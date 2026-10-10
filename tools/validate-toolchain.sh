@@ -7,9 +7,9 @@
 # en build/logs/validate.log; en la terminal solo el resumen.
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-IMAGE="${RETRO64_IMAGE:-retro64-toolchain:dev}"
+IMAGE="${SALSA64_IMAGE:-salsa64-toolchain:dev}"
 SM64_REF=b0fb69da3158eb26fb8747e9284219017e532950
-PSL1GHT_REF=$(docker image inspect -f '{{index .Config.Labels "retro64.psl1ght.ref"}}' "$IMAGE")
+PSL1GHT_REF=$(docker image inspect -f '{{index .Config.Labels "salsa64.psl1ght.ref"}}' "$IMAGE")
 mkdir -p "$ROOT/build/logs"
 LOG="$ROOT/build/logs/validate.log"
 

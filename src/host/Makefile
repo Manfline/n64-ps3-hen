@@ -1,4 +1,4 @@
-# Retro64 — ejecutor de línea de comandos para el host (retro64-run), con el
+# Salsa64 — ejecutor de línea de comandos para el host (salsa64-run), con el
 # gcc nativo del contenedor. Desde la raíz: tools/build.sh host
 #
 # Por omisión compila con AddressSanitizer y UBSan, como las pruebas
@@ -20,9 +20,9 @@ OBJS      := $(patsubst $(ROOT)/%.c,$(OUT)/obj/%.o,$(CORE_SRCS) $(HOST_SRCS))
 
 .PHONY: all clean
 
-all: $(OUT)/retro64-run
+all: $(OUT)/salsa64-run
 
-$(OUT)/retro64-run: $(OBJS)
+$(OUT)/salsa64-run: $(OBJS)
 	@echo "  LD      $(notdir $@)"
 	@$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
 
@@ -32,6 +32,6 @@ $(OUT)/obj/%.o: $(ROOT)/%.c
 	@$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 clean:
-	rm -f $(OUT)/retro64-run
+	rm -f $(OUT)/salsa64-run
 
 -include $(OBJS:.o=.d)

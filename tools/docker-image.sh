@@ -1,10 +1,10 @@
 #!/bin/sh
-# Construye la imagen del toolchain (retro64-toolchain). La primera vez tarda
+# Construye la imagen del toolchain (salsa64-toolchain). La primera vez tarda
 # del orden de una hora: compila binutils y GCC para PPU y SPU.
 #   tools/docker-image.sh [args extra para docker build]
 set -eu
 cd "$(dirname "$0")/.."
-IMAGE="${RETRO64_IMAGE:-retro64-toolchain:dev}"
+IMAGE="${SALSA64_IMAGE:-salsa64-toolchain:dev}"
 mkdir -p build/logs
 LOG=build/logs/docker-image.log
 echo "Construyendo $IMAGE (log en $LOG)"

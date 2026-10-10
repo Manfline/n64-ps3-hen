@@ -1,5 +1,5 @@
 /*
- * Retro64 — COP1 (FPU) del VR4300.
+ * Salsa64 — COP1 (FPU) del VR4300.
  *
  * Reglas del hardware que se modelan (comprobadas con nemu64-test; ver
  * docs/cpu-vr4300.md):
@@ -67,21 +67,21 @@ static inline int sign_of(double x) { return (x > 0) - (x < 0); }
 /* ---- Registros ------------------------------------------------------------ */
 
 /* Operando fs de una instrucción de cálculo: con FR = 0 se ignora el bit bajo. */
-static inline uint64_t fpu_read(const struct retro64_cpu *cpu, unsigned fmt, unsigned r)
+static inline uint64_t fpu_read(const struct salsa64_cpu *cpu, unsigned fmt, unsigned r)
 {
-	uint64_t v = cpu->fpr[(cpu->status & RETRO64_ST_FR) ? r : r & ~1u];
+	uint64_t v = cpu->fpr[(cpu->status & SALSA64_ST_FR) ? r : r & ~1u];
 	return is32(fmt) ? (uint32_t)v : v;
 }
 
 /* Operando ft: el registro físico tal cual, también con FR = 0. */
-static inline uint64_t fpu_read_ft(const struct retro64_cpu *cpu, unsigned fmt, unsigned r)
+static inline uint64_t fpu_read_ft(const struct salsa64_cpu *cpu, unsigned fmt, unsigned r)
 {
 	uint64_t v = cpu->fpr[r];
 	return is32(fmt) ? (uint32_t)v : v;
 }
 
 /* Resultado: el registro físico fd, los 64 bits. */
-static inline void fpu_write(struct retro64_cpu *cpu, unsigned fd, uint64_t v)
+static inline void fpu_write(struct salsa64_cpu *cpu, unsigned fd, uint64_t v)
 {
 	cpu->fpr[fd] = v;
 }
@@ -90,13 +90,13 @@ static inline void fpu_write(struct retro64_cpu *cpu, unsigned fd, uint64_t v)
 
 /* Escribe la causa en FCR31; si alguna está habilitada (E siempre lo está)
  * lanza la excepción y devuelve false. Si no, acumula las banderas. */
-static bool fpu_finish(struct retro64_cpu *cpu, unsigned cause)
+static bool fpu_finish(struct salsa64_cpu *cpu, unsigned cause)
 {
 	uint32_t f = (cpu->fcr31 & ~(0x3Fu << 12)) | cause << 12;
 	unsigned enabled = ((f >> 7) & 0x1F) | FPE_E;
 	if (cause & enabled) {
 		cpu->fcr31 = f;
-		retro64_vr4300_exception(cpu, RETRO64_EXC_FPE, 0);
+		salsa64_vr4300_exception(cpu, SALSA64_EXC_FPE, 0);
 		return false;
 	}
 	cpu->fcr31 = f | (cause & 0x1Fu) << 2;
@@ -142,13 +142,13 @@ static unsigned fpu_input(uint64_t bits, unsigned fmt, double *out)
 
 /* ---- Redondeo del resultado ------------------------------------------------- */
 
-static void fpu_store(struct retro64_cpu *cpu, unsigned fd, uint64_t bits, unsigned cause)
+static void fpu_store(struct salsa64_cpu *cpu, unsigned fd, uint64_t bits, unsigned cause)
 {
 	if (fpu_finish(cpu, cause))
 		fpu_write(cpu, fd, bits);
 }
 
-static void fpu_overflow(struct retro64_cpu *cpu, unsigned fmt, unsigned fd, bool neg, unsigned cause)
+static void fpu_overflow(struct salsa64_cpu *cpu, unsigned fmt, unsigned fd, bool neg, unsigned cause)
 {
 	unsigned mode = cpu->fcr31 & 3;
 	bool to_inf = mode == RM_NEAREST || (mode == RM_PLUS && !neg) || (mode == RM_MINUS && neg);
@@ -157,10 +157,10 @@ static void fpu_overflow(struct retro64_cpu *cpu, unsigned fmt, unsigned fd, boo
 	fpu_store(cpu, fd, bits, cause | FPE_O | FPE_I);
 }
 
-static void fpu_tiny(struct retro64_cpu *cpu, unsigned fmt, unsigned fd, bool neg, unsigned cause)
+static void fpu_tiny(struct salsa64_cpu *cpu, unsigned fmt, unsigned fd, bool neg, unsigned cause)
 {
 	unsigned en = (cpu->fcr31 >> 7) & 0x1F;
-	if (!(cpu->fcr31 & RETRO64_FCR31_FS) || (en & (FPE_U | FPE_I))) {
+	if (!(cpu->fcr31 & SALSA64_FCR31_FS) || (en & (FPE_U | FPE_I))) {
 		fpu_finish(cpu, cause | FPE_E);
 		return;
 	}
@@ -191,7 +191,7 @@ static int directed_step(unsigned mode, bool neg, int dir)
  * exact_inf: un infinito en r es exacto (vino de una entrada infinita o de
  * dividir entre cero), no desbordamiento.
  */
-static void fpu_result(struct retro64_cpu *cpu, unsigned fmt, unsigned fd, double r, int dir,
+static void fpu_result(struct salsa64_cpu *cpu, unsigned fmt, unsigned fd, double r, int dir,
 		       unsigned cause, bool exact_inf)
 {
 	unsigned mode = cpu->fcr31 & 3;
@@ -298,7 +298,7 @@ static int div_error(double a, double b, double r)
 }
 
 /* ADD, SUB, MUL, DIV, SQRT, ABS, NEG. */
-static void fpu_arith(struct retro64_cpu *cpu, uint32_t i, unsigned fmt, unsigned funct)
+static void fpu_arith(struct salsa64_cpu *cpu, uint32_t i, unsigned fmt, unsigned funct)
 {
 	double a, b = 0, r;
 	int dir = 0;
@@ -370,7 +370,7 @@ static double fpu_round(double x, unsigned mode)
 	}
 }
 
-static void fpu_to_int(struct retro64_cpu *cpu, uint32_t i, unsigned fmt, unsigned mode, bool to64)
+static void fpu_to_int(struct salsa64_cpu *cpu, uint32_t i, unsigned fmt, unsigned mode, bool to64)
 {
 	double a;
 	unsigned cause = fpu_input(fpu_read(cpu, fmt, I_FS(i)), fmt, &a);
@@ -394,7 +394,7 @@ static void fpu_to_int(struct retro64_cpu *cpu, uint32_t i, unsigned fmt, unsign
 	fpu_store(cpu, I_FD(i), to64 ? (uint64_t)(int64_t)r : (uint32_t)(int32_t)r, cause);
 }
 
-static void fpu_compare(struct retro64_cpu *cpu, uint32_t i, unsigned fmt, unsigned cond)
+static void fpu_compare(struct salsa64_cpu *cpu, uint32_t i, unsigned fmt, unsigned cond)
 {
 	uint64_t ra = fpu_read(cpu, fmt, I_FS(i)), rb = fpu_read_ft(cpu, fmt, I_FT(i));
 	int ka = nan_kind(ra, fmt), kb = nan_kind(rb, fmt);
@@ -414,13 +414,13 @@ static void fpu_compare(struct retro64_cpu *cpu, uint32_t i, unsigned fmt, unsig
 		 ((cond & 2) && !unordered && a == b) ||
 		 ((cond & 1) && unordered);
 	if (c)
-		cpu->fcr31 |= RETRO64_FCR31_C;
+		cpu->fcr31 |= SALSA64_FCR31_C;
 	else
-		cpu->fcr31 &= ~RETRO64_FCR31_C;
+		cpu->fcr31 &= ~SALSA64_FCR31_C;
 }
 
 /* Instrucciones de formato S y D. */
-static void fpu_float(struct retro64_cpu *cpu, uint32_t i, unsigned fmt)
+static void fpu_float(struct salsa64_cpu *cpu, uint32_t i, unsigned fmt)
 {
 	unsigned funct = I_FUNCT(i);
 	double a;
@@ -463,7 +463,7 @@ static void fpu_float(struct retro64_cpu *cpu, uint32_t i, unsigned fmt)
 }
 
 /* Instrucciones de formato W y L: solo CVT.S y CVT.D. */
-static void fpu_int(struct retro64_cpu *cpu, uint32_t i, unsigned fmt)
+static void fpu_int(struct salsa64_cpu *cpu, uint32_t i, unsigned fmt)
 {
 	unsigned funct = I_FUNCT(i);
 	int64_t v = fmt == FMT_W ? (int64_t)(int32_t)fpu_read(cpu, FMT_W, I_FS(i))
@@ -488,36 +488,36 @@ static void fpu_int(struct retro64_cpu *cpu, uint32_t i, unsigned fmt)
  * DMTC2 y CTC2 usan un único latch de 64 bits (nemu64-test, cop_unusable).
  * Lo demás da Reserved Instruction con Cause.CE = 2.
  */
-void retro64_vr4300_cop2(struct retro64_cpu *cpu, uint32_t i)
+void salsa64_vr4300_cop2(struct salsa64_cpu *cpu, uint32_t i)
 {
-	if (!(cpu->status & RETRO64_ST_CU2)) {
-		retro64_vr4300_exception(cpu, RETRO64_EXC_CPU, 2);
+	if (!(cpu->status & SALSA64_ST_CU2)) {
+		salsa64_vr4300_exception(cpu, SALSA64_EXC_CPU, 2);
 		return;
 	}
 	unsigned rt = I_RT(i);
 	switch (I_RS(i)) {
-	case 0x00: case 0x02: cpu->gpr[rt] = retro64_sx32((uint32_t)cpu->cop2_latch); return; /* MFC2, CFC2 */
+	case 0x00: case 0x02: cpu->gpr[rt] = salsa64_sx32((uint32_t)cpu->cop2_latch); return; /* MFC2, CFC2 */
 	case 0x01:            cpu->gpr[rt] = cpu->cop2_latch; return;                          /* DMFC2 */
 	case 0x04: case 0x05: case 0x06: cpu->cop2_latch = cpu->gpr[rt]; return;               /* MTC2, DMTC2, CTC2 */
 	default:
-		retro64_vr4300_exception(cpu, RETRO64_EXC_RI, 2);
+		salsa64_vr4300_exception(cpu, SALSA64_EXC_RI, 2);
 		return;
 	}
 }
 
 /* ---- Decodificación ----------------------------------------------------------- */
 
-void retro64_vr4300_cop1(struct retro64_cpu *cpu, uint32_t i)
+void salsa64_vr4300_cop1(struct salsa64_cpu *cpu, uint32_t i)
 {
-	if (!(cpu->status & RETRO64_ST_CU1)) {
-		retro64_vr4300_exception(cpu, RETRO64_EXC_CPU, 1);
+	if (!(cpu->status & SALSA64_ST_CU1)) {
+		salsa64_vr4300_exception(cpu, SALSA64_EXC_CPU, 1);
 		return;
 	}
 
 	unsigned rt = I_RT(i), fs = I_FS(i);
 	switch (I_FMT(i)) {
 	case 0x00:                                                        /* MFC1 */
-		cpu->gpr[rt] = retro64_sx32(vr4300_fpr_get32(cpu, fs));
+		cpu->gpr[rt] = salsa64_sx32(vr4300_fpr_get32(cpu, fs));
 		return;
 	case 0x01:                                                        /* DMFC1 */
 		if (!cpu->allow64)
@@ -525,7 +525,7 @@ void retro64_vr4300_cop1(struct retro64_cpu *cpu, uint32_t i)
 		cpu->gpr[rt] = vr4300_fpr_get64(cpu, fs);
 		return;
 	case 0x02:                                                        /* CFC1 */
-		cpu->gpr[rt] = retro64_sx32(fs == 0 ? RETRO64_FCR0_VALUE : fs == 31 ? cpu->fcr31 : 0);
+		cpu->gpr[rt] = salsa64_sx32(fs == 0 ? SALSA64_FCR0_VALUE : fs == 31 ? cpu->fcr31 : 0);
 		return;
 	case 0x04:                                                        /* MTC1 */
 		vr4300_fpr_set32(cpu, fs, (uint32_t)cpu->gpr[rt]);
@@ -540,7 +540,7 @@ void retro64_vr4300_cop1(struct retro64_cpu *cpu, uint32_t i)
 			cpu->fcr31 = (uint32_t)cpu->gpr[rt] & FCR31_WMASK;
 			unsigned cause = (cpu->fcr31 >> 12) & 0x3F;
 			if (cause & (((cpu->fcr31 >> 7) & 0x1F) | FPE_E))
-				retro64_vr4300_exception(cpu, RETRO64_EXC_FPE, 0);
+				salsa64_vr4300_exception(cpu, SALSA64_EXC_FPE, 0);
 		}
 		return;
 	case 0x08: {                                                      /* BC1F/T/FL/TL */
@@ -548,7 +548,7 @@ void retro64_vr4300_cop1(struct retro64_cpu *cpu, uint32_t i)
 			fpu_finish(cpu, FPE_E);
 			return;
 		}
-		bool c = (cpu->fcr31 & RETRO64_FCR31_C) != 0;
+		bool c = (cpu->fcr31 & SALSA64_FCR31_C) != 0;
 		switch (rt & 3) {
 		case 0: vr4300_branch(cpu, !c, i); return;
 		case 1: vr4300_branch(cpu, c, i); return;

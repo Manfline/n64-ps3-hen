@@ -1,5 +1,5 @@
 /*
- * Retro64 — Fase 0: cálculo SIMD en una SPU con DMA de doble búfer.
+ * Salsa64 — Fase 0: cálculo SIMD en una SPU con DMA de doble búfer.
  *
  * Lee su spu_job_t por DMA, transforma su porción del búfer de entrada en
  * bloques de 16 KB (mientras procesa un bloque llega el siguiente) y devuelve

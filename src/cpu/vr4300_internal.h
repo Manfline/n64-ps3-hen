@@ -1,14 +1,14 @@
 /*
- * Retro64 — piezas internas del intérprete del VR4300: decodificación,
+ * Salsa64 — piezas internas del intérprete del VR4300: decodificación,
  * traducción de direcciones y accesos a memoria.
  *
  * Camino rápido: KSEG0/KSEG1 en modo kernel se traducen restando la base y,
  * si la dirección física cae en la RDRAM, se lee directo del búfer con los
  * accesores de core/endian.h (carga directa en la PS3). Todo lo demás pasa
- * por retro64_vr4300_translate_slow (TLB, modos) y por el bus.
+ * por salsa64_vr4300_translate_slow (TLB, modos) y por el bus.
  */
-#ifndef RETRO64_CPU_VR4300_INTERNAL_H
-#define RETRO64_CPU_VR4300_INTERNAL_H
+#ifndef SALSA64_CPU_VR4300_INTERNAL_H
+#define SALSA64_CPU_VR4300_INTERNAL_H
 
 #include "core/bus.h"
 #include "core/endian.h"
@@ -29,39 +29,39 @@
 #define I_FS(i)     I_RD(i)
 #define I_FD(i)     I_SA(i)
 
-enum retro64_access {
-	RETRO64_ACC_FETCH,
-	RETRO64_ACC_LOAD,
-	RETRO64_ACC_STORE,
+enum salsa64_access {
+	SALSA64_ACC_FETCH,
+	SALSA64_ACC_LOAD,
+	SALSA64_ACC_STORE,
 };
 
 /* cop0.c */
-void retro64_vr4300_exception(struct retro64_cpu *cpu, enum retro64_exc code, unsigned ce);
-void retro64_vr4300_address_error(struct retro64_cpu *cpu, uint64_t vaddr, enum retro64_access acc);
+void salsa64_vr4300_exception(struct salsa64_cpu *cpu, enum salsa64_exc code, unsigned ce);
+void salsa64_vr4300_address_error(struct salsa64_cpu *cpu, uint64_t vaddr, enum salsa64_access acc);
 /* align = tamaño - 1; solo se usa para invertir la dirección con Status.RE. */
-bool retro64_vr4300_translate_slow(struct retro64_cpu *cpu, uint64_t vaddr, uint32_t *paddr,
-				   enum retro64_access acc, uint32_t align);
-void retro64_vr4300_update_status(struct retro64_cpu *cpu);
-void retro64_vr4300_cop0(struct retro64_cpu *cpu, uint32_t instr);
+bool salsa64_vr4300_translate_slow(struct salsa64_cpu *cpu, uint64_t vaddr, uint32_t *paddr,
+				   enum salsa64_access acc, uint32_t align);
+void salsa64_vr4300_update_status(struct salsa64_cpu *cpu);
+void salsa64_vr4300_cop0(struct salsa64_cpu *cpu, uint32_t instr);
 /* cop1.c */
-void retro64_vr4300_cop1(struct retro64_cpu *cpu, uint32_t instr);
-void retro64_vr4300_cop2(struct retro64_cpu *cpu, uint32_t instr);
+void salsa64_vr4300_cop1(struct salsa64_cpu *cpu, uint32_t instr);
+void salsa64_vr4300_cop2(struct salsa64_cpu *cpu, uint32_t instr);
 
-static inline void vr4300_reserved(struct retro64_cpu *cpu)
+static inline void vr4300_reserved(struct salsa64_cpu *cpu)
 {
-	retro64_vr4300_exception(cpu, RETRO64_EXC_RI, 0);
+	salsa64_vr4300_exception(cpu, SALSA64_EXC_RI, 0);
 }
 
 /* ---- Saltos ----------------------------------------------------------- */
 
-static inline void vr4300_jump(struct retro64_cpu *cpu, uint64_t target)
+static inline void vr4300_jump(struct salsa64_cpu *cpu, uint64_t target)
 {
 	cpu->next_pc = target;
 	cpu->branch = 1;
 }
 
 /* Salto condicional: la siguiente instrucción es delay slot, se tome o no. */
-static inline void vr4300_branch(struct retro64_cpu *cpu, bool taken, uint32_t instr)
+static inline void vr4300_branch(struct salsa64_cpu *cpu, bool taken, uint32_t instr)
 {
 	if (taken)
 		cpu->next_pc = cpu->cur_pc + 4 + (I_SIMM(instr) << 2);
@@ -69,7 +69,7 @@ static inline void vr4300_branch(struct retro64_cpu *cpu, bool taken, uint32_t i
 }
 
 /* Branch-likely: si no se toma, el delay slot se anula (no se ejecuta). */
-static inline void vr4300_branch_likely(struct retro64_cpu *cpu, bool taken, uint32_t instr)
+static inline void vr4300_branch_likely(struct salsa64_cpu *cpu, bool taken, uint32_t instr)
 {
 	if (taken) {
 		cpu->next_pc = cpu->cur_pc + 4 + (I_SIMM(instr) << 2);
@@ -84,111 +84,111 @@ static inline void vr4300_branch_likely(struct retro64_cpu *cpu, bool taken, uin
 
 /* Verifica alineación (align = tamaño - 1) y traduce. Si falla, la
  * excepción ya quedó lanzada y la instrucción no debe escribir nada. */
-static inline bool vr4300_vaddr(struct retro64_cpu *cpu, uint64_t vaddr, uint32_t align,
-				enum retro64_access acc, uint32_t *paddr)
+static inline bool vr4300_vaddr(struct salsa64_cpu *cpu, uint64_t vaddr, uint32_t align,
+				enum salsa64_access acc, uint32_t *paddr)
 {
-	if (RETRO64_UNLIKELY(vaddr & align)) {
-		retro64_vr4300_address_error(cpu, vaddr, acc);
+	if (SALSA64_UNLIKELY(vaddr & align)) {
+		salsa64_vr4300_address_error(cpu, vaddr, acc);
 		return false;
 	}
 	/* 0xFFFFFFFF80000000–0xFFFFFFFFBFFFFFFF: KSEG0 y KSEG1, sin TLB. */
-	if (RETRO64_LIKELY((vaddr >> 30) == 0x3FFFFFFFEull && cpu->mode == RETRO64_MODE_KERNEL)) {
+	if (SALSA64_LIKELY((vaddr >> 30) == 0x3FFFFFFFEull && cpu->mode == SALSA64_MODE_KERNEL)) {
 		*paddr = (uint32_t)vaddr & 0x1FFFFFFF;
 		return true;
 	}
-	return retro64_vr4300_translate_slow(cpu, vaddr, paddr, acc, align);
+	return salsa64_vr4300_translate_slow(cpu, vaddr, paddr, acc, align);
 }
 
 /* ---- Accesos físicos (RDRAM directo, resto por el bus) ------------------ */
 
-static inline uint8_t vr4300_read8(struct retro64_cpu *cpu, uint32_t pa)
+static inline uint8_t vr4300_read8(struct salsa64_cpu *cpu, uint32_t pa)
 {
-	if (RETRO64_LIKELY(pa < cpu->rdram_size))
-		return retro64_rd8(cpu->rdram + pa);
-	return (uint8_t)(retro64_bus_read32(cpu->bus, pa) >> (8 * (3 - (pa & 3))));
+	if (SALSA64_LIKELY(pa < cpu->rdram_size))
+		return salsa64_rd8(cpu->rdram + pa);
+	return (uint8_t)(salsa64_bus_read32(cpu->bus, pa) >> (8 * (3 - (pa & 3))));
 }
 
-static inline uint16_t vr4300_read16(struct retro64_cpu *cpu, uint32_t pa)
+static inline uint16_t vr4300_read16(struct salsa64_cpu *cpu, uint32_t pa)
 {
-	if (RETRO64_LIKELY(pa < cpu->rdram_size))
-		return retro64_rd16(cpu->rdram + pa);
-	return (uint16_t)(retro64_bus_read32(cpu->bus, pa) >> (8 * (2 - (pa & 2))));
+	if (SALSA64_LIKELY(pa < cpu->rdram_size))
+		return salsa64_rd16(cpu->rdram + pa);
+	return (uint16_t)(salsa64_bus_read32(cpu->bus, pa) >> (8 * (2 - (pa & 2))));
 }
 
-static inline uint32_t vr4300_read32(struct retro64_cpu *cpu, uint32_t pa)
+static inline uint32_t vr4300_read32(struct salsa64_cpu *cpu, uint32_t pa)
 {
-	if (RETRO64_LIKELY(pa < cpu->rdram_size))
-		return retro64_rd32(cpu->rdram + pa);
-	return retro64_bus_read32(cpu->bus, pa);
+	if (SALSA64_LIKELY(pa < cpu->rdram_size))
+		return salsa64_rd32(cpu->rdram + pa);
+	return salsa64_bus_read32(cpu->bus, pa);
 }
 
-static inline uint64_t vr4300_read64(struct retro64_cpu *cpu, uint32_t pa)
+static inline uint64_t vr4300_read64(struct salsa64_cpu *cpu, uint32_t pa)
 {
-	if (RETRO64_LIKELY(pa < cpu->rdram_size))
-		return retro64_rd64(cpu->rdram + pa);
-	return retro64_bus_read64(cpu->bus, pa);
+	if (SALSA64_LIKELY(pa < cpu->rdram_size))
+		return salsa64_rd64(cpu->rdram + pa);
+	return salsa64_bus_read64(cpu->bus, pa);
 }
 
 /* SB y SH reciben el registro completo: fuera de la RDRAM el VR4300 pone en
  * el bus el registro desplazado a su carril, y el RCP, la PIF y el bus PI
  * escriben esa palabra entera sin mirar el tamaño (ver core/bus.h). */
-static inline void vr4300_write8(struct retro64_cpu *cpu, uint32_t pa, uint64_t v)
+static inline void vr4300_write8(struct salsa64_cpu *cpu, uint32_t pa, uint64_t v)
 {
-	if (RETRO64_LIKELY(pa < cpu->rdram_size)) {
-		retro64_wr8(cpu->rdram + pa, (uint8_t)v);
+	if (SALSA64_LIKELY(pa < cpu->rdram_size)) {
+		salsa64_wr8(cpu->rdram + pa, (uint8_t)v);
 		return;
 	}
 	unsigned shift = 8 * (3 - (pa & 3));
-	retro64_bus_write32(cpu->bus, pa, (uint32_t)(v << shift), 0xFFu << shift);
+	salsa64_bus_write32(cpu->bus, pa, (uint32_t)(v << shift), 0xFFu << shift);
 }
 
-static inline void vr4300_write16(struct retro64_cpu *cpu, uint32_t pa, uint64_t v)
+static inline void vr4300_write16(struct salsa64_cpu *cpu, uint32_t pa, uint64_t v)
 {
-	if (RETRO64_LIKELY(pa < cpu->rdram_size)) {
-		retro64_wr16(cpu->rdram + pa, (uint16_t)v);
+	if (SALSA64_LIKELY(pa < cpu->rdram_size)) {
+		salsa64_wr16(cpu->rdram + pa, (uint16_t)v);
 		return;
 	}
 	unsigned shift = 8 * (2 - (pa & 2));
-	retro64_bus_write32(cpu->bus, pa, (uint32_t)(v << shift), 0xFFFFu << shift);
+	salsa64_bus_write32(cpu->bus, pa, (uint32_t)(v << shift), 0xFFFFu << shift);
 }
 
-static inline void vr4300_write32(struct retro64_cpu *cpu, uint32_t pa, uint32_t v)
+static inline void vr4300_write32(struct salsa64_cpu *cpu, uint32_t pa, uint32_t v)
 {
-	if (RETRO64_LIKELY(pa < cpu->rdram_size)) {
-		retro64_wr32(cpu->rdram + pa, v);
+	if (SALSA64_LIKELY(pa < cpu->rdram_size)) {
+		salsa64_wr32(cpu->rdram + pa, v);
 		return;
 	}
-	retro64_bus_write32(cpu->bus, pa, v, 0xFFFFFFFFu);
+	salsa64_bus_write32(cpu->bus, pa, v, 0xFFFFFFFFu);
 }
 
-static inline void vr4300_write64(struct retro64_cpu *cpu, uint32_t pa, uint64_t v)
+static inline void vr4300_write64(struct salsa64_cpu *cpu, uint32_t pa, uint64_t v)
 {
-	if (RETRO64_LIKELY(pa < cpu->rdram_size)) {
-		retro64_wr64(cpu->rdram + pa, v);
+	if (SALSA64_LIKELY(pa < cpu->rdram_size)) {
+		salsa64_wr64(cpu->rdram + pa, v);
 		return;
 	}
-	retro64_bus_write64(cpu->bus, pa, v, ~0ull);
+	salsa64_bus_write64(cpu->bus, pa, v, ~0ull);
 }
 
 /* SWL/SWR y SDL/SDR: solo los bytes de `mask` (orden de la N64). */
-static inline void vr4300_write32_masked(struct retro64_cpu *cpu, uint32_t pa, uint32_t v, uint32_t mask)
+static inline void vr4300_write32_masked(struct salsa64_cpu *cpu, uint32_t pa, uint32_t v, uint32_t mask)
 {
-	if (RETRO64_LIKELY(pa < cpu->rdram_size)) {
+	if (SALSA64_LIKELY(pa < cpu->rdram_size)) {
 		uint8_t *p = cpu->rdram + pa;
-		retro64_wr32(p, (retro64_rd32(p) & ~mask) | (v & mask));
+		salsa64_wr32(p, (salsa64_rd32(p) & ~mask) | (v & mask));
 		return;
 	}
-	retro64_bus_write32(cpu->bus, pa, v, mask);
+	salsa64_bus_write32(cpu->bus, pa, v, mask);
 }
 
-static inline void vr4300_write64_masked(struct retro64_cpu *cpu, uint32_t pa, uint64_t v, uint64_t mask)
+static inline void vr4300_write64_masked(struct salsa64_cpu *cpu, uint32_t pa, uint64_t v, uint64_t mask)
 {
-	if (RETRO64_LIKELY(pa < cpu->rdram_size)) {
+	if (SALSA64_LIKELY(pa < cpu->rdram_size)) {
 		uint8_t *p = cpu->rdram + pa;
-		retro64_wr64(p, (retro64_rd64(p) & ~mask) | (v & mask));
+		salsa64_wr64(p, (salsa64_rd64(p) & ~mask) | (v & mask));
 		return;
 	}
-	retro64_bus_write64(cpu->bus, pa, v, mask);
+	salsa64_bus_write64(cpu->bus, pa, v, mask);
 }
 
 /* ---- Registros de la FPU según Status.FR ------------------------------- */
@@ -196,29 +196,29 @@ static inline void vr4300_write64_masked(struct retro64_cpu *cpu, uint32_t pa, u
  * un registro impar usa la mitad alta del par, y uno de 64 bits ignora el
  * bit bajo del número de registro. */
 
-static inline uint32_t vr4300_fpr_get32(const struct retro64_cpu *cpu, unsigned r)
+static inline uint32_t vr4300_fpr_get32(const struct salsa64_cpu *cpu, unsigned r)
 {
-	if ((cpu->status & RETRO64_ST_FR) || !(r & 1))
+	if ((cpu->status & SALSA64_ST_FR) || !(r & 1))
 		return (uint32_t)cpu->fpr[r];
 	return (uint32_t)(cpu->fpr[r & ~1u] >> 32);
 }
 
-static inline void vr4300_fpr_set32(struct retro64_cpu *cpu, unsigned r, uint32_t v)
+static inline void vr4300_fpr_set32(struct salsa64_cpu *cpu, unsigned r, uint32_t v)
 {
-	if ((cpu->status & RETRO64_ST_FR) || !(r & 1))
+	if ((cpu->status & SALSA64_ST_FR) || !(r & 1))
 		cpu->fpr[r] = (cpu->fpr[r] & 0xFFFFFFFF00000000ull) | v;
 	else
 		cpu->fpr[r & ~1u] = (cpu->fpr[r & ~1u] & 0xFFFFFFFFull) | (uint64_t)v << 32;
 }
 
-static inline uint64_t vr4300_fpr_get64(const struct retro64_cpu *cpu, unsigned r)
+static inline uint64_t vr4300_fpr_get64(const struct salsa64_cpu *cpu, unsigned r)
 {
-	return cpu->fpr[(cpu->status & RETRO64_ST_FR) ? r : r & ~1u];
+	return cpu->fpr[(cpu->status & SALSA64_ST_FR) ? r : r & ~1u];
 }
 
-static inline void vr4300_fpr_set64(struct retro64_cpu *cpu, unsigned r, uint64_t v)
+static inline void vr4300_fpr_set64(struct salsa64_cpu *cpu, unsigned r, uint64_t v)
 {
-	cpu->fpr[(cpu->status & RETRO64_ST_FR) ? r : r & ~1u] = v;
+	cpu->fpr[(cpu->status & SALSA64_ST_FR) ? r : r & ~1u] = v;
 }
 
 #endif

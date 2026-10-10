@@ -1,5 +1,5 @@
 /*
- * Retro64 — pruebas de COP1 (FPU): movimientos, modo FR, aritmética,
+ * Salsa64 — pruebas de COP1 (FPU): movimientos, modo FR, aritmética,
  * causas y banderas de FCR31, conversiones, comparaciones y BC1.
  */
 #include "test.h"
@@ -18,22 +18,22 @@ static void set_d(unsigned r, double d) { CPU->fpr[r] = t_dbits(d); }
 static void rerun(void)
 {
 	t_set_status(T_STATUS);
-	retro64_cpu_set_pc(CPU, T_CODE);
+	salsa64_cpu_set_pc(CPU, T_CODE);
 	t_step(1);
 }
 
 static void cop1_unusable(void)
 {
-	t_set_status(T_STATUS & ~RETRO64_ST_CU1);
+	t_set_status(T_STATUS & ~SALSA64_ST_CU1);
 	R[T0] = T_DATA;
 	T_LOAD(ADD_F(F_S, 0, 1, 2), LWC1(1, 0, T0));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_CPU, T_CODE, 0, T_VEC_GEN);
-	CHECK_EQ((CPU->cause >> RETRO64_CAUSE_CE_SHIFT) & 3, 1);
-	t_set_status(T_STATUS & ~RETRO64_ST_CU1);
-	retro64_cpu_set_pc(CPU, T_CODE + 4);
+	CHECK_EXC(SALSA64_EXC_CPU, T_CODE, 0, T_VEC_GEN);
+	CHECK_EQ((CPU->cause >> SALSA64_CAUSE_CE_SHIFT) & 3, 1);
+	t_set_status(T_STATUS & ~SALSA64_ST_CU1);
+	salsa64_cpu_set_pc(CPU, T_CODE + 4);
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_CPU, T_CODE + 4, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_CPU, T_CODE + 4, 0, T_VEC_GEN);
 }
 
 static void mtc1_mfc1(void)
@@ -50,7 +50,7 @@ static void mtc1_mfc1(void)
 
 static void fr0_register_pairs(void)
 {
-	t_set_status(T_STATUS & ~RETRO64_ST_FR);
+	t_set_status(T_STATUS & ~SALSA64_ST_FR);
 	R[T0] = 0x11111111;
 	R[T1] = 0x22222222;
 	T_LOAD(MTC1(T0, 0), MTC1(T1, 1), DMFC1(T2, 0), MFC1(T3, 1), DMFC1(T4, 1));
@@ -73,7 +73,7 @@ static void fr1_independent_registers(void)
 
 static void fr0_double_arith(void)
 {
-	t_set_status(T_STATUS & ~RETRO64_ST_FR);
+	t_set_status(T_STATUS & ~SALSA64_ST_FR);
 	t_wr64(T_DATA_PA, t_dbits(1.5));
 	t_wr64(T_DATA_PA + 8, t_dbits(2.25));
 	R[T0] = T_DATA;
@@ -147,7 +147,7 @@ static void div_by_zero_trap(void)
 	CPU->fpr[4] = 0x12345678;
 	T_LOAD(DIV_F(F_S, 4, 1, 2));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_FPE, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_FPE, T_CODE, 0, T_VEC_GEN);
 	CHECK_EQ(S(4), 0x12345678);
 	CHECK_EQ(CAUSE(), CZ);
 	CHECK_EQ(FLAGS(), 0);
@@ -187,7 +187,7 @@ static void snan_input_is_unimplemented(void)
 	set_s(2, 1.0f);
 	T_LOAD(ADD_F(F_S, 3, 1, 2));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_FPE, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_FPE, T_CODE, 0, T_VEC_GEN);
 	CHECK_EQ(CAUSE(), CE);
 }
 
@@ -198,7 +198,7 @@ static void denormal_input_is_unimplemented(void)
 	CPU->fpr[3] = 0x55;
 	T_LOAD(ADD_F(F_S, 3, 1, 2));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_FPE, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_FPE, T_CODE, 0, T_VEC_GEN);
 	CHECK_EQ(CAUSE(), CE);
 	CHECK_EQ(S(3), 0x55);
 }
@@ -231,13 +231,13 @@ static void tiny_result_traps_without_fs(void)
 	set_s(1, 1e-30f);
 	T_LOAD(MUL_F(F_S, 2, 1, 1));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_FPE, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_FPE, T_CODE, 0, T_VEC_GEN);
 	CHECK_EQ(CAUSE(), CE);
 }
 
 static void tiny_result_flushes_with_fs(void)
 {
-	CPU->fcr31 = RETRO64_FCR31_FS;
+	CPU->fcr31 = SALSA64_FCR31_FS;
 	set_s(1, -1e-30f);
 	set_s(3, 1e-20f);
 	T_LOAD(MUL_F(F_S, 2, 1, 3));
@@ -288,12 +288,12 @@ static void cvt_to_int_unimplemented(void)
 	CPU->fpr[1] = 0x7FBFFFFF;
 	T_LOAD(CVT_W(F_S, 3, 1));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_FPE, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_FPE, T_CODE, 0, T_VEC_GEN);
 	CHECK_EQ(CAUSE(), CE);
 
 	set_s(1, 3e9f);  /* fuera del rango de 32 bits */
 	rerun();
-	CHECK_EQ(RETRO64_CAUSE_EXC(CPU->cause), RETRO64_EXC_FPE);
+	CHECK_EQ(SALSA64_CAUSE_EXC(CPU->cause), SALSA64_EXC_FPE);
 	CHECK_EQ(CAUSE(), CE);
 }
 
@@ -303,7 +303,7 @@ static void cvt_l_wide_range(void)
 	T_LOAD(CVT_L(F_S, 2, 1));
 	t_step(1);
 	CHECK_EQ(D(2), 3000000000ull);
-	CHECK_EQ(CPU->status & RETRO64_ST_EXL, 0);
+	CHECK_EQ(CPU->status & SALSA64_ST_EXL, 0);
 }
 
 static void cvt_between_formats(void)
@@ -337,7 +337,7 @@ static void cvt_from_long_out_of_range(void)
 	CPU->fpr[1] = 1ull << 55;
 	T_LOAD(CVT_D(F_L, 2, 1));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_FPE, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_FPE, T_CODE, 0, T_VEC_GEN);
 	CHECK_EQ(CAUSE(), CE);
 }
 
@@ -345,16 +345,16 @@ static void unimplemented_encodings(void)
 {
 	T_LOAD(CVT_S(F_S, 2, 1));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_FPE, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_FPE, T_CODE, 0, T_VEC_GEN);
 	CHECK_EQ(CAUSE(), CE);
 
 	t_wr32(T_CODE_PA, ADD_F(F_W, 3, 1, 2));
 	rerun();
-	CHECK_EQ(RETRO64_CAUSE_EXC(CPU->cause), RETRO64_EXC_FPE);
+	CHECK_EQ(SALSA64_CAUSE_EXC(CPU->cause), SALSA64_EXC_FPE);
 
 	t_wr32(T_CODE_PA, M_R(0x11, 0x03, 0, 0, 0, 0));  /* DCFC1: tampoco es RI */
 	rerun();
-	CHECK_EQ(RETRO64_CAUSE_EXC(CPU->cause), RETRO64_EXC_FPE);
+	CHECK_EQ(SALSA64_CAUSE_EXC(CPU->cause), SALSA64_EXC_FPE);
 	CHECK_EQ(CAUSE(), CE);
 }
 
@@ -365,7 +365,7 @@ static void compare_and_branch(void)
 	T_LOAD(C_F(F_S, C_LT, 1, 2), BC1T(2), ADDIU(T0, ZERO, 1), ADDIU(T1, ZERO, 1),
 	       ADDIU(T2, ZERO, 1));
 	t_step(4);
-	CHECK(CPU->fcr31 & RETRO64_FCR31_C);
+	CHECK(CPU->fcr31 & SALSA64_FCR31_C);
 	CHECK_EQ(R[T0], 1);
 	CHECK_EQ(R[T1], 0);
 	CHECK_EQ(R[T2], 1);
@@ -378,7 +378,7 @@ static void compare_false_and_likely(void)
 	T_LOAD(C_F(F_S, C_EQ, 1, 2), BC1TL(5), ADDIU(T0, ZERO, 1), BC1FL(2), ADDIU(T1, ZERO, 1),
 	       ADDIU(T2, ZERO, 1), ADDIU(T3, ZERO, 1));
 	t_step(5);
-	CHECK_EQ(CPU->fcr31 & RETRO64_FCR31_C, 0);
+	CHECK_EQ(CPU->fcr31 & SALSA64_FCR31_C, 0);
 	CHECK_EQ(R[T0], 0);  /* anulado */
 	CHECK_EQ(R[T1], 1);
 	CHECK_EQ(R[T2], 0);
@@ -391,8 +391,8 @@ static void compare_double(void)
 	set_d(2, 2.0);
 	T_LOAD(C_F(F_D, C_LE, 1, 2), CFC1(T0, 31), C_F(F_D, C_LT, 1, 2), CFC1(T1, 31));
 	t_step(4);
-	CHECK(R[T0] & RETRO64_FCR31_C);
-	CHECK_EQ(R[T1] & RETRO64_FCR31_C, 0);
+	CHECK(R[T0] & SALSA64_FCR31_C);
+	CHECK_EQ(R[T1] & SALSA64_FCR31_C, 0);
 }
 
 static void compare_unordered(void)
@@ -402,11 +402,11 @@ static void compare_unordered(void)
 	T_LOAD(C_F(F_S, C_UN, 1, 2), CFC1(T0, 31), C_F(F_S, C_EQ, 1, 2), CFC1(T1, 31),
 	       C_F(F_S, C_ULE, 1, 2), CFC1(T2, 31), C_F(F_S, C_SEQ, 1, 2), CFC1(T3, 31));
 	t_step(8);
-	CHECK(R[T0] & RETRO64_FCR31_C);
+	CHECK(R[T0] & SALSA64_FCR31_C);
 	CHECK_EQ((R[T0] >> 12) & 0x3F, 0);
-	CHECK_EQ(R[T1] & RETRO64_FCR31_C, 0);
-	CHECK(R[T2] & RETRO64_FCR31_C);
-	CHECK_EQ(R[T3] & RETRO64_FCR31_C, 0);
+	CHECK_EQ(R[T1] & SALSA64_FCR31_C, 0);
+	CHECK(R[T2] & SALSA64_FCR31_C);
+	CHECK_EQ(R[T3] & SALSA64_FCR31_C, 0);
 	CHECK_EQ((R[T3] >> 12) & 0x3F, CV);  /* comparación con señal y NaN */
 	CHECK_EQ(FLAGS(), CV);
 }
@@ -417,7 +417,7 @@ static void signaling_compare_traps_when_enabled(void)
 	CPU->fpr[1] = 0x7FBFFFFF;
 	T_LOAD(C_F(F_S, C_SEQ, 1, 1));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_FPE, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_FPE, T_CODE, 0, T_VEC_GEN);
 }
 
 static void ctc1_cfc1(void)
@@ -427,7 +427,7 @@ static void ctc1_cfc1(void)
 	T_LOAD(CTC1(T0, 31), CFC1(T1, 31), CFC1(T2, 0), CTC1(T3, 31), CFC1(T4, 31));
 	t_step(5);
 	CHECK_EQ(R[T1], 0x01000003);
-	CHECK_EQ(R[T2], RETRO64_FCR0_VALUE);
+	CHECK_EQ(R[T2], SALSA64_FCR0_VALUE);
 	CHECK_EQ(R[T4], 0x00800FFF);  /* máscara de escritura */
 }
 
@@ -437,12 +437,12 @@ static void ctc1_raises_pending_cause(void)
 	R[T1] = 1u << 17;            /* causa E */
 	T_LOAD(CTC1(T0, 31), CTC1(T1, 31));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_FPE, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_FPE, T_CODE, 0, T_VEC_GEN);
 	CHECK_EQ(CPU->fcr31, 1u << 12 | 1u << 7);
 	t_set_status(T_STATUS);
-	retro64_cpu_set_pc(CPU, T_CODE + 4);
+	salsa64_cpu_set_pc(CPU, T_CODE + 4);
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_FPE, T_CODE + 4, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_FPE, T_CODE + 4, 0, T_VEC_GEN);
 }
 
 static void load_store_fpr(void)
@@ -522,16 +522,16 @@ static void flush_tiny_results(void)
 	set_d(1, 0x1p-1022);
 	set_d(2, 0.5);
 	T_LOAD(MUL_F(F_D, 3, 1, 2));
-	CPU->fcr31 = RETRO64_FCR31_FS | 2;
+	CPU->fcr31 = SALSA64_FCR31_FS | 2;
 	rerun();
 	CHECK_EQ(D(3), 0x0010000000000000ull);
 	CHECK_EQ(CAUSE(), CU | CI);
-	CPU->fcr31 = RETRO64_FCR31_FS;
+	CPU->fcr31 = SALSA64_FCR31_FS;
 	rerun();
 	CHECK_EQ(D(3), 0);
-	CPU->fcr31 = RETRO64_FCR31_FS | (CU << 7);
+	CPU->fcr31 = SALSA64_FCR31_FS | (CU << 7);
 	rerun();
-	CHECK_EQ(RETRO64_CAUSE_EXC(CPU->cause), RETRO64_EXC_FPE);
+	CHECK_EQ(SALSA64_CAUSE_EXC(CPU->cause), SALSA64_EXC_FPE);
 	CHECK_EQ(CAUSE(), CE);
 }
 

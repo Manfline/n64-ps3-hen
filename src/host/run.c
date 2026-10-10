@@ -1,8 +1,8 @@
 /*
- * Retro64 — ejecutor de línea de comandos para el host, para pruebas
+ * Salsa64 — ejecutor de línea de comandos para el host, para pruebas
  * automatizadas (tools/test-roms.sh). No depende de PSL1GHT.
  *
- *   retro64-run [opciones] rom.z64|rom.v64|rom.n64
+ *   salsa64-run [opciones] rom.z64|rom.v64|rom.n64
  *
  * Carga la ROM, la arranca por HLE (core/boot.c) y corre el intérprete en
  * bloques de ciclos hasta que se cumple una condición. Lo que la ROM imprime
@@ -41,9 +41,9 @@ enum stop_reason {
 	STOP_STUCK,
 };
 
-static struct retro64_n64 n64;
-static uint8_t rdram[RETRO64_RDRAM_MAX] __attribute__((aligned(128)));
-static uint8_t isv_buf[RETRO64_ISV_SIZE] __attribute__((aligned(16)));
+static struct salsa64_n64 n64;
+static uint8_t rdram[SALSA64_RDRAM_MAX] __attribute__((aligned(128)));
+static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
 
 /* Búsqueda de texto en la salida, también entre dos impresiones. */
 static struct {
@@ -51,7 +51,7 @@ static struct {
 	unsigned nfail;
 	size_t keep;
 	size_t tail_len;
-	char window[MAX_TEXT + RETRO64_ISV_SIZE];
+	char window[MAX_TEXT + SALSA64_ISV_SIZE];
 	bool quiet;
 	bool midline;  /* la última impresión no terminó en salto de línea */
 	enum stop_reason hit;
@@ -75,7 +75,7 @@ static void isv_out(void *ctx, const uint8_t *text, uint32_t len)
 		    memmem(watch.window, n, watch.until, strlen(watch.until)))
 			watch.hit = STOP_UNTIL;
 		if (watch.hit != STOP_NONE)
-			retro64_n64_stop(&n64);
+			salsa64_n64_stop(&n64);
 	}
 	watch.tail_len = n < watch.keep ? n : watch.keep;
 	memmove(watch.window, watch.window + n - watch.tail_len, watch.tail_len);
@@ -94,18 +94,18 @@ static uint32_t peek(uint64_t va)
 	uint32_t pa = (uint32_t)va & 0x1FFFFFFF;
 	if ((va >> 30) != 0x3FFFFFFFEull || pa + 4 > n64.bus.rdram_size)
 		return 0;
-	return retro64_rd32(n64.bus.rdram + pa);
+	return salsa64_rd32(n64.bus.rdram + pa);
 }
 
 static uint64_t trace_exc_left;
 
-static void trace_exc(struct retro64_cpu *cpu)
+static void trace_exc(struct salsa64_cpu *cpu)
 {
 	if (!trace_exc_left)
 		return;
 	trace_exc_left--;
 	fprintf(stderr, "excepción %2u en ciclo %llu: pc=%016llx [%08x] epc=%016llx bd=%u badvaddr=%016llx status=%08x\n",
-		RETRO64_CAUSE_EXC(cpu->cause), (unsigned long long)cpu->cycles,
+		SALSA64_CAUSE_EXC(cpu->cause), (unsigned long long)cpu->cycles,
 		(unsigned long long)cpu->cur_pc, peek(cpu->cur_pc), (unsigned long long)cpu->epc,
 		cpu->cause >> 31, (unsigned long long)cpu->bad_vaddr, cpu->status);
 }
@@ -114,7 +114,7 @@ static void trace_exc(struct retro64_cpu *cpu)
  * El bloque puede terminar sobre el salto o sobre su delay slot. */
 static bool cpu_stuck(void)
 {
-	const struct retro64_cpu *cpu = &n64.cpu;
+	const struct salsa64_cpu *cpu = &n64.cpu;
 	uint64_t at = cpu->branch ? cpu->pc - 4 : cpu->pc;
 	uint32_t i = peek(at);
 	bool self = i == 0x1000FFFFu ||
@@ -122,8 +122,8 @@ static bool cpu_stuck(void)
 	if (!self || peek(at + 4) != 0 || (cpu->branch && cpu->next_pc != at))
 		return false;
 	uint32_t st = cpu->status;
-	bool irq_possible = (st & RETRO64_ST_IE) && !(st & (RETRO64_ST_EXL | RETRO64_ST_ERL)) &&
-			    (st & RETRO64_ST_IM);
+	bool irq_possible = (st & SALSA64_ST_IE) && !(st & (SALSA64_ST_EXL | SALSA64_ST_ERL)) &&
+			    (st & SALSA64_ST_IM);
 	return !irq_possible;
 }
 
@@ -151,7 +151,7 @@ static void dump_regs(void)
 		"zr", "at", "v0", "v1", "a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7",
 		"s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "t8", "t9", "k0", "k1", "gp", "sp", "s8", "ra",
 	};
-	const struct retro64_cpu *cpu = &n64.cpu;
+	const struct salsa64_cpu *cpu = &n64.cpu;
 	for (int r = 0; r < 32; r++)
 		fprintf(stderr, "%s=%016llx%s", names[r], (unsigned long long)cpu->gpr[r], r % 4 == 3 ? "\n" : " ");
 	fprintf(stderr, "pc=%016llx status=%08x cause=%08x epc=%016llx badvaddr=%016llx\n",
@@ -161,7 +161,7 @@ static void dump_regs(void)
 
 static void usage(FILE *out)
 {
-	fputs("uso: retro64-run [opciones] rom\n"
+	fputs("uso: salsa64-run [opciones] rom\n"
 	      "  -c, --cycles N        límite de ciclos del VR4300 (por omisión 2^32)\n"
 	      "  -u, --until-text T    terminar (código 0) cuando el ISViewer imprima T\n"
 	      "  -f, --fail-text T     terminar con código 1 si el ISViewer imprime T (hasta 4)\n"
@@ -189,8 +189,8 @@ int main(int argc, char **argv)
 		{ NULL, 0, NULL, 0 },
 	};
 	uint64_t max_cycles = DEFAULT_CYCLES, slice = DEFAULT_SLICE;
-	uint32_t ram = RETRO64_RDRAM_MAX;
-	int tv = RETRO64_BOOT_TV_AUTO, c;
+	uint32_t ram = SALSA64_RDRAM_MAX;
+	int tv = SALSA64_BOOT_TV_AUTO, c;
 	bool regs = false;
 
 	while ((c = getopt_long(argc, argv, "c:u:f:qrh", opts, NULL)) != -1) {
@@ -209,9 +209,9 @@ int main(int argc, char **argv)
 		case 'r': regs = true; break;
 		case 'X': trace_exc_left = strtoull(optarg, NULL, 0); break;
 		case 'T':
-			if (!strcmp(optarg, "ntsc")) tv = RETRO64_TV_NTSC;
-			else if (!strcmp(optarg, "pal")) tv = RETRO64_TV_PAL;
-			else if (!strcmp(optarg, "mpal")) tv = RETRO64_TV_MPAL;
+			if (!strcmp(optarg, "ntsc")) tv = SALSA64_TV_NTSC;
+			else if (!strcmp(optarg, "pal")) tv = SALSA64_TV_PAL;
+			else if (!strcmp(optarg, "mpal")) tv = SALSA64_TV_MPAL;
 			else { usage(stderr); return 3; }
 			break;
 		case 'R':
@@ -237,31 +237,31 @@ int main(int argc, char **argv)
 	size_t rom_size = 0;
 	uint8_t *rom = read_file(path, &rom_size);
 	if (!rom) {
-		fprintf(stderr, "retro64-run: no se pudo leer %s\n", path);
+		fprintf(stderr, "salsa64-run: no se pudo leer %s\n", path);
 		return 3;
 	}
 	static const char *const fmt_names[] = { ".z64", ".v64 (convertida)", ".n64 (convertida)" };
-	enum retro64_rom_format fmt = retro64_rom_normalize(rom, rom_size);
+	enum salsa64_rom_format fmt = salsa64_rom_normalize(rom, rom_size);
 
-	retro64_n64_init(&n64, rdram, ram);
+	salsa64_n64_init(&n64, rdram, ram);
 	if (trace_exc_left)
 		n64.cpu.exc_hook = trace_exc;
-	retro64_bus_set_isviewer(&n64.bus, isv_buf, isv_out, NULL);
-	retro64_bus_set_rom(&n64.bus, rom, (uint32_t)(rom_size > UINT32_MAX ? UINT32_MAX : rom_size));
-	struct retro64_boot_info info;
-	if (!retro64_boot_hle(&n64, tv, &info)) {
-		fprintf(stderr, "retro64-run: no se pudo arrancar %s: %s\n", path, info.error);
+	salsa64_bus_set_isviewer(&n64.bus, isv_buf, isv_out, NULL);
+	salsa64_bus_set_rom(&n64.bus, rom, (uint32_t)(rom_size > UINT32_MAX ? UINT32_MAX : rom_size));
+	struct salsa64_boot_info info;
+	if (!salsa64_boot_hle(&n64, tv, &info)) {
+		fprintf(stderr, "salsa64-run: no se pudo arrancar %s: %s\n", path, info.error);
 		return 3;
 	}
 	static const char *const tv_names[] = { "PAL", "NTSC", "MPAL" };
-	if (info.kind == RETRO64_BOOT_ELF)
-		fprintf(stderr, "retro64-run: %s %s, %zu bytes; ELF en 0x%X (IPL3 libre), %u bytes cargados, "
+	if (info.kind == SALSA64_BOOT_ELF)
+		fprintf(stderr, "salsa64-run: %s %s, %zu bytes; ELF en 0x%X (IPL3 libre), %u bytes cargados, "
 			"entrada 0x%08X, TV %s, RDRAM %u MB\n", path, fmt_names[fmt], rom_size, info.elf_offset,
 			info.loaded, info.entry, tv_names[info.tv], ram >> 20);
 	else
-		fprintf(stderr, "retro64-run: %s %s, %zu bytes; carga plana (CIC %s), %u bytes, "
+		fprintf(stderr, "salsa64-run: %s %s, %zu bytes; carga plana (CIC %s), %u bytes, "
 			"entrada 0x%08X, TV %s, RDRAM %u MB\n", path, fmt_names[fmt], rom_size,
-			retro64_cic_name(info.cic), info.loaded, info.entry, tv_names[info.tv], ram >> 20);
+			salsa64_cic_name(info.cic), info.loaded, info.entry, tv_names[info.tv], ram >> 20);
 
 	/* Bucle principal: bloques de `slice` ciclos y verificación entre ellos. */
 	enum stop_reason reason = STOP_NONE;
@@ -272,7 +272,7 @@ int main(int argc, char **argv)
 			reason = STOP_CYCLES;
 			break;
 		}
-		retro64_n64_run(&n64, max_cycles - done < slice ? max_cycles - done : slice);
+		salsa64_n64_run(&n64, max_cycles - done < slice ? max_cycles - done : slice);
 		if (watch.hit != STOP_NONE)
 			reason = watch.hit;
 		else if (cpu_stuck())
@@ -289,7 +289,7 @@ int main(int argc, char **argv)
 		[STOP_CYCLES] = "se agotaron los ciclos",
 		[STOP_STUCK] = "bucle infinito sin interrupciones posibles",
 	};
-	fprintf(stderr, "retro64-run: %s; %llu ciclos (%.2f s de consola) en %.2f s, %.1f MIPS, pc=0x%016llx\n",
+	fprintf(stderr, "salsa64-run: %s; %llu ciclos (%.2f s de consola) en %.2f s, %.1f MIPS, pc=0x%016llx\n",
 		reason_names[reason], (unsigned long long)cycles, cycles / 93.75e6, us / 1e6,
 		us ? cycles / (double)us : 0.0, (unsigned long long)n64.cpu.pc);
 	if (regs)

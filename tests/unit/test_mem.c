@@ -1,5 +1,5 @@
 /*
- * Retro64 — pruebas de cargas y almacenamientos: anchos, extensión de
+ * Salsa64 — pruebas de cargas y almacenamientos: anchos, extensión de
  * signo, accesos no alineados (LWL/LWR/SWL/SWR/LDL/LDR/SDL/SDR), errores de
  * dirección y LL/SC.
  */
@@ -95,7 +95,7 @@ static void misaligned_load(void)
 	R[T1] = 0x55;
 	T_LOAD(LW(T1, 0, T0));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_ADEL, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_ADEL, T_CODE, 0, T_VEC_GEN);
 	CHECK_EQ(CPU->bad_vaddr, T_DATA + 2);
 	CHECK_EQ(R[T1], 0x55);
 }
@@ -105,7 +105,7 @@ static void misaligned_store(void)
 	R[T0] = T_DATA;
 	T_LOAD(SH(T1, 3, T0));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_ADES, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_ADES, T_CODE, 0, T_VEC_GEN);
 	CHECK_EQ(CPU->bad_vaddr, T_DATA + 3);
 }
 
@@ -114,7 +114,7 @@ static void misaligned_doubleword(void)
 	R[T0] = T_DATA + 4;
 	T_LOAD(LD(T1, 0, T0));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_ADEL, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_ADEL, T_CODE, 0, T_VEC_GEN);
 }
 
 static void address_not_sign_extended(void)
@@ -123,7 +123,7 @@ static void address_not_sign_extended(void)
 	R[T0] = 0x0000000080002000ull;
 	T_LOAD(LW(T1, 0, T0));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_ADEL, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_ADEL, T_CODE, 0, T_VEC_GEN);
 	CHECK_EQ(CPU->bad_vaddr, 0x0000000080002000ull);
 }
 
@@ -154,8 +154,8 @@ static void eret_clears_llbit(void)
 	t_wr32(T_DATA_PA, 10);
 	R[T0] = T_DATA;
 	R[T2] = 7;
-	t_set_status(T_STATUS | RETRO64_ST_EXL);
-	retro64_cpu_cop0_write(CPU, RETRO64_CP0_EPC, T_CODE + 12);
+	t_set_status(T_STATUS | SALSA64_ST_EXL);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_EPC, T_CODE + 12);
 	T_LOAD(LL(T1, 0, T0), ERET, NOP, SC(T2, 0, T0));
 	t_step(3);
 	CHECK_EQ(R[T2], 0);

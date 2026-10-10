@@ -1,5 +1,5 @@
 #!/bin/sh
-# Pruebas con ROMs homebrew en el host: compila retro64-run (gcc nativo, ASan +
+# Pruebas con ROMs homebrew en el host: compila salsa64-run (gcc nativo, ASan +
 # UBSan) y corre nemu64-test hasta su resumen por ISViewer.
 #
 # La lista de pruebas de nemu64-test que fallan se compara con la línea base
@@ -20,14 +20,14 @@ if [ ! -f "$ROM" ]; then
 	exit 1
 fi
 if ! tools/build.sh host >build/logs/build-host.log 2>&1; then
-	echo "falló la compilación de retro64-run (build/logs/build-host.log)" >&2
+	echo "falló la compilación de salsa64-run (build/logs/build-host.log)" >&2
 	exit 1
 fi
 
 # ~190 M ciclos en la versión actual; el límite deja margen de sobra.
 # stderr se une a stdout dentro del contenedor: así el resumen queda al final
 # (Docker no conserva el orden entre los dos flujos).
-tools/build.sh --sh "ASAN_OPTIONS=detect_leaks=0 build/host/retro64-run -c 4000000000 \
+tools/build.sh --sh "ASAN_OPTIONS=detect_leaks=0 build/host/salsa64-run -c 4000000000 \
 	-u 'success rate)' -f 'Exception storm' -f 'panicked at' $ROM 2>&1" >"$LOG" 2>&1
 rc=$?
 summary=$(grep 'success rate)' "$LOG" | tail -1)
@@ -42,7 +42,7 @@ if [ "${1:-}" = "--actualizar" ]; then
 fi
 
 printf '%-12s %s\n' nemu64-test "${summary:-sin resumen (código $rc, $LOG)}"
-grep '^retro64-run:' "$LOG" | tail -1 | sed 's/^/             /'
+grep '^salsa64-run:' "$LOG" | tail -1 | sed 's/^/             /'
 fail=0
 [ $rc -eq 0 ] || fail=1
 new=$(LC_ALL=C comm -13 "$BASE" "$NOW")

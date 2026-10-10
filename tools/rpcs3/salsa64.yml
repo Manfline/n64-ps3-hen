@@ -1,4 +1,4 @@
-# Configuración de RPCS3 para las pruebas de Retro64 (se pasa con --config;
+# Configuración de RPCS3 para las pruebas de Salsa64 (se pasa con --config;
 # solo cambia estas claves, el resto queda como en la config global).
 Video:
   # rsx-triangle lee el framebuffer desde el PPE.

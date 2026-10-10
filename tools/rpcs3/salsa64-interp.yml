@@ -1,4 +1,4 @@
-# Igual que retro64.yml, pero con el intérprete del PPU: ejecuta código
+# Igual que salsa64.yml, pero con el intérprete del PPU: ejecuta código
 # generado en tiempo de ejecución (el recompilador LLVM no). Para jit-ppe.
 Core:
   PPU Decoder: Interpreter (dynamic)

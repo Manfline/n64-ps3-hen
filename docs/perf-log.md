@@ -33,5 +33,5 @@ KSEG0, 20 M instrucciones.
 | 2026-10-10 | (arranque HLE) | RPCS3 0.0.43, PPU LLVM | 29,0 MIPS | **No concluyente** |
 | 2026-10-10 | 81da001 | **PS3 real**: Slim CECH-3011A, HFW 4.91 + HEN, ppu-gcc -O2 -mcpu=cell | **8,8 MIPS** | Primer número real. 154/154 pruebas pasan en big-endian. Muy lejos de los ~60 MIPS que pide la N64 a velocidad completa: perfilar antes de seguir (sospecha: cambios de modo de redondeo/FPSCR en cada ADD.S, que serializan el PPE) |
 
-Corrida completa de nemu64-test (`retro64-run`, ≈189 M ciclos del VR4300):
+Corrida completa de nemu64-test (`salsa64-run`, ≈189 M ciclos del VR4300):
 0,75 s en el host sin sanitizers (253 MIPS); 2,1 s con ASan + UBSan.

@@ -1,6 +1,6 @@
-PROGRAM   := retro64-spu-compute
-TITLE     := Retro64 prueba SPU
-APPID     := RETR00002
+PROGRAM   := salsa64-spu-compute
+TITLE     := Salsa64 prueba SPU
+APPID     := SLSA00002
 SRCS      := main.c
 COMMON    := src/platform/ps3/log.c
 LIBS      := -lnet -lsysmodule -lsysutil -lrt -llv2 -lm

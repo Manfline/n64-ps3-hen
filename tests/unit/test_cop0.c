@@ -1,5 +1,5 @@
 /*
- * Retro64 — pruebas de COP0: registros, excepciones, ERET, Count/Compare,
+ * Salsa64 — pruebas de COP0: registros, excepciones, ERET, Count/Compare,
  * interrupciones, TLB y restricciones de modo usuario.
  */
 #include "test.h"
@@ -11,15 +11,15 @@
 static void tlb_set(unsigned index, uint64_t hi, uint32_t lo0, uint32_t lo1, uint32_t page_mask)
 {
 	uint64_t pc = CPU->pc;
-	retro64_cpu_cop0_write(CPU, RETRO64_CP0_INDEX, index);
-	retro64_cpu_cop0_write(CPU, RETRO64_CP0_ENTRYHI, hi);
-	retro64_cpu_cop0_write(CPU, RETRO64_CP0_ENTRYLO0, lo0);
-	retro64_cpu_cop0_write(CPU, RETRO64_CP0_ENTRYLO1, lo1);
-	retro64_cpu_cop0_write(CPU, RETRO64_CP0_PAGEMASK, page_mask);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_INDEX, index);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_ENTRYHI, hi);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_ENTRYLO0, lo0);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_ENTRYLO1, lo1);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_PAGEMASK, page_mask);
 	t_wr32(0x0F00, TLBWI);
-	retro64_cpu_set_pc(CPU, 0xFFFFFFFF80000F00ull);
+	salsa64_cpu_set_pc(CPU, 0xFFFFFFFF80000F00ull);
 	t_step(1);
-	retro64_cpu_set_pc(CPU, pc);
+	salsa64_cpu_set_pc(CPU, pc);
 }
 
 /* EntryLo: PFN | C=3 | D | V | G */
@@ -27,9 +27,9 @@ static void tlb_set(unsigned index, uint64_t hi, uint32_t lo0, uint32_t lo1, uin
 
 static void prid_and_config(void)
 {
-	T_LOAD(MFC0(T0, RETRO64_CP0_PRID), MFC0(T1, RETRO64_CP0_CONFIG));
+	T_LOAD(MFC0(T0, SALSA64_CP0_PRID), MFC0(T1, SALSA64_CP0_CONFIG));
 	t_step(2);
-	CHECK_EQ(R[T0], RETRO64_PRID_VALUE);
+	CHECK_EQ(R[T0], SALSA64_PRID_VALUE);
 	CHECK_EQ(R[T1], 0x7006E463);
 }
 
@@ -37,8 +37,8 @@ static void write_masks(void)
 {
 	R[T0] = 0xFFFFFFFF;
 	R[T1] = 0xFFFFFFE0;  /* sin KSU, ERL, EXL, IE */
-	T_LOAD(MTC0(T0, RETRO64_CP0_CAUSE), MFC0(T2, RETRO64_CP0_CAUSE),
-	       MTC0(T1, RETRO64_CP0_STATUS), MFC0(T3, RETRO64_CP0_STATUS));
+	T_LOAD(MTC0(T0, SALSA64_CP0_CAUSE), MFC0(T2, SALSA64_CP0_CAUSE),
+	       MTC0(T1, SALSA64_CP0_STATUS), MFC0(T3, SALSA64_CP0_STATUS));
 	t_step(4);
 	CHECK_EQ(R[T2], 0x300);
 	CHECK_EQ(R[T3], 0xFFFFFFFFFF57FFE0ull);
@@ -49,8 +49,8 @@ static void mtc0_writes_64_bits(void)
 {
 	R[T0] = 0xFFFFFFFF80001234ull;
 	R[T1] = 0x0000001234567890ull;
-	T_LOAD(MTC0(T0, RETRO64_CP0_EPC), DMFC0(T2, RETRO64_CP0_EPC),
-	       MTC0(T1, RETRO64_CP0_EPC), DMFC0(T3, RETRO64_CP0_EPC), MFC0(T4, RETRO64_CP0_EPC));
+	T_LOAD(MTC0(T0, SALSA64_CP0_EPC), DMFC0(T2, SALSA64_CP0_EPC),
+	       MTC0(T1, SALSA64_CP0_EPC), DMFC0(T3, SALSA64_CP0_EPC), MFC0(T4, SALSA64_CP0_EPC));
 	t_step(5);
 	CHECK_EQ(R[T2], 0xFFFFFFFF80001234ull);
 	CHECK_EQ(R[T3], 0x0000001234567890ull);
@@ -62,10 +62,10 @@ static void syscall_and_eret(void)
 	t_wr32(0x180, ERET);
 	T_LOAD(SYSCALL, ADDIU(T0, ZERO, 1));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_SYS, T_CODE, 0, T_VEC_GEN);
-	retro64_cpu_cop0_write(CPU, RETRO64_CP0_EPC, T_CODE + 4);  /* el manejador salta el SYSCALL */
+	CHECK_EXC(SALSA64_EXC_SYS, T_CODE, 0, T_VEC_GEN);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_EPC, T_CODE + 4);  /* el manejador salta el SYSCALL */
 	t_step(2);
-	CHECK_EQ(CPU->status & RETRO64_ST_EXL, 0);
+	CHECK_EQ(CPU->status & SALSA64_ST_EXL, 0);
 	CHECK_EQ(R[T0], 1);
 }
 
@@ -73,39 +73,39 @@ static void break_exception(void)
 {
 	T_LOAD(NOP, BREAK);
 	t_step(2);
-	CHECK_EXC(RETRO64_EXC_BP, T_CODE + 4, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_BP, T_CODE + 4, 0, T_VEC_GEN);
 }
 
 static void bev_vectors(void)
 {
-	t_set_status(T_STATUS | RETRO64_ST_BEV);
+	t_set_status(T_STATUS | SALSA64_ST_BEV);
 	T_LOAD(SYSCALL);
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_SYS, T_CODE, 0, 0xFFFFFFFFBFC00380ull);
+	CHECK_EXC(SALSA64_EXC_SYS, T_CODE, 0, 0xFFFFFFFFBFC00380ull);
 }
 
 static void nested_exception_keeps_epc(void)
 {
-	t_set_status(T_STATUS | RETRO64_ST_EXL);
-	retro64_cpu_cop0_write(CPU, RETRO64_CP0_EPC, 0x1234);
+	t_set_status(T_STATUS | SALSA64_ST_EXL);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_EPC, 0x1234);
 	T_LOAD(SYSCALL);
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_SYS, 0x1234, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_SYS, 0x1234, 0, T_VEC_GEN);
 }
 
 static void reserved_instruction(void)
 {
 	T_LOAD(0x70000000u);  /* opcode 0x1C */
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_RI, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_RI, T_CODE, 0, T_VEC_GEN);
 }
 
 static void cop2_unusable(void)
 {
 	T_LOAD(0x48000000u);  /* COP2 */
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_CPU, T_CODE, 0, T_VEC_GEN);
-	CHECK_EQ((CPU->cause >> RETRO64_CAUSE_CE_SHIFT) & 3, 2);
+	CHECK_EXC(SALSA64_EXC_CPU, T_CODE, 0, T_VEC_GEN);
+	CHECK_EQ((CPU->cause >> SALSA64_CAUSE_CE_SHIFT) & 3, 2);
 }
 
 static void traps(void)
@@ -113,7 +113,7 @@ static void traps(void)
 	R[T0] = R[T1] = 5;
 	T_LOAD(TNE(T0, T1), TGE(T0, T1));
 	t_step(2);
-	CHECK_EXC(RETRO64_EXC_TR, T_CODE + 4, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_TR, T_CODE + 4, 0, T_VEC_GEN);
 }
 
 static void trap_immediate(void)
@@ -121,7 +121,7 @@ static void trap_immediate(void)
 	R[T0] = (uint64_t)-3;
 	T_LOAD(TEQI(T0, -3));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_TR, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_TR, T_CODE, 0, T_VEC_GEN);
 }
 
 static void misaligned_fetch(void)
@@ -129,14 +129,14 @@ static void misaligned_fetch(void)
 	R[T0] = T_CODE + 0x22;
 	T_LOAD(JR(T0), NOP);
 	t_step(3);
-	CHECK_EXC(RETRO64_EXC_ADEL, T_CODE + 0x22, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_ADEL, T_CODE + 0x22, 0, T_VEC_GEN);
 	CHECK_EQ(CPU->bad_vaddr, T_CODE + 0x22);
 }
 
 static void count_half_rate(void)
 {
-	T_LOAD(MFC0(T0, RETRO64_CP0_COUNT));
-	t_wr32(T_CODE_PA + 80, MFC0(T1, RETRO64_CP0_COUNT));  /* 20 instrucciones después */
+	T_LOAD(MFC0(T0, SALSA64_CP0_COUNT));
+	t_wr32(T_CODE_PA + 80, MFC0(T1, SALSA64_CP0_COUNT));  /* 20 instrucciones después */
 	t_step(21);
 	CHECK_EQ((uint32_t)(R[T1] - R[T0]), 10);
 }
@@ -144,47 +144,47 @@ static void count_half_rate(void)
 static void count_write(void)
 {
 	R[T0] = 0x12345;
-	T_LOAD(MTC0(T0, RETRO64_CP0_COUNT), MFC0(T1, RETRO64_CP0_COUNT));
+	T_LOAD(MTC0(T0, SALSA64_CP0_COUNT), MFC0(T1, SALSA64_CP0_COUNT));
 	t_step(2);
 	CHECK(R[T1] - 0x12345 <= 1);
 }
 
 static void compare_interrupt(void)
 {
-	t_set_status(T_STATUS | RETRO64_ST_IE | 0x8000);  /* IM7 */
-	T_LOAD(MFC0(T1, RETRO64_CP0_COUNT), ADDIU(T1, T1, 10), MTC0(T1, RETRO64_CP0_COMPARE));
+	t_set_status(T_STATUS | SALSA64_ST_IE | 0x8000);  /* IM7 */
+	T_LOAD(MFC0(T1, SALSA64_CP0_COUNT), ADDIU(T1, T1, 10), MTC0(T1, SALSA64_CP0_COMPARE));
 	t_step(17);  /* 16 ciclos tras leer Count: todavía no */
-	CHECK_EQ(CPU->status & RETRO64_ST_EXL, 0);
+	CHECK_EQ(CPU->status & SALSA64_ST_EXL, 0);
 	CHECK_EQ(CPU->cause & 0x8000, 0);
 
 	unsigned k = 0;
-	while (k < 10 && !(CPU->status & RETRO64_ST_EXL)) {
+	while (k < 10 && !(CPU->status & SALSA64_ST_EXL)) {
 		t_step(1);
 		k++;
 	}
 	CHECK(k >= 3 && k <= 5);
 	CHECK(CPU->cause & 0x8000);
-	CHECK_EQ(RETRO64_CAUSE_EXC(CPU->cause), RETRO64_EXC_INT);
+	CHECK_EQ(SALSA64_CAUSE_EXC(CPU->cause), SALSA64_EXC_INT);
 	CHECK_EQ(CPU->pc, T_VEC_GEN);
 
-	retro64_cpu_cop0_write(CPU, RETRO64_CP0_COMPARE, 0);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_COMPARE, 0);
 	CHECK_EQ(CPU->cause & 0x8000, 0);
 }
 
 static void software_interrupt(void)
 {
-	t_set_status(T_STATUS | RETRO64_ST_IE | 0x100);  /* IM0 */
+	t_set_status(T_STATUS | SALSA64_ST_IE | 0x100);  /* IM0 */
 	R[T0] = 0x100;
-	T_LOAD(MTC0(T0, RETRO64_CP0_CAUSE), NOP);
+	T_LOAD(MTC0(T0, SALSA64_CP0_CAUSE), NOP);
 	t_step(2);
-	CHECK_EXC(RETRO64_EXC_INT, T_CODE + 4, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_INT, T_CODE + 4, 0, T_VEC_GEN);
 }
 
 static void interrupt_blocked_by_exl_and_ie(void)
 {
 	R[T0] = 0x100;
-	t_set_status(T_STATUS | RETRO64_ST_EXL | RETRO64_ST_IE | 0x100);
-	T_LOAD(MTC0(T0, RETRO64_CP0_CAUSE), NOP, NOP);
+	t_set_status(T_STATUS | SALSA64_ST_EXL | SALSA64_ST_IE | 0x100);
+	T_LOAD(MTC0(T0, SALSA64_CP0_CAUSE), NOP, NOP);
 	t_step(2);
 	CHECK_EQ(CPU->pc, T_CODE + 8);
 	t_set_status(T_STATUS | 0x100);  /* sin IE */
@@ -194,32 +194,32 @@ static void interrupt_blocked_by_exl_and_ie(void)
 
 static void mi_interrupt_on_ip2(void)
 {
-	struct retro64_bus *bus = &t_n64.bus;
-	retro64_bus_write32(bus, 0x0430000C, 0x800, ~0u);  /* máscara DP */
-	t_set_status(T_STATUS | RETRO64_ST_IE | 0x400);
-	retro64_mi_raise(bus, RETRO64_IRQ_DP);
+	struct salsa64_bus *bus = &t_n64.bus;
+	salsa64_bus_write32(bus, 0x0430000C, 0x800, ~0u);  /* máscara DP */
+	t_set_status(T_STATUS | SALSA64_ST_IE | 0x400);
+	salsa64_mi_raise(bus, SALSA64_IRQ_DP);
 	CHECK(CPU->cause & 0x400);
 	T_LOAD(NOP);
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_INT, T_CODE, 0, T_VEC_GEN);
-	retro64_bus_write32(bus, 0x04300000, 0x800, ~0u);  /* MI_MODE: limpiar DP */
+	CHECK_EXC(SALSA64_EXC_INT, T_CODE, 0, T_VEC_GEN);
+	salsa64_bus_write32(bus, 0x04300000, 0x800, ~0u);  /* MI_MODE: limpiar DP */
 	CHECK_EQ(CPU->cause & 0x400, 0);
 }
 
 static void eret_from_error_level(void)
 {
-	t_set_status(T_STATUS | RETRO64_ST_ERL);
-	retro64_cpu_cop0_write(CPU, RETRO64_CP0_ERROREPC, T_CODE + 0x20);
+	t_set_status(T_STATUS | SALSA64_ST_ERL);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_ERROREPC, T_CODE + 0x20);
 	T_LOAD(ERET);
 	t_step(1);
 	CHECK_EQ(CPU->pc, T_CODE + 0x20);
-	CHECK_EQ(CPU->status & RETRO64_ST_ERL, 0);
+	CHECK_EQ(CPU->status & SALSA64_ST_ERL, 0);
 }
 
 static void kuseg_unmapped_with_erl(void)
 {
 	t_wr32(T_DATA_PA, 0xABCD1234);
-	t_set_status(T_STATUS | RETRO64_ST_ERL);
+	t_set_status(T_STATUS | SALSA64_ST_ERL);
 	R[T0] = T_DATA_PA;
 	T_LOAD(LW(T1, 0, T0));
 	t_step(1);
@@ -235,11 +235,11 @@ static void tlb_mapped_access(void)
 	R[T2] = LO(0x11, 1, 1, 1);
 	R[T3] = 5;
 	R[T7] = 0x77;
-	T_LOAD(MTC0(T0, RETRO64_CP0_ENTRYHI), MTC0(T1, RETRO64_CP0_ENTRYLO0),
-	       MTC0(T2, RETRO64_CP0_ENTRYLO1), MTC0(ZERO, RETRO64_CP0_PAGEMASK),
-	       MTC0(T3, RETRO64_CP0_INDEX), TLBWI,
+	T_LOAD(MTC0(T0, SALSA64_CP0_ENTRYHI), MTC0(T1, SALSA64_CP0_ENTRYLO0),
+	       MTC0(T2, SALSA64_CP0_ENTRYLO1), MTC0(ZERO, SALSA64_CP0_PAGEMASK),
+	       MTC0(T3, SALSA64_CP0_INDEX), TLBWI,
 	       LW(T4, 0x10, ZERO), LW(T5, 0x1010, ZERO), SW(T7, 0x14, ZERO),
-	       TLBP, MFC0(T6, RETRO64_CP0_INDEX));
+	       TLBP, MFC0(T6, SALSA64_CP0_INDEX));
 	t_step(11);
 	CHECK_EQ(R[T4], 0xFFFFFFFFAAAA5555ull);
 	CHECK_EQ(R[T5], 0x12345678);
@@ -250,13 +250,13 @@ static void tlb_mapped_access(void)
 static void tlb_read_back(void)
 {
 	tlb_set(7, 0x00402000 | 0x42, LO(0x20, 1, 1, 1), LO(0x21, 0, 1, 1), 0x6000);
-	retro64_cpu_cop0_write(CPU, RETRO64_CP0_ENTRYHI, 0);
-	retro64_cpu_cop0_write(CPU, RETRO64_CP0_ENTRYLO0, 0);
-	retro64_cpu_cop0_write(CPU, RETRO64_CP0_PAGEMASK, 0);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_ENTRYHI, 0);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_ENTRYLO0, 0);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_PAGEMASK, 0);
 	R[T0] = 7;
-	T_LOAD(MTC0(T0, RETRO64_CP0_INDEX), TLBR, MFC0(T1, RETRO64_CP0_ENTRYHI),
-	       MFC0(T2, RETRO64_CP0_ENTRYLO0), MFC0(T3, RETRO64_CP0_ENTRYLO1),
-	       MFC0(T4, RETRO64_CP0_PAGEMASK));
+	T_LOAD(MTC0(T0, SALSA64_CP0_INDEX), TLBR, MFC0(T1, SALSA64_CP0_ENTRYHI),
+	       MFC0(T2, SALSA64_CP0_ENTRYLO0), MFC0(T3, SALSA64_CP0_ENTRYLO1),
+	       MFC0(T4, SALSA64_CP0_PAGEMASK));
 	t_step(6);
 	CHECK_EQ(R[T1], 0x00400042);  /* VPN2 enmascarado por la página de 16 KB */
 	CHECK_EQ(R[T2], LO(0x20, 1, 1, 1));
@@ -267,7 +267,7 @@ static void tlb_read_back(void)
 static void tlb_probe_miss(void)
 {
 	R[T0] = 0x7FFFE000;
-	T_LOAD(MTC0(T0, RETRO64_CP0_ENTRYHI), TLBP, MFC0(T1, RETRO64_CP0_INDEX));
+	T_LOAD(MTC0(T0, SALSA64_CP0_ENTRYHI), TLBP, MFC0(T1, SALSA64_CP0_INDEX));
 	t_step(3);
 	CHECK_EQ(R[T1], 0xFFFFFFFF80000000ull);
 }
@@ -288,10 +288,10 @@ static void tlb_large_pages(void)
 static void tlb_refill_on_miss(void)
 {
 	R[T0] = 0x00400120;
-	retro64_cpu_cop0_write(CPU, RETRO64_CP0_ENTRYHI, 0x33);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_ENTRYHI, 0x33);
 	T_LOAD(LW(T1, 0, T0));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_TLBL, T_CODE, 0, T_VEC_TLB);
+	CHECK_EXC(SALSA64_EXC_TLBL, T_CODE, 0, T_VEC_TLB);
 	CHECK_EQ(CPU->bad_vaddr, 0x00400120);
 	CHECK_EQ(CPU->context & 0x7FFFF0, (0x00400120 >> 13) << 4);
 	CHECK_EQ(CPU->entry_hi, 0x00400033);  /* VPN2 de la falla, ASID intacto */
@@ -302,16 +302,16 @@ static void tlb_refill_store(void)
 	R[T0] = 0x00400120;
 	T_LOAD(SW(T1, 0, T0));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_TLBS, T_CODE, 0, T_VEC_TLB);
+	CHECK_EXC(SALSA64_EXC_TLBS, T_CODE, 0, T_VEC_TLB);
 }
 
 static void tlb_miss_with_exl_uses_general_vector(void)
 {
-	t_set_status(T_STATUS | RETRO64_ST_EXL);
+	t_set_status(T_STATUS | SALSA64_ST_EXL);
 	R[T0] = 0x00400120;
 	T_LOAD(LW(T1, 0, T0));
 	t_step(1);
-	CHECK_EQ(RETRO64_CAUSE_EXC(CPU->cause), RETRO64_EXC_TLBL);
+	CHECK_EQ(SALSA64_CAUSE_EXC(CPU->cause), SALSA64_EXC_TLBL);
 	CHECK_EQ(CPU->pc, T_VEC_GEN);
 }
 
@@ -321,7 +321,7 @@ static void tlb_invalid_entry(void)
 	R[T0] = 0x00400120;
 	T_LOAD(LW(T1, 0, T0));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_TLBL, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_TLBL, T_CODE, 0, T_VEC_GEN);
 }
 
 static void tlb_modified(void)
@@ -330,64 +330,64 @@ static void tlb_modified(void)
 	R[T0] = 0x00400120;
 	T_LOAD(LW(T1, 0, T0), SW(T1, 0, T0));
 	t_step(2);
-	CHECK_EXC(RETRO64_EXC_MOD, T_CODE + 4, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_MOD, T_CODE + 4, 0, T_VEC_GEN);
 }
 
 static void tlb_asid_mismatch(void)
 {
 	tlb_set(4, 0x00400000 | 0x01, LO(0x10, 1, 1, 0), LO(0x11, 1, 1, 0), 0);
-	retro64_cpu_cop0_write(CPU, RETRO64_CP0_ENTRYHI, 0x02);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_ENTRYHI, 0x02);
 	R[T0] = 0x00400120;
 	T_LOAD(LW(T1, 0, T0));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_TLBL, T_CODE, 0, T_VEC_TLB);
+	CHECK_EXC(SALSA64_EXC_TLBL, T_CODE, 0, T_VEC_TLB);
 	t_set_status(T_STATUS);
-	retro64_cpu_cop0_write(CPU, RETRO64_CP0_ENTRYHI, 0x01);
-	retro64_cpu_set_pc(CPU, T_CODE);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_ENTRYHI, 0x01);
+	salsa64_cpu_set_pc(CPU, T_CODE);
 	t_step(1);
 	CHECK_EQ(CPU->pc, T_CODE + 4);
 }
 
 static void user_mode_cannot_fetch_kseg0(void)
 {
-	t_set_status((T_STATUS & ~RETRO64_ST_CU0) | KSU_USER);
+	t_set_status((T_STATUS & ~SALSA64_ST_CU0) | KSU_USER);
 	T_LOAD(NOP);
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_ADEL, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_ADEL, T_CODE, 0, T_VEC_GEN);
 }
 
 static void user_mode_restrictions(void)
 {
 	/* Página 0 de kuseg → física 0x10000; ahí va el código de usuario. */
 	tlb_set(0, 0, LO(0x10, 1, 1, 1), LO(0x11, 1, 1, 1), 0);
-	t_wr32(0x10000, MFC0(T0, RETRO64_CP0_STATUS));
+	t_wr32(0x10000, MFC0(T0, SALSA64_CP0_STATUS));
 	t_wr32(0x10004, DADDU(T1, T2, T3));
 	R[T2] = 0x100000000ull;
 	R[T3] = 1;
 
-	t_set_status((T_STATUS & ~RETRO64_ST_CU0) | KSU_USER);
-	retro64_cpu_set_pc(CPU, 0);
+	t_set_status((T_STATUS & ~SALSA64_ST_CU0) | KSU_USER);
+	salsa64_cpu_set_pc(CPU, 0);
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_CPU, 0, 0, T_VEC_GEN);
-	CHECK_EQ((CPU->cause >> RETRO64_CAUSE_CE_SHIFT) & 3, 0);
+	CHECK_EXC(SALSA64_EXC_CPU, 0, 0, T_VEC_GEN);
+	CHECK_EQ((CPU->cause >> SALSA64_CAUSE_CE_SHIFT) & 3, 0);
 
-	t_set_status((T_STATUS & ~RETRO64_ST_CU0) | KSU_USER);
-	retro64_cpu_set_pc(CPU, 4);
+	t_set_status((T_STATUS & ~SALSA64_ST_CU0) | KSU_USER);
+	salsa64_cpu_set_pc(CPU, 4);
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_RI, 4, 0, T_VEC_GEN);  /* 64 bits sin UX */
+	CHECK_EXC(SALSA64_EXC_RI, 4, 0, T_VEC_GEN);  /* 64 bits sin UX */
 
-	t_set_status((T_STATUS & ~RETRO64_ST_CU0) | KSU_USER | RETRO64_ST_UX);
-	retro64_cpu_set_pc(CPU, 4);
+	t_set_status((T_STATUS & ~SALSA64_ST_CU0) | KSU_USER | SALSA64_ST_UX);
+	salsa64_cpu_set_pc(CPU, 4);
 	t_step(1);
 	CHECK_EQ(R[T1], 0x100000001ull);
-	CHECK_EQ(CPU->status & RETRO64_ST_EXL, 0);
+	CHECK_EQ(CPU->status & SALSA64_ST_EXL, 0);
 }
 
 static void random_in_range(void)
 {
 	R[T0] = 10;
-	T_LOAD(MTC0(T0, RETRO64_CP0_WIRED), MFC0(T1, RETRO64_CP0_RANDOM));
-	t_wr32(T_CODE_PA + 0x100, MFC0(T2, RETRO64_CP0_RANDOM));
+	T_LOAD(MTC0(T0, SALSA64_CP0_WIRED), MFC0(T1, SALSA64_CP0_RANDOM));
+	t_wr32(T_CODE_PA + 0x100, MFC0(T2, SALSA64_CP0_RANDOM));
 	t_step(2);
 	CHECK(R[T1] >= 10 && R[T1] <= 31);
 	t_step(63);
@@ -407,7 +407,7 @@ static void unused_register_latch(void)
  * da RI con Cause.CE = 2 (nemu64-test, cop_unusable). */
 static void cop2_latch(void)
 {
-	t_set_status(T_STATUS | RETRO64_ST_CU2);
+	t_set_status(T_STATUS | SALSA64_ST_CU2);
 	R[T0] = 0x0123456789ABCDEFull;
 	T_LOAD(M_R(0x12, 0x04, T0, 5, 0, 0),   /* MTC2 */
 	       M_R(0x12, 0x00, T1, 6, 0, 0),   /* MFC2 */
@@ -416,14 +416,14 @@ static void cop2_latch(void)
 	t_step(4);
 	CHECK_EQ(R[T1], 0xFFFFFFFF89ABCDEFull);
 	CHECK_EQ(R[T2], 0x0123456789ABCDEFull);
-	CHECK_EXC(RETRO64_EXC_RI, T_CODE + 12, 0, T_VEC_GEN);
-	CHECK_EQ((CPU->cause >> RETRO64_CAUSE_CE_SHIFT) & 3, 2);
+	CHECK_EXC(SALSA64_EXC_RI, T_CODE + 12, 0, T_VEC_GEN);
+	CHECK_EQ((CPU->cause >> SALSA64_CAUSE_CE_SHIFT) & 3, 2);
 
 	t_set_status(T_STATUS);
-	retro64_cpu_set_pc(CPU, T_CODE);
+	salsa64_cpu_set_pc(CPU, T_CODE);
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_CPU, T_CODE, 0, T_VEC_GEN);
-	CHECK_EQ((CPU->cause >> RETRO64_CAUSE_CE_SHIFT) & 3, 2);
+	CHECK_EXC(SALSA64_EXC_CPU, T_CODE, 0, T_VEC_GEN);
+	CHECK_EQ((CPU->cause >> SALSA64_CAUSE_CE_SHIFT) & 3, 2);
 }
 
 /* KX = 1: xkphys (0x9000...) llega a la memoria física; con bits 58–32
@@ -431,13 +431,13 @@ static void cop2_latch(void)
 static void xkphys_with_kx(void)
 {
 	t_wr32(0x2000, 0xCAFEF00D);
-	t_set_status(T_STATUS | RETRO64_ST_KX);
+	t_set_status(T_STATUS | SALSA64_ST_KX);
 	R[T0] = 0x9000000000002000ull;
 	R[T1] = 0x9000000100002000ull;
 	T_LOAD(LW(T2, 0, T0), LW(T3, 0, T1));
 	t_step(2);
 	CHECK_EQ(R[T2], 0xFFFFFFFFCAFEF00Dull);
-	CHECK_EXC(RETRO64_EXC_ADEL, T_CODE + 4, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_ADEL, T_CODE + 4, 0, T_VEC_GEN);
 	CHECK_EQ(CPU->bad_vaddr, 0x9000000100002000ull);
 }
 

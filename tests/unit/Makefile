@@ -1,4 +1,4 @@
-# Retro64 — pruebas unitarias del núcleo en el host, con el gcc nativo del
+# Salsa64 — pruebas unitarias del núcleo en el host, con el gcc nativo del
 # contenedor (arm64 little-endian). Desde la raíz: tools/build.sh test-host
 #
 # Por omisión compila con AddressSanitizer y UBSan; SAN= los quita.
@@ -19,12 +19,12 @@ OBJS      := $(patsubst $(ROOT)/%.c,$(OUT)/obj/%.o,$(CORE_SRCS) $(TEST_SRCS))
 
 .PHONY: all run clean
 
-all: $(OUT)/retro64-unit
+all: $(OUT)/salsa64-unit
 
-run: $(OUT)/retro64-unit
+run: $(OUT)/salsa64-unit
 	ASAN_OPTIONS=detect_leaks=0 $<
 
-$(OUT)/retro64-unit: $(OBJS)
+$(OUT)/salsa64-unit: $(OBJS)
 	@echo "  LD      $(notdir $@)"
 	@$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
 

@@ -1,18 +1,18 @@
 /*
- * Retro64 — marco de pruebas unitarias del núcleo.
+ * Salsa64 — marco de pruebas unitarias del núcleo.
  *
  * Las mismas pruebas corren en el host (gcc nativo, little-endian:
  * `make test-host`) y en la PS3/RPCS3 (ppu-gcc, big-endian:
  * tests/phase1/cpu-tests). Sin dependencias de la plataforma: la salida va
- * por la función que pasa quien llama a retro64_unit_run.
+ * por la función que pasa quien llama a salsa64_unit_run.
  *
  * Cada prueba arranca con una máquina limpia (t_reset): RDRAM en cero,
  * modo kernel, Status = CU1|CU0|FR, PC en T_CODE. Las pruebas ponen los
  * registros a mano, cargan unas pocas instrucciones con T_LOAD y avanzan con
  * t_step.
  */
-#ifndef RETRO64_TESTS_TEST_H
-#define RETRO64_TESTS_TEST_H
+#ifndef SALSA64_TESTS_TEST_H
+#define SALSA64_TESTS_TEST_H
 
 #include <stdint.h>
 
@@ -25,9 +25,9 @@
 #define T_DATA      0xFFFFFFFF80002000ull
 #define T_VEC_GEN   0xFFFFFFFF80000180ull
 #define T_VEC_TLB   0xFFFFFFFF80000000ull
-#define T_STATUS    (RETRO64_ST_CU0 | RETRO64_ST_CU1 | RETRO64_ST_FR)
+#define T_STATUS    (SALSA64_ST_CU0 | SALSA64_ST_CU1 | SALSA64_ST_FR)
 
-extern struct retro64_n64 t_n64;
+extern struct salsa64_n64 t_n64;
 #define CPU (&t_n64.cpu)
 #define R   (t_n64.cpu.gpr)
 
@@ -54,11 +54,11 @@ void t_fail(const char *file, int line, const char *fmt, ...) __attribute__((for
 /* Excepción tomada: código, EPC, BD y vector. */
 #define CHECK_EXC(x_code, x_epc, x_bd, x_vec)                             \
 	do {                                                              \
-		CHECK_EQ(RETRO64_CAUSE_EXC(CPU->cause), x_code);          \
+		CHECK_EQ(SALSA64_CAUSE_EXC(CPU->cause), x_code);          \
 		CHECK_EQ(CPU->epc, x_epc);                                \
-		CHECK_EQ((CPU->cause & RETRO64_CAUSE_BD) != 0, x_bd);     \
+		CHECK_EQ((CPU->cause & SALSA64_CAUSE_BD) != 0, x_bd);     \
 		CHECK_EQ(CPU->pc, x_vec);                                 \
-		CHECK(CPU->status & RETRO64_ST_EXL);                      \
+		CHECK(CPU->status & SALSA64_ST_EXL);                      \
 	} while (0)
 
 void t_load(const uint32_t *code, unsigned n);
@@ -97,10 +97,10 @@ void t_suite_boot(void);
 
 /* Corre todo y devuelve el número de pruebas fallidas. `print` recibe una
  * línea sin salto final. */
-int retro64_unit_run(void (*print)(const char *line));
+int salsa64_unit_run(void (*print)(const char *line));
 
 /* Micro-benchmark del intérprete (bench.c). Llamar después de
- * retro64_unit_run, que inicializa la máquina. */
-void retro64_unit_bench(void (*print)(const char *line), uint64_t (*now_us)(void));
+ * salsa64_unit_run, que inicializa la máquina. */
+void salsa64_unit_bench(void (*print)(const char *line), uint64_t (*now_us)(void));
 
 #endif

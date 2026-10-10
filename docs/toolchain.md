@@ -1,6 +1,6 @@
 # Toolchain (Fase 0)
 
-Imagen `retro64-toolchain:dev`, definida en `docker/Dockerfile` y construida con
+Imagen `salsa64-toolchain:dev`, definida en `docker/Dockerfile` y construida con
 `tools/docker-image.sh` sobre el contexto `colima-dev`.
 
 ## Versiones fijadas

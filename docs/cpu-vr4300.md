@@ -16,7 +16,7 @@ no se copió código de Not64, Mupen64Plus ni ares.
 | `src/core/n64.{h,c}` | La máquina: CPU + bus + planificador |
 | `src/core/rom.{h,c}` | Orden de bytes del volcado, encabezado, CIC y tipo de TV |
 | `src/core/boot.{h,c}` | Arranque HLE (sin PIF ROM ni IPL3) |
-| `src/host/run.c` | `retro64-run`: ejecutor de línea de comandos para el host |
+| `src/host/run.c` | `salsa64-run`: ejecutor de línea de comandos para el host |
 | `src/cpu/vr4300.h` | Estado del CPU y API pública |
 | `src/cpu/vr4300_internal.h` | Decodificación, traducción, accesos a memoria, FPRs |
 | `src/cpu/interp.c` | Bucle, enteros, saltos, cargas/almacenamientos |
@@ -44,19 +44,19 @@ no se copió código de Not64, Mupen64Plus ni ares.
 - **Interrupciones.** `irq_pending` se recalcula solo cuando cambian Status,
   Cause o el MI; el bucle mira una bandera por instrucción.
 - **Sin asignaciones.** La RDRAM la pone quien llama; todo lo demás va
-  dentro de `struct retro64_n64` (10,4 KB).
+  dentro de `struct salsa64_n64` (10,4 KB).
 - **TLB al reset.** Entradas inválidas con VPN distintas en KSEG0 (nunca
   coinciden), como hace libultra.
 
 ## Arranque HLE
 
-`retro64_boot_hle` (`src/core/boot.c`) sustituye la PIF ROM (IPL1 e IPL2) y
+`salsa64_boot_hle` (`src/core/boot.c`) sustituye la PIF ROM (IPL1 e IPL2) y
 el IPL3 del cartucho: carga el programa y deja la máquina como la deja el
 IPL3 al saltar a él. No se incluye ni se ejecuta código de Nintendo; la
 variante de IPL3 de la ROM del usuario se reconoce por el CRC-32 de sus bytes
 0x40–0xFFF.
 
-Antes de arrancar, `retro64_rom_normalize` lleva el volcado a .z64
+Antes de arrancar, `salsa64_rom_normalize` lleva el volcado a .z64
 (big-endian): .v64 (bytes intercambiados de dos en dos, firma `37 80 40 12`)
 y .n64 (palabras invertidas, `40 12 37 80`) se convierten una sola vez al
 cargar. Cualquier otra firma se toma como .z64, como pide n64brew.dev (ROM
@@ -114,13 +114,13 @@ Solo camino plano:
 
 El tipo de TV sale del código de destino del encabezado (byte 0x3E: D, F, H,
 I, L, P, S, U, W, X, Y, Z → PAL; B → MPAL; el resto NTSC) y se puede forzar
-(`retro64-run --tv`).
+(`salsa64-run --tv`).
 
 ## ISViewer
 
 Consola de depuración de los kits de desarrollo, en 0x13FF0000–0x13FFFFFF
 (los últimos 64 KB del espacio de una ROM de 64 MB, así que está apagado por
-omisión: `retro64_bus_set_isviewer`). Las ROMs escriben el texto desde +0x20
+omisión: `salsa64_bus_set_isviewer`). Las ROMs escriben el texto desde +0x20
 y su longitud en +0x14; esa escritura llama al callback. El búfer se puede
 leer (nemu64-test lo detecta escribiendo y leyendo 0x12345678) y respeta las
 escrituras de 8/16 bits, a diferencia del bus PI real. Fuente: README de
@@ -237,14 +237,14 @@ Fuera del CPU, lo que nemu64-test marca (línea base en
 ## Pruebas
 
 - `tools/build.sh test-host`: 154 pruebas (`tests/unit/`) con gcc nativo,
-  ASan y UBSan. `build/host/retro64-unit bench` agrega el micro-benchmark.
-- `tools/test-roms.sh`: compila `retro64-run` y corre nemu64-test hasta su
+  ASan y UBSan. `build/host/salsa64-unit bench` agrega el micro-benchmark.
+- `tools/test-roms.sh`: compila `salsa64-run` y corre nemu64-test hasta su
   resumen (≈190 M ciclos, unos 2 s en el host con ASan). Compara la lista de
   pruebas que fallan con `tests/roms/nemu64-test.fallas`: una falla nueva es
   regresión; una que desaparece pide `tools/test-roms.sh --actualizar`. Se
   comprobó que detecta regresiones (romper el enlace de JAL hace fallar dos
   pruebas).
-- `retro64-run` también sirve a mano: `--trace-exc N` muestra las primeras N
+- `salsa64-run` también sirve a mano: `--trace-exc N` muestra las primeras N
   excepciones del CPU, `--regs` vuelca los registros al terminar.
 - `tools/rpcs3-run.py cpu-tests`: las mismas pruebas compiladas con ppu-gcc
   (big-endian) en RPCS3, más el micro-benchmark. En la PS3 real se corre

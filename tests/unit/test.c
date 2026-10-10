@@ -1,5 +1,5 @@
 /*
- * Retro64 — marco y arnés de las pruebas unitarias. Ver test.h.
+ * Salsa64 — marco y arnés de las pruebas unitarias. Ver test.h.
  */
 #include "test.h"
 
@@ -9,10 +9,10 @@
 
 #include "core/endian.h"
 
-struct retro64_n64 t_n64;
+struct salsa64_n64 t_n64;
 int t_checks;
 
-static uint8_t t_rdram[RETRO64_RDRAM_MAX] __attribute__((aligned(128)));
+static uint8_t t_rdram[SALSA64_RDRAM_MAX] __attribute__((aligned(128)));
 static void (*t_print)(const char *line);
 static const char *t_current;
 static int t_current_failed;
@@ -32,14 +32,14 @@ void t_fail(const char *file, int line, const char *fmt, ...)
 
 void t_set_status(uint32_t status)
 {
-	retro64_cpu_cop0_write(CPU, RETRO64_CP0_STATUS, status);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_STATUS, status);
 }
 
 static void t_reset(void)
 {
-	retro64_n64_reset(&t_n64);
+	salsa64_n64_reset(&t_n64);
 	t_set_status(T_STATUS);
-	retro64_cpu_set_pc(CPU, T_CODE);
+	salsa64_cpu_set_pc(CPU, T_CODE);
 }
 
 void t_load(const uint32_t *code, unsigned n)
@@ -51,13 +51,13 @@ void t_load(const uint32_t *code, unsigned n)
 void t_step(unsigned n)
 {
 	while (n--)
-		retro64_cpu_step(CPU);
+		salsa64_cpu_step(CPU);
 }
 
-uint32_t t_rd32(uint32_t pa) { return retro64_rd32(t_rdram + pa); }
-uint64_t t_rd64(uint32_t pa) { return retro64_rd64(t_rdram + pa); }
-void t_wr32(uint32_t pa, uint32_t v) { retro64_wr32(t_rdram + pa, v); }
-void t_wr64(uint32_t pa, uint64_t v) { retro64_wr64(t_rdram + pa, v); }
+uint32_t t_rd32(uint32_t pa) { return salsa64_rd32(t_rdram + pa); }
+uint64_t t_rd64(uint32_t pa) { return salsa64_rd64(t_rdram + pa); }
+void t_wr32(uint32_t pa, uint32_t v) { salsa64_wr32(t_rdram + pa, v); }
+void t_wr64(uint32_t pa, uint64_t v) { salsa64_wr64(t_rdram + pa, v); }
 
 uint32_t t_fbits(float f) { uint32_t u; memcpy(&u, &f, sizeof u); return u; }
 uint64_t t_dbits(double d) { uint64_t u; memcpy(&u, &d, sizeof u); return u; }
@@ -72,7 +72,7 @@ void t_run(const char *name, t_test_fn fn)
 	t_failed_tests += t_current_failed;
 }
 
-int retro64_unit_run(void (*print)(const char *line))
+int salsa64_unit_run(void (*print)(const char *line))
 {
 	static const struct {
 		const char *name;
@@ -91,7 +91,7 @@ int retro64_unit_run(void (*print)(const char *line))
 
 	t_print = print;
 	t_tests = t_failed_tests = t_checks = 0;
-	retro64_n64_init(&t_n64, t_rdram, sizeof t_rdram);
+	salsa64_n64_init(&t_n64, t_rdram, sizeof t_rdram);
 
 	for (unsigned s = 0; s < sizeof suites / sizeof suites[0]; s++) {
 		int tests0 = t_tests, failed0 = t_failed_tests;
@@ -102,7 +102,7 @@ int retro64_unit_run(void (*print)(const char *line))
 	}
 	snprintf(line, sizeof line, "total: %d pruebas, %d verificaciones, %d fallidas (%s)",
 		 t_tests, t_checks, t_failed_tests,
-		 RETRO64_HOST_BIG_ENDIAN ? "big-endian" : "little-endian");
+		 SALSA64_HOST_BIG_ENDIAN ? "big-endian" : "little-endian");
 	print(line);
 	return t_failed_tests;
 }

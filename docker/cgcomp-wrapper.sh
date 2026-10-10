@@ -7,8 +7,8 @@ LIBS=/usr/lib64:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu
 
 if [ "$(uname -m)" = "x86_64" ]; then
 	LD_LIBRARY_PATH="$ROOT/usr/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-		exec "$ROOT/opt/retro64/bin/cgcomp" "$@"
+		exec "$ROOT/opt/salsa64/bin/cgcomp" "$@"
 fi
 
 exec qemu-x86_64-static -L "$ROOT" -E LD_LIBRARY_PATH="$LIBS" \
-	"$ROOT/opt/retro64/bin/cgcomp" "$@"
+	"$ROOT/opt/salsa64/bin/cgcomp" "$@"

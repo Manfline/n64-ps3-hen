@@ -14,8 +14,8 @@ UDP=$!
 for p in udplog spu-compute rsx-triangle jit-ppe; do
 	extra=""
 	if [ "$p" = jit-ppe ]; then
-		rm -f "$HOME/Library/Application Support/rpcs3/dev_hdd0/retro64/jit_state.txt"
-		extra="--relaunch 10 --config tools/rpcs3/retro64-interp.yml"
+		rm -f "$HOME/Library/Application Support/rpcs3/dev_hdd0/salsa64/jit_state.txt"
+		extra="--relaunch 10 --config tools/rpcs3/salsa64-interp.yml"
 	fi
 	tools/rpcs3-run.py "$p" $extra >"build/logs/rpcs3-$p.log" 2>&1
 	rc=$?

@@ -1,5 +1,5 @@
 /*
- * Retro64 — COP0 del VR4300: registros de control, excepciones, TLB,
+ * Salsa64 — COP0 del VR4300: registros de control, excepciones, TLB,
  * Count/Compare e interrupciones.
  *
  * Vectores (BEV = 0 → base 0x80000000; BEV = 1 → 0xBFC00200):
@@ -25,35 +25,35 @@
 
 /* ---- Estado derivado ------------------------------------------------------ */
 
-static void update_irq(struct retro64_cpu *cpu)
+static void update_irq(struct salsa64_cpu *cpu)
 {
 	uint32_t st = cpu->status;
-	cpu->irq_pending = (cpu->cause & st & RETRO64_ST_IM) != 0 &&
-			   (st & (RETRO64_ST_IE | RETRO64_ST_EXL | RETRO64_ST_ERL)) == RETRO64_ST_IE;
+	cpu->irq_pending = (cpu->cause & st & SALSA64_ST_IM) != 0 &&
+			   (st & (SALSA64_ST_IE | SALSA64_ST_EXL | SALSA64_ST_ERL)) == SALSA64_ST_IE;
 }
 
-void retro64_vr4300_update_status(struct retro64_cpu *cpu)
+void salsa64_vr4300_update_status(struct salsa64_cpu *cpu)
 {
 	uint32_t st = cpu->status;
-	if (st & (RETRO64_ST_EXL | RETRO64_ST_ERL))
-		cpu->mode = RETRO64_MODE_KERNEL;
-	else if ((st & RETRO64_ST_KSU) == 0)
-		cpu->mode = RETRO64_MODE_KERNEL;
-	else if ((st & RETRO64_ST_KSU) == 0x08)
-		cpu->mode = RETRO64_MODE_SUPERVISOR;
+	if (st & (SALSA64_ST_EXL | SALSA64_ST_ERL))
+		cpu->mode = SALSA64_MODE_KERNEL;
+	else if ((st & SALSA64_ST_KSU) == 0)
+		cpu->mode = SALSA64_MODE_KERNEL;
+	else if ((st & SALSA64_ST_KSU) == 0x08)
+		cpu->mode = SALSA64_MODE_SUPERVISOR;
 	else
-		cpu->mode = RETRO64_MODE_USER;
+		cpu->mode = SALSA64_MODE_USER;
 
-	cpu->re_xor = (cpu->mode == RETRO64_MODE_USER && (st & RETRO64_ST_RE)) ? 7 : 0;
-	cpu->allow64 = cpu->mode == RETRO64_MODE_KERNEL ||
-		       (cpu->mode == RETRO64_MODE_SUPERVISOR && (st & RETRO64_ST_SX)) ||
-		       (cpu->mode == RETRO64_MODE_USER && (st & RETRO64_ST_UX));
+	cpu->re_xor = (cpu->mode == SALSA64_MODE_USER && (st & SALSA64_ST_RE)) ? 7 : 0;
+	cpu->allow64 = cpu->mode == SALSA64_MODE_KERNEL ||
+		       (cpu->mode == SALSA64_MODE_SUPERVISOR && (st & SALSA64_ST_SX)) ||
+		       (cpu->mode == SALSA64_MODE_USER && (st & SALSA64_ST_UX));
 	update_irq(cpu);
 }
 
-void retro64_cpu_set_ip(struct retro64_cpu *cpu, unsigned line, bool level)
+void salsa64_cpu_set_ip(struct salsa64_cpu *cpu, unsigned line, bool level)
 {
-	uint32_t bit = 1u << (RETRO64_CAUSE_IP_SHIFT + line);
+	uint32_t bit = 1u << (SALSA64_CAUSE_IP_SHIFT + line);
 	if (level)
 		cpu->cause |= bit;
 	else
@@ -63,7 +63,7 @@ void retro64_cpu_set_ip(struct retro64_cpu *cpu, unsigned line, bool level)
 
 /* ---- Count / Compare ------------------------------------------------------- */
 
-uint32_t retro64_cpu_count(const struct retro64_cpu *cpu)
+uint32_t salsa64_cpu_count(const struct salsa64_cpu *cpu)
 {
 	return (uint32_t)(cpu->cycles >> 1) + cpu->count_offset;
 }
@@ -71,22 +71,22 @@ uint32_t retro64_cpu_count(const struct retro64_cpu *cpu)
 /* Count avanza 1 cada 2 ciclos; el evento cae en el primer ciclo en que
  * Count llega a Compare. Si ya son iguales, la próxima vez es tras la vuelta
  * completa de 32 bits. */
-static void schedule_compare(struct retro64_cpu *cpu)
+static void schedule_compare(struct salsa64_cpu *cpu)
 {
-	uint32_t delta = cpu->compare - retro64_cpu_count(cpu);
+	uint32_t delta = cpu->compare - salsa64_cpu_count(cpu);
 	uint64_t ticks = delta ? delta : 0x100000000ull;
-	retro64_sched_set(cpu->sched, RETRO64_EV_COMPARE, ((cpu->cycles >> 1) + ticks) << 1);
+	salsa64_sched_set(cpu->sched, SALSA64_EV_COMPARE, ((cpu->cycles >> 1) + ticks) << 1);
 }
 
 static void compare_event(void *ctx, uint64_t when)
 {
-	struct retro64_cpu *cpu = ctx;
+	struct salsa64_cpu *cpu = ctx;
 	cpu->cause |= CAUSE_IP7;
 	update_irq(cpu);
-	retro64_sched_set(cpu->sched, RETRO64_EV_COMPARE, when + (0x100000000ull << 1));
+	salsa64_sched_set(cpu->sched, SALSA64_EV_COMPARE, when + (0x100000000ull << 1));
 }
 
-static uint32_t cop0_random(const struct retro64_cpu *cpu)
+static uint32_t cop0_random(const struct salsa64_cpu *cpu)
 {
 	/* Random (6 bits) baja 1 por instrucción desde 31 y vuelve a 31 al
 	 * llegar a Wired. Con Wired > 31 pasa por 0, sigue en 63 y baja hasta
@@ -99,38 +99,38 @@ static uint32_t cop0_random(const struct retro64_cpu *cpu)
 
 /* ---- Excepciones ----------------------------------------------------------- */
 
-static void exception_at(struct retro64_cpu *cpu, enum retro64_exc code, unsigned ce, uint32_t offset)
+static void exception_at(struct salsa64_cpu *cpu, enum salsa64_exc code, unsigned ce, uint32_t offset)
 {
-	if (!(cpu->status & RETRO64_ST_EXL)) {
+	if (!(cpu->status & SALSA64_ST_EXL)) {
 		if (cpu->delay_slot) {
 			cpu->epc = cpu->cur_pc - 4;
-			cpu->cause |= RETRO64_CAUSE_BD;
+			cpu->cause |= SALSA64_CAUSE_BD;
 		} else {
 			cpu->epc = cpu->cur_pc;
-			cpu->cause &= ~RETRO64_CAUSE_BD;
+			cpu->cause &= ~SALSA64_CAUSE_BD;
 		}
 	} else {
 		offset = 0x180;
 	}
-	cpu->cause = (cpu->cause & ~(0x7Cu | (3u << RETRO64_CAUSE_CE_SHIFT))) |
-		     (uint32_t)code << 2 | (ce & 3) << RETRO64_CAUSE_CE_SHIFT;
-	cpu->status |= RETRO64_ST_EXL;
+	cpu->cause = (cpu->cause & ~(0x7Cu | (3u << SALSA64_CAUSE_CE_SHIFT))) |
+		     (uint32_t)code << 2 | (ce & 3) << SALSA64_CAUSE_CE_SHIFT;
+	cpu->status |= SALSA64_ST_EXL;
 
-	cpu->pc = ((cpu->status & RETRO64_ST_BEV) ? VEC_BASE_BEV : VEC_BASE) + offset;
+	cpu->pc = ((cpu->status & SALSA64_ST_BEV) ? VEC_BASE_BEV : VEC_BASE) + offset;
 	cpu->next_pc = cpu->pc + 4;
 	cpu->branch = 0;
-	retro64_vr4300_update_status(cpu);
-	if (RETRO64_UNLIKELY(cpu->exc_hook != NULL))
+	salsa64_vr4300_update_status(cpu);
+	if (SALSA64_UNLIKELY(cpu->exc_hook != NULL))
 		cpu->exc_hook(cpu);
 }
 
-void retro64_vr4300_exception(struct retro64_cpu *cpu, enum retro64_exc code, unsigned ce)
+void salsa64_vr4300_exception(struct salsa64_cpu *cpu, enum salsa64_exc code, unsigned ce)
 {
 	exception_at(cpu, code, ce, 0x180);
 }
 
 /* BadVAddr, Context, XContext y EntryHi.VPN2 apuntan a la dirección que falló. */
-static void set_bad_vaddr(struct retro64_cpu *cpu, uint64_t va)
+static void set_bad_vaddr(struct salsa64_cpu *cpu, uint64_t va)
 {
 	cpu->bad_vaddr = va;
 	cpu->context = (cpu->context & 0xFFFFFFFFFF800000ull) | ((va >> 13) & 0x7FFFF) << 4;
@@ -139,23 +139,23 @@ static void set_bad_vaddr(struct retro64_cpu *cpu, uint64_t va)
 	cpu->entry_hi = (va & 0xC00000FFFFFFE000ull) | (cpu->entry_hi & 0xFF);
 }
 
-void retro64_vr4300_address_error(struct retro64_cpu *cpu, uint64_t vaddr, enum retro64_access acc)
+void salsa64_vr4300_address_error(struct salsa64_cpu *cpu, uint64_t vaddr, enum salsa64_access acc)
 {
 	set_bad_vaddr(cpu, vaddr);
-	retro64_vr4300_exception(cpu, acc == RETRO64_ACC_STORE ? RETRO64_EXC_ADES : RETRO64_EXC_ADEL, 0);
+	salsa64_vr4300_exception(cpu, acc == SALSA64_ACC_STORE ? SALSA64_EXC_ADES : SALSA64_EXC_ADEL, 0);
 }
 
 enum tlb_fault { TLB_MISS, TLB_INVALID, TLB_MODIFIED };
 
-static void tlb_exception(struct retro64_cpu *cpu, uint64_t va, enum retro64_access acc, enum tlb_fault f)
+static void tlb_exception(struct salsa64_cpu *cpu, uint64_t va, enum salsa64_access acc, enum tlb_fault f)
 {
 	set_bad_vaddr(cpu, va);
-	enum retro64_exc code = f == TLB_MODIFIED ? RETRO64_EXC_MOD
-				: acc == RETRO64_ACC_STORE ? RETRO64_EXC_TLBS : RETRO64_EXC_TLBL;
+	enum salsa64_exc code = f == TLB_MODIFIED ? SALSA64_EXC_MOD
+				: acc == SALSA64_ACC_STORE ? SALSA64_EXC_TLBS : SALSA64_EXC_TLBL;
 	uint32_t offset = 0x180;
 	if (f == TLB_MISS) {
-		uint32_t xbit = cpu->mode == RETRO64_MODE_KERNEL ? RETRO64_ST_KX
-				: cpu->mode == RETRO64_MODE_SUPERVISOR ? RETRO64_ST_SX : RETRO64_ST_UX;
+		uint32_t xbit = cpu->mode == SALSA64_MODE_KERNEL ? SALSA64_ST_KX
+				: cpu->mode == SALSA64_MODE_SUPERVISOR ? SALSA64_ST_SX : SALSA64_ST_UX;
 		offset = (cpu->status & xbit) ? 0x080 : 0x000;
 	}
 	exception_at(cpu, code, 0, offset);
@@ -167,12 +167,12 @@ static void tlb_exception(struct retro64_cpu *cpu, uint64_t va, enum retro64_acc
  * (39–13); la máscara de página quita los bajos. */
 #define TLB_VPN_BITS 0xC00000FFFFFFE000ull
 
-static bool tlb_lookup(struct retro64_cpu *cpu, uint64_t va, uint32_t *pa, enum retro64_access acc)
+static bool tlb_lookup(struct salsa64_cpu *cpu, uint64_t va, uint32_t *pa, enum salsa64_access acc)
 {
 	uint32_t a = (uint32_t)va, asid = (uint32_t)cpu->entry_hi & 0xFF;
 
-	for (int n = 0; n < RETRO64_TLB_ENTRIES; n++) {
-		const struct retro64_tlb_entry *e = &cpu->tlb[n];
+	for (int n = 0; n < SALSA64_TLB_ENTRIES; n++) {
+		const struct salsa64_tlb_entry *e = &cpu->tlb[n];
 		if ((va ^ e->entry_hi) & e->vpn_mask)
 			continue;
 		if (!e->global && ((uint32_t)e->entry_hi & 0xFF) != asid)
@@ -182,7 +182,7 @@ static bool tlb_lookup(struct retro64_cpu *cpu, uint64_t va, uint32_t *pa, enum 
 			tlb_exception(cpu, va, acc, TLB_INVALID);
 			return false;
 		}
-		if (acc == RETRO64_ACC_STORE && !(lo & 0x4)) {
+		if (acc == SALSA64_ACC_STORE && !(lo & 0x4)) {
 			tlb_exception(cpu, va, acc, TLB_MODIFIED);
 			return false;
 		}
@@ -205,26 +205,26 @@ static bool tlb_lookup(struct retro64_cpu *cpu, uint64_t va, uint32_t *pa, enum 
  *   cksseg/ckseg3        0xFFFFFFFFC0000000–0xFFFFFFFFFFFFFFFF  TLB (supervisor:
  *                        solo hasta 0xFFFFFFFFDFFFFFFF)
  * Lo demás es error de dirección. */
-static bool translate64(struct retro64_cpu *cpu, uint64_t va, uint32_t *pa, enum retro64_access acc)
+static bool translate64(struct salsa64_cpu *cpu, uint64_t va, uint32_t *pa, enum salsa64_access acc)
 {
 	unsigned mode = cpu->mode;
 	if (va < 0x0000010000000000ull) {
-		if (mode == RETRO64_MODE_KERNEL && (cpu->status & RETRO64_ST_ERL) && va < 0x80000000u) {
+		if (mode == SALSA64_MODE_KERNEL && (cpu->status & SALSA64_ST_ERL) && va < 0x80000000u) {
 			*pa = (uint32_t)va;  /* con ERL, los primeros 2 GB quedan sin mapear */
 			return true;
 		}
 		return tlb_lookup(cpu, va, pa, acc);
 	}
-	if (mode == RETRO64_MODE_USER)
+	if (mode == SALSA64_MODE_USER)
 		goto bad;
 	if (va >= 0x4000000000000000ull && va < 0x4000010000000000ull)
 		return tlb_lookup(cpu, va, pa, acc);
 	if (va >= 0xFFFFFFFFC0000000ull) {
-		if (mode == RETRO64_MODE_SUPERVISOR && va >= 0xFFFFFFFFE0000000ull)
+		if (mode == SALSA64_MODE_SUPERVISOR && va >= 0xFFFFFFFFE0000000ull)
 			goto bad;
 		return tlb_lookup(cpu, va, pa, acc);
 	}
-	if (mode == RETRO64_MODE_SUPERVISOR)
+	if (mode == SALSA64_MODE_SUPERVISOR)
 		goto bad;
 	if (va >= 0xFFFFFFFF80000000ull) {
 		*pa = (uint32_t)va & 0x1FFFFFFF;
@@ -237,31 +237,31 @@ static bool translate64(struct retro64_cpu *cpu, uint64_t va, uint32_t *pa, enum
 	if (va >= 0xC000000000000000ull && va < 0xC00000FF80000000ull)
 		return tlb_lookup(cpu, va, pa, acc);
 bad:
-	retro64_vr4300_address_error(cpu, va, acc);
+	salsa64_vr4300_address_error(cpu, va, acc);
 	return false;
 }
 
-static bool translate32(struct retro64_cpu *cpu, uint64_t va, uint32_t *pa, enum retro64_access acc)
+static bool translate32(struct salsa64_cpu *cpu, uint64_t va, uint32_t *pa, enum salsa64_access acc)
 {
 	/* 32 bits: la dirección tiene que ser extensión de signo de 32. */
-	if (RETRO64_UNLIKELY(retro64_sx32((uint32_t)va) != va)) {
-		retro64_vr4300_address_error(cpu, va, acc);
+	if (SALSA64_UNLIKELY(salsa64_sx32((uint32_t)va) != va)) {
+		salsa64_vr4300_address_error(cpu, va, acc);
 		return false;
 	}
 
 	uint32_t a = (uint32_t)va;
-	if (cpu->mode == RETRO64_MODE_USER && a >= 0x80000000u) {
-		retro64_vr4300_address_error(cpu, va, acc);
+	if (cpu->mode == SALSA64_MODE_USER && a >= 0x80000000u) {
+		salsa64_vr4300_address_error(cpu, va, acc);
 		return false;
 	}
-	if (cpu->mode == RETRO64_MODE_SUPERVISOR && a >= 0x80000000u &&
+	if (cpu->mode == SALSA64_MODE_SUPERVISOR && a >= 0x80000000u &&
 	    (a < 0xC0000000u || a >= 0xE0000000u)) {
-		retro64_vr4300_address_error(cpu, va, acc);
+		salsa64_vr4300_address_error(cpu, va, acc);
 		return false;
 	}
 
 	if (a < 0x80000000u) {
-		if (cpu->status & RETRO64_ST_ERL) {  /* kuseg sin mapear con ERL */
+		if (cpu->status & SALSA64_ST_ERL) {  /* kuseg sin mapear con ERL */
 			*pa = a;
 			return true;
 		}
@@ -274,11 +274,11 @@ static bool translate32(struct retro64_cpu *cpu, uint64_t va, uint32_t *pa, enum
 	return tlb_lookup(cpu, va, pa, acc);
 }
 
-bool retro64_vr4300_translate_slow(struct retro64_cpu *cpu, uint64_t va, uint32_t *pa,
-				   enum retro64_access acc, uint32_t align)
+bool salsa64_vr4300_translate_slow(struct salsa64_cpu *cpu, uint64_t va, uint32_t *pa,
+				   enum salsa64_access acc, uint32_t align)
 {
-	uint32_t wide = cpu->mode == RETRO64_MODE_KERNEL ? RETRO64_ST_KX
-			: cpu->mode == RETRO64_MODE_SUPERVISOR ? RETRO64_ST_SX : RETRO64_ST_UX;
+	uint32_t wide = cpu->mode == SALSA64_MODE_KERNEL ? SALSA64_ST_KX
+			: cpu->mode == SALSA64_MODE_SUPERVISOR ? SALSA64_ST_SX : SALSA64_ST_UX;
 	bool ok = (cpu->status & wide) ? translate64(cpu, va, pa, acc) : translate32(cpu, va, pa, acc);
 	/* Status.RE: XOR 7, 6, 4 o 0 según el tamaño (solo en modo usuario). */
 	if (ok)
@@ -286,9 +286,9 @@ bool retro64_vr4300_translate_slow(struct retro64_cpu *cpu, uint64_t va, uint32_
 	return ok;
 }
 
-static void tlb_write(struct retro64_cpu *cpu, unsigned n)
+static void tlb_write(struct salsa64_cpu *cpu, unsigned n)
 {
-	struct retro64_tlb_entry *e = &cpu->tlb[n & 31];
+	struct salsa64_tlb_entry *e = &cpu->tlb[n & 31];
 	/* Cada par de bits de la máscara vale lo que su bit alto (nemu64-test:
 	 * 01 se guarda como 00 y 10 como 11). */
 	uint32_t hi = cpu->page_mask & 0x01554000u;
@@ -301,22 +301,22 @@ static void tlb_write(struct retro64_cpu *cpu, unsigned n)
 	e->odd_bit = ((e->page_mask | 0x1FFFu) + 1) >> 1;
 }
 
-static void tlb_read(struct retro64_cpu *cpu, unsigned n)
+static void tlb_read(struct salsa64_cpu *cpu, unsigned n)
 {
-	const struct retro64_tlb_entry *e = &cpu->tlb[n & 31];
+	const struct salsa64_tlb_entry *e = &cpu->tlb[n & 31];
 	cpu->page_mask = e->page_mask;
 	cpu->entry_hi = e->entry_hi;
 	cpu->entry_lo0 = e->entry_lo[0] | e->global;
 	cpu->entry_lo1 = e->entry_lo[1] | e->global;
 }
 
-static void tlb_probe(struct retro64_cpu *cpu)
+static void tlb_probe(struct salsa64_cpu *cpu)
 {
 	uint64_t hi = cpu->entry_hi;
 	uint32_t asid = (uint32_t)hi & 0xFF;
 	cpu->index = 0x80000000u;
-	for (int n = 0; n < RETRO64_TLB_ENTRIES; n++) {
-		const struct retro64_tlb_entry *e = &cpu->tlb[n];
+	for (int n = 0; n < SALSA64_TLB_ENTRIES; n++) {
+		const struct salsa64_tlb_entry *e = &cpu->tlb[n];
 		if ((hi ^ e->entry_hi) & e->vpn_mask)
 			continue;
 		if (!e->global && ((uint32_t)e->entry_hi & 0xFF) != asid)
@@ -328,133 +328,133 @@ static void tlb_probe(struct retro64_cpu *cpu)
 
 /* ---- Registros ------------------------------------------------------------- */
 
-uint64_t retro64_cpu_cop0_read(struct retro64_cpu *cpu, unsigned reg)
+uint64_t salsa64_cpu_cop0_read(struct salsa64_cpu *cpu, unsigned reg)
 {
 	switch (reg) {
-	case RETRO64_CP0_INDEX:       return cpu->index;
-	case RETRO64_CP0_RANDOM:      return cop0_random(cpu);
-	case RETRO64_CP0_ENTRYLO0:    return cpu->entry_lo0;
-	case RETRO64_CP0_ENTRYLO1:    return cpu->entry_lo1;
-	case RETRO64_CP0_CONTEXT:     return cpu->context;
-	case RETRO64_CP0_PAGEMASK:    return cpu->page_mask;
-	case RETRO64_CP0_WIRED:       return cpu->wired;
-	case RETRO64_CP0_BADVADDR:    return cpu->bad_vaddr;
-	case RETRO64_CP0_COUNT:       return retro64_cpu_count(cpu);
-	case RETRO64_CP0_ENTRYHI:     return cpu->entry_hi;
-	case RETRO64_CP0_COMPARE:     return cpu->compare;
-	case RETRO64_CP0_STATUS:      return cpu->status;
-	case RETRO64_CP0_CAUSE:       return cpu->cause;
-	case RETRO64_CP0_EPC:         return cpu->epc;
-	case RETRO64_CP0_PRID:        return RETRO64_PRID_VALUE;
-	case RETRO64_CP0_CONFIG:      return cpu->config;
-	case RETRO64_CP0_LLADDR:      return cpu->lladdr;
-	case RETRO64_CP0_WATCHLO:     return cpu->watch_lo;
-	case RETRO64_CP0_WATCHHI:     return cpu->watch_hi;
-	case RETRO64_CP0_XCONTEXT:    return cpu->xcontext;
-	case RETRO64_CP0_PARITYERROR: return cpu->parity_error;
-	case RETRO64_CP0_CACHEERROR:  return cpu->cache_error;
-	case RETRO64_CP0_TAGLO:       return cpu->tag_lo;
-	case RETRO64_CP0_TAGHI:       return cpu->tag_hi;
-	case RETRO64_CP0_ERROREPC:    return cpu->error_epc;
+	case SALSA64_CP0_INDEX:       return cpu->index;
+	case SALSA64_CP0_RANDOM:      return cop0_random(cpu);
+	case SALSA64_CP0_ENTRYLO0:    return cpu->entry_lo0;
+	case SALSA64_CP0_ENTRYLO1:    return cpu->entry_lo1;
+	case SALSA64_CP0_CONTEXT:     return cpu->context;
+	case SALSA64_CP0_PAGEMASK:    return cpu->page_mask;
+	case SALSA64_CP0_WIRED:       return cpu->wired;
+	case SALSA64_CP0_BADVADDR:    return cpu->bad_vaddr;
+	case SALSA64_CP0_COUNT:       return salsa64_cpu_count(cpu);
+	case SALSA64_CP0_ENTRYHI:     return cpu->entry_hi;
+	case SALSA64_CP0_COMPARE:     return cpu->compare;
+	case SALSA64_CP0_STATUS:      return cpu->status;
+	case SALSA64_CP0_CAUSE:       return cpu->cause;
+	case SALSA64_CP0_EPC:         return cpu->epc;
+	case SALSA64_CP0_PRID:        return SALSA64_PRID_VALUE;
+	case SALSA64_CP0_CONFIG:      return cpu->config;
+	case SALSA64_CP0_LLADDR:      return cpu->lladdr;
+	case SALSA64_CP0_WATCHLO:     return cpu->watch_lo;
+	case SALSA64_CP0_WATCHHI:     return cpu->watch_hi;
+	case SALSA64_CP0_XCONTEXT:    return cpu->xcontext;
+	case SALSA64_CP0_PARITYERROR: return cpu->parity_error;
+	case SALSA64_CP0_CACHEERROR:  return cpu->cache_error;
+	case SALSA64_CP0_TAGLO:       return cpu->tag_lo;
+	case SALSA64_CP0_TAGHI:       return cpu->tag_hi;
+	case SALSA64_CP0_ERROREPC:    return cpu->error_epc;
 	default:                      return cpu->cop0_latch;  /* 7, 21–25, 31 */
 	}
 }
 
-void retro64_cpu_cop0_write(struct retro64_cpu *cpu, unsigned reg, uint64_t v)
+void salsa64_cpu_cop0_write(struct salsa64_cpu *cpu, unsigned reg, uint64_t v)
 {
 	cpu->cop0_latch = v;
 	switch (reg) {
-	case RETRO64_CP0_INDEX:       cpu->index = (uint32_t)v & 0x8000003Fu; return;
-	case RETRO64_CP0_ENTRYLO0:    cpu->entry_lo0 = (uint32_t)v & ENTRYLO_MASK; return;
-	case RETRO64_CP0_ENTRYLO1:    cpu->entry_lo1 = (uint32_t)v & ENTRYLO_MASK; return;
-	case RETRO64_CP0_CONTEXT:
+	case SALSA64_CP0_INDEX:       cpu->index = (uint32_t)v & 0x8000003Fu; return;
+	case SALSA64_CP0_ENTRYLO0:    cpu->entry_lo0 = (uint32_t)v & ENTRYLO_MASK; return;
+	case SALSA64_CP0_ENTRYLO1:    cpu->entry_lo1 = (uint32_t)v & ENTRYLO_MASK; return;
+	case SALSA64_CP0_CONTEXT:
 		cpu->context = (v & 0xFFFFFFFFFF800000ull) | (cpu->context & 0x7FFFF0);
 		return;
-	case RETRO64_CP0_PAGEMASK:    cpu->page_mask = (uint32_t)v & PAGEMASK_MASK; return;
-	case RETRO64_CP0_WIRED:
+	case SALSA64_CP0_PAGEMASK:    cpu->page_mask = (uint32_t)v & PAGEMASK_MASK; return;
+	case SALSA64_CP0_WIRED:
 		cpu->wired = (uint32_t)v & 0x3F;
 		cpu->random_epoch = cpu->cycles;
 		return;
-	case RETRO64_CP0_COUNT:
+	case SALSA64_CP0_COUNT:
 		cpu->count_offset = (uint32_t)v - (uint32_t)(cpu->cycles >> 1);
 		schedule_compare(cpu);
 		return;
-	case RETRO64_CP0_ENTRYHI:     cpu->entry_hi = v & ENTRYHI_MASK; return;
-	case RETRO64_CP0_COMPARE:
+	case SALSA64_CP0_ENTRYHI:     cpu->entry_hi = v & ENTRYHI_MASK; return;
+	case SALSA64_CP0_COMPARE:
 		cpu->compare = (uint32_t)v;
 		cpu->cause &= ~CAUSE_IP7;
 		update_irq(cpu);
 		schedule_compare(cpu);
 		return;
-	case RETRO64_CP0_STATUS:
+	case SALSA64_CP0_STATUS:
 		cpu->status = (uint32_t)v & STATUS_WMASK;
-		retro64_vr4300_update_status(cpu);
+		salsa64_vr4300_update_status(cpu);
 		return;
-	case RETRO64_CP0_CAUSE:
+	case SALSA64_CP0_CAUSE:
 		cpu->cause = (cpu->cause & ~CAUSE_SW_MASK) | ((uint32_t)v & CAUSE_SW_MASK);
 		update_irq(cpu);
 		return;
-	case RETRO64_CP0_EPC:         cpu->epc = v; return;
-	case RETRO64_CP0_CONFIG:
+	case SALSA64_CP0_EPC:         cpu->epc = v; return;
+	case SALSA64_CP0_CONFIG:
 		cpu->config = (cpu->config & ~CONFIG_WMASK) | ((uint32_t)v & CONFIG_WMASK);
 		return;
-	case RETRO64_CP0_LLADDR:      cpu->lladdr = (uint32_t)v; return;
-	case RETRO64_CP0_WATCHLO:     cpu->watch_lo = (uint32_t)v & 0xFFFFFFFBu; return;
-	case RETRO64_CP0_WATCHHI:     cpu->watch_hi = (uint32_t)v & 0xF; return;
-	case RETRO64_CP0_XCONTEXT:
+	case SALSA64_CP0_LLADDR:      cpu->lladdr = (uint32_t)v; return;
+	case SALSA64_CP0_WATCHLO:     cpu->watch_lo = (uint32_t)v & 0xFFFFFFFBu; return;
+	case SALSA64_CP0_WATCHHI:     cpu->watch_hi = (uint32_t)v & 0xF; return;
+	case SALSA64_CP0_XCONTEXT:
 		cpu->xcontext = (v & 0xFFFFFFFE00000000ull) | (cpu->xcontext & 0x1FFFFFFFFull);
 		return;
-	case RETRO64_CP0_PARITYERROR: cpu->parity_error = (uint32_t)v & 0xFF; return;
-	case RETRO64_CP0_TAGLO:       cpu->tag_lo = (uint32_t)v; return;
-	case RETRO64_CP0_TAGHI:       cpu->tag_hi = 0; return;
-	case RETRO64_CP0_ERROREPC:    cpu->error_epc = v; return;
+	case SALSA64_CP0_PARITYERROR: cpu->parity_error = (uint32_t)v & 0xFF; return;
+	case SALSA64_CP0_TAGLO:       cpu->tag_lo = (uint32_t)v; return;
+	case SALSA64_CP0_TAGHI:       cpu->tag_hi = 0; return;
+	case SALSA64_CP0_ERROREPC:    cpu->error_epc = v; return;
 	default:                      return;  /* solo lectura o sin implementar */
 	}
 }
 
 /* ---- Instrucciones --------------------------------------------------------- */
 
-static void op_eret(struct retro64_cpu *cpu)
+static void op_eret(struct salsa64_cpu *cpu)
 {
-	if (cpu->status & RETRO64_ST_ERL) {
+	if (cpu->status & SALSA64_ST_ERL) {
 		cpu->pc = cpu->error_epc;
-		cpu->status &= ~RETRO64_ST_ERL;
+		cpu->status &= ~SALSA64_ST_ERL;
 	} else {
 		cpu->pc = cpu->epc;
-		cpu->status &= ~RETRO64_ST_EXL;
+		cpu->status &= ~SALSA64_ST_EXL;
 	}
 	cpu->next_pc = cpu->pc + 4;
 	cpu->branch = 0;  /* ERET no tiene delay slot */
 	cpu->llbit = 0;
-	retro64_vr4300_update_status(cpu);
+	salsa64_vr4300_update_status(cpu);
 }
 
-void retro64_vr4300_cop0(struct retro64_cpu *cpu, uint32_t i)
+void salsa64_vr4300_cop0(struct salsa64_cpu *cpu, uint32_t i)
 {
-	if (cpu->mode != RETRO64_MODE_KERNEL && !(cpu->status & RETRO64_ST_CU0)) {
-		retro64_vr4300_exception(cpu, RETRO64_EXC_CPU, 0);
+	if (cpu->mode != SALSA64_MODE_KERNEL && !(cpu->status & SALSA64_ST_CU0)) {
+		salsa64_vr4300_exception(cpu, SALSA64_EXC_CPU, 0);
 		return;
 	}
 
 	unsigned rt = I_RT(i), rd = I_RD(i);
 	switch (I_RS(i)) {
 	case 0x00:                                                             /* MFC0 */
-		cpu->gpr[rt] = retro64_sx32((uint32_t)retro64_cpu_cop0_read(cpu, rd));
+		cpu->gpr[rt] = salsa64_sx32((uint32_t)salsa64_cpu_cop0_read(cpu, rd));
 		return;
 	case 0x01:                                                             /* DMFC0 */
 		if (!cpu->allow64)
 			break;
-		cpu->gpr[rt] = retro64_cpu_cop0_read(cpu, rd);
+		cpu->gpr[rt] = salsa64_cpu_cop0_read(cpu, rd);
 		return;
 	case 0x04:                                                             /* MTC0 */
 		/* Transfiere los 64 bits del GPR, igual que DMTC0 (nemu64-test:
 		 * Context, XContext, EPC y el latch con MTC0 + DMFC0). */
-		retro64_cpu_cop0_write(cpu, rd, cpu->gpr[rt]);
+		salsa64_cpu_cop0_write(cpu, rd, cpu->gpr[rt]);
 		return;
 	case 0x05:                                                             /* DMTC0 */
 		if (!cpu->allow64)
 			break;
-		retro64_cpu_cop0_write(cpu, rd, cpu->gpr[rt]);
+		salsa64_cpu_cop0_write(cpu, rd, cpu->gpr[rt]);
 		return;
 	case 0x02: case 0x06: case 0x08:                                       /* CFC0, CTC0, BC0 */
 		return;  /* reconocidas e inertes (nemu64-test) */
@@ -478,7 +478,7 @@ void retro64_vr4300_cop0(struct retro64_cpu *cpu, uint32_t i)
 
 /* ---- Inicio y reset ---------------------------------------------------------- */
 
-void retro64_cpu_init(struct retro64_cpu *cpu, struct retro64_bus *bus, struct retro64_sched *sched)
+void salsa64_cpu_init(struct salsa64_cpu *cpu, struct salsa64_bus *bus, struct salsa64_sched *sched)
 {
 	memset(cpu, 0, sizeof *cpu);
 	cpu->bus = bus;
@@ -486,11 +486,11 @@ void retro64_cpu_init(struct retro64_cpu *cpu, struct retro64_bus *bus, struct r
 	cpu->rdram = bus->rdram;
 	cpu->rdram_size = bus->rdram_size;
 	bus->cpu = cpu;
-	retro64_sched_handler(sched, RETRO64_EV_COMPARE, compare_event, cpu);
-	retro64_cpu_reset(cpu);
+	salsa64_sched_handler(sched, SALSA64_EV_COMPARE, compare_event, cpu);
+	salsa64_cpu_reset(cpu);
 }
 
-void retro64_cpu_reset(struct retro64_cpu *cpu)
+void salsa64_cpu_reset(struct salsa64_cpu *cpu)
 {
 	memset(cpu->gpr, 0, sizeof cpu->gpr);
 	memset(cpu->fpr, 0, sizeof cpu->fpr);
@@ -499,7 +499,7 @@ void retro64_cpu_reset(struct retro64_cpu *cpu)
 	cpu->cop2_latch = 0;
 	cpu->llbit = 0;
 
-	cpu->status = RETRO64_ST_ERL | RETRO64_ST_BEV;
+	cpu->status = SALSA64_ST_ERL | SALSA64_ST_BEV;
 	cpu->cause = 0;
 	cpu->config = CONFIG_RESET;
 	cpu->index = cpu->entry_lo0 = cpu->entry_lo1 = cpu->page_mask = 0;
@@ -516,7 +516,7 @@ void retro64_cpu_reset(struct retro64_cpu *cpu)
 	 * nunca pasa por la TLB: así ninguna coincide por accidente (es lo
 	 * mismo que hace libultra al inicializarla). */
 	memset(cpu->tlb, 0, sizeof cpu->tlb);
-	for (int n = 0; n < RETRO64_TLB_ENTRIES; n++) {
+	for (int n = 0; n < SALSA64_TLB_ENTRIES; n++) {
 		cpu->tlb[n].entry_hi = 0xFFFFFFFF80000000ull + (uint64_t)n * 0x2000;
 		cpu->tlb[n].vpn_mask = TLB_VPN_BITS;
 		cpu->tlb[n].odd_bit = 0x1000;
@@ -524,12 +524,12 @@ void retro64_cpu_reset(struct retro64_cpu *cpu)
 
 	cpu->compare = 0;
 	cpu->count_offset = 0u - (uint32_t)(cpu->cycles >> 1);
-	retro64_vr4300_update_status(cpu);
+	salsa64_vr4300_update_status(cpu);
 	schedule_compare(cpu);
-	retro64_cpu_set_pc(cpu, 0xFFFFFFFFBFC00000ull);
+	salsa64_cpu_set_pc(cpu, 0xFFFFFFFFBFC00000ull);
 }
 
-void retro64_cpu_set_pc(struct retro64_cpu *cpu, uint64_t pc)
+void salsa64_cpu_set_pc(struct salsa64_cpu *cpu, uint64_t pc)
 {
 	cpu->pc = pc;
 	cpu->next_pc = pc + 4;

@@ -1,6 +1,6 @@
-PROGRAM := retro64-rsx-triangle
-TITLE   := Retro64 prueba RSX
-APPID   := RETR00001
+PROGRAM := salsa64-rsx-triangle
+TITLE   := Salsa64 prueba RSX
+APPID   := SLSA00001
 SRCS    := main.c
 COMMON  := src/platform/ps3/log.c
 SHADERS := shaders/triangle.vcg shaders/triangle.fcg

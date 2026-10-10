@@ -1,11 +1,11 @@
 /*
- * Retro64 — Fase 0: descriptor de trabajo compartido entre PPE y SPU.
+ * Salsa64 — Fase 0: descriptor de trabajo compartido entre PPE y SPU.
  *
  * Las estructuras viajan por DMA: tamaño múltiplo de 16 bytes y alineación
  * de 16. Los búferes de datos se alinean a 128 (línea de caché del Cell).
  */
-#ifndef RETRO64_PHASE0_SPU_JOB_H
-#define RETRO64_PHASE0_SPU_JOB_H
+#ifndef SALSA64_PHASE0_SPU_JOB_H
+#define SALSA64_PHASE0_SPU_JOB_H
 
 #include <stdint.h>
 

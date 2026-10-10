@@ -1,6 +1,6 @@
 # Referencia: el emulador Cell64 (ZeBobbel)
 
-Otro emulador de N64 para PS3, publicado antes que Retro64 (por él se renombró
+Otro emulador de N64 para PS3, publicado antes que Salsa64 (por él se renombró
 este proyecto). Lo usamos como línea base de rendimiento y para comparar
 arquitecturas. Datos del 2026-10-10.
 
@@ -78,7 +78,7 @@ sirven solo para ver la estructura.
 | Llamadas de dibujo / triángulos | ~3200 / ~12 100 |
 
 **Lo valioso:** esa misma traza en la PS3 real mediría cuánto le cuestan al
-PPE el RSP gráfico, el de audio y las texturas. Es justo el tiempo que Retro64
+PPE el RSP gráfico, el de audio y las texturas. Es justo el tiempo que Salsa64
 libera al mover esas tareas a los SPEs. Si el autor corre Cell64 en la
 consola, guardar el `perf_trace.csv` (con la región y la escena) en
 `build/logs/`.
@@ -88,7 +88,7 @@ consola, guardar el `perf_trace.csv` (con la región y la escena) en
 Ver `docs/estado.md`: Mario 64 ~78 % y Zelda en Kokiri ~83 % (PAL, v1.50).
 GoldenEye y Perfect Dark, injugables.
 
-## Qué significa para Retro64
+## Qué significa para Salsa64
 
 - Parten de la misma familia de código que podríamos usar nosotros (Wii64,
   Mupen64Plus), pero con todo el trabajo en un solo hilo del PPE.

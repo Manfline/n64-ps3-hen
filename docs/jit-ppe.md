@@ -7,7 +7,7 @@ los SPEs (su local store ejecuta lo que llegue por DMA).
 
 ## Programa
 
-`tests/phase0/jit-ppe` (`build/retro64-jit-ppe/`). Para cada mecanismo:
+`tests/phase0/jit-ppe` (`build/salsa64-jit-ppe/`). Para cada mecanismo:
 
 1. reserva memoria;
 2. escribe `mulli r3,r3,3 ; addi r3,r3,7 ; blr`;
@@ -37,16 +37,16 @@ los SPEs (su local store ejecuta lo que llegue por DMA).
 
 Ejecutar una página no ejecutable mata el proceso. Antes de cada fase
 arriesgada el programa agrega `<mecanismo> PROBANDO <fase>` a
-`/dev_hdd0/retro64/jit_state.txt`; al relanzarlo, lo que quedó en PROBANDO
+`/dev_hdd0/salsa64/jit_state.txt`; al relanzarlo, lo que quedó en PROBANDO
 se registra como `CRASH <fase>` y sigue con el siguiente mecanismo. **Hay que
 relanzarlo hasta que imprima `RESULTADO jit-ppe`.** Al terminar, el archivo se
-renombra a `/dev_hdd0/retro64/jit_result.txt` y la siguiente ejecución
+renombra a `/dev_hdd0/salsa64/jit_result.txt` y la siguiente ejecución
 empieza de cero.
 
 ## Cómo correrla en la PS3
 
 1. En la Mac: `tools/udplog.py --out build/logs/jit-ppe.log`.
-2. Enviar `build/retro64-jit-ppe/retro64-jit-ppe.self` con ps3load o instalar el
+2. Enviar `build/salsa64-jit-ppe/salsa64-jit-ppe.self` con ps3load o instalar el
    `.pkg` (`tools/build.sh -C tests/phase0/jit-ppe pkg`), ver
    `tools/deploy-ps3.sh`.
 3. Relanzar tras cada caída hasta ver `RESULTADO`.

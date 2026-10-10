@@ -1,5 +1,5 @@
 /*
- * Retro64 — pruebas de saltos: delay slots, branch-likely, enlaces y
+ * Salsa64 — pruebas de saltos: delay slots, branch-likely, enlaces y
  * excepciones dentro de un delay slot.
  */
 #include "test.h"
@@ -162,7 +162,7 @@ static void exception_in_taken_delay_slot(void)
 	R[T1] = 1;
 	T_LOAD(BEQ(ZERO, ZERO, 4), ADD(T2, T0, T1));
 	t_step(2);
-	CHECK_EXC(RETRO64_EXC_OV, T_CODE, 1, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_OV, T_CODE, 1, T_VEC_GEN);
 	CHECK_EQ(R[T2], 0);
 }
 
@@ -172,7 +172,7 @@ static void exception_in_not_taken_delay_slot(void)
 	R[T1] = 1;
 	T_LOAD(BNE(ZERO, ZERO, 4), ADD(T2, T0, T1));
 	t_step(2);
-	CHECK_EXC(RETRO64_EXC_OV, T_CODE, 1, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_OV, T_CODE, 1, T_VEC_GEN);
 }
 
 static void exception_after_slot_clears_bd(void)
@@ -181,7 +181,7 @@ static void exception_after_slot_clears_bd(void)
 	R[T1] = 1;
 	T_LOAD(BNE(ZERO, ZERO, 4), NOP, ADD(T2, T0, T1));
 	t_step(3);
-	CHECK_EXC(RETRO64_EXC_OV, T_CODE + 8, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_OV, T_CODE + 8, 0, T_VEC_GEN);
 }
 
 static void eret_reexecutes_branch(void)
@@ -191,10 +191,10 @@ static void eret_reexecutes_branch(void)
 	R[T0] = R[T1] = 1;
 	T_LOAD(BEQ(T0, T1, 2), SYSCALL, NOP, ADDIU(T2, ZERO, 1));
 	t_step(2);
-	CHECK_EXC(RETRO64_EXC_SYS, T_CODE, 1, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_SYS, T_CODE, 1, T_VEC_GEN);
 	t_step(1);  /* ERET */
 	CHECK_EQ(CPU->pc, T_CODE);
-	CHECK_EQ(CPU->status & RETRO64_ST_EXL, 0);
+	CHECK_EQ(CPU->status & SALSA64_ST_EXL, 0);
 }
 
 void t_suite_branch(void)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Receptor del logger UDP de Retro64 (src/platform/ps3/log.c).
+"""Receptor del logger UDP de Salsa64 (src/platform/ps3/log.c).
 
 Escucha en 0.0.0.0:18194 (broadcast o unicast desde la PS3), imprime cada
 línea con la IP de origen y, con --out, la agrega a un archivo.

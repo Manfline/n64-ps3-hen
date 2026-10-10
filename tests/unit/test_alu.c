@@ -1,5 +1,5 @@
 /*
- * Retro64 — pruebas de la ALU entera: extensión de signo, desbordamiento,
+ * Salsa64 — pruebas de la ALU entera: extensión de signo, desbordamiento,
  * comparaciones, lógicas y desplazamientos.
  */
 #include "test.h"
@@ -42,7 +42,7 @@ static void add_overflow_traps(void)
 	R[T2] = 0x1234;
 	T_LOAD(ADD(T2, T0, T1));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_OV, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_OV, T_CODE, 0, T_VEC_GEN);
 	CHECK_EQ(R[T2], 0x1234);  /* rd intacto */
 }
 
@@ -54,7 +54,7 @@ static void add_negative_no_overflow(void)
 	t_step(2);
 	CHECK_EQ(R[T2], 0xFFFFFFFFFFFFFFFEull);
 	CHECK_EQ(R[T3], 0xFFFFFFFF80000000ull);
-	CHECK_EQ(CPU->status & RETRO64_ST_EXL, 0);
+	CHECK_EQ(CPU->status & SALSA64_ST_EXL, 0);
 }
 
 static void add_overflow_negative(void)
@@ -62,7 +62,7 @@ static void add_overflow_negative(void)
 	R[T0] = 0xFFFFFFFF80000000ull;
 	T_LOAD(ADD(T1, T0, T0));
 	t_step(1);
-	CHECK_EXC(RETRO64_EXC_OV, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_OV, T_CODE, 0, T_VEC_GEN);
 	CHECK_EQ(R[T1], 0);
 }
 
@@ -72,7 +72,7 @@ static void sub_overflow_traps(void)
 	R[T1] = 1;
 	T_LOAD(SUB(T2, T1, T0), SUB(T3, T0, T1));
 	t_step(1);  /* 1 - INT32_MIN desborda */
-	CHECK_EXC(RETRO64_EXC_OV, T_CODE, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_OV, T_CODE, 0, T_VEC_GEN);
 	CHECK_EQ(R[T2], 0);
 }
 
@@ -83,7 +83,7 @@ static void sub_no_overflow(void)
 	T_LOAD(SUB(T2, T0, T1));
 	t_step(1);
 	CHECK_EQ(R[T2], 0xFFFFFFFFFFFFFFFEull);
-	CHECK_EQ(CPU->status & RETRO64_ST_EXL, 0);
+	CHECK_EQ(CPU->status & SALSA64_ST_EXL, 0);
 }
 
 static void addi_overflow_traps(void)
@@ -92,7 +92,7 @@ static void addi_overflow_traps(void)
 	T_LOAD(ADDI(T1, T0, 0x0F), ADDI(T2, T0, 0x10));
 	t_step(2);
 	CHECK_EQ(R[T1], 0x7FFFFFFF);
-	CHECK_EXC(RETRO64_EXC_OV, T_CODE + 4, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_OV, T_CODE + 4, 0, T_VEC_GEN);
 	CHECK_EQ(R[T2], 0);
 }
 
@@ -103,7 +103,7 @@ static void dadd_overflow_traps(void)
 	T_LOAD(DADDU(T2, T0, T1), DADD(T3, T0, T1));
 	t_step(2);
 	CHECK_EQ(R[T2], 0x8000000000000000ull);
-	CHECK_EXC(RETRO64_EXC_OV, T_CODE + 4, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_OV, T_CODE + 4, 0, T_VEC_GEN);
 	CHECK_EQ(R[T3], 0);
 }
 
@@ -116,7 +116,7 @@ static void dsub_and_daddi(void)
 	CHECK_EQ(R[T2], 0x7FFFFFFF00000000ull);
 	CHECK_EQ(R[T3], 0x00000000FFFFFFFFull);
 	CHECK_EQ(R[T4], 0x0000000100007FFFull);
-	CHECK_EXC(RETRO64_EXC_OV, T_CODE + 12, 0, T_VEC_GEN);
+	CHECK_EXC(SALSA64_EXC_OV, T_CODE + 12, 0, T_VEC_GEN);
 }
 
 static void set_less_than(void)

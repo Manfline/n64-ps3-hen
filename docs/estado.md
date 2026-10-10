@@ -1,6 +1,6 @@
 # Estado
 
-## 2026-10-10 — Fase 1: arranque HLE, `retro64-run` y nemu64-test
+## 2026-10-10 — Fase 1: arranque HLE, `salsa64-run` y nemu64-test
 
 Hecho (detalle en docs/cpu-vr4300.md):
 - Arranque HLE sin PIF ROM ni IPL3 (`src/core/boot.c`, `src/core/rom.c`):
@@ -13,7 +13,7 @@ Hecho (detalle en docs/cpu-vr4300.md):
   tiempos de PI DOM1, RI_SELECT, registros de RDRAM. Fuentes documentadas.
 - ISViewer en 0x13FF0000, opcional (tapa los últimos 64 KB de una ROM de
   64 MB).
-- `retro64-run` (`src/host/run.c`, `tools/build.sh host`): corre una ROM N
+- `salsa64-run` (`src/host/run.c`, `tools/build.sh host`): corre una ROM N
   ciclos o hasta un texto del ISViewer, detecta bucles sin salida, traza
   excepciones (`--trace-exc`). Sin asignaciones en el bucle.
 - nemu64-test compilado en contenedor reproducible
@@ -44,7 +44,7 @@ Fallas que quedan en nemu64-test (fuera del intérprete): RSP 294, bus PI
 del cartucho 81, cachés 46, SP (DMA y registros) 31, RDP y MI repeat 10.
 
 Siguiente (Fase 1):
-- [x] Correr `retro64-cpu-tests` en la PS3 real: 154/154 pasan, **8,8 MIPS**
+- [x] Correr `salsa64-cpu-tests` en la PS3 real: 154/154 pasan, **8,8 MIPS**
       (docs/perf-log.md).
 - [ ] Perfilar el intérprete en el PPE: 8,8 MIPS contra ~60 que pide la N64.
       Sospecha: cambios de FPSCR (modo de redondeo) en cada instrucción de FPU.
@@ -92,7 +92,7 @@ bandera Inexact.
 ## 2026-10-10 — Fase 0: completa en RPCS3, falta la PS3 real
 
 Hecho:
-- Imagen `retro64-toolchain:dev` (ver docs/toolchain.md): ps3toolchain (GCC 13.2
+- Imagen `salsa64-toolchain:dev` (ver docs/toolchain.md): ps3toolchain (GCC 13.2
   PPU, 9.5 SPU) + PSL1GHT + cgcomp con Cg Toolkit vía qemu. Los 54 shaders de
   la rama `ps3` del port de SM64 compilan; 18/31 samples de PSL1GHT compilan
   (las fallas son de los samples).
@@ -111,19 +111,19 @@ Hecho:
 Falta para cerrar la Fase 0:
 - [x] Correr los 4 programas en RPCS3 y automatizarlo.
 - [x] PS3 real (2026-10-10, Slim CECH-3011A, HFW 4.91 + HEN; no admite CFW):
-      udplog, spu-compute, rsx-triangle y retro64-cpu-tests pasan; jit-ppe:
+      udplog, spu-compute, rsx-triangle y salsa64-cpu-tests pasan; jit-ppe:
       solo `.text` es escribible y ejecutable (docs/jit-ppe.md). Números en
-      docs/perf-log.md. El log también se escribe en /dev_hdd0/retro64/<prog>.log.
+      docs/perf-log.md. El log también se escribe en /dev_hdd0/salsa64/<prog>.log.
 - [x] Plan de la Fase 3: recompilador en el PPE con la caché en una región de
       `.text`. Falta medir el tamaño máximo de esa región (docs/jit-ppe.md).
 - [ ] Antes: conectar la PS3 (está desconectada; revisar su estado). Datos a
       reunir: IP por cable, versión de firmware, apps de envío instaladas y si
-      hay capturadora. Luego correr la Fase 0 y `retro64-cpu-tests` (primer
+      hay capturadora. Luego correr la Fase 0 y `salsa64-cpu-tests` (primer
       número de MIPS real).
 - [ ] Opcional: correr Cell64 en la PS3 y guardar su `perf_trace.csv`
       (docs/referencia-cell64.md).
 
-Nombre: **Retro64** (decidido el 2026-10-10; antes "Cell64", provisional).
+Nombre: **Salsa64** (decidido el 2026-10-10). Antes: "Retro64" (2026-10-10) y "Cell64" (provisional).
 - Ya existe un emulador de N64 para PS3 llamado **Cell64**: v1.52 de
   "ZeBobbel", publicado en Brewology el 2026-09-27
   (store.brewology.com/ahomebrew.php?brewid=344), con una variante "HEN FIX by
@@ -145,7 +145,7 @@ Nombre: **Retro64** (decidido el 2026-10-10; antes "Cell64", provisional).
 Notas:
 - No usar `-Os` en el PPU: ICE de GCC 13.2 (docs/toolchain.md).
 - En RPCS3, rsx-triangle necesita "Write Color Buffers" para su verificación.
-- Archivos de Retro64 en la PS3: `/dev_hdd0/retro64/` (RPCS3 vacía `/dev_hdd0/tmp`).
+- Archivos de Salsa64 en la PS3: `/dev_hdd0/salsa64/` (RPCS3 vacía `/dev_hdd0/tmp`).
 - Juegos objetivo: tabla en docs/proyecto.md. Comparación con Cell64 en
   docs/referencia-cell64.md (no usa SPEs; todo en un hilo del PPE).
 - Ideas sin decidir: versión rápida del intérprete (decodificar una vez,

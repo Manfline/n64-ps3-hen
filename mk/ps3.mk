@@ -1,4 +1,4 @@
-# mk/ps3.mk — reglas comunes para programas de Retro64 con PSL1GHT.
+# mk/ps3.mk — reglas comunes para programas de Salsa64 con PSL1GHT.
 #
 # El Makefile de cada programa define, antes del include:
 #   PROGRAM     nombre del ejecutable

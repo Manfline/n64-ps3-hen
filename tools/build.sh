@@ -5,7 +5,7 @@
 #   tools/build.sh --sh 'ppu-gcc --version'
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-IMAGE="${RETRO64_IMAGE:-retro64-toolchain:dev}"
+IMAGE="${SALSA64_IMAGE:-salsa64-toolchain:dev}"
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
 	echo "No existe la imagen $IMAGE: correr tools/docker-image.sh" >&2

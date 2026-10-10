@@ -1,5 +1,5 @@
 /*
- * Retro64 — Fase 0: triángulo en el RSX.
+ * Salsa64 — Fase 0: triángulo en el RSX.
  *
  * Inicializa el RSX con doble búfer, dibuja un triángulo con color por
  * vértice (shaders Cg compilados offline con cgcomp) y en el cuadro
@@ -98,7 +98,7 @@ static int init_video(void)
 		}
 	}
 	if (id < 0) {
-		retro64_log("ninguna resolución disponible");
+		salsa64_log("ninguna resolución disponible");
 		return -1;
 	}
 
@@ -109,7 +109,7 @@ static int init_video(void)
 	cfg.aspect = VIDEO_ASPECT_AUTO;
 	cfg.pitch = res.width * 4;
 	if (videoConfigure(VIDEO_PRIMARY, &cfg, NULL, 0) != 0) {
-		retro64_log("videoConfigure falló");
+		salsa64_log("videoConfigure falló");
 		return -1;
 	}
 
@@ -122,7 +122,7 @@ static int init_screen(void)
 {
 	void *host = memalign(1024 * 1024, HOST_SIZE);
 	if (!host || rsxInit(&ctx, CB_SIZE, HOST_SIZE, host) != 0 || !ctx) {
-		retro64_log("rsxInit falló");
+		salsa64_log("rsxInit falló");
 		return -1;
 	}
 	if (init_video() != 0)
@@ -166,7 +166,7 @@ static int init_programs(void)
 	rsxAddressToOffset(fp_buf, &fp_offset);
 	memcpy(vbuf, tri, sizeof tri);
 
-	retro64_log("vertex program %u bytes, fragment program %u bytes", vp_size, fp_size);
+	salsa64_log("vertex program %u bytes, fragment program %u bytes", vp_size, fp_size);
 	return 0;
 }
 
@@ -276,7 +276,7 @@ static int check_frame(const u32 *fb)
 	const u32 near_b = pixel_at(fb, 0.0f, 0.5f);
 	const u32 center = pixel_at(fb, 0.0f, 0.0f);
 
-	retro64_log("píxeles: esquina=%06x rojo=%06x verde=%06x azul=%06x centro=%06x",
+	salsa64_log("píxeles: esquina=%06x rojo=%06x verde=%06x azul=%06x centro=%06x",
 		   corner, near_r, near_g, near_b, center);
 	return corner == (CLEAR_COLOR & 0x00FFFFFFu) && dominant(near_r) == 0 &&
 	       dominant(near_g) == 1 && dominant(near_b) == 2 && center != corner;
@@ -306,18 +306,18 @@ static int exit_pressed(void)
 
 int main(void)
 {
-	retro64_log_init("rsx-triangle");
+	salsa64_log_init("rsx-triangle");
 
 	if (init_screen() != 0 || init_programs() != 0) {
-		retro64_log("RESULTADO rsx-triangle: FALLO al inicializar");
-		retro64_log_shutdown();
+		salsa64_log("RESULTADO rsx-triangle: FALLO al inicializar");
+		salsa64_log_shutdown();
 		return 1;
 	}
-	retro64_log("RSX listo: %ux%u", width, height);
+	salsa64_log("RSX listo: %ux%u", width, height);
 
 	ioPadInit(7);
 	sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, sysutil_cb, NULL);
-	const int autotest = retro64_autotest();
+	const int autotest = salsa64_autotest();
 
 	u64 t0 = sysGetSystemTime();
 	for (u32 frame = 0; running; frame++) {
@@ -329,13 +329,13 @@ int main(void)
 		if (frame == CHECK_FRAME) {
 			wait_finish();
 			const int ok = check_frame(color_buf[cur_fb]);
-			retro64_log("RESULTADO rsx-triangle: %s", ok ? "OK" : "FALLO");
+			salsa64_log("RESULTADO rsx-triangle: %s", ok ? "OK" : "FALLO");
 		}
 		flip();
 
 		if (frame + 1 == FPS_FRAMES) {
 			u64 us = sysGetSystemTime() - t0;
-			retro64_log("%u cuadros en %u ms (vsync)", FPS_FRAMES, (unsigned)(us / 1000));
+			salsa64_log("%u cuadros en %u ms (vsync)", FPS_FRAMES, (unsigned)(us / 1000));
 			if (autotest)
 				break;
 		}
@@ -344,7 +344,7 @@ int main(void)
 	gcmSetWaitFlip(ctx);
 	rsxFinish(ctx, 1);
 	ioPadEnd();
-	retro64_log("salida normal");
-	retro64_log_shutdown();
+	salsa64_log("salida normal");
+	salsa64_log_shutdown();
 	return 0;
 }

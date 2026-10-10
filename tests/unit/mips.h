@@ -1,10 +1,10 @@
 /*
- * Retro64 — ensamblador MIPS mínimo para las pruebas unitarias: cada macro
+ * Salsa64 — ensamblador MIPS mínimo para las pruebas unitarias: cada macro
  * da la palabra de 32 bits de una instrucción. Los inmediatos se recortan a
  * 16 bits; los desplazamientos de salto van en instrucciones (no en bytes).
  */
-#ifndef RETRO64_TESTS_MIPS_H
-#define RETRO64_TESTS_MIPS_H
+#ifndef SALSA64_TESTS_MIPS_H
+#define SALSA64_TESTS_MIPS_H
 
 #include <stdint.h>
 

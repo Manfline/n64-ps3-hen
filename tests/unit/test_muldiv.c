@@ -1,5 +1,5 @@
 /*
- * Retro64 — pruebas de multiplicación, división y HI/LO.
+ * Salsa64 — pruebas de multiplicación, división y HI/LO.
  */
 #include "test.h"
 
@@ -38,7 +38,7 @@ static void mult_upper_bits(void)
 	R[T0] = 0x10;
 	R[T1] = 0x0000000400000000ull;  /* bit 34 en 1: rt vale -2^34 */
 	t_set_status(T_STATUS);
-	retro64_cpu_set_pc(CPU, T_CODE);
+	salsa64_cpu_set_pc(CPU, T_CODE);
 	t_step(1);
 	CHECK_EQ(CPU->lo, 0);
 	CHECK_EQ(CPU->hi, 0xFFFFFFFFFFFFFFC0ull);
@@ -74,7 +74,7 @@ static void div_int_min_by_minus_one(void)
 	t_step(1);
 	CHECK_EQ(CPU->lo, 0xFFFFFFFF80000000ull);
 	CHECK_EQ(CPU->hi, 0);
-	CHECK_EQ(CPU->status & RETRO64_ST_EXL, 0);
+	CHECK_EQ(CPU->status & SALSA64_ST_EXL, 0);
 }
 
 static void divu(void)

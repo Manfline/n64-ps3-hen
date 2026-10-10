@@ -1,6 +1,6 @@
-PROGRAM := retro64-cpu-tests
-TITLE   := Retro64 pruebas del CPU
-APPID   := RETR00005
+PROGRAM := salsa64-cpu-tests
+TITLE   := Salsa64 pruebas del CPU
+APPID   := SLSA00005
 SRCS    := main.c
 
 # El núcleo completo y las pruebas compartidas con el host (sin su main).

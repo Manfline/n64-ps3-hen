@@ -18,4 +18,4 @@ publica libdragon para r7) antes de usarlo.
 
 Para correrlo: `tools/test-roms.sh` (compara con la línea base
 `tests/roms/nemu64-test.fallas`) o, a mano,
-`tools/build.sh --sh 'build/host/retro64-run -u "success rate)" tests/roms/homebrew/nemu64-test.z64'`.
+`tools/build.sh --sh 'build/host/salsa64-run -u "success rate)" tests/roms/homebrew/nemu64-test.z64'`.
