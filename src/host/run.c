@@ -86,7 +86,7 @@ static struct {
 	uint32_t fields;        /* campo del VI de la última comparación de la RDRAM */
 } lock;
 
-static struct salsa64_save save;
+static struct salsa64_save save, ref_save;
 static struct savefile save_file;
 
 /* HLE gráfica: estado, búferes de salida y totales. */
@@ -210,6 +210,17 @@ void salsa64_debug_spmem(uint32_t reg, uint32_t v)
 
 static unsigned trace_rsp_left, trace_vi_left;
 
+/* Muestreo del PC al final de cada bloque del bucle principal, por segmento:
+ * cuánto del tiempo corre código mapeado por la TLB (kuseg, kseg2/3). */
+enum { SEG_KSEG0, SEG_KSEG1, SEG_TLB, SEG_COUNT };
+static uint64_t pc_samples[SEG_COUNT];
+
+static void pc_sample(uint64_t pc)
+{
+	uint32_t top = (uint32_t)pc >> 29;
+	pc_samples[top == 4 ? SEG_KSEG0 : top == 5 ? SEG_KSEG1 : SEG_TLB]++;
+}
+
 static void trace_rsp(void *ctx, const struct salsa64_task *t, enum salsa64_gbi gbi)
 {
 	(void)ctx;
@@ -220,6 +231,40 @@ static void trace_rsp(void *ctx, const struct salsa64_task *t, enum salsa64_gbi 
 		"boot=%08x/%x gbi=%d\n", (unsigned long long)n64.cpu.cycles, t->type, t->flags, t->ucode,
 		t->ucode_size, t->ucode_data, t->ucode_data_size, t->data_ptr, t->data_size, t->ucode_boot,
 		t->ucode_boot_size, gbi);
+	/* Identificación del microcódigo: CRC-32 del código y de ucode_data; en
+	 * las gráficas, sus textos (nombre y versión); en las de audio, las
+	 * palabras de ucode_data que distinguen las variantes de ABI. */
+	uint32_t base = t->ucode_data & 0x7FFFFF, size = t->ucode_data_size, run = 0;
+	if (base >= n64.bus.rdram_size)
+		size = 0;
+	else if (!size || size > 0x1000)
+		size = 0x1000;
+	if (size && size > n64.bus.rdram_size - base)
+		size = n64.bus.rdram_size - base;
+	uint32_t code = t->ucode & 0x7FFFFF, code_size = t->ucode_size;
+	if (code >= n64.bus.rdram_size || code_size > n64.bus.rdram_size - code)
+		code_size = 0;
+	fprintf(stderr, "  crc32: ucode %08x (0x%x bytes), ucode_data %08x (0x%x bytes)\n",
+		code_size ? salsa64_crc32(n64.bus.rdram + code, code_size) : 0, code_size,
+		size ? salsa64_crc32(n64.bus.rdram + base, size) : 0, size);
+	if (t->type == SALSA64_TASK_AUDIO && size >= 0x34)
+		fprintf(stderr, "  ucode_data[00 10 28 30]: %08x %08x %08x %08x\n",
+			salsa64_rd32(n64.bus.rdram + base), salsa64_rd32(n64.bus.rdram + base + 0x10),
+			salsa64_rd32(n64.bus.rdram + base + 0x28), salsa64_rd32(n64.bus.rdram + base + 0x30));
+	if (t->type == SALSA64_TASK_GFX) {
+		fprintf(stderr, "  ucode_data textos:");
+		for (uint32_t i = 0; i <= size; i++) {
+			uint8_t c = i < size ? n64.bus.rdram[base + i] : 0;
+			if (c >= 0x20 && c < 0x7F) {
+				run++;
+				continue;
+			}
+			if (run >= 8)
+				fprintf(stderr, " [%04x] \"%.*s\"", i - run, (int)run, (const char *)n64.bus.rdram + base + i - run);
+			run = 0;
+		}
+		fprintf(stderr, "\n");
+	}
 	/* Microcódigos pequeños: volcar texto y datos. */
 	if (t->ucode_size && t->ucode_size <= 0x100) {
 		fprintf(stderr, "  ucode:");
@@ -841,6 +886,12 @@ int main(int argc, char **argv)
 				fprintf(stderr, "salsa64-run: la referencia no arrancó\n");
 				return 3;
 			}
+			/* El mismo guardado, en una copia: sin él la PIF de la referencia
+			 * responde «sin dispositivo» donde la principal ve la EEPROM. */
+			if (n64.bus.save) {
+				ref_save = save;
+				salsa64_save_attach(&ref.bus, &ref_save);
+			}
 			rec.no_link = true;
 			rec.after_exit = lockstep_check;
 		}
@@ -869,6 +920,7 @@ int main(int argc, char **argv)
 		} else {
 			salsa64_n64_run(&n64, max_cycles - done < slice ? max_cycles - done : slice);
 		}
+		pc_sample(n64.cpu.pc);
 		if (watch.hit != STOP_NONE)
 			reason = watch.hit;
 		else if (cpu_stuck())
@@ -886,6 +938,11 @@ int main(int argc, char **argv)
 		[STOP_CYCLES] = "se agotaron los ciclos",
 		[STOP_STUCK] = "bucle infinito sin interrupciones posibles",
 	};
+	uint64_t samples = pc_samples[SEG_KSEG0] + pc_samples[SEG_KSEG1] + pc_samples[SEG_TLB];
+	if (samples)
+		fprintf(stderr, "salsa64-run: pc al final de cada bloque (%llu muestras): KSEG0 %.1f %%, KSEG1 %.1f %%, "
+			"TLB %.1f %%\n", (unsigned long long)samples, 100.0 * pc_samples[SEG_KSEG0] / samples,
+			100.0 * pc_samples[SEG_KSEG1] / samples, 100.0 * pc_samples[SEG_TLB] / samples);
 	/* Una instrucción por ciclo, salvo los ciclos saltados en bucles de espera. */
 	fprintf(stderr, "salsa64-run: %s; %llu ciclos (%.2f s de consola) en %.2f s, %.1f MIPS, "
 		"%.1f %% en bucles de espera, pc=0x%016llx\n",

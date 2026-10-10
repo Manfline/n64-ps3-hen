@@ -1,5 +1,47 @@
 # Estado
 
+## 2026-10-10 — Arranque del CIC 6105 y censo de compatibilidad
+
+Hecho (rama `amazing-noether-39a548`; detalle en docs/cpu-vr4300.md,
+«Arranque HLE», y docs/compatibilidad.md):
+- `src/core/boot.c`: con el CIC 6105/7105, el arranque HLE deja lo que su
+  IPL3 deja además en la RDRAM: copia de DMEM 0x554–0x888 a 0x004–0x338
+  (desde la ROM del usuario; de ahí sale 0x2E8 = 0xC86E2000), el efecto del
+  DMA con paso de su microcódigo del RSP (24 filas de 8 bytes en 0x2FB1F0,
+  cada 0xFF0, desde RDRAM 0x1E8 vía IMEM 0x120) y el tamaño de la RDRAM en
+  0x3F0. Solo direcciones, cotejadas entre fuentes (docs/THIRD_PARTY.md) y
+  verificadas con dos palabras del Perfect Dark del autor. No hay más
+  efectos documentados por variante (6101/6102/6103/6106/7102: dirección
+  de arranque y semilla, que ya estaban).
+- `salsa64_boot_hle_as` fuerza la variante; pruebas por variante y de los
+  restos del 6105 (234/234 en el host).
+- Perfect Dark pasa la comprobación en la Mac y en la **PS3 real**
+  (frontend «Salsa64 arranque», SLSA00078): 6083 bloques (6078 fuera de
+  KSEG0) en vez de 201, 693 traducciones de la TLB, 59,8 campos/s con 5,8
+  ms por campo, pantalla negra. Se queda en su hilo ocioso esperando al DP
+  tras su primera tarea gráfica (microcódigo de Rare sin texto, sin HLE).
+  `--lockstep` en qemu: 10,7 s de consola sin diferencias.
+- `salsa64-run`: `--trace-rsp` muestra el CRC-32 del microcódigo y de
+  `ucode_data`, los textos de `ucode_data` en las tareas gráficas y las
+  palabras que distinguen el audio; muestreo del PC por segmento al final
+  (KSEG0/KSEG1/TLB). `--lockstep` da a la referencia una copia del
+  guardado: sin ella su PIF respondía «sin dispositivo» en el canal de la
+  EEPROM y salía una diferencia falsa (Perfect Dark, ciclo 254 M).
+- `tools/censo.sh`: censo de compatibilidad con los ROMs del usuario
+  desde su ruta (compila `salsa64-run` con el compilador de la Mac).
+- Censo de 3 minutos (SM64, OoT, MK64, SF64, GoldenEye, Perfect Dark y
+  Banjo-Kazooie): solo Zelda dibuja. Los demás mandan una tarea gráfica
+  con microcódigo sin HLE (F3D, F3DEX 0.95/1.21/1.22, el de Perfect Dark)
+  y se quedan esperando la interrupción del DP. Experimento local: con esa
+  interrupción los seis siguen 3 minutos sin otro bloqueo.
+
+Siguiente (lista priorizada en docs/compatibilidad.md):
+- [ ] HLE de F3D y F3DEX 1.x (trabajo de F3D): 4 de los 6 juegos objetivo.
+- [ ] Interrupción del DP tras una tarea gráfica desconocida
+      (`src/core/rsp.c`, trabajo del fin de tarea).
+- [ ] Detector: F3DEX 0.95 (MK64) y el microcódigo de Perfect Dark por CRC.
+- [ ] Audio HLE: ABI 1, nead y naudio (ver la tabla del censo).
+
 ## 2026-10-10 — Recompilador: código en KSEG1 y mapeado por la TLB
 
 Hecho (diseño en docs/rec-ppe.md, «Código fuera de KSEG0»):
@@ -65,9 +107,9 @@ Siguiente:
     código del juego la escribe: la deja el arranque del 6105 y nuestro
     arranque HLE no. Escribiéndola a mano (experimento, no en el repo)
     pasa, monta 0x7F000000 en la TLB y llega a su hilo ocioso.
-- [ ] Arranque HLE del CIC 6105 (`src/core/boot.c`): lo que el IPL3 deja
+- [x] Arranque HLE del CIC 6105 (`src/core/boot.c`): lo que el IPL3 deja
       en la RDRAM (al menos 0x2E8 = 0xC86E2000), desde documentación
-      pública, sin código de Nintendo.
+      pública, sin código de Nintendo. (Hecho: entrada de arriba.)
 - [ ] HLE gráfica: el microcódigo de GoldenEye (F3D; trabajo de F3D) y que
       una tarea con microcódigo desconocido no deje colgado al juego.
 - [ ] idle.c: bucles de espera en código mapeado por la TLB.
@@ -211,8 +253,9 @@ Hecho (diseño y decisión en docs/rec-ppe.md, números en docs/perf-log.md):
 Siguiente:
 - [ ] Medir en la PS3 el préstamo de registros fijos en bucles (bench
       enteros con registros fijos: esperado ~750 MIPS, antes 128).
-- [ ] Más juegos de la tabla de docs/proyecto.md (SM64, MK64, SF64; GoldenEye y
-      Perfect Dark usan TLB: ver la entrada de arriba).
+- [x] Más juegos de la tabla de docs/proyecto.md (SM64, MK64, SF64; GoldenEye y
+      Perfect Dark usan TLB: ver la entrada de arriba). (Censo en
+      docs/compatibilidad.md.)
 - [ ] Más en nativo: CVT/TRUNC/ROUND de la FPU, LWL/LWR/SWL/SWR, CACHE,
       MFC0 sin salir del bloque. (Código por TLB y KSEG1: hecho.)
 - [ ] Fase 2: el DMA del SP hacia la RDRAM tiene que llamar a
@@ -530,8 +573,9 @@ Siguiente (Fase 1):
 - [ ] CPUTest de krom ensamblado desde fuente con bootcode en ceros (traer
       solo los `.asm` por la API: el repo trae el IPL3 de Nintendo). Probaría
       el camino plano del arranque HLE.
-- [ ] Probar el camino plano con los juegos del usuario (fuera del repo):
-      falta reproducir efectos del IPL3 de algunos CIC (6105).
+- [x] Probar el camino plano con los juegos del usuario (fuera del repo):
+      falta reproducir efectos del IPL3 de algunos CIC (6105). (Hecho:
+      arranque del 6105 y censo, 2026-10-10.)
 
 ## 2026-10-10 — Fase 1 iniciada: intérprete del VR4300
 
