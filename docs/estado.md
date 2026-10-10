@@ -34,6 +34,11 @@ Siguiente:
   en el intérprete y en las cuatro variantes; nemu64-test igual al
   intérprete (446 fallas, hash y ciclo), ×4,04–4,29; bench enteros con
   registros fijos 760 MIPS (el préstamo en bucles funciona; antes 128).
+- qemu-ppc64 con `--lockstep` (respaldos propios, fuera del repo):
+  GoldenEye y Perfect Dark 200 M ciclos cada uno sin diferencias con el
+  intérprete. GoldenEye: 3518 de 3524 bloques mapeados y 5050
+  traducciones en 2,1 s (reescribe la TLB seguido); Perfect Dark con 8 MB:
+  3 traducciones.
 - [ ] PS3 real: el frontend «Salsa64 TLB» (SLSA00074) con GoldenEye y
       Perfect Dark (respaldos propios), mirando la proporción de
       instrucciones interpretadas y las traducciones.

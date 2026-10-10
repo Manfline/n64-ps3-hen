@@ -311,5 +311,7 @@ compiler error: Segmentation fault"; repetir compila bien
 | 2026-10-10 | **Zelda OoT** en el frontend | **PS3 real**, f416bee | 41–60 campos/s (intérprete 15–17); emulación 4–14 ms por campo; se ve igual |
 | 2026-10-10 | Unitarias con código mapeado, KSEG1 y ROM; recompilador estricto (cuatro modos) | qemu-ppc64 | 222/222 |
 | 2026-10-10 | nemu64-test, `--rec` y `--lockstep`, con KSEG1/TLB compilados | qemu-ppc64 | fallas de la línea base; 623 bloques fuera de KSEG0 (de 29 517), 27 traducciones; lockstep sin diferencias (también vitest) |
+| 2026-10-10 | GoldenEye (USA), respaldo del usuario, `--lockstep` 200 M ciclos (2,1 s) | qemu-ppc64 | sin diferencias; 3518 de 3524 bloques mapeados, 5050 traducciones (la TLB cambia seguido), 0,1 % interpretado |
+| 2026-10-10 | Perfect Dark (USA), respaldo del usuario, `--lockstep` 200 M ciclos | qemu-ppc64 | sin diferencias; 198 de 202 bloques mapeados, 3 traducciones (con 8 MB, pocas entradas grandes) |
 
 Rendimiento: solo en la PS3 real (docs/perf-log.md, «Recompilador»).
