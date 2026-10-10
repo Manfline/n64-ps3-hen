@@ -12,6 +12,7 @@ no se copió código de Not64, Mupen64Plus ni ares.
 | `src/core/types.h`, `endian.h` | Tipos, extensión de signo, accesores big-endian |
 | `src/core/bus.{h,c}` | Mapa físico: RDRAM, SP DMEM/IMEM, registros, ROM, PIF RAM |
 | `src/core/rcp.h`, `mi.c`, `pi.c`, `si.c`, `vi.c`, `ai.c`, `sp.c` | Registros del RCP (ver estado abajo) |
+| `src/core/pif.{h,c}` | PIF: comandos joybus de los controles en la PIF RAM (ver abajo) |
 | `src/core/sched.{h,c}` | Planificador de eventos por ciclos, ranuras fijas |
 | `src/core/n64.{h,c}` | La máquina: CPU + bus + planificador |
 | `src/core/rom.{h,c}` | Orden de bytes del volcado, encabezado, CIC y tipo de TV |
@@ -126,6 +127,27 @@ leer (nemu64-test lo detecta escribiendo y leyendo 0x12345678) y respeta las
 escrituras de 8/16 bits, a diferencia del bus PI real. Fuente: README de
 nemu64-test y `src/isviewer.rs`.
 
+## PIF y controles
+
+`src/core/pif.c`, desde n64brew.dev (PIF-NUS, Joybus Protocol):
+
+- Una escritura en la PIF RAM (DMA del SI o directa) con el bit 0x01 del
+  byte 63 prepara los intercambios: recorre la RAM (0x00 salta canal, 0xFD
+  reset de la línea, 0xFE fin, 0xFF nada; si no, `TX RX datos respuesta`)
+  y apaga el bit. Cada lectura de la PIF RAM por DMA los ejecuta antes de
+  copiar; repetir la lectura los vuelve a ejecutar.
+- Canales 0–3: control estándar. Identificación (0x00/0xFF) `05 00 02` (sin
+  accesorio); estado (0x01) botones, X, Y; L + R + Start da RST con Start
+  apagado y el stick en 0. Lectura del accesorio (0x02): 32 ceros y CRC
+  0xFF; escritura (0x03): CRC-8 (0x85) de los datos complementado. Un
+  puerto sin control o un comando desconocido: bit 0x80 en RX; una
+  respuesta más corta que RX: bit 0x40.
+- Canal 4 (EEPROM del cartucho): todavía sin dispositivo.
+- Por omisión hay un control en el puerto 1 (como una consola encendida);
+  el frontend los conecta según los DualShock 3 (`src/frontend/padmap.c`).
+- Falta: EEPROM, Controller Pak, Rumble Pak, el reto del CIC (bit 0x02) y
+  la latencia del DMA del SI.
+
 ## Particularidades del VR4300 que se modelan
 
 Lo marcado con (n64t) lo confirmó nemu64-test; varias reglas de la primera
@@ -236,7 +258,7 @@ Fuera del CPU, lo que nemu64-test marca (línea base en
 
 ## Pruebas
 
-- `tools/build.sh test-host`: 154 pruebas (`tests/unit/`) con gcc nativo,
+- `tools/build.sh test-host`: 175 pruebas (`tests/unit/`) con gcc nativo,
   ASan y UBSan. `build/host/salsa64-unit bench` agrega el micro-benchmark.
 - `tools/test-roms.sh`: compila `salsa64-run` y corre nemu64-test hasta su
   resumen (≈190 M ciclos, unos 2 s en el host con ASan). Compara la lista de

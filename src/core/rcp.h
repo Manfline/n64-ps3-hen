@@ -5,8 +5,8 @@
  * Estado de la Fase 1 (primer hito):
  *   MI  completo: modo, versión, interrupciones y máscara → Cause.IP2.
  *   PI  DMA cartucho → RDRAM inmediato, con interrupción. Sin latencias.
- *   SI  DMA RDRAM ↔ PIF RAM inmediato, con interrupción. Falta procesar los
- *       comandos del PIF (controles, EEPROM).
+ *   SI  DMA RDRAM ↔ PIF RAM inmediato, con interrupción; comandos joybus
+ *       de los controles en pif.c. Falta la EEPROM y la latencia.
  *   SP  bits de SP_STATUS y semáforo. Falta el DMA y arrancar el RSP.
  *   VI  contador de líneas, interrupción en VI_V_INTR y campos con la
  *       temporización del tipo de TV (vi.c); describe el framebuffer que

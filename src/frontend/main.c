@@ -13,6 +13,12 @@
  * "RESULTADO frontend: OK/FALLO"; en modo de prueba automática
  * (platform/ps3/autotest.h) sale después.
  *
+ * Controles: los DualShock 3 de los puertos 1–4 son los controles de la N64
+ * (padmap.c; se cambian con SALSA64_DATA_DIR/controles.cfg). El puerto 1
+ * siempre tiene un control conectado (neutro sin mando): el DS3 tarda unos
+ * cuadros en aparecer y los juegos buscan controles al arrancar. Los cambios
+ * de botones van al log.
+ *
  * Salir: START + SELECT, o "Salir del juego" desde el menú del sistema.
  * Lo que la ROM imprime por el ISViewer va al log.
  */
@@ -28,6 +34,7 @@
 #include <rsxkit/rsxkit.h>
 
 #include "core/boot.h"
+#include "padmap.h"
 #include "platform/ps3/autotest.h"
 #include "platform/ps3/log.h"
 #include "selftest.h"
@@ -36,6 +43,8 @@
 SYS_PROCESS_PARAM(1001, 0x100000);
 
 #define ROM_PATH     SALSA64_DATA_DIR "/rom.z64"
+#define PADS_PATH    SALSA64_DATA_DIR "/controles.cfg"
+#define PADS_CFG_MAX 4096
 #define ROM_MAX      (64u << 20)
 #define FB_MAX_W     640
 #define FB_MAX_H     576
@@ -53,17 +62,95 @@ static void sysutil_cb(u64 status, u64 param, void *user)
 		running = 0;
 }
 
-static int exit_pressed(void)
+static struct salsa64_padmap padmap;
+
+/* Lee controles.cfg si existe; si no, el mapeo por omisión. */
+static void load_padmap(void)
 {
+	static char text[PADS_CFG_MAX];
+	salsa64_padmap_default(&padmap);
+	FILE *f = fopen(PADS_PATH, "rb");
+	if (!f) {
+		salsa64_log("controles: mapeo por omisión (no hay %s)", PADS_PATH);
+		return;
+	}
+	size_t len = fread(text, 1, sizeof text, f);
+	fclose(f);
+	char err[96];
+	int bad = salsa64_padmap_parse(&padmap, text, len, err, sizeof err);
+	if (bad)
+		salsa64_log("controles: %s con %d líneas que no entendí; la primera, %s", PADS_PATH, bad, err);
+	else
+		salsa64_log("controles: %s", PADS_PATH);
+}
+
+static struct salsa64_ds3 ds3_from(const padData *d)
+{
+	struct salsa64_ds3 s;
+	s.buttons = (uint32_t)d->BTN_CROSS << SALSA64_DS3_CROSS | (uint32_t)d->BTN_CIRCLE << SALSA64_DS3_CIRCLE |
+		    (uint32_t)d->BTN_SQUARE << SALSA64_DS3_SQUARE | (uint32_t)d->BTN_TRIANGLE << SALSA64_DS3_TRIANGLE |
+		    (uint32_t)d->BTN_L1 << SALSA64_DS3_L1 | (uint32_t)d->BTN_R1 << SALSA64_DS3_R1 |
+		    (uint32_t)d->BTN_L2 << SALSA64_DS3_L2 | (uint32_t)d->BTN_R2 << SALSA64_DS3_R2 |
+		    (uint32_t)d->BTN_L3 << SALSA64_DS3_L3 | (uint32_t)d->BTN_R3 << SALSA64_DS3_R3 |
+		    (uint32_t)d->BTN_START << SALSA64_DS3_START | (uint32_t)d->BTN_SELECT << SALSA64_DS3_SELECT |
+		    (uint32_t)d->BTN_UP << SALSA64_DS3_UP | (uint32_t)d->BTN_DOWN << SALSA64_DS3_DOWN |
+		    (uint32_t)d->BTN_LEFT << SALSA64_DS3_LEFT | (uint32_t)d->BTN_RIGHT << SALSA64_DS3_RIGHT;
+	s.lx = (uint8_t)d->ANA_L_H;
+	s.ly = (uint8_t)d->ANA_L_V;
+	s.rx = (uint8_t)d->ANA_R_H;
+	s.ry = (uint8_t)d->ANA_R_V;
+	return s;
+}
+
+/* DualShock 3 → controles de la N64, una vez por campo. ioPadGetData da
+ * len = 0 cuando nada cambió: se conserva el último estado. Devuelve 1 si
+ * algún mando tiene START + SELECT. */
+static int update_pads(void)
+{
+	static struct salsa64_ds3 last[SALSA64_PIF_PORTS] = {
+		[0 ... SALSA64_PIF_PORTS - 1] = { 0, 128, 128, 128, 128 },
+	};
+	static struct salsa64_pad logged[SALSA64_PIF_PORTS];
+	static uint8_t present[SALSA64_PIF_PORTS];
+	const uint32_t quit = 1u << SALSA64_DS3_START | 1u << SALSA64_DS3_SELECT;
 	padInfo info;
 	padData data;
+	int exit = 0;
 
 	if (ioPadGetInfo(&info) != 0)
 		return 0;
-	for (int i = 0; i < MAX_PADS; i++)
-		if (info.status[i] && ioPadGetData(i, &data) == 0 && data.BTN_START && data.BTN_SELECT)
-			return 1;
-	return 0;
+	for (unsigned i = 0; i < SALSA64_PIF_PORTS; i++) {
+		struct salsa64_pad p = { 0, 0, 0, i == 0 };
+		if (present[i] != !!info.status[i]) {
+			present[i] = !!info.status[i];
+			salsa64_log("mando %u %s", i + 1, present[i] ? "conectado" : "desconectado");
+			last[i] = (struct salsa64_ds3){ 0, 128, 128, 128, 128 };  /* nada pegado */
+		}
+		if (info.status[i]) {
+			if (ioPadGetData(i, &data) == 0 && data.len > 0)
+				last[i] = ds3_from(&data);
+			salsa64_padmap_apply(&padmap, &last[i], &p);
+			if ((last[i].buttons & quit) == quit)
+				exit = 1;
+		}
+		salsa64_pif_set_pad(&n64.bus, i, &p);
+
+		/* Al log: conexión y botones; el stick, si se movió bastante. */
+		struct salsa64_pad *o = &logged[i];
+		int dx = p.x - o->x, dy = p.y - o->y;
+		if (p.connected != o->connected || p.buttons != o->buttons ||
+		    dx * dx + dy * dy >= 40 * 40) {
+			char desc[128];
+			if (p.connected) {
+				salsa64_pad_describe(&p, desc, sizeof desc);
+				salsa64_log("control %u: %s", i + 1, desc);
+			} else {
+				salsa64_log("control %u: desconectado", i + 1);
+			}
+			*o = p;
+		}
+	}
+	return exit;
 }
 
 /* Texto del ISViewer: al log línea por línea. */
@@ -161,6 +248,7 @@ int main(void)
 		    info.entry, info.tv == SALSA64_TV_PAL ? "PAL" : info.tv == SALSA64_TV_MPAL ? "MPAL" : "NTSC");
 
 	ioPadInit(7);
+	load_padmap();
 	sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, sysutil_cb, NULL);
 	if (selftest_on)
 		selftest_start();
@@ -173,7 +261,7 @@ int main(void)
 
 	while (running) {
 		sysUtilCheckCallback();
-		if (exit_pressed())
+		if (update_pads())
 			break;
 
 		uint64_t t0 = sysGetSystemTime();

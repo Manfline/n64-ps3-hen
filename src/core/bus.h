@@ -25,6 +25,7 @@
 #ifndef SALSA64_CORE_BUS_H
 #define SALSA64_CORE_BUS_H
 
+#include "core/pif.h"
 #include "core/rcp.h"
 #include "core/types.h"
 
@@ -67,6 +68,7 @@ struct salsa64_bus {
 	uint32_t ri[SALSA64_RI_NREGS];
 	uint32_t si[SALSA64_SI_NREGS];
 	uint32_t rdram_regs[SALSA64_RDRAM_NREGS];
+	struct salsa64_pif pif;
 
 	uint8_t sp_mem[SALSA64_SP_MEM_SIZE] __attribute__((aligned(128)));
 	uint8_t pif_ram[SALSA64_PIF_RAM_SIZE] __attribute__((aligned(16)));

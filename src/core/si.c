@@ -1,9 +1,9 @@
 /*
  * Salsa64 — Serial Interface (SI): DMA de 64 bytes entre la RDRAM y la PIF RAM.
  *
- * Primer hito: el DMA es instantáneo y levanta la interrupción del SI. Falta
- * que el PIF procese los comandos (controles, Controller Pak, EEPROM) antes
- * de una lectura, y la latencia real (~2 ms en la consola).
+ * El DMA es instantáneo y levanta la interrupción del SI. El PIF prepara los
+ * comandos joybus al recibir una escritura y los ejecuta antes de cada
+ * lectura (pif.c). Falta la latencia real (~2 ms en la consola).
  */
 #include <string.h>
 
@@ -34,14 +34,17 @@ void salsa64_si_write(struct salsa64_bus *bus, uint32_t reg, uint32_t v)
 		return;
 	case SALSA64_SI_PIF_ADDR_RD64B:  /* PIF RAM → RDRAM */
 		bus->si[i] = v;
+		salsa64_pif_execute(bus);
 		if ((dram = si_dram(bus)) != UINT32_MAX)
 			memcpy(bus->rdram + dram, bus->pif_ram, SALSA64_PIF_RAM_SIZE);
 		salsa64_mi_raise(bus, SALSA64_IRQ_SI);
 		return;
 	case SALSA64_SI_PIF_ADDR_WR64B:  /* RDRAM → PIF RAM */
 		bus->si[i] = v;
-		if ((dram = si_dram(bus)) != UINT32_MAX)
+		if ((dram = si_dram(bus)) != UINT32_MAX) {
 			memcpy(bus->pif_ram, bus->rdram + dram, SALSA64_PIF_RAM_SIZE);
+			salsa64_pif_written(bus);
+		}
 		salsa64_mi_raise(bus, SALSA64_IRQ_SI);
 		return;
 	case SALSA64_SI_STATUS:
