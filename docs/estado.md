@@ -31,8 +31,8 @@ de arranque `amazing-noether-39a548` con `osCicId`, sin integrar):
   `gfx_state.rare` (~250 bytes) con el estado de las dos variantes; dos GBI
   nuevos en rcp.h; F3DEX2, F3D y F3DEX no cambian (mismas pruebas y
   mismas imágenes de gfxtest).
-- SPE 0: Perfect Dark 1,9 KB y Conker 4,4 KB de código; texto 71 KB, bss
-  145 KB, pila ~39 KB (antes ~46; `src/spu/gfx/main.c`). `GFX_MAX_LIGHTS`
+- SPE 0: Perfect Dark 1,9 KB y Conker 4,4 KB de código; texto 72 KB (con main
+  53fb223), bss 145 KB, pila ~38 KB (antes ~46; `src/spu/gfx/main.c`). `GFX_MAX_LIGHTS`
   pasó de 8 a 11: Conker pide hasta 11 luces (`G_MW_NUMLIGHT` = 0x210).
 - Pruebas: suite `gfx-rare` (9: colores por tabla, luz con la normal en la
   tabla, G_TRI4 y G_QUAD de PD; G_TRI4 de 5 bits, G_LOAD_UCODE que no corta
