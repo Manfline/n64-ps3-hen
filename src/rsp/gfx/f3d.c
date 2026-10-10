@@ -268,6 +268,11 @@ void gfx_dl_f3d(struct gfx_state *g)
 			break;
 		case G_RDPHALF_2:
 			g->rdphalf2 = w1;
+			/* F3D: G_RDPHALF_1 + G_RDPHALF_2 o G_RDPHALF_CONT pasan al
+			 * RDP una doble palabra (GoldenEye arma así triángulos crudos
+			 * para el cielo). */
+			if (!ex)
+				gfx_dl_rdp_word(g, g->rdphalf1, w1);
 			break;
 		case G_TEXRECT:
 		case G_TEXRECTFLIP:
@@ -283,7 +288,8 @@ void gfx_dl_f3d(struct gfx_state *g)
 		case G_MODIFYVTX:
 			if (ex)
 				gfx_modify_vertex(g, (w0 & 0xFFFF) / 2, (w0 >> 16) & 0xFF, w1);
-			/* F3D: G_RDPHALF_CONT suelto, nada que hacer. */
+			else  /* F3D: G_RDPHALF_CONT */
+				gfx_dl_rdp_word(g, g->rdphalf1, w1);
 			break;
 		case G_TRI2:
 		case G_QUAD:

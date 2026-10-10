@@ -486,6 +486,49 @@ static void f3d_tri4(void)
 	CHECK_EQ(out_vtx[8].r, 11 * 16);
 }
 
+/* Triángulo crudo del RDP (0xCC, con sombreado) armado con G_RDPHALF_1 +
+ * G_RDPHALF_CONT (y G_RDPHALF_2 en la última doble palabra), como el cielo
+ * de GoldenEye: dos trapecios con el color evaluado en las esquinas. */
+static void f3d_rdp_raw_triangle(void)
+{
+	start(false);
+	basic_setup();
+	const uint32_t cmd[24] = {
+		0xCC000000u | 120, 80u << 16 | 40,  /* YL 30, YM 20, YH 10 (s11.2) */
+		50u << 16, 5u << 16,                 /* XL 50, DxLDy 5 */
+		100u << 16, 0,                       /* XH 100, DxHDy 0 */
+		50u << 16, 0,                        /* XM 50, DxMDy 0 */
+		255u << 16 | 0, 0u << 16 | 255,      /* R G B A enteros en (XH, YH) */
+		1u << 16, 0,                         /* DrDx = 1 */
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  /* fracciones, DxDe, DxDy */
+	};
+	for (int i = 0; i < 12; i++) {
+		dl(0xB4000000, cmd[2 * i]);
+		dl(i == 11 ? 0xB3000000 : 0xB2000000, cmd[2 * i + 1]);
+	}
+	run();
+	CHECK_EQ(res.unknown_cmds, 0);
+	CHECK_EQ(res.triangles, 4);
+	const struct gfx_draw *d = draw_n(0);
+	CHECK(d != NULL);
+	if (!d)
+		return;
+	CHECK_EQ(d->h.b, 12);
+	CHECK_EQ(d->cull, GFX_CULL_NONE);
+	CHECK_EQ(d->depth, 0);
+	/* De YH a YM entre H (x 100) y M (x 50); R baja 1 por píxel hacia M. */
+	CHECK(out_vtx[0].x == 100.0f && out_vtx[0].y == 10.0f && out_vtx[0].w == 1.0f);
+	CHECK_EQ(out_vtx[0].r, 255);
+	CHECK(out_vtx[1].x == 50.0f && out_vtx[1].y == 10.0f);
+	CHECK_EQ(out_vtx[1].r, 205);
+	CHECK_EQ(out_vtx[1].a, 255);
+	CHECK(out_vtx[2].x == 50.0f && out_vtx[2].y == 20.0f);
+	CHECK(out_vtx[5].x == 100.0f && out_vtx[5].y == 20.0f);
+	/* De YM a YL entre H y L, que sale de (50, 20) con pendiente 5. */
+	CHECK(out_vtx[7].x == 50.0f && out_vtx[7].y == 20.0f);
+	CHECK(out_vtx[8].x == 100.0f && out_vtx[8].y == 30.0f);
+}
+
 /* F3DEX 1.x: búfer de 32 con índices ×2, G_TRI2, G_QUAD, G_MODIFYVTX,
  * G_CULLDL, G_BRANCH_Z, TEXRECT con G_RDPHALF_1/2 y G_LOAD_UCODE. */
 static void f3dex_commands(void)
@@ -550,5 +593,6 @@ void t_suite_gfx_f3d(void)
 	RUN(f3d_points_and_matrix);
 	RUN(f3d_unknown);
 	RUN(f3d_tri4);
+	RUN(f3d_rdp_raw_triangle);
 	RUN(f3dex_commands);
 }

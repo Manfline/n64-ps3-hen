@@ -22,6 +22,7 @@ static void reset_rsp(struct gfx_state *g)
 	g->geom = 0;
 	g->dl_sp = 0;
 	g->rdphalf1 = g->rdphalf2 = 0;
+	g->raw_n = 0;
 	g->tex_s = g->tex_t = 0;
 	g->tex_tile = g->tex_level = g->tex_on = 0;
 	gfx_geom_reset(g);
@@ -123,6 +124,24 @@ void gfx_dl_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t ops_
 		return;
 	g->rdphalf2 = d;
 	gfx_texrect(g, w0, w1, st, d, (w0 >> 24) == G_TEXRECTFLIP);
+}
+
+void gfx_dl_rdp_word(struct gfx_state *g, uint32_t hi, uint32_t lo)
+{
+	if (g->raw_n == 0)
+		g->raw_len = (uint8_t)gfx_rdp_raw_words(hi >> 24);
+	g->raw[2 * g->raw_n] = hi;
+	g->raw[2 * g->raw_n + 1] = lo;
+	if (++g->raw_n < g->raw_len)
+		return;
+	g->raw_n = 0;
+	uint32_t op = g->raw[0] >> 24;
+	if (op >= 0xC8 && op <= 0xCF)
+		gfx_rdp_triangle(g, g->raw);
+	else if (op == G_TEXRECTFLIP || op == G_TEXRECTFLIP - 1)
+		gfx_texrect(g, g->raw[0], g->raw[1], g->raw[2], g->raw[3], op == G_TEXRECTFLIP);
+	else
+		gfx_rdp_command(g, g->raw[0], g->raw[1]);
 }
 
 void gfx_branch_z(struct gfx_state *g, uint32_t v, uint32_t zval)

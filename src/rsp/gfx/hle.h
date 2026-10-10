@@ -114,6 +114,8 @@ struct gfx_state {
 	uint16_t tex_s, tex_t;     /* escala de G_TEXTURE (0.16) */
 	uint8_t tex_tile, tex_level, tex_on;
 	uint32_t rdphalf1, rdphalf2;
+	uint32_t raw[44];          /* comando del RDP armado con G_RDPHALF_* */
+	uint8_t raw_n, raw_len;    /* dobles palabras recibidas y esperadas */
 	uint32_t dl_stack[GFX_DL_STACK];
 	int dl_sp;
 	uint32_t dl_pc;            /* siguiente comando de la display list */
@@ -204,6 +206,10 @@ bool gfx_dl_end(struct gfx_state *g);
  * siguientes si sus opcodes están en ops_st y ops_d (hasta 4 opcodes, uno
  * por byte). Si no, el rectángulo se descarta y ese comando sigue normal. */
 void gfx_dl_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t ops_st, uint32_t ops_d);
+/* Una doble palabra de un comando del RDP que llega por G_RDPHALF_* (alta
+ * en G_RDPHALF_1, baja en el siguiente); al completar el comando, lo
+ * ejecuta. */
+void gfx_dl_rdp_word(struct gfx_state *g, uint32_t hi, uint32_t lo);
 /* G_BRANCH_Z: salta a la lista de G_RDPHALF_1 si la z de pantalla del
  * vértice es <= zval. */
 void gfx_branch_z(struct gfx_state *g, uint32_t v, uint32_t zval);
@@ -247,6 +253,11 @@ void gfx_rdp_command(struct gfx_state *g, uint32_t w0, uint32_t w1);
 void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c);
 void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uint32_t w3, bool flip);
 void gfx_flush_draw(struct gfx_state *g);
+/* Triángulos crudos del RDP (0xC8–0xCF) que llegan por G_RDPHALF_*: dobles
+ * palabras del comando según su opcode y el triángulo con ellas (`w`:
+ * pares alta, baja). */
+unsigned gfx_rdp_raw_words(uint32_t op);
+void gfx_rdp_triangle(struct gfx_state *g, const uint32_t *w);
 
 /* texcache.c: hash de 64 bits por bloques de 16 bytes y caché de texturas
  * entre tareas. */
