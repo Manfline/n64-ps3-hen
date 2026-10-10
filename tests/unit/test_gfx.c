@@ -25,6 +25,7 @@ static struct gfx_job job;
 static uint32_t cache_task;  /* tarea de la caché de texturas (0: sin caché) */
 static struct gfx_result res;
 static uint32_t dl_pc, data_pc;
+static uint32_t job_ucode;   /* dirección física del microcódigo de la tarea */
 
 /* ---- Armado de la display list ---- */
 
@@ -78,6 +79,7 @@ static void run(void)
 	}
 	job.gbi = SALSA64_GBI_F3DEX2;
 	job.dl = DL_PA;
+	job.ucode = job_ucode;
 	gfx_run(&gs, &job, &res);
 }
 
@@ -557,6 +559,84 @@ static void gfx_dl_flow(void)
 	CHECK_EQ(res.dl_errors, 0);
 }
 
+/* G_LOAD_UCODE a otro microcódigo (S2DEX en Zelda OoT): sus comandos se
+ * saltan, siguiendo G_DL y G_ENDDL, hasta que la lista vuelve a cargar el
+ * microcódigo de la tarea; lo que sigue se ejecuta y el G_RDPFULLSYNC final
+ * cuenta. Cargar el mismo microcódigo no cambia nada. */
+static void gfx_load_ucode_skips_foreign(void)
+{
+	start();
+	viewport_320x240();
+	load_mtx(ident, true);
+	load_mtx(ident, false);
+	const struct vtx v[3] = { { 0, 0, 0, 0, 0, { 0 } }, { 1, 0, 0, 0, 0, { 0 } }, { 0, 1, 0, 0, 0, { 0 } } };
+	uint32_t va = put_vertices(v, 3);
+	dl(0x01000000 | 3 << 12 | 3 << 1, va);
+	/* Mismo microcódigo: sigue. */
+	dl(0xE1000000, 0x80040000);
+	dl(0xDD000FFF, 0x80030000);
+	dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);  /* triángulo 1 */
+	/* Otro microcódigo: un tramo con una subrutina, comandos que en F3DEX2
+	 * serían triángulos (no deben dibujarse) y la vuelta al nuestro. */
+	dl(0xE1000000, 0x80050000);
+	dl(0xDD000FFF, 0x80031000);
+	uint32_t main_pc = dl_pc;
+	dl_pc = DL_PA + 0x8000;
+	dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);  /* no se ejecuta */
+	dl(0x0A000000, 0x80060000);                       /* G_BG_COPY de S2DEX */
+	dl(0xDF000000, 0);
+	dl_pc = main_pc;
+	dl(0xDE000000, 0x80000000 | (DL_PA + 0x8000));   /* llamada */
+	dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);  /* no se ejecuta */
+	dl(0xE1000000, 0x80040000);
+	dl(0xDD000FFF, 0x80030000);                       /* de vuelta */
+	dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);  /* triángulo 2 */
+	dl(0xE9000000, 0);                                /* G_RDPFULLSYNC */
+	job_ucode = 0x30000;
+	run();
+	job_ucode = 0;
+	CHECK_EQ(res.triangles, 2);
+	CHECK_EQ(res.skipped, 7);
+	CHECK_EQ(res.dl_errors, 0);
+	CHECK_EQ(res.flags & (GFX_RES_FULLSYNC | GFX_RES_LOAD_UCODE | GFX_RES_LOOP),
+		 GFX_RES_FULLSYNC | GFX_RES_LOAD_UCODE);
+	CHECK_EQ(salsa64_gfx_task_flags(&res), SALSA64_GFX_FULLSYNC);
+
+	/* Un tramo ajeno que nunca vuelve: la lista termina en su G_ENDDL y
+	 * cuenta como cortada (no se sabe qué hizo; el juego espera al RDP). */
+	next_task();
+	dl(0xE1000000, 0x80050000);
+	dl(0xDD000FFF, 0x80031000);
+	dl(0x0A000000, 0x80060000);
+	job_ucode = 0x30000;
+	run();
+	job_ucode = 0;
+	CHECK_EQ(res.triangles, 0);
+	CHECK_EQ(res.skipped, 2);
+	CHECK_EQ(res.flags & (GFX_RES_FULLSYNC | GFX_RES_FOREIGN_END), GFX_RES_FOREIGN_END);
+	CHECK_EQ(salsa64_gfx_task_flags(&res), SALSA64_GFX_CUT);
+
+	/* El G_RDPFULLSYNC dentro del tramo ajeno (comando del RDP, común a la
+	 * familia) sí cuenta: DP sin cortar. */
+	next_task();
+	dl(0xE1000000, 0x80050000);
+	dl(0xDD000FFF, 0x80031000);
+	dl(0x0A000000, 0x80060000);
+	dl(0xE9000000, 0);
+	job_ucode = 0x30000;
+	run();
+	job_ucode = 0;
+	CHECK_EQ(res.skipped, 3);
+	CHECK_EQ(salsa64_gfx_task_flags(&res), SALSA64_GFX_FULLSYNC | SALSA64_GFX_CUT);
+
+	/* Sin tramo ajeno y sin FULLSYNC (G_ENDDL): ni DP ni corte. */
+	next_task();
+	run();
+	CHECK_EQ(salsa64_gfx_task_flags(&res), 0);
+	res.flags |= GFX_RES_LOOP;
+	CHECK_EQ(salsa64_gfx_task_flags(&res), SALSA64_GFX_CUT);
+}
+
 /* ---- Caché de texturas ---- */
 
 /* RGBA16 4×2 desde TEX_PA con LOADBLOCK y un TEXRECT en copia. */
@@ -861,6 +941,7 @@ void t_suite_gfx(void)
 	RUN(gfx_fill_1cycle_edge);
 	RUN(gfx_draw_batching);
 	RUN(gfx_dl_flow);
+	RUN(gfx_load_ucode_skips_foreign);
 	RUN(gfx_texcache_across_tasks);
 	RUN(gfx_texcache_palette);
 	RUN(gfx_texcache_ring);

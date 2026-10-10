@@ -20,7 +20,9 @@
  * mezcladas por el alfa primitivo (TEXEL0 en la tile 0, TEXEL1 en la 1),
  * un cuadro con w = 1000 coloreado por PRIM·TEXEL0_ALPHA y dos TEXRECT cuya
  * textura (L) y paleta (M) cambia el CPU en la RDRAM en el cuadro
- * GFXTEST_CHANGE_FRAME (prueba de la caché de texturas entre tareas).
+ * GFXTEST_CHANGE_FRAME (prueba de la caché de texturas entre tareas). Al
+ * final de cada lista, un tramo de otro microcódigo (G_LOAD_UCODE) que la
+ * HLE debe saltar; en GFXTEST_CUT_FRAME la lista termina dentro de él.
  *
  * Se verifica sola en lo que el CPU puede ver: que cada tarea termine con
  * SP_STATUS en HALT|BROKE|TASKDONE, que llegue la interrupción del SP y
@@ -540,6 +542,22 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	dp_tile_size(&dl, 0, 0, 0, 15, 3);
 	dp_othermode(&dl, CYC_COPY | TT_RGBA16, 0);
 	sp_texrect(&dl, 0, 250, 220, 265, 223, 0, 0, 4 << 10, 1 << 10);
+
+	/* Tramo de otro microcódigo (como S2DEX en Zelda OoT): G_LOAD_UCODE a
+	 * otra dirección, comandos que la HLE debe saltar (si los ejecutara, el
+	 * FILLRECT rojo taparía la escena y expect.h lo vería) y la vuelta al
+	 * microcódigo de la tarea. En GFXTEST_CUT_FRAME la lista termina dentro
+	 * del tramo, sin volver ni llegar al G_RDPFULLSYNC: la interrupción del
+	 * DP tiene que llegar de todos modos. */
+	sp_load_ucode(&dl, PHYS(r->ucode) + 0x100, PHYS(r->ucode_data), sizeof r->ucode_data);
+	dp_othermode(&dl, CYC_FILL, 0);
+	dp_fill_color(&dl, 0xF801F801u);
+	dp_fill_rect(&dl, 0, 0, W - 1, H - 1);
+	if (frame == GFXTEST_CUT_FRAME) {
+		sp_end(&dl);
+		return start;
+	}
+	sp_load_ucode(&dl, PHYS(r->ucode), PHYS(r->ucode_data), sizeof r->ucode_data);
 
 	dp_sync(&dl, SYNC_FULL);
 	sp_end(&dl);

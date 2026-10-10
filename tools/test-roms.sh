@@ -118,6 +118,12 @@ grc=$?
 printf '%-12s %s\n' gfxtest "$(grep 'gfxtest: [OF]' "$GLOG" | head -1)"
 grep -E 'gfx:|gfxtest: imagen|gfxtest: \(' "$GLOG" | sed 's/^salsa64-run: /             /'
 [ $grc -eq 0 ] || { echo "             falló (código $grc, $GLOG)"; fail=1; }
+# Cada lista lleva un tramo de otro microcódigo (saltado) y la del cuadro
+# GFXTEST_CUT_FRAME termina dentro de él: una sola tarea cortada.
+if ! grep -q 'gfx:.* [1-9][0-9]* de otro microcódigo saltados.* 1 tareas cortadas' "$GLOG"; then
+	echo "             FALLO: se esperaba un tramo saltado por lista y 1 tarea cortada"
+	fail=1
+fi
 
 ALOG=build/logs/audiotest.run.log
 tools/build.sh --sh "ASAN_OPTIONS=detect_leaks=0 build/host/salsa64-run -c 600000000 \

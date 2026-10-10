@@ -94,6 +94,13 @@ static inline void sp_lookat(gfx **dl, const volatile void *l, unsigned axis)
 	cmd(dl, 0xDC08000Au | (axis * 24 / 8) << 8, PHYS(l));
 }
 
+/* gSPLoadUcodeEx: G_RDPHALF_1 con los datos y G_LOAD_UCODE con el texto. */
+static inline void sp_load_ucode(gfx **dl, uint32_t ucode, uint32_t data, unsigned dsize)
+{
+	cmd(dl, 0xE1000000u, data);
+	cmd(dl, 0xDD000000u | ((dsize - 1) & 0xFFFFu), ucode);
+}
+
 static inline void sp_end(gfx **dl)
 {
 	cmd(dl, 0xDF000000u, 0);

@@ -353,8 +353,50 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 			do_movemem(g, w0, w1);
 			break;
 		case G_LOAD_UCODE:
+			/* Otro microcódigo (Zelda OoT carga S2DEX para el fondo
+			 * prerrenderizado de una sala y después vuelve a F3DZEX): sin
+			 * HLE para él, se saltan sus comandos (siguiendo G_DL y
+			 * G_ENDDL, que la familia comparte) hasta que la lista vuelve
+			 * a cargar el microcódigo de la tarea, y la lista sigue. Antes
+			 * la tarea terminaba aquí sin G_RDPFULLSYNC y el juego se
+			 * quedaba esperando al RDP (OoT: «RCP is HUNG UP»). */
+			if (gfx_addr(g, w1) == job->ucode)
+				break;
 			res->flags |= GFX_RES_LOAD_UCODE;
-			goto done;
+			for (;;) {
+				if (++n >= GFX_MAX_COMMANDS) {
+					res->flags |= GFX_RES_LOOP;
+					goto done;
+				}
+				if (!gfx_io_dl(g, pc, &w0, &w1)) {
+					res->dl_errors++;
+					goto done;
+				}
+				pc += 8;
+				res->skipped++;
+				op = w0 >> 24;
+				if (op == G_LOAD_UCODE && gfx_addr(g, w1) == job->ucode)
+					break;
+				if (op == G_DL) {
+					if (!((w0 >> 16) & 1)) {
+						if (g->dl_sp >= GFX_DL_STACK) {
+							res->dl_errors++;
+							goto done;
+						}
+						g->dl_stack[g->dl_sp++] = pc;
+					}
+					pc = gfx_addr(g, w1);
+				} else if (op == G_ENDDL) {
+					if (g->dl_sp == 0) {
+						res->flags |= GFX_RES_FOREIGN_END;
+						goto done;
+					}
+					pc = g->dl_stack[--g->dl_sp];
+				} else if (op == 0xE9) {  /* G_RDPFULLSYNC: del RDP, común a la familia */
+					res->flags |= GFX_RES_FULLSYNC;
+				}
+			}
+			break;
 		case G_DL:
 			if (!((w0 >> 16) & 1)) {  /* llamada: se guarda el regreso */
 				if (g->dl_sp >= GFX_DL_STACK) {

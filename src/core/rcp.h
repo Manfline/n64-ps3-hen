@@ -109,6 +109,7 @@ struct salsa64_task {
 
 /* Lo que devuelve gfx_finish. */
 #define SALSA64_GFX_FULLSYNC 0x1u  /* la lista terminó con G_RDPFULLSYNC */
+#define SALSA64_GFX_CUT      0x2u  /* la HLE la cortó antes del fin: DP de todos modos */
 
 struct salsa64_gfx_backend {
 	void *ctx;
@@ -174,6 +175,7 @@ struct salsa64_rsp_stats {
 	uint32_t gfx, audio, other, unknown_gbi, unknown_abi;
 	uint32_t polls;        /* fines de tarea vueltos a programar (SPE ocupado) */
 	uint32_t starts_busy;  /* arranques ignorados con una tarea en curso */
+	uint32_t cut;          /* tareas gráficas cortadas por la HLE (DP forzada) */
 };
 
 struct salsa64_rsp {
