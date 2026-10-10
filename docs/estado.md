@@ -32,6 +32,17 @@ Nombre (pendiente de decidir):
   DropSonic DS". Sin código fuente publicado ni descripción técnica; el
   "sitio del desarrollador" es un canal de YouTube con dos videos de prueba.
   Hay que renombrar este proyecto antes de publicar nada.
+- Referencia de rendimiento de ese emulador (videos de ZeBobbel, capturadora,
+  build "40031911"): el overlay dice "INT" (intérprete; formato del overlay de
+  Wii64/Not64). Super Mario 64 en el castillo: 46,9 VI/s (~78 %). Zelda OoT,
+  pantalla de título: 26,4 VI/s, 9,1 FPS (~44 %). No se vio modo "DYN".
+  En el video de la v1.50 (overlay nuevo, sin indicar INT/DYN): Zelda OoT en
+  el menú de archivos a 50,0 VI/s y 50,0 FPS; probablemente versión PAL (50 Hz),
+  o sea ~100 % en una escena ligera. En juego (bosque Kokiri): 41,3 VI/s y
+  13,8 FPS (relación 3:1, coherente); ~83 % si es PAL, ~69 % si es NTSC.
+  Meta para nuestro emulador: superar eso en la misma escena y región.
+  Comparar contra esto nuestro intérprete (Fase 1) y el recompilador (Fase 3),
+  con los mismos juegos en la misma PS3.
 
 Notas:
 - No usar `-Os` en el PPU: ICE de GCC 13.2 (docs/toolchain.md).
