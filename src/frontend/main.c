@@ -2,11 +2,12 @@
  * Salsa64 — frontend mínimo para PS3.
  *
  * Carga una ROM, la arranca por HLE y, en cada campo del VI, corre el
- * intérprete hasta el fin del campo y presenta la imagen del VI con
- * lib/rsxkit: si la dibujó el RSX (tareas gráficas del RSP por HLE en un
- * SPE, src/rdp), ese destino de render; si no, el framebuffer de la RDRAM
- * como textura. Escalado a 4:3. La emulación y la presentación van en un
- * hilo del PPE por ahora.
+ * CPU (recompilador, o el intérprete en RPCS3 o con el archivo
+ * SALSA64_NOREC_FLAG; ver platform/ps3/rec_cache.h) hasta el fin del campo
+ * y presenta la imagen del VI con lib/rsxkit: si la dibujó el RSX (tareas
+ * gráficas del RSP por HLE en un SPE, src/rdp), ese destino de render; si
+ * no, el framebuffer de la RDRAM como textura. Escalado a 4:3. La emulación
+ * y la presentación van en un hilo del PPE por ahora.
  *
  * ROM: si existe SALSA64_DATA_DIR/embedded con "vitest" o "gfxtest", esa
  * ROM de prueba embebida (o con "file:<nombre>", ese archivo de
@@ -68,11 +69,13 @@
 #include <spukit/spukit.h>
 
 #include "core/boot.h"
+#include "cpu/rec.h"
 #include "gfxtest_rom_bin.h"
 #include "padmap.h"
 #include "platform/ps3/autotest.h"
 #include "platform/ps3/gfx_spu.h"
 #include "platform/ps3/log.h"
+#include "platform/ps3/rec_cache.h"
 #include "rdp/rdp.h"
 #include "rsp/gfx/hle.h"
 #include "replay.h"
@@ -104,6 +107,7 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define AUTO_FIELDS      1800
 
 static struct salsa64_n64 n64;
+static struct salsa64_rec rec;
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
 static struct salsa64_save save;
 static struct savefile save_file;
@@ -513,6 +517,17 @@ int main(void)
 		    info.entry, info.tv == SALSA64_TV_PAL ? "PAL" : info.tv == SALSA64_TV_MPAL ? "MPAL" : "NTSC");
 	savefile_open(&save_file, &save, &n64.bus, rom, SAVES_DIR, SAVE_CFG, SALSA64_SAVE_AUTO, salsa64_log);
 
+	bool use_rec = false;
+	rec.opts = SALSA64_REC_OPT_PIN;  /* +7 % en nemu64-test (docs/perf-log.md) */
+	if (!salsa64_ps3_rec_wanted())
+		salsa64_log("recompilador apagado (%s): intérprete", SALSA64_NOREC_FLAG);
+	else if (!(use_rec = salsa64_rec_init(&rec, &n64.cpu, salsa64_ps3_rec_cache(), SALSA64_REC_CACHE_BYTES)))
+		salsa64_log("recompilador no disponible: intérprete");
+	else
+		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x",
+			    SALSA64_REC_CACHE_BYTES >> 20, salsa64_ps3_rec_cache(), rec.calls_near ? "con bl" : "por mtctr",
+			    rec.opts);
+
 	ioPadInit(7);
 	load_padmap();
 	sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, sysutil_cb, NULL);
@@ -687,6 +702,15 @@ int main(void)
 			gfx_wait0 = gfx_spu.wait_us;
 			gfx_waits0 = gfx_spu.waits;
 			(void)gfx_tasks0;
+			if (use_rec) {
+				const struct salsa64_rec_stats *st = &rec.stats;
+				salsa64_log("recompilador: %llu bloques, %u KB de caché, %llu entradas, %llu enlaces, "
+					    "%llu invalidados, %llu vaciados, %llu instr. interpretadas",
+					    (unsigned long long)st->compiled, salsa64_rec_used(&rec) / 256,
+					    (unsigned long long)st->entries, (unsigned long long)st->linked,
+					    (unsigned long long)st->invalidated, (unsigned long long)st->flushes,
+					    (unsigned long long)st->interp_steps);
+			}
 			t_stats = t2;
 			cyc_stats = n64.cpu.cycles;
 			idle_stats = n64.cpu.idle_cycles;

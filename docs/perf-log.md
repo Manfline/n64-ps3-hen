@@ -10,6 +10,13 @@ antes, después, notas.
 | 2026-10-10 | c14268c → 147d5ac | Intérprete, `bench` mixto | PS3 real (mismo equipo) | 17,1 MIPS | 21,2 MIPS (×1,24; ×2,4 desde 8,7) | Un solo despacho (SPECIAL en la misma tabla), FPU rápida sin comparaciones de punto flotante para clasificar, movimientos de COP1 en el bucle |
 | 2026-10-10 | 940f6f8 | Frontend con vitest, emulación por campo | PS3 real (mismo equipo) | 65,6 ms (15,2 campos/s) | 35,0 ms (28,3 campos/s; ×1,9) | Detección de bucles de espera (`src/cpu/idle.c`): 45,6 % del tiempo saltado. Medición A/B automática del frontend, 10 s cada una, dos corridas iguales (65,56/65,66 → 34,97/34,84 ms). Lo que queda es el dibujo de vitest con el CPU |
 | 2026-10-10 | 147d5ac → 940f6f8 | Intérprete, `bench` mixto | PS3 real (mismo equipo) | 21,2 MIPS | 21,0 MIPS (−1 %) | Costo del chequeo de bucle de espera en cada salto tomado. Ver «Bucles de espera» abajo |
+| 2026-10-10 | f7b655d | **Recompilador** (Fase 3), nemu64-test completo | PS3 real (mismo equipo) | intérprete: 7921 ms (23,9 MIPS) | **1817 ms (104,2 MIPS; ×4,36)** | Mismas 462 fallas, mismo hash de nombres y mismo ciclo final (189 431 098). 28 694 bloques, 9,2 MB de caché, 139 440 entradas desde C. Código real: llamadas, retornos, FPU, E/S. Ver «Recompilador» abajo |
+| 2026-10-10 | f7b655d | **Recompilador**, `bench` mixto | PS3 real (mismo equipo) | intérprete: 21,3 MIPS | **156,6 MIPS (×7,4)** | Bucle de 10 instrucciones con ADD.S nativa; ver desglose abajo |
+| 2026-10-10 | f7b655d → f18b392 | Recompilador, escritura temprana inmediata | PS3 real (mismo equipo) | nemu64-test 1817 ms; bench enteros 749,9 MIPS | 1948 ms; 473,7 MIPS (**peor**) | Un `std` justo después de la instrucción que da el valor detiene el pipeline (~3 ciclos por almacenamiento). Pasa a opción y diferida (1fe8ebc) |
+| 2026-10-10 | f18b392 | Recompilador con registros fijos (`OPT_PIN`), nemu64-test | PS3 real (mismo equipo) | 1948 ms (97,2 MIPS) | **1817 ms (104,2 MIPS; ×4,45 del intérprete)** | sp, ra, v0, v1, a0–a3 en r18–r25 entre bloques; +7 %. Por omisión en el frontend |
+| 2026-10-10 | f18b392 | **Frontend con vitest**, recompilador | PS3 real (mismo equipo) | intérprete: 65,6 / 35,0 ms por campo (sin / con bucles de espera) | **5,38 / 2,90 ms (×12); 59,94 campos/s** | Velocidad completa: el resto del campo es la espera del vsync |
+| 2026-10-10 | f416bee | Recompilador, cuatro variantes, nemu64-test | PS3 real (mismo equipo) | intérprete 8098 ms | sin opciones 1941 ms (×4,17); escritura temprana diferida 1992; **registros fijos 1821 (×4,45)**; ambas 1849 | La escritura temprana no compensa ni diferida: queda apagada. Con registros fijos el bench enteros cae de 750 a 128 MIPS (4 registros por bloque): préstamo en bucles (siguiente fila) |
+| 2026-10-10 | f416bee | **Zelda OoT (NTSC) en el frontend**, recompilador con registros fijos, HLE gráfica en el SPE | PS3 real (mismo equipo), respaldo del usuario | intérprete: 15,4–17,5 campos/s, emulación 56–64 ms por campo | **41–60 campos/s (69–100 %), emulación 4–14 ms por campo** | Logo e intro a 58–60; título y escenas con muchos triángulos 41–55, ahora limitadas por la espera a la HLE gráfica del SPE (10–30 ms por tarea), no por el CPU. 86–88 % del tiempo del CPU en bucles de espera. ~10 500 bloques, 7,9 MB de caché, 1,7 % de instrucciones interpretadas. Se ve igual que con el intérprete (el autor) |
 
 ## Líneas base de la Fase 0 (pendientes de PS3 real)
 
@@ -169,6 +176,43 @@ mejora: decidir con el inmediato de la instrucción (desplazamiento entre
 Corrida completa de nemu64-test (`salsa64-run`, ≈189 M ciclos del VR4300):
 0,75 s en el host sin sanitizers (253 MIPS); 2,1 s con ASan + UBSan.
 
+## Recompilador (Fase 3)
+
+Primera corrida en la PS3 real (2026-10-10, Slim CECH-3011A, HFW 4.91 +
+HEN), paquete `salsa64-cpu-tests` de f7b655d (JR en línea y FPU nativa;
+sin la escritura temprana ni los registros fijos de 632a796). Caché en la
+cola NOBITS de 16 MB del segmento de texto, llamadas a C con `bl`.
+
+- Pruebas unitarias con el recompilador en modo estricto (cada `t_step`
+  ejecuta código generado): 163/163. El código generado corre, se
+  reescribe y se invalida en el hardware (dcbst/sync/icbi/isync).
+- nemu64-test completo, intérprete contra recompilador: mismas 462
+  fallas, mismo hash de nombres (`fdfdf160a2fe7ad8`), mismo ciclo final.
+
+| `bench` (`tests/unit/bench.c`) | Intérprete | Recompilador | Ciclos del PPE por instr. (rec) |
+|---|---|---|---|
+| mixto | 21,3 MIPS | 156,6 MIPS (×7,4) | 20 |
+| nop | 32,6 | 1547,0 (×47) | 2,1 |
+| enteros | 25,3 | 749,9 (×30) | 4,3 |
+| memoria (LW/SW) | 20,9 | 159,7 (×7,6) | 20 |
+| mov.s | 23,6 | 538,4 (×23) | 5,9 |
+| add.s (inexacto) | 13,9 | 35,7 (×2,6) | 90 |
+
+Los bucles del bench son bloques que vuelven sobre sí mismos sin escribir
+memoria ni salir a C: miden el mejor caso. "memoria" queda en ~20 ciclos
+por instrucción por el load-hit-store propio del bucle (LW de lo que el SW
+de la vuelta anterior acaba de escribir) y por la prueba de rango. ADD.S
+inexacto cuesta ~90 ciclos: la FPU hace la suma, el redondeo a simple y la
+comparación de punto flotante seguida de salto (espera toda la latencia),
+más la actualización condicional de FCR31.
+
+nemu64-test es la medición con código real: 104 MIPS. Con el modelo actual
+de un ciclo por instrucción, la velocidad completa pide hasta 93,75 MIPS
+emulados por segundo, menos lo que se salta en bucles de espera (casi la
+mitad del campo en escenas ligeras). Pendiente: medir con juegos (tabla de
+docs/proyecto.md) en el frontend, y con 632a796 (escritura temprana, registros
+fijos: cpu-tests mide nemu64-test con y sin ellos).
+
 ## Líneas base de la Fase 2 (parte gráfica)
 
 **PS3 real** (2026-10-10, Slim CECH-3011A, HFW 4.91 + HEN):
@@ -201,3 +245,26 @@ etapa salen del decrementador del SPE (`gfx_result.t_*`):
   formato con SIMD.
 - La traducción al RSX en el PPE cuesta 0,2–0,4 ms por tarea.
 - Misma escena en RPCS3: 16 ms por tarea en el SPE (no concluyente).
+
+### Zelda OoT con el recompilador (2026-10-10)
+
+Respaldo del usuario (`oot.z64`, NTSC, fuera del repositorio), frontend de
+f416bee con el recompilador (registros fijos) y la HLE gráfica de la Fase 2
+en el SPE 0. Ventanas de 5 s del log, desde el arranque:
+
+| Tramo | Campos/s | Emulación por campo | HLE en el SPE por tarea | Triángulos por tarea |
+|---|---|---|---|---|
+| Logo de N64 | 58,1–59,9 | 3,8–7,6 ms | 1,2–10,7 ms | 132–459 |
+| Intro | 54,3–59,8 | 9,3–11,7 ms | 13,9–22,1 ms | 300–1321 |
+| Título y escenas con más dibujos | 41,4–50,3 | 11,7–14,5 ms | 20,0–29,8 ms | 900–1700 |
+| Escenas ligeras (luego) | 58,9–59,9 | 7,1–8,9 ms | 10,3–14,2 ms | 165–400 |
+
+Con el intérprete (Fase 2, misma consola): 15,4–17,5 campos/s y 56–64 ms
+de emulación por campo. El CPU dejó de ser el cuello: donde no llega a 60,
+el PPE espera a la tarea gráfica del SPE (caché de texturas pendiente en la
+Fase 2). Lo interpretado (~190 000 instrucciones por segundo, 1,7 %) no
+está desglosado: el intérprete termina el bloque antes de cada evento y
+después de cada interrupción, y corre lo que el recompilador no toma
+(código fuera de KSEG0, un salto en el delay slot de otro). Pendiente
+medirlo por causa si llega a pesar.
+

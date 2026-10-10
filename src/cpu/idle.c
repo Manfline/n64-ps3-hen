@@ -45,6 +45,7 @@
 #include <string.h>
 
 #include "core/sched.h"
+#include "cpu/rec.h"
 #include "cpu/vr4300_internal.h"
 
 enum verdict {
@@ -299,4 +300,8 @@ void salsa64_cpu_set_idle(struct salsa64_cpu *cpu, bool on)
 	cpu->idle_off = !on;
 	memset(cpu->idle_reject, 0, sizeof cpu->idle_reject);
 	memset(cpu->idle_strike, 0, sizeof cpu->idle_strike);
+	/* El recompilador decidió al compilar qué saltos consultan la tabla
+	 * (rec_emit.c, idle_candidate): con la tabla vacía, todo de nuevo. */
+	if (cpu->rec)
+		salsa64_rec_flush(cpu->rec);
 }

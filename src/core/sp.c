@@ -51,6 +51,7 @@ static void sp_dma(struct salsa64_bus *bus, uint32_t v, bool to_rdram)
 	uint32_t dram = bus->sp.regs[SALSA64_SP_DRAM_ADDR] & 0xFFFFF8;
 
 	for (uint32_t r = 0; r < count; r++) {
+		uint32_t row = dram;
 		for (uint32_t k = 0; k < len; k += 8) {
 			uint8_t *m = bus->sp_mem + bank + off;
 			if (to_rdram) {
@@ -64,6 +65,8 @@ static void sp_dma(struct salsa64_bus *bus, uint32_t v, bool to_rdram)
 			off = (off + 8) & 0xFF8;
 			dram = (dram + 8) & 0xFFFFF8;
 		}
+		if (to_rdram)
+			salsa64_bus_rdram_written(bus, row, len);  /* código recompilado ahí: descartarlo */
 		dram = (dram + skip) & 0xFFFFF8;
 	}
 	bus->sp.regs[SALSA64_SP_MEM_ADDR] = bank | off;

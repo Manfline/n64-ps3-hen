@@ -35,8 +35,10 @@ void salsa64_si_write(struct salsa64_bus *bus, uint32_t reg, uint32_t v)
 	case SALSA64_SI_PIF_ADDR_RD64B:  /* PIF RAM → RDRAM */
 		bus->si[i] = v;
 		salsa64_pif_execute(bus);
-		if ((dram = si_dram(bus)) != UINT32_MAX)
+		if ((dram = si_dram(bus)) != UINT32_MAX) {
 			memcpy(bus->rdram + dram, bus->pif_ram, SALSA64_PIF_RAM_SIZE);
+			salsa64_bus_rdram_written(bus, dram, SALSA64_PIF_RAM_SIZE);
+		}
 		salsa64_mi_raise(bus, SALSA64_IRQ_SI);
 		return;
 	case SALSA64_SI_PIF_ADDR_WR64B:  /* RDRAM → PIF RAM */
