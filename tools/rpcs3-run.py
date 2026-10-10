@@ -50,7 +50,7 @@ def close_error_dialogs(wait: float = 3.0) -> None:
         ps = subprocess.run(["ps", "-axo", "pid=,args="], capture_output=True, text=True).stdout
         for row in ps.splitlines():
             pid, _, args = row.strip().partition(" ")
-            if RPCS3 in args and " --error" in args:
+            if args.startswith(RPCS3 + " ") and " --error" in args:
                 print(f"== RPCS3 mostró un error fatal: {args.split('--error', 1)[1].strip()[:400]}",
                       file=sys.stderr)
                 os.kill(int(pid), signal.SIGKILL)
