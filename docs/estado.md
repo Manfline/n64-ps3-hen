@@ -30,11 +30,13 @@ Hecho (diseño en docs/rec-ppe.md, «Código fuera de KSEG0»):
 - Memoria: +572 KB del estado del recompilador (6,84 MB).
 
 Siguiente:
-- [ ] PS3 real: cpu-tests «Salsa64 CPU TLB» (SLSA00076: unitarias y
-      nemu64-test contra el intérprete) y el frontend «Salsa64 TLB»
-      (SLSA00074) con GoldenEye y Perfect Dark (respaldos propios),
-      mirando la proporción de instrucciones interpretadas y las
-      traducciones.
+- **PS3 real** (b11861c, cpu-tests «Salsa64 CPU TLB», SLSA00076): 232/232
+  en el intérprete y en las cuatro variantes; nemu64-test igual al
+  intérprete (446 fallas, hash y ciclo), ×4,04–4,29; bench enteros con
+  registros fijos 760 MIPS (el préstamo en bucles funciona; antes 128).
+- [ ] PS3 real: el frontend «Salsa64 TLB» (SLSA00074) con GoldenEye y
+      Perfect Dark (respaldos propios), mirando la proporción de
+      instrucciones interpretadas y las traducciones.
 - [ ] Verificar en el desensamblado (o el decomp) si GoldenEye ejecuta
       0x7F000000 desde la ROM o desde la RDRAM.
 
