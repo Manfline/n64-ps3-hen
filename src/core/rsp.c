@@ -128,6 +128,10 @@ enum salsa64_gbi salsa64_rsp_detect_gbi(const struct salsa64_bus *bus, const str
 	/* ROMs de prueba de Salsa64 (sin microcódigo de Nintendo). */
 	if (find(p, end, "Salsa64 GBI F3DEX2"))
 		return SALSA64_GBI_F3DEX2;
+	if (find(p, end, "Salsa64 GBI F3DEX1"))
+		return SALSA64_GBI_F3DEX;
+	if (find(p, end, "Salsa64 GBI Fast3D"))
+		return SALSA64_GBI_F3D;
 
 	/* "RSP Gfx ucode <nombre> fifo|xbus <versión> ...": la versión 2.x es
 	 * la segunda generación (F3DEX2 y familia). */
@@ -166,7 +170,8 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 	if (rsp->trace)
 		rsp->trace(rsp->trace_ctx, &task, gbi);
 	if (task.type == SALSA64_TASK_GFX && valid && rsp->sched) {
-		if (gbi == SALSA64_GBI_F3DEX2 || gbi == SALSA64_GBI_F3DZEX2) {
+		if (gbi == SALSA64_GBI_F3DEX2 || gbi == SALSA64_GBI_F3DZEX2 || gbi == SALSA64_GBI_F3D ||
+		    gbi == SALSA64_GBI_F3DEX) {
 			rsp->stats.gfx++;
 			rsp->busy = SALSA64_TASK_GFX;
 			rsp->gbi = gbi;

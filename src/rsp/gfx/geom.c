@@ -1,6 +1,6 @@
 /*
- * Salsa64 — HLE de F3DEX2: matrices, viewport, luces y transformación de
- * vértices.
+ * Salsa64 — HLE de los microcódigos 3D (F3D, F3DEX, F3DEX2): matrices,
+ * viewport, luces y transformación de vértices.
  *
  * Convenciones de la N64 (libultra, derivada de OpenGL): vectores fila,
  * clip = (x, y, z, 1) · MV · P; una matriz nueva multiplica por la
@@ -12,6 +12,7 @@
  * modelview (como hace el microcódigo) y se normalizan; la normal del
  * vértice (bytes con signo) se usa tal cual.
  */
+#include <stdint.h>
 #include <string.h>
 
 #include "core/endian.h"
@@ -82,6 +83,151 @@ void gfx_mtx_mul(float out[16], const float a[16], const float b[16])
 			r[i * 4 + j] = a[i * 4 + 0] * b[0 * 4 + j] + a[i * 4 + 1] * b[1 * 4 + j] +
 				       a[i * 4 + 2] * b[2 * 4 + j] + a[i * 4 + 3] * b[3 * 4 + j];
 	memcpy(out, r, sizeof r);
+}
+
+void gfx_matrix(struct gfx_state *g, uint32_t addr, uint32_t flags)
+{
+	const uint8_t *src = gfx_io_read(g, GFX_IO_MTX, addr, 64);
+	if (!src) {
+		g->res->dl_errors++;
+		return;
+	}
+	float m[16];
+	gfx_load_matrix(m, src);
+	if (flags & GFX_MTX_PROJECTION) {
+		/* La proyección no tiene pila: PUSH no hace nada. */
+		if (flags & GFX_MTX_LOAD)
+			memcpy(g->proj, m, sizeof m);
+		else
+			gfx_mtx_mul(g->proj, m, g->proj);
+	} else {
+		if ((flags & GFX_MTX_PUSH) && g->mv_top + 1 < GFX_MTX_STACK) {
+			memcpy(g->mv[g->mv_top + 1], g->mv[g->mv_top], sizeof m);
+			g->mv_top++;
+		}
+		if (flags & GFX_MTX_LOAD)
+			memcpy(g->mv[g->mv_top], m, sizeof m);
+		else
+			gfx_mtx_mul(g->mv[g->mv_top], m, g->mv[g->mv_top]);
+		g->lights_dirty = true;
+	}
+	g->mvp_dirty = true;
+}
+
+void gfx_pop_matrix(struct gfx_state *g, uint32_t n)
+{
+	g->mv_top = n > (uint32_t)g->mv_top ? 0 : g->mv_top - (int)n;
+	g->mvp_dirty = true;
+	g->lights_dirty = true;
+}
+
+void gfx_force_matrix(struct gfx_state *g, uint32_t addr)
+{
+	const uint8_t *src = gfx_io_read(g, GFX_IO_MTX, addr, 64);
+	if (src) {
+		gfx_load_matrix(g->mvp, src);
+		g->mvp_dirty = false;
+	}
+}
+
+/* Valor en punto fijo s15.16, redondeado y saturado. */
+static int32_t to_fixed(float v)
+{
+	float x = v * 65536.0f;
+	if (x >= 2147483520.0f)
+		return INT32_MAX;
+	if (x <= -2147483648.0f)
+		return INT32_MIN;
+	return (int32_t)(x >= 0.0f ? x + 0.5f : x - 0.5f);
+}
+
+/* El Mtx guarda primero las 16 partes enteras y luego las 16 fracciones:
+ * `where` < 0x20 cambia las enteras de dos elementos seguidos; si no, sus
+ * fracciones. La matriz vale hasta el próximo G_MTX, que la recalcula. */
+void gfx_insert_matrix(struct gfx_state *g, uint32_t where, uint32_t val)
+{
+	if (where >= 64)
+		return;
+	if (g->mvp_dirty) {
+		gfx_mtx_mul(g->mvp, g->mv[g->mv_top], g->proj);
+		g->mvp_dirty = false;
+	}
+	unsigned i = (where & 0x1F) / 2;
+	for (unsigned k = 0; k < 2 && i + k < 16; k++) {
+		uint32_t half = k == 0 ? val >> 16 : val & 0xFFFF;
+		uint32_t fx = (uint32_t)to_fixed(g->mvp[i + k]);
+		fx = where < 0x20 ? half << 16 | (fx & 0xFFFF) : (fx & 0xFFFF0000u) | half;
+		g->mvp[i + k] = (float)(int32_t)fx * (1.0f / 65536.0f);
+	}
+}
+
+void gfx_num_lights(struct gfx_state *g, int n)
+{
+	g->num_lights = n < 0 ? 0 : n > GFX_MAX_LIGHTS ? GFX_MAX_LIGHTS : n;
+	g->lights_dirty = true;
+}
+
+void gfx_light_color(struct gfx_state *g, int light, uint32_t rgba)
+{
+	if (light < 0 || light > GFX_MAX_LIGHTS)
+		return;
+	g->lights[light].col[0] = (float)(rgba >> 24);
+	g->lights[light].col[1] = (float)((rgba >> 16) & 0xFF);
+	g->lights[light].col[2] = (float)((rgba >> 8) & 0xFF);
+}
+
+/* Dónde cambia un vértice (G_MODIFYVTX, G_MW_POINTS). */
+enum { G_MWO_POINT_RGBA = 0x10, G_MWO_POINT_ST = 0x14, G_MWO_POINT_XYSCREEN = 0x18, G_MWO_POINT_ZSCREEN = 0x1C };
+
+void gfx_modify_vertex(struct gfx_state *g, uint32_t v, uint32_t where, uint32_t val)
+{
+	if (v >= GFX_MAX_VTX)
+		return;
+	struct gfx_vtx *p = &g->vtx[v];
+	switch (where) {
+	case G_MWO_POINT_RGBA:
+		p->c[0] = (uint8_t)(val >> 24);
+		p->c[1] = (uint8_t)(val >> 16);
+		p->c[2] = (uint8_t)(val >> 8);
+		p->c[3] = (uint8_t)val;
+		break;
+	case G_MWO_POINT_ST:
+		p->s = (float)(int16_t)(val >> 16) / 32.0f;
+		p->t = (float)(int16_t)(val & 0xFFFF) / 32.0f;
+		break;
+	case G_MWO_POINT_XYSCREEN: {
+		/* Posición de pantalla nueva (10.2): se vuelve a llevar a recorte. */
+		float sx = (float)(int16_t)(val >> 16) / 4.0f, sy = (float)(int16_t)(val & 0xFFFF) / 4.0f;
+		if (p->w != 0.0f && g->vscale[0] != 0.0f && g->vscale[1] != 0.0f) {
+			p->x = (sx - g->vtrans[0]) / g->vscale[0] * p->w;
+			p->y = (g->vtrans[1] - sy) / g->vscale[1] * p->w;
+		}
+		p->sx = sx;
+		p->sy = sy;
+		break;
+	}
+	case G_MWO_POINT_ZSCREEN: {
+		float sz = (float)(val >> 16);
+		if (p->w != 0.0f && g->vscale[2] != 0.0f)
+			p->z = (sz - g->vtrans[2]) / g->vscale[2] * p->w;
+		p->sz = sz;
+		break;
+	}
+	default:
+		break;
+	}
+}
+
+bool gfx_vertices_culled(const struct gfx_state *g, uint32_t v0, uint32_t v1)
+{
+	uint32_t all = 0x3F;
+	if (v0 >= GFX_MAX_VTX || v1 < v0)
+		return false;
+	if (v1 >= GFX_MAX_VTX)
+		v1 = GFX_MAX_VTX - 1;
+	for (uint32_t i = v0; i <= v1; i++)
+		all &= g->vtx[i].clip;
+	return all != 0;
 }
 
 /* Vp: vscale[4] y vtrans[4] (s16); x e y en cuartos de píxel. */

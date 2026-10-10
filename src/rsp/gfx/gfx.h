@@ -1,5 +1,6 @@
 /*
- * Salsa64 — HLE del microcódigo gráfico (F3DEX2) y del RDP: interfaz.
+ * Salsa64 — HLE de los microcódigos gráficos (F3D, F3DEX, F3DEX2) y del
+ * RDP: interfaz.
  *
  * El mismo código corre en un SPE (src/spu/gfx, la configuración normal en
  * la PS3), en el PPE y en el host (backend síncrono, pruebas). Lee la

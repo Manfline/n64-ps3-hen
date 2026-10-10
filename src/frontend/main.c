@@ -11,7 +11,8 @@
  * ROM: si existe SALSA64_DATA_DIR/embedded con "vitest" o "gfxtest", esa
  * ROM de prueba embebida (o con "file:<nombre>", ese archivo de
  * SALSA64_DATA_DIR, para probar una ROM en RPCS3 sin pisar el rom.z64 que
- * leen otras compilaciones, o con "dump:<nombre>", la repetición de un
+ * leen otras compilaciones; las variantes de gfxtest, salsa64-gfxtest-*.z64,
+ * se verifican como la embebida; o con "dump:<nombre>", la repetición de un
  * volcado de la HLE en el RSX: replay.c); si no, SALSA64_DATA_DIR/rom.z64
  * (cualquiera de los tres órdenes de bytes) si existe; si no, gfxtest. Con las ROMs de
  * prueba el frontend se verifica a sí mismo (selftest.c, selftest_gfx.c) e
@@ -324,6 +325,8 @@ static uint8_t *load_embedded(uint32_t *size, const char **source)
 			fclose(rf);
 			*size = (uint32_t)len;
 			*source = path;
+			if (!strncmp(name + 5, "salsa64-gfxtest", 15))
+				gfxtest_on = 1;
 			return buf;
 		}
 		free(buf);

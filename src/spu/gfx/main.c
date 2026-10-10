@@ -9,7 +9,7 @@
  *
  * Presupuesto de local store (256 KB); los números exactos los imprime el
  * build (spu-size):
- *   código (HLE + runtime)              ~ 45 KB
+ *   código (HLE + runtime)              ~ 55 KB (F3D y F3DEX: 3,3 KB)
  *   gfx_state (RDP, TMEM 4 KB, matrices,
  *     búfer de vértices, caché de texturas)  ~ 21 KB
  *   lecturas por DMA (vértices, matrices,
