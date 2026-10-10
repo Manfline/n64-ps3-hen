@@ -1,14 +1,15 @@
 # syntax=docker/dockerfile:1.7
 #
-# Compila la ROM de prueba del VI (tests/roms/src/vitest, código propio) de
-# forma reproducible: clang/lld de Debian 12 para MIPS (sin libultra ni
+# Compila las ROMs de prueba propias (tests/roms/src/vitest y, con
+# --build-arg ROM=gfxtest, tests/roms/src/gfxtest) de forma reproducible: clang/lld de Debian 12 para MIPS (sin libultra ni
 # libdragon) y nust64 fijo para empaquetar el ELF.
 #
 # El ROM lleva el IPL3 abierto de libdragon (Unlicense) que trae nust64 0.4.1;
 # antes de usarlo se comprueba su MD5 contra el publicado por libdragon para la
 # revisión r7, así que el ROM no contiene código de Nintendo.
 #
-# Uso: tools/build-vitest.sh (deja el ROM en tests/roms/homebrew/).
+# Uso: tools/build-vitest.sh o tools/build-gfxtest.sh (dejan el ROM en
+# tests/roms/homebrew/).
 # Contexto de construcción: tests/roms/src.
 
 ARG DEBIAN=debian:12-slim
@@ -47,14 +48,16 @@ RUN cargo install nust64 --version "${NUST64_VERSION}" --locked \
  && echo "${IPL3_PROD_MD5}  ${ipl3}" | md5sum -c -
 
 FROM toolchain AS build
-COPY vitest /build/vitest
-WORKDIR /build/vitest
+ARG ROM=vitest
+ARG TITLE="SALSA64 VITEST"
+COPY ${ROM} /build/${ROM}
+WORKDIR /build/${ROM}
 RUN make \
- && nust64 -n "SALSA64 VITEST" --elf build/salsa64-vitest.elf \
+ && nust64 -n "${TITLE}" --elf build/salsa64-${ROM}.elf \
  && mkdir /out \
- && cp build/salsa64-vitest.z64 /out/ \
- && { clang-14 --version | head -1; ld.lld-14 --version; nust64 --version 2>/dev/null || echo "nust64 ${NUST64_VERSION}"; } >/out/salsa64-vitest.buildinfo \
- && sha256sum /out/salsa64-vitest.z64
+ && cp build/salsa64-${ROM}.z64 /out/ \
+ && { clang-14 --version | head -1; ld.lld-14 --version; nust64 --version 2>/dev/null || echo "nust64 ${NUST64_VERSION}"; } >/out/salsa64-${ROM}.buildinfo \
+ && sha256sum /out/salsa64-${ROM}.z64
 
 FROM scratch AS rom
 COPY --from=build /out/ /

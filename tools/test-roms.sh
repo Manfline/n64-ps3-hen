@@ -1,7 +1,9 @@
 #!/bin/sh
 # Pruebas con ROMs homebrew en el host: compila salsa64-run (gcc nativo, ASan +
-# UBSan) y corre nemu64-test hasta su resumen por ISViewer, y vitest (ROM
-# propia del VI, tests/roms/src/vitest) hasta que se verifica a sí misma.
+# UBSan) y corre nemu64-test hasta su resumen por ISViewer, vitest (ROM
+# propia del VI, tests/roms/src/vitest) hasta que se verifica a sí misma, y
+# gfxtest (ROM 3D propia, tests/roms/src/gfxtest) por la HLE gráfica, con su
+# imagen verificada en el rasterizador de referencia (build/gfxtest.ppm).
 #
 # La lista de pruebas de nemu64-test que fallan se compara con la línea base
 # tests/roms/nemu64-test.fallas (lo que falta emular: RSP, cachés, bus PI…).
@@ -67,4 +69,13 @@ tools/build.sh --sh "ASAN_OPTIONS=detect_leaks=0 build/host/salsa64-run -c 40000
 vrc=$?
 printf '%-12s %s\n' vitest "$(grep 'vitest:' "$VLOG" | tail -1)"
 [ $vrc -eq 0 ] || { echo "             falló (código $vrc, $VLOG)"; fail=1; }
+
+GLOG=build/logs/gfxtest.run.log
+tools/build.sh --sh "ASAN_OPTIONS=detect_leaks=0 build/host/salsa64-run -c 400000000 \
+	-u 'gfxtest: OK' -f 'gfxtest: FALLO' --gfx-frame build/gfxtest.ppm --gfxtest-check \
+	tests/roms/homebrew/salsa64-gfxtest.z64 2>&1" >"$GLOG" 2>&1
+grc=$?
+printf '%-12s %s\n' gfxtest "$(grep 'gfxtest: [OF]' "$GLOG" | head -1)"
+grep -E 'gfx:|gfxtest: imagen|gfxtest: \(' "$GLOG" | sed 's/^salsa64-run: /             /'
+[ $grc -eq 0 ] || { echo "             falló (código $grc, $GLOG)"; fail=1; }
 exit $fail

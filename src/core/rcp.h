@@ -83,7 +83,8 @@ enum salsa64_task_type {
 /* Familia de microcódigo gráfico (codificación de la lista de comandos). */
 enum salsa64_gbi {
 	SALSA64_GBI_UNKNOWN = 0,
-	SALSA64_GBI_F3DEX2,   /* F3DEX2, F3DZEX2, F3DLX2…: el de Zelda OoT/MM */
+	SALSA64_GBI_F3DEX2,   /* F3DEX2, F3DLX2…: segunda generación */
+	SALSA64_GBI_F3DZEX2,  /* F3DZEX (Zelda OoT/MM): F3DEX2 con G_BRANCH_W */
 	SALSA64_GBI_F3D,      /* Fast3D: Super Mario 64 (pendiente) */
 	SALSA64_GBI_F3DEX,    /* F3DEX 1.x (pendiente) */
 	SALSA64_GBI_S2DEX,    /* sprites 2D (pendiente) */

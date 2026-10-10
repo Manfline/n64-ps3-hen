@@ -159,7 +159,7 @@ static void rsp_detect_gbi(void)
 {
 	/* Solo el formato de los textos de identificación, sin copiarlos. */
 	CHECK_EQ(detect("RSP Gfx ucode F3DEX       fifo 2.08 "), SALSA64_GBI_F3DEX2);
-	CHECK_EQ(detect("RSP Gfx ucode F3DZEX.NoN  fifo 2.06H "), SALSA64_GBI_F3DEX2);
+	CHECK_EQ(detect("RSP Gfx ucode F3DZEX.NoN  fifo 2.06H "), SALSA64_GBI_F3DZEX2);
 	CHECK_EQ(detect("RSP Gfx ucode F3DEX       xbus 1.23 "), SALSA64_GBI_F3DEX);
 	CHECK_EQ(detect("RSP Gfx ucode S2DEX  fifo 2.05 "), SALSA64_GBI_S2DEX);
 	CHECK_EQ(detect("RSP SW Version: 2.0X"), SALSA64_GBI_F3D);

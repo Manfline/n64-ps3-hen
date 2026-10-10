@@ -88,6 +88,7 @@ int salsa64_unit_run(void (*print)(const char *line))
 		{ "boot", t_suite_boot },
 		{ "vi", t_suite_vi },
 		{ "rsp", t_suite_rsp },
+		{ "gfx", t_suite_gfx },
 	};
 	char line[160];
 

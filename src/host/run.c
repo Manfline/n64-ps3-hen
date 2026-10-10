@@ -13,6 +13,12 @@
  *
  * Con --frame, al terminar se escribe en PPM la imagen que muestra el VI.
  *
+ * Las tareas gráficas del RSP pasan por la HLE (src/rsp/gfx) en el mismo
+ * hilo; al final se resume lo que produjo. Con --gfx-frame, la salida de la
+ * HLE se dibuja con el rasterizador de referencia (raster.c) y se guarda la
+ * imagen de la color image que muestra el VI; --gfxtest-check compara esa
+ * imagen con los puntos de la ROM gfxtest (tests/roms/src/gfxtest/expect.h).
+ *
  * Códigos de salida:
  *   0  apareció el texto de --until-text, o se agotaron los ciclos sin pedirlo
  *   1  apareció alguno de los textos de --fail-text
@@ -27,8 +33,12 @@
 #include <string.h>
 #include <time.h>
 
+#include "../../tests/roms/src/gfxtest/expect.h"
 #include "core/boot.h"
 #include "core/endian.h"
+#include "raster.h"
+#include "rsp/gfx/backend.h"
+#include "rsp/gfx/hle.h"
 
 #define DEFAULT_CYCLES (1ull << 32)  /* ~46 s de la consola */
 #define DEFAULT_SLICE  (1ull << 20)
@@ -46,6 +56,121 @@ enum stop_reason {
 static struct salsa64_n64 n64;
 static uint8_t rdram[SALSA64_RDRAM_MAX] __attribute__((aligned(128)));
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
+
+/* HLE gráfica: estado, búferes de salida y totales. */
+static struct gfx_state gfx_state;
+static struct salsa64_gfx_sync gfx_sync;
+static struct gfx_vertex gfx_vtx[1u << 16] __attribute__((aligned(128)));
+static uint8_t gfx_cmd[512u << 10] __attribute__((aligned(128)));
+static uint8_t gfx_tex[4u << 20] __attribute__((aligned(128)));
+static struct {
+	struct gfx_result sum;  /* contadores sumados; flags acumuladas */
+	uint32_t tasks;
+	bool raster;
+} gfx;
+
+static void gfx_acquire(void *ctx, struct gfx_job *job)
+{
+	(void)ctx;
+	job->vtx_ea = (uint64_t)(uintptr_t)gfx_vtx;
+	job->vtx_cap = sizeof gfx_vtx;
+	job->cmd_ea = (uint64_t)(uintptr_t)gfx_cmd;
+	job->cmd_cap = sizeof gfx_cmd;
+	job->tex_ea = (uint64_t)(uintptr_t)gfx_tex;
+	job->tex_cap = sizeof gfx_tex;
+}
+
+static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_result *res)
+{
+	(void)ctx;
+	struct gfx_result *s = &gfx.sum;
+	gfx.tasks++;
+	s->flags |= res->flags;
+	s->commands += res->commands;
+	s->triangles += res->triangles;
+	s->rects += res->rects;
+	s->draws += res->draws;
+	s->textures += res->textures;
+	s->tex_reused += res->tex_reused;
+	s->unknown_cmds += res->unknown_cmds;
+	if (res->unknown_cmds)
+		s->last_unknown = res->last_unknown;
+	s->approx_cc += res->approx_cc;
+	s->dl_errors += res->dl_errors;
+	if (gfx.raster)
+		raster_task(job, res);
+}
+
+static void gfx_summary(void)
+{
+	const struct gfx_result *s = &gfx.sum;
+	double n = gfx.tasks;
+	fprintf(stderr, "salsa64-run: gfx: %u tareas (%u otras, %u con microcódigo desconocido); por tarea "
+		"%.0f comandos, %.0f triángulos, %.0f rectángulos, %.0f dibujos, %.1f texturas (+%.1f reusadas); "
+		"%u comandos sin implementar (último 0x%02X), %u combiners aproximados, %u errores, banderas 0x%02X\n",
+		gfx.tasks, n64.bus.rsp.stats.other + n64.bus.rsp.stats.audio, n64.bus.rsp.stats.unknown_gbi,
+		s->commands / n, s->triangles / n, s->rects / n, s->draws / n, s->textures / n, s->tex_reused / n,
+		s->unknown_cmds, s->last_unknown, s->approx_cc, s->dl_errors, s->flags);
+}
+
+/* Imagen del rasterizador para la color image que muestra el VI. */
+static const uint32_t *gfx_image(uint32_t *width)
+{
+	struct salsa64_vi_frame f;
+	if (!salsa64_vi_frame(&n64.bus, &f))
+		return NULL;
+	return raster_image(f.origin, width);
+}
+
+static bool gfx_dump(const char *path)
+{
+	uint32_t w;
+	const uint32_t *img = gfx_image(&w);
+	if (!img) {
+		fprintf(stderr, "salsa64-run: ninguna tarea gráfica dibujó lo que muestra el VI\n");
+		return false;
+	}
+	FILE *out = fopen(path, "wb");
+	if (!out)
+		return false;
+	fprintf(out, "P6\n%u %u\n255\n", RASTER_W, RASTER_H);
+	for (int i = 0; i < RASTER_W * RASTER_H; i++) {
+		uint8_t rgb[3] = { (uint8_t)(img[i] >> 16), (uint8_t)(img[i] >> 8), (uint8_t)img[i] };
+		fwrite(rgb, 1, 3, out);
+	}
+	fprintf(stderr, "salsa64-run: imagen de la HLE gráfica en %s\n", path);
+	return fclose(out) == 0;
+}
+
+/* Puntos de gfxtest (expect.h) en la imagen del rasterizador. */
+static bool gfxtest_check(void)
+{
+	static const struct gfxtest_point pts[] = { GFXTEST_POINTS };
+	uint32_t w;
+	const uint32_t *img = gfx_image(&w);
+	if (!img) {
+		fprintf(stderr, "salsa64-run: gfxtest: no hay imagen de la HLE\n");
+		return false;
+	}
+	unsigned bad = 0;
+	for (unsigned i = 0; i < sizeof pts / sizeof pts[0]; i++) {
+		uint32_t got = img[pts[i].y * RASTER_W + pts[i].x], want = pts[i].rgb;
+		int ok = 1;
+		for (int k = 0; k < 3; k++) {
+			int d = (int)((got >> (16 - 8 * k)) & 0xFF) - (int)((want >> (16 - 8 * k)) & 0xFF);
+			if (d < -GFXTEST_TOL || d > GFXTEST_TOL)
+				ok = 0;
+		}
+		if (!ok) {
+			bad++;
+			fprintf(stderr, "salsa64-run: gfxtest: (%u, %u) %s: 0x%06X, se esperaba 0x%06X\n", pts[i].x,
+				pts[i].y, pts[i].what, got, want);
+		}
+	}
+	fprintf(stderr, "salsa64-run: gfxtest: imagen %s (%u de %zu puntos bien)\n", bad ? "FALLO" : "OK",
+		(unsigned)(sizeof pts / sizeof pts[0]) - bad, sizeof pts / sizeof pts[0]);
+	return bad == 0;
+}
 
 /* Búsqueda de texto en la salida, también entre dos impresiones. */
 static struct {
@@ -207,7 +332,9 @@ static void usage(FILE *out)
 	      "  -q, --quiet           no copiar la salida del ISViewer a stdout\n"
 	      "  -r, --regs            volcar los registros del CPU al terminar\n"
 	      "      --trace-exc N     mostrar las primeras N excepciones del CPU\n"
-	      "      --frame ARCHIVO   al terminar, guardar en PPM la imagen del VI\n", out);
+	      "      --frame ARCHIVO   al terminar, guardar en PPM la imagen del VI\n"
+	      "      --gfx-frame ARCHIVO  al terminar, guardar en PPM lo que dibujó la HLE gráfica\n"
+	      "      --gfxtest-check   verificar la imagen de la HLE con los puntos de gfxtest\n", out);
 }
 
 int main(int argc, char **argv)
@@ -223,6 +350,8 @@ int main(int argc, char **argv)
 		{ "regs", no_argument, NULL, 'r' },
 		{ "trace-exc", required_argument, NULL, 'X' },
 		{ "frame", required_argument, NULL, 'F' },
+		{ "gfx-frame", required_argument, NULL, 'G' },
+		{ "gfxtest-check", no_argument, NULL, 'K' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 },
 	};
@@ -230,7 +359,8 @@ int main(int argc, char **argv)
 	uint32_t ram = SALSA64_RDRAM_MAX;
 	int tv = SALSA64_BOOT_TV_AUTO, c;
 	bool regs = false;
-	const char *frame_path = NULL;
+	const char *frame_path = NULL, *gfx_path = NULL;
+	bool gfx_check = false;
 
 	while ((c = getopt_long(argc, argv, "c:u:f:qrh", opts, NULL)) != -1) {
 		switch (c) {
@@ -248,6 +378,8 @@ int main(int argc, char **argv)
 		case 'r': regs = true; break;
 		case 'X': trace_exc_left = strtoull(optarg, NULL, 0); break;
 		case 'F': frame_path = optarg; break;
+		case 'G': gfx_path = optarg; gfx.raster = true; break;
+		case 'K': gfx_check = true; gfx.raster = true; break;
 		case 'T':
 			if (!strcmp(optarg, "ntsc")) tv = SALSA64_TV_NTSC;
 			else if (!strcmp(optarg, "pal")) tv = SALSA64_TV_PAL;
@@ -284,6 +416,9 @@ int main(int argc, char **argv)
 	enum salsa64_rom_format fmt = salsa64_rom_normalize(rom, rom_size);
 
 	salsa64_n64_init(&n64, rdram, ram);
+	const struct salsa64_gfx_sink sink = { NULL, gfx_acquire, gfx_done };
+	salsa64_gfx_sync_init(&gfx_sync, &gfx_state, &n64.bus, &sink);
+	salsa64_rsp_set_gfx(&n64.bus, &gfx_sync.backend);
 	if (trace_exc_left)
 		n64.cpu.exc_hook = trace_exc;
 	salsa64_bus_set_isviewer(&n64.bus, isv_buf, isv_out, NULL);
@@ -334,11 +469,15 @@ int main(int argc, char **argv)
 		us ? cycles / (double)us : 0.0, (unsigned long long)n64.cpu.pc);
 	if (regs)
 		dump_regs();
-	if (frame_path && !dump_frame(frame_path)) {
+	if (gfx.tasks || n64.bus.rsp.stats.unknown_gbi)
+		gfx_summary();
+	if ((frame_path && !dump_frame(frame_path)) || (gfx_path && !gfx_dump(gfx_path))) {
 		free(rom);
 		return 3;
 	}
 	free(rom);
+	if (gfx_check && !gfxtest_check())
+		return 1;
 
 	switch (reason) {
 	case STOP_FAIL:   return 1;

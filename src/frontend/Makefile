@@ -6,7 +6,7 @@ SRCS    := main.c selftest.c
 
 R       := ../..
 COMMON  := src/platform/ps3/log.c \
-           $(patsubst $(R)/%,%,$(wildcard $(R)/src/core/*.c $(R)/src/cpu/*.c))
+           $(patsubst $(R)/%,%,$(wildcard $(R)/src/core/*.c $(R)/src/cpu/*.c $(R)/src/rsp/gfx/*.c))
 DATA    := vitest_rom
 vitest_rom_FILE := tests/roms/homebrew/salsa64-vitest.z64
 RSXKIT  := 1

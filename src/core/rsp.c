@@ -136,11 +136,12 @@ enum salsa64_gbi salsa64_rsp_detect_gbi(const struct salsa64_bus *bus, const str
 		q += 14;
 		if (starts_with(q, end, "S2DEX"))
 			return SALSA64_GBI_S2DEX;
+		bool zex = starts_with(q, end, "F3DZEX");
 		const uint8_t *v = q;
 		while (v < end && *v && !(v[0] >= '0' && v[0] <= '9' && v + 1 < end && v[1] == '.'))
 			v++;
 		if (v < end && *v == '2')
-			return SALSA64_GBI_F3DEX2;
+			return zex ? SALSA64_GBI_F3DZEX2 : SALSA64_GBI_F3DEX2;
 		if (v < end && *v == '1')
 			return SALSA64_GBI_F3DEX;
 		return SALSA64_GBI_UNKNOWN;
@@ -162,7 +163,7 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 
 	if (task.type == SALSA64_TASK_GFX && valid && rsp->sched) {
 		enum salsa64_gbi gbi = salsa64_rsp_detect_gbi(bus, &task);
-		if (gbi == SALSA64_GBI_F3DEX2) {
+		if (gbi == SALSA64_GBI_F3DEX2 || gbi == SALSA64_GBI_F3DZEX2) {
 			rsp->stats.gfx++;
 			rsp->busy = SALSA64_TASK_GFX;
 			rsp->gbi = gbi;

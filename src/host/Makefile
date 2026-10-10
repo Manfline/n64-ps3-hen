@@ -14,7 +14,7 @@ CFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffp-contract=off -fno-math-e
 LDFLAGS := $(SAN)
 LDLIBS  := -lm
 
-CORE_SRCS := $(wildcard $(ROOT)/src/core/*.c $(ROOT)/src/cpu/*.c)
+CORE_SRCS := $(wildcard $(ROOT)/src/core/*.c $(ROOT)/src/cpu/*.c $(ROOT)/src/rsp/gfx/*.c)
 HOST_SRCS := $(wildcard $(CURDIR)/*.c)
 OBJS      := $(patsubst $(ROOT)/%.c,$(OUT)/obj/%.o,$(CORE_SRCS) $(HOST_SRCS))
 
