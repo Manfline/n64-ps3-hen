@@ -1,5 +1,31 @@
 # Estado
 
+## 2026-10-10 — Fin de tarea del RSP por sondeo (sin bloquear al SPE)
+
+Hecho (rama `musing-mcclintock-6b5e2c`, commits a2ffd0f + mezcla
+16a544f con main 4a4d98c; diseño en docs/hilos-ppe.md «Fin de tarea sin
+bloquear»):
+- `src/core/rsp.c`: el backend tiene `done(ctx, idle)` (no bloquea); al
+  llegar el fin de la tarea, si no terminó, el evento se vuelve a programar
+  cada `poll_cycles` (10 000 ciclos) y el CPU sigue emulando. Si el CPU
+  saltó ciclos (bucle de espera) desde el sondeo anterior, se le avisa al
+  backend y el del SPE duerme 100 µs antes de contestar: el reloj emulado
+  no corre más rápido que el real. Con la tarea en curso el RSP no está
+  HALT y otro arranque se ignora (`starts_busy`). Genérico para el audio.
+- Prueba unitaria `rsp_gfx_task_polls`; estadísticas `sondeos` y
+  `dormida` en la línea `gfx:` del frontend.
+- ROM gfxtest: la espera por una interrupción vence por tiempo (10 s de
+  Count) y no por vueltas (en RPCS3 el primer trabajo del SPE compila
+  segundos; antes el CPU estaba congelado mientras tanto). Reconstruida.
+- Verificación: 224 pruebas en el host, cpu-tests/vitest/save-tests en
+  RPCS3, gfxtest 22/22, test-roms 446, build sin advertencias.
+
+Pendiente:
+- [ ] Medir en la PS3: «antes» = main 4a4d98c (`salsa64-hilos-antes.pkg`),
+      «después» = 16a544f (`salsa64-hilos-sondeo.pkg`), app SLSA00073;
+      gfxtest y Zelda (y SM64 cuando F3D esté en main). Turno después de
+      los trabajos de audio y TLB.
+
 ## 2026-10-10 — Caché de texturas entre tareas (HLE gráfica)
 
 Hecho (rama `unruffled-maxwell-2af921`; diseño en docs/texturas.md):
