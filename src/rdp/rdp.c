@@ -1,5 +1,12 @@
 /*
  * Salsa64 — RDP sobre el RSX. Ver rdp.h.
+ *
+ * Hilos (docs/hilos-ppe.md): el sink (acquire y done) corre en el hilo de
+ * emulación; todo lo demás, en el de presentación. Las tareas terminadas
+ * esperan en una cola de SETS entradas hasta que salsa64_rdp_flush las
+ * traduce. Un juego de búferes queda libre cuando se tradujo (contador
+ * `translated`) y el RSX pasó su barrera (`fence`, que el hilo de
+ * emulación consulta con rsxkit_fence_done: solo lee una etiqueta).
  */
 #include "rdp/rdp.h"
 
@@ -33,8 +40,11 @@ _Static_assert(GFX_DEPTH_TEST == RSXKIT_DEPTH_TEST && GFX_DEPTH_WRITE == RSXKIT_
 struct set {
 	uint8_t *vtx, *cmd, *tex;
 	uint32_t vtx_off, tex_off;  /* offsets del RSX */
-	uint32_t fence;
+	uint32_t fence;             /* la pone el hilo de presentación al traducir */
+	struct gfx_result res;      /* la deja done; la lee flush */
 };
+
+static inline void lwsync(void) { __asm__ volatile("lwsync" ::: "memory"); }
 
 struct target {
 	bool used;
@@ -58,7 +68,10 @@ static struct {
 	uint8_t *pool;
 	uint32_t pool_off;
 	struct set sets[SETS];
-	unsigned cur_set;
+	/* Tareas: acquire y done avanzan `acquired` y `finished` (hilo de
+	 * emulación); flush avanza `translated` (presentación). La tarea n usa
+	 * el juego n % SETS. */
+	volatile uint32_t acquired, finished, translated;
 	struct target targets[MAX_TARGETS];
 	struct depth depths[MAX_DEPTHS];
 	struct target *bound_t;
@@ -120,13 +133,25 @@ const struct salsa64_gfx_sink *salsa64_rdp_sink(void)
 static void acquire(void *ctx, struct gfx_job *job)
 {
 	(void)ctx;
-	unsigned i = rdp.cur_set = (rdp.cur_set + 1) % SETS;
-	struct set *s = &rdp.sets[i];
-	if (s->fence && !rsxkit_fence_done(s->fence)) {
-		uint64_t t0 = sysGetSystemTime();
-		rsxkit_fence_wait(s->fence);
-		rdp.stats.set_waits++;
-		rdp.stats.us_set_wait += sysGetSystemTime() - t0;
+	uint32_t n = rdp.acquired;
+	struct set *s = &rdp.sets[n % SETS];
+	/* Libre cuando su tarea anterior (n − SETS) ya se tradujo y el RSX pasó
+	 * la barrera que la siguió. */
+	if (n >= SETS) {
+		uint64_t t0 = 0;
+		for (;;) {
+			bool translated = (int32_t)(rdp.translated - (n - SETS + 1)) >= 0;
+			lwsync();
+			if (translated && rsxkit_fence_done(s->fence))
+				break;
+			if (!t0) {
+				t0 = sysGetSystemTime();
+				rdp.stats.set_waits++;
+			}
+			sysUsleep(50);
+		}
+		if (t0)
+			rdp.stats.us_set_wait += sysGetSystemTime() - t0;
 	}
 	job->vtx_ea = (uint64_t)(uintptr_t)s->vtx;
 	job->vtx_cap = VTX_BYTES;
@@ -134,6 +159,7 @@ static void acquire(void *ctx, struct gfx_job *job)
 	job->cmd_cap = CMD_BYTES;
 	job->tex_ea = (uint64_t)(uintptr_t)s->tex;
 	job->tex_cap = TEX_BYTES;
+	rdp.acquired = n + 1;
 }
 
 /* Destino de una color image (o el menos usado, reciclado). */
@@ -280,10 +306,19 @@ static void to_rsxkit(const struct gfx_draw *g, const struct set *s, rsxkit_draw
 
 static void done(void *ctx, const struct gfx_job *job, const struct gfx_result *res)
 {
-	(void)ctx;
+	(void)ctx, (void)job;
+	uint32_t n = rdp.finished;
+	rdp.sets[n % SETS].res = *res;
+	lwsync();
+	rdp.finished = n + 1;
+}
+
+/* Traduce la salida de la tarea n a comandos del RSX. */
+static void translate(uint32_t n)
+{
 	uint64_t t0 = sysGetSystemTime();
-	struct set *s = &rdp.sets[rdp.cur_set];
-	(void)job;
+	struct set *s = &rdp.sets[n % SETS];
+	const struct gfx_result *res = &s->res;
 	rsxkit_vertices(s->vtx_off, RSXKIT_MEM_MAIN);
 	rdp.bound_t = NULL;
 	rdp.bound_d = NULL;
@@ -327,6 +362,25 @@ static void done(void *ctx, const struct gfx_job *job, const struct gfx_result *
 	rdp.last_set = (unsigned)(s - rdp.sets);
 	rdp.stats.tasks++;
 	rdp.stats.us_translate += sysGetSystemTime() - t0;
+}
+
+uint32_t salsa64_rdp_flush(uint32_t upto)
+{
+	uint32_t n = rdp.translated, done_n = rdp.finished;
+	lwsync();  /* los resultados, después de ver `finished` */
+	if (upto == ~0u)
+		upto = done_n;
+	while ((int32_t)(n - done_n) < 0 && (int32_t)(n - upto) < 0) {
+		translate(n);
+		lwsync();  /* la barrera del juego, antes de darlo por traducido */
+		rdp.translated = ++n;
+	}
+	return n;
+}
+
+uint32_t salsa64_rdp_tasks_done(void)
+{
+	return rdp.finished;
 }
 
 bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const rsxkit_view *view,

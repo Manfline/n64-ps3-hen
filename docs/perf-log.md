@@ -18,6 +18,64 @@ antes, después, notas.
 | 2026-10-10 | f416bee | Recompilador, cuatro variantes, nemu64-test | PS3 real (mismo equipo) | intérprete 8098 ms | sin opciones 1941 ms (×4,17); escritura temprana diferida 1992; **registros fijos 1821 (×4,45)**; ambas 1849 | La escritura temprana no compensa ni diferida: queda apagada. Con registros fijos el bench enteros cae de 750 a 128 MIPS (4 registros por bloque): préstamo en bucles (siguiente fila) |
 | 2026-10-10 | f416bee | **Zelda OoT (NTSC) en el frontend**, recompilador con registros fijos, HLE gráfica en el SPE | PS3 real (mismo equipo), respaldo del usuario | intérprete: 15,4–17,5 campos/s, emulación 56–64 ms por campo | **41–60 campos/s (69–100 %), emulación 4–14 ms por campo** | Logo e intro a 58–60; título y escenas con muchos triángulos 41–55, ahora limitadas por la espera a la HLE gráfica del SPE (10–30 ms por tarea), no por el CPU. 86–88 % del tiempo del CPU en bucles de espera. ~10 500 bloques, 7,9 MB de caché, 1,7 % de instrucciones interpretadas. Se ve igual que con el intérprete (el autor) |
 
+## Dos hilos en el PPE (2026-10-10)
+
+**PS3 real** (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00073 «Salsa64
+hilos», recompilador activo en los dos casos. «Antes» = main 697922c (un
+hilo: emulación, presentación y flip en vsync en el mismo bucle).
+«Después» = ee5e917 + 5ee9f40 (hilo de emulación + hilo de presentación,
+ritmo de la tele emulada; docs/hilos-ppe.md). Ventanas de 5 s del log del
+frontend; los campos por segundo son los **emulados**.
+
+### vitest (ROM propia, pantalla 320×240 por el CPU)
+
+| | Antes (un hilo) | Después (dos hilos, con ritmo) | Después sin límite (medición A/B) |
+|---|---|---|---|
+| Campos/s | 59,9 (tope del flip en vsync) | 59,8–60,0 (ritmo) | **187 → 363** sin/con detección de bucles de espera |
+| Emulación por campo | 2,5–5,2 ms | 2,3–2,4 ms | 5,02 → 2,45 ms (×2,1) |
+| Copia del VI | — | 0,30 ms (300 KB) | 0,30 ms |
+| Presentación por campo | 11,4–14,1 ms (casi todo el flip) | 0,2–0,3 ms + flip 0,0–0,1 ms | 0,4 ms + flip 14,6 ms, a 60/s; 1 100–1 500 campos saltados por ventana |
+| Espera del ritmo | — | 14,0 ms por campo | — |
+
+La medición A/B de vitest antes daba 59,94 → 59,94 campos/s (el flip
+tapaba todo); ahora mide de verdad: 187 → 363.
+
+### Zelda: Ocarina of Time (NTSC, respaldo del usuario, fuera del repo)
+
+Campos/s por escena (ventana de 5 s que contiene el campo):
+
+| Escena (campo) | Antes (un hilo) | Después (dos hilos) |
+|---|---|---|
+| Logo de N64 (~150–590) | 57,8–59,0 | 58,4 |
+| Intro nocturna (~590–1200) | 59,0–60,0 | 57,9–59,4 |
+| Link en Epona (~1200–1750) | 58,6–59,4 | 57,1–59,4 |
+| Título con el castillo (~1750–2700) | **52,3 → 50,9 → 47,3 → 45,0 → 41,3** | **57,0 / 59,4 / 57,0 / 59,3 / 59,9** |
+| Después del título (~2700–4700) | 41,6–59,9 | 57,4–59,7 |
+
+Desglose por campo en el título (ventana del campo ~2250): antes
+emulación 12,2 ms + presentación 8,8 ms (flip) = 21 ms → 47 campos/s;
+después emulación 13,7 ms, ritmo 2,8 ms, presentación 0,0 ms, flip 8,9 ms
+en el otro hilo → 57–59 campos/s. Las ventanas a 57 son las que tienen una
+captura `screen-N.ppm`: cada captura frena la presentación ~400 ms (leer
+el búfer del RSX desde el PPE), descarta 4 campos, hace esperar al hilo
+de emulación ~250 ms por un juego de búferes y reinicia el ritmo. Por eso
+las capturas periódicas pasaron a ser opcionales (`capturas`).
+
+Lo que queda dentro de «emulación»: la espera del hilo de emulación al
+SPE al terminar cada tarea gráfica, 10–27 ms por tarea con ~20 tareas/s
+(20–53 % del tiempo del hilo). Es el cuello siguiente: que el evento del
+RSP se vuelva a programar en vez de bloquear (`src/core/rsp.c`), o acortar
+la HLE en el SPE (caché de texturas). La traducción al RSX cuesta
+0,15–0,88 ms por tarea y la copia del VI 0,20 ms por campo (se copia
+aunque el VI muestre un destino del RSX; se puede evitar).
+
+### Guardado por hilos
+
+savetest (SRAM) dos veces en la PS3: «persistió el arranque 1», volcado
+diferido escrito por el hilo de presentación a los ~2 s (257 escrituras
+del juego), salida limpia. START + SELECT y «Salir del juego» funcionan;
+los controles llegan por el buzón entre hilos (vitest los identifica).
+
 ## Líneas base de la Fase 0 (pendientes de PS3 real)
 
 - `spu-compute`: 6 MB, PPE escalar contra 6 SPUs (tiempos en el log).

@@ -20,10 +20,12 @@ en PS3 real.
 | Búfer de comandos RSX + memoria mapeada | 16 | 16 | `rsxkit_init` por omisión (rsx-triangle usa 32) |
 | ROM del cartucho | 64 | | máximo; el frontend la lee entera a memoria al arrancar |
 | Salida de la HLE gráfica SPU → RSX | 20 | 20 | `src/rdp`: 3 juegos de vértices 2 MB + comandos 512 KB + texturas 4 MB, mapeados al RSX (`rsxkit_map_main`) |
+| Copias de la imagen del VI entre hilos | 4,4 | 4,4 | Frontend (docs/hilos-ppe.md): 3 ranuras de 640 × 576 × 4; el hilo de emulación copia el framebuffer al terminar el campo y el de presentación lo sube al RSX |
+| Zona de paso del guardado + pila del hilo de emulación | 0,3 | | 32 KB en `struct savefile` y 256 KB de pila (`sysThreadCreate`) |
 | Audio | 2 | | |
 | Código, pila, heap de newlib | 16 | | |
 | Bloques de control de spukit | 0,01 | 0,01 | ~2,3 KB por trabajador |
-| **Total previsto** | **165** | | con una ROM de 64 MB (158 de main + 6,8 del estado del recompilador) |
+| **Total previsto** | **170** | | con una ROM de 64 MB (158 de la Fase 2 + 6,8 del estado del recompilador + 4,7 de los dos hilos) |
 
 ## Memoria local del RSX (GDDR3)
 
