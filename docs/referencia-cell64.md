@@ -88,6 +88,55 @@ consola, guardar el `perf_trace.csv` (con la región y la escena) en
 Ver `docs/estado.md`: Mario 64 ~78 % y Zelda en Kokiri ~83 % (PAL, v1.50).
 GoldenEye y Perfect Dark, injugables.
 
+## En PS3 real (2026-10-10)
+
+Consola: Slim CECH-3011A, HFW 4.91 + HEN. Zelda: Ocarina of Time (USA, Rev B),
+respaldo del usuario.
+
+- **Paquete:** el de 30 MB (`01.52`) da error al lanzarlo con HEN; funciona
+  la variante de 570 KB («HDD0», la de HEN), mismo título `CLFI00001`.
+- **ROMs:** esa variante redirige `/dev_hdd0/cell64` hacia la ruta de la USB
+  y lee de **`/dev_hdd0/cell64/roms/`** (carpeta real). Redirigir además
+  `/dev_usb000` con webMAN (`/remap.ps3`) colgó la consola en el menú: no
+  encadenar redirecciones.
+- **Trazas:** el arranque en `/dev_hdd0/tmp/cell64_boot_stage.txt` (solo
+  hasta el segundo cuadro del menú y luego la carga de la ROM); el rendimiento
+  en `/dev_hdd0/cell64/perf_trace.csv`. Salida a 1920×1080.
+- **Velocidad** (traza de ~130 s, `perf_trace.csv` por ventanas de 60 VI):
+  - Introducción y menú: 100 % (~20 cps, lo normal del juego).
+  - Gameplay en el **bosque Kokiri** (NTSC): **45–50 VI/s (75–83 %), ~15 cps**
+    según el overlay de Cell64; en la traza, 57–82 % según la ventana. Limita la CPU: el
+    intérprete gasta 0,9–1,3 s del PPE por cada segundo de juego (correlación
+    −0,85 entre velocidad y `cpu_other_us`). El RSP gráfico (0,25–0,4 s/s) y el
+    de audio (~0,1 s/s) también corren en el PPE. El audio se queda sin datos
+    (30–118 underruns por ventana): eso son los tirones.
+  - Escena más ligera (VI 4441–6721, ~38 s): 75–78 % **durmiendo ~0,5 s por
+    ventana** en el limitador, con 50 underruns por ventana. El limitador duerme
+    aunque vaya atrasado: falla de sincronización, no de potencia.
+- **Fallas gráficas:** en la pantalla de nombre salen **cuadros blancos en
+  lugar de letras**; los diálogos y el gameplay se ven bien. Como la fuente de
+  los diálogos sí sale, la falla está en cómo se carga la del teclado de la
+  pantalla de nombre (formato de 4 bits o forma de carga a TMEM), y el
+  combiner solo pinta el color primitivo. Caso de prueba para la Fase 4 de
+  Salsa64.
+- **Espada Kokiri:** en la animación de obtenerla (Link la levanta y se ve
+  el modelo) la hoja sale **sin textura, en blanco y negro** (solo sombreado);
+  empuñada en el gameplay se ve bien. Así que no es la textura de la espada:
+  falla el modelo de «objeto obtenido», que el juego carga aparte en el momento
+  y dibuja con su propia configuración (algunos con mapeo de entorno,
+  `G_TEXTURE_GEN` + `LookAt`). Caso de prueba para el HLE de F3DEX2 de Salsa64
+  (Fase 2) y la Fase 4: abrir el cofre de la espada.
+- **Menú de pausa:** tarda en abrir y la pantalla de equipo se ve mal. En la
+  traza, al abrirlo hay ~5 s sin presentar cuadros (`measured_fps` = 0) con la
+  CPU al tope y luego ~1 MB de texturas. `framebuffer_copies` vale 0 en toda la
+  sesión: Cell64 no copia el framebuffer del RSX a la RDRAM, y el juego lo
+  necesita para el fondo de la pausa (lo filtra la CPU) y para dibujar a Link
+  en la pantalla de equipo (render a textura). Para Salsa64: emular esas
+  copias, al menos por juego (ver «Riesgos conocidos» en docs/proyecto.md).
+- **Para Salsa64:** el cuello es el mismo que el nuestro (intérprete en el
+  PPE). Mover el RSP gráfico y el de audio a SPEs libera ~30–40 % del PPE en
+  gameplay; el limitador debe dejar de dormir cuando va atrasado.
+
 ## Qué significa para Salsa64
 
 - Parten de la misma familia de código que podríamos usar nosotros (Wii64,
