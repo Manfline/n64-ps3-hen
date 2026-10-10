@@ -894,13 +894,14 @@ int main(int argc, char **argv)
 		cycles ? 100.0 * idle_cycles / cycles : 0.0, (unsigned long long)n64.cpu.pc);
 	if (use_rec) {
 		const struct salsa64_rec_stats *st = &rec.stats;
-		fprintf(stderr, "salsa64-run: recompilador: %llu bloques (%u KB de caché), %llu solo intérprete, "
-			"%llu entradas, %llu enlaces, %llu invalidados, %llu vaciados, %llu instr. interpretadas (%.1f %%)%s\n",
-			(unsigned long long)st->compiled, salsa64_rec_used(&rec) / 256,
+		fprintf(stderr, "salsa64-run: recompilador: %llu bloques (%llu fuera de KSEG0, %u KB de caché), "
+			"%llu solo intérprete, %llu entradas, %llu enlaces, %llu invalidados, %llu vaciados, "
+			"%llu traducciones, %llu instr. interpretadas (%.1f %%)%s\n",
+			(unsigned long long)st->compiled, (unsigned long long)st->compiled_x, salsa64_rec_used(&rec) / 256,
 			(unsigned long long)st->interp_only, (unsigned long long)st->entries,
 			(unsigned long long)st->linked, (unsigned long long)st->invalidated,
-			(unsigned long long)st->flushes, (unsigned long long)st->interp_steps,
-			cycles ? 100.0 * (double)st->interp_steps / (double)cycles : 0.0,
+			(unsigned long long)st->flushes, (unsigned long long)st->vt_probes,
+			(unsigned long long)st->interp_steps, cycles ? 100.0 * (double)st->interp_steps / (double)cycles : 0.0,
 			lockstep ? "; --lockstep sin diferencias" : "");
 	}
 	savefile_close(&save_file);

@@ -1,5 +1,79 @@
 # Estado
 
+## 2026-10-10 — Recompilador: código en KSEG1 y mapeado por la TLB
+
+Hecho (diseño en docs/rec-ppe.md, «Código fuera de KSEG0»):
+- El recompilador compila también código en KSEG1 y mapeado por la TLB
+  (kuseg, kseg2/3), con la instrucción en la RDRAM o en la ROM del
+  cartucho. Antes eso lo corría el intérprete; GoldenEye y Perfect Dark
+  corren casi todo su código mapeado.
+- Clave de bloque (vpc, física) en una tabla aparte (`xhash`); KSEG0 sigue
+  igual. Todo en `src/cpu/rec_tlb.c` (para que los merges con otros
+  cambios del recompilador sean fáciles); rec.c y rec_emit.c solo lo llaman. Los bloques mapeados comparan su traducción al entrar contra una
+  TLB del recompilador por página de 4 KB (`vtlb[]`, 4 instrucciones),
+  también al llegar por un enlace o por JR. Escribir la TLB no mata ni
+  desenlaza bloques: antes de correr código, el despachador vuelve a
+  traducir las páginas anotadas si cambiaron la TLB, el ASID o ERL.
+- JR/JALR encuentran en el propio código los bloques fuera de KSEG0.
+- `cop0.c`: `salsa64_vr4300_fetch_probe` (búsqueda en la TLB sin
+  excepciones) y `cpu->tlb_writes`.
+- Pruebas nuevas (también en modo estricto): código mapeado con JAL entre
+  páginas, remapeo con enlace, cambio de ASID, código mapeado reescrito por
+  la dirección mapeada y por KSEG0, KSEG1, ROM por TLB y por KSEG1, dos
+  páginas en la misma entrada de `vtlb[]`, bucle mapeado; bucles de espera
+  en KSEG1 (se saltan) y mapeados (se descartan, como con el intérprete).
+- qemu-ppc64: unitarias 222/222 con el recompilador en los cuatro modos;
+  nemu64-test con las fallas de la línea base y 623 bloques fuera de KSEG0;
+  vitest OK; `--lockstep` sin diferencias en nemu64-test y vitest.
+- Cambiar la ROM o el ISViewer vacía el recompilador (puede haber código
+  compilado desde la ROM).
+- Memoria: +572 KB del estado del recompilador (6,84 MB).
+
+Siguiente:
+- **PS3 real** (b11861c, cpu-tests «Salsa64 CPU TLB», SLSA00076): 232/232
+  en el intérprete y en las cuatro variantes; nemu64-test igual al
+  intérprete (446 fallas, hash y ciclo), ×4,04–4,29; bench enteros con
+  registros fijos 760 MIPS (el préstamo en bucles funciona; antes 128).
+- qemu-ppc64 con `--lockstep` (respaldos propios, fuera del repo):
+  GoldenEye y Perfect Dark 200 M ciclos cada uno sin diferencias con el
+  intérprete. GoldenEye: 3518 de 3524 bloques mapeados y 5050
+  traducciones en 2,1 s (reescribe la TLB seguido); Perfect Dark con 8 MB:
+  3 traducciones.
+- **PS3 real, frontend «Salsa64 TLB»** (SLSA00074, respaldos propios):
+  - GoldenEye: 59,8 campos/s a 93,7 MIPS (velocidad completa del VR4300),
+    **5,6 ms de emulación por campo**; 3512 de 3518 bloques mapeados, 5050
+    traducciones en el arranque y ninguna después, ~0,08 % interpretado;
+    estable 100 s. En pantalla, ruido: el juego manda una sola tarea
+    gráfica con un microcódigo que la HLE no reconoce (ucode en 0x20e60,
+    su F3D) y después solo audio; con el intérprete solo, en la Mac, queda
+    igual (mismo bucle en 0x7000071c a los 21 s). Le toca al trabajo de F3D.
+  - Perfect Dark: 59,8 campos/s, 5,1 ms por campo, pero se queda en el
+    arranque (201 bloques, VI sin configurar, pantalla negra); con el
+    intérprete solo también (pc 0x700017f4 a los 21 s, sin tareas del RSP
+    ni excepciones). No es del recompilador: falta ver el arranque (CIC
+    6105) o algún registro del hardware.
+- Diagnóstico (arnés en la Mac, con el intérprete; lockstep de 10,7 s de
+  consola sin diferencias en los dos juegos):
+  - GoldenEye llega a su hilo ocioso (`b .` en 0x7000071c) y se queda: su
+    única tarea gráfica (ucode en 0x20e60) no la reconoce la HLE, y la
+    tarea nunca termina para el juego (sin DP), así que no vuelve a
+    dibujar; el VI muestra RDRAM sin inicializar (el ruido). Pagina su
+    código por fallos de TLB (110 en 10 s). Además el `b .` mapeado no lo
+    salta idle.c (solo KSEG0/KSEG1): 0 % en bucles de espera.
+  - Perfect Dark (CIC 6105) compara la palabra en 0xA00002E8 con
+    0xC86E2000 y, si no coincide, se queda en `b .` (0x700017f0). Ningún
+    código del juego la escribe: la deja el arranque del 6105 y nuestro
+    arranque HLE no. Escribiéndola a mano (experimento, no en el repo)
+    pasa, monta 0x7F000000 en la TLB y llega a su hilo ocioso.
+- [ ] Arranque HLE del CIC 6105 (`src/core/boot.c`): lo que el IPL3 deja
+      en la RDRAM (al menos 0x2E8 = 0xC86E2000), desde documentación
+      pública, sin código de Nintendo.
+- [ ] HLE gráfica: el microcódigo de GoldenEye (F3D; trabajo de F3D) y que
+      una tarea con microcódigo desconocido no deje colgado al juego.
+- [ ] idle.c: bucles de espera en código mapeado por la TLB.
+- [ ] Verificar en el desensamblado (o el decomp) si GoldenEye ejecuta
+      0x7F000000 desde la ROM o desde la RDRAM.
+
 ## 2026-10-10 — Caché de texturas entre tareas (HLE gráfica)
 
 Hecho (rama `unruffled-maxwell-2af921`; diseño en docs/texturas.md):
@@ -138,9 +212,9 @@ Siguiente:
 - [ ] Medir en la PS3 el préstamo de registros fijos en bucles (bench
       enteros con registros fijos: esperado ~750 MIPS, antes 128).
 - [ ] Más juegos de la tabla de docs/proyecto.md (SM64, MK64, SF64; GoldenEye y
-      Perfect Dark usan TLB: hoy ese código va al intérprete).
+      Perfect Dark usan TLB: ver la entrada de arriba).
 - [ ] Más en nativo: CVT/TRUNC/ROUND de la FPU, LWL/LWR/SWL/SWR, CACHE,
-      MFC0 sin salir del bloque; código por TLB (GoldenEye) y KSEG1.
+      MFC0 sin salir del bloque. (Código por TLB y KSEG1: hecho.)
 - [ ] Fase 2: el DMA del SP hacia la RDRAM tiene que llamar a
       `salsa64_bus_rdram_written`.
 ## 2026-10-10 — Fase 2 (parte gráfica): criterio cumplido en PS3 real
