@@ -12,6 +12,13 @@
  * del ISViewer son estáticos y la ROM se lee una vez con malloc.
  *
  * Con --frame, al terminar se escribe en PPM la imagen que muestra el VI.
+ * Con --no-idle no se saltan los bucles de espera (cpu/idle.c): el
+ * resultado debe ser idéntico, solo más lento.
+ *
+ * Guardado del cartucho (core/save.c): el tipo sale de la cabecera o de la
+ * tabla por código de juego, o de --save. Con --save-dir se lee al empezar
+ * y se escribe al terminar en ese directorio, con el mismo nombre que en la
+ * PS3 (frontend/savefile.c); sin la opción queda solo en memoria.
  *
  * Con --rec corre el recompilador (solo en un host ppc64 big-endian: qemu,
  * tools/test-rec.sh). --lockstep además corre un segundo N64 con el
@@ -29,6 +36,7 @@
  */
 #define _GNU_SOURCE
 #include <getopt.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,6 +46,7 @@
 #include "core/endian.h"
 #include "cpu/rec.h"
 #include "host/rec_host.h"
+#include "frontend/savefile.h"
 
 #define DEFAULT_CYCLES (1ull << 32)  /* ~46 s de la consola */
 #define DEFAULT_SLICE  (1ull << 20)
@@ -67,6 +76,9 @@ static struct {
 	uint64_t history[16];   /* últimos bloques, para el informe */
 	uint32_t fields;        /* campo del VI de la última comparación de la RDRAM */
 } lock;
+
+static struct salsa64_save save;
+static struct savefile save_file;
 
 /* Búsqueda de texto en la salida, también entre dos impresiones. */
 static struct {
@@ -181,6 +193,16 @@ static void lockstep_check(struct salsa64_rec *r, uint64_t block_pc, void *ctx)
 		fprintf(stderr, " %08llx", (unsigned long long)(uint32_t)lock.history[(lock.exits - k) % 16]);
 	fputc('\n', stderr);
 	exit(4);
+}
+
+static void save_log(const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	fputs("salsa64-run: ", stderr);
+	vfprintf(stderr, fmt, ap);
+	fputc('\n', stderr);
+	va_end(ap);
 }
 
 static uint64_t now_us(void)
@@ -311,7 +333,10 @@ static void usage(FILE *out)
 	      "      --rec             usar el recompilador (host ppc64 big-endian)\n"
 	      "      --lockstep[=N]    con --rec, comparar contra el intérprete después de cada\n"
 	      "                        bloque, y la RDRAM en cada campo del VI y cada N bloques\n"
-	      "                        (por omisión 4096)\n", out);
+	      "                        (por omisión 4096)\n"
+	      "      --no-idle         no saltar los bucles de espera\n"
+	      "      --save TIPO       tipo de guardado: ninguno, eeprom4k, eeprom16k, sram256k\n"
+	      "      --save-dir DIR    leer y escribir el guardado del cartucho en DIR\n", out);
 }
 
 int main(int argc, char **argv)
@@ -329,14 +354,17 @@ int main(int argc, char **argv)
 		{ "frame", required_argument, NULL, 'F' },
 		{ "rec", no_argument, NULL, 'E' },
 		{ "lockstep", optional_argument, NULL, 'L' },
+		{ "no-idle", no_argument, NULL, 'I' },
+		{ "save", required_argument, NULL, 'V' },
+		{ "save-dir", required_argument, NULL, 'D' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 },
 	};
 	uint64_t max_cycles = DEFAULT_CYCLES, slice = DEFAULT_SLICE;
 	uint32_t ram = SALSA64_RDRAM_MAX;
-	int tv = SALSA64_BOOT_TV_AUTO, c;
-	bool regs = false, use_rec = false, lockstep = false;
-	const char *frame_path = NULL;
+	int tv = SALSA64_BOOT_TV_AUTO, save_type = SALSA64_SAVE_AUTO, c;
+	bool regs = false, idle = true, use_rec = false, lockstep = false;
+	const char *frame_path = NULL, *save_dir = NULL;
 
 	while ((c = getopt_long(argc, argv, "c:u:f:qrh", opts, NULL)) != -1) {
 		switch (c) {
@@ -360,6 +388,17 @@ int main(int argc, char **argv)
 			lock.ram_every = optarg ? strtoull(optarg, NULL, 0) : 4096;
 			if (!lock.ram_every)
 				lock.ram_every = 1;
+			break;
+		case 'I': idle = false; break;
+		case 'D': save_dir = optarg; break;
+		case 'V':
+			for (int t = 0; t < SALSA64_SAVE_NTYPES; t++)
+				if (!strcmp(optarg, salsa64_save_name(t)))
+					save_type = t;
+			if (save_type == SALSA64_SAVE_AUTO) {
+				usage(stderr);
+				return 3;
+			}
 			break;
 		case 'T':
 			if (!strcmp(optarg, "ntsc")) tv = SALSA64_TV_NTSC;
@@ -397,6 +436,7 @@ int main(int argc, char **argv)
 	enum salsa64_rom_format fmt = salsa64_rom_normalize(rom, rom_size);
 
 	salsa64_n64_init(&n64, rdram, ram);
+	salsa64_cpu_set_idle(&n64.cpu, idle);
 	if (trace_exc_left)
 		n64.cpu.exc_hook = trace_exc;
 	salsa64_bus_set_isviewer(&n64.bus, isv_buf, isv_out, NULL);
@@ -415,6 +455,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "salsa64-run: %s %s, %zu bytes; carga plana (CIC %s), %u bytes, "
 			"entrada 0x%08X, TV %s, RDRAM %u MB\n", path, fmt_names[fmt], rom_size,
 			salsa64_cic_name(info.cic), info.loaded, info.entry, tv_names[info.tv], ram >> 20);
+	savefile_open(&save_file, &save, &n64.bus, rom, save_dir, NULL, save_type, save_log);
 
 	if (use_rec) {
 		void *code = salsa64_host_rec_buffer();
@@ -426,6 +467,7 @@ int main(int argc, char **argv)
 		if (lockstep) {
 			/* La referencia arranca igual; cada bloque vuelve a C para comparar. */
 			salsa64_n64_init(&ref, ref_rdram, ram);
+			salsa64_cpu_set_idle(&ref.cpu, idle);
 			salsa64_bus_set_isviewer(&ref.bus, ref_isv_buf, ref_isv_out, NULL);
 			salsa64_bus_set_rom(&ref.bus, rom, (uint32_t)(rom_size > UINT32_MAX ? UINT32_MAX : rom_size));
 			struct salsa64_boot_info ref_info;
@@ -443,7 +485,7 @@ int main(int argc, char **argv)
 
 	/* Bucle principal: bloques de `slice` ciclos y verificación entre ellos. */
 	enum stop_reason reason = STOP_NONE;
-	uint64_t start_cycles = n64.cpu.cycles, t0 = now_us();
+	uint64_t start_cycles = n64.cpu.cycles, start_idle = n64.cpu.idle_cycles, t0 = now_us();
 	while (reason == STOP_NONE) {
 		uint64_t done = n64.cpu.cycles - start_cycles;
 		if (done >= max_cycles) {
@@ -457,6 +499,7 @@ int main(int argc, char **argv)
 			reason = STOP_STUCK;
 	}
 	uint64_t us = now_us() - t0, cycles = n64.cpu.cycles - start_cycles;
+	uint64_t idle_cycles = n64.cpu.idle_cycles - start_idle;
 	if (watch.midline)
 		putchar('\n');
 	fflush(stdout);
@@ -467,9 +510,12 @@ int main(int argc, char **argv)
 		[STOP_CYCLES] = "se agotaron los ciclos",
 		[STOP_STUCK] = "bucle infinito sin interrupciones posibles",
 	};
-	fprintf(stderr, "salsa64-run: %s; %llu ciclos (%.2f s de consola) en %.2f s, %.1f MIPS, pc=0x%016llx\n",
+	/* Una instrucción por ciclo, salvo los ciclos saltados en bucles de espera. */
+	fprintf(stderr, "salsa64-run: %s; %llu ciclos (%.2f s de consola) en %.2f s, %.1f MIPS, "
+		"%.1f %% en bucles de espera, pc=0x%016llx\n",
 		reason_names[reason], (unsigned long long)cycles, cycles / 93.75e6, us / 1e6,
-		us ? cycles / (double)us : 0.0, (unsigned long long)n64.cpu.pc);
+		us ? (cycles - idle_cycles) / (double)us : 0.0,
+		cycles ? 100.0 * idle_cycles / cycles : 0.0, (unsigned long long)n64.cpu.pc);
 	if (use_rec) {
 		const struct salsa64_rec_stats *st = &rec.stats;
 		fprintf(stderr, "salsa64-run: recompilador: %llu bloques (%u KB de caché), %llu solo intérprete, "
@@ -481,6 +527,7 @@ int main(int argc, char **argv)
 			cycles ? 100.0 * (double)st->interp_steps / (double)cycles : 0.0,
 			lockstep ? "; --lockstep sin diferencias" : "");
 	}
+	savefile_close(&save_file);
 	if (regs)
 		dump_regs();
 	if (frame_path && !dump_frame(frame_path)) {

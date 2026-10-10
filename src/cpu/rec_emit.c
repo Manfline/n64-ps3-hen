@@ -1376,6 +1376,22 @@ static void emit_insn(struct ctx *c, unsigned k)
 
 /* ---- Saltos ------------------------------------------------------------------- */
 
+/* ¿Consultaría el intérprete idle_hint en este salto? Saltos condicionales
+ * (también los de enlace y BC1) y J, tomados hacia atrás a menos de
+ * SALSA64_IDLE_BODY instrucciones, que la tabla de descartados no tenga. */
+static bool idle_candidate(const struct ctx *c, const struct dec *d, uint64_t bpc)
+{
+	uint32_t i = d->w;
+	if (d->kind == K_JUMP_REG || (d->kind == K_JUMP && I_OP(i) != 0x02))
+		return false;
+	uint64_t target = I_OP(i) == 0x02 ? ((bpc + 4) & ~0x0FFFFFFFull) | (uint64_t)I_TARGET(i) << 2
+					  : bpc + 4 + ((uint64_t)(int64_t)(int16_t)i << 2);
+	if (bpc - target >= 4 * SALSA64_IDLE_BODY)
+		return false;
+	const struct salsa64_cpu *cpu = c->rec->cpu;
+	return cpu->idle_reject[(bpc >> 2) & (SALSA64_IDLE_CACHE - 1)] != ((uint32_t)bpc ^ i);
+}
+
 /* El salto en b y su delay slot en b + 1 (la última del bloque). */
 static void emit_branch(struct ctx *c, unsigned b)
 {
@@ -1447,6 +1463,26 @@ static void emit_branch(struct ctx *c, unsigned b)
 		break;
 	}
 
+	/* Bucle de espera posible (idle.c): el camino tomado vuelve a C antes del
+	 * delay slot, en el mismo estado en que el intérprete consulta idle_hint;
+	 * rec.c llama a salsa64_vr4300_idle y, si la tabla lo descarta, invalida
+	 * el bloque para compilarlo sin la consulta. */
+	bool idle = idle_candidate(c, d, bpc);
+	int idle_exit = -1;
+	if (idle) {
+		idle_exit = new_label(c);
+		unsigned sec = c->sec;
+		c->sec = SEC_COLD;
+		bind(c, idle_exit);
+		writeback(c, c->written);
+		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)b + 1));
+		li64(c, 3, bpc);
+		emit_b(c, abs_label(c, c->rec->exit_idle), false);
+		c->sec = sec;
+		if (d->kind == K_BRANCH)
+			emit_bc(c, c->br_bo, c->br_bi, idle_exit);
+	}
+
 	if (likely) {
 		/* No tomado: se salta el delay slot y cuenta solo el salto. */
 		int nt = new_label(c);
@@ -1458,6 +1494,10 @@ static void emit_branch(struct ctx *c, unsigned b)
 		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)b + 1));
 		emit_exit_to(c, c->br_fall);
 		c->sec = sec;
+	}
+	if (idle && d->kind != K_BRANCH) {  /* J o branch-likely tomado: siempre a C */
+		emit_b(c, idle_exit, false);
+		return;
 	}
 
 	c->in_ds = true;
@@ -1472,6 +1512,10 @@ static void emit_branch(struct ctx *c, unsigned b)
 		emit_b(c, abs_label(c, c->temp || c->rec->no_link ? c->rec->exit_jump : c->rec->exit_jr), false);
 		return;
 	case K_BRANCH: {
+		if (idle) {  /* el tomado ya salió antes del delay slot */
+			emit_exit_to(c, c->br_fall);
+			return;
+		}
 		int taken = new_label(c);
 		emit_bc(c, c->br_bo, c->br_bi, taken);
 		emit_exit_to(c, c->br_fall);

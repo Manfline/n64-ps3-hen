@@ -1,5 +1,159 @@
 # Estado
 
+## 2026-10-10 — Fase 3: recompilador MIPS → PPC64 en el PPE (×4,4 con código real)
+
+Hecho (diseño y decisión en docs/rec-ppe.md, números en docs/perf-log.md):
+- **Decisión: recompilador propio.** Not64 y Wii64 (GPLv2+, commits en
+  docs/THIRD_PARTY.md) se revisaron y descartaron como base: emisor de 32
+  bits con pares hi/lo, EABI de la Wii, globales de mupen64, Count solo en
+  saltos y FPU sin FCR31. Se usaron solo como referencia de diseño.
+- `src/cpu/rec.c`, `rec_emit.c`, `rec.h`, `ppc.h`: bloques desde KSEG0
+  hasta un salto con su delay slot; en nativo solo si caben antes del
+  próximo evento, así que eventos, Count, interrupciones y excepciones caen
+  en el mismo ciclo que con el intérprete. 12 registros MIPS por bloque,
+  escritura temprana (contra el load-hit-store entre bloques), enlaces
+  parcheados, JR/JALR sin volver a C, invalidación por código escrito
+  (también desde el intérprete, DMA del PI/SI/SRAM y cargador), FPU nativa
+  con las mismas causas de FCR31 que el intérprete, bucles de espera con la
+  misma consulta que `idle.c`. Lo raro (LWL/LWR, COP0, conversiones de la
+  FPU, TLB, KSEG1, modo usuario) lo corre el intérprete.
+- Caché en la cola NOBITS de 16 MB del segmento de texto
+  (`mk/rec-cache.ld`): llamadas a C con `bl` directo. Estado: 6,3 MB.
+- Pruebas en la Mac sin PS3: Linux ppc64 + qemu (`tools/test-rec.sh`,
+  `docker/ppc64.Dockerfile`): las 197 unitarias también con el recompilador
+  en modo estricto; nemu64-test con la línea base; vitest OK; `salsa64-run
+  --lockstep` compara contra el intérprete bloque a bloque (sin
+  diferencias en nemu64-test).
+- **PS3 real** (f7b655d): 163/163 unitarias ejecutando código generado;
+  nemu64-test 7,9 s → 1,8 s (**×4,36, 104 MIPS**) con las mismas fallas y
+  el mismo ciclo final; bench mixto 21,3 → 156,6 MIPS.
+- RPCS3 no ejecuta código generado: ahí se apaga
+  (`/dev_hdd0/salsa64/sin-recompilador`, lo crea `tools/rpcs3-run.py`).
+- Merge de main (controles, bucles de espera, guardado) sin regresiones.
+
+Siguiente:
+- [ ] PS3: medir la escritura temprana y los registros fijos
+      (`SALSA64_REC_OPT_PIN`; cpu-tests mide nemu64-test con y sin) y el
+      frontend con vitest; decidir el valor por omisión.
+- [ ] Juegos del usuario en el frontend con el recompilador (VI/s, campos
+      por segundo; tabla de docs/proyecto.md) → perf-log.
+- [ ] Más en nativo: CVT/TRUNC/ROUND de la FPU, LWL/LWR/SWL/SWR, CACHE,
+      MFC0 sin salir del bloque; código por TLB (GoldenEye) y KSEG1.
+- [ ] Fase 2: el DMA del SP hacia la RDRAM tiene que llamar a
+      `salsa64_bus_rdram_written`.
+
+## 2026-10-10 — Guardado del cartucho: EEPROM y SRAM
+
+Hecho:
+- **EEPROM de 4 y 16 Kbit** en el canal 4 del PIF (`src/core/save.c`,
+  desde n64brew.dev: Joybus Protocol): información (0x00/0xFF →
+  0x0080/0x00C0), lectura (0x04) y escritura (0x05) de bloques de 8 bytes;
+  en la de 4 Kbit los bloques 64–255 repiten 0–63. Escritura instantánea
+  (en la consola, hasta 6 ms), nunca "ocupada".
+- **SRAM de 256 Kbit** en el dominio 2 del PI (0x08000000, espejo cada
+  32 KB): DMA en los dos sentidos y accesos directos de 32 bits del CPU.
+- **Tipo por juego** (`salsa64_save_detect`): `guardado.cfg` (manual; por
+  código de 3 o 4 caracteres, CRC1 o `*`) > cabecera de homebrew ("ED" en
+  0x3C, tipo en 0x3F; la de n64tool de libdragon) > tabla por código
+  (`src/core/savedb.c`: 178 códigos y 6 excepciones por región, solo donde
+  coinciden ares y N64FlashcartMenu) > ninguno, con aviso en el log. Los
+  seis juegos objetivo están en la tabla (SM64, MK64, SF64 y GoldenEye
+  EEPROM 4K; Perfect Dark 16K; Zelda OoT SRAM). FlashRAM, SRAM de 768 Kbit
+  y de 1 Mbit se reconocen pero no se emulan todavía.
+- **Persistencia** (`src/frontend/savefile.c`, igual en la PS3 y en el
+  host): un archivo por juego y tipo en `/dev_hdd0/salsa64/saves/`
+  (`<título>-<CRC1>.eep|sra`, los nombres de Project64). Búfer preasignado
+  de 32 KB; se cuentan las escrituras del juego que cambian datos y se
+  vuelca tras 2 s sin escrituras (a lo más 30 s si no paran) y al salir.
+  Escritura segura: `.tmp`, borrar y renombrar.
+- Ganchos mínimos en `pif.c`, `pi.c` y `bus.c` (24 líneas); `bus->save`
+  sobrevive al reset.
+- Pruebas: suite `save` (14 pruebas; 196 en total) en el host y en RPCS3
+  (big-endian). ROM propia `savetest` (`tests/roms/src/savetest`, tres
+  variantes por la cabecera, `tools/build-savetest.sh`): escribe un patrón,
+  lo relee y en el arranque siguiente verifica que persistió. En
+  `tools/test-roms.sh` (dos arranques por tipo con `salsa64-run
+  --save-dir`) y en RPCS3 con `salsa64-save-tests` (SLSA00020, las tres
+  ROMs sin pantalla; `tools/test-phase1.sh` lo abre dos veces): pasan,
+  con el volcado diferido a los 2,0 s. Prueba de mutación: romper la
+  repetición de bloques, el identificador, la escritura directa o el DMA
+  hacia la SRAM lo atrapan las pruebas y la ROM.
+- Sin regresiones: nemu64-test 462 fallas, vitest y controles OK; compilan
+  fase 0, fase 1 y el frontend sin advertencias.
+
+- **PS3 real** (Slim CECH-3011A, HFW 4.91 + HEN): `salsa64-save-tests`
+  abierto dos veces pasa en los tres tipos ("persistió el arranque 1");
+  volcado diferido a los 2,0 s y, en la EEPROM de 16 Kbit, escritura al
+  cerrar con cambios pendientes 26 ms después del resultado, que también
+  persistió. El `rename` del `.tmp` funciona en el disco de la PS3. El
+  frontend real (variante «Salsa64 guardado», SLSA00021, para no pisar la
+  app de la Fase 2) con `savetest-sram` como `rom.z64`: azul con un cuadro
+  y, al volver a abrir, verde con dos; START + SELECT llega a
+  `savefile_close` y a "salida normal".
+- `tools/rpcs3-run.py`: en el primer lanzamiento de un ELF nuevo a veces no
+  alcanza a leer el TTY.log (RPCS3 compila sus módulos); si el programa
+  termina sin RESULTADO leído, lo toma del "Accumulated RPCS3 TTY" del
+  final de RPCS3.log.
+
+Notas:
+- En la PS3 quedaron `saves/SALSA64_SAVE_*` (de las ROMs de prueba) y los
+  paquetes `salsa64-save-tests.pkg` y `salsa64-guardado.pkg`; el
+  `rom.z64` de prueba se borró (el `oot.z64` del autor sigue ahí).
+- En la primera salida del frontend en la PS3 el log no tuvo "salida
+  normal" (no se sabe cómo se salió); en la siguiente, con START + SELECT,
+  sí. Si vuelve a faltar, revisar `rsxkit_shutdown`: el guardado se vuelca
+  antes, así que no se pierde.
+
+Falta:
+- [ ] Probarlo con Zelda (SRAM) y un juego con EEPROM cuando la Fase 2
+      permita llegar a guardar (respaldos propios, fuera del repo).
+- [ ] FlashRAM (y SRAM de 768 Kbit y 1 Mbit) cuando un juego la pida.
+- [ ] Para la integración: `src/core/rcp.h` todavía dice "Falta la EEPROM"
+      en el SI y el PI "cartucho → RDRAM"; no se tocó para no chocar con
+      la Fase 2 (edita las líneas vecinas).
+
+## 2026-10-10 — Controles (PIF + DualShock 3) y bucles de espera
+
+Hecho (validado en PS3 real, Slim CECH-3011A, HFW 4.91 + HEN):
+- **Controles** (ceae30f): comandos joybus del PIF por el SI
+  (`src/core/pif.c`, desde n64brew.dev): identificación, estado, accesorio
+  sin pak, RST con L+R+Start, errores de canal. Frontend
+  (`src/frontend/padmap.c`): stick izquierdo → stick (±80), stick derecho
+  → botones C, × → A, □ → B, L2 → Z, L1 → L, R1 → R, START; todo
+  configurable en `/dev_hdd0/salsa64/controles.cfg`. El puerto 1 siempre
+  tiene control (el DS3 tarda ~0,2 s en aparecer y los juegos buscan
+  controles al arrancar). vitest identifica los puertos y lee el control
+  1 por el SI: en la PS3 llegaron a la ROM todos los botones, los sticks
+  en su sentido (arriba = Y +80), los C del stick derecho y RST.
+- **Bucles de espera** (940f6f8, `src/cpu/idle.c`): punto fijo exacto de
+  una vuelta y salto en vueltas enteras hasta el próximo evento. Estado
+  idéntico con y sin detección (pruebas, vitest, nemu64-test). PS3 real
+  con vitest: emulación 65,6 → 35,0 ms por campo (×1,9), 15,2 → 28,3
+  campos/s, 45,6 % del tiempo saltado. Costo en el bench: −1 % (21,2 →
+  21,0 MIPS). docs/perf-log.md.
+- Intérprete optimizado en el frontend: 23,8 MIPS con vitest (antes 13,6).
+- 182 pruebas en el host y en RPCS3 (big-endian) y en la PS3; nemu64-test
+  sin cambios (462).
+
+Notas:
+- ppu-gcc no pone indicaciones estáticas en los saltos (bits a/t en 0): los
+  `+`/`-` que muestra objdump no son predicciones del PPE.
+- Quien escriba la RDRAM fuera del CPU (RSP en SPE, DMA con latencia) debe
+  hacerlo en un evento del planificador, o el salto de bucles de espera se
+  lo pasaría de largo (docs/cpu-vr4300.md, «Bucles de espera»).
+- `salsa64-cpu-tests-idle.pkg` (título «Salsa64 CPU bucles de espera») se
+  instala sobre la misma app SLSA00005 que los demás cpu-tests.
+
+Siguiente:
+- [x] EEPROM del cartucho (canal 4 del PIF) y SRAM: entrada de arriba.
+- [ ] Controller Pak y Rumble.
+- [ ] Bucles de espera: código mapeado por TLB, sondeos de E/S que solo
+      cambian en eventos (MI_INTR, SP_STATUS) y esperas por Count.
+- [ ] Opcional: decidir el chequeo con el inmediato del salto (no depende
+      del destino) y medir si recupera el 1 %.
+- [ ] Repartir emulación y presentación entre los dos hilos del PPE (ya
+      importa: con vitest la emulación baja a 35 ms por campo).
+
 ## 2026-10-10 — Cierre de la jornada (2): Fase 0 y Fase 1 en PS3 real
 
 Hecho hoy en hardware real (Slim CECH-3011A, HFW 4.91 + HEN; sin CFW posible):
@@ -18,7 +172,8 @@ Siguiente (trabajos lanzados al cerrar; una prueba en la PS3 a la vez):
 - [ ] Fase 2: RSP gráfico (F3DEX2) en SPE 0 + RDP mínimo en el RSX sobre
       `lib/rsxkit`, con la infraestructura de trabajos SPE.
 - [ ] Fase 3: recompilador MIPS → PPC64 en el PPE.
-- [ ] Controles (SI/PIF + DualShock 3) y detección de bucles de espera.
+- [x] Controles (SI/PIF + DualShock 3) y detección de bucles de espera
+      (entrada de arriba).
 - [ ] Después de la Fase 2: audio HLE en SPE 1 sobre la misma infraestructura.
 
 ## 2026-10-10 — Fase 1: un homebrew muestra imagen (criterio cumplido)
@@ -62,11 +217,10 @@ Notas:
   siguiente).
 
 Siguiente (Fase 1):
-- [ ] Volver a medir el frontend con vitest con el intérprete optimizado.
-- [ ] Detección de bucles de espera (vitest y los juegos esperan al VI en
-      un bucle): saltar hasta el siguiente evento ahorraría casi todo el
-      campo en escenas ligeras.
-- [ ] SI: comandos del PIF (controles) para mapear el DualShock 3.
+- [x] Volver a medir el frontend con vitest con el intérprete optimizado:
+      15,2 campos/s, 23,8 MIPS (sin detección de bucles de espera).
+- [x] Detección de bucles de espera: ×1,9 con vitest (entrada de arriba).
+- [x] SI: comandos del PIF (controles) y mapeo del DualShock 3.
 - [ ] Repartir emulación y presentación entre los dos hilos del PPE.
 - [ ] Origen del VI: verificar contra ares si libultra deja VI_ORIGIN una
       línea después del inicio del framebuffer (aquí se toma como la
@@ -157,7 +311,7 @@ Siguiente (Fase 1):
 - [x] VI con contador de líneas e interrupción; framebuffer 2D en el RSX
       (primera pieza de `lib/rsxkit/`): ver la entrada de arriba.
 - [ ] Bus PI: latch de escrituras al cartucho y DMA no alineado (81 pruebas
-      de nemu64-test); SRAM/FlashRAM.
+      de nemu64-test); FlashRAM (la SRAM ya está).
 - [ ] Cachés del VR4300 (46 pruebas) y ciclos por instrucción (conjuntos
       "timing" y "cycle" de nemu64-test).
 - [ ] CPUTest de krom ensamblado desde fuente con bootcode en ceros (traer

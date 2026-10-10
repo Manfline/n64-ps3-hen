@@ -12,6 +12,10 @@
  *   - El tiempo es `cycles` (PClock, 93,75 MHz). Count avanza a la mitad.
  *     Por ahora cada instrucción cuesta 1 ciclo; el costo real (caché,
  *     multiplicaciones, divisiones) se calibra más adelante.
+ *   - Bucles de espera (idle.c): un salto corto hacia atrás cuyo cuerpo no
+ *     cambia nada (solo lee la RDRAM y registros) se salta en vueltas
+ *     enteras hasta el próximo evento del planificador. El resultado es el
+ *     mismo, ciclo a ciclo, que ejecutarlo; `idle_cycles` cuenta lo saltado.
  *
  * Alcance de la Fase 1:
  *   - Direccionamiento de 32 y de 64 bits (KX, SX, UX): xkuseg, xksseg,
@@ -59,6 +63,7 @@ struct salsa64_sched;
 #define SALSA64_PRID_VALUE   0x00000B22u
 #define SALSA64_FCR0_VALUE   0x00000A00u
 #define SALSA64_TLB_ENTRIES  32
+#define SALSA64_IDLE_CACHE   64   /* saltos descartados como bucle de espera (potencia de 2) */
 
 enum salsa64_exc {
 	SALSA64_EXC_INT  = 0,
@@ -191,6 +196,13 @@ struct salsa64_cpu {
 	/* Depuración: si no es NULL, se llama al tomar cada excepción (con
 	 * Cause, EPC y el vector ya escritos). */
 	void (*exc_hook)(struct salsa64_cpu *cpu);
+
+	/* Bucles de espera (idle.c). Las tablas guardan pc ^ instrucción del
+	 * salto: descartados para siempre y con un primer fallo. */
+	uint64_t idle_cycles;    /* ciclos saltados desde el arranque */
+	uint8_t idle_off;        /* salsa64_cpu_set_idle(cpu, false) */
+	uint32_t idle_reject[SALSA64_IDLE_CACHE];
+	uint32_t idle_strike[SALSA64_IDLE_CACHE];
 };
 
 void salsa64_cpu_init(struct salsa64_cpu *cpu, struct salsa64_bus *bus,
@@ -204,6 +216,10 @@ void salsa64_cpu_step(struct salsa64_cpu *cpu);
 /* Ejecuta hasta que un evento ponga running = 0 (ver salsa64_n64_run). Con
  * cpu->rec, corre el recompilador (rec.h) en vez del intérprete. */
 void salsa64_cpu_run(struct salsa64_cpu *cpu);
+
+/* Activa o apaga el salto de bucles de espera (activo por omisión). Apagarlo
+ * da el mismo resultado, solo más lento: sirve para comparar y medir. */
+void salsa64_cpu_set_idle(struct salsa64_cpu *cpu, bool on);
 
 /* Línea de interrupción externa: 2 = RCP (MI), 7 = Count/Compare. */
 void salsa64_cpu_set_ip(struct salsa64_cpu *cpu, unsigned line, bool level);

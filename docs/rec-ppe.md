@@ -90,9 +90,18 @@ delay slot y cuenta un ciclo menos.
 | r31 | `struct salsa64_cpu` |
 | r3–r12, r0 | temporales |
 
-Al entrar se cargan los registros que el bloque lee antes de escribir; al
-salir se escriben los modificados. Los que no entran en los 12 van y vienen
-de `cpu->gpr` en cada uso.
+Al entrar se cargan los registros que el bloque lee antes de escribir. Cada
+registro modificado se escribe en `cpu->gpr` apenas recibe su último valor
+del bloque (no todos juntos a la salida): así el bloque siguiente no lo lee
+mientras el almacenamiento sigue en la cola (load-hit-store, decenas de
+ciclos en el PPE). Los que no entran en los 12 van y vienen de `cpu->gpr`
+en cada uso.
+
+Opción `SALSA64_REC_OPT_PIN` (apagada por omisión, en medición): sp, ra,
+v0, v1 y a0–a3 viven en r18–r25 todo el tiempo que corre código generado;
+la entrada los carga y la salida a C los escribe, y antes de cada llamada
+al intérprete se escriben los que la instrucción toca. Quedan 4 registros
+por bloque (r14–r17).
 
 ### Llamadas a C y salidas
 
@@ -107,12 +116,22 @@ Lo que se llama a C:
   RDRAM, código en la zona escrita);
 - instrucciones raras o con mucho estado, que ejecuta el intérprete
   (`salsa64_vr4300_exec_one`): LWL/LWR/SWL/SWR/LDL/LDR/SDL/SDR, LL/SC,
-  CACHE, traps, COP0 y **toda la aritmética de la FPU** (por ahora);
+  CACHE, traps, COP0, CFC1/CTC1, y de la FPU SQRT, conversiones y redondeos;
 - excepciones (SYSCALL, BREAK, desbordamiento).
 
 En nativo: ALU de 32 y 64 bits (con desbordamiento), desplazamientos,
 MULT/DIV y variantes de 64 bits, HI/LO, saltos, cargas y almacenamientos de
-enteros y de COP1, MFC1/MTC1/DMFC1/DMTC1, BC1T/F.
+enteros y de COP1, MFC1/MTC1/DMFC1/DMTC1, BC1T/F, y en S y D
+ADD/SUB/MUL/DIV, MOV, ABS, NEG y C.cond.
+
+La FPU nativa repite el camino rápido del intérprete (`fpu.h`): las mismas
+operaciones de doble precisión en el mismo orden (suma, redondeo a simple
+con `frsp`, TwoSum o fma para el inexacto), así que da los mismos bits y
+las mismas causas y banderas de FCR31. Lo que ese camino no cubre (redondeo
+dirigido, I habilitada, operandos fuera de la franja segura, NaN,
+desnormales, sumas en S con exponentes a más de 28) salta a la sección fría
+y lo hace el intérprete. La prueba `executed_matches_full` ejecuta 6000
+instrucciones aleatorias por el CPU contra el camino completo.
 
 ### Memoria
 
@@ -120,6 +139,21 @@ Camino rápido: `va >> log2(rdram)` vale lo mismo para KSEG0 y KSEG1 tras un
 `ori`; junto con los bits de alineación da una sola comparación. Los
 almacenamientos además miran `code_flags[pa >> 7]`: si hay código
 recompilado en esos 128 bytes, van por C, que invalida.
+
+### Bucles de espera
+
+El intérprete salta vueltas enteras de los bucles de espera (`idle.c`,
+consultado en cada salto corto hacia atrás). El código generado hace la
+misma consulta: un salto que el intérprete consultaría (condicional, de
+enlace, BC1 o J, tomado hacia atrás a menos de 8 instrucciones) y que no
+esté en la tabla de descartados sale a C en el camino tomado, antes del
+delay slot y con el mismo estado (registros en memoria, cycles con el salto
+contado). El despachador llama a `salsa64_vr4300_idle` igual que el
+intérprete; si la tabla lo descarta, invalida el bloque y se recompila sin
+la consulta. Así los ciclos saltados y las tablas quedan idénticos a los del
+intérprete (las pruebas de `test_idle.c` pasan en los dos), y un bucle de
+espera de verdad cuesta una salida a C por evento. Cambiar la detección
+(`salsa64_cpu_set_idle`) vacía la caché.
 
 ### Invalidación
 
@@ -194,5 +228,8 @@ compiler error: Segmentation fault"; repetir compila bien
 | 2026-10-10 | nemu64-test, `--rec` | qemu-ppc64 | 462 fallas, las mismas de la línea base; 1,0 % interpretado |
 | 2026-10-10 | nemu64-test, `--lockstep` | qemu-ppc64 | sin diferencias en 28,5 M bloques |
 | 2026-10-10 | vitest, `--rec` | qemu-ppc64 | `vitest: OK` |
+| 2026-10-10 | Unitarias, recompilador estricto | **PS3 real** (CECH-3011A, HEN), f7b655d | 163/163; caché NOBITS, llamadas con `bl` |
+| 2026-10-10 | nemu64-test, intérprete contra recompilador | **PS3 real**, f7b655d | mismas 462 fallas, mismo hash y mismo ciclo; 7,9 s → 1,8 s (**×4,36**, 104 MIPS) |
+| 2026-10-10 | `bench` mixto | **PS3 real**, f7b655d | 21,3 → 156,6 MIPS (×7,4) |
 
-Rendimiento: solo en la PS3 real (docs/perf-log.md).
+Rendimiento: solo en la PS3 real (docs/perf-log.md, «Recompilador»).

@@ -98,6 +98,7 @@ struct salsa64_rec {
 	uint64_t enter_opd[3];   /* descriptor ELFv1 de la entrada al código generado */
 	uint32_t exit_link, exit_mid, exit_jump;  /* rutinas de salida (palabra en la caché) */
 	uint32_t exit_jr;        /* JR/JALR: busca el bloque destino y salta, o sale como exit_jump */
+	uint32_t exit_idle;      /* salto que el intérprete consultaría como bucle de espera */
 
 	/* Direcciones de entrada de las funciones de C que llama el código. */
 	uint64_t h_load, h_store, h_exec, h_exception;
@@ -165,6 +166,7 @@ enum {
 	SALSA64_REC_EXIT_LINK = 1,  /* a una dirección fija; cpu->rec_site es el enlace a parchear */
 	SALSA64_REC_EXIT_MID = 2,   /* a mitad de bloque (evento, interrupción, código invalidado) */
 	SALSA64_REC_EXIT_JUMP = 3,  /* a un destino calculado (JR/JALR) o sin enlace */
+	SALSA64_REC_EXIT_IDLE = 4,  /* r3 = pc de un salto tomado, antes de su delay slot (idle.c) */
 };
 
 /* Tipos de acceso del camino lento (salsa64_rec_h_load/h_store). */

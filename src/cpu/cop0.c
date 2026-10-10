@@ -527,6 +527,7 @@ void salsa64_cpu_reset(struct salsa64_cpu *cpu)
 
 	cpu->compare = 0;
 	cpu->count_offset = 0u - (uint32_t)(cpu->cycles >> 1);
+	salsa64_cpu_set_idle(cpu, !cpu->idle_off);  /* vacía las tablas de bucles de espera */
 	salsa64_vr4300_update_status(cpu);
 	schedule_compare(cpu);
 	salsa64_cpu_set_pc(cpu, 0xFFFFFFFFBFC00000ull);

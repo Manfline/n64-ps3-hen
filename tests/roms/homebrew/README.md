@@ -14,8 +14,11 @@ reproducible y sin código de Nintendo. Procedencia y licencias en
 | `salsa64-vitest.z64` | ROM propia de prueba del VI (fuente en `tests/roms/src/vitest`, GPLv2+): barras de color, rampa y un cuadro animado en RGBA5551 y RGBA8888, con autoverificación de la temporización. La genera `tools/build-vitest.sh`. |
 | `salsa64-vitest.z64.sha256` | SHA-256 del ROM; recompilarlo desde cero da el mismo valor. |
 | `salsa64-vitest.buildinfo` | Versiones de clang, lld y nust64 con que se compiló. |
+| `salsa64-savetest-eeprom4k.z64`, `-eeprom16k.z64`, `-sram.z64` | ROM propia de prueba del guardado del cartucho (fuente en `tests/roms/src/savetest`, GPLv2+), en tres variantes que solo difieren en el título y en el tipo de guardado de la cabecera de homebrew. Escribe un patrón, lo relee y en el arranque siguiente comprueba que persistió. Las genera `tools/build-savetest.sh`. |
+| `salsa64-savetest-*.z64.sha256` | SHA-256 de cada variante; recompilarlas desde cero da los mismos valores. |
+| `salsa64-savetest.buildinfo` | Versiones de clang, lld y nust64 con que se compiló. |
 
-Los dos ROMs llevan el IPL3 libre de libdragon r7 (Unlicense) que trae nust64 0.4.1;
+Todos los ROMs llevan el IPL3 libre de libdragon r7 (Unlicense) que trae nust64 0.4.1;
 el contenedor comprueba su MD5 (`7f014ed41cc53bb1a5e44f211f8c3dec`, el que
 publica libdragon para r7) antes de usarlo.
 

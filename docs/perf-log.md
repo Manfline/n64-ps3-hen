@@ -8,6 +8,10 @@ antes, después, notas.
 |---|---|---|---|---|---|---|
 | 2026-10-10 | 419731a → c14268c | Intérprete, `bench` mixto | PS3 real: Slim CECH-3011A, HFW 4.91 + HEN | 8,7 MIPS | 17,1 MIPS (×2,0) | Estado del bucle en registros, sin llamadas por instrucción, r0 sin escribir, tablas de `switch` sin `lwax`, FPU rápida sin pasar valores por memoria. Desglose en «Líneas base de la Fase 1» |
 | 2026-10-10 | c14268c → 147d5ac | Intérprete, `bench` mixto | PS3 real (mismo equipo) | 17,1 MIPS | 21,2 MIPS (×1,24; ×2,4 desde 8,7) | Un solo despacho (SPECIAL en la misma tabla), FPU rápida sin comparaciones de punto flotante para clasificar, movimientos de COP1 en el bucle |
+| 2026-10-10 | 940f6f8 | Frontend con vitest, emulación por campo | PS3 real (mismo equipo) | 65,6 ms (15,2 campos/s) | 35,0 ms (28,3 campos/s; ×1,9) | Detección de bucles de espera (`src/cpu/idle.c`): 45,6 % del tiempo saltado. Medición A/B automática del frontend, 10 s cada una, dos corridas iguales (65,56/65,66 → 34,97/34,84 ms). Lo que queda es el dibujo de vitest con el CPU |
+| 2026-10-10 | 147d5ac → 940f6f8 | Intérprete, `bench` mixto | PS3 real (mismo equipo) | 21,2 MIPS | 21,0 MIPS (−1 %) | Costo del chequeo de bucle de espera en cada salto tomado. Ver «Bucles de espera» abajo |
+| 2026-10-10 | f7b655d | **Recompilador** (Fase 3), nemu64-test completo | PS3 real (mismo equipo) | intérprete: 7921 ms (23,9 MIPS) | **1817 ms (104,2 MIPS; ×4,36)** | Mismas 462 fallas, mismo hash de nombres y mismo ciclo final (189 431 098). 28 694 bloques, 9,2 MB de caché, 139 440 entradas desde C. Código real: llamadas, retornos, FPU, E/S. Ver «Recompilador» abajo |
+| 2026-10-10 | f7b655d | **Recompilador**, `bench` mixto | PS3 real (mismo equipo) | intérprete: 21,3 MIPS | **156,6 MIPS (×7,4)** | Bucle de 10 instrucciones con ADD.S nativa; ver desglose abajo |
 
 ## Líneas base de la Fase 0 (pendientes de PS3 real)
 
@@ -120,6 +124,87 @@ enteros y espera activa a la interrupción del VI, sin FPU):
 |---|---|---|---|---|
 | 2026-10-10 | d27735e | RPCS3 0.0.43, PPU LLVM | 24,0 campos/s, 37,7 MIPS | **No concluyente** |
 | 2026-10-10 | d27735e | **PS3 real**: Slim CECH-3011A, HFW 4.91 + HEN | **8,7 campos/s (14 % de NTSC), 13,6 MIPS** | Emulación 114,6 ms por campo, presentación (subida de textura + dibujo en rsxkit) 0,3 ms. 13,6 MIPS sin FPU contra 8,8 del bench con un ADD.S cada 10 instrucciones, medido antes del perfilado (el costo de la FPU era el paso de valores por la pila, no el FPSCR) |
+| 2026-10-10 | 940f6f8, sin detección | **PS3 real** (mismo equipo) | **15,2 campos/s (25 % de NTSC), 23,8 MIPS** | Intérprete optimizado (147d5ac) sin saltar bucles de espera: emulación 65,6 ms por campo. ×1,75 frente a d27735e |
+| 2026-10-10 | 940f6f8, con detección | **PS3 real** (mismo equipo) | **28,3 campos/s (47 % de NTSC), 24,1 MIPS** | Emulación 35,0 ms por campo; 45,6 % del tiempo de la consola se saltó en el bucle de espera al VI. El tope de 60 campos/s lo pone el flip en vsync de rsxkit |
+
+### Bucles de espera (2026-10-10)
+
+Medición A/B en la misma corrida (`salsa64.pkg` de 940f6f8): tras
+verificarse con vitest, el frontend corre 10 s sin detección y 10 s con
+ella. Dos corridas seguidas dieron lo mismo con 0,2 % de diferencia.
+
+| | Sin detección | Con detección |
+|---|---|---|
+| Emulación por campo | 65,6 ms | 35,0 ms (×1,9) |
+| Campos/s | 15,2 | 28,3 |
+| MIPS (instrucciones ejecutadas) | 23,8 | 24,1 |
+| Tiempo de la consola saltado | 0 % | 45,6 % |
+
+En el host (salsa64-run con ASan) vitest hasta su verificación: 1,70 →
+0,93 s. nemu64-test no espera nunca (0 % saltado, mismo tiempo).
+
+Costo en el intérprete (`salsa64-cpu-tests`, bench de 10 instrucciones con
+BNE tomado cada 10). El log anterior de cpu-tests en la consola repetía
+exactamente los números de 147d5ac, así que la variación entre corridas
+parece menor a 0,1 MIPS:
+
+| Variante | 147d5ac | 940f6f8 |
+|---|---|---|
+| mixto | 21,2 | 21,0 |
+| nop | 34,4 | 33,9 |
+| enteros | 25,6 | 25,3 |
+| memoria | 20,9 | 20,6 |
+| mov.s | 23,5 | 23,2 |
+| add.s | 14,0 | 14,0 |
+
+Unos 15 ciclos más por salto tomado (el BNE del bench salta 36 bytes
+atrás: solo hace la resta y la comparación, no consulta la tabla). Se
+revisó el código del PPU: **ppu-gcc no pone indicaciones estáticas en los
+saltos** (bits a/t de BO en 0 en los 337 saltos condicionales del bucle,
+igual que antes; los `+`/`-` de objdump siguen la convención antigua del
+bit «y» y no son predicciones del PPE). Así que no es una predicción
+estática equivocada; queda la cadena dependiente (destino → resta →
+comparación → salto) y el cambio de disposición del código. Posible
+mejora: decidir con el inmediato de la instrucción (desplazamiento entre
+−8 y −1), que no depende del destino calculado. Medir antes de adoptarla.
 
 Corrida completa de nemu64-test (`salsa64-run`, ≈189 M ciclos del VR4300):
 0,75 s en el host sin sanitizers (253 MIPS); 2,1 s con ASan + UBSan.
+
+## Recompilador (Fase 3)
+
+Primera corrida en la PS3 real (2026-10-10, Slim CECH-3011A, HFW 4.91 +
+HEN), paquete `salsa64-cpu-tests` de f7b655d (JR en línea y FPU nativa;
+sin la escritura temprana ni los registros fijos de 632a796). Caché en la
+cola NOBITS de 16 MB del segmento de texto, llamadas a C con `bl`.
+
+- Pruebas unitarias con el recompilador en modo estricto (cada `t_step`
+  ejecuta código generado): 163/163. El código generado corre, se
+  reescribe y se invalida en el hardware (dcbst/sync/icbi/isync).
+- nemu64-test completo, intérprete contra recompilador: mismas 462
+  fallas, mismo hash de nombres (`fdfdf160a2fe7ad8`), mismo ciclo final.
+
+| `bench` (`tests/unit/bench.c`) | Intérprete | Recompilador | Ciclos del PPE por instr. (rec) |
+|---|---|---|---|
+| mixto | 21,3 MIPS | 156,6 MIPS (×7,4) | 20 |
+| nop | 32,6 | 1547,0 (×47) | 2,1 |
+| enteros | 25,3 | 749,9 (×30) | 4,3 |
+| memoria (LW/SW) | 20,9 | 159,7 (×7,6) | 20 |
+| mov.s | 23,6 | 538,4 (×23) | 5,9 |
+| add.s (inexacto) | 13,9 | 35,7 (×2,6) | 90 |
+
+Los bucles del bench son bloques que vuelven sobre sí mismos sin escribir
+memoria ni salir a C: miden el mejor caso. "memoria" queda en ~20 ciclos
+por instrucción por el load-hit-store propio del bucle (LW de lo que el SW
+de la vuelta anterior acaba de escribir) y por la prueba de rango. ADD.S
+inexacto cuesta ~90 ciclos: la FPU hace la suma, el redondeo a simple y la
+comparación de punto flotante seguida de salto (espera toda la latencia),
+más la actualización condicional de FCR31.
+
+nemu64-test es la medición con código real: 104 MIPS. Con el modelo actual
+de un ciclo por instrucción, la velocidad completa pide hasta 93,75 MIPS
+emulados por segundo, menos lo que se salta en bucles de espera (casi la
+mitad del campo en escenas ligeras). Pendiente: medir con juegos (tabla de
+docs/proyecto.md) en el frontend, y con 632a796 (escritura temprana, registros
+fijos: cpu-tests mide nemu64-test con y sin ellos).
+

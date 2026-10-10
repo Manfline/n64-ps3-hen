@@ -116,6 +116,9 @@ static int run_suites(void (*print)(const char *line), struct salsa64_rec *rec, 
 		{ "cop1", t_suite_cop1 },
 		{ "boot", t_suite_boot },
 		{ "vi", t_suite_vi },
+		{ "pif", t_suite_pif },
+		{ "idle", t_suite_idle },
+		{ "save", t_suite_save },
 	};
 	char line[160];
 

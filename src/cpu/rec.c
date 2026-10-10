@@ -172,7 +172,7 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	w[n++] = ppc_mtctr(4);
 	w[n++] = PPC_BCTR;
 
-	uint32_t common = n + 10;
+	uint32_t common = n + 12;
 	rec->exit_link = n;
 	w[n++] = ppc_mflr(4);
 	w[n++] = ppc_addi(4, 4, -16);
@@ -186,6 +186,10 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	n++;
 	rec->exit_jump = n;
 	w[n++] = ppc_li(4, SALSA64_REC_EXIT_JUMP);
+	w[n] = ppc_b((int32_t)(common - n) * 4);
+	n++;
+	rec->exit_idle = n;
+	w[n++] = ppc_li(4, SALSA64_REC_EXIT_IDLE);
 	w[n] = ppc_b((int32_t)(common - n) * 4);
 	n++;
 	while (n < common)
@@ -420,6 +424,27 @@ static void rec_interp(struct salsa64_rec *rec, bool to_boundary)
 	rec->stats.interp_steps += k;
 }
 
+/* El código salió en un salto tomado hacia atrás y corto (EXIT_IDLE): lo
+ * mismo que hace el intérprete en idle_hint, con el mismo estado (registros
+ * en memoria, cycles con el salto contado, el delay slot por delante). */
+static void rec_idle_exit(struct salsa64_rec *rec, uint64_t bpc)
+{
+	struct salsa64_cpu *cpu = rec->cpu;
+	uint32_t pa = (uint32_t)bpc & 0x1FFFFFFF;
+	uint32_t i = salsa64_rd32(cpu->rdram + pa);
+	uint64_t target = I_OP(i) == 0x02 ? ((bpc + 4) & ~0x0FFFFFFFull) | (uint64_t)I_TARGET(i) << 2
+					  : bpc + 4 + (I_SIMM(i) << 2);
+	cpu->pc = bpc + 4;
+	cpu->next_pc = target;
+	cpu->branch = 1;
+	cpu->delay_slot = 0;
+	cpu->cur_pc = bpc;
+	salsa64_vr4300_idle(cpu, bpc, target, i);
+	cpu->redirect = 0;  /* si saltó tiempo: pc, next_pc, branch y cycles ya están */
+	if (cpu->idle_reject[(bpc >> 2) & (SALSA64_IDLE_CACHE - 1)] == ((uint32_t)bpc ^ i))
+		salsa64_rec_invalidate(rec, pa, 4);  /* recompilar sin la consulta */
+}
+
 static bool native_pc(const struct salsa64_rec *rec, uint64_t pc)
 {
 	/* KSEG0 (0xFFFFFFFF80000000–9FFFFFFF), alineada y dentro de la RDRAM. */
@@ -494,6 +519,8 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 			/* Excepción o ERET: pc, next_pc y branch ya están puestos. */
 			cpu->redirect = 0;
 			to_boundary = cpu->exc_count == exc && !rec->strict;
+		} else if (cpu->rec_kind == SALSA64_REC_EXIT_IDLE) {
+			rec_idle_exit(rec, next);  /* deja el delay slot pendiente: lo corre el intérprete */
 		} else {
 			cpu->pc = next;
 			cpu->next_pc = next + 4;

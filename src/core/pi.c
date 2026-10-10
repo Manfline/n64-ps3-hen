@@ -2,12 +2,14 @@
  * Salsa64 — Peripheral Interface (PI): DMA entre el cartucho y la RDRAM.
  *
  * Primer hito: el DMA cartucho → RDRAM (PI_WR_LEN) se completa al instante y
- * levanta la interrupción del PI. Faltan las latencias del bus (dominios 1 y
- * 2), el DMA RDRAM → cartucho (SRAM, FlashRAM) y el estado "ocupado".
+ * levanta la interrupción del PI. La SRAM del cartucho (dominio 2) va en los
+ * dos sentidos por save.c. Faltan las latencias del bus (dominios 1 y 2), la
+ * FlashRAM y el estado "ocupado".
  */
 #include <string.h>
 
 #include "core/bus.h"
+#include "core/save.h"
 
 static void pi_dma_to_rdram(struct salsa64_bus *bus, uint32_t len)
 {
@@ -66,13 +68,15 @@ void salsa64_pi_write(struct salsa64_bus *bus, uint32_t reg, uint32_t v)
 		bus->pi[i] = v & 0xFFFFFFFE;
 		return;
 	case SALSA64_PI_RD_LEN:
-		/* RDRAM → cartucho: SRAM/FlashRAM llegarán después. */
+		/* RDRAM → cartucho: solo la SRAM; la FlashRAM llegará después. */
 		bus->pi[i] = v & 0x00FFFFFF;
-		salsa64_mi_raise(bus, SALSA64_IRQ_PI);
+		if (!salsa64_save_pi_dma(bus, false))
+			salsa64_mi_raise(bus, SALSA64_IRQ_PI);
 		return;
 	case SALSA64_PI_WR_LEN:
 		bus->pi[i] = v & 0x00FFFFFF;
-		pi_dma_to_rdram(bus, (v & 0x00FFFFFF) + 1);
+		if (!salsa64_save_pi_dma(bus, true))
+			pi_dma_to_rdram(bus, (v & 0x00FFFFFF) + 1);
 		return;
 	case SALSA64_PI_STATUS:
 		if (v & 0x2)

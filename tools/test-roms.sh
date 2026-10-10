@@ -1,7 +1,9 @@
 #!/bin/sh
 # Pruebas con ROMs homebrew en el host: compila salsa64-run (gcc nativo, ASan +
-# UBSan) y corre nemu64-test hasta su resumen por ISViewer, y vitest (ROM
-# propia del VI, tests/roms/src/vitest) hasta que se verifica a sí misma.
+# UBSan) y corre nemu64-test hasta su resumen por ISViewer, vitest (ROM
+# propia del VI, tests/roms/src/vitest) hasta que se verifica a sí misma, y
+# savetest (ROM propia del guardado, tests/roms/src/savetest) dos veces por
+# tipo de guardado.
 #
 # La lista de pruebas de nemu64-test que fallan se compara con la línea base
 # tests/roms/nemu64-test.fallas (lo que falta emular: RSP, cachés, bus PI…).
@@ -59,12 +61,47 @@ if [ -n "$gone" ]; then
 fi
 
 # vitest: temporización e interrupción del VI vistas desde la ROM; la imagen
-# del último campo queda en build/vitest.ppm.
+# del último campo queda en build/vitest.ppm. También identifica los
+# controles por el SI (salsa64-run deja uno conectado en el puerto 1) y lee
+# el control 1 en cada cuadro.
 VLOG=build/logs/vitest.run.log
 tools/build.sh --sh "ASAN_OPTIONS=detect_leaks=0 build/host/salsa64-run -c 400000000 \
 	-u 'vitest: OK' -f 'vitest: FALLO' --frame build/vitest.ppm \
 	tests/roms/homebrew/salsa64-vitest.z64 2>&1" >"$VLOG" 2>&1
 vrc=$?
-printf '%-12s %s\n' vitest "$(grep 'vitest:' "$VLOG" | tail -1)"
+printf '%-12s %s\n' vitest "$(grep 'vitest: OK\|vitest: FALLO' "$VLOG" | tail -1)"
+grep '^salsa64-run:.*ciclos' "$VLOG" | tail -1 | sed 's/^/             /'
 [ $vrc -eq 0 ] || { echo "             falló (código $vrc, $VLOG)"; fail=1; }
+pads='vitest: controles: 1=0x0500/0x02 2=no 3=no 4=no'
+pad1='vitest: control 1: botones 0x0000 x 0 y 0'
+if grep -q "^$pads\$" "$VLOG" && grep -q "^$pad1\$" "$VLOG"; then
+	printf '%-12s %s\n' controles "$pads; $pad1"
+else
+	printf '%-12s %s\n' controles "FALLO: se esperaba \"$pads\" y \"$pad1\" ($VLOG)"
+	fail=1
+fi
+
+# savetest: guardado del cartucho (EEPROM de 4 y 16 Kbit, SRAM de 256 Kbit;
+# tests/roms/src/savetest). Dos arranques por tipo con el mismo directorio
+# de guardado, vacío al empezar: el primero escribe y relee; el segundo
+# además comprueba que persistió lo del primero.
+SDIR=build/saves-test
+rm -rf "$SDIR"
+for t in eeprom4k eeprom16k sram; do
+	for n in 1 2; do
+		SLOG=build/logs/savetest-$t-$n.run.log
+		tools/build.sh --sh "ASAN_OPTIONS=detect_leaks=0 build/host/salsa64-run -c 400000000 \
+			-u 'savetest: OK' -f 'savetest: FALLO' --save-dir $SDIR \
+			tests/roms/homebrew/salsa64-savetest-$t.z64 2>&1" >"$SLOG" 2>&1
+		src=$?
+		line=$(grep 'savetest: ' "$SLOG" | tail -1)
+		printf '%-12s %s\n' savetest "${line:-sin resultado (código $src, $SLOG)}"
+		want="arranque $n ("
+		[ $n -eq 2 ] && want="arranque 2 (persistió el arranque 1;"
+		if [ $src -ne 0 ] || ! echo "$line" | grep -qF "$want"; then
+			echo "             falló: se esperaba \"$want\" (código $src, $SLOG)"
+			fail=1
+		fi
+	done
+done
 exit $fail
