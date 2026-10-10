@@ -61,8 +61,10 @@ de lv2); sirve solo para validar que el programa corre.
 | Fecha | Entorno | data | bss | seg0 | heap | sysmem64k | sysmem1m | mmapper | text | flush 64 KB |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 2026-10-10 | RPCS3 0.0.43, LLVM e intérprete dinámico (**no concluyente**) | CRASH ejec. | CRASH ejec. | CRASH ejec. | CRASH ejec. | CRASH ejec. | CRASH ejec. | CRASH ejec. | CRASH escritura | — |
-| — | PS3 Slim, HEN (pendiente) | | | | | | | | | |
-| — | PS3, CFW (pendiente) | | | | | | | | | |
+| 2026-10-10 | **PS3 Slim CECH-3011A, HFW 4.91 + HEN** | CRASH ejec. | CRASH ejec. | CRASH ejec. | CRASH ejec. | CRASH ejec. | CRASH ejec. | CRASH ejec. | **OK**: f(5)=22, reescrita=24 | 12,2 µs |
+
+CFW no se puede probar con la consola disponible: la CECH-3011A tiene firmware
+mínimo de fábrica ≥ 3.60 y solo admite HEN.
 
 En RPCS3 todos los mecanismos reservan memoria bien y todos caen al ejecutar,
 porque el emulador solo ejecuta código de los módulos cargados (ver
@@ -70,4 +72,22 @@ docs/rpcs3.md); eso no dice nada del hardware. Sí valida el programa: la
 máquina de estados completa el ciclo tras 8 caídas, y `.text` es de solo
 lectura.
 
-Conclusión: pendiente de la PS3 real.
+Conclusión (PS3 real, 2026-10-10): **el JIT en el PPE es viable con HEN**,
+pero solo dentro de `.text`. La zona de nops de `.text` (64 KB, paquete
+`.gnpdrm.pkg` hecho con `make_self_npdrm`) se puede escribir, ejecutar,
+reescribir y volver a ejecutar; limpiar 64 KB de caché cuesta 12,2 µs. Toda
+memoria de datos (estática, heap, `sysMemoryAllocate`, `sys_mmapper`) mata el
+proceso al ejecutar, incluso `seg0` en el mismo segmento de 256 MB que
+`.text`: el no-ejecutable se aplica por página, no por segmento.
+
+RPCS3 se equivoca en sentido contrario (ahí `.text` es de solo lectura), así
+que el JIT solo se puede probar en la PS3.
+
+Consecuencias para la Fase 3:
+- La caché del recompilador va en una región reservada dentro de `.text`.
+- Pendiente medir: tamaño máximo de esa región (16–32 MB de nops inflan el
+  EBOOT; probar si un segmento con memsz > filesz, rellenado con ceros por el
+  cargador, también es escribible y ejecutable) y si el permiso depende de
+  cómo se firma el SELF (`.pkg` contra `.gnpdrm.pkg`, `fself`).
+- CFW no hace falta para el JIT; la consola de pruebas no lo admite de todos
+  modos.

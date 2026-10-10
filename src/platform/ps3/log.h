@@ -2,7 +2,10 @@
  * Retro64 — logger para PS3.
  *
  * Cada línea va a la TTY (stdout: RPCS3 la muestra en su consola y en
- * TTY.log) y, si hay red, por UDP hacia la Mac (tools/udplog.py).
+ * TTY.log), a /dev_hdd0/retro64/<programa>.log (se lee por FTP cuando la red
+ * falla; fflush por línea, caro: revisar antes de usarlo en el bucle de
+ * emulación) y, si hay red, por UDP hacia la Mac (tools/udplog.py). Los
+ * fallos de netSendTo se cuentan y se reportan en retro64_log_shutdown().
  *
  * Destino UDP: broadcast 255.255.255.255:18194 por omisión. Para fijar una
  * IP, crear /dev_hdd0/retro64/log.cfg con "ip" o "ip:puerto".

@@ -4,12 +4,14 @@
 #include "platform/ps3/log.h"
 
 #include <arpa/inet.h>
+#include <errno.h>
 #include <net/net.h>
 #include <netinet/in.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/systime.h>
 
 static int log_sock = -1;
@@ -17,6 +19,8 @@ static struct sockaddr_in log_dest;
 static char log_tag[24] = "retro64";
 static u64 log_t0;
 static u32 log_seq;
+static FILE *log_file;
+static int log_send_fails, log_send_ret, log_send_errno;
 
 static void log_load_dest(void)
 {
@@ -48,8 +52,14 @@ void retro64_log_init(const char *program)
 	snprintf(log_tag, sizeof log_tag, "%s", program);
 	log_t0 = sysGetSystemTime();
 
-	if (netInitialize() < 0) {
-		retro64_log("red no disponible: solo TTY");
+	char path[64];
+	mkdir(RETRO64_DATA_DIR, 0777);
+	snprintf(path, sizeof path, RETRO64_DATA_DIR "/%s.log", log_tag);
+	log_file = fopen(path, "w");
+
+	int ret = netInitialize();
+	if (ret < 0) {
+		retro64_log("red no disponible (netInitialize = %d): solo TTY y archivo", ret);
 		return;
 	}
 
@@ -85,15 +95,31 @@ void retro64_log(const char *fmt, ...)
 
 	fputs(line, stdout);
 	fflush(stdout);
-	if (log_sock >= 0)
-		netSendTo(log_sock, line, len, 0, (const struct sockaddr *)&log_dest, sizeof log_dest);
+	if (log_file) {
+		fputs(line, log_file);
+		fflush(log_file);
+	}
+	if (log_sock >= 0) {
+		int ret = netSendTo(log_sock, line, len, 0, (const struct sockaddr *)&log_dest, sizeof log_dest);
+		if (ret < 0 && log_send_fails++ == 0) {
+			log_send_ret = ret;
+			log_send_errno = errno;
+		}
+	}
 }
 
 void retro64_log_shutdown(void)
 {
+	if (log_send_fails)
+		retro64_log("netSendTo falló %d veces (primero: %d, errno %d)",
+			    log_send_fails, log_send_ret, log_send_errno);
 	if (log_sock >= 0) {
 		netClose(log_sock);
 		log_sock = -1;
 		netDeinitialize();
+	}
+	if (log_file) {
+		fclose(log_file);
+		log_file = NULL;
 	}
 }

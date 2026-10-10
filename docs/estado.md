@@ -44,8 +44,10 @@ Fallas que quedan en nemu64-test (fuera del intérprete): RSP 294, bus PI
 del cartucho 81, cachés 46, SP (DMA y registros) 31, RDP y MI repeat 10.
 
 Siguiente (Fase 1):
-- [ ] Correr `retro64-cpu-tests` en la PS3 real: primer número de MIPS del
-      intérprete en el PPE (docs/perf-log.md).
+- [x] Correr `retro64-cpu-tests` en la PS3 real: 154/154 pasan, **8,8 MIPS**
+      (docs/perf-log.md).
+- [ ] Perfilar el intérprete en el PPE: 8,8 MIPS contra ~60 que pide la N64.
+      Sospecha: cambios de FPSCR (modo de redondeo) en cada instrucción de FPU.
 - [ ] VI con contador de líneas e interrupción; framebuffer 2D en el RSX
       (primera pieza de `lib/rsxkit/`, ver docs/proyecto.md).
 - [ ] Bus PI: latch de escrituras al cartucho y DMA no alineado (81 pruebas
@@ -108,9 +110,12 @@ Hecho:
 
 Falta para cerrar la Fase 0:
 - [x] Correr los 4 programas en RPCS3 y automatizarlo.
-- [ ] PS3 real: correr los 4 programas (rsx-triangle, spu-compute, udplog,
-      jit-ppe con HEN y, si se puede, CFW). Llenar docs/jit-ppe.md.
-- [ ] Decidir el plan de la Fase 3 según el resultado del JIT.
+- [x] PS3 real (2026-10-10, Slim CECH-3011A, HFW 4.91 + HEN; no admite CFW):
+      udplog, spu-compute, rsx-triangle y retro64-cpu-tests pasan; jit-ppe:
+      solo `.text` es escribible y ejecutable (docs/jit-ppe.md). Números en
+      docs/perf-log.md. El log también se escribe en /dev_hdd0/retro64/<prog>.log.
+- [x] Plan de la Fase 3: recompilador en el PPE con la caché en una región de
+      `.text`. Falta medir el tamaño máximo de esa región (docs/jit-ppe.md).
 - [ ] Antes: conectar la PS3 (está desconectada; revisar su estado). Datos a
       reunir: IP por cable, versión de firmware, apps de envío instaladas y si
       hay capturadora. Luego correr la Fase 0 y `retro64-cpu-tests` (primer
