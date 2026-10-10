@@ -15,6 +15,9 @@
  *   nivel_ms = 60                   colchón mínimo del anillo
  *   hle = spe | ppe | no            dónde corre la HLE de audio (spe)
  *   salida = si | no                abrir el puerto de audio (si)
+ *   tarea_us = N                    duración de una tarea de audio en
+ *                                   tiempo de la N64 (rsp.c: 85 µs); si el
+ *                                   SPE tarda más, el PPE lo espera
  *   volcado_s = 0                   diagnóstico: guardar los primeros N s
  *                                   que salen por el AI (hasta 30) en
  *                                   SALSA64_DATA_DIR/audio.wav. Con juegos

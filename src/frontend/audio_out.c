@@ -75,6 +75,7 @@ struct audio_cfg {
 	int hle;      /* HLE_* */
 	bool output;
 	uint32_t dump_s;
+	uint32_t task_us;  /* 0: la duración por omisión del núcleo */
 };
 
 static void read_cfg(struct audio_cfg *c)
@@ -85,6 +86,7 @@ static void read_cfg(struct audio_cfg *c)
 	c->hle = HLE_SPE;
 	c->output = true;
 	c->dump_s = 0;
+	c->task_us = 0;
 	FILE *f = fopen(CFG_PATH, "r");
 	if (!f)
 		return;
@@ -105,6 +107,8 @@ static void read_cfg(struct audio_cfg *c)
 			c->output = strcmp(val, "no") != 0;
 		else if (!strcmp(key, "volcado_s"))
 			sscanf(val, "%u", &c->dump_s);
+		else if (!strcmp(key, "tarea_us"))
+			sscanf(val, "%u", &c->task_us);
 	}
 	salsa64_log("audio: %s leído", CFG_PATH);
 }
@@ -260,9 +264,12 @@ int audio_out_init(struct salsa64_n64 *n64)
 			    dump.buf ? "" : ": sin memoria");
 	}
 	salsa64_ai_set_sink(&n64->bus, ai_push, &sync_out);
-	salsa64_log("audio: HLE en %s, política %s, colchón %u ms",
+	if (cfg.task_us)
+		n64->bus.rsp.audio_cycles = (uint32_t)(cfg.task_us * 93.75);
+	salsa64_log("audio: HLE en %s, política %s, colchón %u ms, tarea de %.0f µs de la N64",
 		    hle == HLE_SPE ? "el SPE" : hle == HLE_PPE ? "el PPE" : "ninguna parte (sin HLE)",
-		    cfg.policy == AUDIO_SILENCE ? "silencio" : "estirar", cfg.level_ms);
+		    cfg.policy == AUDIO_SILENCE ? "silencio" : "estirar", cfg.level_ms,
+		    n64->bus.rsp.audio_cycles / 93.75);
 	memset(&prev, 0, sizeof prev);
 	return cfg.output ? open_port() : -1;
 }
