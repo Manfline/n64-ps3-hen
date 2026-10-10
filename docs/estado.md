@@ -27,6 +27,55 @@ Hecho (rama `loving-spence-8951ae`, desde main bd8ac59):
   5,6; 0,5 de los 0,6 son la copia del VI) y 99 % en bucles de espera
   (antes 0 %); 1,2 MIPS ejecutados en vez de 93,7.
 
+## 2026-10-10 — Recompilador: conversiones de la FPU, LWL/LWR y MFC0 en nativo
+
+Hecho (rama `funny-lalande-371c7e`; diseño en docs/rec-ppe.md,
+cifras en docs/perf-log.md):
+- En nativo, con los mismos bits, causas y banderas de FCR31 que el
+  intérprete: SQRT, CVT.D.S/CVT.S.D, ROUND/TRUNC/CEIL/FLOOR a W y L,
+  CVT.W/CVT.L (redondeo al más cercano), CVT.S.W/CVT.D.W (en enteros, sin
+  pasar valores entre registros enteros y de punto flotante), CFC1/CTC1.
+  Lo que no da exacto (redondeo dirigido, I habilitada, operandos fuera de
+  la franja, NaN, desnormales) sigue en el intérprete.
+- LWL/LWR/LDL/LDR/SWL/SWR/SDL/SDR en nativo; los pares LWL+LWR y SWL+SWR
+  sobre los mismos 4 bytes, byte a byte (sin desplazamientos por registro ni
+  load-hit-store en copias).
+- MFC0/DMFC0 ya no terminan el bloque; Count desde r29 + k + 1.
+- Código nuevo en `src/cpu/rec_emit_ext.h` (lo incluye rec_emit.c); en lo
+  común, ganchos de una línea, para no chocar con el trabajo de TLB.
+- `rec->stats.exec_calls` (llamadas al intérprete desde el código) en
+  salsa64-run y cpu-tests; `SALSA64_REC_OPT_RARE_EXEC` repite lo de antes
+  con el mismo binario (cpu-tests la corre como variante).
+- Pruebas: `executed_conversions_match_full` (8000 instrucciones contra el
+  camino completo, más de 3000 en nativo), LWL/LWR y compañía en cada
+  desplazamiento contra un modelo byte a byte, pares en los dos órdenes,
+  registros fuera del PPE, caminos lentos (DMEM, fallo de TLB), código que
+  se reescribe; MFC0 de cada registro y Count dentro del bloque y en un
+  delay slot. 221/221 en el host y con el recompilador (plain, mtctr,
+  registros fijos, escritura temprana); nemu64-test con la línea base,
+  vitest OK, `--lockstep` sin diferencias en los dos. Prueba de mutación:
+  10 de 10 errores puestos a propósito detectados.
+- Host: llamadas al intérprete −18 % en nemu64-test y −97 % en vitest.
+- Con main traído (TLB y KSEG1, bd8ac59): 240/240 en arm64 y en ppc64 en
+  los cuatro modos, nemu64-test con la línea base (623 bloques fuera de
+  KSEG0), vitest OK, `--lockstep` sin diferencias en los dos.
+
+Siguiente:
+- [x] **PS3 real** (cpu-tests SLSA00077 «Salsa64 CPU FPU», e210aeb):
+      nemu64-test 1894 → 1816 ms (−4,1 %, ×4,47 del intérprete) con las
+      mismas fallas; bench cvt 4,2 → 40,7 MIPS, no alineadas 20,5 → 218,5,
+      mfc0 9,8 → 701, espera por Count 8,3 → 488 (salidas a C 2 M → 8).
+      Las 4 «fallas» del RESULTADO eran verificaciones de cobertura en la
+      variante `RARE_EXEC` (corregidas).
+- [ ] Lo que sigue yendo al intérprete: CVT.S/D.L, CACHE, MTC0/TLB/ERET;
+      MFC0 de Random.
+- [x] Bench del intérprete (21 → 14,7 MIPS tras la Fase 2): en el binario
+      de este trabajo da 21,1 MIPS en `t_n64` y en la máquina alineada; no se
+      reproduce y la hipótesis de la página de `sched->next` quedó
+      descartada (docs/perf-log.md). Depende de cómo queda el binario.
+- [ ] Medir en un juego (Zelda, SM64) cuánto pesan las conversiones y las
+      esperas por Count cuando la HLE gráfica deje de ser el cuello.
+
 ## 2026-10-10 — Fin de tarea del RSP por sondeo (sin bloquear al SPE)
 
 Hecho (rama `musing-mcclintock-6b5e2c`, commits a2ffd0f + mezcla
@@ -275,8 +324,9 @@ Siguiente:
       enteros con registros fijos: esperado ~750 MIPS, antes 128).
 - [ ] Más juegos de la tabla de docs/proyecto.md (SM64, MK64, SF64; GoldenEye y
       Perfect Dark usan TLB: ver la entrada de arriba).
-- [ ] Más en nativo: CVT/TRUNC/ROUND de la FPU, LWL/LWR/SWL/SWR, CACHE,
-      MFC0 sin salir del bloque. (Código por TLB y KSEG1: hecho.)
+- [x] Más en nativo: CVT/TRUNC/ROUND de la FPU, LWL/LWR/SWL/SWR, MFC0 sin
+      salir del bloque (entrada de arriba). Código por TLB y KSEG1: hecho.
+- [ ] CACHE.
 - [ ] Fase 2: el DMA del SP hacia la RDRAM tiene que llamar a
       `salsa64_bus_rdram_written`.
 ## 2026-10-10 — Fase 2 (parte gráfica): criterio cumplido en PS3 real
