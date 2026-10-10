@@ -63,5 +63,7 @@ del RSX: 0x00200000/0x00400000 (SPU escritura/lectura) y
   una textura. Antes de esperar una etiqueta hay que vaciar el búfer de
   comandos (`rsxFlushBuffer`), o la espera no termina.
 
-Verificado en RPCS3 0.0.43 (frontend con vitest: RGBA5551 y RGBA8888 se ven
-con el color exacto en la pantalla). Falta confirmarlo en la PS3 real.
+Verificado en RPCS3 0.0.43 y en la **PS3 real** (2026-10-10, CECH-3011A,
+HEN): el frontend con vitest lee la pantalla del RSX y RGBA5551 y RGBA8888
+salen con el color esperado a 1280×720. Subir la textura y dibujar cuesta
+0,2–0,4 ms por cuadro en el PPE.

@@ -33,5 +33,13 @@ KSEG0, 20 M instrucciones.
 | 2026-10-10 | (arranque HLE) | RPCS3 0.0.43, PPU LLVM | 29,0 MIPS | **No concluyente** |
 | 2026-10-10 | 81da001 | **PS3 real**: Slim CECH-3011A, HFW 4.91 + HEN, ppu-gcc -O2 -mcpu=cell | **8,8 MIPS** | Primer número real. 154/154 pruebas pasan en big-endian. Muy lejos de los ~60 MIPS que pide la N64 a velocidad completa: perfilar antes de seguir (sospecha: cambios de modo de redondeo/FPSCR en cada ADD.S, que serializan el PPE) |
 
+Frontend con vitest (`salsa64.pkg`, ROM propia: bucles de dibujo con
+enteros y espera activa a la interrupción del VI, sin FPU):
+
+| Fecha | Commit | Entorno | Resultado | Notas |
+|---|---|---|---|---|
+| 2026-10-10 | d27735e | RPCS3 0.0.43, PPU LLVM | 24,0 campos/s, 37,7 MIPS | **No concluyente** |
+| 2026-10-10 | d27735e | **PS3 real**: Slim CECH-3011A, HFW 4.91 + HEN | **8,7 campos/s (14 % de NTSC), 13,6 MIPS** | Emulación 114,6 ms por campo, presentación (subida de textura + dibujo en rsxkit) 0,3 ms. 13,6 MIPS sin FPU contra 8,8 del bench con un ADD.S cada 10 instrucciones: apoya la sospecha del FPSCR |
+
 Corrida completa de nemu64-test (`salsa64-run`, ≈189 M ciclos del VR4300):
 0,75 s en el host sin sanitizers (253 MIPS); 2,1 s con ASan + UBSan.
