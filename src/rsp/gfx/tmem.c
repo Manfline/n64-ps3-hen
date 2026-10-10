@@ -96,6 +96,8 @@ void gfx_load_block(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	uint32_t bytes = (texels * hb / 2 + 7) & ~7u;
 	if (bytes > 4096)
 		bytes = 4096;
+	g->res->loads++;
+	g->res->load_reads++;
 	const uint8_t *p = gfx_io_read(g, GFX_IO_TEX, src, bytes);
 	if (!p) {
 		g->res->dl_errors++;
@@ -137,9 +139,11 @@ void gfx_load_tile(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	uint32_t key = load_key(g, 0xF4, w0, w1);
 	if (row_bytes > 4096)
 		row_bytes = 4096;
+	g->res->loads++;
 
 	for (uint32_t r = 0; r < rows; r++) {
 		uint32_t src = g->timg_addr + (((y0 + r) * g->timg_width + x0) * hb) / 2;
+		g->res->load_reads++;
 		const uint8_t *p = gfx_io_read(g, GFX_IO_TEX, src, row_bytes);
 		if (!p) {
 			g->res->dl_errors++;
@@ -176,6 +180,8 @@ void gfx_load_tlut(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	if (count > 256)
 		count = 256;
 	uint32_t src = g->timg_addr + (ult * g->timg_width + uls) * 2;
+	g->res->loads++;
+	g->res->load_reads++;
 	const uint8_t *p = gfx_io_read(g, GFX_IO_TEX, src, count * 2);
 	if (!p) {
 		g->res->dl_errors++;

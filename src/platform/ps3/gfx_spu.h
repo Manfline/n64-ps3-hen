@@ -27,6 +27,9 @@ struct salsa64_gfx_spu {
 	uint32_t waits;
 	/* Etapas de la HLE (ticks del SPE, ver gfx_result). */
 	uint64_t t_vtx, t_state, t_tex, t_load;
+	/* Texturas decodificadas y reusadas, cargas a la TMEM y sus lecturas
+	 * de la RDRAM (gfx_result). */
+	uint64_t textures, tex_reused, loads, load_reads;
 };
 
 /* Arranca el trabajador (spukit_init ya llamado). Devuelve 0 o el error de

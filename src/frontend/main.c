@@ -42,6 +42,13 @@
  * en RPCS3 sin manos). Si SALSA64_DATA_DIR/gfxdump dice un número de campo,
  * en ese campo se vuelca la salida de la última tarea gráfica a
  * SALSA64_DATA_DIR/gfxdump.bin (salsa64-run --raster-dump la dibuja).
+ * Si SALSA64_DATA_DIR/capturas dice un número N, las capturas se toman cada
+ * N campos (campo-<campo>.ppm) y no por tiempo: la emulación es
+ * determinista, así que se pueden comparar entre compilaciones.
+ *
+ * Medición de la HLE gráfica: además de la estadística cada STATS_US, el
+ * log resume cada GFX_WIN_FIELDS campos ("gfx campos A–B"): mismas ventanas,
+ * mismas escenas en todas las corridas (para medir antes y después).
  *
  * Salir: START + SELECT, o "Salir del juego" desde el menú del sistema.
  * Lo que la ROM imprime por el ISViewer va al log.
@@ -83,6 +90,8 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define PADS_CFG_MAX 4096
 #define EMBED_PATH   SALSA64_DATA_DIR "/embedded"
 #define GFX_PPE_PATH SALSA64_DATA_DIR "/gfx_ppe"
+#define CAPS_PATH    SALSA64_DATA_DIR "/capturas"
+#define GFX_WIN_FIELDS 100
 #define ROM_MAX      (64u << 20)
 #define FB_MAX_W     640
 #define FB_MAX_H     576
@@ -112,6 +121,43 @@ static void sysutil_cb(u64 status, u64 param, void *user)
 }
 
 static struct salsa64_padmap padmap;
+
+/* Estadística de la HLE gráfica en el SPE por ventanas fijas de campos. */
+static struct {
+	uint32_t field0;
+	uint64_t t0;
+	struct salsa64_gfx_spu spu;
+	struct salsa64_rdp_stats rdp;
+} gwin;
+
+static void gfx_window(uint64_t now)
+{
+	uint32_t field = n64.bus.vi.fields;
+	if (field - gwin.field0 < GFX_WIN_FIELDS)
+		return;
+	struct salsa64_rdp_stats rs;
+	salsa64_rdp_get_stats(&rs);
+	const struct salsa64_gfx_spu *s = &gfx_spu, *s0 = &gwin.spu;
+	uint32_t tasks = s->tasks - s0->tasks;
+	if (tasks && now > gwin.t0) {
+		double k = 1e3 / spukit_tick_hz() / tasks;
+		salsa64_log("gfx campos %u–%u: %.1f campos/s, %u tareas; por tarea: %.0f dibujos, %.0f triángulos, "
+			    "%.1f texturas decodificadas (+%.1f reusadas), %.1f cargas a la TMEM (%.1f lecturas); SPE %.2f ms "
+			    "(vértices %.2f, estado %.2f, texturas %.2f, cargas %.2f), PPE esperando %.2f ms, traducción al "
+			    "RSX %.2f ms",
+			    gwin.field0, field - 1, (field - gwin.field0) * 1e6 / (now - gwin.t0), tasks,
+			    (double)(rs.draws - gwin.rdp.draws) / tasks, (double)(rs.triangles - gwin.rdp.triangles) / tasks,
+			    (double)(s->textures - s0->textures) / tasks, (double)(s->tex_reused - s0->tex_reused) / tasks,
+			    (double)(s->loads - s0->loads) / tasks, (double)(s->load_reads - s0->load_reads) / tasks,
+			    (s->spu_ticks - s0->spu_ticks) * k, (s->t_vtx - s0->t_vtx) * k, (s->t_state - s0->t_state) * k,
+			    (s->t_tex - s0->t_tex) * k, (s->t_load - s0->t_load) * k,
+			    (s->wait_us - s0->wait_us) / 1e3 / tasks, (rs.us_translate - gwin.rdp.us_translate) / 1e3 / tasks);
+	}
+	gwin.field0 = field;
+	gwin.t0 = now;
+	gwin.spu = *s;
+	gwin.rdp = rs;
+}
 
 /* Medición A/B con vitest: sin y con detección de bucles de espera. */
 static struct {
@@ -475,7 +521,7 @@ int main(void)
 	enum selftest_state result = SELFTEST_RUNNING;
 	uint64_t t_stats = sysGetSystemTime(), cyc_stats = n64.cpu.cycles, idle_stats = n64.cpu.idle_cycles;
 	uint64_t t_shot = t_stats;
-	uint32_t shots = 0, dump_field = 0;
+	uint32_t shots = 0, dump_field = 0, cap_every = 0;
 	{
 		FILE *df = fopen(SALSA64_DATA_DIR "/gfxdump", "r");
 		if (df) {
@@ -483,7 +529,14 @@ int main(void)
 				dump_field = 0;
 			fclose(df);
 		}
+		FILE *cf = fopen(CAPS_PATH, "r");
+		if (cf) {
+			if (fscanf(cf, "%u", &cap_every) != 1)
+				cap_every = 0;
+			fclose(cf);
+		}
 	}
+	gwin.t0 = t_stats;
 	uint64_t us_emu = 0, us_present = 0;
 	uint32_t fields_stats = 0, blank = 0, rsx_frames = 0;
 	struct salsa64_rdp_stats rdp0;
@@ -527,7 +580,14 @@ int main(void)
 				selftest_screen(&f, &r);
 			else
 				gfxtest_screen(&f, &r);
-		} else if (!selftest_on && !gfxtest_on && f.width &&
+		} else if (cap_every && !selftest_on && !gfxtest_on && f.width && n64.bus.vi.fields / cap_every != shots) {
+			char path[64];
+			snprintf(path, sizeof path, SALSA64_DATA_DIR "/campo-%u.ppm", n64.bus.vi.fields);
+			rsxkit_finish();
+			salsa64_screenshot(path, &f, &r);
+			salsa64_log("captura %s", path);
+			shots = n64.bus.vi.fields / cap_every;
+		} else if (!cap_every && !selftest_on && !gfxtest_on && f.width &&
 			   (autotest ? n64.bus.vi.fields / AUTO_SHOT_FIELDS != shots
 				     : t1 - t_shot >= SHOT_US)) {
 			char path[64];
@@ -567,6 +627,8 @@ int main(void)
 		} else {
 			bench_field(t2, t1 - t0);
 		}
+		if (gfx_on_spu)
+			gfx_window(t2);
 
 		uint64_t dt = t2 - t_stats;
 		if (dt >= STATS_US) {

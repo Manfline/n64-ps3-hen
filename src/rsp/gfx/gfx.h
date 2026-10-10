@@ -62,7 +62,9 @@ struct gfx_result {
 	 * en el host y el PPE, 0): total, vértices, estado de dibujo (combiner
 	 * y texturas), decodificación de texturas y cargas a la TMEM. */
 	uint32_t t_total, t_vtx, t_state, t_tex, t_load;
-	uint32_t reserved[7];
+	uint32_t loads;          /* cargas a la TMEM (LOADBLOCK, LOADTILE, LOADTLUT) */
+	uint32_t load_reads;     /* lecturas de la RDRAM para esas cargas */
+	uint32_t reserved[5];
 };
 
 #define GFX_RES_FULLSYNC     0x01u  /* G_RDPFULLSYNC: interrupción del DP */

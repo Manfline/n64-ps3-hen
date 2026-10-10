@@ -40,6 +40,10 @@ static uint32_t spu_finish(void *ctx)
 	s->t_state += s->res.t_state;
 	s->t_tex += s->res.t_tex;
 	s->t_load += s->res.t_load;
+	s->textures += s->res.textures;
+	s->tex_reused += s->res.tex_reused;
+	s->loads += s->res.loads;
+	s->load_reads += s->res.load_reads;
 	s->sink.done(s->sink.ctx, &s->job, &s->res);
 	return (s->res.flags & GFX_RES_FULLSYNC) ? SALSA64_GFX_FULLSYNC : 0;
 }
