@@ -1,7 +1,14 @@
 /*
- * Salsa64 — micro-benchmark del intérprete: un bucle con la mezcla típica
- * de un juego (cargas, almacenamientos, ALU, salto, FPU) corriendo desde
- * KSEG0 sobre la RDRAM. Da millones de instrucciones emuladas por segundo.
+ * Salsa64 — micro-benchmark del intérprete: bucles de 10 instrucciones
+ * corriendo desde KSEG0 sobre la RDRAM. Dan millones de instrucciones
+ * emuladas por segundo (MIPS) y nanosegundos por instrucción.
+ *
+ * "mixto" es la mezcla típica de un juego (cargas, almacenamientos, ALU,
+ * salto, FPU) y es la cifra que se compara entre versiones. Las demás
+ * variantes aíslan el costo de cada clase de instrucción: "nop" mide el
+ * bucle del intérprete (búsqueda, decodificación y despacho), y la
+ * diferencia de cada variante contra "nop" es lo que cuesta su clase.
+ * Todas llevan la misma cola ADDIU + BNE + delay slot.
  *
  * Solo vale como referencia en la PS3 real (docs/perf-log.md). Como guía:
  * el VR4300 corre a 93,75 MHz y un juego ejecuta del orden de 30–60 millones
@@ -11,38 +18,110 @@
 
 #include "test.h"
 
+#define LOOP_TAIL(delay) ADDIU(T5, T5, -1), BNE(T5, ZERO, -9), delay
+
+static const uint32_t loop_mixed[] = {
+	LW(T1, 0, T0),
+	ADDIU(T1, T1, 1),
+	SW(T1, 0, T0),
+	ADDU(T2, T2, T1),
+	SLL(T3, T2, 3),
+	XOR(T4, T3, T2),
+	ADD_F(F_S, 0, 0, 1),
+	LOOP_TAIL(NOP),
+};
+
+static const uint32_t loop_nop[] = {
+	NOP, NOP, NOP, NOP, NOP, NOP, NOP,
+	LOOP_TAIL(NOP),
+};
+
+static const uint32_t loop_int[] = {
+	ADDU(T2, T2, T1),
+	SLL(T3, T2, 3),
+	XOR(T4, T3, T2),
+	OR(T6, T4, T1),
+	SUBU(T7, T6, T2),
+	SRL(T8, T7, 2),
+	AND(T9, T8, T4),
+	LOOP_TAIL(NOP),
+};
+
+static const uint32_t loop_mem[] = {
+	LW(T1, 0, T0),
+	SW(T1, 4, T0),
+	LW(T2, 8, T0),
+	SW(T2, 12, T0),
+	LW(T3, 16, T0),
+	SW(T3, 20, T0),
+	LW(T4, 24, T0),
+	LOOP_TAIL(SW(T4, 28, T0)),
+};
+
+/* MOV.S: pasa por la decodificación de COP1 sin aritmética. */
+static const uint32_t loop_fmov[] = {
+	MOV_F(F_S, 2, 0), MOV_F(F_S, 3, 1), MOV_F(F_S, 4, 0), MOV_F(F_S, 5, 1),
+	MOV_F(F_S, 6, 0), MOV_F(F_S, 7, 1), MOV_F(F_S, 8, 0),
+	LOOP_TAIL(NOP),
+};
+
+/* ADD.S con resultado inexacto (1,5 + 0,1): el camino completo de redondeo. */
+static const uint32_t loop_fadd[] = {
+	ADD_F(F_S, 2, 0, 1), ADD_F(F_S, 3, 0, 1), ADD_F(F_S, 4, 0, 1), ADD_F(F_S, 5, 0, 1),
+	ADD_F(F_S, 6, 0, 1), ADD_F(F_S, 7, 0, 1), ADD_F(F_S, 8, 0, 1),
+	LOOP_TAIL(NOP),
+};
+
+struct bench_case {
+	const char *name;
+	const uint32_t *code;
+	unsigned n;
+	uint64_t instructions;
+	float f0, f1;
+};
+
+#define CASE(name, loop, m, f0, f1) { name, loop, sizeof loop / sizeof loop[0], (m) * 1000000ull, f0, f1 }
+
+static const struct bench_case cases[] = {
+	CASE("mixto", loop_mixed, 20, 0, 1.0f),  /* igual que la línea base: comparable */
+	CASE("nop", loop_nop, 10, 0, 0),
+	CASE("enteros", loop_int, 10, 0, 0),
+	CASE("memoria", loop_mem, 10, 0, 0),
+	CASE("mov.s", loop_fmov, 10, 1.5f, 0.1f),
+	CASE("add.s", loop_fadd, 10, 1.5f, 0.1f),
+};
+
 void salsa64_unit_bench(void (*print)(const char *line), uint64_t (*now_us)(void))
 {
-	static const uint32_t loop[] = {
-		LW(T1, 0, T0),
-		ADDIU(T1, T1, 1),
-		SW(T1, 0, T0),
-		ADDU(T2, T2, T1),
-		SLL(T3, T2, 3),
-		XOR(T4, T3, T2),
-		ADD_F(F_S, 0, 0, 1),
-		ADDIU(T5, T5, -1),
-		BNE(T5, ZERO, -9),
-		NOP,
-	};
-	const uint64_t cycles = 20000000;  /* 1 instrucción = 1 ciclo por ahora */
-	char line[128];
+	char line[160];
 
-	salsa64_n64_reset(&t_n64);
-	t_set_status(T_STATUS);
-	t_load(loop, sizeof loop / sizeof loop[0]);
-	salsa64_cpu_set_pc(CPU, T_CODE);
-	R[T0] = T_DATA;
-	R[T5] = 0x7FFFFFFF;
-	CPU->fpr[1] = t_fbits(1.0f);
+	for (unsigned k = 0; k < sizeof cases / sizeof cases[0]; k++) {
+		const struct bench_case *c = &cases[k];
 
-	uint64_t t0 = now_us();
-	salsa64_n64_run(&t_n64, cycles);
-	uint64_t us = now_us() - t0;
+		salsa64_n64_reset(&t_n64);
+		t_set_status(T_STATUS);
+		t_load(c->code, c->n);
+		salsa64_cpu_set_pc(CPU, T_CODE);
+		R[T0] = T_DATA;
+		R[T1] = 0x12345;
+		R[T5] = 0x7FFFFFFF;
+		CPU->fpr[0] = t_fbits(c->f0);
+		CPU->fpr[1] = t_fbits(c->f1);
 
-	snprintf(line, sizeof line, "bench: %llu instrucciones en %llu ms = %llu.%01llu MIPS",
-		 (unsigned long long)cycles, (unsigned long long)(us / 1000),
-		 (unsigned long long)(us ? cycles / us : 0),
-		 (unsigned long long)(us ? cycles * 10 / us % 10 : 0));
-	print(line);
+		uint64_t t0 = now_us();
+		salsa64_n64_run(&t_n64, c->instructions);  /* 1 instrucción = 1 ciclo por ahora */
+		uint64_t us = now_us() - t0;
+		if (!us)
+			us = 1;
+
+		snprintf(line, sizeof line,
+			 "bench: %-8s %3llu M instr. en %6llu ms = %4llu.%01llu MIPS, %5llu.%01llu ns/instr.",
+			 c->name, (unsigned long long)(c->instructions / 1000000),
+			 (unsigned long long)(us / 1000),
+			 (unsigned long long)(c->instructions / us),
+			 (unsigned long long)(c->instructions * 10 / us % 10),
+			 (unsigned long long)(us * 1000 / c->instructions),
+			 (unsigned long long)(us * 10000 / c->instructions % 10));
+		print(line);
+	}
 }
