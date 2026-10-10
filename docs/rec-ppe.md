@@ -205,9 +205,12 @@ dar a cada bloque la clave (vpc, física) y verificar la traducción al
 entrar. Se eligió la segunda: los juegos que paginan con la TLB la
 reescriben en cada falla (refill), y con la primera cada TLBWR mataría los
 bloques de la página que sale y habría que recompilarlos cuando vuelve.
-Perfect Dark pagina su código (con 4 MB lo descomprime por páginas); de
-GoldenEye se recuerda que mapea 0x7F000000 directo a la ROM (no
-verificado): se admiten las dos fuentes.
+Visto en la emulación (2026-10-10): GoldenEye pagina su código bajo
+demanda (fallos de TLB al hacer fetch en 0x7F0xxxxx, páginas de 4 KB que
+trae a la RDRAM, ~0x300000–0x3A0000; 21 entradas en uso) y Perfect Dark
+mapea 0x70000000 con una entrada de páginas de 4 MB y su segmento en
+0x7F000000 con 15 entradas de 128 KB. Los dos ejecutan desde la RDRAM; el
+código en la ROM se admite igual (KSEG1 o un mapeo a la ROM).
 
 - **Clave:** los bloques de KSEG0 siguen en `map[]` (por física) sin
   cambios. Los demás van en `rec->x.xhash` (16 384 cabezas, por vpc)

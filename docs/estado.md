@@ -52,8 +52,25 @@ Siguiente:
     intérprete solo también (pc 0x700017f4 a los 21 s, sin tareas del RSP
     ni excepciones). No es del recompilador: falta ver el arranque (CIC
     6105) o algún registro del hardware.
-- [ ] Perfect Dark: por qué se queda en 0x700017f4 desde el arranque
-      (también con el intérprete).
+- Diagnóstico (arnés en la Mac, con el intérprete; lockstep de 10,7 s de
+  consola sin diferencias en los dos juegos):
+  - GoldenEye llega a su hilo ocioso (`b .` en 0x7000071c) y se queda: su
+    única tarea gráfica (ucode en 0x20e60) no la reconoce la HLE, y la
+    tarea nunca termina para el juego (sin DP), así que no vuelve a
+    dibujar; el VI muestra RDRAM sin inicializar (el ruido). Pagina su
+    código por fallos de TLB (110 en 10 s). Además el `b .` mapeado no lo
+    salta idle.c (solo KSEG0/KSEG1): 0 % en bucles de espera.
+  - Perfect Dark (CIC 6105) compara la palabra en 0xA00002E8 con
+    0xC86E2000 y, si no coincide, se queda en `b .` (0x700017f0). Ningún
+    código del juego la escribe: la deja el arranque del 6105 y nuestro
+    arranque HLE no. Escribiéndola a mano (experimento, no en el repo)
+    pasa, monta 0x7F000000 en la TLB y llega a su hilo ocioso.
+- [ ] Arranque HLE del CIC 6105 (`src/core/boot.c`): lo que el IPL3 deja
+      en la RDRAM (al menos 0x2E8 = 0xC86E2000), desde documentación
+      pública, sin código de Nintendo.
+- [ ] HLE gráfica: el microcódigo de GoldenEye (F3D; trabajo de F3D) y que
+      una tarea con microcódigo desconocido no deje colgado al juego.
+- [ ] idle.c: bucles de espera en código mapeado por la TLB.
 - [ ] Verificar en el desensamblado (o el decomp) si GoldenEye ejecuta
       0x7F000000 desde la ROM o desde la RDRAM.
 
