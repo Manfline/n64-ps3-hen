@@ -468,13 +468,15 @@ int main(void)
 	savefile_open(&save_file, &save, &n64.bus, rom, SAVES_DIR, SAVE_CFG, SALSA64_SAVE_AUTO, salsa64_log);
 
 	bool use_rec = false;
+	rec.opts = SALSA64_REC_OPT_PIN;  /* +7 % en nemu64-test (docs/perf-log.md) */
 	if (!salsa64_ps3_rec_wanted())
 		salsa64_log("recompilador apagado (%s): intérprete", SALSA64_NOREC_FLAG);
 	else if (!(use_rec = salsa64_rec_init(&rec, &n64.cpu, salsa64_ps3_rec_cache(), SALSA64_REC_CACHE_BYTES)))
 		salsa64_log("recompilador no disponible: intérprete");
 	else
-		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s", SALSA64_REC_CACHE_BYTES >> 20,
-			    salsa64_ps3_rec_cache(), rec.calls_near ? "con bl" : "por mtctr");
+		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x",
+			    SALSA64_REC_CACHE_BYTES >> 20, salsa64_ps3_rec_cache(), rec.calls_near ? "con bl" : "por mtctr",
+			    rec.opts);
 
 	ioPadInit(7);
 	load_padmap();
