@@ -126,6 +126,15 @@ respaldo del usuario.
   y dibuja con su propia configuración (algunos con mapeo de entorno,
   `G_TEXTURE_GEN` + `LookAt`). Caso de prueba para el HLE de F3DEX2 de Salsa64
   (Fase 2) y la Fase 4: abrir el cofre de la espada.
+- **Tienda Kokiri** (captura del autor, 2026-10-10): los artículos de los
+  estantes (nueces y palos Deku, escudo Deku) salen **blancos, solo con
+  sombreado**; el estante, el fondo, el texto y Navi se ven bien. Las nueces
+  muestran rayas finas, así que algo de la textura llega pero no su color.
+  Los artículos de tienda se dibujan con las mismas funciones de «objeto
+  obtenido» que la espada: confirma que la falla es de ese camino (configuración
+  propia de combiner, colores primitivo/entorno o mapeo de entorno) y no de
+  un modelo concreto. Caso de prueba más fácil de repetir que el cofre: entrar
+  a la tienda y mirar los estantes.
 - **Menú de pausa:** tarda en abrir y la pantalla de equipo se ve mal. En la
   traza, al abrirlo hay ~5 s sin presentar cuadros (`measured_fps` = 0) con la
   CPU al tope y luego ~1 MB de texturas. `framebuffer_copies` vale 0 en toda la
