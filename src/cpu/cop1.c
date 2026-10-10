@@ -32,17 +32,15 @@
  * redondea a float: con redondeo al más cercano el doble redondeo es inocuo
  * para +, -, *, / y raíz (53 ≥ 2·24 + 2), y el signo del error contra el
  * float se deduce del double. Se compila con -ffp-contract=off: los únicos
- * fma son los explícitos.
+ * fma son los explícitos. Nunca se cambia el modo de redondeo del host.
+ *
+ * El caso común (ADD/SUB/MUL/DIV y C.cond con entradas normales y redondeo
+ * al más cercano) lo resuelve antes un camino rápido integrado en el bucle
+ * del intérprete (vr4300_cop1_fast en fpu.h); lo demás llega aquí.
  */
 #include <string.h>
 
-#include "cpu/vr4300_internal.h"
-
-enum { FPE_I = 0x01, FPE_U = 0x02, FPE_O = 0x04, FPE_Z = 0x08, FPE_V = 0x10, FPE_E = 0x20 };
-
-enum { FMT_S = 0x10, FMT_D = 0x11, FMT_W = 0x14, FMT_L = 0x15 };
-
-enum { RM_NEAREST, RM_ZERO, RM_PLUS, RM_MINUS };
+#include "cpu/fpu.h"
 
 #define FCR31_WMASK   0x0183FFFFu
 #define DEFNAN_S      0x7FBFFFFFu
@@ -62,7 +60,6 @@ static inline double u2d(uint64_t u) { double d; memcpy(&d, &u, sizeof d); retur
 static inline uint64_t d2u(double d) { uint64_t u; memcpy(&u, &d, sizeof u); return u; }
 
 static inline bool is32(unsigned fmt) { return fmt == FMT_S || fmt == FMT_W; }
-static inline int sign_of(double x) { return (x > 0) - (x < 0); }
 
 /* ---- Registros ------------------------------------------------------------ */
 
@@ -260,42 +257,6 @@ static void fpu_result(struct salsa64_cpu *cpu, unsigned fmt, unsigned fd, doubl
 }
 
 /* ---- Aritmética -------------------------------------------------------------- */
-
-/* Signo del error de r = a + b redondeado (TwoSum de Knuth; exacto sin
- * desbordamiento). */
-static int add_error(double a, double b, double r)
-{
-	double bb = r - a;
-	double e = (a - (r - bb)) + (b - bb);
-	return sign_of(e);
-}
-
-/* Cerca del subdesbordamiento el fma puede perder el residuo; se escala por
- * 2^128 el operando chico (exacto, sin desbordar) antes de calcularlo. */
-#define TINY_RESULT 0x1p-900
-#define SCALE       0x1p128
-
-static int mul_error(double a, double b, double r)
-{
-	if (__builtin_fabs(r) >= TINY_RESULT)
-		return sign_of(__builtin_fma(a, b, -r));
-	if (r == 0)  /* producto de dos no ceros redondeado a cero */
-		return (a == 0 || b == 0) ? 0 : (__builtin_signbit(a) != __builtin_signbit(b) ? -1 : 1);
-	if (__builtin_fabs(a) < __builtin_fabs(b))
-		a *= SCALE;
-	else
-		b *= SCALE;
-	return sign_of(__builtin_fma(a, b, -r * SCALE));
-}
-
-static int div_error(double a, double b, double r)
-{
-	if (__builtin_fabs(r) >= TINY_RESULT)
-		return sign_of(__builtin_fma(-r, b, a)) * sign_of(b);
-	if (r == 0)
-		return a == 0 ? 0 : (__builtin_signbit(a) != __builtin_signbit(b) ? -1 : 1);
-	return sign_of(__builtin_fma(-r * SCALE, b, a * SCALE)) * sign_of(b);
-}
 
 /* ADD, SUB, MUL, DIV, SQRT, ABS, NEG. */
 static void fpu_arith(struct salsa64_cpu *cpu, uint32_t i, unsigned fmt, unsigned funct)
@@ -496,8 +457,8 @@ void salsa64_vr4300_cop2(struct salsa64_cpu *cpu, uint32_t i)
 	}
 	unsigned rt = I_RT(i);
 	switch (I_RS(i)) {
-	case 0x00: case 0x02: cpu->gpr[rt] = salsa64_sx32((uint32_t)cpu->cop2_latch); return; /* MFC2, CFC2 */
-	case 0x01:            cpu->gpr[rt] = cpu->cop2_latch; return;                          /* DMFC2 */
+	case 0x00: case 0x02: vr4300_set_gpr(cpu, rt, salsa64_sx32((uint32_t)cpu->cop2_latch)); return; /* MFC2, CFC2 */
+	case 0x01:            vr4300_set_gpr(cpu, rt, cpu->cop2_latch); return;                /* DMFC2 */
 	case 0x04: case 0x05: case 0x06: cpu->cop2_latch = cpu->gpr[rt]; return;               /* MTC2, DMTC2, CTC2 */
 	default:
 		salsa64_vr4300_exception(cpu, SALSA64_EXC_RI, 2);
@@ -517,15 +478,15 @@ void salsa64_vr4300_cop1(struct salsa64_cpu *cpu, uint32_t i)
 	unsigned rt = I_RT(i), fs = I_FS(i);
 	switch (I_FMT(i)) {
 	case 0x00:                                                        /* MFC1 */
-		cpu->gpr[rt] = salsa64_sx32(vr4300_fpr_get32(cpu, fs));
+		vr4300_set_gpr(cpu, rt, salsa64_sx32(vr4300_fpr_get32(cpu, fs)));
 		return;
 	case 0x01:                                                        /* DMFC1 */
 		if (!cpu->allow64)
 			break;
-		cpu->gpr[rt] = vr4300_fpr_get64(cpu, fs);
+		vr4300_set_gpr(cpu, rt, vr4300_fpr_get64(cpu, fs));
 		return;
 	case 0x02:                                                        /* CFC1 */
-		cpu->gpr[rt] = salsa64_sx32(fs == 0 ? SALSA64_FCR0_VALUE : fs == 31 ? cpu->fcr31 : 0);
+		vr4300_set_gpr(cpu, rt, salsa64_sx32(fs == 0 ? SALSA64_FCR0_VALUE : fs == 31 ? cpu->fcr31 : 0));
 		return;
 	case 0x04:                                                        /* MTC1 */
 		vr4300_fpr_set32(cpu, fs, (uint32_t)cpu->gpr[rt]);
@@ -543,19 +504,9 @@ void salsa64_vr4300_cop1(struct salsa64_cpu *cpu, uint32_t i)
 				salsa64_vr4300_exception(cpu, SALSA64_EXC_FPE, 0);
 		}
 		return;
-	case 0x08: {                                                      /* BC1F/T/FL/TL */
-		if (rt & ~3u) {  /* las demás variantes de BC1 no existen */
-			fpu_finish(cpu, FPE_E);
-			return;
-		}
-		bool c = (cpu->fcr31 & SALSA64_FCR31_C) != 0;
-		switch (rt & 3) {
-		case 0: vr4300_branch(cpu, !c, i); return;
-		case 1: vr4300_branch(cpu, c, i); return;
-		case 2: vr4300_branch_likely(cpu, !c, i); return;
-		default: vr4300_branch_likely(cpu, c, i); return;
-		}
-	}
+	case 0x08:  /* BC1F/T/FL/TL los resuelve interp.c; las demás variantes no existen */
+		fpu_finish(cpu, FPE_E);
+		return;
 	case FMT_S:
 	case FMT_D:
 		fpu_float(cpu, i, I_FMT(i));
