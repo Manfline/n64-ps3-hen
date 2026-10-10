@@ -1,0 +1,5 @@
+// Cell64 — Fase 0: color interpolado.
+void main(float4 color : COLOR, out float4 oColor : COLOR)
+{
+	oColor = color;
+}

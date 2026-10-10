@@ -1,0 +1,9 @@
+// Cell64 — Fase 0: posición en clip space y color por vértice, sin transformar.
+void main(float4 position : POSITION,
+          float4 color : COLOR,
+          out float4 oPosition : POSITION,
+          out float4 oColor : COLOR)
+{
+	oPosition = position;
+	oColor = color;
+}

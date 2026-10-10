@@ -1,0 +1,14 @@
+# Salidas de compilación
+build/
+
+# ROMs: nunca se commitean, salvo homebrew de libre distribución
+*.z64
+*.n64
+*.v64
+*.rom
+!tests/roms/homebrew/**
+
+# Configuración local (IP de la PS3, etc.)
+tools/ps3.conf
+
+.DS_Store
