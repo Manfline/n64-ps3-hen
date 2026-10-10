@@ -67,7 +67,7 @@ struct salsa64_bus {
 	struct salsa64_rsp rsp;
 	uint32_t dp[SALSA64_DP_NREGS];
 	struct salsa64_vi vi;
-	uint32_t ai[SALSA64_AI_NREGS];
+	struct salsa64_ai ai;
 	uint32_t pi[SALSA64_PI_NREGS];
 	uint32_t ri[SALSA64_RI_NREGS];
 	uint32_t si[SALSA64_SI_NREGS];
@@ -98,5 +98,9 @@ uint32_t salsa64_bus_read32(struct salsa64_bus *bus, uint32_t paddr);
 uint64_t salsa64_bus_read64(struct salsa64_bus *bus, uint32_t paddr);
 void salsa64_bus_write32(struct salsa64_bus *bus, uint32_t paddr, uint32_t value, uint32_t mask);
 void salsa64_bus_write64(struct salsa64_bus *bus, uint32_t paddr, uint64_t value, uint64_t mask);
+
+/* La RDRAM [pa, pa + len) cambió sin pasar por el CPU (DMA, cargador,
+ * pruebas): el recompilador descarta el código que dependa de ella. */
+void salsa64_bus_rdram_written(struct salsa64_bus *bus, uint32_t pa, uint32_t len);
 
 #endif

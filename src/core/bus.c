@@ -8,6 +8,12 @@
 #include "core/endian.h"
 #include "core/save.h"
 
+/* Sin recompilador no hay nada que invalidar; la Fase 3 lo completa. */
+void salsa64_bus_rdram_written(struct salsa64_bus *bus, uint32_t pa, uint32_t len)
+{
+	(void)bus, (void)pa, (void)len;
+}
+
 void salsa64_bus_init(struct salsa64_bus *bus, uint8_t *rdram, uint32_t rdram_size)
 {
 	memset(bus, 0, sizeof *bus);

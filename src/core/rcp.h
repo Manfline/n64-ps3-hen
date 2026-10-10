@@ -14,8 +14,11 @@
  *   VI  contador de líneas, interrupción en VI_V_INTR y campos con la
  *       temporización del tipo de TV (vi.c); describe el framebuffer que
  *       se ve (salsa64_vi_frame). Sin filtros (AA, divot, gamma).
- *   AI, DP, RI, RDRAM: solo guardan los registros; escribir AI_STATUS baja
- *       su interrupción. Falta la temporización.
+ *   AI  DMA con la cola de dos lugares, temporización por AI_DACRATE y el
+ *       reloj del VI, interrupción al empezar cada DMA y el error del
+ *       acarreo en los límites de 8 KB (ai.c); las muestras van a un
+ *       sumidero que pone el frontend.
+ *   DP, RI, RDRAM: solo guardan los registros. Falta la temporización.
  *
  * Cada bloque recibe el desplazamiento del registro dentro de su página
  * (paddr & 0xFFFFF) y accesos de 32 bits.
@@ -68,9 +71,10 @@ struct salsa64_sp {
 /* ---- Tareas del RSP (rsp.c) ------------------------------------------------
  *
  * libultra deja la tarea (OSTask) en DMEM 0xFC0 antes de arrancar el RSP.
- * Las gráficas se procesan por HLE en un backend intercambiable (en la PS3,
- * un SPE; en el host, en el mismo hilo); el resto de las tareas terminan
- * sin hacer nada por ahora. La tarea termina un tiempo fijo después de
+ * Las gráficas y las de audio se procesan por HLE en backends
+ * intercambiables (en la PS3, un SPE cada una; en el host, en el mismo
+ * hilo); el resto de las tareas terminan sin hacer nada por ahora. La
+ * tarea termina un tiempo fijo después de
  * arrancar (SP_STATUS con BROKE, HALT y TASKDONE, interrupción SP) y, si la
  * lista de comandos pidió sincronizar el RDP, después llega la del DP. */
 
@@ -115,15 +119,59 @@ struct salsa64_gfx_backend {
 	uint32_t (*finish)(void *ctx);
 };
 
+/* ABI de las listas de audio (alist): cada microcódigo de audio numera y
+ * codifica sus comandos a su manera. Se reconoce por unas palabras de su
+ * segmento de datos (rsp_audio.c). Los juegos objetivo: Super Mario 64
+ * ABI1; GoldenEye ABI1 (GE); Zelda OoT, Mario Kart 64 y Star Fox 64 nead;
+ * Perfect Dark naudio con MP3. */
+enum salsa64_abi {
+	SALSA64_ABI_UNKNOWN = 0,
+	SALSA64_ABI_AUDIO,      /* ABI1 de libultra (Super Mario 64 y muchos) */
+	SALSA64_ABI_AUDIO_GE,   /* GoldenEye: ENVMIXER lineal */
+	SALSA64_ABI_AUDIO_BC,   /* Blast Corps, Diddy Kong Racing */
+	SALSA64_ABI_NEAD_MK,    /* Mario Kart 64, Wave Race (E) */
+	SALSA64_ABI_NEAD_SF,    /* Star Fox 64 (salvo J) */
+	SALSA64_ABI_NEAD_SFJ,   /* Star Fox 64 (J) */
+	SALSA64_ABI_NEAD_WRJB,  /* Wave Race (J RevB) */
+	SALSA64_ABI_NEAD_FZ,    /* F-Zero X */
+	SALSA64_ABI_NEAD_YS,    /* Yoshi's Story */
+	SALSA64_ABI_NEAD_1080,  /* 1080° Snowboarding */
+	SALSA64_ABI_NEAD_OOT,   /* Zelda OoT, Zelda MM (J) */
+	SALSA64_ABI_NEAD_MM,    /* Zelda MM, Pokémon Stadium 2 */
+	SALSA64_ABI_NEAD_MMB,   /* Zelda MM (E beta) */
+	SALSA64_ABI_NEAD_AC,    /* Animal Crossing */
+	SALSA64_ABI_NEAD_EFZ,   /* F-Zero X Expansion */
+	SALSA64_ABI_NAUDIO,     /* naudio de Rare y otros (pendiente) */
+	SALSA64_ABI_NAUDIO_BK,  /* Banjo-Kazooie (pendiente) */
+	SALSA64_ABI_NAUDIO_DK,  /* Donkey Kong 64 (pendiente) */
+	SALSA64_ABI_NAUDIO_MP3, /* Perfect Dark, Banjo-Tooie, Jet Force Gemini (pendiente) */
+	SALSA64_ABI_NAUDIO_CBFD,/* Conker (pendiente) */
+	SALSA64_ABI_MUSYX1,     /* MusyX (pendiente) */
+	SALSA64_ABI_MUSYX2,
+	SALSA64_ABI_COUNT
+};
+
+struct salsa64_audio_backend {
+	void *ctx;
+	/* Empieza a procesar la tarea; puede volver antes de terminarla. */
+	void (*start)(void *ctx, const struct salsa64_task *task, enum salsa64_abi abi);
+	/* Espera a que termine (cuando la máquina llega al fin de la tarea) y
+	 * avisa al bus qué partes de la RDRAM escribió
+	 * (salsa64_bus_rdram_written). */
+	void (*finish)(void *ctx, struct salsa64_bus *bus);
+};
+
 struct salsa64_rsp_stats {
-	uint32_t gfx, audio, other, unknown_gbi;
+	uint32_t gfx, audio, other, unknown_gbi, unknown_abi;
 };
 
 struct salsa64_rsp {
 	struct salsa64_sched *sched;
 	const struct salsa64_gfx_backend *gfx;
+	const struct salsa64_audio_backend *audio;
 	uint32_t busy;          /* tipo de la tarea en curso; 0 = ninguna */
 	enum salsa64_gbi gbi;   /* de la tarea en curso */
+	enum salsa64_abi abi;   /* de la última tarea de audio */
 	/* Duración aparente de cada tarea, en ciclos del VR4300. */
 	uint32_t gfx_cycles, audio_cycles, dp_cycles;
 	struct salsa64_rsp_stats stats;
@@ -184,6 +232,34 @@ enum salsa64_ai_reg {
 	SALSA64_AI_DACRATE, SALSA64_AI_BITRATE, SALSA64_AI_NREGS
 };
 
+#define SALSA64_AI_STATUS_FULL    0x80000001u  /* bits 31 y 0 */
+#define SALSA64_AI_STATUS_BUSY    0x40000000u
+#define SALSA64_AI_STATUS_ENABLED 0x02000000u
+#define SALSA64_AI_STATUS_ONES    0x01100000u  /* bits 24 y 20: siempre 1 */
+
+/* Sumidero de las muestras del AI (ai.c). Recibe las de cada DMA cuando
+ * empieza a sonar: 16 bits con signo, estéreo intercalado (izquierda,
+ * derecha), en el orden de bytes de la N64; la frecuencia de muestreo del
+ * DAC y el ciclo del VR4300 en que empieza. `samples` apunta a la RDRAM
+ * (o a ceros si el DMA se sale): vale solo durante la llamada. */
+typedef void (*salsa64_ai_push_fn)(void *ctx, const uint8_t *samples, uint32_t bytes, uint32_t rate_hz,
+				   uint64_t cycle);
+
+struct salsa64_ai {
+	uint32_t regs[SALSA64_AI_NREGS];  /* lo último escrito */
+	/* Cola de DMA de dos lugares: [0] suena, [1] espera. */
+	uint32_t count;
+	uint32_t addr[2], len[2];
+	bool carry;        /* el DMA anterior terminó justo en un límite de 8 KB */
+	bool started;      /* el DMA en curso ya empezó a avanzar (y se entregó) */
+	uint32_t left;     /* bytes del DMA en curso que faltaban en `mark` */
+	uint64_t mark;     /* ciclo de esa cuenta */
+	struct salsa64_sched *sched;
+	salsa64_ai_push_fn push;
+	void *push_ctx;
+	uint32_t dmas;     /* DMAs que empezaron a sonar desde el reset */
+};
+
 enum salsa64_pi_reg {
 	SALSA64_PI_DRAM_ADDR, SALSA64_PI_CART_ADDR, SALSA64_PI_RD_LEN,
 	SALSA64_PI_WR_LEN, SALSA64_PI_STATUS, SALSA64_PI_BSD_DOM1_LAT,
@@ -230,6 +306,11 @@ void salsa64_rsp_read_task(const struct salsa64_bus *bus, struct salsa64_task *t
 /* Familia de microcódigo de una tarea gráfica, por los textos de su
  * segmento de datos (ucode_data). */
 enum salsa64_gbi salsa64_rsp_detect_gbi(const struct salsa64_bus *bus, const struct salsa64_task *task);
+/* Tareas de audio (rsp_audio.c): el backend de la HLE (NULL: terminan sin
+ * producir nada) y el ABI de una tarea por las palabras de su ucode_data. */
+void salsa64_rsp_set_audio(struct salsa64_bus *bus, const struct salsa64_audio_backend *audio);
+enum salsa64_abi salsa64_rsp_detect_abi(const struct salsa64_bus *bus, const struct salsa64_task *task);
+const char *salsa64_abi_name(enum salsa64_abi abi);
 uint32_t salsa64_dp_read(struct salsa64_bus *bus, uint32_t reg);
 void salsa64_dp_write(struct salsa64_bus *bus, uint32_t reg, uint32_t value);
 uint32_t salsa64_vi_read(struct salsa64_bus *bus, uint32_t reg);
@@ -247,6 +328,14 @@ uint64_t salsa64_vi_cycles_left(const struct salsa64_bus *bus);
 /* Describe la imagen visible; false si el VI está apagado o sus registros no
  * forman una imagen dentro de la RDRAM. */
 bool salsa64_vi_frame(const struct salsa64_bus *bus, struct salsa64_vi_frame *frame);
+/* Audio Interface (ai.c). salsa64_ai_init registra su evento; el sumidero
+ * se cambia con salsa64_ai_set_sink (NULL: las muestras se descartan, pero
+ * la temporización y las interrupciones siguen igual). */
+void salsa64_ai_init(struct salsa64_bus *bus, struct salsa64_sched *sched);
+void salsa64_ai_reset(struct salsa64_bus *bus);
+void salsa64_ai_set_sink(struct salsa64_bus *bus, salsa64_ai_push_fn push, void *ctx);
+/* Frecuencia de muestreo que da AI_DACRATE con el reloj del VI (Hz). */
+uint32_t salsa64_ai_rate(const struct salsa64_bus *bus);
 uint32_t salsa64_ai_read(struct salsa64_bus *bus, uint32_t reg);
 void salsa64_ai_write(struct salsa64_bus *bus, uint32_t reg, uint32_t value);
 uint32_t salsa64_pi_read(struct salsa64_bus *bus, uint32_t reg);
