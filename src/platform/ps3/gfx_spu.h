@@ -20,6 +20,7 @@ struct salsa64_gfx_spu {
 	struct gfx_result res;
 	uint32_t seq;
 	bool pending;
+	bool nocache;        /* el hash del SPE no coincide: sin caché de texturas */
 	/* Estadísticas desde el arranque. */
 	uint32_t tasks;
 	uint64_t spu_ticks;  /* tiempo de la HLE en el SPE (ticks del timebase) */
@@ -30,6 +31,8 @@ struct salsa64_gfx_spu {
 	/* Texturas decodificadas y reusadas, cargas a la TMEM y sus lecturas
 	 * de la RDRAM (gfx_result). */
 	uint64_t textures, tex_reused, loads, load_reads;
+	/* Caché de texturas (gfx_result). */
+	uint64_t tex_old, tex_arena, tex_evicted, t_hash;
 };
 
 /* Arranca el trabajador (spukit_init ya llamado). Devuelve 0 o el error de

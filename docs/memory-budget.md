@@ -15,14 +15,14 @@ en PS3 real.
 | Guardado del cartucho (`struct salsa64_save`) | 0,03 | | 32 896 bytes (32 KB de datos alineados a 128), estático en el frontend: EEPROM (512 B / 2 KB) o SRAM (32 KB). Crece a 128 KB con FlashRAM o SRAM de 1 Mbit |
 | Lectura de archivos de guardado (`savefile.c`) | 0,03 | | 32 KB + 1, estático; solo al abrir una ROM |
 | Caché del recompilador | 16 | | Fase 3: cola NOBITS del segmento de texto (docs/jit-ppe.md); 32 si hace falta |
-| Caché de texturas (lado PPE/SPE) | 16 | | Fase 4 |
+| Caché de texturas (lado PPE/SPE) | 8 | 8 | `src/rdp`: región mapeada al RSX que administra la HLE del SPE (texturas RGBA8888 decodificadas, entre tareas); directorio de 1024 texturas en el local store. Se puede subir a 16 si el directorio crece |
 | Búfer de comandos RSX + memoria mapeada | 16 | 16 | `rsxkit_init` por omisión (rsx-triangle usa 32) |
 | ROM del cartucho | 64 | | máximo; el frontend la lee entera a memoria al arrancar |
-| Salida de la HLE gráfica SPU → RSX | 20 | 20 | `src/rdp`: 3 juegos de vértices 2 MB + comandos 512 KB + texturas 4 MB, mapeados al RSX (`rsxkit_map_main`) |
+| Salida de la HLE gráfica SPU → RSX | 20 | 20 | `src/rdp`: 3 juegos de vértices 2 MB + comandos 512 KB + arena de texturas 4 MB, mapeados al RSX (`rsxkit_map_main`) junto con la caché de texturas (28 MB en total). Con la caché el arena casi no se usa: se podría achicar |
 | Audio | 2 | | |
 | Código, pila, heap de newlib | 16 | | |
 | Bloques de control de spukit | 0,01 | 0,01 | ~2,3 KB por trabajador |
-| **Total previsto** | **158** | | con una ROM de 64 MB |
+| **Total previsto** | **150** | | con una ROM de 64 MB |
 
 ## Memoria local del RSX (GDDR3)
 
@@ -40,4 +40,4 @@ en PS3 real.
 |---|---|---|---|---|
 | `spu-compute/spu/mix.c` | 2,6 KB | 0,8 KB + 64 KB | ~69 KB | `spu-size` en el build |
 | `spu-jobs/spu/scale.c` | 3,6 KB | 0,8 KB + 65 KB | ~70 KB | `spu-size` |
-| `src/spu/gfx` (HLE de F3DEX2 + RDP, SPE 0) | 48 KB | 0,8 KB + 112 KB | ~161 KB (+ pila ~95 KB) | `spu-size`: gfx_state 21 KB, texturas 2 × 32 KB, vértices 2 × 8 KB, comandos 2 × 4 KB, display list 2 × 1 KB, lecturas 5,8 KB |
+| `src/spu/gfx` (HLE de F3DEX2 + RDP, SPE 0) | 55 KB | 0,8 KB + 144 KB | ~200 KB (+ pila ~56 KB) | `spu-size`: gfx_state 53 KB (de ellos el directorio de la caché de texturas 32 KB), texturas 2 × 32 KB, vértices 2 × 8 KB, comandos 2 × 4 KB, display list 2 × 1 KB, lecturas 5,8 KB |

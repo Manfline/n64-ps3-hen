@@ -142,15 +142,18 @@ static void gfx_window(uint64_t now)
 	if (tasks && now > gwin.t0) {
 		double k = 1e3 / spukit_tick_hz() / tasks;
 		salsa64_log("gfx campos %u–%u: %.1f campos/s, %u tareas; por tarea: %.0f dibujos, %.0f triángulos, "
-			    "%.1f texturas decodificadas (+%.1f reusadas), %.1f cargas a la TMEM (%.1f lecturas); SPE %.2f ms "
-			    "(vértices %.2f, estado %.2f, texturas %.2f, cargas %.2f), PPE esperando %.2f ms, traducción al "
+			    "%.1f texturas decodificadas (+%.1f reusadas, %.1f de tareas anteriores; %.1f al arena, %.1f "
+			    "desalojadas), %.1f cargas a la TMEM (%.1f lecturas); SPE %.2f ms (vértices %.2f, estado %.2f, "
+			    "identificar texturas %.2f, decodificar %.2f, cargas %.2f), PPE esperando %.2f ms, traducción al "
 			    "RSX %.2f ms",
 			    gwin.field0, field - 1, (field - gwin.field0) * 1e6 / (now - gwin.t0), tasks,
 			    (double)(rs.draws - gwin.rdp.draws) / tasks, (double)(rs.triangles - gwin.rdp.triangles) / tasks,
 			    (double)(s->textures - s0->textures) / tasks, (double)(s->tex_reused - s0->tex_reused) / tasks,
+			    (double)(s->tex_old - s0->tex_old) / tasks, (double)(s->tex_arena - s0->tex_arena) / tasks,
+			    (double)(s->tex_evicted - s0->tex_evicted) / tasks,
 			    (double)(s->loads - s0->loads) / tasks, (double)(s->load_reads - s0->load_reads) / tasks,
 			    (s->spu_ticks - s0->spu_ticks) * k, (s->t_vtx - s0->t_vtx) * k, (s->t_state - s0->t_state) * k,
-			    (s->t_tex - s0->t_tex) * k, (s->t_load - s0->t_load) * k,
+			    (s->t_hash - s0->t_hash) * k, (s->t_tex - s0->t_tex) * k, (s->t_load - s0->t_load) * k,
 			    (s->wait_us - s0->wait_us) / 1e3 / tasks, (rs.us_translate - gwin.rdp.us_translate) / 1e3 / tasks);
 	}
 	gwin.field0 = field;

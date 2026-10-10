@@ -74,6 +74,7 @@ static struct salsa64_gfx_sync gfx_sync;
 static struct gfx_vertex gfx_vtx[1u << 16] __attribute__((aligned(128)));
 static uint8_t gfx_cmd[512u << 10] __attribute__((aligned(128)));
 static uint8_t gfx_tex[4u << 20] __attribute__((aligned(128)));
+static uint8_t gfx_cache[8u << 20] __attribute__((aligned(128)));
 static struct {
 	struct gfx_result sum;  /* contadores sumados; flags acumuladas */
 	uint32_t tasks;
@@ -93,6 +94,14 @@ static void gfx_acquire(void *ctx, struct gfx_job *job)
 	job->cmd_cap = sizeof gfx_cmd;
 	job->tex_ea = (uint64_t)(uintptr_t)gfx_tex;
 	job->tex_cap = sizeof gfx_tex;
+	/* Caché de texturas: el rasterizador termina cada tarea en gfx_done, así
+	 * que la anterior ya no lee nada. */
+	if (!getenv("SALSA64_NO_TEXCACHE")) {
+		job->cache_ea = (uint64_t)(uintptr_t)gfx_cache;
+		job->cache_cap = sizeof gfx_cache;
+	}
+	job->task = gfx.tasks + 1;
+	job->done_task = gfx.tasks;
 }
 
 static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_result *res)
@@ -107,6 +116,10 @@ static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_resu
 	s->draws += res->draws;
 	s->textures += res->textures;
 	s->tex_reused += res->tex_reused;
+	s->tex_old += res->tex_old;
+	s->tex_arena += res->tex_arena;
+	s->tex_evicted += res->tex_evicted;
+	s->loads += res->loads;
 	s->unknown_cmds += res->unknown_cmds;
 	if (res->unknown_cmds)
 		s->last_unknown = res->last_unknown;
@@ -203,10 +216,12 @@ static void gfx_summary(void)
 	const struct gfx_result *s = &gfx.sum;
 	double n = gfx.tasks;
 	fprintf(stderr, "salsa64-run: gfx: %u tareas (%u otras, %u con microcódigo desconocido); por tarea "
-		"%.0f comandos, %.0f triángulos, %.0f rectángulos, %.0f dibujos, %.1f texturas (+%.1f reusadas); "
+		"%.0f comandos, %.0f triángulos, %.0f rectángulos, %.0f dibujos, %.1f cargas a la TMEM, %.1f texturas "
+		"decodificadas (+%.1f reusadas, %.1f de tareas anteriores; %.1f al arena, %.1f desalojadas); "
 		"%u comandos sin implementar (último 0x%02X), %u combiners aproximados, %u errores, banderas 0x%02X\n",
 		gfx.tasks, n64.bus.rsp.stats.other + n64.bus.rsp.stats.audio, n64.bus.rsp.stats.unknown_gbi,
-		s->commands / n, s->triangles / n, s->rects / n, s->draws / n, s->textures / n, s->tex_reused / n,
+		s->commands / n, s->triangles / n, s->rects / n, s->draws / n, s->loads / n, s->textures / n,
+		s->tex_reused / n, s->tex_old / n, s->tex_arena / n, s->tex_evicted / n,
 		s->unknown_cmds, s->last_unknown, s->approx_cc, s->dl_errors, s->flags);
 }
 

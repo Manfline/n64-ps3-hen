@@ -11,7 +11,9 @@
  * Los búferes de salida de la HLE (vértices, comandos, texturas) viven en
  * memoria principal mapeada al RSX, en varios juegos que se turnan: el SPE
  * escribe uno mientras el RSX dibuja otro. Una barrera del RSX dice cuándo
- * se puede volver a usar cada juego.
+ * se puede volver a usar cada juego. La caché de texturas (gfx.h) es otra
+ * región mapeada que la HLE administra sola; las barreras le dicen qué
+ * tareas ya terminó el RSX (job->done_task).
  *
  * Solo PS3 (PSL1GHT). Todas las llamadas desde el hilo que usa rsxkit.
  */
@@ -47,8 +49,9 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 
 void salsa64_rdp_get_stats(struct salsa64_rdp_stats *out);
 
-/* Escribe la salida de la última tarea (gfx.h: gfx_dump_header) en `path`.
- * Espera al RSX. Para depurar. */
+/* Escribe la salida de la última tarea (gfx.h: gfx_dump_header) en `path`,
+ * con las texturas de la caché copiadas al arena (el volcado no depende de
+ * la caché). Espera al RSX. Para depurar. */
 bool salsa64_rdp_dump(const char *path);
 
 #endif
