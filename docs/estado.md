@@ -29,6 +29,9 @@ cifras en docs/perf-log.md):
   vitest OK, `--lockstep` sin diferencias en los dos. Prueba de mutación:
   10 de 10 errores puestos a propósito detectados.
 - Host: llamadas al intérprete −18 % en nemu64-test y −97 % en vitest.
+- Con main traído (TLB y KSEG1, bd8ac59): 240/240 en arm64 y en ppc64 en
+  los cuatro modos, nemu64-test con la línea base (623 bloques fuera de
+  KSEG0), vitest OK, `--lockstep` sin diferencias en los dos.
 
 Siguiente:
 - [ ] **PS3 real** (pedir turno al autor): cpu-tests SLSA00077 «Salsa64
