@@ -130,14 +130,18 @@ static struct salsa64_padmap padmap;
 /* Estadística de la HLE gráfica en el SPE por ventanas fijas de campos. */
 static struct {
 	uint32_t field0;
-	uint64_t t0;
+	uint64_t t0, last, worst;  /* inicio, último campo y el más largo (µs) */
 	struct salsa64_gfx_spu spu;
 	struct salsa64_rdp_stats rdp;
 } gwin;
 
+/* Una vez por campo, con la hora de su fin. */
 static void gfx_window(uint64_t now)
 {
 	uint32_t field = n64.bus.vi.fields;
+	if (gwin.last && now - gwin.last > gwin.worst)
+		gwin.worst = now - gwin.last;
+	gwin.last = now;
 	if (field - gwin.field0 < GFX_WIN_FIELDS)
 		return;
 	struct salsa64_rdp_stats rs;
@@ -146,12 +150,12 @@ static void gfx_window(uint64_t now)
 	uint32_t tasks = s->tasks - s0->tasks;
 	if (tasks && now > gwin.t0) {
 		double k = 1e3 / spukit_tick_hz() / tasks;
-		salsa64_log("gfx campos %u–%u: %.1f campos/s, %u tareas; por tarea: %.0f dibujos, %.0f triángulos, "
-			    "%.1f texturas decodificadas (+%.1f reusadas, %.1f de tareas anteriores; %.1f al arena, %.1f "
-			    "desalojadas), %.1f cargas a la TMEM (%.1f lecturas); SPE %.2f ms (vértices %.2f, estado %.2f, "
+		salsa64_log("gfx campos %u–%u: %.1f campos/s (peor campo %.1f ms), %u tareas; por tarea: %.0f dibujos, "
+			    "%.0f triángulos, %.1f texturas decodificadas (+%.1f reusadas, %.1f de tareas anteriores; %.1f al "
+			    "arena, %.1f desalojadas), %.1f cargas a la TMEM (%.1f lecturas); SPE %.2f ms (vértices %.2f, estado %.2f, "
 			    "identificar texturas %.2f, decodificar %.2f, cargas %.2f), PPE esperando %.2f ms, traducción al "
 			    "RSX %.2f ms",
-			    gwin.field0, field - 1, (field - gwin.field0) * 1e6 / (now - gwin.t0), tasks,
+			    gwin.field0, field - 1, (field - gwin.field0) * 1e6 / (now - gwin.t0), gwin.worst / 1e3, tasks,
 			    (double)(rs.draws - gwin.rdp.draws) / tasks, (double)(rs.triangles - gwin.rdp.triangles) / tasks,
 			    (double)(s->textures - s0->textures) / tasks, (double)(s->tex_reused - s0->tex_reused) / tasks,
 			    (double)(s->tex_old - s0->tex_old) / tasks, (double)(s->tex_arena - s0->tex_arena) / tasks,
@@ -163,6 +167,7 @@ static void gfx_window(uint64_t now)
 	}
 	gwin.field0 = field;
 	gwin.t0 = now;
+	gwin.worst = 0;
 	gwin.spu = *s;
 	gwin.rdp = rs;
 }
