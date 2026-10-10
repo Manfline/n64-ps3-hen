@@ -78,6 +78,32 @@ Falta:
 - [ ] Opcional: SIMD en ENVMIXER, RESAMPLE y ADPCM del SPE (hoy 2,4 ms por
       tarea en Zelda, escalar).
 - [ ] Opcional: que el audio marque el ritmo (pacer.c tiene el enganche).
+## 2026-10-10 — Bucles de espera en código mapeado por la TLB
+
+Hecho (rama `loving-spence-8951ae`, desde main bd8ac59):
+- `src/cpu/idle.c` traduce el código y las cargas de la vuelta también por
+  la TLB, sin efectos (`salsa64_vr4300_fetch_probe`: la búsqueda del
+  intérprete sin excepciones ni cambios); antes solo KSEG0/KSEG1. El «sí»
+  no se guarda (cada vez se vuelve a simular con la TLB y la memoria del
+  momento) y la TLB no cambia dentro de una vuelta (COP0 la descarta): un
+  remapeo o código reescrito se ve en el análisis siguiente; los descartes
+  siguen por pc ^ instrucción. El recompilador no cambia (consulta lo
+  mismo que el intérprete).
+- Pruebas: `b .` mapeado y sondeo de una variable por dirección mapeada
+  (se saltan, igual con y sin detección), y la misma dirección virtual
+  remapeada a un contador (deja de saltar y queda descartado).
+- Mac, 21,3 s de consola con el intérprete: GoldenEye 0,0 → **97,6 %** en
+  bucles de espera (16,2 → 0,8 s); Perfect Dark 0 → 99,3 % (su `b .` del
+  arranque). Registros, log e imagen del VI idénticos con y sin el cambio.
+- qemu-ppc64: 233/233 con el recompilador en los cuatro modos, nemu64-test
+  con la línea base, vitest OK, `--lockstep` sin diferencias en
+  nemu64-test, vitest y en GoldenEye y Perfect Dark (21,3 s de consola cada
+  uno, con 97,6 % y 99,3 % en bucles de espera).
+
+- **PS3 real** (524d80e, frontend «Salsa64 TLB bucles», SLSA00074):
+  GoldenEye a 59,8 campos/s con **0,6 ms de emulación por campo** (antes
+  5,6; 0,5 de los 0,6 son la copia del VI) y 99 % en bucles de espera
+  (antes 0 %); 1,2 MIPS ejecutados en vez de 93,7.
 
 ## 2026-10-10 — Recompilador: conversiones de la FPU, LWL/LWR y MFC0 en nativo
 
@@ -232,9 +258,10 @@ Siguiente:
       pública, sin código de Nintendo.
 - [ ] HLE gráfica: el microcódigo de GoldenEye (F3D; trabajo de F3D) y que
       una tarea con microcódigo desconocido no deje colgado al juego.
-- [ ] idle.c: bucles de espera en código mapeado por la TLB (trabajo TLB).
-- [ ] Verificar en el desensamblado (o el decomp) si GoldenEye ejecuta
-      0x7F000000 desde la ROM o desde la RDRAM.
+- [x] idle.c: bucles de espera en código mapeado por la TLB (entrada de
+      arriba).
+- [x] GoldenEye ejecuta 0x7F000000 desde la RDRAM: pagina su código por
+      fallos de TLB (visto en la emulación, ver abajo).
 
 ## 2026-10-10 — Caché de texturas entre tareas (HLE gráfica)
 
@@ -523,8 +550,9 @@ Notas:
 Siguiente:
 - [x] EEPROM del cartucho (canal 4 del PIF) y SRAM: entrada de arriba.
 - [ ] Controller Pak y Rumble.
-- [ ] Bucles de espera: código mapeado por TLB, sondeos de E/S que solo
-      cambian en eventos (MI_INTR, SP_STATUS) y esperas por Count.
+- [ ] Bucles de espera: sondeos de E/S que solo cambian en eventos
+      (MI_INTR, SP_STATUS) y esperas por Count. (Código mapeado por TLB:
+      hecho, 2026-10-10.)
 - [ ] Opcional: decidir el chequeo con el inmediato del salto (no depende
       del destino) y medir si recupera el 1 %.
 - [ ] Repartir emulación y presentación entre los dos hilos del PPE (ya
