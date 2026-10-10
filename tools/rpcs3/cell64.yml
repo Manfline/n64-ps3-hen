@@ -1,0 +1,10 @@
+# Configuración de RPCS3 para las pruebas de Cell64 (se pasa con --config;
+# solo cambia estas claves, el resto queda como en la config global).
+Video:
+  # rsx-triangle lee el framebuffer desde el PPE.
+  Write Color Buffers: true
+Net:
+  # Sockets reales del host: el logger UDP llega a tools/udplog.py.
+  Internet enabled: Connected
+Miscellaneous:
+  Exit RPCS3 when process finishes: true

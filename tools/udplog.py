@@ -8,11 +8,28 @@ línea con la IP de origen y, con --out, la agrega a un archivo.
 
 --until termina (código 0) al recibir una línea que contenga TEXTO; útil
 para automatizar pruebas: p. ej. --until "RESULTADO".
+
+Al salir resume, por origen y programa, las líneas recibidas, duplicadas y
+perdidas según el número de secuencia "#n" que agrega el logger.
 """
 import argparse
 import datetime
+import re
+import signal
 import socket
 import sys
+
+
+SEQ = re.compile(r"^\[(\S+) +[\d.]+ #(\d+)\]")
+
+
+def summarize(seen: dict) -> None:
+    for (host, tag), seqs in sorted(seen.items()):
+        unique = set(seqs)
+        missing = (max(unique) - min(unique) + 1) - len(unique)
+        print(f"resumen {host} {tag}: {len(seqs)} recibidas, "
+              f"{len(seqs) - len(unique)} duplicadas, {missing} perdidas "
+              f"(secuencia {min(unique)}..{max(unique)})", file=sys.stderr)
 
 
 def main() -> int:
@@ -31,7 +48,11 @@ def main() -> int:
     if args.timeout:
         sock.settimeout(args.timeout)
 
+    # SIGTERM también resume al salir (en sh no interactivo, un proceso en
+    # segundo plano ignora SIGINT).
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     out = open(args.out, "a", encoding="utf-8") if args.out else None
+    seen: dict = {}
     print(f"escuchando UDP en 0.0.0.0:{args.port}", file=sys.stderr)
     try:
         while True:
@@ -42,6 +63,9 @@ def main() -> int:
                 return 1
             stamp = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
             for line in data.decode("utf-8", "replace").splitlines():
+                m = SEQ.match(line)
+                if m:
+                    seen.setdefault((host, m.group(1)), []).append(int(m.group(2)))
                 text = f"{stamp} {host} {line}"
                 print(text, flush=True)
                 if out:
@@ -52,6 +76,7 @@ def main() -> int:
     except KeyboardInterrupt:
         return 0
     finally:
+        summarize(seen)
         if out:
             out.close()
 

@@ -16,6 +16,7 @@ static int log_sock = -1;
 static struct sockaddr_in log_dest;
 static char log_tag[24] = "cell64";
 static u64 log_t0;
+static u32 log_seq;
 
 static void log_load_dest(void)
 {
@@ -68,8 +69,8 @@ void cell64_log(const char *fmt, ...)
 {
 	char line[CELL64_LOG_LINE_MAX];
 	u64 us = sysGetSystemTime() - log_t0;
-	int n = snprintf(line, sizeof line, "[%s %4u.%03u] ", log_tag,
-			 (unsigned)(us / 1000000), (unsigned)(us / 1000 % 1000));
+	int n = snprintf(line, sizeof line, "[%s %4u.%03u #%u] ", log_tag,
+			 (unsigned)(us / 1000000), (unsigned)(us / 1000 % 1000), (unsigned)++log_seq);
 
 	va_list ap;
 	va_start(ap, fmt);

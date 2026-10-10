@@ -5,7 +5,8 @@
  * vértice (shaders Cg compilados offline con cgcomp) y en el cuadro
  * CHECK_FRAME lee píxeles del framebuffer para verificar el dibujo: esquina
  * con el color de fondo y, cerca de cada vértice, el canal dominante de ese
- * vértice. Sale con X/O o desde el menú del sistema.
+ * vértice. Sale con X/O, desde el menú del sistema o, en modo de prueba
+ * automática (platform/ps3/autotest.h), tras FPS_FRAMES cuadros.
  *
  * En RPCS3 la verificación necesita "Write Color Buffers" activado; sin eso
  * el framebuffer no se copia a la memoria emulada (docs/rsx-notes.md).
@@ -23,6 +24,7 @@
 #include <sysutil/sysutil.h>
 #include <sysutil/video.h>
 
+#include "platform/ps3/autotest.h"
 #include "platform/ps3/log.h"
 #include "triangle_fpo.h"
 #include "triangle_vpo.h"
@@ -315,6 +317,7 @@ int main(void)
 
 	ioPadInit(7);
 	sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, sysutil_cb, NULL);
+	const int autotest = cell64_autotest();
 
 	u64 t0 = sysGetSystemTime();
 	for (u32 frame = 0; running; frame++) {
@@ -333,6 +336,8 @@ int main(void)
 		if (frame + 1 == FPS_FRAMES) {
 			u64 us = sysGetSystemTime() - t0;
 			cell64_log("%u cuadros en %u ms (vsync)", FPS_FRAMES, (unsigned)(us / 1000));
+			if (autotest)
+				break;
 		}
 	}
 

@@ -27,10 +27,10 @@
 #include <sys/systime.h>
 
 #include "platform/ps3/log.h"
+#include "platform/ps3/paths.h"
 
-#define JIT_DIR    "/dev_hdd0/tmp"
-#define JIT_STATE  JIT_DIR "/cell64_jit_state.txt"
-#define JIT_RESULT JIT_DIR "/cell64_jit_result.txt"
+#define JIT_STATE  CELL64_DATA_DIR "/jit_state.txt"
+#define JIT_RESULT CELL64_DATA_DIR "/jit_result.txt"
 #define JIT_BYTES  (64 * 1024)
 #define CACHE_LINE 128
 #define FLUSH_REPS 100
@@ -353,7 +353,7 @@ static void run_mech(int i)
 int main(void)
 {
 	cell64_log_init("jit-ppe");
-	mkdir(JIT_DIR, 0777);
+	mkdir(CELL64_DATA_DIR, 0777);
 	state_load();
 
 	for (int i = 0; i < NUM_MECHS; i++) {

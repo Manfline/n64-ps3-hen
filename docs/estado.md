@@ -14,13 +14,26 @@ Hecho:
   - `tests/phase0/udplog`: 200 líneas numeradas por UDP.
 - Logger TTY + UDP (`src/platform/ps3/log.c`) y receptor `tools/udplog.py`.
 
+- RPCS3 0.0.43 + firmware 4.92 en la Mac (docs/rpcs3.md). `tools/test-phase0.sh`
+  corre las cuatro pruebas: udplog, spu-compute y rsx-triangle pasan;
+  jit-ppe completa su ciclo, pero RPCS3 no ejecuta código generado (no
+  concluyente).
+
 Falta para cerrar la Fase 0:
-- [ ] RPCS3 en la Mac + firmware de PS3 instalado por el autor; correr los 4
-      programas y automatizarlo (`tools/rpcs3-run.sh`, por escribir).
+- [x] Correr los 4 programas en RPCS3 y automatizarlo.
 - [ ] PS3 real: correr los 4 programas (rsx-triangle, spu-compute, udplog,
       jit-ppe con HEN y, si se puede, CFW). Llenar docs/jit-ppe.md.
 - [ ] Decidir el plan de la Fase 3 según el resultado del JIT.
 
+Nombre (pendiente de decidir):
+- Ya existe un emulador de N64 para PS3 llamado **Cell64**: v1.52 de
+  "ZeBobbel", publicado en Brewology el 2026-09-27
+  (store.brewology.com/ahomebrew.php?brewid=344), con una variante "HEN FIX by
+  DropSonic DS". Sin código fuente publicado ni descripción técnica; el
+  "sitio del desarrollador" es un canal de YouTube con dos videos de prueba.
+  Hay que renombrar este proyecto antes de publicar nada.
+
 Notas:
 - No usar `-Os` en el PPU: ICE de GCC 13.2 (docs/toolchain.md).
 - En RPCS3, rsx-triangle necesita "Write Color Buffers" para su verificación.
+- Archivos de Cell64 en la PS3: `/dev_hdd0/cell64/` (RPCS3 vacía `/dev_hdd0/tmp`).

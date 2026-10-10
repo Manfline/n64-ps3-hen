@@ -37,10 +37,10 @@ los SPEs (su local store ejecuta lo que llegue por DMA).
 
 Ejecutar una página no ejecutable mata el proceso. Antes de cada fase
 arriesgada el programa agrega `<mecanismo> PROBANDO <fase>` a
-`/dev_hdd0/tmp/cell64_jit_state.txt`; al relanzarlo, lo que quedó en PROBANDO
+`/dev_hdd0/cell64/jit_state.txt`; al relanzarlo, lo que quedó en PROBANDO
 se registra como `CRASH <fase>` y sigue con el siguiente mecanismo. **Hay que
 relanzarlo hasta que imprima `RESULTADO jit-ppe`.** Al terminar, el archivo se
-renombra a `/dev_hdd0/tmp/cell64_jit_result.txt` y la siguiente ejecución
+renombra a `/dev_hdd0/cell64/jit_result.txt` y la siguiente ejecución
 empieza de cero.
 
 ## Cómo correrla en la PS3
@@ -60,7 +60,14 @@ de lv2); sirve solo para validar que el programa corre.
 
 | Fecha | Entorno | data | bss | seg0 | heap | sysmem64k | sysmem1m | mmapper | text | flush 64 KB |
 |---|---|---|---|---|---|---|---|---|---|---|
+| 2026-10-10 | RPCS3 0.0.43, LLVM e intérprete dinámico (**no concluyente**) | CRASH ejec. | CRASH ejec. | CRASH ejec. | CRASH ejec. | CRASH ejec. | CRASH ejec. | CRASH ejec. | CRASH escritura | — |
 | — | PS3 Slim, HEN (pendiente) | | | | | | | | | |
 | — | PS3, CFW (pendiente) | | | | | | | | | |
 
-Conclusión: pendiente.
+En RPCS3 todos los mecanismos reservan memoria bien y todos caen al ejecutar,
+porque el emulador solo ejecuta código de los módulos cargados (ver
+docs/rpcs3.md); eso no dice nada del hardware. Sí valida el programa: la
+máquina de estados completa el ciclo tras 8 caídas, y `.text` es de solo
+lectura.
+
+Conclusión: pendiente de la PS3 real.
