@@ -31,6 +31,7 @@
 #include <string.h>
 
 #include "core/sched.h"
+#include "cpu/fpu.h"
 #include "cpu/ppc.h"
 #include "cpu/rec.h"
 #include "cpu/vr4300_internal.h"
@@ -168,6 +169,12 @@ static void decode(uint32_t i, struct dec *d)
 		case 0x04: case 0x05: RD(rt); break;                    /* MTC1 DMTC1 */
 		case 0x02: WR(rt); d->how = H_EXEC; break;              /* CFC1 */
 		case 0x06: RD(rt); d->how = H_EXEC; break;              /* CTC1 */
+		case 0x10: case 0x11: {                                 /* S, D */
+			unsigned f = I_FUNCT(i);
+			if (!(f <= 0x03 || (f >= 0x05 && f <= 0x07) || f >= 0x30))
+				d->how = H_EXEC;  /* SQRT, conversiones, redondeos */
+			break;
+		}
 		default: d->how = H_EXEC; break;
 		}
 		break;
@@ -1062,6 +1069,249 @@ static void emit_cop1(struct ctx *c, uint32_t i)
 	}
 }
 
+/* ---- FPU ----------------------------------------------------------------------- */
+
+/*
+ * Lo mismo que el camino rápido del intérprete (fpu.h: fpu_fast_arith,
+ * fpu_fast_abs_neg, fpu_fast_compare, MOV), con las mismas operaciones de
+ * doble precisión en el mismo orden, así que da los mismos bits y las mismas
+ * causas en FCR31. Lo que ese camino no cubre (redondeo dirigido, I
+ * habilitada, operandos fuera de la franja segura, NaN, desnormales, suma
+ * con exponentes a más de 28 de distancia en S) salta a la sección fría,
+ * donde lo hace el intérprete.
+ *
+ * Operandos como en cop1.c: fs con el bit bajo ignorado si FR = 0; ft y fd,
+ * el registro tal cual. En S, el valor está en la mitad baja (+4).
+ */
+
+/* r6 = FCR31 leído antes; r5 = 1 si el resultado es inexacto (o NULL: no).
+ * Borra las causas, pone I si hace falta y escribe solo si cambió. */
+static void emit_fcr31_cause(struct ctx *c, bool inexact_in_r5)
+{
+	int same = new_label(c);
+	E(c, ppc_rlwinm(7, 6, 0, 20, 13));  /* causas (bits 12–17) en 0 */
+	if (inexact_in_r5) {
+		E(c, ppc_neg(0, 5));
+		E(c, ppc_andi_(0, 0, 0x1004));  /* causa I y bandera I */
+		E(c, ppc_or(7, 7, 0));
+	}
+	E(c, ppc_cmpw(CR_T, 7, 6));
+	emit_bc(c, PPC_BO_TRUE, PPC_BI(CR_T, PPC_EQ), same);
+	E(c, ppc_stw(7, OFF(fcr31), R_CPU));
+	bind(c, same);
+}
+
+/* Franja segura del exponente (fpu_fast_band): salta a `slow` si no. Deja el
+ * exponente en `e`. */
+static void emit_fpu_band(struct ctx *c, bool is_s, unsigned bits, unsigned e, int slow)
+{
+	int ok = new_label(c);
+	if (is_s) {
+		E(c, ppc_rlwinm(e, bits, 9, 24, 31));
+		E(c, ppc_addi(0, e, -67));
+		E(c, ppc_cmplwi(CR_T, 0, 120));
+		emit_bc(c, PPC_BO_FALSE_LIKELY, PPC_BI(CR_T, PPC_GT), ok);
+		E(c, ppc_rlwinm(0, bits, 0, 1, 31));
+	} else {
+		E(c, ppc_rldicl(e, bits, 12, 53));
+		E(c, ppc_addi(0, e, -583));
+		E(c, ppc_cmplwi(CR_T, 0, 880));
+		emit_bc(c, PPC_BO_FALSE_LIKELY, PPC_BI(CR_T, PPC_GT), ok);
+		E(c, ppc_clrldi(0, bits, 1));
+	}
+	E(c, ppc_cmpdi(CR_T, 0, 0));
+	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
+	bind(c, ok);
+}
+
+static void emit_fpu(struct ctx *c, unsigned k)
+{
+	uint32_t i = c->d[k].w;
+	bool is_s = I_FMT(i) == FMT_S;
+	unsigned funct = I_FUNCT(i), fs = I_FS(i), ft = I_FT(i), fd = I_FD(i);
+	unsigned fsr = c->rec->fr ? fs : fs & ~1u;
+	int32_t lo = is_s ? 4 : 0;
+	int32_t oa = OFF(fpr) + 8 * (int32_t)fsr + lo, ob = OFF(fpr) + 8 * (int32_t)ft + lo;
+	int32_t od = OFF(fpr) + 8 * (int32_t)fd;
+
+	if (funct == 0x06) {  /* MOV: los 64 bits, sin tocar FCR31 */
+		E(c, ppc_ld(0, OFF(fpr) + 8 * (int32_t)fsr, R_CPU));
+		E(c, ppc_std(0, od, R_CPU));
+		return;
+	}
+
+	int slow = new_label(c), resume = new_label(c);
+	if (funct == 0x05 || funct == 0x07) {  /* ABS, NEG */
+		int ok = new_label(c);
+		unsigned emax = is_s ? 0xFF : 0x7FF;
+		if (is_s) {
+			E(c, ppc_lwz(9, oa, R_CPU));
+			E(c, ppc_rlwinm(11, 9, 9, 24, 31));
+			E(c, ppc_rlwinm(12, 9, 0, 9, 31));
+		} else {
+			E(c, ppc_ld(9, oa, R_CPU));
+			E(c, ppc_rldicl(11, 9, 12, 53));
+			E(c, ppc_clrldi(12, 9, 12));
+		}
+		/* NaN y desnormales (mantisa ≠ 0 con exponente 0 o máximo): lento. */
+		E(c, ppc_cmpdi(CR_T, 12, 0));
+		emit_bc(c, PPC_BO_TRUE_LIKELY, PPC_BI(CR_T, PPC_EQ), ok);
+		E(c, ppc_cmpwi(CR_T, 11, 0));
+		emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
+		E(c, ppc_cmpwi(CR_T, 11, (int32_t)emax));
+		emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
+		bind(c, ok);
+		if (is_s) {
+			E(c, funct == 0x07 ? ppc_xoris(9, 9, 0x8000) : ppc_rlwinm(9, 9, 0, 1, 31));
+		} else if (funct == 0x07) {
+			E(c, ppc_li(0, 1));
+			E(c, ppc_sldi(0, 0, 63));
+			E(c, ppc_xor(9, 9, 0));
+		} else {
+			E(c, ppc_clrldi(9, 9, 1));
+		}
+		E(c, ppc_lwz(6, OFF(fcr31), R_CPU));
+		E(c, ppc_std(9, od, R_CPU));  /* en S, los 32 bits altos en 0 */
+		emit_fcr31_cause(c, false);
+	} else if (funct >= 0x30) {  /* C.cond sin NaN, en enteros */
+		unsigned cond = funct & 15;
+		int set = new_label(c), done = new_label(c);
+		if (is_s) {
+			E(c, ppc_lwz(9, oa, R_CPU));
+			E(c, ppc_lwz(10, ob, R_CPU));
+			E(c, ppc_rlwinm(11, 9, 0, 1, 31));
+			E(c, ppc_rlwinm(12, 10, 0, 1, 31));
+			E(c, ppc_lis(0, 0x7F80));
+			E(c, ppc_extsw(9, 9));
+			E(c, ppc_extsw(10, 10));
+		} else {
+			E(c, ppc_ld(9, oa, R_CPU));
+			E(c, ppc_ld(10, ob, R_CPU));
+			E(c, ppc_clrldi(11, 9, 1));
+			E(c, ppc_clrldi(12, 10, 1));
+			E(c, ppc_li(0, 0x7FF));
+			E(c, ppc_sldi(0, 0, 52));
+		}
+		E(c, ppc_cmpld(CR_T, 11, 0));
+		emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(CR_T, PPC_GT), slow);
+		E(c, ppc_cmpld(CR_T, 12, 0));
+		emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(CR_T, PPC_GT), slow);
+		/* Signo y magnitud → entero ordenado: (m ^ s) - s con s = 0 o -1. */
+		E(c, ppc_sradi(9, 9, 63));
+		E(c, ppc_sradi(10, 10, 63));
+		E(c, ppc_xor(11, 11, 9));
+		E(c, ppc_subf(11, 9, 11));
+		E(c, ppc_xor(12, 12, 10));
+		E(c, ppc_subf(12, 10, 12));
+		E(c, ppc_cmpd(CR_T, 11, 12));
+		E(c, ppc_lwz(6, OFF(fcr31), R_CPU));
+		E(c, ppc_rlwinm(7, 6, 0, 20, 13));  /* causas en 0 */
+		E(c, ppc_rlwinm(7, 7, 0, 9, 7));    /* C (bit 23) en 0 */
+		if (cond & 4)
+			emit_bc(c, PPC_BO_TRUE, PPC_BI(CR_T, PPC_LT), set);
+		if (cond & 2)
+			emit_bc(c, PPC_BO_TRUE, PPC_BI(CR_T, PPC_EQ), set);
+		emit_b(c, done, false);
+		bind(c, set);
+		E(c, ppc_oris(7, 7, 0x0080));
+		bind(c, done);
+		int same = new_label(c);
+		E(c, ppc_cmpw(CR_T, 7, 6));
+		emit_bc(c, PPC_BO_TRUE, PPC_BI(CR_T, PPC_EQ), same);
+		E(c, ppc_stw(7, OFF(fcr31), R_CPU));
+		bind(c, same);
+	} else {  /* ADD SUB MUL DIV */
+		int done = new_label(c);
+		E(c, ppc_lwz(6, OFF(fcr31), R_CPU));
+		E(c, ppc_andi_(0, 6, 0x83));  /* RM ≠ 0 o I habilitada */
+		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(0, PPC_EQ), slow);
+		E(c, is_s ? ppc_lwz(9, oa, R_CPU) : ppc_ld(9, oa, R_CPU));
+		E(c, is_s ? ppc_lwz(10, ob, R_CPU) : ppc_ld(10, ob, R_CPU));
+		emit_fpu_band(c, is_s, 9, 12, slow);
+		emit_fpu_band(c, is_s, 10, 4, slow);
+		if (funct == 0x03) {  /* entre cero: Z o V */
+			E(c, is_s ? ppc_rlwinm(0, 10, 0, 1, 31) : ppc_clrldi(0, 10, 1));
+			E(c, ppc_cmpdi(CR_T, 0, 0));
+			emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
+		}
+		E(c, is_s ? ppc_lfs(1, oa, R_CPU) : ppc_lfd(1, oa, R_CPU));
+		E(c, is_s ? ppc_lfs(2, ob, R_CPU) : ppc_lfd(2, ob, R_CPU));
+		if (funct == 0x01)
+			E(c, ppc_fneg(2, 2));  /* SUB = ADD con -b */
+		switch (funct) {
+		case 0x00: case 0x01: E(c, ppc_fadd(0, 1, 2)); break;
+		case 0x02:            E(c, ppc_fmul(0, 1, 2)); break;
+		default:              E(c, ppc_fdiv(0, 1, 2)); break;
+		}
+		E(c, ppc_li(5, 1));
+		if (is_s) {
+			E(c, ppc_frsp(3, 0));
+			E(c, ppc_fcmpu(CR_T, 3, 0));
+			emit_bc(c, PPC_BO_FALSE, PPC_BI(CR_T, PPC_EQ), done);  /* (double)f != r */
+			if (funct <= 0x01) {
+				/* Exponentes a más de 28 (y ninguno cero): TwoSum, lento. */
+				int exact = new_label(c);
+				E(c, ppc_cmpwi(CR_T, 12, 0));
+				emit_bc(c, PPC_BO_TRUE, PPC_BI(CR_T, PPC_EQ), exact);
+				E(c, ppc_cmpwi(CR_T, 4, 0));
+				emit_bc(c, PPC_BO_TRUE, PPC_BI(CR_T, PPC_EQ), exact);
+				E(c, ppc_subf(11, 4, 12));
+				E(c, ppc_addi(11, 11, 28));  /* no r0: en addi vale 0 */
+				E(c, ppc_cmplwi(CR_T, 11, 56));
+				emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(CR_T, PPC_GT), slow);
+				bind(c, exact);
+				E(c, ppc_li(5, 0));
+			} else if (funct == 0x02) {
+				E(c, ppc_li(5, 0));  /* el producto de dos float es exacto en double */
+			} else {
+				E(c, ppc_fnmsub(4, 0, 2, 1));  /* a - r·b */
+				E(c, ppc_fsub(5, 1, 1));
+				E(c, ppc_fcmpu(CR_T, 4, 5));
+				emit_bc(c, PPC_BO_FALSE, PPC_BI(CR_T, PPC_EQ), done);
+				E(c, ppc_li(5, 0));
+			}
+		} else {
+			if (funct <= 0x01) {  /* TwoSum */
+				E(c, ppc_fsub(4, 0, 1));       /* bb = r - a */
+				E(c, ppc_fsub(5, 0, 4));       /* r - bb */
+				E(c, ppc_fsub(5, 1, 5));       /* a - (r - bb) */
+				E(c, ppc_fsub(3, 2, 4));       /* b - bb */
+				E(c, ppc_fadd(4, 5, 3));
+			} else if (funct == 0x02) {
+				E(c, ppc_fmsub(4, 1, 2, 0));   /* a·b - r */
+			} else {
+				E(c, ppc_fnmsub(4, 0, 2, 1));  /* a - r·b */
+			}
+			E(c, ppc_fsub(5, 1, 1));
+			E(c, ppc_fcmpu(CR_T, 4, 5));
+			emit_bc(c, PPC_BO_FALSE, PPC_BI(CR_T, PPC_EQ), done);
+			E(c, ppc_li(5, 0));
+		}
+		bind(c, done);
+		if (is_s) {
+			E(c, ppc_stfs(3, od + 4, R_CPU));
+			E(c, ppc_li(0, 0));
+			E(c, ppc_stw(0, od, R_CPU));
+		} else {
+			E(c, ppc_stfd(0, od, R_CPU));
+		}
+		emit_fcr31_cause(c, true);
+	}
+	bind(c, resume);
+
+	/* Camino lento: el intérprete (no toca registros generales). */
+	unsigned sec = c->sec;
+	c->sec = SEC_COLD;
+	bind(c, slow);
+	call_prep(c, k);
+	E(c, ppc_mr(3, R_CPU));
+	li32u(c, 4, i);
+	emit_call(c, c->rec->h_exec);
+	post_check(c, k);
+	emit_b(c, resume, false);
+	c->sec = sec;
+}
+
 static void emit_insn(struct ctx *c, unsigned k)
 {
 	const struct dec *d = &c->d[k];
@@ -1079,7 +1329,12 @@ static void emit_insn(struct ctx *c, unsigned k)
 	}
 	switch (I_OP(i)) {
 	case 0x00: emit_special(c, i); return;
-	case 0x11: emit_cop1(c, i); return;
+	case 0x11:
+		if ((I_FMT(i) & ~1u) == FMT_S)
+			emit_fpu(c, k);
+		else
+			emit_cop1(c, i);
+		return;
 	case 0x20: emit_load(c, k, SALSA64_REC_LB, DST_GPR); return;
 	case 0x21: emit_load(c, k, SALSA64_REC_LH, DST_GPR); return;
 	case 0x23: emit_load(c, k, SALSA64_REC_LW, DST_GPR); return;
@@ -1194,7 +1449,7 @@ static void emit_branch(struct ctx *c, unsigned b)
 	switch (d->kind) {
 	case K_JUMP_REG:
 		E(c, ppc_mr(3, R_TARGET));
-		emit_b(c, abs_label(c, c->rec->exit_jump), false);
+		emit_b(c, abs_label(c, c->temp || c->rec->no_link ? c->rec->exit_jump : c->rec->exit_jr), false);
 		return;
 	case K_BRANCH: {
 		int taken = new_label(c);

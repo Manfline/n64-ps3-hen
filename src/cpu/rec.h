@@ -42,13 +42,15 @@ struct salsa64_cpu;
 #define SALSA64_REC_MAX_LABELS  4096
 #define SALSA64_REC_MAX_FIXUPS  8192
 
+/* 16 bytes: la búsqueda de destinos de JR en el código generado indexa
+ * blocks[] con un desplazamiento y lee `code` en +0. */
 struct salsa64_rec_block {
-	uint32_t pa;         /* dirección física de la primera instrucción */
-	uint32_t end;        /* pa + bytes de MIPS que cubre */
 	uint32_t code;       /* palabra de entrada en la caché; 0 = lo corre el intérprete */
-	uint32_t links;      /* enlaces que llegan aquí: índice + 1 en links[], 0 = ninguno */
+	uint32_t pa;         /* dirección física de la primera instrucción */
+	uint32_t links;      /* enlaces que llegan aquí: índice + 1 en links[], 0 = ninguno;
+			      * en un id libre, el siguiente id libre */
 	uint16_t n;          /* instrucciones del camino más largo */
-	uint16_t next_free;
+	uint16_t bytes;      /* bytes de MIPS que cubre */
 };
 
 struct salsa64_rec_link {
@@ -90,6 +92,7 @@ struct salsa64_rec {
 	uint32_t generation;     /* sube en cada vaciado completo */
 	uint64_t enter_opd[3];   /* descriptor ELFv1 de la entrada al código generado */
 	uint32_t exit_link, exit_mid, exit_jump;  /* rutinas de salida (palabra en la caché) */
+	uint32_t exit_jr;        /* JR/JALR: busca el bloque destino y salta, o sale como exit_jump */
 
 	/* Direcciones de entrada de las funciones de C que llama el código. */
 	uint64_t h_load, h_store, h_exec, h_exception;

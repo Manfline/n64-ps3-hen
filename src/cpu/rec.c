@@ -41,6 +41,8 @@ _Static_assert(offsetof(struct salsa64_cpu, irq_pending) % 4 == 0 &&
 	       "el código generado lee irq_pending, redirect, rec_abort y mode con un lwz");
 _Static_assert(offsetof(struct salsa64_sched, next) == 0, "el código generado lee sched->next en +0");
 _Static_assert(SALSA64_REC_MAX_LINKS < (1u << 31), "índices de enlaces");
+_Static_assert(sizeof(struct salsa64_rec_block) == 16 && offsetof(struct salsa64_rec_block, code) == 0,
+	       "exit_jr indexa blocks[] con << 4 y lee code en +0");
 
 /* ---- Caché de instrucciones ----------------------------------------------------- */
 
@@ -121,7 +123,32 @@ REC_UNUSED static uint64_t fn_entry(const void *fn, uint64_t *toc)
  *   exit_link: viene de `bl` en un enlace; el nop parcheable está en LR - 16.
  *   exit_mid, exit_jump: tipo de salida en r4.
  *   común: guarda cycles y el tipo, restaura y vuelve a C.
+ *   exit_jr: destino de JR/JALR en r3; si ya hay un bloque compilado ahí,
+ *     salta directo a su entrada (que revisa el próximo evento), si no,
+ *     sigue como exit_jump.
  */
+static uint32_t pre_li64(uint32_t *w, uint32_t n, unsigned rt, uint64_t v)
+{
+	if ((int64_t)v == (int32_t)v) {
+		w[n++] = ppc_lis(rt, (int16_t)(v >> 16));
+		w[n++] = ppc_ori(rt, rt, (uint32_t)v & 0xFFFF);
+	} else {
+		w[n++] = ppc_lis(rt, (int16_t)(v >> 48));
+		w[n++] = ppc_ori(rt, rt, (uint32_t)(v >> 32) & 0xFFFF);
+		w[n++] = ppc_sldi(rt, rt, 32);
+		w[n++] = ppc_oris(rt, rt, (uint32_t)(v >> 16) & 0xFFFF);
+		w[n++] = ppc_ori(rt, rt, (uint32_t)v & 0xFFFF);
+	}
+	return n;
+}
+
+/* bc a una rutina ya escrita del preámbulo. */
+static uint32_t pre_bc(uint32_t *w, uint32_t n, unsigned bo, unsigned bi, uint32_t to)
+{
+	w[n] = ppc_bc(bo, bi, ((int32_t)to - (int32_t)n) * 4);
+	return n + 1;
+}
+
 REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 {
 	uint32_t *w = rec->code, n = 0;
@@ -171,6 +198,34 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	w[n++] = ppc_lwz(12, 8, 1);
 	w[n++] = ppc_mtcrf(0x38, 12);  /* cr2–cr4, los no volátiles */
 	w[n++] = PPC_BLR;
+
+	/* exit_jr: KSEG0, alineada y dentro de la RDRAM → map → blocks → código. */
+	const unsigned ne = PPC_BO_FALSE_UNLIKELY, eq = PPC_BO_TRUE_UNLIKELY, EQ = PPC_BI(0, PPC_EQ);
+	rec->exit_jr = n;
+	w[n++] = ppc_sradi(11, 3, 29);
+	w[n++] = ppc_cmpdi(0, 11, -4);
+	n = pre_bc(w, n, ne, EQ, rec->exit_jump);
+	w[n++] = ppc_clrldi(12, 3, 35);
+	w[n++] = ppc_srdi(11, 12, rec->rdram_shift);
+	w[n++] = ppc_clrldi(0, 12, 62);
+	w[n++] = ppc_or(11, 11, 0);
+	w[n++] = ppc_cmpdi(0, 11, 0);
+	n = pre_bc(w, n, ne, EQ, rec->exit_jump);
+	w[n++] = ppc_srdi(12, 12, 1);  /* map es de uint16_t por palabra */
+	n = pre_li64(w, n, 11, (uintptr_t)rec->map);
+	w[n++] = ppc_lhzx(12, 11, 12);
+	w[n++] = ppc_cmpwi(0, 12, 0);
+	n = pre_bc(w, n, eq, EQ, rec->exit_jump);
+	w[n++] = ppc_sldi(12, 12, 4);
+	n = pre_li64(w, n, 11, (uintptr_t)rec->blocks);
+	w[n++] = ppc_lwzx(12, 11, 12);
+	w[n++] = ppc_cmpwi(0, 12, 0);
+	n = pre_bc(w, n, eq, EQ, rec->exit_jump);
+	w[n++] = ppc_sldi(12, 12, 2);
+	n = pre_li64(w, n, 11, (uintptr_t)rec->code);
+	w[n++] = ppc_add(12, 11, 12);
+	w[n++] = ppc_mtctr(12);
+	w[n++] = PPC_BCTR;
 	return n;
 }
 
@@ -186,7 +241,7 @@ static uint64_t rec_enter(struct salsa64_rec *rec, uint32_t entry)
 
 static uint32_t preamble_words(void)
 {
-	return 128;  /* emit_preamble usa menos; los bloques empiezan alineados */
+	return 256;  /* emit_preamble usa menos; los bloques empiezan alineados */
 }
 
 void salsa64_rec_flush(struct salsa64_rec *rec)
@@ -235,10 +290,10 @@ static void kill_block(struct salsa64_rec *rec, unsigned id)
 {
 	struct salsa64_rec_block *b = &rec->blocks[id];
 	rec->map[b->pa >> 2] = 0;
-	flags_add(rec, b->pa, b->end, -1);
+	flags_add(rec, b->pa, b->pa + b->bytes, -1);
 	unlink_all(rec, b);
 	b->code = 0;
-	b->next_free = rec->free_block;
+	b->links = rec->free_block;
 	rec->free_block = (uint16_t)id;
 	rec->stats.invalidated++;
 	rec->cpu->rec_abort = 1;
@@ -267,7 +322,7 @@ void salsa64_rec_invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t len)
 			w1 = end;
 		for (uint32_t w = w0; w < w1; w += 4) {
 			unsigned id = rec->map[w >> 2];
-			if (id && rec->blocks[id].end > pa)
+			if (id && rec->blocks[id].pa + rec->blocks[id].bytes > pa)
 				kill_block(rec, id);
 		}
 	}
@@ -295,7 +350,7 @@ static unsigned new_block(struct salsa64_rec *rec, uint64_t pc, uint32_t pa)
 	unsigned id;
 	if (rec->free_block) {
 		id = rec->free_block;
-		rec->free_block = rec->blocks[id].next_free;
+		rec->free_block = (uint16_t)rec->blocks[id].links;
 	} else {
 		id = rec->next_block++;
 	}
@@ -303,11 +358,11 @@ static unsigned new_block(struct salsa64_rec *rec, uint64_t pc, uint32_t pa)
 	b->pa = pa;
 	b->code = code;
 	b->n = (uint16_t)n;
-	b->end = pa + (code ? bytes : 4);
+	b->bytes = (uint16_t)(code ? bytes : 4);
 	b->links = 0;
 	rec->map[pa >> 2] = (uint16_t)id;
 	rec->map_dirty = true;
-	flags_add(rec, b->pa, b->end, +1);
+	flags_add(rec, b->pa, b->pa + b->bytes, +1);
 	if (code) {
 		rec->stats.compiled++;
 	} else {
@@ -502,6 +557,8 @@ bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *co
 	}
 
 	uint32_t n = emit_preamble(rec);
+	if (n > preamble_words())
+		return false;
 	salsa64_rec_sync(rec->code, n * 4);
 	rec->enter_opd[0] = (uintptr_t)code;
 	rec->enter_opd[1] = my_toc;

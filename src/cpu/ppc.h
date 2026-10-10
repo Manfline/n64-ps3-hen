@@ -8,6 +8,10 @@
  *
  * Convenciones del ensamblador: los operandos van en el orden de la
  * mnemónica (`ppc_addi(rt, ra, si)` es `addi rt, ra, si`).
+ *
+ * Ojo: en addi, addis y en la base de las cargas y almacenamientos con
+ * desplazamiento, ra = 0 no es r0 sino el valor 0 (así se escribe li). r0
+ * sirve de destino, pero nunca de fuente en esas instrucciones.
  */
 #ifndef SALSA64_CPU_PPC_H
 #define SALSA64_CPU_PPC_H
@@ -96,6 +100,7 @@ PPC_INLINE uint32_t ppc_add(unsigned rt, unsigned ra, unsigned rb) { return ppc_
 PPC_INLINE uint32_t ppc_subf(unsigned rt, unsigned ra, unsigned rb) { return ppc_x(rt, ra, rb, 40); }
 PPC_INLINE uint32_t ppc_neg(unsigned rt, unsigned ra) { return ppc_x(rt, ra, 0, 104); }
 PPC_INLINE uint32_t ppc_mulld(unsigned rt, unsigned ra, unsigned rb) { return ppc_x(rt, ra, rb, 233); }
+PPC_INLINE uint32_t ppc_xoris(unsigned ra, unsigned rs, uint32_t ui) { return ppc_d(27, rs, ra, ui); }
 PPC_INLINE uint32_t ppc_mulhd(unsigned rt, unsigned ra, unsigned rb) { return ppc_x(rt, ra, rb, 73); }
 PPC_INLINE uint32_t ppc_mulhdu(unsigned rt, unsigned ra, unsigned rb) { return ppc_x(rt, ra, rb, 9); }
 PPC_INLINE uint32_t ppc_divd(unsigned rt, unsigned ra, unsigned rb) { return ppc_x(rt, ra, rb, 489); }
@@ -125,6 +130,8 @@ PPC_INLINE uint32_t ppc_srad(unsigned ra, unsigned rs, unsigned rb) { return ppc
 
 PPC_INLINE uint32_t ppc_cmpd(unsigned bf, unsigned ra, unsigned rb) { return ppc_x(bf << 2 | 1, ra, rb, 0); }
 PPC_INLINE uint32_t ppc_cmpld(unsigned bf, unsigned ra, unsigned rb) { return ppc_x(bf << 2 | 1, ra, rb, 32); }
+PPC_INLINE uint32_t ppc_cmpw(unsigned bf, unsigned ra, unsigned rb) { return ppc_x(bf << 2, ra, rb, 0); }
+PPC_INLINE uint32_t ppc_cmplw(unsigned bf, unsigned ra, unsigned rb) { return ppc_x(bf << 2, ra, rb, 32); }
 
 /* ---- Rotaciones con inmediato ----------------------------------------------- */
 
@@ -149,6 +156,34 @@ PPC_INLINE uint32_t ppc_clrldi(unsigned ra, unsigned rs, unsigned n) { return pp
 PPC_INLINE uint32_t ppc_sradi(unsigned ra, unsigned rs, unsigned sh)
 {
 	return 31u << 26 | (uint32_t)rs << 21 | (uint32_t)ra << 16 | (sh & 31) << 11 | 413u << 2 | (sh >> 5 & 1) << 1;
+}
+
+/* ---- Punto flotante (doble precisión, f0–f13 volátiles) ------------------- */
+
+PPC_INLINE uint32_t ppc_lfs(unsigned frt, int32_t d, unsigned ra) { return ppc_d(48, frt, ra, (uint32_t)d); }
+PPC_INLINE uint32_t ppc_lfd(unsigned frt, int32_t d, unsigned ra) { return ppc_d(50, frt, ra, (uint32_t)d); }
+PPC_INLINE uint32_t ppc_stfs(unsigned frs, int32_t d, unsigned ra) { return ppc_d(52, frs, ra, (uint32_t)d); }
+PPC_INLINE uint32_t ppc_stfd(unsigned frs, int32_t d, unsigned ra) { return ppc_d(54, frs, ra, (uint32_t)d); }
+
+/* Forma A (opcode 63): frt, fra, frb, frc. */
+PPC_INLINE uint32_t ppc_fa(unsigned frt, unsigned fra, unsigned frb, unsigned frc, unsigned xo)
+{
+	return 63u << 26 | (uint32_t)frt << 21 | (uint32_t)fra << 16 | (uint32_t)frb << 11 | (uint32_t)frc << 6 | xo << 1;
+}
+
+PPC_INLINE uint32_t ppc_fadd(unsigned frt, unsigned fra, unsigned frb) { return ppc_fa(frt, fra, frb, 0, 21); }
+PPC_INLINE uint32_t ppc_fsub(unsigned frt, unsigned fra, unsigned frb) { return ppc_fa(frt, fra, frb, 0, 20); }
+PPC_INLINE uint32_t ppc_fmul(unsigned frt, unsigned fra, unsigned frc) { return ppc_fa(frt, fra, 0, frc, 25); }
+PPC_INLINE uint32_t ppc_fdiv(unsigned frt, unsigned fra, unsigned frb) { return ppc_fa(frt, fra, frb, 0, 18); }
+/* fmsub: fra * frc - frb; fnmsub: frb - fra * frc (un solo redondeo). */
+PPC_INLINE uint32_t ppc_fmsub(unsigned frt, unsigned fra, unsigned frc, unsigned frb) { return ppc_fa(frt, fra, frb, frc, 28); }
+PPC_INLINE uint32_t ppc_fnmsub(unsigned frt, unsigned fra, unsigned frc, unsigned frb) { return ppc_fa(frt, fra, frb, frc, 30); }
+/* Forma X (opcode 63). */
+PPC_INLINE uint32_t ppc_frsp(unsigned frt, unsigned frb) { return 63u << 26 | (uint32_t)frt << 21 | (uint32_t)frb << 11 | 12u << 1; }
+PPC_INLINE uint32_t ppc_fneg(unsigned frt, unsigned frb) { return 63u << 26 | (uint32_t)frt << 21 | (uint32_t)frb << 11 | 40u << 1; }
+PPC_INLINE uint32_t ppc_fcmpu(unsigned bf, unsigned fra, unsigned frb)
+{
+	return 63u << 26 | (uint32_t)bf << 23 | (uint32_t)fra << 16 | (uint32_t)frb << 11;
 }
 
 /* ---- Saltos -------------------------------------------------------------- */
