@@ -20,11 +20,18 @@ bloquear»):
 - Verificación: 224 pruebas en el host, cpu-tests/vitest/save-tests en
   RPCS3, gfxtest 22/22, test-roms 446, build sin advertencias.
 
+Medido en la PS3 (docs/perf-log.md, «Fin de tarea del RSP por sondeo»):
+Zelda, «esperando al SPE» 2,3–8,2 ms por tarea → 0; emulación por campo
+igual (3,2–7,5 → 3,2–7,2 ms) porque el CPU está ocioso mientras el RSP
+trabaja y el sondeo duerme ese tiempo; 60 campos/s sin regresiones;
+gfxtest OK. La ganancia llegará donde el CPU tenga trabajo durante el
+RDP.
+
 Pendiente:
-- [ ] Medir en la PS3: «antes» = main 4a4d98c (`salsa64-hilos-antes.pkg`),
-      «después» = 16a544f (`salsa64-hilos-sondeo.pkg`), app SLSA00073;
-      gfxtest y Zelda (y SM64 cuando F3D esté en main). Turno después de
-      los trabajos de audio y TLB.
+- [ ] Repetir con Super Mario 64 (F3D) cuando esté en main: 9,5 ms de CPU
+      por campo, el caso donde el sondeo debería rendir.
+- [ ] Recompilador: un bucle que lee Count (MFC0) sale a C en cada vuelta
+      (gfxtest cayó a 9 campos/s); compilar MFC0 Count en línea.
 
 ## 2026-10-10 — Caché de texturas entre tareas (HLE gráfica)
 
