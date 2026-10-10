@@ -1,5 +1,37 @@
 # Estado
 
+## 2026-10-10 — Fase 2 (parte gráfica): criterio cumplido en PS3 real
+
+Hecho (rama `reverent-leavitt-d0f943`):
+- `lib/spukit` (MIT): trabajos por lotes en SPEs, cola en memoria principal
+  y timbre por mailbox (1,76 µs ida y vuelta en la PS3).
+- HLE de F3DEX2/F3DZEX2 portable (`src/rsp/gfx/`) que corre en el SPE 0
+  (`src/spu/gfx/`, E/S por DMA con doble búfer) y en el host; RDP sobre
+  `lib/rsxkit` (`src/rdp/`): combiners como combinación lineal, texturas,
+  z-buffer, culling, niebla, mezcla según la fórmula del blender.
+- Criterio: gfxtest (homebrew propio con el IPL3 libre) 19 de 19 puntos en
+  host, RPCS3 y PS3; Zelda OoT (respaldo propio) llega al título y la
+  intro se ve sin errores gráficos en la PS3 real (confirmado por el autor).
+- Arreglos de la ronda con la PS3: TASKDONE en tareas de libultra sin HLE,
+  destinos alineados a 128 (temblor), frente antihorario, mezcla opaca del
+  cielo, corrección de perspectiva que `cgcomp` quita en MUL/DP (la luna;
+  docs/rsx-notes.md) y FILLRECT inclusivo en 1 ciclo (columna del fundido).
+- Depuración: volcado de la salida de una tarea (`gfxdump`), repetición en
+  el RSX sin emular (`embedded` = `dump:<nombre>`), `tools/gfxdump.py` para
+  editar volcados y `salsa64-run --raster-dump`.
+- Mediciones en docs/perf-log.md: el cuello es el CPU (64 ms por campo, 26 %
+  de NTSC); la HLE en el SPE cuesta 1–21 ms por tarea, sobre todo
+  decodificando texturas.
+
+Pendiente:
+- [ ] Caché de texturas entre tareas y decodificación por formato en el SPE
+      (medir antes/después en la PS3).
+- [ ] F3D (Super Mario 64) y casos de Cell64 (espada Kokiri sin textura,
+      fuente de la pantalla de nombre).
+- [ ] Al integrar con la Fase 3: `sp_dma` hacia la RDRAM debe llamar
+      `salsa64_bus_rdram_written`.
+- [ ] «NO CONTROLLER» en Zelda: falta el control por SI/PIF (otro trabajo).
+
 ## 2026-10-10 — Cierre de la jornada (2): Fase 0 y Fase 1 en PS3 real
 
 Hecho hoy en hardware real (Slim CECH-3011A, HFW 4.91 + HEN; sin CFW posible):
