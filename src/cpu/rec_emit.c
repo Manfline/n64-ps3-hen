@@ -16,7 +16,7 @@
  *
  * Forma de un bloque:
  *   entrada:  si es código mapeado y vtlb[] ya no traduce su página a la
- *             misma física: salir al despachador (que la vuelve a traducir)
+ *             misma física: salir al despachador (rec_tlb.h)
  *             si cycles + n > next: salir (lo corre el intérprete hasta el
  *             evento); si hay COP1 y Status.CU1 = 0: salir igual
  *             carga de los registros que se leen antes de escribirse
@@ -1568,6 +1568,11 @@ static void emit_branch(struct ctx *c, unsigned b)
 
 /* ---- Bloque ------------------------------------------------------------------- */
 
+static uint32_t fetch(const struct salsa64_rec *rec, uint32_t pa)
+{
+	return salsa64_rec_fetch(rec, pa);  /* RDRAM o ROM */
+}
+
 /* Elige los registros MIPS más usados del bloque para r14–r25 (o r14–r17
  * con registros fijos, que ya están en r18–r25).
  *
@@ -1686,7 +1691,7 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 {
 	static struct ctx ctx;  /* grande para la pila; el recompilador corre en un solo hilo */
 	struct ctx *c = &ctx;
-	uint32_t end = salsa64_rec_code_end(rec, pa, seg);
+	uint32_t end = salsa64_rec_code_end(rec, pa, seg);  /* fuera de KSEG0, sin cruzar páginas */
 
 	memset(c, 0, sizeof *c);
 	c->rec = rec;
@@ -1697,18 +1702,17 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 		max = SALSA64_REC_MAX_INSNS;
 
 	/* Decodificación: hasta un salto con su delay slot, una instrucción que
-	 * termina el bloque, el máximo o el final de la memoria (o de la página,
-	 * fuera de KSEG0). Un salto cuyo delay slot no se puede compilar (otro
-	 * salto, COP0, la página siguiente…) queda fuera. */
+	 * termina el bloque, el máximo o el final de la RDRAM. Un salto cuyo
+	 * delay slot no se puede compilar (otro salto, COP0…) queda fuera. */
 	unsigned n = 0;
 	bool any_cop1 = false;
 	while (n < max && pa + 4 * n + 4 <= end) {
 		struct dec *d = &c->d[n];
-		decode(salsa64_rec_fetch(rec, pa + 4 * n), d);
+		decode(fetch(rec, pa + 4 * n), d);
 		if (is_branch(d)) {
 			if (n + 1 >= max || pa + 4 * n + 8 > end)
 				break;
-			decode(salsa64_rec_fetch(rec, pa + 4 * n + 4), &c->d[n + 1]);
+			decode(fetch(rec, pa + 4 * n + 4), &c->d[n + 1]);
 			if (c->d[n + 1].kind != K_NORMAL)
 				break;
 			n += 2;
@@ -1753,14 +1757,14 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	rec->overflow = false;
 	c->sec = SEC_HOT;
 
-	/* Entrada: ¿la TLB sigue traduciendo la página igual?, ¿cabe antes del
-	 * próximo evento?, ¿COP1 usable? */
+	/* Entrada: ¿cabe antes del próximo evento?, ¿COP1 usable? */
 	int start_exit = new_label(c), vt_miss = -1;
 	if (seg == SALSA64_REC_MAPPED) {
-		/* vtlb[] va justo antes de flags (r28). xoris deja 0 en la mitad
-		 * alta solo si coincide; cmplwi compara entonces la baja. */
+		/* ¿vtlb[] (justo antes de flags, en r28) sigue traduciendo la
+		 * página igual? xoris deja 0 en la mitad alta solo si coincide;
+		 * cmplwi compara entonces la baja. */
 		uint32_t v = salsa64_rec_vt_value(pc, pa);
-		int32_t off = 4 * (int32_t)salsa64_rec_vt_slot(pc) - (int32_t)sizeof rec->vtlb;
+		int32_t off = 4 * (int32_t)salsa64_rec_vt_slot(pc) - (int32_t)sizeof rec->x.vtlb;
 		vt_miss = new_label(c);
 		E(c, ppc_lwz(0, off, R_FLAGS));
 		E(c, ppc_xoris(0, 0, v >> 16));

@@ -1,8 +1,9 @@
 # Recompilador MIPS → PPC64 en el PPE (Fase 3)
 
 Código: `src/cpu/rec.h`, `src/cpu/rec.c` (despachador, caché de bloques,
-enlaces, invalidación), `src/cpu/rec_emit.c` (traducción), `src/cpu/ppc.h`
-(codificación de instrucciones PowerPC).
+enlaces, invalidación), `src/cpu/rec_emit.c` (traducción), `src/cpu/rec_tlb.c`
+(código fuera de KSEG0: KSEG1 y TLB), `src/cpu/ppc.h` (codificación de
+instrucciones PowerPC).
 
 ## Decisión: recompilador propio (2026-10-10)
 
@@ -209,9 +210,11 @@ GoldenEye se recuerda que mapea 0x7F000000 directo a la ROM (no
 verificado): se admiten las dos fuentes.
 
 - **Clave:** los bloques de KSEG0 siguen en `map[]` (por física) sin
-  cambios. Los demás van en `xhash` (16 384 cabezas, por vpc) encadenados,
-  con la vpc en `xb[]`; puede haber varios por vpc con físicas distintas.
-  Solo vpc con extensión de signo de 32 bits.
+  cambios. Los demás van en `rec->x.xhash` (16 384 cabezas, por vpc)
+  encadenados, con la vpc en `x.xb[]`; puede haber varios por vpc con
+  físicas distintas. Solo vpc con extensión de signo de 32 bits. Todo eso
+  vive en `src/cpu/rec_tlb.c` y `struct salsa64_rec_x` (`rec_tlb.h`); rec.c
+  y rec_emit.c solo lo llaman.
 - **Sin cruzar páginas de 4 KB** (la página mínima del VR4300): todo el
   bloque comparte la traducción. Un salto cuyo delay slot cae en la página
   siguiente queda fuera del bloque, como los demás que no caben.
@@ -225,7 +228,7 @@ verificado): se admiten las dos fuentes.
 - **Llenarla:** el despachador traduce la página con
   `salsa64_vr4300_fetch_probe` (la búsqueda de la TLB sin excepciones ni
   efectos) cuando no está en `vtlb[]`, y la anota.
-- **Vaciarla (`vt_sync`):** antes de correr cualquier bloque (KSEG0 enlaza
+- **Vaciarla (`salsa64_rec_x_sync`):** antes de correr cualquier bloque (KSEG0 enlaza
   con mapeados), si cambió `cpu->tlb_writes` (sube con TLBWI, TLBWR y el
   reset), el ASID o ERL, vuelve a traducir cada página anotada (pocas) y
   borra las que cambiaron. Basta porque todo cambio de la TLB pasa por C y
@@ -233,16 +236,17 @@ verificado): se admiten las dos fuentes.
   ERET y las excepciones salen con `redirect`.
 - **Remapeo:** el bloque de la física vieja se queda (si la página vuelve,
   sirve de nuevo); el despachador desenlaza los de la misma vpc con otra
-  física cuando la busca (`xfind`), para que sus enlaces se vuelvan a hacer
+  física cuando la busca (`salsa64_rec_x_find`), para que sus enlaces se vuelvan a hacer
   con el bloque que vale.
 - **Escrituras:** los de la RDRAM cuentan en `code_flags` y van también en
-  `xpage` (por página física); `salsa64_rec_invalidate` los encuentra ahí.
+  `x.xpage` (por página física); `salsa64_rec_invalidate` los encuentra ahí.
   Los de la ROM nunca se invalidan (solo lectura); el ISViewer, que sí se
   escribe, no se compila.
 - **Bucles de espera:** la salida lleva la instrucción del salto en
   `rec_site` (el despachador no relee memoria mapeada). `idle.c` solo
   analiza KSEG0/KSEG1, así que descarta los mapeados, igual que con el
-  intérprete; el bloque se recompila sin la consulta (`kill_x_at`, por vpc).
+  intérprete; el bloque se recompila sin la consulta
+  (`salsa64_rec_x_kill_at`, por vpc).
 - **Colisiones:** dos páginas a 16 MB caen en la misma entrada de `vtlb[]`:
   se turnan (cada cambio pasa por el despachador). Correcto, más lento.
 - Memoria: +572 KB (`xb[]` 512 KB, `xhash` 32 KB, `vtlb` 16 KB, `vt_live`

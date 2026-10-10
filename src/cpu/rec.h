@@ -2,13 +2,11 @@
  * Salsa64 — recompilador dinámico MIPS (VR4300) → PowerPC64 para el PPE.
  *
  * Diseño y decisiones en docs/rec-ppe.md. Resumen:
- *   - Unidad: bloque básico que empieza en modo kernel y termina en un salto
- *     (con su delay slot), en una instrucción que cambia el estado global
- *     (COP0, SYSCALL, BREAK) o a las SALSA64_REC_MAX_INSNS instrucciones.
- *     Código en KSEG0 dentro de la RDRAM (map[], por dirección física), o en
- *     KSEG1 o mapeado por la TLB con la instrucción en la RDRAM o en la ROM
- *     (por dirección virtual y física, sin cruzar páginas de 4 KB; el
- *     mapeado revisa su traducción al entrar). Lo demás (modos
+ *   - Unidad: bloque básico que empieza en una dirección de KSEG0 dentro de
+ *     la RDRAM y termina en un salto (con su delay slot), en una instrucción
+ *     que cambia el estado global (COP0, SYSCALL, BREAK) o a las
+ *     SALSA64_REC_MAX_INSNS instrucciones. También desde KSEG1 o mapeado por
+ *     la TLB, en la RDRAM o en la ROM (rec_tlb.h). Lo demás (modos
  *     usuario/supervisor, interrupciones, delay slots pendientes) lo corre el
  *     intérprete, que es la referencia.
  *   - Mismo resultado que el intérprete, instrucción por instrucción y ciclo
@@ -32,6 +30,7 @@
 
 #include "core/bus.h"
 #include "core/types.h"
+#include "cpu/rec_tlb.h"
 
 struct salsa64_cpu;
 
@@ -44,16 +43,6 @@ struct salsa64_cpu;
 #define SALSA64_REC_BUF_WORDS   16384     /* búfer de compilación por sección */
 #define SALSA64_REC_MAX_LABELS  4096
 #define SALSA64_REC_MAX_FIXUPS  8192
-#define SALSA64_REC_XHASH       16384     /* cabezas de la tabla de bloques fuera de KSEG0 */
-#define SALSA64_REC_VT_PAGES    4096      /* páginas de 4 KB de la TLB del recompilador */
-#define SALSA64_REC_PAGE_SHIFT  12
-
-/* Dónde está el código de un bloque. */
-enum {
-	SALSA64_REC_KSEG0,   /* map[], sin traducción */
-	SALSA64_REC_KSEG1,   /* xhash, sin traducción */
-	SALSA64_REC_MAPPED,  /* xhash; revisa vtlb[] al entrar */
-};
 
 /* 16 bytes: la búsqueda de destinos de JR en el código generado indexa
  * blocks[] con un desplazamiento y lee `code` en +0. */
@@ -71,13 +60,6 @@ struct salsa64_rec_link {
 	uint32_t next;       /* índice + 1 del siguiente, 0 = fin */
 };
 
-/* Datos de un bloque fuera de KSEG0 (en KSEG0 solo vpc). */
-struct salsa64_rec_xblock {
-	uint32_t vpc;        /* dirección virtual (extensión de signo de 32 bits) */
-	uint16_t hnext;      /* siguiente en la misma cabeza de xhash */
-	uint16_t pnext;      /* siguiente en la misma página de xpage (código en la RDRAM) */
-};
-
 struct salsa64_rec_stats {
 	uint64_t compiled;       /* bloques compilados (sin los temporales) */
 	uint64_t temp_compiled;  /* bloques recortados del modo estricto */
@@ -87,8 +69,8 @@ struct salsa64_rec_stats {
 	uint64_t invalidated;    /* bloques invalidados */
 	uint64_t flushes;        /* vaciados completos de la caché */
 	uint64_t interp_steps;   /* instrucciones que corrió el intérprete */
-	uint64_t compiled_x;     /* de compiled, los de KSEG1 o mapeados */
-	uint64_t vt_probes;      /* traducciones con la TLB del CPU (páginas nuevas o revisadas) */
+	uint64_t compiled_x;     /* de compiled, los de KSEG1 o mapeados (rec_tlb.c) */
+	uint64_t vt_probes;      /* traducciones con la TLB del CPU (rec_tlb.c) */
 	uint64_t compile_us;     /* reservado para quien mida el tiempo de compilación */
 };
 
@@ -138,13 +120,6 @@ struct salsa64_rec {
 	uint32_t next_block;     /* siguiente id nunca usado */
 	uint32_t free_link;      /* lista de entradas libres de links[] (índice + 1) */
 	uint32_t next_link;
-	uint32_t xcount;         /* bloques vivos en xhash */
-
-	/* Estado de la TLB con que se revisó vtlb[] (salsa64_rec_run). */
-	uint32_t vt_tlb_writes;
-	uint8_t vt_asid;
-	bool vt_erl;
-	uint32_t vt_nlive;       /* entradas de vt_live[] */
 
 	/* Depuración: si no es NULL, se llama después de cada salida del código
 	 * generado (modo traza, ver src/host/run.c). */
@@ -163,33 +138,12 @@ struct salsa64_rec {
 	uint32_t nlabels, nfixups;
 	bool overflow;
 
-	uint16_t map[SALSA64_REC_MAP_WORDS];          /* bloque de KSEG0 que empieza en cada palabra */
-	/* TLB del recompilador: por página virtual de 4 KB (bits 23–12), el valor
-	 * de salsa64_rec_vt_value mientras la TLB del CPU la traduzca así, o 0.
-	 * Va justo antes de flags: el código la lee con un desplazamiento
-	 * negativo desde code_flags (r28). */
-	uint32_t vtlb[SALSA64_REC_VT_PAGES];
+	uint16_t map[SALSA64_REC_MAP_WORDS];          /* bloque que empieza en cada palabra */
+	struct salsa64_rec_x x;                       /* fuera de KSEG0 (rec_tlb.h): justo antes de flags */
 	uint8_t flags[SALSA64_REC_FLAG_BYTES];        /* bloques que tocan cada 128 bytes (satura en 255) */
 	struct salsa64_rec_block blocks[SALSA64_REC_MAX_BLOCKS + 1];
 	struct salsa64_rec_link links[SALSA64_REC_MAX_LINKS];
-	struct salsa64_rec_xblock xb[SALSA64_REC_MAX_BLOCKS + 1];
-	uint16_t xhash[SALSA64_REC_XHASH];            /* bloques fuera de KSEG0 por vpc */
-	uint16_t xpage[SALSA64_RDRAM_MAX >> SALSA64_REC_PAGE_SHIFT];  /* los mismos en la RDRAM, por página */
-	uint16_t vt_live[SALSA64_REC_VT_PAGES];       /* entradas de vtlb[] distintas de 0 */
 };
-
-/* Valor de vtlb[] para la página de `va` traducida a la de `pa` (pa < 2^29):
- * bit 31, los bits 31–24 de va (los 23–12 dan la entrada) y la página
- * física. */
-static inline unsigned salsa64_rec_vt_slot(uint64_t va)
-{
-	return ((uint32_t)va >> SALSA64_REC_PAGE_SHIFT) & (SALSA64_REC_VT_PAGES - 1);
-}
-
-static inline uint32_t salsa64_rec_vt_value(uint64_t va, uint32_t pa)
-{
-	return 0x80000000u | ((uint32_t)va >> 24) << 17 | pa >> SALSA64_REC_PAGE_SHIFT;
-}
 
 /*
  * Prepara el recompilador sobre `cpu` con una caché de código de `bytes`
@@ -237,16 +191,10 @@ static const uint8_t salsa64_rec_pin[SALSA64_REC_PIN_N] __attribute__((unused)) 
 /* rec.c (interno): deja visible para el PPE el código recién escrito. */
 void salsa64_rec_sync(const void *p, size_t bytes);
 
-/* rec.c (interno): la instrucción en la dirección física `pa` (RDRAM o ROM). */
-uint32_t salsa64_rec_fetch(const struct salsa64_rec *rec, uint32_t pa);
-/* rec.c (interno): hasta dónde puede llegar un bloque que empieza en `pa`
- * (fin de la RDRAM o de la ROM; fuera de KSEG0, fin de la página de 4 KB). */
-uint32_t salsa64_rec_code_end(const struct salsa64_rec *rec, uint32_t pa, unsigned seg);
-
 /* rec_emit.c (interno): compila el bloque en `pc` (física `pa`, segmento
- * `seg`) de hasta `max` instrucciones. Devuelve la palabra de entrada en la
- * caché, o 0 si no se pudo; `n` recibe las instrucciones del camino más
- * largo y `bytes` las que cubre. */
+ * `seg` de rec_tlb.h) de hasta `max` instrucciones. Devuelve la palabra de
+ * entrada en la caché, o 0 si no se pudo; `n` recibe las instrucciones del
+ * camino más largo y `bytes` las que cubre. */
 uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, unsigned seg, unsigned max,
 			     bool temp, unsigned *n, uint32_t *bytes);
 

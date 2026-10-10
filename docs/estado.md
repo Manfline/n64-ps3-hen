@@ -8,7 +8,8 @@ Hecho (diseño en docs/rec-ppe.md, «Código fuera de KSEG0»):
   cartucho. Antes eso lo corría el intérprete; GoldenEye y Perfect Dark
   corren casi todo su código mapeado.
 - Clave de bloque (vpc, física) en una tabla aparte (`xhash`); KSEG0 sigue
-  igual. Los bloques mapeados comparan su traducción al entrar contra una
+  igual. Todo en `src/cpu/rec_tlb.c` (para que los merges con otros
+  cambios del recompilador sean fáciles); rec.c y rec_emit.c solo lo llaman. Los bloques mapeados comparan su traducción al entrar contra una
   TLB del recompilador por página de 4 KB (`vtlb[]`, 4 instrucciones),
   también al llegar por un enlace o por JR. Escribir la TLB no mata ni
   desenlaza bloques: antes de correr código, el despachador vuelve a
@@ -29,9 +30,11 @@ Hecho (diseño en docs/rec-ppe.md, «Código fuera de KSEG0»):
 - Memoria: +572 KB del estado del recompilador (6,84 MB).
 
 Siguiente:
-- [ ] PS3 real: cpu-tests (SLSA00065) y nemu64-test contra el intérprete
-      con este cambio; GoldenEye y Perfect Dark en el frontend (SLSA00063),
-      con la proporción de instrucciones interpretadas y las traducciones.
+- [ ] PS3 real (APPID SLSA00074): cpu-tests «Salsa64 CPU TLB» (unitarias
+      y nemu64-test contra el intérprete) y el frontend «Salsa64 TLB» con
+      GoldenEye y Perfect Dark (respaldos propios), mirando la proporción
+      de instrucciones interpretadas y las traducciones. Los dos paquetes
+      comparten APPID: se instalan de a uno.
 - [ ] Verificar en el desensamblado (o el decomp) si GoldenEye ejecuta
       0x7F000000 desde la ROM o desde la RDRAM.
 
