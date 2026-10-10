@@ -87,7 +87,9 @@ autor sacadas de su log; receta en la entrada de arriba):
       escribe). Le toca a src/rdp (destinos por dirección y ancho, o no
       tirar el de 320). Cerrar el menú vuelve al juego. Reproducible en la
       Mac: `--pad "$(cat docs/pads/zelda-oot.pad)" --trace-from 19100
-      --trace-gfx 80` muestra los TARGET.
+      --trace-gfx 80` muestra los TARGET, y con `--gfx-frame-every 6` el
+      rasterizador de referencia dibuja el menú (mapa del bosque Kokiri)
+      bien: la HLE está bien, es solo la presentación.
 
 Falta (para ver bien la casa de Link y las salas con fondo prerrenderizado):
 - [ ] HLE de S2DEX para el fondo (`G_BG_COPY`/`G_BG_1CYC` con `uObjBg` →
