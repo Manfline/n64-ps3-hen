@@ -418,6 +418,7 @@ int main(int argc, char **argv)
 
 	if (use_rec) {
 		void *code = salsa64_host_rec_buffer();
+		rec.opts = salsa64_host_rec_opts();
 		if (!code || !salsa64_rec_init(&rec, &n64.cpu, code, SALSA64_HOST_REC_BYTES)) {
 			fprintf(stderr, "salsa64-run: el recompilador no corre en este host\n");
 			return 3;
@@ -435,8 +436,9 @@ int main(int argc, char **argv)
 			rec.no_link = true;
 			rec.after_exit = lockstep_check;
 		}
-		fprintf(stderr, "salsa64-run: recompilador activo%s; caché en %p, llamadas a C %s\n",
-			lockstep ? " con --lockstep" : "", code, rec.calls_near ? "con bl" : "por mtctr/bctrl");
+		fprintf(stderr, "salsa64-run: recompilador activo%s%s; caché en %p, llamadas a C %s\n",
+			lockstep ? " con --lockstep" : "", rec.opts & SALSA64_REC_OPT_PIN ? ", registros fijos" : "",
+			code, rec.calls_near ? "con bl" : "por mtctr/bctrl");
 	}
 
 	/* Bucle principal: bloques de `slice` ciclos y verificación entre ellos. */

@@ -59,11 +59,13 @@ int main(int argc, char **argv)
 		void *code = salsa64_host_rec_buffer();
 		if (getenv("SALSA64_REC_DUMP"))
 			rec.on_compile = dump_block;
+		rec.opts = salsa64_host_rec_opts();
 		int r = code ? salsa64_unit_run_rec(print_line, &rec, code, SALSA64_HOST_REC_BYTES) : -1;
 		if (r < 0)
 			return 2;
-		printf("recompilador: caché en %p, llamadas a C %s\n", code,
-		       rec.calls_near ? "con bl directo" : "por mtctr/bctrl");
+		printf("recompilador: caché en %p, llamadas a C %s%s\n", code,
+		       rec.calls_near ? "con bl directo" : "por mtctr/bctrl",
+		       rec.opts & SALSA64_REC_OPT_PIN ? ", registros fijos" : "");
 		failed += r;
 	}
 	if (bench)

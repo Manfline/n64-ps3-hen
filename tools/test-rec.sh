@@ -21,11 +21,15 @@ if ! tools/build-ppc64.sh >build/logs/build-ppc64.log 2>&1; then
 	exit 1
 fi
 
-for far in "" 1; do
-	log=build/logs/rec-unit${far:+-far}.log
-	SALSA64_REC_FAR=$far tools/qemu-ppc64.sh build/ppc64/salsa64-unit rec >"$log" 2>&1
+# Llamadas por bl y por mtctr, y con registros fijos entre bloques.
+for mode in plain far pin; do
+	log=build/logs/rec-unit-$mode.log
+	far=""; pin=""
+	[ $mode = far ] && far=1
+	[ $mode = pin ] && pin=1
+	SALSA64_REC_FAR=$far SALSA64_REC_PIN=$pin tools/qemu-ppc64.sh build/ppc64/salsa64-unit rec >"$log" 2>&1
 	rc=$?
-	printf '%-14s %s\n' "unit${far:+ (far)}" "$(grep '^total' "$log" | tr '\n' ';' | sed 's/;$//')"
+	printf '%-14s %s\n' "unit ($mode)" "$(grep '^total' "$log" | tail -1)"
 	grep '^FALLO' "$log" | head -10
 	[ $rc -eq 0 ] || fail=1
 done
@@ -36,21 +40,24 @@ run() {
 	tools/qemu-ppc64.sh "$@" >"$log" 2>&1
 }
 
-run build/logs/rec-nemu.log build/ppc64/salsa64-run -c 4000000000 \
-	-u 'success rate)' -f 'Exception storm' -f 'panicked at' --rec $NEMU
-rc=$?
-grep "^Test '" build/logs/rec-nemu.log | sed "s/^Test '\([^']*\)'.*/\1/" | LC_ALL=C sort -u >build/logs/rec-nemu.fallas
-new=$(LC_ALL=C comm -13 tests/roms/nemu64-test.fallas build/logs/rec-nemu.fallas)
-gone=$(LC_ALL=C comm -23 tests/roms/nemu64-test.fallas build/logs/rec-nemu.fallas)
-printf '%-14s %s\n' nemu64-test "$(grep 'success rate)' build/logs/rec-nemu.log | tail -1)"
-grep 'recompilador:' build/logs/rec-nemu.log | tail -1 | sed 's/^/               /'
-[ $rc -eq 0 ] || fail=1
-if [ -n "$new" ] || [ -n "$gone" ]; then
-	echo "DIFERENCIA con la línea base del intérprete:"
-	echo "$new" | sed 's/^/  nueva: /'
-	echo "$gone" | sed 's/^/  ya no falla: /'
-	fail=1
-fi
+for pin in "" 1; do
+	log=build/logs/rec-nemu${pin:+-pin}.log
+	SALSA64_REC_PIN=$pin run "$log" build/ppc64/salsa64-run -c 4000000000 \
+		-u 'success rate)' -f 'Exception storm' -f 'panicked at' --rec $NEMU
+	rc=$?
+	grep "^Test '" "$log" | sed "s/^Test '\([^']*\)'.*/\1/" | LC_ALL=C sort -u >build/logs/rec-nemu.fallas
+	new=$(LC_ALL=C comm -13 tests/roms/nemu64-test.fallas build/logs/rec-nemu.fallas)
+	gone=$(LC_ALL=C comm -23 tests/roms/nemu64-test.fallas build/logs/rec-nemu.fallas)
+	printf '%-14s %s\n' "nemu64-test${pin:+ (pin)}" "$(grep 'success rate)' "$log" | tail -1)"
+	grep 'recompilador:' "$log" | tail -1 | sed 's/^/               /'
+	[ $rc -eq 0 ] || fail=1
+	if [ -n "$new" ] || [ -n "$gone" ]; then
+		echo "DIFERENCIA con la línea base del intérprete:"
+		echo "$new" | sed 's/^/  nueva: /'
+		echo "$gone" | sed 's/^/  ya no falla: /'
+		fail=1
+	fi
+done
 
 run build/logs/rec-vitest.log build/ppc64/salsa64-run -c 400000000 \
 	-u 'vitest: OK' -f 'vitest: FALLO' --rec $VITEST

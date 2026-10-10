@@ -166,6 +166,9 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	w[n++] = ppc_ld(28, OFF(code_flags), 31);
 	w[n++] = ppc_ld(11, OFF(sched), 31);
 	w[n++] = ppc_ld(27, (int32_t)offsetof(struct salsa64_sched, next), 11);
+	if (rec->opts & SALSA64_REC_OPT_PIN)
+		for (unsigned k = 0; k < SALSA64_REC_PIN_N; k++)
+			w[n++] = ppc_ld(SALSA64_REC_PIN_PPC + k, OFF(gpr) + 8 * salsa64_rec_pin[k], 31);
 	w[n++] = ppc_mtctr(4);
 	w[n++] = PPC_BCTR;
 
@@ -190,6 +193,9 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 
 	w[n++] = ppc_std(29, OFF(cycles), 31);
 	w[n++] = ppc_stw(4, OFF(rec_kind), 31);
+	if (rec->opts & SALSA64_REC_OPT_PIN)
+		for (unsigned k = 0; k < SALSA64_REC_PIN_N; k++)
+			w[n++] = ppc_std(SALSA64_REC_PIN_PPC + k, OFF(gpr) + 8 * salsa64_rec_pin[k], 31);
 	for (unsigned r = 14; r <= 31; r++)
 		w[n++] = ppc_ld(r, SAVE + 8 * (int32_t)(r - 14), 1);
 	w[n++] = ppc_addi(1, 1, FRAME);
@@ -520,10 +526,12 @@ bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *co
 		return false;
 
 	/* Los ganchos de depuración los pone quien llama antes de iniciar. */
+	uint32_t opts = rec->opts;
 	void (*after_exit)(struct salsa64_rec *, uint64_t, void *) = rec->after_exit;
 	void (*on_compile)(struct salsa64_rec *, uint64_t, uint32_t, uint32_t, bool) = rec->on_compile;
 	void *after_exit_ctx = rec->after_exit_ctx;
 	memset(rec, 0, sizeof *rec);
+	rec->opts = opts;
 	rec->after_exit = after_exit;
 	rec->after_exit_ctx = after_exit_ctx;
 	rec->on_compile = on_compile;

@@ -12,14 +12,15 @@ en PS3 real.
 |---|---|---|---|
 | RDRAM emulada | 8 | | 4 MB + Expansion Pak; la pone quien llama a `salsa64_n64_init` |
 | Estado de la máquina (`struct salsa64_n64`) | 0,01 | 0,01 | 10,4 KB: CPU 1,7 KB, bus 8,5 KB (incluye SP DMEM/IMEM) |
-| Caché del recompilador | 16 | | Fase 3: cola NOBITS del segmento de texto (docs/jit-ppe.md); 32 si hace falta |
+| Caché del recompilador | 16 | 16 | Fase 3: cola NOBITS del segmento de texto (`mk/rec-cache.ld`, docs/rec-ppe.md); 32 si hace falta. nemu64-test entero usa ~9 MB |
+| Estado del recompilador (`struct salsa64_rec`) | 6,3 | 6,3 | Mapa de bloques (4 MB: uint16_t por palabra de 8 MB), banderas de código (64 KB), 65 535 bloques (1 MB), 131 072 enlaces (1 MB), búferes de compilación (0,2 MB); en .bss |
 | Caché de texturas (lado PPE/SPE) | 16 | | Fase 4 |
 | Búfer de comandos RSX + memoria mapeada | 16 | 16 | `rsxkit_init` por omisión (rsx-triangle usa 32) |
 | ROM del cartucho | 64 | | máximo; el frontend la lee entera a memoria al arrancar |
 | Listas de triángulos SPU → RSX | 8 | | doble búfer por cuadro |
 | Audio | 2 | | |
 | Código, pila, heap de newlib | 16 | | |
-| **Total previsto** | **146** | | con una ROM de 64 MB |
+| **Total previsto** | **152** | | con una ROM de 64 MB |
 
 ## Memoria local del RSX (GDDR3)
 

@@ -70,28 +70,36 @@ int main(void)
 		}
 	}
 
-	/* nemu64-test completo: el intérprete es la referencia. */
+	/* nemu64-test completo: el intérprete es la referencia; el recompilador
+	 * sin y con registros fijos entre bloques (SALSA64_REC_OPT_PIN). */
 	static struct rombench_result ri, rr;
+	static const struct { uint32_t opts; const char *name; } variants[] = {
+		{ 0, "recompilador" },
+		{ SALSA64_REC_OPT_PIN, "recompilador con registros fijos" },
+	};
 	const char *rom_state = "sin comparar";
 	if (salsa64_rombench(&ri, NULL, NULL, 0, now_us))
 		log_rombench("intérprete", &ri);
-	if (salsa64_ps3_rec_wanted() && salsa64_rombench(&rr, &rec, salsa64_ps3_rec_cache(), SALSA64_REC_CACHE_BYTES,
-							  now_us)) {
-		log_rombench("recompilador", &rr);
+	for (unsigned v = 0; v < sizeof variants / sizeof variants[0] && salsa64_ps3_rec_wanted(); v++) {
+		rec.opts = variants[v].opts;
+		if (!salsa64_rombench(&rr, &rec, salsa64_ps3_rec_cache(), SALSA64_REC_CACHE_BYTES, now_us))
+			continue;
+		log_rombench(variants[v].name, &rr);
 		const struct salsa64_rec_stats *st = &rec.stats;
-		salsa64_log("recompilador: %llu bloques, %u KB de caché, %llu entradas desde C, %llu enlaces, "
-			    "%llu invalidados, %llu vaciados, %llu instr. interpretadas",
+		salsa64_log("%s: %llu bloques, %u KB de caché, %llu entradas desde C, %llu enlaces, "
+			    "%llu invalidados, %llu vaciados, %llu instr. interpretadas", variants[v].name,
 			    (unsigned long long)st->compiled, salsa64_rec_used(&rec) / 256,
 			    (unsigned long long)st->entries, (unsigned long long)st->linked,
 			    (unsigned long long)st->invalidated, (unsigned long long)st->flushes,
 			    (unsigned long long)st->interp_steps);
 		bool same = ri.finished && rr.finished && ri.failed == rr.failed &&
 			    ri.names_hash == rr.names_hash && ri.cycles == rr.cycles;
-		rom_state = same ? "iguales" : "DISTINTOS";
+		if (!same || v == 0)
+			rom_state = same ? "iguales" : "DISTINTOS";
 		if (!same)
 			rec_failed++;
 		if (rr.us)
-			salsa64_log("nemu64-test: recompilador %.2fx más rápido que el intérprete",
+			salsa64_log("nemu64-test: %s %.2fx más rápido que el intérprete", variants[v].name,
 				    (double)ri.us / (double)rr.us);
 	}
 

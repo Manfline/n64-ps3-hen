@@ -6,6 +6,8 @@
  * llame a C con `bl` directo: es un arreglo en .bss al que se le agrega
  * permiso de ejecución. Con SALSA64_REC_FAR=1 se usa un mmap lejano, que
  * obliga a llamar por mtctr/bctrl (el otro camino del emisor).
+ * SALSA64_REC_PIN=1 activa los registros fijos entre bloques
+ * (SALSA64_REC_OPT_PIN).
  */
 #ifndef SALSA64_HOST_REC_HOST_H
 #define SALSA64_HOST_REC_HOST_H
@@ -14,19 +16,33 @@
 #include <stdlib.h>
 #include <sys/mman.h>
 
+#include "cpu/rec.h"
+
 #define SALSA64_HOST_REC_BYTES (16u << 20)
 
 static uint8_t salsa64_host_rec_cache[SALSA64_HOST_REC_BYTES] __attribute__((aligned(65536)));
 
+/* Variable de entorno puesta y distinta de "" y de "0". */
+static inline int salsa64_host_env_on(const char *name)
+{
+	const char *v = getenv(name);
+	return v && *v && *v != '0';
+}
+
 static inline void *salsa64_host_rec_buffer(void)
 {
-	if (!getenv("SALSA64_REC_FAR") &&
+	if (!salsa64_host_env_on("SALSA64_REC_FAR") &&
 	    mprotect(salsa64_host_rec_cache, sizeof salsa64_host_rec_cache,
 		     PROT_READ | PROT_WRITE | PROT_EXEC) == 0)
 		return salsa64_host_rec_cache;
 	void *p = mmap(NULL, SALSA64_HOST_REC_BYTES, PROT_READ | PROT_WRITE | PROT_EXEC,
 		       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	return p == MAP_FAILED ? NULL : p;
+}
+
+static inline uint32_t salsa64_host_rec_opts(void)
+{
+	return salsa64_host_env_on("SALSA64_REC_PIN") ? SALSA64_REC_OPT_PIN : 0;
 }
 
 #endif

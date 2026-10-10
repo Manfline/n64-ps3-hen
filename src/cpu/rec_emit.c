@@ -54,7 +54,7 @@ enum {
 	R_RDRAM = 30,
 	R_CPU = 31,
 };
-#define N_CACHE 12
+#define N_CACHE 12   /* sin registros fijos; con SALSA64_REC_OPT_PIN, 4 (r14–r17) */
 #define CR_T  1   /* pruebas internas */
 #define CR_BR 4   /* condición del salto */
 
@@ -222,9 +222,11 @@ struct ctx {
 	unsigned sec;
 	struct dec d[SALSA64_REC_MAX_INSNS];
 	uint8_t map[34];        /* registro MIPS → registro del PPE, 0 = en memoria */
-	uint64_t cached;
+	uint64_t cached;        /* en un registro del PPE (por bloque o fijo) */
+	uint64_t pinned;        /* fijos entre bloques (SALSA64_REC_OPT_PIN) */
 	uint64_t written;       /* asignados y modificados desde la entrada o el inicio del bucle */
 	uint64_t written_start; /* written al empezar la instrucción en curso */
+	uint8_t last_write[34]; /* última instrucción que escribe cada registro, + 1 (0 = ninguna) */
 	unsigned k;             /* instrucción en curso */
 	bool in_ds;
 	int body;               /* etiqueta del cuerpo (vuelta de los bucles) */
@@ -354,19 +356,35 @@ static unsigned dst(struct ctx *c, unsigned r, unsigned tmp)
 }
 
 /* El valor de `r` quedó en `reg` (el que dio dst). */
+/* Un registro asignado se escribe en memoria apenas recibe su último valor
+ * del bloque, no a la salida: si el bloque siguiente lo lee enseguida, el
+ * almacenamiento ya salió de la cola (en el PPE, leer lo que sigue en la
+ * cola de almacenamiento cuesta decenas de ciclos). */
 static void put(struct ctx *c, unsigned r, unsigned reg)
 {
-	if (r == 0)
-		return;
-	if (c->map[r])
-		c->written |= BIT(r);
-	else
+	if (r == 0 || (c->pinned & BIT(r)))
+		return;  /* un registro fijo no se escribe hasta volver a C */
+	if (!c->map[r] || c->last_write[r] == c->k + 1) {
 		E(c, ppc_std(reg, off_reg(r), R_CPU));
+		c->written &= ~BIT(r);
+	} else {
+		c->written |= BIT(r);
+	}
 }
 
-static void writeback(struct ctx *c, uint64_t mask)
+/* Escribe en cpu->gpr los registros de `mask` que están en el PPE. */
+static void store_regs(struct ctx *c, uint64_t mask)
 {
 	mask &= c->cached;
+	for (unsigned r = 1; r < 34; r++)
+		if (mask & BIT(r))
+			E(c, ppc_std(c->map[r], off_reg(r), R_CPU));
+}
+
+/* Al salir del bloque: los fijos siguen en sus registros. */
+static void writeback(struct ctx *c, uint64_t mask)
+{
+	mask &= c->cached & ~c->pinned;
 	for (unsigned r = 1; r < 34; r++)
 		if (mask & BIT(r))
 			E(c, ppc_std(c->map[r], off_reg(r), R_CPU));
@@ -523,7 +541,9 @@ static void post_check(struct ctx *c, unsigned k)
 static void emit_exec(struct ctx *c, unsigned k)
 {
 	const struct dec *d = &c->d[k];
-	writeback(c, (d->reads | d->writes) & c->written);
+	/* El intérprete lee y escribe cpu->gpr: antes, los que toca y están
+	 * modificados (o fijos); después, los que escribe. */
+	store_regs(c, (d->reads | d->writes) & (c->written | c->pinned));
 	call_prep(c, k);
 	E(c, ppc_mr(3, R_CPU));
 	li32u(c, 4, d->w);
@@ -1472,10 +1492,11 @@ static uint32_t fetch(const struct salsa64_rec *rec, uint32_t pa)
 	return salsa64_rd32(rec->cpu->rdram + pa);
 }
 
-/* Elige hasta N_CACHE registros MIPS (los más usados) para r14–r25. */
+/* Elige los registros MIPS más usados del bloque para r14–r25 (o r14–r17
+ * con registros fijos, que ya están en r18–r25). */
 static void allocate(struct ctx *c)
 {
-	unsigned count[34] = { 0 };
+	unsigned count[34] = { 0 }, slots = N_CACHE;
 	for (unsigned k = 0; k < c->n; k++) {
 		uint64_t m = c->d[k].reads | c->d[k].writes;
 		for (unsigned r = 1; r < 34; r++)
@@ -1483,8 +1504,18 @@ static void allocate(struct ctx *c)
 				count[r]++;
 	}
 	memset(c->map, 0, sizeof c->map);
-	c->cached = 0;
-	for (unsigned slot = 0; slot < N_CACHE; slot++) {
+	c->cached = c->pinned = 0;
+	if (c->rec->opts & SALSA64_REC_OPT_PIN) {
+		for (unsigned k = 0; k < SALSA64_REC_PIN_N; k++) {
+			unsigned m = salsa64_rec_pin[k];
+			c->map[m] = (uint8_t)(SALSA64_REC_PIN_PPC + k);
+			c->pinned |= BIT(m);
+			count[m] = 0;
+		}
+		c->cached = c->pinned;
+		slots = SALSA64_REC_PIN_PPC - R_CACHE0;
+	}
+	for (unsigned slot = 0; slot < slots; slot++) {
 		unsigned best = 0;
 		for (unsigned r = 1; r < 34; r++)
 			if (count[r] > count[best] && !(c->cached & BIT(r)))
@@ -1584,6 +1615,9 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, unsigned max,
 	for (unsigned k = 0; k < n; k++) {
 		livein |= c->d[k].reads & ~seen;
 		seen |= c->d[k].writes;
+		for (unsigned r = 1; r < 34; r++)
+			if (c->d[k].writes & BIT(r))
+				c->last_write[r] = (uint8_t)(k + 1);
 	}
 
 	rec->nbuf[0] = rec->nbuf[1] = 0;
@@ -1601,7 +1635,7 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, unsigned max,
 		E(c, ppc_andis_(0, 0, SALSA64_ST_CU1 >> 16));
 		emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(0, PPC_EQ), start_exit);
 	}
-	reload(c, livein);
+	reload(c, livein & ~c->pinned);
 	c->body = new_label(c);
 	bind(c, c->body);
 

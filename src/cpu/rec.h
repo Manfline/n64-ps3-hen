@@ -83,7 +83,12 @@ struct salsa64_rec_fixup {
 	uint8_t cond;        /* 1 = bc (14 bits), 0 = b/bl (24 bits) */
 };
 
+/* Opciones: se ponen en rec->opts antes de salsa64_rec_init, que las
+ * conserva. */
+#define SALSA64_REC_OPT_PIN 1u  /* sp, ra, v0, v1, a0–a3 fijos en r18–r25 entre bloques */
+
 struct salsa64_rec {
+	uint32_t opts;
 	struct salsa64_cpu *cpu;
 	uint32_t *code;          /* caché de código */
 	uint32_t code_words;     /* capacidad, en palabras */
@@ -166,6 +171,14 @@ enum {
 enum { SALSA64_REC_LB, SALSA64_REC_LBU, SALSA64_REC_LH, SALSA64_REC_LHU,
        SALSA64_REC_LW, SALSA64_REC_LWU, SALSA64_REC_LD };
 enum { SALSA64_REC_SB, SALSA64_REC_SH, SALSA64_REC_SW, SALSA64_REC_SD };
+
+/* Con SALSA64_REC_OPT_PIN: el registro MIPS salsa64_rec_pin[k] vive en
+ * r(SALSA64_REC_PIN_PPC + k) mientras corre el código generado; la entrada lo
+ * carga y la salida a C lo escribe. Son los de la convención de llamadas:
+ * pasan de un bloque a otro en cada llamada y cada retorno. */
+#define SALSA64_REC_PIN_N   8
+#define SALSA64_REC_PIN_PPC 18
+static const uint8_t salsa64_rec_pin[SALSA64_REC_PIN_N] __attribute__((unused)) = { 29, 31, 2, 3, 4, 5, 6, 7 };
 
 /* rec.c (interno): deja visible para el PPE el código recién escrito. */
 void salsa64_rec_sync(const void *p, size_t bytes);
