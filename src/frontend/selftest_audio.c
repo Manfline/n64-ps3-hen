@@ -44,10 +44,11 @@ enum selftest_state audiotest_state(uint32_t fields)
 		return SELFTEST_FAILED;
 	if (st.cpu > 0 && st.hle > 0) {
 		const struct audio_sync_stats *o = audio_out_stats();
-		bool ok = o->in_frames >= MIN_FRAMES && audio_out_blocks() > 0;
+		uint64_t in = audio_out_ai_frames();
+		bool ok = in >= MIN_FRAMES && audio_out_blocks() > 0;
 		if (!st.logged++)
 			salsa64_log("audiotest: salida: %llu muestras del AI, %llu bloques al puerto, %llu en silencio",
-				    (unsigned long long)o->in_frames, (unsigned long long)audio_out_blocks(),
+				    (unsigned long long)in, (unsigned long long)audio_out_blocks(),
 				    (unsigned long long)o->silent_frames);
 		return ok ? SELFTEST_OK : SELFTEST_FAILED;
 	}

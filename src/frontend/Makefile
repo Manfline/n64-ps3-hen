@@ -21,7 +21,7 @@ SPU_PROGS := gfx audio
 gfx_SRCS  := $(R)/src/spu/gfx/main.c $(R)/src/spu/gfx/io_spu.c \
              $(filter-out %/io_mem.c %/sync.c,$(wildcard $(R)/src/rsp/gfx/*.c))
 audio_SRCS := $(R)/src/spu/audio/main.c $(R)/src/spu/audio/io_spu.c \
-              $(filter-out %/io_mem.c %/sync.c,$(wildcard $(R)/src/rsp/audio/*.c))
+              $(filter-out %/io_mem.c %/sync.c %/selftest.c,$(wildcard $(R)/src/rsp/audio/*.c))
 CFLAGS  := -ffp-contract=off -fno-math-errno
 LIBS    := -lrsx -lgcm_sys -laudio -lio -lsysutil -lnet -lsysmodule -lrt -llv2 -lm
 # Caché del recompilador al final del segmento de texto (docs/rec-ppe.md).

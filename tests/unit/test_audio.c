@@ -11,6 +11,7 @@
 #include "core/endian.h"
 #include "rsp/audio/backend.h"
 #include "rsp/audio/hle.h"
+#include "rsp/audio/selftest.h"
 
 #define ALIST  0x100000u  /* la lista de comandos */
 #define SRC    0x200000u
@@ -523,6 +524,40 @@ static void core_runs_audio_task(void)
 	salsa64_rsp_set_audio(bus, NULL);
 }
 
+/* Las listas que compara el arranque en la PS3 (SPE contra PPE): corren sin
+ * errores, con un solo comando desconocido a propósito en nead, y dos
+ * corridas desde el mismo estado dejan lo mismo. */
+static void selftest_lists_are_clean(void)
+{
+	static uint8_t a[AUD_SELFTEST_RAM], b[AUD_SELFTEST_RAM];
+	static struct aud_state sa, sb;
+	static const uint32_t abis[] = { SALSA64_ABI_NEAD_OOT, SALSA64_ABI_AUDIO, SALSA64_ABI_NEAD_MK };
+	aud_init(&sa);
+	aud_init(&sb);
+	for (unsigned i = 0; i < 3; i++) {
+		struct aud_job job;
+		struct aud_result ra, rb;
+		memset(&job, 0, sizeof job);
+		job.rdram_size = AUD_SELFTEST_RAM;
+		job.abi = abis[i];
+		job.alist_size = aud_selftest_build(a, abis[i], 12345u + i);
+		memcpy(b, a, sizeof b);
+		job.rdram_ea = (uint64_t)(uintptr_t)a;
+		aud_run(&sa, &job, &ra);
+		job.rdram_ea = (uint64_t)(uintptr_t)b;
+		aud_run(&sb, &job, &rb);
+		CHECK_EQ(ra.errors, 0);
+		CHECK_EQ(ra.commands, job.alist_size / 8);
+		CHECK_EQ(ra.unknown, abis[i] == SALSA64_ABI_NEAD_OOT ? 1 : 0);
+		CHECK(memcmp(a, b, sizeof a) == 0);
+		/* La DMEM guardada no queda en cero: los comandos hicieron algo. */
+		unsigned nonzero = 0;
+		for (uint32_t k = 0x2000; k < 0x3000; k++)
+			nonzero += a[k] != 0;
+		CHECK(nonzero > 1000);
+	}
+}
+
 void t_suite_audio(void)
 {
 	RUN(detect_abi);
@@ -539,4 +574,5 @@ void t_suite_audio(void)
 	RUN(abi1_segments_envmixer);
 	RUN(abi1_mixer_interleave);
 	RUN(core_runs_audio_task);
+	RUN(selftest_lists_are_clean);
 }

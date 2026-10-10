@@ -184,8 +184,8 @@ static void A1_LOADADPCM(struct aud_state *st, uint32_t w1, uint32_t w2)
 {
 	uint16_t count = (uint16_t)w1;
 	uint32_t n = aud_align(count, 8) >> 1;
-	if (n > 16 * 8)
-		n = 16 * 8;
+	if (n > 16 * 16)
+		n = 16 * 16;
 	aud_load_s16(st, st->abi1.table, a1_address(st, w2), n);
 }
 
@@ -233,8 +233,8 @@ static const acmd_fn abi1_ge[16] = {
 static void N_LOADADPCM(struct aud_state *st, uint32_t w1, uint32_t w2)
 {
 	uint32_t n = (uint16_t)w1 >> 1;
-	if (n > 16 * 8)
-		n = 16 * 8;
+	if (n > 16 * 16)
+		n = 16 * 16;
 	aud_load_s16(st, st->nead.table, w2 & 0xFFFFFF, n);
 }
 

@@ -37,6 +37,15 @@
  * tiempo real), se salta lo viejo hasta el nivel objetivo, con la misma
  * transición suave.
  *
+ * Quién marca el ritmo: la emulación va al paso de la tele emulada
+ * (pacer.c, reloj de tiempo real) y el audio la sigue: la corrección de
+ * ±0,5 % absorbe la deriva entre el reloj del PPE y el del DAC de la
+ * consola, y el estirador cubre lo que la emulación no alcance (o se pase).
+ * Así el audio nunca frena ni acelera a la emulación. Si algún día el audio
+ * marcara el ritmo (esperar a que baje el nivel del anillo en vez de
+ * dormir hasta la hora del campo), pacer.c tiene el enganche: su función
+ * de dormir y pacer_nudge.
+ *
  * Nivel objetivo: 60 ms o 1,5 veces lo que entrega el juego de una vez (lo
  * que sea mayor), más un grano y la búsqueda. Latencia total en la PS3:
  * eso más lo que va adelantado en el puerto de audio (~21 ms).

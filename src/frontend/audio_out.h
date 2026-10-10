@@ -40,5 +40,7 @@ void audio_out_shutdown(void);
 const struct audio_sync_stats *audio_out_stats(void);
 /* Bloques del puerto llenados por el hilo de audio. */
 uint64_t audio_out_blocks(void);
+/* Muestras que entregó el AI hasta ahora (al día, del lado del productor). */
+uint64_t audio_out_ai_frames(void);
 
 #endif

@@ -32,6 +32,10 @@ static struct aud_job job __attribute__((aligned(16)));
 static int handler(void *ctx, const spukit_job *j, spukit_result *res)
 {
 	(void)ctx;
+	if (j->kind == AUD_JOB_RESET) {
+		aud_init(&state);
+		return 0;
+	}
 	if (j->kind != AUD_JOB_TASK)
 		return -1;
 	memcpy(&job, j->data, sizeof job);

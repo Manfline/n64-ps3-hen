@@ -284,6 +284,11 @@ uint64_t audio_out_blocks(void)
 	return port.blocks;
 }
 
+uint64_t audio_out_ai_frames(void)
+{
+	return __atomic_load_n(&sync_out.wpos, __ATOMIC_ACQUIRE);
+}
+
 void audio_out_field(uint64_t now_us)
 {
 	if (dump.buf && !dump.written && __atomic_load_n(&dump.full, __ATOMIC_ACQUIRE)) {

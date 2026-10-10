@@ -7,6 +7,8 @@
 #include <sys/systime.h>
 #include <sys/thread.h>
 
+#include "platform/ps3/log.h"
+#include "rsp/audio/selftest.h"
 #include "spu_audio_bin.h"
 
 static void spu_start(void *ctx, const struct salsa64_task *task, enum salsa64_abi abi)
@@ -66,6 +68,47 @@ static void spu_finish(void *ctx, struct salsa64_bus *bus)
 		salsa64_audio_written(bus, &res);
 }
 
+/* Al arrancar: listas de prueba (selftest.c) en el SPE y en el PPE sobre
+ * copias iguales de una RDRAM de mentira; deben quedar iguales. Además, en
+ * RPCS3, el programa del SPE se compila aquí y no en la primera tarea del
+ * juego. Devuelve cuántas listas difieren; el estado del SPE queda en cero. */
+static int check_lists(spukit_worker *w)
+{
+	static uint8_t ram_spe[AUD_SELFTEST_RAM] __attribute__((aligned(128)));
+	static uint8_t ram_ppe[AUD_SELFTEST_RAM] __attribute__((aligned(128)));
+	static struct aud_state ppe;
+	static const uint32_t abis[] = { SALSA64_ABI_NEAD_OOT, SALSA64_ABI_AUDIO, SALSA64_ABI_NEAD_MK };
+	int bad = 0;
+	aud_init(&ppe);
+	spukit_wait(w, spukit_post(w, AUD_JOB_RESET, NULL, 0));
+	for (unsigned i = 0; i < sizeof abis / sizeof abis[0]; i++) {
+		struct aud_job job;
+		struct aud_result res_spe, res_ppe;
+		memset(&job, 0, sizeof job);
+		job.rdram_size = AUD_SELFTEST_RAM;
+		job.abi = abis[i];
+		job.alist_size = aud_selftest_build(ram_spe, abis[i], 12345u + i);
+		memcpy(ram_ppe, ram_spe, sizeof ram_ppe);
+		job.rdram_ea = (uint64_t)(uintptr_t)ram_spe;
+		const spukit_result *r = spukit_wait(w, spukit_post(w, AUD_JOB_TASK, &job, sizeof job));
+		memcpy(&res_spe, r->data, sizeof res_spe);
+		job.rdram_ea = (uint64_t)(uintptr_t)ram_ppe;
+		aud_run(&ppe, &job, &res_ppe);
+		uint32_t diff = 0, first = 0;
+		for (uint32_t k = 0; k < AUD_SELFTEST_RAM; k++)
+			if (ram_spe[k] != ram_ppe[k] && !diff++)
+				first = k;
+		if (r->error || diff || res_spe.commands != res_ppe.commands || res_spe.errors || res_ppe.errors) {
+			salsa64_log("audio: lista de prueba %s: el SPE difiere del PPE (%u bytes, el primero en 0x%04X; "
+				    "%u/%u comandos, %u/%u errores)", salsa64_abi_name(abis[i]), diff, first,
+				    res_spe.commands, res_ppe.commands, res_spe.errors, res_ppe.errors);
+			bad++;
+		}
+	}
+	spukit_wait(w, spukit_post(w, AUD_JOB_RESET, NULL, 0));
+	return bad;
+}
+
 int salsa64_audio_spu_init(struct salsa64_audio_spu *s, const struct salsa64_bus *bus)
 {
 	memset(s, 0, sizeof *s);
@@ -75,7 +118,13 @@ int salsa64_audio_spu_init(struct salsa64_audio_spu *s, const struct salsa64_bus
 	s->backend.done = spu_done;
 	s->bus = bus;
 	s->worker = spukit_worker_start(spu_audio_bin, "salsa64_audio", 0);
-	return s->worker ? 0 : spukit_last_error();
+	if (!s->worker)
+		return spukit_last_error();
+	uint64_t t0 = sysGetSystemTime();
+	int bad = check_lists(s->worker);
+	salsa64_log("audio: listas de prueba en el SPE: %s (%.1f ms)", bad ? "DIFIEREN del PPE" : "iguales al PPE",
+		    (sysGetSystemTime() - t0) / 1e3);
+	return 0;
 }
 
 void salsa64_audio_spu_shutdown(struct salsa64_audio_spu *s)

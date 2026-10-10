@@ -19,7 +19,8 @@
 /* ---- Trabajo y resultado ---------------------------------------------------
  * Caben en el descriptor y el resultado de 112 bytes de lib/spukit. */
 
-#define AUD_JOB_TASK 2  /* kind del trabajo en spukit */
+#define AUD_JOB_TASK  2  /* kind del trabajo en spukit: una tarea */
+#define AUD_JOB_RESET 3  /* volver el estado de los ABI a cero (aud_init) */
 
 struct aud_job {
 	uint64_t rdram_ea;   /* dirección de la RDRAM emulada (EA del PPE) */
@@ -49,7 +50,7 @@ struct aud_result {
 /* ---- Estado ----------------------------------------------------------------
  * La DMEM del microcódigo (4 KB, con margen para que ningún comando se
  * salga del búfer) y el estado de cada familia de ABI, que persiste entre
- * tareas como en mupen64plus-rsp-hle. ~8,7 KB; en el SPE vive en el local
+ * tareas como en mupen64plus-rsp-hle. ~9,2 KB; en el SPE vive en el local
  * store. */
 
 #define AUD_DMEM_SIZE 0x1000u
@@ -63,7 +64,10 @@ struct aud_abi1 {           /* ABI1: Super Mario 64, GoldenEye… */
 	int16_t vol[2], target[2];
 	int32_t rate[2];
 	uint32_t loop;
-	int16_t table[16 * 8];  /* libro de códigos ADPCM / coeficientes de POLEF */
+	/* Libro de códigos ADPCM (hasta 8 predictores × 16 coeficientes) y
+	 * coeficientes de POLEF. ADPCM indexa con el nibble del cuadro: hasta
+	 * 16 predictores, así que la tabla da para 16 (el resto en cero). */
+	int16_t table[16 * 16];
 };
 
 struct aud_nead {           /* nead (ABI2): Zelda OoT, Mario Kart 64, Star Fox 64… */
@@ -72,7 +76,7 @@ struct aud_nead {           /* nead (ABI2): Zelda OoT, Mario Kart 64, Star Fox 6
 	uint32_t loop;
 	uint16_t filter_count;
 	uint32_t filter_lut[2];
-	int16_t table[16 * 8];
+	int16_t table[16 * 16];  /* como en ABI1 */
 };
 
 struct aud_job;

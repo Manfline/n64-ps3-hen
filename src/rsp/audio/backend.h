@@ -37,7 +37,7 @@ struct salsa64_audio_sync {
 	struct salsa64_audio_stats stats;
 };
 
-/* `state` lo pone quien llama (~8,7 KB) y queda inicializado. */
+/* `state` lo pone quien llama (~9,2 KB) y queda inicializado. */
 void salsa64_audio_sync_init(struct salsa64_audio_sync *s, struct aud_state *state, const struct salsa64_bus *bus);
 void salsa64_audio_add_stats(struct salsa64_audio_stats *st, const struct aud_result *res);
 
