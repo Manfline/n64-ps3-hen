@@ -22,9 +22,10 @@ Hecho (rama `loving-spence-8951ae`, desde main bd8ac59):
   nemu64-test, vitest y en GoldenEye y Perfect Dark (21,3 s de consola cada
   uno, con 97,6 % y 99,3 % en bucles de espera).
 
-Siguiente:
-- [ ] PS3 real: GoldenEye en el frontend (ms por campo y % en bucles de
-      espera) cuando haya turno.
+- **PS3 real** (524d80e, frontend «Salsa64 TLB bucles», SLSA00074):
+  GoldenEye a 59,8 campos/s con **0,6 ms de emulación por campo** (antes
+  5,6; 0,5 de los 0,6 son la copia del VI) y 99 % en bucles de espera
+  (antes 0 %); 1,2 MIPS ejecutados en vez de 93,7.
 
 ## 2026-10-10 — Fin de tarea del RSP por sondeo (sin bloquear al SPE)
 
