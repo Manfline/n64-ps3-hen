@@ -7,6 +7,7 @@
 | `tests/phase0/rsx-triangle/main.c` | Sample `samples/graphics/rsxtest` de PSL1GHT (`f649a08f`) | MIT | Inicialización del RSX, superficie, viewport y flip reescritos en C a partir de `rsxutil.cpp`/`main.cpp` |
 | `lib/rsxkit/src/video.c` | `tests/phase0/rsx-triangle/main.c` (propio), que sigue el sample `rsxtest` de PSL1GHT | MIT | Inicialización del RSX y del video, superficie y flip; el resto de `lib/rsxkit` es propio |
 | `tests/phase0/spu-compute/spu/mix.c` | Patrón DMA del sample `samples/spu/spudma` de PSL1GHT | MIT | Solo el patrón `mfc_get`/espera por etiqueta; el cálculo y el doble búfer son propios |
+| `lib/rsxkit/src/fprog.c` | Formato de instrucción de fragment program de `tools/cgcomp/include/nvfx_shader.h` y `fpparser.cpp` de PSL1GHT (`f649a08f`) | MIT | Solo los campos (fin de programa, tipo de fuente, bit 31 de SRC2) para limpiar el bit que quita la corrección de perspectiva; código propio |
 
 El núcleo de la Fase 1 (`src/core/`, `src/cpu/`, `src/host/`) es código
 propio, escrito desde documentación pública (manual del VR4300 de NEC, MIPS

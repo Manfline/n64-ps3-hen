@@ -37,6 +37,7 @@ static inline void cmd(gfx **dl, uint32_t w0, uint32_t w1)
 
 #define G_ZBUFFER            0x00000001u
 #define G_SHADE              0x00000004u
+#define G_CULL_FRONT         0x00000200u
 #define G_CULL_BACK          0x00000400u
 #define G_LIGHTING           0x00020000u
 #define G_TEXTURE_GEN        0x00040000u
@@ -104,6 +105,7 @@ enum { SIZ_4 = 0, SIZ_8 = 1, SIZ_16 = 2, SIZ_32 = 3 };
 
 /* othermode H */
 #define CYC_1CYCLE (0u << 20)
+#define CYC_2CYCLE (1u << 20)
 #define CYC_COPY   (2u << 20)
 #define CYC_FILL   (3u << 20)
 #define TT_RGBA16  (2u << 14)
@@ -131,6 +133,7 @@ enum { CC_COMBINED = 0, CC_TEXEL0 = 1, CC_TEXEL1 = 2, CC_PRIM = 3, CC_SHADE = 4,
 #define CC_A_0   15u
 #define CC_B_0   15u
 #define CC_C_0   31u
+#define CC_C_TEXEL0_ALPHA 8u
 #define CC_D_0   7u
 #define CC_D_1   6u
 #define CCA_0    7u

@@ -14,7 +14,11 @@
  * con z-buffer, un triángulo Gouraud, un cuadro con textura RGBA16 (texels
  * puntuales), un TEXRECT I4 con alpha compare, un TEXRECT en modo COPY con
  * textura CI4 y paleta, un cuadro translúcido, un cubo iluminado en
- * perspectiva que gira y un cuadro con mapeo de entorno (G_TEXTURE_GEN).
+ * perspectiva que gira, un cuadro con mapeo de entorno (G_TEXTURE_GEN) y
+ * cuatro cuadros de culling (antihorario y horario con G_CULL_BACK y con
+ * G_CULL_FRONT: se ven dos), un cuadro de 2 ciclos con dos texturas
+ * mezcladas por el alfa primitivo (TEXEL0 en la tile 0, TEXEL1 en la 1) y
+ * un cuadro con w = 1000 coloreado por PRIM·TEXEL0_ALPHA.
  *
  * Se verifica sola en lo que el CPU puede ver: que cada tarea termine con
  * SP_STATUS en HALT|BROKE|TASKDONE, que llegue la interrupción del SP y
@@ -102,9 +106,12 @@ struct rsp_data {
 	char ucode_data[32];
 	uint64_t dram_stack[128];
 	int16_t vp[8];
-	mtx ident, ortho, persp, trans, rot_y, rot_x;
+	mtx ident, ortho, persp, trans, rot_y, rot_x, far;
 	light sun, ambient, look_x, look_y;
 	vtx quad_a[4], quad_b[4], tri_c[3], quad_d[4], quad_g[4], quad_i[4], cube[24];
+	vtx cull[16];  /* 4 cuadros: antihorario/horario × cull back/front */
+	vtx quad_j[4], quad_k[4];
+	uint16_t red[4 * 4], blue[4 * 4];
 	uint16_t checker[8 * 8];
 	uint8_t glyph[16 * 8 / 2];
 	uint8_t ci[16 * 4 / 2];
@@ -208,6 +215,10 @@ static void init_data(void)
 	set_mtx(&r->ortho, ortho);
 	set_mtx(&r->persp, persp);
 	set_mtx(&r->trans, trans);
+	/* Proyección ×1000: mismo lugar en pantalla que la ortográfica, con
+	 * w = 1000 (como los objetos lejanos de un juego). */
+	const int32_t far[16] = { 1000 * ONE, 0, 0, 0, 0, 1000 * ONE, 0, 0, 0, 0, 1000 * ONE, 0, 0, 0, 0, 1000 * ONE };
+	set_mtx(&r->far, far);
 
 	set_light(&r->sun, 200, 40, 60, 100);
 	set_light(&r->ambient, 50, 0, 0, 0);
@@ -222,6 +233,18 @@ static void init_data(void)
 	set_vtx(&r->tri_c[2], -20, 20, 0, 0, 0, 0x0000FFFF);
 	set_quad(r->quad_d, -4, 24, 12, 4, 0, 0xFFFFFFFF);
 	set_quad(r->quad_g, 16, -8, 28, -24, 0, 0xFFFFFFFF);
+	/* Culling (expect.h): set_quad da los vértices en sentido horario con
+	 * la y hacia arriba; los antihorarios se arman al revés. */
+	set_quad(&r->cull[0], 16, 16, 22, 8, 0, 0x00FFFFFF);   /* back, antihorario: se ve */
+	set_quad(&r->cull[4], 23, 16, 29, 8, 0, 0xFF0000FF);   /* back, horario: no */
+	set_quad(&r->cull[8], 16, 4, 22, -4, 0, 0xFFFF00FF);   /* front, antihorario: no */
+	set_quad(&r->cull[12], 23, 4, 29, -4, 0, 0xFF00FFFF);  /* front, horario: se ve */
+	set_quad(r->quad_j, -22, -24, -10, -28, 0, 0xFFFFFFFF);
+	set_quad(r->quad_k, 24, 30, 30, 26, 0, 0xFFFFFFFF);
+	for (int i = 0; i < 16; i++) {
+		r->red[i] = rgba16(31, 0, 0);
+		r->blue[i] = rgba16(0, 0, 31);
+	}
 
 	/* Cubo: 6 caras de 4 vértices, en sentido antihorario visto desde
 	 * fuera, con la normal de la cara en el color. */
@@ -379,6 +402,51 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	sp_vertex(&dl, r->quad_g, 4, 0);
 	sp_tri2(&dl, 0, 1, 2, 0, 2, 3);
 
+	/* Culling: cuadros de color plano con G_CULL_BACK y G_CULL_FRONT. Los
+	 * de set_quad son horarios (0,1,2 va a la derecha y abajo); invertir el
+	 * orden los hace antihorarios. */
+	dp_othermode(&dl, CYC_1CYCLE, BL_XLU);
+	dp_combine(&dl, CC_A_0, CC_B_0, CC_C_0, CC_SHADE, CCA_0, CCA_0, CCA_0, CC_SHADE);
+	sp_vertex(&dl, r->cull, 16, 0);
+	sp_geometry(&dl, G_CULL_FRONT | G_ZBUFFER, G_CULL_BACK | G_SHADE | G_SHADING_SMOOTH);
+	sp_tri2(&dl, 0, 3, 2, 0, 2, 1);      /* antihorario */
+	sp_tri2(&dl, 4, 5, 6, 4, 6, 7);      /* horario */
+	sp_geometry(&dl, G_CULL_BACK, G_CULL_FRONT);
+	sp_tri2(&dl, 8, 11, 10, 8, 10, 9);   /* antihorario */
+	sp_tri2(&dl, 12, 13, 14, 12, 14, 15); /* horario */
+	sp_geometry(&dl, G_CULL_FRONT, 0);
+
+	/* J: 2 ciclos, (TEXEL1 − TEXEL0)·PRIM_ALPHA + TEXEL0 y luego COMBINED;
+	 * rojo en la tile 0 (TMEM 0) y azul en la 1 (TMEM 256 bytes). */
+	dp_texture_image(&dl, FMT_RGBA, SIZ_16, 1, r->red);
+	dp_tile(&dl, FMT_RGBA, SIZ_16, 0, 0, 7, 0, 0, 0, 0);
+	dp_sync(&dl, SYNC_LOAD);
+	dp_load_block(&dl, 7, 16, 2048);
+	dp_texture_image(&dl, FMT_RGBA, SIZ_16, 1, r->blue);
+	dp_tile(&dl, FMT_RGBA, SIZ_16, 0, 32, 7, 0, 0, 0, 0);
+	dp_sync(&dl, SYNC_LOAD);
+	dp_load_block(&dl, 7, 16, 2048);
+	dp_sync(&dl, SYNC_PIPE);
+	dp_tile(&dl, FMT_RGBA, SIZ_16, 1, 0, 0, 0, 0, 2, 0);
+	dp_tile_size(&dl, 0, 0, 0, 3, 3);
+	dp_tile(&dl, FMT_RGBA, SIZ_16, 1, 32, 1, 0, 0, 2, 0);
+	dp_tile_size(&dl, 1, 0, 0, 3, 3);
+	dp_othermode(&dl, CYC_2CYCLE | TF_POINT, BL_XLU);
+	dp_prim_color(&dl, 0xFFFFFF80);
+	{
+		/* Ciclo 0: a=TEXEL1, b=TEXEL0, c=PRIM_ALPHA (10), d=TEXEL0; alfa 1.
+		 * Ciclo 1: COMBINED. Se arma a mano: dp_combine pone el mismo en los dos. */
+		uint32_t hi = 2u << 20 | 10u << 15 | 7u << 12 | 7u << 9 | 15u << 5 | 31u;
+		uint32_t lo = 1u << 28 | 15u << 24 | 7u << 21 | 7u << 18 | 1u << 15 | 7u << 12 | 6u << 9 |
+			      0u << 6 | 7u << 3 | 0u;
+		cmd(&dl, 0xFC000000u | hi, lo);
+	}
+	sp_texture(&dl, 0xFFFF, 0xFFFF, 0, 1);
+	sp_geometry(&dl, G_CULL_BACK | G_CULL_FRONT | G_ZBUFFER, 0);
+	sp_vertex(&dl, r->quad_j, 4, 0);
+	sp_tri2(&dl, 0, 1, 2, 0, 2, 3);
+	sp_texture(&dl, 0, 0, 0, 0);
+
 	/* H: cubo iluminado en perspectiva. */
 	sp_matrix(&dl, &r->persp, G_MTX_LOAD | G_MTX_PROJECTION);
 	sp_matrix(&dl, &r->trans, G_MTX_LOAD | G_MTX_MODELVIEW);
@@ -407,6 +475,20 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	dp_combine(&dl, CC_A_0, CC_B_0, CC_C_0, CC_TEXEL0, CCA_0, CCA_0, CCA_0, CC_D_1);
 	sp_texture(&dl, 0x0200, 0x0200, 0, 1);
 	sp_vertex(&dl, r->quad_i, 4, 0);
+	sp_tri2(&dl, 0, 1, 2, 0, 2, 3);
+	sp_texture(&dl, 0, 0, 0, 0);
+
+	/* K: w = 1000 y PRIM·TEXEL0_ALPHA con el tablero (alfa 1): naranja.
+	 * El término de TEXEL0_ALPHA pasa por una entrada que el fragment
+	 * program lee con MUL; sin corrección de perspectiva saldría ÷1000. */
+	sp_matrix(&dl, &r->far, G_MTX_LOAD | G_MTX_PROJECTION);
+	sp_geometry(&dl, G_LIGHTING | G_TEXTURE_GEN, 0);
+	load_checker(&dl, 0, 0);
+	dp_othermode(&dl, CYC_1CYCLE | TF_POINT | TP_PERSP, BL_XLU);
+	dp_prim_color(&dl, 0xFF8000FF);
+	dp_combine(&dl, CC_PRIM, CC_B_0, CC_C_TEXEL0_ALPHA, CC_D_0, CCA_0, CCA_0, CCA_0, CC_D_1);
+	sp_texture(&dl, 0xFFFF, 0xFFFF, 0, 1);
+	sp_vertex(&dl, r->quad_k, 4, 0);
 	sp_tri2(&dl, 0, 1, 2, 0, 2, 3);
 	sp_texture(&dl, 0, 0, 0, 0);
 

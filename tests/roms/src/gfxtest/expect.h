@@ -9,6 +9,9 @@
  *
  * Objetos de prueba con proyección ortográfica (clip = vértice / 32): un
  * vértice (vx, vy) cae en el píxel (160 + 5·vx, 120 − 3,75·vy).
+ *
+ * Orientación: como en OpenGL (y libultra), el frente es antihorario con
+ * la y hacia arriba.
  */
 #ifndef SALSA64_GFXTEST_EXPECT_H
 #define SALSA64_GFXTEST_EXPECT_H
@@ -49,6 +52,12 @@ struct gfxtest_point {
 	{ 20, 201, 0x000000, "TEXRECT COPY CI4 + TLUT: índice 0" },                    \
 	{ 27, 201, 0x737373, "TEXRECT COPY CI4 + TLUT: índice 7" },                    \
 	{ 35, 202, 0xF7F7F7, "TEXRECT COPY CI4 + TLUT: índice 15" },                   \
-	{ 285, 165, 0x9090B1, "mezcla alfa 50 % sobre el fondo" },
+	{ 285, 165, 0x9090B1, "mezcla alfa 50 % sobre el fondo" },                    \
+	{ 255, 75, 0x00FFFF, "G_CULL_BACK: antihorario se ve" },                        \
+	{ 290, 75, GFXTEST_BG, "G_CULL_BACK: horario no se ve" },                      \
+	{ 255, 120, GFXTEST_BG, "G_CULL_FRONT: antihorario no se ve" },                \
+	{ 290, 120, 0xFF00FF, "G_CULL_FRONT: horario se ve" },                          \
+	{ 80, 217, 0x800080, "2 ciclos, 2 texturas: lerp(rojo, azul, 0,5)" },          \
+	{ 295, 15, 0xFF8000, "w = 1000: PRIM·TEXEL0_ALPHA" },
 
 #endif
