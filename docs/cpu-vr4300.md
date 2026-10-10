@@ -160,7 +160,13 @@ campo en escenas ligeras.
   las tablas.
 - **Condición para el resto.** Quien escriba la RDRAM fuera del CPU (DMA con
   latencia, el RSP en un SPE en la Fase 2) debe hacerlo en un evento del
-  planificador; si no, el salto se pasaría de largo esa escritura.
+  planificador; si no, el salto se pasaría de largo esa escritura. La HLE
+  de audio en el SPE 1 escribe la RDRAM mientras corre la tarea, pero el
+  juego solo la mira después de la interrupción del SP, que llega en el
+  evento de fin de tarea: ahí se espera al SPE y se avisa lo escrito con
+  `salsa64_bus_rdram_written` (como en la consola, donde el RSP también
+  escribe durante la tarea). El AI solo lee la RDRAM, al empezar cada DMA,
+  que es otro evento.
 - **Medición.** `cpu->idle_cycles` cuenta los ciclos saltados; el frontend y
   `salsa64-run` reportan MIPS sin ellos y el porcentaje saltado.
 - **Falta.** Bucles en código mapeado por TLB (GoldenEye), sondeos de E/S

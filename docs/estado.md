@@ -2,7 +2,7 @@
 
 ## 2026-10-10 — F3D (Super Mario 64) y F3DEX 1.x
 
-Hecho (rama `lucid-pare-4f93fb`, con main traído hasta cfa146b; sin
+Hecho (rama `lucid-pare-4f93fb`, con main traído hasta f698afe; sin
 integrar):
 - HLE de la primera generación de microcódigos en `src/rsp/gfx/f3d.c`: F3D
   (Fast3D: búfer de 16 vértices, índices ×10, G_TRI1, G_MTX con sus
@@ -43,8 +43,8 @@ integrar):
 - **PS3 real con main fusionado** (recompilador, dos hilos, caché,
   sondeo): SM64 sin franjas en la transición y al 100 % de NTSC en el
   logo, la transición y la cara (antes 55–67 %); GoldenEye: la intro se
-  ve, al 100 % de NTSC. El autor vio después dos errores, ya arreglados en
-  el host y pendientes de la PS3:
+  ve, al 100 % de NTSC. El autor vio después dos errores, arreglados y
+  confirmados por él en la PS3:
   - La cara del Mario 3D (de frente): el combiner de los ojos,
     (TEXEL0 − SHADE)·TEXEL0_ALPHA + SHADE, multiplica la textura por su
     alfa y combine.c lo aproximaba. Ahora pide la textura premultiplicada
@@ -69,7 +69,12 @@ Pendiente:
       ver cuáles son (`combine.c`).
 - [ ] En la PS3: GoldenEye, Mario Kart 64 y Star Fox 64 con este
       paquete (en el host ya dibujan).
-- [ ] Confirmar en la PS3 la cara de Mario y el cielo de GoldenEye.
+- [x] Confirmar en la PS3 la cara de Mario y el cielo de GoldenEye.
+- [ ] Mario Kart 64 en la PS3 (el autor): la carrera se ve con HUD, pero
+      el título sin logo ni textos, los menús negros con recuadros de
+      color sólido sin textura y algunos carteles de la pista en negro
+      (distinguir pantallas gigantes, que son efecto de framebuffer, de
+      letreros con textura).
 - [ ] GoldenEye: dos combiners del nivel multiplican el sombreado por su
       alfa (lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE: niebla por luz
       precalculada) y se aproximan (75 000 en 52 s de Dam). Hace falta un
@@ -86,6 +91,115 @@ Pendiente:
   todas las carpetas del host, así que `salsa64-run` se compila nativo en la
   Mac (`make -C src/host OUT=$PWD/build/host-mac CC=clang SAN=`) y lee la
   ROM en su lugar.
+## 2026-10-10 — Audio de punta a punta: AI, HLE de audio en el SPE 1 y salida en la PS3
+
+Hecho (rama `amazing-varahamihira-3027c8`, con main cfa146b):
+- **AI** (`src/core/ai.c`, desde n64brew.dev): cola de dos DMA, AI_STATUS
+  (BUSY/FULL/ENABLED), AI_LENGTH que cuenta hacia abajo y los demás
+  registros que se leen como él, frecuencia = reloj del VI de la región /
+  (AI_DACRATE + 1), interrupción al **empezar** cada DMA, AI_CONTROL que
+  detiene el DMA y el acarreo de los límites de 8 KB (libultra lo
+  compensa). Un evento del planificador por DMA; las muestras van a un
+  sumidero al empezar cada DMA.
+- **HLE de audio** (`src/rsp/audio/`, adaptada de mupen64plus-rsp-hle,
+  GPLv2+, avisos en cada archivo y docs/THIRD_PARTY.md): ABI1 (Super Mario
+  64; variante de GoldenEye) y todas las variantes nead (Zelda OoT, Mario
+  Kart 64, Star Fox 64…). DMEM en el orden de la N64 con índices de la N64
+  (el original dependía del host little-endian en FILTER e INTERLEAVE),
+  E/S explícita de la RDRAM, tabla de RESAMPLE **propia**
+  (`tools/audio-lut.py`; la del original es del microcódigo), libro de
+  códigos de 16 predictores (el original leía fuera de la tabla). El núcleo
+  reconoce el ABI por las palabras de `ucode_data` (`rsp_audio.c`). ABIs
+  por juego objetivo: SM64 ABI1, GoldenEye ABI1 (GE), Zelda OoT / Mario
+  Kart 64 / Star Fox 64 nead, Perfect Dark naudio con MP3 (pendiente).
+- **SPE 1** (`src/spu/audio/`, `src/platform/ps3/audio_spu.c`): una tarea
+  por trabajo de lib/spukit, E/S por DMA (escrituras en trozos de
+  alineación natural: nunca reescribe RDRAM vecina), fin de tarea por
+  sondeo (`done`), aviso de lo escrito con `salsa64_bus_rdram_written`.
+  Local store: 27 KB de código + 20 KB de datos. Al arrancar compara
+  listas de prueba (`selftest.c`) en el SPE y en el PPE.
+- **Salida** (`src/frontend/audio_out.c`, `audio_sync.c`): anillo sin
+  bloqueos entre la emulación y un hilo de audio que llena el puerto de
+  PSL1GHT (48 kHz, 16 bloques de 256, cuatro por delante). **Ritmo:** lo
+  marca pacer.c (la tele emulada); el audio lo sigue con una corrección de
+  ±0,5 % del remuestreo. **Política** (`audio.cfg`): «estirar» (por
+  omisión: si la emulación se aparta más de un 3–5 % sigue su velocidad
+  con WSOLA sin cambiar el tono; si se vacía repite lo reciente hasta 150
+  ms y luego calla) o «silencio» (calla con 10 ms de desvanecido y sigue
+  donde quedó). Toda transición pasa por la suma con ventana: sin
+  chasquidos, verificado en el host con productores al 27 %, 100 % y 130 %.
+  Diagnóstico: `volcado_s` (WAV de lo que sale por el AI, nunca al repo),
+  `tarea_us`, pico del AI en dBFS en el log. Memoria: 0,3 MB.
+- **ROM audiotest** (`tests/roms/src/audiotest`, propia, IPL3 libre): tono
+  conocido por el CPU (La 4, Do izquierda, Mi derecha, Sol, Do 6) y luego
+  por una tarea de audio («Salsa64 ABI NEAD»); se verifica sola y
+  `salsa64-run --audiotest-check` compara lo que sale por el AI muestra por
+  muestra. En `tools/test-roms.sh`.
+- Pruebas: suites ai (8), audio (15) y sync (5); 269 en total en el host y
+  en RPCS3 (big-endian). Pruebas de mutación: romper el acarreo, el orden
+  de INTERLEAVE, la escala del ADPCM o el solapamiento del estirador las
+  hace fallar. nemu64-test 446 fallas (sin cambios), vitest, controles,
+  savetest, gfxtest y audiotest OK; build sin advertencias. RPCS3:
+  audiotest OK en el frontend (renderer de audio Null en las pruebas).
+- **PS3 real** (paquete «Salsa64 audio», SLSA00072): audiotest suena bien
+  (afinador en 440 Hz, cada canal de su lado), 100 % de NTSC, 0 faltas.
+  **Zelda OoT suena perfecto** (el autor): 9 min al 99,9 %, HLE en el SPE
+  2,4 ms por tarea (mediana; máx. 4,0), PPE esperando 0, 0 bloques tarde.
+  Mediciones en docs/perf-log.md.
+
+Notas:
+- Una vez, tras la primera corrida de Zelda (120 s), la consola quedó en
+  negro después de «salida normal» y hubo que reiniciarla. No se repitió
+  en tres salidas más (7 s, 9 min y SM64 100 s); ahora el cierre del audio
+  anota cada paso y todos devuelven 0. Además, soltar el audio
+  (`salsa64_rsp_set_audio(NULL)`) ya no termina una tarea gráfica en vuelo:
+  antes hacía un reset completo del RSP y podía llamar a `wake()` del
+  frontend con su semáforo ya destruido. Si vuelve a pasar, mirar esas
+  líneas; `salsa64_rsp_set_gfx(NULL)` en main.c tenía el mismo riesgo
+  (iba después de `sysSemDestroy(wake_sem)`): corregido al integrar, el
+  semáforo se destruye después de soltar la HLE gráfica. Probablemente no
+  era la causa del negro: en lv2 un semáforo destruido da error, no se
+  cuelga, y el negro llegó después de «salida normal» (fin del proceso:
+  ¿algún hilo, SPE o el puerto de audio aún vivo?). Pendiente si se repite.
+- `.gitignore`: la regla «core» de los volcados de qemu también ignoraba
+  `src/core` para archivos nuevos; se agregó «!src/core/».
+
+Falta:
+- [ ] Oír Super Mario 64 (ABI1): sus tareas corren sin errores (0,115 ms)
+      pero el juego no pasa del arranque sin F3D.
+- [ ] naudio (Perfect Dark, Banjo, Conker; Perfect Dark con MP3) y MusyX.
+- [ ] Probar la política «silencio» y una escena lenta en la PS3; con el
+      recompilador Zelda ya va al 100 % y casi no hace falta estirar.
+- [ ] Opcional: SIMD en ENVMIXER, RESAMPLE y ADPCM del SPE (hoy 2,4 ms por
+      tarea en Zelda, escalar).
+- [ ] Opcional: que el audio marque el ritmo (pacer.c tiene el enganche).
+## 2026-10-10 — Bucles de espera en código mapeado por la TLB
+
+Hecho (rama `loving-spence-8951ae`, desde main bd8ac59):
+- `src/cpu/idle.c` traduce el código y las cargas de la vuelta también por
+  la TLB, sin efectos (`salsa64_vr4300_fetch_probe`: la búsqueda del
+  intérprete sin excepciones ni cambios); antes solo KSEG0/KSEG1. El «sí»
+  no se guarda (cada vez se vuelve a simular con la TLB y la memoria del
+  momento) y la TLB no cambia dentro de una vuelta (COP0 la descarta): un
+  remapeo o código reescrito se ve en el análisis siguiente; los descartes
+  siguen por pc ^ instrucción. El recompilador no cambia (consulta lo
+  mismo que el intérprete).
+- Pruebas: `b .` mapeado y sondeo de una variable por dirección mapeada
+  (se saltan, igual con y sin detección), y la misma dirección virtual
+  remapeada a un contador (deja de saltar y queda descartado).
+- Mac, 21,3 s de consola con el intérprete: GoldenEye 0,0 → **97,6 %** en
+  bucles de espera (16,2 → 0,8 s); Perfect Dark 0 → 99,3 % (su `b .` del
+  arranque). Registros, log e imagen del VI idénticos con y sin el cambio.
+- qemu-ppc64: 233/233 con el recompilador en los cuatro modos, nemu64-test
+  con la línea base, vitest OK, `--lockstep` sin diferencias en
+  nemu64-test, vitest y en GoldenEye y Perfect Dark (21,3 s de consola cada
+  uno, con 97,6 % y 99,3 % en bucles de espera).
+
+- **PS3 real** (524d80e, frontend «Salsa64 TLB bucles», SLSA00074):
+  GoldenEye a 59,8 campos/s con **0,6 ms de emulación por campo** (antes
+  5,6; 0,5 de los 0,6 son la copia del VI) y 99 % en bucles de espera
+  (antes 0 %); 1,2 MIPS ejecutados en vez de 93,7.
+
 ## 2026-10-10 — Recompilador: conversiones de la FPU, LWL/LWR y MFC0 en nativo
 
 Hecho (rama `funny-lalande-371c7e`; diseño en docs/rec-ppe.md,
@@ -239,9 +353,10 @@ Siguiente:
       pública, sin código de Nintendo.
 - [ ] HLE gráfica: el microcódigo de GoldenEye (F3D; trabajo de F3D) y que
       una tarea con microcódigo desconocido no deje colgado al juego.
-- [ ] idle.c: bucles de espera en código mapeado por la TLB (trabajo TLB).
-- [ ] Verificar en el desensamblado (o el decomp) si GoldenEye ejecuta
-      0x7F000000 desde la ROM o desde la RDRAM.
+- [x] idle.c: bucles de espera en código mapeado por la TLB (entrada de
+      arriba).
+- [x] GoldenEye ejecuta 0x7F000000 desde la RDRAM: pagina su código por
+      fallos de TLB (visto en la emulación, ver abajo).
 
 ## 2026-10-10 — Caché de texturas entre tareas (HLE gráfica)
 
@@ -531,8 +646,9 @@ Notas:
 Siguiente:
 - [x] EEPROM del cartucho (canal 4 del PIF) y SRAM: entrada de arriba.
 - [ ] Controller Pak y Rumble.
-- [ ] Bucles de espera: código mapeado por TLB, sondeos de E/S que solo
-      cambian en eventos (MI_INTR, SP_STATUS) y esperas por Count.
+- [ ] Bucles de espera: sondeos de E/S que solo cambian en eventos
+      (MI_INTR, SP_STATUS) y esperas por Count. (Código mapeado por TLB:
+      hecho, 2026-10-10.)
 - [ ] Opcional: decidir el chequeo con el inmediato del salto (no depende
       del destino) y medir si recupera el 1 %.
 - [ ] Repartir emulación y presentación entre los dos hilos del PPE (ya

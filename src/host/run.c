@@ -31,6 +31,12 @@
  * imagen de la color image que muestra el VI; --gfxtest-check compara esa
  * imagen con los puntos de la ROM gfxtest (tests/roms/src/gfxtest/expect.h).
  *
+ * Audio: las tareas de audio pasan por la HLE (src/rsp/audio) en el mismo
+ * hilo y lo que sale por el AI se guarda; con --audio-wav se escribe en un
+ * WAV y --audiotest-check lo compara muestra por muestra con el tono de la
+ * ROM audiotest (tests/roms/src/audiotest/tone.h) y exige que no haya
+ * huecos entre los DMA del AI.
+ *
  * Códigos de salida:
  *   0  apareció el texto de --until-text, o se agotaron los ciclos sin pedirlo
  *   1  apareció alguno de los textos de --fail-text
@@ -47,6 +53,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "../../tests/roms/src/audiotest/tone.h"
 #include "../../tests/roms/src/gfxtest/expect.h"
 #include "core/boot.h"
 #include "core/endian.h"
@@ -55,6 +62,7 @@
 #include "frontend/savefile.h"
 #include "raster.h"
 #include "rsp/gfx/backend.h"
+#include "rsp/audio/backend.h"
 #include "rsp/gfx/hle.h"
 
 #define DEFAULT_CYCLES (1ull << 32)  /* ~46 s de la consola */
@@ -88,6 +96,37 @@ static struct {
 
 static struct salsa64_save save;
 static struct savefile save_file;
+
+/* Audio: HLE y lo que sale por el AI (16 bits estéreo, orden de la N64). */
+#define AUDIO_MAX (16u << 20)
+static struct aud_state aud_state;
+static struct salsa64_audio_sync aud_sync;
+static uint8_t audio_buf[AUDIO_MAX];
+static struct {
+	uint32_t bytes, rate, dmas, gaps, rates;
+	uint64_t next;      /* ciclo en que debía empezar el DMA siguiente */
+	bool lost;          /* no cupo todo en audio_buf */
+} audio;
+
+/* Sumidero del AI: guarda las muestras y cuenta los huecos (un DMA que no
+ * empieza justo cuando terminó el anterior). */
+static void audio_push(void *ctx, const uint8_t *p, uint32_t bytes, uint32_t rate, uint64_t cycle)
+{
+	(void)ctx;
+	if (audio.dmas && cycle != audio.next)
+		audio.gaps++;
+	if (audio.rate && rate != audio.rate)
+		audio.rates++;
+	audio.rate = rate;
+	audio.dmas++;
+	uint64_t div = (n64.bus.ai.regs[SALSA64_AI_DACRATE] & 0x3FFF) + 1;
+	uint64_t num = (uint64_t)(bytes / 4) * 93750000ull * div, den = n64.bus.vi.clock_hz;
+	audio.next = cycle + (num + den - 1) / den;
+	uint32_t n = bytes < AUDIO_MAX - audio.bytes ? bytes : AUDIO_MAX - audio.bytes;
+	memcpy(audio_buf + audio.bytes, p, n);
+	audio.bytes += n;
+	audio.lost |= n < bytes;
+}
 
 /* HLE gráfica: estado, búferes de salida y totales. */
 static struct gfx_state gfx_state;
@@ -314,6 +353,69 @@ static void gfx_summary(void)
 		s->commands / n, s->triangles / n, s->rects / n, s->draws / n, s->loads / n, s->textures / n,
 		s->tex_reused / n, s->tex_old / n, s->tex_arena / n, s->tex_evicted / n,
 		s->unknown_cmds, s->last_unknown, s->approx_cc, s->dl_errors, s->flags);
+}
+
+static void audio_summary(void)
+{
+	const struct salsa64_audio_stats *a = &aud_sync.stats;
+	const struct salsa64_rsp_stats *r = &n64.bus.rsp.stats;
+	fprintf(stderr, "salsa64-run: audio: %u tareas (%u con ABI desconocido; último ABI %s), %u comandos, "
+		"%u sin implementar (último 0x%08X), %u errores; AI: %u DMA, %u muestras a %u Hz, %u huecos, "
+		"%u cambios de frecuencia%s\n", r->audio, r->unknown_abi, salsa64_abi_name(n64.bus.rsp.abi),
+		a->commands, a->unknown, a->last_unknown, a->errors, audio.dmas, audio.bytes / 4, audio.rate,
+		audio.gaps ? audio.gaps - 1 : 0, audio.rates, audio.lost ? " (no cupo todo)" : "");
+}
+
+static bool audio_wav(const char *path)
+{
+	FILE *f = fopen(path, "wb");
+	if (!f)
+		return false;
+	uint32_t data = audio.bytes, rate = audio.rate ? audio.rate : 32000;
+	uint8_t h[44];
+	memcpy(h, "RIFF", 4);
+	for (int i = 0; i < 4; i++) h[4 + i] = (uint8_t)((36 + data) >> (8 * i));
+	memcpy(h + 8, "WAVEfmt ", 8);
+	static const uint8_t fmt[8] = { 16, 0, 0, 0, 1, 0, 2, 0 };  /* PCM, 2 canales */
+	memcpy(h + 16, fmt, 8);
+	for (int i = 0; i < 4; i++) h[24 + i] = (uint8_t)(rate >> (8 * i));
+	for (int i = 0; i < 4; i++) h[28 + i] = (uint8_t)((rate * 4) >> (8 * i));
+	h[32] = 4, h[33] = 0, h[34] = 16, h[35] = 0;
+	memcpy(h + 36, "data", 4);
+	for (int i = 0; i < 4; i++) h[40 + i] = (uint8_t)(data >> (8 * i));
+	fwrite(h, 1, sizeof h, f);
+	for (uint32_t i = 0; i < data; i += 2) {
+		uint8_t le[2] = { audio_buf[i + 1], audio_buf[i] };  /* la N64 es big-endian */
+		fwrite(le, 1, 2, f);
+	}
+	fprintf(stderr, "salsa64-run: audio del AI en %s (%u muestras a %u Hz)\n", path, data / 4, rate);
+	return fclose(f) == 0;
+}
+
+/* Lo que salió por el AI contra el tono de audiotest. */
+static bool audiotest_check(void)
+{
+	struct tone_gen g = { 0, 0, 0 };
+	uint32_t frames = audio.bytes / 4, bad = 0, first = 0;
+	for (uint32_t i = 0; i < frames; i++) {
+		int16_t l, r;
+		tone_next(&g, &l, &r);
+		int16_t gl = (int16_t)salsa64_rd16(audio_buf + 4 * i), gr = (int16_t)salsa64_rd16(audio_buf + 4 * i + 2);
+		if (gl != l || gr != r) {
+			if (!bad++)
+				first = i;
+		}
+	}
+	/* Huecos: el primer DMA empieza con la cola vacía; ninguno más. Las dos
+	 * fases de la ROM son 180 búferes; el último puede seguir en la cola. */
+	uint32_t gaps = audio.gaps ? audio.gaps - 1 : 0;
+	bool ok = frames >= 179 * TONE_FRAMES && !bad && !gaps && !audio.rates && !audio.lost;
+	char where[48] = "";
+	if (bad)
+		snprintf(where, sizeof where, ", la primera en la muestra %u", first);
+	fprintf(stderr, "salsa64-run: audiotest: audio %s (%u muestras, %u distintas%s, %u huecos, %u Hz)\n",
+		ok ? "OK" : "FALLO", frames, bad, where, gaps, audio.rate);
+	return ok;
 }
 
 /* Imagen del rasterizador para la color image que muestra el VI. */
@@ -752,6 +854,8 @@ static void usage(FILE *out)
 	      "      --trace-rsp N     mostrar las primeras N tareas del RSP\n"
 	      "      --trace-vi N      mostrar la imagen del VI en los últimos N campos\n"
 	      "      --pad GUION       control 1 por campos: \"300:START;306:-;400:A+Z@0,80\"\n"
+	      "      --audio-wav ARCHIVO  al terminar, guardar en WAV lo que salió por el AI\n"
+	      "      --audiotest-check comparar lo que salió por el AI con el tono de audiotest\n"
 	      "      --raster-dump F   dibujar un volcado de la HLE de la PS3 (gfxdump.bin) en\n"
 	      "                        --gfx-frame y salir (sin ROM)\n", out);
 }
@@ -781,6 +885,8 @@ int main(int argc, char **argv)
 		{ "pad", required_argument, NULL, OPT_PAD },
 		{ "trace-gfx", required_argument, NULL, 'Q' },
 		{ "raster-dump", required_argument, NULL, 'D' },
+		{ "audio-wav", required_argument, NULL, 'A' },
+		{ "audiotest-check", no_argument, NULL, 'Z' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 },
 	};
@@ -789,7 +895,8 @@ int main(int argc, char **argv)
 	int tv = SALSA64_BOOT_TV_AUTO, save_type = SALSA64_SAVE_AUTO, c;
 	bool regs = false, idle = true, use_rec = false, lockstep = false;
 	const char *frame_path = NULL, *gfx_path = NULL, *save_dir = NULL;
-	bool gfx_check = false;
+	bool gfx_check = false, audio_check = false;
+	const char *wav_path = NULL;
 	const char *dump_path = NULL;
 
 	while ((c = getopt_long(argc, argv, "c:u:f:qrh", opts, NULL)) != -1) {
@@ -837,6 +944,8 @@ int main(int argc, char **argv)
 			}
 			break;
 		case 'D': dump_path = optarg; break;
+		case 'A': wav_path = optarg; break;
+		case 'Z': audio_check = true; break;
 		case 'Q': trace_gfx_left = (unsigned)strtoul(optarg, NULL, 0); trace_gfx_verbose = getenv("SALSA64_GFX_VERBOSE") != NULL; break;
 		case 'T':
 			if (!strcmp(optarg, "ntsc")) tv = SALSA64_TV_NTSC;
@@ -880,6 +989,9 @@ int main(int argc, char **argv)
 	const struct salsa64_gfx_sink sink = { NULL, gfx_acquire, gfx_done };
 	salsa64_gfx_sync_init(&gfx_sync, &gfx_state, &n64.bus, &sink);
 	salsa64_rsp_set_gfx(&n64.bus, &gfx_sync.backend);
+	salsa64_audio_sync_init(&aud_sync, &aud_state, &n64.bus);
+	salsa64_rsp_set_audio(&n64.bus, &aud_sync.backend);
+	salsa64_ai_set_sink(&n64.bus, audio_push, NULL);
 	n64.bus.rsp.trace = trace_rsp;
 	if (trace_exc_left)
 		n64.cpu.exc_hook = trace_exc;
@@ -994,12 +1106,20 @@ int main(int argc, char **argv)
 		dump_regs();
 	if (gfx.tasks || n64.bus.rsp.stats.unknown_gbi)
 		gfx_summary();
+	if (n64.bus.rsp.stats.audio || audio.dmas)
+		audio_summary();
+	if (wav_path && !audio_wav(wav_path)) {
+		free(rom);
+		return 3;
+	}
 	if ((frame_path && !dump_frame(frame_path)) || (gfx_path && !gfx_dump(gfx_path))) {
 		free(rom);
 		return 3;
 	}
 	free(rom);
 	if (gfx_check && !gfxtest_check())
+		return 1;
+	if (audio_check && !audiotest_check())
 		return 1;
 
 	switch (reason) {

@@ -18,6 +18,8 @@ antes, después, notas.
 | 2026-10-10 | f416bee | Recompilador, cuatro variantes, nemu64-test | PS3 real (mismo equipo) | intérprete 8098 ms | sin opciones 1941 ms (×4,17); escritura temprana diferida 1992; **registros fijos 1821 (×4,45)**; ambas 1849 | La escritura temprana no compensa ni diferida: queda apagada. Con registros fijos el bench enteros cae de 750 a 128 MIPS (4 registros por bloque): préstamo en bucles (siguiente fila) |
 | 2026-10-10 | b11861c | Recompilador con código en KSEG1 y por TLB (rec_tlb.c), cuatro variantes, nemu64-test y bench | PS3 real (mismo equipo) | intérprete 7972 ms; f416bee: sin opciones 1941, temprana 1992, fijos 1821, ambas 1849 | sin opciones 1973 ms (×4,04); temprana 2014; **fijos 1856 (×4,29)**; ambas 1897. Bench enteros con registros fijos **760 MIPS** (antes 128: el préstamo en bucles funciona) | Mismas 446 fallas, hash y ciclo que el intérprete; 232/232 unitarias en cada variante. 623 de 29 442 bloques fuera de KSEG0 (antes al intérprete). 1–3 % más lento que f416bee, dentro de lo que varió entre corridas anteriores (sin opciones 1817 → 1941); nemu64-test casi no tiene código mapeado, la medición que importa es GoldenEye/Perfect Dark |
 | 2026-10-10 | 8c27863 | **GoldenEye (NTSC)** en el frontend, recompilador con código mapeado por la TLB | PS3 real (mismo equipo), respaldo del usuario | antes: el código mapeado lo corría el intérprete (~24–33 MIPS en nemu64-test) | **59,8 campos/s, 93,7 MIPS (velocidad completa), emulación 5,6 ms por campo** | 3512 de 3518 bloques mapeados, 5050 traducciones (todas en el arranque), ~0,08 % interpretado. El juego no pasa del arranque gráfico (microcódigo F3D sin soporte: ruido en pantalla, igual con el intérprete solo), así que es carga de CPU sin dibujar y sin bucles de espera. Perfect Dark: 5,1 ms por campo, también atorado en el arranque con el intérprete |
+| 2026-10-10 | bd8ac59 → (esta rama) | Bucles de espera en código mapeado por la TLB (`idle.c`), GoldenEye y Perfect Dark 21,3 s de consola con el intérprete | Mac (salsa64-run nativo), respaldos del usuario | GoldenEye 0,0 % en bucles de espera, 16,2 s; Perfect Dark 0,0 % | **GoldenEye 97,6 %, 0,8 s; Perfect Dark 99,3 %** | Mismos registros, log e imagen del VI que sin el cambio. GoldenEye: su hilo ocioso es un `b .` mapeado en 0x7000071c (no dibuja por el microcódigo F3D). Pendiente medir en la PS3 |
+| 2026-10-10 | 524d80e | Bucles de espera en código mapeado, **GoldenEye** en el frontend con el recompilador | PS3 real (mismo equipo), respaldo del usuario | 59,8 campos/s, 93,7 MIPS, 0 % en bucles de espera, emulación 5,6 ms por campo | **59,8 campos/s, 1,2 MIPS, 99 % en bucles de espera, emulación 0,6 ms por campo** (0,5 ms es la copia del VI) | Su hilo ocioso es un `b .` mapeado en 0x7000071c; el juego no dibuja todavía (microcódigo F3D) |
 | 2026-10-10 | 697922c → b3ba375 | **Caché de texturas** entre tareas (HLE gráfica en el SPE 0), Zelda OoT con el recompilador, ventanas fijas de 100 campos | PS3 real (mismo equipo), respaldo del usuario | HLE en el SPE 14,0–30,6 ms por tarea; escenas pesadas a 38–48 campos/s; peor campo 36–43 ms | **5,1–9,6 ms por tarea (×2,8–3,3); 59,8–60,2 campos/s en todas; peor campo 17–27 ms** | Decodificar texturas: 6,7–17,2 → 0,00–0,09 ms (0–1 textura decodificada por tarea); identificarlas (hash) 0,03–0,35 ms; cargas a la TMEM 3,7–7,3 → 1,4–3,0 ms (copia en bloque). Mismas capturas byte a byte. Ver «Caché de texturas» abajo |
 | 2026-10-10 | f416bee | **Zelda OoT (NTSC) en el frontend**, recompilador con registros fijos, HLE gráfica en el SPE | PS3 real (mismo equipo), respaldo del usuario | intérprete: 15,4–17,5 campos/s, emulación 56–64 ms por campo | **41–60 campos/s (69–100 %), emulación 4–14 ms por campo** | Logo e intro a 58–60; título y escenas con muchos triángulos 41–55, ahora limitadas por la espera a la HLE gráfica del SPE (10–30 ms por tarea), no por el CPU. 86–88 % del tiempo del CPU en bucles de espera. ~10 500 bloques, 7,9 MB de caché, 1,7 % de instrucciones interpretadas. Se ve igual que con el intérprete (el autor) |
 | 2026-10-10 | e210aeb | **Recompilador: conversiones de la FPU, LWL/LWR y MFC0 en nativo**, nemu64-test con registros fijos | PS3 real (mismo equipo), cpu-tests SLSA00077 | mismo binario con `RARE_EXEC` (como antes): 1894 ms (×4,29 del intérprete, 8118 ms) | **1816 ms (104,1 MIPS; ×4,47); −4,1 %** | Mismas 446 fallas, hash y ciclo. Entradas desde C 140 909 → 110 074; llamadas al intérprete 2,15 M → 1,77 M. Bench: cvt 4,2 → 40,7 MIPS, no alineadas 20,5 → 218,5, mfc0 9,8 → 701, espera por Count 8,3 → 488 (salidas a C 2 M → 8). Ver «Conversiones de la FPU…» abajo |
@@ -126,6 +128,47 @@ savetest (SRAM) dos veces en la PS3: «persistió el arranque 1», volcado
 diferido escrito por el hilo de presentación a los ~2 s (257 escrituras
 del juego), salida limpia. START + SELECT y «Salir del juego» funcionan;
 los controles llegan por el buzón entre hilos (vitest los identifica).
+
+## Audio: AI, HLE de audio en el SPE 1 y salida (2026-10-10)
+
+**PS3 real** (mismo equipo), rama `amazing-varahamihira-3027c8`
+con main 298b18d (recompilador, dos hilos con ritmo, fin de tarea por
+sondeo). Paquete «Salsa64 audio» (SLSA00072). Ventanas de 5 s.
+
+audiotest (ROM propia; tono por el CPU y luego por una tarea de audio de
+14 comandos nead cada 16 ms):
+
+| | PS3 real |
+|---|---|
+| Velocidad | 59,8 campos/s (100 % de NTSC), 96 % del tiempo en bucles de espera |
+| HLE de audio en el SPE, por tarea | **0,057 ms** (máx. 0,057), PPE esperando 0,000 ms, 62,5 tareas/s |
+| Listas de prueba al arrancar (SPE contra PPE, 3 listas) | iguales, 1,0 ms (en RPCS3, 1,3 s: compila el programa del SPE) |
+| Salida | colchón 78–98 ms, régimen normal (sin estirar), 0 faltas, 0 silencios, 0 saltos, 0 bloques tarde; 2 % de silencio solo en los primeros 5 s (llenado del colchón) |
+| Hilo de audio | 1,9 % del tiempo de pared |
+| Oído (el autor) | suena bien: el afinador marca 440 Hz y cada nota sale de su lado |
+| Corrida completa | 96 s, 3 007 488 muestras del AI, 4 510 464 a la salida (4 392 en silencio: el llenado inicial), 17 619 bloques; START + SELECT cierra el audio y sale normal |
+
+Zelda OoT NTSC (respaldo propio), recompilador, del logo al juego;
+corrida de 535 s (105 ventanas) más una de 120 s con el mismo resultado:
+
+| | PS3 real |
+|---|---|
+| ABI | nead (Zelda OoT): 0 comandos sin implementar, 0 errores, ~60 tareas/s |
+| HLE de audio en el SPE 1, por tarea | mediana **2,42 ms**, ventanas de 5 s entre 0,30 (arranque) y 2,83 ms; la tarea más larga 4,02 ms |
+| PPE esperando al SPE | **0,000 ms** (fin de tarea por sondeo; el SPE termina antes de que el núcleo pregunte) |
+| Salida | emulación al 99,9 % de media, régimen normal; 0,06 % del tiempo en silencio (el llenado inicial), 0,4 % estirado (los arranques de escena), 3 faltas breves en 9 min, 0 silencios, 0 saltos, 0 bloques tarde |
+| Hilo de audio | 2,0 % del tiempo de pared |
+| Oído (el autor) | «se escucha perfecto» |
+
+Super Mario 64 NTSC: sin F3D (otro trabajo) el juego no pasa del arranque y
+no hay imagen ni sonido audible, pero sus tareas de ABI1 corren en el SPE
+1 sin errores ni comandos desconocidos: **0,115 ms** por tarea, 60/s.
+Pendiente oírlo cuando F3D esté integrado.
+
+El costo de la HLE de Zelda (2,4 ms por tarea, código escalar) cabe de
+sobra en el SPE (14 % de un campo) y no frena al PPE. Si hace falta, los
+bucles de ENVMIXER, RESAMPLE y ADPCM son candidatos claros a SIMD.
+
 
 ## Fin de tarea del RSP por sondeo (2026-10-10)
 
