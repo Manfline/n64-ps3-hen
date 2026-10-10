@@ -13,6 +13,13 @@ propio, escrito desde documentación pública (manual del VR4300 de NEC, MIPS
 IV ISA, n64brew.dev) y validado con nemu64-test. No incluye código de
 Not64/Wii64, Mupen64Plus ni ares.
 
+La HLE gráfica de la Fase 2 (`src/rsp/gfx/`, `src/spu/gfx/`, `src/rdp/`) y
+`lib/spukit/` también son código propio. Para el comportamiento de F3DEX2 y
+del RDP se consultaron la documentación de n64brew.dev y el código de
+emuladores GPL (abajo), sin copiar código: se reescribió a partir de la
+descripción. Nada de eso entra en `lib/rsxkit/` ni en `lib/spukit/` (MIT),
+que solo usan PSL1GHT.
+
 Datos tomados de terceros (no código):
 
 | Dato | En | Origen | Licencia |
@@ -22,6 +29,12 @@ Datos tomados de terceros (no código):
 | Semillas del IPL3, ajuste de la dirección de arranque por CIC, códigos de destino, mapa de memoria y reglas del bus | `src/core/` | n64brew.dev (PIF-NUS, CIC-NUS, ROM Header, Memory map, RDRAM Interface, Initial Program Load) | documentación |
 | Temporización del VI (relojes por tipo de TV, VI_V_SYNC/VI_H_SYNC, área visible con VI_H_VIDEO/VI_V_VIDEO y escalas) | `src/core/vi.c` | n64brew.dev (Video Interface) | documentación |
 | Reglas de hardware verificadas por las pruebas (MULT, LWR, enlaces, COP0, COP2, FPU, TLB, RE, bus) y valores de los registros de RDRAM | `src/cpu/`, `src/core/` | nemu64-test (fuente, comentarios y valores esperados) | MIT |
+| DMA del SP (filas, salto, vuelta en el banco, registros al terminar), bits de SP_STATUS, estructura OSTask en DMEM 0xFC0 | `src/core/sp.c`, `src/core/rsp.c` | n64brew.dev (Reality Signal Processor/Interface); mupen64plus-rsp-hle `src/memory.h`, `src/hle.c` | documentación; GPLv2 (solo consulta) |
+| Fin de una tarea: HALT, BROKE y TASKDONE, e interrupción DP tras G_RDPFULLSYNC (los retardos son propios, del mismo orden) | `src/core/rsp.c` | mupen64plus-core `src/device/rcp/rsp/rsp_core.c` (`do_SP_Task`) | GPLv2 (solo consulta) |
+| Detección del microcódigo por los textos de `ucode_data` ("RSP Gfx ucode", versión 2.x, F3DZEX, "RSP SW Version") | `src/core/rsp.c` | GLideN64 `src/GBI.cpp`; mupen64plus-video-rice `src/RSP_Parser.cpp` | GPLv2 (solo consulta). Las pruebas usan textos sintéticos, no los de Nintendo |
+| Codificación de los comandos F3DEX2 y F3DZEX (G_VTX, G_MODIFYVTX, G_CULLDL, G_BRANCH_Z/W, G_TRI*, G_TEXTURE, G_GEOMETRYMODE y sus bits, G_MTX, G_MOVEWORD, G_MOVEMEM y sus offsets, G_SETOTHERMODE_*, G_TEXRECT en tres comandos) | `src/rsp/gfx/f3dex2.c`, `tests/roms/src/gfxtest/gbi.h` | n64brew.dev; GLideN64 `src/uCodes/F3DEX2.*`, `src/GBI.h`, `src/gSP.cpp`; mupen64plus-video-glide64mk2 `ucode02.h`; mupen64plus-video-rice `UcodeDefs.h` | documentación; GPLv2 (solo consulta). `gbi.h` de gfxtest es propio: no es el de libultra ni el de ningún decomp |
+| Luces (transformar la dirección con la modelview y normalizar), mapeo de entorno ((d+1)·512 y acos(−d)·1024/π texels antes de la escala) y niebla por vértice (z/w·fm + fo) | `src/rsp/gfx/geom.c` | GLideN64 `src/gSP.cpp`, `src/3DMath.cpp`; mupen64plus-video-glide64mk2 `3dmath.cpp` | GPLv2 (solo consulta) |
+| RDP: campos de othermode, blender, G_SETCOMBINE y sus entradas, TMEM (LOADBLOCK con dxt, LOADTILE, LOADTLUT, RGBA32 partido, intercambio en filas impares), formatos de textura, TEXRECT/FILLRECT en COPY/FILL, intercambio de TEXEL0/TEXEL1 en el segundo ciclo | `src/rsp/gfx/rdp.c`, `tmem.c`, `combine.c` | n64brew.dev (Reality Display Processor/Commands); parallel-rdp (MIT) y angrylion-rdp-plus (licencia MAME, no comercial: solo lectura) como confirmación | documentación (CC BY-SA, reescrito); MIT; solo consulta |
 
 Aviso de PSL1GHT: Copyright (c) 2011 PSL1GHT Development Team, licencia MIT
 (compatible con GPLv2 o posterior).

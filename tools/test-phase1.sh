@@ -28,7 +28,7 @@ printf '%-10s %s\n' rpcs3 "${res:-sin RESULTADO (código $rc)}"
 grep -E 'FALLO [a-z]|bench:' build/logs/rpcs3-cpu-tests.log | sed 's/^\[[^]]*\] /           /' | head -20
 [ $rc -eq 0 ] || fail=1
 
-tools/rpcs3-run.py build/salsa64/salsa64.elf >build/logs/rpcs3-frontend.log 2>&1
+tools/rpcs3-run.py build/salsa64/salsa64.elf --embedded vitest >build/logs/rpcs3-frontend.log 2>&1
 rc=$?
 res=$(grep 'RESULTADO' build/logs/rpcs3-frontend.log | tail -1 | sed 's/.*RESULTADO //')
 printf '%-10s %s\n' frontend "${res:-sin RESULTADO (código $rc)}"

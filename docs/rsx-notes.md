@@ -67,3 +67,18 @@ Verificado en RPCS3 0.0.43 y en la **PS3 real** (2026-10-10, CECH-3011A,
 HEN): el frontend con vitest lee la pantalla del RSX y RGBA5551 y RGBA8888
 salen con el color esperado a 1280×720. Subir la textura y dibujar cuesta
 0,2–0,4 ms por cuadro en el PPE.
+
+## Trampas de PSL1GHT (f649a08, 2026-10-10)
+
+- **`rsxSetVertexProgramConstants` está roto:** avanza `context->current` a
+  mano mientras escribe y después otra vez con `RSX_CONTEXT_CURRENT_END`, así
+  que deja palabras sin escribir en el FIFO (RPCS3: "FIFO error: possible
+  desync event" y "Dead FIFO commands queue"); además su `count` son floats,
+  no vec4, y en el bucle de 32 floats copia dos veces el mismo bloque. Usar
+  `rsxLoadVertexProgramParameterBlock(ctx, base, n_vec4, datos)`, que parte en
+  bloques de 8 vec4 bien.
+- `rsxLoadVertexProgram` sube también las constantes internas que pone
+  `cgcomp` (literales como 2.0): no hace falta subirlas a mano.
+- `cgcomp` asigna las constantes del vertex program en orden de declaración
+  y consecutivas (un `uniform float4 k[15]` queda como `k[0]`…`k[14]`), así
+  que se pueden subir de una vez.
