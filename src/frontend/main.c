@@ -1,12 +1,24 @@
 /*
  * Salsa64 — frontend mínimo para PS3.
  *
- * Carga una ROM, la arranca por HLE y, en cada campo del VI, corre el
- * intérprete hasta el fin del campo y presenta la imagen del VI con
- * lib/rsxkit: si la dibujó el RSX (tareas gráficas del RSP por HLE en un
- * SPE, src/rdp), ese destino de render; si no, el framebuffer de la RDRAM
- * como textura. Escalado a 4:3. La emulación y la presentación van en un
- * hilo del PPE por ahora.
+ * Carga una ROM, la arranca por HLE y la emula en dos hilos del PPE
+ * (docs/hilos-ppe.md):
+ *
+ *   emulación     (emu_thread, prioridad 1000): corre el intérprete hasta el
+ *                 fin de cada campo del VI, aplica los controles al PIF, copia
+ *                 la imagen del VI y encola el campo; las tareas gráficas del
+ *                 RSP van por HLE al SPE 0 (src/platform/ps3/gfx_spu.c) y su
+ *                 salida queda en la cola de src/rdp.
+ *   presentación  (el hilo principal, prioridad 1001): traduce la salida de
+ *                 la HLE a comandos del RSX (salsa64_rdp_flush) y presenta
+ *                 cada campo con lib/rsxkit: si lo dibujó el RSX, ese destino
+ *                 de render; si no, la copia del framebuffer de la RDRAM como
+ *                 textura, escalada a 4:3. Lee los DualShock 3, vuelca el
+ *                 guardado, escribe el log de estadísticas, capturas y
+ *                 volcados, y decide la salida.
+ *
+ * Si la emulación va más rápida que la tele se presenta el campo más nuevo y
+ * los demás se saltan: la emulación nunca espera al vsync.
  *
  * ROM: si existe SALSA64_DATA_DIR/embedded con "vitest" o "gfxtest", esa
  * ROM de prueba embebida (o con "file:<nombre>", ese archivo de
@@ -53,7 +65,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/process.h>
+#include <sys/sem.h>
 #include <sys/systime.h>
+#include <sys/thread.h>
 #include <sysutil/sysutil.h>
 
 #include <rsxkit/rsxkit.h>
@@ -93,16 +107,31 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define AUTO_SHOT_FIELDS 300
 #define AUTO_FIELDS      1800
 
+/* Hilo de emulación: más prioridad que el principal (1001), para que el
+ * sistema le quite ciclos antes a la presentación. */
+#define EMU_PRIO     1000
+#define EMU_STACK    (256u << 10)
+#define WAKE_US      4000  /* el hilo de presentación revisa controles y colas al menos cada tanto */
+
 static struct salsa64_n64 n64;
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
 static struct salsa64_save save;
 static struct savefile save_file;
 static volatile int running = 1;
+static volatile int emu_done;   /* el hilo de emulación salió de su bucle */
 static int selftest_on;   /* vitest */
 static int gfxtest_on;    /* gfxtest */
 static struct salsa64_gfx_spu gfx_spu;
 static struct salsa64_gfx_sync gfx_ppe;
 static struct gfx_state gfx_ppe_state;
+static sys_sem_t wake_sem;  /* la emulación despierta a la presentación */
+
+static inline void lwsync(void) { __asm__ volatile("lwsync" ::: "memory"); }
+
+static void wake(void)
+{
+	sysSemPost(wake_sem, 1);  /* si ya está en 1, da error: no importa */
+}
 
 static void sysutil_cb(u64 status, u64 param, void *user)
 {
@@ -113,7 +142,97 @@ static void sysutil_cb(u64 status, u64 param, void *user)
 
 static struct salsa64_padmap padmap;
 
-/* Medición A/B con vitest: sin y con detección de bucles de espera. */
+/* ---- Lo que cruza entre los hilos (docs/hilos-ppe.md) ----------------------- */
+
+/* Copia de la imagen del VI al terminar el campo: la escribe emulación, la
+ * sube al RSX presentación. Tres ranuras bastan: una escribiéndose, una
+ * en cola (la más nueva; las viejas se liberan) y una en uso. */
+#define SNAP_SLOTS 3
+#define SNAP_BYTES (FB_MAX_W * FB_MAX_H * 4)
+enum { SNAP_FREE, SNAP_WRITING, SNAP_QUEUED, SNAP_IN_USE };
+static uint8_t *snap_buf[SNAP_SLOTS];
+static volatile uint32_t snap_state[SNAP_SLOTS];
+
+static int snap_cas(int slot, uint32_t from, uint32_t to)
+{
+	return __sync_bool_compare_and_swap(&snap_state[slot], from, to);
+}
+
+/* Un campo terminado, de emulación a presentación. */
+#define FIELD_QUEUE 8
+#define FIELD_CHECK 0x1u  /* verificar la pantalla (selftest): no se salta */
+struct field_msg {
+	uint32_t field;             /* n64.bus.vi.fields al terminar */
+	uint32_t tasks;             /* tareas gráficas terminadas hasta ahí */
+	struct salsa64_vi_frame f;  /* f.width == 0: sin imagen */
+	int32_t snap;               /* ranura con la copia del VI, o -1 */
+	uint32_t flags;
+	volatile uint32_t skip;     /* emulación lo pone si encoló uno más nuevo */
+};
+static struct field_msg field_q[FIELD_QUEUE];
+static volatile uint32_t field_head, field_tail;  /* head la mueve emulación; tail, presentación */
+
+/* Controles, de presentación a emulación (seqlock: seq impar = escribiendo). */
+static struct {
+	volatile uint32_t seq;
+	struct salsa64_pad pads[SALSA64_PIF_PORTS];
+} pad_box;
+
+static void pads_publish(const struct salsa64_pad pads[SALSA64_PIF_PORTS])
+{
+	pad_box.seq++;
+	lwsync();
+	memcpy(pad_box.pads, pads, sizeof pad_box.pads);
+	lwsync();
+	pad_box.seq++;
+}
+
+static void pads_apply(void)
+{
+	struct salsa64_pad pads[SALSA64_PIF_PORTS];
+	for (;;) {
+		uint32_t s1 = pad_box.seq;
+		if (s1 & 1)
+			continue;  /* presentación está escribiendo: son unos nanosegundos */
+		lwsync();
+		memcpy(pads, pad_box.pads, sizeof pads);
+		lwsync();
+		if (pad_box.seq == s1)
+			break;
+	}
+	for (unsigned i = 0; i < SALSA64_PIF_PORTS; i++)
+		salsa64_pif_set_pad(&n64.bus, i, &pads[i]);
+}
+
+/* Contadores del hilo de emulación; presentación los lee cada 5 s. */
+static struct {
+	volatile uint64_t us_emu, us_copy;
+	volatile uint32_t fields, dropped, no_slot;
+} emu_stats;
+
+/* Petición de presentación a emulación: empezar la medición A/B de vitest. */
+static volatile int bench_request;
+
+/* Sink gráfico del frontend: el del RDP más el timbre a presentación. */
+static const struct salsa64_gfx_sink *rdp_sink;
+
+static void front_acquire(void *ctx, struct gfx_job *job)
+{
+	(void)ctx;
+	rdp_sink->acquire(rdp_sink->ctx, job);
+}
+
+static void front_done(void *ctx, const struct gfx_job *job, const struct gfx_result *res)
+{
+	(void)ctx;
+	rdp_sink->done(rdp_sink->ctx, job, res);
+	wake();
+}
+
+static const struct salsa64_gfx_sink front_sink = { NULL, front_acquire, front_done };
+
+/* ---- Medición A/B con vitest (hilo de emulación) ----------------------------- */
+
 static struct {
 	int stage;  /* 0 nada, 1 sin detección, 2 con detección, 3 terminada */
 	uint64_t t0, us_emu, cycles0, idle0;
@@ -159,6 +278,8 @@ static void bench_field(uint64_t now, uint64_t us_emu)
 	}
 }
 
+/* ---- Controles (hilo de presentación) --------------------------------------- */
+
 /* Lee controles.cfg si existe; si no, el mapeo por omisión. */
 static void load_padmap(void)
 {
@@ -197,9 +318,9 @@ static struct salsa64_ds3 ds3_from(const padData *d)
 	return s;
 }
 
-/* DualShock 3 → controles de la N64, una vez por campo. ioPadGetData da
- * len = 0 cuando nada cambió: se conserva el último estado. Devuelve 1 si
- * algún mando tiene START + SELECT. */
+/* DualShock 3 → controles de la N64, publicados para el hilo de emulación.
+ * ioPadGetData da len = 0 cuando nada cambió: se conserva el último
+ * estado. Devuelve 1 si algún mando tiene START + SELECT. */
 static int update_pads(void)
 {
 	static struct salsa64_ds3 last[SALSA64_PIF_PORTS] = {
@@ -211,6 +332,7 @@ static int update_pads(void)
 	};
 	static uint8_t present[SALSA64_PIF_PORTS];
 	const uint32_t quit = 1u << SALSA64_DS3_START | 1u << SALSA64_DS3_SELECT;
+	struct salsa64_pad pads[SALSA64_PIF_PORTS];
 	padInfo info;
 	padData data;
 	int exit = 0;
@@ -239,7 +361,7 @@ static int update_pads(void)
 			if ((last[i].buttons & quit) == quit)
 				exit = 1;
 		}
-		salsa64_pif_set_pad(&n64.bus, i, &p);
+		pads[i] = p;
 
 		/* Al log: conexión y botones; el stick, si se movió bastante. */
 		struct salsa64_pad *o = &logged[i];
@@ -256,10 +378,13 @@ static int update_pads(void)
 			*o = p;
 		}
 	}
+	pads_publish(pads);
 	return exit;
 }
 
-/* Texto del ISViewer: al log línea por línea. */
+/* ---- ROM ------------------------------------------------------------------ */
+
+/* Texto del ISViewer: al log línea por línea (hilo de emulación). */
 static void isv_out(void *ctx, const uint8_t *text, uint32_t len)
 {
 	static char line[256];
@@ -373,14 +498,311 @@ static int file_exists(const char *path)
 	return f != NULL;
 }
 
+/* ---- Hilo de emulación ------------------------------------------------------ */
+
+/* Al terminar un campo: la imagen del VI (copiada a una ranura) y el
+ * mensaje para presentación. Si hay un campo anterior sin consumir y no
+ * lleva verificación, se marca para saltarlo y se le suelta la ranura. */
+static void post_field(void)
+{
+	static uint32_t last_idx = ~0u;
+	struct field_msg m;
+	memset(&m, 0, sizeof m);
+	m.field = n64.bus.vi.fields;
+	m.tasks = salsa64_rdp_tasks_done();
+	m.snap = -1;
+
+	if (salsa64_vi_frame(&n64.bus, &m.f) && m.f.width <= FB_MAX_W && m.f.height <= FB_MAX_H) {
+		if (selftest_on && selftest_frame(&n64.bus, &m.f))
+			m.flags |= FIELD_CHECK;
+		for (int i = 0; i < SNAP_SLOTS; i++) {
+			if (snap_cas(i, SNAP_FREE, SNAP_WRITING)) {
+				m.snap = i;
+				break;
+			}
+		}
+		if (m.snap >= 0) {
+			uint64_t t0 = sysGetSystemTime();
+			uint8_t *dst = snap_buf[m.snap];
+			const uint8_t *src = n64.bus.rdram + m.f.origin;
+			uint32_t line = m.f.width * m.f.bpp;
+			if (m.f.stride == line) {
+				memcpy(dst, src, line * m.f.height);
+			} else {
+				for (uint32_t y = 0; y < m.f.height; y++)
+					memcpy(dst + y * line, src + y * m.f.stride, line);
+			}
+			emu_stats.us_copy += sysGetSystemTime() - t0;
+		} else {
+			emu_stats.no_slot++;
+		}
+	} else {
+		m.f.width = 0;
+	}
+
+	uint32_t h = field_head;
+	/* Con verificación pendiente esperamos lugar (solo en las pruebas);
+	 * si no, un campo que no cabe se pierde: la emulación no espera. */
+	while (h - field_tail >= FIELD_QUEUE && (m.flags & FIELD_CHECK) && running)
+		sysUsleep(200);
+	if (h - field_tail >= FIELD_QUEUE) {
+		if (m.snap >= 0)
+			snap_state[m.snap] = SNAP_FREE;
+		emu_stats.dropped++;
+		return;
+	}
+	if (last_idx != ~0u && (int32_t)(last_idx - field_tail) >= 0) {
+		struct field_msg *o = &field_q[last_idx % FIELD_QUEUE];
+		if (!(o->flags & FIELD_CHECK)) {
+			o->skip = 1;
+			if (o->snap >= 0)
+				snap_cas(o->snap, SNAP_QUEUED, SNAP_FREE);  /* si presentación no la tomó ya */
+		}
+	}
+	if (m.snap >= 0)
+		snap_state[m.snap] = SNAP_QUEUED;
+	field_q[h % FIELD_QUEUE] = m;
+	lwsync();  /* el mensaje y la copia, antes de publicarlos */
+	field_head = h + 1;
+	last_idx = h;
+	wake();
+}
+
+static void emu_thread(void *arg)
+{
+	(void)arg;
+	while (running) {
+		pads_apply();
+		uint64_t t0 = sysGetSystemTime();
+		salsa64_n64_run_field(&n64);
+		uint64_t t1 = sysGetSystemTime();
+		savefile_stage(&save_file, t1);
+		post_field();
+		/* audio_out: si el audio necesita este hilo (fin de cada tarea
+		 * de audio), aquí. */
+		if (bench_request && !bench.stage)
+			bench_begin(1, t1);
+		else
+			bench_field(t1, t1 - t0);
+		emu_stats.us_emu += t1 - t0;
+		lwsync();
+		emu_stats.fields++;
+	}
+	lwsync();
+	emu_done = 1;
+	wake();
+	sysThreadExit(0);
+}
+
+/* ---- Hilo de presentación --------------------------------------------------- */
+
+static struct {
+	rsxkit_view view;
+	rsxkit_fb *fb;
+	int autotest;
+	enum selftest_state result;
+	uint32_t dump_field;
+	uint64_t t_shot;
+	uint32_t shots;
+	/* Estadísticas de la ventana en curso. */
+	uint64_t us_present, us_flip;
+	uint32_t presented, blank, rsx_frames, skipped;
+} pres = { .view = { RSXKIT_SCALE_FIT, RSXKIT_FILTER_LINEAR, 4.0f / 3.0f } };
+
+/* Presenta (o salta) un campo encolado. */
+static void present_field(const struct field_msg *m, uint64_t now)
+{
+	salsa64_rdp_flush(m->tasks);  /* las tareas de este campo, no las del siguiente */
+	if (m->skip && !(m->flags & FIELD_CHECK)) {
+		if (m->snap >= 0)
+			snap_cas(m->snap, SNAP_QUEUED, SNAP_FREE);
+		pres.skipped++;
+		return;
+	}
+	int slot = m->snap;
+	bool have = false;
+	if (slot >= 0) {
+		have = snap_cas(slot, SNAP_QUEUED, SNAP_IN_USE);
+		if (!have) {
+			/* Emulación la soltó al encolar un campo más nuevo. */
+			pres.skipped++;
+			return;
+		}
+	}
+	rsxkit_rect r = { 0, 0, 0, 0 };
+	bool check = false, check_gfx = false;
+	uint64_t t0 = sysGetSystemTime();
+	rsxkit_frame_begin(0x000000);
+	if (m->f.width) {
+		if (salsa64_rdp_present(&m->f, m->field, &pres.view, &r)) {
+			pres.rsx_frames++;
+			if (gfxtest_on && pres.result == SELFTEST_RUNNING)
+				check_gfx = gfxtest_want_screen();
+		} else if (have) {
+			check = (m->flags & FIELD_CHECK) != 0;
+			rsxkit_fb_upload(pres.fb, snap_buf[slot], m->f.width, m->f.height, m->f.width * m->f.bpp,
+					 m->f.bpp == 4 ? RSXKIT_RGBA8888 : RSXKIT_RGBA5551);
+			rsxkit_fb_draw(pres.fb, &pres.view, &r);
+		} else {
+			pres.blank++;
+		}
+	} else {
+		pres.blank++;
+	}
+	if (have)
+		snap_state[slot] = SNAP_FREE;  /* ya está en la memoria del RSX */
+	if (check || check_gfx) {
+		rsxkit_finish();
+		if (check)
+			selftest_screen(&m->f, &r);
+		else
+			gfxtest_screen(&m->f, &r);
+	} else if (!selftest_on && !gfxtest_on && m->f.width &&
+		   (pres.autotest ? m->field / AUTO_SHOT_FIELDS != pres.shots : now - pres.t_shot >= SHOT_US)) {
+		char path[64];
+		snprintf(path, sizeof path, SALSA64_DATA_DIR "/screen-%u.ppm", pres.shots % SHOT_MAX + 1);
+		rsxkit_finish();
+		salsa64_screenshot(path, &m->f, &r);
+		salsa64_log("captura %s (campo %u)", path, m->field);
+		pres.shots = pres.autotest ? m->field / AUTO_SHOT_FIELDS : pres.shots + 1;
+		pres.t_shot = now;
+	}
+	if (pres.dump_field && m->field >= pres.dump_field) {
+		rsxkit_finish();
+		salsa64_log("volcado de la HLE en el campo %u: %s", m->field,
+			    salsa64_rdp_dump(SALSA64_DATA_DIR "/gfxdump.bin") ? "bien" : "FALLO");
+		pres.dump_field = 0;
+	}
+	/* audio_out: una vez por campo presentado, aquí (antes del flip). */
+	uint64_t t1 = sysGetSystemTime();
+	rsxkit_frame_end();
+	uint64_t t2 = sysGetSystemTime();
+	pres.us_present += t1 - t0;
+	pres.us_flip += t2 - t1;
+	pres.presented++;
+
+	if (pres.autotest && !selftest_on && !gfxtest_on && m->field >= AUTO_FIELDS) {
+		salsa64_log("RESULTADO frontend: OK (ROM del disco, %u campos)", m->field);
+		running = 0;
+	}
+	if ((selftest_on || gfxtest_on) && pres.result == SELFTEST_RUNNING) {
+		pres.result = selftest_on ? selftest_state(m->field) : gfxtest_state(m->field);
+		if (pres.result != SELFTEST_RUNNING) {
+			salsa64_log("RESULTADO frontend: %s (campo %u)", pres.result == SELFTEST_OK ? "OK" : "FALLO",
+				    m->field);
+			if (pres.autotest)
+				running = 0;
+			else if (pres.result == SELFTEST_OK && selftest_on)
+				bench_request = 1;
+		}
+	}
+}
+
+/* Consume lo encolado: campos en orden y, al final, las tareas gráficas que
+ * ya terminaron (son del campo siguiente). */
+static void drain(uint64_t now, int present)
+{
+	while (field_tail != field_head) {
+		lwsync();  /* el mensaje, después de ver head */
+		struct field_msg m = field_q[field_tail % FIELD_QUEUE];
+		if (present) {
+			present_field(&m, now);
+		} else if (m.snap >= 0) {
+			snap_cas(m.snap, SNAP_QUEUED, SNAP_FREE);
+		}
+		lwsync();
+		field_tail++;
+	}
+	salsa64_rdp_flush(~0u);
+}
+
+/* Estadísticas de los dos hilos, cada STATS_US. */
+static void stats(uint64_t now, int gfx_on_spu, const struct salsa64_boot_info *info)
+{
+	static uint64_t t_stats, us_emu0, us_copy0, cyc0, idle0;
+	static uint32_t fields0;
+	static struct salsa64_rdp_stats rdp0;
+	static uint32_t gfx_waits0;
+	static uint64_t gfx_ticks0, gfx_wait0, gfx_vtx0, gfx_state0, gfx_tex0, gfx_load0;
+
+	if (!t_stats) {
+		t_stats = now;
+		salsa64_rdp_get_stats(&rdp0);
+		return;
+	}
+	uint64_t dt = now - t_stats;
+	if (dt < STATS_US)
+		return;
+	/* Los contadores de emulación se leen sin lock: palabras de 64 bits
+	 * alineadas, una línea de estadísticas. */
+	uint32_t fields = emu_stats.fields - fields0;
+	uint64_t us_emu = emu_stats.us_emu - us_emu0, us_copy = emu_stats.us_copy - us_copy0;
+	uint64_t cyc = n64.cpu.cycles - cyc0, idle = n64.cpu.idle_cycles - idle0;
+	salsa64_log("%.1f campos/s (%.0f %% de %s), %.1f MIPS, %.0f %% en bucles de espera; "
+		    "emulación %.1f ms por campo (copia del VI %.2f); presentados %u (%.1f ms + flip %.1f ms "
+		    "cada uno), %u saltados, %u descartados, %u sin imagen, %u del RSX",
+		    fields * 1e6 / dt, fields * 1e6 / dt * 100.0 * n64.bus.vi.field_cycles / 93750000.0,
+		    info->tv == SALSA64_TV_PAL ? "PAL" : "NTSC", (double)(cyc - idle) / dt,
+		    cyc ? 100.0 * idle / cyc : 0.0, fields ? us_emu / 1000.0 / fields : 0.0,
+		    fields ? us_copy / 1000.0 / fields : 0.0, pres.presented,
+		    pres.presented ? pres.us_present / 1000.0 / pres.presented : 0.0,
+		    pres.presented ? pres.us_flip / 1000.0 / pres.presented : 0.0, pres.skipped,
+		    emu_stats.dropped, pres.blank, pres.rsx_frames);
+	/* Tareas gráficas: tiempo de la HLE (en el SPE), espera del PPE,
+	 * traducción a comandos del RSX y esperas por un juego de búferes. */
+	struct salsa64_rdp_stats rs;
+	salsa64_rdp_get_stats(&rs);
+	uint32_t tasks = rs.tasks - rdp0.tasks;
+	if (tasks) {
+		double spu_ms = 0, wait_ms = 0;
+		uint32_t waits = 0;
+		if (gfx_on_spu) {
+			spu_ms = (gfx_spu.spu_ticks - gfx_ticks0) * 1e3 / spukit_tick_hz() / tasks;
+			wait_ms = (gfx_spu.wait_us - gfx_wait0) / 1e3 / tasks;
+			waits = gfx_spu.waits - gfx_waits0;
+		}
+		salsa64_log("gfx: %u tareas (%.1f/s); por tarea: %.0f dibujos, %.0f triángulos, HLE en el "
+			    "SPE %.2f ms, emulación esperando al SPE %.2f ms (%u esperas), traducción al RSX "
+			    "%.2f ms; %u destinos creados, %u esperas por un juego de búferes (%.2f ms)",
+			    tasks, tasks * 1e6 / dt, (double)(rs.draws - rdp0.draws) / tasks,
+			    (double)(rs.triangles - rdp0.triangles) / tasks, spu_ms, wait_ms, waits,
+			    (rs.us_translate - rdp0.us_translate) / 1e3 / tasks,
+			    rs.targets_created - rdp0.targets_created, rs.set_waits - rdp0.set_waits,
+			    (rs.us_set_wait - rdp0.us_set_wait) / 1e3);
+		if (gfx_on_spu) {
+			double k = 1e3 / spukit_tick_hz() / tasks;
+			salsa64_log("gfx en el SPE por tarea: vértices %.2f ms, estado %.2f ms (texturas %.2f ms), "
+				    "cargas a la TMEM %.2f ms", (gfx_spu.t_vtx - gfx_vtx0) * k,
+				    (gfx_spu.t_state - gfx_state0) * k, (gfx_spu.t_tex - gfx_tex0) * k,
+				    (gfx_spu.t_load - gfx_load0) * k);
+		}
+	}
+	gfx_vtx0 = gfx_spu.t_vtx;
+	gfx_state0 = gfx_spu.t_state;
+	gfx_tex0 = gfx_spu.t_tex;
+	gfx_load0 = gfx_spu.t_load;
+	rdp0 = rs;
+	gfx_ticks0 = gfx_spu.spu_ticks;
+	gfx_wait0 = gfx_spu.wait_us;
+	gfx_waits0 = gfx_spu.waits;
+	t_stats = now;
+	fields0 = emu_stats.fields;
+	us_emu0 = emu_stats.us_emu;
+	us_copy0 = emu_stats.us_copy;
+	cyc0 = n64.cpu.cycles;
+	idle0 = n64.cpu.idle_cycles;
+	pres.us_present = pres.us_flip = 0;
+	pres.presented = pres.blank = pres.rsx_frames = pres.skipped = 0;
+}
+
 int main(void)
 {
 	salsa64_log_init("salsa64");
-	const int autotest = salsa64_autotest();
+	pres.autotest = salsa64_autotest();
 
 	int rc = rsxkit_init(NULL);
-	rsxkit_fb *fb = rc == RSXKIT_OK ? rsxkit_fb_create(FB_MAX_W, FB_MAX_H) : NULL;
-	if (!fb) {
+	pres.fb = rc == RSXKIT_OK ? rsxkit_fb_create(FB_MAX_W, FB_MAX_H) : NULL;
+	if (!pres.fb) {
 		salsa64_log("RESULTADO frontend: FALLO al iniciar el RSX (%d)", rc);
 		salsa64_log_shutdown();
 		return 1;
@@ -393,6 +815,7 @@ int main(void)
 		salsa64_log_shutdown();
 		return 1;
 	}
+	rdp_sink = salsa64_rdp_sink();
 
 	{
 		char name[80] = "";
@@ -419,7 +842,9 @@ int main(void)
 	const char *source = NULL;
 	uint8_t *rom = load_rom(&rom_size, &source);
 	uint8_t *rdram = memalign(128, SALSA64_RDRAM_MAX);
-	if (!rom || !rdram) {
+	for (int i = 0; i < SNAP_SLOTS; i++)
+		snap_buf[i] = memalign(128, SNAP_BYTES);
+	if (!rom || !rdram || !snap_buf[SNAP_SLOTS - 1]) {
 		salsa64_log("RESULTADO frontend: FALLO sin memoria");
 		rsxkit_shutdown();
 		salsa64_log_shutdown();
@@ -434,7 +859,7 @@ int main(void)
 	int gfx_on_spu = !file_exists(GFX_PPE_PATH);
 	if (gfx_on_spu) {
 		spukit_init(6);
-		if ((rc = salsa64_gfx_spu_init(&gfx_spu, &n64.bus, salsa64_rdp_sink())) != 0) {
+		if ((rc = salsa64_gfx_spu_init(&gfx_spu, &n64.bus, &front_sink)) != 0) {
 			salsa64_log("no arrancó el SPE de la HLE gráfica (%d): uso el PPE", rc);
 			gfx_on_spu = 0;
 		}
@@ -442,10 +867,11 @@ int main(void)
 	if (gfx_on_spu) {
 		salsa64_rsp_set_gfx(&n64.bus, &gfx_spu.backend);
 	} else {
-		salsa64_gfx_sync_init(&gfx_ppe, &gfx_ppe_state, &n64.bus, salsa64_rdp_sink());
+		salsa64_gfx_sync_init(&gfx_ppe, &gfx_ppe_state, &n64.bus, &front_sink);
 		salsa64_rsp_set_gfx(&n64.bus, &gfx_ppe.backend);
 	}
 	salsa64_log("HLE gráfica en %s", gfx_on_spu ? "el SPE" : "el PPE");
+	/* audio_out: inicio, aquí (después de spukit_init). */
 
 	salsa64_bus_set_rom(&n64.bus, rom, rom_size);
 	struct salsa64_boot_info info;
@@ -470,169 +896,66 @@ int main(void)
 		selftest_start();
 	if (gfxtest_on)
 		gfxtest_start();
-
-	const rsxkit_view view = { RSXKIT_SCALE_FIT, RSXKIT_FILTER_LINEAR, 4.0f / 3.0f };
-	enum selftest_state result = SELFTEST_RUNNING;
-	uint64_t t_stats = sysGetSystemTime(), cyc_stats = n64.cpu.cycles, idle_stats = n64.cpu.idle_cycles;
-	uint64_t t_shot = t_stats;
-	uint32_t shots = 0, dump_field = 0;
 	{
 		FILE *df = fopen(SALSA64_DATA_DIR "/gfxdump", "r");
 		if (df) {
-			if (fscanf(df, "%u", &dump_field) != 1)
-				dump_field = 0;
+			if (fscanf(df, "%u", &pres.dump_field) != 1)
+				pres.dump_field = 0;
 			fclose(df);
 		}
 	}
-	uint64_t us_emu = 0, us_present = 0;
-	uint32_t fields_stats = 0, blank = 0, rsx_frames = 0;
-	struct salsa64_rdp_stats rdp0;
-	salsa64_rdp_get_stats(&rdp0);
-	uint32_t gfx_tasks0 = 0, gfx_waits0 = 0;
-	uint64_t gfx_ticks0 = 0, gfx_wait0 = 0;
-	uint64_t gfx_vtx0 = 0, gfx_state0 = 0, gfx_tex0 = 0, gfx_load0 = 0;
+	/* El puerto 1 con control neutro desde el primer campo. */
+	update_pads();
 
+	/* El hilo de emulación. */
+	sys_sem_attr_t sem_attr = { SYS_SEM_ATTR_PROTOCOL, SYS_SEM_ATTR_PSHARED, 0, 0, 0, "wake" };
+	sys_ppu_thread_t emu_tid;
+	if (sysSemCreate(&wake_sem, &sem_attr, 0, 1) != 0 ||
+	    sysThreadCreate(&emu_tid, emu_thread, NULL, EMU_PRIO, EMU_STACK, THREAD_JOINABLE,
+			    (char *)"salsa64_emu") != 0) {
+		salsa64_log("RESULTADO frontend: FALLO al crear el hilo de emulación");
+		salsa64_rsp_set_gfx(&n64.bus, NULL);
+		rsxkit_shutdown();
+		salsa64_log_shutdown();
+		return 1;
+	}
+	salsa64_log("hilos: emulación con prioridad %d, presentación con 1001", EMU_PRIO);
+
+	uint64_t now = sysGetSystemTime();
+	pres.t_shot = now;
+	stats(now, gfx_on_spu, &info);
 	while (running) {
+		sysSemWait(wake_sem, WAKE_US);
 		sysUtilCheckCallback();
 		if (update_pads())
 			break;
-
-		uint64_t t0 = sysGetSystemTime();
-		salsa64_n64_run_field(&n64);
-		uint64_t t1 = sysGetSystemTime();
-		savefile_poll(&save_file, t1);
-
-		struct salsa64_vi_frame f = { 0 };
-		rsxkit_rect r = { 0, 0, 0, 0 };
-		bool check = false, check_gfx = false;
-		rsxkit_frame_begin(0x000000);
-		if (salsa64_vi_frame(&n64.bus, &f) && f.width <= FB_MAX_W && f.height <= FB_MAX_H) {
-			if (salsa64_rdp_present(&f, n64.bus.vi.fields, &view, &r)) {
-				rsx_frames++;
-				if (gfxtest_on && result == SELFTEST_RUNNING)
-					check_gfx = gfxtest_want_screen();
-			} else {
-				if (selftest_on && result == SELFTEST_RUNNING)
-					check = selftest_frame(&n64.bus, &f);
-				rsxkit_fb_upload(fb, n64.bus.rdram + f.origin, f.width, f.height, f.stride,
-						 f.bpp == 4 ? RSXKIT_RGBA8888 : RSXKIT_RGBA5551);
-				rsxkit_fb_draw(fb, &view, &r);
-			}
-		} else {
-			blank++;
-		}
-		if (check || check_gfx) {
-			rsxkit_finish();
-			if (check)
-				selftest_screen(&f, &r);
-			else
-				gfxtest_screen(&f, &r);
-		} else if (!selftest_on && !gfxtest_on && f.width &&
-			   (autotest ? n64.bus.vi.fields / AUTO_SHOT_FIELDS != shots
-				     : t1 - t_shot >= SHOT_US)) {
-			char path[64];
-			snprintf(path, sizeof path, SALSA64_DATA_DIR "/screen-%u.ppm", shots % SHOT_MAX + 1);
-			rsxkit_finish();
-			salsa64_screenshot(path, &f, &r);
-			salsa64_log("captura %s (campo %u)", path, n64.bus.vi.fields);
-			shots = autotest ? n64.bus.vi.fields / AUTO_SHOT_FIELDS : shots + 1;
-			t_shot = t1;
-		}
-		if (dump_field && n64.bus.vi.fields >= dump_field) {
-			rsxkit_finish();
-			salsa64_log("volcado de la HLE en el campo %u: %s", n64.bus.vi.fields,
-				    salsa64_rdp_dump(SALSA64_DATA_DIR "/gfxdump.bin") ? "bien" : "FALLO");
-			dump_field = 0;
-		}
-		if (autotest && !selftest_on && !gfxtest_on && n64.bus.vi.fields >= AUTO_FIELDS) {
-			salsa64_log("RESULTADO frontend: OK (ROM del disco, %u campos)", n64.bus.vi.fields);
-			break;
-		}
-		rsxkit_frame_end();
-		uint64_t t2 = sysGetSystemTime();
-		us_emu += t1 - t0;
-		us_present += t2 - t1;
-		fields_stats++;
-
-		if ((selftest_on || gfxtest_on) && result == SELFTEST_RUNNING) {
-			result = selftest_on ? selftest_state(n64.bus.vi.fields) : gfxtest_state(n64.bus.vi.fields);
-			if (result != SELFTEST_RUNNING) {
-				salsa64_log("RESULTADO frontend: %s (campo %u)", result == SELFTEST_OK ? "OK" : "FALLO",
-					    n64.bus.vi.fields);
-				if (autotest)
-					break;
-				if (result == SELFTEST_OK)
-					bench_begin(1, t2);
-			}
-		} else {
-			bench_field(t2, t1 - t0);
-		}
-
-		uint64_t dt = t2 - t_stats;
-		if (dt >= STATS_US) {
-			/* Una instrucción por ciclo, salvo los saltados en bucles de espera. */
-			uint64_t cyc = n64.cpu.cycles - cyc_stats, idle = n64.cpu.idle_cycles - idle_stats;
-			salsa64_log("%.1f campos/s (%.0f %% de %s), %.1f MIPS, %.0f %% en bucles de espera; "
-				    "por campo: emulación %.1f ms, presentación %.1f ms; %u sin imagen, %u del RSX",
-				    fields_stats * 1e6 / dt,
-				    fields_stats * 1e6 / dt * 100.0 * n64.bus.vi.field_cycles / 93750000.0,
-				    info.tv == SALSA64_TV_PAL ? "PAL" : "NTSC",
-				    (double)(cyc - idle) / dt, cyc ? 100.0 * idle / cyc : 0.0,
-				    us_emu / 1000.0 / fields_stats, us_present / 1000.0 / fields_stats, blank, rsx_frames);
-			/* Tareas gráficas: tiempo de la HLE (en el SPE), espera del PPE
-			 * y traducción a comandos del RSX, por tarea. */
-			struct salsa64_rdp_stats rs;
-			salsa64_rdp_get_stats(&rs);
-			uint32_t tasks = rs.tasks - rdp0.tasks;
-			if (tasks) {
-				double spu_ms = 0, wait_ms = 0;
-				uint32_t waits = 0;
-				if (gfx_on_spu) {
-					spu_ms = (gfx_spu.spu_ticks - gfx_ticks0) * 1e3 / spukit_tick_hz() / tasks;
-					wait_ms = (gfx_spu.wait_us - gfx_wait0) / 1e3 / tasks;
-					waits = gfx_spu.waits - gfx_waits0;
-				}
-				salsa64_log("gfx: %u tareas (%.1f/s); por tarea: %.0f dibujos, %.0f triángulos, HLE en el "
-					    "SPE %.2f ms, PPE esperando %.2f ms (%u esperas), traducción al RSX %.2f ms; "
-					    "%u destinos creados, %u esperas al RSX",
-					    tasks, tasks * 1e6 / dt, (double)(rs.draws - rdp0.draws) / tasks,
-					    (double)(rs.triangles - rdp0.triangles) / tasks, spu_ms, wait_ms, waits,
-					    (rs.us_translate - rdp0.us_translate) / 1e3 / tasks,
-					    rs.targets_created - rdp0.targets_created, rs.set_waits - rdp0.set_waits);
-				if (gfx_on_spu) {
-					double k = 1e3 / spukit_tick_hz() / tasks;
-					salsa64_log("gfx en el SPE por tarea: vértices %.2f ms, estado %.2f ms (texturas %.2f ms), "
-						    "cargas a la TMEM %.2f ms", (gfx_spu.t_vtx - gfx_vtx0) * k,
-						    (gfx_spu.t_state - gfx_state0) * k, (gfx_spu.t_tex - gfx_tex0) * k,
-						    (gfx_spu.t_load - gfx_load0) * k);
-				}
-			}
-			gfx_vtx0 = gfx_spu.t_vtx;
-			gfx_state0 = gfx_spu.t_state;
-			gfx_tex0 = gfx_spu.t_tex;
-			gfx_load0 = gfx_spu.t_load;
-			rdp0 = rs;
-			gfx_tasks0 = gfx_spu.tasks;
-			gfx_ticks0 = gfx_spu.spu_ticks;
-			gfx_wait0 = gfx_spu.wait_us;
-			gfx_waits0 = gfx_spu.waits;
-			(void)gfx_tasks0;
-			t_stats = t2;
-			cyc_stats = n64.cpu.cycles;
-			idle_stats = n64.cpu.idle_cycles;
-			us_emu = us_present = 0;
-			fields_stats = blank = rsx_frames = 0;
-		}
+		now = sysGetSystemTime();
+		savefile_write_staged(&save_file, now);
+		drain(now, 1);
+		stats(now, gfx_on_spu, &info);
 	}
 
+	/* Parar la emulación sin dejarla esperando un juego de búferes. */
+	running = 0;
+	while (!emu_done) {
+		drain(sysGetSystemTime(), 0);
+		sysUsleep(500);
+	}
+	u64 ret;
+	sysThreadJoin(emu_tid, &ret);
+	drain(sysGetSystemTime(), 0);
+	sysSemDestroy(wake_sem);
+
 	savefile_close(&save_file);
+	/* audio_out: cierre, aquí. */
 	salsa64_rsp_set_gfx(&n64.bus, NULL);  /* espera la tarea en vuelo */
 	if (gfx_on_spu)
 		salsa64_gfx_spu_shutdown(&gfx_spu);
 	salsa64_rdp_shutdown();
 	rsxkit_shutdown();
 	ioPadEnd();
-	salsa64_log("salida normal tras %u campos", n64.bus.vi.fields);
+	salsa64_log("salida normal tras %u campos (%u emulados, %u descartados por la cola, %u sin ranura)",
+		    n64.bus.vi.fields, emu_stats.fields, emu_stats.dropped, emu_stats.no_slot);
 	salsa64_log_shutdown();
 	return 0;
 }

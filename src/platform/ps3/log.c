@@ -5,6 +5,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <lv2/mutex.h>
 #include <net/net.h>
 #include <netinet/in.h>
 #include <stdarg.h>
@@ -21,6 +22,9 @@ static u64 log_t0;
 static u32 log_seq;
 static FILE *log_file;
 static int log_send_fails, log_send_ret, log_send_errno;
+/* Una línea a la vez: el frontend escribe desde dos hilos. */
+static sys_lwmutex_t log_mutex;
+static int log_mutex_ok;
 
 static void log_load_dest(void)
 {
@@ -51,6 +55,8 @@ void salsa64_log_init(const char *program)
 {
 	snprintf(log_tag, sizeof log_tag, "%s", program);
 	log_t0 = sysGetSystemTime();
+	sys_lwmutex_attr_t attr = { SYS_LWMUTEX_PROTOCOL_FIFO, SYS_LWMUTEX_ATTR_NOT_RECURSIVE, "log" };
+	log_mutex_ok = sysLwMutexCreate(&log_mutex, &attr) == 0;
 
 	char path[64];
 	mkdir(SALSA64_DATA_DIR, 0777);
@@ -78,6 +84,8 @@ void salsa64_log_init(const char *program)
 void salsa64_log(const char *fmt, ...)
 {
 	char line[SALSA64_LOG_LINE_MAX];
+	if (log_mutex_ok)
+		sysLwMutexLock(&log_mutex, 0);
 	u64 us = sysGetSystemTime() - log_t0;
 	int n = snprintf(line, sizeof line, "[%s %4u.%03u #%u] ", log_tag,
 			 (unsigned)(us / 1000000), (unsigned)(us / 1000 % 1000), (unsigned)++log_seq);
@@ -106,6 +114,8 @@ void salsa64_log(const char *fmt, ...)
 			log_send_errno = errno;
 		}
 	}
+	if (log_mutex_ok)
+		sysLwMutexUnlock(&log_mutex);
 }
 
 void salsa64_log_shutdown(void)
@@ -121,5 +131,9 @@ void salsa64_log_shutdown(void)
 	if (log_file) {
 		fclose(log_file);
 		log_file = NULL;
+	}
+	if (log_mutex_ok) {
+		sysLwMutexDestroy(&log_mutex);
+		log_mutex_ok = 0;
 	}
 }

@@ -1,5 +1,42 @@
 # Estado
 
+## 2026-10-10 — Dos hilos en el PPE (frontend)
+
+Hecho (rama `musing-mcclintock-6b5e2c`; diseño en docs/hilos-ppe.md):
+- `src/frontend/main.c`: hilo de emulación (`sysThreadCreate`, prioridad
+  1000, pila de 256 KB) con el CPU, el planificador, el envío de tareas al
+  SPE, los controles aplicados al PIF y la copia de la imagen del VI; el
+  hilo principal (1001) traduce la salida de la HLE al RSX, presenta con
+  flip en vsync, lee los DualShock 3, escribe el guardado, el log de
+  estadísticas, capturas y volcados. Duerme en un semáforo (la emulación
+  lo despierta por campo y por tarea); nunca espera activa (SMT).
+- Colas preasignadas: cola de campos (8 mensajes) con copia del VI en 3
+  ranuras (4,4 MB; estados por `lwarx/stwcx.`), cola de tareas gráficas
+  de 3 entradas dentro de `src/rdp` (`salsa64_rdp_flush` traduce en el
+  hilo de presentación; `acquire` espera un juego libre con
+  `rsxkit_fence_done`, la única función de rsxkit documentada como segura
+  desde otro hilo), buzón de controles con seqlock, zona de paso del
+  guardado (`savefile_stage` / `savefile_write_staged`), lwmutex en el log.
+- Si la emulación va más rápida que la tele: se presenta el campo más
+  nuevo y los viejos se saltan (`saltados` en el log); la emulación nunca
+  espera al vsync. Los campos con verificación del selftest no se saltan.
+- Verificación igual que antes: selftest de vitest (RDRAM en emulación,
+  pantalla en presentación), gfxtest, capturas, `gfxdump`, repetición
+  (`dump:`, de un hilo: llama a `salsa64_rdp_flush`). Pruebas: 212 en el
+  host; test-roms (nemu64-test 446 fallas, vitest, controles, savetest,
+  gfxtest); fase 1 y fase 2 en RPCS3.
+- Lugar para el audio marcado con `audio_out:` en main.c (inicio, cada
+  campo presentado, cierre; y `emu_thread` si necesita el hilo de
+  emulación).
+
+Mediciones en la PS3: docs/perf-log.md, «Dos hilos en el PPE».
+
+Pendiente:
+- [ ] La espera del hilo de emulación al SPE al terminar cada tarea (13–19
+      ms por tarea en Zelda) sigue: quitarla pide que el evento del RSP se
+      vuelva a programar en vez de bloquear (`src/core/rsp.c`, Fase 3).
+- [ ] Menú y audio en el hilo de presentación (trabajos aparte).
+
 ## 2026-10-10 — Fase 2 (parte gráfica): criterio cumplido en PS3 real
 
 Hecho (rama `reverent-leavitt-d0f943`, integrada en main después del
