@@ -1,5 +1,38 @@
 # Estado
 
+## 2026-10-10 — Fin de tarea del RSP por sondeo (sin bloquear al SPE)
+
+Hecho (rama `musing-mcclintock-6b5e2c`, commits a2ffd0f + mezcla
+16a544f con main 4a4d98c; diseño en docs/hilos-ppe.md «Fin de tarea sin
+bloquear»):
+- `src/core/rsp.c`: el backend tiene `done(ctx, idle)` (no bloquea); al
+  llegar el fin de la tarea, si no terminó, el evento se vuelve a programar
+  cada `poll_cycles` (10 000 ciclos) y el CPU sigue emulando. Si el CPU
+  saltó ciclos (bucle de espera) desde el sondeo anterior, se le avisa al
+  backend y el del SPE duerme 100 µs antes de contestar: el reloj emulado
+  no corre más rápido que el real. Con la tarea en curso el RSP no está
+  HALT y otro arranque se ignora (`starts_busy`). Genérico para el audio.
+- Prueba unitaria `rsp_gfx_task_polls`; estadísticas `sondeos` y
+  `dormida` en la línea `gfx:` del frontend.
+- ROM gfxtest: la espera por una interrupción vence por tiempo (10 s de
+  Count) y no por vueltas (en RPCS3 el primer trabajo del SPE compila
+  segundos; antes el CPU estaba congelado mientras tanto). Reconstruida.
+- Verificación: 224 pruebas en el host, cpu-tests/vitest/save-tests en
+  RPCS3, gfxtest 22/22, test-roms 446, build sin advertencias.
+
+Medido en la PS3 (docs/perf-log.md, «Fin de tarea del RSP por sondeo»):
+Zelda, «esperando al SPE» 2,3–8,2 ms por tarea → 0; emulación por campo
+igual (3,2–7,5 → 3,2–7,2 ms) porque el CPU está ocioso mientras el RSP
+trabaja y el sondeo duerme ese tiempo; 60 campos/s sin regresiones;
+gfxtest OK. La ganancia llegará donde el CPU tenga trabajo durante el
+RDP.
+
+Pendiente:
+- [ ] Repetir con Super Mario 64 (F3D) cuando esté en main: 9,5 ms de CPU
+      por campo, el caso donde el sondeo debería rendir.
+- [ ] Recompilador: un bucle que lee Count (MFC0) sale a C en cada vuelta
+      (gfxtest cayó a 9 campos/s); compilar MFC0 Count en línea (trabajo FPU, MFC0 nativo).
+
 ## 2026-10-10 — Recompilador: código en KSEG1 y mapeado por la TLB
 
 Hecho (diseño en docs/rec-ppe.md, «Código fuera de KSEG0»):
@@ -65,12 +98,13 @@ Siguiente:
     código del juego la escribe: la deja el arranque del 6105 y nuestro
     arranque HLE no. Escribiéndola a mano (experimento, no en el repo)
     pasa, monta 0x7F000000 en la TLB y llega a su hilo ocioso.
-- [ ] Arranque HLE del CIC 6105 (`src/core/boot.c`): lo que el IPL3 deja
+- [ ] Arranque HLE del CIC 6105 (`src/core/boot.c`; trabajo «Arranque del CIC
+      6105 y censo»): lo que el IPL3 deja
       en la RDRAM (al menos 0x2E8 = 0xC86E2000), desde documentación
       pública, sin código de Nintendo.
 - [ ] HLE gráfica: el microcódigo de GoldenEye (F3D; trabajo de F3D) y que
       una tarea con microcódigo desconocido no deje colgado al juego.
-- [ ] idle.c: bucles de espera en código mapeado por la TLB.
+- [ ] idle.c: bucles de espera en código mapeado por la TLB (trabajo TLB).
 - [ ] Verificar en el desensamblado (o el decomp) si GoldenEye ejecuta
       0x7F000000 desde la ROM o desde la RDRAM.
 
