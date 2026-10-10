@@ -17,6 +17,15 @@ cartucho (`src/core/save.c`, `src/frontend/savefile.c`) son código propio, escr
 IV ISA, n64brew.dev) y validado con nemu64-test. No incluye código de
 Not64/Wii64, Mupen64Plus ni ares.
 
+El recompilador de la Fase 3 (`src/cpu/rec.c`, `rec_emit.c`, `rec.h`,
+`ppc.h`) también es propio, escrito desde Power ISA (libro I) y la
+semántica de nuestro intérprete. Not64 y Wii64 se **consultaron como
+referencia de diseño, sin copiar código** (decisión en docs/rec-ppe.md):
+
+| Proyecto | Repositorio y commit revisado | Licencia | Uso |
+|---|---|---|---|
+| Not64 | github.com/extremscorner/not64, `d35a7a1c454eca973995939dbca3f06725cf4a6e` (2026-04-10) | GPLv2 o posterior (cabeceras de `r4300/ppc/*`; `LICENCE.TXT` = GPL v2) | Lectura de `r4300/ppc/` y `Recomp-Cache*` |
+| Wii64 | github.com/emukidid/Wii64, `2e1c6fb056e1965a57f6be4accdbf5460e7de291` (2026-10-09) | GPLv2 o posterior | Lectura de `r4300/ppc/` |
 La HLE gráfica de la Fase 2 (`src/rsp/gfx/`, `src/spu/gfx/`, `src/rdp/`) y
 `lib/spukit/` también son código propio. Para el comportamiento de F3DEX2 y
 del RDP se consultaron la documentación de n64brew.dev y el código de
@@ -63,6 +72,8 @@ arriba como el resto.
 | PSL1GHT | github.com/ps3dev/PSL1GHT | MIT | SDK homebrew, enlazado con los programas |
 | NVIDIA Cg Toolkit 3.1 | developer.nvidia.com/cg-toolkit | Propietaria (NVIDIA), gratuita | `libCg.so` para `cgcomp`, solo en la imagen local; no se commitea ni se publica |
 | Port de SM64, rama `ps3` | github.com/fgsfdsfgs/sm64-port | — | Solo para validar `cgcomp`: los shaders se descargan a `build/validate/` y no se copian al repo |
+| gcc-powerpc64-linux-gnu 12, glibc ppc64 (Debian 12) | debian.org | GPL/LGPL | Compilar el núcleo para Linux ppc64 y probar el recompilador con qemu (`docker/ppc64.Dockerfile`); los binarios quedan en `build/ppc64` |
+| QEMU 7.2 (`qemu-user-static`, Debian 12) | qemu.org | GPLv2 | Ejecutar esos binarios ppc64 en la Mac |
 
 ## ROMs de prueba incluidas
 

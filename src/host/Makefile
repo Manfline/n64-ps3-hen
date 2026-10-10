@@ -5,13 +5,13 @@
 # unitarias; SAN= los quita (más rápido).
 
 ROOT := $(abspath ../..)
-OUT  := $(ROOT)/build/host
+OUT  ?= $(ROOT)/build/host
 
 CC      ?= gcc
 SAN     ?= -fsanitize=address,undefined -fno-sanitize-recover=undefined
 CFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffp-contract=off -fno-math-errno \
-           -I$(ROOT)/src $(SAN)
-LDFLAGS := $(SAN)
+           -I$(ROOT)/src $(SAN) $(EXTRA_CFLAGS)
+LDFLAGS := $(SAN) $(EXTRA_LDFLAGS)
 LDLIBS  := -lm
 
 CORE_SRCS := $(wildcard $(ROOT)/src/core/*.c $(ROOT)/src/cpu/*.c $(ROOT)/src/rsp/gfx/*.c $(ROOT)/src/rsp/audio/*.c) $(ROOT)/src/frontend/savefile.c

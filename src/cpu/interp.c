@@ -45,6 +45,7 @@
  */
 #include "core/sched.h"
 #include "cpu/fpu.h"
+#include "cpu/rec.h"
 
 #ifndef __SIZEOF_INT128__
 #error "DMULT/DMULTU necesitan __int128 (ppu-gcc y gcc de 64 bits lo tienen)"
@@ -650,9 +651,21 @@ void salsa64_cpu_step(struct salsa64_cpu *cpu)
 		salsa64_sched_dispatch(cpu->sched, cpu->cycles);
 }
 
+/* Para el recompilador (rec.c): una instrucción que no es salto, con
+ * cur_pc, delay_slot y cycles ya puestos en la estructura. */
+void salsa64_vr4300_exec_one(struct salsa64_cpu *cpu, uint32_t instr)
+{
+	struct flow f = { cpu->cur_pc + 4, cpu->cur_pc + 8, cpu->cur_pc, 0 };
+	execute(cpu, &f, instr);
+}
+
 void salsa64_cpu_run(struct salsa64_cpu *cpu)
 {
 	struct salsa64_sched *s = cpu->sched;
+	if (cpu->rec) {
+		salsa64_rec_run(cpu->rec);
+		return;
+	}
 	cpu->running = 1;
 	while (cpu->running) {
 		if (cpu->cycles < s->next)

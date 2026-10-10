@@ -43,6 +43,8 @@ bool salsa64_vr4300_translate_slow(struct salsa64_cpu *cpu, uint64_t vaddr, uint
 				   enum salsa64_access acc, uint32_t align);
 void salsa64_vr4300_update_status(struct salsa64_cpu *cpu);
 void salsa64_vr4300_cop0(struct salsa64_cpu *cpu, uint32_t instr);
+/* interp.c: una instrucción que no es salto (la usa el recompilador). */
+void salsa64_vr4300_exec_one(struct salsa64_cpu *cpu, uint32_t instr);
 /* cop1.c */
 void salsa64_vr4300_cop1(struct salsa64_cpu *cpu, uint32_t instr);
 void salsa64_vr4300_cop2(struct salsa64_cpu *cpu, uint32_t instr);
@@ -87,6 +89,16 @@ static inline bool vr4300_vaddr(struct salsa64_cpu *cpu, uint64_t vaddr, uint32_
 
 /* ---- Accesos físicos (RDRAM directo, resto por el bus) ------------------ */
 
+/* rec.c: un almacenamiento cayó en una zona de la RDRAM con código
+ * recompilado. */
+void salsa64_rec_code_written(struct salsa64_rec *rec, uint32_t pa, uint32_t len);
+
+static inline void vr4300_code_check(struct salsa64_cpu *cpu, uint32_t pa, uint32_t len)
+{
+	if (SALSA64_UNLIKELY(cpu->code_flags != NULL) && cpu->code_flags[pa >> 7])
+		salsa64_rec_code_written(cpu->rec, pa, len);
+}
+
 static inline uint8_t vr4300_read8(struct salsa64_cpu *cpu, uint32_t pa)
 {
 	if (SALSA64_LIKELY(pa < cpu->rdram_size))
@@ -122,6 +134,7 @@ static inline void vr4300_write8(struct salsa64_cpu *cpu, uint32_t pa, uint64_t 
 {
 	if (SALSA64_LIKELY(pa < cpu->rdram_size)) {
 		salsa64_wr8(cpu->rdram + pa, (uint8_t)v);
+		vr4300_code_check(cpu, pa, 1);
 		return;
 	}
 	unsigned shift = 8 * (3 - (pa & 3));
@@ -132,6 +145,7 @@ static inline void vr4300_write16(struct salsa64_cpu *cpu, uint32_t pa, uint64_t
 {
 	if (SALSA64_LIKELY(pa < cpu->rdram_size)) {
 		salsa64_wr16(cpu->rdram + pa, (uint16_t)v);
+		vr4300_code_check(cpu, pa, 2);
 		return;
 	}
 	unsigned shift = 8 * (2 - (pa & 2));
@@ -142,6 +156,7 @@ static inline void vr4300_write32(struct salsa64_cpu *cpu, uint32_t pa, uint32_t
 {
 	if (SALSA64_LIKELY(pa < cpu->rdram_size)) {
 		salsa64_wr32(cpu->rdram + pa, v);
+		vr4300_code_check(cpu, pa, 4);
 		return;
 	}
 	salsa64_bus_write32(cpu->bus, pa, v, 0xFFFFFFFFu);
@@ -151,6 +166,7 @@ static inline void vr4300_write64(struct salsa64_cpu *cpu, uint32_t pa, uint64_t
 {
 	if (SALSA64_LIKELY(pa < cpu->rdram_size)) {
 		salsa64_wr64(cpu->rdram + pa, v);
+		vr4300_code_check(cpu, pa, 8);
 		return;
 	}
 	salsa64_bus_write64(cpu->bus, pa, v, ~0ull);
@@ -162,6 +178,7 @@ static inline void vr4300_write32_masked(struct salsa64_cpu *cpu, uint32_t pa, u
 	if (SALSA64_LIKELY(pa < cpu->rdram_size)) {
 		uint8_t *p = cpu->rdram + pa;
 		salsa64_wr32(p, (salsa64_rd32(p) & ~mask) | (v & mask));
+		vr4300_code_check(cpu, pa, 4);
 		return;
 	}
 	salsa64_bus_write32(cpu->bus, pa, v, mask);
@@ -172,6 +189,7 @@ static inline void vr4300_write64_masked(struct salsa64_cpu *cpu, uint32_t pa, u
 	if (SALSA64_LIKELY(pa < cpu->rdram_size)) {
 		uint8_t *p = cpu->rdram + pa;
 		salsa64_wr64(p, (salsa64_rd64(p) & ~mask) | (v & mask));
+		vr4300_code_check(cpu, pa, 8);
 		return;
 	}
 	salsa64_bus_write64(cpu->bus, pa, v, mask);

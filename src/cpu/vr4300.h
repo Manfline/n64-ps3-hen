@@ -141,8 +141,12 @@ struct salsa64_cpu {
 	/* Leídos en cada instrucción; solo cambian en caminos lentos. */
 	uint8_t *rdram;        /* copia de bus->rdram para el camino rápido */
 	uint32_t rdram_size;
+	/* Estos cuatro bytes van juntos y alineados: el código del recompilador
+	 * los lee con una sola carga después de llamar a C (rec.c) y sale del
+	 * bloque si alguno no es 0. */
 	uint8_t irq_pending;   /* hay interrupción habilitada y no enmascarada */
 	uint8_t redirect;      /* pc/next_pc/branch cambiaron fuera del bucle: recargarlos */
+	uint8_t rec_abort;     /* el recompilador invalidó código: volver a su despachador */
 	uint8_t mode;          /* enum salsa64_cpu_mode */
 	uint8_t allow64;       /* operaciones de 64 bits permitidas en este modo */
 
@@ -180,6 +184,15 @@ struct salsa64_cpu {
 	struct salsa64_bus *bus;
 	struct salsa64_sched *sched;
 
+	/* Recompilador (rec.h): NULL si corre solo el intérprete. code_flags
+	 * marca, por cada 128 bytes de la RDRAM, si hay código recompilado:
+	 * un almacenamiento ahí avisa al recompilador para invalidarlo. */
+	struct salsa64_rec *rec;
+	const uint8_t *code_flags;
+	uint32_t exc_count;      /* excepciones tomadas (el despachador del recompilador lo mira) */
+	uint32_t rec_kind;       /* tipo de salida del código generado (rec.c) */
+	uint64_t rec_site;       /* dirección del enlace a parchear, o 0 */
+
 	/* Depuración: si no es NULL, se llama al tomar cada excepción (con
 	 * Cause, EPC y el vector ya escritos). */
 	void (*exc_hook)(struct salsa64_cpu *cpu);
@@ -200,7 +213,8 @@ void salsa64_cpu_set_pc(struct salsa64_cpu *cpu, uint64_t pc);
 
 /* Ejecuta una instrucción (o atiende una interrupción pendiente). */
 void salsa64_cpu_step(struct salsa64_cpu *cpu);
-/* Ejecuta hasta que un evento ponga running = 0 (ver salsa64_n64_run). */
+/* Ejecuta hasta que un evento ponga running = 0 (ver salsa64_n64_run). Con
+ * cpu->rec, corre el recompilador (rec.h) en vez del intérprete. */
 void salsa64_cpu_run(struct salsa64_cpu *cpu);
 
 /* Activa o apaga el salto de bucles de espera (activo por omisión). Apagarlo

@@ -12,3 +12,9 @@ build/
 tools/ps3.conf
 
 .DS_Store
+
+# Volcados de memoria de qemu-user (tools/qemu-ppc64.sh); `core` también
+# coincidiría con el directorio src/core.
+core
+!src/core/
+qemu_*.core
