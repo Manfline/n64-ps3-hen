@@ -85,6 +85,9 @@ static struct {
 	 * el juego n % SETS. */
 	volatile uint32_t acquired, finished, translated;
 	struct target targets[MAX_TARGETS];
+	/* Lo presentado en el último campo desde el RSX (NULL: la RDRAM). */
+	const struct target *shown;
+	uint32_t shown_origin, shown_field;
 	struct depth depths[MAX_DEPTHS];
 	struct target *bound_t;
 	struct depth *bound_d;
@@ -452,6 +455,20 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 		}
 		best = t;
 	}
+	if (!best && rdp.shown && rdp.shown->used && f->origin == rdp.shown_origin &&
+	    field - rdp.shown_field <= 2) {
+		/* El juego sostiene la misma imagen sin dibujar (GoldenEye, un
+		 * segundo mientras carga las carpetas): con la HLE la RDRAM de ese
+		 * framebuffer no tiene lo que dibujó el RSX (salían datos viejos,
+		 * ruido), así que mientras el VI no cambie de origen se sigue
+		 * presentando el mismo destino. */
+		const struct target *t = rdp.shown;
+		if (f->origin >= t->addr && f->origin < t->addr + t->width * t->bpp * t->lh)
+			best = t;
+	}
+	rdp.shown = best;
+	rdp.shown_origin = f->origin;
+	rdp.shown_field = field;
 	if (!best)
 		return false;
 	uint32_t line = best->width * best->bpp;
