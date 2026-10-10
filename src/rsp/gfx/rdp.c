@@ -34,7 +34,11 @@ _Static_assert(sizeof(struct gfx_result) <= 112, "gfx_result cabe en un resultad
 
 /* Clases de primitiva: cambian partes del estado (los rectángulos no se
  * descartan por orientación ni usan la profundidad de los vértices). */
-enum prim_kind { PRIM_TRI, PRIM_RECT, PRIM_FILL };
+enum prim_kind {
+	PRIM_TRI, PRIM_RECT, PRIM_FILL,
+	/* Triángulos crudos del RDP: con textura (_T) y/o z (_Z) según el comando. */
+	PRIM_RAW = 4, PRIM_RAW_T = 5, PRIM_RAW_Z = 6, PRIM_RAW_TZ = 7,
+};
 
 /* Mezcla del blender (othermode L, bits 16–31). */
 enum { BL_IN = 0, BL_MEM = 1, BL_BL = 2, BL_FOG = 3 };
@@ -177,7 +181,8 @@ static float shift_scale(unsigned shift)
 static bool texture_state(struct gfx_state *g, struct gfx_draw *d, int tile, int slot, bool copy)
 {
 	struct gfx_tex *t = &d->tex[slot];
-	if (!gfx_tile_texture(g, tile & 7, t))
+	bool premul = (t->flags & GFX_TEX_PREMUL) != 0;  /* lo pidió gfx_combine */
+	if (!gfx_tile_texture(g, tile & 7, t, premul))
 		return false;
 	const struct gfx_tile *ti = &g->tiles[tile & 7];
 	bool bilinear = !copy && ((g->oh >> G_MDSFT_TEXTFILT) & 3) != G_TF_POINT;
@@ -186,7 +191,7 @@ static bool texture_state(struct gfx_state *g, struct gfx_draw *d, int tile, int
 							 : GFX_WRAP_CLAMP) |
 			     (ti->maskt && !(ti->cmt & 2) ? ((ti->cmt & 1) ? GFX_WRAP_MIRROR : GFX_WRAP_REPEAT)
 							   : GFX_WRAP_CLAMP) << 2 |
-			     (bilinear ? GFX_TEX_BILINEAR : 0));
+			     (bilinear ? GFX_TEX_BILINEAR : 0) | (premul ? GFX_TEX_PREMUL : 0));
 	float w = (float)t->width, h = (float)t->height;
 	t->xf[0] = shift_scale(ti->shifts) / w;
 	t->xf[1] = shift_scale(ti->shiftt) / h;
@@ -227,7 +232,7 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 		return;
 	}
 
-	bool zbuf = kind == PRIM_RECT || (g->geom & G_ZBUFFER);
+	bool zbuf = kind == PRIM_RECT || (kind < PRIM_RAW ? (g->geom & G_ZBUFFER) != 0 : (kind & 2) != 0);
 	if (zbuf && (g->ol & Z_CMP))
 		d->depth |= GFX_DEPTH_TEST;
 	if (zbuf && (g->ol & Z_UPD))
@@ -246,7 +251,7 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 
 	if (gfx_combine(g, d))
 		g->res->approx_cc++;
-	bool textured = kind == PRIM_RECT || g->tex_on;
+	bool textured = kind == PRIM_RECT || (kind < PRIM_RAW ? g->tex_on != 0 : (kind & 1) != 0);
 	if (!textured)
 		d->ntex = 0;
 	unsigned n = d->ntex;
@@ -290,7 +295,7 @@ static struct gfx_vertex *begin_prim(struct gfx_state *g, enum prim_kind kind, i
 {
 	send_target(g);
 	if (g->dirty || !g->have_draw || g->draw.prim_kind != (uint32_t)kind ||
-	    (kind == PRIM_RECT && g->draw.prim_tile != (uint32_t)tile)) {
+	    ((kind == PRIM_RECT || kind >= PRIM_RAW) && g->draw.prim_tile != (uint32_t)tile)) {
 		struct gfx_draw d;
 		uint32_t t0 = gfx_io_clock();
 		build_state(g, &d, kind, tile);
@@ -399,6 +404,142 @@ void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uin
 		t[0] = t0, t[1] = t0 + w * dtdy, t[2] = t0, t[3] = t0 + w * dtdy;
 	}
 	rect(g, PRIM_RECT, tile, ulx, uly, lrx, lry, s, t);
+}
+
+/* ---- Triángulos crudos del RDP --------------------------------------------
+ * Comandos 0xC8–0xCF (n64brew.dev, "Reality Display Processor/Commands"):
+ * aristas H (mayor, de YH a YL), M (de YH a YM) y L (de YM a YL) en
+ * píxeles, y bloques opcionales de sombreado, textura y z con su valor en
+ * (XH, floor(YH)), su cambio por píxel en x (DxDx) y a lo largo de la
+ * arista mayor (DxDe). El RDP rellena dos trapecios: de YH a YM entre H y
+ * M, y de YM a YL entre H y L; cada uno sale como dos triángulos con los
+ * atributos evaluados en sus esquinas. Llegan en `w` como pares de
+ * palabras (alta, baja) de cada doble palabra del comando. */
+
+/* Coordenada x (s11.16 en los 28 bits bajos) y pendiente (s13.16 en 30). */
+static float raw_x(uint32_t v) { return (float)((int32_t)(v << 4) >> 4) * (1.0f / 65536.0f); }
+static float raw_dx(uint32_t v) { return (float)((int32_t)(v << 2) >> 2) * (1.0f / 65536.0f); }
+/* y en s11.2 (14 bits). */
+static float raw_y(uint32_t v) { return (float)((int32_t)(v << 18) >> 18) * 0.25f; }
+
+/* Canal k (0–3) de un bloque de 8 dobles palabras desde w: entero en la
+ * doble palabra `di`, fracción en `df`. */
+static float raw_coef(const uint32_t *w, int di, int df, int k)
+{
+	uint32_t wi = w[2 * di + (k >> 1)], wf = w[2 * df + (k >> 1)];
+	uint32_t hi = (k & 1) ? wi & 0xFFFF : wi >> 16, lo = (k & 1) ? wf & 0xFFFF : wf >> 16;
+	return (float)(int32_t)(hi << 16 | lo) * (1.0f / 65536.0f);
+}
+
+struct raw_attr {
+	float v[4], dx[4], de[4];
+};
+
+static void raw_block(const uint32_t *b, struct raw_attr *a)
+{
+	for (int k = 0; k < 4; k++) {
+		a->v[k] = raw_coef(b, 0, 2, k);
+		a->dx[k] = raw_coef(b, 1, 3, k);
+		a->de[k] = raw_coef(b, 4, 6, k);
+	}
+}
+
+unsigned gfx_rdp_raw_words(uint32_t op)
+{
+	if (op == 0xE4 || op == 0xE5)  /* TEXRECT y TEXRECTFLIP */
+		return 2;
+	if (op < 0xC8 || op > 0xCF)
+		return 1;
+	return 4 + ((op & 4) ? 8 : 0) + ((op & 2) ? 8 : 0) + ((op & 1) ? 2 : 0);
+}
+
+void gfx_rdp_triangle(struct gfx_state *g, const uint32_t *w)
+{
+	uint32_t op = w[0] >> 24;
+	bool shade = op & 4, tex = op & 2, zb = op & 1;
+	int tile = (w[0] >> 16) & 7;
+	float yl = raw_y(w[0]), ym = raw_y(w[1] >> 16), yh = raw_y(w[1]);
+	float xl = raw_x(w[2]), dxl = raw_dx(w[3]);
+	float xh = raw_x(w[4]), dxh = raw_dx(w[5]);
+	float xm = raw_x(w[6]), dxm = raw_dx(w[7]);
+	float y0 = (float)(int)(yh >= 0.0f ? yh : yh - 0.75f);  /* floor(YH) */
+	const uint32_t *p = w + 8;
+	struct raw_attr sh, tx;
+	memset(&sh, 0, sizeof sh);
+	memset(&tx, 0, sizeof tx);
+	if (shade) {
+		raw_block(p, &sh);
+		p += 16;
+	}
+	if (tex) {
+		raw_block(p, &tx);
+		p += 16;
+	}
+	float z = 0.0f, dzdx = 0.0f, dzde = 0.0f;
+	if (zb) {
+		z = (float)(int32_t)p[0] * (1.0f / 65536.0f);
+		dzdx = (float)(int32_t)p[1] * (1.0f / 65536.0f);
+		dzde = (float)(int32_t)p[2] * (1.0f / 65536.0f);
+	}
+	bool persp = tex && ((g->oh >> G_MDSFT_TEXTPERSP) & 1);
+
+	/* Esquinas: (x, y) de cada trapecio, en orden alrededor. */
+	float c[2][4][2];
+	int quads = 0;
+	if (ym > yh) {
+		float hm = xh + dxh * (ym - y0), mm = xm + dxm * (ym - y0);
+		float h0 = xh + dxh * (yh - y0), m0 = xm + dxm * (yh - y0);
+		float q[4][2] = { { h0, yh }, { m0, yh }, { mm, ym }, { hm, ym } };
+		memcpy(c[quads++], q, sizeof q);
+	}
+	if (yl > ym) {
+		float hm = xh + dxh * (ym - y0), hl = xh + dxh * (yl - y0);
+		float lm = xl, ll = xl + dxl * (yl - ym);
+		float q[4][2] = { { hm, ym }, { lm, ym }, { ll, yl }, { hl, yl } };
+		memcpy(c[quads++], q, sizeof q);
+	}
+	for (int qi = 0; qi < quads; qi++) {
+		struct gfx_vertex v[4];
+		for (int i = 0; i < 4; i++) {
+			float x = c[qi][i][0], y = c[qi][i][1];
+			/* Atributo en (x, y): por la arista mayor hasta y, luego en x. */
+			float e = y - y0, d = x - (xh + dxh * e);
+			float a[4], t[4];
+			for (int k = 0; k < 4; k++) {
+				a[k] = sh.v[k] + sh.de[k] * e + sh.dx[k] * d;
+				t[k] = tx.v[k] + tx.de[k] * e + tx.dx[k] * d;
+			}
+			/* S y T en s10.21: texels = valor / 32; con perspectiva, ÷ W
+			 * (W ≈ 1 en 0x7FFF.0000) y la w de salida es 1/W. */
+			float wn = persp ? t[2] * (1.0f / 32768.0f) : 1.0f;
+			if (wn < 1e-6f)
+				wn = 1e-6f;
+			float ww = 1.0f / wn;
+			struct gfx_vertex *o = &v[i];
+			o->w = ww;
+			o->x = x * ww;
+			o->y = y * ww;
+			float zz = zb ? (z + dzde * e + dzdx * d) * (1.0f / 32768.0f) : 0.0f;
+			o->z = (zz < 0.0f ? 0.0f : zz > 1.0f ? 1.0f : zz) * ww;
+			o->s = t[0] / 32.0f * ww;
+			o->t = t[1] / 32.0f * ww;
+			uint8_t col[4];
+			for (int k = 0; k < 4; k++) {
+				float f = a[k] < 0.0f ? 0.0f : a[k] > 255.0f ? 255.0f : a[k];
+				col[k] = (uint8_t)(f + 0.5f);
+			}
+			o->r = col[0], o->g = col[1], o->b = col[2], o->a = col[3];
+			o->pad = 0;
+		}
+		static const int order[6] = { 0, 1, 2, 0, 2, 3 };
+		enum prim_kind kind = (enum prim_kind)(PRIM_RAW | (tex ? 1 : 0) | (zb ? 2 : 0));
+		struct gfx_vertex *o = begin_prim(g, kind, tile, 6);
+		if (!o)
+			return;
+		g->res->triangles += 2;
+		for (int i = 0; i < 6; i++)
+			o[i] = v[order[i]];
+	}
 }
 
 static void fillrect(struct gfx_state *g, uint32_t w0, uint32_t w1)

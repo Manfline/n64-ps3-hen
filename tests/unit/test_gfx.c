@@ -401,6 +401,70 @@ static void gfx_tmem_rgba16_block(void)
 	CHECK(fabsf(d->tex[0].xf[0] - 0.25f) < 1e-6f);
 }
 
+/* (TEXEL0 − SHADE)·TEXEL0_ALPHA + SHADE con alfa ENV (G_SETCOMBINE de los
+ * ojos de Mario en SM64): T0·T0a pide la textura premultiplicada y queda
+ * exacto; con T0 solo además, se sigue aproximando. */
+#define CC_EYES_HI 0x147E28u
+#define CC_EYES_LO 0x44FE7B3Du
+
+static void gfx_combiner_premul(void)
+{
+	start();
+	struct gfx_draw d;
+	memset(&d, 0, sizeof d);
+	gs.oh = 0;
+	gs.env = 0x000000C0;
+	gs.cc_hi = CC_EYES_HI;
+	gs.cc_lo = CC_EYES_LO;
+	CHECK(!gfx_combine(&gs, &d));
+	CHECK(d.tex[0].flags & GFX_TEX_PREMUL);
+	CHECK_EQ(d.ntex, 1);
+	for (int lane = 0; lane < 3; lane++) {
+		CHECK(d.k[GFX_K_T0][0][lane] == 1.0f);    /* T0·T0a: la premultiplicada */
+		CHECK(d.k[GFX_K_T0A][1][lane] == -1.0f);  /* −S·T0a */
+		CHECK(d.k[GFX_K_ONE][1][lane] == 1.0f);   /* + S */
+	}
+	CHECK(fabsf(d.k[GFX_K_ONE][0][3] - 0xC0 / 255.0f) < 1e-6f);  /* alfa = ENV */
+
+	/* (TEXEL0 − 0)·TEXEL0_ALPHA + TEXEL0: T0·T0a + T0. */
+	gs.cc_lo = 15u << 28 | 15u << 24 | 7u << 21 | 7u << 18 | 1u << 15 | 7u << 12 | 5u << 9 | 1u << 6 | 7u << 3 | 5u;
+	CHECK(gfx_combine(&gs, &d));
+	CHECK(!(d.tex[0].flags & GFX_TEX_PREMUL));
+}
+
+/* La misma textura premultiplicada al decodificar: alfa 0 → negro. */
+static void gfx_tmem_premul(void)
+{
+	start();
+	for (int i = 0; i < 8; i++)  /* amarillo; alfa 0 en los pares, 1 en los impares */
+		salsa64_wr16(t_n64.bus.rdram + TEX_PA + 2 * i, (uint16_t)(31u << 11 | 31u << 6 | (unsigned)(i & 1)));
+	dl(0xFD100000, TEX_PA);
+	dl(0xF5100000, 0x07000000);
+	dl(0xF3000000, 0x07000000 | 7 << 12 | 2048);
+	dl(0xF5100000 | 1 << 9, 0x00000000);
+	dl(0xF2000000, (3 << 2) << 12 | (1 << 2));
+	set_cycle(G_CYC_1CYCLE);
+	dl(0xFC000000 | CC_EYES_HI, CC_EYES_LO);
+	dl(0xE4000000 | (4 << 2) << 12 | (2 << 2), 0);
+	dl(0xE1000000, 0);
+	dl(0xF1000000, 0x04000400);
+	run();
+	CHECK_EQ(res.approx_cc, 0);
+	const struct gfx_draw *d = draw_n(0);
+	CHECK(d != NULL);
+	if (!d)
+		return;
+	CHECK(d->tex[0].flags & GFX_TEX_PREMUL);
+	const uint8_t *tex = out_tex + d->tex[0].offset;
+	CHECK_EQ(tex[0], 0);  /* texel 0, alfa 0 */
+	CHECK_EQ(tex[1], 0);
+	CHECK_EQ(tex[3], 0);
+	CHECK_EQ(tex[4], 0xFF);  /* texel 1, opaco: sin cambios */
+	CHECK_EQ(tex[5], 0xFF);
+	CHECK_EQ(tex[6], 0);
+	CHECK_EQ(tex[7], 0xFF);
+}
+
 /* CI4 con paleta RGBA16 (LOADTLUT) cargada con LOADTILE. */
 static void gfx_tmem_ci4_tlut(void)
 {
@@ -857,6 +921,8 @@ void t_suite_gfx(void)
 	RUN(gfx_texgen);
 	RUN(gfx_tmem_rgba16_block);
 	RUN(gfx_tmem_ci4_tlut);
+	RUN(gfx_combiner_premul);
+	RUN(gfx_tmem_premul);
 	RUN(gfx_fill_and_zclear);
 	RUN(gfx_fill_1cycle_edge);
 	RUN(gfx_draw_batching);
