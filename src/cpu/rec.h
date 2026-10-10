@@ -85,7 +85,8 @@ struct salsa64_rec_fixup {
 
 /* Opciones: se ponen en rec->opts antes de salsa64_rec_init, que las
  * conserva. */
-#define SALSA64_REC_OPT_PIN 1u  /* sp, ra, v0, v1, a0–a3 fijos en r18–r25 entre bloques */
+#define SALSA64_REC_OPT_PIN   1u  /* sp, ra, v0, v1, a0–a3 fijos en r18–r25 entre bloques */
+#define SALSA64_REC_OPT_EAGER 2u  /* escribir cada registro poco después de su último valor */
 
 struct salsa64_rec {
 	uint32_t opts;

@@ -18,6 +18,26 @@ Hallazgos sobre el RSX en homebrew (documentación escasa: anotar todo aquí).
 - Entradas del vertex program: `POSITION` → atributo 0, `COLOR` → atributo 3
   (`GCM_VERTEX_ATTRIB_COLOR0`). Si se enlazan 3 componentes a un `float4`,
   `w` vale 1.
+- **`cgcomp` quita la corrección de perspectiva en MUL, DP2/3/4, DIV y NRM3**
+  (`fpparser.cpp: IsPCDisablingInstruction`): pone el bit 31 de SRC2 de la
+  instrucción, y la entrada (varying) que lee llega dividida entre w. Con
+  w = 1 no se nota; con los w de un juego de N64 (≈ 2000 para la luna del
+  intro de Zelda) el término vale casi cero. RPCS3 lo emula así
+  (`tcN * gl_FragCoord.w` en el GLSL que registra con *Log shader
+  programs*). rsxkit limpia el bit al subir cada fragment program
+  (`lib/rsxkit/src/fprog.c`); gfxtest lo cubre con un cuadro de w = 1000.
+  El generador de fragment programs de la Fase 4 debe dejar el bit en 0.
+  Formato de cada instrucción: 4 palabras de 32 bits con las mitades de 16
+  bits intercambiadas; si alguna fuente es constante (tipo 2), los 16 bytes
+  siguientes son su valor.
+- RPCS3 compila los shaders en segundo plano: la primera corrida después de
+  cambiar un fragment program puede saltarse dibujos (pantalla negra en la
+  captura). Repetir antes de concluir.
+- Orientación: con la y hacia arriba en el espacio de recorte, el frente de
+  la N64 es antihorario (`rsxSetFrontFace(ctx, GCM_FRONTFACE_CCW)`). Con CW
+  el culling sale al revés (faltaban el cielo y la luna en Zelda).
+- Profundidad: `rsxSetZMinMaxControl(ctx, FALSE, TRUE, FALSE)` (sin recorte
+  en z cercano/lejano por hardware; la HLE ya recortó) y z/w en [0, 1].
 
 ## Framebuffer
 
@@ -67,3 +87,18 @@ Verificado en RPCS3 0.0.43 y en la **PS3 real** (2026-10-10, CECH-3011A,
 HEN): el frontend con vitest lee la pantalla del RSX y RGBA5551 y RGBA8888
 salen con el color esperado a 1280×720. Subir la textura y dibujar cuesta
 0,2–0,4 ms por cuadro en el PPE.
+
+## Trampas de PSL1GHT (f649a08, 2026-10-10)
+
+- **`rsxSetVertexProgramConstants` está roto:** avanza `context->current` a
+  mano mientras escribe y después otra vez con `RSX_CONTEXT_CURRENT_END`, así
+  que deja palabras sin escribir en el FIFO (RPCS3: "FIFO error: possible
+  desync event" y "Dead FIFO commands queue"); además su `count` son floats,
+  no vec4, y en el bucle de 32 floats copia dos veces el mismo bloque. Usar
+  `rsxLoadVertexProgramParameterBlock(ctx, base, n_vec4, datos)`, que parte en
+  bloques de 8 vec4 bien.
+- `rsxLoadVertexProgram` sube también las constantes internas que pone
+  `cgcomp` (literales como 2.0): no hace falta subirlas a mano.
+- `cgcomp` asigna las constantes del vertex program en orden de declaración
+  y consecutivas (un `uniform float4 k[15]` queda como `k[0]`…`k[14]`), así
+  que se pueden subir de una vez.

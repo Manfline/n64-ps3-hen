@@ -6,8 +6,8 @@
  * llame a C con `bl` directo: es un arreglo en .bss al que se le agrega
  * permiso de ejecución. Con SALSA64_REC_FAR=1 se usa un mmap lejano, que
  * obliga a llamar por mtctr/bctrl (el otro camino del emisor).
- * SALSA64_REC_PIN=1 activa los registros fijos entre bloques
- * (SALSA64_REC_OPT_PIN).
+ * SALSA64_REC_PIN=1 y SALSA64_REC_EAGER=1 activan las opciones
+ * SALSA64_REC_OPT_PIN y SALSA64_REC_OPT_EAGER.
  */
 #ifndef SALSA64_HOST_REC_HOST_H
 #define SALSA64_HOST_REC_HOST_H
@@ -42,7 +42,8 @@ static inline void *salsa64_host_rec_buffer(void)
 
 static inline uint32_t salsa64_host_rec_opts(void)
 {
-	return salsa64_host_env_on("SALSA64_REC_PIN") ? SALSA64_REC_OPT_PIN : 0;
+	return (salsa64_host_env_on("SALSA64_REC_PIN") ? SALSA64_REC_OPT_PIN : 0) |
+	       (salsa64_host_env_on("SALSA64_REC_EAGER") ? SALSA64_REC_OPT_EAGER : 0);
 }
 
 #endif

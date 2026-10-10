@@ -53,41 +53,42 @@ int main(void)
 	u64 us = sysGetSystemTime() - t0;
 	salsa64_unit_bench(print_line, now_us);
 
-	const char *rec_state = "apagado (" SALSA64_NOREC_FLAG ")";
-	int rec_failed = 0;
-	u64 rec_us = 0;
-	if (salsa64_ps3_rec_wanted()) {
-		t0 = sysGetSystemTime();
-		int r = salsa64_unit_run_rec(print_line, &rec, salsa64_ps3_rec_cache(), SALSA64_REC_CACHE_BYTES);
-		rec_us = sysGetSystemTime() - t0;
-		if (r < 0) {
-			rec_state = "no disponible";
-		} else {
-			rec_state = rec.calls_near ? "activo, llamadas con bl" : "activo, llamadas por mtctr";
-			rec_failed = r;
-			salsa64_unit_bench(print_line, now_us);
-			salsa64_rec_detach(&rec);
-		}
-	}
-
-	/* nemu64-test completo: el intérprete es la referencia; el recompilador
-	 * sin y con registros fijos entre bloques (SALSA64_REC_OPT_PIN). */
-	static struct rombench_result ri, rr;
+	/* El recompilador con cada combinación de opciones (rec.h): pruebas en
+	 * modo estricto, bench y nemu64-test completo contra el intérprete. */
 	static const struct { uint32_t opts; const char *name; } variants[] = {
 		{ 0, "recompilador" },
-		{ SALSA64_REC_OPT_PIN, "recompilador con registros fijos" },
+		{ SALSA64_REC_OPT_EAGER, "recompilador + escritura temprana" },
+		{ SALSA64_REC_OPT_PIN, "recompilador + registros fijos" },
+		{ SALSA64_REC_OPT_PIN | SALSA64_REC_OPT_EAGER, "recompilador + registros fijos + escritura temprana" },
 	};
-	const char *rom_state = "sin comparar";
+	const char *rec_state = "apagado (" SALSA64_NOREC_FLAG ")", *rom_state = "sin comparar";
+	int rec_failed = 0;
+	u64 rec_us = 0;
+	static struct rombench_result ri, rr;
 	if (salsa64_rombench(&ri, NULL, NULL, 0, now_us))
 		log_rombench("intérprete", &ri);
 	for (unsigned v = 0; v < sizeof variants / sizeof variants[0] && salsa64_ps3_rec_wanted(); v++) {
+		const char *name = variants[v].name;
+		salsa64_log("---- %s", name);
 		rec.opts = variants[v].opts;
+		t0 = sysGetSystemTime();
+		int r = salsa64_unit_run_rec(print_line, &rec, salsa64_ps3_rec_cache(), SALSA64_REC_CACHE_BYTES);
+		rec_us += sysGetSystemTime() - t0;
+		if (r < 0) {
+			rec_state = "no disponible";
+			break;
+		}
+		rec_state = rec.calls_near ? "activo, llamadas con bl" : "activo, llamadas por mtctr";
+		rec_failed += r;
+		salsa64_unit_bench(print_line, now_us);
+		salsa64_rec_detach(&rec);
+
 		if (!salsa64_rombench(&rr, &rec, salsa64_ps3_rec_cache(), SALSA64_REC_CACHE_BYTES, now_us))
 			continue;
-		log_rombench(variants[v].name, &rr);
+		log_rombench(name, &rr);
 		const struct salsa64_rec_stats *st = &rec.stats;
 		salsa64_log("%s: %llu bloques, %u KB de caché, %llu entradas desde C, %llu enlaces, "
-			    "%llu invalidados, %llu vaciados, %llu instr. interpretadas", variants[v].name,
+			    "%llu invalidados, %llu vaciados, %llu instr. interpretadas", name,
 			    (unsigned long long)st->compiled, salsa64_rec_used(&rec) / 256,
 			    (unsigned long long)st->entries, (unsigned long long)st->linked,
 			    (unsigned long long)st->invalidated, (unsigned long long)st->flushes,
@@ -99,7 +100,7 @@ int main(void)
 		if (!same)
 			rec_failed++;
 		if (rr.us)
-			salsa64_log("nemu64-test: %s %.2fx más rápido que el intérprete", variants[v].name,
+			salsa64_log("nemu64-test: %s %.2fx más rápido que el intérprete", name,
 				    (double)ri.us / (double)rr.us);
 	}
 

@@ -21,13 +21,16 @@ if ! tools/build-ppc64.sh >build/logs/build-ppc64.log 2>&1; then
 	exit 1
 fi
 
-# Llamadas por bl y por mtctr, y con registros fijos entre bloques.
-for mode in plain far pin; do
+# Llamadas por bl y por mtctr, y con las opciones (registros fijos,
+# escritura temprana).
+for mode in plain far pin eager; do
 	log=build/logs/rec-unit-$mode.log
-	far=""; pin=""
+	far=""; pin=""; eager=""
 	[ $mode = far ] && far=1
 	[ $mode = pin ] && pin=1
-	SALSA64_REC_FAR=$far SALSA64_REC_PIN=$pin tools/qemu-ppc64.sh build/ppc64/salsa64-unit rec >"$log" 2>&1
+	[ $mode = eager ] && eager=1 && pin=1
+	SALSA64_REC_FAR=$far SALSA64_REC_PIN=$pin SALSA64_REC_EAGER=$eager \
+		tools/qemu-ppc64.sh build/ppc64/salsa64-unit rec >"$log" 2>&1
 	rc=$?
 	printf '%-14s %s\n' "unit ($mode)" "$(grep '^total' "$log" | tail -1)"
 	grep '^FALLO' "$log" | head -10
@@ -42,13 +45,13 @@ run() {
 
 for pin in "" 1; do
 	log=build/logs/rec-nemu${pin:+-pin}.log
-	SALSA64_REC_PIN=$pin run "$log" build/ppc64/salsa64-run -c 4000000000 \
+	SALSA64_REC_PIN=$pin SALSA64_REC_EAGER=$pin run "$log" build/ppc64/salsa64-run -c 4000000000 \
 		-u 'success rate)' -f 'Exception storm' -f 'panicked at' --rec $NEMU
 	rc=$?
 	grep "^Test '" "$log" | sed "s/^Test '\([^']*\)'.*/\1/" | LC_ALL=C sort -u >build/logs/rec-nemu.fallas
 	new=$(LC_ALL=C comm -13 tests/roms/nemu64-test.fallas build/logs/rec-nemu.fallas)
 	gone=$(LC_ALL=C comm -23 tests/roms/nemu64-test.fallas build/logs/rec-nemu.fallas)
-	printf '%-14s %s\n' "nemu64-test${pin:+ (pin)}" "$(grep 'success rate)' "$log" | tail -1)"
+	printf '%-14s %s\n' "nemu64-test${pin:+ (pin+eager)}" "$(grep 'success rate)' "$log" | tail -1)"
 	grep 'recompilador:' "$log" | tail -1 | sed 's/^/               /'
 	[ $rc -eq 0 ] || fail=1
 	if [ -n "$new" ] || [ -n "$gone" ]; then

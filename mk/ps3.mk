@@ -15,6 +15,8 @@
 #               la raíz). Símbolos <nombre>_bin[], _end[] y _size.
 #   RSXKIT      1 para enlazar lib/rsxkit (se compila en build/rsxkit con su
 #               propio Makefile, sin -Isrc)
+#   SPUKIT      1 para enlazar lib/spukit (build/spukit) y poner sus
+#               cabeceras al alcance del PPU y de los programas SPU
 #
 # Salidas en build/<PROGRAM>/:
 #   <PROGRAM>.elf        stripped + sprxlinker: RPCS3 y ps3load
@@ -66,6 +68,12 @@ RSXKIT_LIB  := $(ROOT)/build/rsxkit/librsxkit.a
 PPU_CFLAGS  += -I$(ROOT)/lib/rsxkit/include
 endif
 
+ifeq ($(SPUKIT),1)
+SPUKIT_LIB  := $(ROOT)/build/spukit/libspukit.a
+PPU_CFLAGS  += -I$(ROOT)/lib/spukit/include
+SPU_CFLAGS  += -I$(ROOT)/lib/spukit/include
+endif
+
 vpath %.vcg $(sort $(dir $(abspath $(SHADERS))))
 vpath %.fcg $(sort $(dir $(abspath $(SHADERS))))
 
@@ -91,7 +99,7 @@ $(OBJ)/%.S.o: $(ROOT)/%.S
 	@mkdir -p $(@D)
 	$(VERB)ppu-gcc $(PPU_CFLAGS) -MMD -MP -x assembler-with-cpp -c $< -o $@
 
-$(OBJ)/$(PROGRAM).raw.elf: $(PPU_OBJS) $(EMBED_OBJS) $(RSXKIT_LIB)
+$(OBJ)/$(PROGRAM).raw.elf: $(PPU_OBJS) $(EMBED_OBJS) $(RSXKIT_LIB) $(SPUKIT_LIB)
 	@echo "  PPU LD  $(notdir $@)"
 	$(VERB)ppu-gcc $(PPU_LDFLAGS) $^ $(LIBS) -o $@
 
@@ -125,6 +133,13 @@ ifeq ($(RSXKIT),1)
 rsxkit:
 	$(VERB)$(MAKE) --no-print-directory -C $(ROOT)/lib/rsxkit OUT=$(ROOT)/build/rsxkit
 $(RSXKIT_LIB): rsxkit ;
+endif
+
+ifeq ($(SPUKIT),1)
+.PHONY: spukit
+spukit:
+	$(VERB)$(MAKE) --no-print-directory -C $(ROOT)/lib/spukit OUT=$(ROOT)/build/spukit
+$(SPUKIT_LIB): spukit ;
 endif
 
 # --- SPU ---------------------------------------------------------------------

@@ -4,10 +4,13 @@
  *
  * Estado de la Fase 1 (primer hito):
  *   MI  completo: modo, versión, interrupciones y máscara → Cause.IP2.
- *   PI  DMA cartucho → RDRAM inmediato, con interrupción. Sin latencias.
+ *   PI  DMA cartucho ↔ RDRAM inmediato, con interrupción; SRAM en save.c.
+ *       Sin latencias.
  *   SI  DMA RDRAM ↔ PIF RAM inmediato, con interrupción; comandos joybus
- *       de los controles en pif.c. Falta la EEPROM y la latencia.
- *   SP  bits de SP_STATUS y semáforo. Falta el DMA y arrancar el RSP.
+ *       de los controles en pif.c y de la EEPROM en save.c. Falta la latencia.
+ *   SP  bits de SP_STATUS, semáforo y DMA inmediato. El RSP no ejecuta
+ *       microcódigo: al arrancarlo se lee la tarea (OSTask) de la DMEM y
+ *       las gráficas van a la HLE (rsp.c y el backend de src/rsp/gfx).
  *   VI  contador de líneas, interrupción en VI_V_INTR y campos con la
  *       temporización del tipo de TV (vi.c); describe el framebuffer que
  *       se ve (salsa64_vi_frame). Sin filtros (AA, divot, gamma).
@@ -50,12 +53,84 @@ enum salsa64_sp_reg {
 	SALSA64_SP_DMA_BUSY, SALSA64_SP_SEMAPHORE, SALSA64_SP_NREGS
 };
 
-#define SALSA64_SP_STATUS_HALT  0x0001u
-#define SALSA64_SP_STATUS_BROKE 0x0002u
+#define SALSA64_SP_STATUS_HALT       0x0001u
+#define SALSA64_SP_STATUS_BROKE      0x0002u
+#define SALSA64_SP_STATUS_INTR_BREAK 0x0040u
+#define SALSA64_SP_STATUS_SIG(n)     (0x0080u << (n))
+/* Señales que usa libultra: 0 pedir ceder, 1 cedió, 2 tarea terminada. */
+#define SALSA64_SP_STATUS_TASKDONE   SALSA64_SP_STATUS_SIG(2)
 
 struct salsa64_sp {
 	uint32_t regs[SALSA64_SP_NREGS];
 	uint32_t pc;
+};
+
+/* ---- Tareas del RSP (rsp.c) ------------------------------------------------
+ *
+ * libultra deja la tarea (OSTask) en DMEM 0xFC0 antes de arrancar el RSP.
+ * Las gráficas se procesan por HLE en un backend intercambiable (en la PS3,
+ * un SPE; en el host, en el mismo hilo); el resto de las tareas terminan
+ * sin hacer nada por ahora. La tarea termina un tiempo fijo después de
+ * arrancar (SP_STATUS con BROKE, HALT y TASKDONE, interrupción SP) y, si la
+ * lista de comandos pidió sincronizar el RDP, después llega la del DP. */
+
+#define SALSA64_TASK_DMEM 0xFC0u
+
+enum salsa64_task_type {
+	SALSA64_TASK_GFX = 1,
+	SALSA64_TASK_AUDIO = 2,
+};
+
+/* Familia de microcódigo gráfico (codificación de la lista de comandos). */
+enum salsa64_gbi {
+	SALSA64_GBI_UNKNOWN = 0,
+	SALSA64_GBI_F3DEX2,   /* F3DEX2, F3DLX2…: segunda generación */
+	SALSA64_GBI_F3DZEX2,  /* F3DZEX (Zelda OoT/MM): F3DEX2 con G_BRANCH_W */
+	SALSA64_GBI_F3D,      /* Fast3D: Super Mario 64 (pendiente) */
+	SALSA64_GBI_F3DEX,    /* F3DEX 1.x (pendiente) */
+	SALSA64_GBI_S2DEX,    /* sprites 2D (pendiente) */
+};
+
+/* Campos de OSTask (16 palabras en DMEM 0xFC0). */
+struct salsa64_task {
+	uint32_t type, flags;
+	uint32_t ucode_boot, ucode_boot_size;
+	uint32_t ucode, ucode_size;
+	uint32_t ucode_data, ucode_data_size;
+	uint32_t dram_stack, dram_stack_size;
+	uint32_t output_buff, output_buff_size;
+	uint32_t data_ptr, data_size;
+	uint32_t yield_data_ptr, yield_data_size;
+};
+
+/* Lo que devuelve gfx_finish. */
+#define SALSA64_GFX_FULLSYNC 0x1u  /* la lista terminó con G_RDPFULLSYNC */
+
+struct salsa64_gfx_backend {
+	void *ctx;
+	/* Empieza a procesar la tarea; puede volver antes de terminarla. */
+	void (*start)(void *ctx, const struct salsa64_task *task, enum salsa64_gbi gbi);
+	/* Espera a que termine (cuando la máquina llega al fin de la tarea) y
+	 * devuelve SALSA64_GFX_*. */
+	uint32_t (*finish)(void *ctx);
+};
+
+struct salsa64_rsp_stats {
+	uint32_t gfx, audio, other, unknown_gbi;
+};
+
+struct salsa64_rsp {
+	struct salsa64_sched *sched;
+	const struct salsa64_gfx_backend *gfx;
+	uint32_t busy;          /* tipo de la tarea en curso; 0 = ninguna */
+	enum salsa64_gbi gbi;   /* de la tarea en curso */
+	/* Duración aparente de cada tarea, en ciclos del VR4300. */
+	uint32_t gfx_cycles, audio_cycles, dp_cycles;
+	struct salsa64_rsp_stats stats;
+	/* Opcional (depuración): cada arranque del RSP con su tarea y la familia
+	 * de microcódigo detectada (SALSA64_GBI_UNKNOWN si no es gráfica). */
+	void (*trace)(void *ctx, const struct salsa64_task *task, enum salsa64_gbi gbi);
+	void *trace_ctx;
 };
 
 enum salsa64_dp_reg {
@@ -143,6 +218,18 @@ uint32_t salsa64_mi_read(struct salsa64_bus *bus, uint32_t reg);
 void salsa64_mi_write(struct salsa64_bus *bus, uint32_t reg, uint32_t value);
 uint32_t salsa64_sp_read(struct salsa64_bus *bus, uint32_t reg);
 void salsa64_sp_write(struct salsa64_bus *bus, uint32_t reg, uint32_t value);
+
+/* Tareas del RSP (rsp.c). salsa64_rsp_init registra sus eventos; el backend
+ * gráfico se cambia con salsa64_rsp_set_gfx (NULL: las tareas gráficas
+ * terminan sin dibujar). salsa64_rsp_start lo llama el SP al quitarle HALT. */
+void salsa64_rsp_init(struct salsa64_bus *bus, struct salsa64_sched *sched);
+void salsa64_rsp_reset(struct salsa64_bus *bus);
+void salsa64_rsp_set_gfx(struct salsa64_bus *bus, const struct salsa64_gfx_backend *gfx);
+void salsa64_rsp_start(struct salsa64_bus *bus);
+void salsa64_rsp_read_task(const struct salsa64_bus *bus, struct salsa64_task *task);
+/* Familia de microcódigo de una tarea gráfica, por los textos de su
+ * segmento de datos (ucode_data). */
+enum salsa64_gbi salsa64_rsp_detect_gbi(const struct salsa64_bus *bus, const struct salsa64_task *task);
 uint32_t salsa64_dp_read(struct salsa64_bus *bus, uint32_t reg);
 void salsa64_dp_write(struct salsa64_bus *bus, uint32_t reg, uint32_t value);
 uint32_t salsa64_vi_read(struct salsa64_bus *bus, uint32_t reg);

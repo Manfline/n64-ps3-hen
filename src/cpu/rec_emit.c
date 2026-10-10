@@ -227,6 +227,8 @@ struct ctx {
 	uint64_t written;       /* asignados y modificados desde la entrada o el inicio del bucle */
 	uint64_t written_start; /* written al empezar la instrucción en curso */
 	uint8_t last_write[34]; /* última instrucción que escribe cada registro, + 1 (0 = ninguna) */
+	uint64_t eager;         /* con su último valor, esperando para escribirse (OPT_EAGER) */
+	uint8_t eager_due[34];  /* instrucción antes de la cual escribirlo */
 	unsigned k;             /* instrucción en curso */
 	bool in_ds;
 	int body;               /* etiqueta del cuerpo (vuelta de los bucles) */
@@ -355,20 +357,39 @@ static unsigned dst(struct ctx *c, unsigned r, unsigned tmp)
 	return (r && c->map[r]) ? c->map[r] : tmp;
 }
 
-/* El valor de `r` quedó en `reg` (el que dio dst). */
-/* Un registro asignado se escribe en memoria apenas recibe su último valor
- * del bloque, no a la salida: si el bloque siguiente lo lee enseguida, el
- * almacenamiento ya salió de la cola (en el PPE, leer lo que sigue en la
- * cola de almacenamiento cuesta decenas de ciclos). */
+/* El valor de `r` quedó en `reg` (el que dio dst).
+ *
+ * Con SALSA64_REC_OPT_EAGER, un registro asignado que recibe su último valor
+ * del bloque se escribe en memoria dos instrucciones después, no a la
+ * salida: si el bloque siguiente lo lee enseguida, el almacenamiento ya
+ * salió de la cola (load-hit-store). No justo después: en el PPE, un
+ * almacenamiento que espera el valor recién calculado detiene el pipeline
+ * (medido: −37 % en un bucle de enteros). */
 static void put(struct ctx *c, unsigned r, unsigned reg)
 {
 	if (r == 0 || (c->pinned & BIT(r)))
 		return;  /* un registro fijo no se escribe hasta volver a C */
-	if (!c->map[r] || c->last_write[r] == c->k + 1) {
+	if (!c->map[r]) {
 		E(c, ppc_std(reg, off_reg(r), R_CPU));
-		c->written &= ~BIT(r);
-	} else {
-		c->written |= BIT(r);
+		return;
+	}
+	c->written |= BIT(r);
+	if ((c->rec->opts & SALSA64_REC_OPT_EAGER) && c->last_write[r] == c->k + 1) {
+		c->eager |= BIT(r);
+		c->eager_due[r] = (uint8_t)(c->k + 2);
+	}
+}
+
+/* Escribe los registros de OPT_EAGER cuyo turno llegó, antes de la
+ * instrucción k. */
+static void flush_eager(struct ctx *c, unsigned k)
+{
+	for (unsigned r = 1; c->eager && r < 34; r++) {
+		if ((c->eager & BIT(r)) && c->eager_due[r] <= k) {
+			E(c, ppc_std(c->map[r], off_reg(r), R_CPU));
+			c->eager &= ~BIT(r);
+			c->written &= ~BIT(r);
+		}
 	}
 }
 
@@ -1337,6 +1358,7 @@ static void emit_insn(struct ctx *c, unsigned k)
 	const struct dec *d = &c->d[k];
 	uint32_t i = d->w;
 
+	flush_eager(c, k);
 	c->k = k;
 	c->written_start = c->written;
 	if (d->how == H_EXEC) {
@@ -1401,6 +1423,7 @@ static void emit_branch(struct ctx *c, unsigned b)
 	uint64_t bpc = insn_pc(c, b);
 	bool likely = d->kind == K_BRANCH_L;
 
+	flush_eager(c, b);
 	c->k = b;
 	c->written_start = c->written;
 	c->br_kind = d->kind;

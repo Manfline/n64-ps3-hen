@@ -16,7 +16,8 @@ fi
 # Sin --platform: con la imagen local amd64, Docker (colima) dice que no la
 # encuentra; sin la opción la usa y solo avisa (el aviso va a stderr).
 # El gcc emulado como amd64 a veces muere con "internal compiler error:
-# Segmentation fault" y al repetir compila bien: se reintenta una vez.
+# Segmentation fault" y al repetir compila bien: se reintenta hasta tres
+# veces (make retoma donde quedó).
 mk1() {
 	docker run --rm -i --user "$(id -u):$(id -g)" -e HOME=/tmp \
 		-v "$ROOT:/src" -w /src "$IMAGE" \
@@ -24,7 +25,11 @@ mk1() {
 		EXTRA_CFLAGS="-mcpu=cell -mno-relative-jumptables" EXTRA_LDFLAGS=-static all
 }
 mk() {
-	mk1 "$1" || { echo "reintento: $1" >&2; mk1 "$1"; }
+	for try in 1 2 3; do
+		mk1 "$1" && return 0
+		echo "reintento $try: $1" >&2
+	done
+	mk1 "$1"
 }
 
 case "$what" in

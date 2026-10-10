@@ -7,6 +7,7 @@
 | `tests/phase0/rsx-triangle/main.c` | Sample `samples/graphics/rsxtest` de PSL1GHT (`f649a08f`) | MIT | Inicialización del RSX, superficie, viewport y flip reescritos en C a partir de `rsxutil.cpp`/`main.cpp` |
 | `lib/rsxkit/src/video.c` | `tests/phase0/rsx-triangle/main.c` (propio), que sigue el sample `rsxtest` de PSL1GHT | MIT | Inicialización del RSX y del video, superficie y flip; el resto de `lib/rsxkit` es propio |
 | `tests/phase0/spu-compute/spu/mix.c` | Patrón DMA del sample `samples/spu/spudma` de PSL1GHT | MIT | Solo el patrón `mfc_get`/espera por etiqueta; el cálculo y el doble búfer son propios |
+| `lib/rsxkit/src/fprog.c` | Formato de instrucción de fragment program de `tools/cgcomp/include/nvfx_shader.h` y `fpparser.cpp` de PSL1GHT (`f649a08f`) | MIT | Solo los campos (fin de programa, tipo de fuente, bit 31 de SRC2) para limpiar el bit que quita la corrección de perspectiva; código propio |
 
 El núcleo de la Fase 1 (`src/core/`, `src/cpu/`, `src/host/`), el mapeo
 de controles del frontend (`src/frontend/padmap.c`) y el guardado del
@@ -23,6 +24,12 @@ referencia de diseño, sin copiar código** (decisión en docs/rec-ppe.md):
 |---|---|---|---|
 | Not64 | github.com/extremscorner/not64, `d35a7a1c454eca973995939dbca3f06725cf4a6e` (2026-04-10) | GPLv2 o posterior (cabeceras de `r4300/ppc/*`; `LICENCE.TXT` = GPL v2) | Lectura de `r4300/ppc/` y `Recomp-Cache*` |
 | Wii64 | github.com/emukidid/Wii64, `2e1c6fb056e1965a57f6be4accdbf5460e7de291` (2026-10-09) | GPLv2 o posterior | Lectura de `r4300/ppc/` |
+La HLE gráfica de la Fase 2 (`src/rsp/gfx/`, `src/spu/gfx/`, `src/rdp/`) y
+`lib/spukit/` también son código propio. Para el comportamiento de F3DEX2 y
+del RDP se consultaron la documentación de n64brew.dev y el código de
+emuladores GPL (abajo), sin copiar código: se reescribió a partir de la
+descripción. Nada de eso entra en `lib/rsxkit/` ni en `lib/spukit/` (MIT),
+que solo usan PSL1GHT.
 
 Datos tomados de terceros (no código):
 
@@ -36,6 +43,12 @@ Datos tomados de terceros (no código):
 | Reglas de hardware verificadas por las pruebas (MULT, LWR, enlaces, COP0, COP2, FPU, TLB, RE, bus) y valores de los registros de RDRAM | `src/cpu/`, `src/core/` | nemu64-test (fuente, comentarios y valores esperados) | MIT |
 | EEPROM del cartucho (comandos 0x00/0xFF, 0x04, 0x05, identificadores 0x0080/0x00C0, bloques repetidos en la de 4 Kbit), SRAM en el dominio 2 del PI (DMA PI_RD_LEN/PI_WR_LEN, acceso directo de 32 bits) y cabecera de homebrew ("ED" en 0x3C, tipo en 0x3F) | `src/core/save.c`, `tests/roms/src/savetest` | n64brew.dev (Joybus Protocol, Peripheral Interface, Memory map, ROM Header; consultadas el 2026-10-10) | documentación |
 | Tipo de guardado por código de juego: solo el código del encabezado y el tipo de memoria (datos de compatibilidad, sin material de Nintendo) | `src/core/savedb.c` | Cotejados entre dos fuentes y tomados solo donde coinciden (178 códigos y 6 excepciones por región): heurística de mia en ares (`mia/medium/nintendo-64.cpp`, commit `433d07fb`) y base de N64FlashcartMenu (`src/menu/rom_info.c`, commit `8c5fb11f`). No se copió código de ninguna | ares: ISC; N64FlashcartMenu: AGPL-3.0 (solo hechos) |
+| DMA del SP (filas, salto, vuelta en el banco, registros al terminar), bits de SP_STATUS, estructura OSTask en DMEM 0xFC0 | `src/core/sp.c`, `src/core/rsp.c` | n64brew.dev (Reality Signal Processor/Interface); mupen64plus-rsp-hle `src/memory.h`, `src/hle.c` | documentación; GPLv2 (solo consulta) |
+| Fin de una tarea: HALT, BROKE y TASKDONE, e interrupción DP tras G_RDPFULLSYNC (los retardos son propios, del mismo orden) | `src/core/rsp.c` | mupen64plus-core `src/device/rcp/rsp/rsp_core.c` (`do_SP_Task`) | GPLv2 (solo consulta) |
+| Detección del microcódigo por los textos de `ucode_data` ("RSP Gfx ucode", versión 2.x, F3DZEX, "RSP SW Version") | `src/core/rsp.c` | GLideN64 `src/GBI.cpp`; mupen64plus-video-rice `src/RSP_Parser.cpp` | GPLv2 (solo consulta). Las pruebas usan textos sintéticos, no los de Nintendo |
+| Codificación de los comandos F3DEX2 y F3DZEX (G_VTX, G_MODIFYVTX, G_CULLDL, G_BRANCH_Z/W, G_TRI*, G_TEXTURE, G_GEOMETRYMODE y sus bits, G_MTX, G_MOVEWORD, G_MOVEMEM y sus offsets, G_SETOTHERMODE_*, G_TEXRECT en tres comandos) | `src/rsp/gfx/f3dex2.c`, `tests/roms/src/gfxtest/gbi.h` | n64brew.dev; GLideN64 `src/uCodes/F3DEX2.*`, `src/GBI.h`, `src/gSP.cpp`; mupen64plus-video-glide64mk2 `ucode02.h`; mupen64plus-video-rice `UcodeDefs.h` | documentación; GPLv2 (solo consulta). `gbi.h` de gfxtest es propio: no es el de libultra ni el de ningún decomp |
+| Luces (transformar la dirección con la modelview y normalizar), mapeo de entorno ((d+1)·512 y acos(−d)·1024/π texels antes de la escala) y niebla por vértice (z/w·fm + fo) | `src/rsp/gfx/geom.c` | GLideN64 `src/gSP.cpp`, `src/3DMath.cpp`; mupen64plus-video-glide64mk2 `3dmath.cpp` | GPLv2 (solo consulta) |
+| RDP: campos de othermode, blender, G_SETCOMBINE y sus entradas, TMEM (LOADBLOCK con dxt, LOADTILE, LOADTLUT, RGBA32 partido, intercambio en filas impares), formatos de textura, TEXRECT/FILLRECT en COPY/FILL, intercambio de TEXEL0/TEXEL1 en el segundo ciclo | `src/rsp/gfx/rdp.c`, `tmem.c`, `combine.c` | n64brew.dev (Reality Display Processor/Commands); parallel-rdp (MIT) y angrylion-rdp-plus (licencia MAME, no comercial: solo lectura) como confirmación | documentación (CC BY-SA, reescrito); MIT; solo consulta |
 
 Aviso de PSL1GHT: Copyright (c) 2011 PSL1GHT Development Team, licencia MIT
 (compatible con GPLv2 o posterior).
