@@ -75,8 +75,10 @@ struct salsa64_sp {
  * intercambiables (en la PS3, un SPE cada una; en el host, en el mismo
  * hilo); el resto de las tareas terminan sin hacer nada por ahora. La
  * tarea termina un tiempo fijo después de
- * arrancar (SP_STATUS con BROKE, HALT y TASKDONE, interrupción SP) y, si la
- * lista de comandos pidió sincronizar el RDP, después llega la del DP. */
+ * arrancar (SP_STATUS con BROKE, HALT y TASKDONE, interrupción SP) y
+ * después llega la del DP si la lista pidió sincronizar el RDP, si la HLE
+ * la cortó antes (SALSA64_GFX_CUT) o si no hay HLE para su microcódigo:
+ * el juego la espera por cada tarea gráfica. */
 
 #define SALSA64_TASK_DMEM 0xFC0u
 
