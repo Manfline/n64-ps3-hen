@@ -140,7 +140,7 @@ static int run_suites(void (*print)(const char *line), struct salsa64_rec *rec, 
 		{ "sync", t_suite_audio_sync },
 		{ "pacer", t_suite_pacer },
 	};
-	char line[160];
+	char line[256];
 
 	t_print = print;
 	t_tests = t_failed_tests = t_checks = 0;
@@ -168,12 +168,13 @@ static int run_suites(void (*print)(const char *line), struct salsa64_rec *rec, 
 	if (rec) {
 		const struct salsa64_rec_stats *st = &rec->stats;
 		snprintf(line, sizeof line, "recompilador: %llu bloques (%llu fuera de KSEG0), %llu recortados, "
-			 "%llu solo intérprete, %llu entradas, %llu enlaces, %llu invalidados, %llu instr. interpretadas",
+			 "%llu solo intérprete, %llu entradas, %llu enlaces, %llu invalidados, %llu instr. interpretadas, "
+			 "%llu llamadas al intérprete",
 			 (unsigned long long)st->compiled, (unsigned long long)st->compiled_x,
 			 (unsigned long long)st->temp_compiled,
 			 (unsigned long long)st->interp_only, (unsigned long long)st->entries,
 			 (unsigned long long)st->linked, (unsigned long long)st->invalidated,
-			 (unsigned long long)st->interp_steps);
+			 (unsigned long long)st->interp_steps, (unsigned long long)st->exec_calls);
 		print(line);
 	}
 	return t_failed_tests;

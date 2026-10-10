@@ -68,7 +68,10 @@ int main(int argc, char **argv)
 		       rec.opts & SALSA64_REC_OPT_PIN ? ", registros fijos" : "");
 		failed += r;
 	}
-	if (bench)
+	if (bench) {
 		salsa64_unit_bench(print_line, now_us);
+		if (!use_rec)
+			salsa64_unit_bench_aligned(print_line, now_us);
+	}
 	return failed ? 1 : 0;
 }

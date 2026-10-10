@@ -1008,13 +1008,13 @@ int main(int argc, char **argv)
 		const struct salsa64_rec_stats *st = &rec.stats;
 		fprintf(stderr, "salsa64-run: recompilador: %llu bloques (%llu fuera de KSEG0, %u KB de caché), "
 			"%llu solo intérprete, %llu entradas, %llu enlaces, %llu invalidados, %llu vaciados, "
-			"%llu traducciones, %llu instr. interpretadas (%.1f %%)%s\n",
+			"%llu traducciones, %llu instr. interpretadas (%.1f %%), %llu llamadas al intérprete%s\n",
 			(unsigned long long)st->compiled, (unsigned long long)st->compiled_x, salsa64_rec_used(&rec) / 256,
 			(unsigned long long)st->interp_only, (unsigned long long)st->entries,
 			(unsigned long long)st->linked, (unsigned long long)st->invalidated,
 			(unsigned long long)st->flushes, (unsigned long long)st->vt_probes,
 			(unsigned long long)st->interp_steps, cycles ? 100.0 * (double)st->interp_steps / (double)cycles : 0.0,
-			lockstep ? "; --lockstep sin diferencias" : "");
+			(unsigned long long)st->exec_calls, lockstep ? "; --lockstep sin diferencias" : "");
 	}
 	savefile_close(&save_file);
 	if (regs)

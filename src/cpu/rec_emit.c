@@ -1363,6 +1363,9 @@ static void emit_fpu(struct ctx *c, unsigned k)
 	c->sec = sec;
 }
 
+/* Conversiones y raíz de la FPU, CFC1/CTC1, LWL/LWR y compañía, MFC0. */
+#include "cpu/rec_emit_ext.h"
+
 static void emit_insn(struct ctx *c, unsigned k)
 {
 	const struct dec *d = &c->d[k];
@@ -1379,6 +1382,8 @@ static void emit_insn(struct ctx *c, unsigned k)
 		emit_exception(c, k, I_FUNCT(i) == 0x0C ? SALSA64_EXC_SYS : SALSA64_EXC_BP);
 		return;
 	}
+	if (emit_ext(c, k))
+		return;
 	switch (I_OP(i)) {
 	case 0x00: emit_special(c, i); return;
 	case 0x11:
@@ -1708,11 +1713,11 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	bool any_cop1 = false;
 	while (n < max && pa + 4 * n + 4 <= end) {
 		struct dec *d = &c->d[n];
-		decode(fetch(rec, pa + 4 * n), d);
+		decode_ext(rec, fetch(rec, pa + 4 * n), d);
 		if (is_branch(d)) {
 			if (n + 1 >= max || pa + 4 * n + 8 > end)
 				break;
-			decode(fetch(rec, pa + 4 * n + 4), &c->d[n + 1]);
+			decode_ext(rec, fetch(rec, pa + 4 * n + 4), &c->d[n + 1]);
 			if (c->d[n + 1].kind != K_NORMAL)
 				break;
 			n += 2;
@@ -1790,6 +1795,10 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 		if (c->has_branch && k == n - 2) {
 			emit_branch(c, k);
 			break;
+		}
+		if (emit_unaligned_pair(c, k, c->has_branch ? n - 2 : n)) {
+			k++;
+			continue;
 		}
 		emit_insn(c, k);
 		if (c->d[k].kind == K_END)
