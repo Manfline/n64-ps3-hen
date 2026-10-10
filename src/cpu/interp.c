@@ -34,6 +34,9 @@
  *     bucle recarga pc/next_pc/branch.
  *   - r0 nunca se escribe (vr4300_set_gpr), en vez de ponerlo en 0 después
  *     de cada instrucción y leerlo enseguida.
+ *   - Un solo despacho por instrucción: SPECIAL va por funct en la misma
+ *     tabla (SP(funct)). Lo frecuente de COP1 se resuelve en el bucle
+ *     (vr4300_cop1_fast, fpu.h).
  *   - Los switch se compilan con tablas absolutas (-mno-relative-jumptables
  *     en mk/ps3.mk): las relativas usan lwax, microcodificada en el PPE.
  */
@@ -56,6 +59,7 @@ struct flow {
 };
 
 #define SET(reg, v) vr4300_set_gpr(cpu, (reg), (v))
+#define SP(funct) (64 + (funct))  /* SPECIAL en la tabla de despacho de execute */
 
 #define REQUIRE64(cpu)                                   \
 	do {                                             \
@@ -150,131 +154,6 @@ static void op_divu64(struct salsa64_cpu *cpu, uint64_t a, uint64_t b)
 	} else {
 		cpu->lo = a / b;
 		cpu->hi = a % b;
-	}
-}
-
-/* ---- SPECIAL ------------------------------------------------------------- */
-
-HOT void op_special(struct salsa64_cpu *cpu, struct flow *f, uint32_t i)
-{
-	uint64_t *r = cpu->gpr;
-	unsigned rs = I_RS(i), rt = I_RT(i), rd = I_RD(i), sa = I_SA(i);
-
-	switch (I_FUNCT(i)) {
-	case 0x00: SET(rd, salsa64_sx32((uint32_t)r[rt] << sa)); return;                 /* SLL */
-	case 0x02: SET(rd, salsa64_sx32((uint32_t)r[rt] >> sa)); return;                 /* SRL */
-	case 0x03: SET(rd, salsa64_sx32((uint32_t)((int64_t)r[rt] >> sa))); return;      /* SRA */
-	case 0x04: SET(rd, salsa64_sx32((uint32_t)r[rt] << (r[rs] & 31))); return;       /* SLLV */
-	case 0x06: SET(rd, salsa64_sx32((uint32_t)r[rt] >> (r[rs] & 31))); return;       /* SRLV */
-	case 0x07: SET(rd, salsa64_sx32((uint32_t)((int64_t)r[rt] >> (r[rs] & 31)))); return; /* SRAV */
-	case 0x08: jump(f, r[rs]); return;                                                /* JR */
-	case 0x09: {                                                                      /* JALR */
-		uint64_t target = r[rs];
-		SET(rd, f->next_pc);
-		jump(f, target);
-		return;
-	}
-	case 0x0C: salsa64_vr4300_exception(cpu, SALSA64_EXC_SYS, 0); return;             /* SYSCALL */
-	case 0x0D: salsa64_vr4300_exception(cpu, SALSA64_EXC_BP, 0); return;              /* BREAK */
-	case 0x0F: return;                                                                /* SYNC */
-	case 0x10: SET(rd, cpu->hi); return;                                              /* MFHI */
-	case 0x11: cpu->hi = r[rs]; return;                                               /* MTHI */
-	case 0x12: SET(rd, cpu->lo); return;                                              /* MFLO */
-	case 0x13: cpu->lo = r[rs]; return;                                               /* MTLO */
-	case 0x14: REQUIRE64(cpu); SET(rd, r[rt] << (r[rs] & 63)); return;                /* DSLLV */
-	case 0x16: REQUIRE64(cpu); SET(rd, r[rt] >> (r[rs] & 63)); return;                /* DSRLV */
-	case 0x17: REQUIRE64(cpu); SET(rd, (uint64_t)((int64_t)r[rt] >> (r[rs] & 63))); return; /* DSRAV */
-	case 0x18: {                                                                      /* MULT */
-		/* El multiplicador toma rs con sus 64 bits y rt como entero de 35
-		 * bits con signo; con entradas que son extensión de signo de 32 bits
-		 * da lo mismo que 32 × 32 (nemu64-test, arithmetic/mul.rs). */
-		int64_t b = (int64_t)(r[rt] << 29) >> 29;
-		uint64_t p = r[rs] * (uint64_t)b;
-		cpu->lo = salsa64_sx32((uint32_t)p);
-		cpu->hi = salsa64_sx32((uint32_t)(p >> 32));
-		return;
-	}
-	case 0x19: {                                                                      /* MULTU */
-		uint64_t p = (uint64_t)(uint32_t)r[rs] * (uint32_t)r[rt];
-		cpu->lo = salsa64_sx32((uint32_t)p);
-		cpu->hi = salsa64_sx32((uint32_t)(p >> 32));
-		return;
-	}
-	case 0x1A: op_div32(cpu, r[rs], r[rt]); return;                                   /* DIV */
-	case 0x1B: op_divu32(cpu, r[rs], r[rt]); return;                                  /* DIVU */
-	case 0x1C: {                                                                      /* DMULT */
-		REQUIRE64(cpu);
-		__int128 p = (__int128)(int64_t)r[rs] * (int64_t)r[rt];
-		cpu->lo = (uint64_t)p;
-		cpu->hi = (uint64_t)((unsigned __int128)p >> 64);
-		return;
-	}
-	case 0x1D: {                                                                      /* DMULTU */
-		REQUIRE64(cpu);
-		unsigned __int128 p = (unsigned __int128)r[rs] * r[rt];
-		cpu->lo = (uint64_t)p;
-		cpu->hi = (uint64_t)(p >> 64);
-		return;
-	}
-	case 0x1E: REQUIRE64(cpu); op_div64(cpu, r[rs], r[rt]); return;                   /* DDIV */
-	case 0x1F: REQUIRE64(cpu); op_divu64(cpu, r[rs], r[rt]); return;                  /* DDIVU */
-	case 0x20: {                                                                      /* ADD */
-		uint32_t a = (uint32_t)r[rs], b = (uint32_t)r[rt], s = a + b;
-		if ((~(a ^ b) & (a ^ s)) >> 31)
-			salsa64_vr4300_exception(cpu, SALSA64_EXC_OV, 0);
-		else
-			SET(rd, salsa64_sx32(s));
-		return;
-	}
-	case 0x21: SET(rd, salsa64_sx32((uint32_t)r[rs] + (uint32_t)r[rt])); return;     /* ADDU */
-	case 0x22: {                                                                      /* SUB */
-		uint32_t a = (uint32_t)r[rs], b = (uint32_t)r[rt], d = a - b;
-		if (((a ^ b) & (a ^ d)) >> 31)
-			salsa64_vr4300_exception(cpu, SALSA64_EXC_OV, 0);
-		else
-			SET(rd, salsa64_sx32(d));
-		return;
-	}
-	case 0x23: SET(rd, salsa64_sx32((uint32_t)r[rs] - (uint32_t)r[rt])); return;     /* SUBU */
-	case 0x24: SET(rd, r[rs] & r[rt]); return;                                        /* AND */
-	case 0x25: SET(rd, r[rs] | r[rt]); return;                                        /* OR */
-	case 0x26: SET(rd, r[rs] ^ r[rt]); return;                                        /* XOR */
-	case 0x27: SET(rd, ~(r[rs] | r[rt])); return;                                     /* NOR */
-	case 0x2A: SET(rd, (int64_t)r[rs] < (int64_t)r[rt]); return;                      /* SLT */
-	case 0x2B: SET(rd, r[rs] < r[rt]); return;                                        /* SLTU */
-	case 0x2C: {                                                                      /* DADD */
-		REQUIRE64(cpu);
-		uint64_t a = r[rs], b = r[rt], s = a + b;
-		if ((~(a ^ b) & (a ^ s)) >> 63)
-			salsa64_vr4300_exception(cpu, SALSA64_EXC_OV, 0);
-		else
-			SET(rd, s);
-		return;
-	}
-	case 0x2D: REQUIRE64(cpu); SET(rd, r[rs] + r[rt]); return;                        /* DADDU */
-	case 0x2E: {                                                                      /* DSUB */
-		REQUIRE64(cpu);
-		uint64_t a = r[rs], b = r[rt], d = a - b;
-		if (((a ^ b) & (a ^ d)) >> 63)
-			salsa64_vr4300_exception(cpu, SALSA64_EXC_OV, 0);
-		else
-			SET(rd, d);
-		return;
-	}
-	case 0x2F: REQUIRE64(cpu); SET(rd, r[rs] - r[rt]); return;                        /* DSUBU */
-	case 0x30: trap_if(cpu, (int64_t)r[rs] >= (int64_t)r[rt]); return;                /* TGE */
-	case 0x31: trap_if(cpu, r[rs] >= r[rt]); return;                                  /* TGEU */
-	case 0x32: trap_if(cpu, (int64_t)r[rs] < (int64_t)r[rt]); return;                 /* TLT */
-	case 0x33: trap_if(cpu, r[rs] < r[rt]); return;                                   /* TLTU */
-	case 0x34: trap_if(cpu, r[rs] == r[rt]); return;                                  /* TEQ */
-	case 0x36: trap_if(cpu, r[rs] != r[rt]); return;                                  /* TNE */
-	case 0x38: REQUIRE64(cpu); SET(rd, r[rt] << sa); return;                          /* DSLL */
-	case 0x3A: REQUIRE64(cpu); SET(rd, r[rt] >> sa); return;                          /* DSRL */
-	case 0x3B: REQUIRE64(cpu); SET(rd, (uint64_t)((int64_t)r[rt] >> sa)); return;     /* DSRA */
-	case 0x3C: REQUIRE64(cpu); SET(rd, r[rt] << (sa + 32)); return;                   /* DSLL32 */
-	case 0x3E: REQUIRE64(cpu); SET(rd, r[rt] >> (sa + 32)); return;                   /* DSRL32 */
-	case 0x3F: REQUIRE64(cpu); SET(rd, (uint64_t)((int64_t)r[rt] >> (sa + 32))); return; /* DSRA32 */
-	default:   vr4300_reserved(cpu); return;
 	}
 }
 
@@ -402,16 +281,135 @@ static inline bool cop1_usable(struct salsa64_cpu *cpu)
 HOT void execute(struct salsa64_cpu *cpu, struct flow *f, uint32_t i)
 {
 	uint64_t *r = cpu->gpr;
-	unsigned rs = I_RS(i), rt = I_RT(i);
+	unsigned rs = I_RS(i), rt = I_RT(i), rd = I_RD(i), sa = I_SA(i);
 	uint32_t pa;
 #define VA (r[rs] + I_SIMM(i))  /* dirección efectiva de cargas y almacenamientos */
 
-	switch (I_OP(i)) {
-	case 0x00:
-		if (i == 0)  /* NOP (SLL r0, r0, 0): sin segundo despacho */
+	/* Un solo despacho: SPECIAL (op 0) va por funct en la misma tabla, en
+	 * SP(funct) = 64 + funct. Sin salto: la máscara vale 0x7F solo si op = 0. */
+	unsigned op = I_OP(i);
+	unsigned idx = op | (((op - 1u) >> 25) & (64u | I_FUNCT(i)));
+
+	switch (idx) {
+	/* ---- SPECIAL ---- */
+	case SP(0x00):                                                           /* SLL */
+		if (i == 0)  /* NOP (SLL r0, r0, 0), lo más común: nada que hacer */
 			return;
-		op_special(cpu, f, i);
+		SET(rd, salsa64_sx32((uint32_t)r[rt] << sa));
 		return;
+	case SP(0x02): SET(rd, salsa64_sx32((uint32_t)r[rt] >> sa)); return;                 /* SRL */
+	case SP(0x03): SET(rd, salsa64_sx32((uint32_t)((int64_t)r[rt] >> sa))); return;      /* SRA */
+	case SP(0x04): SET(rd, salsa64_sx32((uint32_t)r[rt] << (r[rs] & 31))); return;       /* SLLV */
+	case SP(0x06): SET(rd, salsa64_sx32((uint32_t)r[rt] >> (r[rs] & 31))); return;       /* SRLV */
+	case SP(0x07): SET(rd, salsa64_sx32((uint32_t)((int64_t)r[rt] >> (r[rs] & 31)))); return; /* SRAV */
+	case SP(0x08): jump(f, r[rs]); return;                                                /* JR */
+	case SP(0x09): {                                                                      /* JALR */
+		uint64_t target = r[rs];
+		SET(rd, f->next_pc);
+		jump(f, target);
+		return;
+	}
+	case SP(0x0C): salsa64_vr4300_exception(cpu, SALSA64_EXC_SYS, 0); return;             /* SYSCALL */
+	case SP(0x0D): salsa64_vr4300_exception(cpu, SALSA64_EXC_BP, 0); return;              /* BREAK */
+	case SP(0x0F): return;                                                                /* SYNC */
+	case SP(0x10): SET(rd, cpu->hi); return;                                              /* MFHI */
+	case SP(0x11): cpu->hi = r[rs]; return;                                               /* MTHI */
+	case SP(0x12): SET(rd, cpu->lo); return;                                              /* MFLO */
+	case SP(0x13): cpu->lo = r[rs]; return;                                               /* MTLO */
+	case SP(0x14): REQUIRE64(cpu); SET(rd, r[rt] << (r[rs] & 63)); return;                /* DSLLV */
+	case SP(0x16): REQUIRE64(cpu); SET(rd, r[rt] >> (r[rs] & 63)); return;                /* DSRLV */
+	case SP(0x17): REQUIRE64(cpu); SET(rd, (uint64_t)((int64_t)r[rt] >> (r[rs] & 63))); return; /* DSRAV */
+	case SP(0x18): {                                                                      /* MULT */
+		/* El multiplicador toma rs con sus 64 bits y rt como entero de 35
+		 * bits con signo; con entradas que son extensión de signo de 32 bits
+		 * da lo mismo que 32 × 32 (nemu64-test, arithmetic/mul.rs). */
+		int64_t b = (int64_t)(r[rt] << 29) >> 29;
+		uint64_t p = r[rs] * (uint64_t)b;
+		cpu->lo = salsa64_sx32((uint32_t)p);
+		cpu->hi = salsa64_sx32((uint32_t)(p >> 32));
+		return;
+	}
+	case SP(0x19): {                                                                      /* MULTU */
+		uint64_t p = (uint64_t)(uint32_t)r[rs] * (uint32_t)r[rt];
+		cpu->lo = salsa64_sx32((uint32_t)p);
+		cpu->hi = salsa64_sx32((uint32_t)(p >> 32));
+		return;
+	}
+	case SP(0x1A): op_div32(cpu, r[rs], r[rt]); return;                                   /* DIV */
+	case SP(0x1B): op_divu32(cpu, r[rs], r[rt]); return;                                  /* DIVU */
+	case SP(0x1C): {                                                                      /* DMULT */
+		REQUIRE64(cpu);
+		__int128 p = (__int128)(int64_t)r[rs] * (int64_t)r[rt];
+		cpu->lo = (uint64_t)p;
+		cpu->hi = (uint64_t)((unsigned __int128)p >> 64);
+		return;
+	}
+	case SP(0x1D): {                                                                      /* DMULTU */
+		REQUIRE64(cpu);
+		unsigned __int128 p = (unsigned __int128)r[rs] * r[rt];
+		cpu->lo = (uint64_t)p;
+		cpu->hi = (uint64_t)(p >> 64);
+		return;
+	}
+	case SP(0x1E): REQUIRE64(cpu); op_div64(cpu, r[rs], r[rt]); return;                   /* DDIV */
+	case SP(0x1F): REQUIRE64(cpu); op_divu64(cpu, r[rs], r[rt]); return;                  /* DDIVU */
+	case SP(0x20): {                                                                      /* ADD */
+		uint32_t a = (uint32_t)r[rs], b = (uint32_t)r[rt], s = a + b;
+		if ((~(a ^ b) & (a ^ s)) >> 31)
+			salsa64_vr4300_exception(cpu, SALSA64_EXC_OV, 0);
+		else
+			SET(rd, salsa64_sx32(s));
+		return;
+	}
+	case SP(0x21): SET(rd, salsa64_sx32((uint32_t)r[rs] + (uint32_t)r[rt])); return;     /* ADDU */
+	case SP(0x22): {                                                                      /* SUB */
+		uint32_t a = (uint32_t)r[rs], b = (uint32_t)r[rt], d = a - b;
+		if (((a ^ b) & (a ^ d)) >> 31)
+			salsa64_vr4300_exception(cpu, SALSA64_EXC_OV, 0);
+		else
+			SET(rd, salsa64_sx32(d));
+		return;
+	}
+	case SP(0x23): SET(rd, salsa64_sx32((uint32_t)r[rs] - (uint32_t)r[rt])); return;     /* SUBU */
+	case SP(0x24): SET(rd, r[rs] & r[rt]); return;                                        /* AND */
+	case SP(0x25): SET(rd, r[rs] | r[rt]); return;                                        /* OR */
+	case SP(0x26): SET(rd, r[rs] ^ r[rt]); return;                                        /* XOR */
+	case SP(0x27): SET(rd, ~(r[rs] | r[rt])); return;                                     /* NOR */
+	case SP(0x2A): SET(rd, (int64_t)r[rs] < (int64_t)r[rt]); return;                      /* SLT */
+	case SP(0x2B): SET(rd, r[rs] < r[rt]); return;                                        /* SLTU */
+	case SP(0x2C): {                                                                      /* DADD */
+		REQUIRE64(cpu);
+		uint64_t a = r[rs], b = r[rt], s = a + b;
+		if ((~(a ^ b) & (a ^ s)) >> 63)
+			salsa64_vr4300_exception(cpu, SALSA64_EXC_OV, 0);
+		else
+			SET(rd, s);
+		return;
+	}
+	case SP(0x2D): REQUIRE64(cpu); SET(rd, r[rs] + r[rt]); return;                        /* DADDU */
+	case SP(0x2E): {                                                                      /* DSUB */
+		REQUIRE64(cpu);
+		uint64_t a = r[rs], b = r[rt], d = a - b;
+		if (((a ^ b) & (a ^ d)) >> 63)
+			salsa64_vr4300_exception(cpu, SALSA64_EXC_OV, 0);
+		else
+			SET(rd, d);
+		return;
+	}
+	case SP(0x2F): REQUIRE64(cpu); SET(rd, r[rs] - r[rt]); return;                        /* DSUBU */
+	case SP(0x30): trap_if(cpu, (int64_t)r[rs] >= (int64_t)r[rt]); return;                /* TGE */
+	case SP(0x31): trap_if(cpu, r[rs] >= r[rt]); return;                                  /* TGEU */
+	case SP(0x32): trap_if(cpu, (int64_t)r[rs] < (int64_t)r[rt]); return;                 /* TLT */
+	case SP(0x33): trap_if(cpu, r[rs] < r[rt]); return;                                   /* TLTU */
+	case SP(0x34): trap_if(cpu, r[rs] == r[rt]); return;                                  /* TEQ */
+	case SP(0x36): trap_if(cpu, r[rs] != r[rt]); return;                                  /* TNE */
+	case SP(0x38): REQUIRE64(cpu); SET(rd, r[rt] << sa); return;                          /* DSLL */
+	case SP(0x3A): REQUIRE64(cpu); SET(rd, r[rt] >> sa); return;                          /* DSRL */
+	case SP(0x3B): REQUIRE64(cpu); SET(rd, (uint64_t)((int64_t)r[rt] >> sa)); return;     /* DSRA */
+	case SP(0x3C): REQUIRE64(cpu); SET(rd, r[rt] << (sa + 32)); return;                   /* DSLL32 */
+	case SP(0x3E): REQUIRE64(cpu); SET(rd, r[rt] >> (sa + 32)); return;                   /* DSRL32 */
+	case SP(0x3F): REQUIRE64(cpu); SET(rd, (uint64_t)((int64_t)r[rt] >> (sa + 32))); return; /* DSRA32 */
+	/* ---- Resto ---- */
 	case 0x01: op_regimm(cpu, f, i); return;
 	case 0x02:                                                               /* J */
 		jump(f, ((f->cur + 4) & ~0x0FFFFFFFull) | (uint64_t)I_TARGET(i) << 2);
@@ -580,7 +578,7 @@ HOT void execute(struct salsa64_cpu *cpu, struct flow *f, uint32_t i)
 		if (vr4300_vaddr(cpu, VA, 7, SALSA64_ACC_STORE, &pa))
 			vr4300_write64(cpu, pa, r[rt]);
 		return;
-	default:   vr4300_reserved(cpu); return;  /* COP3, 0x1C–0x1F, 0x33, 0x3B */
+	default:   vr4300_reserved(cpu); return;  /* COP3, 0x1C–0x1F, 0x33, 0x3B, funct de SPECIAL inexistentes */
 	}
 #undef VA
 }

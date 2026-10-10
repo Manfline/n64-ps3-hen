@@ -550,9 +550,10 @@ static uint64_t fz_rand(void)  /* xorshift64*: misma secuencia en todas las plat
 	return fz_state * 0x2545F4914F6CDD1Dull;
 }
 
-/* Operando: casi siempre normal con exponente en una franja (cancelaciones,
- * inexactos, bordes de desbordamiento y subdesbordamiento); a veces un valor
- * especial o bits al azar (NaN, infinito, desnormal). */
+/* Operando: casi siempre normal con exponente en una franja (centro, bordes
+ * de la franja segura del camino rápido, cerca de desbordamiento y de
+ * subdesbordamiento); a veces un valor especial o bits al azar (NaN,
+ * infinito, desnormal). */
 static uint64_t fz_operand(bool is_s)
 {
 	static const uint32_t special_s[] = {
@@ -564,8 +565,19 @@ static uint64_t fz_operand(bool is_s)
 		0x7FF0000000000000ull, 0x7FF8000000000000ull, 0x7FF7FFFFFFFFFFFFull,
 		0x0000000000000001ull, 0x3FF0000000000000ull, 0xBFF0000000000000ull,
 	};
+	/* Franjas de exponentes sesgados: {mínimo, ancho}. */
+	static const unsigned bands_s[][2] = {
+		{ 107, 41 }, { 107, 41 }, { 107, 41 }, { 107, 41 }, { 107, 41 },
+		{ 1, 40 }, { 214, 41 }, { 50, 40 }, { 165, 40 },     /* 67 y 187: bordes de la franja segura */
+		{ 1, 40 }, { 214, 41 }, { 50, 40 }, { 165, 40 }, { 107, 41 },
+	};
+	static const unsigned bands_d[][2] = {
+		{ 1003, 41 }, { 1003, 41 }, { 1003, 41 }, { 1003, 41 }, { 1003, 41 },
+		{ 1, 60 }, { 100, 150 }, { 1987, 60 }, { 560, 50 }, { 1440, 50 }, /* 583 y 1463: bordes */
+		{ 1, 60 }, { 100, 150 }, { 560, 50 }, { 1440, 50 },
+	};
 	uint64_t x = fz_rand(), sign = x >> 63, m = fz_rand();
-	unsigned kind = x & 15, e;
+	unsigned kind = x & 15;
 
 	if (kind == 0)
 		return is_s ? (uint32_t)m : m;
@@ -573,15 +585,12 @@ static uint64_t fz_operand(bool is_s)
 		return is_s ? special_s[m % (sizeof special_s / sizeof special_s[0])]
 			    : special_d[m % (sizeof special_d / sizeof special_d[0])];
 	if (is_s) {
-		e = kind < 10 ? 107 + (unsigned)(m % 41)          /* 2^-20..2^20 */
-		    : kind < 13 ? 1 + (unsigned)(m % 40)          /* cerca del mínimo */
-		    : 214 + (unsigned)(m % 41);                   /* cerca del máximo */
+		const unsigned *b = bands_s[kind - 2];
+		unsigned e = b[0] + (unsigned)(m % b[1]);
 		return sign << 31 | (uint64_t)e << 23 | (x >> 8 & 0x7FFFFF);
 	}
-	e = kind < 9 ? 1003 + (unsigned)(m % 41)
-	    : kind < 11 ? 1 + (unsigned)(m % 60)
-	    : kind < 13 ? 100 + (unsigned)(m % 150)               /* productos cerca de 2^-900 y 2^-1022 */
-	    : 1987 + (unsigned)(m % 60);
+	const unsigned *b = bands_d[kind - 2];
+	unsigned e = b[0] + (unsigned)(m % b[1]);
 	return sign << 63 | (uint64_t)e << 52 | (x >> 4 & 0xFFFFFFFFFFFFFull);
 }
 
@@ -589,31 +598,39 @@ static struct salsa64_cpu fz_full, fz_fast;
 
 static void fast_path_matches_full(void)
 {
-	static const unsigned functs[] = { 0x00, 0x01, 0x02, 0x03, 0x30, 0x32, 0x36, 0x3A, 0x3C, 0x3E };
+	static const unsigned functs[] = {
+		0x00, 0x01, 0x02, 0x03, 0x00, 0x01, 0x02, 0x03, 0x05, 0x06, 0x07,
+		0x30, 0x32, 0x36, 0x3A, 0x3C, 0x3E,
+	};
+	static const unsigned moves[] = { 0x00, 0x01, 0x02, 0x04, 0x05 };  /* MFC1 DMFC1 CFC1 MTC1 DMTC1 */
 	unsigned hits = 0, failed = 0;
 
-	for (unsigned n = 0; n < 20000; n++) {
-		bool is_s = fz_rand() & 1, fr = (fz_rand() & 3) != 0;
+	for (unsigned n = 0; n < 30000; n++) {
+		bool is_s = fz_rand() & 1, fr = (fz_rand() & 3) != 0, move = (fz_rand() & 7) == 0;
 		unsigned funct = functs[fz_rand() % (sizeof functs / sizeof functs[0])];
 		unsigned fs = fz_rand() & 31, ft = fz_rand() & 31, fd = fz_rand() & 31;
 		uint64_t r = fz_rand();
 		/* Redondeo al más cercano la mitad de las veces; habilitaciones y FS
-		 * de vez en cuando; banderas y C al azar. */
+		 * de vez en cuando; banderas, causas y C al azar. */
 		uint32_t fcr31 = ((r & 1) ? (uint32_t)(r >> 1) & 3 : 0) |
 				 ((uint32_t)(r >> 8) & 0x1F) << 2 |
 				 ((r >> 16 & 7) == 0 ? ((uint32_t)(r >> 20) & 0x1F) << 7 : 0) |
+				 ((r >> 26 & 3) == 0 ? ((uint32_t)(r >> 28) & 0x1F) << 12 : 0) |
 				 ((r >> 32 & 3) == 0 ? SALSA64_FCR31_FS : 0) |
 				 ((r >> 40 & 1) ? SALSA64_FCR31_C : 0);
 
 		t_set_status(fr ? T_STATUS : T_STATUS & ~SALSA64_ST_FR);
-		for (unsigned k = 0; k < 32; k++)
+		for (unsigned k = 0; k < 32; k++) {
 			CPU->fpr[k] = fz_rand();
+			R[k] = k ? fz_rand() : 0;
+		}
 		unsigned rs = fr ? fs : fs & ~1u;
 		uint64_t a = fz_operand(is_s), b = fz_operand(is_s);
 		CPU->fpr[rs] = is_s ? (CPU->fpr[rs] & 0xFFFFFFFF00000000ull) | a : a;
 		CPU->fpr[ft] = is_s ? (CPU->fpr[ft] & 0xFFFFFFFF00000000ull) | b : b;
 		CPU->fcr31 = fcr31;
-		uint32_t instr = FOP(is_s ? F_S : F_D, funct, fd, fs, ft);
+		uint32_t instr = move ? M_R(0x11, moves[fz_rand() % 5], ft, (fz_rand() & 1) ? fs : 31 * (fs & 1), 0, 0)
+				      : FOP(is_s ? F_S : F_D, funct, fd, fs, ft);
 
 		memcpy(&fz_full, CPU, sizeof fz_full);
 		memcpy(&fz_fast, CPU, sizeof fz_fast);
@@ -625,6 +642,7 @@ static void fast_path_matches_full(void)
 
 		t_checks++;
 		if (memcmp(fz_full.fpr, fz_fast.fpr, sizeof fz_full.fpr) != 0 ||
+		    memcmp(fz_full.gpr, fz_fast.gpr, sizeof fz_full.gpr) != 0 ||
 		    fz_full.fcr31 != fz_fast.fcr31 || fz_full.cause != fz_fast.cause ||
 		    fz_full.status != fz_fast.status || fz_full.pc != fz_fast.pc) {
 			if (failed++ < 5)
@@ -637,7 +655,7 @@ static void fast_path_matches_full(void)
 		}
 	}
 	/* Que el camino rápido de verdad se haya usado en buena parte. */
-	CHECK(hits > 4000);
+	CHECK(hits > 8000);
 }
 
 void t_suite_cop1(void)

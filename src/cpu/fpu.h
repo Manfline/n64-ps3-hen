@@ -62,17 +62,24 @@ FPU_INLINE int div_error(double a, double b, double r)
 /* ---- Camino rápido ------------------------------------------------------------ */
 
 /*
- * ADD, SUB, MUL, DIV y C.cond en S y D para el caso común: entradas cero o
- * normales, redondeo al más cercano, excepción I deshabilitada y resultado
- * normal o cero exacto. Da lo mismo que el camino completo (la prueba
- * fast_path_matches_full los compara); cualquier otro caso devuelve false y
- * va por salsa64_vr4300_cop1.
+ * Lo más frecuente de COP1 sin salir del bucle del intérprete: MFC1, DMFC1,
+ * CFC1, MTC1, DMTC1 y, en S y D, ADD/SUB/MUL/DIV, ABS, NEG, MOV y C.cond.
+ * Da lo mismo que el camino completo (la prueba fast_path_matches_full los
+ * compara); lo que no cubre devuelve false y va por salsa64_vr4300_cop1.
  *
- * Pensado para el PPE: los operandos van de cpu->fpr directo a registros de
- * punto flotante (lfs/lfd), el resultado vuelve igual y la clasificación se
- * hace con comparaciones de punto flotante. El camino completo trabaja con
- * los bits en registros enteros, y en el PPE cada paso entre unos y otros va
- * por memoria (load-hit-store, decenas de ciclos).
+ * Pensado para el PPE, que no tiene movimientos directos entre registros
+ * enteros y de punto flotante (van por memoria: load-hit-store, decenas de
+ * ciclos) y donde una comparación de punto flotante seguida de un salto
+ * espera toda la latencia de la FPU:
+ *   - Los bits de cada operando se cargan de cpu->fpr a un registro entero y,
+ *     aparte, el valor a uno de punto flotante (lfs/lfd); el resultado se
+ *     guarda desde el registro de punto flotante.
+ *   - La clasificación (cero, normal, NaN, desnormal) y C.cond se hacen con
+ *     los bits, en enteros.
+ *   - La aritmética solo toma entradas cero o con exponente en una franja
+ *     alrededor de 1 (fpu_fast_band): así ningún resultado desborda ni queda
+ *     diminuto y no hay que revisarlo. Queda una sola comparación de punto
+ *     flotante, la del flag I.
  */
 
 #if SALSA64_HOST_BIG_ENDIAN
@@ -95,47 +102,61 @@ FPU_INLINE double fpu_fast_load(const struct salsa64_cpu *cpu, bool is_s, unsign
 	return *(const fpu_alias_f64 *)&cpu->fpr[r];
 }
 
-/* Cero, o normal y finito. NaN, infinito y desnormales no lo son. */
-FPU_INLINE bool fpu_fast_input(double x, double minnorm, double max)
+/* Los mismos bits en un registro entero. volatile impide que GCC aproveche
+ * una carga para la otra pasando el valor entre registros (por la pila). */
+FPU_INLINE uint64_t fpu_fast_bits(const struct salsa64_cpu *cpu, bool is_s, unsigned r)
 {
-	double ax = __builtin_fabs(x);
-	return (ax >= minnorm && ax <= max) || x == 0;
+	if (is_s)
+		return *(const volatile fpu_alias_u32 *)((const char *)&cpu->fpr[r] + FPR_LO32);
+	return *(const volatile uint64_t *)&cpu->fpr[r];
 }
 
-FPU_INLINE bool vr4300_cop1_fast(struct salsa64_cpu *cpu, uint32_t i)
+/* Exponente sesgado; |valor| sin signo. */
+FPU_INLINE unsigned fpu_fast_exp(uint64_t bits, bool is_s)
 {
-	unsigned fmt = I_FMT(i), funct = I_FUNCT(i);
-	if ((fmt != FMT_S && fmt != FMT_D) || (funct > 0x03 && funct < 0x30) ||
-	    !(cpu->status & SALSA64_ST_CU1))
+	return is_s ? (unsigned)(bits >> 23) & 0xFF : (unsigned)(bits >> 52) & 0x7FF;
+}
+
+FPU_INLINE uint64_t fpu_fast_mag(uint64_t bits, bool is_s)
+{
+	return is_s ? bits & 0x7FFFFFFF : bits & 0x7FFFFFFFFFFFFFFFull;
+}
+
+/*
+ * ¿Cero, o exponente en la franja segura? S: 2^-60 ≤ |x| < 2^61; D: 2^-440 ≤
+ * |x| < 2^441. Con dos entradas así, suma y resta no desbordan y, si no dan
+ * cero, dan al menos 2^-83 (S) o 2^-492 (D) (múltiplos del último bit del
+ * menor); producto y cociente quedan entre 2^-121 y 2^122 (S) o 2^-881 y 2^882
+ * (D): por encima del mínimo normal y de TINY_RESULT.
+ */
+FPU_INLINE bool fpu_fast_band(uint64_t bits, bool is_s)
+{
+	unsigned e = fpu_fast_exp(bits, is_s);
+	return (is_s ? e - 67u <= 120u : e - 583u <= 880u) || fpu_fast_mag(bits, is_s) == 0;
+}
+
+/* Escribe las causas (ninguna, o I) sin almacenamiento redundante: la
+ * próxima instrucción de COP1 lee FCR31 y chocaría con él. */
+FPU_INLINE void fpu_fast_cause(struct salsa64_cpu *cpu, uint32_t fcr31, bool inexact)
+{
+	uint32_t f = (fcr31 & ~(0x3Fu << 12)) | (inexact ? FPE_I << 12 | FPE_I << 2 : 0);
+	if (f != fcr31)
+		cpu->fcr31 = f;
+}
+
+/* ADD, SUB, MUL y DIV con redondeo al más cercano e I deshabilitada. */
+FPU_INLINE bool fpu_fast_arith(struct salsa64_cpu *cpu, uint32_t i, bool is_s, unsigned fs, unsigned funct)
+{
+	uint32_t fcr31 = cpu->fcr31;
+	unsigned ft = I_FT(i);
+	if (fcr31 & 0x83)  /* RM ≠ 0 o I habilitada */
+		return false;
+	uint64_t ba = fpu_fast_bits(cpu, is_s, fs), bb = fpu_fast_bits(cpu, is_s, ft);
+	if (!fpu_fast_band(ba, is_s) || !fpu_fast_band(bb, is_s) ||
+	    (funct == 0x03 && fpu_fast_mag(bb, is_s) == 0))  /* entre cero: Z o V */
 		return false;
 
-	bool is_s = fmt == FMT_S;
-	unsigned fs = (cpu->status & SALSA64_ST_FR) ? I_FS(i) : I_FS(i) & ~1u;
-	double a = fpu_fast_load(cpu, is_s, fs), b = fpu_fast_load(cpu, is_s, I_FT(i));
-	uint32_t fcr31 = cpu->fcr31, f31 = fcr31 & ~(0x3Fu << 12);
-
-	if (funct >= 0x30) {  /* C.cond: sin NaN no hay causa */
-		if (a != a || b != b)
-			return false;
-		unsigned cond = funct & 15;
-		if (((cond & 4) && a < b) || ((cond & 2) && a == b))
-			f31 |= SALSA64_FCR31_C;
-		else
-			f31 &= ~SALSA64_FCR31_C;
-		if (f31 != fcr31)  /* sin almacenamiento redundante que la próxima lectura choque */
-			cpu->fcr31 = f31;
-		return true;
-	}
-
-	/* Redondeo al más cercano (RM = 0) e I deshabilitada (bit 7). */
-	if (fcr31 & 0x83)
-		return false;
-	double minnorm = is_s ? 0x1p-126 : 0x1p-1022;
-	double max = is_s ? 0x1.fffffep127 : 0x1.fffffffffffffp1023;
-	if (!fpu_fast_input(a, minnorm, max) || !fpu_fast_input(b, minnorm, max))
-		return false;
-
-	double r;
+	double a = fpu_fast_load(cpu, is_s, fs), b = fpu_fast_load(cpu, is_s, ft), r;
 	switch (funct) {
 	case 0x01:
 		b = -b;  /* SUB = ADD con -b */
@@ -147,42 +168,36 @@ FPU_INLINE bool vr4300_cop1_fast(struct salsa64_cpu *cpu, uint32_t i)
 		r = a * b;
 		break;
 	default:
-		if (b == 0)
-			return false;
 		r = a / b;
 		break;
 	}
 
-	/* Cero: exacto en la suma (de no ceros sale al menos el mínimo
-	 * desnormal); en producto y cociente solo con un factor o dividendo 0.
-	 * Si no, lejos del subdesbordamiento y de donde el fma pierde el residuo. */
-	if (r == 0) {
-		if ((funct == 0x02 && a != 0 && b != 0) || (funct == 0x03 && a != 0))
-			return false;
-	} else if (!(__builtin_fabs(r) >= (is_s ? 0x1p-125 : TINY_RESULT) &&
-		     __builtin_fabs(r) <= 0x1.fffffffffffffp1023)) {
-		return false;
-	}
-
+	/* Inexacto: el resultado redondeado no es el exacto. En la franja segura
+	 * los residuos (TwoSum, fma) son exactos. */
 	bool inexact;
 	float f = 0;
 	if (is_s) {
 		f = (float)r;
-		if (__builtin_isinf(f))
-			return false;
-		/* Si el float no es r, es inexacto; si lo es, depende de si r lo fue
-		 * (el producto de dos float es exacto en double). */
-		inexact = (double)f != r ||
-			  (funct <= 0x01 ? add_error(a, b, r) : funct == 0x03 ? div_error(a, b, r) : 0) != 0;
+		if ((double)f != r) {
+			inexact = true;
+		} else if (funct <= 0x01) {
+			/* Dos float con exponentes a 28 o menos de distancia (o un
+			 * cero) suman exacto en double. */
+			unsigned ea = fpu_fast_exp(ba, true), eb = fpu_fast_exp(bb, true);
+			unsigned gap = ea > eb ? ea - eb : eb - ea;
+			inexact = ea && eb && gap > 28 && add_error(a, b, r) != 0;
+		} else {
+			/* El producto de dos float es exacto en double. */
+			inexact = funct == 0x03 && __builtin_fma(-r, b, a) != 0;
+		}
+	} else if (funct <= 0x01) {
+		double bb2 = r - a;
+		inexact = (a - (r - bb2)) + (b - bb2) != 0;  /* TwoSum (add_error) */
 	} else {
-		inexact = (funct <= 0x01 ? add_error(a, b, r)
-			   : funct == 0x02 ? mul_error(a, b, r) : div_error(a, b, r)) != 0;
+		inexact = (funct == 0x02 ? __builtin_fma(a, b, -r) : __builtin_fma(-r, b, a)) != 0;
 	}
 
-	if (inexact)
-		f31 |= FPE_I << 12 | FPE_I << 2;
-	if (f31 != fcr31)
-		cpu->fcr31 = f31;
+	fpu_fast_cause(cpu, fcr31, inexact);
 	unsigned fd = I_FD(i);
 	if (is_s) {
 		*(fpu_alias_f32 *)((char *)&cpu->fpr[fd] + FPR_LO32) = f;
@@ -191,6 +206,97 @@ FPU_INLINE bool vr4300_cop1_fast(struct salsa64_cpu *cpu, uint32_t i)
 		*(fpu_alias_f64 *)&cpu->fpr[fd] = r;
 	}
 	return true;
+}
+
+/* ABS y NEG: cambian el bit de signo. NaN y desnormales van al camino
+ * completo (V o E); infinito, cero y normales son exactos y sin causa. */
+FPU_INLINE bool fpu_fast_abs_neg(struct salsa64_cpu *cpu, uint32_t i, bool is_s, unsigned fs, bool neg)
+{
+	uint64_t b = fpu_fast_bits(cpu, is_s, fs), sign = is_s ? 0x80000000u : 0x8000000000000000ull;
+	unsigned e = fpu_fast_exp(b, is_s), emax = is_s ? 0xFF : 0x7FF;
+	uint64_t mant = b & (is_s ? 0x7FFFFFull : 0xFFFFFFFFFFFFFull);
+	if (mant && (e == 0 || e == emax))
+		return false;
+	uint32_t fcr31 = cpu->fcr31;
+	fpu_fast_cause(cpu, fcr31, false);
+	cpu->fpr[I_FD(i)] = neg ? b ^ sign : b & ~sign;  /* en S, los 32 bits altos en 0 */
+	return true;
+}
+
+/* C.cond sin NaN: no hay causa y la comparación se hace en enteros. Signo y
+ * magnitud pasan a un entero ordenado (±0 dan 0); los desnormales comparan
+ * bien así. */
+FPU_INLINE bool fpu_fast_compare(struct salsa64_cpu *cpu, uint32_t i, bool is_s, unsigned fs, unsigned cond)
+{
+	uint64_t ba = fpu_fast_bits(cpu, is_s, fs), bb = fpu_fast_bits(cpu, is_s, I_FT(i));
+	uint64_t ma = fpu_fast_mag(ba, is_s), mb = fpu_fast_mag(bb, is_s);
+	uint64_t inf = is_s ? 0x7F800000u : 0x7FF0000000000000ull;
+	if (ma > inf || mb > inf)
+		return false;
+	int64_t sa, sb;  /* 0 o -1 según el signo */
+	if (is_s) {
+		sa = -(int64_t)(ba >> 31);
+		sb = -(int64_t)(bb >> 31);
+	} else {
+		sa = -(int64_t)(ba >> 63);
+		sb = -(int64_t)(bb >> 63);
+	}
+	int64_t ka = ((int64_t)ma ^ sa) - sa, kb = ((int64_t)mb ^ sb) - sb;
+	uint32_t fcr31 = cpu->fcr31, f = fcr31 & ~(0x3Fu << 12);
+	if (((cond & 4) && ka < kb) || ((cond & 2) && ka == kb))
+		f |= SALSA64_FCR31_C;
+	else
+		f &= ~SALSA64_FCR31_C;
+	if (f != fcr31)
+		cpu->fcr31 = f;
+	return true;
+}
+
+FPU_INLINE bool vr4300_cop1_fast(struct salsa64_cpu *cpu, uint32_t i)
+{
+	uint32_t status = cpu->status;
+	if (!(status & SALSA64_ST_CU1))
+		return false;
+	unsigned fmt = I_FMT(i), fs = I_FS(i), rt = I_RT(i);
+
+	if ((fmt & ~1u) == FMT_S) {  /* S o D */
+		bool is_s = fmt == FMT_S;
+		unsigned funct = I_FUNCT(i), fsr = (status & SALSA64_ST_FR) ? fs : fs & ~1u;
+		if (funct <= 0x03)
+			return fpu_fast_arith(cpu, i, is_s, fsr, funct);
+		if (funct >= 0x30)
+			return fpu_fast_compare(cpu, i, is_s, fsr, funct & 15);
+		if (funct == 0x06) {  /* MOV: 64 bits, sin causa */
+			cpu->fpr[I_FD(i)] = cpu->fpr[fsr];
+			return true;
+		}
+		if (funct == 0x05 || funct == 0x07)
+			return fpu_fast_abs_neg(cpu, i, is_s, fsr, funct == 0x07);
+		return false;
+	}
+	switch (fmt) {
+	case 0x00:                                                        /* MFC1 */
+		vr4300_set_gpr(cpu, rt, salsa64_sx32(vr4300_fpr_get32(cpu, fs)));
+		return true;
+	case 0x04:                                                        /* MTC1 */
+		vr4300_fpr_set32(cpu, fs, (uint32_t)cpu->gpr[rt]);
+		return true;
+	case 0x01:                                                        /* DMFC1 */
+		if (!cpu->allow64)
+			return false;
+		vr4300_set_gpr(cpu, rt, vr4300_fpr_get64(cpu, fs));
+		return true;
+	case 0x05:                                                        /* DMTC1 */
+		if (!cpu->allow64)
+			return false;
+		vr4300_fpr_set64(cpu, fs, cpu->gpr[rt]);
+		return true;
+	case 0x02:                                                        /* CFC1 */
+		vr4300_set_gpr(cpu, rt, salsa64_sx32(fs == 0 ? SALSA64_FCR0_VALUE : fs == 31 ? cpu->fcr31 : 0));
+		return true;
+	default:
+		return false;
+	}
 }
 
 #endif

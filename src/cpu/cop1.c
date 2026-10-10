@@ -34,9 +34,10 @@
  * float se deduce del double. Se compila con -ffp-contract=off: los únicos
  * fma son los explícitos. Nunca se cambia el modo de redondeo del host.
  *
- * El caso común (ADD/SUB/MUL/DIV y C.cond con entradas normales y redondeo
- * al más cercano) lo resuelve antes un camino rápido integrado en el bucle
- * del intérprete (vr4300_cop1_fast en fpu.h); lo demás llega aquí.
+ * Lo frecuente (MFC1, MTC1, CFC1, MOV, ABS, NEG, C.cond y ADD/SUB/MUL/DIV con
+ * entradas normales y redondeo al más cercano) lo resuelve antes un camino
+ * rápido integrado en el bucle del intérprete (vr4300_cop1_fast en fpu.h);
+ * lo demás llega aquí.
  */
 #include <string.h>
 
