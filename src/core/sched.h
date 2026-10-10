@@ -19,6 +19,8 @@ enum salsa64_event {
 	SALSA64_EV_COMPARE,  /* Count == Compare (COP0) */
 	SALSA64_EV_VI_INTR,  /* el VI llega a la línea de VI_V_INTR */
 	SALSA64_EV_VI_FIELD, /* fin de un campo de video */
+	SALSA64_EV_SP_TASK,  /* termina la tarea del RSP en curso */
+	SALSA64_EV_DP_SYNC,  /* el RDP termina (G_RDPFULLSYNC): interrupción DP */
 	SALSA64_EV_MAX
 };
 
