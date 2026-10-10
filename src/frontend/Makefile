@@ -2,7 +2,7 @@
 PROGRAM := salsa64
 TITLE   := Salsa64
 APPID   := SLSA00064
-SRCS    := main.c padmap.c replay.c savefile.c screenshot.c selftest.c selftest_gfx.c
+SRCS    := main.c pacer.c padmap.c replay.c savefile.c screenshot.c selftest.c selftest_gfx.c
 
 R       := ../..
 COMMON  := src/platform/ps3/log.c src/platform/ps3/gfx_spu.c src/rdp/rdp.c \

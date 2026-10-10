@@ -92,6 +92,7 @@ int salsa64_unit_run(void (*print)(const char *line))
 		{ "save", t_suite_save },
 		{ "rsp", t_suite_rsp },
 		{ "gfx", t_suite_gfx },
+		{ "pacer", t_suite_pacer },
 	};
 	char line[160];
 

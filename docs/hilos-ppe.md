@@ -37,6 +37,35 @@ Un solo productor y un solo consumidor por cola; las barreras son
 | Salida | `running` (presentación lo pone en 0: START + SELECT, «Salir del juego», fin de la prueba automática); `emu_done` (emulación lo pone al terminar su bucle) | ambos |
 | Log | `salsa64_log` con un lwmutex alrededor de la línea (`src/platform/ps3/log.c`) | ambos |
 
+## Ritmo: la emulación al paso de la tele emulada
+
+Con un solo hilo, el flip en vsync frenaba a la emulación; ahora no la
+frena nada, y con el recompilador (Fase 3) los juegos ligeros irían más
+rápido que la consola real. `src/frontend/pacer.c` (pieza aparte,
+portable, con pruebas en `tests/unit/test_pacer.c`) pone el ritmo en el
+hilo de emulación:
+
+- La referencia es la hora a la que debe empezar el próximo campo. Antes
+  de emular un campo, si la hora no llegó, el hilo duerme hasta ella
+  (`sysUsleep`; nunca espera activa); si ya pasó, no espera.
+- Después de cada campo la referencia avanza lo que duró el campo en
+  ciclos del VR4300 (32/3 ns por ciclo, sin perder el resto): el ritmo
+  medio es exacto (NTSC 59,83 campos/s, PAL 49,92; campos de 262 y 263
+  líneas con su duración propia) aunque cada espera tenga jitter.
+- **Sin deuda:** si el atraso pasa de `PACER_MAX_BEHIND_NS` (~4 campos),
+  la referencia se reinicia a ahora. Un tirón no se «recupera» corriendo
+  rápido después; cada reinicio se cuenta (`reinicios` en el log).
+- La presentación sigue saltando campos como antes (si alguna vez la
+  emulación llega adelantada a la cola, se muestra el más nuevo).
+- `SALSA64_DATA_DIR/turbo` presente: sin límite (para medir el máximo).
+  La medición A/B de vitest corre siempre sin límite.
+
+Punto de enganche para el audio: la función de dormir es de quien llama
+(se puede cambiar por una espera al llenado del búfer de audio), y
+`pacer_nudge` mueve la referencia unos ns para un control fino (corregir
+la deriva entre el reloj y el audio, o ajustar el remuestreo). Si el
+audio prefiere marcar el ritmo él solo, desactiva el pacer.
+
 ## Si un hilo va más rápido que el otro
 
 - **Emulación más rápida que la tele** (futuro recompilador, o ya con la

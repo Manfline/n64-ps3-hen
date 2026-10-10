@@ -28,6 +28,11 @@ Hecho (rama `musing-mcclintock-6b5e2c`; diseño en docs/hilos-ppe.md):
 - Lugar para el audio marcado con `audio_out:` en main.c (inicio, cada
   campo presentado, cierre; y `emu_thread` si necesita el hilo de
   emulación).
+- Ritmo (`src/frontend/pacer.c`, pedido en main): cada
+  campo a la hora de la tele emulada con el reloj real, sin acumular
+  deuda; `SALSA64_DATA_DIR/turbo` lo quita para medir el máximo; la
+  medición A/B de vitest va sin límite. Enganche para que el audio marque
+  el ritmo (`sleep` reemplazable, `pacer_nudge`). 5 pruebas unitarias.
 
 Mediciones en la PS3: docs/perf-log.md, «Dos hilos en el PPE».
 

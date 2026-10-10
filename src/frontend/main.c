@@ -18,7 +18,10 @@
  *                 volcados, y decide la salida.
  *
  * Si la emulación va más rápida que la tele se presenta el campo más nuevo y
- * los demás se saltan: la emulación nunca espera al vsync.
+ * los demás se saltan: la emulación nunca espera al vsync. Lo que la frena
+ * es el ritmo de la tele emulada (pacer.c: cada campo a su hora, sin
+ * acumular deuda); con SALSA64_DATA_DIR/turbo presente corre al máximo
+ * (para medir). La medición A/B de vitest corre siempre al máximo.
  *
  * ROM: si existe SALSA64_DATA_DIR/embedded con "vitest" o "gfxtest", esa
  * ROM de prueba embebida (o con "file:<nombre>", ese archivo de
@@ -75,6 +78,7 @@
 
 #include "core/boot.h"
 #include "gfxtest_rom_bin.h"
+#include "pacer.h"
 #include "padmap.h"
 #include "platform/ps3/autotest.h"
 #include "platform/ps3/gfx_spu.h"
@@ -97,6 +101,7 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define PADS_CFG_MAX 4096
 #define EMBED_PATH   SALSA64_DATA_DIR "/embedded"
 #define GFX_PPE_PATH SALSA64_DATA_DIR "/gfx_ppe"
+#define TURBO_PATH   SALSA64_DATA_DIR "/turbo"
 #define ROM_MAX      (64u << 20)
 #define FB_MAX_W     640
 #define FB_MAX_H     576
@@ -125,6 +130,13 @@ static struct salsa64_gfx_spu gfx_spu;
 static struct salsa64_gfx_sync gfx_ppe;
 static struct gfx_state gfx_ppe_state;
 static sys_sem_t wake_sem;  /* la emulación despierta a la presentación */
+static struct pacer pacer;  /* ritmo de la tele emulada (hilo de emulación) */
+
+static void pacer_sleep(void *ctx, uint64_t us)
+{
+	(void)ctx;
+	sysUsleep((u32)us);
+}
 
 static inline void lwsync(void) { __asm__ volatile("lwsync" ::: "memory"); }
 
@@ -206,7 +218,7 @@ static void pads_apply(void)
 
 /* Contadores del hilo de emulación; presentación los lee cada 5 s. */
 static struct {
-	volatile uint64_t us_emu, us_copy;
+	volatile uint64_t us_emu, us_copy, us_pace;
 	volatile uint32_t fields, dropped, no_slot;
 } emu_stats;
 
@@ -574,8 +586,16 @@ static void emu_thread(void *arg)
 	while (running) {
 		pads_apply();
 		uint64_t t0 = sysGetSystemTime();
-		salsa64_n64_run_field(&n64);
+		if (bench.stage != 1 && bench.stage != 2) {
+			/* Al ritmo de la tele emulada (la medición A/B va al máximo). */
+			pacer_wait(&pacer, t0);
+			uint64_t tp = sysGetSystemTime();
+			emu_stats.us_pace += tp - t0;
+			t0 = tp;
+		}
+		uint64_t cycles = salsa64_n64_run_field(&n64);
 		uint64_t t1 = sysGetSystemTime();
+		pacer_advance(&pacer, cycles);
 		savefile_stage(&save_file, t1);
 		post_field();
 		/* audio_out: si el audio necesita este hilo (fin de cada tarea
@@ -719,7 +739,7 @@ static void drain(uint64_t now, int present)
 /* Estadísticas de los dos hilos, cada STATS_US. */
 static void stats(uint64_t now, int gfx_on_spu, const struct salsa64_boot_info *info)
 {
-	static uint64_t t_stats, us_emu0, us_copy0, cyc0, idle0;
+	static uint64_t t_stats, us_emu0, us_copy0, us_pace0, cyc0, idle0;
 	static uint32_t fields0;
 	static struct salsa64_rdp_stats rdp0;
 	static uint32_t gfx_waits0;
@@ -737,14 +757,16 @@ static void stats(uint64_t now, int gfx_on_spu, const struct salsa64_boot_info *
 	 * alineadas, una línea de estadísticas. */
 	uint32_t fields = emu_stats.fields - fields0;
 	uint64_t us_emu = emu_stats.us_emu - us_emu0, us_copy = emu_stats.us_copy - us_copy0;
+	uint64_t us_pace = emu_stats.us_pace - us_pace0;
 	uint64_t cyc = n64.cpu.cycles - cyc0, idle = n64.cpu.idle_cycles - idle0;
 	salsa64_log("%.1f campos/s (%.0f %% de %s), %.1f MIPS, %.0f %% en bucles de espera; "
-		    "emulación %.1f ms por campo (copia del VI %.2f); presentados %u (%.1f ms + flip %.1f ms "
-		    "cada uno), %u saltados, %u descartados, %u sin imagen, %u del RSX",
+		    "emulación %.1f ms por campo (copia del VI %.2f), ritmo %.1f ms (%u reinicios); presentados %u "
+		    "(%.1f ms + flip %.1f ms cada uno), %u saltados, %u descartados, %u sin imagen, %u del RSX",
 		    fields * 1e6 / dt, fields * 1e6 / dt * 100.0 * n64.bus.vi.field_cycles / 93750000.0,
 		    info->tv == SALSA64_TV_PAL ? "PAL" : "NTSC", (double)(cyc - idle) / dt,
 		    cyc ? 100.0 * idle / cyc : 0.0, fields ? us_emu / 1000.0 / fields : 0.0,
-		    fields ? us_copy / 1000.0 / fields : 0.0, pres.presented,
+		    fields ? us_copy / 1000.0 / fields : 0.0, fields ? us_pace / 1000.0 / fields : 0.0,
+		    pacer.resets, pres.presented,
 		    pres.presented ? pres.us_present / 1000.0 / pres.presented : 0.0,
 		    pres.presented ? pres.us_flip / 1000.0 / pres.presented : 0.0, pres.skipped,
 		    emu_stats.dropped, pres.blank, pres.rsx_frames);
@@ -789,6 +811,7 @@ static void stats(uint64_t now, int gfx_on_spu, const struct salsa64_boot_info *
 	fields0 = emu_stats.fields;
 	us_emu0 = emu_stats.us_emu;
 	us_copy0 = emu_stats.us_copy;
+	us_pace0 = emu_stats.us_pace;
 	cyc0 = n64.cpu.cycles;
 	idle0 = n64.cpu.idle_cycles;
 	pres.us_present = pres.us_flip = 0;
@@ -906,6 +929,8 @@ int main(void)
 	}
 	/* El puerto 1 con control neutro desde el primer campo. */
 	update_pads();
+	pacer_init(&pacer, !file_exists(TURBO_PATH), pacer_sleep, NULL);
+	salsa64_log("ritmo: %s", pacer.enabled ? "el de la tele emulada (cada campo a su hora)" : "sin límite (turbo)");
 
 	/* El hilo de emulación. */
 	sys_sem_attr_t sem_attr = { SYS_SEM_ATTR_PROTOCOL, SYS_SEM_ATTR_PSHARED, 0, 0, 0, "wake" };
