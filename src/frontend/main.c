@@ -108,6 +108,7 @@
 #include "padmap.h"
 #include "platform/ps3/autotest.h"
 #include "platform/ps3/gfx_spu.h"
+#include "platform/ps3/rsp_spu.h"
 #include "platform/ps3/log.h"
 #include "platform/ps3/rec_cache.h"
 #include "rdp/rdp.h"
@@ -130,6 +131,7 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define EMBED_PATH   SALSA64_DATA_DIR "/embedded"
 #define GFX_PPE_PATH SALSA64_DATA_DIR "/gfx_ppe"
 #define TURBO_PATH   SALSA64_DATA_DIR "/turbo"
+#define LLE_PATH     SALSA64_DATA_DIR "/lle"
 #define SHOTS_PATH   SALSA64_DATA_DIR "/capturas"
 #define ROM_MAX      (64u << 20)
 #define FB_MAX_W     640
@@ -161,6 +163,11 @@ static int audiotest_on;  /* audiotest */
 static struct salsa64_gfx_spu gfx_spu;
 static struct salsa64_gfx_sync gfx_ppe;
 static struct gfx_state gfx_ppe_state;
+/* RSP a bajo nivel (Fase 6): con SALSA64_DATA_DIR/lle presente, el
+ * microcódigo real corre en un SPE para lo que no tiene HLE ("auto") o
+ * para todo ("all"); el RDP lo consume gfx_ppe en el PPE. */
+static struct salsa64_rsp_spu rsp_spu;
+static enum salsa64_lle_mode lle_mode;
 static sys_sem_t wake_sem;  /* la emulación despierta a la presentación */
 static struct pacer pacer;  /* ritmo de la tele emulada (hilo de emulación) */
 
@@ -547,6 +554,20 @@ static uint8_t *load_rom(uint32_t *size, const char **source)
 	return embedded(gfxtest_rom_bin, gfxtest_rom_bin_size, size);
 }
 
+/* SALSA64_DATA_DIR/lle: ausente = sin LLE; "all" = todo el microcódigo;
+ * cualquier otra cosa = solo lo que no tiene HLE. */
+static enum salsa64_lle_mode lle_config(void)
+{
+	FILE *f = fopen(LLE_PATH, "r");
+	if (!f)
+		return SALSA64_LLE_OFF;
+	char word[16] = "";
+	if (fscanf(f, "%15s", word) != 1)
+		word[0] = '\0';
+	fclose(f);
+	return strcmp(word, "all") == 0 ? SALSA64_LLE_ALL : SALSA64_LLE_AUTO;
+}
+
 static int file_exists(const char *path)
 {
 	FILE *f = fopen(path, "r");
@@ -931,6 +952,29 @@ static void stats(uint64_t now, int gfx_on_spu, const struct salsa64_boot_info *
 				    (gfx_spu.t_load - gfx_load0) * k);
 		}
 	}
+	if (lle_mode != SALSA64_LLE_OFF) {
+		static uint32_t lle_tasks0, lle_jobs0, lle_polls0;
+		static uint64_t lle_instr0, lle_ticks0, lle_wait0, lle_sleep0;
+		uint32_t t = rsp_spu.tasks - lle_tasks0;
+		if (t) {
+			uint64_t instr = rsp_spu.instructions - lle_instr0, ticks = rsp_spu.spu_ticks - lle_ticks0;
+			double us = ticks * 1e6 / spukit_tick_hz();
+			salsa64_log("rsp lle: %u tareas (%u trabajos), %.0f instrucciones por tarea, %.2f ms en el SPE "
+				    "por tarea, %.1f ns por instrucción (%.1f MIPS; el RSP real ~62), esperando %.2f ms, "
+				    "%.1f sondeos y %.2f ms dormida por tarea, %u interrupciones, %u tramos del RDP",
+				    t, rsp_spu.jobs - lle_jobs0, (double)instr / t, us / 1e3 / t,
+				    instr ? us * 1e3 / instr : 0.0, us ? instr / us : 0.0,
+				    (rsp_spu.wait_us - lle_wait0) / 1e3 / t, (double)(rsp_spu.polls - lle_polls0) / t,
+				    (rsp_spu.sleep_us - lle_sleep0) / 1e3 / t, rsp_spu.irqs, rsp_spu.dpc_entries);
+		}
+		lle_tasks0 = rsp_spu.tasks;
+		lle_jobs0 = rsp_spu.jobs;
+		lle_polls0 = rsp_spu.polls;
+		lle_instr0 = rsp_spu.instructions;
+		lle_ticks0 = rsp_spu.spu_ticks;
+		lle_wait0 = rsp_spu.wait_us;
+		lle_sleep0 = rsp_spu.sleep_us;
+	}
 	if (use_rec) {
 		const struct salsa64_rec_stats *st = &rec.stats;
 		salsa64_log("recompilador: %llu bloques (%llu fuera de KSEG0), %u KB de caché, %llu entradas, "
@@ -1041,6 +1085,22 @@ int main(void)
 	salsa64_log("HLE gráfica en %s", gfx_on_spu ? "el SPE" : "el PPE");
 	/* audio_out: inicio (HLE en el SPE 1, sumidero del AI, puerto de audio). */
 	audio_out_init(&n64);
+	/* RSP a bajo nivel en otro SPE. */
+	lle_mode = lle_config();
+	if (lle_mode != SALSA64_LLE_OFF) {
+		spukit_init(6);
+		if ((rc = salsa64_rsp_spu_init(&rsp_spu, &n64.bus)) != 0) {
+			salsa64_log("rsp lle: no arrancó el SPE del microcódigo (%d): sin LLE", rc);
+			lle_mode = SALSA64_LLE_OFF;
+		} else {
+			if (gfx_on_spu)
+				salsa64_gfx_sync_init(&gfx_ppe, &gfx_ppe_state, &n64.bus, &front_sink);
+			salsa64_rsp_set_dpc(&n64.bus, &gfx_ppe.dpc);
+			salsa64_rsp_set_lle(&n64.bus, &rsp_spu.backend, lle_mode);
+			salsa64_log("rsp lle: microcódigo real en un SPE para %s; el RDP en el PPE",
+				    lle_mode == SALSA64_LLE_ALL ? "todas las tareas" : "lo que no tiene HLE");
+		}
+	}
 
 	salsa64_bus_set_rom(&n64.bus, rom, rom_size);
 	struct salsa64_boot_info info;
@@ -1146,6 +1206,14 @@ int main(void)
 	/* audio_out: cierre (con el hilo de emulación ya terminado). */
 	audio_out_shutdown();
 	salsa64_rsp_set_gfx(&n64.bus, NULL);  /* espera la tarea en vuelo */
+	if (lle_mode != SALSA64_LLE_OFF) {
+		salsa64_rsp_set_lle(&n64.bus, NULL, SALSA64_LLE_OFF);
+		salsa64_rsp_set_dpc(&n64.bus, NULL);
+		salsa64_log("rsp lle: %u tareas, %u trabajos, %llu instrucciones (la tarea más larga %u), %u fallidos, "
+			    "%u tramos del RDP (%u perdidos); SPE detenido (salida %d)", rsp_spu.tasks, rsp_spu.jobs,
+			    (unsigned long long)rsp_spu.instructions, rsp_spu.task_max, rsp_spu.failed,
+			    rsp_spu.dpc_entries, rsp_spu.dpc_lost, salsa64_rsp_spu_shutdown(&rsp_spu));
+	}
 	if (gfx_on_spu)
 		salsa64_gfx_spu_shutdown(&gfx_spu);
 	/* Después de la tarea en vuelo: su fin llama a front_done → wake(). */

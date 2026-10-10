@@ -1,5 +1,56 @@
 # Estado
 
+## 2026-10-10 — Fase 6: prototipo de LLE del RSP (microcódigo real) en host y SPE
+
+Hecho (rama `nervous-lewin-ae6137`, desde main 3270538; sin
+integrar; diseño y mediciones en docs/rsp-lle.md):
+- **Intérprete portable del RSP** (`src/rsp/lle/`: escalar, COP0, unidad
+  vectorial completa con el acumulador de 48 bits y VCO/VCC/VCE, recíprocos
+  por tabla, todas las cargas/almacenamientos vectoriales). Semántica de
+  los casos raros de ares (ISC, registrado en THIRD_PARTY.md). Mismo código
+  en host, PPE y SPE, sin `#ifdef` de orden de bytes.
+- **nemu64-test con `--lle`: fallan 136 de 4637 (97 %) frente a 433 (90 %)
+  sin LLE. Las 214 pruebas «RSP …» pasan todas**; quedan 4 «RDP STATUS»
+  (el RDP no escribe el framebuffer en la RDRAM). Sin regresiones; 5
+  mejoras en el camino HLE (pares de bits de SP_STATUS, DPC_START/END).
+  `tools/test-roms.sh` corre nemu64 dos veces (líneas base
+  `nemu64-test.fallas`, 289 nombres, y `nemu64-test-lle.fallas`, 71).
+- **Enganche** (`rsp.c`: backend `salsa64_lle_backend`, modos
+  `off/auto/all`; `sp.c`: sincronía, SP_STATUS atómico, DPC con semántica
+  real) y **RDP a bajo nivel** (`src/rsp/gfx/dpc.c`: los comandos crudos
+  de DPC_START..END, también por xbus, van a `gfx_rdp_command`/
+  `gfx_rdp_triangle`, el camino de triángulos crudos existente).
+- **Host**: `salsa64-run --lle[=auto|all]`, `--lle-speed`,
+  `--lle-check-audio` (cada tarea de audio también en la HLE sobre una
+  copia de la RDRAM, comparando lo escrito). SM64: el Fast3D real corre y
+  el título con la cara de Mario sale igual que en HLE. Zelda: el nead
+  real suena (211 M instrucciones en 16 s); las primeras 30 tareas de
+  audio idénticas a la HLE byte a byte, y desde el primer sonido difiere
+  solo FILTER, donde mupen64plus-rsp-hle promedia las tablas (`>> 1`) y el
+  microcódigo real no → **la HLE de FILTER probablemente va a la mitad**;
+  confirmar de oído.
+- **SPE** (`src/spu/rsp/`, `src/platform/ps3/rsp_spu.c`): trabajo de
+  spukit con DMEM/IMEM en el local store, SP_STATUS y semáforo por DMA
+  atómico (getllar/putllc) contra los `__atomic_*` del PPE, DMA del SP
+  entre la RDRAM y el local store, registros del DP en el SPE con captura
+  de los comandos xbus para que el PPE los reproduzca (`salsa64_dp_submit`),
+  continuaciones cada 200 000 instrucciones. Frontend: archivo
+  `SALSA64_DATA_DIR/lle` con `auto` o `all`; líneas «rsp lle:» en el log.
+- 12 pruebas unitarias nuevas (297 en total).
+- Medido en el host: 12,5 ns por instrucción del RSP (docs/perf-log.md).
+
+Pendiente:
+- [ ] **PS3**: paquete «Salsa64 LLE» (SLSA00082) con `lle` = `all` y Zelda
+      u otro juego: que arranque, que suene, y la línea «rsp lle:» (ns por
+      instrucción en el SPE); anotar en docs/perf-log.md y rsp-lle.md.
+- [ ] Confirmar de oído FILTER (HLE a la mitad vs microcódigo real).
+- [ ] Comparar la imagen de Zelda en LLE con la HLE (host, `--gfx-frame`).
+- [ ] Recompilador RSP → SPU (plan en docs/rsp-lle.md) para pasar de ~0,5×
+      a 5–10× el RSP real; mover el consumidor del RDP al SPE.
+- [ ] Homebrew de libdragon (rspq/rdpq) como prueba sin HLE.
+- [ ] Limitaciones del SPE: escrituras del CPU en DMEM/IMEM durante una
+      tarea, limpiar la interrupción del SP desde el microcódigo.
+
 ## 2026-10-10 — F3D (Super Mario 64) y F3DEX 1.x
 
 Hecho (rama `lucid-pare-4f93fb`, con main traído hasta f698afe; sin

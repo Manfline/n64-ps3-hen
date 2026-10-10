@@ -12,7 +12,6 @@ MI Repeat: SD
 MI Repeat: SH
 MI Repeat: SW
 MI Repeat: Wrap2KiB
-RDP START & END REG (masking)
 RDP STATUS: Flags during a run
 RDP STATUS: Run from DMEM (xbus)
 RDP STATUS: Run from DMEM (xbus) (end of dmem)
@@ -105,7 +104,6 @@ RSP SRLV
 RSP SRLV (where target=shift amount)
 RSP SRV
 RSP SSV
-RSP STATUS: start-valid
 RSP STV
 RSP SUB
 RSP SUBU
@@ -235,9 +233,6 @@ SP Register Read Access From RSP
 SP Semaphore Register (CPU and RSP)
 SP Semaphore Register (RSP only)
 SP Set/Clear Halt
-SP Set/Clear Interrupt
-SP Set/Clear Interrupt on Break
-SP Set/Clear Signal
 SP halt itself through Status.halt
 cache: Cache write unused bits
 cache: Conflicting CacheLineIndex vs Ptag

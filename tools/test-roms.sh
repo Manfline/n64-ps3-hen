@@ -12,10 +12,13 @@
 # su tono (build/audiotest.wav).
 #
 # La lista de pruebas de nemu64-test que fallan se compara con la línea base
-# tests/roms/nemu64-test.fallas (lo que falta emular: RSP, cachés, bus PI…).
-# Una falla nueva es una regresión y hace fallar el script; una que deja de
-# fallar se avisa para actualizar la línea base:
+# tests/roms/nemu64-test.fallas (lo que falta emular: RSP sin LLE, cachés,
+# bus PI…). Una falla nueva es una regresión y hace fallar el script; una que
+# deja de fallar se avisa para actualizar la línea base:
 #   tools/test-roms.sh --actualizar
+# nemu64-test corre dos veces: con la HLE (línea base de arriba) y con el
+# RSP a bajo nivel (--lle; línea base tests/roms/nemu64-test-lle.fallas, sin
+# las pruebas del RSP).
 set -u
 cd "$(dirname "$0")/.."
 ROM=tests/roms/homebrew/nemu64-test.z64
@@ -42,29 +45,46 @@ rc=$?
 summary=$(grep 'success rate)' "$LOG" | tail -1)
 grep "^Test '" "$LOG" | sed "s/^Test '\([^']*\)'.*/\1/" | LC_ALL=C sort -u >"$NOW"
 
+# Lo mismo con el RSP a bajo nivel.
+LBASE=tests/roms/nemu64-test-lle.fallas
+LLOG=build/logs/nemu64-test-lle.run.log
+LNOW=build/logs/nemu64-test-lle.fallas
+tools/build.sh --sh "ASAN_OPTIONS=detect_leaks=0 build/host/salsa64-run -c 4000000000 --lle \
+	-u 'success rate)' -f 'Exception storm' -f 'panicked at' $ROM 2>&1" >"$LLOG" 2>&1
+lrc=$?
+lsummary=$(grep 'success rate)' "$LLOG" | tail -1)
+grep "^Test '" "$LLOG" | sed "s/^Test '\([^']*\)'.*/\1/" | LC_ALL=C sort -u >"$LNOW"
+
 if [ "${1:-}" = "--actualizar" ]; then
 	[ $rc -eq 0 ] || { echo "nemu64-test no terminó (código $rc, $LOG)" >&2; exit 1; }
+	[ $lrc -eq 0 ] || { echo "nemu64-test --lle no terminó (código $lrc, $LLOG)" >&2; exit 1; }
 	cp "$NOW" "$BASE"
-	echo "línea base actualizada: $(wc -l <"$BASE" | tr -d ' ') pruebas con fallas"
+	cp "$LNOW" "$LBASE"
+	echo "línea base actualizada: $(wc -l <"$BASE" | tr -d ' ') pruebas con fallas; con --lle $(wc -l <"$LBASE" | tr -d ' ')"
 	echo "$summary"
+	echo "$lsummary"
 	exit 0
 fi
 
-printf '%-12s %s\n' nemu64-test "${summary:-sin resumen (código $rc, $LOG)}"
-grep '^salsa64-run:' "$LOG" | tail -1 | sed 's/^/             /'
 fail=0
-[ $rc -eq 0 ] || fail=1
-new=$(LC_ALL=C comm -13 "$BASE" "$NOW")
-gone=$(LC_ALL=C comm -23 "$BASE" "$NOW")
-if [ -n "$new" ]; then
-	echo "REGRESIÓN: pruebas que antes pasaban y ahora fallan:"
-	echo "$new" | sed 's/^/  /'
-	fail=1
-fi
-if [ -n "$gone" ]; then
-	echo "Mejoras: estas pruebas ya no fallan (tools/test-roms.sh --actualizar):"
-	echo "$gone" | sed 's/^/  /'
-fi
+compara() {  # nombre resumen log rc base ahora
+	printf '%-12s %s\n' "$1" "${2:-sin resumen (código $4, $3)}"
+	grep '^salsa64-run: rsp lle' "$3" | tail -1 | sed 's/^/             /'
+	[ $4 -eq 0 ] || fail=1
+	new=$(LC_ALL=C comm -13 "$5" "$6")
+	gone=$(LC_ALL=C comm -23 "$5" "$6")
+	if [ -n "$new" ]; then
+		echo "REGRESIÓN: pruebas que antes pasaban y ahora fallan:"
+		echo "$new" | sed 's/^/  /'
+		fail=1
+	fi
+	if [ -n "$gone" ]; then
+		echo "Mejoras: estas pruebas ya no fallan (tools/test-roms.sh --actualizar):"
+		echo "$gone" | sed 's/^/  /'
+	fi
+}
+compara nemu64-test "$summary" "$LOG" $rc "$BASE" "$NOW"
+compara "nemu64 lle" "$lsummary" "$LLOG" $lrc "$LBASE" "$LNOW"
 
 # vitest: temporización e interrupción del VI vistas desde la ROM; la imagen
 # del último campo queda en build/vitest.ppm. También identifica los

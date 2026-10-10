@@ -37,9 +37,8 @@
  * la señal 2 (tarea terminada). */
 static void rsp_break(struct salsa64_bus *bus, uint32_t signals)
 {
-	uint32_t s = bus->sp.regs[SALSA64_SP_STATUS];
-	s |= SALSA64_SP_STATUS_HALT | SALSA64_SP_STATUS_BROKE | signals;
-	bus->sp.regs[SALSA64_SP_STATUS] = s;
+	uint32_t s = __atomic_or_fetch(&bus->sp.regs[SALSA64_SP_STATUS],
+				       SALSA64_SP_STATUS_HALT | SALSA64_SP_STATUS_BROKE | signals, __ATOMIC_SEQ_CST);
 	if (s & SALSA64_SP_STATUS_INTR_BREAK)
 		salsa64_mi_raise(bus, SALSA64_IRQ_SP);
 }
@@ -53,6 +52,8 @@ static bool task_done(struct salsa64_bus *bus, bool idle)
 		return rsp->gfx->done(rsp->gfx->ctx, idle);
 	if (rsp->busy == SALSA64_TASK_AUDIO && rsp->audio && rsp->audio->done)
 		return rsp->audio->done(rsp->audio->ctx, idle);
+	if (rsp->busy == SALSA64_TASK_LLE && rsp->lle && rsp->lle->done)
+		return rsp->lle->done(rsp->lle->ctx, idle);
 	return true;
 }
 
@@ -71,6 +72,14 @@ static void task_event(void *ctx, uint64_t when)
 		salsa64_sched_set(rsp->sched, SALSA64_EV_SP_TASK, when + rsp->poll_cycles);
 		return;
 	}
+	if (rsp->busy == SALSA64_TASK_LLE) {
+		/* El microcódigo real (en el SPE) ya dejó SP_STATUS como lo dejó:
+		 * HALT y BROKE si hizo BREAK; finish recoge su estado. */
+		if (rsp->lle)
+			rsp->lle->finish(rsp->lle->ctx);
+		rsp->busy = 0;
+		return;
+	}
 	if (rsp->busy == SALSA64_TASK_GFX && rsp->gfx)
 		flags = rsp->gfx->finish(rsp->gfx->ctx);
 	else if (rsp->busy == SALSA64_TASK_AUDIO && rsp->audio)
@@ -85,6 +94,34 @@ static void dp_event(void *ctx, uint64_t when)
 {
 	(void)when;
 	salsa64_mi_raise(ctx, SALSA64_IRQ_DP);
+}
+
+void salsa64_rsp_dp_done(struct salsa64_bus *bus)
+{
+	struct salsa64_rsp *rsp = &bus->rsp;
+	uint64_t now = bus->cpu ? bus->cpu->cycles : 0;
+	if (rsp->sched)
+		salsa64_sched_set(rsp->sched, SALSA64_EV_DP_SYNC, now + rsp->dp_cycles);
+}
+
+void salsa64_rsp_sync(struct salsa64_bus *bus)
+{
+	const struct salsa64_lle_backend *lle = bus->rsp.lle;
+	if (lle && lle->sync)
+		lle->sync(lle->ctx);
+}
+
+void salsa64_rsp_set_lle(struct salsa64_bus *bus, const struct salsa64_lle_backend *lle,
+			 enum salsa64_lle_mode mode)
+{
+	salsa64_rsp_reset(bus);
+	bus->rsp.lle = lle;
+	bus->rsp.lle_mode = lle ? mode : SALSA64_LLE_OFF;
+}
+
+void salsa64_rsp_set_dpc(struct salsa64_bus *bus, const struct salsa64_dpc_backend *dpc)
+{
+	bus->rsp.dpc = dpc;
 }
 
 void salsa64_rsp_init(struct salsa64_bus *bus, struct salsa64_sched *sched)
@@ -108,7 +145,11 @@ void salsa64_rsp_reset(struct salsa64_bus *bus)
 		rsp->gfx->finish(rsp->gfx->ctx);
 	else if (rsp->busy == SALSA64_TASK_AUDIO && rsp->audio)
 		rsp->audio->finish(rsp->audio->ctx, bus);
+	else if (rsp->busy == SALSA64_TASK_LLE && rsp->lle)
+		rsp->lle->finish(rsp->lle->ctx);
 	rsp->busy = 0;
+	if (rsp->lle && rsp->lle->reset)
+		rsp->lle->reset(rsp->lle->ctx);
 	if (rsp->sched) {
 		salsa64_sched_cancel(rsp->sched, SALSA64_EV_SP_TASK);
 		salsa64_sched_cancel(rsp->sched, SALSA64_EV_DP_SYNC);
@@ -218,11 +259,17 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 {
 	struct salsa64_rsp *rsp = &bus->rsp;
 	struct salsa64_task task;
-	if (rsp->busy) {
+	if (rsp->busy && rsp->busy != SALSA64_TASK_LLE) {
 		/* Ya corre una tarea (su fin espera al backend): como en el
 		 * hardware, quitar HALT a un RSP que corre no hace nada. */
 		rsp->stats.starts_busy++;
 		return;
+	}
+	if (rsp->busy == SALSA64_TASK_LLE && rsp->lle) {
+		/* El CPU detuvo al microcódigo (HALT) y lo reanuda: el backend
+		 * recoge lo que quedó en vuelo y sigue. */
+		rsp->lle->finish(rsp->lle->ctx);
+		rsp->busy = 0;
 	}
 	salsa64_rsp_read_task(bus, &task);
 
@@ -232,8 +279,28 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 
 	enum salsa64_gbi gbi = task.type == SALSA64_TASK_GFX && valid ? salsa64_rsp_detect_gbi(bus, &task)
 								       : SALSA64_GBI_UNKNOWN;
+	enum salsa64_abi abi = task.type == SALSA64_TASK_AUDIO && valid ? salsa64_rsp_detect_abi(bus, &task)
+								       : SALSA64_ABI_UNKNOWN;
 	if (rsp->trace)
 		rsp->trace(rsp->trace_ctx, &task, gbi);
+
+	/* RSP a bajo nivel: lo que no tiene HLE (modo auto) o todo (all). Una
+	 * tarea con HLE "disponible" es la que sus backends saben hacer. */
+	if (rsp->lle && rsp->lle_mode != SALSA64_LLE_OFF && rsp->sched) {
+		bool hle_gfx = task.type == SALSA64_TASK_GFX && valid && rsp->gfx &&
+			       (gbi == SALSA64_GBI_F3DEX2 || gbi == SALSA64_GBI_F3DZEX2 || gbi == SALSA64_GBI_F3D ||
+				gbi == SALSA64_GBI_F3DEX);
+		bool hle_audio = task.type == SALSA64_TASK_AUDIO && valid && rsp->audio && abi != SALSA64_ABI_UNKNOWN;
+		if (rsp->lle_mode == SALSA64_LLE_ALL || !(hle_gfx || hle_audio)) {
+			rsp->stats.lle++;
+			rsp->lle->start(rsp->lle->ctx);
+			if (rsp->lle->done) {
+				rsp->busy = SALSA64_TASK_LLE;
+				salsa64_sched_set(rsp->sched, SALSA64_EV_SP_TASK, now + rsp->poll_cycles);
+			}
+			return;
+		}
+	}
 	if (task.type == SALSA64_TASK_GFX && valid && rsp->sched) {
 		if (gbi == SALSA64_GBI_F3DEX2 || gbi == SALSA64_GBI_F3DZEX2 || gbi == SALSA64_GBI_F3D ||
 		    gbi == SALSA64_GBI_F3DEX) {
@@ -257,7 +324,7 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 		 * 1). Con un ABI desconocido la tarea solo termina. */
 		rsp->stats.audio++;
 		rsp->busy = SALSA64_TASK_AUDIO;
-		rsp->abi = salsa64_rsp_detect_abi(bus, &task);
+		rsp->abi = abi;
 		if (rsp->abi == SALSA64_ABI_UNKNOWN)
 			rsp->stats.unknown_abi++;
 		else if (rsp->audio)

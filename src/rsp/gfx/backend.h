@@ -32,6 +32,9 @@ void salsa64_gfx_job(struct gfx_job *job, const struct salsa64_bus *bus, const s
 struct gfx_state;
 struct salsa64_gfx_sync {
 	struct salsa64_gfx_backend backend;
+	/* RDP a bajo nivel: cada tramo DPC_START..DPC_END es un trabajo
+	 * GFX_JOB_DPC sobre el mismo estado (salsa64_rsp_set_dpc). */
+	struct salsa64_dpc_backend dpc;
 	struct gfx_state *state;
 	const struct salsa64_bus *bus;
 	struct salsa64_gfx_sink sink;
@@ -39,6 +42,8 @@ struct salsa64_gfx_sync {
 	struct gfx_result res;
 	bool pending;
 	bool reset;
+	uint32_t dpc_runs;
+	struct gfx_result dpc_sum;
 };
 
 /* `state` lo pone quien llama (~20 KB) y queda inicializado. */

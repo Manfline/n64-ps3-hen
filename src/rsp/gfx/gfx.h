@@ -57,10 +57,16 @@ struct gfx_job {
 	 * cuyos dibujos ya no leen texturas (el consumidor la terminó). */
 	uint32_t task;
 	uint32_t done_task;
+	/* RDP a bajo nivel (GFX_JOB_DPC): comandos [dl, dl_end) de la RDRAM
+	 * o, con GFX_JOB_XBUS, de la DMEM en dmem_ea (4 KB). */
+	uint32_t dl_end;
+	uint64_t dmem_ea;
 };
 
 #define GFX_JOB_RESET 0x1u  /* olvidar el estado del RDP (reset de la consola) */
 #define GFX_JOB_NOCACHE 0x2u  /* no usar ni llenar la caché (para medir) */
+#define GFX_JOB_DPC 0x4u  /* comandos del RDP crudos (dpc.c), no una display list */
+#define GFX_JOB_XBUS 0x8u  /* con GFX_JOB_DPC: los comandos están en la DMEM */
 
 /* ---- Caché de texturas -------------------------------------------------------
  * Las texturas decodificadas viven en una región de memoria que pone el

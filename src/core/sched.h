@@ -22,6 +22,7 @@ enum salsa64_event {
 	SALSA64_EV_SP_TASK,  /* termina la tarea del RSP en curso */
 	SALSA64_EV_DP_SYNC,  /* el RDP termina (G_RDPFULLSYNC): interrupción DP */
 	SALSA64_EV_AI_DMA,   /* termina el DMA del AI en curso */
+	SALSA64_EV_RSP_LLE,  /* siguiente rebanada del RSP a bajo nivel (host) */
 	SALSA64_EV_MAX
 };
 

@@ -565,3 +565,24 @@ después de cada interrupción, y corre lo que el recompilador no toma
 (código fuera de KSEG0, un salto en el delay slot de otro). Pendiente
 medirlo por causa si llega a pesar.
 
+## RSP a bajo nivel (Fase 6, prototipo; 2026-10-10)
+
+Intérprete del microcódigo real (`src/rsp/lle`, docs/rsp-lle.md).
+
+**Host** (Mac, clang nativo sin sanitizadores, `salsa64-run -c 1500000000`
+= 16 s de consola de Zelda OoT, respaldo del usuario fuera del repo):
+
+| Modo | Tiempo real | Instrucciones del RSP | Por instrucción |
+|---|---|---|---|
+| HLE (gráficos y audio) | 0,95 s | — | — |
+| `--lle=all` (todo el microcódigo real) | 3,58 s | 211 M (1379 tareas, 153 000 por tarea, la más larga 542 000) | 12,5 ns (~40 ciclos del Mac) |
+
+- nemu64-test: 2,0 s sin LLE, 3,1 s con `--lle` (5,9 M instrucciones del
+  RSP en 240 000 arranques: la suite arranca el RSP por cada prueba).
+- Super Mario 64, 9,6 s de consola: 161 M instrucciones (858 tareas).
+
+**PS3** (SPE): pendiente. El paquete «Salsa64 LLE» (SLSA00082) anota en el
+log, por ventana, ns por instrucción y MIPS del RSP emulado; el RSP real
+hace ~62,5 M instrucciones/s. Estimación previa: 20–60 ciclos del SPE por
+instrucción (6–20 ns), entre 0,3× y 1× el RSP real.
+

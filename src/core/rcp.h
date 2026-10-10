@@ -170,17 +170,70 @@ struct salsa64_audio_backend {
 	bool (*done)(void *ctx, bool idle);
 };
 
+/* ---- RSP a bajo nivel (LLE, Fase 6: src/rsp/lle) ---------------------------
+ * Un backend opcional que ejecuta el microcódigo real. Al quitarle HALT al
+ * RSP, rsp.c le pasa el arranque si la tarea no tiene HLE (modo `auto`) o
+ * siempre (`all`); el microcódigo corre desde SP_PC con la DMEM y la IMEM
+ * del bus. En el host corre en rebanadas intercaladas con el CPU (sync lo
+ * pone al día cuando el CPU toca un registro del SP o del DP); en la PS3,
+ * en un SPE, con fin por sondeo como los demás backends (done/finish). */
+enum salsa64_lle_mode {
+	SALSA64_LLE_OFF = 0,
+	SALSA64_LLE_AUTO,  /* solo lo que no tiene HLE */
+	SALSA64_LLE_ALL,   /* todo el microcódigo, también el que tiene HLE */
+};
+
+#define SALSA64_TASK_LLE 0xFFu  /* rsp.busy: el microcódigo corre en el SPE */
+
+struct salsa64_lle_backend {
+	void *ctx;
+	/* El RSP salió de HALT sin HLE: ejecutar desde SP_PC. Vuelve enseguida. */
+	void (*start)(void *ctx);
+	/* El CPU va a leer o escribir un registro del SP o del DP: poner al
+	 * día al RSP (host). Opcional. */
+	void (*sync)(void *ctx);
+	/* Reset del RSP. Opcional. */
+	void (*reset)(void *ctx);
+	/* Opcionales, juntos (SPE): ¿terminó? sin bloquear, y recoger. Si
+	 * `done` es NULL el RSP corre en el hilo del CPU y no se sondea. */
+	bool (*done)(void *ctx, bool idle);
+	void (*finish)(void *ctx);
+};
+
+/* RDP a bajo nivel: quien consume el flujo de comandos que llega por
+ * DPC_START/DPC_END. `dmem` es NULL si los comandos están en la RDRAM o,
+ * con xbus, la imagen de 4 KB de la DMEM de donde leerlos (módulo 4 KB).
+ * Devuelve SALSA64_GFX_FULLSYNC si vio un SYNC_FULL (interrupción del DP). */
+struct salsa64_dpc_backend {
+	void *ctx;
+	uint32_t (*run)(void *ctx, uint32_t start, uint32_t end, const uint8_t *dmem);
+};
+
+/* DPC_STATUS: bits de estado y, al escribir, pares (limpiar, poner). */
+#define SALSA64_DP_STATUS_XBUS        0x001u
+#define SALSA64_DP_STATUS_FREEZE      0x002u
+#define SALSA64_DP_STATUS_FLUSH       0x004u
+#define SALSA64_DP_STATUS_START_GCLK  0x008u
+#define SALSA64_DP_STATUS_CBUF_READY  0x080u
+#define SALSA64_DP_STATUS_END_VALID   0x200u
+#define SALSA64_DP_STATUS_START_VALID 0x400u
+
 struct salsa64_rsp_stats {
 	uint32_t gfx, audio, other, unknown_gbi, unknown_abi;
 	uint32_t polls;        /* fines de tarea vueltos a programar (SPE ocupado) */
 	uint32_t starts_busy;  /* arranques ignorados con una tarea en curso */
 	uint32_t unknown_data; /* ucode_data de la última con microcódigo desconocido */
+	uint32_t lle;          /* arranques que fueron al microcódigo real */
+	uint32_t dpc_runs;     /* tramos de comandos del RDP consumidos */
 };
 
 struct salsa64_rsp {
 	struct salsa64_sched *sched;
 	const struct salsa64_gfx_backend *gfx;
 	const struct salsa64_audio_backend *audio;
+	const struct salsa64_lle_backend *lle;
+	enum salsa64_lle_mode lle_mode;
+	const struct salsa64_dpc_backend *dpc;
 	uint32_t busy;          /* tipo de la tarea en curso; 0 = ninguna */
 	enum salsa64_gbi gbi;   /* de la tarea en curso */
 	enum salsa64_abi abi;   /* de la última tarea de audio */
@@ -329,6 +382,20 @@ void salsa64_rsp_ucode_text(const struct salsa64_bus *bus, uint32_t ucode_data, 
 void salsa64_rsp_set_audio(struct salsa64_bus *bus, const struct salsa64_audio_backend *audio);
 enum salsa64_abi salsa64_rsp_detect_abi(const struct salsa64_bus *bus, const struct salsa64_task *task);
 const char *salsa64_abi_name(enum salsa64_abi abi);
+/* RSP a bajo nivel: el backend (NULL lo quita) y el modo; el consumidor
+ * del RDP (NULL: los comandos solo se descartan y DPC_CURRENT avanza). */
+void salsa64_rsp_set_lle(struct salsa64_bus *bus, const struct salsa64_lle_backend *lle,
+			 enum salsa64_lle_mode mode);
+void salsa64_rsp_set_dpc(struct salsa64_bus *bus, const struct salsa64_dpc_backend *dpc);
+/* Un tramo de comandos del RDP ya entregado (lo que un SPE anotó al correr
+ * el microcódigo): deja DPC_START/END/CURRENT como si el RDP lo hubiera
+ * consumido y lo pasa al consumidor. `dmem` como en salsa64_dpc_backend. */
+void salsa64_dp_submit(struct salsa64_bus *bus, uint32_t start, uint32_t end, const uint8_t *dmem);
+/* El CPU va a tocar un registro del SP o del DP (sp.c): el RSP a bajo
+ * nivel se pone al día. */
+void salsa64_rsp_sync(struct salsa64_bus *bus);
+/* El RDP vio un SYNC_FULL: interrupción del DP dp_cycles después. */
+void salsa64_rsp_dp_done(struct salsa64_bus *bus);
 uint32_t salsa64_dp_read(struct salsa64_bus *bus, uint32_t reg);
 void salsa64_dp_write(struct salsa64_bus *bus, uint32_t reg, uint32_t value);
 uint32_t salsa64_vi_read(struct salsa64_bus *bus, uint32_t reg);
