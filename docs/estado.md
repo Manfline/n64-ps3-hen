@@ -29,14 +29,25 @@ Hecho (diseño y decisión en docs/rec-ppe.md, números en docs/perf-log.md):
   el mismo ciclo final; bench mixto 21,3 → 156,6 MIPS.
 - RPCS3 no ejecuta código generado: ahí se apaga
   (`/dev_hdd0/salsa64/sin-recompilador`, lo crea `tools/rpcs3-run.py`).
-- Merge de main (controles, bucles de espera, guardado) sin regresiones.
+- Merges de main (controles, bucles de espera, guardado, Fase 2 gráfica)
+  sin regresiones; el DMA del SP, del SI y de la SRAM avisan al
+  recompilador.
+- Registros fijos (sp, ra, v0, v1, a0–a3) activos en el frontend: +7 % en
+  nemu64-test (×4,45 del intérprete); los bucles toman prestados los que no
+  usan. La escritura temprana no compensó: opción apagada.
+- **Zelda OoT en la PS3 real con el recompilador: 41–60 campos/s** (con el
+  intérprete 15–17), 4–14 ms de emulación por campo; se ve igual. Donde no
+  llega a 60, el PPE espera a la HLE gráfica del SPE.
+- vitest en el frontend: 60 campos/s, 2,9–5,4 ms de emulación por campo.
+- Paquetes de prueba con APPID propio: SLSA00063 «Salsa64 recompilador»
+  (frontend) y SLSA00065 «Salsa64 CPU recompilador» (cpu-tests con cuatro
+  variantes del recompilador y nemu64-test contra el intérprete).
 
 Siguiente:
-- [ ] PS3: medir la escritura temprana y los registros fijos
-      (`SALSA64_REC_OPT_PIN`; cpu-tests mide nemu64-test con y sin) y el
-      frontend con vitest; decidir el valor por omisión.
-- [ ] Juegos del usuario en el frontend con el recompilador (VI/s, campos
-      por segundo; tabla de docs/proyecto.md) → perf-log.
+- [ ] Medir en la PS3 el préstamo de registros fijos en bucles (bench
+      enteros con registros fijos: esperado ~750 MIPS, antes 128).
+- [ ] Más juegos de la tabla de docs/proyecto.md (SM64, MK64, SF64; GoldenEye y
+      Perfect Dark usan TLB: hoy ese código va al intérprete).
 - [ ] Más en nativo: CVT/TRUNC/ROUND de la FPU, LWL/LWR/SWL/SWR, CACHE,
       MFC0 sin salir del bloque; código por TLB (GoldenEye) y KSEG1.
 - [ ] Fase 2: el DMA del SP hacia la RDRAM tiene que llamar a

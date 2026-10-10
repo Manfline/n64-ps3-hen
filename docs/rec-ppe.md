@@ -97,11 +97,20 @@ mientras el almacenamiento sigue en la cola (load-hit-store, decenas de
 ciclos en el PPE). Los que no entran en los 12 van y vienen de `cpu->gpr`
 en cada uso.
 
-Opción `SALSA64_REC_OPT_PIN` (apagada por omisión, en medición): sp, ra,
-v0, v1 y a0–a3 viven en r18–r25 todo el tiempo que corre código generado;
-la entrada los carga y la salida a C los escribe, y antes de cada llamada
-al intérprete se escriben los que la instrucción toca. Quedan 4 registros
-por bloque (r14–r17).
+Opción `SALSA64_REC_OPT_PIN` (activa en el frontend; +7 % en nemu64-test
+en la PS3): sp, ra, v0, v1 y a0–a3 viven en r18–r25 todo el tiempo que
+corre código generado; la entrada los carga y la salida a C los escribe, y
+antes de cada llamada al intérprete se escriben los que la instrucción
+toca. Quedan 4 registros por bloque (r14–r17), poco para un bucle con
+muchos temporales (bench enteros 750 → 128 MIPS): un bucle que necesita
+más toma prestados los fijos que no usa (los guarda al entrar y los repone
+en cada salida) y vuelve a tener hasta 12.
+
+Opción `SALSA64_REC_OPT_EAGER` (apagada): escribir cada registro dos
+instrucciones después de su último valor del bloque, contra el
+load-hit-store del bloque siguiente. Medido en la PS3 no compensa (−2,6 %
+en nemu64-test); escribirlo justo después fue peor (−37 % en un bucle de
+enteros: el almacenamiento espera al valor y detiene el pipeline).
 
 ### Llamadas a C y salidas
 
@@ -231,5 +240,8 @@ compiler error: Segmentation fault"; repetir compila bien
 | 2026-10-10 | Unitarias, recompilador estricto | **PS3 real** (CECH-3011A, HEN), f7b655d | 163/163; caché NOBITS, llamadas con `bl` |
 | 2026-10-10 | nemu64-test, intérprete contra recompilador | **PS3 real**, f7b655d | mismas 462 fallas, mismo hash y mismo ciclo; 7,9 s → 1,8 s (**×4,36**, 104 MIPS) |
 | 2026-10-10 | `bench` mixto | **PS3 real**, f7b655d | 21,3 → 156,6 MIPS (×7,4) |
+| 2026-10-10 | nemu64-test, cuatro variantes | **PS3 real**, f416bee | registros fijos 1821 ms (×4,45); 213/213 en cada variante |
+| 2026-10-10 | Frontend con vitest | **PS3 real**, f18b392 | 60 campos/s, 2,9–5,4 ms de emulación por campo (intérprete 35–66) |
+| 2026-10-10 | **Zelda OoT** en el frontend | **PS3 real**, f416bee | 41–60 campos/s (intérprete 15–17); emulación 4–14 ms por campo; se ve igual |
 
 Rendimiento: solo en la PS3 real (docs/perf-log.md, «Recompilador»).

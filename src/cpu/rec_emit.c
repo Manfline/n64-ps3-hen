@@ -224,6 +224,7 @@ struct ctx {
 	uint8_t map[34];        /* registro MIPS → registro del PPE, 0 = en memoria */
 	uint64_t cached;        /* en un registro del PPE (por bloque o fijo) */
 	uint64_t pinned;        /* fijos entre bloques (SALSA64_REC_OPT_PIN) */
+	uint64_t borrowed;      /* fijos que este bucle no usa: su registro del PPE queda para otros */
 	uint64_t written;       /* asignados y modificados desde la entrada o el inicio del bucle */
 	uint64_t written_start; /* written al empezar la instrucción en curso */
 	uint8_t last_write[34]; /* última instrucción que escribe cada registro, + 1 (0 = ninguna) */
@@ -241,6 +242,8 @@ struct ctx {
 	uint8_t br_bo, br_bi;   /* condición de "tomado" en cr4 */
 	uint64_t br_target, br_fall;
 };
+
+static void restore_borrowed(struct ctx *c);
 
 static void E(struct ctx *c, uint32_t w)
 {
@@ -481,6 +484,7 @@ static void emit_pending_exits(struct ctx *c)
 			emit_continue(c, p->k);
 		else
 			li64(c, 3, insn_pc(c, p->k));  /* no se usa: hay excepción (redirect) */
+		restore_borrowed(c);
 		emit_b(c, abs_label(c, c->rec->exit_mid), false);
 	}
 }
@@ -490,6 +494,7 @@ static void emit_pending_exits(struct ctx *c)
  *   nop ; lis r3 ; ori r3 ; bl exit_link   (exit_link calcula el nop = LR - 16) */
 static void emit_exit_to(struct ctx *c, uint64_t target)
 {
+	restore_borrowed(c);
 	if (!c->temp && !c->rec->no_link && (int64_t)target == (int32_t)target) {
 		E(c, PPC_NOP);
 		E(c, ppc_lis(3, (int16_t)(target >> 16)));
@@ -502,16 +507,18 @@ static void emit_exit_to(struct ctx *c, uint64_t target)
 }
 
 /* Salto tomado: vuelta al cuerpo si va al propio bloque (con la prueba del
- * próximo evento), o salida enlazada. */
+ * próximo evento), o salida enlazada. Con no_link (--lockstep) los bucles
+ * siguen: se compara al salir de ellos. */
 static void emit_taken(struct ctx *c, uint64_t target)
 {
-	if (target != c->pc || c->temp || c->rec->no_link) {
+	if (target != c->pc || c->temp) {
 		emit_exit_to(c, target);
 		return;
 	}
 	E(c, ppc_addi(0, R_CYCLES, (int32_t)c->n));
 	E(c, ppc_cmpld(0, 0, R_NEXT));
 	emit_bc(c, PPC_BO_FALSE_LIKELY, PPC_BI(0, PPC_GT), c->body);
+	restore_borrowed(c);
 	li64(c, 3, c->pc);
 	emit_b(c, abs_label(c, c->rec->exit_mid), false);
 }
@@ -574,6 +581,7 @@ static void emit_exec(struct ctx *c, unsigned k)
 		writeback(c, c->written);
 		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)k + 1));
 		emit_continue(c, k);
+		restore_borrowed(c);
 		emit_b(c, abs_label(c, c->rec->exit_mid), false);
 		return;
 	}
@@ -1500,6 +1508,7 @@ static void emit_branch(struct ctx *c, unsigned b)
 		writeback(c, c->written);
 		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)b + 1));
 		li64(c, 3, bpc);
+		restore_borrowed(c);
 		emit_b(c, abs_label(c, c->rec->exit_idle), false);
 		c->sec = sec;
 		if (d->kind == K_BRANCH)
@@ -1532,6 +1541,7 @@ static void emit_branch(struct ctx *c, unsigned b)
 	switch (d->kind) {
 	case K_JUMP_REG:
 		E(c, ppc_mr(3, R_TARGET));
+		restore_borrowed(c);
 		emit_b(c, abs_label(c, c->temp || c->rec->no_link ? c->rec->exit_jump : c->rec->exit_jr), false);
 		return;
 	case K_BRANCH: {
@@ -1560,39 +1570,79 @@ static uint32_t fetch(const struct salsa64_rec *rec, uint32_t pa)
 }
 
 /* Elige los registros MIPS más usados del bloque para r14–r25 (o r14–r17
- * con registros fijos, que ya están en r18–r25). */
-static void allocate(struct ctx *c)
+ * con registros fijos, que ya están en r18–r25).
+ *
+ * Con registros fijos, un bucle (bloque que vuelve sobre sí mismo) que
+ * necesita más de 4 registros propios toma prestados los fijos que no usa:
+ * los guarda en cpu->gpr al entrar y los repone en cada salida
+ * (restore_borrowed). En la PS3, un bucle de enteros con 9 temporales pasó
+ * de 128 a ~750 MIPS así; fuera de los bucles no compensa. */
+static void allocate(struct ctx *c, bool loop)
 {
-	unsigned count[34] = { 0 }, slots = N_CACHE;
+	unsigned count[34] = { 0 }, nslots = 0;
+	uint8_t slots[N_CACHE];
+	uint64_t used = 0;
 	for (unsigned k = 0; k < c->n; k++) {
 		uint64_t m = c->d[k].reads | c->d[k].writes;
+		used |= m;
 		for (unsigned r = 1; r < 34; r++)
 			if (m & BIT(r))
 				count[r]++;
 	}
 	memset(c->map, 0, sizeof c->map);
-	c->cached = c->pinned = 0;
+	c->cached = c->pinned = c->borrowed = 0;
 	if (c->rec->opts & SALSA64_REC_OPT_PIN) {
+		uint64_t pins = 0;
+		for (unsigned k = 0; k < SALSA64_REC_PIN_N; k++)
+			pins |= BIT(salsa64_rec_pin[k]);
+		unsigned demand = (unsigned)__builtin_popcountll(used & ~pins & ~1ull);
+		for (unsigned r = R_CACHE0; r < SALSA64_REC_PIN_PPC; r++)
+			slots[nslots++] = (uint8_t)r;
 		for (unsigned k = 0; k < SALSA64_REC_PIN_N; k++) {
-			unsigned m = salsa64_rec_pin[k];
-			c->map[m] = (uint8_t)(SALSA64_REC_PIN_PPC + k);
-			c->pinned |= BIT(m);
-			count[m] = 0;
+			unsigned m = salsa64_rec_pin[k], p = SALSA64_REC_PIN_PPC + k;
+			if (loop && !(used & BIT(m)) && nslots < demand && nslots < N_CACHE) {
+				c->borrowed |= BIT(m);
+				slots[nslots++] = (uint8_t)p;
+			} else {
+				c->map[m] = (uint8_t)p;
+				c->pinned |= BIT(m);
+				count[m] = 0;
+			}
 		}
 		c->cached = c->pinned;
-		slots = SALSA64_REC_PIN_PPC - R_CACHE0;
+	} else {
+		for (unsigned r = R_CACHE0; r < R_CACHE0 + N_CACHE; r++)
+			slots[nslots++] = (uint8_t)r;
 	}
-	for (unsigned slot = 0; slot < slots; slot++) {
+	for (unsigned slot = 0; slot < nslots; slot++) {
 		unsigned best = 0;
 		for (unsigned r = 1; r < 34; r++)
 			if (count[r] > count[best] && !(c->cached & BIT(r)))
 				best = r;
 		if (!best)
 			break;
-		c->map[best] = (uint8_t)(R_CACHE0 + slot);
+		c->map[best] = slots[slot];
 		c->cached |= BIT(best);
 		count[best] = 0;
 	}
+}
+
+/* Registro del PPE de un fijo prestado (ver allocate). */
+static unsigned pin_ppc(unsigned m)
+{
+	for (unsigned k = 0; k < SALSA64_REC_PIN_N; k++)
+		if (salsa64_rec_pin[k] == m)
+			return SALSA64_REC_PIN_PPC + k;
+	return 0;
+}
+
+/* Antes de cualquier salida del bloque: los fijos prestados vuelven a su
+ * registro (el que sigue los espera ahí). */
+static void restore_borrowed(struct ctx *c)
+{
+	for (unsigned r = 1; c->borrowed && r < 32; r++)
+		if (c->borrowed & BIT(r))
+			E(c, ppc_ld(pin_ppc(r), off_reg(r), R_CPU));
 }
 
 /* Ubica las secciones en la caché a partir de la palabra `base`, resuelve los
@@ -1676,7 +1726,18 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, unsigned max,
 		any_cop1 |= c->d[k].cop1;
 		c->exit_before[k] = c->exit_after[k] = -1;
 	}
-	allocate(c);
+	/* ¿Bucle? El salto final vuelve al inicio (emit_taken). */
+	bool loop = false;
+	if (c->has_branch && !temp) {
+		uint32_t i = c->d[n - 2].w;
+		uint64_t bpc = pc + 4ull * (n - 2), target = 0;
+		if (I_OP(i) == 0x02 || I_OP(i) == 0x03)
+			target = ((bpc + 4) & ~0x0FFFFFFFull) | (uint64_t)I_TARGET(i) << 2;
+		else if (c->d[n - 2].kind != K_JUMP_REG)
+			target = bpc + 4 + ((uint64_t)(int64_t)(int16_t)i << 2);
+		loop = target == pc;
+	}
+	allocate(c, loop);
 
 	uint64_t seen = 0, livein = 0;
 	for (unsigned k = 0; k < n; k++) {
@@ -1702,6 +1763,9 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, unsigned max,
 		E(c, ppc_andis_(0, 0, SALSA64_ST_CU1 >> 16));
 		emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(0, PPC_EQ), start_exit);
 	}
+	for (unsigned r = 1; c->borrowed && r < 32; r++)  /* fijos prestados: a cpu->gpr */
+		if (c->borrowed & BIT(r))
+			E(c, ppc_std(pin_ppc(r), off_reg(r), R_CPU));
 	reload(c, livein & ~c->pinned);
 	c->body = new_label(c);
 	bind(c, c->body);

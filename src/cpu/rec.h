@@ -109,7 +109,7 @@ struct salsa64_rec {
 	unsigned rdram_shift;    /* log2(rdram_size) */
 	uint32_t fr;             /* Status.FR con que se compiló la caché */
 	bool strict;             /* pruebas: nunca interpreta lo que se puede recompilar */
-	bool no_link;            /* sin enlaces ni bucles internos: cada bloque vuelve a C */
+	bool no_link;            /* sin enlaces: cada bloque (o bucle de un bloque) vuelve a C */
 	bool map_dirty;
 
 	uint16_t free_block;     /* lista de ids libres */
