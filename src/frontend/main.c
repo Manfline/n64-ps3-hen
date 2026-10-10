@@ -27,6 +27,7 @@
 #include <malloc.h>
 #include <ppu-types.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/process.h>
 #include <sys/systime.h>
@@ -159,6 +160,9 @@ static int update_pads(void)
 		[0 ... SALSA64_PIF_PORTS - 1] = { 0, 128, 128, 128, 128 },
 	};
 	static struct salsa64_pad logged[SALSA64_PIF_PORTS];
+	static struct salsa64_ds3 raw_logged[SALSA64_PIF_PORTS] = {
+		[0 ... SALSA64_PIF_PORTS - 1] = { 0, 128, 128, 128, 128 },
+	};
 	static uint8_t present[SALSA64_PIF_PORTS];
 	const uint32_t quit = 1u << SALSA64_DS3_START | 1u << SALSA64_DS3_SELECT;
 	padInfo info;
@@ -177,6 +181,14 @@ static int update_pads(void)
 		if (info.status[i]) {
 			if (ioPadGetData(i, &data) == 0 && data.len > 0)
 				last[i] = ds3_from(&data);
+			/* Los sticks del DS3 tal como llegan, para revisar el mapeo. */
+			const struct salsa64_ds3 *a = &last[i], *b = &raw_logged[i];
+			if (abs(a->lx - b->lx) >= 40 || abs(a->ly - b->ly) >= 40 ||
+			    abs(a->rx - b->rx) >= 40 || abs(a->ry - b->ry) >= 40) {
+				salsa64_log("mando %u: stick izquierdo (%u,%u), derecho (%u,%u)", i + 1,
+					    a->lx, a->ly, a->rx, a->ry);
+				raw_logged[i] = *a;
+			}
 			salsa64_padmap_apply(&padmap, &last[i], &p);
 			if ((last[i].buttons & quit) == quit)
 				exit = 1;
