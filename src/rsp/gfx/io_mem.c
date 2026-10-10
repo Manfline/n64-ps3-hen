@@ -19,6 +19,11 @@ struct io_mem {
 
 static struct io_mem io_default;
 
+uint32_t gfx_io_clock(void)
+{
+	return 0;
+}
+
 void gfx_io_begin(struct gfx_state *g)
 {
 	if (!g->io)

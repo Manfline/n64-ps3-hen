@@ -94,6 +94,50 @@ static uint32_t fill_rgba(const struct gfx_state *g)
 	return r << 24 | gr << 16 | b << 8 | ((p & 1) ? 0xFF : 0);
 }
 
+/* Factor del blender como k + ka·α (α = alfa del color que entra). */
+struct bl_factor {
+	float k, ka;
+};
+
+static bool bl_eq(struct bl_factor f, float k, float ka)
+{
+	return f.k > k - 1e-3f && f.k < k + 1e-3f && f.ka > ka - 1e-3f && f.ka < ka + 1e-3f;
+}
+
+/* P·A + M·B (n64brew.dev: Set Other Modes) llevado a lo que hace el RSX:
+ * se suman los factores del color que entra (IN) y del de la memoria (MEM).
+ * A_SHADE se toma como el alfa que entra; MEM_A como 1; los colores
+ * constantes (blend, fog) en P o M se ignoran. */
+static uint8_t classify_blend(unsigned p, unsigned a, unsigned m, unsigned b, uint32_t fog)
+{
+	struct bl_factor fa = { 0.0f, 0.0f }, fb = { 0.0f, 0.0f };
+	switch (a) {
+	case BA_IN:
+	case BA_SHADE: fa.ka = 1.0f; break;
+	case BA_FOG:   fa.k = (fog & 0xFF) / 255.0f; break;
+	default:       break;
+	}
+	switch (b) {
+	case BB_1MA: fb.k = 1.0f - fa.k, fb.ka = -fa.ka; break;
+	case BB_MEM:
+	case BB_ONE: fb.k = 1.0f; break;
+	default:     break;
+	}
+	struct bl_factor in = { 0.0f, 0.0f }, mem = { 0.0f, 0.0f };
+	if (p == BL_IN) in.k += fa.k, in.ka += fa.ka;
+	if (p == BL_MEM) mem.k += fa.k, mem.ka += fa.ka;
+	if (m == BL_IN) in.k += fb.k, in.ka += fb.ka;
+	if (m == BL_MEM) mem.k += fb.k, mem.ka += fb.ka;
+
+	if (bl_eq(mem, 0.0f, 0.0f))
+		return GFX_BLEND_OFF;                 /* p. ej. IN·0 + IN·1 */
+	if (bl_eq(in, 0.0f, 0.0f) && bl_eq(mem, 1.0f, 0.0f))
+		return GFX_BLEND_KEEP;                /* solo profundidad */
+	if (bl_eq(in, 0.0f, 1.0f) && bl_eq(mem, 1.0f, 0.0f))
+		return GFX_BLEND_ADD;
+	return GFX_BLEND_ALPHA;                       /* IN·α + MEM·(1 − α) y parecidos */
+}
+
 static void blend_state(const struct gfx_state *g, struct gfx_draw *d)
 {
 	uint32_t ol = g->ol;
@@ -110,18 +154,7 @@ static void blend_state(const struct gfx_state *g, struct gfx_draw *d)
 		p = c1p, a = c1a, m = c1m, b = c1b;
 	}
 
-	if (!(ol & FORCE_BL)) {
-		d->blend = GFX_BLEND_OFF;
-	} else if (p == BL_IN && m == BL_MEM && b == BB_ONE) {
-		d->blend = GFX_BLEND_ADD;
-	} else if (p == BL_MEM && a == BA_ZERO && b == BB_ONE) {
-		d->blend = GFX_BLEND_KEEP;
-	} else if (p == BL_IN && m == BL_MEM) {
-		d->blend = GFX_BLEND_ALPHA;
-	} else {
-		d->blend = GFX_BLEND_ALPHA;
-	}
-	(void)a;
+	d->blend = !(ol & FORCE_BL) ? GFX_BLEND_OFF : classify_blend(p, a, m, b, g->fog);
 
 	if ((ol & G_AC_MASK) == G_AC_THRESHOLD) {
 		d->atest = GFX_ATEST_GEQUAL;
@@ -260,7 +293,9 @@ static struct gfx_vertex *begin_prim(struct gfx_state *g, enum prim_kind kind, i
 	if (g->dirty || !g->have_draw || g->draw.prim_kind != (uint32_t)kind ||
 	    (kind == PRIM_RECT && g->draw.prim_tile != (uint32_t)tile)) {
 		struct gfx_draw d;
+		uint32_t t0 = gfx_io_clock();
 		build_state(g, &d, kind, tile);
+		g->res->t_state += gfx_io_clock() - t0;
 		d.prim_kind = kind;
 		d.prim_tile = (uint32_t)tile;
 		g->dirty = false;
@@ -433,9 +468,12 @@ void gfx_rdp_command(struct gfx_state *g, uint32_t w0, uint32_t w1)
 		g->oh = w0 & 0x00FFFFFF;
 		g->ol = w1;
 		break;
-	case G_LOADTLUT:
+	case G_LOADTLUT: {
+		uint32_t t0 = gfx_io_clock();
 		gfx_load_tlut(g, w0, w1);
+		g->res->t_load += gfx_io_clock() - t0;
 		break;
+	}
 	case G_SETTILESIZE: {
 		struct gfx_tile *t = &g->tiles[(w1 >> 24) & 7];
 		t->uls = (w0 >> 12) & 0xFFF;
@@ -445,11 +483,15 @@ void gfx_rdp_command(struct gfx_state *g, uint32_t w0, uint32_t w1)
 		break;
 	}
 	case G_LOADBLOCK:
-		gfx_load_block(g, w0, w1);
+	case G_LOADTILE: {
+		uint32_t t0 = gfx_io_clock();
+		if (op == G_LOADBLOCK)
+			gfx_load_block(g, w0, w1);
+		else
+			gfx_load_tile(g, w0, w1);
+		g->res->t_load += gfx_io_clock() - t0;
 		break;
-	case G_LOADTILE:
-		gfx_load_tile(g, w0, w1);
-		break;
+	}
 	case G_SETTILE: {
 		struct gfx_tile *t = &g->tiles[(w1 >> 24) & 7];
 		t->fmt = (w0 >> 21) & 7;

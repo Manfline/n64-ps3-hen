@@ -25,6 +25,8 @@ struct salsa64_gfx_spu {
 	uint64_t spu_ticks;  /* tiempo de la HLE en el SPE (ticks del timebase) */
 	uint64_t wait_us;    /* PPE esperando al SPE al terminar una tarea */
 	uint32_t waits;
+	/* Etapas de la HLE (ticks del SPE, ver gfx_result). */
+	uint64_t t_vtx, t_state, t_tex, t_load;
 };
 
 /* Arranca el trabajador (spukit_init ya llamado). Devuelve 0 o el error de

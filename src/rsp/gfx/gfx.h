@@ -58,7 +58,11 @@ struct gfx_result {
 	uint32_t last_unknown;   /* opcode del último */
 	uint32_t approx_cc;      /* combiners aproximados */
 	uint32_t dl_errors;      /* direcciones fuera de la RDRAM, pila llena */
-	uint32_t reserved[12];
+	/* Tiempo por etapa en ticks de gfx_io_clock (en el SPE, el timebase;
+	 * en el host y el PPE, 0): total, vértices, estado de dibujo (combiner
+	 * y texturas), decodificación de texturas y cargas a la TMEM. */
+	uint32_t t_total, t_vtx, t_state, t_tex, t_load;
+	uint32_t reserved[7];
 };
 
 #define GFX_RES_FULLSYNC     0x01u  /* G_RDPFULLSYNC: interrupción del DP */
@@ -164,6 +168,16 @@ struct gfx_draw {
 };
 
 #define GFX_ALIGN16(x) (((x) + 15u) & ~15u)
+
+/* Volcado de la salida de una tarea, para depurar (src/rdp lo escribe en
+ * la PS3; salsa64-run --raster-dump lo dibuja en el host). Todo en el
+ * orden de bytes de quien lo escribió (big-endian en la PS3): cabecera,
+ * comandos, vértices y arena de texturas, uno detrás de otro. */
+#define GFX_DUMP_MAGIC 0x53344744u  /* "S4GD" */
+struct gfx_dump_header {
+	uint32_t magic;
+	uint32_t cmd_bytes, vtx_bytes, tex_bytes;
+};
 
 /* ---- Ejecución -----------------------------------------------------------------
  * gfx_run interpreta la display list de un trabajo. Las funciones gfx_io_*

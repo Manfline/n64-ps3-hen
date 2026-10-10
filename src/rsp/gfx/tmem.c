@@ -328,6 +328,7 @@ bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex)
 		}
 
 	uint32_t size = pitch * h;
+	uint32_t t0 = gfx_io_clock();
 	uint8_t *out = gfx_io_tex_begin(g, size);
 	if (!out)
 		return false;
@@ -337,6 +338,7 @@ bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex)
 			salsa64_wr32(row + 4 * x, texel(g, t, x, y, tt));
 	}
 	int32_t off = gfx_io_tex_commit(g, size);
+	g->res->t_tex += gfx_io_clock() - t0;
 	if (off < 0)
 		return false;
 	memset(tex, 0, sizeof *tex);

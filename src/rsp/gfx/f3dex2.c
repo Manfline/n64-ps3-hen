@@ -220,6 +220,7 @@ static void tri(struct gfx_state *g, uint32_t w)
 void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *res)
 {
 	memset(res, 0, sizeof *res);
+	uint32_t t_start = gfx_io_clock();
 	g->job = job;
 	g->res = res;
 	if (job->flags & GFX_JOB_RESET)
@@ -272,8 +273,11 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 		case G_VTX: {
 			uint32_t count = (w0 >> 12) & 0xFF;
 			uint32_t end = (w0 >> 1) & 0x7F;
-			if (count <= end)
+			if (count <= end) {
+				uint32_t t0 = gfx_io_clock();
 				gfx_load_vertices(g, gfx_addr(g, w1), end - count, count);
+				res->t_vtx += gfx_io_clock() - t0;
+			}
 			break;
 		}
 		case G_MODIFYVTX:
@@ -409,4 +413,5 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 done:
 	gfx_flush_draw(g);
 	gfx_io_end(g);
+	res->t_total = gfx_io_clock() - t_start;
 }

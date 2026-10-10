@@ -49,6 +49,11 @@ static struct {
 	uint32_t tex_used;
 } io;
 
+uint32_t gfx_io_clock(void)
+{
+	return ~spu_read_decrementer();  /* el decrementador cuenta hacia abajo */
+}
+
 void gfx_io_begin(struct gfx_state *g)
 {
 	(void)g;

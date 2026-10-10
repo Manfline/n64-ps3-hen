@@ -36,6 +36,10 @@ static uint32_t spu_finish(void *ctx)
 		memset(&s->res, 0, sizeof s->res);
 	s->tasks++;
 	s->spu_ticks += r->ticks;
+	s->t_vtx += s->res.t_vtx;
+	s->t_state += s->res.t_state;
+	s->t_tex += s->res.t_tex;
+	s->t_load += s->res.t_load;
 	s->sink.done(s->sink.ctx, &s->job, &s->res);
 	return (s->res.flags & GFX_RES_FULLSYNC) ? SALSA64_GFX_FULLSYNC : 0;
 }

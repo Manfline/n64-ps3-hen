@@ -122,6 +122,8 @@ struct gfx_state {
 enum gfx_io_slot { GFX_IO_VTX, GFX_IO_MTX, GFX_IO_SMALL, GFX_IO_TEX, GFX_IO_SLOTS };
 #define GFX_IO_MAX 4096u  /* bytes por lectura (GFX_IO_TEX); 1 KB los demás */
 
+/* Reloj creciente para medir etapas (0 si la plataforma no lo da). */
+uint32_t gfx_io_clock(void);
 /* Prepara la E/S para un trabajo. */
 void gfx_io_begin(struct gfx_state *g);
 /* Termina las escrituras pendientes y deja en res los bytes escritos. */
