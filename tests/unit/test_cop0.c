@@ -7,24 +7,8 @@
 
 #define KSU_USER 0x10u
 
-/* Escribe una entrada de la TLB ejecutando TLBWI desde una dirección aparte,
- * sin tocar el programa de la prueba. */
-static void tlb_set(unsigned index, uint64_t hi, uint32_t lo0, uint32_t lo1, uint32_t page_mask)
-{
-	uint64_t pc = CPU->pc;
-	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_INDEX, index);
-	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_ENTRYHI, hi);
-	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_ENTRYLO0, lo0);
-	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_ENTRYLO1, lo1);
-	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_PAGEMASK, page_mask);
-	t_wr32(0x0F00, TLBWI);
-	salsa64_cpu_set_pc(CPU, 0xFFFFFFFF80000F00ull);
-	t_step(1);
-	salsa64_cpu_set_pc(CPU, pc);
-}
-
-/* EntryLo: PFN | C=3 | D | V | G */
-#define LO(pfn, d, v, g) ((uint32_t)(pfn) << 6 | 3u << 3 | (d) << 2 | (v) << 1 | (g))
+#define tlb_set t_tlb_set
+#define LO      T_LO
 
 static void prid_and_config(void)
 {
@@ -420,6 +404,202 @@ static void tlb_asid_mismatch(void)
 	CHECK_EQ(CPU->pc, T_CODE + 4);
 }
 
+/* ---- Código mapeado y en KSEG1 ----------------------------------------------
+ * Con el recompilador, estos bloques van por dirección virtual y física
+ * (rec.c): el mapeado revisa su traducción al entrar, también si llega por
+ * un enlace. */
+
+#define V_CODE 0x00400000u  /* kuseg; par de páginas de 4 KB: 0x00400000 y 0x00401000 */
+
+/* En `pa`: T0 += inc y vuelve por RA. */
+static void put_inc(uint32_t pa, int16_t inc)
+{
+	t_wr32(pa, ADDIU(T0, T0, inc));
+	t_wr32(pa + 4, JR(RA));
+	t_wr32(pa + 8, NOP);
+}
+
+static void tlb_exec_mapped_call(void)
+{
+	tlb_set(10, V_CODE, LO(0x10, 1, 1, 1), LO(0x11, 1, 1, 1), 0);
+	/* Página par: JAL a la impar; al volver, suma y regresa a KSEG0. */
+	t_wr32(0x10000, ADDIU(T1, ZERO, 7));
+	t_wr32(0x10004, JAL(V_CODE + 0x1100));
+	t_wr32(0x10008, ADDIU(T0, ZERO, 5));
+	t_wr32(0x1000C, ADDU(T2, T0, T1));
+	t_wr32(0x10010, JR(T7));
+	t_wr32(0x10014, NOP);
+	t_wr32(0x11100, ADDIU(T0, T0, 1));
+	t_wr32(0x11104, JR(RA));
+	t_wr32(0x11108, ADDIU(T1, T1, 2));
+	R[T7] = T_CODE + 12;
+	T_LOAD(LUI(S0, V_CODE >> 16), JR(S0), NOP, ADDIU(T3, ZERO, 1));
+	t_step(13);
+	CHECK_EQ(R[T0], 6);
+	CHECK_EQ(R[T1], 9);
+	CHECK_EQ(R[T2], 15);
+	CHECK_EQ(R[RA], V_CODE + 12);
+	CHECK_EQ(R[T3], 1);
+	CHECK_EQ(CPU->pc, T_CODE + 16);
+}
+
+/* Bucle mapeado que llama a una función mapeada: el JR de vuelta encuentra
+ * el bloque en el código generado (exit_jr) desde la segunda vuelta. */
+static void tlb_exec_mapped_loop(void)
+{
+	tlb_set(10, V_CODE, LO(0x10, 1, 1, 1), LO(0x11, 1, 1, 1), 0);
+	t_wr32(0x10000, JAL(V_CODE + 0x100));
+	t_wr32(0x10004, ADDIU(T1, T1, 1));
+	t_wr32(0x10008, J(V_CODE));
+	t_wr32(0x1000C, NOP);
+	put_inc(0x10100, 2);
+	salsa64_cpu_set_pc(CPU, V_CODE);
+	t_step(7 * 20);
+	CHECK_EQ(R[T0], 40);
+	CHECK_EQ(R[T1], 20);
+	CHECK_EQ(R[RA], V_CODE + 8);
+	CHECK_EQ(CPU->pc, V_CODE);
+}
+
+/* Bucle en KSEG0: llama a V_CODE, que salta (J, enlazable) a la página
+ * impar, y después reescribe EntryLo1 con T5. */
+static void load_remap_loop(void)
+{
+	t_wr32(0x10000, J(V_CODE + 0x1000));
+	t_wr32(0x10004, NOP);
+	R[S0] = V_CODE;
+	T_LOAD(JALR(RA, S0), NOP, MTC0(T5, SALSA64_CP0_ENTRYLO1), TLBWI, J(T_CODE_PA), NOP);
+}
+
+static void tlb_exec_remap(void)
+{
+	tlb_set(10, V_CODE, LO(0x10, 1, 1, 1), LO(0x11, 1, 1, 1), 0);
+	put_inc(0x11000, 1);
+	put_inc(0x21000, 100);
+	load_remap_loop();
+	R[T5] = LO(0x21, 1, 1, 1);
+	t_step(11);
+	CHECK_EQ(R[T0], 1);
+	CHECK_EQ(CPU->pc, T_CODE);
+	t_step(11);
+	CHECK_EQ(R[T0], 101);  /* la página impar ahora es 0x21000 */
+	t_step(11);
+	CHECK_EQ(R[T0], 201);
+	R[T5] = LO(0x11, 1, 1, 1);
+	t_step(11);
+	CHECK_EQ(R[T0], 301);
+	t_step(11);
+	CHECK_EQ(R[T0], 302);  /* de vuelta en 0x11000 */
+	CHECK_EQ(CPU->pc, T_CODE);
+}
+
+/* Dos entradas para la misma página con ASID distinto: cambiar EntryHi
+ * cambia el código que corre. */
+static void tlb_exec_asid(void)
+{
+	tlb_set(11, V_CODE | 1, LO(0x10, 1, 1, 0), LO(0x11, 1, 1, 0), 0);
+	tlb_set(12, V_CODE | 2, LO(0x20, 1, 1, 0), LO(0x21, 1, 1, 0), 0);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_ENTRYHI, 1);
+	put_inc(0x10000, 1);
+	put_inc(0x20000, 100);
+	R[S0] = V_CODE;
+	R[T5] = 2;
+	T_LOAD(JALR(RA, S0), NOP, MTC0(T5, SALSA64_CP0_ENTRYHI), J(T_CODE_PA), NOP);
+	t_step(8);
+	CHECK_EQ(R[T0], 1);
+	t_step(8);
+	CHECK_EQ(R[T0], 101);
+	R[T5] = 1;
+	t_step(8);
+	CHECK_EQ(R[T0], 201);
+	t_step(8);
+	CHECK_EQ(R[T0], 202);
+	CHECK_EQ(CPU->pc, T_CODE);
+}
+
+/* El código mapeado se reescribe con un SW desde `base` (la dirección
+ * mapeada o la de KSEG0) y la siguiente llamada corre la instrucción nueva. */
+static void code_write_loop(uint64_t base)
+{
+	tlb_set(10, V_CODE, LO(0x10, 1, 1, 1), LO(0x11, 1, 1, 1), 0);
+	put_inc(0x10000, 1);
+	salsa64_cpu_set_pc(CPU, T_CODE);
+	R[T0] = 0;
+	R[S0] = V_CODE;
+	R[S1] = base;
+	R[T6] = ADDIU(T0, T0, 100);
+	T_LOAD(JALR(RA, S0), NOP, SW(T6, 0, S1), J(T_CODE_PA), NOP);
+	t_step(8);
+	CHECK_EQ(R[T0], 1);
+	t_step(8);
+	CHECK_EQ(R[T0], 101);
+	R[T6] = ADDIU(T0, T0, 1000);
+	t_step(8);
+	CHECK_EQ(R[T0], 201);
+	t_step(8);
+	CHECK_EQ(R[T0], 1201);
+}
+
+static void tlb_exec_code_write(void)
+{
+	code_write_loop(V_CODE);
+	code_write_loop(0xFFFFFFFF80010000ull);
+}
+
+static void exec_kseg1(void)
+{
+	t_wr32(0x10000, ADDIU(T0, ZERO, 3));
+	t_wr32(0x10004, JAL(0x10100));
+	t_wr32(0x10008, NOP);
+	t_wr32(0x1000C, ADDIU(T1, T0, 1));
+	t_wr32(0x10100, JR(RA));
+	t_wr32(0x10104, ADDIU(T0, T0, 10));
+	salsa64_cpu_set_pc(CPU, 0xFFFFFFFFA0010000ull);
+	t_step(6);
+	CHECK_EQ(R[T0], 13);
+	CHECK_EQ(R[T1], 14);
+	CHECK_EQ(R[RA], 0xFFFFFFFFA001000Cull);
+	CHECK_EQ(CPU->pc, 0xFFFFFFFFA0010010ull);
+}
+
+/* Código en la ROM del cartucho, por la TLB y por KSEG1. */
+static void exec_rom(void)
+{
+	static uint8_t rom[0x2000];
+	static const uint32_t code[] = { ADDIU(T0, T0, 0x55), JR(RA), NOP };
+	for (unsigned k = 0; k < 3; k++)
+		for (unsigned b = 0; b < 4; b++)
+			rom[0x1000 + 4 * k + b] = (uint8_t)(code[k] >> (24 - 8 * b));
+	salsa64_bus_set_rom(&t_n64.bus, rom, sizeof rom);
+	tlb_set(10, V_CODE, LO(0x10000, 0, 1, 1), LO(0x10001, 0, 1, 1), 0);
+	R[S0] = V_CODE + 0x1000;
+	R[S1] = 0xFFFFFFFFB0001000ull;
+	T_LOAD(JALR(RA, S0), NOP, JALR(RA, S1), NOP, ADDIU(T1, T0, 1));
+	t_step(11);
+	CHECK_EQ(R[T0], 0xAA);
+	CHECK_EQ(R[T1], 0xAB);
+	CHECK_EQ(CPU->pc, T_CODE + 20);
+	salsa64_bus_set_rom(&t_n64.bus, NULL, 0);
+}
+
+/* Dos páginas a 16 MB caen en la misma entrada de la TLB del recompilador:
+ * se turnan, sin cambiar el resultado. */
+static void tlb_exec_same_slot(void)
+{
+	tlb_set(10, V_CODE, LO(0x10, 1, 1, 1), LO(0x11, 1, 1, 1), 0);
+	tlb_set(13, V_CODE + 0x01000000, LO(0x30, 1, 1, 1), LO(0x31, 1, 1, 1), 0);
+	t_wr32(0x10000, JAL(V_CODE + 0x01000000));
+	t_wr32(0x10004, NOP);
+	t_wr32(0x10008, J(V_CODE));
+	t_wr32(0x1000C, NOP);
+	put_inc(0x30000, 1);
+	R[S0] = V_CODE;
+	T_LOAD(JR(S0), NOP);
+	t_step(2 + 7 * 5);
+	CHECK_EQ(R[T0], 5);
+	CHECK_EQ(CPU->pc, V_CODE);
+}
+
 static void user_mode_cannot_fetch_kseg0(void)
 {
 	t_set_status((T_STATUS & ~SALSA64_ST_CU0) | KSU_USER);
@@ -547,6 +727,14 @@ void t_suite_cop0(void)
 	RUN(tlb_invalid_entry);
 	RUN(tlb_modified);
 	RUN(tlb_asid_mismatch);
+	RUN(tlb_exec_mapped_call);
+	RUN(tlb_exec_mapped_loop);
+	RUN(tlb_exec_remap);
+	RUN(tlb_exec_asid);
+	RUN(tlb_exec_code_write);
+	RUN(exec_kseg1);
+	RUN(exec_rom);
+	RUN(tlb_exec_same_slot);
 	RUN(user_mode_cannot_fetch_kseg0);
 	RUN(user_mode_restrictions);
 	RUN(random_in_range);

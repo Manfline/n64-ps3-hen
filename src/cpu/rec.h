@@ -5,7 +5,8 @@
  *   - Unidad: bloque básico que empieza en una dirección de KSEG0 dentro de
  *     la RDRAM y termina en un salto (con su delay slot), en una instrucción
  *     que cambia el estado global (COP0, SYSCALL, BREAK) o a las
- *     SALSA64_REC_MAX_INSNS instrucciones. Lo demás (TLB, KSEG1, modos
+ *     SALSA64_REC_MAX_INSNS instrucciones. También desde KSEG1 o mapeado por
+ *     la TLB, en la RDRAM o en la ROM (rec_tlb.h). Lo demás (modos
  *     usuario/supervisor, interrupciones, delay slots pendientes) lo corre el
  *     intérprete, que es la referencia.
  *   - Mismo resultado que el intérprete, instrucción por instrucción y ciclo
@@ -29,6 +30,7 @@
 
 #include "core/bus.h"
 #include "core/types.h"
+#include "cpu/rec_tlb.h"
 
 struct salsa64_cpu;
 
@@ -68,6 +70,8 @@ struct salsa64_rec_stats {
 	uint64_t flushes;        /* vaciados completos de la caché */
 	uint64_t interp_steps;   /* instrucciones que corrió el intérprete */
 	uint64_t exec_calls;     /* instrucciones que el código generado le pasó al intérprete */
+	uint64_t compiled_x;     /* de compiled, los de KSEG1 o mapeados (rec_tlb.c) */
+	uint64_t vt_probes;      /* traducciones con la TLB del CPU (rec_tlb.c) */
 	uint64_t compile_us;     /* reservado para quien mida el tiempo de compilación */
 };
 
@@ -140,6 +144,7 @@ struct salsa64_rec {
 	bool overflow;
 
 	uint16_t map[SALSA64_REC_MAP_WORDS];          /* bloque que empieza en cada palabra */
+	struct salsa64_rec_x x;                       /* fuera de KSEG0 (rec_tlb.h): justo antes de flags */
 	uint8_t flags[SALSA64_REC_FLAG_BYTES];        /* bloques que tocan cada 128 bytes (satura en 255) */
 	struct salsa64_rec_block blocks[SALSA64_REC_MAX_BLOCKS + 1];
 	struct salsa64_rec_link links[SALSA64_REC_MAX_LINKS];
@@ -191,10 +196,11 @@ static const uint8_t salsa64_rec_pin[SALSA64_REC_PIN_N] __attribute__((unused)) 
 /* rec.c (interno): deja visible para el PPE el código recién escrito. */
 void salsa64_rec_sync(const void *p, size_t bytes);
 
-/* rec_emit.c (interno): compila el bloque en `pc` de hasta `max` instrucciones.
- * Devuelve la palabra de entrada en la caché, o 0 si no se pudo; `n` recibe
- * las instrucciones del camino más largo y `bytes` las que cubre. */
-uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, unsigned max, bool temp,
-			     unsigned *n, uint32_t *bytes);
+/* rec_emit.c (interno): compila el bloque en `pc` (física `pa`, segmento
+ * `seg` de rec_tlb.h) de hasta `max` instrucciones. Devuelve la palabra de
+ * entrada en la caché, o 0 si no se pudo; `n` recibe las instrucciones del
+ * camino más largo y `bytes` las que cubre. */
+uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, unsigned seg, unsigned max,
+			     bool temp, unsigned *n, uint32_t *bytes);
 
 #endif

@@ -62,6 +62,20 @@ void t_step(unsigned n)
 		salsa64_cpu_step(CPU);
 }
 
+void t_tlb_set(unsigned index, uint64_t hi, uint32_t lo0, uint32_t lo1, uint32_t page_mask)
+{
+	uint64_t pc = CPU->pc;
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_INDEX, index);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_ENTRYHI, hi);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_ENTRYLO0, lo0);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_ENTRYLO1, lo1);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_PAGEMASK, page_mask);
+	t_wr32(0x0F00, TLBWI);
+	salsa64_cpu_set_pc(CPU, 0xFFFFFFFF80000F00ull);
+	t_step(1);
+	salsa64_cpu_set_pc(CPU, pc);
+}
+
 uint32_t t_rd32(uint32_t pa) { return salsa64_rd32(t_rdram + pa); }
 uint64_t t_rd64(uint32_t pa) { return salsa64_rd64(t_rdram + pa); }
 
@@ -150,10 +164,11 @@ static int run_suites(void (*print)(const char *line), struct salsa64_rec *rec, 
 	print(line);
 	if (rec) {
 		const struct salsa64_rec_stats *st = &rec->stats;
-		snprintf(line, sizeof line, "recompilador: %llu bloques, %llu recortados, %llu solo intérprete, "
-			 "%llu entradas, %llu enlaces, %llu invalidados, %llu instr. interpretadas, "
+		snprintf(line, sizeof line, "recompilador: %llu bloques (%llu fuera de KSEG0), %llu recortados, "
+			 "%llu solo intérprete, %llu entradas, %llu enlaces, %llu invalidados, %llu instr. interpretadas, "
 			 "%llu llamadas al intérprete",
-			 (unsigned long long)st->compiled, (unsigned long long)st->temp_compiled,
+			 (unsigned long long)st->compiled, (unsigned long long)st->compiled_x,
+			 (unsigned long long)st->temp_compiled,
 			 (unsigned long long)st->interp_only, (unsigned long long)st->entries,
 			 (unsigned long long)st->linked, (unsigned long long)st->invalidated,
 			 (unsigned long long)st->interp_steps, (unsigned long long)st->exec_calls);
