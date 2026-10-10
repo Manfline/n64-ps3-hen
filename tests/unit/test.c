@@ -94,6 +94,7 @@ int salsa64_unit_run(void (*print)(const char *line))
 		{ "rsp", t_suite_rsp },
 		{ "gfx", t_suite_gfx },
 		{ "audio", t_suite_audio },
+		{ "sync", t_suite_audio_sync },
 	};
 	char line[160];
 

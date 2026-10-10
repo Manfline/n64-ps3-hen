@@ -1,0 +1,36 @@
+/*
+ * Salsa64 — audio del frontend en la PS3: la HLE de las tareas de audio (en
+ * el SPE 1) y la salida de lo que produce el AI por el puerto de audio del
+ * sistema (48 kHz estéreo) desde un hilo propio del PPE.
+ *
+ *   AI (hilo de la emulación) → audio_sync (anillo, estirador, remuestreo)
+ *   → hilo de audio: llena los bloques del puerto (256 muestras, 5,3 ms)
+ *     cuatro por delante de los que suenan, despertado por la cola de
+ *     eventos del puerto; nunca espera a la emulación.
+ *
+ * Configuración en SALSA64_DATA_DIR/audio.cfg (opcional), una clave por
+ * línea:
+ *   politica = estirar | silencio   qué hacer si la emulación va lenta
+ *                                   (audio_sync.h; por omisión estirar)
+ *   nivel_ms = 60                   colchón mínimo del anillo
+ *   hle = spe | ppe | no            dónde corre la HLE de audio (spe)
+ *   salida = si | no                abrir el puerto de audio (si)
+ */
+#ifndef SALSA64_FRONTEND_AUDIO_OUT_H
+#define SALSA64_FRONTEND_AUDIO_OUT_H
+
+#include "audio_sync.h"
+#include "core/n64.h"
+
+/* Arranca la HLE de audio y la salida y conecta el AI. Devuelve 0 si la
+ * salida quedó andando (sin ella, la HLE y el AI siguen igual). */
+int audio_out_init(struct salsa64_n64 *n64);
+/* Una vez por campo, desde el hilo principal: estadísticas al log cada 5 s. */
+void audio_out_field(uint64_t now_us);
+void audio_out_shutdown(void);
+/* Para las autopruebas: lo que pasó por la salida. */
+const struct audio_sync_stats *audio_out_stats(void);
+/* Bloques del puerto llenados por el hilo de audio. */
+uint64_t audio_out_blocks(void);
+
+#endif

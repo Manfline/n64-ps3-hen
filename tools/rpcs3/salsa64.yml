@@ -8,3 +8,7 @@ Net:
   Internet enabled: Connected
 Miscellaneous:
   Exit RPCS3 when process finishes: true
+Audio:
+  # Las pruebas automáticas no suenan por los altavoces de la Mac; cellAudio
+  # sigue consumiendo bloques a su ritmo (audiotest lo verifica).
+  Renderer: "Null"

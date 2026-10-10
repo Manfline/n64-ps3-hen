@@ -102,6 +102,7 @@ void t_suite_save(void);
 void t_suite_rsp(void);
 void t_suite_gfx(void);
 void t_suite_audio(void);
+void t_suite_audio_sync(void);
 
 /* Corre todo y devuelve el número de pruebas fallidas. `print` recibe una
  * línea sin salto final. */

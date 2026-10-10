@@ -35,6 +35,11 @@
  * HLE gráfica: en el SPE 0 (lib/spukit); con SALSA64_DATA_DIR/gfx_ppe
  * presente, en el PPE (para comparar tiempos).
  *
+ * Audio (audio_out.c): HLE de las tareas de audio en el SPE 1 y lo que sale
+ * por el AI al puerto de audio, desde un hilo propio; se configura con
+ * SALSA64_DATA_DIR/audio.cfg. Con "audiotest" en embedded, la ROM de prueba
+ * del audio se verifica sola (selftest_audio.c) y sigue sonando.
+ *
  * Capturas: con una ROM del disco, cada SHOT_US se guarda la pantalla en
  * SALSA64_DATA_DIR/screen-N.ppm (N de 1 a SHOT_MAX, en ronda), para verla
  * desde la Mac por FTP. En modo de prueba automática se captura cada
@@ -59,6 +64,8 @@
 #include <rsxkit/rsxkit.h>
 #include <spukit/spukit.h>
 
+#include "audio_out.h"
+#include "audiotest_rom_bin.h"
 #include "core/boot.h"
 #include "gfxtest_rom_bin.h"
 #include "padmap.h"
@@ -71,6 +78,7 @@
 #include "savefile.h"
 #include "screenshot.h"
 #include "selftest.h"
+#include "selftest_audio.h"
 #include "selftest_gfx.h"
 #include "vitest_rom_bin.h"
 
@@ -100,6 +108,7 @@ static struct savefile save_file;
 static volatile int running = 1;
 static int selftest_on;   /* vitest */
 static int gfxtest_on;    /* gfxtest */
+static int audiotest_on;  /* audiotest */
 static struct salsa64_gfx_spu gfx_spu;
 static struct salsa64_gfx_sync gfx_ppe;
 static struct gfx_state gfx_ppe_state;
@@ -269,6 +278,8 @@ static void isv_out(void *ctx, const uint8_t *text, uint32_t len)
 		selftest_isv(text, len);
 	if (gfxtest_on)
 		gfxtest_isv(text, len);
+	if (audiotest_on)
+		audiotest_isv(text, len);
 	for (uint32_t i = 0; i < len; i++) {
 		if (text[i] == '\n' || n == sizeof line - 1) {
 			line[n] = '\0';
@@ -311,6 +322,11 @@ static uint8_t *load_embedded(uint32_t *size, const char **source)
 		gfxtest_on = 1;
 		return embedded(gfxtest_rom_bin, gfxtest_rom_bin_size, size);
 	}
+	if (!strcmp(name, "audiotest")) {
+		*source = "audiotest (embebida)";
+		audiotest_on = 1;
+		return embedded(audiotest_rom_bin, audiotest_rom_bin_size, size);
+	}
 	if (!strncmp(name, "file:", 5)) {
 		static char path[96];
 		snprintf(path, sizeof path, SALSA64_DATA_DIR "/%s", name + 5);
@@ -332,7 +348,7 @@ static uint8_t *load_embedded(uint32_t *size, const char **source)
 		salsa64_log("no se pudo leer %s", path);
 		return NULL;
 	}
-	salsa64_log("%s dice \"%s\": no es vitest, gfxtest ni file:<nombre>", EMBED_PATH, name);
+	salsa64_log("%s dice \"%s\": no es vitest, gfxtest, audiotest ni file:<nombre>", EMBED_PATH, name);
 	return NULL;
 }
 
@@ -446,6 +462,7 @@ int main(void)
 		salsa64_rsp_set_gfx(&n64.bus, &gfx_ppe.backend);
 	}
 	salsa64_log("HLE gráfica en %s", gfx_on_spu ? "el SPE" : "el PPE");
+	audio_out_init(&n64);
 
 	salsa64_bus_set_rom(&n64.bus, rom, rom_size);
 	struct salsa64_boot_info info;
@@ -470,6 +487,8 @@ int main(void)
 		selftest_start();
 	if (gfxtest_on)
 		gfxtest_start();
+	if (audiotest_on)
+		audiotest_start();
 
 	const rsxkit_view view = { RSXKIT_SCALE_FIT, RSXKIT_FILTER_LINEAR, 4.0f / 3.0f };
 	enum selftest_state result = SELFTEST_RUNNING;
@@ -501,6 +520,7 @@ int main(void)
 		salsa64_n64_run_field(&n64);
 		uint64_t t1 = sysGetSystemTime();
 		savefile_poll(&save_file, t1);
+		audio_out_field(t1);
 
 		struct salsa64_vi_frame f = { 0 };
 		rsxkit_rect r = { 0, 0, 0, 0 };
@@ -527,7 +547,7 @@ int main(void)
 				selftest_screen(&f, &r);
 			else
 				gfxtest_screen(&f, &r);
-		} else if (!selftest_on && !gfxtest_on && f.width &&
+		} else if (!selftest_on && !gfxtest_on && !audiotest_on && f.width &&
 			   (autotest ? n64.bus.vi.fields / AUTO_SHOT_FIELDS != shots
 				     : t1 - t_shot >= SHOT_US)) {
 			char path[64];
@@ -544,7 +564,7 @@ int main(void)
 				    salsa64_rdp_dump(SALSA64_DATA_DIR "/gfxdump.bin") ? "bien" : "FALLO");
 			dump_field = 0;
 		}
-		if (autotest && !selftest_on && !gfxtest_on && n64.bus.vi.fields >= AUTO_FIELDS) {
+		if (autotest && !selftest_on && !gfxtest_on && !audiotest_on && n64.bus.vi.fields >= AUTO_FIELDS) {
 			salsa64_log("RESULTADO frontend: OK (ROM del disco, %u campos)", n64.bus.vi.fields);
 			break;
 		}
@@ -554,14 +574,16 @@ int main(void)
 		us_present += t2 - t1;
 		fields_stats++;
 
-		if ((selftest_on || gfxtest_on) && result == SELFTEST_RUNNING) {
-			result = selftest_on ? selftest_state(n64.bus.vi.fields) : gfxtest_state(n64.bus.vi.fields);
+		if ((selftest_on || gfxtest_on || audiotest_on) && result == SELFTEST_RUNNING) {
+			result = selftest_on ? selftest_state(n64.bus.vi.fields)
+			       : gfxtest_on  ? gfxtest_state(n64.bus.vi.fields)
+					     : audiotest_state(n64.bus.vi.fields);
 			if (result != SELFTEST_RUNNING) {
 				salsa64_log("RESULTADO frontend: %s (campo %u)", result == SELFTEST_OK ? "OK" : "FALLO",
 					    n64.bus.vi.fields);
 				if (autotest)
 					break;
-				if (result == SELFTEST_OK)
+				if (result == SELFTEST_OK && !audiotest_on)  /* audiotest sigue sonando */
 					bench_begin(1, t2);
 			}
 		} else {
@@ -626,6 +648,7 @@ int main(void)
 	}
 
 	savefile_close(&save_file);
+	audio_out_shutdown();
 	salsa64_rsp_set_gfx(&n64.bus, NULL);  /* espera la tarea en vuelo */
 	if (gfx_on_spu)
 		salsa64_gfx_spu_shutdown(&gfx_spu);
