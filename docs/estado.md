@@ -16,6 +16,8 @@ Hecho (rama `reverent-leavitt-d0f943`):
   destinos alineados a 128 (temblor), frente antihorario, mezcla opaca del
   cielo, corrección de perspectiva que `cgcomp` quita en MUL/DP (la luna;
   docs/rsx-notes.md) y FILLRECT inclusivo en 1 ciclo (columna del fundido).
+  Todos verificados por el autor en la PS3 real con `salsa64-fase2.pkg`
+  (APPID propio SLSA00062, título «Salsa64 Fase 2 (gfx)»).
 - Depuración: volcado de la salida de una tarea (`gfxdump`), repetición en
   el RSX sin emular (`embedded` = `dump:<nombre>`), `tools/gfxdump.py` para
   editar volcados y `salsa64-run --raster-dump`.
