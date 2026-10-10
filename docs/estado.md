@@ -17,7 +17,7 @@ Hecho (rama `amazing-noether-39a548`; detalle en docs/cpu-vr4300.md,
   hilo principal si vale 6105 (se quedaba en el hilo ocioso a los 88 mil
   ciclos); Banjo-Kazooie y Perfect Dark también lo comprueban.
 - `salsa64_boot_hle_as` fuerza la variante; pruebas por variante y de los
-  restos del 6105 (272/272 en el host con main f698afe).
+  restos del 6105 (287/287 en el host con main 3270538).
 - Perfect Dark pasa la comprobación en la Mac y en la **PS3 real**
   (frontend «Salsa64 arranque», SLSA00078): 6083 bloques (6078 fuera de
   KSEG0) en vez de 201, 693 traducciones de la TLB, 59,8 campos/s con 5,8
@@ -33,14 +33,13 @@ Hecho (rama `amazing-noether-39a548`; detalle en docs/cpu-vr4300.md,
 - `tools/censo.sh`: censo de compatibilidad con los ROMs del usuario
   desde su ruta (compila `salsa64-run` con el compilador de la Mac).
 - Censo de 3 minutos de 8 juegos (los 6 objetivo, Banjo-Kazooie y Conker)
-  sobre main f698afe + la rama de F3D (sin integrar): dibujan SM64 (título),
+  sobre main 3270538 (F3D integrado): dibujan SM64 (título),
   OoT, MK64, SF64, GoldenEye y Banjo; suenan ABI 1 y nead. Perfect Dark
   corre sin dibujar ni sonar (su microcódigo de Rare y naudio con MP3 sin
   HLE); Conker manda una sola tarea gráfica (F3DEXBG 2.08, comando 0x14) y
   su naudio da error. Sin la rama de F3D, solo Zelda dibujaba.
 
 Siguiente (lista priorizada en docs/compatibilidad.md):
-- [ ] Integrar la rama de F3D.
 - [ ] Audio: las tres naudio (Banjo-Kazooie, Conker, Perfect Dark con MP3).
 - [ ] Microcódigo de Perfect Dark (por CRC; sin texto) y F3DEXBG de Conker.
 - [ ] Probar con el control y medir en la PS3 las escenas de docs/proyecto.md.
