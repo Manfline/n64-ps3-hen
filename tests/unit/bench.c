@@ -104,6 +104,13 @@ static const uint32_t loop_mfc0[] = {
 	LOOP_TAIL(NOP),
 };
 
+/* Espera por tiempo sondeando Count (como la ROM gfxtest): un bucle corto
+ * que no termina durante el bench (T5 = 0x7FFFFFFF ciclos de espera). Con
+ * MFC0 terminando el bloque, el recompilador volvía a C en cada vuelta. */
+static const uint32_t loop_count_wait[] = {
+	MFC0(T1, SALSA64_CP0_COUNT), SUBU(T2, T1, T3), SLTU(T2, T2, T5), BNE(T2, ZERO, -4), NOP,
+};
+
 struct bench_case {
 	const char *name;
 	const uint32_t *code;
@@ -124,11 +131,12 @@ static const struct bench_case cases[] = {
 	CASE("cvt", loop_cvt, 10, 1.5f, 0.1f),
 	CASE("no alin.", loop_unaligned, 10, 0, 0),
 	CASE("mfc0", loop_mfc0, 10, 0, 0),
+	CASE("espera", loop_count_wait, 10, 0, 0),
 };
 
 void salsa64_unit_bench(void (*print)(const char *line), uint64_t (*now_us)(void))
 {
-	char line[160];
+	char line[224];
 	struct salsa64_rec *rec = CPU->rec;
 	if (rec)
 		rec->strict = false;  /* como en un juego: lo que no cabe antes de un evento, al intérprete */
@@ -146,20 +154,25 @@ void salsa64_unit_bench(void (*print)(const char *line), uint64_t (*now_us)(void
 		CPU->fpr[0] = t_fbits(c->f0);
 		CPU->fpr[1] = t_fbits(c->f1);
 
+		uint64_t entries0 = rec ? rec->stats.entries : 0, calls0 = rec ? rec->stats.exec_calls : 0;
 		uint64_t t0 = now_us();
 		salsa64_n64_run(&t_n64, c->instructions);  /* 1 instrucción = 1 ciclo por ahora */
 		uint64_t us = now_us() - t0;
 		if (!us)
 			us = 1;
 
-		snprintf(line, sizeof line,
-			 "bench%s: %-8s %3llu M instr. en %6llu ms = %4llu.%01llu MIPS, %5llu.%01llu ns/instr.",
-			 rec ? " rec" : "", c->name, (unsigned long long)(c->instructions / 1000000),
-			 (unsigned long long)(us / 1000),
-			 (unsigned long long)(c->instructions / us),
-			 (unsigned long long)(c->instructions * 10 / us % 10),
-			 (unsigned long long)(us * 1000 / c->instructions),
-			 (unsigned long long)(us * 10000 / c->instructions % 10));
+		int len = snprintf(line, sizeof line,
+				   "bench%s: %-8s %3llu M instr. en %6llu ms = %4llu.%01llu MIPS, %5llu.%01llu ns/instr.",
+				   rec ? " rec" : "", c->name, (unsigned long long)(c->instructions / 1000000),
+				   (unsigned long long)(us / 1000),
+				   (unsigned long long)(c->instructions / us),
+				   (unsigned long long)(c->instructions * 10 / us % 10),
+				   (unsigned long long)(us * 1000 / c->instructions),
+				   (unsigned long long)(us * 10000 / c->instructions % 10));
+		if (rec && len > 0 && (size_t)len < sizeof line)  /* salidas a C y llamadas al intérprete */
+			snprintf(line + len, sizeof line - (size_t)len, ", %llu entradas desde C, %llu llamadas al intérprete",
+				 (unsigned long long)(rec->stats.entries - entries0),
+				 (unsigned long long)(rec->stats.exec_calls - calls0));
 		print(line);
 	}
 }
