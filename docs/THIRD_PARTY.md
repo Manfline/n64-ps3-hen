@@ -5,6 +5,7 @@
 | Archivo | Origen | Licencia | Notas |
 |---|---|---|---|
 | `tests/phase0/rsx-triangle/main.c` | Sample `samples/graphics/rsxtest` de PSL1GHT (`f649a08f`) | MIT | Inicialización del RSX, superficie, viewport y flip reescritos en C a partir de `rsxutil.cpp`/`main.cpp` |
+| `lib/rsxkit/src/video.c` | `tests/phase0/rsx-triangle/main.c` (propio), que sigue el sample `rsxtest` de PSL1GHT | MIT | Inicialización del RSX y del video, superficie y flip; el resto de `lib/rsxkit` es propio |
 | `tests/phase0/spu-compute/spu/mix.c` | Patrón DMA del sample `samples/spu/spudma` de PSL1GHT | MIT | Solo el patrón `mfc_get`/espera por etiqueta; el cálculo y el doble búfer son propios |
 
 El núcleo de la Fase 1 (`src/core/`, `src/cpu/`, `src/host/`) es código

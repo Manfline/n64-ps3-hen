@@ -12,17 +12,19 @@ PS3 real.
 | Estado de la máquina (`struct salsa64_n64`) | 0,01 | 0,01 | 10,4 KB: CPU 1,7 KB, bus 8,5 KB (incluye SP DMEM/IMEM) |
 | Caché del recompilador | 32 | | Fase 3; depende de docs/jit-ppe.md |
 | Caché de texturas (lado PPE/SPE) | 16 | | Fase 4 |
-| Búfer de comandos RSX + memoria mapeada | 32 | | `HOST_SIZE` de rsx-triangle |
+| Búfer de comandos RSX + memoria mapeada | 16 | 16 | `rsxkit_init` por omisión (rsx-triangle usa 32) |
+| ROM del cartucho | 64 | | máximo; el frontend la lee entera a memoria al arrancar |
 | Listas de triángulos SPU → RSX | 8 | | doble búfer por cuadro |
 | Audio | 2 | | |
 | Código, pila, heap de newlib | 16 | | |
-| **Total previsto** | **114** | | |
+| **Total previsto** | **162** | | con una ROM de 64 MB |
 
 ## Memoria local del RSX (GDDR3)
 
 | Uso | Previsto | Medido | Notas |
 |---|---|---|---|
-| Framebuffers 1280×720 ×2 + Z | 11 | | X8R8G8B8 + Z24S8 |
+| Framebuffers 1280×720 ×2 + Z | 11 | 11 | X8R8G8B8 + Z24S8 (`rsxkit_init`) |
+| Framebuffer 2D del VI | 3 | 2,8 | `rsxkit_fb_create(640, 576)`: 2 copias × 640 × 576 × 4 |
 | Render interno 2x/3x | 60 | | Fase 5 |
 | Texturas | 64 | | Fase 4 |
 
