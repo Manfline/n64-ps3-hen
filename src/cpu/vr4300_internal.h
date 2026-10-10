@@ -38,12 +38,14 @@ enum retro64_access {
 /* cop0.c */
 void retro64_vr4300_exception(struct retro64_cpu *cpu, enum retro64_exc code, unsigned ce);
 void retro64_vr4300_address_error(struct retro64_cpu *cpu, uint64_t vaddr, enum retro64_access acc);
+/* align = tamaño - 1; solo se usa para invertir la dirección con Status.RE. */
 bool retro64_vr4300_translate_slow(struct retro64_cpu *cpu, uint64_t vaddr, uint32_t *paddr,
-				   enum retro64_access acc);
+				   enum retro64_access acc, uint32_t align);
 void retro64_vr4300_update_status(struct retro64_cpu *cpu);
 void retro64_vr4300_cop0(struct retro64_cpu *cpu, uint32_t instr);
 /* cop1.c */
 void retro64_vr4300_cop1(struct retro64_cpu *cpu, uint32_t instr);
+void retro64_vr4300_cop2(struct retro64_cpu *cpu, uint32_t instr);
 
 static inline void vr4300_reserved(struct retro64_cpu *cpu)
 {
@@ -80,17 +82,6 @@ static inline void vr4300_branch_likely(struct retro64_cpu *cpu, bool taken, uin
 
 /* ---- Traducción ------------------------------------------------------- */
 
-static inline bool vr4300_translate(struct retro64_cpu *cpu, uint64_t vaddr, uint32_t *paddr,
-				    enum retro64_access acc)
-{
-	/* 0xFFFFFFFF80000000–0xFFFFFFFFBFFFFFFF: KSEG0 y KSEG1, sin TLB. */
-	if (RETRO64_LIKELY((vaddr >> 30) == 0x3FFFFFFFEull && cpu->mode == RETRO64_MODE_KERNEL)) {
-		*paddr = (uint32_t)vaddr & 0x1FFFFFFF;
-		return true;
-	}
-	return retro64_vr4300_translate_slow(cpu, vaddr, paddr, acc);
-}
-
 /* Verifica alineación (align = tamaño - 1) y traduce. Si falla, la
  * excepción ya quedó lanzada y la instrucción no debe escribir nada. */
 static inline bool vr4300_vaddr(struct retro64_cpu *cpu, uint64_t vaddr, uint32_t align,
@@ -100,7 +91,12 @@ static inline bool vr4300_vaddr(struct retro64_cpu *cpu, uint64_t vaddr, uint32_
 		retro64_vr4300_address_error(cpu, vaddr, acc);
 		return false;
 	}
-	return vr4300_translate(cpu, vaddr, paddr, acc);
+	/* 0xFFFFFFFF80000000–0xFFFFFFFFBFFFFFFF: KSEG0 y KSEG1, sin TLB. */
+	if (RETRO64_LIKELY((vaddr >> 30) == 0x3FFFFFFFEull && cpu->mode == RETRO64_MODE_KERNEL)) {
+		*paddr = (uint32_t)vaddr & 0x1FFFFFFF;
+		return true;
+	}
+	return retro64_vr4300_translate_slow(cpu, vaddr, paddr, acc, align);
 }
 
 /* ---- Accesos físicos (RDRAM directo, resto por el bus) ------------------ */
@@ -133,24 +129,27 @@ static inline uint64_t vr4300_read64(struct retro64_cpu *cpu, uint32_t pa)
 	return retro64_bus_read64(cpu->bus, pa);
 }
 
-static inline void vr4300_write8(struct retro64_cpu *cpu, uint32_t pa, uint8_t v)
+/* SB y SH reciben el registro completo: fuera de la RDRAM el VR4300 pone en
+ * el bus el registro desplazado a su carril, y el RCP, la PIF y el bus PI
+ * escriben esa palabra entera sin mirar el tamaño (ver core/bus.h). */
+static inline void vr4300_write8(struct retro64_cpu *cpu, uint32_t pa, uint64_t v)
 {
 	if (RETRO64_LIKELY(pa < cpu->rdram_size)) {
-		retro64_wr8(cpu->rdram + pa, v);
+		retro64_wr8(cpu->rdram + pa, (uint8_t)v);
 		return;
 	}
 	unsigned shift = 8 * (3 - (pa & 3));
-	retro64_bus_write32(cpu->bus, pa, (uint32_t)v << shift, 0xFFu << shift);
+	retro64_bus_write32(cpu->bus, pa, (uint32_t)(v << shift), 0xFFu << shift);
 }
 
-static inline void vr4300_write16(struct retro64_cpu *cpu, uint32_t pa, uint16_t v)
+static inline void vr4300_write16(struct retro64_cpu *cpu, uint32_t pa, uint64_t v)
 {
 	if (RETRO64_LIKELY(pa < cpu->rdram_size)) {
-		retro64_wr16(cpu->rdram + pa, v);
+		retro64_wr16(cpu->rdram + pa, (uint16_t)v);
 		return;
 	}
 	unsigned shift = 8 * (2 - (pa & 2));
-	retro64_bus_write32(cpu->bus, pa, (uint32_t)v << shift, 0xFFFFu << shift);
+	retro64_bus_write32(cpu->bus, pa, (uint32_t)(v << shift), 0xFFFFu << shift);
 }
 
 static inline void vr4300_write32(struct retro64_cpu *cpu, uint32_t pa, uint32_t v)

@@ -48,13 +48,17 @@ static void sp_dmem_through_bus(void)
 	R[T0] = KSEG1(0x04000000);
 	R[T1] = 0xDEADBEEF;
 	R[T2] = 0x55;
-	T_LOAD(SW(T1, 0x40, T0), SB(T2, 0x41, T0), LW(T3, 0x40, T0), LBU(T4, 0x43, T0), LH(T5, 0x40, T0));
-	t_step(5);
-	CHECK_EQ(R[T3], 0xFFFFFFFFDE55BEEFull);
+	T_LOAD(SW(T1, 0x40, T0), LW(T3, 0x40, T0), LBU(T4, 0x43, T0), LH(T5, 0x40, T0),
+	       SB(T2, 0x41, T0), LW(T6, 0x40, T0));
+	t_step(6);
+	CHECK_EQ(R[T3], 0xFFFFFFFFDEADBEEFull);
 	CHECK_EQ(R[T4], 0xEF);
-	CHECK_EQ(R[T5], 0xFFFFFFFFFFFFDE55ull);
+	CHECK_EQ(R[T5], 0xFFFFFFFFFFFFDEADull);
+	/* SB fuera de la RDRAM escribe la palabra entera: el registro desplazado
+	 * a su carril, con ceros alrededor (nemu64-test, sp_memory). */
+	CHECK_EQ(R[T6], 0x00550000);
 	/* Espejo cada 8 KB. */
-	CHECK_EQ(retro64_bus_read32(&t_n64.bus, 0x04002040), 0xDE55BEEF);
+	CHECK_EQ(retro64_bus_read32(&t_n64.bus, 0x04002040), 0x00550000);
 }
 
 static void cart_rom_read(void)
@@ -143,9 +147,16 @@ static void sp_status_and_semaphore(void)
 {
 	struct retro64_bus *bus = &t_n64.bus;
 	CHECK_EQ(retro64_bus_read32(bus, 0x04040010), RETRO64_SP_STATUS_HALT);
-	retro64_bus_write32(bus, 0x04040010, 0x1 | 0x400, ~0u);  /* quitar halt, poner señal 0 */
-	CHECK_EQ(retro64_bus_read32(bus, 0x04040010), 0x80);
+	retro64_bus_write32(bus, 0x04040010, 0x400, ~0u);        /* poner señal 0 */
+	CHECK_EQ(retro64_bus_read32(bus, 0x04040010), 0x81);
 	retro64_bus_write32(bus, 0x04040010, 0x10, ~0u);         /* levantar interrupción SP */
+	CHECK_EQ(bus->mi.intr, 1u << RETRO64_IRQ_SP);
+	retro64_bus_write32(bus, 0x04040010, 0x08, ~0u);         /* bajarla */
+	CHECK_EQ(bus->mi.intr, 0);
+	/* RSP provisional: quitar HALT lo detiene en el acto con BROKE y, con
+	 * interrupción en BREAK habilitada, la levanta. */
+	retro64_bus_write32(bus, 0x04040010, 0x1 | 0x100, ~0u);
+	CHECK_EQ(retro64_bus_read32(bus, 0x04040010), 0x80 | 0x40 | RETRO64_SP_STATUS_BROKE | RETRO64_SP_STATUS_HALT);
 	CHECK_EQ(bus->mi.intr, 1u << RETRO64_IRQ_SP);
 	CHECK_EQ(retro64_bus_read32(bus, 0x0404001C), 0);
 	CHECK_EQ(retro64_bus_read32(bus, 0x0404001C), 1);

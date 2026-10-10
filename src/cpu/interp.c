@@ -12,7 +12,15 @@
  *     el signo de los 32 bits bajos (bits altos entran al resultado).
  *   - DIV/DIVU/DDIV/DDIVU entre cero no son excepción: LO = ±1 o -1,
  *     HI = dividendo.
- *   - LWL/LWR extienden el signo del resultado de 32 bits.
+ *   - LWL y LWR con la palabra completa extienden el signo del resultado de
+ *     32 bits; LWR parcial deja los 32 bits altos de rt sin tocar.
+ *   - La dirección de retorno de JAL, JALR y BxxAL es next_pc: la
+ *     instrucción que sigue al delay slot, también cuando el salto está a su
+ *     vez en el delay slot de otro (entonces es el destino de ese + 4).
+ *   - Status.RE en modo usuario (little-endian): la dirección física se
+ *     invierte con XOR 7, 6, 4 o 0 según el tamaño (también al buscar
+ *     instrucciones), y LWL/LWR/SWL/SWR/LDL/LDR/SDL/SDR toman el desplazamiento
+ *     de esa dirección ya invertida. BadVAddr conserva la original.
  */
 #include "core/sched.h"
 #include "cpu/vr4300_internal.h"
@@ -106,7 +114,7 @@ static void op_special(struct retro64_cpu *cpu, uint32_t i)
 	case 0x08: vr4300_jump(cpu, r[rs]); return;                                       /* JR */
 	case 0x09: {                                                                      /* JALR */
 		uint64_t target = r[rs];
-		r[rd] = cpu->cur_pc + 8;
+		r[rd] = cpu->next_pc;
 		vr4300_jump(cpu, target);
 		return;
 	}
@@ -121,9 +129,13 @@ static void op_special(struct retro64_cpu *cpu, uint32_t i)
 	case 0x16: REQUIRE64(cpu); r[rd] = r[rt] >> (r[rs] & 63); return;                 /* DSRLV */
 	case 0x17: REQUIRE64(cpu); r[rd] = (uint64_t)((int64_t)r[rt] >> (r[rs] & 63)); return; /* DSRAV */
 	case 0x18: {                                                                      /* MULT */
-		int64_t p = (int64_t)(int32_t)r[rs] * (int32_t)r[rt];
+		/* El multiplicador toma rs con sus 64 bits y rt como entero de 35
+		 * bits con signo; con entradas que son extensión de signo de 32 bits
+		 * da lo mismo que 32 × 32 (nemu64-test, arithmetic/mul.rs). */
+		int64_t b = (int64_t)(r[rt] << 29) >> 29;
+		uint64_t p = r[rs] * (uint64_t)b;
 		cpu->lo = retro64_sx32((uint32_t)p);
-		cpu->hi = retro64_sx32((uint32_t)((uint64_t)p >> 32));
+		cpu->hi = retro64_sx32((uint32_t)(p >> 32));
 		return;
 	}
 	case 0x19: {                                                                      /* MULTU */
@@ -229,10 +241,10 @@ static void op_regimm(struct retro64_cpu *cpu, uint32_t i)
 	case 0x0B: trap_if(cpu, (uint64_t)s < imm); return;              /* TLTIU */
 	case 0x0C: trap_if(cpu, (uint64_t)s == imm); return;             /* TEQI */
 	case 0x0E: trap_if(cpu, (uint64_t)s != imm); return;             /* TNEI */
-	case 0x10: cpu->gpr[31] = cpu->cur_pc + 8; vr4300_branch(cpu, s < 0, i); return;         /* BLTZAL */
-	case 0x11: cpu->gpr[31] = cpu->cur_pc + 8; vr4300_branch(cpu, s >= 0, i); return;        /* BGEZAL */
-	case 0x12: cpu->gpr[31] = cpu->cur_pc + 8; vr4300_branch_likely(cpu, s < 0, i); return;  /* BLTZALL */
-	case 0x13: cpu->gpr[31] = cpu->cur_pc + 8; vr4300_branch_likely(cpu, s >= 0, i); return; /* BGEZALL */
+	case 0x10: cpu->gpr[31] = cpu->next_pc; vr4300_branch(cpu, s < 0, i); return;         /* BLTZAL */
+	case 0x11: cpu->gpr[31] = cpu->next_pc; vr4300_branch(cpu, s >= 0, i); return;        /* BGEZAL */
+	case 0x12: cpu->gpr[31] = cpu->next_pc; vr4300_branch_likely(cpu, s < 0, i); return;  /* BLTZALL */
+	case 0x13: cpu->gpr[31] = cpu->next_pc; vr4300_branch_likely(cpu, s >= 0, i); return; /* BGEZALL */
 	default:   vr4300_reserved(cpu); return;
 	}
 }
@@ -245,13 +257,20 @@ static void op_lwl_lwr(struct retro64_cpu *cpu, uint32_t i, bool left)
 	uint32_t pa;
 	if (!vr4300_vaddr(cpu, va, 0, RETRO64_ACC_LOAD, &pa))
 		return;
+	/* El desplazamiento sale de pa: con Status.RE ya viene invertido. */
 	uint32_t w = vr4300_read32(cpu, pa & ~3u), old = (uint32_t)cpu->gpr[I_RT(i)], v;
 	if (left) {
-		unsigned shift = 8 * (va & 3);
+		unsigned shift = 8 * (pa & 3);
 		v = (old & ~(0xFFFFFFFFu << shift)) | (w << shift);
 	} else {
-		unsigned shift = 8 * (3 - (va & 3));
+		unsigned shift = 8 * (3 - (pa & 3));
 		v = (old & ~(0xFFFFFFFFu >> shift)) | (w >> shift);
+		/* Si no carga el byte más significativo, LWR no extiende el signo:
+		 * los 32 bits altos de rt quedan como estaban (nemu64-test). */
+		if (shift) {
+			cpu->gpr[I_RT(i)] = (cpu->gpr[I_RT(i)] & 0xFFFFFFFF00000000ull) | v;
+			return;
+		}
 	}
 	cpu->gpr[I_RT(i)] = retro64_sx32(v);
 }
@@ -265,10 +284,10 @@ static void op_ldl_ldr(struct retro64_cpu *cpu, uint32_t i, bool left)
 		return;
 	uint64_t d = vr4300_read64(cpu, pa & ~7u), old = cpu->gpr[I_RT(i)];
 	if (left) {
-		unsigned shift = 8 * (va & 7);
+		unsigned shift = 8 * (pa & 7);
 		cpu->gpr[I_RT(i)] = (old & ~(~0ull << shift)) | (d << shift);
 	} else {
-		unsigned shift = 8 * (7 - (va & 7));
+		unsigned shift = 8 * (7 - (pa & 7));
 		cpu->gpr[I_RT(i)] = (old & ~(~0ull >> shift)) | (d >> shift);
 	}
 }
@@ -280,10 +299,10 @@ static void op_swl_swr(struct retro64_cpu *cpu, uint32_t i, bool left)
 	if (!vr4300_vaddr(cpu, va, 0, RETRO64_ACC_STORE, &pa))
 		return;
 	if (left) {
-		unsigned shift = 8 * (va & 3);
+		unsigned shift = 8 * (pa & 3);
 		vr4300_write32_masked(cpu, pa & ~3u, v >> shift, 0xFFFFFFFFu >> shift);
 	} else {
-		unsigned shift = 8 * (3 - (va & 3));
+		unsigned shift = 8 * (3 - (pa & 3));
 		vr4300_write32_masked(cpu, pa & ~3u, v << shift, 0xFFFFFFFFu << shift);
 	}
 }
@@ -296,10 +315,10 @@ static void op_sdl_sdr(struct retro64_cpu *cpu, uint32_t i, bool left)
 	if (!vr4300_vaddr(cpu, va, 0, RETRO64_ACC_STORE, &pa))
 		return;
 	if (left) {
-		unsigned shift = 8 * (va & 7);
+		unsigned shift = 8 * (pa & 7);
 		vr4300_write64_masked(cpu, pa & ~7u, v >> shift, ~0ull >> shift);
 	} else {
-		unsigned shift = 8 * (7 - (va & 7));
+		unsigned shift = 8 * (7 - (pa & 7));
 		vr4300_write64_masked(cpu, pa & ~7u, v << shift, ~0ull << shift);
 	}
 }
@@ -338,7 +357,7 @@ static void execute(struct retro64_cpu *cpu, uint32_t i)
 		vr4300_jump(cpu, ((cpu->cur_pc + 4) & ~0x0FFFFFFFull) | (uint64_t)I_TARGET(i) << 2);
 		return;
 	case 0x03:                                                               /* JAL */
-		r[31] = cpu->cur_pc + 8;
+		r[31] = cpu->next_pc;
 		vr4300_jump(cpu, ((cpu->cur_pc + 4) & ~0x0FFFFFFFull) | (uint64_t)I_TARGET(i) << 2);
 		return;
 	case 0x04: vr4300_branch(cpu, r[rs] == r[rt], i); return;               /* BEQ */
@@ -362,7 +381,7 @@ static void execute(struct retro64_cpu *cpu, uint32_t i)
 	case 0x0F: r[rt] = retro64_sx32(i << 16); return;                       /* LUI */
 	case 0x10: retro64_vr4300_cop0(cpu, i); return;
 	case 0x11: retro64_vr4300_cop1(cpu, i); return;
-	case 0x12: op_cop_unusable_or_ri(cpu, 2); return;                       /* COP2 */
+	case 0x12: retro64_vr4300_cop2(cpu, i); return;                         /* COP2 */
 	case 0x14: vr4300_branch_likely(cpu, r[rs] == r[rt], i); return;       /* BEQL */
 	case 0x15: vr4300_branch_likely(cpu, r[rs] != r[rt], i); return;       /* BNEL */
 	case 0x16: vr4300_branch_likely(cpu, (int64_t)r[rs] <= 0, i); return;  /* BLEZL */
@@ -408,11 +427,11 @@ static void execute(struct retro64_cpu *cpu, uint32_t i)
 		return;
 	case 0x28:                                                               /* SB */
 		if (vr4300_vaddr(cpu, va, 0, RETRO64_ACC_STORE, &pa))
-			vr4300_write8(cpu, pa, (uint8_t)r[rt]);
+			vr4300_write8(cpu, pa, r[rt]);
 		return;
 	case 0x29:                                                               /* SH */
 		if (vr4300_vaddr(cpu, va, 1, RETRO64_ACC_STORE, &pa))
-			vr4300_write16(cpu, pa, (uint16_t)r[rt]);
+			vr4300_write16(cpu, pa, r[rt]);
 		return;
 	case 0x2A: op_swl_swr(cpu, i, true); return;                            /* SWL */
 	case 0x2B:                                                               /* SW */
@@ -425,6 +444,8 @@ static void execute(struct retro64_cpu *cpu, uint32_t i)
 	case 0x2F:                                                               /* CACHE: sin cachés emuladas */
 		if (cpu->mode != RETRO64_MODE_KERNEL && !(cpu->status & RETRO64_ST_CU0))
 			retro64_vr4300_exception(cpu, RETRO64_EXC_CPU, 0);
+		else if (va & 3)  /* alineada a 4 basta; a 2 da AdEL */
+			retro64_vr4300_address_error(cpu, va, RETRO64_ACC_LOAD);
 		return;
 	case 0x30:                                                               /* LL */
 		if (vr4300_vaddr(cpu, va, 3, RETRO64_ACC_LOAD, &pa)) {

@@ -92,7 +92,8 @@ enum retro64_si_reg {
 #define RETRO64_SI_STATUS_INTR 0x1000u
 
 #define RETRO64_RI_NREGS    8
-#define RETRO64_RDRAM_NREGS 10
+#define RETRO64_RDRAM_NREGS    16
+#define RETRO64_RDRAM_REGS_END 0x03F80000u  /* después: escrituras "broadcast" */
 
 /* Interrupciones del MI. Actualizan Cause.IP2 del CPU. */
 void retro64_mi_raise(struct retro64_bus *bus, enum retro64_irq irq);

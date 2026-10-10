@@ -81,6 +81,16 @@ static void jal_links_and_jumps(void)
 	CHECK_EQ(CPU->pc, T_CODE + 0x14);
 }
 
+/* Un JAL en el delay slot de J enlaza al destino de J + 4: la instrucción que
+ * sigue a su propio delay slot (nemu64-test, jumps). */
+static void jal_in_delay_slot_links_after_target(void)
+{
+	T_LOAD(J(0x80001020), JAL(0x80001040));
+	t_step(3);
+	CHECK_EQ(R[RA], T_CODE + 0x24);
+	CHECK_EQ(CPU->pc, T_CODE + 0x40);
+}
+
 static void j_keeps_upper_region(void)
 {
 	T_LOAD(J(0x00002000), NOP);
@@ -200,6 +210,7 @@ void t_suite_branch(void)
 	RUN(jalr_custom_link);
 	RUN(jalr_same_register_uses_old_value);
 	RUN(jr_returns);
+	RUN(jal_in_delay_slot_links_after_target);
 	RUN(bltzal_links_even_if_not_taken);
 	RUN(bltzal_reads_ra_before_link);
 	RUN(backward_loop);

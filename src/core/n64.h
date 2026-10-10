@@ -23,5 +23,8 @@ void retro64_n64_init(struct retro64_n64 *n64, uint8_t *rdram, uint32_t rdram_si
 void retro64_n64_reset(struct retro64_n64 *n64);
 /* Ejecuta `cycles` ciclos del VR4300 (93,75 MHz). */
 void retro64_n64_run(struct retro64_n64 *n64, uint64_t cycles);
+/* Pide terminar retro64_n64_run después de la instrucción en curso (por
+ * ejemplo, desde el callback del ISViewer). */
+void retro64_n64_stop(struct retro64_n64 *n64);
 
 #endif

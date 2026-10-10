@@ -1,0 +1,310 @@
+CACHE dcache create dirty exclusive (0x0D) then store/writeback
+CACHE dcache hit writeback invalidate (0x15)
+CACHE dcache index writeback invalidate clears valid (TagLo via load tag)
+CACHE icache hit invalidate clears valid when line hits
+CACHE icache hit writeback (0x18) pushes line to RAM
+CACHE icache index invalidate clears valid (TagLo via load tag)
+DCACHE: cached LW stale after uncached SW until invalidate
+DCACHE: hit writeback pushes dirty line to RAM
+ICACHE: uncached patch does not affect fetched line until invalidate
+MI Repeat: SB
+MI Repeat: SD
+MI Repeat: SH
+MI Repeat: SW
+MI Repeat: Wrap2KiB
+RDP START & END REG (masking)
+RDP STATUS: Flags during a run
+RDP STATUS: Run from DMEM (xbus)
+RDP STATUS: Run from DMEM (xbus) (end of dmem)
+RDP STATUS: Run from DMEM (xbus) (overflowing dmem)
+RSP ADD
+RSP ADDI
+RSP ADDIU
+RSP ADDU
+RSP AND
+RSP ANDI
+RSP BEQ
+RSP BGEZ
+RSP BGEZAL
+RSP BGEZAL (test RA)
+RSP BGTZ
+RSP BLEZ
+RSP BLTZ
+RSP BLTZAL
+RSP BLTZAL (test RA)
+RSP BNE
+RSP BREAK
+RSP BREAK (within delay slot of a branch that wasn
+RSP BREAK (within delay slot)
+RSP CFC2 (index higher than three)
+RSP CTC2 (index higher than three)
+RSP CTC2/CFC2
+RSP J
+RSP JAL
+RSP JALR: Register change in delay slot
+RSP JALR: Return address in delay slot
+RSP JALR: Return register is equal to target register
+RSP JALR: Simple
+RSP JR: Register change in delay slot
+RSP JR: Simple
+RSP LB
+RSP LBU
+RSP LBV
+RSP LDV
+RSP LDV (overflow)
+RSP LFV
+RSP LFV Zero Extended
+RSP LH
+RSP LHU
+RSP LHV
+RSP LHV (end of DMEM)
+RSP LLV
+RSP LLV (overflow)
+RSP LPV
+RSP LPV (end of DMEM)
+RSP LQV
+RSP LQV (end of DMEM)
+RSP LRV
+RSP LRV (start of DMEM)
+RSP LSV
+RSP LSV (overflow)
+RSP LTV
+RSP LUV
+RSP LUV (end of DMEM)
+RSP LW
+RSP LWU
+RSP LWV
+RSP MFC2
+RSP MTC2
+RSP NOR
+RSP OR
+RSP ORI
+RSP RCP (verify table)
+RSP RSQ (verify table)
+RSP SB
+RSP SBV
+RSP SDV
+RSP SFV
+RSP SH (aligned)
+RSP SH (unaligned)
+RSP SHV
+RSP SLL
+RSP SLLV
+RSP SLLV (where target=shift amount)
+RSP SLT
+RSP SLTI
+RSP SLTIU
+RSP SLV
+RSP SPV
+RSP SQV
+RSP SRA
+RSP SRAV
+RSP SRAV (where target=shift amount)
+RSP SRL
+RSP SRLV
+RSP SRLV (where target=shift amount)
+RSP SRV
+RSP SSV
+RSP STATUS: start-valid
+RSP STV
+RSP SUB
+RSP SUBU
+RSP SUV
+RSP SW (aligned)
+RSP SW (unaligned)
+RSP SWV
+RSP V30
+RSP V31
+RSP V46
+RSP V47
+RSP V59
+RSP VABS
+RSP VACCB
+RSP VADD
+RSP VADDB
+RSP VADDC
+RSP VAND
+RSP VCH
+RSP VCL
+RSP VCR
+RSP VEQ
+RSP VEXTN
+RSP VEXTQ
+RSP VEXTT
+RSP VGE
+RSP VINSN
+RSP VINSQ
+RSP VINST
+RSP VLT
+RSP VMACF
+RSP VMACF (accumulator itself overflowed)
+RSP VMACF (e=H0)
+RSP VMACF (e=_5)
+RSP VMACQ
+RSP VMACU
+RSP VMACU (accumulator itself overflowed)
+RSP VMACU (e=H0)
+RSP VMACU (e=_0)
+RSP VMADH
+RSP VMADH (accumulator itself overflowed)
+RSP VMADH (e=H1)
+RSP VMADH (e=Q1)
+RSP VMADH (e=_7)
+RSP VMADL
+RSP VMADL (accumulator itself overflowed)
+RSP VMADL (e=_4)
+RSP VMADM
+RSP VMADM (accumulator itself overflowed)
+RSP VMADM (e=_4)
+RSP VMADN
+RSP VMADN (accumulator itself overflowed)
+RSP VMADN (e=H1)
+RSP VMADN (e=H3)
+RSP VMADN (e=_6)
+RSP VMOV
+RSP VMRG
+RSP VMUDH
+RSP VMUDH (e=H0)
+RSP VMUDH (e=Q1)
+RSP VMUDH (e=_7)
+RSP VMUDL
+RSP VMUDL (H1)
+RSP VMUDL (e=_5)
+RSP VMUDM
+RSP VMUDM (H1)
+RSP VMUDM (e=_7)
+RSP VMUDN
+RSP VMUDN (e=H2)
+RSP VMUDN (e=_7)
+RSP VMULF
+RSP VMULF (e=H0)
+RSP VMULF (e=H1)
+RSP VMULF (e={1})
+RSP VMULQ
+RSP VMULQ (e=H1)
+RSP VMULU
+RSP VMULU (e=H1)
+RSP VNAND
+RSP VNE
+RSP VNOP
+RSP VNOR
+RSP VNULL
+RSP VNXOR
+RSP VOR
+RSP VRCP (all 16 bit values)
+RSP VRCP (register and element combinations)
+RSP VRCPH (register and element combinations)
+RSP VRCPH sets input for VRCPL
+RSP VRCPH sets input for VRSQL
+RSP VRCPH/VRCPL (32 bit)
+RSP VRCPH/VRSQH (read high VRCP) )
+RSP VRCPH/VRSQH (read high VRCPL) )
+RSP VRCPH/VRSQH (read high VRSQ) )
+RSP VRCPH/VRSQH (read high VRSQL) )
+RSP VRCPL (register and element combinations)
+RSP VRNDN (Negative accumulator is clamped before writing the result)
+RSP VRNDN (even vs)
+RSP VRNDN (odd vs)
+RSP VRNDN (overwrite itself with element specifier)
+RSP VRNDP (Negative accumulator is clamped before writing the result)
+RSP VRNDP (accumulator itself overflowed)
+RSP VRNDP (even vs)
+RSP VRNDP (odd vs)
+RSP VRNDP (overwrite itself with element specifier)
+RSP VRSQ (all 16 bit values)
+RSP VRSQ (register and element combinations)
+RSP VRSQH (register and element combinations)
+RSP VRSQH/VRSQL (32 bit)
+RSP VRSQL (register and element combinations)
+RSP VSAC
+RSP VSAD
+RSP VSAR
+RSP VSUB
+RSP VSUBB
+RSP VSUBC
+RSP VSUCB
+RSP VSUM
+RSP VSUT
+RSP VXOR
+RSP Wrap around
+RSP XOR
+RSP XORI
+RSP hidden flag register
+RSP running in parallel to the CPU
+SP Register Read Access From RSP
+SP Semaphore Register (CPU and RSP)
+SP Semaphore Register (RSP only)
+SP Set/Clear Halt
+SP Set/Clear Interrupt
+SP Set/Clear Interrupt on Break
+SP Set/Clear Signal
+SP halt itself through Status.halt
+cache: Cache write unused bits
+cache: Conflicting CacheLineIndex vs Ptag
+cache: Hit Invalidate keeps dirty flag
+cache: Hit Write Back Invalidate keeps dirty flag
+cache: Index Write Back Invalidate keeps dirty flag
+cache: Move cache line
+cache: Read cached vs uncached
+cache: Write cache line manually (clean)
+cache: Write cache line manually (dirty)
+cart-writing: Temp value  decay
+cart-writing: Write16, Read32
+cart-writing: Write32 (outside of ROM), Read32
+cart-writing: Write32, Read16
+cart-writing: Write32, Read32 (beginning of rom)
+cart-writing: Write32, Read32 (different location, nearby)
+cart-writing: Write32, Read32 (end of rom)
+cart-writing: Write32, Read32 (same location)
+cart-writing: Write32, Read8
+cart-writing: Write32, check PI.STATUS IOBUSY
+cart-writing: Write64, Read32
+cart-writing: Write8 (with offset), Read32
+cart-writing: Write8, Read32
+cart_memory: DMA CART -> RDRAM (misaligned)
+cart_memory: DMA CART -> RDRAM (misaligned, cross page)
+cart_memory: DMA CART -> RDRAM (misaligned, end of page)
+cart_memory: DMA CART -> RDRAM (small sizes)
+data cache: Cache Hit Invalidate)
+data cache: Cache Hit Write Back Invalidate)
+data cache: Cache Hit Write Back)
+data cache: Cache Index Load Tag
+data cache: Create Dirty Exclusive)
+data cache: Index Write Back Invalidate)
+data cache: Write back (Using CACHE with Data-Index Write Back Invalidate with uncached address)
+data cache: Write back (Using CACHE with Data-Index Write Back Invalidate)
+data cache: Write back (Using LB 8kb+15 later)
+data cache: Write back (Using LBU 8kb+15 later)
+data cache: Write back (Using LD 8kb+8 later)
+data cache: Write back (Using LH 8kb+14 later)
+data cache: Write back (Using LW 8kb+12 later)
+data cache: Write back (Using LW 8kb+14 later)
+data cache: Write back (Using LWU 8kb+12 later)
+data cache: Write back (Using SB 8kb+15 later)
+data cache: Write back (Using SD 8kb+8 later)
+data cache: Write back (Using SH 8kb+14 later)
+data cache: Write back (Using SW 8kb+12 later)
+icache: Cache(Fill)
+icache: Cache(HitInvalidate)
+icache: Cache(HitWriteBack)
+icache: Cache(IndexInvalidate)
+icache: Cache(IndexStoreTag)
+icache: Modify cached
+icache: Modify cached (second instruction)
+icache: Self-modifying code within basic block (single write)
+spmem: DMA (nowhere) -> IMEM (overflow stays in IMEM)
+spmem: DMA RDRAM -> DMEM (RAM offset unaligned)
+spmem: DMA RDRAM -> DMEM (SP offset unaligned)
+spmem: DMA RDRAM -> DMEM (all aligned)
+spmem: DMA RDRAM -> DMEM (length = 11)
+spmem: DMA RDRAM -> DMEM (overflow)
+spmem: DMA RDRAM -> DMEM (until the end)
+spmem: DMA RDRAM -> IMEM (SP offset unaligned)
+spmem: DMA RDRAM -> IMEM (length = 11)
+spmem: DMA RDRAM -> IMEM (overflow)
+spmem: DMA RDRAM -> IMEM (until the end)
+spmem: DMA RDRAM <- DMEM (overflow with count != 1)
+spmem: DMA RDRAM <- DMEM (overflow)
+spmem: DMA RDRAM <- IMEM (overflow with count != 1)
+spmem: DMA RDRAM <-> DMEM (multi-row overflow roundtrip)
+spmem: DMA RDRAM <-> IMEM (multi-row overflow roundtrip)

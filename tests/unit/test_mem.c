@@ -46,13 +46,14 @@ static void lwl_lwr_merge(void)
 {
 	t_wr32(T_DATA_PA, 0x00112233);
 	R[T0] = T_DATA;
-	R[T1] = R[T2] = 0xAABBCCDD;
+	R[T1] = 0xAABBCCDD;
+	R[T2] = 0x00000000AABBCCDDull;
 	R[T3] = 0x12345678;
 	t_wr32(T_DATA_PA + 4, 0x8899AABB);
 	T_LOAD(LWL(T1, 2, T0), LWR(T2, 1, T0), LWR(T3, 7, T0));
 	t_step(3);
 	CHECK_EQ(R[T1], 0x2233CCDD);
-	CHECK_EQ(R[T2], 0xFFFFFFFFAABB0011ull);  /* el resultado de 32 bits se extiende */
+	CHECK_EQ(R[T2], 0x00000000AABB0011ull);  /* LWR parcial: los 32 bits altos quedan */
 	CHECK_EQ(R[T3], 0xFFFFFFFF8899AABBull);
 }
 
