@@ -17,6 +17,11 @@
  * multipliquen dos texturas ni el sombreado por sí mismo; esos productos se
  * aproximan quedándose con el primer factor y se cuentan.
  *
+ * Excepción: una textura por su propio alfa (T0·T0a, como en
+ * (TEXEL0 − SHADE)·TEXEL0_ALPHA + SHADE, los ojos de Mario en SM64). Si el
+ * dibujo no usa también T0 solo, se pide la textura premultiplicada
+ * (RGB·A, GFX_TEX_PREMUL) y T0·T0a ocupa el término de T0: exacto.
+ *
  * En el canal alfa, "el mismo canal" es el alfa: ahí T0 y S se guardan
  * siempre como T0a y Sa, así que COMBINED_ALPHA se puede llevar tal cual a
  * los canales de color.
@@ -29,7 +34,8 @@
 
 #include "rsp/gfx/hle.h"
 
-enum { TX_ONE, TX_T0, TX_T0A, TX_T1, TX_T1A, TX_N };
+/* T0P = T0·T0a y T1P = T1·T1a (textura premultiplicada). */
+enum { TX_ONE, TX_T0, TX_T0A, TX_T1, TX_T1A, TX_T0P, TX_T1P, TX_N };
 enum { SH_ONE, SH_S, SH_SA, SH_N };
 
 typedef struct {
@@ -53,7 +59,7 @@ static poly p_const(float v)
 
 static poly p_tex(int tx, const struct cc_ctx *x)
 {
-	static const int swapped[TX_N] = { TX_ONE, TX_T1, TX_T1A, TX_T0, TX_T0A };
+	static const int swapped[TX_N] = { TX_ONE, TX_T1, TX_T1A, TX_T0, TX_T0A, TX_T1P, TX_T0P };
 	poly p;
 	memset(&p, 0, sizeof p);
 	p.c[x->swap ? swapped[tx] : tx][SH_ONE] = 1.0f;
@@ -83,6 +89,22 @@ static poly p_add(poly a, const poly *b)
 	return a;
 }
 
+/* Producto de dos monomios de textura: exacto si es una textura por su
+ * propio alfa; si no, se aproxima con el primero. */
+static int tx_mul(int ta, int tb, struct cc_ctx *x)
+{
+	if (ta == TX_ONE)
+		return tb;
+	if (tb == TX_ONE)
+		return ta;
+	if ((ta == TX_T0 && tb == TX_T0A) || (ta == TX_T0A && tb == TX_T0))
+		return TX_T0P;
+	if ((ta == TX_T1 && tb == TX_T1A) || (ta == TX_T1A && tb == TX_T1))
+		return TX_T1P;
+	x->approx = true;  /* textura × textura */
+	return ta;
+}
+
 static poly p_mul(const poly *a, const poly *b, struct cc_ctx *x)
 {
 	poly r = p_const(0.0f);
@@ -96,13 +118,7 @@ static poly p_mul(const poly *a, const poly *b, struct cc_ctx *x)
 					float vb = b->c[tb][sb];
 					if (vb == 0.0f)
 						continue;
-					int t = ta, s = sa;
-					if (tb != TX_ONE) {
-						if (ta != TX_ONE)
-							x->approx = true;  /* textura × textura */
-						else
-							t = tb;
-					}
+					int t = tx_mul(ta, tb, x), s = sa;
 					if (sb != SH_ONE) {
 						if (sa != SH_ONE)
 							x->approx = true;  /* sombreado × sombreado */
@@ -230,7 +246,34 @@ static void rgba(uint32_t c, float out[4])
 }
 
 /* Monomio de textura → término de gfx_draw.k. */
-static const int tx_term[TX_N] = { GFX_K_ONE, GFX_K_T0, GFX_K_T0A, GFX_K_T1, GFX_K_T1A };
+static const int tx_term[TX_T0P] = { GFX_K_ONE, GFX_K_T0, GFX_K_T0A, GFX_K_T1, GFX_K_T1A };
+
+static bool any_coef(const poly out[4], int t)
+{
+	for (int lane = 0; lane < 4; lane++)
+		for (int s = 0; s < SH_N; s++)
+			if (out[lane].c[t][s] != 0.0f)
+				return true;
+	return false;
+}
+
+/* T·Ta sin T solo: textura premultiplicada (exacto). Con T solo también:
+ * se aproxima sumándolo a T, como antes. */
+static void premul(poly out[4], int t, int tp, struct gfx_tex *tex, struct cc_ctx *x)
+{
+	if (!any_coef(out, tp))
+		return;
+	bool plain = any_coef(out, t);
+	for (int lane = 0; lane < 4; lane++)
+		for (int s = 0; s < SH_N; s++) {
+			out[lane].c[t][s] += out[lane].c[tp][s];
+			out[lane].c[tp][s] = 0.0f;
+		}
+	if (plain)
+		x->approx = true;
+	else
+		tex->flags |= GFX_TEX_PREMUL;
+}
 
 bool gfx_combine(const struct gfx_state *g, struct gfx_draw *d)
 {
@@ -258,10 +301,15 @@ bool gfx_combine(const struct gfx_state *g, struct gfx_draw *d)
 		run_cycle(&cyc[1], out, comb, &x);
 	}
 
+	d->tex[0].flags &= (uint8_t)~GFX_TEX_PREMUL;
+	d->tex[1].flags &= (uint8_t)~GFX_TEX_PREMUL;
+	premul(out, TX_T0, TX_T0P, &d->tex[0], &x);
+	premul(out, TX_T1, TX_T1P, &d->tex[1], &x);
+
 	memset(d->k, 0, sizeof d->k);
 	bool t0 = false, t1 = false;
 	for (int lane = 0; lane < 4; lane++)
-		for (int t = 0; t < TX_N; t++)
+		for (int t = 0; t < TX_T0P; t++)  /* T0P y T1P ya pasaron a T0 y T1 */
 			for (int s = 0; s < SH_N; s++) {
 				float v = out[lane].c[t][s];
 				d->k[tx_term[t]][s][lane] = v;

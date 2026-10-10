@@ -15,9 +15,9 @@
 
 #include "rsp/gfx/gfx.h"
 
-#define GFX_MAX_VTX     64   /* F3DEX2: 32 */
-#define GFX_MTX_STACK   32   /* F3DEX2: 18 en la RDRAM */
-#define GFX_DL_STACK    32   /* F3DEX2: 18 */
+#define GFX_MAX_VTX     64   /* F3D: 16; F3DEX y F3DEX2: 32 */
+#define GFX_MTX_STACK   32   /* F3D: 10, F3DEX2: 18 en la RDRAM */
+#define GFX_DL_STACK    32   /* F3D: 10, F3DEX2: 18 */
 #define GFX_MAX_LIGHTS  8    /* direccionales + la ambiental */
 #define GFX_TEX_ARENA   128  /* texturas en el arena por tarea */
 #define GFX_TC_ENTRIES  1024 /* texturas en la caché entre tareas */
@@ -90,7 +90,7 @@ struct gfx_texcache {
  * cargas a la TMEM ni cambios de tiles (tex_gen) ni del modo de paleta. */
 struct gfx_tilememo {
 	uint32_t gen;
-	uint8_t tt, ok;
+	uint8_t tt, ok, premul;
 	struct gfx_tex tex;
 };
 
@@ -114,8 +114,11 @@ struct gfx_state {
 	uint16_t tex_s, tex_t;     /* escala de G_TEXTURE (0.16) */
 	uint8_t tex_tile, tex_level, tex_on;
 	uint32_t rdphalf1, rdphalf2;
+	uint32_t raw[44];          /* comando del RDP armado con G_RDPHALF_* */
+	uint8_t raw_n, raw_len;    /* dobles palabras recibidas y esperadas */
 	uint32_t dl_stack[GFX_DL_STACK];
 	int dl_sp;
+	uint32_t dl_pc;            /* siguiente comando de la display list */
 	struct gfx_vtx vtx[GFX_MAX_VTX];
 
 	/* --- RDP (persiste entre tareas) --- */
@@ -185,6 +188,38 @@ void gfx_io_tex_cache(struct gfx_state *g, uint32_t off, uint32_t size);
 
 /* ---- Módulos ---- */
 
+/* Cada familia de microcódigos decodifica sus comandos en su archivo
+ * (f3dex2.c: F3DEX2 y F3DZEX2; f3d.c: F3D y F3DEX 1.x) y llama a lo de
+ * abajo con los parámetros ya extraídos. */
+void gfx_dl_f3dex2(struct gfx_state *g);
+void gfx_dl_f3d(struct gfx_state *g);
+
+/* dl.c: recorrido de la display list y estado que el RSP pasa al RDP. */
+/* Siguiente comando (avanza dl_pc). false: la tarea termina (fuera de la
+ * RDRAM o demasiados comandos). */
+bool gfx_dl_next(struct gfx_state *g, uint32_t *w0, uint32_t *w1);
+/* G_DL: llamada (guarda el regreso) o salto. false si la pila se llenó. */
+bool gfx_dl_call(struct gfx_state *g, uint32_t seg, bool branch);
+/* G_ENDDL: regreso a quien llamó. false si terminó la lista principal. */
+bool gfx_dl_end(struct gfx_state *g);
+/* G_TEXRECT y G_TEXRECTFLIP: s, t y dsdx, dtdy llegan en los dos comandos
+ * siguientes si sus opcodes están en ops_st y ops_d (hasta 4 opcodes, uno
+ * por byte). Si no, el rectángulo se descarta y ese comando sigue normal. */
+void gfx_dl_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t ops_st, uint32_t ops_d);
+/* Una doble palabra de un comando del RDP que llega por G_RDPHALF_* (alta
+ * en G_RDPHALF_1, baja en el siguiente); al completar el comando, lo
+ * ejecuta. */
+void gfx_dl_rdp_word(struct gfx_state *g, uint32_t hi, uint32_t lo);
+/* G_BRANCH_Z: salta a la lista de G_RDPHALF_1 si la z de pantalla del
+ * vértice es <= zval. */
+void gfx_branch_z(struct gfx_state *g, uint32_t v, uint32_t zval);
+/* G_TEXTURE: escala s, t (0.16) en `scale`, nivel, tile y encendido. */
+void gfx_sp_texture(struct gfx_state *g, uint32_t scale, unsigned level, unsigned tile, unsigned on);
+/* Geometry mode nuevo completo, con los bits de F3DEX2 (abajo). */
+void gfx_sp_geometry(struct gfx_state *g, uint32_t geom);
+/* G_SETOTHERMODE_H/L: `len` bits desde el bit `shift`. */
+void gfx_sp_othermode(struct gfx_state *g, bool high, int shift, int len, uint32_t data);
+
 /* geom.c: matrices, vértices, luces. */
 void gfx_geom_reset(struct gfx_state *g);
 void gfx_load_matrix(float m[16], const uint8_t *src);
@@ -193,6 +228,22 @@ void gfx_load_vertices(struct gfx_state *g, uint32_t addr, uint32_t v0, uint32_t
 void gfx_set_viewport(struct gfx_state *g, const uint8_t *vp);
 void gfx_set_light(struct gfx_state *g, int index, const uint8_t *src);
 void gfx_set_lookat(struct gfx_state *g, int axis, const uint8_t *src);
+/* G_MTX: carga o multiplica (y apila) la modelview o la proyección. */
+#define GFX_MTX_PUSH       0x01u
+#define GFX_MTX_LOAD       0x02u
+#define GFX_MTX_PROJECTION 0x04u
+void gfx_matrix(struct gfx_state *g, uint32_t addr, uint32_t flags);
+void gfx_pop_matrix(struct gfx_state *g, uint32_t n);
+/* Matriz combinada: entera (gSPForceMatrix) o media palabra de dos
+ * elementos (G_MW_MATRIX; `where` en bytes dentro del Mtx). */
+void gfx_force_matrix(struct gfx_state *g, uint32_t addr);
+void gfx_insert_matrix(struct gfx_state *g, uint32_t where, uint32_t val);
+void gfx_num_lights(struct gfx_state *g, int n);
+void gfx_light_color(struct gfx_state *g, int light, uint32_t rgba);
+/* G_MODIFYVTX / G_MW_POINTS: `where` es G_MWO_POINT_* (geom.c). */
+void gfx_modify_vertex(struct gfx_state *g, uint32_t v, uint32_t where, uint32_t val);
+/* G_CULLDL: true si los vértices v0..v1 quedan todos fuera de un plano. */
+bool gfx_vertices_culled(const struct gfx_state *g, uint32_t v0, uint32_t v1);
 /* Pantalla → coordenadas homogéneas de salida. */
 void gfx_vtx_out(const struct gfx_state *g, const struct gfx_vtx *v, struct gfx_vertex *o);
 
@@ -202,6 +253,11 @@ void gfx_rdp_command(struct gfx_state *g, uint32_t w0, uint32_t w1);
 void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c);
 void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uint32_t w3, bool flip);
 void gfx_flush_draw(struct gfx_state *g);
+/* Triángulos crudos del RDP (0xC8–0xCF) que llegan por G_RDPHALF_*: dobles
+ * palabras del comando según su opcode y el triángulo con ellas (`w`:
+ * pares alta, baja). */
+unsigned gfx_rdp_raw_words(uint32_t op);
+void gfx_rdp_triangle(struct gfx_state *g, const uint32_t *w);
 
 /* texcache.c: hash de 64 bits por bloques de 16 bytes y caché de texturas
  * entre tareas. */
@@ -229,8 +285,9 @@ void gfx_load_block(struct gfx_state *g, uint32_t w0, uint32_t w1);
 void gfx_load_tile(struct gfx_state *g, uint32_t w0, uint32_t w1);
 void gfx_load_tlut(struct gfx_state *g, uint32_t w0, uint32_t w1);
 /* Decodifica la tile a RGBA8888 (o la toma de la caché) y llena `tex`
- * salvo flags y xf. false si no hay lugar. */
-bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex);
+ * salvo flags y xf; con premul, RGB·A (otra entrada de la caché). false si
+ * no hay lugar. */
+bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex, bool premul);
 /* Tamaño de la textura de una tile (potencia de 2 si se repite). */
 void gfx_tile_size(const struct gfx_tile *t, uint32_t *w, uint32_t *h);
 
@@ -244,7 +301,8 @@ static inline uint32_t gfx_addr(const struct gfx_state *g, uint32_t seg)
 	return (g->segments[(seg >> 24) & 15] + (seg & 0x00FFFFFF)) & 0x00FFFFFF;
 }
 
-/* Bits de geometry mode de F3DEX2. */
+/* Bits de geometry mode de F3DEX2: los que guarda gfx_state.geom con
+ * cualquier microcódigo (f3d.c traduce los suyos). */
 #define G_ZBUFFER            0x00000001u
 #define G_SHADE              0x00000004u
 #define G_CULL_FRONT         0x00000200u

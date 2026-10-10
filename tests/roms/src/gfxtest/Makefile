@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Salsa64 — gfxtest. Se compila dentro de docker/vitest.Dockerfile con ROM=gfxtest
-# (tools/build-vitest.sh gfxtest): clang 14 de Debian para MIPS II big-endian (o32; el VR4300 es MIPS III,
+# (tools/build-gfxtest.sh): clang 14 de Debian para MIPS II big-endian (o32; el VR4300 es MIPS III,
 # pero LLVM no admite o32 con mips3: `cache` y `eret` van con .set mips3),
 # sin bibliotecas. El ROM lo arma nust64 a partir de build/salsa64-gfxtest.elf.
 CC      := clang-14
@@ -10,6 +10,11 @@ CFLAGS  := $(TARGET) -O2 -std=c11 -Wall -Wextra -Werror -ffreestanding -fno-buil
            -nostdlib -mno-abicalls -fno-pic -G0 -msoft-float -mno-check-zero-division \
            -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-stack-protector
 ASFLAGS := $(TARGET) -mno-abicalls -fno-pic -G0 -msoft-float
+
+# GBI=F3D o GBI=F3DEX: las mismas escenas con los comandos del RSP de la
+# primera generación (gbi.h); por omisión, F3DEX2.
+GBI ?= F3DEX2
+CFLAGS += -DGBI_$(GBI)
 
 OUT := build
 OBJS := $(OUT)/start.o $(OUT)/main.o

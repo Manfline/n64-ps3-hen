@@ -56,6 +56,7 @@ static inline void lwsync(void) { __asm__ volatile("lwsync" ::: "memory"); }
 
 struct target {
 	bool used;
+	bool drawn;              /* dibujado desde la última presentación */
 	uint32_t addr, width, lw, lh, bpp;
 	uint32_t last_field;
 	rsxkit_target *t;
@@ -227,6 +228,7 @@ static struct target *get_target(uint32_t addr, uint32_t width, uint32_t siz)
 	t->lh = lh;
 	t->bpp = siz == G_IM_SIZ_32b ? 4 : siz == G_IM_SIZ_8b ? 1 : 2;
 	t->last_field = rdp.field;
+	t->drawn = false;
 	rdp.stats.targets_created++;
 	return t;
 }
@@ -375,6 +377,7 @@ static void translate(uint32_t n)
 				d = get_depth(g->zimg, cur);
 			bind(cur, d);
 			cur->last_field = rdp.field;
+			cur->drawn = true;
 			to_rsxkit(g, s, &rd);
 			rsxkit_draw_triangles(&rd, g->h.a, g->h.b);
 			rdp.stats.draws++;
@@ -420,6 +423,14 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 	rdp.field = field;
 	if (!rdp.ready)
 		return false;
+	/* rdp.field solo avanza cuando el VI muestra algo: lo dibujado mientras
+	 * estuvo en negro (SM64 lo apaga 26 campos al cambiar de escena) quedó
+	 * con el campo de antes y parecería viejo al volver la imagen. */
+	for (int i = 0; i < MAX_TARGETS; i++)
+		if (rdp.targets[i].drawn) {
+			rdp.targets[i].last_field = field;
+			rdp.targets[i].drawn = false;
+		}
 	for (int i = 0; i < MAX_TARGETS; i++) {
 		const struct target *t = &rdp.targets[i];
 		if (!t->used || field - t->last_field > STALE_FIELDS)

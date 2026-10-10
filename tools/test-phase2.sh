@@ -3,7 +3,8 @@
 # y gfxtest con el rasterizador de referencia), lib/spukit en RPCS3
 # (spu-jobs) y el frontend con gfxtest en RPCS3: HLE en el SPE, dibujo en
 # el RSX y la pantalla verificada en los puntos de
-# tests/roms/src/gfxtest/expect.h. El tiempo de RPCS3 no es concluyente.
+# tests/roms/src/gfxtest/expect.h, con la ROM embebida (F3DEX2) y con su
+# variante F3D. El tiempo de RPCS3 no es concluyente.
 set -u
 cd "$(dirname "$0")/.."
 mkdir -p build/logs
@@ -39,5 +40,15 @@ tools/rpcs3-run.py build/salsa64/salsa64.elf --embedded gfxtest >build/logs/rpcs
 rc=$?
 printf '%-10s %s\n' frontend "$(grep 'RESULTADO' build/logs/rpcs3-gfxtest.log | tail -1 | sed 's/.*RESULTADO //')"
 grep -E 'gfxtest:|gfx:' build/logs/rpcs3-gfxtest.log | sed 's/^\[[^]]*\] /           /' | head -8
+[ $rc -eq 0 ] || fail=1
+
+# La variante F3D, desde dev_hdd0/salsa64 de RPCS3 (file:).
+R3DATA="$HOME/Library/Application Support/rpcs3/dev_hdd0/salsa64"
+mkdir -p "$R3DATA"
+cp tests/roms/homebrew/salsa64-gfxtest-f3d.z64 "$R3DATA/"
+tools/rpcs3-run.py build/salsa64/salsa64.elf --rom salsa64-gfxtest-f3d.z64 >build/logs/rpcs3-gfxtest-f3d.log 2>&1
+rc=$?
+printf '%-10s %s\n' f3d "$(grep 'RESULTADO' build/logs/rpcs3-gfxtest-f3d.log | tail -1 | sed 's/.*RESULTADO //')"
+grep -E 'gfxtest:|gfx:' build/logs/rpcs3-gfxtest-f3d.log | sed 's/^\[[^]]*\] /           /' | head -8
 [ $rc -eq 0 ] || fail=1
 exit $fail
