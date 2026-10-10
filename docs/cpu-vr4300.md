@@ -110,9 +110,24 @@ Solo camino plano:
   pasa al IPL3 (libdragon `boot/ipl3.c` los nombra así); no está verificado
   qué queda exactamente en ellos tras el IPL3 de Nintendo.
 - $sp = 0xA4001FF0 (lo deja el IPL1).
-- Falta: los efectos secundarios propios de algunos IPL3 (el de 6105 usa el
-  RSP durante el arranque y hay juegos que lo comprueban). Se verán con los
-  juegos del usuario; no se pueden reproducir copiando código de Nintendo.
+
+Solo CIC 6105/7105 (lo que su IPL3 deja además y los juegos comprueban;
+fuentes en docs/THIRD_PARTY.md):
+
+| Qué | Efecto | Quién lo comprueba |
+|---|---|---|
+| Copia de su propia imagen | DMEM 0x554–0x888 → RDRAM 0x004–0x338. En DMEM están los bytes 0x40–0xFFF de la ROM en las mismas posiciones, así que se copian de la ROM del usuario | Perfect Dark (`b .` si 0x2E8 ≠ 0xC86E2000, ROM 0x838) y Zelda OoT (un actor revisa la misma palabra) |
+| Microcódigo del RSP | Lee 0x1F0 bytes de RDRAM 0x1E8 a IMEM 0x120 y los escribe con un DMA con paso: 24 filas de 8 bytes desde RDRAM 0x2FB1F0, una cada 0xFF0 (SP_WR_LEN = 0xFE817000). Se reproduce el efecto, no el microcódigo | Donkey Kong 64 (fila 3, 0x2FE1C0) |
+| Tamaño de la RDRAM | En 0x3F0, además de osMemSize en 0x318 | homebrew que arranca con IPL3 6105 (n64bootloader) |
+
+Las variables de libultra (0x300–0x318) se escriben después y pisan la
+copia; de 0x31C a 0x337 queda lo copiado. No se reproduce lo que queda en
+IMEM 0x000–0x11F (el microcódigo, descifrado del residuo del IPL2 que deja la
+PIF ROM): es código de Nintendo. Tampoco el resto de los registros que deja
+cada IPL3 (los cálculos del checksum): no hay documentación pública ni juego
+conocido que los lea. En las demás variantes no hay efectos documentados en
+la RDRAM más allá de la dirección de arranque. `salsa64_boot_hle_as` fuerza
+la variante (pruebas: las ROMs sintéticas no traen un IPL3 de Nintendo).
 
 El tipo de TV sale del código de destino del encabezado (byte 0x3E: D, F, H,
 I, L, P, S, U, W, X, Y, Z → PAL; B → MPAL; el resto NTSC) y se puede forzar
