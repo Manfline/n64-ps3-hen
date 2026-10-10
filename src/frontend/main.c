@@ -44,7 +44,8 @@
  * SALSA64_DATA_DIR/gfxdump.bin (salsa64-run --raster-dump la dibuja).
  * Si SALSA64_DATA_DIR/capturas dice un número N, las capturas se toman cada
  * N campos (campo-<campo>.ppm) y no por tiempo: la emulación es
- * determinista, así que se pueden comparar entre compilaciones.
+ * determinista, así que se pueden comparar entre compilaciones. Un segundo
+ * número M hace salir en el campo M (mediciones sin manos).
  *
  * Medición de la HLE gráfica: además de la estadística cada STATS_US, el
  * log resume cada GFX_WIN_FIELDS campos ("gfx campos A–B"): mismas ventanas,
@@ -524,7 +525,7 @@ int main(void)
 	enum selftest_state result = SELFTEST_RUNNING;
 	uint64_t t_stats = sysGetSystemTime(), cyc_stats = n64.cpu.cycles, idle_stats = n64.cpu.idle_cycles;
 	uint64_t t_shot = t_stats;
-	uint32_t shots = 0, dump_field = 0, cap_every = 0;
+	uint32_t shots = 0, dump_field = 0, cap_every = 0, exit_field = 0;
 	{
 		FILE *df = fopen(SALSA64_DATA_DIR "/gfxdump", "r");
 		if (df) {
@@ -534,7 +535,7 @@ int main(void)
 		}
 		FILE *cf = fopen(CAPS_PATH, "r");
 		if (cf) {
-			if (fscanf(cf, "%u", &cap_every) != 1)
+			if (fscanf(cf, "%u %u", &cap_every, &exit_field) < 1)
 				cap_every = 0;
 			fclose(cf);
 		}
@@ -606,6 +607,10 @@ int main(void)
 			salsa64_log("volcado de la HLE en el campo %u: %s", n64.bus.vi.fields,
 				    salsa64_rdp_dump(SALSA64_DATA_DIR "/gfxdump.bin") ? "bien" : "FALLO");
 			dump_field = 0;
+		}
+		if (exit_field && n64.bus.vi.fields >= exit_field) {
+			salsa64_log("salida en el campo %u (capturas)", n64.bus.vi.fields);
+			break;
 		}
 		if (autotest && !selftest_on && !gfxtest_on && n64.bus.vi.fields >= AUTO_FIELDS) {
 			salsa64_log("RESULTADO frontend: OK (ROM del disco, %u campos)", n64.bus.vi.fields);
