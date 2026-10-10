@@ -8,6 +8,7 @@
 
 #include "../../tests/roms/src/gfxtest/expect.h"
 #include "platform/ps3/log.h"
+#include "screenshot.h"
 
 static const struct gfxtest_point points[] = { GFXTEST_POINTS };
 #define NPOINTS (sizeof points / sizeof points[0])
@@ -47,27 +48,6 @@ static uint32_t screen_px(const uint32_t *px, uint32_t pitch, const struct salsa
 	return px[sy * (pitch / 4) + sx] & 0xFFFFFF;
 }
 
-/* La pantalla muestreada en el centro de cada píxel de la N64. */
-static void dump(const uint32_t *px, uint32_t pitch, const struct salsa64_vi_frame *f, const rsxkit_rect *r)
-{
-	FILE *out = fopen(PPM_PATH, "wb");
-	if (!out)
-		return;
-	fprintf(out, "P6\n%u %u\n255\n", f->width, f->height);
-	static uint8_t line[3 * 640];
-	for (uint32_t y = 0; y < f->height; y++) {
-		for (uint32_t x = 0; x < f->width && x < 640; x++) {
-			uint32_t c = screen_px(px, pitch, f, r, x + 0.5f, y + 0.5f);
-			line[3 * x] = (uint8_t)(c >> 16);
-			line[3 * x + 1] = (uint8_t)(c >> 8);
-			line[3 * x + 2] = (uint8_t)c;
-		}
-		fwrite(line, 3, f->width, out);
-	}
-	fclose(out);
-	salsa64_log("gfxtest: imagen en %s", PPM_PATH);
-}
-
 void gfxtest_screen(const struct salsa64_vi_frame *f, const rsxkit_rect *r)
 {
 	uint32_t pitch;
@@ -91,7 +71,8 @@ void gfxtest_screen(const struct salsa64_vi_frame *f, const rsxkit_rect *r)
 	st.screen = bad ? -1 : 1;
 	salsa64_log("gfxtest: pantalla %s (%u de %u puntos bien; rectángulo %ux%u en %d,%d)", bad ? "MAL" : "bien",
 		    (unsigned)NPOINTS - bad, (unsigned)NPOINTS, r->w, r->h, r->x, r->y);
-	dump(px, pitch, f, r);
+	salsa64_screenshot(PPM_PATH, f, r);
+	salsa64_log("gfxtest: imagen en %s", PPM_PATH);
 }
 
 enum selftest_state gfxtest_state(uint32_t fields)

@@ -18,6 +18,10 @@
  * HLE gráfica: en el SPE 0 (lib/spukit); con SALSA64_DATA_DIR/gfx_ppe
  * presente, en el PPE (para comparar tiempos).
  *
+ * Capturas: con una ROM del disco, cada SHOT_US se guarda la pantalla en
+ * SALSA64_DATA_DIR/screen-N.ppm (N de 1 a SHOT_MAX, en ronda), para verla
+ * desde la Mac por FTP.
+ *
  * Salir: START + SELECT, o "Salir del juego" desde el menú del sistema.
  * Lo que la ROM imprime por el ISViewer va al log.
  */
@@ -40,6 +44,7 @@
 #include "platform/ps3/log.h"
 #include "rdp/rdp.h"
 #include "rsp/gfx/hle.h"
+#include "screenshot.h"
 #include "selftest.h"
 #include "selftest_gfx.h"
 #include "vitest_rom_bin.h"
@@ -53,6 +58,8 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define FB_MAX_W     640
 #define FB_MAX_H     576
 #define STATS_US     5000000u
+#define SHOT_US      10000000u
+#define SHOT_MAX     9
 
 static struct salsa64_n64 n64;
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
@@ -254,6 +261,8 @@ int main(void)
 	const rsxkit_view view = { RSXKIT_SCALE_FIT, RSXKIT_FILTER_LINEAR, 4.0f / 3.0f };
 	enum selftest_state result = SELFTEST_RUNNING;
 	uint64_t t_stats = sysGetSystemTime(), cyc_stats = n64.cpu.cycles;
+	uint64_t t_shot = t_stats;
+	uint32_t shots = 0;
 	uint64_t us_emu = 0, us_present = 0;
 	uint32_t fields_stats = 0, blank = 0, rsx_frames = 0;
 	struct salsa64_rdp_stats rdp0;
@@ -270,8 +279,8 @@ int main(void)
 		salsa64_n64_run_field(&n64);
 		uint64_t t1 = sysGetSystemTime();
 
-		struct salsa64_vi_frame f;
-		rsxkit_rect r;
+		struct salsa64_vi_frame f = { 0 };
+		rsxkit_rect r = { 0, 0, 0, 0 };
 		bool check = false, check_gfx = false;
 		rsxkit_frame_begin(0x000000);
 		if (salsa64_vi_frame(&n64.bus, &f) && f.width <= FB_MAX_W && f.height <= FB_MAX_H) {
@@ -295,6 +304,14 @@ int main(void)
 				selftest_screen(&f, &r);
 			else
 				gfxtest_screen(&f, &r);
+		} else if (!selftest_on && !gfxtest_on && f.width && t1 - t_shot >= SHOT_US) {
+			char path[64];
+			snprintf(path, sizeof path, SALSA64_DATA_DIR "/screen-%u.ppm", shots % SHOT_MAX + 1);
+			rsxkit_finish();
+			salsa64_screenshot(path, &f, &r);
+			salsa64_log("captura %s (campo %u)", path, n64.bus.vi.fields);
+			shots++;
+			t_shot = t1;
 		}
 		rsxkit_frame_end();
 		uint64_t t2 = sysGetSystemTime();

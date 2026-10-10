@@ -69,6 +69,8 @@ static struct {
 	bool raster;
 } gfx;
 
+static unsigned trace_gfx_left;
+
 static void gfx_acquire(void *ctx, struct gfx_job *job)
 {
 	(void)ctx;
@@ -99,6 +101,26 @@ static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_resu
 	s->dl_errors += res->dl_errors;
 	if (gfx.raster)
 		raster_task(job, res);
+	if (trace_gfx_left && n64.bus.vi.fields > 500) {
+		trace_gfx_left--;
+		fprintf(stderr, "tarea gfx (campo %u):", n64.bus.vi.fields);
+		uint32_t off = 0;
+		while (off + sizeof(struct gfx_cmd) <= res->cmd_bytes) {
+			const struct gfx_cmd *c = (const struct gfx_cmd *)(gfx_cmd + off);
+			if (c->op == GFX_OP_END || !c->size)
+				break;
+			if (c->op == GFX_OP_TARGET)
+				fprintf(stderr, " TARGET %06x/%u", c->a, c->b);
+			else if (c->op == GFX_OP_ZCLEAR)
+				fprintf(stderr, " ZCLEAR %06x", c->a);
+			else if (c->op == GFX_OP_DRAW) {
+				const struct gfx_draw *d = (const struct gfx_draw *)c;
+				fprintf(stderr, " D%u", d->h.b / 3);
+			}
+			off += c->size;
+		}
+		fprintf(stderr, "\n");
+	}
 }
 
 #ifdef SALSA64_DEBUG_SPMEM
@@ -111,7 +133,7 @@ void salsa64_debug_spmem(uint32_t reg, uint32_t v)
 }
 #endif
 
-static unsigned trace_rsp_left;
+static unsigned trace_rsp_left, trace_vi_left;
 
 static void trace_rsp(void *ctx, const struct salsa64_task *t, enum salsa64_gbi gbi)
 {
@@ -385,7 +407,8 @@ static void usage(FILE *out)
 	      "      --frame ARCHIVO   al terminar, guardar en PPM la imagen del VI\n"
 	      "      --gfx-frame ARCHIVO  al terminar, guardar en PPM lo que dibujó la HLE gráfica\n"
 	      "      --gfxtest-check   verificar la imagen de la HLE con los puntos de gfxtest\n"
-	      "      --trace-rsp N     mostrar las primeras N tareas del RSP\n", out);
+	      "      --trace-rsp N     mostrar las primeras N tareas del RSP\n"
+	      "      --trace-vi N      mostrar la imagen del VI en los últimos N campos\n", out);
 }
 
 int main(int argc, char **argv)
@@ -404,6 +427,8 @@ int main(int argc, char **argv)
 		{ "gfx-frame", required_argument, NULL, 'G' },
 		{ "gfxtest-check", no_argument, NULL, 'K' },
 		{ "trace-rsp", required_argument, NULL, 'P' },
+		{ "trace-vi", required_argument, NULL, 'V' },
+		{ "trace-gfx", required_argument, NULL, 'Q' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 },
 	};
@@ -433,6 +458,8 @@ int main(int argc, char **argv)
 		case 'G': gfx_path = optarg; gfx.raster = true; break;
 		case 'K': gfx_check = true; gfx.raster = true; break;
 		case 'P': trace_rsp_left = (unsigned)strtoul(optarg, NULL, 0); break;
+		case 'V': trace_vi_left = (unsigned)strtoul(optarg, NULL, 0); break;
+		case 'Q': trace_gfx_left = (unsigned)strtoul(optarg, NULL, 0); break;
 		case 'T':
 			if (!strcmp(optarg, "ntsc")) tv = SALSA64_TV_NTSC;
 			else if (!strcmp(optarg, "pal")) tv = SALSA64_TV_PAL;
@@ -501,7 +528,17 @@ int main(int argc, char **argv)
 			reason = STOP_CYCLES;
 			break;
 		}
-		salsa64_n64_run(&n64, max_cycles - done < slice ? max_cycles - done : slice);
+		if (trace_vi_left && max_cycles - done < (uint64_t)trace_vi_left * 1600000u) {
+			/* Últimos campos: de a uno, con la imagen que describe el VI. */
+			salsa64_n64_run_field(&n64);
+			struct salsa64_vi_frame f;
+			if (salsa64_vi_frame(&n64.bus, &f))
+				fprintf(stderr, "campo %u: origen %06x %ux%u stride %u bpp %u (V_VIDEO %08x Y_SCALE %08x)\n",
+					n64.bus.vi.fields, f.origin, f.width, f.height, f.stride, f.bpp,
+					n64.bus.vi.regs[SALSA64_VI_V_VIDEO], n64.bus.vi.regs[SALSA64_VI_Y_SCALE]);
+		} else {
+			salsa64_n64_run(&n64, max_cycles - done < slice ? max_cycles - done : slice);
+		}
 		if (watch.hit != STOP_NONE)
 			reason = watch.hit;
 		else if (cpu_stuck())
