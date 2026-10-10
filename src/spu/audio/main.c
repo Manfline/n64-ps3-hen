@@ -8,7 +8,7 @@
  * persiste entre tareas, como en el host.
  *
  * Presupuesto de local store (256 KB); los números exactos los imprime el
- * build (spu-size; 2026-10-10, con naudio y MP3: text 44 368, data 832,
+ * build (spu-size; 2026-10-10, con naudio y MP3: text 43 456, data 832,
  * bss 22 416 bytes):
  *   código (HLE + runtime)               41 KB
  *   ventana de síntesis del MP3            2 KB
