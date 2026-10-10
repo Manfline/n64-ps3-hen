@@ -15,6 +15,11 @@
  *   nivel_ms = 60                   colchón mínimo del anillo
  *   hle = spe | ppe | no            dónde corre la HLE de audio (spe)
  *   salida = si | no                abrir el puerto de audio (si)
+ *   volcado_s = 0                   diagnóstico: guardar los primeros N s
+ *                                   que salen por el AI (hasta 30) en
+ *                                   SALSA64_DATA_DIR/audio.wav. Con juegos
+ *                                   comerciales es audio del juego: no va
+ *                                   al repositorio.
  */
 #ifndef SALSA64_FRONTEND_AUDIO_OUT_H
 #define SALSA64_FRONTEND_AUDIO_OUT_H

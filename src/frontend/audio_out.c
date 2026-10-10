@@ -8,6 +8,7 @@
 #include "audio_out.h"
 
 #include <audio/audio.h>
+#include <malloc.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/event_queue.h>
@@ -22,6 +23,8 @@
 #include "rsp/audio/backend.h"
 
 #define CFG_PATH  SALSA64_DATA_DIR "/audio.cfg"
+#define WAV_PATH  SALSA64_DATA_DIR "/audio.wav"
+#define DUMP_MAX_S 30
 #define CFG_MAX   1024
 #define LEAD      4u        /* bloques llenos por delante del que suena */
 #define STATS_US  5000000u
@@ -47,6 +50,15 @@ static struct {
 	volatile uint64_t busy_us;   /* tiempo del hilo trabajando */
 } port;
 
+/* Volcado opcional de lo que sale por el AI (diagnóstico; audio.cfg). Lo
+ * llena el sumidero del AI y lo escribe audio_out_field. */
+static struct {
+	uint8_t *buf;
+	uint32_t cap, len, rate;
+	volatile uint32_t full;
+	bool written;
+} dump;
+
 /* Para las estadísticas cada STATS_US. */
 static struct {
 	uint64_t t;
@@ -62,6 +74,7 @@ struct audio_cfg {
 	uint32_t level_ms;
 	int hle;      /* HLE_* */
 	bool output;
+	uint32_t dump_s;
 };
 
 static void read_cfg(struct audio_cfg *c)
@@ -71,6 +84,7 @@ static void read_cfg(struct audio_cfg *c)
 	c->level_ms = 60;
 	c->hle = HLE_SPE;
 	c->output = true;
+	c->dump_s = 0;
 	FILE *f = fopen(CFG_PATH, "r");
 	if (!f)
 		return;
@@ -89,6 +103,8 @@ static void read_cfg(struct audio_cfg *c)
 			c->hle = !strcmp(val, "ppe") ? HLE_PPE : !strcmp(val, "no") ? HLE_NONE : HLE_SPE;
 		else if (!strcmp(key, "salida"))
 			c->output = strcmp(val, "no") != 0;
+		else if (!strcmp(key, "volcado_s"))
+			sscanf(val, "%u", &c->dump_s);
 	}
 	salsa64_log("audio: %s leído", CFG_PATH);
 }
@@ -99,6 +115,42 @@ static void ai_push(void *ctx, const uint8_t *p, uint32_t bytes, uint32_t rate, 
 {
 	(void)cycle;
 	audio_sync_push(ctx, p, bytes, rate);
+	if (dump.buf && !dump.full) {
+		uint32_t n = bytes < dump.cap - dump.len ? bytes : dump.cap - dump.len;
+		memcpy(dump.buf + dump.len, p, n);
+		dump.len += n;
+		dump.rate = rate;
+		if (dump.len == dump.cap)
+			__atomic_store_n(&dump.full, 1, __ATOMIC_RELEASE);
+	}
+}
+
+static void write_dump(void)
+{
+	FILE *f = fopen(WAV_PATH, "wb");
+	if (!f) {
+		salsa64_log("audio: no se pudo escribir %s", WAV_PATH);
+		return;
+	}
+	uint32_t data = dump.len, rate = dump.rate;
+	uint8_t h[44] = { 'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ',
+			  16, 0, 0, 0, 1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 16, 0, 'd', 'a', 't', 'a' };
+	for (int i = 0; i < 4; i++) {
+		h[4 + i] = (uint8_t)((36 + data) >> (8 * i));
+		h[24 + i] = (uint8_t)(rate >> (8 * i));
+		h[28 + i] = (uint8_t)((rate * 4) >> (8 * i));
+		h[40 + i] = (uint8_t)(data >> (8 * i));
+	}
+	/* WAV es little-endian: se invierte cada muestra en su lugar. */
+	for (uint32_t i = 0; i + 1 < data; i += 2) {
+		uint8_t t = dump.buf[i];
+		dump.buf[i] = dump.buf[i + 1];
+		dump.buf[i + 1] = t;
+	}
+	bool ok = fwrite(h, 1, sizeof h, f) == sizeof h && fwrite(dump.buf, 1, data, f) == data;
+	ok &= fclose(f) == 0;
+	salsa64_log("audio: volcado de %.1f s del AI (%u Hz) en %s%s", data / 4.0 / (rate ? rate : 1), rate,
+		    WAV_PATH, ok ? "" : ": FALLÓ");
 }
 
 static float *block_ptr(uint32_t b)
@@ -199,6 +251,14 @@ int audio_out_init(struct salsa64_n64 *n64)
 	if (hle == HLE_PPE)
 		salsa64_audio_sync_init(&hle_ppe, &hle_ppe_state, &n64->bus);
 	salsa64_rsp_set_audio(&n64->bus, hle == HLE_SPE ? &hle_spu.backend : hle == HLE_PPE ? &hle_ppe.backend : NULL);
+	if (cfg.dump_s) {
+		/* Se reserva al arrancar, no en el bucle. 50 kHz como máximo. */
+		uint32_t s = cfg.dump_s > DUMP_MAX_S ? DUMP_MAX_S : cfg.dump_s;
+		dump.cap = s * 50000u * 4u;
+		dump.buf = memalign(128, dump.cap);
+		salsa64_log("audio: volcado de los primeros %u s del AI en %s%s", s, WAV_PATH,
+			    dump.buf ? "" : ": sin memoria");
+	}
 	salsa64_ai_set_sink(&n64->bus, ai_push, &sync_out);
 	salsa64_log("audio: HLE en %s, política %s, colchón %u ms",
 		    hle == HLE_SPE ? "el SPE" : hle == HLE_PPE ? "el PPE" : "ninguna parte (sin HLE)",
@@ -219,6 +279,10 @@ uint64_t audio_out_blocks(void)
 
 void audio_out_field(uint64_t now_us)
 {
+	if (dump.buf && !dump.written && __atomic_load_n(&dump.full, __ATOMIC_ACQUIRE)) {
+		dump.written = true;
+		write_dump();
+	}
 	if (!prev.t) {
 		prev.t = now_us;
 		return;
@@ -280,6 +344,10 @@ void audio_out_shutdown(void)
 	salsa64_rsp_set_audio(&machine->bus, NULL);  /* espera la tarea en vuelo */
 	if (hle == HLE_SPE)
 		salsa64_audio_spu_shutdown(&hle_spu);
+	if (dump.buf && !dump.written && dump.len) {
+		dump.written = true;
+		write_dump();  /* lo que alcanzó a juntar */
+	}
 	if (port.open) {
 		u64 rv;
 		port.quit = 1;
