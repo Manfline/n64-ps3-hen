@@ -2,6 +2,7 @@
  * Salsa64 — pruebas de COP0: registros, excepciones, ERET, Count/Compare,
  * interrupciones, TLB y restricciones de modo usuario.
  */
+#include "cpu/rec.h"
 #include "test.h"
 
 #define KSU_USER 0x10u
@@ -123,6 +124,77 @@ static void count_half_rate(void)
 	t_wr32(T_CODE_PA + 80, MFC0(T1, SALSA64_CP0_COUNT));  /* 20 instrucciones después */
 	t_step(21);
 	CHECK_EQ((uint32_t)(R[T1] - R[T0]), 10);
+}
+
+/* MFC0 y DMFC0 de cada registro (Random aparte): lo mismo que
+ * salsa64_cpu_cop0_read, con signo desde 32 bits y en 64. Los campos llevan
+ * valores con la mitad alta y el bit 31 distintos. */
+static void mfc0_reads_every_register(void)
+{
+	CPU->index = 0x8000001F;
+	CPU->entry_lo0 = 0x83FFFFFF;
+	CPU->entry_lo1 = 0x0000FFFF;
+	CPU->context = 0xFFFFFFFF807FFFF0ull;
+	CPU->page_mask = 0x01FFE000;
+	CPU->wired = 5;
+	CPU->bad_vaddr = 0x0000000180000004ull;
+	CPU->entry_hi = 0xC00000FFFFFFE0FFull;
+	CPU->compare = 0x87654321;
+	CPU->cause = 0x8000FF7C;  /* sin IE no hay interrupción */
+	CPU->epc = 0x00000000DEADBEEFull;
+	CPU->config = 0x7006E463;
+	CPU->lladdr = 0x89ABCDEF;
+	CPU->watch_lo = 0xFFFFFFFB;
+	CPU->watch_hi = 0xF;
+	CPU->xcontext = 0x123456789ABCDEF0ull;
+	CPU->parity_error = 0xFF;
+	CPU->cache_error = 0x80000000;
+	CPU->tag_lo = 0xF0F0F0F0;
+	CPU->error_epc = 0xFFFFFFFF80001234ull;
+	CPU->cop0_latch = 0xFEDCBA9876543210ull;
+	CPU->count_offset = 0xFFFFFF00;
+
+	uint64_t calls = CPU->rec ? CPU->rec->stats.exec_calls : 0;
+	for (unsigned rd = 0; rd < 32; rd++) {
+		if (rd == SALSA64_CP0_RANDOM)
+			continue;
+		R[T1] = R[T2] = 0x5555;
+		t_wr32(T_CODE_PA, MFC0(T1, rd));
+		t_wr32(T_CODE_PA + 4, DMFC0(T2, rd));
+		salsa64_cpu_set_pc(CPU, T_CODE);
+		uint64_t c0 = CPU->cycles;
+		t_step(2);
+		uint64_t want = salsa64_cpu_cop0_read(CPU, rd), want64 = want;
+		if (rd == SALSA64_CP0_COUNT) {
+			want = (uint32_t)((c0 + 1) >> 1) + CPU->count_offset;
+			want64 = (uint32_t)((uint32_t)((c0 + 2) >> 1) + CPU->count_offset);
+		}
+		CHECK_EQ(R[T1], (uint64_t)(int64_t)(int32_t)(uint32_t)want);
+		CHECK_EQ(R[T2], want64);
+	}
+	if (CPU->rec && !(CPU->rec->opts & SALSA64_REC_OPT_RARE_EXEC))  /* esa opción las manda al intérprete */
+		CHECK_EQ(CPU->rec->stats.exec_calls, calls);
+}
+
+/* Count leído varias veces en un mismo bloque (el recompilador ya no lo
+ * termina en MFC0), desde un ciclo par y uno impar, y en un delay slot. */
+static void mfc0_count_inside_block(void)
+{
+	for (unsigned odd = 0; odd < 2; odd++) {
+		T_LOAD(NOP, MFC0(T1, SALSA64_CP0_COUNT), NOP, NOP, MFC0(T2, SALSA64_CP0_COUNT),
+		       ADDIU(T3, T3, 1), MFC0(T3, SALSA64_CP0_COUNT), BEQ(ZERO, ZERO, 2),
+		       MFC0(T4, SALSA64_CP0_COUNT), NOP, ADDIU(T5, ZERO, 1));
+		salsa64_cpu_set_pc(CPU, T_CODE + 4 * (1 - odd));
+		uint64_t c0 = CPU->cycles - (1 - odd);  /* como si hubiera corrido el NOP */
+		t_step(10 - (1 - odd));
+		uint32_t off = CPU->count_offset;
+		CHECK_EQ(R[T1], (uint64_t)(int64_t)(int32_t)((uint32_t)((c0 + 2) >> 1) + off));
+		CHECK_EQ(R[T2], (uint64_t)(int64_t)(int32_t)((uint32_t)((c0 + 5) >> 1) + off));
+		CHECK_EQ(R[T3], (uint64_t)(int64_t)(int32_t)((uint32_t)((c0 + 7) >> 1) + off));
+		CHECK_EQ(R[T4], (uint64_t)(int64_t)(int32_t)((uint32_t)((c0 + 9) >> 1) + off));
+		CHECK_EQ(R[T5], 1);
+		R[T5] = 0;
+	}
 }
 
 static void count_write(void)
@@ -636,6 +708,8 @@ void t_suite_cop0(void)
 	RUN(trap_immediate);
 	RUN(misaligned_fetch);
 	RUN(count_half_rate);
+	RUN(mfc0_reads_every_register);
+	RUN(mfc0_count_inside_block);
 	RUN(count_write);
 	RUN(compare_interrupt);
 	RUN(software_interrupt);

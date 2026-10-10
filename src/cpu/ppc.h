@@ -212,4 +212,24 @@ PPC_INLINE uint32_t ppc_mtcrf(unsigned fxm, unsigned rs)
 PPC_INLINE int ppc_fits_b(int64_t disp) { return disp >= -(1 << 25) && disp < (1 << 25) && !(disp & 3); }
 PPC_INLINE int ppc_fits_bc(int64_t disp) { return disp >= -(1 << 15) && disp < (1 << 15) && !(disp & 3); }
 
+/* ---- Para conversiones de la FPU y accesos no alineados (rec_emit_ext.h) --- */
+
+/* subfic rt, ra, si: rt = si - ra */
+PPC_INLINE uint32_t ppc_subfic(unsigned rt, unsigned ra, int32_t si) { return ppc_d(8, rt, ra, (uint32_t)si); }
+/* Ceros a la izquierda en los 32 bits bajos (32 si son todos 0). */
+PPC_INLINE uint32_t ppc_cntlzw(unsigned ra, unsigned rs) { return ppc_x(rs, ra, 0, 26); }
+/* rlwimi: rota rs y lo inserta en ra bajo la máscara mb–me (el resto de ra queda). */
+PPC_INLINE uint32_t ppc_rlwimi(unsigned ra, unsigned rs, unsigned sh, unsigned mb, unsigned me)
+{
+	return 20u << 26 | (uint32_t)rs << 21 | (uint32_t)ra << 16 | (sh & 31) << 11 | (mb & 31) << 6 | (me & 31) << 1;
+}
+/* Raíz cuadrada (opcional en la arquitectura; el PPE la tiene: ppu-gcc
+ * -mcpu=cell la emite). */
+PPC_INLINE uint32_t ppc_fsqrt(unsigned frt, unsigned frb) { return ppc_fa(frt, 0, frb, 0, 22); }
+/* A entero de 64 bits en el registro de punto flotante: con el modo del
+ * FPSCR (siempre al más cercano par) o hacia cero; y de vuelta a double. */
+PPC_INLINE uint32_t ppc_fctid(unsigned frt, unsigned frb) { return 63u << 26 | (uint32_t)frt << 21 | (uint32_t)frb << 11 | 814u << 1; }
+PPC_INLINE uint32_t ppc_fctidz(unsigned frt, unsigned frb) { return 63u << 26 | (uint32_t)frt << 21 | (uint32_t)frb << 11 | 815u << 1; }
+PPC_INLINE uint32_t ppc_fcfid(unsigned frt, unsigned frb) { return 63u << 26 | (uint32_t)frt << 21 | (uint32_t)frb << 11 | 846u << 1; }
+
 #endif
