@@ -41,6 +41,11 @@ void salsa64_vr4300_address_error(struct salsa64_cpu *cpu, uint64_t vaddr, enum 
 /* align = tamaño - 1; solo se usa para invertir la dirección con Status.RE. */
 bool salsa64_vr4300_translate_slow(struct salsa64_cpu *cpu, uint64_t vaddr, uint32_t *paddr,
 				   enum salsa64_access acc, uint32_t align);
+/* La dirección física de la instrucción en `va` en modo kernel, sin
+ * excepciones ni efectos (el recompilador): false si va no es extensión de
+ * signo de 32 bits, si la TLB no la resuelve (falla o V = 0) o si es kuseg
+ * con ERL. Para KSEG0/KSEG1, la resta de la base. */
+bool salsa64_vr4300_fetch_probe(const struct salsa64_cpu *cpu, uint64_t va, uint32_t *pa);
 void salsa64_vr4300_update_status(struct salsa64_cpu *cpu);
 void salsa64_vr4300_cop0(struct salsa64_cpu *cpu, uint32_t instr);
 /* interp.c: una instrucción que no es salto (la usa el recompilador). */

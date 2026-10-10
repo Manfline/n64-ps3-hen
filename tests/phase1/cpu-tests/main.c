@@ -87,9 +87,10 @@ int main(void)
 			continue;
 		log_rombench(name, &rr);
 		const struct salsa64_rec_stats *st = &rec.stats;
-		salsa64_log("%s: %llu bloques, %u KB de caché, %llu entradas desde C, %llu enlaces, "
+		salsa64_log("%s: %llu bloques (%llu fuera de KSEG0), %u KB de caché, %llu entradas desde C, %llu enlaces, "
 			    "%llu invalidados, %llu vaciados, %llu instr. interpretadas", name,
-			    (unsigned long long)st->compiled, salsa64_rec_used(&rec) / 256,
+			    (unsigned long long)st->compiled, (unsigned long long)st->compiled_x,
+			    salsa64_rec_used(&rec) / 256,
 			    (unsigned long long)st->entries, (unsigned long long)st->linked,
 			    (unsigned long long)st->invalidated, (unsigned long long)st->flushes,
 			    (unsigned long long)st->interp_steps);

@@ -1,5 +1,40 @@
 # Estado
 
+## 2026-10-10 — Recompilador: código en KSEG1 y mapeado por la TLB
+
+Hecho (diseño en docs/rec-ppe.md, «Código fuera de KSEG0»):
+- El recompilador compila también código en KSEG1 y mapeado por la TLB
+  (kuseg, kseg2/3), con la instrucción en la RDRAM o en la ROM del
+  cartucho. Antes eso lo corría el intérprete; GoldenEye y Perfect Dark
+  corren casi todo su código mapeado.
+- Clave de bloque (vpc, física) en una tabla aparte (`xhash`); KSEG0 sigue
+  igual. Los bloques mapeados comparan su traducción al entrar contra una
+  TLB del recompilador por página de 4 KB (`vtlb[]`, 4 instrucciones),
+  también al llegar por un enlace o por JR. Escribir la TLB no mata ni
+  desenlaza bloques: antes de correr código, el despachador vuelve a
+  traducir las páginas anotadas si cambiaron la TLB, el ASID o ERL.
+- JR/JALR encuentran en el propio código los bloques fuera de KSEG0.
+- `cop0.c`: `salsa64_vr4300_fetch_probe` (búsqueda en la TLB sin
+  excepciones) y `cpu->tlb_writes`.
+- Pruebas nuevas (también en modo estricto): código mapeado con JAL entre
+  páginas, remapeo con enlace, cambio de ASID, código mapeado reescrito por
+  la dirección mapeada y por KSEG0, KSEG1, ROM por TLB y por KSEG1, dos
+  páginas en la misma entrada de `vtlb[]`, bucle mapeado; bucles de espera
+  en KSEG1 (se saltan) y mapeados (se descartan, como con el intérprete).
+- qemu-ppc64: unitarias 222/222 con el recompilador en los cuatro modos;
+  nemu64-test con las fallas de la línea base y 623 bloques fuera de KSEG0;
+  vitest OK; `--lockstep` sin diferencias en nemu64-test y vitest.
+- Cambiar la ROM o el ISViewer vacía el recompilador (puede haber código
+  compilado desde la ROM).
+- Memoria: +572 KB del estado del recompilador (6,84 MB).
+
+Siguiente:
+- [ ] PS3 real: cpu-tests (SLSA00065) y nemu64-test contra el intérprete
+      con este cambio; GoldenEye y Perfect Dark en el frontend (SLSA00063),
+      con la proporción de instrucciones interpretadas y las traducciones.
+- [ ] Verificar en el desensamblado (o el decomp) si GoldenEye ejecuta
+      0x7F000000 desde la ROM o desde la RDRAM.
+
 ## 2026-10-10 — Fase 3: recompilador MIPS → PPC64 en el PPE (×4,4 con código real)
 
 Hecho (diseño y decisión en docs/rec-ppe.md, números en docs/perf-log.md):
@@ -47,9 +82,9 @@ Siguiente:
 - [ ] Medir en la PS3 el préstamo de registros fijos en bucles (bench
       enteros con registros fijos: esperado ~750 MIPS, antes 128).
 - [ ] Más juegos de la tabla de docs/proyecto.md (SM64, MK64, SF64; GoldenEye y
-      Perfect Dark usan TLB: hoy ese código va al intérprete).
+      Perfect Dark usan TLB: ver la entrada de arriba).
 - [ ] Más en nativo: CVT/TRUNC/ROUND de la FPU, LWL/LWR/SWL/SWR, CACHE,
-      MFC0 sin salir del bloque; código por TLB (GoldenEye) y KSEG1.
+      MFC0 sin salir del bloque. (Código por TLB y KSEG1: hecho.)
 - [ ] Fase 2: el DMA del SP hacia la RDRAM tiene que llamar a
       `salsa64_bus_rdram_written`.
 ## 2026-10-10 — Fase 2 (parte gráfica): criterio cumplido en PS3 real

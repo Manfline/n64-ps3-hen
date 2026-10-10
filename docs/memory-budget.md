@@ -15,7 +15,7 @@ en PS3 real.
 | Guardado del cartucho (`struct salsa64_save`) | 0,03 | | 32 896 bytes (32 KB de datos alineados a 128), estático en el frontend: EEPROM (512 B / 2 KB) o SRAM (32 KB). Crece a 128 KB con FlashRAM o SRAM de 1 Mbit |
 | Lectura de archivos de guardado (`savefile.c`) | 0,03 | | 32 KB + 1, estático; solo al abrir una ROM |
 | Caché del recompilador | 16 | 16 | Fase 3: cola NOBITS del segmento de texto (`mk/rec-cache.ld`, docs/rec-ppe.md); 32 si hace falta. nemu64-test entero usa ~9 MB |
-| Estado del recompilador (`struct salsa64_rec`) | 6,3 | 6,3 | Mapa de bloques (4 MB: uint16_t por palabra de 8 MB), banderas de código (64 KB), 65 535 bloques (1 MB), 131 072 enlaces (1 MB), búferes de compilación (0,2 MB); en .bss |
+| Estado del recompilador (`struct salsa64_rec`) | 6,8 | 6,3 | Mapa de bloques (4 MB: uint16_t por palabra de 8 MB), banderas de código (64 KB), 65 535 bloques (1 MB), 131 072 enlaces (1 MB), búferes de compilación (0,2 MB), bloques fuera de KSEG0 y TLB del recompilador (0,56 MB: `xb` 512 KB, `xhash` 32 KB, `vtlb` 16 KB); en .bss. 7 172 408 bytes (medido con sizeof el 2026-10-10) |
 | Caché de texturas (lado PPE/SPE) | 16 | | Fase 4 |
 | Búfer de comandos RSX + memoria mapeada | 16 | 16 | `rsxkit_init` por omisión (rsx-triangle usa 32) |
 | ROM del cartucho | 64 | | máximo; el frontend la lee entera a memoria al arrancar |
@@ -23,7 +23,7 @@ en PS3 real.
 | Audio | 2 | | |
 | Código, pila, heap de newlib | 16 | | |
 | Bloques de control de spukit | 0,01 | 0,01 | ~2,3 KB por trabajador |
-| **Total previsto** | **164** | | con una ROM de 64 MB (158 de main + 6,3 del estado del recompilador) |
+| **Total previsto** | **165** | | con una ROM de 64 MB (158 de main + 6,8 del estado del recompilador) |
 
 ## Memoria local del RSX (GDDR3)
 
