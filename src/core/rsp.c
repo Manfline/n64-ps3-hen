@@ -79,8 +79,10 @@ static void task_event(void *ctx, uint64_t when)
 	rsp_break(bus, SALSA64_SP_STATUS_TASKDONE);
 	/* La interrupción del DP llega si la lista pidió G_RDPFULLSYNC y también
 	 * si la HLE la cortó antes de llegar a él (búfer lleno, lista
-	 * interminable): el juego espera al RDP por cada tarea gráfica y, sin
-	 * ella, se queda esperando (OoT avisa «RCP is HUNG UP» a los 3 s). */
+	 * interminable, fin dentro de un tramo de otro microcódigo): el juego
+	 * espera al RDP por cada tarea gráfica y, sin ella, se queda esperando
+	 * (OoT avisa «RCP is HUNG UP» a los 3 s). Mismo principio que en
+	 * salsa64_rsp_start para las tareas con un microcódigo sin HLE. */
 	if (flags & SALSA64_GFX_CUT)
 		rsp->stats.cut++;
 	if (flags & (SALSA64_GFX_FULLSYNC | SALSA64_GFX_CUT))
