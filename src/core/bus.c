@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "core/endian.h"
+#include "core/save.h"
 
 void salsa64_bus_init(struct salsa64_bus *bus, uint8_t *rdram, uint32_t rdram_size)
 {
@@ -138,6 +139,8 @@ uint32_t salsa64_bus_read32(struct salsa64_bus *bus, uint32_t paddr)
 		return rcp_read(bus, paddr);
 	if (paddr >= SALSA64_PIF_RAM_ADDR && paddr < SALSA64_PIF_RAM_ADDR + SALSA64_PIF_RAM_SIZE)
 		return salsa64_rd32(bus->pif_ram + (paddr - SALSA64_PIF_RAM_ADDR));
+	if (paddr - SALSA64_SRAM_ADDR < SALSA64_SRAM_SPAN)
+		return salsa64_save_sram_read32(bus, paddr);
 	return 0;
 }
 
@@ -170,6 +173,10 @@ void salsa64_bus_write32(struct salsa64_bus *bus, uint32_t paddr, uint32_t value
 	if (paddr >= SALSA64_PIF_RAM_ADDR && paddr < SALSA64_PIF_RAM_ADDR + SALSA64_PIF_RAM_SIZE) {
 		salsa64_wr32(bus->pif_ram + (paddr - SALSA64_PIF_RAM_ADDR), value);
 		salsa64_pif_written(bus);
+		return;
+	}
+	if (paddr - SALSA64_SRAM_ADDR < SALSA64_SRAM_SPAN) {
+		salsa64_save_sram_write32(bus, paddr, value);
 		return;
 	}
 	/* ROM del cartucho y huecos: se ignora. */

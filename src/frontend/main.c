@@ -20,6 +20,11 @@
  * cuadros en aparecer y los juegos buscan controles al arrancar. Los cambios
  * de botones van al log.
  *
+ * Guardado del cartucho (EEPROM, SRAM; savefile.c): tipo por
+ * SALSA64_DATA_DIR/guardado.cfg, la cabecera de homebrew o la tabla por
+ * código de juego; un archivo por juego en SALSA64_DATA_DIR/saves, escrito
+ * unos segundos después de la última escritura del juego y al salir.
+ *
  * Salir: START + SELECT, o "Salir del juego" desde el menú del sistema.
  * Lo que la ROM imprime por el ISViewer va al log.
  */
@@ -39,6 +44,7 @@
 #include "padmap.h"
 #include "platform/ps3/autotest.h"
 #include "platform/ps3/log.h"
+#include "savefile.h"
 #include "selftest.h"
 #include "vitest_rom_bin.h"
 
@@ -46,6 +52,8 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 
 #define ROM_PATH     SALSA64_DATA_DIR "/rom.z64"
 #define PADS_PATH    SALSA64_DATA_DIR "/controles.cfg"
+#define SAVES_DIR    SALSA64_DATA_DIR "/saves"
+#define SAVE_CFG     SALSA64_DATA_DIR "/guardado.cfg"
 #define PADS_CFG_MAX 4096
 #define ROM_MAX      (64u << 20)
 #define FB_MAX_W     640
@@ -55,6 +63,8 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 
 static struct salsa64_n64 n64;
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
+static struct salsa64_save save;
+static struct savefile save_file;
 static volatile int running = 1;
 static int selftest_on;
 
@@ -306,6 +316,7 @@ int main(void)
 	salsa64_log("ROM %s \"%s\", %u bytes, %s, entrada 0x%08X, TV %s", source, title, rom_size,
 		    info.kind == SALSA64_BOOT_ELF ? "ELF (IPL3 libre)" : "carga plana",
 		    info.entry, info.tv == SALSA64_TV_PAL ? "PAL" : info.tv == SALSA64_TV_MPAL ? "MPAL" : "NTSC");
+	savefile_open(&save_file, &save, &n64.bus, rom, SAVES_DIR, SAVE_CFG, SALSA64_SAVE_AUTO, salsa64_log);
 
 	ioPadInit(7);
 	load_padmap();
@@ -327,6 +338,7 @@ int main(void)
 		uint64_t t0 = sysGetSystemTime();
 		salsa64_n64_run_field(&n64);
 		uint64_t t1 = sysGetSystemTime();
+		savefile_poll(&save_file, t1);
 
 		struct salsa64_vi_frame f;
 		rsxkit_rect r;
@@ -384,6 +396,7 @@ int main(void)
 		}
 	}
 
+	savefile_close(&save_file);
 	rsxkit_shutdown();
 	ioPadEnd();
 	salsa64_log("salida normal tras %u campos", n64.bus.vi.fields);

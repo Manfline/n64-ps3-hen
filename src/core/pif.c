@@ -8,6 +8,8 @@
 
 #include <string.h>
 
+#include "core/save.h"
+
 #define CMD_BYTE       63            /* byte de comandos del PIF */
 #define CMD_JOYBUS     0x01          /* preparar los intercambios joybus */
 
@@ -160,7 +162,8 @@ void salsa64_pif_execute(struct salsa64_bus *bus)
 		int n = -1;
 		if (txlen && ch < SALSA64_PIF_PORTS && pif->pads[ch].connected)
 			n = pad_command(&pif->pads[ch], tx, txlen, reply);
-		/* Canal 4 (EEPROM del cartucho): todavía sin dispositivo. */
+		else if (ch == SALSA64_PIF_PORTS && bus->save)  /* EEPROM del cartucho */
+			n = salsa64_save_joybus(bus->save, tx, txlen, reply);
 		uint8_t err = 0;
 		if (n < 0) {
 			err = RX_NO_DEVICE;

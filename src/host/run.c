@@ -15,6 +15,11 @@
  * Con --no-idle no se saltan los bucles de espera (cpu/idle.c): el
  * resultado debe ser idéntico, solo más lento.
  *
+ * Guardado del cartucho (core/save.c): el tipo sale de la cabecera o de la
+ * tabla por código de juego, o de --save. Con --save-dir se lee al empezar
+ * y se escribe al terminar en ese directorio, con el mismo nombre que en la
+ * PS3 (frontend/savefile.c); sin la opción queda solo en memoria.
+ *
  * Códigos de salida:
  *   0  apareció el texto de --until-text, o se agotaron los ciclos sin pedirlo
  *   1  apareció alguno de los textos de --fail-text
@@ -24,6 +29,7 @@
  */
 #define _GNU_SOURCE
 #include <getopt.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +37,7 @@
 
 #include "core/boot.h"
 #include "core/endian.h"
+#include "frontend/savefile.h"
 
 #define DEFAULT_CYCLES (1ull << 32)  /* ~46 s de la consola */
 #define DEFAULT_SLICE  (1ull << 20)
@@ -48,6 +55,8 @@ enum stop_reason {
 static struct salsa64_n64 n64;
 static uint8_t rdram[SALSA64_RDRAM_MAX] __attribute__((aligned(128)));
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
+static struct salsa64_save save;
+static struct savefile save_file;
 
 /* Búsqueda de texto en la salida, también entre dos impresiones. */
 static struct {
@@ -83,6 +92,16 @@ static void isv_out(void *ctx, const uint8_t *text, uint32_t len)
 	}
 	watch.tail_len = n < watch.keep ? n : watch.keep;
 	memmove(watch.window, watch.window + n - watch.tail_len, watch.tail_len);
+}
+
+static void save_log(const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	fputs("salsa64-run: ", stderr);
+	vfprintf(stderr, fmt, ap);
+	fputc('\n', stderr);
+	va_end(ap);
 }
 
 static uint64_t now_us(void)
@@ -210,7 +229,9 @@ static void usage(FILE *out)
 	      "  -r, --regs            volcar los registros del CPU al terminar\n"
 	      "      --trace-exc N     mostrar las primeras N excepciones del CPU\n"
 	      "      --frame ARCHIVO   al terminar, guardar en PPM la imagen del VI\n"
-	      "      --no-idle         no saltar los bucles de espera\n", out);
+	      "      --no-idle         no saltar los bucles de espera\n"
+	      "      --save TIPO       tipo de guardado: ninguno, eeprom4k, eeprom16k, sram256k\n"
+	      "      --save-dir DIR    leer y escribir el guardado del cartucho en DIR\n", out);
 }
 
 int main(int argc, char **argv)
@@ -227,14 +248,16 @@ int main(int argc, char **argv)
 		{ "trace-exc", required_argument, NULL, 'X' },
 		{ "frame", required_argument, NULL, 'F' },
 		{ "no-idle", no_argument, NULL, 'I' },
+		{ "save", required_argument, NULL, 'V' },
+		{ "save-dir", required_argument, NULL, 'D' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 },
 	};
 	uint64_t max_cycles = DEFAULT_CYCLES, slice = DEFAULT_SLICE;
 	uint32_t ram = SALSA64_RDRAM_MAX;
-	int tv = SALSA64_BOOT_TV_AUTO, c;
+	int tv = SALSA64_BOOT_TV_AUTO, save_type = SALSA64_SAVE_AUTO, c;
 	bool regs = false, idle = true;
-	const char *frame_path = NULL;
+	const char *frame_path = NULL, *save_dir = NULL;
 
 	while ((c = getopt_long(argc, argv, "c:u:f:qrh", opts, NULL)) != -1) {
 		switch (c) {
@@ -253,6 +276,16 @@ int main(int argc, char **argv)
 		case 'X': trace_exc_left = strtoull(optarg, NULL, 0); break;
 		case 'F': frame_path = optarg; break;
 		case 'I': idle = false; break;
+		case 'D': save_dir = optarg; break;
+		case 'V':
+			for (int t = 0; t < SALSA64_SAVE_NTYPES; t++)
+				if (!strcmp(optarg, salsa64_save_name(t)))
+					save_type = t;
+			if (save_type == SALSA64_SAVE_AUTO) {
+				usage(stderr);
+				return 3;
+			}
+			break;
 		case 'T':
 			if (!strcmp(optarg, "ntsc")) tv = SALSA64_TV_NTSC;
 			else if (!strcmp(optarg, "pal")) tv = SALSA64_TV_PAL;
@@ -308,6 +341,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "salsa64-run: %s %s, %zu bytes; carga plana (CIC %s), %u bytes, "
 			"entrada 0x%08X, TV %s, RDRAM %u MB\n", path, fmt_names[fmt], rom_size,
 			salsa64_cic_name(info.cic), info.loaded, info.entry, tv_names[info.tv], ram >> 20);
+	savefile_open(&save_file, &save, &n64.bus, rom, save_dir, NULL, save_type, save_log);
 
 	/* Bucle principal: bloques de `slice` ciclos y verificación entre ellos. */
 	enum stop_reason reason = STOP_NONE;
@@ -342,6 +376,7 @@ int main(int argc, char **argv)
 		reason_names[reason], (unsigned long long)cycles, cycles / 93.75e6, us / 1e6,
 		us ? (cycles - idle_cycles) / (double)us : 0.0,
 		cycles ? 100.0 * idle_cycles / cycles : 0.0, (unsigned long long)n64.cpu.pc);
+	savefile_close(&save_file);
 	if (regs)
 		dump_regs();
 	if (frame_path && !dump_frame(frame_path)) {

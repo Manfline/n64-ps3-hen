@@ -119,7 +119,36 @@ def run_once(elf: pathlib.Path, config: pathlib.Path, timeout: float, keep_lines
         name = elf.stem.removeprefix("salsa64-")
         if (LOGDIR / "RPCS3.log").exists():
             shutil.copy(LOGDIR / "RPCS3.log", ROOT / f"build/logs/rpcs3-{name}.rpcs3.log")
+    if status == "salio":
+        # En el primer lanzamiento de un ELF nuevo (RPCS3 compila sus
+        # módulos) a veces no se alcanza a leer el TTY.log; RPCS3.log trae al
+        # final todo el TTY acumulado.
+        tty_lines = accumulated_tty(rlog)
+        if any("RESULTADO" in l for l in tty_lines):
+            print("== TTY tomado del final de RPCS3.log", file=sys.stderr)
+            for line in tty_lines:
+                print(line, flush=True)
+                keep_lines.append(line)
+            status = "resultado"
     return status
+
+
+def accumulated_tty(log: pathlib.Path) -> list:
+    """Líneas de la sección "Accumulated RPCS3 TTY" de RPCS3.log."""
+    if not log.exists():
+        return []
+    lines = log.read_text("utf-8", "replace").splitlines()
+    try:
+        start = lines.index("Accumulated RPCS3 TTY:") + 1
+    except ValueError:
+        return []
+    out = []
+    for line in lines[start:]:
+        if line.startswith("End RPCS3 TTY Section"):
+            break
+        if line.strip("\x00"):
+            out.append(line.strip("\x00"))
+    return out
 
 
 def show_rpcs3_errors() -> None:
