@@ -12,10 +12,11 @@
  *     Por ahora cada instrucción cuesta 1 ciclo; el costo real (caché,
  *     multiplicaciones, divisiones) se calibra más adelante.
  *
- * Alcance del primer hito de la Fase 1:
- *   - Direccionamiento de 32 bits (KX = SX = UX = 0). Las direcciones de 64
- *     bits que no son extensión de signo de 32 dan error de dirección.
- *   - TLB de 32 entradas con refill, inválida y modificación.
+ * Alcance de la Fase 1:
+ *   - Direccionamiento de 32 y de 64 bits (KX, SX, UX): xkuseg, xksseg,
+ *     xkphys, xkseg y los segmentos compatibles, con direcciones virtuales
+ *     de 40 bits y físicas de 32.
+ *   - TLB de 32 entradas con refill (TLB y XTLB), inválida y modificación.
  *   - FPU: formatos S, D, W, L; modo FR. Aritmética siempre con redondeo al
  *     más cercano; la bandera "inexacto" no se calcula todavía.
  *   - Sin cachés, sin watchpoints, sin errores de bus.
@@ -38,6 +39,7 @@ struct retro64_sched;
 #define RETRO64_ST_KX   0x00000080u
 #define RETRO64_ST_IM   0x0000FF00u
 #define RETRO64_ST_BEV  0x00400000u
+#define RETRO64_ST_RE   0x02000000u
 #define RETRO64_ST_FR   0x04000000u
 #define RETRO64_ST_CU0  0x10000000u
 #define RETRO64_ST_CU1  0x20000000u
@@ -99,7 +101,7 @@ struct retro64_tlb_entry {
 	uint64_t entry_hi;     /* VPN2 (enmascarado por page_mask) y ASID */
 	uint32_t entry_lo[2];  /* PFN, C, D, V (G aparte) */
 	uint32_t page_mask;
-	uint32_t vpn_mask;     /* bits de la dirección virtual que se comparan */
+	uint64_t vpn_mask;     /* bits de la dirección virtual que se comparan (R y VPN2) */
 	uint32_t odd_bit;      /* bit que elige entry_lo[1] */
 	uint32_t global;
 };
@@ -123,6 +125,7 @@ struct retro64_cpu {
 	uint8_t allow64;       /* operaciones de 64 bits permitidas en este modo */
 	uint8_t llbit;
 	uint8_t running;
+	uint8_t re_xor;        /* 7 en modo usuario con Status.RE (little-endian), si no 0 */
 
 	/* COP0 */
 	uint32_t status;
@@ -151,10 +154,16 @@ struct retro64_cpu {
 	uint64_t fpr[32];
 	uint32_t fcr31;
 
+	uint64_t cop2_latch;     /* MTC2/DMTC2/CTC2 escriben aquí; MFC2/DMFC2/CFC2 leen */
+
 	struct retro64_tlb_entry tlb[RETRO64_TLB_ENTRIES];
 
 	struct retro64_bus *bus;
 	struct retro64_sched *sched;
+
+	/* Depuración: si no es NULL, se llama al tomar cada excepción (con
+	 * Cause, EPC y el vector ya escritos). */
+	void (*exc_hook)(struct retro64_cpu *cpu);
 };
 
 void retro64_cpu_init(struct retro64_cpu *cpu, struct retro64_bus *bus,

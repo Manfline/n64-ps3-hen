@@ -167,9 +167,11 @@ static void invalid_gives_default_nan(void)
 	CHECK_EQ(FLAGS(), CV);
 }
 
+/* NaN de entrada con el bit alto de la mantisa en 1 (qNaN de IEEE 754-2008):
+ * Invalid y el NaN por omisión (nemu64-test). */
 static void qnan_input_is_invalid(void)
 {
-	CPU->fpr[1] = 0x7FBFFFFF;  /* qNaN de MIPS */
+	CPU->fpr[1] = 0x7FC00000;
 	set_s(2, 1.0f);
 	T_LOAD(ADD_F(F_S, 3, 1, 2));
 	t_step(1);
@@ -177,9 +179,11 @@ static void qnan_input_is_invalid(void)
 	CHECK_EQ(CAUSE(), CV);
 }
 
+/* Con ese bit en 0 (sNaN de IEEE; también el NaN por omisión de MIPS):
+ * Unimplemented. */
 static void snan_input_is_unimplemented(void)
 {
-	CPU->fpr[1] = 0x7FC00000;  /* sNaN de MIPS (bit alto de la mantisa en 1) */
+	CPU->fpr[1] = 0x7FBFFFFF;
 	set_s(2, 1.0f);
 	T_LOAD(ADD_F(F_S, 3, 1, 2));
 	t_step(1);
@@ -348,9 +352,10 @@ static void unimplemented_encodings(void)
 	rerun();
 	CHECK_EQ(RETRO64_CAUSE_EXC(CPU->cause), RETRO64_EXC_FPE);
 
-	t_wr32(T_CODE_PA, M_R(0x11, 0x03, 0, 0, 0, 0));  /* rs reservado */
+	t_wr32(T_CODE_PA, M_R(0x11, 0x03, 0, 0, 0, 0));  /* DCFC1: tampoco es RI */
 	rerun();
-	CHECK_EQ(RETRO64_CAUSE_EXC(CPU->cause), RETRO64_EXC_RI);
+	CHECK_EQ(RETRO64_CAUSE_EXC(CPU->cause), RETRO64_EXC_FPE);
+	CHECK_EQ(CAUSE(), CE);
 }
 
 static void compare_and_branch(void)
@@ -453,6 +458,83 @@ static void load_store_fpr(void)
 	CHECK_EQ(D(4), t_dbits(-8.5));
 }
 
+/* Redondeo dirigido e Inexact: 1 + 2^-30 no cabe en float. */
+static void directed_rounding_and_inexact(void)
+{
+	static const struct { unsigned mode; uint32_t bits; } cases[] = {
+		{ 0, 0x3F800000 },  /* más cercano: 1.0 */
+		{ 1, 0x3F800000 },  /* a cero */
+		{ 2, 0x3F800001 },  /* a +inf: el float siguiente */
+		{ 3, 0x3F800000 },  /* a -inf */
+	};
+	for (unsigned k = 0; k < 4; k++) {
+		set_s(1, 1.0f);
+		set_s(2, 0x1p-30f);
+		CPU->fcr31 = cases[k].mode;
+		T_LOAD(ADD_F(F_S, 3, 1, 2));
+		rerun();
+		CHECK_EQ(S(3), cases[k].bits);
+		CHECK_EQ(CAUSE(), CI);
+		CHECK_EQ(FLAGS(), CI);
+	}
+	/* Exacto: sin I. Resultado S: los 32 bits altos de fd quedan en 0. */
+	set_s(1, 1.5f);
+	set_s(2, 0.25f);
+	CPU->fpr[3] = 0x1234567800000000ull;
+	CPU->fcr31 = 0;
+	rerun();
+	CHECK_EQ(D(3), t_fbits(1.75f));
+	CHECK_EQ(CAUSE(), 0);
+
+	/* D: 1/3 al más cercano redondea hacia abajo; hacia +inf da 1 ulp más y
+	 * hacia -inf lo mismo. */
+	set_d(1, 1.0);
+	set_d(2, 3.0);
+	t_wr32(T_CODE_PA, DIV_F(F_D, 3, 1, 2));
+	CPU->fcr31 = 2;
+	rerun();
+	CHECK_EQ(D(3), t_dbits(1.0 / 3.0) + 1);
+	CHECK_EQ(CAUSE(), CI);
+	CPU->fcr31 = 3;
+	rerun();
+	CHECK_EQ(D(3), t_dbits(1.0 / 3.0));
+}
+
+/* Desbordamiento: ±inf o ±máximo según el modo, con O e I. */
+static void overflow_by_mode(void)
+{
+	set_s(1, 3.0e38f);
+	set_s(2, 3.0e38f);
+	T_LOAD(ADD_F(F_S, 3, 1, 2));
+	CPU->fcr31 = 0;
+	rerun();
+	CHECK_EQ(S(3), 0x7F800000);
+	CHECK_EQ(CAUSE(), CO | CI);
+	CPU->fcr31 = 1;
+	rerun();
+	CHECK_EQ(S(3), 0x7F7FFFFF);
+}
+
+/* Resultado diminuto con FS = 1 y U/I deshabilitadas: se aplana; hacia +inf,
+ * al mínimo normal. Con U habilitada, E (nemu64-test). */
+static void flush_tiny_results(void)
+{
+	set_d(1, 0x1p-1022);
+	set_d(2, 0.5);
+	T_LOAD(MUL_F(F_D, 3, 1, 2));
+	CPU->fcr31 = RETRO64_FCR31_FS | 2;
+	rerun();
+	CHECK_EQ(D(3), 0x0010000000000000ull);
+	CHECK_EQ(CAUSE(), CU | CI);
+	CPU->fcr31 = RETRO64_FCR31_FS;
+	rerun();
+	CHECK_EQ(D(3), 0);
+	CPU->fcr31 = RETRO64_FCR31_FS | (CU << 7);
+	rerun();
+	CHECK_EQ(RETRO64_CAUSE_EXC(CPU->cause), RETRO64_EXC_FPE);
+	CHECK_EQ(CAUSE(), CE);
+}
+
 void t_suite_cop1(void)
 {
 	RUN(cop1_unusable);
@@ -489,4 +571,7 @@ void t_suite_cop1(void)
 	RUN(ctc1_cfc1);
 	RUN(ctc1_raises_pending_cause);
 	RUN(load_store_fpr);
+	RUN(directed_rounding_and_inexact);
+	RUN(overflow_by_mode);
+	RUN(flush_tiny_results);
 }

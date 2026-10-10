@@ -15,6 +15,9 @@ tools/docker-image.sh        # una vez: imagen retro64-toolchain:dev (~10 min)
 tools/build.sh               # compila los programas de tests/phase0 y phase1
 tools/build.sh test-host     # pruebas unitarias del núcleo con gcc nativo
 tools/test-phase1.sh         # las mismas pruebas en RPCS3 (big-endian)
+tools/build.sh host          # retro64-run: corre una ROM en el host
+tools/test-roms.sh           # nemu64-test con retro64-run, contra la línea base
+tools/build-nemu64-test.sh   # recompila tests/roms/homebrew/nemu64-test.z64
 tools/validate-toolchain.sh  # samples de PSL1GHT + shaders de referencia
 ```
 

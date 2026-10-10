@@ -1,5 +1,62 @@
 # Estado
 
+## 2026-10-10 — Fase 1: arranque HLE, `retro64-run` y nemu64-test
+
+Hecho (detalle en docs/cpu-vr4300.md):
+- Arranque HLE sin PIF ROM ni IPL3 (`src/core/boot.c`, `src/core/rom.c`):
+  normaliza .v64/.n64 a .z64, reconoce el IPL3 de Nintendo por CRC-32 y tiene
+  dos caminos. ELF (IPL3 libre de libdragon, el de nemu64-test): carga los
+  PT_LOAD, deja los boot flags en DMEM (memoria en [0], TV en [9], ELF en
+  [12]) y $sp al final de la RDRAM. Plano (IPL3 de Nintendo o compat): copia
+  1 MB desde 0x1000 a la dirección del encabezado (ajustada por CIC) y deja
+  las variables de libultra en 0x300 y s3–s7. Común: Status 0x34000000,
+  tiempos de PI DOM1, RI_SELECT, registros de RDRAM. Fuentes documentadas.
+- ISViewer en 0x13FF0000, opcional (tapa los últimos 64 KB de una ROM de
+  64 MB).
+- `retro64-run` (`src/host/run.c`, `tools/build.sh host`): corre una ROM N
+  ciclos o hasta un texto del ISViewer, detecta bucles sin salida, traza
+  excepciones (`--trace-exc`). Sin asignaciones en el bucle.
+- nemu64-test compilado en contenedor reproducible
+  (`tools/build-nemu64-test.sh`, mismo SHA-256 desde cero), licencias e IPL3
+  verificados, en `tests/roms/homebrew/` con sus avisos.
+- `tools/test-roms.sh`: corre nemu64-test y compara con la línea base de
+  fallas conocidas (`tests/roms/nemu64-test.fallas`); una regresión lo hace
+  fallar (probado rompiendo a propósito el enlace de JAL).
+- nemu64-test pasó de no arrancar a 4175 de 4637 pruebas (90 %). Las fallas
+  del CPU que encontró están arregladas: MULT con rt de 35 bits, LWR parcial,
+  enlace de saltos en delay slot, MTC0 de 64 bits, Index.P, TagLo, PageMask y
+  EntryLo en la TLB, Random con Wired > 31, funciones de COP0 reservadas
+  como NOP, CFC0/CTC0/BC0, CACHE no alineado, latch de COP2, direccionamiento
+  de 64 bits (xkuseg/xksseg/xkphys/xkseg), Status.RE; FPU: índices de
+  registro con FR = 0, clasificación de NaN (estaba al revés), redondeo
+  dirigido e Inexact, desbordamiento, flush con FS, rango de CVT.L,
+  codificaciones inexistentes → FPE. Bus: SB/SH/SD fuera de la RDRAM y
+  lecturas del bus PI de 16 bits.
+- RSP provisional: quitarle HALT lo detiene en el acto con BROKE, para que
+  nadie espere para siempre (Fase 2 lo reemplaza).
+- Pruebas: 154 unitarias (antes 139) en host (ASan + UBSan) y en RPCS3
+  (big-endian): todas pasan. Se actualizaron las 5 que codificaban
+  suposiciones que nemu64-test desmintió.
+- Rendimiento del intérprete en el host: 237 → 217 MIPS por la FPU exacta
+  (docs/perf-log.md). nemu64-test completo: 0,75 s en el host.
+
+Fallas que quedan en nemu64-test (fuera del intérprete): RSP 294, bus PI
+del cartucho 81, cachés 46, SP (DMA y registros) 31, RDP y MI repeat 10.
+
+Siguiente (Fase 1):
+- [ ] Correr `retro64-cpu-tests` en la PS3 real: primer número de MIPS del
+      intérprete en el PPE (docs/perf-log.md).
+- [ ] VI con contador de líneas e interrupción; framebuffer 2D en el RSX.
+- [ ] Bus PI: latch de escrituras al cartucho y DMA no alineado (81 pruebas
+      de nemu64-test); SRAM/FlashRAM.
+- [ ] Cachés del VR4300 (46 pruebas) y ciclos por instrucción (conjuntos
+      "timing" y "cycle" de nemu64-test).
+- [ ] CPUTest de krom ensamblado desde fuente con bootcode en ceros (traer
+      solo los `.asm` por la API: el repo trae el IPL3 de Nintendo). Probaría
+      el camino plano del arranque HLE.
+- [ ] Probar el camino plano con los juegos del usuario (fuera del repo):
+      falta reproducir efectos del IPL3 de algunos CIC (6105).
+
 ## 2026-10-10 — Fase 1 iniciada: intérprete del VR4300
 
 Hecho (diseño en docs/cpu-vr4300.md):
@@ -25,18 +82,9 @@ Hecho (diseño en docs/cpu-vr4300.md):
   solo ensamblado desde fuente, porque sus ROMs traen el IPL3 de Nintendo.
   Dillonb/n64-tests descartada (sin licencia).
 
-Siguiente (Fase 1):
-- [ ] Correr `retro64-cpu-tests` en la PS3 real: primer número de MIPS del
-      intérprete en el PPE (docs/perf-log.md).
-- [ ] Arranque HLE: cargar la ROM, copiar los primeros 1 MB a RDRAM, dejar
-      registros y DMEM como el IPL3 (lo que nemu64-test espera: tamaño de
-      RAM en DMEM[0], TV en DMEM[9], offset del ELF en DMEM[12]).
-- [ ] ISViewer (0x13FF0000) para leer la salida de nemu64-test.
-- [ ] Contenedor para compilar nemu64-test (Rust nightly-2026-07-16 +
-      nust64 0.4.1) y guardar el ROM en `tests/roms/homebrew/`.
-- [ ] VI con contador de líneas e interrupción; framebuffer 2D en el RSX.
-- [ ] Pendientes del CPU: direccionamiento de 64 bits, bandera Inexact,
-      ciclos por instrucción (docs/cpu-vr4300.md).
+Siguiente (Fase 1): ver la entrada de arriba. Hechos en ella: arranque
+HLE, ISViewer, contenedor de nemu64-test, direccionamiento de 64 bits y
+bandera Inexact.
 
 ## 2026-10-10 — Fase 0 en curso
 

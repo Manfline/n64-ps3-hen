@@ -85,6 +85,7 @@ int retro64_unit_run(void (*print)(const char *line))
 		{ "mem", t_suite_mem },
 		{ "cop0", t_suite_cop0 },
 		{ "cop1", t_suite_cop1 },
+		{ "boot", t_suite_boot },
 	};
 	char line[160];
 

@@ -18,6 +18,7 @@
 #define CONFIG_RESET    0x7006E463u
 #define ENTRYHI_MASK    0xC00000FFFFFFE0FFull
 #define ENTRYLO_MASK    0x3FFFFFFFu
+#define TLB_ENTRYLO_MASK 0x03FFFFFEu  /* la TLB guarda PFN de 20 bits, C, D y V */
 #define PAGEMASK_MASK   0x01FFE000u
 #define VEC_BASE        0xFFFFFFFF80000000ull
 #define VEC_BASE_BEV    0xFFFFFFFFBFC00200ull
@@ -43,6 +44,7 @@ void retro64_vr4300_update_status(struct retro64_cpu *cpu)
 	else
 		cpu->mode = RETRO64_MODE_USER;
 
+	cpu->re_xor = (cpu->mode == RETRO64_MODE_USER && (st & RETRO64_ST_RE)) ? 7 : 0;
 	cpu->allow64 = cpu->mode == RETRO64_MODE_KERNEL ||
 		       (cpu->mode == RETRO64_MODE_SUPERVISOR && (st & RETRO64_ST_SX)) ||
 		       (cpu->mode == RETRO64_MODE_USER && (st & RETRO64_ST_UX));
@@ -86,10 +88,13 @@ static void compare_event(void *ctx, uint64_t when)
 
 static uint32_t cop0_random(const struct retro64_cpu *cpu)
 {
-	/* Random baja 1 por instrucción de 31 a Wired y vuelve a 31. */
+	/* Random (6 bits) baja 1 por instrucción desde 31 y vuelve a 31 al
+	 * llegar a Wired. Con Wired > 31 pasa por 0, sigue en 63 y baja hasta
+	 * Wired (nemu64-test: recorre 0..63). */
 	uint64_t n = cpu->cycles - cpu->random_epoch;
-	uint32_t wired = cpu->wired & 31;
-	return 31 - (uint32_t)(n % (32 - wired));
+	uint32_t wired = cpu->wired & 63;
+	uint32_t period = wired <= 31 ? 32 - wired : 96 - wired;
+	return (31 - (uint32_t)(n % period)) & 63;
 }
 
 /* ---- Excepciones ----------------------------------------------------------- */
@@ -115,6 +120,8 @@ static void exception_at(struct retro64_cpu *cpu, enum retro64_exc code, unsigne
 	cpu->next_pc = cpu->pc + 4;
 	cpu->branch = 0;
 	retro64_vr4300_update_status(cpu);
+	if (RETRO64_UNLIKELY(cpu->exc_hook != NULL))
+		cpu->exc_hook(cpu);
 }
 
 void retro64_vr4300_exception(struct retro64_cpu *cpu, enum retro64_exc code, unsigned ce)
@@ -156,13 +163,17 @@ static void tlb_exception(struct retro64_cpu *cpu, uint64_t va, enum retro64_acc
 
 /* ---- TLB y traducción ------------------------------------------------------ */
 
+/* Bits de una dirección virtual que la TLB compara: región (63–62) y VPN2
+ * (39–13); la máscara de página quita los bajos. */
+#define TLB_VPN_BITS 0xC00000FFFFFFE000ull
+
 static bool tlb_lookup(struct retro64_cpu *cpu, uint64_t va, uint32_t *pa, enum retro64_access acc)
 {
 	uint32_t a = (uint32_t)va, asid = (uint32_t)cpu->entry_hi & 0xFF;
 
 	for (int n = 0; n < RETRO64_TLB_ENTRIES; n++) {
 		const struct retro64_tlb_entry *e = &cpu->tlb[n];
-		if ((a ^ (uint32_t)e->entry_hi) & e->vpn_mask)
+		if ((va ^ e->entry_hi) & e->vpn_mask)
 			continue;
 		if (!e->global && ((uint32_t)e->entry_hi & 0xFF) != asid)
 			continue;
@@ -183,10 +194,56 @@ static bool tlb_lookup(struct retro64_cpu *cpu, uint64_t va, uint32_t *pa, enum 
 	return false;
 }
 
-bool retro64_vr4300_translate_slow(struct retro64_cpu *cpu, uint64_t va, uint32_t *pa,
-				   enum retro64_access acc)
+/* Direccionamiento de 64 bits (KX, SX o UX según el modo). Espacios del
+ * VR4300, con direcciones virtuales de 40 bits:
+ *   xkuseg/xsuseg/xuseg  0x0000000000000000–0x000000FFFFFFFFFF  TLB
+ *   xksseg/xsseg         0x4000000000000000–0x400000FFFFFFFFFF  TLB (no usuario)
+ *   xkphys               0x8000000000000000–0xBFFFFFFFFFFFFFFF  sin TLB, solo kernel;
+ *                        bits 61–59 = caché, 58–32 en 0, físico = bits 31–0
+ *   xkseg                0xC000000000000000–0xC00000FF7FFFFFFF  TLB, solo kernel
+ *   ckseg0/1             0xFFFFFFFF80000000–0xFFFFFFFFBFFFFFFF  sin TLB, solo kernel
+ *   cksseg/ckseg3        0xFFFFFFFFC0000000–0xFFFFFFFFFFFFFFFF  TLB (supervisor:
+ *                        solo hasta 0xFFFFFFFFDFFFFFFF)
+ * Lo demás es error de dirección. */
+static bool translate64(struct retro64_cpu *cpu, uint64_t va, uint32_t *pa, enum retro64_access acc)
 {
-	/* Solo direccionamiento de 32 bits por ahora (ver vr4300.h). */
+	unsigned mode = cpu->mode;
+	if (va < 0x0000010000000000ull) {
+		if (mode == RETRO64_MODE_KERNEL && (cpu->status & RETRO64_ST_ERL) && va < 0x80000000u) {
+			*pa = (uint32_t)va;  /* con ERL, los primeros 2 GB quedan sin mapear */
+			return true;
+		}
+		return tlb_lookup(cpu, va, pa, acc);
+	}
+	if (mode == RETRO64_MODE_USER)
+		goto bad;
+	if (va >= 0x4000000000000000ull && va < 0x4000010000000000ull)
+		return tlb_lookup(cpu, va, pa, acc);
+	if (va >= 0xFFFFFFFFC0000000ull) {
+		if (mode == RETRO64_MODE_SUPERVISOR && va >= 0xFFFFFFFFE0000000ull)
+			goto bad;
+		return tlb_lookup(cpu, va, pa, acc);
+	}
+	if (mode == RETRO64_MODE_SUPERVISOR)
+		goto bad;
+	if (va >= 0xFFFFFFFF80000000ull) {
+		*pa = (uint32_t)va & 0x1FFFFFFF;
+		return true;
+	}
+	if ((va >> 62) == 2 && !(va & 0x07FFFFFF00000000ull)) {
+		*pa = (uint32_t)va;
+		return true;
+	}
+	if (va >= 0xC000000000000000ull && va < 0xC00000FF80000000ull)
+		return tlb_lookup(cpu, va, pa, acc);
+bad:
+	retro64_vr4300_address_error(cpu, va, acc);
+	return false;
+}
+
+static bool translate32(struct retro64_cpu *cpu, uint64_t va, uint32_t *pa, enum retro64_access acc)
+{
+	/* 32 bits: la dirección tiene que ser extensión de signo de 32. */
 	if (RETRO64_UNLIKELY(retro64_sx32((uint32_t)va) != va)) {
 		retro64_vr4300_address_error(cpu, va, acc);
 		return false;
@@ -217,15 +274,30 @@ bool retro64_vr4300_translate_slow(struct retro64_cpu *cpu, uint64_t va, uint32_
 	return tlb_lookup(cpu, va, pa, acc);
 }
 
+bool retro64_vr4300_translate_slow(struct retro64_cpu *cpu, uint64_t va, uint32_t *pa,
+				   enum retro64_access acc, uint32_t align)
+{
+	uint32_t wide = cpu->mode == RETRO64_MODE_KERNEL ? RETRO64_ST_KX
+			: cpu->mode == RETRO64_MODE_SUPERVISOR ? RETRO64_ST_SX : RETRO64_ST_UX;
+	bool ok = (cpu->status & wide) ? translate64(cpu, va, pa, acc) : translate32(cpu, va, pa, acc);
+	/* Status.RE: XOR 7, 6, 4 o 0 según el tamaño (solo en modo usuario). */
+	if (ok)
+		*pa ^= cpu->re_xor & ~align;
+	return ok;
+}
+
 static void tlb_write(struct retro64_cpu *cpu, unsigned n)
 {
 	struct retro64_tlb_entry *e = &cpu->tlb[n & 31];
-	e->page_mask = cpu->page_mask & PAGEMASK_MASK;
+	/* Cada par de bits de la máscara vale lo que su bit alto (nemu64-test:
+	 * 01 se guarda como 00 y 10 como 11). */
+	uint32_t hi = cpu->page_mask & 0x01554000u;
+	e->page_mask = hi | hi >> 1;
 	e->entry_hi = cpu->entry_hi & ENTRYHI_MASK & ~(uint64_t)e->page_mask;
-	e->entry_lo[0] = cpu->entry_lo0 & ENTRYLO_MASK & ~1u;
-	e->entry_lo[1] = cpu->entry_lo1 & ENTRYLO_MASK & ~1u;
+	e->entry_lo[0] = cpu->entry_lo0 & TLB_ENTRYLO_MASK;
+	e->entry_lo[1] = cpu->entry_lo1 & TLB_ENTRYLO_MASK;
 	e->global = cpu->entry_lo0 & cpu->entry_lo1 & 1;
-	e->vpn_mask = ~(e->page_mask | 0x1FFFu);
+	e->vpn_mask = TLB_VPN_BITS & ~(uint64_t)e->page_mask;
 	e->odd_bit = ((e->page_mask | 0x1FFFu) + 1) >> 1;
 }
 
@@ -240,11 +312,12 @@ static void tlb_read(struct retro64_cpu *cpu, unsigned n)
 
 static void tlb_probe(struct retro64_cpu *cpu)
 {
-	uint32_t hi = (uint32_t)cpu->entry_hi, asid = hi & 0xFF;
+	uint64_t hi = cpu->entry_hi;
+	uint32_t asid = (uint32_t)hi & 0xFF;
 	cpu->index = 0x80000000u;
 	for (int n = 0; n < RETRO64_TLB_ENTRIES; n++) {
 		const struct retro64_tlb_entry *e = &cpu->tlb[n];
-		if ((hi ^ (uint32_t)e->entry_hi) & e->vpn_mask)
+		if ((hi ^ e->entry_hi) & e->vpn_mask)
 			continue;
 		if (!e->global && ((uint32_t)e->entry_hi & 0xFF) != asid)
 			continue;
@@ -291,9 +364,7 @@ void retro64_cpu_cop0_write(struct retro64_cpu *cpu, unsigned reg, uint64_t v)
 {
 	cpu->cop0_latch = v;
 	switch (reg) {
-	case RETRO64_CP0_INDEX:
-		cpu->index = (cpu->index & 0x80000000u) | ((uint32_t)v & 0x3F);
-		return;
+	case RETRO64_CP0_INDEX:       cpu->index = (uint32_t)v & 0x8000003Fu; return;
 	case RETRO64_CP0_ENTRYLO0:    cpu->entry_lo0 = (uint32_t)v & ENTRYLO_MASK; return;
 	case RETRO64_CP0_ENTRYLO1:    cpu->entry_lo1 = (uint32_t)v & ENTRYLO_MASK; return;
 	case RETRO64_CP0_CONTEXT:
@@ -334,7 +405,7 @@ void retro64_cpu_cop0_write(struct retro64_cpu *cpu, unsigned reg, uint64_t v)
 		cpu->xcontext = (v & 0xFFFFFFFE00000000ull) | (cpu->xcontext & 0x1FFFFFFFFull);
 		return;
 	case RETRO64_CP0_PARITYERROR: cpu->parity_error = (uint32_t)v & 0xFF; return;
-	case RETRO64_CP0_TAGLO:       cpu->tag_lo = (uint32_t)v & 0x0FFFFFC0u; return;
+	case RETRO64_CP0_TAGLO:       cpu->tag_lo = (uint32_t)v; return;
 	case RETRO64_CP0_TAGHI:       cpu->tag_hi = 0; return;
 	case RETRO64_CP0_ERROREPC:    cpu->error_epc = v; return;
 	default:                      return;  /* solo lectura o sin implementar */
@@ -376,13 +447,17 @@ void retro64_vr4300_cop0(struct retro64_cpu *cpu, uint32_t i)
 		cpu->gpr[rt] = retro64_cpu_cop0_read(cpu, rd);
 		return;
 	case 0x04:                                                             /* MTC0 */
-		retro64_cpu_cop0_write(cpu, rd, retro64_sx32((uint32_t)cpu->gpr[rt]));
+		/* Transfiere los 64 bits del GPR, igual que DMTC0 (nemu64-test:
+		 * Context, XContext, EPC y el latch con MTC0 + DMFC0). */
+		retro64_cpu_cop0_write(cpu, rd, cpu->gpr[rt]);
 		return;
 	case 0x05:                                                             /* DMTC0 */
 		if (!cpu->allow64)
 			break;
 		retro64_cpu_cop0_write(cpu, rd, cpu->gpr[rt]);
 		return;
+	case 0x02: case 0x06: case 0x08:                                       /* CFC0, CTC0, BC0 */
+		return;  /* reconocidas e inertes (nemu64-test) */
 	case 0x10: case 0x11: case 0x12: case 0x13: case 0x14: case 0x15: case 0x16: case 0x17:
 	case 0x18: case 0x19: case 0x1A: case 0x1B: case 0x1C: case 0x1D: case 0x1E: case 0x1F:
 		switch (I_FUNCT(i)) {
@@ -391,7 +466,8 @@ void retro64_vr4300_cop0(struct retro64_cpu *cpu, uint32_t i)
 		case 0x06: tlb_write(cpu, cop0_random(cpu)); return;          /* TLBWR */
 		case 0x08: tlb_probe(cpu); return;                            /* TLBP */
 		case 0x18: op_eret(cpu); return;                              /* ERET */
-		default:   break;
+		case 0x10: break;                                             /* RFE (R3000): RI */
+		default:   return;  /* las demás funciones con CO = 1 no hacen nada */
 		}
 		break;
 	default:
@@ -420,6 +496,7 @@ void retro64_cpu_reset(struct retro64_cpu *cpu)
 	memset(cpu->fpr, 0, sizeof cpu->fpr);
 	cpu->hi = cpu->lo = 0;
 	cpu->fcr31 = 0;
+	cpu->cop2_latch = 0;
 	cpu->llbit = 0;
 
 	cpu->status = RETRO64_ST_ERL | RETRO64_ST_BEV;
@@ -441,7 +518,7 @@ void retro64_cpu_reset(struct retro64_cpu *cpu)
 	memset(cpu->tlb, 0, sizeof cpu->tlb);
 	for (int n = 0; n < RETRO64_TLB_ENTRIES; n++) {
 		cpu->tlb[n].entry_hi = 0xFFFFFFFF80000000ull + (uint64_t)n * 0x2000;
-		cpu->tlb[n].vpn_mask = ~0x1FFFu;
+		cpu->tlb[n].vpn_mask = TLB_VPN_BITS;
 		cpu->tlb[n].odd_bit = 0x1000;
 	}
 

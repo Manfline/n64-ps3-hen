@@ -28,3 +28,8 @@ void retro64_n64_run(struct retro64_n64 *n64, uint64_t cycles)
 	retro64_sched_set(&n64->sched, RETRO64_EV_STOP, n64->cpu.cycles + cycles);
 	retro64_cpu_run(&n64->cpu);
 }
+
+void retro64_n64_stop(struct retro64_n64 *n64)
+{
+	retro64_sched_set(&n64->sched, RETRO64_EV_STOP, n64->cpu.cycles);
+}

@@ -7,9 +7,19 @@
 | `tests/phase0/rsx-triangle/main.c` | Sample `samples/graphics/rsxtest` de PSL1GHT (`f649a08f`) | MIT | Inicialización del RSX, superficie, viewport y flip reescritos en C a partir de `rsxutil.cpp`/`main.cpp` |
 | `tests/phase0/spu-compute/spu/mix.c` | Patrón DMA del sample `samples/spu/spudma` de PSL1GHT | MIT | Solo el patrón `mfc_get`/espera por etiqueta; el cálculo y el doble búfer son propios |
 
-El núcleo de la Fase 1 (`src/core/`, `src/cpu/`) es código propio, escrito
-desde documentación pública (manual del VR4300 de NEC, MIPS IV ISA,
-n64brew.dev). No incluye código de Not64/Wii64, Mupen64Plus ni ares.
+El núcleo de la Fase 1 (`src/core/`, `src/cpu/`, `src/host/`) es código
+propio, escrito desde documentación pública (manual del VR4300 de NEC, MIPS
+IV ISA, n64brew.dev) y validado con nemu64-test. No incluye código de
+Not64/Wii64, Mupen64Plus ni ares.
+
+Datos tomados de terceros (no código):
+
+| Dato | En | Origen | Licencia |
+|---|---|---|---|
+| Comportamiento del IPL3 libre (búsqueda del ELF, boot flags en DMEM, $sp, variables de libultra del modo compat) | `src/core/boot.c` | libdragon `boot/README.md`, `ipl3.c`, `loader.c`, `cleanup.c`, `minidragon.h` (rama `preview`, consultada el 2026-10-10) | Unlicense |
+| CRC-32 del IPL3 de cada variante de CIC (solo los valores) | `src/core/rom.c` | nust64 0.4.1, `src/rom.rs` | MIT |
+| Semillas del IPL3, ajuste de la dirección de arranque por CIC, códigos de destino, mapa de memoria y reglas del bus | `src/core/` | n64brew.dev (PIF-NUS, CIC-NUS, ROM Header, Memory map, RDRAM Interface, Initial Program Load) | documentación |
+| Reglas de hardware verificadas por las pruebas (MULT, LWR, enlaces, COP0, COP2, FPU, TLB, RE, bus) y valores de los registros de RDRAM | `src/cpu/`, `src/core/` | nemu64-test (fuente, comentarios y valores esperados) | MIT |
 
 Aviso de PSL1GHT: Copyright (c) 2011 PSL1GHT Development Team, licencia MIT
 (compatible con GPLv2 o posterior).
@@ -23,15 +33,34 @@ Aviso de PSL1GHT: Copyright (c) 2011 PSL1GHT Development Team, licencia MIT
 | NVIDIA Cg Toolkit 3.1 | developer.nvidia.com/cg-toolkit | Propietaria (NVIDIA), gratuita | `libCg.so` para `cgcomp`, solo en la imagen local; no se commitea ni se publica |
 | Port de SM64, rama `ps3` | github.com/fgsfdsfgs/sm64-port | — | Solo para validar `cgcomp`: los shaders se descargan a `build/validate/` y no se copian al repo |
 
-## Suites de prueba de CPU (elegidas; aún no incluidas)
+## ROMs de prueba incluidas
+
+| Archivo | Origen | Licencia | Contenido de terceros |
+|---|---|---|---|
+| `tests/roms/homebrew/nemu64-test.z64` | github.com/thelemmy/nemu64-test, commit `9a8b9f7d94ee2f6f57d7feed70c98c22cdc30e6c` (2026-09-08), conjunto "base" | MIT (Copyright (c) 2021 lemmy-64), `nemu64-test.LICENSE` | IPL3 libre de libdragon r7 (Unlicense) que trae nust64 0.4.1, verificado por MD5 (`7f014ed41cc53bb1a5e44f211f8c3dec`); crates enlazados (arbitrary-int y oorandom MIT; arrayref BSD-2-Clause; linked_list_allocator, lock_api, num-traits, scopeguard y spinning_top MIT/Apache-2.0), compiler-builtins y core/alloc de Rust: avisos en `nemu64-test.NOTICES` |
+
+Se compila con `tools/build-nemu64-test.sh` (`docker/nemu64-test.Dockerfile`):
+rustup-init 1.29.1 (SHA-256 fijo), Rust `nightly-2026-07-16` con `rust-src`,
+nust64 0.4.1 instalado con Rust 1.90.0 y `--locked` (su `proc-macro2` 1.0.49
+no compila con nightly), y `cargo build --release --locked`. Recompilar desde
+cero (`--no-cache`) da el mismo SHA-256 (`nemu64-test.z64.sha256`). El ROM
+no contiene código de Nintendo.
+
+## Herramientas para compilar ROMs de prueba (no se redistribuyen)
+
+| Componente | Origen | Licencia | Uso |
+|---|---|---|---|
+| Rust (rustup 1.29.1, nightly-2026-07-16, 1.90.0) | rust-lang.org | MIT OR Apache-2.0 | Compilar nemu64-test en el contenedor |
+| nust64 0.4.1 | crates.io / github.com/rust-n64/nust64 | MIT | ELF → ROM con el IPL3 de libdragon |
+
+## Suites de prueba de CPU
 
 Licencias verificadas el 2026-10-10 con la API de GitHub (campo `license`)
-y revisando los repositorios. Ninguna ROM está en el repo todavía: entrarán
-a `tests/roms/homebrew/` cuando exista el arranque HLE para correrlas.
+y revisando los repositorios.
 
 | Suite | Commit revisado | Licencia | ¿Contiene IPL3 de Nintendo? | Decisión |
 |---|---|---|---|---|
-| nemu64-test (github.com/thelemmy/nemu64-test; sucesor de lemmy-64/n64-systemtest) | `9a8b9f7d` (2026-09-08) | MIT | No: usa el IPL3 abierto de libdragon (Unlicense) que trae nust64 0.4.1 (MIT) | **Principal.** Cubre ALU, saltos, LL/SC, COP0, COP1 (modo FR), TLB, excepciones, y también MI/PI/SP/PIF/RSP/RDP. No hay releases: se compila desde fuente (Rust `nightly-2026-07-16` + `nust64` 0.4.1). Reporta en pantalla e ISViewer opcional. Depende del estado que deja el IPL3 en DMEM (tamaño de RAM en DMEM[0], tipo de TV en DMEM[9], offset del ELF en DMEM[12]): el HLE de boot debe reproducirlo. |
-| CPUTest de krom (github.com/PeterLemon/N64) | `7085543e` (2026-02-01) | Unlicense (desde 2025-09-27) | **Sí.** Cada ROM y `LIB/N64_BOOTCODE.BIN` contienen el IPL3 CIC-6102 de Nintendo; `BOOTCODE/BOOTCODE.asm` es su desensamblado | **Secundaria, solo ensamblada desde fuente** con un bootcode libre (ceros, ya que arrancamos por HLE) en lugar de `N64_BOOTCODE.BIN`. Nunca descargar ese archivo, `BOOTCODE.asm` ni los `.N64` precompilados. Reporta PASS/FAIL en el framebuffer. |
+| nemu64-test (github.com/thelemmy/nemu64-test; sucesor de lemmy-64/n64-systemtest) | `9a8b9f7d` (2026-09-08) | MIT | No: usa el IPL3 abierto de libdragon (Unlicense) que trae nust64 0.4.1 (MIT) | **Principal; incluida** (ver arriba). Cubre ALU, saltos, LL/SC, COP0, COP1 (modo FR), TLB, excepciones, y también MI/PI/SP/PIF/RSP/RDP. Reporta en pantalla e ISViewer; el arranque HLE reproduce lo que espera en DMEM. Corre con `tools/test-roms.sh`. |
+| CPUTest de krom (github.com/PeterLemon/N64) | `7085543e` (2026-02-01) | Unlicense (desde 2025-09-27) | **Sí.** Cada ROM y `LIB/N64_BOOTCODE.BIN` contienen el IPL3 CIC-6102 de Nintendo; `BOOTCODE/BOOTCODE.asm` es su desensamblado | **Secundaria, pendiente: solo ensamblada desde fuente** con un bootcode libre (ceros, ya que arrancamos por HLE; el camino "plano" del HLE la arrancaría) en lugar de `N64_BOOTCODE.BIN`. Un `git clone` bajaría esos binarios: hay que traer solo los `.asm` de texto por la API. Nunca descargar ese archivo, `BOOTCODE.asm` ni los `.N64` precompilados. Reporta PASS/FAIL en el framebuffer (falta el VI para leerlo). |
 | Dillonb/n64-tests | — | Ninguna | Sí | Descartada: sin licencia no es redistribuible. |
 | Pruebas de libdragon | — | Unlicense | No | Descartada: prueban la biblioteca, no el CPU. |

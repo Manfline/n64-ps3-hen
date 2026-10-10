@@ -44,12 +44,13 @@ static void write_masks(void)
 	CHECK_EQ(R[T3], 0xFFFFFFFFFF57FFE0ull);
 }
 
-static void mtc0_sign_extends_64bit_registers(void)
+/* MTC0 transfiere los 64 bits del GPR, como DMTC0 (nemu64-test). */
+static void mtc0_writes_64_bits(void)
 {
-	R[T0] = 0x80001234;
+	R[T0] = 0xFFFFFFFF80001234ull;
 	R[T1] = 0x0000001234567890ull;
 	T_LOAD(MTC0(T0, RETRO64_CP0_EPC), DMFC0(T2, RETRO64_CP0_EPC),
-	       DMTC0(T1, RETRO64_CP0_EPC), DMFC0(T3, RETRO64_CP0_EPC), MFC0(T4, RETRO64_CP0_EPC));
+	       MTC0(T1, RETRO64_CP0_EPC), DMFC0(T3, RETRO64_CP0_EPC), MFC0(T4, RETRO64_CP0_EPC));
 	t_step(5);
 	CHECK_EQ(R[T2], 0xFFFFFFFF80001234ull);
 	CHECK_EQ(R[T3], 0x0000001234567890ull);
@@ -402,11 +403,49 @@ static void unused_register_latch(void)
 	CHECK_EQ(R[T1], 0x1234);
 }
 
+/* Sin COP2, con Status.CU2 los movimientos usan un latch de 64 bits; el resto
+ * da RI con Cause.CE = 2 (nemu64-test, cop_unusable). */
+static void cop2_latch(void)
+{
+	t_set_status(T_STATUS | RETRO64_ST_CU2);
+	R[T0] = 0x0123456789ABCDEFull;
+	T_LOAD(M_R(0x12, 0x04, T0, 5, 0, 0),   /* MTC2 */
+	       M_R(0x12, 0x00, T1, 6, 0, 0),   /* MFC2 */
+	       M_R(0x12, 0x01, T2, 7, 0, 0),   /* DMFC2 */
+	       M_R(0x12, 0x03, T3, 7, 0, 0));  /* DCFC2: RI */
+	t_step(4);
+	CHECK_EQ(R[T1], 0xFFFFFFFF89ABCDEFull);
+	CHECK_EQ(R[T2], 0x0123456789ABCDEFull);
+	CHECK_EXC(RETRO64_EXC_RI, T_CODE + 12, 0, T_VEC_GEN);
+	CHECK_EQ((CPU->cause >> RETRO64_CAUSE_CE_SHIFT) & 3, 2);
+
+	t_set_status(T_STATUS);
+	retro64_cpu_set_pc(CPU, T_CODE);
+	t_step(1);
+	CHECK_EXC(RETRO64_EXC_CPU, T_CODE, 0, T_VEC_GEN);
+	CHECK_EQ((CPU->cause >> RETRO64_CAUSE_CE_SHIFT) & 3, 2);
+}
+
+/* KX = 1: xkphys (0x9000...) llega a la memoria física; con bits 58–32
+ * distintos de 0 es error de dirección. */
+static void xkphys_with_kx(void)
+{
+	t_wr32(0x2000, 0xCAFEF00D);
+	t_set_status(T_STATUS | RETRO64_ST_KX);
+	R[T0] = 0x9000000000002000ull;
+	R[T1] = 0x9000000100002000ull;
+	T_LOAD(LW(T2, 0, T0), LW(T3, 0, T1));
+	t_step(2);
+	CHECK_EQ(R[T2], 0xFFFFFFFFCAFEF00Dull);
+	CHECK_EXC(RETRO64_EXC_ADEL, T_CODE + 4, 0, T_VEC_GEN);
+	CHECK_EQ(CPU->bad_vaddr, 0x9000000100002000ull);
+}
+
 void t_suite_cop0(void)
 {
 	RUN(prid_and_config);
 	RUN(write_masks);
-	RUN(mtc0_sign_extends_64bit_registers);
+	RUN(mtc0_writes_64_bits);
 	RUN(syscall_and_eret);
 	RUN(break_exception);
 	RUN(bev_vectors);
@@ -438,4 +477,6 @@ void t_suite_cop0(void)
 	RUN(user_mode_restrictions);
 	RUN(random_in_range);
 	RUN(unused_register_latch);
+	RUN(cop2_latch);
+	RUN(xkphys_with_kx);
 }

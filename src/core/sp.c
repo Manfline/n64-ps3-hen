@@ -2,8 +2,11 @@
  * Retro64 — registros del RSP (SP) y del RDP (DP, comandos).
  *
  * Primer hito: SP_STATUS (halt, broke, interrupción, señales) y el semáforo
- * se comportan como en la consola; el RSP no se ejecuta y el DMA del SP no
- * existe todavía (Fase 2, SPE 0). Los registros del DP solo se guardan.
+ * se comportan como en la consola; el DMA del SP no existe todavía y el RSP
+ * no ejecuta nada (Fase 2, SPE 0). Mientras tanto, quitarle HALT lo detiene
+ * en el acto como si hubiera ejecutado BREAK (BROKE y, si está habilitada, la
+ * interrupción): así ningún programa espera para siempre a que termine.
+ * Los registros del DP solo se guardan.
  */
 #include "core/bus.h"
 
@@ -46,6 +49,12 @@ static void sp_write_status(struct retro64_bus *bus, uint32_t v)
 			s &= ~(0x80u << i);
 		if (v & (0x400u << (2 * i)))
 			s |= 0x80u << i;
+	}
+	/* RSP provisional: arrancar es detenerse en un BREAK inmediato. */
+	if (!(s & RETRO64_SP_STATUS_HALT)) {
+		s |= RETRO64_SP_STATUS_HALT | RETRO64_SP_STATUS_BROKE;
+		if (s & 0x40)
+			retro64_mi_raise(bus, RETRO64_IRQ_SP);
 	}
 	bus->sp.regs[RETRO64_SP_STATUS] = s;
 }

@@ -25,3 +25,8 @@ KSEG0, 20 M instrucciones.
 | 2026-10-10 | (este) | Host: Mac Studio, Docker arm64, gcc 12 -O2 | 237 MIPS | Solo referencia del host |
 | 2026-10-10 | (este) | RPCS3 0.0.43, PPU LLVM | 35,6 MIPS | **No concluyente** |
 | | | PS3 real | pendiente | `retro64-cpu-tests` |
+| 2026-10-10 | (arranque HLE) | Host: Mac Studio, Docker arm64, gcc 12 -O2 | 217 MIPS | −8 %: la FPU calcula ahora Inexact y los modos de redondeo con exactitud (TwoSum/fma); el bucle tiene un ADD.S cada 10 instrucciones. Costo de corrección, no regresión |
+| 2026-10-10 | (arranque HLE) | RPCS3 0.0.43, PPU LLVM | 29,0 MIPS | **No concluyente** |
+
+Corrida completa de nemu64-test (`retro64-run`, ≈189 M ciclos del VR4300):
+0,75 s en el host sin sanitizers (253 MIPS); 2,1 s con ASan + UBSan.
