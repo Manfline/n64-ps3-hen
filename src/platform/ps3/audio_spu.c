@@ -77,7 +77,8 @@ static int check_lists(spukit_worker *w)
 	static uint8_t ram_spe[AUD_SELFTEST_RAM] __attribute__((aligned(128)));
 	static uint8_t ram_ppe[AUD_SELFTEST_RAM] __attribute__((aligned(128)));
 	static struct aud_state ppe;
-	static const uint32_t abis[] = { SALSA64_ABI_NEAD_OOT, SALSA64_ABI_AUDIO, SALSA64_ABI_NEAD_MK };
+	static const uint32_t abis[] = { SALSA64_ABI_NEAD_OOT, SALSA64_ABI_AUDIO, SALSA64_ABI_NEAD_MK,
+					 SALSA64_ABI_NAUDIO_MP3, SALSA64_ABI_NAUDIO_BK };
 	int bad = 0;
 	aud_init(&ppe);
 	spukit_wait(w, spukit_post(w, AUD_JOB_RESET, NULL, 0));

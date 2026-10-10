@@ -123,5 +123,16 @@ void alist_filter(struct aud_state *st, uint16_t dmem, uint16_t count, uint32_t 
 		  const uint32_t *lut_address);
 void alist_polef(struct aud_state *st, bool init, uint16_t dmemo, uint16_t dmemi, uint16_t count,
 		 uint16_t gain, int16_t *table, uint32_t address);
+void alist_iirf(struct aud_state *st, bool init, uint16_t dmemo, uint16_t dmemi, uint16_t count,
+		const int16_t *table, uint32_t address);
+void alist_overload(struct aud_state *st, uint16_t dmem, uint16_t count, int16_t gain, uint16_t attenuation);
+
+/* ---- MP3 (mp3.c) ------------------------------------------------------------
+ * Síntesis de un gránulo (576 muestras) de MPEG-1 Layer III: lee de la
+ * RDRAM 8 bytes de ganancias y 3 bloques de 32 × 6 muestras de subbanda y
+ * escribe encima las muestras PCM. `index` es la posición (par, 0–30) en
+ * el anillo de la ventana de síntesis. */
+void aud_mp3(struct aud_state *st, unsigned index, uint32_t address);
+extern const int16_t aud_mp3_window[0x420];
 
 #endif

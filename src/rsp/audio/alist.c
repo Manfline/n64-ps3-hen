@@ -589,3 +589,56 @@ void alist_polef(struct aud_state *st, bool init, uint16_t dmemo, uint16_t dmemi
 	} while (count != 0);
 	aud_store_s16(st, address, out + 4, 4);
 }
+
+/* IIR (naudio de Conker y los de MP3): biquad sobre bloques de 8 con
+ *   y[n] = c0·x[n] + c1·x[n−1] + c0·x[n−2] + 2·c8·y[n−1] + 2·c9·y[n−2]
+ * (c = table[i]; cada producto redondeado a Q15 como VMULF) y la salida
+ * truncada a 16 bits sin saturar, como en el original. Estado en la RDRAM:
+ * y[n−2], y[n−1] en +4/+6 y x[n−2], x[n−1] en +8/+10. */
+static int32_t vmulf(int16_t x, int16_t y)
+{
+	return ((int32_t)x * y + 0x4000) >> 15;
+}
+
+void alist_iirf(struct aud_state *st, bool init, uint16_t dmemo, uint16_t dmemi, uint16_t count,
+		const int16_t *table, uint32_t address)
+{
+	uint8_t *dst = aud_dm(st, dmemo);
+	int16_t y[8] = { 0 }, x[4] = { 0 };
+	unsigned index = 7;
+
+	if (!init) {
+		int16_t s[4];
+		aud_load_s16(st, s, address + 4, 4);
+		y[6] = s[0];
+		y[7] = s[1];
+		x[1] = s[2];
+		x[2] = s[3];
+	}
+	int32_t prev = vmulf(table[9], y[6]) * 2;
+	for (count = (uint16_t)aud_align(count, 16); count; count -= 16, dst += 16) {
+		for (unsigned i = 0; i < 8; i++, dmemi += 2) {
+			x[index & 3] = aud_ld16(aud_dm(st, dmemi));
+			int32_t accu = prev + vmulf(table[0], x[index & 3]) + vmulf(table[1], x[(index - 1) & 3]) +
+				       vmulf(table[0], x[(index - 2) & 3]);
+			accu += vmulf(table[8], y[index]) * 2;
+			prev = vmulf(table[9], y[index]) * 2;
+			y[i] = (int16_t)accu;
+			aud_st16(dst + 2 * i, y[i]);
+			index = (index + 1) & 7;
+		}
+	}
+	int16_t s[4] = { y[6], y[7], x[(index - 2) & 3], x[(index - 1) & 3] };
+	aud_store_s16(st, address + 4, s, 4);
+}
+
+/* OVERLOAD (distorsión de Conker): ganancia saturada y luego atenuación
+ * (Q16 sin signo). `count` en bytes. */
+void alist_overload(struct aud_state *st, uint16_t dmem, uint16_t count, int16_t gain, uint16_t attenuation)
+{
+	uint8_t *p = aud_dm(st, dmem);
+	for (count >>= 1; count; count--, p += 2) {
+		int32_t accu = aud_clamp16(aud_ld16(p) * gain);
+		aud_st16(p, (int16_t)((accu * attenuation) >> 16));
+	}
+}

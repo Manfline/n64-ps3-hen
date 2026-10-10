@@ -148,11 +148,11 @@ enum salsa64_abi {
 	SALSA64_ABI_NEAD_MMB,   /* Zelda MM (E beta) */
 	SALSA64_ABI_NEAD_AC,    /* Animal Crossing */
 	SALSA64_ABI_NEAD_EFZ,   /* F-Zero X Expansion */
-	SALSA64_ABI_NAUDIO,     /* naudio de Rare y otros (pendiente) */
-	SALSA64_ABI_NAUDIO_BK,  /* Banjo-Kazooie (pendiente) */
-	SALSA64_ABI_NAUDIO_DK,  /* Donkey Kong 64 (pendiente) */
-	SALSA64_ABI_NAUDIO_MP3, /* Perfect Dark, Banjo-Tooie, Jet Force Gemini (pendiente) */
-	SALSA64_ABI_NAUDIO_CBFD,/* Conker (pendiente) */
+	SALSA64_ABI_NAUDIO,     /* naudio de Rare y otros */
+	SALSA64_ABI_NAUDIO_BK,  /* Banjo-Kazooie */
+	SALSA64_ABI_NAUDIO_DK,  /* Donkey Kong 64 */
+	SALSA64_ABI_NAUDIO_MP3, /* Perfect Dark, Banjo-Tooie, Jet Force Gemini */
+	SALSA64_ABI_NAUDIO_CBFD,/* Conker */
 	SALSA64_ABI_MUSYX1,     /* MusyX (pendiente) */
 	SALSA64_ABI_MUSYX2,
 	SALSA64_ABI_COUNT
