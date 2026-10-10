@@ -20,6 +20,11 @@
  * al atender la interrupción. Imprime por el ISViewer (si lo hay)
  * "vitest: OK …" o "vitest: FALLO …" y sigue animando.
  *
+ * Controles, por el SI y el PIF (comandos joybus de n64brew.dev): al
+ * arrancar identifica los cuatro puertos y en cada cuadro lee el control 1;
+ * imprime "vitest: control …" al empezar y cada vez que cambia. No altera
+ * el dibujo ni la temporización que se verifican.
+ *
  * Valores de los registros del VI: los modos estándar NTSC/PAL de 320×240
  * documentados en n64brew.dev (Video Interface).
  */
@@ -42,6 +47,11 @@
 #define VI_X_SCALE   REG(0x04400030)
 #define VI_Y_SCALE   REG(0x04400034)
 #define MI_INTR_MASK REG(0x0430000C)
+#define SI_DRAM_ADDR REG(0x04800000)
+#define SI_PIF_RD64B REG(0x04800004)
+#define SI_PIF_WR64B REG(0x04800010)
+#define SI_STATUS    REG(0x04800018)
+#define PIF_RAM      0x1FC007C0u
 #define BOOT_FLAGS   REG(0x04000008)  /* DMEM: el IPL3 de libdragon deja el tipo de TV en [23:16] */
 
 #define ISV_MAGIC    REG(0x13FF0000)
@@ -62,6 +72,8 @@ volatile uint32_t vi_fields, vi_vcurrent, vi_count;
 /* Fuera de .bss (start.S no los limpia por la caché): se escriben enteros
  * por KSEG1 en cada cuadro. */
 static uint32_t fb[2][W * H] __attribute__((section(".fb"), aligned(64)));
+/* Copia de la PIF RAM para el DMA del SI; también solo por KSEG1. */
+static uint32_t pif_buf[16] __attribute__((section(".fb"), aligned(64)));
 
 static const uint32_t bars[8] = {  /* 0xRRGGBBAA */
 	0xFFFFFFFF, 0xFFFF00FF, 0x00FFFFFF, 0x00FF00FF,
@@ -221,6 +233,23 @@ static void put_u(uint32_t v)
 		msg[msg_len++] = tmp[--n];
 }
 
+static void put_x(uint32_t v, int digits)
+{
+	put("0x");
+	while (digits--)
+		if (msg_len < sizeof msg)
+			msg[msg_len++] = "0123456789ABCDEF"[(v >> (4 * digits)) & 15];
+}
+
+static void put_i(int32_t v)
+{
+	if (v < 0) {
+		put("-");
+		v = -v;
+	}
+	put_u((uint32_t)v);
+}
+
 static void isv_flush(void)
 {
 	for (unsigned i = 0; i < msg_len; i += 4) {
@@ -231,6 +260,97 @@ static void isv_flush(void)
 	}
 	ISV_LEN = msg_len;
 	msg_len = 0;
+}
+
+/* ---- Controles (SI + PIF) ------------------------------------------------- */
+
+static void si_wait(void)
+{
+	while (SI_STATUS & 3)  /* DMA o E/S en curso */
+		;
+}
+
+/* Escribe los 64 bytes en la PIF RAM, deja que el PIF ejecute los comandos
+ * y los vuelve a leer con las respuestas. */
+static void pif_exchange(const uint8_t *cmds, unsigned n, uint8_t *out)
+{
+	volatile uint32_t *buf = uncached(pif_buf);
+	for (unsigned i = 0; i < 64; i += 4) {
+		uint32_t w = 0;
+		for (unsigned k = 0; k < 4; k++)
+			w = w << 8 | (i + k < n ? cmds[i + k] : 0);
+		buf[i / 4] = i == 60 ? w | 1 : w;  /* byte 63 = 0x01: ejecutar joybus */
+	}
+	si_wait();
+	SI_DRAM_ADDR = (uint32_t)pif_buf & 0x1FFFFFFF;
+	SI_PIF_WR64B = PIF_RAM;
+	si_wait();
+	SI_STATUS = 0;  /* baja la interrupción del SI (enmascarada) */
+	SI_DRAM_ADDR = (uint32_t)pif_buf & 0x1FFFFFFF;
+	SI_PIF_RD64B = PIF_RAM;
+	si_wait();
+	SI_STATUS = 0;
+	for (unsigned i = 0; i < 64; i += 4) {
+		uint32_t w = buf[i / 4];
+		for (unsigned k = 0; k < 4; k++)
+			out[i + k] = (uint8_t)(w >> (24 - 8 * k));
+	}
+}
+
+/* Identificación (comando 0x00) de los cuatro puertos. */
+static void report_pads(void)
+{
+	static const uint8_t cmds[] = {
+		0x01, 0x03, 0x00, 0xFF, 0xFF, 0xFF,
+		0x01, 0x03, 0x00, 0xFF, 0xFF, 0xFF,
+		0x01, 0x03, 0x00, 0xFF, 0xFF, 0xFF,
+		0x01, 0x03, 0x00, 0xFF, 0xFF, 0xFF,
+		0xFE,
+	};
+	uint8_t r[64];
+	pif_exchange(cmds, sizeof cmds, r);
+	put("vitest: controles:");
+	for (unsigned p = 0; p < 4; p++) {
+		const uint8_t *h = r + 6 * p;
+		put(" ");
+		put_u(p + 1);
+		put("=");
+		if (h[1] & 0xC0) {
+			put("no");
+		} else {
+			put_x((uint32_t)h[3] << 8 | h[4], 4);
+			put("/");
+			put_x(h[5], 2);
+		}
+	}
+	put("\n");
+	isv_flush();
+}
+
+/* Estado del control 1 (comando 0x01); se imprime cuando cambia. */
+static void poll_pad(uint32_t *last)
+{
+	static const uint8_t cmds[] = { 0x01, 0x04, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE };
+	uint8_t r[64];
+	pif_exchange(cmds, sizeof cmds, r);
+	uint32_t now = (r[1] & 0xC0) ? 0xFFFFFFFFu
+				     : (uint32_t)r[3] << 24 | (uint32_t)r[4] << 16 | (uint32_t)r[5] << 8 | r[6];
+	if (now == *last)
+		return;
+	*last = now;
+	put("vitest: control 1: ");
+	if (now == 0xFFFFFFFFu) {
+		put("no hay");
+	} else {
+		put("botones ");
+		put_x(now >> 16, 4);
+		put(" x ");
+		put_i((int8_t)(now >> 8));
+		put(" y ");
+		put_i((int8_t)now);
+	}
+	put("\n");
+	isv_flush();
 }
 
 /* ---- Programa ------------------------------------------------------------ */
@@ -267,11 +387,13 @@ int main(void)
 	int pal = ((BOOT_FLAGS >> 16) & 0xFF) == 0;  /* 0 = PAL, 1 = NTSC, 2 = MPAL */
 	int isv = isv_present();
 	uint32_t cur = 0, frame = 0, skipped = 0;
-	uint32_t first_fields = 0, first_count = 0;
+	uint32_t first_fields = 0, first_count = 0, pad = 0xFFFFFFFEu;
 
 	draw(fb[0], 0, 0);
 	vi_setup(pal, fb[0]);
 	enable_vi_interrupt();
+	if (isv)
+		report_pads();
 
 	for (;;) {
 		int fmt32 = (frame / FIELDS_PER_FORMAT) & 1;
@@ -288,6 +410,8 @@ int main(void)
 		VI_CONTROL = fmt32 ? CTRL_32 : CTRL_16;
 		cur ^= 1;
 		frame++;
+		if (isv)
+			poll_pad(&pad);
 
 		if (frame == 2) {
 			first_fields = now_fields;

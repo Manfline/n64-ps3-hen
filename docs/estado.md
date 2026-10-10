@@ -1,5 +1,46 @@
 # Estado
 
+## 2026-10-10 — Controles (PIF + DualShock 3) y bucles de espera
+
+Hecho (validado en PS3 real, Slim CECH-3011A, HFW 4.91 + HEN):
+- **Controles** (ceae30f): comandos joybus del PIF por el SI
+  (`src/core/pif.c`, desde n64brew.dev): identificación, estado, accesorio
+  sin pak, RST con L+R+Start, errores de canal. Frontend
+  (`src/frontend/padmap.c`): stick izquierdo → stick (±80), stick derecho
+  → botones C, × → A, □ → B, L2 → Z, L1 → L, R1 → R, START; todo
+  configurable en `/dev_hdd0/salsa64/controles.cfg`. El puerto 1 siempre
+  tiene control (el DS3 tarda ~0,2 s en aparecer y los juegos buscan
+  controles al arrancar). vitest identifica los puertos y lee el control
+  1 por el SI: en la PS3 llegaron a la ROM todos los botones, los sticks
+  en su sentido (arriba = Y +80), los C del stick derecho y RST.
+- **Bucles de espera** (940f6f8, `src/cpu/idle.c`): punto fijo exacto de
+  una vuelta y salto en vueltas enteras hasta el próximo evento. Estado
+  idéntico con y sin detección (pruebas, vitest, nemu64-test). PS3 real
+  con vitest: emulación 65,6 → 35,0 ms por campo (×1,9), 15,2 → 28,3
+  campos/s, 45,6 % del tiempo saltado. Costo en el bench: −1 % (21,2 →
+  21,0 MIPS). docs/perf-log.md.
+- Intérprete optimizado en el frontend: 23,8 MIPS con vitest (antes 13,6).
+- 182 pruebas en el host y en RPCS3 (big-endian) y en la PS3; nemu64-test
+  sin cambios (462).
+
+Notas:
+- ppu-gcc no pone indicaciones estáticas en los saltos (bits a/t en 0): los
+  `+`/`-` que muestra objdump no son predicciones del PPE.
+- Quien escriba la RDRAM fuera del CPU (RSP en SPE, DMA con latencia) debe
+  hacerlo en un evento del planificador, o el salto de bucles de espera se
+  lo pasaría de largo (docs/cpu-vr4300.md, «Bucles de espera»).
+- `salsa64-cpu-tests-idle.pkg` (título «Salsa64 CPU bucles de espera») se
+  instala sobre la misma app SLSA00005 que los demás cpu-tests.
+
+Siguiente:
+- [ ] EEPROM del cartucho (canal 4 del PIF), Controller Pak y Rumble.
+- [ ] Bucles de espera: código mapeado por TLB, sondeos de E/S que solo
+      cambian en eventos (MI_INTR, SP_STATUS) y esperas por Count.
+- [ ] Opcional: decidir el chequeo con el inmediato del salto (no depende
+      del destino) y medir si recupera el 1 %.
+- [ ] Repartir emulación y presentación entre los dos hilos del PPE (ya
+      importa: con vitest la emulación baja a 35 ms por campo).
+
 ## 2026-10-10 — Cierre de la jornada (2): Fase 0 y Fase 1 en PS3 real
 
 Hecho hoy en hardware real (Slim CECH-3011A, HFW 4.91 + HEN; sin CFW posible):
@@ -18,7 +59,8 @@ Siguiente (trabajos lanzados al cerrar; una prueba en la PS3 a la vez):
 - [ ] Fase 2: RSP gráfico (F3DEX2) en SPE 0 + RDP mínimo en el RSX sobre
       `lib/rsxkit`, con la infraestructura de trabajos SPE.
 - [ ] Fase 3: recompilador MIPS → PPC64 en el PPE.
-- [ ] Controles (SI/PIF + DualShock 3) y detección de bucles de espera.
+- [x] Controles (SI/PIF + DualShock 3) y detección de bucles de espera
+      (entrada de arriba).
 - [ ] Después de la Fase 2: audio HLE en SPE 1 sobre la misma infraestructura.
 
 ## 2026-10-10 — Fase 1: un homebrew muestra imagen (criterio cumplido)
@@ -62,11 +104,10 @@ Notas:
   siguiente).
 
 Siguiente (Fase 1):
-- [ ] Volver a medir el frontend con vitest con el intérprete optimizado.
-- [ ] Detección de bucles de espera (vitest y los juegos esperan al VI en
-      un bucle): saltar hasta el siguiente evento ahorraría casi todo el
-      campo en escenas ligeras.
-- [ ] SI: comandos del PIF (controles) para mapear el DualShock 3.
+- [x] Volver a medir el frontend con vitest con el intérprete optimizado:
+      15,2 campos/s, 23,8 MIPS (sin detección de bucles de espera).
+- [x] Detección de bucles de espera: ×1,9 con vitest (entrada de arriba).
+- [x] SI: comandos del PIF (controles) y mapeo del DualShock 3.
 - [ ] Repartir emulación y presentación entre los dos hilos del PPE.
 - [ ] Origen del VI: verificar contra ares si libultra deja VI_ORIGIN una
       línea después del inicio del framebuffer (aquí se toma como la

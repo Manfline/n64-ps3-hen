@@ -2,7 +2,7 @@
 PROGRAM := salsa64
 TITLE   := Salsa64
 APPID   := SLSA00064
-SRCS    := main.c selftest.c
+SRCS    := main.c selftest.c padmap.c
 
 R       := ../..
 COMMON  := src/platform/ps3/log.c \

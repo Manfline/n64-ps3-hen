@@ -12,6 +12,7 @@ no se copió código de Not64, Mupen64Plus ni ares.
 | `src/core/types.h`, `endian.h` | Tipos, extensión de signo, accesores big-endian |
 | `src/core/bus.{h,c}` | Mapa físico: RDRAM, SP DMEM/IMEM, registros, ROM, PIF RAM |
 | `src/core/rcp.h`, `mi.c`, `pi.c`, `si.c`, `vi.c`, `ai.c`, `sp.c` | Registros del RCP (ver estado abajo) |
+| `src/core/pif.{h,c}` | PIF: comandos joybus de los controles en la PIF RAM (ver abajo) |
 | `src/core/sched.{h,c}` | Planificador de eventos por ciclos, ranuras fijas |
 | `src/core/n64.{h,c}` | La máquina: CPU + bus + planificador |
 | `src/core/rom.{h,c}` | Orden de bytes del volcado, encabezado, CIC y tipo de TV |
@@ -22,6 +23,7 @@ no se copió código de Not64, Mupen64Plus ni ares.
 | `src/cpu/interp.c` | Bucle, enteros, saltos, cargas/almacenamientos |
 | `src/cpu/cop0.c` | COP0, excepciones, TLB, Count/Compare, interrupciones |
 | `src/cpu/cop1.c` | FPU |
+| `src/cpu/idle.c` | Detección de bucles de espera (ver abajo) |
 
 ## Decisiones
 
@@ -125,6 +127,66 @@ y su longitud en +0x14; esa escritura llama al callback. El búfer se puede
 leer (nemu64-test lo detecta escribiendo y leyendo 0x12345678) y respeta las
 escrituras de 8/16 bits, a diferencia del bus PI real. Fuente: README de
 nemu64-test y `src/isviewer.rs`.
+
+## Bucles de espera
+
+`src/cpu/idle.c`. Los programas esperan al VI en bucles cortos: el `b .` del
+hilo ocioso de libultra o un sondeo de una variable que cambia el manejador
+de interrupciones (vitest: `lw; beq; nop`). Interpretarlos es casi todo el
+campo en escenas ligeras.
+
+- **Cuándo se mira.** Solo los saltos tomados hacia atrás con el destino a
+  menos de 8 instrucciones (`idle_hint` en `interp.c`: una resta y una
+  comparación). Antes de analizar se consulta una tabla de 64 entradas con
+  `pc ^ instrucción` de los saltos ya descartados.
+- **Criterio exacto.** Se simula una vuelta (delay slot, cuerpo, salto) en
+  una copia de los registros. Es bucle de espera si solo hay enteros sin
+  efectos y cargas de la RDRAM por KSEG0/KSEG1, el salto se vuelve a tomar y
+  los 32 registros terminan iguales: la vuelta es un punto fijo y sin un
+  evento del planificador nada cambia. No mira el código como patrón: un
+  contador, un almacenamiento, un sondeo de E/S (VI_V_CURRENT, SI_STATUS) o
+  COP0 (Count) no pasan.
+- **Salto exacto.** Se suman vueltas enteras hasta el próximo evento: el
+  salto vuelve a ejecutarse, a lo sumo, en el ciclo del evento. La
+  interrupción cae en el mismo ciclo y en la misma instrucción; Count, EPC y
+  Random quedan idénticos. `tests/unit/test_idle.c` corre cada escenario
+  con y sin detección y compara el estado; `salsa64-run --no-idle` permite
+  comparar ROMs completas (vitest y nemu64-test dan registros e imagen
+  idénticos).
+- **Descartes.** Lo que el código no permite (almacena, E/S, salto en el
+  cuerpo) se descarta al primer intento; lo que falla el punto fijo, al
+  segundo (el primero puede fallar porque el delay slot todavía no escribió
+  su valor). Apagar y prender la detección (`salsa64_cpu_set_idle`) vacía
+  las tablas.
+- **Condición para el resto.** Quien escriba la RDRAM fuera del CPU (DMA con
+  latencia, el RSP en un SPE en la Fase 2) debe hacerlo en un evento del
+  planificador; si no, el salto se pasaría de largo esa escritura.
+- **Medición.** `cpu->idle_cycles` cuenta los ciclos saltados; el frontend y
+  `salsa64-run` reportan MIPS sin ellos y el porcentaje saltado.
+- **Falta.** Bucles en código mapeado por TLB (GoldenEye), sondeos de E/S
+  cuyo valor solo cambia en eventos (MI_INTR, SP_STATUS) y esperas por Count
+  (`wait_ms` de libdragon): calcular cuándo se cumple la condición.
+
+## PIF y controles
+
+`src/core/pif.c`, desde n64brew.dev (PIF-NUS, Joybus Protocol):
+
+- Una escritura en la PIF RAM (DMA del SI o directa) con el bit 0x01 del
+  byte 63 prepara los intercambios: recorre la RAM (0x00 salta canal, 0xFD
+  reset de la línea, 0xFE fin, 0xFF nada; si no, `TX RX datos respuesta`)
+  y apaga el bit. Cada lectura de la PIF RAM por DMA los ejecuta antes de
+  copiar; repetir la lectura los vuelve a ejecutar.
+- Canales 0–3: control estándar. Identificación (0x00/0xFF) `05 00 02` (sin
+  accesorio); estado (0x01) botones, X, Y; L + R + Start da RST con Start
+  apagado y el stick en 0. Lectura del accesorio (0x02): 32 ceros y CRC
+  0xFF; escritura (0x03): CRC-8 (0x85) de los datos complementado. Un
+  puerto sin control o un comando desconocido: bit 0x80 en RX; una
+  respuesta más corta que RX: bit 0x40.
+- Canal 4 (EEPROM del cartucho): todavía sin dispositivo.
+- Por omisión hay un control en el puerto 1 (como una consola encendida);
+  el frontend los conecta según los DualShock 3 (`src/frontend/padmap.c`).
+- Falta: EEPROM, Controller Pak, Rumble Pak, el reto del CIC (bit 0x02) y
+  la latencia del DMA del SI.
 
 ## Particularidades del VR4300 que se modelan
 
@@ -236,7 +298,7 @@ Fuera del CPU, lo que nemu64-test marca (línea base en
 
 ## Pruebas
 
-- `tools/build.sh test-host`: 154 pruebas (`tests/unit/`) con gcc nativo,
+- `tools/build.sh test-host`: 182 pruebas (`tests/unit/`) con gcc nativo,
   ASan y UBSan. `build/host/salsa64-unit bench` agrega el micro-benchmark.
 - `tools/test-roms.sh`: compila `salsa64-run` y corre nemu64-test hasta su
   resumen (≈190 M ciclos, unos 2 s en el host con ASan). Compara la lista de

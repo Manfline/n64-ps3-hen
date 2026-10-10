@@ -12,6 +12,9 @@ void salsa64_bus_init(struct salsa64_bus *bus, uint8_t *rdram, uint32_t rdram_si
 	memset(bus, 0, sizeof *bus);
 	bus->rdram = rdram;
 	bus->rdram_size = rdram_size > SALSA64_RDRAM_MAX ? SALSA64_RDRAM_MAX : rdram_size;
+	/* Como una consola recién encendida: un control en el puerto 1. El
+	 * frontend lo cambia según los mandos que haya. */
+	bus->pif.pads[0].connected = 1;
 	salsa64_bus_reset(bus);
 }
 
@@ -20,6 +23,7 @@ void salsa64_bus_reset(struct salsa64_bus *bus)
 	memset(bus->rdram, 0, bus->rdram_size);
 	memset(bus->sp_mem, 0, sizeof bus->sp_mem);
 	memset(bus->pif_ram, 0, sizeof bus->pif_ram);
+	salsa64_pif_reset(bus);
 	memset(bus->rdram_regs, 0, sizeof bus->rdram_regs);
 	memset(bus->ri, 0, sizeof bus->ri);
 	if (bus->isv)
@@ -165,6 +169,7 @@ void salsa64_bus_write32(struct salsa64_bus *bus, uint32_t paddr, uint32_t value
 	}
 	if (paddr >= SALSA64_PIF_RAM_ADDR && paddr < SALSA64_PIF_RAM_ADDR + SALSA64_PIF_RAM_SIZE) {
 		salsa64_wr32(bus->pif_ram + (paddr - SALSA64_PIF_RAM_ADDR), value);
+		salsa64_pif_written(bus);
 		return;
 	}
 	/* ROM del cartucho y huecos: se ignora. */

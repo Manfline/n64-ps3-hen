@@ -59,12 +59,23 @@ if [ -n "$gone" ]; then
 fi
 
 # vitest: temporización e interrupción del VI vistas desde la ROM; la imagen
-# del último campo queda en build/vitest.ppm.
+# del último campo queda en build/vitest.ppm. También identifica los
+# controles por el SI (salsa64-run deja uno conectado en el puerto 1) y lee
+# el control 1 en cada cuadro.
 VLOG=build/logs/vitest.run.log
 tools/build.sh --sh "ASAN_OPTIONS=detect_leaks=0 build/host/salsa64-run -c 400000000 \
 	-u 'vitest: OK' -f 'vitest: FALLO' --frame build/vitest.ppm \
 	tests/roms/homebrew/salsa64-vitest.z64 2>&1" >"$VLOG" 2>&1
 vrc=$?
-printf '%-12s %s\n' vitest "$(grep 'vitest:' "$VLOG" | tail -1)"
+printf '%-12s %s\n' vitest "$(grep 'vitest: OK\|vitest: FALLO' "$VLOG" | tail -1)"
+grep '^salsa64-run:.*ciclos' "$VLOG" | tail -1 | sed 's/^/             /'
 [ $vrc -eq 0 ] || { echo "             falló (código $vrc, $VLOG)"; fail=1; }
+pads='vitest: controles: 1=0x0500/0x02 2=no 3=no 4=no'
+pad1='vitest: control 1: botones 0x0000 x 0 y 0'
+if grep -q "^$pads\$" "$VLOG" && grep -q "^$pad1\$" "$VLOG"; then
+	printf '%-12s %s\n' controles "$pads; $pad1"
+else
+	printf '%-12s %s\n' controles "FALLO: se esperaba \"$pads\" y \"$pad1\" ($VLOG)"
+	fail=1
+fi
 exit $fail
