@@ -52,6 +52,7 @@ int main(void)
 	int failed = salsa64_unit_run(print_line);
 	u64 us = sysGetSystemTime() - t0;
 	salsa64_unit_bench(print_line, now_us);
+	salsa64_unit_bench_aligned(print_line, now_us);
 
 	/* El recompilador con varias combinaciones de opciones (rec.h): pruebas
 	 * en modo estricto, bench y nemu64-test completo contra el intérprete.

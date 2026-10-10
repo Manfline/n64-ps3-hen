@@ -238,12 +238,37 @@ Host (qemu ppc64, registros fijos; cuenta de eventos, no tiempo):
 Lo que queda en nemu64-test son sobre todo sus pruebas de COP0 (MTC0, TLB,
 ERET), traps y CACHE.
 
-**PS3 real: pendiente.** Preparado: `salsa64-cpu-rec.pkg` (SLSA00065,
-«Salsa64 CPU rec conversiones»: nemu64-test y bench con registros fijos,
-con y sin `RARE_EXEC`; variantes nuevas del bench `cvt`, `no alin.` y
-`mfc0`) y `salsa64-rec.pkg` (SLSA00063, «Salsa64 rec conversiones»: con
-`/dev_hdd0/salsa64/ab-recompilador` alterna `RARE_EXEC` en cada ventana de
-5 s, para comparar Zelda en la misma escena).
+**PS3 real: pendiente.** Preparado: `salsa64-cpu-fpu.pkg` (SLSA00077,
+«Salsa64 CPU FPU»): nemu64-test y bench con registros fijos, con y sin
+`RARE_EXEC`, y variantes nuevas del bench `cvt`, `no alin.` y `mfc0`. En
+Zelda la ganancia no se vería todavía en los campos/s: donde no llega a 60
+espera a la HLE gráfica del SPE.
+
+### Bench del intérprete tras traer la Fase 2: 21 → 14,7 MIPS (diagnóstico, 2026-10-10)
+
+En la PS3, el bench del intérprete bajó en todas las variantes al traer la
+Fase 2 (f18b392 → 59fba13; nop 34 → 19,5 MIPS, unos 70 ciclos más por
+instrucción), sin cambios en interp.c. Lo revisado:
+- `salsa64_cpu_run` es el mismo código byte a byte en los dos ELF (solo
+  cambian direcciones y desplazamientos del TOC); en la Mac el bench da lo
+  mismo con los dos árboles (~305 MIPS mixto).
+- En la misma corrida de la PS3, el bench del recompilador no cambió
+  (156,7 MIPS), y usa la misma `t_n64` y la misma RDRAM.
+- `t_n64` sigue alineada a 128 (0x118ed580 → 0x118f5600) y `t_rdram`
+  también (0x110ed500 → 0x110f5580); la tabla de saltos del intérprete está
+  dentro del código (0x21180 → 0x21e90).
+- Lo que solo el intérprete toca en cada instrucción: la búsqueda en la
+  RDRAM de pruebas (`t_rdram + 0x1000`) y `sched->next`. Con la Fase 2,
+  `sched->next` quedó en otra página de 4 KB que el CPU (0x118f6028) y esa
+  página comparte los bits bajos con la de la búsqueda (0x110f6580). No se
+  encontró por qué eso costaría 70 ciclos (en el ERAT de datos de 2 vías
+  caben las dos); queda como hipótesis.
+
+Prueba en la PS3 (cpu-tests de este trabajo): «bench alineado» corre las
+mismas variantes con el intérprete en una máquina aparte con estructura y
+RDRAM alineadas a 64 KB. Si ahí vuelve a ~21 MIPS es la ubicación en
+memoria (y conviene alinear también la máquina del frontend); si no, es
+otra cosa del binario.
 
 ## Líneas base de la Fase 2 (parte gráfica)
 

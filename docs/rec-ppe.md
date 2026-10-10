@@ -1,8 +1,10 @@
 # Recompilador MIPS → PPC64 en el PPE (Fase 3)
 
 Código: `src/cpu/rec.h`, `src/cpu/rec.c` (despachador, caché de bloques,
-enlaces, invalidación), `src/cpu/rec_emit.c` (traducción), `src/cpu/ppc.h`
-(codificación de instrucciones PowerPC).
+enlaces, invalidación), `src/cpu/rec_emit.c` (traducción),
+`src/cpu/rec_emit_ext.h` (conversiones de la FPU, CFC1/CTC1, LWL/LWR y
+compañía, MFC0; lo incluye rec_emit.c), `src/cpu/ppc.h` (codificación de
+instrucciones PowerPC).
 
 ## Decisión: recompilador propio (2026-10-10)
 
@@ -137,10 +139,12 @@ MOV, ABS, NEG, C.cond, ROUND/TRUNC/CEIL/FLOOR a W y L, CVT.W/CVT.L,
 CVT.D.S y CVT.S.D, y CVT.S.W/CVT.D.W.
 
 `rec->stats.exec_calls` cuenta las instrucciones que el código generado le
-pasa al intérprete (salsa64-run, cpu-tests y el frontend lo muestran).
-`SALSA64_REC_OPT_RARE_EXEC` repite lo de antes del 2026-10-10
-(conversiones, SQRT, CFC1/CTC1, LWL/LWR y compañía al intérprete, MFC0
-terminando el bloque) para medir la diferencia con el mismo binario.
+pasa al intérprete (salsa64-run, cpu-tests y las unitarias lo muestran).
+`decode()` sigue marcando lo de `rec_emit_ext.h` como antes y
+`decode_ext()` lo promueve a nativo; `SALSA64_REC_OPT_RARE_EXEC` se salta
+la promoción y repite lo de antes del 2026-10-10 (conversiones, SQRT,
+CFC1/CTC1, LWL/LWR y compañía al intérprete, MFC0 terminando el bloque),
+para medir la diferencia con el mismo binario.
 
 La FPU nativa repite el camino rápido del intérprete (`fpu.h`): las mismas
 operaciones de doble precisión en el mismo orden (suma, redondeo a simple

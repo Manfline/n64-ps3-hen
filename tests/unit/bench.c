@@ -16,6 +16,7 @@
  */
 #include <stdio.h>
 
+#include "core/endian.h"
 #include "cpu/rec.h"
 #include "test.h"
 
@@ -159,6 +160,51 @@ void salsa64_unit_bench(void (*print)(const char *line), uint64_t (*now_us)(void
 			 (unsigned long long)(c->instructions * 10 / us % 10),
 			 (unsigned long long)(us * 1000 / c->instructions),
 			 (unsigned long long)(us * 10000 / c->instructions % 10));
+		print(line);
+	}
+}
+
+/*
+ * Diagnóstico (docs/perf-log.md): el bench del intérprete bajó de 21 a
+ * 14,7 MIPS en la PS3 al traer la Fase 2 sin cambiar interp.c, y en la Mac
+ * no. Las mismas variantes, con el intérprete, en una máquina aparte con la
+ * estructura y la RDRAM alineadas a 64 KB: si aquí vuelve a ~21, es la
+ * ubicación de t_n64/t_rdram en memoria, no el código.
+ */
+static struct salsa64_n64 bench_n64 __attribute__((aligned(65536)));
+static uint8_t bench_rdram[SALSA64_RDRAM_MAX] __attribute__((aligned(65536)));
+
+void salsa64_unit_bench_aligned(void (*print)(const char *line), uint64_t (*now_us)(void))
+{
+	char line[200];
+	struct salsa64_n64 *n = &bench_n64;
+	salsa64_n64_init(n, bench_rdram, sizeof bench_rdram);
+	snprintf(line, sizeof line, "bench alineado: máquina en %p, RDRAM en %p (t_n64 en %p, t_rdram en %p)",
+		 (void *)n, (void *)bench_rdram, (void *)&t_n64, (void *)t_n64.cpu.rdram);
+	print(line);
+
+	for (unsigned k = 0; k < sizeof cases / sizeof cases[0]; k++) {
+		const struct bench_case *c = &cases[k];
+		salsa64_n64_reset(n);
+		salsa64_cpu_cop0_write(&n->cpu, SALSA64_CP0_STATUS, T_STATUS);
+		for (unsigned j = 0; j < c->n; j++)
+			salsa64_wr32(bench_rdram + T_CODE_PA + 4 * j, c->code[j]);
+		salsa64_cpu_set_pc(&n->cpu, T_CODE);
+		n->cpu.gpr[T0] = T_DATA;
+		n->cpu.gpr[T1] = 0x12345;
+		n->cpu.gpr[T5] = 0x7FFFFFFF;
+		n->cpu.fpr[0] = t_fbits(c->f0);
+		n->cpu.fpr[1] = t_fbits(c->f1);
+
+		uint64_t t0 = now_us();
+		salsa64_n64_run(n, c->instructions);
+		uint64_t us = now_us() - t0;
+		if (!us)
+			us = 1;
+		snprintf(line, sizeof line, "bench alineado: %-8s %3llu M instr. en %6llu ms = %4llu.%01llu MIPS",
+			 c->name, (unsigned long long)(c->instructions / 1000000), (unsigned long long)(us / 1000),
+			 (unsigned long long)(c->instructions / us),
+			 (unsigned long long)(c->instructions * 10 / us % 10));
 		print(line);
 	}
 }

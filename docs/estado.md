@@ -14,10 +14,11 @@ cifras en docs/perf-log.md):
   sobre los mismos 4 bytes, byte a byte (sin desplazamientos por registro ni
   load-hit-store en copias).
 - MFC0/DMFC0 ya no terminan el bloque; Count desde r29 + k + 1.
+- Código nuevo en `src/cpu/rec_emit_ext.h` (lo incluye rec_emit.c); en lo
+  común, ganchos de una línea, para no chocar con el trabajo de TLB.
 - `rec->stats.exec_calls` (llamadas al intérprete desde el código) en
-  salsa64-run, cpu-tests y el frontend; `SALSA64_REC_OPT_RARE_EXEC` para
-  medir antes/después con el mismo binario (cpu-tests la corre como
-  variante; el frontend la alterna con `ab-recompilador`).
+  salsa64-run y cpu-tests; `SALSA64_REC_OPT_RARE_EXEC` repite lo de antes
+  con el mismo binario (cpu-tests la corre como variante).
 - Pruebas: `executed_conversions_match_full` (8000 instrucciones contra el
   camino completo, más de 3000 en nativo), LWL/LWR y compañía en cada
   desplazamiento contra un modelo byte a byte, pares en los dos órdenes,
@@ -30,9 +31,9 @@ cifras en docs/perf-log.md):
 - Host: llamadas al intérprete −18 % en nemu64-test y −97 % en vitest.
 
 Siguiente:
-- [ ] **PS3 real** (pedir turno al autor): cpu-tests SLSA00065 (bench
-      `cvt`, `no alin.`, `mfc0` y nemu64-test con y sin `RARE_EXEC`) y
-      Zelda en el frontend SLSA00063 con `ab-recompilador`.
+- [ ] **PS3 real** (pedir turno al autor): cpu-tests SLSA00077 «Salsa64
+      CPU FPU» (bench `cvt`, `no alin.`, `mfc0` y nemu64-test con y sin
+      `RARE_EXEC`).
 - [ ] Lo que sigue yendo al intérprete: CVT.S/D.L, CACHE, MTC0/TLB/ERET;
       MFC0 de Random.
 
