@@ -14,6 +14,11 @@ n64brew.dev). No incluye código de Not64/Wii64, Mupen64Plus ni ares.
 Aviso de PSL1GHT: Copyright (c) 2011 PSL1GHT Development Team, licencia MIT
 (compatible con GPLv2 o posterior).
 
+`lib/rsxkit/` es MIT, no GPL: solo admite código propio o de fuentes con
+licencia permisiva (MIT, BSD, zlib). Nada de Not64/Wii64, Mupen64Plus,
+RPCS3, ares ni del port de SM64. Sus orígenes se registran en la tabla de
+arriba como el resto.
+
 ## Herramientas usadas para compilar (no se redistribuyen en el repo)
 
 | Componente | Origen | Licencia | Uso |

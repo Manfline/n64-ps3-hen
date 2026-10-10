@@ -34,7 +34,8 @@ Siguiente (Fase 1):
 - [ ] ISViewer (0x13FF0000) para leer la salida de nemu64-test.
 - [ ] Contenedor para compilar nemu64-test (Rust nightly-2026-07-16 +
       nust64 0.4.1) y guardar el ROM en `tests/roms/homebrew/`.
-- [ ] VI con contador de líneas e interrupción; framebuffer 2D en el RSX.
+- [ ] VI con contador de líneas e interrupción; framebuffer 2D en el RSX
+      (primera pieza de `lib/rsxkit/`, ver docs/proyecto.md).
 - [ ] Pendientes del CPU: direccionamiento de 64 bits, bandera Inexact,
       ciclos por instrucción (docs/cpu-vr4300.md).
 

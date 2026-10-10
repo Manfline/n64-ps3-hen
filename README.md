@@ -2,7 +2,8 @@
 
 Emulador de Nintendo 64 para PlayStation 3 (homebrew) diseñado alrededor del
 Cell: el PPE ejecuta el VR4300, los SPEs hacen el trabajo vectorial (RSP,
-audio, posprocesado) y el RSX dibuja. Licencia GPLv2 o posterior.
+audio, posprocesado) y el RSX dibuja. Licencia GPLv2 o posterior, salvo la
+capa gráfica genérica `lib/rsxkit/`, que es MIT (ver `lib/rsxkit/LICENSE`).
 
 Estado: Fase 1 (intérprete del VR4300). Ver `docs/estado.md`.
 
