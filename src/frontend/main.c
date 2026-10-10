@@ -592,8 +592,10 @@ static void emu_thread(void *arg)
 	while (running) {
 		pads_apply();
 		uint64_t t0 = sysGetSystemTime();
-		if (bench.stage != 1 && bench.stage != 2) {
-			/* Al ritmo de la tele emulada (la medición A/B va al máximo). */
+		/* Al ritmo de la tele emulada; la medición A/B va al máximo y
+		 * queda fuera del ritmo (ni espera ni avanza la referencia). */
+		int paced = bench.stage != 1 && bench.stage != 2;
+		if (paced) {
 			pacer_wait(&pacer, t0);
 			uint64_t tp = sysGetSystemTime();
 			emu_stats.us_pace += tp - t0;
@@ -601,7 +603,8 @@ static void emu_thread(void *arg)
 		}
 		uint64_t cycles = salsa64_n64_run_field(&n64);
 		uint64_t t1 = sysGetSystemTime();
-		pacer_advance(&pacer, cycles);
+		if (paced)
+			pacer_advance(&pacer, cycles);
 		savefile_stage(&save_file, t1);
 		post_field();
 		/* audio_out: si el audio necesita este hilo (fin de cada tarea

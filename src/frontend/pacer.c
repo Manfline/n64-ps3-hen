@@ -24,6 +24,11 @@ uint64_t pacer_wait(struct pacer *p, uint64_t now_us)
 		return 0;
 	}
 	if (now_ns < p->next_ns) {
+		if (p->next_ns - now_ns > PACER_MAX_AHEAD_NS) {
+			p->next_ns = now_ns;  /* nadie espera minutos: referencia nueva */
+			p->resets++;
+			return 0;
+		}
 		uint64_t us = (p->next_ns - now_ns + 999) / 1000;
 		p->waits++;
 		p->us_requested += us;

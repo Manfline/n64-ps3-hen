@@ -9,9 +9,12 @@
  * hasta ella; si ya pasó no se espera nada, y si el atraso supera
  * PACER_MAX_BEHIND_NS se olvida la deuda (la referencia se reinicia a
  * ahora): un tirón de la emulación no se "recupera" corriendo rápido
- * después. Después de cada campo la referencia avanza lo que duró el campo
- * en ciclos del VR4300 (93,75 MHz), así que el ritmo medio es exacto
- * aunque cada espera tenga jitter.
+ * después. Lo mismo si va adelantada más de PACER_MAX_AHEAD_NS (solo pasa
+ * si alguien avanzó la referencia sin esperar, o el reloj dio un salto):
+ * nunca se duerme más de eso de una vez. Después de cada campo la
+ * referencia avanza lo que duró el campo en ciclos del VR4300
+ * (93,75 MHz), así que el ritmo medio es exacto aunque cada espera tenga
+ * jitter.
  *
  * Punto de enganche para el audio: `sleep` es de quien llama (en la PS3,
  * sysUsleep) y se puede reemplazar por una espera al llenado del búfer de
@@ -27,6 +30,7 @@
 #include <stdint.h>
 
 #define PACER_MAX_BEHIND_NS 67000000ull  /* ~4 campos NTSC */
+#define PACER_MAX_AHEAD_NS  67000000ull
 
 typedef void (*pacer_sleep_fn)(void *ctx, uint64_t us);
 
@@ -39,7 +43,7 @@ struct pacer {
 	void *ctx;
 	/* Estadísticas desde el arranque. */
 	uint32_t waits;          /* campos en que durmió */
-	uint32_t resets;         /* veces que olvidó la deuda */
+	uint32_t resets;         /* veces que reinició la referencia (atraso o adelanto grandes) */
 	uint64_t us_requested;   /* µs pedidos a `sleep` */
 };
 

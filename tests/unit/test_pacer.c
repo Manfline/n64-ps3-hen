@@ -70,6 +70,25 @@ static void pacer_far_behind_resets(void)
 	CHECK_EQ(pacer_wait(&p, 1000000 + 1000), (NTSC_NS - 1000000 + 999) / 1000);
 }
 
+static void pacer_far_ahead_resets(void)
+{
+	begin(1);
+	pacer_wait(&p, 0);
+	/* 300 campos avanzados sin esperar (como la medición A/B): no se duerme
+	 * 5 s, se toma una referencia nueva. */
+	for (int i = 0; i < 300; i++)
+		pacer_advance(&p, NTSC_FIELD);
+	CHECK_EQ(pacer_wait(&p, 20000), 0);
+	CHECK_EQ(sleeps, 0);
+	CHECK_EQ(p.resets, 1);
+	CHECK_EQ(p.next_ns, 20000000ull);
+	/* Adelanto chico (3 campos): sí se espera. */
+	for (int i = 0; i < 3; i++)
+		pacer_advance(&p, NTSC_FIELD);
+	CHECK_EQ(pacer_wait(&p, 21000), (3 * NTSC_NS - 1000000 + 999) / 1000);
+	CHECK_EQ(p.resets, 1);
+}
+
 static void pacer_exact_rate(void)
 {
 	begin(1);
@@ -111,6 +130,7 @@ void t_suite_pacer(void)
 	RUN(pacer_ahead_sleeps);
 	RUN(pacer_behind_no_wait_no_debt);
 	RUN(pacer_far_behind_resets);
+	RUN(pacer_far_ahead_resets);
 	RUN(pacer_exact_rate);
 	RUN(pacer_disabled_and_nudge);
 }

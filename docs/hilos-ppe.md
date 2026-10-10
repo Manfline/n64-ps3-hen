@@ -55,6 +55,10 @@ hilo de emulación:
 - **Sin deuda:** si el atraso pasa de `PACER_MAX_BEHIND_NS` (~4 campos),
   la referencia se reinicia a ahora. Un tirón no se «recupera» corriendo
   rápido después; cada reinicio se cuenta (`reinicios` en el log).
+- **Sin esperas largas:** si la referencia queda adelantada más de
+  `PACER_MAX_AHEAD_NS` (~4 campos) también se reinicia; nunca se duerme
+  más de eso de una vez. (La primera corrida en la PS3 durmió 70 s: la
+  medición A/B avanzaba la referencia sin esperar.)
 - La presentación sigue saltando campos como antes (si alguna vez la
   emulación llega adelantada a la cola, se muestra el más nuevo).
 - `SALSA64_DATA_DIR/turbo` presente: sin límite (para medir el máximo).
