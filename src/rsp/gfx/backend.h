@@ -27,6 +27,8 @@ struct salsa64_gfx_sink {
 /* Trabajo para una tarea (sin los búferes de salida). */
 void salsa64_gfx_job(struct gfx_job *job, const struct salsa64_bus *bus, const struct salsa64_task *task,
 		     enum salsa64_gbi gbi);
+/* Lo que `finish` devuelve al núcleo por un resultado (SALSA64_GFX_*). */
+uint32_t salsa64_gfx_task_flags(const struct gfx_result *res);
 
 /* Backend síncrono: la HLE corre en el hilo del CPU al arrancar la tarea. */
 struct gfx_state;

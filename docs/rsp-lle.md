@@ -76,6 +76,10 @@ DMEM (4 KB cada una) caben de sobra en el local store.
   consumidor del RDP y CURRENT avanza al final; xbus y freeze con sus
   pares de bits. Pasan «RDP START & END REG (masking)» y «RSP STATUS:
   start-valid».
+- Interrupción del DP: con el microcódigo real la da el SYNC_FULL del
+  flujo de comandos (`dpc.c` → `salsa64_rsp_dp_done`), nunca la forzada
+  de «microcódigo sin HLE» ni la de lista cortada (`SALSA64_GFX_CUT`),
+  que son de la HLE: la rama LLE de `salsa64_rsp_start` sale antes.
 
 ### RDP a bajo nivel (`src/rsp/gfx/dpc.c`)
 

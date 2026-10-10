@@ -146,6 +146,13 @@ for v in gfxtest gfxtest-f3d gfxtest-f3dex; do
 		echo "             falló: hay comandos sin implementar ($GLOG)"
 		fail=1
 	fi
+	# Cada lista lleva un tramo de otro microcódigo (saltado) y la del cuadro
+	# GFXTEST_CUT_FRAME termina dentro de él: una sola tarea cortada (F3D no
+	# tiene G_LOAD_UCODE: sin tramo).
+	if [ $v != gfxtest-f3d ] && ! grep -q 'gfx:.* [1-9][0-9]* de otro microcódigo saltados.* 1 tareas cortadas' "$GLOG"; then
+		echo "             FALLO: se esperaba un tramo saltado por lista y 1 tarea cortada ($GLOG)"
+		fail=1
+	fi
 done
 
 ALOG=build/logs/audiotest.run.log

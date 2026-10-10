@@ -57,6 +57,11 @@ struct gfx_job {
 	 * cuyos dibujos ya no leen texturas (el consumidor la terminó). */
 	uint32_t task;
 	uint32_t done_task;
+	/* Dirección física del microcódigo de la tarea (ucode del OSTask): un
+	 * G_LOAD_UCODE a otra dirección es otro microcódigo (S2DEX…), cuyos
+	 * comandos se saltan hasta que la lista vuelve a cargar este. Con 0
+	 * (no se sabe cuál es) todo G_LOAD_UCODE es ajeno. */
+	uint32_t ucode;
 	/* RDP a bajo nivel (GFX_JOB_DPC): comandos [dl, dl_end) de la RDRAM
 	 * o, con GFX_JOB_XBUS, de la DMEM en dmem_ea (4 KB). */
 	uint32_t dl_end;
@@ -105,7 +110,7 @@ struct gfx_result {
 	uint32_t tex_arena;      /* decodificadas en el arena (sin lugar en la caché) */
 	uint32_t tex_evicted;    /* texturas sacadas de la caché */
 	uint32_t t_hash;         /* ticks identificando texturas (hash y búsqueda) */
-	uint32_t reserved[1];
+	uint32_t skipped;        /* comandos saltados de otro microcódigo (G_LOAD_UCODE) */
 };
 
 #define GFX_RES_FULLSYNC     0x01u  /* G_RDPFULLSYNC: interrupción del DP */
@@ -113,7 +118,11 @@ struct gfx_result {
 #define GFX_RES_CMD_FULL     0x04u
 #define GFX_RES_TEX_FULL     0x08u
 #define GFX_RES_LOOP         0x10u  /* demasiados comandos: se cortó */
-#define GFX_RES_LOAD_UCODE   0x20u  /* G_LOAD_UCODE (cambio de microcódigo) */
+#define GFX_RES_LOAD_UCODE   0x20u  /* G_LOAD_UCODE a otro microcódigo: se saltó su tramo */
+#define GFX_RES_FOREIGN_END  0x40u  /* la lista terminó dentro de ese tramo (sin volver) */
+/* La lista no llegó a su fin (o acabó donde no se sabe qué hizo): el juego
+ * sigue esperando al RDP. */
+#define GFX_RES_CUT (GFX_RES_VTX_FULL | GFX_RES_CMD_FULL | GFX_RES_TEX_FULL | GFX_RES_LOOP | GFX_RES_FOREIGN_END)
 
 /* ---- Vértice de salida -------------------------------------------------------
  * x, y: píxeles del framebuffer de la N64 multiplicados por w; z: profundidad

@@ -291,10 +291,20 @@ void gfx_dl_f3d(struct gfx_state *g)
 			else  /* F3D: G_RDPHALF_CONT */
 				gfx_dl_rdp_word(g, g->rdphalf1, w1);
 			break;
+		case G_LOAD_UCODE:
+			if (ex) {
+				/* Otro microcódigo: se salta su tramo (dl.c). */
+				if (!(g->job->ucode && gfx_addr(g, w1) == g->job->ucode) &&
+				    !gfx_dl_skip_foreign(g, G_LOAD_UCODE, G_DL, G_ENDDL))
+					return;
+				break;
+			}
+			res->unknown_cmds++;  /* F3D no lo tiene */
+			res->last_unknown = op;
+			break;
 		case G_TRI2:
 		case G_QUAD:
 		case G_BRANCH_Z:
-		case G_LOAD_UCODE:
 			if (!ex && op == G_TRI2) {
 				tri4(g, w0, w1);
 			} else if (!ex) {
