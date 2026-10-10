@@ -101,6 +101,40 @@ static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_resu
 		raster_task(job, res);
 }
 
+#ifdef SALSA64_DEBUG_SPMEM
+void salsa64_debug_spmem(uint32_t reg, uint32_t v)
+{
+	static unsigned n;
+	if (n++ < 200)
+		fprintf(stderr, "lee SP mem %04x = %08x (pc %08llx, ciclo %llu)\n", reg, v,
+			(unsigned long long)n64.cpu.cur_pc, (unsigned long long)n64.cpu.cycles);
+}
+#endif
+
+static unsigned trace_rsp_left;
+
+static void trace_rsp(void *ctx, const struct salsa64_task *t, enum salsa64_gbi gbi)
+{
+	(void)ctx;
+	if (!trace_rsp_left)
+		return;
+	trace_rsp_left--;
+	fprintf(stderr, "RSP en ciclo %llu: type=%u flags=%x ucode=%08x/%x data=%08x/%x data_ptr=%08x/%x "
+		"boot=%08x/%x gbi=%d\n", (unsigned long long)n64.cpu.cycles, t->type, t->flags, t->ucode,
+		t->ucode_size, t->ucode_data, t->ucode_data_size, t->data_ptr, t->data_size, t->ucode_boot,
+		t->ucode_boot_size, gbi);
+	/* Microcódigos pequeños: volcar texto y datos. */
+	if (t->ucode_size && t->ucode_size <= 0x100) {
+		fprintf(stderr, "  ucode:");
+		for (uint32_t i = 0; i < t->ucode_size; i += 4)
+			fprintf(stderr, " %08x", salsa64_rd32(n64.bus.rdram + ((t->ucode + i) & 0x7FFFFF)));
+		fprintf(stderr, "\n  data:");
+		for (uint32_t i = 0; i < t->ucode_data_size && i < 0x40; i += 4)
+			fprintf(stderr, " %08x", salsa64_rd32(n64.bus.rdram + ((t->ucode_data + i) & 0x7FFFFF)));
+		fprintf(stderr, "\n");
+	}
+}
+
 static void gfx_summary(void)
 {
 	const struct gfx_result *s = &gfx.sum;
@@ -284,6 +318,22 @@ static void dump_regs(void)
 	fprintf(stderr, "pc=%016llx status=%08x cause=%08x epc=%016llx badvaddr=%016llx\n",
 		(unsigned long long)cpu->pc, cpu->status, cpu->cause,
 		(unsigned long long)cpu->epc, (unsigned long long)cpu->bad_vaddr);
+	const struct salsa64_bus *b = &n64.bus;
+	fprintf(stderr, "MI intr=%02x mask=%02x; VI control=%08x origin=%08x v_intr=%u campos=%u; SP status=%04x; "
+		"PI status=%x; tareas RSP: gfx %u, audio %u, otras %u, microcódigo desconocido %u\n",
+		b->mi.intr, b->mi.mask, b->vi.regs[SALSA64_VI_CONTROL], b->vi.regs[SALSA64_VI_ORIGIN],
+		b->vi.regs[SALSA64_VI_V_INTR], b->vi.fields, b->sp.regs[SALSA64_SP_STATUS], b->pi[SALSA64_PI_STATUS],
+		b->rsp.stats.gfx, b->rsp.stats.audio, b->rsp.stats.other, b->rsp.stats.unknown_gbi);
+	fprintf(stderr, "PIF RAM:");
+	for (int i = 0; i < 64; i += 4)
+		fprintf(stderr, " %08x", salsa64_rd32(b->pif_ram + i));
+	fprintf(stderr, "\nSI status=%x dram=%08x\n", b->si[SALSA64_SI_STATUS], b->si[SALSA64_SI_DRAM_ADDR]);
+#ifdef SALSA64_DEBUG_SPMEM
+	extern unsigned salsa64_debug_irq[6];
+	fprintf(stderr, "interrupciones: SP %u SI %u AI %u VI %u PI %u DP %u\n", salsa64_debug_irq[0],
+		salsa64_debug_irq[1], salsa64_debug_irq[2], salsa64_debug_irq[3], salsa64_debug_irq[4],
+		salsa64_debug_irq[5]);
+#endif
 }
 
 /* Imagen del VI en PPM (P6), RGBA5551 o RGBA8888 → RGB de 8 bits. */
@@ -334,7 +384,8 @@ static void usage(FILE *out)
 	      "      --trace-exc N     mostrar las primeras N excepciones del CPU\n"
 	      "      --frame ARCHIVO   al terminar, guardar en PPM la imagen del VI\n"
 	      "      --gfx-frame ARCHIVO  al terminar, guardar en PPM lo que dibujó la HLE gráfica\n"
-	      "      --gfxtest-check   verificar la imagen de la HLE con los puntos de gfxtest\n", out);
+	      "      --gfxtest-check   verificar la imagen de la HLE con los puntos de gfxtest\n"
+	      "      --trace-rsp N     mostrar las primeras N tareas del RSP\n", out);
 }
 
 int main(int argc, char **argv)
@@ -352,6 +403,7 @@ int main(int argc, char **argv)
 		{ "frame", required_argument, NULL, 'F' },
 		{ "gfx-frame", required_argument, NULL, 'G' },
 		{ "gfxtest-check", no_argument, NULL, 'K' },
+		{ "trace-rsp", required_argument, NULL, 'P' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 },
 	};
@@ -380,6 +432,7 @@ int main(int argc, char **argv)
 		case 'F': frame_path = optarg; break;
 		case 'G': gfx_path = optarg; gfx.raster = true; break;
 		case 'K': gfx_check = true; gfx.raster = true; break;
+		case 'P': trace_rsp_left = (unsigned)strtoul(optarg, NULL, 0); break;
 		case 'T':
 			if (!strcmp(optarg, "ntsc")) tv = SALSA64_TV_NTSC;
 			else if (!strcmp(optarg, "pal")) tv = SALSA64_TV_PAL;
@@ -419,6 +472,7 @@ int main(int argc, char **argv)
 	const struct salsa64_gfx_sink sink = { NULL, gfx_acquire, gfx_done };
 	salsa64_gfx_sync_init(&gfx_sync, &gfx_state, &n64.bus, &sink);
 	salsa64_rsp_set_gfx(&n64.bus, &gfx_sync.backend);
+	n64.bus.rsp.trace = trace_rsp;
 	if (trace_exc_left)
 		n64.cpu.exc_hook = trace_exc;
 	salsa64_bus_set_isviewer(&n64.bus, isv_buf, isv_out, NULL);

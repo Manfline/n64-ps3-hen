@@ -144,6 +144,27 @@ static void rsp_audio_task(void)
 	CHECK_EQ(bus->mi.intr, 1u << SALSA64_IRQ_SP);  /* sin DP */
 }
 
+/* Una tarea de libultra sin HLE (como la de tipo 4 que manda Zelda OoT al
+ * arrancar) termina con TASKDONE: sin él, libultra la toma por un BREAK
+ * suelto y nadie despierta. Lo que no parece tarea, sin señales. */
+static void rsp_other_task(void)
+{
+	struct salsa64_bus *bus = &t_n64.bus;
+	put_task(4, 0x5000, 0x6000);
+	salsa64_wr32(bus->sp_mem + SALSA64_TASK_DMEM + 0x14, 0x20);   /* ucode_size */
+	salsa64_wr32(bus->sp_mem + SALSA64_TASK_DMEM + 0x0C, 0x3E8);  /* ucode_boot_size */
+	wr(SP_REG(SALSA64_SP_STATUS), 0x1 | 0x4 | 0x100);
+	CHECK_EQ(rd(SP_REG(SALSA64_SP_STATUS)),
+		 SALSA64_SP_STATUS_HALT | SALSA64_SP_STATUS_BROKE | SALSA64_SP_STATUS_INTR_BREAK |
+		 SALSA64_SP_STATUS_TASKDONE);
+	CHECK_EQ(bus->mi.intr, 1u << SALSA64_IRQ_SP);
+
+	wr(SP_REG(SALSA64_SP_STATUS), 0x8 | 0x2000);  /* bajar interrupción y TASKDONE */
+	memset(bus->sp_mem + SALSA64_TASK_DMEM, 0, 64);
+	wr(SP_REG(SALSA64_SP_STATUS), 0x1 | 0x4);
+	CHECK_EQ(rd(SP_REG(SALSA64_SP_STATUS)) & SALSA64_SP_STATUS_TASKDONE, 0);
+}
+
 static enum salsa64_gbi detect(const char *text)
 {
 	struct salsa64_task task;
@@ -172,5 +193,6 @@ void t_suite_rsp(void)
 	RUN(sp_dma_rows);
 	RUN(rsp_gfx_task);
 	RUN(rsp_audio_task);
+	RUN(rsp_other_task);
 	RUN(rsp_detect_gbi);
 }

@@ -126,6 +126,10 @@ struct salsa64_rsp {
 	/* Duración aparente de cada tarea, en ciclos del VR4300. */
 	uint32_t gfx_cycles, audio_cycles, dp_cycles;
 	struct salsa64_rsp_stats stats;
+	/* Opcional (depuración): cada arranque del RSP con su tarea y la familia
+	 * de microcódigo detectada (SALSA64_GBI_UNKNOWN si no es gráfica). */
+	void (*trace)(void *ctx, const struct salsa64_task *task, enum salsa64_gbi gbi);
+	void *trace_ctx;
 };
 
 enum salsa64_dp_reg {

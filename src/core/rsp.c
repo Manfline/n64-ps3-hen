@@ -161,8 +161,11 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 	uint64_t now = bus->cpu ? bus->cpu->cycles : 0;
 	bool valid = in_rdram(bus, task.data_ptr, 8) && in_rdram(bus, task.ucode_data, 16);
 
+	enum salsa64_gbi gbi = task.type == SALSA64_TASK_GFX && valid ? salsa64_rsp_detect_gbi(bus, &task)
+								       : SALSA64_GBI_UNKNOWN;
+	if (rsp->trace)
+		rsp->trace(rsp->trace_ctx, &task, gbi);
 	if (task.type == SALSA64_TASK_GFX && valid && rsp->sched) {
-		enum salsa64_gbi gbi = salsa64_rsp_detect_gbi(bus, &task);
 		if (gbi == SALSA64_GBI_F3DEX2 || gbi == SALSA64_GBI_F3DZEX2) {
 			rsp->stats.gfx++;
 			rsp->busy = SALSA64_TASK_GFX;
@@ -182,6 +185,12 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 	} else {
 		rsp->stats.other++;
 	}
-	/* Sin HLE para esta tarea: se detiene en el acto. */
-	rsp_break(bus, 0);
+	/* Sin HLE para esta tarea: se detiene en el acto. Si parece una tarea de
+	 * libultra (como hace mupen64plus-rsp-hle: rspboot de hasta 4 KB), con
+	 * TASKDONE: el manejador de interrupciones de libultra solo avisa que la
+	 * tarea terminó si ve TASKDONE o YIELDED; si no, la toma por un BREAK
+	 * suelto y quien la espera no despierta nunca (Zelda OoT al arrancar
+	 * manda una tarea de tipo 4 así). */
+	bool libultra = task.type != 0 && task.ucode_size != 0 && task.ucode_boot_size <= 0x1000;
+	rsp_break(bus, libultra ? SALSA64_SP_STATUS_TASKDONE : 0);
 }
