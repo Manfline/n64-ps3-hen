@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "cpu/fpu.h"
+#include "cpu/rec.h"
 #include "test.h"
 
 enum { CI = 0x01, CU = 0x02, CO = 0x04, CZ = 0x08, CV = 0x10, CE = 0x20 };
@@ -719,6 +720,172 @@ static void executed_matches_full(void)
 	}
 }
 
+/* Operando de una conversión o de SQRT: los de fz_operand, enteros con
+ * fracción (0, 1/4, 1/2, 3/4 o al azar: los empates de ROUND) de hasta 62
+ * bits, valores a unas unidades de 2^30, 2^31, 2^52 y 2^53 (donde un modo
+ * de redondeo se sale del rango) y los bordes de la franja de CVT.S.D. */
+static uint64_t fz_cvt_operand(bool is_s)
+{
+	static const double edges[] = {
+		2147483647.0, 2147483647.5, 2147483648.0, 2147483648.5, -2147483648.0, -2147483648.5,
+		-2147483649.0, 1073741823.5, 1073741824.0, -1073741824.5, -1073741825.0,
+		4503599627370495.5, -4503599627370495.5, 4503599627370496.0, 9007199254740991.0,
+		9007199254740992.0, -9007199254740992.0, 0.5, -0.5, 1.5, -1.5, 2.5, -2.5, 1e-30, -1e-30,
+		0x1p-126, 0x1.000001p-126, 0x1.fffffffp-127, 0x1p-127, 0x1.fffffep127, 0x1.fffffefp126,
+		0x1.ffffffp127, 0x1p127, -0x1.ffffffp126, 0.0, -0.0,
+	};
+	static const double fracs[] = { 0, 0.25, 0.5, 0.75, 0.5 };
+	uint64_t x = fz_rand();
+	double v;
+	switch (x & 7) {
+	case 0: case 1:
+		return fz_operand(is_s);
+	case 2:
+		v = edges[(x >> 3) % (sizeof edges / sizeof edges[0])];
+		break;
+	case 3: {
+		static const unsigned ks[] = { 30, 31, 52, 53 };
+		v = (double)(1ull << ks[(x >> 3) % 4]) - (double)((x >> 5) % 4) + fracs[(x >> 7) % 5];
+		if (x >> 63)
+			v = -v;
+		break;
+	}
+	default: {
+		unsigned bits = (unsigned)(x >> 3) % 63, f = (unsigned)(x >> 9) % 6;
+		uint64_t m = bits ? fz_rand() >> (64 - bits) : 0;
+		v = (double)m + (f < 5 ? fracs[f] : (double)(fz_rand() >> 11) * 0x1p-53);
+		if (x >> 63)
+			v = -v;
+		break;
+	}
+	}
+	if (is_s && !(__builtin_fabs(v) <= 0x1.fffffep127))
+		v = 0x1p100;  /* (float) de algo mayor no está definido en C */
+	return is_s ? t_fbits((float)v) : t_dbits(v);
+}
+
+/* Entero de 32 bits para CVT.S.W y CVT.D.W: al azar (casi siempre con más
+ * de 24 bits), chico, bordes y empates de 25 bits (el bit que sobra es justo
+ * la mitad). */
+static uint32_t fz_int_operand(void)
+{
+	static const uint32_t edges[] = {
+		0, 1, 0xFFFFFFFF, 0x80000000, 0x7FFFFFFF, 0x01000000, 0x01000001, 0x01000003,
+		0x00FFFFFF, 0x02000006, 0x7FFFFFC0, 0x7FFFFF80, 0x7FFFFFBF, 0x81000001, 0xFF000001,
+	};
+	uint64_t x = fz_rand();
+	uint32_t w;
+	switch (x & 3) {
+	case 0:
+		return (uint32_t)fz_rand();
+	case 1:
+		w = (uint32_t)(fz_rand() >> (40 + (x >> 2) % 24));
+		break;
+	case 2:
+		return edges[(x >> 2) % (sizeof edges / sizeof edges[0])];
+	default:
+		w = (((uint32_t)fz_rand() & 0x00FFFFFF) | 0x01000001u) << ((x >> 2) % 7);
+		break;
+	}
+	return (x >> 63) ? 0u - w : w;
+}
+
+/*
+ * Conversiones, SQRT, CFC1 y CTC1 ejecutados por el CPU (t_step: el
+ * intérprete o, con el recompilador, el código generado) contra el camino
+ * completo llamado directo. Como executed_matches_full, más los registros
+ * generales.
+ */
+static void executed_conversions_match_full(void)
+{
+	unsigned failed = 0, native = 0;
+
+	for (unsigned n = 0; n < 8000; n++) {
+		bool is_s = fz_rand() & 1, fr = (fz_rand() & 3) != 0;
+		unsigned kind = (unsigned)(fz_rand() % 6);
+		unsigned fs = fz_rand() & 31, fd = fz_rand() & 31, rt = fz_rand() & 31;
+		uint64_t r = fz_rand();
+		uint32_t fcr31 = ((r & 1) ? (uint32_t)(r >> 1) & 3 : 0) |
+				 ((uint32_t)(r >> 8) & 0x1F) << 2 |
+				 ((r >> 16 & 7) == 0 ? ((uint32_t)(r >> 20) & 0x1F) << 7 : 0) |
+				 ((r >> 26 & 3) == 0 ? ((uint32_t)(r >> 28) & 0x1F) << 12 : 0) |
+				 ((r >> 32 & 3) == 0 ? SALSA64_FCR31_FS : 0) |
+				 ((r >> 40 & 1) ? SALSA64_FCR31_C : 0);
+
+		t_set_status(fr ? T_STATUS : T_STATUS & ~SALSA64_ST_FR);
+		for (unsigned k = 0; k < 32; k++) {
+			CPU->fpr[k] = fz_rand();
+			R[k] = k ? fz_rand() : 0;
+		}
+		unsigned rs = fr ? fs : fs & ~1u;
+		uint32_t instr;
+		switch (kind) {
+		case 0:  /* SQRT */
+			instr = SQRT_F(is_s ? F_S : F_D, fd, fs);
+			break;
+		case 1:  /* CVT.D.S, CVT.S.D */
+			instr = is_s ? CVT_D(F_S, fd, fs) : CVT_S(F_D, fd, fs);
+			break;
+		case 2:  /* CVT.S.W, CVT.D.W */
+			instr = (fz_rand() & 1) ? CVT_S(F_W, fd, fs) : CVT_D(F_W, fd, fs);
+			CPU->fpr[rs] = (CPU->fpr[rs] & 0xFFFFFFFF00000000ull) | fz_int_operand();
+			break;
+		case 3:  /* ROUND, TRUNC, CEIL, FLOOR a L y W */
+			instr = FOP(is_s ? F_S : F_D, 0x08 + (unsigned)(fz_rand() % 8), fd, fs, 0);
+			break;
+		case 4:  /* CVT.W, CVT.L */
+			instr = FOP(is_s ? F_S : F_D, (fz_rand() & 1) ? 0x24 : 0x25, fd, fs, 0);
+			break;
+		default: /* CFC1, CTC1 */
+			fs = (fz_rand() & 1) ? 31 : (fz_rand() & 3) ? 0 : fs;
+			if (fz_rand() & 1) {
+				instr = CFC1(rt, fs);
+			} else {
+				instr = CTC1(rt, fs);
+				if (rt && (fz_rand() & 1))
+					R[rt] = (fz_rand() & ~0xFFFFFFFFull) | (fz_rand() & 1 ? fcr31 >> 1 : fcr31);
+			}
+			break;
+		}
+		if (kind != 2 && kind != 5) {
+			uint64_t a = fz_cvt_operand(is_s);
+			CPU->fpr[rs] = is_s ? (CPU->fpr[rs] & 0xFFFFFFFF00000000ull) | a : a;
+		}
+		CPU->fcr31 = fcr31;
+		t_wr32(T_CODE_PA, instr);
+		salsa64_cpu_set_pc(CPU, T_CODE);
+		CPU->cur_pc = T_CODE;
+		CPU->cause = 0;
+
+		memcpy(&fz_full, CPU, sizeof fz_full);
+		fz_full.redirect = 0;
+		salsa64_vr4300_cop1(&fz_full, instr);
+		bool exc = fz_full.redirect;
+		uint64_t calls = CPU->rec ? CPU->rec->stats.exec_calls : 0;
+		t_step(1);
+		native += CPU->rec && CPU->rec->stats.exec_calls == calls;
+
+		t_checks++;
+		if (memcmp(fz_full.fpr, CPU->fpr, sizeof fz_full.fpr) != 0 ||
+		    memcmp(fz_full.gpr, CPU->gpr, sizeof fz_full.gpr) != 0 ||
+		    fz_full.fcr31 != CPU->fcr31 || fz_full.cause != CPU->cause ||
+		    fz_full.status != CPU->status || CPU->pc != (exc ? fz_full.pc : T_CODE + 4)) {
+			if (failed++ < 8)
+				t_fail(__FILE__, __LINE__,
+				       "instr 0x%08x, fs 0x%016llx, FCR31 0x%08x: fd 0x%016llx/0x%016llx, "
+				       "FCR31 0x%08x/0x%08x, rt 0x%016llx/0x%016llx (completo/ejecutado)",
+				       instr, (unsigned long long)fz_full.fpr[rs], fcr31,
+				       (unsigned long long)fz_full.fpr[I_FD(instr)], (unsigned long long)CPU->fpr[I_FD(instr)],
+				       fz_full.fcr31, CPU->fcr31, (unsigned long long)fz_full.gpr[rt],
+				       (unsigned long long)CPU->gpr[rt]);
+		}
+	}
+	/* Con el recompilador, que buena parte haya corrido en nativo (salvo con
+	 * SALSA64_REC_OPT_RARE_EXEC, que las manda al intérprete a propósito). */
+	if (CPU->rec && !(CPU->rec->opts & SALSA64_REC_OPT_RARE_EXEC))
+		CHECK(native > 3000);
+}
+
 void t_suite_cop1(void)
 {
 	RUN(cop1_unusable);
@@ -760,4 +927,5 @@ void t_suite_cop1(void)
 	RUN(flush_tiny_results);
 	RUN(fast_path_matches_full);
 	RUN(executed_matches_full);
+	RUN(executed_conversions_match_full);
 }
