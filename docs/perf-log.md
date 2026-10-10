@@ -7,6 +7,7 @@ antes, después, notas.
 | Fecha | Commit | Prueba | Entorno | Antes | Después | Notas |
 |---|---|---|---|---|---|---|
 | 2026-10-10 | 419731a → c14268c | Intérprete, `bench` mixto | PS3 real: Slim CECH-3011A, HFW 4.91 + HEN | 8,7 MIPS | 17,1 MIPS (×2,0) | Estado del bucle en registros, sin llamadas por instrucción, r0 sin escribir, tablas de `switch` sin `lwax`, FPU rápida sin pasar valores por memoria. Desglose en «Líneas base de la Fase 1» |
+| 2026-10-10 | c14268c → 147d5ac | Intérprete, `bench` mixto | PS3 real (mismo equipo) | 17,1 MIPS | 21,2 MIPS (×1,24; ×2,4 desde 8,7) | Un solo despacho (SPECIAL en la misma tabla), FPU rápida sin comparaciones de punto flotante para clasificar, movimientos de COP1 en el bucle |
 
 ## Líneas base de la Fase 0 (pendientes de PS3 real)
 
@@ -35,6 +36,8 @@ KSEG0, 20 M instrucciones.
 | 2026-10-10 | 419731a | **PS3 real** (mismo equipo) | 8,7 MIPS | Mismo intérprete con el benchmark en variantes: repite la línea base |
 | 2026-10-10 | c14268c | **PS3 real** (mismo equipo), + `-mno-relative-jumptables` | **17,1 MIPS** | ×2,0. Desglose abajo |
 | 2026-10-10 | c14268c | Host: Mac Studio, Docker arm64, gcc 12 -O2 | 294 MIPS | Solo referencia del host |
+| 2026-10-10 | 147d5ac | **PS3 real** (mismo equipo) | **21,2 MIPS** | Segunda ronda. Desglose abajo |
+| 2026-10-10 | 147d5ac | Host: Mac Studio, Docker arm64, gcc 12 -O2 | 297 MIPS | Solo referencia del host |
 
 ### Desglose por clase de instrucción (2026-10-10)
 
@@ -43,14 +46,14 @@ cola ADDIU + BNE + delay slot). Ciclos del PPE = ns × 3,2 (3,2 GHz). PS3
 real (CECH-3011A, HFW 4.91 + HEN); paquete `salsa64-cpu-tests`, 154/154
 pruebas en ambas corridas.
 
-| Variante | Antes (419731a) | Después (c14268c) | Ciclos/instr. | Mejora |
-|---|---|---|---|---|
-| mixto | 8,7 MIPS | 17,1 MIPS | 364 → 187 | ×2,0 |
-| nop | 12,6 | 38,2 | 254 → 84 | ×3,0 |
-| enteros | 12,8 | 23,5 | 248 → 136 | ×1,8 |
-| memoria (LW/SW) | 14,0 | 22,1 | 227 → 144 | ×1,6 |
-| mov.s | 8,6 | 13,3 | 369 → 240 | ×1,5 |
-| add.s (inexacto) | 2,6 | 7,6 | 1194 → 416 | ×2,9 |
+| Variante | Original (419731a) | Ronda 1 (c14268c) | Ronda 2 (147d5ac) | Ciclos/instr. | Total |
+|---|---|---|---|---|---|
+| mixto | 8,7 MIPS | 17,1 | 21,2 | 364 → 187 → 150 | ×2,4 |
+| nop | 12,6 | 38,2 | 34,4 | 254 → 84 → 93 | ×2,7 |
+| enteros | 12,8 | 23,5 | 25,6 | 248 → 136 → 124 | ×2,0 |
+| memoria (LW/SW) | 14,0 | 22,1 | 20,9 | 227 → 144 → 152 | ×1,5 |
+| mov.s | 8,6 | 13,3 | 23,5 | 369 → 240 → 136 | ×2,7 |
+| add.s (inexacto) | 2,6 | 7,6 | 14,0 | 1194 → 416 → 227 | ×5,3 |
 
 Host (Mac Studio, Docker arm64, sin sanitizers), solo referencia: mixto
 231 → 294 MIPS. RPCS3 dio 21,4 MIPS después (antes 29): no concluyente, su
@@ -83,12 +86,32 @@ Lo que queda (después), en ciclos por instrucción por encima de un NOP:
   en registros enteros (cargados de memoria, sin transferencia) y una franja
   de exponentes que garantice que no hay desbordamiento ni subdesbordamiento.
 
+Segunda ronda (147d5ac), en ciclos por encima de un NOP: ALU de SPECIAL
+75 → 45, MOV.S 223 → 61, ADD.S 475 → 192; LW/SW igual (~74). El índice
+del despacho único (64 + funct, sin salto) alarga la cadena de despacho de
+todas las instrucciones: NOP y memoria, que no usaban el segundo despacho,
+perdieron ~9 ciclos. Para una mezcla de juego con ~1/3 de SPECIAL queda a
+favor; se podría acortar la cadena calculando el índice ya escalado y
+directo desde la palabra de la instrucción (unos 2–4 ciclos).
+
+Lo que queda: el bucle cuesta ~93 ciclos aun para un NOP (~45
+instrucciones del PPE). Es sobre todo la cadena dependiente de cada
+instrucción: cargar la palabra de la RDRAM → extraer el índice → cargar la
+dirección de la tabla → mtctr → bctr, más la latencia de cada carga en un
+procesador in-order. Bajarlo de verdad pide decodificar por adelantado
+(caché de instrucciones predecodificadas o despacho en tubería: decodificar
+la siguiente mientras corre la actual), y la dependencia entre
+instrucciones por `cpu->gpr` en memoria no se quita en un intérprete. Es el
+terreno del recompilador (Fase 3).
+
 Reglas del PPE que salieron de aquí (aplican también al recompilador de la
 Fase 3): no releer lo recién escrito; nada de funciones cortas con marco
 de pila en el camino caliente; evitar `lwax`/`lha` (cargas con extensión
 de signo), desplazamientos variables y formas con punto (`rldicl.`,
 `srdi.`) en código caliente; no mover valores entre registros enteros y de
-punto flotante; `-mno-relative-jumptables` en todo el código del PPU.
+punto flotante; clasificar valores de punto flotante con sus bits en
+enteros y no con comparaciones de punto flotante seguidas de salto;
+`-mno-relative-jumptables` en todo el código del PPU.
 
 Corrida completa de nemu64-test (`salsa64-run`, ≈189 M ciclos del VR4300):
 0,75 s en el host sin sanitizers (253 MIPS); 2,1 s con ASan + UBSan.
