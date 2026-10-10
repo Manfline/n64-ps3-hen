@@ -6,7 +6,8 @@
   tools/rpcs3-run.py build/salsa64/salsa64.elf --embedded vitest
 
 Con --embedded, el frontend usa esa ROM de prueba embebida (escribe
-dev_hdd0/salsa64/embedded en RPCS3); sin la opción, ese archivo se borra.
+dev_hdd0/salsa64/embedded en RPCS3); con --rom NOMBRE, ese archivo de
+dev_hdd0/salsa64 (sin pisar rom.z64); sin opciones, se borra.
 
 Lanza RPCS3 con --no-gui y tools/rpcs3/salsa64.yml, crea el archivo de modo
 autotest (src/platform/ps3/autotest.h) para que el programa salga solo, sigue
@@ -150,10 +151,18 @@ def main() -> int:
                     help="configuración de RPCS3 (por omisión tools/rpcs3/salsa64.yml)")
     ap.add_argument("--embedded", choices=["vitest", "gfxtest"],
                     help="ROM de prueba embebida que debe usar el frontend")
+    ap.add_argument("--rom", help="archivo de dev_hdd0/salsa64 que debe cargar el frontend "
+                    "(no se llama rom.z64 para no afectar a otras compilaciones)")
+    ap.add_argument("--replay", help="volcado de la HLE (en dev_hdd0/salsa64) que el frontend "
+                    "debe dibujar en el RSX (replay.c)")
     args = ap.parse_args()
 
     EMBED_FILE.parent.mkdir(parents=True, exist_ok=True)
-    if args.embedded:
+    if args.replay:
+        EMBED_FILE.write_text("dump:" + args.replay + "\n")
+    elif args.rom:
+        EMBED_FILE.write_text("file:" + args.rom + "\n")
+    elif args.embedded:
         EMBED_FILE.write_text(args.embedded + "\n")
     elif EMBED_FILE.exists():
         EMBED_FILE.unlink()

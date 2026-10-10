@@ -47,4 +47,8 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 
 void salsa64_rdp_get_stats(struct salsa64_rdp_stats *out);
 
+/* Escribe la salida de la última tarea (gfx.h: gfx_dump_header) en `path`.
+ * Espera al RSX. Para depurar. */
+bool salsa64_rdp_dump(const char *path);
+
 #endif

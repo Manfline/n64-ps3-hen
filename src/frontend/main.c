@@ -9,8 +9,11 @@
  * hilo del PPE por ahora.
  *
  * ROM: si existe SALSA64_DATA_DIR/embedded con "vitest" o "gfxtest", esa
- * ROM de prueba embebida; si no, SALSA64_DATA_DIR/rom.z64 (cualquiera de
- * los tres órdenes de bytes) si existe; si no, gfxtest. Con las ROMs de
+ * ROM de prueba embebida (o con "file:<nombre>", ese archivo de
+ * SALSA64_DATA_DIR, para probar una ROM en RPCS3 sin pisar el rom.z64 que
+ * leen otras compilaciones, o con "dump:<nombre>", la repetición de un
+ * volcado de la HLE en el RSX: replay.c); si no, SALSA64_DATA_DIR/rom.z64
+ * (cualquiera de los tres órdenes de bytes) si existe; si no, gfxtest. Con las ROMs de
  * prueba el frontend se verifica a sí mismo (selftest.c, selftest_gfx.c) e
  * imprime "RESULTADO frontend: OK/FALLO"; en modo de prueba automática
  * (platform/ps3/autotest.h) sale después.
@@ -20,7 +23,11 @@
  *
  * Capturas: con una ROM del disco, cada SHOT_US se guarda la pantalla en
  * SALSA64_DATA_DIR/screen-N.ppm (N de 1 a SHOT_MAX, en ronda), para verla
- * desde la Mac por FTP.
+ * desde la Mac por FTP. En modo de prueba automática se captura cada
+ * AUTO_SHOT_FIELDS campos y se sale tras AUTO_FIELDS (para correr una ROM
+ * en RPCS3 sin manos). Si SALSA64_DATA_DIR/gfxdump dice un número de campo,
+ * en ese campo se vuelca la salida de la última tarea gráfica a
+ * SALSA64_DATA_DIR/gfxdump.bin (salsa64-run --raster-dump la dibuja).
  *
  * Salir: START + SELECT, o "Salir del juego" desde el menú del sistema.
  * Lo que la ROM imprime por el ISViewer va al log.
@@ -44,6 +51,7 @@
 #include "platform/ps3/log.h"
 #include "rdp/rdp.h"
 #include "rsp/gfx/hle.h"
+#include "replay.h"
 #include "screenshot.h"
 #include "selftest.h"
 #include "selftest_gfx.h"
@@ -60,6 +68,8 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define STATS_US     5000000u
 #define SHOT_US      10000000u
 #define SHOT_MAX     9
+#define AUTO_SHOT_FIELDS 300
+#define AUTO_FIELDS      1800
 
 static struct salsa64_n64 n64;
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
@@ -124,7 +134,7 @@ static uint8_t *embedded(const uint8_t *bin, uint32_t bin_size, uint32_t *size)
 /* ROM embebida elegida en EMBED_PATH, o NULL. */
 static uint8_t *load_embedded(uint32_t *size, const char **source)
 {
-	char name[16] = "";
+	char name[80] = "";
 	FILE *f = fopen(EMBED_PATH, "r");
 	if (!f)
 		return NULL;
@@ -142,7 +152,28 @@ static uint8_t *load_embedded(uint32_t *size, const char **source)
 		gfxtest_on = 1;
 		return embedded(gfxtest_rom_bin, gfxtest_rom_bin_size, size);
 	}
-	salsa64_log("%s dice \"%s\": no es vitest ni gfxtest", EMBED_PATH, name);
+	if (!strncmp(name, "file:", 5)) {
+		static char path[96];
+		snprintf(path, sizeof path, SALSA64_DATA_DIR "/%s", name + 5);
+		FILE *rf = fopen(path, "rb");
+		long len = -1;
+		if (rf && fseek(rf, 0, SEEK_END) == 0)
+			len = ftell(rf);
+		uint8_t *buf = NULL;
+		if (rf && len >= 0x1000 && (uint32_t)len <= ROM_MAX && fseek(rf, 0, SEEK_SET) == 0 &&
+		    (buf = memalign(128, (size_t)len)) && fread(buf, 1, (size_t)len, rf) == (size_t)len) {
+			fclose(rf);
+			*size = (uint32_t)len;
+			*source = path;
+			return buf;
+		}
+		free(buf);
+		if (rf)
+			fclose(rf);
+		salsa64_log("no se pudo leer %s", path);
+		return NULL;
+	}
+	salsa64_log("%s dice \"%s\": no es vitest, gfxtest ni file:<nombre>", EMBED_PATH, name);
 	return NULL;
 }
 
@@ -204,6 +235,27 @@ int main(void)
 		return 1;
 	}
 
+	{
+		char name[80] = "";
+		FILE *ef = fopen(EMBED_PATH, "r");
+		if (ef) {
+			if (!fgets(name, sizeof name, ef))
+				name[0] = '\0';
+			fclose(ef);
+			name[strcspn(name, " \r\n")] = '\0';
+		}
+		if (!strncmp(name, "dump:", 5)) {
+			char path[96];
+			snprintf(path, sizeof path, SALSA64_DATA_DIR "/%s", name + 5);
+			int rr = salsa64_replay(path);
+			salsa64_log("RESULTADO frontend: %s (repetición)", rr == 0 ? "OK" : "FALLO");
+			salsa64_rdp_shutdown();
+			rsxkit_shutdown();
+			salsa64_log_shutdown();
+			return rr == 0 ? 0 : 1;
+		}
+	}
+
 	uint32_t rom_size = 0;
 	const char *source = NULL;
 	uint8_t *rom = load_rom(&rom_size, &source);
@@ -262,13 +314,22 @@ int main(void)
 	enum selftest_state result = SELFTEST_RUNNING;
 	uint64_t t_stats = sysGetSystemTime(), cyc_stats = n64.cpu.cycles;
 	uint64_t t_shot = t_stats;
-	uint32_t shots = 0;
+	uint32_t shots = 0, dump_field = 0;
+	{
+		FILE *df = fopen(SALSA64_DATA_DIR "/gfxdump", "r");
+		if (df) {
+			if (fscanf(df, "%u", &dump_field) != 1)
+				dump_field = 0;
+			fclose(df);
+		}
+	}
 	uint64_t us_emu = 0, us_present = 0;
 	uint32_t fields_stats = 0, blank = 0, rsx_frames = 0;
 	struct salsa64_rdp_stats rdp0;
 	salsa64_rdp_get_stats(&rdp0);
 	uint32_t gfx_tasks0 = 0, gfx_waits0 = 0;
 	uint64_t gfx_ticks0 = 0, gfx_wait0 = 0;
+	uint64_t gfx_vtx0 = 0, gfx_state0 = 0, gfx_tex0 = 0, gfx_load0 = 0;
 
 	while (running) {
 		sysUtilCheckCallback();
@@ -304,14 +365,26 @@ int main(void)
 				selftest_screen(&f, &r);
 			else
 				gfxtest_screen(&f, &r);
-		} else if (!selftest_on && !gfxtest_on && f.width && t1 - t_shot >= SHOT_US) {
+		} else if (!selftest_on && !gfxtest_on && f.width &&
+			   (autotest ? n64.bus.vi.fields / AUTO_SHOT_FIELDS != shots
+				     : t1 - t_shot >= SHOT_US)) {
 			char path[64];
 			snprintf(path, sizeof path, SALSA64_DATA_DIR "/screen-%u.ppm", shots % SHOT_MAX + 1);
 			rsxkit_finish();
 			salsa64_screenshot(path, &f, &r);
 			salsa64_log("captura %s (campo %u)", path, n64.bus.vi.fields);
-			shots++;
+			shots = autotest ? n64.bus.vi.fields / AUTO_SHOT_FIELDS : shots + 1;
 			t_shot = t1;
+		}
+		if (dump_field && n64.bus.vi.fields >= dump_field) {
+			rsxkit_finish();
+			salsa64_log("volcado de la HLE en el campo %u: %s", n64.bus.vi.fields,
+				    salsa64_rdp_dump(SALSA64_DATA_DIR "/gfxdump.bin") ? "bien" : "FALLO");
+			dump_field = 0;
+		}
+		if (autotest && !selftest_on && !gfxtest_on && n64.bus.vi.fields >= AUTO_FIELDS) {
+			salsa64_log("RESULTADO frontend: OK (ROM del disco, %u campos)", n64.bus.vi.fields);
+			break;
 		}
 		rsxkit_frame_end();
 		uint64_t t2 = sysGetSystemTime();
@@ -359,7 +432,18 @@ int main(void)
 					    (double)(rs.triangles - rdp0.triangles) / tasks, spu_ms, wait_ms, waits,
 					    (rs.us_translate - rdp0.us_translate) / 1e3 / tasks,
 					    rs.targets_created - rdp0.targets_created, rs.set_waits - rdp0.set_waits);
+				if (gfx_on_spu) {
+					double k = 1e3 / spukit_tick_hz() / tasks;
+					salsa64_log("gfx en el SPE por tarea: vértices %.2f ms, estado %.2f ms (texturas %.2f ms), "
+						    "cargas a la TMEM %.2f ms", (gfx_spu.t_vtx - gfx_vtx0) * k,
+						    (gfx_spu.t_state - gfx_state0) * k, (gfx_spu.t_tex - gfx_tex0) * k,
+						    (gfx_spu.t_load - gfx_load0) * k);
+				}
 			}
+			gfx_vtx0 = gfx_spu.t_vtx;
+			gfx_state0 = gfx_spu.t_state;
+			gfx_tex0 = gfx_spu.t_tex;
+			gfx_load0 = gfx_spu.t_load;
 			rdp0 = rs;
 			gfx_tasks0 = gfx_spu.tasks;
 			gfx_ticks0 = gfx_spu.spu_ticks;

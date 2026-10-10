@@ -71,6 +71,8 @@ static struct {
 
 static unsigned trace_gfx_left;
 
+static bool trace_gfx_verbose;
+
 static void gfx_acquire(void *ctx, struct gfx_job *job)
 {
 	(void)ctx;
@@ -115,7 +117,35 @@ static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_resu
 				fprintf(stderr, " ZCLEAR %06x", c->a);
 			else if (c->op == GFX_OP_DRAW) {
 				const struct gfx_draw *d = (const struct gfx_draw *)c;
-				fprintf(stderr, " D%u", d->h.b / 3);
+				if (trace_gfx_verbose) {
+					float zmin = 1e30f, zmax = -1e30f, wmin = 1e30f, wmax = -1e30f;
+					for (uint32_t i = 0; i < d->h.b; i++) {
+						const struct gfx_vertex *v = &gfx_vtx[d->h.a + i];
+						float z = v->w != 0.0f ? v->z / v->w : 0.0f;
+						zmin = z < zmin ? z : zmin, zmax = z > zmax ? z : zmax;
+						wmin = v->w < wmin ? v->w : wmin, wmax = v->w > wmax ? v->w : wmax;
+					}
+					fprintf(stderr, "\n  D%-4u kind %u cyc %u ntex %u depth %u blend %u cull %u atest %u/%u fog %u "
+						"z/w %.3f..%.3f w %.1f..%.1f", d->h.b / 3, d->prim_kind, d->cycle, d->ntex,
+						d->depth, d->blend, d->cull, d->atest, d->aref, d->fog, zmin, zmax, wmin, wmax);
+					if (d->blend) {
+						static const char *const tn[] = { "T0", "T0a", "T1", "T1a", "1" };
+						fprintf(stderr, "\n        alfa:");
+						for (int t = 0; t < GFX_K_TERMS; t++)
+							for (int k = 0; k < 3; k++)
+								if (d->k[t][k][3] != 0.0f)
+									fprintf(stderr, " %+.3f·%s·%s", d->k[t][k][3], tn[t],
+										k == 0 ? "1" : k == 1 ? "C" : "Ca");
+						for (int t = 0; t < d->ntex; t++)
+							fprintf(stderr, " tex%d %ux%u pitch %u flags %x xf %.4f %.4f %.4f %.4f", t,
+								d->tex[t].width, d->tex[t].height, d->tex[t].pitch, d->tex[t].flags,
+								d->tex[t].xf[0], d->tex[t].xf[1], d->tex[t].xf[2], d->tex[t].xf[3]);
+						const uint8_t *a = &gfx_vtx[d->h.a].r;
+						fprintf(stderr, " v0 rgba %u %u %u %u", a[0], a[1], a[2], a[3]);
+					}
+				} else {
+					fprintf(stderr, " D%u", d->h.b / 3);
+				}
 			}
 			off += c->size;
 		}
@@ -196,6 +226,102 @@ static bool gfx_dump(const char *path)
 	}
 	fprintf(stderr, "salsa64-run: imagen de la HLE gráfica en %s\n", path);
 	return fclose(out) == 0;
+}
+
+static uint8_t *read_file(const char *path, size_t *size);
+
+/* Volcado de la PS3 (big-endian) → orden del host y rasterizador. */
+static uint32_t be32(uint32_t v) { return salsa64_rd32((const uint8_t *)&v); }
+static void swap32s(void *p, uint32_t bytes)
+{
+	uint32_t *w = p;
+	for (uint32_t i = 0; i < bytes / 4; i++)
+		w[i] = be32(w[i]);
+}
+
+static int raster_dump(const char *path, const char *out)
+{
+	size_t size;
+	uint8_t *buf = read_file(path, &size);
+	if (!buf || size < sizeof(struct gfx_dump_header)) {
+		fprintf(stderr, "salsa64-run: no se pudo leer %s\n", path);
+		return 3;
+	}
+	struct gfx_dump_header h;
+	memcpy(&h, buf, sizeof h);
+	swap32s(&h, sizeof h);
+	if (h.magic != GFX_DUMP_MAGIC || sizeof h + (size_t)h.cmd_bytes + h.vtx_bytes + h.tex_bytes > size) {
+		fprintf(stderr, "salsa64-run: %s no es un volcado de la HLE\n", path);
+		return 3;
+	}
+	uint8_t *cmd = buf + sizeof h, *vtx = cmd + h.cmd_bytes, *tex = vtx + h.vtx_bytes;
+	/* Comandos: cabeceras (op y size de 16 bits) y el resto palabras de 32. */
+	for (uint32_t off = 0; off + sizeof(struct gfx_cmd) <= h.cmd_bytes;) {
+		struct gfx_cmd *c = (struct gfx_cmd *)(cmd + off);
+		uint16_t op = salsa64_rd16((uint8_t *)&c->op), sz = salsa64_rd16((uint8_t *)&c->size);
+		c->op = op, c->size = sz;
+		swap32s(&c->a, sz - 4);
+		if (op == GFX_OP_ZCLEAR) {
+			struct gfx_zclear *z = (struct gfx_zclear *)c;
+			swap32s(z->rect, sizeof z->rect);  /* deshace: son de 16 bits */
+			for (int i = 0; i < 4; i++)
+				z->rect[i] = salsa64_rd16((uint8_t *)&z->rect[i]);
+		} else if (op == GFX_OP_DRAW) {
+			struct gfx_draw *d = (struct gfx_draw *)c;
+			swap32s(d->scissor, 8 + 8);  /* deshace scissor y los bytes de estado */
+			for (int i = 0; i < 4; i++)
+				d->scissor[i] = salsa64_rd16((uint8_t *)&d->scissor[i]);
+			for (int t = 0; t < 2; t++) {
+				struct gfx_tex *x = &d->tex[t];
+				swap32s(&x->width, 8);  /* deshace los de 16 y 8 bits */
+				x->width = salsa64_rd16((uint8_t *)&x->width);
+				x->height = salsa64_rd16((uint8_t *)&x->height);
+				x->pitch = salsa64_rd16((uint8_t *)&x->pitch);
+			}
+		}
+		if (op == GFX_OP_END || !sz)
+			break;
+		off += sz;
+	}
+	/* Vértices: 6 floats y un uint32 de relleno; el color son bytes. */
+	for (uint32_t i = 0; i + sizeof(struct gfx_vertex) <= h.vtx_bytes; i += sizeof(struct gfx_vertex)) {
+		struct gfx_vertex *v = (struct gfx_vertex *)(vtx + i);
+		swap32s(v, 24);
+	}
+	struct gfx_job job;
+	struct gfx_result res;
+	memset(&job, 0, sizeof job);
+	memset(&res, 0, sizeof res);
+	job.cmd_ea = (uint64_t)(uintptr_t)cmd;
+	job.vtx_ea = (uint64_t)(uintptr_t)vtx;
+	job.tex_ea = (uint64_t)(uintptr_t)tex;
+	res.cmd_bytes = h.cmd_bytes;
+	res.vtx_bytes = h.vtx_bytes;
+	res.tex_bytes = h.tex_bytes;
+	raster_task(&job, &res);
+	/* La primera color image del volcado. */
+	const struct gfx_cmd *c = (const struct gfx_cmd *)cmd;
+	uint32_t addr = 0, w;
+	for (uint32_t off = 0; off < h.cmd_bytes && c->size; off += c->size, c = (const struct gfx_cmd *)(cmd + off))
+		if (c->op == GFX_OP_TARGET) {
+			addr = c->a;
+			break;
+		}
+	const uint32_t *img = raster_image(addr, &w);
+	if (!img || !out) {
+		fprintf(stderr, "salsa64-run: el volcado no dibuja ninguna color image (o falta --gfx-frame)\n");
+		return 3;
+	}
+	FILE *f = fopen(out, "wb");
+	fprintf(f, "P6\n%u %u\n255\n", RASTER_W, RASTER_H);
+	for (int i = 0; i < RASTER_W * RASTER_H; i++) {
+		uint8_t rgb[3] = { (uint8_t)(img[i] >> 16), (uint8_t)(img[i] >> 8), (uint8_t)img[i] };
+		fwrite(rgb, 1, 3, f);
+	}
+	fclose(f);
+	fprintf(stderr, "salsa64-run: volcado de %s dibujado en %s (color image %06x)\n", path, out, addr);
+	free(buf);
+	return 0;
 }
 
 /* Puntos de gfxtest (expect.h) en la imagen del rasterizador. */
@@ -408,7 +534,9 @@ static void usage(FILE *out)
 	      "      --gfx-frame ARCHIVO  al terminar, guardar en PPM lo que dibujó la HLE gráfica\n"
 	      "      --gfxtest-check   verificar la imagen de la HLE con los puntos de gfxtest\n"
 	      "      --trace-rsp N     mostrar las primeras N tareas del RSP\n"
-	      "      --trace-vi N      mostrar la imagen del VI en los últimos N campos\n", out);
+	      "      --trace-vi N      mostrar la imagen del VI en los últimos N campos\n"
+	      "      --raster-dump F   dibujar un volcado de la HLE de la PS3 (gfxdump.bin) en\n"
+	      "                        --gfx-frame y salir (sin ROM)\n", out);
 }
 
 int main(int argc, char **argv)
@@ -429,6 +557,7 @@ int main(int argc, char **argv)
 		{ "trace-rsp", required_argument, NULL, 'P' },
 		{ "trace-vi", required_argument, NULL, 'V' },
 		{ "trace-gfx", required_argument, NULL, 'Q' },
+		{ "raster-dump", required_argument, NULL, 'D' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 },
 	};
@@ -438,6 +567,7 @@ int main(int argc, char **argv)
 	bool regs = false;
 	const char *frame_path = NULL, *gfx_path = NULL;
 	bool gfx_check = false;
+	const char *dump_path = NULL;
 
 	while ((c = getopt_long(argc, argv, "c:u:f:qrh", opts, NULL)) != -1) {
 		switch (c) {
@@ -459,7 +589,8 @@ int main(int argc, char **argv)
 		case 'K': gfx_check = true; gfx.raster = true; break;
 		case 'P': trace_rsp_left = (unsigned)strtoul(optarg, NULL, 0); break;
 		case 'V': trace_vi_left = (unsigned)strtoul(optarg, NULL, 0); break;
-		case 'Q': trace_gfx_left = (unsigned)strtoul(optarg, NULL, 0); break;
+		case 'D': dump_path = optarg; break;
+		case 'Q': trace_gfx_left = (unsigned)strtoul(optarg, NULL, 0); trace_gfx_verbose = getenv("SALSA64_GFX_VERBOSE") != NULL; break;
 		case 'T':
 			if (!strcmp(optarg, "ntsc")) tv = SALSA64_TV_NTSC;
 			else if (!strcmp(optarg, "pal")) tv = SALSA64_TV_PAL;
@@ -475,6 +606,8 @@ int main(int argc, char **argv)
 		default:  usage(stderr); return 3;
 		}
 	}
+	if (dump_path)
+		return raster_dump(dump_path, gfx_path);
 	size_t longest = watch.until ? strlen(watch.until) : 0;
 	for (unsigned k = 0; k < watch.nfail; k++)
 		if (strlen(watch.fail[k]) > longest)

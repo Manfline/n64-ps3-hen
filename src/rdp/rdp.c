@@ -4,6 +4,7 @@
 #include "rdp/rdp.h"
 
 #include <malloc.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/systime.h>
 
@@ -63,6 +64,8 @@ static struct {
 	struct target *bound_t;
 	struct depth *bound_d;
 	uint32_t field;
+	unsigned last_set;           /* juego de búferes de la última tarea dibujada */
+	struct gfx_result last_res;
 	struct salsa64_rdp_stats stats;
 } rdp;
 
@@ -320,6 +323,8 @@ static void done(void *ctx, const struct gfx_job *job, const struct gfx_result *
 		off += c->size;
 	}
 	s->fence = rsxkit_fence();
+	rdp.last_res = *res;
+	rdp.last_set = (unsigned)(s - rdp.sets);
 	rdp.stats.tasks++;
 	rdp.stats.us_translate += sysGetSystemTime() - t0;
 }
@@ -345,6 +350,22 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 		return true;
 	}
 	return false;
+}
+
+bool salsa64_rdp_dump(const char *path)
+{
+	if (!rdp.ready || !rdp.last_res.cmd_bytes)
+		return false;
+	const struct set *s = &rdp.sets[rdp.last_set];
+	FILE *f = fopen(path, "wb");
+	if (!f)
+		return false;
+	struct gfx_dump_header h = { GFX_DUMP_MAGIC, rdp.last_res.cmd_bytes, rdp.last_res.vtx_bytes,
+				     rdp.last_res.tex_bytes };
+	bool ok = fwrite(&h, sizeof h, 1, f) == 1 && fwrite(s->cmd, 1, h.cmd_bytes, f) == h.cmd_bytes &&
+		  fwrite(s->vtx, 1, h.vtx_bytes, f) == h.vtx_bytes && fwrite(s->tex, 1, h.tex_bytes, f) == h.tex_bytes;
+	fclose(f);
+	return ok;
 }
 
 void salsa64_rdp_get_stats(struct salsa64_rdp_stats *out)
