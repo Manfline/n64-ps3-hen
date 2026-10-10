@@ -658,6 +658,67 @@ static void fast_path_matches_full(void)
 	CHECK(hits > 8000);
 }
 
+/*
+ * Lo mismo, pero ejecutando la instrucción con el CPU (t_step): con el
+ * intérprete prueba su camino rápido y, con el recompilador (modo
+ * estricto), el código generado. La referencia es el camino completo
+ * llamado directo.
+ */
+static void executed_matches_full(void)
+{
+	static const unsigned functs[] = {
+		0x00, 0x01, 0x02, 0x03, 0x00, 0x01, 0x02, 0x03, 0x05, 0x06, 0x07,
+		0x30, 0x32, 0x36, 0x3A, 0x3C, 0x3E,
+	};
+	unsigned failed = 0;
+
+	for (unsigned n = 0; n < 6000; n++) {
+		bool is_s = fz_rand() & 1, fr = (fz_rand() & 3) != 0;
+		unsigned funct = functs[fz_rand() % (sizeof functs / sizeof functs[0])];
+		unsigned fs = fz_rand() & 31, ft = fz_rand() & 31, fd = fz_rand() & 31;
+		uint64_t r = fz_rand();
+		uint32_t fcr31 = ((r & 1) ? (uint32_t)(r >> 1) & 3 : 0) |
+				 ((uint32_t)(r >> 8) & 0x1F) << 2 |
+				 ((r >> 16 & 7) == 0 ? ((uint32_t)(r >> 20) & 0x1F) << 7 : 0) |
+				 ((r >> 26 & 3) == 0 ? ((uint32_t)(r >> 28) & 0x1F) << 12 : 0) |
+				 ((r >> 32 & 3) == 0 ? SALSA64_FCR31_FS : 0) |
+				 ((r >> 40 & 1) ? SALSA64_FCR31_C : 0);
+
+		t_set_status(fr ? T_STATUS : T_STATUS & ~SALSA64_ST_FR);
+		for (unsigned k = 0; k < 32; k++)
+			CPU->fpr[k] = fz_rand();
+		unsigned rs = fr ? fs : fs & ~1u;
+		uint64_t a = fz_operand(is_s), b = fz_operand(is_s);
+		CPU->fpr[rs] = is_s ? (CPU->fpr[rs] & 0xFFFFFFFF00000000ull) | a : a;
+		CPU->fpr[ft] = is_s ? (CPU->fpr[ft] & 0xFFFFFFFF00000000ull) | b : b;
+		CPU->fcr31 = fcr31;
+		uint32_t instr = FOP(is_s ? F_S : F_D, funct, fd, fs, ft);
+		t_wr32(T_CODE_PA, instr);
+		salsa64_cpu_set_pc(CPU, T_CODE);
+		CPU->cur_pc = T_CODE;
+		CPU->cause = 0;
+
+		memcpy(&fz_full, CPU, sizeof fz_full);
+		fz_full.redirect = 0;  /* set_pc lo deja en 1; aquí marca una excepción */
+		salsa64_vr4300_cop1(&fz_full, instr);
+		bool exc = fz_full.redirect;
+		t_step(1);
+
+		t_checks++;
+		if (memcmp(fz_full.fpr, CPU->fpr, sizeof fz_full.fpr) != 0 ||
+		    fz_full.fcr31 != CPU->fcr31 || fz_full.cause != CPU->cause ||
+		    fz_full.status != CPU->status || CPU->pc != (exc ? fz_full.pc : T_CODE + 4)) {
+			if (failed++ < 5)
+				t_fail(__FILE__, __LINE__,
+				       "instr 0x%08x, fs 0x%016llx, ft 0x%016llx, FCR31 0x%08x: "
+				       "fd 0x%016llx/0x%016llx, FCR31 0x%08x/0x%08x (completo/ejecutado)",
+				       instr, (unsigned long long)a, (unsigned long long)b, fcr31,
+				       (unsigned long long)fz_full.fpr[fd], (unsigned long long)CPU->fpr[fd],
+				       fz_full.fcr31, CPU->fcr31);
+		}
+	}
+}
+
 void t_suite_cop1(void)
 {
 	RUN(cop1_unusable);
@@ -698,4 +759,5 @@ void t_suite_cop1(void)
 	RUN(overflow_by_mode);
 	RUN(flush_tiny_results);
 	RUN(fast_path_matches_full);
+	RUN(executed_matches_full);
 }

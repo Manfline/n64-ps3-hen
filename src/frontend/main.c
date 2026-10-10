@@ -4,8 +4,10 @@
  * Carga una ROM, la arranca por HLE y la emula en dos hilos del PPE
  * (docs/hilos-ppe.md):
  *
- *   emulación     (emu_thread, prioridad 1000): corre el intérprete hasta el
- *                 fin de cada campo del VI, aplica los controles al PIF, copia
+ *   emulación     (emu_thread, prioridad 1000): corre el CPU (recompilador,
+ *                 o el intérprete en RPCS3 o con el archivo SALSA64_NOREC_FLAG;
+ *                 ver platform/ps3/rec_cache.h) hasta el fin de cada campo del
+ *                 VI, aplica los controles al PIF, copia
  *                 la imagen del VI y encola el campo; las tareas gráficas del
  *                 RSP van por HLE al SPE 0 (src/platform/ps3/gfx_spu.c) y su
  *                 salida queda en la cola de src/rdp.
@@ -77,12 +79,14 @@
 #include <spukit/spukit.h>
 
 #include "core/boot.h"
+#include "cpu/rec.h"
 #include "gfxtest_rom_bin.h"
 #include "pacer.h"
 #include "padmap.h"
 #include "platform/ps3/autotest.h"
 #include "platform/ps3/gfx_spu.h"
 #include "platform/ps3/log.h"
+#include "platform/ps3/rec_cache.h"
 #include "rdp/rdp.h"
 #include "rsp/gfx/hle.h"
 #include "replay.h"
@@ -119,6 +123,8 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define WAKE_US      4000  /* el hilo de presentación revisa controles y colas al menos cada tanto */
 
 static struct salsa64_n64 n64;
+static struct salsa64_rec rec;
+static bool use_rec;  /* el CPU corre con el recompilador */
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
 static struct salsa64_save save;
 static struct savefile save_file;
@@ -799,6 +805,15 @@ static void stats(uint64_t now, int gfx_on_spu, const struct salsa64_boot_info *
 				    (gfx_spu.t_load - gfx_load0) * k);
 		}
 	}
+	if (use_rec) {
+		const struct salsa64_rec_stats *st = &rec.stats;
+		salsa64_log("recompilador: %llu bloques, %u KB de caché, %llu entradas, %llu enlaces, "
+			    "%llu invalidados, %llu vaciados, %llu instr. interpretadas",
+			    (unsigned long long)st->compiled, salsa64_rec_used(&rec) / 256,
+			    (unsigned long long)st->entries, (unsigned long long)st->linked,
+			    (unsigned long long)st->invalidated, (unsigned long long)st->flushes,
+			    (unsigned long long)st->interp_steps);
+	}
 	gfx_vtx0 = gfx_spu.t_vtx;
 	gfx_state0 = gfx_spu.t_state;
 	gfx_tex0 = gfx_spu.t_tex;
@@ -911,6 +926,16 @@ int main(void)
 		    info.kind == SALSA64_BOOT_ELF ? "ELF (IPL3 libre)" : "carga plana",
 		    info.entry, info.tv == SALSA64_TV_PAL ? "PAL" : info.tv == SALSA64_TV_MPAL ? "MPAL" : "NTSC");
 	savefile_open(&save_file, &save, &n64.bus, rom, SAVES_DIR, SAVE_CFG, SALSA64_SAVE_AUTO, salsa64_log);
+
+	rec.opts = SALSA64_REC_OPT_PIN;  /* +7 % en nemu64-test (docs/perf-log.md) */
+	if (!salsa64_ps3_rec_wanted())
+		salsa64_log("recompilador apagado (%s): intérprete", SALSA64_NOREC_FLAG);
+	else if (!(use_rec = salsa64_rec_init(&rec, &n64.cpu, salsa64_ps3_rec_cache(), SALSA64_REC_CACHE_BYTES)))
+		salsa64_log("recompilador no disponible: intérprete");
+	else
+		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x",
+			    SALSA64_REC_CACHE_BYTES >> 20, salsa64_ps3_rec_cache(), rec.calls_near ? "con bl" : "por mtctr",
+			    rec.opts);
 
 	ioPadInit(7);
 	load_padmap();

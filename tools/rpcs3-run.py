@@ -33,6 +33,9 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 RPCS3 = os.environ.get("RPCS3", "/Applications/RPCS3.app/Contents/MacOS/rpcs3")
 LOGDIR = pathlib.Path.home() / "Library/Caches/rpcs3"
 AUTOTEST_FLAG = pathlib.Path.home() / "Library/Application Support/rpcs3/dev_hdd0/salsa64/autotest"
+# RPCS3 no ejecuta código generado: el recompilador se apaga con este archivo
+# (src/platform/ps3/rec_cache.h). En la PS3 real no existe.
+NOREC_FLAG = AUTOTEST_FLAG.parent / "sin-recompilador"
 EMBED_FILE = AUTOTEST_FLAG.parent / "embedded"
 CONFIG = ROOT / "tools/rpcs3/salsa64.yml"
 EXIT_GRACE = 30  # segundos para que RPCS3 se cierre solo tras RESULTADO
@@ -69,6 +72,7 @@ def run_once(elf: pathlib.Path, config: pathlib.Path, timeout: float, keep_lines
     """Devuelve 'resultado', 'salio' (terminó sin RESULTADO), 'fatal' o 'timeout'."""
     AUTOTEST_FLAG.parent.mkdir(parents=True, exist_ok=True)
     AUTOTEST_FLAG.touch()
+    NOREC_FLAG.touch()
     tty = LOGDIR / "TTY.log"
     rlog = LOGDIR / "RPCS3.log"
     for old in (tty, rlog):  # el de la corrida anterior podría tener un fatal

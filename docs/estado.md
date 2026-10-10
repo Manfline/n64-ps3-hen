@@ -42,6 +42,58 @@ Pendiente:
       vuelva a programar en vez de bloquear (`src/core/rsp.c`, Fase 3).
 - [ ] Menú y audio en el hilo de presentación (trabajos aparte).
 
+## 2026-10-10 — Fase 3: recompilador MIPS → PPC64 en el PPE (×4,4 con código real)
+
+Hecho (diseño y decisión en docs/rec-ppe.md, números en docs/perf-log.md):
+- **Decisión: recompilador propio.** Not64 y Wii64 (GPLv2+, commits en
+  docs/THIRD_PARTY.md) se revisaron y descartaron como base: emisor de 32
+  bits con pares hi/lo, EABI de la Wii, globales de mupen64, Count solo en
+  saltos y FPU sin FCR31. Se usaron solo como referencia de diseño.
+- `src/cpu/rec.c`, `rec_emit.c`, `rec.h`, `ppc.h`: bloques desde KSEG0
+  hasta un salto con su delay slot; en nativo solo si caben antes del
+  próximo evento, así que eventos, Count, interrupciones y excepciones caen
+  en el mismo ciclo que con el intérprete. 12 registros MIPS por bloque,
+  escritura temprana (contra el load-hit-store entre bloques), enlaces
+  parcheados, JR/JALR sin volver a C, invalidación por código escrito
+  (también desde el intérprete, DMA del PI/SI/SRAM y cargador), FPU nativa
+  con las mismas causas de FCR31 que el intérprete, bucles de espera con la
+  misma consulta que `idle.c`. Lo raro (LWL/LWR, COP0, conversiones de la
+  FPU, TLB, KSEG1, modo usuario) lo corre el intérprete.
+- Caché en la cola NOBITS de 16 MB del segmento de texto
+  (`mk/rec-cache.ld`): llamadas a C con `bl` directo. Estado: 6,3 MB.
+- Pruebas en la Mac sin PS3: Linux ppc64 + qemu (`tools/test-rec.sh`,
+  `docker/ppc64.Dockerfile`): las 197 unitarias también con el recompilador
+  en modo estricto; nemu64-test con la línea base; vitest OK; `salsa64-run
+  --lockstep` compara contra el intérprete bloque a bloque (sin
+  diferencias en nemu64-test).
+- **PS3 real** (f7b655d): 163/163 unitarias ejecutando código generado;
+  nemu64-test 7,9 s → 1,8 s (**×4,36, 104 MIPS**) con las mismas fallas y
+  el mismo ciclo final; bench mixto 21,3 → 156,6 MIPS.
+- RPCS3 no ejecuta código generado: ahí se apaga
+  (`/dev_hdd0/salsa64/sin-recompilador`, lo crea `tools/rpcs3-run.py`).
+- Merges de main (controles, bucles de espera, guardado, Fase 2 gráfica)
+  sin regresiones; el DMA del SP, del SI y de la SRAM avisan al
+  recompilador.
+- Registros fijos (sp, ra, v0, v1, a0–a3) activos en el frontend: +7 % en
+  nemu64-test (×4,45 del intérprete); los bucles toman prestados los que no
+  usan. La escritura temprana no compensó: opción apagada.
+- **Zelda OoT en la PS3 real con el recompilador: 41–60 campos/s** (con el
+  intérprete 15–17), 4–14 ms de emulación por campo; se ve igual. Donde no
+  llega a 60, el PPE espera a la HLE gráfica del SPE.
+- vitest en el frontend: 60 campos/s, 2,9–5,4 ms de emulación por campo.
+- Paquetes de prueba con APPID propio: SLSA00063 «Salsa64 recompilador»
+  (frontend) y SLSA00065 «Salsa64 CPU recompilador» (cpu-tests con cuatro
+  variantes del recompilador y nemu64-test contra el intérprete).
+
+Siguiente:
+- [ ] Medir en la PS3 el préstamo de registros fijos en bucles (bench
+      enteros con registros fijos: esperado ~750 MIPS, antes 128).
+- [ ] Más juegos de la tabla de docs/proyecto.md (SM64, MK64, SF64; GoldenEye y
+      Perfect Dark usan TLB: hoy ese código va al intérprete).
+- [ ] Más en nativo: CVT/TRUNC/ROUND de la FPU, LWL/LWR/SWL/SWR, CACHE,
+      MFC0 sin salir del bloque; código por TLB (GoldenEye) y KSEG1.
+- [ ] Fase 2: el DMA del SP hacia la RDRAM tiene que llamar a
+      `salsa64_bus_rdram_written`.
 ## 2026-10-10 — Fase 2 (parte gráfica): criterio cumplido en PS3 real
 
 Hecho (rama `reverent-leavitt-d0f943`, integrada en main después del

@@ -16,6 +16,7 @@
  */
 #include <stdio.h>
 
+#include "cpu/rec.h"
 #include "test.h"
 
 #define LOOP_TAIL(delay) ADDIU(T5, T5, -1), BNE(T5, ZERO, -9), delay
@@ -94,6 +95,9 @@ static const struct bench_case cases[] = {
 void salsa64_unit_bench(void (*print)(const char *line), uint64_t (*now_us)(void))
 {
 	char line[160];
+	struct salsa64_rec *rec = CPU->rec;
+	if (rec)
+		rec->strict = false;  /* como en un juego: lo que no cabe antes de un evento, al intérprete */
 
 	for (unsigned k = 0; k < sizeof cases / sizeof cases[0]; k++) {
 		const struct bench_case *c = &cases[k];
@@ -115,8 +119,8 @@ void salsa64_unit_bench(void (*print)(const char *line), uint64_t (*now_us)(void
 			us = 1;
 
 		snprintf(line, sizeof line,
-			 "bench: %-8s %3llu M instr. en %6llu ms = %4llu.%01llu MIPS, %5llu.%01llu ns/instr.",
-			 c->name, (unsigned long long)(c->instructions / 1000000),
+			 "bench%s: %-8s %3llu M instr. en %6llu ms = %4llu.%01llu MIPS, %5llu.%01llu ns/instr.",
+			 rec ? " rec" : "", c->name, (unsigned long long)(c->instructions / 1000000),
 			 (unsigned long long)(us / 1000),
 			 (unsigned long long)(c->instructions / us),
 			 (unsigned long long)(c->instructions * 10 / us % 10),
