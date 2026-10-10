@@ -201,3 +201,23 @@ etapa salen del decrementador del SPE (`gfx_result.t_*`):
   formato con SIMD.
 - La traducción al RSX en el PPE cuesta 0,2–0,4 ms por tarea.
 - Misma escena en RPCS3: 16 ms por tarea en el SPE (no concluyente).
+
+**Super Mario 64 en PS3 real** (2026-10-10, respaldo del usuario, USA/NTSC,
+fuera del repo; commit d0bc043, paquete «Salsa64 F3D» SLSA00071, HLE de F3D
+en el SPE 0, intérprete del CPU). Ventanas de 5 s del log del frontend:
+
+| Escena | Campos/s | Emulación por campo | Por tarea gráfica | HLE en el SPE | Vértices | Estado (texturas) | Cargas a la TMEM |
+|---|---|---|---|---|---|---|---|
+| Arranque y logo, campos 0–~290 | 57,1 (95 %) | 3,0 ms | 7 dibujos, 1002 triángulos | 1,49 ms | 0,45 ms | 0,36 ms (0,34) | 0,09 ms |
+| Paso del logo a la cara, campos ~290–460 | 32,7 (55 %) | 22,1 ms | 36 dibujos, 877 triángulos | 4,55 ms | 1,02 ms | 0,74 ms (0,52) | 1,86 ms |
+| Cara de Mario, campos ~460–660 | 40,0 (67 %) | 23,8 ms | 57 dibujos, 1324 triángulos | 6,89 ms | 1,44 ms | 1,04 ms (0,65) | 3,07 ms |
+| Selección de archivo | 60,1 (100 %) | 5,5 ms | 86 dibujos, 328 triángulos | 2,81 ms | 0,21 ms | 1,58 ms (1,06) | 0,56 ms |
+
+- A diferencia de Zelda, el CPU solo pesa en la cara de Mario (la anima el
+  CPU: 15 MIPS y 76 % en bucles de espera): 67 % de NTSC. El logo y la
+  selección de archivo van a velocidad completa con el intérprete.
+- En el SPE pesan las cargas a la TMEM de la cara (3 ms por tarea) y el
+  estado de dibujo con muchas texturas (selección de archivo); la
+  traducción al RSX en el PPE, 0,1–0,2 ms por tarea.
+- gfxtest en F3D en la misma consola: 0,18 ms por tarea en el SPE, como en
+  F3DEX2.

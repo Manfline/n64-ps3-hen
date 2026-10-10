@@ -1,5 +1,51 @@
 # Estado
 
+## 2026-10-10 — F3D (Super Mario 64) y F3DEX 1.x
+
+Hecho (rama `lucid-pare-4f93fb`, sin integrar):
+- HLE de la primera generación de microcódigos en `src/rsp/gfx/f3d.c`: F3D
+  (Fast3D: búfer de 16 vértices, índices ×10, G_TRI1, G_MTX con sus
+  banderas, G_MOVEMEM/G_MOVEWORD con sus índices, geometry mode en dos
+  comandos con otros bits, G_SETOTHERMODE_* directo, TEXRECT con
+  G_RDPHALF_2 + G_RDPHALF_CONT) y F3DEX 1.x (búfer de 32, índices ×2,
+  G_TRI2, G_QUAD, G_MODIFYVTX, G_CULLDL, G_BRANCH_Z, G_LOAD_UCODE). Lo
+  común salió de `f3dex2.c` a `dl.c` y `geom.c` sin cambiar F3DEX2 (mismas
+  31566 verificaciones). `rsp.c` manda F3D y F3DEX al backend. En el SPE 0
+  son 3,3 KB de código (presupuesto en `src/spu/gfx/main.c`).
+- Pruebas: 11 nuevas en el host (`tests/unit/test_gfx_f3d.c`) más la
+  detección y el despacho en `test_rsp.c`: 223 en total.
+- gfxtest en tres variantes (`tools/build-gfxtest.sh`; `GBI=` en su
+  Makefile): F3DEX2 (la ROM sale idéntica), F3D y F3DEX. En el host las tres
+  dan 19 de 19 puntos y la misma imagen (`tools/test-roms.sh`, que además
+  falla si hay comandos sin implementar); la de F3D también en RPCS3
+  (`tools/test-phase2.sh`) y en la **PS3 real** (`RESULTADO frontend: OK`,
+  0,18 ms por tarea en el SPE). El frontend verifica la pantalla de las
+  variantes cargadas con `file:salsa64-gfxtest-*.z64` como la embebida.
+- **SM64** (respaldo propio, USA, fuera del repo): en el host llega al
+  título y a las demos (Bowser, Whomp's Fortress) sin comandos sin
+  implementar ni errores en 2 minutos; en la **PS3 real** el autor confirmó
+  el título y la selección de archivo («todo se ve bien»). Mediciones en
+  docs/perf-log.md: velocidad completa en el logo y en la selección de
+  archivo, 67 % de NTSC en la cara de Mario (la anima el CPU).
+- Arreglo en `src/rdp/rdp.c` (3729f8f): unos cuadros con franjas de
+  colores en el paso del logo a la cara. SM64 apaga el VI 26 campos al
+  cambiar de escena; lo dibujado entonces quedaba marcado con el campo de
+  antes del apagado y el frontend, al volver la imagen, presentaba la RDRAM.
+  Simulado con la traza del host: de 17 campos sin imagen del RSX a 0.
+
+Pendiente:
+- [ ] Confirmar en la PS3 el arreglo de la transición (paquete «Salsa64
+      F3D», SLSA00071) y dejar `embedded` como estaba (`vitest`).
+- [ ] Combiners aproximados en las demos de SM64 (cientos por minuto):
+      ver cuáles son (`combine.c`).
+- [ ] F3DEX 1.x solo está probado con listas sintéticas y gfxtest: falta
+      un juego que lo use. G_LINE3D de F3D (no lo usa SM64) sin
+      implementar.
+- Para correr un respaldo en el host sin copiarlo: colima no comparte
+  todas las carpetas del host, así que `salsa64-run` se compila nativo en la
+  Mac (`make -C src/host OUT=$PWD/build/host-mac CC=clang SAN=`) y lee la
+  ROM en su lugar.
+
 ## 2026-10-10 — Fase 2 (parte gráfica): criterio cumplido en PS3 real
 
 Hecho (rama `reverent-leavitt-d0f943`, integrada en main después del
@@ -29,8 +75,9 @@ guardado y los controles):
 Pendiente:
 - [ ] Caché de texturas entre tareas y decodificación por formato en el SPE
       (medir antes/después en la PS3).
-- [ ] F3D (Super Mario 64) y casos de Cell64 (espada Kokiri sin textura,
-      fuente de la pantalla de nombre).
+- [x] F3D (Super Mario 64): ver la entrada de arriba.
+- [ ] Casos de Cell64 (espada Kokiri sin textura, fuente de la pantalla de
+      nombre).
 - [ ] Al integrar con la Fase 3: `sp_dma` hacia la RDRAM debe llamar
       `salsa64_bus_rdram_written`.
 - [ ] «NO CONTROLLER» en Zelda: el control por SI/PIF ya está integrado;
