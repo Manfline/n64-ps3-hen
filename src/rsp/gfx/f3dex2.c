@@ -230,7 +230,9 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 	g->target_sent = false;
 	g->dirty = true;
 	g->vtx_count = 0;
-	g->ntexcache = 0;
+	g->narena_tex = 0;
+	memset(g->tilememo, 0, sizeof g->tilememo);
+	gfx_tc_begin(g);
 	gfx_io_begin(g);
 
 	uint32_t pc = job->dl & 0x00FFFFFF;

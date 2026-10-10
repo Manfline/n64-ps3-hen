@@ -28,6 +28,9 @@
 #define GFXTEST_FAIL_TEXT  "gfxtest: FALLO"
 /* Cuadros que dibuja antes de reportar. */
 #define GFXTEST_FRAMES 120
+/* Cuadro en que el CPU cambia una textura y una paleta en la RDRAM (la
+ * caché de texturas debe notarlo). */
+#define GFXTEST_CHANGE_FRAME 60
 
 struct gfxtest_point {
 	unsigned short x, y;
@@ -58,6 +61,9 @@ struct gfxtest_point {
 	{ 255, 120, GFXTEST_BG, "G_CULL_FRONT: antihorario no se ve" },                \
 	{ 290, 120, 0xFF00FF, "G_CULL_FRONT: horario se ve" },                          \
 	{ 80, 217, 0x800080, "2 ciclos, 2 texturas: lerp(rojo, azul, 0,5)" },          \
-	{ 295, 15, 0xFF8000, "w = 1000: PRIM·TEXEL0_ALPHA" },
+	{ 295, 15, 0xFF8000, "w = 1000: PRIM·TEXEL0_ALPHA" },                          \
+	{ 271, 221, 0x00FF00, "textura cambiada en la RDRAM: texel (0,0)" },            \
+	{ 277, 227, 0xFF00FF, "textura cambiada en la RDRAM: texel (3,3), nuevo" },    \
+	{ 255, 221, 0xFF8400, "paleta cambiada en la RDRAM: índice 5, nuevo" },
 
 #endif

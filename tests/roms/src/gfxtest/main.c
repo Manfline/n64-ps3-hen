@@ -17,8 +17,10 @@
  * perspectiva que gira, un cuadro con mapeo de entorno (G_TEXTURE_GEN) y
  * cuatro cuadros de culling (antihorario y horario con G_CULL_BACK y con
  * G_CULL_FRONT: se ven dos), un cuadro de 2 ciclos con dos texturas
- * mezcladas por el alfa primitivo (TEXEL0 en la tile 0, TEXEL1 en la 1) y
- * un cuadro con w = 1000 coloreado por PRIM·TEXEL0_ALPHA.
+ * mezcladas por el alfa primitivo (TEXEL0 en la tile 0, TEXEL1 en la 1),
+ * un cuadro con w = 1000 coloreado por PRIM·TEXEL0_ALPHA y dos TEXRECT cuya
+ * textura (L) y paleta (M) cambia el CPU en la RDRAM en el cuadro
+ * GFXTEST_CHANGE_FRAME (prueba de la caché de texturas entre tareas).
  *
  * Se verifica sola en lo que el CPU puede ver: que cada tarea termine con
  * SP_STATUS en HALT|BROKE|TASKDONE, que llegue la interrupción del SP y
@@ -120,6 +122,8 @@ struct rsp_data {
 	uint8_t glyph[16 * 8 / 2];
 	uint8_t ci[16 * 4 / 2];
 	uint16_t palette[16];
+	uint16_t chg[4 * 4] __attribute__((aligned(8)));
+	uint16_t pal2[16] __attribute__((aligned(8)));
 } __attribute__((aligned(64)));
 
 static struct rsp_data rsp_mem __attribute__((section(".rsp")));
@@ -290,6 +294,19 @@ static void init_data(void)
 			r->ci[(y * 16 + x) / 2] = (uint8_t)(x << 4 | (x + 1));
 	for (int i = 0; i < 16; i++)
 		r->palette[i] = rgba16((unsigned)i * 2, (unsigned)i * 2, (unsigned)i * 2);
+	/* L y M (expect.h): verde y una paleta con el índice 5 azul; el cuadro
+	 * GFXTEST_CHANGE_FRAME cambia el texel (3,3) y el índice 5. */
+	for (int i = 0; i < 16; i++) {
+		r->chg[i] = rgba16(0, 31, 0);
+		r->pal2[i] = i == 5 ? rgba16(0, 0, 31) : rgba16(31, 31, 31);
+	}
+}
+
+static void change_textures(void)
+{
+	volatile struct rsp_data *r = R;
+	r->chg[15] = rgba16(31, 0, 31);
+	r->pal2[5] = rgba16(31, 16, 0);
 }
 
 static void load_checker(gfx **dl, unsigned cm, unsigned filter)
@@ -496,6 +513,34 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	sp_tri2(&dl, 0, 1, 2, 0, 2, 3);
 	sp_texture(&dl, 0, 0, 0, 0);
 
+	/* L: TEXRECT ×2 con una textura RGBA16 de 4×4 que cambia el CPU. */
+	dp_texture_image(&dl, FMT_RGBA, SIZ_16, 1, r->chg);
+	dp_tile(&dl, FMT_RGBA, SIZ_16, 0, 0, 7, 0, 0, 0, 0);
+	dp_sync(&dl, SYNC_LOAD);
+	dp_load_block(&dl, 7, 16, 2048);
+	dp_sync(&dl, SYNC_PIPE);
+	dp_tile(&dl, FMT_RGBA, SIZ_16, 1, 0, 0, 0, 0, 2, 0);
+	dp_tile_size(&dl, 0, 0, 0, 3, 3);
+	dp_othermode(&dl, CYC_1CYCLE | TF_POINT, BL_XLU);
+	dp_combine(&dl, CC_A_0, CC_B_0, CC_C_0, CC_TEXEL0, CCA_0, CCA_0, CCA_0, CC_D_1);
+	sp_texrect(&dl, 0, 270, 220, 278, 228, 0, 0, 512, 512);
+
+	/* M: como F, con la paleta que cambia el CPU. */
+	dp_texture_image(&dl, FMT_RGBA, SIZ_16, 1, r->pal2);
+	dp_tile(&dl, FMT_RGBA, SIZ_4, 0, 0x100, 7, 0, 0, 0, 0);
+	dp_sync(&dl, SYNC_LOAD);
+	dp_load_tlut(&dl, 7, 16);
+	dp_sync(&dl, SYNC_PIPE);
+	dp_texture_image(&dl, FMT_CI, SIZ_16, 1, r->ci);
+	dp_tile(&dl, FMT_CI, SIZ_16, 0, 0, 7, 0, 0, 0, 0);
+	dp_sync(&dl, SYNC_LOAD);
+	dp_load_block(&dl, 7, 16, 2048);
+	dp_sync(&dl, SYNC_PIPE);
+	dp_tile(&dl, FMT_CI, SIZ_4, 1, 0, 0, 0, 2, 0, 0);
+	dp_tile_size(&dl, 0, 0, 0, 15, 3);
+	dp_othermode(&dl, CYC_COPY | TT_RGBA16, 0);
+	sp_texrect(&dl, 0, 250, 220, 265, 223, 0, 0, 4 << 10, 1 << 10);
+
 	dp_sync(&dl, SYNC_FULL);
 	sp_end(&dl);
 	return start;
@@ -642,6 +687,8 @@ int main(void)
 
 	for (;;) {
 		uint16_t *color = fb[cur];
+		if (frame == GFXTEST_CHANGE_FRAME)
+			change_textures();
 		gfx *dl = build_dl(color, frame);
 		uint32_t dl_bytes = 8 * 1024;
 

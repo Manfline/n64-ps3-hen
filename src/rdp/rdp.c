@@ -7,6 +7,11 @@
  * traduce. Un juego de búferes queda libre cuando se tradujo (contador
  * `translated`) y el RSX pasó su barrera (`fence`, que el hilo de
  * emulación consulta con rsxkit_fence_done: solo lee una etiqueta).
+ *
+ * Caché de texturas (gfx.h): otra región mapeada que administra la HLE.
+ * La tarea n lleva el número n + 1 y, como done_task, la última tarea
+ * cuya barrera ya pasó, nunca la última traducida (salsa64_rdp_dump lee
+ * sus texturas).
  */
 #include "rdp/rdp.h"
 
@@ -23,7 +28,9 @@
 #define CMD_BYTES   (512u << 10)
 #define TEX_BYTES   (4u << 20)
 #define SET_BYTES   (VTX_BYTES + CMD_BYTES + TEX_BYTES)
-#define POOL_BYTES  (((SETS * SET_BYTES) + 0xFFFFFu) & ~0xFFFFFu)
+#define SETS_BYTES  (((SETS * SET_BYTES) + 0xFFFFFu) & ~0xFFFFFu)
+#define CACHE_BYTES (8u << 20)  /* caché de texturas (docs/memory-budget.md) */
+#define POOL_BYTES  (SETS_BYTES + CACHE_BYTES)
 #define MAX_TARGETS 4
 #define MAX_DEPTHS  2
 #define STALE_FIELDS 30  /* un destino sin dibujar en tantos campos ya no se presenta */
@@ -41,6 +48,7 @@ struct set {
 	uint8_t *vtx, *cmd, *tex;
 	uint32_t vtx_off, tex_off;  /* offsets del RSX */
 	uint32_t fence;             /* la pone el hilo de presentación al traducir */
+	volatile uint32_t fence_task;  /* número de la tarea antes de `fence` */
 	struct gfx_result res;      /* la deja done; la lee flush */
 };
 
@@ -67,6 +75,9 @@ static struct {
 	uint32_t scale;
 	uint8_t *pool;
 	uint32_t pool_off;
+	uint8_t *cache;              /* región de la caché de texturas */
+	uint32_t cache_off;
+	uint32_t done_task;          /* última tarea que el RSX terminó (hilo de emulación) */
 	struct set sets[SETS];
 	/* Tareas: acquire y done avanzan `acquired` y `finished` (hilo de
 	 * emulación); flush avanza `translated` (presentación). La tarea n usa
@@ -106,6 +117,8 @@ int salsa64_rdp_init(uint32_t scale)
 		s->vtx_off = rdp.pool_off + base;
 		s->tex_off = rdp.pool_off + base + VTX_BYTES + CMD_BYTES;
 	}
+	rdp.cache = rdp.pool + SETS_BYTES;
+	rdp.cache_off = rdp.pool_off + SETS_BYTES;
 	rdp.ready = true;
 	return RSXKIT_OK;
 }
@@ -153,6 +166,22 @@ static void acquire(void *ctx, struct gfx_job *job)
 		if (t0)
 			rdp.stats.us_set_wait += sysGetSystemTime() - t0;
 	}
+	/* Tareas que el RSX ya terminó: la de cada juego cuya barrera pasó (las
+	 * hace en orden). fence_task se lee antes que fence: si es la nueva,
+	 * fence también lo es (translate las escribe al revés). */
+	for (unsigned k = 0; k < SETS; k++) {
+		uint32_t ft = rdp.sets[k].fence_task;
+		lwsync();
+		if (ft && (int32_t)(ft - rdp.done_task) > 0 && rsxkit_fence_done(rdp.sets[k].fence))
+			rdp.done_task = ft;
+	}
+	uint32_t last = rdp.translated, done = rdp.done_task;
+	if ((int32_t)(done - (last - 1)) > 0)
+		done = last - 1;
+	job->task = n + 1;
+	job->done_task = done;
+	job->cache_ea = (uint64_t)(uintptr_t)rdp.cache;
+	job->cache_cap = CACHE_BYTES;
 	job->vtx_ea = (uint64_t)(uintptr_t)s->vtx;
 	job->vtx_cap = VTX_BYTES;
 	job->cmd_ea = (uint64_t)(uintptr_t)s->cmd;
@@ -290,7 +319,7 @@ static void to_rsxkit(const struct gfx_draw *g, const struct set *s, rsxkit_draw
 	for (int i = 0; i < d->ntex; i++) {
 		const struct gfx_tex *gt = &g->tex[i];
 		rsxkit_texture *t = &d->tex[i];
-		t->offset = s->tex_off + gt->offset;
+		t->offset = (gt->where == GFX_TEX_CACHE ? rdp.cache_off : s->tex_off) + gt->offset;
 		t->pitch = gt->pitch;
 		t->width = gt->width;
 		t->height = gt->height;
@@ -358,6 +387,8 @@ static void translate(uint32_t n)
 		off += c->size;
 	}
 	s->fence = rsxkit_fence();
+	lwsync();
+	s->fence_task = n + 1;
 	rdp.last_res = *res;
 	rdp.last_set = (unsigned)(s - rdp.sets);
 	rdp.stats.tasks++;
@@ -411,14 +442,55 @@ bool salsa64_rdp_dump(const char *path)
 	if (!rdp.ready || !rdp.last_res.cmd_bytes)
 		return false;
 	const struct set *s = &rdp.sets[rdp.last_set];
-	FILE *f = fopen(path, "wb");
-	if (!f)
+	const struct gfx_result *r = &rdp.last_res;
+	uint32_t max = 2 * (r->cmd_bytes / sizeof(struct gfx_draw)) + 1;
+	uint8_t *cmd = malloc(r->cmd_bytes);
+	uint32_t *src = malloc(max * 2 * sizeof *src), *len = src + max;
+	if (!cmd || !src) {
+		free(cmd);
+		free(src);
 		return false;
-	struct gfx_dump_header h = { GFX_DUMP_MAGIC, rdp.last_res.cmd_bytes, rdp.last_res.vtx_bytes,
-				     rdp.last_res.tex_bytes };
-	bool ok = fwrite(&h, sizeof h, 1, f) == 1 && fwrite(s->cmd, 1, h.cmd_bytes, f) == h.cmd_bytes &&
-		  fwrite(s->vtx, 1, h.vtx_bytes, f) == h.vtx_bytes && fwrite(s->tex, 1, h.tex_bytes, f) == h.tex_bytes;
-	fclose(f);
+	}
+	memcpy(cmd, s->cmd, r->cmd_bytes);
+	/* Las texturas de la caché se copian detrás del arena (una vez cada
+	 * una) y los dibujos pasan a apuntar ahí. */
+	uint32_t arena = (r->tex_bytes + 127) & ~127u, tex_bytes = arena, n = 0;
+	for (uint32_t off = 0; off + sizeof(struct gfx_cmd) <= r->cmd_bytes;) {
+		struct gfx_cmd *c = (struct gfx_cmd *)(cmd + off);
+		if (c->op == GFX_OP_END || c->size < sizeof *c)
+			break;
+		struct gfx_draw *d = (struct gfx_draw *)c;
+		for (int i = 0; c->op == GFX_OP_DRAW && i < d->ntex && i < 2; i++) {
+			struct gfx_tex *t = &d->tex[i];
+			if (t->where != GFX_TEX_CACHE)
+				continue;
+			uint32_t k = 0, dst = arena;
+			while (k < n && src[k] != t->offset)
+				dst += (len[k++] + 127) & ~127u;
+			if (k == n && n < max) {
+				src[n] = t->offset;
+				len[n++] = (uint32_t)t->pitch * t->height;
+				tex_bytes += (len[k] + 127) & ~127u;
+			}
+			t->where = GFX_TEX_ARENA;
+			t->offset = dst;
+		}
+		off += c->size;
+	}
+	FILE *f = fopen(path, "wb");
+	static const uint8_t zero[128];
+	struct gfx_dump_header h = { GFX_DUMP_MAGIC, r->cmd_bytes, r->vtx_bytes, tex_bytes };
+	bool ok = f && fwrite(&h, sizeof h, 1, f) == 1 && fwrite(cmd, 1, h.cmd_bytes, f) == h.cmd_bytes &&
+		  fwrite(s->vtx, 1, h.vtx_bytes, f) == h.vtx_bytes && fwrite(s->tex, 1, r->tex_bytes, f) == r->tex_bytes &&
+		  fwrite(zero, 1, arena - r->tex_bytes, f) == arena - r->tex_bytes;
+	for (uint32_t k = 0; ok && k < n; k++) {
+		uint32_t pad = ((len[k] + 127) & ~127u) - len[k];
+		ok = fwrite(rdp.cache + src[k], 1, len[k], f) == len[k] && fwrite(zero, 1, pad, f) == pad;
+	}
+	if (f)
+		fclose(f);
+	free(cmd);
+	free(src);
 	return ok;
 }
 
