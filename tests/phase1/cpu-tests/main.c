@@ -6,9 +6,11 @@
  * aquí validan el camino big-endian (accesos directos a la RDRAM sin
  * byte-swap), el código que genera ppu-gcc y, en la PS3 real, el código que
  * genera el recompilador en la caché NOBITS (docs/rec-ppe.md). Después de
- * cada pasada corre el micro-benchmark. Tiempos en el log: solo valen en la
- * PS3 real (en RPCS3 no; ver docs/proyecto.md). En RPCS3 el recompilador queda
- * apagado (platform/ps3/rec_cache.h).
+ * cada pasada corre el micro-benchmark. Al final, nemu64-test completo con
+ * los dos (rombench.c): mismas pruebas fallidas y tiempo con código real.
+ * Tiempos en el log: solo valen en la PS3 real (en RPCS3 no; ver
+ * docs/proyecto.md). En RPCS3 el recompilador queda apagado
+ * (platform/ps3/rec_cache.h).
  */
 #include <ppu-types.h>
 #include <sys/process.h>
@@ -17,6 +19,7 @@
 #include "cpu/rec.h"
 #include "platform/ps3/log.h"
 #include "platform/ps3/rec_cache.h"
+#include "rombench.h"
 #include "test.h"
 
 SYS_PROCESS_PARAM(1001, 0x40000);
@@ -31,6 +34,14 @@ static void print_line(const char *line)
 static uint64_t now_us(void)
 {
 	return sysGetSystemTime();
+}
+
+static void log_rombench(const char *who, const struct rombench_result *r)
+{
+	salsa64_log("nemu64-test %s: %s; %u pruebas con falla (hash %016llx), %llu ciclos en %llu ms = %.1f MIPS",
+		    who, r->finished ? r->summary : "SIN TERMINAR", r->failed, (unsigned long long)r->names_hash,
+		    (unsigned long long)r->cycles, (unsigned long long)(r->us / 1000),
+		    r->us ? (double)r->cycles / (double)r->us : 0.0);
 }
 
 int main(void)
@@ -55,12 +66,38 @@ int main(void)
 			rec_state = rec.calls_near ? "activo, llamadas con bl" : "activo, llamadas por mtctr";
 			rec_failed = r;
 			salsa64_unit_bench(print_line, now_us);
+			salsa64_rec_detach(&rec);
 		}
 	}
 
+	/* nemu64-test completo: el intérprete es la referencia. */
+	static struct rombench_result ri, rr;
+	const char *rom_state = "sin comparar";
+	if (salsa64_rombench(&ri, NULL, NULL, 0, now_us))
+		log_rombench("intérprete", &ri);
+	if (salsa64_ps3_rec_wanted() && salsa64_rombench(&rr, &rec, salsa64_ps3_rec_cache(), SALSA64_REC_CACHE_BYTES,
+							  now_us)) {
+		log_rombench("recompilador", &rr);
+		const struct salsa64_rec_stats *st = &rec.stats;
+		salsa64_log("recompilador: %llu bloques, %u KB de caché, %llu entradas desde C, %llu enlaces, "
+			    "%llu invalidados, %llu vaciados, %llu instr. interpretadas",
+			    (unsigned long long)st->compiled, salsa64_rec_used(&rec) / 256,
+			    (unsigned long long)st->entries, (unsigned long long)st->linked,
+			    (unsigned long long)st->invalidated, (unsigned long long)st->flushes,
+			    (unsigned long long)st->interp_steps);
+		bool same = ri.finished && rr.finished && ri.failed == rr.failed &&
+			    ri.names_hash == rr.names_hash && ri.cycles == rr.cycles;
+		rom_state = same ? "iguales" : "DISTINTOS";
+		if (!same)
+			rec_failed++;
+		if (rr.us)
+			salsa64_log("nemu64-test: recompilador %.2fx más rápido que el intérprete",
+				    (double)ri.us / (double)rr.us);
+	}
+
 	salsa64_log("RESULTADO cpu-tests: %s (intérprete: %d pruebas fallidas, %u ms; recompilador %s: "
-		    "%d fallidas, %u ms)", failed || rec_failed ? "FALLO" : "OK", failed, (unsigned)(us / 1000),
-		    rec_state, rec_failed, (unsigned)(rec_us / 1000));
+		    "%d fallidas, %u ms; nemu64-test %s)", failed || rec_failed ? "FALLO" : "OK", failed,
+		    (unsigned)(us / 1000), rec_state, rec_failed, (unsigned)(rec_us / 1000), rom_state);
 	salsa64_log_shutdown();
 	return 0;
 }
