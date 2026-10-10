@@ -177,7 +177,8 @@ static float shift_scale(unsigned shift)
 static bool texture_state(struct gfx_state *g, struct gfx_draw *d, int tile, int slot, bool copy)
 {
 	struct gfx_tex *t = &d->tex[slot];
-	if (!gfx_tile_texture(g, tile & 7, t))
+	bool premul = (t->flags & GFX_TEX_PREMUL) != 0;  /* lo pidió gfx_combine */
+	if (!gfx_tile_texture(g, tile & 7, t, premul))
 		return false;
 	const struct gfx_tile *ti = &g->tiles[tile & 7];
 	bool bilinear = !copy && ((g->oh >> G_MDSFT_TEXTFILT) & 3) != G_TF_POINT;
@@ -186,7 +187,7 @@ static bool texture_state(struct gfx_state *g, struct gfx_draw *d, int tile, int
 							 : GFX_WRAP_CLAMP) |
 			     (ti->maskt && !(ti->cmt & 2) ? ((ti->cmt & 1) ? GFX_WRAP_MIRROR : GFX_WRAP_REPEAT)
 							   : GFX_WRAP_CLAMP) << 2 |
-			     (bilinear ? GFX_TEX_BILINEAR : 0));
+			     (bilinear ? GFX_TEX_BILINEAR : 0) | (premul ? GFX_TEX_PREMUL : 0));
 	float w = (float)t->width, h = (float)t->height;
 	t->xf[0] = shift_scale(ti->shifts) / w;
 	t->xf[1] = shift_scale(ti->shiftt) / h;

@@ -162,6 +162,7 @@ struct gfx_tex {
 #define GFX_TEX_WRAP_S(f)   ((f) & 3u)         /* GFX_WRAP_* */
 #define GFX_TEX_WRAP_T(f)   (((f) >> 2) & 3u)
 #define GFX_TEX_BILINEAR    0x10u
+#define GFX_TEX_PREMUL      0x20u  /* texels con RGB·A (combine.c) */
 enum { GFX_TEX_ARENA = 0, GFX_TEX_CACHE = 1 };
 enum { GFX_WRAP_CLAMP = 0, GFX_WRAP_REPEAT = 1, GFX_WRAP_MIRROR = 2 };
 

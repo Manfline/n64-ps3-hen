@@ -90,7 +90,7 @@ struct gfx_texcache {
  * cargas a la TMEM ni cambios de tiles (tex_gen) ni del modo de paleta. */
 struct gfx_tilememo {
 	uint32_t gen;
-	uint8_t tt, ok;
+	uint8_t tt, ok, premul;
 	struct gfx_tex tex;
 };
 
@@ -274,8 +274,9 @@ void gfx_load_block(struct gfx_state *g, uint32_t w0, uint32_t w1);
 void gfx_load_tile(struct gfx_state *g, uint32_t w0, uint32_t w1);
 void gfx_load_tlut(struct gfx_state *g, uint32_t w0, uint32_t w1);
 /* Decodifica la tile a RGBA8888 (o la toma de la caché) y llena `tex`
- * salvo flags y xf. false si no hay lugar. */
-bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex);
+ * salvo flags y xf; con premul, RGB·A (otra entrada de la caché). false si
+ * no hay lugar. */
+bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex, bool premul);
 /* Tamaño de la textura de una tile (potencia de 2 si se repite). */
 void gfx_tile_size(const struct gfx_tile *t, uint32_t *w, uint32_t *h);
 

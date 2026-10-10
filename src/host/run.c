@@ -210,6 +210,72 @@ void salsa64_debug_spmem(uint32_t reg, uint32_t v)
 
 static unsigned trace_rsp_left, trace_vi_left;
 
+/* --pad: botones del control 1 desde un campo dado (para llegar a una
+ * escena de juego sin manos). */
+#define PAD_EVENTS 64
+static struct {
+	uint32_t field;
+	struct salsa64_pad pad;
+} pad_ev[PAD_EVENTS];
+static unsigned pad_n, pad_next;
+
+/* "CAMPO:BOTONES[@X,Y];…" con BOTONES unidos por '+' (A B Z START L R DU DD
+ * DL DR CU CD CL CR) o '-' para ninguno. */
+static bool parse_pad(const char *s)
+{
+	static const struct {
+		const char *name;
+		uint16_t bit;
+	} names[] = {
+		{ "A", SALSA64_PAD_A }, { "B", SALSA64_PAD_B }, { "Z", SALSA64_PAD_Z },
+		{ "START", SALSA64_PAD_START }, { "L", SALSA64_PAD_L }, { "R", SALSA64_PAD_R },
+		{ "DU", SALSA64_PAD_D_UP }, { "DD", SALSA64_PAD_D_DOWN }, { "DL", SALSA64_PAD_D_LEFT },
+		{ "DR", SALSA64_PAD_D_RIGHT }, { "CU", SALSA64_PAD_C_UP }, { "CD", SALSA64_PAD_C_DOWN },
+		{ "CL", SALSA64_PAD_C_LEFT }, { "CR", SALSA64_PAD_C_RIGHT },
+	};
+	while (*s) {
+		if (pad_n >= PAD_EVENTS)
+			return false;
+		char *end;
+		unsigned long field = strtoul(s, &end, 0);
+		if (*end != ':')
+			return false;
+		s = end + 1;
+		struct salsa64_pad pad = { 0, 0, 0, 1 };
+		while (*s && *s != ';' && *s != '@') {
+			size_t n = strcspn(s, "+;@");
+			bool ok = n == 1 && *s == '-';
+			for (size_t i = 0; !ok && i < sizeof names / sizeof names[0]; i++)
+				if (strlen(names[i].name) == n && !strncmp(s, names[i].name, n)) {
+					pad.buttons |= names[i].bit;
+					ok = true;
+				}
+			if (!ok)
+				return false;
+			s += n;
+			if (*s == '+')
+				s++;
+		}
+		if (*s == '@') {
+			long x = strtol(s + 1, &end, 0);
+			if (*end != ',')
+				return false;
+			long y = strtol(end + 1, &end, 0);
+			pad.x = (int8_t)x;
+			pad.y = (int8_t)y;
+			s = end;
+		}
+		pad_ev[pad_n].field = (uint32_t)field;
+		pad_ev[pad_n].pad = pad;
+		pad_n++;
+		if (*s == ';')
+			s++;
+		else if (*s)
+			return false;
+	}
+	return true;
+}
+
 static void trace_rsp(void *ctx, const struct salsa64_task *t, enum salsa64_gbi gbi)
 {
 	(void)ctx;
@@ -659,7 +725,7 @@ static bool dump_frame(const char *path)
 }
 
 /* Opciones largas sin letra (códigos fuera de ASCII). */
-enum { OPT_REC = 0x100, OPT_LOCKSTEP };
+enum { OPT_REC = 0x100, OPT_LOCKSTEP, OPT_PAD };
 
 static void usage(FILE *out)
 {
@@ -685,6 +751,7 @@ static void usage(FILE *out)
 	      "      --gfxtest-check   verificar la imagen de la HLE con los puntos de gfxtest\n"
 	      "      --trace-rsp N     mostrar las primeras N tareas del RSP\n"
 	      "      --trace-vi N      mostrar la imagen del VI en los últimos N campos\n"
+	      "      --pad GUION       control 1 por campos: \"300:START;306:-;400:A+Z@0,80\"\n"
 	      "      --raster-dump F   dibujar un volcado de la HLE de la PS3 (gfxdump.bin) en\n"
 	      "                        --gfx-frame y salir (sin ROM)\n", out);
 }
@@ -711,6 +778,7 @@ int main(int argc, char **argv)
 		{ "gfxtest-check", no_argument, NULL, 'K' },
 		{ "trace-rsp", required_argument, NULL, 'P' },
 		{ "trace-vi", required_argument, NULL, 'V' },
+		{ "pad", required_argument, NULL, OPT_PAD },
 		{ "trace-gfx", required_argument, NULL, 'Q' },
 		{ "raster-dump", required_argument, NULL, 'D' },
 		{ "help", no_argument, NULL, 'h' },
@@ -762,6 +830,12 @@ int main(int argc, char **argv)
 		case 'K': gfx_check = true; gfx.raster = true; break;
 		case 'P': trace_rsp_left = (unsigned)strtoul(optarg, NULL, 0); break;
 		case 'V': trace_vi_left = (unsigned)strtoul(optarg, NULL, 0); break;
+		case OPT_PAD:
+			if (!parse_pad(optarg)) {
+				fprintf(stderr, "salsa64-run: --pad no se entiende: %s\n", optarg);
+				return 3;
+			}
+			break;
 		case 'D': dump_path = optarg; break;
 		case 'Q': trace_gfx_left = (unsigned)strtoul(optarg, NULL, 0); trace_gfx_verbose = getenv("SALSA64_GFX_VERBOSE") != NULL; break;
 		case 'T':
@@ -862,7 +936,14 @@ int main(int argc, char **argv)
 			reason = STOP_CYCLES;
 			break;
 		}
-		if (trace_vi_left && max_cycles - done < (uint64_t)trace_vi_left * 1600000u) {
+		while (pad_next < pad_n && pad_ev[pad_next].field <= n64.bus.vi.fields) {
+			salsa64_pif_set_pad(&n64.bus, 0, &pad_ev[pad_next].pad);
+			pad_next++;
+		}
+		if (pad_next < pad_n) {
+			/* Hasta el último evento del control: de a un campo. */
+			salsa64_n64_run_field(&n64);
+		} else if (trace_vi_left && max_cycles - done < (uint64_t)trace_vi_left * 1600000u) {
 			/* Últimos campos: de a uno, con la imagen que describe el VI. */
 			salsa64_n64_run_field(&n64);
 			struct salsa64_vi_frame f;
