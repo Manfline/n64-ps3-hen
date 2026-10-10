@@ -29,6 +29,17 @@ integrar):
   el título y la selección de archivo («todo se ve bien»). Mediciones en
   docs/perf-log.md: velocidad completa en el logo y en la selección de
   archivo, 67 % de NTSC en la cara de Mario (la anima el CPU).
+- Otros juegos del usuario en el host (respaldos fuera del repo), sin
+  comandos sin implementar: **GoldenEye** usa Fast3D 2.0G con `G_TRI4`
+  (0xB1, cuatro triángulos con índices de 4 bits; antes 140 223 comandos
+  sin implementar, ahora la intro se ve con la orientación bien);
+  **Mario Kart 64** trae «F3DEX 0.95», que ahora se trata como F3DEX 1.x
+  (logo y carrera de demostración); **Star Fox 64** (F3DEX.NoN 1.22) y
+  **Banjo-Kazooie** (F3DEX 1.21) corren con F3DEX 1.x.
+- Una tarea gráfica con microcódigo sin HLE termina también del lado del
+  DP (ningún juego se cuelga esperando al RDP) y el frontend la anota en
+  el log con el texto del microcódigo (`salsa64_rsp_ucode_text`, también
+  en `salsa64-run --trace-rsp`).
 - Arreglo en `src/rdp/rdp.c` (3729f8f): unos cuadros con franjas de
   colores en el paso del logo a la cara. SM64 apaga el VI 26 campos al
   cambiar de escena; lo dibujado entonces quedaba marcado con el campo de
@@ -40,9 +51,12 @@ Pendiente:
       F3D», SLSA00071) y dejar `embedded` como estaba (`vitest`).
 - [ ] Combiners aproximados en las demos de SM64 (cientos por minuto):
       ver cuáles son (`combine.c`).
-- [ ] F3DEX 1.x solo está probado con listas sintéticas y gfxtest: falta
-      un juego que lo use. G_LINE3D de F3D (no lo usa SM64) sin
-      implementar.
+- [ ] En la PS3: GoldenEye, Mario Kart 64 y Star Fox 64 con este
+      paquete (en el host ya dibujan).
+- [ ] Mario Kart 64: en la carrera de demostración la franja de abajo
+      sale en negro en el host. Star Fox 64: un cuadrito con textura abajo
+      a la izquierda en el logo. Revisar ambos.
+- [ ] G_LINE3D de F3D (no lo usan SM64 ni GoldenEye) sin implementar.
 - Para correr un respaldo en el host sin copiarlo: colima no comparte
   todas las carpetas del host, así que `salsa64-run` se compila nativo en la
   Mac (`make -C src/host OUT=$PWD/build/host-mac CC=clang SAN=`) y lee la
