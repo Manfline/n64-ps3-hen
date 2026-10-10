@@ -1,0 +1,19 @@
+arbitrary-int v2.1.1 | MIT
+arrayref v0.3.9 | BSD-2-Clause
+autocfg v1.5.1 | Apache-2.0 OR MIT
+bitbybit v2.0.0 (proc-macro) | MIT
+linked_list_allocator v0.10.6 | Apache-2.0/MIT
+lock_api v0.4.14 | MIT OR Apache-2.0
+n64-systemtest v3.0.0 (/build/nemu64-test) | 
+num-traits v0.2.19 | MIT OR Apache-2.0
+num-traits v0.2.19 | MIT OR Apache-2.0 (*)
+oorandom v11.1.5 | MIT
+proc-macro2 v1.0.106 | MIT OR Apache-2.0
+proc-macro2 v1.0.106 | MIT OR Apache-2.0 (*)
+quote v1.0.46 | MIT OR Apache-2.0
+quote v1.0.46 | MIT OR Apache-2.0 (*)
+scopeguard v1.2.0 | MIT OR Apache-2.0
+spinning_top v0.2.5 | MIT/Apache-2.0
+spinning_top v0.2.5 | MIT/Apache-2.0 (*)
+syn v2.0.119 | MIT OR Apache-2.0
+unicode-ident v1.0.24 | (MIT OR Apache-2.0) AND Unicode-3.0
