@@ -39,9 +39,30 @@ Hecho:
 - Sin regresiones: nemu64-test 462 fallas, vitest y controles OK; compilan
   fase 0, fase 1 y el frontend sin advertencias.
 
+- **PS3 real** (Slim CECH-3011A, HFW 4.91 + HEN): `salsa64-save-tests`
+  abierto dos veces pasa en los tres tipos ("persistió el arranque 1");
+  volcado diferido a los 2,0 s y, en la EEPROM de 16 Kbit, escritura al
+  cerrar con cambios pendientes 26 ms después del resultado, que también
+  persistió. El `rename` del `.tmp` funciona en el disco de la PS3. El
+  frontend real (variante «Salsa64 guardado», SLSA00021, para no pisar la
+  app de la Fase 2) con `savetest-sram` como `rom.z64`: azul con un cuadro
+  y, al volver a abrir, verde con dos; START + SELECT llega a
+  `savefile_close` y a "salida normal".
+- `tools/rpcs3-run.py`: en el primer lanzamiento de un ELF nuevo a veces no
+  alcanza a leer el TTY.log (RPCS3 compila sus módulos); si el programa
+  termina sin RESULTADO leído, lo toma del "Accumulated RPCS3 TTY" del
+  final de RPCS3.log.
+
+Notas:
+- En la PS3 quedaron `saves/SALSA64_SAVE_*` (de las ROMs de prueba) y los
+  paquetes `salsa64-save-tests.pkg` y `salsa64-guardado.pkg`; el
+  `rom.z64` de prueba se borró (el `oot.z64` del autor sigue ahí).
+- En la primera salida del frontend en la PS3 el log no tuvo "salida
+  normal" (no se sabe cómo se salió); en la siguiente, con START + SELECT,
+  sí. Si vuelve a faltar, revisar `rsxkit_shutdown`: el guardado se vuelca
+  antes, así que no se pierde.
+
 Falta:
-- [ ] PS3 real: `salsa64-save-tests` dos veces y el frontend con
-      `savetest-sram` como `rom.z64` (abrir, salir, volver a abrir).
 - [ ] Probarlo con Zelda (SRAM) y un juego con EEPROM cuando la Fase 2
       permita llegar a guardar (respaldos propios, fuera del repo).
 - [ ] FlashRAM (y SRAM de 768 Kbit y 1 Mbit) cuando un juego la pida.
