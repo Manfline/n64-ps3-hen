@@ -2,7 +2,8 @@
  * Salsa64 — CPU NEC VR4300 (MIPS III, 64 bits): estado y API del intérprete.
  *
  * Modelo de ejecución:
- *   - `pc` es la próxima instrucción a ejecutar y `next_pc` la siguiente.
+ *   - `pc` es la próxima instrucción a ejecutar y `next_pc` la siguiente
+ *     (dentro de salsa64_cpu_run viven en registros; ver interp.c).
  *     Un salto escribe `next_pc` y marca `branch`: la instrucción que sigue
  *     (el delay slot) se ejecuta con `delay_slot` = 1 y luego el flujo va al
  *     destino. Un branch-likely no tomado salta el delay slot.
@@ -17,8 +18,8 @@
  *     xkphys, xkseg y los segmentos compatibles, con direcciones virtuales
  *     de 40 bits y físicas de 32.
  *   - TLB de 32 entradas con refill (TLB y XTLB), inválida y modificación.
- *   - FPU: formatos S, D, W, L; modo FR. Aritmética siempre con redondeo al
- *     más cercano; la bandera "inexacto" no se calcula todavía.
+ *   - FPU: formatos S, D, W, L; modo FR; los cuatro modos de redondeo y
+ *     las causas de FCR31, incluida la bandera "inexacto" (cop1.c).
  *   - Sin cachés, sin watchpoints, sin errores de bus.
  */
 #ifndef SALSA64_CPU_VR4300_H
@@ -107,25 +108,38 @@ struct salsa64_tlb_entry {
 };
 
 struct salsa64_cpu {
-	/* Estado de ejecución: lo más usado al principio de la estructura. */
-	uint64_t gpr[32];
+	/*
+	 * Estado de ejecución, ordenado según lo usa el bucle del intérprete
+	 * (interp.c). En el PPE, leer un dato recién escrito que sigue en la
+	 * cola de almacenamiento (load-hit-store) cuesta decenas de ciclos: lo
+	 * que el bucle escribe en cada instrucción queda en otros 16 bytes que
+	 * lo que lee en cada instrucción.
+	 */
+	uint64_t gpr[32];      /* gpr[0] nunca se escribe (vr4300_set_gpr) */
 	uint64_t hi, lo;
-	uint64_t pc;
-	uint64_t next_pc;
-	uint64_t cur_pc;
+
+	/* Escritos en cada instrucción para el código fuera del bucle
+	 * (excepciones, COP0); el bucle no los lee. */
 	uint64_t cycles;
-
-	uint8_t *rdram;        /* copia de bus->rdram para el camino rápido */
-	uint32_t rdram_size;
-
-	uint8_t branch;        /* la instrucción en curso es un salto */
+	uint64_t cur_pc;
 	uint8_t delay_slot;    /* la instrucción en curso está en un delay slot */
-	uint8_t irq_pending;   /* hay interrupción habilitada y no enmascarada */
-	uint8_t mode;          /* enum salsa64_cpu_mode */
-	uint8_t allow64;       /* operaciones de 64 bits permitidas en este modo */
+	uint8_t branch;        /* la instrucción en curso es un salto */
 	uint8_t llbit;
 	uint8_t running;
 	uint8_t re_xor;        /* 7 en modo usuario con Status.RE (little-endian), si no 0 */
+
+	/* Dentro del bucle, pc y next_pc viven en registros: aquí se escriben al
+	 * salir y los escriben las excepciones, ERET y salsa64_cpu_set_pc. */
+	uint64_t pc;
+	uint64_t next_pc;
+
+	/* Leídos en cada instrucción; solo cambian en caminos lentos. */
+	uint8_t *rdram;        /* copia de bus->rdram para el camino rápido */
+	uint32_t rdram_size;
+	uint8_t irq_pending;   /* hay interrupción habilitada y no enmascarada */
+	uint8_t redirect;      /* pc/next_pc/branch cambiaron fuera del bucle: recargarlos */
+	uint8_t mode;          /* enum salsa64_cpu_mode */
+	uint8_t allow64;       /* operaciones de 64 bits permitidas en este modo */
 
 	/* COP0 */
 	uint32_t status;

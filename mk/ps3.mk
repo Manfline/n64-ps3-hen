@@ -39,7 +39,7 @@ endif
 PPU_MACHDEP := -mhard-float -fmodulo-sched -ffunction-sections -fdata-sections
 SPU_MACHDEP := -mdual-nops -fmodulo-sched -ffunction-sections -fdata-sections
 
-PPU_CFLAGS  := -std=gnu11 -O2 -Wall -Wextra -mcpu=cell $(PPU_MACHDEP) \
+PPU_CFLAGS  := -std=gnu11 -O2 -Wall -Wextra -mcpu=cell -mno-relative-jumptables $(PPU_MACHDEP) \
                -I$(PSL1GHT)/ppu/include -I$(PSL1GHT)/ppu/include/simdmath \
                -I$(ROOT)/src -I$(HERE) -I$(OBJ) $(CFLAGS)
 PPU_LDFLAGS := $(PPU_MACHDEP) -L$(PSL1GHT)/ppu/lib -Wl,-Map,$(OUT)/$(PROGRAM).map $(LDFLAGS)

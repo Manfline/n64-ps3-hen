@@ -1,5 +1,38 @@
 # Estado
 
+## 2026-10-10 — Intérprete en el PPE: 8,7 → 21,2 MIPS
+
+Hecho (números y diagnóstico en docs/perf-log.md):
+- Benchmark en variantes (mixto, nop, enteros, memoria, mov.s, add.s) con
+  MIPS y ns por instrucción.
+- La FPU nunca cambiaba el FPSCR: la sospecha no aplicaba. Lo caro era el
+  bucle (~250 ciclos por instrucción aun para un NOP: load-hit-store, una
+  llamada con marco de pila por instrucción, `lwax` en los `switch`) y, en
+  la FPU, pasar valores entre registros enteros y de punto flotante por la
+  pila.
+- Bucle con pc/next_pc/flag de salto en registros y `cpu->redirect` para
+  excepciones/ERET/set_pc; r0 nunca se escribe; NOP sin segundo despacho;
+  BC1 en el bucle; `-mno-relative-jumptables` en mk/ps3.mk; camino rápido
+  de la FPU (src/cpu/fpu.h) con prueba de equivalencia de 20 000 casos.
+- PS3 real: mixto 8,7 → 17,1 MIPS (×2,0); nop ×3,0; add.s ×2,9. 155 pruebas
+  en host y RPCS3; nemu64-test sin regresiones.
+
+- Segunda ronda (147d5ac): SPECIAL en la misma tabla de despacho, FPU
+  rápida que clasifica con los bits en enteros y una franja de exponentes
+  segura (una sola comparación de punto flotante), C.cond en enteros y
+  MOV/ABS/NEG/MFC1/MTC1/CFC1/DMFC1/DMTC1 en el bucle. Prueba de
+  equivalencia de 30 000 casos. PS3 real: mixto 17,1 → 21,2 MIPS; mov.s
+  ×1,8; add.s ×1,8; nop −10 % (cadena de despacho más larga).
+
+Siguiente:
+- [ ] Opcional, poco: índice de despacho ya escalado y calculado directo de
+      la palabra de la instrucción (recupera parte de los ~9 ciclos que
+      perdieron NOP y LW/SW).
+- El bucle cuesta ~93 ciclos aun para un NOP: el intérprete no llegará a
+  ~60 MIPS en el PPE sin decodificar por adelantado, y la dependencia entre
+  instrucciones por `cpu->gpr` en memoria no se quita en un intérprete. La
+  meta de velocidad completa es el recompilador (Fase 3).
+
 ## 2026-10-10 — Fase 1: arranque HLE, `salsa64-run` y nemu64-test
 
 Hecho (detalle en docs/cpu-vr4300.md):
@@ -46,8 +79,8 @@ del cartucho 81, cachés 46, SP (DMA y registros) 31, RDP y MI repeat 10.
 Siguiente (Fase 1):
 - [x] Correr `salsa64-cpu-tests` en la PS3 real: 154/154 pasan, **8,8 MIPS**
       (docs/perf-log.md).
-- [ ] Perfilar el intérprete en el PPE: 8,8 MIPS contra ~60 que pide la N64.
-      Sospecha: cambios de FPSCR (modo de redondeo) en cada instrucción de FPU.
+- [x] Perfilar el intérprete en el PPE: 8,8 → 21,2 MIPS en dos rondas
+      (entrada de arriba; la sospecha del FPSCR no aplicaba).
 - [ ] VI con contador de líneas e interrupción; framebuffer 2D en el RSX
       (primera pieza de `lib/rsxkit/`, ver docs/proyecto.md).
 - [ ] Bus PI: latch de escrituras al cartucho y DMA no alineado (81 pruebas

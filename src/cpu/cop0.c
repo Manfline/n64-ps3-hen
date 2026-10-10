@@ -119,6 +119,7 @@ static void exception_at(struct salsa64_cpu *cpu, enum salsa64_exc code, unsigne
 	cpu->pc = ((cpu->status & SALSA64_ST_BEV) ? VEC_BASE_BEV : VEC_BASE) + offset;
 	cpu->next_pc = cpu->pc + 4;
 	cpu->branch = 0;
+	cpu->redirect = 1;
 	salsa64_vr4300_update_status(cpu);
 	if (SALSA64_UNLIKELY(cpu->exc_hook != NULL))
 		cpu->exc_hook(cpu);
@@ -425,6 +426,7 @@ static void op_eret(struct salsa64_cpu *cpu)
 	}
 	cpu->next_pc = cpu->pc + 4;
 	cpu->branch = 0;  /* ERET no tiene delay slot */
+	cpu->redirect = 1;
 	cpu->llbit = 0;
 	salsa64_vr4300_update_status(cpu);
 }
@@ -439,12 +441,12 @@ void salsa64_vr4300_cop0(struct salsa64_cpu *cpu, uint32_t i)
 	unsigned rt = I_RT(i), rd = I_RD(i);
 	switch (I_RS(i)) {
 	case 0x00:                                                             /* MFC0 */
-		cpu->gpr[rt] = salsa64_sx32((uint32_t)salsa64_cpu_cop0_read(cpu, rd));
+		vr4300_set_gpr(cpu, rt, salsa64_sx32((uint32_t)salsa64_cpu_cop0_read(cpu, rd)));
 		return;
 	case 0x01:                                                             /* DMFC0 */
 		if (!cpu->allow64)
 			break;
-		cpu->gpr[rt] = salsa64_cpu_cop0_read(cpu, rd);
+		vr4300_set_gpr(cpu, rt, salsa64_cpu_cop0_read(cpu, rd));
 		return;
 	case 0x04:                                                             /* MTC0 */
 		/* Transfiere los 64 bits del GPR, igual que DMTC0 (nemu64-test:
@@ -535,4 +537,5 @@ void salsa64_cpu_set_pc(struct salsa64_cpu *cpu, uint64_t pc)
 	cpu->next_pc = pc + 4;
 	cpu->branch = 0;
 	cpu->delay_slot = 0;
+	cpu->redirect = 1;
 }

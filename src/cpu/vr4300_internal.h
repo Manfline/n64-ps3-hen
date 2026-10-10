@@ -52,32 +52,13 @@ static inline void vr4300_reserved(struct salsa64_cpu *cpu)
 	salsa64_vr4300_exception(cpu, SALSA64_EXC_RI, 0);
 }
 
-/* ---- Saltos ----------------------------------------------------------- */
-
-static inline void vr4300_jump(struct salsa64_cpu *cpu, uint64_t target)
+/* Escribe un registro general. r0 vale siempre 0 porque nunca se escribe:
+ * así leerlo (muy frecuente) no choca en el PPE con un almacenamiento
+ * pendiente, como pasaría si se pusiera en 0 después de cada instrucción. */
+static inline void vr4300_set_gpr(struct salsa64_cpu *cpu, unsigned r, uint64_t v)
 {
-	cpu->next_pc = target;
-	cpu->branch = 1;
-}
-
-/* Salto condicional: la siguiente instrucción es delay slot, se tome o no. */
-static inline void vr4300_branch(struct salsa64_cpu *cpu, bool taken, uint32_t instr)
-{
-	if (taken)
-		cpu->next_pc = cpu->cur_pc + 4 + (I_SIMM(instr) << 2);
-	cpu->branch = 1;
-}
-
-/* Branch-likely: si no se toma, el delay slot se anula (no se ejecuta). */
-static inline void vr4300_branch_likely(struct salsa64_cpu *cpu, bool taken, uint32_t instr)
-{
-	if (taken) {
-		cpu->next_pc = cpu->cur_pc + 4 + (I_SIMM(instr) << 2);
-		cpu->branch = 1;
-	} else {
-		cpu->pc = cpu->next_pc;
-		cpu->next_pc += 4;
-	}
+	if (SALSA64_LIKELY(r != 0))
+		cpu->gpr[r] = v;
 }
 
 /* ---- Traducción ------------------------------------------------------- */
