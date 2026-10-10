@@ -379,9 +379,20 @@ Host (qemu ppc64, registros fijos; cuenta de eventos, no tiempo):
 Lo que queda en nemu64-test son sobre todo sus pruebas de COP0 (MTC0, TLB,
 ERET), traps y CACHE.
 
+Bench del recompilador en qemu (10 M instrucciones por caso, registros
+fijos; cuentas, no tiempo):
+
+| Caso | Antes (`RARE_EXEC`) | Después |
+|---|---|---|
+| `espera` (bucle de 5 que sondea Count, como la ROM gfxtest) | 2 000 000 entradas desde C y 2 000 000 llamadas al intérprete (una por vuelta) | 8 entradas, 0 llamadas |
+| `mfc0` (Count, Status, Cause, EPC) | 1 000 000 entradas, 1 000 000 llamadas | 7 entradas, 0 llamadas |
+| `cvt` | 6 999 958 llamadas | 0 |
+| `no alin.` | 5 999 964 llamadas | 0 |
+
 **PS3 real: pendiente.** Preparado: `salsa64-cpu-fpu.pkg` (SLSA00077,
 «Salsa64 CPU FPU»): nemu64-test y bench con registros fijos, con y sin
-`RARE_EXEC`, y variantes nuevas del bench `cvt`, `no alin.` y `mfc0`. En
+`RARE_EXEC`, y variantes nuevas del bench `cvt`, `no alin.`, `mfc0` y
+`espera` (con entradas desde C y llamadas al intérprete por caso). En
 Zelda la ganancia no se vería todavía en los campos/s: donde no llega a 60
 espera a la HLE gráfica del SPE.
 
