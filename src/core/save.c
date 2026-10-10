@@ -160,6 +160,8 @@ bool salsa64_save_pi_dma(struct salsa64_bus *bus, bool to_rdram)
 			store(s, off, bus->rdram + d, chunk);
 		done += chunk;
 	}
+	if (to_rdram && dram < bus->rdram_size)
+		salsa64_bus_rdram_written(bus, dram, len);  /* código recompilado ahí: descartarlo */
 
 	/* Igual que el DMA de la ROM (pi.c). */
 	bus->pi[SALSA64_PI_DRAM_ADDR] = (dram + len + 7) & 0x00FFFFF8;
