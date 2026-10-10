@@ -11,7 +11,8 @@
  * si existe; si no, la ROM de prueba vitest que va embebida. Con vitest,
  * el frontend se verifica a sí mismo (selftest.c) e imprime
  * "RESULTADO frontend: OK/FALLO"; en modo de prueba automática
- * (platform/ps3/autotest.h) sale después.
+ * (platform/ps3/autotest.h) sale después. Si no, mide 10 s sin detección de
+ * bucles de espera y 10 s con ella ("MEDICIÓN …" en el log) y sigue.
  *
  * Controles: los DualShock 3 de los puertos 1–4 son los controles de la N64
  * (padmap.c; se cambian con SALSA64_DATA_DIR/controles.cfg). El puerto 1
@@ -49,6 +50,7 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define FB_MAX_W     640
 #define FB_MAX_H     576
 #define STATS_US     5000000u
+#define BENCH_US     10000000u
 
 static struct salsa64_n64 n64;
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
@@ -63,6 +65,52 @@ static void sysutil_cb(u64 status, u64 param, void *user)
 }
 
 static struct salsa64_padmap padmap;
+
+/* Medición A/B con vitest: sin y con detección de bucles de espera. */
+static struct {
+	int stage;  /* 0 nada, 1 sin detección, 2 con detección, 3 terminada */
+	uint64_t t0, us_emu, cycles0, idle0;
+	uint32_t fields;
+	double rate[2], ms[2];
+} bench;
+
+static void bench_begin(int stage, uint64_t now)
+{
+	bench.stage = stage;
+	bench.t0 = now;
+	bench.us_emu = 0;
+	bench.fields = 0;
+	bench.cycles0 = n64.cpu.cycles;
+	bench.idle0 = n64.cpu.idle_cycles;
+	salsa64_cpu_set_idle(&n64.cpu, stage == 2);
+}
+
+static void bench_field(uint64_t now, uint64_t us_emu)
+{
+	if (bench.stage != 1 && bench.stage != 2)
+		return;
+	bench.us_emu += us_emu;
+	bench.fields++;
+	uint64_t dt = now - bench.t0;
+	if (dt < BENCH_US)
+		return;
+	int k = bench.stage - 1;
+	uint64_t cyc = n64.cpu.cycles - bench.cycles0, idle = n64.cpu.idle_cycles - bench.idle0;
+	bench.rate[k] = bench.fields * 1e6 / dt;
+	bench.ms[k] = bench.us_emu / 1000.0 / bench.fields;
+	salsa64_log("MEDICIÓN vitest %s detección de bucles de espera: %.2f campos/s, emulación %.2f ms "
+		    "por campo, %.1f MIPS, %.1f %% del tiempo saltado (%u campos en %.1f s)",
+		    k ? "con" : "sin", bench.rate[k], bench.ms[k], (double)(cyc - idle) / dt,
+		    cyc ? 100.0 * idle / cyc : 0.0, bench.fields, dt / 1e6);
+	if (k == 0) {
+		bench_begin(2, now);
+	} else {
+		bench.stage = 3;
+		salsa64_log("MEDICIÓN vitest: emulación %.2f → %.2f ms por campo (×%.1f), %.2f → %.2f campos/s",
+			    bench.ms[0], bench.ms[1], bench.ms[1] > 0 ? bench.ms[0] / bench.ms[1] : 0.0,
+			    bench.rate[0], bench.rate[1]);
+	}
+}
 
 /* Lee controles.cfg si existe; si no, el mapeo por omisión. */
 static void load_padmap(void)
@@ -255,7 +303,7 @@ int main(void)
 
 	const rsxkit_view view = { RSXKIT_SCALE_FIT, RSXKIT_FILTER_LINEAR, 4.0f / 3.0f };
 	enum selftest_state result = SELFTEST_RUNNING;
-	uint64_t t_stats = sysGetSystemTime(), cyc_stats = n64.cpu.cycles;
+	uint64_t t_stats = sysGetSystemTime(), cyc_stats = n64.cpu.cycles, idle_stats = n64.cpu.idle_cycles;
 	uint64_t us_emu = 0, us_present = 0;
 	uint32_t fields_stats = 0, blank = 0;
 
@@ -298,21 +346,27 @@ int main(void)
 					    n64.bus.vi.fields);
 				if (autotest)
 					break;
+				if (result == SELFTEST_OK)
+					bench_begin(1, t2);
 			}
+		} else {
+			bench_field(t2, t1 - t0);
 		}
 
 		uint64_t dt = t2 - t_stats;
 		if (dt >= STATS_US) {
-			uint64_t cyc = n64.cpu.cycles - cyc_stats;
-			salsa64_log("%.1f campos/s (%.0f %% de %s), %.1f MIPS; por campo: emulación %.1f ms, "
-				    "presentación %.1f ms; %u sin imagen",
+			/* Una instrucción por ciclo, salvo los saltados en bucles de espera. */
+			uint64_t cyc = n64.cpu.cycles - cyc_stats, idle = n64.cpu.idle_cycles - idle_stats;
+			salsa64_log("%.1f campos/s (%.0f %% de %s), %.1f MIPS, %.0f %% en bucles de espera; "
+				    "por campo: emulación %.1f ms, presentación %.1f ms; %u sin imagen",
 				    fields_stats * 1e6 / dt,
 				    fields_stats * 1e6 / dt * 100.0 * n64.bus.vi.field_cycles / 93750000.0,
 				    info.tv == SALSA64_TV_PAL ? "PAL" : "NTSC",
-				    (double)cyc / dt, us_emu / 1000.0 / fields_stats,
-				    us_present / 1000.0 / fields_stats, blank);
+				    (double)(cyc - idle) / dt, cyc ? 100.0 * idle / cyc : 0.0,
+				    us_emu / 1000.0 / fields_stats, us_present / 1000.0 / fields_stats, blank);
 			t_stats = t2;
 			cyc_stats = n64.cpu.cycles;
+			idle_stats = n64.cpu.idle_cycles;
 			us_emu = us_present = 0;
 			fields_stats = blank = 0;
 		}

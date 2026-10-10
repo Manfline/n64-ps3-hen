@@ -12,6 +12,8 @@
  * del ISViewer son estáticos y la ROM se lee una vez con malloc.
  *
  * Con --frame, al terminar se escribe en PPM la imagen que muestra el VI.
+ * Con --no-idle no se saltan los bucles de espera (cpu/idle.c): el
+ * resultado debe ser idéntico, solo más lento.
  *
  * Códigos de salida:
  *   0  apareció el texto de --until-text, o se agotaron los ciclos sin pedirlo
@@ -207,7 +209,8 @@ static void usage(FILE *out)
 	      "  -q, --quiet           no copiar la salida del ISViewer a stdout\n"
 	      "  -r, --regs            volcar los registros del CPU al terminar\n"
 	      "      --trace-exc N     mostrar las primeras N excepciones del CPU\n"
-	      "      --frame ARCHIVO   al terminar, guardar en PPM la imagen del VI\n", out);
+	      "      --frame ARCHIVO   al terminar, guardar en PPM la imagen del VI\n"
+	      "      --no-idle         no saltar los bucles de espera\n", out);
 }
 
 int main(int argc, char **argv)
@@ -223,13 +226,14 @@ int main(int argc, char **argv)
 		{ "regs", no_argument, NULL, 'r' },
 		{ "trace-exc", required_argument, NULL, 'X' },
 		{ "frame", required_argument, NULL, 'F' },
+		{ "no-idle", no_argument, NULL, 'I' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 },
 	};
 	uint64_t max_cycles = DEFAULT_CYCLES, slice = DEFAULT_SLICE;
 	uint32_t ram = SALSA64_RDRAM_MAX;
 	int tv = SALSA64_BOOT_TV_AUTO, c;
-	bool regs = false;
+	bool regs = false, idle = true;
 	const char *frame_path = NULL;
 
 	while ((c = getopt_long(argc, argv, "c:u:f:qrh", opts, NULL)) != -1) {
@@ -248,6 +252,7 @@ int main(int argc, char **argv)
 		case 'r': regs = true; break;
 		case 'X': trace_exc_left = strtoull(optarg, NULL, 0); break;
 		case 'F': frame_path = optarg; break;
+		case 'I': idle = false; break;
 		case 'T':
 			if (!strcmp(optarg, "ntsc")) tv = SALSA64_TV_NTSC;
 			else if (!strcmp(optarg, "pal")) tv = SALSA64_TV_PAL;
@@ -284,6 +289,7 @@ int main(int argc, char **argv)
 	enum salsa64_rom_format fmt = salsa64_rom_normalize(rom, rom_size);
 
 	salsa64_n64_init(&n64, rdram, ram);
+	salsa64_cpu_set_idle(&n64.cpu, idle);
 	if (trace_exc_left)
 		n64.cpu.exc_hook = trace_exc;
 	salsa64_bus_set_isviewer(&n64.bus, isv_buf, isv_out, NULL);
@@ -305,7 +311,7 @@ int main(int argc, char **argv)
 
 	/* Bucle principal: bloques de `slice` ciclos y verificación entre ellos. */
 	enum stop_reason reason = STOP_NONE;
-	uint64_t start_cycles = n64.cpu.cycles, t0 = now_us();
+	uint64_t start_cycles = n64.cpu.cycles, start_idle = n64.cpu.idle_cycles, t0 = now_us();
 	while (reason == STOP_NONE) {
 		uint64_t done = n64.cpu.cycles - start_cycles;
 		if (done >= max_cycles) {
@@ -319,6 +325,7 @@ int main(int argc, char **argv)
 			reason = STOP_STUCK;
 	}
 	uint64_t us = now_us() - t0, cycles = n64.cpu.cycles - start_cycles;
+	uint64_t idle_cycles = n64.cpu.idle_cycles - start_idle;
 	if (watch.midline)
 		putchar('\n');
 	fflush(stdout);
@@ -329,9 +336,12 @@ int main(int argc, char **argv)
 		[STOP_CYCLES] = "se agotaron los ciclos",
 		[STOP_STUCK] = "bucle infinito sin interrupciones posibles",
 	};
-	fprintf(stderr, "salsa64-run: %s; %llu ciclos (%.2f s de consola) en %.2f s, %.1f MIPS, pc=0x%016llx\n",
+	/* Una instrucción por ciclo, salvo los ciclos saltados en bucles de espera. */
+	fprintf(stderr, "salsa64-run: %s; %llu ciclos (%.2f s de consola) en %.2f s, %.1f MIPS, "
+		"%.1f %% en bucles de espera, pc=0x%016llx\n",
 		reason_names[reason], (unsigned long long)cycles, cycles / 93.75e6, us / 1e6,
-		us ? cycles / (double)us : 0.0, (unsigned long long)n64.cpu.pc);
+		us ? (cycles - idle_cycles) / (double)us : 0.0,
+		cycles ? 100.0 * idle_cycles / cycles : 0.0, (unsigned long long)n64.cpu.pc);
 	if (regs)
 		dump_regs();
 	if (frame_path && !dump_frame(frame_path)) {

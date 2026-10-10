@@ -23,6 +23,7 @@ no se copió código de Not64, Mupen64Plus ni ares.
 | `src/cpu/interp.c` | Bucle, enteros, saltos, cargas/almacenamientos |
 | `src/cpu/cop0.c` | COP0, excepciones, TLB, Count/Compare, interrupciones |
 | `src/cpu/cop1.c` | FPU |
+| `src/cpu/idle.c` | Detección de bucles de espera (ver abajo) |
 
 ## Decisiones
 
@@ -126,6 +127,45 @@ y su longitud en +0x14; esa escritura llama al callback. El búfer se puede
 leer (nemu64-test lo detecta escribiendo y leyendo 0x12345678) y respeta las
 escrituras de 8/16 bits, a diferencia del bus PI real. Fuente: README de
 nemu64-test y `src/isviewer.rs`.
+
+## Bucles de espera
+
+`src/cpu/idle.c`. Los programas esperan al VI en bucles cortos: el `b .` del
+hilo ocioso de libultra o un sondeo de una variable que cambia el manejador
+de interrupciones (vitest: `lw; beq; nop`). Interpretarlos es casi todo el
+campo en escenas ligeras.
+
+- **Cuándo se mira.** Solo los saltos tomados hacia atrás con el destino a
+  menos de 8 instrucciones (`idle_hint` en `interp.c`: una resta y una
+  comparación). Antes de analizar se consulta una tabla de 64 entradas con
+  `pc ^ instrucción` de los saltos ya descartados.
+- **Criterio exacto.** Se simula una vuelta (delay slot, cuerpo, salto) en
+  una copia de los registros. Es bucle de espera si solo hay enteros sin
+  efectos y cargas de la RDRAM por KSEG0/KSEG1, el salto se vuelve a tomar y
+  los 32 registros terminan iguales: la vuelta es un punto fijo y sin un
+  evento del planificador nada cambia. No mira el código como patrón: un
+  contador, un almacenamiento, un sondeo de E/S (VI_V_CURRENT, SI_STATUS) o
+  COP0 (Count) no pasan.
+- **Salto exacto.** Se suman vueltas enteras hasta el próximo evento: el
+  salto vuelve a ejecutarse, a lo sumo, en el ciclo del evento. La
+  interrupción cae en el mismo ciclo y en la misma instrucción; Count, EPC y
+  Random quedan idénticos. `tests/unit/test_idle.c` corre cada escenario
+  con y sin detección y compara el estado; `salsa64-run --no-idle` permite
+  comparar ROMs completas (vitest y nemu64-test dan registros e imagen
+  idénticos).
+- **Descartes.** Lo que el código no permite (almacena, E/S, salto en el
+  cuerpo) se descarta al primer intento; lo que falla el punto fijo, al
+  segundo (el primero puede fallar porque el delay slot todavía no escribió
+  su valor). Apagar y prender la detección (`salsa64_cpu_set_idle`) vacía
+  las tablas.
+- **Condición para el resto.** Quien escriba la RDRAM fuera del CPU (DMA con
+  latencia, el RSP en un SPE en la Fase 2) debe hacerlo en un evento del
+  planificador; si no, el salto se pasaría de largo esa escritura.
+- **Medición.** `cpu->idle_cycles` cuenta los ciclos saltados; el frontend y
+  `salsa64-run` reportan MIPS sin ellos y el porcentaje saltado.
+- **Falta.** Bucles en código mapeado por TLB (GoldenEye), sondeos de E/S
+  cuyo valor solo cambia en eventos (MI_INTR, SP_STATUS) y esperas por Count
+  (`wait_ms` de libdragon): calcular cuándo se cumple la condición.
 
 ## PIF y controles
 
@@ -258,7 +298,7 @@ Fuera del CPU, lo que nemu64-test marca (línea base en
 
 ## Pruebas
 
-- `tools/build.sh test-host`: 175 pruebas (`tests/unit/`) con gcc nativo,
+- `tools/build.sh test-host`: 182 pruebas (`tests/unit/`) con gcc nativo,
   ASan y UBSan. `build/host/salsa64-unit bench` agrega el micro-benchmark.
 - `tools/test-roms.sh`: compila `salsa64-run` y corre nemu64-test hasta su
   resumen (≈190 M ciclos, unos 2 s en el host con ASan). Compara la lista de

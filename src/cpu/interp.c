@@ -39,6 +39,9 @@
  *     (vr4300_cop1_fast, fpu.h).
  *   - Los switch se compilan con tablas absolutas (-mno-relative-jumptables
  *     en mk/ps3.mk): las relativas usan lwax, microcodificada en el PPE.
+ *   - Bucles de espera: un salto tomado hacia atrás y corto consulta la
+ *     tabla de descartados y, si no está, idle.c decide si saltar el tiempo
+ *     (lo avisa con cpu->redirect, que también recarga `cycles`).
  */
 #include "core/sched.h"
 #include "cpu/fpu.h"
@@ -83,20 +86,33 @@ HOT void jump(struct flow *f, uint64_t target)
 	f->branch = 1;
 }
 
-/* Salto condicional: la siguiente instrucción es delay slot, se tome o no. */
-HOT void branch(struct flow *f, bool taken, uint32_t instr)
+/* Salto ya tomado: si es corto y hacia atrás, quizá sea un bucle de espera.
+ * Los descartados cuestan una resta, una carga y dos comparaciones. */
+HOT void idle_hint(struct salsa64_cpu *cpu, const struct flow *f, uint32_t instr)
 {
-	if (taken)
+	if (SALSA64_LIKELY(f->cur - f->next_pc >= 4 * SALSA64_IDLE_BODY))
+		return;
+	if (cpu->idle_reject[(f->cur >> 2) & (SALSA64_IDLE_CACHE - 1)] != ((uint32_t)f->cur ^ instr))
+		salsa64_vr4300_idle(cpu, f->cur, f->next_pc, instr);
+}
+
+/* Salto condicional: la siguiente instrucción es delay slot, se tome o no. */
+HOT void branch(struct salsa64_cpu *cpu, struct flow *f, bool taken, uint32_t instr)
+{
+	if (taken) {
 		f->next_pc = f->cur + 4 + (I_SIMM(instr) << 2);
+		idle_hint(cpu, f, instr);
+	}
 	f->branch = 1;
 }
 
 /* Branch-likely: si no se toma, el delay slot se anula (no se ejecuta). */
-HOT void branch_likely(struct flow *f, bool taken, uint32_t instr)
+HOT void branch_likely(struct salsa64_cpu *cpu, struct flow *f, bool taken, uint32_t instr)
 {
 	if (taken) {
 		f->next_pc = f->cur + 4 + (I_SIMM(instr) << 2);
 		f->branch = 1;
+		idle_hint(cpu, f, instr);
 	} else {
 		f->pc = f->next_pc;
 		f->next_pc += 4;
@@ -166,20 +182,20 @@ HOT void op_regimm(struct salsa64_cpu *cpu, struct flow *f, uint32_t i)
 	uint64_t imm = I_SIMM(i);
 
 	switch (I_RT(i)) {
-	case 0x00: branch(f, s < 0, i); return;                          /* BLTZ */
-	case 0x01: branch(f, s >= 0, i); return;                         /* BGEZ */
-	case 0x02: branch_likely(f, s < 0, i); return;                   /* BLTZL */
-	case 0x03: branch_likely(f, s >= 0, i); return;                  /* BGEZL */
+	case 0x00: branch(cpu, f, s < 0, i); return;                     /* BLTZ */
+	case 0x01: branch(cpu, f, s >= 0, i); return;                    /* BGEZ */
+	case 0x02: branch_likely(cpu, f, s < 0, i); return;              /* BLTZL */
+	case 0x03: branch_likely(cpu, f, s >= 0, i); return;             /* BGEZL */
 	case 0x08: trap_if(cpu, s >= (int64_t)imm); return;              /* TGEI */
 	case 0x09: trap_if(cpu, (uint64_t)s >= imm); return;             /* TGEIU */
 	case 0x0A: trap_if(cpu, s < (int64_t)imm); return;               /* TLTI */
 	case 0x0B: trap_if(cpu, (uint64_t)s < imm); return;              /* TLTIU */
 	case 0x0C: trap_if(cpu, (uint64_t)s == imm); return;             /* TEQI */
 	case 0x0E: trap_if(cpu, (uint64_t)s != imm); return;             /* TNEI */
-	case 0x10: cpu->gpr[31] = f->next_pc; branch(f, s < 0, i); return;                    /* BLTZAL */
-	case 0x11: cpu->gpr[31] = f->next_pc; branch(f, s >= 0, i); return;                   /* BGEZAL */
-	case 0x12: cpu->gpr[31] = f->next_pc; branch_likely(f, s < 0, i); return;             /* BLTZALL */
-	case 0x13: cpu->gpr[31] = f->next_pc; branch_likely(f, s >= 0, i); return;            /* BGEZALL */
+	case 0x10: cpu->gpr[31] = f->next_pc; branch(cpu, f, s < 0, i); return;               /* BLTZAL */
+	case 0x11: cpu->gpr[31] = f->next_pc; branch(cpu, f, s >= 0, i); return;              /* BGEZAL */
+	case 0x12: cpu->gpr[31] = f->next_pc; branch_likely(cpu, f, s < 0, i); return;        /* BLTZALL */
+	case 0x13: cpu->gpr[31] = f->next_pc; branch_likely(cpu, f, s >= 0, i); return;       /* BGEZALL */
 	default:   vr4300_reserved(cpu); return;
 	}
 }
@@ -413,15 +429,16 @@ HOT void execute(struct salsa64_cpu *cpu, struct flow *f, uint32_t i)
 	case 0x01: op_regimm(cpu, f, i); return;
 	case 0x02:                                                               /* J */
 		jump(f, ((f->cur + 4) & ~0x0FFFFFFFull) | (uint64_t)I_TARGET(i) << 2);
+		idle_hint(cpu, f, i);
 		return;
 	case 0x03:                                                               /* JAL */
 		r[31] = f->next_pc;
 		jump(f, ((f->cur + 4) & ~0x0FFFFFFFull) | (uint64_t)I_TARGET(i) << 2);
 		return;
-	case 0x04: branch(f, r[rs] == r[rt], i); return;                        /* BEQ */
-	case 0x05: branch(f, r[rs] != r[rt], i); return;                        /* BNE */
-	case 0x06: branch(f, (int64_t)r[rs] <= 0, i); return;                   /* BLEZ */
-	case 0x07: branch(f, (int64_t)r[rs] > 0, i); return;                    /* BGTZ */
+	case 0x04: branch(cpu, f, r[rs] == r[rt], i); return;                   /* BEQ */
+	case 0x05: branch(cpu, f, r[rs] != r[rt], i); return;                   /* BNE */
+	case 0x06: branch(cpu, f, (int64_t)r[rs] <= 0, i); return;              /* BLEZ */
+	case 0x07: branch(cpu, f, (int64_t)r[rs] > 0, i); return;               /* BGTZ */
 	case 0x08: {                                                             /* ADDI */
 		uint32_t a = (uint32_t)r[rs], b = (uint32_t)I_SIMM(i), s = a + b;
 		if ((~(a ^ b) & (a ^ s)) >> 31)
@@ -444,19 +461,19 @@ HOT void execute(struct salsa64_cpu *cpu, struct flow *f, uint32_t i)
 			bool c = (cpu->fcr31 & SALSA64_FCR31_C) != 0;
 			bool taken = (rt & 1) ? c : !c;
 			if (rt & 2)
-				branch_likely(f, taken, i);
+				branch_likely(cpu, f, taken, i);
 			else
-				branch(f, taken, i);
+				branch(cpu, f, taken, i);
 			return;
 		}
 		if (!vr4300_cop1_fast(cpu, i))
 			salsa64_vr4300_cop1(cpu, i);
 		return;
 	case 0x12: salsa64_vr4300_cop2(cpu, i); return;                         /* COP2 */
-	case 0x14: branch_likely(f, r[rs] == r[rt], i); return;                /* BEQL */
-	case 0x15: branch_likely(f, r[rs] != r[rt], i); return;                /* BNEL */
-	case 0x16: branch_likely(f, (int64_t)r[rs] <= 0, i); return;           /* BLEZL */
-	case 0x17: branch_likely(f, (int64_t)r[rs] > 0, i); return;            /* BGTZL */
+	case 0x14: branch_likely(cpu, f, r[rs] == r[rt], i); return;           /* BEQL */
+	case 0x15: branch_likely(cpu, f, r[rs] != r[rt], i); return;           /* BNEL */
+	case 0x16: branch_likely(cpu, f, (int64_t)r[rs] <= 0, i); return;      /* BLEZL */
+	case 0x17: branch_likely(cpu, f, (int64_t)r[rs] > 0, i); return;       /* BGTZL */
 	case 0x18: {                                                             /* DADDI */
 		REQUIRE64(cpu);
 		uint64_t a = r[rs], b = I_SIMM(i), s = a + b;
@@ -617,6 +634,7 @@ HOT void cpu_loop(struct salsa64_cpu *cpu, bool once)
 			f.pc = cpu->pc;
 			f.next_pc = cpu->next_pc;
 			f.branch = cpu->branch;
+			cycles = cpu->cycles;  /* un bucle de espera adelanta el tiempo */
 		}
 	} while (!once && cycles < s->next);
 
