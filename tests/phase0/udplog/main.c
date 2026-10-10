@@ -1,7 +1,7 @@
 /*
- * Cell64 — Fase 0: prueba del logger UDP.
+ * Retro64 — Fase 0: prueba del logger UDP.
  *
- * Envía CELL64_UDPLOG_COUNT líneas numeradas y una línea final con el total.
+ * Envía RETRO64_UDPLOG_COUNT líneas numeradas y una línea final con el total.
  * En la Mac: tools/udplog.py --until RESULTADO y comparar el total recibido.
  */
 #include <ppu-types.h>
@@ -10,22 +10,22 @@
 
 #include "platform/ps3/log.h"
 
-#define CELL64_UDPLOG_COUNT 200
+#define RETRO64_UDPLOG_COUNT 200
 
 SYS_PROCESS_PARAM(1001, 0x10000);
 
 int main(void)
 {
-	cell64_log_init("udplog");
-	cell64_log("enviando %d líneas numeradas", CELL64_UDPLOG_COUNT);
+	retro64_log_init("udplog");
+	retro64_log("enviando %d líneas numeradas", RETRO64_UDPLOG_COUNT);
 
-	for (int i = 0; i < CELL64_UDPLOG_COUNT; i++) {
-		cell64_log("linea %03d/%03d", i + 1, CELL64_UDPLOG_COUNT);
+	for (int i = 0; i < RETRO64_UDPLOG_COUNT; i++) {
+		retro64_log("linea %03d/%03d", i + 1, RETRO64_UDPLOG_COUNT);
 		if (i % 20 == 19)
 			sysUsleep(10000); /* no saturar la cola de envío */
 	}
 
-	cell64_log("RESULTADO udplog: enviadas %d líneas", CELL64_UDPLOG_COUNT);
-	cell64_log_shutdown();
+	retro64_log("RESULTADO udplog: enviadas %d líneas", RETRO64_UDPLOG_COUNT);
+	retro64_log_shutdown();
 	return 0;
 }

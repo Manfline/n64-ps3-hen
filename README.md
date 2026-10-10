@@ -1,4 +1,4 @@
-# Cell64 (nombre provisional)
+# Retro64
 
 Emulador de Nintendo 64 para PlayStation 3 (homebrew) diseñado alrededor del
 Cell: el PPE ejecuta el VR4300, los SPEs hacen el trabajo vectorial (RSP,
@@ -11,7 +11,7 @@ Estado: Fase 0 (entorno). Ver `docs/estado.md`.
 Requiere Docker (en las Macs: contexto `colima-dev`).
 
 ```sh
-tools/docker-image.sh        # una vez: imagen cell64-toolchain:dev (~10 min)
+tools/docker-image.sh        # una vez: imagen retro64-toolchain:dev (~10 min)
 tools/build.sh               # compila los programas de tests/phase0
 tools/validate-toolchain.sh  # samples de PSL1GHT + shaders de referencia
 ```
@@ -23,7 +23,7 @@ Salidas en `build/<programa>/`: `.elf` (RPCS3, ps3load), `.self`,
 
 ```sh
 tools/udplog.py                                   # log UDP en la Mac
-PS3_IP=x.x.x.x tools/deploy-ps3.sh ps3load build/cell64-jit-ppe/cell64-jit-ppe.self
+PS3_IP=x.x.x.x tools/deploy-ps3.sh ps3load build/retro64-jit-ppe/retro64-jit-ppe.self
 ```
 
 No se incluyen ni se aceptan ROMs comerciales, BIOS, PIF ROMs ni material de

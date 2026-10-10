@@ -1,7 +1,5 @@
-# Igual que cell64.yml, pero con el intérprete del PPU: ejecuta código
-# generado en tiempo de ejecución (el recompilador LLVM no). Para jit-ppe.
-Core:
-  PPU Decoder: Interpreter (dynamic)
+# Configuración de RPCS3 para las pruebas de Retro64 (se pasa con --config;
+# solo cambia estas claves, el resto queda como en la config global).
 Video:
   # rsx-triangle lee el framebuffer desde el PPE.
   Write Color Buffers: true

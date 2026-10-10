@@ -20,19 +20,19 @@ rendimiento, sincronización entre SPEs ni JIT con RPCS3.**
 - `tools/rpcs3-run.py <programa>`: lanza `rpcs3 --no-gui --config <yml> <elf>`,
   sigue `TTY.log` hasta la línea `RESULTADO` y copia `RPCS3.log` a
   `build/logs/rpcs3-<programa>.rpcs3.log`.
-- `tools/rpcs3/cell64.yml`: Write Color Buffers, red conectada, salir al
+- `tools/rpcs3/retro64.yml`: Write Color Buffers, red conectada, salir al
   terminar el proceso. `--config` aplica solo esas claves sobre la config
   global.
-- `tools/rpcs3/cell64-interp.yml`: lo mismo con `PPU Decoder: Interpreter
+- `tools/rpcs3/retro64-interp.yml`: lo mismo con `PPU Decoder: Interpreter
   (dynamic)`.
 
 ## Peculiaridades encontradas
 
-- **Vacía `/dev_hdd0/tmp` en cada arranque.** Los archivos de Cell64 van en
-  `/dev_hdd0/cell64/` (`src/platform/ps3/paths.h`).
+- **Vacía `/dev_hdd0/tmp` en cada arranque.** Los archivos de Retro64 van en
+  `/dev_hdd0/retro64/` (`src/platform/ps3/paths.h`).
 - **No mandar SIGTERM mientras se cierra:** aborta con "Emulation object is
   unavailable (process teardown)". Los programas salen solos en modo
-  autotest (`/dev_hdd0/cell64/autotest`, lo crea el lanzador) y RPCS3 se
+  autotest (`/dev_hdd0/retro64/autotest`, lo crea el lanzador) y RPCS3 se
   cierra con "Exit RPCS3 when process finishes"; solo se usa SIGKILL si se
   cuelga.
 - **Errores fatales en `--no-gui`:** RPCS3 queda detenido y muestra la

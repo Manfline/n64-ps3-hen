@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Corre un programa de Cell64 en RPCS3 y espera su línea RESULTADO.
+"""Corre un programa de Retro64 en RPCS3 y espera su línea RESULTADO.
 
   tools/rpcs3-run.py rsx-triangle            (o la ruta a un .elf)
-  tools/rpcs3-run.py jit-ppe --relaunch 10 --config tools/rpcs3/cell64-interp.yml
+  tools/rpcs3-run.py jit-ppe --relaunch 10 --config tools/rpcs3/retro64-interp.yml
 
-Lanza RPCS3 con --no-gui y tools/rpcs3/cell64.yml, crea el archivo de modo
+Lanza RPCS3 con --no-gui y tools/rpcs3/retro64.yml, crea el archivo de modo
 autotest (src/platform/ps3/autotest.h) para que el programa salga solo, sigue
 TTY.log e imprime las líneas del programa. RPCS3 se cierra por su cuenta al
 terminar el proceso ("Exit RPCS3 when process finishes"); solo se mata con
@@ -27,8 +27,8 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 RPCS3 = os.environ.get("RPCS3", "/Applications/RPCS3.app/Contents/MacOS/rpcs3")
 LOGDIR = pathlib.Path.home() / "Library/Caches/rpcs3"
-AUTOTEST_FLAG = pathlib.Path.home() / "Library/Application Support/rpcs3/dev_hdd0/cell64/autotest"
-CONFIG = ROOT / "tools/rpcs3/cell64.yml"
+AUTOTEST_FLAG = pathlib.Path.home() / "Library/Application Support/rpcs3/dev_hdd0/retro64/autotest"
+CONFIG = ROOT / "tools/rpcs3/retro64.yml"
 EXIT_GRACE = 30  # segundos para que RPCS3 se cierre solo tras RESULTADO
 
 
@@ -36,7 +36,7 @@ def resolve_elf(arg: str) -> pathlib.Path:
     p = pathlib.Path(arg)
     if p.suffix == ".elf" and p.exists():
         return p.resolve()
-    p = ROOT / "build" / f"cell64-{arg}" / f"cell64-{arg}.elf"
+    p = ROOT / "build" / f"retro64-{arg}" / f"retro64-{arg}.elf"
     if not p.exists():
         sys.exit(f"no existe {p}: compilar con tools/build.sh")
     return p
@@ -116,7 +116,7 @@ def run_once(elf: pathlib.Path, config: pathlib.Path, timeout: float, keep_lines
             proc.kill()
             proc.wait()
         close_error_dialogs(3.0 if status != "resultado" else 0.0)
-        name = elf.stem.removeprefix("cell64-")
+        name = elf.stem.removeprefix("retro64-")
         if (LOGDIR / "RPCS3.log").exists():
             shutil.copy(LOGDIR / "RPCS3.log", ROOT / f"build/logs/rpcs3-{name}.rpcs3.log")
     return status
@@ -142,7 +142,7 @@ def main() -> int:
     ap.add_argument("--relaunch", type=int, default=0,
                     help="relanzar hasta N veces si termina sin RESULTADO")
     ap.add_argument("--config", type=pathlib.Path, default=CONFIG,
-                    help="configuración de RPCS3 (por omisión tools/rpcs3/cell64.yml)")
+                    help="configuración de RPCS3 (por omisión tools/rpcs3/retro64.yml)")
     args = ap.parse_args()
 
     elf = resolve_elf(args.program)

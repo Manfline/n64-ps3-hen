@@ -1,5 +1,5 @@
 /*
- * Cell64 — Fase 0: prueba de JIT en el PPE (bloqueante para la Fase 3).
+ * Retro64 — Fase 0: prueba de JIT en el PPE (bloqueante para la Fase 3).
  *
  * Para cada mecanismo de memoria de `mechs` escribe una función PowerPC
  * (r3 = r3 * 3 + 7; blr), limpia cachés (dcbst/sync/icbi/isync), la llama
@@ -29,8 +29,8 @@
 #include "platform/ps3/log.h"
 #include "platform/ps3/paths.h"
 
-#define JIT_STATE  CELL64_DATA_DIR "/jit_state.txt"
-#define JIT_RESULT CELL64_DATA_DIR "/jit_result.txt"
+#define JIT_STATE  RETRO64_DATA_DIR "/jit_state.txt"
+#define JIT_RESULT RETRO64_DATA_DIR "/jit_result.txt"
 #define JIT_BYTES  (64 * 1024)
 #define CACHE_LINE 128
 #define FLUSH_REPS 100
@@ -96,18 +96,18 @@ static u32 bss_buf[JIT_BYTES / 4] __attribute__((aligned(CACHE_LINE)));
  * mismos 256 MB que .text (.opd vive ahí): distingue si el no-ejecutable se
  * aplica por segmento (SLB) o por página. */
 static u32 seg0_buf[JIT_BYTES / 4]
-	__attribute__((aligned(CACHE_LINE), section(".data.rel.ro.cell64_jit"))) = { 1 };
+	__attribute__((aligned(CACHE_LINE), section(".data.rel.ro.retro64_jit"))) = { 1 };
 
 /* Zona de nops dentro de .text: ejecutable, pero en principio de solo lectura. */
 __asm__("	.section .text\n"
 	"	.balign 128\n"
-	"	.globl cell64_text_cave\n"
-	"cell64_text_cave:\n"
+	"	.globl retro64_text_cave\n"
+	"retro64_text_cave:\n"
 	"	.rept 16384\n"
 	"	nop\n"
 	"	.endr\n"
 	"	.previous\n");
-extern u32 cell64_text_cave[];
+extern u32 retro64_text_cave[];
 
 static sys_mem_addr_t mm_addr;
 static sys_mem_id_t mm_id;
@@ -133,7 +133,7 @@ static void *alloc_seg0(char *err, size_t n)
 static void *alloc_text(char *err, size_t n)
 {
 	(void)err, (void)n;
-	return cell64_text_cave;
+	return retro64_text_cave;
 }
 
 static void *alloc_heap(char *err, size_t n)
@@ -258,7 +258,7 @@ static void state_append(const char *fmt, ...)
 {
 	FILE *f = fopen(JIT_STATE, "a");
 	if (!f) {
-		cell64_log("no se pudo abrir %s: el progreso no se guardará", JIT_STATE);
+		retro64_log("no se pudo abrir %s: el progreso no se guardará", JIT_STATE);
 		return;
 	}
 	va_list ap;
@@ -305,7 +305,7 @@ static void finish_mech(int i, const char *fmt, ...)
 	va_end(ap);
 	states[i].st = ST_DONE;
 	state_append("%s", states[i].line);
-	cell64_log("%s", states[i].line);
+	retro64_log("%s", states[i].line);
 }
 
 /* --- Prueba ----------------------------------------------------------------- */
@@ -315,14 +315,14 @@ static void run_mech(int i)
 	const jit_mech_t *m = &mechs[i];
 	char err[96] = "";
 
-	cell64_log("== %s: %s", m->name, m->desc);
+	retro64_log("== %s: %s", m->name, m->desc);
 	void *mem = m->alloc(err, JIT_BYTES);
 	if (!mem) {
 		finish_mech(i, "%s NO_DISPONIBLE %s", m->name, err);
 		return;
 	}
 	volatile u32 *code = mem;
-	cell64_log("%s: código en %p", m->name, mem);
+	retro64_log("%s: código en %p", m->name, mem);
 
 	state_append("%s PROBANDO escritura", m->name);
 	emit_func(code, 7);
@@ -352,13 +352,13 @@ static void run_mech(int i)
 
 int main(void)
 {
-	cell64_log_init("jit-ppe");
-	mkdir(CELL64_DATA_DIR, 0777);
+	retro64_log_init("jit-ppe");
+	mkdir(RETRO64_DATA_DIR, 0777);
 	state_load();
 
 	for (int i = 0; i < NUM_MECHS; i++) {
 		if (states[i].st == ST_TRYING) {
-			cell64_log("%s: el intento anterior terminó el proceso en la fase '%s'",
+			retro64_log("%s: el intento anterior terminó el proceso en la fase '%s'",
 				   mechs[i].name, states[i].phase);
 			finish_mech(i, "%s CRASH %s", mechs[i].name, states[i].phase);
 		}
@@ -369,21 +369,21 @@ int main(void)
 			run_mech(i);
 
 	int executable = 0;
-	cell64_log("== resumen");
+	retro64_log("== resumen");
 	for (int i = 0; i < NUM_MECHS; i++) {
-		cell64_log("  %s", states[i].line);
+		retro64_log("  %s", states[i].line);
 		if (strstr(states[i].line, " OK "))
 			executable++;
 	}
 
 	remove(JIT_RESULT);
 	if (rename(JIT_STATE, JIT_RESULT) != 0)
-		cell64_log("no se pudo renombrar %s; borrarlo a mano para repetir la prueba", JIT_STATE);
+		retro64_log("no se pudo renombrar %s; borrarlo a mano para repetir la prueba", JIT_STATE);
 	else
-		cell64_log("resultado guardado en %s", JIT_RESULT);
+		retro64_log("resultado guardado en %s", JIT_RESULT);
 
-	cell64_log("RESULTADO jit-ppe: %d de %d mecanismos ejecutan código generado",
+	retro64_log("RESULTADO jit-ppe: %d de %d mecanismos ejecutan código generado",
 		   executable, NUM_MECHS);
-	cell64_log_shutdown();
+	retro64_log_shutdown();
 	return 0;
 }

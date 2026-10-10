@@ -25,13 +25,13 @@ Falta para cerrar la Fase 0:
       jit-ppe con HEN y, si se puede, CFW). Llenar docs/jit-ppe.md.
 - [ ] Decidir el plan de la Fase 3 según el resultado del JIT.
 
-Nombre (pendiente de decidir):
+Nombre: **Retro64** (decidido el 2026-10-10; antes "Cell64", provisional).
 - Ya existe un emulador de N64 para PS3 llamado **Cell64**: v1.52 de
   "ZeBobbel", publicado en Brewology el 2026-09-27
   (store.brewology.com/ahomebrew.php?brewid=344), con una variante "HEN FIX by
   DropSonic DS". Sin código fuente publicado ni descripción técnica; el
   "sitio del desarrollador" es un canal de YouTube con dos videos de prueba.
-  Hay que renombrar este proyecto antes de publicar nada.
+  Por eso se renombró el proyecto. La carpeta sigue siendo `projects/cell64`.
 - Referencia de rendimiento de ese emulador (videos de ZeBobbel, capturadora,
   build "40031911"): el overlay dice "INT" (intérprete; formato del overlay de
   Wii64/Not64). Super Mario 64 en el castillo: 46,9 VI/s (~78 %). Zelda OoT,

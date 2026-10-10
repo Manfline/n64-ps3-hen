@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 #
-# Imagen de desarrollo de Cell64: ps3toolchain + PSL1GHT + cgcomp con NVIDIA Cg Toolkit.
+# Imagen de desarrollo de Retro64: ps3toolchain + PSL1GHT + cgcomp con NVIDIA Cg Toolkit.
 #
 # - El toolchain (binutils/GCC para PPU y SPU) y PSL1GHT se compilan para la
 #   arquitectura nativa del builder (arm64 en las Macs): compilar GCC bajo
@@ -37,10 +37,10 @@ RUN curl -fsSL "https://github.com/ps3dev/PSL1GHT/archive/${PSL1GHT_REF}.tar.gz"
  && make -C "/tmp/PSL1GHT-${PSL1GHT_REF}/tools/cgcomp"
 
 # Raíz mínima x86_64: cgcomp, libCg.so, el cargador y sus dependencias.
-RUN mkdir -p /sysroot/usr/lib64 /sysroot/opt/cell64/bin \
+RUN mkdir -p /sysroot/usr/lib64 /sysroot/opt/retro64/bin \
  && cp /tmp/cg/usr/lib64/libCg.so /sysroot/usr/lib64/ \
- && cp "/tmp/PSL1GHT-${PSL1GHT_REF}/tools/cgcomp/cgcomp" /sysroot/opt/cell64/bin/ \
- && for f in $(ldd /sysroot/opt/cell64/bin/cgcomp /sysroot/usr/lib64/libCg.so \
+ && cp "/tmp/PSL1GHT-${PSL1GHT_REF}/tools/cgcomp/cgcomp" /sysroot/opt/retro64/bin/ \
+ && for f in $(ldd /sysroot/opt/retro64/bin/cgcomp /sysroot/usr/lib64/libCg.so \
                | awk '$2 == "=>" && $3 ~ /^\// {print $3} $1 ~ /^\/.*ld-linux/ {print $1}' | sort -u); do \
       cp --parents -L "$f" /sysroot; \
     done \
@@ -89,10 +89,10 @@ FROM ${DEBIAN}
 ARG PS3TOOLCHAIN_REF
 ARG PSL1GHT_REF
 
-LABEL org.opencontainers.image.title="cell64-toolchain" \
-      org.opencontainers.image.description="ps3toolchain + PSL1GHT + cgcomp para Cell64" \
-      cell64.ps3toolchain.ref="${PS3TOOLCHAIN_REF}" \
-      cell64.psl1ght.ref="${PSL1GHT_REF}"
+LABEL org.opencontainers.image.title="retro64-toolchain" \
+      org.opencontainers.image.description="ps3toolchain + PSL1GHT + cgcomp para Retro64" \
+      retro64.ps3toolchain.ref="${PS3TOOLCHAIN_REF}" \
+      retro64.psl1ght.ref="${PSL1GHT_REF}"
 
 ENV PS3DEV=/usr/local/ps3dev
 ENV PSL1GHT=${PS3DEV}

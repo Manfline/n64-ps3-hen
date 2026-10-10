@@ -1,4 +1,4 @@
-# Cell64 — se ejecuta dentro de la imagen cell64-toolchain (tools/build.sh).
+# Retro64 — se ejecuta dentro de la imagen retro64-toolchain (tools/build.sh).
 PHASE0_DIRS := $(patsubst %/Makefile,%,$(wildcard tests/phase0/*/Makefile))
 
 .PHONY: all phase0 clean $(PHASE0_DIRS)

@@ -1,12 +1,12 @@
 #!/bin/sh
 # Envía un programa a la PS3 real.
-#   PS3_IP=x.x.x.x tools/deploy-ps3.sh ps3load build/cell64-jit-ppe/cell64-jit-ppe.self
-#   PS3_IP=x.x.x.x tools/deploy-ps3.sh ftp build/cell64-jit-ppe/cell64-jit-ppe.pkg
+#   PS3_IP=x.x.x.x tools/deploy-ps3.sh ps3load build/retro64-jit-ppe/retro64-jit-ppe.self
+#   PS3_IP=x.x.x.x tools/deploy-ps3.sh ftp build/retro64-jit-ppe/retro64-jit-ppe.pkg
 #
 # ps3load: la PS3 debe estar corriendo la app ps3load (escucha en TCP 4299);
 #          el programa se ejecuta en cuanto llega.
 # ftp:     sube a /dev_hdd0/packages/ (si es .pkg, para instalarlo desde
-#          Package Manager) o a /dev_hdd0/cell64/, vía el FTP de webMAN MOD.
+#          Package Manager) o a /dev_hdd0/retro64/, vía el FTP de webMAN MOD.
 # PS3_IP también puede ir en tools/ps3.conf (ignorado por git): PS3_IP=...
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,7 +28,7 @@ ps3load)
 ftp)
 	case "$FILE" in
 	*.pkg) DEST=/dev_hdd0/packages/ ;;
-	*) DEST=/dev_hdd0/cell64/ ;;
+	*) DEST=/dev_hdd0/retro64/ ;;
 	esac
 	curl --ftp-create-dirs -T "$FILE" "ftp://$PS3_IP$DEST"
 	echo "subido a $DEST$(basename "$FILE")"

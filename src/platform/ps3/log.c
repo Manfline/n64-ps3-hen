@@ -1,5 +1,5 @@
 /*
- * Cell64 — logger para PS3 (TTY + UDP). Ver log.h.
+ * Retro64 — logger para PS3 (TTY + UDP). Ver log.h.
  */
 #include "platform/ps3/log.h"
 
@@ -14,16 +14,16 @@
 
 static int log_sock = -1;
 static struct sockaddr_in log_dest;
-static char log_tag[24] = "cell64";
+static char log_tag[24] = "retro64";
 static u64 log_t0;
 static u32 log_seq;
 
 static void log_load_dest(void)
 {
 	char cfg[64] = "255.255.255.255";
-	unsigned port = CELL64_LOG_PORT;
+	unsigned port = RETRO64_LOG_PORT;
 
-	FILE *f = fopen(CELL64_LOG_CFG, "r");
+	FILE *f = fopen(RETRO64_LOG_CFG, "r");
 	if (f) {
 		if (fgets(cfg, sizeof cfg, f)) {
 			cfg[strcspn(cfg, " \r\n")] = '\0';
@@ -43,31 +43,31 @@ static void log_load_dest(void)
 		inet_pton(AF_INET, "255.255.255.255", &log_dest.sin_addr);
 }
 
-void cell64_log_init(const char *program)
+void retro64_log_init(const char *program)
 {
 	snprintf(log_tag, sizeof log_tag, "%s", program);
 	log_t0 = sysGetSystemTime();
 
 	if (netInitialize() < 0) {
-		cell64_log("red no disponible: solo TTY");
+		retro64_log("red no disponible: solo TTY");
 		return;
 	}
 
 	log_sock = netSocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (log_sock < 0) {
-		cell64_log("netSocket falló (%d): solo TTY", log_sock);
+		retro64_log("netSocket falló (%d): solo TTY", log_sock);
 		return;
 	}
 
 	int on = 1;
 	netSetSockOpt(log_sock, SOL_SOCKET, SO_BROADCAST, &on, sizeof on);
 	log_load_dest();
-	cell64_log("log UDP hacia %s:%u", inet_ntoa(log_dest.sin_addr), ntohs(log_dest.sin_port));
+	retro64_log("log UDP hacia %s:%u", inet_ntoa(log_dest.sin_addr), ntohs(log_dest.sin_port));
 }
 
-void cell64_log(const char *fmt, ...)
+void retro64_log(const char *fmt, ...)
 {
-	char line[CELL64_LOG_LINE_MAX];
+	char line[RETRO64_LOG_LINE_MAX];
 	u64 us = sysGetSystemTime() - log_t0;
 	int n = snprintf(line, sizeof line, "[%s %4u.%03u #%u] ", log_tag,
 			 (unsigned)(us / 1000000), (unsigned)(us / 1000 % 1000), (unsigned)++log_seq);
@@ -89,7 +89,7 @@ void cell64_log(const char *fmt, ...)
 		netSendTo(log_sock, line, len, 0, (const struct sockaddr *)&log_dest, sizeof log_dest);
 }
 
-void cell64_log_shutdown(void)
+void retro64_log_shutdown(void)
 {
 	if (log_sock >= 0) {
 		netClose(log_sock);
