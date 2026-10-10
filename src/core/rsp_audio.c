@@ -50,10 +50,16 @@ const char *salsa64_abi_name(enum salsa64_abi abi)
 	return abi < SALSA64_ABI_COUNT && names[abi] ? names[abi] : "?";
 }
 
+/* Solo espera una tarea de audio en vuelo (y avisa lo que escribió): una
+ * gráfica no se toca, así el frontend puede soltar el audio sin terminar
+ * la tarea gráfica a destiempo. El evento de fin de tarea sigue en pie y,
+ * sin backend, solo termina la tarea. */
 void salsa64_rsp_set_audio(struct salsa64_bus *bus, const struct salsa64_audio_backend *audio)
 {
-	salsa64_rsp_reset(bus);
-	bus->rsp.audio = audio;
+	struct salsa64_rsp *rsp = &bus->rsp;
+	if (rsp->busy == SALSA64_TASK_AUDIO && rsp->audio)
+		rsp->audio->finish(rsp->audio->ctx, bus);
+	rsp->audio = audio;
 }
 
 enum salsa64_abi salsa64_rsp_detect_abi(const struct salsa64_bus *bus, const struct salsa64_task *task)

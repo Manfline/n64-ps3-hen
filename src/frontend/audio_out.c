@@ -9,6 +9,7 @@
 
 #include <audio/audio.h>
 #include <malloc.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/event_queue.h>
@@ -58,6 +59,10 @@ static struct {
 	volatile uint32_t full;
 	bool written;
 } dump;
+
+/* Pico de lo que entrega el AI desde la última estadística (0–32768): dice
+ * si un juego que «no suena» manda silencio o audio. */
+static volatile uint32_t ai_peak;
 
 /* Para las estadísticas cada STATS_US. */
 static struct {
@@ -119,6 +124,14 @@ static void ai_push(void *ctx, const uint8_t *p, uint32_t bytes, uint32_t rate, 
 {
 	(void)cycle;
 	audio_sync_push(ctx, p, bytes, rate);
+	uint32_t peak = ai_peak;
+	for (uint32_t i = 0; i + 1 < bytes; i += 2) {
+		int32_t v = (int16_t)(p[i] << 8 | p[i + 1]);
+		uint32_t a = (uint32_t)(v < 0 ? -v : v);
+		if (a > peak)
+			peak = a;
+	}
+	ai_peak = peak;
 	if (dump.buf && !dump.full) {
 		uint32_t n = bytes < dump.cap - dump.len ? bytes : dump.cap - dump.len;
 		memcpy(dump.buf + dump.len, p, n);
@@ -331,7 +344,7 @@ void audio_out_field(uint64_t now_us)
 	if (port.open && out) {
 		salsa64_log("audio: salida %.0f ms de colchón, emulación al %.0f %%, %s; en 5 s: %.0f %% en silencio, "
 			    "%.0f %% estirado, %u faltas, %u silencios, %u saltos, %u descartadas, %u bloques tarde; "
-			    "hilo %.2f %% del tiempo; del AI %u Hz",
+			    "hilo %.2f %% del tiempo; del AI %u Hz, pico %.0f dBFS",
 			    audio_sync_level_ms(&sync_out), sync_out.speed_est * 100.0,
 			    sync_out.stretching ? "estirando" : "normal",
 			    100.0 * (o->silent_frames - prev.out.silent_frames) / out,
@@ -339,7 +352,8 @@ void audio_out_field(uint64_t now_us)
 			    o->underruns - prev.out.underruns, o->silences - prev.out.silences,
 			    o->skips - prev.out.skips, o->dropped - prev.out.dropped,
 			    (unsigned)(port.late - prev.late), 100.0 * (port.busy_us - prev.busy_us) / dt,
-			    sync_out.rate);
+			    sync_out.rate, ai_peak ? 20.0 * log10(ai_peak / 32768.0) : -99.0);
+		ai_peak = 0;
 	}
 	prev.out = *o;
 	prev.late = port.late;
