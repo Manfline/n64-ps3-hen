@@ -1216,12 +1216,14 @@ int main(int argc, char **argv)
 			reason = STOP_CYCLES;
 			break;
 		}
-		if (trace_vi_left && max_cycles - done < (uint64_t)trace_vi_left * 1600000u) {
-			/* Últimos campos: de a uno, con la imagen que describe el VI. */
+		bool trace_vi = trace_vi_left && max_cycles - done < (uint64_t)trace_vi_left * 1600000u;
+		if (trace_vi) {
+			/* Últimos campos: de a uno, con la imagen que describe el VI (los
+			 * controles programados se aplican en field_done). */
 			salsa64_n64_run_field(&n64);
 			field_done(gfx_path, frame_every);
 			struct salsa64_vi_frame f;
-			if (salsa64_vi_frame(&n64.bus, &f))
+			if (trace_vi && salsa64_vi_frame(&n64.bus, &f))
 				fprintf(stderr, "campo %u: origen %06x %ux%u stride %u bpp %u (V_VIDEO %08x Y_SCALE %08x)\n",
 					n64.bus.vi.fields, f.origin, f.width, f.height, f.stride, f.bpp,
 					n64.bus.vi.regs[SALSA64_VI_V_VIDEO], n64.bus.vi.regs[SALSA64_VI_Y_SCALE]);
