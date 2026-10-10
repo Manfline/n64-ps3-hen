@@ -78,7 +78,7 @@
 #define DEFAULT_SLICE  (1ull << 20)
 #define MAX_TEXT       255
 #define MAX_FAIL_TEXTS 4
-#define MAX_PADS       64
+#define MAX_PADS       512
 #define PAD_HOLD       8   /* campos que dura una pulsación programada */
 
 enum stop_reason {
@@ -214,6 +214,24 @@ static void pad_field(void)
 	if (tracing())
 		fprintf(stderr, "campo %u (ciclo %llu): control 1 botones 0x%04x x %d y %d\n", field,
 			(unsigned long long)n64.cpu.cycles, pad->buttons, pad->x, pad->y);
+}
+
+/* Al terminar cada campo (modo campo por campo): controles programados y,
+ * con --gfx-frame-every, la imagen de la HLE en ARCHIVO-<campo>.ppm (sin la
+ * extensión de ARCHIVO) desde --trace-from. */
+static bool gfx_dump(const char *path);
+
+static void field_done(const char *gfx_path, uint32_t frame_every)
+{
+	pad_field();
+	if (frame_every && gfx_path && tracing() && n64.bus.vi.fields % frame_every == 0) {
+		char name[512];
+		size_t len = strlen(gfx_path);
+		if (len > 4 && !strcmp(gfx_path + len - 4, ".ppm"))
+			len -= 4;
+		snprintf(name, sizeof name, "%.*s-%u.ppm", (int)len, gfx_path, n64.bus.vi.fields);
+		gfx_dump(name);
+	}
 }
 
 /* La referencia de --lockstep hasta `to`, aplicando los controles en el
@@ -912,7 +930,8 @@ static bool dump_frame(const char *path)
 }
 
 /* Opciones largas sin letra (códigos fuera de ASCII). */
-enum { OPT_REC = 0x100, OPT_LOCKSTEP, OPT_PAD, OPT_TRACE_FROM, OPT_TRACE_FAULTS, OPT_RAM_DUMP, OPT_TRACE_AUDIO };
+enum { OPT_REC = 0x100, OPT_LOCKSTEP, OPT_PAD, OPT_TRACE_FROM, OPT_TRACE_FAULTS, OPT_RAM_DUMP, OPT_TRACE_AUDIO,
+       OPT_FRAME_EVERY };
 
 static void usage(FILE *out)
 {
@@ -939,6 +958,7 @@ static void usage(FILE *out)
 	      "      --save TIPO       tipo de guardado: ninguno, eeprom4k, eeprom16k, sram256k\n"
 	      "      --save-dir DIR    leer y escribir el guardado del cartucho en DIR\n"
 	      "      --gfx-frame ARCHIVO  al terminar, guardar en PPM lo que dibujó la HLE gráfica\n"
+	      "      --gfx-frame-every N  con --pad, además cada N campos desde --trace-from (ARCHIVO-<campo>.ppm)\n"
 	      "      --gfxtest-check   verificar la imagen de la HLE con los puntos de gfxtest\n"
 	      "      --trace-rsp N     mostrar las primeras N tareas del RSP\n"
 	      "      --trace-audio N   opcodes de la lista de audio de las primeras N tareas de audio\n"
@@ -969,6 +989,7 @@ int main(int argc, char **argv)
 		{ "trace-faults", required_argument, NULL, OPT_TRACE_FAULTS },
 		{ "ram-dump", required_argument, NULL, OPT_RAM_DUMP },
 		{ "trace-audio", required_argument, NULL, OPT_TRACE_AUDIO },
+		{ "gfx-frame-every", required_argument, NULL, OPT_FRAME_EVERY },
 		{ "no-idle", no_argument, NULL, 'I' },
 		{ "save", required_argument, NULL, 'E' },
 		{ "save-dir", required_argument, NULL, 'W' },
@@ -991,6 +1012,7 @@ int main(int argc, char **argv)
 	bool gfx_check = false, audio_check = false;
 	const char *wav_path = NULL;
 	const char *dump_path = NULL, *ram_path = NULL;
+	uint32_t frame_every = 0;
 
 	while ((c = getopt_long(argc, argv, "c:u:f:qrh", opts, NULL)) != -1) {
 		switch (c) {
@@ -1026,6 +1048,7 @@ int main(int argc, char **argv)
 		case OPT_TRACE_FAULTS: trace_exc_left = strtoull(optarg, NULL, 0); trace_exc_faults_only = true; break;
 		case OPT_RAM_DUMP: ram_path = optarg; break;
 		case OPT_TRACE_AUDIO: trace_audio_left = (unsigned)strtoul(optarg, NULL, 0); break;
+		case OPT_FRAME_EVERY: frame_every = (uint32_t)strtoul(optarg, NULL, 0); break;
 		case 'W': save_dir = optarg; break;
 		case 'E':
 			for (int t = 0; t < SALSA64_SAVE_NTYPES; t++)
@@ -1148,7 +1171,7 @@ int main(int argc, char **argv)
 		if (trace_vi_left && max_cycles - done < (uint64_t)trace_vi_left * 1600000u) {
 			/* Últimos campos: de a uno, con la imagen que describe el VI. */
 			salsa64_n64_run_field(&n64);
-			pad_field();
+			field_done(gfx_path, frame_every);
 			struct salsa64_vi_frame f;
 			if (salsa64_vi_frame(&n64.bus, &f))
 				fprintf(stderr, "campo %u: origen %06x %ux%u stride %u bpp %u (V_VIDEO %08x Y_SCALE %08x)\n",
@@ -1158,7 +1181,7 @@ int main(int argc, char **argv)
 			/* Con controles programados, campo por campo: el control cambia
 			 * justo al empezar uno. */
 			salsa64_n64_run_field(&n64);
-			pad_field();
+			field_done(gfx_path, frame_every);
 		} else {
 			salsa64_n64_run(&n64, max_cycles - done < slice ? max_cycles - done : slice);
 		}

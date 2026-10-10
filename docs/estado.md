@@ -60,8 +60,34 @@ estado, pc y la cola en la que espera cada uno, sin símbolos). Con `--pad
 "2200:START,2320:A,2440:A,2560:A"` y el `.sra` del autor en `--save-dir`,
 Zelda entra al juego en el campo 2712.
 
-- [ ] **PS3 real**: paquete «Salsa64 depuración» (SLSA00079) subido;
-      falta que el autor lo pruebe (ranura → juego, con audio).
+- **PS3 real** (paquete «Salsa64 depuración», SLSA00079, ba9bdfc): Zelda
+  entra al juego y el autor jugó 7 min (intro, casa de Link, Navi, bosque
+  Kokiri) a 59,8 campos/s, 0 tareas cortadas, ~7 comandos de S2DEX
+  saltados por cuadro en la casa; audio −4 a −11 dBFS en juego. El silencio
+  de ~30 s entre elegir la partida y el vuelo de Navi es del juego: la
+  Mac con sus mismas pulsaciones calla y suena en los mismos campos, y
+  en ese tramo las listas de audio no traen voces (solo CLEARBUFF,
+  LOADBUFF, MIXER, SAVEBUFF, DMEMMOVE, INTERLEAVE).
+
+Visto en esa corrida, para otros trabajos (reproducible en la Mac con
+`--pad "$(cat build/host-mac/pad-autor.txt)"`, las pulsaciones del
+autor sacadas de su log; receta en la entrada de arriba):
+- [ ] **Texturas del mundo** (trabajo F3D/texturas): en el bosque Kokiri la
+      geometría sale en colores planos (verde del shade), la HUD bien; igual
+      en el rasterizador de la Mac (campo 18600 de esa corrida), así que es
+      la HLE, no el RSX. La casa de Link (interior 3D en la intro) sí se ve
+      con texturas.
+- [ ] **Menú de pausa en negro** (frontend/rdp): con el menú abierto cada
+      tarea (30/s) pone tres color images: dos de **64 de ancho** (0x3b8800
+      y **0x3b5000, la misma dirección del framebuffer**) y luego
+      0x3b5000/320; el VI sigue mostrando 0x3b5280/0x3daa80. En la PS3 el
+      log dice «0 del RSX» y ~2 destinos creados por tarea: el destino de
+      320 se pierde al crear uno de 64 en la misma dirección y la
+      presentación cae a la copia de la RDRAM (negra, el RSX no la
+      escribe). Le toca a src/rdp (destinos por dirección y ancho, o no
+      tirar el de 320). Cerrar el menú vuelve al juego. Reproducible en la
+      Mac: `--pad "$(cat docs/pads/zelda-oot.pad)" --trace-from 19100
+      --trace-gfx 80` muestra los TARGET.
 
 Falta (para ver bien la casa de Link y las salas con fondo prerrenderizado):
 - [ ] HLE de S2DEX para el fondo (`G_BG_COPY`/`G_BG_1CYC` con `uObjBg` →
