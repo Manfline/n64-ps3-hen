@@ -9,6 +9,8 @@
  *   - libdragon, boot/README.md, ipl3.c, loader.c y cleanup.c (Unlicense):
  *     búsqueda y carga del ELF, boot flags en DMEM, $sp y variables de
  *     libultra en 0x80000300.
+ *   - CIC 6105: solo direcciones y tamaños, de varias fuentes cotejadas
+ *     (docs/THIRD_PARTY.md); los bytes los pone el cartucho del usuario.
  */
 #include "core/boot.h"
 
@@ -26,6 +28,19 @@
 #define PT_LOAD          1u
 #define PT_N64_DECOMP    0x64E36341u
 #define PF_N64_COMPRESSED 0x1000u
+
+/* CIC 6105: copia de su imagen en DMEM a la RDRAM y DMA con paso del RSP. */
+#define X105_COPY_SRC    0x554u      /* DMEM, = ROM (el IPL2 copia 0x40–0xFFF) */
+#define X105_COPY_END    0x888u
+#define X105_COPY_DST    0x004u
+#define X105_RSP_SRC     0x1E8u      /* RDRAM → IMEM 0x120, 0x1F0 bytes */
+#define X105_RSP_IMEM    0x120u
+#define X105_RSP_LEN     0x1F0u
+#define X105_RSP_DST     0x2FB1F0u   /* SP_WR_LEN = 0xFE817000 */
+#define X105_RSP_ROWS    24u
+#define X105_RSP_ROW     8u
+#define X105_RSP_STRIDE  0xFF0u
+#define X105_MEMSIZE     0x3F0u
 
 enum { REG_S3 = 19, REG_S4, REG_S5, REG_S6, REG_S7, REG_SP = 29 };
 
@@ -140,6 +155,30 @@ static bool boot_elf(struct salsa64_n64 *n64, uint32_t elf, struct salsa64_boot_
 	return true;
 }
 
+/*
+ * Lo que el IPL3 del 6105/7105 deja además en la RDRAM, y que los juegos
+ * comprueban (Perfect Dark se queda en un `b .` si 0x2E8 no vale 0xC86E2000;
+ * Zelda OoT lo revisa en un actor; Donkey Kong 64 lee 0x2FE1C0):
+ *   - copia su propia imagen de DMEM 0x554–0x888 a RDRAM 0x004–0x338;
+ *   - corre en el RSP un microcódigo que lee 0x1F0 bytes de RDRAM 0x1E8 a
+ *     IMEM 0x120 y los escribe de vuelta con un DMA con paso: 24 filas de 8
+ *     bytes desde RDRAM 0x2FB1F0, una cada 0xFF0;
+ *   - deja el tamaño de la RDRAM en 0x3F0.
+ * Las variables de libultra (0x300–0x318) se escriben después y pisan la
+ * copia; de 0x31C a 0x337 queda lo copiado.
+ */
+static void boot_x105(struct salsa64_bus *bus)
+{
+	uint8_t *ram = bus->rdram, *imem = bus->sp_mem + 0x1000;
+
+	memcpy(ram + X105_COPY_DST, bus->rom + X105_COPY_SRC, X105_COPY_END - X105_COPY_SRC);
+	memcpy(imem + X105_RSP_IMEM, ram + X105_RSP_SRC, X105_RSP_LEN);
+	for (uint32_t i = 0; i < X105_RSP_ROWS; i++)
+		memcpy(ram + X105_RSP_DST + i * X105_RSP_STRIDE, imem + X105_RSP_IMEM + i * X105_RSP_ROW,
+		       X105_RSP_ROW);
+	salsa64_wr32(ram + X105_MEMSIZE, bus->rdram_size);
+}
+
 static bool boot_flat(struct salsa64_n64 *n64, struct salsa64_boot_info *info)
 {
 	struct salsa64_bus *bus = &n64->bus;
@@ -159,6 +198,8 @@ static bool boot_flat(struct salsa64_n64 *n64, struct salsa64_boot_info *info)
 	if (!rdram_range(bus, entry, len, &pa))
 		return fail(info, "la dirección de arranque del encabezado no cae en la RDRAM");
 	memcpy(bus->rdram + pa, bus->rom + SALSA64_ROM_IPL3_END, len);
+	if (info->cic == SALSA64_CIC_6105)
+		boot_x105(bus);
 
 	/* Variables de arranque de libultra (osTvType, osRomType, osRomBase,
 	 * osResetType, osVersion, osMemSize), como las deja el IPL3. */
@@ -166,6 +207,12 @@ static bool boot_flat(struct salsa64_n64 *n64, struct salsa64_boot_info *info)
 	salsa64_wr32(bus->rdram + 0x304, 0);
 	salsa64_wr32(bus->rdram + 0x308, 0xB0000000u);
 	salsa64_wr32(bus->rdram + 0x30C, 0);
+	/* osCicId: los IPL3 del 6103 y del 6105 dejan su número, y los juegos de
+	 * Rare lo comprueban (6103: Banjo-Kazooie, Diddy Kong Racing; 6105:
+	 * Conker no arranca su hilo principal sin él, Perfect Dark, DK64). De
+	 * las demás variantes no hay dato: queda como estaba. */
+	if (info->cic == SALSA64_CIC_6103 || info->cic == SALSA64_CIC_6105)
+		salsa64_wr32(bus->rdram + 0x310, info->cic == SALSA64_CIC_6103 ? 6103 : 6105);
 	salsa64_wr32(bus->rdram + 0x314, 0);
 	salsa64_wr32(bus->rdram + 0x318, bus->rdram_size);
 
@@ -185,6 +232,17 @@ static bool boot_flat(struct salsa64_n64 *n64, struct salsa64_boot_info *info)
 
 bool salsa64_boot_hle(struct salsa64_n64 *n64, int tv, struct salsa64_boot_info *info)
 {
+	const struct salsa64_bus *bus = &n64->bus;
+	enum salsa64_cic cic = SALSA64_CIC_UNKNOWN;
+
+	if (bus->rom && bus->rom_size >= SALSA64_ROM_IPL3_END)
+		cic = salsa64_rom_cic(bus->rom);
+	return salsa64_boot_hle_as(n64, tv, cic, info);
+}
+
+bool salsa64_boot_hle_as(struct salsa64_n64 *n64, int tv, enum salsa64_cic cic,
+			 struct salsa64_boot_info *info)
+{
 	struct salsa64_boot_info scratch;
 	struct salsa64_bus *bus = &n64->bus;
 	const uint8_t *rom = bus->rom;
@@ -196,7 +254,7 @@ bool salsa64_boot_hle(struct salsa64_n64 *n64, int tv, struct salsa64_boot_info 
 		return fail(info, "ROM ausente o de menos de 4 KB");
 
 	salsa64_n64_reset(n64);
-	info->cic = salsa64_rom_cic(rom);
+	info->cic = cic;
 	info->tv = tv == SALSA64_BOOT_TV_AUTO ? salsa64_rom_tv_type(rom) : (enum salsa64_tv_type)tv;
 	boot_common(n64, rom);
 	salsa64_vi_set_tv(bus, info->tv);
