@@ -33,6 +33,7 @@ struct salsa64_audio_spu {
 /* Arranca el trabajador (spukit_init ya llamado). Devuelve 0 o el error de
  * spukit. */
 int salsa64_audio_spu_init(struct salsa64_audio_spu *s, const struct salsa64_bus *bus);
-void salsa64_audio_spu_shutdown(struct salsa64_audio_spu *s);
+/* Detiene el trabajador; devuelve el estado de salida del programa SPU. */
+int salsa64_audio_spu_shutdown(struct salsa64_audio_spu *s);
 
 #endif

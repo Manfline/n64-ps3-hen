@@ -127,11 +127,13 @@ int salsa64_audio_spu_init(struct salsa64_audio_spu *s, const struct salsa64_bus
 	return 0;
 }
 
-void salsa64_audio_spu_shutdown(struct salsa64_audio_spu *s)
+int salsa64_audio_spu_shutdown(struct salsa64_audio_spu *s)
 {
+	int rc = 0;
 	if (s->pending)
 		spu_finish(s, NULL);
 	if (s->worker)
-		spukit_worker_stop(s->worker);
+		rc = spukit_worker_stop(s->worker);
 	s->worker = NULL;
+	return rc;
 }

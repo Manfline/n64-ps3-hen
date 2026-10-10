@@ -355,21 +355,28 @@ void audio_out_shutdown(void)
 	salsa64_ai_set_sink(&machine->bus, NULL, NULL);
 	salsa64_rsp_set_audio(&machine->bus, NULL);  /* espera la tarea en vuelo */
 	if (hle == HLE_SPE)
-		salsa64_audio_spu_shutdown(&hle_spu);
+		salsa64_log("audio: SPE de la HLE detenido (salida %d)", salsa64_audio_spu_shutdown(&hle_spu));
 	if (dump.buf && !dump.written && dump.len) {
 		dump.written = true;
 		write_dump();  /* lo que alcanzó a juntar */
 	}
 	if (port.open) {
-		u64 rv;
+		/* Orden de PSL1GHT (audio/audio.h), con el hilo ya terminado. Cada
+		 * resultado va al log: un recurso del sistema que quede enganchado
+		 * al proceso puede colgar la consola al salir. */
+		u64 rv = 0;
 		port.quit = 1;
-		sysThreadJoin(port.thread, &rv);
-		audioPortStop(port.port);
-		audioRemoveNotifyEventQueue(port.key);
-		audioPortClose(port.port);
-		sysEventQueueDestroy(port.queue, 0);
-		audioQuit();
+		int rj = sysThreadJoin(port.thread, &rv);
+		int rs = audioPortStop(port.port);
+		int rr = audioRemoveNotifyEventQueue(port.key);
+		int rc = audioPortClose(port.port);
+		int rd = sysEventQueueDestroy(port.queue, 0);
+		if (rd)
+			rd = sysEventQueueDestroy(port.queue, 1) ? rd : 0;  /* 1: forzar */
+		int rq = audioQuit();
 		port.open = false;
+		salsa64_log("audio: cierre del puerto: join %d, stop %d, cola fuera %d, close %d, cola destruida %d, "
+			    "quit %d", rj, rs, rr, rc, rd, rq);
 	}
 	salsa64_log("audio: %llu muestras del AI, %llu a la salida (%llu en silencio), %llu bloques",
 		    (unsigned long long)sync_out.stats.in_frames, (unsigned long long)sync_out.stats.out_frames,
