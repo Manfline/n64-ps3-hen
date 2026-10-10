@@ -1,5 +1,26 @@
 # Estado
 
+## 2026-10-10 — Cierre de la jornada (2): Fase 0 y Fase 1 en PS3 real
+
+Hecho hoy en hardware real (Slim CECH-3011A, HFW 4.91 + HEN; sin CFW posible):
+- Fase 0 completa: udplog, spu-compute (6 SPUs), rsx-triangle, cpu-tests y
+  jit-ppe pasan. JIT viable solo en `.text`; la caché del recompilador va en
+  una cola NOBITS de 16 MB del segmento de texto (docs/jit-ppe.md).
+- Fase 1 cumplida: `salsa64.pkg` muestra la ROM `vitest` (entrada de abajo).
+- Intérprete en el PPE: 8,7 → 21,2 MIPS; no llegará a ~60 sin recompilador.
+- Referencia Cell64 en la misma consola: Zelda en Kokiri 45–50 VI/s, ~15 cps,
+  y cuatro fallas gráficas como casos de prueba (docs/referencia-cell64.md).
+- Proyecto renombrado a **Salsa64**; repo privado github.com/ricowp81/Salsa64.
+- Herramientas: log también en disco (`/dev_hdd0/salsa64/<prog>.log`),
+  `tools/ps3-live.py` (monitor en vivo), `tools/ps3.conf` con la IP.
+
+Siguiente (trabajos lanzados al cerrar; una prueba en la PS3 a la vez):
+- [ ] Fase 2: RSP gráfico (F3DEX2) en SPE 0 + RDP mínimo en el RSX sobre
+      `lib/rsxkit`, con la infraestructura de trabajos SPE.
+- [ ] Fase 3: recompilador MIPS → PPC64 en el PPE.
+- [ ] Controles (SI/PIF + DualShock 3) y detección de bucles de espera.
+- [ ] Después de la Fase 2: audio HLE en SPE 1 sobre la misma infraestructura.
+
 ## 2026-10-10 — Fase 1: un homebrew muestra imagen (criterio cumplido)
 
 Hecho:
