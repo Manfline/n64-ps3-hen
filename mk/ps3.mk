@@ -9,6 +9,8 @@
 #   LIBS        bibliotecas de PSL1GHT a enlazar
 #   SPU_PROGS   programas SPU a embeber; para cada uno, <nombre>_SRCS
 #   SHADERS     shaders Cg (.vcg/.fcg), relativos al directorio del programa
+#   CFLAGS      opcional, se agrega a los flags de compilación PPU
+#   LDFLAGS     opcional, se agrega a los flags de enlace PPU
 #
 # Salidas en build/<PROGRAM>/:
 #   <PROGRAM>.elf        stripped + sprxlinker: RPCS3 y ps3load
@@ -40,7 +42,7 @@ SPU_MACHDEP := -mdual-nops -fmodulo-sched -ffunction-sections -fdata-sections
 PPU_CFLAGS  := -std=gnu11 -O2 -Wall -Wextra -mcpu=cell $(PPU_MACHDEP) \
                -I$(PSL1GHT)/ppu/include -I$(PSL1GHT)/ppu/include/simdmath \
                -I$(ROOT)/src -I$(HERE) -I$(OBJ) $(CFLAGS)
-PPU_LDFLAGS := $(PPU_MACHDEP) -L$(PSL1GHT)/ppu/lib -Wl,-Map,$(OUT)/$(PROGRAM).map
+PPU_LDFLAGS := $(PPU_MACHDEP) -L$(PSL1GHT)/ppu/lib -Wl,-Map,$(OUT)/$(PROGRAM).map $(LDFLAGS)
 SPU_CFLAGS  := -std=gnu11 -O2 -Wall -Wextra $(SPU_MACHDEP) \
                -I$(PSL1GHT)/spu/include -I$(PSL1GHT)/spu/include/simdmath \
                -I$(ROOT)/src -I$(HERE) $(SPU_EXTRA_CFLAGS)
