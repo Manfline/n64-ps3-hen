@@ -109,7 +109,8 @@ enum salsa64_save_type savefile_open(struct savefile *f, struct salsa64_save *sa
 	return type;
 }
 
-bool savefile_flush(struct savefile *f)
+/* `why`: "diferido" o "al salir", para el log. */
+static bool flush(struct savefile *f, const char *why)
 {
 	struct salsa64_save *s = f->save;
 	if (!f->path[0] || !salsa64_save_dirty(s))
@@ -130,17 +131,22 @@ bool savefile_flush(struct savefile *f)
 		f->failed = true;
 		return false;
 	}
-	f->log("guardado: escrito %s (%u escrituras del juego)", f->path, s->writes - s->flushed);
+	f->log("guardado: escrito %s %s (%u escrituras del juego)", why, f->path, s->writes - s->flushed);
 	f->failed = false;
 	salsa64_save_flushed(s);
 	return true;
+}
+
+bool savefile_flush(struct savefile *f)
+{
+	return flush(f, "a pedido");
 }
 
 void savefile_poll(struct savefile *f, uint64_t now_us)
 {
 	if (!f->path[0] || !salsa64_save_due(f->save, now_us) || now_us < f->retry_us)
 		return;
-	if (!savefile_flush(f))
+	if (!flush(f, "diferido"))
 		f->retry_us = now_us + SAVEFILE_RETRY_US;
 }
 
@@ -148,7 +154,9 @@ void savefile_close(struct savefile *f)
 {
 	if (!f->bus)
 		return;  /* no se abrió */
-	savefile_flush(f);
+	if (f->path[0] && !salsa64_save_dirty(f->save))
+		f->log("guardado: cerrado sin cambios pendientes");
+	flush(f, "al salir");
 	salsa64_save_attach(f->bus, NULL);
 	f->path[0] = '\0';
 }

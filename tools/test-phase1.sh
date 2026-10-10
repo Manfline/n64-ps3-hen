@@ -44,7 +44,7 @@ for n in 1 2; do
 	rc=$?
 	res=$(grep 'RESULTADO' build/logs/rpcs3-save-tests-$n.log | tail -1 | sed 's/.*RESULTADO //')
 	printf '%-10s %s\n' guardado$n "${res:-sin RESULTADO (código $rc)}"
-	grep -E 'guardado: escrito|volcado diferido|FALLO' build/logs/rpcs3-save-tests-$n.log |
+	grep -E 'guardado: escrito|volcado|FALLO' build/logs/rpcs3-save-tests-$n.log |
 		sed 's/^\[[^]]*\] /           /' | head -8
 	case "$res" in
 	"save-tests: OK (arranque $n "*) [ $rc -eq 0 ] || fail=1 ;;
