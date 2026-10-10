@@ -344,7 +344,13 @@ tools/build-ppc64.sh                   # build/ppc64/salsa64-unit y salsa64-run
 tools/qemu-ppc64.sh build/ppc64/salsa64-unit rec
 tools/qemu-ppc64.sh build/ppc64/salsa64-run --rec rom.z64
 tools/qemu-ppc64.sh build/ppc64/salsa64-run --lockstep rom.z64
+SALSA64_ROMS=/ruta/a/respaldos \
+  tools/qemu-ppc64.sh build/ppc64/salsa64-run --lockstep /roms/goldeneye.z64
 ```
+
+Los respaldos de juegos van fuera del repo, en una carpeta que
+colima comparta (no todas lo están); `SALSA64_ROMS` la
+monta de solo lectura en `/roms`.
 
 - `salsa64-unit rec`: las pruebas unitarias otra vez con el recompilador en
   **modo estricto** (nunca interpreta lo que se puede compilar: si un bloque
