@@ -52,11 +52,13 @@
  * HLE gráfica: en el SPE 0 (lib/spukit); con SALSA64_DATA_DIR/gfx_ppe
  * presente, en el PPE (para comparar tiempos).
  *
- * Capturas: con una ROM del disco, cada SHOT_US se guarda la pantalla en
- * SALSA64_DATA_DIR/screen-N.ppm (N de 1 a SHOT_MAX, en ronda), para verla
- * desde la Mac por FTP. En modo de prueba automática se captura cada
- * AUTO_SHOT_FIELDS campos y se sale tras AUTO_FIELDS (para correr una ROM
- * en RPCS3 sin manos). Si SALSA64_DATA_DIR/gfxdump dice un número de campo,
+ * Capturas: con una ROM del disco y SALSA64_DATA_DIR/capturas presente,
+ * cada SHOT_US se guarda la pantalla en SALSA64_DATA_DIR/screen-N.ppm (N de
+ * 1 a SHOT_MAX, en ronda), para verla desde la Mac por FTP. Cada captura
+ * frena la presentación ~400 ms (leer el búfer del RSX desde el PPE es
+ * lento): se nota como un tirón, por eso es opcional. En modo de prueba
+ * automática se captura siempre, cada AUTO_SHOT_FIELDS campos, y se sale
+ * tras AUTO_FIELDS (para correr una ROM en RPCS3 sin manos). Si SALSA64_DATA_DIR/gfxdump dice un número de campo,
  * en ese campo se vuelca la salida de la última tarea gráfica a
  * SALSA64_DATA_DIR/gfxdump.bin (salsa64-run --raster-dump la dibuja).
  *
@@ -106,6 +108,7 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define EMBED_PATH   SALSA64_DATA_DIR "/embedded"
 #define GFX_PPE_PATH SALSA64_DATA_DIR "/gfx_ppe"
 #define TURBO_PATH   SALSA64_DATA_DIR "/turbo"
+#define SHOTS_PATH   SALSA64_DATA_DIR "/capturas"
 #define ROM_MAX      (64u << 20)
 #define FB_MAX_W     640
 #define FB_MAX_H     576
@@ -629,6 +632,7 @@ static struct {
 	rsxkit_view view;
 	rsxkit_fb *fb;
 	int autotest;
+	int shots_on;  /* capturas periódicas (SHOTS_PATH o prueba automática) */
 	enum selftest_state result;
 	uint32_t dump_field;
 	uint64_t t_shot;
@@ -686,7 +690,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 			selftest_screen(&m->f, &r);
 		else
 			gfxtest_screen(&m->f, &r);
-	} else if (!selftest_on && !gfxtest_on && m->f.width &&
+	} else if (pres.shots_on && !selftest_on && !gfxtest_on && m->f.width &&
 		   (pres.autotest ? m->field / AUTO_SHOT_FIELDS != pres.shots : now - pres.t_shot >= SHOT_US)) {
 		char path[64];
 		snprintf(path, sizeof path, SALSA64_DATA_DIR "/screen-%u.ppm", pres.shots % SHOT_MAX + 1);
@@ -959,6 +963,9 @@ int main(void)
 	update_pads();
 	pacer_init(&pacer, !file_exists(TURBO_PATH), pacer_sleep, NULL);
 	salsa64_log("ritmo: %s", pacer.enabled ? "el de la tele emulada (cada campo a su hora)" : "sin límite (turbo)");
+	pres.shots_on = pres.autotest || file_exists(SHOTS_PATH);
+	if (pres.shots_on && !pres.autotest)
+		salsa64_log("capturas: screen-N.ppm cada %u s (%s)", SHOT_US / 1000000u, SHOTS_PATH);
 
 	/* El hilo de emulación. */
 	sys_sem_attr_t sem_attr = { SYS_SEM_ATTR_PROTOCOL, SYS_SEM_ATTR_PSHARED, 0, 0, 0, "wake" };

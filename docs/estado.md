@@ -34,12 +34,24 @@ Hecho (rama `musing-mcclintock-6b5e2c`; diseño en docs/hilos-ppe.md):
   medición A/B de vitest va sin límite. Enganche para que el audio marque
   el ritmo (`sleep` reemplazable, `pacer_nudge`). 5 pruebas unitarias.
 
-Mediciones en la PS3: docs/perf-log.md, «Dos hilos en el PPE».
+Medido en la PS3 real con el recompilador (main 697922c mezclado; tabla
+en docs/perf-log.md, «Dos hilos en el PPE»): Zelda en el título con el
+castillo 41–52 → 57–60 campos/s (el flip del vsync ya no frena a la
+emulación); vitest sin límite 187 → 363 campos/s con la presentación a
+60/s saltando el resto, y con ritmo 60,0 exactos; guardado por hilos y
+START + SELECT bien. Las capturas periódicas `screen-N.ppm` pasaron a ser
+opcionales (`SALSA64_DATA_DIR/capturas`): cada una frena ~400 ms y era el
+«tirón» cada 10 s; en prueba automática siguen siempre.
 
 Pendiente:
-- [ ] La espera del hilo de emulación al SPE al terminar cada tarea (13–19
-      ms por tarea en Zelda) sigue: quitarla pide que el evento del RSP se
-      vuelva a programar en vez de bloquear (`src/core/rsp.c`, Fase 3).
+- [ ] La espera del hilo de emulación al SPE al terminar cada tarea (10–27
+      ms por tarea, 20–53 % del hilo en Zelda) es el cuello siguiente:
+      que el evento del RSP se vuelva a programar en vez de bloquear
+      (`src/core/rsp.c`), o acortar la HLE (caché de texturas).
+- [ ] Copia del VI (0,2–0,3 ms por campo) aunque el VI muestre un destino
+      del RSX: evitarla con una pista del hilo de presentación.
+- [ ] Repetir la medición con Super Mario 64 cuando F3D esté en main (caso
+      de libro: 9,5 ms de emulación + 7–8 ms de presentación en un hilo).
 - [ ] Menú y audio en el hilo de presentación (trabajos aparte).
 
 ## 2026-10-10 — Fase 3: recompilador MIPS → PPC64 en el PPE (×4,4 con código real)

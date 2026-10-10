@@ -29,7 +29,7 @@ Un solo productor y un solo consumidor por cola; las barreras son
 |---|---|---|
 | Salida de una tarea gráfica (vértices, comandos, texturas) | Los 3 juegos de búferes de `src/rdp` mapeados al RSX, en ronda. `acquire` (hilo de emulación) toma el siguiente; `done` deja su `gfx_result` en una cola de 3 entradas; `salsa64_rdp_flush` (presentación) traduce en orden y pone una barrera del RSX por juego. Un juego vuelve a estar libre cuando se tradujo **y** el RSX pasó su barrera (`rsxkit_fence_done`, que solo lee la etiqueta y por eso puede llamarse desde el otro hilo) | emulación → presentación |
 | Campo terminado | Cola de 8 mensajes (`struct field_msg`): número de campo, tareas gráficas terminadas hasta ahí (para que el flush no traduzca tareas posteriores al campo), descripción del VI, ranura de la copia, banderas (verificar pantalla) | emulación → presentación |
-| Imagen del VI (cuando la dibujó el CPU en la RDRAM) | **Copia** al terminar el campo, en una de 3 ranuras de 640×576×4 (4,4 MB) con estados LIBRE → ESCRIBIENDO → EN COLA → EN USO → LIBRE (`lwarx/stwcx.` para disputar EN COLA entre los dos hilos). Se copia siempre, también cuando el VI muestra un destino del RSX: cuesta ~50 µs por campo (320×240×2) y evita que el hilo de emulación tenga que saber qué destinos existen | emulación → presentación |
+| Imagen del VI (cuando la dibujó el CPU en la RDRAM) | **Copia** al terminar el campo, en una de 3 ranuras de 640×576×4 (4,4 MB) con estados LIBRE → ESCRIBIENDO → EN COLA → EN USO → LIBRE (`lwarx/stwcx.` para disputar EN COLA entre los dos hilos). Se copia siempre, también cuando el VI muestra un destino del RSX: cuesta 0,20 ms por campo (320×240×2) y 0,30 ms (320×240×4) en la PS3, y evita que el hilo de emulación tenga que saber qué destinos existen (pendiente: una pista del hilo de presentación para no copiar) | emulación → presentación |
 | Controles | Buzón con seqlock: el hilo de presentación lee los DS3 y publica `struct salsa64_pad[4]` + «salir»; el de emulación los aplica al PIF al empezar cada campo | presentación → emulación |
 | Guardado del cartucho | `savefile_stage` (emulación): cuando `salsa64_save_due` dice que toca, copia los 32 KB a una zona de paso y marca `pending`; `savefile_write_staged` (presentación) los escribe al disco y limpia `pending`. Mientras está pendiente no se vuelve a copiar; la escritura nunca toca los datos vivos | emulación → presentación |
 | Resultado del selftest / petición de medición | Banderas de un `int` (monótonas): `selftest.c` las pone desde los dos hilos (ISViewer y RDRAM desde emulación; pantalla desde presentación) y `selftest_state` las lee en presentación. `bench_request` de presentación a emulación | ambos |
@@ -88,6 +88,12 @@ audio prefiere marcar el ritmo él solo, desactiva el pacer.
   de ~1 por campo no debería ocurrir.
 - **Mensajes con verificación** (selftest de vitest, gfxtest) no se
   saltan: la prueba necesita ver esa pantalla.
+- **Capturas `screen-N.ppm`**: leer el búfer del RSX desde el PPE y
+  escribir el PPM frena la presentación ~400 ms (medido en la PS3): se
+  descartan 4 campos, el hilo de emulación espera ~250 ms por un juego
+  de búferes y el ritmo se reinicia. Por eso las capturas periódicas son
+  opcionales (`SALSA64_DATA_DIR/capturas`); en prueba automática van
+  siempre.
 
 ## Lo que no cambia
 
