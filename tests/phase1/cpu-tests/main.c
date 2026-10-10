@@ -53,13 +53,15 @@ int main(void)
 	u64 us = sysGetSystemTime() - t0;
 	salsa64_unit_bench(print_line, now_us);
 
-	/* El recompilador con cada combinación de opciones (rec.h): pruebas en
-	 * modo estricto, bench y nemu64-test completo contra el intérprete. */
+	/* El recompilador con varias combinaciones de opciones (rec.h): pruebas
+	 * en modo estricto, bench y nemu64-test completo contra el intérprete.
+	 * La primera es la del frontend; la de RARE_EXEC repite lo de antes de
+	 * traducir conversiones, LWL/LWR y MFC0 (la diferencia es la ganancia). */
 	static const struct { uint32_t opts; const char *name; } variants[] = {
-		{ 0, "recompilador" },
-		{ SALSA64_REC_OPT_EAGER, "recompilador + escritura temprana" },
 		{ SALSA64_REC_OPT_PIN, "recompilador + registros fijos" },
-		{ SALSA64_REC_OPT_PIN | SALSA64_REC_OPT_EAGER, "recompilador + registros fijos + escritura temprana" },
+		{ SALSA64_REC_OPT_PIN | SALSA64_REC_OPT_RARE_EXEC,
+		  "recompilador + registros fijos, conversiones/LWL/MFC0 al intérprete (como antes)" },
+		{ 0, "recompilador" },
 	};
 	const char *rec_state = "apagado (" SALSA64_NOREC_FLAG ")", *rom_state = "sin comparar";
 	int rec_failed = 0;
@@ -88,11 +90,12 @@ int main(void)
 		log_rombench(name, &rr);
 		const struct salsa64_rec_stats *st = &rec.stats;
 		salsa64_log("%s: %llu bloques, %u KB de caché, %llu entradas desde C, %llu enlaces, "
-			    "%llu invalidados, %llu vaciados, %llu instr. interpretadas", name,
+			    "%llu invalidados, %llu vaciados, %llu instr. interpretadas, "
+			    "%llu llamadas al intérprete", name,
 			    (unsigned long long)st->compiled, salsa64_rec_used(&rec) / 256,
 			    (unsigned long long)st->entries, (unsigned long long)st->linked,
 			    (unsigned long long)st->invalidated, (unsigned long long)st->flushes,
-			    (unsigned long long)st->interp_steps);
+			    (unsigned long long)st->interp_steps, (unsigned long long)st->exec_calls);
 		bool same = ri.finished && rr.finished && ri.failed == rr.failed &&
 			    ri.names_hash == rr.names_hash && ri.cycles == rr.cycles;
 		if (!same || v == 0)

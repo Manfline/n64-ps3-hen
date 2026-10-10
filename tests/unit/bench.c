@@ -73,6 +73,36 @@ static const uint32_t loop_fadd[] = {
 	LOOP_TAIL(NOP),
 };
 
+/* Conversiones de la FPU (entero a float, truncado, float ↔ double,
+ * raíz, a entero) y CFC1: el recompilador las mandaba al intérprete hasta
+ * el 2026-10-10 (SALSA64_REC_OPT_RARE_EXEC lo repite). f1 como entero
+ * (0x3DCCCCCD) tiene 31 bits: CVT.S.W redondea. */
+static const uint32_t loop_cvt[] = {
+	CVT_S(F_W, 2, 1),
+	TRUNC_W(F_S, 3, 0),
+	CVT_D(F_S, 4, 1),
+	CVT_S(F_D, 6, 4),
+	SQRT_F(F_S, 7, 0),
+	CFC1(T6, 31),
+	CVT_W(F_S, 8, 1),
+	LOOP_TAIL(NOP),
+};
+
+/* Copia no alineada como la escribe el compilador: pares LWL/LWR y
+ * SWL/SWR. */
+static const uint32_t loop_unaligned[] = {
+	LWL(T1, 1, T0), LWR(T1, 4, T0), SWL(T1, 0x21, T0), SWR(T1, 0x24, T0),
+	LWL(T2, 6, T0), LWR(T2, 9, T0), ADDU(T3, T3, T2),
+	LOOP_TAIL(NOP),
+};
+
+/* MFC0 (Count, Status, Cause, EPC): antes cada uno terminaba el bloque. */
+static const uint32_t loop_mfc0[] = {
+	MFC0(T1, SALSA64_CP0_COUNT), ADDU(T2, T2, T1), MFC0(T3, SALSA64_CP0_STATUS), OR(T4, T4, T3),
+	MFC0(T6, SALSA64_CP0_CAUSE), XOR(T7, T7, T6), MFC0(T8, SALSA64_CP0_EPC),
+	LOOP_TAIL(NOP),
+};
+
 struct bench_case {
 	const char *name;
 	const uint32_t *code;
@@ -90,6 +120,9 @@ static const struct bench_case cases[] = {
 	CASE("memoria", loop_mem, 10, 0, 0),
 	CASE("mov.s", loop_fmov, 10, 1.5f, 0.1f),
 	CASE("add.s", loop_fadd, 10, 1.5f, 0.1f),
+	CASE("cvt", loop_cvt, 10, 1.5f, 0.1f),
+	CASE("no alin.", loop_unaligned, 10, 0, 0),
+	CASE("mfc0", loop_mfc0, 10, 0, 0),
 };
 
 void salsa64_unit_bench(void (*print)(const char *line), uint64_t (*now_us)(void))

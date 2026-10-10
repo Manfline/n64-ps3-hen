@@ -67,6 +67,7 @@ struct salsa64_rec_stats {
 	uint64_t invalidated;    /* bloques invalidados */
 	uint64_t flushes;        /* vaciados completos de la caché */
 	uint64_t interp_steps;   /* instrucciones que corrió el intérprete */
+	uint64_t exec_calls;     /* instrucciones que el código generado le pasó al intérprete */
 	uint64_t compile_us;     /* reservado para quien mida el tiempo de compilación */
 };
 
@@ -87,6 +88,10 @@ struct salsa64_rec_fixup {
  * conserva. */
 #define SALSA64_REC_OPT_PIN   1u  /* sp, ra, v0, v1, a0–a3 fijos en r18–r25 entre bloques */
 #define SALSA64_REC_OPT_EAGER 2u  /* escribir cada registro poco después de su último valor */
+/* Para medir: conversiones y SQRT de la FPU, CFC1/CTC1, LWL/LWR y compañía
+ * por el intérprete y MFC0 terminando el bloque, como antes de traducirlos
+ * (docs/perf-log.md). Se aplica al compilar: cambiarla pide vaciar la caché. */
+#define SALSA64_REC_OPT_RARE_EXEC 4u
 
 struct salsa64_rec {
 	uint32_t opts;

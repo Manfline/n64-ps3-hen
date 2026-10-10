@@ -1,5 +1,41 @@
 # Estado
 
+## 2026-10-10 — Recompilador: conversiones de la FPU, LWL/LWR y MFC0 en nativo
+
+Hecho (rama `funny-lalande-371c7e`; diseño en docs/rec-ppe.md,
+cifras en docs/perf-log.md):
+- En nativo, con los mismos bits, causas y banderas de FCR31 que el
+  intérprete: SQRT, CVT.D.S/CVT.S.D, ROUND/TRUNC/CEIL/FLOOR a W y L,
+  CVT.W/CVT.L (redondeo al más cercano), CVT.S.W/CVT.D.W (en enteros, sin
+  pasar valores entre registros enteros y de punto flotante), CFC1/CTC1.
+  Lo que no da exacto (redondeo dirigido, I habilitada, operandos fuera de
+  la franja, NaN, desnormales) sigue en el intérprete.
+- LWL/LWR/LDL/LDR/SWL/SWR/SDL/SDR en nativo; los pares LWL+LWR y SWL+SWR
+  sobre los mismos 4 bytes, byte a byte (sin desplazamientos por registro ni
+  load-hit-store en copias).
+- MFC0/DMFC0 ya no terminan el bloque; Count desde r29 + k + 1.
+- `rec->stats.exec_calls` (llamadas al intérprete desde el código) en
+  salsa64-run, cpu-tests y el frontend; `SALSA64_REC_OPT_RARE_EXEC` para
+  medir antes/después con el mismo binario (cpu-tests la corre como
+  variante; el frontend la alterna con `ab-recompilador`).
+- Pruebas: `executed_conversions_match_full` (8000 instrucciones contra el
+  camino completo, más de 3000 en nativo), LWL/LWR y compañía en cada
+  desplazamiento contra un modelo byte a byte, pares en los dos órdenes,
+  registros fuera del PPE, caminos lentos (DMEM, fallo de TLB), código que
+  se reescribe; MFC0 de cada registro y Count dentro del bloque y en un
+  delay slot. 221/221 en el host y con el recompilador (plain, mtctr,
+  registros fijos, escritura temprana); nemu64-test con la línea base,
+  vitest OK, `--lockstep` sin diferencias en los dos. Prueba de mutación:
+  10 de 10 errores puestos a propósito detectados.
+- Host: llamadas al intérprete −18 % en nemu64-test y −97 % en vitest.
+
+Siguiente:
+- [ ] **PS3 real** (pedir turno al autor): cpu-tests SLSA00065 (bench
+      `cvt`, `no alin.`, `mfc0` y nemu64-test con y sin `RARE_EXEC`) y
+      Zelda en el frontend SLSA00063 con `ab-recompilador`.
+- [ ] Lo que sigue yendo al intérprete: CVT.S/D.L, CACHE, MTC0/TLB/ERET;
+      MFC0 de Random.
+
 ## 2026-10-10 — Fase 3: recompilador MIPS → PPC64 en el PPE (×4,4 con código real)
 
 Hecho (diseño y decisión en docs/rec-ppe.md, números en docs/perf-log.md):
@@ -48,8 +84,9 @@ Siguiente:
       enteros con registros fijos: esperado ~750 MIPS, antes 128).
 - [ ] Más juegos de la tabla de docs/proyecto.md (SM64, MK64, SF64; GoldenEye y
       Perfect Dark usan TLB: hoy ese código va al intérprete).
-- [ ] Más en nativo: CVT/TRUNC/ROUND de la FPU, LWL/LWR/SWL/SWR, CACHE,
-      MFC0 sin salir del bloque; código por TLB (GoldenEye) y KSEG1.
+- [x] Más en nativo: CVT/TRUNC/ROUND de la FPU, LWL/LWR/SWL/SWR, MFC0 sin
+      salir del bloque (entrada de arriba).
+- [ ] CACHE; código por TLB (GoldenEye) y KSEG1.
 - [ ] Fase 2: el DMA del SP hacia la RDRAM tiene que llamar a
       `salsa64_bus_rdram_written`.
 ## 2026-10-10 — Fase 2 (parte gráfica): criterio cumplido en PS3 real

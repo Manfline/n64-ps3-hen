@@ -64,6 +64,8 @@ PPC_INLINE uint32_t ppc_xori(unsigned ra, unsigned rs, uint32_t ui) { return ppc
 PPC_INLINE uint32_t ppc_andi_(unsigned ra, unsigned rs, uint32_t ui) { return ppc_d(28, rs, ra, ui); }
 PPC_INLINE uint32_t ppc_andis_(unsigned ra, unsigned rs, uint32_t ui) { return ppc_d(29, rs, ra, ui); }
 PPC_INLINE uint32_t ppc_mulli(unsigned rt, unsigned ra, int32_t si) { return ppc_d(7, rt, ra, (uint32_t)si); }
+/* subfic rt, ra, si: rt = si - ra */
+PPC_INLINE uint32_t ppc_subfic(unsigned rt, unsigned ra, int32_t si) { return ppc_d(8, rt, ra, (uint32_t)si); }
 
 /* cmpi/cmpli: campo BF, L = 1 para 64 bits. */
 PPC_INLINE uint32_t ppc_cmpdi(unsigned bf, unsigned ra, int32_t si) { return ppc_d(11, bf << 2 | 1, ra, (uint32_t)si); }
@@ -117,6 +119,8 @@ PPC_INLINE uint32_t ppc_mr(unsigned ra, unsigned rs) { return ppc_or(ra, rs, rs)
 PPC_INLINE uint32_t ppc_extsw(unsigned ra, unsigned rs) { return ppc_x(rs, ra, 0, 986); }
 PPC_INLINE uint32_t ppc_extsh(unsigned ra, unsigned rs) { return ppc_x(rs, ra, 0, 922); }
 PPC_INLINE uint32_t ppc_extsb(unsigned ra, unsigned rs) { return ppc_x(rs, ra, 0, 954); }
+/* Ceros a la izquierda en los 32 bits bajos (32 si son todos 0). */
+PPC_INLINE uint32_t ppc_cntlzw(unsigned ra, unsigned rs) { return ppc_x(rs, ra, 0, 26); }
 
 /* Desplazamientos con registro: microcodificados en el PPE, solo para
  * SLLV/SRLV/SRAV y sus versiones de 64 bits. */
@@ -138,6 +142,12 @@ PPC_INLINE uint32_t ppc_cmplw(unsigned bf, unsigned ra, unsigned rb) { return pp
 PPC_INLINE uint32_t ppc_rlwinm(unsigned ra, unsigned rs, unsigned sh, unsigned mb, unsigned me)
 {
 	return 21u << 26 | (uint32_t)rs << 21 | (uint32_t)ra << 16 | (sh & 31) << 11 | (mb & 31) << 6 | (me & 31) << 1;
+}
+
+/* rlwimi: rota rs y lo inserta en ra bajo la máscara mb–me (el resto de ra queda). */
+PPC_INLINE uint32_t ppc_rlwimi(unsigned ra, unsigned rs, unsigned sh, unsigned mb, unsigned me)
+{
+	return 20u << 26 | (uint32_t)rs << 21 | (uint32_t)ra << 16 | (sh & 31) << 11 | (mb & 31) << 6 | (me & 31) << 1;
 }
 
 /* Forma MD: sh y mb/me de 6 bits, partidos como pide la codificación. */
@@ -181,6 +191,14 @@ PPC_INLINE uint32_t ppc_fnmsub(unsigned frt, unsigned fra, unsigned frc, unsigne
 /* Forma X (opcode 63). */
 PPC_INLINE uint32_t ppc_frsp(unsigned frt, unsigned frb) { return 63u << 26 | (uint32_t)frt << 21 | (uint32_t)frb << 11 | 12u << 1; }
 PPC_INLINE uint32_t ppc_fneg(unsigned frt, unsigned frb) { return 63u << 26 | (uint32_t)frt << 21 | (uint32_t)frb << 11 | 40u << 1; }
+/* Raíz cuadrada (opcional en la arquitectura; el PPE la tiene: ppu-gcc
+ * -mcpu=cell la emite). */
+PPC_INLINE uint32_t ppc_fsqrt(unsigned frt, unsigned frb) { return ppc_fa(frt, 0, frb, 0, 22); }
+/* A entero de 64 bits en el registro de punto flotante: con el modo del
+ * FPSCR (siempre al más cercano par) o hacia cero; y de vuelta a double. */
+PPC_INLINE uint32_t ppc_fctid(unsigned frt, unsigned frb) { return 63u << 26 | (uint32_t)frt << 21 | (uint32_t)frb << 11 | 814u << 1; }
+PPC_INLINE uint32_t ppc_fctidz(unsigned frt, unsigned frb) { return 63u << 26 | (uint32_t)frt << 21 | (uint32_t)frb << 11 | 815u << 1; }
+PPC_INLINE uint32_t ppc_fcfid(unsigned frt, unsigned frb) { return 63u << 26 | (uint32_t)frt << 21 | (uint32_t)frb << 11 | 846u << 1; }
 PPC_INLINE uint32_t ppc_fcmpu(unsigned bf, unsigned fra, unsigned frb)
 {
 	return 63u << 26 | (uint32_t)bf << 23 | (uint32_t)fra << 16 | (uint32_t)frb << 11;

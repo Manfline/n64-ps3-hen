@@ -213,6 +213,38 @@ mitad del campo en escenas ligeras). Pendiente: medir con juegos (tabla de
 docs/proyecto.md) en el frontend, y con 632a796 (escritura temprana, registros
 fijos: cpu-tests mide nemu64-test con y sin ellos).
 
+### Conversiones de la FPU, LWL/LWR y MFC0 en nativo (2026-10-10)
+
+Antes iban al intérprete (una llamada a C por instrucción, con su
+escritura y recarga de registros y la revisión de eventos al volver) y MFC0
+terminaba el bloque. Ahora en nativo: SQRT, CVT.D.S/CVT.S.D,
+ROUND/TRUNC/CEIL/FLOOR/CVT a W y L, CVT.S.W/CVT.D.W, CFC1/CTC1,
+LWL/LWR/LDL/LDR/SWL/SWR/SDL/SDR (los pares LWL+LWR y SWL+SWR byte a byte) y
+MFC0/DMFC0 (docs/rec-ppe.md). `SALSA64_REC_OPT_RARE_EXEC` repite lo de
+antes con el mismo binario: con ella, salsa64-run da exactamente las
+cifras de la línea base anterior (139 861 entradas, 1 989 273
+interpretadas en nemu64-test).
+
+Host (qemu ppc64, registros fijos; cuenta de eventos, no tiempo):
+
+| Prueba | Antes (`RARE_EXEC`) | Después | |
+|---|---|---|---|
+| nemu64-test: llamadas al intérprete desde el código | 2 154 355 | 1 773 580 | −18 % |
+| nemu64-test: entradas desde C | 139 861 | 109 026 | −22 % |
+| nemu64-test: instrucciones del intérprete en el despachador | 1 989 273 | 1 591 007 | −20 % |
+| vitest: llamadas al intérprete | 4 428 | 125 | −97 % |
+| vitest: entradas desde C | 925 | 803 | −13 % |
+
+Lo que queda en nemu64-test son sobre todo sus pruebas de COP0 (MTC0, TLB,
+ERET), traps y CACHE.
+
+**PS3 real: pendiente.** Preparado: `salsa64-cpu-rec.pkg` (SLSA00065,
+«Salsa64 CPU rec conversiones»: nemu64-test y bench con registros fijos,
+con y sin `RARE_EXEC`; variantes nuevas del bench `cvt`, `no alin.` y
+`mfc0`) y `salsa64-rec.pkg` (SLSA00063, «Salsa64 rec conversiones»: con
+`/dev_hdd0/salsa64/ab-recompilador` alterna `RARE_EXEC` en cada ventana de
+5 s, para comparar Zelda en la misma escena).
+
 ## Líneas base de la Fase 2 (parte gráfica)
 
 **PS3 real** (2026-10-10, Slim CECH-3011A, HFW 4.91 + HEN):

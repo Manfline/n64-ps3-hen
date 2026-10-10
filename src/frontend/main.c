@@ -44,6 +44,11 @@
  * en ese campo se vuelca la salida de la última tarea gráfica a
  * SALSA64_DATA_DIR/gfxdump.bin (salsa64-run --raster-dump la dibuja).
  *
+ * Medición A/B del recompilador: con SALSA64_DATA_DIR/ab-recompilador
+ * presente, cada ventana de estadísticas alterna SALSA64_REC_OPT_RARE_EXEC
+ * (conversiones de la FPU, LWL/LWR y MFC0 al intérprete, como antes de
+ * traducirlos) y vacía la caché; el log dice con qué corre cada ventana.
+ *
  * Salir: START + SELECT, o "Salir del juego" desde el menú del sistema.
  * Lo que la ROM imprime por el ISViewer va al log.
  */
@@ -477,6 +482,16 @@ int main(void)
 		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x",
 			    SALSA64_REC_CACHE_BYTES >> 20, salsa64_ps3_rec_cache(), rec.calls_near ? "con bl" : "por mtctr",
 			    rec.opts);
+	bool ab_rec = false;
+	if (use_rec) {
+		FILE *af = fopen(SALSA64_DATA_DIR "/ab-recompilador", "r");
+		if (af) {
+			fclose(af);
+			ab_rec = true;
+			salsa64_log("A/B del recompilador: cada ventana alterna todo en nativo y "
+				    "conversiones/LWL/MFC0 al intérprete; empieza todo en nativo");
+		}
+	}
 
 	ioPadInit(7);
 	load_padmap();
@@ -635,11 +650,19 @@ int main(void)
 			if (use_rec) {
 				const struct salsa64_rec_stats *st = &rec.stats;
 				salsa64_log("recompilador: %llu bloques, %u KB de caché, %llu entradas, %llu enlaces, "
-					    "%llu invalidados, %llu vaciados, %llu instr. interpretadas",
+					    "%llu invalidados, %llu vaciados, %llu instr. interpretadas, "
+					    "%llu llamadas al intérprete",
 					    (unsigned long long)st->compiled, salsa64_rec_used(&rec) / 256,
 					    (unsigned long long)st->entries, (unsigned long long)st->linked,
 					    (unsigned long long)st->invalidated, (unsigned long long)st->flushes,
-					    (unsigned long long)st->interp_steps);
+					    (unsigned long long)st->interp_steps, (unsigned long long)st->exec_calls);
+			}
+			if (ab_rec) {
+				rec.opts ^= SALSA64_REC_OPT_RARE_EXEC;
+				salsa64_rec_flush(&rec);
+				salsa64_log("A/B: la ventana siguiente con %s",
+					    (rec.opts & SALSA64_REC_OPT_RARE_EXEC)
+						    ? "conversiones/LWL/MFC0 al intérprete (como antes)" : "todo en nativo");
 			}
 			t_stats = t2;
 			cyc_stats = n64.cpu.cycles;

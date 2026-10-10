@@ -70,10 +70,10 @@ VI_V_CURRENT dan lo mismo. KSEG1, TLB, modo usuario: intérprete (por ahora).
 
 ### Bloques
 
-Desde `pc` hasta un salto con su delay slot, una instrucción de COP0,
-SYSCALL o BREAK (siempre vuelven a C), o 64 instrucciones. Un salto cuyo
-delay slot es otro salto o COP0 queda fuera del bloque (lo corre el
-intérprete). La condición se calcula antes del delay slot en `cr4` (no
+Desde `pc` hasta un salto con su delay slot, una instrucción de COP0 que
+no sea MFC0/DMFC0, SYSCALL o BREAK (siempre vuelven a C), o 64
+instrucciones. Un salto cuyo delay slot es otro salto o una de esas
+instrucciones de COP0 queda fuera del bloque (lo corre el intérprete). La condición se calcula antes del delay slot en `cr4` (no
 volátil, sobrevive a las llamadas a C); branch-likely no tomado salta el
 delay slot y cuenta un ciclo menos.
 
@@ -121,17 +121,26 @@ Si algo cambió, el bloque escribe sus registros y vuelve al despachador con
 la dirección donde sigue (en un delay slot, según el salto).
 
 Lo que se llama a C:
-- camino lento de cargas y almacenamientos (E/S, TLB, KSEG1, fuera de la
-  RDRAM, código en la zona escrita);
+- camino lento de cargas y almacenamientos (E/S, TLB, fuera de la RDRAM,
+  código en la zona escrita);
 - instrucciones raras o con mucho estado, que ejecuta el intérprete
-  (`salsa64_vr4300_exec_one`): LWL/LWR/SWL/SWR/LDL/LDR/SDL/SDR, LL/SC,
-  CACHE, traps, COP0, CFC1/CTC1, y de la FPU SQRT, conversiones y redondeos;
+  (`salsa64_vr4300_exec_one`): LL/SC, CACHE, traps, COP0 salvo MFC0/DMFC0
+  (y MFC0 de Random), CVT.S/D.L, y los caminos lentos de lo que se traduce
+  (operandos fuera de la franja, redondeo dirigido, causas habilitadas);
 - excepciones (SYSCALL, BREAK, desbordamiento).
 
 En nativo: ALU de 32 y 64 bits (con desbordamiento), desplazamientos,
 MULT/DIV y variantes de 64 bits, HI/LO, saltos, cargas y almacenamientos de
-enteros y de COP1, MFC1/MTC1/DMFC1/DMTC1, BC1T/F, y en S y D
-ADD/SUB/MUL/DIV, MOV, ABS, NEG y C.cond.
+enteros y de COP1, LWL/LWR/LDL/LDR/SWL/SWR/SDL/SDR, MFC0/DMFC0,
+MFC1/MTC1/DMFC1/DMTC1, CFC1/CTC1, BC1T/F, en S y D ADD/SUB/MUL/DIV, SQRT,
+MOV, ABS, NEG, C.cond, ROUND/TRUNC/CEIL/FLOOR a W y L, CVT.W/CVT.L,
+CVT.D.S y CVT.S.D, y CVT.S.W/CVT.D.W.
+
+`rec->stats.exec_calls` cuenta las instrucciones que el código generado le
+pasa al intérprete (salsa64-run, cpu-tests y el frontend lo muestran).
+`SALSA64_REC_OPT_RARE_EXEC` repite lo de antes del 2026-10-10
+(conversiones, SQRT, CFC1/CTC1, LWL/LWR y compañía al intérprete, MFC0
+terminando el bloque) para medir la diferencia con el mismo binario.
 
 La FPU nativa repite el camino rápido del intérprete (`fpu.h`): las mismas
 operaciones de doble precisión en el mismo orden (suma, redondeo a simple
@@ -141,6 +150,61 @@ dirigido, I habilitada, operandos fuera de la franja segura, NaN,
 desnormales, sumas en S con exponentes a más de 28) salta a la sección fría
 y lo hace el intérprete. La prueba `executed_matches_full` ejecuta 6000
 instrucciones aleatorias por el CPU contra el camino completo.
+
+Conversiones y raíz (2026-10-10), con la misma regla: lo que el camino
+nativo no puede dar con los mismos bits y causas de `cop1.c` va al
+intérprete. Clasifican el operando con sus bits en enteros (exponente en
+una franja, o ±0) y nunca pasan un valor entre registros enteros y de
+punto flotante:
+- SQRT: positivo normal o ±0, redondeo al más cercano, I deshabilitada.
+  `fsqrt` (el PPE la tiene); I según `frsp` ≠ raíz (en S) o el residuo
+  a − r·r de `fnmsub`, que es lo que hace `cop1.c` con fma.
+- CVT.D.S: `lfs` + `stfd`, exacto y sin causa. CVT.S.D: 2⁻¹²⁶ ≤ |x| < 2¹²⁷
+  (ni desborda ni queda diminuto), `frsp` e I si cambió.
+- ROUND/TRUNC/CEIL/FLOOR a W y L, y CVT.W/CVT.L con redondeo al más
+  cercano: solo exponentes con los que ningún modo se sale del rango (W:
+  |x| < 2³¹ en S, < 2³⁰ en D; L: < 2⁵³). `fctid` (el FPSCR siempre está al
+  más cercano par, como `fpu_round`) o `fctidz`; CEIL y FLOOR corrigen el
+  truncado en ±1 (exacto); I si el entero vuelto a double (`fcfid`) difiere.
+  El resultado va de `stfd` a `cpu->fpr`, que es su destino.
+- CVT.S.W y CVT.D.W en enteros: el entero está en `cpu->fpr` y llevarlo a
+  un registro de punto flotante pide escribirlo y releerlo (load-hit-store;
+  ppu-gcc hace eso con `(double)x`). Se normaliza |x| con `cntlzw` y un
+  `slw` (microcódigo, uno solo) y, en S, se redondea a 24 bits al más
+  cercano par sumando 0x7F más el bit que queda abajo.
+- CFC1 lee FCR31 (o FCR0); CTC1 escribe los bits escribibles y, si una
+  causa queda con su excepción habilitada (E siempre), deja la instrucción
+  al intérprete, que la lanza.
+
+La prueba `executed_conversions_match_full` (8000 instrucciones: SQRT, las
+conversiones con enteros con fracción, empates, bordes de 2³¹ y 2⁵³ y de la
+franja de CVT.S.D, CFC1/CTC1) compara el CPU con el camino completo y, con
+el recompilador, exige que más de 3000 hayan corrido sin el intérprete.
+
+### Cargas y almacenamientos no alineados
+
+LWL/LWR/LDL/LDR/SWL/SWR/SDL/SDR sueltos: en la RDRAM desde KSEG0/KSEG1 (y,
+al escribir, sin código en esos 128 bytes), el desplazamiento sale de la
+dirección y la mezcla usa desplazamientos por registro (microcódigo en el
+PPE, pero mucho menos que una llamada al intérprete); los almacenamientos
+leen la palabra, la mezclan y la escriben. Un LWL y un LWR (o SWL y SWR)
+consecutivos, en cualquier orden, sobre los mismos 4 bytes (`off` y
+`off + 3`, misma base y mismo rt; en las cargas, la base no es rt) son un
+acceso de 4 bytes sin alinear, como los escribe el compilador: se hacen
+byte a byte (4 `lbz` y 3 `rlwimi`, o 4 `stb`), sin desplazamientos por
+registro y sin leer la palabra antes de escribirla (en una copia, el par
+siguiente escribe la palabra que el anterior acaba de escribir:
+load-hit-store). Fuera de la RDRAM, con TLB o con código, el intérprete
+corre las dos.
+
+### MFC0
+
+MFC0 y DMFC0 ya no terminan el bloque: en modo kernel (el único en que
+corre un bloque) no hay excepción posible, y cada registro es un campo de
+`struct salsa64_cpu` (tabla en `rec_emit.c` con lo mismo que
+`salsa64_cpu_cop0_read`). Count es `(cycles >> 1) + count_offset` con
+`cycles = r29 + k + 1`, lo que el intérprete tiene al ejecutar la
+instrucción k. Random lo corre el intérprete (sin terminar el bloque).
 
 ### Memoria
 
@@ -243,5 +307,6 @@ compiler error: Segmentation fault"; repetir compila bien
 | 2026-10-10 | nemu64-test, cuatro variantes | **PS3 real**, f416bee | registros fijos 1821 ms (×4,45); 213/213 en cada variante |
 | 2026-10-10 | Frontend con vitest | **PS3 real**, f18b392 | 60 campos/s, 2,9–5,4 ms de emulación por campo (intérprete 35–66) |
 | 2026-10-10 | **Zelda OoT** en el frontend | **PS3 real**, f416bee | 41–60 campos/s (intérprete 15–17); emulación 4–14 ms por campo; se ve igual |
+| 2026-10-10 | Unitarias con conversiones, LWL/LWR y MFC0 en nativo | qemu-ppc64 (plain, mtctr, fijos, temprana) | 221/221; `--lockstep` sin diferencias en nemu64-test y vitest; mutación 10/10 |
 
 Rendimiento: solo en la PS3 real (docs/perf-log.md, «Recompilador»).
