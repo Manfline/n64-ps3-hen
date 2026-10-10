@@ -47,4 +47,9 @@ struct salsa64_boot_info {
  */
 bool salsa64_boot_hle(struct salsa64_n64 *n64, int tv, struct salsa64_boot_info *info);
 
+/* Igual, con la variante de CIC dada en lugar de la que reconoce el CRC del
+ * IPL3 (pruebas: las ROMs sintéticas no traen un IPL3 de Nintendo). */
+bool salsa64_boot_hle_as(struct salsa64_n64 *n64, int tv, enum salsa64_cic cic,
+			 struct salsa64_boot_info *info);
+
 #endif

@@ -1,6 +1,7 @@
 # Pulsaciones programadas para `salsa64-run --pad`
 
-Una línea por archivo, con el formato de `--pad` (`CAMPO:BOTONES,…`):
+Una línea por archivo, con el formato de `--pad` (`CAMPO:BOTONES;…`; cada
+estado vale hasta el siguiente, por eso cada pulsación lleva su suelta `-`):
 
     build/host/salsa64-run --pad "$(cat docs/pads/zelda-oot.pad)" --save-dir DIR rom.z64
 

@@ -37,13 +37,13 @@
  * ROM audiotest (tests/roms/src/audiotest/tone.h) y exige que no haya
  * huecos entre los DMA del AI.
  *
- * Controles programados (--pad): "CAMPO:BOTONES,CAMPO:BOTONES,…" pone el
- * control 1 al empezar ese campo del VI (A, B, Z, START, DU/DD/DL/DR, L, R,
- * CU/CD/CL/CR, x<n>/y<n> para el stick, unidos con +; vacío o "-" lo
- * suelta). Una pulsación se suelta sola PAD_HOLD campos después si no hay
- * otra entrada antes. Sirve para llegar a una escena sin manos (menús de
- * un juego) y es determinista: con --lockstep la referencia recibe lo mismo
- * en el mismo ciclo. --trace-from CAMPO retrasa las trazas (--trace-exc,
+ * Controles programados (--pad): "CAMPO:BOTONES[@X,Y];…" (o separados por
+ * ',') pone el control 1 al empezar ese campo del VI (A, B, Z, START,
+ * DU/DD/DL/DR, L, R, CU/CD/CL/CR unidos con +; el stick como @X,Y o
+ * x<n>/y<n>; "-" suelta todo) y el estado vale hasta la entrada siguiente.
+ * Sirve para llegar a una escena sin manos (menús de un juego) y es
+ * determinista: con --lockstep la referencia recibe lo mismo en el mismo
+ * ciclo. --trace-from CAMPO retrasa las trazas (--trace-exc,
  * --trace-faults, --trace-rsp, --trace-gfx) hasta ese campo.
  *
  * Códigos de salida:
@@ -79,7 +79,6 @@
 #define MAX_TEXT       255
 #define MAX_FAIL_TEXTS 4
 #define MAX_PADS       512
-#define PAD_HOLD       8   /* campos que dura una pulsación programada */
 
 enum stop_reason {
 	STOP_NONE,
@@ -105,7 +104,7 @@ static struct {
 	uint32_t fields;        /* campo del VI de la última comparación de la RDRAM */
 } lock;
 
-static struct salsa64_save save;
+static struct salsa64_save save, ref_save;
 static struct savefile save_file;
 
 /* --pad: el control 1 por campo del VI. `applied` guarda en qué ciclo se
@@ -114,7 +113,6 @@ static struct savefile save_file;
 static struct {
 	struct { uint32_t field; struct salsa64_pad pad; } at[MAX_PADS];
 	unsigned n, next;
-	uint32_t release_field;   /* campo en que se suelta la pulsación en curso, 0 si no hay */
 	struct { uint64_t cycle; struct salsa64_pad pad; } applied[MAX_PADS * 2];
 	unsigned napplied, ref_next;
 } pads;
@@ -144,9 +142,12 @@ static bool pad_button(const char *s, size_t n, uint16_t *bit)
 	return false;
 }
 
-/* "CAMPO:BOTONES,…": botones unidos con +, x<n>/y<n> para el stick. */
+/* "CAMPO:BOTONES[@X,Y];…" (o separados por ','): botones unidos con +,
+ * '-' suelta todo, el stick como @X,Y o x<n>/y<n>. Cada estado vale hasta
+ * el siguiente. */
 static bool pad_parse(const char *spec)
 {
+	char sep = strchr(spec, ';') ? ';' : ',';
 	while (*spec) {
 		if (pads.n == MAX_PADS)
 			return false;
@@ -156,9 +157,20 @@ static bool pad_parse(const char *spec)
 			return false;
 		struct salsa64_pad pad = { 0, 0, 0, 1 };
 		const char *p = end + 1;
-		while (*p && *p != ',') {
+		while (*p && *p != sep) {
+			if (*p == '@') {
+				long x = strtol(p + 1, &end, 10);
+				if (*end != ',')
+					return false;
+				long y = strtol(end + 1, &end, 10);
+				if (x < -128 || x > 127 || y < -128 || y > 127)
+					return false;
+				pad.x = (int8_t)x, pad.y = (int8_t)y;
+				p = end;
+				continue;
+			}
 			const char *q = p;
-			while (*q && *q != ',' && *q != '+')
+			while (*q && *q != sep && *q != '+' && *q != '@')
 				q++;
 			size_t n = (size_t)(q - p);
 			uint16_t bit;
@@ -179,7 +191,7 @@ static bool pad_parse(const char *spec)
 		pads.at[pads.n].field = (uint32_t)field;
 		pads.at[pads.n].pad = pad;
 		pads.n++;
-		spec = *p == ',' ? p + 1 : p;
+		spec = *p == sep ? p + 1 : p;
 	}
 	return pads.n > 0;
 }
@@ -194,15 +206,8 @@ static void pad_field(void)
 {
 	uint32_t field = n64.bus.vi.fields;
 	const struct salsa64_pad *pad = NULL;
-	static const struct salsa64_pad none = { 0, 0, 0, 1 };
-	if (pads.next < pads.n && field >= pads.at[pads.next].field) {
-		pad = &pads.at[pads.next].pad;
-		pads.release_field = pad->buttons || pad->x || pad->y ? field + PAD_HOLD : 0;
-		pads.next++;
-	} else if (pads.release_field && field >= pads.release_field) {
-		pad = &none;
-		pads.release_field = 0;
-	}
+	while (pads.next < pads.n && field >= pads.at[pads.next].field)
+		pad = &pads.at[pads.next++].pad;
 	if (!pad)
 		return;
 	pad_apply(&n64, pad);
@@ -417,6 +422,17 @@ static void trace_alist(const struct salsa64_task *t)
 	fprintf(stderr, "\n");
 }
 
+/* Muestreo del PC al final de cada bloque del bucle principal, por segmento:
+ * cuánto del tiempo corre código mapeado por la TLB (kuseg, kseg2/3). */
+enum { SEG_KSEG0, SEG_KSEG1, SEG_TLB, SEG_COUNT };
+static uint64_t pc_samples[SEG_COUNT];
+
+static void pc_sample(uint64_t pc)
+{
+	uint32_t top = (uint32_t)pc >> 29;
+	pc_samples[top == 4 ? SEG_KSEG0 : top == 5 ? SEG_KSEG1 : SEG_TLB]++;
+}
+
 static void trace_rsp(void *ctx, const struct salsa64_task *t, enum salsa64_gbi gbi)
 {
 	(void)ctx;
@@ -431,6 +447,31 @@ static void trace_rsp(void *ctx, const struct salsa64_task *t, enum salsa64_gbi 
 		"boot=%08x/%x gbi=%d\n", (unsigned long long)n64.cpu.cycles, t->type, t->flags, t->ucode,
 		t->ucode_size, t->ucode_data, t->ucode_data_size, t->data_ptr, t->data_size, t->ucode_boot,
 		t->ucode_boot_size, gbi);
+	/* Identificación del microcódigo: su texto ("RSP Gfx ucode …"), el CRC-32
+	 * del código y de ucode_data (para los que no traen texto) y, en las de
+	 * audio, el ABI y las palabras de ucode_data que lo distinguen. */
+	char text[96];
+	salsa64_rsp_ucode_text(&n64.bus, t->ucode_data, text, sizeof text);
+	if (text[0])
+		fprintf(stderr, "  %s\n", text);
+	uint32_t base = t->ucode_data & 0x7FFFFF, size = t->ucode_data_size;
+	if (base >= n64.bus.rdram_size)
+		size = 0;
+	else if (!size || size > 0x1000)
+		size = 0x1000;
+	if (size && size > n64.bus.rdram_size - base)
+		size = n64.bus.rdram_size - base;
+	uint32_t code = t->ucode & 0x7FFFFF, code_size = t->ucode_size;
+	if (code >= n64.bus.rdram_size || code_size > n64.bus.rdram_size - code)
+		code_size = 0;
+	fprintf(stderr, "  crc32: ucode %08x (0x%x bytes), ucode_data %08x (0x%x bytes)\n",
+		code_size ? salsa64_crc32(n64.bus.rdram + code, code_size) : 0, code_size,
+		size ? salsa64_crc32(n64.bus.rdram + base, size) : 0, size);
+	if (t->type == SALSA64_TASK_AUDIO && size >= 0x34)
+		fprintf(stderr, "  audio %s; ucode_data[00 10 28 30]: %08x %08x %08x %08x\n",
+			salsa64_abi_name(salsa64_rsp_detect_abi(&n64.bus, t)), salsa64_rd32(n64.bus.rdram + base),
+			salsa64_rd32(n64.bus.rdram + base + 0x10), salsa64_rd32(n64.bus.rdram + base + 0x28),
+			salsa64_rd32(n64.bus.rdram + base + 0x30));
 	/* Microcódigos pequeños: volcar texto y datos. */
 	if (t->ucode_size && t->ucode_size <= 0x100) {
 		fprintf(stderr, "  ucode:");
@@ -947,7 +988,8 @@ static void usage(FILE *out)
 	      "      --trace-exc N     mostrar las primeras N excepciones del CPU\n"
 	      "      --trace-faults N  igual, sin las interrupciones\n"
 	      "      --trace-from C    trazar solo desde el campo C del VI\n"
-	      "      --pad ESPEC       control 1 programado: CAMPO:BOTONES,… (A+START, x80, -)\n"
+	      "      --pad GUION       control 1 por campos: \"300:START;306:-;400:A+Z@0,80\"\n"
+	      "                        (también CAMPO:BOTONES,… con x80/y-50); vale hasta el siguiente\n"
 	      "      --frame ARCHIVO   al terminar, guardar en PPM la imagen del VI\n"
 	      "      --ram-dump ARCHIVO  al terminar, volcar la RDRAM (tools/libultra-threads.py)\n"
 	      "      --rec             usar el recompilador (host ppc64 big-endian)\n"
@@ -1151,6 +1193,12 @@ int main(int argc, char **argv)
 				fprintf(stderr, "salsa64-run: la referencia no arrancó\n");
 				return 3;
 			}
+			/* El mismo guardado, en una copia: sin él la PIF de la referencia
+			 * responde «sin dispositivo» donde la principal ve la EEPROM. */
+			if (n64.bus.save) {
+				ref_save = save;
+				salsa64_save_attach(&ref.bus, &ref_save);
+			}
 			rec.no_link = true;
 			rec.after_exit = lockstep_check;
 		}
@@ -1185,6 +1233,7 @@ int main(int argc, char **argv)
 		} else {
 			salsa64_n64_run(&n64, max_cycles - done < slice ? max_cycles - done : slice);
 		}
+		pc_sample(n64.cpu.pc);
 		if (watch.hit != STOP_NONE)
 			reason = watch.hit;
 		else if (cpu_stuck())
@@ -1202,6 +1251,11 @@ int main(int argc, char **argv)
 		[STOP_CYCLES] = "se agotaron los ciclos",
 		[STOP_STUCK] = "bucle infinito sin interrupciones posibles",
 	};
+	uint64_t samples = pc_samples[SEG_KSEG0] + pc_samples[SEG_KSEG1] + pc_samples[SEG_TLB];
+	if (samples)
+		fprintf(stderr, "salsa64-run: pc al final de cada bloque (%llu muestras): KSEG0 %.1f %%, KSEG1 %.1f %%, "
+			"TLB %.1f %%\n", (unsigned long long)samples, 100.0 * pc_samples[SEG_KSEG0] / samples,
+			100.0 * pc_samples[SEG_KSEG1] / samples, 100.0 * pc_samples[SEG_TLB] / samples);
 	/* Una instrucción por ciclo, salvo los ciclos saltados en bucles de espera. */
 	fprintf(stderr, "salsa64-run: %s; %llu ciclos (%.2f s de consola) en %.2f s, %.1f MIPS, "
 		"%.1f %% en bucles de espera, pc=0x%016llx\n",

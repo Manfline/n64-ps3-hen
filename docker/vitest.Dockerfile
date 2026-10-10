@@ -2,7 +2,8 @@
 #
 # Compila las ROMs de prueba propias (tests/roms/src/vitest y, con
 # --build-arg ROM=gfxtest, tests/roms/src/gfxtest) de forma reproducible: clang/lld de Debian 12 para MIPS (sin libultra ni
-# libdragon) y nust64 fijo para empaquetar el ELF.
+# libdragon) y nust64 fijo para empaquetar el ELF. GBI (gfxtest) elige la
+# variante y NAME el nombre de la ROM (por omisión, salsa64-<ROM>).
 #
 # El ROM lleva el IPL3 abierto de libdragon (Unlicense) que trae nust64 0.4.1;
 # antes de usarlo se comprueba su MD5 contra el publicado por libdragon para la
@@ -50,14 +51,17 @@ RUN cargo install nust64 --version "${NUST64_VERSION}" --locked \
 FROM toolchain AS build
 ARG ROM=vitest
 ARG TITLE="SALSA64 VITEST"
+ARG GBI=""
+ARG NAME=""
 COPY ${ROM} /build/${ROM}
 WORKDIR /build/${ROM}
-RUN make \
+RUN name="${NAME:-salsa64-${ROM}}" \
+ && make ${GBI:+GBI=${GBI}} \
  && nust64 -n "${TITLE}" --elf build/salsa64-${ROM}.elf \
  && mkdir /out \
- && cp build/salsa64-${ROM}.z64 /out/ \
- && { clang-14 --version | head -1; ld.lld-14 --version; nust64 --version 2>/dev/null || echo "nust64 ${NUST64_VERSION}"; } >/out/salsa64-${ROM}.buildinfo \
- && sha256sum /out/salsa64-${ROM}.z64
+ && cp build/salsa64-${ROM}.z64 "/out/${name}.z64" \
+ && { clang-14 --version | head -1; ld.lld-14 --version; nust64 --version 2>/dev/null || echo "nust64 ${NUST64_VERSION}"; } >"/out/${name}.buildinfo" \
+ && sha256sum "/out/${name}.z64"
 
 FROM scratch AS rom
 COPY --from=build /out/ /

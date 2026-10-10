@@ -1,14 +1,15 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * Salsa64 — gfxtest: ROM 3D de prueba para la HLE de F3DEX2 y el RDP.
- * Código propio, sin libultra ni libdragon; se empaqueta con el IPL3 libre
- * de libdragon (nust64).
+ * Salsa64 — gfxtest: ROM 3D de prueba para la HLE gráfica (F3DEX2, F3D o
+ * F3DEX 1.x según GBI en el Makefile) y el RDP. Código propio, sin libultra
+ * ni libdragon; se empaqueta con el IPL3 libre de libdragon (nust64).
  *
- * Cada cuadro arma una display list F3DEX2 (gbi.h) y la manda al RSP como
- * una tarea gráfica de libultra (OSTask en DMEM 0xFC0). El microcódigo es
- * un BREAK y su segmento de datos lleva el texto "Salsa64 GBI F3DEX2": en un
- * emulador con HLE que lo reconozca se dibuja la escena; en una N64 real el
- * RSP solo se detiene (no hay microcódigo de Nintendo aquí).
+ * Cada cuadro arma una display list (gbi.h) y la manda al RSP como una
+ * tarea gráfica de libultra (OSTask en DMEM 0xFC0). El microcódigo es un
+ * BREAK y su segmento de datos lleva el texto GBI_MARKER ("Salsa64 GBI
+ * F3DEX2", "Salsa64 GBI Fast3D" o "Salsa64 GBI F3DEX1"): en un emulador con
+ * HLE que lo reconozca se dibuja la escena; en una N64 real el RSP solo se
+ * detiene (no hay microcódigo de Nintendo aquí).
  *
  * Escena (expect.h): borrado del z-buffer y fondo con FILLRECT, dos cuadros
  * con z-buffer, un triángulo Gouraud, un cuadro con textura RGBA16 (texels
@@ -22,7 +23,8 @@
  * textura (L) y paleta (M) cambia el CPU en la RDRAM en el cuadro
  * GFXTEST_CHANGE_FRAME (prueba de la caché de texturas entre tareas). Al
  * final de cada lista, un tramo de otro microcódigo (G_LOAD_UCODE) que la
- * HLE debe saltar; en GFXTEST_CUT_FRAME la lista termina dentro de él.
+ * HLE debe saltar; en GFXTEST_CUT_FRAME la lista termina dentro de él (no
+ * en la variante F3D, que no tiene G_LOAD_UCODE).
  *
  * Se verifica sola en lo que el CPU puede ver: que cada tarea termine con
  * SP_STATUS en HALT|BROKE|TASKDONE, que llegue la interrupción del SP y
@@ -205,7 +207,7 @@ static uint16_t rgba16(unsigned r5, unsigned g5, unsigned b5)
 static void init_data(void)
 {
 	volatile struct rsp_data *r = R;
-	static const char marker[] = "Salsa64 GBI F3DEX2";
+	static const char marker[] = GBI_MARKER;
 	for (unsigned i = 0; i < sizeof r->ucode_data; i++)
 		r->ucode_data[i] = i < sizeof marker ? marker[i] : 0;
 	r->ucode[0] = 0x0000000D;  /* break */
@@ -549,6 +551,7 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	 * microcódigo de la tarea. En GFXTEST_CUT_FRAME la lista termina dentro
 	 * del tramo, sin volver ni llegar al G_RDPFULLSYNC: la interrupción del
 	 * DP tiene que llegar de todos modos. */
+#ifndef GBI_F3D  /* F3D no tiene G_LOAD_UCODE */
 	sp_load_ucode(&dl, PHYS(r->ucode) + 0x100, PHYS(r->ucode_data), sizeof r->ucode_data);
 	dp_othermode(&dl, CYC_FILL, 0);
 	dp_fill_color(&dl, 0xF801F801u);
@@ -558,6 +561,7 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 		return start;
 	}
 	sp_load_ucode(&dl, PHYS(r->ucode), PHYS(r->ucode_data), sizeof r->ucode_data);
+#endif
 
 	dp_sync(&dl, SYNC_FULL);
 	sp_end(&dl);

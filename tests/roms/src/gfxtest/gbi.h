@@ -1,9 +1,15 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * Salsa64 — gfxtest: codificación propia de los comandos F3DEX2 y del RDP
+ * Salsa64 — gfxtest: codificación propia de los comandos del RSP y del RDP
  * que usa la ROM (no es el gbi.h de libultra). Escrita a partir de la
  * documentación pública (n64brew.dev, "Reality Display Processor/Commands"
- * y la GBI de F3DEX2 descrita ahí).
+ * y la GBI de F3DEX2 descrita ahí; para F3D y F3DEX 1.x, la documentación
+ * de la comunidad de SM64 sobre Fast3D; docs/THIRD_PARTY.md).
+ *
+ * La ROM se compila para una GBI (Makefile, GBI=...): F3DEX2 (por
+ * omisión), F3D (Fast3D) o F3DEX (1.x). Las escenas son las mismas; cambia
+ * la codificación de los comandos del RSP y el texto que identifica al
+ * "microcódigo" (GBI_MARKER). Los del RDP son iguales en las tres.
  *
  * Cada función agrega un comando de 64 bits en *dl. Las direcciones son
  * físicas (el RSP no ve el espacio virtual del CPU).
@@ -19,6 +25,25 @@ typedef struct {
 
 #define PHYS(p) ((uint32_t)(uintptr_t)(p) & 0x1FFFFFFFu)
 
+#if defined(GBI_F3D) || defined(GBI_F3DEX)
+#define GBI_1 1  /* primera generación: F3D y F3DEX 1.x */
+#endif
+
+#if defined(GBI_F3D)
+#define GBI_MARKER "Salsa64 GBI Fast3D"
+#elif defined(GBI_F3DEX)
+#define GBI_MARKER "Salsa64 GBI F3DEX1"
+#else
+#define GBI_MARKER "Salsa64 GBI F3DEX2"
+#endif
+
+/* Índice de vértice dentro de un comando: ×10 en F3D, ×2 en las demás. */
+#ifdef GBI_F3D
+#define VI(v) ((v) * 10u)
+#else
+#define VI(v) ((v) * 2u)
+#endif
+
 static inline void cmd(gfx **dl, uint32_t w0, uint32_t w1)
 {
 	volatile uint32_t *p = (volatile uint32_t *)*dl;  /* el DL está en KSEG1 */
@@ -28,6 +53,22 @@ static inline void cmd(gfx **dl, uint32_t w0, uint32_t w1)
 }
 
 /* ---- RSP ---- */
+#ifdef GBI_1
+#define G_MTX_NOPUSH     0x00u
+#define G_MTX_PUSH       0x04u
+#define G_MTX_MUL        0x00u
+#define G_MTX_LOAD       0x02u
+#define G_MTX_MODELVIEW  0x00u
+#define G_MTX_PROJECTION 0x01u
+
+#define G_ZBUFFER            0x00000001u
+#define G_SHADE              0x00000004u
+#define G_SHADING_SMOOTH     0x00000200u
+#define G_CULL_FRONT         0x00001000u
+#define G_CULL_BACK          0x00002000u
+#define G_LIGHTING           0x00020000u
+#define G_TEXTURE_GEN        0x00040000u
+#else
 #define G_MTX_NOPUSH     0x00u
 #define G_MTX_PUSH       0x01u
 #define G_MTX_MUL        0x00u
@@ -42,68 +83,131 @@ static inline void cmd(gfx **dl, uint32_t w0, uint32_t w1)
 #define G_LIGHTING           0x00020000u
 #define G_TEXTURE_GEN        0x00040000u
 #define G_SHADING_SMOOTH     0x00200000u
+#endif
 
+/* n vértices desde el lugar v0 del búfer (F3D: 16 lugares; F3DEX: 32). */
 static inline void sp_vertex(gfx **dl, const volatile void *v, unsigned n, unsigned v0)
 {
+#if defined(GBI_F3D)
+	cmd(dl, 0x04000000u | (n - 1) << 20 | v0 << 16 | n * 16, PHYS(v));
+#elif defined(GBI_F3DEX)
+	cmd(dl, 0x04000000u | VI(v0) << 16 | n << 10 | (n * 16 - 1), PHYS(v));
+#else
 	cmd(dl, 0x01000000u | n << 12 | (v0 + n) << 1, PHYS(v));
+#endif
 }
 
 static inline void sp_tri(gfx **dl, unsigned a, unsigned b, unsigned c)
 {
+#ifdef GBI_1
+	cmd(dl, 0xBF000000u, VI(a) << 16 | VI(b) << 8 | VI(c));
+#else
 	cmd(dl, 0x05000000u | a << 17 | b << 9 | c << 1, 0);
+#endif
 }
 
+/* F3D no tiene G_TRI2: van dos G_TRI1. */
 static inline void sp_tri2(gfx **dl, unsigned a, unsigned b, unsigned c, unsigned d, unsigned e, unsigned f)
 {
+#if defined(GBI_F3D)
+	sp_tri(dl, a, b, c);
+	sp_tri(dl, d, e, f);
+#elif defined(GBI_F3DEX)
+	cmd(dl, 0xB1000000u | VI(a) << 16 | VI(b) << 8 | VI(c), VI(d) << 16 | VI(e) << 8 | VI(f));
+#else
 	cmd(dl, 0x06000000u | a << 17 | b << 9 | c << 1, d << 17 | e << 9 | f << 1);
+#endif
 }
 
 static inline void sp_matrix(gfx **dl, const volatile void *m, unsigned flags)
 {
+#ifdef GBI_1
+	cmd(dl, 0x01000040u | flags << 16, PHYS(m));
+#else
 	cmd(dl, 0xDA380000u | (flags ^ G_MTX_PUSH), PHYS(m));
+#endif
 }
 
 static inline void sp_viewport(gfx **dl, const volatile void *vp)
 {
+#ifdef GBI_1
+	cmd(dl, 0x03800010u, PHYS(vp));  /* G_MV_VIEWPORT */
+#else
 	cmd(dl, 0xDC080008u, PHYS(vp));
+#endif
 }
 
+/* En la primera generación, G_CLEARGEOMETRYMODE y G_SETGEOMETRYMODE. */
 static inline void sp_geometry(gfx **dl, uint32_t clear, uint32_t set)
 {
+#ifdef GBI_1
+	if (clear)
+		cmd(dl, 0xB6000000u, clear);
+	if (set)
+		cmd(dl, 0xB7000000u, set);
+#else
 	cmd(dl, 0xD9000000u | (~clear & 0x00FFFFFFu), set);
+#endif
 }
 
 static inline void sp_texture(gfx **dl, unsigned s, unsigned t, unsigned tile, unsigned on)
 {
+#ifdef GBI_1
+	cmd(dl, 0xBB000000u | tile << 8 | on, s << 16 | t);
+#else
 	cmd(dl, 0xD7000000u | tile << 8 | on << 1, s << 16 | t);
+#endif
 }
 
 static inline void sp_num_lights(gfx **dl, unsigned n)
 {
+#ifdef GBI_1
+	cmd(dl, 0xBC000002u, 0x80000000u + (n + 1) * 32);  /* fin de las luces en la DMEM */
+#else
 	cmd(dl, 0xDB020000u, n * 24);
+#endif
 }
 
 /* Luz i (0 = la primera; la ambiental va en i = número de luces). */
 static inline void sp_light(gfx **dl, const volatile void *l, unsigned i)
 {
+#ifdef GBI_1
+	cmd(dl, 0x03000010u | (0x86u + 2 * i) << 16, PHYS(l));  /* G_MV_L0 + 2·i */
+#else
 	cmd(dl, 0xDC08000Au | ((i + 2) * 24 / 8) << 8, PHYS(l));
+#endif
 }
 
 static inline void sp_lookat(gfx **dl, const volatile void *l, unsigned axis)
 {
+#ifdef GBI_1
+	cmd(dl, axis ? 0x03820010u : 0x03840010u, PHYS(l));  /* G_MV_LOOKATY / X */
+#else
 	cmd(dl, 0xDC08000Au | (axis * 24 / 8) << 8, PHYS(l));
+#endif
 }
 
-/* gSPLoadUcodeEx: G_RDPHALF_1 con los datos y G_LOAD_UCODE con el texto. */
+/* gSPLoadUcodeEx: G_RDPHALF_1 con los datos y G_LOAD_UCODE con el texto
+ * (en la primera generación, 0xB4 y 0xAF; F3D no lo tiene, pero F3DEX 1.x
+ * sí y la HLE lo trata igual). */
 static inline void sp_load_ucode(gfx **dl, uint32_t ucode, uint32_t data, unsigned dsize)
 {
+#ifdef GBI_1
+	cmd(dl, 0xB4000000u, data);
+	cmd(dl, 0xAF000000u | ((dsize - 1) & 0xFFFFu), ucode);
+#else
 	cmd(dl, 0xE1000000u, data);
 	cmd(dl, 0xDD000000u | ((dsize - 1) & 0xFFFFu), ucode);
+#endif
 }
 
 static inline void sp_end(gfx **dl)
 {
+#ifdef GBI_1
+	cmd(dl, 0xB8000000u, 0);
+#else
 	cmd(dl, 0xDF000000u, 0);
+#endif
 }
 
 /* ---- RDP ---- */
@@ -228,13 +332,21 @@ static inline void dp_blend_color(gfx **dl, uint32_t rgba)
 }
 
 /* Rectángulo con textura: (x0, y0)–(x1, y1) en píxeles; s, t en s10.5;
- * dsdx, dtdy en s5.10. Va en tres comandos (F3DEX2). */
+ * dsdx, dtdy en s5.10. Va en tres comandos: el del RDP y dos G_RDPHALF_*
+ * (en F3D, G_RDPHALF_2 y G_RDPHALF_CONT, como en Super Mario 64). */
 static inline void sp_texrect(gfx **dl, unsigned tile, unsigned x0, unsigned y0, unsigned x1, unsigned y1,
 			      int s, int t, int dsdx, int dtdy)
 {
+#if defined(GBI_F3D)
+	const uint32_t half_st = 0xB3000000u, half_d = 0xB2000000u;
+#elif defined(GBI_F3DEX)
+	const uint32_t half_st = 0xB4000000u, half_d = 0xB3000000u;
+#else
+	const uint32_t half_st = 0xE1000000u, half_d = 0xF1000000u;
+#endif
 	cmd(dl, 0xE4000000u | (x1 << 2) << 12 | y1 << 2, tile << 24 | (x0 << 2) << 12 | y0 << 2);
-	cmd(dl, 0xE1000000u, (uint32_t)(uint16_t)s << 16 | (uint16_t)t);
-	cmd(dl, 0xF1000000u, (uint32_t)(uint16_t)dsdx << 16 | (uint16_t)dtdy);
+	cmd(dl, half_st, (uint32_t)(uint16_t)s << 16 | (uint16_t)t);
+	cmd(dl, half_d, (uint32_t)(uint16_t)dsdx << 16 | (uint16_t)dtdy);
 }
 
 #endif

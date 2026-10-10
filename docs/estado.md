@@ -52,8 +52,9 @@ Arreglo:
   Árbol Deku con su texto); ~7 comandos de S2DEX saltados por cuadro.
 
 Herramientas nuevas para esto (`salsa64-run`): `--pad
-"CAMPO:BOTONES,…"` (control 1 programado por campo del VI, determinista,
-también en la referencia de `--lockstep`), `--trace-from CAMPO`,
+"CAMPO:BOTONES[@X,Y];…"` (control 1 programado por campo del VI, cada estado
+hasta el siguiente; unificado con el `--pad` que traía main: misma sintaxis,
+campo por campo y también en la referencia de `--lockstep`), `--trace-from CAMPO`,
 `--trace-faults N` (excepciones sin las interrupciones), `--ram-dump
 ARCHIVO`, y `tools/libultra-threads.py` (hilos de libultra en un volcado:
 estado, pc y la cola en la que espera cada uno, sin símbolos). Con `--pad
@@ -69,9 +70,16 @@ Zelda entra al juego en el campo 2712.
   en ese tramo las listas de audio no traen voces (solo CLEARBUFF,
   LOADBUFF, MIXER, SAVEBUFF, DMEMMOVE, INTERLEAVE).
 
+Con main 485a747 traído (F3D, arranque del CIC 6105 con osCicId): Zelda
+sigue pasando la ranura en la Mac (el arranque nuevo no cambia nada aquí);
+el salto de tramos ajenos vive ahora en `gfx_dl_skip_foreign` (dl.c) y lo
+usan F3DEX2/F3DZEX y F3DEX 1.x (F3D no tiene G_LOAD_UCODE: la variante F3D
+de gfxtest no lleva el tramo). Con `job->ucode` = 0 (tarea sin microcódigo
+conocido, como en las pruebas de F3D) todo G_LOAD_UCODE es ajeno.
+
 Visto en esa corrida, para otros trabajos (reproducible en la Mac con
-`--pad "$(cat build/host-mac/pad-autor.txt)"`, las pulsaciones del
-autor sacadas de su log; receta en la entrada de arriba):
+`--pad "$(cat docs/pads/zelda-oot.pad)"`, las pulsaciones del autor
+sacadas de su log; receta en la entrada de arriba):
 - [ ] **Texturas del mundo** (trabajo F3D/texturas): en el bosque Kokiri la
       geometría sale en colores planos (verde del shade), la HUD bien; igual
       en el rasterizador de la Mac (campo 18600 de esa corrida), así que es
@@ -100,6 +108,141 @@ Falta (para ver bien la casa de Link y las salas con fondo prerrenderizado):
       fondo sale negro aunque S2DEX lo copie. mupen64plus-rsp-hle la tiene
       (`jpeg.c`, GPLv2+; registrar en THIRD_PARTY si se adapta). Son 75
       tareas por sala, una vez (no por cuadro).
+## 2026-10-10 — Arranque del CIC 6105 y censo de compatibilidad
+
+Hecho (rama `amazing-noether-39a548`; detalle en docs/cpu-vr4300.md,
+«Arranque HLE», y docs/compatibilidad.md):
+- `src/core/boot.c`: con el CIC 6105/7105, el arranque HLE deja lo que su
+  IPL3 deja además en la RDRAM: copia de DMEM 0x554–0x888 a 0x004–0x338
+  (desde la ROM del usuario; de ahí sale 0x2E8 = 0xC86E2000), el efecto del
+  DMA con paso de su microcódigo del RSP (24 filas de 8 bytes en 0x2FB1F0,
+  cada 0xFF0, desde RDRAM 0x1E8 vía IMEM 0x120) y el tamaño de la RDRAM en
+  0x3F0. Solo direcciones, cotejadas entre fuentes (docs/THIRD_PARTY.md) y
+  verificadas con dos palabras del Perfect Dark del autor. No hay más
+  efectos documentados por variante (6101/6102/6103/6106/7102: dirección
+  de arranque y semilla, que ya estaban).
+- `osCicId` (0x310) = 6103 o 6105 con esos IPL3: Conker solo arranca su
+  hilo principal si vale 6105 (se quedaba en el hilo ocioso a los 88 mil
+  ciclos); Banjo-Kazooie y Perfect Dark también lo comprueban.
+- `salsa64_boot_hle_as` fuerza la variante; pruebas por variante y de los
+  restos del 6105 (287/287 en el host con main 3270538).
+- Perfect Dark pasa la comprobación en la Mac y en la **PS3 real**
+  (frontend «Salsa64 arranque», SLSA00078): 6083 bloques (6078 fuera de
+  KSEG0) en vez de 201, 693 traducciones de la TLB, 59,8 campos/s con 5,8
+  ms por campo, pantalla negra. Se queda en su hilo ocioso esperando al DP
+  tras su primera tarea gráfica (microcódigo de Rare sin texto, sin HLE).
+  `--lockstep` en qemu: 10,7 s de consola sin diferencias.
+- `salsa64-run`: `--trace-rsp` muestra el CRC-32 del microcódigo y de
+  `ucode_data`, los textos de `ucode_data` en las tareas gráficas y las
+  palabras que distinguen el audio; muestreo del PC por segmento al final
+  (KSEG0/KSEG1/TLB). `--lockstep` da a la referencia una copia del
+  guardado: sin ella su PIF respondía «sin dispositivo» en el canal de la
+  EEPROM y salía una diferencia falsa (Perfect Dark, ciclo 254 M).
+- `tools/censo.sh`: censo de compatibilidad con los ROMs del usuario
+  desde su ruta (compila `salsa64-run` con el compilador de la Mac).
+- Censo de 3 minutos de 8 juegos (los 6 objetivo, Banjo-Kazooie y Conker)
+  sobre main 3270538 (F3D integrado): dibujan SM64 (título),
+  OoT, MK64, SF64, GoldenEye y Banjo; suenan ABI 1 y nead. Perfect Dark
+  corre sin dibujar ni sonar (su microcódigo de Rare y naudio con MP3 sin
+  HLE); Conker manda una sola tarea gráfica (F3DEXBG 2.08, comando 0x14) y
+  su naudio da error. Sin la rama de F3D, solo Zelda dibujaba.
+
+Siguiente (lista priorizada en docs/compatibilidad.md):
+- [ ] Audio: las tres naudio (Banjo-Kazooie, Conker, Perfect Dark con MP3).
+- [ ] Microcódigo de Perfect Dark (por CRC; sin texto) y F3DEXBG de Conker.
+- [ ] Probar con el control y medir en la PS3 las escenas de docs/proyecto.md.
+
+## 2026-10-10 — F3D (Super Mario 64) y F3DEX 1.x
+
+Hecho (rama `lucid-pare-4f93fb`, con main traído hasta f698afe; sin
+integrar):
+- HLE de la primera generación de microcódigos en `src/rsp/gfx/f3d.c`: F3D
+  (Fast3D: búfer de 16 vértices, índices ×10, G_TRI1, G_MTX con sus
+  banderas, G_MOVEMEM/G_MOVEWORD con sus índices, geometry mode en dos
+  comandos con otros bits, G_SETOTHERMODE_* directo, TEXRECT con
+  G_RDPHALF_2 + G_RDPHALF_CONT) y F3DEX 1.x (búfer de 32, índices ×2,
+  G_TRI2, G_QUAD, G_MODIFYVTX, G_CULLDL, G_BRANCH_Z, G_LOAD_UCODE). Lo
+  común salió de `f3dex2.c` a `dl.c` y `geom.c` sin cambiar F3DEX2 (mismas
+  31566 verificaciones). `rsp.c` manda F3D y F3DEX al backend. En el SPE 0
+  son 3,3 KB de código (presupuesto en `src/spu/gfx/main.c`).
+- Pruebas: 11 nuevas en el host (`tests/unit/test_gfx_f3d.c`) más la
+  detección y el despacho en `test_rsp.c`: 223 en total.
+- gfxtest en tres variantes (`tools/build-gfxtest.sh`; `GBI=` en su
+  Makefile): F3DEX2 (la ROM sale idéntica), F3D y F3DEX. En el host las tres
+  dan los mismos puntos y la misma imagen (`tools/test-roms.sh`, que además
+  falla si hay comandos sin implementar): 19 de 19 antes de traer main y
+  22 de 22 con las escenas de la caché de texturas. La de F3D también en
+  RPCS3 (`tools/test-phase2.sh`, 22 de 22) y en la **PS3 real** (19 de 19,
+  `RESULTADO frontend: OK`, 0,18 ms por tarea en el SPE). El frontend verifica la pantalla de las
+  variantes cargadas con `file:salsa64-gfxtest-*.z64` como la embebida.
+- **SM64** (respaldo propio, USA, fuera del repo): en el host llega al
+  título y a las demos (Bowser, Whomp's Fortress) sin comandos sin
+  implementar ni errores en 2 minutos; en la **PS3 real** el autor confirmó
+  el título y la selección de archivo («todo se ve bien»). Mediciones en
+  docs/perf-log.md: velocidad completa en el logo y en la selección de
+  archivo, 67 % de NTSC en la cara de Mario (la anima el CPU).
+- Otros juegos del usuario en el host (respaldos fuera del repo), sin
+  comandos sin implementar: **GoldenEye** usa Fast3D 2.0G con `G_TRI4`
+  (0xB1, cuatro triángulos con índices de 4 bits; antes 140 223 comandos
+  sin implementar, ahora la intro se ve con la orientación bien);
+  **Mario Kart 64** trae «F3DEX 0.95», que ahora se trata como F3DEX 1.x
+  (logo y carrera de demostración); **Star Fox 64** (F3DEX.NoN 1.22) y
+  **Banjo-Kazooie** (F3DEX 1.21) corren con F3DEX 1.x.
+- Una tarea gráfica con microcódigo sin HLE termina también del lado del
+  DP (ningún juego se cuelga esperando al RDP) y el frontend la anota en
+  el log con el texto del microcódigo (`salsa64_rsp_ucode_text`, también
+  en `salsa64-run --trace-rsp`).
+- **PS3 real con main fusionado** (recompilador, dos hilos, caché,
+  sondeo): SM64 sin franjas en la transición y al 100 % de NTSC en el
+  logo, la transición y la cara (antes 55–67 %); GoldenEye: la intro se
+  ve, al 100 % de NTSC. El autor vio después dos errores, arreglados y
+  confirmados por él en la PS3:
+  - La cara del Mario 3D (de frente): el combiner de los ojos,
+    (TEXEL0 − SHADE)·TEXEL0_ALPHA + SHADE, multiplica la textura por su
+    alfa y combine.c lo aproximaba. Ahora pide la textura premultiplicada
+    (RGB·A al decodificar) y queda exacto (2c4b3f4): 0 combiners
+    aproximados en SM64.
+  - El cielo de GoldenEye «infinito»: lo dibuja con triángulos crudos del
+    RDP partidos en G_RDPHALF_1 + G_RDPHALF_CONT/2, que la HLE no
+    dibujaba. Ahora se convierten en triángulos (2c53149).
+- `salsa64-run --pad "CAMPO:BOTONES[@X,Y];…"`: control 1 por campos para
+  llegar a escenas de juego en el host (SM64 hasta el castillo, GoldenEye
+  hasta Dam).
+- Arreglo en `src/rdp/rdp.c` (3729f8f): unos cuadros con franjas de
+  colores en el paso del logo a la cara. SM64 apaga el VI 26 campos al
+  cambiar de escena; lo dibujado entonces quedaba marcado con el campo de
+  antes del apagado y el frontend, al volver la imagen, presentaba la RDRAM.
+  Simulado con la traza del host: de 17 campos sin imagen del RSX a 0.
+
+Pendiente:
+- [ ] Confirmar en la PS3 el arreglo de la transición (paquete «Salsa64
+      F3D», SLSA00071) y dejar `embedded` como estaba (`vitest`).
+- [ ] Combiners aproximados en las demos de SM64 (cientos por minuto):
+      ver cuáles son (`combine.c`).
+- [ ] En la PS3: GoldenEye, Mario Kart 64 y Star Fox 64 con este
+      paquete (en el host ya dibujan).
+- [x] Confirmar en la PS3 la cara de Mario y el cielo de GoldenEye.
+- [ ] Mario Kart 64 en la PS3 (el autor): la carrera se ve con HUD, pero
+      el título sin logo ni textos, los menús negros con recuadros de
+      color sólido sin textura y algunos carteles de la pista en negro
+      (distinguir pantallas gigantes, que son efecto de framebuffer, de
+      letreros con textura).
+- [ ] GoldenEye: dos combiners del nivel multiplican el sombreado por su
+      alfa (lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE: niebla por luz
+      precalculada) y se aproximan (75 000 en 52 s de Dam). Hace falta un
+      término S·Sa por vértice en la combinación del RSX (rsxkit y
+      src/rdp) o el generador de fragment programs de la Fase 4.
+- [ ] GoldenEye: las franjas azules de los costados son del juego (3D con
+      scissor en las columnas 1–318 sobre un relleno 0x1199); en una tele
+      quedan en el overscan. Opción de recorte en el frontend.
+- [ ] Mario Kart 64: en la carrera de demostración la franja de abajo
+      sale en negro en el host. Star Fox 64: un cuadrito con textura abajo
+      a la izquierda en el logo. Revisar ambos.
+- [ ] G_LINE3D de F3D (no lo usan SM64 ni GoldenEye) sin implementar.
+- Para correr un respaldo en el host sin copiarlo: colima no comparte
+  todas las carpetas del host, así que `salsa64-run` se compila nativo en la
+  Mac (`make -C src/host OUT=$PWD/build/host-mac CC=clang SAN=`) y lee la
+  ROM en su lugar.
 
 ## 2026-10-10 — Audio de punta a punta: AI, HLE de audio en el SPE 1 y salida en la PS3
 
@@ -357,10 +500,10 @@ Siguiente:
     código del juego la escribe: la deja el arranque del 6105 y nuestro
     arranque HLE no. Escribiéndola a mano (experimento, no en el repo)
     pasa, monta 0x7F000000 en la TLB y llega a su hilo ocioso.
-- [ ] Arranque HLE del CIC 6105 (`src/core/boot.c`; trabajo «Arranque del CIC
+- [x] Arranque HLE del CIC 6105 (`src/core/boot.c`; trabajo «Arranque del CIC
       6105 y censo»): lo que el IPL3 deja
       en la RDRAM (al menos 0x2E8 = 0xC86E2000), desde documentación
-      pública, sin código de Nintendo.
+      pública, sin código de Nintendo. (Hecho: entrada de arriba.)
 - [ ] HLE gráfica: el microcódigo de GoldenEye (F3D; trabajo de F3D) y que
       una tarea con microcódigo desconocido no deje colgado al juego.
 - [x] idle.c: bucles de espera en código mapeado por la TLB (entrada de
@@ -505,8 +648,9 @@ Hecho (diseño y decisión en docs/rec-ppe.md, números en docs/perf-log.md):
 Siguiente:
 - [ ] Medir en la PS3 el préstamo de registros fijos en bucles (bench
       enteros con registros fijos: esperado ~750 MIPS, antes 128).
-- [ ] Más juegos de la tabla de docs/proyecto.md (SM64, MK64, SF64; GoldenEye y
-      Perfect Dark usan TLB: ver la entrada de arriba).
+- [x] Más juegos de la tabla de docs/proyecto.md (SM64, MK64, SF64; GoldenEye y
+      Perfect Dark usan TLB: ver la entrada de arriba). (Censo en
+      docs/compatibilidad.md.)
 - [x] Más en nativo: CVT/TRUNC/ROUND de la FPU, LWL/LWR/SWL/SWR, MFC0 sin
       salir del bloque (entrada de arriba). Código por TLB y KSEG1: hecho.
 - [ ] CACHE.
@@ -541,8 +685,9 @@ guardado y los controles):
 Pendiente:
 - [ ] Caché de texturas entre tareas y decodificación por formato en el SPE
       (medir antes/después en la PS3).
-- [ ] F3D (Super Mario 64) y casos de Cell64 (espada Kokiri sin textura,
-      fuente de la pantalla de nombre).
+- [x] F3D (Super Mario 64): ver la entrada «F3D (Super Mario 64) y F3DEX 1.x».
+- [ ] Casos de Cell64 (espada Kokiri sin textura, fuente de la pantalla de
+      nombre).
 - [ ] Al integrar con la Fase 3: `sp_dma` hacia la RDRAM debe llamar
       `salsa64_bus_rdram_written`.
 - [ ] «NO CONTROLLER» en Zelda: el control por SI/PIF ya está integrado;
@@ -826,8 +971,9 @@ Siguiente (Fase 1):
 - [ ] CPUTest de krom ensamblado desde fuente con bootcode en ceros (traer
       solo los `.asm` por la API: el repo trae el IPL3 de Nintendo). Probaría
       el camino plano del arranque HLE.
-- [ ] Probar el camino plano con los juegos del usuario (fuera del repo):
-      falta reproducir efectos del IPL3 de algunos CIC (6105).
+- [x] Probar el camino plano con los juegos del usuario (fuera del repo):
+      falta reproducir efectos del IPL3 de algunos CIC (6105). (Hecho:
+      arranque del 6105 y censo, 2026-10-10.)
 
 ## 2026-10-10 — Fase 1 iniciada: intérprete del VR4300
 

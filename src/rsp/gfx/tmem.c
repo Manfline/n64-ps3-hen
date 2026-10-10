@@ -260,12 +260,13 @@ static uint32_t texel(const struct gfx_state *g, const struct gfx_tile *t, uint3
 /* Hash de lo que lee texel() para la tile: las filas de texels (con la
  * paleta, si se usa) y los parámetros que cambian el resultado. */
 static void tile_key(const struct gfx_state *g, const struct gfx_tile *t, uint32_t w, uint32_t h, unsigned tt,
-		     uint32_t key[2])
+		     bool premul, uint32_t key[2])
 {
 	struct gfx_hash hs;
 	gfx_hash_init(&hs);
+	/* Versión de la decodificación (1) y si va premultiplicada. */
 	gfx_hash_words(&hs, (uint32_t)t->fmt << 24 | (uint32_t)t->siz << 16 | (uint32_t)t->pal << 8 | tt,
-		       (uint32_t)t->line << 16 | (t->tmem & 15), w << 16 | h, 1 /* versión de la decodificación */);
+		       (uint32_t)t->line << 16 | (t->tmem & 15), w << 16 | h, 1u | (uint32_t)premul << 31);
 	/* texel() lee por fila 8 bytes enteros (la fila impar intercambia
 	 * mitades dentro de cada palabra) y solo 256 filas distintas. */
 	uint32_t row = t->siz == G_IM_SIZ_4b ? (w + 1) / 2 : t->siz == G_IM_SIZ_8b ? w : 2 * w;
@@ -288,17 +289,28 @@ static void tile_key(const struct gfx_state *g, const struct gfx_tile *t, uint32
 	gfx_hash_final(&hs, key);
 }
 
+/* RGB·A (0xRRGGBBAA), redondeado. */
+static uint32_t premultiply(uint32_t c)
+{
+	uint32_t a = c & 0xFF;
+	uint32_t r = ((c >> 24) * a + 127) / 255, g = (((c >> 16) & 0xFF) * a + 127) / 255;
+	uint32_t b = (((c >> 8) & 0xFF) * a + 127) / 255;
+	return r << 24 | g << 16 | b << 8 | a;
+}
+
 static void decode(const struct gfx_state *g, const struct gfx_tile *t, uint32_t w, uint32_t h, uint32_t pitch,
-		   unsigned tt, uint8_t *out)
+		   unsigned tt, bool premul, uint8_t *out)
 {
 	for (uint32_t y = 0; y < h; y++) {
 		uint8_t *row = out + y * pitch;
-		for (uint32_t x = 0; x < w; x++)
-			salsa64_wr32(row + 4 * x, texel(g, t, x, y, tt));
+		for (uint32_t x = 0; x < w; x++) {
+			uint32_t c = texel(g, t, x, y, tt);
+			salsa64_wr32(row + 4 * x, premul ? premultiply(c) : c);
+		}
 	}
 }
 
-static bool resolve(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, struct gfx_tex *tex)
+static bool resolve(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, bool premul, struct gfx_tex *tex)
 {
 	uint32_t w, h;
 	gfx_tile_size(t, &w, &h);
@@ -309,7 +321,7 @@ static bool resolve(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, 
 		return false;
 	uint32_t t0 = gfx_io_clock();
 	uint32_t key[2];
-	tile_key(g, t, w, h, tt, key);
+	tile_key(g, t, w, h, tt, premul, key);
 	memset(tex, 0, sizeof *tex);
 	tex->width = (uint16_t)w;
 	tex->height = (uint16_t)h;
@@ -342,7 +354,7 @@ static bool resolve(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, 
 	if (!out)
 		return false;
 	t0 = gfx_io_clock();
-	decode(g, t, w, h, pitch, tt, out);
+	decode(g, t, w, h, pitch, tt, premul, out);
 	struct gfx_tc_entry *e = g->tc_on ? gfx_tc_insert(g, key, size) : NULL;
 	if (e) {
 		e->width = (uint16_t)w;
@@ -372,7 +384,7 @@ static bool resolve(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, 
 	return true;
 }
 
-bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex)
+bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex, bool premul)
 {
 	const struct gfx_tile *t = &g->tiles[tile & 7];
 	/* La paleta se usa con texturas de 4 y 8 bits si el othermode la activa. */
@@ -380,16 +392,17 @@ bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex)
 	if (t->siz > G_IM_SIZ_8b || tt < G_TT_RGBA16)
 		tt = G_TT_NONE;
 	struct gfx_tilememo *m = &g->tilememo[tile & 7];
-	if (m->ok && m->gen == g->tex_gen && m->tt == tt) {
+	if (m->ok && m->gen == g->tex_gen && m->tt == tt && m->premul == premul) {
 		*tex = m->tex;
 		g->res->tex_reused++;
 		return true;
 	}
-	if (!resolve(g, t, tt, tex))
+	if (!resolve(g, t, tt, premul, tex))
 		return false;
 	m->ok = 1;
 	m->gen = g->tex_gen;
 	m->tt = (uint8_t)tt;
+	m->premul = premul;
 	m->tex = *tex;
 	return true;
 }

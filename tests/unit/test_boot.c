@@ -165,6 +165,104 @@ static void boot_flat_like_libultra(void)
 	done();
 }
 
+/* IPL3 sintético con un patrón (la variante se fuerza: el CRC no coincide). */
+static void rom_ipl3_pattern(void)
+{
+	for (uint32_t i = SALSA64_ROM_HEADER_SIZE; i < SALSA64_ROM_IPL3_END; i++)
+		rom[i] = (uint8_t)(i * 7 + 3);
+}
+
+/* Dirección de arranque y semilla por variante; nada en la RDRAM baja salvo
+ * las variables de libultra. */
+static void boot_by_cic(void)
+{
+	static const struct {
+		enum salsa64_cic cic;
+		uint32_t header, entry;
+		uint8_t seed;
+		uint32_t cic_id;
+	} v[] = {
+		{ SALSA64_CIC_6101, 0x80000400, 0x80000400, 0x3F, 0 },
+		{ SALSA64_CIC_6102, 0x80000400, 0x80000400, 0x3F, 0 },
+		{ SALSA64_CIC_7102, 0x80000400, 0x80000480, 0x3F, 0 },     /* fija */
+		{ SALSA64_CIC_6103, 0x80100400, 0x80000400, 0x78, 6103 },  /* −1 MB */
+		{ SALSA64_CIC_6105, 0x80000400, 0x80000400, 0x91, 6105 },
+		{ SALSA64_CIC_6106, 0x80200400, 0x80000400, 0x85, 0 },     /* −2 MB */
+	};
+	for (size_t i = 0; i < sizeof v / sizeof v[0]; i++) {
+		struct salsa64_boot_info info;
+		rom_header(v[i].header, 'E');
+		rom_ipl3_pattern();
+		salsa64_wr32(rom + 0x1000, ADDIU(T0, ZERO, 0x66));
+		salsa64_bus_set_rom(&t_n64.bus, rom, sizeof rom);
+
+		CHECK(salsa64_boot_hle_as(&t_n64, SALSA64_BOOT_TV_AUTO, v[i].cic, &info));
+		CHECK_EQ(info.kind, SALSA64_BOOT_FLAT);
+		CHECK_EQ(info.cic, v[i].cic);
+		CHECK_EQ(info.entry, v[i].entry);
+		CHECK_EQ(CPU->pc, 0xFFFFFFFF00000000ull | v[i].entry);
+		CHECK_EQ(R[S6], v[i].seed);
+		CHECK_EQ(t_rd32(v[i].entry & 0x1FFFFFFF), ADDIU(T0, ZERO, 0x66));
+		CHECK_EQ(t_rd32(0x300), SALSA64_TV_NTSC);
+		CHECK_EQ(t_rd32(0x310), v[i].cic_id);  /* osCicId */
+		CHECK_EQ(t_rd32(0x318), 0x800000);
+		if (v[i].cic != SALSA64_CIC_6105) {
+			CHECK_EQ(t_rd32(0x004), 0);
+			CHECK_EQ(t_rd32(0x2E8), 0);
+			CHECK_EQ(t_rd32(0x3F0), 0);
+			CHECK_EQ(t_rd32(0x2FB1F0), 0);
+		}
+	}
+	done();
+}
+
+/* CIC 6105: copia de DMEM 0x554–0x888 a RDRAM 0x004–0x338 (lo que Perfect
+ * Dark comprueba en 0x2E8), DMA con paso del RSP desde RDRAM 0x1E8 (24 filas
+ * de 8 bytes en 0x2FB1F0, cada 0xFF0) y tamaño de la RDRAM en 0x3F0. */
+static void boot_cic6105_leftovers(void)
+{
+	struct salsa64_boot_info info;
+	rom_header(0x80000400, 'P');
+	rom_ipl3_pattern();
+	salsa64_bus_set_rom(&t_n64.bus, rom, sizeof rom);
+	CHECK(salsa64_boot_hle_as(&t_n64, SALSA64_BOOT_TV_AUTO, SALSA64_CIC_6105, &info));
+
+	CHECK_EQ(t_rd32(0x000), 0);
+	CHECK_EQ(t_rd32(0x004), salsa64_rd32(rom + 0x554));
+	CHECK_EQ(t_rd32(0x2E8), salsa64_rd32(rom + 0x838));
+	CHECK_EQ(t_rd32(0x2FC), salsa64_rd32(rom + 0x84C));
+	CHECK_EQ(t_rd32(0x334), salsa64_rd32(rom + 0x884));
+	CHECK_EQ(t_rd32(0x338), 0);
+	/* Las variables de libultra pisan la copia; después queda lo copiado. */
+	CHECK_EQ(t_rd32(0x300), SALSA64_TV_PAL);
+	CHECK_EQ(t_rd32(0x308), 0xB0000000);
+	CHECK_EQ(t_rd32(0x310), 6105);  /* osCicId, también encima de la copia */
+	CHECK_EQ(t_rd32(0x318), 0x800000);
+	CHECK_EQ(t_rd32(0x31C), salsa64_rd32(rom + 0x86C));
+	CHECK_EQ(t_rd32(0x3F0), 0x800000);
+
+	const uint8_t *imem = t_n64.bus.sp_mem + 0x1000;
+	CHECK_EQ(salsa64_rd32(imem + 0x120), salsa64_rd32(rom + 0x738));
+	CHECK_EQ(salsa64_rd32(imem + 0x220), salsa64_rd32(rom + 0x838));  /* RDRAM 0x2E8 */
+	CHECK_EQ(salsa64_rd32(imem + 0x270), 0);                           /* RDRAM 0x338 */
+	CHECK_EQ(salsa64_rd32(imem + 0x310), 0);                           /* fin de la lectura */
+	for (uint32_t i = 0; i < 24; i++) {
+		CHECK_EQ(t_rd64(0x2FB1F0 + i * 0xFF0), salsa64_rd64(rom + 0x738 + i * 8));
+		CHECK_EQ(t_rd32(0x2FB1F8 + i * 0xFF0), 0);
+	}
+	CHECK_EQ(t_rd32(0x2FE1C0), salsa64_rd32(rom + 0x750));  /* fila 3 (Donkey Kong 64) */
+	CHECK_EQ(t_rd32(0x2FB1F0 + 24 * 0xFF0), 0);
+
+	/* Con 4 MB, el tamaño en 0x3F0 y en osMemSize. */
+	t_n64.bus.rdram_size = 0x400000;
+	CHECK(salsa64_boot_hle_as(&t_n64, SALSA64_BOOT_TV_AUTO, SALSA64_CIC_6105, &info));
+	CHECK_EQ(t_rd32(0x3F0), 0x400000);
+	CHECK_EQ(t_rd32(0x318), 0x400000);
+	CHECK_EQ(t_rd32(0x2FE1C0), salsa64_rd32(rom + 0x750));
+	t_n64.bus.rdram_size = 0x800000;
+	done();
+}
+
 static char isv_text[64];
 static uint32_t isv_len;
 
@@ -241,6 +339,8 @@ void t_suite_boot(void)
 	RUN(boot_elf_like_libdragon);
 	RUN(boot_elf_errors);
 	RUN(boot_flat_like_libultra);
+	RUN(boot_by_cic);
+	RUN(boot_cic6105_leftovers);
 	RUN(isviewer_prints);
 	RUN(pi_bus_subword_reads);
 	RUN(pif_ram_subword_writes);

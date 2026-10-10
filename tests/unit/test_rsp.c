@@ -138,12 +138,32 @@ static void rsp_gfx_task(void)
 	salsa64_sched_dispatch(&t_n64.sched, t0 + bus->rsp.gfx_cycles + bus->rsp.dp_cycles);
 	CHECK_EQ(bus->mi.intr, (1u << SALSA64_IRQ_SP) | (1u << SALSA64_IRQ_DP));
 
-	/* Microcódigo desconocido: no llega al backend y se detiene en el acto. */
+	/* F3D también va al backend. */
+	wr(SP_REG(SALSA64_SP_STATUS), 0x8);  /* bajar la interrupción SP */
+	bus->mi.intr = 0;
+	memset(t_n64.bus.rdram + 0x5000, 0, 0x800);
+	put_text(0x5000 + 0x40, "Salsa64 GBI Fast3D");
+	wr(SP_REG(SALSA64_SP_STATUS), 0x1 | 0x4);
+	CHECK_EQ(fake.starts, 2);
+	CHECK_EQ(fake.gbi, SALSA64_GBI_F3D);
+	CHECK_EQ(bus->rsp.busy, SALSA64_TASK_GFX);
+	salsa64_sched_dispatch(&t_n64.sched, CPU->cycles + bus->rsp.gfx_cycles + bus->rsp.dp_cycles);
+	CHECK_EQ(fake.finishes, 2);
+
+	/* Microcódigo desconocido: no llega al backend y se detiene en el acto;
+	 * la interrupción del DP llega igual (quien espere el fin del RDP no
+	 * se cuelga). */
+	wr(SP_REG(SALSA64_SP_STATUS), 0x8);
+	wr(0x04300000, 0x0800);  /* MI_MODE: bajar la interrupción DP */
 	memset(t_n64.bus.rdram + 0x5000, 0, 0x800);
 	wr(SP_REG(SALSA64_SP_STATUS), 0x1 | 0x4);
-	CHECK_EQ(fake.starts, 1);
+	CHECK_EQ(fake.starts, 2);
 	CHECK_EQ(bus->rsp.stats.unknown_gbi, 1);
+	CHECK_EQ(bus->rsp.stats.unknown_data, 0x80005000);
 	CHECK(rd(SP_REG(SALSA64_SP_STATUS)) & SALSA64_SP_STATUS_BROKE);
+	CHECK_EQ(bus->mi.intr & (1u << SALSA64_IRQ_DP), 0);
+	salsa64_sched_dispatch(&t_n64.sched, CPU->cycles + bus->rsp.dp_cycles);
+	CHECK(bus->mi.intr & (1u << SALSA64_IRQ_DP));
 	salsa64_rsp_set_gfx(bus, NULL);
 }
 
@@ -283,10 +303,24 @@ static void rsp_detect_gbi(void)
 	CHECK_EQ(detect("RSP Gfx ucode F3DEX       fifo 2.08 "), SALSA64_GBI_F3DEX2);
 	CHECK_EQ(detect("RSP Gfx ucode F3DZEX.NoN  fifo 2.06H "), SALSA64_GBI_F3DZEX2);
 	CHECK_EQ(detect("RSP Gfx ucode F3DEX       xbus 1.23 "), SALSA64_GBI_F3DEX);
+	CHECK_EQ(detect("RSP Gfx ucode F3DEX         0.95 "), SALSA64_GBI_F3DEX);
 	CHECK_EQ(detect("RSP Gfx ucode S2DEX  fifo 2.05 "), SALSA64_GBI_S2DEX);
 	CHECK_EQ(detect("RSP SW Version: 2.0X"), SALSA64_GBI_F3D);
 	CHECK_EQ(detect("Salsa64 GBI F3DEX2"), SALSA64_GBI_F3DEX2);
+	CHECK_EQ(detect("Salsa64 GBI F3DEX1"), SALSA64_GBI_F3DEX);
+	CHECK_EQ(detect("Salsa64 GBI Fast3D"), SALSA64_GBI_F3D);
 	CHECK_EQ(detect("nada"), SALSA64_GBI_UNKNOWN);
+
+	/* El texto para los logs: hasta el primer carácter no imprimible. */
+	char text[32];
+	detect("RSP SW Version: 2.0X, 01-01-96");
+	salsa64_rsp_ucode_text(&t_n64.bus, 0x80005000, text, sizeof text);
+	CHECK(strcmp(text, "RSP SW Version: 2.0X, 01-01-96") == 0);
+	salsa64_rsp_ucode_text(&t_n64.bus, 0x80005000, text, 8);
+	CHECK(strcmp(text, "RSP SW ") == 0);
+	detect("nada");
+	salsa64_rsp_ucode_text(&t_n64.bus, 0x80005000, text, sizeof text);
+	CHECK_EQ(text[0], 0);
 }
 
 void t_suite_rsp(void)

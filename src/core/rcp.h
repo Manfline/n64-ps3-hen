@@ -90,8 +90,8 @@ enum salsa64_gbi {
 	SALSA64_GBI_UNKNOWN = 0,
 	SALSA64_GBI_F3DEX2,   /* F3DEX2, F3DLX2…: segunda generación */
 	SALSA64_GBI_F3DZEX2,  /* F3DZEX (Zelda OoT/MM): F3DEX2 con G_BRANCH_W */
-	SALSA64_GBI_F3D,      /* Fast3D: Super Mario 64 (pendiente) */
-	SALSA64_GBI_F3DEX,    /* F3DEX 1.x (pendiente) */
+	SALSA64_GBI_F3D,      /* Fast3D: Super Mario 64 */
+	SALSA64_GBI_F3DEX,    /* F3DEX 1.x (F3DLX, F3DLP…) */
 	SALSA64_GBI_S2DEX,    /* sprites 2D (pendiente) */
 };
 
@@ -175,6 +175,7 @@ struct salsa64_rsp_stats {
 	uint32_t gfx, audio, other, unknown_gbi, unknown_abi;
 	uint32_t polls;        /* fines de tarea vueltos a programar (SPE ocupado) */
 	uint32_t starts_busy;  /* arranques ignorados con una tarea en curso */
+	uint32_t unknown_data; /* ucode_data de la última con microcódigo desconocido */
 	uint32_t cut;          /* tareas gráficas cortadas por la HLE (DP forzada) */
 };
 
@@ -322,6 +323,9 @@ void salsa64_rsp_read_task(const struct salsa64_bus *bus, struct salsa64_task *t
 /* Familia de microcódigo de una tarea gráfica, por los textos de su
  * segmento de datos (ucode_data). */
 enum salsa64_gbi salsa64_rsp_detect_gbi(const struct salsa64_bus *bus, const struct salsa64_task *task);
+/* El texto que identifica a un microcódigo ("RSP Gfx ucode …", "RSP SW
+ * Version: …") en sus datos, en `out` (vacío si no hay). Para los logs. */
+void salsa64_rsp_ucode_text(const struct salsa64_bus *bus, uint32_t ucode_data, char *out, size_t n);
 /* Tareas de audio (rsp_audio.c): el backend de la HLE (NULL: terminan sin
  * producir nada) y el ABI de una tarea por las palabras de su ucode_data. */
 void salsa64_rsp_set_audio(struct salsa64_bus *bus, const struct salsa64_audio_backend *audio);
