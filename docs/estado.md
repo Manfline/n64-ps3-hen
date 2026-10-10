@@ -39,9 +39,21 @@ Siguiente:
   intérprete. GoldenEye: 3518 de 3524 bloques mapeados y 5050
   traducciones en 2,1 s (reescribe la TLB seguido); Perfect Dark con 8 MB:
   3 traducciones.
-- [ ] PS3 real: el frontend «Salsa64 TLB» (SLSA00074) con GoldenEye y
-      Perfect Dark (respaldos propios), mirando la proporción de
-      instrucciones interpretadas y las traducciones.
+- **PS3 real, frontend «Salsa64 TLB»** (SLSA00074, respaldos propios):
+  - GoldenEye: 59,8 campos/s a 93,7 MIPS (velocidad completa del VR4300),
+    **5,6 ms de emulación por campo**; 3512 de 3518 bloques mapeados, 5050
+    traducciones en el arranque y ninguna después, ~0,08 % interpretado;
+    estable 100 s. En pantalla, ruido: el juego manda una sola tarea
+    gráfica con un microcódigo que la HLE no reconoce (ucode en 0x20e60,
+    su F3D) y después solo audio; con el intérprete solo, en la Mac, queda
+    igual (mismo bucle en 0x7000071c a los 21 s). Le toca al trabajo de F3D.
+  - Perfect Dark: 59,8 campos/s, 5,1 ms por campo, pero se queda en el
+    arranque (201 bloques, VI sin configurar, pantalla negra); con el
+    intérprete solo también (pc 0x700017f4 a los 21 s, sin tareas del RSP
+    ni excepciones). No es del recompilador: falta ver el arranque (CIC
+    6105) o algún registro del hardware.
+- [ ] Perfect Dark: por qué se queda en 0x700017f4 desde el arranque
+      (también con el intérprete).
 - [ ] Verificar en el desensamblado (o el decomp) si GoldenEye ejecuta
       0x7F000000 desde la ROM o desde la RDRAM.
 
