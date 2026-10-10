@@ -13,12 +13,19 @@
  *
  * Con --frame, al terminar se escribe en PPM la imagen que muestra el VI.
  *
+ * Con --rec corre el recompilador (solo en un host ppc64 big-endian: qemu,
+ * tools/test-rec.sh). --lockstep además corre un segundo N64 con el
+ * intérprete y, después de cada bloque recompilado, lo lleva al mismo ciclo
+ * y compara el CPU (y cada tanto la RDRAM): la primera diferencia termina
+ * con código 4 y el detalle.
+ *
  * Códigos de salida:
  *   0  apareció el texto de --until-text, o se agotaron los ciclos sin pedirlo
  *   1  apareció alguno de los textos de --fail-text
  *   2  se agotaron los ciclos esperando --until-text, o el CPU quedó en un
  *      bucle infinito sin interrupciones posibles
  *   3  error de argumentos o de carga
+ *   4  --lockstep encontró una diferencia con el intérprete
  */
 #define _GNU_SOURCE
 #include <getopt.h>
@@ -29,6 +36,8 @@
 
 #include "core/boot.h"
 #include "core/endian.h"
+#include "cpu/rec.h"
+#include "host/rec_host.h"
 
 #define DEFAULT_CYCLES (1ull << 32)  /* ~46 s de la consola */
 #define DEFAULT_SLICE  (1ull << 20)
@@ -46,6 +55,18 @@ enum stop_reason {
 static struct salsa64_n64 n64;
 static uint8_t rdram[SALSA64_RDRAM_MAX] __attribute__((aligned(128)));
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
+static struct salsa64_rec rec;
+
+/* --lockstep: la máquina de referencia, solo con el intérprete. */
+static struct salsa64_n64 ref;
+static uint8_t ref_rdram[SALSA64_RDRAM_MAX] __attribute__((aligned(128)));
+static uint8_t ref_isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
+static struct {
+	uint64_t exits;
+	uint64_t ram_every;
+	uint64_t history[16];   /* últimos bloques, para el informe */
+	uint32_t fields;        /* campo del VI de la última comparación de la RDRAM */
+} lock;
 
 /* Búsqueda de texto en la salida, también entre dos impresiones. */
 static struct {
@@ -81,6 +102,85 @@ static void isv_out(void *ctx, const uint8_t *text, uint32_t len)
 	}
 	watch.tail_len = n < watch.keep ? n : watch.keep;
 	memmove(watch.window, watch.window + n - watch.tail_len, watch.tail_len);
+}
+
+static void ref_isv_out(void *ctx, const uint8_t *text, uint32_t len)
+{
+	(void)ctx, (void)text, (void)len;
+}
+
+#define DIFF(name, a, b)                                                                        \
+	do {                                                                                    \
+		if ((uint64_t)(a) != (uint64_t)(b)) {                                           \
+			fprintf(stderr, "  %-10s rec=%016llx intérprete=%016llx\n", name,      \
+				(unsigned long long)(a), (unsigned long long)(b));              \
+			bad = true;                                                             \
+		}                                                                               \
+	} while (0)
+
+/* Después de cada salida del código generado: la referencia al mismo ciclo y
+ * comparar. */
+static void lockstep_check(struct salsa64_rec *r, uint64_t block_pc, void *ctx)
+{
+	(void)r, (void)ctx;
+	const struct salsa64_cpu *a = &n64.cpu, *b = &ref.cpu;
+	lock.history[lock.exits % 16] = block_pc;
+	lock.exits++;
+	/* La referencia despacha los eventos que vencen en el ciclo al que
+	 * llega; el despachador del recompilador lo haría en su próxima vuelta. */
+	if (a->cycles >= n64.sched.next)
+		salsa64_sched_dispatch(&n64.sched, a->cycles);
+	if (b->cycles < a->cycles)
+		salsa64_n64_run(&ref, a->cycles - b->cycles);
+
+	bool bad = false;
+	char name[16];
+	DIFF("cycles", a->cycles, b->cycles);
+	DIFF("pc", a->pc, b->pc);
+	DIFF("next_pc", a->next_pc, b->next_pc);
+	DIFF("branch", a->branch, b->branch);
+	for (int k = 1; k < 32; k++) {
+		snprintf(name, sizeof name, "r%d", k);
+		DIFF(name, a->gpr[k], b->gpr[k]);
+	}
+	DIFF("hi", a->hi, b->hi);
+	DIFF("lo", a->lo, b->lo);
+	for (int k = 0; k < 32; k++) {
+		snprintf(name, sizeof name, "f%d", k);
+		DIFF(name, a->fpr[k], b->fpr[k]);
+	}
+	DIFF("fcr31", a->fcr31, b->fcr31);
+	DIFF("status", a->status, b->status);
+	DIFF("cause", a->cause, b->cause);
+	DIFF("epc", a->epc, b->epc);
+	DIFF("errorepc", a->error_epc, b->error_epc);
+	DIFF("badvaddr", a->bad_vaddr, b->bad_vaddr);
+	DIFF("compare", a->compare, b->compare);
+	DIFF("count_off", a->count_offset, b->count_offset);
+	DIFF("llbit", a->llbit, b->llbit);
+	DIFF("entryhi", a->entry_hi, b->entry_hi);
+	DIFF("mi.intr", n64.bus.mi.intr, ref.bus.mi.intr);
+	DIFF("vi.fields", n64.bus.vi.fields, ref.bus.vi.fields);
+	if (!bad && (lock.exits % lock.ram_every == 0 || n64.bus.vi.fields != lock.fields)) {
+		lock.fields = n64.bus.vi.fields;
+		for (uint32_t pa = 0; pa < n64.bus.rdram_size; pa += 4) {
+			if (salsa64_rd32(rdram + pa) != salsa64_rd32(ref_rdram + pa)) {
+				fprintf(stderr, "  RDRAM %08x rec=%08x intérprete=%08x\n", pa,
+					salsa64_rd32(rdram + pa), salsa64_rd32(ref_rdram + pa));
+				bad = true;
+				break;
+			}
+		}
+	}
+	if (!bad)
+		return;
+	fprintf(stderr, "salsa64-run: --lockstep: diferencia después del bloque %016llx (salida %llu, ciclo %llu)\n"
+		"  bloques anteriores:", (unsigned long long)block_pc, (unsigned long long)lock.exits,
+		(unsigned long long)a->cycles);
+	for (unsigned k = 1; k <= 16 && k <= lock.exits; k++)
+		fprintf(stderr, " %08llx", (unsigned long long)(uint32_t)lock.history[(lock.exits - k) % 16]);
+	fputc('\n', stderr);
+	exit(4);
 }
 
 static uint64_t now_us(void)
@@ -207,7 +307,11 @@ static void usage(FILE *out)
 	      "  -q, --quiet           no copiar la salida del ISViewer a stdout\n"
 	      "  -r, --regs            volcar los registros del CPU al terminar\n"
 	      "      --trace-exc N     mostrar las primeras N excepciones del CPU\n"
-	      "      --frame ARCHIVO   al terminar, guardar en PPM la imagen del VI\n", out);
+	      "      --frame ARCHIVO   al terminar, guardar en PPM la imagen del VI\n"
+	      "      --rec             usar el recompilador (host ppc64 big-endian)\n"
+	      "      --lockstep[=N]    con --rec, comparar contra el intérprete después de cada\n"
+	      "                        bloque, y la RDRAM en cada campo del VI y cada N bloques\n"
+	      "                        (por omisión 4096)\n", out);
 }
 
 int main(int argc, char **argv)
@@ -223,13 +327,15 @@ int main(int argc, char **argv)
 		{ "regs", no_argument, NULL, 'r' },
 		{ "trace-exc", required_argument, NULL, 'X' },
 		{ "frame", required_argument, NULL, 'F' },
+		{ "rec", no_argument, NULL, 'E' },
+		{ "lockstep", optional_argument, NULL, 'L' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 },
 	};
 	uint64_t max_cycles = DEFAULT_CYCLES, slice = DEFAULT_SLICE;
 	uint32_t ram = SALSA64_RDRAM_MAX;
 	int tv = SALSA64_BOOT_TV_AUTO, c;
-	bool regs = false;
+	bool regs = false, use_rec = false, lockstep = false;
 	const char *frame_path = NULL;
 
 	while ((c = getopt_long(argc, argv, "c:u:f:qrh", opts, NULL)) != -1) {
@@ -248,6 +354,13 @@ int main(int argc, char **argv)
 		case 'r': regs = true; break;
 		case 'X': trace_exc_left = strtoull(optarg, NULL, 0); break;
 		case 'F': frame_path = optarg; break;
+		case 'E': use_rec = true; break;
+		case 'L':
+			use_rec = lockstep = true;
+			lock.ram_every = optarg ? strtoull(optarg, NULL, 0) : 4096;
+			if (!lock.ram_every)
+				lock.ram_every = 1;
+			break;
 		case 'T':
 			if (!strcmp(optarg, "ntsc")) tv = SALSA64_TV_NTSC;
 			else if (!strcmp(optarg, "pal")) tv = SALSA64_TV_PAL;
@@ -303,6 +416,29 @@ int main(int argc, char **argv)
 			"entrada 0x%08X, TV %s, RDRAM %u MB\n", path, fmt_names[fmt], rom_size,
 			salsa64_cic_name(info.cic), info.loaded, info.entry, tv_names[info.tv], ram >> 20);
 
+	if (use_rec) {
+		void *code = salsa64_host_rec_buffer();
+		if (!code || !salsa64_rec_init(&rec, &n64.cpu, code, SALSA64_HOST_REC_BYTES)) {
+			fprintf(stderr, "salsa64-run: el recompilador no corre en este host\n");
+			return 3;
+		}
+		if (lockstep) {
+			/* La referencia arranca igual; cada bloque vuelve a C para comparar. */
+			salsa64_n64_init(&ref, ref_rdram, ram);
+			salsa64_bus_set_isviewer(&ref.bus, ref_isv_buf, ref_isv_out, NULL);
+			salsa64_bus_set_rom(&ref.bus, rom, (uint32_t)(rom_size > UINT32_MAX ? UINT32_MAX : rom_size));
+			struct salsa64_boot_info ref_info;
+			if (!salsa64_boot_hle(&ref, tv, &ref_info)) {
+				fprintf(stderr, "salsa64-run: la referencia no arrancó\n");
+				return 3;
+			}
+			rec.no_link = true;
+			rec.after_exit = lockstep_check;
+		}
+		fprintf(stderr, "salsa64-run: recompilador activo%s; caché en %p, llamadas a C %s\n",
+			lockstep ? " con --lockstep" : "", code, rec.calls_near ? "con bl" : "por mtctr/bctrl");
+	}
+
 	/* Bucle principal: bloques de `slice` ciclos y verificación entre ellos. */
 	enum stop_reason reason = STOP_NONE;
 	uint64_t start_cycles = n64.cpu.cycles, t0 = now_us();
@@ -332,6 +468,17 @@ int main(int argc, char **argv)
 	fprintf(stderr, "salsa64-run: %s; %llu ciclos (%.2f s de consola) en %.2f s, %.1f MIPS, pc=0x%016llx\n",
 		reason_names[reason], (unsigned long long)cycles, cycles / 93.75e6, us / 1e6,
 		us ? cycles / (double)us : 0.0, (unsigned long long)n64.cpu.pc);
+	if (use_rec) {
+		const struct salsa64_rec_stats *st = &rec.stats;
+		fprintf(stderr, "salsa64-run: recompilador: %llu bloques (%u KB de caché), %llu solo intérprete, "
+			"%llu entradas, %llu enlaces, %llu invalidados, %llu vaciados, %llu instr. interpretadas (%.1f %%)%s\n",
+			(unsigned long long)st->compiled, salsa64_rec_used(&rec) / 256,
+			(unsigned long long)st->interp_only, (unsigned long long)st->entries,
+			(unsigned long long)st->linked, (unsigned long long)st->invalidated,
+			(unsigned long long)st->flushes, (unsigned long long)st->interp_steps,
+			cycles ? 100.0 * (double)st->interp_steps / (double)cycles : 0.0,
+			lockstep ? "; --lockstep sin diferencias" : "");
+	}
 	if (regs)
 		dump_regs();
 	if (frame_path && !dump_frame(frame_path)) {

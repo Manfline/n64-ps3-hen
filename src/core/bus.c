@@ -6,6 +6,14 @@
 #include <string.h>
 
 #include "core/endian.h"
+#include "cpu/rec.h"
+#include "cpu/vr4300.h"
+
+void salsa64_bus_rdram_written(struct salsa64_bus *bus, uint32_t pa, uint32_t len)
+{
+	if (bus->cpu && bus->cpu->rec)
+		salsa64_rec_invalidate(bus->cpu->rec, pa, len);
+}
 
 void salsa64_bus_init(struct salsa64_bus *bus, uint8_t *rdram, uint32_t rdram_size)
 {
@@ -18,6 +26,7 @@ void salsa64_bus_init(struct salsa64_bus *bus, uint8_t *rdram, uint32_t rdram_si
 void salsa64_bus_reset(struct salsa64_bus *bus)
 {
 	memset(bus->rdram, 0, bus->rdram_size);
+	salsa64_bus_rdram_written(bus, 0, bus->rdram_size);
 	memset(bus->sp_mem, 0, sizeof bus->sp_mem);
 	memset(bus->pif_ram, 0, sizeof bus->pif_ram);
 	memset(bus->rdram_regs, 0, sizeof bus->rdram_regs);

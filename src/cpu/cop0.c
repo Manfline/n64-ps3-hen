@@ -115,6 +115,7 @@ static void exception_at(struct salsa64_cpu *cpu, enum salsa64_exc code, unsigne
 	cpu->cause = (cpu->cause & ~(0x7Cu | (3u << SALSA64_CAUSE_CE_SHIFT))) |
 		     (uint32_t)code << 2 | (ce & 3) << SALSA64_CAUSE_CE_SHIFT;
 	cpu->status |= SALSA64_ST_EXL;
+	cpu->exc_count++;
 
 	cpu->pc = ((cpu->status & SALSA64_ST_BEV) ? VEC_BASE_BEV : VEC_BASE) + offset;
 	cpu->next_pc = cpu->pc + 4;

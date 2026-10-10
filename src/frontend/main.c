@@ -2,7 +2,9 @@
  * Salsa64 — frontend mínimo para PS3.
  *
  * Carga una ROM, la arranca por HLE y, en cada campo del VI, corre el
- * intérprete hasta el fin del campo y presenta el framebuffer del VI con
+ * CPU (recompilador, o el intérprete en RPCS3 o con el archivo
+ * SALSA64_NOREC_FLAG; ver platform/ps3/rec_cache.h) hasta el fin del campo
+ * y presenta el framebuffer del VI con
  * lib/rsxkit (textura en la memoria del RSX, escalada a 4:3). Todo en un
  * hilo del PPE por ahora; repartir CPU y presentación entre los dos hilos
  * del PPE queda para cuando el intérprete se acerque a tiempo real.
@@ -28,8 +30,10 @@
 #include <rsxkit/rsxkit.h>
 
 #include "core/boot.h"
+#include "cpu/rec.h"
 #include "platform/ps3/autotest.h"
 #include "platform/ps3/log.h"
+#include "platform/ps3/rec_cache.h"
 #include "selftest.h"
 #include "vitest_rom_bin.h"
 
@@ -42,6 +46,7 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define STATS_US     5000000u
 
 static struct salsa64_n64 n64;
+static struct salsa64_rec rec;
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
 static volatile int running = 1;
 static int selftest_on;
@@ -160,6 +165,15 @@ int main(void)
 		    info.kind == SALSA64_BOOT_ELF ? "ELF (IPL3 libre)" : "carga plana",
 		    info.entry, info.tv == SALSA64_TV_PAL ? "PAL" : info.tv == SALSA64_TV_MPAL ? "MPAL" : "NTSC");
 
+	bool use_rec = false;
+	if (!salsa64_ps3_rec_wanted())
+		salsa64_log("recompilador apagado (%s): intérprete", SALSA64_NOREC_FLAG);
+	else if (!(use_rec = salsa64_rec_init(&rec, &n64.cpu, salsa64_ps3_rec_cache(), SALSA64_REC_CACHE_BYTES)))
+		salsa64_log("recompilador no disponible: intérprete");
+	else
+		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s", SALSA64_REC_CACHE_BYTES >> 20,
+			    salsa64_ps3_rec_cache(), rec.calls_near ? "con bl" : "por mtctr");
+
 	ioPadInit(7);
 	sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, sysutil_cb, NULL);
 	if (selftest_on)
@@ -223,6 +237,15 @@ int main(void)
 				    info.tv == SALSA64_TV_PAL ? "PAL" : "NTSC",
 				    (double)cyc / dt, us_emu / 1000.0 / fields_stats,
 				    us_present / 1000.0 / fields_stats, blank);
+			if (use_rec) {
+				const struct salsa64_rec_stats *st = &rec.stats;
+				salsa64_log("recompilador: %llu bloques, %u KB de caché, %llu entradas, %llu enlaces, "
+					    "%llu invalidados, %llu vaciados, %llu instr. interpretadas",
+					    (unsigned long long)st->compiled, salsa64_rec_used(&rec) / 256,
+					    (unsigned long long)st->entries, (unsigned long long)st->linked,
+					    (unsigned long long)st->invalidated, (unsigned long long)st->flushes,
+					    (unsigned long long)st->interp_steps);
+			}
 			t_stats = t2;
 			cyc_stats = n64.cpu.cycles;
 			us_emu = us_present = 0;

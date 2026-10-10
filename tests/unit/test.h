@@ -99,6 +99,12 @@ void t_suite_vi(void);
 /* Corre todo y devuelve el número de pruebas fallidas. `print` recibe una
  * línea sin salto final. */
 int salsa64_unit_run(void (*print)(const char *line));
+/* Lo mismo con el recompilador (rec.h) sobre la caché `code`; -1 si el host
+ * no puede ejecutar código generado. */
+struct salsa64_rec;
+/* Correr solo las pruebas cuyo nombre contiene `substring` (NULL: todas). */
+void salsa64_unit_filter(const char *substring);
+int salsa64_unit_run_rec(void (*print)(const char *line), struct salsa64_rec *rec, void *code, size_t bytes);
 
 /* Micro-benchmark del intérprete (bench.c). Llamar después de
  * salsa64_unit_run, que inicializa la máquina. */

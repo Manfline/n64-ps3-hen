@@ -206,7 +206,9 @@ bool salsa64_boot_hle(struct salsa64_n64 *n64, int tv, struct salsa64_boot_info 
 	 * busca un ELF como hace el de libdragon. */
 	uint32_t elf = info->cic == SALSA64_CIC_UNKNOWN ? elf_find(bus) : 0;
 	bool ok = elf ? boot_elf(n64, elf, info) : boot_flat(n64, info);
-	if (ok)
+	if (ok) {
+		salsa64_bus_rdram_written(bus, 0, bus->rdram_size);
 		salsa64_cpu_set_pc(&n64->cpu, salsa64_sx32(info->entry));
+	}
 	return ok;
 }

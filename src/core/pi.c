@@ -37,6 +37,8 @@ static void pi_dma_to_rdram(struct salsa64_bus *bus, uint32_t len)
 		}
 		done += chunk;
 	}
+	if (dram < bus->rdram_size)
+		salsa64_bus_rdram_written(bus, dram, len);
 
 	bus->pi[SALSA64_PI_DRAM_ADDR] = (dram + len + 7) & 0x00FFFFF8;
 	bus->pi[SALSA64_PI_CART_ADDR] = (cart + len + 1) & 0xFFFFFFFE;
