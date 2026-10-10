@@ -11,6 +11,10 @@
 #   SHADERS     shaders Cg (.vcg/.fcg), relativos al directorio del programa
 #   CFLAGS      opcional, se agrega a los flags de compilación PPU
 #   LDFLAGS     opcional, se agrega a los flags de enlace PPU
+#   DATA        archivos a embeber; para cada uno, <nombre>_FILE (relativo a
+#               la raíz). Símbolos <nombre>_bin[], _end[] y _size.
+#   RSXKIT      1 para enlazar lib/rsxkit (se compila en build/rsxkit con su
+#               propio Makefile, sin -Isrc)
 #
 # Salidas en build/<PROGRAM>/:
 #   <PROGRAM>.elf        stripped + sprxlinker: RPCS3 y ps3load
@@ -54,7 +58,13 @@ CONTENTID ?= UP0001-$(APPID)_00-0000000000000000
 PPU_OBJS    := $(patsubst $(ROOT)/%,$(OBJ)/%.o,$(abspath $(SRCS)) $(addprefix $(ROOT)/,$(COMMON)))
 SHADER_BINS := $(addprefix $(OBJ)/,$(patsubst %.vcg,%.vpo,$(patsubst %.fcg,%.fpo,$(notdir $(SHADERS)))))
 SPU_BINS    := $(foreach p,$(SPU_PROGS),$(OBJ)/spu_$(p).bin)
-EMBED_OBJS  := $(addsuffix .o,$(SHADER_BINS) $(SPU_BINS))
+DATA_BINS   := $(foreach d,$(DATA),$(OBJ)/$(d).bin)
+EMBED_OBJS  := $(addsuffix .o,$(SHADER_BINS) $(SPU_BINS) $(DATA_BINS))
+
+ifeq ($(RSXKIT),1)
+RSXKIT_LIB  := $(ROOT)/build/rsxkit/librsxkit.a
+PPU_CFLAGS  += -I$(ROOT)/lib/rsxkit/include
+endif
 
 vpath %.vcg $(sort $(dir $(abspath $(SHADERS))))
 vpath %.fcg $(sort $(dir $(abspath $(SHADERS))))
@@ -81,7 +91,7 @@ $(OBJ)/%.S.o: $(ROOT)/%.S
 	@mkdir -p $(@D)
 	$(VERB)ppu-gcc $(PPU_CFLAGS) -MMD -MP -x assembler-with-cpp -c $< -o $@
 
-$(OBJ)/$(PROGRAM).raw.elf: $(PPU_OBJS) $(EMBED_OBJS)
+$(OBJ)/$(PROGRAM).raw.elf: $(PPU_OBJS) $(EMBED_OBJS) $(RSXKIT_LIB)
 	@echo "  PPU LD  $(notdir $@)"
 	$(VERB)ppu-gcc $(PPU_LDFLAGS) $^ $(LIBS) -o $@
 
@@ -107,6 +117,15 @@ $(OUT)/$(PROGRAM).pkg: $(OUT)/$(PROGRAM).elf
 	$(VERB)pkg --contentid $(CONTENTID) $(OBJ)/pkg/ $@ >/dev/null
 	$(VERB)cp $@ $(basename $@).gnpdrm.pkg
 	$(VERB)package_finalize $(basename $@).gnpdrm.pkg
+
+# lib/rsxkit con su propio Makefile; siempre se consulta (es barato) y el
+# enlace se rehace solo si cambió la biblioteca.
+ifeq ($(RSXKIT),1)
+.PHONY: rsxkit
+rsxkit:
+	$(VERB)$(MAKE) --no-print-directory -C $(ROOT)/lib/rsxkit OUT=$(ROOT)/build/rsxkit
+$(RSXKIT_LIB): rsxkit ;
+endif
 
 # --- SPU ---------------------------------------------------------------------
 $(OBJ)/spu/%.c.o: $(ROOT)/%.c
@@ -142,6 +161,13 @@ define EMBED
 	printf '#include <ppu-types.h>\nextern const u8 %s[];\nextern const u8 %s_end[];\nextern const u32 %s_size;\n' \
 		$$sym $$sym $$sym > $(OBJ)/$$(echo $(notdir $<) | tr . _).h
 endef
+
+define DATA_RULES
+$$(OBJ)/$(1).bin: $$(ROOT)/$$($(1)_FILE)
+	@mkdir -p $$(@D)
+	$$(VERB)cp $$< $$@
+endef
+$(foreach d,$(DATA),$(eval $(call DATA_RULES,$(d))))
 
 $(OBJ)/%.vpo.o: $(OBJ)/%.vpo ; $(EMBED)
 $(OBJ)/%.fpo.o: $(OBJ)/%.fpo ; $(EMBED)

@@ -5,6 +5,7 @@
 | Archivo | Origen | Licencia | Notas |
 |---|---|---|---|
 | `tests/phase0/rsx-triangle/main.c` | Sample `samples/graphics/rsxtest` de PSL1GHT (`f649a08f`) | MIT | Inicialización del RSX, superficie, viewport y flip reescritos en C a partir de `rsxutil.cpp`/`main.cpp` |
+| `lib/rsxkit/src/video.c` | `tests/phase0/rsx-triangle/main.c` (propio), que sigue el sample `rsxtest` de PSL1GHT | MIT | Inicialización del RSX y del video, superficie y flip; el resto de `lib/rsxkit` es propio |
 | `tests/phase0/spu-compute/spu/mix.c` | Patrón DMA del sample `samples/spu/spudma` de PSL1GHT | MIT | Solo el patrón `mfc_get`/espera por etiqueta; el cálculo y el doble búfer son propios |
 
 El núcleo de la Fase 1 (`src/core/`, `src/cpu/`, `src/host/`) es código
@@ -19,6 +20,7 @@ Datos tomados de terceros (no código):
 | Comportamiento del IPL3 libre (búsqueda del ELF, boot flags en DMEM, $sp, variables de libultra del modo compat) | `src/core/boot.c` | libdragon `boot/README.md`, `ipl3.c`, `loader.c`, `cleanup.c`, `minidragon.h` (rama `preview`, consultada el 2026-10-10) | Unlicense |
 | CRC-32 del IPL3 de cada variante de CIC (solo los valores) | `src/core/rom.c` | nust64 0.4.1, `src/rom.rs` | MIT |
 | Semillas del IPL3, ajuste de la dirección de arranque por CIC, códigos de destino, mapa de memoria y reglas del bus | `src/core/` | n64brew.dev (PIF-NUS, CIC-NUS, ROM Header, Memory map, RDRAM Interface, Initial Program Load) | documentación |
+| Temporización del VI (relojes por tipo de TV, VI_V_SYNC/VI_H_SYNC, área visible con VI_H_VIDEO/VI_V_VIDEO y escalas) | `src/core/vi.c` | n64brew.dev (Video Interface) | documentación |
 | Reglas de hardware verificadas por las pruebas (MULT, LWR, enlaces, COP0, COP2, FPU, TLB, RE, bus) y valores de los registros de RDRAM | `src/cpu/`, `src/core/` | nemu64-test (fuente, comentarios y valores esperados) | MIT |
 
 Aviso de PSL1GHT: Copyright (c) 2011 PSL1GHT Development Team, licencia MIT
@@ -44,6 +46,13 @@ arriba como el resto.
 |---|---|---|---|
 | `tests/roms/homebrew/nemu64-test.z64` | github.com/thelemmy/nemu64-test, commit `9a8b9f7d94ee2f6f57d7feed70c98c22cdc30e6c` (2026-09-08), conjunto "base" | MIT (Copyright (c) 2021 lemmy-64), `nemu64-test.LICENSE` | IPL3 libre de libdragon r7 (Unlicense) que trae nust64 0.4.1, verificado por MD5 (`7f014ed41cc53bb1a5e44f211f8c3dec`); crates enlazados (arbitrary-int y oorandom MIT; arrayref BSD-2-Clause; linked_list_allocator, lock_api, num-traits, scopeguard y spinning_top MIT/Apache-2.0), compiler-builtins y core/alloc de Rust: avisos en `nemu64-test.NOTICES` |
 
+| `tests/roms/homebrew/salsa64-vitest.z64` | Código propio (`tests/roms/src/vitest`) | GPLv2 o posterior | IPL3 libre de libdragon r7 (Unlicense) que trae nust64 0.4.1, verificado por MD5 como arriba. Sin bibliotecas: ni libultra ni libdragon. Valores de los registros del VI (modos NTSC/PAL de 320×240) tomados de n64brew.dev (Video Interface) |
+
+`salsa64-vitest.z64` se compila con `tools/build-vitest.sh`
+(`docker/vitest.Dockerfile`): clang y lld 14.0.6 de Debian 12 (MIPS II
+big-endian, o32) y nust64 0.4.1 instalado con Rust 1.90.0 y `--locked`.
+Recompilarlo da el mismo SHA-256 (`salsa64-vitest.z64.sha256`).
+
 Se compila con `tools/build-nemu64-test.sh` (`docker/nemu64-test.Dockerfile`):
 rustup-init 1.29.1 (SHA-256 fijo), Rust `nightly-2026-07-16` con `rust-src`,
 nust64 0.4.1 instalado con Rust 1.90.0 y `--locked` (su `proc-macro2` 1.0.49
@@ -57,6 +66,7 @@ no contiene código de Nintendo.
 |---|---|---|---|
 | Rust (rustup 1.29.1, nightly-2026-07-16, 1.90.0) | rust-lang.org | MIT OR Apache-2.0 | Compilar nemu64-test en el contenedor |
 | nust64 0.4.1 | crates.io / github.com/rust-n64/nust64 | MIT | ELF → ROM con el IPL3 de libdragon |
+| clang/lld 14 (Debian 12) | llvm.org | Apache-2.0 con excepción LLVM | Compilar vitest para MIPS |
 
 ## Suites de prueba de CPU
 

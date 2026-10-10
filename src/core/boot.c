@@ -68,7 +68,7 @@ static void boot_common(struct salsa64_n64 *n64, const uint8_t *rom)
 	bus->rdram_regs[0] = 0xB4190010u;
 	bus->rdram_regs[2] = 0x2B3B1A0Bu;
 	bus->rdram_regs[6] = 0x101C0A04u;
-	bus->vi[SALSA64_VI_V_INTR] = VI_V_INTR_BOOT;
+	bus->vi.regs[SALSA64_VI_V_INTR] = VI_V_INTR_BOOT;
 	/* SP detenido con PC = 0, MI sin interrupciones ni máscara, DMEM e IMEM
 	 * en cero: ya lo deja así el reset. */
 }
@@ -199,6 +199,8 @@ bool salsa64_boot_hle(struct salsa64_n64 *n64, int tv, struct salsa64_boot_info 
 	info->cic = salsa64_rom_cic(rom);
 	info->tv = tv == SALSA64_BOOT_TV_AUTO ? salsa64_rom_tv_type(rom) : (enum salsa64_tv_type)tv;
 	boot_common(n64, rom);
+	salsa64_vi_set_tv(bus, info->tv);
+	salsa64_vi_start(bus);
 
 	/* Un IPL3 de Nintendo reconocido siempre copia 1 MB plano; si no, se
 	 * busca un ELF como hace el de libdragon. */

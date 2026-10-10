@@ -94,6 +94,7 @@ void t_suite_mem(void);
 void t_suite_cop0(void);
 void t_suite_cop1(void);
 void t_suite_boot(void);
+void t_suite_vi(void);
 
 /* Corre todo y devuelve el número de pruebas fallidas. `print` recibe una
  * línea sin salto final. */

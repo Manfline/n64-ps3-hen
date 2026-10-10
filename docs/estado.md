@@ -1,5 +1,57 @@
 # Estado
 
+## 2026-10-10 — Fase 1: un homebrew muestra imagen (criterio cumplido)
+
+Hecho:
+- VI (`src/core/vi.c`): temporización por campos con dos eventos del
+  planificador; duración desde VI_V_SYNC, VI_H_SYNC y el reloj de cada tipo
+  de TV (NTSC 1 567 041 ciclos, 59,83 Hz; PAL 49,92 Hz); VI_V_CURRENT
+  calculado al leerlo, interrupción en VI_V_INTR, entrelazado con campos de
+  262/263 líneas. `salsa64_vi_frame` describe la imagen visible (origen,
+  tamaño por VI_H_VIDEO/VI_V_VIDEO y escalas, RGBA5551/RGBA8888);
+  `salsa64_n64_run_field` corre hasta el fin del campo.
+- `salsa64-run --frame` guarda la imagen del VI en PPM. La pantalla de
+  resultados de nemu64-test se ve completa.
+- ROM `vitest` (`tests/roms/src/vitest`, propia, GPLv2+): clang 14 para MIPS
+  + nust64 (IPL3 libre r7) en contenedor reproducible
+  (`tools/build-vitest.sh`). Barras, rampa y cuadro animado alternando
+  RGBA5551 y RGBA8888 con doble búfer en la interrupción del VI; se
+  verifica sola (Count por campo exacto, V_CURRENT en el manejador).
+- `lib/rsxkit` (MIT, `lib/rsxkit/README.md`): init del RSX y video, cuadro
+  con doble búfer y flip en vsync, framebuffer 2D escalado (fit/entero/
+  estirar, lineal/cercano) con 5 formatos leídos directo por el RSX
+  (RGBA5551 = textura R5G5B5A1). Compila aparte, sin -Isrc.
+- Frontend (`src/frontend`, `salsa64.pkg`, SLSA00064): ROM de
+  `/dev_hdd0/salsa64/rom.z64` o vitest embebida; un campo de emulación y
+  una presentación por vuelta; con vitest se verifica solo (RDRAM y pantalla
+  en ambos formatos + resultado de la ROM). Sale con START + SELECT.
+- Pruebas: 161 en el host y en RPCS3; nemu64-test sin cambios (462);
+  `tools/test-roms.sh` corre vitest y `tools/test-phase1.sh` el frontend.
+- **PS3 real** (CECH-3011A, HEN): `RESULTADO frontend: OK` en el campo 124;
+  8,7 campos/s (14 % de NTSC), 13,6 MIPS, presentación 0,3 ms por campo
+  (docs/perf-log.md).
+
+Notas:
+- El log UDP no llegó a `tools/udplog.py`: había otro receptor abierto en el
+  mismo puerto (`jit-ppe-cache`, desde las 09:27) que se quedó con los
+  paquetes unicast. El log en disco (`/dev_hdd0/salsa64/salsa64.log`, por
+  FTP) sí estaba completo.
+- Los 13,6 MIPS se midieron antes del perfilado. La sospecha del FPSCR no
+  aplicaba; el intérprete optimizado da 21,2 MIPS en el bench (entrada
+  siguiente).
+
+Siguiente (Fase 1):
+- [ ] Volver a medir el frontend con vitest con el intérprete optimizado.
+- [ ] Detección de bucles de espera (vitest y los juegos esperan al VI en
+      un bucle): saltar hasta el siguiente evento ahorraría casi todo el
+      campo en escenas ligeras.
+- [ ] SI: comandos del PIF (controles) para mapear el DualShock 3.
+- [ ] Repartir emulación y presentación entre los dos hilos del PPE.
+- [ ] Origen del VI: verificar contra ares si libultra deja VI_ORIGIN una
+      línea después del inicio del framebuffer (aquí se toma como la
+      primera línea visible).
+- [ ] Bus PI, cachés, CPUTest de krom y camino plano: igual que abajo.
+
 ## 2026-10-10 — Intérprete en el PPE: 8,7 → 21,2 MIPS
 
 Hecho (números y diagnóstico en docs/perf-log.md):
@@ -81,8 +133,8 @@ Siguiente (Fase 1):
       (docs/perf-log.md).
 - [x] Perfilar el intérprete en el PPE: 8,8 → 21,2 MIPS en dos rondas
       (entrada de arriba; la sospecha del FPSCR no aplicaba).
-- [ ] VI con contador de líneas e interrupción; framebuffer 2D en el RSX
-      (primera pieza de `lib/rsxkit/`, ver docs/proyecto.md).
+- [x] VI con contador de líneas e interrupción; framebuffer 2D en el RSX
+      (primera pieza de `lib/rsxkit/`): ver la entrada de arriba.
 - [ ] Bus PI: latch de escrituras al cartucho y DMA no alineado (81 pruebas
       de nemu64-test); SRAM/FlashRAM.
 - [ ] Cachés del VR4300 (46 pruebas) y ciclos por instrucción (conjuntos

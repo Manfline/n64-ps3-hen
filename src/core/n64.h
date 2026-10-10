@@ -23,6 +23,10 @@ void salsa64_n64_init(struct salsa64_n64 *n64, uint8_t *rdram, uint32_t rdram_si
 void salsa64_n64_reset(struct salsa64_n64 *n64);
 /* Ejecuta `cycles` ciclos del VR4300 (93,75 MHz). */
 void salsa64_n64_run(struct salsa64_n64 *n64, uint64_t cycles);
+/* Ejecuta hasta que termina el campo de video en curso (fin de cuadro del
+ * VI, ~1,57 M ciclos en NTSC) y devuelve los ciclos ejecutados. Al volver,
+ * salsa64_vi_frame describe la imagen de ese campo. */
+uint64_t salsa64_n64_run_field(struct salsa64_n64 *n64);
 /* Pide terminar salsa64_n64_run después de la instrucción en curso (por
  * ejemplo, desde el callback del ISViewer). */
 void salsa64_n64_stop(struct salsa64_n64 *n64);
