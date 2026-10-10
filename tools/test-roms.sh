@@ -5,7 +5,8 @@
 # savetest (ROM propia del guardado, tests/roms/src/savetest) dos veces por
 # tipo de guardado.
 # gfxtest (ROM 3D propia, tests/roms/src/gfxtest) por la HLE gráfica, con su
-# imagen verificada en el rasterizador de referencia (build/gfxtest.ppm).
+# imagen verificada en el rasterizador de referencia (build/gfxtest.ppm), en
+# sus variantes F3DEX2, F3D y F3DEX (build/gfxtest-f3d.ppm, …).
 #
 # La lista de pruebas de nemu64-test que fallan se compara con la línea base
 # tests/roms/nemu64-test.fallas (lo que falta emular: RSP, cachés, bus PI…).
@@ -107,12 +108,20 @@ for t in eeprom4k eeprom16k sram; do
 	done
 done
 
-GLOG=build/logs/gfxtest.run.log
-tools/build.sh --sh "ASAN_OPTIONS=detect_leaks=0 build/host/salsa64-run -c 400000000 \
-	-u 'gfxtest: OK' -f 'gfxtest: FALLO' --gfx-frame build/gfxtest.ppm --gfxtest-check \
-	tests/roms/homebrew/salsa64-gfxtest.z64 2>&1" >"$GLOG" 2>&1
-grc=$?
-printf '%-12s %s\n' gfxtest "$(grep 'gfxtest: [OF]' "$GLOG" | head -1)"
-grep -E 'gfx:|gfxtest: imagen|gfxtest: \(' "$GLOG" | sed 's/^salsa64-run: /             /'
-[ $grc -eq 0 ] || { echo "             falló (código $grc, $GLOG)"; fail=1; }
+# gfxtest en sus tres variantes (las mismas escenas con los comandos de
+# F3DEX2, F3D y F3DEX 1.x): misma imagen y ningún comando sin implementar.
+for v in gfxtest gfxtest-f3d gfxtest-f3dex; do
+	GLOG=build/logs/$v.run.log
+	tools/build.sh --sh "ASAN_OPTIONS=detect_leaks=0 build/host/salsa64-run -c 400000000 \
+		-u 'gfxtest: OK' -f 'gfxtest: FALLO' --gfx-frame build/$v.ppm --gfxtest-check \
+		tests/roms/homebrew/salsa64-$v.z64 2>&1" >"$GLOG" 2>&1
+	grc=$?
+	printf '%-12s %s\n' $v "$(grep 'gfxtest: [OF]' "$GLOG" | head -1)"
+	grep -E 'gfx:|gfxtest: imagen|gfxtest: \(' "$GLOG" | sed 's/^salsa64-run: /             /'
+	[ $grc -eq 0 ] || { echo "             falló (código $grc, $GLOG)"; fail=1; }
+	if ! grep -q 'gfx:.* 0 comandos sin implementar' "$GLOG"; then
+		echo "             falló: hay comandos sin implementar ($GLOG)"
+		fail=1
+	fi
+done
 exit $fail

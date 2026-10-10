@@ -1,14 +1,15 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * Salsa64 — gfxtest: ROM 3D de prueba para la HLE de F3DEX2 y el RDP.
- * Código propio, sin libultra ni libdragon; se empaqueta con el IPL3 libre
- * de libdragon (nust64).
+ * Salsa64 — gfxtest: ROM 3D de prueba para la HLE gráfica (F3DEX2, F3D o
+ * F3DEX 1.x según GBI en el Makefile) y el RDP. Código propio, sin libultra
+ * ni libdragon; se empaqueta con el IPL3 libre de libdragon (nust64).
  *
- * Cada cuadro arma una display list F3DEX2 (gbi.h) y la manda al RSP como
- * una tarea gráfica de libultra (OSTask en DMEM 0xFC0). El microcódigo es
- * un BREAK y su segmento de datos lleva el texto "Salsa64 GBI F3DEX2": en un
- * emulador con HLE que lo reconozca se dibuja la escena; en una N64 real el
- * RSP solo se detiene (no hay microcódigo de Nintendo aquí).
+ * Cada cuadro arma una display list (gbi.h) y la manda al RSP como una
+ * tarea gráfica de libultra (OSTask en DMEM 0xFC0). El microcódigo es un
+ * BREAK y su segmento de datos lleva el texto GBI_MARKER ("Salsa64 GBI
+ * F3DEX2", "Salsa64 GBI Fast3D" o "Salsa64 GBI F3DEX1"): en un emulador con
+ * HLE que lo reconozca se dibuja la escena; en una N64 real el RSP solo se
+ * detiene (no hay microcódigo de Nintendo aquí).
  *
  * Escena (expect.h): borrado del z-buffer y fondo con FILLRECT, dos cuadros
  * con z-buffer, un triángulo Gouraud, un cuadro con textura RGBA16 (texels
@@ -195,7 +196,7 @@ static uint16_t rgba16(unsigned r5, unsigned g5, unsigned b5)
 static void init_data(void)
 {
 	volatile struct rsp_data *r = R;
-	static const char marker[] = "Salsa64 GBI F3DEX2";
+	static const char marker[] = GBI_MARKER;
 	for (unsigned i = 0; i < sizeof r->ucode_data; i++)
 		r->ucode_data[i] = i < sizeof marker ? marker[i] : 0;
 	r->ucode[0] = 0x0000000D;  /* break */

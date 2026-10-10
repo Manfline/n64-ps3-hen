@@ -14,6 +14,9 @@ reproducible y sin código de Nintendo. Procedencia y licencias en
 | `salsa64-vitest.z64` | ROM propia de prueba del VI (fuente en `tests/roms/src/vitest`, GPLv2+): barras de color, rampa y un cuadro animado en RGBA5551 y RGBA8888, con autoverificación de la temporización. La genera `tools/build-vitest.sh`. |
 | `salsa64-vitest.z64.sha256` | SHA-256 del ROM; recompilarlo desde cero da el mismo valor. |
 | `salsa64-vitest.buildinfo` | Versiones de clang, lld y nust64 con que se compiló. |
+| `salsa64-gfxtest.z64` | ROM propia de prueba de la HLE gráfica (fuente en `tests/roms/src/gfxtest`, GPLv2+): z-buffer, Gouraud, texturas RGBA16/I4/CI4, TEXRECT en 1 ciclo y en copia, mezcla, culling, 2 ciclos con dos texturas, luces, mapeo de entorno y w grande, con comandos F3DEX2. La verifican `salsa64-run --gfxtest-check` y el frontend (puntos de `expect.h`). |
+| `salsa64-gfxtest-f3d.z64`, `salsa64-gfxtest-f3dex.z64` | Las mismas escenas con los comandos de F3D (Fast3D) y de F3DEX 1.x. Las tres las genera `tools/build-gfxtest.sh`. |
+| `salsa64-gfxtest*.z64.sha256`, `salsa64-gfxtest*.buildinfo` | SHA-256 y versiones de compilación de cada variante. |
 | `salsa64-savetest-eeprom4k.z64`, `-eeprom16k.z64`, `-sram.z64` | ROM propia de prueba del guardado del cartucho (fuente en `tests/roms/src/savetest`, GPLv2+), en tres variantes que solo difieren en el título y en el tipo de guardado de la cabecera de homebrew. Escribe un patrón, lo relee y en el arranque siguiente comprueba que persistió. Las genera `tools/build-savetest.sh`. |
 | `salsa64-savetest-*.z64.sha256` | SHA-256 de cada variante; recompilarlas desde cero da los mismos valores. |
 | `salsa64-savetest.buildinfo` | Versiones de clang, lld y nust64 con que se compiló. |
