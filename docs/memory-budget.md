@@ -8,7 +8,8 @@ PS3 real.
 
 | Uso | Previsto | Medido | Notas |
 |---|---|---|---|
-| RDRAM emulada | 8 | | 4 MB + Expansion Pak |
+| RDRAM emulada | 8 | | 4 MB + Expansion Pak; la pone quien llama a `retro64_n64_init` |
+| Estado de la máquina (`struct retro64_n64`) | 0,01 | 0,01 | 10,4 KB: CPU 1,7 KB, bus 8,5 KB (incluye SP DMEM/IMEM) |
 | Caché del recompilador | 32 | | Fase 3; depende de docs/jit-ppe.md |
 | Caché de texturas (lado PPE/SPE) | 16 | | Fase 4 |
 | Búfer de comandos RSX + memoria mapeada | 32 | | `HOST_SIZE` de rsx-triangle |

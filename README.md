@@ -4,7 +4,7 @@ Emulador de Nintendo 64 para PlayStation 3 (homebrew) diseñado alrededor del
 Cell: el PPE ejecuta el VR4300, los SPEs hacen el trabajo vectorial (RSP,
 audio, posprocesado) y el RSX dibuja. Licencia GPLv2 o posterior.
 
-Estado: Fase 0 (entorno). Ver `docs/estado.md`.
+Estado: Fase 1 (intérprete del VR4300). Ver `docs/estado.md`.
 
 ## Compilar
 
@@ -12,7 +12,9 @@ Requiere Docker (en las Macs: contexto `colima-dev`).
 
 ```sh
 tools/docker-image.sh        # una vez: imagen retro64-toolchain:dev (~10 min)
-tools/build.sh               # compila los programas de tests/phase0
+tools/build.sh               # compila los programas de tests/phase0 y phase1
+tools/build.sh test-host     # pruebas unitarias del núcleo con gcc nativo
+tools/test-phase1.sh         # las mismas pruebas en RPCS3 (big-endian)
 tools/validate-toolchain.sh  # samples de PSL1GHT + shaders de referencia
 ```
 

@@ -1,0 +1,105 @@
+/*
+ * Retro64 — marco de pruebas unitarias del núcleo.
+ *
+ * Las mismas pruebas corren en el host (gcc nativo, little-endian:
+ * `make test-host`) y en la PS3/RPCS3 (ppu-gcc, big-endian:
+ * tests/phase1/cpu-tests). Sin dependencias de la plataforma: la salida va
+ * por la función que pasa quien llama a retro64_unit_run.
+ *
+ * Cada prueba arranca con una máquina limpia (t_reset): RDRAM en cero,
+ * modo kernel, Status = CU1|CU0|FR, PC en T_CODE. Las pruebas ponen los
+ * registros a mano, cargan unas pocas instrucciones con T_LOAD y avanzan con
+ * t_step.
+ */
+#ifndef RETRO64_TESTS_TEST_H
+#define RETRO64_TESTS_TEST_H
+
+#include <stdint.h>
+
+#include "core/n64.h"
+#include "mips.h"
+
+#define T_CODE_PA   0x1000u
+#define T_DATA_PA   0x2000u
+#define T_CODE      0xFFFFFFFF80001000ull  /* KSEG0 */
+#define T_DATA      0xFFFFFFFF80002000ull
+#define T_VEC_GEN   0xFFFFFFFF80000180ull
+#define T_VEC_TLB   0xFFFFFFFF80000000ull
+#define T_STATUS    (RETRO64_ST_CU0 | RETRO64_ST_CU1 | RETRO64_ST_FR)
+
+extern struct retro64_n64 t_n64;
+#define CPU (&t_n64.cpu)
+#define R   (t_n64.cpu.gpr)
+
+extern int t_checks;
+
+void t_fail(const char *file, int line, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
+
+#define CHECK(c)                                              \
+	do {                                                  \
+		t_checks++;                                   \
+		if (!(c))                                     \
+			t_fail(__FILE__, __LINE__, "%s", #c); \
+	} while (0)
+
+#define CHECK_EQ(a, b)                                                                 \
+	do {                                                                           \
+		uint64_t a_ = (uint64_t)(a), b_ = (uint64_t)(b);                       \
+		t_checks++;                                                            \
+		if (a_ != b_)                                                          \
+			t_fail(__FILE__, __LINE__, "%s = 0x%016llx, se esperaba 0x%016llx", \
+			       #a, (unsigned long long)a_, (unsigned long long)b_);    \
+	} while (0)
+
+/* Excepción tomada: código, EPC, BD y vector. */
+#define CHECK_EXC(x_code, x_epc, x_bd, x_vec)                             \
+	do {                                                              \
+		CHECK_EQ(RETRO64_CAUSE_EXC(CPU->cause), x_code);          \
+		CHECK_EQ(CPU->epc, x_epc);                                \
+		CHECK_EQ((CPU->cause & RETRO64_CAUSE_BD) != 0, x_bd);     \
+		CHECK_EQ(CPU->pc, x_vec);                                 \
+		CHECK(CPU->status & RETRO64_ST_EXL);                      \
+	} while (0)
+
+void t_load(const uint32_t *code, unsigned n);
+#define T_LOAD(...)                                                 \
+	do {                                                        \
+		static const uint32_t code_[] = { __VA_ARGS__ };    \
+		t_load(code_, sizeof code_ / sizeof code_[0]);      \
+	} while (0)
+
+void t_step(unsigned n);
+void t_set_status(uint32_t status);
+
+/* RDRAM física, en el orden de bytes de la N64. */
+uint32_t t_rd32(uint32_t pa);
+uint64_t t_rd64(uint32_t pa);
+void t_wr32(uint32_t pa, uint32_t v);
+void t_wr64(uint32_t pa, uint64_t v);
+
+/* Patrones de bits de float/double del host (IEEE 754 en ambos). */
+uint32_t t_fbits(float f);
+uint64_t t_dbits(double d);
+
+typedef void (*t_test_fn)(void);
+void t_run(const char *name, t_test_fn fn);
+#define RUN(fn) t_run(#fn, fn)
+
+/* Suites (una por archivo). */
+void t_suite_core(void);
+void t_suite_alu(void);
+void t_suite_muldiv(void);
+void t_suite_branch(void);
+void t_suite_mem(void);
+void t_suite_cop0(void);
+void t_suite_cop1(void);
+
+/* Corre todo y devuelve el número de pruebas fallidas. `print` recibe una
+ * línea sin salto final. */
+int retro64_unit_run(void (*print)(const char *line));
+
+/* Micro-benchmark del intérprete (bench.c). Llamar después de
+ * retro64_unit_run, que inicializa la máquina. */
+void retro64_unit_bench(void (*print)(const char *line), uint64_t (*now_us)(void));
+
+#endif

@@ -1,5 +1,43 @@
 # Estado
 
+## 2026-10-10 — Fase 1 iniciada: intérprete del VR4300
+
+Hecho (diseño en docs/cpu-vr4300.md):
+- Intérprete del VR4300 en `src/cpu/`: ALU de 32/64 bits con
+  desbordamiento, cargas/almacenamientos (incluidos LWL/LWR/LDL/LDR y sus
+  stores), LL/SC, saltos con delay slot y branch-likely, HI/LO, MULT/DIV y
+  variantes de 64 bits, traps; COP0 (Count/Compare, Status, Cause, EPC,
+  ErrorEPC, excepciones, ERET, TLB de 32 entradas, modos usuario/supervisor);
+  COP1 con modo FR, causas/banderas de FCR31, conversiones y comparaciones.
+- Bus y mapa físico en `src/core/`: RDRAM de 4/8 MB con camino rápido desde
+  KSEG0/KSEG1, SP DMEM/IMEM, ROM, PIF RAM. MI completo (interrupciones →
+  IP2); PI y SI con DMA inmediato; VI, AI, SP, DP como registros. Planificador
+  de eventos (Compare). Sin asignaciones en el bucle.
+- Portable: mismo código para ppu-gcc (big-endian, accesos directos) y gcc
+  nativo (arm64, con byte-swap).
+- Pruebas: `tools/build.sh test-host` (139 pruebas, ASan + UBSan) y
+  `tools/test-phase1.sh` (las mismas en RPCS3, big-endian). Todas pasan en
+  ambos. Prueba de mutación: romper SRA, branch-likely o EPC las hace fallar.
+- Micro-benchmark del intérprete (bucle mixto con FPU): 237 MIPS en el host
+  (Mac Studio, Docker arm64); 35,6 MIPS en RPCS3 (no concluyente).
+- Suites elegidas y licencias verificadas (docs/THIRD_PARTY.md):
+  nemu64-test (MIT, IPL3 libre) como principal; CPUTest de krom (Unlicense)
+  solo ensamblado desde fuente, porque sus ROMs traen el IPL3 de Nintendo.
+  Dillonb/n64-tests descartada (sin licencia).
+
+Siguiente (Fase 1):
+- [ ] Correr `retro64-cpu-tests` en la PS3 real: primer número de MIPS del
+      intérprete en el PPE (docs/perf-log.md).
+- [ ] Arranque HLE: cargar la ROM, copiar los primeros 1 MB a RDRAM, dejar
+      registros y DMEM como el IPL3 (lo que nemu64-test espera: tamaño de
+      RAM en DMEM[0], TV en DMEM[9], offset del ELF en DMEM[12]).
+- [ ] ISViewer (0x13FF0000) para leer la salida de nemu64-test.
+- [ ] Contenedor para compilar nemu64-test (Rust nightly-2026-07-16 +
+      nust64 0.4.1) y guardar el ROM en `tests/roms/homebrew/`.
+- [ ] VI con contador de líneas e interrupción; framebuffer 2D en el RSX.
+- [ ] Pendientes del CPU: direccionamiento de 64 bits, bandera Inexact,
+      ciclos por instrucción (docs/cpu-vr4300.md).
+
 ## 2026-10-10 — Fase 0 en curso
 
 Hecho:
