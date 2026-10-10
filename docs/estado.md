@@ -30,13 +30,50 @@ Hecho (diseño en docs/rec-ppe.md, «Código fuera de KSEG0»):
 - Memoria: +572 KB del estado del recompilador (6,84 MB).
 
 Siguiente:
-- [ ] PS3 real (APPID SLSA00074): cpu-tests «Salsa64 CPU TLB» (unitarias
-      y nemu64-test contra el intérprete) y el frontend «Salsa64 TLB» con
-      GoldenEye y Perfect Dark (respaldos propios), mirando la proporción
-      de instrucciones interpretadas y las traducciones. Los dos paquetes
-      comparten APPID: se instalan de a uno.
+- [ ] PS3 real: cpu-tests «Salsa64 CPU TLB» (SLSA00076: unitarias y
+      nemu64-test contra el intérprete) y el frontend «Salsa64 TLB»
+      (SLSA00074) con GoldenEye y Perfect Dark (respaldos propios),
+      mirando la proporción de instrucciones interpretadas y las
+      traducciones.
 - [ ] Verificar en el desensamblado (o el decomp) si GoldenEye ejecuta
       0x7F000000 desde la ROM o desde la RDRAM.
+
+## 2026-10-10 — Caché de texturas entre tareas (HLE gráfica)
+
+Hecho (rama `unruffled-maxwell-2af921`; diseño en docs/texturas.md):
+- Las texturas decodificadas viven en una región de 8 MB mapeada al RSX
+  (`src/rdp`) que la HLE del SPE 0 administra entre tareas
+  (`src/rsp/gfx/texcache.c`). Identidad: hash de 64 bits (ronda de
+  xxHash32 en ocho carriles, SIMD en el SPE) de los bytes de la TMEM que
+  lee la decodificación —texels y paleta— y de los parámetros de la tile:
+  un cambio en la RDRAM o en la paleta da otra textura sin vigilar
+  escrituras (cubre las del CPU, que no avisan). Al arrancar, el frontend
+  comprueba que el hash del SPE da lo mismo que el del PPE.
+- Anillo con desalojo en orden de llegada; lo que el RSX aún puede leer
+  (`job->done_task`, de las barreras de `src/rdp`) se salta. Sin lugar, la
+  textura va al arena de la tarea. `salsa64_rdp_dump` copia las texturas
+  de la caché al volcado (mismo formato).
+- Cargas a la TMEM en bloque (sin `memcpy` de 8 bytes): ×2,4.
+- Medición en el frontend: ventanas fijas de 100 campos («gfx campos A–B»,
+  con el peor campo), capturas en campos fijos y salida sola
+  (`capturas` = «N M»); acomodado sobre los dos hilos de main.
+- PS3 real, Zelda (intro y título, con el recompilador; docs/perf-log.md):
+  HLE en el SPE 14–31 → 5–9,6 ms por tarea; decodificar 6,7–17,2 → 0–0,09
+  ms; las escenas a 41–48 campos/s llegan a 60; capturas idénticas byte a
+  byte. Decisión: todo en el SPE 0; los SPE 2–3 quedan para el escalado de
+  texturas (docs/texturas.md).
+- Pruebas: caché entre tareas, texel y paleta cambiados en la RDRAM, anillo
+  con texturas en uso y directorio lleno, hash por tramos; gfxtest con una
+  textura y una paleta que el CPU cambia en el cuadro 60 (22 puntos).
+
+Pendiente:
+- [ ] LOADTILE pide cada fila con un DMA que espera (~2300 lecturas por
+      tarea en Zelda): pedirlas por adelantado. Es lo más caro que queda
+      en el SPE junto con el estado de dibujo.
+- [ ] Decodificación por formato con SIMD y salidas de 16 bits en
+      `lib/rsxkit/`: solo cuando falla la caché; medir antes el peor campo
+      en cambios de escena (Kokiri, partida en juego).
+- [ ] Achicar el arena de texturas por juego (casi no se usa).
 
 ## 2026-10-10 — Dos hilos en el PPE (frontend)
 

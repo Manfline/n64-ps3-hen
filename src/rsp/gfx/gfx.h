@@ -10,7 +10,9 @@
  *   comandos   registros gfx_cmd: cambios de destino (color image), borrado
  *              de profundidad y dibujos (gfx_draw: estado completo + un tramo
  *              de vértices, triángulos sueltos)
- *   texturas   texels RGBA8888 decodificados de la TMEM, en un arena
+ *   texturas   texels RGBA8888 decodificados de la TMEM, en la caché de
+ *              texturas (persiste entre tareas: ver «Caché de texturas»)
+ *              o, si no hay lugar, en el arena de la tarea
  *
  * Quien consume (src/rdp en el PPE) traduce los comandos a lib/rsxkit. Los
  * registros se escriben en el orden de bytes de quien produce y se leen en
@@ -27,23 +29,50 @@
  * Caben en el descriptor y el resultado de 112 bytes de lib/spukit. */
 
 #define GFX_JOB_TASK 1  /* kind del trabajo en spukit */
+#define GFX_JOB_HASH 2  /* prueba del hash (struct gfx_hash_job), antes de las tareas */
+
+/* Hash de `len` bytes desde `start` de un anillo de `size` bytes (≤ 4096,
+ * potencia de 2) en `ea`; el resultado son las dos palabras de la clave. */
+struct gfx_hash_job {
+	uint64_t ea;
+	uint32_t size, start, len;
+};
 
 struct gfx_job {
 	uint64_t rdram_ea;   /* dirección de la RDRAM emulada (EA del PPE) */
 	uint64_t vtx_ea;     /* salida: vértices */
 	uint64_t cmd_ea;     /* salida: comandos */
 	uint64_t tex_ea;     /* salida: arena de texturas */
+	uint64_t cache_ea;   /* región de la caché de texturas (0: sin caché) */
 	uint32_t rdram_size;
 	uint32_t vtx_cap;    /* capacidades en bytes */
 	uint32_t cmd_cap;
 	uint32_t tex_cap;
+	uint32_t cache_cap;
 	uint32_t gbi;        /* enum salsa64_gbi */
 	uint32_t dl;         /* data_ptr del OSTask: primera display list */
 	uint32_t flags;      /* GFX_JOB_* */
-	uint32_t reserved[5];
+	/* Caché de texturas: número de esta tarea (creciente) y la última tarea
+	 * cuyos dibujos ya no leen texturas (el consumidor la terminó). */
+	uint32_t task;
+	uint32_t done_task;
 };
 
 #define GFX_JOB_RESET 0x1u  /* olvidar el estado del RDP (reset de la consola) */
+#define GFX_JOB_NOCACHE 0x2u  /* no usar ni llenar la caché (para medir) */
+
+/* ---- Caché de texturas -------------------------------------------------------
+ * Las texturas decodificadas viven en una región de memoria que pone el
+ * consumidor (job->cache_ea, cache_cap; vista por el RSX) y que la HLE
+ * administra sola entre tareas: cada textura se identifica por un hash de
+ * los bytes de la TMEM que lee su decodificación (texels y paleta) y de los
+ * parámetros de la tile, así que un cambio en la RDRAM de origen o en la
+ * paleta da otra textura. Una textura se puede sobrescribir solo si la
+ * última tarea que la usó es <= job->done_task: el consumidor debe dar en
+ * done_task una tarea cuyos dibujos ya terminó (en la PS3, la barrera del
+ * RSX) y, para los volcados, nunca la tarea anterior (task − 1). Un mismo
+ * consumidor debe numerar sus tareas sin repetir; si cambia la región, la
+ * caché se vacía. */
 
 struct gfx_result {
 	uint32_t vtx_bytes, cmd_bytes, tex_bytes;
@@ -60,9 +89,16 @@ struct gfx_result {
 	uint32_t dl_errors;      /* direcciones fuera de la RDRAM, pila llena */
 	/* Tiempo por etapa en ticks de gfx_io_clock (en el SPE, el timebase;
 	 * en el host y el PPE, 0): total, vértices, estado de dibujo (combiner
-	 * y texturas), decodificación de texturas y cargas a la TMEM. */
+	 * y texturas, incluidos t_hash y t_tex), decodificación de texturas y
+	 * cargas a la TMEM. */
 	uint32_t t_total, t_vtx, t_state, t_tex, t_load;
-	uint32_t reserved[7];
+	uint32_t loads;          /* cargas a la TMEM (LOADBLOCK, LOADTILE, LOADTLUT) */
+	uint32_t load_reads;     /* lecturas de la RDRAM para esas cargas */
+	uint32_t tex_old;        /* de las reusadas, decodificadas en tareas anteriores */
+	uint32_t tex_arena;      /* decodificadas en el arena (sin lugar en la caché) */
+	uint32_t tex_evicted;    /* texturas sacadas de la caché */
+	uint32_t t_hash;         /* ticks identificando texturas (hash y búsqueda) */
+	uint32_t reserved[1];
 };
 
 #define GFX_RES_FULLSYNC     0x01u  /* G_RDPFULLSYNC: interrupción del DP */
@@ -108,14 +144,15 @@ struct gfx_zclear {
 	uint32_t pad[2];
 };
 
-/* Textura de un dibujo: texels RGBA8888 (bytes R, G, B, A) en el arena. */
+/* Textura de un dibujo: texels RGBA8888 (bytes R, G, B, A) en el arena de
+ * la tarea o en la región de la caché. */
 struct gfx_tex {
-	uint32_t offset;    /* desde el inicio del arena */
+	uint32_t offset;    /* desde el inicio del arena o de la región */
 	uint16_t width, height;
 	uint16_t pitch;     /* bytes por fila */
 	uint8_t flags;      /* GFX_TEX_* */
-	uint8_t pad;
-	uint32_t key;       /* identidad de la textura (para quien cachee) */
+	uint8_t where;      /* GFX_TEX_ARENA o GFX_TEX_CACHE */
+	uint32_t key;       /* identidad de la textura (32 bits del hash) */
 	/* s, t (texels de la N64) → coordenadas normalizadas de la textura:
 	 * u = s * xf[0] + xf[2], v = t * xf[1] + xf[3]. */
 	float xf[4];
@@ -124,6 +161,7 @@ struct gfx_tex {
 #define GFX_TEX_WRAP_S(f)   ((f) & 3u)         /* GFX_WRAP_* */
 #define GFX_TEX_WRAP_T(f)   (((f) >> 2) & 3u)
 #define GFX_TEX_BILINEAR    0x10u
+enum { GFX_TEX_ARENA = 0, GFX_TEX_CACHE = 1 };
 enum { GFX_WRAP_CLAMP = 0, GFX_WRAP_REPEAT = 1, GFX_WRAP_MIRROR = 2 };
 
 /* Combinación lineal que evalúa el RSX (lib/rsxkit: RSXKIT_PROG_LINCOMB):

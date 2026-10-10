@@ -16,7 +16,55 @@ antes, después, notas.
 | 2026-10-10 | f18b392 | Recompilador con registros fijos (`OPT_PIN`), nemu64-test | PS3 real (mismo equipo) | 1948 ms (97,2 MIPS) | **1817 ms (104,2 MIPS; ×4,45 del intérprete)** | sp, ra, v0, v1, a0–a3 en r18–r25 entre bloques; +7 %. Por omisión en el frontend |
 | 2026-10-10 | f18b392 | **Frontend con vitest**, recompilador | PS3 real (mismo equipo) | intérprete: 65,6 / 35,0 ms por campo (sin / con bucles de espera) | **5,38 / 2,90 ms (×12); 59,94 campos/s** | Velocidad completa: el resto del campo es la espera del vsync |
 | 2026-10-10 | f416bee | Recompilador, cuatro variantes, nemu64-test | PS3 real (mismo equipo) | intérprete 8098 ms | sin opciones 1941 ms (×4,17); escritura temprana diferida 1992; **registros fijos 1821 (×4,45)**; ambas 1849 | La escritura temprana no compensa ni diferida: queda apagada. Con registros fijos el bench enteros cae de 750 a 128 MIPS (4 registros por bloque): préstamo en bucles (siguiente fila) |
+| 2026-10-10 | 697922c → b3ba375 | **Caché de texturas** entre tareas (HLE gráfica en el SPE 0), Zelda OoT con el recompilador, ventanas fijas de 100 campos | PS3 real (mismo equipo), respaldo del usuario | HLE en el SPE 14,0–30,6 ms por tarea; escenas pesadas a 38–48 campos/s; peor campo 36–43 ms | **5,1–9,6 ms por tarea (×2,8–3,3); 59,8–60,2 campos/s en todas; peor campo 17–27 ms** | Decodificar texturas: 6,7–17,2 → 0,00–0,09 ms (0–1 textura decodificada por tarea); identificarlas (hash) 0,03–0,35 ms; cargas a la TMEM 3,7–7,3 → 1,4–3,0 ms (copia en bloque). Mismas capturas byte a byte. Ver «Caché de texturas» abajo |
 | 2026-10-10 | f416bee | **Zelda OoT (NTSC) en el frontend**, recompilador con registros fijos, HLE gráfica en el SPE | PS3 real (mismo equipo), respaldo del usuario | intérprete: 15,4–17,5 campos/s, emulación 56–64 ms por campo | **41–60 campos/s (69–100 %), emulación 4–14 ms por campo** | Logo e intro a 58–60; título y escenas con muchos triángulos 41–55, ahora limitadas por la espera a la HLE gráfica del SPE (10–30 ms por tarea), no por el CPU. 86–88 % del tiempo del CPU en bucles de espera. ~10 500 bloques, 7,9 MB de caché, 1,7 % de instrucciones interpretadas. Se ve igual que con el intérprete (el autor) |
+
+## Caché de texturas (2026-10-10)
+
+**PS3 real** (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00070 «Salsa64
+texturas», Zelda OoT NTSC (respaldo del usuario, fuera del repo), sin
+tocar el control: arranque, logo, intro y título. Las dos compilaciones
+son de un hilo con el recompilador y solo difieren en la HLE gráfica:
+«antes» = main 697922c más la instrumentación (ventanas fijas de 100
+campos, capturas en campos fijos, salida en el campo 3510; parche en la
+rama, sin cambios de comportamiento); «después» = b3ba375 (caché de
+texturas, docs/texturas.md). La emulación es determinista: misma ventana,
+misma escena; las 7 capturas (campos 500, 1000, …, 3500) son **idénticas
+byte a byte**. Por tarea gráfica (~33 tareas cada 100 campos):
+
+| Campos | Escena | Campos/s | Peor campo | Dibujos | Texturas decodificadas | HLE en el SPE | Decodificar | Cargas a la TMEM | PPE esperando al SPE |
+|---|---|---|---|---|---|---|---|---|---|
+| 0–99 | Logo de N64 | 59,5 → 57,9 | 29,6 → 71,5 | 22 | 18,0 → 0,2 | 1,04 → 0,51 ms | 0,47 → 0,01 | 0,12 → 0,04 | 0,66 → 0,13 |
+| 500–599 | Intro nocturna | 60,2 → 60,0 | 24,8 → 17,2 | 110 | 83,3 → 0,7 | 14,04 → 5,09 ms | 6,75 → 0,06 | 3,73 → 1,43 | 13,56 → 4,62 |
+| 1300–1399 | Intro (Epona) | 59,8 → 60,0 | 32,0 → 18,5 | 137 | 111,5 → 0,0 | 19,75 → 6,17 ms | 11,03 → 0,00 | 4,82 → 2,22 | 19,28 → 5,71 |
+| 1700–1799 | Intro, la más pesada | **41,3 → 59,9** | 211,9 → 21,8 | 248/244 | 170,0 → 0,7 | 28,31 → 8,92 ms | 15,82 → 0,09 | 6,54 → 2,82 | 27,81 → 8,44 |
+| 2000–2099 | Título con el castillo | 60,4 → 60,5 | 29,2 → 17,1 | 147 | 91,3 → 0,1 | 21,03 → 6,43 ms | 11,47 → 0,01 | 5,63 → 2,42 | 20,55 → 5,94 |
+| 2200–2299 | Escena con más dibujos | **45,2 → 60,1** | 42,7 → 21,8 | 272/268 | 182,7 → 0,0 | 30,62 → 9,33 ms | 17,21 → 0,00 | 7,10 → 2,96 | 30,13 → 8,84 |
+| 2500–2599 | | **45,2 → 60,4** | 37,5 → 20,0 | 201/200 | 130,5 → 0,0 | 25,38 → 8,38 ms | 13,06 → 0,00 | 6,96 → 2,93 | 24,91 → 7,90 |
+| 3100–3199 | | **45,1 → 60,0** | 34,9 → 20,0 | 163/161 | 137,0 → 0,0 | 22,39 → 6,79 ms | 12,85 → 0,00 | 5,34 → 2,54 | 21,91 → 6,31 |
+
+Tiempos del decrementador del SPE (`gfx_result.t_*`); el peor campo es el
+intervalo más largo entre dos campos en el bucle (con la presentación). Las
+ventanas que terminan en un múltiplo de 500 (400–499, 900–999, …) tienen
+una captura (~400 ms) y no se comparan; las de 0–99 incluyen el arranque.
+
+- La decodificación desaparece: 0 a 1,1 texturas decodificadas por tarea
+  (se reusan 36–320 por tarea, la mitad de tareas anteriores); en los 3510
+  campos no hubo desalojos ni texturas al arena (cabe todo en 8 MB y 1024
+  entradas). Identificar las texturas (hash de lo que leen en la TMEM y
+  búsqueda) cuesta 0,03–0,35 ms por tarea.
+- Las cargas a la TMEM bajan ×2,4 por copiar en bloque (antes `memcpy` de 8
+  bytes por palabra y 4 más para intercambiar mitades). Ahora son lo más
+  caro de la HLE junto con el estado: 2250–2570 lecturas de la RDRAM por
+  tarea para 260–450 cargas (LOADTILE lee fila por fila, cada una con un
+  DMA que espera). Siguiente paso: pedir las filas por adelantado o con
+  una lista de DMA.
+- Menos dibujos (248 → 244): la misma textura cargada dos veces en una
+  tarea antes daba dos copias en el arena con distinta dirección y cortaba
+  el dibujo; ahora es la misma entrada.
+- El PPE sigue esperando al SPE 4,6–9,1 ms por tarea en la intro y el
+  título, pero ya cabe en el campo: todas las ventanas sin captura llegan a
+  60 campos/s.
 
 ## Dos hilos en el PPE (2026-10-10)
 

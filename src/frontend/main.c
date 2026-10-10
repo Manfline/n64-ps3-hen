@@ -58,7 +58,18 @@
  * frena la presentación ~400 ms (leer el búfer del RSX desde el PPE es
  * lento): se nota como un tirón, por eso es opcional. En modo de prueba
  * automática se captura siempre, cada AUTO_SHOT_FIELDS campos, y se sale
- * tras AUTO_FIELDS (para correr una ROM en RPCS3 sin manos). Si SALSA64_DATA_DIR/gfxdump dice un número de campo,
+ * tras AUTO_FIELDS (para correr una ROM en RPCS3 sin manos). Si capturas
+ * dice un número N, se captura en cambio cada N campos exactos
+ * (campo-<campo>.ppm; esos campos no se saltan): la emulación es
+ * determinista, así que se comparan entre compilaciones; un segundo número
+ * M hace salir en el campo M (mediciones sin manos).
+ *
+ * Medición de la HLE gráfica: además de stats() cada STATS_US, el hilo de
+ * emulación resume cada GFX_WIN_FIELDS campos ("gfx campos A–B": campos/s,
+ * el campo que más tardó en emularse y el trabajo del SPE). Mismas
+ * ventanas, mismas escenas en todas las corridas.
+ *
+ * Si SALSA64_DATA_DIR/gfxdump dice un número de campo,
  * en ese campo se vuelca la salida de la última tarea gráfica a
  * SALSA64_DATA_DIR/gfxdump.bin (salsa64-run --raster-dump la dibuja).
  *
@@ -182,6 +193,10 @@ static int snap_cas(int slot, uint32_t from, uint32_t to)
 /* Un campo terminado, de emulación a presentación. */
 #define FIELD_QUEUE 8
 #define FIELD_CHECK 0x1u  /* verificar la pantalla (selftest): no se salta */
+#define FIELD_SHOT  0x2u  /* captura de un campo fijo (capturas = N): no se salta */
+#define FIELD_KEEP  (FIELD_CHECK | FIELD_SHOT)
+#define GFX_WIN_FIELDS 100
+static uint32_t cap_every, exit_field;  /* capturas = "N M" */
 struct field_msg {
 	uint32_t field;             /* n64.bus.vi.fields al terminar */
 	uint32_t tasks;             /* tareas gráficas terminadas hasta ahí */
@@ -536,6 +551,8 @@ static void post_field(void)
 	if (salsa64_vi_frame(&n64.bus, &m.f) && m.f.width <= FB_MAX_W && m.f.height <= FB_MAX_H) {
 		if (selftest_on && selftest_frame(&n64.bus, &m.f))
 			m.flags |= FIELD_CHECK;
+		if (cap_every && m.field % cap_every == 0)
+			m.flags |= FIELD_SHOT;
 		for (int i = 0; i < SNAP_SLOTS; i++) {
 			if (snap_cas(i, SNAP_FREE, SNAP_WRITING)) {
 				m.snap = i;
@@ -564,7 +581,7 @@ static void post_field(void)
 	uint32_t h = field_head;
 	/* Con verificación pendiente esperamos lugar (solo en las pruebas);
 	 * si no, un campo que no cabe se pierde: la emulación no espera. */
-	while (h - field_tail >= FIELD_QUEUE && (m.flags & FIELD_CHECK) && running)
+	while (h - field_tail >= FIELD_QUEUE && (m.flags & FIELD_KEEP) && running)
 		sysUsleep(200);
 	if (h - field_tail >= FIELD_QUEUE) {
 		if (m.snap >= 0)
@@ -574,7 +591,7 @@ static void post_field(void)
 	}
 	if (last_idx != ~0u && (int32_t)(last_idx - field_tail) >= 0) {
 		struct field_msg *o = &field_q[last_idx % FIELD_QUEUE];
-		if (!(o->flags & FIELD_CHECK)) {
+		if (!(o->flags & FIELD_KEEP)) {
 			o->skip = 1;
 			if (o->snap >= 0)
 				snap_cas(o->snap, SNAP_QUEUED, SNAP_FREE);  /* si presentación no la tomó ya */
@@ -587,6 +604,53 @@ static void post_field(void)
 	field_head = h + 1;
 	last_idx = h;
 	wake();
+}
+
+/* Estadística de la HLE gráfica en el SPE por ventanas fijas de campos
+ * (hilo de emulación, donde se suman los contadores del SPE). */
+static struct {
+	int on;
+	uint32_t field0;
+	uint64_t t0, worst;  /* inicio y el campo que más tardó en emularse (µs) */
+	struct salsa64_gfx_spu spu;
+	struct salsa64_rdp_stats rdp;
+} gwin;
+
+static void gfx_window(uint64_t now, uint64_t us_field)
+{
+	uint32_t field = n64.bus.vi.fields;
+	if (us_field > gwin.worst)
+		gwin.worst = us_field;
+	if (!gwin.t0)
+		gwin.t0 = now;
+	if (field - gwin.field0 < GFX_WIN_FIELDS)
+		return;
+	struct salsa64_rdp_stats rs;
+	salsa64_rdp_get_stats(&rs);
+	const struct salsa64_gfx_spu *s = &gfx_spu, *s0 = &gwin.spu;
+	uint32_t tasks = s->tasks - s0->tasks;
+	if (tasks && now > gwin.t0) {
+		double k = 1e3 / spukit_tick_hz() / tasks;
+		salsa64_log("gfx campos %u–%u: %.1f campos/s (peor campo %.1f ms de emulación), %u tareas; por tarea: "
+			    "%.0f dibujos, %.0f triángulos, %.1f texturas decodificadas (+%.1f reusadas, %.1f de tareas "
+			    "anteriores; %.1f al arena, %.1f desalojadas), %.1f cargas a la TMEM (%.1f lecturas); SPE %.2f ms "
+			    "(vértices %.2f, estado %.2f, identificar texturas %.2f, decodificar %.2f, cargas %.2f), PPE "
+			    "esperando %.2f ms, traducción al RSX %.2f ms",
+			    gwin.field0, field - 1, (field - gwin.field0) * 1e6 / (now - gwin.t0), gwin.worst / 1e3, tasks,
+			    (double)(rs.draws - gwin.rdp.draws) / tasks, (double)(rs.triangles - gwin.rdp.triangles) / tasks,
+			    (double)(s->textures - s0->textures) / tasks, (double)(s->tex_reused - s0->tex_reused) / tasks,
+			    (double)(s->tex_old - s0->tex_old) / tasks, (double)(s->tex_arena - s0->tex_arena) / tasks,
+			    (double)(s->tex_evicted - s0->tex_evicted) / tasks,
+			    (double)(s->loads - s0->loads) / tasks, (double)(s->load_reads - s0->load_reads) / tasks,
+			    (s->spu_ticks - s0->spu_ticks) * k, (s->t_vtx - s0->t_vtx) * k, (s->t_state - s0->t_state) * k,
+			    (s->t_hash - s0->t_hash) * k, (s->t_tex - s0->t_tex) * k, (s->t_load - s0->t_load) * k,
+			    (s->wait_us - s0->wait_us) / 1e3 / tasks, (rs.us_translate - gwin.rdp.us_translate) / 1e3 / tasks);
+	}
+	gwin.field0 = field;
+	gwin.t0 = now;
+	gwin.worst = 0;
+	gwin.spu = *s;
+	gwin.rdp = rs;
 }
 
 static void emu_thread(void *arg)
@@ -617,6 +681,8 @@ static void emu_thread(void *arg)
 		else
 			bench_field(t1, t1 - t0);
 		emu_stats.us_emu += t1 - t0;
+		if (gwin.on)
+			gfx_window(t1, t1 - t0);
 		lwsync();
 		emu_stats.fields++;
 	}
@@ -646,7 +712,7 @@ static struct {
 static void present_field(const struct field_msg *m, uint64_t now)
 {
 	salsa64_rdp_flush(m->tasks);  /* las tareas de este campo, no las del siguiente */
-	if (m->skip && !(m->flags & FIELD_CHECK)) {
+	if (m->skip && !(m->flags & FIELD_KEEP)) {
 		if (m->snap >= 0)
 			snap_cas(m->snap, SNAP_QUEUED, SNAP_FREE);
 		pres.skipped++;
@@ -690,7 +756,13 @@ static void present_field(const struct field_msg *m, uint64_t now)
 			selftest_screen(&m->f, &r);
 		else
 			gfxtest_screen(&m->f, &r);
-	} else if (pres.shots_on && !selftest_on && !gfxtest_on && m->f.width &&
+	} else if ((m->flags & FIELD_SHOT) && m->f.width) {
+		char path[64];
+		snprintf(path, sizeof path, SALSA64_DATA_DIR "/campo-%u.ppm", m->field);
+		rsxkit_finish();
+		salsa64_screenshot(path, &m->f, &r);
+		salsa64_log("captura %s", path);
+	} else if (pres.shots_on && !cap_every && !selftest_on && !gfxtest_on && m->f.width &&
 		   (pres.autotest ? m->field / AUTO_SHOT_FIELDS != pres.shots : now - pres.t_shot >= SHOT_US)) {
 		char path[64];
 		snprintf(path, sizeof path, SALSA64_DATA_DIR "/screen-%u.ppm", pres.shots % SHOT_MAX + 1);
@@ -714,6 +786,10 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	pres.us_flip += t2 - t1;
 	pres.presented++;
 
+	if (exit_field && m->field >= exit_field) {
+		salsa64_log("salida en el campo %u (capturas)", m->field);
+		running = 0;
+	}
 	if (pres.autotest && !selftest_on && !gfxtest_on && m->field >= AUTO_FIELDS) {
 		salsa64_log("RESULTADO frontend: OK (ROM del disco, %u campos)", m->field);
 		running = 0;
@@ -966,8 +1042,19 @@ int main(void)
 	pacer_init(&pacer, !file_exists(TURBO_PATH), pacer_sleep, NULL);
 	salsa64_log("ritmo: %s", pacer.enabled ? "el de la tele emulada (cada campo a su hora)" : "sin límite (turbo)");
 	pres.shots_on = pres.autotest || file_exists(SHOTS_PATH);
-	if (pres.shots_on && !pres.autotest)
+	{
+		FILE *cf = fopen(SHOTS_PATH, "r");
+		if (cf) {
+			if (fscanf(cf, "%u %u", &cap_every, &exit_field) < 1)
+				cap_every = exit_field = 0;
+			fclose(cf);
+		}
+	}
+	if (cap_every)
+		salsa64_log("capturas: campo-N.ppm cada %u campos%s", cap_every, exit_field ? ", y salida" : "");
+	else if (pres.shots_on && !pres.autotest)
 		salsa64_log("capturas: screen-N.ppm cada %u s (%s)", SHOT_US / 1000000u, SHOTS_PATH);
+	gwin.on = gfx_on_spu;
 
 	/* El hilo de emulación. */
 	sys_sem_attr_t sem_attr = { SYS_SEM_ATTR_PROTOCOL, SYS_SEM_ATTR_PSHARED, 0, 0, 0, "wake" };
