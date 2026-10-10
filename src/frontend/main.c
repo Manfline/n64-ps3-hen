@@ -1122,7 +1122,6 @@ int main(void)
 	u64 ret;
 	sysThreadJoin(emu_tid, &ret);
 	drain(sysGetSystemTime(), 0);
-	sysSemDestroy(wake_sem);
 
 	savefile_close(&save_file);
 	/* audio_out: cierre (con el hilo de emulación ya terminado). */
@@ -1130,6 +1129,8 @@ int main(void)
 	salsa64_rsp_set_gfx(&n64.bus, NULL);  /* espera la tarea en vuelo */
 	if (gfx_on_spu)
 		salsa64_gfx_spu_shutdown(&gfx_spu);
+	/* Después de la tarea en vuelo: su fin llama a front_done → wake(). */
+	sysSemDestroy(wake_sem);
 	salsa64_rdp_shutdown();
 	rsxkit_shutdown();
 	ioPadEnd();

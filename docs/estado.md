@@ -64,8 +64,12 @@ Notas:
   (`salsa64_rsp_set_audio(NULL)`) ya no termina una tarea gráfica en vuelo:
   antes hacía un reset completo del RSP y podía llamar a `wake()` del
   frontend con su semáforo ya destruido. Si vuelve a pasar, mirar esas
-  líneas; `salsa64_rsp_set_gfx(NULL)` en main.c tiene el mismo riesgo
-  (también va después de `sysSemDestroy(wake_sem)`).
+  líneas; `salsa64_rsp_set_gfx(NULL)` en main.c tenía el mismo riesgo
+  (iba después de `sysSemDestroy(wake_sem)`): corregido al integrar, el
+  semáforo se destruye después de soltar la HLE gráfica. Probablemente no
+  era la causa del negro: en lv2 un semáforo destruido da error, no se
+  cuelga, y el negro llegó después de «salida normal» (fin del proceso:
+  ¿algún hilo, SPE o el puerto de audio aún vivo?). Pendiente si se repite.
 - `.gitignore`: la regla «core» de los volcados de qemu también ignoraba
   `src/core` para archivos nuevos; se agregó «!src/core/».
 
