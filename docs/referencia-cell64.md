@@ -142,6 +142,12 @@ respaldo del usuario.
   necesita para el fondo de la pausa (lo filtra la CPU) y para dibujar a Link
   en la pantalla de equipo (render a textura). Para Salsa64: emular esas
   copias, al menos por juego (ver «Riesgos conocidos» en docs/proyecto.md).
+  Confirmado con captura del autor (2026-10-10): en el recuadro de Link sale
+  **basura** (trozos de otras texturas, ruido de colores, franjas verdes
+  verticales). Es lo que hay en esa zona de la RDRAM, leído como textura,
+  porque el juego dibuja a Link ahí y luego lo usa como textura, y Cell64 nunca
+  lo baja del RSX. Los íconos 2D (espada, escudo, túnica, botas), los textos y
+  el marco se ven bien. Caso de prueba de la Fase 4: abrir la pausa → Equipo.
 - **Para Salsa64:** el cuello es el mismo que el nuestro (intérprete en el
   PPE). Mover el RSP gráfico y el de audio a SPEs libera ~30–40 % del PPE en
   gameplay; el limitador debe dejar de dormir cuando va atrasado.
