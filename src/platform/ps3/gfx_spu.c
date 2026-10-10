@@ -17,6 +17,22 @@ static void spu_start(void *ctx, const struct salsa64_task *task, enum salsa64_g
 	s->pending = true;
 }
 
+#define POLL_SLEEP_US 100
+
+static bool spu_done(void *ctx, bool idle)
+{
+	struct salsa64_gfx_spu *s = ctx;
+	if (!s->pending || spukit_done(s->worker, s->seq))
+		return true;
+	s->polls++;
+	if (idle) {
+		sysUsleep(POLL_SLEEP_US);
+		s->sleep_us += POLL_SLEEP_US;
+		return spukit_done(s->worker, s->seq);
+	}
+	return false;
+}
+
 static uint32_t spu_finish(void *ctx)
 {
 	struct salsa64_gfx_spu *s = ctx;
@@ -51,6 +67,7 @@ int salsa64_gfx_spu_init(struct salsa64_gfx_spu *s, const struct salsa64_bus *bu
 	s->backend.ctx = s;
 	s->backend.start = spu_start;
 	s->backend.finish = spu_finish;
+	s->backend.done = spu_done;
 	s->bus = bus;
 	s->sink = *sink;
 	s->worker = spukit_worker_start(spu_gfx_bin, "salsa64_gfx", 0);

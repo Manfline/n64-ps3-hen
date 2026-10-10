@@ -95,14 +95,36 @@ audio prefiere marcar el ritmo él solo, desactiva el pacer.
   opcionales (`SALSA64_DATA_DIR/capturas`); en prueba automática van
   siempre.
 
+## Fin de tarea sin bloquear (sondeo)
+
+El CPU emulado no debe reusar la display list antes de que el SPE acabe
+de leerla, así que TASKDONE no puede llegar antes de que el SPE termine.
+Antes, el evento de fin de tarea esperaba al SPE (`spu_finish`): 10–27 ms
+por tarea con Zelda, 20–53 % del hilo de emulación. Ahora (`src/core/rsp.c`):
+
+- El backend tiene `done(ctx, idle)` (no bloquea). Al llegar el fin de la
+  tarea (`gfx_cycles` después del arranque), si no terminó, el evento se
+  vuelve a programar `poll_cycles` (10 000 ciclos, ~0,11 ms) más tarde y
+  el CPU sigue emulando: el trabajo del juego entre tareas (lógica,
+  audio, la display list siguiente) corre en paralelo con el SPE.
+- Mientras tanto el RSP no está HALT; quitar HALT no arranca otra tarea
+  (`starts_busy`), como en el hardware; un yield se ignora y la tarea
+  termina con TASKDONE, que libultra acepta como fin.
+- **Reloj emulado contra reloj real:** si el CPU está en un bucle de
+  espera, la detección salta directo al sondeo siguiente, y sin más cada
+  sondeo tardaría ~1 µs real por 0,11 ms emulados: la N64 correría 100×
+  más rápido que el reloj mientras el SPE trabaja (campos del VI de más,
+  interrupciones de más). Por eso el núcleo le dice al backend si el CPU
+  saltó ciclos desde el sondeo anterior (`idle`), y el backend del SPE
+  duerme entonces 100 µs antes de contestar (`sysUsleep`, nunca espera
+  activa: el PPE es SMT). Si el CPU trabaja de verdad, no duerme.
+- Es genérico: el backend de audio (SPE 1) puede dar su `done` y el
+  mismo evento lo sondea.
+- `finish` sigue recogiendo el resultado (y bloquea si un backend no
+  tiene `done`, como el síncrono del host).
+
 ## Lo que no cambia
 
-- La espera del hilo de emulación al SPE al terminar cada tarea
-  (`spu_finish`, en el evento del planificador) sigue ahí: el CPU emulado
-  no debe reusar la display list antes de que el SPE acabe de leerla. Con
-  Zelda son 13–19 ms por tarea (docs/perf-log.md). Quitarla pide cambiar
-  el evento del RSP (`src/core/rsp.c`: volver a programarse si el SPE no
-  terminó, en vez de bloquear), que es terreno de la Fase 3.
 - Verificación propia del frontend, capturas `screen-N.ppm`, volcado
   (`gfxdump`) y repetición (`dump:<nombre>`) funcionan igual; la
   repetición es de un solo hilo y llama a `salsa64_rdp_flush` ella misma.
