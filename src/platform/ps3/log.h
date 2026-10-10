@@ -14,7 +14,8 @@
  * receptor cuente pérdidas y duplicados del UDP.
  *
  * Sin asignaciones dinámicas: cada línea se arma en un búfer de pila de
- * SALSA64_LOG_LINE_MAX bytes. No es seguro entre hilos todavía.
+ * SALSA64_LOG_LINE_MAX bytes. Seguro entre hilos: un lwmutex por línea
+ * (el frontend escribe desde el hilo de emulación y el de presentación).
  */
 #ifndef SALSA64_PLATFORM_PS3_LOG_H
 #define SALSA64_PLATFORM_PS3_LOG_H

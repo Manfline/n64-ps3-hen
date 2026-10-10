@@ -121,6 +121,7 @@ static int run_suites(void (*print)(const char *line), struct salsa64_rec *rec, 
 		{ "save", t_suite_save },
 		{ "rsp", t_suite_rsp },
 		{ "gfx", t_suite_gfx },
+		{ "pacer", t_suite_pacer },
 	};
 	char line[160];
 
