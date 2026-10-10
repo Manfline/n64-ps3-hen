@@ -127,6 +127,25 @@ diferido escrito por el hilo de presentación a los ~2 s (257 escrituras
 del juego), salida limpia. START + SELECT y «Salir del juego» funcionan;
 los controles llegan por el buzón entre hilos (vitest los identifica).
 
+## Audio: AI, HLE de audio en el SPE 1 y salida (2026-10-10)
+
+**PS3 real** (mismo equipo), rama `amazing-varahamihira-3027c8`
+con main 298b18d (recompilador, dos hilos con ritmo, fin de tarea por
+sondeo). Paquete «Salsa64 audio» (SLSA00072). Ventanas de 5 s.
+
+audiotest (ROM propia; tono por el CPU y luego por una tarea de audio de
+14 comandos nead cada 16 ms):
+
+| | PS3 real |
+|---|---|
+| Velocidad | 59,8 campos/s (100 % de NTSC), 96 % del tiempo en bucles de espera |
+| HLE de audio en el SPE, por tarea | **0,057 ms** (máx. 0,057), PPE esperando 0,000 ms, 62,5 tareas/s |
+| Listas de prueba al arrancar (SPE contra PPE, 3 listas) | iguales, 1,0 ms (en RPCS3, 1,3 s: compila el programa del SPE) |
+| Salida | colchón 78–98 ms, régimen normal (sin estirar), 0 faltas, 0 silencios, 0 saltos, 0 bloques tarde; 2 % de silencio solo en los primeros 5 s (llenado del colchón) |
+| Hilo de audio | 1,9 % del tiempo de pared |
+| Oído (el autor) | suena bien: el afinador marca 440 Hz y cada nota sale de su lado |
+| Corrida completa | 96 s, 3 007 488 muestras del AI, 4 510 464 a la salida (4 392 en silencio: el llenado inicial), 17 619 bloques; START + SELECT cierra el audio y sale normal |
+
 ## Fin de tarea del RSP por sondeo (2026-10-10)
 
 **PS3 real** (mismo equipo), recompilador y caché de texturas en los dos
