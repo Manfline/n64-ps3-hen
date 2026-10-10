@@ -656,6 +656,21 @@ static void gfx_window(uint64_t now, uint64_t us_field)
 	gwin.rdp = rs;
 }
 
+/* Tareas gráficas con un microcódigo sin HLE (terminan sin dibujar): al log
+ * la primera y luego cada vez que se duplican, para no llenarlo. */
+static void log_unknown_gbi(void)
+{
+	static uint32_t next = 1;
+	const struct salsa64_rsp_stats *st = &n64.bus.rsp.stats;
+	if (st->unknown_gbi < next)
+		return;
+	char text[96];
+	salsa64_rsp_ucode_text(&n64.bus, st->unknown_data, text, sizeof text);
+	salsa64_log("RSP: %u tareas gráficas con microcódigo sin HLE (datos en 0x%08x: \"%s\"); terminan sin dibujar",
+		    st->unknown_gbi, (unsigned)st->unknown_data, text);
+	next = st->unknown_gbi * 2;
+}
+
 static void emu_thread(void *arg)
 {
 	(void)arg;
@@ -673,6 +688,7 @@ static void emu_thread(void *arg)
 		}
 		uint64_t cycles = salsa64_n64_run_field(&n64);
 		uint64_t t1 = sysGetSystemTime();
+		log_unknown_gbi();
 		if (paced)
 			pacer_advance(&pacer, cycles);
 		savefile_stage(&save_file, t1);

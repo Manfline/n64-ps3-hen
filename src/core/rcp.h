@@ -126,6 +126,7 @@ struct salsa64_rsp_stats {
 	uint32_t gfx, audio, other, unknown_gbi;
 	uint32_t polls;        /* fines de tarea vueltos a programar (SPE ocupado) */
 	uint32_t starts_busy;  /* arranques ignorados con una tarea en curso */
+	uint32_t unknown_data; /* ucode_data de la última con microcódigo desconocido */
 };
 
 struct salsa64_rsp {
@@ -242,6 +243,9 @@ void salsa64_rsp_read_task(const struct salsa64_bus *bus, struct salsa64_task *t
 /* Familia de microcódigo de una tarea gráfica, por los textos de su
  * segmento de datos (ucode_data). */
 enum salsa64_gbi salsa64_rsp_detect_gbi(const struct salsa64_bus *bus, const struct salsa64_task *task);
+/* El texto que identifica a un microcódigo ("RSP Gfx ucode …", "RSP SW
+ * Version: …") en sus datos, en `out` (vacío si no hay). Para los logs. */
+void salsa64_rsp_ucode_text(const struct salsa64_bus *bus, uint32_t ucode_data, char *out, size_t n);
 uint32_t salsa64_dp_read(struct salsa64_bus *bus, uint32_t reg);
 void salsa64_dp_write(struct salsa64_bus *bus, uint32_t reg, uint32_t value);
 uint32_t salsa64_vi_read(struct salsa64_bus *bus, uint32_t reg);

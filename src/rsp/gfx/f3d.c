@@ -12,12 +12,13 @@
  * G_TEXTURE con el encendido en el byte bajo. Difieren en los vértices: F3D
  * tiene un búfer de 16 y da los índices ×10; F3DEX, uno de 32, índices ×2 y
  * comandos nuevos (G_TRI2, G_QUAD, G_MODIFYVTX, G_BRANCH_Z, G_LOAD_UCODE)
- * en lugar de G_RDPHALF_CONT y G_LINE3D de F3D.
+ * en lugar de G_RDPHALF_CONT y G_LINE3D de F3D. Fast3D 2.0G (GoldenEye)
+ * usa el 0xB1 para G_TRI4: cuatro triángulos con índices de 4 bits.
  *
  * G_TEXRECT llega seguido de dos G_RDPHALF_*: en F3D, de G_RDPHALF_2 y
  * G_RDPHALF_CONT (o G_RDPHALF_1 y G_RDPHALF_2, como en F3DEX).
  *
- * En el SPE 0 son 3,3 KB de código y nada de estado propio (usa la
+ * En el SPE 0 son 3,5 KB de código y nada de estado propio (usa la
  * gfx_state de siempre); presupuesto completo en src/spu/gfx/main.c.
  *
  * Fuentes (docs/THIRD_PARTY.md): n64brew.dev y la documentación de la
@@ -29,7 +30,8 @@
 
 enum {
 	G_SPNOOP = 0x00, G_MTX = 0x01, G_MOVEMEM = 0x03, G_VTX = 0x04, G_DL = 0x06,
-	G_LOAD_UCODE = 0xAF, G_BRANCH_Z = 0xB0, G_TRI2 = 0xB1,
+	G_LOAD_UCODE = 0xAF, G_BRANCH_Z = 0xB0,
+	G_TRI2 = 0xB1,          /* F3D 2.0G (GoldenEye): G_TRI4 */
 	G_MODIFYVTX = 0xB2,     /* F3D: G_RDPHALF_CONT */
 	G_RDPHALF_2 = 0xB3, G_RDPHALF_1 = 0xB4,
 	G_QUAD = 0xB5,          /* F3D: G_LINE3D */
@@ -105,6 +107,17 @@ static void tri(struct gfx_state *g, uint32_t w, bool ex)
 	default:
 		gfx_triangle(g, a, b, c);
 		break;
+	}
+}
+
+/* G_TRI4 (F3D 2.0G): el triángulo k va en el nibble k de w0 y los nibbles
+ * 2k y 2k+1 de w1; los que no se usan repiten un índice (área nula). */
+static void tri4(struct gfx_state *g, uint32_t w0, uint32_t w1)
+{
+	for (int k = 0; k < 4; k++) {
+		uint32_t a = (w0 >> (4 * k)) & 15, b = (w1 >> (8 * k)) & 15, c = (w1 >> (8 * k + 4)) & 15;
+		if (a != b && b != c && a != c)
+			gfx_triangle(g, a, b, c);
 	}
 }
 
@@ -276,7 +289,9 @@ void gfx_dl_f3d(struct gfx_state *g)
 		case G_QUAD:
 		case G_BRANCH_Z:
 		case G_LOAD_UCODE:
-			if (!ex) {
+			if (!ex && op == G_TRI2) {
+				tri4(g, w0, w1);
+			} else if (!ex) {
 				/* G_LINE3D y los opcodes que F3D no tiene. */
 				res->unknown_cmds++;
 				res->last_unknown = op;

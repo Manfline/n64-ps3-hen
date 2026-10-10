@@ -220,6 +220,10 @@ static void trace_rsp(void *ctx, const struct salsa64_task *t, enum salsa64_gbi 
 		"boot=%08x/%x gbi=%d\n", (unsigned long long)n64.cpu.cycles, t->type, t->flags, t->ucode,
 		t->ucode_size, t->ucode_data, t->ucode_data_size, t->data_ptr, t->data_size, t->ucode_boot,
 		t->ucode_boot_size, gbi);
+	char text[96];
+	salsa64_rsp_ucode_text(&n64.bus, t->ucode_data, text, sizeof text);
+	if (text[0])
+		fprintf(stderr, "  %s\n", text);
 	/* Microcódigos pequeños: volcar texto y datos. */
 	if (t->ucode_size && t->ucode_size <= 0x100) {
 		fprintf(stderr, "  ucode:");

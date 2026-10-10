@@ -444,13 +444,46 @@ static void f3d_points_and_matrix(void)
 static void f3d_unknown(void)
 {
 	start(false);
-	dl(0xB1000000, 0);   /* G_TRI2 de F3DEX */
+	dl(0xB0000000, 0);   /* G_BRANCH_Z de F3DEX */
 	dl(0xB5000000, 0);   /* G_LINE3D */
 	dl(0x02000000, 0);   /* reservado */
 	dl(0xC0000000, 0);   /* G_NOOP del RDP: nada */
 	run();
 	CHECK_EQ(res.unknown_cmds, 3);
 	CHECK_EQ(res.last_unknown, 0x02);
+}
+
+/* G_TRI4 de Fast3D 2.0G (GoldenEye): el triángulo k con el nibble k de w0
+ * y los nibbles 2k y 2k+1 de w1; los que repiten un índice no se dibujan. */
+static void f3d_tri4(void)
+{
+	start(false);
+	basic_setup();
+	const float quarter[16] = { 0.25f, 0, 0, 0, 0, 0.25f, 0, 0, 0, 0, 0.25f, 0, 0, 0, 0, 1 };
+	sp_matrix(quarter, MTX_LOAD);  /* la rejilla de 4×4 dentro del recorte */
+	sp_set_geometry(F3D_SMOOTH | F3D_CULL_BACK);
+	struct vtx v[16];
+	memset(v, 0, sizeof v);
+	for (int i = 0; i < 16; i++) {
+		v[i].x = (int16_t)(i & 3);
+		v[i].y = (int16_t)(i >> 2);
+		v[i].c[0] = (uint8_t)(i * 16);
+		v[i].c[3] = 255;
+	}
+	sp_vertex(put_vertices(v, 16), 16, 0);
+	/* (0,1,4) y (5,9,8)… antihorarios con la y hacia arriba; el tercero
+	 * vacío (0,0,0) y el cuarto (15,14,11) también antihorario. */
+	dl(0xB1000000 | 15u << 12 | 0u << 8 | 5u << 4 | 0u, 11u << 28 | 14u << 24 | 0u << 16 | 8u << 12 | 9u << 8 | 4u << 4 | 1u);
+	run();
+	CHECK_EQ(res.unknown_cmds, 0);
+	CHECK_EQ(res.triangles, 3);
+	CHECK_EQ(out_vtx[0].r, 0 * 16);
+	CHECK_EQ(out_vtx[1].r, 1 * 16);
+	CHECK_EQ(out_vtx[2].r, 4 * 16);
+	CHECK_EQ(out_vtx[3].r, 5 * 16);
+	CHECK_EQ(out_vtx[5].r, 8 * 16);
+	CHECK_EQ(out_vtx[6].r, 15 * 16);
+	CHECK_EQ(out_vtx[8].r, 11 * 16);
 }
 
 /* F3DEX 1.x: búfer de 32 con índices ×2, G_TRI2, G_QUAD, G_MODIFYVTX,
@@ -516,5 +549,6 @@ void t_suite_gfx_f3d(void)
 	RUN(f3d_dl_flow);
 	RUN(f3d_points_and_matrix);
 	RUN(f3d_unknown);
+	RUN(f3d_tri4);
 	RUN(f3dex_commands);
 }

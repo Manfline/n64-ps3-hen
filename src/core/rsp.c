@@ -175,7 +175,8 @@ enum salsa64_gbi salsa64_rsp_detect_gbi(const struct salsa64_bus *bus, const str
 			v++;
 		if (v < end && *v == '2')
 			return zex ? SALSA64_GBI_F3DZEX2 : SALSA64_GBI_F3DEX2;
-		if (v < end && *v == '1')
+		/* 1.x y la 0.9x anterior (Mario Kart 64): primera generación. */
+		if (v < end && (*v == '1' || *v == '0'))
 			return SALSA64_GBI_F3DEX;
 		return SALSA64_GBI_UNKNOWN;
 	}
@@ -183,6 +184,27 @@ enum salsa64_gbi salsa64_rsp_detect_gbi(const struct salsa64_bus *bus, const str
 	if (find(p, end, "RSP SW Version: 2.0"))
 		return SALSA64_GBI_F3D;
 	return SALSA64_GBI_UNKNOWN;
+}
+
+void salsa64_rsp_ucode_text(const struct salsa64_bus *bus, uint32_t ucode_data, char *out, size_t n)
+{
+	uint32_t addr = ucode_data & 0x1FFFFFFF;
+	if (n == 0)
+		return;
+	out[0] = '\0';
+	if (addr >= bus->rdram_size)
+		return;
+	uint32_t size = bus->rdram_size - addr < UCODE_SCAN_MAX ? bus->rdram_size - addr : UCODE_SCAN_MAX;
+	const uint8_t *p = bus->rdram + addr, *end = p + size;
+	const uint8_t *q = find(p, end, "RSP ");
+	if (!q)
+		return;
+	size_t i = 0;
+	while (i + 1 < n && q + i < end && q[i] >= 0x20 && q[i] < 0x7F) {
+		out[i] = (char)q[i];
+		i++;
+	}
+	out[i] = '\0';
 }
 
 void salsa64_rsp_start(struct salsa64_bus *bus)
@@ -216,7 +238,13 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 			salsa64_sched_set(rsp->sched, SALSA64_EV_SP_TASK, now + rsp->gfx_cycles);
 			return;
 		}
+		/* Microcódigo sin HLE: la tarea termina abajo y, como casi toda
+		 * display list acaba en G_RDPFULLSYNC, también llega la
+		 * interrupción del DP; si no, un juego que la espere se cuelga
+		 * (GoldenEye antes de reconocer su Fast3D 2.0G). */
 		rsp->stats.unknown_gbi++;
+		rsp->stats.unknown_data = task.ucode_data;
+		salsa64_sched_set(rsp->sched, SALSA64_EV_DP_SYNC, now + rsp->dp_cycles);
 	} else if (task.type == SALSA64_TASK_AUDIO && valid && rsp->sched) {
 		/* Audio HLE: pendiente (SPE 1). Por ahora la tarea solo termina. */
 		rsp->stats.audio++;
