@@ -61,7 +61,7 @@ struct salsa64_bus {
 	struct salsa64_mi mi;
 	struct salsa64_sp sp;
 	uint32_t dp[SALSA64_DP_NREGS];
-	uint32_t vi[SALSA64_VI_NREGS];
+	struct salsa64_vi vi;
 	uint32_t ai[SALSA64_AI_NREGS];
 	uint32_t pi[SALSA64_PI_NREGS];
 	uint32_t ri[SALSA64_RI_NREGS];

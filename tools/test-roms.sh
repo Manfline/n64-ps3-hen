@@ -1,6 +1,7 @@
 #!/bin/sh
 # Pruebas con ROMs homebrew en el host: compila salsa64-run (gcc nativo, ASan +
-# UBSan) y corre nemu64-test hasta su resumen por ISViewer.
+# UBSan) y corre nemu64-test hasta su resumen por ISViewer, y vitest (ROM
+# propia del VI, tests/roms/src/vitest) hasta que se verifica a sí misma.
 #
 # La lista de pruebas de nemu64-test que fallan se compara con la línea base
 # tests/roms/nemu64-test.fallas (lo que falta emular: RSP, cachés, bus PI…).
@@ -56,4 +57,14 @@ if [ -n "$gone" ]; then
 	echo "Mejoras: estas pruebas ya no fallan (tools/test-roms.sh --actualizar):"
 	echo "$gone" | sed 's/^/  /'
 fi
+
+# vitest: temporización e interrupción del VI vistas desde la ROM; la imagen
+# del último campo queda en build/vitest.ppm.
+VLOG=build/logs/vitest.run.log
+tools/build.sh --sh "ASAN_OPTIONS=detect_leaks=0 build/host/salsa64-run -c 400000000 \
+	-u 'vitest: OK' -f 'vitest: FALLO' --frame build/vitest.ppm \
+	tests/roms/homebrew/salsa64-vitest.z64 2>&1" >"$VLOG" 2>&1
+vrc=$?
+printf '%-12s %s\n' vitest "$(grep 'vitest:' "$VLOG" | tail -1)"
+[ $vrc -eq 0 ] || { echo "             falló (código $vrc, $VLOG)"; fail=1; }
 exit $fail

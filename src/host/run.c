@@ -11,6 +11,8 @@
  * Toda la memoria se reserva antes de empezar a emular: la RDRAM y el búfer
  * del ISViewer son estáticos y la ROM se lee una vez con malloc.
  *
+ * Con --frame, al terminar se escribe en PPM la imagen que muestra el VI.
+ *
  * Códigos de salida:
  *   0  apareció el texto de --until-text, o se agotaron los ciclos sin pedirlo
  *   1  apareció alguno de los textos de --fail-text
@@ -159,6 +161,40 @@ static void dump_regs(void)
 		(unsigned long long)cpu->epc, (unsigned long long)cpu->bad_vaddr);
 }
 
+/* Imagen del VI en PPM (P6), RGBA5551 o RGBA8888 → RGB de 8 bits. */
+static bool dump_frame(const char *path)
+{
+	struct salsa64_vi_frame f;
+	if (!salsa64_vi_frame(&n64.bus, &f)) {
+		fprintf(stderr, "salsa64-run: el VI no muestra imagen (VI_CONTROL = 0x%08x)\n",
+			n64.bus.vi.regs[SALSA64_VI_CONTROL]);
+		return false;
+	}
+	FILE *out = fopen(path, "wb");
+	if (!out)
+		return false;
+	fprintf(out, "P6\n%u %u\n255\n", f.width, f.height);
+	for (uint32_t y = 0; y < f.height; y++) {
+		const uint8_t *line = n64.bus.rdram + f.origin + y * f.stride;
+		for (uint32_t x = 0; x < f.width; x++) {
+			uint8_t rgb[3];
+			if (f.bpp == 2) {
+				uint32_t v = salsa64_rd16(line + 2 * x);
+				uint32_t c[3] = { v >> 11, (v >> 6) & 31, (v >> 1) & 31 };
+				for (int k = 0; k < 3; k++)
+					rgb[k] = (uint8_t)(c[k] << 3 | c[k] >> 2);
+			} else {
+				memcpy(rgb, line + 4 * x, 3);
+			}
+			fwrite(rgb, 1, 3, out);
+		}
+	}
+	fprintf(stderr, "salsa64-run: imagen del VI %ux%u (%s, origen 0x%06x) en %s; %u campos\n",
+		f.width, f.height, f.bpp == 2 ? "RGBA5551" : "RGBA8888", f.origin, path,
+		n64.bus.vi.fields);
+	return fclose(out) == 0;
+}
+
 static void usage(FILE *out)
 {
 	fputs("uso: salsa64-run [opciones] rom\n"
@@ -170,7 +206,8 @@ static void usage(FILE *out)
 	      "      --slice N         ciclos por bloque entre verificaciones (2^20)\n"
 	      "  -q, --quiet           no copiar la salida del ISViewer a stdout\n"
 	      "  -r, --regs            volcar los registros del CPU al terminar\n"
-	      "      --trace-exc N     mostrar las primeras N excepciones del CPU\n", out);
+	      "      --trace-exc N     mostrar las primeras N excepciones del CPU\n"
+	      "      --frame ARCHIVO   al terminar, guardar en PPM la imagen del VI\n", out);
 }
 
 int main(int argc, char **argv)
@@ -185,6 +222,7 @@ int main(int argc, char **argv)
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "regs", no_argument, NULL, 'r' },
 		{ "trace-exc", required_argument, NULL, 'X' },
+		{ "frame", required_argument, NULL, 'F' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 },
 	};
@@ -192,6 +230,7 @@ int main(int argc, char **argv)
 	uint32_t ram = SALSA64_RDRAM_MAX;
 	int tv = SALSA64_BOOT_TV_AUTO, c;
 	bool regs = false;
+	const char *frame_path = NULL;
 
 	while ((c = getopt_long(argc, argv, "c:u:f:qrh", opts, NULL)) != -1) {
 		switch (c) {
@@ -208,6 +247,7 @@ int main(int argc, char **argv)
 		case 'q': watch.quiet = true; break;
 		case 'r': regs = true; break;
 		case 'X': trace_exc_left = strtoull(optarg, NULL, 0); break;
+		case 'F': frame_path = optarg; break;
 		case 'T':
 			if (!strcmp(optarg, "ntsc")) tv = SALSA64_TV_NTSC;
 			else if (!strcmp(optarg, "pal")) tv = SALSA64_TV_PAL;
@@ -294,6 +334,10 @@ int main(int argc, char **argv)
 		us ? cycles / (double)us : 0.0, (unsigned long long)n64.cpu.pc);
 	if (regs)
 		dump_regs();
+	if (frame_path && !dump_frame(frame_path)) {
+		free(rom);
+		return 3;
+	}
 	free(rom);
 
 	switch (reason) {

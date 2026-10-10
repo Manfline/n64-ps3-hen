@@ -17,6 +17,8 @@
 enum salsa64_event {
 	SALSA64_EV_STOP,     /* fin del lapso pedido a salsa64_n64_run */
 	SALSA64_EV_COMPARE,  /* Count == Compare (COP0) */
+	SALSA64_EV_VI_INTR,  /* el VI llega a la línea de VI_V_INTR */
+	SALSA64_EV_VI_FIELD, /* fin de un campo de video */
 	SALSA64_EV_MAX
 };
 
