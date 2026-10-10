@@ -165,10 +165,12 @@ static void un_fill(uint8_t *mem)
 		mem[b] = rd8(T_DATA_PA + b);
 }
 
-/* Llamadas del código generado al intérprete (0 sin recompilador). */
+/* Llamadas del código generado al intérprete (0 sin recompilador, o con
+ * SALSA64_REC_OPT_RARE_EXEC, que las manda al intérprete a propósito). */
 static uint64_t exec_calls(void)
 {
-	return CPU->rec ? CPU->rec->stats.exec_calls : 0;
+	const struct salsa64_rec *rec = CPU->rec;
+	return rec && !(rec->opts & SALSA64_REC_OPT_RARE_EXEC) ? rec->stats.exec_calls : 0;
 }
 
 static bool un_mem_equal(const uint8_t *mem)

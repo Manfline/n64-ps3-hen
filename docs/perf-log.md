@@ -20,6 +20,7 @@ antes, después, notas.
 | 2026-10-10 | 8c27863 | **GoldenEye (NTSC)** en el frontend, recompilador con código mapeado por la TLB | PS3 real (mismo equipo), respaldo del usuario | antes: el código mapeado lo corría el intérprete (~24–33 MIPS en nemu64-test) | **59,8 campos/s, 93,7 MIPS (velocidad completa), emulación 5,6 ms por campo** | 3512 de 3518 bloques mapeados, 5050 traducciones (todas en el arranque), ~0,08 % interpretado. El juego no pasa del arranque gráfico (microcódigo F3D sin soporte: ruido en pantalla, igual con el intérprete solo), así que es carga de CPU sin dibujar y sin bucles de espera. Perfect Dark: 5,1 ms por campo, también atorado en el arranque con el intérprete |
 | 2026-10-10 | 697922c → b3ba375 | **Caché de texturas** entre tareas (HLE gráfica en el SPE 0), Zelda OoT con el recompilador, ventanas fijas de 100 campos | PS3 real (mismo equipo), respaldo del usuario | HLE en el SPE 14,0–30,6 ms por tarea; escenas pesadas a 38–48 campos/s; peor campo 36–43 ms | **5,1–9,6 ms por tarea (×2,8–3,3); 59,8–60,2 campos/s en todas; peor campo 17–27 ms** | Decodificar texturas: 6,7–17,2 → 0,00–0,09 ms (0–1 textura decodificada por tarea); identificarlas (hash) 0,03–0,35 ms; cargas a la TMEM 3,7–7,3 → 1,4–3,0 ms (copia en bloque). Mismas capturas byte a byte. Ver «Caché de texturas» abajo |
 | 2026-10-10 | f416bee | **Zelda OoT (NTSC) en el frontend**, recompilador con registros fijos, HLE gráfica en el SPE | PS3 real (mismo equipo), respaldo del usuario | intérprete: 15,4–17,5 campos/s, emulación 56–64 ms por campo | **41–60 campos/s (69–100 %), emulación 4–14 ms por campo** | Logo e intro a 58–60; título y escenas con muchos triángulos 41–55, ahora limitadas por la espera a la HLE gráfica del SPE (10–30 ms por tarea), no por el CPU. 86–88 % del tiempo del CPU en bucles de espera. ~10 500 bloques, 7,9 MB de caché, 1,7 % de instrucciones interpretadas. Se ve igual que con el intérprete (el autor) |
+| 2026-10-10 | e210aeb | **Recompilador: conversiones de la FPU, LWL/LWR y MFC0 en nativo**, nemu64-test con registros fijos | PS3 real (mismo equipo), cpu-tests SLSA00077 | mismo binario con `RARE_EXEC` (como antes): 1894 ms (×4,29 del intérprete, 8118 ms) | **1816 ms (104,1 MIPS; ×4,47); −4,1 %** | Mismas 446 fallas, hash y ciclo. Entradas desde C 140 909 → 110 074; llamadas al intérprete 2,15 M → 1,77 M. Bench: cvt 4,2 → 40,7 MIPS, no alineadas 20,5 → 218,5, mfc0 9,8 → 701, espera por Count 8,3 → 488 (salidas a C 2 M → 8). Ver «Conversiones de la FPU…» abajo |
 
 ## Caché de texturas (2026-10-10)
 
@@ -389,12 +390,32 @@ fijos; cuentas, no tiempo):
 | `cvt` | 6 999 958 llamadas | 0 |
 | `no alin.` | 5 999 964 llamadas | 0 |
 
-**PS3 real: pendiente.** Preparado: `salsa64-cpu-fpu.pkg` (SLSA00077,
-«Salsa64 CPU FPU»): nemu64-test y bench con registros fijos, con y sin
-`RARE_EXEC`, y variantes nuevas del bench `cvt`, `no alin.`, `mfc0` y
-`espera` (con entradas desde C y llamadas al intérprete por caso). En
-Zelda la ganancia no se vería todavía en los campos/s: donde no llega a 60
-espera a la HLE gráfica del SPE.
+**PS3 real** (2026-10-10, Slim CECH-3011A, HFW 4.91 + HEN; cpu-tests
+SLSA00077 «Salsa64 CPU FPU» de e210aeb, mismo binario con y sin
+`RARE_EXEC`, registros fijos):
+
+| | Antes (`RARE_EXEC`) | Después | |
+|---|---|---|---|
+| nemu64-test | 1894 ms (99,9 MIPS, ×4,29) | **1816 ms (104,1 MIPS, ×4,47)** | −4,1 % |
+| nemu64-test: entradas desde C | 140 909 | 110 074 | −22 % |
+| nemu64-test: llamadas al intérprete | 2 154 724 | 1 773 947 | −18 % |
+| bench `cvt` (CVT.S.W, TRUNC.W.S, CVT.D.S, CVT.S.D, SQRT.S, CFC1, CVT.W.S) | 4,2 MIPS | **40,7 MIPS** | ×9,7 |
+| bench `no alin.` (pares LWL/LWR y SWL/SWR) | 20,5 MIPS | **218,5 MIPS** | ×10,7 |
+| bench `mfc0` (Count, Status, Cause, EPC) | 9,8 MIPS | **700,7 MIPS** | ×71 |
+| bench `espera` (bucle que sondea Count) | 8,3 MIPS; 2 000 000 salidas a C | **487,8 MIPS; 8 salidas** | ×59 |
+
+Las demás variantes del bench no cambian (mixto 156 MIPS). Con el
+intérprete solo, `cvt` corre a 4,4 MIPS: el camino completo de las
+conversiones es caro. En nemu64-test la ganancia es chica porque lo que
+queda interpretado son sus pruebas de COP0 (MTC0, TLB, ERET), traps y
+CACHE; en un juego pesan las conversiones (cada `(int)f` es un TRUNC.W.S),
+las copias no alineadas y las esperas por Count. En Zelda no se vería en
+los campos/s todavía: donde no llega a 60 espera a la HLE gráfica del SPE.
+
+El RESULTADO de esa corrida dice FALLO por 4 verificaciones de cobertura
+(«corrió en nativo») que fallan a propósito en la variante `RARE_EXEC`;
+las comparaciones de resultados pasaron en las tres variantes. Corregido
+después (las verificaciones no aplican con esa opción).
 
 ### Bench del intérprete tras traer la Fase 2: 21 → 14,7 MIPS (diagnóstico, 2026-10-10)
 
@@ -416,11 +437,15 @@ instrucción), sin cambios en interp.c. Lo revisado:
   encontró por qué eso costaría 70 ciclos (en el ERAT de datos de 2 vías
   caben las dos); queda como hipótesis.
 
-Prueba en la PS3 (cpu-tests de este trabajo): «bench alineado» corre las
-mismas variantes con el intérprete en una máquina aparte con estructura y
-RDRAM alineadas a 64 KB. Si ahí vuelve a ~21 MIPS es la ubicación en
-memoria (y conviene alinear también la máquina del frontend); si no, es
-otra cosa del binario.
+Prueba en la PS3 (cpu-tests SLSA00077 de e210aeb): «bench alineado» corre
+las mismas variantes con el intérprete en una máquina aparte con estructura
+y RDRAM alineadas a 64 KB. Resultado: **en ese binario los dos dan lo de
+antes** (mixto 21,1 y 21,1 MIPS, nop 33,1 y 32,7), con `t_n64` en
+0x121a2f00 y `t_rdram` en 0x119a2e80. Ahí `sched->next` también queda en
+otra página de 4 KB que el CPU, con los mismos bits bajos que la de la
+búsqueda, así que esa hipótesis queda descartada. La caída a 14,7 depende
+de cómo queda armado el binario y no se encontró el mecanismo; si vuelve a
+aparecer, comparar contra este binario.
 
 ## Líneas base de la Fase 2 (parte gráfica)
 

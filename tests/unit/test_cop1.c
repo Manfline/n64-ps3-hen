@@ -880,8 +880,9 @@ static void executed_conversions_match_full(void)
 				       (unsigned long long)CPU->gpr[rt]);
 		}
 	}
-	/* Con el recompilador, que buena parte haya corrido en nativo. */
-	if (CPU->rec)
+	/* Con el recompilador, que buena parte haya corrido en nativo (salvo con
+	 * SALSA64_REC_OPT_RARE_EXEC, que las manda al intérprete a propósito). */
+	if (CPU->rec && !(CPU->rec->opts & SALSA64_REC_OPT_RARE_EXEC))
 		CHECK(native > 3000);
 }
 

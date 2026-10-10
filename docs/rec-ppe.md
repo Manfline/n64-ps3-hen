@@ -385,5 +385,6 @@ compiler error: Segmentation fault"; repetir compila bien
 | 2026-10-10 | GoldenEye (USA), respaldo del usuario, `--lockstep` 200 M ciclos (2,1 s) | qemu-ppc64 | sin diferencias; 3518 de 3524 bloques mapeados, 5050 traducciones (la TLB cambia seguido), 0,1 % interpretado |
 | 2026-10-10 | Perfect Dark (USA), respaldo del usuario, `--lockstep` 200 M ciclos | qemu-ppc64 | sin diferencias; 198 de 202 bloques mapeados, 3 traducciones (con 8 MB, pocas entradas grandes) |
 | 2026-10-10 | Unitarias con conversiones, LWL/LWR y MFC0 en nativo | qemu-ppc64 (plain, mtctr, fijos, temprana) | 221/221; `--lockstep` sin diferencias en nemu64-test y vitest; mutación 10/10 |
+| 2026-10-10 | nemu64-test y bench con y sin `RARE_EXEC` (conversiones, LWL/LWR y MFC0 al intérprete) | **PS3 real**, e210aeb | nemu64-test 1894 → 1816 ms (−4,1 %), mismas fallas; bench cvt ×9,7, no alineadas ×10,7, mfc0 ×71, espera por Count ×59 |
 
 Rendimiento: solo en la PS3 real (docs/perf-log.md, «Recompilador»).

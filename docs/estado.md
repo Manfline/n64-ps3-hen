@@ -34,13 +34,20 @@ cifras en docs/perf-log.md):
   KSEG0), vitest OK, `--lockstep` sin diferencias en los dos.
 
 Siguiente:
-- [ ] **PS3 real** (pedir turno al autor): cpu-tests SLSA00077 «Salsa64
-      CPU FPU» (bench `cvt`, `no alin.`, `mfc0`, `espera` y nemu64-test con
-      y sin `RARE_EXEC`).
+- [x] **PS3 real** (cpu-tests SLSA00077 «Salsa64 CPU FPU», e210aeb):
+      nemu64-test 1894 → 1816 ms (−4,1 %, ×4,47 del intérprete) con las
+      mismas fallas; bench cvt 4,2 → 40,7 MIPS, no alineadas 20,5 → 218,5,
+      mfc0 9,8 → 701, espera por Count 8,3 → 488 (salidas a C 2 M → 8).
+      Las 4 «fallas» del RESULTADO eran verificaciones de cobertura en la
+      variante `RARE_EXEC` (corregidas).
 - [ ] Lo que sigue yendo al intérprete: CVT.S/D.L, CACHE, MTC0/TLB/ERET;
       MFC0 de Random.
-- [ ] Bench del intérprete: ver «bench alineado» en la corrida de la PS3
-      (docs/perf-log.md, diagnóstico 21 → 14,7 MIPS).
+- [x] Bench del intérprete (21 → 14,7 MIPS tras la Fase 2): en el binario
+      de este trabajo da 21,1 MIPS en `t_n64` y en la máquina alineada; no se
+      reproduce y la hipótesis de la página de `sched->next` quedó
+      descartada (docs/perf-log.md). Depende de cómo queda el binario.
+- [ ] Medir en un juego (Zelda, SM64) cuánto pesan las conversiones y las
+      esperas por Count cuando la HLE gráfica deje de ser el cuello.
 
 ## 2026-10-10 — Fin de tarea del RSP por sondeo (sin bloquear al SPE)
 

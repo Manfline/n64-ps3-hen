@@ -172,7 +172,7 @@ static void mfc0_reads_every_register(void)
 		CHECK_EQ(R[T1], (uint64_t)(int64_t)(int32_t)(uint32_t)want);
 		CHECK_EQ(R[T2], want64);
 	}
-	if (CPU->rec)
+	if (CPU->rec && !(CPU->rec->opts & SALSA64_REC_OPT_RARE_EXEC))  /* esa opción las manda al intérprete */
 		CHECK_EQ(CPU->rec->stats.exec_calls, calls);
 }
 
