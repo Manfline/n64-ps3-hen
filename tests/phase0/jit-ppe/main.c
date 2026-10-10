@@ -13,9 +13,17 @@
  * como CRASH y se sigue con el siguiente. Al terminar todos, el archivo se
  * renombra a JIT_RESULT y la próxima ejecución empieza de cero.
  *
+ * Dos conjuntos de mecanismos (Makefile, PRUEBA=):
+ *   mecanismos  memoria de datos, heap, sys_memory, sys_mmapper y una zona de
+ *               nops de 64 KB en .text;
+ *   cache       (JIT_PRUEBA_CACHE) inicio y fin de una zona de nops grande
+ *               en .text y de una cola NOBITS al final del segmento de texto
+ *               (nobits.ld): cuánto cabe para la caché del recompilador.
+ *
  * Resultados y forma de correrla: docs/jit-ppe.md.
  */
 #include <malloc.h>
+#include <ppu-lv2.h>
 #include <ppu-types.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -34,6 +42,17 @@
 #define JIT_BYTES  (64 * 1024)
 #define CACHE_LINE 128
 #define FLUSH_REPS 100
+#define ZONE_REPS  10
+
+#ifdef JIT_PRUEBA_CACHE
+#define JIT_CAVE_BYTES   ((JIT_CAVE_MB) * 1024 * 1024)
+#define JIT_NOBITS_BYTES ((JIT_NOBITS_MB) * 1024 * 1024)
+#else
+#define JIT_CAVE_BYTES   (64 * 1024)
+#endif
+
+#define STR_(x) #x
+#define STR(x)  STR_(x)
 
 SYS_PROCESS_PARAM(1001, 0x100000);
 
@@ -89,6 +108,69 @@ static int call_code(const volatile u32 *code, int arg)
 
 /* --- Mecanismos de memoria -------------------------------------------------- */
 
+/* Zona de nops dentro de .text: ejecutable, pero en principio de solo lectura. */
+__asm__("	.section .text\n"
+	"	.balign 128\n"
+	"	.globl salsa64_text_cave\n"
+	"salsa64_text_cave:\n"
+	"	.fill " STR(JIT_CAVE_BYTES) "/4, 4, 0x60000000\n"
+	"	.previous\n");
+extern u32 salsa64_text_cave[];
+
+/* note: motivo del fallo si se devuelve NULL; si no, nota opcional que se
+ * agrega a la línea de resultado. */
+static void *alloc_text(char *note, size_t n)
+{
+	(void)note, (void)n;
+	return salsa64_text_cave;
+}
+
+static void release_none(void *p)
+{
+	(void)p;
+}
+
+#ifdef JIT_PRUEBA_CACHE
+
+/* Cola sin contenido en el archivo: nobits.ld la pone al final del segmento
+ * de texto y el cargador debe rellenarla con ceros. */
+__asm__("	.section .salsa64_jit_nobits,\"ax\",@nobits\n"
+	"	.balign 65536\n"
+	"	.globl salsa64_jit_nobits\n"
+	"salsa64_jit_nobits:\n"
+	"	.space " STR(JIT_NOBITS_BYTES) "\n"
+	"	.previous\n");
+extern u32 salsa64_jit_nobits[];
+
+static void *alloc_text_end(char *note, size_t n)
+{
+	(void)note;
+	return (u8 *)salsa64_text_cave + JIT_CAVE_BYTES - n;
+}
+
+/* Leer la cola entera ya es una prueba: si el cargador no la mapeó, cae aquí. */
+static void *alloc_nobits(char *note, size_t n)
+{
+	(void)n;
+	const volatile u32 *p = salsa64_jit_nobits;
+	snprintf(note, 96, "ceros=sí");
+	for (size_t k = 0; k < JIT_NOBITS_BYTES / 4; k++) {
+		if (p[k] != 0) {
+			snprintf(note, 96, "ceros=NO(+0x%zx)", k * 4);
+			break;
+		}
+	}
+	return salsa64_jit_nobits;
+}
+
+static void *alloc_nobits_end(char *note, size_t n)
+{
+	(void)note;
+	return (u8 *)salsa64_jit_nobits + JIT_NOBITS_BYTES - n;
+}
+
+#else
+
 static u32 data_buf[JIT_BYTES / 4] __attribute__((aligned(CACHE_LINE))) = { 1 };
 static u32 bss_buf[JIT_BYTES / 4] __attribute__((aligned(CACHE_LINE)));
 
@@ -97,17 +179,6 @@ static u32 bss_buf[JIT_BYTES / 4] __attribute__((aligned(CACHE_LINE)));
  * aplica por segmento (SLB) o por página. */
 static u32 seg0_buf[JIT_BYTES / 4]
 	__attribute__((aligned(CACHE_LINE), section(".data.rel.ro.salsa64_jit"))) = { 1 };
-
-/* Zona de nops dentro de .text: ejecutable, pero en principio de solo lectura. */
-__asm__("	.section .text\n"
-	"	.balign 128\n"
-	"	.globl salsa64_text_cave\n"
-	"salsa64_text_cave:\n"
-	"	.rept 16384\n"
-	"	nop\n"
-	"	.endr\n"
-	"	.previous\n");
-extern u32 salsa64_text_cave[];
 
 static sys_mem_addr_t mm_addr;
 static sys_mem_id_t mm_id;
@@ -128,12 +199,6 @@ static void *alloc_seg0(char *err, size_t n)
 {
 	(void)err, (void)n;
 	return seg0_buf;
-}
-
-static void *alloc_text(char *err, size_t n)
-{
-	(void)err, (void)n;
-	return salsa64_text_cave;
 }
 
 static void *alloc_heap(char *err, size_t n)
@@ -191,11 +256,6 @@ static void *alloc_mmapper(char *err, size_t n)
 	return (void *)(uintptr_t)mm_addr;
 }
 
-static void release_none(void *p)
-{
-	(void)p;
-}
-
 static void release_heap(void *p)
 {
 	free(p);
@@ -215,24 +275,36 @@ static void release_mmapper(void *p)
 	sysMMapperFreeAddress(mm_addr);
 }
 
+#endif
+
 typedef struct {
 	const char *name;
 	const char *desc;
-	void *(*alloc)(char *err, size_t n);
+	void *(*alloc)(char *note, size_t n);
 	void (*release)(void *p);
+	size_t zone; /* si no es 0, se mide también limpiar la zona entera */
 } jit_mech_t;
 
+#ifdef JIT_PRUEBA_CACHE
+static const jit_mech_t mechs[] = {
+	{ "text",       "zona de nops en .text, inicio",             alloc_text,       release_none, JIT_CAVE_BYTES },
+	{ "text_fin",   "zona de nops en .text, últimos 64 KB",      alloc_text_end,   release_none, 0 },
+	{ "nobits",     "cola NOBITS del segmento de texto, inicio", alloc_nobits,     release_none, JIT_NOBITS_BYTES },
+	{ "nobits_fin", "cola NOBITS, últimos 64 KB",                alloc_nobits_end, release_none, 0 },
+};
+#else
 /* .text va al final: lo esperable es que la escritura mate el proceso. */
 static const jit_mech_t mechs[] = {
-	{ "data",      "arreglo estático en .data",                 alloc_data,       release_none },
-	{ "bss",       "arreglo estático en .bss",                  alloc_bss,        release_none },
-	{ "seg0",      "arreglo RW en el segmento de .text (0x50000)", alloc_seg0,    release_none },
-	{ "heap",      "memalign() de newlib",                      alloc_heap,       release_heap },
-	{ "sysmem64k", "sysMemoryAllocate, páginas de 64 KB",       alloc_sysmem_64k, release_sysmem },
-	{ "sysmem1m",  "sysMemoryAllocate, páginas de 1 MB",        alloc_sysmem_1m,  release_sysmem },
-	{ "mmapper",   "sys_mmapper: reservar, asignar y mapear",   alloc_mmapper,    release_mmapper },
-	{ "text",      "zona de nops dentro de .text (escritura directa)", alloc_text, release_none },
+	{ "data",      "arreglo estático en .data",                 alloc_data,       release_none, 0 },
+	{ "bss",       "arreglo estático en .bss",                  alloc_bss,        release_none, 0 },
+	{ "seg0",      "arreglo RW en el segmento de .text (0x50000)", alloc_seg0,    release_none, 0 },
+	{ "heap",      "memalign() de newlib",                      alloc_heap,       release_heap, 0 },
+	{ "sysmem64k", "sysMemoryAllocate, páginas de 64 KB",       alloc_sysmem_64k, release_sysmem, 0 },
+	{ "sysmem1m",  "sysMemoryAllocate, páginas de 1 MB",        alloc_sysmem_1m,  release_sysmem, 0 },
+	{ "mmapper",   "sys_mmapper: reservar, asignar y mapear",   alloc_mmapper,    release_mmapper, 0 },
+	{ "text",      "zona de nops dentro de .text (escritura directa)", alloc_text, release_none, 0 },
 };
+#endif
 #define NUM_MECHS ((int)(sizeof mechs / sizeof mechs[0]))
 
 /* --- Estado persistente ----------------------------------------------------- */
@@ -310,15 +382,29 @@ static void finish_mech(int i, const char *fmt, ...)
 
 /* --- Prueba ----------------------------------------------------------------- */
 
+/* sys_memory_get_user_memory_size (syscall 352), sin envoltura en PSL1GHT:
+ * dice si los segmentos del ELF se descuentan de la memoria de usuario. */
+static struct {
+	u32 total;
+	u32 available;
+} user_mem;
+
+static s32 get_user_memory(void)
+{
+	lv2syscall1(352, (u64)(uintptr_t)&user_mem);
+	return_to_user_prog(s32);
+}
+
 static void run_mech(int i)
 {
 	const jit_mech_t *m = &mechs[i];
-	char err[96] = "";
+	char note[96] = "";
 
 	salsa64_log("== %s: %s", m->name, m->desc);
-	void *mem = m->alloc(err, JIT_BYTES);
+	state_append("%s PROBANDO reserva", m->name);
+	void *mem = m->alloc(note, JIT_BYTES);
 	if (!mem) {
-		finish_mech(i, "%s NO_DISPONIBLE %s", m->name, err);
+		finish_mech(i, "%s NO_DISPONIBLE %s", m->name, note);
 		return;
 	}
 	volatile u32 *code = mem;
@@ -341,19 +427,36 @@ static void run_mech(int i)
 		flush_code(mem, JIT_BYTES);
 	u64 flush_ns = (sysGetSystemTime() - t0) * 1000 / FLUSH_REPS;
 
+	char zone[32] = "";
+	if (m->zone) {
+		t0 = sysGetSystemTime();
+		for (int k = 0; k < ZONE_REPS; k++)
+			flush_code(mem, m->zone);
+		snprintf(zone, sizeof zone, " flush%uM=%uus", (unsigned)(m->zone >> 20),
+			 (unsigned)((sysGetSystemTime() - t0) / ZONE_REPS));
+	}
+
 	m->release(mem);
 
 	const int ok = first == 22 && second == 24;
-	finish_mech(i, "%s %s f(5)=%d reescrita=%d%s flush64k=%uns", m->name,
+	finish_mech(i, "%s %s f(5)=%d reescrita=%d%s flush64k=%uns%s%s%s", m->name,
 		    ok ? "OK" : "FALLO", first, second,
 		    (first == 22 && second == 22) ? " (icache vieja)" : "",
-		    (unsigned)flush_ns);
+		    (unsigned)flush_ns, zone, note[0] ? " " : "", note);
 }
 
 int main(void)
 {
 	salsa64_log_init("jit-ppe");
 	mkdir(SALSA64_DATA_DIR, 0777);
+	if (get_user_memory() == 0)
+		salsa64_log("memoria de usuario: total %u KB, disponible %u KB",
+			   user_mem.total >> 10, user_mem.available >> 10);
+#ifdef JIT_PRUEBA_CACHE
+	salsa64_log("zona de nops en %p, %u KB; cola NOBITS en %p, %u KB",
+		   (void *)salsa64_text_cave, (unsigned)(JIT_CAVE_BYTES >> 10),
+		   (void *)salsa64_jit_nobits, (unsigned)(JIT_NOBITS_BYTES >> 10));
+#endif
 	state_load();
 
 	for (int i = 0; i < NUM_MECHS; i++) {

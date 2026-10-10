@@ -1,8 +1,10 @@
 # Presupuesto de memoria
 
 PS3: 256 MB XDR (principal) + 256 MB GDDR3 (RSX). El juego tiene ~213 MB de
-XDR disponibles; el resto es del sistema. Cifras en MB; "medido" se llena en
-PS3 real.
+XDR disponibles; el resto es del sistema. Medido con HEN (docs/jit-ppe.md):
+214 016 KB (209 MB) de memoria de usuario, y los segmentos del ELF (código,
+datos y colas NOBITS) se descuentan de ahí. Cifras en MB; "medido" se llena
+en PS3 real.
 
 ## Memoria principal (XDR)
 
@@ -10,13 +12,13 @@ PS3 real.
 |---|---|---|---|
 | RDRAM emulada | 8 | | 4 MB + Expansion Pak; la pone quien llama a `salsa64_n64_init` |
 | Estado de la máquina (`struct salsa64_n64`) | 0,01 | 0,01 | 10,4 KB: CPU 1,7 KB, bus 8,5 KB (incluye SP DMEM/IMEM) |
-| Caché del recompilador | 32 | | Fase 3; depende de docs/jit-ppe.md |
+| Caché del recompilador | 16 | | Fase 3: cola NOBITS del segmento de texto (docs/jit-ppe.md); 32 si hace falta |
 | Caché de texturas (lado PPE/SPE) | 16 | | Fase 4 |
 | Búfer de comandos RSX + memoria mapeada | 32 | | `HOST_SIZE` de rsx-triangle |
 | Listas de triángulos SPU → RSX | 8 | | doble búfer por cuadro |
 | Audio | 2 | | |
 | Código, pila, heap de newlib | 16 | | |
-| **Total previsto** | **114** | | |
+| **Total previsto** | **98** | | |
 
 ## Memoria local del RSX (GDDR3)
 
