@@ -459,6 +459,26 @@ static void gfx_fill_and_zclear(void)
 	CHECK(find_cmd(GFX_OP_TARGET, 0) != NULL);
 }
 
+/* FILLRECT en 1 ciclo: borde inferior derecho exclusivo, salvo cuando se
+ * queda a un píxel del scissor (el fundido de Zelda manda 319, 239). */
+static void gfx_fill_1cycle_edge(void)
+{
+	start();
+	dl(0xFF100000 | 319, 0x00100000);
+	dl(0xED000000, (320 << 2) << 12 | (240 << 2));  /* scissor 320×240 */
+	set_cycle(G_CYC_1CYCLE);
+	dl(0xF6000000 | (100 << 2) << 12 | (50 << 2), (10 << 2) << 12 | (10 << 2));
+	dl(0xF6000000 | (319 << 2) << 12 | (239 << 2), 0);
+	run();
+	const struct gfx_draw *d = draw_n(0);
+	CHECK(d != NULL);
+	if (d)
+		CHECK_EQ(d->h.b, 12);
+	/* Vértice 5: abajo a la derecha de cada rectángulo. */
+	CHECK(out_vtx[5].x == 100.0f && out_vtx[5].y == 50.0f);
+	CHECK(out_vtx[11].x == 320.0f && out_vtx[11].y == 240.0f);
+}
+
 /* Triángulos seguidos con el mismo estado comparten dibujo; un cambio de
  * color primitivo abre otro. */
 static void gfx_draw_batching(void)
@@ -530,6 +550,7 @@ void t_suite_gfx(void)
 	RUN(gfx_tmem_rgba16_block);
 	RUN(gfx_tmem_ci4_tlut);
 	RUN(gfx_fill_and_zclear);
+	RUN(gfx_fill_1cycle_edge);
 	RUN(gfx_draw_batching);
 	RUN(gfx_dl_flow);
 }

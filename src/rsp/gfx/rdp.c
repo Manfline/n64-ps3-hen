@@ -410,8 +410,18 @@ static void fillrect(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	if (cycle == G_CYC_FILL || cycle == G_CYC_COPY) {
 		lrx += 1.0f;
 		lry += 1.0f;
-	} else if (lry == uly) {
-		lry += 1.0f;
+	} else {
+		if (lry == uly)
+			lry += 1.0f;
+		/* En 1 y 2 ciclos el borde inferior derecho es exclusivo, pero hay
+		 * juegos que lo mandan inclusivo (el fundido de Zelda: 319, 239) y
+		 * en la consola la columna y la fila que faltan quedan fuera de la
+		 * imagen visible de la tele. Aquí se ven: si el rectángulo se queda
+		 * a un píxel del scissor, llega hasta él. */
+		if ((uint32_t)lrx * 4 + 4 == g->scissor[2])
+			lrx += 1.0f;
+		if ((uint32_t)lry * 4 + 4 == g->scissor[3])
+			lry += 1.0f;
 	}
 	if (cycle == G_CYC_FILL && g->cimg_addr == g->zimg_addr) {
 		/* Borrar el z-buffer: se dibuja en la color image que apunta a él. */
