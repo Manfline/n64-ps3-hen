@@ -588,11 +588,15 @@ static uint32_t count(void);
 static int wait_intr(uint32_t bit)
 {
 	uint32_t t0 = count();
-	do {
+	for (uint32_t i = 0;; i++) {
 		if (MI_INTR & bit)
 			return 1;
-	} while (count() - t0 < TIMEOUT_TICKS);
-	return 0;
+		/* Count solo de vez en cuando: leerlo en cada vuelta (MFC0) saca
+		 * al recompilador de Salsa64 a su camino lento y el bucle se
+		 * arrastra (9 campos/s en la PS3). */
+		if ((i & 1023) == 0 && count() - t0 >= TIMEOUT_TICKS)
+			return 0;
+	}
 }
 
 /* ---- Video e ISViewer (como vitest) --------------------------------------- */
