@@ -13,7 +13,7 @@
  *     `TX RX [tx bytes] [rx bytes]` con las longitudes en los 6 bits bajos.
  *     TX bit 7 = saltar este intercambio; RX bit 7 = no hay dispositivo,
  *     bit 6 = faltaron bytes en la respuesta (los pone el PIF).
- *   - Canales 0–3: puertos de control; 4: cartucho (EEPROM; aún no).
+ *   - Canales 0–3: puertos de control; 4: cartucho (EEPROM, save.c).
  *
  * Control estándar: identificación (0x00 y 0xFF: 05 00 + estado), estado
  * (0x01: botones, X, Y) y, sin Controller Pak ni Rumble, lectura y

@@ -10,6 +10,7 @@
  *   0x04100000             DP (RDP), comandos
  *   0x04300000 MI · 0x04400000 VI · 0x04500000 AI · 0x04600000 PI
  *   0x04700000 RI · 0x04800000 SI
+ *   0x08000000–0x0FFFFFFF  SRAM del cartucho (dominio 2), si la hay (save.c)
  *   0x10000000–0x1FBFFFFF  ROM del cartucho (dominio 1, dirección 2)
  *   0x13FF0000–0x13FFFFFF  ISViewer, solo si se activa (tapa la ROM ahí)
  *   0x1FC00000–0x1FC007BF  PIF ROM: no se incluye (arranque por HLE), lee 0
@@ -48,6 +49,7 @@
 typedef void (*salsa64_isv_fn)(void *ctx, const uint8_t *text, uint32_t len);
 
 struct salsa64_cpu;
+struct salsa64_save;
 
 struct salsa64_bus {
 	uint8_t *rdram;
@@ -58,6 +60,7 @@ struct salsa64_bus {
 	uint8_t *isv;             /* búfer del ISViewer o NULL (apagado) */
 	salsa64_isv_fn isv_out;
 	void *isv_ctx;
+	struct salsa64_save *save;  /* guardado del cartucho o NULL (save.c) */
 
 	struct salsa64_mi mi;
 	struct salsa64_sp sp;

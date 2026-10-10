@@ -89,6 +89,7 @@ int salsa64_unit_run(void (*print)(const char *line))
 		{ "vi", t_suite_vi },
 		{ "pif", t_suite_pif },
 		{ "idle", t_suite_idle },
+		{ "save", t_suite_save },
 	};
 	char line[160];
 

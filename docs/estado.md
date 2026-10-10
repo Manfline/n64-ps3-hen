@@ -1,5 +1,54 @@
 # Estado
 
+## 2026-10-10 — Guardado del cartucho: EEPROM y SRAM
+
+Hecho:
+- **EEPROM de 4 y 16 Kbit** en el canal 4 del PIF (`src/core/save.c`,
+  desde n64brew.dev: Joybus Protocol): información (0x00/0xFF →
+  0x0080/0x00C0), lectura (0x04) y escritura (0x05) de bloques de 8 bytes;
+  en la de 4 Kbit los bloques 64–255 repiten 0–63. Escritura instantánea
+  (en la consola, hasta 6 ms), nunca "ocupada".
+- **SRAM de 256 Kbit** en el dominio 2 del PI (0x08000000, espejo cada
+  32 KB): DMA en los dos sentidos y accesos directos de 32 bits del CPU.
+- **Tipo por juego** (`salsa64_save_detect`): `guardado.cfg` (manual; por
+  código de 3 o 4 caracteres, CRC1 o `*`) > cabecera de homebrew ("ED" en
+  0x3C, tipo en 0x3F; la de n64tool de libdragon) > tabla por código
+  (`src/core/savedb.c`: 178 códigos y 6 excepciones por región, solo donde
+  coinciden ares y N64FlashcartMenu) > ninguno, con aviso en el log. Los
+  seis juegos objetivo están en la tabla (SM64, MK64, SF64 y GoldenEye
+  EEPROM 4K; Perfect Dark 16K; Zelda OoT SRAM). FlashRAM, SRAM de 768 Kbit
+  y de 1 Mbit se reconocen pero no se emulan todavía.
+- **Persistencia** (`src/frontend/savefile.c`, igual en la PS3 y en el
+  host): un archivo por juego y tipo en `/dev_hdd0/salsa64/saves/`
+  (`<título>-<CRC1>.eep|sra`, los nombres de Project64). Búfer preasignado
+  de 32 KB; se cuentan las escrituras del juego que cambian datos y se
+  vuelca tras 2 s sin escrituras (a lo más 30 s si no paran) y al salir.
+  Escritura segura: `.tmp`, borrar y renombrar.
+- Ganchos mínimos en `pif.c`, `pi.c` y `bus.c` (24 líneas); `bus->save`
+  sobrevive al reset.
+- Pruebas: suite `save` (14 pruebas; 196 en total) en el host y en RPCS3
+  (big-endian). ROM propia `savetest` (`tests/roms/src/savetest`, tres
+  variantes por la cabecera, `tools/build-savetest.sh`): escribe un patrón,
+  lo relee y en el arranque siguiente verifica que persistió. En
+  `tools/test-roms.sh` (dos arranques por tipo con `salsa64-run
+  --save-dir`) y en RPCS3 con `salsa64-save-tests` (SLSA00020, las tres
+  ROMs sin pantalla; `tools/test-phase1.sh` lo abre dos veces): pasan,
+  con el volcado diferido a los 2,0 s. Prueba de mutación: romper la
+  repetición de bloques, el identificador, la escritura directa o el DMA
+  hacia la SRAM lo atrapan las pruebas y la ROM.
+- Sin regresiones: nemu64-test 462 fallas, vitest y controles OK; compilan
+  fase 0, fase 1 y el frontend sin advertencias.
+
+Falta:
+- [ ] PS3 real: `salsa64-save-tests` dos veces y el frontend con
+      `savetest-sram` como `rom.z64` (abrir, salir, volver a abrir).
+- [ ] Probarlo con Zelda (SRAM) y un juego con EEPROM cuando la Fase 2
+      permita llegar a guardar (respaldos propios, fuera del repo).
+- [ ] FlashRAM (y SRAM de 768 Kbit y 1 Mbit) cuando un juego la pida.
+- [ ] Para la integración: `src/core/rcp.h` todavía dice "Falta la EEPROM"
+      en el SI y el PI "cartucho → RDRAM"; no se tocó para no chocar con
+      la Fase 2 (edita las líneas vecinas).
+
 ## 2026-10-10 — Controles (PIF + DualShock 3) y bucles de espera
 
 Hecho (validado en PS3 real, Slim CECH-3011A, HFW 4.91 + HEN):
@@ -33,7 +82,8 @@ Notas:
   instala sobre la misma app SLSA00005 que los demás cpu-tests.
 
 Siguiente:
-- [ ] EEPROM del cartucho (canal 4 del PIF), Controller Pak y Rumble.
+- [x] EEPROM del cartucho (canal 4 del PIF) y SRAM: entrada de arriba.
+- [ ] Controller Pak y Rumble.
 - [ ] Bucles de espera: código mapeado por TLB, sondeos de E/S que solo
       cambian en eventos (MI_INTR, SP_STATUS) y esperas por Count.
 - [ ] Opcional: decidir el chequeo con el inmediato del salto (no depende
@@ -198,7 +248,7 @@ Siguiente (Fase 1):
 - [x] VI con contador de líneas e interrupción; framebuffer 2D en el RSX
       (primera pieza de `lib/rsxkit/`): ver la entrada de arriba.
 - [ ] Bus PI: latch de escrituras al cartucho y DMA no alineado (81 pruebas
-      de nemu64-test); SRAM/FlashRAM.
+      de nemu64-test); FlashRAM (la SRAM ya está).
 - [ ] Cachés del VR4300 (46 pruebas) y ciclos por instrucción (conjuntos
       "timing" y "cycle" de nemu64-test).
 - [ ] CPUTest de krom ensamblado desde fuente con bootcode en ceros (traer

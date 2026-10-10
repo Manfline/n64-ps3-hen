@@ -1,7 +1,9 @@
 #!/bin/sh
 # Pruebas con ROMs homebrew en el host: compila salsa64-run (gcc nativo, ASan +
-# UBSan) y corre nemu64-test hasta su resumen por ISViewer, y vitest (ROM
-# propia del VI, tests/roms/src/vitest) hasta que se verifica a sí misma.
+# UBSan) y corre nemu64-test hasta su resumen por ISViewer, vitest (ROM
+# propia del VI, tests/roms/src/vitest) hasta que se verifica a sí misma, y
+# savetest (ROM propia del guardado, tests/roms/src/savetest) dos veces por
+# tipo de guardado.
 #
 # La lista de pruebas de nemu64-test que fallan se compara con la línea base
 # tests/roms/nemu64-test.fallas (lo que falta emular: RSP, cachés, bus PI…).
@@ -78,4 +80,28 @@ else
 	printf '%-12s %s\n' controles "FALLO: se esperaba \"$pads\" y \"$pad1\" ($VLOG)"
 	fail=1
 fi
+
+# savetest: guardado del cartucho (EEPROM de 4 y 16 Kbit, SRAM de 256 Kbit;
+# tests/roms/src/savetest). Dos arranques por tipo con el mismo directorio
+# de guardado, vacío al empezar: el primero escribe y relee; el segundo
+# además comprueba que persistió lo del primero.
+SDIR=build/saves-test
+rm -rf "$SDIR"
+for t in eeprom4k eeprom16k sram; do
+	for n in 1 2; do
+		SLOG=build/logs/savetest-$t-$n.run.log
+		tools/build.sh --sh "ASAN_OPTIONS=detect_leaks=0 build/host/salsa64-run -c 400000000 \
+			-u 'savetest: OK' -f 'savetest: FALLO' --save-dir $SDIR \
+			tests/roms/homebrew/salsa64-savetest-$t.z64 2>&1" >"$SLOG" 2>&1
+		src=$?
+		line=$(grep 'savetest: ' "$SLOG" | tail -1)
+		printf '%-12s %s\n' savetest "${line:-sin resultado (código $src, $SLOG)}"
+		want="arranque $n ("
+		[ $n -eq 2 ] && want="arranque 2 (persistió el arranque 1;"
+		if [ $src -ne 0 ] || ! echo "$line" | grep -qF "$want"; then
+			echo "             falló: se esperaba \"$want\" (código $src, $SLOG)"
+			fail=1
+		fi
+	done
+done
 exit $fail
