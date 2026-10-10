@@ -38,10 +38,10 @@ Siguiente (Fase 1):
 - [ ] Pendientes del CPU: direccionamiento de 64 bits, bandera Inexact,
       ciclos por instrucción (docs/cpu-vr4300.md).
 
-## 2026-10-10 — Fase 0 en curso
+## 2026-10-10 — Fase 0: completa en RPCS3, falta la PS3 real
 
 Hecho:
-- Imagen `cell64-toolchain:dev` (ver docs/toolchain.md): ps3toolchain (GCC 13.2
+- Imagen `retro64-toolchain:dev` (ver docs/toolchain.md): ps3toolchain (GCC 13.2
   PPU, 9.5 SPU) + PSL1GHT + cgcomp con Cg Toolkit vía qemu. Los 54 shaders de
   la rama `ps3` del port de SM64 compilan; 18/31 samples de PSL1GHT compilan
   (las fallas son de los samples).
@@ -62,6 +62,12 @@ Falta para cerrar la Fase 0:
 - [ ] PS3 real: correr los 4 programas (rsx-triangle, spu-compute, udplog,
       jit-ppe con HEN y, si se puede, CFW). Llenar docs/jit-ppe.md.
 - [ ] Decidir el plan de la Fase 3 según el resultado del JIT.
+- [ ] Antes: conectar la PS3 (está desconectada; revisar su estado). Datos a
+      reunir: IP por cable, versión de firmware, apps de envío instaladas y si
+      hay capturadora. Luego correr la Fase 0 y `retro64-cpu-tests` (primer
+      número de MIPS real).
+- [ ] Opcional: correr Cell64 en la PS3 y guardar su `perf_trace.csv`
+      (docs/referencia-cell64.md).
 
 Nombre: **Retro64** (decidido el 2026-10-10; antes "Cell64", provisional).
 - Ya existe un emulador de N64 para PS3 llamado **Cell64**: v1.52 de
@@ -85,4 +91,9 @@ Nombre: **Retro64** (decidido el 2026-10-10; antes "Cell64", provisional).
 Notas:
 - No usar `-Os` en el PPU: ICE de GCC 13.2 (docs/toolchain.md).
 - En RPCS3, rsx-triangle necesita "Write Color Buffers" para su verificación.
-- Archivos de Cell64 en la PS3: `/dev_hdd0/cell64/` (RPCS3 vacía `/dev_hdd0/tmp`).
+- Archivos de Retro64 en la PS3: `/dev_hdd0/retro64/` (RPCS3 vacía `/dev_hdd0/tmp`).
+- Juegos objetivo: tabla en docs/proyecto.md. Comparación con Cell64 en
+  docs/referencia-cell64.md (no usa SPEs; todo en un hilo del PPE).
+- Ideas sin decidir: versión rápida del intérprete (decodificar una vez,
+  como el "FASTINT" de Cell64) y, como investigación lejana, emular la CPU en
+  un SPE solo si el PPE no alcanza.
