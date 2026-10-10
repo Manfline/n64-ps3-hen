@@ -13,10 +13,11 @@
  * Load Tile, Load TLUT, Set Tile; TMEM) y el comportamiento descrito por
  * GLideN64 (docs/THIRD_PARTY.md). Código propio.
  *
- * Caché: cada carga marca los bloques de 64 bytes que escribe con una
- * identidad (dirección de origen y parámetros). La textura de una tile se
- * identifica por esas marcas y los parámetros de la tile; dentro de una
- * tarea, la misma identidad reutiliza la textura ya decodificada.
+ * Caché: la textura de una tile se identifica por un hash de los bytes de
+ * la TMEM que lee su decodificación (texels y paleta) y de sus parámetros
+ * (texcache.c). La misma identidad reutiliza la textura ya decodificada, en
+ * la misma tarea o en una anterior; una tile que no cambió desde la última
+ * vez (sin cargas ni cambios de tiles) ni siquiera se vuelve a calcular.
  */
 #include <string.h>
 
@@ -25,48 +26,25 @@
 
 #define TMEM_MASK 0xFFFu
 
-static uint32_t mix(uint32_t h, uint32_t v)
+/* Mitad de una palabra de 64 bits de la TMEM (alineada a 8). */
+typedef uint32_t __attribute__((may_alias, aligned(4))) tword;
+
+static inline void swap_halves(uint8_t *tmem, uint32_t addr)
 {
-	h ^= v;
-	h *= 0x01000193u;
-	h ^= h >> 15;
-	return h;
+	tword *q = (tword *)(void *)(tmem + (addr & TMEM_MASK & ~7u));
+	uint32_t a = q[0];
+	q[0] = q[1];
+	q[1] = a;
 }
 
-static void mark(struct gfx_state *g, uint32_t start, uint32_t bytes, uint32_t key)
+/* `bytes` (múltiplo de 8) a la TMEM desde `dst` (alineado a 8); lo que pasa
+ * de los 4 KB sigue desde el principio. */
+static void tmem_copy(uint8_t *tmem, uint32_t dst, const uint8_t *src, uint32_t bytes)
 {
-	if (bytes >= 4096) {
-		for (int i = 0; i < 64; i++)
-			g->tmem_key[i] = key;
-		return;
-	}
-	uint32_t first = (start & TMEM_MASK) >> 6, last = ((start + bytes - 1) & TMEM_MASK) >> 6;
-	for (uint32_t b = first;; b = (b + 1) & 63) {
-		g->tmem_key[b] = key;
-		if (b == last)
-			break;
-	}
-}
-
-static uint32_t load_key(struct gfx_state *g, uint32_t op, uint32_t w0, uint32_t w1)
-{
-	uint32_t h = 0x811C9DC5u;
-	h = mix(h, op);
-	h = mix(h, g->timg_addr);
-	h = mix(h, (uint32_t)g->timg_width << 8 | g->timg_siz);
-	h = mix(h, w0);
-	h = mix(h, w1 & 0x00FFFFFF);
-	return h | 1;  /* 0 = nada cargado */
-}
-
-static void swap_halves(uint8_t *tmem, uint32_t addr)
-{
-	uint8_t *p = tmem + (addr & TMEM_MASK & ~7u);
-	uint32_t a, b;
-	memcpy(&a, p, 4);
-	memcpy(&b, p + 4, 4);
-	memcpy(p, &b, 4);
-	memcpy(p + 4, &a, 4);
+	dst &= TMEM_MASK;
+	uint32_t n = 4096 - dst < bytes ? 4096 - dst : bytes;
+	memcpy(tmem + dst, src, n);
+	memcpy(tmem, src + n, bytes - n);
 }
 
 /* Bytes por texel ×2 (los de 4 bits ocupan medio byte). */
@@ -96,6 +74,9 @@ void gfx_load_block(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	uint32_t bytes = (texels * hb / 2 + 7) & ~7u;
 	if (bytes > 4096)
 		bytes = 4096;
+	g->tex_gen++;
+	g->res->loads++;
+	g->res->load_reads++;
 	const uint8_t *p = gfx_io_read(g, GFX_IO_TEX, src, bytes);
 	if (!p) {
 		g->res->dl_errors++;
@@ -108,22 +89,19 @@ void gfx_load_block(struct gfx_state *g, uint32_t w0, uint32_t w1)
 			put32(g->tmem, (base + 2 * k) ^ x, p + 8 * k);
 			put32(g->tmem, (base + 2 * k + 1) ^ x, p + 8 * k + 4);
 		}
-		mark(g, t->tmem, bytes / 2, load_key(g, 0xF3, w0, w1));
-		mark(g, t->tmem + 0x800, bytes / 2, load_key(g, 0xF3, w0, w1));
 		return;
 	}
-	for (uint32_t k = 0; k < bytes / 8; k++) {
-		uint32_t dst = (t->tmem + 8 * k) & TMEM_MASK;
-		memcpy(g->tmem + dst, p + 8 * k, 8);
-		if (((k * dxt) >> 11) & 1)
-			swap_halves(g->tmem, dst);
-	}
-	mark(g, t->tmem, bytes, load_key(g, 0xF3, w0, w1));
+	tmem_copy(g->tmem, t->tmem, p, bytes);
+	if (dxt)
+		for (uint32_t k = 0; k < bytes / 8; k++)
+			if (((k * dxt) >> 11) & 1)
+				swap_halves(g->tmem, t->tmem + 8 * k);
 }
 
 void gfx_load_tile(struct gfx_state *g, uint32_t w0, uint32_t w1)
 {
 	struct gfx_tile *t = &g->tiles[(w1 >> 24) & 7];
+	g->tex_gen++;
 	t->uls = (w0 >> 12) & 0xFFF;
 	t->ult = w0 & 0xFFF;
 	t->lrs = (w1 >> 12) & 0xFFF;
@@ -134,12 +112,13 @@ void gfx_load_tile(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	uint32_t width = x1 - x0 + 1, rows = y1 - y0 + 1;
 	uint32_t hb = half_bytes(g->timg_siz);
 	uint32_t row_bytes = (width * hb / 2 + 7) & ~7u;
-	uint32_t key = load_key(g, 0xF4, w0, w1);
 	if (row_bytes > 4096)
 		row_bytes = 4096;
+	g->res->loads++;
 
 	for (uint32_t r = 0; r < rows; r++) {
 		uint32_t src = g->timg_addr + (((y0 + r) * g->timg_width + x0) * hb) / 2;
+		g->res->load_reads++;
 		const uint8_t *p = gfx_io_read(g, GFX_IO_TEX, src, row_bytes);
 		if (!p) {
 			g->res->dl_errors++;
@@ -150,18 +129,13 @@ void gfx_load_tile(struct gfx_state *g, uint32_t w0, uint32_t w1)
 			uint32_t x = (r & 1) ? 2 : 0;
 			for (uint32_t j = 0; j < width; j++)
 				put32(g->tmem, (base + j) ^ x, p + 4 * j);
-			mark(g, t->tmem + r * t->line, width * 2, key);
-			mark(g, 0x800 + t->tmem + r * t->line, width * 2, key);
 			continue;
 		}
 		uint32_t dst = t->tmem + r * t->line;
-		for (uint32_t k = 0; k < row_bytes; k += 8) {
-			uint32_t d = (dst + k) & TMEM_MASK;
-			memcpy(g->tmem + d, p + k, 8);
-			if (r & 1)
-				swap_halves(g->tmem, d);
-		}
-		mark(g, dst, row_bytes, key);
+		tmem_copy(g->tmem, dst, p, row_bytes);
+		if (r & 1)
+			for (uint32_t k = 0; k < row_bytes; k += 8)
+				swap_halves(g->tmem, dst + k);
 	}
 }
 
@@ -176,17 +150,22 @@ void gfx_load_tlut(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	if (count > 256)
 		count = 256;
 	uint32_t src = g->timg_addr + (ult * g->timg_width + uls) * 2;
+	g->tex_gen++;
+	g->res->loads++;
+	g->res->load_reads++;
 	const uint8_t *p = gfx_io_read(g, GFX_IO_TEX, src, count * 2);
 	if (!p) {
 		g->res->dl_errors++;
 		return;
 	}
 	for (uint32_t e = 0; e < count; e++) {
-		uint32_t d = 0x800 | ((t->tmem + 8 * e) & 0x7FF);
-		for (int k = 0; k < 4; k++)
-			memcpy(g->tmem + d + 2 * k, p + 2 * e, 2);
+		uint32_t v;
+		memcpy(&v, p + 2 * e, 2);
+		memcpy((uint8_t *)&v + 2, p + 2 * e, 2);
+		tword *q = (tword *)(void *)(g->tmem + (0x800 | ((t->tmem + 8 * e) & 0x7FF)));
+		q[0] = v;
+		q[1] = v;
 	}
-	mark(g, 0x800 | (t->tmem & 0x7FF), count * 8, load_key(g, 0xF0, w0, w1));
 }
 
 void gfx_tile_size(const struct gfx_tile *t, uint32_t *w, uint32_t *h)
@@ -278,35 +257,49 @@ static uint32_t texel(const struct gfx_state *g, const struct gfx_tile *t, uint3
 	}
 }
 
-static uint32_t tile_key(const struct gfx_state *g, const struct gfx_tile *t, uint32_t w, uint32_t h, unsigned tt)
+/* Hash de lo que lee texel() para la tile: las filas de texels (con la
+ * paleta, si se usa) y los parámetros que cambian el resultado. */
+static void tile_key(const struct gfx_state *g, const struct gfx_tile *t, uint32_t w, uint32_t h, unsigned tt,
+		     uint32_t key[2])
 {
-	uint32_t hk = 0x811C9DC5u;
-	hk = mix(hk, (uint32_t)t->fmt << 24 | (uint32_t)t->siz << 16 | t->pal << 8 | tt);
-	hk = mix(hk, (uint32_t)t->line << 16 | t->tmem);
-	hk = mix(hk, w << 16 | h);
-	uint32_t bytes = h * t->line;
-	if (bytes == 0 || bytes > 4096)
-		bytes = 4096;
-	uint32_t first = (t->tmem & TMEM_MASK) >> 6, nblocks = (bytes + 63) / 64 + 1;
-	if (nblocks > 64)
-		nblocks = 64;
-	for (uint32_t i = 0; i < nblocks; i++)
-		hk = mix(hk, g->tmem_key[(first + i) & 63]);
-	if (t->siz == G_IM_SIZ_32b)
-		for (uint32_t i = 0; i < nblocks && i < 32; i++)
-			hk = mix(hk, g->tmem_key[32 + ((first + i) & 31)]);
+	struct gfx_hash hs;
+	gfx_hash_init(&hs);
+	gfx_hash_words(&hs, (uint32_t)t->fmt << 24 | (uint32_t)t->siz << 16 | (uint32_t)t->pal << 8 | tt,
+		       (uint32_t)t->line << 16 | (t->tmem & 15), w << 16 | h, 1 /* versión de la decodificación */);
+	/* texel() lee por fila 8 bytes enteros (la fila impar intercambia
+	 * mitades dentro de cada palabra) y solo 256 filas distintas. */
+	uint32_t row = t->siz == G_IM_SIZ_4b ? (w + 1) / 2 : t->siz == G_IM_SIZ_8b ? w : 2 * w;
+	uint32_t rows = h < 256 ? h : 256;
+	uint32_t len = (rows - 1) * t->line + ((row + 7) & ~7u);
+	if (t->siz == G_IM_SIZ_32b) {
+		/* R y G en la mitad baja, B y A en la alta, en el mismo lugar. */
+		gfx_hash_ring(&hs, g->tmem, 0x800, t->tmem, len);
+		gfx_hash_ring(&hs, g->tmem + 0x800, 0x800, t->tmem, len);
+	} else {
+		gfx_hash_ring(&hs, g->tmem, 4096, t->tmem, len);
+	}
 	if (tt != G_TT_NONE) {
 		/* Paleta: el banco de la tile (4 bits) o toda (8 bits). */
-		uint32_t b0 = t->siz == G_IM_SIZ_4b ? 32 + t->pal * 2 : 32, nb = t->siz == G_IM_SIZ_4b ? 2 : 32;
-		for (uint32_t i = 0; i < nb; i++)
-			hk = mix(hk, g->tmem_key[(b0 + i) & 63]);
+		if (t->siz == G_IM_SIZ_4b)
+			gfx_hash_ring(&hs, g->tmem, 4096, 0x800 + (uint32_t)t->pal * 128, 128);
+		else
+			gfx_hash_ring(&hs, g->tmem, 4096, 0x800, 0x800);
 	}
-	return hk | 1;
+	gfx_hash_final(&hs, key);
 }
 
-bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex)
+static void decode(const struct gfx_state *g, const struct gfx_tile *t, uint32_t w, uint32_t h, uint32_t pitch,
+		   unsigned tt, uint8_t *out)
 {
-	const struct gfx_tile *t = &g->tiles[tile & 7];
+	for (uint32_t y = 0; y < h; y++) {
+		uint8_t *row = out + y * pitch;
+		for (uint32_t x = 0; x < w; x++)
+			salsa64_wr32(row + 4 * x, texel(g, t, x, y, tt));
+	}
+}
+
+static bool resolve(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, struct gfx_tex *tex)
+{
 	uint32_t w, h;
 	gfx_tile_size(t, &w, &h);
 	uint32_t pitch = (w * 4 + 63) & ~63u;
@@ -314,44 +307,89 @@ bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex)
 		h = GFX_TEX_MAX / pitch;
 	if (h == 0)
 		return false;
+	uint32_t t0 = gfx_io_clock();
+	uint32_t key[2];
+	tile_key(g, t, w, h, tt, key);
+	memset(tex, 0, sizeof *tex);
+	tex->width = (uint16_t)w;
+	tex->height = (uint16_t)h;
+	tex->pitch = (uint16_t)pitch;
+	tex->key = key[0];
+
+	/* Ya decodificada: en el arena de esta tarea o en la caché. */
+	const struct gfx_tc_entry *found = NULL;
+	bool old = false;
+	for (uint32_t i = 0; i < g->narena_tex; i++)
+		if (g->arena_tex[i].key[0] == key[0] && g->arena_tex[i].key[1] == key[1]) {
+			*tex = g->arena_tex[i].tex;
+			g->res->tex_reused++;
+			g->res->t_hash += gfx_io_clock() - t0;
+			return true;
+		}
+	if (g->tc_on)
+		found = gfx_tc_find(g, key, &old);
+	g->res->t_hash += gfx_io_clock() - t0;
+	if (found) {
+		tex->where = GFX_TEX_CACHE;
+		tex->offset = found->off;
+		g->res->tex_reused++;
+		g->res->tex_old += old;
+		return true;
+	}
+
+	uint32_t size = pitch * h;
+	uint8_t *out = gfx_io_tex_begin(g, size);
+	if (!out)
+		return false;
+	t0 = gfx_io_clock();
+	decode(g, t, w, h, pitch, tt, out);
+	struct gfx_tc_entry *e = g->tc_on ? gfx_tc_insert(g, key, size) : NULL;
+	if (e) {
+		e->width = (uint16_t)w;
+		e->height = (uint16_t)h;
+		e->pitch = (uint16_t)pitch;
+		gfx_io_tex_cache(g, e->off, size);
+		tex->where = GFX_TEX_CACHE;
+		tex->offset = e->off;
+	} else {
+		int32_t off = gfx_io_tex_commit(g, size);
+		if (off < 0) {
+			g->res->t_tex += gfx_io_clock() - t0;
+			return false;
+		}
+		tex->where = GFX_TEX_ARENA;
+		tex->offset = (uint32_t)off;
+		g->res->tex_arena += g->tc_on;
+		if (g->narena_tex < GFX_TEX_ARENA) {
+			g->arena_tex[g->narena_tex].key[0] = key[0];
+			g->arena_tex[g->narena_tex].key[1] = key[1];
+			g->arena_tex[g->narena_tex].tex = *tex;
+			g->narena_tex++;
+		}
+	}
+	g->res->t_tex += gfx_io_clock() - t0;
+	g->res->textures++;
+	return true;
+}
+
+bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex)
+{
+	const struct gfx_tile *t = &g->tiles[tile & 7];
 	/* La paleta se usa con texturas de 4 y 8 bits si el othermode la activa. */
 	unsigned tt = (g->oh >> G_MDSFT_TEXTLUT) & 3;
 	if (t->siz > G_IM_SIZ_8b || tt < G_TT_RGBA16)
 		tt = G_TT_NONE;
-	uint32_t key = tile_key(g, t, w, h, tt);
-
-	for (uint32_t i = 0; i < g->ntexcache; i++)
-		if (g->texcache[i].key == key) {
-			*tex = g->texcache[i].tex;
-			g->res->tex_reused++;
-			return true;
-		}
-
-	uint32_t size = pitch * h;
-	uint32_t t0 = gfx_io_clock();
-	uint8_t *out = gfx_io_tex_begin(g, size);
-	if (!out)
-		return false;
-	for (uint32_t y = 0; y < h; y++) {
-		uint8_t *row = out + y * pitch;
-		for (uint32_t x = 0; x < w; x++)
-			salsa64_wr32(row + 4 * x, texel(g, t, x, y, tt));
+	struct gfx_tilememo *m = &g->tilememo[tile & 7];
+	if (m->ok && m->gen == g->tex_gen && m->tt == tt) {
+		*tex = m->tex;
+		g->res->tex_reused++;
+		return true;
 	}
-	int32_t off = gfx_io_tex_commit(g, size);
-	g->res->t_tex += gfx_io_clock() - t0;
-	if (off < 0)
+	if (!resolve(g, t, tt, tex))
 		return false;
-	memset(tex, 0, sizeof *tex);
-	tex->offset = (uint32_t)off;
-	tex->width = (uint16_t)w;
-	tex->height = (uint16_t)h;
-	tex->pitch = (uint16_t)pitch;
-	tex->key = key;
-	g->res->textures++;
-	if (g->ntexcache < GFX_TEX_CACHE) {
-		g->texcache[g->ntexcache].key = key;
-		g->texcache[g->ntexcache].tex = *tex;
-		g->ntexcache++;
-	}
+	m->ok = 1;
+	m->gen = g->tex_gen;
+	m->tt = (uint8_t)tt;
+	m->tex = *tex;
 	return true;
 }
