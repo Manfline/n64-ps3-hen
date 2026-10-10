@@ -170,8 +170,11 @@ void gfx_dl_f3dex2(struct gfx_state *g)
 			do_movemem(g, w0, w1);
 			break;
 		case G_LOAD_UCODE:
-			res->flags |= GFX_RES_LOAD_UCODE;
-			return;
+			/* Otro microcódigo: se salta su tramo (dl.c); el mismo, nada. */
+			if (!(g->job->ucode && gfx_addr(g, w1) == g->job->ucode) &&
+			    !gfx_dl_skip_foreign(g, G_LOAD_UCODE, G_DL, G_ENDDL))
+				return;
+			break;
 		case G_DL:
 			if (!gfx_dl_call(g, w1, (w0 >> 16) & 1))
 				return;

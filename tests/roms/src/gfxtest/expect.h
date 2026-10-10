@@ -31,6 +31,10 @@
 /* Cuadro en que el CPU cambia una textura y una paleta en la RDRAM (la
  * caché de texturas debe notarlo). */
 #define GFXTEST_CHANGE_FRAME 60
+/* Cuadro cuya lista termina dentro del tramo de otro microcódigo (sin
+ * volver ni llegar al G_RDPFULLSYNC): la interrupción del DP debe llegar
+ * igual. */
+#define GFXTEST_CUT_FRAME 7
 
 struct gfxtest_point {
 	unsigned short x, y;

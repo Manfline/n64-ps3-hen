@@ -39,6 +39,7 @@ struct salsa64_gfx_spu {
 	uint64_t textures, tex_reused, loads, load_reads;
 	/* Caché de texturas (gfx_result). */
 	uint64_t tex_old, tex_arena, tex_evicted, t_hash;
+	uint64_t skipped;    /* comandos de otro microcódigo saltados (G_LOAD_UCODE) */
 };
 
 /* Arranca el trabajador (spukit_init ya llamado). Devuelve 0 o el error de

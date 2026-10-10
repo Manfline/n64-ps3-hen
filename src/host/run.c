@@ -37,6 +37,15 @@
  * ROM audiotest (tests/roms/src/audiotest/tone.h) y exige que no haya
  * huecos entre los DMA del AI.
  *
+ * Controles programados (--pad): "CAMPO:BOTONES[@X,Y];…" (o separados por
+ * ',') pone el control 1 al empezar ese campo del VI (A, B, Z, START,
+ * DU/DD/DL/DR, L, R, CU/CD/CL/CR unidos con +; el stick como @X,Y o
+ * x<n>/y<n>; "-" suelta todo) y el estado vale hasta la entrada siguiente.
+ * Sirve para llegar a una escena sin manos (menús de un juego) y es
+ * determinista: con --lockstep la referencia recibe lo mismo en el mismo
+ * ciclo. --trace-from CAMPO retrasa las trazas (--trace-exc,
+ * --trace-faults, --trace-rsp, --trace-gfx) hasta ese campo.
+ *
  * Códigos de salida:
  *   0  apareció el texto de --until-text, o se agotaron los ciclos sin pedirlo
  *   1  apareció alguno de los textos de --fail-text
@@ -69,6 +78,7 @@
 #define DEFAULT_SLICE  (1ull << 20)
 #define MAX_TEXT       255
 #define MAX_FAIL_TEXTS 4
+#define MAX_PADS       512
 
 enum stop_reason {
 	STOP_NONE,
@@ -96,6 +106,153 @@ static struct {
 
 static struct salsa64_save save, ref_save;
 static struct savefile save_file;
+
+/* --pad: el control 1 por campo del VI. `applied` guarda en qué ciclo se
+ * aplicó cada cambio para que la referencia de --lockstep reciba lo mismo
+ * en el mismo ciclo. */
+static struct {
+	struct { uint32_t field; struct salsa64_pad pad; } at[MAX_PADS];
+	unsigned n, next;
+	struct { uint64_t cycle; struct salsa64_pad pad; } applied[MAX_PADS * 2];
+	unsigned napplied, ref_next;
+} pads;
+
+static uint32_t trace_from;        /* --trace-from: campo desde el que se traza */
+static bool trace_exc_faults_only; /* --trace-faults: sin interrupciones */
+
+static bool tracing(void)
+{
+	return n64.bus.vi.fields >= trace_from;
+}
+
+static bool pad_button(const char *s, size_t n, uint16_t *bit)
+{
+	static const struct { const char *name; uint16_t bit; } names[] = {
+		{ "A", SALSA64_PAD_A }, { "B", SALSA64_PAD_B }, { "Z", SALSA64_PAD_Z },
+		{ "START", SALSA64_PAD_START }, { "DU", SALSA64_PAD_D_UP }, { "DD", SALSA64_PAD_D_DOWN },
+		{ "DL", SALSA64_PAD_D_LEFT }, { "DR", SALSA64_PAD_D_RIGHT }, { "L", SALSA64_PAD_L },
+		{ "R", SALSA64_PAD_R }, { "CU", SALSA64_PAD_C_UP }, { "CD", SALSA64_PAD_C_DOWN },
+		{ "CL", SALSA64_PAD_C_LEFT }, { "CR", SALSA64_PAD_C_RIGHT },
+	};
+	for (unsigned i = 0; i < sizeof names / sizeof names[0]; i++)
+		if (strlen(names[i].name) == n && !strncmp(s, names[i].name, n)) {
+			*bit = names[i].bit;
+			return true;
+		}
+	return false;
+}
+
+/* "CAMPO:BOTONES[@X,Y];…" (o separados por ','): botones unidos con +,
+ * '-' suelta todo, el stick como @X,Y o x<n>/y<n>. Cada estado vale hasta
+ * el siguiente. */
+static bool pad_parse(const char *spec)
+{
+	char sep = strchr(spec, ';') ? ';' : ',';
+	while (*spec) {
+		if (pads.n == MAX_PADS)
+			return false;
+		char *end;
+		unsigned long field = strtoul(spec, &end, 0);
+		if (end == spec || *end != ':' || (pads.n && field <= pads.at[pads.n - 1].field))
+			return false;
+		struct salsa64_pad pad = { 0, 0, 0, 1 };
+		const char *p = end + 1;
+		while (*p && *p != sep) {
+			if (*p == '@') {
+				long x = strtol(p + 1, &end, 10);
+				if (*end != ',')
+					return false;
+				long y = strtol(end + 1, &end, 10);
+				if (x < -128 || x > 127 || y < -128 || y > 127)
+					return false;
+				pad.x = (int8_t)x, pad.y = (int8_t)y;
+				p = end;
+				continue;
+			}
+			const char *q = p;
+			while (*q && *q != sep && *q != '+' && *q != '@')
+				q++;
+			size_t n = (size_t)(q - p);
+			uint16_t bit;
+			if (n == 1 && *p == '-') {
+				/* suelta todo */
+			} else if (n > 1 && (*p == 'x' || *p == 'y')) {
+				long v = strtol(p + 1, &end, 10);
+				if (end != q || v < -128 || v > 127)
+					return false;
+				*(*p == 'x' ? &pad.x : &pad.y) = (int8_t)v;
+			} else if (n && pad_button(p, n, &bit)) {
+				pad.buttons |= bit;
+			} else if (n) {
+				return false;
+			}
+			p = *q == '+' ? q + 1 : q;
+		}
+		pads.at[pads.n].field = (uint32_t)field;
+		pads.at[pads.n].pad = pad;
+		pads.n++;
+		spec = *p == sep ? p + 1 : p;
+	}
+	return pads.n > 0;
+}
+
+static void pad_apply(struct salsa64_n64 *m, const struct salsa64_pad *pad)
+{
+	salsa64_pif_set_pad(&m->bus, 0, pad);
+}
+
+/* Al empezar cada campo (la máquina parada justo en el fin del anterior). */
+static void pad_field(void)
+{
+	uint32_t field = n64.bus.vi.fields;
+	const struct salsa64_pad *pad = NULL;
+	while (pads.next < pads.n && field >= pads.at[pads.next].field)
+		pad = &pads.at[pads.next++].pad;
+	if (!pad)
+		return;
+	pad_apply(&n64, pad);
+	if (pads.napplied < sizeof pads.applied / sizeof pads.applied[0]) {
+		pads.applied[pads.napplied].cycle = n64.cpu.cycles;
+		pads.applied[pads.napplied].pad = *pad;
+		pads.napplied++;
+	}
+	if (tracing())
+		fprintf(stderr, "campo %u (ciclo %llu): control 1 botones 0x%04x x %d y %d\n", field,
+			(unsigned long long)n64.cpu.cycles, pad->buttons, pad->x, pad->y);
+}
+
+/* Al terminar cada campo (modo campo por campo): controles programados y,
+ * con --gfx-frame-every, la imagen de la HLE en ARCHIVO-<campo>.ppm (sin la
+ * extensión de ARCHIVO) desde --trace-from. */
+static bool gfx_dump(const char *path);
+
+static void field_done(const char *gfx_path, uint32_t frame_every)
+{
+	pad_field();
+	if (frame_every && gfx_path && tracing() && n64.bus.vi.fields % frame_every == 0) {
+		char name[512];
+		size_t len = strlen(gfx_path);
+		if (len > 4 && !strcmp(gfx_path + len - 4, ".ppm"))
+			len -= 4;
+		snprintf(name, sizeof name, "%.*s-%u.ppm", (int)len, gfx_path, n64.bus.vi.fields);
+		gfx_dump(name);
+	}
+}
+
+/* La referencia de --lockstep hasta `to`, aplicando los controles en el
+ * ciclo en que los recibió la máquina principal. */
+static void ref_run_to(uint64_t to)
+{
+	while (pads.ref_next < pads.napplied && pads.applied[pads.ref_next].cycle <= to) {
+		uint64_t at = pads.applied[pads.ref_next].cycle;
+		if (ref.cpu.cycles < at)
+			salsa64_n64_run(&ref, at - ref.cpu.cycles);
+		pad_apply(&ref, &pads.applied[pads.ref_next].pad);
+		pads.ref_next++;
+	}
+	if (ref.cpu.cycles < to)
+		salsa64_n64_run(&ref, to - ref.cpu.cycles);
+}
 
 /* Audio: HLE y lo que sale por el AI (16 bits estéreo, orden de la N64). */
 #define AUDIO_MAX (16u << 20)
@@ -185,9 +342,10 @@ static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_resu
 		s->last_unknown = res->last_unknown;
 	s->approx_cc += res->approx_cc;
 	s->dl_errors += res->dl_errors;
+	s->skipped += res->skipped;
 	if (gfx.raster)
 		raster_task(job, res);
-	if (trace_gfx_left && n64.bus.vi.fields > 500) {
+	if (trace_gfx_left && n64.bus.vi.fields > (trace_from ? trace_from : 500)) {
 		trace_gfx_left--;
 		fprintf(stderr, "tarea gfx (campo %u):", n64.bus.vi.fields);
 		uint32_t off = 0;
@@ -247,7 +405,22 @@ void salsa64_debug_spmem(uint32_t reg, uint32_t v)
 }
 #endif
 
-static unsigned trace_rsp_left, trace_vi_left;
+static unsigned trace_rsp_left, trace_vi_left, trace_audio_left;
+
+/* --trace-audio: los opcodes de la lista de audio de una tarea (8 bytes por
+ * comando), para comparar lo que el juego pide en escenas distintas. */
+static void trace_alist(const struct salsa64_task *t)
+{
+	uint32_t a = t->data_ptr & 0x7FFFFF, n = t->data_size / 8;
+	fprintf(stderr, "alist (campo %u, %u comandos):", n64.bus.vi.fields, n);
+	for (uint32_t i = 0; i < n && a + 8 * i + 8 <= n64.bus.rdram_size; i++) {
+		uint32_t w0 = salsa64_rd32(n64.bus.rdram + a + 8 * i), w1 = salsa64_rd32(n64.bus.rdram + a + 8 * i + 4);
+		fprintf(stderr, " %02x", w0 >> 24);
+		if (getenv("SALSA64_ALIST_VERBOSE"))
+			fprintf(stderr, ":%06x:%08x", w0 & 0xFFFFFF, w1);
+	}
+	fprintf(stderr, "\n");
+}
 
 /* Muestreo del PC al final de cada bloque del bucle principal, por segmento:
  * cuánto del tiempo corre código mapeado por la TLB (kuseg, kseg2/3). */
@@ -260,76 +433,14 @@ static void pc_sample(uint64_t pc)
 	pc_samples[top == 4 ? SEG_KSEG0 : top == 5 ? SEG_KSEG1 : SEG_TLB]++;
 }
 
-/* --pad: botones del control 1 desde un campo dado (para llegar a una
- * escena de juego sin manos). */
-#define PAD_EVENTS 64
-static struct {
-	uint32_t field;
-	struct salsa64_pad pad;
-} pad_ev[PAD_EVENTS];
-static unsigned pad_n, pad_next;
-
-/* "CAMPO:BOTONES[@X,Y];…" con BOTONES unidos por '+' (A B Z START L R DU DD
- * DL DR CU CD CL CR) o '-' para ninguno. */
-static bool parse_pad(const char *s)
-{
-	static const struct {
-		const char *name;
-		uint16_t bit;
-	} names[] = {
-		{ "A", SALSA64_PAD_A }, { "B", SALSA64_PAD_B }, { "Z", SALSA64_PAD_Z },
-		{ "START", SALSA64_PAD_START }, { "L", SALSA64_PAD_L }, { "R", SALSA64_PAD_R },
-		{ "DU", SALSA64_PAD_D_UP }, { "DD", SALSA64_PAD_D_DOWN }, { "DL", SALSA64_PAD_D_LEFT },
-		{ "DR", SALSA64_PAD_D_RIGHT }, { "CU", SALSA64_PAD_C_UP }, { "CD", SALSA64_PAD_C_DOWN },
-		{ "CL", SALSA64_PAD_C_LEFT }, { "CR", SALSA64_PAD_C_RIGHT },
-	};
-	while (*s) {
-		if (pad_n >= PAD_EVENTS)
-			return false;
-		char *end;
-		unsigned long field = strtoul(s, &end, 0);
-		if (*end != ':')
-			return false;
-		s = end + 1;
-		struct salsa64_pad pad = { 0, 0, 0, 1 };
-		while (*s && *s != ';' && *s != '@') {
-			size_t n = strcspn(s, "+;@");
-			bool ok = n == 1 && *s == '-';
-			for (size_t i = 0; !ok && i < sizeof names / sizeof names[0]; i++)
-				if (strlen(names[i].name) == n && !strncmp(s, names[i].name, n)) {
-					pad.buttons |= names[i].bit;
-					ok = true;
-				}
-			if (!ok)
-				return false;
-			s += n;
-			if (*s == '+')
-				s++;
-		}
-		if (*s == '@') {
-			long x = strtol(s + 1, &end, 0);
-			if (*end != ',')
-				return false;
-			long y = strtol(end + 1, &end, 0);
-			pad.x = (int8_t)x;
-			pad.y = (int8_t)y;
-			s = end;
-		}
-		pad_ev[pad_n].field = (uint32_t)field;
-		pad_ev[pad_n].pad = pad;
-		pad_n++;
-		if (*s == ';')
-			s++;
-		else if (*s)
-			return false;
-	}
-	return true;
-}
-
 static void trace_rsp(void *ctx, const struct salsa64_task *t, enum salsa64_gbi gbi)
 {
 	(void)ctx;
-	if (!trace_rsp_left)
+	if (trace_audio_left && t->type == SALSA64_TASK_AUDIO && tracing()) {
+		trace_audio_left--;
+		trace_alist(t);
+	}
+	if (!trace_rsp_left || !tracing())
 		return;
 	trace_rsp_left--;
 	fprintf(stderr, "RSP en ciclo %llu: type=%u flags=%x ucode=%08x/%x data=%08x/%x data_ptr=%08x/%x "
@@ -380,11 +491,13 @@ static void gfx_summary(void)
 	fprintf(stderr, "salsa64-run: gfx: %u tareas (%u otras, %u con microcódigo desconocido); por tarea "
 		"%.0f comandos, %.0f triángulos, %.0f rectángulos, %.0f dibujos, %.1f cargas a la TMEM, %.1f texturas "
 		"decodificadas (+%.1f reusadas, %.1f de tareas anteriores; %.1f al arena, %.1f desalojadas); "
-		"%u comandos sin implementar (último 0x%02X), %u combiners aproximados, %u errores, banderas 0x%02X\n",
+		"%u comandos sin implementar (último 0x%02X), %u de otro microcódigo saltados, %u combiners "
+		"aproximados, %u errores, %u tareas cortadas, banderas 0x%02X\n",
 		gfx.tasks, n64.bus.rsp.stats.other + n64.bus.rsp.stats.audio, n64.bus.rsp.stats.unknown_gbi,
 		s->commands / n, s->triangles / n, s->rects / n, s->draws / n, s->loads / n, s->textures / n,
 		s->tex_reused / n, s->tex_old / n, s->tex_arena / n, s->tex_evicted / n,
-		s->unknown_cmds, s->last_unknown, s->approx_cc, s->dl_errors, s->flags);
+		s->unknown_cmds, s->last_unknown, s->skipped, s->approx_cc, s->dl_errors, n64.bus.rsp.stats.cut,
+		s->flags);
 }
 
 static void audio_summary(void)
@@ -667,8 +780,7 @@ static void lockstep_check(struct salsa64_rec *r, uint64_t block_pc, void *ctx)
 	 * llega; el despachador del recompilador lo haría en su próxima vuelta. */
 	if (a->cycles >= n64.sched.next)
 		salsa64_sched_dispatch(&n64.sched, a->cycles);
-	if (b->cycles < a->cycles)
-		salsa64_n64_run(&ref, a->cycles - b->cycles);
+	ref_run_to(a->cycles);
 
 	bool bad = false;
 	char name[16];
@@ -750,7 +862,7 @@ static uint64_t trace_exc_left;
 
 static void trace_exc(struct salsa64_cpu *cpu)
 {
-	if (!trace_exc_left)
+	if (!trace_exc_left || !tracing() || (trace_exc_faults_only && SALSA64_CAUSE_EXC(cpu->cause) == 0))
 		return;
 	trace_exc_left--;
 	fprintf(stderr, "excepción %2u en ciclo %llu: pc=%016llx [%08x] epc=%016llx bd=%u badvaddr=%016llx status=%08x\n",
@@ -859,7 +971,8 @@ static bool dump_frame(const char *path)
 }
 
 /* Opciones largas sin letra (códigos fuera de ASCII). */
-enum { OPT_REC = 0x100, OPT_LOCKSTEP, OPT_PAD };
+enum { OPT_REC = 0x100, OPT_LOCKSTEP, OPT_PAD, OPT_TRACE_FROM, OPT_TRACE_FAULTS, OPT_RAM_DUMP, OPT_TRACE_AUDIO,
+       OPT_FRAME_EVERY };
 
 static void usage(FILE *out)
 {
@@ -873,7 +986,12 @@ static void usage(FILE *out)
 	      "  -q, --quiet           no copiar la salida del ISViewer a stdout\n"
 	      "  -r, --regs            volcar los registros del CPU al terminar\n"
 	      "      --trace-exc N     mostrar las primeras N excepciones del CPU\n"
+	      "      --trace-faults N  igual, sin las interrupciones\n"
+	      "      --trace-from C    trazar solo desde el campo C del VI\n"
+	      "      --pad GUION       control 1 por campos: \"300:START;306:-;400:A+Z@0,80\"\n"
+	      "                        (también CAMPO:BOTONES,… con x80/y-50); vale hasta el siguiente\n"
 	      "      --frame ARCHIVO   al terminar, guardar en PPM la imagen del VI\n"
+	      "      --ram-dump ARCHIVO  al terminar, volcar la RDRAM (tools/libultra-threads.py)\n"
 	      "      --rec             usar el recompilador (host ppc64 big-endian)\n"
 	      "      --lockstep[=N]    con --rec, comparar contra el intérprete después de cada\n"
 	      "                        bloque, y la RDRAM en cada campo del VI y cada N bloques\n"
@@ -882,10 +1000,11 @@ static void usage(FILE *out)
 	      "      --save TIPO       tipo de guardado: ninguno, eeprom4k, eeprom16k, sram256k\n"
 	      "      --save-dir DIR    leer y escribir el guardado del cartucho en DIR\n"
 	      "      --gfx-frame ARCHIVO  al terminar, guardar en PPM lo que dibujó la HLE gráfica\n"
+	      "      --gfx-frame-every N  con --pad, además cada N campos desde --trace-from (ARCHIVO-<campo>.ppm)\n"
 	      "      --gfxtest-check   verificar la imagen de la HLE con los puntos de gfxtest\n"
 	      "      --trace-rsp N     mostrar las primeras N tareas del RSP\n"
+	      "      --trace-audio N   opcodes de la lista de audio de las primeras N tareas de audio\n"
 	      "      --trace-vi N      mostrar la imagen del VI en los últimos N campos\n"
-	      "      --pad GUION       control 1 por campos: \"300:START;306:-;400:A+Z@0,80\"\n"
 	      "      --audio-wav ARCHIVO  al terminar, guardar en WAV lo que salió por el AI\n"
 	      "      --audiotest-check comparar lo que salió por el AI con el tono de audiotest\n"
 	      "      --raster-dump F   dibujar un volcado de la HLE de la PS3 (gfxdump.bin) en\n"
@@ -907,6 +1026,12 @@ int main(int argc, char **argv)
 		{ "frame", required_argument, NULL, 'F' },
 		{ "rec", no_argument, NULL, OPT_REC },
 		{ "lockstep", optional_argument, NULL, OPT_LOCKSTEP },
+		{ "pad", required_argument, NULL, OPT_PAD },
+		{ "trace-from", required_argument, NULL, OPT_TRACE_FROM },
+		{ "trace-faults", required_argument, NULL, OPT_TRACE_FAULTS },
+		{ "ram-dump", required_argument, NULL, OPT_RAM_DUMP },
+		{ "trace-audio", required_argument, NULL, OPT_TRACE_AUDIO },
+		{ "gfx-frame-every", required_argument, NULL, OPT_FRAME_EVERY },
 		{ "no-idle", no_argument, NULL, 'I' },
 		{ "save", required_argument, NULL, 'E' },
 		{ "save-dir", required_argument, NULL, 'W' },
@@ -914,7 +1039,6 @@ int main(int argc, char **argv)
 		{ "gfxtest-check", no_argument, NULL, 'K' },
 		{ "trace-rsp", required_argument, NULL, 'P' },
 		{ "trace-vi", required_argument, NULL, 'V' },
-		{ "pad", required_argument, NULL, OPT_PAD },
 		{ "trace-gfx", required_argument, NULL, 'Q' },
 		{ "raster-dump", required_argument, NULL, 'D' },
 		{ "audio-wav", required_argument, NULL, 'A' },
@@ -929,7 +1053,8 @@ int main(int argc, char **argv)
 	const char *frame_path = NULL, *gfx_path = NULL, *save_dir = NULL;
 	bool gfx_check = false, audio_check = false;
 	const char *wav_path = NULL;
-	const char *dump_path = NULL;
+	const char *dump_path = NULL, *ram_path = NULL;
+	uint32_t frame_every = 0;
 
 	while ((c = getopt_long(argc, argv, "c:u:f:qrh", opts, NULL)) != -1) {
 		switch (c) {
@@ -955,6 +1080,17 @@ int main(int argc, char **argv)
 				lock.ram_every = 1;
 			break;
 		case 'I': idle = false; break;
+		case OPT_PAD:
+			if (!pad_parse(optarg)) {
+				fprintf(stderr, "salsa64-run: --pad: no se entiende \"%s\"\n", optarg);
+				return 3;
+			}
+			break;
+		case OPT_TRACE_FROM: trace_from = (uint32_t)strtoul(optarg, NULL, 0); break;
+		case OPT_TRACE_FAULTS: trace_exc_left = strtoull(optarg, NULL, 0); trace_exc_faults_only = true; break;
+		case OPT_RAM_DUMP: ram_path = optarg; break;
+		case OPT_TRACE_AUDIO: trace_audio_left = (unsigned)strtoul(optarg, NULL, 0); break;
+		case OPT_FRAME_EVERY: frame_every = (uint32_t)strtoul(optarg, NULL, 0); break;
 		case 'W': save_dir = optarg; break;
 		case 'E':
 			for (int t = 0; t < SALSA64_SAVE_NTYPES; t++)
@@ -969,12 +1105,6 @@ int main(int argc, char **argv)
 		case 'K': gfx_check = true; gfx.raster = true; break;
 		case 'P': trace_rsp_left = (unsigned)strtoul(optarg, NULL, 0); break;
 		case 'V': trace_vi_left = (unsigned)strtoul(optarg, NULL, 0); break;
-		case OPT_PAD:
-			if (!parse_pad(optarg)) {
-				fprintf(stderr, "salsa64-run: --pad no se entiende: %s\n", optarg);
-				return 3;
-			}
-			break;
 		case 'D': dump_path = optarg; break;
 		case 'A': wav_path = optarg; break;
 		case 'Z': audio_check = true; break;
@@ -1086,21 +1216,20 @@ int main(int argc, char **argv)
 			reason = STOP_CYCLES;
 			break;
 		}
-		while (pad_next < pad_n && pad_ev[pad_next].field <= n64.bus.vi.fields) {
-			salsa64_pif_set_pad(&n64.bus, 0, &pad_ev[pad_next].pad);
-			pad_next++;
-		}
-		if (pad_next < pad_n) {
-			/* Hasta el último evento del control: de a un campo. */
-			salsa64_n64_run_field(&n64);
-		} else if (trace_vi_left && max_cycles - done < (uint64_t)trace_vi_left * 1600000u) {
+		if (trace_vi_left && max_cycles - done < (uint64_t)trace_vi_left * 1600000u) {
 			/* Últimos campos: de a uno, con la imagen que describe el VI. */
 			salsa64_n64_run_field(&n64);
+			field_done(gfx_path, frame_every);
 			struct salsa64_vi_frame f;
 			if (salsa64_vi_frame(&n64.bus, &f))
 				fprintf(stderr, "campo %u: origen %06x %ux%u stride %u bpp %u (V_VIDEO %08x Y_SCALE %08x)\n",
 					n64.bus.vi.fields, f.origin, f.width, f.height, f.stride, f.bpp,
 					n64.bus.vi.regs[SALSA64_VI_V_VIDEO], n64.bus.vi.regs[SALSA64_VI_Y_SCALE]);
+		} else if (pads.n) {
+			/* Con controles programados, campo por campo: el control cambia
+			 * justo al empezar uno. */
+			salsa64_n64_run_field(&n64);
+			field_done(gfx_path, frame_every);
 		} else {
 			salsa64_n64_run(&n64, max_cycles - done < slice ? max_cycles - done : slice);
 		}
@@ -1148,6 +1277,14 @@ int main(int argc, char **argv)
 	savefile_close(&save_file);
 	if (regs)
 		dump_regs();
+	if (ram_path) {
+		FILE *f = fopen(ram_path, "wb");
+		if (!f || fwrite(rdram, 1, n64.bus.rdram_size, f) != n64.bus.rdram_size || fclose(f) != 0) {
+			fprintf(stderr, "salsa64-run: no se pudo escribir %s\n", ram_path);
+			return 3;
+		}
+		fprintf(stderr, "salsa64-run: RDRAM (%u MB) en %s\n", n64.bus.rdram_size >> 20, ram_path);
+	}
 	if (gfx.tasks || n64.bus.rsp.stats.unknown_gbi)
 		gfx_summary();
 	if (n64.bus.rsp.stats.audio || audio.dmas)

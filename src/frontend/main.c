@@ -871,7 +871,8 @@ static void stats(uint64_t now, int gfx_on_spu, const struct salsa64_boot_info *
 	static uint64_t t_stats, us_emu0, us_copy0, us_pace0, cyc0, idle0;
 	static uint32_t fields0;
 	static struct salsa64_rdp_stats rdp0;
-	static uint32_t gfx_waits0, gfx_polls0;
+	static uint32_t gfx_waits0, gfx_polls0, gfx_cut0;
+	static uint64_t gfx_skipped0;
 	static uint64_t gfx_ticks0, gfx_wait0, gfx_sleep0, gfx_vtx0, gfx_state0, gfx_tex0, gfx_load0;
 
 	if (!t_stats) {
@@ -917,12 +918,14 @@ static void stats(uint64_t now, int gfx_on_spu, const struct salsa64_boot_info *
 		salsa64_log("gfx: %u tareas (%.1f/s); por tarea: %.0f dibujos, %.0f triángulos, HLE en el "
 			    "SPE %.2f ms, emulación esperando al SPE %.2f ms (%u esperas), %.1f sondeos y %.2f ms "
 			    "dormida en bucles de espera, traducción al RSX %.2f ms; %u destinos creados, %u esperas "
-			    "por un juego de búferes (%.2f ms)",
+			    "por un juego de búferes (%.2f ms); %u tareas cortadas, %u comandos de otro microcódigo "
+			    "saltados",
 			    tasks, tasks * 1e6 / dt, (double)(rs.draws - rdp0.draws) / tasks,
 			    (double)(rs.triangles - rdp0.triangles) / tasks, spu_ms, wait_ms, waits,
 			    (double)polls / tasks, sleep_ms, (rs.us_translate - rdp0.us_translate) / 1e3 / tasks,
 			    rs.targets_created - rdp0.targets_created, rs.set_waits - rdp0.set_waits,
-			    (rs.us_set_wait - rdp0.us_set_wait) / 1e3);
+			    (rs.us_set_wait - rdp0.us_set_wait) / 1e3, n64.bus.rsp.stats.cut - gfx_cut0,
+			    (unsigned)(gfx_spu.skipped - gfx_skipped0));
 		if (gfx_on_spu) {
 			double k = 1e3 / spukit_tick_hz() / tasks;
 			salsa64_log("gfx en el SPE por tarea: vértices %.2f ms, estado %.2f ms (texturas %.2f ms), "
@@ -952,6 +955,8 @@ static void stats(uint64_t now, int gfx_on_spu, const struct salsa64_boot_info *
 	gfx_waits0 = gfx_spu.waits;
 	gfx_polls0 = gfx_spu.polls;
 	gfx_sleep0 = gfx_spu.sleep_us;
+	gfx_cut0 = n64.bus.rsp.stats.cut;
+	gfx_skipped0 = gfx_spu.skipped;
 	t_stats = now;
 	fields0 = emu_stats.fields;
 	us_emu0 = emu_stats.us_emu;
