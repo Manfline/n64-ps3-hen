@@ -44,32 +44,37 @@ static void rsp_break(struct salsa64_bus *bus, uint32_t signals)
 		salsa64_mi_raise(bus, SALSA64_IRQ_SP);
 }
 
-/* Backend de la tarea en curso (el gráfico; el de audio irá aquí). */
-static const struct salsa64_gfx_backend *task_backend(const struct salsa64_rsp *rsp)
+/* ¿Terminó ya la tarea en curso? Los backends que lo saben decir sin
+ * bloquear (`done`) se sondean; los demás se esperan en `finish`. */
+static bool task_done(struct salsa64_bus *bus, bool idle)
 {
-	return rsp->busy == SALSA64_TASK_GFX ? rsp->gfx : NULL;
+	const struct salsa64_rsp *rsp = &bus->rsp;
+	if (rsp->busy == SALSA64_TASK_GFX && rsp->gfx && rsp->gfx->done)
+		return rsp->gfx->done(rsp->gfx->ctx, idle);
+	if (rsp->busy == SALSA64_TASK_AUDIO && rsp->audio && rsp->audio->done)
+		return rsp->audio->done(rsp->audio->ctx, idle);
+	return true;
 }
 
 static void task_event(void *ctx, uint64_t when)
 {
 	struct salsa64_bus *bus = ctx;
 	struct salsa64_rsp *rsp = &bus->rsp;
-	const struct salsa64_gfx_backend *be = task_backend(rsp);
 	uint32_t flags = 0;
 
-	if (be && be->done) {
-		/* ¿El CPU saltó ciclos (bucle de espera) desde el sondeo anterior? */
-		uint64_t idle_now = bus->cpu ? bus->cpu->idle_cycles : 0;
-		bool idle = idle_now != rsp->poll_idle;
-		rsp->poll_idle = idle_now;
-		if (!be->done(be->ctx, idle)) {
-			rsp->stats.polls++;
-			salsa64_sched_set(rsp->sched, SALSA64_EV_SP_TASK, when + rsp->poll_cycles);
-			return;
-		}
+	/* ¿El CPU saltó ciclos (bucle de espera) desde el sondeo anterior? */
+	uint64_t idle_now = bus->cpu ? bus->cpu->idle_cycles : 0;
+	bool idle = idle_now != rsp->poll_idle;
+	rsp->poll_idle = idle_now;
+	if (!task_done(bus, idle)) {
+		rsp->stats.polls++;
+		salsa64_sched_set(rsp->sched, SALSA64_EV_SP_TASK, when + rsp->poll_cycles);
+		return;
 	}
-	if (be)
-		flags = be->finish(be->ctx);
+	if (rsp->busy == SALSA64_TASK_GFX && rsp->gfx)
+		flags = rsp->gfx->finish(rsp->gfx->ctx);
+	else if (rsp->busy == SALSA64_TASK_AUDIO && rsp->audio)
+		rsp->audio->finish(rsp->audio->ctx, bus);
 	rsp->busy = 0;
 	rsp_break(bus, SALSA64_SP_STATUS_TASKDONE);
 	if (flags & SALSA64_GFX_FULLSYNC)
@@ -101,6 +106,8 @@ void salsa64_rsp_reset(struct salsa64_bus *bus)
 	 * a medias. */
 	if (rsp->busy == SALSA64_TASK_GFX && rsp->gfx)
 		rsp->gfx->finish(rsp->gfx->ctx);
+	else if (rsp->busy == SALSA64_TASK_AUDIO && rsp->audio)
+		rsp->audio->finish(rsp->audio->ctx, bus);
 	rsp->busy = 0;
 	if (rsp->sched) {
 		salsa64_sched_cancel(rsp->sched, SALSA64_EV_SP_TASK);
@@ -213,9 +220,15 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 		}
 		rsp->stats.unknown_gbi++;
 	} else if (task.type == SALSA64_TASK_AUDIO && valid && rsp->sched) {
-		/* Audio HLE: pendiente (SPE 1). Por ahora la tarea solo termina. */
+		/* La HLE de audio (rsp_audio.c y src/rsp/audio; en la PS3, el SPE
+		 * 1). Con un ABI desconocido la tarea solo termina. */
 		rsp->stats.audio++;
 		rsp->busy = SALSA64_TASK_AUDIO;
+		rsp->abi = salsa64_rsp_detect_abi(bus, &task);
+		if (rsp->abi == SALSA64_ABI_UNKNOWN)
+			rsp->stats.unknown_abi++;
+		else if (rsp->audio)
+			rsp->audio->start(rsp->audio->ctx, &task, rsp->abi);
 		salsa64_sched_set(rsp->sched, SALSA64_EV_SP_TASK, now + rsp->audio_cycles);
 		return;
 	} else {

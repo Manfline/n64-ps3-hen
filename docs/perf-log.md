@@ -129,6 +129,47 @@ diferido escrito por el hilo de presentación a los ~2 s (257 escrituras
 del juego), salida limpia. START + SELECT y «Salir del juego» funcionan;
 los controles llegan por el buzón entre hilos (vitest los identifica).
 
+## Audio: AI, HLE de audio en el SPE 1 y salida (2026-10-10)
+
+**PS3 real** (mismo equipo), rama `amazing-varahamihira-3027c8`
+con main 298b18d (recompilador, dos hilos con ritmo, fin de tarea por
+sondeo). Paquete «Salsa64 audio» (SLSA00072). Ventanas de 5 s.
+
+audiotest (ROM propia; tono por el CPU y luego por una tarea de audio de
+14 comandos nead cada 16 ms):
+
+| | PS3 real |
+|---|---|
+| Velocidad | 59,8 campos/s (100 % de NTSC), 96 % del tiempo en bucles de espera |
+| HLE de audio en el SPE, por tarea | **0,057 ms** (máx. 0,057), PPE esperando 0,000 ms, 62,5 tareas/s |
+| Listas de prueba al arrancar (SPE contra PPE, 3 listas) | iguales, 1,0 ms (en RPCS3, 1,3 s: compila el programa del SPE) |
+| Salida | colchón 78–98 ms, régimen normal (sin estirar), 0 faltas, 0 silencios, 0 saltos, 0 bloques tarde; 2 % de silencio solo en los primeros 5 s (llenado del colchón) |
+| Hilo de audio | 1,9 % del tiempo de pared |
+| Oído (el autor) | suena bien: el afinador marca 440 Hz y cada nota sale de su lado |
+| Corrida completa | 96 s, 3 007 488 muestras del AI, 4 510 464 a la salida (4 392 en silencio: el llenado inicial), 17 619 bloques; START + SELECT cierra el audio y sale normal |
+
+Zelda OoT NTSC (respaldo propio), recompilador, del logo al juego;
+corrida de 535 s (105 ventanas) más una de 120 s con el mismo resultado:
+
+| | PS3 real |
+|---|---|
+| ABI | nead (Zelda OoT): 0 comandos sin implementar, 0 errores, ~60 tareas/s |
+| HLE de audio en el SPE 1, por tarea | mediana **2,42 ms**, ventanas de 5 s entre 0,30 (arranque) y 2,83 ms; la tarea más larga 4,02 ms |
+| PPE esperando al SPE | **0,000 ms** (fin de tarea por sondeo; el SPE termina antes de que el núcleo pregunte) |
+| Salida | emulación al 99,9 % de media, régimen normal; 0,06 % del tiempo en silencio (el llenado inicial), 0,4 % estirado (los arranques de escena), 3 faltas breves en 9 min, 0 silencios, 0 saltos, 0 bloques tarde |
+| Hilo de audio | 2,0 % del tiempo de pared |
+| Oído (el autor) | «se escucha perfecto» |
+
+Super Mario 64 NTSC: sin F3D (otro trabajo) el juego no pasa del arranque y
+no hay imagen ni sonido audible, pero sus tareas de ABI1 corren en el SPE
+1 sin errores ni comandos desconocidos: **0,115 ms** por tarea, 60/s.
+Pendiente oírlo cuando F3D esté integrado.
+
+El costo de la HLE de Zelda (2,4 ms por tarea, código escalar) cabe de
+sobra en el SPE (14 % de un campo) y no frena al PPE. Si hace falta, los
+bucles de ENVMIXER, RESAMPLE y ADPCM son candidatos claros a SIMD.
+
+
 ## Fin de tarea del RSP por sondeo (2026-10-10)
 
 **PS3 real** (mismo equipo), recompilador y caché de texturas en los dos

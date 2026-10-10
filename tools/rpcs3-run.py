@@ -199,7 +199,7 @@ def main() -> int:
                     help="relanzar hasta N veces si termina sin RESULTADO")
     ap.add_argument("--config", type=pathlib.Path, default=CONFIG,
                     help="configuración de RPCS3 (por omisión tools/rpcs3/salsa64.yml)")
-    ap.add_argument("--embedded", choices=["vitest", "gfxtest"],
+    ap.add_argument("--embedded", choices=["vitest", "gfxtest", "audiotest"],
                     help="ROM de prueba embebida que debe usar el frontend")
     ap.add_argument("--rom", help="archivo de dev_hdd0/salsa64 que debe cargar el frontend "
                     "(no se llama rom.z64 para no afectar a otras compilaciones)")

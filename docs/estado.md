@@ -1,5 +1,83 @@
 # Estado
 
+## 2026-10-10 — Audio de punta a punta: AI, HLE de audio en el SPE 1 y salida en la PS3
+
+Hecho (rama `amazing-varahamihira-3027c8`, con main cfa146b):
+- **AI** (`src/core/ai.c`, desde n64brew.dev): cola de dos DMA, AI_STATUS
+  (BUSY/FULL/ENABLED), AI_LENGTH que cuenta hacia abajo y los demás
+  registros que se leen como él, frecuencia = reloj del VI de la región /
+  (AI_DACRATE + 1), interrupción al **empezar** cada DMA, AI_CONTROL que
+  detiene el DMA y el acarreo de los límites de 8 KB (libultra lo
+  compensa). Un evento del planificador por DMA; las muestras van a un
+  sumidero al empezar cada DMA.
+- **HLE de audio** (`src/rsp/audio/`, adaptada de mupen64plus-rsp-hle,
+  GPLv2+, avisos en cada archivo y docs/THIRD_PARTY.md): ABI1 (Super Mario
+  64; variante de GoldenEye) y todas las variantes nead (Zelda OoT, Mario
+  Kart 64, Star Fox 64…). DMEM en el orden de la N64 con índices de la N64
+  (el original dependía del host little-endian en FILTER e INTERLEAVE),
+  E/S explícita de la RDRAM, tabla de RESAMPLE **propia**
+  (`tools/audio-lut.py`; la del original es del microcódigo), libro de
+  códigos de 16 predictores (el original leía fuera de la tabla). El núcleo
+  reconoce el ABI por las palabras de `ucode_data` (`rsp_audio.c`). ABIs
+  por juego objetivo: SM64 ABI1, GoldenEye ABI1 (GE), Zelda OoT / Mario
+  Kart 64 / Star Fox 64 nead, Perfect Dark naudio con MP3 (pendiente).
+- **SPE 1** (`src/spu/audio/`, `src/platform/ps3/audio_spu.c`): una tarea
+  por trabajo de lib/spukit, E/S por DMA (escrituras en trozos de
+  alineación natural: nunca reescribe RDRAM vecina), fin de tarea por
+  sondeo (`done`), aviso de lo escrito con `salsa64_bus_rdram_written`.
+  Local store: 27 KB de código + 20 KB de datos. Al arrancar compara
+  listas de prueba (`selftest.c`) en el SPE y en el PPE.
+- **Salida** (`src/frontend/audio_out.c`, `audio_sync.c`): anillo sin
+  bloqueos entre la emulación y un hilo de audio que llena el puerto de
+  PSL1GHT (48 kHz, 16 bloques de 256, cuatro por delante). **Ritmo:** lo
+  marca pacer.c (la tele emulada); el audio lo sigue con una corrección de
+  ±0,5 % del remuestreo. **Política** (`audio.cfg`): «estirar» (por
+  omisión: si la emulación se aparta más de un 3–5 % sigue su velocidad
+  con WSOLA sin cambiar el tono; si se vacía repite lo reciente hasta 150
+  ms y luego calla) o «silencio» (calla con 10 ms de desvanecido y sigue
+  donde quedó). Toda transición pasa por la suma con ventana: sin
+  chasquidos, verificado en el host con productores al 27 %, 100 % y 130 %.
+  Diagnóstico: `volcado_s` (WAV de lo que sale por el AI, nunca al repo),
+  `tarea_us`, pico del AI en dBFS en el log. Memoria: 0,3 MB.
+- **ROM audiotest** (`tests/roms/src/audiotest`, propia, IPL3 libre): tono
+  conocido por el CPU (La 4, Do izquierda, Mi derecha, Sol, Do 6) y luego
+  por una tarea de audio («Salsa64 ABI NEAD»); se verifica sola y
+  `salsa64-run --audiotest-check` compara lo que sale por el AI muestra por
+  muestra. En `tools/test-roms.sh`.
+- Pruebas: suites ai (8), audio (15) y sync (5); 269 en total en el host y
+  en RPCS3 (big-endian). Pruebas de mutación: romper el acarreo, el orden
+  de INTERLEAVE, la escala del ADPCM o el solapamiento del estirador las
+  hace fallar. nemu64-test 446 fallas (sin cambios), vitest, controles,
+  savetest, gfxtest y audiotest OK; build sin advertencias. RPCS3:
+  audiotest OK en el frontend (renderer de audio Null en las pruebas).
+- **PS3 real** (paquete «Salsa64 audio», SLSA00072): audiotest suena bien
+  (afinador en 440 Hz, cada canal de su lado), 100 % de NTSC, 0 faltas.
+  **Zelda OoT suena perfecto** (el autor): 9 min al 99,9 %, HLE en el SPE
+  2,4 ms por tarea (mediana; máx. 4,0), PPE esperando 0, 0 bloques tarde.
+  Mediciones en docs/perf-log.md.
+
+Notas:
+- Una vez, tras la primera corrida de Zelda (120 s), la consola quedó en
+  negro después de «salida normal» y hubo que reiniciarla. No se repitió
+  en tres salidas más (7 s, 9 min y SM64 100 s); ahora el cierre del audio
+  anota cada paso y todos devuelven 0. Además, soltar el audio
+  (`salsa64_rsp_set_audio(NULL)`) ya no termina una tarea gráfica en vuelo:
+  antes hacía un reset completo del RSP y podía llamar a `wake()` del
+  frontend con su semáforo ya destruido. Si vuelve a pasar, mirar esas
+  líneas; `salsa64_rsp_set_gfx(NULL)` en main.c tiene el mismo riesgo
+  (también va después de `sysSemDestroy(wake_sem)`).
+- `.gitignore`: la regla «core» de los volcados de qemu también ignoraba
+  `src/core` para archivos nuevos; se agregó «!src/core/».
+
+Falta:
+- [ ] Oír Super Mario 64 (ABI1): sus tareas corren sin errores (0,115 ms)
+      pero el juego no pasa del arranque sin F3D.
+- [ ] naudio (Perfect Dark, Banjo, Conker; Perfect Dark con MP3) y MusyX.
+- [ ] Probar la política «silencio» y una escena lenta en la PS3; con el
+      recompilador Zelda ya va al 100 % y casi no hace falta estirar.
+- [ ] Opcional: SIMD en ENVMIXER, RESAMPLE y ADPCM del SPE (hoy 2,4 ms por
+      tarea en Zelda, escalar).
+- [ ] Opcional: que el audio marque el ritmo (pacer.c tiene el enganche).
 ## 2026-10-10 — Bucles de espera en código mapeado por la TLB
 
 Hecho (rama `loving-spence-8951ae`, desde main bd8ac59):
