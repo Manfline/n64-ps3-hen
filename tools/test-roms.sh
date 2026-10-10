@@ -6,6 +6,9 @@
 # tipo de guardado.
 # gfxtest (ROM 3D propia, tests/roms/src/gfxtest) por la HLE gráfica, con su
 # imagen verificada en el rasterizador de referencia (build/gfxtest.ppm).
+# audiotest (ROM propia del AI y de la HLE de audio, tests/roms/src/audiotest):
+# se verifica sola y lo que sale por el AI se compara muestra por muestra con
+# su tono (build/audiotest.wav).
 #
 # La lista de pruebas de nemu64-test que fallan se compara con la línea base
 # tests/roms/nemu64-test.fallas (lo que falta emular: RSP, cachés, bus PI…).
@@ -115,4 +118,13 @@ grc=$?
 printf '%-12s %s\n' gfxtest "$(grep 'gfxtest: [OF]' "$GLOG" | head -1)"
 grep -E 'gfx:|gfxtest: imagen|gfxtest: \(' "$GLOG" | sed 's/^salsa64-run: /             /'
 [ $grc -eq 0 ] || { echo "             falló (código $grc, $GLOG)"; fail=1; }
+
+ALOG=build/logs/audiotest.run.log
+tools/build.sh --sh "ASAN_OPTIONS=detect_leaks=0 build/host/salsa64-run -c 600000000 \
+	-u 'audiotest: HLE OK' -f 'audiotest: FALLO' --audio-wav build/audiotest.wav --audiotest-check \
+	tests/roms/homebrew/salsa64-audiotest.z64 2>&1" >"$ALOG" 2>&1
+arc=$?
+printf '%-12s %s\n' audiotest "$(grep '^audiotest: ' "$ALOG" | head -1)"
+grep -E '^audiotest: HLE|audiotest: audio|salsa64-run: audio:' "$ALOG" | sed 's/^salsa64-run: /             /; s/^audiotest: HLE/             audiotest: HLE/'
+[ $arc -eq 0 ] || { echo "             falló (código $arc, $ALOG)"; fail=1; }
 exit $fail
