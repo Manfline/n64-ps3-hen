@@ -127,6 +127,39 @@ diferido escrito por el hilo de presentación a los ~2 s (257 escrituras
 del juego), salida limpia. START + SELECT y «Salir del juego» funcionan;
 los controles llegan por el buzón entre hilos (vitest los identifica).
 
+## Fin de tarea del RSP por sondeo (2026-10-10)
+
+**PS3 real** (mismo equipo), recompilador y caché de texturas en los dos
+casos, dos hilos. «Antes» = main 4a4d98c (el evento de fin de tarea
+espera al SPE); «después» = 16a544f + 0cb8f63 (sondeo: el evento se
+reprograma cada 10 000 ciclos; si el CPU está en bucle de espera, el
+backend duerme 100 µs por sondeo). Zelda OoT NTSC, 52 s desde el logo
+hasta pasado el título; ventanas de 5 s.
+
+| | Antes (espera) | Después (sondeo) |
+|---|---|---|
+| Campos/s | 58,5–60,0 | 58,5–59,9 |
+| Emulación por campo | 3,2–7,5 ms | 3,2–7,2 ms |
+| Emulación esperando al SPE, por tarea | 2,3–8,2 ms (100 esperas / 100 tareas) | **0,00 ms (0 esperas)** |
+| Sondeos por tarea / dormida en bucles de espera | — | 33–75 / 2,9–6,9 ms |
+| Ritmo (margen por campo) | 9,0–13,6 ms | 9,3–13,6 ms |
+
+Lectura: la espera bloqueante desapareció, pero en Zelda no hay nada que
+hacer mientras el RSP trabaja (el CPU está en el bucle ocioso de
+libultra el 86–88 % del tiempo): el tiempo que antes bloqueaba ahora lo
+duerme el sondeo en pasos de 100 µs, y la emulación por campo queda
+igual. La ganancia aparecerá donde el CPU tenga trabajo durante el RDP
+(lógica del juego después de mandar la tarea; Super Mario 64 con F3D es
+el candidato). Sin regresiones: 60 campos/s, 0 descartados, salida
+limpia; gfxtest OK en la PS3.
+
+gfxtest en la PS3: OK (22 de 22) antes y después; 38 → 36–37 campos/s
+(26 → 27 ms por campo: la ROM espera al RSP con un bucle que no es de
+espera pura y ahora lee Count cada 1024 vueltas). La primera versión de
+la ROM con espera por tiempo leía Count en cada vuelta y el recompilador
+salía a C en cada iteración (64 M salidas, 319 M instrucciones
+interpretadas, 9 campos/s).
+
 ## Líneas base de la Fase 0 (pendientes de PS3 real)
 
 - `spu-compute`: 6 MB, PPE escalar contra 6 SPUs (tiempos en el log).
