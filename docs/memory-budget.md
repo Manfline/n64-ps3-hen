@@ -18,10 +18,11 @@ en PS3 real.
 | Caché de texturas (lado PPE/SPE) | 16 | | Fase 4 |
 | Búfer de comandos RSX + memoria mapeada | 16 | 16 | `rsxkit_init` por omisión (rsx-triangle usa 32) |
 | ROM del cartucho | 64 | | máximo; el frontend la lee entera a memoria al arrancar |
-| Listas de triángulos SPU → RSX | 8 | | doble búfer por cuadro |
+| Salida de la HLE gráfica SPU → RSX | 20 | 20 | `src/rdp`: 3 juegos de vértices 2 MB + comandos 512 KB + texturas 4 MB, mapeados al RSX (`rsxkit_map_main`) |
 | Audio | 2 | | |
 | Código, pila, heap de newlib | 16 | | |
-| **Total previsto** | **146** | | con una ROM de 64 MB |
+| Bloques de control de spukit | 0,01 | 0,01 | ~2,3 KB por trabajador |
+| **Total previsto** | **158** | | con una ROM de 64 MB |
 
 ## Memoria local del RSX (GDDR3)
 
@@ -29,7 +30,8 @@ en PS3 real.
 |---|---|---|---|
 | Framebuffers 1280×720 ×2 + Z | 11 | 11 | X8R8G8B8 + Z24S8 (`rsxkit_init`) |
 | Framebuffer 2D del VI | 3 | 2,8 | `rsxkit_fb_create(640, 576)`: 2 copias × 640 × 576 × 4 |
-| Render interno 2x/3x | 60 | | Fase 5 |
+| Destinos de render de la N64 (Fase 2) | 16 | | `src/rdp`: hasta 4 color images a 3× (960×720×4 = 2,6 MB c/u) y 2 profundidades; a 1080p, 4× (1280×960: 4,7 MB c/u) |
+| Render interno 2x/3x | 60 | | Fase 5 (incluye lo anterior) |
 | Texturas | 64 | | Fase 4 |
 
 ## Local store de los SPEs (256 KB c/u)
@@ -37,3 +39,5 @@ en PS3 real.
 | Programa | Código | Datos + búferes | Total | Fuente |
 |---|---|---|---|---|
 | `spu-compute/spu/mix.c` | 2,6 KB | 0,8 KB + 64 KB | ~69 KB | `spu-size` en el build |
+| `spu-jobs/spu/scale.c` | 3,6 KB | 0,8 KB + 65 KB | ~70 KB | `spu-size` |
+| `src/spu/gfx` (HLE de F3DEX2 + RDP, SPE 0) | 48 KB | 0,8 KB + 112 KB | ~161 KB (+ pila ~95 KB) | `spu-size`: gfx_state 21 KB, texturas 2 × 32 KB, vértices 2 × 8 KB, comandos 2 × 4 KB, display list 2 × 1 KB, lecturas 5,8 KB |

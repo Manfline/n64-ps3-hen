@@ -1,5 +1,44 @@
 # Estado
 
+## 2026-10-10 — Fase 2 (parte gráfica): criterio cumplido en PS3 real
+
+Hecho (rama `reverent-leavitt-d0f943`, integrada en main después del
+guardado y los controles):
+- `lib/spukit` (MIT): trabajos por lotes en SPEs, cola en memoria principal
+  y timbre por mailbox (1,76 µs ida y vuelta en la PS3).
+- HLE de F3DEX2/F3DZEX2 portable (`src/rsp/gfx/`) que corre en el SPE 0
+  (`src/spu/gfx/`, E/S por DMA con doble búfer) y en el host; RDP sobre
+  `lib/rsxkit` (`src/rdp/`): combiners como combinación lineal, texturas,
+  z-buffer, culling, niebla, mezcla según la fórmula del blender.
+- Criterio: gfxtest (homebrew propio con el IPL3 libre) 19 de 19 puntos en
+  host, RPCS3 y PS3; Zelda OoT (respaldo propio) llega al título y la
+  intro se ve sin errores gráficos en la PS3 real (confirmado por el autor).
+- Arreglos de la ronda con la PS3: TASKDONE en tareas de libultra sin HLE,
+  destinos alineados a 128 (temblor), frente antihorario, mezcla opaca del
+  cielo, corrección de perspectiva que `cgcomp` quita en MUL/DP (la luna;
+  docs/rsx-notes.md) y FILLRECT inclusivo en 1 ciclo (columna del fundido).
+  Todos verificados por el autor en la PS3 real con `salsa64-fase2.pkg`
+  (APPID propio SLSA00062, título «Salsa64 Fase 2 (gfx)»).
+- Depuración: volcado de la salida de una tarea (`gfxdump`), repetición en
+  el RSX sin emular (`embedded` = `dump:<nombre>`), `tools/gfxdump.py` para
+  editar volcados y `salsa64-run --raster-dump`.
+- Mediciones en docs/perf-log.md: el cuello es el CPU (64 ms por campo, 26 %
+  de NTSC); la HLE en el SPE cuesta 1–21 ms por tarea, sobre todo
+  decodificando texturas.
+
+Pendiente:
+- [ ] Caché de texturas entre tareas y decodificación por formato en el SPE
+      (medir antes/después en la PS3).
+- [ ] F3D (Super Mario 64) y casos de Cell64 (espada Kokiri sin textura,
+      fuente de la pantalla de nombre).
+- [ ] Al integrar con la Fase 3: `sp_dma` hacia la RDRAM debe llamar
+      `salsa64_bus_rdram_written`.
+- [ ] «NO CONTROLLER» en Zelda: el control por SI/PIF ya está integrado;
+      comprobar en la PS3 que Zelda lo ve.
+- [ ] Comprobar en la PS3 Zelda con la HLE en el SPE y la detección de
+      bucles de espera juntas: lo que el RSP escriba o avise fuera del
+      CPU debe ir en un evento del planificador (nota de los controles).
+
 ## 2026-10-10 — Guardado del cartucho: EEPROM y SRAM
 
 Hecho:
@@ -66,9 +105,8 @@ Falta:
 - [ ] Probarlo con Zelda (SRAM) y un juego con EEPROM cuando la Fase 2
       permita llegar a guardar (respaldos propios, fuera del repo).
 - [ ] FlashRAM (y SRAM de 768 Kbit y 1 Mbit) cuando un juego la pida.
-- [ ] Para la integración: `src/core/rcp.h` todavía dice "Falta la EEPROM"
-      en el SI y el PI "cartucho → RDRAM"; no se tocó para no chocar con
-      la Fase 2 (edita las líneas vecinas).
+- [x] `src/core/rcp.h`: el comentario del SI ya menciona la EEPROM (al
+      integrar con la Fase 2) y el del PI, la SRAM.
 
 ## 2026-10-10 — Controles (PIF + DualShock 3) y bucles de espera
 

@@ -153,8 +153,8 @@ static void sp_status_and_semaphore(void)
 	CHECK_EQ(bus->mi.intr, 1u << SALSA64_IRQ_SP);
 	salsa64_bus_write32(bus, 0x04040010, 0x08, ~0u);         /* bajarla */
 	CHECK_EQ(bus->mi.intr, 0);
-	/* RSP provisional: quitar HALT lo detiene en el acto con BROKE y, con
-	 * interrupción en BREAK habilitada, la levanta. */
+	/* Sin tarea reconocible en la DMEM, quitar HALT lo detiene en el acto
+	 * con BROKE y, con interrupción en BREAK habilitada, la levanta. */
 	salsa64_bus_write32(bus, 0x04040010, 0x1 | 0x100, ~0u);
 	CHECK_EQ(salsa64_bus_read32(bus, 0x04040010), 0x80 | 0x40 | SALSA64_SP_STATUS_BROKE | SALSA64_SP_STATUS_HALT);
 	CHECK_EQ(bus->mi.intr, 1u << SALSA64_IRQ_SP);
