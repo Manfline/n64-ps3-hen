@@ -187,6 +187,20 @@ static inline void sp_lookat(gfx **dl, const volatile void *l, unsigned axis)
 #endif
 }
 
+/* gSPLoadUcodeEx: G_RDPHALF_1 con los datos y G_LOAD_UCODE con el texto
+ * (en la primera generación, 0xB4 y 0xAF; F3D no lo tiene, pero F3DEX 1.x
+ * sí y la HLE lo trata igual). */
+static inline void sp_load_ucode(gfx **dl, uint32_t ucode, uint32_t data, unsigned dsize)
+{
+#ifdef GBI_1
+	cmd(dl, 0xB4000000u, data);
+	cmd(dl, 0xAF000000u | ((dsize - 1) & 0xFFFFu), ucode);
+#else
+	cmd(dl, 0xE1000000u, data);
+	cmd(dl, 0xDD000000u | ((dsize - 1) & 0xFFFFu), ucode);
+#endif
+}
+
 static inline void sp_end(gfx **dl)
 {
 #ifdef GBI_1

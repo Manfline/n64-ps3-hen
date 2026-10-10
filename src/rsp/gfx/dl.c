@@ -134,6 +134,40 @@ bool gfx_dl_end(struct gfx_state *g)
 	return true;
 }
 
+/* Tramo de otro microcódigo tras un G_LOAD_UCODE (Zelda OoT carga S2DEX
+ * para el fondo prerrenderizado de una sala y después vuelve a F3DZEX):
+ * sin HLE para él, se saltan sus comandos, siguiendo las llamadas y los
+ * fines de lista (op_dl, op_enddl: la familia los comparte) y tomando el
+ * G_RDPFULLSYNC (del RDP, común a todas), hasta el G_LOAD_UCODE (op_ucode)
+ * que vuelve al microcódigo de la tarea. true: la lista sigue; false: se
+ * acabó dentro del tramo (GFX_RES_FOREIGN_END, cuenta como cortada) o hubo
+ * un error. Antes la tarea terminaba en el G_LOAD_UCODE sin
+ * G_RDPFULLSYNC y el juego se quedaba esperando al RDP («RCP is HUNG UP»). */
+bool gfx_dl_skip_foreign(struct gfx_state *g, uint32_t op_ucode, uint32_t op_dl, uint32_t op_enddl)
+{
+	struct gfx_result *res = g->res;
+	uint32_t w0, w1;
+	res->flags |= GFX_RES_LOAD_UCODE;
+	while (gfx_dl_next(g, &w0, &w1)) {
+		uint32_t op = w0 >> 24;
+		res->skipped++;
+		if (op == op_ucode && g->job->ucode && gfx_addr(g, w1) == g->job->ucode)
+			return true;
+		if (op == op_dl) {
+			if (!gfx_dl_call(g, w1, (w0 >> 16) & 1))
+				return false;
+		} else if (op == op_enddl) {
+			if (!gfx_dl_end(g)) {
+				res->flags |= GFX_RES_FOREIGN_END;
+				return false;
+			}
+		} else if (op == 0xE9) {  /* G_RDPFULLSYNC */
+			res->flags |= GFX_RES_FULLSYNC;
+		}
+	}
+	return false;
+}
+
 static bool op_in(uint32_t op, uint32_t set)
 {
 	for (; set; set >>= 8)

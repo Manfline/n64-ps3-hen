@@ -69,11 +69,13 @@ static void fake_start(void *ctx, const struct salsa64_task *task, enum salsa64_
 	fake.gbi = gbi;
 }
 
+static uint32_t fake_flags = SALSA64_GFX_FULLSYNC;  /* lo que devuelve finish */
+
 static uint32_t fake_finish(void *ctx)
 {
 	(void)ctx;
 	fake.finishes++;
-	return SALSA64_GFX_FULLSYNC;
+	return fake_flags;
 }
 
 static const struct salsa64_gfx_backend fake_backend = { NULL, fake_start, fake_finish, NULL };
@@ -239,6 +241,38 @@ static void rsp_gfx_task_polls(void)
 	salsa64_rsp_set_gfx(bus, NULL);
 }
 
+/* Una lista cortada por la HLE (búfer lleno, sin G_RDPFULLSYNC) también
+ * termina con la interrupción del DP: el juego espera al RDP por cada tarea
+ * gráfica (Zelda OoT: «RCP is HUNG UP» a los 3 s sin ella). */
+static void rsp_gfx_task_cut(void)
+{
+	struct salsa64_bus *bus = &t_n64.bus;
+	memset(&fake, 0, sizeof fake);
+	fake_flags = SALSA64_GFX_CUT;
+	salsa64_rsp_set_gfx(bus, &fake_backend);
+	put_text(0x5000 + 0x123, "Salsa64 GBI F3DEX2");
+	put_task(SALSA64_TASK_GFX, 0x5000, 0x6000);
+	wr(SP_REG(SALSA64_SP_STATUS), 0x1 | 0x4 | 0x100);
+	uint64_t t0 = CPU->cycles;
+	salsa64_sched_dispatch(&t_n64.sched, t0 + bus->rsp.gfx_cycles);
+	CHECK_EQ(bus->mi.intr, 1u << SALSA64_IRQ_SP);
+	CHECK_EQ(bus->rsp.stats.cut, 1);
+	salsa64_sched_dispatch(&t_n64.sched, t0 + bus->rsp.gfx_cycles + bus->rsp.dp_cycles);
+	CHECK_EQ(bus->mi.intr, (1u << SALSA64_IRQ_SP) | (1u << SALSA64_IRQ_DP));
+
+	/* Sin FULLSYNC ni corte (la lista acabó en G_ENDDL): sin DP. */
+	salsa64_mi_clear(bus, SALSA64_IRQ_SP);
+	salsa64_mi_clear(bus, SALSA64_IRQ_DP);
+	fake_flags = 0;
+	wr(SP_REG(SALSA64_SP_STATUS), 0x1 | 0x4 | 0x100);
+	t0 = CPU->cycles;
+	salsa64_sched_dispatch(&t_n64.sched, t0 + bus->rsp.gfx_cycles + bus->rsp.dp_cycles);
+	CHECK_EQ(bus->mi.intr, 1u << SALSA64_IRQ_SP);
+	CHECK_EQ(bus->rsp.stats.cut, 1);
+	fake_flags = SALSA64_GFX_FULLSYNC;
+	salsa64_rsp_set_gfx(bus, NULL);
+}
+
 static void rsp_audio_task(void)
 {
 	struct salsa64_bus *bus = &t_n64.bus;
@@ -362,6 +396,7 @@ void t_suite_rsp(void)
 	RUN(sp_dma_rows);
 	RUN(rsp_gfx_task);
 	RUN(rsp_gfx_task_polls);
+	RUN(rsp_gfx_task_cut);
 	RUN(rsp_audio_task);
 	RUN(rsp_other_task);
 	RUN(rsp_detect_gbi);

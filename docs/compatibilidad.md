@@ -14,7 +14,7 @@ de identificación de los microcódigos salen de `--trace-rsp`.
 ## 2026-10-10 (3) — microcódigos gráficos de Rare (Perfect Dark y Conker)
 
 Código medido: rama `competent-haslett-3bad2a` (main 3270538 con la
-rama de arranque y `osCicId` fusionada), mismo método: 3 minutos de consola
+rama de arranque y `osCicId`; luego main 53fb223 fusionado), mismo método: 3 minutos de consola
 sin tocar el control.
 
 | Juego | Gráficos (HLE) | A los 3 minutos |
@@ -53,12 +53,12 @@ sin tocar el control.
   `hack_rectDepthBufferCopyCBFD`, `hack_fbTextureOffset`,
   `texturedRectCopyToItself`).
 
-## 2026-10-10 (2) — main f698afe + rama de F3D + osCicId
+## 2026-10-10 (2) — main 3270538 (F3D integrado) + osCicId
 
-Código medido: esta rama (arranque del 6105 y `osCicId`) con main f698afe
-(audio en el SPE 1, bucles de espera mapeados) y la rama de F3D
-`lucid-pare-4f93fb` (F3D 2.0G, F3DEX 0.95/1.x, el DP se cierra tras
-un microcódigo sin HLE) fusionadas solo para medir, sin integrar.
+Código medido: esta rama (arranque del 6105 y `osCicId`) con main 3270538
+(audio en el SPE 1, bucles de espera mapeados, F3D 2.0D/2.0G y F3DEX
+0.95/1.x, el DP se cierra tras un microcódigo sin HLE). Antes de integrar
+F3D se midió con su rama fusionada aparte: los mismos números.
 
 | Juego | Región / versión | CIC | Guardado | Gráficos (HLE) | Audio (HLE) | A los 3 minutos |
 |---|---|---|---|---|---|---|
@@ -143,13 +143,12 @@ tienen partes que el microcódigo escribe; las cuatro palabras son estables.
 
 | # | Qué | Desbloquea | Quién |
 |---|---|---|---|
-| 1 | Integrar la rama de F3D (F3D 2.0D/2.0G, F3DEX 0.95/1.x, DP tras microcódigo desconocido) | SM64, MK64, SF64, GoldenEye y Banjo dibujan; ningún juego se cuelga por un microcódigo sin HLE | main |
-| 2 | HLE de naudio: la de Banjo-Kazooie, la de Conker y la de Perfect Dark (con MP3); hoy toda tarea da error | Sonido en los tres juegos de Rare (y Banjo-Tooie, JFG) | trabajo de audio (`src/rsp/audio`, SPE 1) |
-| 3 | ~~HLE del microcódigo de Perfect Dark~~ hecho: F3DPD (sección 3) | Perfect Dark | trabajo de Rare |
-| 4 | ~~F3DEXBG 2.08 de Conker~~ hecho: G_TRI4 en 0x10–0x1F y G_LOAD_UCODE que no corta la lista (sección 3) | Conker | trabajo de Rare |
-| 5 | Probar con el control (pasar los títulos; `--pad` de la rama de F3D) y medir en la PS3 las escenas de docs/proyecto.md | Mediciones de la tabla de juegos | tras 1–4 |
-| 6 | Desafío del CIC 6105 por la PIF durante el juego (no apareció en 3 minutos) | Perfect Dark, Conker, Banjo-Tooie a largo plazo | PIF (`src/core/pif.c`), cuando aparezca |
-| 7 | Zelda: en una captura de la demo el cielo aparece en la parte de abajo; revisar si es el encuadre o geometría que falta | Zelda | trabajo de F3D |
+| 1 | HLE de naudio: la de Banjo-Kazooie, la de Conker y la de Perfect Dark (con MP3); hoy toda tarea da error | Sonido en los tres juegos de Rare (y Banjo-Tooie, JFG) | trabajo de audio (`src/rsp/audio`, SPE 1) |
+| 2 | ~~HLE del microcódigo de Perfect Dark~~ hecho: F3DPD (sección 3) | Perfect Dark | trabajo de Rare |
+| 3 | ~~F3DEXBG 2.08 de Conker~~ hecho: G_TRI4 en 0x10–0x1F y G_LOAD_UCODE que no corta la lista (sección 3) | Conker | trabajo de Rare |
+| 4 | Probar con el control (pasar los títulos; `--pad` de la rama de F3D) y medir en la PS3 las escenas de docs/proyecto.md | Mediciones de la tabla de juegos | tras 1–3 |
+| 5 | Desafío del CIC 6105 por la PIF durante el juego (no apareció en 3 minutos) | Perfect Dark, Conker, Banjo-Tooie a largo plazo | PIF (`src/core/pif.c`), cuando aparezca |
+| 6 | Zelda: en una captura de la demo el cielo aparece en la parte de abajo; revisar si es el encuadre o geometría que falta | Zelda | trabajo de F3D |
 
 ## 2026-10-10 (1) — primera pasada, sin F3D ni audio
 

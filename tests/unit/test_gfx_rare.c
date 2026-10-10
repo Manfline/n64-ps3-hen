@@ -318,13 +318,16 @@ static void cbfd_load_ucode(void)
 	CHECK(!(res.flags & GFX_RES_LOAD_UCODE));
 	CHECK(gs.rare.advanced);
 
-	/* En F3DEX2 el mismo comando sí termina la tarea. */
+	/* En F3DEX2 el mismo comando carga otro microcódigo: su tramo se salta
+	 * (gfx_dl_skip_foreign) y el triángulo no se dibuja. */
 	start(SALSA64_GBI_F3DEX2);
+	cbfd_vertex(put_vertices(v, 3), 3, 0);
 	dl(0xDD0007FF, 0x00110000);
+	dl(0x05000204, 0);
 	dl(0xE9000000, 0);
 	run();
 	CHECK(res.flags & GFX_RES_LOAD_UCODE);
-	CHECK(!(res.flags & GFX_RES_FULLSYNC));
+	CHECK_EQ(res.triangles, 0);
 }
 
 /* Luz de 48 bytes: color, dirección, intensidad de luz puntual (en

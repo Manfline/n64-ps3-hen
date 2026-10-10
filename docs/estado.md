@@ -21,6 +21,9 @@ de arranque `amazing-noether-39a548` con `osCicId`, sin integrar):
   G_LOAD_UCODE no cambia de GBI (pasa a la iluminación avanzada y la lista
   sigue); la HLE de F3DEX2 terminaba la tarea ahí, sin llegar al
   G_RDPFULLSYNC, y el juego esperaba la interrupción del DP para siempre.
+  Con main 53fb223 F3DEX2 salta el tramo de un microcódigo ajeno
+  (`gfx_dl_skip_foreign`, el S2DEX de Zelda); en Conker eso perdería todo lo
+  que dibuja después, así que su hook atiende el 0xDD antes que F3DEX2.
 - Cambios en lo común, mínimos: las familias aceptan un *hook* con los
   comandos propios de una variante (`gfx_dl_f3d(g, hook)`,
   `gfx_dl_f3dex2(g, hook)`); geom.c separa la transformación de la lectura
@@ -62,6 +65,115 @@ Pendiente:
 - [ ] La luz de Conker sigue a GLideN64 (en el modo básico la direccional
       no cuenta); contrastar con la PS3 cuando haya escenas de juego.
 
+## 2026-10-10 — Zelda OoT se colgaba al elegir la ranura: G_LOAD_UCODE (S2DEX) y el RDP que nunca terminaba
+
+Síntoma (PS3 real, main f698afe): al elegir una partida, pantalla negra con
+una rayita amarilla arriba a la izquierda, el audio seguía (en silencio) y
+no llegaba ninguna tarea gráfica más; 96 % en bucles de espera.
+
+Diagnóstico (rama `fervent-antonelli-6904bf`, en la Mac con el
+intérprete, sin PS3):
+- Se reproduce igual con el intérprete y la HLE síncrona: no es del
+  recompilador, ni del sondeo del SPE, ni del DMA del PI.
+- Al cargar la primera sala (la casa de Link, con fondo prerrenderizado) el
+  juego manda 75 tareas tipo 4 (su decodificador JPEG; sin HLE, terminan sin
+  hacer nada) y una tarea gráfica cuya lista carga **S2DEX** con
+  `G_LOAD_UCODE` para copiar el fondo (`uObjBg`) y después vuelve a F3DZEX.
+  La HLE terminaba la tarea en el `G_LOAD_UCODE`, sin llegar al
+  `G_RDPFULLSYNC`: TASKDONE sí, interrupción del DP no. El planificador de
+  libultra nunca dio la tarea por terminada, el hilo gráfico de OoT esperó
+  su mensaje y a los 3 s su vigilante declaró «RCP is HUNG UP»: el hilo de
+  fallas dibuja el rectangulito amarillo (el de `Fault_DrawCornerRec`) y el
+  juego queda muerto con el audio vivo. Visto con el volcado de la RDRAM:
+  todos los hilos esperando en colas vacías.
+- Nadie había pasado de la selección de archivo: no era regresión.
+
+Arreglo:
+- `src/rsp/gfx/f3dex2.c`: un `G_LOAD_UCODE` a otra dirección que la del
+  microcódigo de la tarea (`job->ucode`, nuevo en `gfx_job`) ya no termina
+  la lista: se saltan sus comandos (siguiendo `G_DL` y `G_ENDDL`, que la
+  familia comparte) hasta el `G_LOAD_UCODE` que vuelve al de la tarea, y la
+  lista sigue (Link, objetos, HUD y el FULLSYNC se ejecutan; el fondo
+  prerrenderizado queda negro). `res->skipped` cuenta los saltados; la
+  bandera `GFX_RES_LOAD_UCODE` marca que hubo un tramo ajeno.
+- `src/core/rsp.c`: si la HLE corta una lista antes de su fin
+  (`SALSA64_GFX_CUT`: búfer lleno, lista interminable, error de dirección;
+  lo traduce `salsa64_gfx_task_flags` en sync.c y gfx_spu.c), la
+  interrupción del DP llega de todos modos: el juego espera al RDP por cada
+  tarea gráfica. Estadística `cut` (frontend: «tareas cortadas» y «comandos
+  de otro microcódigo saltados» en la línea `gfx:`).
+- Pruebas: `rsp_gfx_task_cut` (DP con lista cortada; sin DP si acabó en
+  ENDDL sin FULLSYNC) y `gfx_load_ucode_skips_foreign` (mismo microcódigo
+  sigue; tramo ajeno con subrutina saltado, 2 triángulos, FULLSYNC; tramo
+  que nunca vuelve = cortado; FULLSYNC dentro del tramo cuenta). La ROM
+  gfxtest lleva al final de cada lista un tramo de otro microcódigo con un
+  FILLRECT rojo que taparía la escena si se ejecutara, y en el cuadro
+  GFXTEST_CUT_FRAME (7) termina dentro de él: la ROM exige la interrupción
+  del DP y test-roms.sh exige «1 tareas cortadas» y tramos saltados. 272
+  unitarias en el host (clang nativo y Docker con ASan); test-roms
+  (nemu64-test 446, vitest, controles, savetest, gfxtest 22/22, audiotest)
+  OK; build sin advertencias.
+- Mac: con el arreglo el juego sigue (tareas gráficas a 20/s, la escena del
+  Árbol Deku con su texto); ~7 comandos de S2DEX saltados por cuadro.
+
+Herramientas nuevas para esto (`salsa64-run`): `--pad
+"CAMPO:BOTONES[@X,Y];…"` (control 1 programado por campo del VI, cada estado
+hasta el siguiente; unificado con el `--pad` que traía main: misma sintaxis,
+campo por campo y también en la referencia de `--lockstep`), `--trace-from CAMPO`,
+`--trace-faults N` (excepciones sin las interrupciones), `--ram-dump
+ARCHIVO`, y `tools/libultra-threads.py` (hilos de libultra en un volcado:
+estado, pc y la cola en la que espera cada uno, sin símbolos). Con `--pad
+"2200:START,2320:A,2440:A,2560:A"` y el `.sra` del autor en `--save-dir`,
+Zelda entra al juego en el campo 2712.
+
+- **PS3 real** (paquete «Salsa64 depuración», SLSA00079, ba9bdfc): Zelda
+  entra al juego y el autor jugó 7 min (intro, casa de Link, Navi, bosque
+  Kokiri) a 59,8 campos/s, 0 tareas cortadas, ~7 comandos de S2DEX
+  saltados por cuadro en la casa; audio −4 a −11 dBFS en juego. El silencio
+  de ~30 s entre elegir la partida y el vuelo de Navi es del juego: la
+  Mac con sus mismas pulsaciones calla y suena en los mismos campos, y
+  en ese tramo las listas de audio no traen voces (solo CLEARBUFF,
+  LOADBUFF, MIXER, SAVEBUFF, DMEMMOVE, INTERLEAVE).
+
+Con main 485a747 traído (F3D, arranque del CIC 6105 con osCicId): Zelda
+sigue pasando la ranura en la Mac (el arranque nuevo no cambia nada aquí);
+el salto de tramos ajenos vive ahora en `gfx_dl_skip_foreign` (dl.c) y lo
+usan F3DEX2/F3DZEX y F3DEX 1.x (F3D no tiene G_LOAD_UCODE: la variante F3D
+de gfxtest no lleva el tramo). Con `job->ucode` = 0 (tarea sin microcódigo
+conocido, como en las pruebas de F3D) todo G_LOAD_UCODE es ajeno.
+
+Visto en esa corrida, para otros trabajos (reproducible en la Mac con
+`--pad "$(cat docs/pads/zelda-oot.pad)"`, las pulsaciones del autor
+sacadas de su log; receta en la entrada de arriba):
+- [ ] **Texturas del mundo** (trabajo F3D/texturas): en el bosque Kokiri la
+      geometría sale en colores planos (verde del shade), la HUD bien; igual
+      en el rasterizador de la Mac (campo 18600 de esa corrida), así que es
+      la HLE, no el RSX. La casa de Link (interior 3D en la intro) sí se ve
+      con texturas.
+- [ ] **Menú de pausa en negro** (frontend/rdp): con el menú abierto cada
+      tarea (30/s) pone tres color images: dos de **64 de ancho** (0x3b8800
+      y **0x3b5000, la misma dirección del framebuffer**) y luego
+      0x3b5000/320; el VI sigue mostrando 0x3b5280/0x3daa80. En la PS3 el
+      log dice «0 del RSX» y ~2 destinos creados por tarea: el destino de
+      320 se pierde al crear uno de 64 en la misma dirección y la
+      presentación cae a la copia de la RDRAM (negra, el RSX no la
+      escribe). Le toca a src/rdp (destinos por dirección y ancho, o no
+      tirar el de 320). Cerrar el menú vuelve al juego. Reproducible en la
+      Mac: `--pad "$(cat docs/pads/zelda-oot.pad)" --trace-from 19100
+      --trace-gfx 80` muestra los TARGET, y con `--gfx-frame-every 6` el
+      rasterizador de referencia dibuja el menú (mapa del bosque Kokiri)
+      bien: la HLE está bien, es solo la presentación.
+
+Falta (para ver bien la casa de Link y las salas con fondo prerrenderizado):
+- [ ] HLE de S2DEX para el fondo (`G_BG_COPY`/`G_BG_1CYC` con `uObjBg` →
+      rectángulos con textura por tiras) y detectar el microcódigo que
+      carga `G_LOAD_UCODE` por el texto de sus datos (como en rsp.c).
+- [ ] Tarea tipo 4 de OoT (decodificador JPEG `njpgdspMain`: IDCT y
+      YUV→RGBA16 de los macrobloques que el CPU ya decodificó): sin ella el
+      fondo sale negro aunque S2DEX lo copie. mupen64plus-rsp-hle la tiene
+      (`jpeg.c`, GPLv2+; registrar en THIRD_PARTY si se adapta). Son 75
+      tareas por sala, una vez (no por cuadro).
+
 ## 2026-10-10 — Arranque del CIC 6105 y censo de compatibilidad
 
 Hecho (rama `amazing-noether-39a548`; detalle en docs/cpu-vr4300.md,
@@ -79,7 +191,7 @@ Hecho (rama `amazing-noether-39a548`; detalle en docs/cpu-vr4300.md,
   hilo principal si vale 6105 (se quedaba en el hilo ocioso a los 88 mil
   ciclos); Banjo-Kazooie y Perfect Dark también lo comprueban.
 - `salsa64_boot_hle_as` fuerza la variante; pruebas por variante y de los
-  restos del 6105 (272/272 en el host con main f698afe).
+  restos del 6105 (287/287 en el host con main 3270538).
 - Perfect Dark pasa la comprobación en la Mac y en la **PS3 real**
   (frontend «Salsa64 arranque», SLSA00078): 6083 bloques (6078 fuera de
   KSEG0) en vez de 201, 693 traducciones de la TLB, 59,8 campos/s con 5,8
@@ -95,14 +207,13 @@ Hecho (rama `amazing-noether-39a548`; detalle en docs/cpu-vr4300.md,
 - `tools/censo.sh`: censo de compatibilidad con los ROMs del usuario
   desde su ruta (compila `salsa64-run` con el compilador de la Mac).
 - Censo de 3 minutos de 8 juegos (los 6 objetivo, Banjo-Kazooie y Conker)
-  sobre main f698afe + la rama de F3D (sin integrar): dibujan SM64 (título),
+  sobre main 3270538 (F3D integrado): dibujan SM64 (título),
   OoT, MK64, SF64, GoldenEye y Banjo; suenan ABI 1 y nead. Perfect Dark
   corre sin dibujar ni sonar (su microcódigo de Rare y naudio con MP3 sin
   HLE); Conker manda una sola tarea gráfica (F3DEXBG 2.08, comando 0x14) y
   su naudio da error. Sin la rama de F3D, solo Zelda dibujaba.
 
 Siguiente (lista priorizada en docs/compatibilidad.md):
-- [ ] Integrar la rama de F3D.
 - [ ] Audio: las tres naudio (Banjo-Kazooie, Conker, Perfect Dark con MP3).
 - [ ] Microcódigo de Perfect Dark (por CRC; sin texto) y F3DEXBG de Conker.
 - [ ] Probar con el control y medir en la PS3 las escenas de docs/proyecto.md.
