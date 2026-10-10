@@ -75,6 +75,38 @@ la caché que usa la tarea: el formato no cambia y la repetición
   RDRAM en el cuadro 60; se verifica la imagen después. Con un hash que no
   ve el último texel ni la paleta, fallan esos dos puntos.
 
+## Medición en la PS3 real
+
+Zelda OoT, intro y título, con el recompilador (docs/perf-log.md, «Caché de
+texturas»): la HLE en el SPE baja de 14–31 ms a 5–9,6 ms por tarea; la
+decodificación, de 6,7–17,2 ms a 0,00–0,09 ms (0–1 textura decodificada
+por tarea, sin desalojos en 3510 campos); el hash y la búsqueda cuestan
+0,03–0,35 ms. Las escenas que iban a 41–48 campos/s llegan a 60, y las
+capturas en campos fijos son idénticas byte a byte a las de antes.
+
 ## Decisión: SPE 0 o SPE 2–3
 
-Pendiente de las mediciones en la PS3 (docs/perf-log.md).
+**La caché y la decodificación se quedan en el SPE 0.** Con la caché, lo
+que queda de decodificar es 0–0,09 ms por tarea en promedio: mover eso a
+otro SPE no ahorra nada y agregaría sincronización (la tarea necesita el
+lugar de la textura para escribir el dibujo) y copias de la TMEM entre
+SPEs. Lo que hoy cuesta en el SPE 0 son las cargas a la TMEM (1,4–3,0 ms,
+DMA fila por fila), el estado de dibujo (1,3–2,9 ms) y los vértices
+(1,1–1,6 ms), que no se reparten bien.
+
+Los SPE 2–3 siguen reservados para lo que sí pesa por textura y no por
+tarea: escalado de texturas (xBR/ScaleFX, Fase 5) y, si aparecen juegos
+que cambian muchas texturas por cuadro (decodificación en ráfaga al
+cambiar de escena), decodificación por adelantado. Se revisa si el peor
+campo en un cambio de escena pasa de un campo de tele (16,7 ms) por
+decodificar.
+
+## Pendiente
+
+- Cargas a la TMEM: pedir por adelantado las filas de LOADTILE (hoy un DMA
+  que espera por fila: ~2300 lecturas por tarea en Zelda).
+- Decodificación por formato con SIMD y salidas de 16 bits del RSX
+  (R5G5B5A1 tal cual, IA como G8B8) en `lib/rsxkit/` (MIT): solo importa
+  cuando falla la caché; medir el peor campo en cambios de escena antes.
+- El arena de texturas por juego (4 MB × 3) casi no se usa: se puede
+  achicar.
