@@ -431,6 +431,11 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 			rdp.targets[i].last_field = field;
 			rdp.targets[i].drawn = false;
 		}
+	/* Puede haber más de uno: tras un cambio de resolución, la misma
+	 * dirección con el ancho de antes (GoldenEye pasa de 320 a 440 al ir a
+	 * las carpetas y, en campos alternos, salía la imagen vieja). Se toma el
+	 * del ancho que muestra el VI y, entre iguales, el dibujado hace menos. */
+	const struct target *best = NULL;
 	for (int i = 0; i < MAX_TARGETS; i++) {
 		const struct target *t = &rdp.targets[i];
 		if (!t->used || field - t->last_field > STALE_FIELDS)
@@ -438,14 +443,24 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 		uint32_t line = t->width * t->bpp;
 		if (f->origin < t->addr || f->origin >= t->addr + line * t->lh)
 			continue;
-		uint32_t y0 = (f->origin - t->addr) / line;
-		uint32_t w = f->width < t->lw ? f->width : t->lw;
-		uint32_t h = f->height < t->lh - y0 ? f->height : t->lh - y0;
-		rsxkit_rect src = { 0, (int32_t)(y0 * rdp.scale), w * rdp.scale, h * rdp.scale };
-		rsxkit_target_present(t->t, &src, f->width, f->height, view, out);
-		return true;
+		if (best) {
+			bool tw = t->width == f->width, bw = best->width == f->width;
+			if (bw && !tw)
+				continue;
+			if (bw == tw && (int32_t)(t->last_field - best->last_field) <= 0)
+				continue;
+		}
+		best = t;
 	}
-	return false;
+	if (!best)
+		return false;
+	uint32_t line = best->width * best->bpp;
+	uint32_t y0 = (f->origin - best->addr) / line;
+	uint32_t w = f->width < best->lw ? f->width : best->lw;
+	uint32_t h = f->height < best->lh - y0 ? f->height : best->lh - y0;
+	rsxkit_rect src = { 0, (int32_t)(y0 * rdp.scale), w * rdp.scale, h * rdp.scale };
+	rsxkit_target_present(best->t, &src, f->width, f->height, view, out);
+	return true;
 }
 
 bool salsa64_rdp_dump(const char *path)
