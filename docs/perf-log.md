@@ -150,10 +150,12 @@ igual. La ganancia aparecerá donde el CPU tenga trabajo durante el RDP
 el candidato). Sin regresiones: 60 campos/s, 0 descartados, salida
 limpia; gfxtest OK en la PS3.
 
-gfxtest: la primera versión de la ROM con espera por tiempo leía Count
-en cada vuelta y el recompilador salía a C en cada iteración (64 M
-salidas, 319 M instrucciones interpretadas, 9 campos/s); con Count cada
-1024 vueltas vuelve a su velocidad.
+gfxtest en la PS3: OK (22 de 22) antes y después; 38 → 36–37 campos/s
+(26 → 27 ms por campo: la ROM espera al RSP con un bucle que no es de
+espera pura y ahora lee Count cada 1024 vueltas). La primera versión de
+la ROM con espera por tiempo leía Count en cada vuelta y el recompilador
+salía a C en cada iteración (64 M salidas, 319 M instrucciones
+interpretadas, 9 campos/s).
 
 ## Líneas base de la Fase 0 (pendientes de PS3 real)
 
