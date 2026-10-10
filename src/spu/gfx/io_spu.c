@@ -8,7 +8,8 @@
  *                 síncrono del tramo alineado a 16 que las contiene
  *   vértices      dos búferes de 8 KB (256 vértices): mientras uno sale por
  *   y comandos    DMA se llena el otro; ídem dos de 4 KB para los comandos
- *   texturas      dos búferes de 32 KB; cada textura sale por DMA al arena
+ *   texturas      dos búferes de 32 KB; cada textura sale por DMA a la
+ *                 región de la caché de texturas o al arena de la tarea
  *
  * Etiquetas DMA: 0 lecturas, 1–2 display list, 3–4 vértices, 5–6 comandos,
  * 7–8 texturas. La 31 es de spukit.
@@ -210,4 +211,10 @@ int32_t gfx_io_tex_commit(struct gfx_state *g, uint32_t size)
 	io.tex_cur ^= 1;
 	io.tex_used = off + size;
 	return (int32_t)off;
+}
+
+void gfx_io_tex_cache(struct gfx_state *g, uint32_t off, uint32_t size)
+{
+	spukit_dma_put(tex_buf[io.tex_cur], g->job->cache_ea + off, (size + 15) & ~15u, TAG_TEX + io.tex_cur);
+	io.tex_cur ^= 1;
 }

@@ -16,7 +16,148 @@ antes, después, notas.
 | 2026-10-10 | f18b392 | Recompilador con registros fijos (`OPT_PIN`), nemu64-test | PS3 real (mismo equipo) | 1948 ms (97,2 MIPS) | **1817 ms (104,2 MIPS; ×4,45 del intérprete)** | sp, ra, v0, v1, a0–a3 en r18–r25 entre bloques; +7 %. Por omisión en el frontend |
 | 2026-10-10 | f18b392 | **Frontend con vitest**, recompilador | PS3 real (mismo equipo) | intérprete: 65,6 / 35,0 ms por campo (sin / con bucles de espera) | **5,38 / 2,90 ms (×12); 59,94 campos/s** | Velocidad completa: el resto del campo es la espera del vsync |
 | 2026-10-10 | f416bee | Recompilador, cuatro variantes, nemu64-test | PS3 real (mismo equipo) | intérprete 8098 ms | sin opciones 1941 ms (×4,17); escritura temprana diferida 1992; **registros fijos 1821 (×4,45)**; ambas 1849 | La escritura temprana no compensa ni diferida: queda apagada. Con registros fijos el bench enteros cae de 750 a 128 MIPS (4 registros por bloque): préstamo en bucles (siguiente fila) |
+| 2026-10-10 | b11861c | Recompilador con código en KSEG1 y por TLB (rec_tlb.c), cuatro variantes, nemu64-test y bench | PS3 real (mismo equipo) | intérprete 7972 ms; f416bee: sin opciones 1941, temprana 1992, fijos 1821, ambas 1849 | sin opciones 1973 ms (×4,04); temprana 2014; **fijos 1856 (×4,29)**; ambas 1897. Bench enteros con registros fijos **760 MIPS** (antes 128: el préstamo en bucles funciona) | Mismas 446 fallas, hash y ciclo que el intérprete; 232/232 unitarias en cada variante. 623 de 29 442 bloques fuera de KSEG0 (antes al intérprete). 1–3 % más lento que f416bee, dentro de lo que varió entre corridas anteriores (sin opciones 1817 → 1941); nemu64-test casi no tiene código mapeado, la medición que importa es GoldenEye/Perfect Dark |
+| 2026-10-10 | 8c27863 | **GoldenEye (NTSC)** en el frontend, recompilador con código mapeado por la TLB | PS3 real (mismo equipo), respaldo del usuario | antes: el código mapeado lo corría el intérprete (~24–33 MIPS en nemu64-test) | **59,8 campos/s, 93,7 MIPS (velocidad completa), emulación 5,6 ms por campo** | 3512 de 3518 bloques mapeados, 5050 traducciones (todas en el arranque), ~0,08 % interpretado. El juego no pasa del arranque gráfico (microcódigo F3D sin soporte: ruido en pantalla, igual con el intérprete solo), así que es carga de CPU sin dibujar y sin bucles de espera. Perfect Dark: 5,1 ms por campo, también atorado en el arranque con el intérprete |
+| 2026-10-10 | 697922c → b3ba375 | **Caché de texturas** entre tareas (HLE gráfica en el SPE 0), Zelda OoT con el recompilador, ventanas fijas de 100 campos | PS3 real (mismo equipo), respaldo del usuario | HLE en el SPE 14,0–30,6 ms por tarea; escenas pesadas a 38–48 campos/s; peor campo 36–43 ms | **5,1–9,6 ms por tarea (×2,8–3,3); 59,8–60,2 campos/s en todas; peor campo 17–27 ms** | Decodificar texturas: 6,7–17,2 → 0,00–0,09 ms (0–1 textura decodificada por tarea); identificarlas (hash) 0,03–0,35 ms; cargas a la TMEM 3,7–7,3 → 1,4–3,0 ms (copia en bloque). Mismas capturas byte a byte. Ver «Caché de texturas» abajo |
 | 2026-10-10 | f416bee | **Zelda OoT (NTSC) en el frontend**, recompilador con registros fijos, HLE gráfica en el SPE | PS3 real (mismo equipo), respaldo del usuario | intérprete: 15,4–17,5 campos/s, emulación 56–64 ms por campo | **41–60 campos/s (69–100 %), emulación 4–14 ms por campo** | Logo e intro a 58–60; título y escenas con muchos triángulos 41–55, ahora limitadas por la espera a la HLE gráfica del SPE (10–30 ms por tarea), no por el CPU. 86–88 % del tiempo del CPU en bucles de espera. ~10 500 bloques, 7,9 MB de caché, 1,7 % de instrucciones interpretadas. Se ve igual que con el intérprete (el autor) |
+
+## Caché de texturas (2026-10-10)
+
+**PS3 real** (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00070 «Salsa64
+texturas», Zelda OoT NTSC (respaldo del usuario, fuera del repo), sin
+tocar el control: arranque, logo, intro y título. Las dos compilaciones
+son de un hilo con el recompilador y solo difieren en la HLE gráfica:
+«antes» = main 697922c más la instrumentación (ventanas fijas de 100
+campos, capturas en campos fijos, salida en el campo 3510; parche en la
+rama, sin cambios de comportamiento); «después» = b3ba375 (caché de
+texturas, docs/texturas.md). La emulación es determinista: misma ventana,
+misma escena; las 7 capturas (campos 500, 1000, …, 3500) son **idénticas
+byte a byte**. Por tarea gráfica (~33 tareas cada 100 campos):
+
+| Campos | Escena | Campos/s | Peor campo | Dibujos | Texturas decodificadas | HLE en el SPE | Decodificar | Cargas a la TMEM | PPE esperando al SPE |
+|---|---|---|---|---|---|---|---|---|---|
+| 0–99 | Logo de N64 | 59,5 → 57,9 | 29,6 → 71,5 | 22 | 18,0 → 0,2 | 1,04 → 0,51 ms | 0,47 → 0,01 | 0,12 → 0,04 | 0,66 → 0,13 |
+| 500–599 | Intro nocturna | 60,2 → 60,0 | 24,8 → 17,2 | 110 | 83,3 → 0,7 | 14,04 → 5,09 ms | 6,75 → 0,06 | 3,73 → 1,43 | 13,56 → 4,62 |
+| 1300–1399 | Intro (Epona) | 59,8 → 60,0 | 32,0 → 18,5 | 137 | 111,5 → 0,0 | 19,75 → 6,17 ms | 11,03 → 0,00 | 4,82 → 2,22 | 19,28 → 5,71 |
+| 1700–1799 | Intro, la más pesada | **41,3 → 59,9** | 211,9 → 21,8 | 248/244 | 170,0 → 0,7 | 28,31 → 8,92 ms | 15,82 → 0,09 | 6,54 → 2,82 | 27,81 → 8,44 |
+| 2000–2099 | Título con el castillo | 60,4 → 60,5 | 29,2 → 17,1 | 147 | 91,3 → 0,1 | 21,03 → 6,43 ms | 11,47 → 0,01 | 5,63 → 2,42 | 20,55 → 5,94 |
+| 2200–2299 | Escena con más dibujos | **45,2 → 60,1** | 42,7 → 21,8 | 272/268 | 182,7 → 0,0 | 30,62 → 9,33 ms | 17,21 → 0,00 | 7,10 → 2,96 | 30,13 → 8,84 |
+| 2500–2599 | | **45,2 → 60,4** | 37,5 → 20,0 | 201/200 | 130,5 → 0,0 | 25,38 → 8,38 ms | 13,06 → 0,00 | 6,96 → 2,93 | 24,91 → 7,90 |
+| 3100–3199 | | **45,1 → 60,0** | 34,9 → 20,0 | 163/161 | 137,0 → 0,0 | 22,39 → 6,79 ms | 12,85 → 0,00 | 5,34 → 2,54 | 21,91 → 6,31 |
+
+Tiempos del decrementador del SPE (`gfx_result.t_*`); el peor campo es el
+intervalo más largo entre dos campos en el bucle (con la presentación). Las
+ventanas que terminan en un múltiplo de 500 (400–499, 900–999, …) tienen
+una captura (~400 ms) y no se comparan; las de 0–99 incluyen el arranque.
+
+- La decodificación desaparece: 0 a 1,1 texturas decodificadas por tarea
+  (se reusan 36–320 por tarea, la mitad de tareas anteriores); en los 3510
+  campos no hubo desalojos ni texturas al arena (cabe todo en 8 MB y 1024
+  entradas). Identificar las texturas (hash de lo que leen en la TMEM y
+  búsqueda) cuesta 0,03–0,35 ms por tarea.
+- Las cargas a la TMEM bajan ×2,4 por copiar en bloque (antes `memcpy` de 8
+  bytes por palabra y 4 más para intercambiar mitades). Ahora son lo más
+  caro de la HLE junto con el estado: 2250–2570 lecturas de la RDRAM por
+  tarea para 260–450 cargas (LOADTILE lee fila por fila, cada una con un
+  DMA que espera). Siguiente paso: pedir las filas por adelantado o con
+  una lista de DMA.
+- Menos dibujos (248 → 244): la misma textura cargada dos veces en una
+  tarea antes daba dos copias en el arena con distinta dirección y cortaba
+  el dibujo; ahora es la misma entrada.
+- El PPE sigue esperando al SPE 4,6–9,1 ms por tarea en la intro y el
+  título, pero ya cabe en el campo: todas las ventanas sin captura llegan a
+  60 campos/s.
+
+## Dos hilos en el PPE (2026-10-10)
+
+**PS3 real** (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00073 «Salsa64
+hilos», recompilador activo en los dos casos. «Antes» = main 697922c (un
+hilo: emulación, presentación y flip en vsync en el mismo bucle).
+«Después» = ee5e917 + 5ee9f40 (hilo de emulación + hilo de presentación,
+ritmo de la tele emulada; docs/hilos-ppe.md). Ventanas de 5 s del log del
+frontend; los campos por segundo son los **emulados**.
+
+### vitest (ROM propia, pantalla 320×240 por el CPU)
+
+| | Antes (un hilo) | Después (dos hilos, con ritmo) | Después sin límite (medición A/B) |
+|---|---|---|---|
+| Campos/s | 59,9 (tope del flip en vsync) | 59,8–60,0 (ritmo) | **187 → 363** sin/con detección de bucles de espera |
+| Emulación por campo | 2,5–5,2 ms | 2,3–2,4 ms | 5,02 → 2,45 ms (×2,1) |
+| Copia del VI | — | 0,30 ms (300 KB) | 0,30 ms |
+| Presentación por campo | 11,4–14,1 ms (casi todo el flip) | 0,2–0,3 ms + flip 0,0–0,1 ms | 0,4 ms + flip 14,6 ms, a 60/s; 1 100–1 500 campos saltados por ventana |
+| Espera del ritmo | — | 14,0 ms por campo | — |
+
+La medición A/B de vitest antes daba 59,94 → 59,94 campos/s (el flip
+tapaba todo); ahora mide de verdad: 187 → 363.
+
+### Zelda: Ocarina of Time (NTSC, respaldo del usuario, fuera del repo)
+
+Campos/s por escena (ventana de 5 s que contiene el campo):
+
+| Escena (campo) | Antes (un hilo) | Después (dos hilos) |
+|---|---|---|
+| Logo de N64 (~150–590) | 57,8–59,0 | 58,4 |
+| Intro nocturna (~590–1200) | 59,0–60,0 | 57,9–59,4 |
+| Link en Epona (~1200–1750) | 58,6–59,4 | 57,1–59,4 |
+| Título con el castillo (~1750–2700) | **52,3 → 50,9 → 47,3 → 45,0 → 41,3** | **57,0 / 59,4 / 57,0 / 59,3 / 59,9** |
+| Después del título (~2700–4700) | 41,6–59,9 | 57,4–59,7 |
+
+Desglose por campo en el título (ventana del campo ~2250): antes
+emulación 12,2 ms + presentación 8,8 ms (flip) = 21 ms → 47 campos/s;
+después emulación 13,7 ms, ritmo 2,8 ms, presentación 0,0 ms, flip 8,9 ms
+en el otro hilo → 57–59 campos/s. Las ventanas a 57 son las que tienen una
+captura `screen-N.ppm`: cada captura frena la presentación ~400 ms (leer
+el búfer del RSX desde el PPE), descarta 4 campos, hace esperar al hilo
+de emulación ~250 ms por un juego de búferes y reinicia el ritmo. Por eso
+las capturas periódicas pasaron a ser opcionales (`capturas`).
+
+Lo que queda dentro de «emulación»: la espera del hilo de emulación al
+SPE al terminar cada tarea gráfica, 10–27 ms por tarea con ~20 tareas/s
+(20–53 % del tiempo del hilo). Es el cuello siguiente: que el evento del
+RSP se vuelva a programar en vez de bloquear (`src/core/rsp.c`), o acortar
+la HLE en el SPE (caché de texturas). La traducción al RSX cuesta
+0,15–0,88 ms por tarea y la copia del VI 0,20 ms por campo (se copia
+aunque el VI muestre un destino del RSX; se puede evitar).
+
+### Guardado por hilos
+
+savetest (SRAM) dos veces en la PS3: «persistió el arranque 1», volcado
+diferido escrito por el hilo de presentación a los ~2 s (257 escrituras
+del juego), salida limpia. START + SELECT y «Salir del juego» funcionan;
+los controles llegan por el buzón entre hilos (vitest los identifica).
+
+## Fin de tarea del RSP por sondeo (2026-10-10)
+
+**PS3 real** (mismo equipo), recompilador y caché de texturas en los dos
+casos, dos hilos. «Antes» = main 4a4d98c (el evento de fin de tarea
+espera al SPE); «después» = 16a544f + 0cb8f63 (sondeo: el evento se
+reprograma cada 10 000 ciclos; si el CPU está en bucle de espera, el
+backend duerme 100 µs por sondeo). Zelda OoT NTSC, 52 s desde el logo
+hasta pasado el título; ventanas de 5 s.
+
+| | Antes (espera) | Después (sondeo) |
+|---|---|---|
+| Campos/s | 58,5–60,0 | 58,5–59,9 |
+| Emulación por campo | 3,2–7,5 ms | 3,2–7,2 ms |
+| Emulación esperando al SPE, por tarea | 2,3–8,2 ms (100 esperas / 100 tareas) | **0,00 ms (0 esperas)** |
+| Sondeos por tarea / dormida en bucles de espera | — | 33–75 / 2,9–6,9 ms |
+| Ritmo (margen por campo) | 9,0–13,6 ms | 9,3–13,6 ms |
+
+Lectura: la espera bloqueante desapareció, pero en Zelda no hay nada que
+hacer mientras el RSP trabaja (el CPU está en el bucle ocioso de
+libultra el 86–88 % del tiempo): el tiempo que antes bloqueaba ahora lo
+duerme el sondeo en pasos de 100 µs, y la emulación por campo queda
+igual. La ganancia aparecerá donde el CPU tenga trabajo durante el RDP
+(lógica del juego después de mandar la tarea; Super Mario 64 con F3D es
+el candidato). Sin regresiones: 60 campos/s, 0 descartados, salida
+limpia; gfxtest OK en la PS3.
+
+gfxtest en la PS3: OK (22 de 22) antes y después; 38 → 36–37 campos/s
+(26 → 27 ms por campo: la ROM espera al RSP con un bucle que no es de
+espera pura y ahora lee Count cada 1024 vueltas). La primera versión de
+la ROM con espera por tiempo leía Count en cada vuelta y el recompilador
+salía a C en cada iteración (64 M salidas, 319 M instrucciones
+interpretadas, 9 campos/s).
 
 ## Líneas base de la Fase 0 (pendientes de PS3 real)
 

@@ -71,6 +71,13 @@ void t_load(const uint32_t *code, unsigned n);
 void t_step(unsigned n);
 void t_set_status(uint32_t status);
 
+/* Escribe una entrada de la TLB ejecutando TLBWI desde una dirección aparte
+ * (0x80000F00), sin tocar el programa de la prueba. Deja Index, EntryHi,
+ * EntryLo0/1 y PageMask con esos valores. */
+void t_tlb_set(unsigned index, uint64_t hi, uint32_t lo0, uint32_t lo1, uint32_t page_mask);
+/* EntryLo: PFN | C=3 | D | V | G */
+#define T_LO(pfn, d, v, g) ((uint32_t)(pfn) << 6 | 3u << 3 | (d) << 2 | (v) << 1 | (g))
+
 /* RDRAM física, en el orden de bytes de la N64. */
 uint32_t t_rd32(uint32_t pa);
 uint64_t t_rd64(uint32_t pa);
@@ -103,6 +110,7 @@ void t_suite_rsp(void);
 void t_suite_gfx(void);
 void t_suite_audio(void);
 void t_suite_audio_sync(void);
+void t_suite_pacer(void);
 
 /* Corre todo y devuelve el número de pruebas fallidas. `print` recibe una
  * línea sin salto final. */

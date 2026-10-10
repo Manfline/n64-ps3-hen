@@ -11,9 +11,14 @@
  * Los búferes de salida de la HLE (vértices, comandos, texturas) viven en
  * memoria principal mapeada al RSX, en varios juegos que se turnan: el SPE
  * escribe uno mientras el RSX dibuja otro. Una barrera del RSX dice cuándo
- * se puede volver a usar cada juego.
+ * se puede volver a usar cada juego. La caché de texturas (gfx.h) es otra
+ * región mapeada que la HLE administra sola; las barreras le dicen qué
+ * tareas ya terminó el RSX (job->done_task).
  *
- * Solo PS3 (PSL1GHT). Todas las llamadas desde el hilo que usa rsxkit.
+ * Solo PS3 (PSL1GHT). Dos hilos (docs/hilos-ppe.md): el sink (acquire,
+ * done) se llama desde el hilo de emulación; lo demás, desde el hilo que
+ * usa rsxkit (presentación). Las tareas terminadas esperan en una cola
+ * hasta salsa64_rdp_flush, que las traduce en orden.
  */
 #ifndef SALSA64_RDP_RDP_H
 #define SALSA64_RDP_RDP_H
@@ -27,9 +32,9 @@ struct salsa64_rdp_stats {
 	uint32_t tasks;
 	uint32_t draws, triangles;
 	uint32_t targets_created;
-	uint32_t set_waits;      /* veces que un juego de búferes seguía en uso */
-	uint64_t us_translate;   /* PPE traduciendo a comandos del RSX */
-	uint64_t us_set_wait;
+	uint32_t set_waits;      /* veces que un juego de búferes seguía en uso (emulación) */
+	uint64_t us_translate;   /* PPE traduciendo a comandos del RSX (presentación) */
+	uint64_t us_set_wait;    /* hilo de emulación esperando un juego */
 };
 
 /* Después de rsxkit_init. scale = 0: la mayor escala entera que cabe en la
@@ -37,8 +42,17 @@ struct salsa64_rdp_stats {
 int salsa64_rdp_init(uint32_t scale);
 void salsa64_rdp_shutdown(void);
 
-/* Las dos manos de un backend gráfico (rsp/gfx/backend.h). */
+/* Las dos manos de un backend gráfico (rsp/gfx/backend.h). acquire puede
+ * esperar a que el RSX libere un juego de búferes (nunca llama a rsxkit
+ * salvo rsxkit_fence_done). */
 const struct salsa64_gfx_sink *salsa64_rdp_sink(void);
+
+/* Traduce a comandos del RSX las tareas terminadas con número menor que
+ * `upto` (~0u: todas). Devuelve cuántas van traducidas en total. */
+uint32_t salsa64_rdp_flush(uint32_t upto);
+/* Tareas terminadas (done) hasta ahora; para el hilo de emulación, que lo
+ * manda con cada campo. */
+uint32_t salsa64_rdp_tasks_done(void);
 
 /* Si el VI muestra una color image dibujada por el RSX en los últimos
  * campos, la presenta (en el cuadro en curso de rsxkit) y devuelve true. */
@@ -47,8 +61,9 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 
 void salsa64_rdp_get_stats(struct salsa64_rdp_stats *out);
 
-/* Escribe la salida de la última tarea (gfx.h: gfx_dump_header) en `path`.
- * Espera al RSX. Para depurar. */
+/* Escribe la salida de la última tarea (gfx.h: gfx_dump_header) en `path`,
+ * con las texturas de la caché copiadas al arena (el volcado no depende de
+ * la caché). Espera al RSX. Para depurar. */
 bool salsa64_rdp_dump(const char *path);
 
 #endif

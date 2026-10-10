@@ -5,6 +5,7 @@
 
 #include <string.h>
 #include <sys/systime.h>
+#include <sys/thread.h>
 
 #include "spu_audio_bin.h"
 
@@ -14,6 +15,26 @@ static void spu_start(void *ctx, const struct salsa64_task *task, enum salsa64_a
 	salsa64_audio_job(&s->job, s->bus, task, abi);
 	s->seq = spukit_post(s->worker, AUD_JOB_TASK, &s->job, sizeof s->job);
 	s->pending = true;
+}
+
+#define POLL_SLEEP_US 100
+
+/* Sondeo del fin de la tarea (rsp.c): si el SPE no terminó, el núcleo
+ * vuelve a preguntar más tarde y el CPU sigue emulando. Si el CPU está en
+ * un bucle de espera, se duerme un poco antes de contestar para que el
+ * reloj emulado no se adelante al real (como el backend gráfico). */
+static bool spu_done(void *ctx, bool idle)
+{
+	struct salsa64_audio_spu *s = ctx;
+	if (!s->pending || spukit_done(s->worker, s->seq))
+		return true;
+	s->polls++;
+	if (idle) {
+		sysUsleep(POLL_SLEEP_US);
+		s->sleep_us += POLL_SLEEP_US;
+		return spukit_done(s->worker, s->seq);
+	}
+	return false;
 }
 
 /* Espera la tarea en vuelo; avisa al bus de lo que escribió si `bus`. */
@@ -51,6 +72,7 @@ int salsa64_audio_spu_init(struct salsa64_audio_spu *s, const struct salsa64_bus
 	s->backend.ctx = s;
 	s->backend.start = spu_start;
 	s->backend.finish = spu_finish;
+	s->backend.done = spu_done;
 	s->bus = bus;
 	s->worker = spukit_worker_start(spu_audio_bin, "salsa64_audio", 0);
 	return s->worker ? 0 : spukit_last_error();

@@ -220,6 +220,35 @@ static void idle_store_not_skipped(void)
 	CHECK(rejected(CODE(1)));
 }
 
+/* `b .` en KSEG1: el intérprete lo analiza igual que en KSEG0. */
+static void setup_kseg1_self_loop(void)
+{
+	T_LOAD(BEQ(0, 0, 0xFFFF), NOP);
+	salsa64_cpu_set_pc(CPU, KSEG1(T_CODE_PA));
+}
+
+/* `b .` mapeado por la TLB: idle.c no lee código mapeado, así que lo
+ * descarta (y el recompilador recompila el bloque sin la consulta). */
+#define V_LOOP 0x00400000u
+
+static void setup_mapped_self_loop(void)
+{
+	t_tlb_set(10, V_LOOP, T_LO(0x10, 1, 1, 1), T_LO(0x11, 1, 1, 1), 0);
+	t_wr32(0x10000, BEQ(0, 0, 0xFFFF));
+	t_wr32(0x10004, NOP);
+	salsa64_cpu_set_pc(CPU, V_LOOP);
+}
+
+static void idle_other_segments(void)
+{
+	uint64_t skipped = same_both_ways(setup_kseg1_self_loop, 1000000);
+	CHECK(skipped >= 999000);
+	skipped = same_both_ways(setup_mapped_self_loop, 100000);
+	CHECK_EQ(skipped, 0);
+	CHECK_EQ(CPU->idle_reject[(V_LOOP >> 2) & (SALSA64_IDLE_CACHE - 1)], V_LOOP ^ BEQ(0, 0, 0xFFFF));
+	CHECK_EQ(CPU->pc & ~4ull, V_LOOP);
+}
+
 /* Apagar y prender la detección vacía las tablas. */
 static void idle_toggle(void)
 {
@@ -244,4 +273,5 @@ void t_suite_idle(void)
 	RUN(idle_delay_slot_write);
 	RUN(idle_store_not_skipped);
 	RUN(idle_toggle);
+	RUN(idle_other_segments);
 }

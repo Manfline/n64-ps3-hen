@@ -15,7 +15,9 @@
  *   cr4 condición del salto (sobrevive al delay slot); cr0 y cr1 temporales.
  *
  * Forma de un bloque:
- *   entrada:  si cycles + n > next: salir (lo corre el intérprete hasta el
+ *   entrada:  si es código mapeado y vtlb[] ya no traduce su página a la
+ *             misma física: salir al despachador (rec_tlb.h)
+ *             si cycles + n > next: salir (lo corre el intérprete hasta el
  *             evento); si hay COP1 y Status.CU1 = 0: salir igual
  *             carga de los registros que se leen antes de escribirse
  *   cuerpo:   una traducción por instrucción; los caminos lentos (E/S, TLB,
@@ -1507,6 +1509,8 @@ static void emit_branch(struct ctx *c, unsigned b)
 		bind(c, idle_exit);
 		writeback(c, c->written);
 		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)b + 1));
+		li32u(c, 0, i);  /* el despachador no relee la instrucción (puede estar mapeada) */
+		E(c, ppc_std(0, OFF(rec_site), R_CPU));
 		li64(c, 3, bpc);
 		restore_borrowed(c);
 		emit_b(c, abs_label(c, c->rec->exit_idle), false);
@@ -1566,7 +1570,7 @@ static void emit_branch(struct ctx *c, unsigned b)
 
 static uint32_t fetch(const struct salsa64_rec *rec, uint32_t pa)
 {
-	return salsa64_rd32(rec->cpu->rdram + pa);
+	return salsa64_rec_fetch(rec, pa);  /* RDRAM o ROM */
 }
 
 /* Elige los registros MIPS más usados del bloque para r14–r25 (o r14–r17
@@ -1682,12 +1686,12 @@ static uint32_t finalize(struct salsa64_rec *rec, uint32_t base, uint32_t limit)
 	return nhot + ncold;
 }
 
-uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, unsigned max, bool temp,
-			     unsigned *n_out, uint32_t *bytes_out)
+uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, unsigned seg, unsigned max,
+			     bool temp, unsigned *n_out, uint32_t *bytes_out)
 {
 	static struct ctx ctx;  /* grande para la pila; el recompilador corre en un solo hilo */
 	struct ctx *c = &ctx;
-	uint32_t pa = (uint32_t)pc & 0x1FFFFFFF;
+	uint32_t end = salsa64_rec_code_end(rec, pa, seg);  /* fuera de KSEG0, sin cruzar páginas */
 
 	memset(c, 0, sizeof *c);
 	c->rec = rec;
@@ -1702,11 +1706,11 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, unsigned max,
 	 * delay slot no se puede compilar (otro salto, COP0…) queda fuera. */
 	unsigned n = 0;
 	bool any_cop1 = false;
-	while (n < max && pa + 4 * n + 4 <= rec->rdram_size) {
+	while (n < max && pa + 4 * n + 4 <= end) {
 		struct dec *d = &c->d[n];
 		decode(fetch(rec, pa + 4 * n), d);
 		if (is_branch(d)) {
-			if (n + 1 >= max || pa + 4 * n + 8 > rec->rdram_size)
+			if (n + 1 >= max || pa + 4 * n + 8 > end)
 				break;
 			decode(fetch(rec, pa + 4 * n + 4), &c->d[n + 1]);
 			if (c->d[n + 1].kind != K_NORMAL)
@@ -1754,7 +1758,19 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, unsigned max,
 	c->sec = SEC_HOT;
 
 	/* Entrada: ¿cabe antes del próximo evento?, ¿COP1 usable? */
-	int start_exit = new_label(c);
+	int start_exit = new_label(c), vt_miss = -1;
+	if (seg == SALSA64_REC_MAPPED) {
+		/* ¿vtlb[] (justo antes de flags, en r28) sigue traduciendo la
+		 * página igual? xoris deja 0 en la mitad alta solo si coincide;
+		 * cmplwi compara entonces la baja. */
+		uint32_t v = salsa64_rec_vt_value(pc, pa);
+		int32_t off = 4 * (int32_t)salsa64_rec_vt_slot(pc) - (int32_t)sizeof rec->x.vtlb;
+		vt_miss = new_label(c);
+		E(c, ppc_lwz(0, off, R_FLAGS));
+		E(c, ppc_xoris(0, 0, v >> 16));
+		E(c, ppc_cmplwi(0, 0, v & 0xFFFF));
+		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(0, PPC_EQ), vt_miss);
+	}
 	E(c, ppc_addi(0, R_CYCLES, (int32_t)n));
 	E(c, ppc_cmpld(0, 0, R_NEXT));
 	emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(0, PPC_GT), start_exit);
@@ -1789,6 +1805,11 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, unsigned max,
 	bind(c, start_exit);
 	li64(c, 3, pc);
 	emit_b(c, abs_label(c, rec->exit_mid), false);
+	if (vt_miss >= 0) {  /* la página cambió de traducción: que la busque el despachador */
+		bind(c, vt_miss);
+		li64(c, 3, pc);
+		emit_b(c, abs_label(c, rec->exit_jump), false);
+	}
 	emit_pending_exits(c);
 
 	uint32_t base = temp ? rec->scratch : rec->used;

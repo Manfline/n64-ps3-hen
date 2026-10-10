@@ -18,9 +18,12 @@ deja una ventana de error fatal (proceso `rpcs3 --error`), se registra su
 mensaje y se cierra. Copia de RPCS3.log en build/logs/rpcs3-<programa>.rpcs3.log.
 Código de salida: 0 si hubo RESULTADO sin FALLO, 1 si FALLO, 2 si no hubo
 RESULTADO.
+RPCS3, su dev_hdd0 y su TTY.log son uno solo para todos los worktrees: cada
+corrida toma un candado (LOCK_FILE) y, si otra corrida lo tiene, espera.
 RPCS3 no es concluyente para rendimiento ni para el JIT (ver docs/proyecto.md).
 """
 import argparse
+import fcntl
 import os
 import pathlib
 import shutil
@@ -39,6 +42,20 @@ NOREC_FLAG = AUTOTEST_FLAG.parent / "sin-recompilador"
 EMBED_FILE = AUTOTEST_FLAG.parent / "embedded"
 CONFIG = ROOT / "tools/rpcs3/salsa64.yml"
 EXIT_GRACE = 30  # segundos para que RPCS3 se cierre solo tras RESULTADO
+# Fuera del repo para que lo compartan todos los worktrees.
+LOCK_FILE = LOGDIR / "salsa64-rpcs3.lock"
+
+
+def lock_rpcs3():
+    """Una corrida de RPCS3 a la vez entre worktrees; se suelta al salir."""
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    f = open(LOCK_FILE, "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("== RPCS3 ocupado por otra corrida (otro worktree): espero turno", file=sys.stderr)
+        fcntl.flock(f, fcntl.LOCK_EX)
+    return f
 
 
 def resolve_elf(arg: str) -> pathlib.Path:
@@ -190,6 +207,7 @@ def main() -> int:
                     "debe dibujar en el RSX (replay.c)")
     args = ap.parse_args()
 
+    lock = lock_rpcs3()  # noqa: F841 (se mantiene hasta salir)
     EMBED_FILE.parent.mkdir(parents=True, exist_ok=True)
     if args.replay:
         EMBED_FILE.write_text("dump:" + args.replay + "\n")

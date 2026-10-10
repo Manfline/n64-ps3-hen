@@ -62,8 +62,7 @@ void gfx_rdp_reset(struct gfx_state *g)
 	g->timg_fmt = g->timg_siz = 0;
 	memset(g->tiles, 0, sizeof g->tiles);
 	memset(g->tmem, 0, sizeof g->tmem);
-	memset(g->tmem_key, 0, sizeof g->tmem_key);
-	g->load_seq = 0;
+	g->tex_gen++;
 }
 
 void gfx_init(struct gfx_state *g)
@@ -486,6 +485,7 @@ void gfx_rdp_command(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	}
 	case G_SETTILESIZE: {
 		struct gfx_tile *t = &g->tiles[(w1 >> 24) & 7];
+		g->tex_gen++;
 		t->uls = (w0 >> 12) & 0xFFF;
 		t->ult = w0 & 0xFFF;
 		t->lrs = (w1 >> 12) & 0xFFF;
@@ -504,6 +504,7 @@ void gfx_rdp_command(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	}
 	case G_SETTILE: {
 		struct gfx_tile *t = &g->tiles[(w1 >> 24) & 7];
+		g->tex_gen++;
 		t->fmt = (w0 >> 21) & 7;
 		t->siz = (w0 >> 19) & 3;
 		t->line = (uint16_t)(((w0 >> 9) & 0x1FF) * 8);

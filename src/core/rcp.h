@@ -117,6 +117,13 @@ struct salsa64_gfx_backend {
 	/* Espera a que termine (cuando la máquina llega al fin de la tarea) y
 	 * devuelve SALSA64_GFX_*. */
 	uint32_t (*finish)(void *ctx);
+	/* Opcional: ¿ya terminó? Sin bloquear. Si lo hay, el fin de la tarea
+	 * se vuelve a programar cada poll_cycles hasta que diga que sí, y el
+	 * CPU sigue emulando entre medias. `idle` avisa que el CPU está en un
+	 * bucle de espera (saltó ciclos desde el sondeo anterior): el backend
+	 * puede dormir un poco en vez de volver en el acto, para que el reloj
+	 * emulado no corra más rápido que el real. */
+	bool (*done)(void *ctx, bool idle);
 };
 
 /* ABI de las listas de audio (alist): cada microcódigo de audio numera y
@@ -159,10 +166,14 @@ struct salsa64_audio_backend {
 	 * avisa al bus qué partes de la RDRAM escribió
 	 * (salsa64_bus_rdram_written). */
 	void (*finish)(void *ctx, struct salsa64_bus *bus);
+	/* Opcional, como en el gráfico: ¿ya terminó? Sin bloquear. */
+	bool (*done)(void *ctx, bool idle);
 };
 
 struct salsa64_rsp_stats {
 	uint32_t gfx, audio, other, unknown_gbi, unknown_abi;
+	uint32_t polls;        /* fines de tarea vueltos a programar (SPE ocupado) */
+	uint32_t starts_busy;  /* arranques ignorados con una tarea en curso */
 };
 
 struct salsa64_rsp {
@@ -174,6 +185,9 @@ struct salsa64_rsp {
 	enum salsa64_abi abi;   /* de la última tarea de audio */
 	/* Duración aparente de cada tarea, en ciclos del VR4300. */
 	uint32_t gfx_cycles, audio_cycles, dp_cycles;
+	/* Cada cuántos ciclos se vuelve a preguntar al backend si terminó. */
+	uint32_t poll_cycles;
+	uint64_t poll_idle;     /* idle_cycles del CPU en el sondeo anterior */
 	struct salsa64_rsp_stats stats;
 	/* Opcional (depuración): cada arranque del RSP con su tarea y la familia
 	 * de microcódigo detectada (SALSA64_GBI_UNKNOWN si no es gráfica). */

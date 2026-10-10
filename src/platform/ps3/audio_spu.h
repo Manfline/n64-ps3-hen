@@ -26,6 +26,8 @@ struct salsa64_audio_spu {
 	uint64_t wait_us;    /* PPE esperando al SPE al terminar una tarea */
 	uint32_t waits;
 	uint32_t failed;     /* trabajos que el SPE devolvió con error */
+	uint32_t polls;      /* sondeos con la tarea sin terminar */
+	uint64_t sleep_us;   /* dormido en sondeos con el CPU en bucle de espera */
 };
 
 /* Arranca el trabajador (spukit_init ya llamado). Devuelve 0 o el error de
