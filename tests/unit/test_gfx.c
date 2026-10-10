@@ -20,7 +20,9 @@ static struct gfx_state gs;
 static struct gfx_vertex out_vtx[4096] __attribute__((aligned(16)));
 static uint8_t out_cmd[64 * 1024] __attribute__((aligned(16)));
 static uint8_t out_tex[256 * 1024] __attribute__((aligned(128)));
+static uint8_t out_cache[64 * 1024] __attribute__((aligned(128)));
 static struct gfx_job job;
+static uint32_t cache_task;  /* tarea de la caché de texturas (0: sin caché) */
 static struct gfx_result res;
 static uint32_t dl_pc, data_pc;
 
@@ -44,7 +46,16 @@ static void start(void)
 {
 	dl_pc = DL_PA;
 	data_pc = DATA_PA;
+	cache_task = 0;
 	gfx_init(&gs);
+}
+
+/* Otra tarea con el mismo estado del RDP (y la misma caché). */
+static void next_task(void)
+{
+	dl_pc = DL_PA;
+	data_pc = DATA_PA;
+	cache_task++;
 }
 
 static void run(void)
@@ -59,6 +70,12 @@ static void run(void)
 	job.cmd_cap = sizeof out_cmd;
 	job.tex_ea = (uint64_t)(uintptr_t)out_tex;
 	job.tex_cap = sizeof out_tex;
+	if (cache_task) {
+		job.cache_ea = (uint64_t)(uintptr_t)out_cache;
+		job.cache_cap = sizeof out_cache;
+		job.task = cache_task;
+		job.done_task = cache_task - 1;
+	}
 	job.gbi = SALSA64_GBI_F3DEX2;
 	job.dl = DL_PA;
 	gfx_run(&gs, &job, &res);
@@ -540,6 +557,297 @@ static void gfx_dl_flow(void)
 	CHECK_EQ(res.dl_errors, 0);
 }
 
+/* ---- Caché de texturas ---- */
+
+/* RGBA16 4×2 desde TEX_PA con LOADBLOCK y un TEXRECT en copia. */
+static void dl_rgba16_rect(void)
+{
+	dl(0xFD100000 | 0, TEX_PA);
+	dl(0xF5100000, 0x07000000);
+	dl(0xF3000000, 0x07000000 | 7 << 12 | 2048);
+	dl(0xF5100000 | 1 << 9, 0x00000000);
+	dl(0xF2000000, 0x00000000 | (3 << 2) << 12 | (1 << 2));
+	set_cycle(G_CYC_COPY);
+	dl(0xE4000000 | (3 << 2) << 12 | (1 << 2), 0);
+	dl(0xE1000000, 0);
+	dl(0xF1000000, 0x10000400);
+}
+
+static const uint8_t *tex_of(const struct gfx_tex *t)
+{
+	return (t->where == GFX_TEX_CACHE ? out_cache : out_tex) + t->offset;
+}
+
+/* La misma textura en otra tarea sale de la caché; si cambia un texel en la
+ * RDRAM (el último del tramo cargado), se vuelve a decodificar. */
+static void gfx_texcache_across_tasks(void)
+{
+	start();
+	cache_task = 1;
+	for (int i = 0; i < 8; i++)
+		salsa64_wr16(t_n64.bus.rdram + TEX_PA + 2 * i, (uint16_t)((i * 4) << 11 | 1));
+	dl_rgba16_rect();
+	run();
+	const struct gfx_draw *d = draw_n(0);
+	CHECK(d != NULL);
+	if (!d)
+		return;
+	CHECK_EQ(res.textures, 1);
+	CHECK_EQ(res.tex_old, 0);
+	CHECK_EQ(d->tex[0].where, GFX_TEX_CACHE);
+	uint32_t first = d->tex[0].offset;
+	CHECK_EQ(tex_of(&d->tex[0])[d->tex[0].pitch + 4 * 3], 28u << 3 | 28u >> 2);
+
+	next_task();
+	dl_rgba16_rect();
+	run();
+	d = draw_n(0);
+	CHECK_EQ(res.textures, 0);
+	CHECK_EQ(res.tex_old, 1);
+	CHECK(d && d->tex[0].where == GFX_TEX_CACHE && d->tex[0].offset == first);
+
+	/* Texel (3, 1): el último de los 16 bytes cargados. */
+	salsa64_wr16(t_n64.bus.rdram + TEX_PA + 14, (uint16_t)(31u << 6 | 1));
+	next_task();
+	dl_rgba16_rect();
+	run();
+	d = draw_n(0);
+	CHECK_EQ(res.textures, 1);
+	if (!d)
+		return;
+	CHECK(d->tex[0].offset != first);
+	const uint8_t *p = tex_of(&d->tex[0]) + d->tex[0].pitch + 4 * 3;
+	CHECK_EQ(p[0], 0);
+	CHECK_EQ(p[1], 0xFF);
+
+	/* De vuelta al original: la primera sigue en la caché. */
+	salsa64_wr16(t_n64.bus.rdram + TEX_PA + 14, (uint16_t)(28u << 11 | 1));
+	next_task();
+	dl_rgba16_rect();
+	run();
+	d = draw_n(0);
+	CHECK_EQ(res.textures, 0);
+	CHECK(d && d->tex[0].offset == first);
+
+	/* Con GFX_JOB_NOCACHE, al arena. */
+	next_task();
+	dl_rgba16_rect();
+	dl(0xDF000000, 0);
+	memset(&job, 0, sizeof job);
+	job.rdram_ea = (uint64_t)(uintptr_t)t_n64.bus.rdram;
+	job.rdram_size = t_n64.bus.rdram_size;
+	job.vtx_ea = (uint64_t)(uintptr_t)out_vtx;
+	job.vtx_cap = sizeof out_vtx;
+	job.cmd_ea = (uint64_t)(uintptr_t)out_cmd;
+	job.cmd_cap = sizeof out_cmd;
+	job.tex_ea = (uint64_t)(uintptr_t)out_tex;
+	job.tex_cap = sizeof out_tex;
+	job.cache_ea = (uint64_t)(uintptr_t)out_cache;
+	job.cache_cap = sizeof out_cache;
+	job.task = cache_task;
+	job.done_task = cache_task - 1;
+	job.flags = GFX_JOB_NOCACHE;
+	job.gbi = SALSA64_GBI_F3DEX2;
+	job.dl = DL_PA;
+	gfx_run(&gs, &job, &res);
+	d = draw_n(0);
+	CHECK_EQ(res.textures, 1);
+	CHECK(d && d->tex[0].where == GFX_TEX_ARENA);
+}
+
+/* CI4 con paleta: si cambia una entrada de la paleta en la RDRAM, la
+ * textura es otra. */
+static void dl_ci4_rect(void)
+{
+	dl(0xFD100000, TEX_PA + 0x100);
+	dl(0xF5000100, 0x07000000);
+	dl(0xF0000000, 0x07000000 | (15 << 2) << 12);
+	dl(0xFD480000 | 3, TEX_PA);
+	dl(0xF5480000 | 1 << 9, 0x07000000);
+	dl(0xF4000000, 0x07000000 | (3 << 2) << 12 | (1 << 2));
+	dl(0xF5400000 | 1 << 9, 0x00000000);
+	dl(0xF2000000, (7 << 2) << 12 | (1 << 2));
+	dl(0xE3000000 | (32 - 14 - 2) << 8 | 1, 2u << 14);
+	set_cycle(G_CYC_COPY);
+	dl(0xE4000000 | (7 << 2) << 12 | (0 << 2), 0);
+	dl(0xE1000000, 0);
+	dl(0xF1000000, 0x10000400);
+}
+
+static void gfx_texcache_palette(void)
+{
+	start();
+	cache_task = 1;
+	for (int i = 0; i < 16; i++)
+		salsa64_wr16(t_n64.bus.rdram + TEX_PA + 0x100 + 2 * i, (uint16_t)((i * 2) << 1 | 1));
+	for (int i = 0; i < 8; i++)
+		t_n64.bus.rdram[TEX_PA + i] = (uint8_t)((2 * i) << 4 | (2 * i + 1));
+	dl_ci4_rect();
+	run();
+	CHECK_EQ(res.textures, 1);
+	next_task();
+	dl_ci4_rect();
+	run();
+	CHECK_EQ(res.textures, 0);
+	/* Entrada 3: azul 6 → verde 31. */
+	salsa64_wr16(t_n64.bus.rdram + TEX_PA + 0x100 + 6, (uint16_t)(31u << 6 | 1));
+	next_task();
+	dl_ci4_rect();
+	run();
+	CHECK_EQ(res.textures, 1);
+	const struct gfx_draw *d = draw_n(0);
+	if (!d)
+		return;
+	const uint8_t *p = tex_of(&d->tex[0]);
+	CHECK_EQ(p[4 * 3 + 1], 0xFF);  /* texel 3: verde */
+	CHECK_EQ(p[4 * 3 + 2], 0);
+	CHECK_EQ(p[4 * 4 + 2], 8u << 3 | 8u >> 2);  /* texel 4: azul 8, igual */
+}
+
+/* El anillo de la caché: con el consumidor dos tareas atrás, nunca se
+ * desaloja ni se pisa una textura que aún puede leer; las entradas no se
+ * enciman y el índice las encuentra después de moverse. */
+static uint32_t lcg(uint32_t *s)
+{
+	*s = *s * 1103515245u + 12345u;
+	return *s >> 8;
+}
+
+/* Tareas con `ops` usos de claves al azar (de `keys` distintas; tamaño
+ * 128 o de 128 a 3200 bytes) sobre una región de `cap` bytes. */
+static void ring_run(uint32_t cap, uint32_t keys, int ops, bool small, uint32_t *ins, uint32_t *hit, uint32_t *fail)
+{
+	static struct gfx_state g;
+	memset(&g, 0, sizeof g);
+	memset(&job, 0, sizeof job);
+	memset(&res, 0, sizeof res);
+	g.job = &job;
+	g.res = &res;
+	job.cache_ea = (uint64_t)(uintptr_t)out_cache;  /* el directorio no la toca */
+	job.cache_cap = cap;
+	enum { KEYS = 4000 };
+	static uint32_t last[KEYS], off[KEYS];
+	memset(last, 0, sizeof last);
+	uint32_t seed = 1;
+	*ins = *hit = *fail = 0;
+	for (uint32_t task = 1; task <= 400; task++) {
+		job.task = task;
+		job.done_task = task - 3;
+		gfx_tc_begin(&g);
+		CHECK(g.tc_on);
+		for (int n = 0; n < ops; n++) {
+			uint32_t k = lcg(&seed) % (task < 200 ? keys / 8 : keys);
+			uint32_t key[2] = { k * 0x9E3779B1u, k };
+			bool old;
+			const struct gfx_tc_entry *e = gfx_tc_find(&g, key, &old);
+			if (e) {
+				(*hit)++;
+				CHECK_EQ(e->off, off[k]);
+				CHECK_EQ(old, last[k] != task);
+				last[k] = task;
+				continue;
+			}
+			uint32_t sz = small ? 128 : 128 + (lcg(&seed) % 4) * 1000;
+			struct gfx_tc_entry *ne = gfx_tc_insert(&g, key, sz);
+			if (!ne) {
+				(*fail)++;
+				continue;
+			}
+			(*ins)++;
+			CHECK(ne->off + ne->size <= g.tc.cap);
+			off[k] = ne->off;
+			last[k] = task;
+		}
+		/* Las que se usaron después de done_task siguen donde estaban. */
+		for (uint32_t k = 0; k < keys; k++)
+			if (last[k] && (int32_t)(last[k] - job.done_task) > 0) {
+				bool found = false;
+				for (uint32_t i = 0; i < g.tc.count; i++) {
+					const struct gfx_tc_entry *e = &g.tc.e[(g.tc.tail + i) % GFX_TC_ENTRIES];
+					if (e->key[1] == k) {
+						found = true;
+						CHECK_EQ(e->off, off[k]);
+					}
+				}
+				CHECK(found);
+			}
+		/* En el orden de la región desde head_off y sin encimarse. */
+		uint32_t prev_end = g.tc.head_off;
+		bool wrapped = false;
+		for (uint32_t i = 0; i < g.tc.count; i++) {
+			const struct gfx_tc_entry *e = &g.tc.e[(g.tc.tail + i) % GFX_TC_ENTRIES];
+			if (e->off < prev_end) {
+				CHECK(!wrapped);
+				wrapped = true;
+			}
+			CHECK(!wrapped || e->off + e->size <= g.tc.head_off);
+			prev_end = e->off + e->size;
+		}
+	}
+}
+
+static void gfx_texcache_ring(void)
+{
+	start();
+	uint32_t ins, hit, fail;
+	/* Texturas grandes: la región se llena antes que el directorio. */
+	ring_run(40000, 300, 8, false, &ins, &hit, &fail);
+	CHECK(ins > 500 && hit > 500 && res.tex_evicted > 300);
+	CHECK(fail < ins / 10);  /* lo que no cabe va al arena */
+	/* Texturas chicas y muchas claves: se llena el directorio. */
+	ring_run(1u << 20, 4000, 40, true, &ins, &hit, &fail);
+	CHECK(ins > 4000 && hit > 1000 && res.tex_evicted > 3000);
+	CHECK_EQ(fail, 0);
+}
+
+/* El hash ve exactamente el tramo pedido, también al dar la vuelta. */
+static void gfx_texcache_hash(void)
+{
+	static uint8_t ring[4096] __attribute__((aligned(16)));
+	for (int i = 0; i < 4096; i++)
+		ring[i] = (uint8_t)(i * 7 + 3);
+	uint32_t k0[2], k1[2];
+	struct gfx_hash h;
+	gfx_hash_init(&h);
+	gfx_hash_ring(&h, ring, 4096, 8, 24);  /* bytes 8..31 */
+	gfx_hash_final(&h, k0);
+	ring[7] ^= 1;
+	ring[32] ^= 1;
+	gfx_hash_init(&h);
+	gfx_hash_ring(&h, ring, 4096, 8, 24);
+	gfx_hash_final(&h, k1);
+	CHECK(k0[0] == k1[0] && k0[1] == k1[1]);
+	ring[31] ^= 1;
+	gfx_hash_init(&h);
+	gfx_hash_ring(&h, ring, 4096, 8, 24);
+	gfx_hash_final(&h, k1);
+	CHECK(k0[0] != k1[0] && k0[1] != k1[1]);
+	/* Vuelta: 4088..4095 y 0..7. */
+	gfx_hash_init(&h);
+	gfx_hash_ring(&h, ring, 4096, 4088, 16);
+	gfx_hash_final(&h, k0);
+	ring[3] ^= 0x80;
+	gfx_hash_init(&h);
+	gfx_hash_ring(&h, ring, 4096, 4088, 16);
+	gfx_hash_final(&h, k1);
+	CHECK(k0[0] != k1[0]);
+	ring[8] ^= 0x80;
+	ring[4087] ^= 0x80;
+	gfx_hash_init(&h);
+	gfx_hash_ring(&h, ring, 4096, 4088, 16);
+	gfx_hash_final(&h, k0);
+	CHECK(k0[0] == k1[0] && k0[1] == k1[1]);
+	/* Mismo contenido en otro lugar alineado igual: misma clave. */
+	memcpy(ring + 1024, ring + 512, 256);
+	gfx_hash_init(&h);
+	gfx_hash_ring(&h, ring, 4096, 512, 256);
+	gfx_hash_final(&h, k0);
+	gfx_hash_init(&h);
+	gfx_hash_ring(&h, ring, 4096, 1024, 256);
+	gfx_hash_final(&h, k1);
+	CHECK(k0[0] == k1[0] && k0[1] == k1[1]);
+}
+
 void t_suite_gfx(void)
 {
 	RUN(gfx_combiner_forms);
@@ -553,4 +861,8 @@ void t_suite_gfx(void)
 	RUN(gfx_fill_1cycle_edge);
 	RUN(gfx_draw_batching);
 	RUN(gfx_dl_flow);
+	RUN(gfx_texcache_across_tasks);
+	RUN(gfx_texcache_palette);
+	RUN(gfx_texcache_ring);
+	RUN(gfx_texcache_hash);
 }

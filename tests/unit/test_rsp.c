@@ -75,7 +75,21 @@ static uint32_t fake_finish(void *ctx)
 	return SALSA64_GFX_FULLSYNC;
 }
 
-static const struct salsa64_gfx_backend fake_backend = { NULL, fake_start, fake_finish };
+static const struct salsa64_gfx_backend fake_backend = { NULL, fake_start, fake_finish, NULL };
+
+/* Backend que tarda: `done` dice que no las primeras `fake_busy` veces y
+ * anota si el núcleo le avisó que el CPU estaba en un bucle de espera. */
+static int fake_busy, fake_dones, fake_idle_seen;
+
+static bool fake_done(void *ctx, bool idle)
+{
+	(void)ctx;
+	fake_dones++;
+	fake_idle_seen += idle;
+	return fake_busy-- <= 0;
+}
+
+static const struct salsa64_gfx_backend slow_backend = { NULL, fake_start, fake_finish, fake_done };
 
 static void put_task(uint32_t type, uint32_t ucode_data, uint32_t dl)
 {
@@ -143,6 +157,59 @@ static void rsp_gfx_task(void)
 	salsa64_rsp_set_gfx(bus, NULL);
 }
 
+/* El fin de la tarea se vuelve a programar mientras el backend no termina;
+ * el CPU sigue sin HALT, otro arranque se ignora y TASKDONE llega cuando
+ * el backend dice que sí. */
+static void rsp_gfx_task_polls(void)
+{
+	struct salsa64_bus *bus = &t_n64.bus;
+	memset(&fake, 0, sizeof fake);
+	fake_busy = 3;
+	fake_dones = fake_idle_seen = 0;
+	salsa64_rsp_set_gfx(bus, &slow_backend);
+	put_text(0x5000 + 0x123, "Salsa64 GBI F3DEX2");
+	put_task(SALSA64_TASK_GFX, 0x5000, 0x6000);
+	wr(SP_REG(SALSA64_SP_STATUS), 0x1 | 0x4 | 0x100);
+	CHECK_EQ(fake.starts, 1);
+
+	uint64_t t0 = CPU->cycles, t = t0 + bus->rsp.gfx_cycles;
+	for (int i = 0; i < 3; i++) {
+		salsa64_sched_dispatch(&t_n64.sched, t);
+		CHECK_EQ(fake.finishes, 0);
+		CHECK_EQ(bus->rsp.busy, SALSA64_TASK_GFX);
+		CHECK_EQ(rd(SP_REG(SALSA64_SP_STATUS)) & SALSA64_SP_STATUS_HALT, 0);
+		CHECK_EQ(bus->rsp.stats.polls, (uint32_t)(i + 1));
+		CHECK_EQ(t_n64.sched.when[SALSA64_EV_SP_TASK], t + bus->rsp.poll_cycles);
+		/* Con la tarea en curso no arranca otra: sp.c solo arranca al
+		 * quitar un HALT puesto, y aunque llegara aquí se ignora. */
+		wr(SP_REG(SALSA64_SP_STATUS), 0x1 | 0x4);
+		salsa64_rsp_start(bus);
+		CHECK_EQ(fake.starts, 1);
+		CHECK_EQ(bus->rsp.stats.starts_busy, (uint32_t)(i + 1));
+		t += bus->rsp.poll_cycles;
+	}
+	CHECK_EQ(fake_idle_seen, 0);  /* el CPU no saltó ciclos */
+	/* Un salto de bucle de espera entre sondeos se le avisa al backend. */
+	CPU->idle_cycles += 5000;
+	fake_busy = 1;
+	salsa64_sched_dispatch(&t_n64.sched, t);
+	CHECK_EQ(fake_idle_seen, 1);
+	CHECK_EQ(fake.finishes, 0);
+	t += bus->rsp.poll_cycles;
+	salsa64_sched_dispatch(&t_n64.sched, t);
+	CHECK_EQ(fake_idle_seen, 1);  /* sin más saltos, sin aviso */
+	CHECK_EQ(fake.finishes, 1);
+	CHECK_EQ(bus->rsp.busy, 0);
+	CHECK_EQ(rd(SP_REG(SALSA64_SP_STATUS)),
+		 SALSA64_SP_STATUS_HALT | SALSA64_SP_STATUS_BROKE | SALSA64_SP_STATUS_INTR_BREAK |
+		 SALSA64_SP_STATUS_TASKDONE);
+	CHECK_EQ(bus->mi.intr, 1u << SALSA64_IRQ_SP);
+	salsa64_sched_dispatch(&t_n64.sched, t + bus->rsp.dp_cycles);
+	CHECK_EQ(bus->mi.intr, (1u << SALSA64_IRQ_SP) | (1u << SALSA64_IRQ_DP));
+	CHECK_EQ(fake_dones, 5);
+	salsa64_rsp_set_gfx(bus, NULL);
+}
+
 static void rsp_audio_task(void)
 {
 	struct salsa64_bus *bus = &t_n64.bus;
@@ -206,6 +273,7 @@ void t_suite_rsp(void)
 {
 	RUN(sp_dma_rows);
 	RUN(rsp_gfx_task);
+	RUN(rsp_gfx_task_polls);
 	RUN(rsp_audio_task);
 	RUN(rsp_other_task);
 	RUN(rsp_detect_gbi);

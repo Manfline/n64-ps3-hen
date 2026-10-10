@@ -15,6 +15,15 @@ cartucho (`src/core/save.c`, `src/frontend/savefile.c`) son código propio, escr
 IV ISA, n64brew.dev) y validado con nemu64-test. No incluye código de
 Not64/Wii64, Mupen64Plus ni ares.
 
+El recompilador de la Fase 3 (`src/cpu/rec.c`, `rec_emit.c`, `rec.h`,
+`ppc.h`) también es propio, escrito desde Power ISA (libro I) y la
+semántica de nuestro intérprete. Not64 y Wii64 se **consultaron como
+referencia de diseño, sin copiar código** (decisión en docs/rec-ppe.md):
+
+| Proyecto | Repositorio y commit revisado | Licencia | Uso |
+|---|---|---|---|
+| Not64 | github.com/extremscorner/not64, `d35a7a1c454eca973995939dbca3f06725cf4a6e` (2026-04-10) | GPLv2 o posterior (cabeceras de `r4300/ppc/*`; `LICENCE.TXT` = GPL v2) | Lectura de `r4300/ppc/` y `Recomp-Cache*` |
+| Wii64 | github.com/emukidid/Wii64, `2e1c6fb056e1965a57f6be4accdbf5460e7de291` (2026-10-09) | GPLv2 o posterior | Lectura de `r4300/ppc/` |
 La HLE gráfica de la Fase 2 (`src/rsp/gfx/`, `src/spu/gfx/`, `src/rdp/`) y
 `lib/spukit/` también son código propio. Para el comportamiento de F3DEX2 y
 del RDP se consultaron la documentación de n64brew.dev y el código de
@@ -39,7 +48,8 @@ Datos tomados de terceros (no código):
 | Detección del microcódigo por los textos de `ucode_data` ("RSP Gfx ucode", versión 2.x, F3DZEX, "RSP SW Version") | `src/core/rsp.c` | GLideN64 `src/GBI.cpp`; mupen64plus-video-rice `src/RSP_Parser.cpp` | GPLv2 (solo consulta). Las pruebas usan textos sintéticos, no los de Nintendo |
 | Codificación de los comandos F3DEX2 y F3DZEX (G_VTX, G_MODIFYVTX, G_CULLDL, G_BRANCH_Z/W, G_TRI*, G_TEXTURE, G_GEOMETRYMODE y sus bits, G_MTX, G_MOVEWORD, G_MOVEMEM y sus offsets, G_SETOTHERMODE_*, G_TEXRECT en tres comandos) | `src/rsp/gfx/f3dex2.c`, `tests/roms/src/gfxtest/gbi.h` | n64brew.dev; GLideN64 `src/uCodes/F3DEX2.*`, `src/GBI.h`, `src/gSP.cpp`; mupen64plus-video-glide64mk2 `ucode02.h`; mupen64plus-video-rice `UcodeDefs.h` | documentación; GPLv2 (solo consulta). `gbi.h` de gfxtest es propio: no es el de libultra ni el de ningún decomp |
 | Luces (transformar la dirección con la modelview y normalizar), mapeo de entorno ((d+1)·512 y acos(−d)·1024/π texels antes de la escala) y niebla por vértice (z/w·fm + fo) | `src/rsp/gfx/geom.c` | GLideN64 `src/gSP.cpp`, `src/3DMath.cpp`; mupen64plus-video-glide64mk2 `3dmath.cpp` | GPLv2 (solo consulta) |
-| Codificación de los comandos de F3D (Fast3D) y F3DEX 1.x: opcodes inmediatos desde 0xBF, G_VTX (n−1, v0 y largo; en F3DEX v0·2 y n), índices ×10 en F3D, G_MTX (proyección 0x01, carga 0x02, push 0x04), G_MOVEMEM (viewport 0x80, lookat 0x82/0x84, luces 0x86–0x94, gSPForceMatrix 0x9E/0x98/0x9A/0x9C), G_MOVEWORD (índice en el byte bajo, número de luces 0x80000000 + 32·(n+1), color de luz cada 0x20, G_MW_POINTS de 40 bytes), bits de geometry mode (suave 0x200, culling 0x1000/0x2000), G_SETOTHERMODE_* con desplazamiento y largo directos, G_TEXTURE con el encendido en el byte bajo, G_TEXRECT seguido de G_RDPHALF_2 y G_RDPHALF_CONT | `src/rsp/gfx/f3d.c`, `tests/roms/src/gfxtest/gbi.h` | Documentación de la comunidad de SM64 sobre Fast3D (wiki de Skelux, "Fast3D Display List Commands", consultada el 2026-10-10); GLideN64 `src/uCodes/F3D.cpp` (consultado el 2026-10-10) y `F3DEX.cpp` | documentación; GPLv2 (solo consulta, sin copiar código). Nada del decomp de SM64 ni de libultra |
+| Codificación de los comandos de F3D (Fast3D) y F3DEX 1.x: opcodes inmediatos desde 0xBF, G_VTX (n−1, v0 y largo; en F3DEX v0·2 y n), índices ×10 en F3D, G_MTX (proyección 0x01, carga 0x02, push 0x04), G_MOVEMEM (viewport 0x80, lookat 0x82/0x84, luces 0x86–0x94, gSPForceMatrix 0x9E/0x98/0x9A/0x9C), G_MOVEWORD (índice en el byte bajo, número de luces 0x80000000 + 32·(n+1), color de luz cada 0x20, G_MW_POINTS de 40 bytes), bits de geometry mode (suave 0x200, culling 0x1000/0x2000), G_SETOTHERMODE_* con desplazamiento y largo directos, G_TEXTURE con el encendido en el byte bajo, G_TEXRECT seguido de G_RDPHALF_2 y G_RDPHALF_CONT | `src/rsp/gfx/f3d.c`, `tests/roms/src/gfxtest/gbi.h` | Documentación de la comunidad de SM64 sobre Fast3D (wiki de Skelux, "Fast3D Display List Commands", consultada el 2026-10-10); GLideN64 `src/uCodes/F3D.cpp` (consultado el 2026-10-10) | documentación; GPLv2 (solo consulta, sin copiar código). Nada del decomp de SM64 ni de libultra |
+| Ronda de xxHash32 (acumulador + entrada·PRIME2, rotar 13, ·PRIME1), sus constantes PRIME1–3 y la mezcla final (avalanche) | `src/rsp/gfx/texcache.c` (hash de las texturas de la caché) | xxHash de Yann Collet, especificación `doc/xxhash_spec.md` (github.com/Cyan4973/xxHash) | BSD-2-Clause. Solo la ronda y las constantes; la disposición en ocho carriles de 16 bytes y el plegado a 64 bits son propios (no es xxHash compatible) |
 | RDP: campos de othermode, blender, G_SETCOMBINE y sus entradas, TMEM (LOADBLOCK con dxt, LOADTILE, LOADTLUT, RGBA32 partido, intercambio en filas impares), formatos de textura, TEXRECT/FILLRECT en COPY/FILL, intercambio de TEXEL0/TEXEL1 en el segundo ciclo | `src/rsp/gfx/rdp.c`, `tmem.c`, `combine.c` | n64brew.dev (Reality Display Processor/Commands); parallel-rdp (MIT) y angrylion-rdp-plus (licencia MAME, no comercial: solo lectura) como confirmación | documentación (CC BY-SA, reescrito); MIT; solo consulta |
 
 Aviso de PSL1GHT: Copyright (c) 2011 PSL1GHT Development Team, licencia MIT
@@ -58,6 +68,8 @@ arriba como el resto.
 | PSL1GHT | github.com/ps3dev/PSL1GHT | MIT | SDK homebrew, enlazado con los programas |
 | NVIDIA Cg Toolkit 3.1 | developer.nvidia.com/cg-toolkit | Propietaria (NVIDIA), gratuita | `libCg.so` para `cgcomp`, solo en la imagen local; no se commitea ni se publica |
 | Port de SM64, rama `ps3` | github.com/fgsfdsfgs/sm64-port | — | Solo para validar `cgcomp`: los shaders se descargan a `build/validate/` y no se copian al repo |
+| gcc-powerpc64-linux-gnu 12, glibc ppc64 (Debian 12) | debian.org | GPL/LGPL | Compilar el núcleo para Linux ppc64 y probar el recompilador con qemu (`docker/ppc64.Dockerfile`); los binarios quedan en `build/ppc64` |
+| QEMU 7.2 (`qemu-user-static`, Debian 12) | qemu.org | GPLv2 | Ejecutar esos binarios ppc64 en la Mac |
 
 ## ROMs de prueba incluidas
 

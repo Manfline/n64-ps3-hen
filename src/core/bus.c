@@ -7,6 +7,14 @@
 
 #include "core/endian.h"
 #include "core/save.h"
+#include "cpu/rec.h"
+#include "cpu/vr4300.h"
+
+void salsa64_bus_rdram_written(struct salsa64_bus *bus, uint32_t pa, uint32_t len)
+{
+	if (bus->cpu && bus->cpu->rec)
+		salsa64_rec_invalidate(bus->cpu->rec, pa, len);
+}
 
 void salsa64_bus_init(struct salsa64_bus *bus, uint8_t *rdram, uint32_t rdram_size)
 {
@@ -22,6 +30,7 @@ void salsa64_bus_init(struct salsa64_bus *bus, uint8_t *rdram, uint32_t rdram_si
 void salsa64_bus_reset(struct salsa64_bus *bus)
 {
 	memset(bus->rdram, 0, bus->rdram_size);
+	salsa64_bus_rdram_written(bus, 0, bus->rdram_size);
 	memset(bus->sp_mem, 0, sizeof bus->sp_mem);
 	memset(bus->pif_ram, 0, sizeof bus->pif_ram);
 	salsa64_pif_reset(bus);
@@ -37,6 +46,8 @@ void salsa64_bus_set_rom(struct salsa64_bus *bus, const uint8_t *rom, uint32_t s
 	uint32_t max = SALSA64_CART_ROM_END - SALSA64_CART_ROM_ADDR;
 	bus->rom = rom;
 	bus->rom_size = size > max ? max : size;
+	if (bus->cpu && bus->cpu->rec)  /* puede haber código compilado desde la ROM anterior */
+		salsa64_rec_flush(bus->cpu->rec);
 }
 
 void salsa64_bus_set_isviewer(struct salsa64_bus *bus, uint8_t *buf, salsa64_isv_fn out, void *ctx)
@@ -46,6 +57,8 @@ void salsa64_bus_set_isviewer(struct salsa64_bus *bus, uint8_t *buf, salsa64_isv
 	bus->isv_ctx = ctx;
 	if (buf)
 		memset(buf, 0, SALSA64_ISV_SIZE);
+	if (bus->cpu && bus->cpu->rec)  /* el ISViewer tapa la ROM: no se compila ahí */
+		salsa64_rec_flush(bus->cpu->rec);
 }
 
 static inline bool isv_hit(const struct salsa64_bus *bus, uint32_t paddr)

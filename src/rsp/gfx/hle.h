@@ -1,10 +1,11 @@
 /*
  * Salsa64 — HLE gráfica: estado interno y E/S por plataforma. Ver gfx.h.
  *
- * Todo el estado cabe en una gfx_state (~10 KB; la TMEM son 4 KB): en el SPE
- * vive en el local store y persiste entre tareas, como el estado del RDP en
- * la consola. El estado del RSP (matrices, luces, segmentos) se reinicia en
- * cada tarea, como lo hace el microcódigo al cargarse.
+ * Todo el estado cabe en una gfx_state (~53 KB: la TMEM son 4 KB y el
+ * directorio de la caché de texturas 32 KB): en el SPE vive en el local
+ * store y persiste entre tareas, como el estado del RDP en la consola. El
+ * estado del RSP (matrices, luces, segmentos) se reinicia en cada tarea,
+ * como lo hace el microcódigo al cargarse.
  */
 #ifndef SALSA64_RSP_GFX_HLE_H
 #define SALSA64_RSP_GFX_HLE_H
@@ -18,7 +19,9 @@
 #define GFX_MTX_STACK   32   /* F3D: 10, F3DEX2: 18 en la RDRAM */
 #define GFX_DL_STACK    32   /* F3D: 10, F3DEX2: 18 */
 #define GFX_MAX_LIGHTS  8    /* direccionales + la ambiental */
-#define GFX_TEX_CACHE   128  /* texturas decodificadas por tarea */
+#define GFX_TEX_ARENA   128  /* texturas en el arena por tarea */
+#define GFX_TC_ENTRIES  1024 /* texturas en la caché entre tareas */
+#define GFX_TC_SLOTS    2048 /* índice por hash de la caché (potencia de 2) */
 #define GFX_MAX_COMMANDS (1u << 20)
 
 /* Códigos de recorte de un vértice. */
@@ -54,8 +57,40 @@ struct gfx_tile {
 	uint16_t uls, ult, lrs, lrt;  /* 10.2 */
 };
 
+/* Textura decodificada en el arena de la tarea en curso. */
 struct gfx_texentry {
-	uint32_t key;
+	uint32_t key[2];
+	struct gfx_tex tex;
+};
+
+/* Caché de texturas entre tareas (texcache.c): directorio de lo que hay en
+ * la región job->cache_ea. Las entradas forman una cola en el orden en que
+ * ocupan la región (anillo); se reserva en `head_off` y se desaloja lo que
+ * sigue, salvo lo que aún puede leer el consumidor (last_task > done_task),
+ * que se salta. */
+struct gfx_tc_entry {
+	uint32_t key[2];
+	uint32_t off, size;      /* lugar en la región (múltiplos de 128) */
+	uint32_t last_task;      /* última tarea que la usó */
+	uint16_t width, height, pitch;
+	uint16_t slot;           /* posición en index */
+};
+
+struct gfx_texcache {
+	uint64_t ea;             /* región con que se armó el directorio */
+	uint32_t cap;
+	uint32_t head_off;       /* donde va la próxima textura */
+	uint32_t tail, count;    /* cola de entradas en e[] (circular) */
+	uint32_t task, done_task;
+	uint16_t index[GFX_TC_SLOTS];  /* posición en e[] + 1; 0 = libre */
+	struct gfx_tc_entry e[GFX_TC_ENTRIES];
+};
+
+/* Última textura resuelta por tile en la tarea: vale mientras no haya
+ * cargas a la TMEM ni cambios de tiles (tex_gen) ni del modo de paleta. */
+struct gfx_tilememo {
+	uint32_t gen;
+	uint8_t tt, ok;
 	struct gfx_tex tex;
 };
 
@@ -99,9 +134,9 @@ struct gfx_state {
 	uint16_t timg_width;
 	uint8_t timg_fmt, timg_siz;
 	struct gfx_tile tiles[8];
-	uint32_t tmem_key[64];     /* identidad de lo cargado en cada bloque de 64 B */
-	uint32_t load_seq;
+	uint32_t tex_gen;          /* cambia con cada carga a la TMEM o cambio de tile */
 	uint8_t tmem[4096] __attribute__((aligned(16)));
+	struct gfx_texcache tc;
 
 	/* --- Salida de la tarea en curso --- */
 	const struct gfx_job *job;
@@ -111,8 +146,10 @@ struct gfx_state {
 	bool have_draw;            /* `draw` está abierto */
 	struct gfx_draw draw __attribute__((aligned(16)));
 	uint32_t vtx_count;        /* vértices escritos en la tarea */
-	struct gfx_texentry texcache[GFX_TEX_CACHE];
-	uint32_t ntexcache;
+	bool tc_on;                /* la tarea usa la caché de texturas */
+	struct gfx_texentry arena_tex[GFX_TEX_ARENA];
+	uint32_t narena_tex;
+	struct gfx_tilememo tilememo[8];
 
 	void *io;                  /* estado de la plataforma (gfx_io.h) */
 };
@@ -143,6 +180,9 @@ bool gfx_io_cmd(struct gfx_state *g, const void *rec, uint32_t size);
 #define GFX_TEX_MAX 32768u
 uint8_t *gfx_io_tex_begin(struct gfx_state *g, uint32_t size);
 int32_t gfx_io_tex_commit(struct gfx_state *g, uint32_t size);
+/* Entrega la textura (del área de gfx_io_tex_begin) a la región de la
+ * caché, `off` bytes desde su inicio (múltiplo de 128). */
+void gfx_io_tex_cache(struct gfx_state *g, uint32_t off, uint32_t size);
 
 /* ---- Módulos ---- */
 
@@ -208,12 +248,33 @@ void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c);
 void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uint32_t w3, bool flip);
 void gfx_flush_draw(struct gfx_state *g);
 
+/* texcache.c: hash de 64 bits por bloques de 16 bytes y caché de texturas
+ * entre tareas. */
+struct gfx_hash {
+	uint32_t acc[8] __attribute__((aligned(16)));
+	uint32_t len;
+};
+void gfx_hash_init(struct gfx_hash *h);
+/* Bytes [start, start + len) de un anillo de `size` bytes (potencia de 2,
+ * alineado a 16): lo que pase del final sigue desde el principio. */
+void gfx_hash_ring(struct gfx_hash *h, const uint8_t *ring, uint32_t size, uint32_t start, uint32_t len);
+void gfx_hash_words(struct gfx_hash *h, uint32_t a, uint32_t b, uint32_t c, uint32_t d);
+void gfx_hash_final(const struct gfx_hash *h, uint32_t key[2]);
+
+/* Al empezar una tarea: decide si usa la caché (g->tc_on) y la prepara. */
+void gfx_tc_begin(struct gfx_state *g);
+/* Textura con ese hash (y la marca usada en esta tarea), o NULL. */
+const struct gfx_tc_entry *gfx_tc_find(struct gfx_state *g, const uint32_t key[2], bool *old);
+/* Lugar para una textura nueva de `size` bytes, o NULL si no hay (todo lo
+ * que habría que desalojar lo puede leer aún el consumidor). */
+struct gfx_tc_entry *gfx_tc_insert(struct gfx_state *g, const uint32_t key[2], uint32_t size);
+
 /* tmem.c: cargas a la TMEM y decodificación de una tile. */
 void gfx_load_block(struct gfx_state *g, uint32_t w0, uint32_t w1);
 void gfx_load_tile(struct gfx_state *g, uint32_t w0, uint32_t w1);
 void gfx_load_tlut(struct gfx_state *g, uint32_t w0, uint32_t w1);
-/* Decodifica la tile a RGBA8888 (o la toma de la caché de la tarea) y llena
- * `tex` salvo xf. false si no hay lugar. */
+/* Decodifica la tile a RGBA8888 (o la toma de la caché) y llena `tex`
+ * salvo flags y xf. false si no hay lugar. */
 bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex);
 /* Tamaño de la textura de una tile (potencia de 2 si se repite). */
 void gfx_tile_size(const struct gfx_tile *t, uint32_t *w, uint32_t *h);

@@ -2,7 +2,8 @@
 
 ## 2026-10-10 — F3D (Super Mario 64) y F3DEX 1.x
 
-Hecho (rama `lucid-pare-4f93fb`, sin integrar):
+Hecho (rama `lucid-pare-4f93fb`, con main traído hasta 20ab569; sin
+integrar):
 - HLE de la primera generación de microcódigos en `src/rsp/gfx/f3d.c`: F3D
   (Fast3D: búfer de 16 vértices, índices ×10, G_TRI1, G_MTX con sus
   banderas, G_MOVEMEM/G_MOVEWORD con sus índices, geometry mode en dos
@@ -16,10 +17,11 @@ Hecho (rama `lucid-pare-4f93fb`, sin integrar):
   detección y el despacho en `test_rsp.c`: 223 en total.
 - gfxtest en tres variantes (`tools/build-gfxtest.sh`; `GBI=` en su
   Makefile): F3DEX2 (la ROM sale idéntica), F3D y F3DEX. En el host las tres
-  dan 19 de 19 puntos y la misma imagen (`tools/test-roms.sh`, que además
-  falla si hay comandos sin implementar); la de F3D también en RPCS3
-  (`tools/test-phase2.sh`) y en la **PS3 real** (`RESULTADO frontend: OK`,
-  0,18 ms por tarea en el SPE). El frontend verifica la pantalla de las
+  dan los mismos puntos y la misma imagen (`tools/test-roms.sh`, que además
+  falla si hay comandos sin implementar): 19 de 19 antes de traer main y
+  22 de 22 con las escenas de la caché de texturas. La de F3D también en
+  RPCS3 (`tools/test-phase2.sh`, 22 de 22) y en la **PS3 real** (19 de 19,
+  `RESULTADO frontend: OK`, 0,18 ms por tarea en el SPE). El frontend verifica la pantalla de las
   variantes cargadas con `file:salsa64-gfxtest-*.z64` como la embebida.
 - **SM64** (respaldo propio, USA, fuera del repo): en el host llega al
   título y a las demos (Bowser, Whomp's Fortress) sin comandos sin
@@ -46,6 +48,257 @@ Pendiente:
   Mac (`make -C src/host OUT=$PWD/build/host-mac CC=clang SAN=`) y lee la
   ROM en su lugar.
 
+## 2026-10-10 — Fin de tarea del RSP por sondeo (sin bloquear al SPE)
+
+Hecho (rama `musing-mcclintock-6b5e2c`, commits a2ffd0f + mezcla
+16a544f con main 4a4d98c; diseño en docs/hilos-ppe.md «Fin de tarea sin
+bloquear»):
+- `src/core/rsp.c`: el backend tiene `done(ctx, idle)` (no bloquea); al
+  llegar el fin de la tarea, si no terminó, el evento se vuelve a programar
+  cada `poll_cycles` (10 000 ciclos) y el CPU sigue emulando. Si el CPU
+  saltó ciclos (bucle de espera) desde el sondeo anterior, se le avisa al
+  backend y el del SPE duerme 100 µs antes de contestar: el reloj emulado
+  no corre más rápido que el real. Con la tarea en curso el RSP no está
+  HALT y otro arranque se ignora (`starts_busy`). Genérico para el audio.
+- Prueba unitaria `rsp_gfx_task_polls`; estadísticas `sondeos` y
+  `dormida` en la línea `gfx:` del frontend.
+- ROM gfxtest: la espera por una interrupción vence por tiempo (10 s de
+  Count) y no por vueltas (en RPCS3 el primer trabajo del SPE compila
+  segundos; antes el CPU estaba congelado mientras tanto). Reconstruida.
+- Verificación: 224 pruebas en el host, cpu-tests/vitest/save-tests en
+  RPCS3, gfxtest 22/22, test-roms 446, build sin advertencias.
+
+Medido en la PS3 (docs/perf-log.md, «Fin de tarea del RSP por sondeo»):
+Zelda, «esperando al SPE» 2,3–8,2 ms por tarea → 0; emulación por campo
+igual (3,2–7,5 → 3,2–7,2 ms) porque el CPU está ocioso mientras el RSP
+trabaja y el sondeo duerme ese tiempo; 60 campos/s sin regresiones;
+gfxtest OK. La ganancia llegará donde el CPU tenga trabajo durante el
+RDP.
+
+Pendiente:
+- [ ] Repetir con Super Mario 64 (F3D) cuando esté en main: 9,5 ms de CPU
+      por campo, el caso donde el sondeo debería rendir.
+- [ ] Recompilador: un bucle que lee Count (MFC0) sale a C en cada vuelta
+      (gfxtest cayó a 9 campos/s); compilar MFC0 Count en línea (trabajo FPU, MFC0 nativo).
+
+## 2026-10-10 — Recompilador: código en KSEG1 y mapeado por la TLB
+
+Hecho (diseño en docs/rec-ppe.md, «Código fuera de KSEG0»):
+- El recompilador compila también código en KSEG1 y mapeado por la TLB
+  (kuseg, kseg2/3), con la instrucción en la RDRAM o en la ROM del
+  cartucho. Antes eso lo corría el intérprete; GoldenEye y Perfect Dark
+  corren casi todo su código mapeado.
+- Clave de bloque (vpc, física) en una tabla aparte (`xhash`); KSEG0 sigue
+  igual. Todo en `src/cpu/rec_tlb.c` (para que los merges con otros
+  cambios del recompilador sean fáciles); rec.c y rec_emit.c solo lo llaman. Los bloques mapeados comparan su traducción al entrar contra una
+  TLB del recompilador por página de 4 KB (`vtlb[]`, 4 instrucciones),
+  también al llegar por un enlace o por JR. Escribir la TLB no mata ni
+  desenlaza bloques: antes de correr código, el despachador vuelve a
+  traducir las páginas anotadas si cambiaron la TLB, el ASID o ERL.
+- JR/JALR encuentran en el propio código los bloques fuera de KSEG0.
+- `cop0.c`: `salsa64_vr4300_fetch_probe` (búsqueda en la TLB sin
+  excepciones) y `cpu->tlb_writes`.
+- Pruebas nuevas (también en modo estricto): código mapeado con JAL entre
+  páginas, remapeo con enlace, cambio de ASID, código mapeado reescrito por
+  la dirección mapeada y por KSEG0, KSEG1, ROM por TLB y por KSEG1, dos
+  páginas en la misma entrada de `vtlb[]`, bucle mapeado; bucles de espera
+  en KSEG1 (se saltan) y mapeados (se descartan, como con el intérprete).
+- qemu-ppc64: unitarias 222/222 con el recompilador en los cuatro modos;
+  nemu64-test con las fallas de la línea base y 623 bloques fuera de KSEG0;
+  vitest OK; `--lockstep` sin diferencias en nemu64-test y vitest.
+- Cambiar la ROM o el ISViewer vacía el recompilador (puede haber código
+  compilado desde la ROM).
+- Memoria: +572 KB del estado del recompilador (6,84 MB).
+
+Siguiente:
+- **PS3 real** (b11861c, cpu-tests «Salsa64 CPU TLB», SLSA00076): 232/232
+  en el intérprete y en las cuatro variantes; nemu64-test igual al
+  intérprete (446 fallas, hash y ciclo), ×4,04–4,29; bench enteros con
+  registros fijos 760 MIPS (el préstamo en bucles funciona; antes 128).
+- qemu-ppc64 con `--lockstep` (respaldos propios, fuera del repo):
+  GoldenEye y Perfect Dark 200 M ciclos cada uno sin diferencias con el
+  intérprete. GoldenEye: 3518 de 3524 bloques mapeados y 5050
+  traducciones en 2,1 s (reescribe la TLB seguido); Perfect Dark con 8 MB:
+  3 traducciones.
+- **PS3 real, frontend «Salsa64 TLB»** (SLSA00074, respaldos propios):
+  - GoldenEye: 59,8 campos/s a 93,7 MIPS (velocidad completa del VR4300),
+    **5,6 ms de emulación por campo**; 3512 de 3518 bloques mapeados, 5050
+    traducciones en el arranque y ninguna después, ~0,08 % interpretado;
+    estable 100 s. En pantalla, ruido: el juego manda una sola tarea
+    gráfica con un microcódigo que la HLE no reconoce (ucode en 0x20e60,
+    su F3D) y después solo audio; con el intérprete solo, en la Mac, queda
+    igual (mismo bucle en 0x7000071c a los 21 s). Le toca al trabajo de F3D.
+  - Perfect Dark: 59,8 campos/s, 5,1 ms por campo, pero se queda en el
+    arranque (201 bloques, VI sin configurar, pantalla negra); con el
+    intérprete solo también (pc 0x700017f4 a los 21 s, sin tareas del RSP
+    ni excepciones). No es del recompilador: falta ver el arranque (CIC
+    6105) o algún registro del hardware.
+- Diagnóstico (arnés en la Mac, con el intérprete; lockstep de 10,7 s de
+  consola sin diferencias en los dos juegos):
+  - GoldenEye llega a su hilo ocioso (`b .` en 0x7000071c) y se queda: su
+    única tarea gráfica (ucode en 0x20e60) no la reconoce la HLE, y la
+    tarea nunca termina para el juego (sin DP), así que no vuelve a
+    dibujar; el VI muestra RDRAM sin inicializar (el ruido). Pagina su
+    código por fallos de TLB (110 en 10 s). Además el `b .` mapeado no lo
+    salta idle.c (solo KSEG0/KSEG1): 0 % en bucles de espera.
+  - Perfect Dark (CIC 6105) compara la palabra en 0xA00002E8 con
+    0xC86E2000 y, si no coincide, se queda en `b .` (0x700017f0). Ningún
+    código del juego la escribe: la deja el arranque del 6105 y nuestro
+    arranque HLE no. Escribiéndola a mano (experimento, no en el repo)
+    pasa, monta 0x7F000000 en la TLB y llega a su hilo ocioso.
+- [ ] Arranque HLE del CIC 6105 (`src/core/boot.c`; trabajo «Arranque del CIC
+      6105 y censo»): lo que el IPL3 deja
+      en la RDRAM (al menos 0x2E8 = 0xC86E2000), desde documentación
+      pública, sin código de Nintendo.
+- [ ] HLE gráfica: el microcódigo de GoldenEye (F3D; trabajo de F3D) y que
+      una tarea con microcódigo desconocido no deje colgado al juego.
+- [ ] idle.c: bucles de espera en código mapeado por la TLB (trabajo TLB).
+- [ ] Verificar en el desensamblado (o el decomp) si GoldenEye ejecuta
+      0x7F000000 desde la ROM o desde la RDRAM.
+
+## 2026-10-10 — Caché de texturas entre tareas (HLE gráfica)
+
+Hecho (rama `unruffled-maxwell-2af921`; diseño en docs/texturas.md):
+- Las texturas decodificadas viven en una región de 8 MB mapeada al RSX
+  (`src/rdp`) que la HLE del SPE 0 administra entre tareas
+  (`src/rsp/gfx/texcache.c`). Identidad: hash de 64 bits (ronda de
+  xxHash32 en ocho carriles, SIMD en el SPE) de los bytes de la TMEM que
+  lee la decodificación —texels y paleta— y de los parámetros de la tile:
+  un cambio en la RDRAM o en la paleta da otra textura sin vigilar
+  escrituras (cubre las del CPU, que no avisan). Al arrancar, el frontend
+  comprueba que el hash del SPE da lo mismo que el del PPE.
+- Anillo con desalojo en orden de llegada; lo que el RSX aún puede leer
+  (`job->done_task`, de las barreras de `src/rdp`) se salta. Sin lugar, la
+  textura va al arena de la tarea. `salsa64_rdp_dump` copia las texturas
+  de la caché al volcado (mismo formato).
+- Cargas a la TMEM en bloque (sin `memcpy` de 8 bytes): ×2,4.
+- Medición en el frontend: ventanas fijas de 100 campos («gfx campos A–B»,
+  con el peor campo), capturas en campos fijos y salida sola
+  (`capturas` = «N M»); acomodado sobre los dos hilos de main.
+- PS3 real, Zelda (intro y título, con el recompilador; docs/perf-log.md):
+  HLE en el SPE 14–31 → 5–9,6 ms por tarea; decodificar 6,7–17,2 → 0–0,09
+  ms; las escenas a 41–48 campos/s llegan a 60; capturas idénticas byte a
+  byte. Decisión: todo en el SPE 0; los SPE 2–3 quedan para el escalado de
+  texturas (docs/texturas.md).
+- Pruebas: caché entre tareas, texel y paleta cambiados en la RDRAM, anillo
+  con texturas en uso y directorio lleno, hash por tramos; gfxtest con una
+  textura y una paleta que el CPU cambia en el cuadro 60 (22 puntos).
+
+Pendiente:
+- [ ] LOADTILE pide cada fila con un DMA que espera (~2300 lecturas por
+      tarea en Zelda): pedirlas por adelantado. Es lo más caro que queda
+      en el SPE junto con el estado de dibujo.
+- [ ] Decodificación por formato con SIMD y salidas de 16 bits en
+      `lib/rsxkit/`: solo cuando falla la caché; medir antes el peor campo
+      en cambios de escena (Kokiri, partida en juego).
+- [ ] Achicar el arena de texturas por juego (casi no se usa).
+
+## 2026-10-10 — Dos hilos en el PPE (frontend)
+
+Hecho (rama `musing-mcclintock-6b5e2c`; diseño en docs/hilos-ppe.md):
+- `src/frontend/main.c`: hilo de emulación (`sysThreadCreate`, prioridad
+  1000, pila de 256 KB) con el CPU, el planificador, el envío de tareas al
+  SPE, los controles aplicados al PIF y la copia de la imagen del VI; el
+  hilo principal (1001) traduce la salida de la HLE al RSX, presenta con
+  flip en vsync, lee los DualShock 3, escribe el guardado, el log de
+  estadísticas, capturas y volcados. Duerme en un semáforo (la emulación
+  lo despierta por campo y por tarea); nunca espera activa (SMT).
+- Colas preasignadas: cola de campos (8 mensajes) con copia del VI en 3
+  ranuras (4,4 MB; estados por `lwarx/stwcx.`), cola de tareas gráficas
+  de 3 entradas dentro de `src/rdp` (`salsa64_rdp_flush` traduce en el
+  hilo de presentación; `acquire` espera un juego libre con
+  `rsxkit_fence_done`, la única función de rsxkit documentada como segura
+  desde otro hilo), buzón de controles con seqlock, zona de paso del
+  guardado (`savefile_stage` / `savefile_write_staged`), lwmutex en el log.
+- Si la emulación va más rápida que la tele: se presenta el campo más
+  nuevo y los viejos se saltan (`saltados` en el log); la emulación nunca
+  espera al vsync. Los campos con verificación del selftest no se saltan.
+- Verificación igual que antes: selftest de vitest (RDRAM en emulación,
+  pantalla en presentación), gfxtest, capturas, `gfxdump`, repetición
+  (`dump:`, de un hilo: llama a `salsa64_rdp_flush`). Pruebas: 212 en el
+  host; test-roms (nemu64-test 446 fallas, vitest, controles, savetest,
+  gfxtest); fase 1 y fase 2 en RPCS3.
+- Lugar para el audio marcado con `audio_out:` en main.c (inicio, cada
+  campo presentado, cierre; y `emu_thread` si necesita el hilo de
+  emulación).
+- Ritmo (`src/frontend/pacer.c`, pedido en main): cada
+  campo a la hora de la tele emulada con el reloj real, sin acumular
+  deuda; `SALSA64_DATA_DIR/turbo` lo quita para medir el máximo; la
+  medición A/B de vitest va sin límite. Enganche para que el audio marque
+  el ritmo (`sleep` reemplazable, `pacer_nudge`). 5 pruebas unitarias.
+
+Medido en la PS3 real con el recompilador (main 697922c mezclado; tabla
+en docs/perf-log.md, «Dos hilos en el PPE»): Zelda en el título con el
+castillo 41–52 → 57–60 campos/s (el flip del vsync ya no frena a la
+emulación); vitest sin límite 187 → 363 campos/s con la presentación a
+60/s saltando el resto, y con ritmo 60,0 exactos; guardado por hilos y
+START + SELECT bien. Las capturas periódicas `screen-N.ppm` pasaron a ser
+opcionales (`SALSA64_DATA_DIR/capturas`): cada una frena ~400 ms y era el
+«tirón» cada 10 s; en prueba automática siguen siempre.
+
+Pendiente:
+- [ ] La espera del hilo de emulación al SPE al terminar cada tarea (10–27
+      ms por tarea, 20–53 % del hilo en Zelda) es el cuello siguiente:
+      que el evento del RSP se vuelva a programar en vez de bloquear
+      (`src/core/rsp.c`), o acortar la HLE (caché de texturas).
+- [ ] Copia del VI (0,2–0,3 ms por campo) aunque el VI muestre un destino
+      del RSX: evitarla con una pista del hilo de presentación.
+- [ ] Repetir la medición con Super Mario 64 cuando F3D esté en main (caso
+      de libro: 9,5 ms de emulación + 7–8 ms de presentación en un hilo).
+- [ ] Menú y audio en el hilo de presentación (trabajos aparte).
+
+## 2026-10-10 — Fase 3: recompilador MIPS → PPC64 en el PPE (×4,4 con código real)
+
+Hecho (diseño y decisión en docs/rec-ppe.md, números en docs/perf-log.md):
+- **Decisión: recompilador propio.** Not64 y Wii64 (GPLv2+, commits en
+  docs/THIRD_PARTY.md) se revisaron y descartaron como base: emisor de 32
+  bits con pares hi/lo, EABI de la Wii, globales de mupen64, Count solo en
+  saltos y FPU sin FCR31. Se usaron solo como referencia de diseño.
+- `src/cpu/rec.c`, `rec_emit.c`, `rec.h`, `ppc.h`: bloques desde KSEG0
+  hasta un salto con su delay slot; en nativo solo si caben antes del
+  próximo evento, así que eventos, Count, interrupciones y excepciones caen
+  en el mismo ciclo que con el intérprete. 12 registros MIPS por bloque,
+  escritura temprana (contra el load-hit-store entre bloques), enlaces
+  parcheados, JR/JALR sin volver a C, invalidación por código escrito
+  (también desde el intérprete, DMA del PI/SI/SRAM y cargador), FPU nativa
+  con las mismas causas de FCR31 que el intérprete, bucles de espera con la
+  misma consulta que `idle.c`. Lo raro (LWL/LWR, COP0, conversiones de la
+  FPU, TLB, KSEG1, modo usuario) lo corre el intérprete.
+- Caché en la cola NOBITS de 16 MB del segmento de texto
+  (`mk/rec-cache.ld`): llamadas a C con `bl` directo. Estado: 6,3 MB.
+- Pruebas en la Mac sin PS3: Linux ppc64 + qemu (`tools/test-rec.sh`,
+  `docker/ppc64.Dockerfile`): las 197 unitarias también con el recompilador
+  en modo estricto; nemu64-test con la línea base; vitest OK; `salsa64-run
+  --lockstep` compara contra el intérprete bloque a bloque (sin
+  diferencias en nemu64-test).
+- **PS3 real** (f7b655d): 163/163 unitarias ejecutando código generado;
+  nemu64-test 7,9 s → 1,8 s (**×4,36, 104 MIPS**) con las mismas fallas y
+  el mismo ciclo final; bench mixto 21,3 → 156,6 MIPS.
+- RPCS3 no ejecuta código generado: ahí se apaga
+  (`/dev_hdd0/salsa64/sin-recompilador`, lo crea `tools/rpcs3-run.py`).
+- Merges de main (controles, bucles de espera, guardado, Fase 2 gráfica)
+  sin regresiones; el DMA del SP, del SI y de la SRAM avisan al
+  recompilador.
+- Registros fijos (sp, ra, v0, v1, a0–a3) activos en el frontend: +7 % en
+  nemu64-test (×4,45 del intérprete); los bucles toman prestados los que no
+  usan. La escritura temprana no compensó: opción apagada.
+- **Zelda OoT en la PS3 real con el recompilador: 41–60 campos/s** (con el
+  intérprete 15–17), 4–14 ms de emulación por campo; se ve igual. Donde no
+  llega a 60, el PPE espera a la HLE gráfica del SPE.
+- vitest en el frontend: 60 campos/s, 2,9–5,4 ms de emulación por campo.
+- Paquetes de prueba con APPID propio: SLSA00063 «Salsa64 recompilador»
+  (frontend) y SLSA00065 «Salsa64 CPU recompilador» (cpu-tests con cuatro
+  variantes del recompilador y nemu64-test contra el intérprete).
+
+Siguiente:
+- [ ] Medir en la PS3 el préstamo de registros fijos en bucles (bench
+      enteros con registros fijos: esperado ~750 MIPS, antes 128).
+- [ ] Más juegos de la tabla de docs/proyecto.md (SM64, MK64, SF64; GoldenEye y
+      Perfect Dark usan TLB: ver la entrada de arriba).
+- [ ] Más en nativo: CVT/TRUNC/ROUND de la FPU, LWL/LWR/SWL/SWR, CACHE,
+      MFC0 sin salir del bloque. (Código por TLB y KSEG1: hecho.)
+- [ ] Fase 2: el DMA del SP hacia la RDRAM tiene que llamar a
+      `salsa64_bus_rdram_written`.
 ## 2026-10-10 — Fase 2 (parte gráfica): criterio cumplido en PS3 real
 
 Hecho (rama `reverent-leavitt-d0f943`, integrada en main después del
@@ -75,7 +328,7 @@ guardado y los controles):
 Pendiente:
 - [ ] Caché de texturas entre tareas y decodificación por formato en el SPE
       (medir antes/después en la PS3).
-- [x] F3D (Super Mario 64): ver la entrada de arriba.
+- [x] F3D (Super Mario 64): ver la entrada «F3D (Super Mario 64) y F3DEX 1.x».
 - [ ] Casos de Cell64 (espada Kokiri sin textura, fuente de la pantalla de
       nombre).
 - [ ] Al integrar con la Fase 3: `sp_dma` hacia la RDRAM debe llamar

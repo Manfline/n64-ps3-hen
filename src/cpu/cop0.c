@@ -115,6 +115,7 @@ static void exception_at(struct salsa64_cpu *cpu, enum salsa64_exc code, unsigne
 	cpu->cause = (cpu->cause & ~(0x7Cu | (3u << SALSA64_CAUSE_CE_SHIFT))) |
 		     (uint32_t)code << 2 | (ce & 3) << SALSA64_CAUSE_CE_SHIFT;
 	cpu->status |= SALSA64_ST_EXL;
+	cpu->exc_count++;
 
 	cpu->pc = ((cpu->status & SALSA64_ST_BEV) ? VEC_BASE_BEV : VEC_BASE) + offset;
 	cpu->next_pc = cpu->pc + 4;
@@ -168,31 +169,66 @@ static void tlb_exception(struct salsa64_cpu *cpu, uint64_t va, enum salsa64_acc
  * (39–13); la máscara de página quita los bajos. */
 #define TLB_VPN_BITS 0xC00000FFFFFFE000ull
 
-static bool tlb_lookup(struct salsa64_cpu *cpu, uint64_t va, uint32_t *pa, enum salsa64_access acc)
+/* Primera entrada que coincide con `va` (VPN2 y ASID o global), o NULL. */
+static const struct salsa64_tlb_entry *tlb_find(const struct salsa64_cpu *cpu, uint64_t va)
 {
-	uint32_t a = (uint32_t)va, asid = (uint32_t)cpu->entry_hi & 0xFF;
-
+	uint32_t asid = (uint32_t)cpu->entry_hi & 0xFF;
 	for (int n = 0; n < SALSA64_TLB_ENTRIES; n++) {
 		const struct salsa64_tlb_entry *e = &cpu->tlb[n];
 		if ((va ^ e->entry_hi) & e->vpn_mask)
 			continue;
 		if (!e->global && ((uint32_t)e->entry_hi & 0xFF) != asid)
 			continue;
-		uint32_t lo = e->entry_lo[(a & e->odd_bit) ? 1 : 0];
-		if (!(lo & 0x2)) {
-			tlb_exception(cpu, va, acc, TLB_INVALID);
-			return false;
-		}
-		if (acc == SALSA64_ACC_STORE && !(lo & 0x4)) {
-			tlb_exception(cpu, va, acc, TLB_MODIFIED);
-			return false;
-		}
-		uint32_t offset_mask = e->odd_bit - 1;
-		*pa = ((lo >> 6) << 12 & ~offset_mask) | (a & offset_mask);
+		return e;
+	}
+	return NULL;
+}
+
+static uint32_t tlb_pa(const struct salsa64_tlb_entry *e, uint32_t lo, uint64_t va)
+{
+	uint32_t offset_mask = e->odd_bit - 1;
+	return ((lo >> 6) << 12 & ~offset_mask) | ((uint32_t)va & offset_mask);
+}
+
+static bool tlb_lookup(struct salsa64_cpu *cpu, uint64_t va, uint32_t *pa, enum salsa64_access acc)
+{
+	const struct salsa64_tlb_entry *e = tlb_find(cpu, va);
+	if (!e) {
+		tlb_exception(cpu, va, acc, TLB_MISS);
+		return false;
+	}
+	uint32_t lo = e->entry_lo[((uint32_t)va & e->odd_bit) ? 1 : 0];
+	if (!(lo & 0x2)) {
+		tlb_exception(cpu, va, acc, TLB_INVALID);
+		return false;
+	}
+	if (acc == SALSA64_ACC_STORE && !(lo & 0x4)) {
+		tlb_exception(cpu, va, acc, TLB_MODIFIED);
+		return false;
+	}
+	*pa = tlb_pa(e, lo, va);
+	return true;
+}
+
+bool salsa64_vr4300_fetch_probe(const struct salsa64_cpu *cpu, uint64_t va, uint32_t *pa)
+{
+	if ((int64_t)va != (int32_t)va || cpu->mode != SALSA64_MODE_KERNEL)
+		return false;
+	uint32_t a = (uint32_t)va;
+	if (a >= 0x80000000u && a < 0xC0000000u) {
+		*pa = a & 0x1FFFFFFF;
 		return true;
 	}
-	tlb_exception(cpu, va, acc, TLB_MISS);
-	return false;
+	if (a < 0x80000000u && (cpu->status & SALSA64_ST_ERL))
+		return false;  /* kuseg sin mapear: no vale la pena compilarlo */
+	const struct salsa64_tlb_entry *e = tlb_find(cpu, va);
+	if (!e)
+		return false;
+	uint32_t lo = e->entry_lo[(a & e->odd_bit) ? 1 : 0];
+	if (!(lo & 0x2))
+		return false;
+	*pa = tlb_pa(e, lo, va);
+	return true;
 }
 
 /* Direccionamiento de 64 bits (KX, SX o UX según el modo). Espacios del
@@ -300,6 +336,7 @@ static void tlb_write(struct salsa64_cpu *cpu, unsigned n)
 	e->global = cpu->entry_lo0 & cpu->entry_lo1 & 1;
 	e->vpn_mask = TLB_VPN_BITS & ~(uint64_t)e->page_mask;
 	e->odd_bit = ((e->page_mask | 0x1FFFu) + 1) >> 1;
+	cpu->tlb_writes++;
 }
 
 static void tlb_read(struct salsa64_cpu *cpu, unsigned n)
@@ -523,6 +560,7 @@ void salsa64_cpu_reset(struct salsa64_cpu *cpu)
 		cpu->tlb[n].vpn_mask = TLB_VPN_BITS;
 		cpu->tlb[n].odd_bit = 0x1000;
 	}
+	cpu->tlb_writes++;
 
 	cpu->compare = 0;
 	cpu->count_offset = 0u - (uint32_t)(cpu->cycles >> 1);

@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "core/endian.h"
+#include "cpu/rec.h"
 
 struct salsa64_n64 t_n64;
 int t_checks;
@@ -48,22 +49,64 @@ void t_load(const uint32_t *code, unsigned n)
 		t_wr32(T_CODE_PA + 4 * k, code[k]);
 }
 
+/* Con el recompilador, n instrucciones exactas por el despachador (modo
+ * estricto: compila recortado lo que no cabe); salsa64_cpu_step es una
+ * instrucción del intérprete seguida de los eventos que venzan, lo mismo. */
 void t_step(unsigned n)
 {
+	if (CPU->rec) {
+		salsa64_n64_run(&t_n64, n);
+		return;
+	}
 	while (n--)
 		salsa64_cpu_step(CPU);
 }
 
+void t_tlb_set(unsigned index, uint64_t hi, uint32_t lo0, uint32_t lo1, uint32_t page_mask)
+{
+	uint64_t pc = CPU->pc;
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_INDEX, index);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_ENTRYHI, hi);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_ENTRYLO0, lo0);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_ENTRYLO1, lo1);
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_PAGEMASK, page_mask);
+	t_wr32(0x0F00, TLBWI);
+	salsa64_cpu_set_pc(CPU, 0xFFFFFFFF80000F00ull);
+	t_step(1);
+	salsa64_cpu_set_pc(CPU, pc);
+}
+
 uint32_t t_rd32(uint32_t pa) { return salsa64_rd32(t_rdram + pa); }
 uint64_t t_rd64(uint32_t pa) { return salsa64_rd64(t_rdram + pa); }
-void t_wr32(uint32_t pa, uint32_t v) { salsa64_wr32(t_rdram + pa, v); }
-void t_wr64(uint32_t pa, uint64_t v) { salsa64_wr64(t_rdram + pa, v); }
+
+/* Las pruebas escriben la RDRAM por fuera del CPU: avisar al recompilador. */
+void t_wr32(uint32_t pa, uint32_t v)
+{
+	salsa64_wr32(t_rdram + pa, v);
+	salsa64_bus_rdram_written(&t_n64.bus, pa, 4);
+}
+
+void t_wr64(uint32_t pa, uint64_t v)
+{
+	salsa64_wr64(t_rdram + pa, v);
+	salsa64_bus_rdram_written(&t_n64.bus, pa, 8);
+}
 
 uint32_t t_fbits(float f) { uint32_t u; memcpy(&u, &f, sizeof u); return u; }
 uint64_t t_dbits(double d) { uint64_t u; memcpy(&u, &d, sizeof u); return u; }
 
+/* Solo las pruebas cuyo nombre contenga este texto (salsa64_unit_filter). */
+static const char *t_only;
+
+void salsa64_unit_filter(const char *substring)
+{
+	t_only = substring;
+}
+
 void t_run(const char *name, t_test_fn fn)
 {
+	if (t_only && !strstr(name, t_only))
+		return;
 	t_current = name;
 	t_current_failed = 0;
 	t_reset();
@@ -72,7 +115,7 @@ void t_run(const char *name, t_test_fn fn)
 	t_failed_tests += t_current_failed;
 }
 
-int salsa64_unit_run(void (*print)(const char *line))
+static int run_suites(void (*print)(const char *line), struct salsa64_rec *rec, void *code, size_t bytes)
 {
 	static const struct {
 		const char *name;
@@ -93,12 +136,21 @@ int salsa64_unit_run(void (*print)(const char *line))
 		{ "rsp", t_suite_rsp },
 		{ "gfx", t_suite_gfx },
 		{ "gfx-f3d", t_suite_gfx_f3d },
+		{ "pacer", t_suite_pacer },
 	};
 	char line[160];
 
 	t_print = print;
 	t_tests = t_failed_tests = t_checks = 0;
 	salsa64_n64_init(&t_n64, t_rdram, sizeof t_rdram);
+	if (rec) {
+		if (!salsa64_rec_init(rec, CPU, code, bytes)) {
+			print("recompilador: no disponible en este host");
+			return -1;
+		}
+		rec->strict = true;
+		print("recompilador: activo (modo estricto)");
+	}
 
 	for (unsigned s = 0; s < sizeof suites / sizeof suites[0]; s++) {
 		int tests0 = t_tests, failed0 = t_failed_tests;
@@ -107,9 +159,30 @@ int salsa64_unit_run(void (*print)(const char *line))
 			 suites[s].name, t_tests - tests0, t_failed_tests - failed0);
 		print(line);
 	}
-	snprintf(line, sizeof line, "total: %d pruebas, %d verificaciones, %d fallidas (%s)",
+	snprintf(line, sizeof line, "total: %d pruebas, %d verificaciones, %d fallidas (%s%s)",
 		 t_tests, t_checks, t_failed_tests,
-		 SALSA64_HOST_BIG_ENDIAN ? "big-endian" : "little-endian");
+		 SALSA64_HOST_BIG_ENDIAN ? "big-endian" : "little-endian", rec ? ", recompilador" : "");
 	print(line);
+	if (rec) {
+		const struct salsa64_rec_stats *st = &rec->stats;
+		snprintf(line, sizeof line, "recompilador: %llu bloques (%llu fuera de KSEG0), %llu recortados, "
+			 "%llu solo intérprete, %llu entradas, %llu enlaces, %llu invalidados, %llu instr. interpretadas",
+			 (unsigned long long)st->compiled, (unsigned long long)st->compiled_x,
+			 (unsigned long long)st->temp_compiled,
+			 (unsigned long long)st->interp_only, (unsigned long long)st->entries,
+			 (unsigned long long)st->linked, (unsigned long long)st->invalidated,
+			 (unsigned long long)st->interp_steps);
+		print(line);
+	}
 	return t_failed_tests;
+}
+
+int salsa64_unit_run(void (*print)(const char *line))
+{
+	return run_suites(print, NULL, NULL, 0);
+}
+
+int salsa64_unit_run_rec(void (*print)(const char *line), struct salsa64_rec *rec, void *code, size_t bytes)
+{
+	return run_suites(print, rec, code, bytes);
 }

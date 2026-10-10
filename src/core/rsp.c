@@ -3,11 +3,20 @@
  * gráfico y fin de la tarea (interrupciones SP y DP). Ver rcp.h.
  *
  * Tiempos: la tarea "dura" gfx_cycles/audio_cycles ciclos del CPU; en ese
- * lapso el backend gráfico puede trabajar en paralelo (un SPE) y al final
- * se le espera. La interrupción del DP llega dp_cycles después de la del
+ * lapso el backend gráfico puede trabajar en paralelo (un SPE). Al llegar
+ * el fin, si el backend sabe decir si terminó (`done`) y todavía no, el
+ * evento se vuelve a programar poll_cycles más tarde y el CPU sigue
+ * emulando (o, si está en un bucle de espera, el backend duerme un poco:
+ * así el reloj emulado no se adelanta al real); si no sabe, se le espera
+ * (`finish`). La interrupción del DP llega dp_cycles después de la del
  * SP, si la lista terminó con G_RDPFULLSYNC. mupen64plus-core usa retardos
  * del mismo orden (unos miles de ciclos); aquí son más largos para que el
  * SPE alcance a terminar sin frenar al CPU, y se pueden cambiar.
+ *
+ * Mientras la tarea sigue en curso el RSP no está HALT y una escritura
+ * que quite HALT no arranca otra (como en el hardware: ya corre); una
+ * petición de yield se ignora y la tarea termina normal (TASKDONE), que
+ * libultra acepta como fin de la tarea.
  */
 #include <string.h>
 
@@ -19,6 +28,7 @@
 #define GFX_CYCLES_DEFAULT   30000u  /* ~0,32 ms de la N64 */
 #define AUDIO_CYCLES_DEFAULT 8000u
 #define DP_CYCLES_DEFAULT    10000u
+#define POLL_CYCLES_DEFAULT  10000u  /* ~0,11 ms de la N64 entre sondeos */
 
 /* Hasta dónde se buscan los textos del microcódigo en su segmento de datos. */
 #define UCODE_SCAN_MAX 0x1000u
@@ -34,14 +44,32 @@ static void rsp_break(struct salsa64_bus *bus, uint32_t signals)
 		salsa64_mi_raise(bus, SALSA64_IRQ_SP);
 }
 
+/* Backend de la tarea en curso (el gráfico; el de audio irá aquí). */
+static const struct salsa64_gfx_backend *task_backend(const struct salsa64_rsp *rsp)
+{
+	return rsp->busy == SALSA64_TASK_GFX ? rsp->gfx : NULL;
+}
+
 static void task_event(void *ctx, uint64_t when)
 {
 	struct salsa64_bus *bus = ctx;
 	struct salsa64_rsp *rsp = &bus->rsp;
+	const struct salsa64_gfx_backend *be = task_backend(rsp);
 	uint32_t flags = 0;
 
-	if (rsp->busy == SALSA64_TASK_GFX && rsp->gfx)
-		flags = rsp->gfx->finish(rsp->gfx->ctx);
+	if (be && be->done) {
+		/* ¿El CPU saltó ciclos (bucle de espera) desde el sondeo anterior? */
+		uint64_t idle_now = bus->cpu ? bus->cpu->idle_cycles : 0;
+		bool idle = idle_now != rsp->poll_idle;
+		rsp->poll_idle = idle_now;
+		if (!be->done(be->ctx, idle)) {
+			rsp->stats.polls++;
+			salsa64_sched_set(rsp->sched, SALSA64_EV_SP_TASK, when + rsp->poll_cycles);
+			return;
+		}
+	}
+	if (be)
+		flags = be->finish(be->ctx);
 	rsp->busy = 0;
 	rsp_break(bus, SALSA64_SP_STATUS_TASKDONE);
 	if (flags & SALSA64_GFX_FULLSYNC)
@@ -61,6 +89,7 @@ void salsa64_rsp_init(struct salsa64_bus *bus, struct salsa64_sched *sched)
 	rsp->gfx_cycles = GFX_CYCLES_DEFAULT;
 	rsp->audio_cycles = AUDIO_CYCLES_DEFAULT;
 	rsp->dp_cycles = DP_CYCLES_DEFAULT;
+	rsp->poll_cycles = POLL_CYCLES_DEFAULT;
 	salsa64_sched_handler(sched, SALSA64_EV_SP_TASK, task_event, bus);
 	salsa64_sched_handler(sched, SALSA64_EV_DP_SYNC, dp_event, bus);
 }
@@ -160,9 +189,16 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 {
 	struct salsa64_rsp *rsp = &bus->rsp;
 	struct salsa64_task task;
+	if (rsp->busy) {
+		/* Ya corre una tarea (su fin espera al backend): como en el
+		 * hardware, quitar HALT a un RSP que corre no hace nada. */
+		rsp->stats.starts_busy++;
+		return;
+	}
 	salsa64_rsp_read_task(bus, &task);
 
 	uint64_t now = bus->cpu ? bus->cpu->cycles : 0;
+	rsp->poll_idle = bus->cpu ? bus->cpu->idle_cycles : 0;
 	bool valid = in_rdram(bus, task.data_ptr, 8) && in_rdram(bus, task.ucode_data, 16);
 
 	enum salsa64_gbi gbi = task.type == SALSA64_TASK_GFX && valid ? salsa64_rsp_detect_gbi(bus, &task)
