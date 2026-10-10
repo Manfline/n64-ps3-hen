@@ -6,7 +6,7 @@ SRCS    := main.c rombench.c
 # El núcleo completo y las pruebas compartidas con el host (sin su main).
 R       := ../../..
 COMMON  := src/platform/ps3/log.c src/platform/ps3/rec_cache.c \
-           $(patsubst $(R)/%,%,$(wildcard $(R)/src/core/*.c $(R)/src/cpu/*.c $(R)/src/rsp/gfx/*.c)) src/frontend/padmap.c \
+           $(patsubst $(R)/%,%,$(wildcard $(R)/src/core/*.c $(R)/src/cpu/*.c $(R)/src/rsp/gfx/*.c)) src/frontend/padmap.c src/frontend/pacer.c \
            $(filter-out tests/unit/main_host.c,$(patsubst $(R)/%,%,$(wildcard $(R)/tests/unit/*.c)))
 CFLAGS  := -ffp-contract=off -fno-math-errno -I$(CURDIR)/$(R)/tests/unit
 LIBS    := -lnet -lsysutil -lsysmodule -lrt -llv2 -lm

@@ -82,32 +82,37 @@ static int wrap(int i, int n, unsigned mode)
 	return i < 0 ? 0 : i >= n ? n - 1 : i;
 }
 
-static void fetch(const struct gfx_tex *t, const uint8_t *arena, int x, int y, float out[4])
+/* Memoria de las texturas: arena de la tarea y región de la caché. */
+struct texmem {
+	const uint8_t *base[2];  /* GFX_TEX_ARENA, GFX_TEX_CACHE */
+};
+
+static void fetch(const struct gfx_tex *t, const struct texmem *m, int x, int y, float out[4])
 {
 	x = wrap(x, t->width, GFX_TEX_WRAP_S(t->flags));
 	y = wrap(y, t->height, GFX_TEX_WRAP_T(t->flags));
-	const uint8_t *p = arena + t->offset + (uint32_t)y * t->pitch + 4u * (uint32_t)x;
+	const uint8_t *p = m->base[t->where & 1] + t->offset + (uint32_t)y * t->pitch + 4u * (uint32_t)x;
 	for (int k = 0; k < 4; k++)
 		out[k] = p[k] / 255.0f;
 }
 
 /* Muestra con semántica del RSX: u, v normalizados; centros de texel en
  * (i + 0,5) / tamaño. */
-static void sample(const struct gfx_tex *t, const uint8_t *arena, float u, float v, float out[4])
+static void sample(const struct gfx_tex *t, const struct texmem *m, float u, float v, float out[4])
 {
 	float x = u * t->width, y = v * t->height;
 	if (!(t->flags & GFX_TEX_BILINEAR)) {
-		fetch(t, arena, (int)floorf(x), (int)floorf(y), out);
+		fetch(t, m, (int)floorf(x), (int)floorf(y), out);
 		return;
 	}
 	x -= 0.5f;
 	y -= 0.5f;
 	int x0 = (int)floorf(x), y0 = (int)floorf(y);
 	float fx = x - x0, fy = y - y0, a[4], b[4], c[4], d[4];
-	fetch(t, arena, x0, y0, a);
-	fetch(t, arena, x0 + 1, y0, b);
-	fetch(t, arena, x0, y0 + 1, c);
-	fetch(t, arena, x0 + 1, y0 + 1, d);
+	fetch(t, m, x0, y0, a);
+	fetch(t, m, x0 + 1, y0, b);
+	fetch(t, m, x0, y0 + 1, c);
+	fetch(t, m, x0 + 1, y0 + 1, d);
 	for (int k = 0; k < 4; k++)
 		out[k] = (a[k] * (1 - fx) + b[k] * fx) * (1 - fy) + (c[k] * (1 - fx) + d[k] * fx) * fy;
 }
@@ -117,7 +122,7 @@ static float edge(float ax, float ay, float bx, float by, float px, float py)
 	return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
 }
 
-static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, const uint8_t *arena,
+static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, const struct texmem *m,
 			  struct target *tg, struct depth *zb)
 {
 	float sx[3], sy[3], sz[3], iw[3];
@@ -173,7 +178,7 @@ static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, 
 			float tx[2][4] = { { 1, 1, 1, 1 }, { 1, 1, 1, 1 } };
 			for (int i = 0; i < d->ntex && i < 2; i++) {
 				const struct gfx_tex *te = &d->tex[i];
-				sample(te, arena, s * te->xf[0] + te->xf[2], t * te->xf[1] + te->xf[3], tx[i]);
+				sample(te, m, s * te->xf[0] + te->xf[2], t * te->xf[1] + te->xf[3], tx[i]);
 			}
 			float X[GFX_K_TERMS][4];
 			for (int k = 0; k < GFX_K_TERMS; k++)
@@ -214,7 +219,7 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 {
 	const uint8_t *cmd = (const uint8_t *)(uintptr_t)job->cmd_ea;
 	const struct gfx_vertex *vtx = (const struct gfx_vertex *)(uintptr_t)job->vtx_ea;
-	const uint8_t *arena = (const uint8_t *)(uintptr_t)job->tex_ea;
+	const struct texmem m = { { (const uint8_t *)(uintptr_t)job->tex_ea, (const uint8_t *)(uintptr_t)job->cache_ea } };
 	struct target *tg = NULL;
 	uint32_t off = 0;
 	while (off + sizeof(struct gfx_cmd) <= res->cmd_bytes) {
@@ -239,7 +244,7 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 				break;
 			struct depth *zb = d->depth ? get_depth(d->zimg) : NULL;
 			for (uint32_t i = 0; i + 3 <= d->h.b; i += 3)
-				draw_triangle(d, vtx + d->h.a + i, arena, tg, zb);
+				draw_triangle(d, vtx + d->h.a + i, &m, tg, zb);
 			break;
 		}
 		default:

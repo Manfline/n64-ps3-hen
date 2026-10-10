@@ -78,6 +78,7 @@ int salsa64_replay(const char *path)
 	rsxkit_rect r = { 0, 0, 0, 0 };
 	salsa64_rdp_present(&vf, 1, &view, &r);  /* fija el campo de la tarea */
 	sink->done(sink->ctx, &job, &res);
+	salsa64_rdp_flush(~0u);
 	for (int i = 0; i < REPLAY_FRAMES; i++) {
 		rsxkit_frame_begin(0x000000);
 		bool shown = salsa64_rdp_present(&vf, 1, &view, &r);

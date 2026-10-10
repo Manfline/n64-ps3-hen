@@ -36,6 +36,99 @@ Siguiente:
       `RARE_EXEC`).
 - [ ] Lo que sigue yendo al intérprete: CVT.S/D.L, CACHE, MTC0/TLB/ERET;
       MFC0 de Random.
+- [ ] Bench del intérprete: ver «bench alineado» en la corrida de la PS3
+      (docs/perf-log.md, diagnóstico 21 → 14,7 MIPS).
+
+## 2026-10-10 — Caché de texturas entre tareas (HLE gráfica)
+
+Hecho (rama `unruffled-maxwell-2af921`; diseño en docs/texturas.md):
+- Las texturas decodificadas viven en una región de 8 MB mapeada al RSX
+  (`src/rdp`) que la HLE del SPE 0 administra entre tareas
+  (`src/rsp/gfx/texcache.c`). Identidad: hash de 64 bits (ronda de
+  xxHash32 en ocho carriles, SIMD en el SPE) de los bytes de la TMEM que
+  lee la decodificación —texels y paleta— y de los parámetros de la tile:
+  un cambio en la RDRAM o en la paleta da otra textura sin vigilar
+  escrituras (cubre las del CPU, que no avisan). Al arrancar, el frontend
+  comprueba que el hash del SPE da lo mismo que el del PPE.
+- Anillo con desalojo en orden de llegada; lo que el RSX aún puede leer
+  (`job->done_task`, de las barreras de `src/rdp`) se salta. Sin lugar, la
+  textura va al arena de la tarea. `salsa64_rdp_dump` copia las texturas
+  de la caché al volcado (mismo formato).
+- Cargas a la TMEM en bloque (sin `memcpy` de 8 bytes): ×2,4.
+- Medición en el frontend: ventanas fijas de 100 campos («gfx campos A–B»,
+  con el peor campo), capturas en campos fijos y salida sola
+  (`capturas` = «N M»); acomodado sobre los dos hilos de main.
+- PS3 real, Zelda (intro y título, con el recompilador; docs/perf-log.md):
+  HLE en el SPE 14–31 → 5–9,6 ms por tarea; decodificar 6,7–17,2 → 0–0,09
+  ms; las escenas a 41–48 campos/s llegan a 60; capturas idénticas byte a
+  byte. Decisión: todo en el SPE 0; los SPE 2–3 quedan para el escalado de
+  texturas (docs/texturas.md).
+- Pruebas: caché entre tareas, texel y paleta cambiados en la RDRAM, anillo
+  con texturas en uso y directorio lleno, hash por tramos; gfxtest con una
+  textura y una paleta que el CPU cambia en el cuadro 60 (22 puntos).
+
+Pendiente:
+- [ ] LOADTILE pide cada fila con un DMA que espera (~2300 lecturas por
+      tarea en Zelda): pedirlas por adelantado. Es lo más caro que queda
+      en el SPE junto con el estado de dibujo.
+- [ ] Decodificación por formato con SIMD y salidas de 16 bits en
+      `lib/rsxkit/`: solo cuando falla la caché; medir antes el peor campo
+      en cambios de escena (Kokiri, partida en juego).
+- [ ] Achicar el arena de texturas por juego (casi no se usa).
+
+## 2026-10-10 — Dos hilos en el PPE (frontend)
+
+Hecho (rama `musing-mcclintock-6b5e2c`; diseño en docs/hilos-ppe.md):
+- `src/frontend/main.c`: hilo de emulación (`sysThreadCreate`, prioridad
+  1000, pila de 256 KB) con el CPU, el planificador, el envío de tareas al
+  SPE, los controles aplicados al PIF y la copia de la imagen del VI; el
+  hilo principal (1001) traduce la salida de la HLE al RSX, presenta con
+  flip en vsync, lee los DualShock 3, escribe el guardado, el log de
+  estadísticas, capturas y volcados. Duerme en un semáforo (la emulación
+  lo despierta por campo y por tarea); nunca espera activa (SMT).
+- Colas preasignadas: cola de campos (8 mensajes) con copia del VI en 3
+  ranuras (4,4 MB; estados por `lwarx/stwcx.`), cola de tareas gráficas
+  de 3 entradas dentro de `src/rdp` (`salsa64_rdp_flush` traduce en el
+  hilo de presentación; `acquire` espera un juego libre con
+  `rsxkit_fence_done`, la única función de rsxkit documentada como segura
+  desde otro hilo), buzón de controles con seqlock, zona de paso del
+  guardado (`savefile_stage` / `savefile_write_staged`), lwmutex en el log.
+- Si la emulación va más rápida que la tele: se presenta el campo más
+  nuevo y los viejos se saltan (`saltados` en el log); la emulación nunca
+  espera al vsync. Los campos con verificación del selftest no se saltan.
+- Verificación igual que antes: selftest de vitest (RDRAM en emulación,
+  pantalla en presentación), gfxtest, capturas, `gfxdump`, repetición
+  (`dump:`, de un hilo: llama a `salsa64_rdp_flush`). Pruebas: 212 en el
+  host; test-roms (nemu64-test 446 fallas, vitest, controles, savetest,
+  gfxtest); fase 1 y fase 2 en RPCS3.
+- Lugar para el audio marcado con `audio_out:` en main.c (inicio, cada
+  campo presentado, cierre; y `emu_thread` si necesita el hilo de
+  emulación).
+- Ritmo (`src/frontend/pacer.c`, pedido en main): cada
+  campo a la hora de la tele emulada con el reloj real, sin acumular
+  deuda; `SALSA64_DATA_DIR/turbo` lo quita para medir el máximo; la
+  medición A/B de vitest va sin límite. Enganche para que el audio marque
+  el ritmo (`sleep` reemplazable, `pacer_nudge`). 5 pruebas unitarias.
+
+Medido en la PS3 real con el recompilador (main 697922c mezclado; tabla
+en docs/perf-log.md, «Dos hilos en el PPE»): Zelda en el título con el
+castillo 41–52 → 57–60 campos/s (el flip del vsync ya no frena a la
+emulación); vitest sin límite 187 → 363 campos/s con la presentación a
+60/s saltando el resto, y con ritmo 60,0 exactos; guardado por hilos y
+START + SELECT bien. Las capturas periódicas `screen-N.ppm` pasaron a ser
+opcionales (`SALSA64_DATA_DIR/capturas`): cada una frena ~400 ms y era el
+«tirón» cada 10 s; en prueba automática siguen siempre.
+
+Pendiente:
+- [ ] La espera del hilo de emulación al SPE al terminar cada tarea (10–27
+      ms por tarea, 20–53 % del hilo en Zelda) es el cuello siguiente:
+      que el evento del RSP se vuelva a programar en vez de bloquear
+      (`src/core/rsp.c`), o acortar la HLE (caché de texturas).
+- [ ] Copia del VI (0,2–0,3 ms por campo) aunque el VI muestre un destino
+      del RSX: evitarla con una pista del hilo de presentación.
+- [ ] Repetir la medición con Super Mario 64 cuando F3D esté en main (caso
+      de libro: 9,5 ms de emulación + 7–8 ms de presentación en un hilo).
+- [ ] Menú y audio en el hilo de presentación (trabajos aparte).
 
 ## 2026-10-10 — Fase 3: recompilador MIPS → PPC64 en el PPE (×4,4 con código real)
 

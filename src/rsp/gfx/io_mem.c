@@ -106,3 +106,9 @@ int32_t gfx_io_tex_commit(struct gfx_state *g, uint32_t size)
 	io->tex_used = off + size;
 	return (int32_t)off;
 }
+
+void gfx_io_tex_cache(struct gfx_state *g, uint32_t off, uint32_t size)
+{
+	struct io_mem *io = g->io;
+	memcpy(PTR(g->job->cache_ea) + off, io->tex_stage, size);
+}
