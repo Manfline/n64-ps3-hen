@@ -207,6 +207,12 @@ static bool boot_flat(struct salsa64_n64 *n64, struct salsa64_boot_info *info)
 	salsa64_wr32(bus->rdram + 0x304, 0);
 	salsa64_wr32(bus->rdram + 0x308, 0xB0000000u);
 	salsa64_wr32(bus->rdram + 0x30C, 0);
+	/* osCicId: los IPL3 del 6103 y del 6105 dejan su número, y los juegos de
+	 * Rare lo comprueban (6103: Banjo-Kazooie, Diddy Kong Racing; 6105:
+	 * Conker no arranca su hilo principal sin él, Perfect Dark, DK64). De
+	 * las demás variantes no hay dato: queda como estaba. */
+	if (info->cic == SALSA64_CIC_6103 || info->cic == SALSA64_CIC_6105)
+		salsa64_wr32(bus->rdram + 0x310, info->cic == SALSA64_CIC_6103 ? 6103 : 6105);
 	salsa64_wr32(bus->rdram + 0x314, 0);
 	salsa64_wr32(bus->rdram + 0x318, bus->rdram_size);
 

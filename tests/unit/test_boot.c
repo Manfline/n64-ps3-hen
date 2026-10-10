@@ -180,13 +180,14 @@ static void boot_by_cic(void)
 		enum salsa64_cic cic;
 		uint32_t header, entry;
 		uint8_t seed;
+		uint32_t cic_id;
 	} v[] = {
-		{ SALSA64_CIC_6101, 0x80000400, 0x80000400, 0x3F },
-		{ SALSA64_CIC_6102, 0x80000400, 0x80000400, 0x3F },
-		{ SALSA64_CIC_7102, 0x80000400, 0x80000480, 0x3F },  /* fija */
-		{ SALSA64_CIC_6103, 0x80100400, 0x80000400, 0x78 },  /* −1 MB */
-		{ SALSA64_CIC_6105, 0x80000400, 0x80000400, 0x91 },
-		{ SALSA64_CIC_6106, 0x80200400, 0x80000400, 0x85 },  /* −2 MB */
+		{ SALSA64_CIC_6101, 0x80000400, 0x80000400, 0x3F, 0 },
+		{ SALSA64_CIC_6102, 0x80000400, 0x80000400, 0x3F, 0 },
+		{ SALSA64_CIC_7102, 0x80000400, 0x80000480, 0x3F, 0 },     /* fija */
+		{ SALSA64_CIC_6103, 0x80100400, 0x80000400, 0x78, 6103 },  /* −1 MB */
+		{ SALSA64_CIC_6105, 0x80000400, 0x80000400, 0x91, 6105 },
+		{ SALSA64_CIC_6106, 0x80200400, 0x80000400, 0x85, 0 },     /* −2 MB */
 	};
 	for (size_t i = 0; i < sizeof v / sizeof v[0]; i++) {
 		struct salsa64_boot_info info;
@@ -203,6 +204,7 @@ static void boot_by_cic(void)
 		CHECK_EQ(R[S6], v[i].seed);
 		CHECK_EQ(t_rd32(v[i].entry & 0x1FFFFFFF), ADDIU(T0, ZERO, 0x66));
 		CHECK_EQ(t_rd32(0x300), SALSA64_TV_NTSC);
+		CHECK_EQ(t_rd32(0x310), v[i].cic_id);  /* osCicId */
 		CHECK_EQ(t_rd32(0x318), 0x800000);
 		if (v[i].cic != SALSA64_CIC_6105) {
 			CHECK_EQ(t_rd32(0x004), 0);
@@ -234,6 +236,7 @@ static void boot_cic6105_leftovers(void)
 	/* Las variables de libultra pisan la copia; después queda lo copiado. */
 	CHECK_EQ(t_rd32(0x300), SALSA64_TV_PAL);
 	CHECK_EQ(t_rd32(0x308), 0xB0000000);
+	CHECK_EQ(t_rd32(0x310), 6105);  /* osCicId, también encima de la copia */
 	CHECK_EQ(t_rd32(0x318), 0x800000);
 	CHECK_EQ(t_rd32(0x31C), salsa64_rd32(rom + 0x86C));
 	CHECK_EQ(t_rd32(0x3F0), 0x800000);

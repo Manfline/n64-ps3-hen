@@ -13,8 +13,11 @@ Hecho (rama `amazing-noether-39a548`; detalle en docs/cpu-vr4300.md,
   verificadas con dos palabras del Perfect Dark del autor. No hay más
   efectos documentados por variante (6101/6102/6103/6106/7102: dirección
   de arranque y semilla, que ya estaban).
+- `osCicId` (0x310) = 6103 o 6105 con esos IPL3: Conker solo arranca su
+  hilo principal si vale 6105 (se quedaba en el hilo ocioso a los 88 mil
+  ciclos); Banjo-Kazooie y Perfect Dark también lo comprueban.
 - `salsa64_boot_hle_as` fuerza la variante; pruebas por variante y de los
-  restos del 6105 (234/234 en el host).
+  restos del 6105 (272/272 en el host con main f698afe).
 - Perfect Dark pasa la comprobación en la Mac y en la **PS3 real**
   (frontend «Salsa64 arranque», SLSA00078): 6083 bloques (6078 fuera de
   KSEG0) en vez de 201, 693 traducciones de la TLB, 59,8 campos/s con 5,8
@@ -29,18 +32,18 @@ Hecho (rama `amazing-noether-39a548`; detalle en docs/cpu-vr4300.md,
   EEPROM y salía una diferencia falsa (Perfect Dark, ciclo 254 M).
 - `tools/censo.sh`: censo de compatibilidad con los ROMs del usuario
   desde su ruta (compila `salsa64-run` con el compilador de la Mac).
-- Censo de 3 minutos (SM64, OoT, MK64, SF64, GoldenEye, Perfect Dark y
-  Banjo-Kazooie): solo Zelda dibuja. Los demás mandan una tarea gráfica
-  con microcódigo sin HLE (F3D, F3DEX 0.95/1.21/1.22, el de Perfect Dark)
-  y se quedan esperando la interrupción del DP. Experimento local: con esa
-  interrupción los seis siguen 3 minutos sin otro bloqueo.
+- Censo de 3 minutos de 8 juegos (los 6 objetivo, Banjo-Kazooie y Conker)
+  sobre main f698afe + la rama de F3D (sin integrar): dibujan SM64 (título),
+  OoT, MK64, SF64, GoldenEye y Banjo; suenan ABI 1 y nead. Perfect Dark
+  corre sin dibujar ni sonar (su microcódigo de Rare y naudio con MP3 sin
+  HLE); Conker manda una sola tarea gráfica (F3DEXBG 2.08, comando 0x14) y
+  su naudio da error. Sin la rama de F3D, solo Zelda dibujaba.
 
 Siguiente (lista priorizada en docs/compatibilidad.md):
-- [ ] HLE de F3D y F3DEX 1.x (trabajo de F3D): 4 de los 6 juegos objetivo.
-- [ ] Interrupción del DP tras una tarea gráfica desconocida
-      (`src/core/rsp.c`, trabajo del fin de tarea).
-- [ ] Detector: F3DEX 0.95 (MK64) y el microcódigo de Perfect Dark por CRC.
-- [ ] Audio HLE: ABI 1, nead y naudio (ver la tabla del censo).
+- [ ] Integrar la rama de F3D.
+- [ ] Audio: las tres naudio (Banjo-Kazooie, Conker, Perfect Dark con MP3).
+- [ ] Microcódigo de Perfect Dark (por CRC; sin texto) y F3DEXBG de Conker.
+- [ ] Probar con el control y medir en la PS3 las escenas de docs/proyecto.md.
 ## 2026-10-10 — Audio de punta a punta: AI, HLE de audio en el SPE 1 y salida en la PS3
 
 Hecho (rama `amazing-varahamihira-3027c8`, con main cfa146b):

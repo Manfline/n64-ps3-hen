@@ -8,8 +8,9 @@
 # Los ROMs son respaldos del usuario, fuera del repositorio: se leen desde su
 # ruta y no se copian a ningún lado. El Docker de desarrollo (colima) solo
 # comparte la carpeta de proyectos, así que salsa64-run se compila aquí con
-# el compilador de la Mac (sin sanitizadores) en build/host-mac. Las
-# imágenes son capturas de juegos comerciales: no se suben al repositorio.
+# el compilador de la Mac (src/host/Makefile sin sanitizadores) en
+# build/host-mac. Las imágenes son capturas de juegos comerciales: no se
+# suben al repositorio.
 #
 # Por omisión 3 minutos de consola (1,69e10 ciclos) y salida en build/censo.
 # Los juegos corren en paralelo, uno por proceso.
@@ -28,11 +29,9 @@ shift $((OPTIND - 1))
 [ $# -gt 0 ] || { echo "uso: tools/censo.sh [-c ciclos] [-o dir] rom..." >&2; exit 3; }
 
 BIN="$ROOT/build/host-mac/salsa64-run"
-mkdir -p "$ROOT/build/host-mac" "$OUT"
+mkdir -p "$OUT"
 rm -f "$BIN"
-cc -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffp-contract=off -fno-math-errno -I"$ROOT/src" \
-	"$ROOT"/src/core/*.c "$ROOT"/src/cpu/*.c "$ROOT"/src/rsp/gfx/*.c "$ROOT/src/frontend/savefile.c" \
-	"$ROOT"/src/host/*.c -lm -o "$BIN" 2>&1 | grep -v "reducing alignment" || true
+make -s -C "$ROOT/src/host" OUT="$ROOT/build/host-mac" CC=cc SAN= -j8 2>&1 | grep -v "reducing alignment" || true
 [ -x "$BIN" ] || { echo "no se pudo compilar salsa64-run" >&2; exit 1; }
 
 for rom in "$@"; do

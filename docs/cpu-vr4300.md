@@ -119,9 +119,12 @@ fuentes en docs/THIRD_PARTY.md):
 | Copia de su propia imagen | DMEM 0x554–0x888 → RDRAM 0x004–0x338. En DMEM están los bytes 0x40–0xFFF de la ROM en las mismas posiciones, así que se copian de la ROM del usuario | Perfect Dark (`b .` si 0x2E8 ≠ 0xC86E2000, ROM 0x838) y Zelda OoT (un actor revisa la misma palabra) |
 | Microcódigo del RSP | Lee 0x1F0 bytes de RDRAM 0x1E8 a IMEM 0x120 y los escribe con un DMA con paso: 24 filas de 8 bytes desde RDRAM 0x2FB1F0, una cada 0xFF0 (SP_WR_LEN = 0xFE817000). Se reproduce el efecto, no el microcódigo | Donkey Kong 64 (fila 3, 0x2FE1C0) |
 | Tamaño de la RDRAM | En 0x3F0, además de osMemSize en 0x318 | homebrew que arranca con IPL3 6105 (n64bootloader) |
+| `osCicId` (0x310) | 6105 (también con el 6103: 6103) | Conker (sin él no arranca su hilo principal), Perfect Dark, DK64; con 6103, Banjo-Kazooie y Diddy Kong Racing |
 
-Las variables de libultra (0x300–0x318) se escriben después y pisan la
-copia; de 0x31C a 0x337 queda lo copiado. No se reproduce lo que queda en
+Las variables de libultra (0x300–0x318, con `osCicId`) se escriben después
+y pisan la copia; de 0x31C a 0x337 queda lo copiado. `osCicId` se escribe
+solo con el 6103 y el 6105, las dos variantes de las que hay juegos que lo
+comprueban; con las demás queda en 0. No se reproduce lo que queda en
 IMEM 0x000–0x11F (el microcódigo, descifrado del residuo del IPL2 que deja la
 PIF ROM): es código de Nintendo. Tampoco el resto de los registros que deja
 cada IPL3 (los cálculos del checksum): no hay documentación pública ni juego
