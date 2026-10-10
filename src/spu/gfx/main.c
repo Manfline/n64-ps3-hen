@@ -8,19 +8,21 @@
  * TMEM viven en el local store y persisten entre tareas.
  *
  * Presupuesto de local store (256 KB); los números exactos los imprime el
- * build (spu-size: texto 64 KB, datos 0,8 KB, bss 145 KB):
- *   código (HLE + runtime)              ~ 64 KB (F3D y F3DEX: 3,5 KB)
+ * build (spu-size: texto 71 KB, datos 0,8 KB, bss 145 KB):
+ *   código (HLE + runtime)              ~ 71 KB (F3D y F3DEX: 3,6 KB;
+ *                                         Perfect Dark 1,9 KB y Conker
+ *                                         4,4 KB)
  *   gfx_state (RDP, TMEM 4 KB, matrices,
  *     búfer de vértices, texturas de la
  *     tarea, directorio de la caché de
- *     texturas 32 KB)                      ~ 53 KB
+ *     texturas 32 KB, luces de Conker)     ~ 53 KB
  *   lecturas por DMA (vértices, matrices,
  *     luces, cargas de TMEM)               ~ 5,8 KB
  *   display list 2 × 1 KB                    2 KB
  *   vértices 2 × 8 KB, comandos 2 × 4 KB    24 KB
  *   texturas 2 × 32 KB                      64 KB
  *   spukit (descriptor, resultado…)        < 1 KB
- *   pila                                    el resto (~ 46 KB)
+ *   pila                                    el resto (~ 39 KB)
  */
 #include <spukit/spu.h>
 #include <sys/spu_thread.h>

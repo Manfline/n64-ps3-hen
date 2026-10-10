@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "core/endian.h"
+#include "core/rom.h"
 
 #define SP_REG(r) (0x04040000u + 4 * (r))
 
@@ -148,6 +149,26 @@ static void rsp_gfx_task(void)
 	salsa64_sched_dispatch(&t_n64.sched, CPU->cycles + bus->rsp.gfx_cycles + bus->rsp.dp_cycles);
 	CHECK_EQ(fake.finishes, 2);
 
+	/* Y las variantes de Rare. */
+	wr(SP_REG(SALSA64_SP_STATUS), 0x8);
+	bus->mi.intr = 0;
+	memset(t_n64.bus.rdram + 0x5000, 0, 0x800);
+	put_text(0x5000 + 0x40, "Salsa64 GBI F3DEXBG");
+	wr(SP_REG(SALSA64_SP_STATUS), 0x1 | 0x4);
+	CHECK_EQ(fake.starts, 3);
+	CHECK_EQ(fake.gbi, SALSA64_GBI_F3DEXBG);
+	salsa64_sched_dispatch(&t_n64.sched, CPU->cycles + bus->rsp.gfx_cycles + bus->rsp.dp_cycles);
+	CHECK_EQ(fake.finishes, 3);
+	wr(SP_REG(SALSA64_SP_STATUS), 0x8);
+	bus->mi.intr = 0;
+	memset(t_n64.bus.rdram + 0x5000, 0, 0x800);
+	put_text(0x5000 + 0x40, "Salsa64 GBI F3DPD");
+	wr(SP_REG(SALSA64_SP_STATUS), 0x1 | 0x4);
+	CHECK_EQ(fake.starts, 4);
+	CHECK_EQ(fake.gbi, SALSA64_GBI_F3DPD);
+	salsa64_sched_dispatch(&t_n64.sched, CPU->cycles + bus->rsp.gfx_cycles + bus->rsp.dp_cycles);
+	CHECK_EQ(fake.finishes, 4);
+
 	/* Microcódigo desconocido: no llega al backend y se detiene en el acto;
 	 * la interrupción del DP llega igual (quien espere el fin del RDP no
 	 * se cuelga). */
@@ -155,7 +176,7 @@ static void rsp_gfx_task(void)
 	wr(0x04300000, 0x0800);  /* MI_MODE: bajar la interrupción DP */
 	memset(t_n64.bus.rdram + 0x5000, 0, 0x800);
 	wr(SP_REG(SALSA64_SP_STATUS), 0x1 | 0x4);
-	CHECK_EQ(fake.starts, 2);
+	CHECK_EQ(fake.starts, 4);
 	CHECK_EQ(bus->rsp.stats.unknown_gbi, 1);
 	CHECK_EQ(bus->rsp.stats.unknown_data, 0x80005000);
 	CHECK(rd(SP_REG(SALSA64_SP_STATUS)) & SALSA64_SP_STATUS_BROKE);
@@ -263,6 +284,50 @@ static enum salsa64_gbi detect(const char *text)
 	return salsa64_rsp_detect_gbi(&t_n64.bus, &task);
 }
 
+/* Los 4 bytes que, tras el estado `state` del CRC-32 (sin la inversión
+ * final), lo llevan a `target`: el CRC hacia atrás 32 bits. */
+static void crc32_force(uint32_t state, uint32_t target, uint8_t out[4])
+{
+	uint32_t r = ~target;
+	for (int i = 0; i < 32; i++)
+		r = (r & 0x80000000u) ? ((r ^ 0xEDB88320u) << 1) | 1 : r << 1;
+	r ^= state;
+	for (int i = 0; i < 4; i++)
+		out[i] = (uint8_t)(r >> (8 * i));
+}
+
+/* Microcódigo sin texto (Perfect Dark): por el CRC-32 de su código. Los
+ * datos son sintéticos (ceros y 4 bytes calculados para dar ese CRC). */
+static void rsp_detect_gbi_crc(void)
+{
+	const uint32_t code = 0x8000, size = 0x1000;
+	uint8_t *p = t_n64.bus.rdram + code;
+	memset(p, 0, size);
+	uint32_t state = 0xFFFFFFFFu;
+	for (uint32_t i = 0; i < size - 4; i++) {
+		state ^= p[i];
+		for (int k = 0; k < 8; k++)
+			state = (state >> 1) ^ (0xEDB88320u & (0u - (state & 1)));
+	}
+	crc32_force(state, 0xC543D0A8u, p + size - 4);
+	CHECK_EQ(salsa64_crc32(p, size), 0xC543D0A8u);
+
+	struct salsa64_task task;
+	memset(&task, 0, sizeof task);
+	memset(t_n64.bus.rdram + 0x5000, 0, 0x800);
+	task.ucode = 0x80000000u | code;
+	task.ucode_size = size;
+	task.ucode_data = 0x80005000;
+	task.ucode_data_size = 0x800;
+	CHECK_EQ(salsa64_rsp_detect_gbi(&t_n64.bus, &task), SALSA64_GBI_F3DPD);
+	task.ucode_size = 0xFF8;  /* otro tamaño: no es él */
+	CHECK_EQ(salsa64_rsp_detect_gbi(&t_n64.bus, &task), SALSA64_GBI_UNKNOWN);
+	task.ucode_size = size;
+	p[17] ^= 1;
+	CHECK_EQ(salsa64_rsp_detect_gbi(&t_n64.bus, &task), SALSA64_GBI_UNKNOWN);
+	memset(p, 0, size);
+}
+
 static void rsp_detect_gbi(void)
 {
 	/* Solo el formato de los textos de identificación, sin copiarlos. */
@@ -271,10 +336,13 @@ static void rsp_detect_gbi(void)
 	CHECK_EQ(detect("RSP Gfx ucode F3DEX       xbus 1.23 "), SALSA64_GBI_F3DEX);
 	CHECK_EQ(detect("RSP Gfx ucode F3DEX         0.95 "), SALSA64_GBI_F3DEX);
 	CHECK_EQ(detect("RSP Gfx ucode S2DEX  fifo 2.05 "), SALSA64_GBI_S2DEX);
+	CHECK_EQ(detect("RSP Gfx ucode F3DEXBG.NoN fifo 2.08 "), SALSA64_GBI_F3DEXBG);
 	CHECK_EQ(detect("RSP SW Version: 2.0X"), SALSA64_GBI_F3D);
 	CHECK_EQ(detect("Salsa64 GBI F3DEX2"), SALSA64_GBI_F3DEX2);
 	CHECK_EQ(detect("Salsa64 GBI F3DEX1"), SALSA64_GBI_F3DEX);
 	CHECK_EQ(detect("Salsa64 GBI Fast3D"), SALSA64_GBI_F3D);
+	CHECK_EQ(detect("Salsa64 GBI F3DPD"), SALSA64_GBI_F3DPD);
+	CHECK_EQ(detect("Salsa64 GBI F3DEXBG"), SALSA64_GBI_F3DEXBG);
 	CHECK_EQ(detect("nada"), SALSA64_GBI_UNKNOWN);
 
 	/* El texto para los logs: hasta el primer carácter no imprimible. */
@@ -297,4 +365,5 @@ void t_suite_rsp(void)
 	RUN(rsp_audio_task);
 	RUN(rsp_other_task);
 	RUN(rsp_detect_gbi);
+	RUN(rsp_detect_gbi_crc);
 }

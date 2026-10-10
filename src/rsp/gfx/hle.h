@@ -18,7 +18,7 @@
 #define GFX_MAX_VTX     64   /* F3D: 16; F3DEX y F3DEX2: 32 */
 #define GFX_MTX_STACK   32   /* F3D: 10, F3DEX2: 18 en la RDRAM */
 #define GFX_DL_STACK    32   /* F3D: 10, F3DEX2: 18 */
-#define GFX_MAX_LIGHTS  8    /* direccionales + la ambiental */
+#define GFX_MAX_LIGHTS  11   /* + la ambiental; F3DEX2: 7, Conker: 11 */
 #define GFX_TEX_ARENA   128  /* texturas en el arena por tarea */
 #define GFX_TC_ENTRIES  1024 /* texturas en la caché entre tareas */
 #define GFX_TC_SLOTS    2048 /* índice por hash de la caché (potencia de 2) */
@@ -86,6 +86,18 @@ struct gfx_texcache {
 	struct gfx_tc_entry e[GFX_TC_ENTRIES];
 };
 
+/* Estado propio de las variantes de Rare (f3dpd.c, f3dexbg.c); cada una
+ * lo pone en cero al empezar la tarea. */
+struct gfx_rare {
+	uint32_t color_base;     /* Perfect Dark: tabla de colores de los vértices */
+	/* Conker */
+	uint32_t normal_base;    /* normales: 2 bytes por lugar del búfer de vértices */
+	bool advanced;           /* iluminación avanzada (tras su G_LOAD_UCODE) */
+	float coord_mod[16];     /* G_MW_COORD_MOD: posición para las luces puntuales */
+	float light_pos[GFX_MAX_LIGHTS + 1][3];
+	float light_ca[GFX_MAX_LIGHTS + 1];  /* intensidad de la luz puntual */
+};
+
 /* Última textura resuelta por tile en la tarea: vale mientras no haya
  * cargas a la TMEM ni cambios de tiles (tex_gen) ni del modo de paleta. */
 struct gfx_tilememo {
@@ -120,6 +132,7 @@ struct gfx_state {
 	int dl_sp;
 	uint32_t dl_pc;            /* siguiente comando de la display list */
 	struct gfx_vtx vtx[GFX_MAX_VTX];
+	struct gfx_rare rare;
 
 	/* --- RDP (persiste entre tareas) --- */
 	uint32_t oh, ol;           /* othermode H y L */
@@ -190,9 +203,15 @@ void gfx_io_tex_cache(struct gfx_state *g, uint32_t off, uint32_t size);
 
 /* Cada familia de microcódigos decodifica sus comandos en su archivo
  * (f3dex2.c: F3DEX2 y F3DZEX2; f3d.c: F3D y F3DEX 1.x) y llama a lo de
- * abajo con los parámetros ya extraídos. */
-void gfx_dl_f3dex2(struct gfx_state *g);
-void gfx_dl_f3d(struct gfx_state *g);
+ * abajo con los parámetros ya extraídos. Una variante de una familia pasa
+ * un `hook` con sus comandos propios: devuelve true si el comando era suyo
+ * (ya resuelto) y false para que siga la familia. */
+typedef bool (*gfx_cmd_hook)(struct gfx_state *g, uint32_t w0, uint32_t w1);
+void gfx_dl_f3dex2(struct gfx_state *g, gfx_cmd_hook hook);
+void gfx_dl_f3d(struct gfx_state *g, gfx_cmd_hook hook);
+/* Variantes de Rare: Perfect Dark (de F3D) y Conker (de F3DEX2). */
+void gfx_dl_f3dpd(struct gfx_state *g);
+void gfx_dl_f3dexbg(struct gfx_state *g);
 
 /* dl.c: recorrido de la display list y estado que el RSP pasa al RDP. */
 /* Siguiente comando (avanza dl_pc). false: la tarea termina (fuera de la
@@ -225,6 +244,13 @@ void gfx_geom_reset(struct gfx_state *g);
 void gfx_load_matrix(float m[16], const uint8_t *src);
 void gfx_mtx_mul(float out[16], const float a[16], const float b[16]);
 void gfx_load_vertices(struct gfx_state *g, uint32_t addr, uint32_t v0, uint32_t n);
+/* Lo mismo con los n vértices de 16 bytes ya leídos (o armados) en `src`. */
+void gfx_vertices(struct gfx_state *g, const uint8_t *src, uint32_t v0, uint32_t n);
+/* Luces y lookat en espacio del modelo (light_model, lookat_model), al día. */
+void gfx_light_vectors(struct gfx_state *g);
+/* G_TEXTURE_GEN: s, t del vértice según su normal (unitaria, espacio del
+ * modelo) y el lookat, con la escala de G_TEXTURE. */
+void gfx_texgen_vertex(struct gfx_state *g, const float nrm[3], struct gfx_vtx *v);
 void gfx_set_viewport(struct gfx_state *g, const uint8_t *vp);
 void gfx_set_light(struct gfx_state *g, int index, const uint8_t *src);
 void gfx_set_lookat(struct gfx_state *g, int axis, const uint8_t *src);
@@ -313,6 +339,7 @@ static inline uint32_t gfx_addr(const struct gfx_state *g, uint32_t seg)
 #define G_TEXTURE_GEN_LINEAR 0x00080000u
 #define G_LOD                0x00100000u
 #define G_SHADING_SMOOTH     0x00200000u
+#define G_POINT_LIGHTING     0x00400000u
 #define G_CLIPPING           0x00800000u
 
 /* othermode H */

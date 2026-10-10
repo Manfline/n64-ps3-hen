@@ -1,5 +1,67 @@
 # Estado
 
+## 2026-10-10 — Microcódigos gráficos de Rare: Perfect Dark y Conker
+
+Hecho (rama `competent-haslett-3bad2a`, con main 3270538 y la rama
+de arranque `amazing-noether-39a548` con `osCicId`, sin integrar):
+- **Perfect Dark** (`src/rsp/gfx/f3dpd.c`): Fast3D de Rare. Solo cambian
+  G_VTX (vértices de 12 bytes: x, y, z, banderas, offset del color, s, t) y
+  G_VTXCOLORBASE (0x07, la tabla de colores; 4 bytes R, G, B, A o normal y
+  A con G_LIGHTING); G_TRI4 en 0xB1 ya lo tenía f3d.c (como GoldenEye) y
+  G_QUAD en 0xB5 con índices ×10. Cada vértice se arma en el formato de 16
+  bytes y sigue el camino de siempre. El microcódigo no trae texto: se
+  reconoce por el CRC-32 de su código (c543d0a8, 0x1000 bytes) solo si
+  ningún texto lo identificó (`src/core/rsp.c`); `salsa64_crc32` pasó a una
+  tabla de nibbles (dos pasos por byte en vez de ocho).
+- **Conker** (`src/rsp/gfx/f3dexbg.c`, «F3DEXBG.NoN fifo 2.08», por su
+  texto): F3DEX2 con G_TRI4 en 0x10–0x1F (índices de 5 bits; el 0x14 era
+  eso), luces de 48 bytes con luz puntual (posición e intensidad),
+  G_MW_COORD_MOD, tabla de normales aparte (G_MV_NORMALS) y la luz que
+  multiplica el color del vértice. **Por qué no mandaba otra tarea:** su
+  G_LOAD_UCODE no cambia de GBI (pasa a la iluminación avanzada y la lista
+  sigue); la HLE de F3DEX2 terminaba la tarea ahí, sin llegar al
+  G_RDPFULLSYNC, y el juego esperaba la interrupción del DP para siempre.
+- Cambios en lo común, mínimos: las familias aceptan un *hook* con los
+  comandos propios de una variante (`gfx_dl_f3d(g, hook)`,
+  `gfx_dl_f3dex2(g, hook)`); geom.c separa la transformación de la lectura
+  (`gfx_vertices`) y expone las luces en espacio del modelo y el texgen;
+  `gfx_state.rare` (~250 bytes) con el estado de las dos variantes; dos GBI
+  nuevos en rcp.h; F3DEX2, F3D y F3DEX no cambian (mismas pruebas y
+  mismas imágenes de gfxtest).
+- SPE 0: Perfect Dark 1,9 KB y Conker 4,4 KB de código; texto 71 KB, bss
+  145 KB, pila ~39 KB (antes ~46; `src/spu/gfx/main.c`). `GFX_MAX_LIGHTS`
+  pasó de 8 a 11: Conker pide hasta 11 luces (`G_MW_NUMLIGHT` = 0x210).
+- Pruebas: suite `gfx-rare` (9: colores por tabla, luz con la normal en la
+  tabla, G_TRI4 y G_QUAD de PD; G_TRI4 de 5 bits, G_LOAD_UCODE que no corta
+  la lista, luz básica y avanzada, 11 luces, COORD_MOD, lookat, normales y
+  texgen de Conker) y en `rsp` la detección por texto y por CRC (4 KB
+  sintéticos con 4 bytes calculados para dar el CRC de PD) y el despacho al
+  backend: 297 en el host. Mutaciones: 6 de 6 detectadas.
+- Host (respaldos propios, fuera del repo), 3 minutos sin tocar el
+  control: **Perfect Dark** 6914 tareas, 0 comandos sin implementar, 0
+  errores (identificación del producto en alta resolución, logo de
+  Nintendo, cubo de N64 que se vuelve el logo de Rare, la ciudad, Joanna en
+  la azotea); **Conker** 4468 tareas, 0 sin implementar, 0 aproximados
+  (pantalla legal, logos, Conker con la motosierra, la taberna, menú
+  «GAME 1»). Detalle en docs/compatibilidad.md.
+- Depuración en el host: `EXTRA_CFLAGS=-DSALSA64_DEBUG_DL` vuelca las
+  display lists (`SALSA64_DEBUG_DL=N`, `SALSA64_DEBUG_DL_FROM=k`) y
+  `-DRASTER_W=640 -DRASTER_H=480` agranda el rasterizador para pantallas de
+  alta resolución.
+
+Pendiente:
+- [ ] PS3 real: Perfect Dark y Conker con el paquete «Salsa64 Rare»
+      (SLSA00081); que el autor confirme lo que se ve (y la boca de Conker en
+      la escena del logo de Rareware: oscura por dentro, parece correcto).
+- [ ] Perfect Dark aproxima `lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE` (el de
+      GoldenEye): término S·Sa en el RSX (Fase 4).
+- [ ] Efectos de framebuffer de los dos (cámara espía y monitores de PD,
+      copias del z-buffer, desenfoque de la pausa y sombra de Conker): Fase
+      4; lista en docs/compatibilidad.md.
+- [ ] Sonido: naudio de los dos (trabajo de audio).
+- [ ] La luz de Conker sigue a GLideN64 (en el modo básico la direccional
+      no cuenta); contrastar con la PS3 cuando haya escenas de juego.
+
 ## 2026-10-10 — Arranque del CIC 6105 y censo de compatibilidad
 
 Hecho (rama `amazing-noether-39a548`; detalle en docs/cpu-vr4300.md,

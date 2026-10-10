@@ -22,6 +22,7 @@
 
 #include "core/bus.h"
 #include "core/endian.h"
+#include "core/rom.h"
 #include "core/sched.h"
 #include "cpu/vr4300.h"
 
@@ -149,6 +150,25 @@ static const uint8_t *find(const uint8_t *p, const uint8_t *end, const char *s)
 	return NULL;
 }
 
+/* Microcódigos sin texto de identificación, por el CRC-32 de su código
+ * (ucode, ucode_size bytes; solo el valor, ver docs/compatibilidad.md). */
+static const struct {
+	uint32_t crc, size;
+	enum salsa64_gbi gbi;
+} ucode_crcs[] = {
+	{ 0xC543D0A8u, 0x1000, SALSA64_GBI_F3DPD },  /* Perfect Dark (NTSC-U) */
+};
+
+static enum salsa64_gbi gbi_by_crc(const struct salsa64_bus *bus, const struct salsa64_task *task)
+{
+	uint32_t addr = task->ucode & 0x1FFFFFFF;
+	for (unsigned i = 0; i < sizeof ucode_crcs / sizeof ucode_crcs[0]; i++)
+		if (task->ucode_size == ucode_crcs[i].size && in_rdram(bus, addr, task->ucode_size) &&
+		    salsa64_crc32(bus->rdram + addr, task->ucode_size) == ucode_crcs[i].crc)
+			return ucode_crcs[i].gbi;
+	return SALSA64_GBI_UNKNOWN;
+}
+
 enum salsa64_gbi salsa64_rsp_detect_gbi(const struct salsa64_bus *bus, const struct salsa64_task *task)
 {
 	uint32_t addr = task->ucode_data & 0x1FFFFFFF;
@@ -162,6 +182,10 @@ enum salsa64_gbi salsa64_rsp_detect_gbi(const struct salsa64_bus *bus, const str
 	const uint8_t *p = bus->rdram + addr, *end = p + size;
 
 	/* ROMs de prueba de Salsa64 (sin microcódigo de Nintendo). */
+	if (find(p, end, "Salsa64 GBI F3DEXBG"))
+		return SALSA64_GBI_F3DEXBG;
+	if (find(p, end, "Salsa64 GBI F3DPD"))
+		return SALSA64_GBI_F3DPD;
 	if (find(p, end, "Salsa64 GBI F3DEX2"))
 		return SALSA64_GBI_F3DEX2;
 	if (find(p, end, "Salsa64 GBI F3DEX1"))
@@ -176,6 +200,9 @@ enum salsa64_gbi salsa64_rsp_detect_gbi(const struct salsa64_bus *bus, const str
 		q += 14;
 		if (starts_with(q, end, "S2DEX"))
 			return SALSA64_GBI_S2DEX;
+		/* El de Conker ("F3DEXBG.NoN fifo 2.08"): F3DEX2 con lo suyo. */
+		if (starts_with(q, end, "F3DEXBG"))
+			return SALSA64_GBI_F3DEXBG;
 		bool zex = starts_with(q, end, "F3DZEX");
 		const uint8_t *v = q;
 		while (v < end && *v && !(v[0] >= '0' && v[0] <= '9' && v + 1 < end && v[1] == '.'))
@@ -190,7 +217,7 @@ enum salsa64_gbi salsa64_rsp_detect_gbi(const struct salsa64_bus *bus, const str
 	/* Fast3D (Super Mario 64 y los primeros juegos) no trae ese texto. */
 	if (find(p, end, "RSP SW Version: 2.0"))
 		return SALSA64_GBI_F3D;
-	return SALSA64_GBI_UNKNOWN;
+	return gbi_by_crc(bus, task);
 }
 
 void salsa64_rsp_ucode_text(const struct salsa64_bus *bus, uint32_t ucode_data, char *out, size_t n)
@@ -235,8 +262,7 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 	if (rsp->trace)
 		rsp->trace(rsp->trace_ctx, &task, gbi);
 	if (task.type == SALSA64_TASK_GFX && valid && rsp->sched) {
-		if (gbi == SALSA64_GBI_F3DEX2 || gbi == SALSA64_GBI_F3DZEX2 || gbi == SALSA64_GBI_F3D ||
-		    gbi == SALSA64_GBI_F3DEX) {
+		if (gbi != SALSA64_GBI_UNKNOWN && gbi != SALSA64_GBI_S2DEX) {
 			rsp->stats.gfx++;
 			rsp->busy = SALSA64_TASK_GFX;
 			rsp->gbi = gbi;

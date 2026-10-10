@@ -190,13 +190,15 @@ static void moveword(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	}
 }
 
-void gfx_dl_f3d(struct gfx_state *g)
+void gfx_dl_f3d(struct gfx_state *g, gfx_cmd_hook hook)
 {
 	struct gfx_result *res = g->res;
 	const bool ex = g->job->gbi == SALSA64_GBI_F3DEX;
 	uint32_t w0, w1;
 
 	while (gfx_dl_next(g, &w0, &w1)) {
+		if (hook && hook(g, w0, w1))
+			continue;
 		uint32_t op = w0 >> 24;
 		switch (op) {
 		case G_VTX: {
