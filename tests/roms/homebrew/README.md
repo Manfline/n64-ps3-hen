@@ -14,6 +14,8 @@ reproducible y sin código de Nintendo. Procedencia y licencias en
 | `salsa64-vitest.z64` | ROM propia de prueba del VI (fuente en `tests/roms/src/vitest`, GPLv2+): barras de color, rampa y un cuadro animado en RGBA5551 y RGBA8888, con autoverificación de la temporización. La genera `tools/build-vitest.sh`. |
 | `salsa64-vitest.z64.sha256` | SHA-256 del ROM; recompilarlo desde cero da el mismo valor. |
 | `salsa64-vitest.buildinfo` | Versiones de clang, lld y nust64 con que se compiló. |
+| `salsa64-audiotest.z64` | ROM propia de prueba del AI y de la HLE de audio (fuente en `tests/roms/src/audiotest`, GPLv2+): un tono conocido (La 4, Do 5 a la izquierda, Mi 5 a la derecha, Sol 5, Do 6, silencio) primero desde el CPU y después intercalado por una tarea de audio ("Salsa64 ABI NEAD"); se verifica sola y `salsa64-run --audiotest-check` compara lo que sale por el AI muestra por muestra. La genera `tools/build-audiotest.sh`. |
+| `salsa64-audiotest.z64.sha256`, `salsa64-audiotest.buildinfo` | SHA-256 (reproducible) y versiones de clang, lld y nust64. |
 | `salsa64-savetest-eeprom4k.z64`, `-eeprom16k.z64`, `-sram.z64` | ROM propia de prueba del guardado del cartucho (fuente en `tests/roms/src/savetest`, GPLv2+), en tres variantes que solo difieren en el título y en el tipo de guardado de la cabecera de homebrew. Escribe un patrón, lo relee y en el arranque siguiente comprueba que persistió. Las genera `tools/build-savetest.sh`. |
 | `salsa64-savetest-*.z64.sha256` | SHA-256 de cada variante; recompilarlas desde cero da los mismos valores. |
 | `salsa64-savetest.buildinfo` | Versiones de clang, lld y nust64 con que se compiló. |

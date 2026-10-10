@@ -71,7 +71,11 @@
 
 #define W GFXTEST_W
 #define H GFXTEST_H
-#define TIMEOUT 20000000u
+/* Espera máxima por una interrupción, en ticks de Count (46,875 MHz): 10 s.
+ * Es un guardia contra cuelgues, no una medida: el emulador puede tardar
+ * lo que tarde su RSP (en RPCS3 el primer trabajo del SPE compila segundos
+ * mientras el CPU sigue contando). */
+#define TIMEOUT_TICKS (10u * 46875000u)
 
 /* ---- Datos que ve el RSP ---------------------------------------------------
  * Todo en una sección sin cargar ni limpiar (.rsp), escrita siempre por
@@ -579,12 +583,20 @@ static void start_task(const gfx *dl, uint32_t dl_bytes)
 	SP_STATUS = 0x001 | 0x004 | 0x100 | 0x200 | 0x800 | 0x2000;
 }
 
+static uint32_t count(void);
+
 static int wait_intr(uint32_t bit)
 {
-	for (uint32_t i = 0; i < TIMEOUT; i++)
+	uint32_t t0 = count();
+	for (uint32_t i = 0;; i++) {
 		if (MI_INTR & bit)
 			return 1;
-	return 0;
+		/* Count solo de vez en cuando: leerlo en cada vuelta (MFC0) saca
+		 * al recompilador de Salsa64 a su camino lento y el bucle se
+		 * arrastra (9 campos/s en la PS3). */
+		if ((i & 1023) == 0 && count() - t0 >= TIMEOUT_TICKS)
+			return 0;
+	}
 }
 
 /* ---- Video e ISViewer (como vitest) --------------------------------------- */

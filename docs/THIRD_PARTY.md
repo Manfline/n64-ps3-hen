@@ -9,6 +9,8 @@
 | `tests/phase0/spu-compute/spu/mix.c` | Patrón DMA del sample `samples/spu/spudma` de PSL1GHT | MIT | Solo el patrón `mfc_get`/espera por etiqueta; el cálculo y el doble búfer son propios |
 | `lib/rsxkit/src/fprog.c` | Formato de instrucción de fragment program de `tools/cgcomp/include/nvfx_shader.h` y `fpparser.cpp` de PSL1GHT (`f649a08f`) | MIT | Solo los campos (fin de programa, tipo de fuente, bit 31 de SRC2) para limpiar el bit que quita la corrección de perspectiva; código propio |
 
+| `src/rsp/audio/alist.c`, `src/rsp/audio/abi.c` (HLE de las listas de audio) | mupen64plus-rsp-hle (github.com/mupen64plus/mupen64plus-rsp-hle), commit `8a7a472a` (2026-06-23): `src/alist.c`, `src/audio.c`, `src/alist_audio.c`, `src/alist_nead.c` y la tabla de despacho de `src/hle.c` | GPLv2 o posterior (cabecera de cada archivo; `LICENSES` dice GPLv2) | Adaptado (2026-10-10) con los avisos de copyright originales en cada archivo: DMEM y RDRAM en el orden de la N64 con índices de la N64 (FILTER e INTERLEAVE del original dependen del host little-endian), E/S explícita de la RDRAM (DMA en el SPE), formato propio del estado de ENVMIXER, direcciones de la DMEM módulo 4 KB, sin desplazamientos de negativos. **No** se tomó la tabla `RESAMPLE_LUT` del original (viene del microcódigo de Nintendo): `src/rsp/audio/lut.c` es un diseño propio (`tools/audio-lut.py`). Compatible con GPLv2+ |
+
 El núcleo de la Fase 1 (`src/core/`, `src/cpu/`, `src/host/`), el mapeo
 de controles del frontend (`src/frontend/padmap.c`) y el guardado del
 cartucho (`src/core/save.c`, `src/frontend/savefile.c`) son código propio, escrito desde documentación pública (manual del VR4300 de NEC, MIPS
@@ -47,6 +49,10 @@ Datos tomados de terceros (no código):
 | Tipo de guardado por código de juego: solo el código del encabezado y el tipo de memoria (datos de compatibilidad, sin material de Nintendo) | `src/core/savedb.c` | Cotejados entre dos fuentes y tomados solo donde coinciden (178 códigos y 6 excepciones por región): heurística de mia en ares (`mia/medium/nintendo-64.cpp`, commit `433d07fb`) y base de N64FlashcartMenu (`src/menu/rom_info.c`, commit `8c5fb11f`). No se copió código de ninguna | ares: ISC; N64FlashcartMenu: AGPL-3.0 (solo hechos) |
 | DMA del SP (filas, salto, vuelta en el banco, registros al terminar), bits de SP_STATUS, estructura OSTask en DMEM 0xFC0 | `src/core/sp.c`, `src/core/rsp.c` | n64brew.dev (Reality Signal Processor/Interface); mupen64plus-rsp-hle `src/memory.h`, `src/hle.c` | documentación; GPLv2 (solo consulta) |
 | Fin de una tarea: HALT, BROKE y TASKDONE, e interrupción DP tras G_RDPFULLSYNC (los retardos son propios, del mismo orden) | `src/core/rsp.c` | mupen64plus-core `src/device/rcp/rsp/rsp_core.c` (`do_SP_Task`) | GPLv2 (solo consulta) |
+| Audio Interface: DMA con cola de dos lugares, interrupción al empezar cada DMA, AI_LENGTH y los demás registros que se leen como él, bits de AI_STATUS, frecuencia = reloj del VI / (AI_DACRATE + 1), error del acarreo en los límites de 8 KB | `src/core/ai.c`, `tests/roms/src/audiotest` | n64brew.dev (Audio Interface, consultada el 2026-10-10); ares `ares/n64/ai/` (ISC) como confirmación | documentación; ISC (solo consulta) |
+| Reconocimiento del ABI de audio por palabras de `ucode_data` (las constantes de [0x10], [0x28] y [0x30] de cada microcódigo, sin código ni datos del microcódigo) | `src/core/rsp_audio.c` | mupen64plus-rsp-hle `src/hle.c` (`try_audio_task_detection`, commit `8a7a472a`) | GPLv2+; solo se comparan valores. Las pruebas usan palabras sintéticas y el texto "Salsa64 ABI NEAD" |
+| Sincronía del audio con la salida (WSOLA) | `src/frontend/audio_sync.c` | Técnica de Verhelst y Roelands (1993), escrita desde su descripción | código propio |
+| Puerto de audio de la PS3 (audioInit, puertos, cola de eventos, bloques de 256 muestras en flotante) | `src/frontend/audio_out.c` | `ppu/include/audio/audio.h` de PSL1GHT | MIT |
 | Detección del microcódigo por los textos de `ucode_data` ("RSP Gfx ucode", versión 2.x, F3DZEX, "RSP SW Version") | `src/core/rsp.c` | GLideN64 `src/GBI.cpp`; mupen64plus-video-rice `src/RSP_Parser.cpp` | GPLv2 (solo consulta). Las pruebas usan textos sintéticos, no los de Nintendo |
 | Codificación de los comandos F3DEX2 y F3DZEX (G_VTX, G_MODIFYVTX, G_CULLDL, G_BRANCH_Z/W, G_TRI*, G_TEXTURE, G_GEOMETRYMODE y sus bits, G_MTX, G_MOVEWORD, G_MOVEMEM y sus offsets, G_SETOTHERMODE_*, G_TEXRECT en tres comandos) | `src/rsp/gfx/f3dex2.c`, `tests/roms/src/gfxtest/gbi.h` | n64brew.dev; GLideN64 `src/uCodes/F3DEX2.*`, `src/GBI.h`, `src/gSP.cpp`; mupen64plus-video-glide64mk2 `ucode02.h`; mupen64plus-video-rice `UcodeDefs.h` | documentación; GPLv2 (solo consulta). `gbi.h` de gfxtest es propio: no es el de libultra ni el de ningún decomp |
 | Luces (transformar la dirección con la modelview y normalizar), mapeo de entorno ((d+1)·512 y acos(−d)·1024/π texels antes de la escala) y niebla por vértice (z/w·fm + fo) | `src/rsp/gfx/geom.c` | GLideN64 `src/gSP.cpp`, `src/3DMath.cpp`; mupen64plus-video-glide64mk2 `3dmath.cpp` | GPLv2 (solo consulta) |
@@ -79,6 +85,7 @@ arriba como el resto.
 | `tests/roms/homebrew/nemu64-test.z64` | github.com/thelemmy/nemu64-test, commit `9a8b9f7d94ee2f6f57d7feed70c98c22cdc30e6c` (2026-09-08), conjunto "base" | MIT (Copyright (c) 2021 lemmy-64), `nemu64-test.LICENSE` | IPL3 libre de libdragon r7 (Unlicense) que trae nust64 0.4.1, verificado por MD5 (`7f014ed41cc53bb1a5e44f211f8c3dec`); crates enlazados (arbitrary-int y oorandom MIT; arrayref BSD-2-Clause; linked_list_allocator, lock_api, num-traits, scopeguard y spinning_top MIT/Apache-2.0), compiler-builtins y core/alloc de Rust: avisos en `nemu64-test.NOTICES` |
 
 | `tests/roms/homebrew/salsa64-vitest.z64` | Código propio (`tests/roms/src/vitest`) | GPLv2 o posterior | IPL3 libre de libdragon r7 (Unlicense) que trae nust64 0.4.1, verificado por MD5 como arriba. Sin bibliotecas: ni libultra ni libdragon. Valores de los registros del VI (modos NTSC/PAL de 320×240) y comandos joybus tomados de n64brew.dev (Video Interface, Joybus Protocol) |
+| `tests/roms/homebrew/salsa64-audiotest.z64` | Código propio (`tests/roms/src/audiotest`) | GPLv2 o posterior | Lo mismo que vitest. Registros del AI de n64brew.dev (Audio Interface); la tarea de audio usa la codificación de comandos de nead (como en `src/rsp/audio/abi.c`) con un microcódigo que es solo un BREAK y el texto "Salsa64 ABI NEAD" |
 | `tests/roms/homebrew/salsa64-savetest-{eeprom4k,eeprom16k,sram}.z64` | Código propio (`tests/roms/src/savetest`) | GPLv2 o posterior | Lo mismo que vitest. Comandos de la EEPROM, registros del PI y cabecera de homebrew de n64brew.dev (Joybus Protocol, Peripheral Interface, ROM Header) |
 
 `salsa64-vitest.z64` se compila con `tools/build-vitest.sh`
@@ -102,7 +109,7 @@ no contiene código de Nintendo.
 |---|---|---|---|
 | Rust (rustup 1.29.1, nightly-2026-07-16, 1.90.0) | rust-lang.org | MIT OR Apache-2.0 | Compilar nemu64-test en el contenedor |
 | nust64 0.4.1 | crates.io / github.com/rust-n64/nust64 | MIT | ELF → ROM con el IPL3 de libdragon |
-| clang/lld 14 (Debian 12) | llvm.org | Apache-2.0 con excepción LLVM | Compilar vitest y savetest para MIPS |
+| clang/lld 14 (Debian 12) | llvm.org | Apache-2.0 con excepción LLVM | Compilar vitest, savetest, gfxtest y audiotest para MIPS |
 
 ## Suites de prueba de CPU
 

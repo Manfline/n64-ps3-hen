@@ -52,6 +52,13 @@
  * HLE gráfica: en el SPE 0 (lib/spukit); con SALSA64_DATA_DIR/gfx_ppe
  * presente, en el PPE (para comparar tiempos).
  *
+ * Audio (audio_out.c): HLE de las tareas de audio en el SPE 1 y lo que sale
+ * por el AI al puerto de audio, desde un hilo propio; se configura con
+ * SALSA64_DATA_DIR/audio.cfg. El ritmo lo marca pacer.c (la tele
+ * emulada); el audio lo sigue con su corrección fina (audio_sync.h). Con
+ * "audiotest" en embedded, la ROM de prueba del audio se verifica sola
+ * (selftest_audio.c) y sigue sonando.
+ *
  * Capturas: con una ROM del disco y SALSA64_DATA_DIR/capturas presente,
  * cada SHOT_US se guarda la pantalla en SALSA64_DATA_DIR/screen-N.ppm (N de
  * 1 a SHOT_MAX, en ronda), para verla desde la Mac por FTP. Cada captura
@@ -93,6 +100,8 @@
 
 #include "core/boot.h"
 #include "cpu/rec.h"
+#include "audio_out.h"
+#include "audiotest_rom_bin.h"
 #include "gfxtest_rom_bin.h"
 #include "pacer.h"
 #include "padmap.h"
@@ -106,6 +115,7 @@
 #include "savefile.h"
 #include "screenshot.h"
 #include "selftest.h"
+#include "selftest_audio.h"
 #include "selftest_gfx.h"
 #include "vitest_rom_bin.h"
 
@@ -146,6 +156,7 @@ static volatile int running = 1;
 static volatile int emu_done;   /* el hilo de emulación salió de su bucle */
 static int selftest_on;   /* vitest */
 static int gfxtest_on;    /* gfxtest */
+static int audiotest_on;  /* audiotest */
 static struct salsa64_gfx_spu gfx_spu;
 static struct salsa64_gfx_sync gfx_ppe;
 static struct gfx_state gfx_ppe_state;
@@ -430,6 +441,8 @@ static void isv_out(void *ctx, const uint8_t *text, uint32_t len)
 		selftest_isv(text, len);
 	if (gfxtest_on)
 		gfxtest_isv(text, len);
+	if (audiotest_on)
+		audiotest_isv(text, len);
 	for (uint32_t i = 0; i < len; i++) {
 		if (text[i] == '\n' || n == sizeof line - 1) {
 			line[n] = '\0';
@@ -472,6 +485,11 @@ static uint8_t *load_embedded(uint32_t *size, const char **source)
 		gfxtest_on = 1;
 		return embedded(gfxtest_rom_bin, gfxtest_rom_bin_size, size);
 	}
+	if (!strcmp(name, "audiotest")) {
+		*source = "audiotest (embebida)";
+		audiotest_on = 1;
+		return embedded(audiotest_rom_bin, audiotest_rom_bin_size, size);
+	}
 	if (!strncmp(name, "file:", 5)) {
 		static char path[96];
 		snprintf(path, sizeof path, SALSA64_DATA_DIR "/%s", name + 5);
@@ -493,7 +511,7 @@ static uint8_t *load_embedded(uint32_t *size, const char **source)
 		salsa64_log("no se pudo leer %s", path);
 		return NULL;
 	}
-	salsa64_log("%s dice \"%s\": no es vitest, gfxtest ni file:<nombre>", EMBED_PATH, name);
+	salsa64_log("%s dice \"%s\": no es vitest, gfxtest, audiotest ni file:<nombre>", EMBED_PATH, name);
 	return NULL;
 }
 
@@ -762,7 +780,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		rsxkit_finish();
 		salsa64_screenshot(path, &m->f, &r);
 		salsa64_log("captura %s", path);
-	} else if (pres.shots_on && !cap_every && !selftest_on && !gfxtest_on && m->f.width &&
+	} else if (pres.shots_on && !cap_every && !selftest_on && !gfxtest_on && !audiotest_on && m->f.width &&
 		   (pres.autotest ? m->field / AUTO_SHOT_FIELDS != pres.shots : now - pres.t_shot >= SHOT_US)) {
 		char path[64];
 		snprintf(path, sizeof path, SALSA64_DATA_DIR "/screen-%u.ppm", pres.shots % SHOT_MAX + 1);
@@ -778,8 +796,9 @@ static void present_field(const struct field_msg *m, uint64_t now)
 			    salsa64_rdp_dump(SALSA64_DATA_DIR "/gfxdump.bin") ? "bien" : "FALLO");
 		pres.dump_field = 0;
 	}
-	/* audio_out: una vez por campo presentado, aquí (antes del flip). */
+	/* audio_out: una vez por campo presentado (estadísticas y volcado). */
 	uint64_t t1 = sysGetSystemTime();
+	audio_out_field(t1);
 	rsxkit_frame_end();
 	uint64_t t2 = sysGetSystemTime();
 	pres.us_present += t1 - t0;
@@ -790,12 +809,14 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		salsa64_log("salida en el campo %u (capturas)", m->field);
 		running = 0;
 	}
-	if (pres.autotest && !selftest_on && !gfxtest_on && m->field >= AUTO_FIELDS) {
+	if (pres.autotest && !selftest_on && !gfxtest_on && !audiotest_on && m->field >= AUTO_FIELDS) {
 		salsa64_log("RESULTADO frontend: OK (ROM del disco, %u campos)", m->field);
 		running = 0;
 	}
-	if ((selftest_on || gfxtest_on) && pres.result == SELFTEST_RUNNING) {
-		pres.result = selftest_on ? selftest_state(m->field) : gfxtest_state(m->field);
+	if ((selftest_on || gfxtest_on || audiotest_on) && pres.result == SELFTEST_RUNNING) {
+		pres.result = selftest_on ? selftest_state(m->field)
+			    : gfxtest_on  ? gfxtest_state(m->field)
+					  : audiotest_state(m->field);
 		if (pres.result != SELFTEST_RUNNING) {
 			salsa64_log("RESULTADO frontend: %s (campo %u)", pres.result == SELFTEST_OK ? "OK" : "FALLO",
 				    m->field);
@@ -831,8 +852,8 @@ static void stats(uint64_t now, int gfx_on_spu, const struct salsa64_boot_info *
 	static uint64_t t_stats, us_emu0, us_copy0, us_pace0, cyc0, idle0;
 	static uint32_t fields0;
 	static struct salsa64_rdp_stats rdp0;
-	static uint32_t gfx_waits0;
-	static uint64_t gfx_ticks0, gfx_wait0, gfx_vtx0, gfx_state0, gfx_tex0, gfx_load0;
+	static uint32_t gfx_waits0, gfx_polls0;
+	static uint64_t gfx_ticks0, gfx_wait0, gfx_sleep0, gfx_vtx0, gfx_state0, gfx_tex0, gfx_load0;
 
 	if (!t_stats) {
 		t_stats = now;
@@ -865,19 +886,22 @@ static void stats(uint64_t now, int gfx_on_spu, const struct salsa64_boot_info *
 	salsa64_rdp_get_stats(&rs);
 	uint32_t tasks = rs.tasks - rdp0.tasks;
 	if (tasks) {
-		double spu_ms = 0, wait_ms = 0;
-		uint32_t waits = 0;
+		double spu_ms = 0, wait_ms = 0, sleep_ms = 0;
+		uint32_t waits = 0, polls = 0;
 		if (gfx_on_spu) {
 			spu_ms = (gfx_spu.spu_ticks - gfx_ticks0) * 1e3 / spukit_tick_hz() / tasks;
 			wait_ms = (gfx_spu.wait_us - gfx_wait0) / 1e3 / tasks;
 			waits = gfx_spu.waits - gfx_waits0;
+			polls = gfx_spu.polls - gfx_polls0;
+			sleep_ms = (gfx_spu.sleep_us - gfx_sleep0) / 1e3 / tasks;
 		}
 		salsa64_log("gfx: %u tareas (%.1f/s); por tarea: %.0f dibujos, %.0f triángulos, HLE en el "
-			    "SPE %.2f ms, emulación esperando al SPE %.2f ms (%u esperas), traducción al RSX "
-			    "%.2f ms; %u destinos creados, %u esperas por un juego de búferes (%.2f ms)",
+			    "SPE %.2f ms, emulación esperando al SPE %.2f ms (%u esperas), %.1f sondeos y %.2f ms "
+			    "dormida en bucles de espera, traducción al RSX %.2f ms; %u destinos creados, %u esperas "
+			    "por un juego de búferes (%.2f ms)",
 			    tasks, tasks * 1e6 / dt, (double)(rs.draws - rdp0.draws) / tasks,
 			    (double)(rs.triangles - rdp0.triangles) / tasks, spu_ms, wait_ms, waits,
-			    (rs.us_translate - rdp0.us_translate) / 1e3 / tasks,
+			    (double)polls / tasks, sleep_ms, (rs.us_translate - rdp0.us_translate) / 1e3 / tasks,
 			    rs.targets_created - rdp0.targets_created, rs.set_waits - rdp0.set_waits,
 			    (rs.us_set_wait - rdp0.us_set_wait) / 1e3);
 		if (gfx_on_spu) {
@@ -907,6 +931,8 @@ static void stats(uint64_t now, int gfx_on_spu, const struct salsa64_boot_info *
 	gfx_ticks0 = gfx_spu.spu_ticks;
 	gfx_wait0 = gfx_spu.wait_us;
 	gfx_waits0 = gfx_spu.waits;
+	gfx_polls0 = gfx_spu.polls;
+	gfx_sleep0 = gfx_spu.sleep_us;
 	t_stats = now;
 	fields0 = emu_stats.fields;
 	us_emu0 = emu_stats.us_emu;
@@ -994,7 +1020,8 @@ int main(void)
 		salsa64_rsp_set_gfx(&n64.bus, &gfx_ppe.backend);
 	}
 	salsa64_log("HLE gráfica en %s", gfx_on_spu ? "el SPE" : "el PPE");
-	/* audio_out: inicio, aquí (después de spukit_init). */
+	/* audio_out: inicio (HLE en el SPE 1, sumidero del AI, puerto de audio). */
+	audio_out_init(&n64);
 
 	salsa64_bus_set_rom(&n64.bus, rom, rom_size);
 	struct salsa64_boot_info info;
@@ -1029,6 +1056,8 @@ int main(void)
 		selftest_start();
 	if (gfxtest_on)
 		gfxtest_start();
+	if (audiotest_on)
+		audiotest_start();
 	{
 		FILE *df = fopen(SALSA64_DATA_DIR "/gfxdump", "r");
 		if (df) {
@@ -1093,13 +1122,15 @@ int main(void)
 	u64 ret;
 	sysThreadJoin(emu_tid, &ret);
 	drain(sysGetSystemTime(), 0);
-	sysSemDestroy(wake_sem);
 
 	savefile_close(&save_file);
-	/* audio_out: cierre, aquí. */
+	/* audio_out: cierre (con el hilo de emulación ya terminado). */
+	audio_out_shutdown();
 	salsa64_rsp_set_gfx(&n64.bus, NULL);  /* espera la tarea en vuelo */
 	if (gfx_on_spu)
 		salsa64_gfx_spu_shutdown(&gfx_spu);
+	/* Después de la tarea en vuelo: su fin llama a front_done → wake(). */
+	sysSemDestroy(wake_sem);
 	salsa64_rdp_shutdown();
 	rsxkit_shutdown();
 	ioPadEnd();

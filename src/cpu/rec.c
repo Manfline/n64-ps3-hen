@@ -98,6 +98,7 @@ REC_UNUSED static void rec_h_store(struct salsa64_cpu *cpu, uint64_t va, uint64_
 
 REC_UNUSED static void rec_h_exec(struct salsa64_cpu *cpu, uint32_t instr)
 {
+	cpu->rec->stats.exec_calls++;
 	salsa64_vr4300_exec_one(cpu, instr);
 }
 

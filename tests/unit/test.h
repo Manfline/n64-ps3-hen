@@ -102,11 +102,14 @@ void t_suite_cop0(void);
 void t_suite_cop1(void);
 void t_suite_boot(void);
 void t_suite_vi(void);
+void t_suite_ai(void);
 void t_suite_pif(void);
 void t_suite_idle(void);
 void t_suite_save(void);
 void t_suite_rsp(void);
 void t_suite_gfx(void);
+void t_suite_audio(void);
+void t_suite_audio_sync(void);
 void t_suite_pacer(void);
 
 /* Corre todo y devuelve el número de pruebas fallidas. `print` recibe una
@@ -122,5 +125,7 @@ int salsa64_unit_run_rec(void (*print)(const char *line), struct salsa64_rec *re
 /* Micro-benchmark del intérprete (bench.c). Llamar después de
  * salsa64_unit_run, que inicializa la máquina. */
 void salsa64_unit_bench(void (*print)(const char *line), uint64_t (*now_us)(void));
+/* Diagnóstico: el bench del intérprete en una máquina alineada a 64 KB. */
+void salsa64_unit_bench_aligned(void (*print)(const char *line), uint64_t (*now_us)(void));
 
 #endif

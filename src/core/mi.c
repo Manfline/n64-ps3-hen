@@ -34,7 +34,7 @@ void salsa64_rcp_reset(struct salsa64_bus *bus)
 	memset(bus->dp, 0, sizeof bus->dp);
 	memset(bus->vi.regs, 0, sizeof bus->vi.regs);
 	bus->vi.regs[SALSA64_VI_V_INTR] = SALSA64_VI_V_INTR_RESET;
-	memset(bus->ai, 0, sizeof bus->ai);
+	salsa64_ai_reset(bus);
 	memset(bus->pi, 0, sizeof bus->pi);
 	memset(bus->si, 0, sizeof bus->si);
 	bus->sp.regs[SALSA64_SP_STATUS] = SALSA64_SP_STATUS_HALT;
