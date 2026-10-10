@@ -40,6 +40,22 @@ integrar):
   DP (ningún juego se cuelga esperando al RDP) y el frontend la anota en
   el log con el texto del microcódigo (`salsa64_rsp_ucode_text`, también
   en `salsa64-run --trace-rsp`).
+- **PS3 real con main fusionado** (recompilador, dos hilos, caché,
+  sondeo): SM64 sin franjas en la transición y al 100 % de NTSC en el
+  logo, la transición y la cara (antes 55–67 %); GoldenEye: la intro se
+  ve, al 100 % de NTSC. El autor vio después dos errores, ya arreglados en
+  el host y pendientes de la PS3:
+  - La cara del Mario 3D (de frente): el combiner de los ojos,
+    (TEXEL0 − SHADE)·TEXEL0_ALPHA + SHADE, multiplica la textura por su
+    alfa y combine.c lo aproximaba. Ahora pide la textura premultiplicada
+    (RGB·A al decodificar) y queda exacto (2c4b3f4): 0 combiners
+    aproximados en SM64.
+  - El cielo de GoldenEye «infinito»: lo dibuja con triángulos crudos del
+    RDP partidos en G_RDPHALF_1 + G_RDPHALF_CONT/2, que la HLE no
+    dibujaba. Ahora se convierten en triángulos (2c53149).
+- `salsa64-run --pad "CAMPO:BOTONES[@X,Y];…"`: control 1 por campos para
+  llegar a escenas de juego en el host (SM64 hasta el castillo, GoldenEye
+  hasta Dam).
 - Arreglo en `src/rdp/rdp.c` (3729f8f): unos cuadros con franjas de
   colores en el paso del logo a la cara. SM64 apaga el VI 26 campos al
   cambiar de escena; lo dibujado entonces quedaba marcado con el campo de
@@ -53,6 +69,15 @@ Pendiente:
       ver cuáles son (`combine.c`).
 - [ ] En la PS3: GoldenEye, Mario Kart 64 y Star Fox 64 con este
       paquete (en el host ya dibujan).
+- [ ] Confirmar en la PS3 la cara de Mario y el cielo de GoldenEye.
+- [ ] GoldenEye: dos combiners del nivel multiplican el sombreado por su
+      alfa (lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE: niebla por luz
+      precalculada) y se aproximan (75 000 en 52 s de Dam). Hace falta un
+      término S·Sa por vértice en la combinación del RSX (rsxkit y
+      src/rdp) o el generador de fragment programs de la Fase 4.
+- [ ] GoldenEye: las franjas azules de los costados son del juego (3D con
+      scissor en las columnas 1–318 sobre un relleno 0x1199); en una tele
+      quedan en el overscan. Opción de recorte en el frontend.
 - [ ] Mario Kart 64: en la carrera de demostración la franja de abajo
       sale en negro en el host. Star Fox 64: un cuadrito con textura abajo
       a la izquierda en el logo. Revisar ambos.
