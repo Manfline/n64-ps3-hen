@@ -246,9 +246,9 @@ código en la ROM se admite igual (KSEG1 o un mapeo a la ROM).
   Los de la ROM nunca se invalidan (solo lectura); el ISViewer, que sí se
   escribe, no se compila.
 - **Bucles de espera:** la salida lleva la instrucción del salto en
-  `rec_site` (el despachador no relee memoria mapeada). `idle.c` solo
-  analiza KSEG0/KSEG1, así que descarta los mapeados, igual que con el
-  intérprete; el bloque se recompila sin la consulta
+  `rec_site` (el despachador no relee memoria mapeada). `idle.c` analiza
+  también código mapeado (traduce sin efectos con la misma búsqueda); si
+  la tabla descarta el salto, el bloque se recompila sin la consulta
   (`salsa64_rec_x_kill_at`, por vpc).
 - **Colisiones:** dos páginas a 16 MB caen en la misma entrada de `vtlb[]`:
   se turnan (cada cambio pasa por el despachador). Correcto, más lento.

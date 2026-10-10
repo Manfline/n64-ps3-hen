@@ -17,9 +17,9 @@
  * salto corto hacia atrás (interp.c, idle_hint), aquí se simula una vuelta
  * completa desde el estado actual (delay slot, cuerpo y el salto), en una
  * copia de los registros y sin tocar nada. Es un bucle de espera si:
- *   - solo hay operaciones de enteros sin efectos y cargas de la RDRAM por
- *     KSEG0/KSEG1 en modo kernel (nada de almacenamientos, E/S, COP0, FPU ni
- *     saltos intermedios),
+ *   - solo hay operaciones de enteros sin efectos y cargas de la RDRAM en
+ *     modo kernel, por KSEG0/KSEG1 o por la TLB (nada de almacenamientos,
+ *     E/S, COP0, FPU ni saltos intermedios),
  *   - el salto se vuelve a tomar al mismo destino, y
  *   - los 32 registros terminan iguales a como empezaron.
  * Entonces la vuelta es un punto fijo: sin un evento nada cambia (la RDRAM
@@ -31,6 +31,16 @@
  * Condición para el resto del emulador: quien escriba la RDRAM fuera del
  * CPU (DMA con latencia, el RSP en un SPE) debe hacerlo en un evento del
  * planificador, o el salto se pasaría de largo esa escritura.
+ *
+ * Código y datos mapeados por la TLB (GoldenEye, Perfect Dark): se
+ * traducen con la misma búsqueda que el intérprete pero sin efectos
+ * (salsa64_vr4300_fetch_probe: sin excepciones ni cambios de la TLB). La
+ * TLB no cambia dentro de la vuelta (COP0 descarta el bucle), y el «sí»
+ * nunca se guarda: cada vez que se toma el salto se vuelve a simular con la
+ * TLB y la memoria de ese momento, así que un remapeo o código reescrito
+ * se ven en el siguiente análisis. Solo se guardan los descartes, por
+ * pc ^ instrucción como en KSEG0: con el código remapeado bajo el mismo
+ * salto, a lo sumo se deja de saltar, nunca se salta de más.
  *
  * Costo en el bucle caliente: solo los saltos tomados hacia atrás y cortos
  * consultan una tabla (pc ^ instrucción de los ya descartados). Un bucle que
@@ -61,13 +71,19 @@ enum step {
 	STEP_NEVER,
 };
 
-/* La traducción del camino rápido, sin excepciones: KSEG0/KSEG1 en modo
- * kernel, alineada y dentro de la RDRAM. */
-static bool direct(const struct salsa64_cpu *cpu, uint64_t va, uint32_t size, uint32_t *pa)
+/* La traducción sin efectos en modo kernel, alineada y dentro de la RDRAM:
+ * KSEG0/KSEG1 restando la base (el camino rápido del intérprete) y lo demás
+ * por la TLB, sin excepciones (si el intérprete lanzaría una, no es un
+ * bucle de espera). */
+static bool translate(const struct salsa64_cpu *cpu, uint64_t va, uint32_t size, uint32_t *pa)
 {
-	if ((va & (size - 1)) || (va >> 30) != 0x3FFFFFFFEull || cpu->mode != SALSA64_MODE_KERNEL)
+	if ((va & (size - 1)) || cpu->mode != SALSA64_MODE_KERNEL)
 		return false;
-	uint32_t p = (uint32_t)va & 0x1FFFFFFF;
+	uint32_t p;
+	if ((va >> 30) == 0x3FFFFFFFEull)
+		p = (uint32_t)va & 0x1FFFFFFF;
+	else if (!salsa64_vr4300_fetch_probe(cpu, va, &p))
+		return false;
 	if (p >= cpu->rdram_size || cpu->rdram_size - p < size)
 		return false;
 	*pa = p;
@@ -77,7 +93,7 @@ static bool direct(const struct salsa64_cpu *cpu, uint64_t va, uint32_t size, ui
 static bool fetch(const struct salsa64_cpu *cpu, uint64_t va, uint32_t *instr)
 {
 	uint32_t pa;
-	if (!direct(cpu, va, 4, &pa))
+	if (!translate(cpu, va, 4, &pa))
 		return false;
 	*instr = salsa64_rd32(cpu->rdram + pa);
 	return true;
@@ -205,8 +221,8 @@ static enum step simulate(const struct salsa64_cpu *cpu, uint64_t *g, uint32_t i
 		return STEP_NEVER;
 	}
 	if (size) {
-		/* Una carga fuera de la RDRAM (E/S, ROM) o con TLB no se simula. */
-		if (!direct(cpu, s + imm, size, &pa))
+		/* Una carga fuera de la RDRAM (E/S, ROM) o que fallaría no se simula. */
+		if (!translate(cpu, s + imm, size, &pa))
 			return STEP_NEVER;
 		dst = rt;
 		v = load(cpu, pa, size, sign);

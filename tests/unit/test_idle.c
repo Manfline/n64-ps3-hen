@@ -227,15 +227,46 @@ static void setup_kseg1_self_loop(void)
 	salsa64_cpu_set_pc(CPU, KSEG1(T_CODE_PA));
 }
 
-/* `b .` mapeado por la TLB: idle.c no lee código mapeado, así que lo
- * descarta (y el recompilador recompila el bloque sin la consulta). */
+/* Código mapeado por la TLB (el hilo ocioso de GoldenEye): página par de
+ * V_LOOP en la física 0x10000, impar (datos) en 0x11000. */
 #define V_LOOP 0x00400000u
 
+static void map_loop_page(uint32_t even_pfn)
+{
+	t_tlb_set(10, V_LOOP, T_LO(even_pfn, 1, 1, 1), T_LO(0x11, 1, 1, 1), 0);
+}
+
+/* `b .` mapeado. */
 static void setup_mapped_self_loop(void)
 {
-	t_tlb_set(10, V_LOOP, T_LO(0x10, 1, 1, 1), T_LO(0x11, 1, 1, 1), 0);
+	map_loop_page(0x10);
 	t_wr32(0x10000, BEQ(0, 0, 0xFFFF));
 	t_wr32(0x10004, NOP);
+	salsa64_cpu_set_pc(CPU, V_LOOP);
+}
+
+/* Sondeo de una variable leída por la dirección mapeada (página impar). */
+static void setup_mapped_poll(void)
+{
+	map_loop_page(0x10);
+	t_wr32(0x10000, LW(8, 0x100, 16));
+	t_wr32(0x10004, BEQ(8, 0, 0xFFFE));
+	t_wr32(0x10008, NOP);
+	t_wr32(0x11100, 0);
+	R[16] = V_LOOP + 0x1000;
+	salsa64_cpu_set_pc(CPU, V_LOOP);
+}
+
+/* El mismo salto en la misma dirección virtual, pero la TLB pasa la página a
+ * otra física donde el delay slot cuenta: el análisis ve la página nueva y
+ * deja de saltar. */
+static void setup_mapped_remap(void)
+{
+	setup_mapped_self_loop();
+	t_wr32(0x20000, BEQ(0, 0, 0xFFFF));
+	t_wr32(0x20004, ADDIU(8, 8, 1));
+	salsa64_n64_run(&t_n64, 50000);
+	map_loop_page(0x20);
 	salsa64_cpu_set_pc(CPU, V_LOOP);
 }
 
@@ -243,10 +274,20 @@ static void idle_other_segments(void)
 {
 	uint64_t skipped = same_both_ways(setup_kseg1_self_loop, 1000000);
 	CHECK(skipped >= 999000);
-	skipped = same_both_ways(setup_mapped_self_loop, 100000);
-	CHECK_EQ(skipped, 0);
-	CHECK_EQ(CPU->idle_reject[(V_LOOP >> 2) & (SALSA64_IDLE_CACHE - 1)], V_LOOP ^ BEQ(0, 0, 0xFFFF));
+	skipped = same_both_ways(setup_mapped_self_loop, 1000000);
+	CHECK(skipped >= 999000);
 	CHECK_EQ(CPU->pc & ~4ull, V_LOOP);
+	skipped = same_both_ways(setup_mapped_poll, 1000000);
+	CHECK(skipped >= 999000);
+	CHECK_EQ(R[8], 0);
+}
+
+static void idle_mapped_remap(void)
+{
+	uint64_t skipped = same_both_ways(setup_mapped_remap, 20000);
+	CHECK_EQ(skipped, 0);
+	CHECK(R[8] >= 9990 && R[8] <= 10000);  /* una vuelta (2 instrucciones) por cuenta */
+	CHECK_EQ(CPU->idle_reject[(V_LOOP >> 2) & (SALSA64_IDLE_CACHE - 1)], V_LOOP ^ BEQ(0, 0, 0xFFFF));
 }
 
 /* Apagar y prender la detección vacía las tablas. */
@@ -274,4 +315,5 @@ void t_suite_idle(void)
 	RUN(idle_store_not_skipped);
 	RUN(idle_toggle);
 	RUN(idle_other_segments);
+	RUN(idle_mapped_remap);
 }
