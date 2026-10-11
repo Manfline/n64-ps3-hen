@@ -50,6 +50,36 @@ static uint32_t sync_finish(void *ctx)
 	return salsa64_gfx_task_flags(&s->res);
 }
 
+static uint32_t sync_dpc_run(void *ctx, uint32_t start, uint32_t end, const uint8_t *dmem)
+{
+	struct salsa64_gfx_sync *s = ctx;
+	struct gfx_job job;
+	struct gfx_result res;
+	memset(&job, 0, sizeof job);
+	job.rdram_ea = (uint64_t)(uintptr_t)s->bus->rdram;
+	job.rdram_size = s->bus->rdram_size;
+	job.dmem_ea = (uint64_t)(uintptr_t)dmem;
+	job.dl = start;
+	job.dl_end = end;
+	job.flags = GFX_JOB_DPC | (dmem ? GFX_JOB_XBUS : 0);
+	if (s->reset) {
+		job.flags |= GFX_JOB_RESET;
+		s->reset = false;
+	}
+	s->sink.acquire(s->sink.ctx, &job);
+	gfx_run(s->state, &job, &res);
+	s->sink.done(s->sink.ctx, &job, &res);
+	s->dpc_runs++;
+	s->dpc_sum.commands += res.commands;
+	s->dpc_sum.triangles += res.triangles;
+	s->dpc_sum.rects += res.rects;
+	s->dpc_sum.draws += res.draws;
+	s->dpc_sum.unknown_cmds += res.unknown_cmds;
+	s->dpc_sum.dl_errors += res.dl_errors;
+	s->dpc_sum.flags |= res.flags;
+	return (res.flags & GFX_RES_FULLSYNC) ? SALSA64_GFX_FULLSYNC : 0;
+}
+
 void salsa64_gfx_sync_init(struct salsa64_gfx_sync *s, struct gfx_state *state, const struct salsa64_bus *bus,
 			   const struct salsa64_gfx_sink *sink)
 {
@@ -57,6 +87,8 @@ void salsa64_gfx_sync_init(struct salsa64_gfx_sync *s, struct gfx_state *state, 
 	s->backend.ctx = s;
 	s->backend.start = sync_start;
 	s->backend.finish = sync_finish;
+	s->dpc.ctx = s;
+	s->dpc.run = sync_dpc_run;
 	s->state = state;
 	s->bus = bus;
 	s->sink = *sink;

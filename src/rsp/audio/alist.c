@@ -362,12 +362,15 @@ void alist_envmix_nead(struct aud_state *st, bool swap_wet_lr, uint16_t dmem_dl,
 
 /* ---- Mezclas ---------------------------------------------------------------- */
 
+/* MIXER redondea el producto (+0x4000), como VMULF: el truncado de
+ * mupen64plus-rsp-hle dejaba ±1 LSB de diferencia con el microcódigo real
+ * (comparado en el LLE con Zelda OoT, Perfect Dark y Super Mario 64). */
 void alist_mix(struct aud_state *st, uint16_t dmemo, uint16_t dmemi, uint16_t count, int16_t gain)
 {
 	uint8_t *dst = aud_dm(st, dmemo);
 	const uint8_t *src = aud_dm(st, dmemi);
 	for (count >>= 1; count; count--, dst += 2, src += 2)
-		sample_mix(dst, aud_ld16(src), gain);
+		aud_st16(dst, aud_clamp16(aud_ld16(dst) + ((aud_ld16(src) * gain + 0x4000) >> 15)));
 }
 
 void alist_multQ44(struct aud_state *st, uint16_t dmem, uint16_t count, int8_t gain)
@@ -518,8 +521,13 @@ void alist_adpcm(struct aud_state *st, bool init, bool loop, bool two_bit_per_sa
  * FILTER (nead): FIR de 8 coeficientes sobre bloques de 8 muestras. En
  * índices de la N64, con X = las 8 muestras guardadas seguidas del bloque:
  *   out[n] = Σ_{t=0..7} L[t] · X[8 + n − t],  redondeado (+0x4000) >> 15
- * Los coeficientes son el promedio de dos tablas del juego, que quedan
- * escritas con ese promedio (como hace el microcódigo). */
+ * Coeficientes: la tabla de la nota (lut_address[0]) se acerca a la mitad
+ * de camino a la de la llamada anterior, guardada detrás del estado
+ * (lut_address[1]): L = (anterior + nota + 1) >> 1, que queda escrita ahí;
+ * la de la nota no se toca. Así lo hace el microcódigo de Zelda OoT
+ * ejecutado en el LLE (rama del LLE del RSP, --lle-check-audio): mupen64plus-
+ * rsp-hle escribe el promedio redondeado hacia abajo en las dos tablas, y
+ * con la anterior en cero el filtro sonaba a la mitad (−6 dB). */
 void alist_filter(struct aud_state *st, uint16_t dmem, uint16_t count, uint32_t address,
 		  const uint32_t *lut_address)
 {
@@ -531,8 +539,7 @@ void alist_filter(struct aud_state *st, uint16_t dmem, uint16_t count, uint32_t 
 	aud_load_s16(st, lut6, lut_address[0], 8);
 	aud_load_s16(st, lut5, lut_address[1], 8);
 	for (unsigned i = 0; i < 8; i++)
-		lut5[i] = lut6[i] = (int16_t)((lut5[i] + lut6[i]) >> 1);
-	aud_store_s16(st, lut_address[0], lut6, 8);
+		lut5[i] = (int16_t)((lut5[i] + lut6[i] + 1) >> 1);
 	aud_store_s16(st, lut_address[1], lut5, 8);
 
 	aud_load_s16(st, x, address, 8);
@@ -542,7 +549,7 @@ void alist_filter(struct aud_state *st, uint16_t dmem, uint16_t count, uint32_t 
 		for (unsigned n = 0; n < 8 && blk + 2 * n < count; n++) {
 			int32_t v = 0;
 			for (unsigned t = 0; t < 8; t++)
-				v += lut6[t] * x[8 + n - t];
+				v += lut5[t] * x[8 + n - t];
 			aud_st16(io + 2 * n, (int16_t)((v + 0x4000) >> 15));
 		}
 		memcpy(x, x + 8, 8 * sizeof x[0]);
@@ -588,4 +595,57 @@ void alist_polef(struct aud_state *st, bool init, uint16_t dmemo, uint16_t dmemi
 		count -= 16;
 	} while (count != 0);
 	aud_store_s16(st, address, out + 4, 4);
+}
+
+/* IIR (naudio de Conker y los de MP3): biquad sobre bloques de 8 con
+ *   y[n] = c0·x[n] + c1·x[n−1] + c0·x[n−2] + 2·c8·y[n−1] + 2·c9·y[n−2]
+ * (c = table[i]; cada producto redondeado a Q15 como VMULF) y la salida
+ * truncada a 16 bits sin saturar, como en el original. Estado en la RDRAM:
+ * y[n−2], y[n−1] en +4/+6 y x[n−2], x[n−1] en +8/+10. */
+static int32_t vmulf(int16_t x, int16_t y)
+{
+	return ((int32_t)x * y + 0x4000) >> 15;
+}
+
+void alist_iirf(struct aud_state *st, bool init, uint16_t dmemo, uint16_t dmemi, uint16_t count,
+		const int16_t *table, uint32_t address)
+{
+	uint8_t *dst = aud_dm(st, dmemo);
+	int16_t y[8] = { 0 }, x[4] = { 0 };
+	unsigned index = 7;
+
+	if (!init) {
+		int16_t s[4];
+		aud_load_s16(st, s, address + 4, 4);
+		y[6] = s[0];
+		y[7] = s[1];
+		x[1] = s[2];
+		x[2] = s[3];
+	}
+	int32_t prev = vmulf(table[9], y[6]) * 2;
+	for (count = (uint16_t)aud_align(count, 16); count; count -= 16, dst += 16) {
+		for (unsigned i = 0; i < 8; i++, dmemi += 2) {
+			x[index & 3] = aud_ld16(aud_dm(st, dmemi));
+			int32_t accu = prev + vmulf(table[0], x[index & 3]) + vmulf(table[1], x[(index - 1) & 3]) +
+				       vmulf(table[0], x[(index - 2) & 3]);
+			accu += vmulf(table[8], y[index]) * 2;
+			prev = vmulf(table[9], y[index]) * 2;
+			y[i] = (int16_t)accu;
+			aud_st16(dst + 2 * i, y[i]);
+			index = (index + 1) & 7;
+		}
+	}
+	int16_t s[4] = { y[6], y[7], x[(index - 2) & 3], x[(index - 1) & 3] };
+	aud_store_s16(st, address + 4, s, 4);
+}
+
+/* OVERLOAD (distorsión de Conker): ganancia saturada y luego atenuación
+ * (Q16 sin signo). `count` en bytes. */
+void alist_overload(struct aud_state *st, uint16_t dmem, uint16_t count, int16_t gain, uint16_t attenuation)
+{
+	uint8_t *p = aud_dm(st, dmem);
+	for (count >>= 1; count; count--, p += 2) {
+		int32_t accu = aud_clamp16(aud_ld16(p) * gain);
+		aud_st16(p, (int16_t)((accu * attenuation) >> 16));
+	}
 }

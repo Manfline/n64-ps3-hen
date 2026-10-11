@@ -364,8 +364,13 @@ monta de solo lectura en `/roms`.
   otro camino (`mtctr`/`bctrl`). `SALSA64_REC_DUMP=1` vuelca cada bloque.
 
 qemu 7.2 con `-cpu 970` da resultados erróneos (el intérprete falla 15
-pruebas que pasan en la PS3) y con `power5+` se cuelga: se usa `power7`. El
-emisor se limita a Power ISA 2.02 a mano (sin `isel`, `popcntd`, `ldbrx`).
+pruebas que pasan en la PS3) y con `power5+` se cuelga. Se usaba `power7`;
+desde el 2026-10-10 es `power9` (`SALSA64_QEMU_CPU` lo cambia): `sin`, `cos`
+y `floor` de la glibc estática de ppc64 usan `mffscrn`/`mffscrni` (Power ISA
+3.0), que qemu con `power7`/`power8` rechaza con SIGILL (se caía la suite
+`sync`, por `audio_sync.c`; en la PS3 no hay glibc). Con `power9` las
+pruebas, nemu64-test y vitest dan lo mismo que antes. El emisor se limita a
+Power ISA 2.02 a mano (sin `isel`, `popcntd`, `ldbrx`).
 
 El compilador cruzado corre emulado como amd64 y a veces muere con "internal
 compiler error: Segmentation fault"; repetir compila bien
@@ -378,6 +383,7 @@ compiler error: Segmentation fault"; repetir compila bien
 | 2026-10-10 | Unitarias, intérprete | qemu-ppc64 (power7) | 162/162 |
 | 2026-10-10 | Unitarias, recompilador estricto (`bl` y `mtctr`) | qemu-ppc64 | 162/162; 223 bloques, 155 recortados, 38 instrucciones interpretadas |
 | 2026-10-10 | nemu64-test, `--rec` | qemu-ppc64 | 462 fallas, las mismas de la línea base; 1,0 % interpretado |
+| 2026-10-10 | `tools/test-rec.sh` con `-cpu power9` (main f6fed36) | qemu-ppc64 | unitarias 289/289 en los cuatro modos (con `power7` se caía la suite `sync`); nemu64-test 446 fallas, las de la línea base, también con pin+eager; vitest OK; `--lockstep` sin diferencias |
 | 2026-10-10 | nemu64-test, `--lockstep` | qemu-ppc64 | sin diferencias en 28,5 M bloques |
 | 2026-10-10 | vitest, `--rec` | qemu-ppc64 | `vitest: OK` |
 | 2026-10-10 | Unitarias, recompilador estricto | **PS3 real** (CECH-3011A, HEN), f7b655d | 163/163; caché NOBITS, llamadas con `bl` |

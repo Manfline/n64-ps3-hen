@@ -67,20 +67,24 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 		fprintf(stderr, "tarea %u gbi %u dl %06x\n", debug_task - 1, job->gbi, g->dl_pc);
 #endif
 
-	switch (job->gbi) {
-	case SALSA64_GBI_F3D:
-	case SALSA64_GBI_F3DEX:
-		gfx_dl_f3d(g, NULL);
-		break;
-	case SALSA64_GBI_F3DPD:
-		gfx_dl_f3dpd(g);
-		break;
-	case SALSA64_GBI_F3DEXBG:
-		gfx_dl_f3dexbg(g);
-		break;
-	default:
-		gfx_dl_f3dex2(g, NULL);
-		break;
+	if (job->flags & GFX_JOB_DPC) {
+		gfx_dl_dpc(g);
+	} else {
+		switch (job->gbi) {
+		case SALSA64_GBI_F3D:
+		case SALSA64_GBI_F3DEX:
+			gfx_dl_f3d(g, NULL);
+			break;
+		case SALSA64_GBI_F3DPD:
+			gfx_dl_f3dpd(g);
+			break;
+		case SALSA64_GBI_F3DEXBG:
+			gfx_dl_f3dexbg(g);
+			break;
+		default:
+			gfx_dl_f3dex2(g, NULL);
+			break;
+		}
 	}
 
 	gfx_flush_draw(g);

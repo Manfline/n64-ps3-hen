@@ -50,7 +50,7 @@ struct aud_result {
 /* ---- Estado ----------------------------------------------------------------
  * La DMEM del microcódigo (4 KB, con margen para que ningún comando se
  * salga del búfer) y el estado de cada familia de ABI, que persiste entre
- * tareas como en mupen64plus-rsp-hle. ~9,2 KB; en el SPE vive en el local
+ * tareas como en mupen64plus-rsp-hle. ~12 KB; en el SPE vive en el local
  * store. */
 
 #define AUD_DMEM_SIZE 0x1000u
@@ -79,6 +79,22 @@ struct aud_nead {           /* nead (ABI2): Zelda OoT, Mario Kart 64, Star Fox 6
 	int16_t table[16 * 16];  /* como en ABI1 */
 };
 
+struct aud_naudio {         /* naudio: Banjo-Kazooie, Conker, Perfect Dark, Donkey Kong 64… */
+	int16_t dry, wet;
+	int16_t vol[2], target[2];
+	int32_t rate[2];
+	uint32_t loop;
+	int16_t table[16 * 16];  /* libro de ADPCM y coeficientes de POLEF/IIR, como en ABI1 */
+};
+
+/* Memoria de trabajo de MP3 (naudio de Perfect Dark, Banjo-Tooie y Conker):
+ * las direcciones 0x800–0xFFF de la DMEM del decodificador, aparte de la
+ * de las listas como en mupen64plus-rsp-hle. 0x8A0–0xCDF guarda las 16
+ * últimas salidas de la DCT (la ventana de síntesis), que siguen de un
+ * comando MP3 al siguiente. */
+#define AUD_MP3_BASE 0x800u
+#define AUD_MP3_SIZE 0x800u
+
 struct aud_job;
 struct aud_result;
 
@@ -86,6 +102,8 @@ struct aud_state {
 	uint8_t dmem[AUD_DMEM_SIZE + AUD_DMEM_SLACK] __attribute__((aligned(16)));
 	struct aud_abi1 abi1;
 	struct aud_nead nead;
+	struct aud_naudio naudio;
+	uint8_t mp3[AUD_MP3_SIZE] __attribute__((aligned(16)));
 	const struct aud_job *job;
 	struct aud_result *res;
 	void *io;               /* estado de la plataforma (io_mem.c, src/spu/audio) */

@@ -73,6 +73,7 @@
 #include "rsp/gfx/backend.h"
 #include "rsp/audio/backend.h"
 #include "rsp/gfx/hle.h"
+#include "rsp/lle/core.h"
 
 #define DEFAULT_CYCLES (1ull << 32)  /* ~46 s de la consola */
 #define DEFAULT_SLICE  (1ull << 20)
@@ -288,6 +289,11 @@ static void audio_push(void *ctx, const uint8_t *p, uint32_t bytes, uint32_t rat
 /* HLE gráfica: estado, búferes de salida y totales. */
 static struct gfx_state gfx_state;
 static struct salsa64_gfx_sync gfx_sync;
+
+/* --lle: el microcódigo real del RSP, en rebanadas del hilo del CPU. */
+static struct salsa64_lle_host lle_host;
+static enum salsa64_lle_mode lle_mode;
+static double lle_speed;
 static struct gfx_vertex gfx_vtx[1u << 16] __attribute__((aligned(128)));
 static uint8_t gfx_cmd[512u << 10] __attribute__((aligned(128)));
 static uint8_t gfx_tex[4u << 20] __attribute__((aligned(128)));
@@ -433,9 +439,85 @@ static void pc_sample(uint64_t pc)
 	pc_samples[top == 4 ? SEG_KSEG0 : top == 5 ? SEG_KSEG1 : SEG_TLB]++;
 }
 
+/* --lle-check-audio: cada tarea de audio que corre en el microcódigo real
+ * se corre también en la HLE sobre una copia de la RDRAM; cuando el RSP
+ * termina (en el siguiente arranque, o al final) se comparan los tramos
+ * que la HLE escribió. Encuentra la primera divergencia del LLE. */
+static struct {
+	bool on, pending;
+	uint8_t *rdram;         /* copia de la RDRAM con la salida de la HLE */
+	struct aud_result res;
+	uint32_t task, tasks, bad, bytes;
+	int reports;
+} shadow;
+
+static void shadow_compare(void)
+{
+	shadow.pending = false;
+	bool bad = false;
+	for (uint32_t i = 0; i < shadow.res.nranges && i < AUD_MAX_RANGES; i++) {
+		uint32_t a = shadow.res.range_addr[i] & 0x7FFFFF, n = shadow.res.range_len[i];
+		if (n > n64.bus.rdram_size - a)
+			n = n64.bus.rdram_size - a;
+		shadow.bytes += n;
+		const uint8_t *x = n64.bus.rdram + a, *y = shadow.rdram + a;
+		uint32_t k = 0;
+		while (k < n && x[k] == y[k])
+			k++;
+		if (k == n)
+			continue;
+		bad = true;
+		if (shadow.reports < 8) {
+			shadow.reports++;
+			uint32_t d = 0;
+			for (uint32_t j = 0; j < n; j++)
+				d += x[j] != y[j];
+			fprintf(stderr, "lle-check: tarea de audio %u, tramo %u [%06x, %u bytes]: %u bytes distintos desde "
+				"+%u: lle %02x%02x%02x%02x %02x%02x%02x%02x, hle %02x%02x%02x%02x %02x%02x%02x%02x\n",
+				shadow.task, i, a, n, d, k, x[k], x[k + 1], x[k + 2], x[k + 3], x[k + 4], x[k + 5], x[k + 6],
+				x[k + 7], y[k], y[k + 1], y[k + 2], y[k + 3], y[k + 4], y[k + 5], y[k + 6], y[k + 7]);
+		}
+	}
+	shadow.bad += bad;
+}
+
+static void shadow_start(const struct salsa64_task *t)
+{
+	enum salsa64_abi abi = salsa64_rsp_detect_abi(&n64.bus, t);
+	if (abi == SALSA64_ABI_UNKNOWN)
+		return;
+	if (!shadow.rdram)
+		shadow.rdram = malloc(n64.bus.rdram_size);
+	memcpy(shadow.rdram, n64.bus.rdram, n64.bus.rdram_size);
+	struct aud_job job;
+	salsa64_audio_job(&job, &n64.bus, t, abi);
+	job.rdram_ea = (uint64_t)(uintptr_t)shadow.rdram;
+	aud_run(&aud_state, &job, &shadow.res);
+	shadow.pending = true;
+	shadow.task = ++shadow.tasks;
+	/* SALSA64_LLE_DUMP_TASK=N: la lista de comandos de esa tarea y lo que
+	 * la HLE escribió, para seguir la divergencia a mano. */
+	const char *dump = getenv("SALSA64_LLE_DUMP_TASK");
+	if (dump && (uint32_t)atoi(dump) == shadow.task) {
+		fprintf(stderr, "lle-check: tarea de audio %u, alist %06x (%u bytes), ABI %s:\n", shadow.task,
+			job.alist, job.alist_size, salsa64_abi_name(abi));
+		for (uint32_t i = 0; i + 8 <= job.alist_size; i += 8)
+			fprintf(stderr, "  %3u: %08x %08x\n", i / 8, salsa64_rd32(n64.bus.rdram + ((job.alist + i) & 0x7FFFFF)),
+				salsa64_rd32(n64.bus.rdram + ((job.alist + i + 4) & 0x7FFFFF)));
+		for (uint32_t i = 0; i < shadow.res.nranges && i < AUD_MAX_RANGES; i++)
+			fprintf(stderr, "  tramo %u: %06x %u bytes\n", i, shadow.res.range_addr[i], shadow.res.range_len[i]);
+	}
+}
+
 static void trace_rsp(void *ctx, const struct salsa64_task *t, enum salsa64_gbi gbi)
 {
 	(void)ctx;
+	if (shadow.on) {
+		if (shadow.pending)
+			shadow_compare();
+		if (t->type == SALSA64_TASK_AUDIO)
+			shadow_start(t);
+	}
 	if (trace_audio_left && t->type == SALSA64_TASK_AUDIO && tracing()) {
 		trace_audio_left--;
 		trace_alist(t);
@@ -509,6 +591,24 @@ static void audio_summary(void)
 		"%u cambios de frecuencia%s\n", r->audio, r->unknown_abi, salsa64_abi_name(n64.bus.rsp.abi),
 		a->commands, a->unknown, a->last_unknown, a->errors, audio.dmas, audio.bytes / 4, audio.rate,
 		audio.gaps ? audio.gaps - 1 : 0, audio.rates, audio.lost ? " (no cupo todo)" : "");
+}
+
+static void lle_summary(void)
+{
+	const struct salsa64_lle_host *h = &lle_host;
+	const struct gfx_result *d = &gfx_sync.dpc_sum;
+	fprintf(stderr, "salsa64-run: rsp lle (%s, %.3f instr/ciclo): %u arranques, %llu instrucciones (%u tareas, "
+		"%.0f por tarea, la más larga %u), %u rebanadas, %u sincronías; rdp: %u tramos, %u comandos, "
+		"%u triángulos, %u rectángulos, %u dibujos, %u sin implementar, %u errores\n",
+		lle_mode == SALSA64_LLE_ALL ? "todo" : "sin HLE", (double)h->ipc_num / h->ipc_den, h->starts,
+		(unsigned long long)h->instructions, h->tasks_done,
+		h->tasks_done ? (double)h->instructions / h->tasks_done : 0.0, h->task_max, h->slices, h->syncs,
+		gfx_sync.dpc_runs, d->commands, d->triangles, d->rects, d->draws, d->unknown_cmds, d->dl_errors);
+	const uint32_t *cr = h->rsp.c0_reads, *cw = h->rsp.c0_writes;
+	fprintf(stderr, "salsa64-run: rsp lle COP0: SP_STATUS %u lecturas/%u escrituras, semáforo %u/%u, DMA_BUSY/FULL %u, "
+		"DMA %u lecturas/%u escrituras, DP %u lecturas/%u escrituras\n", cr[4], cw[4], cr[7], cw[7], cr[5] + cr[6],
+		cw[2], cw[3], cr[8] + cr[9] + cr[10] + cr[11] + cr[12] + cr[13] + cr[14] + cr[15],
+		cw[8] + cw[9] + cw[10] + cw[11]);
 }
 
 static bool audio_wav(const char *path)
@@ -972,7 +1072,7 @@ static bool dump_frame(const char *path)
 
 /* Opciones largas sin letra (códigos fuera de ASCII). */
 enum { OPT_REC = 0x100, OPT_LOCKSTEP, OPT_PAD, OPT_TRACE_FROM, OPT_TRACE_FAULTS, OPT_RAM_DUMP, OPT_TRACE_AUDIO,
-       OPT_FRAME_EVERY };
+       OPT_FRAME_EVERY, OPT_LLE, OPT_LLE_SPEED, OPT_LLE_CHECK };
 
 static void usage(FILE *out)
 {
@@ -1008,7 +1108,11 @@ static void usage(FILE *out)
 	      "      --audio-wav ARCHIVO  al terminar, guardar en WAV lo que salió por el AI\n"
 	      "      --audiotest-check comparar lo que salió por el AI con el tono de audiotest\n"
 	      "      --raster-dump F   dibujar un volcado de la HLE de la PS3 (gfxdump.bin) en\n"
-	      "                        --gfx-frame y salir (sin ROM)\n", out);
+	      "                        --gfx-frame y salir (sin ROM)\n"
+	      "      --lle[=auto|all]  RSP a bajo nivel: el microcódigo real para lo que no tiene\n"
+	      "                        HLE (auto) o para todo (all); el RDP consume sus comandos\n"
+	      "      --lle-speed F     instrucciones del RSP por ciclo del CPU (nominal 0,667)\n"
+	      "      --lle-check-audio con --lle=all, comparar cada tarea de audio con la HLE\n", out);
 }
 
 int main(int argc, char **argv)
@@ -1039,6 +1143,9 @@ int main(int argc, char **argv)
 		{ "gfxtest-check", no_argument, NULL, 'K' },
 		{ "trace-rsp", required_argument, NULL, 'P' },
 		{ "trace-vi", required_argument, NULL, 'V' },
+		{ "lle", optional_argument, NULL, OPT_LLE },
+		{ "lle-speed", required_argument, NULL, OPT_LLE_SPEED },
+		{ "lle-check-audio", no_argument, NULL, OPT_LLE_CHECK },
 		{ "trace-gfx", required_argument, NULL, 'Q' },
 		{ "raster-dump", required_argument, NULL, 'D' },
 		{ "audio-wav", required_argument, NULL, 'A' },
@@ -1105,6 +1212,18 @@ int main(int argc, char **argv)
 		case 'K': gfx_check = true; gfx.raster = true; break;
 		case 'P': trace_rsp_left = (unsigned)strtoul(optarg, NULL, 0); break;
 		case 'V': trace_vi_left = (unsigned)strtoul(optarg, NULL, 0); break;
+		case OPT_LLE:
+			if (!optarg || !strcmp(optarg, "auto"))
+				lle_mode = SALSA64_LLE_AUTO;
+			else if (!strcmp(optarg, "all"))
+				lle_mode = SALSA64_LLE_ALL;
+			else {
+				fprintf(stderr, "salsa64-run: --lle=%s no se entiende (auto, all)\n", optarg);
+				return 3;
+			}
+			break;
+		case OPT_LLE_SPEED: lle_speed = atof(optarg); break;
+		case OPT_LLE_CHECK: shadow.on = true; break;
 		case 'D': dump_path = optarg; break;
 		case 'A': wav_path = optarg; break;
 		case 'Z': audio_check = true; break;
@@ -1154,6 +1273,13 @@ int main(int argc, char **argv)
 	salsa64_audio_sync_init(&aud_sync, &aud_state, &n64.bus);
 	salsa64_rsp_set_audio(&n64.bus, &aud_sync.backend);
 	salsa64_ai_set_sink(&n64.bus, audio_push, NULL);
+	if (lle_mode != SALSA64_LLE_OFF) {
+		salsa64_lle_host_init(&lle_host, &n64.bus);
+		if (lle_speed > 0.0)
+			salsa64_lle_host_speed(&lle_host, lle_speed);
+		salsa64_rsp_set_lle(&n64.bus, &lle_host.backend, lle_mode);
+	}
+	salsa64_rsp_set_dpc(&n64.bus, &gfx_sync.dpc);
 	n64.bus.rsp.trace = trace_rsp;
 	if (trace_exc_left)
 		n64.cpu.exc_hook = trace_exc;
@@ -1291,6 +1417,14 @@ int main(int argc, char **argv)
 		gfx_summary();
 	if (n64.bus.rsp.stats.audio || audio.dmas)
 		audio_summary();
+	if (lle_mode != SALSA64_LLE_OFF)
+		lle_summary();
+	if (shadow.on) {
+		if (shadow.pending)
+			shadow_compare();
+		fprintf(stderr, "salsa64-run: lle-check: %u tareas de audio comparadas con la HLE, %u bytes, %u tareas "
+			"distintas\n", shadow.tasks, shadow.bytes, shadow.bad);
+	}
 	if (wav_path && !audio_wav(wav_path)) {
 		free(rom);
 		return 3;

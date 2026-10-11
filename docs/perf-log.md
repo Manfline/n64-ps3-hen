@@ -129,6 +129,32 @@ diferido escrito por el hilo de presentación a los ~2 s (257 escrituras
 del juego), salida limpia. START + SELECT y «Salir del juego» funcionan;
 los controles llegan por el buzón entre hilos (vitest los identifica).
 
+## Audio: naudio y MP3 en el SPE 1 (2026-10-10)
+
+**PS3 real** (mismo equipo), rama `charming-allen-a8e4b3` con main
+485a747, recompilador. Paquete «Salsa64 naudio» (SLSA00080). Respaldos
+propios; ventanas de 5 s.
+
+| | Banjo-Kazooie | Perfect Dark | Conker |
+|---|---|---|---|
+| ABI | naudio (Banjo-Kazooie) | naudio con MP3 | naudio (Conker) |
+| Corrida | 89 s, del logo a jugar | 179 s, sin imagen (falta su microcódigo gráfico) | 96 s, pantalla negra (se detiene tras la primera tarea gráfica) |
+| Tareas | ~30/s, 0 sin implementar, 0 errores | ~30/s, 0 sin implementar, 0 errores | 30/s, 0 sin implementar, 0 errores |
+| HLE en el SPE 1, por tarea | mediana **2,92 ms** (ventanas 1,24–3,65; la más larga 5,68) | mediana **5,70 ms** (2,09–7,83; la más larga 10,38) | **1,56 ms** (solo el bus de efectos: el juego no dispara voces) |
+| PPE esperando al SPE | 0,000 ms | 0,000 ms | 0,000 ms |
+| Emulación | 100 % de media (mín. 88 %) | 97 % (mín. 78 %: el CPU) | 100 % |
+| Salida | 1,1 % en silencio (el llenado), 6,6 % estirado, 13 faltas breves, 0 bloques tarde | 2,3 % en silencio, 20,5 % estirado (las bajadas del CPU), 28 faltas breves, 0 bloques tarde | normal |
+| Hilo de audio | 1,9 % | 2,2 % | 1,7 % |
+| Oído (el autor) | «suena bien» (el video parpadea: de la HLE gráfica) | «suena bien» | silencio, lo esperado |
+
+Listas de prueba al arrancar (SPE contra PPE, ahora 5: nead OoT y MK, ABI1,
+naudio con MP3 y Banjo-Kazooie): iguales, 2,9 ms.
+
+El SPE 1 pasa ~9 % del tiempo en Banjo y ~17 % en Perfect Dark (más
+comandos por tarea: ~875 contra ~380, y el MP3). Código escalar; los
+candidatos a SIMD siguen siendo ENVMIXER, RESAMPLE y ADPCM, y ahora la
+ventana del MP3.
+
 ## Audio: AI, HLE de audio en el SPE 1 y salida (2026-10-10)
 
 **PS3 real** (mismo equipo), rama `amazing-varahamihira-3027c8`
@@ -564,4 +590,52 @@ está desglosado: el intérprete termina el bloque antes de cada evento y
 después de cada interrupción, y corre lo que el recompilador no toma
 (código fuera de KSEG0, un salto en el delay slot de otro). Pendiente
 medirlo por causa si llega a pesar.
+
+## RSP a bajo nivel (Fase 6, prototipo; 2026-10-10)
+
+Intérprete del microcódigo real (`src/rsp/lle`, docs/rsp-lle.md).
+
+**Host** (Mac, clang nativo sin sanitizadores, `salsa64-run -c 1500000000`
+= 16 s de consola de Zelda OoT, respaldo del usuario fuera del repo):
+
+| Modo | Tiempo real | Instrucciones del RSP | Por instrucción |
+|---|---|---|---|
+| HLE (gráficos y audio) | 0,95 s | — | — |
+| `--lle=all` (todo el microcódigo real) | 3,58 s | 211 M (1379 tareas, 153 000 por tarea, la más larga 542 000) | 12,5 ns (~40 ciclos del Mac) |
+
+- nemu64-test: 2,0 s sin LLE, 3,1 s con `--lle` (5,9 M instrucciones del
+  RSP en 240 000 arranques: la suite arranca el RSP por cada prueba).
+- Super Mario 64, 9,6 s de consola: 161 M instrucciones (858 tareas).
+
+**PS3 real** (2026-10-10, Slim CECH-3011A, HFW 4.91 + HEN; paquete «Salsa64
+LLE» SLSA00082 con main bd9fcd3 fusionado; Zelda OoT, respaldo del usuario,
+`lle` = `all`: todo el microcódigo real en un SPE, el RDP en el PPE).
+Ventanas de 5 s del log («rsp lle:»):
+
+| Tramo | Tareas (trabajos) | Instr. por tarea | SPE por tarea | ns por instrucción | MIPS del RSP emulado | Campos/s |
+|---|---|---|---|---|---|---|
+| Logo y título (F3DZEX2 + nead) | 251 (251) | 39 000 | 8,8 ms | 226 | 4,4 | 55 |
+| Título, más geometría | 207 (209) | 59 000 | 15,4 ms | 260 | 3,8 | 24 |
+| Intro, campo de Hyrule | 153 (153) | 96 000 | 27,0 ms | 282 | 3,6 | 30 |
+| Intro, escenas grandes | 97 (97) | 170 000 | 48,2 ms | 283 | 3,5 | 38 |
+| Intro, fondos S2DEX (DMA de muchas filas) | 53 (224) | 814 000 | 91 ms | 112 | 9,0 | — |
+
+- El RSP real hace ~62,5 M instrucciones/s: el intérprete en C en el SPE
+  va **14–18 veces más lento** (3,5–4,4 MIPS) en el microcódigo gráfico y
+  de audio, y 7 veces más lento donde casi todo es DMA. Mucho peor que la
+  estimación previa (0,3–1×): el SPU no tiene unidad escalar ni predicción
+  de saltos, el `switch` de despacho es un salto indirecto por instrucción
+  y cada acceso a COP0 que vive en el bus es un DMA atómico de ~1 µs.
+- Tráfico de COP0 por tarea (Zelda): SP_STATUS 180–430 lecturas, semáforo
+  2–190 tomas y sueltas (F3DEX2 lo usa como cerrojo del DMA), DMA 60–150
+  filas de entrada y 30–70 de salida, DP 25–60 lecturas, 0 reintentos
+  atómicos. Solo los accesos atómicos son 1,5–2,5 ms de los 8,8 ms por
+  tarea del primer tramo.
+- Con el mismo paquete y sin `lle` (HLE por omisión): Zelda 106 s al
+  100 % de NTSC, audio 0 faltas, «salida normal»; GoldenEye intro y
+  menús al 99–100 % y **en el nivel (Dam) 36–50 campos/s** (60–84 % de
+  NTSC: HLE gráfica en el SPE 8–10 ms por tarea con 3 000–3 700
+  triángulos, CPU a ~40 MIPS con 24–46 % en bucles de espera; el audio se
+  estira). Es la primera medición del nivel en la PS3 (las anteriores eran
+  de la intro); no hay A/B con el paquete de main.
 

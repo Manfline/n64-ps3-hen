@@ -213,6 +213,8 @@ void gfx_dl_f3d(struct gfx_state *g, gfx_cmd_hook hook);
 /* Variantes de Rare: Perfect Dark (de F3D) y Conker (de F3DEX2). */
 void gfx_dl_f3dpd(struct gfx_state *g);
 void gfx_dl_f3dexbg(struct gfx_state *g);
+/* dpc.c: comandos crudos del RDP [job->dl, job->dl_end) (GFX_JOB_DPC). */
+void gfx_dl_dpc(struct gfx_state *g);
 
 /* dl.c: recorrido de la display list y estado que el RSP pasa al RDP. */
 /* Siguiente comando (avanza dl_pc). false: la tarea termina (fuera de la

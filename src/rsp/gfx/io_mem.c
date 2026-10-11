@@ -53,7 +53,11 @@ const uint8_t *gfx_io_read(struct gfx_state *g, enum gfx_io_slot slot, uint32_t 
 
 bool gfx_io_dl(struct gfx_state *g, uint32_t addr, uint32_t *w0, uint32_t *w1)
 {
-	const uint8_t *p = gfx_io_read(g, GFX_IO_SMALL, addr & ~7u, 8);
+	const uint8_t *p;
+	if (g->job->flags & GFX_JOB_XBUS)
+		p = PTR(g->job->dmem_ea) + (addr & 0xFF8u);
+	else
+		p = gfx_io_read(g, GFX_IO_SMALL, addr & ~7u, 8);
 	if (!p)
 		return false;
 	*w0 = salsa64_rd32(p);

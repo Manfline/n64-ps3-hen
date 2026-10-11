@@ -8,14 +8,17 @@
  * persiste entre tareas, como en el host.
  *
  * Presupuesto de local store (256 KB); los números exactos los imprime el
- * build (spu-size; 2026-10-10: text 27 432, data 832, bss 19 344 bytes):
- *   código (HLE + runtime)               27 KB
+ * build (spu-size; 2026-10-10, con naudio y MP3: text 43 456, data 832,
+ * bss 22 416 bytes):
+ *   código (HLE + runtime)               41 KB
+ *   ventana de síntesis del MP3            2 KB
  *   aud_state (DMEM 4 KB + margen 4 KB,
- *     estado de ABI1 y nead)               8,7 KB
+ *     estado de ABI1, nead y naudio,
+ *     memoria de trabajo del MP3 2 KB)    11,7 KB
  *   lecturas y escrituras 2 × (4 KB + 32)  8,1 KB
  *   bloque de la lista                     1 KB
  *   spukit (descriptor, resultado…)      < 1 KB
- *   pila                                  el resto (~208 KB; la HLE usa
+ *   pila                                  el resto (~190 KB; la HLE usa
  *                                          < 2 KB)
  */
 #include <spukit/spu.h>
