@@ -314,6 +314,18 @@ Pendiente:
 - [ ] La luz de Conker sigue a GLideN64 (en el modo básico la direccional
       no cuenta); contrastar con la PS3 cuando haya escenas de juego.
 
+## Pendiente: trabajo de efectos de framebuffer (anotado el 2026-10-10)
+
+Se lanza cuando se integre el trabajo de presentación (se monta sobre su tabla de destinos).
+Detectar cuándo el juego usa como textura o lee con el CPU una imagen dibujada en el RSX; copiar
+RSX → RDRAM (bajando de 3× a la resolución de la N64) solo en esos casos, y para el render a
+textura usar directo el destino del RSX. Casos:
+- [ ] Zelda OoT: fondo difuminado de la pausa (lo difumina el CPU) y Link en la pantalla de equipo
+      (render a textura); la pausa ya se ve con el trabajo de presentación, pero con esos dos defectos
+      (confirmado por el autor en la PS3).
+- [ ] Mario Kart 64: pantallas gigantes que transmiten la carrera.
+- [ ] Perfect Dark: cámara espía y otros; Majora's Mask (Canción del Vuelo, transformaciones).
+
 ## Pendiente: trabajo de presentación (anotado el 2026-10-10)
 
 Se lanza cuando cierre el trabajo de texturas de Kokiri. Los tres casos están en
