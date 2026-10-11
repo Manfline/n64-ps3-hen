@@ -38,6 +38,7 @@ static void reset_rsp(struct gfx_state *g)
 	g->geom = 0;
 	g->dl_sp = 0;
 	g->rdphalf1 = g->rdphalf2 = 0;
+	g->obj_rendermode = 0;
 	g->raw_n = 0;
 	g->tex_s = g->tex_t = 0;
 	g->tex_tile = g->tex_level = g->tex_on = 0;

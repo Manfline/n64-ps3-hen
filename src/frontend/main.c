@@ -940,6 +940,36 @@ static void log_unknown_gbi(void)
 	unknown_gbi_next = st->unknown_gbi * 2;
 }
 
+/* Fondos prerrenderizados (Zelda OoT): las tareas JPEG de una sala llegan
+ * en tanda al cargarla (la HLE corre en el PPE, en el hilo del CPU); al
+ * terminar la tanda (un campo sin tareas nuevas), al log cuántas y cuánto
+ * tardaron. */
+static struct {
+	uint32_t seen, tasks, mb;
+	uint64_t us;
+} jpeg_log;
+
+static uint64_t clock_us(void)
+{
+	return (uint64_t)sysGetSystemTime();
+}
+
+static void log_jpeg(void)
+{
+	const struct salsa64_rsp_stats *st = &n64.bus.rsp.stats;
+	if (st->jpeg < jpeg_log.tasks)
+		memset(&jpeg_log, 0, sizeof jpeg_log);  /* otro juego */
+	if (st->jpeg == jpeg_log.seen && st->jpeg != jpeg_log.tasks) {
+		salsa64_log("JPEG: %u tareas, %u macrobloques en %.2f ms del PPE (fondo prerrenderizado); %u con "
+			    "parámetros malos en total", st->jpeg - jpeg_log.tasks, st->jpeg_mb - jpeg_log.mb,
+			    (st->jpeg_us - jpeg_log.us) / 1e3, st->jpeg_bad);
+		jpeg_log.tasks = st->jpeg;
+		jpeg_log.mb = st->jpeg_mb;
+		jpeg_log.us = st->jpeg_us;
+	}
+	jpeg_log.seen = st->jpeg;
+}
+
 static void emu_thread(void *arg)
 {
 	(void)arg;
@@ -959,6 +989,7 @@ static void emu_thread(void *arg)
 		uint64_t t1 = sysGetSystemTime();
 		pif_edges_note();
 		log_unknown_gbi();
+		log_jpeg();
 		if (paced)
 			pacer_advance(&pacer, cycles);
 		savefile_stage(&save_file, t1);
@@ -1145,7 +1176,7 @@ static struct {
 	uint32_t fields0, pif_reads0;
 	struct salsa64_rdp_stats rdp0;
 	uint32_t gfx_waits0, gfx_polls0, gfx_cut0;
-	uint64_t gfx_skipped0;
+	uint64_t gfx_skipped0, gfx_bg0;
 	uint64_t gfx_ticks0, gfx_wait0, gfx_sleep0, gfx_vtx0, gfx_state0, gfx_tex0, gfx_load0;
 	uint32_t lle_tasks0, lle_jobs0, lle_polls0;
 	uint64_t lle_instr0, lle_ticks0, lle_wait0, lle_sleep0;
@@ -1219,13 +1250,13 @@ static void stats(uint64_t now)
 			    "SPE %.2f ms, emulación esperando al SPE %.2f ms (%u esperas), %.1f sondeos y %.2f ms "
 			    "dormida en bucles de espera, traducción al RSX %.2f ms; %u destinos creados, %u esperas "
 			    "por un juego de búferes (%.2f ms); %u tareas cortadas, %u comandos de otro microcódigo "
-			    "saltados",
+			    "saltados, %u fondos de S2DEX",
 			    tasks, tasks * 1e6 / dt, (double)(rs.draws - sw.rdp0.draws) / tasks,
 			    (double)(rs.triangles - sw.rdp0.triangles) / tasks, spu_ms, wait_ms, waits,
 			    (double)polls / tasks, sleep_ms, (rs.us_translate - sw.rdp0.us_translate) / 1e3 / tasks,
 			    rs.targets_created - sw.rdp0.targets_created, rs.set_waits - sw.rdp0.set_waits,
 			    (rs.us_set_wait - sw.rdp0.us_set_wait) / 1e3, n64.bus.rsp.stats.cut - sw.gfx_cut0,
-			    (unsigned)(gfx_spu.skipped - sw.gfx_skipped0));
+			    (unsigned)(gfx_spu.skipped - sw.gfx_skipped0), (unsigned)(gfx_spu.bg - sw.gfx_bg0));
 		if (gfx_on_spu) {
 			double k = 1e3 / spukit_tick_hz() / tasks;
 			salsa64_log("gfx en el SPE por tarea: vértices %.2f ms, estado %.2f ms (texturas %.2f ms), "
@@ -1290,6 +1321,7 @@ static void stats(uint64_t now)
 	sw.gfx_sleep0 = gfx_spu.sleep_us;
 	sw.gfx_cut0 = n64.bus.rsp.stats.cut;
 	sw.gfx_skipped0 = gfx_spu.skipped;
+	sw.gfx_bg0 = gfx_spu.bg;
 	sw.t_stats = now;
 	sw.pif_reads0 = n64.bus.pif.reads[0];
 	pad_poll.polls = 0;
@@ -1436,6 +1468,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		salsa64_rsp_set_gfx(&n64.bus, &gfx_ppe.backend);
 	}
 	salsa64_log("HLE gráfica en %s", gfx_on_spu ? "el SPE" : "el PPE");
+	n64.bus.rsp.clock_us = clock_us;
 	/* audio_out: inicio (HLE en el SPE 1, sumidero del AI, puerto de audio). */
 	audio_out_init(&n64);
 	/* RSP a bajo nivel en otro SPE. */

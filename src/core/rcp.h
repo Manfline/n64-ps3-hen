@@ -86,6 +86,7 @@ struct salsa64_sp {
 enum salsa64_task_type {
 	SALSA64_TASK_GFX = 1,
 	SALSA64_TASK_AUDIO = 2,
+	SALSA64_TASK_JPEG = 4,   /* M_NJPEGTASK: decodificador JPEG (rsp/jpeg) */
 };
 
 /* Familia de microcódigo gráfico (codificación de la lista de comandos). */
@@ -232,6 +233,10 @@ struct salsa64_rsp_stats {
 	uint32_t lle;          /* arranques que fueron al microcódigo real */
 	uint32_t dpc_runs;     /* tramos de comandos del RDP consumidos */
 	uint32_t cut;          /* tareas gráficas cortadas por la HLE (DP forzada) */
+	uint32_t jpeg;         /* tareas JPEG hechas por la HLE (rsp/jpeg) */
+	uint32_t jpeg_mb;      /* sus macrobloques */
+	uint32_t jpeg_bad;     /* con parámetros que no valían */
+	uint64_t jpeg_us;      /* tiempo en ellas (con clock_us) */
 };
 
 struct salsa64_rsp {
@@ -240,6 +245,12 @@ struct salsa64_rsp {
 	const struct salsa64_audio_backend *audio;
 	const struct salsa64_lle_backend *lle;
 	enum salsa64_lle_mode lle_mode;
+	/* Diagnóstico: las tareas JPEG van al microcódigo real (LLE) aunque
+	 * tengan HLE, para compararlas (salsa64-run --lle-check-jpeg). */
+	bool jpeg_lle;
+	/* Opcional: reloj en µs para medir lo que se hace en el hilo del CPU
+	 * (la HLE JPEG). */
+	uint64_t (*clock_us)(void);
 	const struct salsa64_dpc_backend *dpc;
 	uint32_t busy;          /* tipo de la tarea en curso; 0 = ninguna */
 	enum salsa64_gbi gbi;   /* de la tarea en curso */

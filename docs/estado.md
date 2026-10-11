@@ -68,6 +68,131 @@ Pendiente:
       espera algo durante un campo de 170 ms de emulación): sin efecto en
       el juego; revisar si aparece en otra escena.
 
+## 2026-10-11 — Kokiri y su tienda en colores planos: eran los fondos prerrenderizados (tarea JPEG y S2DEX)
+
+Diagnóstico (rama `fervent-hodgkin-d38e1e`, en la Mac, sin PS3):
+- **No era el combiner ni la HLE de F3DZEX.** La captura del host del
+  campo 14400 (verde puro y un rectángulo azul) se reproduce bit a bit con
+  la partida nueva del trabajo de framebuffer (`build/oot/pad4.txt` de su
+  worktree, `MAX_PADS` subido a 2048 como en su rama). El píxel (100,150)
+  lo escribe un dibujo **sin textura** de la propia sala: G_TEXTURE
+  apagado, combiner SHADE·PRIM con PRIM = (0,161,0), iluminado; el azul es
+  PRIM = (0,0,255) solo. La display list está en el archivo de la sala
+  (segmento 3) y su cabecera de malla es de **tipo 1
+  (ROOM_SHAPE_TYPE_IMAGE)**: imagen de 320 × 240 RGBA16 que dentro del
+  archivo es un JPEG (`FFD8FFE0…JFIF`).
+- La casa de Link (tras despertar, cámara cenital fija) y la tienda Kokiri
+  son **salas prerrenderizadas**. El juego dibuja una malla «proxy» en
+  colores PRIM planos solo para llenar el z-buffer y encima copia el fondo
+  con S2DEX (`G_LOAD_UCODE` → `G_BG_COPY` con un `uObjBg` → vuelta a
+  F3DZEX); el fondo lo decodifican al cargar la sala el CPU (Huffman) y 75
+  tareas del RSP de tipo 4 (IDCT y YCbCr → RGBA5551). Salsa64 saltaba el
+  tramo S2DEX (entrada del 2026-10-10 del cuelgue de Zelda) y las tareas
+  JPEG terminaban sin hacer nada: se veía la proxy. Verde/azul en la casa,
+  amarillo/naranja en la tienda.
+- Referencias en la misma cámara: mupen64plus (GLide64 + rsp-hle, misma
+  partida y pad) muestra el fondo de la casa; con `--lle=auto` (el
+  microcódigo JPEG real) la RDRAM tiene la imagen bien decodificada y con
+  la HLE de antes, basura.
+- **El cierre del 2026-10-10 («sol cenital») vale para el bosque al aire
+  libre** (balcón, campo ~3700): el piso hexagonal sale igual en
+  mupen64plus. Lo que se reportó como «piso del bosque verde puro al salir
+  de la casa» era la casa vista desde arriba.
+
+Hecho:
+- **HLE de la tarea JPEG de OoT** (`src/rsp/jpeg/`, nuevo): reconocida por
+  el CRC-32 del microcódigo (4 KB, sin texto); por macrobloque, × tabla de
+  cuantización ×16, zigzag, IDCT 8 × 8, YCbCr → RGBA5551 en su mismo lugar
+  (modo 0 4:2:2 y modo 2 4:2:0). Algoritmo de `jpeg_decode_PS` de
+  mupen64plus-rsp-hle (GPLv2+, `docs/THIRD_PARTY.md`), reescrito. Corre en
+  el **PPE**, dentro del arranque de la tarea (`core/rsp.c`): 0,61 ms por
+  sala en la Mac (300 macrobloques), una vez al cargarla.
+- **S2DEX2 dentro de una tarea F3DEX2** (`src/rsp/gfx/s2dex.c`, nuevo): el
+  `G_LOAD_UCODE` cuyos datos dicen «S2DEX … 2.x» ya no se salta; se
+  interpretan G_DL/G_ENDDL, G_MOVEWORD de segmentos, othermode, comandos
+  del RDP y **G_BG_COPY / G_BG_1CYC**: la imagen (con vuelta en x e y desde
+  imageX/imageY) se carga a la TMEM por tiras con LOADTILE (las filas que
+  caben en 4 KB, 2 KB con paleta; 6 filas de 320 en RGBA16) y cada tira es
+  un TEXRECT (dos si da la vuelta en x), como hace el microcódigo: pasa por
+  `rdp.c` como cualquier rectángulo, sin tocar `src/rdp` ni rsxkit. Las
+  tiras se reutilizan entre cuadros por la caché de texturas (40 por
+  cuadro, ~300 KB). Otros microcódigos ajenos se siguen saltando (gfxtest).
+  Formato de `uObjBg` según GLideN64 (solo consulta).
+- `salsa64-run --lle-check-jpeg`: las tareas JPEG al microcódigo real
+  (implica `--lle=auto`) y la HLE sobre una copia de la RDRAM; compara al
+  TASKDONE (no en el yield: el planificador de OoT interrumpe a veces una
+  tarea JPEG para correr una gráfica). Estadísticas nuevas: `jpeg` (tareas,
+  macrobloques, ms con `rsp.clock_us`) y `bg` (fondos de S2DEX) en el
+  resumen del host y en el log de la PS3 («JPEG: N tareas … ms del PPE» al
+  terminar cada tanda y «N fondos de S2DEX» en la línea `gfx:`).
+- Receta de la tienda en el host (`docs/pads/README.md`): pad de Kokiri +
+  `--poke` de la lista de salidas de la casa (0x0211 → 0x00C1).
+- Pruebas: suite `jpeg` (5: DC por cuadrante, croma en modo 0, orientación
+  del zigzag, IDCT contra una referencia en doble precisión, varios
+  macrobloques y parámetros malos) y en `gfx` `gfx_s2dex_bg_copy`,
+  `gfx_s2dex_bg_wrap` (vuelta en x e y, tres tiras) y `gfx_s2dex_bg_scaled`
+  (G_BG_1CYC a escala 2; un S2DEX 1.x se sigue saltando).
+
+Medido (host):
+- **JPEG contra el microcódigo real**: casa (partida nueva, dos cargas, 150
+  tareas, 153 600 píxeles) 99,0 % idénticos, 0,8 % a ±1 en un canal de 5
+  bits; casa y tienda con la partida del autor, 99,2 % y el resto a ±1. El
+  sesgo que quedaba en G (+1 en el 1,1 % de los píxeles) se quitó
+  truncando cada producto de G como el punto fijo del RSP; lo que queda es
+  ruido de la IDCT del RSP. 256 píxeles distintos de más en la partida
+  nueva: un macrobloque que el **LLE** no escribe al reanudar una tarea JPEG
+  interrumpida (yield); la HLE no se interrumpe. Pendiente del LLE, abajo.
+- **Copia del fondo exacta**: en el campo 14400 el cuadro es la imagen
+  RGBA16 de la RDRAM píxel a píxel salvo HUD, Link y Navi (94,7 % del
+  cuadro). Contra mupen64plus (640 × 480 con filtro, reducido): mediana
+  5,5/255, 91 % a ≤ 16/255.
+- **Otros juegos sin cambios**: SM64 (pad del castillo), Mario Kart 64
+  (demo), GoldenEye (pad de Dam) y Perfect Dark (intro): 48 capturas cada
+  300 campos y los cuadros finales idénticos antes y después. En Zelda con
+  el pad de Kokiri, idénticas dentro de la casa; en el balcón cambian
+  Navi y las motas (378 píxeles): el juego diverge porque ahora su
+  `gZBuffer` de la RDRAM (donde decodifica el JPEG) tiene la imagen y no
+  basura, y el CPU lo lee.
+- Local store del SPE 0: texto 97,0 KB (+4,8 KB de `s2dex.c`), pila libre
+  ~13 KB y la cadena más honda ~8 KB (`-fstack-usage`).
+
+Verificado:
+- [x] `test-host` 363/363 (Docker, ASan/UBSan) y nativo; `test-roms`
+      (nemu64-test 433 / 136 con LLE, vitest, controles, savetest,
+      gfxtest 32/32 ×3, audiotest); `tools/build.sh` sin advertencias;
+      `test-phase2` en RPCS3 (gfxtest 32/32 F3DEX2 y F3D con la HLE en el
+      SPE, menú con cierre limpio); `test-rec`: ver abajo.
+- [x] **PS3 real** (paquete «Salsa64 Kokiri», SLSA00091, 3b95776,
+      `embedded` = `file:oot.z64`; el autor, 2026-10-11): la tienda Kokiri y
+      la casa de Link «ya se ven bien». En el log, dos salas: «JPEG: 75
+      tareas, 300 macrobloques en 67,8 / 67,3 ms del PPE», 0 con parámetros
+      malos, y 14–47 «fondos de S2DEX» por ventana de 5 s. Las ventanas de
+      100 campos con la carga de sala quedan en 57,3–57,6 campos/s con el
+      peor campo en 37–39 ms de emulación (≈ 2 campos de tirón durante la
+      transición; el resto, 5–8 ms por campo). Log en
+      `build/ps3-logs/salsa64-kokiri.log` (fuera de git).
+- **Decisión:** el JPEG se queda en el PPE (una vez por sala, durante la
+  transición). Es ~110 veces más lento que en la Mac: flotantes con
+  conversiones a entero (en el PPE pasan por memoria) y `lrintf`/`floorf`
+  de la biblioteca; con una IDCT en punto fijo debería bajar a pocos ms
+  sin pasar a un SPE (pendiente abajo).
+
+Pendiente:
+- [ ] HLE JPEG en el PPE: IDCT y conversión a RGBA5551 en punto fijo (sin
+      flotantes ni `lrintf`/`floorf`), volver a medir contra el
+      microcódigo real (`--lle-check-jpeg`) y en la PS3; meta < 10 ms por
+      sala (hoy 68 ms).
+- [ ] LLE: al reanudar una tarea JPEG interrumpida (OS_TASK_YIELDED) el
+      último macrobloque queda sin escribir (tarea 49 de la partida nueva).
+- [ ] LLE + RDP del host: los TEXRECT en modo copia que emite el S2DEX real
+      salen negros con rayas (`--lle=all`, campo 14400); con la HLE el fondo
+      sale bien.
+- [ ] Otros usos de S2DEX: tareas que son S2DEX enteras (`SALSA64_GBI_S2DEX`,
+      sprites) y S2DEX 1.x dentro de F3DEX 1.x siguen sin HLE.
+- [ ] Majora's Mask y otros con tareas JPEG de otro microcódigo (Pokémon
+      Stadium usa el mismo algoritmo con otro código: añadir su CRC al
+      verlo).
+
 ## 2026-10-10 — Menú para elegir ROM (estilo XMB) y vuelta al menú con cierre limpio
 
 Hecho (rama `intelligent-yalow-4dd14d`, desde main e7184b7):
@@ -321,7 +446,10 @@ sugerido: recorte → líneas del logo → framebuffer → JIT.
   punto tras el redondeo). Evidencia (fotos y logs, fuera de git por ser
   imágenes de un juego comercial):
   en una carpeta propia.
-- **Kokiri en colores planos, reabierto (2026-10-11).** El cierre del 2026-10-10
+- **Kokiri en colores planos, reabierto (2026-10-11).** *Resuelto en la rama
+  `fervent-hodgkin-d38e1e` (entrada de arriba): eran las salas
+  prerrenderizadas (fondo JPEG + S2DEX sin HLE); lo de abajo era la casa vista
+  desde arriba, no el piso del bosque.* El cierre del 2026-10-10
   («es el sol cenital») no explica lo que se ve al salir de la casa de Link: en
   el host (campo 14400 con pad) el piso es verde puro, (0,71,0), (0,104,0),
   (0,161,0)…, con rojo y azul en 0, y un rectángulo azul liso. Ninguna textura
@@ -679,6 +807,12 @@ Pendiente:
 
 ## 2026-10-10 — Kokiri «en colores planos»: es el sol cenital, no la HLE (referencia con mupen64plus)
 
+> **Corrección (2026-10-11):** esto vale para el bosque al aire libre (el
+> balcón, campo ~3700). Lo que el autor vio en la PS3 y el verde puro del
+> host (casa de Link desde arriba, tienda Kokiri) son **salas
+> prerrenderizadas**: faltaban la tarea JPEG y el fondo de S2DEX. Ver la
+> entrada «Kokiri y su tienda en colores planos» del 2026-10-11.
+
 Reporte (PS3 y rasterizador de la Mac): en el bosque
 Kokiri de Zelda OoT el mundo sale en colores planos, «verde del shade», con
 la HUD bien; la casa de Link sí se ve con texturas.
@@ -1016,7 +1150,9 @@ sacadas de su log; receta en la entrada de arriba):
       colores planos (verde del shade), igual en el rasterizador de la Mac.
       No era error: es el sol cenital de mediodía (ver la entrada «Kokiri
       “en colores planos”», con la referencia de mupen64plus). Queda
-      confirmar en la PS3 que se ve como en la Mac.
+      confirmar en la PS3 que se ve como en la Mac. *(2026-10-11: en las
+      salas prerrenderizadas sí era error; resuelto con la tarea JPEG y
+      S2DEX, entrada del 2026-10-11.)*
 - [x] **Menú de pausa en negro** (frontend/rdp; resuelto por el trabajo de
       presentación, `src/rdp/targets.c`): con el menú abierto cada
       tarea (30/s) pone tres color images: dos de **64 de ancho** (0x3b8800
@@ -1033,10 +1169,11 @@ sacadas de su log; receta en la entrada de arriba):
       bien: la HLE está bien, es solo la presentación.
 
 Falta (para ver bien la casa de Link y las salas con fondo prerrenderizado):
-- [ ] HLE de S2DEX para el fondo (`G_BG_COPY`/`G_BG_1CYC` con `uObjBg` →
+- [x] HLE de S2DEX para el fondo (`G_BG_COPY`/`G_BG_1CYC` con `uObjBg` →
       rectángulos con textura por tiras) y detectar el microcódigo que
       carga `G_LOAD_UCODE` por el texto de sus datos (como en rsp.c).
-- [ ] Tarea tipo 4 de OoT (decodificador JPEG `njpgdspMain`: IDCT y
+      *Hecho el 2026-10-11 (`src/rsp/gfx/s2dex.c`).*
+- [x] *(2026-10-11, `src/rsp/jpeg/`)* Tarea tipo 4 de OoT (decodificador JPEG `njpgdspMain`: IDCT y
       YUV→RGBA16 de los macrobloques que el CPU ya decodificó): sin ella el
       fondo sale negro aunque S2DEX lo copie. mupen64plus-rsp-hle la tiene
       (`jpeg.c`, GPLv2+; registrar en THIRD_PARTY si se adapta). Son 75

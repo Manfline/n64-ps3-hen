@@ -26,6 +26,7 @@
 #include "core/rom.h"
 #include "core/sched.h"
 #include "cpu/vr4300.h"
+#include "rsp/jpeg/jpeg.h"
 
 #define GFX_CYCLES_DEFAULT   30000u  /* ~0,32 ms de la N64 */
 #define AUDIO_CYCLES_DEFAULT 8000u
@@ -370,6 +371,10 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 								       : SALSA64_GBI_UNKNOWN;
 	enum salsa64_abi abi = task.type == SALSA64_TASK_AUDIO && valid ? salsa64_rsp_detect_abi(bus, &task)
 								       : SALSA64_ABI_UNKNOWN;
+	/* JPEG: el microcódigo se reconoce por su CRC (no trae texto). */
+	enum salsa64_jpeg_kind jpeg = SALSA64_JPEG_NONE;
+	if (task.type == SALSA64_TASK_JPEG && valid && !rsp->jpeg_lle && in_rdram(bus, task.ucode, task.ucode_size))
+		jpeg = salsa64_jpeg_detect(bus->rdram + (task.ucode & 0x1FFFFFFF), task.ucode_size);
 	if (rsp->trace)
 		rsp->trace(rsp->trace_ctx, &task, gbi);
 
@@ -380,7 +385,7 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 			       (gbi == SALSA64_GBI_F3DEX2 || gbi == SALSA64_GBI_F3DZEX2 || gbi == SALSA64_GBI_F3D ||
 				gbi == SALSA64_GBI_F3DEX);
 		bool hle_audio = task.type == SALSA64_TASK_AUDIO && valid && rsp->audio && abi != SALSA64_ABI_UNKNOWN;
-		if (rsp->lle_mode == SALSA64_LLE_ALL || !(hle_gfx || hle_audio)) {
+		if (rsp->lle_mode == SALSA64_LLE_ALL || !(hle_gfx || hle_audio || jpeg != SALSA64_JPEG_NONE)) {
 			rsp->stats.lle++;
 			rsp->lle->start(rsp->lle->ctx);
 			if (rsp->lle->done) {
@@ -420,6 +425,17 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 			rsp->audio->start(rsp->audio->ctx, &task, rsp->abi);
 		salsa64_sched_set(rsp->sched, SALSA64_EV_SP_TASK, now + rsp->audio_cycles);
 		return;
+	} else if (jpeg != SALSA64_JPEG_NONE) {
+		/* JPEG (fondos prerrenderizados de Zelda OoT): pocas y una vez por
+		 * sala; se hace aquí mismo y la tarea termina abajo. */
+		struct salsa64_jpeg_result r;
+		uint64_t t0 = rsp->clock_us ? rsp->clock_us() : 0;
+		salsa64_jpeg_run(jpeg, bus->rdram, bus->rdram_size, task.data_ptr, &r);
+		if (rsp->clock_us)
+			rsp->stats.jpeg_us += rsp->clock_us() - t0;
+		rsp->stats.jpeg++;
+		rsp->stats.jpeg_mb += r.macroblocks;
+		rsp->stats.jpeg_bad += r.bad;
 	} else {
 		rsp->stats.other++;
 	}
