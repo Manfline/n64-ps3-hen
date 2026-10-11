@@ -52,6 +52,8 @@ uint32_t raster_field;
 int raster_fbfx = 2;
 static struct rdp_vi_ring vi_ring;
 static uint32_t primes, readbacks, mirrors, frames;
+static uint32_t rb_task[RDP_TARGETS_MAX];  /* última tarea con copia a la RDRAM por ranura */
+#define RB_KEEP_TASKS 32
 static struct gfx_job last_job;  /* la RDRAM, para el espejo de cada campo */
 
 static void prime(const struct gfx_job *job, int slot);
@@ -363,6 +365,7 @@ static void viscvg(const struct gfx_job *job, int cur, const struct gfx_draw *d)
 	const struct rdp_target *t = &tg.t[cur];
 	if (raster_fbfx < 2 || t->bpp != 2 || !job->rdram_ea)
 		return;
+	rb_task[cur] = tg.task;
 	uint8_t *rdram = (uint8_t *)(uintptr_t)job->rdram_ea;
 	uint32_t y0 = d->scissor[1] / 4, y1 = (d->scissor[3] + 3) / 4, x0 = d->scissor[0] / 4, x1 = (d->scissor[2] + 3) / 4;
 	if (y1 > t->lh)
@@ -547,6 +550,7 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 		if (raster_fbfx >= 2 && rdp_readback_wanted(&vi_ring, t->addr, t->width, t->bpp == 2 ? 2 : 0) &&
 		    rdp_targets_readback(&tg, i, true)) {
 			readback(job, i, rows);
+			rb_task[i] = tg.task;
 			readbacks++;
 			if (raster_trace_fb)
 				fprintf(stderr, "fb: campo %u tarea %u: copia a la RDRAM del destino %06x/%u\n", raster_field,
@@ -554,6 +558,7 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 		} else if (raster_fbfx >= 2 && rows && !t->presented && t->bpp == 2 && t->width != tg.vi_width) {
 			/* Espejo de una imagen auxiliar chica (en la PS3, sin esperar). */
 			readback(job, i, rows);
+			rb_task[i] = tg.task;
 			mirrors++;
 		}
 	}
@@ -570,6 +575,14 @@ void raster_vi(uint32_t origin, uint32_t width)
 		const struct rdp_target *t = &tg.t[i];
 		if (t->used && t->bpp == 2 && t->width == width && origin >= t->addr &&
 		    origin < t->addr + t->width * 2 * t->lh) {
+			/* Como rdp.c: no pisar una copia reciente que se solape. */
+			uint32_t lo = t->addr, hi = t->addr + t->width * 2 * t->lh;
+			for (int k = 0; k < RDP_TARGETS_MAX; k++) {
+				const struct rdp_target *a = &tg.t[k];
+				if (a->used && tg.task - rb_task[k] <= RB_KEEP_TASKS && a->addr < hi &&
+				    a->addr + a->width * a->bpp * a->lh > lo)
+					return;
+			}
 			readback(&last_job, i, t->lh);
 			frames++;
 			return;

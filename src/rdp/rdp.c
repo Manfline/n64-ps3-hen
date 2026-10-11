@@ -62,6 +62,11 @@
  * redibujado al cambiar de equipo en Zelda caía como «repetida» y el CPU
  * lo copiaba antes de tiempo. */
 #define RB_HISTORY  1
+/* Tareas durante las que el espejo del framebuffer respeta la zona de una
+ * imagen auxiliar recién copiada que se solapa con él (Link se dibuja en
+ * los primeros 14 KB del framebuffer de Zelda y el CPU lo copia de ahí; el
+ * filtro de la pausa lee la cobertura ~1 s). */
+#define RB_KEEP_TASKS 32
 #define RB_WAIT_US  200000  /* la emulación no espera una copia más que esto */
 
 _Static_assert(sizeof(struct gfx_vertex) == sizeof(rsxkit_vertex), "vértice de la HLE = vértice de rsxkit");
@@ -147,6 +152,10 @@ static struct {
 		uint32_t addr, width, lw, rows, fence;
 	} mirrors[MIRRORS];
 	struct mirror frame;         /* el espejo del framebuffer presentado */
+	/* Última tarea en que cada ranura se copió a la RDRAM (o se rellenó
+	 * su cobertura): el espejo del framebuffer no pisa esa zona mientras
+	 * el CPU pueda estar leyéndola. */
+	uint32_t rb_task[RDP_TARGETS_MAX];
 	struct mirror big[RB_SLOTS]; /* copias grandes sin esperar, en los búferes de RB_SLOTS */
 	/* Color images pedidas en las últimas RB_HISTORY tareas (hilo de
 	 * emulación): una que se repite ya no se espera. */
@@ -259,6 +268,7 @@ uint32_t salsa64_rdp_reset(void)
 	memset(&rdp.frame, 0, sizeof rdp.frame);
 	memset(rdp.big, 0, sizeof rdp.big);
 	memset(rdp.rb_prev_n, 0, sizeof rdp.rb_prev_n);
+	memset(rdp.rb_task, 0, sizeof rdp.rb_task);
 	memset(&rdp.vi_ring, 0, sizeof rdp.vi_ring);
 	memset(rdp.surf_dirty, 0, sizeof rdp.surf_dirty);
 	rdp.last_set = 0;
@@ -575,6 +585,7 @@ static void viscvg(int cur, const struct gfx_draw *g)
 	const struct rdp_target *t = &rdp.tg.t[cur];
 	if (!rdp.rdram || rdp.fbfx < 2 || t->bpp != 2)
 		return;
+	rdp.rb_task[cur] = rdp.tg.task;
 	uint32_t y0 = g->scissor[1] / 4, y1 = (g->scissor[3] + 3) / 4, x0 = g->scissor[0] / 4, x1 = (g->scissor[2] + 3) / 4;
 	if (y1 > t->lh)
 		y1 = t->lh;
@@ -801,6 +812,7 @@ static void translate(uint32_t n)
 			rdp.bound_t = -1;
 			big_used |= 1u << buf;
 			sync_rb[i] = true;
+			rdp.rb_task[i] = rdp.tg.task;
 			if (s->rb_sync[k]) {
 				rb[nrb].slot = i;
 				rb[nrb].buf = buf;
@@ -844,6 +856,7 @@ static void translate(uint32_t n)
 				       t->lw, rows, RSXKIT_RGB565) != RSXKIT_OK)
 			continue;
 		rdp.bound_t = -1;
+		rdp.rb_task[i] = rdp.tg.task;
 		struct mirror *m = &rdp.mirrors[k];
 		m->used = true;
 		m->addr = t->addr;
@@ -913,6 +926,17 @@ static void frame_mirror(int slot, uint32_t rows)
 		return;
 	if (rows > t->lh)
 		rows = t->lh;
+	/* No pisar lo que una copia reciente dejó en esa misma memoria (Link
+	 * en los primeros bytes del framebuffer; la cobertura de VISCVG). */
+	uint32_t lo = t->addr, hi = t->addr + t->width * 2 * rows;
+	for (int i = 0; i < RDP_TARGETS_MAX; i++) {
+		const struct rdp_target *a = &rdp.tg.t[i];
+		if (!a->used || rdp.tg.task - rdp.rb_task[i] > RB_KEEP_TASKS)
+			continue;
+		uint32_t alo = a->addr, ahi = a->addr + a->width * a->bpp * a->lh;
+		if (alo < hi && ahi > lo)
+			return;
+	}
 	rsxkit_rect src = { 0, 0, t->lw * rdp.scale, rows * rdp.scale };
 	if (rsxkit_target_read(rdp.surf[slot], &src, rdp.rb_off + FRAME_SLOT * RB_SLOT, RB_PITCH, t->lw, rows,
 			       RSXKIT_RGB565) != RSXKIT_OK)
