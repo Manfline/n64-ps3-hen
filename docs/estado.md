@@ -99,18 +99,25 @@ en intro/menús (falta medir un nivel). Primer video público: GoldenEye.
 merge b166a06): Banjo sin parpadeo, Conker sin quemado, pausa de Zelda visible,
 overscan. La «regresión» de GoldenEye (soldados cian, armas azul claro) era la
 aproximación del combiner con ENV de la HLE vieja, idéntica en SLSA00064; con el
-generador el autor vio GoldenEye normal en la PS3.
+generador el autor vio GoldenEye normal en la PS3. Después, el menú estilo XMB
+(`intelligent-yalow-4dd14d`, merge 00eba22), confirmado en la PS3.
 
-**Trabajos abiertos al cerrar** (sin integrar):
-- Menú estilo XMB (`intelligent-yalow-4dd14d`): listo en host y RPCS3,
-  espera turno en la PS3. Integrar después de presentación (choques en main.c y
-  rdp.c ya previstos).
-- Polígonos estirados de Mario Kart en la PS3 (`reverent-meninsky-b3f79c`):
-  en curso (recorte del RSP).
+**Trabajos abiertos** (sin integrar):
+- Polígonos estirados de Mario Kart (`reverent-meninsky-b3f79c`, paquete
+  «Salsa64 recorte» SLSA00090): en la PS3, Mario Kart arreglado y SM64 bien; en
+  GoldenEye el autor vio líneas azules en las uniones de texturas. Falta saber
+  si las causa el recorte o ya estaban en main antes de integrarlo.
+
+**Problemas abiertos:**
+- Líneas como de entrelazado en el logo de N64 de Zelda en la PS3; en el
+  rasterizador de la Mac el cuadro sale limpio. Sospecha: el recorte del
+  overscan escala 684 líneas a 720 con filtro lineal; probar con
+  «Recorte del borde: Apagado» en el menú. Arreglo propuesto: tapar los bordes
+  con negro sin escalar.
 
 **Siguientes trabajos decididos con el autor:**
 - JIT («Recompilador: más velocidad del CPU en GoldenEye y Perfect
-  Dark»): abrirlo **después de integrar el menú**.
+  Dark»): ya puede abrirse (el menú está en main).
 - Efectos de framebuffer (pendiente de abajo): ya puede abrirse, presentación está en main.
 - HLE: z/w > 1 en Banjo (modelos que tiemblan, cielo), boca negra de Conker.
 - Zelda: fondos prerrenderizados (S2DEX + tarea JPEG); luego Majora's Mask.
@@ -121,7 +128,9 @@ generador el autor vio GoldenEye normal en la PS3.
 sospecha: los dos hilos más el retraso propio de Zelda; presentación agregó al
 log la línea «retraso: cola … destino …» para medirlo. Algunos trabajos no pueden
 escribir `embedded` por FTP: lo cambia el autor.
-`embedded` quedó en el último valor que dejó presentación.
+`embedded` quedó en el último valor que dejó presentación. Con el menú en main:
+si existe `/dev_hdd0/salsa64/embedded`, cualquier app (también la principal)
+arranca directo esa ROM sin menú; el menú sale solo cuando el archivo no existe.
 
 ## 2026-10-10 — Fase 4: generador de fragment programs del RSX en tiempo de ejecución (rama compassionate-shirley)
 
