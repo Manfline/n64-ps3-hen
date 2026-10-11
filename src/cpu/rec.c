@@ -240,6 +240,19 @@ static uint32_t pre_bc(uint32_t *w, uint32_t n, unsigned bo, unsigned bi, uint32
 	return n + 1;
 }
 
+/* Llamada a una función de C desde el preámbulo (como emit_call). */
+REC_UNUSED static uint32_t pre_call(uint32_t *w, uint32_t n, const struct salsa64_rec *rec, uint64_t entry)
+{
+	if (rec->calls_near) {
+		w[n] = ppc_bl((int32_t)((int64_t)entry - (int64_t)(uintptr_t)&rec->code[n]));
+		return n + 1;
+	}
+	n = pre_li64(w, n, 12, entry);
+	w[n++] = ppc_mtctr(12);
+	w[n++] = PPC_BCTRL;
+	return n;
+}
+
 REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 {
 	uint32_t *w = rec->code, n = 0;
@@ -414,6 +427,49 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 			w[n++] = PPC_BLR;
 		}
 	}
+
+	/* Camino lento de cargas y almacenamientos, compartido por tipo
+	 * (rec_emit.c, emit_load/emit_store): r3 = va (r5 = valor al almacenar),
+	 * r6 = (k + 1) | delay slot << 8 | n << 16, r7 = pc de la instrucción.
+	 * Deja cycles, cur_pc y delay_slot como el intérprete, llama a C y recarga
+	 * sched->next (r27). Vuelve con r3 = valor y cr1 ne si hubo excepción
+	 * (redirect); si no, cr5 gt si hay que salir (interrupción, código
+	 * invalidado, modo, o el bloque ya no cabe antes del evento). Guarda LR y
+	 * el fin del bloque en cpu->rec_lr y rec_tmp. Antes se repetía todo esto
+	 * (~25 palabras) en cada carga y almacenamiento. */
+	for (unsigned st = 0; st < 2; st++) {
+		for (unsigned kind = 0; kind < (st ? 4u : 7u); kind++) {
+			(st ? rec->slow_store : rec->slow_load)[kind] = n;
+			w[n++] = ppc_rlwinm(0, 6, 0, 24, 31);       /* k + 1 */
+			w[n++] = ppc_add(0, 0, 29);
+			w[n++] = ppc_std(0, OFF(cycles), 31);
+			w[n++] = ppc_std(7, OFF(cur_pc), 31);
+			w[n++] = ppc_rlwinm(0, 6, 24, 31, 31);      /* delay slot (bit 8) */
+			w[n++] = ppc_stb(0, OFF(delay_slot), 31);
+			w[n++] = ppc_rlwinm(0, 6, 16, 24, 31);      /* n */
+			w[n++] = ppc_add(0, 0, 29);
+			w[n++] = ppc_std(0, OFF(rec_tmp), 31);
+			w[n++] = ppc_mflr(0);
+			w[n++] = ppc_std(0, OFF(rec_lr), 31);
+			w[n++] = ppc_mr(4, 3);
+			w[n++] = ppc_mr(3, 31);
+			w[n++] = ppc_li(st ? 6 : 5, (int32_t)kind);
+			n = pre_call(w, n, rec, st ? rec->h_store : rec->h_load);
+			w[n++] = ppc_ld(0, OFF(rec_lr), 31);
+			w[n++] = ppc_mtlr(0);
+			w[n++] = ppc_lbz(0, OFF(redirect), 31);
+			w[n++] = ppc_cmpwi(1, 0, 0);
+			w[n++] = ppc_bclr(PPC_BO_FALSE, PPC_BI(1, PPC_EQ));  /* excepción: cr1 ne */
+			w[n++] = ppc_lwz(0, OFF(irq_pending), 31);         /* irq, redirect, abort y modo */
+			w[n++] = ppc_cmpwi(5, 0, 0);
+			w[n++] = ppc_bclr(PPC_BO_FALSE, PPC_BI(5, PPC_EQ));  /* salir: cr5 gt */
+			w[n++] = ppc_ld(11, OFF(sched), 31);
+			w[n++] = ppc_ld(27, (int32_t)offsetof(struct salsa64_sched, next), 11);
+			w[n++] = ppc_ld(0, OFF(rec_tmp), 31);
+			w[n++] = ppc_cmpld(5, 0, 27);                       /* no cabe: cr5 gt */
+			w[n++] = PPC_BLR;
+		}
+	}
 	return n;
 }
 
@@ -429,7 +485,7 @@ static uint64_t rec_enter(struct salsa64_rec *rec, uint32_t entry)
 
 static uint32_t preamble_words(void)
 {
-	return 512;  /* emit_preamble usa menos; los bloques empiezan alineados */
+	return 1024;  /* emit_preamble usa menos; los bloques empiezan alineados */
 }
 
 void salsa64_rec_flush(struct salsa64_rec *rec)

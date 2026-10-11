@@ -258,6 +258,30 @@ corre un bloque) no hay excepción posible, y cada registro es un campo de
 `cycles = r29 + k + 1`, lo que el intérprete tiene al ejecutar la
 instrucción k. Random lo corre el intérprete (sin terminar el bloque).
 
+### Tamaño del código generado (2026-10-11)
+
+Un bloque de GoldenEye con 13 instrucciones, dos saltos internos y dos
+cargas daba 180 palabras de PPC (volcado con `SALSA64_REC_DUMP=1` en
+`salsa64-run`; `tools/rec-disasm.sh` lo desensambla): media 316 palabras
+por bloque, mediana 171, p90 789. Cada carga o almacenamiento costaba ~47
+palabras frías: el camino lento (`call_prep`, argumentos, llamada, revisión
+de `redirect` y `post_check`) y dos salidas pendientes (antes y después)
+que repetían la escritura de los registros modificados. Con superbloques y
+la caché de 16 MB, GoldenEye la llenaba cada 7,5 s (17 vaciados en 128 s).
+Ahora:
+- El camino lento de cargas y almacenamientos son 11 rutinas compartidas
+  del preámbulo (`slow_load[7]`, `slow_store[4]`): el sitio escribe sus
+  registros sucios (solo en ese camino, el rápido no cambia), pasa k, el
+  delay slot y n en r6 y el pc en r7, y la rutina deja `cycles`, `cur_pc` y
+  `delay_slot` como el intérprete, llama a C (guardando LR en
+  `cpu->rec_lr`), recarga `sched->next` y vuelve con cr1 ne si hubo
+  excepción o cr5 gt si hay que salir. Como lo sucio ya está en memoria,
+  las salidas del sitio solo ajustan `cycles` (y el valor cargado va a su
+  lugar antes de salir).
+- La traducción de datos por `ktlb[]` también es compartida
+  (`ktlb_rtn[2][4]`, por alineación y lectura/escritura).
+- El preámbulo pasa de 256 a 1024 palabras.
+
 ### Memoria
 
 Camino rápido: `va >> log2(rdram)` vale lo mismo para KSEG0 y KSEG1 tras un

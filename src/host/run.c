@@ -118,6 +118,17 @@ static void prof_line(void *ctx, const char *text)
 	fprintf(stderr, "%s\n", text);
 }
 
+/* SALSA64_REC_DUMP=1: cada bloque compilado en hexadecimal (como en las
+ * unitarias), para desensamblarlo (tools/rec-disasm.sh) o medirlo. */
+static void dump_block(struct salsa64_rec *r, uint64_t pc, uint32_t entry, uint32_t words, bool temp)
+{
+	fprintf(stderr, "bloque %016llx%s entrada %u, %u palabras:", (unsigned long long)pc,
+		temp ? " (recortado)" : "", entry, words);
+	for (uint32_t k = 0; k < words; k++)
+		fprintf(stderr, " %08x", r->code[entry + k]);
+	fputc('\n', stderr);
+}
+
 /* --lockstep: la máquina de referencia, solo con el intérprete. */
 static struct salsa64_n64 ref;
 static uint8_t ref_rdram[SALSA64_RDRAM_MAX] __attribute__((aligned(128)));
@@ -1566,6 +1577,8 @@ int main(int argc, char **argv)
 	if (use_rec) {
 		void *code = salsa64_host_rec_buffer();
 		rec.opts = salsa64_host_rec_opts();
+		if (getenv("SALSA64_REC_DUMP"))
+			rec.on_compile = dump_block;
 		if (getenv("SALSA64_REC_PROF")) {
 			rec.prof = &prof;
 			prof.blocks = calloc(1, sizeof *prof.blocks);

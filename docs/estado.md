@@ -33,11 +33,31 @@ en la consola queda para el día de pruebas):
   físico) como bloque nuevo al paginar su código (93 000 bloques y 6
   vaciados de la caché en 128 s): un bloque vivo de la misma vpc con los
   mismos bytes se reutiliza en la física nueva (`salsa64_rec_x_rekey`).
+- **Bloques desprendidos** («Bloques desprendidos» en docs/rec-ppe.md):
+  GoldenEye pagina su código y cada página vuelve en otro marco: compilaba
+  cada (vpc, marco) de nuevo (101 900 bloques y 7 vaciados completos de la
+  caché en 128 s). Un bloque mapeado invalidado se desprende con una copia
+  de sus bytes y se engancha donde vuelva su página con los mismos bytes
+  (parcheando la palabra de `ktlb` de su entrada): 40 850 bloques, 28 200
+  enganchados, compilaciones por campo en la presa 22 → 0,7, vaciados 7 → 3.
+- **Superbloques** («Saltos condicionales internos»): el perfil por bloque
+  dio 5,3 instrucciones por bloque; un condicional hacia adelante ya no
+  corta el bloque (su camino tomado sale enlazado, el no tomado sigue con
+  los registros en el PPE). Los tres bucles más calientes de GoldenEye eran
+  parejas de bloques.
+- Caché de código de 16 → 24 MB (GoldenEye la llenaba cada ~40 s; ~900 bytes
+  de PPC por bloque) y el camino de la `ktlb` en 8 rutinas compartidas del
+  preámbulo (3 palabras por acceso en vez de ~22).
 - Opción `SALSA64_REC_OPT_LEGACY` (`/dev_hdd0/salsa64/jit-viejo`,
   `SALSA64_REC_LEGACY=1`): el comportamiento anterior en el mismo binario,
-  para el A/B en la consola.
-- Exactitud: `--lockstep` sin diferencias en nemu64-test (primer lote; la
-  suite completa con todo corre al cerrar esta entrada: ver abajo).
+  para el A/B en la consola. Bits `SALSA64_REC_OPTS` (host) para apagar una
+  pieza a la vez al acotar una diferencia.
+- **La referencia de `--lockstep` no tenía HLE** (gráfica ni de audio): no
+  recibía la interrupción del DP de las tareas con HLE y GoldenEye y Perfect
+  Dark, que ya dibujan, divergían igual con el camino viejo (bisect con los
+  bits de arriba: todos fallaban en el mismo ciclo). Ahora lleva la misma
+  HLE con su estado; con eso Perfect Dark pasa (200 M ciclos) y las corridas
+  largas se anotan abajo.
 
 **Para el día de pruebas en la PS3 (orden sugerido: al final, tras recorte →
 líneas del logo → framebuffer):** instalar `build/salsa64-jit/salsa64-jit.pkg`

@@ -466,8 +466,10 @@ static void emit_continue(struct ctx *c, unsigned k)
 }
 
 /* Salida desde la instrucción k: antes (excepción: no escribió nada) o
- * después de completarla. Se emite al final, en la sección fría. */
-static int exit_label(struct ctx *c, unsigned k, bool after)
+ * después de completarla. Se emite al final, en la sección fría. Con `wb`,
+ * escribe los registros modificados; sin él, el sitio ya los escribió antes
+ * de llamar a C (emit_load/emit_store) y la salida solo ajusta cycles. */
+static int exit_label(struct ctx *c, unsigned k, bool after, bool wb)
 {
 	int *slot = after ? &c->exit_after[k] : &c->exit_before[k];
 	if (*slot >= 0)
@@ -476,7 +478,7 @@ static int exit_label(struct ctx *c, unsigned k, bool after)
 	p->label = (uint16_t)new_label(c);
 	p->k = (uint8_t)k;
 	p->after = after;
-	p->mask = c->written_start | (after ? c->d[k].writes & c->cached : 0);
+	p->mask = wb ? c->written_start | (after ? c->d[k].writes & c->cached : 0) : 0;
 	*slot = p->label;
 	return p->label;
 }
@@ -563,7 +565,7 @@ static void emit_call(struct ctx *c, uint64_t entry)
  * evento. */
 static void post_check(struct ctx *c, unsigned k)
 {
-	int out = exit_label(c, k, true);
+	int out = exit_label(c, k, true, true);
 	E(c, ppc_lwz(0, OFF(irq_pending), R_CPU));
 	E(c, ppc_cmpwi(CR_T, 0, 0));
 	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), out);
@@ -615,7 +617,7 @@ static void emit_exception(struct ctx *c, unsigned k, unsigned code)
 	E(c, ppc_mr(3, R_CPU));
 	E(c, ppc_li(4, (int32_t)code));
 	emit_call(c, c->rec->h_exception);
-	emit_b(c, exit_label(c, k, false), false);
+	emit_b(c, exit_label(c, k, false, true), false);
 }
 
 /* Rama a un camino frío que lanza la excepción de desbordamiento. */
@@ -716,29 +718,40 @@ static void emit_load(struct ctx *c, unsigned k, unsigned kind, unsigned where)
 	default:              E(c, ppc_ldx(d, R_RDRAM, T_Y)); break;
 	}
 	bind(c, resume);
-	/* El valor queda en d por los dos caminos. */
+	/* El valor queda en d por los dos caminos. Camino lento: la rutina
+	 * compartida del preámbulo (rec.c, slow_load); lo sucio se escribe antes
+	 * para que las salidas no tengan que hacerlo. */
 	unsigned save_sec = c->sec;
 	c->sec = SEC_COLD;
 	{
 		bind(c, slow);
-		call_prep(c, k);
-		E(c, ppc_mr(4, T_ADDR));
-		E(c, ppc_mr(3, R_CPU));
-		E(c, ppc_li(5, (int32_t)kind));
-		emit_call(c, c->rec->h_load);
-		E(c, ppc_lbz(0, OFF(redirect), R_CPU));
-		E(c, ppc_cmpwi(CR_T, 0, 0));
-		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), exit_label(c, k, false));
-		E(c, ppc_mr(d, 3));
-		/* Si sale antes de volver, el valor tiene que estar en su lugar. */
+		store_regs(c, c->written_start);
+		li64(c, 7, insn_pc(c, k));
+		li32u(c, 6, (k + 1) | (c->in_ds ? 0x100u : 0) | (uint32_t)c->n << 16);
+		emit_b(c, abs_label(c, c->rec->slow_load[kind]), true);
+		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(1, PPC_EQ), exit_label(c, k, false, false));
+		int out = new_label(c);
+		emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(5, PPC_GT), out);
+		if (d != 3)
+			E(c, ppc_mr(d, 3));
 		if (where == DST_FPR32)
 			E(c, ppc_stw(d, fpr32_off(c, rt), R_CPU));
 		else if (where == DST_FPR64)
 			E(c, ppc_std(d, fpr64_off(c, rt), R_CPU));
 		else if (rt && !c->map[rt])
 			E(c, ppc_std(d, off_reg(rt), R_CPU));
-		post_check(c, k);
 		emit_b(c, resume, false);
+		/* Salir con el valor en su lugar: en memoria, o en su registro fijo. */
+		bind(c, out);
+		if (where == DST_FPR32)
+			E(c, ppc_stw(3, fpr32_off(c, rt), R_CPU));
+		else if (where == DST_FPR64)
+			E(c, ppc_std(3, fpr64_off(c, rt), R_CPU));
+		else if (rt && (c->pinned & BIT(rt)))
+			E(c, ppc_mr(c->map[rt], 3));
+		else if (rt)
+			E(c, ppc_std(3, off_reg(rt), R_CPU));
+		emit_b(c, exit_label(c, k, true, false), false);
 	}
 	c->sec = save_sec;
 	if (where == DST_FPR32)
@@ -781,13 +794,14 @@ static void emit_store(struct ctx *c, unsigned k, unsigned kind, unsigned from)
 	unsigned save_sec = c->sec;
 	c->sec = SEC_COLD;
 	bind(c, slow);
-	call_prep(c, k);
-	E(c, ppc_mr(5, v));
-	E(c, ppc_mr(4, T_ADDR));
-	E(c, ppc_mr(3, R_CPU));
-	E(c, ppc_li(6, (int32_t)kind));
-	emit_call(c, c->rec->h_store);
-	post_check(c, k);
+	store_regs(c, c->written_start);
+	if (v != 5)
+		E(c, ppc_mr(5, v));
+	li64(c, 7, insn_pc(c, k));
+	li32u(c, 6, (k + 1) | (c->in_ds ? 0x100u : 0) | (uint32_t)c->n << 16);
+	emit_b(c, abs_label(c, c->rec->slow_store[kind]), true);
+	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(1, PPC_EQ), exit_label(c, k, false, false));
+	emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(5, PPC_GT), exit_label(c, k, true, false));
 	emit_b(c, resume, false);
 	c->sec = save_sec;
 }
