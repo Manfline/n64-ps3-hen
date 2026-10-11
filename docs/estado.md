@@ -121,9 +121,36 @@ Pendiente:
       Regresiones: GoldenEye, Banjo, Conker, SM64, Mario Kart un minuto
       cada uno.
 - [ ] Mario Kart: localizar la escena de las pantallas con el autor.
-- [ ] Líneas del logo de Zelda: confirmar en la PS3 que la presentación
-      1:1 las quita (si no, no era el recorte) y que el costo por campo no
-      cambia (mismo dibujo).
+- [ ] **Líneas del logo de Zelda: no era la presentación.** Con el 1:1
+      siguen en la PS3 (2026-10-11), y el host también las dibuja en todos
+      los campos del logo (`build/oot/logo/strip.png`, fuera de git;
+      `main` las había mirado a tamaño chico). El texto «NINTENDO 64» se
+      dibuja en franjas de 2 filas (rectángulos I8 de 192 × 2, `timg`
+      2c70d0, 2c7250… cada 0x180) en 2 ciclos con una segunda textura de
+      ruido I8 de 32 × 32 (tile 1: `mask 5,5`, `shift 2,11`, `sz
+      120,97-0,0`, combiner `267e60:350cf37f`, prim `aaffffff`, env
+      `0000ff80`): las filas alternas salen más oscuras, así que es cómo la
+      HLE muestrea esa segunda textura (shift de t de 11 = ×32 con máscara
+      de 32, o el origen `ult` de la tile) — zona de la HLE
+      (`src/rsp/gfx`), trabajo de F3D/texturas. El 1:1 se queda igual: quita
+      un estirado real (237 líneas a 720 incluso sin recorte).
+- [ ] **Túnica de Link** (foto del autor, 2026-10-11, fuera del repo):
+      defecto en la textura de la túnica, previo a esta rama; HLE/combiner.
+- [ ] **Link en la pantalla de equipo, fuera de la casa, sale roto en la
+      PS3** (dentro de la casa sale bien; el fondo de la pausa, bien en los
+      dos). En el host, fuera (campo ~16550 del pad) Link sale bien. Falta
+      una prueba en la PS3 que lo aísle: `gfxdump` en la pantalla de equipo
+      y mirar de qué lee la textura (espejo de `289600/64` tarde o reciclado
+      de ranuras).
+- [ ] **Controles en Zelda:** a veces R en la pausa no responde hasta
+      pulsarlo muchas veces (el autor, PS3). El log no muestra esperas por
+      copias (0 tareas esperadas, 100 % de NTSC): no es de esta rama;
+      revisar el mapeo o el PIF (zona del frontend).
+- [ ] **Al abrir la pausa, un haz de polígonos verdes del centro a la
+      esquina superior izquierda durante ~1 s** (PS3). Candidato: las
+      franjas que leen el scratch del destino ligado justo después de
+      `rsxkit_target_copy` sin `rsxkit_texture_sync` (caché de texturas del
+      RSX con datos viejos). Probar con sincronía tras la copia.
 - [ ] Perfect Dark y Conker: copias del z-buffer, sombra, desenfoque;
       color images de 32 y 8 bits.
 - [ ] Reducción con filtro de caja (hoy bilineal) y, si pesa, en un SPE.
