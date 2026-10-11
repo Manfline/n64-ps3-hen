@@ -58,7 +58,11 @@ Pruebas:
   (`salsa64_rdp_settle`), y al cargar se olvidan también el scratch, los
   espejos y el historial de copias (`salsa64_rdp_drop_targets`). La prueba
   de determinismo de gfxtest corre con el rasterizador en las tres corridas
-  (copias espejo y a la RDRAM leídas por el CPU en cada tarea): idéntica.
+  (copias espejo y a la RDRAM leídas por el CPU en cada tarea): idéntica; en
+  el host con respaldos, también la pausa de Zelda (16090 → 16300), el túnel
+  de Mario Kart y la presa de GoldenEye. Hallado de paso (de main, no de los
+  estados): con copias (`SALSA64_FBFX=2`) el rasterizador del host deja de
+  dibujar SM64 a las 96 tareas gráficas (~campo 350); con 0 o 1, normal.
 
 Pendiente: la PS3 real (guardar y cargar en Zelda, SM64, Mario Kart y
 GoldenEye con varias ranuras, cargar tras volver al menú, tiempos, y que el

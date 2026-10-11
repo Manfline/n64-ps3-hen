@@ -97,12 +97,16 @@ Solo en el límite de un campo y con la emulación quieta:
    (`emu_park`, dormida).
 3. Presentación presenta lo que quedaba en la cola (del campo marcado sale
    la miniatura, antes de dibujar el aviso), traduce todas las tareas
-   gráficas, espera al RSX (`rsxkit_finish`) y guarda o carga.
+   gráficas, espera al RSX (`rsxkit_finish`), espera las copias RSX → RDRAM
+   de los efectos de framebuffer que quedaran en vuelo y las escribe
+   (`salsa64_rdp_settle`: ninguna llega tarde sobre una RDRAM cargada) y
+   guarda o carga.
 4. Al cargar: la caché del recompilador se vacía (`salsa64_rec_flush`, dentro
    de `salsa64_state_load`), los destinos del RSX se sueltan
    (`salsa64_rdp_drop_targets`: lo dibujado ya no es de esta máquina y el
-   número de campo retrocede; las colas y la numeración de las tareas siguen,
-   porque el SPE es el mismo), la cola de audio se vacía con su transición
+   número de campo retrocede; también el scratch, los espejos y el historial
+   de copias; las colas y la numeración de las tareas siguen, porque el SPE
+   es el mismo), la cola de audio se vacía con su transición
    (`audio_out_flush`) y se olvidan el último campo encolado y las ventanas
    que cuentan campos. El VI se relee solo en el campo siguiente.
 5. Presentación baja la petición; emulación sigue y reinicia el ritmo.
@@ -133,6 +137,13 @@ planificador, HLE) y las mismas imágenes (VI y HLE gráfica).
   (intro 1500 → 1800 y Kokiri 3400 → 3600), Super Mario 64 (900 → 1200 y el
   castillo 4100 → 4300), GoldenEye (1200 → 1500 y la presa, código mapeado
   por la TLB, 7200 → 7500) y Mario Kart 64 (900 → 1200): todo idéntico.
+  Con los efectos de framebuffer (el rasterizador en las tres corridas: las
+  copias RSX → RDRAM son parte del estado): la pausa de Zelda (16090 →
+  16300, `zelda-pausa-nueva.pad`, con las copias de la pausa y el filtro del
+  CPU), el túnel de Mario Kart (3000 → 3300, `mk64-luigi.pad`), la presa de
+  GoldenEye y el castillo de SM64 (con `SALSA64_FBFX=1`: con copias, el
+  rasterizador del host deja de dibujar SM64 a las 96 tareas, también sin
+  estados): idénticos.
 
 En la PS3 la emulación no es determinista ciclo a ciclo (los SPE terminan
 cuando terminan y el fin de tarea se sondea), así que allí se prueba que
