@@ -1,5 +1,106 @@
 # Estado
 
+## 2026-10-10 — Presentación: Banjo-Kazooie (FREEZE del RDP y destino equivocado), pausa de Zelda y recorte del overscan
+
+Rama `bold-neumann-794fc0` (trabajo de presentación). Los tres casos
+pendientes de `src/rdp` y uno más que apareció en el camino.
+
+**Banjo-Kazooie no pasaba de 2 tareas gráficas** (en la Mac, en qemu
+ppc64 con y sin recompilador, y en RPCS3: pantalla fija con el audio
+sonando; en la PS3 real la intro corría porque el paquete naudio era
+anterior). Bisección por commits del host: lo rompió la integración del
+LLE (ce8351d), que dio semántica a DPC_STATUS (antes una lectura devolvía
+la última palabra escrita). Rastreando los accesos al DP: el juego usa el
+bit FREEZE como semáforo: en el manejador de la interrupción del DP escribe
+SET_FREEZE, arranca la tarea del cuadro siguiente con el RDP congelado y
+la descongela después; la interrupción de esa tarea la espera *después* de
+descongelar (en la consola el RDP congelado no ejecuta). Nuestro HLE la
+daba 10 000 ciclos tras el fin de la tarea, aún congelado, y el juego la
+perdía. Arreglo en el núcleo (`src/core/rsp.c`, `sp.c`): si DPC_STATUS
+tiene FREEZE cuando toca la interrupción del SYNC_FULL, se retiene
+(`dp_held`) y se programa cuando el CPU escribe CLR_FREEZE
+(`salsa64_rsp_dp_unfreeze`). Mismo principio que mupen64plus-core (que
+difiere la tarea entera mientras FREEZE). Banjo corre: 644 tareas en 27 s
+en la Mac. Prueba `rsp_gfx_task` intacta (la interrupción sigue llegando
+`dp_cycles` después del fin de la tarea cuando no hay freeze).
+
+**Parpadeo de Banjo en la PS3 (a):** el juego alterna dos framebuffers de
+292 × 216 a 584 × 216 bytes uno del otro, y `src/rdp` supone 3/4 del ancho
+de alto (219 líneas): el primero «cubre» el origen del VI del segundo con
+sus últimas 2 líneas. Entre los dos, se tomaba el dibujado hace menos, que
+mientras se muestra uno es el otro (el RDP ya dibuja el cuadro siguiente):
+se presentaban 2 líneas negras estiradas a toda la pantalla. Simulado con
+la traza de la Mac (VI y destinos por tarea, 70 s): 566 de 4142 campos con
+el destino equivocado; con la regla nueva (entre destinos del ancho del VI,
+el que empieza más cerca del origen; luego el más reciente), 12, todos de
+arranque o cambio de escena (el otro framebuffer aún sin dibujar).
+
+**Tabla de destinos portable:** `src/rdp/targets.c` (sin rsxkit): qué
+color image tiene superficie, cuál se recicla y cuál se presenta; `rdp.c`
+solo guarda las superficies por ranura. Pruebas en
+`tests/unit/test_targets.c` (6): dos framebuffers alternos en direcciones
+distintas que se solapan en la cuenta (Banjo), la misma dirección con dos
+anchos (GoldenEye 320/440), color images de 64 sobre el framebuffer (Zelda
+en pausa), VI sostenido sin dibujar (GoldenEye cargando), dibujado con el
+VI apagado (SM64) y el orden de reciclado.
+
+**Pausa de Zelda negra en la PS3:** con el menú, cada tarea pone 3 color
+images y alternando framebuffers son 6 distintas (0x3b8800/64,
+0x3b5000/64, 0x3b5000/320, 0x3de000/64, 0x3da800/64, 0x3da800/320) para 4
+ranuras: cada tarea tiraba 2 y entre ellas el framebuffer de 320. Ahora
+8 ranuras (`RDP_TARGETS_MAX`; memoria del RSX en docs/memory-budget.md) y,
+al reciclar, nunca la presentada en el último campo, primero las viejas
+(30 campos), luego las de un ancho distinto al del VI (auxiliares) y al
+final la más antigua. Reproducido en la Mac con `docs/pads/zelda-oot.pad`
+(la partida del autor bajada de la PS3 por FTP a `build/saves/`, fuera de
+git): los TARGET de la traza son esos; el rasterizador de la Mac no cambia.
+
+**Recorte del overscan:** `SALSA64_DATA_DIR/overscan.cfg`, en píxeles de la
+N64 a 320 × 240 por lado (un número: todos; dos: horizontal y vertical;
+cuatro: izquierda, derecha, arriba, abajo; `0` lo apaga). **Encendido por
+omisión con 8 y 6 (2,5 % por lado)**: es lo que una tele de tubo esconde y
+donde los juegos dejan basura (las columnas azules de GoldenEye; los HUD
+quedan dentro). Se escala con la imagen del VI (a 640 de ancho recorta
+16). Vale para el destino del RSX y para la copia de la RDRAM; las ROMs de
+prueba se presentan enteras (sus verificaciones leen la pantalla por
+posición) y las capturas salen del tamaño recortado. En rsxkit,
+`rsxkit_target_present` acepta ahora cualquier columna (la textura toma la
+fila entera y la columna va en las coordenadas de textura; antes el offset
+se redondeaba a 32 píxeles).
+
+**Fondo negro de Banjo (c) — no es presentación:** en la Mac también sale
+negro (cielo y paisaje) tras Banjo tocando. En la tarea del campo 2400 el
+primer dibujo tras el borrado son 8 triángulos con textura, w de −88 a
+1321 y z/w hasta 117 (el domo del cielo): el rasterizador de la Mac los
+descarta por w ≤ 0 y en el RSX quedan fuera por z/w > 1 (el z normalizado
+se pasa de 1 también en objetos normales: 1,05–1,36). Le toca a la HLE
+(trabajo de F3D): la proyección o el recorte de esos triángulos. El síntoma
+(b) (escena «desplazada», mitad izquierda vacía, pasto solo abajo) coincide
+con la escena sin fondo: Banjo a la derecha sobre una franja de pasto y
+todo lo demás negro. Pedir al autor que lo vuelva a mirar con el fondo
+arreglado antes de buscar otra cosa.
+
+Herramientas (`salsa64-run`): `--pad "0:…"` conecta el control desde el
+arranque (antes el primer estado entraba al terminar el campo 1; en la PS3
+el puerto 1 siempre está); `--trace-exc` imprime los bits IP de Cause y
+MI_INTR/MASK; variables `SALSA64_GFX_CYCLES`, `SALSA64_DP_CYCLES` y
+`SALSA64_AUDIO_CYCLES` para probar otros tiempos del RSP; ganchos de
+depuración `-DSALSA64_DEBUG_PI` (DMA del PI) y `-DSALSA64_DEBUG_DP`
+(registros del DP, escrituras de SP_STATUS e interrupción del DP), como
+`SALSA64_DEBUG_SPMEM`.
+
+Pendiente:
+- [ ] PS3 real (paquete «Salsa64 presentación», SLSA00084): Banjo sin
+      parpadeo y entero (su respaldo ya está en `/dev_hdd0/salsa64/banjo.z64`),
+      pausa de Zelda visible, GoldenEye sin las columnas azules, un minuto de
+      Zelda, SM64 y Mario Kart sin regresiones. El autor confirma.
+- [ ] HLE: el cielo y el paisaje de Banjo (arriba). Trabajo de F3D.
+- [ ] LLE: con `--lle=all` Banjo no arranca (la primera tarea corre 958 M
+      instrucciones sin tocar COP0); no es del freeze. Trabajo del LLE.
+- [ ] El VI de Banjo muestra 213 de 240 líneas (V_VIDEO 61–488): en una
+      tele quedarían bandas; aquí se estira a 4:3. Colocar la imagen según
+      la ventana del VI cuando haya un caso que lo necesite.
+
 ## 2026-10-10 — Kokiri «en colores planos»: es el sol cenital, no la HLE (referencia con mupen64plus)
 
 Reporte (PS3 y rasterizador de la Mac): en el bosque
@@ -72,9 +173,10 @@ Pendiente:
       huecos crema.
 ## Pendiente: trabajo de presentación (anotado el 2026-10-10)
 
-Se lanza cuando cierre el trabajo de texturas de Kokiri. Los tres casos están en
-`src/rdp/rdp.c` (qué destino del RSX se presenta en cada campo):
-- [ ] **Banjo-Kazooie parpadea** muy fuerte (visto por el autor en la PS3;
+Resuelto en la entrada «Presentación: Banjo-Kazooie…» de arriba (falta
+confirmar en la PS3). Los tres casos estaban en `src/rdp/rdp.c` (qué
+destino del RSX se presenta en cada campo):
+- [x] **Banjo-Kazooie parpadea** muy fuerte (visto por el autor en la PS3;
       video de 1,6 s en la intro, Banjo tocando el banjo). Tres síntomas: (a)
       ~1 de cada 3 cuadros del video (30 cps) sale casi negro con solo la parte
       de arriba de la cabeza de Banjo: imagen vieja o a medio dibujar
@@ -84,10 +186,10 @@ Se lanza cuando cierre el trabajo de texturas de Kokiri. Los tres casos están e
       VI, viewport y scissor; (c) falta el fondo (cielo y paisaje negros).
       Revisar cómo alterna sus framebuffers y si usa efectos que leen el
       framebuffer.
-- [ ] **Menú de pausa de Zelda negro en la PS3:** el juego pone color images
+- [x] **Menú de pausa de Zelda negro en la PS3:** el juego pone color images
       de 64 de ancho en la dirección del framebuffer y se pierde el destino de
       320 («0 del RSX»); en el rasterizador de la Mac se ve bien.
-- [ ] **Recorte del overscan:** GoldenEye deja franjas azules a los costados
+- [x] **Recorte del overscan:** GoldenEye deja franjas azules a los costados
       (su scissor 3D cubre las columnas 1–318 sobre un relleno azul).
 
 ## 2026-10-10 — Fase 6: prototipo de LLE del RSP (microcódigo real) en host y SPE
@@ -237,7 +339,8 @@ sacadas de su log; receta en la entrada de arriba):
       No era error: es el sol cenital de mediodía (ver la entrada «Kokiri
       “en colores planos”», con la referencia de mupen64plus). Queda
       confirmar en la PS3 que se ve como en la Mac.
-- [ ] **Menú de pausa en negro** (frontend/rdp): con el menú abierto cada
+- [x] **Menú de pausa en negro** (frontend/rdp; resuelto por el trabajo de
+      presentación, `src/rdp/targets.c`): con el menú abierto cada
       tarea (30/s) pone tres color images: dos de **64 de ancho** (0x3b8800
       y **0x3b5000, la misma dirección del framebuffer**) y luego
       0x3b5000/320; el VI sigue mostrando 0x3b5280/0x3daa80. En la PS3 el
@@ -497,9 +600,10 @@ Pendiente:
       precalculada) y se aproximan (75 000 en 52 s de Dam). Hace falta un
       término S·Sa por vértice en la combinación del RSX (rsxkit y
       src/rdp) o el generador de fragment programs de la Fase 4.
-- [ ] GoldenEye: las franjas azules de los costados son del juego (3D con
+- [x] GoldenEye: las franjas azules de los costados son del juego (3D con
       scissor en las columnas 1–318 sobre un relleno 0x1199); en una tele
-      quedan en el overscan. Opción de recorte en el frontend.
+      quedan en el overscan. Opción de recorte en el frontend
+      (`overscan.cfg`, trabajo de presentación).
 - [ ] Star Fox 64: un cuadrito con textura abajo a la izquierda en el
       logo (host). Revisar.
 - [ ] G_LINE3D de F3D (no lo usan SM64 ni GoldenEye) sin implementar.

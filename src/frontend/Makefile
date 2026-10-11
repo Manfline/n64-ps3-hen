@@ -7,7 +7,7 @@ SRCS    := main.c audio_out.c audio_sync.c pacer.c padmap.c replay.c savefile.c 
 
 R       := ../..
 COMMON  := src/platform/ps3/log.c src/platform/ps3/rec_cache.c src/platform/ps3/gfx_spu.c \
-           src/platform/ps3/audio_spu.c src/platform/ps3/rsp_spu.c src/rdp/rdp.c \
+           src/platform/ps3/audio_spu.c src/platform/ps3/rsp_spu.c src/rdp/rdp.c src/rdp/targets.c \
            $(patsubst $(R)/%,%,$(wildcard $(R)/src/core/*.c $(R)/src/cpu/*.c $(R)/src/rsp/gfx/*.c $(R)/src/rsp/audio/*.c \
                                           $(R)/src/rsp/lle/*.c))
 DATA    := vitest_rom gfxtest_rom audiotest_rom

@@ -60,6 +60,11 @@
  * "audiotest" en embedded, la ROM de prueba del audio se verifica sola
  * (selftest_audio.c) y sigue sonando.
  *
+ * Presentación: la imagen del VI sin el overscan (SALSA64_DATA_DIR/
+ * overscan.cfg: píxeles por lado a 320 × 240; por omisión 8 y 6, 0 la
+ * apaga), escalada a 4:3. Qué destino del RSX se presenta lo decide
+ * src/rdp/targets.c.
+ *
  * Capturas: con una ROM del disco y SALSA64_DATA_DIR/capturas presente,
  * cada SHOT_US se guarda la pantalla en SALSA64_DATA_DIR/screen-N.ppm (N de
  * 1 a SHOT_MAX, en ronda), para verla desde la Mac por FTP. Cada captura
@@ -133,6 +138,7 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define TURBO_PATH   SALSA64_DATA_DIR "/turbo"
 #define LLE_PATH     SALSA64_DATA_DIR "/lle"
 #define SHOTS_PATH   SALSA64_DATA_DIR "/capturas"
+#define OVERSCAN_PATH SALSA64_DATA_DIR "/overscan.cfg"
 #define ROM_MAX      (64u << 20)
 #define FB_MAX_W     640
 #define FB_MAX_H     576
@@ -568,6 +574,59 @@ static enum salsa64_lle_mode lle_config(void)
 	return strcmp(word, "all") == 0 ? SALSA64_LLE_ALL : SALSA64_LLE_AUTO;
 }
 
+/* Recorte del overscan: los bordes de la imagen que una tele de tubo no
+ * muestra (y donde los juegos dejan basura: GoldenEye rellena de azul la
+ * primera y la última columna). En píxeles de la N64 a 320 × 240, por
+ * lado; se escala con la imagen del VI (a 640 de ancho recorta el doble).
+ * Por omisión 8 y 6 (2,5 % por lado); overscan.cfg lo cambia con un
+ * número (todos los lados), dos (horizontal, vertical) o cuatro
+ * (izquierda, derecha, arriba, abajo); 0 lo apaga. Las ROMs de prueba se
+ * presentan enteras (sus verificaciones leen la pantalla por posición). */
+static struct { uint32_t left, right, top, bottom; } overscan = { 8, 8, 6, 6 };
+
+static void load_overscan(void)
+{
+	FILE *f = fopen(OVERSCAN_PATH, "r");
+	if (!f) {
+		salsa64_log("overscan: recorte %u %u %u %u por omisión (no hay %s)", overscan.left, overscan.right,
+			    overscan.top, overscan.bottom, OVERSCAN_PATH);
+		return;
+	}
+	unsigned v[4] = { 0, 0, 0, 0 };
+	int n = fscanf(f, "%u %u %u %u", &v[0], &v[1], &v[2], &v[3]);
+	fclose(f);
+	for (int i = 0; i < 4; i++)
+		if (v[i] > 64)
+			v[i] = 64;
+	if (n == 1)
+		overscan.left = overscan.right = overscan.top = overscan.bottom = v[0];
+	else if (n == 2)
+		overscan.left = overscan.right = v[0], overscan.top = overscan.bottom = v[1];
+	else if (n == 4)
+		overscan.left = v[0], overscan.right = v[1], overscan.top = v[2], overscan.bottom = v[3];
+	else
+		salsa64_log("overscan: %s sin números; queda el recorte por omisión", OVERSCAN_PATH);
+	salsa64_log("overscan: recorte %u %u %u %u (%s)", overscan.left, overscan.right, overscan.top,
+		    overscan.bottom, OVERSCAN_PATH);
+}
+
+/* El recorte para una imagen del VI (0 con las ROMs de prueba). */
+static struct salsa64_overscan overscan_for(const struct salsa64_vi_frame *f)
+{
+	struct salsa64_overscan c = { 0, 0, 0, 0 };
+	if (selftest_on || gfxtest_on || audiotest_on || !f->width || !f->height)
+		return c;
+	c.left = overscan.left * f->width / 320;
+	c.right = overscan.right * f->width / 320;
+	c.top = overscan.top * f->height / 240;
+	c.bottom = overscan.bottom * f->height / 240;
+	if (c.left + c.right >= f->width)
+		c.left = c.right = 0;
+	if (c.top + c.bottom >= f->height)
+		c.top = c.bottom = 0;
+	return c;
+}
+
 static int file_exists(const char *path)
 {
 	FILE *f = fopen(path, "r");
@@ -790,15 +849,22 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	bool check = false, check_gfx = false;
 	uint64_t t0 = sysGetSystemTime();
 	rsxkit_frame_begin(0x000000);
+	/* Lo que se ve: la imagen del VI sin el overscan (las capturas van de
+	 * ese tamaño). */
+	struct salsa64_overscan crop = overscan_for(&m->f);
+	struct salsa64_vi_frame shown = m->f;
+	shown.width -= crop.left + crop.right;
+	shown.height -= crop.top + crop.bottom;
 	if (m->f.width) {
-		if (salsa64_rdp_present(&m->f, m->field, &pres.view, &r)) {
+		if (salsa64_rdp_present(&m->f, m->field, &pres.view, &crop, &r)) {
 			pres.rsx_frames++;
 			if (gfxtest_on && pres.result == SELFTEST_RUNNING)
 				check_gfx = gfxtest_want_screen();
 		} else if (have) {
 			check = (m->flags & FIELD_CHECK) != 0;
-			rsxkit_fb_upload(pres.fb, snap_buf[slot], m->f.width, m->f.height, m->f.width * m->f.bpp,
-					 m->f.bpp == 4 ? RSXKIT_RGBA8888 : RSXKIT_RGBA5551);
+			uint32_t line = m->f.width * m->f.bpp;
+			rsxkit_fb_upload(pres.fb, snap_buf[slot] + crop.top * line + crop.left * m->f.bpp, shown.width,
+					 shown.height, line, m->f.bpp == 4 ? RSXKIT_RGBA8888 : RSXKIT_RGBA5551);
 			rsxkit_fb_draw(pres.fb, &pres.view, &r);
 		} else {
 			pres.blank++;
@@ -818,14 +884,14 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		char path[64];
 		snprintf(path, sizeof path, SALSA64_DATA_DIR "/campo-%u.ppm", m->field);
 		rsxkit_finish();
-		salsa64_screenshot(path, &m->f, &r);
+		salsa64_screenshot(path, &shown, &r);
 		salsa64_log("captura %s", path);
 	} else if (pres.shots_on && !cap_every && !selftest_on && !gfxtest_on && !audiotest_on && m->f.width &&
 		   (pres.autotest ? m->field / AUTO_SHOT_FIELDS != pres.shots : now - pres.t_shot >= SHOT_US)) {
 		char path[64];
 		snprintf(path, sizeof path, SALSA64_DATA_DIR "/screen-%u.ppm", pres.shots % SHOT_MAX + 1);
 		rsxkit_finish();
-		salsa64_screenshot(path, &m->f, &r);
+		salsa64_screenshot(path, &shown, &r);
 		salsa64_log("captura %s (campo %u)", path, m->field);
 		pres.shots = pres.autotest ? m->field / AUTO_SHOT_FIELDS : pres.shots + 1;
 		pres.t_shot = now;
@@ -1142,6 +1208,7 @@ int main(void)
 
 	ioPadInit(7);
 	load_padmap();
+	load_overscan();
 	sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, sysutil_cb, NULL);
 	if (selftest_on)
 		selftest_start();

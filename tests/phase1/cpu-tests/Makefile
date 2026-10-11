@@ -7,7 +7,7 @@ SRCS    := main.c rombench.c
 R       := ../../..
 COMMON  := src/platform/ps3/log.c src/platform/ps3/rec_cache.c \
            $(patsubst $(R)/%,%,$(wildcard $(R)/src/core/*.c $(R)/src/cpu/*.c $(R)/src/rsp/gfx/*.c $(R)/src/rsp/audio/*.c \
-                                          $(R)/src/rsp/lle/*.c)) src/frontend/padmap.c src/frontend/pacer.c src/frontend/audio_sync.c \
+                                          $(R)/src/rsp/lle/*.c)) src/frontend/padmap.c src/frontend/pacer.c src/frontend/audio_sync.c src/rdp/targets.c \
            $(filter-out tests/unit/main_host.c,$(patsubst $(R)/%,%,$(wildcard $(R)/tests/unit/*.c)))
 CFLAGS  := -ffp-contract=off -fno-math-errno -I$(CURDIR)/$(R)/tests/unit
 LIBS    := -lnet -lsysutil -lsysmodule -lrt -llv2 -lm

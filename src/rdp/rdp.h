@@ -6,7 +6,9 @@
  * render en el RSX, a una escala entera de la resolución de la N64 (3× a
  * 720p); cada z image, su profundidad. Al presentar un campo, si el VI
  * muestra una color image que dibujó el RSX, se presenta ese destino; si
- * no (imagen hecha por el CPU), el frontend usa el framebuffer 2D.
+ * no (imagen hecha por el CPU), el frontend usa el framebuffer 2D. Qué
+ * destino es ese, y cuál se recicla cuando no caben más, lo decide
+ * targets.c (portable, con pruebas en tests/unit/test_targets.c).
  *
  * Los búferes de salida de la HLE (vértices, comandos, texturas) viven en
  * memoria principal mapeada al RSX, en varios juegos que se turnan: el SPE
@@ -54,10 +56,17 @@ uint32_t salsa64_rdp_flush(uint32_t upto);
  * manda con cada campo. */
 uint32_t salsa64_rdp_tasks_done(void);
 
+/* Recorte del overscan al presentar, en píxeles de la imagen del VI por
+ * cada lado (0: sin recorte). */
+struct salsa64_overscan {
+	uint32_t left, right, top, bottom;
+};
+
 /* Si el VI muestra una color image dibujada por el RSX en los últimos
- * campos, la presenta (en el cuadro en curso de rsxkit) y devuelve true. */
+ * campos, la presenta (en el cuadro en curso de rsxkit), sin los bordes de
+ * `crop` (NULL: entera), y devuelve true. */
 bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const rsxkit_view *view,
-			 rsxkit_rect *out);
+			 const struct salsa64_overscan *crop, rsxkit_rect *out);
 
 void salsa64_rdp_get_stats(struct salsa64_rdp_stats *out);
 

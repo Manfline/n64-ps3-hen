@@ -14,7 +14,7 @@ LDFLAGS := $(SAN) $(EXTRA_LDFLAGS)
 LDLIBS  := -lm
 
 CORE_SRCS := $(wildcard $(ROOT)/src/core/*.c $(ROOT)/src/cpu/*.c $(ROOT)/src/rsp/gfx/*.c $(ROOT)/src/rsp/audio/*.c $(ROOT)/src/rsp/lle/*.c) $(ROOT)/src/frontend/padmap.c $(ROOT)/src/frontend/pacer.c \
-             $(ROOT)/src/frontend/audio_sync.c
+             $(ROOT)/src/frontend/audio_sync.c $(ROOT)/src/rdp/targets.c
 TEST_SRCS := $(wildcard $(CURDIR)/*.c)
 OBJS      := $(patsubst $(ROOT)/%.c,$(OUT)/obj/%.o,$(CORE_SRCS) $(TEST_SRCS))
 

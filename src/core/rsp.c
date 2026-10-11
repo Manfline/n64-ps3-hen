@@ -9,7 +9,8 @@
  * emulando (o, si está en un bucle de espera, el backend duerme un poco:
  * así el reloj emulado no se adelanta al real); si no sabe, se le espera
  * (`finish`). La interrupción del DP llega dp_cycles después de la del
- * SP, si la lista terminó con G_RDPFULLSYNC. mupen64plus-core usa retardos
+ * SP, si la lista terminó con G_RDPFULLSYNC (y el RDP no está congelado:
+ * salsa64_rsp_dp_done). mupen64plus-core usa retardos
  * del mismo orden (unos miles de ciclos); aquí son más largos para que el
  * SPE alcance a terminar sin frenar al CPU, y se pueden cambiar.
  *
@@ -57,6 +58,8 @@ static bool task_done(struct salsa64_bus *bus, bool idle)
 	return true;
 }
 
+static void dp_sync_at(struct salsa64_bus *bus, uint64_t now);
+
 static void task_event(void *ctx, uint64_t when)
 {
 	struct salsa64_bus *bus = ctx;
@@ -95,21 +98,50 @@ static void task_event(void *ctx, uint64_t when)
 	if (flags & SALSA64_GFX_CUT)
 		rsp->stats.cut++;
 	if (flags & (SALSA64_GFX_FULLSYNC | SALSA64_GFX_CUT))
-		salsa64_sched_set(rsp->sched, SALSA64_EV_DP_SYNC, when + rsp->dp_cycles);
+		dp_sync_at(bus, when);
 }
+
+#ifdef SALSA64_DEBUG_DP
+void salsa64_debug_dp(int kind, uint32_t reg, uint32_t v);
+#endif
 
 static void dp_event(void *ctx, uint64_t when)
 {
 	(void)when;
+#ifdef SALSA64_DEBUG_DP
+	salsa64_debug_dp(3, 0, 0);
+#endif
 	salsa64_mi_raise(ctx, SALSA64_IRQ_DP);
+}
+
+/* Congelado (FREEZE), el RDP no ejecuta: la interrupción espera a que el CPU
+ * lo descongele. Banjo-Kazooie lo congela en el manejador de la interrupción
+ * del DP, arranca la tarea del cuadro siguiente así y la descongela
+ * después; si la interrupción de esa tarea llegara en el acto, el juego la
+ * perdería y se quedaría esperando al RDP (2 cuadros y pantalla fija). */
+static void dp_sync_at(struct salsa64_bus *bus, uint64_t now)
+{
+	struct salsa64_rsp *rsp = &bus->rsp;
+	if (bus->dp[SALSA64_DP_STATUS] & SALSA64_DP_STATUS_FREEZE) {
+		rsp->dp_held = true;
+		return;
+	}
+	if (rsp->sched)
+		salsa64_sched_set(rsp->sched, SALSA64_EV_DP_SYNC, now + rsp->dp_cycles);
 }
 
 void salsa64_rsp_dp_done(struct salsa64_bus *bus)
 {
+	dp_sync_at(bus, bus->cpu ? bus->cpu->cycles : 0);
+}
+
+void salsa64_rsp_dp_unfreeze(struct salsa64_bus *bus)
+{
 	struct salsa64_rsp *rsp = &bus->rsp;
-	uint64_t now = bus->cpu ? bus->cpu->cycles : 0;
-	if (rsp->sched)
-		salsa64_sched_set(rsp->sched, SALSA64_EV_DP_SYNC, now + rsp->dp_cycles);
+	if (!rsp->dp_held)
+		return;
+	rsp->dp_held = false;
+	salsa64_rsp_dp_done(bus);
 }
 
 void salsa64_rsp_sync(struct salsa64_bus *bus)
@@ -156,6 +188,7 @@ void salsa64_rsp_reset(struct salsa64_bus *bus)
 	else if (rsp->busy == SALSA64_TASK_LLE && rsp->lle)
 		rsp->lle->finish(rsp->lle->ctx);
 	rsp->busy = 0;
+	rsp->dp_held = false;
 	if (rsp->lle && rsp->lle->reset)
 		rsp->lle->reset(rsp->lle->ctx);
 	if (rsp->sched) {
@@ -326,7 +359,7 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 		 * (GoldenEye antes de reconocer su Fast3D 2.0G). */
 		rsp->stats.unknown_gbi++;
 		rsp->stats.unknown_data = task.ucode_data;
-		salsa64_sched_set(rsp->sched, SALSA64_EV_DP_SYNC, now + rsp->dp_cycles);
+		dp_sync_at(bus, now);
 	} else if (task.type == SALSA64_TASK_AUDIO && valid && rsp->sched) {
 		/* La HLE de audio (rsp_audio.c y src/rsp/audio; en la PS3, el SPE
 		 * 1). Con un ABI desconocido la tarea solo termina. */
