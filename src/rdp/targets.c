@@ -31,9 +31,14 @@ static int evict_class(const struct rdp_targets *s, const struct rdp_target *t)
 	return 2;
 }
 
-int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32_t siz, bool *fresh)
+int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32_t siz, uint32_t min_lh,
+		    bool *fresh)
 {
 	int free_i = -1, victim = -1;
+	uint32_t lw = width ? width : 320;
+	uint32_t lh = lw * 3 / 4;
+	if (min_lh > lh)
+		lh = min_lh;
 	for (int i = 0; i < RDP_TARGETS_MAX; i++) {
 		struct rdp_target *t = &s->t[i];
 		if (!t->used) {
@@ -42,7 +47,16 @@ int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32
 			continue;
 		}
 		if (t->addr == addr && t->width == width) {
-			*fresh = false;
+			if (t->lh >= lh) {
+				*fresh = false;
+				return i;
+			}
+			/* Crece: la superficie se vuelve a crear (lo dibujado hasta
+			 * ahora se pierde; pasa una vez). */
+			t->lh = lh;
+			t->drawn = false;
+			s->created++;
+			*fresh = true;
 			return i;
 		}
 		if (i == s->shown)
@@ -60,14 +74,13 @@ int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32
 	if (i < 0)
 		i = s->shown >= 0 ? s->shown : 0;  /* no pasa: hay más de una ranura */
 	struct rdp_target *t = &s->t[i];
-	uint32_t lw = width ? width : 320;
 	t->used = true;
 	t->drawn = false;
 	t->addr = addr;
 	t->width = width;
 	t->bpp = siz == IM_SIZ_32b ? 4 : siz == IM_SIZ_8b ? 1 : 2;
 	t->lw = lw;
-	t->lh = lw * 3 / 4;
+	t->lh = lh;
 	t->last_field = s->field;
 	s->created++;
 	*fresh = true;

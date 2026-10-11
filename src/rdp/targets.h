@@ -9,11 +9,13 @@
  * rdp_targets_get dice que cambió de imagen.
  *
  * Cada destino es una color image (dirección, ancho); su alto lógico es
- * una conjetura (3/4 del ancho), porque la N64 no declara el alto. Por eso
- * dos framebuffers seguidos se solapan en la cuenta: el que empieza más
- * cerca del origen del VI es el que se muestra (Banjo-Kazooie alterna dos
- * de 292 × 216 y presentaba el otro, con solo sus últimas líneas, cuando el
- * RDP lo acababa de dibujar).
+ * una conjetura, porque la N64 no declara el alto: 3/4 del ancho, o más si
+ * las tijeras de los dibujos que recibe llegan más abajo (la imagen
+ * auxiliar de Conker es CI8 de 64 × 64: con 48 líneas, el RSX escribía
+ * fuera de la superficie). Por eso dos framebuffers seguidos se solapan en
+ * la cuenta: el que empieza más cerca del origen del VI es el que se
+ * muestra (Banjo-Kazooie alterna dos de 292 × 216 y presentaba el otro, con
+ * solo sus últimas líneas, cuando el RDP lo acababa de dibujar).
  */
 #ifndef SALSA64_RDP_TARGETS_H
 #define SALSA64_RDP_TARGETS_H
@@ -59,13 +61,16 @@ struct rdp_present {
 void rdp_targets_init(struct rdp_targets *s);
 
 /* Ranura de la color image (addr, width, siz de G_SETCIMG), existente o
- * reciclada. *fresh: la ranura cambió de imagen (o es nueva): hay que
- * crear su superficie de lw × lh (y destruir la anterior si la había).
+ * reciclada, con al menos `min_lh` líneas (0: las de siempre, 3/4 del
+ * ancho; quien llama pasa hasta dónde llegan las tijeras de los dibujos
+ * que vienen). *fresh: la ranura cambió de imagen, es nueva o creció: hay
+ * que crear su superficie de lw × lh (y destruir la anterior si la había).
  * Al reciclar, nunca se toma la ranura presentada en el último campo;
  * entre las demás se prefiere una vieja (RDP_TARGETS_STALE), después una
  * de un ancho distinto al del VI (imagen auxiliar, no un framebuffer) y
  * al final la dibujada hace más campos. */
-int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32_t siz, bool *fresh);
+int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32_t siz, uint32_t min_lh,
+		    bool *fresh);
 
 /* Se dibujó en la ranura durante el campo en curso. */
 void rdp_targets_drawn(struct rdp_targets *s, int slot);

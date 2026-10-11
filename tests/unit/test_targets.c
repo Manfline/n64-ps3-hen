@@ -32,7 +32,7 @@ static struct salsa64_vi_frame frame(uint32_t origin, uint32_t width, uint32_t h
 static int draw(uint32_t addr, uint32_t width)
 {
 	bool fresh;
-	int i = rdp_targets_get(&s, addr, width, SIZ_16b, &fresh);
+	int i = rdp_targets_get(&s, addr, width, SIZ_16b, 0, &fresh);
 	rdp_targets_drawn(&s, i);
 	return i;
 }
@@ -184,7 +184,7 @@ static void targets_recycle_order(void)
 	CHECK_EQ(s.created, RDP_TARGETS_MAX);
 	/* Una más: sale la auxiliar más vieja (la del campo 2). */
 	bool fresh;
-	int n = rdp_targets_get(&s, 0x200000, 64, SIZ_16b, &fresh);
+	int n = rdp_targets_get(&s, 0x200000, 64, SIZ_16b, 0, &fresh);
 	CHECK(fresh);
 	CHECK(n != a && n != b);
 	CHECK_EQ(s.t[n].addr, 0x200000);
@@ -201,13 +201,47 @@ static void targets_recycle_order(void)
 		draw(0x200000, 64);
 		present(field, A + 0x280, 320, 237);
 	}
-	n = rdp_targets_get(&s, 0x300000, 64, SIZ_16b, &fresh);
+	n = rdp_targets_get(&s, 0x300000, 64, SIZ_16b, 0, &fresh);
 	CHECK(fresh);
 	CHECK_EQ(n, b);
 }
 
+/* Conker: a mitad del cuadro dibuja en una color image CI8 de 64 de ancho
+ * con tijeras hasta la línea 65 (es de 64 × 64): el destino nace con ese
+ * alto y no con 48; si una tarea posterior llega más abajo, crece (se
+ * vuelve a crear). El framebuffer de 292 × 216 no crece con 216. */
+static void targets_height_from_scissor(void)
+{
+	const uint32_t A = 0x3d6300, X = 0xde080;
+	rdp_targets_init(&s);
+	bool fresh;
+	int a = rdp_targets_get(&s, A, 292, SIZ_16b, 216, &fresh);
+	CHECK(fresh);
+	CHECK_EQ(s.t[a].lh, 219);
+	int x = rdp_targets_get(&s, X, 64, 1u, 65, &fresh);
+	CHECK(fresh);
+	CHECK_EQ(s.t[x].lw, 64);
+	CHECK_EQ(s.t[x].lh, 65);
+	CHECK_EQ(s.t[x].bpp, 1);
+	CHECK_EQ(rdp_targets_get(&s, X, 64, 1u, 60, &fresh), x);
+	CHECK(!fresh);
+	CHECK_EQ(s.t[x].lh, 65);
+	CHECK_EQ(rdp_targets_get(&s, X, 64, 1u, 128, &fresh), x);
+	CHECK(fresh);
+	CHECK_EQ(s.t[x].lh, 128);
+	CHECK_EQ(rdp_targets_get(&s, A, 292, SIZ_16b, 0, &fresh), a);
+	CHECK(!fresh);
+	CHECK_EQ(s.created, 3);
+	/* La presentación usa el alto real: el VI muestra 213 líneas de A. */
+	rdp_targets_drawn(&s, a);
+	struct rdp_present p = present(1, A + 584, 292, 213);
+	CHECK_EQ(p.slot, a);
+	CHECK_EQ(p.h, 213);
+}
+
 void t_suite_targets(void)
 {
+	RUN(targets_height_from_scissor);
 	RUN(targets_two_buffers_overlapping);
 	RUN(targets_same_addr_two_widths);
 	RUN(targets_aux_image_on_framebuffer);

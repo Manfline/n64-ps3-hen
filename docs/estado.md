@@ -35,14 +35,33 @@ el destino equivocado; con la regla nueva (entre destinos del ancho del VI,
 el que empieza más cerca del origen; luego el más reciente), 12, todos de
 arranque o cambio de escena (el otro framebuffer aún sin dibujar).
 
+**Conker en la PS3 (3D quemado y parpadeando, capturas del RSX negras;
+pedido en main tras integrar la rama de Rare):** mismo error
+que Banjo. La repetición del volcado de la PS3 (campo 3600) en RPCS3 con
+`tools/rpcs3-run.py --replay` dibuja la escena bien: la traducción al RSX
+es correcta. En la Mac (70 s con `--trace-vi` y `--trace-gfx`) Conker
+alterna dos framebuffers de 292 × 216 (0x3b7600 y 0x3d6300, a 216 líneas
+uno del otro) y a mitad de cada tarea dibuja en la color image CI8 de 64 de
+ancho (0xde080) y vuelve: con la regla vieja 591 de 4144 campos presentaban
+las 2 últimas líneas del otro framebuffer (negras, o una franja de color
+estirada a toda la pantalla: lo «quemado»); con la nueva, 0. Además, el
+alto supuesto de un destino (3/4 del ancho: 48 para la de 64) ahora crece
+hasta donde llegan las tijeras de los dibujos que recibe (`rdp.c` mira los
+dibujos que siguen a cada TARGET; la CI8 de Conker es de 64 × 64 y su
+FILL va de 0 a 65): la superficie se crea del alto real y, si una tarea
+posterior llega más abajo, se vuelve a crear más grande. El alto de la
+presentación (`h`) también lo usa. (rsxkit ya recortaba tijeras y
+borrados a la superficie: no se escribía fuera.)
+
 **Tabla de destinos portable:** `src/rdp/targets.c` (sin rsxkit): qué
 color image tiene superficie, cuál se recicla y cuál se presenta; `rdp.c`
 solo guarda las superficies por ranura. Pruebas en
-`tests/unit/test_targets.c` (6): dos framebuffers alternos en direcciones
-distintas que se solapan en la cuenta (Banjo), la misma dirección con dos
-anchos (GoldenEye 320/440), color images de 64 sobre el framebuffer (Zelda
-en pausa), VI sostenido sin dibujar (GoldenEye cargando), dibujado con el
-VI apagado (SM64) y el orden de reciclado.
+`tests/unit/test_targets.c` (7): dos framebuffers alternos en direcciones
+distintas que se solapan en la cuenta (Banjo, Conker), la misma dirección
+con dos anchos (GoldenEye 320/440), color images de 64 sobre el
+framebuffer (Zelda en pausa), VI sostenido sin dibujar (GoldenEye
+cargando), dibujado con el VI apagado (SM64), el orden de reciclado y el
+alto por las tijeras (Conker).
 
 **Pausa de Zelda negra en la PS3:** con el menú, cada tarea pone 3 color
 images y alternando framebuffers son 6 distintas (0x3b8800/64,
@@ -92,8 +111,9 @@ depuración `-DSALSA64_DEBUG_PI` (DMA del PI) y `-DSALSA64_DEBUG_DP`
 Pendiente:
 - [ ] PS3 real (paquete «Salsa64 presentación», SLSA00084): Banjo sin
       parpadeo y entero (su respaldo ya está en `/dev_hdd0/salsa64/banjo.z64`),
-      pausa de Zelda visible, GoldenEye sin las columnas azules, un minuto de
-      Zelda, SM64 y Mario Kart sin regresiones. El autor confirma.
+      Conker con el 3D bien (`conker.z64`), pausa de Zelda visible, GoldenEye
+      sin las columnas azules, un minuto de Zelda, SM64 y Mario Kart sin
+      regresiones. El autor confirma.
 - [ ] HLE: el cielo y el paisaje de Banjo (arriba). Trabajo de F3D.
 - [ ] LLE: con `--lle=all` Banjo no arranca (la primera tarea corre 958 M
       instrucciones sin tocar COP0); no es del freeze. Trabajo del LLE.
@@ -240,8 +260,9 @@ Pendiente:
       cortadas, naudio con MP3 sin errores. **Mario Kart 64** (no
       regresión): 65 s al 100 % de NTSC, 0 tareas cortadas. `embedded`
       quedó como estaba (`file:oot.z64`).
-- [ ] **Conker en la PS3**: arranca y suena, pero el 3D sale quemado y
-      parpadea y no se ve el logo de N64; las capturas del RSX de las
+- [x] **Conker en la PS3** (resuelto en la entrada «Presentación:
+      Banjo-Kazooie…» de arriba, falta confirmar en la PS3): arranca y
+      suena, pero el 3D sale quemado y parpadea y no se ve el logo de N64; las capturas del RSX de las
       escenas 3D (campos 3000, 3600, 4200) salen negras y el logo 2D de
       Nintendo sí. El volcado de la HLE hecho en el SPE (`gfxdump` del campo
       3600) dibujado en la Mac con `--raster-dump` sale bien e igual al

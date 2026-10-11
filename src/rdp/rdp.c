@@ -189,12 +189,31 @@ static void acquire(void *ctx, struct gfx_job *job)
 	rdp.acquired = n + 1;
 }
 
+/* Hasta qué línea llegan las tijeras de los dibujos que siguen a un
+ * TARGET (hasta el siguiente): el alto mínimo de su superficie. */
+static uint32_t scissor_bottom(const struct set *s, uint32_t off, uint32_t cmd_bytes)
+{
+	uint32_t bottom = 0;
+	while (off + sizeof(struct gfx_cmd) <= cmd_bytes) {
+		const struct gfx_cmd *c = (const struct gfx_cmd *)(s->cmd + off);
+		if (c->op == GFX_OP_END || c->op == GFX_OP_TARGET || c->size < sizeof *c)
+			break;
+		if (c->op == GFX_OP_DRAW) {
+			uint32_t y1 = (((const struct gfx_draw *)c)->scissor[3] + 3) / 4;
+			if (y1 > bottom)
+				bottom = y1;
+		}
+		off += c->size;
+	}
+	return bottom;
+}
+
 /* Ranura (con superficie) de una color image; -1 si el RSX no tiene
  * memoria para una nueva. */
-static int get_target(uint32_t addr, uint32_t width, uint32_t siz)
+static int get_target(uint32_t addr, uint32_t width, uint32_t siz, uint32_t min_lh)
 {
 	bool fresh;
-	int i = rdp_targets_get(&rdp.tg, addr, width, siz, &fresh);
+	int i = rdp_targets_get(&rdp.tg, addr, width, siz, min_lh, &fresh);
 	if (!fresh)
 		return i;
 	if (rdp.surf[i]) {
@@ -345,7 +364,7 @@ static void translate(uint32_t n)
 			break;
 		switch (c->op) {
 		case GFX_OP_TARGET:
-			cur = get_target(c->a, c->b, c->c & 0xFF);
+			cur = get_target(c->a, c->b, c->c & 0xFF, scissor_bottom(s, off + c->size, res->cmd_bytes));
 			break;
 		case GFX_OP_ZCLEAR:
 			zclear((const struct gfx_zclear *)c);
