@@ -1,5 +1,18 @@
 # Estado
 
+## Pendiente: trabajo de presentación (anotado el 2026-10-10)
+
+Se lanza cuando cierre el trabajo de texturas de Kokiri. Los tres casos están en
+`src/rdp/rdp.c` (qué destino del RSX se presenta en cada campo):
+- [ ] **Banjo-Kazooie parpadea** muy fuerte (visto por el autor): en campos
+      alternos sale otra imagen (vieja, negra o la RDRAM). Revisar cómo alterna
+      sus framebuffers y si usa efectos que leen el framebuffer.
+- [ ] **Menú de pausa de Zelda negro en la PS3:** el juego pone color images
+      de 64 de ancho en la dirección del framebuffer y se pierde el destino de
+      320 («0 del RSX»); en el rasterizador de la Mac se ve bien.
+- [ ] **Recorte del overscan:** GoldenEye deja franjas azules a los costados
+      (su scissor 3D cubre las columnas 1–318 sobre un relleno azul).
+
 ## 2026-10-10 — Zelda OoT se colgaba al elegir la ranura: G_LOAD_UCODE (S2DEX) y el RDP que nunca terminaba
 
 Síntoma (PS3 real, main f698afe): al elegir una partida, pantalla negra con
