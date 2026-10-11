@@ -42,6 +42,10 @@ Hecho:
   Y ms); el juego leyó el control 1 Z veces (W/s)». El host imprime el
   mismo «PIF → juego» con `--pad`.
 - `docs/hilos-ppe.md` al día (fila de controles y de flancos del PIF).
+- En verde: `tools/build.sh test-host` (356 pruebas), `tools/test-roms.sh`,
+  `tools/build.sh` (sin avisos), `tools/test-phase2.sh` (RPCS3, ya con las
+  líneas nuevas del log) y `tools/test-rec.sh` (nemu64-test con las 433
+  fallas de siempre).
 
 Pendiente:
 - [ ] PS3 real con el paquete «Salsa64 control» (SLSA00092,
