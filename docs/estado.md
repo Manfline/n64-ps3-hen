@@ -634,10 +634,21 @@ sugerido: recorte → líneas del logo → framebuffer → JIT.
 - Gráficos pendientes (actualizado 2026-10-11): líneas del logo de Zelda (la
   HLE muestrea mal la segunda textura de ruido del texto «NINTENDO 64»),
   defecto en la túnica de Link, líneas azules en uniones de GoldenEye.
+- **Mario Kart, Luigi Raceway: negro arriba del muro de ladrillos** (PS3,
+  2026-10-11, en todos los paquetes): debería verse el cielo en degradado y el
+  fondo de la pista. Previo a las ramas de hoy; candidato: cómo se dibuja el
+  cielo (rectángulo o triángulos con degradado al fondo). Reproducir en el host
+  con docs/pads/mk64-luigi.pad y comparar contra mupen64plus.
 - Zelda: fondos prerrenderizados hechos (2026-10-11); JPEG a punto fijo
   (68 ms por sala en el PPE, meta < 10 ms); luego Majora's Mask.
 - Recompilador: FPU en registros, más registros fijos y refill de la TLB
   (en curso desde el 2026-10-11).
+- **Quitarle trabajo al PPE** (decidido el 2026-10-11, después de cerrar los
+  trabajos abiertos): el VR4300 se queda en el PPE (memoria, FPU IEEE y saltos
+  no le van a un SPE), pero lo demás pasa a los SPEs libres (2–5) para que el
+  hilo 0 tenga el núcleo: tarea JPEG de Zelda (68 ms en el PPE), conversión de
+  texturas, lo que quede de la presentación del hilo 1. Ordenar con
+  docs/uso-cell.md (uso medido por componente y por juego).
 - Fase 5 (posprocesado, MSAA) después de presentación y menú; recompilador
   RSP→SPU para el LLE; conversión genérica de texturas en lib/rsxkit/spu.
 
