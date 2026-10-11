@@ -45,7 +45,19 @@ Hecho (rama `charming-allen-a8e4b3`, con main 485a747):
   verde (295 con main), `tools/test-roms.sh` (nemu64-test 446, vitest, controles,
   savetest, gfxtest ×3, audiotest) y test-phase1/2 en RPCS3 OK.
 
+- **PS3 real** (paquete «Salsa64 naudio», SLSA00080): **Banjo-Kazooie y
+  Perfect Dark suenan bien** (el autor), 0 errores y 0 comandos sin
+  implementar; HLE en el SPE 1 por tarea: mediana 2,9 ms en Banjo y 5,7
+  ms en Perfect Dark (la más larga 10,4 ms), el PPE nunca espera.
+  Conker: pantalla negra y silencio como en la Mac, sus tareas sin
+  errores (1,6 ms). Detalle en docs/perf-log.md. Respaldos subidos a
+  `/dev_hdd0/salsa64/` como `banjo.z64` y `conker.z64`; `embedded` quedó
+  en `file:perfectdark.z64`, como estaba al empezar.
+
 Notas:
+- Banjo-Kazooie en la PS3: el **video parpadea** (uno de cada dos cuadros
+  sale incompleto: sin suelo y con medio Banjo) y el fondo sale negro. Es
+  de la HLE gráfica o la presentación, no del audio: para el trabajo de F3D.
 - OVERLOAD recorre 0x170 muestras como el original (el doble que los
   demás comandos, que cuentan 0x170 bytes); ningún juego lo mandó en las
   escenas a las que llegamos, así que queda sin verificar.
@@ -53,8 +65,6 @@ Notas:
   de la HLE.
 
 Falta:
-- [ ] PS3 real (paquete «Salsa64 naudio», SLSA00080): oír Banjo-Kazooie y
-      Perfect Dark, costo por tarea en el SPE (docs/perf-log.md).
 - [ ] Oír Conker cuando el trabajo de F3D lo haga avanzar (F3DEXBG).
 - [ ] Probar Donkey Kong 64 (sin respaldo; la tabla es la del original).
 - [ ] MusyX (Rogue Squadron, Resident Evil 2, Indiana Jones…).
