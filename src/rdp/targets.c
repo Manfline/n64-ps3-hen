@@ -111,12 +111,16 @@ void rdp_targets_present(struct rdp_targets *s, const struct salsa64_vi_frame *f
 	s->field = field;
 	/* El campo solo avanza cuando el VI muestra algo: lo dibujado mientras
 	 * estuvo en negro (SM64 lo apaga 26 campos al cambiar de escena) queda
-	 * con el campo de ahora, no con el de antes del apagado. */
-	for (int i = 0; i < RDP_TARGETS_MAX; i++)
+	 * con el campo de ahora, no con el de antes del apagado. La antigüedad
+	 * de cada destino (para medir el retraso de lo que se ve) se toma antes. */
+	uint32_t age[RDP_TARGETS_MAX];
+	for (int i = 0; i < RDP_TARGETS_MAX; i++) {
+		age[i] = s->t[i].drawn ? 0 : field - s->t[i].last_field;
 		if (s->t[i].drawn) {
 			s->t[i].last_field = field;
 			s->t[i].drawn = false;
 		}
+	}
 	if (f->width)
 		s->vi_width = f->width;
 
@@ -151,10 +155,11 @@ void rdp_targets_present(struct rdp_targets *s, const struct salsa64_vi_frame *f
 	s->shown_origin = f->origin;
 	s->shown_field = field;
 	out->slot = best;
-	out->y0 = out->w = out->h = 0;
+	out->y0 = out->w = out->h = out->age = 0;
 	if (best < 0)
 		return;
 	const struct rdp_target *t = &s->t[best];
+	out->age = age[best];
 	out->y0 = best_y0;
 	out->w = f->width < t->lw ? f->width : t->lw;
 	out->h = f->height < t->lh - best_y0 ? f->height : t->lh - best_y0;

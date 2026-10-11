@@ -56,6 +56,7 @@ struct rdp_present {
 	int slot;         /* -1: nada del RSX (va la copia de la RDRAM) */
 	uint32_t y0;      /* primera línea lógica (el origen del VI dentro del destino) */
 	uint32_t w, h;    /* píxeles lógicos */
+	uint32_t age;     /* campos desde que se dibujó lo presentado (0: en este campo) */
 };
 
 void rdp_targets_init(struct rdp_targets *s);

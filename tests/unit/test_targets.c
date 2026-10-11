@@ -65,9 +65,11 @@ static void targets_two_buffers_overlapping(void)
 	CHECK(b != a);
 	p = present(2, A + LINE, 292, 213);
 	CHECK_EQ(p.slot, a);
+	CHECK_EQ(p.age, 1);  /* A se dibujó en el campo 1 */
 	p = present(3, B + LINE, 292, 213);
 	CHECK_EQ(p.slot, b);
 	CHECK_EQ(p.y0, 1);
+	CHECK_EQ(p.age, 1);  /* B, dibujado antes de presentar el campo 2 */
 	/* Mientras se muestra B se dibuja A otra vez: A cubre el origen de B
 	 * (línea 217 de sus 219) y es más reciente, pero B empieza más cerca. */
 	CHECK_EQ(draw(A, 292), a);

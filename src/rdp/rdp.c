@@ -426,6 +426,9 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 	rdp_targets_present(&rdp.tg, f, field, &p);
 	if (p.slot < 0 || !rdp.surf[p.slot] || !p.w || !p.h)
 		return false;
+	rdp.stats.age_sum += p.age;
+	if (p.age > rdp.stats.age_max)
+		rdp.stats.age_max = p.age;
 	/* Recorte del overscan: la región se achica por los cuatro lados y se
 	 * presenta como una imagen más chica (misma proporción de pantalla). */
 	uint32_t cl = 0, cr = 0, ct = 0, cb = 0;

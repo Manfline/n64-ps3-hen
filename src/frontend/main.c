@@ -823,6 +823,10 @@ static struct {
 	/* Estadísticas de la ventana en curso. */
 	uint64_t us_present, us_flip;
 	uint32_t presented, blank, rsx_frames, skipped;
+	/* Retraso de la presentación: campos que la emulación lleva de ventaja
+	 * al campo que se presenta (cola entre hilos), sumado y el mayor. */
+	uint64_t behind_sum;
+	uint32_t behind_max;
 } pres = { .view = { RSXKIT_SCALE_FIT, RSXKIT_FILTER_LINEAR, 4.0f / 3.0f } };
 
 /* Presenta (o salta) un campo encolado. */
@@ -848,6 +852,10 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	rsxkit_rect r = { 0, 0, 0, 0 };
 	bool check = false, check_gfx = false;
 	uint64_t t0 = sysGetSystemTime();
+	uint32_t behind = n64.bus.vi.fields - m->field;  /* lectura de 32 bits del otro hilo */
+	pres.behind_sum += behind;
+	if (behind > pres.behind_max)
+		pres.behind_max = behind;
 	rsxkit_frame_begin(0x000000);
 	/* Lo que se ve: la imagen del VI sin el overscan (las capturas van de
 	 * ese tamaño). */
@@ -991,6 +999,17 @@ static void stats(uint64_t now, int gfx_on_spu, const struct salsa64_boot_info *
 	 * traducción a comandos del RSX y esperas por un juego de búferes. */
 	struct salsa64_rdp_stats rs;
 	salsa64_rdp_get_stats(&rs);
+	/* Retraso de lo que se ve, en campos: la cola entre hilos (campos que la
+	 * emulación lleva de ventaja al presentar) y la antigüedad del destino
+	 * (campos entre su dibujo y el campo que lo muestra: lo que tarda el
+	 * juego en mostrar lo que dibuja, 2 con doble búfer a 30 cps). Para
+	 * comparar la sensación de input lag entre compilaciones y juegos. */
+	if (pres.presented)
+		salsa64_log("retraso: cola %.2f campos (máx %u); destino %.2f campos de antigüedad (máx %u) en %u "
+			    "campos del RSX",
+			    (double)pres.behind_sum / pres.presented, pres.behind_max,
+			    pres.rsx_frames ? (double)(rs.age_sum - rdp0.age_sum) / pres.rsx_frames : 0.0,
+			    rs.age_max, pres.rsx_frames);
 	uint32_t tasks = rs.tasks - rdp0.tasks;
 	if (tasks) {
 		double spu_ms = 0, wait_ms = 0, sleep_ms = 0;
@@ -1083,6 +1102,7 @@ static void stats(uint64_t now, int gfx_on_spu, const struct salsa64_boot_info *
 	idle0 = n64.cpu.idle_cycles;
 	pres.us_present = pres.us_flip = 0;
 	pres.presented = pres.blank = pres.rsx_frames = pres.skipped = 0;
+	pres.behind_sum = pres.behind_max = 0;
 }
 
 int main(void)
