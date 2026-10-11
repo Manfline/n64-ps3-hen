@@ -1,5 +1,50 @@
 # Estado
 
+## 2026-10-10 (noche) — Cierre de la jornada
+
+**Integrado y subido hoy** (main 8231305): controles y bucles de espera, guardado
+del cartucho, Fase 2 gráfica (F3DEX2 en el SPE 0), recompilador (Fase 3) con TLB,
+FPU/LWL/LWR/MFC0 nativos y bucles en código mapeado, dos hilos del PPE con
+limitador, caché de texturas, fin de tarea del RSP por sondeo, audio en el SPE 1
+(ABI1, nead y naudio con MP3; FILTER y MIXER contra el microcódigo real), F3D,
+F3DEX 1.x/0.95, Fast3D 2.0G, menús de Mario Kart, presentación de GoldenEye,
+arranque del CIC 6105/osCicId, censo (docs/compatibilidad.md), arreglo del
+cuelgue de Zelda, microcódigos de Rare (Perfect Dark, Conker), prototipo de LLE
+del RSP, generador de fragment programs (Fase 4), G_RM_TEX_EDGE (medidor de
+SM64), candado de RPCS3, qemu con power9, logo y fondo del XMB.
+
+**En la PS3 real:** Zelda, SM64, Mario Kart, GoldenEye y Perfect Dark se juegan
+con audio; Zelda/SM64/MK64 a velocidad completa; GoldenEye en la presa 34–55
+campos/s (emulación 18–29 ms por campo: el CPU es cuello); Perfect Dark al 100 %
+en intro/menús (falta medir un nivel). Primer video público: GoldenEye.
+
+**Trabajos abiertos al cerrar** (sin integrar):
+- Presentación (`bold-neumann-794fc0`): Banjo sin parpadeo, Conker sin
+  quemado, pausa de Zelda visible, overscan; **regresión**: en GoldenEye las
+  armas a veces pierden la textura o salen azul claro con su app y no con
+  SLSA00064 (main 705f4ac). No integrar hasta arreglarlo. Usa worktrees
+  auxiliares `bold-tmp-*`.
+- Menú estilo XMB (`intelligent-yalow-4dd14d`): listo en host y RPCS3,
+  espera turno en la PS3. Integrar después de presentación (choques en main.c y
+  rdp.c ya previstos).
+- Polígonos estirados de Mario Kart en la PS3 (`reverent-meninsky-b3f79c`):
+  en curso (recorte del RSP).
+
+**Siguientes trabajos decididos con el autor:**
+- JIT («Recompilador: más velocidad del CPU en GoldenEye y Perfect
+  Dark», ya sugerido, sin abrir): abrirlo **después de integrar el menú**.
+- Efectos de framebuffer (pendiente de arriba): después de presentación.
+- HLE: z/w > 1 en Banjo (modelos que tiemblan, cielo), boca negra de Conker.
+- Zelda: fondos prerrenderizados (S2DEX + tarea JPEG); luego Majora's Mask.
+- Fase 5 (posprocesado, MSAA) después de presentación y menú; recompilador
+  RSP→SPU para el LLE; conversión genérica de texturas en lib/rsxkit/spu.
+
+**Notas:** el input lag de Zelda es antiguo y solo en Zelda (SM64 bien);
+sospecha: los dos hilos más el retraso propio de Zelda; presentación agregó al
+log la línea «retraso: cola … destino …» para medirlo. Algunos trabajos no pueden
+escribir `embedded` por FTP: lo cambia el autor.
+`embedded` quedó en el último valor que dejó presentación.
+
 ## 2026-10-10 — Fase 4: generador de fragment programs del RSX en tiempo de ejecución (rama compassionate-shirley)
 
 Hecho:
