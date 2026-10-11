@@ -62,13 +62,21 @@ Decisiones:
   fog·C.a al primer término sin factores (`fogsel`); combine.c garantiza
   ese término cuando hay niebla.
 
+Verificado:
+- [x] RPCS3: `tools/test-phase2.sh`: gfxtest en el frontend (HLE en el SPE,
+      RSX con programas generados) 24/24 puntos en F3DEX2 y F3D; 2
+      programas generados, 9 cambios de programa por tarea.
+- [x] `tools/test-rec.sh` (qemu ppc64, big-endian): 324/324 unitarias en
+      los cuatro modos del recompilador (el intérprete del microcódigo y
+      el generador también en big-endian), nemu64-test con las 433 fallas
+      de la línea base, vitest OK.
+
 Pendiente:
-- [ ] RPCS3: `tools/test-phase2.sh` (gfxtest en el frontend, F3DEX2 y F3D).
-- [ ] PS3 real (paquete SLSA00087 «Salsa64 fpgen»): gfxtest 24/24,
-      GoldenEye en Dam con la niebla exacta, sin regresiones en Zelda,
-      SM64 y Mario Kart; medir programas distintos, cambios por tarea y ms
-      en `docs/perf-log.md`.
-- [ ] `tools/test-rec.sh` (qemu, > 10 min).
+- [ ] PS3 real (paquete `salsa64-fpgen.pkg` subido a `/dev_hdd0/packages/`,
+      SLSA00087 «Salsa64 fpgen»): GoldenEye en Dam con la niebla exacta,
+      sin regresiones en Zelda, SM64 y Mario Kart; medir programas
+      distintos, cambios por tarea y ms en `docs/perf-log.md` (líneas
+      «gfx: fragment programs:» del log).
 
 ## 2026-10-10 — Kokiri «en colores planos»: es el sol cenital, no la HLE (referencia con mupen64plus)
 
