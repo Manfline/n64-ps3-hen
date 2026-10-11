@@ -15,6 +15,11 @@ void salsa64_gfx_job(struct gfx_job *job, const struct salsa64_bus *bus, const s
 	job->gbi = gbi;
 	job->dl = task->data_ptr & 0x00FFFFFF;
 	job->ucode = task->ucode & 0x00FFFFFF;
+	/* El de Perfect Dark (sin texto) se toma como NoN: sin recorte el autor lo
+	 * jugó bien en la PS3 y GLide64 dibuja los muros cercanos de su intro
+	 * que el recorte quitaría; no está verificado contra hardware. */
+	if (bus->rsp.gfx_nonear || gbi == SALSA64_GBI_F3DPD)
+		job->flags |= GFX_JOB_NONEAR;
 }
 
 uint32_t salsa64_gfx_task_flags(const struct gfx_result *res)

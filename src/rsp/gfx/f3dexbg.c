@@ -49,7 +49,7 @@ enum {
 };
 
 /* G_MOVEWORD */
-enum { G_MW_NUMLIGHT = 0x02, G_MW_SEGMENT = 0x06, G_MW_FOG = 0x08, G_MW_COORD_MOD = 0x10 };
+enum { G_MW_NUMLIGHT = 0x02, G_MW_CLIP = 0x04, G_MW_SEGMENT = 0x06, G_MW_FOG = 0x08, G_MW_COORD_MOD = 0x10 };
 
 /* G_MOVEMEM */
 enum { G_MV_VIEWPORT = 8, G_MV_LIGHT = 10, G_MV_NORMALS = 14 };
@@ -102,8 +102,11 @@ static void moveword(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	case G_MW_COORD_MOD:
 		coord_mod(g, w0, w1);
 		break;
+	case G_MW_CLIP:
+		gfx_clip_ratio(g, w0 & 0xFFFF, w1);
+		break;
 	default:
-		break;  /* G_MW_CLIP, G_MW_PERSPNORM… */
+		break;  /* G_MW_PERSPNORM… */
 	}
 }
 

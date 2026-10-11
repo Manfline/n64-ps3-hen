@@ -70,6 +70,12 @@ struct gfxtest_point {
 	{ 277, 227, 0xFF00FF, "textura cambiada en la RDRAM: texel (3,3), nuevo" },    \
 	{ 255, 221, 0xFF8400, "paleta cambiada en la RDRAM: índice 5, nuevo" },     \
 	{ 114, 22, 0xFF0000, "G_RM_TEX_EDGE: texel opaco" },                          \
-	{ 126, 22, GFXTEST_BG, "G_RM_TEX_EDGE: texel con alfa 0, no se escribe" },
+	{ 126, 22, GFXTEST_BG, "G_RM_TEX_EDGE: texel con alfa 0, no se escribe" },   \
+	{ 20, 90, 0x00FF80, "clip ratio 1: dentro del viewport chico" },              \
+	{ 5, 90, GFXTEST_BG, "clip ratio 1: fuera del viewport (izquierda)" },         \
+	{ 35, 90, GFXTEST_BG, "clip ratio 1: fuera del viewport (derecha)" },          \
+	{ 20, 78, GFXTEST_BG, "clip ratio 1: fuera del viewport (arriba)" },           \
+	{ 10, 120, 0xFF8080, "plano cercano: lo de delante se ve" },                  \
+	{ 30, 120, GFXTEST_BG, "plano cercano: lo de detrás no se dibuja" },
 
 #endif

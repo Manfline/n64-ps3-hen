@@ -21,8 +21,11 @@
  * mezcladas por el alfa primitivo (TEXEL0 en la tile 0, TEXEL1 en la 1),
  * un cuadro con w = 1000 coloreado por PRIM·TEXEL0_ALPHA y dos TEXRECT cuya
  * textura (L) y paleta (M) cambia el CPU en la RDRAM en el cuadro
- * GFXTEST_CHANGE_FRAME (prueba de la caché de texturas entre tareas) y un
- * cuadro con textura RGBA16 de alfa de 1 bit en G_RM_TEX_EDGE (N). Al
+ * GFXTEST_CHANGE_FRAME (prueba de la caché de texturas entre tareas), un
+ * cuadro con textura RGBA16 de alfa de 1 bit en G_RM_TEX_EDGE (N), un
+ * cuadro el doble de grande que un viewport chico con clip ratio 1 (O: el
+ * RSP lo recorta a la ventana) y uno que cruza el plano cercano (P: la
+ * mitad de detrás no se dibuja). Al
  * final de cada lista, un tramo de otro microcódigo (G_LOAD_UCODE) que la
  * HLE debe saltar; en GFXTEST_CUT_FRAME la lista termina dentro de él (no
  * en la variante F3D, que no tiene G_LOAD_UCODE).
@@ -116,12 +119,12 @@ struct rsp_data {
 	uint32_t ucode[4];
 	char ucode_data[32];
 	uint64_t dram_stack[128];
-	int16_t vp[8];
+	int16_t vp[8], vp_o[8];
 	mtx ident, ortho, persp, trans, rot_y, rot_x, far;
 	light sun, ambient, look_x, look_y;
 	vtx quad_a[4], quad_b[4], tri_c[3], quad_d[4], quad_g[4], quad_i[4], cube[24];
 	vtx cull[16];  /* 4 cuadros: antihorario/horario × cull back/front */
-	vtx quad_j[4], quad_k[4], quad_n[4];
+	vtx quad_j[4], quad_k[4], quad_n[4], quad_o[4], quad_p[4];
 	uint16_t red[4 * 4], blue[4 * 4];
 	uint16_t checker[8 * 8];
 	uint8_t glyph[16 * 8 / 2];
@@ -219,6 +222,10 @@ static void init_data(void)
 	const int16_t vp[8] = { W * 2, H * 2, 511, 0, W * 2, H * 2, 511, 0 };
 	for (int i = 0; i < 8; i++)
 		r->vp[i] = vp[i];
+	/* O: 20×16 píxeles con centro en (20, 90) (expect.h). */
+	const int16_t vp_o[8] = { 10 * 4, 8 * 4, 511, 0, 20 * 4, 90 * 4, 511, 0 };
+	for (int i = 0; i < 8; i++)
+		r->vp_o[i] = vp_o[i];
 
 	const int32_t ident[16] = { ONE, 0, 0, 0, 0, ONE, 0, 0, 0, 0, ONE, 0, 0, 0, 0, ONE };
 	const int32_t ortho[16] = { ONE / 32, 0, 0, 0, 0, ONE / 32, 0, 0, 0, 0, ONE / 32, 0, 0, 0, 0, ONE };
@@ -256,6 +263,14 @@ static void init_data(void)
 	set_quad(r->quad_j, -22, -24, -10, -28, 0, 0xFFFFFFFF);
 	set_quad(r->quad_k, 24, 30, 30, 26, 0, 0xFFFFFFFF);
 	set_quad(r->quad_n, -10, 28, -6, 24, 0, 0xFFFFFFFF);
+	/* O: ±2 en recorte, el doble del viewport chico. */
+	set_quad(r->quad_o, -64, 64, 64, -64, 0, 0x00FF80FF);
+	/* P: z de 0 (izquierda) a −64 (derecha, −2 en recorte): el plano
+	 * cercano (z = −w) lo corta en el medio, en el píxel 20. */
+	set_vtx(&r->quad_p[0], -31, 2, 0, 0, 0, 0xFF8080FF);
+	set_vtx(&r->quad_p[1], -25, 2, -64, 0, 0, 0xFF8080FF);
+	set_vtx(&r->quad_p[2], -25, -2, -64, 0, 0, 0xFF8080FF);
+	set_vtx(&r->quad_p[3], -31, -2, 0, 0, 0, 0xFF8080FF);
 	for (int i = 0; i < 16; i++) {
 		r->red[i] = rgba16(31, 0, 0);
 		r->blue[i] = rgba16(0, 0, 31);
@@ -569,6 +584,25 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	sp_vertex(&dl, r->quad_n, 4, 0);
 	sp_tri2(&dl, 0, 1, 2, 0, 2, 3);
 	sp_texture(&dl, 0, 0, 0, 0);
+
+	/* O: viewport chico y clip ratio 1 con las tijeras de toda la pantalla
+	 * (la demo de Mario Kart 64): lo que sale de la ventana no se dibuja. */
+	sp_matrix(&dl, &r->ident, G_MTX_LOAD | G_MTX_PROJECTION);
+	sp_matrix(&dl, &r->ortho, G_MTX_LOAD | G_MTX_MODELVIEW);
+	dp_othermode(&dl, CYC_1CYCLE, BL_XLU);
+	dp_combine(&dl, CC_A_0, CC_B_0, CC_C_0, CC_SHADE, CCA_0, CCA_0, CCA_0, CC_SHADE);
+	sp_geometry(&dl, G_ZBUFFER | G_CULL_FRONT | G_CULL_BACK | G_LIGHTING | G_TEXTURE_GEN,
+		    G_SHADE | G_SHADING_SMOOTH);
+	sp_clip_ratio(&dl, 1);
+	sp_viewport(&dl, r->vp_o);
+	sp_vertex(&dl, r->quad_o, 4, 0);
+	sp_tri2(&dl, 0, 1, 2, 0, 2, 3);
+	sp_viewport(&dl, r->vp);
+	sp_clip_ratio(&dl, 2);
+
+	/* P: cruza el plano cercano; sin z-buffer, lo de detrás no se dibuja. */
+	sp_vertex(&dl, r->quad_p, 4, 0);
+	sp_tri2(&dl, 0, 1, 2, 0, 2, 3);
 
 	/* Tramo de otro microcódigo (como S2DEX en Zelda OoT): G_LOAD_UCODE a
 	 * otra dirección, comandos que la HLE debe saltar (si los ejecutara, el

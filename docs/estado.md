@@ -1,5 +1,83 @@
 # Estado
 
+## 2026-10-10 — Mario Kart 64: polígonos estirados en los zooms (recorte del RSP en la HLE)
+
+Reporte (el autor, PS3, «Salsa64 alfa» SLSA00085): en Mario Kart 64, al
+pasar del título a lo que sigue, «polígonos mal calculados, donde se queda
+una punta y se estira»; después precisó: «una pantalla que se hace pequeña,
+como un gameplay que sale».
+
+Diagnóstico (rama `reverent-meninsky-b3f79c`, en la Mac):
+- No era del RSX ni de la vida de los juegos de búferes de src/rdp: con
+  `salsa64-run` se simuló un SPE lento (`SALSA64_GFX_LATE=N` retrasa la HLE
+  N sondeos; con `SALSA64_GFX_TEAR` la corre también al arrancar y compara)
+  y en 245 tareas ninguna lectura de la RDRAM cambió durante la tarea; la
+  invalidación de la caché de vértices de PSL1GHT (`rsxInvalidateVertexCache`
+  escribe 0x1710 y 0x1714, como libgcm) está bien.
+- El cuadro malo no es título → «GAME SELECT» (solo rectángulos, sale
+  limpio) sino los **zooms de la demo**: entra creciendo desde una ventana
+  (campos ~1106–1141 tras START en el 400) y al terminar se encoge
+  (3300–3350 sin tocar nada). El juego los dibuja con un viewport chico que
+  crece (`G_MV_VIEWPORT`), tijeras del RDP hasta (0, 0) y
+  `gSPClipRatio(FRUSTRATIO_1)` cada cuadro. En el RSP real los triángulos se
+  recortan contra el viewport por la clip ratio y contra el plano cercano; la
+  HLE no hacía ninguna de las dos cosas: el suelo cruzaba el plano cercano
+  (w → 0, x/w de −8000) y salía de la ventana como una punta hacia la
+  esquina. Reproducido en el rasterizador de la Mac (campos 3310–3350 sin
+  pulsar nada); la otra rama miró la transición a «GAME SELECT», que es de
+  rectángulos, y por eso se vio limpia.
+
+Arreglo (`src/rsp/gfx`; nada en src/rdp ni en lib/rsxkit):
+- `G_MW_CLIP` (F3D, F3DEX, F3DEX2, el de Conker) guarda la clip ratio y
+  cada tarea arranca con la de los datos del microcódigo (vuelven a la
+  DMEM): **1** en la primera generación (F3D 2.0D/2.0G, F3DEX 0.95/1.21/1.22,
+  el de Perfect Dark) y **2** en la segunda (F3DZEX), leído de los datos de
+  los ucodes de los respaldos (offset 0x70 y 0x180: (1,0,0,r) (0,1,0,r)
+  (1,0,0,−r) (0,1,0,−r)). La caja viewport × ratio se suma a las tijeras de
+  los dibujos de triángulos (los rectángulos no pasan por el RSP); un
+  cambio de viewport abre dibujo nuevo. GoldenEye y Perfect Dark tienen
+  viewport = tijeras y no cambian.
+- Recorte contra el plano cercano (z = −w) en `gfx_triangle`: un vértice
+  detrás → dos triángulos, dos → uno, tres → nada; interpolación lineal en
+  coordenadas de recorte, como el RSP. Los microcódigos «.NoN» (Zelda OoT
+  F3DZEX.NoN, Star Fox 64 F3DEX.NoN, Conker F3DEXBG.NoN) no recortan: el
+  núcleo lo lee del texto del ucode (`rsp->gfx_nonear`) y va en
+  `GFX_JOB_NONEAR`. El de Perfect Dark (sin texto) se toma como NoN, **sin
+  verificar contra hardware**: el autor ya lo jugó sin recorte y GLide64
+  dibuja los muros cercanos de su intro que el recorte quitaría (cuadro
+  3000, un muro a la izquierda).
+- Efecto en otros juegos (rasterizador de la Mac, main contra la rama, un
+  cuadro cada 100 campos): Zelda, Star Fox, Conker, Perfect Dark y los menús
+  de Mario Kart idénticos. **SM64** en el castillo: el suelo cerca de la
+  cámara (cruza el plano cercano) se descartaba entero y se veía el agua del
+  foso debajo; ahora se dibuja, como en mupen64plus. **Banjo-Kazooie**: en
+  la intro unos polígonos delante del plano cercano tapaban todo de negro;
+  ahora se ve el logo con la abeja. **GoldenEye**: diferencias chicas dentro
+  de modelos que cruzan el plano cercano (créditos), a la vista iguales.
+- Pruebas: unitarias `f3dex_clip_ratio`, `f3d_near_clip`,
+  `gfx_clip_ratio_f3dex2` y `rsp_gfx_nonear` (324 en total); gfxtest con las
+  escenas O (viewport chico + clip ratio 1 con tijeras de toda la pantalla)
+  y P (cuadro que cruza el plano cercano): 30 de 30 puntos en el host (tres
+  variantes) y en RPCS3 (F3DEX2 y F3D, pantalla del RSX); con main fallan
+  4 puntos. `tools/build.sh test-host`, `tools/test-roms.sh`,
+  `tools/build.sh` sin advertencias y `tools/test-phase2.sh`.
+- La traza por dibujo de `salsa64-run` imprime además x/w, y/w, tijeras,
+  viewport y la dirección de la textura.
+- Respaldo de Mario Kart (con permiso del autor) en
+  una carpeta de respaldos propios (`mk64.z64`) y en el dev_hdd0 de RPCS3.
+
+Pendiente:
+- [ ] **PS3 real**: la demo de Mario Kart (entrada y salida del zoom) sin
+      puntas; SM64 en el castillo y GoldenEye sin regresiones; la intro de
+      Perfect Dark (muros cercanos). Paquete con APPID y título propios.
+- [ ] En RPCS3 el modo de prueba automática sale a los 1800 campos y el
+      zoom sin tocar nada cae en el 3300 (`capturas` "25 3500" no llega):
+      dejar que el M de `capturas N M` mande sobre AUTO_FIELDS si hace falta
+      verlo ahí.
+- [ ] Banjo-Kazooie en el host se queda en el logo de Rare (tarea del campo
+      68, luego solo audio): no es de esta rama.
+
+
 ## 2026-10-10 — Medidor de energía de SM64 con fondo opaco: G_RM_TEX_EDGE
 
 Reporte (el autor, PS3, main de hoy): en Super Mario 64, al nadar, el
