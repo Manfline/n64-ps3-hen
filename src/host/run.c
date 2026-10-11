@@ -571,6 +571,32 @@ static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_resu
 	}
 }
 
+#ifdef SALSA64_DEBUG_PI
+/* DMA cartucho → RDRAM (pi.c), desde --trace-from. */
+void salsa64_debug_pi(uint32_t cart, uint32_t dram, uint32_t len)
+{
+	static unsigned n;
+	if (!tracing() || n++ >= 400)
+		return;
+	fprintf(stderr, "PI campo %u ciclo %llu: cart %08x -> rdram %06x, %u bytes (pc %08llx)\n", n64.bus.vi.fields,
+		(unsigned long long)n64.cpu.cycles, cart, dram, len, (unsigned long long)n64.cpu.cur_pc);
+}
+#endif
+
+#ifdef SALSA64_DEBUG_DP
+/* Registros del DP (0 lectura, 1 escritura) y escrituras de SP_STATUS (2),
+ * desde --trace-from. */
+void salsa64_debug_dp(int kind, uint32_t reg, uint32_t v)
+{
+	static unsigned n;
+	if (!tracing() || n++ >= 400)
+		return;
+	fprintf(stderr, "%s campo %u ciclo %llu: reg %02x %s %08x (pc %08llx)\n", kind == 3 ? "DP-IRQ" : kind == 2 ? "SP" : "DP",
+		n64.bus.vi.fields, (unsigned long long)n64.cpu.cycles, reg, kind == 0 ? "->" : "<-", v,
+		(unsigned long long)n64.cpu.cur_pc);
+}
+#endif
+
 #ifdef SALSA64_DEBUG_SPMEM
 void salsa64_debug_spmem(uint32_t reg, uint32_t v)
 {
@@ -1135,10 +1161,12 @@ static void trace_exc(struct salsa64_cpu *cpu)
 	if (!trace_exc_left || !tracing() || (trace_exc_faults_only && SALSA64_CAUSE_EXC(cpu->cause) == 0))
 		return;
 	trace_exc_left--;
-	fprintf(stderr, "excepción %2u en ciclo %llu: pc=%016llx [%08x] epc=%016llx bd=%u badvaddr=%016llx status=%08x\n",
+	fprintf(stderr, "excepción %2u en ciclo %llu: pc=%016llx [%08x] epc=%016llx bd=%u badvaddr=%016llx status=%08x "
+		"ip=%02x mi=%02x/%02x\n",
 		SALSA64_CAUSE_EXC(cpu->cause), (unsigned long long)cpu->cycles,
 		(unsigned long long)cpu->cur_pc, peek(cpu->cur_pc), (unsigned long long)cpu->epc,
-		cpu->cause >> 31, (unsigned long long)cpu->bad_vaddr, cpu->status);
+		cpu->cause >> 31, (unsigned long long)cpu->bad_vaddr, cpu->status, (cpu->cause >> 8) & 0xFF,
+		n64.bus.mi.intr & 0x3F, n64.bus.mi.mask & 0x3F);
 }
 
 /* `b .` (o `j .`) con NOP en el delay slot y sin interrupción que lo saque.
@@ -1445,6 +1473,12 @@ int main(int argc, char **argv)
 	enum salsa64_rom_format fmt = salsa64_rom_normalize(rom, rom_size);
 
 	salsa64_n64_init(&n64, rdram, ram);
+	if (getenv("SALSA64_GFX_CYCLES"))
+		n64.bus.rsp.gfx_cycles = (uint32_t)strtoul(getenv("SALSA64_GFX_CYCLES"), NULL, 0);
+	if (getenv("SALSA64_DP_CYCLES"))
+		n64.bus.rsp.dp_cycles = (uint32_t)strtoul(getenv("SALSA64_DP_CYCLES"), NULL, 0);
+	if (getenv("SALSA64_AUDIO_CYCLES"))
+		n64.bus.rsp.audio_cycles = (uint32_t)strtoul(getenv("SALSA64_AUDIO_CYCLES"), NULL, 0);
 	salsa64_cpu_set_idle(&n64.cpu, idle);
 	const struct salsa64_gfx_sink sink = { NULL, gfx_acquire, gfx_done };
 	salsa64_gfx_sync_init(&gfx_sync, &gfx_state, &n64.bus, &sink);
@@ -1511,6 +1545,11 @@ int main(int argc, char **argv)
 			lockstep ? " con --lockstep" : "", rec.opts & SALSA64_REC_OPT_PIN ? ", registros fijos" : "",
 			code, rec.calls_near ? "con bl" : "por mtctr/bctrl");
 	}
+
+	/* Un control programado en el campo 0 está conectado desde el arranque
+	 * (como el puerto 1 en la PS3): hay juegos que solo lo buscan al
+	 * iniciar y sin él no pasan del logo (Banjo-Kazooie). */
+	pad_field();
 
 	/* Bucle principal: bloques de `slice` ciclos y verificación entre ellos. */
 	enum stop_reason reason = STOP_NONE;
