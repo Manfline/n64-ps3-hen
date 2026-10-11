@@ -176,7 +176,7 @@ void salsa64_rec_x_sync(struct salsa64_rec *rec)
 		return;
 	struct salsa64_rec_prof *prof = rec->prof;
 	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0;
-	bool full = asid != x->asid || erl != x->erl || (rec->opts & SALSA64_REC_OPT_LEGACY);
+	bool full = asid != x->asid || erl != x->erl || SALSA64_REC_OLD(rec, SALSA64_REC_DBG_NO_TSYNC);
 	x->tlb_writes = cpu->tlb_writes;
 	x->asid = asid;
 	x->erl = erl;
@@ -256,6 +256,8 @@ void salsa64_rec_x_flush(struct salsa64_rec *rec)
 {
 	memset(rec->x.xhash, 0, sizeof rec->x.xhash);
 	memset(rec->x.xpage, 0, sizeof rec->x.xpage);
+	memset(rec->x.state, 0, sizeof rec->x.state);
+	rec->x.copy_used = 0;
 	rec->x.count = 0;
 }
 
@@ -270,13 +272,49 @@ void salsa64_rec_x_add(struct salsa64_rec *rec, unsigned id, uint64_t pc, uint32
 	b->hnext = *h;
 	*h = (uint16_t)id;
 	b->pnext = 0;
+	x->state[id] = SALSA64_REC_X_LIVE;
+	x->copy_off[id] = 0;
 	if (pa < rec->rdram_size) {
 		uint16_t *p = &x->xpage[pa >> SALSA64_REC_PAGE_SHIFT];
 		b->pnext = *p;
 		*p = (uint16_t)id;
+		/* La copia de sus bytes, para engancharlo donde vuelva su página. */
+		uint32_t bytes = rec->blocks[id].bytes;
+		if (code && seg == SALSA64_REC_MAPPED && x->copy_used + bytes <= SALSA64_REC_X_COPY_BYTES) {
+			memcpy(x->copy + x->copy_used, rec->cpu->rdram + pa, bytes);
+			x->copy_off[id] = x->copy_used + 1;
+			x->copy_used += bytes;
+		}
 	}
 	x->count++;
 	rec->stats.compiled_x += code;
+}
+
+static void xpage_remove(struct salsa64_rec_x *x, unsigned id, uint32_t pa)
+{
+	uint16_t *p = &x->xpage[pa >> SALSA64_REC_PAGE_SHIFT];
+	while (*p != id)
+		p = &x->xb[*p].pnext;
+	*p = x->xb[id].pnext;
+}
+
+static void xpage_add(struct salsa64_rec_x *x, unsigned id, uint32_t pa)
+{
+	uint16_t *p = &x->xpage[pa >> SALSA64_REC_PAGE_SHIFT];
+	x->xb[id].pnext = *p;
+	*p = (uint16_t)id;
+}
+
+bool salsa64_rec_x_detach(struct salsa64_rec *rec, unsigned id)
+{
+	struct salsa64_rec_x *x = &rec->x;
+	if (!x->copy_off[id] || x->state[id] != SALSA64_REC_X_LIVE || SALSA64_REC_OLD(rec, SALSA64_REC_DBG_NO_DETACH))
+		return false;
+	salsa64_rec_block_detach(rec, id);  /* enlaces, banderas, code = 0 */
+	xpage_remove(x, id, rec->blocks[id].pa);
+	x->state[id] = SALSA64_REC_X_DETACHED;
+	rec->stats.detached++;
+	return true;
 }
 
 bool salsa64_rec_x_remove(struct salsa64_rec *rec, unsigned id)
@@ -290,12 +328,9 @@ bool salsa64_rec_x_remove(struct salsa64_rec *rec, unsigned id)
 		p = &x->xb[*p].hnext;
 	*p = b->hnext;
 	uint32_t pa = rec->blocks[id].pa;
-	if (pa < rec->rdram_size) {
-		p = &x->xpage[pa >> SALSA64_REC_PAGE_SHIFT];
-		while (*p != id)
-			p = &x->xb[*p].pnext;
-		*p = b->pnext;
-	}
+	if (pa < rec->rdram_size && x->state[id] == SALSA64_REC_X_LIVE)
+		xpage_remove(x, id, pa);
+	x->state[id] = SALSA64_REC_X_LIVE;
 	x->count--;
 	return true;
 }
@@ -313,7 +348,7 @@ unsigned salsa64_rec_x_find(struct salsa64_rec *rec, uint64_t pc, uint32_t pa)
 	struct salsa64_rec_x *x = &rec->x;
 	uint16_t *head = &x->xhash[xhash_slot(pc)], *p = head;
 	for (unsigned id = *p; id; p = &x->xb[id].hnext, id = *p) {
-		if (x->xb[id].vpc != (uint32_t)pc)
+		if (x->xb[id].vpc != (uint32_t)pc || x->state[id] != SALSA64_REC_X_LIVE)
 			continue;
 		if (rec->blocks[id].pa != pa) {
 			if (rec->blocks[id].links)
@@ -330,11 +365,11 @@ unsigned salsa64_rec_x_find(struct salsa64_rec *rec, uint64_t pc, uint32_t pa)
 	return 0;
 }
 
-/* GoldenEye pagina su código bajo demanda y cada página vuelve en el marco
- * que toque: sin esto, cada (vpc, marco) era un bloque nuevo (93 000 en 128
- * s, con 6 vaciados de la caché). Un bloque vivo sigue teniendo en su física
- * los bytes con que se compiló (si no, lo habría matado la invalidación), y
- * su código depende solo de la vpc y de esos bytes. */
+/* GoldenEye pagina su código bajo demanda, cada página vuelve en el marco
+ * que toque y el DMA que trae otra página al marco invalida los bloques que
+ * había: sin esto, cada (vpc, marco) era un bloque nuevo (93 000 en 128 s,
+ * con 6 vaciados de la caché, cada uno con todo por recompilar). El código
+ * de un bloque depende solo de su vpc y de sus bytes (la copia). */
 unsigned salsa64_rec_x_rekey(struct salsa64_rec *rec, uint64_t pc, uint32_t pa)
 {
 	struct salsa64_rec_x *x = &rec->x;
@@ -344,20 +379,18 @@ unsigned salsa64_rec_x_rekey(struct salsa64_rec *rec, uint64_t pc, uint32_t pa)
 		return 0;
 	uint16_t *head = &x->xhash[xhash_slot(pc)], *p = head;
 	for (unsigned id = *p; id; p = &x->xb[id].hnext, id = *p) {
-		const struct salsa64_rec_block *b = &rec->blocks[id];
-		uint32_t old = b->pa;
-		if (x->xb[id].vpc != (uint32_t)pc || !b->code || old >= rec->rdram_size ||
-		    pa + b->bytes > rec->rdram_size || memcmp(rdram + old, rdram + pa, b->bytes) != 0)
+		struct salsa64_rec_block *b = &rec->blocks[id];
+		bool detached = x->state[id] == SALSA64_REC_X_DETACHED;
+		uint32_t old = b->pa, code = detached ? x->saved_code[id] : b->code;
+		if (x->xb[id].vpc != (uint32_t)pc || !x->copy_off[id] || !code || pa + b->bytes > rec->rdram_size ||
+		    memcmp(x->copy + x->copy_off[id] - 1, rdram + pa, b->bytes) != 0)
 			continue;
-		if (!salsa64_rec_block_rekey(rec, id, pa, vt))
+		if (!salsa64_rec_block_rekey(rec, id, pa, vt, code, !detached))
 			continue;
-		uint16_t *q = &x->xpage[old >> SALSA64_REC_PAGE_SHIFT];
-		while (*q != id)
-			q = &x->xb[*q].pnext;
-		*q = x->xb[id].pnext;
-		q = &x->xpage[pa >> SALSA64_REC_PAGE_SHIFT];
-		x->xb[id].pnext = *q;
-		*q = (uint16_t)id;
+		if (!detached)
+			xpage_remove(x, id, old);
+		xpage_add(x, id, pa);
+		x->state[id] = SALSA64_REC_X_LIVE;
 		if (p != head) {
 			*p = x->xb[id].hnext;
 			x->xb[id].hnext = *head;
@@ -376,7 +409,7 @@ void salsa64_rec_x_invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t end
 		for (unsigned id = x->xpage[p], next; id; id = next) {
 			next = x->xb[id].pnext;
 			const struct salsa64_rec_block *b = &rec->blocks[id];
-			if (b->pa < end && b->pa + b->bytes > pa)
+			if (b->pa < end && b->pa + b->bytes > pa && !salsa64_rec_x_detach(rec, id))
 				salsa64_rec_kill_block(rec, id);
 		}
 	}

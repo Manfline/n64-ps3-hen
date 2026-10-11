@@ -129,7 +129,7 @@ REC_UNUSED static uint64_t rec_h_load(struct salsa64_cpu *cpu, uint64_t va, unsi
 	uint32_t pa = 0;
 	bool ok = vr4300_vaddr(cpu, va, align[kind], SALSA64_ACC_LOAD, &pa);
 	if (ok) {
-		if (!(cpu->rec->opts & SALSA64_REC_OPT_LEGACY))
+		if (!SALSA64_REC_OLD(cpu->rec, SALSA64_REC_DBG_NO_DATA))
 			salsa64_rec_x_data_fill(cpu->rec, va);
 		switch (kind) {
 		case SALSA64_REC_LB:  v = salsa64_sx8(vr4300_read8(cpu, pa)); break;
@@ -154,7 +154,7 @@ REC_UNUSED static void rec_h_store(struct salsa64_cpu *cpu, uint64_t va, uint64_
 	uint32_t pa = 0;
 	bool ok = vr4300_vaddr(cpu, va, align[kind], SALSA64_ACC_STORE, &pa);
 	if (ok) {
-		if (!(cpu->rec->opts & SALSA64_REC_OPT_LEGACY))
+		if (!SALSA64_REC_OLD(cpu->rec, SALSA64_REC_DBG_NO_DATA))
 			salsa64_rec_x_data_fill(cpu->rec, va);
 		switch (kind) {
 		case SALSA64_REC_SB: vr4300_write8(cpu, pa, v); break;
@@ -349,7 +349,7 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	w[n++] = ppc_rlwinm(12, 3, 31, 17, 30);  /* ((vpc >> 2) & (XHASH - 1)) * 2 */
 	n = pre_li64(w, n, 11, (uintptr_t)rec->x.xhash);
 	w[n++] = ppc_lhzx(12, 11, 12);
-	if (rec->opts & SALSA64_REC_OPT_LEGACY) {  /* solo la cabeza, como antes */
+	if (SALSA64_REC_OLD(rec, SALSA64_REC_DBG_NO_CHAIN)) {  /* solo la cabeza, como antes */
 		w[n++] = ppc_cmpwi(0, 12, 0);
 		n = pre_bc(w, n, eq, EQ, rec->exit_jump);
 		w[n++] = ppc_sldi(0, 12, 3);
@@ -439,11 +439,12 @@ static void unlink_all(struct salsa64_rec *rec, struct salsa64_rec_block *b)
 static void kill_block(struct salsa64_rec *rec, unsigned id)
 {
 	struct salsa64_rec_block *b = &rec->blocks[id];
+	bool detached = rec->x.state[id] == SALSA64_REC_X_DETACHED;  /* ya sin banderas, enlaces ni código */
 	if (rec->prof && rec->prof->blocks)
 		salsa64_rec_prof_fold(rec->prof, id, false);
 	if (!salsa64_rec_x_remove(rec, id))
 		rec->map[b->pa >> 2] = 0;
-	if (b->pa < rec->rdram_size)  /* no en la ROM */
+	if (b->pa < rec->rdram_size && !detached)  /* no en la ROM */
 		flags_add(rec, b->pa, b->pa + b->bytes, -1);
 	unlink_all(rec, b);
 	b->code = 0;
@@ -463,21 +464,36 @@ void salsa64_rec_unlink_block(struct salsa64_rec *rec, unsigned id)
 	unlink_all(rec, &rec->blocks[id]);
 }
 
-bool salsa64_rec_block_rekey(struct salsa64_rec *rec, unsigned id, uint32_t pa, uint32_t vt)
+bool salsa64_rec_block_rekey(struct salsa64_rec *rec, unsigned id, uint32_t pa, uint32_t vt, uint32_t code,
+			     bool had_flags)
 {
 	struct salsa64_rec_block *b = &rec->blocks[id];
-	uint32_t *w = &rec->code[b->code];
+	uint32_t *w = &rec->code[code];
 	/* La entrada de un bloque mapeado (rec_emit.c): [addis] lwz ; xoris hi ; cmplwi lo ; bne. */
 	unsigned k = (w[0] >> 26) == 15 ? 2 : 1;
 	if ((w[k] >> 26) != 27 || (w[k + 1] >> 26) != 10)
 		return false;
-	flags_add(rec, b->pa, b->pa + b->bytes, -1);
+	if (had_flags)
+		flags_add(rec, b->pa, b->pa + b->bytes, -1);
 	flags_add(rec, pa, pa + b->bytes, +1);
 	b->pa = pa;
+	b->code = code;
 	w[k] = (w[k] & 0xFFFF0000u) | (vt >> 16);
 	w[k + 1] = (w[k + 1] & 0xFFFF0000u) | (vt & 0xFFFF);
 	salsa64_rec_sync(w, 4 * (k + 2));
+	rec->map_dirty = true;
 	return true;
+}
+
+void salsa64_rec_block_detach(struct salsa64_rec *rec, unsigned id)
+{
+	struct salsa64_rec_block *b = &rec->blocks[id];
+	unlink_all(rec, b);
+	flags_add(rec, b->pa, b->pa + b->bytes, -1);
+	rec->x.saved_code[id] = b->code;
+	b->code = 0;
+	rec->stats.invalidated++;
+	rec->cpu->rec_abort = 1;
 }
 
 void salsa64_rec_invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t len)
@@ -698,7 +714,7 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 		}
 
 		unsigned id = seg == SALSA64_REC_KSEG0 ? rec->map[pa >> 2] : salsa64_rec_x_find(rec, pc, pa);
-		if (!id && seg == SALSA64_REC_MAPPED && !(rec->opts & SALSA64_REC_OPT_LEGACY))
+		if (!id && seg == SALSA64_REC_MAPPED && !SALSA64_REC_OLD(rec, SALSA64_REC_DBG_NO_DETACH))
 			id = salsa64_rec_x_rekey(rec, pc, pa);
 		if (!id) {
 			if (prof)
@@ -768,7 +784,7 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 			 * bloque que sigue se busca como cualquier otro (con LEGACY, tras
 			 * un ERET el intérprete hasta el fin del bloque básico, como antes). */
 			cpu->redirect = 0;
-			to_boundary = (rec->opts & SALSA64_REC_OPT_LEGACY) && cpu->exc_count == exc && !rec->strict;
+			to_boundary = SALSA64_REC_OLD(rec, SALSA64_REC_DBG_ERET_BOUND) && cpu->exc_count == exc && !rec->strict;
 		} else if (cpu->rec_kind == SALSA64_REC_EXIT_IDLE) {
 			/* Deja el delay slot pendiente: lo corre el intérprete. */
 			if (prof)

@@ -46,7 +46,8 @@ static inline uint32_t salsa64_host_rec_opts(void)
 	return (salsa64_host_env_on("SALSA64_REC_PIN") ? SALSA64_REC_OPT_PIN : 0) |
 	       (salsa64_host_env_on("SALSA64_REC_EAGER") ? SALSA64_REC_OPT_EAGER : 0) |
 	       (salsa64_host_env_on("SALSA64_REC_RARE_EXEC") ? SALSA64_REC_OPT_RARE_EXEC : 0) |
-	       (salsa64_host_env_on("SALSA64_REC_LEGACY") ? SALSA64_REC_OPT_LEGACY : 0);
+	       (salsa64_host_env_on("SALSA64_REC_LEGACY") ? SALSA64_REC_OPT_LEGACY : 0) |
+	       (getenv("SALSA64_REC_OPTS") ? (uint32_t)strtoul(getenv("SALSA64_REC_OPTS"), NULL, 0) : 0);
 }
 
 #endif

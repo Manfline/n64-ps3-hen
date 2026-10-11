@@ -35,6 +35,14 @@ struct salsa64_rec;
 #define SALSA64_REC_XHASH       16384     /* cabezas de xhash */
 #define SALSA64_REC_VT_PAGES    16384     /* entradas de ktlb[]: bits 25–12 de la virtual */
 #define SALSA64_REC_PAGE_SHIFT  12
+#define SALSA64_REC_X_COPY_BYTES (1u << 20) /* copias de los bytes MIPS de los bloques mapeados (desprender) */
+
+/* Estado de un bloque mapeado (x.state[]). */
+enum {
+	SALSA64_REC_X_LIVE,      /* o no es mapeado */
+	SALSA64_REC_X_DETACHED,  /* su página se reescribió: fuera de flags y xpage, sin código ni enlaces; en xhash con
+				  * su copia, para engancharlo donde vuelva la página con los mismos bytes */
+};
 
 /* Valor de ktlb[]: etiqueta (bits 31–26 de la virtual), válida, D (se puede
  * escribir) y la página física (pa < 2^29: 17 bits). 0 = sin traducción. */
@@ -73,10 +81,18 @@ struct salsa64_rec_x {
 	uint8_t asid;
 	bool erl;
 	uint32_t nlive;          /* entradas de live[] */
+	uint32_t copy_used;      /* bytes ocupados de copy[] */
 	struct salsa64_rec_xblock xb[SALSA64_REC_X_IDS];
 	uint16_t xhash[SALSA64_REC_XHASH];
 	uint16_t xpage[SALSA64_RDRAM_MAX >> SALSA64_REC_PAGE_SHIFT];
 	struct salsa64_rec_tlb_snap snap[SALSA64_TLB_ENTRIES];
+	/* Bloques mapeados en la RDRAM: copia de sus bytes MIPS (copy_off + 1 en
+	 * copy[]; 0 = sin copia), su código mientras están desprendidos y su
+	 * estado. Un bloque vivo depende solo de su vpc y de esos bytes. */
+	uint32_t copy_off[SALSA64_REC_X_IDS];
+	uint32_t saved_code[SALSA64_REC_X_IDS];
+	uint8_t state[SALSA64_REC_X_IDS];
+	uint8_t copy[SALSA64_REC_X_COPY_BYTES];
 	uint16_t live[SALSA64_REC_VT_PAGES];  /* entradas de ktlb[] distintas de 0 */
 	uint32_t ktlb[SALSA64_REC_VT_PAGES];
 };
@@ -113,10 +129,13 @@ unsigned salsa64_rec_seg(struct salsa64_rec *rec, uint64_t pc, uint32_t *pa);
 void salsa64_rec_x_data_fill(struct salsa64_rec *rec, uint64_t va);
 /* El bloque fuera de KSEG0 de (pc, pa), o 0. */
 unsigned salsa64_rec_x_find(struct salsa64_rec *rec, uint64_t pc, uint32_t pa);
-/* No hay bloque de (pc, pa) mapeado: si hay uno de pc en otra física de la
- * RDRAM con los mismos bytes (la página volvió en otro marco), lo pasa a pa
- * y lo devuelve; si no, 0. */
+/* No hay bloque de (pc, pa) mapeado: si hay uno de pc (vivo en otra física,
+ * o desprendido) cuya copia de bytes coincide con lo que hay en pa (la
+ * página volvió en otro marco), lo engancha en pa y lo devuelve; si no, 0. */
 unsigned salsa64_rec_x_rekey(struct salsa64_rec *rec, uint64_t pc, uint32_t pa);
+/* El bloque mapeado `id` en la RDRAM se invalidó (su página se reescribió):
+ * si tiene copia, lo desprende en vez de matarlo; false si hay que matarlo. */
+bool salsa64_rec_x_detach(struct salsa64_rec *rec, unsigned id);
 /* Bloque nuevo `id` (de cualquier segmento): anota su vpc y, fuera de KSEG0,
  * lo agrega a xhash y xpage. */
 void salsa64_rec_x_add(struct salsa64_rec *rec, unsigned id, uint64_t pc, uint32_t pa, unsigned seg, bool code);
@@ -131,8 +150,14 @@ void salsa64_rec_x_kill_at(struct salsa64_rec *rec, uint64_t vpc);
 void salsa64_rec_kill_block(struct salsa64_rec *rec, unsigned id);
 void salsa64_rec_unlink_block(struct salsa64_rec *rec, unsigned id);
 /* El bloque mapeado `id` pasa a la física `pa` (banderas de código y la
- * palabra de ktlb[], `vt`, que compara al entrar); false si su código no
- * empieza como se espera. */
-bool salsa64_rec_block_rekey(struct salsa64_rec *rec, unsigned id, uint32_t pa, uint32_t vt);
+ * palabra de ktlb[], `vt`, que compara al entrar); `code` es su entrada
+ * (la de ahora, o la guardada si estaba desprendido) y `had_flags` si sus
+ * banderas de código siguen puestas en la física vieja. False si su código
+ * no empieza como se espera. */
+bool salsa64_rec_block_rekey(struct salsa64_rec *rec, unsigned id, uint32_t pa, uint32_t vt, uint32_t code,
+			     bool had_flags);
+/* Deja al bloque sin enlaces entrantes, sin banderas de código y con code = 0
+ * (para desprenderlo); rec_tlb.c lo saca de xpage. */
+void salsa64_rec_block_detach(struct salsa64_rec *rec, unsigned id);
 
 #endif

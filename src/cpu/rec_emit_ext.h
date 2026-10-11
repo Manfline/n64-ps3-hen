@@ -50,7 +50,7 @@ static void decode_ext(const struct salsa64_rec *rec, uint32_t i, struct dec *d)
 	decode(i, d);
 	if (!(rec->opts & SALSA64_REC_OPT_RARE_EXEC))
 		decode_promote(i, d);
-	if ((rec->opts & SALSA64_REC_OPT_LEGACY) && I_OP(i) == 0x2F)
+	if (SALSA64_REC_OLD(rec, SALSA64_REC_DBG_NO_CACHE) && I_OP(i) == 0x2F)
 		d->how = H_EXEC;  /* CACHE al intérprete, como antes */
 }
 

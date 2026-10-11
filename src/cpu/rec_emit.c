@@ -579,7 +579,7 @@ static void emit_exec(struct ctx *c, unsigned k)
 	li32u(c, 4, d->w);
 	emit_call(c, c->rec->h_exec);
 	reload(c, d->writes);
-	if (d->kind == K_END && (c->rec->opts & SALSA64_REC_OPT_LEGACY)) {
+	if (d->kind == K_END && SALSA64_REC_OLD(c->rec, SALSA64_REC_DBG_NO_ENDLINK)) {
 		/* Como antes: al despachador, que interpreta el resto del bloque básico. */
 		writeback(c, c->written);
 		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)k + 1));
@@ -655,7 +655,7 @@ static void emit_addr(struct ctx *c, unsigned rs, int16_t imm, unsigned align, i
 		E(c, ppc_or(T_X, T_X, T_Y));
 	}
 	E(c, ppc_cmpdi(CR_T, T_X, 0));
-	if (r->opts & SALSA64_REC_OPT_LEGACY) {  /* sin datos mapeados: todo lo demás a C */
+	if (SALSA64_REC_OLD(r, SALSA64_REC_DBG_NO_DATA)) {  /* sin datos mapeados: todo lo demás a C */
 		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
 		E(c, ppc_clrldi(T_Y, T_ADDR, 64 - s));
 		return;

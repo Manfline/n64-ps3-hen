@@ -354,8 +354,35 @@ código en la ROM se admite igual (KSEG1 o un mapeo a la ROM).
   se turnan (cada cambio pasa por C). Correcto, más lento. Con 16 384
   entradas el código de Perfect Dark (0x7F000000) y sus datos (0x70000000)
   no chocan; con las 4096 de antes sí (16 MB).
-- Memoria: +647 KB (`xb[]` 512 KB, `ktlb` 64 KB, `live` 32 KB, `xhash`
-  32 KB, `xpage` 4 KB, `snap` 0,75 KB).
+- Memoria: +2,2 MB (`xb[]` 512 KB, `ktlb` 64 KB, `live` 32 KB, `xhash`
+  32 KB, `xpage` 4 KB, `snap` 0,75 KB; bloques desprendidos: `copy` 1 MB,
+  `copy_off` y `saved_code` 256 KB cada uno, `state` 64 KB).
+
+### Bloques desprendidos: la página vuelve en otro marco (2026-10-11)
+
+GoldenEye pagina su código bajo demanda con un pool de marcos: la página
+virtual X vuelve en el marco que toque, y el DMA que trae otra página al
+marco invalida los bloques que había. Cada (vpc, marco) era un bloque nuevo:
+101 900 bloques en 128 s con unos 21 000 pc distintos, 7 vaciados completos
+de la caché (cada uno recompila todo lo vivo: ~15 000 bloques de golpe) y
+12–22 compilaciones por campo. El código de un bloque depende solo de su
+vpc y de sus bytes, así que:
+
+- Al compilar un bloque mapeado en la RDRAM se guarda una copia de sus
+  bytes MIPS (`x.copy[]`, 1 MB; sin copia, se comporta como antes).
+- Cuando una escritura invalida un bloque con copia, se **desprende**
+  (`salsa64_rec_x_detach`) en vez de matarlo: pierde enlaces entrantes,
+  banderas de código y `code` (así `exit_jr` y el despachador lo saltan),
+  sale de `xpage`, pero sigue en `xhash` con su copia y su código guardado.
+- Cuando el despachador no encuentra bloque para (vpc, pa) mapeado,
+  `salsa64_rec_x_rekey` busca en la cadena uno de la misma vpc (desprendido,
+  o vivo en otra física) cuya copia coincida byte a byte con lo que hay en
+  pa, y lo engancha ahí: banderas y `xpage` en la física nueva, `code` de
+  vuelta y la palabra de `ktlb[]` que compara al entrar parcheada en su
+  código (`xoris`/`cmplwi`). Sus enlaces salientes siguen valiendo (son por
+  vpc) y los entrantes se rehacen solos.
+- Un vaciado completo borra copias y estados; los ids de los desprendidos
+  se liberan solo al vaciar (si se agotan, se vacía, como antes).
 
 ### Datos mapeados por la TLB (2026-10-10)
 
@@ -439,6 +466,10 @@ monta de solo lectura en `/roms`.
 - `salsa64-run --lockstep`: una segunda máquina con el intérprete; después
   de cada bloque (sin enlaces) la lleva al mismo ciclo y compara CPU, MI y
   cada N bloques la RDRAM. Es el "modo traza" del criterio de la Fase 3.
+  La referencia lleva su propia HLE gráfica y de audio (desde el
+  2026-10-11): sin ellas no recibía la interrupción del DP de las tareas
+  con HLE (G_RDPFULLSYNC) y GoldenEye y Perfect Dark, que ya dibujan,
+  divergían por una interrupción que a la referencia nunca le llegaba.
 - La caché del host va en `.bss` con `mprotect` para que las llamadas sean
   `bl` como en la PS3; `SALSA64_REC_FAR=1` usa un `mmap` lejano y prueba el
   otro camino (`mtctr`/`bctrl`). `SALSA64_REC_DUMP=1` vuelca cada bloque.

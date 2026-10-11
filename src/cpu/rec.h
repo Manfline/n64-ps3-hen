@@ -72,7 +72,8 @@ struct salsa64_rec_stats {
 	uint64_t interp_steps;   /* instrucciones que corrió el intérprete */
 	uint64_t exec_calls;     /* instrucciones que el código generado le pasó al intérprete */
 	uint64_t compiled_x;     /* de compiled, los de KSEG1 o mapeados (rec_tlb.c) */
-	uint64_t rekeyed;        /* bloques mapeados reutilizados en otra física con los mismos bytes (rec_tlb.c) */
+	uint64_t rekeyed;        /* bloques mapeados enganchados en otra física con los mismos bytes (rec_tlb.c) */
+	uint64_t detached;       /* bloques mapeados desprendidos al reescribirse su página (rec_tlb.c) */
 	uint64_t vt_probes;      /* traducciones con la TLB del CPU (rec_tlb.c) */
 	uint64_t compile_us;     /* reservado para quien mida el tiempo de compilación */
 };
@@ -105,6 +106,16 @@ struct salsa64_rec_fixup {
  * páginas anotadas y no prellena, exit_jr mira solo la cabeza de xhash. Se
  * aplica al compilar y en el despachador: fijarla antes de salsa64_rec_init. */
 #define SALSA64_REC_OPT_LEGACY 8u
+/* Depuración (host, SALSA64_REC_OPTS): apagan una pieza nueva a la vez para
+ * acotar una diferencia en --lockstep. LEGACY las apaga todas. */
+#define SALSA64_REC_DBG_NO_ENDLINK 0x100u   /* COP0 vuelve al despachador e interpreta el resto del bloque básico */
+#define SALSA64_REC_DBG_NO_CACHE   0x200u   /* CACHE al intérprete */
+#define SALSA64_REC_DBG_NO_CHAIN   0x400u   /* exit_jr mira solo la cabeza de xhash */
+#define SALSA64_REC_DBG_NO_TSYNC   0x800u   /* x_sync vuelve a traducir todo y no prellena */
+#define SALSA64_REC_DBG_NO_DATA    0x1000u  /* sin camino rápido de datos mapeados ni anotarlos */
+#define SALSA64_REC_DBG_ERET_BOUND 0x2000u  /* tras un ERET, el intérprete hasta el fin del bloque básico */
+#define SALSA64_REC_DBG_NO_DETACH  0x4000u  /* invalidar mata el bloque (sin desprender ni enganchar) */
+#define SALSA64_REC_OLD(rec, bit)  ((rec)->opts & (SALSA64_REC_OPT_LEGACY | (bit)))
 
 struct salsa64_rec {
 	uint32_t opts;
