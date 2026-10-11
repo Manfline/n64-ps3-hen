@@ -126,6 +126,7 @@
 #include <sys/systime.h>
 #include <sys/thread.h>
 #include <sysutil/sysutil.h>
+#include <sysutil/video.h>
 
 #include <rsxkit/rsxkit.h>
 #include <rsxkit/ui.h>
@@ -173,6 +174,7 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define MENU_TEST_MAX 8
 #define MENU_IDLE_FIELDS 900  /* prueba automática: sin acción en tanto, falla */
 #define OVERSCAN_PATH SALSA64_DATA_DIR "/overscan.cfg"
+#define VIDEO_CFG_PATH SALSA64_DATA_DIR "/video.cfg"
 #define ROM_MAX      (64u << 20)
 #define FB_MAX_W     640
 #define FB_MAX_H     576
@@ -1867,12 +1869,37 @@ static int menu_loop(void)
 	return ok ? 0 : 1;
 }
 
+/* video.cfg: «1080» prefiere 1080p, con el render de la N64 a 4× (1280×960);
+ * sin archivo, o con otra cosa, 720p a 3× como siempre. Si la tele no acepta
+ * 1080, sigue con el siguiente modo de la lista. */
+static const int32_t modes_1080[] = {
+	VIDEO_RESOLUTION_1080, VIDEO_RESOLUTION_720, VIDEO_RESOLUTION_480, VIDEO_RESOLUTION_576,
+};
+
+static const rsxkit_config *video_config(rsxkit_config *cfg)
+{
+	FILE *f = fopen(VIDEO_CFG_PATH, "r");
+	if (!f)
+		return NULL;
+	char line[16] = "";
+	bool want_1080 = fgets(line, sizeof line, f) && strncmp(line, "1080", 4) == 0;
+	fclose(f);
+	if (!want_1080)
+		return NULL;
+	memset(cfg, 0, sizeof *cfg);
+	cfg->modes = modes_1080;
+	cfg->num_modes = sizeof modes_1080 / sizeof modes_1080[0];
+	return cfg;
+}
+
 int main(void)
 {
 	salsa64_log_init("salsa64");
 	pres.autotest = salsa64_autotest();
 
-	int rc = rsxkit_init(NULL);
+	rsxkit_config vcfg;
+	const rsxkit_config *vc = video_config(&vcfg);
+	int rc = rsxkit_init(vc);
 	pres.fb = rc == RSXKIT_OK ? rsxkit_fb_create(FB_MAX_W, FB_MAX_H) : NULL;
 	if (!pres.fb) {
 		salsa64_log("RESULTADO frontend: FALLO al iniciar el RSX (%d)", rc);
@@ -1880,7 +1907,8 @@ int main(void)
 		return 1;
 	}
 	const rsxkit_screen *sc = rsxkit_screen_info();
-	salsa64_log("RSX listo: %ux%u, tele %s", sc->width, sc->height, sc->aspect > 1.5f ? "16:9" : "4:3");
+	salsa64_log("RSX listo: %ux%u, tele %s%s", sc->width, sc->height, sc->aspect > 1.5f ? "16:9" : "4:3",
+		    vc ? " (video.cfg: 1080)" : "");
 	if ((rc = salsa64_rdp_init(0)) != RSXKIT_OK) {
 		salsa64_log("RESULTADO frontend: FALLO al preparar el RDP (%d)", rc);
 		rsxkit_shutdown();
