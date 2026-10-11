@@ -23,6 +23,7 @@ static struct gfx_job job;
 static struct gfx_result res;
 static uint32_t dl_pc, data_pc;
 static bool ex;  /* F3DEX en vez de F3D */
+static uint32_t job_flags;  /* GFX_JOB_* del próximo run */
 
 /* ---- Codificación de la primera generación ---- */
 
@@ -45,6 +46,7 @@ static void start(bool f3dex)
 	ex = f3dex;
 	dl_pc = DL_PA;
 	data_pc = DATA_PA;
+	job_flags = 0;
 	gfx_init(&gs);
 }
 
@@ -62,6 +64,7 @@ static void run(void)
 	job.tex_cap = sizeof out_tex;
 	job.gbi = ex ? SALSA64_GBI_F3DEX : SALSA64_GBI_F3D;
 	job.dl = DL_PA;
+	job.flags = job_flags;
 	gfx_run(&gs, &job, &res);
 }
 
@@ -127,6 +130,25 @@ static void sp_viewport_320x240(void)
 	for (int i = 0; i < 8; i++)
 		salsa64_wr16(t_n64.bus.rdram + a + 2 * i, (uint16_t)vp[i]);
 	dl(0x03800010, a);  /* G_MOVEMEM G_MV_VIEWPORT */
+}
+
+/* Viewport de 2·sx × 2·sy píxeles con centro en (tx, ty). */
+static void sp_viewport(int sx, int sy, int tx, int ty)
+{
+	uint32_t a = data_alloc(16);
+	const int16_t vp[8] = { (int16_t)(sx * 4), (int16_t)(sy * 4), 511, 0, (int16_t)(tx * 4), (int16_t)(ty * 4), 511, 0 };
+	for (int i = 0; i < 8; i++)
+		salsa64_wr16(t_n64.bus.rdram + a + 2 * i, (uint16_t)vp[i]);
+	dl(0x03800010, a);
+}
+
+/* gSPClipRatio: G_MOVEWORD G_MW_CLIP en las cuatro posiciones. */
+static void sp_clip_ratio(int r)
+{
+	dl(0xBC000004 | 0x04 << 8, (uint16_t)r);
+	dl(0xBC000004 | 0x0C << 8, (uint16_t)r);
+	dl(0xBC000004 | 0x14 << 8, (uint16_t)-r);
+	dl(0xBC000004 | 0x1C << 8, (uint16_t)-r);
 }
 
 static void sp_vertex(uint32_t addr, unsigned n, unsigned v0)
@@ -585,6 +607,95 @@ static void f3dex_commands(void)
 	CHECK(res.flags & GFX_RES_LOAD_UCODE);
 }
 
+/* El RSP recorta los triángulos contra el viewport por la clip ratio: aquí
+ * van en las tijeras del dibujo (no en las de los rectángulos). La demo de
+ * Mario Kart 64 abre con un viewport chico, clip ratio 1 y tijeras hasta
+ * (0, 0). La primera generación arranca con ratio 1. */
+static void f3dex_clip_ratio(void)
+{
+	start(true);
+	basic_setup();
+	sp_viewport(40, 30, 160, 120);  /* ventana x 120–200, y 90–150 */
+	const struct vtx v[3] = {
+		{ -4, -4, 0, 0, 0, { 255, 255, 255, 255 } },
+		{ 4, -4, 0, 0, 0, { 255, 255, 255, 255 } },
+		{ 0, 4, 0, 0, 0, { 255, 255, 255, 255 } },
+	};
+	sp_vertex(put_vertices(v, 3), 3, 0);
+	sp_tri1(0, 1, 2, 0);                     /* ratio de los datos: 1 */
+	sp_clip_ratio(2);
+	sp_tri1(0, 1, 2, 0);
+	sp_viewport(80, 60, 160, 120);           /* otro viewport: otro dibujo */
+	sp_tri1(0, 1, 2, 0);
+	dl(0xF6000000 | (100 << 2) << 12 | (100 << 2), (10 << 2) << 12 | (10 << 2));  /* G_FILLRECT */
+	run();
+	CHECK_EQ(res.triangles, 3);
+	const struct gfx_draw *d0 = draw_n(0), *d1 = draw_n(1), *d2 = draw_n(2), *d3 = draw_n(3);
+	CHECK(d0 && d1 && d2 && d3);
+	if (!d0 || !d1 || !d2 || !d3)
+		return;
+	CHECK(d0->scissor[0] == 120 * 4 && d0->scissor[1] == 90 * 4 && d0->scissor[2] == 200 * 4 &&
+	      d0->scissor[3] == 150 * 4);
+	CHECK(d1->scissor[0] == 80 * 4 && d1->scissor[1] == 60 * 4 && d1->scissor[2] == 240 * 4 &&
+	      d1->scissor[3] == 180 * 4);
+	/* ±160 × 120 por 2: más que la pantalla, mandan las tijeras del RDP. */
+	CHECK(d2->scissor[0] == 0 && d2->scissor[1] == 0 && d2->scissor[2] == 320 * 4 && d2->scissor[3] == 240 * 4);
+	/* El rectángulo, siempre con las tijeras del RDP. */
+	CHECK(d3->scissor[0] == 0 && d3->scissor[1] == 0 && d3->scissor[2] == 320 * 4 && d3->scissor[3] == 240 * 4);
+}
+
+/* Plano cercano (z = −w): con matrices identidad w = 1 y queda detrás lo
+ * que tiene z < −1. Un vértice detrás: el triángulo sale como dos; dos: uno
+ * más chico; los tres: nada. Con un microcódigo .NoN no se recorta. */
+static void f3d_near_clip(void)
+{
+	start(false);
+	basic_setup();
+	sp_clear_geometry(0xFFFFFFFF);
+	sp_set_geometry(F3D_SHADE | F3D_SMOOTH);
+	const struct vtx v[5] = {
+		{ 0, 0, 1, 0, 0, { 0, 0, 0, 255 } },
+		{ 1, 0, 1, 0, 0, { 200, 0, 0, 255 } },
+		{ 0, 1, -3, 0, 0, { 0, 100, 0, 255 } },
+		{ 1, 1, -3, 0, 0, { 0, 0, 0, 255 } },
+		{ 0, -1, -5, 0, 0, { 0, 0, 0, 255 } },
+	};
+	sp_vertex(put_vertices(v, 5), 5, 0);
+	sp_tri1(0, 1, 2, 0);
+	sp_tri1(0, 2, 3, 0);
+	sp_tri1(2, 3, 4, 0);
+	run();
+	CHECK_EQ(res.triangles, 2);
+	const struct gfx_draw *d = draw_n(0);
+	CHECK(d && d->h.b == 9);
+	/* v0 (160,120), v1 (320,120), corte v1–v2 en (240,60), corte v2–v0
+	 * en (160,60); en abanico desde v0. */
+	static const float want[6][2] = { { 160, 120 }, { 320, 120 }, { 240, 60 }, { 160, 120 }, { 240, 60 }, { 160, 60 } };
+	for (int i = 0; i < 6; i++) {
+		const struct gfx_vertex *o = &out_vtx[i];
+		CHECK(fabsf(o->x / o->w - want[i][0]) < 1e-3f && fabsf(o->y / o->w - want[i][1]) < 1e-3f);
+		CHECK(o->z >= -1e-4f);
+	}
+	CHECK_EQ(out_vtx[2].r, 100);  /* mitad de 200 y 0 */
+	CHECK_EQ(out_vtx[2].g, 50);
+	CHECK(fabsf(out_vtx[2].z) < 1e-4f);  /* el corte queda en el plano cercano */
+	/* Dos detrás (v2, v3): un triángulo de v0 a los cortes de v0–v2 y v3–v0. */
+	CHECK(fabsf(out_vtx[7].x / out_vtx[7].w - 160) < 1e-3f && fabsf(out_vtx[7].y / out_vtx[7].w - 60) < 1e-3f);
+	CHECK(fabsf(out_vtx[8].x / out_vtx[8].w - 240) < 1e-3f && fabsf(out_vtx[8].y / out_vtx[8].w - 60) < 1e-3f);
+
+	start(false);
+	job_flags = GFX_JOB_NONEAR;
+	basic_setup();
+	sp_vertex(put_vertices(v, 5), 5, 0);
+	sp_tri1(0, 1, 2, 0);
+	sp_tri1(2, 3, 4, 0);
+	run();
+	CHECK_EQ(res.triangles, 2);
+	d = draw_n(0);
+	CHECK(d && d->h.b == 6);
+	CHECK(fabsf(out_vtx[2].x / out_vtx[2].w - 160) < 1e-3f && fabsf(out_vtx[2].y / out_vtx[2].w) < 1e-3f);
+}
+
 void t_suite_gfx_f3d(void)
 {
 	RUN(f3d_triangle);
@@ -600,4 +711,6 @@ void t_suite_gfx_f3d(void)
 	RUN(f3d_tri4);
 	RUN(f3d_rdp_raw_triangle);
 	RUN(f3dex_commands);
+	RUN(f3dex_clip_ratio);
+	RUN(f3d_near_clip);
 }

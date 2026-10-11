@@ -7,6 +7,7 @@
 
 #include "core/endian.h"
 #include "core/rom.h"
+#include "rsp/gfx/backend.h"
 
 #define SP_REG(r) (0x04040000u + 4 * (r))
 
@@ -307,6 +308,37 @@ static void rsp_other_task(void)
 	CHECK_EQ(rd(SP_REG(SALSA64_SP_STATUS)) & SALSA64_SP_STATUS_TASKDONE, 0);
 }
 
+/* Los microcódigos ".NoN" no recortan contra el plano cercano: el núcleo lo
+ * anota al arrancar la tarea y el trabajo de la HLE lo lleva en sus banderas.
+ * El de Perfect Dark (sin texto) se toma como NoN (sync.c). */
+static void rsp_gfx_nonear(void)
+{
+	struct salsa64_bus *bus = &t_n64.bus;
+	static const struct { const char *text; bool nonear; } cases[] = {
+		{ "RSP Gfx ucode F3DEX.NoN   fifo 1.23 ", true },
+		{ "RSP Gfx ucode F3DZEX.NoN  fifo 2.06H ", true },
+		{ "RSP Gfx ucode F3DEX         0.95 ", false },
+		{ "RSP Gfx ucode F3DEX       fifo 2.08 ", false },
+		{ "Salsa64 GBI F3DPD", true },
+	};
+	salsa64_rsp_set_gfx(bus, &fake_backend);
+	for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+		memset(&fake, 0, sizeof fake);
+		memset(t_n64.bus.rdram + 0x5000, 0, 0x800);
+		put_text(0x5000 + 0x40, cases[i].text);
+		put_task(SALSA64_TASK_GFX, 0x5000, 0x6000);
+		wr(SP_REG(SALSA64_SP_STATUS), 0x1 | 0x4);
+		CHECK_EQ(fake.starts, 1);
+		struct gfx_job job;
+		salsa64_gfx_job(&job, bus, &fake.task, fake.gbi);
+		CHECK_EQ((job.flags & GFX_JOB_NONEAR) != 0, cases[i].nonear);
+		salsa64_sched_dispatch(&t_n64.sched, CPU->cycles + bus->rsp.gfx_cycles + bus->rsp.dp_cycles);
+		wr(SP_REG(SALSA64_SP_STATUS), 0x8);
+		bus->mi.intr = 0;
+	}
+	salsa64_rsp_set_gfx(bus, NULL);
+}
+
 static enum salsa64_gbi detect(const char *text)
 {
 	struct salsa64_task task;
@@ -400,5 +432,6 @@ void t_suite_rsp(void)
 	RUN(rsp_audio_task);
 	RUN(rsp_other_task);
 	RUN(rsp_detect_gbi);
+	RUN(rsp_gfx_nonear);
 	RUN(rsp_detect_gbi_crc);
 }

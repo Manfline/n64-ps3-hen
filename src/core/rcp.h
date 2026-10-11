@@ -243,6 +243,7 @@ struct salsa64_rsp {
 	const struct salsa64_dpc_backend *dpc;
 	uint32_t busy;          /* tipo de la tarea en curso; 0 = ninguna */
 	enum salsa64_gbi gbi;   /* de la tarea en curso */
+	bool gfx_nonear;        /* su microcódigo no recorta el plano cercano (".NoN") */
 	enum salsa64_abi abi;   /* de la última tarea de audio */
 	/* Duración aparente de cada tarea, en ciclos del VR4300. */
 	uint32_t gfx_cycles, audio_cycles, dp_cycles;

@@ -251,8 +251,27 @@ static enum salsa64_gbi gbi_by_crc(const struct salsa64_bus *bus, const struct s
 	return SALSA64_GBI_UNKNOWN;
 }
 
+/* ¿El nombre del microcódigo ("RSP Gfx ucode F3DEX.NoN fifo 1.22"…) dice
+ * que no recorta contra el plano cercano? */
+static bool gfx_ucode_nonear(const uint8_t *q, const uint8_t *end)
+{
+	for (; q + 4 <= end && *q && *q != ' '; q++)
+		if (starts_with(q, end, ".NoN"))
+			return true;
+	return false;
+}
+
+static enum salsa64_gbi detect_gbi(const struct salsa64_bus *bus, const struct salsa64_task *task, bool *nonear);
+
 enum salsa64_gbi salsa64_rsp_detect_gbi(const struct salsa64_bus *bus, const struct salsa64_task *task)
 {
+	bool nonear;
+	return detect_gbi(bus, task, &nonear);
+}
+
+static enum salsa64_gbi detect_gbi(const struct salsa64_bus *bus, const struct salsa64_task *task, bool *nonear)
+{
+	*nonear = false;
 	uint32_t addr = task->ucode_data & 0x1FFFFFFF;
 	uint32_t size = task->ucode_data_size;
 	if (size == 0 || size > UCODE_SCAN_MAX)
@@ -280,6 +299,7 @@ enum salsa64_gbi salsa64_rsp_detect_gbi(const struct salsa64_bus *bus, const str
 	const uint8_t *q = find(p, end, "RSP Gfx ucode ");
 	if (q) {
 		q += 14;
+		*nonear = gfx_ucode_nonear(q, end);
 		if (starts_with(q, end, "S2DEX"))
 			return SALSA64_GBI_S2DEX;
 		/* El de Conker ("F3DEXBG.NoN fifo 2.08"): F3DEX2 con lo suyo. */
@@ -345,7 +365,8 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 	rsp->poll_idle = bus->cpu ? bus->cpu->idle_cycles : 0;
 	bool valid = in_rdram(bus, task.data_ptr, 8) && in_rdram(bus, task.ucode_data, 16);
 
-	enum salsa64_gbi gbi = task.type == SALSA64_TASK_GFX && valid ? salsa64_rsp_detect_gbi(bus, &task)
+	bool nonear = false;
+	enum salsa64_gbi gbi = task.type == SALSA64_TASK_GFX && valid ? detect_gbi(bus, &task, &nonear)
 								       : SALSA64_GBI_UNKNOWN;
 	enum salsa64_abi abi = task.type == SALSA64_TASK_AUDIO && valid ? salsa64_rsp_detect_abi(bus, &task)
 								       : SALSA64_ABI_UNKNOWN;
@@ -374,6 +395,7 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 			rsp->stats.gfx++;
 			rsp->busy = SALSA64_TASK_GFX;
 			rsp->gbi = gbi;
+			rsp->gfx_nonear = nonear;
 			if (rsp->gfx)
 				rsp->gfx->start(rsp->gfx->ctx, &task, gbi);
 			salsa64_sched_set(rsp->sched, SALSA64_EV_SP_TASK, now + rsp->gfx_cycles);

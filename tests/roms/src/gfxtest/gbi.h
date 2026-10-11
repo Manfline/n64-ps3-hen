@@ -137,6 +137,21 @@ static inline void sp_viewport(gfx **dl, const volatile void *vp)
 #endif
 }
 
+/* gSPClipRatio: el RSP recorta los triángulos contra el viewport por r
+ * (G_MOVEWORD G_MW_CLIP en las cuatro posiciones; las positivas con -r). */
+static inline void sp_clip_ratio(gfx **dl, int r)
+{
+	static const unsigned off[4] = { 0x04, 0x0C, 0x14, 0x1C };
+	for (int i = 0; i < 4; i++) {
+		uint32_t v = (uint16_t)(i < 2 ? r : -r);
+#ifdef GBI_1
+		cmd(dl, 0xBC000004u | off[i] << 8, v);
+#else
+		cmd(dl, 0xDB040000u | off[i], v);
+#endif
+	}
+}
+
 /* En la primera generación, G_CLEARGEOMETRYMODE y G_SETGEOMETRYMODE. */
 static inline void sp_geometry(gfx **dl, uint32_t clear, uint32_t set)
 {

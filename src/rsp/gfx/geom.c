@@ -61,6 +61,7 @@ void gfx_geom_reset(struct gfx_state *g)
 	g->vscale[0] = g->vtrans[0] = 160.0f;
 	g->vscale[1] = g->vtrans[1] = 120.0f;
 	g->vscale[2] = g->vtrans[2] = 511.0f;
+	g->clip_ratio[0] = g->clip_ratio[1] = 1.0f;  /* gfx_run pone la del microcódigo */
 	g->fog_mul = g->fog_off = 0.0f;
 	memset(g->vtx, 0, sizeof g->vtx);
 }
@@ -235,8 +236,24 @@ void gfx_set_viewport(struct gfx_state *g, const uint8_t *vp)
 {
 	for (int i = 0; i < 3; i++) {
 		float k = i < 2 ? 0.25f : 1.0f;
-		g->vscale[i] = (float)(int16_t)salsa64_rd16(vp + 2 * i) * k;
-		g->vtrans[i] = (float)(int16_t)salsa64_rd16(vp + 8 + 2 * i) * k;
+		float s = (float)(int16_t)salsa64_rd16(vp + 2 * i) * k, t = (float)(int16_t)salsa64_rd16(vp + 8 + 2 * i) * k;
+		if (i < 2 && (s != g->vscale[i] || t != g->vtrans[i]))
+			g->dirty = true;  /* la caja de recorte va en las tijeras del dibujo */
+		g->vscale[i] = s;
+		g->vtrans[i] = t;
+	}
+}
+
+void gfx_clip_ratio(struct gfx_state *g, uint32_t offset, uint32_t value)
+{
+	if (offset != 0x04 && offset != 0x0C)
+		return;
+	int16_t r = (int16_t)(value & 0xFFFF);
+	float f = (float)(r < 0 ? -r : r);
+	float *dst = &g->clip_ratio[offset == 0x0C];
+	if (f > 0.0f && f != *dst) {
+		*dst = f;
+		g->dirty = true;
 	}
 }
 
