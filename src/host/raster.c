@@ -61,6 +61,18 @@ static struct depth *get_depth(uint32_t addr)
 	return d;
 }
 
+#ifdef SALSA64_GFX_TRACE
+/* Depuración (build con -DSALSA64_GFX_TRACE, solo en las tareas que traza
+ * --trace-gfx): SALSA64_GFX_MARK=n[,m…] pinta de magenta esos dibujos y
+ * SALSA64_GFX_PIX=x,y muestra qué dibujos escriben ese píxel y con qué valores. */
+#include <stdio.h>
+#include <stdlib.h>
+extern int salsa64_gfx_trace_now;
+static bool raster_mark;
+static unsigned ndraw;
+static int pix_x = -1, pix_y = -1;
+#endif
+
 static float clamp01(float v)
 {
 	return v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v;
@@ -198,6 +210,18 @@ static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, 
 						 tx[1][l] * X[GFX_K_T1][l] + tx[1][3] * X[GFX_K_T1A][l] + X[GFX_K_ONE][l]);
 			if (d->atest == GFX_ATEST_GEQUAL && out[3] * 255.0f + 0.5f < d->aref)
 				continue;
+#ifdef SALSA64_GFX_TRACE
+			if (raster_mark)
+				out[0] = 1.0f, out[1] = 0.0f, out[2] = 1.0f, out[3] = 1.0f;
+#endif
+#ifdef SALSA64_GFX_TRACE
+			if (pix_x == x && pix_y == y)
+				fprintf(stderr, "    PIX draw %u ntex %u blend %u atest %u c %.2f %.2f %.2f %.2f tx0 %.2f %.2f %.2f %.2f "
+					"X0 %.2f %.2f %.2f X4 %.2f %.2f %.2f out %.2f %.2f %.2f %.2f s %.1f t %.1f z %.3f\n",
+					ndraw, d->ntex, d->blend, d->atest, c[0], c[1], c[2], c[3], tx[0][0], tx[0][1], tx[0][2], tx[0][3],
+					X[GFX_K_T0][0], X[GFX_K_T0][1], X[GFX_K_T0][2], X[GFX_K_ONE][0], X[GFX_K_ONE][1], X[GFX_K_ONE][2],
+					out[0], out[1], out[2], out[3], s, t, z);
+#endif
 			uint32_t old = tg->rgb[idx];
 			float dst[3] = { (old >> 16 & 0xFF) / 255.0f, (old >> 8 & 0xFF) / 255.0f, (old & 0xFF) / 255.0f };
 			if (d->blend == GFX_BLEND_KEEP)
@@ -222,6 +246,12 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 	const struct texmem m = { { (const uint8_t *)(uintptr_t)job->tex_ea, (const uint8_t *)(uintptr_t)job->cache_ea } };
 	struct target *tg = NULL;
 	uint32_t off = 0;
+#ifdef SALSA64_GFX_TRACE
+	ndraw = 0;
+	pix_x = pix_y = -1;
+	if (salsa64_gfx_trace_now && getenv("SALSA64_GFX_PIX"))
+		sscanf(getenv("SALSA64_GFX_PIX"), "%d,%d", &pix_x, &pix_y);
+#endif
 	while (off + sizeof(struct gfx_cmd) <= res->cmd_bytes) {
 		const struct gfx_cmd *c = (const struct gfx_cmd *)(cmd + off);
 		if (c->op == GFX_OP_END || c->size == 0)
@@ -240,6 +270,22 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 		}
 		case GFX_OP_DRAW: {
 			const struct gfx_draw *d = (const struct gfx_draw *)c;
+#ifdef SALSA64_GFX_TRACE
+			{
+				ndraw++;
+				const char *mk = salsa64_gfx_trace_now ? getenv("SALSA64_GFX_MARK") : NULL;
+				raster_mark = false;
+				for (const char *q = mk; q && *q;) {
+					char *e;
+					unsigned long n = strtoul(q, &e, 10);
+					if (e == q)
+						break;
+					if (n == ndraw)
+						raster_mark = true;
+					q = *e ? e + 1 : e;
+				}
+			}
+#endif
 			if (!tg)
 				break;
 			struct depth *zb = d->depth ? get_depth(d->zimg) : NULL;

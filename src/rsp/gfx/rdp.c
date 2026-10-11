@@ -15,6 +15,11 @@
 
 #include "rsp/gfx/hle.h"
 
+#ifdef SALSA64_GFX_TRACE
+/* Depuración en el host (src/host/run.c): el estado resumido de cada dibujo. */
+void salsa64_gfx_trace_state(const struct gfx_state *g, const struct gfx_draw *d, int kind, int tile);
+#endif
+
 enum {
 	RDP_TRI_FIRST = 0xC8, RDP_TRI_LAST = 0xCF,
 	G_RDPLOADSYNC = 0xE6, G_RDPPIPESYNC = 0xE7, G_RDPTILESYNC = 0xE8, G_RDPFULLSYNC = 0xE9,
@@ -268,6 +273,9 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 		for (int t = d->ntex == 0 ? GFX_K_T0 : GFX_K_T1; t <= GFX_K_T1A; t++)
 			memset(d->k[t], 0, sizeof d->k[t]);
 	}
+#ifdef SALSA64_GFX_TRACE
+	salsa64_gfx_trace_state(g, d, kind, tile);
+#endif
 }
 
 void gfx_flush_draw(struct gfx_state *g)
