@@ -31,8 +31,8 @@ de arranque `amazing-noether-39a548` con `osCicId`, sin integrar):
   `gfx_state.rare` (~250 bytes) con el estado de las dos variantes; dos GBI
   nuevos en rcp.h; F3DEX2, F3D y F3DEX no cambian (mismas pruebas y
   mismas imágenes de gfxtest).
-- SPE 0: Perfect Dark 1,9 KB y Conker 4,4 KB de código; texto 72 KB (con main
-  53fb223), bss 145 KB, pila ~38 KB (antes ~46; `src/spu/gfx/main.c`). `GFX_MAX_LIGHTS`
+- SPE 0: Perfect Dark 1,9 KB y Conker 4,4 KB de código; texto 73 KB (con main
+  755cbaa), bss 145 KB, pila ~37 KB (antes ~46; `src/spu/gfx/main.c`). `GFX_MAX_LIGHTS`
   pasó de 8 a 11: Conker pide hasta 11 luces (`G_MW_NUMLIGHT` = 0x210).
 - Pruebas: suite `gfx-rare` (9: colores por tabla, luz con la normal en la
   tabla, G_TRI4 y G_QUAD de PD; G_TRI4 de 5 bits, G_LOAD_UCODE que no corta
@@ -47,6 +47,14 @@ de arranque `amazing-noether-39a548` con `osCicId`, sin integrar):
   la azotea); **Conker** 4468 tareas, 0 sin implementar, 0 aproximados
   (pantalla legal, logos, Conker con la motosierra, la taberna, menú
   «GAME 1»). Detalle en docs/compatibilidad.md.
+- Con main 755cbaa fusionado: build sin advertencias, test-roms (nemu64-test
+  446, vitest, controles, savetest, gfxtest ×3 con 22/22, audiotest),
+  test-phase1 y test-phase2 en RPCS3 (297/297 big-endian antes de la última
+  fusión), test-rec en qemu (nemu64-test con la línea base y vitest con el
+  recompilador; las unitarias pasan hasta `gfx-rare` en los cuatro modos y
+  se caen en `sync`, como en main). Sin regresión: SM64, Mario Kart 64,
+  GoldenEye, Star Fox 64 y Banjo-Kazooie dan, con main y con esta rama, el
+  mismo resumen gráfico y la misma imagen a los 60 s.
 - Depuración en el host: `EXTRA_CFLAGS=-DSALSA64_DEBUG_DL` vuelca las
   display lists (`SALSA64_DEBUG_DL=N`, `SALSA64_DEBUG_DL_FROM=k`) y
   `-DRASTER_W=640 -DRASTER_H=480` agranda el rasterizador para pantallas de
@@ -54,8 +62,11 @@ de arranque `amazing-noether-39a548` con `osCicId`, sin integrar):
 
 Pendiente:
 - [ ] PS3 real: Perfect Dark y Conker con el paquete «Salsa64 Rare»
-      (SLSA00081); que el autor confirme lo que se ve (y la boca de Conker en
-      la escena del logo de Rareware: oscura por dentro, parece correcto).
+      (SLSA00081, ya en /dev_hdd0/packages/salsa64-rare.gnpdrm.pkg, con
+      main 755cbaa); que el autor confirme lo que se ve (y la boca de Conker
+      en la escena del logo de Rareware: oscura por dentro, parece
+      correcto), y un minuto de SM64 o Mario Kart por si hay regresión. Al
+      terminar, `embedded` como estaba.
 - [ ] Perfect Dark aproxima `lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE` (el de
       GoldenEye): término S·Sa en el RSX (Fase 4).
 - [ ] Efectos de framebuffer de los dos (cámara espía y monitores de PD,
