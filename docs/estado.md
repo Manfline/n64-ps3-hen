@@ -60,13 +60,70 @@ Pruebas:
   de determinismo de gfxtest corre con el rasterizador en las tres corridas
   (copias espejo y a la RDRAM leídas por el CPU en cada tarea): idéntica; en
   el host con respaldos, también la pausa de Zelda (16090 → 16300), el túnel
-  de Mario Kart y la presa de GoldenEye. Hallado de paso (de main, no de los
-  estados): con copias (`SALSA64_FBFX=2`) el rasterizador del host deja de
-  dibujar SM64 a las 96 tareas gráficas (~campo 350); con 0 o 1, normal.
+  de Mario Kart, la presa de GoldenEye y SM64 (del logo a la cara de Mario y
+  el castillo, tras el arreglo de main de la copia del framebuffer, que
+  esta prueba encontró: el rasterizador del host dejaba de dibujar SM64 a
+  las 96 tareas). La marca de «ya copiado» de cada destino se reinicia al
+  cargar; lo dibujado que todavía no se copió no entra en el estado
+  (docs/estados.md, «Lo que no entra en un estado»).
 
 Pendiente: la PS3 real (guardar y cargar en Zelda, SM64, Mario Kart y
 GoldenEye con varias ranuras, cargar tras volver al menú, tiempos, y que el
 contador no cambie los campos/s).
+
+## 2026-10-11 — SM64 se colgaba con los efectos de framebuffer: el espejo del framebuffer sigue al dibujo, no al VI
+
+**Síntoma** (host, main 4baa6df): Super Mario 64 con `SALSA64_FBFX=2` dejaba
+de mandar tareas gráficas en la 96 (campo ~343, paso del logo a la cara de
+Mario; el audio seguía). Bisección con `--first-parent` en la rama de los
+efectos: lo rompe b4d9d61 («Host: el modelo de copias sigue la política de
+la consola»); ya había fallado en bf836f2 (espejo del framebuffer por
+campo) y lo tapaba sin querer que el host copiara todos los framebuffers
+al terminar cada tarea (su `vi_width` quedaba en 0).
+
+**Causa** (docs/framebuffer.md, «Espejo del framebuffer»): el espejo
+copiaba el framebuffer presentado en cada campo. SM64 dibuja un
+framebuffer (tarea 95), carga por DMA ~200 KB de datos de la cara sobre dos
+de sus framebuffers (`390000`–`3c2780`) mientras el VI todavía muestra uno,
+y lo presenta un campo más: la copia pisaba esos datos (el código de la
+cara los lee en el campo 354) y el juego se colgaba. Copiar «una vez al
+presentar» no alcanza (ese framebuffer se presenta por primera vez después
+del DMA). Además el host copiaba el alto conjeturado (`lh`) en vez de las
+filas que muestra el VI: la intro de Conker se colgaba en la tarea 34 (en
+la PS3, que copia las filas del VI, no).
+
+**Arreglo**: lo dibujado en un framebuffer se copia a la RDRAM una vez por
+dibujo, al terminar la tarea si el VI ya lo mostró alguna vez y si no al
+presentarlo (`rdp_targets_mirror_at_task_end` / `rdp_targets_mirror_wanted`
+en `src/rdp/targets.c`), igual en `src/rdp/rdp.c` (PS3) y en
+`src/host/raster.c`. Pruebas: `targets_frame_mirror` (política) y
+`raster_frame_mirror_sm64` (el rasterizador del host de punta a punta,
+`tests/unit/test_raster.c`; falla con el raster.c de main).
+
+**¿La PS3?** El camino existe ahí: `frame_mirror` de `rdp.c` copia el
+presentado en cada campo desde bf836f2 y su copia llega un campo después,
+o sea después del DMA del campo 343 (el host con ese retraso simulado
+también se cuelga en la tarea 96). No hay registro de SM64 en la PS3 con el
+espejo: `build/ps3-logs/sm64.log` no tiene «cuadros copiados» (anterior a
+bf836f2). Hay que confirmarlo en la consola.
+
+**Verificación** (host nativo, respaldos fuera del repo): SM64 660 tareas
+en 1500 campos (como con `FBFX=1`) y hasta el castillo con el medidor de
+energía igual que con `FBFX=1`; Conker 395 tareas (main 34; igual que
+`FBFX=1`); Zelda: pausa (fondo difuminado) y pantalla de equipo con Link,
+53 capturas idénticas a main (partida nueva «A» creada con el control);
+Mario Kart en Luigi Raceway (`mk64-luigi.pad`) y GoldenEye idénticos a main
+(el pad no llega al túnel); Banjo con la misma imagen de la HLE.
+`test-host` 371/371, `test-roms` en verde (gfxtest 35/35 en las tres
+variantes), `build.sh` sin avisos, `test-phase2` en verde (gfxtest 35/35
+en RPCS3).
+
+**Pendiente (PS3 real):** SM64 del logo a la cara de Mario y al castillo,
+la cámara del túnel de Luigi Raceway, la pausa y la pantalla de equipo de
+Zelda, Conker. Queda una carrera solo de la PS3: la copia llega a la RDRAM
+uno o dos campos después de traducir la tarea, así que un DMA sobre un
+framebuffer en el mismo campo en que el RDP lo terminó podría quedar
+debajo (en SM64 pasan ~4 campos).
 
 ## 2026-10-11 — Efectos de framebuffer: render a textura y copias RSX → RDRAM (rama hopeful-dirac)
 

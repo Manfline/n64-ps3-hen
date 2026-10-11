@@ -141,13 +141,25 @@ planificador, HLE) y las mismas imágenes (VI y HLE gráfica).
   copias RSX → RDRAM son parte del estado): la pausa de Zelda (16090 →
   16300, `zelda-pausa-nueva.pad`, con las copias de la pausa y el filtro del
   CPU), el túnel de Mario Kart (3000 → 3300, `mk64-luigi.pad`), la presa de
-  GoldenEye y el castillo de SM64 (con `SALSA64_FBFX=1`: con copias, el
-  rasterizador del host deja de dibujar SM64 a las 96 tareas, también sin
-  estados): idénticos.
+  GoldenEye, y SM64 del logo a la cara de Mario (300 → 500) y en el
+  castillo: idénticos.
 
 En la PS3 la emulación no es determinista ciclo a ciclo (los SPE terminan
 cuando terminan y el fin de tarea se sondea), así que allí se prueba que
 guardar y cargar funcione, no que dos corridas coincidan.
+
+## Lo que no entra en un estado
+
+Los píxeles que solo están en el RSX. Con los efectos de framebuffer, lo
+que el RDP dibuja vuelve a la RDRAM por las copias (docs/framebuffer.md);
+la barrera espera las que estén en vuelo. Lo que todavía no se copió
+porque espera su momento (un framebuffer dibujado por primera vez se copia
+cuando el VI lo presenta) se copia después de guardar, como siempre, pero
+no queda en el archivo: al cargar ese estado, esa copia no llega (un cuadro
+del framebuffer con lo que había en la RDRAM). La marca de «ya copiado» de
+cada destino se reinicia al cargar (`drop_targets`), así que nada se copia
+dos veces. Pasa al empezar un juego o cuando cambia de framebuffers; en los
+juegos medidos, guardar en medio del juego da estados idénticos.
 
 ## Lo que se ve al cargar
 

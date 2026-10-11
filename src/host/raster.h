@@ -38,6 +38,9 @@ extern int raster_fbfx;
 /* Cada campo con imagen: el origen y ancho del VI (como salsa64_rdp_vi). */
 struct salsa64_vi_frame;
 void raster_vi(const struct salsa64_vi_frame *f);
+/* Vuelve al estado del arranque: tabla de destinos, imágenes y cuentas
+ * (pruebas unitarias; salsa64-run no lo necesita). */
+void raster_reset(void);
 /* Totales: copias a la RDRAM, destinos cebados, texturas desde un destino
  * (de su imagen) y desde la RDRAM. */
 void raster_fb_stats(uint32_t *readbacks, uint32_t *primes, uint32_t *tex_rsx, uint32_t *tex_rdram);

@@ -55,6 +55,7 @@ int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32
 			 * ahora se pierde; pasa una vez). */
 			t->lh = lh;
 			t->drawn = false;
+			t->mirrored = true;
 			s->created++;
 			*fresh = true;
 			return i;
@@ -78,6 +79,7 @@ int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32
 	t->drawn = false;
 	t->presented = false;
 	t->cpu_owned = false;
+	t->mirrored = true;  /* nada dibujado aún que copiar a la RDRAM */
 	t->addr = addr;
 	t->width = width;
 	t->bpp = siz == IM_SIZ_32b ? 4 : siz == IM_SIZ_8b ? 1 : 2;
@@ -99,6 +101,7 @@ void rdp_targets_drawn(struct rdp_targets *s, int slot)
 	s->t[slot].last_task = s->task;
 	s->t[slot].drawn = true;
 	s->t[slot].cpu_owned = false;  /* el RDP volvió a escribir: la verdad está en el RSX */
+	s->t[slot].mirrored = false;
 }
 
 void rdp_targets_task(struct rdp_targets *s)
@@ -138,6 +141,25 @@ bool rdp_targets_readback(struct rdp_targets *s, int slot, bool force)
 	t->cpu_owned = true;
 	s->readbacks++;
 	return true;
+}
+
+bool rdp_targets_mirror_wanted(const struct rdp_targets *s, int slot)
+{
+	return slot >= 0 && slot < RDP_TARGETS_MAX && s->t[slot].used && !s->t[slot].mirrored;
+}
+
+bool rdp_targets_mirror_at_task_end(const struct rdp_targets *s, int slot)
+{
+	if (!rdp_targets_mirror_wanted(s, slot))
+		return false;
+	const struct rdp_target *t = &s->t[slot];
+	return t->presented && t->bpp == 2 && t->width == s->vi_width;
+}
+
+void rdp_targets_mirrored(struct rdp_targets *s, int slot)
+{
+	if (slot >= 0 && slot < RDP_TARGETS_MAX)
+		s->t[slot].mirrored = true;
 }
 
 void rdp_vi_ring_push(struct rdp_vi_ring *r, uint32_t origin, uint32_t width)
