@@ -51,7 +51,7 @@ bool raster_trace_fb;
 uint32_t raster_field;
 int raster_fbfx = 2;
 static struct rdp_vi_ring vi_ring;
-static uint32_t primes, readbacks;
+static uint32_t primes, readbacks, mirrors;
 
 static void prime(const struct gfx_job *job, int slot);
 
@@ -411,13 +411,14 @@ static int locate_any(uint32_t addr)
 	return -1;
 }
 
-/* Copia el destino a la RDRAM como RGBA5551 (sin cobertura: alfa 1). */
-static void readback(const struct gfx_job *job, int slot)
+/* Copia a la RDRAM como RGBA5551 (sin cobertura: alfa 1) las `rows`
+ * primeras filas del destino. */
+static void readback(const struct gfx_job *job, int slot, uint32_t rows)
 {
 	const struct rdp_target *t = &tg.t[slot];
 	if (t->bpp != 2 || !job->rdram_ea)
 		return;
-	uint32_t w = t->width < RASTER_W ? t->width : RASTER_W, h = t->lh < RASTER_H ? t->lh : RASTER_H;
+	uint32_t w = t->width < RASTER_W ? t->width : RASTER_W, h = rows < RASTER_H ? rows : RASTER_H;
 	uint8_t *rdram = (uint8_t *)(uintptr_t)job->rdram_ea;
 	for (uint32_t y = 0; y < h; y++) {
 		uint32_t a = t->addr + y * t->width * 2;
@@ -439,6 +440,7 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 	int cur = -1;
 	uint32_t off = 0;
 	bool drawn[RDP_TARGETS_MAX] = { false };
+	uint32_t drawn_rows[RDP_TARGETS_MAX] = { 0 };  /* hasta dónde llegaron las tijeras */
 	/* Dibujos que leen cada destino en esta tarea, por destino escrito (traza). */
 	uint32_t reads[RDP_TARGETS_MAX][RDP_TARGETS_MAX] = { { 0 } }, read_stale[RDP_TARGETS_MAX][RDP_TARGETS_MAX] = { { 0 } };
 	uint32_t read_age[RDP_TARGETS_MAX] = { 0 };
@@ -519,6 +521,8 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 			if (!drawn[cur])
 				rdp_targets_drawn(&tg, cur);
 			drawn[cur] = true;
+			if ((uint32_t)(d->scissor[3] + 3) / 4 > drawn_rows[cur])
+				drawn_rows[cur] = (d->scissor[3] + 3) / 4;
 			break;
 		}
 		default:
@@ -536,13 +540,19 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 		if (!drawn[i])
 			continue;
 		/* Como en la PS3: lo decide el ancho del VI y sus orígenes. */
-		if (raster_fbfx >= 2 && rdp_readback_wanted(&vi_ring, tg.t[i].addr, tg.t[i].width, tg.t[i].bpp == 2 ? 2 : 0) &&
+		const struct rdp_target *t = &tg.t[i];
+		uint32_t rows = drawn_rows[i] < t->lh ? drawn_rows[i] : t->lh;
+		if (raster_fbfx >= 2 && rdp_readback_wanted(&vi_ring, t->addr, t->width, t->bpp == 2 ? 2 : 0) &&
 		    rdp_targets_readback(&tg, i, true)) {
-			readback(job, i);
+			readback(job, i, rows);
 			readbacks++;
 			if (raster_trace_fb)
 				fprintf(stderr, "fb: campo %u tarea %u: copia a la RDRAM del destino %06x/%u\n", raster_field,
-					task_no, tg.t[i].addr, tg.t[i].width);
+					task_no, t->addr, t->width);
+		} else if (raster_fbfx >= 2 && rows && !t->presented && t->bpp == 2 && t->width != tg.vi_width) {
+			/* Espejo de una imagen auxiliar chica (en la PS3, sin esperar). */
+			readback(job, i, rows);
+			mirrors++;
 		}
 	}
 }

@@ -80,8 +80,16 @@ superficie R5G6B5 **en memoria principal mapeada**, filtro lineal), espera
 la barrera y convierte a RGBA5551 escribiendo en la RDRAM
 (`rsxkit_pixels_565_to_5551`, 4 píxeles por palabra). Desde entonces el
 destino es «del CPU» (`cpu_owned`) hasta que el RDP lo vuelva a dibujar.
-Las imágenes chicas (iconos, pantallas) nunca se copian: se quedan en el
-RSX como textura.
+Las imágenes chicas (iconos, pantallas) no se esperan: al terminar la tarea
+que las dibujó se encola una **copia espejo** (solo las filas que llegaron
+las tijeras, hasta 64 KB, cuatro en vuelo) y se convierte a la RDRAM en
+una traducción posterior, cuando el RSX pasó su barrera, sin marcar el
+destino como del CPU. Así, mientras son recientes se leen del RSX a 3× y,
+cuando un dibujo las lee ya viejas (Link en la pantalla de equipo de Zelda
+se dibuja en `289600/64` al abrir la pausa y se lee 395 tareas después), la
+RDRAM tiene lo que el RDP dejó. Las copias a la RDRAM escriben solo las
+filas dibujadas: el alto de un destino es una conjetura y pasarse
+pisaría datos del juego.
 
 **Cebado.** La N64 dibuja siempre encima de lo que hay en la RDRAM. Una
 superficie nueva, o sin dibujar desde hace más de `RDP_TARGETS_FRESH`

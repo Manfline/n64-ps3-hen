@@ -1145,13 +1145,14 @@ static void stats(uint64_t now)
 		uint32_t rb = rs.readbacks - sw.rdp0.readbacks, rbw = rs.readback_waits - sw.rdp0.readback_waits;
 		uint32_t trsx = rs.tex_rsx - sw.rdp0.tex_rsx, trd = rs.tex_rdram - sw.rdp0.tex_rdram;
 		uint32_t tself = rs.tex_self - sw.rdp0.tex_self, primes = rs.primes - sw.rdp0.primes;
-		if (rb || rbw || trsx || trd || tself || primes)
+		uint32_t mir = rs.mirrors - sw.rdp0.mirrors, mirs = rs.mirrors_skipped - sw.rdp0.mirrors_skipped;
+		if (rb || rbw || mir || mirs || trsx || trd || tself || primes)
 			salsa64_log("gfx: framebuffer: %u copias a la RDRAM (%.2f ms c/u en presentación), la emulación "
-				    "esperó %u tareas (%.2f ms c/u, %u tarde), texturas desde un destino: %u del RSX, "
-				    "%u de la RDRAM, %u del ligado; %u destinos cebados",
+				    "esperó %u tareas (%.2f ms c/u, %u tarde), %u copias espejo (%u sin búfer); texturas "
+				    "desde un destino: %u del RSX, %u de la RDRAM, %u del ligado; %u destinos cebados",
 				    rb, rb ? (rs.us_readback - sw.rdp0.us_readback) / 1e3 / rb : 0.0, rbw,
 				    rbw ? (rs.us_readback_wait - sw.rdp0.us_readback_wait) / 1e3 / rbw : 0.0,
-				    rs.readback_late - sw.rdp0.readback_late, trsx, trd, tself, primes);
+				    rs.readback_late - sw.rdp0.readback_late, mir, mirs, trsx, trd, tself, primes);
 	}
 	if (lle_mode != SALSA64_LLE_OFF) {
 		uint32_t t = rsp_spu.tasks - sw.lle_tasks0;

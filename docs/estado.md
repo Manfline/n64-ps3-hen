@@ -47,8 +47,13 @@ de accesos del CPU, build `-DSALSA64_WATCH_MEM`):**
   emulación) recorre las cabeceras de la tarea, decide con el anillo del VI,
   despierta a presentación y espera `readback_done` (hasta 200 ms, lo
   cuenta como «tarde»); `translate` encola la reducción, espera la barrera y
-  convierte a RGBA5551 en la RDRAM. Interruptor `SALSA64_DATA_DIR/fbfx.cfg`
-  (0, 1, 2); línea «gfx: framebuffer:» en el log cada 5 s.
+  convierte a RGBA5551 en la RDRAM. Las imágenes auxiliares chicas van
+  como **copias espejo** sin esperar (se convierten cuando pasa la
+  barrera): Link se dibuja en `289600/64` al abrir la pausa y la pantalla
+  de equipo lo lee 395 tareas después, ya desde la RDRAM. Solo se escriben
+  las filas dibujadas (el alto es una conjetura). Interruptor
+  `SALSA64_DATA_DIR/fbfx.cfg` (0, 1, 2); línea «gfx: framebuffer:» en el
+  log cada 5 s.
 - El host (`src/host/raster.c`) sigue la misma tabla y política: la pausa
   de Zelda en la Mac pasa de ruido a mostrar el bosque Kokiri bajo el mapa
   (`build/oot/cmp1.png`, fuera de git). `--trace-fb`, `SALSA64_FBFX`.
@@ -68,12 +73,14 @@ spu-jobs, menú) y `tools/test-rec.sh` (356 unitarias big-endian ×4,
 nemu64-test 433, vitest).
 
 Pendiente:
-- [ ] **PS3 real:** subir el paquete, Zelda: pausa (fondo y pantalla de
-      equipo con Link), medir la línea «gfx: framebuffer:» (ms por copia y
-      por espera) y anotarlo en docs/perf-log.md; comprobar que gfxtest da
-      28/28 en la PS3 (orden de bytes de la superficie R5G6B5 en memoria
-      principal: la única suposición sin verificar en hardware). Regresiones:
-      GoldenEye, Banjo, Conker, SM64, Mario Kart un minuto cada uno.
+- [ ] **PS3 real:** subir el paquete, Zelda: pausa (fondo y, con R dos
+      veces, la pantalla de equipo con Link), medir la línea «gfx:
+      framebuffer:» (ms por copia y por espera) y anotarlo en
+      docs/perf-log.md; comprobar que gfxtest da 28/28 en la PS3 (orden de
+      bytes de la superficie R5G6B5 en memoria principal: la única
+      suposición sin verificar en hardware; en RPCS3 ya da 28/28).
+      Regresiones: GoldenEye, Banjo, Conker, SM64, Mario Kart un minuto
+      cada uno.
 - [ ] Mario Kart: localizar la escena de las pantallas con el autor.
 - [ ] Perfect Dark y Conker: copias del z-buffer, sombra, desenfoque;
       color images de 32 y 8 bits.
