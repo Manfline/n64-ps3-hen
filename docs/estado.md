@@ -44,8 +44,12 @@ Pruebas:
 - RPCS3 (`tools/rpcs3-run.py --estados A,B`: guarda en A, carga en B y la ROM
   de prueba se tiene que verificar después): vitest, gfxtest y audiotest OK,
   cierre limpio (RPCS3 no sirve para medir los tiempos).
-- `tools/build.sh test-host` 376/376, `tools/test-roms.sh` verde, el
-  frontend sin avisos. El SPE gráfico pierde 1,9 KB de pila (queda ~11 KB;
+- `tools/build.sh test-host` 376/376; `tools/test-roms.sh` verde;
+  `tools/test-rec.sh --lockstep` verde (unitarias en los cuatro modos,
+  nemu64-test con la línea base, estados con `--rec` = intérprete, y
+  `--lockstep` sin diferencias en nemu64-test, vitest y gfxtest desde un
+  estado cargado); `tools/test-phase2.sh` verde; `tools/build.sh` (todos los
+  programas) sin avisos. El SPE gráfico pierde 1,9 KB de pila (queda ~11 KB;
   la cadena más honda usa ~8 KB).
 
 Pendiente: la PS3 real (guardar y cargar en Zelda, SM64, Mario Kart y
