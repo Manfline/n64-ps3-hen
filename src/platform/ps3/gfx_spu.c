@@ -98,8 +98,9 @@ static uint32_t spu_finish(void *ctx)
 	s->tex_arena += s->res.tex_arena;
 	s->tex_evicted += s->res.tex_evicted;
 	s->t_hash += s->res.t_hash;
+	s->skipped += s->res.skipped;
 	s->sink.done(s->sink.ctx, &s->job, &s->res);
-	return (s->res.flags & GFX_RES_FULLSYNC) ? SALSA64_GFX_FULLSYNC : 0;
+	return salsa64_gfx_task_flags(&s->res);
 }
 
 int salsa64_gfx_spu_init(struct salsa64_gfx_spu *s, const struct salsa64_bus *bus,

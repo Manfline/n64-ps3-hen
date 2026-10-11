@@ -6,11 +6,15 @@
 # SALSA64_TEST, SALSA64_REC_DUMP, SALSA64_REC_FAR, SALSA64_REC_PIN,
 # SALSA64_REC_EAGER y SALSA64_REC_RARE_EXEC.
 #
-# CPU power7: con -cpu 970 (el más parecido al PPE, Power ISA 2.01) qemu 7.2
-# da resultados erróneos (el intérprete falla 15 pruebas que pasan en la PS3
-# y con power7/power8), y power5+ se cuelga. power7 acepta instrucciones que
-# el PPE no tiene: el emisor (src/cpu/ppc.h) se limita a mano a Power ISA
-# 2.02 y el C se compila con -mcpu=cell.
+# CPU power9 (SALSA64_QEMU_CPU cambia el modelo): con -cpu 970 (el más
+# parecido al PPE, Power ISA 2.01) qemu 7.2 da resultados erróneos (el
+# intérprete falla 15 pruebas que pasan en la PS3 y con power7/power8), y
+# power5+ se cuelga. Con power7 o power8, sin, cos y floor de la glibc
+# estática mueren con SIGILL: usan mffscrn/mffscrni (Power ISA 3.0), que
+# qemu solo acepta desde power9 (se caía la suite sync, por audio_sync.c;
+# en la PS3 no hay glibc). power9 acepta instrucciones que el PPE no tiene:
+# el emisor (src/cpu/ppc.h) se limita a mano a Power ISA 2.02 y el C se
+# compila con -mcpu=cell.
 #
 # Respaldos de juegos (fuera del repo, nunca en él): SALSA64_ROMS con una
 # carpeta que colima comparta (no todas lo están) se
@@ -25,4 +29,5 @@ exec docker run --rm -i --user "$(id -u):$(id -g)" -v "$ROOT:/src" -w /src \
 	${SALSA64_ROMS:+-v} ${SALSA64_ROMS:+"$SALSA64_ROMS:/roms:ro"} \
 	-e SALSA64_TEST -e SALSA64_REC_DUMP -e SALSA64_REC_FAR -e SALSA64_REC_PIN -e SALSA64_REC_EAGER \
 	-e SALSA64_REC_RARE_EXEC "$IMAGE" \
-	sh -c 'exec timeout "$0" qemu-ppc64-static -cpu power7 "$@" 2>&1' "${QEMU_TIMEOUT:-600}" "$@"
+	sh -c 'cpu=$1; shift; exec timeout "$0" qemu-ppc64-static -cpu "$cpu" "$@" 2>&1' \
+	"${QEMU_TIMEOUT:-600}" "${SALSA64_QEMU_CPU:-power9}" "$@"

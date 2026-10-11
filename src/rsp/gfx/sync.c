@@ -14,6 +14,17 @@ void salsa64_gfx_job(struct gfx_job *job, const struct salsa64_bus *bus, const s
 	job->rdram_size = bus->rdram_size;
 	job->gbi = gbi;
 	job->dl = task->data_ptr & 0x00FFFFFF;
+	job->ucode = task->ucode & 0x00FFFFFF;
+}
+
+uint32_t salsa64_gfx_task_flags(const struct gfx_result *res)
+{
+	uint32_t f = 0;
+	if (res->flags & GFX_RES_FULLSYNC)
+		f |= SALSA64_GFX_FULLSYNC;
+	if ((res->flags & GFX_RES_CUT) || res->dl_errors)
+		f |= SALSA64_GFX_CUT;
+	return f;
 }
 
 static void sync_start(void *ctx, const struct salsa64_task *task, enum salsa64_gbi gbi)
@@ -36,7 +47,7 @@ static uint32_t sync_finish(void *ctx)
 		return 0;
 	s->pending = false;
 	s->sink.done(s->sink.ctx, &s->job, &s->res);
-	return (s->res.flags & GFX_RES_FULLSYNC) ? SALSA64_GFX_FULLSYNC : 0;
+	return salsa64_gfx_task_flags(&s->res);
 }
 
 void salsa64_gfx_sync_init(struct salsa64_gfx_sync *s, struct gfx_state *state, const struct salsa64_bus *bus,

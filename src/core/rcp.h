@@ -75,8 +75,10 @@ struct salsa64_sp {
  * intercambiables (en la PS3, un SPE cada una; en el host, en el mismo
  * hilo); el resto de las tareas terminan sin hacer nada por ahora. La
  * tarea termina un tiempo fijo después de
- * arrancar (SP_STATUS con BROKE, HALT y TASKDONE, interrupción SP) y, si la
- * lista de comandos pidió sincronizar el RDP, después llega la del DP. */
+ * arrancar (SP_STATUS con BROKE, HALT y TASKDONE, interrupción SP) y
+ * después llega la del DP si la lista pidió sincronizar el RDP, si la HLE
+ * la cortó antes (SALSA64_GFX_CUT) o si no hay HLE para su microcódigo:
+ * el juego la espera por cada tarea gráfica. */
 
 #define SALSA64_TASK_DMEM 0xFC0u
 
@@ -109,6 +111,7 @@ struct salsa64_task {
 
 /* Lo que devuelve gfx_finish. */
 #define SALSA64_GFX_FULLSYNC 0x1u  /* la lista terminó con G_RDPFULLSYNC */
+#define SALSA64_GFX_CUT      0x2u  /* la HLE la cortó antes del fin: DP de todos modos */
 
 struct salsa64_gfx_backend {
 	void *ctx;
@@ -175,6 +178,7 @@ struct salsa64_rsp_stats {
 	uint32_t polls;        /* fines de tarea vueltos a programar (SPE ocupado) */
 	uint32_t starts_busy;  /* arranques ignorados con una tarea en curso */
 	uint32_t unknown_data; /* ucode_data de la última con microcódigo desconocido */
+	uint32_t cut;          /* tareas gráficas cortadas por la HLE (DP forzada) */
 };
 
 struct salsa64_rsp {

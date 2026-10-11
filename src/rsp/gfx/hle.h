@@ -144,6 +144,7 @@ struct gfx_state {
 	const struct gfx_job *job;
 	struct gfx_result *res;
 	bool dirty;                /* cambió algo del estado de dibujo */
+	uint8_t rect_clamp;        /* TEXRECT en curso: 1 limitar s, 2 limitar t */
 	bool target_sent;          /* GFX_OP_TARGET de la color image actual */
 	bool have_draw;            /* `draw` está abierto */
 	struct gfx_draw draw __attribute__((aligned(16)));
@@ -202,6 +203,8 @@ bool gfx_dl_next(struct gfx_state *g, uint32_t *w0, uint32_t *w1);
 bool gfx_dl_call(struct gfx_state *g, uint32_t seg, bool branch);
 /* G_ENDDL: regreso a quien llamó. false si terminó la lista principal. */
 bool gfx_dl_end(struct gfx_state *g);
+/* Salta un tramo de otro microcódigo hasta volver al de la tarea (dl.c). */
+bool gfx_dl_skip_foreign(struct gfx_state *g, uint32_t op_ucode, uint32_t op_dl, uint32_t op_enddl);
 /* G_TEXRECT y G_TEXRECTFLIP: s, t y dsdx, dtdy llegan en los dos comandos
  * siguientes si sus opcodes están en ops_st y ops_d (hasta 4 opcodes, uno
  * por byte). Si no, el rectángulo se descarta y ese comando sigue normal. */

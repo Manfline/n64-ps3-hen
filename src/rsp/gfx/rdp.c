@@ -178,7 +178,8 @@ static float shift_scale(unsigned shift)
 	return (float)(1u << (16 - shift));
 }
 
-static bool texture_state(struct gfx_state *g, struct gfx_draw *d, int tile, int slot, bool copy)
+/* `clamp`: ejes que se limitan aunque la tile repita (gfx_texrect). */
+static bool texture_state(struct gfx_state *g, struct gfx_draw *d, int tile, int slot, bool copy, unsigned clamp)
 {
 	struct gfx_tex *t = &d->tex[slot];
 	bool premul = (t->flags & GFX_TEX_PREMUL) != 0;  /* lo pidió gfx_combine */
@@ -187,10 +188,12 @@ static bool texture_state(struct gfx_state *g, struct gfx_draw *d, int tile, int
 	const struct gfx_tile *ti = &g->tiles[tile & 7];
 	bool bilinear = !copy && ((g->oh >> G_MDSFT_TEXTFILT) & 3) != G_TF_POINT;
 	float half = bilinear ? 0.5f : 0.0f;
-	t->flags = (uint8_t)((ti->masks && !(ti->cms & 2) ? ((ti->cms & 1) ? GFX_WRAP_MIRROR : GFX_WRAP_REPEAT)
-							 : GFX_WRAP_CLAMP) |
-			     (ti->maskt && !(ti->cmt & 2) ? ((ti->cmt & 1) ? GFX_WRAP_MIRROR : GFX_WRAP_REPEAT)
-							   : GFX_WRAP_CLAMP) << 2 |
+	t->flags = (uint8_t)((ti->masks && !(ti->cms & 2) && !(clamp & 1)
+				      ? ((ti->cms & 1) ? GFX_WRAP_MIRROR : GFX_WRAP_REPEAT)
+				      : GFX_WRAP_CLAMP) |
+			     (ti->maskt && !(ti->cmt & 2) && !(clamp & 2)
+				      ? ((ti->cmt & 1) ? GFX_WRAP_MIRROR : GFX_WRAP_REPEAT)
+				      : GFX_WRAP_CLAMP) << 2 |
 			     (bilinear ? GFX_TEX_BILINEAR : 0) | (premul ? GFX_TEX_PREMUL : 0));
 	float w = (float)t->width, h = (float)t->height;
 	t->xf[0] = shift_scale(ti->shifts) / w;
@@ -223,7 +226,7 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 		for (int lane = 0; lane < 4; lane++)
 			d->k[GFX_K_T0][0][lane] = 1.0f;
 		d->ntex = 1;
-		if (!texture_state(g, d, tile, 0, true))
+		if (!texture_state(g, d, tile, 0, true, g->rect_clamp))
 			d->ntex = 0;
 		if ((g->ol & G_AC_MASK) == G_AC_THRESHOLD) {
 			d->atest = GFX_ATEST_GEQUAL;
@@ -256,7 +259,7 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 		d->ntex = 0;
 	unsigned n = d->ntex;
 	for (unsigned i = 0; i < n; i++)
-		if (!texture_state(g, d, tile + (int)i, (int)i, false)) {
+		if (!texture_state(g, d, tile + (int)i, (int)i, false, kind == PRIM_RECT ? g->rect_clamp : 0)) {
 			d->ntex = (uint8_t)i;
 			break;
 		}
@@ -352,10 +355,14 @@ void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
  * en cada esquina (0: arriba a la izquierda, 1: arriba a la derecha,
  * 2: abajo a la izquierda, 3: abajo a la derecha). */
 static void rect(struct gfx_state *g, enum prim_kind kind, int tile, float x0, float y0, float x1, float y1,
-		 const float s[4], const float t[4])
+		 const float s[4], const float t[4], unsigned clamp)
 {
 	if (x1 <= x0 || y1 <= y0)
 		return;
+	if (clamp != g->rect_clamp) {
+		g->rect_clamp = (uint8_t)clamp;
+		g->dirty = true;
+	}
 	struct gfx_vertex *o = begin_prim(g, kind, tile, 6);
 	if (!o)
 		return;
@@ -395,6 +402,34 @@ void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uin
 		lry = uly + 1.0f;
 	}
 	float w = lrx - ulx, h = lry - uly;
+
+	/* Ejes cuyos texels muestreados caen todos dentro de la tile: ahí se
+	 * limita aunque repita. Da lo mismo que en la N64 y evita que, a más
+	 * resolución, el filtro mezcle el borde con el lado opuesto (Mario
+	 * Kart 64 dibuja sus imágenes en tiras de 2 filas que repiten: salían
+	 * líneas). */
+	const struct gfx_tile *ti = &g->tiles[tile];
+	uint32_t tw, th;
+	gfx_tile_size(ti, &tw, &th);
+	float ns = flip ? h : w, nt = flip ? w : h;  /* muestras en s y en t */
+	float ks = shift_scale(ti->shifts), kt = shift_scale(ti->shiftt);
+	float sa = s0 * ks - ti->uls / 4.0f, sb = (s0 + (ns - 1.0f) * dsdx) * ks - ti->uls / 4.0f;
+	float ta = t0 * kt - ti->ult / 4.0f, tb = (t0 + (nt - 1.0f) * dtdy) * kt - ti->ult / 4.0f;
+	unsigned clamp = 0;
+	if ((sa < sb ? sa : sb) > -0.01f && (sa < sb ? sb : sa) < (float)tw - 0.99f)
+		clamp |= 1;
+	if ((ta < tb ? ta : tb) > -0.01f && (ta < tb ? tb : ta) < (float)th - 0.99f)
+		clamp |= 2;
+
+	/* El RDP muestrea en la esquina de cada píxel; el RSX, en el centro:
+	 * con filtro bilineal se corre medio píxel para no mezclar texels
+	 * vecinos en un rectángulo 1:1. */
+	bool bilinear = (cycle == G_CYC_1CYCLE || cycle == G_CYC_2CYCLE) &&
+			((g->oh >> G_MDSFT_TEXTFILT) & 3) != G_TF_POINT;
+	if (bilinear) {
+		s0 -= 0.5f * dsdx;
+		t0 -= 0.5f * dtdy;
+	}
 	float s[4], t[4];
 	if (!flip) {
 		s[0] = s0, s[1] = s0 + w * dsdx, s[2] = s0, s[3] = s0 + w * dsdx;
@@ -403,7 +438,7 @@ void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uin
 		s[0] = s0, s[1] = s0, s[2] = s0 + h * dsdx, s[3] = s0 + h * dsdx;
 		t[0] = t0, t[1] = t0 + w * dtdy, t[2] = t0, t[3] = t0 + w * dtdy;
 	}
-	rect(g, PRIM_RECT, tile, ulx, uly, lrx, lry, s, t);
+	rect(g, PRIM_RECT, tile, ulx, uly, lrx, lry, s, t, clamp);
 }
 
 /* ---- Triángulos crudos del RDP --------------------------------------------
@@ -580,7 +615,7 @@ static void fillrect(struct gfx_state *g, uint32_t w0, uint32_t w1)
 		g->res->rects++;
 		return;
 	}
-	rect(g, cycle == G_CYC_FILL ? PRIM_FILL : PRIM_RECT, 0, ulx, uly, lrx, lry, NULL, NULL);
+	rect(g, cycle == G_CYC_FILL ? PRIM_FILL : PRIM_RECT, 0, ulx, uly, lrx, lry, NULL, NULL, 3);
 }
 
 static void set_image(uint32_t w0, uint8_t *fmt, uint8_t *siz, uint16_t *width)
