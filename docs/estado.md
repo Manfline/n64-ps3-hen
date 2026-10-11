@@ -136,6 +136,11 @@ Pendiente:
       un estirado real (237 líneas a 720 incluso sin recorte).
 - [ ] **Túnica de Link** (foto del autor, 2026-10-11, fuera del repo):
       defecto en la textura de la túnica, previo a esta rama; HLE/combiner.
+- [ ] **Tienda del bosque Kokiri: el piso y las paredes salen planos
+      (amarillo y naranja), sin textura; los objetos sí la tienen** (foto
+      del autor, 2026-10-11). Igual con `fbfx.cfg` = 0: previo a esta
+      rama, HLE (trabajo de F3D/texturas). Reproducirlo en el host requiere un
+      pad hasta la tienda.
 - [ ] **Link en la pantalla de equipo, fuera de la casa, sale roto en la
       PS3** (dentro de la casa sale bien; el fondo de la pausa, bien en los
       dos). En el host, fuera (campo ~16550 del pad) Link sale bien. Falta
