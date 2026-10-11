@@ -57,7 +57,11 @@
 #define POOL_BYTES  (SETS_BYTES + CACHE_BYTES + FB_BYTES)
 #define MAX_DEPTHS  2
 #define RB_PER_TASK 8   /* color images que una tarea puede pedir copiar */
-#define RB_HISTORY  4   /* tareas en que una imagen repetida ya no se espera */
+/* Una imagen pedida también en la tarea anterior ya no se espera (iconos
+ * de cada cuadro, la intro de Conker); con una ventana mayor, Link
+ * redibujado al cambiar de equipo en Zelda caía como «repetida» y el CPU
+ * lo copiaba antes de tiempo. */
+#define RB_HISTORY  1
 #define RB_WAIT_US  200000  /* la emulación no espera una copia más que esto */
 
 _Static_assert(sizeof(struct gfx_vertex) == sizeof(rsxkit_vertex), "vértice de la HLE = vértice de rsxkit");
