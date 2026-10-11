@@ -19,7 +19,7 @@
 
 #include "cpu/rec.h"
 
-#define SALSA64_HOST_REC_BYTES (16u << 20)
+#define SALSA64_HOST_REC_BYTES (24u << 20)
 
 static uint8_t salsa64_host_rec_cache[SALSA64_HOST_REC_BYTES] __attribute__((aligned(65536)));
 

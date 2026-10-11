@@ -115,6 +115,7 @@ struct salsa64_rec_fixup {
 #define SALSA64_REC_DBG_NO_DATA    0x1000u  /* sin camino rápido de datos mapeados ni anotarlos */
 #define SALSA64_REC_DBG_ERET_BOUND 0x2000u  /* tras un ERET, el intérprete hasta el fin del bloque básico */
 #define SALSA64_REC_DBG_NO_DETACH  0x4000u  /* invalidar mata el bloque (sin desprender ni enganchar) */
+#define SALSA64_REC_DBG_NO_SUPER   0x8000u  /* un salto condicional hacia adelante termina el bloque */
 #define SALSA64_REC_OLD(rec, bit)  ((rec)->opts & (SALSA64_REC_OPT_LEGACY | (bit)))
 
 struct salsa64_rec {
@@ -131,6 +132,8 @@ struct salsa64_rec {
 	uint32_t exit_idle;      /* salto que el intérprete consultaría como bucle de espera */
 	uint32_t exit_start;     /* el bloque salió en la entrada (no cabe antes del evento, COP1 inusable) */
 	uint32_t exit_end;       /* el bloque terminó en una instrucción que vuelve a C (COP0, SYSCALL…) */
+	uint32_t ktlb_rtn[2][4]; /* traducción de datos por ktlb[] (rec_tlb.h): [almacena][alineación 0, 1, 3, 7];
+				  * r3 = va; vuelve con cr1 eq y r12 = desplazamiento en la RDRAM, o cr1 ne */
 
 	/* Direcciones de entrada de las funciones de C que llama el código. */
 	uint64_t h_load, h_store, h_exec, h_exception;

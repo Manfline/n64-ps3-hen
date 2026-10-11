@@ -1,7 +1,7 @@
 /*
  * Salsa64 — caché de código del recompilador en la PS3 (src/cpu/rec.h).
  *
- * 16 MB en una cola NOBITS del segmento de texto (mk/rec-cache.ld): el
+ * 24 MB en una cola NOBITS del segmento de texto (mk/rec-cache.ld): el
  * programa que la use enlaza src/platform/ps3/rec_cache.c y agrega a su
  * Makefile `LDFLAGS := -T $(ROOT)/mk/rec-cache.ld -T lv2.ld`.
  *
@@ -17,7 +17,7 @@
 
 #include "platform/ps3/paths.h"
 
-#define SALSA64_REC_CACHE_BYTES (16u << 20)
+#define SALSA64_REC_CACHE_BYTES (24u << 20)
 #define SALSA64_NOREC_FLAG SALSA64_DATA_DIR "/sin-recompilador"
 /* Con este archivo, el perfil del recompilador por causa (src/cpu/rec_prof.h)
  * va al log con las estadísticas. */

@@ -94,6 +94,37 @@ instrucciones de COP0 queda fuera del bloque (lo corre el intérprete). La condi
 volátil, sobrevive a las llamadas a C); branch-likely no tomado salta el
 delay slot y cuenta un ciclo menos.
 
+### Saltos condicionales internos (superbloques, 2026-10-11)
+
+GoldenEye ejecutaba 5,3 instrucciones por bloque (perfil por bloque,
+pesado por ejecuciones): cada `if` y cada salida de bucle cortaban el
+bloque, y cada corte cuesta la prueba del evento, la escritura y recarga de
+registros por `cpu->gpr` (load-hit-store en el PPE) y el enlace. Ahora un
+salto condicional **hacia adelante** (BEQ, BNE, BLEZ, BGTZ, BLTZ, BGEZ,
+BC1F/T y sus likely) no termina el bloque: su delay slot se emite en línea
+y el camino **tomado** sale enlazado al destino (registros modificados
+escritos, `cycles` hasta el delay slot), mientras el no tomado sigue en el
+mismo bloque con los registros en el PPE (`emit_internal_branch`). El
+bloque termina en un salto hacia atrás (al inicio, bucle; u otro), en
+J/JAL/JR/JALR, en una instrucción que vuelve a C o a las 64
+instrucciones. Los tres bucles más calientes de GoldenEye (comparación de
+cadenas, búsqueda en una tabla) eran parejas de bloques y pasan a ser uno.
+
+Detalles que mantienen la exactitud:
+- Cada salto guarda su descripción en `c->br[k]` y su delay slot se marca
+  en `ds_of[]`: una salida a C desde ese delay slot continúa según su salto
+  (`emit_continue`, con la condición en cr4, que las llamadas a C no tocan).
+- Un branch-likely interno no tomado salta su delay slot y cuesta un ciclo
+  menos: se descuenta de r29 (`addi r29, r29, -1`) para que `cycles =
+  r29 + k + 1` siga valiendo en el resto del bloque; y el registro que
+  escribe el delay slot se carga a la entrada (livein), para que la
+  escritura de registros al salir lo deje con el valor de antes en ese
+  camino.
+- Los pares LWL/LWR y SWL/SWR no cruzan un salto.
+- Solo el salto final puede ser candidato a bucle de espera (idle.c); los
+  internos son hacia adelante.
+- `SALSA64_REC_DBG_NO_SUPER` (y LEGACY) vuelven a cortar en cada salto.
+
 ### Registros
 
 | PPE | Uso |
@@ -432,7 +463,10 @@ ejecuciones.
 
 ### Caché de código
 
-PS3: cola NOBITS de 16 MB al final del segmento de texto
+PS3: cola NOBITS de 24 MB (16 hasta el 2026-10-11: GoldenEye la llenaba cada
+~40 s, con un vaciado completo cada vez; ~900 bytes de PPC por bloque de 5
+instrucciones, sobre todo caminos fríos de memoria, que ahora llaman a
+rutinas compartidas del preámbulo para la `ktlb`) al final del segmento de texto
 (`mk/rec-cache.ld`, docs/jit-ppe.md). Las funciones de C quedan a menos de
 32 MB: el código las llama con `bl` directo. `struct salsa64_rec` (mapa,
 banderas, bloques, enlaces, la tabla de bloques fuera de KSEG0 y búferes de

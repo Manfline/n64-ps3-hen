@@ -371,7 +371,50 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	n = pre_bc(w, n, eq, EQ, id_ok);
 	w[n++] = ppc_lhzx(12, 10, 0);
 	w[n] = ppc_b((int32_t)(chain - n) * 4);
-	return n + 1;
+	n++;
+
+	/* Traducción de datos por ktlb[] (rec_emit.c, emit_addr; rec_tlb.h): la
+	 * dirección en r3 es extensión de signo de 32 bits y está alineada, su
+	 * entrada tiene la etiqueta y es válida (y D al almacenar) y la física
+	 * cae en la RDRAM: cr1 eq y r12 = desplazamiento; si no, cr1 ne. Usa r0,
+	 * r11 y r12. Compartida para no repetir ~20 palabras en cada acceso. */
+	static const uint8_t aligns[4] = { 0, 1, 3, 7 };
+	const unsigned NE1 = PPC_BI(1, PPC_EQ);
+	for (unsigned st = 0; st < 2; st++) {
+		for (unsigned a = 0; a < 4; a++) {
+			unsigned align = aligns[a];
+			rec->ktlb_rtn[st][a] = n;
+			w[n++] = ppc_extsw(11, 3);
+			w[n++] = ppc_cmpd(1, 11, 3);
+			w[n++] = ppc_bclr(PPC_BO_FALSE, NE1);
+			if (align) {
+				w[n++] = ppc_clrldi(0, 3, align == 1 ? 63 : align == 3 ? 62 : 61);
+				w[n++] = ppc_cmpdi(1, 0, 0);
+				w[n++] = ppc_bclr(PPC_BO_FALSE, NE1);
+			}
+			w[n++] = ppc_rlwinm(11, 3, 22, 16, 29);   /* ((va >> 12) & 16383) * 4 */
+			w[n++] = ppc_addis(12, 28, -1);            /* ktlb[] termina donde empieza flags (r28) */
+			w[n++] = ppc_lwzx(11, 12, 11);
+			if (st) {
+				w[n++] = ppc_rlwinm(0, 11, 8, 24, 31);     /* etiqueta, válida y D */
+				w[n++] = ppc_rlwinm(12, 3, 8, 24, 29);
+				w[n++] = ppc_ori(12, 12, 3);
+			} else {
+				w[n++] = ppc_rlwinm(0, 11, 7, 25, 31);     /* etiqueta y válida */
+				w[n++] = ppc_rlwinm(12, 3, 7, 25, 30);
+				w[n++] = ppc_ori(12, 12, 1);
+			}
+			w[n++] = ppc_cmpw(1, 0, 12);
+			w[n++] = ppc_bclr(PPC_BO_FALSE, NE1);
+			w[n++] = ppc_rlwinm(12, 11, 12, 3, 19);    /* página física << 12 */
+			w[n++] = ppc_rlwinm(0, 3, 0, 20, 31);
+			w[n++] = ppc_or(12, 12, 0);
+			w[n++] = ppc_srdi(0, 12, rec->rdram_shift);  /* dentro de la RDRAM: eq */
+			w[n++] = ppc_cmpdi(1, 0, 0);
+			w[n++] = PPC_BLR;
+		}
+	}
+	return n;
 }
 
 typedef uint64_t (*rec_enter_fn)(struct salsa64_cpu *cpu, const uint32_t *code);
@@ -386,7 +429,7 @@ static uint64_t rec_enter(struct salsa64_rec *rec, uint32_t entry)
 
 static uint32_t preamble_words(void)
 {
-	return 256;  /* emit_preamble usa menos; los bloques empiezan alineados */
+	return 512;  /* emit_preamble usa menos; los bloques empiezan alineados */
 }
 
 void salsa64_rec_flush(struct salsa64_rec *rec)
