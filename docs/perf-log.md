@@ -41,14 +41,18 @@ cada una en presentación (esperar al RSX emulado y convertir), la
 emulación esperó 2,22 ms por tarea. Sirve solo para saber que el mecanismo
 funciona de punta a punta.
 
-**PS3 real: pendiente** (la consola estuvo apagada toda la jornada). Medir
-con Zelda OoT: el minuto de bosque Kokiri sin pausa (debe seguir al 100 %
-de NTSC con 0 copias; la única carga nueva es el origen de cada textura y
-el recorrido de cabeceras en `done`), la pausa (1 copia por pausa: ms de la
-copia en presentación y de la espera en emulación) y el menú de pausa
-abierto (texturas desde el RSX por tarea, cebados). Y SM64, Mario Kart,
-GoldenEye, Banjo y Conker un minuto cada uno: 0 copias esperadas y la
-misma velocidad que antes.
+**PS3 real** (2026-10-11, Slim CECH-3011A, HFW 4.91 + HEN, app SLSA00089
+«Salsa64 framebuffer», rama hopeful-dirac con main 23a3289; logs en
+`build/ps3-logs/`, fuera de git):
+
+| Juego | Escena | Campos/s | Copias a la RDRAM (esperadas por la emulación) | Espejos | Notas |
+|---|---|---|---|---|---|
+| gfxtest | los 34 puntos (28 en ese paquete): 28/28 bien | — | 1 por cuadro: 5,5–5,9 ms c/u en presentación; la emulación esperó 5,7–6,7 ms por tarea | 1 por cuadro | Un caso artificial que copia en cada cuadro: es el peor costo posible |
+| Zelda OoT | bosque Kokiri, un minuto | 59,8 (100 %) | 0 | 0 | Emulación 4,0 ms por campo, igual que antes |
+| Zelda OoT | abrir la pausa | — | 1 por pausa: 13,3–20,1 ms en presentación; la emulación esperó 14,4–23,4 ms | 59–175 por 5 s (iconos) | Una vez por pausa; la N64 tarda ~1 s en filtrar el fondo |
+| Zelda OoT | pausa abierta | 59,8 | 0 | 150 por 5 s | 40 texturas por tarea desde la RDRAM (las franjas del fondo) |
+| SM64 | castillo exterior, un minuto | 59,8 (100 %) | 1 al arrancar (12 ms) | 0 | |
+| GoldenEye | Dam, un minuto, con el espejo del framebuffer por campo | 45,8 (76 %) | 0 | 225–229 cuadros copiados por 5 s | Dentro del rango previo del nivel (34–55: va por el CPU, 21,6 ms de emulación por campo); presentación 0,0 ms por campo: el espejo no se mide |
 
 ## Caché de texturas (2026-10-10)
 
