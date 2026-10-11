@@ -44,5 +44,7 @@ bool states_load(struct salsa64_n64 *n64, unsigned slot, struct states_timing *t
  * quedó la imagen de la N64). La guarda el próximo states_save. */
 void states_thumb_capture(const rsxkit_rect *r);
 void states_thumb_clear(void);
+/* Lo que tardó la última captura (µs; 0 si no hubo). */
+uint64_t states_thumb_us(void);
 
 #endif

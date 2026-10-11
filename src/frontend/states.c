@@ -11,6 +11,7 @@
 static uint8_t scratch[SALSA64_STATE_SCRATCH] __attribute__((aligned(128)));
 static uint16_t thumb_px[SALSA64_STATE_THUMB_W * SALSA64_STATE_THUMB_H];
 static bool thumb_ok;
+static uint64_t thumb_us;
 
 struct fsio {
 	s32 fd;
@@ -120,8 +121,10 @@ bool states_load(struct salsa64_n64 *n64, unsigned slot, struct states_timing *t
 void states_thumb_capture(const rsxkit_rect *r)
 {
 	uint32_t pitch;
+	uint64_t t0 = sysGetSystemTime();
 	const uint32_t *px = rsxkit_back_buffer(&pitch);
 	thumb_ok = false;
+	thumb_us = 0;
 	if (!px || !r->w || !r->h)
 		return;
 	/* Una lectura por píxel de la miniatura: leer la memoria del RSX desde
@@ -137,9 +140,15 @@ void states_thumb_capture(const rsxkit_rect *r)
 		}
 	}
 	thumb_ok = true;
+	thumb_us = sysGetSystemTime() - t0;
 }
 
 void states_thumb_clear(void)
 {
 	thumb_ok = false;
+}
+
+uint64_t states_thumb_us(void)
+{
+	return thumb_us;
 }

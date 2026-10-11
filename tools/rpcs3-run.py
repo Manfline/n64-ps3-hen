@@ -10,7 +10,10 @@ dev_hdd0/salsa64/embedded en RPCS3); con --rom NOMBRE, ese archivo de
 dev_hdd0/salsa64 (sin pisar rom.z64); sin opciones, se borra y el frontend
 muestra el menú. Con --menu ROM..., el menú se maneja solo: copia las ROMs a
 dev_hdd0/salsa64, las nombra en dev_hdd0/salsa64/menu-prueba y el frontend
-las abre en orden, vuelve al menú después de cada una y sale.
+las abre en orden, vuelve al menú después de cada una y sale. Con --estados
+A,B el frontend guarda un estado en la ranura 9 al llegar al campo A y lo
+carga en el B; la ROM de prueba tiene que verificarse igual después
+(dev_hdd0/salsa64/estados-prueba, que se borra al terminar).
 
 Lanza RPCS3 con --no-gui y tools/rpcs3/salsa64.yml, crea el archivo de modo
 autotest (src/platform/ps3/autotest.h) para que el programa salga solo, sigue
@@ -44,6 +47,7 @@ AUTOTEST_FLAG = pathlib.Path.home() / "Library/Application Support/rpcs3/dev_hdd
 NOREC_FLAG = AUTOTEST_FLAG.parent / "sin-recompilador"
 EMBED_FILE = AUTOTEST_FLAG.parent / "embedded"
 MENU_TEST_FILE = AUTOTEST_FLAG.parent / "menu-prueba"
+STATE_TEST_FILE = AUTOTEST_FLAG.parent / "estados-prueba"
 CONFIG = ROOT / "tools/rpcs3/salsa64.yml"
 EXIT_GRACE = 30  # segundos para que RPCS3 se cierre solo tras RESULTADO
 # Fuera del repo para que lo compartan todos los worktrees.
@@ -212,6 +216,8 @@ def main() -> int:
     ap.add_argument("--menu", nargs="+", metavar="ROM",
                     help="ROMs (rutas, o nombres ya en dev_hdd0/salsa64) que el menú del frontend "
                     "abre en orden, sin embedded")
+    ap.add_argument("--estados", metavar="A,B",
+                    help="guardar un estado en el campo A y cargarlo en el B (prueba de los estados)")
     args = ap.parse_args()
 
     lock = lock_rpcs3()  # noqa: F841 (se mantiene hasta salir)
@@ -234,6 +240,11 @@ def main() -> int:
         MENU_TEST_FILE.write_text("".join(n + "\n" for n in names))
     elif MENU_TEST_FILE.exists():
         MENU_TEST_FILE.unlink()
+    if args.estados:
+        a, b = (int(x) for x in args.estados.split(","))
+        STATE_TEST_FILE.write_text(f"{a} {b}\n")
+    elif STATE_TEST_FILE.exists():
+        STATE_TEST_FILE.unlink()
 
     elf = resolve_elf(args.program)
     lines: list = []
@@ -247,6 +258,8 @@ def main() -> int:
         if status == "timeout":
             break
 
+    if args.estados and STATE_TEST_FILE.exists():
+        STATE_TEST_FILE.unlink()  # el dev_hdd0 es de todos los worktrees
     result = [l for l in lines if "RESULTADO" in l]
     if not result:
         return 2

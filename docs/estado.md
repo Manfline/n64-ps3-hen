@@ -1,5 +1,57 @@
 # Estado
 
+## 2026-10-11 — Estados guardados con 10 ranuras por juego y contador de FPS (rama `wonderful-blackwell-6f40d3`, paquete SLSA00094 «Salsa64 estados»)
+
+Hecho (diseño y decisiones en docs/estados.md):
+
+- **Núcleo portable** (`src/core/state.c`): cabecera de 64 bytes (magia,
+  versión, CRC1/CRC2 y tamaño de la ROM, título, RDRAM, campo) y secciones
+  «etiqueta + largo» descritas con una sola función para guardar y cargar,
+  en big-endian: el mismo archivo sirve en la PS3 y en `salsa64-run`. CPU con
+  COP0, TLB y FPU; planificador; MI, SP, DP, VI, AI, PI, RI, SI y la tarea del
+  RSP en curso; DMEM/IMEM; PIF; guardado del cartucho; estado de las HLE
+  gráfica (RDP + TMEM) y de audio (DMEM, ABI, MP3) entre tareas, también en
+  los SPE (trabajos nuevos); miniatura de 160 × 120; RDRAM al final sin
+  comprimir. Secciones cortas cargan con ceros (para crecer), versiones
+  viejas o nuevas, otro juego u otra RDRAM se rechazan con un mensaje.
+- **La tarea del RSP en vuelo** se recoge antes de guardar sin adelantar su
+  fin emulado (`salsa64_rsp_quiesce`): el estado sale en cualquier campo y
+  la continuación es idéntica.
+- **PS3** (`src/frontend/states.c`, `main.c`): SELECT + R1 guarda, SELECT +
+  L1 carga, SELECT + izquierda/derecha cambia de ranura (esos botones no
+  llegan al juego con SELECT apretado); `/dev_hdd0/salsa64/states/<título>-
+  <CRC1>.st0…st9`, escritos con sysFs a un .tmp y renombrados. Barrera en el
+  límite del campo: emulación recoge la tarea, encola el campo y espera;
+  presentación presenta lo que queda (miniatura), espera al RSX y guarda o
+  carga; al cargar vacía la caché del recompilador, suelta los destinos del
+  RSX (`salsa64_rdp_drop_targets`, sin tocar la numeración de las tareas) y
+  vacía la cola de audio con su transición (`audio_sync_flush`). Aviso de
+  ~2 s abajo en la pantalla (`src/frontend/osd.c`, rsxkit/ui).
+- **Contador de FPS** (pedido de la coordinación): «VI 59,9 (100 %) · juego
+  30 · pantalla 60», promedio de 0,5 s, contado solo en el hilo de
+  presentación; SELECT + △ y fila «Mostrar FPS» en Opciones; se recuerda en
+  menu.cfg (`fps = si|no`).
+- **Host**: `salsa64-run --state-save CAMPO:ARCHIVO`, `--state-load ARCHIVO`
+  (con `--lockstep` también la referencia) y `--fields N`.
+
+Pruebas:
+- Determinismo (guardar en N, cargar en otra corrida y seguir hasta M contra
+  de corrido: estado byte por byte e imágenes iguales): unitarias
+  (`test_state.c`, también con el recompilador), `tools/test-roms.sh`
+  (gfxtest, vitest, audiotest), `tools/test-rec.sh` (gfxtest con `--rec` =
+  intérprete) y respaldos propios en el host: Zelda (intro y Kokiri), SM64
+  (intro y castillo), GoldenEye (intro y la presa) y Mario Kart: idénticos.
+- RPCS3 (`tools/rpcs3-run.py --estados A,B`: guarda en A, carga en B y la ROM
+  de prueba se tiene que verificar después): vitest, gfxtest y audiotest OK,
+  cierre limpio (RPCS3 no sirve para medir los tiempos).
+- `tools/build.sh test-host` 376/376, `tools/test-roms.sh` verde, el
+  frontend sin avisos. El SPE gráfico pierde 1,9 KB de pila (queda ~11 KB;
+  la cadena más honda usa ~8 KB).
+
+Pendiente: la PS3 real (guardar y cargar en Zelda, SM64, Mario Kart y
+GoldenEye con varias ranuras, cargar tras volver al menú, tiempos, y que el
+contador no cambie los campos/s).
+
 ## 2026-10-11 — Recompilador: perfil por causa y menos salidas a C en GoldenEye y Perfect Dark (rama `upbeat-driscoll-1dd271`, paquete SLSA00088 «Salsa64 JIT»)
 
 Hecho (sin la PS3: la noche del 10 al 11 se trabajó en qemu; la medición

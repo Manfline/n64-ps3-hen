@@ -71,6 +71,17 @@
  * cuadros en aparecer y los juegos buscan controles al arrancar. Los cambios
  * de botones van al log.
  *
+ * Estados guardados (states.c, core/state.h, docs/estados.md): diez
+ * ranuras por juego en SALSA64_DATA_DIR/states. SELECT + R1 guarda en la
+ * ranura actual, SELECT + L1 carga, SELECT + izquierda/derecha cambia de
+ * ranura; mientras SELECT está apretado esos botones no llegan al juego.
+ * Se hacen en el límite de un campo con la emulación quieta: el hilo de
+ * emulación recoge la tarea del RSP en vuelo y espera; el de presentación
+ * vacía las colas, espera al RSX y guarda o carga (state_barrier). Un aviso
+ * corto en pantalla (osd.c) dice qué pasó. SELECT + △ muestra u oculta el
+ * contador de velocidad (VI/s y %, cuadros del juego y de la pantalla), que
+ * se recuerda en menu.cfg.
+ *
  * Guardado del cartucho (EEPROM, SRAM; savefile.c): tipo por
  * SALSA64_DATA_DIR/guardado.cfg, la cabecera de homebrew o la tabla por
  * código de juego; un archivo por juego en SALSA64_DATA_DIR/saves, escrito
@@ -515,6 +526,19 @@ static struct salsa64_ds3 ds3_from(const padData *d)
 
 static unsigned state_req_slot;  /* la ranura de la petición en curso */
 static int combos_on;            /* dentro del juego (no en el menú) */
+static uint32_t state_done;      /* barreras terminadas */
+static bool state_last_ok;       /* cómo terminó la última */
+
+/* Prueba automática de los estados (SALSA64_DATA_DIR/estados-prueba = "A B",
+ * tools/rpcs3-run.py --estados): guardar en la ranura 9 al llegar al campo
+ * A y cargarla en el B; la ROM de prueba tiene que verificarse igual
+ * después. */
+#define STATE_TEST_PATH SALSA64_DATA_DIR "/estados-prueba"
+enum { ST_OFF, ST_SAVE, ST_SAVING, ST_LOAD, ST_LOADING, ST_DONE, ST_FAILED };
+static struct {
+	uint32_t save_at, load_at, done0;
+	int stage;
+} state_test;
 
 static void fps_setting_save(bool on);
 static bool fps_setting_load(void);
@@ -1230,7 +1254,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		pres.shots = pres.autotest ? m->field / AUTO_SHOT_FIELDS : pres.shots + 1;
 		pres.t_shot = now;
 	}
-	if (m->flags & FIELD_STATE) {
+	if ((m->flags & FIELD_STATE) && state_req == STATE_SAVE) {
 		/* La miniatura del estado: la imagen sin el aviso encima. */
 		rsxkit_finish();
 		states_thumb_capture(&r);
@@ -1266,6 +1290,10 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		pres.result = selftest_on ? selftest_state(m->field)
 			    : gfxtest_on  ? gfxtest_state(m->field)
 					  : audiotest_state(m->field);
+		if (pres.result == SELFTEST_OK && state_test.stage && state_test.stage != ST_DONE) {
+			salsa64_log("estados, prueba automática: la ROM terminó antes de cargar el estado");
+			pres.result = SELFTEST_FAILED;
+		}
 		if (pres.result != SELFTEST_RUNNING) {
 			salsa64_log("%s: %s (campo %u)", res_tag, pres.result == SELFTEST_OK ? "OK" : "FALLO",
 				    m->field);
@@ -1501,21 +1529,23 @@ static void state_barrier(void)
 	char err[160] = "";
 	struct states_timing t;
 	uint32_t field0 = n64.bus.vi.fields;
+	bool ok = false;
 	if (!state_quiet) {
 		osd_notice(sysGetSystemTime(), "Estados no disponibles con lle");
 	} else if (req == STATE_SAVE) {
-		bool ok = states_save(&n64, slot, &t, err, sizeof err);
+		ok = states_save(&n64, slot, &t, err, sizeof err);
 		if (ok) {
 			osd_notice(sysGetSystemTime(), "Estado guardado en ranura %u", slot);
-			salsa64_log("estado: guardado en la ranura %u (campo %u): %.1f ms, de ellos %.1f ms escribiendo; %u KB",
-				    slot, field0, t.us_total / 1e3, t.us_io / 1e3, t.bytes >> 10);
+			salsa64_log("estado: guardado en la ranura %u (campo %u): %.1f ms, de ellos %.1f ms escribiendo; %u KB; "
+				    "miniatura %.1f ms", slot, field0, t.us_total / 1e3, t.us_io / 1e3, t.bytes >> 10,
+				    states_thumb_us() / 1e3);
 		} else {
 			osd_notice(sysGetSystemTime(), "No se pudo guardar: %s", err);
 			salsa64_log("estado: FALLO al guardar en la ranura %u: %s", slot, err);
 		}
 	} else if (req == STATE_LOAD) {
 		bool broken = false;
-		bool ok = states_load(&n64, slot, &t, err, sizeof err, &broken);
+		ok = states_load(&n64, slot, &t, err, sizeof err, &broken);
 		if (ok) {
 			salsa64_rdp_drop_targets();
 			audio_out_flush();
@@ -1540,8 +1570,42 @@ static void state_barrier(void)
 		}
 	}
 	states_thumb_clear();
+	state_last_ok = ok;
+	state_done++;
 	lwsync();
 	state_req = STATE_NONE;
+}
+
+static void state_test_step(void)
+{
+	uint32_t field = n64.bus.vi.fields;
+	switch (state_test.stage) {
+	case ST_SAVE:
+	case ST_LOAD:
+		if (state_req || field < (state_test.stage == ST_SAVE ? state_test.save_at : state_test.load_at))
+			return;
+		state_test.done0 = state_done;
+		state_slot = 9;
+		state_command(state_test.stage == ST_SAVE ? STATE_SAVE : STATE_LOAD);
+		state_test.stage++;
+		return;
+	case ST_SAVING:
+	case ST_LOADING:
+		if (state_done == state_test.done0)
+			return;
+		salsa64_log("estados, prueba automática: %s %s (campo %u)",
+			    state_test.stage == ST_SAVING ? "guardar" : "cargar", state_last_ok ? "bien" : "FALLO", field);
+		state_test.stage = !state_last_ok ? ST_FAILED : state_test.stage == ST_SAVING ? ST_LOAD : ST_DONE;
+		if (state_test.stage == ST_FAILED && pres.result == SELFTEST_RUNNING) {
+			pres.result = SELFTEST_FAILED;
+			salsa64_log("%s: FALLO (estado guardado, campo %u)", res_tag, field);
+			if (pres.autotest)
+				running = 0;
+		}
+		return;
+	default:
+		return;
+	}
 }
 
 /* Lo que es de un juego vuelve a como al arrancar el programa: colas entre
@@ -1590,6 +1654,9 @@ static void game_reset(void)
 	state_quiet = 0;
 	state_slot = 0;
 	combos_on = 0;
+	state_done = 0;
+	state_last_ok = false;
+	memset(&state_test, 0, sizeof state_test);
 	osd_notice_clear();
 	osd_fps_reset(&fps);
 	states_thumb_clear();
@@ -1777,6 +1844,18 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	else if (pres.shots_on && !pres.autotest)
 		salsa64_log("capturas: screen-N.ppm cada %u s (%s)", SHOT_US / 1000000u, SHOTS_PATH);
 	gwin.on = gfx_on_spu;
+	{
+		FILE *tf = fopen(STATE_TEST_PATH, "r");
+		if (tf) {
+			if (fscanf(tf, "%u %u", &state_test.save_at, &state_test.load_at) == 2 &&
+			    state_test.save_at < state_test.load_at) {
+				state_test.stage = ST_SAVE;
+				salsa64_log("estados, prueba automática: guardar en el campo %u y cargar en el %u (ranura 9)",
+					    state_test.save_at, state_test.load_at);
+			}
+			fclose(tf);
+		}
+	}
 
 	/* El hilo de emulación. */
 	sys_ppu_thread_t emu_tid;
@@ -1812,6 +1891,8 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		drain(now, 1);
 		if (state_parked && state_req)
 			state_barrier();
+		if (state_test.stage)
+			state_test_step();
 		if (fps.on)
 			osd_fps_sample(&fps, now, n64.bus.vi.fields, n64.cpu.cycles, pres.game_frames, pres.frames_total);
 		stats(now);
