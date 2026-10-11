@@ -134,3 +134,9 @@ y revisando los repositorios.
 | CPUTest de krom (github.com/PeterLemon/N64) | `7085543e` (2026-02-01) | Unlicense (desde 2025-09-27) | **Sí.** Cada ROM y `LIB/N64_BOOTCODE.BIN` contienen el IPL3 CIC-6102 de Nintendo; `BOOTCODE/BOOTCODE.asm` es su desensamblado | **Secundaria, pendiente: solo ensamblada desde fuente** con un bootcode libre (ceros, ya que arrancamos por HLE; el camino "plano" del HLE la arrancaría) en lugar de `N64_BOOTCODE.BIN`. Un `git clone` bajaría esos binarios: hay que traer solo los `.asm` de texto por la API. Nunca descargar ese archivo, `BOOTCODE.asm` ni los `.N64` precompilados. Reporta PASS/FAIL en el framebuffer (falta el VI para leerlo). |
 | Dillonb/n64-tests | — | Ninguna | Sí | Descartada: sin licencia no es redistribuible. |
 | Pruebas de libdragon | — | Unlicense | No | Descartada: prueban la biblioteca, no el CPU. |
+
+## Recursos gráficos
+
+| Recurso | Origen | Licencia |
+|---|---|---|
+| `assets/ps3/ICON0.PNG` (320×176) y `assets/ps3/PIC1.PNG` (1920×1080): logo de Salsa64 (chile low-poly de 8 segmentos y «SALSA64») | Aportado por el autor el 2026-10-10; escalado con `sips` (PIC1 recortado a 16:9) | Del proyecto. Sin marcas de Nintendo ni de Sony |
