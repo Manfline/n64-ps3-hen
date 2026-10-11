@@ -85,10 +85,9 @@ Pruebas (todo con el árbol final, 2026-10-11):
 - `tools/test-roms.sh`: nemu64-test 433 (HLE) y 136 (LLE), vitest,
   controles, savetest ×3, gfxtest ×3, audiotest: verde. `tools/build.sh
   test-host` 351/351.
-- `--lockstep` de Perfect Dark (3 G ciclos, intro) sin diferencias;
-  GoldenEye con `goldeneye-dam.pad` sin diferencias hasta donde llega en 1 h
-  (campo ~3600 de ~4800; la corrida de 2,5 h hasta la presa estaba en
-  marcha al cerrar: `build/logs/sl-lock-ge.log`).
+- `--lockstep` de Perfect Dark (3 G ciclos, intro) y de GoldenEye con
+  `goldeneye-dam.pad` hasta jugar en la presa (7,5 G ciclos, 283 M salidas
+  comparadas, 1 h 46 min de qemu): **sin diferencias**.
 - `tools/build.sh` (todos los programas) y el paquete: sin advertencias.
 - Sin medición en la PS3 (no estuvo disponible): ninguna conclusión de
   rendimiento todavía. Lo que se sabe de qemu son cuentas (tabla en
