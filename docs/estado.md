@@ -1,5 +1,56 @@
 # Estado
 
+## 2026-10-11 — Pulsaciones perdidas del control: retención en el PIF y en el buzón entre hilos (rama vibrant-hawking)
+
+Reporte (el autor, PS3, 2026-10-10 y 11): a veces un botón no responde
+hasta pulsarlo muchas veces (R en la pausa de Zelda, también en SM64).
+
+Medido en el host (`salsa64-run` nativo, mismas pulsaciones por campo):
+- **Zelda lee el control en cada campo y acumula las pulsaciones**: en la
+  pausa, R de 1, 2, 3 y 6 campos giran la página las 9 veces. El núcleo y
+  el PIF no la pierden.
+- **Pero el juego ignora R mientras gira la página** (~35 campos, 0,6 s):
+  dos R separadas 15 o 30 campos dan un solo giro; a 45, 60 u 80 campos,
+  dos. En el log de la PS3 del trabajo de efectos (zelda2.log) las R van a
+  0,3–1,8 s: la de 41,439 s (0,3 s tras la anterior) cae en el giro. Eso es
+  del juego, no del emulador; para la prueba hay que esperar a que la
+  página termine de girar.
+- **SM64 lee el control cada 2 campos**: una START de 1 campo en la fase sin
+  lectura se perdía (la pausa no abría y la siguiente pulsación la abría a
+  destiempo: «hay que pulsar varias veces»). Con la retención del PIF entran
+  las 6 de 6 (antes 3 de 6).
+- En la PS3 los cambios del DS3 llegan cuantizados a ~16,7 ms
+  (`update_pads` corre una vez por flip): una pulsación corta llega como 1
+  o 2 campos, y el buzón de último estado podía perder una pulsación
+  publicada y soltada entre dos campos.
+
+Hecho:
+- **PIF** (`src/core/pif.c`): cada botón pulsado queda retenido (`held`)
+  hasta salir en una respuesta de estado (comando 0x01); la identificación
+  y el pak no lo gastan; desconectar o reiniciar lo olvida. Las soltadas no
+  se retienen. Guarda lo entregado (`sent`, `reads`) para el log. Prueba
+  `pif_held_press`.
+- **Buzón presentación → emulación** (`src/frontend/main.c`): además del
+  seqlock, OR atómico de los botones vistos (`pad_box.pressed`) que
+  emulación toma y pone en 0; los controles se aplican justo antes de
+  emular el campo (antes, antes de la espera del ritmo: hasta ~12 ms más
+  viejos).
+- **Log de la PS3, solo en flancos**: «control N: … (campo M)» en
+  `update_pads` y «PIF → juego: control N: … (campo M, lectura K)» cuando
+  cambia lo que el PIF entregó (cola de 32 entre hilos, la escribe
+  presentación). Cada 5 s: «controles: X lecturas de los mandos (hueco máx
+  Y ms); el juego leyó el control 1 Z veces (W/s)». El host imprime el
+  mismo «PIF → juego» con `--pad`.
+- `docs/hilos-ppe.md` al día (fila de controles y de flancos del PIF).
+
+Pendiente:
+- [ ] PS3 real con el paquete «Salsa64 control» (SLSA00092,
+      `salsa64-control.pkg`, log en `/dev_hdd0/salsa64/salsa64-control.log`):
+      R en la pausa de Zelda (esperando a que termine el giro) y botones de
+      SM64 a la primera; en el log, cada «control 1» seguido de su «PIF →
+      juego» uno o dos campos después, y el hueco máximo entre lecturas
+      de los mandos.
+
 ## 2026-10-10 — Menú para elegir ROM (estilo XMB) y vuelta al menú con cierre limpio
 
 Hecho (rama `intelligent-yalow-4dd14d`, desde main e7184b7):

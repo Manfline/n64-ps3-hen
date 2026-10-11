@@ -43,12 +43,15 @@ void salsa64_pif_reset(struct salsa64_bus *bus)
 	for (int ch = 0; ch < SALSA64_PIF_CHANNELS; ch++)
 		pif->handshake[ch] = -1;
 	pif->parsed = 0;
+	memset(pif->held, 0, sizeof pif->held);
 }
 
 void salsa64_pif_set_pad(struct salsa64_bus *bus, unsigned port, const struct salsa64_pad *pad)
 {
-	if (port < SALSA64_PIF_PORTS)
-		bus->pif.pads[port] = *pad;
+	if (port >= SALSA64_PIF_PORTS)
+		return;
+	bus->pif.pads[port] = *pad;
+	bus->pif.held[port] = pad->connected ? (uint16_t)(bus->pif.held[port] | pad->buttons) : 0;
 }
 
 uint8_t salsa64_joybus_crc8(const uint8_t *data, unsigned len)
@@ -103,8 +106,10 @@ void salsa64_pif_written(struct salsa64_bus *bus)
 
 /* Respuesta del control estándar en `reply`; devuelve su longitud, o -1 si
  * el control no contesta (comando desconocido o incompleto). */
-static int pad_command(const struct salsa64_pad *pad, const uint8_t *tx, unsigned txlen, uint8_t *reply)
+static int pad_command(struct salsa64_pif *pif, unsigned port, const uint8_t *tx, unsigned txlen,
+		       uint8_t *reply)
 {
+	const struct salsa64_pad *pad = &pif->pads[port];
 	switch (tx[0]) {
 	case JB_INFO:
 	case JB_RESET:
@@ -113,12 +118,16 @@ static int pad_command(const struct salsa64_pad *pad, const uint8_t *tx, unsigne
 		reply[2] = PAD_NO_PAK;
 		return 3;
 	case JB_STATE: {
-		uint16_t b = pad->buttons & (uint16_t)~SALSA64_PAD_RST;
+		/* Lo pulsado ahora y lo que se soltó sin haberse entregado. */
+		uint16_t b = (pad->buttons | pif->held[port]) & (uint16_t)~SALSA64_PAD_RST;
 		int8_t x = pad->x, y = pad->y;
+		pif->held[port] = 0;
 		if ((b & PAD_RESET_COMBO) == PAD_RESET_COMBO) {
 			b = (uint16_t)((b & ~SALSA64_PAD_START) | SALSA64_PAD_RST);
 			x = y = 0;
 		}
+		pif->sent[port] = (struct salsa64_pad){ b, x, y, 1 };
+		pif->reads[port]++;
 		reply[0] = (uint8_t)(b >> 8);
 		reply[1] = (uint8_t)b;
 		reply[2] = (uint8_t)x;
@@ -161,7 +170,7 @@ void salsa64_pif_execute(struct salsa64_bus *bus)
 		uint8_t reply[PAK_BLOCK + 1];
 		int n = -1;
 		if (txlen && ch < SALSA64_PIF_PORTS && pif->pads[ch].connected)
-			n = pad_command(&pif->pads[ch], tx, txlen, reply);
+			n = pad_command(pif, (unsigned)ch, tx, txlen, reply);
 		else if (ch == SALSA64_PIF_PORTS && bus->save)  /* EEPROM del cartucho */
 			n = salsa64_save_joybus(bus->save, tx, txlen, reply);
 		uint8_t err = 0;

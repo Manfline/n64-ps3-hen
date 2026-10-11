@@ -313,6 +313,14 @@ static bool gfx_dump(const char *path);
 
 static void field_done(const char *gfx_path, uint32_t frame_every)
 {
+	/* Con --pad: lo que el PIF entregó al juego, en cada cambio de botones
+	 * (como el «PIF → juego» del log de la PS3). */
+	static uint16_t sent;
+	const struct salsa64_pad *out = &n64.bus.pif.sent[0];
+	if (pads.n && out->buttons != sent && tracing())
+		fprintf(stderr, "campo %u: PIF → juego: control 1 botones 0x%04x (lectura %u)\n", n64.bus.vi.fields,
+			out->buttons, n64.bus.pif.reads[0]);
+	sent = out->buttons;
 	pad_field();
 	poke_field();
 	if (frame_every && gfx_path && tracing() && n64.bus.vi.fields % frame_every == 0) {

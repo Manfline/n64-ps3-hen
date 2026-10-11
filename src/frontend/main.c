@@ -278,10 +278,14 @@ struct field_msg {
 static struct field_msg field_q[FIELD_QUEUE];
 static volatile uint32_t field_head, field_tail;  /* head la mueve emulación; tail, presentación */
 
-/* Controles, de presentación a emulación (seqlock: seq impar = escribiendo). */
+/* Controles, de presentación a emulación: el último estado (seqlock: seq
+ * impar = escribiendo) y, aparte, el OR de los botones vistos desde que
+ * emulación los tomó, para que una pulsación publicada y soltada entre dos
+ * campos llegue al PIF (que la retiene hasta entregarla al juego). */
 static struct {
 	volatile uint32_t seq;
 	struct salsa64_pad pads[SALSA64_PIF_PORTS];
+	volatile uint32_t pressed[SALSA64_PIF_PORTS];
 } pad_box;
 
 static void pads_publish(const struct salsa64_pad pads[SALSA64_PIF_PORTS])
@@ -291,6 +295,9 @@ static void pads_publish(const struct salsa64_pad pads[SALSA64_PIF_PORTS])
 	memcpy(pad_box.pads, pads, sizeof pad_box.pads);
 	lwsync();
 	pad_box.seq++;
+	for (unsigned i = 0; i < SALSA64_PIF_PORTS; i++)
+		if (pads[i].buttons)
+			__sync_fetch_and_or(&pad_box.pressed[i], pads[i].buttons);
 }
 
 static void pads_apply(void)
@@ -306,8 +313,60 @@ static void pads_apply(void)
 		if (pad_box.seq == s1)
 			break;
 	}
-	for (unsigned i = 0; i < SALSA64_PIF_PORTS; i++)
+	for (unsigned i = 0; i < SALSA64_PIF_PORTS; i++) {
+		if (pad_box.pressed[i])
+			pads[i].buttons |= (uint16_t)__sync_fetch_and_and(&pad_box.pressed[i], 0);
 		salsa64_pif_set_pad(&n64.bus, i, &pads[i]);
+	}
+}
+
+/* Flancos de lo que el PIF entregó al juego (respuestas de estado): los
+ * anota emulación al terminar cada campo y los escribe presentación. */
+#define PIF_EDGES 32
+static struct {
+	struct salsa64_pad pad;
+	uint32_t field, reads;
+	uint8_t port;
+} pif_edge[PIF_EDGES];
+static volatile uint32_t pif_edge_head, pif_edge_tail, pif_edge_lost;
+static uint16_t pif_edge_seen[SALSA64_PIF_PORTS];
+
+static void pif_edges_note(void)
+{
+	const struct salsa64_pif *pif = &n64.bus.pif;
+	for (unsigned i = 0; i < SALSA64_PIF_PORTS; i++) {
+		if (pif->sent[i].buttons == pif_edge_seen[i])
+			continue;
+		pif_edge_seen[i] = pif->sent[i].buttons;
+		if (pif_edge_head - pif_edge_tail >= PIF_EDGES) {
+			__sync_fetch_and_add(&pif_edge_lost, 1);
+			continue;
+		}
+		uint32_t k = pif_edge_head % PIF_EDGES;
+		pif_edge[k].pad = pif->sent[i];
+		pif_edge[k].field = n64.bus.vi.fields;
+		pif_edge[k].reads = pif->reads[i];
+		pif_edge[k].port = (uint8_t)i;
+		lwsync();
+		pif_edge_head++;
+	}
+}
+
+static void pif_edges_log(void)
+{
+	while (pif_edge_tail != pif_edge_head) {
+		lwsync();  /* la entrada, después de ver head */
+		uint32_t k = pif_edge_tail % PIF_EDGES;
+		char desc[128];
+		salsa64_pad_describe(&pif_edge[k].pad, desc, sizeof desc);
+		salsa64_log("PIF → juego: control %u: %s (campo %u, lectura %u)", pif_edge[k].port + 1u, desc,
+			    pif_edge[k].field, pif_edge[k].reads);
+		lwsync();
+		pif_edge_tail++;
+	}
+	uint32_t lost = pif_edge_lost ? __sync_fetch_and_and(&pif_edge_lost, 0) : 0;
+	if (lost)
+		salsa64_log("PIF → juego: %u flancos sin anotar (cola llena)", lost);
 }
 
 /* Contadores del hilo de emulación; presentación los lee cada 5 s. */
@@ -424,6 +483,14 @@ static struct salsa64_ds3 ds3_from(const padData *d)
 	return s;
 }
 
+/* Lecturas de los mandos en la ventana de estadísticas y el hueco más
+ * largo entre dos: una pulsación más corta que el hueco no llega a verse
+ * (ioPadGetData da solo el último estado). */
+static struct {
+	uint64_t last_us, max_gap_us;
+	uint32_t polls;
+} pad_poll;
+
 /* DualShock 3 → controles de la N64, publicados para el hilo de emulación.
  * ioPadGetData da len = 0 cuando nada cambió: se conserva el último
  * estado. Devuelve 1 si algún mando tiene START + SELECT; en `buttons`
@@ -447,6 +514,12 @@ static int update_pads(uint32_t *buttons)
 
 	if (buttons)
 		*buttons = 0;
+	uint64_t now = sysGetSystemTime();
+	if (pad_poll.last_us && now - pad_poll.last_us > pad_poll.max_gap_us)
+		pad_poll.max_gap_us = now - pad_poll.last_us;
+	pad_poll.last_us = now;
+	pad_poll.polls++;
+	pif_edges_log();
 	if (ioPadGetInfo(&info) != 0)
 		return 0;
 	for (unsigned i = 0; i < SALSA64_PIF_PORTS; i++) {
@@ -480,11 +553,13 @@ static int update_pads(uint32_t *buttons)
 		if (p.connected != o->connected || p.buttons != o->buttons ||
 		    dx * dx + dy * dy >= 40 * 40) {
 			char desc[128];
+			/* El campo que emulación tenía en curso, para cotejar con el
+			 * «PIF → juego» del mismo botón. */
 			if (p.connected) {
 				salsa64_pad_describe(&p, desc, sizeof desc);
-				salsa64_log("control %u: %s", i + 1, desc);
+				salsa64_log("control %u: %s (campo %u)", i + 1, desc, n64.bus.vi.fields);
 			} else {
-				salsa64_log("control %u: desconectado", i + 1);
+				salsa64_log("control %u: desconectado (campo %u)", i + 1, n64.bus.vi.fields);
 			}
 			*o = p;
 		}
@@ -862,7 +937,6 @@ static void emu_thread(void *arg)
 {
 	(void)arg;
 	while (running) {
-		pads_apply();
 		uint64_t t0 = sysGetSystemTime();
 		/* Al ritmo de la tele emulada; la medición A/B va al máximo y
 		 * queda fuera del ritmo (ni espera ni avanza la referencia). */
@@ -873,8 +947,10 @@ static void emu_thread(void *arg)
 			emu_stats.us_pace += tp - t0;
 			t0 = tp;
 		}
+		pads_apply();  /* después de la espera: lo más reciente de los mandos */
 		uint64_t cycles = salsa64_n64_run_field(&n64);
 		uint64_t t1 = sysGetSystemTime();
+		pif_edges_note();
 		log_unknown_gbi();
 		if (paced)
 			pacer_advance(&pacer, cycles);
@@ -1054,7 +1130,7 @@ static void drain(uint64_t now, int present)
  * anterior (se vacía al empezar cada juego). */
 static struct {
 	uint64_t t_stats, us_emu0, us_copy0, us_pace0, cyc0, idle0;
-	uint32_t fields0;
+	uint32_t fields0, pif_reads0;
 	struct salsa64_rdp_stats rdp0;
 	uint32_t gfx_waits0, gfx_polls0, gfx_cut0;
 	uint64_t gfx_skipped0;
@@ -1070,6 +1146,8 @@ static void stats(uint64_t now)
 	if (!sw.t_stats) {
 		sw.t_stats = now;
 		salsa64_rdp_get_stats(&sw.rdp0);
+		pad_poll.polls = 0;
+		pad_poll.max_gap_us = 0;
 		return;
 	}
 	uint64_t dt = now - sw.t_stats;
@@ -1107,6 +1185,13 @@ static void stats(uint64_t now)
 			    (double)pres.behind_sum / pres.presented, pres.behind_max,
 			    pres.rsx_frames ? (double)(rs.age_sum - sw.rdp0.age_sum) / pres.rsx_frames : 0.0,
 			    rs.age_max, pres.rsx_frames);
+	/* Controles: cada cuánto se leyeron los mandos (el hueco más largo
+	 * es la pulsación más corta que puede perderse) y cuántas veces leyó
+	 * el juego el control 1. */
+	salsa64_log("controles: %u lecturas de los mandos (hueco máx %.1f ms); el juego leyó el control 1 "
+		    "%u veces (%.1f/s)",
+		    pad_poll.polls, pad_poll.max_gap_us / 1e3, n64.bus.pif.reads[0] - sw.pif_reads0,
+		    (n64.bus.pif.reads[0] - sw.pif_reads0) * 1e6 / dt);
 	uint32_t tasks = rs.tasks - sw.rdp0.tasks;
 	if (tasks) {
 		double spu_ms = 0, wait_ms = 0, sleep_ms = 0;
@@ -1194,6 +1279,9 @@ static void stats(uint64_t now)
 	sw.gfx_cut0 = n64.bus.rsp.stats.cut;
 	sw.gfx_skipped0 = gfx_spu.skipped;
 	sw.t_stats = now;
+	sw.pif_reads0 = n64.bus.pif.reads[0];
+	pad_poll.polls = 0;
+	pad_poll.max_gap_us = 0;
 	sw.fields0 = emu_stats.fields;
 	sw.us_emu0 = emu_stats.us_emu;
 	sw.us_copy0 = emu_stats.us_copy;
@@ -1229,6 +1317,10 @@ static void game_reset(void)
 	memset(&save_file, 0, sizeof save_file);
 	memset(field_q, 0, sizeof field_q);
 	field_head = field_tail = 0;
+	pif_edge_head = pif_edge_tail = pif_edge_lost = 0;
+	memset(pif_edge_seen, 0, sizeof pif_edge_seen);
+	for (unsigned i = 0; i < SALSA64_PIF_PORTS; i++)
+		pad_box.pressed[i] = 0;
 	post_last = ~0u;
 	for (int i = 0; i < SNAP_SLOTS; i++)
 		snap_state[i] = SNAP_FREE;
