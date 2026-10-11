@@ -131,6 +131,12 @@ struct salsa64_gfx_backend {
 	 * puede dormir un poco en vez de volver en el acto, para que el reloj
 	 * emulado no corra más rápido que el real. */
 	bool (*done)(void *ctx, bool idle);
+	/* Opcionales (estados guardados, core/state.c), sin tarea en vuelo: el
+	 * estado que la HLE conserva entre tareas (el del RDP y la TMEM) en un
+	 * formato portable de state_size bytes, y de vuelta. */
+	uint32_t state_size;
+	bool (*save_state)(void *ctx, uint8_t *buf);
+	bool (*load_state)(void *ctx, const uint8_t *buf);
 };
 
 /* ABI de las listas de audio (alist): cada microcódigo de audio numera y
@@ -175,6 +181,11 @@ struct salsa64_audio_backend {
 	void (*finish)(void *ctx, struct salsa64_bus *bus);
 	/* Opcional, como en el gráfico: ¿ya terminó? Sin bloquear. */
 	bool (*done)(void *ctx, bool idle);
+	/* Opcionales, como en el gráfico: el estado de los ABI que persiste
+	 * entre tareas (DMEM, libro de ADPCM, envolventes, ventana de MP3). */
+	uint32_t state_size;
+	bool (*save_state)(void *ctx, uint8_t *buf);
+	bool (*load_state)(void *ctx, const uint8_t *buf);
 };
 
 /* ---- RSP a bajo nivel (LLE, Fase 6: src/rsp/lle) ---------------------------
@@ -264,6 +275,10 @@ struct salsa64_rsp {
 	/* Cada cuántos ciclos se vuelve a preguntar al backend si terminó. */
 	uint32_t poll_cycles;
 	uint64_t poll_idle;     /* idle_cycles del CPU en el sondeo anterior */
+	/* La tarea en curso ya se recogió del backend (salsa64_rsp_quiesce): su
+	 * fin llega a su hora con estas banderas, sin volver a llamarlo. */
+	bool collected;
+	uint32_t collected_flags;
 	struct salsa64_rsp_stats stats;
 	/* Opcional (depuración): cada arranque del RSP con su tarea y la familia
 	 * de microcódigo detectada (SALSA64_GBI_UNKNOWN si no es gráfica). */
@@ -414,6 +429,12 @@ void salsa64_rsp_set_dpc(struct salsa64_bus *bus, const struct salsa64_dpc_backe
  * el microcódigo): deja DPC_START/END/CURRENT como si el RDP lo hubiera
  * consumido y lo pasa al consumidor. `dmem` como en salsa64_dpc_backend. */
 void salsa64_dp_submit(struct salsa64_bus *bus, uint32_t start, uint32_t end, const uint8_t *dmem);
+/* Estados guardados: con la emulación quieta, espera a que el backend
+ * termine la tarea en curso (gráfica o de audio) y guarda su resultado; el
+ * fin emulado de la tarea no se adelanta (llega a su hora con ese
+ * resultado). Devuelve false si el RSP corre microcódigo real (LLE): sin
+ * estados guardados. */
+bool salsa64_rsp_quiesce(struct salsa64_bus *bus);
 /* El CPU va a tocar un registro del SP o del DP (sp.c): el RSP a bajo
  * nivel se pone al día. */
 void salsa64_rsp_sync(struct salsa64_bus *bus);

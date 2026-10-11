@@ -31,6 +31,18 @@
 
 #define GFX_JOB_TASK 1  /* kind del trabajo en spukit */
 #define GFX_JOB_HASH 2  /* prueba del hash (struct gfx_hash_job), antes de las tareas */
+/* Estados guardados: el estado que persiste entre tareas (registros del
+ * RDP y TMEM, state.c) de y hacia GFX_STATE_BYTES bytes en `ea` (alineado a
+ * 128), en un formato portable: GFX_STATE_REGS bytes de registros y la
+ * TMEM. Entre tareas. */
+#define GFX_JOB_STATE_SAVE 3
+#define GFX_JOB_STATE_LOAD 4
+#define GFX_STATE_REGS  256u
+#define GFX_STATE_BYTES (GFX_STATE_REGS + 4096u)
+
+struct gfx_state_job {
+	uint64_t ea;
+};
 
 /* Hash de `len` bytes desde `start` de un anillo de `size` bytes (≤ 4096,
  * potencia de 2) en `ea`; el resultado son las dos palabras de la clave. */

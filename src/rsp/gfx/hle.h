@@ -335,6 +335,14 @@ bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex, bool p
 /* Tamaño de la textura de una tile (potencia de 2 si se repite). */
 void gfx_tile_size(const struct gfx_tile *t, uint32_t *w, uint32_t *h);
 
+/* state.c: lo que persiste entre tareas, en el formato portable de
+ * GFX_STATE_* (gfx.h). Los registros solos, para el SPE (la TMEM va por
+ * DMA), o todo junto (GFX_STATE_BYTES). false si el formato no es este. */
+void gfx_state_pack_regs(const struct gfx_state *g, uint8_t out[GFX_STATE_REGS]);
+bool gfx_state_unpack_regs(struct gfx_state *g, const uint8_t in[GFX_STATE_REGS]);
+void gfx_state_save(const struct gfx_state *g, uint8_t *out);
+bool gfx_state_load(struct gfx_state *g, const uint8_t *in);
+
 /* combine.c: combiner → combinación lineal fija o términos del generador
  * (gfx.h). Lee d->fog (con niebla deja un término sin factores). Devuelve
  * true si tuvo que aproximar. */

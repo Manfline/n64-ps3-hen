@@ -1837,7 +1837,7 @@ int main(int argc, char **argv)
 	if (getenv("SALSA64_GFX_LATE")) {
 		gfx_late.polls = (unsigned)strtoul(getenv("SALSA64_GFX_LATE"), NULL, 0);
 		gfx_late.tear = getenv("SALSA64_GFX_TEAR") != NULL;
-		gfx_late.backend = (struct salsa64_gfx_backend){ NULL, late_start, late_finish, late_done };
+		gfx_late.backend = (struct salsa64_gfx_backend){ .start = late_start, .finish = late_finish, .done = late_done };
 		salsa64_rsp_set_gfx(&n64.bus, &gfx_late.backend);
 	}
 	salsa64_audio_sync_init(&aud_sync, &aud_state, &n64.bus);

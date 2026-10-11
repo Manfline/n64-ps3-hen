@@ -14,6 +14,7 @@
 #ifndef SALSA64_RSP_AUDIO_AUDIO_H
 #define SALSA64_RSP_AUDIO_AUDIO_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /* ---- Trabajo y resultado ---------------------------------------------------
@@ -21,6 +22,16 @@
 
 #define AUD_JOB_TASK  2  /* kind del trabajo en spukit: una tarea */
 #define AUD_JOB_RESET 3  /* volver el estado de los ABI a cero (aud_init) */
+/* Estados guardados: el estado entre tareas (state.c) de y hacia
+ * AUD_STATE_BYTES bytes en `ea` (alineado a 128), en un formato portable.
+ * Entre tareas. */
+#define AUD_JOB_STATE_SAVE 4
+#define AUD_JOB_STATE_LOAD 5
+#define AUD_STATE_BYTES 12032u
+
+struct aud_state_job {
+	uint64_t ea;
+};
 
 struct aud_job {
 	uint64_t rdram_ea;   /* dirección de la RDRAM emulada (EA del PPE) */
@@ -110,6 +121,10 @@ struct aud_state {
 };
 
 void aud_init(struct aud_state *st);
+/* El estado entre tareas en el formato de AUD_STATE_BYTES (state.c), y de
+ * vuelta (false si el formato no es este). */
+void aud_state_save(const struct aud_state *st, uint8_t *out);
+bool aud_state_load(struct aud_state *st, const uint8_t *in);
 /* Ejecuta la lista de audio del trabajo y llena `res`. */
 void aud_run(struct aud_state *st, const struct aud_job *job, struct aud_result *res);
 

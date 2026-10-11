@@ -51,12 +51,28 @@ static void sync_finish(void *ctx, struct salsa64_bus *bus)
 	salsa64_audio_written(bus, &s->res);
 }
 
+static bool sync_save_state(void *ctx, uint8_t *buf)
+{
+	struct salsa64_audio_sync *s = ctx;
+	aud_state_save(s->state, buf);
+	return true;
+}
+
+static bool sync_load_state(void *ctx, const uint8_t *buf)
+{
+	struct salsa64_audio_sync *s = ctx;
+	return aud_state_load(s->state, buf);
+}
+
 void salsa64_audio_sync_init(struct salsa64_audio_sync *s, struct aud_state *state, const struct salsa64_bus *bus)
 {
 	memset(s, 0, sizeof *s);
 	s->backend.ctx = s;
 	s->backend.start = sync_start;
 	s->backend.finish = sync_finish;
+	s->backend.state_size = AUD_STATE_BYTES;
+	s->backend.save_state = sync_save_state;
+	s->backend.load_state = sync_load_state;
 	s->state = state;
 	s->bus = bus;
 	aud_init(state);
