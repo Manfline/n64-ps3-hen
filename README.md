@@ -115,8 +115,12 @@ Goals, architecture and roadmap: [docs/proyecto.md](docs/proyecto.md).
 
 ## License
 
+Copyright (C) 2026 ricowp81.
+
 Salsa64 is free software under the **GNU General Public License, version 2 or
-(at your option) any later version** ([LICENSE](LICENSE)).
+(at your option) any later version** ([LICENSE](LICENSE)). Files that adapt
+code from other projects keep their original copyright notices (see
+[docs/THIRD_PARTY.md](docs/THIRD_PARTY.md)).
 
 `lib/rsxkit/` and `lib/spukit/` are under the **MIT license** (their own
 `LICENSE` files) so that other emulators and homebrew, including projects
