@@ -279,14 +279,18 @@ static struct field_msg field_q[FIELD_QUEUE];
 static volatile uint32_t field_head, field_tail;  /* head la mueve emulación; tail, presentación */
 
 /* Controles, de presentación a emulación: el último estado (seqlock: seq
- * impar = escribiendo) y, aparte, el OR de los botones vistos desde que
- * emulación los tomó, para que una pulsación publicada y soltada entre dos
- * campos llegue al PIF (que la retiene hasta entregarla al juego). */
+ * impar = escribiendo) y, aparte, el OR de los botones recién pulsados
+ * desde que emulación los tomó, para que una pulsación publicada y soltada
+ * entre dos campos llegue al PIF (que la retiene hasta entregarla al
+ * juego). Solo los flancos: con todo lo pulsado, cada soltada se
+ * retrasaría un campo. */
 static struct {
 	volatile uint32_t seq;
 	struct salsa64_pad pads[SALSA64_PIF_PORTS];
 	volatile uint32_t pressed[SALSA64_PIF_PORTS];
 } pad_box;
+
+static uint16_t pad_published[SALSA64_PIF_PORTS];
 
 static void pads_publish(const struct salsa64_pad pads[SALSA64_PIF_PORTS])
 {
@@ -295,9 +299,12 @@ static void pads_publish(const struct salsa64_pad pads[SALSA64_PIF_PORTS])
 	memcpy(pad_box.pads, pads, sizeof pad_box.pads);
 	lwsync();
 	pad_box.seq++;
-	for (unsigned i = 0; i < SALSA64_PIF_PORTS; i++)
-		if (pads[i].buttons)
-			__sync_fetch_and_or(&pad_box.pressed[i], pads[i].buttons);
+	for (unsigned i = 0; i < SALSA64_PIF_PORTS; i++) {
+		uint16_t rise = (uint16_t)(pads[i].buttons & ~pad_published[i]);
+		if (rise)
+			__sync_fetch_and_or(&pad_box.pressed[i], rise);
+		pad_published[i] = pads[i].buttons;
+	}
 }
 
 static void pads_apply(void)
@@ -1109,10 +1116,15 @@ static void present_field(const struct field_msg *m, uint64_t now)
 }
 
 /* Consume lo encolado: campos en orden y, al final, las tareas gráficas que
- * ya terminaron (son del campo siguiente). */
+ * ya terminaron (son del campo siguiente). Solo lo que había al entrar: con
+ * el flip en vsync y la emulación al mismo ritmo, mientras se presenta un
+ * campo llega el siguiente, la cola no se vacía y el bucle de presentación
+ * no volvía a leer los mandos (7,4 s sin leerlos en la selección de ranura
+ * de Zelda, PS3, 2026-10-11). */
 static void drain(uint64_t now, int present)
 {
-	while (field_tail != field_head) {
+	uint32_t head = field_head;
+	while (field_tail != head) {
 		lwsync();  /* el mensaje, después de ver head */
 		struct field_msg m = field_q[field_tail % FIELD_QUEUE];
 		if (present) {
@@ -1321,6 +1333,7 @@ static void game_reset(void)
 	memset(pif_edge_seen, 0, sizeof pif_edge_seen);
 	for (unsigned i = 0; i < SALSA64_PIF_PORTS; i++)
 		pad_box.pressed[i] = 0;
+	memset(pad_published, 0, sizeof pad_published);
 	post_last = ~0u;
 	for (int i = 0; i < SNAP_SLOTS; i++)
 		snap_state[i] = SNAP_FREE;

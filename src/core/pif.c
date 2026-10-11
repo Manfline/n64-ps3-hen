@@ -50,8 +50,12 @@ void salsa64_pif_set_pad(struct salsa64_bus *bus, unsigned port, const struct sa
 {
 	if (port >= SALSA64_PIF_PORTS)
 		return;
+	/* Solo lo recién pulsado: retener todo lo pulsado alargaría cada
+	 * pulsación hasta la lectura siguiente y se comería una soltada corta
+	 * entre dos pulsaciones (A soltada 4 campos en SM64, PS3). */
+	uint16_t pressed = (uint16_t)(pad->buttons & ~bus->pif.pads[port].buttons);
+	bus->pif.held[port] = pad->connected ? (uint16_t)(bus->pif.held[port] | pressed) : 0;
 	bus->pif.pads[port] = *pad;
-	bus->pif.held[port] = pad->connected ? (uint16_t)(bus->pif.held[port] | pad->buttons) : 0;
 }
 
 uint8_t salsa64_joybus_crc8(const uint8_t *data, unsigned len)

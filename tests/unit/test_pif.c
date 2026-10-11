@@ -208,6 +208,22 @@ static void pif_held_press(void)
 	salsa64_pif_execute(bus());
 	CHECK_EQ(ram()[3], 0x00);
 
+	/* Solo el flanco: ya entregado y mantenido unos campos sin lecturas,
+	 * si se suelta antes de la siguiente sale suelto (no se come la
+	 * soltada entre dos pulsaciones). */
+	pad(0, SALSA64_PAD_A, 0, 0);
+	salsa64_pif_execute(bus());
+	CHECK_EQ(ram()[3], 0x80);
+	pad(0, SALSA64_PAD_A, 0, 0);
+	pad(0, SALSA64_PAD_A, 0, 0);
+	pad(0, 0, 0, 0);
+	salsa64_pif_execute(bus());
+	CHECK_EQ(ram()[3], 0x00);
+	pad(0, SALSA64_PAD_A, 0, 0);
+	salsa64_pif_execute(bus());
+	CHECK_EQ(ram()[3], 0x80);
+	pad(0, 0, 0, 0);
+
 	/* Desconectar o reiniciar la consola olvida lo retenido. */
 	pad(0, SALSA64_PAD_B, 0, 0);
 	unplug(0);

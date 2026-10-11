@@ -1,40 +1,42 @@
 # Estado
 
-## 2026-10-11 — Pulsaciones perdidas del control: retención en el PIF y en el buzón entre hilos (rama vibrant-hawking)
+## 2026-10-11 — Pulsaciones perdidas del control: el bucle de presentación dejaba de leer los mandos (rama vibrant-hawking)
 
 Reporte (el autor, PS3, 2026-10-10 y 11): a veces un botón no responde
-hasta pulsarlo muchas veces (R en la pausa de Zelda, también en SM64).
+hasta pulsarlo muchas veces (R en la pausa de Zelda, el stick en la
+selección de ranura, también SM64); después «responde normal».
+
+**Causa (log de la PS3 con los mandos instrumentados):** el hilo de
+presentación pasó **7,4 s sin leer los mandos** en la selección de ranura
+de Zelda (y 0,6–0,9 s en otros momentos) mientras presentaba 667 campos.
+`drain()` consumía la cola hasta vaciarla, pero con el flip en vsync y la
+emulación al mismo ritmo, mientras se presenta un campo llega el
+siguiente: la cola no se vaciaba y el bucle no volvía a `update_pads`
+hasta que los dos ritmos se desfasaban. Ahora `drain()` presenta solo lo
+encolado al entrar. Lo que sí se leía llegaba siempre al juego (cada
+«control 1» con su «PIF → juego» 1–3 campos después).
 
 Medido en el host (`salsa64-run` nativo, mismas pulsaciones por campo):
 - **Zelda lee el control en cada campo y acumula las pulsaciones**: en la
-  pausa, R de 1, 2, 3 y 6 campos giran la página las 9 veces. El núcleo y
-  el PIF no la pierden.
-- **Pero el juego ignora R mientras gira la página** (~35 campos, 0,6 s):
-  dos R separadas 15 o 30 campos dan un solo giro; a 45, 60 u 80 campos,
-  dos. En el log de la PS3 del trabajo de efectos (zelda2.log) las R van a
-  0,3–1,8 s: la de 41,439 s (0,3 s tras la anterior) cae en el giro. Eso es
-  del juego, no del emulador; para la prueba hay que esperar a que la
-  página termine de girar.
+  pausa, R de 1, 2, 3 y 6 campos giran la página las 9 veces.
+- **Zelda ignora R mientras gira la página** (~35 campos, 0,6 s): dos R
+  separadas 15 o 30 campos dan un solo giro; a 45 o más, dos. Es del juego.
 - **SM64 lee el control cada 2 campos**: una START de 1 campo en la fase sin
-  lectura se perdía (la pausa no abría y la siguiente pulsación la abría a
-  destiempo: «hay que pulsar varias veces»). Con la retención del PIF entran
-  las 6 de 6 (antes 3 de 6).
-- En la PS3 los cambios del DS3 llegan cuantizados a ~16,7 ms
-  (`update_pads` corre una vez por flip): una pulsación corta llega como 1
-  o 2 campos, y el buzón de último estado podía perder una pulsación
-  publicada y soltada entre dos campos.
+  lectura se perdía (3 de 6); con la retención del PIF, 6 de 6.
 
 Hecho:
-- **PIF** (`src/core/pif.c`): cada botón pulsado queda retenido (`held`)
-  hasta salir en una respuesta de estado (comando 0x01); la identificación
-  y el pak no lo gastan; desconectar o reiniciar lo olvida. Las soltadas no
-  se retienen. Guarda lo entregado (`sent`, `reads`) para el log. Prueba
-  `pif_held_press`.
-- **Buzón presentación → emulación** (`src/frontend/main.c`): además del
-  seqlock, OR atómico de los botones vistos (`pad_box.pressed`) que
-  emulación toma y pone en 0; los controles se aplican justo antes de
-  emular el campo (antes, antes de la espera del ritmo: hasta ~12 ms más
-  viejos).
+- **`drain()` acotado** (`src/frontend/main.c`): solo los campos que había
+  al entrar; el bucle vuelve a leer los mandos en cada vuelta.
+- **PIF** (`src/core/pif.c`): cada flanco de pulsación queda retenido
+  (`held`) hasta salir en una respuesta de estado (comando 0x01); la
+  identificación y el pak no lo gastan; desconectar o reiniciar lo olvida.
+  Solo flancos: con todo lo pulsado, una A soltada 4 campos entre dos
+  pulsaciones se perdía en SM64 (visto en la PS3). Guarda lo entregado
+  (`sent`, `reads`) para el log. Prueba `pif_held_press`.
+- **Buzón presentación → emulación**: además del seqlock, OR atómico de los
+  botones recién pulsados (`pad_box.pressed`) que emulación toma y pone en
+  0; los controles se aplican justo antes de emular el campo (antes, antes
+  de la espera del ritmo: hasta ~12 ms más viejos).
 - **Log de la PS3, solo en flancos**: «control N: … (campo M)» en
   `update_pads` y «PIF → juego: control N: … (campo M, lectura K)» cuando
   cambia lo que el PIF entregó (cola de 32 entre hilos, la escribe
@@ -42,30 +44,29 @@ Hecho:
   Y ms); el juego leyó el control 1 Z veces (W/s)». El host imprime el
   mismo «PIF → juego» con `--pad`.
 - `docs/hilos-ppe.md` al día (fila de controles y de flancos del PIF).
-- En verde: `tools/build.sh test-host` (356 pruebas), `tools/test-roms.sh`,
-  `tools/build.sh` (sin avisos), `tools/test-phase2.sh` (RPCS3, ya con las
-  líneas nuevas del log) y `tools/test-rec.sh` (nemu64-test con las 433
-  fallas de siempre).
+
+**PS3 real** (paquete «Salsa64 control», SLSA00092; logs fuera de git en
+una carpeta propia):
+- Antes de acotar `drain()`: huecos de 7402, 929, 831, 595 y 251 ms sin
+  leer los mandos; el autor: el stick no bajaba en la selección de ranura.
+- Después, Zelda: «ya funciona»; hueco máximo 19–31 ms en el juego (312 ms
+  una vez, en la carga del título a la selección de ranura); 12 de 12
+  pulsaciones entregadas.
+- SM64 con la retención por flancos: «todo funciona perfecto»; hueco
+  máximo 8,8–38 ms, el juego lee el control 30 veces/s; 75 de 75
+  pulsaciones (A machacada, B, START) entregadas al juego.
+- `embedded` quedó en `file:sm64.z64`.
+
+Suites en verde con el código final: `tools/build.sh test-host` (356
+pruebas), `tools/test-roms.sh`, `tools/build.sh` (sin avisos),
+`tools/test-phase2.sh` (RPCS3) y `tools/test-rec.sh` (nemu64-test con las
+433 fallas de siempre).
 
 Pendiente:
-- [ ] PS3 real con el paquete «Salsa64 control» (SLSA00092,
-      `salsa64-control.pkg`, log en `/dev_hdd0/salsa64/salsa64-control.log`;
-      `embedded` lo cambia el autor). Pruebas para el autor:
-      1. **Zelda** (`file:oot.z64`), en el juego: START para la pausa. R
-         una vez y **esperar a que la página termine de girar** (~0,6 s);
-         repetir unas 10 veces. Luego Z (página a la izquierda) igual. Anotar
-         cuántas no giraron. Después, a propósito, R dos veces rápido (la
-         segunda debe ignorarse: es del juego).
-      2. **Zelda**, fuera de la pausa: toques cortos de A, B y botones C
-         (sacar y guardar un objeto, hablar), contando los que no
-         respondieron.
-      3. **SM64** (`file:sm64.z64`), en el castillo: START para pausar y
-         quitar la pausa unas 10 veces, toques cortos de A (salto), B
-         (puñetazo) y Z (agacharse), y R (cámara).
-      4. Al terminar, bajar el log por FTP (desde la Mac).
-      En el log: cada «control 1: … (campo M)» debe tener su «PIF → juego»
-      uno o dos campos después (Zelda) o hasta tres (SM64); «controles: …
-      hueco máx» dice la pulsación más corta que podría no verse.
+- [ ] Integración en main.
+- [ ] El hueco de 312 ms en la carga del título de Zelda (la presentación
+      espera algo durante un campo de 170 ms de emulación): sin efecto en
+      el juego; revisar si aparece en otra escena.
 
 ## 2026-10-10 — Menú para elegir ROM (estilo XMB) y vuelta al menú con cierre limpio
 
@@ -332,12 +333,10 @@ sugerido: recorte → líneas del logo → framebuffer → JIT.
   a las mallas de las salas, no a los actores. Evidencia (fuera de git):
   en una carpeta propia.
   Trabajo sugerido: «Diagnosticar Kokiri y su tienda en colores planos» (SLSA00091).
-- **Pulsaciones perdidas** (PS3, 2026-10-11): a veces un botón no responde
-  hasta pulsarlo muchas veces (R en la pausa de Zelda; también en SM64). No es
-  de los efectos de framebuffer ni de falta de velocidad (100 % NTSC, 4 ms por
-  campo). Zona: `update_pads` en `src/frontend/main.c`, la publicación al hilo
-  de emulación o el PIF. Trabajo sugerido: «Arreglar pulsaciones perdidas del
-  control» (SLSA00092).
+- **Pulsaciones perdidas** (PS3, 2026-10-11): resuelto en la rama
+  vibrant-hawking (ver la entrada del 2026-10-11 arriba): el bucle de
+  presentación dejaba de leer los mandos hasta 7,4 s; confirmado por
+  el autor en Zelda y SM64 (SLSA00092).
 
 **Siguientes trabajos decididos con el autor:**
 - JIT («Recompilador: más velocidad del CPU en GoldenEye y Perfect
