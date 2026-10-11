@@ -301,11 +301,20 @@ antigüedad cuántos campos hay entre el dibujo del destino y el campo que
 lo muestra (lo del juego: 1,0 en GoldenEye, 1,5 en Banjo, 2,5 en Conker).
 Zelda queda por medir con el menú de pausa y un minuto de juego.
 
+**Con el paquete que lleva main b32a6e6 (generador de fragment
+programs), el autor en la PS3:** GoldenEye «todo se ve normal»: soldados,
+armas en primera persona y el plano de Bond sin tinte (80,9 dibujos por
+tarea con programa generado). Zelda: el menú de pausa se ve (el mapa; los
+errores que quedan en él son los efectos de framebuffer ya conocidos,
+Fase 4), 100 % de NTSC, cola 0,00 y destino de 2,50 campos de antigüedad
+(el juego va a 20 cps: cada cuadro se muestra 3 campos; GoldenEye 1,0 y
+Banjo 1,5): la sensación de retraso de Zelda es del propio juego, no de
+la cola de presentación. SM64 y Mario Kart, sin novedades. `embedded`
+quedó en `file:oot.z64`.
+
 Pendiente:
-- [ ] PS3 real con el paquete que lleva main b32a6e6 (generador): soldados y
-      armas de GoldenEye (varias, y el plano de Bond al entrar a Dam) sin
-      tinte; pausa de Zelda visible y su «retraso»; un minuto de SM64 y
-      Mario Kart. El autor confirma.
+- [ ] Integración en main (la rama lleva main
+      b32a6e6 fusionado y la verificación completa en verde).
 - [ ] HLE: el cielo y el paisaje de Banjo (arriba). Trabajo de F3D.
 - [ ] LLE: con `--lle=all` Banjo no arranca (la primera tarea corre 958 M
       instrucciones sin tocar COP0); no es del freeze. Trabajo del LLE.
