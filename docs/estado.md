@@ -53,6 +53,18 @@ integrar):
   - El cielo de GoldenEye «infinito»: lo dibuja con triángulos crudos del
     RDP partidos en G_RDPHALF_1 + G_RDPHALF_CONT/2, que la HLE no
     dibujaba. Ahora se convierten en triángulos (2c53149).
+- Después de integrar (main 3270538), confirmados por el autor en la PS3:
+  - El audio de SM64, GoldenEye y Mario Kart 64 suena bien.
+  - GoldenEye sin ruido entre el logo y las carpetas: el frontend elige
+    el destino del ancho que muestra el VI (GE usa la misma dirección
+    para 320 y 440; 66a3870) y sigue presentando el destino mientras el VI
+    sostiene la imagen sin dibujar (un segundo de carga; antes salía la
+    RDRAM con datos viejos; 10e869e).
+  - Mario Kart 64 con título, menús y letreros: F3DEX acepta TEXRECT con
+    G_RDPHALF_2 + G_RDPHALF_CONT, la secuencia de la libultra temprana
+    (7343e2f), y los TEXRECT en tiras sin costuras a más resolución:
+    limitar el eje si todo cae dentro de la tile y muestrear en la
+    esquina del píxel con filtro bilineal (8ec50de).
 - `salsa64-run --pad "CAMPO:BOTONES[@X,Y];…"`: control 1 por campos para
   llegar a escenas de juego en el host (SM64 hasta el castillo, GoldenEye
   hasta Dam).
@@ -70,11 +82,13 @@ Pendiente:
 - [ ] En la PS3: GoldenEye, Mario Kart 64 y Star Fox 64 con este
       paquete (en el host ya dibujan).
 - [x] Confirmar en la PS3 la cara de Mario y el cielo de GoldenEye.
-- [ ] Mario Kart 64 en la PS3 (el autor): la carrera se ve con HUD, pero
-      el título sin logo ni textos, los menús negros con recuadros de
-      color sólido sin textura y algunos carteles de la pista en negro
-      (distinguir pantallas gigantes, que son efecto de framebuffer, de
-      letreros con textura).
+- [x] Mario Kart 64: título, menús y letreros (ver arriba). Quedan las
+      pantallas gigantes de las pistas, que muestran el framebuffer
+      anterior como textura (efecto de framebuffer, Fase 4).
+- [ ] Perfect Dark: corre sin dibujar con un microcódigo de Rare sin
+      texto (CRC c543d0a8). Conker: «F3DEXBG.NoN fifo 2.08» tomado como
+      F3DEX2, deja 2 comandos sin implementar (el último 0x14) y no manda
+      otra tarea.
 - [ ] GoldenEye: dos combiners del nivel multiplican el sombreado por su
       alfa (lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE: niebla por luz
       precalculada) y se aproximan (75 000 en 52 s de Dam). Hace falta un
@@ -83,9 +97,8 @@ Pendiente:
 - [ ] GoldenEye: las franjas azules de los costados son del juego (3D con
       scissor en las columnas 1–318 sobre un relleno 0x1199); en una tele
       quedan en el overscan. Opción de recorte en el frontend.
-- [ ] Mario Kart 64: en la carrera de demostración la franja de abajo
-      sale en negro en el host. Star Fox 64: un cuadrito con textura abajo
-      a la izquierda en el logo. Revisar ambos.
+- [ ] Star Fox 64: un cuadrito con textura abajo a la izquierda en el
+      logo (host). Revisar.
 - [ ] G_LINE3D de F3D (no lo usan SM64 ni GoldenEye) sin implementar.
 - Para correr un respaldo en el host sin copiarlo: colima no comparte
   todas las carpetas del host, así que `salsa64-run` se compila nativo en la
