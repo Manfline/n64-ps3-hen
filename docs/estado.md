@@ -44,7 +44,7 @@ Pruebas:
 - RPCS3 (`tools/rpcs3-run.py --estados A,B`: guarda en A, carga en B y la ROM
   de prueba se tiene que verificar después): vitest, gfxtest y audiotest OK,
   cierre limpio (RPCS3 no sirve para medir los tiempos).
-- `tools/build.sh test-host` 376/376; `tools/test-roms.sh` verde;
+- `tools/build.sh test-host` 381/381 (con main); `tools/test-roms.sh` verde;
   `tools/test-rec.sh --lockstep` verde (unitarias en los cuatro modos,
   nemu64-test con la línea base, estados con `--rec` = intérprete, y
   `--lockstep` sin diferencias en nemu64-test, vitest y gfxtest desde un
