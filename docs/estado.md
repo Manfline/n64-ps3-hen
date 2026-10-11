@@ -36,17 +36,28 @@ integrar; diseño y mediciones en docs/rsp-lle.md):
   de los comandos xbus para que el PPE los reproduzca (`salsa64_dp_submit`),
   continuaciones cada 200 000 instrucciones. Frontend: archivo
   `SALSA64_DATA_DIR/lle` con `auto` o `all`; líneas «rsp lle:» en el log.
-- 12 pruebas unitarias nuevas (297 en total).
+- 12 pruebas unitarias nuevas (301 en total con main).
 - Medido en el host: 12,5 ns por instrucción del RSP (docs/perf-log.md).
+- **PS3 real** (turno del autor): sanidad con HLE por omisión bien (Zelda
+  106 s al 100 % con audio; GoldenEye intro al 100 %, nivel a 36–50
+  campos/s con el audio estirado: primera medición del nivel, no es de
+  esta rama). Con `lle` = `all`, **Zelda se ve y suena con el microcódigo
+  real en el SPE**: 226–283 ns por instrucción (3,5–4,4 MIPS; el RSP real
+  ~62), 24–55 campos/s. Tres arreglos sobre la marcha (SP_PC pisado al
+  recoger el trabajo, estado del DP entre trabajos, DMA de muchas filas de
+  S2DEX en una transferencia) e instrumentación (contadores de COP0,
+  latido del SPE). Queda una divergencia: tras los fondos S2DEX de la
+  intro (~36 s) el microcódigo entra en un bucle sin fin que el host no
+  reproduce (detalle y pista en docs/rsp-lle.md).
 
 Pendiente:
-- [ ] **PS3**: paquete «Salsa64 LLE» (SLSA00082) con `lle` = `all` y Zelda
-      u otro juego: que arranque, que suene, y la línea «rsp lle:» (ns por
-      instrucción en el SPE); anotar en docs/perf-log.md y rsp-lle.md.
+- [ ] Divergencia del SPE tras S2DEX: modelo del protocolo de trabajos del
+      SPE en el host (`lle_spu_run` con memcpy y cortes por `max_instr`)
+      para reproducirla con trazas; sin turnos de consola.
 - [ ] Confirmar de oído FILTER (HLE a la mitad vs microcódigo real).
 - [ ] Comparar la imagen de Zelda en LLE con la HLE (host, `--gfx-frame`).
-- [ ] Recompilador RSP → SPU (plan en docs/rsp-lle.md) para pasar de ~0,5×
-      a 5–10× el RSP real; mover el consumidor del RDP al SPE.
+- [ ] Recompilador RSP → SPU (plan en docs/rsp-lle.md): es lo único que
+      lleva de 0,06× a velocidad real; mover el consumidor del RDP al SPE.
 - [ ] Homebrew de libdragon (rspq/rdpq) como prueba sin HLE.
 - [ ] Limitaciones del SPE: escrituras del CPU en DMEM/IMEM durante una
       tarea, limpiar la interrupción del SP desde el microcódigo.

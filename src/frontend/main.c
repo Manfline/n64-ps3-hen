@@ -959,6 +959,7 @@ static void stats(uint64_t now, int gfx_on_spu, const struct salsa64_boot_info *
 		static uint32_t lle_tasks0, lle_jobs0, lle_polls0;
 		static uint64_t lle_instr0, lle_ticks0, lle_wait0, lle_sleep0;
 		uint32_t t = rsp_spu.tasks - lle_tasks0;
+		salsa64_rsp_spu_stuck(&rsp_spu);
 		if (t) {
 			uint64_t instr = rsp_spu.instructions - lle_instr0, ticks = rsp_spu.spu_ticks - lle_ticks0;
 			double us = ticks * 1e6 / spukit_tick_hz();
@@ -969,6 +970,12 @@ static void stats(uint64_t now, int gfx_on_spu, const struct salsa64_boot_info *
 				    instr ? us * 1e3 / instr : 0.0, us ? instr / us : 0.0,
 				    (rsp_spu.wait_us - lle_wait0) / 1e3 / t, (double)(rsp_spu.polls - lle_polls0) / t,
 				    (rsp_spu.sleep_us - lle_sleep0) / 1e3 / t, rsp_spu.irqs, rsp_spu.dpc_entries);
+			salsa64_log("rsp lle COP0 por tarea: SP_STATUS %.0f lecturas/%.0f escrituras, semáforo %.0f/%.0f, "
+				    "DMA %.0f filas dentro/%.0f fuera, DP %.0f lecturas, %.0f reintentos atómicos",
+				    (double)rsp_spu.status_reads / rsp_spu.tasks, (double)rsp_spu.status_writes / rsp_spu.tasks,
+				    (double)rsp_spu.sem_reads / rsp_spu.tasks, (double)rsp_spu.sem_writes / rsp_spu.tasks,
+				    (double)rsp_spu.dma_rows_in / rsp_spu.tasks, (double)rsp_spu.dma_rows_out / rsp_spu.tasks,
+				    (double)rsp_spu.dp_reads / rsp_spu.tasks, (double)rsp_spu.atomic_retries / rsp_spu.tasks);
 		}
 		lle_tasks0 = rsp_spu.tasks;
 		lle_jobs0 = rsp_spu.jobs;

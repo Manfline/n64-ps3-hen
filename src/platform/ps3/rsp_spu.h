@@ -25,6 +25,7 @@ struct salsa64_rsp_spu {
 	struct lle_result res;
 	uint32_t seq;
 	bool pending;
+	uint32_t pc_writes;      /* bus->sp.pc_writes al publicar: si cambió, el CPU puso otro PC */
 	/* Estadísticas desde el arranque. */
 	uint32_t tasks;          /* arranques (tareas del microcódigo) */
 	uint32_t jobs;           /* trabajos publicados (continuaciones incluidas) */
@@ -36,11 +37,18 @@ struct salsa64_rsp_spu {
 	uint32_t irqs, dpc_entries, dpc_lost, failed;
 	uint32_t task_max;       /* instrucciones de la tarea más larga */
 	uint64_t task_instr;     /* instrucciones de la tarea en curso */
+	/* Sumas de lo que hizo el microcódigo con COP0 (lle_result). */
+	uint64_t status_reads, sem_reads, status_writes, sem_writes;
+	uint64_t dma_rows_in, dma_rows_out, atomic_retries, dp_reads;
+	uint64_t job_since_us;   /* cuándo se publicó el trabajo en vuelo */
 };
 
 /* Arranca el trabajador (spukit_init ya llamado). Devuelve 0 o el error de
  * spukit. Después: salsa64_rsp_set_lle(bus, &s->backend, modo). */
 int salsa64_rsp_spu_init(struct salsa64_rsp_spu *s, struct salsa64_bus *bus);
 int salsa64_rsp_spu_shutdown(struct salsa64_rsp_spu *s);
+/* Anota en el log el último latido del trabajo en vuelo si lleva más de
+ * un segundo (desde el hilo de presentación, con las estadísticas). */
+void salsa64_rsp_spu_stuck(struct salsa64_rsp_spu *s);
 
 #endif

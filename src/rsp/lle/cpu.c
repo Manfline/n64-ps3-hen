@@ -110,6 +110,8 @@ void lle_reset(struct rsp_lle *s)
 	s->next_pc = 4;
 	s->halt = true;
 	s->instructions = 0;
+	memset(s->c0_reads, 0, sizeof s->c0_reads);
+	memset(s->c0_writes, 0, sizeof s->c0_writes);
 }
 
 void lle_set_pc(struct rsp_lle *s, uint32_t pc)
@@ -164,11 +166,13 @@ static void cop0(struct rsp_lle *s, uint32_t op)
 	switch (OP_RS(op)) {
 	case 0x00: {  /* MFC0 */
 		uint32_t v = lle_io_read(s, rd);
+		s->c0_reads[rd]++;
 		if (OP_RT(op))
 			s->r[OP_RT(op)] = v;
 		break;
 	}
 	case 0x04:  /* MTC0 */
+		s->c0_writes[rd]++;
 		lle_io_write(s, rd, s->r[OP_RT(op)]);
 		break;
 	default:

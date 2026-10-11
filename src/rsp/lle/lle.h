@@ -63,6 +63,9 @@ struct rsp_lle {
 	bool halt;              /* lo pone la E/S: HALT en SP_STATUS */
 	uint8_t *dmem, *imem;   /* 4 KB cada una, alineadas a 16 */
 	uint64_t instructions;  /* ejecutadas desde lle_reset */
+	/* Accesos a COP0 por registro (MFC0, MTC0), para saber en qué espera
+	 * el microcódigo (semáforo, SP_STATUS, DMA, DP). */
+	uint32_t c0_reads[16], c0_writes[16];
 	void *io;               /* estado de la plataforma */
 
 	uint16_t rcp_table[512];

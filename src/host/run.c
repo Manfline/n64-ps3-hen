@@ -604,6 +604,11 @@ static void lle_summary(void)
 		(unsigned long long)h->instructions, h->tasks_done,
 		h->tasks_done ? (double)h->instructions / h->tasks_done : 0.0, h->task_max, h->slices, h->syncs,
 		gfx_sync.dpc_runs, d->commands, d->triangles, d->rects, d->draws, d->unknown_cmds, d->dl_errors);
+	const uint32_t *cr = h->rsp.c0_reads, *cw = h->rsp.c0_writes;
+	fprintf(stderr, "salsa64-run: rsp lle COP0: SP_STATUS %u lecturas/%u escrituras, semáforo %u/%u, DMA_BUSY/FULL %u, "
+		"DMA %u lecturas/%u escrituras, DP %u lecturas/%u escrituras\n", cr[4], cw[4], cr[7], cw[7], cr[5] + cr[6],
+		cw[2], cw[3], cr[8] + cr[9] + cr[10] + cr[11] + cr[12] + cr[13] + cr[14] + cr[15],
+		cw[8] + cw[9] + cw[10] + cw[11]);
 }
 
 static bool audio_wav(const char *path)

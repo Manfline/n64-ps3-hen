@@ -80,8 +80,10 @@ static void host_start(void *ctx)
 	struct salsa64_lle_host *h = ctx;
 	/* Si el CPU escribió SP_PC desde la última vez, de ahí; si solo quitó
 	 * HALT, sigue donde iba (con su delay slot pendiente). */
-	if (h->bus->sp.pc != h->rsp.pc)
+	if (h->bus->sp.pc_writes != h->pc_writes) {
+		h->pc_writes = h->bus->sp.pc_writes;
 		lle_set_pc(&h->rsp, h->bus->sp.pc);
+	}
 	h->rsp.halt = false;
 	h->starts++;
 	if (h->running)

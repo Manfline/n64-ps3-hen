@@ -1,7 +1,8 @@
 # RSP a bajo nivel (LLE): prototipo de la Fase 6
 
-Fecha: 2026-10-10. Estado: prototipo acotado, validado en el host; en la
-PS3 compilado y empaquetado (SLSA00082 «Salsa64 LLE»), pendiente de medir.
+Fecha: 2026-10-10. Estado: prototipo acotado, validado en el host y
+**medido en la PS3 real** (SLSA00082 «Salsa64 LLE»): corre, se ve y suena,
+14–18 veces más lento que el RSP real; una divergencia del SPE abierta.
 
 ## Por qué
 
@@ -178,17 +179,61 @@ Host (Mac, clang nativo, `-c 1500000000` = 16 s de consola, Zelda OoT,
 RSP → **12,5 ns por instrucción** del RSP en el Mac (~40 ciclos de un
 núcleo a ~3,3 GHz; ver `docs/perf-log.md`).
 
-PS3: pendiente (paquete SLSA00082 con `lle` = `all`). Qué mirar en el log:
-la línea «rsp lle:» por ventana da ns por instrucción y MIPS del RSP
-emulado; el RSP real hace ~62,5 M instrucciones por segundo (una por ciclo
-en el mejor caso, dos con emisión doble), así que a 16 ns por instrucción
-se iguala, y a 8 ns se duplica. Estimación por la arquitectura: el SPE no
-tiene unidad escalar (todo es SIMD de 128 bits), un intérprete en C con
-`switch` y accesos a `s->r[]` paga unos 20–60 ciclos del SPE por
-instrucción del RSP (6–20 ns a 3,2 GHz), más las lecturas atómicas de
-SP_STATUS cada 256 instrucciones y los DMA del microcódigo. Es decir: el
-intérprete probablemente queda entre 0,3× y 1× el RSP real; para
-velocidad completa con margen hace falta el recompilador.
+PS3 real (2026-10-10, Zelda OoT con `lle` = `all`; tabla completa en
+`docs/perf-log.md`): el intérprete en el SPE hace **226–283 ns por
+instrucción del RSP (3,5–4,4 MIPS)** en el microcódigo gráfico y de
+audio, y 112 ns (9 MIPS) en los tramos de S2DEX dominados por DMA. El RSP
+real hace ~62,5 M instrucciones/s: **14–18 veces más lento**, muy por
+debajo de la estimación previa (0,3–1×). Causas, por orden: el SPU no tiene
+unidad escalar ni predicción de saltos (el `switch` de despacho es un salto
+indirecto por instrucción, ~20 ciclos de penalización cada uno, y cada
+acceso a un byte de la DMEM es carga de 16 bytes + rotación); cada MFC0/
+MTC0 de SP_STATUS o del semáforo es un DMA atómico de ~1 µs, y F3DEX2 toma
+y suelta el semáforo alrededor de cada DMA (2–190 veces por tarea) y lee
+SP_STATUS 180–430 veces por tarea; cada DMA del SP es una transferencia
+síncrona (~2 µs). Se ve y se oye: el título y la intro de Zelda se dibujan
+con el F3DZEX real por el camino de triángulos crudos y el nead real suena,
+a 24–55 campos/s con el audio estirado.
+
+Lo que salió en la consola y se corrigió sobre la marcha (tres paquetes):
+
+- **SP_PC pisado al recoger el trabajo**: el CPU escribe SP_PC = 0 y quita
+  HALT para la tarea siguiente (al ceder la gráfica para el audio) antes de
+  que el PPE recoja el trabajo anterior; `collect` escribía el PC donde se
+  detuvo el microcódigo viejo y la tarea nueva arrancaba en cualquier
+  parte. Ahora `bus->sp.pc_writes` cuenta las escrituras del CPU y el PC
+  recogido solo se aplica si no hubo una nueva (también en el conductor del
+  host).
+- **Estado del DP entre trabajos**: una continuación (200 000
+  instrucciones) o una reanudación partía de registros viejos del DP: un
+  DPC_START pendiente de su END (START_VALID) y DPC_CURRENT se perdían y el
+  microcódigo xbus esperaba a que CURRENT alcanzara su puntero. El
+  resultado del trabajo trae los cuatro registros y `collect` los vuelca.
+- **DMA de muchas filas**: S2DEX carga fondos con DMAs de cientos de filas
+  (`count`) con un salto (`skip`), y el SPE hacía una transferencia
+  síncrona por fila (~2 µs): 150 filas → 300 µs por DMA, miles por tarea,
+  segundos por tarea (se veía como «se atora a menos de un cuadro por
+  segundo»). Ahora el tramo que abarcan todas las filas se trae de una vez
+  si cabe en 32 KB.
+- **Instrumentación** que lo hizo visible: contadores de accesos a COP0
+  por registro en el intérprete (`c0_reads/c0_writes`, portables), que el
+  host resume al salir y el SPE devuelve por trabajo, y un **latido** del
+  SPE cada 4096 instrucciones (PC, $1–$4, contadores) en `lle_log`, que el
+  PPE imprime cuando un trabajo lleva más de un segundo en vuelo.
+
+**Lo que queda abierto**: tras los fondos de la intro (~36 s de consola)
+el microcódigo entra en un bucle que no termina ninguna tarea: 935 M
+instrucciones en 5 168 trabajos, DMAs de entrada con punteros que crecen de
+64 en 64 bytes desde 0x81FFFFC0 (fuera de la RDRAM), semáforo tomado y
+suelto miles de veces, sin lecturas de SP_STATUS. En el host la misma
+escena pasa (4 036 tareas en 43 s de consola, sin atascos), así que es
+una divergencia del camino del SPE, muy probablemente en las fronteras
+entre trabajos (reinicio de la E/S, recarga de DMEM/IMEM y de los
+registros del DMA, o el estado del DP) y no en el intérprete. Siguiente
+paso recomendado: un **modelo del protocolo de trabajos del SPE en el
+host** (correr `lle_spu_run` con memcpy en vez de DMA, con los mismos
+cortes por `max_instr`) para reproducirlo con trazas de COP0 y DMEM, sin
+turnos de consola.
 
 ## Plan: recompilador RSP → SPU
 
@@ -245,14 +290,19 @@ coeficientes). Lo que falta para que un juego sin HLE se vea bien:
 
 ## Recomendación
 
-Seguir. El intérprete portable ya cubre el ISA completo verificado contra
-hardware, corre microcódigo real de gráficos y de audio en el host, y la
-integración (modos auto/all, RDP por DPC, SPE con DMA atómico) está hecha.
-La inversión que falta es rendimiento (recompilador RSP → SPU, 2–4 semanas
-de trabajo con las pruebas de nemu64-test como red) y la fidelidad del RDP
-a bajo nivel, que coincide con la Fase 4. Con eso, cualquier microcódigo
-(Rare, Factor 5, libdragon) corre sin HLE a mano, y la HLE queda como
-camino rápido para lo conocido.
+Seguir, con los pies en la tierra: el intérprete portable cubre el ISA
+completo verificado contra hardware, corre microcódigo real de gráficos y
+de audio en el host y en el SPE, y la integración (modos auto/all, RDP por
+DPC, SPE con DMA atómico) está hecha; pero a 3,5–4,4 MIPS en el SPE está
+14–18 veces por debajo del RSP real, y un intérprete mejor (despacho sin
+saltos indirectos, acceso a la DMEM por palabras, caché local de SP_STATUS
+y del semáforo con invalidación por el PPE) ganaría quizá 3–5×, no 15×.
+Lo que llega a velocidad real es el recompilador RSP → SPU (plan arriba;
+2–4 semanas con nemu64-test como red), que además elimina la mayor parte
+del costo de los accesos a COP0 al convertirlos en código recto. Antes de
+eso, cerrar la divergencia del SPE con el modelo del protocolo en el host.
+Con eso, cualquier microcódigo (Rare, Factor 5, libdragon) corre sin HLE a
+mano, y la HLE queda como camino rápido para lo conocido.
 
 ## Cómo probar
 

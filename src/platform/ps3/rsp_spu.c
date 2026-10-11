@@ -33,6 +33,8 @@ static void post_run(struct salsa64_rsp_spu *s, uint32_t pc)
 	j->dp_current = bus->dp[SALSA64_DP_CURRENT];
 	s->seq = spukit_post(s->worker, LLE_JOB_RUN, j, sizeof *j);
 	s->pending = true;
+	s->pc_writes = bus->sp.pc_writes;
+	s->job_since_us = sysGetSystemTime();
 	s->jobs++;
 }
 
@@ -51,7 +53,19 @@ static void collect(struct salsa64_rsp_spu *s, const spukit_result *r)
 	memcpy(res, r->data, sizeof *res);
 	s->instructions += res->instructions;
 	s->task_instr += res->instructions;
-	bus->sp.pc = res->pc;
+	s->status_reads += res->status_reads;
+	s->sem_reads += res->sem_reads;
+	s->status_writes += res->status_writes;
+	s->sem_writes += res->sem_writes;
+	s->dma_rows_in += res->dma_rows_in;
+	s->dma_rows_out += res->dma_rows_out;
+	s->atomic_retries += res->atomic_retries;
+	s->dp_reads += res->dp_reads;
+	/* SP_PC es donde quedó el microcódigo, salvo que el CPU ya haya escrito
+	 * otro (la tarea siguiente, cargada mientras este trabajo terminaba):
+	 * ese manda. */
+	if (bus->sp.pc_writes == s->pc_writes)
+		bus->sp.pc = res->pc;
 
 	if (res->flags & LLE_RES_WRITTEN_ALL) {
 		salsa64_bus_rdram_written(bus, 0, bus->rdram_size);
@@ -76,10 +90,19 @@ static void collect(struct salsa64_rsp_spu *s, const spukit_result *r)
 	}
 	if (res->flags & LLE_RES_CAPTURE_FULL)
 		s->dpc_lost++;
+	/* Los registros del DP como los dejó el microcódigo, incluido un
+	 * DPC_START pendiente de su END (START_VALID) y lo que quedó sin
+	 * entregar por freeze: el trabajo siguiente (una continuación, o la
+	 * tarea reanudada tras ceder) parte de ahí, no de registros viejos. */
+	bus->dp[SALSA64_DP_START] = res->dp_start;
+	bus->dp[SALSA64_DP_END] = res->dp_end;
+	bus->dp[SALSA64_DP_CURRENT] = res->dp_current;
 	bus->dp[SALSA64_DP_STATUS] = (bus->dp[SALSA64_DP_STATUS] & ~(SALSA64_DP_STATUS_XBUS | SALSA64_DP_STATUS_FREEZE |
-							      SALSA64_DP_STATUS_FLUSH)) |
+							      SALSA64_DP_STATUS_FLUSH | SALSA64_DP_STATUS_START_VALID |
+							      SALSA64_DP_STATUS_CBUF_READY)) |
 				     (res->dp_status & (SALSA64_DP_STATUS_XBUS | SALSA64_DP_STATUS_FREEZE |
-							SALSA64_DP_STATUS_FLUSH));
+							SALSA64_DP_STATUS_FLUSH | SALSA64_DP_STATUS_START_VALID |
+							SALSA64_DP_STATUS_CBUF_READY));
 	if (res->irq & LLE_IRQ_SP) {
 		s->irqs++;
 		salsa64_mi_raise(bus, SALSA64_IRQ_SP);
@@ -174,6 +197,20 @@ int salsa64_rsp_spu_init(struct salsa64_rsp_spu *s, struct salsa64_bus *bus)
 		return spukit_last_error();
 	spukit_wait(s->worker, spukit_post(s->worker, LLE_JOB_RESET, NULL, 0));
 	return 0;
+}
+
+/* Si el trabajo en vuelo lleva más de un segundo: su último latido. */
+void salsa64_rsp_spu_stuck(struct salsa64_rsp_spu *s)
+{
+	if (!s->pending || sysGetSystemTime() - s->job_since_us < 1000000)
+		return;
+	const struct lle_heartbeat *h = &s->log->heartbeat;
+	salsa64_log("rsp lle: trabajo %u en vuelo desde hace %.1f s: %u instrucciones, pc 0x%03x, $1-$4 %08x %08x "
+		    "%08x %08x; SP_STATUS %u lecturas/%u escrituras, semáforo %u/%u, DMA %u filas dentro/%u fuera, "
+		    "DP %u lecturas, %u tramos, %u reintentos atómicos",
+		    s->jobs, (sysGetSystemTime() - s->job_since_us) / 1e6, h->instructions, h->pc, h->r[0], h->r[1],
+		    h->r[2], h->r[3], h->status_reads, h->status_writes, h->sem_reads, h->sem_writes, h->dma_rows_in,
+		    h->dma_rows_out, h->dp_reads, h->dpc_entries, h->atomic_retries);
 }
 
 int salsa64_rsp_spu_shutdown(struct salsa64_rsp_spu *s)

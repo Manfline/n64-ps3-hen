@@ -119,6 +119,7 @@ void salsa64_sp_write(struct salsa64_bus *bus, uint32_t reg, uint32_t v)
 	salsa64_rsp_sync(bus);
 	if (reg == SP_PC_REG) {
 		bus->sp.pc = v & 0xFFC;
+		bus->sp.pc_writes++;
 		return;
 	}
 	if ((reg & ~0x1Fu) != 0x40000)

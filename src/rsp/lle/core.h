@@ -19,6 +19,7 @@ struct salsa64_lle_host {
 	 * ciclos del CPU (por omisión 2/3: 62,5 MHz contra 93,75, una
 	 * instrucción por ciclo). salsa64_lle_host_speed lo cambia. */
 	uint32_t ipc_num, ipc_den;
+	uint32_t pc_writes;  /* bus->sp.pc_writes visto: un cambio es un PC nuevo del CPU */
 	/* Estadísticas desde el inicio. */
 	uint64_t instructions;
 	uint32_t starts, slices, syncs;

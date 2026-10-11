@@ -66,6 +66,7 @@ enum salsa64_sp_reg {
 struct salsa64_sp {
 	uint32_t regs[SALSA64_SP_NREGS];
 	uint32_t pc;
+	uint32_t pc_writes;  /* escrituras de SP_PC por el CPU (el RSP a bajo nivel distingue un PC nuevo) */
 };
 
 /* ---- Tareas del RSP (rsp.c) ------------------------------------------------

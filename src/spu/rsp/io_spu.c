@@ -57,15 +57,24 @@ struct lle_spu_io {
 	uint32_t nentries, cap_used;
 	uint32_t nwritten;
 	struct lle_written written[LLE_WRITTEN_MAX];
+	uint32_t dma_rows_in, dma_rows_out, atomic_retries;
+	uint32_t c0_reads0[16], c0_writes0[16];  /* contadores al empezar el trabajo */
+	uint32_t instr0;
 };
 
 static struct lle_spu_io io;
 static struct lle_dpc_entry entries[LLE_DPC_MAX] __attribute__((aligned(128)));
 static uint8_t line[128] __attribute__((aligned(128)));
 static uint8_t rd_buf[LLE_MEM_SIZE + 32] __attribute__((aligned(128)));
+/* Un DMA de varias filas (S2DEX carga fondos línea a línea: cientos de
+ * filas con un salto entre ellas) se trae de una vez si el tramo que
+ * abarcan cabe aquí; si no, fila a fila. */
+#define RD_SPAN_MAX (32u << 10)
+static uint8_t rd_span[RD_SPAN_MAX + 32] __attribute__((aligned(128)));
 static uint8_t wr_buf[LLE_MEM_SIZE + 32] __attribute__((aligned(128)));
 static uint8_t cap_buf[LLE_MEM_SIZE + 32] __attribute__((aligned(128)));
 static uint8_t regs_buf[64] __attribute__((aligned(128)));
+static struct lle_heartbeat heartbeat __attribute__((aligned(128)));
 
 /* ---- DMA atómico sobre una palabra del bus ---- */
 
@@ -73,13 +82,16 @@ static uint32_t atomic_rmw(uint64_t ea, uint32_t clear, uint32_t set, uint32_t *
 {
 	uint64_t base = ea & ~127ull;
 	uint32_t off = (uint32_t)(ea & 127), v;
-	do {
+	for (;;) {
 		mfc_getllar(line, base, 0, 0);
 		mfc_read_atomic_status();
 		v = *(volatile uint32_t *)(line + off);
 		*(volatile uint32_t *)(line + off) = (v & ~clear) | set;
 		mfc_putllc(line, base, 0, 0);
-	} while (mfc_read_atomic_status() & MFC_PUTLLC_STATUS);
+		if (!(mfc_read_atomic_status() & MFC_PUTLLC_STATUS))
+			break;
+		io.atomic_retries++;
+	}
 	if (old)
 		*old = v;
 	return (v & ~clear) | set;
@@ -139,6 +151,26 @@ static void sp_dma(struct rsp_lle *s, uint32_t v, bool to_rdram)
 	uint32_t bank = mem & 0x1000, off = mem & 0xFF8;
 	uint32_t dram = io.regs[1] & 0xFFFFF8;
 
+	if (to_rdram)
+		io.dma_rows_out += count;
+	else
+		io.dma_rows_in += count;
+	if (!to_rdram && count > 1) {
+		/* Todas las filas de un tramo de la RDRAM con una sola lectura. */
+		uint32_t stride = len + skip;
+		uint64_t span = (uint64_t)(count - 1) * stride + len;
+		if (span <= RD_SPAN_MAX && dram + span <= job->rdram_size) {
+			const uint8_t *p = spukit_get_unaligned(rd_span, job->rdram_ea + dram, (uint32_t)span, TAG_READ);
+			for (uint32_t r = 0; r < count; r++) {
+				mem_copy(s, bank, off, (uint8_t *)p + r * stride, len, false);
+				off = (off + len) & 0xFF8;
+			}
+			io.regs[0] = bank | off;
+			io.regs[1] = (uint32_t)((dram + count * stride) & 0xFFFFF8);
+			io.regs[2] = (v & 0xFFF00000u) | 0xFF8;
+			return;
+		}
+	}
 	for (uint32_t r = 0; r < count; r++) {
 		uint32_t avail = dram < job->rdram_size ? job->rdram_size - dram : 0;
 		uint32_t n = len < avail ? len : avail & ~7u;
@@ -317,9 +349,38 @@ void lle_io_break(struct rsp_lle *s)
 	s->halt = true;
 }
 
+static void fill_counts(const struct rsp_lle *s, uint32_t *status_reads, uint32_t *sem_reads,
+			uint32_t *status_writes, uint32_t *sem_writes, uint32_t *dp_reads)
+{
+	*status_reads = s->c0_reads[LLE_C0_STATUS] - io.c0_reads0[LLE_C0_STATUS];
+	*sem_reads = s->c0_reads[LLE_C0_SEMAPHORE] - io.c0_reads0[LLE_C0_SEMAPHORE];
+	*status_writes = s->c0_writes[LLE_C0_STATUS] - io.c0_writes0[LLE_C0_STATUS];
+	*sem_writes = s->c0_writes[LLE_C0_SEMAPHORE] - io.c0_writes0[LLE_C0_SEMAPHORE];
+	uint32_t dp = 0;
+	for (unsigned i = 8; i < 16; i++)
+		dp += s->c0_reads[i] - io.c0_reads0[i];
+	*dp_reads = dp;
+}
+
 void lle_io_poll(struct rsp_lle *s)
 {
 	s->halt = (atomic_read(status_ea()) & ST_HALT) != 0;
+	uint32_t n = (uint32_t)(s->instructions - io.instr0);
+	if ((n & (LLE_HEARTBEAT - 1)) != 0)
+		return;
+	/* Latido: dónde va el trabajo (para un microcódigo que no termina). */
+	spukit_dma_wait(1u << TAG_CAP);
+	heartbeat.instructions = n;
+	heartbeat.pc = s->pc;
+	fill_counts(s, &heartbeat.status_reads, &heartbeat.sem_reads, &heartbeat.status_writes,
+		    &heartbeat.sem_writes, &heartbeat.dp_reads);
+	heartbeat.dma_rows_in = io.dma_rows_in;
+	heartbeat.dma_rows_out = io.dma_rows_out;
+	heartbeat.atomic_retries = io.atomic_retries;
+	heartbeat.dpc_entries = io.nentries;
+	for (int i = 0; i < 4; i++)
+		heartbeat.r[i] = s->r[1 + i];
+	spukit_dma_put(&heartbeat, io.job->log_ea + offsetof(struct lle_log, heartbeat), sizeof heartbeat, TAG_CAP);
 }
 
 /* ---- Un trabajo ---- */
@@ -328,6 +389,9 @@ int lle_spu_run(struct rsp_lle *s, const struct lle_job *job, struct lle_result 
 {
 	memset(&io, 0, sizeof io);
 	io.job = job;
+	memcpy(io.c0_reads0, s->c0_reads, sizeof io.c0_reads0);
+	memcpy(io.c0_writes0, s->c0_writes, sizeof io.c0_writes0);
+	io.instr0 = (uint32_t)s->instructions;
 
 	/* DMEM e IMEM del bus, y los registros del DMA del SP. */
 	spukit_dma_get(s->dmem, job->mem_ea, 2 * LLE_MEM_SIZE, TAG_MEM);
@@ -370,6 +434,10 @@ int lle_spu_run(struct rsp_lle *s, const struct lle_job *job, struct lle_result 
 	res->dpc_entries = io.nentries;
 	res->nwritten = io.nwritten;
 	memcpy(res->written, io.written, sizeof res->written);
+	fill_counts(s, &res->status_reads, &res->sem_reads, &res->status_writes, &res->sem_writes, &res->dp_reads);
+	res->dma_rows_in = io.dma_rows_in;
+	res->dma_rows_out = io.dma_rows_out;
+	res->atomic_retries = io.atomic_retries;
 	spukit_dma_wait((1u << TAG_MEM) | (1u << TAG_WRITE) | (1u << TAG_CAP));
 	return 0;
 }

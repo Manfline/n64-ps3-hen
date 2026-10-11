@@ -38,7 +38,7 @@ struct lle_job {
 	uint32_t reserved;
 };
 
-#define LLE_WRITTEN_MAX 9
+#define LLE_WRITTEN_MAX 5
 
 struct lle_written {
 	uint32_t start, len;
@@ -53,7 +53,27 @@ struct lle_result {
 	uint32_t dpc_entries;   /* entradas válidas en lle_log.entries */
 	uint32_t nwritten;
 	struct lle_written written[LLE_WRITTEN_MAX];
+	/* Qué hizo el microcódigo con COP0 en este trabajo: lecturas de
+	 * SP_STATUS y del semáforo, escrituras de SP_STATUS y del semáforo,
+	 * filas de DMA leídas y escritas, reintentos del DMA atómico y
+	 * lecturas de los registros del DP. */
+	uint32_t status_reads, sem_reads, status_writes, sem_writes;
+	uint32_t dma_rows_in, dma_rows_out, atomic_retries, dp_reads;
 };
+
+/* Latido del trabajo en curso, que el SPE escribe cada LLE_HEARTBEAT
+ * instrucciones en lle_log.heartbeat: para ver dónde está un microcódigo
+ * que no termina. */
+#define LLE_HEARTBEAT 4096u
+struct lle_heartbeat {
+	uint32_t instructions;  /* del trabajo en curso */
+	uint32_t pc;
+	uint32_t status_reads, sem_reads, status_writes, sem_writes;
+	uint32_t dma_rows_in, dma_rows_out, atomic_retries, dp_reads;
+	uint32_t dpc_entries;
+	uint32_t r[4];          /* $1, $2, $3, $4 */
+	uint32_t pad[17];
+} __attribute__((aligned(128)));
 
 #define LLE_RES_HALTED      0x1u  /* se detuvo; si no, agotó max_instr */
 #define LLE_RES_WRITTEN_ALL 0x2u  /* más tramos de los que caben: toda la RDRAM */
@@ -72,6 +92,7 @@ struct lle_dpc_entry {
 struct lle_log {
 	struct lle_dpc_entry entries[LLE_DPC_MAX];
 	uint8_t capture[LLE_CAPTURE_SIZE];
+	struct lle_heartbeat heartbeat;
 } __attribute__((aligned(128)));
 
 #endif
