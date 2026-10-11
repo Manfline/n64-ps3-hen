@@ -114,6 +114,7 @@ struct gfx_result {
 	uint32_t tex_evicted;    /* texturas sacadas de la caché */
 	uint32_t t_hash;         /* ticks identificando texturas (hash y búsqueda) */
 	uint32_t skipped;        /* comandos saltados de otro microcódigo (G_LOAD_UCODE) */
+	uint32_t bg;             /* fondos de S2DEX dibujados (G_BG_COPY, G_BG_1CYC) */
 };
 
 #define GFX_RES_FULLSYNC     0x01u  /* G_RDPFULLSYNC: interrupción del DP */

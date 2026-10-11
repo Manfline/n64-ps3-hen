@@ -7,7 +7,7 @@ SRCS    := main.c
 # tres ROMs savetest embebidas.
 R       := ../../..
 COMMON  := src/platform/ps3/log.c src/frontend/savefile.c \
-           $(patsubst $(R)/%,%,$(wildcard $(R)/src/core/*.c $(R)/src/cpu/*.c))
+           $(patsubst $(R)/%,%,$(wildcard $(R)/src/core/*.c $(R)/src/cpu/*.c $(R)/src/rsp/jpeg/*.c))
 DATA    := savetest_eeprom4k savetest_eeprom16k savetest_sram
 savetest_eeprom4k_FILE  := tests/roms/homebrew/salsa64-savetest-eeprom4k.z64
 savetest_eeprom16k_FILE := tests/roms/homebrew/salsa64-savetest-eeprom16k.z64

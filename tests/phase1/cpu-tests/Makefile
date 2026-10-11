@@ -6,7 +6,7 @@ SRCS    := main.c rombench.c
 # El núcleo completo y las pruebas compartidas con el host (sin su main).
 R       := ../../..
 COMMON  := src/platform/ps3/log.c src/platform/ps3/rec_cache.c \
-           $(patsubst $(R)/%,%,$(wildcard $(R)/src/core/*.c $(R)/src/cpu/*.c $(R)/src/rsp/gfx/*.c $(R)/src/rsp/audio/*.c \
+           $(patsubst $(R)/%,%,$(wildcard $(R)/src/core/*.c $(R)/src/cpu/*.c $(R)/src/rsp/gfx/*.c $(R)/src/rsp/audio/*.c $(R)/src/rsp/jpeg/*.c \
                                           $(R)/src/rsp/lle/*.c)) src/frontend/padmap.c src/frontend/pacer.c src/frontend/audio_sync.c src/rdp/targets.c \
            src/frontend/romlist.c src/frontend/menu.c lib/rsxkit/src/text.c lib/rsxkit/src/ui_geom.c \
            $(filter-out tests/unit/main_host.c,$(patsubst $(R)/%,%,$(wildcard $(R)/tests/unit/*.c))) \

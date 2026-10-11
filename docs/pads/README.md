@@ -16,6 +16,13 @@ estado vale hasta el siguiente, por eso cada pulsación lleva su suelta `-`):
   campo 2800, izquierda en el 3250, arriba en el 3385, suelta en el 3470):
   Link queda en el balcón del bosque Kokiri desde el campo ~3500, sin más
   entrada. Sirve también como `M64P_PAD` de `tools/m64p-ref.sh`.
+  **Tienda Kokiri** (sala prerrenderizada, 2026-10-11): con el mismo pad y
+  `--poke "3000:80383670=0x00C1;3000:80383672=0x00C1"` la cortina lleva a
+  la tienda en vez de al bosque (se cambian las dos entradas de la lista de
+  salidas de la escena de la casa, 0x0211 → 0x00C1, en la RDRAM de OoT 1.2
+  con la partida del autor); Link está dentro desde el campo ~3550. Con
+  `--lle-check-jpeg` además compara las 75 tareas JPEG de cada sala con el
+  microcódigo real.
 - `goldeneye-dam.pad`: START en el campo 200 y A cada 240 campos (pulsada
   8 campos): pasa el título, la carpeta y las pantallas de la misión hasta
   jugar en Dam desde el campo ~4800 (con `-c 7500000000` llega a unos 80 s

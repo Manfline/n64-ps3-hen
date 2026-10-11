@@ -8,12 +8,14 @@
  * TMEM viven en el local store y persisten entre tareas.
  *
  * Presupuesto de local store (256 KB); los números exactos los imprime el
- * build (spu-size: texto 82,5 KB, datos 0,8 KB, bss 148,6 KB):
- *   código (HLE + runtime)              ~ 82 KB (F3D y F3DEX: 3,6 KB;
+ * build (spu-size, 2026-10-11: texto 97,0 KB, datos 0,8 KB, bss 145,1 KB):
+ *   código (HLE + runtime)              ~ 97 KB (F3D y F3DEX: 3,6 KB;
  *                                         Perfect Dark 1,9 KB y Conker
  *                                         4,4 KB; el combiner con sus
  *                                         términos para el generador de
- *                                         fragment programs, ~9 KB)
+ *                                         fragment programs, ~9 KB; el
+ *                                         tramo S2DEX de los fondos de
+ *                                         Zelda OoT, 4,8 KB)
  *   gfx_state (RDP, TMEM 4 KB, matrices,
  *     búfer de vértices, texturas de la
  *     tarea, directorio de la caché de
@@ -24,7 +26,10 @@
  *   vértices 2 × 8 KB, comandos 2 × 4 KB    24 KB
  *   texturas 2 × 32 KB                      64 KB
  *   spukit (descriptor, resultado…)        < 1 KB
- *   pila                                    el resto (~ 24 KB)
+ *   pila                                    el resto (~ 13 KB; la cadena más
+ *                                         honda, fondo S2DEX → TEXRECT →
+ *                                         estado → combiner, usa ~8 KB
+ *                                         según -fstack-usage)
  */
 #include <spukit/spu.h>
 #include <sys/spu_thread.h>
