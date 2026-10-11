@@ -48,10 +48,16 @@ bool salsa64_vr4300_translate_slow(struct salsa64_cpu *cpu, uint64_t vaddr, uint
  * para una carga: en modo kernel se traduce igual (el bit D solo cuenta
  * para almacenamientos). */
 bool salsa64_vr4300_fetch_probe(const struct salsa64_cpu *cpu, uint64_t va, uint32_t *pa);
+/* Lo mismo, con el bit D de la entrada (si se puede escribir; en KSEG0/KSEG1
+ * siempre): la TLB del recompilador la usa para datos (rec_tlb.h). */
+bool salsa64_vr4300_kernel_probe(const struct salsa64_cpu *cpu, uint64_t va, uint32_t *pa, bool *dirty);
 void salsa64_vr4300_update_status(struct salsa64_cpu *cpu);
 void salsa64_vr4300_cop0(struct salsa64_cpu *cpu, uint32_t instr);
 /* interp.c: una instrucción que no es salto (la usa el recompilador). */
 void salsa64_vr4300_exec_one(struct salsa64_cpu *cpu, uint32_t instr);
+/* interp.c: salsa64_cpu_step sin despachar los eventos vencidos (rec.c los
+ * despacha y los mide). */
+void salsa64_cpu_step_only(struct salsa64_cpu *cpu);
 /* cop1.c */
 void salsa64_vr4300_cop1(struct salsa64_cpu *cpu, uint32_t instr);
 void salsa64_vr4300_cop2(struct salsa64_cpu *cpu, uint32_t instr);

@@ -119,6 +119,27 @@ static struct salsa64_n64 n64;
 static uint8_t rdram[SALSA64_RDRAM_MAX] __attribute__((aligned(128)));
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
 static struct salsa64_rec rec;
+/* SALSA64_REC_PROF=N: el perfil del recompilador (rec_prof.h, solo cuentas en
+ * el host) cada N campos y al final. */
+static struct salsa64_rec_prof prof, prof_prev;
+static uint32_t prof_every, prof_next;
+
+static void prof_line(void *ctx, const char *text)
+{
+	(void)ctx;
+	fprintf(stderr, "%s\n", text);
+}
+
+/* SALSA64_REC_DUMP=1: cada bloque compilado en hexadecimal (como en las
+ * unitarias), para desensamblarlo (tools/rec-disasm.sh) o medirlo. */
+static void dump_block(struct salsa64_rec *r, uint64_t pc, uint32_t entry, uint32_t words, bool temp)
+{
+	fprintf(stderr, "bloque %016llx%s entrada %u, %u palabras:", (unsigned long long)pc,
+		temp ? " (recortado)" : "", entry, words);
+	for (uint32_t k = 0; k < words; k++)
+		fprintf(stderr, " %08x", r->code[entry + k]);
+	fputc('\n', stderr);
+}
 
 /* --lockstep: la máquina de referencia, solo con el intérprete. */
 static struct salsa64_n64 ref;
@@ -396,6 +417,45 @@ static struct gfx_vertex gfx_vtx[1u << 16] __attribute__((aligned(128)));
 static uint8_t gfx_cmd[512u << 10] __attribute__((aligned(128)));
 static uint8_t gfx_tex[4u << 20] __attribute__((aligned(128)));
 static uint8_t gfx_cache[8u << 20] __attribute__((aligned(128)));
+
+/* La referencia de --lockstep lleva la misma HLE gráfica y de audio con su
+ * propio estado y búferes: sus tareas dan los mismos eventos (fin de tarea,
+ * G_RDPFULLSYNC → interrupción del DP) y el audio escribe lo mismo en su
+ * RDRAM; la salida gráfica se descarta. Sin ellos la referencia no recibía
+ * la interrupción del DP de las tareas con HLE (visto el 2026-10-11 con
+ * GoldenEye y Perfect Dark: antes no dibujaban y pasaban por «sin HLE»). */
+static struct gfx_state ref_gfx_state;
+static struct salsa64_gfx_sync ref_gfx_sync;
+static struct aud_state ref_aud_state;
+static struct salsa64_audio_sync ref_aud_sync;
+static struct gfx_vertex ref_gfx_vtx[1u << 16] __attribute__((aligned(128)));
+static uint8_t ref_gfx_cmd[512u << 10] __attribute__((aligned(128)));
+static uint8_t ref_gfx_tex[4u << 20] __attribute__((aligned(128)));
+static uint8_t ref_gfx_cache[8u << 20] __attribute__((aligned(128)));
+static uint32_t ref_gfx_tasks;
+
+static void ref_gfx_acquire(void *ctx, struct gfx_job *job)
+{
+	(void)ctx;
+	job->vtx_ea = (uint64_t)(uintptr_t)ref_gfx_vtx;
+	job->vtx_cap = sizeof ref_gfx_vtx;
+	job->cmd_ea = (uint64_t)(uintptr_t)ref_gfx_cmd;
+	job->cmd_cap = sizeof ref_gfx_cmd;
+	job->tex_ea = (uint64_t)(uintptr_t)ref_gfx_tex;
+	job->tex_cap = sizeof ref_gfx_tex;
+	if (!getenv("SALSA64_NO_TEXCACHE")) {
+		job->cache_ea = (uint64_t)(uintptr_t)ref_gfx_cache;
+		job->cache_cap = sizeof ref_gfx_cache;
+	}
+	job->task = ref_gfx_tasks + 1;
+	job->done_task = ref_gfx_tasks;
+}
+
+static void ref_gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_result *res)
+{
+	(void)ctx, (void)job, (void)res;
+	ref_gfx_tasks++;
+}
 static struct {
 	struct gfx_result sum;  /* contadores sumados; flags acumuladas */
 	uint32_t tasks;
@@ -1929,6 +1989,14 @@ int main(int argc, char **argv)
 	if (use_rec) {
 		void *code = salsa64_host_rec_buffer();
 		rec.opts = salsa64_host_rec_opts();
+		if (getenv("SALSA64_REC_DUMP"))
+			rec.on_compile = dump_block;
+		if (getenv("SALSA64_REC_PROF")) {
+			rec.prof = &prof;
+			prof.blocks = calloc(1, sizeof *prof.blocks);
+			prof_every = (uint32_t)strtoul(getenv("SALSA64_REC_PROF"), NULL, 0);
+			prof_next = prof_every;
+		}
 		if (!code || !salsa64_rec_init(&rec, &n64.cpu, code, SALSA64_HOST_REC_BYTES)) {
 			fprintf(stderr, "salsa64-run: el recompilador no corre en este host\n");
 			return 3;
@@ -1939,6 +2007,14 @@ int main(int argc, char **argv)
 			salsa64_cpu_set_idle(&ref.cpu, idle);
 			salsa64_bus_set_isviewer(&ref.bus, ref_isv_buf, ref_isv_out, NULL);
 			salsa64_bus_set_rom(&ref.bus, rom, (uint32_t)(rom_size > UINT32_MAX ? UINT32_MAX : rom_size));
+			ref.bus.rsp.gfx_cycles = n64.bus.rsp.gfx_cycles;
+			ref.bus.rsp.dp_cycles = n64.bus.rsp.dp_cycles;
+			ref.bus.rsp.audio_cycles = n64.bus.rsp.audio_cycles;
+			const struct salsa64_gfx_sink ref_sink = { NULL, ref_gfx_acquire, ref_gfx_done };
+			salsa64_gfx_sync_init(&ref_gfx_sync, &ref_gfx_state, &ref.bus, &ref_sink);
+			salsa64_rsp_set_gfx(&ref.bus, &ref_gfx_sync.backend);
+			salsa64_audio_sync_init(&ref_aud_sync, &ref_aud_state, &ref.bus);
+			salsa64_rsp_set_audio(&ref.bus, &ref_aud_sync.backend);
 			struct salsa64_boot_info ref_info;
 			if (!salsa64_boot_hle(&ref, tv, &ref_info)) {
 				fprintf(stderr, "salsa64-run: la referencia no arrancó\n");
@@ -1993,6 +2069,12 @@ int main(int argc, char **argv)
 			salsa64_n64_run(&n64, max_cycles - done < slice ? max_cycles - done : slice);
 		}
 		pc_sample(n64.cpu.pc);
+		if (prof_every && n64.bus.vi.fields >= prof_next) {
+			char text[2048];
+			salsa64_rec_prof_report(&prof, &prof_prev, 0, prof_every, text, sizeof text);
+			fprintf(stderr, "campos %u–%u, %s\n", prof_next - prof_every, n64.bus.vi.fields, text);
+			prof_next = n64.bus.vi.fields + prof_every;
+		}
 		if (watch.hit != STOP_NONE)
 			reason = watch.hit;
 		else if (cpu_stuck())
@@ -2023,15 +2105,24 @@ int main(int argc, char **argv)
 		cycles ? 100.0 * idle_cycles / cycles : 0.0, (unsigned long long)n64.cpu.pc);
 	if (use_rec) {
 		const struct salsa64_rec_stats *st = &rec.stats;
-		fprintf(stderr, "salsa64-run: recompilador: %llu bloques (%llu fuera de KSEG0, %u KB de caché), "
-			"%llu solo intérprete, %llu entradas, %llu enlaces, %llu invalidados, %llu vaciados, "
-			"%llu traducciones, %llu instr. interpretadas (%.1f %%), %llu llamadas al intérprete%s\n",
-			(unsigned long long)st->compiled, (unsigned long long)st->compiled_x, salsa64_rec_used(&rec) / 256,
+		fprintf(stderr, "salsa64-run: recompilador: %llu bloques (%llu fuera de KSEG0, %llu desprendidos y %llu "
+			"enganchados en otra física, %u KB de caché), %llu solo intérprete, %llu entradas, %llu enlaces, "
+			"%llu invalidados, %llu vaciados, %llu traducciones, %llu instr. interpretadas (%.1f %%), "
+			"%llu llamadas al intérprete%s\n",
+			(unsigned long long)st->compiled, (unsigned long long)st->compiled_x, (unsigned long long)st->detached,
+			(unsigned long long)st->rekeyed, salsa64_rec_used(&rec) / 256,
 			(unsigned long long)st->interp_only, (unsigned long long)st->entries,
 			(unsigned long long)st->linked, (unsigned long long)st->invalidated,
 			(unsigned long long)st->flushes, (unsigned long long)st->vt_probes,
 			(unsigned long long)st->interp_steps, cycles ? 100.0 * (double)st->interp_steps / (double)cycles : 0.0,
 			(unsigned long long)st->exec_calls, lockstep ? "; --lockstep sin diferencias" : "");
+		if (rec.prof) {
+			char text[2048];
+			memset(&prof_prev, 0, sizeof prof_prev);
+			salsa64_rec_prof_report(&prof, &prof_prev, 0, n64.bus.vi.fields, text, sizeof text);
+			fprintf(stderr, "salsa64-run: %s\n", text);
+			salsa64_rec_prof_blocks_report(&rec, 40, prof_line, NULL);
+		}
 	}
 	savefile_close(&save_file);
 	if (regs)
