@@ -191,6 +191,7 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 
 static struct salsa64_n64 n64;
 static struct salsa64_rec rec;
+static struct salsa64_rec_prof rec_prof, rec_prof_prev;  /* perfil del recompilador (SALSA64_RECPROF_FLAG) */
 static bool use_rec;  /* el CPU corre con el recompilador */
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
 static struct salsa64_save save;
@@ -1308,6 +1309,15 @@ static void stats(uint64_t now)
 			    (unsigned long long)st->linked, (unsigned long long)st->invalidated,
 			    (unsigned long long)st->flushes, (unsigned long long)st->vt_probes,
 			    (unsigned long long)st->interp_steps);
+		if (rec.prof) {
+			char text[2048];
+			salsa64_rec_prof_report(rec.prof, &rec_prof_prev, spukit_tick_hz(), fields, text, sizeof text);
+			for (char *l = text, *e; l && *l; l = e) {
+				if ((e = strchr(l, '\n')))
+					*e++ = '\0';
+				salsa64_log("%s", l);
+			}
+		}
 	}
 	sw.gfx_vtx0 = gfx_spu.t_vtx;
 	sw.gfx_state0 = gfx_spu.t_state;
@@ -1505,14 +1515,18 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	savefile_open(&save_file, &save, &n64.bus, rom, SAVES_DIR, SAVE_CFG, SALSA64_SAVE_AUTO, salsa64_log);
 
 	rec.opts = SALSA64_REC_OPT_PIN;  /* +7 % en nemu64-test (docs/perf-log.md) */
+	if (salsa64_ps3_rec_legacy_wanted())
+		rec.opts |= SALSA64_REC_OPT_LEGACY;
+	rec.prof = salsa64_ps3_rec_prof_wanted() ? &rec_prof : NULL;
 	if (!salsa64_ps3_rec_wanted())
 		salsa64_log("recompilador apagado (%s): intérprete", SALSA64_NOREC_FLAG);
 	else if (!(use_rec = salsa64_rec_init(&rec, &n64.cpu, salsa64_ps3_rec_cache(), SALSA64_REC_CACHE_BYTES)))
 		salsa64_log("recompilador no disponible: intérprete");
 	else
-		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x",
+		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x%s%s",
 			    SALSA64_REC_CACHE_BYTES >> 20, salsa64_ps3_rec_cache(), rec.calls_near ? "con bl" : "por mtctr",
-			    rec.opts);
+			    rec.opts, rec.prof ? ", con perfil" : "",
+			    rec.opts & SALSA64_REC_OPT_LEGACY ? ", camino viejo (jit-viejo)" : "");
 
 	/* overscan.cfg: en cada juego (se cambia desde las Opciones del menú). */
 	load_overscan();

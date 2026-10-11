@@ -30,6 +30,7 @@
 
 #include "core/bus.h"
 #include "core/types.h"
+#include "cpu/rec_prof.h"
 #include "cpu/rec_tlb.h"
 
 struct salsa64_cpu;
@@ -71,6 +72,8 @@ struct salsa64_rec_stats {
 	uint64_t interp_steps;   /* instrucciones que corrió el intérprete */
 	uint64_t exec_calls;     /* instrucciones que el código generado le pasó al intérprete */
 	uint64_t compiled_x;     /* de compiled, los de KSEG1 o mapeados (rec_tlb.c) */
+	uint64_t rekeyed;        /* bloques mapeados enganchados en otra física con los mismos bytes (rec_tlb.c) */
+	uint64_t detached;       /* bloques mapeados desprendidos al reescribirse su página (rec_tlb.c) */
 	uint64_t vt_probes;      /* traducciones con la TLB del CPU (rec_tlb.c) */
 	uint64_t compile_us;     /* reservado para quien mida el tiempo de compilación */
 };
@@ -96,6 +99,24 @@ struct salsa64_rec_fixup {
  * por el intérprete y MFC0 terminando el bloque, como antes de traducirlos
  * (docs/perf-log.md). Se aplica al compilar: cambiarla pide vaciar la caché. */
 #define SALSA64_REC_OPT_RARE_EXEC 4u
+/* Para medir A/B en la PS3 con el mismo binario: lo de antes del 2026-10-10
+ * (noche). COP0 y ERET vuelven al despachador y el intérprete corre el resto
+ * del bloque básico, CACHE al intérprete, sin camino rápido de datos
+ * mapeados (ktlb solo para código), x_sync vuelve a traducir todas las
+ * páginas anotadas y no prellena, exit_jr mira solo la cabeza de xhash. Se
+ * aplica al compilar y en el despachador: fijarla antes de salsa64_rec_init. */
+#define SALSA64_REC_OPT_LEGACY 8u
+/* Depuración (host, SALSA64_REC_OPTS): apagan una pieza nueva a la vez para
+ * acotar una diferencia en --lockstep. LEGACY las apaga todas. */
+#define SALSA64_REC_DBG_NO_ENDLINK 0x100u   /* COP0 vuelve al despachador e interpreta el resto del bloque básico */
+#define SALSA64_REC_DBG_NO_CACHE   0x200u   /* CACHE al intérprete */
+#define SALSA64_REC_DBG_NO_CHAIN   0x400u   /* exit_jr mira solo la cabeza de xhash */
+#define SALSA64_REC_DBG_NO_TSYNC   0x800u   /* x_sync vuelve a traducir todo y no prellena */
+#define SALSA64_REC_DBG_NO_DATA    0x1000u  /* sin camino rápido de datos mapeados ni anotarlos */
+#define SALSA64_REC_DBG_ERET_BOUND 0x2000u  /* tras un ERET, el intérprete hasta el fin del bloque básico */
+#define SALSA64_REC_DBG_NO_DETACH  0x4000u  /* invalidar mata el bloque (sin desprender ni enganchar) */
+#define SALSA64_REC_DBG_NO_SUPER   0x8000u  /* un salto condicional hacia adelante termina el bloque */
+#define SALSA64_REC_OLD(rec, bit)  ((rec)->opts & (SALSA64_REC_OPT_LEGACY | (bit)))
 
 struct salsa64_rec {
 	uint32_t opts;
@@ -109,6 +130,11 @@ struct salsa64_rec {
 	uint32_t exit_link, exit_mid, exit_jump;  /* rutinas de salida (palabra en la caché) */
 	uint32_t exit_jr;        /* JR/JALR: busca el bloque destino y salta, o sale como exit_jump */
 	uint32_t exit_idle;      /* salto que el intérprete consultaría como bucle de espera */
+	uint32_t exit_start;     /* el bloque salió en la entrada (no cabe antes del evento, COP1 inusable) */
+	uint32_t exit_end;       /* el bloque terminó en una instrucción que vuelve a C (COP0, SYSCALL…) */
+	uint32_t ktlb_rtn[2][4]; /* traducción de datos por ktlb[] (rec_tlb.h): [almacena][alineación 0, 1, 3, 7];
+				  * r3 = va; vuelve con cr1 eq y r12 = desplazamiento en la RDRAM, o cr1 ne */
+	uint32_t slow_load[7], slow_store[4];  /* camino lento compartido por tipo (rec_emit.c, emit_load/emit_store) */
 
 	/* Direcciones de entrada de las funciones de C que llama el código. */
 	uint64_t h_load, h_store, h_exec, h_exception;
@@ -121,6 +147,7 @@ struct salsa64_rec {
 	bool no_link;            /* sin enlaces: cada bloque (o bucle de un bloque) vuelve a C */
 	bool map_dirty;
 
+	unsigned cur_id;         /* id del bloque que se compila (0 en los temporales): perfil por bloque */
 	uint16_t free_block;     /* lista de ids libres */
 	uint32_t next_block;     /* siguiente id nunca usado */
 	uint32_t free_link;      /* lista de entradas libres de links[] (índice + 1) */
@@ -132,6 +159,9 @@ struct salsa64_rec {
 	void *after_exit_ctx;
 	/* Depuración: cada bloque compilado (palabra de entrada y tamaño). */
 	void (*on_compile)(struct salsa64_rec *rec, uint64_t pc, uint32_t entry, uint32_t words, bool temp);
+	/* Perfil por causa (rec_prof.h); NULL = apagado. Lo pone quien llama,
+	 * antes o después de salsa64_rec_init (que lo conserva). */
+	struct salsa64_rec_prof *prof;
 
 	struct salsa64_rec_stats stats;
 
@@ -178,6 +208,8 @@ enum {
 	SALSA64_REC_EXIT_MID = 2,   /* a mitad de bloque (evento, interrupción, código invalidado) */
 	SALSA64_REC_EXIT_JUMP = 3,  /* a un destino calculado (JR/JALR) o sin enlace */
 	SALSA64_REC_EXIT_IDLE = 4,  /* r3 = pc de un salto tomado, antes de su delay slot (idle.c) */
+	SALSA64_REC_EXIT_START = 5, /* como EXIT_MID, en la entrada del bloque: no cabe antes del evento o COP1 inusable */
+	SALSA64_REC_EXIT_END = 6,   /* el bloque terminó completo en una instrucción de K_END; sigue en r3 */
 };
 
 /* Tipos de acceso del camino lento (salsa64_rec_h_load/h_store). */

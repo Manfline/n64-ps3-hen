@@ -210,13 +210,14 @@ static bool tlb_lookup(struct salsa64_cpu *cpu, uint64_t va, uint32_t *pa, enum 
 	return true;
 }
 
-bool salsa64_vr4300_fetch_probe(const struct salsa64_cpu *cpu, uint64_t va, uint32_t *pa)
+bool salsa64_vr4300_kernel_probe(const struct salsa64_cpu *cpu, uint64_t va, uint32_t *pa, bool *dirty)
 {
 	if ((int64_t)va != (int32_t)va || cpu->mode != SALSA64_MODE_KERNEL)
 		return false;
 	uint32_t a = (uint32_t)va;
 	if (a >= 0x80000000u && a < 0xC0000000u) {
 		*pa = a & 0x1FFFFFFF;
+		*dirty = true;
 		return true;
 	}
 	if (a < 0x80000000u && (cpu->status & SALSA64_ST_ERL))
@@ -228,7 +229,14 @@ bool salsa64_vr4300_fetch_probe(const struct salsa64_cpu *cpu, uint64_t va, uint
 	if (!(lo & 0x2))
 		return false;
 	*pa = tlb_pa(e, lo, va);
+	*dirty = (lo & 0x4) != 0;
 	return true;
+}
+
+bool salsa64_vr4300_fetch_probe(const struct salsa64_cpu *cpu, uint64_t va, uint32_t *pa)
+{
+	bool dirty;
+	return salsa64_vr4300_kernel_probe(cpu, va, pa, &dirty);
 }
 
 /* Direccionamiento de 64 bits (KX, SX o UX según el modo). Espacios del

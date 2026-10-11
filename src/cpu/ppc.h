@@ -199,6 +199,8 @@ PPC_INLINE uint32_t ppc_bc(unsigned bo, unsigned bi, int32_t disp)
 
 /* ---- Registros especiales ------------------------------------------------- */
 
+/* bclr: vuelve por LR si la condición (como en bc) se cumple. */
+PPC_INLINE uint32_t ppc_bclr(unsigned bo, unsigned bi) { return 0x4C000020u | (uint32_t)bo << 21 | (uint32_t)bi << 16; }
 PPC_INLINE uint32_t ppc_mflr(unsigned rt) { return 0x7C0802A6u | (uint32_t)rt << 21; }
 PPC_INLINE uint32_t ppc_mtlr(unsigned rs) { return 0x7C0803A6u | (uint32_t)rs << 21; }
 PPC_INLINE uint32_t ppc_mtctr(unsigned rs) { return 0x7C0903A6u | (uint32_t)rs << 21; }

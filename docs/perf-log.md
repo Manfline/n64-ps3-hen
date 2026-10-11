@@ -490,6 +490,86 @@ El RESULTADO de esa corrida dice FALLO por 4 verificaciones de cobertura
 las comparaciones de resultados pasaron en las tres variantes. Corregido
 después (las verificaciones no aplican con esa opción).
 
+### Recompilador: perfil por causa y salidas a C (2026-10-11)
+
+Perfil nuevo (`src/cpu/rec_prof.h`, docs/rec-ppe.md «Perfil por causa»).
+Primero las **cuentas** en qemu (no miden el Cell, pero dicen cuántas veces
+pasa cada cosa), GoldenEye NTSC hasta la presa con `docs/pads/goldeneye-dam.pad`
+(`SALSA64_REC_PROF=600`, 12 000 M ciclos = 128 s de consola), ventana de
+campos 4800–5400 (en juego), por campo:
+
+| | Antes (main 23a3289) | Después | |
+|---|---|---|---|
+| Entradas desde C al código generado | 1591 | 841 | −47 % |
+| Llamadas a C desde el código | 2109 (CACHE 1006, COP0 690, FPU 160, E/S 254) | 2589 (COP0 2173, FPU 162, E/S 254) | los COP0 que antes corría el intérprete «a mitad» ahora son llamadas |
+| Instrucciones interpretadas en el despachador | 13 872 (13 381 «a mitad», tras un COP0) | 507 (359 fallas de TLB al buscar código, 112 bloques sin compilar) | −96 % |
+| Traducciones de la TLB (`vt_probes`) | ~14 000 (109 M en 128 s) | 360 revisiones selectivas (3,5 M en 128 s) | |
+| Salidas por JR sin bloque a mano | 824 | 348 | la cadena de xhash y el prellenado de `ktlb` |
+| Salidas por ERET/excepción | 37 | 397 | el ERET ya no lo corre el intérprete |
+| Tiempo de qemu, 128 s de consola | 181,6 s | 165,4 s | orientativo |
+
+Perfect Dark (intro, 64 s de consola), total por campo: 3163 cargas y 201
+almacenamientos por C a direcciones mapeadas por la TLB (sus datos en una
+página de 4 MB en 0x70000000), 770 CACHE, 200 COP0.
+
+**Bloques, código y vaciados** (misma corrida de GoldenEye, 128 s; el
+perfil por bloque pesa por ejecuciones):
+
+| Estado | Bloques compilados | Instrucciones por bloque | Vaciados de la caché | Compilaciones por campo en la presa |
+|---|---|---|---|---|
+| main (antes) | 101 910 | 5,3 | 7 (16 MB) | 22 |
+| + bloques desprendidos | 40 851 (28 206 enganchados de vuelta) | 5,3 | 3 | 0,7 |
+| + superbloques | 131 228 | 11,8 | 17 (16 MB: ~900 bytes de PPC por bloque) | — |
+| + rutinas de ktlb y caché de 24 MB | 26 243 | 11,8 | 2 | — |
+| + camino lento compartido | 24 901 | 11,9 | 2 (10,3 MB al final; el segundo al cargar la presa) | 0,6 |
+
+Perfect Dark con lo mismo (64 s): 16,1 instrucciones por bloque (5,2 de
+memoria), 2 vaciados con 24 MB antes del camino lento compartido.
+
+**PS3 real** (Slim CECH-3011A, HFW 4.91 + HEN; paquete SLSA00088 «Salsa64
+JIT» con main fusionado, `perfil` puesto; el A/B es con el mismo binario:
+`jit-viejo` repite el comportamiento anterior). GoldenEye NTSC en la presa,
+~2 min de juego cada uno (ventanas de 5 s del log, resumidas con
+`tools/jit-perfil.py`; las escenas no son idénticas, por eso también el
+tiempo por instrucción ejecutada):
+
+| | Camino viejo (`jit-viejo`) | Nuevo | |
+|---|---|---|---|
+| Campos/s en la presa | 33–59, media **43,0** (72 % de NTSC) | 41–59, media **49,4** (83 %) | +15 % |
+| MIPS (sin bucles de espera) | 37,5 | 50,6 | +35 % |
+| Emulación por campo | 22,7 ms | 20,1 ms | |
+| … nativo | 13,7 | 16,0 | igual por instrucción (15,7 vs 15,6 ns) |
+| … llamadas a C | 0,6 | 1,9 | los COP0 que antes corría el intérprete «a mitad» |
+| … intérprete | 2,8 | 0,8 | |
+| … eventos | 0,5 | 0,5 | |
+| … compilar | 0,3 | 0,3 | |
+| … ktlb (revisar tras la TLB) | 3,8 | 1,0 | |
+| … despachador | 1,0 | 0,0 | |
+| Tiempo por instrucción ejecutada | 26,0 ns | 19,6 ns | −25 % |
+| Bloques compilados / vaciados (≈110 s) | 67 988 / 2 | 35 913 / 2 | |
+| Traducciones de la TLB | 132,7 M | 4,4 M | |
+| Instrucciones interpretadas | 68,8 M | 7,7 M | |
+
+Lo que dice el desglose nuevo: **el código nativo es el 80 % del tiempo y
+cuesta ~50 ciclos del PPE por instrucción MIPS** (15,6 ns); los
+superbloques no bajaron ese costo por instrucción. Lo demás ya es chico:
+llamadas a C 1,9 ms (COP0 del refill: 2200 por campo), ktlb 1,0 ms (las
+~360 escrituras de la TLB por campo: la sincronía selectiva compara 32
+entradas y prellena con la búsqueda lineal; se puede traducir directo
+desde la entrada escrita), intérprete 0,8. Los 2 vaciados en ~110 s son
+por tamaño (23 MB de los 24): cada uno recompila el conjunto vivo. Siguiente
+objetivo: el costo por instrucción del nativo (FPU por memoria, registros
+entre bloques).
+
+Sin regresión en los ligeros con el mismo paquete (un minuto o más de
+juego cada uno, PS3 real): Zelda OoT 59,4 campos/s de media (99–100 %,
+emulación 7,7 ms por campo, 58 ventanas), Super Mario 64 59,5 (100 %, 5,4
+ms, 70 ventanas), Mario Kart 64 59,4 (100 %, 5,9 ms, 34 ventanas); los tres
+con «salida normal» y «cierre: estado limpio». Con `jit-viejo`, la primera
+corrida se quedó en negro: el preámbulo cortaba antes de las rutinas
+compartidas nuevas (arreglado; el camino viejo queda validado en qemu con
+nemu64-test y GoldenEye).
+
 ### Bench del intérprete tras traer la Fase 2: 21 → 14,7 MIPS (diagnóstico, 2026-10-10)
 
 En la PS3, el bench del intérprete bajó en todas las variantes al traer la

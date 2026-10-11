@@ -15,7 +15,7 @@
  *   cr4 condición del salto (sobrevive al delay slot); cr0 y cr1 temporales.
  *
  * Forma de un bloque:
- *   entrada:  si es código mapeado y vtlb[] ya no traduce su página a la
+ *   entrada:  si es código mapeado y ktlb[] ya no traduce su página a la
  *             misma física: salir al despachador (rec_tlb.h)
  *             si cycles + n > next: salir (lo corre el intérprete hasta el
  *             evento); si hay COP1 y Status.CU1 = 0: salir igual
@@ -239,10 +239,14 @@ struct ctx {
 	int exit_after[SALSA64_REC_MAX_INSNS];
 	struct pending_exit pending[2 * SALSA64_REC_MAX_INSNS];
 	unsigned npending;
-	/* Salto del bloque, para continuar después del delay slot. */
-	uint8_t br_kind;
-	uint8_t br_bo, br_bi;   /* condición de "tomado" en cr4 */
-	uint64_t br_target, br_fall;
+	/* Cada salto del bloque (el final y los condicionales internos hacia
+	 * adelante), para continuar después de su delay slot. */
+	struct brinfo {
+		uint8_t kind;
+		uint8_t bo, bi;     /* condición de "tomado" en cr4 */
+		uint64_t target, fall;
+	} br[SALSA64_REC_MAX_INSNS];
+	uint8_t ds_of[SALSA64_REC_MAX_INSNS];  /* k es el delay slot del salto ds_of[k] - 1 (0: no es delay slot) */
 };
 
 static void restore_borrowed(struct ctx *c);
@@ -431,36 +435,41 @@ static uint64_t insn_pc(const struct ctx *c, unsigned k)
 	return c->pc + 4ull * k;
 }
 
-/* r3 = dónde sigue la ejecución después de la instrucción k. */
+/* r3 = dónde sigue la ejecución después de la instrucción k. En un delay
+ * slot, según su salto (la condición sigue en cr4, que las llamadas a C no
+ * tocan). */
 static void emit_continue(struct ctx *c, unsigned k)
 {
-	if (!(c->has_branch && k == c->n - 1)) {
+	if (!c->ds_of[k]) {
 		li64(c, 3, insn_pc(c, k + 1));
 		return;
 	}
-	switch (c->br_kind) {
+	const struct brinfo *br = &c->br[c->ds_of[k] - 1];
+	switch (br->kind) {
 	case K_JUMP_REG:
 		E(c, ppc_mr(3, R_TARGET));
 		return;
 	case K_BRANCH: {
 		int taken = new_label(c), join = new_label(c);
-		emit_bc(c, c->br_bo, c->br_bi, taken);
-		li64(c, 3, c->br_fall);
+		emit_bc(c, br->bo, br->bi, taken);
+		li64(c, 3, br->fall);
 		emit_b(c, join, false);
 		bind(c, taken);
-		li64(c, 3, c->br_target);
+		li64(c, 3, br->target);
 		bind(c, join);
 		return;
 	}
 	default:  /* J/JAL, o branch-likely (el delay slot solo corre si se tomó) */
-		li64(c, 3, c->br_target);
+		li64(c, 3, br->target);
 		return;
 	}
 }
 
 /* Salida desde la instrucción k: antes (excepción: no escribió nada) o
- * después de completarla. Se emite al final, en la sección fría. */
-static int exit_label(struct ctx *c, unsigned k, bool after)
+ * después de completarla. Se emite al final, en la sección fría. Con `wb`,
+ * escribe los registros modificados; sin él, el sitio ya los escribió antes
+ * de llamar a C (emit_load/emit_store) y la salida solo ajusta cycles. */
+static int exit_label(struct ctx *c, unsigned k, bool after, bool wb)
 {
 	int *slot = after ? &c->exit_after[k] : &c->exit_before[k];
 	if (*slot >= 0)
@@ -469,7 +478,7 @@ static int exit_label(struct ctx *c, unsigned k, bool after)
 	p->label = (uint16_t)new_label(c);
 	p->k = (uint8_t)k;
 	p->after = after;
-	p->mask = c->written_start | (after ? c->d[k].writes & c->cached : 0);
+	p->mask = wb ? c->written_start | (after ? c->d[k].writes & c->cached : 0) : 0;
 	*slot = p->label;
 	return p->label;
 }
@@ -556,7 +565,7 @@ static void emit_call(struct ctx *c, uint64_t entry)
  * evento. */
 static void post_check(struct ctx *c, unsigned k)
 {
-	int out = exit_label(c, k, true);
+	int out = exit_label(c, k, true, true);
 	E(c, ppc_lwz(0, OFF(irq_pending), R_CPU));
 	E(c, ppc_cmpwi(CR_T, 0, 0));
 	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), out);
@@ -579,7 +588,8 @@ static void emit_exec(struct ctx *c, unsigned k)
 	li32u(c, 4, d->w);
 	emit_call(c, c->rec->h_exec);
 	reload(c, d->writes);
-	if (d->kind == K_END) {
+	if (d->kind == K_END && SALSA64_REC_OLD(c->rec, SALSA64_REC_DBG_NO_ENDLINK)) {
+		/* Como antes: al despachador, que interpreta el resto del bloque básico. */
 		writeback(c, c->written);
 		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)k + 1));
 		emit_continue(c, k);
@@ -588,6 +598,15 @@ static void emit_exec(struct ctx *c, unsigned k)
 		return;
 	}
 	post_check(c, k);
+	if (d->kind == K_END) {
+		/* Última del bloque (COP0): rec_h_exec ya hizo lo que el despachador
+		 * haría antes del bloque siguiente (rec_tlb.h, Status.FR) y
+		 * post_check revisó el modo, las interrupciones y el evento: se
+		 * enlaza con el siguiente como cualquier salida a dirección fija. */
+		writeback(c, c->written);
+		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)k + 1));
+		emit_exit_to(c, insn_pc(c, k + 1));
+	}
 }
 
 /* Excepción segura (SYSCALL, BREAK) o condicional (desbordamiento, en la
@@ -598,7 +617,7 @@ static void emit_exception(struct ctx *c, unsigned k, unsigned code)
 	E(c, ppc_mr(3, R_CPU));
 	E(c, ppc_li(4, (int32_t)code));
 	emit_call(c, c->rec->h_exception);
-	emit_b(c, exit_label(c, k, false), false);
+	emit_b(c, exit_label(c, k, false, true), false);
 }
 
 /* Rama a un camino frío que lanza la excepción de desbordamiento. */
@@ -621,12 +640,20 @@ static void branch_overflow(struct ctx *c, unsigned bo, unsigned bi)
  * RDRAM de 2^s bytes, (va >> s) vale -2^(31-s) en KSEG0 y -2^(31-s) + 2^(29-s)
  * en KSEG1; el `ori` junta los dos casos. Deja en r12 el desplazamiento
  * dentro de la RDRAM.
+ *
+ * Si no es KSEG0/KSEG1, en la sección fría se prueba ktlb[] (rec_tlb.h): la
+ * dirección es extensión de signo de 32 bits y está alineada, su página
+ * tiene la etiqueta y es válida (y D, al escribir) y la física cae en la
+ * RDRAM; entonces r12 queda igual y se vuelve al camino rápido. Lo demás
+ * (sin traducción, E/S, excepciones) va a `slow`, que llama a C; el camino
+ * lento anota la página en ktlb[] para la próxima vez.
  */
-static void emit_addr(struct ctx *c, unsigned rs, int16_t imm, unsigned align, int slow)
+static void emit_addr(struct ctx *c, unsigned rs, int16_t imm, unsigned align, int slow, bool store)
 {
 	struct salsa64_rec *r = c->rec;
 	unsigned s = r->rdram_shift;
 	int32_t k1 = 1 << (29 - s), region = -(1 << (31 - s)) | k1;
+	int mapped = new_label(c), back = new_label(c);
 	unsigned base = get(c, rs, T_ADDR);
 	E(c, ppc_addi(T_ADDR, base, imm));
 	E(c, ppc_sradi(T_X, T_ADDR, s));
@@ -637,8 +664,23 @@ static void emit_addr(struct ctx *c, unsigned rs, int16_t imm, unsigned align, i
 		E(c, ppc_or(T_X, T_X, T_Y));
 	}
 	E(c, ppc_cmpdi(CR_T, T_X, 0));
-	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
+	if (SALSA64_REC_OLD(r, SALSA64_REC_DBG_NO_DATA)) {  /* sin datos mapeados: todo lo demás a C */
+		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
+		E(c, ppc_clrldi(T_Y, T_ADDR, 64 - s));
+		return;
+	}
+	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), mapped);
 	E(c, ppc_clrldi(T_Y, T_ADDR, 64 - s));
+	bind(c, back);
+
+	/* La rutina compartida del preámbulo (rec.c): cr1 eq y r12 listo, o ne. */
+	unsigned sec = c->sec;
+	c->sec = SEC_COLD;
+	bind(c, mapped);
+	emit_b(c, abs_label(c, r->ktlb_rtn[store][align == 0 ? 0 : align == 1 ? 1 : align == 3 ? 2 : 3]), true);
+	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
+	emit_b(c, back, false);
+	c->sec = sec;
 }
 
 /* Registros de la FPU en cpu->fpr según el Status.FR con que se compila
@@ -664,7 +706,7 @@ static void emit_load(struct ctx *c, unsigned k, unsigned kind, unsigned where)
 	unsigned rt = I_RT(i);
 	int slow = new_label(c), resume = new_label(c);
 
-	emit_addr(c, I_RS(i), (int16_t)i, align[kind], slow);
+	emit_addr(c, I_RS(i), (int16_t)i, align[kind], slow, false);
 	unsigned d = where == DST_GPR ? dst(c, rt, T_V) : T_V;
 	switch (kind) {
 	case SALSA64_REC_LB:  E(c, ppc_lbzx(d, R_RDRAM, T_Y)); E(c, ppc_extsb(d, d)); break;
@@ -676,29 +718,40 @@ static void emit_load(struct ctx *c, unsigned k, unsigned kind, unsigned where)
 	default:              E(c, ppc_ldx(d, R_RDRAM, T_Y)); break;
 	}
 	bind(c, resume);
-	/* El valor queda en d por los dos caminos. */
+	/* El valor queda en d por los dos caminos. Camino lento: la rutina
+	 * compartida del preámbulo (rec.c, slow_load); lo sucio se escribe antes
+	 * para que las salidas no tengan que hacerlo. */
 	unsigned save_sec = c->sec;
 	c->sec = SEC_COLD;
 	{
 		bind(c, slow);
-		call_prep(c, k);
-		E(c, ppc_mr(4, T_ADDR));
-		E(c, ppc_mr(3, R_CPU));
-		E(c, ppc_li(5, (int32_t)kind));
-		emit_call(c, c->rec->h_load);
-		E(c, ppc_lbz(0, OFF(redirect), R_CPU));
-		E(c, ppc_cmpwi(CR_T, 0, 0));
-		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), exit_label(c, k, false));
-		E(c, ppc_mr(d, 3));
-		/* Si sale antes de volver, el valor tiene que estar en su lugar. */
+		store_regs(c, c->written_start);
+		li64(c, 7, insn_pc(c, k));
+		li32u(c, 6, (k + 1) | (c->in_ds ? 0x100u : 0) | (uint32_t)c->n << 16);
+		emit_b(c, abs_label(c, c->rec->slow_load[kind]), true);
+		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(1, PPC_EQ), exit_label(c, k, false, false));
+		int out = new_label(c);
+		emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(5, PPC_GT), out);
+		if (d != 3)
+			E(c, ppc_mr(d, 3));
 		if (where == DST_FPR32)
 			E(c, ppc_stw(d, fpr32_off(c, rt), R_CPU));
 		else if (where == DST_FPR64)
 			E(c, ppc_std(d, fpr64_off(c, rt), R_CPU));
 		else if (rt && !c->map[rt])
 			E(c, ppc_std(d, off_reg(rt), R_CPU));
-		post_check(c, k);
 		emit_b(c, resume, false);
+		/* Salir con el valor en su lugar: en memoria, o en su registro fijo. */
+		bind(c, out);
+		if (where == DST_FPR32)
+			E(c, ppc_stw(3, fpr32_off(c, rt), R_CPU));
+		else if (where == DST_FPR64)
+			E(c, ppc_std(3, fpr64_off(c, rt), R_CPU));
+		else if (rt && (c->pinned & BIT(rt)))
+			E(c, ppc_mr(c->map[rt], 3));
+		else if (rt)
+			E(c, ppc_std(3, off_reg(rt), R_CPU));
+		emit_b(c, exit_label(c, k, true, false), false);
 	}
 	c->sec = save_sec;
 	if (where == DST_FPR32)
@@ -725,7 +778,7 @@ static void emit_store(struct ctx *c, unsigned k, unsigned kind, unsigned from)
 	} else {
 		v = get(c, rt, T_S1);
 	}
-	emit_addr(c, I_RS(i), (int16_t)i, align[kind], slow);
+	emit_addr(c, I_RS(i), (int16_t)i, align[kind], slow, true);
 	/* Código recompilado en estos 128 bytes: por el camino lento. */
 	E(c, ppc_srdi(T_X, T_Y, SALSA64_REC_FLAG_SHIFT));
 	E(c, ppc_lbzx(T_X, R_FLAGS, T_X));
@@ -741,13 +794,14 @@ static void emit_store(struct ctx *c, unsigned k, unsigned kind, unsigned from)
 	unsigned save_sec = c->sec;
 	c->sec = SEC_COLD;
 	bind(c, slow);
-	call_prep(c, k);
-	E(c, ppc_mr(5, v));
-	E(c, ppc_mr(4, T_ADDR));
-	E(c, ppc_mr(3, R_CPU));
-	E(c, ppc_li(6, (int32_t)kind));
-	emit_call(c, c->rec->h_store);
-	post_check(c, k);
+	store_regs(c, c->written_start);
+	if (v != 5)
+		E(c, ppc_mr(5, v));
+	li64(c, 7, insn_pc(c, k));
+	li32u(c, 6, (k + 1) | (c->in_ds ? 0x100u : 0) | (uint32_t)c->n << 16);
+	emit_b(c, abs_label(c, c->rec->slow_store[kind]), true);
+	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(1, PPC_EQ), exit_label(c, k, false, false));
+	emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(5, PPC_GT), exit_label(c, k, true, false));
 	emit_b(c, resume, false);
 	c->sec = save_sec;
 }
@@ -1429,28 +1483,29 @@ static bool idle_candidate(const struct ctx *c, const struct dec *d, uint64_t bp
 	return cpu->idle_reject[(bpc >> 2) & (SALSA64_IDLE_CACHE - 1)] != ((uint32_t)bpc ^ i);
 }
 
-/* El salto en b y su delay slot en b + 1 (la última del bloque). */
-static void emit_branch(struct ctx *c, unsigned b)
+/* La condición del salto b en cr4 (y el registro de enlace, si lo escribe);
+ * deja su descripción en c->br[b]. */
+static void emit_branch_cond(struct ctx *c, unsigned b)
 {
 	const struct dec *d = &c->d[b];
 	uint32_t i = d->w;
 	unsigned op = I_OP(i), rs = I_RS(i), rt = I_RT(i), a, x;
 	uint64_t bpc = insn_pc(c, b);
-	bool likely = d->kind == K_BRANCH_L;
+	struct brinfo *br = &c->br[b];
 
 	flush_eager(c, b);
 	c->k = b;
 	c->written_start = c->written;
-	c->br_kind = d->kind;
-	c->br_fall = bpc + 8;
-	c->br_target = bpc + 4 + ((uint64_t)(int64_t)(int16_t)i << 2);
+	br->kind = d->kind;
+	br->fall = bpc + 8;
+	br->target = bpc + 4 + ((uint64_t)(int64_t)(int16_t)i << 2);
 
 	switch (op) {
 	case 0x02: case 0x03:                                             /* J JAL */
-		c->br_target = ((bpc + 4) & ~0x0FFFFFFFull) | (uint64_t)I_TARGET(i) << 2;
+		br->target = ((bpc + 4) & ~0x0FFFFFFFull) | (uint64_t)I_TARGET(i) << 2;
 		if (op == 0x03) {
 			x = dst(c, 31, T_V);
-			li64(c, x, c->br_fall);
+			li64(c, x, br->fall);
 			put(c, 31, x);
 		}
 		break;
@@ -1460,7 +1515,7 @@ static void emit_branch(struct ctx *c, unsigned b)
 			E(c, ppc_mr(R_TARGET, a));
 		if (I_FUNCT(i) == 0x09 && I_RD(i)) {
 			x = dst(c, I_RD(i), T_V);
-			li64(c, x, c->br_fall);
+			li64(c, x, br->fall);
 			put(c, I_RD(i), x);
 		}
 		break;
@@ -1472,23 +1527,23 @@ static void emit_branch(struct ctx *c, unsigned b)
 			x = get(c, rt, T_S2);
 			E(c, ppc_cmpd(CR_BR, a, x));
 		}
-		c->br_bi = PPC_BI(CR_BR, PPC_EQ);
-		c->br_bo = (op & 1) ? PPC_BO_FALSE : PPC_BO_TRUE;
+		br->bi = PPC_BI(CR_BR, PPC_EQ);
+		br->bo = (op & 1) ? PPC_BO_FALSE : PPC_BO_TRUE;
 		break;
 	case 0x06: case 0x07: case 0x16: case 0x17:                       /* BLEZ BGTZ (L) */
 		a = get(c, rs, T_S1);
 		E(c, ppc_cmpdi(CR_BR, a, 0));
-		c->br_bi = PPC_BI(CR_BR, PPC_GT);
-		c->br_bo = (op & 1) ? PPC_BO_TRUE : PPC_BO_FALSE;
+		br->bi = PPC_BI(CR_BR, PPC_GT);
+		br->bo = (op & 1) ? PPC_BO_TRUE : PPC_BO_FALSE;
 		break;
 	case 0x01:                                                        /* REGIMM */
 		a = get(c, rs, T_S1);
 		E(c, ppc_cmpdi(CR_BR, a, 0));
-		c->br_bi = PPC_BI(CR_BR, PPC_LT);
-		c->br_bo = (rt & 1) ? PPC_BO_FALSE : PPC_BO_TRUE;  /* BGEZ: no menor que 0 */
+		br->bi = PPC_BI(CR_BR, PPC_LT);
+		br->bo = (rt & 1) ? PPC_BO_FALSE : PPC_BO_TRUE;  /* BGEZ: no menor que 0 */
 		if (rt & 0x10) {  /* enlace después de leer rs */
 			x = dst(c, 31, T_V);
-			li64(c, x, c->br_fall);
+			li64(c, x, br->fall);
 			put(c, 31, x);
 		}
 		break;
@@ -1496,10 +1551,63 @@ static void emit_branch(struct ctx *c, unsigned b)
 		E(c, ppc_lwz(0, OFF(fcr31), R_CPU));
 		E(c, ppc_rlwinm(0, 0, 9, 31, 31));  /* bit 23, C */
 		E(c, ppc_cmpwi(CR_BR, 0, 0));
-		c->br_bi = PPC_BI(CR_BR, PPC_EQ);
-		c->br_bo = (rt & 1) ? PPC_BO_FALSE : PPC_BO_TRUE;
+		br->bi = PPC_BI(CR_BR, PPC_EQ);
+		br->bo = (rt & 1) ? PPC_BO_FALSE : PPC_BO_TRUE;
 		break;
 	}
+}
+
+/* Salto condicional interno (hacia adelante) en b, con su delay slot en
+ * b + 1: el bloque sigue por el camino no tomado y el tomado sale enlazado
+ * al destino, con los registros escritos y los ciclos hasta el delay slot.
+ * Así un `if` o la salida de un bucle no cortan el bloque (GoldenEye hacía
+ * 5,3 instrucciones por bloque). En un branch-likely no tomado el delay
+ * slot no corre: desde ahí el bloque cuesta un ciclo menos, y se descuenta
+ * de r29 para que `cycles = r29 + k + 1` siga valiendo; su destino se carga
+ * a la entrada (livein) para que lo que se escriba después tenga el valor
+ * de antes en ese camino. */
+static void emit_internal_branch(struct ctx *c, unsigned b)
+{
+	bool likely = c->d[b].kind == K_BRANCH_L;
+	emit_branch_cond(c, b);
+	const struct brinfo *br = &c->br[b];
+	if (likely) {
+		int nt = new_label(c);
+		emit_bc(c, br->bo == PPC_BO_TRUE ? PPC_BO_FALSE : PPC_BO_TRUE, br->bi, nt);
+		c->in_ds = true;
+		emit_insn(c, b + 1);
+		c->in_ds = false;
+		writeback(c, c->written);
+		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)b + 2));
+		emit_exit_to(c, br->target);
+		bind(c, nt);
+		E(c, ppc_addi(R_CYCLES, R_CYCLES, -1));
+		return;
+	}
+	c->in_ds = true;
+	emit_insn(c, b + 1);
+	c->in_ds = false;
+	int taken = new_label(c);
+	emit_bc(c, br->bo, br->bi, taken);
+	unsigned sec = c->sec;
+	c->sec = SEC_COLD;
+	bind(c, taken);
+	writeback(c, c->written);
+	E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)b + 2));
+	emit_exit_to(c, br->target);
+	c->sec = sec;
+}
+
+/* El salto en b y su delay slot en b + 1 (la última del bloque). */
+static void emit_branch(struct ctx *c, unsigned b)
+{
+	const struct dec *d = &c->d[b];
+	uint32_t i = d->w;
+	uint64_t bpc = insn_pc(c, b);
+	bool likely = d->kind == K_BRANCH_L;
+
+	emit_branch_cond(c, b);
+	const struct brinfo *br = &c->br[b];
 
 	/* Bucle de espera posible (idle.c): el camino tomado vuelve a C antes del
 	 * delay slot, en el mismo estado en que el intérprete consulta idle_hint;
@@ -1521,19 +1629,19 @@ static void emit_branch(struct ctx *c, unsigned b)
 		emit_b(c, abs_label(c, c->rec->exit_idle), false);
 		c->sec = sec;
 		if (d->kind == K_BRANCH)
-			emit_bc(c, c->br_bo, c->br_bi, idle_exit);
+			emit_bc(c, br->bo, br->bi, idle_exit);
 	}
 
 	if (likely) {
 		/* No tomado: se salta el delay slot y cuenta solo el salto. */
 		int nt = new_label(c);
-		emit_bc(c, c->br_bo == PPC_BO_TRUE ? PPC_BO_FALSE : PPC_BO_TRUE, c->br_bi, nt);
+		emit_bc(c, br->bo == PPC_BO_TRUE ? PPC_BO_FALSE : PPC_BO_TRUE, br->bi, nt);
 		unsigned sec = c->sec;
 		c->sec = SEC_COLD;
 		bind(c, nt);
 		writeback(c, c->written);
 		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)b + 1));
-		emit_exit_to(c, c->br_fall);
+		emit_exit_to(c, br->fall);
 		c->sec = sec;
 	}
 	if (idle && d->kind != K_BRANCH) {  /* J o branch-likely tomado: siempre a C */
@@ -1555,18 +1663,18 @@ static void emit_branch(struct ctx *c, unsigned b)
 		return;
 	case K_BRANCH: {
 		if (idle) {  /* el tomado ya salió antes del delay slot */
-			emit_exit_to(c, c->br_fall);
+			emit_exit_to(c, br->fall);
 			return;
 		}
 		int taken = new_label(c);
-		emit_bc(c, c->br_bo, c->br_bi, taken);
-		emit_exit_to(c, c->br_fall);
+		emit_bc(c, br->bo, br->bi, taken);
+		emit_exit_to(c, br->fall);
 		bind(c, taken);
-		emit_taken(c, c->br_target);
+		emit_taken(c, br->target);
 		return;
 	}
 	default:  /* J/JAL o branch-likely tomado */
-		emit_taken(c, c->br_target);
+		emit_taken(c, br->target);
 		return;
 	}
 }
@@ -1720,9 +1828,18 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 			decode_ext(rec, fetch(rec, pa + 4 * n + 4), &c->d[n + 1]);
 			if (c->d[n + 1].kind != K_NORMAL)
 				break;
+			c->ds_of[n + 1] = (uint8_t)(n + 1);
+			/* Un condicional hacia adelante no corta el bloque: su camino
+			 * tomado sale enlazado (emit_internal_branch). */
+			uint64_t bpc = pc + 4ull * n, target = bpc + 4 + ((uint64_t)(int64_t)(int16_t)d->w << 2);
+			bool internal = (d->kind == K_BRANCH || d->kind == K_BRANCH_L) && target > bpc &&
+					!SALSA64_REC_OLD(rec, SALSA64_REC_DBG_NO_SUPER);
 			n += 2;
-			c->has_branch = true;
-			break;
+			if (!internal) {
+				c->has_branch = true;
+				break;
+			}
+			continue;
 		}
 		n++;
 		if (d->kind == K_END)
@@ -1751,6 +1868,8 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	uint64_t seen = 0, livein = 0;
 	for (unsigned k = 0; k < n; k++) {
 		livein |= c->d[k].reads & ~seen;
+		if (c->ds_of[k] && c->d[k - 1].kind == K_BRANCH_L && !(c->has_branch && k == n - 1))
+			livein |= c->d[k].writes & ~seen;  /* likely interno no tomado: el delay slot no corre */
 		seen |= c->d[k].writes;
 		for (unsigned r = 1; r < 34; r++)
 			if (c->d[k].writes & BIT(r))
@@ -1765,13 +1884,21 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	/* Entrada: ¿cabe antes del próximo evento?, ¿COP1 usable? */
 	int start_exit = new_label(c), vt_miss = -1;
 	if (seg == SALSA64_REC_MAPPED) {
-		/* ¿vtlb[] (justo antes de flags, en r28) sigue traduciendo la
-		 * página igual? xoris deja 0 en la mitad alta solo si coincide;
-		 * cmplwi compara entonces la baja. */
-		uint32_t v = salsa64_rec_vt_value(pc, pa);
-		int32_t off = 4 * (int32_t)salsa64_rec_vt_slot(pc) - (int32_t)sizeof rec->x.vtlb;
+		/* ¿ktlb[] (justo antes de flags, en r28) sigue traduciendo la
+		 * página igual que ahora (el despachador la acaba de anotar, con su
+		 * bit D)? xoris deja 0 en la mitad alta solo si coincide; cmplwi
+		 * compara entonces la baja. */
+		uint32_t v = rec->x.ktlb[salsa64_rec_vt_slot(pc)];
+		int32_t off = 4 * (int32_t)salsa64_rec_vt_slot(pc) - (int32_t)sizeof rec->x.ktlb;
+		if ((v & ~SALSA64_REC_VT_DIRTY) != salsa64_rec_vt_value(pc, pa, false))
+			return 0;  /* no debería pasar: la página no está anotada como se pidió */
 		vt_miss = new_label(c);
-		E(c, ppc_lwz(0, off, R_FLAGS));
+		if (off < -32768) {
+			E(c, ppc_addis(T_X, R_FLAGS, -1));
+			E(c, ppc_lwz(0, off + 65536, T_X));
+		} else {
+			E(c, ppc_lwz(0, off, R_FLAGS));
+		}
 		E(c, ppc_xoris(0, 0, v >> 16));
 		E(c, ppc_cmplwi(0, 0, v & 0xFFFF));
 		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(0, PPC_EQ), vt_miss);
@@ -1790,13 +1917,27 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	reload(c, livein & ~c->pinned);
 	c->body = new_label(c);
 	bind(c, c->body);
+	if (rec->prof && rec->prof->blocks && rec->cur_id) {  /* perfil por bloque: una cuenta por paso por el cuerpo */
+		li64(c, T_X, (uintptr_t)&rec->prof->blocks->hits[rec->cur_id]);
+		E(c, ppc_ld(T_Y, 0, T_X));
+		E(c, ppc_addi(T_Y, T_Y, 1));  /* no r0: en addi vale 0 */
+		E(c, ppc_std(T_Y, 0, T_X));
+	}
 
 	for (unsigned k = 0; k < n; k++) {
 		if (c->has_branch && k == n - 2) {
 			emit_branch(c, k);
 			break;
 		}
-		if (emit_unaligned_pair(c, k, c->has_branch ? n - 2 : n)) {
+		if (is_branch(&c->d[k])) {
+			emit_internal_branch(c, k);
+			k++;
+			continue;
+		}
+		unsigned seg_end = k;  /* un par LWL/LWR no cruza un salto */
+		while (seg_end < n && !is_branch(&c->d[seg_end]))
+			seg_end++;
+		if (emit_unaligned_pair(c, k, seg_end)) {
 			k++;
 			continue;
 		}
@@ -1813,7 +1954,7 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	c->sec = SEC_COLD;
 	bind(c, start_exit);
 	li64(c, 3, pc);
-	emit_b(c, abs_label(c, rec->exit_mid), false);
+	emit_b(c, abs_label(c, rec->exit_start), false);
 	if (vt_miss >= 0) {  /* la página cambió de traducción: que la busque el despachador */
 		bind(c, vt_miss);
 		li64(c, 3, pc);
@@ -1828,6 +1969,21 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 		return 0;
 	if (!temp)
 		rec->used = (base + words + 31) & ~31u;  /* bloques alineados a 128 bytes */
+	if (rec->prof && rec->prof->blocks && rec->cur_id && !temp) {
+		struct salsa64_rec_prof_block *pb = &rec->prof->blocks->info[rec->cur_id];
+		unsigned fpu = 0, mem = 0;
+		pb->regs = 0;
+		for (unsigned k = 0; k < n; k++) {
+			uint32_t w = c->d[k].w;
+			pb->regs |= c->d[k].reads | c->d[k].writes;
+			fpu += I_OP(w) == 0x11 && (I_FMT(w) & ~1u) == FMT_S;
+			mem += I_OP(w) >= 0x20 && I_OP(w) != 0x2F;
+		}
+		pb->pc = (uint32_t)pc;
+		pb->n = (uint16_t)n;
+		pb->fpu = (uint8_t)fpu;
+		pb->mem = (uint8_t)mem;
+	}
 	if (rec->on_compile)
 		rec->on_compile(rec, pc, base, words, temp);
 	*n_out = n;

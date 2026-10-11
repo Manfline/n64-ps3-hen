@@ -1,5 +1,112 @@
 # Estado
 
+## 2026-10-11 — Recompilador: perfil por causa y menos salidas a C en GoldenEye y Perfect Dark (rama `upbeat-driscoll-1dd271`, paquete SLSA00088 «Salsa64 JIT»)
+
+Hecho (sin la PS3: la noche del 10 al 11 se trabajó en qemu; la medición
+en la consola queda para el día de pruebas):
+
+- **Perfil del recompilador por causa** (`src/cpu/rec_prof.h/.c`, docs/rec-ppe.md
+  «Perfil por causa»): tiempo con el timebase del PPE y cuentas de código
+  generado, llamadas a C (cargas y almacenamientos lentos por tipo de
+  dirección, instrucciones al intérprete por clase, excepciones), intérprete
+  en el despachador por motivo, eventos por tipo (el del RSP incluye el
+  sondeo y lo dormido esperando al SPE), compilar, `ktlb`, bucles de espera
+  y salidas por tipo. En la PS3 lo enciende `/dev_hdd0/salsa64/perfil` y
+  sale cada 5 s en ms por campo con las estadísticas; en el host,
+  `SALSA64_REC_PROF=N` (cuentas cada N campos y, al final, los bloques más
+  ejecutados con sus palabras y el uso de registros; `tools/mips-disasm.py`
+  los lee).
+- **Lo que las cuentas mandaron arreglar** (GoldenEye en la presa, qemu,
+  por campo, antes → después): instrucciones interpretadas 13 900 → 500
+  (cada COP0 terminaba el bloque y el intérprete seguía hasta el fin del
+  bloque básico: ahora el bloque enlaza con el siguiente y `rec_h_exec`
+  sincroniza la TLB del recompilador; tras un ERET tampoco se interpreta);
+  traducciones de la TLB 14 000 → 360 revisiones (`x_sync` compara las 32
+  entradas con una instantánea y borra solo las páginas de las que
+  cambiaron; además prellena las de la entrada nueva); CACHE al intérprete
+  1000 → 0 (nativo); salidas por JR 820 → 350 (`exit_jr` recorre la cadena
+  de xhash); entradas desde C 1590 → 840. Perfect Dark tiene sus datos en
+  una página de 4 MB mapeada (3200 cargas por campo por C en la intro): la
+  `vtlb` pasó a ser `ktlb` (16 384 páginas, con el bit D) y las cargas y
+  almacenamientos a direcciones mapeadas la prueban en línea («Datos
+  mapeados por la TLB»). GoldenEye además compilaba cada (vpc, marco
+  físico) como bloque nuevo al paginar su código (93 000 bloques y 6
+  vaciados de la caché en 128 s): un bloque vivo de la misma vpc con los
+  mismos bytes se reutiliza en la física nueva (`salsa64_rec_x_rekey`).
+- **Bloques desprendidos** («Bloques desprendidos» en docs/rec-ppe.md):
+  GoldenEye pagina su código y cada página vuelve en otro marco: compilaba
+  cada (vpc, marco) de nuevo (101 900 bloques y 7 vaciados completos de la
+  caché en 128 s). Un bloque mapeado invalidado se desprende con una copia
+  de sus bytes y se engancha donde vuelva su página con los mismos bytes
+  (parcheando la palabra de `ktlb` de su entrada): 40 850 bloques, 28 200
+  enganchados, compilaciones por campo en la presa 22 → 0,7, vaciados 7 → 3.
+- **Superbloques** («Saltos condicionales internos»): el perfil por bloque
+  dio 5,3 instrucciones por bloque; un condicional hacia adelante ya no
+  corta el bloque (su camino tomado sale enlazado, el no tomado sigue con
+  los registros en el PPE). Los tres bucles más calientes de GoldenEye eran
+  parejas de bloques.
+- Caché de código de 16 → 24 MB (GoldenEye la llenaba cada ~40 s; ~900 bytes
+  de PPC por bloque) y el camino de la `ktlb` en 8 rutinas compartidas del
+  preámbulo (3 palabras por acceso en vez de ~22).
+- Opción `SALSA64_REC_OPT_LEGACY` (`/dev_hdd0/salsa64/jit-viejo`,
+  `SALSA64_REC_LEGACY=1`): el comportamiento anterior en el mismo binario,
+  para el A/B en la consola. Bits `SALSA64_REC_OPTS` (host) para apagar una
+  pieza a la vez al acotar una diferencia.
+- **La referencia de `--lockstep` no tenía HLE** (gráfica ni de audio): no
+  recibía la interrupción del DP de las tareas con HLE y GoldenEye y Perfect
+  Dark, que ya dibujan, divergían igual con el camino viejo (bisect con los
+  bits de arriba: todos fallaban en el mismo ciclo). Ahora lleva la misma
+  HLE con su estado; con eso Perfect Dark pasa (200 M ciclos) y las corridas
+  largas se anotan abajo.
+
+**Para el día de pruebas en la PS3 (orden sugerido: al final, tras recorte →
+líneas del logo → framebuffer):** la consola no respondía en la noche (FTP
+sin conexión), así que el paquete está sin subir: desde este worktree
+`PS3_IP=x.x.x.x tools/deploy-ps3.sh ftp build/salsa64-jit/salsa64-jit.pkg`
+(el worktree no tiene `tools/ps3.conf`); instalarlo desde Package Manager
+(SLSA00088 «Salsa64 JIT»), crear por FTP `/dev_hdd0/salsa64/perfil` (vacío:
+`curl -T /dev/null ftp://x.x.x.x/dev_hdd0/salsa64/perfil`) y poner
+`embedded` = `file:goldeneye.z64`.
+1. Abrir «Salsa64 JIT», jugar la presa ~3 min (misma ruta que las
+   mediciones anteriores), salir, bajar `/dev_hdd0/salsa64/salsa64.log`.
+2. Crear `/dev_hdd0/salsa64/jit-viejo` (vacío) y repetir: es el «antes» con
+   el mismo binario. Borrarlo después.
+3. Si hay tiempo: Perfect Dark en un nivel (es el que más gana con los
+   datos mapeados), y un minuto de Zelda, SM64 y Mario Kart (sin regresión).
+Lo que hay que leer del log: la línea «campos/s … emulación X ms por campo»
+y las de «perfil JIT por campo» (nativo, llamadas a C, intérprete, eventos,
+compilar, ktlb, despachador) en el tramo de la presa; anotarlas en
+docs/perf-log.md («Recompilador: perfil y salidas a C»).
+
+Pruebas (todo con el árbol final, 2026-10-11):
+- `tools/test-rec.sh --lockstep`: unitarias 351/351 en los cuatro modos,
+  nemu64-test 433 fallas (línea base) con y sin pin+eager, vitest OK,
+  `--lockstep` sin diferencias en nemu64-test y vitest.
+- `tools/test-roms.sh`: nemu64-test 433 (HLE) y 136 (LLE), vitest,
+  controles, savetest ×3, gfxtest ×3, audiotest: verde. `tools/build.sh
+  test-host` 351/351.
+- `--lockstep` de Perfect Dark (3 G ciclos, intro) y de GoldenEye con
+  `goldeneye-dam.pad` hasta jugar en la presa (7,5 G ciclos, 283 M salidas
+  comparadas, 1 h 46 min de qemu): **sin diferencias**.
+- `tools/build.sh` (todos los programas) y el paquete: sin advertencias.
+- **PS3 real (2026-10-11, tarde), A/B con el mismo paquete en la presa de
+  GoldenEye:** 43,0 → 49,4 campos/s de media (+15 %), 37,5 → 50,6 MIPS
+  (+35 %), 26,0 → 19,6 ns por instrucción ejecutada (−25 %); intérprete
+  2,8 → 0,8 ms por campo, ktlb 3,8 → 1,0, despachador 1,0 → 0,0. **El
+  nativo es el 80 % y cuesta ~50 ciclos del PPE por instrucción MIPS**, igual
+  antes y después: ahí va el siguiente trabajo. Zelda, SM64 y Mario Kart
+  a 59,4–59,5 campos/s (sin regresión). Tabla en docs/perf-log.md.
+
+Pendiente / siguiente paso: con el desglose de la PS3 decidir el ataque al
+código nativo (lo que no se ve en qemu): registros de la FPU residentes en
+f14–f31 dentro del bloque (hoy cada operación pasa por `cpu->fpr`:
+load-hit-store entre operaciones dependientes; GoldenEye 0,78 por bloque),
+más registros fijos entre bloques (r26–r28 liberables; `at`, `s0`, `t6` son
+los más usados sin fijar), MTC0 EntryLo/TLBWR/ERET con un ayudante propio
+en vez de `exec_one` (GoldenEye: 2200 llamadas por campo del refill), y
+seguir bajando el tamaño del código (la FPU y las salidas de los saltos
+internos) para que la caché no se vacíe en la presa.
+
 ## 2026-10-11 — Pulsaciones perdidas del control: el bucle de presentación dejaba de leer los mandos (rama vibrant-hawking)
 
 Reporte (el autor, PS3, 2026-10-10 y 11): a veces un botón no responde
