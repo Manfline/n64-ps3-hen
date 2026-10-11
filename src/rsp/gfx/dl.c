@@ -4,14 +4,30 @@
  * en tres comandos y el estado que el RSP pasa al RDP (textura, geometry
  * mode y othermode).
  *
- * Cada familia decodifica sus comandos en su archivo (f3dex2.c, f3d.c) y
- * llama a estas funciones y a las de geom.c con los parámetros ya
- * extraídos. Ver hle.h.
+ * Cada familia decodifica sus comandos en su archivo (f3dex2.c, f3d.c; las
+ * variantes de Rare, sobre ellas, en f3dpd.c y f3dexbg.c) y llama a estas
+ * funciones y a las de geom.c con los parámetros ya extraídos. Ver hle.h.
  */
 #include <string.h>
 
 #include "core/rcp.h"
 #include "rsp/gfx/hle.h"
+
+#ifdef SALSA64_DEBUG_DL
+/* Volcado de las display lists al stderr, solo en el host para depurar
+ * (EXTRA_CFLAGS=-DSALSA64_DEBUG_DL): SALSA64_DEBUG_DL=N tareas desde la
+ * número SALSA64_DEBUG_DL_FROM (0 por omisión). */
+#include <stdio.h>
+#include <stdlib.h>
+static unsigned debug_task;
+static bool debug_on;
+static bool debug_dl_task(void)
+{
+	const char *n = getenv("SALSA64_DEBUG_DL"), *from = getenv("SALSA64_DEBUG_DL_FROM");
+	unsigned first = from ? (unsigned)strtoul(from, NULL, 0) : 0, t = debug_task++;
+	return n && t >= first && t - first < (unsigned)strtoul(n, NULL, 0);
+}
+#endif
 
 #define G_TEXRECTFLIP 0xE5u
 
@@ -46,17 +62,39 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 	gfx_tc_begin(g);
 	g->dl_pc = job->dl & 0x00FFFFFF;
 	gfx_io_begin(g);
+#ifdef SALSA64_DEBUG_DL
+	if ((debug_on = debug_dl_task()))
+		fprintf(stderr, "tarea %u gbi %u dl %06x\n", debug_task - 1, job->gbi, g->dl_pc);
+#endif
 
-	if (job->flags & GFX_JOB_DPC)
+	if (job->flags & GFX_JOB_DPC) {
 		gfx_dl_dpc(g);
-	else if (job->gbi == SALSA64_GBI_F3D || job->gbi == SALSA64_GBI_F3DEX)
-		gfx_dl_f3d(g);
-	else
-		gfx_dl_f3dex2(g);
+	} else {
+		switch (job->gbi) {
+		case SALSA64_GBI_F3D:
+		case SALSA64_GBI_F3DEX:
+			gfx_dl_f3d(g, NULL);
+			break;
+		case SALSA64_GBI_F3DPD:
+			gfx_dl_f3dpd(g);
+			break;
+		case SALSA64_GBI_F3DEXBG:
+			gfx_dl_f3dexbg(g);
+			break;
+		default:
+			gfx_dl_f3dex2(g, NULL);
+			break;
+		}
+	}
 
 	gfx_flush_draw(g);
 	gfx_io_end(g);
 	res->t_total = gfx_io_clock() - t_start;
+#ifdef SALSA64_DEBUG_DL
+	if (debug_on)
+		fprintf(stderr, "fin: %u comandos, %u triángulos, %u sin implementar (último %02x), banderas %x\n",
+			res->commands, res->triangles, res->unknown_cmds, res->last_unknown, res->flags);
+#endif
 }
 
 bool gfx_dl_next(struct gfx_state *g, uint32_t *w0, uint32_t *w1)
@@ -72,6 +110,10 @@ bool gfx_dl_next(struct gfx_state *g, uint32_t *w0, uint32_t *w1)
 	}
 	g->dl_pc += 8;
 	res->commands++;
+#ifdef SALSA64_DEBUG_DL
+	if (debug_on)
+		fprintf(stderr, "dl %06x %*s%08x %08x\n", g->dl_pc - 8, 2 * g->dl_sp, "", *w0, *w1);
+#endif
 	return true;
 }
 

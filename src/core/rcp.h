@@ -96,6 +96,8 @@ enum salsa64_gbi {
 	SALSA64_GBI_F3D,      /* Fast3D: Super Mario 64 */
 	SALSA64_GBI_F3DEX,    /* F3DEX 1.x (F3DLX, F3DLP…) */
 	SALSA64_GBI_S2DEX,    /* sprites 2D (pendiente) */
+	SALSA64_GBI_F3DPD,    /* Perfect Dark: Fast3D de Rare, vértices con color por índice */
+	SALSA64_GBI_F3DEXBG,  /* Conker: F3DEX2 con G_TRI4, normales aparte y luces puntuales */
 };
 
 /* Campos de OSTask (16 palabras en DMEM 0xFC0). */
@@ -377,7 +379,8 @@ void salsa64_rsp_set_gfx(struct salsa64_bus *bus, const struct salsa64_gfx_backe
 void salsa64_rsp_start(struct salsa64_bus *bus);
 void salsa64_rsp_read_task(const struct salsa64_bus *bus, struct salsa64_task *task);
 /* Familia de microcódigo de una tarea gráfica, por los textos de su
- * segmento de datos (ucode_data). */
+ * segmento de datos (ucode_data) o, si no trae texto, por el CRC-32 de su
+ * código. */
 enum salsa64_gbi salsa64_rsp_detect_gbi(const struct salsa64_bus *bus, const struct salsa64_task *task);
 /* El texto que identifica a un microcódigo ("RSP Gfx ucode …", "RSP SW
  * Version: …") en sus datos, en `out` (vacío si no hay). Para los logs. */

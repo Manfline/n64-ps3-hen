@@ -306,6 +306,41 @@ void gfx_load_vertices(struct gfx_state *g, uint32_t addr, uint32_t v0, uint32_t
 		g->res->dl_errors++;
 		return;
 	}
+	gfx_vertices(g, src, v0, n);
+}
+
+void gfx_light_vectors(struct gfx_state *g)
+{
+	if (g->lights_dirty)
+		update_lights(g);
+}
+
+void gfx_texgen_vertex(struct gfx_state *g, const float nrm[3], struct gfx_vtx *v)
+{
+	const float *lx = g->lookat_model[0], *ly = g->lookat_model[1];
+	float dx = nrm[0] * lx[0] + nrm[1] * lx[1] + nrm[2] * lx[2];
+	float dy = nrm[0] * ly[0] + nrm[1] * ly[1] + nrm[2] * ly[2];
+	float s, t;
+	/* En unidades s10.5, antes de la escala de G_TEXTURE: (d + 1)/2 en
+	 * 0..1 llega a 1024 texels; con la escala típica de mapeo de entorno
+	 * (0x07C0) quedan ~31. */
+	if (g->geom & G_TEXTURE_GEN_LINEAR) {
+		s = acos_approx(-dx) * (1024.0f * 32.0f / 3.14159265f);
+		t = acos_approx(-dy) * (1024.0f * 32.0f / 3.14159265f);
+	} else {
+		s = (dx + 1.0f) * (512.0f * 32.0f);
+		t = (dy + 1.0f) * (512.0f * 32.0f);
+	}
+	v->s = s * ((float)g->tex_s / (65536.0f * 32.0f));
+	v->t = t * ((float)g->tex_t / (65536.0f * 32.0f));
+}
+
+void gfx_vertices(struct gfx_state *g, const uint8_t *src, uint32_t v0, uint32_t n)
+{
+	if (v0 >= GFX_MAX_VTX)
+		return;
+	if (n > GFX_MAX_VTX - v0)
+		n = GFX_MAX_VTX - v0;
 	if (g->mvp_dirty) {
 		gfx_mtx_mul(g->mvp, g->mv[g->mv_top], g->proj);
 		g->mvp_dirty = false;
@@ -344,6 +379,8 @@ void gfx_load_vertices(struct gfx_state *g, uint32_t addr, uint32_t v0, uint32_t
 		float s = (float)(int16_t)salsa64_rd16(src + 8);
 		float t = (float)(int16_t)salsa64_rd16(src + 10);
 		const uint8_t *c = src + 12;
+		v->s = s * ks;
+		v->t = t * kt;
 
 		if (lighting) {
 			float nrm[3] = { (float)(int8_t)c[0], (float)(int8_t)c[1], (float)(int8_t)c[2] };
@@ -363,29 +400,14 @@ void gfx_load_vertices(struct gfx_state *g, uint32_t addr, uint32_t v0, uint32_t
 				v->c[k] = (uint8_t)clampf(rgb[k] + 0.5f, 0.0f, 255.0f);
 			v->c[3] = c[3];
 
-			if (g->geom & G_TEXTURE_GEN) {
-				const float *lx = g->lookat_model[0], *ly = g->lookat_model[1];
-				float dx = nrm[0] * lx[0] + nrm[1] * lx[1] + nrm[2] * lx[2];
-				float dy = nrm[0] * ly[0] + nrm[1] * ly[1] + nrm[2] * ly[2];
-				/* En unidades s10.5, antes de la escala de G_TEXTURE:
-				 * (d + 1)/2 en 0..1 llega a 1024 texels; con la escala
-				 * típica de mapeo de entorno (0x07C0) quedan ~31. */
-				if (g->geom & G_TEXTURE_GEN_LINEAR) {
-					s = acos_approx(-dx) * (1024.0f * 32.0f / 3.14159265f);
-					t = acos_approx(-dy) * (1024.0f * 32.0f / 3.14159265f);
-				} else {
-					s = (dx + 1.0f) * (512.0f * 32.0f);
-					t = (dy + 1.0f) * (512.0f * 32.0f);
-				}
-			}
+			if (g->geom & G_TEXTURE_GEN)
+				gfx_texgen_vertex(g, nrm, v);
 		} else {
 			v->c[0] = c[0];
 			v->c[1] = c[1];
 			v->c[2] = c[2];
 			v->c[3] = c[3];
 		}
-		v->s = s * ks;
-		v->t = t * kt;
 
 		if (g->geom & G_FOG) {
 			/* Alfa = factor de niebla según la profundidad (z/w se fija
