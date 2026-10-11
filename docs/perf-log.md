@@ -570,6 +570,43 @@ corrida se quedó en negro: el preámbulo cortaba antes de las rutinas
 compartidas nuevas (arreglado; el camino viejo queda validado en qemu con
 nemu64-test y GoldenEye).
 
+### FPU residente, sin microcódigo, COP0 con rutinas y caché por tramos (2026-10-11, rama jovial-jones)
+
+Lo que cambia en el código nativo (docs/rec-ppe.md «Lo que el PPE hace en
+microcódigo», «FPU residente», «COP0 sin el intérprete», «Desalojo por
+tramos»), y por qué debería bajar los ~50 ciclos por instrucción:
+
+| Pieza | Antes (por instrucción afectada) | Ahora |
+|---|---|---|
+| ANDI de MIPS | `andi.` (microcódigo: ≥ 11 ciclos, vacía el pipeline) | `rlwinm` (1) o `li`+`ori`+`and` (3) |
+| Entrada de un bloque con COP1 | `andis.` (≥ 11) | `rlwinm`+`cmpwi` (2) |
+| Salida a C | `mtcrf 0x38` (microcódigo, 9 micropalabras) | 3 `mtocrf` (3) |
+| ADD.S en la franja, inexacto | ~40 palabras, 2 cargas de bits + 2 de valor, `andi.`, FCR31 leído, modificado y guardado, TwoSum o prueba de exponentes: ~90 ciclos (bench) | ~27 palabras sin cargas ni almacenamientos de FCR31: fabs×2, 6 fcmpu, op, frsp, 2 fsub, 3 fcmpu, crops; FCR31 se escribe al salir del bloque |
+| ADD.D | TwoSum: 5 operaciones dependientes (~50 ciclos de latencia) | dos restas independientes y dos comparaciones (~23) |
+| LWC1 → operación dependiente | `stw` a casa + `lwz`/`lfs` de casa (load-hit-store) | `lfsx` directo de la RDRAM al registro residente |
+| MTC0 EntryLo (×2 por refill) | exec_one + x_sync (~2800 ciclos cada llamada en la PS3, 2200 por campo) | 3 palabras |
+| TLBWR | exec_one + comparar 32 entradas + compactar `live[]` | rutina propia: solo esa entrada |
+| ERET | exec_one + redirect + despachador (buscar el bloque, entrar) | rutina propia + `exit_jr` al bloque destino |
+| Caché llena | vaciado completo: ~7000 bloques recompilados de golpe (campos de 52 ms) | desalojo del tramo más viejo (1/8 de 32 MB) |
+
+En qemu las cuentas del perfil (llamadas a C, instrucciones interpretadas)
+no cambian con la FPU residente: el dominio del camino rápido es el mismo
+y solo cambia lo que cuesta cada operación, que qemu no mide. GoldenEye
+hasta la presa (128 s, `goldeneye-dam.pad`), por campo: 1590 llamadas a C
+(COP0 1236, FPU 120, E/S 235), 482 entradas, 578 instrucciones
+interpretadas; 11,9 instrucciones por bloque, 0,80 de COP1 y 3,94 de
+memoria. Con los ayudantes de COP0 las 1236 llamadas de COP0 pasan a ~400
+TLBWR + ~400 ERET con rutinas chicas (las MTC0 son nativas).
+
+**Pendiente: la PS3 real** (A/B con el mismo paquete SLSA00093 y los
+archivos `jit-fpu-memoria`, `jit-cop0-viejo`, `jit-sin-tramos`, `jit-viejo`
+y `rdram-1m`), en la escena fija «GoldenEye, presa, junto al camión»
+(referencia del log de main `salsa64-1080-5x-final.log`, campos 7100–7699:
+40–46 campos/s, 20–23 ms de emulación por campo, 3 vaciados y 44 345
+invalidados en la partida, peores campos de 52 ms), Perfect Dark en un
+nivel, y un minuto de Zelda, SM64 y Mario Kart (sin regresión). El bench de
+cpu-tests (SLSA00094) da el costo por instrucción de add.s, mov.s y cvt.
+
 ### Bench del intérprete tras traer la Fase 2: 21 → 14,7 MIPS (diagnóstico, 2026-10-10)
 
 En la PS3, el bench del intérprete bajó en todas las variantes al traer la

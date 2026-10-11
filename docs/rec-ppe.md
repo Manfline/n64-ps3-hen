@@ -611,14 +611,37 @@ ejecuciones.
 
 ### Caché de código
 
-PS3: cola NOBITS de 24 MB (16 hasta el 2026-10-11: GoldenEye la llenaba cada
+PS3: cola NOBITS de 32 MB (16 hasta el 2026-10-11: GoldenEye la llenaba cada
 ~40 s, con un vaciado completo cada vez; ~900 bytes de PPC por bloque de 5
 instrucciones, sobre todo caminos fríos de memoria, que ahora llaman a
-rutinas compartidas del preámbulo para la `ktlb`) al final del segmento de texto
-(`mk/rec-cache.ld`, docs/jit-ppe.md). Las funciones de C quedan a menos de
-32 MB: el código las llama con `bl` directo. `struct salsa64_rec` (mapa,
-banderas, bloques, enlaces, la tabla de bloques fuera de KSEG0 y búferes de
-compilación) ocupa 6,8 MB y se reserva una vez (docs/memory-budget.md).
+rutinas compartidas del preámbulo para la `ktlb`; 24 MB después) al final
+del segmento de texto (`mk/rec-cache.ld`, docs/jit-ppe.md). 32 MB es el
+techo: los saltos al preámbulo (`b`/`bl`, ±32 MB) tienen que alcanzarlo
+desde el final de la caché. Las funciones de C quedan a menos de 32 MB del
+preámbulo y de los primeros tramos, que las llaman con `bl` directo; cada
+bloque decide al compilarse (`calls_near` por bloque) y los del final usan
+`mtctr`/`bctrl`. `struct salsa64_rec` (mapa, banderas, bloques, enlaces, la
+tabla de bloques fuera de KSEG0 y búferes de compilación) ocupa 7,8 MB y se
+reserva una vez (docs/memory-budget.md).
+
+**Desalojo por tramos (2026-10-11).** Hasta ahora, llena la caché, se
+vaciaba entera y el conjunto vivo (~7000 bloques en GoldenEye) se
+recompilaba de golpe: en la PS3, 3 vaciados por partida en la presa y
+campos de hasta 52 ms. Ahora la zona de bloques se parte en
+`SALSA64_REC_SEGMENTS` (8) tramos iguales y se asigna linealmente dentro
+del tramo en uso; cuando no cabe otro bloque, se pasa al siguiente tramo
+(el más viejo) y se matan solo los bloques cuyo código (o el guardado, si
+están desprendidos) está en él: salen del mapa y de `xhash`, se deshacen
+los enlaces que llegan a ellos y sus ids vuelven a la lista libre. Los
+enlaces que *salen* de un bloque desalojado viven en la lista de su
+destino con el sitio parcheado dentro del tramo: cada enlace guarda la
+generación del tramo de su sitio (`seg_gen[]`, que sube al desalojar) y al
+deshacerlo se salta si ya no coincide (la palabra pertenece a otro bloque).
+El despachador también deja de parchear los sitios anotados antes de un
+desalojo (`generation` sube). Las copias de bytes de los bloques
+desprendidos (`x.copy[]`) no se recuperan hasta un vaciado completo, que
+sigue ocurriendo si se agotan los ids o los enlaces. `SALSA64_REC_OPT_NO_EVICT`
+(`jit-sin-tramos` en la PS3) y `jit-viejo` vuelven al vaciado completo.
 
 ## Pruebas en el host
 
@@ -693,5 +716,7 @@ compiler error: Segmentation fault"; repetir compila bien
 | 2026-10-10 | nemu64-test y bench con y sin `RARE_EXEC` (conversiones, LWL/LWR y MFC0 al intérprete) | **PS3 real**, e210aeb | nemu64-test 1894 → 1816 ms (−4,1 %), mismas fallas; bench cvt ×9,7, no alineadas ×10,7, mfc0 ×71, espera por Count ×59 |
 | 2026-10-11 | `tools/test-rec.sh --lockstep` con enlace tras COP0, ktlb de datos, bloques desprendidos, superbloques y caminos lentos compartidos | qemu-ppc64 | unitarias 351/351 en los cuatro modos; nemu64-test 433 fallas (línea base) con y sin pin+eager; vitest OK; `--lockstep` sin diferencias en nemu64-test y vitest |
 | 2026-10-11 | `--lockstep` con la referencia con HLE: Perfect Dark 3 G ciclos (intro); GoldenEye con `goldeneye-dam.pad` 7,5 G ciclos (80 s de consola, hasta jugar en la presa) | qemu-ppc64 | **sin diferencias** en los dos; GoldenEye 283 M salidas comparadas en 1 h 46 min, 16 606 bloques (17 031 enganchados de vuelta) |
+| 2026-10-11 | FPU residente, sin microcódigo, COP0 con rutinas propias (9d1eba0, 1cf4c09, 952366c) | qemu-ppc64 | unitarias 365/365 en cinco modos (plain, far, pin, eager y FPU por memoria), con la prueba nueva `executed_sequences_match_interp`; nemu64-test 433 fallas (línea base) con y sin pin+eager; vitest OK; `--lockstep` sin diferencias en nemu64-test, vitest y Perfect Dark 300 M ciclos. Antes del arreglo del camino lento de LWC1, Perfect Dark abortaba (SIGSEGV en qemu) |
+| 2026-10-11 | Caché de 32 MB por tramos, con `SALSA64_REC_CACHE_MB` para forzar desalojos | qemu-ppc64 | unitarias 365/365 con 2 MB; nemu64-test 433 fallas con 3 MB (93 desalojos, 0 nuevas); vitest OK con 2 MB; `--lockstep` de nemu64-test con 3 MB (ver estado.md) |
 
 Rendimiento: solo en la PS3 real (docs/perf-log.md, «Recompilador»).

@@ -30,6 +30,17 @@ static inline int salsa64_host_env_on(const char *name)
 	return v && *v && *v != '0';
 }
 
+/* Tamaño de la caché: SALSA64_REC_CACHE_MB (hasta 24) la achica, para
+ * forzar desalojos por tramos y vaciados en las pruebas. */
+static inline size_t salsa64_host_rec_bytes(void)
+{
+	const char *v = getenv("SALSA64_REC_CACHE_MB");
+	unsigned long mb = v ? strtoul(v, NULL, 0) : 0;
+	if (mb >= 1 && mb <= 24)
+		return (size_t)mb << 20;
+	return SALSA64_HOST_REC_BYTES;
+}
+
 static inline void *salsa64_host_rec_buffer(void)
 {
 	if (!salsa64_host_env_on("SALSA64_REC_FAR") &&
@@ -49,6 +60,7 @@ static inline uint32_t salsa64_host_rec_opts(void)
 	       (salsa64_host_env_on("SALSA64_REC_LEGACY") ? SALSA64_REC_OPT_LEGACY : 0) |
 	       (salsa64_host_env_on("SALSA64_REC_FPU_MEM") ? SALSA64_REC_OPT_FPU_MEM : 0) |
 	       (salsa64_host_env_on("SALSA64_REC_COP0_EXEC") ? SALSA64_REC_OPT_COP0_EXEC : 0) |
+	       (salsa64_host_env_on("SALSA64_REC_NO_EVICT") ? SALSA64_REC_OPT_NO_EVICT : 0) |
 	       (getenv("SALSA64_REC_OPTS") ? (uint32_t)strtoul(getenv("SALSA64_REC_OPTS"), NULL, 0) : 0);
 }
 

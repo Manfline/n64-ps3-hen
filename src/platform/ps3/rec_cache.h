@@ -17,7 +17,9 @@
 
 #include "platform/ps3/paths.h"
 
-#define SALSA64_REC_CACHE_BYTES (24u << 20)
+/* 32 MB es el techo: los saltos al preámbulo (±32 MB) tienen que alcanzarlo
+ * desde el final (docs/rec-ppe.md, «Caché de código»). */
+#define SALSA64_REC_CACHE_BYTES (32u << 20)
 #define SALSA64_NOREC_FLAG SALSA64_DATA_DIR "/sin-recompilador"
 /* Con este archivo, el perfil del recompilador por causa (src/cpu/rec_prof.h)
  * va al log con las estadísticas. */
@@ -63,6 +65,16 @@ static inline int salsa64_ps3_rec_cop0_exec_wanted(void)
 {
 	struct stat st;
 	return stat(SALSA64_RECCOP0EXEC_FLAG, &st) == 0;
+}
+
+/* Con este archivo, la caché llena se vacía entera como hasta el 2026-10-11
+ * en vez de desalojar el tramo más viejo (SALSA64_REC_OPT_NO_EVICT). */
+#define SALSA64_RECNOEVICT_FLAG SALSA64_DATA_DIR "/jit-sin-tramos"
+
+static inline int salsa64_ps3_rec_no_evict_wanted(void)
+{
+	struct stat st;
+	return stat(SALSA64_RECNOEVICT_FLAG, &st) == 0;
 }
 
 #endif

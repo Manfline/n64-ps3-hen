@@ -225,6 +225,7 @@ struct ctx {
 	unsigned n;
 	bool temp;
 	bool has_branch;
+	bool calls_near;        /* este bloque llama a C con `bl` (a menos de 32 MB); si no, mtctr/bctrl */
 	unsigned sec;
 	struct dec d[SALSA64_REC_MAX_INSNS];
 	uint8_t map[34];        /* registro MIPS → registro del PPE, 0 = en memoria */
@@ -593,7 +594,7 @@ static void emit_call(struct ctx *c, uint64_t entry)
 {
 	struct salsa64_rec *r = c->rec;
 	int64_t rel = (int64_t)entry - (int64_t)(uintptr_t)r->code;
-	if (r->calls_near) {
+	if (c->calls_near) {
 		emit_b(c, abs_label(c, rel / 4), true);
 		return;
 	}
@@ -1944,6 +1945,7 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	c->pc = pc;
 	c->pa = pa;
 	c->temp = temp;
+	c->calls_near = salsa64_rec_calls_near_at(rec, temp ? rec->scratch : rec->used);
 	if (max > SALSA64_REC_MAX_INSNS)
 		max = SALSA64_REC_MAX_INSNS;
 
@@ -2100,7 +2102,7 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	emit_pending_exits(c);
 
 	uint32_t base = temp ? rec->scratch : rec->used;
-	uint32_t limit = temp ? rec->code_words : rec->scratch;
+	uint32_t limit = temp ? rec->code_words : rec->seg_end;  /* el tramo en uso (rec.c) */
 	uint32_t words = finalize(rec, base, limit);
 	if (!words)
 		return 0;
