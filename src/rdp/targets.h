@@ -43,6 +43,7 @@ struct rdp_target {
 	 * desde entonces la verdad está ahí (el CPU puede haberla cambiado)
 	 * hasta que el RDP lo vuelva a dibujar. */
 	bool cpu_owned;
+	uint8_t fmt;          /* G_IM_FMT_* de la color image (lo pone quien la crea; 0 si no se sabe) */
 	uint32_t addr;        /* color image: dirección física y ancho en píxeles */
 	uint32_t width;
 	uint32_t bpp;         /* bytes por píxel: 1, 2 o 4 */

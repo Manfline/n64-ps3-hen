@@ -81,6 +81,7 @@ int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32
 	t->addr = addr;
 	t->width = width;
 	t->bpp = siz == IM_SIZ_32b ? 4 : siz == IM_SIZ_8b ? 1 : 2;
+	t->fmt = 0;
 	t->lw = lw;
 	t->lh = lh;
 	t->last_field = s->field;

@@ -27,6 +27,7 @@
 #include <string.h>
 
 #include "core/endian.h"
+#include "core/rcp.h"
 #include "rdp/targets.h"
 
 #define MAX_DEPTHS 4
@@ -46,6 +47,7 @@ static int scratch_slot;
 static struct depth depths[MAX_DEPTHS];
 static unsigned next_depth;
 static uint32_t task_no;
+static uint32_t vi_field;  /* campos del VI con imagen (rdp_targets_present) */
 
 bool raster_trace_fb;
 uint32_t raster_field;
@@ -54,16 +56,27 @@ static struct rdp_vi_ring vi_ring;
 static uint32_t primes, readbacks, mirrors, frames;
 static uint32_t rb_task[RDP_TARGETS_MAX];  /* última tarea con copia a la RDRAM por ranura */
 #define RB_KEEP_TASKS 32
+#define MIRROR_BYTES 65536  /* como rdp.c: tope de una copia espejo (imagen chica) */
 static struct gfx_job last_job;  /* la RDRAM, para el espejo de cada campo */
 
 static void prime(const struct gfx_job *job, int slot);
 
-static int get_target(const struct gfx_job *job, uint32_t addr, uint32_t width, uint32_t siz, uint32_t min_lh)
+static int get_target(const struct gfx_job *job, uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
+		      uint32_t min_lh)
 {
 	bool fresh;
+	/* Como rdp.c: una color image imposible no toca la tabla. */
+	if (!width || width > 640 || min_lh > 480) {
+		if (raster_trace_fb)
+			fprintf(stderr, "fb: campo %u tarea %u: color image imposible %06x/%u (alto %u): se ignora\n", raster_field,
+				task_no, addr, width, min_lh);
+		return -1;
+	}
 	int i = rdp_targets_get(&tg, addr, width, siz, min_lh, &fresh);
-	if (fresh)
+	if (fresh) {
 		memset(rgb[i], 0, sizeof rgb[i]);
+		tg.t[i].fmt = (uint8_t)fmt;
+	}
 	if (fresh || tg.task - tg.t[i].last_task > RDP_TARGETS_FRESH)
 		prime(job, i);
 	return i;
@@ -420,16 +433,21 @@ static int locate_any(uint32_t addr)
 static void readback(const struct gfx_job *job, int slot, uint32_t rows)
 {
 	const struct rdp_target *t = &tg.t[slot];
-	if (t->bpp != 2 || !job->rdram_ea)
+	if ((t->bpp != 2 && t->bpp != 1) || !job->rdram_ea)
 		return;
 	uint32_t w = t->width < RASTER_W ? t->width : RASTER_W, h = rows < RASTER_H ? rows : RASTER_H;
 	uint8_t *rdram = (uint8_t *)(uintptr_t)job->rdram_ea;
 	for (uint32_t y = 0; y < h; y++) {
-		uint32_t a = t->addr + y * t->width * 2;
-		if (a + w * 2 > job->rdram_size)
+		uint32_t a = t->addr + y * t->width * t->bpp;
+		if (a + w * t->bpp > job->rdram_size)
 			break;
 		for (uint32_t x = 0; x < w; x++) {
 			uint32_t c = rgb[slot][y * RASTER_W + x];
+			if (t->bpp == 1) {
+				/* Imagen de 8 bits: la intensidad es el rojo (como rdp.c). */
+				rdram[a + x] = (uint8_t)(c >> 16);
+				continue;
+			}
 			uint32_t p = ((c >> 19) & 31) << 11 | ((c >> 11) & 31) << 6 | ((c >> 3) & 31) << 1 | 1;
 			salsa64_wr16(rdram + a + 2 * x, (uint16_t)p);
 		}
@@ -449,7 +467,7 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 	uint32_t reads[RDP_TARGETS_MAX][RDP_TARGETS_MAX] = { { 0 } }, read_stale[RDP_TARGETS_MAX][RDP_TARGETS_MAX] = { { 0 } };
 	uint32_t read_age[RDP_TARGETS_MAX] = { 0 };
 	uint32_t suspect[RDP_TARGETS_MAX] = { 0 };
-	tg.field = ++task_no;
+	++task_no;  /* tg.field lo lleva el VI (raster_vi), como en la PS3 */
 	rdp_targets_task(&tg);
 	scratch_slot = -1;
 	last_job = *job;
@@ -465,7 +483,8 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 			break;
 		switch (c->op) {
 		case GFX_OP_TARGET:
-			cur = get_target(job, c->a, c->b, c->c & 0xFF, scissor_bottom(cmd, off + c->size, res->cmd_bytes));
+			cur = get_target(job, c->a, c->b, (c->c >> 8) & 0xFF, c->c & 0xFF,
+					 scissor_bottom(cmd, off + c->size, res->cmd_bytes));
 			break;
 		case GFX_OP_ZCLEAR: {
 			const struct gfx_zclear *z = (const struct gfx_zclear *)c;
@@ -538,8 +557,20 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 			if (!drawn[cur])
 				rdp_targets_drawn(&tg, cur);
 			drawn[cur] = true;
-			if ((uint32_t)(d->scissor[3] + 3) / 4 > drawn_rows[cur])
-				drawn_rows[cur] = (d->scissor[3] + 3) / 4;
+			{
+				/* Como rdp.c: hasta la fila más baja de los vértices. */
+				float ymax = 0.0f;
+				for (uint32_t k = 0; k < d->h.b; k++) {
+					const struct gfx_vertex *v = vtx + d->h.a + k;
+					if (v->w > 0.0f && v->y / v->w > ymax)
+						ymax = v->y / v->w;
+				}
+				uint32_t rows = (uint32_t)(ymax + 0.999f), bottom = (d->scissor[3] + 3) / 4;
+				if (rows > bottom)
+					rows = bottom;
+				if (rows > drawn_rows[cur])
+					drawn_rows[cur] = rows;
+			}
 			break;
 		}
 		default:
@@ -565,20 +596,31 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 			rb_task[i] = tg.task;
 			readbacks++;
 			if (raster_trace_fb)
-				fprintf(stderr, "fb: campo %u tarea %u: copia a la RDRAM del destino %06x/%u\n", raster_field,
-					task_no, t->addr, t->width);
-		} else if (raster_fbfx >= 2 && rows && !t->presented && t->bpp == 2 && t->width != tg.vi_width) {
+				fprintf(stderr, "fb: campo %u tarea %u: copia a la RDRAM del destino %06x/%u: %u filas (alto conjeturado %u)\n",
+					raster_field, task_no, t->addr, t->width, rows, t->lh);
+		} else if (raster_fbfx >= 2 && rows && !t->presented && (t->bpp == 2 || (t->bpp == 1 && t->fmt == 4)) &&
+			   t->width != tg.vi_width && t->width * t->bpp * rows <= MIRROR_BYTES) {
 			/* Espejo de una imagen auxiliar chica (en la PS3, sin esperar). */
 			readback(job, i, rows);
 			rb_task[i] = tg.task;
 			mirrors++;
+			if (raster_trace_fb)
+				fprintf(stderr, "fb: campo %u tarea %u: copia espejo del destino %06x/%u: %u filas (alto conjeturado %u)\n",
+					raster_field, task_no, t->addr, t->width, rows, t->lh);
 		}
 	}
 }
 
-void raster_vi(uint32_t origin, uint32_t width)
+void raster_vi(const struct salsa64_vi_frame *f)
 {
+	uint32_t origin = f->origin, width = f->width;
 	rdp_vi_ring_push(&vi_ring, origin, width);
+	/* Como la PS3: qué destino se presenta (marca `presented`, el ancho del
+	 * VI y la ranura protegida del reciclado). Sin esto el host copiaba a
+	 * la RDRAM todos los destinos de cada tarea, framebuffers incluidos, y
+	 * no reproducía la política de la consola. */
+	struct rdp_present out;
+	rdp_targets_present(&tg, f, ++vi_field, &out);
 	/* Como la PS3: el framebuffer que muestra el VI se copia a la RDRAM
 	 * cada campo (lo que el CPU lea de él es el cuadro, no basura). */
 	if (raster_fbfx < 2 || !last_job.rdram_ea)

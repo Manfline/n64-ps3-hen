@@ -512,7 +512,7 @@ static void raster_field_vi(void)
 {
 	struct salsa64_vi_frame f;
 	if (gfx.raster && salsa64_vi_frame(&n64.bus, &f))
-		raster_vi(f.origin, f.width);
+		raster_vi(&f);
 }
 
 static bool trace_gfx_verbose;

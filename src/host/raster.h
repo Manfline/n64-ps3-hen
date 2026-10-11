@@ -36,7 +36,8 @@ extern bool raster_trace_fb;
 extern uint32_t raster_field;
 extern int raster_fbfx;
 /* Cada campo con imagen: el origen y ancho del VI (como salsa64_rdp_vi). */
-void raster_vi(uint32_t origin, uint32_t width);
+struct salsa64_vi_frame;
+void raster_vi(const struct salsa64_vi_frame *f);
 /* Totales: copias a la RDRAM, destinos cebados, texturas desde un destino
  * (de su imagen) y desde la RDRAM. */
 void raster_fb_stats(uint32_t *readbacks, uint32_t *primes, uint32_t *tex_rsx, uint32_t *tex_rdram);
