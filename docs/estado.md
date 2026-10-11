@@ -265,6 +265,12 @@ sugerido: recorte → líneas del logo → framebuffer → JIT.
   a las mallas de las salas, no a los actores. Evidencia (fuera de git):
   en una carpeta propia.
   Trabajo sugerido: «Diagnosticar Kokiri y su tienda en colores planos» (SLSA00091).
+- **Pulsaciones perdidas** (PS3, 2026-10-11): a veces un botón no responde
+  hasta pulsarlo muchas veces (R en la pausa de Zelda; también en SM64). No es
+  de los efectos de framebuffer ni de falta de velocidad (100 % NTSC, 4 ms por
+  campo). Zona: `update_pads` en `src/frontend/main.c`, la publicación al hilo
+  de emulación o el PIF. Trabajo sugerido: «Arreglar pulsaciones perdidas del
+  control» (SLSA00092).
 
 **Siguientes trabajos decididos con el autor:**
 - JIT («Recompilador: más velocidad del CPU en GoldenEye y Perfect
