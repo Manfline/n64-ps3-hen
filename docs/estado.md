@@ -45,11 +45,24 @@ sin FORCE_BL sigue el corte en 128 de antes.
 - **PS3 real**: el autor confirmó el medidor de SM64 sin fondo. Log de la
   corrida sin errores (`build/ps3-logs/sm64-medidor.log`, fuera de git).
 
+- **Mario Kart 64 en la PS3** con este paquete: menús y carrera bien según
+  el autor (la pantalla gigante negra de la pista es el efecto de
+  framebuffer ya pendiente, Fase 4). Vio además polígonos con «una punta que
+  se queda y se estira» en la transición del título a «GAME SELECT». No es
+  de esta rama: ninguna draw de Mario Kart pasa por la rama nueva de
+  `blend_state` (55 026 estados rastreados, campos 300–1900). En la Mac la
+  transición sale limpia: el fundido son 240 triángulos con w de 1940 a
+  2900 (ninguno con w ≤ 0) y «GAME SELECT» son solo rectángulos. Hipótesis:
+  el RSX lee vértices viejos (búfer que la tarea siguiente ya reescribió) en
+  src/rdp.
+
 Pendiente:
-- [ ] PS3: un vistazo a los menús de Mario Kart 64 con «Salsa64 alfa»
-      (`embedded` = `file:mk64.z64`). Al terminar, `embedded` vuelve a
-      `file:oot.z64`, como lo dejó el trabajo de presentación (estaba así
-      antes de esta prueba).
+- [ ] Polígonos estirados en la transición título → «GAME SELECT» de
+      Mario Kart 64 en la PS3 (tarea aparte: separar HLE de RSX con el
+      volcado `gfxdump.bin` y `--raster-dump`; revisar la vida de los
+      juegos de búferes de src/rdp/rdp.c).
+- [ ] `embedded` de vuelta a `file:oot.z64` (como lo dejó el trabajo de
+      presentación) cuando el autor termine con Mario Kart.
 
 ## 2026-10-10 — Kokiri «en colores planos»: es el sol cenital, no la HLE (referencia con mupen64plus)
 
