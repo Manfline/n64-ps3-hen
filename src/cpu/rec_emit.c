@@ -783,6 +783,15 @@ static void emit_load(struct ctx *c, unsigned k, unsigned kind, unsigned where)
 	case SALSA64_REC_LWU: E(c, ppc_lwzx(d, R_RDRAM, T_Y)); break;
 	default:              E(c, ppc_ldx(d, R_RDRAM, T_Y)); break;
 	}
+	/* COP1: a casa y al registro residente directo de la RDRAM (T_Y),
+	 * antes de `resume`: el camino lento llega ahí sin T_Y y lo carga de
+	 * casa él mismo. */
+	if (where == DST_FPR32)
+		E(c, ppc_stw(d, fpr32_off(c, rt), R_CPU));
+	else if (where == DST_FPR64)
+		E(c, ppc_std(d, fpr64_off(c, rt), R_CPU));
+	if (where != DST_GPR && c->fpu_res)
+		fpu_loaded(c, k, rt, where == DST_FPR64, d, true);
 	bind(c, resume);
 	/* El valor queda en d por los dos caminos. Camino lento: la rutina
 	 * compartida del preámbulo (rec.c, slow_load); lo sucio se escribe antes
@@ -822,14 +831,8 @@ static void emit_load(struct ctx *c, unsigned k, unsigned kind, unsigned where)
 		emit_b(c, exit_label(c, k, true, false), false);
 	}
 	c->sec = save_sec;
-	if (where == DST_FPR32)
-		E(c, ppc_stw(d, fpr32_off(c, rt), R_CPU));
-	else if (where == DST_FPR64)
-		E(c, ppc_std(d, fpr64_off(c, rt), R_CPU));
-	else
+	if (where == DST_GPR)
 		put(c, rt, d);
-	if (where != DST_GPR && c->fpu_res)  /* y al registro residente, directo de la RDRAM */
-		fpu_loaded(c, k, rt, where == DST_FPR64, d, true);
 }
 
 static void emit_store(struct ctx *c, unsigned k, unsigned kind, unsigned from)

@@ -409,8 +409,10 @@ static void emit_eret(struct ctx *c, unsigned k)
 	restore_borrowed(c);
 	emit_b(c, abs_label(c, c->temp || c->rec->no_link ? c->rec->exit_jump : c->rec->exit_jr), false);
 	bind(c, mid);
+	/* Como exit_jr sin bloque: el despachador atiende la interrupción o el
+	 * modo (exit_mid lo haría interpretar hasta el fin del bloque básico). */
 	restore_borrowed(c);
-	emit_b(c, abs_label(c, c->rec->exit_mid), false);
+	emit_b(c, abs_label(c, c->rec->exit_jump), false);
 }
 
 /* ---- COP1: CFC1 y CTC1 ---------------------------------------------------------- */

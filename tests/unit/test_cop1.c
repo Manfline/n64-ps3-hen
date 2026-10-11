@@ -888,13 +888,15 @@ static void executed_conversions_match_full(void)
 
 /* Una instrucción al azar de COP1, o una carga, almacenamiento o movimiento
  * con enteros que la toca: operandos al azar, memoria en T_DATA (base T0,
- * desplazamientos alineados a 8), registros enteros t1–s0. */
+ * desplazamientos alineados a 8) o, una de cada cuatro, en la DMEM del SP
+ * (base S1: fuera de la RDRAM, el camino lento del recompilador), registros
+ * enteros t1–s0. */
 static uint32_t fz_cop1_insn(void)
 {
 	uint64_t r = fz_rand();
 	unsigned kind = (unsigned)(r % 24), fmt = (r >> 8 & 1) ? F_D : F_S;
 	unsigned fs = r >> 16 & 31, ft = r >> 21 & 31, fd = r >> 26 & 31, rt = 9 + (unsigned)(r >> 32 & 7);
-	unsigned x = (unsigned)(r >> 48);
+	unsigned x = (unsigned)(r >> 48), base = (r >> 44 & 3) == 0 ? S1 : T0;
 	int off = (int)(r >> 40 & 7) * 8;
 	switch (kind) {
 	case 0: case 1: case 2: return ADD_F(fmt, fd, fs, ft);
@@ -912,10 +914,10 @@ static uint32_t fz_cop1_insn(void)
 	case 15:         return MFC1(rt, fs);
 	case 16:         return MTC1(rt, fs);
 	case 17:         return (x & 1) ? DMFC1(rt, fs) : DMTC1(rt, fs);
-	case 18: case 19: return LWC1(ft, off, T0);
-	case 20:         return LDC1(ft, off, T0);
-	case 21:         return SWC1(ft, off, T0);
-	case 22:         return SDC1(ft, off, T0);
+	case 18: case 19: return LWC1(ft, off, base);
+	case 20:         return LDC1(ft, off, base);
+	case 21:         return SWC1(ft, off, base);
+	case 22:         return SDC1(ft, off, base);
 	default:         return (x & 3) ? CFC1(rt, 31) : CTC1(rt, 31);
 	}
 }
@@ -930,9 +932,10 @@ static uint32_t fz_cop1_insn(void)
  */
 static void executed_sequences_match_interp(void)
 {
-	enum { DATA_WORDS = 32, MAX_LEN = 8 };
+	enum { DATA_WORDS = 32, MAX_LEN = 8, DMEM_PA = 0x04000100 };
+	const uint64_t DMEM = 0xFFFFFFFFA4000100ull;  /* la DMEM del SP por KSEG1 */
 	static struct salsa64_cpu init, ref;
-	static uint32_t data_init[DATA_WORDS], data_ref[DATA_WORDS];
+	static uint32_t data_init[DATA_WORDS], data_ref[DATA_WORDS], dmem_ref[DATA_WORDS];
 	struct salsa64_rec *rec = CPU->rec;
 	unsigned failed = 0, native = 0;
 
@@ -966,9 +969,11 @@ static void executed_sequences_match_interp(void)
 		for (unsigned k = 9; k <= 16; k++)
 			R[k] = (fz_rand() & 1) ? (uint64_t)(int64_t)(int32_t)(fz_rand() % 200001 - 100000) : fz_rand();
 		R[T0] = T_DATA;
+		R[S1] = DMEM;  /* fuera de la RDRAM: por el bus, el camino lento */
 		for (unsigned k = 0; k < DATA_WORDS; k++) {
 			data_init[k] = (fz_rand() & 1) ? (uint32_t)fz_operand(true) : (uint32_t)fz_rand();
 			t_wr32(T_DATA_PA + 4 * k, data_init[k]);
+			salsa64_bus_write32(&t_n64.bus, DMEM_PA + 4 * k, data_init[k], 0xFFFFFFFFu);
 		}
 		CPU->fcr31 = fcr31;
 		CPU->cause = 0;
@@ -984,14 +989,18 @@ static void executed_sequences_match_interp(void)
 			salsa64_cpu_step(CPU);
 		CPU->rec = rec;
 		memcpy(&ref, CPU, sizeof ref);
-		for (unsigned k = 0; k < DATA_WORDS; k++)
+		for (unsigned k = 0; k < DATA_WORDS; k++) {
 			data_ref[k] = t_rd32(T_DATA_PA + 4 * k);
+			dmem_ref[k] = salsa64_bus_read32(&t_n64.bus, DMEM_PA + 4 * k);
+		}
 
 		/* De nuevo desde el mismo estado, por el camino normal (con el
 		 * recompilador, el bloque entero en nativo). */
 		memcpy(CPU, &init, sizeof init);
-		for (unsigned k = 0; k < DATA_WORDS; k++)
+		for (unsigned k = 0; k < DATA_WORDS; k++) {
 			t_wr32(T_DATA_PA + 4 * k, data_init[k]);
+			salsa64_bus_write32(&t_n64.bus, DMEM_PA + 4 * k, data_init[k], 0xFFFFFFFFu);
+		}
 		salsa64_cpu_set_pc(CPU, T_CODE);
 		uint64_t calls = rec ? rec->stats.exec_calls : 0;
 		t_step(len);
@@ -1001,7 +1010,8 @@ static void executed_sequences_match_interp(void)
 			    ref.fcr31 == CPU->fcr31 && ref.cause == CPU->cause && ref.status == CPU->status &&
 			    ref.pc == CPU->pc && ref.epc == CPU->epc && ref.cycles == CPU->cycles;
 		for (unsigned k = 0; same && k < DATA_WORDS; k++)
-			same = data_ref[k] == t_rd32(T_DATA_PA + 4 * k);
+			same = data_ref[k] == t_rd32(T_DATA_PA + 4 * k) &&
+			       dmem_ref[k] == salsa64_bus_read32(&t_n64.bus, DMEM_PA + 4 * k);
 		t_checks++;
 		if (!same && failed++ < 8) {
 			unsigned bad = 32;
