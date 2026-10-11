@@ -698,7 +698,7 @@ static void readbacks_wanted(struct set *s, const struct gfx_result *res)
 				 * dibujo la lee (Link redibujado entre los iconos de cada
 				 * cuadro, que el CPU copia a otro búfer). Las grandes
 				 * repetidas no se esperan (la intro de Conker). */
-				bool small = c->b * 2 * 240 <= MIRROR_BYTES * 4;
+				bool small = c->b * 2 * 240 <= MIRROR_BYTES;  /* 64 de ancho sí; 320, no */
 				bool sync = !again || (small && !rdp_reads_image(s, res, c->a, c->b));
 				s->rb_sync[k] = sync;
 				s->rb_nsync += sync;
