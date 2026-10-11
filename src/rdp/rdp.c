@@ -56,7 +56,8 @@
 #define FB_BYTES    (((RB_SLOTS + 2) * RB_SLOT + MIRRORS * MIRROR_BYTES + 0xFFFFFu) & ~0xFFFFFu)
 #define POOL_BYTES  (SETS_BYTES + CACHE_BYTES + FB_BYTES)
 #define MAX_DEPTHS  2
-#define RB_PER_TASK 4   /* color images que una tarea puede pedir copiar */
+#define RB_PER_TASK 8   /* color images que una tarea puede pedir copiar */
+#define RB_HISTORY  4   /* tareas en que una imagen repetida ya no se espera */
 #define RB_WAIT_US  200000  /* la emulación no espera una copia más que esto */
 
 _Static_assert(sizeof(struct gfx_vertex) == sizeof(rsxkit_vertex), "vértice de la HLE = vértice de rsxkit");
@@ -143,8 +144,11 @@ static struct {
 	} mirrors[MIRRORS];
 	struct mirror frame;         /* el espejo del framebuffer presentado */
 	struct mirror big[RB_SLOTS]; /* copias grandes sin esperar, en los búferes de RB_SLOTS */
-	uint32_t rb_prev[RB_PER_TASK];  /* color images pedidas en la tarea anterior (hilo de emulación) */
-	uint32_t rb_prev_n;
+	/* Color images pedidas en las últimas RB_HISTORY tareas (hilo de
+	 * emulación): una que se repite ya no se espera. */
+	uint32_t rb_prev[RB_HISTORY][RB_PER_TASK];
+	uint32_t rb_prev_n[RB_HISTORY];
+	uint32_t rb_prev_i;
 } rdp;
 
 static void acquire(void *ctx, struct gfx_job *job);
@@ -250,7 +254,7 @@ uint32_t salsa64_rdp_reset(void)
 	memset(rdp.mirrors, 0, sizeof rdp.mirrors);
 	memset(&rdp.frame, 0, sizeof rdp.frame);
 	memset(rdp.big, 0, sizeof rdp.big);
-	rdp.rb_prev_n = 0;
+	memset(rdp.rb_prev_n, 0, sizeof rdp.rb_prev_n);
 	memset(&rdp.vi_ring, 0, sizeof rdp.vi_ring);
 	memset(rdp.surf_dirty, 0, sizeof rdp.surf_dirty);
 	rdp.last_set = 0;
@@ -623,15 +627,18 @@ static void to_rsxkit(const struct gfx_draw *g, const struct set *s, int cur, rs
 	memcpy(d->k, g->k, sizeof d->k);
 }
 
-/* Color images de la tarea que el CPU va a leer (rdp_readback_wanted):
- * las copia el hilo de presentación al traducirla; mientras, la emulación
- * espera aquí, para que la RDRAM esté al día cuando llegue la interrupción
- * del DP. Solo recorre las cabeceras de los registros. */
+/* Color images auxiliares de 16 bits de la tarea (las que no son un
+ * framebuffer reciente del VI): se copian a la RDRAM al traducirla. La
+ * emulación espera aquí la copia de las que acaban de aparecer (el CPU las
+ * suele leer en cuanto llega la interrupción del DP: el fondo de la pausa
+ * de Zelda, o Link recién dibujado que el CPU copia a otra parte); las que
+ * se repiten en RB_HISTORY tareas van sin esperar (iconos de cada cuadro,
+ * la intro de Conker). Solo recorre las cabeceras de los registros. */
 static void readbacks_wanted(struct set *s, const struct gfx_result *res)
 {
 	s->rb_n = s->rb_nsync = 0;
 	if (!rdp.rdram || rdp.fbfx < 2) {
-		rdp.rb_prev_n = 0;
+		memset(rdp.rb_prev_n, 0, sizeof rdp.rb_prev_n);
 		return;
 	}
 	uint32_t off = 0;
@@ -639,14 +646,16 @@ static void readbacks_wanted(struct set *s, const struct gfx_result *res)
 		const struct gfx_cmd *c = (const struct gfx_cmd *)(s->cmd + off);
 		if (c->op == GFX_OP_END || c->size < sizeof *c)
 			break;
-		if (c->op == GFX_OP_TARGET && rdp_readback_wanted(&rdp.vi_ring, c->a, c->b, c->c & 0xFF)) {
+		if (c->op == GFX_OP_TARGET && (c->c & 0xFF) == 2u && rdp.vi_ring.n &&
+		    !rdp_vi_ring_covers(&rdp.vi_ring, c->a, c->b)) {
 			uint32_t k = 0;
 			while (k < s->rb_n && s->rb_addr[k] != c->a)
 				k++;
 			if (k == s->rb_n && k < RB_PER_TASK) {
 				bool again = false;
-				for (uint32_t j = 0; j < rdp.rb_prev_n; j++)
-					again |= rdp.rb_prev[j] == c->a;
+				for (uint32_t h = 0; h < RB_HISTORY; h++)
+					for (uint32_t j = 0; j < rdp.rb_prev_n[h]; j++)
+						again |= rdp.rb_prev[h][j] == c->a;
 				s->rb_sync[k] = !again;
 				s->rb_nsync += !again;
 				s->rb_addr[s->rb_n++] = c->a;
@@ -654,8 +663,9 @@ static void readbacks_wanted(struct set *s, const struct gfx_result *res)
 		}
 		off += c->size;
 	}
-	memcpy(rdp.rb_prev, s->rb_addr, sizeof rdp.rb_prev);
-	rdp.rb_prev_n = s->rb_n;
+	rdp.rb_prev_i = (rdp.rb_prev_i + 1) % RB_HISTORY;
+	memcpy(rdp.rb_prev[rdp.rb_prev_i], s->rb_addr, sizeof rdp.rb_prev[0]);
+	rdp.rb_prev_n[rdp.rb_prev_i] = s->rb_n;
 }
 
 static void done(void *ctx, const struct gfx_job *job, const struct gfx_result *res)
@@ -763,6 +773,10 @@ static void translate(uint32_t n)
 			if (!drawn[i] || !rows || t->addr != s->rb_addr[k] || t->bpp != 2 || t->lw > RB_MAX_W ||
 			    t->lh > RB_MAX_H || t->addr + t->width * 2 * rows > rdp.rdram_size)
 				continue;
+			/* Repetida y chica: espejo chico sin esperar (abajo). */
+			uint32_t pitch_small = (t->lw * 2 + 63) & ~63u;
+			if (!s->rb_sync[k] && t->width != rdp.tg.vi_width && pitch_small * rows <= MIRROR_BYTES)
+				break;
 			/* Un búfer grande libre; si todos esperan una barrera, se
 			 * termina el pendiente más viejo (espera corta). */
 			int buf = -1;

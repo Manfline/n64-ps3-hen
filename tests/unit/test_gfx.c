@@ -1158,8 +1158,25 @@ static void gfx_texture_provenance(void)
 	dl(0xE4000000 | (31 << 2) << 12 | (31 << 2), 0);
 	dl(0xE1000000, 0);
 	dl(0xF1000000, 0x10000400);
+	/* Una I8 de 32×32 cargada como libultra: SETTIMG de 16 bits, LOADBLOCK
+	 * de 512 texels de 16 bits, y la tile que lee de 8 bits. */
+	dl(0xFD100000 | 0, TEX_PA + 0x8000);
+	dl(0xF5100000, 0x07000000);
+	dl(0xF3000000, 0x07000000 | 511 << 12 | 512);
+	dl(0xF5880000 | 4 << 9, 0x00000000);                      /* tile 0: I8, línea 4 palabras (32 bytes) */
+	dl(0xF2000000, (31 << 2) << 12 | (31 << 2));
+	dl(0xE4000000 | (31 << 2) << 12 | (31 << 2), 0);
+	dl(0xE1000000, 0);
+	dl(0xF1000000, 0x10000400);
 	run();
-	CHECK_EQ(res.rects, 3);
+	CHECK_EQ(res.rects, 4);
+	const struct gfx_draw *d3 = draw_n(3);
+	CHECK(d3 != NULL);
+	if (d3) {
+		CHECK_EQ(d3->tex[0].src_addr, TEX_PA + 0x8000);
+		CHECK_EQ(d3->tex[0].src_pitch, 32);
+		CHECK_EQ(d3->tex[0].src_siz, G_IM_SIZ_8b);
+	}
 	const struct gfx_draw *d0 = draw_n(0), *d1 = draw_n(1), *d2 = draw_n(2);
 	CHECK(d0 && d1 && d2);
 	if (!d0 || !d1 || !d2)
@@ -1179,6 +1196,7 @@ static void gfx_texture_provenance(void)
 	CHECK_EQ(d1->tex[0].width, 32);
 	CHECK_EQ(d2->tex[0].src_addr, TEX_PA + 0x4000);
 	CHECK_EQ(d2->tex[0].src_pitch, 32);
+	CHECK_EQ(d2->tex[0].src_siz, G_IM_SIZ_16b);
 	/* Misma textura decodificada (reusada), distinto origen. */
 	CHECK_EQ(d2->tex[0].offset, d1->tex[0].offset);
 	CHECK_EQ(d2->tex[0].where, d1->tex[0].where);

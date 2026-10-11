@@ -135,6 +135,9 @@ void rdp_vi_ring_push(struct rdp_vi_ring *r, uint32_t origin, uint32_t width);
  * aparte, que el CPU suele leer (el fondo de la pausa de Zelda). Las
  * imágenes chicas (iconos, pantallas) se quedan en el RSX como textura. */
 bool rdp_readback_wanted(const struct rdp_vi_ring *r, uint32_t addr, uint32_t width, uint32_t siz);
+/* ¿La color image (addr, width) está dentro de alguno de los framebuffers
+ * recientes del VI? Las que no lo están son imágenes auxiliares. */
+bool rdp_vi_ring_covers(const struct rdp_vi_ring *r, uint32_t addr, uint32_t width);
 
 /* Qué presentar en el campo `field` para la imagen `f` del VI: entre los
  * destinos recientes que cubren el origen, el del ancho del VI; entre

@@ -151,19 +151,25 @@ void rdp_vi_ring_push(struct rdp_vi_ring *r, uint32_t origin, uint32_t width)
 	r->n++;
 }
 
-bool rdp_readback_wanted(const struct rdp_vi_ring *r, uint32_t addr, uint32_t width, uint32_t siz)
+bool rdp_vi_ring_covers(const struct rdp_vi_ring *r, uint32_t addr, uint32_t width)
 {
-	if (siz != 2u || !r->n || width != r->width[(r->n - 1) % RDP_VI_RING])
-		return false;
+	(void)width;
 	for (uint32_t k = 0; k < RDP_VI_RING && k < r->n; k++) {
 		uint32_t o = r->origin[(r->n - 1 - k) % RDP_VI_RING], w = r->width[(r->n - 1 - k) % RDP_VI_RING];
 		/* Un framebuffer empieza un poco antes del origen (líneas que el VI
 		 * no muestra) y mide unas 3/4 del ancho de alto. */
 		uint32_t line = w * 2, lo = o > 8 * line ? o - 8 * line : 0, hi = o + line * (w * 3 / 4);
 		if (addr >= lo && addr < hi)
-			return false;
+			return true;
 	}
-	return true;
+	return false;
+}
+
+bool rdp_readback_wanted(const struct rdp_vi_ring *r, uint32_t addr, uint32_t width, uint32_t siz)
+{
+	if (siz != 2u || !r->n || width != r->width[(r->n - 1) % RDP_VI_RING])
+		return false;
+	return !rdp_vi_ring_covers(r, addr, width);
 }
 
 int rdp_targets_locate(const struct rdp_targets *s, uint32_t addr, uint32_t pitch, uint32_t bpp, uint32_t *x0,

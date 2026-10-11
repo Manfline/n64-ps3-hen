@@ -91,7 +91,9 @@ static void provenance(const struct gfx_state *g, const struct gfx_tile *t, stru
 {
 	for (uint32_t k = 1; k <= GFX_LOADS; k++) {
 		const struct gfx_load *l = &g->loads[(g->load_next - k) & (GFX_LOADS - 1)];
-		if (!l->bytes || l->siz != t->siz || !t->line)
+		/* libultra carga las texturas de 4 y 8 bits como de 16 (LOADBLOCK
+		 * cuenta texels de 16): el tamaño que vale es el de la tile que lee. */
+		if (!l->bytes || !t->line || (l->line != 0 && l->siz != t->siz))
 			continue;
 		if (t->tmem < l->tmem || t->tmem >= (uint32_t)l->tmem + l->bytes)
 			continue;
@@ -108,7 +110,7 @@ static void provenance(const struct gfx_state *g, const struct gfx_tile *t, stru
 			tex->src_addr = l->addr + (off / l->line) * l->row_bytes + off % l->line;
 			tex->src_pitch = l->pitch;
 		}
-		tex->src_siz = l->siz;
+		tex->src_siz = l->line == 0 ? t->siz : l->siz;
 		tex->src_fmt = l->fmt;
 		return;
 	}
