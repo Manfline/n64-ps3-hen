@@ -253,6 +253,13 @@ sugerido: recorte → líneas del logo → framebuffer → JIT.
   punto tras el redondeo). Evidencia (fotos y logs, fuera de git por ser
   imágenes de un juego comercial):
   en una carpeta propia.
+- **Kokiri en colores planos, reabierto (2026-10-11).** El cierre del 2026-10-10
+  («es el sol cenital») no explica lo que se ve al salir de la casa de Link: en
+  el host (campo 14400 con pad) el piso es verde puro, (0,71,0), (0,104,0),
+  (0,161,0)…, con rojo y azul en 0, y un rectángulo azul liso. Ninguna textura
+  × iluminación da eso; aquella comparación con mupen64plus fue en el balcón
+  (campo ~3700) y midió colores con rojo y azul. El autor lo ve como error en la
+  PS3. Trabajo sugerido: «Diagnosticar Kokiri en colores planos» (SLSA00091).
 
 **Siguientes trabajos decididos con el autor:**
 - JIT («Recompilador: más velocidad del CPU en GoldenEye y Perfect
