@@ -11,6 +11,54 @@ compilador de la Mac (el Docker de desarrollo no ve las carpetas de fuera del
 proyecto) y deja log e imágenes en `build/censo/`. Los textos, CRC y palabras
 de identificación de los microcódigos salen de `--trace-rsp`.
 
+## 2026-10-10 (3) — microcódigos gráficos de Rare (Perfect Dark y Conker)
+
+Código medido: rama `competent-haslett-3bad2a` (main 3270538 con la
+rama de arranque y `osCicId`; luego main 53fb223 fusionado), mismo método: 3 minutos de consola
+sin tocar el control.
+
+| Juego | Gráficos (HLE) | A los 3 minutos |
+|---|---|---|
+| Perfect Dark | **F3DPD** (`src/rsp/gfx/f3dpd.c`), reconocido por el CRC-32 del código (c543d0a8, 0x1000 bytes): 6914 tareas, **0 comandos sin implementar**, 0 errores; 1 combiner aproximado (abajo) | Pantalla de identificación (alta resolución, 576×474), logo de Nintendo, cubo de N64 que se vuelve el logo de Rare, vuelo por la ciudad y Joanna en la azotea |
+| Conker's Bad Fur Day | **F3DEXBG** (`src/rsp/gfx/f3dexbg.c`), por su texto: 4468 tareas, **0 comandos sin implementar**, 0 combiners aproximados, 0 errores | Pantalla legal, logo de Nintendo, Conker con la motosierra, logo de Rareware, la taberna y el menú «GAME 1» |
+
+- **PS3 real** (paquete «Salsa64 Rare» con main ce8351d): Perfect Dark se
+  ve y suena bien, al 100 % de NTSC salvo la intro en alta resolución.
+  Conker arranca y suena, pero en el RSX el 3D sale quemado y parpadea (la
+  HLE del SPE es correcta: su volcado dibujado en la Mac sale bien); falla
+  de presentación con su destino CI de 8 bits y 64 de ancho a mitad de
+  cuadro, pasada al trabajo de presentación.
+- Con el control (`--pad`: START y luego A cada 5 s): Perfect Dark llega a
+  «Enter Agent Name» (7782 tareas en 150 s) y Conker al comienzo del juego
+  (6830 tareas en 260 s), los dos con 0 comandos sin implementar y 0
+  errores.
+- **Perfect Dark** es Fast3D salvo los vértices: G_VTX de 12 bytes con el
+  color en una tabla aparte (G_VTXCOLORBASE, 0x07); G_TRI4 en 0xB1 como
+  GoldenEye. Su intro es de alta resolución: el rasterizador del host
+  (320×240) la ve completa con `EXTRA_CFLAGS="-DRASTER_W=640
+  -DRASTER_H=480"`.
+- **Conker** quedaba mudo de imagen porque su G_LOAD_UCODE (0xDD) no
+  cambia de GBI: carga la iluminación avanzada y la lista sigue. La HLE de
+  F3DEX2 terminaba la tarea ahí, sin llegar al G_RDPFULLSYNC, y el juego
+  esperaba para siempre la interrupción del DP. El 0x14 era su G_TRI4
+  (0x10–0x1F).
+- Combiner aproximado de Perfect Dark: `lerp(ENV, TEXEL0, SHADE_ALPHA) ·
+  SHADE` (2 ciclos), el mismo de GoldenEye (motor de Rare): hace falta un
+  término S·Sa en la combinación del RSX (Fase 4). 40 905 dibujos en 3
+  minutos.
+- Conker, en la escena del logo de Rareware, muestra la boca abierta con el
+  interior oscuro (su textura de 32×32: fondo blanco y la boca en el
+  centro); parece correcto, pendiente de confirmar en la PS3.
+- Efectos de framebuffer de estos juegos, fuera de esta tarea (Fase 4).
+  Perfect Dark: la cámara espía y los monitores (imagen dibujada y leída
+  como textura) y la lectura del z-buffer con rectángulos texturizados
+  (GLideN64: `hack_rectDepthBufferCopyPD`, `hack_clearAloneDepthBuffer`,
+  `texturedRectDepthBufferCopy`). Conker: el desenfoque de la pausa, la
+  sombra de Conker, la copia del z-buffer y rectángulos que copian la
+  imagen sobre sí misma (`hack_blurPauseScreen`,
+  `hack_rectDepthBufferCopyCBFD`, `hack_fbTextureOffset`,
+  `texturedRectCopyToItself`).
+
 ## 2026-10-10 (2) — main 3270538 (F3D integrado) + osCicId
 
 Código medido: esta rama (arranque del 6105 y `osCicId`) con main 3270538
@@ -102,8 +150,8 @@ tienen partes que el microcódigo escribe; las cuatro palabras son estables.
 | # | Qué | Desbloquea | Quién |
 |---|---|---|---|
 | 1 | HLE de naudio: la de Banjo-Kazooie, la de Conker y la de Perfect Dark (con MP3); hoy toda tarea da error | Sonido en los tres juegos de Rare (y Banjo-Tooie, JFG) | trabajo de audio (`src/rsp/audio`, SPE 1) |
-| 2 | HLE del microcódigo de Perfect Dark (variante de Rare de F3DEX sin texto: identificar por CRC, vértices propios) | Perfect Dark | trabajo de F3D |
-| 3 | F3DEXBG 2.08 de Conker: el comando 0x14 y lo que le impide mandar la segunda tarea | Conker | trabajo de F3D |
+| 2 | ~~HLE del microcódigo de Perfect Dark~~ hecho: F3DPD (sección 3) | Perfect Dark | trabajo de Rare |
+| 3 | ~~F3DEXBG 2.08 de Conker~~ hecho: G_TRI4 en 0x10–0x1F y G_LOAD_UCODE que no corta la lista (sección 3) | Conker | trabajo de Rare |
 | 4 | Probar con el control (pasar los títulos; `--pad` de la rama de F3D) y medir en la PS3 las escenas de docs/proyecto.md | Mediciones de la tabla de juegos | tras 1–3 |
 | 5 | Desafío del CIC 6105 por la PIF durante el juego (no apareció en 3 minutos) | Perfect Dark, Conker, Banjo-Tooie a largo plazo | PIF (`src/core/pif.c`), cuando aparezca |
 | 6 | Zelda: en una captura de la demo el cielo aparece en la parte de abajo; revisar si es el encuadre o geometría que falta | Zelda | trabajo de F3D |

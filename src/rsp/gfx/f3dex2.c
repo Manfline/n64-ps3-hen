@@ -99,13 +99,15 @@ static void tri(struct gfx_state *g, uint32_t w)
 }
 
 
-void gfx_dl_f3dex2(struct gfx_state *g)
+void gfx_dl_f3dex2(struct gfx_state *g, gfx_cmd_hook hook)
 {
 	struct gfx_result *res = g->res;
 	const bool zex = g->job->gbi == SALSA64_GBI_F3DZEX2;
 	uint32_t w0, w1;
 
 	while (gfx_dl_next(g, &w0, &w1)) {
+		if (hook && hook(g, w0, w1))
+			continue;
 		uint32_t op = w0 >> 24;
 		switch (op) {
 		case G_VTX: {

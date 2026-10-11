@@ -116,10 +116,16 @@ $(OUT)/$(PROGRAM).fake.self: $(OUT)/$(PROGRAM).elf
 	@echo "  FSELF   $(notdir $@)"
 	$(VERB)fself $< $@
 
-$(OUT)/$(PROGRAM).pkg: $(OUT)/$(PROGRAM).elf
+# Ícono del XMB (320×176) y fondo opcional (1920×1080): cada programa puede
+# fijar ICON0 y PIC1; por omisión, el ícono genérico de PSL1GHT y sin fondo.
+ICON0 ?= $(PS3DEV)/bin/ICON0.PNG
+PIC1  ?=
+
+$(OUT)/$(PROGRAM).pkg: $(OUT)/$(PROGRAM).elf $(ICON0) $(PIC1)
 	@echo "  PKG     $(notdir $@)"
 	$(VERB)rm -rf $(OBJ)/pkg && mkdir -p $(OBJ)/pkg/USRDIR
-	$(VERB)cp $(PS3DEV)/bin/ICON0.PNG $(OBJ)/pkg/ICON0.PNG
+	$(VERB)cp $(ICON0) $(OBJ)/pkg/ICON0.PNG
+	$(if $(PIC1),$(VERB)cp $(PIC1) $(OBJ)/pkg/PIC1.PNG)
 	$(VERB)make_self_npdrm $< $(OBJ)/pkg/USRDIR/EBOOT.BIN $(CONTENTID) >/dev/null
 	$(VERB)sfo --title "$(TITLE)" --appid "$(APPID)" -f $(PS3DEV)/bin/sfo.xml $(OBJ)/pkg/PARAM.SFO
 	$(VERB)pkg --contentid $(CONTENTID) $(OBJ)/pkg/ $@ >/dev/null
