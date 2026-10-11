@@ -380,6 +380,26 @@ static void nead_filter(void)
 	CHECK_EQ(get16(DST + 30), 15);
 	/* Estado: el último bloque de entrada. */
 	CHECK_EQ(get16(STATE + 14), 16);
+
+	/* Tablas: la anterior (detrás del estado) va a la mitad de camino de la
+	 * de la nota, redondeando hacia arriba; la de la nota no cambia. Tres
+	 * llamadas desde cero dejan lo que deja el microcódigo de Zelda en el
+	 * LLE (tarea 31 de su música): 0 → 490 → 735 → 858. */
+	static const int16_t note[8] = { 980, -3081, 4883, 14286, 4883, -3081, 980, 590 };
+	static const int16_t after3[8] = { 858, -2695, 4273, 12501, 4273, -2695, 858, 517 };
+	for (int i = 0; i < 8; i++) {
+		put16(BOOK + 2 * i, note[i]);
+		put16(STATE + 0x10 + 2 * i, 0);
+	}
+	for (int k = 0; k < 3; k++) {
+		cmd(0x07000000u | 0x02u << 16 | 32, BOOK);
+		cmd(0x07000000u | 0x100, STATE);
+	}
+	run_abi(SALSA64_ABI_NEAD_OOT);
+	for (int i = 0; i < 8; i++) {
+		CHECK_EQ(get16(STATE + 0x10 + 2 * i), after3[i]);
+		CHECK_EQ(get16(BOOK + 2 * i), note[i]);
+	}
 }
 
 static void nead_errors_and_unknown(void)
@@ -479,7 +499,7 @@ static void abi1_mixer_interleave(void)
 	run_abi(SALSA64_ABI_AUDIO);
 	CHECK_EQ(res.errors, 0);
 	for (int i = 0; i < 16; i++) {
-		int32_t l = 2 * i, r = -2 * i + ((l * 0x7FFF) >> 15);
+		int32_t l = 2 * i, r = -2 * i + ((l * 0x7FFF + 0x4000) >> 15);  /* redondeado */
 		CHECK_EQ(get16(DST + 4 * i), l);
 		CHECK_EQ(get16(DST + 4 * i + 2), r);
 	}
