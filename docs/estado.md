@@ -18,12 +18,13 @@ con audio; Zelda/SM64/MK64 a velocidad completa; GoldenEye en la presa 34–55
 campos/s (emulación 18–29 ms por campo: el CPU es cuello); Perfect Dark al 100 %
 en intro/menús (falta medir un nivel). Primer video público: GoldenEye.
 
+**Integrado después del cierre:** presentación (`bold-neumann-794fc0`,
+merge b166a06): Banjo sin parpadeo, Conker sin quemado, pausa de Zelda visible,
+overscan. La «regresión» de GoldenEye (soldados cian, armas azul claro) era la
+aproximación del combiner con ENV de la HLE vieja, idéntica en SLSA00064; con el
+generador el autor vio GoldenEye normal en la PS3.
+
 **Trabajos abiertos al cerrar** (sin integrar):
-- Presentación (`bold-neumann-794fc0`): Banjo sin parpadeo, Conker sin
-  quemado, pausa de Zelda visible, overscan; **regresión**: en GoldenEye las
-  armas a veces pierden la textura o salen azul claro con su app y no con
-  SLSA00064 (main 705f4ac). No integrar hasta arreglarlo. Usa worktrees
-  auxiliares `bold-tmp-*`.
 - Menú estilo XMB (`intelligent-yalow-4dd14d`): listo en host y RPCS3,
   espera turno en la PS3. Integrar después de presentación (choques en main.c y
   rdp.c ya previstos).
@@ -32,8 +33,8 @@ en intro/menús (falta medir un nivel). Primer video público: GoldenEye.
 
 **Siguientes trabajos decididos con el autor:**
 - JIT («Recompilador: más velocidad del CPU en GoldenEye y Perfect
-  Dark», ya sugerido, sin abrir): abrirlo **después de integrar el menú**.
-- Efectos de framebuffer (pendiente de arriba): después de presentación.
+  Dark»): abrirlo **después de integrar el menú**.
+- Efectos de framebuffer (pendiente de abajo): ya puede abrirse, presentación está en main.
 - HLE: z/w > 1 en Banjo (modelos que tiemblan, cielo), boca negra de Conker.
 - Zelda: fondos prerrenderizados (S2DEX + tarea JPEG); luego Majora's Mask.
 - Fase 5 (posprocesado, MSAA) después de presentación y menú; recompilador
