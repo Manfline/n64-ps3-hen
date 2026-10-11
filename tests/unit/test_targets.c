@@ -241,8 +241,133 @@ static void targets_height_from_scissor(void)
 	CHECK_EQ(p.h, 213);
 }
 
+/* Origen de una textura (gfx_tex.src_*) dentro de un destino: entre dos
+ * framebuffers que se solapan en la cuenta (Banjo) gana el que empieza más
+ * cerca; el paso y los bytes por texel deben coincidir; una dirección fuera
+ * de todos da -1. */
+static void targets_locate(void)
+{
+	const uint32_t A = 0x3a5d00, B = 0x3c49c0, LINE = 292 * 2;
+	rdp_targets_init(&s);
+	int a = draw(A, 292), b = draw(B, 292);
+	uint32_t x0 = 99, y0 = 99;
+	/* Las primeras filas de B caen también en las últimas de A. */
+	CHECK_EQ(rdp_targets_locate(&s, B + LINE, 292, 2, &x0, &y0), b);
+	CHECK_EQ(x0, 0);
+	CHECK_EQ(y0, 1);
+	/* Dentro de A, a media fila. */
+	CHECK_EQ(rdp_targets_locate(&s, A + 10 * LINE + 2 * 7, 292, 2, &x0, &y0), a);
+	CHECK_EQ(x0, 7);
+	CHECK_EQ(y0, 10);
+	/* Otro paso u otro tamaño de texel: no es este destino. */
+	CHECK_EQ(rdp_targets_locate(&s, A, 320, 2, &x0, &y0), -1);
+	CHECK_EQ(rdp_targets_locate(&s, A, 292, 4, &x0, &y0), -1);
+	/* Fuera de todos. */
+	CHECK_EQ(rdp_targets_locate(&s, A - 2, 292, 2, &x0, &y0), -1);
+	CHECK_EQ(rdp_targets_locate(&s, B + LINE * 219, 292, 2, &x0, &y0), -1);
+	/* Una imagen auxiliar de 64 sobre el framebuffer de Zelda (misma
+	 * dirección): el paso decide. */
+	const uint32_t Z = 0x3b5000;
+	rdp_targets_init(&s);
+	int z = draw(Z, 320), w = draw(Z, 64);
+	CHECK_EQ(rdp_targets_locate(&s, Z + 128 * 3, 64, 2, &x0, &y0), w);
+	CHECK_EQ(y0, 3);
+	CHECK_EQ(rdp_targets_locate(&s, Z + 640 * 3, 320, 2, &x0, &y0), z);
+	CHECK_EQ(y0, 3);
+}
+
+/* De dónde se lee una textura que viene de un destino (docs/framebuffer.md):
+ * del RSX si lo dibujó una tarea reciente y no es el ligado ni se copió a
+ * la RDRAM; si no, de la RDRAM. La pausa de Zelda: el framebuffer dibujado
+ * dos tareas antes se lee del RSX al copiarlo a fbufSave; fbufSave se copia
+ * a la RDRAM (el CPU lo filtra) y desde entonces se lee de la RDRAM; una
+ * imagen de 64 recién dibujada se lee del RSX, salvo sobre sí misma. */
+static void targets_texture_policy(void)
+{
+	const uint32_t FB = 0x3da800, SAVE = 0x12c700, ICON = 0x3da800;
+	rdp_targets_init(&s);
+	s.vi_width = 320;
+	int slot;
+	uint32_t x0, y0;
+	rdp_targets_task(&s);  /* tarea 1: el cuadro, que el VI muestra */
+	int fb = draw(FB, 320);
+	present(1, FB + 640, 320, 237);
+	rdp_targets_task(&s);  /* tarea 2: otro framebuffer */
+	draw(0x3b5000, 320);
+	rdp_targets_task(&s);  /* tarea 3: la pausa copia FB → SAVE */
+	int save = draw(SAVE, 320);
+	CHECK_EQ(rdp_targets_texture(&s, FB + 640 * 10, 320, 2, save, &slot, &x0, &y0), RDP_TEXSRC_RSX);
+	CHECK_EQ(slot, fb);
+	CHECK_EQ(y0, 10);
+	/* Sobre sí mismo (el oscurecido y VISCVG): de una copia del ligado. */
+	CHECK_EQ(rdp_targets_texture(&s, FB, 320, 2, fb, &slot, &x0, &y0), RDP_TEXSRC_SELF);
+	CHECK_EQ(slot, fb);
+	/* Al terminar la tarea, SAVE se copia a la RDRAM: es del CPU. */
+	CHECK(rdp_targets_readback(&s, save, false));
+	CHECK(s.t[save].cpu_owned);
+	CHECK(!rdp_targets_readback(&s, fb, false));  /* ya presentado: no */
+	rdp_targets_task(&s);  /* tarea 4: restaurar desde SAVE */
+	CHECK_EQ(rdp_targets_texture(&s, SAVE + 640 * 6, 320, 2, fb, &slot, &x0, &y0), RDP_TEXSRC_RDRAM);
+	CHECK_EQ(slot, save);
+	/* Si el RDP vuelve a dibujar SAVE, vuelve a valer el RSX. */
+	draw(SAVE, 320);
+	CHECK(!s.t[save].cpu_owned);
+	CHECK_EQ(rdp_targets_texture(&s, SAVE, 320, 2, fb, &slot, &x0, &y0), RDP_TEXSRC_RSX);
+	/* Icono de 64 sobre el framebuffer, dibujado en esta tarea. */
+	int icon = draw(ICON, 64);
+	CHECK_EQ(rdp_targets_texture(&s, ICON + 128 * 2, 64, 2, fb, &slot, &x0, &y0), RDP_TEXSRC_RSX);
+	CHECK_EQ(slot, icon);
+	CHECK_EQ(y0, 2);
+	CHECK(!rdp_targets_readback(&s, icon, false));  /* chico: se queda en el RSX */
+	/* Viejo: tras RDP_TARGETS_FRESH tareas sin dibujarlo, de la RDRAM. */
+	for (int k = 0; k <= RDP_TARGETS_FRESH; k++)
+		rdp_targets_task(&s);
+	CHECK_EQ(rdp_targets_texture(&s, ICON, 64, 2, fb, &slot, &x0, &y0), RDP_TEXSRC_RDRAM);
+	CHECK_EQ(s.tex_rsx, 3);
+	CHECK_EQ(s.tex_rdram, 2);
+	CHECK_EQ(s.tex_self, 1);
+	CHECK_EQ(s.readbacks, 1);
+	/* Sin VI presentado no se sabe qué es framebuffer: con force se copia. */
+	CHECK(rdp_targets_readback(&s, fb, true));
+}
+
+/* Lo que decide el hilo de emulación con los orígenes del VI: una color
+ * image de 16 bits del ancho del VI que no es un framebuffer reciente se
+ * copia (fbufSave de Zelda en el z-buffer); los framebuffers (también el
+ * que empieza unas líneas antes del origen), las imágenes chicas y las de
+ * otro tamaño de texel, no. */
+static void targets_readback_wanted(void)
+{
+	struct rdp_vi_ring r;
+	memset(&r, 0, sizeof r);
+	CHECK(!rdp_readback_wanted(&r, 0x12c700, 320, 2));  /* sin VI aún: nada */
+	rdp_vi_ring_push(&r, 0x3b5000 + 640, 320);
+	rdp_vi_ring_push(&r, 0x3da800 + 640, 320);
+	rdp_vi_ring_push(&r, 0x3b5000 + 640, 320);  /* repetido: no ocupa */
+	CHECK_EQ(r.n, 2);
+	CHECK(rdp_readback_wanted(&r, 0x12c700, 320, 2));
+	CHECK(!rdp_readback_wanted(&r, 0x3b5000, 320, 2));
+	CHECK(!rdp_readback_wanted(&r, 0x3da800, 320, 2));
+	CHECK(!rdp_readback_wanted(&r, 0x3da800 + 640 * 100, 320, 2));
+	CHECK(!rdp_readback_wanted(&r, 0x12c700, 64, 2));   /* chica */
+	CHECK(!rdp_readback_wanted(&r, 0x12c700, 320, 1));  /* CI8 */
+	CHECK(!rdp_readback_wanted(&r, 0x12c700, 320, 3));  /* 32 bits */
+	/* Un ancho del VI nuevo (GoldenEye pasa a 440): manda el último. */
+	rdp_vi_ring_push(&r, 0x200000, 440);
+	CHECK(!rdp_readback_wanted(&r, 0x12c700, 320, 2));
+	CHECK(rdp_readback_wanted(&r, 0x12c700, 440, 2));
+	/* El anillo da la vuelta sin perder los últimos. */
+	for (uint32_t k = 0; k < RDP_VI_RING + 2; k++)
+		rdp_vi_ring_push(&r, 0x100000 + 0x40000 * k, 440);
+	CHECK(!rdp_readback_wanted(&r, 0x100000 + 0x40000 * (RDP_VI_RING + 1), 440, 2));
+	CHECK(rdp_readback_wanted(&r, 0x12c700, 440, 2));
+}
+
 void t_suite_targets(void)
 {
+	RUN(targets_locate);
+	RUN(targets_texture_policy);
+	RUN(targets_readback_wanted);
 	RUN(targets_height_from_scissor);
 	RUN(targets_two_buffers_overlapping);
 	RUN(targets_same_addr_two_widths);

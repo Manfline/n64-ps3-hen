@@ -26,6 +26,30 @@ antes, después, notas.
 | 2026-10-10 | e210aeb | **Recompilador: conversiones de la FPU, LWL/LWR y MFC0 en nativo**, nemu64-test con registros fijos | PS3 real (mismo equipo), cpu-tests SLSA00077 | mismo binario con `RARE_EXEC` (como antes): 1894 ms (×4,29 del intérprete, 8118 ms) | **1816 ms (104,1 MIPS; ×4,47); −4,1 %** | Mismas 446 fallas, hash y ciclo. Entradas desde C 140 909 → 110 074; llamadas al intérprete 2,15 M → 1,77 M. Bench: cvt 4,2 → 40,7 MIPS, no alineadas 20,5 → 218,5, mfc0 9,8 → 701, espera por Count 8,3 → 488 (salidas a C 2 M → 8). Ver «Conversiones de la FPU…» abajo |
 | 2026-10-10 | 136dff4 (PS3: ad14e4b con main 5a0a1a3) | **Generador de fragment programs** (Fase 4), GoldenEye NTSC en Dam, ~3 min de juego | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00087 «Salsa64 fpgen», respaldo del usuario | combinación lineal sola: 36–50 campos/s en Dam (60–84 %), 97 449 combiners aproximados en 80 s de host | **34–55 campos/s (57–93 %), emulación 18–29 ms por campo; 0 combiners aproximados**; 4 programas generados en toda la corrida (0 vaciados), hasta 131 de 350 dibujos por tarea con programa generado, 7–23 cambios de programa por tarea, traducción al RSX 0,3–1,8 ms por tarea | La niebla por luz (lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE) exacta en las capturas de la presa. El cuello sigue en el CPU y la HLE del SPE (5–15 ms por tarea), no en el RSX. Zelda OoT 53–60 campos/s, SM64 54–60, Mario Kart 60: 0 programas generados (todo cabe en la combinación lineal), sin regresión visual. Ver «Generador de fragment programs» abajo |
 
+## Efectos de framebuffer (2026-10-10)
+
+Rama `hopeful-dirac-f4e91b` (docs/framebuffer.md). Lo que cuesta
+cada mecanismo lo escribe el frontend cada 5 s («gfx: framebuffer: N copias
+a la RDRAM (ms c/u en presentación), la emulación esperó N tareas (ms c/u,
+N tarde), texturas desde un destino: del RSX, de la RDRAM, del ligado;
+destinos cebados»). Interruptor: `SALSA64_DATA_DIR/fbfx.cfg` (`0` apaga
+todo, `1` solo render a textura, `2` todo, por omisión).
+
+**RPCS3** (0.0.43, Mac; no vale para tiempos): gfxtest con los dos casos
+nuevos, 28 de 28 puntos; 122 copias de 320 × 240 en 120 cuadros, 2,05 ms
+cada una en presentación (esperar al RSX emulado y convertir), la
+emulación esperó 2,22 ms por tarea. Sirve solo para saber que el mecanismo
+funciona de punta a punta.
+
+**PS3 real: pendiente** (la consola estuvo apagada toda la jornada). Medir
+con Zelda OoT: el minuto de bosque Kokiri sin pausa (debe seguir al 100 %
+de NTSC con 0 copias; la única carga nueva es el origen de cada textura y
+el recorrido de cabeceras en `done`), la pausa (1 copia por pausa: ms de la
+copia en presentación y de la espera en emulación) y el menú de pausa
+abierto (texturas desde el RSX por tarea, cebados). Y SM64, Mario Kart,
+GoldenEye, Banjo y Conker un minuto cada uno: 0 copias esperadas y la
+misma velocidad que antes.
+
 ## Caché de texturas (2026-10-10)
 
 **PS3 real** (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00070 «Salsa64

@@ -20,7 +20,8 @@ en PS3 real.
 | Búfer de comandos RSX + memoria mapeada | 16 | 16 | `rsxkit_init` por omisión (rsx-triangle usa 32) |
 | ROM del cartucho | 64 | | máximo; el frontend la lee entera a memoria al arrancar. Con `embedded`, a su medida; con el menú, un búfer de 64 MB reservado al entrar al menú y reusado por cada juego (sin asignaciones al cambiar de juego) |
 | Menú para elegir ROM | 2,1 | | 2 MB de memoria principal mapeada al RSX para el 2D (`rsxkit_ui_init`: atlas de la fuente 441 KB y dos búferes de 4096 quads, 768 KB cada uno), reservados al entrar al menú y para siempre; lista de 256 ROMs (74 KB) y texto de guardado.cfg (4 KB), estáticos. Sin memoria local del RSX: dibuja sobre la pantalla |
-| Salida de la HLE gráfica SPU → RSX | 20 | 20 | `src/rdp`: 3 juegos de vértices 2 MB + comandos 768 KB + arena de texturas 3,75 MB, mapeados al RSX (`rsxkit_map_main`) junto con la caché de texturas (28 MB en total). Con la caché el arena casi no se usa: se podría achicar más. Los comandos crecieron de 512 a 768 KB cuando `gfx_draw` pasó de 352 a 480 bytes (términos del generador de fragment programs, 2026-10-10) |
+| Salida de la HLE gráfica SPU → RSX | 20 | 20 | `src/rdp`: 3 juegos de vértices 2 MB + comandos 768 KB + arena de texturas 3,75 MB, mapeados al RSX (`rsxkit_map_main`) junto con la caché de texturas (28 MB en total). Con la caché el arena casi no se usa: se podría achicar más. Los comandos crecieron de 512 a 768 KB cuando `gfx_draw` pasó de 352 a 480 bytes (términos del generador de fragment programs, 2026-10-10) y a 496 con el origen de cada textura (efectos de framebuffer) |
+| Efectos de framebuffer (copias RSX → RDRAM y cebado) | 2 | 2 | `src/rdp`: en el mismo pool mapeado, 2 búferes de 640 × 480 × 2 (RGB565 a la resolución de la N64, 600 KB c/u) para las copias y uno igual para cebar superficies desde la RDRAM; redondeado a 2 MB (docs/framebuffer.md) |
 | Copias de la imagen del VI entre hilos | 4,4 | 4,4 | Frontend (docs/hilos-ppe.md): 3 ranuras de 640 × 576 × 4; el hilo de emulación copia el framebuffer al terminar el campo y el de presentación lo sube al RSX |
 | Zona de paso del guardado + pila del hilo de emulación | 0,3 | | 32 KB en `struct savefile` y 256 KB de pila (`sysThreadCreate`) |
 | Audio | 2 | 0,3 | `src/frontend/audio_out.c`: anillo de `audio_sync` 256 KB (65 536 muestras estéreo de 16 bits, ~2 s a 32 kHz) + estirador y remuestreo 12 KB, estáticos; HLE en el PPE (si no arranca el SPE) 9,2 KB; prueba del arranque (SPE contra PPE) 2 × 16 KB + 9,2 KB; pila del hilo de audio 64 KB; el puerto de audio (16 bloques × 256 × 2 flotantes = 32 KB) es memoria del sistema. Con `volcado_s` en audio.cfg, 200 KB por segundo (hasta 6 MB), reservados al arrancar |
@@ -35,6 +36,7 @@ en PS3 real.
 | Framebuffers 1280×720 ×2 + Z | 11 | 11 | X8R8G8B8 + Z24S8 (`rsxkit_init`) |
 | Framebuffer 2D del VI | 3 | 2,8 | `rsxkit_fb_create(640, 576)`: 2 copias × 640 × 576 × 4 |
 | Destinos de render de la N64 (Fase 2) | 27 | | `src/rdp/targets.c`: hasta 8 color images a 3× (960×720×4 = 2,6 MB c/u; las auxiliares de 64 de ancho de Zelda en pausa pesan 0,1 MB) y 2 profundidades; a 1080p, 4× (1280×960: 4,7 MB c/u, 44 MB en total). Lo normal son 2–4 vivas |
+| Scratch de los efectos de framebuffer | 2,6 | | `src/rdp`: una copia del destino ligado cuando un dibujo lo lee como textura (la pausa de Zelda), del tamaño del destino (960×720×4); se crea la primera vez que hace falta |
 | Render interno 2x/3x | 60 | | Fase 5 (incluye lo anterior) |
 | Texturas | 64 | | Fase 4 |
 

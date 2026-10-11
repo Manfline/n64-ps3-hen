@@ -37,8 +37,19 @@
 #define SET_BYTES   (VTX_BYTES + CMD_BYTES + TEX_BYTES)
 #define SETS_BYTES  (((SETS * SET_BYTES) + 0xFFFFFu) & ~0xFFFFFu)
 #define CACHE_BYTES (8u << 20)  /* caché de texturas (docs/memory-budget.md) */
-#define POOL_BYTES  (SETS_BYTES + CACHE_BYTES)
+/* Efectos de framebuffer (docs/framebuffer.md): dos búferes para las copias
+ * RSX → RDRAM (RGB565 a la resolución de la N64, hasta 640 × 480) y uno
+ * para cebar una superficie con lo que el CPU dejó en la RDRAM (RGBA5551). */
+#define RB_MAX_W    640
+#define RB_MAX_H    480
+#define RB_PITCH    ((RB_MAX_W * 2 + 63) & ~63u)
+#define RB_SLOT     (RB_PITCH * RB_MAX_H)
+#define RB_SLOTS    2
+#define FB_BYTES    (((RB_SLOTS + 1) * RB_SLOT + 0xFFFFFu) & ~0xFFFFFu)
+#define POOL_BYTES  (SETS_BYTES + CACHE_BYTES + FB_BYTES)
 #define MAX_DEPTHS  2
+#define RB_PER_TASK 4   /* color images que una tarea puede pedir copiar */
+#define RB_WAIT_US  200000  /* la emulación no espera una copia más que esto */
 
 _Static_assert(sizeof(struct gfx_vertex) == sizeof(rsxkit_vertex), "vértice de la HLE = vértice de rsxkit");
 _Static_assert(sizeof(((struct gfx_draw *)0)->k) == sizeof(((rsxkit_draw *)0)->k), "términos k");
@@ -59,6 +70,10 @@ struct set {
 	uint32_t fence;             /* la pone el hilo de presentación al traducir */
 	volatile uint32_t fence_task;  /* número de la tarea antes de `fence` */
 	struct gfx_result res;      /* la deja done; la lee flush */
+	/* Color images de la tarea que hay que copiar a la RDRAM al traducirla
+	 * (lo decide done, en el hilo de emulación, que después espera). */
+	uint32_t rb_addr[RB_PER_TASK];
+	uint32_t rb_n;
 };
 
 static inline void lwsync(void) { __asm__ volatile("lwsync" ::: "memory"); }
@@ -87,12 +102,26 @@ static struct {
 	volatile uint32_t acquired, finished, translated;
 	struct rdp_targets tg;                    /* la tabla de destinos (targets.c) */
 	rsxkit_target *surf[RDP_TARGETS_MAX];     /* la superficie de cada ranura */
+	bool surf_dirty[RDP_TARGETS_MAX];         /* dibujada desde la última rsxkit_texture_sync */
+	rsxkit_target *scratch;      /* copia del destino ligado cuando un dibujo lo lee (SELF) */
+	uint32_t scratch_w, scratch_h;
+	int scratch_slot;            /* ranura copiada en esta tarea, o -1 */
 	struct depth depths[MAX_DEPTHS];
 	int bound_t;                 /* ranura ligada, o -1 */
 	struct depth *bound_d;
 	unsigned last_set;           /* juego de búferes de la última tarea dibujada */
 	struct gfx_result last_res;
 	struct salsa64_rdp_stats stats;
+	/* Efectos de framebuffer (docs/framebuffer.md). */
+	int fbfx;                    /* 0 apagado, 1 render a textura, 2 también copias */
+	uint8_t *rdram;              /* la RDRAM emulada (NULL: sin copias ni cebado) */
+	uint32_t rdram_size;
+	void (*wake)(void);          /* despierta al hilo de presentación */
+	struct rdp_vi_ring vi_ring;  /* orígenes recientes del VI (hilo de emulación) */
+	uint8_t *rb;                 /* búferes de copia (RB_SLOTS) y de cebado, mapeados */
+	uint32_t rb_off;
+	volatile uint32_t readback_done;  /* última tarea con sus copias ya en la RDRAM */
+	bool rb_late_logged;
 } rdp;
 
 static void acquire(void *ctx, struct gfx_job *job);
@@ -123,8 +152,28 @@ int salsa64_rdp_init(uint32_t scale)
 	}
 	rdp.cache = rdp.pool + SETS_BYTES;
 	rdp.cache_off = rdp.pool_off + SETS_BYTES;
+	rdp.rb = rdp.cache + CACHE_BYTES;
+	rdp.rb_off = rdp.cache_off + CACHE_BYTES;
+	rdp.fbfx = 2;
 	rdp.ready = true;
 	return RSXKIT_OK;
+}
+
+void salsa64_rdp_set_memory(uint8_t *rdram, uint32_t rdram_size, void (*wake)(void))
+{
+	rdp.rdram = rdram;
+	rdp.rdram_size = rdram_size;
+	rdp.wake = wake;
+}
+
+void salsa64_rdp_vi(uint32_t origin, uint32_t width)
+{
+	rdp_vi_ring_push(&rdp.vi_ring, origin, width);
+}
+
+void salsa64_rdp_fbfx(int level)
+{
+	rdp.fbfx = level < 0 ? 0 : level > 2 ? 2 : level;
 }
 
 static void release_targets(void)
@@ -135,7 +184,12 @@ static void release_targets(void)
 	for (int i = 0; i < MAX_DEPTHS; i++)
 		if (rdp.depths[i].used)
 			rsxkit_depth_destroy(rdp.depths[i].d);
+	if (rdp.scratch)
+		rsxkit_target_destroy(rdp.scratch);
+	rdp.scratch = NULL;
+	rdp.scratch_w = rdp.scratch_h = 0;
 	memset(rdp.surf, 0, sizeof rdp.surf);
+	memset(rdp.surf_dirty, 0, sizeof rdp.surf_dirty);
 	memset(rdp.depths, 0, sizeof rdp.depths);
 	rdp.bound_t = -1;
 	rdp.bound_d = NULL;
@@ -168,6 +222,10 @@ uint32_t salsa64_rdp_reset(void)
 		memset(&rdp.sets[i].res, 0, sizeof rdp.sets[i].res);
 	}
 	rdp.acquired = rdp.finished = rdp.translated = 0;
+	rdp.readback_done = 0;
+	rdp.rb_late_logged = false;
+	memset(&rdp.vi_ring, 0, sizeof rdp.vi_ring);
+	memset(rdp.surf_dirty, 0, sizeof rdp.surf_dirty);
 	rdp.last_set = 0;
 	memset(&rdp.last_res, 0, sizeof rdp.last_res);
 	memset(&rdp.stats, 0, sizeof rdp.stats);
@@ -248,12 +306,38 @@ static uint32_t scissor_bottom(const struct set *s, uint32_t off, uint32_t cmd_b
 
 /* Ranura (con superficie) de una color image; -1 si el RSX no tiene
  * memoria para una nueva. */
+/* Ceba la superficie de la ranura con lo que hay en la RDRAM (lo que el
+ * CPU dibujó o dejó ahí): la N64 siempre dibuja encima de la memoria. Solo
+ * color images de 16 bits que caben en el búfer de cebado. */
+static void prime(int i)
+{
+	const struct rdp_target *t = &rdp.tg.t[i];
+	if (!rdp.rdram || rdp.fbfx < 1 || t->bpp != 2 || t->lw > RB_MAX_W || t->lh > RB_MAX_H)
+		return;
+	uint32_t line = t->width * 2, bytes = line * t->lh;
+	if (t->addr + bytes > rdp.rdram_size)
+		return;
+	uint8_t *dst = rdp.rb + RB_SLOTS * RB_SLOT;
+	uint32_t pitch = (t->lw * 2 + 63) & ~63u;
+	for (uint32_t y = 0; y < t->lh; y++)
+		memcpy(dst + y * pitch, rdp.rdram + t->addr + y * line, t->lw * 2);
+	if (rsxkit_target_fill(rdp.surf[i], rdp.rb_off + RB_SLOTS * RB_SLOT, pitch, t->lw, t->lh, RSXKIT_RGBA5551) ==
+	    RSXKIT_OK) {
+		rdp.bound_t = -1;  /* rsxkit_target_fill ligó la superficie sin profundidad */
+		rdp.stats.primes++;
+	}
+}
+
 static int get_target(uint32_t addr, uint32_t width, uint32_t siz, uint32_t min_lh)
 {
 	bool fresh;
 	int i = rdp_targets_get(&rdp.tg, addr, width, siz, min_lh, &fresh);
-	if (!fresh)
+	if (!fresh) {
+		/* Sin dibujar desde hace tareas: lo que vale está en la RDRAM. */
+		if (rdp.tg.task - rdp.tg.t[i].last_task > RDP_TARGETS_FRESH)
+			prime(i);
 		return i;
+	}
 	if (rdp.surf[i]) {
 		if (rdp.bound_t == i)
 			rdp.bound_t = -1;
@@ -266,7 +350,9 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t siz, uint32_t min_
 		rdp.tg.t[i].used = false;
 		return -1;
 	}
+	rdp.surf_dirty[i] = false;
 	rdp.stats.targets_created++;
+	prime(i);
 	return i;
 }
 
@@ -336,8 +422,89 @@ static void zclear(const struct gfx_zclear *z)
 	/* Si aún no existe, nacerá en 1 (borrada). */
 }
 
-static void to_rsxkit(const struct gfx_draw *g, const struct set *s, rsxkit_draw *d)
+/* Si la textura viene de un destino dibujado hace poco, se lee de su
+ * superficie (a la escala del RSX) en vez de la copia decodificada de la
+ * RDRAM. Devuelve true si hay que sincronizar antes del dibujo (la
+ * superficie se dibujó desde la última vez). */
+static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_texture *t)
 {
+	if (rdp.fbfx < 1 || !gt->src_addr || gt->src_siz != 2u)
+		return false;
+	int slot;
+	uint32_t x0, y0;
+	enum rdp_texsrc src = rdp_targets_texture(&rdp.tg, gt->src_addr, gt->src_pitch, 2, cur, &slot, &x0, &y0);
+	if ((src != RDP_TEXSRC_RSX && src != RDP_TEXSRC_SELF) || !rdp.surf[slot])
+		return false;
+	const struct rdp_target *tg = &rdp.tg.t[slot];
+	/* Una textura que se repite a lo ancho no cabe en filas enteras. */
+	if (GFX_TEX_WRAP_S(gt->flags) != GFX_WRAP_CLAMP && gt->width != tg->lw)
+		return false;
+	const rsxkit_target *from = rdp.surf[slot];
+	if (src == RDP_TEXSRC_SELF) {
+		/* Lee lo que está dibujando: una copia de la superficie tal como
+		 * está ahora (una por tarea; las franjas de Zelda leen cada una
+		 * filas que aún no reescribió). */
+		if (rdp.scratch_slot != slot) {
+			uint32_t w, h;
+			rsxkit_target_size(rdp.surf[slot], &w, &h);
+			if (rdp.scratch && (rdp.scratch_w != w || rdp.scratch_h != h)) {
+				rsxkit_target_destroy(rdp.scratch);
+				rdp.scratch = NULL;
+			}
+			if (!rdp.scratch) {
+				rdp.scratch = rsxkit_target_create(w, h);
+				rdp.scratch_w = w;
+				rdp.scratch_h = h;
+			}
+			if (!rdp.scratch || rsxkit_target_copy(rdp.scratch, rdp.surf[slot]) != RSXKIT_OK)
+				return false;
+			rdp.bound_t = -1;  /* rsxkit_target_copy dejó ligado el scratch */
+			rdp.scratch_slot = slot;
+		}
+		from = rdp.scratch;
+	}
+	rsxkit_texture nt;
+	rsxkit_target_texture(from, y0 * rdp.scale, gt->height * rdp.scale, &nt);
+	if (!nt.height)
+		return false;
+	t->offset = nt.offset;
+	t->pitch = nt.pitch;
+	t->width = nt.width;
+	t->height = nt.height;
+	t->location = nt.location;
+	t->format = nt.format;
+	t->wrap_s = RSXKIT_WRAP_CLAMP;
+	/* u recorre la fila entera del destino: la textura empieza en x0. */
+	float w = (float)gt->width, lw = (float)tg->lw;
+	t->xf[0] = gt->xf[0] * w / lw;
+	t->xf[2] = ((float)x0 + gt->xf[2] * w) / lw;
+	return src == RDP_TEXSRC_RSX && rdp.surf_dirty[slot];
+}
+
+/* G_RM_VISCVG: en vez de dibujar, deja en la RDRAM «cobertura plena» en
+ * las filas del rectángulo (el CPU de Zelda salta los píxeles cubiertos
+ * del todo al filtrar el fondo de la pausa). */
+static void viscvg(int cur, const struct gfx_draw *g)
+{
+	const struct rdp_target *t = &rdp.tg.t[cur];
+	if (!rdp.rdram || rdp.fbfx < 2 || t->bpp != 2)
+		return;
+	uint32_t y0 = g->scissor[1] / 4, y1 = (g->scissor[3] + 3) / 4, x0 = g->scissor[0] / 4, x1 = (g->scissor[2] + 3) / 4;
+	if (y1 > t->lh)
+		y1 = t->lh;
+	if (x1 > t->width)
+		x1 = t->width;
+	for (uint32_t y = y0; y < y1 && x1 > x0; y++) {
+		uint32_t a = t->addr + (y * t->width + x0) * 2;
+		if (a + (x1 - x0) * 2 > rdp.rdram_size)
+			break;
+		memset(rdp.rdram + a, 0xFF, (x1 - x0) * 2);
+	}
+}
+
+static void to_rsxkit(const struct gfx_draw *g, const struct set *s, int cur, rsxkit_draw *d, bool *sync)
+{
+	*sync = false;
 	static const uint8_t blend[] = {
 		[GFX_BLEND_OFF] = RSXKIT_BLEND_OFF, [GFX_BLEND_ALPHA] = RSXKIT_BLEND_ALPHA,
 		[GFX_BLEND_ADD] = RSXKIT_BLEND_ADD, [GFX_BLEND_KEEP] = RSXKIT_BLEND_NONE,
@@ -372,17 +539,60 @@ static void to_rsxkit(const struct gfx_draw *g, const struct set *s, rsxkit_draw
 		t->wrap_t = wrap[GFX_TEX_WRAP_T(gt->flags)];
 		t->filter = (gt->flags & GFX_TEX_BILINEAR) ? RSXKIT_FILTER_LINEAR : RSXKIT_FILTER_NEAREST;
 		memcpy(t->xf, gt->xf, sizeof t->xf);
+		if (texture_from_target(gt, cur, t))
+			*sync = true;
 	}
 	memcpy(d->k, g->k, sizeof d->k);
+}
+
+/* Color images de la tarea que el CPU va a leer (rdp_readback_wanted):
+ * las copia el hilo de presentación al traducirla; mientras, la emulación
+ * espera aquí, para que la RDRAM esté al día cuando llegue la interrupción
+ * del DP. Solo recorre las cabeceras de los registros. */
+static void readbacks_wanted(struct set *s, const struct gfx_result *res)
+{
+	s->rb_n = 0;
+	if (!rdp.rdram || rdp.fbfx < 2)
+		return;
+	uint32_t off = 0;
+	while (off + sizeof(struct gfx_cmd) <= res->cmd_bytes) {
+		const struct gfx_cmd *c = (const struct gfx_cmd *)(s->cmd + off);
+		if (c->op == GFX_OP_END || c->size < sizeof *c)
+			break;
+		if (c->op == GFX_OP_TARGET && rdp_readback_wanted(&rdp.vi_ring, c->a, c->b, c->c & 0xFF)) {
+			uint32_t k = 0;
+			while (k < s->rb_n && s->rb_addr[k] != c->a)
+				k++;
+			if (k == s->rb_n && k < RB_PER_TASK)
+				s->rb_addr[s->rb_n++] = c->a;
+		}
+		off += c->size;
+	}
 }
 
 static void done(void *ctx, const struct gfx_job *job, const struct gfx_result *res)
 {
 	(void)ctx, (void)job;
 	uint32_t n = rdp.finished;
-	rdp.sets[n % SETS].res = *res;
+	struct set *s = &rdp.sets[n % SETS];
+	s->res = *res;
+	readbacks_wanted(s, res);
 	lwsync();
 	rdp.finished = n + 1;
+	if (!s->rb_n)
+		return;
+	if (rdp.wake)
+		rdp.wake();
+	uint64_t t0 = sysGetSystemTime();
+	rdp.stats.readback_waits++;
+	while ((int32_t)(rdp.readback_done - (n + 1)) < 0) {
+		sysUsleep(50);
+		if (sysGetSystemTime() - t0 > RB_WAIT_US) {
+			rdp.stats.readback_late++;
+			break;
+		}
+	}
+	rdp.stats.us_readback_wait += sysGetSystemTime() - t0;
 }
 
 /* Traduce la salida de la tarea n a comandos del RSX. */
@@ -394,7 +604,10 @@ static void translate(uint32_t n)
 	rsxkit_vertices(s->vtx_off, RSXKIT_MEM_MAIN);
 	rdp.bound_t = -1;
 	rdp.bound_d = NULL;
+	rdp_targets_task(&rdp.tg);
+	rdp.scratch_slot = -1;
 	int cur = -1;
+	bool drawn[RDP_TARGETS_MAX] = { false };
 
 	uint32_t off = 0;
 	rsxkit_draw rd;
@@ -413,12 +626,24 @@ static void translate(uint32_t n)
 			const struct gfx_draw *g = (const struct gfx_draw *)c;
 			if (cur < 0 || !g->h.b)
 				break;
+			if (g->viscvg) {
+				viscvg(cur, g);
+				break;
+			}
+			bool sync;
+			to_rsxkit(g, s, cur, &rd, &sync);
+			if (sync) {
+				/* Lee una superficie dibujada en este mismo tramo. */
+				rsxkit_texture_sync();
+				memset(rdp.surf_dirty, 0, sizeof rdp.surf_dirty);
+			}
 			struct depth *d = rdp.bound_t == cur ? rdp.bound_d : NULL;
 			if (g->depth)
 				d = get_depth(g->zimg, cur);
 			bind(cur, d);
 			rdp_targets_drawn(&rdp.tg, cur);
-			to_rsxkit(g, s, &rd);
+			drawn[cur] = true;
+			rdp.surf_dirty[cur] = true;
 			rsxkit_draw_triangles(&rd, g->h.a, g->h.b);
 			rdp.stats.draws++;
 			if (g->nterms)
@@ -431,9 +656,46 @@ static void translate(uint32_t n)
 		}
 		off += c->size;
 	}
+	/* Copias a la RDRAM que pidió done: el RSX reduce cada destino a su
+	 * búfer y, pasada la barrera, el PPE lo convierte y lo escribe. */
+	struct { int slot; uint32_t buf; } rb[RB_SLOTS];
+	uint32_t nrb = 0;
+	for (uint32_t k = 0; k < s->rb_n && nrb < RB_SLOTS; k++) {
+		for (int i = 0; i < RDP_TARGETS_MAX; i++) {
+			const struct rdp_target *t = &rdp.tg.t[i];
+			if (!drawn[i] || t->addr != s->rb_addr[k] || t->bpp != 2 || t->lw > RB_MAX_W || t->lh > RB_MAX_H ||
+			    t->addr + t->width * 2 * t->lh > rdp.rdram_size)
+				continue;
+			if (!rdp_targets_readback(&rdp.tg, i, true))
+				continue;
+			if (rsxkit_target_read(rdp.surf[i], NULL, rdp.rb_off + nrb * RB_SLOT, RB_PITCH, t->lw, t->lh,
+					       RSXKIT_RGB565) != RSXKIT_OK)
+				continue;
+			rdp.bound_t = -1;
+			rb[nrb].slot = i;
+			rb[nrb].buf = nrb;
+			nrb++;
+			break;
+		}
+	}
 	s->fence = rsxkit_fence();
 	lwsync();
 	s->fence_task = n + 1;
+	if (nrb) {
+		uint64_t t1 = sysGetSystemTime();
+		rsxkit_fence_wait(s->fence);
+		for (uint32_t k = 0; k < nrb; k++) {
+			const struct rdp_target *t = &rdp.tg.t[rb[k].slot];
+			const uint8_t *src = rdp.rb + rb[k].buf * RB_SLOT;
+			for (uint32_t y = 0; y < t->lh; y++)
+				rsxkit_pixels_565_to_5551((uint16_t *)(rdp.rdram + t->addr + y * t->width * 2),
+							  (const uint16_t *)(src + y * RB_PITCH), t->lw);
+			rdp.stats.readbacks++;
+		}
+		rdp.stats.us_readback += sysGetSystemTime() - t1;
+	}
+	lwsync();  /* la RDRAM, antes de decir que está */
+	rdp.readback_done = n + 1;
 	rdp.last_res = *res;
 	rdp.last_set = (unsigned)(s - rdp.sets);
 	rdp.stats.tasks++;
@@ -554,4 +816,7 @@ void salsa64_rdp_get_stats(struct salsa64_rdp_stats *out)
 	out->fp_generated = fp.generated;
 	out->fp_evictions = fp.evictions;
 	out->fp_loads = fp.loads;
+	out->tex_rsx = rdp.tg.tex_rsx;
+	out->tex_rdram = rdp.tg.tex_rdram;
+	out->tex_self = rdp.tg.tex_self;
 }

@@ -299,6 +299,13 @@ static inline void dp_load_block(gfx **dl, unsigned tile, unsigned texels, unsig
 	cmd(dl, 0xF3000000u, tile << 24 | (texels - 1) << 12 | dxt);
 }
 
+/* LOADTILE: el rectángulo (uls, ult)–(lrs, lrt) de la imagen de textura a
+ * la tile, fila por fila (texels; bordes inclusivos). */
+static inline void dp_load_tile(gfx **dl, unsigned tile, unsigned uls, unsigned ult, unsigned lrs, unsigned lrt)
+{
+	cmd(dl, 0xF4000000u | (uls << 2) << 12 | ult << 2, tile << 24 | (lrs << 2) << 12 | lrt << 2);
+}
+
 static inline void dp_load_tlut(gfx **dl, unsigned tile, unsigned count)
 {
 	cmd(dl, 0xF0000000u, tile << 24 | ((count - 1) << 2) << 12);

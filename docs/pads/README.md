@@ -26,3 +26,16 @@ estado vale hasta el siguiente, por eso cada pulsación lleva su suelta `-`):
   cerrado con A y Mario caminando hasta el puente del castillo (campo
   ~4200). Con `--poke "4200:8033B21E=0x0400"` (la energía de Mario a la
   mitad) aparece el medidor de energía desde el campo ~4220.
+- `zelda-pausa-nueva.pad`: Zelda OoT sin partida (o con `--save-dir` a una
+  carpeta vacía: crea el archivo «A» en la ranura 1): título con START,
+  ranura 1 y nombre «A» (A, START), el archivo se abre con A, el intro del
+  Árbol Deku y de Navi con A cada 40 campos hasta el 16000, y START en los
+  campos 16100 (pausa), 16400 (sigue) y 16700 (pausa otra vez). La pausa
+  cae en la tarea del campo 16107 (`--trace-fb`); con `-c 26500000000`
+  alcanza hasta el campo ~16900. La partida que deja en `--save-dir`
+  sirve para repetirlo sin el nombre (los campos no cambian).
+- `mk64-luigi.pad`: Mario Kart 64: START en el 900, A cada 150 campos por
+  los menús (1P, Mario GP, 50cc, Mario, Mushroom Cup, Luigi Raceway) y
+  desde el 2650 A sostenida con el stick a la derecha en tres tramos: la
+  carrera empieza en el campo ~2550 y el kart da tumbos por la pista hasta
+  el ~6000. En esos campos no hay cargas a la TMEM desde un framebuffer.

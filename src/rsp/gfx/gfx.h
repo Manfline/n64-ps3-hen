@@ -172,6 +172,15 @@ struct gfx_tex {
 	/* s, t (texels de la N64) → coordenadas normalizadas de la textura:
 	 * u = s * xf[0] + xf[2], v = t * xf[1] + xf[3]. */
 	float xf[4];
+	/* De dónde salió: la carga a la TMEM (LOADBLOCK, LOADTILE) de la que
+	 * lee la tile. src_addr es la dirección física del texel (0, 0) de la
+	 * textura en la imagen de origen (G_SETTIMG), src_pitch los texels por
+	 * fila de esa imagen y src_siz/src_fmt su tamaño y formato (G_IM_*).
+	 * src_addr = 0: no se sabe. El consumidor decide si esa imagen es un
+	 * destino que él mismo dibujó (render a textura). */
+	uint32_t src_addr;
+	uint16_t src_pitch;
+	uint8_t src_siz, src_fmt;
 };
 
 #define GFX_TEX_WRAP_S(f)   ((f) & 3u)         /* GFX_WRAP_* */
@@ -228,7 +237,12 @@ struct gfx_draw {
 	uint32_t prim_tile;      /* informativo: tile de los rectángulos */
 	uint8_t nterms;          /* 0: combinación lineal fija; si no, términos con `factors` */
 	uint8_t factors[GFX_K_TERMS][GFX_K_FACTORS];  /* GFX_F_*, 0 = fin de la lista */
-	uint8_t pad[3];
+	/* G_RM_VISCVG: el RDP escribe la cobertura de cada píxel como color
+	 * (IM_RD | FORCE_BL, blender IN·0 + BL·A_MEM); Zelda lo usa para que
+	 * el CPU filtre los bordes del fondo de la pausa. El consumidor no lo
+	 * dibuja: deja «cobertura plena» en la RDRAM (docs/framebuffer.md). */
+	uint8_t viscvg;
+	uint8_t pad[2];
 	struct gfx_tex tex[2];
 	float k[GFX_K_TERMS][3][4];
 };

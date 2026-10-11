@@ -72,6 +72,8 @@ struct gfxtest_point {
 	{ 114, 22, 0xFF0000, "G_RM_TEX_EDGE: texel opaco" },                          \
 	{ 126, 22, GFXTEST_BG, "G_RM_TEX_EDGE: texel con alfa 0, no se escribe" },    \
 	{ 252, 232, 0xFF0000, "2 ciclos, TEXEL0·TEXEL1·SHADE (programa generado)" },       \
-	{ 287, 232, 0x804080, "2 ciclos, lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE (generado)" },
+	{ 287, 232, 0x804080, "2 ciclos, lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE (generado)" }, \
+	{ 150, 109, 0xFF00FF, "render a textura: color image de 64 leída como textura" },    \
+	{ 150, 119, 0xFF0000, "copia RSX → RDRAM: el CPU leyó la color image guardada" },
 
 #endif

@@ -7,6 +7,14 @@
  * ver y verificar en el host lo que produce la HLE (tools/test-roms.sh con
  * gfxtest) y como referencia cuando el RSX muestre otra cosa.
  *
+ * Los destinos (qué color image tiene imagen, cuál se recicla) son la misma
+ * tabla que usa la PS3, src/rdp/targets.c; el campo de la tabla es aquí el
+ * número de tarea. Como en la PS3, una textura cuyo origen (gfx_tex.src_*)
+ * cae en un destino dibujado hace poco se lee del destino (render a
+ * textura), y un destino se copia a la RDRAM (RGBA5551) al terminar la
+ * tarea cuando la política de rdp_targets lo pide: así el host modela la
+ * misma conducta antes de medirla en la consola.
+ *
  * Simplificaciones: sin recorte contra los planos (se descartan triángulos
  * con algún w ≤ 0), muestreo en el centro del píxel, regla de cobertura
  * por arriba a la izquierda aproximada.
@@ -14,16 +22,16 @@
 #include "raster.h"
 
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-#define MAX_TARGETS 4
+#include "core/endian.h"
+#include "rdp/targets.h"
 
-struct target {
-	uint32_t addr;
-	uint32_t width;
-	bool used;
-	uint32_t rgb[RASTER_W * RASTER_H];
-};
+#define MAX_DEPTHS 4
+/* G_IM_SIZ_16b (gbi): color images y texturas de 16 bits. */
+#define IM_SIZ_16b 2u
 
 struct depth {
 	uint32_t addr;
@@ -31,29 +39,39 @@ struct depth {
 	float z[RASTER_W * RASTER_H];
 };
 
-static struct target targets[MAX_TARGETS];
-static struct depth depths[MAX_TARGETS];
-static unsigned next_target, next_depth;
+static struct rdp_targets tg;
+static uint32_t rgb[RDP_TARGETS_MAX][RASTER_W * RASTER_H];
+static uint32_t scratch[RASTER_W * RASTER_H];  /* copia del ligado cuando un dibujo lo lee */
+static int scratch_slot;
+static struct depth depths[MAX_DEPTHS];
+static unsigned next_depth;
+static uint32_t task_no;
 
-static struct target *get_target(uint32_t addr, uint32_t width)
+bool raster_trace_fb;
+uint32_t raster_field;
+int raster_fbfx = 2;
+static struct rdp_vi_ring vi_ring;
+static uint32_t primes, readbacks;
+
+static void prime(const struct gfx_job *job, int slot);
+
+static int get_target(const struct gfx_job *job, uint32_t addr, uint32_t width, uint32_t siz, uint32_t min_lh)
 {
-	for (int i = 0; i < MAX_TARGETS; i++)
-		if (targets[i].used && targets[i].addr == addr)
-			return &targets[i];
-	struct target *t = &targets[next_target++ % MAX_TARGETS];
-	t->used = true;
-	t->addr = addr;
-	t->width = width;
-	memset(t->rgb, 0, sizeof t->rgb);
-	return t;
+	bool fresh;
+	int i = rdp_targets_get(&tg, addr, width, siz, min_lh, &fresh);
+	if (fresh)
+		memset(rgb[i], 0, sizeof rgb[i]);
+	if (fresh || tg.task - tg.t[i].last_task > RDP_TARGETS_FRESH)
+		prime(job, i);
+	return i;
 }
 
 static struct depth *get_depth(uint32_t addr)
 {
-	for (int i = 0; i < MAX_TARGETS; i++)
+	for (int i = 0; i < MAX_DEPTHS; i++)
 		if (depths[i].used && depths[i].addr == addr)
 			return &depths[i];
-	struct depth *d = &depths[next_depth++ % MAX_TARGETS];
+	struct depth *d = &depths[next_depth++ % MAX_DEPTHS];
 	d->used = true;
 	d->addr = addr;
 	for (int i = 0; i < RASTER_W * RASTER_H; i++)
@@ -65,8 +83,6 @@ static struct depth *get_depth(uint32_t addr)
 /* Depuración (build con -DSALSA64_GFX_TRACE, solo en las tareas que traza
  * --trace-gfx): SALSA64_GFX_MARK=n[,m…] pinta de magenta esos dibujos y
  * SALSA64_GFX_PIX=x,y muestra qué dibujos escriben ese píxel y con qué valores. */
-#include <stdio.h>
-#include <stdlib.h>
 extern int salsa64_gfx_trace_now;
 static bool raster_mark;
 static unsigned ndraw;
@@ -99,10 +115,32 @@ struct texmem {
 	const uint8_t *base[2];  /* GFX_TEX_ARENA, GFX_TEX_CACHE */
 };
 
-static void fetch(const struct gfx_tex *t, const struct texmem *m, int x, int y, float out[4])
+/* De dónde se lee cada textura del dibujo: un destino (render a textura)
+ * o su memoria. */
+struct texsrc {
+	int slot;            /* ranura del destino, o -1 */
+	const uint32_t *pix; /* su imagen, o la copia (scratch) si es el ligado */
+	uint32_t x0, y0;     /* texel (0, 0) de la textura dentro del destino */
+};
+
+static void fetch(const struct gfx_tex *t, const struct texmem *m, const struct texsrc *s, int x, int y,
+		  float out[4])
 {
 	x = wrap(x, t->width, GFX_TEX_WRAP_S(t->flags));
 	y = wrap(y, t->height, GFX_TEX_WRAP_T(t->flags));
+	if (s->slot >= 0) {
+		uint32_t px = s->x0 + (uint32_t)x, py = s->y0 + (uint32_t)y;
+		if (px >= RASTER_W)
+			px = RASTER_W - 1;
+		if (py >= RASTER_H)
+			py = RASTER_H - 1;
+		uint32_t c = s->pix[py * RASTER_W + px];
+		out[0] = (c >> 16 & 0xFF) / 255.0f;
+		out[1] = (c >> 8 & 0xFF) / 255.0f;
+		out[2] = (c & 0xFF) / 255.0f;
+		out[3] = 1.0f;
+		return;
+	}
 	const uint8_t *p = m->base[t->where & 1] + t->offset + (uint32_t)y * t->pitch + 4u * (uint32_t)x;
 	for (int k = 0; k < 4; k++)
 		out[k] = p[k] / 255.0f;
@@ -110,21 +148,22 @@ static void fetch(const struct gfx_tex *t, const struct texmem *m, int x, int y,
 
 /* Muestra con semántica del RSX: u, v normalizados; centros de texel en
  * (i + 0,5) / tamaño. */
-static void sample(const struct gfx_tex *t, const struct texmem *m, float u, float v, float out[4])
+static void sample(const struct gfx_tex *t, const struct texmem *m, const struct texsrc *s, float u, float v,
+		   float out[4])
 {
 	float x = u * t->width, y = v * t->height;
 	if (!(t->flags & GFX_TEX_BILINEAR)) {
-		fetch(t, m, (int)floorf(x), (int)floorf(y), out);
+		fetch(t, m, s, (int)floorf(x), (int)floorf(y), out);
 		return;
 	}
 	x -= 0.5f;
 	y -= 0.5f;
 	int x0 = (int)floorf(x), y0 = (int)floorf(y);
 	float fx = x - x0, fy = y - y0, a[4], b[4], c[4], d[4];
-	fetch(t, m, x0, y0, a);
-	fetch(t, m, x0 + 1, y0, b);
-	fetch(t, m, x0, y0 + 1, c);
-	fetch(t, m, x0 + 1, y0 + 1, d);
+	fetch(t, m, s, x0, y0, a);
+	fetch(t, m, s, x0 + 1, y0, b);
+	fetch(t, m, s, x0, y0 + 1, c);
+	fetch(t, m, s, x0 + 1, y0 + 1, d);
 	for (int k = 0; k < 4; k++)
 		out[k] = (a[k] * (1 - fx) + b[k] * fx) * (1 - fy) + (c[k] * (1 - fx) + d[k] * fx) * fy;
 }
@@ -135,7 +174,7 @@ static float edge(float ax, float ay, float bx, float by, float px, float py)
 }
 
 static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, const struct texmem *m,
-			  struct target *tg, struct depth *zb)
+			  const struct texsrc src[2], uint32_t *tg_rgb, struct depth *zb)
 {
 	float sx[3], sy[3], sz[3], iw[3];
 	for (int i = 0; i < 3; i++) {
@@ -190,7 +229,7 @@ static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, 
 			float tx[2][4] = { { 1, 1, 1, 1 }, { 1, 1, 1, 1 } };
 			for (int i = 0; i < d->ntex && i < 2; i++) {
 				const struct gfx_tex *te = &d->tex[i];
-				sample(te, m, s * te->xf[0] + te->xf[2], t * te->xf[1] + te->xf[3], tx[i]);
+				sample(te, m, &src[i], s * te->xf[0] + te->xf[2], t * te->xf[1] + te->xf[3], tx[i]);
 			}
 			float X[GFX_K_TERMS][4];
 			for (int k = 0; k < GFX_K_TERMS; k++)
@@ -254,7 +293,7 @@ static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, 
 					X[GFX_K_T0][0], X[GFX_K_T0][1], X[GFX_K_T0][2], X[GFX_K_ONE][0], X[GFX_K_ONE][1], X[GFX_K_ONE][2],
 					out[0], out[1], out[2], out[3], s, t, z);
 #endif
-			uint32_t old = tg->rgb[idx];
+			uint32_t old = tg_rgb[idx];
 			float dst[3] = { (old >> 16 & 0xFF) / 255.0f, (old >> 8 & 0xFF) / 255.0f, (old & 0xFF) / 255.0f };
 			if (d->blend == GFX_BLEND_KEEP)
 				continue;
@@ -264,11 +303,132 @@ static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, 
 				else if (d->blend == GFX_BLEND_ADD)
 					out[l] = clamp01(out[l] * out[3] + dst[l]);
 			}
-			tg->rgb[idx] = (uint32_t)(out[0] * 255.0f + 0.5f) << 16 | (uint32_t)(out[1] * 255.0f + 0.5f) << 8 |
-				       (uint32_t)(out[2] * 255.0f + 0.5f);
+			tg_rgb[idx] = (uint32_t)(out[0] * 255.0f + 0.5f) << 16 | (uint32_t)(out[1] * 255.0f + 0.5f) << 8 |
+				      (uint32_t)(out[2] * 255.0f + 0.5f);
 			if ((d->depth & GFX_DEPTH_WRITE) && zb)
 				zb->z[idx] = z;
 		}
+}
+
+/* Hasta qué línea llegan las tijeras de los dibujos que siguen a un TARGET
+ * (como rdp.c en la PS3): el alto mínimo de su imagen. */
+static uint32_t scissor_bottom(const uint8_t *cmd, uint32_t off, uint32_t cmd_bytes)
+{
+	uint32_t bottom = 0;
+	while (off + sizeof(struct gfx_cmd) <= cmd_bytes) {
+		const struct gfx_cmd *c = (const struct gfx_cmd *)(cmd + off);
+		if (c->op == GFX_OP_END || c->op == GFX_OP_TARGET || c->size < sizeof *c)
+			break;
+		if (c->op == GFX_OP_DRAW) {
+			uint32_t y1 = (((const struct gfx_draw *)c)->scissor[3] + 3) / 4;
+			if (y1 > bottom)
+				bottom = y1;
+		}
+		off += c->size;
+	}
+	return bottom;
+}
+
+/* El origen de una textura del dibujo, si es un destino dibujado hace
+ * poco (raster_fresh tareas o menos). */
+static int texture_source(const struct gfx_tex *t, int cur, struct texsrc *s)
+{
+	s->slot = -1;
+	if (!t->src_addr || t->src_siz != IM_SIZ_16b)
+		return -1;
+	uint32_t x0, y0;
+	int i;
+	enum rdp_texsrc src = rdp_targets_texture(&tg, t->src_addr, t->src_pitch, 2, cur, &i, &x0, &y0);
+	if ((src != RDP_TEXSRC_RSX && src != RDP_TEXSRC_SELF) || !raster_fbfx)
+		return i;
+	if (src == RDP_TEXSRC_SELF) {
+		if (scratch_slot != i) {
+			memcpy(scratch, rgb[i], sizeof scratch);
+			scratch_slot = i;
+		}
+		s->pix = scratch;
+	} else {
+		s->pix = rgb[i];
+	}
+	s->slot = i;
+	s->x0 = x0;
+	s->y0 = y0;
+	return i;
+}
+
+/* G_RM_VISCVG: cobertura plena en la RDRAM en vez de dibujar (como rdp.c). */
+static void viscvg(const struct gfx_job *job, int cur, const struct gfx_draw *d)
+{
+	const struct rdp_target *t = &tg.t[cur];
+	if (raster_fbfx < 2 || t->bpp != 2 || !job->rdram_ea)
+		return;
+	uint8_t *rdram = (uint8_t *)(uintptr_t)job->rdram_ea;
+	uint32_t y0 = d->scissor[1] / 4, y1 = (d->scissor[3] + 3) / 4, x0 = d->scissor[0] / 4, x1 = (d->scissor[2] + 3) / 4;
+	if (y1 > t->lh)
+		y1 = t->lh;
+	if (x1 > t->width)
+		x1 = t->width;
+	for (uint32_t y = y0; y < y1 && x1 > x0; y++) {
+		uint32_t a = t->addr + (y * t->width + x0) * 2;
+		if (a + (x1 - x0) * 2 > job->rdram_size)
+			break;
+		memset(rdram + a, 0xFF, (x1 - x0) * 2);
+	}
+}
+
+/* Ceba la imagen de la ranura con la RDRAM (RGBA5551), como hace la PS3
+ * con una superficie nueva o sin dibujar desde hace tareas. */
+static void prime(const struct gfx_job *job, int slot)
+{
+	const struct rdp_target *t = &tg.t[slot];
+	if (!raster_fbfx || t->bpp != 2 || !job->rdram_ea)
+		return;
+	const uint8_t *rdram = (const uint8_t *)(uintptr_t)job->rdram_ea;
+	uint32_t w = t->width < RASTER_W ? t->width : RASTER_W, h = t->lh < RASTER_H ? t->lh : RASTER_H;
+	for (uint32_t y = 0; y < h; y++) {
+		uint32_t a = t->addr + y * t->width * 2;
+		if (a + w * 2 > job->rdram_size)
+			break;
+		for (uint32_t x = 0; x < w; x++) {
+			uint32_t p = salsa64_rd16(rdram + a + 2 * x);
+			uint32_t r = p >> 11, g = (p >> 6) & 31, b = (p >> 1) & 31;
+			rgb[slot][y * RASTER_W + x] = (r << 3 | r >> 2) << 16 | (g << 3 | g >> 2) << 8 | (b << 3 | b >> 2);
+		}
+	}
+	primes++;
+}
+
+/* Ranura cuyo rango de direcciones contiene `addr`, sin mirar el paso ni
+ * el tamaño de texel (traza: texturas que vienen de un destino pero no
+ * como se esperaba). */
+static int locate_any(uint32_t addr)
+{
+	for (int i = 0; i < RDP_TARGETS_MAX; i++) {
+		const struct rdp_target *t = &tg.t[i];
+		if (t->used && addr >= t->addr && addr < t->addr + t->width * t->bpp * t->lh)
+			return i;
+	}
+	return -1;
+}
+
+/* Copia el destino a la RDRAM como RGBA5551 (sin cobertura: alfa 1). */
+static void readback(const struct gfx_job *job, int slot)
+{
+	const struct rdp_target *t = &tg.t[slot];
+	if (t->bpp != 2 || !job->rdram_ea)
+		return;
+	uint32_t w = t->width < RASTER_W ? t->width : RASTER_W, h = t->lh < RASTER_H ? t->lh : RASTER_H;
+	uint8_t *rdram = (uint8_t *)(uintptr_t)job->rdram_ea;
+	for (uint32_t y = 0; y < h; y++) {
+		uint32_t a = t->addr + y * t->width * 2;
+		if (a + w * 2 > job->rdram_size)
+			break;
+		for (uint32_t x = 0; x < w; x++) {
+			uint32_t c = rgb[slot][y * RASTER_W + x];
+			uint32_t p = ((c >> 19) & 31) << 11 | ((c >> 11) & 31) << 6 | ((c >> 3) & 31) << 1 | 1;
+			salsa64_wr16(rdram + a + 2 * x, (uint16_t)p);
+		}
+	}
 }
 
 void raster_task(const struct gfx_job *job, const struct gfx_result *res)
@@ -276,8 +436,16 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 	const uint8_t *cmd = (const uint8_t *)(uintptr_t)job->cmd_ea;
 	const struct gfx_vertex *vtx = (const struct gfx_vertex *)(uintptr_t)job->vtx_ea;
 	const struct texmem m = { { (const uint8_t *)(uintptr_t)job->tex_ea, (const uint8_t *)(uintptr_t)job->cache_ea } };
-	struct target *tg = NULL;
+	int cur = -1;
 	uint32_t off = 0;
+	bool drawn[RDP_TARGETS_MAX] = { false };
+	/* Dibujos que leen cada destino en esta tarea, por destino escrito (traza). */
+	uint32_t reads[RDP_TARGETS_MAX][RDP_TARGETS_MAX] = { { 0 } }, read_stale[RDP_TARGETS_MAX][RDP_TARGETS_MAX] = { { 0 } };
+	uint32_t read_age[RDP_TARGETS_MAX] = { 0 };
+	uint32_t suspect[RDP_TARGETS_MAX] = { 0 };
+	tg.field = ++task_no;
+	rdp_targets_task(&tg);
+	scratch_slot = -1;
 #ifdef SALSA64_GFX_TRACE
 	ndraw = 0;
 	pix_x = pix_y = -1;
@@ -290,7 +458,7 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 			break;
 		switch (c->op) {
 		case GFX_OP_TARGET:
-			tg = get_target(c->a, c->b);
+			cur = get_target(job, c->a, c->b, c->c & 0xFF, scissor_bottom(cmd, off + c->size, res->cmd_bytes));
 			break;
 		case GFX_OP_ZCLEAR: {
 			const struct gfx_zclear *z = (const struct gfx_zclear *)c;
@@ -318,11 +486,39 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 				}
 			}
 #endif
-			if (!tg)
+			if (cur < 0)
 				break;
+			if (d->viscvg) {
+				viscvg(job, cur, d);
+				break;
+			}
+			struct texsrc src[2];
+			for (int i = 0; i < 2; i++) {
+				src[i].slot = -1;
+				if (i < d->ntex) {
+					int k = texture_source(&d->tex[i], cur, &src[i]);
+					if (k < 0 && raster_trace_fb && d->tex[i].src_addr) {
+						int j = locate_any(d->tex[i].src_addr);
+						if (j >= 0 && suspect[j]++ == 0)
+							fprintf(stderr, "fb: campo %u tarea %u: textura %ux%u con origen %06x en el "
+								"destino %06x/%u pero paso %u, siz %u, fmt %u\n", raster_field, task_no,
+								d->tex[i].width, d->tex[i].height, d->tex[i].src_addr, tg.t[j].addr,
+								tg.t[j].width, d->tex[i].src_pitch, d->tex[i].src_siz, d->tex[i].src_fmt);
+					}
+					if (k >= 0) {
+						reads[k][cur]++;
+						read_age[k] = tg.field - tg.t[k].last_field;
+						if (src[i].slot < 0)
+							read_stale[k][cur]++;
+					}
+				}
+			}
 			struct depth *zb = d->depth ? get_depth(d->zimg) : NULL;
 			for (uint32_t i = 0; i + 3 <= d->h.b; i += 3)
-				draw_triangle(d, vtx + d->h.a + i, &m, tg, zb);
+				draw_triangle(d, vtx + d->h.a + i, &m, src, rgb[cur], zb);
+			if (!drawn[cur])
+				rdp_targets_drawn(&tg, cur);
+			drawn[cur] = true;
 			break;
 		}
 		default:
@@ -330,15 +526,59 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 		}
 		off += c->size;
 	}
+	for (int i = 0; i < RDP_TARGETS_MAX; i++) {
+		for (int j = 0; raster_trace_fb && j < RDP_TARGETS_MAX; j++)
+			if (reads[i][j])
+				fprintf(stderr, "fb: campo %u tarea %u: %u dibujos leen el destino %06x/%u (dibujado hace %u "
+					"tareas; %u de la RDRAM por viejo o ser el mismo) hacia %06x/%u\n", raster_field,
+					task_no, reads[i][j], tg.t[i].addr, tg.t[i].width, read_age[i], read_stale[i][j],
+					tg.t[j].addr, tg.t[j].width);
+		if (!drawn[i])
+			continue;
+		/* Como en la PS3: lo decide el ancho del VI y sus orígenes. */
+		if (raster_fbfx >= 2 && rdp_readback_wanted(&vi_ring, tg.t[i].addr, tg.t[i].width, tg.t[i].bpp == 2 ? 2 : 0) &&
+		    rdp_targets_readback(&tg, i, true)) {
+			readback(job, i);
+			readbacks++;
+			if (raster_trace_fb)
+				fprintf(stderr, "fb: campo %u tarea %u: copia a la RDRAM del destino %06x/%u\n", raster_field,
+					task_no, tg.t[i].addr, tg.t[i].width);
+		}
+	}
+}
+
+void raster_vi(uint32_t origin, uint32_t width)
+{
+	rdp_vi_ring_push(&vi_ring, origin, width);
+}
+
+void raster_fb_stats(uint32_t *n_readbacks, uint32_t *n_primes, uint32_t *tex_rsx, uint32_t *tex_rdram)
+{
+	*n_readbacks = readbacks;
+	*n_primes = primes;
+	*tex_rsx = tg.tex_rsx;
+	*tex_rdram = tg.tex_rdram;
 }
 
 const uint32_t *raster_image(uint32_t addr, uint32_t *width)
 {
-	for (int i = 0; i < MAX_TARGETS; i++)
-		if (targets[i].used && addr >= targets[i].addr &&
-		    addr < targets[i].addr + targets[i].width * RASTER_H * 4) {
-			*width = targets[i].width;
-			return targets[i].rgb;
+	for (int i = 0; i < RDP_TARGETS_MAX; i++) {
+		const struct rdp_target *t = &tg.t[i];
+		if (t->used && addr >= t->addr && addr < t->addr + t->width * t->bpp * t->lh) {
+			*width = t->width;
+			return rgb[i];
 		}
+	}
 	return NULL;
+}
+
+bool raster_target_info(int slot, uint32_t *addr, uint32_t *width, uint32_t *bpp, uint32_t *lh)
+{
+	if (slot < 0 || slot >= RDP_TARGETS_MAX || !tg.t[slot].used)
+		return false;
+	*addr = tg.t[slot].addr;
+	*width = tg.t[slot].width;
+	*bpp = tg.t[slot].bpp;
+	*lh = tg.t[slot].lh;
+	return true;
 }

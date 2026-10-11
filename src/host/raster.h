@@ -24,5 +24,21 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res);
 /* Imagen (0xRRGGBB, RASTER_W de paso) que contiene la dirección `addr`, o
  * NULL si ninguna tarea dibujó ahí. */
 const uint32_t *raster_image(uint32_t addr, uint32_t *width);
+/* Qué hay en la ranura `slot` de la tabla de destinos (para la vigilancia
+ * de accesos del CPU); false si está vacía. */
+bool raster_target_info(int slot, uint32_t *addr, uint32_t *width, uint32_t *bpp, uint32_t *lh);
+
+/* Ajustes (los pone run.c): trazar a stderr los dibujos que leen un destino
+ * (--trace-fb) con el campo en curso; el nivel de efectos de framebuffer
+ * como salsa64_rdp_fbfx (0 apagados, 1 render a textura, 2 también copias
+ * a la RDRAM). */
+extern bool raster_trace_fb;
+extern uint32_t raster_field;
+extern int raster_fbfx;
+/* Cada campo con imagen: el origen y ancho del VI (como salsa64_rdp_vi). */
+void raster_vi(uint32_t origin, uint32_t width);
+/* Totales: copias a la RDRAM, destinos cebados, texturas desde un destino
+ * (de su imagen) y desde la RDRAM. */
+void raster_fb_stats(uint32_t *readbacks, uint32_t *primes, uint32_t *tex_rsx, uint32_t *tex_rdram);
 
 #endif
