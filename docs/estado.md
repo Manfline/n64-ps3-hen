@@ -577,8 +577,15 @@ sugerido: recorte → líneas del logo → framebuffer → JIT.
 - JIT («Recompilador: más velocidad del CPU en GoldenEye y Perfect
   Dark»): ya puede abrirse (el menú está en main).
 - Efectos de framebuffer (pendiente de abajo): ya puede abrirse, presentación está en main.
-- HLE: z/w > 1 en Banjo (modelos que tiemblan, cielo), boca negra de Conker.
-- Zelda: fondos prerrenderizados (S2DEX + tarea JPEG); luego Majora's Mask.
+- HLE: **cara de Conker** (polígonos negros en la boca, visto en la PS3; no lo
+  explicaba la presentación) y z/w > 1 en Banjo (modelos que tiemblan, cielo).
+- Gráficos pendientes (actualizado 2026-10-11): líneas del logo de Zelda (la
+  HLE muestrea mal la segunda textura de ruido del texto «NINTENDO 64»),
+  defecto en la túnica de Link, líneas azules en uniones de GoldenEye.
+- Zelda: fondos prerrenderizados hechos (2026-10-11); JPEG a punto fijo
+  (68 ms por sala en el PPE, meta < 10 ms); luego Majora's Mask.
+- Recompilador: FPU en registros, más registros fijos y refill de la TLB
+  (en curso desde el 2026-10-11).
 - Fase 5 (posprocesado, MSAA) después de presentación y menú; recompilador
   RSP→SPU para el LLE; conversión genérica de texturas en lib/rsxkit/spu.
 
