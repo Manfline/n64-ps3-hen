@@ -74,8 +74,10 @@ Pendiente:
       «Salsa64 menú»): el autor confirmó que en Mario Kart «ya no se ve» lo
       que reportaba (log `build/ps3-logs/mk64-recorte.log`, fuera de git:
       sin errores, 60 campos/s).
-- [ ] PS3 real, regresiones: SM64 en el castillo (suelo junto al foso),
-      GoldenEye y la intro de Perfect Dark (muros cercanos).
+- [x] PS3 real, SM64 en el castillo: «todo se ve bien» (el autor; log
+      `build/ps3-logs/sm64-recorte.log`).
+- [ ] PS3 real, regresiones: GoldenEye y la intro de Perfect Dark (muros
+      cercanos).
 - [ ] En RPCS3 el modo de prueba automática sale a los 1800 campos y el
       zoom sin tocar nada cae en el 3300 (`capturas` "25 3500" no llega):
       dejar que el M de `capturas N M` mande sobre AUTO_FIELDS si hace falta
