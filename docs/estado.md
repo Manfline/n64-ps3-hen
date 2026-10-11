@@ -132,12 +132,24 @@ de arranque `amazing-noether-39a548` con `osCicId`, sin integrar):
   alta resolución.
 
 Pendiente:
-- [ ] PS3 real: Perfect Dark y Conker con el paquete «Salsa64 Rare»
-      (SLSA00081, ya en /dev_hdd0/packages/salsa64-rare.gnpdrm.pkg, con
-      main 755cbaa); que el autor confirme lo que se ve (y la boca de Conker
-      en la escena del logo de Rareware: oscura por dentro, parece
-      correcto), y un minuto de SM64 o Mario Kart por si hay regresión. Al
-      terminar, `embedded` como estaba.
+- [x] **PS3 real** (paquete «Salsa64 Rare», SLSA00081, be8f573 con main
+      ce8351d): **Perfect Dark** se ve y suena bien (el autor: «se ve y suena
+      espectacular»); 59,9 campos/s (100 % de NTSC) salvo la intro en alta
+      resolución (84–94 %), HLE en el SPE 1,4–8 ms por tarea, 0 tareas
+      cortadas, naudio con MP3 sin errores. **Mario Kart 64** (no
+      regresión): 65 s al 100 % de NTSC, 0 tareas cortadas. `embedded`
+      quedó como estaba (`file:oot.z64`).
+- [ ] **Conker en la PS3**: arranca y suena, pero el 3D sale quemado y
+      parpadea y no se ve el logo de N64; las capturas del RSX de las
+      escenas 3D (campos 3000, 3600, 4200) salen negras y el logo 2D de
+      Nintendo sí. El volcado de la HLE hecho en el SPE (`gfxdump` del campo
+      3600) dibujado en la Mac con `--raster-dump` sale bien e igual al
+      host: la HLE es correcta y la falla es de la traducción o la
+      presentación del RSX (`src/rdp/rdp.c`, lib/rsxkit). Lo propio de
+      Conker: a mitad de cada cuadro dibuja en un destino CI de 8 bits y 64
+      de ancho (0xDE080) y vuelve al principal (0x3D6300, 292×213 RGBA16, z
+      en 0xE9D80). Pasado al trabajo de presentación (mismo tipo que la pausa
+      de Zelda).
 - [ ] Perfect Dark aproxima `lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE` (el de
       GoldenEye): término S·Sa en el RSX (Fase 4).
 - [ ] Efectos de framebuffer de los dos (cámara espía y monitores de PD,
