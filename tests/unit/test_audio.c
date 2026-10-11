@@ -1,11 +1,15 @@
 /*
  * Salsa64 — pruebas de la HLE de audio (src/rsp/audio): reconocimiento del
- * ABI, comandos de nead y ABI1 con listas sintéticas y resultados
- * calculados a mano, partes de la RDRAM escritas y la tarea completa por
- * el núcleo (rsp.c) con el backend síncrono.
+ * ABI, comandos de nead, ABI1 y naudio con listas sintéticas y resultados
+ * calculados a mano, el MP3 contra la síntesis de MPEG-1 en coma flotante,
+ * partes de la RDRAM escritas y la tarea completa por el núcleo (rsp.c)
+ * con el backend síncrono.
  */
 #include "test.h"
 
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "core/endian.h"
@@ -109,6 +113,9 @@ static void detect_abi(void)
 	CHECK_EQ(detect_with(1, 0x111812E0, 0, 0), SALSA64_ABI_NEAD_SFJ);
 	CHECK_EQ(detect_with(0, 0x1AE8143C, 0, 0), SALSA64_ABI_NAUDIO_MP3);
 	CHECK_EQ(detect_with(0, 0x0000127C, 0, 0), SALSA64_ABI_NAUDIO);
+	CHECK_EQ(detect_with(0, 0x00001280, 0, 0), SALSA64_ABI_NAUDIO_BK);
+	CHECK_EQ(detect_with(0, 0x1C58126C, 0, 0), SALSA64_ABI_NAUDIO_DK);
+	CHECK_EQ(detect_with(0, 0x1AB0140C, 0, 0), SALSA64_ABI_NAUDIO_CBFD);
 	CHECK_EQ(detect_with(0, 0x00000001, 0, 0), SALSA64_ABI_MUSYX1);
 	CHECK_EQ(detect_with(0, 0, 0, 0), SALSA64_ABI_UNKNOWN);
 	/* Las ROMs de prueba de Salsa64. */
@@ -390,7 +397,7 @@ static void nead_errors_and_unknown(void)
 
 	/* Un ABI sin HLE no ejecuta nada. */
 	n_savebuff(0x100, DST, 16);
-	run_abi(SALSA64_ABI_NAUDIO_MP3);
+	run_abi(SALSA64_ABI_MUSYX1);
 	CHECK_EQ(res.commands, 0);
 	CHECK_EQ(res.errors, 1);
 }
@@ -478,6 +485,398 @@ static void abi1_mixer_interleave(void)
 	}
 }
 
+/* ---- naudio (Banjo-Kazooie, Conker, Perfect Dark…) --------------------------
+ * Direcciones de la DMEM relativas a 0x4F0; casi todo sobre 0x170 bytes. */
+
+#define NA_N      184     /* muestras por búfer */
+#define NA_MAIN2  0x170   /* 0x660 */
+#define NA_DL     0x4E0   /* 0x9D0 */
+#define NA_DR     0x650   /* 0xB40 */
+#define NA_WL     0x7C0   /* 0xCB0 */
+#define NA_WR     0x930   /* 0xE20 */
+
+/* En la RDRAM, con lugar para 0x2E0 bytes por búfer. */
+#define NA_SRC    0x220000u
+#define NA_SRC2   0x221000u
+#define NA_DST    0x222000u
+#define NA_STATE  0x224000u
+#define NA_BOOK   0x225000u
+
+static void na_loadbuff(uint16_t rel, uint32_t addr, uint16_t count)
+{
+	cmd(0x04000000u | (uint32_t)count << 12 | rel, addr);
+}
+
+static void na_savebuff(uint16_t rel, uint32_t addr, uint16_t count)
+{
+	cmd(0x06000000u | (uint32_t)count << 12 | rel, addr);
+}
+
+static void put_const(uint32_t pa, unsigned n, int16_t v)
+{
+	for (unsigned i = 0; i < n; i++)
+		put16(pa + 2 * i, v);
+}
+
+static void naudio_load_mix_save(void)
+{
+	fresh();
+	for (int i = 0; i < NA_N; i++)
+		put16(NA_SRC + 2 * i, (int16_t)(i * 100 - 9000));
+	put_const(NA_SRC2, NA_N, 1000);
+	na_loadbuff(0, NA_SRC, 0x170);
+	na_loadbuff(NA_MAIN2, NA_SRC2, 0x170);
+	cmd(0x0C000000u | 0x4000, 0x0000u << 16 | NA_MAIN2);  /* MIXER ×0,5: MAIN → MAIN2 */
+	cmd(0x02000000u | (NA_MAIN2 + 0x10), 16);           /* CLEARBUFF de 8 muestras */
+	cmd(0x0A000000u | 0x002, 0x0300u << 16 | 6);         /* DMEMMOVE 6 → 8 bytes */
+	na_savebuff(NA_MAIN2, NA_DST, 0x170);
+	na_savebuff(0x300, NA_DST + 0x200, 16);
+	run_abi(SALSA64_ABI_NAUDIO);
+	CHECK_EQ(res.commands, 7);
+	CHECK_EQ(res.errors, 0);
+	CHECK_EQ(res.unknown, 0);
+	for (int i = 0; i < NA_N; i++) {
+		int32_t x = i * 100 - 9000;
+		int16_t want = (int16_t)(1000 + ((x * 0x4000) >> 15));
+		if (i >= 8 && i < 16)
+			want = 0;
+		CHECK_EQ(get16(NA_DST + 2 * i), want);
+	}
+	/* DMEMMOVE desde la muestra 1: 4 muestras y el resto en cero. */
+	CHECK_EQ(get16(NA_DST + 0x200), -8900);
+	CHECK_EQ(get16(NA_DST + 0x206), -8600);
+	CHECK_EQ(get16(NA_DST + 0x208), 0);
+}
+
+/* SETVOL: izquierda volumen + seco/efecto, derecha destino/velocidad,
+ * izquierda destino/velocidad, y el 0x0E que cambia la parte baja. */
+static void na_setvol(uint8_t flags, uint16_t v, uint32_t w2)
+{
+	cmd(0x09000000u | (uint32_t)flags << 16 | v, w2);
+}
+
+static void naudio_envmixer_interleave(void)
+{
+	fresh();
+	put_const(NA_SRC, NA_N, 10000);
+	put_const(NA_SRC2, NA_N, 100);
+	na_setvol(0x06, 0x4000, 0x7FFFu << 16 | 0x2000);  /* vol izq. 0,5; seco 1; efecto 0,25 */
+	na_setvol(0x04, 0x2000, 0x00012345);               /* destino der. 0,25 */
+	cmd(0x0E000000u, 0x0000BEEF);                      /* parte baja de la velocidad der. */
+	na_setvol(0x00, 0x4000, 0);                        /* destino izq. 0,5 */
+	run_abi(SALSA64_ABI_NAUDIO);
+	CHECK_EQ(st.naudio.vol[0], 0x4000);
+	CHECK_EQ(st.naudio.dry, 0x7FFF);
+	CHECK_EQ(st.naudio.wet, 0x2000);
+	CHECK_EQ(st.naudio.target[1], 0x2000);
+	CHECK_EQ(st.naudio.rate[1], 0x0001BEEF);
+	CHECK_EQ(st.naudio.target[0], 0x4000);
+
+	/* Volúmenes constantes: izquierda 0,5, derecha 0,25 (velocidades 0). */
+	na_setvol(0x04, 0x2000, 0);
+	for (int pass = 0; pass < 2; pass++) {
+		na_loadbuff(0, NA_SRC, 0x170);
+		na_loadbuff(NA_DL, NA_SRC2, 0x170);
+		na_loadbuff(NA_DR, NA_SRC2, 0x170);
+		na_loadbuff(NA_WL, NA_SRC2, 0x170);
+		na_loadbuff(NA_WR, NA_SRC2, 0x170);
+		/* ENVMIXER: volumen derecho en w1; A_INIT la primera vez. */
+		cmd(0x03000000u | (pass ? 0u : 0x01u << 16) | 0x2000, NA_STATE);
+		na_savebuff(NA_DL, NA_DST, 0x170);
+		na_savebuff(NA_DR, NA_DST + 0x200, 0x170);
+		na_savebuff(NA_WL, NA_DST + 0x400, 0x170);
+		na_savebuff(NA_WR, NA_DST + 0x600, 0x170);
+		run_abi(SALSA64_ABI_NAUDIO);
+		CHECK_EQ(res.errors, 0);
+		/* Ganancias (vol · seco o efecto + 0x4000) >> 15: 0x4000, 0x2000,
+		 * 0x1000 y 0x800 → 10000 sale 5000, 2500, 1250 y 625. */
+		for (int i = 0; i < NA_N; i += 61) {
+			CHECK_EQ(get16(NA_DST + 2 * i), 5100);
+			CHECK_EQ(get16(NA_DST + 0x200 + 2 * i), 2600);
+			CHECK_EQ(get16(NA_DST + 0x400 + 2 * i), 1350);
+			CHECK_EQ(get16(NA_DST + 0x600 + 2 * i), 725);
+		}
+		CHECK_EQ(get16(NA_DST + 2 * (NA_N - 1)), 5100);
+	}
+
+	/* INTERLEAVE: secos izquierdo y derecho → MAIN (368 muestras). */
+	for (int i = 0; i < NA_N; i++) {
+		put16(NA_SRC + 2 * i, (int16_t)i);
+		put16(NA_SRC2 + 2 * i, (int16_t)-i);
+	}
+	na_loadbuff(NA_DL, NA_SRC, 0x170);
+	na_loadbuff(NA_DR, NA_SRC2, 0x170);
+	cmd(0x0D000000u, 0);
+	na_savebuff(0, NA_DST, 0x2E0);
+	run_abi(SALSA64_ABI_NAUDIO);
+	for (int i = 0; i < NA_N; i++) {
+		CHECK_EQ(get16(NA_DST + 4 * i), i);
+		CHECK_EQ(get16(NA_DST + 4 * i + 2), -i);
+	}
+}
+
+/* ADPCM: estado en w1; banderas, cuenta, entrada (4 bits) y salida en w2. */
+static void na_adpcm(uint8_t flags, uint32_t state, uint16_t count, uint8_t in_rel, uint16_t out_rel)
+{
+	cmd(0x01000000u | state, (uint32_t)flags << 28 | (uint32_t)count << 16 | (uint32_t)in_rel << 12 | out_rel);
+}
+
+static void naudio_adpcm_resample(void)
+{
+	fresh();
+	memset(ram(NA_BOOK), 0, 256);
+	put_adpcm_frame(NA_SRC, 0x00);
+	put_adpcm_frame(NA_SRC + 9, 0xC0);
+	memset(ram(NA_SRC + 18), 0, 14);
+	cmd(0x0B000000u | 256, NA_BOOK);
+	na_loadbuff(0, NA_SRC, 32);
+	na_adpcm(0x1, NA_STATE, 64, 0, 0x200);  /* A_INIT */
+	na_savebuff(0x200, NA_DST, 96);
+	run_abi(SALSA64_ABI_NAUDIO_BK);
+	CHECK_EQ(res.errors, 0);
+	CHECK_EQ(res.unknown, 0);
+	CHECK_EQ(get16(NA_DST + 0), 0);
+	for (int i = 0; i < 16; i++) {
+		CHECK_EQ(get16(NA_DST + 32 + 2 * i), nibbles[i]);
+		CHECK_EQ(get16(NA_DST + 64 + 2 * i), nibbles[i] * 4096);
+	}
+	CHECK_EQ(get16(NA_STATE + 28), -1 * 4096);
+
+	/* A_LOOP: las muestras previas salen de la dirección de SETLOOP. */
+	for (int i = 0; i < 16; i++)
+		put16(NA_STATE + 0x40 + 2 * i, (int16_t)(i == 15 ? 321 : 0));
+	cmd(0x0F000000u, NA_STATE + 0x40);
+	na_loadbuff(4, NA_SRC, 16);
+	na_adpcm(0x2, NA_STATE, 32, 4, 0x200);
+	na_savebuff(0x200, NA_DST, 64);
+	run_abi(SALSA64_ABI_NAUDIO_BK);
+	CHECK_EQ(get16(NA_DST + 30), 321);
+	CHECK_EQ(get16(NA_DST + 32), 1);
+
+	/* RESAMPLE: estado en w1; A_INIT, tono (16 bits desde el 14), entrada
+	 * (12 bits desde el 2) y salida MAIN2 (bits 0–1 ≠ 0), 184 muestras. */
+	put_const(NA_SRC, 200, 1000);
+	na_loadbuff(0x400, NA_SRC, 400);
+	cmd(0x05000000u | NA_STATE, 0x1u << 30 | 0x8000u << 14 | 0x400u << 2 | 1);
+	na_savebuff(NA_MAIN2, NA_DST, 0x170);
+	run_abi(SALSA64_ABI_NAUDIO);
+	CHECK_EQ(res.errors, 0);
+	int32_t c0 = aud_resample_lut[0], c1 = aud_resample_lut[1];
+	CHECK_EQ(get16(NA_DST + 0), 0);
+	CHECK_EQ(get16(NA_DST + 4), (1000 * c0) >> 15);
+	CHECK_EQ(get16(NA_DST + 6), (1000 * (c0 + c1)) >> 15);
+	CHECK_EQ(get16(NA_DST + 8), 1000);
+	CHECK_EQ(get16(NA_DST + 2 * (NA_N - 1)), 1000);
+	CHECK_EQ(get16(NA_STATE + 8), 0);
+}
+
+/* Los comandos 7 y 8: sin implementar en naudio y Banjo-Kazooie, MIXER en
+ * Donkey Kong 64, MP3 y nada (MP3ADDY) en los de MP3. */
+static void naudio_variant_tables(void)
+{
+	fresh();
+	cmd(0x07000000u, 0);
+	cmd(0x08000000u, 0);
+	run_abi(SALSA64_ABI_NAUDIO);
+	CHECK_EQ(res.unknown, 2);
+	cmd(0x07000000u, 0);
+	run_abi(SALSA64_ABI_NAUDIO_BK);
+	CHECK_EQ(res.unknown, 1);
+	cmd(0x08000000u, 0x12345678);
+	run_abi(SALSA64_ABI_NAUDIO_CBFD);
+	CHECK_EQ(res.unknown, 0);
+	CHECK_EQ(res.errors, 0);
+
+	put_const(NA_SRC, NA_N, 2000);
+	put_const(NA_SRC2, NA_N, 10);
+	na_loadbuff(0, NA_SRC, 0x170);
+	na_loadbuff(NA_MAIN2, NA_SRC2, 0x170);
+	cmd(0x07000000u | 0x4000, 0x0000u << 16 | NA_MAIN2);
+	cmd(0x08000000u | 0x4000, 0x0000u << 16 | NA_MAIN2);
+	na_savebuff(NA_MAIN2, NA_DST, 0x170);
+	run_abi(SALSA64_ABI_NAUDIO_DK);
+	CHECK_EQ(res.unknown, 0);
+	CHECK_EQ(get16(NA_DST + 0), 2010);
+	CHECK_EQ(get16(NA_DST + 2 * (NA_N - 1)), 2010);
+}
+
+/* Referencia directa del IIR de naudio: y[n] = c0·x[n] + c1·x[n−1] +
+ * c0·x[n−2] + 2·c8·y[n−1] + 2·c9·y[n−2], cada producto en Q15 redondeado. */
+static int32_t q15(int32_t c, int32_t x)
+{
+	return (c * x + 0x4000) >> 15;
+}
+
+static void naudio_filter(void)
+{
+	static const int16_t c[4] = { 0x3000, -0x2000, 0x2000, -0x0800 };  /* c0, c1, c8, c9 */
+	int16_t x[2 * NA_N + 2], y[2 * NA_N + 2];
+	fresh();
+	memset(ram(NA_BOOK), 0, 32);
+	put16(NA_BOOK + 0, c[0]);
+	put16(NA_BOOK + 2, c[1]);
+	put16(NA_BOOK + 16, c[2]);
+	put16(NA_BOOK + 18, c[3]);
+	for (int i = 0; i < 2 * NA_N; i++) {
+		x[i + 2] = (int16_t)((i * 7919) % 6001 - 3000);
+		put16(NA_SRC + 2 * i, x[i + 2]);
+	}
+	x[0] = x[1] = y[0] = y[1] = 0;
+	for (int n = 2; n < 2 * NA_N + 2; n++)
+		y[n] = (int16_t)(q15(c[0], x[n]) + q15(c[1], x[n - 1]) + q15(c[0], x[n - 2]) +
+				 2 * q15(c[2], y[n - 1]) + 2 * q15(c[3], y[n - 2]));
+
+	/* Dos bloques: el segundo sigue del estado (y[n−2], y[n−1], x[n−2], x[n−1]). */
+	cmd(0x0B000000u | 32, NA_BOOK);
+	na_loadbuff(NA_MAIN2, NA_SRC, 0x170);
+	cmd(0x0E000000u | 0x01u << 16, 0x01u << 24 | NA_STATE);  /* filtro sobre MAIN2, A_INIT */
+	na_savebuff(NA_MAIN2, NA_DST, 0x170);
+	na_loadbuff(0, NA_SRC + 0x170, 0x170);
+	cmd(0x0E000000u, NA_STATE);                               /* sobre MAIN */
+	na_savebuff(0, NA_DST + 0x170, 0x170);
+	run_abi(SALSA64_ABI_NAUDIO_MP3);
+	CHECK_EQ(res.errors, 0);
+	CHECK_EQ(res.unknown, 0);
+	for (int i = 0; i < 2 * NA_N; i++)
+		CHECK_EQ(get16(NA_DST + 2 * i), y[i + 2]);
+	CHECK_EQ(get16(NA_STATE + 4), y[2 * NA_N]);
+	CHECK_EQ(get16(NA_STATE + 10), x[2 * NA_N + 1]);
+
+	/* Con c0 = c1 = 0 es POLEF: sin coeficientes, salida = x · ganancia (Q14). */
+	memset(ram(NA_BOOK), 0, 32);
+	cmd(0x0B000000u | 32, NA_BOOK);
+	na_loadbuff(0, NA_SRC, 0x170);
+	cmd(0x0E000000u | 0x01u << 16 | 0x2000, NA_STATE);
+	na_savebuff(0, NA_DST, 0x170);
+	run_abi(SALSA64_ABI_NAUDIO_MP3);
+	for (int i = 0; i < NA_N; i += 37)
+		CHECK_EQ(get16(NA_DST + 2 * i), (x[i + 2] * 0x2000) >> 14);
+}
+
+/* OVERLOAD (Conker): ganancia saturada y luego × atenuación / 65536. */
+static void naudio_overload(void)
+{
+	fresh();
+	static const int16_t in[4] = { 1000, 10000, -10000, -3 };
+	for (int i = 0; i < 2 * NA_N; i++)
+		put16(NA_SRC + 2 * i, in[i & 3]);
+	na_loadbuff(0, NA_SRC, 0x2E0);
+	cmd(0x00000000u, 0x8000u << 16 | 4);
+	na_savebuff(0, NA_DST, 0x2E0);
+	run_abi(SALSA64_ABI_NAUDIO_CBFD);
+	CHECK_EQ(res.unknown, 0);
+	static const int16_t out[4] = { 2000, 16383, -16384, -6 };
+	for (int i = 0; i < NA_N; i++)
+		CHECK_EQ(get16(NA_DST + 2 * i), out[i & 3]);
+}
+
+/* ---- MP3 ----------------------------------------------------------------------
+ * Contra la síntesis de MPEG-1 (ISO 11172-3, 2.4.3.2.2) en coma flotante con
+ * la misma ventana (D[] reconstruida de los bloques 0–16 de la tabla y la
+ * simetría D[512 − i] = ±D[i] del estándar): la salida del RSP debe ser la
+ * de referencia por una constante, salvo redondeos. */
+
+#define MP3BUF 0x210000u
+
+static double mp3_d(int i)
+{
+	/* Bloques 0–16: T[j][k] = D[32k + j]. */
+	if (i % 32 <= 16)
+		return aud_mp3_window[(i % 32) * 32 + i / 32] / 32768.0;
+	double v = mp3_d(512 - i);
+	return (i & 63) ? -v : v;
+}
+
+static void mp3_window_table(void)
+{
+	/* Cada bloque repite sus 16 coeficientes; el pico D[256] vale 32767. */
+	for (int b = 0; b < 33; b++)
+		for (int k = 0; k < 15; k++)
+			CHECK_EQ(aud_mp3_window[32 * b + k], aud_mp3_window[32 * b + 16 + k]);
+	CHECK_EQ(aud_mp3_window[8], 32767);
+	/* D[64] = 0,003250122 y D[128] = 0,031082153 (ISO), escalados por
+	 * 32767 / 1,144989014. */
+	CHECK_EQ(aud_mp3_window[2], 93);
+	CHECK_EQ(aud_mp3_window[4], 890);
+}
+
+static void mp3_matches_reference(void)
+{
+	enum { CMDS = 4, SLOTS = 18 * CMDS };
+	static double vbuf[1024], ref[SLOTS * 32];
+	static int16_t sub[SLOTS][32];
+	fresh();
+	memset(vbuf, 0, sizeof vbuf);
+	uint32_t seed = 1;
+	for (int t = 0; t < SLOTS; t++)
+		for (int k = 0; k < 32; k++) {
+			seed = seed * 1103515245u + 12345u;
+			int amp = k < 4 ? 3000 : k < 12 ? 800 : 100;
+			sub[t][k] = (int16_t)((int)((seed >> 8) % (2 * amp + 1)) - amp);
+		}
+
+	/* Referencia: V = N·S, U de V, W = U·D, salida = Σ W. */
+	for (int t = 0; t < SLOTS; t++) {
+		memmove(vbuf + 64, vbuf, 960 * sizeof vbuf[0]);
+		for (int i = 0; i < 64; i++) {
+			double acc = 0;
+			for (int k = 0; k < 32; k++)
+				acc += cos((16 + i) * (2 * k + 1) * M_PI / 64) * sub[t][k];
+			vbuf[i] = acc;
+		}
+		for (int j = 0; j < 32; j++) {
+			double acc = 0;
+			for (int i = 0; i < 8; i++)
+				acc += vbuf[128 * i + j] * mp3_d(64 * i + j) + vbuf[128 * i + 96 + j] * mp3_d(64 * i + 32 + j);
+			ref[32 * t + j] = acc;
+		}
+	}
+
+	/* RSP: CMDS comandos MP3 seguidos; cada uno avanza el anillo 18 lugares
+	 * (el índice baja 36 ≡ 4). Ganancias enteras +1 y −1: en las ranuras
+	 * impares las muestras 17–31 salen con el signo cambiado y la segunda
+	 * palabra lo corrige (con +1 en las dos, esas muestras salen negadas). */
+	for (int c = 0; c < CMDS; c++) {
+		uint32_t a = MP3BUF + 0x1000 * c;
+		t_wr32(a, 0x00010000u);
+		t_wr32(a + 4, 0xFFFF0000u);
+		for (int t = 0; t < 18; t++)
+			for (int k = 0; k < 32; k++)
+				put16(a + 8 + 0x40 * t + 2 * k, sub[18 * c + t][k]);
+		cmd(0x07000000u | ((32u - 4u * c) & 0x1E), a);
+	}
+	run_abi(SALSA64_ABI_NAUDIO_MP3);
+	CHECK_EQ(res.errors, 0);
+	CHECK_EQ(res.unknown, 0);
+	CHECK_EQ(res.nranges, CMDS);
+
+	/* Escala por mínimos cuadrados y error relativo. */
+	double sxy = 0, sxx = 0, syy = 0;
+	for (int n = 0; n < SLOTS * 32; n++) {
+		double x = ref[n], y = get16(MP3BUF + 0x1000 * (n / 576) + 2 * (n % 576));
+		y = (int16_t)y;
+		sxy += x * y;
+		sxx += x * x;
+		syy += y * y;
+	}
+	double k = sxy / sxx, err = 0, maxerr = 0;
+	for (int n = 0; n < SLOTS * 32; n++) {
+		double y = (int16_t)get16(MP3BUF + 0x1000 * (n / 576) + 2 * (n % 576));
+		double e = fabs(y - k * ref[n]);
+		err += e * e;
+		if (e > maxerr)
+			maxerr = e;
+	}
+	double rms = sqrt(syy / (SLOTS * 32)), erms = sqrt(err / (SLOTS * 32));
+	if (getenv("SALSA64_MP3_DEBUG"))
+		fprintf(stderr, "mp3: k = %g, rms %.1f, error rms %.2f, máx %.1f\n", k, rms, erms, maxerr);
+	/* 2026-10-10: k = 1,00002, rms 3066, error rms 4,6 y máximo 19,6. */
+	CHECK(rms > 1000);
+	CHECK(fabs(k - 1) < 0.001);
+	CHECK(erms < 8);
+	CHECK(maxerr < 40);
+}
+
 /* ---- Tarea completa por el núcleo ------------------------------------------- */
 
 static void core_runs_audio_task(void)
@@ -531,10 +930,11 @@ static void selftest_lists_are_clean(void)
 {
 	static uint8_t a[AUD_SELFTEST_RAM], b[AUD_SELFTEST_RAM];
 	static struct aud_state sa, sb;
-	static const uint32_t abis[] = { SALSA64_ABI_NEAD_OOT, SALSA64_ABI_AUDIO, SALSA64_ABI_NEAD_MK };
+	static const uint32_t abis[] = { SALSA64_ABI_NEAD_OOT, SALSA64_ABI_AUDIO, SALSA64_ABI_NEAD_MK,
+					 SALSA64_ABI_NAUDIO_MP3, SALSA64_ABI_NAUDIO_BK };
 	aud_init(&sa);
 	aud_init(&sb);
-	for (unsigned i = 0; i < 3; i++) {
+	for (unsigned i = 0; i < sizeof abis / sizeof abis[0]; i++) {
 		struct aud_job job;
 		struct aud_result ra, rb;
 		memset(&job, 0, sizeof job);
@@ -573,6 +973,14 @@ void t_suite_audio(void)
 	RUN(ranges_merge_when_full);
 	RUN(abi1_segments_envmixer);
 	RUN(abi1_mixer_interleave);
+	RUN(naudio_load_mix_save);
+	RUN(naudio_envmixer_interleave);
+	RUN(naudio_adpcm_resample);
+	RUN(naudio_variant_tables);
+	RUN(naudio_filter);
+	RUN(naudio_overload);
+	RUN(mp3_window_table);
+	RUN(mp3_matches_reference);
 	RUN(core_runs_audio_task);
 	RUN(selftest_lists_are_clean);
 }

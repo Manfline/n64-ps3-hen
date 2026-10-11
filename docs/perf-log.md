@@ -129,6 +129,32 @@ diferido escrito por el hilo de presentación a los ~2 s (257 escrituras
 del juego), salida limpia. START + SELECT y «Salir del juego» funcionan;
 los controles llegan por el buzón entre hilos (vitest los identifica).
 
+## Audio: naudio y MP3 en el SPE 1 (2026-10-10)
+
+**PS3 real** (mismo equipo), rama `charming-allen-a8e4b3` con main
+485a747, recompilador. Paquete «Salsa64 naudio» (SLSA00080). Respaldos
+propios; ventanas de 5 s.
+
+| | Banjo-Kazooie | Perfect Dark | Conker |
+|---|---|---|---|
+| ABI | naudio (Banjo-Kazooie) | naudio con MP3 | naudio (Conker) |
+| Corrida | 89 s, del logo a jugar | 179 s, sin imagen (falta su microcódigo gráfico) | 96 s, pantalla negra (se detiene tras la primera tarea gráfica) |
+| Tareas | ~30/s, 0 sin implementar, 0 errores | ~30/s, 0 sin implementar, 0 errores | 30/s, 0 sin implementar, 0 errores |
+| HLE en el SPE 1, por tarea | mediana **2,92 ms** (ventanas 1,24–3,65; la más larga 5,68) | mediana **5,70 ms** (2,09–7,83; la más larga 10,38) | **1,56 ms** (solo el bus de efectos: el juego no dispara voces) |
+| PPE esperando al SPE | 0,000 ms | 0,000 ms | 0,000 ms |
+| Emulación | 100 % de media (mín. 88 %) | 97 % (mín. 78 %: el CPU) | 100 % |
+| Salida | 1,1 % en silencio (el llenado), 6,6 % estirado, 13 faltas breves, 0 bloques tarde | 2,3 % en silencio, 20,5 % estirado (las bajadas del CPU), 28 faltas breves, 0 bloques tarde | normal |
+| Hilo de audio | 1,9 % | 2,2 % | 1,7 % |
+| Oído (el autor) | «suena bien» (el video parpadea: de la HLE gráfica) | «suena bien» | silencio, lo esperado |
+
+Listas de prueba al arrancar (SPE contra PPE, ahora 5: nead OoT y MK, ABI1,
+naudio con MP3 y Banjo-Kazooie): iguales, 2,9 ms.
+
+El SPE 1 pasa ~9 % del tiempo en Banjo y ~17 % en Perfect Dark (más
+comandos por tarea: ~875 contra ~380, y el MP3). Código escalar; los
+candidatos a SIMD siguen siendo ENVMIXER, RESAMPLE y ADPCM, y ahora la
+ventana del MP3.
+
 ## Audio: AI, HLE de audio en el SPE 1 y salida (2026-10-10)
 
 **PS3 real** (mismo equipo), rama `amazing-varahamihira-3027c8`

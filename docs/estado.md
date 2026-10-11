@@ -128,6 +128,77 @@ Falta (para ver bien la casa de Link y las salas con fondo prerrenderizado):
       fondo sale negro aunque S2DEX lo copie. mupen64plus-rsp-hle la tiene
       (`jpeg.c`, GPLv2+; registrar en THIRD_PARTY si se adapta). Son 75
       tareas por sala, una vez (no por cuadro).
+
+## 2026-10-10 — naudio: Banjo-Kazooie, Conker, Perfect Dark (con MP3) y Donkey Kong 64
+
+Hecho (rama `charming-allen-a8e4b3`, con main 485a747):
+- **naudio** en la HLE portable (`src/rsp/audio/abi.c`): las tablas de
+  naudio, Banjo-Kazooie (la misma), Donkey Kong 64 (7 y 8 son MIXER) y los
+  de MP3 (Perfect Dark, Banjo-Tooie, Jet Force Gemini y Conker: 0
+  OVERLOAD, 7 MP3, 8 MP3ADDY, 0x0E filtro). Búferes fijos de 0x170 bytes
+  desde 0x4F0; ADPCM y RESAMPLE con el estado en w1; SETVOL con sus tres
+  formas y el 0x0E que salta a la mitad de SETVOL. IIR y OVERLOAD en
+  `alist.c`. Codificación verificada contra `alist_naudio.c` de
+  mupen64plus-rsp-hle (8a7a472a). La detección ya existía
+  (`src/core/rsp_audio.c`, palabra [0x10] de `ucode_data`).
+- **MP3** (`src/rsp/audio/mp3.c`): la síntesis de MPEG-1 Layer III que el
+  microcódigo hace en el RSP (DCT de 32 y ventana de 512), adaptada de
+  `mp3.c` del original e igual a él bit a bit (2304 muestras comparadas con
+  el original compilado aparte, fuera del repo). La ventana **no** es la
+  tabla del microcódigo: `tools/audio-mp3-lut.py` la genera desde la
+  ventana estándar (ISO 11172-3, vía `ff_mpa_enwindow` de FFmpeg, LGPL);
+  coincide con la del original en todas las entradas que se leen.
+  Memoria de trabajo aparte de la DMEM de las listas (2 KB, persiste entre
+  comandos como el anillo de la ventana). Las dos palabras de ganancia del
+  comando: Perfect Dark manda +16 y −16; la segunda corrige el signo de
+  las muestras 17–31 de las ranuras impares.
+- **SPE 1**: text 43 456, data 832, bss 22 416 bytes (~66 KB de 256 KB; la
+  cabecera de `src/spu/audio/main.c` lleva el desglose). Cabe sin
+  overlays.
+- **Pruebas** (suite audio, 23): cada comando naudio con listas sintéticas
+  y resultados a mano; el IIR contra una referencia directa en dos bloques
+  (sigue del estado); el MP3 contra la síntesis de MPEG-1 en coma flotante
+  (escala 1,00002, error rms 4,6 LSB sobre 3066, máximo 19,6). Listas
+  naudio con y sin MP3 en la autoprueba SPE contra PPE del arranque
+  (iguales en RPCS3).
+- **Mac** (`salsa64-run`, 3 min de consola, respaldos propios): Banjo-
+  Kazooie 5373 tareas, Conker 5389 y Perfect Dark 5216, todas **sin
+  errores ni comandos sin implementar** (el censo: todas con error). Banjo
+  y Perfect Dark suenan con niveles normales (−14 a −24 dBFS); Perfect
+  Dark manda 3166 comandos MP3 en 3 min y su PCM es continuo (sin saltos
+  en las fronteras de las ranuras). Conker sale en silencio: sin su
+  microcódigo gráfico se queda tras la primera tarea gráfica y no dispara
+  voces (no manda ADPCM ni ENVMIXER; solo el bus de efectos). WAVs para
+  escuchar en `build/naudio/` (fuera de git).
+- Sin regresiones: `tools/build.sh` sin advertencias, test-host en
+  verde (295 con main), `tools/test-roms.sh` (nemu64-test 446, vitest, controles,
+  savetest, gfxtest ×3, audiotest) y test-phase1/2 en RPCS3 OK.
+
+- **PS3 real** (paquete «Salsa64 naudio», SLSA00080): **Banjo-Kazooie y
+  Perfect Dark suenan bien** (el autor), 0 errores y 0 comandos sin
+  implementar; HLE en el SPE 1 por tarea: mediana 2,9 ms en Banjo y 5,7
+  ms en Perfect Dark (la más larga 10,4 ms), el PPE nunca espera.
+  Conker: pantalla negra y silencio como en la Mac, sus tareas sin
+  errores (1,6 ms). Detalle en docs/perf-log.md. Respaldos subidos a
+  `/dev_hdd0/salsa64/` como `banjo.z64` y `conker.z64`; `embedded` quedó
+  en `file:perfectdark.z64`, como estaba al empezar.
+
+Notas:
+- Banjo-Kazooie en la PS3: el **video parpadea** (uno de cada dos cuadros
+  sale incompleto: sin suelo y con medio Banjo) y el fondo sale negro. Es
+  de la HLE gráfica o la presentación, no del audio: para el trabajo de F3D.
+- OVERLOAD recorre 0x170 muestras como el original (el doble que los
+  demás comandos, que cuentan 0x170 bytes); ningún juego lo mandó en las
+  escenas a las que llegamos, así que queda sin verificar.
+- Conker: 4926 huecos entre DMA del AI en 3 min (el juego detenido); no es
+  de la HLE.
+
+Falta:
+- [ ] Oír Conker cuando el trabajo de F3D lo haga avanzar (F3DEXBG).
+- [ ] Probar Donkey Kong 64 (sin respaldo; la tabla es la del original).
+- [ ] MusyX (Rogue Squadron, Resident Evil 2, Indiana Jones…).
+- [ ] docs/compatibilidad.md: la columna de audio de Banjo, Conker y
+      Perfect Dark (queda para main, es del censo).
 ## 2026-10-10 — Arranque del CIC 6105 y censo de compatibilidad
 
 Hecho (rama `amazing-noether-39a548`; detalle en docs/cpu-vr4300.md,
@@ -353,7 +424,8 @@ Notas:
 Falta:
 - [ ] Oír Super Mario 64 (ABI1): sus tareas corren sin errores (0,115 ms)
       pero el juego no pasa del arranque sin F3D.
-- [ ] naudio (Perfect Dark, Banjo, Conker; Perfect Dark con MP3) y MusyX.
+- [x] naudio (Perfect Dark, Banjo, Conker; Perfect Dark con MP3): ver la entrada
+      de naudio. Falta MusyX.
 - [ ] Probar la política «silencio» y una escena lenta en la PS3; con el
       recompilador Zelda ya va al 100 % y casi no hace falta estirar.
 - [ ] Opcional: SIMD en ENVMIXER, RESAMPLE y ADPCM del SPE (hoy 2,4 ms por
