@@ -62,13 +62,12 @@ Opciones:
 - **Recorte del borde (overscan)**: sin recorte, normal (por omisión) o
   amplio. Recorta los bordes de la imagen, donde algunos juegos dejan
   basura.
-- **Resolución**: 720p o 1080p (se aplica al volver a abrir Salsa64).
-- **Mostrar FPS**: el contador de velocidad dentro del juego (abajo, en
-  «Contador de velocidad»). También se cambia en el juego con SELECT + △.
 - **Resolución**: 720p (por omisión, render a 3×) o 1080p (render a 4×).
   Solo se aplica al volver a abrir Salsa64; el panel muestra la salida
   actual y, si pediste 1080p y no se logró, recuerda activarlo en Ajustes de
   pantalla del XMB.
+- **Mostrar FPS**: el contador de velocidad dentro del juego (abajo, en
+  «Contador de velocidad»). También se cambia en el juego con SELECT + △.
 
 ## Controles en el juego
 
