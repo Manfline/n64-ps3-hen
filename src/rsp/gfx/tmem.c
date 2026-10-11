@@ -61,6 +61,61 @@ static void put32(uint8_t *tmem, uint32_t idx, const uint8_t *src)
 	memcpy(tmem + 0x800 + idx * 2, src + 2, 2);
 }
 
+/* Anota una carga: el tramo [tmem, tmem + bytes) de la TMEM vino de `addr`
+ * en filas de `line` bytes, de una imagen con `row_bytes` por fila. */
+#ifdef SALSA64_GFX_TRACE
+/* Depuración en el host (src/host/run.c): cada carga a la TMEM. */
+void salsa64_gfx_trace_load(const struct gfx_state *g, uint32_t addr, uint32_t bytes, uint32_t line);
+#endif
+
+static void note_load(struct gfx_state *g, uint32_t tmem, uint32_t bytes, uint32_t line, uint32_t addr,
+		      uint32_t row_bytes)
+{
+#ifdef SALSA64_GFX_TRACE
+	salsa64_gfx_trace_load(g, addr, bytes, line);
+#endif
+	struct gfx_load *l = &g->loads[g->load_next++ & (GFX_LOADS - 1)];
+	l->addr = addr;
+	l->row_bytes = row_bytes;
+	l->tmem = (uint16_t)(tmem & TMEM_MASK);
+	l->bytes = (uint16_t)(bytes > 4096 ? 4096 : bytes);
+	l->line = (uint16_t)line;  /* 0: LOADBLOCK, texels seguidos */
+	l->pitch = g->timg_width;
+	l->siz = g->timg_siz;
+	l->fmt = g->timg_fmt;
+}
+
+/* De qué carga lee la tile (la más reciente que escribió su inicio en la
+ * TMEM con las mismas filas) y dónde está en la RDRAM su texel (0, 0). */
+static void provenance(const struct gfx_state *g, const struct gfx_tile *t, struct gfx_tex *tex)
+{
+	for (uint32_t k = 1; k <= GFX_LOADS; k++) {
+		const struct gfx_load *l = &g->loads[(g->load_next - k) & (GFX_LOADS - 1)];
+		/* libultra carga las texturas de 4 y 8 bits como de 16 (LOADBLOCK
+		 * cuenta texels de 16): el tamaño que vale es el de la tile que lee. */
+		if (!l->bytes || !t->line || (l->line != 0 && l->siz != t->siz))
+			continue;
+		if (t->tmem < l->tmem || t->tmem >= (uint32_t)l->tmem + l->bytes)
+			continue;
+		uint32_t off = t->tmem - l->tmem;
+		if (l->line == 0) {
+			/* LOADBLOCK: texels seguidos (libultra manda ancho 1 en SETTIMG):
+			 * las filas son las de la tile que lee, y el paso de la imagen
+			 * de origen, el ancho de esa fila. */
+			tex->src_addr = l->addr + off;
+			tex->src_pitch = (uint16_t)(t->line * 2 / half_bytes(t->siz));
+		} else {
+			if (l->line != t->line)
+				continue;
+			tex->src_addr = l->addr + (off / l->line) * l->row_bytes + off % l->line;
+			tex->src_pitch = l->pitch;
+		}
+		tex->src_siz = l->line == 0 ? t->siz : l->siz;
+		tex->src_fmt = l->fmt;
+		return;
+	}
+}
+
 void gfx_load_block(struct gfx_state *g, uint32_t w0, uint32_t w1)
 {
 	struct gfx_tile *t = &g->tiles[(w1 >> 24) & 7];
@@ -82,6 +137,8 @@ void gfx_load_block(struct gfx_state *g, uint32_t w0, uint32_t w1)
 		g->res->dl_errors++;
 		return;
 	}
+	/* Los texels van seguidos: línea 0 (la tile que lea decide las filas). */
+	note_load(g, t->tmem, bytes, 0, src, 0);
 	if (g->timg_siz == G_IM_SIZ_32b) {
 		uint32_t base = t->tmem / 2;
 		for (uint32_t k = 0; k < bytes / 8; k++) {
@@ -115,6 +172,8 @@ void gfx_load_tile(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	if (row_bytes > 4096)
 		row_bytes = 4096;
 	g->res->loads++;
+	note_load(g, t->tmem, rows * t->line, t->line, g->timg_addr + ((y0 * g->timg_width + x0) * hb) / 2,
+		  (uint32_t)g->timg_width * hb / 2);
 
 	for (uint32_t r = 0; r < rows; r++) {
 		uint32_t src = g->timg_addr + (((y0 + r) * g->timg_width + x0) * hb) / 2;
@@ -310,7 +369,25 @@ static void decode(const struct gfx_state *g, const struct gfx_tile *t, uint32_t
 	}
 }
 
+static bool resolve_content(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, bool premul,
+			    struct gfx_tex *tex);
+
+/* La textura de la tile (contenido, de la caché o decodificado) y de
+ * dónde vino. El origen se pone después: dos tiles con el mismo contenido
+ * comparten textura pero pueden venir de distinto lugar. */
 static bool resolve(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, bool premul, struct gfx_tex *tex)
+{
+	if (!resolve_content(g, t, tt, premul, tex))
+		return false;
+	tex->src_addr = 0;
+	tex->src_pitch = 0;
+	tex->src_siz = tex->src_fmt = 0;
+	provenance(g, t, tex);
+	return true;
+}
+
+static bool resolve_content(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, bool premul,
+			    struct gfx_tex *tex)
 {
 	uint32_t w, h;
 	gfx_tile_size(t, &w, &h);

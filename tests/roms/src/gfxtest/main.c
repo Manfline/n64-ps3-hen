@@ -28,7 +28,10 @@
  * SHADE_ALPHA)·SHADE, la niebla por luz de GoldenEye (Q), un cuadro el
  * doble de grande que un viewport chico con clip ratio 1 (O: el RSP lo
  * recorta a la ventana) y uno que cruza el plano cercano (R: la mitad de
- * detrás no se dibuja). Al
+ * detrás no se dibuja), una color image de 64 que se dibuja y se lee como
+ * textura en la misma lista (S: render a textura) y una del ancho del
+ * framebuffer que el RDP llena y el CPU lee en el cuadro siguiente (T:
+ * copia RSX → RDRAM). Al
  * final de cada lista, un tramo de otro microcódigo (G_LOAD_UCODE) que la
  * HLE debe saltar; en GFXTEST_CUT_FRAME la lista termina dentro de él (no
  * en la variante F3D, que no tiene G_LOAD_UCODE).
@@ -142,6 +145,14 @@ struct rsp_data {
 static struct rsp_data rsp_mem __attribute__((section(".rsp")));
 static uint16_t fb[2][W * H] __attribute__((section(".fb"), aligned(64)));
 static uint16_t zbuf[W * H] __attribute__((section(".fb"), aligned(64)));
+/* Efectos de framebuffer (docs/framebuffer.md): una color image chica que
+ * se dibuja y se lee como textura en la misma lista, y una del ancho del
+ * framebuffer que el RDP llena y el CPU lee en el cuadro siguiente. */
+static uint16_t fb_small[64 * 16] __attribute__((section(".fb"), aligned(64)));
+static uint16_t fb_save[W * H] __attribute__((section(".fb"), aligned(64)));
+static uint16_t fb_cpu[64 * 16] __attribute__((section(".fb"), aligned(64)));
+static uint16_t saved_pixel;  /* lo que el CPU leyó de fb_save tras el cuadro anterior */
+static uint16_t small_pixel;  /* lo que el CPU leyó de fb_cpu (64 de ancho) */
 
 #define R ((volatile struct rsp_data *)((uint32_t)&rsp_mem | 0x20000000u))
 
@@ -662,6 +673,58 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	sp_vertex(&dl, r->quad_r, 4, 0);
 	sp_tri2(&dl, 0, 1, 2, 0, 2, 3);
 
+	/* S: render a textura. fb_small (64 de ancho) se llena de magenta y en
+	 * esta misma lista se dibuja como textura en el framebuffer: en la PS3
+	 * se lee de la superficie del RSX; sin eso la RDRAM de fb_small está en
+	 * cero y el rectángulo saldría negro. */
+	dp_othermode(&dl, CYC_FILL, 0);
+	dp_color_image(&dl, FMT_RGBA, SIZ_16, 64, fb_small);
+	dp_scissor(&dl, 0, 0, 64, 16);
+	dp_fill_color(&dl, 0xF83FF83Fu);  /* (31, 0, 31, 1) */
+	dp_fill_rect(&dl, 0, 0, 63, 15);
+	dp_sync(&dl, SYNC_PIPE);
+	dp_color_image(&dl, FMT_RGBA, SIZ_16, W, color);
+	dp_scissor(&dl, 0, 0, W, H);
+	dp_texture_image(&dl, FMT_RGBA, SIZ_16, 64, fb_small);
+	dp_tile(&dl, FMT_RGBA, SIZ_16, 8, 0, 7, 0, 0, 0, 0);  /* 32 texels por fila: 8 palabras */
+	dp_sync(&dl, SYNC_LOAD);
+	dp_load_tile(&dl, 7, 0, 0, 31, 7);
+	dp_sync(&dl, SYNC_PIPE);
+	dp_tile(&dl, FMT_RGBA, SIZ_16, 8, 0, 0, 0, 0, 0, 0);
+	dp_tile_size(&dl, 0, 0, 0, 31, 7);
+	dp_othermode(&dl, CYC_COPY, 0);
+	sp_texrect(&dl, 0, 140, 106, 171, 113, 0, 0, 4 << 10, 1 << 10);
+
+	/* T: copia RSX → RDRAM. fb_save, del ancho del framebuffer, se llena de
+	 * rojo en sus primeras filas; el CPU la lee al terminar el cuadro (main)
+	 * y aquí pinta con ese color lo que leyó en el cuadro anterior: en la
+	 * PS3 el destino tiene que estar copiado a la RDRAM antes de la
+	 * interrupción del DP. */
+	dp_othermode(&dl, CYC_FILL, 0);
+	dp_color_image(&dl, FMT_RGBA, SIZ_16, W, fb_save);
+	dp_scissor(&dl, 0, 0, W, 8);
+	dp_fill_color(&dl, 0xF801F801u);  /* rojo */
+	dp_fill_rect(&dl, 0, 0, W - 1, 7);
+	dp_sync(&dl, SYNC_PIPE);
+	dp_color_image(&dl, FMT_RGBA, SIZ_16, W, color);
+	dp_scissor(&dl, 0, 0, W, H);
+	dp_fill_color(&dl, (uint32_t)saved_pixel << 16 | saved_pixel);
+	dp_fill_rect(&dl, 140, 116, 171, 123);
+
+	/* U: como P pero con una color image de 64 de ancho que ningún dibujo
+	 * lee (el render de Link en la pausa de Zelda, que el CPU filtra): se
+	 * llena de verde y el CPU la lee al terminar el cuadro. */
+	dp_othermode(&dl, CYC_FILL, 0);
+	dp_color_image(&dl, FMT_RGBA, SIZ_16, 64, fb_cpu);
+	dp_scissor(&dl, 0, 0, 64, 16);
+	dp_fill_color(&dl, 0x07C107C1u);  /* (0, 31, 0, 1) */
+	dp_fill_rect(&dl, 0, 0, 63, 15);
+	dp_sync(&dl, SYNC_PIPE);
+	dp_color_image(&dl, FMT_RGBA, SIZ_16, W, color);
+	dp_scissor(&dl, 0, 0, W, H);
+	dp_fill_color(&dl, (uint32_t)small_pixel << 16 | small_pixel);
+	dp_fill_rect(&dl, 176, 106, 207, 113);
+
 	/* Tramo de otro microcódigo (como S2DEX en Zelda OoT): G_LOAD_UCODE a
 	 * otra dirección, comandos que la HLE debe saltar (si los ejecutara, el
 	 * FILLRECT rojo taparía la escena y expect.h lo vería) y la vuelta al
@@ -854,6 +917,9 @@ int main(void)
 			}
 			MI_MODE = 0x0800;  /* bajar la interrupción DP */
 		}
+		/* Lo que el RDP dejó en fb_save (caso P), sin pasar por la caché. */
+		saved_pixel = *(volatile uint16_t *)((uint32_t)&fb_save[3 * W + 100] | 0xA0000000u);
+		small_pixel = *(volatile uint16_t *)((uint32_t)&fb_cpu[9 * 64 + 40] | 0xA0000000u);
 		if (errors && !first_error)
 			first_error = frame + 1;
 

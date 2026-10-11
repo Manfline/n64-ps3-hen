@@ -98,6 +98,20 @@ struct gfx_rare {
 	float light_ca[GFX_MAX_LIGHTS + 1];  /* intensidad de la luz puntual */
 };
 
+/* Una carga a la TMEM (LOADBLOCK o LOADTILE): qué tramo de la TMEM
+ * escribió y de dónde lo trajo, para saber de qué imagen de la RDRAM sale
+ * cada textura (gfx_tex.src_*). Se guardan las últimas GFX_LOADS. */
+#define GFX_LOADS 4
+struct gfx_load {
+	uint32_t addr;       /* RDRAM: primer byte cargado */
+	uint32_t row_bytes;  /* bytes por fila de la imagen de origen */
+	uint16_t tmem;       /* tramo escrito en la TMEM, en bytes (32 bits: la mitad baja) */
+	uint16_t bytes;
+	uint16_t line;       /* bytes por fila en la TMEM (LOADBLOCK: 0, texels seguidos) */
+	uint16_t pitch;      /* texels por fila de la imagen de origen */
+	uint8_t siz, fmt;
+};
+
 /* Última textura resuelta por tile en la tarea: vale mientras no haya
  * cargas a la TMEM ni cambios de tiles (tex_gen) ni del modo de paleta. */
 struct gfx_tilememo {
@@ -154,6 +168,8 @@ struct gfx_state {
 	uint8_t timg_fmt, timg_siz;
 	struct gfx_tile tiles[8];
 	uint32_t tex_gen;          /* cambia con cada carga a la TMEM o cambio de tile */
+	struct gfx_load loads[GFX_LOADS];  /* anillo; load_next es la próxima a escribir */
+	uint32_t load_next;
 	uint8_t tmem[4096] __attribute__((aligned(16)));
 	struct gfx_texcache tc;
 

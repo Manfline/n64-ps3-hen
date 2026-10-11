@@ -76,12 +76,16 @@ int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32
 	struct rdp_target *t = &s->t[i];
 	t->used = true;
 	t->drawn = false;
+	t->presented = false;
+	t->cpu_owned = false;
 	t->addr = addr;
 	t->width = width;
 	t->bpp = siz == IM_SIZ_32b ? 4 : siz == IM_SIZ_8b ? 1 : 2;
+	t->fmt = 0;
 	t->lw = lw;
 	t->lh = lh;
 	t->last_field = s->field;
+	t->last_task = s->task;
 	s->created++;
 	*fresh = true;
 	return i;
@@ -92,7 +96,106 @@ void rdp_targets_drawn(struct rdp_targets *s, int slot)
 	if (slot < 0 || slot >= RDP_TARGETS_MAX)
 		return;
 	s->t[slot].last_field = s->field;
+	s->t[slot].last_task = s->task;
 	s->t[slot].drawn = true;
+	s->t[slot].cpu_owned = false;  /* el RDP volvió a escribir: la verdad está en el RSX */
+}
+
+void rdp_targets_task(struct rdp_targets *s)
+{
+	s->task++;
+}
+
+enum rdp_texsrc rdp_targets_texture(struct rdp_targets *s, uint32_t addr, uint32_t pitch, uint32_t bpp, int cur,
+				    int *slot, uint32_t *x0, uint32_t *y0)
+{
+	int i = rdp_targets_locate(s, addr, pitch, bpp, x0, y0);
+	*slot = i;
+	if (i < 0)
+		return RDP_TEXSRC_NONE;
+	const struct rdp_target *t = &s->t[i];
+	if (t->cpu_owned || s->task - t->last_task > RDP_TARGETS_FRESH) {
+		s->tex_rdram++;
+		return RDP_TEXSRC_RDRAM;
+	}
+	if (i == cur) {
+		s->tex_self++;
+		return RDP_TEXSRC_SELF;
+	}
+	s->tex_rsx++;
+	return RDP_TEXSRC_RSX;
+}
+
+bool rdp_targets_readback(struct rdp_targets *s, int slot, bool force)
+{
+	if (slot < 0 || slot >= RDP_TARGETS_MAX || !s->t[slot].used)
+		return false;
+	struct rdp_target *t = &s->t[slot];
+	if (!force) {
+		if (t->presented || t->bpp != 2 || t->width != s->vi_width)
+			return false;
+	}
+	t->cpu_owned = true;
+	s->readbacks++;
+	return true;
+}
+
+void rdp_vi_ring_push(struct rdp_vi_ring *r, uint32_t origin, uint32_t width)
+{
+	if (!width)
+		return;
+	for (uint32_t k = 0; k < RDP_VI_RING && k < r->n; k++)
+		if (r->origin[(r->n - 1 - k) % RDP_VI_RING] == origin)
+			return;
+	r->origin[r->n % RDP_VI_RING] = origin;
+	r->width[r->n % RDP_VI_RING] = width;
+	r->n++;
+}
+
+bool rdp_vi_ring_covers(const struct rdp_vi_ring *r, uint32_t addr, uint32_t width)
+{
+	(void)width;
+	for (uint32_t k = 0; k < RDP_VI_RING && k < r->n; k++) {
+		uint32_t o = r->origin[(r->n - 1 - k) % RDP_VI_RING], w = r->width[(r->n - 1 - k) % RDP_VI_RING];
+		/* Un framebuffer empieza un poco antes del origen (líneas que el VI
+		 * no muestra) y mide unas 3/4 del ancho de alto. */
+		uint32_t line = w * 2, lo = o > 8 * line ? o - 8 * line : 0, hi = o + line * (w * 3 / 4);
+		if (addr >= lo && addr < hi)
+			return true;
+	}
+	return false;
+}
+
+bool rdp_readback_wanted(const struct rdp_vi_ring *r, uint32_t addr, uint32_t width, uint32_t siz)
+{
+	if (siz != 2u || !r->n || width != r->width[(r->n - 1) % RDP_VI_RING])
+		return false;
+	return !rdp_vi_ring_covers(r, addr, width);
+}
+
+int rdp_targets_locate(const struct rdp_targets *s, uint32_t addr, uint32_t pitch, uint32_t bpp, uint32_t *x0,
+		       uint32_t *y0)
+{
+	int best = -1;
+	uint32_t best_off = 0;
+	for (int i = 0; i < RDP_TARGETS_MAX; i++) {
+		const struct rdp_target *t = &s->t[i];
+		uint32_t line = t->width * t->bpp;
+		if (!t->used || t->width != pitch || t->bpp != bpp || !line || addr < t->addr ||
+		    addr >= t->addr + line * t->lh)
+			continue;
+		uint32_t off = addr - t->addr;
+		if (best < 0 || off < best_off) {
+			best = i;
+			best_off = off;
+		}
+	}
+	if (best < 0)
+		return -1;
+	uint32_t line = s->t[best].width * bpp;
+	*x0 = (best_off % line) / bpp;
+	*y0 = best_off / line;
+	return best;
 }
 
 /* ¿El destino cubre el origen del VI? Da la línea lógica donde cae. */
@@ -154,6 +257,8 @@ void rdp_targets_present(struct rdp_targets *s, const struct salsa64_vi_frame *f
 	s->shown = best;
 	s->shown_origin = f->origin;
 	s->shown_field = field;
+	if (best >= 0)
+		s->t[best].presented = true;
 	out->slot = best;
 	out->y0 = out->w = out->h = out->age = 0;
 	if (best < 0)
