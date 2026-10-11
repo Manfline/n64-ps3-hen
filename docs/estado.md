@@ -586,6 +586,12 @@ sugerido: recorte → líneas del logo → framebuffer → JIT.
   (68 ms por sala en el PPE, meta < 10 ms); luego Majora's Mask.
 - Recompilador: FPU en registros, más registros fijos y refill de la TLB
   (en curso desde el 2026-10-11).
+- **Quitarle trabajo al PPE** (decidido el 2026-10-11, después de cerrar los
+  trabajos abiertos): el VR4300 se queda en el PPE (memoria, FPU IEEE y saltos
+  no le van a un SPE), pero lo demás pasa a los SPEs libres (2–5) para que el
+  hilo 0 tenga el núcleo: tarea JPEG de Zelda (68 ms en el PPE), conversión de
+  texturas, lo que quede de la presentación del hilo 1. Ordenar con
+  docs/uso-cell.md (uso medido por componente y por juego).
 - Fase 5 (posprocesado, MSAA) después de presentación y menú; recompilador
   RSP→SPU para el LLE; conversión genérica de texturas en lib/rsxkit/spu.
 
