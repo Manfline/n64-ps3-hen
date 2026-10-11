@@ -775,12 +775,26 @@ static void translate(uint32_t n)
 			const struct gfx_draw *g = (const struct gfx_draw *)c;
 			if (cur < 0 || !g->h.b)
 				break;
-			if (g->viscvg) {
-				viscvg(cur, g);
-				break;
-			}
 			bool sync;
-			to_rsxkit(g, s, cur, &rd, &sync);
+			if (g->viscvg) {
+				/* Cobertura plena en la RDRAM y, en la superficie, blanco
+				 * (el RDP copia después esa «cobertura» a otra imagen y el
+				 * CPU la lee: Link en la pausa de Zelda). */
+				viscvg(cur, g);
+				struct gfx_draw w = *g;
+				w.ntex = 0;
+				w.nterms = 0;
+				w.blend = GFX_BLEND_OFF;
+				w.atest = 0;
+				w.fog = 0;
+				w.depth = 0;
+				memset(w.k, 0, sizeof w.k);
+				for (int lane = 0; lane < 4; lane++)
+					w.k[GFX_K_ONE][0][lane] = 1.0f;
+				to_rsxkit(&w, s, cur, &rd, &sync);
+			} else {
+				to_rsxkit(g, s, cur, &rd, &sync);
+			}
 			if (sync) {
 				/* Lee una superficie dibujada en este mismo tramo. */
 				rsxkit_texture_sync();

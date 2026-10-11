@@ -495,9 +495,21 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 #endif
 			if (cur < 0)
 				break;
+			struct gfx_draw white;
 			if (d->viscvg) {
+				/* Cobertura plena en la RDRAM y blanco en la imagen (como rdp.c). */
 				viscvg(job, cur, d);
-				break;
+				white = *d;
+				white.ntex = 0;
+				white.nterms = 0;
+				white.blend = GFX_BLEND_OFF;
+				white.atest = 0;
+				white.fog = 0;
+				white.depth = 0;
+				memset(white.k, 0, sizeof white.k);
+				for (int lane = 0; lane < 4; lane++)
+					white.k[GFX_K_ONE][0][lane] = 1.0f;
+				d = &white;
 			}
 			struct texsrc src[2];
 			for (int i = 0; i < 2; i++) {
