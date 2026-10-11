@@ -59,12 +59,24 @@ Pruebas:
   vitest, controles, savetest, gfxtest ×3, audiotest), build sin
   advertencias, `test-phase1`, `test-phase2` y `test-rec`: verdes.
 
-Falta:
-- [ ] PS3 real (paquete «Salsa64 menú», SLSA00086): que el menú liste los
-      juegos propios, que abra Zelda y SM64, que START + SELECT vuelva y
-      deje abrir otro, que el guardado se conserve, y que la salida al XMB
-      sea limpia. Aprovechar para medir el menú (cuadros por segundo con
-      ondas).
+- **PS3 real** (paquete «Salsa64 menú», SLSA00086, con main 5c2b00e
+  fusionado): el autor confirma que funciona correctamente.
+  - El menú listó los 8 respaldos de `/dev_hdd0/salsa64`.
+  - Se abrió Mario Kart 64; START + SELECT volvió al menú, con todos los
+    pasos del cierre en 0 y «cierre: estado limpio».
+  - Perfect Dark escribió su EEPROM de 16 Kbit durante el juego («escrito
+    diferido»), volvió al menú y, al reabrirlo, se leyeron sus 2048 bytes:
+    el guardado se conserva.
+  - «Salir al XMB» terminó en «salida normal» y volvió al XMB sin pantalla
+    negra.
+  - Cada juego arrancó con el recompilador vacío y el audio al 99–101 %
+    (log en `build/ps3-logs/salsa64-menu.log`, fuera de git).
+
+Falta (opcional):
+- [ ] Medir el menú en la PS3 (cuadros por segundo con ondas; hoy no lo
+      escribe al log).
+- [ ] Probar el menú en una tele 4:3 o a 1080p (la vista previa del host
+      cubre 4:3).
 ## 2026-10-10 (noche) — Cierre de la jornada
 
 **Integrado y subido hoy** (main 8231305): controles y bucles de espera, guardado
