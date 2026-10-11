@@ -67,7 +67,8 @@ con caché de 3 MB y 92 desalojos), vitest y Perfect Dark 300 M ciclos;
 `tools/build.sh test-host` 365/365 y `tools/test-roms.sh` en verde. El
 lockstep de GoldenEye hasta la presa (7,5 G ciclos) pasó **sin
 diferencias** con la FPU residente (9d1eba0: 283,6 M salidas comparadas) y
-con el árbol final (15d6724: 204 M salidas, 1 vaciado y 6 desalojos). Dos
+con el árbol final (15d6724: 204 M salidas, 1 vaciado y 6 desalojos); la
+intro de Perfect Dark (3 G ciclos) también, con el árbol final. Dos
 errores que solo el lockstep encontró: el camino lento de
 LWC1 cargando el registro residente de la RDRAM (Perfect Dark abortaba) y
 los saltos internos dejando basura en los registros escritos por las
