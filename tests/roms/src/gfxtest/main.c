@@ -150,7 +150,9 @@ static uint16_t zbuf[W * H] __attribute__((section(".fb"), aligned(64)));
  * framebuffer que el RDP llena y el CPU lee en el cuadro siguiente. */
 static uint16_t fb_small[64 * 16] __attribute__((section(".fb"), aligned(64)));
 static uint16_t fb_save[W * H] __attribute__((section(".fb"), aligned(64)));
+static uint16_t fb_cpu[64 * 16] __attribute__((section(".fb"), aligned(64)));
 static uint16_t saved_pixel;  /* lo que el CPU leyó de fb_save tras el cuadro anterior */
+static uint16_t small_pixel;  /* lo que el CPU leyó de fb_cpu (64 de ancho) */
 
 #define R ((volatile struct rsp_data *)((uint32_t)&rsp_mem | 0x20000000u))
 
@@ -709,6 +711,20 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	dp_fill_color(&dl, (uint32_t)saved_pixel << 16 | saved_pixel);
 	dp_fill_rect(&dl, 140, 116, 171, 123);
 
+	/* U: como P pero con una color image de 64 de ancho que ningún dibujo
+	 * lee (el render de Link en la pausa de Zelda, que el CPU filtra): se
+	 * llena de verde y el CPU la lee al terminar el cuadro. */
+	dp_othermode(&dl, CYC_FILL, 0);
+	dp_color_image(&dl, FMT_RGBA, SIZ_16, 64, fb_cpu);
+	dp_scissor(&dl, 0, 0, 64, 16);
+	dp_fill_color(&dl, 0x07C107C1u);  /* (0, 31, 0, 1) */
+	dp_fill_rect(&dl, 0, 0, 63, 15);
+	dp_sync(&dl, SYNC_PIPE);
+	dp_color_image(&dl, FMT_RGBA, SIZ_16, W, color);
+	dp_scissor(&dl, 0, 0, W, H);
+	dp_fill_color(&dl, (uint32_t)small_pixel << 16 | small_pixel);
+	dp_fill_rect(&dl, 176, 106, 207, 113);
+
 	/* Tramo de otro microcódigo (como S2DEX en Zelda OoT): G_LOAD_UCODE a
 	 * otra dirección, comandos que la HLE debe saltar (si los ejecutara, el
 	 * FILLRECT rojo taparía la escena y expect.h lo vería) y la vuelta al
@@ -903,6 +919,7 @@ int main(void)
 		}
 		/* Lo que el RDP dejó en fb_save (caso P), sin pasar por la caché. */
 		saved_pixel = *(volatile uint16_t *)((uint32_t)&fb_save[3 * W + 100] | 0xA0000000u);
+		small_pixel = *(volatile uint16_t *)((uint32_t)&fb_cpu[9 * 64 + 40] | 0xA0000000u);
 		if (errors && !first_error)
 			first_error = frame + 1;
 

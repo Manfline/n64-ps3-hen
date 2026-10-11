@@ -75,6 +75,7 @@ struct gfxtest_point {
 	{ 287, 232, 0x804080, "2 ciclos, lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE (generado)" }, \
 	{ 150, 109, 0xFF00FF, "render a textura: color image de 64 leída como textura" },    \
 	{ 150, 119, 0xFF0000, "copia RSX → RDRAM: el CPU leyó la color image guardada" }, \
+	{ 190, 109, 0x00FF00, "copia RSX → RDRAM de una color image de 64 de ancho (el CPU la leyó)" }, \
 	{ 20, 90, 0x00FF80, "clip ratio 1: dentro del viewport chico" },              \
 	{ 5, 90, GFXTEST_BG, "clip ratio 1: fuera del viewport (izquierda)" },         \
 	{ 35, 90, GFXTEST_BG, "clip ratio 1: fuera del viewport (derecha)" },          \
