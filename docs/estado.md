@@ -76,8 +76,36 @@ Pendiente:
       sin errores, 60 campos/s).
 - [x] PS3 real, SM64 en el castillo: «todo se ve bien» (el autor; log
       `build/ps3-logs/sm64-recorte.log`).
-- [ ] PS3 real, regresiones: GoldenEye y la intro de Perfect Dark (muros
-      cercanos).
+- [ ] **GoldenEye en la PS3 (noche del 2026-10-10): líneas azules finas en
+      uniones de polígonos** que corren hacia la cámara (centro de la
+      carretera del túnel de Dam, base de la barrera; fotos del autor). Sin
+      atribuir. Lo que se descartó en el host: el punto de corte de una
+      arista compartida se calcula en distinto orden en cada triángulo
+      vecino, pero coincide hasta 0,001 px (`SALSA64_GFX_CUTCHECK`, 3572
+      vértices cortados en 619 campos de Dam) y el rasterizador de la Mac no
+      muestra ninguna grieta en las uniones con esta rama; las líneas no
+      corren a lo largo del corte del plano cercano (sería horizontal, abajo).
+      No se llegó al túnel sin manos (dos guiones chocan con paredes). El
+      cian de GoldenEye ya conocido era otra cosa (soldados y armas, por el
+      combiner). **Decide un A/B en la PS3**: «Salsa64 menú» o «Salsa64 alfa»
+      (main sin este recorte) en el mismo túnel. Si también salen, pendiente
+      aparte (no de esta rama); si no, el sospechoso es cómo el RSX
+      rasteriza los triángulos cortados (volcado `gfxdump` del campo malo
+      para dibujarlo en la Mac con `--raster-dump`).
+- [ ] PS3 real, pendiente: la intro de Perfect Dark (muros cercanos).
+
+Qué ver mañana en la PS3 (paquete «Salsa64 recorte», SLSA00090;
+`embedded` en /dev_hdd0/salsa64/, se cambia por FTP):
+1. `file:goldeneye.z64` con «Salsa64 recorte» y luego la misma escena con
+   «Salsa64 menú» o «Salsa64 alfa»: túnel de Dam con las barreras a rayas,
+   mirando el centro de la carretera y la base de la barrera. Lo esperado si
+   es de esta rama: líneas azules solo en «recorte».
+2. `file:perfectdark.z64`: intro (vuelo por la ciudad) y un nivel. Se toma
+   como NoN: lo esperado es verlo como antes; si hay puntas estiradas en
+   muros cercanos, su microcódigo sí recorta (una línea en
+   `src/rsp/gfx/sync.c`); si hay huecos negros, no.
+3. Ya confirmados hoy: Mario Kart (demo al entrar y al encogerse, sin
+   puntas) y SM64 en el castillo (suelo junto al foso), «todo se ve bien».
 - [ ] En RPCS3 el modo de prueba automática sale a los 1800 campos y el
       zoom sin tocar nada cae en el 3300 (`capturas` "25 3500" no llega):
       dejar que el M de `capturas N M` mande sobre AUTO_FIELDS si hace falta

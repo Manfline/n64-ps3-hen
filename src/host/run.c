@@ -64,6 +64,9 @@
  * sigue; con SALSA64_GFX_TEAR además la corre al arrancar y avisa si la
  * salida cambió entre las dos (el CPU tocó durante la tarea algo que la
  * lista lee); SALSA64_GFX_TEAR_V lista los vértices distintos.
+ * SALSA64_GFX_CUTCHECK mide, por tarea, cuánto se separan los vértices que
+ * la HLE puso sobre el plano cercano entre triángulos vecinos (una grieta
+ * en una arista compartida sería ≥ 1 px).
  *
  * Códigos de salida:
  *   0  apareció el texto de --until-text, o se agotaron los ciclos sin pedirlo
@@ -603,10 +606,65 @@ static void gfx_acquire(void *ctx, struct gfx_job *job)
 #endif
 }
 
+/* SALSA64_GFX_CUTCHECK (diagnóstico): los vértices que la HLE puso sobre el
+ * plano cercano (profundidad 0) deberían coincidir entre triángulos vecinos
+ * que comparten la arista cortada; se agrupan por posición en pantalla y se
+ * mide cuánto se separan dentro de cada grupo (una grieta sería ≥ 1 px). */
+static void cut_check(const struct gfx_result *res)
+{
+	static float px[8192], py[8192];
+	unsigned n = 0;
+	for (uint32_t off = 0; off + sizeof(struct gfx_cmd) <= res->cmd_bytes;) {
+		const struct gfx_cmd *c = (const struct gfx_cmd *)(gfx_cmd + off);
+		if (c->op == GFX_OP_END || !c->size)
+			break;
+		if (c->op == GFX_OP_DRAW) {
+			const struct gfx_draw *d = (const struct gfx_draw *)c;
+			for (uint32_t i = 0; i < d->h.b && n < 8192; i++) {
+				const struct gfx_vertex *v = &gfx_vtx[d->h.a + i];
+				if (d->prim_kind == 0 && v->w > 0.0f && fabsf(v->z / v->w) < 1e-5f) {
+					px[n] = v->x / v->w;
+					py[n] = v->y / v->w;
+					n++;
+				}
+			}
+		}
+		off += c->size;
+	}
+	if (!n)
+		return;
+	unsigned groups = 0, orphans = 0;
+	float worst = 0.0f;
+	static bool used[8192];
+	memset(used, 0, n);
+	for (unsigned i = 0; i < n; i++) {
+		if (used[i])
+			continue;
+		unsigned members = 1;
+		float far = 0.0f;
+		for (unsigned j = i + 1; j < n; j++) {
+			float dx = px[j] - px[i], dy = py[j] - py[i];
+			if (fabsf(dx) < 0.5f && fabsf(dy) < 0.5f) {
+				used[j] = true;
+				members++;
+				float dd = sqrtf(dx * dx + dy * dy);
+				far = dd > far ? dd : far;
+			}
+		}
+		groups++;
+		orphans += members == 1;
+		worst = far > worst ? far : worst;
+	}
+	fprintf(stderr, "cutcheck campo %u: %u vértices en el plano cercano, %u grupos (%u sin pareja), "
+		"separación máx. %.6f px\n", n64.bus.vi.fields, n, groups, orphans, worst);
+}
+
 static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_result *res)
 {
 	(void)ctx;
 	struct gfx_result *s = &gfx.sum;
+	if (getenv("SALSA64_GFX_CUTCHECK") && n64.bus.vi.fields >= trace_from)
+		cut_check(res);
 	gfx.tasks++;
 	s->flags |= res->flags;
 	s->commands += res->commands;
