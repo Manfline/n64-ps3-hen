@@ -76,12 +76,21 @@ Verificado:
       RPCS3 26/26 en F3DEX2 y F3D, compilación PS3 sin advertencias,
       test-rec en los cuatro modos del recompilador.
 
+- [x] **PS3 real** (SLSA00087 «Salsa64 fpgen», 136dff4 y luego ad14e4b con
+      main fusionado; el autor, 2026-10-10): GoldenEye 238 s hasta Dam con
+      la niebla por luz exacta en las capturas (34–55 campos/s en el
+      nivel, 4 programas generados, hasta 131 dibujos por tarea con
+      programa generado, 0 vaciados); Zelda OoT (144 s, Kokiri), SM64
+      (166 s, castillo; el medidor de energía ya sin fondo con main
+      fusionado) y Mario Kart 64 (81 s, pista) sin regresión visual, 0
+      programas generados y 54–60 campos/s. Números en
+      `docs/perf-log.md`.
+
 Pendiente:
-- [ ] PS3 real (paquete `salsa64-fpgen.pkg` subido a `/dev_hdd0/packages/`,
-      SLSA00087 «Salsa64 fpgen»): GoldenEye en Dam con la niebla exacta,
-      sin regresiones en Zelda, SM64 y Mario Kart; medir programas
-      distintos, cambios por tarea y ms en `docs/perf-log.md` (líneas
-      «gfx: fragment programs:» del log).
+- [ ] Perfect Dark en la PS3 con el generador (su combiner de niebla por
+      luz es el de GoldenEye; en el host ya no se aproxima).
+- [ ] Medir el tiempo del RSX por cuadro cuando haya contadores (hoy solo
+      se mide el PPE).
 ## 2026-10-10 — Medidor de energía de SM64 con fondo opaco: G_RM_TEX_EDGE
 
 Reporte (el autor, PS3, main de hoy): en Super Mario 64, al nadar, el
