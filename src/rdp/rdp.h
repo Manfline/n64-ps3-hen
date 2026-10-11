@@ -41,6 +41,12 @@ struct salsa64_rdp_stats {
  * pantalla. Devuelve 0 o un código negativo de rsxkit. */
 int salsa64_rdp_init(uint32_t scale);
 void salsa64_rdp_shutdown(void);
+/* Entre juegos (menú): suelta los destinos y profundidades del RSX y vacía
+ * las colas de tareas y las estadísticas; la memoria mapeada se conserva.
+ * Sin backend gráfico conectado (salsa64_rsp_set_gfx(NULL)) y después del
+ * último salsa64_rdp_flush. Devuelve las tareas que quedaban sin traducir
+ * (0 si se consumió todo). */
+uint32_t salsa64_rdp_reset(void);
 
 /* Las dos manos de un backend gráfico (rsp/gfx/backend.h). acquire puede
  * esperar a que el RSX libere un juego de búferes (nunca llama a rsxkit

@@ -114,6 +114,11 @@ void t_suite_gfx_rare(void);
 void t_suite_audio(void);
 void t_suite_audio_sync(void);
 void t_suite_pacer(void);
+void t_suite_menu(void);
+
+/* Directorio donde las pruebas pueden escribir (lo pone quien llama; NULL:
+ * las pruebas que tocan el disco no corren). */
+extern const char *t_tmp_dir;
 
 /* Corre todo y devuelve el número de pruebas fallidas. `print` recibe una
  * línea sin salto final. */

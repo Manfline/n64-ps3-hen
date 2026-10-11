@@ -9,12 +9,13 @@ OUT  ?= $(ROOT)/build/host
 CC      ?= gcc
 SAN     ?= -fsanitize=address,undefined -fno-sanitize-recover=undefined
 CFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffp-contract=off -fno-math-errno \
-           -I$(ROOT)/src -I$(CURDIR) $(SAN) $(EXTRA_CFLAGS)
+           -I$(ROOT)/src -I$(ROOT)/lib/rsxkit/include -I$(CURDIR) $(SAN) $(EXTRA_CFLAGS)
 LDFLAGS := $(SAN) $(EXTRA_LDFLAGS)
 LDLIBS  := -lm
 
 CORE_SRCS := $(wildcard $(ROOT)/src/core/*.c $(ROOT)/src/cpu/*.c $(ROOT)/src/rsp/gfx/*.c $(ROOT)/src/rsp/audio/*.c $(ROOT)/src/rsp/lle/*.c) $(ROOT)/src/frontend/padmap.c $(ROOT)/src/frontend/pacer.c \
-             $(ROOT)/src/frontend/audio_sync.c
+             $(ROOT)/src/frontend/audio_sync.c $(ROOT)/src/frontend/romlist.c $(ROOT)/src/frontend/menu.c \
+             $(ROOT)/lib/rsxkit/src/text.c
 TEST_SRCS := $(wildcard $(CURDIR)/*.c)
 OBJS      := $(patsubst $(ROOT)/%.c,$(OUT)/obj/%.o,$(CORE_SRCS) $(TEST_SRCS))
 

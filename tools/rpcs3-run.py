@@ -7,7 +7,10 @@
 
 Con --embedded, el frontend usa esa ROM de prueba embebida (escribe
 dev_hdd0/salsa64/embedded en RPCS3); con --rom NOMBRE, ese archivo de
-dev_hdd0/salsa64 (sin pisar rom.z64); sin opciones, se borra.
+dev_hdd0/salsa64 (sin pisar rom.z64); sin opciones, se borra y el frontend
+muestra el menú. Con --menu ROM..., el menú se maneja solo: copia las ROMs a
+dev_hdd0/salsa64, las nombra en dev_hdd0/salsa64/menu-prueba y el frontend
+las abre en orden, vuelve al menú después de cada una y sale.
 
 Lanza RPCS3 con --no-gui y tools/rpcs3/salsa64.yml, crea el archivo de modo
 autotest (src/platform/ps3/autotest.h) para que el programa salga solo, sigue
@@ -40,6 +43,7 @@ AUTOTEST_FLAG = pathlib.Path.home() / "Library/Application Support/rpcs3/dev_hdd
 # (src/platform/ps3/rec_cache.h). En la PS3 real no existe.
 NOREC_FLAG = AUTOTEST_FLAG.parent / "sin-recompilador"
 EMBED_FILE = AUTOTEST_FLAG.parent / "embedded"
+MENU_TEST_FILE = AUTOTEST_FLAG.parent / "menu-prueba"
 CONFIG = ROOT / "tools/rpcs3/salsa64.yml"
 EXIT_GRACE = 30  # segundos para que RPCS3 se cierre solo tras RESULTADO
 # Fuera del repo para que lo compartan todos los worktrees.
@@ -205,6 +209,9 @@ def main() -> int:
                     "(no se llama rom.z64 para no afectar a otras compilaciones)")
     ap.add_argument("--replay", help="volcado de la HLE (en dev_hdd0/salsa64) que el frontend "
                     "debe dibujar en el RSX (replay.c)")
+    ap.add_argument("--menu", nargs="+", metavar="ROM",
+                    help="ROMs (rutas, o nombres ya en dev_hdd0/salsa64) que el menú del frontend "
+                    "abre en orden, sin embedded")
     args = ap.parse_args()
 
     lock = lock_rpcs3()  # noqa: F841 (se mantiene hasta salir)
@@ -217,6 +224,16 @@ def main() -> int:
         EMBED_FILE.write_text(args.embedded + "\n")
     elif EMBED_FILE.exists():
         EMBED_FILE.unlink()
+    if args.menu:
+        names = []
+        for rom in args.menu:
+            src = pathlib.Path(rom)
+            if src.is_file():
+                shutil.copy(src, EMBED_FILE.parent / src.name)
+            names.append(src.name)
+        MENU_TEST_FILE.write_text("".join(n + "\n" for n in names))
+    elif MENU_TEST_FILE.exists():
+        MENU_TEST_FILE.unlink()
 
     elf = resolve_elf(args.program)
     lines: list = []
