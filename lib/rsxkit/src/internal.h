@@ -83,9 +83,10 @@ const struct rsxkit_fp_cached *rsxkit_fp_lookup(const rsxkit_fp_desc *desc);
 uint32_t rsxkit_fp_generation(void);
 void rsxkit_fp_count_load(void);
 void rsxkit_fp_shutdown(void);
-/* Dibuja una textura lineal X8R8G8B8 de la memoria local como un
- * rectángulo en la pantalla (fb.c). */
-void rsxkit_blit(uint32_t offset, uint32_t pitch, uint32_t tex_w, uint32_t tex_h, float u1, float v1,
-		 rsxkit_format format, const rsxkit_rect *r, rsxkit_filter filter);
+/* Dibuja la región [u0, u1] × [v0, v1] (coordenadas normalizadas) de una
+ * textura lineal de la memoria local como un rectángulo en la pantalla
+ * (fb.c). */
+void rsxkit_blit(uint32_t offset, uint32_t pitch, uint32_t tex_w, uint32_t tex_h, float u0, float v0, float u1,
+		 float v1, rsxkit_format format, const rsxkit_rect *r, rsxkit_filter filter);
 
 #endif

@@ -247,6 +247,9 @@ struct salsa64_rsp {
 	enum salsa64_abi abi;   /* de la última tarea de audio */
 	/* Duración aparente de cada tarea, en ciclos del VR4300. */
 	uint32_t gfx_cycles, audio_cycles, dp_cycles;
+	/* Interrupción del DP retenida: el RDP terminó (SYNC_FULL) mientras
+	 * estaba congelado (DPC_STATUS FREEZE); llega al descongelarlo. */
+	bool dp_held;
 	/* Cada cuántos ciclos se vuelve a preguntar al backend si terminó. */
 	uint32_t poll_cycles;
 	uint64_t poll_idle;     /* idle_cycles del CPU en el sondeo anterior */
@@ -403,8 +406,11 @@ void salsa64_dp_submit(struct salsa64_bus *bus, uint32_t start, uint32_t end, co
 /* El CPU va a tocar un registro del SP o del DP (sp.c): el RSP a bajo
  * nivel se pone al día. */
 void salsa64_rsp_sync(struct salsa64_bus *bus);
-/* El RDP vio un SYNC_FULL: interrupción del DP dp_cycles después. */
+/* El RDP vio un SYNC_FULL: interrupción del DP dp_cycles después o, si el
+ * RDP está congelado (DPC_STATUS FREEZE), dp_cycles después de que el CPU lo
+ * descongele (salsa64_rsp_dp_unfreeze, desde la escritura de DPC_STATUS). */
 void salsa64_rsp_dp_done(struct salsa64_bus *bus);
+void salsa64_rsp_dp_unfreeze(struct salsa64_bus *bus);
 uint32_t salsa64_dp_read(struct salsa64_bus *bus, uint32_t reg);
 void salsa64_dp_write(struct salsa64_bus *bus, uint32_t reg, uint32_t value);
 uint32_t salsa64_vi_read(struct salsa64_bus *bus, uint32_t reg);

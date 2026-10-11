@@ -11,10 +11,17 @@
 #include "core/bus.h"
 #include "core/save.h"
 
+#ifdef SALSA64_DEBUG_PI
+void salsa64_debug_pi(uint32_t cart, uint32_t dram, uint32_t len);
+#endif
+
 static void pi_dma_to_rdram(struct salsa64_bus *bus, uint32_t len)
 {
 	uint32_t dram = bus->pi[SALSA64_PI_DRAM_ADDR] & 0x00FFFFFE;
 	uint32_t cart = bus->pi[SALSA64_PI_CART_ADDR] & 0xFFFFFFFE;
+#ifdef SALSA64_DEBUG_PI
+	salsa64_debug_pi(cart, dram, len);
+#endif
 
 	/* Solo la ROM (dominio 1, dirección 2) tiene datos por ahora; lo que
 	 * caiga fuera de la ROM o de la RDRAM se lee como 0 o se descarta. */
