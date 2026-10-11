@@ -363,6 +363,74 @@ static void targets_readback_wanted(void)
 	CHECK(rdp_readback_wanted(&r, 0x12c700, 440, 2));
 }
 
+/* Espejo del framebuffer, una vez por dibujo (la política que siguen rdp.c
+ * y el rasterizador del host; tests/unit/test_raster.c la prueba de punta
+ * a punta). La secuencia de Super Mario 64 al pasar del logo a la cara de
+ * Mario: triple búfer; el RDP dibuja B; el VI sigue en A; un DMA carga
+ * datos encima de A y de B; el VI muestra B sin que el RDP lo toque. */
+static void targets_frame_mirror(void)
+{
+	const uint32_t A = 0x38f800, B = 0x3b5000, C = 0x3da800, LINE = 640;
+	bool fresh;
+	rdp_targets_init(&s);
+	int a = rdp_targets_get(&s, A, 320, SIZ_16b, 0, &fresh);
+	CHECK(!rdp_targets_mirror_wanted(&s, a));  /* recién creado: nada dibujado */
+	rdp_targets_drawn(&s, a);
+	/* El VI aún no lo mostró: no se sabe que es un framebuffer; se copia al
+	 * presentarlo, una vez. */
+	CHECK(rdp_targets_mirror_wanted(&s, a));
+	CHECK(!rdp_targets_mirror_at_task_end(&s, a));
+	struct rdp_present p = present(1, A + LINE, 320, 237);
+	CHECK_EQ(p.slot, a);
+	CHECK(rdp_targets_mirror_wanted(&s, p.slot));
+	rdp_targets_mirrored(&s, p.slot);
+	p = present(2, A + LINE, 320, 237);
+	CHECK(!rdp_targets_mirror_wanted(&s, p.slot));
+
+	/* Triple búfer: B y C se copian al presentarlos la primera vez; desde
+	 * entonces, cada dibujo al terminar su tarea. */
+	int b = draw(B, 320);
+	CHECK(!rdp_targets_mirror_at_task_end(&s, b));
+	p = present(3, B + LINE, 320, 237);
+	CHECK_EQ(p.slot, b);
+	CHECK(rdp_targets_mirror_wanted(&s, b));
+	rdp_targets_mirrored(&s, b);
+	int c = draw(C, 320);
+	p = present(5, C + LINE, 320, 237);
+	CHECK_EQ(p.slot, c);
+	rdp_targets_mirrored(&s, c);
+	uint32_t field = 7;
+	for (int k = 0; k < 6; k++, field += 2) {
+		uint32_t fb = k % 3 == 0 ? A : k % 3 == 1 ? B : C;
+		int i = draw(fb, 320);
+		CHECK(rdp_targets_mirror_at_task_end(&s, i));
+		rdp_targets_mirrored(&s, i);
+		p = present(field, fb + LINE, 320, 237);
+		CHECK_EQ(p.slot, i);
+		CHECK(!rdp_targets_mirror_wanted(&s, p.slot));
+	}
+
+	/* El cambio de escena: B dibujado y copiado al terminar su tarea; el
+	 * VI en A dos campos, el DMA, y B un campo: nada que copiar. */
+	CHECK_EQ(draw(B, 320), b);
+	CHECK(rdp_targets_mirror_at_task_end(&s, b));
+	rdp_targets_mirrored(&s, b);
+	p = present(field++, A + LINE, 320, 237);
+	CHECK(!rdp_targets_mirror_wanted(&s, p.slot));
+	p = present(field++, A + LINE, 320, 237);
+	CHECK(!rdp_targets_mirror_wanted(&s, p.slot));
+	p = present(field++, B + LINE, 320, 237);
+	CHECK_EQ(p.slot, b);
+	CHECK(!rdp_targets_mirror_wanted(&s, p.slot));
+
+	/* Una color image del ancho del VI que el VI no muestra (el fbufSave de
+	 * Zelda) o de otro ancho (Link, 64) no es un framebuffer: no va por el
+	 * espejo al terminar la tarea (rdp_readback_wanted y las copias
+	 * espejo de las chicas se ocupan). */
+	CHECK(!rdp_targets_mirror_at_task_end(&s, draw(0x12c700, 320)));
+	CHECK(!rdp_targets_mirror_at_task_end(&s, draw(0x279f00, 64)));
+}
+
 void t_suite_targets(void)
 {
 	RUN(targets_locate);
@@ -375,4 +443,5 @@ void t_suite_targets(void)
 	RUN(targets_held_frame);
 	RUN(targets_drawn_while_blank);
 	RUN(targets_recycle_order);
+	RUN(targets_frame_mirror);
 }
