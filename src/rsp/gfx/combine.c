@@ -1,30 +1,45 @@
 /*
- * Salsa64 — combiner de color de la N64 → combinación lineal para el RSX.
+ * Salsa64 — combiner de color de la N64 → términos para el RSX.
  *
  * El combiner del RDP calcula, por ciclo y por canal, (A − B) × C + D con
  * entradas que son texels (TEXEL0/1), el color de sombreado (SHADE),
  * constantes (PRIM, ENV, 1, 0…) y, en el segundo ciclo, el resultado del
  * primero (COMBINED). Aquí se evalúa de forma simbólica: cada valor es un
- * polinomio por canal sobre los monomios
+ * polinomio por canal cuyos monomios son productos de
  *
- *     {1, T0, T0a, T1, T1a} × {1, S, Sa}
+ *     T0, T0a, T1, T1a (texels y sus alfas) y S, Sa (sombreado y su alfa)
  *
- * (T0a = alfa de TEXEL0, S = SHADE del mismo canal, Sa = alfa de SHADE), con
- * las constantes ya como números. El resultado se deja en gfx_draw.k, que
- * el RSX evalúa así: el vertex program arma cada término X_k = k0 + k1·C +
- * k2·C.aaaa con el color del vértice y el fragment program suma T0·X0 +
- * T0.aaaa·X1 + T1·X2 + T1.aaaa·X3 + X4. Es exacto mientras no se
- * multipliquen dos texturas ni el sombreado por sí mismo; esos productos se
- * aproximan quedándose con el primer factor y se cuentan.
+ * con las constantes ya como números. Un monomio lleva cada textura como
+ * mucho una vez (hasta dos texturas distintas) y hasta tres factores de
+ * sombreado; lo que se pasa de eso se aproxima quedándose con el primer
+ * factor y se cuenta.
  *
- * Excepción: una textura por su propio alfa (T0·T0a, como en
- * (TEXEL0 − SHADE)·TEXEL0_ALPHA + SHADE, los ojos de Mario en SM64). Si el
- * dibujo no usa también T0 solo, se pide la textura premultiplicada
- * (RGB·A, GFX_TEX_PREMUL) y T0·T0a ocupa el término de T0: exacto.
+ * El resultado se deja en gfx_draw de una de dos formas:
+ *
+ * - Combinación lineal fija (nterms = 0): color = T0·X0 + T0a·X1 + T1·X2 +
+ *   T1a·X3 + X4 con X_i = k[i][0] + k[i][1]·C + k[i][2]·C.aaaa (C es el
+ *   color del vértice; los X_i los arma el vertex program). Exacta mientras
+ *   ningún monomio multiplique dos texturas ni dos factores de sombreado.
+ *   Una textura por su propio alfa (T0·T0a, los ojos de Mario en SM64) cabe
+ *   pidiendo la textura premultiplicada (RGB·A, GFX_TEX_PREMUL) si el
+ *   dibujo no usa también T0 solo. Es el camino rápido: programas
+ *   precompilados en lib/rsxkit.
+ *
+ * - Términos para el generador de fragment programs (nterms > 0): color =
+ *   Σ_j (Π factors[j]) · X_j, donde los factores son T0, T0a, T1, T1a, C y
+ *   Ca (gfx.h, GFX_F_*; lib/rsxkit los traduce a un programa del RSX y lo
+ *   cachea). Cubre los productos de texturas y de sombreado (la niebla por
+ *   luz de GoldenEye, lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE). Los monomios
+ *   se agrupan en el menor número de términos: cada X_j absorbe un factor
+ *   de sombreado (k[j][1]·C o k[j][2]·C.aaaa), así que un término con
+ *   factores F junta los monomios F, F·S y F·Sa.
  *
  * En el canal alfa, "el mismo canal" es el alfa: ahí T0 y S se guardan
  * siempre como T0a y Sa, así que COMBINED_ALPHA se puede llevar tal cual a
- * los canales de color.
+ * los canales de color; y en los términos del generador, el cuarto carril
+ * de un factor T0 o T0a vale T0a y el de C o Ca vale Ca, por lo que un
+ * monomio del alfa puede ir en cualquier término cuyos factores, vistos
+ * desde el alfa, coincidan.
  *
  * Codificación de G_SETCOMBINE y entradas de cada slot: n64brew.dev
  * (Reality Display Processor/Commands, "Set Combine Mode"). En un ciclo se
@@ -34,12 +49,18 @@
 
 #include "rsp/gfx/hle.h"
 
-/* T0P = T0·T0a y T1P = T1·T1a (textura premultiplicada). */
-enum { TX_ONE, TX_T0, TX_T0A, TX_T1, TX_T1A, TX_T0P, TX_T1P, TX_N };
-enum { SH_ONE, SH_S, SH_SA, SH_N };
+/* Monomio: exponentes de T0, T0a, T1, T1a, S y Sa, dos bits cada uno. */
+typedef uint16_t mono;
+enum { F_T0, F_T0A, F_T1, F_T1A, F_S, F_SA, F_N };
+#define M_SHIFT(f)  (2 * (f))
+#define M_EXP(m, f) (((m) >> M_SHIFT(f)) & 3u)
+#define M_ONE(f)    ((mono)(1u << M_SHIFT(f)))
 
+#define P_MAX 16
 typedef struct {
-	float c[TX_N][SH_N];
+	uint8_t n;
+	mono m[P_MAX];
+	float c[P_MAX];
 } poly;
 
 struct cc_ctx {
@@ -49,85 +70,103 @@ struct cc_ctx {
 	bool swap;  /* segundo ciclo de 2CYCLE: TEXEL0 lee el texel de la tile+1 */
 };
 
-static poly p_const(float v)
+static poly p_zero(void)
 {
 	poly p;
 	memset(&p, 0, sizeof p);
-	p.c[TX_ONE][SH_ONE] = v;
 	return p;
 }
 
-static poly p_tex(int tx, const struct cc_ctx *x)
+/* Suma c·m a p; los coeficientes que quedan en cero desaparecen. */
+static void p_term(poly *p, mono m, float c, struct cc_ctx *x)
 {
-	static const int swapped[TX_N] = { TX_ONE, TX_T1, TX_T1A, TX_T0, TX_T0A, TX_T1P, TX_T0P };
-	poly p;
-	memset(&p, 0, sizeof p);
-	p.c[x->swap ? swapped[tx] : tx][SH_ONE] = 1.0f;
+	if (c == 0.0f)
+		return;
+	for (unsigned i = 0; i < p->n; i++)
+		if (p->m[i] == m) {
+			p->c[i] += c;
+			if (p->c[i] == 0.0f) {
+				p->n--;
+				p->m[i] = p->m[p->n];
+				p->c[i] = p->c[p->n];
+			}
+			return;
+		}
+	if (p->n == P_MAX) {
+		x->approx = true;  /* demasiados monomios: se pierde uno */
+		return;
+	}
+	p->m[p->n] = m;
+	p->c[p->n] = c;
+	p->n++;
+}
+
+static poly p_const(float v, struct cc_ctx *x)
+{
+	poly p = p_zero();
+	p_term(&p, 0, v, x);
 	return p;
 }
 
-static poly p_mono(int tx, int sh)
+static poly p_mono(int f, struct cc_ctx *x)
 {
-	poly p = p_const(0.0f);
-	p.c[tx][sh] = 1.0f;
+	poly p = p_zero();
+	p_term(&p, M_ONE(f), 1.0f, x);
 	return p;
 }
 
-static poly p_sub(poly a, const poly *b)
+static poly p_tex(int f, struct cc_ctx *x)
 {
-	for (int t = 0; t < TX_N; t++)
-		for (int s = 0; s < SH_N; s++)
-			a.c[t][s] -= b->c[t][s];
+	static const int swapped[F_N] = { F_T1, F_T1A, F_T0, F_T0A, F_S, F_SA };
+	return p_mono(x->swap ? swapped[f] : f, x);
+}
+
+static poly p_sub(poly a, const poly *b, struct cc_ctx *x)
+{
+	for (unsigned i = 0; i < b->n; i++)
+		p_term(&a, b->m[i], -b->c[i], x);
 	return a;
 }
 
-static poly p_add(poly a, const poly *b)
+static poly p_add(poly a, const poly *b, struct cc_ctx *x)
 {
-	for (int t = 0; t < TX_N; t++)
-		for (int s = 0; s < SH_N; s++)
-			a.c[t][s] += b->c[t][s];
+	for (unsigned i = 0; i < b->n; i++)
+		p_term(&a, b->m[i], b->c[i], x);
 	return a;
 }
 
-/* Producto de dos monomios de textura: exacto si es una textura por su
- * propio alfa; si no, se aproxima con el primero. */
-static int tx_mul(int ta, int tb, struct cc_ctx *x)
+/* Producto de dos monomios: cada textura a lo sumo una vez y dos texturas
+ * como máximo, hasta tres factores de sombreado. Si no, se aproxima con
+ * el primero. */
+static mono mono_mul(mono a, mono b, struct cc_ctx *x)
 {
-	if (ta == TX_ONE)
-		return tb;
-	if (tb == TX_ONE)
-		return ta;
-	if ((ta == TX_T0 && tb == TX_T0A) || (ta == TX_T0A && tb == TX_T0))
-		return TX_T0P;
-	if ((ta == TX_T1 && tb == TX_T1A) || (ta == TX_T1A && tb == TX_T1))
-		return TX_T1P;
-	x->approx = true;  /* textura × textura */
-	return ta;
+	unsigned tex = 0, sh = 0;
+	mono r = 0;
+	for (int f = 0; f < F_N; f++) {
+		unsigned e = M_EXP(a, f) + M_EXP(b, f);
+		if (f < F_S) {
+			if (e > 1)
+				goto approx;
+			tex += e;
+		} else {
+			sh += e;
+		}
+		r |= (mono)(e << M_SHIFT(f));
+	}
+	if (tex > 2 || sh > 3)
+		goto approx;
+	return r;
+approx:
+	x->approx = true;
+	return a;
 }
 
 static poly p_mul(const poly *a, const poly *b, struct cc_ctx *x)
 {
-	poly r = p_const(0.0f);
-	for (int ta = 0; ta < TX_N; ta++)
-		for (int sa = 0; sa < SH_N; sa++) {
-			float va = a->c[ta][sa];
-			if (va == 0.0f)
-				continue;
-			for (int tb = 0; tb < TX_N; tb++)
-				for (int sb = 0; sb < SH_N; sb++) {
-					float vb = b->c[tb][sb];
-					if (vb == 0.0f)
-						continue;
-					int t = tx_mul(ta, tb, x), s = sa;
-					if (sb != SH_ONE) {
-						if (sa != SH_ONE)
-							x->approx = true;  /* sombreado × sombreado */
-						else
-							s = sb;
-					}
-					r.c[t][s] += va * vb;
-				}
-		}
+	poly r = p_zero();
+	for (unsigned i = 0; i < a->n; i++)
+		for (unsigned j = 0; j < b->n; j++)
+			p_term(&r, mono_mul(a->m[i], b->m[j], x), a->c[i] * b->c[j], x);
 	return r;
 }
 
@@ -137,34 +176,34 @@ static poly in_rgb(int slot, unsigned v, int lane, const poly *comb, const poly 
 {
 	switch (v) {
 	case 0: return *comb;
-	case 1: return p_tex(TX_T0, x);
-	case 2: return p_tex(TX_T1, x);
-	case 3: return p_const(x->prim[lane]);
-	case 4: return p_mono(TX_ONE, SH_S);
-	case 5: return p_const(x->env[lane]);
+	case 1: return p_tex(F_T0, x);
+	case 2: return p_tex(F_T1, x);
+	case 3: return p_const(x->prim[lane], x);
+	case 4: return p_mono(F_S, x);
+	case 5: return p_const(x->env[lane], x);
 	default: break;
 	}
 	switch (slot) {
 	case 'a':  /* 6 ONE, 7 NOISE, 8–15 cero */
-		return p_const(v == 6 ? 1.0f : v == 7 ? x->noise : 0.0f);
+		return p_const(v == 6 ? 1.0f : v == 7 ? x->noise : 0.0f, x);
 	case 'b':  /* 6 CENTER, 7 K4, 8–15 cero */
-		return p_const(v == 7 ? x->k4 : 0.0f);
+		return p_const(v == 7 ? x->k4 : 0.0f, x);
 	case 'c':
 		switch (v) {
-		case 6: return p_const(0.0f);                 /* SCALE (clave) */
+		case 6: return p_const(0.0f, x);              /* SCALE (clave) */
 		case 7: return *comb_a;                       /* COMBINED_ALPHA */
-		case 8: return p_tex(TX_T0A, x);
-		case 9: return p_tex(TX_T1A, x);
-		case 10: return p_const(x->prim[3]);
-		case 11: return p_mono(TX_ONE, SH_SA);
-		case 12: return p_const(x->env[3]);
-		case 13: return p_const(x->lod);              /* LOD_FRACTION */
-		case 14: return p_const(x->prim_lod);         /* PRIM_LOD_FRAC */
-		case 15: return p_const(x->k5);
-		default: return p_const(0.0f);
+		case 8: return p_tex(F_T0A, x);
+		case 9: return p_tex(F_T1A, x);
+		case 10: return p_const(x->prim[3], x);
+		case 11: return p_mono(F_SA, x);
+		case 12: return p_const(x->env[3], x);
+		case 13: return p_const(x->lod, x);           /* LOD_FRACTION */
+		case 14: return p_const(x->prim_lod, x);      /* PRIM_LOD_FRAC */
+		case 15: return p_const(x->k5, x);
+		default: return p_const(0.0f, x);
 		}
 	default:   /* 'd': 6 ONE, 7 cero */
-		return p_const(v == 6 ? 1.0f : 0.0f);
+		return p_const(v == 6 ? 1.0f : 0.0f, x);
 	}
 }
 
@@ -172,22 +211,22 @@ static poly in_alpha(int slot, unsigned v, const poly *comb_a, struct cc_ctx *x)
 {
 	if (slot == 'c') {
 		switch (v) {
-		case 0: return p_const(x->lod);
-		case 6: return p_const(x->prim_lod);
-		case 7: return p_const(0.0f);
+		case 0: return p_const(x->lod, x);
+		case 6: return p_const(x->prim_lod, x);
+		case 7: return p_const(0.0f, x);
 		default: break;
 		}
 	} else if (v == 0) {
 		return *comb_a;
 	}
 	switch (v) {
-	case 1: return p_tex(TX_T0A, x);
-	case 2: return p_tex(TX_T1A, x);
-	case 3: return p_const(x->prim[3]);
-	case 4: return p_mono(TX_ONE, SH_SA);
-	case 5: return p_const(x->env[3]);
-	case 6: return p_const(1.0f);
-	default: return p_const(0.0f);
+	case 1: return p_tex(F_T0A, x);
+	case 2: return p_tex(F_T1A, x);
+	case 3: return p_const(x->prim[3], x);
+	case 4: return p_mono(F_SA, x);
+	case 5: return p_const(x->env[3], x);
+	case 6: return p_const(1.0f, x);
+	default: return p_const(0.0f, x);
 	}
 }
 
@@ -224,17 +263,17 @@ static void run_cycle(const struct cc_cycle *cy, poly out[4], const poly comb[4]
 		poly b = in_rgb('b', cy->b, lane, &comb[lane], &comb[3], x);
 		poly c = in_rgb('c', cy->c, lane, &comb[lane], &comb[3], x);
 		poly d = in_rgb('d', cy->d, lane, &comb[lane], &comb[3], x);
-		a = p_sub(a, &b);
+		a = p_sub(a, &b, x);
 		a = p_mul(&a, &c, x);
-		out[lane] = p_add(a, &d);
+		out[lane] = p_add(a, &d, x);
 	}
 	poly a = in_alpha('a', cy->aa, &comb[3], x);
 	poly b = in_alpha('b', cy->ab, &comb[3], x);
 	poly c = in_alpha('c', cy->ac, &comb[3], x);
 	poly d = in_alpha('d', cy->ad, &comb[3], x);
-	a = p_sub(a, &b);
+	a = p_sub(a, &b, x);
 	a = p_mul(&a, &c, x);
-	out[3] = p_add(a, &d);
+	out[3] = p_add(a, &d, x);
 }
 
 static void rgba(uint32_t c, float out[4])
@@ -245,34 +284,233 @@ static void rgba(uint32_t c, float out[4])
 	out[3] = (float)(c & 0xFF) / 255.0f;
 }
 
-/* Monomio de textura → término de gfx_draw.k. */
-static const int tx_term[TX_T0P] = { GFX_K_ONE, GFX_K_T0, GFX_K_T0A, GFX_K_T1, GFX_K_T1A };
+/* ---- Combinación lineal fija ---- */
 
-static bool any_coef(const poly out[4], int t)
+/* Término y lugar de la combinación lineal para un monomio; false si no
+ * cabe (dos texturas, dos factores de sombreado). T·Ta va al término de T
+ * (textura premultiplicada). */
+static bool lincomb_slot(mono m, int *term, int *slot)
 {
-	for (int lane = 0; lane < 4; lane++)
-		for (int s = 0; s < SH_N; s++)
-			if (out[lane].c[t][s] != 0.0f)
-				return true;
-	return false;
+	unsigned s = M_EXP(m, F_S), sa = M_EXP(m, F_SA);
+	if (s + sa > 1)
+		return false;
+	*slot = s ? 1 : sa ? 2 : 0;
+	unsigned t0 = M_EXP(m, F_T0) + M_EXP(m, F_T0A), t1 = M_EXP(m, F_T1) + M_EXP(m, F_T1A);
+	if (t0 && t1)
+		return false;
+	if (t0)
+		*term = M_EXP(m, F_T0) ? GFX_K_T0 : GFX_K_T0A;
+	else if (t1)
+		*term = M_EXP(m, F_T1) ? GFX_K_T1 : GFX_K_T1A;
+	else
+		*term = GFX_K_ONE;
+	return true;
 }
 
-/* T·Ta sin T solo: textura premultiplicada (exacto). Con T solo también:
- * se aproxima sumándolo a T, como antes. */
-static void premul(poly out[4], int t, int tp, struct gfx_tex *tex, struct cc_ctx *x)
+static bool fit_lincomb(const poly out[4], struct gfx_draw *d)
 {
-	if (!any_coef(out, tp))
-		return;
-	bool plain = any_coef(out, t);
+	bool plain[2] = { false, false }, premul[2] = { false, false };
 	for (int lane = 0; lane < 4; lane++)
-		for (int s = 0; s < SH_N; s++) {
-			out[lane].c[t][s] += out[lane].c[tp][s];
-			out[lane].c[tp][s] = 0.0f;
+		for (unsigned i = 0; i < out[lane].n; i++) {
+			mono m = out[lane].m[i];
+			int term, slot;
+			if (!lincomb_slot(m, &term, &slot))
+				return false;
+			for (int t = 0; t < 2; t++) {
+				unsigned e = M_EXP(m, t ? F_T1 : F_T0), ea = M_EXP(m, t ? F_T1A : F_T0A);
+				if (e && ea)
+					premul[t] = true;
+				else if (e)
+					plain[t] = true;
+			}
 		}
-	if (plain)
-		x->approx = true;
-	else
-		tex->flags |= GFX_TEX_PREMUL;
+	/* T·Ta y T solo en el mismo dibujo: no hay una sola textura que sirva
+	 * para los dos (va al generador). */
+	if ((plain[0] && premul[0]) || (plain[1] && premul[1]))
+		return false;
+	memset(d->k, 0, sizeof d->k);
+	bool t0 = false, t1 = false;
+	for (int lane = 0; lane < 4; lane++)
+		for (unsigned i = 0; i < out[lane].n; i++) {
+			int term, slot;
+			lincomb_slot(out[lane].m[i], &term, &slot);
+			d->k[term][slot][lane] = out[lane].c[i];
+			t0 |= term == GFX_K_T0 || term == GFX_K_T0A;
+			t1 |= term == GFX_K_T1 || term == GFX_K_T1A;
+		}
+	for (int t = 0; t < 2; t++)
+		if (premul[t])
+			d->tex[t].flags |= GFX_TEX_PREMUL;
+	d->nterms = 0;
+	d->ntex = t1 ? 2 : t0 ? 1 : 0;
+	return true;
+}
+
+/* ---- Términos para el generador ---- */
+
+/* Un monomio del canal alfa, visto desde los términos: T0 y T0a son lo
+ * mismo (T0a), S y Sa también (Sa). */
+static mono canon(mono m)
+{
+	unsigned t0 = M_EXP(m, F_T0) + M_EXP(m, F_T0A), t1 = M_EXP(m, F_T1) + M_EXP(m, F_T1A);
+	unsigned s = M_EXP(m, F_S) + M_EXP(m, F_SA);
+	return (mono)(t0 << M_SHIFT(F_T0) | t1 << M_SHIFT(F_T1) | s << M_SHIFT(F_S));
+}
+
+/* Monomio que calcula una lista de factores en los canales de color. */
+static mono factors_mono(const uint8_t f[GFX_K_FACTORS])
+{
+	static const mono of[] = { 0, M_ONE(F_T0), M_ONE(F_T0A), M_ONE(F_T1), M_ONE(F_T1A), M_ONE(F_S), M_ONE(F_SA) };
+	mono m = 0;
+	for (int k = 0; k < GFX_K_FACTORS && f[k]; k++)
+		m = (mono)(m + of[f[k]]);
+	return m;
+}
+
+/* Lista de factores para el monomio `m`: en forma de color (exponentes de
+ * cada factor) o canónica del alfa (T0 dos veces = T0 y T0a; S tres veces
+ * = C, Ca, C). */
+static void mono_factors(mono m, bool alpha, uint8_t f[GFX_K_FACTORS])
+{
+	static const uint8_t color[F_N] = { GFX_F_T0, GFX_F_T0A, GFX_F_T1, GFX_F_T1A, GFX_F_C, GFX_F_CA };
+	static const uint8_t pair[F_N][2] = { { GFX_F_T0, GFX_F_T0A }, { 0, 0 }, { GFX_F_T1, GFX_F_T1A },
+					      { 0, 0 }, { GFX_F_C, GFX_F_CA }, { 0, 0 } };
+	int n = 0;
+	memset(f, 0, GFX_K_FACTORS);
+	for (int k = 0; k < F_N; k++)
+		for (unsigned e = 0; e < M_EXP(m, k) && n < GFX_K_FACTORS; e++)
+			f[n++] = alpha ? pair[k][e & 1] : color[k];
+}
+
+struct need {
+	mono m;       /* canónico en el canal alfa */
+	float c;
+	uint8_t lane;
+	bool done;
+};
+
+/* Candidatos de un monomio: el término con todos sus factores (lugar 0) o
+ * sin un factor de sombreado, que absorbe X_j (lugar 1: S, lugar 2: Sa; en
+ * el alfa los dos lugares valen Ca, se usa el 1). */
+static int candidates(const struct need *nd, mono f[3], int slot[3])
+{
+	int n = 0;
+	f[n] = nd->m, slot[n++] = 0;
+	if (M_EXP(nd->m, F_S))
+		f[n] = (mono)(nd->m - M_ONE(F_S)), slot[n++] = 1;
+	if (nd->lane < 3 && M_EXP(nd->m, F_SA))
+		f[n] = (mono)(nd->m - M_ONE(F_SA)), slot[n++] = 2;
+	return n;
+}
+
+/* ¿El término de factores `f` sirve a este monomio? Devuelve el lugar o −1. */
+static int term_serves(const uint8_t f[GFX_K_FACTORS], const struct need *nd)
+{
+	mono tm = factors_mono(f);
+	if (nd->lane == 3)
+		tm = canon(tm);
+	mono cf[3];
+	int slot[3], n = candidates(nd, cf, slot);
+	for (int i = 0; i < n; i++)
+		if (cf[i] == tm)
+			return slot[i];
+	return -1;
+}
+
+static void build_terms(const poly out[4], struct gfx_draw *d, struct cc_ctx *x)
+{
+	struct need needs[4 * P_MAX];
+	unsigned nneeds = 0;
+	for (int lane = 0; lane < 4; lane++)
+		for (unsigned i = 0; i < out[lane].n; i++) {
+			struct need *nd = &needs[nneeds++];
+			nd->m = lane == 3 ? canon(out[lane].m[i]) : out[lane].m[i];
+			nd->c = out[lane].c[i];
+			nd->lane = (uint8_t)lane;
+			nd->done = false;
+		}
+
+	memset(d->k, 0, sizeof d->k);
+	memset(d->factors, 0, sizeof d->factors);
+	unsigned nterms = 0;
+	for (;;) {
+		/* El término que sirve a más monomios pendientes. */
+		uint8_t best[GFX_K_FACTORS];
+		int best_count = 0;
+		for (unsigned i = 0; i < nneeds; i++) {
+			if (needs[i].done)
+				continue;
+			mono cf[3];
+			int slot[3], n = candidates(&needs[i], cf, slot);
+			for (int c = 0; c < n; c++) {
+				uint8_t f[GFX_K_FACTORS];
+				mono_factors(cf[c], needs[i].lane == 3, f);
+				int count = 0;
+				for (unsigned j = 0; j < nneeds; j++)
+					if (!needs[j].done && term_serves(f, &needs[j]) >= 0)
+						count++;
+				/* A igual cuenta, los factores menores (C antes que Ca):
+				 * el mismo conjunto de monomios da siempre los mismos
+				 * términos. */
+				if (count > best_count || (count == best_count && memcmp(f, best, sizeof best) < 0)) {
+					best_count = count;
+					memcpy(best, f, sizeof best);
+				}
+			}
+		}
+		if (!best_count)
+			break;
+		if (nterms == GFX_K_TERMS) {
+			x->approx = true;  /* no caben más términos: se pierden monomios */
+			break;
+		}
+		memcpy(d->factors[nterms], best, GFX_K_FACTORS);
+		for (unsigned j = 0; j < nneeds; j++) {
+			int slot = needs[j].done ? -1 : term_serves(best, &needs[j]);
+			if (slot < 0)
+				continue;
+			d->k[nterms][slot][needs[j].lane] += needs[j].c;
+			needs[j].done = true;
+		}
+		nterms++;
+	}
+
+	/* Orden canónico de los términos (por sus factores), para que el mismo
+	 * conjunto dé siempre el mismo programa. */
+	for (unsigned a = 1; a < nterms; a++)
+		for (unsigned b = a; b > 0 && memcmp(d->factors[b - 1], d->factors[b], GFX_K_FACTORS) > 0; b--) {
+			uint8_t tf[GFX_K_FACTORS];
+			float tk[3][4];
+			memcpy(tf, d->factors[b], sizeof tf);
+			memcpy(d->factors[b], d->factors[b - 1], sizeof tf);
+			memcpy(d->factors[b - 1], tf, sizeof tf);
+			memcpy(tk, d->k[b], sizeof tk);
+			memcpy(d->k[b], d->k[b - 1], sizeof tk);
+			memcpy(d->k[b - 1], tk, sizeof tk);
+		}
+	/* Con niebla, el vertex program suma fog·C.a al primer término sin
+	 * factores: que exista. */
+	if (d->fog && (nterms == 0 || d->factors[0][0] != GFX_F_NONE)) {
+		if (nterms < GFX_K_TERMS) {
+			memmove(d->factors[1], d->factors[0], (GFX_K_TERMS - 1) * GFX_K_FACTORS);
+			memmove(d->k[1], d->k[0], (GFX_K_TERMS - 1) * sizeof d->k[0]);
+			memset(d->factors[0], 0, GFX_K_FACTORS);
+			memset(d->k[0], 0, sizeof d->k[0]);
+			nterms++;
+		} else {
+			x->approx = true;  /* la niebla no se suma */
+		}
+	}
+	bool t0 = false, t1 = false;
+	for (unsigned j = 0; j < nterms; j++)
+		for (int k = 0; k < GFX_K_FACTORS; k++) {
+			t0 |= d->factors[j][k] == GFX_F_T0 || d->factors[j][k] == GFX_F_T0A;
+			t1 |= d->factors[j][k] == GFX_F_T1 || d->factors[j][k] == GFX_F_T1A;
+		}
+	d->nterms = (uint8_t)nterms;
+	d->ntex = t1 ? 2 : t0 ? 1 : 0;
+	if (nterms == 0)
+		d->nterms = 0;  /* todo era cero: la combinación lineal vacía */
 }
 
 bool gfx_combine(const struct gfx_state *g, struct gfx_draw *d)
@@ -287,7 +525,7 @@ bool gfx_combine(const struct gfx_state *g, struct gfx_draw *d)
 	struct cc_cycle cyc[2];
 	unpack(g->cc_hi, g->cc_lo, cyc);
 
-	poly zero = p_const(0.0f);
+	poly zero = p_zero();
 	poly comb[4] = { zero, zero, zero, zero }, out[4];
 	unsigned cycle = (g->oh >> G_MDSFT_CYCLETYPE) & 3;
 	if (cycle == G_CYC_2CYCLE) {
@@ -303,21 +541,40 @@ bool gfx_combine(const struct gfx_state *g, struct gfx_draw *d)
 
 	d->tex[0].flags &= (uint8_t)~GFX_TEX_PREMUL;
 	d->tex[1].flags &= (uint8_t)~GFX_TEX_PREMUL;
-	premul(out, TX_T0, TX_T0P, &d->tex[0], &x);
-	premul(out, TX_T1, TX_T1P, &d->tex[1], &x);
-
-	memset(d->k, 0, sizeof d->k);
-	bool t0 = false, t1 = false;
-	for (int lane = 0; lane < 4; lane++)
-		for (int t = 0; t < TX_T0P; t++)  /* T0P y T1P ya pasaron a T0 y T1 */
-			for (int s = 0; s < SH_N; s++) {
-				float v = out[lane].c[t][s];
-				d->k[tx_term[t]][s][lane] = v;
-				if (v != 0.0f) {
-					t0 |= t == TX_T0 || t == TX_T0A;
-					t1 |= t == TX_T1 || t == TX_T1A;
-				}
-			}
-	d->ntex = t1 ? 2 : t0 ? 1 : 0;
+	memset(d->factors, 0, sizeof d->factors);
+	if (!fit_lincomb(out, d))
+		build_terms(out, d, &x);
 	return x.approx;
+}
+
+void gfx_combine_textures(struct gfx_draw *d, unsigned ntex)
+{
+	if (d->nterms == 0) {
+		for (int t = ntex == 0 ? GFX_K_T0 : GFX_K_T1; ntex < 2 && t <= GFX_K_T1A; t++)
+			memset(d->k[t], 0, sizeof d->k[t]);
+		return;
+	}
+	unsigned n = 0;
+	for (unsigned j = 0; j < d->nterms; j++) {
+		bool drop = false;
+		for (int k = 0; k < GFX_K_FACTORS; k++) {
+			uint8_t f = d->factors[j][k];
+			drop |= (f == GFX_F_T0 || f == GFX_F_T0A) && ntex < 1;
+			drop |= (f == GFX_F_T1 || f == GFX_F_T1A) && ntex < 2;
+		}
+		if (drop)
+			continue;
+		if (n != j) {
+			memcpy(d->factors[n], d->factors[j], GFX_K_FACTORS);
+			memcpy(d->k[n], d->k[j], sizeof d->k[n]);
+		}
+		n++;
+	}
+	for (unsigned j = n; j < d->nterms; j++) {
+		memset(d->factors[j], 0, GFX_K_FACTORS);
+		memset(d->k[j], 0, sizeof d->k[j]);
+	}
+	d->nterms = (uint8_t)n;
+	if (n == 0)
+		memset(d->k, 0, sizeof d->k);  /* combinación lineal vacía: cero */
 }

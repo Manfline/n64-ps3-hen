@@ -70,7 +70,9 @@ struct gfxtest_point {
 	{ 277, 227, 0xFF00FF, "textura cambiada en la RDRAM: texel (3,3), nuevo" },    \
 	{ 255, 221, 0xFF8400, "paleta cambiada en la RDRAM: índice 5, nuevo" },     \
 	{ 114, 22, 0xFF0000, "G_RM_TEX_EDGE: texel opaco" },                          \
-	{ 126, 22, GFXTEST_BG, "G_RM_TEX_EDGE: texel con alfa 0, no se escribe" },   \
+	{ 126, 22, GFXTEST_BG, "G_RM_TEX_EDGE: texel con alfa 0, no se escribe" },    \
+	{ 252, 232, 0xFF0000, "2 ciclos, TEXEL0·TEXEL1·SHADE (programa generado)" },       \
+	{ 287, 232, 0x804080, "2 ciclos, lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE (generado)" }, \
 	{ 20, 90, 0x00FF80, "clip ratio 1: dentro del viewport chico" },              \
 	{ 5, 90, GFXTEST_BG, "clip ratio 1: fuera del viewport (izquierda)" },         \
 	{ 35, 90, GFXTEST_BG, "clip ratio 1: fuera del viewport (derecha)" },          \

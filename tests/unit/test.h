@@ -114,6 +114,7 @@ void t_suite_gfx_rare(void);
 void t_suite_audio(void);
 void t_suite_audio_sync(void);
 void t_suite_pacer(void);
+void t_suite_fpgen(void);
 
 /* Corre todo y devuelve el número de pruebas fallidas. `print` recibe una
  * línea sin salto final. */

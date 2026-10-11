@@ -282,6 +282,8 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 	if (kind != PRIM_TRI || !(g->geom & G_FOG))
 		d->fog = 0;
 
+	/* La niebla ya está decidida: con ella, gfx_combine deja el término al
+	 * que el vertex program suma el color de niebla. */
 	if (gfx_combine(g, d))
 		g->res->approx_cc++;
 	bool textured = kind == PRIM_RECT || (kind < PRIM_RAW ? g->tex_on != 0 : (kind & 1) != 0);
@@ -293,11 +295,11 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 			d->ntex = (uint8_t)i;
 			break;
 		}
-	if (d->ntex < n) {
-		/* Sin la textura (arena lleno): sus términos se anulan. */
-		for (int t = d->ntex == 0 ? GFX_K_T0 : GFX_K_T1; t <= GFX_K_T1A; t++)
-			memset(d->k[t], 0, sizeof d->k[t]);
-	}
+	/* Sin una textura (apagadas o arena lleno): lo que la leía se anula. */
+	if (d->nterms)
+		gfx_combine_textures(d, d->ntex);
+	else if (d->ntex < n)
+		gfx_combine_textures(d, d->ntex);
 #ifdef SALSA64_GFX_TRACE
 	salsa64_gfx_trace_state(g, d, kind, tile);
 #endif

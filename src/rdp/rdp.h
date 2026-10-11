@@ -35,6 +35,12 @@ struct salsa64_rdp_stats {
 	uint32_t set_waits;      /* veces que un juego de búferes seguía en uso (emulación) */
 	uint64_t us_translate;   /* PPE traduciendo a comandos del RSX (presentación) */
 	uint64_t us_set_wait;    /* hilo de emulación esperando un juego */
+	/* Fragment programs generados (lib/rsxkit, rsxkit_fp_stats): dibujos
+	 * que usaron uno, programas distintos en la caché, generados en total,
+	 * vaciados de la caché y cargas de programa (cambios, contando los
+	 * precompilados). */
+	uint32_t draws_generated;
+	uint32_t fp_programs, fp_generated, fp_evictions, fp_loads;
 };
 
 /* Después de rsxkit_init. scale = 0: la mayor escala entera que cabe en la

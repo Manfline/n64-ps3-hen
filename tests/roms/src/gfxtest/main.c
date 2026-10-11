@@ -19,13 +19,16 @@
  * cuatro cuadros de culling (antihorario y horario con G_CULL_BACK y con
  * G_CULL_FRONT: se ven dos), un cuadro de 2 ciclos con dos texturas
  * mezcladas por el alfa primitivo (TEXEL0 en la tile 0, TEXEL1 en la 1),
- * un cuadro con w = 1000 coloreado por PRIM·TEXEL0_ALPHA y dos TEXRECT cuya
+ * un cuadro con w = 1000 coloreado por PRIM·TEXEL0_ALPHA, dos TEXRECT cuya
  * textura (L) y paleta (M) cambia el CPU en la RDRAM en el cuadro
  * GFXTEST_CHANGE_FRAME (prueba de la caché de texturas entre tareas), un
- * cuadro con textura RGBA16 de alfa de 1 bit en G_RM_TEX_EDGE (N), un
- * cuadro el doble de grande que un viewport chico con clip ratio 1 (O: el
- * RSP lo recorta a la ventana) y uno que cruza el plano cercano (P: la
- * mitad de detrás no se dibuja). Al
+ * cuadro con textura RGBA16 de alfa de 1 bit en G_RM_TEX_EDGE (N), dos
+ * cuadros de 2 ciclos que no caben en una combinación lineal (piden un
+ * fragment program generado): TEXEL0·TEXEL1·SHADE (P) y lerp(ENV, TEXEL0,
+ * SHADE_ALPHA)·SHADE, la niebla por luz de GoldenEye (Q), un cuadro el
+ * doble de grande que un viewport chico con clip ratio 1 (O: el RSP lo
+ * recorta a la ventana) y uno que cruza el plano cercano (R: la mitad de
+ * detrás no se dibuja). Al
  * final de cada lista, un tramo de otro microcódigo (G_LOAD_UCODE) que la
  * HLE debe saltar; en GFXTEST_CUT_FRAME la lista termina dentro de él (no
  * en la variante F3D, que no tiene G_LOAD_UCODE).
@@ -124,8 +127,9 @@ struct rsp_data {
 	light sun, ambient, look_x, look_y;
 	vtx quad_a[4], quad_b[4], tri_c[3], quad_d[4], quad_g[4], quad_i[4], cube[24];
 	vtx cull[16];  /* 4 cuadros: antihorario/horario × cull back/front */
-	vtx quad_j[4], quad_k[4], quad_n[4], quad_o[4], quad_p[4];
+	vtx quad_j[4], quad_k[4], quad_n[4], quad_p[4], quad_q[4], quad_o[4], quad_r[4];
 	uint16_t red[4 * 4], blue[4 * 4];
+	uint16_t yellow[4 * 4], magenta[4 * 4];
 	uint16_t checker[8 * 8];
 	uint8_t glyph[16 * 8 / 2];
 	uint8_t ci[16 * 4 / 2];
@@ -263,17 +267,23 @@ static void init_data(void)
 	set_quad(r->quad_j, -22, -24, -10, -28, 0, 0xFFFFFFFF);
 	set_quad(r->quad_k, 24, 30, 30, 26, 0, 0xFFFFFFFF);
 	set_quad(r->quad_n, -10, 28, -6, 24, 0, 0xFFFFFFFF);
+	/* P y Q (expect.h): sombreado (255, 128, 255, 128) → S = (1, 0,5, 1),
+	 * Sa = 0,5. */
+	set_quad(r->quad_p, 16, -29, 21, -31, 0, 0xFF80FF80);
+	set_quad(r->quad_q, 23, -29, 28, -31, 0, 0xFF80FF80);
 	/* O: ±2 en recorte, el doble del viewport chico. */
 	set_quad(r->quad_o, -64, 64, 64, -64, 0, 0x00FF80FF);
-	/* P: z de 0 (izquierda) a −64 (derecha, −2 en recorte): el plano
+	/* R: z de 0 (izquierda) a −64 (derecha, −2 en recorte): el plano
 	 * cercano (z = −w) lo corta en el medio, en el píxel 20. */
-	set_vtx(&r->quad_p[0], -31, 2, 0, 0, 0, 0xFF8080FF);
-	set_vtx(&r->quad_p[1], -25, 2, -64, 0, 0, 0xFF8080FF);
-	set_vtx(&r->quad_p[2], -25, -2, -64, 0, 0, 0xFF8080FF);
-	set_vtx(&r->quad_p[3], -31, -2, 0, 0, 0, 0xFF8080FF);
+	set_vtx(&r->quad_r[0], -31, 2, 0, 0, 0, 0xFF8080FF);
+	set_vtx(&r->quad_r[1], -25, 2, -64, 0, 0, 0xFF8080FF);
+	set_vtx(&r->quad_r[2], -25, -2, -64, 0, 0, 0xFF8080FF);
+	set_vtx(&r->quad_r[3], -31, -2, 0, 0, 0, 0xFF8080FF);
 	for (int i = 0; i < 16; i++) {
 		r->red[i] = rgba16(31, 0, 0);
 		r->blue[i] = rgba16(0, 0, 31);
+		r->yellow[i] = rgba16(31, 31, 0);
+		r->magenta[i] = rgba16(31, 0, 31);
 	}
 
 	/* Cubo: 6 caras de 4 vértices, en sentido antihorario visto desde
@@ -539,6 +549,54 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	sp_tri2(&dl, 0, 1, 2, 0, 2, 3);
 	sp_texture(&dl, 0, 0, 0, 0);
 
+	/* P: 2 ciclos, (TEXEL0 − 0)·TEXEL1 + 0 y luego (COMBINED − 0)·SHADE +
+	 * 0; amarillo en la tile 0 y magenta en la 1: rojo × S = (1, 0, 0).
+	 * Textura × textura: no cabe en la combinación lineal del RSX (y la
+	 * aproximación de antes daría amarillo × S). */
+	dp_texture_image(&dl, FMT_RGBA, SIZ_16, 1, r->yellow);
+	dp_tile(&dl, FMT_RGBA, SIZ_16, 0, 0, 7, 0, 0, 0, 0);
+	dp_sync(&dl, SYNC_LOAD);
+	dp_load_block(&dl, 7, 16, 2048);
+	dp_texture_image(&dl, FMT_RGBA, SIZ_16, 1, r->magenta);
+	dp_tile(&dl, FMT_RGBA, SIZ_16, 0, 32, 7, 0, 0, 0, 0);
+	dp_sync(&dl, SYNC_LOAD);
+	dp_load_block(&dl, 7, 16, 2048);
+	dp_sync(&dl, SYNC_PIPE);
+	dp_tile(&dl, FMT_RGBA, SIZ_16, 1, 0, 0, 0, 0, 2, 0);
+	dp_tile_size(&dl, 0, 0, 0, 3, 3);
+	dp_tile(&dl, FMT_RGBA, SIZ_16, 1, 32, 1, 0, 0, 2, 0);
+	dp_tile_size(&dl, 1, 0, 0, 3, 3);
+	dp_othermode(&dl, CYC_2CYCLE | TF_POINT, BL_XLU);
+	{
+		/* Ciclo 0: a=TEXEL0, b=0, c=TEXEL1 (2), d=0; alfa 0·0 + 1.
+		 * Ciclo 1: a=COMBINED, b=0, c=SHADE (4), d=0; alfa 0·0 + 1. */
+		uint32_t hi = 1u << 20 | 2u << 15 | 7u << 12 | 7u << 9 | 0u << 5 | 4u;
+		uint32_t lo = 15u << 28 | 15u << 24 | 7u << 21 | 7u << 18 | 7u << 15 | 7u << 12 | 6u << 9 |
+			      7u << 6 | 7u << 3 | 6u;
+		cmd(&dl, 0xFC000000u | hi, lo);
+	}
+	sp_texture(&dl, 0xFFFF, 0xFFFF, 0, 1);
+	sp_geometry(&dl, G_CULL_BACK | G_CULL_FRONT | G_ZBUFFER | G_LIGHTING | G_TEXTURE_GEN, G_SHADE | G_SHADING_SMOOTH);
+	sp_vertex(&dl, r->quad_p, 4, 0);
+	sp_tri2(&dl, 0, 1, 2, 0, 2, 3);
+
+	/* Q: la niebla por luz de GoldenEye: ciclo 0 (TEXEL0 − ENV)·SHADE_ALPHA
+	 * + ENV, ciclo 1 (COMBINED − 0)·SHADE + 0, con ENV azul y Sa = 0,5:
+	 * (0,5, 0,5, 0,5) × S = (0,5, 0,25, 0,5). Sombreado × sombreado: la
+	 * aproximación de antes (sin el factor Sa) daría T0 × S = (1, 0,5, 0). */
+	dp_env_color(&dl, 0x0000FFFF);
+	{
+		/* Ciclo 0: a=TEXEL0, b=ENV (5), c=SHADE_ALPHA (11), d=ENV (5);
+		 * alfa 0·0 + 1. Ciclo 1: a=COMBINED, b=0, c=SHADE, d=0; alfa 0·0 + 1. */
+		uint32_t hi = 1u << 20 | 11u << 15 | 7u << 12 | 7u << 9 | 0u << 5 | 4u;
+		uint32_t lo = 5u << 28 | 15u << 24 | 7u << 21 | 7u << 18 | 5u << 15 | 7u << 12 | 6u << 9 |
+			      7u << 6 | 7u << 3 | 6u;
+		cmd(&dl, 0xFC000000u | hi, lo);
+	}
+	sp_vertex(&dl, r->quad_q, 4, 0);
+	sp_tri2(&dl, 0, 1, 2, 0, 2, 3);
+	sp_texture(&dl, 0, 0, 0, 0);
+
 	/* L: TEXRECT ×2 con una textura RGBA16 de 4×4 que cambia el CPU. */
 	dp_texture_image(&dl, FMT_RGBA, SIZ_16, 1, r->chg);
 	dp_tile(&dl, FMT_RGBA, SIZ_16, 0, 0, 7, 0, 0, 0, 0);
@@ -600,8 +658,8 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	sp_viewport(&dl, r->vp);
 	sp_clip_ratio(&dl, 2);
 
-	/* P: cruza el plano cercano; sin z-buffer, lo de detrás no se dibuja. */
-	sp_vertex(&dl, r->quad_p, 4, 0);
+	/* R: cruza el plano cercano; sin z-buffer, lo de detrás no se dibuja. */
+	sp_vertex(&dl, r->quad_r, 4, 0);
 	sp_tri2(&dl, 0, 1, 2, 0, 2, 3);
 
 	/* Tramo de otro microcódigo (como S2DEX en Zelda OoT): G_LOAD_UCODE a

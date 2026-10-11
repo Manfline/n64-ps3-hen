@@ -349,6 +349,11 @@ static inline void dp_prim_color(gfx **dl, uint32_t rgba)
 	cmd(dl, 0xFA000000u, rgba);
 }
 
+static inline void dp_env_color(gfx **dl, uint32_t rgba)
+{
+	cmd(dl, 0xFB000000u, rgba);
+}
+
 static inline void dp_blend_color(gfx **dl, uint32_t rgba)
 {
 	cmd(dl, 0xF9000000u, rgba);
