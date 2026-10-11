@@ -59,11 +59,13 @@ de accesos del CPU, build `-DSALSA64_WATCH_MEM`):**
 - Paquete `build/salsa64/salsa64-framebuffer.pkg` (SLSA00089, «Salsa64
   framebuffer»), sin subir: la PS3 estaba apagada toda la jornada.
 
-**Verificación:** `test-host` 356 (10 de targets, 22 de gfx), `tools/test-roms.sh`
-(nemu64-test 433 con HLE y 136 con LLE, vitest, controles, savetest ×6,
-gfxtest ×3 con 28 puntos, audiotest), rsxkit y frontend en Docker sin
-avisos. Pendientes al escribir esto: `tools/build.sh` entero,
-`tools/test-phase2.sh` en RPCS3 y `tools/test-rec.sh` (corriendo).
+**Verificación (todo en verde):** `test-host` 356 (10 de targets, 22 de
+gfx), `tools/test-roms.sh` (nemu64-test 433 con HLE y 136 con LLE, vitest,
+controles, savetest ×6, gfxtest ×3 con 28 puntos, audiotest),
+`tools/build.sh` entero sin avisos del compilador, `tools/test-phase2.sh`
+en RPCS3 (gfxtest 28/28 en el host y en el frontend con F3DEX2 y F3D,
+spu-jobs, menú) y `tools/test-rec.sh` (356 unitarias big-endian ×4,
+nemu64-test 433, vitest).
 
 Pendiente:
 - [ ] **PS3 real:** subir el paquete, Zelda: pausa (fondo y pantalla de
