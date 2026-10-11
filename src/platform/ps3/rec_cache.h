@@ -55,4 +55,14 @@ static inline int salsa64_ps3_rec_fpu_mem_wanted(void)
 	return stat(SALSA64_RECFPUMEM_FLAG, &st) == 0;
 }
 
+/* Con este archivo, COP0 como hasta el 2026-10-11, todo por el intérprete
+ * (SALSA64_REC_OPT_COP0_EXEC). */
+#define SALSA64_RECCOP0EXEC_FLAG SALSA64_DATA_DIR "/jit-cop0-viejo"
+
+static inline int salsa64_ps3_rec_cop0_exec_wanted(void)
+{
+	struct stat st;
+	return stat(SALSA64_RECCOP0EXEC_FLAG, &st) == 0;
+}
+
 #endif

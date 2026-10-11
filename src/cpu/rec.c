@@ -192,6 +192,40 @@ REC_UNUSED static void rec_h_exec(struct salsa64_cpu *cpu, uint32_t instr)
 		salsa64_rec_prof_add(prof, exec_cause(instr), salsa64_rec_prof_now() - t0);
 }
 
+/* TLBWI/TLBWR desde el código generado (rec_emit_ext.h, emit_tlbw): la
+ * escritura y la ktlb al día solo para esa entrada, sin el intérprete ni la
+ * comparación de las 32 entradas de salsa64_rec_x_sync. El bloque termina
+ * después y enlaza con el siguiente, cuya entrada revisa su página. */
+REC_UNUSED static void rec_h_tlbw(struct salsa64_cpu *cpu, uint32_t instr)
+{
+	struct salsa64_rec *rec = cpu->rec;
+	struct salsa64_rec_prof *prof = rec->prof;
+	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0;
+	rec->stats.exec_calls++;
+	salsa64_rec_x_tlb_written(rec, salsa64_vr4300_tlbw(cpu, I_FUNCT(instr) == 0x06));
+	if (prof)
+		salsa64_rec_prof_add(prof, SALSA64_PROF_EXEC_COP0, salsa64_rec_prof_now() - t0);
+}
+
+/* ERET desde el código generado (emit_eret): lo que hace el intérprete sin
+ * redirect, y devuelve el pc: el código sigue por exit_jr si el modo sigue
+ * siendo kernel y no hay interrupción (lo revisa él), si no sale al
+ * despachador con ese pc. Si cambió ERL, la ktlb se revisa aquí (antes lo
+ * hacía el despachador al volver). */
+REC_UNUSED static uint64_t rec_h_eret(struct salsa64_cpu *cpu)
+{
+	struct salsa64_rec *rec = cpu->rec;
+	struct salsa64_rec_prof *prof = rec->prof;
+	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0;
+	rec->stats.exec_calls++;
+	salsa64_vr4300_eret(cpu);
+	cpu->redirect = 0;
+	salsa64_rec_x_sync(rec);
+	if (prof)
+		salsa64_rec_prof_add(prof, SALSA64_PROF_EXEC_COP0, salsa64_rec_prof_now() - t0);
+	return cpu->pc;
+}
+
 REC_UNUSED static void rec_h_exception(struct salsa64_cpu *cpu, unsigned code)
 {
 	struct salsa64_rec_prof *prof = cpu->rec->prof;
@@ -971,12 +1005,17 @@ bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *co
 	ok &= t == my_toc;
 	rec->h_exception = fn_entry((const void *)rec_h_exception, &t);
 	ok &= t == my_toc;
+	rec->h_tlbw = fn_entry((const void *)rec_h_tlbw, &t);
+	ok &= t == my_toc;
+	rec->h_eret = fn_entry((const void *)rec_h_eret, &t);
+	ok &= t == my_toc;
 	if (!ok)
 		return false;  /* el código generado no cambia de TOC */
 
-	uint64_t lo = (uintptr_t)code, hi = lo + bytes, h[4] = { rec->h_load, rec->h_store, rec->h_exec, rec->h_exception };
+	uint64_t lo = (uintptr_t)code, hi = lo + bytes;
+	uint64_t h[6] = { rec->h_load, rec->h_store, rec->h_exec, rec->h_exception, rec->h_tlbw, rec->h_eret };
 	rec->calls_near = true;
-	for (unsigned k = 0; k < 4; k++) {
+	for (unsigned k = 0; k < 6; k++) {
 		uint64_t far = h[k] < lo ? hi - h[k] : h[k] > hi ? h[k] - lo : hi - lo;
 		if (far >= CALL_REACH)
 			rec->calls_near = false;

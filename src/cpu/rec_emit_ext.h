@@ -16,15 +16,35 @@
 
 /* ---- Decodificación ------------------------------------------------------------ */
 
-static void decode_promote(uint32_t i, struct dec *d)
+static void decode_promote(const struct salsa64_rec *rec, uint32_t i, struct dec *d)
 {
-	unsigned op = I_OP(i), fmt = I_RS(i), f = I_FUNCT(i);
+	unsigned op = I_OP(i), fmt = I_RS(i), f = I_FUNCT(i), rd = I_RD(i);
 	switch (op) {
 	case 0x10:  /* MFC0 DMFC0: solo leen y el bloque sigue; Random, el intérprete */
 		if (fmt <= 0x01) {
 			d->kind = K_NORMAL;
 			d->reads &= ~BIT(I_RT(i));
 			d->how = I_RD(i) == SALSA64_CP0_RANDOM ? H_EXEC : H_NATIVE;
+			return;
+		}
+		if (rec->opts & SALSA64_REC_OPT_COP0_EXEC)
+			return;
+		/* MTC0/DMTC0 a un registro que solo guarda el valor: el bloque
+		 * sigue. TLBWI/TLBWR y ERET con rutina propia (rec.c), terminando el
+		 * bloque como antes. Lo demás de COP0 (Status, Cause, Compare,
+		 * EntryHi, Count…), el intérprete. */
+		if ((fmt == 0x04 || fmt == 0x05) &&
+		    (rd == SALSA64_CP0_ENTRYLO0 || rd == SALSA64_CP0_ENTRYLO1 || rd == SALSA64_CP0_PAGEMASK ||
+		     rd == SALSA64_CP0_INDEX)) {
+			d->kind = K_NORMAL;
+			d->how = H_MTC0;
+			d->writes = 0;
+		} else if (fmt >= 0x10 && (f == 0x02 || f == 0x06)) {
+			d->how = H_TLBW;
+			d->reads = d->writes = 0;
+		} else if (fmt >= 0x10 && f == 0x18) {
+			d->how = H_ERET;
+			d->reads = d->writes = 0;
 		}
 		return;
 	case 0x11:
@@ -49,7 +69,7 @@ static void decode_ext(const struct salsa64_rec *rec, uint32_t i, struct dec *d)
 {
 	decode(i, d);
 	if (!(rec->opts & SALSA64_REC_OPT_RARE_EXEC))
-		decode_promote(i, d);
+		decode_promote(rec, i, d);
 	if (SALSA64_REC_OLD(rec, SALSA64_REC_DBG_NO_CACHE) && I_OP(i) == 0x2F)
 		d->how = H_EXEC;  /* CACHE al intérprete, como antes */
 }
@@ -324,6 +344,73 @@ static void emit_cop0(struct ctx *c, unsigned k)
 		E(c, ppc_extsw(d, d));
 	}
 	put(c, rt, d);
+}
+
+/* ---- COP0: MTC0 de EntryLo, PageMask e Index; TLBWI/TLBWR; ERET (2026-10-11) ---- */
+
+/* MTC0 (y DMTC0) a un registro que solo guarda el valor
+ * (salsa64_cpu_cop0_write): el latch y el campo con su máscara. El refill de
+ * la TLB de GoldenEye escribe EntryLo0 y EntryLo1 ~800 veces por campo. */
+static void emit_mtc0(struct ctx *c, unsigned k)
+{
+	uint32_t i = c->d[k].w;
+	unsigned rd = I_RD(i), v = get(c, I_RT(i), T_S1);
+	E(c, ppc_std(v, OFF(cop0_latch), R_CPU));
+	switch (rd) {
+	case SALSA64_CP0_ENTRYLO0:
+	case SALSA64_CP0_ENTRYLO1:
+		E(c, ppc_rlwinm(T_X, v, 0, 2, 31));  /* 0x3FFFFFFF */
+		E(c, ppc_stw(T_X, rd == SALSA64_CP0_ENTRYLO0 ? OFF(entry_lo0) : OFF(entry_lo1), R_CPU));
+		return;
+	case SALSA64_CP0_PAGEMASK:
+		E(c, ppc_rlwinm(T_X, v, 0, 7, 18));  /* 0x01FFE000 */
+		E(c, ppc_stw(T_X, OFF(page_mask), R_CPU));
+		return;
+	default:                                 /* Index: 0x8000003F */
+		E(c, ppc_lis(T_X, (int16_t)0x8000));
+		E(c, ppc_ori(T_X, T_X, 0x3F));
+		E(c, ppc_and(T_X, v, T_X));
+		E(c, ppc_stw(T_X, OFF(index), R_CPU));
+		return;
+	}
+}
+
+/* TLBWI/TLBWR: la escritura y la ktlb de esa entrada en C (rec_h_tlbw: sin
+ * el intérprete ni la comparación de las 32 entradas), sin excepción,
+ * interrupción ni cambio de modo posibles; el bloque termina enlazado al
+ * siguiente, cuya entrada revisa su página (rec_tlb.h). */
+static void emit_tlbw(struct ctx *c, unsigned k)
+{
+	call_prep(c, k);  /* Random sale de cycles */
+	E(c, ppc_mr(3, R_CPU));
+	li32u(c, 4, c->d[k].w);
+	emit_call(c, c->rec->h_tlbw);
+	writeback(c, c->written);
+	E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)k + 1));
+	emit_exit_to(c, insn_pc(c, k + 1));
+}
+
+/* ERET: rec_h_eret deja pc, Status y el modo (cop0.c) y devuelve el pc; si
+ * el modo sigue siendo kernel y no hay interrupción, al bloque destino por
+ * exit_jr (como JR), si no al despachador con ese pc. Hasta ahora cada ERET
+ * salía por redirect al despachador (GoldenEye: ~400 por campo). */
+static void emit_eret(struct ctx *c, unsigned k)
+{
+	int mid = new_label(c);
+	writeback(c, c->written);
+	fpu_flush(c);
+	call_prep(c, k);
+	E(c, ppc_mr(3, R_CPU));
+	emit_call(c, c->rec->h_eret);
+	E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)k + 1));
+	E(c, ppc_lwz(0, OFF(irq_pending), R_CPU));  /* irq, redirect, abort y modo */
+	E(c, ppc_cmpwi(CR_T, 0, 0));
+	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), mid);
+	restore_borrowed(c);
+	emit_b(c, abs_label(c, c->temp || c->rec->no_link ? c->rec->exit_jump : c->rec->exit_jr), false);
+	bind(c, mid);
+	restore_borrowed(c);
+	emit_b(c, abs_label(c, c->rec->exit_mid), false);
 }
 
 /* ---- COP1: CFC1 y CTC1 ---------------------------------------------------------- */

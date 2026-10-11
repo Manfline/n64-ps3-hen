@@ -178,7 +178,9 @@ Lo que se llama a C:
   fuera de la RDRAM, código en la zona escrita);
 - instrucciones raras o con mucho estado, que ejecuta el intérprete
   (`salsa64_vr4300_exec_one`): LL/SC, traps, COP0 salvo MFC0/DMFC0
-  (y MFC0 de Random), CVT.S/D.L, y los caminos lentos de lo que se traduce
+  (y MFC0 de Random), MTC0 a EntryLo/PageMask/Index, TLBWI/TLBWR y ERET
+  (estos tres últimos con rutina propia, ver «COP0 sin el intérprete»),
+  CVT.S/D.L, y los caminos lentos de lo que se traduce
   (operandos fuera de la franja, redondeo dirigido, causas habilitadas);
 - excepciones (SYSCALL, BREAK, desbordamiento).
 
@@ -318,6 +320,35 @@ instrucciones de COP1 con cargas, almacenamientos, MTC1/MFC1, CFC1/CTC1 y
 operandos al azar, en un solo bloque) compara el resultado entero
 (registros, FCR31, excepciones, memoria) con el intérprete sobre el mismo
 estado inicial, y exige que más de 600 corran enteras en nativo.
+
+### COP0 sin el intérprete: MTC0 EntryLo, TLBWR y ERET (2026-10-11)
+
+El refill de la TLB de GoldenEye (~400 por campo) son cuatro instrucciones
+de COP0 (dos MTC0 a EntryLo, TLBWR y ERET), y cada una costaba una llamada
+a `salsa64_vr4300_exec_one` más, tras cada COP0, `salsa64_rec_x_sync`
+(comparar las 32 entradas de la TLB con la instantánea) y, en el ERET, la
+vuelta al despachador por `redirect` (buscar el bloque, entrar de nuevo):
+2200 llamadas y ~1,9 ms por campo en la PS3. Ahora
+(`SALSA64_REC_OPT_COP0_EXEC` y el archivo `jit-cop0-viejo` repiten lo de
+antes para medir):
+
+- **MTC0 y DMTC0 a EntryLo0, EntryLo1, PageMask e Index** son nativos y no
+  terminan el bloque: el latch (`cop0_latch`) y el campo con su máscara
+  (`salsa64_cpu_cop0_write`). No cambian la traducción hasta la escritura
+  de la TLB. Status, Cause, Compare, Count, EntryHi (cambia el ASID) y lo
+  demás siguen por el intérprete y terminan el bloque.
+- **TLBWI/TLBWR** llaman a `rec_h_tlbw` (rec.c): la escritura
+  (`salsa64_vr4300_tlbw`, que devuelve la entrada) y `salsa64_rec_x_tlb_written`,
+  que pone `ktlb[]` al día solo para esa entrada (borrar sus páginas de antes
+  y de ahora, instantánea y prellenado) sin recorrer las 32 ni compactar
+  `live[]` (`vt_set` compacta si se llena). No hay excepción, interrupción
+  ni cambio de modo posibles, así que no se revisa nada al volver: el bloque
+  termina enlazado al siguiente, cuya entrada revisa su página.
+- **ERET** llama a `rec_h_eret`: lo que hace el intérprete (`op_eret`) sin
+  dejar `redirect`, revisa la ktlb si cambió ERL y devuelve el pc; el código
+  mira la palabra de interrupción/modo y, si sigue en kernel sin
+  interrupción, va al bloque destino por `exit_jr` como un JR; si no, al
+  despachador con ese pc (`exit_mid`).
 
 ### Cargas y almacenamientos no alineados
 

@@ -1519,17 +1519,20 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		rec.opts |= SALSA64_REC_OPT_LEGACY;
 	if (salsa64_ps3_rec_fpu_mem_wanted())
 		rec.opts |= SALSA64_REC_OPT_FPU_MEM;
+	if (salsa64_ps3_rec_cop0_exec_wanted())
+		rec.opts |= SALSA64_REC_OPT_COP0_EXEC;
 	rec.prof = salsa64_ps3_rec_prof_wanted() ? &rec_prof : NULL;
 	if (!salsa64_ps3_rec_wanted())
 		salsa64_log("recompilador apagado (%s): intérprete", SALSA64_NOREC_FLAG);
 	else if (!(use_rec = salsa64_rec_init(&rec, &n64.cpu, salsa64_ps3_rec_cache(), SALSA64_REC_CACHE_BYTES)))
 		salsa64_log("recompilador no disponible: intérprete");
 	else
-		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x%s%s%s",
+		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x%s%s%s%s",
 			    SALSA64_REC_CACHE_BYTES >> 20, salsa64_ps3_rec_cache(), rec.calls_near ? "con bl" : "por mtctr",
 			    rec.opts, rec.prof ? ", con perfil" : "",
 			    rec.opts & SALSA64_REC_OPT_LEGACY ? ", camino viejo (jit-viejo)" : "",
-			    rec.opts & SALSA64_REC_OPT_FPU_MEM ? ", FPU por memoria (jit-fpu-memoria)" : ", FPU residente");
+			    rec.opts & SALSA64_REC_OPT_FPU_MEM ? ", FPU por memoria (jit-fpu-memoria)" : ", FPU residente",
+			    rec.opts & SALSA64_REC_OPT_COP0_EXEC ? ", COP0 por el intérprete (jit-cop0-viejo)" : "");
 
 	/* overscan.cfg: en cada juego (se cambia desde las Opciones del menú). */
 	load_overscan();

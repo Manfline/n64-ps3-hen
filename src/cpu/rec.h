@@ -110,6 +110,11 @@ struct salsa64_rec_fixup {
  * cpu->fpr (rec_emit.c, emit_fpu) en vez de registros residentes y FCR31
  * perezoso (rec_emit_fpu.h). Se aplica al compilar. */
 #define SALSA64_REC_OPT_FPU_MEM 16u
+/* Para medir A/B: COP0 como hasta el 2026-10-11, todo por el intérprete
+ * (MTC0 de EntryLo/PageMask/Index, TLBWI/TLBWR y ERET tienen ahora camino
+ * propio: rec_emit_ext.h y rec_h_tlbw/rec_h_eret en rec.c). Se aplica al
+ * compilar. */
+#define SALSA64_REC_OPT_COP0_EXEC 32u
 /* Depuración (host, SALSA64_REC_OPTS): apagan una pieza nueva a la vez para
  * acotar una diferencia en --lockstep. LEGACY las apaga todas. */
 #define SALSA64_REC_DBG_NO_ENDLINK 0x100u   /* COP0 vuelve al despachador e interpreta el resto del bloque básico */
@@ -141,7 +146,7 @@ struct salsa64_rec {
 	uint32_t slow_load[7], slow_store[4];  /* camino lento compartido por tipo (rec_emit.c, emit_load/emit_store) */
 
 	/* Direcciones de entrada de las funciones de C que llama el código. */
-	uint64_t h_load, h_store, h_exec, h_exception;
+	uint64_t h_load, h_store, h_exec, h_exception, h_tlbw, h_eret;
 	bool calls_near;         /* todas a menos de 32 MB de la caché: `bl` directo */
 
 	uint32_t rdram_size;

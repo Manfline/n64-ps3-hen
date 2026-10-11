@@ -90,6 +90,9 @@ enum how {
 	H_NATIVE,
 	H_EXEC,       /* la ejecuta el intérprete (salsa64_vr4300_exec_one) */
 	H_EXC,        /* SYSCALL/BREAK: excepción segura */
+	H_MTC0,       /* MTC0 a EntryLo0/1, PageMask o Index: el valor y su máscara (rec_emit_ext.h) */
+	H_TLBW,       /* TLBWI/TLBWR: rec_h_tlbw y el bloque termina enlazado */
+	H_ERET,       /* ERET: rec_h_eret y al destino por exit_jr */
 };
 
 struct dec {
@@ -1536,6 +1539,18 @@ static void emit_insn(struct ctx *c, unsigned k)
 	}
 	if (d->how == H_EXC) {
 		emit_exception(c, k, I_FUNCT(i) == 0x0C ? SALSA64_EXC_SYS : SALSA64_EXC_BP);
+		return;
+	}
+	if (d->how == H_MTC0) {
+		emit_mtc0(c, k);
+		return;
+	}
+	if (d->how == H_TLBW) {
+		emit_tlbw(c, k);
+		return;
+	}
+	if (d->how == H_ERET) {
+		emit_eret(c, k);
 		return;
 	}
 	if (I_OP(i) == 0x11 && c->fpu_res) {
