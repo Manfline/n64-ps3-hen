@@ -54,15 +54,24 @@ enum menu_overscan {
 	MENU_OVERSCAN_CUSTOM,  /* otros números en overscan.cfg (se muestran, no se eligen) */
 };
 
+/* Resolución de salida (SALSA64_DATA_DIR/video.cfg, ver main.c): solo se
+ * aplica al volver a abrir Salsa64. */
+enum menu_resolution {
+	MENU_RES_720P,
+	MENU_RES_1080P,
+};
+
 /* Ajustes del menú: el fondo va en SALSA64_DATA_DIR/menu.cfg; el recorte
- * es el de overscan.cfg, que lee y escribe main.c. */
+ * es el de overscan.cfg y la resolución la de video.cfg, que leen y
+ * escriben en main.c. */
 struct menu_settings {
 	bool waves;     /* fondo animado («fondo = si|no») */
 	int overscan;   /* enum menu_overscan */
+	int resolution; /* enum menu_resolution */
 };
 
 enum { MENU_PAGE_GAMES, MENU_PAGE_OPTIONS };
-enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_BACK, MENU_OPTS };
+enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_RESOLUTION, MENU_OPT_BACK, MENU_OPTS };
 
 struct menu {
 	const struct romlist *list;
@@ -70,6 +79,10 @@ struct menu {
 	int page;              /* MENU_PAGE_* */
 	int sel;               /* juegos: 0 .. count + 1 (count: Opciones; count + 1: Salir) */
 	int opt;               /* opciones: MENU_OPT_* */
+	/* Salida con la que arrancó la app (la pone main.c): ancho × alto y la
+	 * resolución que se pidió en video.cfg al arrancar. */
+	unsigned out_w, out_h;
+	int res_boot;          /* enum menu_resolution */
 	bool armed;            /* ya se vieron todos los botones sueltos */
 	uint32_t held;         /* botones del llamado anterior */
 	uint32_t rep_button;   /* bit de la dirección que repite, o 0 */

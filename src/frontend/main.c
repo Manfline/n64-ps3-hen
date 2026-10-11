@@ -41,7 +41,8 @@
  * por título, con un panel de información (archivo, código, región, tipo de
  * guardado) y ondas de fondo; en Opciones se apagan las ondas (se guarda
  * en SALSA64_DATA_DIR/menu.cfg) y se elige el recorte del overscan (se
- * escribe overscan.cfg, que run_game relee en cada juego). Cruceta para elegir, X para abrir, triángulo
+ * escribe overscan.cfg, que run_game relee en cada juego) y la resolución de
+ * salida (video.cfg; vale al volver a abrir Salsa64). Cruceta para elegir, X para abrir, triángulo
  * para Opciones; la última ROM abierta queda en SALSA64_DATA_DIR/ultima-rom
  * y es la elegida al volver. Dentro del juego, START + SELECT vuelve al menú: se
  * cierra todo lo del juego (guardado al disco, audio, HLE gráfica y de
@@ -1616,6 +1617,10 @@ static const char *const rom_dirs[] = {
 	"/dev_usb004/salsa64", "/dev_usb005/salsa64", "/dev_usb006/salsa64", "/dev_usb007/salsa64",
 };
 
+static bool video_wants_1080(void);
+static void video_save(int resolution);
+static bool boot_1080;  /* video.cfg pedía 1080p al arrancar (rsxkit_init ya corrió) */
+
 static struct romlist roms;
 static struct menu menu;
 static struct {
@@ -1668,6 +1673,10 @@ static void menu_scan(const char *keep)
 	menu_init(&menu, &roms, keep ? romlist_find(&roms, keep) : -1, &mn.settings);
 	if (keep)
 		snprintf(menu.last, sizeof menu.last, "%s", keep);
+	const rsxkit_screen *osc = rsxkit_screen_info();
+	menu.out_w = osc->width;
+	menu.out_h = osc->height;
+	menu.res_boot = boot_1080 ? MENU_RES_1080P : MENU_RES_720P;
 	menu.dirs[menu.ndirs++] = SALSA64_DATA_DIR;
 	menu.dirs[menu.ndirs++] = "/dev_usb000/salsa64 … /dev_usb007/salsa64";
 }
@@ -1800,6 +1809,7 @@ static int menu_loop(void)
 	menu_settings_load();
 	load_overscan();
 	mn.settings.overscan = overscan_preset();
+	mn.settings.resolution = video_wants_1080() ? MENU_RES_1080P : MENU_RES_720P;
 	salsa64_log("menú: espacio lógico de %.0fx%.0f sobre %ux%u, búfer de ROM de %u MB, fondo animado %s", mn.lw,
 		    mn.lh, sc->width, sc->height, ROM_MAX >> 20, mn.settings.waves ? "sí" : "no");
 
@@ -1839,6 +1849,8 @@ static int menu_loop(void)
 		if (a == MENU_SETTINGS) {
 			if (menu.set.overscan != mn.settings.overscan)
 				overscan_save(menu.set.overscan);
+			if (menu.set.resolution != mn.settings.resolution)
+				video_save(menu.set.resolution);
 			if (menu.set.waves != mn.settings.waves) {
 				mn.settings.waves = menu.set.waves;
 				menu_settings_save();
@@ -1876,15 +1888,32 @@ static const int32_t modes_1080[] = {
 	VIDEO_RESOLUTION_1080, VIDEO_RESOLUTION_720, VIDEO_RESOLUTION_480, VIDEO_RESOLUTION_576,
 };
 
-static const rsxkit_config *video_config(rsxkit_config *cfg)
+static bool video_wants_1080(void)
 {
 	FILE *f = fopen(VIDEO_CFG_PATH, "r");
 	if (!f)
-		return NULL;
+		return false;
 	char line[16] = "";
 	bool want_1080 = fgets(line, sizeof line, f) && strncmp(line, "1080", 4) == 0;
 	fclose(f);
-	if (!want_1080)
+	return want_1080;
+}
+
+/* Opción «Resolución» del menú: video.cfg con «1080» o «720». Solo se lee
+ * al arrancar (rsxkit_init), así que el cambio vale al volver a abrir. */
+static void video_save(int resolution)
+{
+	FILE *f = fopen(VIDEO_CFG_PATH, "w");
+	if (f) {
+		fputs(resolution == MENU_RES_1080P ? "1080\n" : "720\n", f);
+		fclose(f);
+	} else
+		salsa64_log("menú: no se pudo escribir %s", VIDEO_CFG_PATH);
+}
+
+static const rsxkit_config *video_config(rsxkit_config *cfg)
+{
+	if (!video_wants_1080())
 		return NULL;
 	memset(cfg, 0, sizeof *cfg);
 	cfg->modes = modes_1080;
@@ -1906,6 +1935,7 @@ int main(void)
 		salsa64_log_shutdown();
 		return 1;
 	}
+	boot_1080 = vc != NULL;
 	const rsxkit_screen *sc = rsxkit_screen_info();
 	salsa64_log("RSX listo: %ux%u, tele %s%s", sc->width, sc->height, sc->aspect > 1.5f ? "16:9" : "4:3",
 		    vc ? " (video.cfg: 1080)" : "");

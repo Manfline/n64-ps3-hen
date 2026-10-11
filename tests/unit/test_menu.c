@@ -390,8 +390,24 @@ static void menu_options_page(void)
 	menu_input(&m, LEFT, 69);
 	CHECK_EQ(m.set.overscan, MENU_OVERSCAN_NORMAL);
 	CHECK(m.set.waves);
+	/* Resolución: X o los lados alternan 720p / 1080p y piden guardar. */
 	menu_input(&m, 0, 69);
 	menu_input(&m, DOWN, 70);
+	CHECK_EQ(m.opt, MENU_OPT_RESOLUTION);
+	CHECK_EQ(m.set.resolution, MENU_RES_720P);
+	menu_input(&m, 0, 71);
+	CHECK_EQ(menu_input(&m, CROSS, 72), MENU_SETTINGS);
+	CHECK_EQ(m.set.resolution, MENU_RES_1080P);
+	menu_input(&m, 0, 73);
+	CHECK_EQ(menu_input(&m, LEFT, 74), MENU_SETTINGS);
+	CHECK_EQ(m.set.resolution, MENU_RES_720P);
+	menu_input(&m, 0, 75);
+	CHECK_EQ(menu_input(&m, RIGHT, 76), MENU_SETTINGS);
+	CHECK_EQ(m.set.resolution, MENU_RES_1080P);
+	CHECK_EQ(m.set.overscan, MENU_OVERSCAN_NORMAL);
+	CHECK(m.set.waves);
+	menu_input(&m, 0, 77);
+	menu_input(&m, DOWN, 78);
 	CHECK_EQ(m.opt, MENU_OPT_BACK);
 	menu_input(&m, 0, 80);
 	CHECK_EQ(menu_input(&m, RIGHT, 90), MENU_NONE);  /* «Volver» no tiene valor */
@@ -414,6 +430,7 @@ static void menu_settings_file(void)
 	menu_settings_default(&s);
 	CHECK(s.waves);
 	CHECK_EQ(s.overscan, MENU_OVERSCAN_NORMAL);
+	CHECK_EQ(s.resolution, MENU_RES_720P);
 	static const char off[] = "# comentario\n  FONDO = No\notra = cosa\n";
 	menu_settings_parse(&s, off, sizeof off - 1);
 	CHECK(!s.waves);
@@ -739,6 +756,8 @@ static void menu_preview(void)
 	frame_list_setup();
 	struct menu m;
 	menu_init(&m, &frame_list, 4, NULL);
+	m.out_w = 1280, m.out_h = 720;
+	m.res_boot = MENU_RES_1080P;  /* pidió 1080p y quedó 720p: sale la pista */
 	snprintf(m.last, sizeof m.last, "%s", frame_list.e[4].path);
 	uint32_t n = frames(&m, 1000000, 13000000, 1280);
 	raster(rgb, 1280, 720, 1280, 720, n);
@@ -746,10 +765,18 @@ static void menu_preview(void)
 	write_ppm(path, rgb, 1280, 720);
 	menu_input(&m, 0, 13100000);
 	menu_input(&m, BIT(SALSA64_DS3_TRIANGLE), 13100000);
+	menu_input(&m, 0, 13110000);
+	menu_input(&m, DOWN, 13111000);
+	menu_input(&m, 0, 13112000);
+	menu_input(&m, DOWN, 13113000);  /* la fila «Resolución» */
 	n = frames(&m, 13116000, 14500000, 1280);
 	raster(rgb, 1280, 720, 1280, 720, n);
 	snprintf(path, sizeof path, "%s-opciones.ppm", out);
 	write_ppm(path, rgb, 1280, 720);
+	n = frames(&m, 14500000, 14600000, 960);
+	raster(rgb, 960, 720, 960, 720, n);
+	snprintf(path, sizeof path, "%s-opciones43.ppm", out);
+	write_ppm(path, rgb, 960, 720);
 	menu_init(&m, &frame_list, frame_list.count, NULL);
 	m.set.waves = false;
 	menu_set_status(&m, "No se pudo leer /dev_usb000/salsa64/mk64.z64");
