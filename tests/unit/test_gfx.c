@@ -827,6 +827,194 @@ static void gfx_load_ucode_skips_foreign(void)
 	CHECK_EQ(salsa64_gfx_task_flags(&res), SALSA64_GFX_CUT);
 }
 
+/* ---- S2DEX2: fondos prerrenderizados (G_BG_COPY, G_BG_1CYC) ---- */
+
+/* G_LOAD_UCODE a un S2DEX2: los datos del microcódigo llevan el texto que
+ * lo identifica (inventado aquí). La vuelta es al de la tarea (0x30000). */
+static void s2dex_enter(const char *text)
+{
+	uint32_t data = data_alloc(64);
+	memset(t_n64.bus.rdram + data, 0, 64);
+	memcpy(t_n64.bus.rdram + data + 8, text, strlen(text));
+	dl(0xE1000000, 0x80000000 | data);
+	dl(0xDD00003F, 0x80031000);
+}
+
+static void s2dex_leave(void)
+{
+	dl(0xE1000000, 0x80040000);
+	dl(0xDD000FFF, 0x80030000);
+}
+
+/* uObjBg (u10.5 para imageX/Y, u10.2 para tamaños, s10.2 para el marco) y
+ * la escala de uObjScaleBg (u5.10). */
+static uint32_t put_bg(uint32_t image_x, uint32_t image_w, int32_t frame_x, uint32_t frame_w, uint32_t image_y,
+		       uint32_t image_h, int32_t frame_y, uint32_t frame_h, uint32_t ptr, uint16_t scale_w,
+		       uint16_t scale_h)
+{
+	uint32_t a = data_alloc(40);
+	uint8_t *p = t_n64.bus.rdram + a;
+	memset(p, 0, 40);
+	salsa64_wr16(p + 0, (uint16_t)(image_x << 5));
+	salsa64_wr16(p + 2, (uint16_t)(image_w << 2));
+	salsa64_wr16(p + 4, (uint16_t)(frame_x * 4));
+	salsa64_wr16(p + 6, (uint16_t)(frame_w << 2));
+	salsa64_wr16(p + 8, (uint16_t)(image_y << 5));
+	salsa64_wr16(p + 10, (uint16_t)(image_h << 2));
+	salsa64_wr16(p + 12, (uint16_t)(frame_y * 4));
+	salsa64_wr16(p + 14, (uint16_t)(frame_h << 2));
+	salsa64_wr32(p + 16, ptr);
+	salsa64_wr16(p + 20, 0xFFF4);          /* G_BGLT_LOADTILE */
+	p[22] = G_IM_FMT_RGBA;
+	p[23] = G_IM_SIZ_16b;
+	salsa64_wr16(p + 28, scale_w);
+	salsa64_wr16(p + 30, scale_h);
+	return a;
+}
+
+/* Imagen RGBA16 en TEX_PA: rojo = x, verde = y (módulo 32), opaca. */
+static uint16_t bg_texel(uint32_t x, uint32_t y)
+{
+	return (uint16_t)((x & 31) << 11 | (y & 31) << 6 | ((x >> 5) & 31) << 1 | 1);
+}
+
+static void put_bg_image(uint32_t w, uint32_t h)
+{
+	for (uint32_t y = 0; y < h; y++)
+		for (uint32_t x = 0; x < w; x++)
+			salsa64_wr16(t_n64.bus.rdram + TEX_PA + 2 * (y * w + x), bg_texel(x, y));
+}
+
+/* Esquina de arriba a la izquierda (corner 0) o de abajo a la derecha (1)
+ * del rectángulo r del dibujo n (los rectángulos seguidos con el mismo
+ * estado van en un dibujo, 6 vértices cada uno). */
+static const struct gfx_vertex *rect_v(int n, int r, int corner)
+{
+	const struct gfx_draw *d = draw_n(n);
+	return d && (uint32_t)(6 * r + 6) <= d->h.b ? &out_vtx[d->h.a + 6 * r + (corner ? 5 : 0)] : NULL;
+}
+
+/* La textura del dibujo n tiene en (x, y) el texel (ix, iy) de la imagen. */
+static bool bg_tex_is(int n, uint32_t x, uint32_t y, uint32_t ix, uint32_t iy)
+{
+	const struct gfx_draw *d = draw_n(n);
+	if (!d || !d->ntex)
+		return false;
+	const uint8_t *t = (d->tex[0].where == GFX_TEX_CACHE ? out_cache : out_tex) + d->tex[0].offset +
+			   y * d->tex[0].pitch + 4 * x;
+	uint16_t p = bg_texel(ix, iy);
+	uint32_t r = (p >> 11) & 31, g = (p >> 6) & 31, b = (p >> 1) & 31;
+	return t[0] == (r << 3 | r >> 2) && t[1] == (g << 3 | g >> 2) && t[2] == (b << 3 | b >> 2) && t[3] == 0xFF;
+}
+
+/* Room_DrawBackground2D de Zelda OoT: S2DEX2 copia una imagen RGBA16 sin
+ * escala al marco con G_BG_COPY; la lista vuelve a F3DEX2 después. */
+static void gfx_s2dex_bg_copy(void)
+{
+	start();
+	put_bg_image(40, 20);
+	s2dex_enter("RSP Gfx ucode S2DEX  fifo 2.05  prueba de Salsa64");
+	dl(0xEF200000, 0x00000001);  /* G_RDPSETOTHERMODE: copia, G_AC_THRESHOLD */
+	dl(0x0A000000, 0x80000000 | put_bg(0, 40, 10, 40, 0, 20, 5, 20, 0x80000000 | TEX_PA, 1024, 1024));
+	s2dex_leave();
+	dl(0xE9000000, 0);
+	job_ucode = 0x30000;
+	run();
+	job_ucode = 0;
+	CHECK_EQ(res.bg, 1);
+	CHECK_EQ(res.skipped, 0);
+	CHECK_EQ(res.dl_errors, 0);
+	CHECK_EQ(res.flags & (GFX_RES_FULLSYNC | GFX_RES_LOAD_UCODE | GFX_RES_FOREIGN_END),
+		 GFX_RES_FULLSYNC | GFX_RES_LOAD_UCODE);
+	/* 80 bytes por fila: las 20 caben en la TMEM, una tira. */
+	CHECK_EQ(res.rects, 1);
+	const struct gfx_draw *d = draw_n(0);
+	CHECK(d != NULL);
+	if (!d)
+		return;
+	CHECK_EQ(d->cycle, G_CYC_COPY);
+	CHECK_EQ(d->ntex, 1);
+	CHECK_EQ(d->tex[0].width, 40);
+	CHECK_EQ(d->tex[0].height, 20);
+	CHECK(bg_tex_is(0, 0, 0, 0, 0) && bg_tex_is(0, 39, 19, 39, 19) && bg_tex_is(0, 33, 7, 33, 7));
+	const struct gfx_vertex *a = rect_v(0, 0, 0), *b = rect_v(0, 0, 1);
+	CHECK(a->x == 10.0f && a->y == 5.0f && b->x == 50.0f && b->y == 25.0f);
+	CHECK(fabsf(a->s) < 1e-5f && fabsf(a->t) < 1e-5f && fabsf(b->s - 40.0f) < 1e-4f && fabsf(b->t - 20.0f) < 1e-4f);
+}
+
+/* La imagen se repite: desde (300, 18) en una de 320 × 20 el marco da la
+ * vuelta en x (20 columnas y luego 300) y en y (2 filas y luego desde 0);
+ * 640 bytes por fila: tiras de 6 filas. */
+static void gfx_s2dex_bg_wrap(void)
+{
+	start();
+	put_bg_image(320, 20);
+	s2dex_enter("RSP Gfx ucode S2DEX  fifo 2.05  prueba de Salsa64");
+	dl(0xEF200000, 0x00000001);
+	dl(0x0A000000, 0x80000000 | put_bg(300, 320, 0, 320, 18, 20, 0, 14, 0x80000000 | TEX_PA, 1024, 1024));
+	s2dex_leave();
+	job_ucode = 0x30000;
+	run();
+	job_ucode = 0;
+	CHECK_EQ(res.bg, 1);
+	/* Tiras: filas 18–19 (pantalla 0–1), 0–5 (2–7), 6–11 (8–13); dos
+	 * rectángulos por tira, en el dibujo de su tira. */
+	CHECK_EQ(res.rects, 6);
+	static const float y0[3] = { 0, 2, 8 }, y1[3] = { 2, 8, 14 }, t0[3] = { 18, 0, 6 };
+	for (int k = 0; k < 6; k++) {
+		const struct gfx_vertex *a = rect_v(k / 2, k & 1, 0), *b = rect_v(k / 2, k & 1, 1);
+		CHECK(a != NULL);
+		if (!a)
+			return;
+		bool first = (k & 1) == 0;
+		CHECK(a->y == y0[k / 2] && b->y == y1[k / 2]);
+		CHECK(a->x == (first ? 0.0f : 20.0f) && b->x == (first ? 20.0f : 320.0f));
+		CHECK(fabsf(a->s - (first ? 300.0f : 0.0f)) < 1e-3f);
+		CHECK(fabsf(a->t - t0[k / 2]) < 1e-3f);
+	}
+	/* La segunda tira carga las filas 0–5: su texel (0, 0) es el (0, 0). */
+	CHECK(bg_tex_is(1, 0, 0, 0, 0) && bg_tex_is(1, 319, 5, 319, 5));
+	CHECK(bg_tex_is(0, 0, 0, 0, 18));
+}
+
+/* G_BG_1CYC (uObjScaleBg) con escala 2 (dos texels por píxel, u5.10 =
+ * 2048): un marco de 20 × 10 recorre la imagen de 40 × 20 en 1 ciclo. Y un
+ * S2DEX de la primera generación (1.x) no se interpreta: se salta. */
+static void gfx_s2dex_bg_scaled(void)
+{
+	start();
+	put_bg_image(40, 20);
+	s2dex_enter("RSP Gfx ucode S2DEX  fifo 2.05  prueba de Salsa64");
+	dl(0xEF000000, 0x00000001);  /* 1 ciclo, filtro puntual */
+	set_combine(CC(CC_ZERO, CC_ZERO, CC_C_ZERO, CC_T0), CC(CC_A_ZERO, CC_A_ZERO, 7, 6));
+	dl(0x09000000, 0x80000000 | put_bg(0, 40, 0, 20, 0, 20, 0, 10, 0x80000000 | TEX_PA, 2048, 2048));
+	s2dex_leave();
+	job_ucode = 0x30000;
+	run();
+	job_ucode = 0;
+	CHECK_EQ(res.bg, 1);
+	CHECK_EQ(res.rects, 1);
+	const struct gfx_vertex *a = rect_v(0, 0, 0), *b = rect_v(0, 0, 1);
+	CHECK(a != NULL);
+	if (!a)
+		return;
+	CHECK(a->x == 0.0f && a->y == 0.0f && b->x == 20.0f && b->y == 10.0f);
+	CHECK(fabsf(b->s - 40.0f) < 1e-3f && fabsf(b->t - 20.0f) < 1e-3f);
+	CHECK_EQ(draw_n(0)->cycle, G_CYC_1CYCLE);
+
+	next_task();
+	s2dex_enter("RSP Gfx ucode S2DEX  fifo 1.06  prueba de Salsa64");
+	dl(0xEF200000, 0x00000001);
+	dl(0x0A000000, 0x80000000 | put_bg(0, 40, 0, 40, 0, 20, 0, 20, 0x80000000 | TEX_PA, 1024, 1024));
+	s2dex_leave();
+	job_ucode = 0x30000;
+	run();
+	job_ucode = 0;
+	CHECK_EQ(res.bg, 0);
+	CHECK_EQ(res.rects, 0);
+	CHECK_EQ(res.skipped, 4);
+}
+
 /* ---- Caché de texturas ---- */
 
 /* RGBA16 4×2 desde TEX_PA con LOADBLOCK y un TEXRECT en copia. */
@@ -1118,11 +1306,51 @@ static void gfx_texcache_hash(void)
 	CHECK(k0[0] == k1[0] && k0[1] == k1[1]);
 }
 
+/* F3DEX2 arranca con clip ratio 2 (sus datos) y G_MOVEWORD G_MW_CLIP la
+ * cambia: la caja de recorte del RSP va en las tijeras de los triángulos. */
+static void gfx_clip_ratio_f3dex2(void)
+{
+	start();
+	uint32_t a = data_alloc(16);
+	const int16_t vp[8] = { 160, 120, 511, 0, 640, 480, 511, 0 };  /* 40×30 en (160, 120) */
+	for (int i = 0; i < 8; i++)
+		salsa64_wr16(t_n64.bus.rdram + a + 2 * i, (uint16_t)vp[i]);
+	dl(0xDC080008, a);
+	load_mtx(ident, true);
+	load_mtx(ident, false);
+	set_combine(CC_A_ZERO, CC_ZERO, CC_C_ZERO, CC_SHADE, CC_ZERO, CC_ZERO, CC_ZERO, CC_SHADE);
+	dl(0xD9000000, G_SHADING_SMOOTH);
+	dl(0xFF100000 | 319, 0x00100000);
+	const struct vtx v[3] = {
+		{ -4, -4, 0, 0, 0, { 255, 255, 255, 255 } },
+		{ 4, -4, 0, 0, 0, { 255, 255, 255, 255 } },
+		{ 0, 4, 0, 0, 0, { 255, 255, 255, 255 } },
+	};
+	dl(0x01000000 | 3 << 12 | 3 << 1, put_vertices(v, 3));
+	dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);
+	dl(0xDB040004, 1);       /* gSPClipRatio(FRUSTRATIO_1) */
+	dl(0xDB04000C, 1);
+	dl(0xDB040014, 0xFFFF);
+	dl(0xDB04001C, 0xFFFF);
+	dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);
+	run();
+	CHECK_EQ(res.triangles, 2);
+	const struct gfx_draw *d0 = draw_n(0), *d1 = draw_n(1);
+	CHECK(d0 && d1);
+	if (!d0 || !d1)
+		return;
+	CHECK(d0->scissor[0] == 80 * 4 && d0->scissor[1] == 60 * 4 && d0->scissor[2] == 240 * 4 &&
+	      d0->scissor[3] == 180 * 4);
+	CHECK(d1->scissor[0] == 120 * 4 && d1->scissor[1] == 90 * 4 && d1->scissor[2] == 200 * 4 &&
+	      d1->scissor[3] == 150 * 4);
+}
+
 void t_suite_gfx(void)
 {
 	RUN(gfx_combiner_forms);
 	RUN(gfx_combiner_shade_squared);
 	RUN(gfx_triangle_transform);
+	RUN(gfx_clip_ratio_f3dex2);
 	RUN(gfx_matrix_stack);
 	RUN(gfx_lighting);
 	RUN(gfx_texgen);
@@ -1136,6 +1364,9 @@ void t_suite_gfx(void)
 	RUN(gfx_cvg_x_alpha);
 	RUN(gfx_dl_flow);
 	RUN(gfx_load_ucode_skips_foreign);
+	RUN(gfx_s2dex_bg_copy);
+	RUN(gfx_s2dex_bg_wrap);
+	RUN(gfx_s2dex_bg_scaled);
 	RUN(gfx_texcache_across_tasks);
 	RUN(gfx_texcache_palette);
 	RUN(gfx_texcache_ring);

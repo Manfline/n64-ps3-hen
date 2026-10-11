@@ -122,10 +122,14 @@ struct gfx_state {
 	float light_model[GFX_MAX_LIGHTS + 1][3];  /* en espacio del modelo */
 	float lookat_model[2][3];
 	float vscale[3], vtrans[3];
+	/* G_MW_CLIP: el RSP recorta los triángulos contra el viewport agrandado
+	 * por esta razón (x, y); lo de fuera no llega al RDP. */
+	float clip_ratio[2];
 	float fog_mul, fog_off;
 	uint16_t tex_s, tex_t;     /* escala de G_TEXTURE (0.16) */
 	uint8_t tex_tile, tex_level, tex_on;
 	uint32_t rdphalf1, rdphalf2;
+	uint32_t obj_rendermode;   /* G_OBJ_RENDERMODE de S2DEX (s2dex.c) */
 	uint32_t raw[44];          /* comando del RDP armado con G_RDPHALF_* */
 	uint8_t raw_n, raw_len;    /* dobles palabras recibidas y esperadas */
 	uint32_t dl_stack[GFX_DL_STACK];
@@ -156,6 +160,7 @@ struct gfx_state {
 	/* --- Salida de la tarea en curso --- */
 	const struct gfx_job *job;
 	struct gfx_result *res;
+	bool near_clip;            /* recortar contra el plano cercano (sin GFX_JOB_NONEAR) */
 	bool dirty;                /* cambió algo del estado de dibujo */
 	uint8_t rect_clamp;        /* TEXRECT en curso: 1 limitar s, 2 limitar t */
 	bool target_sent;          /* GFX_OP_TARGET de la color image actual */
@@ -226,6 +231,11 @@ bool gfx_dl_call(struct gfx_state *g, uint32_t seg, bool branch);
 bool gfx_dl_end(struct gfx_state *g);
 /* Salta un tramo de otro microcódigo hasta volver al de la tarea (dl.c). */
 bool gfx_dl_skip_foreign(struct gfx_state *g, uint32_t op_ucode, uint32_t op_dl, uint32_t op_enddl);
+/* s2dex.c: ¿los datos del microcódigo que carga un G_LOAD_UCODE son de
+ * S2DEX2? Y el tramo S2DEX2 hasta el G_LOAD_UCODE que vuelve al de la
+ * tarea (true: la lista sigue; false como gfx_dl_skip_foreign). */
+bool gfx_ucode_is_s2dex2(struct gfx_state *g, uint32_t data, uint32_t size);
+bool gfx_dl_s2dex2(struct gfx_state *g);
 /* G_TEXRECT y G_TEXRECTFLIP: s, t y dsdx, dtdy llegan en los dos comandos
  * siguientes si sus opcodes están en ops_st y ops_d (hasta 4 opcodes, uno
  * por byte). Si no, el rectángulo se descarta y ese comando sigue normal. */
@@ -257,6 +267,9 @@ void gfx_light_vectors(struct gfx_state *g);
  * modelo) y el lookat, con la escala de G_TEXTURE. */
 void gfx_texgen_vertex(struct gfx_state *g, const float nrm[3], struct gfx_vtx *v);
 void gfx_set_viewport(struct gfx_state *g, const uint8_t *vp);
+/* G_MOVEWORD G_MW_CLIP: `offset` dentro de la tabla (RNX 0x04, RNY 0x0C; los
+ * positivos RPX y RPY son los mismos con signo contrario). */
+void gfx_clip_ratio(struct gfx_state *g, uint32_t offset, uint32_t value);
 void gfx_set_light(struct gfx_state *g, int index, const uint8_t *src);
 void gfx_set_lookat(struct gfx_state *g, int axis, const uint8_t *src);
 /* G_MTX: carga o multiplica (y apila) la modelview o la proyección. */

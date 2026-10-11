@@ -48,9 +48,11 @@ static void do_moveword(struct gfx_state *g, uint32_t w0, uint32_t w1)
 		if ((offset % 24) == 0)
 			gfx_light_color(g, (int)(offset / 24), w1);
 		break;
+	case G_MW_CLIP:
+		gfx_clip_ratio(g, offset, w1);
+		break;
 	case G_MW_MATRIX:
 	case G_MW_FORCEMTX:
-	case G_MW_CLIP:
 	case G_MW_PERSPNORM:
 	default:
 		break;
@@ -172,9 +174,13 @@ void gfx_dl_f3dex2(struct gfx_state *g, gfx_cmd_hook hook)
 			do_movemem(g, w0, w1);
 			break;
 		case G_LOAD_UCODE:
-			/* Otro microcódigo: se salta su tramo (dl.c); el mismo, nada. */
-			if (!(g->job->ucode && gfx_addr(g, w1) == g->job->ucode) &&
-			    !gfx_dl_skip_foreign(g, G_LOAD_UCODE, G_DL, G_ENDDL))
+			/* Otro microcódigo: S2DEX2 (el fondo prerrenderizado de Zelda
+			 * OoT) se interpreta (s2dex.c); los demás se saltan (dl.c). El
+			 * mismo, nada. */
+			if (g->job->ucode && gfx_addr(g, w1) == g->job->ucode)
+				break;
+			if (gfx_ucode_is_s2dex2(g, gfx_addr(g, g->rdphalf1), (w0 & 0xFFFF) + 1) ? !gfx_dl_s2dex2(g)
+												   : !gfx_dl_skip_foreign(g, G_LOAD_UCODE, G_DL, G_ENDDL))
 				return;
 			break;
 		case G_DL:

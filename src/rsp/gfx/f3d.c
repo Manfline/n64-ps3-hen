@@ -184,6 +184,8 @@ static void moveword(struct gfx_state *g, uint32_t w0, uint32_t w1)
 		gfx_modify_vertex(g, offset / 40, offset % 40, w1);
 		break;
 	case G_MW_CLIP:
+		gfx_clip_ratio(g, offset, w1);
+		break;
 	case G_MW_PERSPNORM:
 	default:
 		break;

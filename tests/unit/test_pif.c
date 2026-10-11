@@ -173,6 +173,71 @@ static void pif_reset_combo(void)
 	CHECK_EQ(ram()[4], 0x00);
 }
 
+/* Una pulsación que se suelta antes de que el juego lea el control sale
+ * pulsada en la lectura siguiente, y solo en esa; la identificación no la
+ * gasta. Lo entregado queda en sent/reads para el log del frontend. */
+static void pif_held_press(void)
+{
+	static const uint8_t state[] = { 0x01, 0x04, 0x01, 0, 0, 0, 0, 0xFE };
+	static const uint8_t info[] = { 0x01, 0x03, 0x00, 0, 0, 0, 0xFE };
+	uint32_t reads = bus()->pif.reads[0];
+	pad(0, SALSA64_PAD_R, 10, 0);
+	pad(0, 0, 0, 0);  /* soltado entre dos lecturas del juego */
+	pif_load(info, sizeof info, 0x01);
+	salsa64_pif_execute(bus());
+	CHECK_EQ(bus()->pif.reads[0], reads);
+	pif_load(state, sizeof state, 0x01);
+	salsa64_pif_execute(bus());
+	CHECK_EQ(ram()[3], 0x00);
+	CHECK_EQ(ram()[4], 0x10);  /* R, retenido */
+	CHECK_EQ(ram()[5], 0);     /* el stick no se retiene */
+	CHECK_EQ(bus()->pif.sent[0].buttons, SALSA64_PAD_R);
+	CHECK_EQ(bus()->pif.sent[0].x, 0);
+	CHECK_EQ(bus()->pif.reads[0], reads + 1);
+	salsa64_pif_execute(bus());
+	CHECK_EQ(ram()[4], 0x00);  /* ya entregado: suelto */
+	CHECK_EQ(bus()->pif.sent[0].buttons, 0);
+	CHECK_EQ(bus()->pif.reads[0], reads + 2);
+
+	/* Mantenido: sale en cada lectura; suelto después de entregarse, no. */
+	pad(0, SALSA64_PAD_A, 0, 0);
+	salsa64_pif_execute(bus());
+	salsa64_pif_execute(bus());
+	CHECK_EQ(ram()[3], 0x80);
+	pad(0, 0, 0, 0);
+	salsa64_pif_execute(bus());
+	CHECK_EQ(ram()[3], 0x00);
+
+	/* Solo el flanco: ya entregado y mantenido unos campos sin lecturas,
+	 * si se suelta antes de la siguiente sale suelto (no se come la
+	 * soltada entre dos pulsaciones). */
+	pad(0, SALSA64_PAD_A, 0, 0);
+	salsa64_pif_execute(bus());
+	CHECK_EQ(ram()[3], 0x80);
+	pad(0, SALSA64_PAD_A, 0, 0);
+	pad(0, SALSA64_PAD_A, 0, 0);
+	pad(0, 0, 0, 0);
+	salsa64_pif_execute(bus());
+	CHECK_EQ(ram()[3], 0x00);
+	pad(0, SALSA64_PAD_A, 0, 0);
+	salsa64_pif_execute(bus());
+	CHECK_EQ(ram()[3], 0x80);
+	pad(0, 0, 0, 0);
+
+	/* Desconectar o reiniciar la consola olvida lo retenido. */
+	pad(0, SALSA64_PAD_B, 0, 0);
+	unplug(0);
+	pad(0, 0, 0, 0);
+	salsa64_pif_execute(bus());
+	CHECK_EQ(ram()[3], 0x00);
+	pad(0, SALSA64_PAD_B, 0, 0);
+	pad(0, 0, 0, 0);
+	salsa64_n64_reset(&t_n64);
+	pif_load(state, sizeof state, 0x01);
+	salsa64_pif_execute(bus());
+	CHECK_EQ(ram()[3], 0x00);
+}
+
 /* Sin Controller Pak: la lectura da ceros y CRC 0xFF; la escritura, el CRC
  * de los datos complementado. */
 static void pif_no_pak(void)
@@ -393,6 +458,7 @@ void t_suite_pif(void)
 	RUN(pif_direct_write);
 	RUN(pif_escapes);
 	RUN(pif_reset_combo);
+	RUN(pif_held_press);
 	RUN(pif_no_pak);
 	RUN(pif_crc8);
 	RUN(pif_rx_length);

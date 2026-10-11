@@ -111,6 +111,7 @@ void t_suite_rsp_lle(void);
 void t_suite_gfx(void);
 void t_suite_gfx_f3d(void);
 void t_suite_gfx_rare(void);
+void t_suite_jpeg(void);
 void t_suite_audio(void);
 void t_suite_audio_sync(void);
 void t_suite_pacer(void);
