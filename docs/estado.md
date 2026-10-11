@@ -78,12 +78,31 @@ y las de «perfil JIT por campo» (nativo, llamadas a C, intérprete, eventos,
 compilar, ktlb, despachador) en el tramo de la presa; anotarlas en
 docs/perf-log.md («Recompilador: perfil y salidas a C»).
 
+Pruebas (todo con el árbol final, 2026-10-11):
+- `tools/test-rec.sh --lockstep`: unitarias 351/351 en los cuatro modos,
+  nemu64-test 433 fallas (línea base) con y sin pin+eager, vitest OK,
+  `--lockstep` sin diferencias en nemu64-test y vitest.
+- `tools/test-roms.sh`: nemu64-test 433 (HLE) y 136 (LLE), vitest,
+  controles, savetest ×3, gfxtest ×3, audiotest: verde. `tools/build.sh
+  test-host` 351/351.
+- `--lockstep` de Perfect Dark (3 G ciclos, intro) sin diferencias;
+  GoldenEye con `goldeneye-dam.pad` sin diferencias hasta donde llega en 1 h
+  (campo ~3600 de ~4800; la corrida de 2,5 h hasta la presa estaba en
+  marcha al cerrar: `build/logs/sl-lock-ge.log`).
+- `tools/build.sh` (todos los programas) y el paquete: sin advertencias.
+- Sin medición en la PS3 (no estuvo disponible): ninguna conclusión de
+  rendimiento todavía. Lo que se sabe de qemu son cuentas (tabla en
+  docs/perf-log.md).
+
 Pendiente / siguiente paso: con el desglose de la PS3 decidir el ataque al
 código nativo (lo que no se ve en qemu): registros de la FPU residentes en
 f14–f31 dentro del bloque (hoy cada operación pasa por `cpu->fpr`:
-load-hit-store entre operaciones dependientes), más registros fijos entre
-bloques (r26–r28 liberables), y MTC0 EntryLo/TLBWR/ERET con un ayudante
-propio en vez de `exec_one` (GoldenEye: 2200 llamadas por campo del refill).
+load-hit-store entre operaciones dependientes; GoldenEye 0,78 por bloque),
+más registros fijos entre bloques (r26–r28 liberables; `at`, `s0`, `t6` son
+los más usados sin fijar), MTC0 EntryLo/TLBWR/ERET con un ayudante propio
+en vez de `exec_one` (GoldenEye: 2200 llamadas por campo del refill), y
+seguir bajando el tamaño del código (la FPU y las salidas de los saltos
+internos) para que la caché no se vacíe en la presa.
 
 ## 2026-10-10 — Menú para elegir ROM (estilo XMB) y vuelta al menú con cierre limpio
 
