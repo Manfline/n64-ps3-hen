@@ -15,8 +15,8 @@
  * en lugar de G_RDPHALF_CONT y G_LINE3D de F3D. Fast3D 2.0G (GoldenEye)
  * usa el 0xB1 para G_TRI4: cuatro triángulos con índices de 4 bits.
  *
- * G_TEXRECT llega seguido de dos G_RDPHALF_*: en F3D, de G_RDPHALF_2 y
- * G_RDPHALF_CONT (o G_RDPHALF_1 y G_RDPHALF_2, como en F3DEX).
+ * G_TEXRECT llega seguido de dos G_RDPHALF_*: G_RDPHALF_2 y G_RDPHALF_CONT
+ * (SM64, Mario Kart 64) o G_RDPHALF_1 y G_RDPHALF_2 (libultra 2.0).
  *
  * En el SPE 0 son 3,5 KB de código y nada de estado propio (usa la
  * gfx_state de siempre); presupuesto completo en src/spu/gfx/main.c.
@@ -276,10 +276,10 @@ void gfx_dl_f3d(struct gfx_state *g)
 			break;
 		case G_TEXRECT:
 		case G_TEXRECTFLIP:
-			if (ex)
-				gfx_dl_texrect(g, w0, w1, G_RDPHALF_1, G_RDPHALF_2);
-			else
-				gfx_dl_texrect(g, w0, w1, G_RDPHALF_1 | G_RDPHALF_2 << 8, G_RDPHALF_2 | G_RDPHALF_CONT << 8);
+			/* G_RDPHALF_1 + G_RDPHALF_2 (libultra 2.0) o G_RDPHALF_2 +
+			 * G_RDPHALF_CONT (la anterior: SM64 y también F3DEX 0.95 en
+			 * Mario Kart 64, aunque en F3DEX 1.x el 0xB2 sea G_MODIFYVTX). */
+			gfx_dl_texrect(g, w0, w1, G_RDPHALF_1 | G_RDPHALF_2 << 8, G_RDPHALF_2 | G_RDPHALF_CONT << 8);
 			break;
 		case G_SPNOOP:
 		case G_NOOP:
