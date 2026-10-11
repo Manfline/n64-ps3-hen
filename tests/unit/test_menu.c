@@ -371,7 +371,26 @@ static void menu_options_page(void)
 	menu_input(&m, 0, 40);
 	CHECK_EQ(menu_input(&m, RIGHT, 50), MENU_SETTINGS);
 	CHECK(m.set.waves);
+	/* Recorte del borde: derecha avanza, izquierda vuelve, con vuelta. */
 	menu_input(&m, 0, 60);
+	menu_input(&m, DOWN, 61);
+	CHECK_EQ(m.opt, MENU_OPT_OVERSCAN);
+	CHECK_EQ(m.set.overscan, MENU_OVERSCAN_NORMAL);
+	menu_input(&m, 0, 62);
+	CHECK_EQ(menu_input(&m, RIGHT, 63), MENU_SETTINGS);
+	CHECK_EQ(m.set.overscan, MENU_OVERSCAN_WIDE);
+	menu_input(&m, 0, 64);
+	menu_input(&m, CROSS, 65);
+	CHECK_EQ(m.set.overscan, MENU_OVERSCAN_OFF);
+	menu_input(&m, 0, 66);
+	menu_input(&m, LEFT, 67);
+	CHECK_EQ(m.set.overscan, MENU_OVERSCAN_WIDE);
+	m.set.overscan = MENU_OVERSCAN_CUSTOM;  /* números propios en overscan.cfg */
+	menu_input(&m, 0, 68);
+	menu_input(&m, LEFT, 69);
+	CHECK_EQ(m.set.overscan, MENU_OVERSCAN_NORMAL);
+	CHECK(m.set.waves);
+	menu_input(&m, 0, 69);
 	menu_input(&m, DOWN, 70);
 	CHECK_EQ(m.opt, MENU_OPT_BACK);
 	menu_input(&m, 0, 80);
@@ -394,6 +413,7 @@ static void menu_settings_file(void)
 	struct menu_settings s;
 	menu_settings_default(&s);
 	CHECK(s.waves);
+	CHECK_EQ(s.overscan, MENU_OVERSCAN_NORMAL);
 	static const char off[] = "# comentario\n  FONDO = No\notra = cosa\n";
 	menu_settings_parse(&s, off, sizeof off - 1);
 	CHECK(!s.waves);

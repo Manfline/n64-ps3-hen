@@ -39,8 +39,9 @@
  * en el XMB y dibujado entero por el RSX (rsxkit/ui.h): los .z64/.v64/.n64
  * de SALSA64_DATA_DIR y de /dev_usbNNN/salsa64 en una columna, ordenados
  * por título, con un panel de información (archivo, código, región, tipo de
- * guardado) y ondas de fondo que se apagan en Opciones (se guarda en
- * SALSA64_DATA_DIR/menu.cfg). Cruceta para elegir, X para abrir, triángulo
+ * guardado) y ondas de fondo; en Opciones se apagan las ondas (se guarda
+ * en SALSA64_DATA_DIR/menu.cfg) y se elige el recorte del overscan (se
+ * escribe overscan.cfg, que run_game relee en cada juego). Cruceta para elegir, X para abrir, triángulo
  * para Opciones; la última ROM abierta queda en SALSA64_DATA_DIR/ultima-rom
  * y es la elegida al volver. Dentro del juego, START + SELECT vuelve al menú: se
  * cierra todo lo del juego (guardado al disco, audio, HLE gráfica y de
@@ -676,6 +677,31 @@ static void load_overscan(void)
 		salsa64_log("overscan: %s sin números; queda el recorte por omisión", OVERSCAN_PATH);
 	salsa64_log("overscan: recorte %u %u %u %u (%s)", overscan.left, overscan.right, overscan.top,
 		    overscan.bottom, OVERSCAN_PATH);
+}
+
+/* El recorte de overscan.cfg como opción del menú (Opciones). */
+static int overscan_preset(void)
+{
+	uint32_t l = overscan.left, r = overscan.right, t = overscan.top, b = overscan.bottom;
+	if (!l && !r && !t && !b)
+		return MENU_OVERSCAN_OFF;
+	if (l == 8 && r == 8 && t == 6 && b == 6)
+		return MENU_OVERSCAN_NORMAL;
+	if (l == 16 && r == 16 && t == 12 && b == 12)
+		return MENU_OVERSCAN_WIDE;
+	return MENU_OVERSCAN_CUSTOM;
+}
+
+static void overscan_save(int preset)
+{
+	const char *text = preset == MENU_OVERSCAN_OFF ? "0\n" : preset == MENU_OVERSCAN_WIDE ? "16 12\n" : "8 6\n";
+	FILE *f = fopen(OVERSCAN_PATH, "w");
+	bool ok = f && fputs(text, f) >= 0;
+	if (f && fclose(f) != 0)
+		ok = false;
+	if (!ok)
+		salsa64_log("menú: no se pudo escribir %s", OVERSCAN_PATH);
+	load_overscan();
 }
 
 /* El recorte para una imagen del VI (0 con las ROMs de prueba). */
@@ -1618,6 +1644,8 @@ static int menu_loop(void)
 	mn.lh = 720.0f;
 	mn.lw = sc->aspect > 1.5f ? 1280.0f : 960.0f;
 	menu_settings_load();
+	load_overscan();
+	mn.settings.overscan = overscan_preset();
 	salsa64_log("menú: espacio lógico de %.0fx%.0f sobre %ux%u, búfer de ROM de %u MB, fondo animado %s", mn.lw,
 		    mn.lh, sc->width, sc->height, ROM_MAX >> 20, mn.settings.waves ? "sí" : "no");
 
@@ -1655,8 +1683,13 @@ static int menu_loop(void)
 		}
 		enum menu_action a = menu_input(&menu, buttons, sysGetSystemTime());
 		if (a == MENU_SETTINGS) {
+			if (menu.set.overscan != mn.settings.overscan)
+				overscan_save(menu.set.overscan);
+			if (menu.set.waves != mn.settings.waves) {
+				mn.settings.waves = menu.set.waves;
+				menu_settings_save();
+			}
 			mn.settings = menu.set;
-			menu_settings_save();
 		}
 		if (a == MENU_QUIT) {
 			salsa64_log("menú: «Salir al XMB»");

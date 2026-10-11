@@ -41,6 +41,17 @@
 void menu_settings_default(struct menu_settings *s)
 {
 	s->waves = true;
+	s->overscan = MENU_OVERSCAN_NORMAL;
+}
+
+static const char *overscan_name(int o)
+{
+	switch (o) {
+	case MENU_OVERSCAN_OFF:    return "Apagado";
+	case MENU_OVERSCAN_NORMAL: return "Normal";
+	case MENU_OVERSCAN_WIDE:   return "Amplio";
+	default:                   return "Personalizado";
+	}
 }
 
 static int lower(int c)
@@ -131,6 +142,19 @@ static enum menu_action options_buttons(struct menu *m, uint32_t pressed)
 	}
 	if (m->opt == MENU_OPT_WAVES && (pressed & change)) {
 		m->set.waves = !m->set.waves;
+		return MENU_SETTINGS;
+	}
+	if (m->opt == MENU_OPT_OVERSCAN && (pressed & change)) {
+		/* Apagado → Normal → Amplio → Apagado (izquierda, al revés); un
+		 * recorte personalizado pasa a Normal. */
+		int o = m->set.overscan;
+		if (o == MENU_OVERSCAN_CUSTOM)
+			o = MENU_OVERSCAN_NORMAL;
+		else if (pressed & BIT(SALSA64_DS3_LEFT))
+			o = o == MENU_OVERSCAN_OFF ? MENU_OVERSCAN_WIDE : o - 1;
+		else
+			o = o == MENU_OVERSCAN_WIDE ? MENU_OVERSCAN_OFF : o + 1;
+		m->set.overscan = o;
 		return MENU_SETTINGS;
 	}
 	return MENU_NONE;
@@ -434,32 +458,48 @@ static void panel(const struct menu *m, float W, float H, float a)
 	float ca = a * smooth(settle) * (games ? 1.0f - m->page_t : m->page_t);
 	/* Con tele 4:3 el panel es angosto: letra un poco más chica. */
 	bool narrow = pw < 450.0f;
-	float tscale = narrow ? 2.0f : 2.5f, vscale = narrow ? 1.5f : 1.75f;
+	float tscale = narrow ? 2.0f : 2.5f, vscale = narrow ? 1.5f : 1.75f, dscale = narrow ? 1.35f : 1.6f;
 	float x = px + 26.0f, y = py + 24.0f, vx = x + (narrow ? 124.0f : 140.0f);
 	uint32_t vmax = (uint32_t)((px + pw - 20.0f - vx) / (RSXKIT_FONT_W * vscale));
-	uint32_t tmax = (uint32_t)((pw - 48.0f) / (RSXKIT_FONT_W * tscale)), lmax = (uint32_t)((pw - 48.0f) / 12.8f);
+	uint32_t tmax = (uint32_t)((pw - 48.0f) / (RSXKIT_FONT_W * tscale));
+	uint32_t lmax = (uint32_t)((pw - 48.0f) / (RSXKIT_FONT_W * dscale));
 	char buf[ROMLIST_PATH_MAX + 32], loc[24];
 
 	if (!games) {
-		if (m->opt == MENU_OPT_WAVES) {
-			stext(x, y, "Fondo animado", tscale, 0xFFFFFFu, ca, tmax);
-			y += 56.0f;
-			stext(x, y, "Ondas en movimiento de fondo.", 1.6f, C_TEXT, ca, lmax);
-			stext(x, y + 30.0f, "Apágalas para un fondo fijo.", 1.6f, C_TEXT, ca, lmax);
-			stext(x, y + 60.0f, "Se guarda en menu.cfg.", 1.6f, C_DIM, ca, lmax);
-			stext(x, y + 110.0f, m->set.waves ? "Sí" : "No", 2.5f, C_ACCENT, ca, 0);
-		} else {
-			stext(x, y, "Volver", tscale, 0xFFFFFFu, ca, tmax);
-			stext(x, y + 56.0f, "A la lista de juegos.", 1.6f, C_TEXT, ca, lmax);
+		static const char *const waves_text[] = { "Ondas en movimiento de fondo.", "Apágalas para un fondo fijo.",
+							  NULL, "Se guarda en menu.cfg.", NULL, NULL };
+		static const char *const crop_text[] = { "Quita el borde de la imagen", "que una tele de tubo no deja",
+							 "ver (ahí algunos juegos dejan", "basura).", NULL,
+							 "Normal: 8 y 6 puntos por lado;", "amplio: 16 y 12.",
+							 "Se guarda en overscan.cfg.", NULL, NULL };
+		static const char *const back_text[] = { "A la lista de juegos.", NULL, NULL };
+		const char *title = m->opt == MENU_OPT_WAVES ? "Fondo animado"
+				    : m->opt == MENU_OPT_OVERSCAN ? "Recorte del borde" : "Volver";
+		const char *const *text = m->opt == MENU_OPT_WAVES ? waves_text
+					  : m->opt == MENU_OPT_OVERSCAN ? crop_text : back_text;
+		const char *value = m->opt == MENU_OPT_WAVES ? (m->set.waves ? "Sí" : "No")
+				    : m->opt == MENU_OPT_OVERSCAN ? overscan_name(m->set.overscan) : NULL;
+		stext(x, y, title, tscale, 0xFFFFFFu, ca, tmax);
+		y += 56.0f;
+		/* Líneas cortas (caben en 4:3); NULL es un renglón en blanco, dos
+		 * NULL seguidos terminan. */
+		bool dim = false;  /* lo que va después del renglón en blanco */
+		for (int i = 0; text[i] || text[i + 1]; i++, y += 30.0f) {
+			if (!text[i])
+				dim = true;
+			else
+				stext(x, y, text[i], dscale, dim ? C_DIM : C_TEXT, ca, lmax);
 		}
+		if (value)
+			stext(x, y + 16.0f, value, tscale, C_ACCENT, ca, 0);
 		return;
 	}
 	int s = menu_selected(m);
 	if (s < 0) {
 		bool exit = m->sel == menu_row_exit(m);
 		stext(x, y, exit ? "Salir al XMB" : "Opciones", tscale, 0xFFFFFFu, ca, tmax);
-		stext(x, y + 56.0f, exit ? "Cierra Salsa64 y vuelve" : "Ajustes del menú:", 1.6f, C_TEXT, ca, lmax);
-		stext(x, y + 86.0f, exit ? "al menú de la consola." : "fondo animado.", 1.6f, C_TEXT, ca, lmax);
+		stext(x, y + 56.0f, exit ? "Cierra Salsa64 y vuelve" : "Fondo animado del menú", dscale, C_TEXT, ca, lmax);
+		stext(x, y + 86.0f, exit ? "al menú de la consola." : "y recorte del borde.", dscale, C_TEXT, ca, lmax);
 		return;
 	}
 	const struct rom_entry *e = &m->list->e[s];
@@ -503,7 +543,7 @@ static void games_column(const struct menu *m, float x, float W, float H, float 
 			r.sub = romlist_name(e);
 		} else if (i == (int)m->list->count) {
 			r.title = "Opciones";
-			r.sub = "Fondo animado";
+			r.sub = "Fondo animado y recorte del borde";
 			r.icon = 1;
 		} else {
 			r.title = "Salir al XMB";
@@ -524,8 +564,11 @@ static void games_column(const struct menu *m, float x, float W, float H, float 
 static void options_column(const struct menu *m, float x, float W, float H, float a)
 {
 	struct row waves = { "Fondo animado", "Ondas detrás del menú", 2, "~", 0, m->set.waves ? "Sí" : "No" };
+	struct row crop = { "Recorte del borde", "Overscan de la imagen del juego", 2, "□", 0,
+			    overscan_name(m->set.overscan) };
 	struct row back = { "Volver", "A la lista de juegos", 2, "◀", 0, NULL };
 	draw_row(&waves, MENU_OPT_WAVES - m->opt_pos, x, W, H, a);
+	draw_row(&crop, MENU_OPT_OVERSCAN - m->opt_pos, x, W, H, a);
 	draw_row(&back, MENU_OPT_BACK - m->opt_pos, x, W, H, a);
 }
 

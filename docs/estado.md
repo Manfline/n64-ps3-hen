@@ -14,9 +14,11 @@ Hecho (rama `intelligent-yalow-4dd14d`, desde main e7184b7):
     con la fila elegida más grande y el nombre de archivo debajo, columna que
     se desliza con suavizado, panel de información que aparece al detenerse,
     fondo en degradado que cambia despacio con tres ondas animadas, texto con
-    sombra, fundido de entrada y página de Opciones (fondo animado sí/no, en
-    `SALSA64_DATA_DIR/menu.cfg`; el overscan del trabajo de presentación puede
-    ir ahí). Íconos dibujados con rectángulos.
+    sombra, fundido de entrada y página de Opciones: fondo animado sí/no (en
+    `SALSA64_DATA_DIR/menu.cfg`) y recorte del borde (el `overscan.cfg` del
+    trabajo de presentación: Apagado, Normal 8/6, Amplio 16/12, o
+    «Personalizado» si el archivo trae otros números; se relee al abrir cada
+    juego). Íconos dibujados con rectángulos.
   - Controles: cruceta con repetición (pulsación nueva para dar la vuelta),
     izquierda/derecha para cambiar de página, X para abrir, triángulo para
     Opciones y círculo para volver. Recuerda la última ROM en

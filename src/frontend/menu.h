@@ -15,8 +15,9 @@
  * MENU_REPEAT_DELAY_US, después cada MENU_REPEAT_US y, pasado
  * MENU_REPEAT_FAST_AFTER_US, cada MENU_REPEAT_FAST_US; la vuelta de un
  * extremo al otro solo con una pulsación nueva), izquierda/derecha una
- * página, X abre, triángulo va a Opciones. En Opciones, X o izquierda/
- * derecha cambian el valor y círculo vuelve. Hasta ver todos los botones
+ * página, X abre, triángulo va a Opciones (fondo animado y recorte del
+ * borde). En Opciones, X o izquierda/derecha cambian el valor y círculo
+ * vuelve. Hasta ver todos los botones
  * sueltos no acepta nada (el START + SELECT con que se volvió del juego o el
  * X con que se abrió no cuentan dos veces).
  *
@@ -45,13 +46,23 @@ enum menu_action {
 	MENU_SETTINGS,  /* cambió un ajuste: guardarlo */
 };
 
-/* Ajustes del menú (SALSA64_DATA_DIR/menu.cfg). */
+/* Recorte del overscan (SALSA64_DATA_DIR/overscan.cfg, ver main.c). */
+enum menu_overscan {
+	MENU_OVERSCAN_OFF,     /* 0: la imagen entera */
+	MENU_OVERSCAN_NORMAL,  /* 8 y 6 píxeles por lado a 320 × 240 (por omisión) */
+	MENU_OVERSCAN_WIDE,    /* 16 y 12 */
+	MENU_OVERSCAN_CUSTOM,  /* otros números en overscan.cfg (se muestran, no se eligen) */
+};
+
+/* Ajustes del menú: el fondo va en SALSA64_DATA_DIR/menu.cfg; el recorte
+ * es el de overscan.cfg, que lee y escribe main.c. */
 struct menu_settings {
-	bool waves;  /* fondo animado («fondo = si|no») */
+	bool waves;     /* fondo animado («fondo = si|no») */
+	int overscan;   /* enum menu_overscan */
 };
 
 enum { MENU_PAGE_GAMES, MENU_PAGE_OPTIONS };
-enum { MENU_OPT_WAVES, MENU_OPT_BACK, MENU_OPTS };
+enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_BACK, MENU_OPTS };
 
 struct menu {
 	const struct romlist *list;
