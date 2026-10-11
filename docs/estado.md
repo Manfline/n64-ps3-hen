@@ -45,11 +45,23 @@ Hecho:
 
 Pendiente:
 - [ ] PS3 real con el paquete «Salsa64 control» (SLSA00092,
-      `salsa64-control.pkg`, log en `/dev_hdd0/salsa64/salsa64-control.log`):
-      R en la pausa de Zelda (esperando a que termine el giro) y botones de
-      SM64 a la primera; en el log, cada «control 1» seguido de su «PIF →
-      juego» uno o dos campos después, y el hueco máximo entre lecturas
-      de los mandos.
+      `salsa64-control.pkg`, log en `/dev_hdd0/salsa64/salsa64-control.log`;
+      `embedded` lo cambia el autor). Pruebas para el autor:
+      1. **Zelda** (`file:oot.z64`), en el juego: START para la pausa. R
+         una vez y **esperar a que la página termine de girar** (~0,6 s);
+         repetir unas 10 veces. Luego Z (página a la izquierda) igual. Anotar
+         cuántas no giraron. Después, a propósito, R dos veces rápido (la
+         segunda debe ignorarse: es del juego).
+      2. **Zelda**, fuera de la pausa: toques cortos de A, B y botones C
+         (sacar y guardar un objeto, hablar), contando los que no
+         respondieron.
+      3. **SM64** (`file:sm64.z64`), en el castillo: START para pausar y
+         quitar la pausa unas 10 veces, toques cortos de A (salto), B
+         (puñetazo) y Z (agacharse), y R (cámara).
+      4. Al terminar, bajar el log por FTP (desde la Mac).
+      En el log: cada «control 1: … (campo M)» debe tener su «PIF → juego»
+      uno o dos campos después (Zelda) o hasta tres (SM64); «controles: …
+      hueco máx» dice la pulsación más corta que podría no verse.
 
 ## 2026-10-10 — Menú para elegir ROM (estilo XMB) y vuelta al menú con cierre limpio
 
