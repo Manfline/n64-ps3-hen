@@ -259,7 +259,12 @@ sugerido: recorte → líneas del logo → framebuffer → JIT.
   (0,161,0)…, con rojo y azul en 0, y un rectángulo azul liso. Ninguna textura
   × iluminación da eso; aquella comparación con mupen64plus fue en el balcón
   (campo ~3700) y midió colores con rojo y azul. El autor lo ve como error en la
-  PS3. Trabajo sugerido: «Diagnosticar Kokiri en colores planos» (SLSA00091).
+  PS3. También en la tienda del bosque Kokiri (foto en la PS3, 2026-10-11):
+  piso amarillo y paredes y mostrador naranja lisos, con los personajes y
+  objetos texturizados; igual con `fbfx.cfg` = 0, así que es de la HLE. Afecta
+  a las mallas de las salas, no a los actores. Evidencia (fuera de git):
+  en una carpeta propia.
+  Trabajo sugerido: «Diagnosticar Kokiri y su tienda en colores planos» (SLSA00091).
 
 **Siguientes trabajos decididos con el autor:**
 - JIT («Recompilador: más velocidad del CPU en GoldenEye y Perfect
