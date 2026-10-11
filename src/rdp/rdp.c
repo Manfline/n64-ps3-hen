@@ -484,6 +484,20 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 	uint32_t w = p.w - cl - cr, h = p.h - ct - cb;
 	rsxkit_rect src = { (int32_t)(cl * rdp.scale), (int32_t)((p.y0 + ct) * rdp.scale), w * rdp.scale,
 			    h * rdp.scale };
+	/* Si la región cabe en la pantalla, a 1:1 (modo entero con su tamaño
+	 * en píxeles de la superficie: factor 1, píxeles cuadrados, centrada;
+	 * en 480/576 el píxel no es cuadrado y el ancho se estira igual que
+	 * antes). Ajustarla a la pantalla estiraba el recorte del overscan
+	 * (912 × 684 a 960 × 720, ×1,053) y el filtro lineal repetía una fila
+	 * cada ~19: las líneas en el logo de N64 de Zelda. Lo que sobra queda
+	 * negro, que es como se borra el cuadro. Sin recorte no cambia nada:
+	 * 960 × 720 cabía justo. */
+	const rsxkit_screen *sc = rsxkit_screen_info();
+	if (view && view->scale == RSXKIT_SCALE_FIT && src.w <= sc->width && src.h <= sc->height) {
+		rsxkit_view one = { RSXKIT_SCALE_INTEGER, view->filter, 0.0f };
+		rsxkit_target_present(rdp.surf[p.slot], &src, src.w, src.h, &one, out);
+		return true;
+	}
 	rsxkit_target_present(rdp.surf[p.slot], &src, w, h, view, out);
 	return true;
 }
