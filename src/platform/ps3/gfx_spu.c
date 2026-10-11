@@ -104,30 +104,43 @@ static uint32_t spu_finish(void *ctx)
 	return salsa64_gfx_task_flags(&s->res);
 }
 
-/* Estados guardados: el SPE deja o toma el estado del RDP en un búfer
- * propio (alineado para el DMA), sin tarea en vuelo. */
-static uint8_t state_buf[GFX_STATE_BYTES] __attribute__((aligned(128)));
+/* Estados guardados: el SPE copia el tramo crudo de su gfx_state (registros
+ * del RDP, tiles y TMEM) al mismo lugar de esta imagen, o lo trae de ella; el
+ * formato portable se arma aquí (rsp/gfx/state.c). Si el SPE dice que el
+ * tramo está en otro lugar de su struct (otra disposición), no se guarda ni
+ * se carga nada de la HLE. Sin tarea en vuelo. */
+static struct gfx_state shadow __attribute__((aligned(128)));
 
 static bool spu_state(struct salsa64_gfx_spu *s, uint32_t kind)
 {
 	if (s->pending || !s->worker)
 		return false;
-	struct gfx_state_job sj = { (uint64_t)(uintptr_t)state_buf };
+	struct gfx_state_job sj = { (uint64_t)(uintptr_t)((uint8_t *)&shadow + GFX_RAW_START) };
 	const spukit_result *r = spukit_wait(s->worker, spukit_post(s->worker, kind, &sj, sizeof sj));
-	return !r->error;
+	uint32_t where[2];
+	memcpy(where, r->data, sizeof where);
+	if (r->error || where[0] != GFX_RAW_START || where[1] != GFX_RAW_END) {
+		salsa64_log("estado de la HLE gráfica: el SPE no lo dio (error %d, tramo %u–%u en el SPE, %u–%u aquí)",
+			    r->error, where[0], where[1], (unsigned)GFX_RAW_START, (unsigned)GFX_RAW_END);
+		return false;
+	}
+	return true;
 }
 
 static bool spu_save_state(void *ctx, uint8_t *buf)
 {
 	if (!spu_state(ctx, GFX_JOB_STATE_SAVE))
 		return false;
-	memcpy(buf, state_buf, sizeof state_buf);
+	gfx_state_save(&shadow, buf);
 	return true;
 }
 
 static bool spu_load_state(void *ctx, const uint8_t *buf)
 {
-	memcpy(state_buf, buf, sizeof state_buf);
+	/* Lo que comparte el tramo y no es del formato (tex_gen, el final del
+	 * estado de Rare) se conserva: primero se trae lo que tiene el SPE. */
+	if (!spu_state(ctx, GFX_JOB_STATE_SAVE) || !gfx_state_load(&shadow, buf))
+		return false;
 	return spu_state(ctx, GFX_JOB_STATE_LOAD);
 }
 

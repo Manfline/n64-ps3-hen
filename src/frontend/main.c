@@ -936,6 +936,7 @@ static void post_field(uint32_t flags)
 	m.flags = flags;
 
 	if (salsa64_vi_frame(&n64.bus, &m.f) && m.f.width <= FB_MAX_W && m.f.height <= FB_MAX_H) {
+		salsa64_rdp_vi(m.f.origin, m.f.width);  /* qué color images son framebuffers */
 		if (selftest_on && selftest_frame(&n64.bus, &m.f))
 			m.flags |= FIELD_CHECK;
 		if (cap_every && m.field % cap_every == 0)
@@ -1428,6 +1429,22 @@ static void stats(uint64_t now)
 			    (double)(rs.fp_loads - sw.rdp0.fp_loads) / tasks, rs.draws_generated - sw.rdp0.draws_generated,
 			    (double)(rs.draws_generated - sw.rdp0.draws_generated) / tasks, rs.fp_programs,
 			    rs.fp_generated - sw.rdp0.fp_generated, rs.fp_evictions - sw.rdp0.fp_evictions);
+		uint32_t rb = rs.readbacks - sw.rdp0.readbacks, rbw = rs.readback_waits - sw.rdp0.readback_waits;
+		uint32_t trsx = rs.tex_rsx - sw.rdp0.tex_rsx, trd = rs.tex_rdram - sw.rdp0.tex_rdram;
+		uint32_t tself = rs.tex_self - sw.rdp0.tex_self, primes = rs.primes - sw.rdp0.primes;
+		uint32_t mir = rs.mirrors - sw.rdp0.mirrors, mirs = rs.mirrors_skipped - sw.rdp0.mirrors_skipped;
+		uint32_t fmir = rs.frames_mirrored - sw.rdp0.frames_mirrored;
+		uint32_t lost = rs.readbacks_lost - sw.rdp0.readbacks_lost, tfail = rs.targets_failed - sw.rdp0.targets_failed;
+		uint32_t tabs = rs.targets_absurd - sw.rdp0.targets_absurd;
+		if (rb || rbw || mir || mirs || fmir || trsx || trd || tself || primes || lost || tfail || tabs)
+			salsa64_log("gfx: framebuffer: %u copias a la RDRAM (%.2f ms c/u en presentación), la emulación "
+				    "esperó %u tareas (%.2f ms c/u, %u tarde), %u copias espejo (%u sin búfer), %u cuadros "
+				    "copiados; texturas desde un destino: %u del RSX, %u de la RDRAM, %u del ligado; %u "
+				    "destinos cebados; %u copias perdidas, %u destinos sin superficie, %u color images imposibles",
+				    rb, rb ? (rs.us_readback - sw.rdp0.us_readback) / 1e3 / rb : 0.0, rbw,
+				    rbw ? (rs.us_readback_wait - sw.rdp0.us_readback_wait) / 1e3 / rbw : 0.0,
+				    rs.readback_late - sw.rdp0.readback_late, mir, mirs, fmir, trsx, trd, tself, primes, lost,
+				    tfail, tabs);
 	}
 	if (lle_mode != SALSA64_LLE_OFF) {
 		uint32_t t = rsp_spu.tasks - sw.lle_tasks0;
@@ -1524,6 +1541,9 @@ static void state_barrier(void)
 {
 	drain(sysGetSystemTime(), 1);
 	rsxkit_finish();
+	/* Ninguna copia RSX → RDRAM en vuelo: al guardar quedan en el estado y
+	 * al cargar no llegan tarde sobre la RDRAM cargada. */
+	salsa64_rdp_settle();
 	int req = state_req;
 	unsigned slot = state_req_slot;
 	char err[160] = "";
@@ -1819,6 +1839,20 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		gfxtest_start();
 	if (audiotest_on)
 		audiotest_start();
+	{
+		/* SALSA64_DATA_DIR/fbfx.cfg: 0 sin efectos de framebuffer, 1 solo
+		 * render a textura, 2 también copias a la RDRAM (por omisión). */
+		int fbfx = 2;
+		FILE *ff = fopen(SALSA64_DATA_DIR "/fbfx.cfg", "r");
+		if (ff) {
+			if (fscanf(ff, "%d", &fbfx) != 1)
+				fbfx = 2;
+			fclose(ff);
+		}
+		salsa64_rdp_fbfx(fbfx);
+		salsa64_log("efectos de framebuffer: %s", fbfx <= 0 ? "apagados" : fbfx == 1 ? "render a textura" :
+								"render a textura y copias a la RDRAM");
+	}
 	{
 		FILE *df = fopen(SALSA64_DATA_DIR "/gfxdump", "r");
 		if (df) {
@@ -2315,6 +2349,10 @@ int main(void)
 		salsa64_log_shutdown();
 		return 1;
 	}
+	/* Efectos de framebuffer: copias RSX → RDRAM y el despertar del hilo de
+	 * presentación cuando una tarea las necesita (docs/framebuffer.md). */
+	salsa64_rdp_set_memory(rdram, SALSA64_RDRAM_MAX, wake);
+	salsa64_rdp_set_log(salsa64_log);
 	ioPadInit(7);
 	load_padmap();
 	sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, sysutil_cb, NULL);

@@ -70,6 +70,8 @@ void gfx_rdp_reset(struct gfx_state *g)
 	g->timg_width = 1;
 	g->timg_fmt = g->timg_siz = 0;
 	memset(g->tiles, 0, sizeof g->tiles);
+	memset(g->loads, 0, sizeof g->loads);
+	g->load_next = 0;
 	memset(g->tmem, 0, sizeof g->tmem);
 	g->tex_gen++;
 }
@@ -163,6 +165,9 @@ static void blend_state(const struct gfx_state *g, struct gfx_draw *d)
 	}
 
 	d->blend = !(ol & FORCE_BL) ? GFX_BLEND_OFF : classify_blend(p, a, m, b, g->fog);
+	/* G_RM_VISCVG: IM_RD | FORCE_BL y el blender IN·0 + BL·A_MEM. */
+	if ((ol & (IM_RD | FORCE_BL)) == (IM_RD | FORCE_BL) && p == BL_IN && a == BA_ZERO && m == BL_BL && b == BB_MEM)
+		d->viscvg = 1;
 
 	if ((ol & G_AC_MASK) == G_AC_THRESHOLD) {
 		d->atest = GFX_ATEST_GEQUAL;

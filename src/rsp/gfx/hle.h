@@ -11,6 +11,7 @@
 #define SALSA64_RSP_GFX_HLE_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "rsp/gfx/gfx.h"
@@ -98,6 +99,20 @@ struct gfx_rare {
 	float light_ca[GFX_MAX_LIGHTS + 1];  /* intensidad de la luz puntual */
 };
 
+/* Una carga a la TMEM (LOADBLOCK o LOADTILE): qué tramo de la TMEM
+ * escribió y de dónde lo trajo, para saber de qué imagen de la RDRAM sale
+ * cada textura (gfx_tex.src_*). Se guardan las últimas GFX_LOADS. */
+#define GFX_LOADS 4
+struct gfx_load {
+	uint32_t addr;       /* RDRAM: primer byte cargado */
+	uint32_t row_bytes;  /* bytes por fila de la imagen de origen */
+	uint16_t tmem;       /* tramo escrito en la TMEM, en bytes (32 bits: la mitad baja) */
+	uint16_t bytes;
+	uint16_t line;       /* bytes por fila en la TMEM (LOADBLOCK: 0, texels seguidos) */
+	uint16_t pitch;      /* texels por fila de la imagen de origen */
+	uint8_t siz, fmt;
+};
+
 /* Última textura resuelta por tile en la tarea: vale mientras no haya
  * cargas a la TMEM ni cambios de tiles (tex_gen) ni del modo de paleta. */
 struct gfx_tilememo {
@@ -154,6 +169,8 @@ struct gfx_state {
 	uint8_t timg_fmt, timg_siz;
 	struct gfx_tile tiles[8];
 	uint32_t tex_gen;          /* cambia con cada carga a la TMEM o cambio de tile */
+	struct gfx_load loads[GFX_LOADS];  /* anillo; load_next es la próxima a escribir */
+	uint32_t load_next;
 	uint8_t tmem[4096] __attribute__((aligned(16)));
 	struct gfx_texcache tc;
 
@@ -334,6 +351,16 @@ void gfx_load_tlut(struct gfx_state *g, uint32_t w0, uint32_t w1);
 bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex, bool premul);
 /* Tamaño de la textura de una tile (potencia de 2 si se repite). */
 void gfx_tile_size(const struct gfx_tile *t, uint32_t *w, uint32_t *h);
+
+/* Tramo de gfx_state con lo que persiste entre tareas, alineado a 16 para
+ * el DMA: desde othermode (y lo que comparta su bloque de 16 bytes con el
+ * final del estado de las variantes de Rare, que se reinicia en cada tarea)
+ * hasta el final de la TMEM. El trabajo de estado del SPE lo copia tal cual
+ * (gfx.h). */
+#define GFX_RAW_START (offsetof(struct gfx_state, oh) & ~(size_t)15)
+#define GFX_RAW_END   (offsetof(struct gfx_state, tmem) + sizeof(((struct gfx_state *)0)->tmem))
+_Static_assert(GFX_RAW_END % 16 == 0 && GFX_RAW_END - GFX_RAW_START <= 16384,
+	       "el tramo del estado del RDP no cabe en una DMA");
 
 /* state.c: lo que persiste entre tareas, en el formato portable de
  * GFX_STATE_* (gfx.h): los registros solos (el SPE manda la TMEM por DMA)

@@ -20,11 +20,12 @@ en PS3 real.
 | Búfer de comandos RSX + memoria mapeada | 16 | 16 | `rsxkit_init` por omisión (rsx-triangle usa 32) |
 | ROM del cartucho | 64 | | máximo; el frontend la lee entera a memoria al arrancar. Con `embedded`, a su medida; con el menú, un búfer de 64 MB reservado al entrar al menú y reusado por cada juego (sin asignaciones al cambiar de juego) |
 | Menú para elegir ROM | 2,1 | | 2 MB de memoria principal mapeada al RSX para el 2D (`rsxkit_ui_init`: atlas de la fuente 441 KB y dos búferes de 4096 quads, 768 KB cada uno), reservados al entrar al menú y para siempre; lista de 256 ROMs (74 KB) y texto de guardado.cfg (4 KB), estáticos. Sin memoria local del RSX: dibuja sobre la pantalla |
-| Salida de la HLE gráfica SPU → RSX | 20 | 20 | `src/rdp`: 3 juegos de vértices 2 MB + comandos 768 KB + arena de texturas 3,75 MB, mapeados al RSX (`rsxkit_map_main`) junto con la caché de texturas (28 MB en total). Con la caché el arena casi no se usa: se podría achicar más. Los comandos crecieron de 512 a 768 KB cuando `gfx_draw` pasó de 352 a 480 bytes (términos del generador de fragment programs, 2026-10-10) |
+| Salida de la HLE gráfica SPU → RSX | 20 | 20 | `src/rdp`: 3 juegos de vértices 2 MB + comandos 768 KB + arena de texturas 3,75 MB, mapeados al RSX (`rsxkit_map_main`) junto con la caché de texturas (28 MB en total). Con la caché el arena casi no se usa: se podría achicar más. Los comandos crecieron de 512 a 768 KB cuando `gfx_draw` pasó de 352 a 480 bytes (términos del generador de fragment programs, 2026-10-10) y a 496 con el origen de cada textura (efectos de framebuffer) |
+| Efectos de framebuffer (copias RSX → RDRAM, espejos y cebado) | 3 | 3 | `src/rdp`: en el mismo pool mapeado, 2 búferes de 640 × 480 × 2 (RGB565 a la resolución de la N64, 600 KB c/u) para las copias que la emulación espera, 4 de 64 KB para las copias espejo de imágenes chicas y uno de 600 KB para cebar superficies desde la RDRAM; 2,0 MB redondeados a 3 (docs/framebuffer.md) |
 | Copias de la imagen del VI entre hilos | 4,4 | 4,4 | Frontend (docs/hilos-ppe.md): 3 ranuras de 640 × 576 × 4; el hilo de emulación copia el framebuffer al terminar el campo y el de presentación lo sube al RSX |
 | Zona de paso del guardado + pila del hilo de emulación | 0,3 | | 32 KB en `struct savefile` y 256 KB de pila (`sysThreadCreate`) |
 | Audio | 2 | 0,3 | `src/frontend/audio_out.c`: anillo de `audio_sync` 256 KB (65 536 muestras estéreo de 16 bits, ~2 s a 32 kHz) + estirador y remuestreo 12 KB, estáticos; HLE en el PPE (si no arranca el SPE) 9,2 KB; prueba del arranque (SPE contra PPE) 2 × 16 KB + 9,2 KB; pila del hilo de audio 64 KB; el puerto de audio (16 bloques × 256 × 2 flotantes = 32 KB) es memoria del sistema. Con `volcado_s` en audio.cfg, 200 KB por segundo (hasta 6 MB), reservados al arrancar |
-| Estados guardados | 0,2 | | `src/frontend/states.c`: búfer de paso de 128 KB (cabecera y secciones chicas; la RDRAM va directo de y hacia su búfer, sin copia) y miniatura de 160 × 120 × 2 (37,5 KB), estáticos; búferes alineados para el DMA del estado de las HLE: gráfica 4,25 KB (`gfx_spu.c`) y de audio 11,75 KB (`audio_spu.c`). docs/estados.md |
+| Estados guardados | 0,2 | | `src/frontend/states.c`: búfer de paso de 128 KB (cabecera y secciones chicas; la RDRAM va directo de y hacia su búfer, sin copia) y miniatura de 160 × 120 × 2 (37,5 KB), estáticos; imagen de gfx_state del SPE para el estado de la HLE gráfica (48 KB, `gfx_spu.c`: el SPE copia ahí el tramo del RDP) y búfer de paso del de audio (11,75 KB, `audio_spu.c`). docs/estados.md |
 | Código, pila, heap de newlib | 16 | | |
 | Bloques de control de spukit | 0,01 | 0,01 | ~2,3 KB por trabajador |
 | **Total previsto** | **162** | | con una ROM de 64 MB (150 de la Fase 2 con la caché de texturas de 8 MB + 6,8 del estado del recompilador + 4,7 de los dos hilos + 0,2 de los estados guardados) |
@@ -35,7 +36,8 @@ en PS3 real.
 |---|---|---|---|
 | Framebuffers 1280×720 ×2 + Z | 11 | 11 | X8R8G8B8 + Z24S8 (`rsxkit_init`) |
 | Framebuffer 2D del VI | 3 | 2,8 | `rsxkit_fb_create(640, 576)`: 2 copias × 640 × 576 × 4 |
-| Destinos de render de la N64 (Fase 2) | 27 | | `src/rdp/targets.c`: hasta 8 color images a 3× (960×720×4 = 2,6 MB c/u; las auxiliares de 64 de ancho de Zelda en pausa pesan 0,1 MB) y 2 profundidades; a 1080p, 4× (1280×960: 4,7 MB c/u, 44 MB en total). Lo normal son 2–4 vivas |
+| Destinos de render de la N64 (Fase 2) | 27 | | `src/rdp/targets.c`: hasta 8 color images a 3× (960×720×4 = 2,6 MB c/u; las auxiliares de 64 de ancho de Zelda en pausa pesan 0,25 MB) más un scratch y 4 profundidades (rsxkit admite 16 superficies y 16 profundidades); a 1080p, 4× (1280×960: 4,7 MB c/u, 44 MB en total). Lo normal son 2–4 vivas |
+| Scratch de los efectos de framebuffer | 2,6 | | `src/rdp`: una copia del destino ligado cuando un dibujo lo lee como textura (la pausa de Zelda), del tamaño del destino (960×720×4); se crea la primera vez que hace falta |
 | Render interno 2x/3x | 60 | | Fase 5 (incluye lo anterior) |
 | Texturas | 64 | | Fase 4 |
 
@@ -46,7 +48,7 @@ en PS3 real.
 | `spu-compute/spu/mix.c` | 2,6 KB | 0,8 KB + 64 KB | ~69 KB | `spu-size` en el build |
 | `spu-jobs/spu/scale.c` | 3,6 KB | 0,8 KB + 65 KB | ~70 KB | `spu-size` |
 | `src/spu/audio` (HLE de las listas de audio, SPE 1) | 45 KB | 0,8 KB + 33,6 KB | ~80 KB (+ pila ~176 KB) | `spu-size` (2026-10-11): aud_state 11,7 KB (DMEM 4 KB + margen 4 KB, estado de ABI1, nead y naudio, MP3 2 KB), lecturas y escrituras 2 × 4 KB, bloque de la lista 1 KB, paso del estado guardado 11,75 KB |
-| `src/spu/gfx` (HLE de F3DEX2 + RDP, SPE 0) | 98,8 KB | 0,8 KB + 145,1 KB | ~245 KB (+ pila ~11 KB) | `spu-size` (2026-10-11): gfx_state 48 KB (de ellos el directorio de la caché de texturas 32 KB), texturas 2 × 32 KB, vértices 2 × 8 KB, comandos 2 × 4 KB, display list 2 × 1 KB, lecturas 5,8 KB; los estados guardados agregan 1,9 KB de código (los registros del RDP pasan por la pila; la TMEM va directo por DMA). La cadena más honda de la pila usa ~8 KB |
+| `src/spu/gfx` (HLE de F3DEX2 + RDP, SPE 0) | 99,0 KB | 0,8 KB + 146,3 KB | ~246 KB (+ pila ~9,9 KB) | `spu-size` (2026-10-11, con los efectos de framebuffer): gfx_state 48 KB (de ellos el directorio de la caché de texturas 32 KB), texturas 2 × 32 KB, vértices 2 × 8 KB, comandos 2 × 4 KB, display list 2 × 1 KB, lecturas 5,8 KB. Los estados guardados agregan 0,2 KB de código: el SPE copia tal cual el tramo del estado del RDP y el PPE arma el formato (sin ellos la pila era ~10,2 KB). La cadena más honda de la pila usa ~8 KB |
 
 ## Disco (HDD de la PS3)
 

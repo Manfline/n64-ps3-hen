@@ -23,7 +23,7 @@ SPUKIT  := 1
 # intérprete de src/rsp/lle con la E/S por DMA de src/spu/rsp.
 SPU_PROGS := gfx audio rsp
 gfx_SRCS  := $(R)/src/spu/gfx/main.c $(R)/src/spu/gfx/io_spu.c \
-             $(filter-out %/io_mem.c %/sync.c,$(wildcard $(R)/src/rsp/gfx/*.c))
+             $(filter-out %/io_mem.c %/sync.c %/state.c,$(wildcard $(R)/src/rsp/gfx/*.c))
 audio_SRCS := $(R)/src/spu/audio/main.c $(R)/src/spu/audio/io_spu.c \
               $(filter-out %/io_mem.c %/sync.c %/selftest.c,$(wildcard $(R)/src/rsp/audio/*.c))
 rsp_SRCS   := $(R)/src/spu/rsp/main.c $(R)/src/spu/rsp/io_spu.c \

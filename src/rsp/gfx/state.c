@@ -10,9 +10,9 @@
  * (los estados viejos lo dejan en cero) y subir FORMAT solo si cambia el
  * sentido de uno que ya estaba.
  *
- * Con una tabla y un bucle en vez de una línea por campo: en el SPE, cada
- * acceso de un byte suelto son varias instrucciones y la versión campo por
- * campo ocupaba 7 KB del local store, que la HLE gráfica no tiene.
+ * Corre en el host y en el PPE, nunca en el SPE: el SPE solo copia el tramo
+ * crudo de su estado (GFX_RAW_START a GFX_RAW_END) y el PPE lo pasa a este
+ * formato (src/platform/ps3/gfx_spu.c).
  */
 #include <stddef.h>
 #include <string.h>
@@ -67,7 +67,7 @@ static void set(uint8_t *p, unsigned size, uint32_t v)
 }
 
 /* Recorre la tabla en un sentido u otro; devuelve los bytes del formato. */
-__attribute__((optimize("Os"))) static unsigned walk(struct gfx_state *g, uint8_t *buf, bool load)
+static unsigned walk(struct gfx_state *g, uint8_t *buf, bool load)
 {
 	uint8_t *base = (uint8_t *)g;
 	unsigned pos = 4;

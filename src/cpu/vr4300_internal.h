@@ -112,8 +112,19 @@ static inline void vr4300_code_check(struct salsa64_cpu *cpu, uint32_t pa, uint3
 		salsa64_rec_code_written(cpu->rec, pa, len);
 }
 
+/* Depuración en el host (build -DSALSA64_WATCH_MEM): cada acceso del CPU a
+ * la RDRAM pasa por salsa64_watch_access (src/host/run.c), que cuenta los
+ * que caen en un destino de render. Nunca en la PS3. */
+#ifdef SALSA64_WATCH_MEM
+void salsa64_watch_access(uint32_t pa, int write);
+#define VR4300_WATCH(pa, write) salsa64_watch_access((pa), (write))
+#else
+#define VR4300_WATCH(pa, write) ((void)0)
+#endif
+
 static inline uint8_t vr4300_read8(struct salsa64_cpu *cpu, uint32_t pa)
 {
+	VR4300_WATCH(pa, 0);
 	if (SALSA64_LIKELY(pa < cpu->rdram_size))
 		return salsa64_rd8(cpu->rdram + pa);
 	return (uint8_t)(salsa64_bus_read32(cpu->bus, pa) >> (8 * (3 - (pa & 3))));
@@ -121,6 +132,7 @@ static inline uint8_t vr4300_read8(struct salsa64_cpu *cpu, uint32_t pa)
 
 static inline uint16_t vr4300_read16(struct salsa64_cpu *cpu, uint32_t pa)
 {
+	VR4300_WATCH(pa, 0);
 	if (SALSA64_LIKELY(pa < cpu->rdram_size))
 		return salsa64_rd16(cpu->rdram + pa);
 	return (uint16_t)(salsa64_bus_read32(cpu->bus, pa) >> (8 * (2 - (pa & 2))));
@@ -128,6 +140,7 @@ static inline uint16_t vr4300_read16(struct salsa64_cpu *cpu, uint32_t pa)
 
 static inline uint32_t vr4300_read32(struct salsa64_cpu *cpu, uint32_t pa)
 {
+	VR4300_WATCH(pa, 0);
 	if (SALSA64_LIKELY(pa < cpu->rdram_size))
 		return salsa64_rd32(cpu->rdram + pa);
 	return salsa64_bus_read32(cpu->bus, pa);
@@ -135,6 +148,7 @@ static inline uint32_t vr4300_read32(struct salsa64_cpu *cpu, uint32_t pa)
 
 static inline uint64_t vr4300_read64(struct salsa64_cpu *cpu, uint32_t pa)
 {
+	VR4300_WATCH(pa, 0);
 	if (SALSA64_LIKELY(pa < cpu->rdram_size))
 		return salsa64_rd64(cpu->rdram + pa);
 	return salsa64_bus_read64(cpu->bus, pa);
@@ -145,6 +159,7 @@ static inline uint64_t vr4300_read64(struct salsa64_cpu *cpu, uint32_t pa)
  * escriben esa palabra entera sin mirar el tamaño (ver core/bus.h). */
 static inline void vr4300_write8(struct salsa64_cpu *cpu, uint32_t pa, uint64_t v)
 {
+	VR4300_WATCH(pa, 1);
 	if (SALSA64_LIKELY(pa < cpu->rdram_size)) {
 		salsa64_wr8(cpu->rdram + pa, (uint8_t)v);
 		vr4300_code_check(cpu, pa, 1);
@@ -156,6 +171,7 @@ static inline void vr4300_write8(struct salsa64_cpu *cpu, uint32_t pa, uint64_t 
 
 static inline void vr4300_write16(struct salsa64_cpu *cpu, uint32_t pa, uint64_t v)
 {
+	VR4300_WATCH(pa, 1);
 	if (SALSA64_LIKELY(pa < cpu->rdram_size)) {
 		salsa64_wr16(cpu->rdram + pa, (uint16_t)v);
 		vr4300_code_check(cpu, pa, 2);
@@ -167,6 +183,7 @@ static inline void vr4300_write16(struct salsa64_cpu *cpu, uint32_t pa, uint64_t
 
 static inline void vr4300_write32(struct salsa64_cpu *cpu, uint32_t pa, uint32_t v)
 {
+	VR4300_WATCH(pa, 1);
 	if (SALSA64_LIKELY(pa < cpu->rdram_size)) {
 		salsa64_wr32(cpu->rdram + pa, v);
 		vr4300_code_check(cpu, pa, 4);
@@ -177,6 +194,7 @@ static inline void vr4300_write32(struct salsa64_cpu *cpu, uint32_t pa, uint32_t
 
 static inline void vr4300_write64(struct salsa64_cpu *cpu, uint32_t pa, uint64_t v)
 {
+	VR4300_WATCH(pa, 1);
 	if (SALSA64_LIKELY(pa < cpu->rdram_size)) {
 		salsa64_wr64(cpu->rdram + pa, v);
 		vr4300_code_check(cpu, pa, 8);
@@ -188,6 +206,7 @@ static inline void vr4300_write64(struct salsa64_cpu *cpu, uint32_t pa, uint64_t
 /* SWL/SWR y SDL/SDR: solo los bytes de `mask` (orden de la N64). */
 static inline void vr4300_write32_masked(struct salsa64_cpu *cpu, uint32_t pa, uint32_t v, uint32_t mask)
 {
+	VR4300_WATCH(pa, 1);
 	if (SALSA64_LIKELY(pa < cpu->rdram_size)) {
 		uint8_t *p = cpu->rdram + pa;
 		salsa64_wr32(p, (salsa64_rd32(p) & ~mask) | (v & mask));
@@ -199,6 +218,7 @@ static inline void vr4300_write32_masked(struct salsa64_cpu *cpu, uint32_t pa, u
 
 static inline void vr4300_write64_masked(struct salsa64_cpu *cpu, uint32_t pa, uint64_t v, uint64_t mask)
 {
+	VR4300_WATCH(pa, 1);
 	if (SALSA64_LIKELY(pa < cpu->rdram_size)) {
 		uint8_t *p = cpu->rdram + pa;
 		salsa64_wr64(p, (salsa64_rd64(p) & ~mask) | (v & mask));

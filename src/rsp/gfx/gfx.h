@@ -31,10 +31,13 @@
 
 #define GFX_JOB_TASK 1  /* kind del trabajo en spukit */
 #define GFX_JOB_HASH 2  /* prueba del hash (struct gfx_hash_job), antes de las tareas */
-/* Estados guardados: el estado que persiste entre tareas (registros del
- * RDP y TMEM, state.c) de y hacia GFX_STATE_BYTES bytes en `ea` (alineado a
- * 128), en un formato portable: GFX_STATE_REGS bytes de registros y la
- * TMEM. Entre tareas. */
+/* Estados guardados, entre tareas: el SPE copia tal cual el tramo de su
+ * gfx_state con lo que persiste entre tareas (GFX_RAW_START a GFX_RAW_END de
+ * hle.h: registros del RDP, tiles y TMEM) a `ea`, o lo trae de ahí, y
+ * contesta dónde empieza y termina ese tramo en su struct (dos uint32_t) para
+ * que el PPE compruebe que la disposición es la misma. El formato portable
+ * (GFX_STATE_BYTES: GFX_STATE_REGS bytes de registros y la TMEM, state.c) lo
+ * arma el PPE: en el SPE no sobra local store. */
 #define GFX_JOB_STATE_SAVE 3
 #define GFX_JOB_STATE_LOAD 4
 #define GFX_STATE_REGS  256u
@@ -188,6 +191,15 @@ struct gfx_tex {
 	/* s, t (texels de la N64) → coordenadas normalizadas de la textura:
 	 * u = s * xf[0] + xf[2], v = t * xf[1] + xf[3]. */
 	float xf[4];
+	/* De dónde salió: la carga a la TMEM (LOADBLOCK, LOADTILE) de la que
+	 * lee la tile. src_addr es la dirección física del texel (0, 0) de la
+	 * textura en la imagen de origen (G_SETTIMG), src_pitch los texels por
+	 * fila de esa imagen y src_siz/src_fmt su tamaño y formato (G_IM_*).
+	 * src_addr = 0: no se sabe. El consumidor decide si esa imagen es un
+	 * destino que él mismo dibujó (render a textura). */
+	uint32_t src_addr;
+	uint16_t src_pitch;
+	uint8_t src_siz, src_fmt;
 };
 
 #define GFX_TEX_WRAP_S(f)   ((f) & 3u)         /* GFX_WRAP_* */
@@ -244,7 +256,12 @@ struct gfx_draw {
 	uint32_t prim_tile;      /* informativo: tile de los rectángulos */
 	uint8_t nterms;          /* 0: combinación lineal fija; si no, términos con `factors` */
 	uint8_t factors[GFX_K_TERMS][GFX_K_FACTORS];  /* GFX_F_*, 0 = fin de la lista */
-	uint8_t pad[3];
+	/* G_RM_VISCVG: el RDP escribe la cobertura de cada píxel como color
+	 * (IM_RD | FORCE_BL, blender IN·0 + BL·A_MEM); Zelda lo usa para que
+	 * el CPU filtre los bordes del fondo de la pausa. El consumidor no lo
+	 * dibuja: deja «cobertura plena» en la RDRAM (docs/framebuffer.md). */
+	uint8_t viscvg;
+	uint8_t pad[2];
 	struct gfx_tex tex[2];
 	float k[GFX_K_TERMS][3][4];
 };

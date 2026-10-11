@@ -10,7 +10,7 @@ ranuras por juego en la PS3; en el host, `salsa64-run --state-save` y
 | Recoger la tarea del RSP en vuelo | `salsa64_rsp_quiesce` (`src/core/rsp.c`) |
 | Estado de la HLE gráfica entre tareas | `src/rsp/gfx/state.c` (registros del RDP) y `sync.c` (con la TMEM) |
 | Estado de la HLE de audio entre tareas | `src/rsp/audio/state.c` |
-| En los SPE | trabajos `GFX_JOB_STATE_*` y `AUD_JOB_STATE_*` (`src/spu/gfx/main.c`, `src/spu/audio/main.c`) |
+| En los SPE | trabajos `GFX_JOB_STATE_*` (el SPE copia tal cual el tramo del RDP; el PPE arma el formato, `src/platform/ps3/gfx_spu.c`) y `AUD_JOB_STATE_*` (`src/spu/gfx/main.c`, `src/spu/audio/main.c`) |
 | Archivos de las ranuras y miniatura (PS3) | `src/frontend/states.c` |
 | Barrera entre los dos hilos, atajos, aviso | `src/frontend/main.c` (`emu_park`, `state_barrier`, `pad_combos`), `src/frontend/osd.c` |
 | Host | `src/host/run.c` (`--state-save CAMPO:ARCHIVO`, `--state-load ARCHIVO`, `--fields N`) |

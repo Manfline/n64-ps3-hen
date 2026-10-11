@@ -8,8 +8,8 @@
  * TMEM viven en el local store y persisten entre tareas.
  *
  * Presupuesto de local store (256 KB); los números exactos los imprime el
- * build (spu-size, 2026-10-11, con los estados guardados: texto 98,8 KB,
- * datos 0,8 KB, bss 145,1 KB):
+ * build (spu-size, 2026-10-11, con los efectos de framebuffer y los estados
+ * guardados: texto 99,0 KB, datos 0,8 KB, bss 146,3 KB):
  *   código (HLE + runtime)              ~ 97 KB (F3D y F3DEX: 3,6 KB;
  *                                         Perfect Dark 1,9 KB y Conker
  *                                         4,4 KB; el combiner con sus
@@ -27,9 +27,8 @@
  *   vértices 2 × 8 KB, comandos 2 × 4 KB    24 KB
  *   texturas 2 × 32 KB                      64 KB
  *   spukit (descriptor, resultado…)        < 1 KB
- *   estados guardados (state.c y el
- *     trabajo de guardar o cargar)           ~ 1,9 KB
- *   pila                                    el resto (~ 11 KB; la cadena más
+ *   trabajo de los estados guardados        ~ 0,2 KB
+ *   pila                                    el resto (~ 9,9 KB; la cadena más
  *                                         honda, fondo S2DEX → TEXRECT →
  *                                         estado → combiner, usa ~8 KB
  *                                         según -fstack-usage)
@@ -42,24 +41,21 @@
 static struct gfx_state state __attribute__((aligned(128)));
 static struct gfx_job job __attribute__((aligned(16)));
 
-/* Estados guardados, entre tareas: los registros del RDP por la pila y la
- * TMEM directo, una DMA cada uno (< 16 KB). Aparte y chica: el local store
- * no sobra. */
-static __attribute__((noinline, cold)) int state_job(bool save, uint64_t ea)
+/* Estados guardados, entre tareas: el tramo con lo que persiste (registros
+ * del RDP, tiles y TMEM) tal cual, en una DMA (< 16 KB); el PPE lo pasa al
+ * formato portable. Contesta dónde está el tramo para que el PPE compruebe
+ * la disposición. Aparte y chica: el local store no sobra. */
+static __attribute__((noinline, cold)) int state_job(bool save, uint64_t ea, spukit_result *res)
 {
-	uint8_t regs[GFX_STATE_REGS] __attribute__((aligned(16)));
-	if (save) {
-		gfx_state_pack_regs(&state, regs);
-		mfc_put(regs, ea, GFX_STATE_REGS, 0, 0, 0);
-		mfc_put(state.tmem, ea + GFX_STATE_REGS, sizeof state.tmem, 0, 0, 0);
-		spukit_dma_wait(1u << 0);
-		return 0;
-	}
-	mfc_get(regs, ea, GFX_STATE_REGS, 0, 0, 0);
-	spukit_dma_wait(1u << 0);
-	if (!gfx_state_unpack_regs(&state, regs))
-		return -1;
-	mfc_get(state.tmem, ea + GFX_STATE_REGS, sizeof state.tmem, 0, 0, 0);
+	uint8_t *p = (uint8_t *)&state + GFX_RAW_START;
+	uint32_t n = GFX_RAW_END - GFX_RAW_START;
+	uint32_t *where = (uint32_t *)(void *)res->data;
+	where[0] = GFX_RAW_START;
+	where[1] = GFX_RAW_END;
+	if (save)
+		mfc_put(p, ea, n, 0, 0, 0);
+	else
+		mfc_get(p, ea, n, 0, 0, 0);
 	spukit_dma_wait(1u << 0);
 	return 0;
 }
@@ -83,7 +79,8 @@ static int handler(void *ctx, const spukit_job *j, spukit_result *res)
 		return 0;
 	}
 	if (j->kind == GFX_JOB_STATE_SAVE || j->kind == GFX_JOB_STATE_LOAD)
-		return state_job(j->kind == GFX_JOB_STATE_SAVE, ((const struct gfx_state_job *)(const void *)j->data)->ea);
+		return state_job(j->kind == GFX_JOB_STATE_SAVE, ((const struct gfx_state_job *)(const void *)j->data)->ea,
+				 res);
 	if (j->kind != GFX_JOB_TASK)
 		return -1;
 	memcpy(&job, j->data, sizeof job);

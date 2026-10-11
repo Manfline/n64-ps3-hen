@@ -48,6 +48,19 @@ struct salsa64_rdp_stats {
 	 * precompilados). */
 	uint32_t draws_generated;
 	uint32_t fp_programs, fp_generated, fp_evictions, fp_loads;
+	/* Efectos de framebuffer (docs/framebuffer.md): copias RSX → RDRAM y
+	 * su tiempo en el hilo de presentación (esperar al RSX y convertir),
+	 * tareas que la emulación esperó por una copia y cuánto, texturas con
+	 * origen en un destino leídas de su superficie o de la RDRAM, y
+	 * destinos cebados desde la RDRAM. */
+	uint32_t readbacks, readback_waits, readback_late;
+	uint64_t us_readback, us_readback_wait;
+	uint32_t mirrors, mirrors_skipped;  /* copias espejo (sin esperar) y las que no cupieron */
+	uint32_t frames_mirrored;           /* campos cuyo framebuffer se copió a la RDRAM */
+	uint32_t tex_rsx, tex_rdram, tex_self, primes;
+	/* Copias pedidas que no encontraron su destino dibujado, superficies
+	 * que el RSX no pudo crear y color images imposibles ignoradas. */
+	uint32_t readbacks_lost, targets_failed, targets_absurd;
 };
 
 /* Después de rsxkit_init. scale = 0: la mayor escala entera que cabe en la
@@ -60,15 +73,38 @@ void salsa64_rdp_shutdown(void);
  * último salsa64_rdp_flush. Devuelve las tareas que quedaban sin traducir
  * (0 si se consumió todo). */
 uint32_t salsa64_rdp_reset(void);
-/* Al cargar un estado guardado: suelta los destinos y profundidades (lo
- * dibujado antes ya no es de esta máquina, y los números de campo
- * retroceden) sin tocar las colas ni la numeración de las tareas, que
- * siguen con el mismo SPE. Después del último salsa64_rdp_flush. */
+/* Estados guardados, en la barrera (después del último salsa64_rdp_flush,
+ * con la emulación quieta): settle espera las copias RSX → RDRAM que
+ * quedaran en vuelo (espejos del framebuffer y de las imágenes chicas,
+ * copias grandes sin esperar) y las escribe en la RDRAM, así ninguna llega
+ * tarde. drop_targets, al cargar: suelta los destinos, profundidades y el
+ * scratch (lo dibujado ya no es de esta máquina y los números de campo
+ * retroceden) y olvida las copias y su historial, sin tocar las colas ni la
+ * numeración de las tareas, que siguen con el mismo SPE. */
+void salsa64_rdp_settle(void);
 void salsa64_rdp_drop_targets(void);
+
+/* Efectos de framebuffer (docs/framebuffer.md). La RDRAM emulada, para
+ * copiar ahí los destinos que el CPU va a leer y cebar superficies con lo
+ * que el CPU dibujó, y cómo despertar al hilo de presentación cuando una
+ * tarea necesita esa copia antes de terminar (`done` espera a que esté).
+ * Antes de la primera tarea; NULL apaga las copias. */
+void salsa64_rdp_set_memory(uint8_t *rdram, uint32_t rdram_size, void (*wake)(void));
+/* Hilo de emulación, al terminar cada campo con imagen: origen y ancho del
+ * VI, para distinguir framebuffers de imágenes auxiliares desde ese hilo. */
+void salsa64_rdp_vi(uint32_t origin, uint32_t width);
+/* Interruptor: 0 apaga los efectos de framebuffer (las texturas que
+ * vienen de un destino se leen de la RDRAM como antes y nada se copia), 1
+ * solo render a textura, 2 también las copias a la RDRAM (por omisión). */
+void salsa64_rdp_fbfx(int level);
+
+/* Avisos y la traza de las copias (los escribe el frontend en su log). */
+void salsa64_rdp_set_log(void (*fn)(const char *fmt, ...));
 
 /* Las dos manos de un backend gráfico (rsp/gfx/backend.h). acquire puede
  * esperar a que el RSX libere un juego de búferes (nunca llama a rsxkit
- * salvo rsxkit_fence_done). */
+ * salvo rsxkit_fence_done). done puede esperar a que el hilo de
+ * presentación copie un destino a la RDRAM (ver salsa64_rdp_set_memory). */
 const struct salsa64_gfx_sink *salsa64_rdp_sink(void);
 
 /* Traduce a comandos del RSX las tareas terminadas con número menor que

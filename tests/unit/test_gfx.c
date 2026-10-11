@@ -1305,6 +1305,122 @@ static void gfx_texcache_hash(void)
 	gfx_hash_final(&h, k1);
 	CHECK(k0[0] == k1[0] && k0[1] == k1[1]);
 }
+/* Procedencia de las texturas (gfx_tex.src_*): un LOADTILE de las filas
+ * 10–15 de una imagen de 320 (un framebuffer) deja la dirección de su
+ * texel (0, 0) y el paso de la imagen; un LOADBLOCK de una textura de 32×32
+ * también; y dos cargas con el mismo contenido desde direcciones distintas
+ * comparten la textura decodificada pero no el origen. */
+static void gfx_texture_provenance(void)
+{
+	const uint32_t FB_PA = 0x100000;
+	start();
+	/* Filas 10–15 de un framebuffer RGBA16 de 320: texel = número de fila. */
+	for (int y = 10; y < 16; y++)
+		for (int x = 0; x < 320; x++)
+			salsa64_wr16(t_n64.bus.rdram + FB_PA + (y * 320 + x) * 2, (uint16_t)(y << 11 | 1));
+	dl(0xFD100000 | 319, FB_PA);                             /* SETTIMG RGBA16, ancho 320 */
+	dl(0xF5100000 | 80 << 9, 0x07000000);                     /* SETTILE 7: línea 80 palabras, tmem 0 */
+	dl(0xF4000000 | (0 << 2) << 12 | (10 << 2), 0x07000000 | (319 << 2) << 12 | (15 << 2)); /* LOADTILE */
+	dl(0xF5100000 | 80 << 9, 0x00000000);                     /* SETTILE 0 */
+	dl(0xF2000000, (319 << 2) << 12 | (5 << 2));              /* tile 0: 320×6 */
+	set_cycle(G_CYC_COPY);
+	dl(0xE4000000 | (319 << 2) << 12 | (15 << 2), (0 << 2) << 12 | (10 << 2));  /* TEXRECT 0,10–319,15 */
+	dl(0xE1000000, 0);
+	dl(0xF1000000, 0x10000400);
+	/* Una textura normal de 32×32 por LOADBLOCK. */
+	dl(0xFD100000 | 31, TEX_PA);
+	dl(0xF5100000, 0x07000000);
+	dl(0xF3000000, 0x07000000 | 1023 << 12 | 256);          /* LOADBLOCK 1024 texels, dxt 1 fila de 8 bytes */
+	dl(0xF5100000 | 8 << 9, 0x00000000);                      /* SETTILE 0: línea 8 palabras */
+	dl(0xF2000000, (31 << 2) << 12 | (31 << 2));              /* 32×32 */
+	dl(0xE4000000 | (31 << 2) << 12 | (31 << 2), 0);
+	dl(0xE1000000, 0);
+	dl(0xF1000000, 0x10000400);
+	/* El mismo contenido (ceros) desde otra dirección, con ancho 1 en
+	 * SETTIMG como lo manda libultra (gDPLoadTextureBlock). */
+	dl(0xFD100000 | 0, TEX_PA + 0x4000);
+	dl(0xF5100000, 0x07000000);
+	dl(0xF3000000, 0x07000000 | 1023 << 12 | 256);
+	dl(0xF5100000 | 8 << 9, 0x00000000);
+	dl(0xF2000000, (31 << 2) << 12 | (31 << 2));
+	dl(0xE4000000 | (31 << 2) << 12 | (31 << 2), 0);
+	dl(0xE1000000, 0);
+	dl(0xF1000000, 0x10000400);
+	/* Una I8 de 32×32 cargada como libultra: SETTIMG de 16 bits, LOADBLOCK
+	 * de 512 texels de 16 bits, y la tile que lee de 8 bits. */
+	dl(0xFD100000 | 0, TEX_PA + 0x8000);
+	dl(0xF5100000, 0x07000000);
+	dl(0xF3000000, 0x07000000 | 511 << 12 | 512);
+	dl(0xF5880000 | 4 << 9, 0x00000000);                      /* tile 0: I8, línea 4 palabras (32 bytes) */
+	dl(0xF2000000, (31 << 2) << 12 | (31 << 2));
+	dl(0xE4000000 | (31 << 2) << 12 | (31 << 2), 0);
+	dl(0xE1000000, 0);
+	dl(0xF1000000, 0x10000400);
+	run();
+	CHECK_EQ(res.rects, 4);
+	const struct gfx_draw *d3 = draw_n(3);
+	CHECK(d3 != NULL);
+	if (d3) {
+		CHECK_EQ(d3->tex[0].src_addr, TEX_PA + 0x8000);
+		CHECK_EQ(d3->tex[0].src_pitch, 32);
+		CHECK_EQ(d3->tex[0].src_siz, G_IM_SIZ_8b);
+	}
+	const struct gfx_draw *d0 = draw_n(0), *d1 = draw_n(1), *d2 = draw_n(2);
+	CHECK(d0 && d1 && d2);
+	if (!d0 || !d1 || !d2)
+		return;
+	CHECK_EQ(d0->ntex, 1);
+	CHECK_EQ(d0->tex[0].width, 320);
+	CHECK_EQ(d0->tex[0].height, 6);
+	CHECK_EQ(d0->tex[0].src_addr, FB_PA + 10 * 640);
+	CHECK_EQ(d0->tex[0].src_pitch, 320);
+	CHECK_EQ(d0->tex[0].src_siz, G_IM_SIZ_16b);
+	CHECK_EQ(d0->tex[0].src_fmt, G_IM_FMT_RGBA);
+	/* El contenido es el del framebuffer: la fila 2 de la textura es la 12. */
+	const uint8_t *tex = (d0->tex[0].where == GFX_TEX_CACHE ? out_cache : out_tex) + d0->tex[0].offset;
+	CHECK_EQ(tex[2 * d0->tex[0].pitch + 4 * 5], (12 << 3) | (12 >> 2));
+	CHECK_EQ(d1->tex[0].src_addr, TEX_PA);
+	CHECK_EQ(d1->tex[0].src_pitch, 32);
+	CHECK_EQ(d1->tex[0].width, 32);
+	CHECK_EQ(d2->tex[0].src_addr, TEX_PA + 0x4000);
+	CHECK_EQ(d2->tex[0].src_pitch, 32);
+	CHECK_EQ(d2->tex[0].src_siz, G_IM_SIZ_16b);
+	/* Misma textura decodificada (reusada), distinto origen. */
+	CHECK_EQ(d2->tex[0].offset, d1->tex[0].offset);
+	CHECK_EQ(d2->tex[0].where, d1->tex[0].where);
+	CHECK(res.tex_reused >= 1);
+}
+
+/* G_RM_VISCVG (IM_RD | FORCE_BL, blender IN·0 + BL·A_MEM): el dibujo sale
+ * marcado para que el consumidor deje cobertura plena en vez de dibujar;
+ * G_RM_PASS (FORCE_BL, IN·0 + IN·1), no. */
+static void gfx_viscvg_flag(void)
+{
+	start();
+	dl(0xFD100000 | 319, TEX_PA);
+	dl(0xF5100000 | 80 << 9, 0x07000000);
+	dl(0xF4000000, 0x07000000 | (319 << 2) << 12 | (5 << 2));
+	dl(0xF5100000 | 80 << 9, 0x00000000);
+	dl(0xF2000000, (319 << 2) << 12 | (5 << 2));
+	set_cycle(G_CYC_1CYCLE);
+	/* G_RM_PASS: c1 = (IN, 0, IN, 1) → 0x0C080000 y FORCE_BL. */
+	dl(0xEF000000, 0x0C080000 | FORCE_BL);
+	dl(0xE4000000 | (319 << 2) << 12 | (5 << 2), 0);
+	dl(0xE1000000, 0);
+	dl(0xF1000000, 0x04000400);
+	/* G_RM_VISCVG: c1 = (IN, 0, BL, A_MEM) → 0x0C840000 con IM_RD y FORCE_BL. */
+	dl(0xEF000000, 0x0C840000 | IM_RD | FORCE_BL);
+	dl(0xE4000000 | (319 << 2) << 12 | (239 << 2), 0);
+	dl(0xE1000000, 0);
+	dl(0xF1000000, 0x04000400);
+	run();
+	const struct gfx_draw *d0 = draw_n(0), *d1 = draw_n(1);
+	CHECK(d0 && d1);
+	if (!d0 || !d1)
+		return;
+	CHECK_EQ(d0->viscvg, 0);
+	CHECK_EQ(d1->viscvg, 1);
+}
 
 /* F3DEX2 arranca con clip ratio 2 (sus datos) y G_MOVEWORD G_MW_CLIP la
  * cambia: la caja de recorte del RSP va en las tijeras de los triángulos. */
@@ -1342,8 +1458,7 @@ static void gfx_clip_ratio_f3dex2(void)
 	CHECK(d0->scissor[0] == 80 * 4 && d0->scissor[1] == 60 * 4 && d0->scissor[2] == 240 * 4 &&
 	      d0->scissor[3] == 180 * 4);
 	CHECK(d1->scissor[0] == 120 * 4 && d1->scissor[1] == 90 * 4 && d1->scissor[2] == 200 * 4 &&
-	      d1->scissor[3] == 150 * 4);
-}
+	      d1->scissor[3] == 150 * 4);}
 
 void t_suite_gfx(void)
 {
@@ -1371,4 +1486,6 @@ void t_suite_gfx(void)
 	RUN(gfx_texcache_palette);
 	RUN(gfx_texcache_ring);
 	RUN(gfx_texcache_hash);
+	RUN(gfx_texture_provenance);
+	RUN(gfx_viscvg_flag);
 }

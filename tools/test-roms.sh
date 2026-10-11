@@ -173,14 +173,16 @@ estados() {  # nombre rom N M [gfx: también la imagen de la HLE gráfica]
 	rm -rf "$d"
 	mkdir -p "$d"
 	R="ASAN_OPTIONS=detect_leaks=0 build/host/salsa64-run -q"
-	g1="" g2=""
+	g1="" gn="" g2=""
 	if [ "${5:-}" = gfx ]; then
-		g1="--gfx-frame $d/m-gfx.ppm" g2="--gfx-frame $d/m2-gfx.ppm"
+		# El rasterizador en las tres corridas: con él la HLE copia destinos
+		# a la RDRAM (efectos de framebuffer) y eso es parte del estado.
+		g1="--gfx-frame $d/m-gfx.ppm" gn="--gfx-frame $d/n-gfx.ppm" g2="--gfx-frame $d/m2-gfx.ppm"
 	else
 		: >"$d/m-gfx.ppm"; : >"$d/m2-gfx.ppm"
 	fi
 	tools/build.sh --sh "$R --fields $4 --state-save $4:$d/m.st --frame $d/m.ppm $g1 $2 && \
-		$R --fields $3 --state-save $3:$d/n.st $2 && \
+		$R --fields $3 --state-save $3:$d/n.st $gn $2 && \
 		$R --state-load $d/n.st --fields $4 --state-save $4:$d/m2.st --frame $d/m2.ppm $g2 $2" \
 		>"$ELOG" 2>&1
 	erc=$?
