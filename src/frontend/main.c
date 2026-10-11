@@ -1617,8 +1617,8 @@ static const char *const rom_dirs[] = {
 	"/dev_usb004/salsa64", "/dev_usb005/salsa64", "/dev_usb006/salsa64", "/dev_usb007/salsa64",
 };
 
-static bool video_wants_1080(void);
-static void video_save(int resolution);
+static void video_load(struct menu_settings *set);
+static void video_save(const struct menu_settings *set);
 static bool boot_1080;  /* video.cfg pedía 1080p al arrancar (rsxkit_init ya corrió) */
 
 static struct romlist roms;
@@ -1809,7 +1809,12 @@ static int menu_loop(void)
 	menu_settings_load();
 	load_overscan();
 	mn.settings.overscan = overscan_preset();
-	mn.settings.resolution = video_wants_1080() ? MENU_RES_1080P : MENU_RES_720P;
+	{
+		struct menu_settings v = mn.settings;
+		video_load(&v);
+		mn.settings.resolution = v.resolution;
+		mn.settings.scale = v.scale;
+	}
 	salsa64_log("menú: espacio lógico de %.0fx%.0f sobre %ux%u, búfer de ROM de %u MB, fondo animado %s", mn.lw,
 		    mn.lh, sc->width, sc->height, ROM_MAX >> 20, mn.settings.waves ? "sí" : "no");
 
@@ -1849,8 +1854,8 @@ static int menu_loop(void)
 		if (a == MENU_SETTINGS) {
 			if (menu.set.overscan != mn.settings.overscan)
 				overscan_save(menu.set.overscan);
-			if (menu.set.resolution != mn.settings.resolution)
-				video_save(menu.set.resolution);
+			if (menu.set.resolution != mn.settings.resolution || menu.set.scale != mn.settings.scale)
+				video_save(&menu.set);
 			if (menu.set.waves != mn.settings.waves) {
 				mn.settings.waves = menu.set.waves;
 				menu_settings_save();
@@ -1881,33 +1886,46 @@ static int menu_loop(void)
 	return ok ? 0 : 1;
 }
 
-/* video.cfg: «1080» prefiere 1080p, con el render de la N64 a 4× (1280×960);
- * sin archivo, o con otra cosa, 720p a 3× como siempre. Si la tele no acepta
- * 1080, sigue con el siguiente modo de la lista. */
+/* video.cfg: «salida = 1080» prefiere 1080p (también la línea sola «1080» del
+ * formato viejo); «escala = auto|1..5» es el tamaño del render de la N64
+ * (auto: 4× a 1080p, 3× a 720p). Sin archivo, 720p y escala automática.
+ * Si la tele no acepta 1080, sigue con el siguiente modo de la lista. */
 static const int32_t modes_1080[] = {
 	VIDEO_RESOLUTION_1080, VIDEO_RESOLUTION_720, VIDEO_RESOLUTION_480, VIDEO_RESOLUTION_576,
 };
 
-static bool video_wants_1080(void)
+/* Lo que dice video.cfg al arrancar (rsxkit_init y salsa64_rdp_init). */
+static struct menu_settings video_cfg;
+
+static void video_load(struct menu_settings *set)
 {
+	char text[256];
+	size_t n = 0;
 	FILE *f = fopen(VIDEO_CFG_PATH, "r");
-	if (!f)
-		return false;
-	char line[16] = "";
-	bool want_1080 = fgets(line, sizeof line, f) && strncmp(line, "1080", 4) == 0;
-	fclose(f);
-	return want_1080;
+	if (f) {
+		n = fread(text, 1, sizeof text - 1, f);
+		fclose(f);
+	}
+	menu_video_parse(set, text, n);
 }
 
-/* Opción «Resolución» del menú: video.cfg con «1080» o «720». Solo se lee
- * al arrancar (rsxkit_init), así que el cambio vale al volver a abrir. */
-static void video_save(int resolution)
+static bool video_wants_1080(void)
 {
+	return video_cfg.resolution == MENU_RES_1080P;
+}
+
+/* Opciones «Resolución» y «Escala interna» del menú: video.cfg con
+ * «salida» y «escala». Solo se leen al arrancar, así que el cambio vale al
+ * volver a abrir. */
+static void video_save(const struct menu_settings *set)
+{
+	char text[256];
+	int n = menu_video_format(set, text, sizeof text);
 	FILE *f = fopen(VIDEO_CFG_PATH, "w");
-	if (f) {
-		fputs(resolution == MENU_RES_1080P ? "1080\n" : "720\n", f);
-		fclose(f);
-	} else
+	bool ok = f && fwrite(text, 1, (size_t)n, f) == (size_t)n;
+	if (f && fclose(f) != 0)
+		ok = false;
+	if (!ok)
 		salsa64_log("menú: no se pudo escribir %s", VIDEO_CFG_PATH);
 }
 
@@ -1926,6 +1944,8 @@ int main(void)
 	salsa64_log_init("salsa64");
 	pres.autotest = salsa64_autotest();
 
+	menu_settings_default(&video_cfg);
+	video_load(&video_cfg);
 	rsxkit_config vcfg;
 	const rsxkit_config *vc = video_config(&vcfg);
 	int rc = rsxkit_init(vc);
@@ -1939,11 +1959,17 @@ int main(void)
 	const rsxkit_screen *sc = rsxkit_screen_info();
 	salsa64_log("RSX listo: %ux%u, tele %s%s", sc->width, sc->height, sc->aspect > 1.5f ? "16:9" : "4:3",
 		    vc ? " (video.cfg: 1080)" : "");
-	if ((rc = salsa64_rdp_init(0)) != RSXKIT_OK) {
+	if ((rc = salsa64_rdp_init((uint32_t)video_cfg.scale)) != RSXKIT_OK) {
 		salsa64_log("RESULTADO frontend: FALLO al preparar el RDP (%d)", rc);
 		rsxkit_shutdown();
 		salsa64_log_shutdown();
 		return 1;
+	}
+	{
+		bool cut;
+		uint32_t es = salsa64_rdp_scale(&cut);
+		salsa64_log("RDP listo: escala-objetivo %u× (%u líneas por imagen; cada destino, la entera que llega ahí), %s%s", es, 240 * es,
+			    video_cfg.scale ? "pedida" : "automática", cut ? ", reducida por memoria del RSX" : "");
 	}
 	rdp_sink = salsa64_rdp_sink();
 

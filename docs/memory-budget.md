@@ -34,9 +34,24 @@ en PS3 real.
 |---|---|---|---|
 | Framebuffers 1280×720 ×2 + Z | 11 | 11 | X8R8G8B8 + Z24S8 (`rsxkit_init`) |
 | Framebuffer 2D del VI | 3 | 2,8 | `rsxkit_fb_create(640, 576)`: 2 copias × 640 × 576 × 4 |
-| Destinos de render de la N64 (Fase 2) | 27 | | `src/rdp/targets.c`: hasta 8 color images a 3× (960×720×4 = 2,6 MB c/u; las auxiliares de 64 de ancho de Zelda en pausa pesan 0,1 MB) y 2 profundidades; a 1080p, 4× (1280×960: 4,7 MB c/u, 44 MB en total). Lo normal son 2–4 vivas |
+| Destinos de render de la N64 (Fase 2) | 27 | | `src/rdp/targets.c`: hasta 8 color images y 2 profundidades, con escala por destino según la escala interna (3× a 720p, 4× a 1080p, o 1×–5× por «Escala interna»): 960×720×4 = 2,6 MB c/u a 3×; 1280×960: 4,7 MB a 4×; 1600×1200: 7,7 MB a 5×. Tope total de 96 MiB. Las auxiliares de 64 de ancho de Zelda en pausa pesan 0,1 MB. Lo normal son 2–4 vivas. Política y peor caso abajo |
 | Render interno 2x/3x | 60 | | Fase 5 (incluye lo anterior) |
 | Texturas | 64 | | Fase 4 |
+
+### Escala interna y tope de los destinos (2026-10-11)
+
+La escala elegida (`salsa64_rdp_init`, 0 = automática, 1–5) es un **objetivo de líneas**: 240 × escala (5× = 1200). Cada destino usa la escala entera que lleva su imagen a ese objetivo sin pasarse (`rdp_target_scale`, mínimo 1, máximo 5, y 4096 por lado): 320×240 a 5×, 640×480 a 2×, una auxiliar de 64 de ancho (48 líneas) a 5× (con tope). La superficie guarda su escala (`surf_scale` en `rdp.c`), la profundidad usa la del destino de color con que se pide, y la presentación convierte su región con la escala del destino; `rsxkit_bind` ya trabaja con tamaño lógico, así que lib/rsxkit no cambió. No hay otra copia RSX ↔ RDRAM que suponga la escala.
+
+| Destino a la escala-objetivo | 1× | 3× | 4× | 5× |
+|---|---|---|---|---|
+| 320×240 (escala del destino) | 0,3 MB (1×) | 2,8 (3×) | 4,9 (4×) | 7,7 (5×) |
+| 640×480 | 1,2 MB (1×) | 1,2 (1×) | 4,9 (2×) | 4,9 (2×) |
+
+- **Peor caso** (`rdp_vram_worst`): 10 superficies (8 color images y 2 profundidades), cada una a lo más del peso de una de 320×240 a la escala-objetivo (o de 640×480 nativa si es mayor): 1× 12 MB; 3× 28 MB; 4× 49 MB; 5× 77 MB (73 MiB). Antes, con escala global, ocho de 640×480 a 5× eran 245 MB.
+- **Tope total:** `RDP_VRAM_BUDGET` = 96 MiB para destinos y profundidades vivos (los 256 MB locales a 1080p: pantallas 24 MB, 2D del VI 2,8 MB, menú y shaders unos MB; quedan ~120 MB de margen para la fragmentación del montón de `rsxMemalign`).
+- **Al arrancar:** `rdp_scale_pick` baja el objetivo mientras el peor caso pase del tope; con las cifras de arriba 5× entra (73 MiB), así que no se reduce nunca hoy, y la regla protege si cambia el máximo o el tope. El log dice «RDP listo: escala-objetivo N× …, pedida|automática[, reducida por memoria del RSX]».
+- **En el juego:** `rdp.c` suma los bytes vivos. Para crear un destino o una profundidad que pasaría del tope, `make_room` recicla el destino más viejo (menor `last_field`; nunca el presentado en el último campo ni el que se está creando o para el que se pide la profundidad) hasta que quepa, y cuenta `targets_evicted`. Si ni así cabe, o rsxkit no tiene memoria, esa color image se queda en la copia de la RDRAM (no se dibuja en el RSX) y una profundidad que falta dibuja sin z-buffer: nunca falla una creación sin camino de respaldo.
+- **Presentación:** `rsxkit_target_present` lee el destino como textura con filtro lineal; lo más que reduce es 5× en 720p (1600×1200 → 960×720, 1,67×), sin aliasing apreciable. A 1× la imagen se amplía con el mismo filtro lineal.
 
 ## Local store de los SPEs (256 KB c/u)
 

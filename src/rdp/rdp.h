@@ -34,6 +34,7 @@ struct salsa64_rdp_stats {
 	uint32_t tasks;
 	uint32_t draws, triangles;
 	uint32_t targets_created;
+	uint32_t targets_evicted;  /* destinos reciclados por el tope de memoria */
 	uint32_t set_waits;      /* veces que un juego de búferes seguía en uso (emulación) */
 	uint64_t us_translate;   /* PPE traduciendo a comandos del RSX (presentación) */
 	uint64_t us_set_wait;    /* hilo de emulación esperando un juego */
@@ -50,9 +51,31 @@ struct salsa64_rdp_stats {
 	uint32_t fp_programs, fp_generated, fp_evictions, fp_loads;
 };
 
-/* Después de rsxkit_init. scale = 0: la mayor escala entera que cabe en la
- * pantalla. Devuelve 0 o un código negativo de rsxkit. */
+/* Después de rsxkit_init. scale = 0 (automática): la mayor escala entera
+ * que cabe en la pantalla (720p → 3×, 1080p → 4×); 1 .. 5: la pedida
+ * (1× es la imagen nativa de 320 × 240; más que la pantalla es
+ * supermuestreo: la presentación la reduce con filtro lineal). Devuelve 0
+ * o un código negativo de rsxkit.
+ *
+ * La escala elegida es un objetivo de líneas (240 × escala: 5× = 1200) y
+ * cada destino usa la escala entera que lleva su imagen a ese objetivo sin
+ * pasarse (rdp_target_scale): 320 × 240 a 5×, 640 × 480 a 2×, una auxiliar
+ * chica a la misma escala que su alto pida (hasta 5×). Cada superficie lleva
+ * su escala (surf_scale), y la profundidad la del destino de color con que
+ * se usa; rsxkit ya trabaja en coordenadas lógicas (rsxkit_bind) y la
+ * presentación convierte su región con la escala del destino.
+ *
+ * Política de memoria local del RSX (docs/memory-budget.md):
+ * 1) al arrancar el objetivo se baja hasta que el peor caso (10 superficies
+ * de 320 × 240 a esa escala; rdp_vram_worst) quepa en RDP_VRAM_BUDGET
+ * (96 MiB): a 5× son 73 MiB y entra; 2) en el juego, los destinos y
+ * profundidades vivos suman a lo más RDP_VRAM_BUDGET: para crear uno que
+ * pasaría se recicla el destino más viejo (no el presentado en el último
+ * campo); si ni así cabe, o rsxkit no tiene memoria, esa imagen se queda en
+ * la copia de la RDRAM y no se dibuja en el RSX, sin errores. */
 int salsa64_rdp_init(uint32_t scale);
+/* Escala-objetivo efectiva tras salsa64_rdp_init; *reduced: se bajó por memoria. */
+uint32_t salsa64_rdp_scale(bool *reduced);
 void salsa64_rdp_shutdown(void);
 /* Entre juegos (menú): suelta los destinos y profundidades del RSX y vacía
  * las colas de tareas y las estadísticas; la memoria mapeada se conserva.

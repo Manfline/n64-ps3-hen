@@ -68,10 +68,11 @@ struct menu_settings {
 	bool waves;     /* fondo animado («fondo = si|no») */
 	int overscan;   /* enum menu_overscan */
 	int resolution; /* enum menu_resolution */
+	int scale;      /* escala interna del render: 0 automática, 1 .. 5 */
 };
 
 enum { MENU_PAGE_GAMES, MENU_PAGE_OPTIONS };
-enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_RESOLUTION, MENU_OPT_BACK, MENU_OPTS };
+enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_RESOLUTION, MENU_OPT_SCALE, MENU_OPT_BACK, MENU_OPTS };
 
 struct menu {
 	const struct romlist *list;
@@ -120,6 +121,12 @@ void menu_frame(struct menu *m, float lw, float lh, uint64_t now_us);
 void menu_settings_default(struct menu_settings *s);
 void menu_settings_parse(struct menu_settings *s, const char *text, size_t len);
 int menu_settings_format(const struct menu_settings *s, char *buf, size_t size);
+
+/* video.cfg: «salida = 1080|720» y «escala = auto|1..5». También acepta el
+ * formato viejo, una sola línea «1080» o «720». Solo toca resolution y
+ * scale; lo que no entiende lo deja como estaba. */
+void menu_video_parse(struct menu_settings *s, const char *text, size_t len);
+int menu_video_format(const struct menu_settings *s, char *buf, size_t size);
 
 /* Para la prueba automática: los botones que acercan la selección a la
  * fila `target` de la página de juegos (0 .. menu_row_exit) y la abren;

@@ -66,6 +66,7 @@ static inline void lwsync(void) { __asm__ volatile("lwsync" ::: "memory"); }
 struct depth {
 	bool used;
 	uint32_t addr, w, h;
+	uint32_t bytes;
 	bool clear_pending;
 	float clear_rect[4];
 	float clear_value;
@@ -75,6 +76,10 @@ struct depth {
 static struct {
 	bool ready;
 	uint32_t scale;
+	bool scale_reduced;          /* la escala se bajó por memoria */
+	uint32_t vram;               /* bytes de destinos y profundidades vivos */
+	uint32_t surf_bytes[RDP_TARGETS_MAX];
+	uint32_t surf_scale[RDP_TARGETS_MAX];  /* escala de la superficie de cada ranura */
 	uint8_t *pool;
 	uint32_t pool_off;
 	uint8_t *cache;              /* región de la caché de texturas */
@@ -105,7 +110,7 @@ int salsa64_rdp_init(uint32_t scale)
 	rdp_targets_init(&rdp.tg);
 	rdp.bound_t = -1;
 	const rsxkit_screen *sc = rsxkit_screen_info();
-	rdp.scale = scale ? scale : (sc->height >= 240 ? sc->height / 240 : 1);
+	rdp.scale = rdp_scale_pick(scale, sc->height, &rdp.scale_reduced);
 	rdp.pool = memalign(1u << 20, POOL_BYTES);
 	if (!rdp.pool)
 		return RSXKIT_ENOMEM;
@@ -136,10 +141,20 @@ static void release_targets(void)
 		if (rdp.depths[i].used)
 			rsxkit_depth_destroy(rdp.depths[i].d);
 	memset(rdp.surf, 0, sizeof rdp.surf);
+	memset(rdp.surf_bytes, 0, sizeof rdp.surf_bytes);
+	memset(rdp.surf_scale, 0, sizeof rdp.surf_scale);
+	rdp.vram = 0;
 	memset(rdp.depths, 0, sizeof rdp.depths);
 	rdp.bound_t = -1;
 	rdp.bound_d = NULL;
 	rdp_targets_init(&rdp.tg);  /* la tabla de destinos, vacía */
+}
+
+uint32_t salsa64_rdp_scale(bool *reduced)
+{
+	if (reduced)
+		*reduced = rdp.scale_reduced;
+	return rdp.scale;
 }
 
 void salsa64_rdp_shutdown(void)
@@ -246,26 +261,63 @@ static uint32_t scissor_bottom(const struct set *s, uint32_t off, uint32_t cmd_b
 	return bottom;
 }
 
+/* Suelta la superficie de una ranura (destruye, descuenta y deja la
+ * ranura sin usar). */
+static void drop_surface(int i)
+{
+	if (rdp.bound_t == i)
+		rdp.bound_t = -1;
+	rsxkit_target_destroy(rdp.surf[i]);
+	rdp.surf[i] = NULL;
+	rdp.vram -= rdp.surf_bytes[i];
+	rdp.surf_bytes[i] = 0;
+	rdp.surf_scale[i] = 0;
+}
+
+/* Hace sitio para `bytes` más bajo el tope RDP_VRAM_BUDGET reciclando el
+ * destino más viejo (menos campos desde que se dibujó), sin tocar `keep` ni
+ * el presentado en el último campo. false: ni así cabe. */
+static bool make_room(uint32_t bytes, int keep)
+{
+	while (rdp.vram + bytes > RDP_VRAM_BUDGET) {
+		int victim = -1;
+		for (int j = 0; j < RDP_TARGETS_MAX; j++) {
+			if (!rdp.surf[j] || j == keep || j == rdp.tg.shown)
+				continue;
+			if (victim < 0 || rdp.tg.t[j].last_field < rdp.tg.t[victim].last_field)
+				victim = j;
+		}
+		if (victim < 0)
+			return false;
+		drop_surface(victim);
+		rdp.tg.t[victim].used = false;
+		rdp.stats.targets_evicted++;
+	}
+	return true;
+}
+
 /* Ranura (con superficie) de una color image; -1 si el RSX no tiene
- * memoria para una nueva. */
+ * memoria para una nueva (esa imagen se queda en la copia de la RDRAM). */
 static int get_target(uint32_t addr, uint32_t width, uint32_t siz, uint32_t min_lh)
 {
 	bool fresh;
 	int i = rdp_targets_get(&rdp.tg, addr, width, siz, min_lh, &fresh);
 	if (!fresh)
 		return i;
-	if (rdp.surf[i]) {
-		if (rdp.bound_t == i)
-			rdp.bound_t = -1;
-		rsxkit_target_destroy(rdp.surf[i]);
-		rdp.surf[i] = NULL;
-	}
+	if (rdp.surf[i])
+		drop_surface(i);
 	const struct rdp_target *t = &rdp.tg.t[i];
-	rdp.surf[i] = rsxkit_target_create(t->lw * rdp.scale, t->lh * rdp.scale);
+	uint32_t sc = rdp_target_scale(rdp.scale, t->lw, t->lh);
+	uint32_t bytes = rdp_surface_bytes(t->lw * sc, t->lh * sc);
+	if (make_room(bytes, i))
+		rdp.surf[i] = rsxkit_target_create(t->lw * sc, t->lh * sc);
 	if (!rdp.surf[i]) {
 		rdp.tg.t[i].used = false;
 		return -1;
 	}
+	rdp.surf_bytes[i] = bytes;
+	rdp.surf_scale[i] = sc;
+	rdp.vram += bytes;
 	rdp.stats.targets_created++;
 	return i;
 }
@@ -273,7 +325,8 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t siz, uint32_t min_
 static struct depth *get_depth(uint32_t addr, int slot)
 {
 	const struct rdp_target *t = &rdp.tg.t[slot];
-	uint32_t w = t->lw * rdp.scale, h = t->lh * rdp.scale;
+	/* La profundidad lleva la escala del destino de color con que se usa. */
+	uint32_t w = t->lw * rdp.surf_scale[slot], h = t->lh * rdp.surf_scale[slot];
 	struct depth *free_d = NULL;
 	for (int i = 0; i < MAX_DEPTHS; i++) {
 		struct depth *d = &rdp.depths[i];
@@ -288,10 +341,15 @@ static struct depth *get_depth(uint32_t addr, int slot)
 			rdp.bound_d = NULL;
 		rsxkit_depth_destroy(d->d);
 		d->used = false;
+		rdp.vram -= d->bytes;
+		d->bytes = 0;
 	}
-	d->d = rsxkit_depth_create(w, h);
+	uint32_t bytes = rdp_surface_bytes(w, h);
+	d->d = make_room(bytes, slot) ? rsxkit_depth_create(w, h) : NULL;
 	if (!d->d)
 		return NULL;
+	d->bytes = bytes;
+	rdp.vram += bytes;
 	d->used = true;
 	d->addr = addr;
 	d->w = w;
@@ -482,8 +540,8 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 			ct = cb = 0;
 	}
 	uint32_t w = p.w - cl - cr, h = p.h - ct - cb;
-	rsxkit_rect src = { (int32_t)(cl * rdp.scale), (int32_t)((p.y0 + ct) * rdp.scale), w * rdp.scale,
-			    h * rdp.scale };
+	uint32_t sc = rdp.surf_scale[p.slot];
+	rsxkit_rect src = { (int32_t)(cl * sc), (int32_t)((p.y0 + ct) * sc), w * sc, h * sc };
 	rsxkit_target_present(rdp.surf[p.slot], &src, w, h, view, out);
 	return true;
 }

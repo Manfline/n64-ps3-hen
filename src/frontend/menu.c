@@ -43,6 +43,7 @@ void menu_settings_default(struct menu_settings *s)
 	s->waves = true;
 	s->overscan = MENU_OVERSCAN_NORMAL;
 	s->resolution = MENU_RES_720P;
+	s->scale = 0;
 }
 
 static const char *overscan_name(int o)
@@ -58,6 +59,18 @@ static const char *overscan_name(int o)
 static const char *resolution_name(int r)
 {
 	return r == MENU_RES_1080P ? "1080p" : "720p";
+}
+
+/* «Auto (3×)», «1× nativa», «4×»... */
+static const char *scale_name(const struct menu_settings *s, char *buf, size_t n)
+{
+	if (s->scale == 0)
+		snprintf(buf, n, "Auto (%d×)", s->resolution == MENU_RES_1080P ? 4 : 3);
+	else if (s->scale == 1)
+		snprintf(buf, n, "1× nativa");
+	else
+		snprintf(buf, n, "%d×", s->scale);
+	return buf;
 }
 
 static int lower(int c)
@@ -89,6 +102,58 @@ void menu_settings_parse(struct menu_settings *s, const char *text, size_t len)
 		if (!strcmp(key, "fondo") && (yes || no))
 			s->waves = yes;
 	}
+}
+
+void menu_video_parse(struct menu_settings *s, const char *text, size_t len)
+{
+	size_t i = 0;
+	while (i < len) {
+		size_t e = i;
+		while (e < len && text[e] != '\n')
+			e++;
+		char line[96];
+		size_t n = e - i < sizeof line - 1 ? e - i : sizeof line - 1;
+		memcpy(line, text + i, n);
+		line[n] = '\0';
+		i = e + 1;
+		char key[32], val[32];
+		if (line[0] == '#')
+			continue;
+		if (sscanf(line, " %31[^= ] = %31s", key, val) != 2) {
+			/* Formato viejo: la línea es la resolución. */
+			if (!strncmp(line, "1080", 4))
+				s->resolution = MENU_RES_1080P;
+			else if (!strncmp(line, "720", 3))
+				s->resolution = MENU_RES_720P;
+			continue;
+		}
+		for (char *p = key; *p; p++)
+			*p = (char)lower((unsigned char)*p);
+		for (char *p = val; *p; p++)
+			*p = (char)lower((unsigned char)*p);
+		if (!strcmp(key, "salida")) {
+			if (!strncmp(val, "1080", 4))
+				s->resolution = MENU_RES_1080P;
+			else if (!strncmp(val, "720", 3))
+				s->resolution = MENU_RES_720P;
+		} else if (!strcmp(key, "escala")) {
+			if (!strcmp(val, "auto"))
+				s->scale = 0;
+			else if (val[0] >= '1' && val[0] <= '5' && (!val[1] || (val[1] == 'x' && !val[2])))
+				s->scale = val[0] - '0';
+		}
+	}
+}
+
+int menu_video_format(const struct menu_settings *s, char *buf, size_t size)
+{
+	char scale[8] = "auto";
+	if (s->scale >= 1 && s->scale <= 5)
+		snprintf(scale, sizeof scale, "%d", s->scale);
+	return snprintf(buf, size,
+			"# Video de Salsa64 (se lee al arrancar)\n# salida = 720|1080; escala = auto|1|2|3|4|5\n"
+			"salida = %s\nescala = %s\n",
+			s->resolution == MENU_RES_1080P ? "1080" : "720", scale);
 }
 
 int menu_settings_format(const struct menu_settings *s, char *buf, size_t size)
@@ -165,6 +230,12 @@ static enum menu_action options_buttons(struct menu *m, uint32_t pressed)
 	}
 	if (m->opt == MENU_OPT_RESOLUTION && (pressed & change)) {
 		m->set.resolution = m->set.resolution == MENU_RES_1080P ? MENU_RES_720P : MENU_RES_1080P;
+		return MENU_SETTINGS;
+	}
+	if (m->opt == MENU_OPT_SCALE && (pressed & change)) {
+		/* Auto → 1× → ... → 5× → Auto (izquierda, al revés). */
+		int v = m->set.scale + (pressed & BIT(SALSA64_DS3_LEFT) ? 5 : 1);
+		m->set.scale = v % 6;
 		return MENU_SETTINGS;
 	}
 	return MENU_NONE;
@@ -484,16 +555,26 @@ static void panel(const struct menu *m, float W, float H, float a)
 							 "Se guarda en overscan.cfg.", NULL, NULL };
 		static const char *const res_text[] = { "Salida de video: 720p (3x)", "o 1080p (4x). Se aplica al", "volver a abrir Salsa64.",
 							"Se guarda en video.cfg.", NULL, NULL };
+		/* Escala interna: tamaño y texto dependen del valor. */
+		char scale_buf[24], size_buf[32];
+		int eff = m->set.scale ? m->set.scale : (m->set.resolution == MENU_RES_1080P ? 4 : 3);
+		snprintf(size_buf, sizeof size_buf, "%d× = %d×%d puntos", eff, 320 * eff, 240 * eff);
+		const char *const scale_text[] = { size_buf, "Mayor que la pantalla es", "supermuestreo: más nitidez",
+						   "y bordes suaves, pero más", "trabajo para el RSX.",
+						   "1×: la imagen original N64.", "Se aplica al reabrir.", NULL, NULL };
 		static const char *const back_text[] = { "A la lista de juegos.", NULL, NULL };
 		const char *title = m->opt == MENU_OPT_WAVES ? "Fondo animado"
 				    : m->opt == MENU_OPT_OVERSCAN ? "Recorte del borde"
-				    : m->opt == MENU_OPT_RESOLUTION ? "Resolución" : "Volver";
+				    : m->opt == MENU_OPT_RESOLUTION ? "Resolución"
+				    : m->opt == MENU_OPT_SCALE ? "Escala interna" : "Volver";
 		const char *const *text = m->opt == MENU_OPT_WAVES ? waves_text
 					  : m->opt == MENU_OPT_OVERSCAN ? crop_text
-					  : m->opt == MENU_OPT_RESOLUTION ? res_text : back_text;
+					  : m->opt == MENU_OPT_RESOLUTION ? res_text
+					  : m->opt == MENU_OPT_SCALE ? scale_text : back_text;
 		const char *value = m->opt == MENU_OPT_WAVES ? (m->set.waves ? "Sí" : "No")
 				    : m->opt == MENU_OPT_OVERSCAN ? overscan_name(m->set.overscan)
-				    : m->opt == MENU_OPT_RESOLUTION ? resolution_name(m->set.resolution) : NULL;
+				    : m->opt == MENU_OPT_RESOLUTION ? resolution_name(m->set.resolution)
+				    : m->opt == MENU_OPT_SCALE ? scale_name(&m->set, scale_buf, sizeof scale_buf) : NULL;
 		stext(x, y, title, tscale, 0xFFFFFFu, ca, tmax);
 		y += 56.0f;
 		/* Líneas cortas (caben en 4:3); NULL es un renglón en blanco, dos
@@ -595,10 +676,14 @@ static void options_column(const struct menu *m, float x, float W, float H, floa
 	struct row crop = { "Recorte del borde", "Overscan de la imagen del juego", 2, "□", 0,
 			    overscan_name(m->set.overscan) };
 	struct row res = { "Resolución", "Salida de video (al reabrir)", 2, "■", 0, resolution_name(m->set.resolution) };
+	char sbuf[24];
+	struct row scale = { "Escala interna", "Dibujo interno (al reabrir)", 2, "▲", 0,
+			     scale_name(&m->set, sbuf, sizeof sbuf) };
 	struct row back = { "Volver", "A la lista de juegos", 2, "◀", 0, NULL };
 	draw_row(&waves, MENU_OPT_WAVES - m->opt_pos, x, W, H, a);
 	draw_row(&crop, MENU_OPT_OVERSCAN - m->opt_pos, x, W, H, a);
 	draw_row(&res, MENU_OPT_RESOLUTION - m->opt_pos, x, W, H, a);
+	draw_row(&scale, MENU_OPT_SCALE - m->opt_pos, x, W, H, a);
 	draw_row(&back, MENU_OPT_BACK - m->opt_pos, x, W, H, a);
 }
 

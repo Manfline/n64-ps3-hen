@@ -406,6 +406,27 @@ static void menu_options_page(void)
 	CHECK_EQ(m.set.resolution, MENU_RES_1080P);
 	CHECK_EQ(m.set.overscan, MENU_OVERSCAN_NORMAL);
 	CHECK(m.set.waves);
+	/* Escala interna: Auto → 1× … 5× → Auto (izquierda, al revés). */
+	menu_input(&m, 0, 77);
+	menu_input(&m, DOWN, 77);
+	CHECK_EQ(m.opt, MENU_OPT_SCALE);
+	CHECK_EQ(m.set.scale, 0);
+	uint64_t t = 200;
+	for (int want = 1; want <= 5; want++) {
+		menu_input(&m, 0, t++);
+		CHECK_EQ(menu_input(&m, RIGHT, t++), MENU_SETTINGS);
+		CHECK_EQ(m.set.scale, want);
+	}
+	menu_input(&m, 0, t++);
+	CHECK_EQ(menu_input(&m, RIGHT, t++), MENU_SETTINGS);
+	CHECK_EQ(m.set.scale, 0);
+	menu_input(&m, 0, t++);
+	CHECK_EQ(menu_input(&m, LEFT, t++), MENU_SETTINGS);
+	CHECK_EQ(m.set.scale, 5);
+	menu_input(&m, 0, t++);
+	CHECK_EQ(menu_input(&m, CROSS, t++), MENU_SETTINGS);
+	CHECK_EQ(m.set.scale, 0);
+	CHECK_EQ(m.set.resolution, MENU_RES_1080P);
 	menu_input(&m, 0, 77);
 	menu_input(&m, DOWN, 78);
 	CHECK_EQ(m.opt, MENU_OPT_BACK);
@@ -743,6 +764,43 @@ static void menu_frame_geometry(void)
 	rsxkit_ui_batch(NULL, 0, 0, 0);
 }
 
+/* video.cfg: formato nuevo, formato viejo («1080» solo) y valores raros. */
+static void menu_video_file(void)
+{
+	struct menu_settings s;
+	menu_settings_default(&s);
+	CHECK_EQ(s.resolution, MENU_RES_720P);
+	CHECK_EQ(s.scale, 0);
+	const char old[] = "1080\n";
+	menu_video_parse(&s, old, sizeof old - 1);
+	CHECK_EQ(s.resolution, MENU_RES_1080P);
+	CHECK_EQ(s.scale, 0);
+	const char old720[] = "720\n";
+	menu_video_parse(&s, old720, sizeof old720 - 1);
+	CHECK_EQ(s.resolution, MENU_RES_720P);
+	const char nuevo[] = "# x\nSalida = 1080\nescala = 5\n";
+	menu_video_parse(&s, nuevo, sizeof nuevo - 1);
+	CHECK_EQ(s.resolution, MENU_RES_1080P);
+	CHECK_EQ(s.scale, 5);
+	const char bad[] = "escala = 9\nsalida = 4k\n";
+	menu_video_parse(&s, bad, sizeof bad - 1);
+	CHECK_EQ(s.scale, 5);
+	CHECK_EQ(s.resolution, MENU_RES_1080P);
+	const char autoc[] = "escala = auto\n";
+	menu_video_parse(&s, autoc, sizeof autoc - 1);
+	CHECK_EQ(s.scale, 0);
+	char text[256];
+	s.scale = 2;
+	s.resolution = MENU_RES_720P;
+	int n = menu_video_format(&s, text, sizeof text);
+	struct menu_settings t;
+	menu_settings_default(&t);
+	t.resolution = MENU_RES_1080P;
+	menu_video_parse(&t, text, (size_t)n);
+	CHECK_EQ(t.scale, 2);
+	CHECK_EQ(t.resolution, MENU_RES_720P);
+}
+
 /* SALSA64_MENU_PPM=<prefijo>: el menú como lo dibujaría el RSX en
  * <prefijo>-juegos.ppm, -opciones.ppm y -43.ppm, para verlo a ojo. */
 static void menu_preview(void)
@@ -771,9 +829,25 @@ static void menu_preview(void)
 	menu_input(&m, DOWN, 13113000);  /* la fila «Resolución» */
 	n = frames(&m, 13116000, 14500000, 1280);
 	raster(rgb, 1280, 720, 1280, 720, n);
+	snprintf(path, sizeof path, "%s-resolucion.ppm", out);
+	write_ppm(path, rgb, 1280, 720);
+	menu_input(&m, 0, 14510000);
+	menu_input(&m, DOWN, 14511000);  /* «Escala interna» */
+	menu_input(&m, 0, 14512000);
+	menu_input(&m, RIGHT, 14513000);
+	menu_input(&m, 0, 14514000);
+	menu_input(&m, RIGHT, 14515000);
+	menu_input(&m, 0, 14516000);
+	menu_input(&m, RIGHT, 14517000);
+	menu_input(&m, 0, 14518000);
+	menu_input(&m, RIGHT, 14519000);
+	menu_input(&m, 0, 14519500);
+	menu_input(&m, RIGHT, 14519900);  /* 5× */
+	n = frames(&m, 14520000, 15500000, 1280);
+	raster(rgb, 1280, 720, 1280, 720, n);
 	snprintf(path, sizeof path, "%s-opciones.ppm", out);
 	write_ppm(path, rgb, 1280, 720);
-	n = frames(&m, 14500000, 14600000, 960);
+	n = frames(&m, 15500000, 15600000, 960);
 	raster(rgb, 960, 720, 960, 720, n);
 	snprintf(path, sizeof path, "%s-opciones43.ppm", out);
 	write_ppm(path, rgb, 960, 720);
@@ -798,6 +872,7 @@ void t_suite_menu(void)
 	RUN(menu_needs_release_first);
 	RUN(menu_move_and_wrap);
 	RUN(menu_repeat);
+	RUN(menu_video_file);
 	RUN(menu_pages);
 	RUN(menu_options_page);
 	RUN(menu_settings_file);
