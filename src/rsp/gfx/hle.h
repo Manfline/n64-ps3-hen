@@ -157,6 +157,7 @@ struct gfx_state {
 	const struct gfx_job *job;
 	struct gfx_result *res;
 	bool dirty;                /* cambió algo del estado de dibujo */
+	uint8_t rect_clamp;        /* TEXRECT en curso: 1 limitar s, 2 limitar t */
 	bool target_sent;          /* GFX_OP_TARGET de la color image actual */
 	bool have_draw;            /* `draw` está abierto */
 	struct gfx_draw draw __attribute__((aligned(16)));

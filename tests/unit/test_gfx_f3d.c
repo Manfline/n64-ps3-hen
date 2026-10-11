@@ -572,11 +572,16 @@ static void f3dex_commands(void)
 	dl(0xE4000000 | (3 << 2) << 12 | (1 << 2), 0);
 	dl(0xB4000000, 0);
 	dl(0xB3000000, 0x10000400);
+	/* La secuencia anterior (G_RDPHALF_2 + G_RDPHALF_CONT), que manda
+	 * F3DEX 0.95 en Mario Kart 64: también es un rectángulo. */
+	dl(0xE4000000 | (13 << 2) << 12 | (1 << 2), (10 << 2) << 12);
+	dl(0xB3000000, 0);
+	dl(0xB2000000, 0x10000400);
 	dl(0xAF000000, 0);                       /* G_LOAD_UCODE: termina */
 	sp_tri1(0, 1, 2, 0);
 	run();
 	CHECK_EQ(res.triangles, 1);
-	CHECK_EQ(res.rects, 1);
+	CHECK_EQ(res.rects, 2);
 	CHECK(res.flags & GFX_RES_LOAD_UCODE);
 }
 
