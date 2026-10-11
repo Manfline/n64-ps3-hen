@@ -24,7 +24,7 @@ def main():
     if not args:
         print(__doc__)
         return
-    stats = re.compile(r"^(\S+ )?([\d.]+) campos/s \((\d+) % de \w+\), ([\d.]+) MIPS, (\d+) % en bucles de espera; "
+    stats = re.compile(r"(\s|^)([\d.]+) campos/s \((\d+) % de \w+\), ([\d.]+) MIPS, (\d+) % en bucles de espera; "
                        r"emulación ([\d.]+) ms por campo")
     prof = re.compile(r"perfil JIT por campo: emulación ([\d.]+) ms = nativo ([\d.]+) \((\d+) %\), llamadas a C ([\d.]+) "
                       r"\((\d+) %\), intérprete ([\d.]+) \((\d+) %\), eventos ([\d.]+) \((\d+) %\), compilar ([\d.]+), "

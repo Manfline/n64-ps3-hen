@@ -371,20 +371,21 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 		w[n++] = ppc_cmplw(0, 0, 3);
 		n = pre_bc(w, n, ne, EQ, rec->exit_jump);
 		w[n] = ppc_b((int32_t)(id_ok - n) * 4);
-		return n + 1;
+		n++;  /* y siguen las rutinas compartidas (el camino lento las usa también) */
+	} else {
+		n = pre_li64(w, n, 11, (uintptr_t)rec->x.xb);
+		w[n++] = ppc_addi(10, 11, (int32_t)offsetof(struct salsa64_rec_xblock, hnext));
+		uint32_t chain = n;  /* r12 = id, r11 = xb, r10 = xb + hnext */
+		w[n++] = ppc_cmpwi(0, 12, 0);
+		n = pre_bc(w, n, eq, EQ, rec->exit_jump);
+		w[n++] = ppc_sldi(0, 12, 3);
+		w[n++] = ppc_lwzx(9, 11, 0);
+		w[n++] = ppc_cmplw(0, 9, 3);
+		n = pre_bc(w, n, eq, EQ, id_ok);
+		w[n++] = ppc_lhzx(12, 10, 0);
+		w[n] = ppc_b((int32_t)(chain - n) * 4);
+		n++;
 	}
-	n = pre_li64(w, n, 11, (uintptr_t)rec->x.xb);
-	w[n++] = ppc_addi(10, 11, (int32_t)offsetof(struct salsa64_rec_xblock, hnext));
-	uint32_t chain = n;  /* r12 = id, r11 = xb, r10 = xb + hnext */
-	w[n++] = ppc_cmpwi(0, 12, 0);
-	n = pre_bc(w, n, eq, EQ, rec->exit_jump);
-	w[n++] = ppc_sldi(0, 12, 3);
-	w[n++] = ppc_lwzx(9, 11, 0);
-	w[n++] = ppc_cmplw(0, 9, 3);
-	n = pre_bc(w, n, eq, EQ, id_ok);
-	w[n++] = ppc_lhzx(12, 10, 0);
-	w[n] = ppc_b((int32_t)(chain - n) * 4);
-	n++;
 
 	/* Traducción de datos por ktlb[] (rec_emit.c, emit_addr; rec_tlb.h): la
 	 * dirección en r3 es extensión de signo de 32 bits y está alineada, su
