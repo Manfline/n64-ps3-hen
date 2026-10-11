@@ -58,6 +58,9 @@ struct salsa64_rdp_stats {
 	uint32_t mirrors, mirrors_skipped;  /* copias espejo (sin esperar) y las que no cupieron */
 	uint32_t frames_mirrored;           /* campos cuyo framebuffer se copió a la RDRAM */
 	uint32_t tex_rsx, tex_rdram, tex_self, primes;
+	/* Copias pedidas que no encontraron su destino dibujado, superficies
+	 * que el RSX no pudo crear y color images imposibles ignoradas. */
+	uint32_t readbacks_lost, targets_failed, targets_absurd;
 };
 
 /* Después de rsxkit_init. scale = 0: la mayor escala entera que cabe en la
@@ -84,6 +87,9 @@ void salsa64_rdp_vi(uint32_t origin, uint32_t width);
  * vienen de un destino se leen de la RDRAM como antes y nada se copia), 1
  * solo render a textura, 2 también las copias a la RDRAM (por omisión). */
 void salsa64_rdp_fbfx(int level);
+
+/* Avisos y la traza de las copias (los escribe el frontend en su log). */
+void salsa64_rdp_set_log(void (*fn)(const char *fmt, ...));
 
 /* Las dos manos de un backend gráfico (rsp/gfx/backend.h). acquire puede
  * esperar a que el RSX libere un juego de búferes (nunca llama a rsxkit
