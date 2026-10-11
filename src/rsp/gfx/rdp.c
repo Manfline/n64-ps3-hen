@@ -168,9 +168,15 @@ static void blend_state(const struct gfx_state *g, struct gfx_draw *d)
 		d->atest = GFX_ATEST_GEQUAL;
 		d->aref = (uint8_t)(g->blend & 0xFF) ? (uint8_t)(g->blend & 0xFF) : 1;
 	} else if ((ol & CVG_X_ALPHA) && !(ol & FORCE_BL)) {
-		/* Bordes recortados por el alfa de la textura (G_RM_*_TEX_EDGE). */
+		/* Bordes recortados por el alfa de la textura (G_RM_AA_*_TEX_EDGE). */
 		d->atest = GFX_ATEST_GEQUAL;
 		d->aref = 128;
+	} else if ((ol & (CVG_X_ALPHA | AA_EN)) == (CVG_X_ALPHA | AA_EN)) {
+		/* Con FORCE_BL (G_RM_TEX_EDGE: IN·0 + IN·1, el medidor de energía de
+		 * SM64): la cobertura es cvg·α/32 y el RDP no escribe los píxeles
+		 * donde da 0, o sea α < 32 con el píxel cubierto entero. */
+		d->atest = GFX_ATEST_GEQUAL;
+		d->aref = 32;
 	}
 }
 

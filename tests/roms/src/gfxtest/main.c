@@ -21,10 +21,11 @@
  * mezcladas por el alfa primitivo (TEXEL0 en la tile 0, TEXEL1 en la 1),
  * un cuadro con w = 1000 coloreado por PRIM·TEXEL0_ALPHA, dos TEXRECT cuya
  * textura (L) y paleta (M) cambia el CPU en la RDRAM en el cuadro
- * GFXTEST_CHANGE_FRAME (prueba de la caché de texturas entre tareas), y
- * dos cuadros de 2 ciclos que no caben en una combinación lineal (piden
- * un fragment program generado): TEXEL0·TEXEL1·SHADE (N) y
- * lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE, la niebla por luz de GoldenEye (O). Al
+ * GFXTEST_CHANGE_FRAME (prueba de la caché de texturas entre tareas), un
+ * cuadro con textura RGBA16 de alfa de 1 bit en G_RM_TEX_EDGE (N) y dos
+ * cuadros de 2 ciclos que no caben en una combinación lineal (piden un
+ * fragment program generado): TEXEL0·TEXEL1·SHADE (P) y lerp(ENV, TEXEL0,
+ * SHADE_ALPHA)·SHADE, la niebla por luz de GoldenEye (Q). Al
  * final de cada lista, un tramo de otro microcódigo (G_LOAD_UCODE) que la
  * HLE debe saltar; en GFXTEST_CUT_FRAME la lista termina dentro de él (no
  * en la variante F3D, que no tiene G_LOAD_UCODE).
@@ -123,7 +124,7 @@ struct rsp_data {
 	light sun, ambient, look_x, look_y;
 	vtx quad_a[4], quad_b[4], tri_c[3], quad_d[4], quad_g[4], quad_i[4], cube[24];
 	vtx cull[16];  /* 4 cuadros: antihorario/horario × cull back/front */
-	vtx quad_j[4], quad_k[4], quad_n[4], quad_o[4];
+	vtx quad_j[4], quad_k[4], quad_n[4], quad_p[4], quad_q[4];
 	uint16_t red[4 * 4], blue[4 * 4];
 	uint16_t yellow[4 * 4], magenta[4 * 4];
 	uint16_t checker[8 * 8];
@@ -132,6 +133,7 @@ struct rsp_data {
 	uint16_t palette[16];
 	uint16_t chg[4 * 4] __attribute__((aligned(8)));
 	uint16_t pal2[16] __attribute__((aligned(8)));
+	uint16_t edge[8 * 8] __attribute__((aligned(8)));
 } __attribute__((aligned(64)));
 
 static struct rsp_data rsp_mem __attribute__((section(".rsp")));
@@ -257,10 +259,11 @@ static void init_data(void)
 	set_quad(&r->cull[12], 23, 4, 29, -4, 0, 0xFF00FFFF);  /* front, horario: se ve */
 	set_quad(r->quad_j, -22, -24, -10, -28, 0, 0xFFFFFFFF);
 	set_quad(r->quad_k, 24, 30, 30, 26, 0, 0xFFFFFFFF);
-	/* N y O (expect.h): sombreado (255, 128, 255, 128) → S = (1, 0,5, 1),
+	set_quad(r->quad_n, -10, 28, -6, 24, 0, 0xFFFFFFFF);
+	/* P y Q (expect.h): sombreado (255, 128, 255, 128) → S = (1, 0,5, 1),
 	 * Sa = 0,5. */
-	set_quad(r->quad_n, 16, -29, 21, -31, 0, 0xFF80FF80);
-	set_quad(r->quad_o, 23, -29, 28, -31, 0, 0xFF80FF80);
+	set_quad(r->quad_p, 16, -29, 21, -31, 0, 0xFF80FF80);
+	set_quad(r->quad_q, 23, -29, 28, -31, 0, 0xFF80FF80);
 	for (int i = 0; i < 16; i++) {
 		r->red[i] = rgba16(31, 0, 0);
 		r->blue[i] = rgba16(0, 0, 31);
@@ -308,6 +311,10 @@ static void init_data(void)
 			r->ci[(y * 16 + x) / 2] = (uint8_t)(x << 4 | (x + 1));
 	for (int i = 0; i < 16; i++)
 		r->palette[i] = rgba16((unsigned)i * 2, (unsigned)i * 2, (unsigned)i * 2);
+	/* N: 8×8, mitad izquierda roja opaca y derecha café con alfa 0. */
+	for (int y = 0; y < 8; y++)
+		for (int x = 0; x < 8; x++)
+			r->edge[y * 8 + x] = x < 4 ? rgba16(31, 0, 0) : (uint16_t)(rgba16(20, 10, 4) & ~1u);
 	/* L y M (expect.h): verde y una paleta con el índice 5 azul; el cuadro
 	 * GFXTEST_CHANGE_FRAME cambia el texel (3,3) y el índice 5. */
 	for (int i = 0; i < 16; i++) {
@@ -527,7 +534,7 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	sp_tri2(&dl, 0, 1, 2, 0, 2, 3);
 	sp_texture(&dl, 0, 0, 0, 0);
 
-	/* N: 2 ciclos, (TEXEL0 − 0)·TEXEL1 + 0 y luego (COMBINED − 0)·SHADE +
+	/* P: 2 ciclos, (TEXEL0 − 0)·TEXEL1 + 0 y luego (COMBINED − 0)·SHADE +
 	 * 0; amarillo en la tile 0 y magenta en la 1: rojo × S = (1, 0, 0).
 	 * Textura × textura: no cabe en la combinación lineal del RSX (y la
 	 * aproximación de antes daría amarillo × S). */
@@ -555,10 +562,10 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	}
 	sp_texture(&dl, 0xFFFF, 0xFFFF, 0, 1);
 	sp_geometry(&dl, G_CULL_BACK | G_CULL_FRONT | G_ZBUFFER | G_LIGHTING | G_TEXTURE_GEN, G_SHADE | G_SHADING_SMOOTH);
-	sp_vertex(&dl, r->quad_n, 4, 0);
+	sp_vertex(&dl, r->quad_p, 4, 0);
 	sp_tri2(&dl, 0, 1, 2, 0, 2, 3);
 
-	/* O: la niebla por luz de GoldenEye: ciclo 0 (TEXEL0 − ENV)·SHADE_ALPHA
+	/* Q: la niebla por luz de GoldenEye: ciclo 0 (TEXEL0 − ENV)·SHADE_ALPHA
 	 * + ENV, ciclo 1 (COMBINED − 0)·SHADE + 0, con ENV azul y Sa = 0,5:
 	 * (0,5, 0,5, 0,5) × S = (0,5, 0,25, 0,5). Sombreado × sombreado: la
 	 * aproximación de antes (sin el factor Sa) daría T0 × S = (1, 0,5, 0). */
@@ -571,7 +578,7 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 			      7u << 6 | 7u << 3 | 6u;
 		cmd(&dl, 0xFC000000u | hi, lo);
 	}
-	sp_vertex(&dl, r->quad_o, 4, 0);
+	sp_vertex(&dl, r->quad_q, 4, 0);
 	sp_tri2(&dl, 0, 1, 2, 0, 2, 3);
 	sp_texture(&dl, 0, 0, 0, 0);
 
@@ -602,6 +609,24 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	dp_tile_size(&dl, 0, 0, 0, 15, 3);
 	dp_othermode(&dl, CYC_COPY | TT_RGBA16, 0);
 	sp_texrect(&dl, 0, 250, 220, 265, 223, 0, 0, 4 << 10, 1 << 10);
+
+	/* N: textura RGBA16 con alfa de 1 bit y G_RM_TEX_EDGE (FORCE_BL, in·0 +
+	 * in·1, cobertura × alfa; el medidor de energía de SM64): la mitad con
+	 * alfa 0 no se escribe y se ve el fondo. */
+	sp_matrix(&dl, &r->ident, G_MTX_LOAD | G_MTX_PROJECTION);
+	dp_texture_image(&dl, FMT_RGBA, SIZ_16, 1, r->edge);
+	dp_tile(&dl, FMT_RGBA, SIZ_16, 0, 0, 7, 0, 0, 0, 0);
+	dp_sync(&dl, SYNC_LOAD);
+	dp_load_block(&dl, 7, 64, 1024);
+	dp_sync(&dl, SYNC_PIPE);
+	dp_tile(&dl, FMT_RGBA, SIZ_16, 2, 0, 0, 0, 2, 3, 0);
+	dp_tile_size(&dl, 0, 0, 0, 7, 7);
+	dp_othermode(&dl, CYC_1CYCLE | TF_POINT, RM_TEX_EDGE);
+	dp_combine(&dl, CC_A_0, CC_B_0, CC_C_0, CC_TEXEL0, CCA_0, CCA_0, CCA_0, CC_TEXEL0);
+	sp_texture(&dl, 0xFFFF, 0xFFFF, 0, 1);
+	sp_vertex(&dl, r->quad_n, 4, 0);
+	sp_tri2(&dl, 0, 1, 2, 0, 2, 3);
+	sp_texture(&dl, 0, 0, 0, 0);
 
 	/* Tramo de otro microcódigo (como S2DEX en Zelda OoT): G_LOAD_UCODE a
 	 * otra dirección, comandos que la HLE debe saltar (si los ejecutara, el
