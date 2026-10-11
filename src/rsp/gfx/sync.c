@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — backend síncrono de la HLE gráfica. Ver backend.h.
  */

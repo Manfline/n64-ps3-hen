@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — tramo S2DEX2 dentro de una tarea de la familia F3DEX2: Zelda OoT
  * carga S2DEX con G_LOAD_UCODE para copiar el fondo de una sala

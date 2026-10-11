@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — rasterizador de referencia en software para la salida de la
  * HLE gráfica (src/rsp/gfx/gfx.h), solo para el host.

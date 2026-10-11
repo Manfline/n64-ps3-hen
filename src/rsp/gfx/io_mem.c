@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — E/S de la HLE gráfica con memoria directa (host y PPE).
  *

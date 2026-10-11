@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — RDP a bajo nivel: el flujo de comandos que llega por
  * DPC_START/DPC_END (lo que produce el RSP con el microcódigo real, o el

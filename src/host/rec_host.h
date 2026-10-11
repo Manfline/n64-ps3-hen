@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — caché de código del recompilador en un host Linux (ppc64 con
  * qemu; tools/test-rec.sh). Compartido por salsa64-run y salsa64-unit.

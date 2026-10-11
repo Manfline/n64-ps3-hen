@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — HLE del microcódigo gráfico de Perfect Dark (variante de Rare
  * de Fast3D; GLideN64 la llama F3DPD).

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — HLE de los microcódigos 3D (F3D, F3DEX, F3DEX2): matrices,
  * viewport, luces y transformación de vértices.

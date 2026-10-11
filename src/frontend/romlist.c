@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — lista de ROMs para el menú del frontend. Ver romlist.h.
  */

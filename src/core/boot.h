@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — arranque HLE: se salta la PIF ROM (IPL1/IPL2) y el IPL3 del
  * cartucho, y deja la máquina como la dejaría el IPL3 al saltar al programa.

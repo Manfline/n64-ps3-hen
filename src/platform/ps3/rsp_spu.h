@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — RSP a bajo nivel en un SPE (PS3): backend salsa64_lle_backend
  * que manda el microcódigo real al programa src/spu/rsp como trabajos de

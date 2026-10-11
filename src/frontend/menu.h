@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — menú para elegir ROM, con una disposición inspirada en el XMB
  * (sin ningún recurso de Sony: todo se dibuja con rsxkit/ui.h).

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — backends de la HLE de audio para el núcleo
  * (salsa64_audio_backend).

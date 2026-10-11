@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — E/S de la HLE de audio en el SPE: la RDRAM se lee y escribe
  * por DMA.

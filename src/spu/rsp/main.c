@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — programa SPU del RSP a bajo nivel (Fase 6).
  *

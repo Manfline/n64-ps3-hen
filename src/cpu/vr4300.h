@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — CPU NEC VR4300 (MIPS III, 64 bits): estado y API del intérprete.
  *

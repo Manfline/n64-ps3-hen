@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — audio del frontend en la PS3: la HLE de las tareas de audio (en
  * el SPE 1) y la salida de lo que produce el AI por el puerto de audio del

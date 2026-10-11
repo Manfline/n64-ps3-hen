@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — piezas internas del intérprete del VR4300: decodificación,
  * traducción de direcciones y accesos a memoria.

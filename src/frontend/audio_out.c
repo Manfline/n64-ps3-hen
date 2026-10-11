@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — audio del frontend en la PS3. Ver audio_out.h.
  *

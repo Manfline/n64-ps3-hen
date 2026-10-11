@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — arranque HLE. Ver boot.h y docs/cpu-vr4300.md ("Arranque HLE").
  *

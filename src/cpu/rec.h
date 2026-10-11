@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — recompilador dinámico MIPS (VR4300) → PowerPC64 para el PPE.
  *

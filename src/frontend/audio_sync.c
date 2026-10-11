@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — sincronía entre el audio emulado y la salida real. Ver
  * audio_sync.h. Código propio; WSOLA (solapamiento y suma con búsqueda de

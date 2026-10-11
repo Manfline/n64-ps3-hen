@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — LLE del RSP: unidad escalar, COP0 y despacho. Ver lle.h.
  *

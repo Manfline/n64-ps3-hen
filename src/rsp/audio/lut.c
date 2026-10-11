@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — tabla de interpolación de RESAMPLE (64 fases × 4 coeficientes,
  * Q15). Diseño propio, no la tabla del microcódigo de Nintendo: sinc de

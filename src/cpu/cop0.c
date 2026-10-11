@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — COP0 del VR4300: registros de control, excepciones, TLB,
  * Count/Compare e interrupciones.

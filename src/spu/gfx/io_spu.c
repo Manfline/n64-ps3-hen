@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — E/S de la HLE gráfica en el SPE: la RDRAM se lee por DMA y la
  * salida se escribe por DMA desde búferes dobles del local store.

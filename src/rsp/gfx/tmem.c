@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — TMEM del RDP: cargas desde la RDRAM y decodificación de una
  * tile a RGBA8888 para el RSX.

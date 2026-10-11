@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — piezas de la FPU (COP1) que comparten el camino completo
  * (cop1.c) y el camino rápido, que se integra en el bucle del intérprete

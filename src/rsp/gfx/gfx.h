@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — HLE de los microcódigos gráficos (F3D, F3DEX, F3DEX2) y del
  * RDP: interfaz.

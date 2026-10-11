@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — listas de audio de prueba (selftest.c): una RDRAM de mentira
  * con entradas seudoaleatorias y una lista de comandos en la dirección 0

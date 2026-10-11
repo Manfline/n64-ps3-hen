@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — backend gráfico en un SPE (PS3): cada tarea gráfica del RSP
  * se publica como un trabajo de lib/spukit al programa src/spu/gfx. El

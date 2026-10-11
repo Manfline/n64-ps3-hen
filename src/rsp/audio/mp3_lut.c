@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — ventana de síntesis del MP3 (33 bloques × 2 × 16, Q15). Sale
  * de la ventana estándar de MPEG-1 (ISO/IEC 11172-3, D[i], vía

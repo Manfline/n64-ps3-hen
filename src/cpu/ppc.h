@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — codificación de instrucciones PowerPC64 para el recompilador.
  *

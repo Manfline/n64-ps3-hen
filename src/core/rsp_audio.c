@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — tareas de audio del RSP: reconocer el ABI de la lista de audio
  * y el backend de la HLE (src/rsp/audio). Ver rcp.h.

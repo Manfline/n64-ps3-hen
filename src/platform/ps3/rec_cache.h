@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — caché de código del recompilador en la PS3 (src/cpu/rec.h).
  *

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — intérprete del VR4300: bucle, decodificación, enteros, saltos,
  * cargas y almacenamientos. COP0 en cop0.c y COP1 en cop1.c.

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — HLE de las tareas JPEG del RSP (tipo 4 de OSTask).
  *

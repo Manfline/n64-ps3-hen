@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — MIPS Interface (MI): modo, versión e interrupciones del RCP.
  * La salida (MI_INTR & MI_INTR_MASK) es la línea IP2 del VR4300.

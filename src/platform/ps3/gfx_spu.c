@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — backend gráfico en un SPE. Ver gfx_spu.h.
  */

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — backend de la HLE de audio en un SPE (PS3): cada tarea de audio
  * del RSP se publica como un trabajo de lib/spukit al programa src/spu/audio

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Salsa64 — ejecutor de línea de comandos para el host (salsa64-run), con el
 # gcc nativo del contenedor. Desde la raíz: tools/build.sh host
 #
