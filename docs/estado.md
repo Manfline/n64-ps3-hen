@@ -4,9 +4,16 @@
 
 Se lanza cuando cierre el trabajo de texturas de Kokiri. Los tres casos están en
 `src/rdp/rdp.c` (qué destino del RSX se presenta en cada campo):
-- [ ] **Banjo-Kazooie parpadea** muy fuerte (visto por el autor): en campos
-      alternos sale otra imagen (vieja, negra o la RDRAM). Revisar cómo alterna
-      sus framebuffers y si usa efectos que leen el framebuffer.
+- [ ] **Banjo-Kazooie parpadea** muy fuerte (visto por el autor en la PS3;
+      video de 1,6 s en la intro, Banjo tocando el banjo). Tres síntomas: (a)
+      ~1 de cada 3 cuadros del video (30 cps) sale casi negro con solo la parte
+      de arriba de la cabeza de Banjo: imagen vieja o a medio dibujar
+      presentada entre las buenas; (b) toda la escena sale desplazada a la
+      derecha y abajo (mitad izquierda vacía, Banjo cortado en el borde
+      derecho, el pasto solo en un rectángulo abajo): revisar origen/escala del
+      VI, viewport y scissor; (c) falta el fondo (cielo y paisaje negros).
+      Revisar cómo alterna sus framebuffers y si usa efectos que leen el
+      framebuffer.
 - [ ] **Menú de pausa de Zelda negro en la PS3:** el juego pone color images
       de 64 de ancho en la dirección del framebuffer y se pierde el destino de
       320 («0 del RSX»); en el rasterizador de la Mac se ve bien.
