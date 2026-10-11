@@ -62,10 +62,17 @@ después esta rama). Diseño en docs/rec-ppe.md.
 Validado en qemu-ppc64 (todo con el árbol final): unitarias 365/365 en los
 cinco modos (incluida la FPU por memoria), nemu64-test 433 fallas (línea
 base) con y sin registros fijos y con caché de 3 MB (93 desalojos), vitest
-OK (también con 2 MB), `--lockstep` sin diferencias en nemu64-test y vitest
-y en Perfect Dark 300 M ciclos; el lockstep de GoldenEye hasta la presa
-(7,5 G ciclos) y el de nemu64-test con desalojos se anotan abajo al
-terminar. `tools/build.sh` sin advertencias.
+OK (también con 2 MB), `--lockstep` sin diferencias en nemu64-test (también
+con caché de 3 MB y 92 desalojos), vitest y Perfect Dark 300 M ciclos;
+`tools/build.sh test-host` 365/365 y `tools/test-roms.sh` en verde. El
+lockstep de GoldenEye hasta la presa (7,5 G ciclos, 283,6 M salidas
+comparadas) pasó **sin diferencias** con la FPU residente (9d1eba0); con el
+árbol final (saltos internos) corre al cerrar esta entrada y se anota en la
+tabla de docs/rec-ppe.md. Dos errores que solo el lockstep encontró: el camino lento de
+LWC1 cargando el registro residente de la RDRAM (Perfect Dark abortaba) y
+los saltos internos dejando basura en los registros escritos por las
+instrucciones saltadas (nemu64-test, bloque 80014c84). `tools/build.sh`
+sin advertencias.
 
 **Para la PS3 (A/B con el mismo paquete, archivos vacíos en
 /dev_hdd0/salsa64/):** `jit-fpu-memoria` (FPU como antes), `jit-cop0-viejo`

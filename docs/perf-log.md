@@ -595,16 +595,17 @@ y solo cambia lo que cuesta cada operación, que qemu no mide. GoldenEye
 hasta la presa (128 s, `goldeneye-dam.pad`, caché de 24 MB del host), por
 campo, antes → con los ayudantes de COP0 y el desalojo por tramos:
 
-| | FPU residente (9d1eba0) | + COP0 y tramos (d719987) |
-|---|---|---|
-| Llamadas a C | 1590 (COP0 1236, FPU 120, E/S 235) | 1016 (COP0 661, FPU 120) |
-| Entradas desde C | 482 | 265 (el ERET sigue por `exit_jr`) |
-| Salidas por redirect (ERET, excepción) | 218 | 0 |
-| Instrucciones interpretadas | 578 | 578 |
-| Llamadas al intérprete en 128 s | 10,4 M | 6,0 M |
-| Entradas en 128 s | 3,69 M | 2,03 M |
-| Bloques compilados / vaciados / desalojos | 26 581 / 2 / — | 20 819 / 1 / 10 |
-| Instrucciones por bloque | 11,9 | 12,0 |
+| | FPU residente (9d1eba0) | + COP0 y tramos (d719987) | + saltos internos (15d6724) |
+|---|---|---|---|
+| Llamadas a C | 1590 (COP0 1236, FPU 120, E/S 235) | 1016 (COP0 661, FPU 120) | 1016 |
+| Entradas desde C | 482 | 265 (el ERET sigue por `exit_jr`) | 264 |
+| Salidas por redirect (ERET, excepción) | 218 | 0 | 0 |
+| Instrucciones interpretadas | 578 | 578 | 578 |
+| Llamadas al intérprete en 128 s | 10,4 M | 6,0 M | 6,0 M |
+| Entradas en 128 s | 3,69 M | 2,03 M | 2,02 M |
+| Ejecuciones de bloques en 128 s | 643 M | 637 M | **509 M** (−21 %: los saltos internos ya no cortan) |
+| Bloques compilados / vaciados / desalojos | 26 581 / 2 / — | 20 819 / 1 / 10 | 17 308 / 1 / 8 |
+| Instrucciones por bloque | 11,9 | 12,0 | 12,3 |
 
 **Pendiente: la PS3 real** (A/B con el mismo paquete SLSA00093 y los
 archivos `jit-fpu-memoria`, `jit-cop0-viejo`, `jit-sin-tramos`, `jit-viejo`
