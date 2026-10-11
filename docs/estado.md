@@ -183,6 +183,31 @@ Hecho (rama `charming-allen-a8e4b3`, con main 485a747):
   `/dev_hdd0/salsa64/` como `banjo.z64` y `conker.z64`; `embedded` quedó
   en `file:perfectdark.z64`, como estaba al empezar.
 
+- **Después, pedido en main:**
+  - `tools/test-rec.sh` se caía en la suite `sync` bajo qemu: SIGILL por
+    `mffscrni` en `sin`/`cos`/`floor` de la glibc estática de ppc64 (Power
+    ISA 3.0; qemu 7.2 solo lo acepta desde power9). `tools/qemu-ppc64.sh`
+    usa `-cpu power9` (commit df3d652, rama `qemu-sync-fix` sobre
+    main); test-rec en verde, también `--lockstep`, y con naudio y MP3
+    (297 pruebas en big-endian).
+  - **FILTER** (nead: Zelda, Majora…) corregido contra el microcódigo real
+    con la herramienta del LLE (`--lle=all --lle-check-audio`, rama del
+    LLE): la tabla de la nota no se escribe; la de detrás del estado pasa a
+    `(anterior + nota + 1) >> 1` y con ella se filtra. La HLE dejaba el
+    filtro a la mitad (−6 dB) y reescribía la tabla de la nota. Se oye en
+    los primeros 15 s de Zelda (WAVs viejo/nuevo en `build/naudio/`).
+    **PS3 real: Zelda «suena bien»** (el autor), SPE 2,1 ms por tarea.
+  - **MIXER** redondea el producto como el microcódigo (+0x4000): con el
+    LLE, Zelda pasa de 952 k a 210 k muestras distintas, Perfect Dark de
+    1,80 M a 1,46 M, SM64 de 788 a 761 tareas distintas.
+  - naudio contra el microcódigo real (LLE): Conker 476 tareas idénticas;
+    Perfect Dark idéntico hasta la tarea 117 (cuando empieza a sonar). Lo
+    que queda es RESAMPLE (tabla propia, a propósito) y el estado de
+    ENVMIXER (formato propio: la HLE lee como suyo el que escribe el LLE,
+    así que solo se compara la primera tarea de cada voz). Para medir
+    naudio hace falta subir AUD_MAX_RANGES en el host (con 10 los tramos se
+    juntan con memoria que el CPU escribe mientras tanto).
+
 Notas:
 - Banjo-Kazooie en la PS3: el **video parpadea** (uno de cada dos cuadros
   sale incompleto: sin suelo y con medio Banjo) y el fondo sale negro. Es
@@ -197,6 +222,9 @@ Falta:
 - [ ] Oír Conker cuando el trabajo de F3D lo haga avanzar (F3DEXBG).
 - [ ] Probar Donkey Kong 64 (sin respaldo; la tabla es la del original).
 - [ ] MusyX (Rogue Squadron, Resident Evil 2, Indiana Jones…).
+- [ ] Opcional, con el LLE integrado: estado de ENVMIXER en el formato del
+      microcódigo (para poder comparar más allá de la primera tarea de
+      cada voz) y revisar los ±1 LSB que quedan en naudio.
 - [ ] docs/compatibilidad.md: la columna de audio de Banjo, Conker y
       Perfect Dark (queda para main, es del censo).
 ## 2026-10-10 — Arranque del CIC 6105 y censo de compatibilidad
