@@ -84,14 +84,19 @@ superficie R5G6B5 **en memoria principal mapeada**, filtro lineal), espera
 la barrera y convierte a RGBA5551 escribiendo en la RDRAM
 (`rsxkit_pixels_565_to_5551`, 4 píxeles por palabra). Desde entonces el
 destino es «del CPU» (`cpu_owned`) hasta que el RDP lo vuelva a dibujar.
-La emulación solo espera la copia cuando la imagen **acaba de aparecer**
-(no se pidió en la tarea anterior: el fondo de la pausa de Zelda, una vez
-por pausa). Si la misma imagen se pide en tareas seguidas (la intro de
-Conker dibuja cada tarea una color image de 292 que no se presenta y el
-RDP no lee: 150 copias esperadas en 5 s, 16–18 ms cada una), la copia se
-hace sin esperar en uno de los dos búferes grandes y el CPU recibe el
-cuadro anterior: un efecto por cuadro queda con un cuadro de retraso en
-vez de frenar la emulación.
+Qué copias espera la emulación (`readbacks_wanted`, hilo de emulación,
+recorriendo los registros de la tarea): las imágenes auxiliares de 16
+bits (las que no son un framebuffer reciente del VI, de cualquier ancho)
+cuando **acaban de aparecer** (no se pidieron en la tarea anterior: el fondo
+de la pausa de Zelda, una vez por pausa), y las **chicas (≤ 64 KB) que
+ningún dibujo de la tarea lee como textura**: su único lector posible es el
+CPU (Zelda redibuja a Link en `3da800/64`, entre los iconos de cada cuadro,
+y el CPU lo copia a otro búfer para la pantalla de equipo; sin esperar, el
+CPU copiaba basura). Las demás van sin esperar: las chicas que lee el RDP
+(iconos), y las grandes repetidas (la intro de Conker dibuja cada tarea una
+color image de 292 que no se presenta y el RDP no lee: 150 copias
+esperadas en 5 s, 16–18 ms cada una, frenaban), que se copian en un búfer
+grande y el CPU recibe el cuadro anterior.
 
 **Espejo del framebuffer presentado.** Cada campo, el framebuffer que
 muestra el VI se reduce en el RSX a un búfer y, un campo después, el PPE
@@ -99,7 +104,11 @@ lo escribe en la RDRAM (solo las filas que muestra el VI; sin esperas).
 Mario Kart fabrica con el CPU la textura de la cámara del túnel de Luigi
 Raceway leyendo el framebuffer: sin el espejo la pantalla salía negra. En
 la PS3 cuesta 0,0 ms medidos por campo en presentación (GoldenEye en Dam
-sigue a 45,8 campos/s, su rango).
+sigue a 45,8 campos/s, su rango). El espejo no pisa durante 32 tareas la
+memoria de una copia reciente que se solape con el framebuffer (Link en sus
+primeros 14 KB; la cobertura plena de VISCVG, que el filtro del CPU lee
+durante ~1 s): sin eso, el CPU copiaba la esquina de la pantalla de pausa
+en vez de a Link.
 
 Las imágenes chicas (iconos, pantallas) no se esperan: al terminar la tarea
 que las dibujó se encola una **copia espejo** (solo las filas que llegaron

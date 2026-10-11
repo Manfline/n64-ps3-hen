@@ -27,17 +27,25 @@ primera copia de una imagen y las de tareas seguidas van sin esperar (el
 CPU recibe el cuadro anterior). Sin probar en la PS3; el host no reproduce
 esa escena.
 
-**Para el próximo turno de la PS3** (paquete `salsa64-framebuffer.pkg`
-ya subido con lo de abajo, falta instalarlo):
-1. Zelda, pausa: ¿sigue el haz verde al abrir? (arreglo: sincronía tras
-   copiar al scratch). Fuera de la casa, R dos veces → EQUIPMENT: Link.
-   Si sigue roto, `gfxdump` en esa pantalla para ver de dónde lee la
-   textura.
-2. Conker, intro con START y A: en el log, «copias a la RDRAM» debe ser
-   1–2 por ventana y «copias espejo» muchas (antes 150 esperadas por
-   ventana); se ve igual que antes.
-3. Mario Kart, túnel: la cámara se sigue viendo (el espejo por campo no
-   cambió).
+**Turno corto del 2026-10-11 (tarde):** el haz verde al abrir la pausa
+ya no sale (sincronía tras el scratch). Link en la pantalla de equipo
+fuera de la casa seguía roto: el volcado mostró que ahí el **CPU** copia a
+Link desde `3da800/64` (los primeros 14 KB del framebuffer) y no el RDP, y
+dos cosas lo rompían: la copia iba sin esperar (los iconos se dibujan en
+esa misma imagen cada tarea, así que contaba como «repetida») y el espejo
+del framebuffer por campo pisaba esa zona antes de que el CPU la copiara.
+Arreglado en la rama (se espera la copia de las imágenes chicas que ningún
+dibujo lee; el espejo respeta 32 tareas las zonas recién copiadas; umbral
+de «chica» 64 KB para no frenar a Conker). **Sin verificar en la PS3:** la
+PS3 pasó al JIT; el paquete con todo está en `build/salsa64/
+salsa64-framebuffer.pkg` (sin subir: el de la consola no tiene el umbral).
+
+**Para el próximo turno de la PS3** (subir e instalar el paquete):
+1. Zelda fuera de la casa: pausa → R dos veces → EQUIPMENT, cambiar de
+   equipo rápido y despacio: Link siempre bien. Si no, `gfxdump` ahí.
+2. Conker, intro con START y A: «copias a la RDRAM» 1–2 por ventana y
+   «copias espejo» muchas; se ve igual que antes.
+3. Mario Kart, túnel: la cámara se sigue viendo.
 
 **La lista con la que se probó (2026-10-11):**
 
@@ -171,21 +179,16 @@ Pendiente:
       del autor, 2026-10-11). Igual con `fbfx.cfg` = 0: previo a esta
       rama, HLE (trabajo de F3D/texturas). Reproducirlo en el host requiere un
       pad hasta la tienda.
-- [ ] **Link en la pantalla de equipo, fuera de la casa, sale roto en la
-      PS3** (dentro de la casa sale bien; el fondo de la pausa, bien en los
-      dos). En el host, fuera (campo ~16550 del pad) Link sale bien. Falta
-      una prueba en la PS3 que lo aísle: `gfxdump` en la pantalla de equipo
-      y mirar de qué lee la textura (espejo de `289600/64` tarde o reciclado
-      de ranuras).
+- [ ] **Link en la pantalla de equipo, fuera de la casa** (PS3): causa
+      encontrada y arreglada en la rama (arriba); falta confirmarlo en la
+      consola con el último paquete.
 - [ ] **Controles en Zelda:** a veces R en la pausa no responde hasta
       pulsarlo muchas veces (el autor, PS3). El log no muestra esperas por
       copias (0 tareas esperadas, 100 % de NTSC): no es de esta rama;
       revisar el mapeo o el PIF (zona del frontend).
-- [ ] **Al abrir la pausa, un haz de polígonos verdes del centro a la
-      esquina superior izquierda durante ~1 s** (PS3). Candidato: las
-      franjas que leen el scratch del destino ligado justo después de
-      `rsxkit_target_copy` sin esperar al RSX. Ya se sincroniza tras la
-      copia (sin probar en la PS3).
+- [x] Haz de polígonos verdes al abrir la pausa (PS3): era la lectura del
+      scratch recién copiado sin esperar al RSX; con la sincronía ya no
+      sale (confirmado por el autor el 2026-10-11).
 - [ ] Perfect Dark y Conker: copias del z-buffer, sombra, desenfoque;
       color images de 32 y 8 bits.
 - [ ] Reducción con filtro de caja (hoy bilineal) y, si pesa, en un SPE.
