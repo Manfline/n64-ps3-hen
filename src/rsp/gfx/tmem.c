@@ -79,7 +79,7 @@ static void note_load(struct gfx_state *g, uint32_t tmem, uint32_t bytes, uint32
 	l->row_bytes = row_bytes;
 	l->tmem = (uint16_t)(tmem & TMEM_MASK);
 	l->bytes = (uint16_t)(bytes > 4096 ? 4096 : bytes);
-	l->line = (uint16_t)line;
+	l->line = (uint16_t)line;  /* 0: LOADBLOCK, texels seguidos */
 	l->pitch = g->timg_width;
 	l->siz = g->timg_siz;
 	l->fmt = g->timg_fmt;
@@ -91,13 +91,23 @@ static void provenance(const struct gfx_state *g, const struct gfx_tile *t, stru
 {
 	for (uint32_t k = 1; k <= GFX_LOADS; k++) {
 		const struct gfx_load *l = &g->loads[(g->load_next - k) & (GFX_LOADS - 1)];
-		if (!l->bytes || !l->line || l->siz != t->siz || l->line != t->line)
+		if (!l->bytes || l->siz != t->siz || !t->line)
 			continue;
 		if (t->tmem < l->tmem || t->tmem >= (uint32_t)l->tmem + l->bytes)
 			continue;
 		uint32_t off = t->tmem - l->tmem;
-		tex->src_addr = l->addr + (off / l->line) * l->row_bytes + off % l->line;
-		tex->src_pitch = l->pitch;
+		if (l->line == 0) {
+			/* LOADBLOCK: texels seguidos (libultra manda ancho 1 en SETTIMG):
+			 * las filas son las de la tile que lee, y el paso de la imagen
+			 * de origen, el ancho de esa fila. */
+			tex->src_addr = l->addr + off;
+			tex->src_pitch = (uint16_t)(t->line * 2 / half_bytes(t->siz));
+		} else {
+			if (l->line != t->line)
+				continue;
+			tex->src_addr = l->addr + (off / l->line) * l->row_bytes + off % l->line;
+			tex->src_pitch = l->pitch;
+		}
 		tex->src_siz = l->siz;
 		tex->src_fmt = l->fmt;
 		return;
@@ -125,9 +135,8 @@ void gfx_load_block(struct gfx_state *g, uint32_t w0, uint32_t w1)
 		g->res->dl_errors++;
 		return;
 	}
-	/* Los texels van seguidos: las filas de la TMEM son las de la imagen. */
-	uint32_t row_bytes = (uint32_t)g->timg_width * hb / 2;
-	note_load(g, t->tmem, bytes, row_bytes, src, row_bytes);
+	/* Los texels van seguidos: línea 0 (la tile que lea decide las filas). */
+	note_load(g, t->tmem, bytes, 0, src, 0);
 	if (g->timg_siz == G_IM_SIZ_32b) {
 		uint32_t base = t->tmem / 2;
 		for (uint32_t k = 0; k < bytes / 8; k++) {

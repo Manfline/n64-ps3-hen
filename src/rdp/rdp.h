@@ -56,6 +56,7 @@ struct salsa64_rdp_stats {
 	uint32_t readbacks, readback_waits, readback_late;
 	uint64_t us_readback, us_readback_wait;
 	uint32_t mirrors, mirrors_skipped;  /* copias espejo (sin esperar) y las que no cupieron */
+	uint32_t frames_mirrored;           /* campos cuyo framebuffer se copió a la RDRAM */
 	uint32_t tex_rsx, tex_rdram, tex_self, primes;
 };
 

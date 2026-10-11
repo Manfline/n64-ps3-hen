@@ -107,7 +107,7 @@ struct gfx_load {
 	uint32_t row_bytes;  /* bytes por fila de la imagen de origen */
 	uint16_t tmem;       /* tramo escrito en la TMEM, en bytes (32 bits: la mitad baja) */
 	uint16_t bytes;
-	uint16_t line;       /* bytes por fila en la TMEM (LOADBLOCK: los de la imagen) */
+	uint16_t line;       /* bytes por fila en la TMEM (LOADBLOCK: 0, texels seguidos) */
 	uint16_t pitch;      /* texels por fila de la imagen de origen */
 	uint8_t siz, fmt;
 };

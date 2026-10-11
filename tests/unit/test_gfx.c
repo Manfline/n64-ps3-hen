@@ -1148,8 +1148,9 @@ static void gfx_texture_provenance(void)
 	dl(0xE4000000 | (31 << 2) << 12 | (31 << 2), 0);
 	dl(0xE1000000, 0);
 	dl(0xF1000000, 0x10000400);
-	/* El mismo contenido (ceros) desde otra dirección. */
-	dl(0xFD100000 | 31, TEX_PA + 0x4000);
+	/* El mismo contenido (ceros) desde otra dirección, con ancho 1 en
+	 * SETTIMG como lo manda libultra (gDPLoadTextureBlock). */
+	dl(0xFD100000 | 0, TEX_PA + 0x4000);
 	dl(0xF5100000, 0x07000000);
 	dl(0xF3000000, 0x07000000 | 1023 << 12 | 256);
 	dl(0xF5100000 | 8 << 9, 0x00000000);

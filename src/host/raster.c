@@ -51,7 +51,8 @@ bool raster_trace_fb;
 uint32_t raster_field;
 int raster_fbfx = 2;
 static struct rdp_vi_ring vi_ring;
-static uint32_t primes, readbacks, mirrors;
+static uint32_t primes, readbacks, mirrors, frames;
+static struct gfx_job last_job;  /* la RDRAM, para el espejo de cada campo */
 
 static void prime(const struct gfx_job *job, int slot);
 
@@ -448,6 +449,7 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 	tg.field = ++task_no;
 	rdp_targets_task(&tg);
 	scratch_slot = -1;
+	last_job = *job;
 #ifdef SALSA64_GFX_TRACE
 	ndraw = 0;
 	pix_x = pix_y = -1;
@@ -560,6 +562,19 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 void raster_vi(uint32_t origin, uint32_t width)
 {
 	rdp_vi_ring_push(&vi_ring, origin, width);
+	/* Como la PS3: el framebuffer que muestra el VI se copia a la RDRAM
+	 * cada campo (lo que el CPU lea de él es el cuadro, no basura). */
+	if (raster_fbfx < 2 || !last_job.rdram_ea)
+		return;
+	for (int i = 0; i < RDP_TARGETS_MAX; i++) {
+		const struct rdp_target *t = &tg.t[i];
+		if (t->used && t->bpp == 2 && t->width == width && origin >= t->addr &&
+		    origin < t->addr + t->width * 2 * t->lh) {
+			readback(&last_job, i, t->lh);
+			frames++;
+			return;
+		}
+	}
 }
 
 void raster_fb_stats(uint32_t *n_readbacks, uint32_t *n_primes, uint32_t *tex_rsx, uint32_t *tex_rdram)

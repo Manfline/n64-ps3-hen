@@ -49,7 +49,11 @@
  * esperar: búferes de 64 KB (hasta 128 × 256 a 16 bits). */
 #define MIRROR_BYTES 65536u
 #define MIRRORS      4
-#define FB_BYTES    (((RB_SLOTS + 1) * RB_SLOT + MIRRORS * MIRROR_BYTES + 0xFFFFFu) & ~0xFFFFFu)
+/* Espejo del framebuffer presentado, cada campo, sin esperar (Mario Kart
+ * reduce el cuadro con el CPU para la pantalla del túnel): un búfer grande
+ * más, después de los RB_SLOTS y el de cebado. */
+#define FRAME_SLOT  (RB_SLOTS + 1)
+#define FB_BYTES    (((RB_SLOTS + 2) * RB_SLOT + MIRRORS * MIRROR_BYTES + 0xFFFFFu) & ~0xFFFFFu)
 #define POOL_BYTES  (SETS_BYTES + CACHE_BYTES + FB_BYTES)
 #define MAX_DEPTHS  2
 #define RB_PER_TASK 4   /* color images que una tarea puede pedir copiar */
@@ -132,6 +136,7 @@ static struct {
 		bool used;
 		uint32_t addr, width, lw, rows, fence;
 	} mirrors[MIRRORS];
+	struct mirror frame;         /* el espejo del framebuffer presentado */
 } rdp;
 
 static void acquire(void *ctx, struct gfx_job *job);
@@ -235,6 +240,7 @@ uint32_t salsa64_rdp_reset(void)
 	rdp.readback_done = 0;
 	rdp.rb_late_logged = false;
 	memset(rdp.mirrors, 0, sizeof rdp.mirrors);
+	memset(&rdp.frame, 0, sizeof rdp.frame);
 	memset(&rdp.vi_ring, 0, sizeof rdp.vi_ring);
 	memset(rdp.surf_dirty, 0, sizeof rdp.surf_dirty);
 	rdp.last_set = 0;
@@ -321,6 +327,11 @@ static uint32_t scissor_bottom(const struct set *s, uint32_t off, uint32_t cmd_b
  * `lw` píxeles por fila con paso `pitch`. */
 static void to_rdram(const uint8_t *src, uint32_t pitch, uint32_t addr, uint32_t width, uint32_t lw, uint32_t rows)
 {
+	/* El RSX escribió el búfer a espaldas de la caché del PPE: soltar las
+	 * líneas que pudieran quedar de la lectura anterior. */
+	for (uint32_t off = 0; off < rows * pitch; off += 128)
+		__asm__ volatile("dcbf 0,%0" ::"r"(src + off) : "memory");
+	__asm__ volatile("sync" ::: "memory");
 	for (uint32_t y = 0; y < rows; y++)
 		rsxkit_pixels_565_to_5551((uint16_t *)(rdp.rdram + addr + y * width * 2), (const uint16_t *)(src + y * pitch),
 					  lw);
@@ -329,6 +340,12 @@ static void to_rdram(const uint8_t *src, uint32_t pitch, uint32_t addr, uint32_t
 /* Copias espejo cuya barrera ya pasó: a la RDRAM y el búfer queda libre. */
 static void readbacks_finish(bool wait)
 {
+	struct mirror *f = &rdp.frame;
+	if (f->used && (wait ? (rsxkit_fence_wait(f->fence), true) : rsxkit_fence_done(f->fence))) {
+		to_rdram(rdp.rb + FRAME_SLOT * RB_SLOT, RB_PITCH, f->addr, f->width, f->lw, f->rows);
+		f->used = false;
+		rdp.stats.frames_mirrored++;
+	}
 	for (int k = 0; k < MIRRORS; k++) {
 		struct mirror *m = &rdp.mirrors[k];
 		if (!m->used)
@@ -338,7 +355,7 @@ static void readbacks_finish(bool wait)
 		else if (!rsxkit_fence_done(m->fence))
 			continue;
 		uint32_t pitch = (m->lw * 2 + 63) & ~63u;
-		to_rdram(rdp.rb + (RB_SLOTS + 1) * RB_SLOT + k * MIRROR_BYTES, pitch, m->addr, m->width, m->lw, m->rows);
+		to_rdram(rdp.rb + (RB_SLOTS + 2) * RB_SLOT + k * MIRROR_BYTES, pitch, m->addr, m->width, m->lw, m->rows);
 		m->used = false;
 		rdp.stats.mirrors++;
 	}
@@ -747,7 +764,7 @@ static void translate(uint32_t n)
 			continue;
 		}
 		rsxkit_rect src = { 0, 0, t->lw * rdp.scale, rows * rdp.scale };
-		if (rsxkit_target_read(rdp.surf[i], &src, rdp.rb_off + (RB_SLOTS + 1) * RB_SLOT + k * MIRROR_BYTES, pitch,
+		if (rsxkit_target_read(rdp.surf[i], &src, rdp.rb_off + (RB_SLOTS + 2) * RB_SLOT + k * MIRROR_BYTES, pitch,
 				       t->lw, rows, RSXKIT_RGB565) != RSXKIT_OK)
 			continue;
 		rdp.bound_t = -1;
@@ -802,6 +819,34 @@ uint32_t salsa64_rdp_tasks_done(void)
 	return rdp.finished;
 }
 
+/* Espejo del framebuffer que se presenta: el RSX lo reduce a un búfer y, un
+ * campo después (readbacks_finish), el PPE lo escribe en la RDRAM. Así lo
+ * que el CPU lea del framebuffer (Mario Kart reduce el cuadro para la
+ * pantalla del túnel) es el cuadro anterior, no basura. Solo las filas que
+ * el VI muestra; sin esperar; si el espejo anterior aún no pasó la
+ * barrera, este campo se salta. */
+static void frame_mirror(int slot, uint32_t rows)
+{
+	const struct rdp_target *t = &rdp.tg.t[slot];
+	readbacks_finish(false);
+	if (rdp.frame.used || !rdp.rdram || rdp.fbfx < 2 || t->bpp != 2 || t->lw > RB_MAX_W || rows > RB_MAX_H ||
+	    !rows || t->addr + t->width * 2 * rows > rdp.rdram_size)
+		return;
+	if (rows > t->lh)
+		rows = t->lh;
+	rsxkit_rect src = { 0, 0, t->lw * rdp.scale, rows * rdp.scale };
+	if (rsxkit_target_read(rdp.surf[slot], &src, rdp.rb_off + FRAME_SLOT * RB_SLOT, RB_PITCH, t->lw, rows,
+			       RSXKIT_RGB565) != RSXKIT_OK)
+		return;
+	rdp.bound_t = -1;
+	rdp.frame.used = true;
+	rdp.frame.addr = t->addr;
+	rdp.frame.width = t->width;
+	rdp.frame.lw = t->lw;
+	rdp.frame.rows = rows;
+	rdp.frame.fence = rsxkit_fence();
+}
+
 bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const rsxkit_view *view,
 			 const struct salsa64_overscan *crop, rsxkit_rect *out)
 {
@@ -839,9 +884,10 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 	if (view && view->scale == RSXKIT_SCALE_FIT && src.w <= sc->width && src.h <= sc->height) {
 		rsxkit_view one = { RSXKIT_SCALE_INTEGER, view->filter, 0.0f };
 		rsxkit_target_present(rdp.surf[p.slot], &src, src.w, src.h, &one, out);
-		return true;
+	} else {
+		rsxkit_target_present(rdp.surf[p.slot], &src, w, h, view, out);
 	}
-	rsxkit_target_present(rdp.surf[p.slot], &src, w, h, view, out);
+	frame_mirror(p.slot, p.y0 + p.h);
 	return true;
 }
 
