@@ -263,7 +263,8 @@ static void emit_cache(struct ctx *c, unsigned k)
 	int slow = new_label(c), resume = new_label(c);
 	unsigned base = get(c, I_RS(i), T_ADDR);
 	E(c, ppc_addi(T_ADDR, base, (int16_t)i));
-	E(c, ppc_andi_(0, T_ADDR, 3));
+	E(c, ppc_rlwinm(0, T_ADDR, 0, 30, 31));
+	E(c, ppc_cmpwi(0, 0, 0));
 	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(0, PPC_EQ), slow);
 	bind(c, resume);
 	emit_slow_exec(c, k, k, slow, resume);
@@ -398,7 +399,9 @@ static void emit_fpu_range(struct ctx *c, bool is_s, unsigned bits, unsigned e, 
 static void emit_fcr31_gate(struct ctx *c, uint32_t mask, int slow)
 {
 	E(c, ppc_lwz(6, OFF(fcr31), R_CPU));
-	E(c, ppc_andi_(0, 6, mask));
+	E(c, ppc_li(0, (int32_t)mask));  /* andi. es microcódigo */
+	E(c, ppc_and(0, 6, 0));
+	E(c, ppc_cmpwi(0, 0, 0));
 	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(0, PPC_EQ), slow);
 }
 
@@ -503,7 +506,7 @@ static void emit_fpu_from_w(struct ctx *c, bool to_s, int32_t oa, int32_t od, in
 	E(c, ppc_cntlzw(12, 11));
 	E(c, ppc_slw(11, 11, 12));       /* el 1 más alto en el bit 31 */
 	if (to_s) {
-		E(c, ppc_andi_(5, 11, 0xFF));   /* lo que no cabe en 24 bits */
+		E(c, ppc_rlwinm(5, 11, 0, 24, 31));  /* lo que no cabe en 24 bits */
 		E(c, ppc_rlwinm(0, 11, 24, 31, 31));
 		E(c, ppc_add(11, 11, 0));
 		E(c, ppc_addi(11, 11, 0x7F));

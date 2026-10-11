@@ -137,6 +137,11 @@ Detalles que mantienen la exactitud:
 | r30 | RDRAM |
 | r31 | `struct salsa64_cpu` |
 | r3–r12, r0 | temporales |
+| f14–f25 | los 12 `cpu->fpr[p]` más usados del bloque («FPU residente») |
+| f26–f31 | constantes: 1,0, 0,0 y los bordes de la franja segura en S y D |
+| f0–f13 | temporales de la FPU |
+| cr2, cr3.3 | FCR31 perezoso: C, causa I, bandera I, compuerta |
+| cr4 | condición del salto (sobrevive al delay slot) |
 
 Al entrar se cargan los registros que el bloque lee antes de escribir. Cada
 registro modificado se escribe en `cpu->gpr` apenas recibe su último valor
@@ -232,6 +237,87 @@ La prueba `executed_conversions_match_full` (8000 instrucciones: SQRT, las
 conversiones con enteros con fracción, empates, bordes de 2³¹ y 2⁵³ y de la
 franja de CVT.S.D, CFC1/CTC1) compara el CPU con el camino completo y, con
 el recompilador, exige que más de 3000 hayan corrido sin el intérprete.
+
+### Lo que el PPE hace en microcódigo (2026-10-11)
+
+Del manual del Cell (tabla A-1, A.1.3): una instrucción microcodificada
+vacía el pipeline y tarda al menos 11 ciclos. Lo son **todas las formas con
+punto** (`andi.`, `andis.`, `and.`, `rlwinm.`, `add.`…), los desplazamientos
+y rotaciones por registro (`slw`, `srw`, `sld`, `srd`, `sraw`, `srad`,
+`rldcl`, `rlwnm`), `lwa`/`lha`, `mtcrf` de más de un campo (`mtocrf` de uno
+cuesta un ciclo), `mcrfs` y `mtfsf*`, `lmw`/`stmw`. `mfcr` cuesta ~34 ciclos
+y `mffs` 11–28. Lo demás: `fcmpu` deja su bit del CR al ciclo siguiente;
+`fadd`/`fmul`/`frsp`/`fsel`/`fabs`/`fctid`/`fcfid` 10 ciclos; `fdiv` 56–74 y
+`fsqrt` 66–84 (sin pipeline); enteros 2 ciclos; `mulli` 6, `mulld` 15 (y
+detienen el pipeline); cargas 2.
+
+El emisor usaba `andi.` en cada ANDI de MIPS (muy frecuente) y en la
+compuerta de cada operación de la FPU, `andis.` a la entrada de cada bloque
+con COP1 y `mtcrf 0x38` en cada salida a C. Ahora ANDI es `rlwinm` (máscara
+de unos seguidos) o `li`+`ori`+`and`; las pruebas de bits son
+`rlwinm`+`cmpwi`; la salida usa tres `mtocrf`. Quedan por registro los
+desplazamientos de SLLV y compañía y de LWL/LWR sueltos (no hay otra forma;
+los pares LWL/LWR van byte a byte).
+
+### FPU residente (2026-10-11)
+
+Hasta aquí cada operación de la FPU cargaba sus operandos de `cpu->fpr`
+(los bits a un registro entero para clasificarlos y el valor a uno de punto
+flotante), escribía el resultado y leía, modificaba y guardaba FCR31: unas
+40 palabras y ~90 ciclos por ADD.S (bench), con load-hit-store entre
+operaciones dependientes. Ahora (`rec_emit_fpu.h`; `SALSA64_REC_OPT_FPU_MEM`
+y el archivo `jit-fpu-memoria` en la PS3 vuelven a lo de antes para medir):
+
+- **Registros residentes.** Los 12 `cpu->fpr[p]` más usados del bloque
+  viven en f14–f25 (no volátiles: sobreviven a las llamadas a C; la entrada
+  guarda y repone f14–f31). Un registro del PPE tiene el valor en un
+  formato: S (la mitad baja como double, lo que da `lfs`) o D (los 64 bits);
+  un uso en otro formato lo recarga de casa. Los vivos a la entrada se cargan
+  en el formato de su primer uso; al volver al cuerpo (bucle) se reponen los
+  que cambiaron de formato.
+- **Casa siempre al día.** Cada resultado se escribe en `cpu->fpr` en cuanto
+  está (el almacenamiento espera por el valor, pero la comparación ya esperó
+  por él): ninguna salida ni llamada a C escribe registros de la FPU y el
+  intérprete (camino lento) siempre lee lo correcto. LWC1/LDC1 cargan el
+  registro residente directo de la RDRAM (`lfsx`/`lfdx`) además de escribir
+  casa; SWC1/SDC1 de un valor residente almacenan con `stfsx`/`stfdx`.
+- **Clasificación en punto flotante.** Mover bits entre la FPU y los enteros
+  pasa por memoria (load-hit-store), y `fcmpu` da su bit al ciclo siguiente:
+  la franja segura de `fpu_fast_band` (|x| en [2⁻⁶⁰, 2⁶¹) en S, [2⁻⁴⁴⁰,
+  2⁴⁴¹) en D, o cero) se prueba con `fabs` y tres `fcmpu` contra constantes
+  que la entrada deja en f27–f31 (1,0 en f26 para CEIL/FLOOR); NaN e
+  infinito fallan todas las comparaciones. Las comparaciones de los operandos
+  se emiten antes de la operación y corren en paralelo con ella; un solo
+  salto al camino lento junta todo con crops.
+- **Inexacto sin TwoSum.** La suma en double `r = a + b` es exacta si y solo
+  si `r − a == b` y `r − b == a` (dos restas independientes y dos
+  comparaciones, en vez de la cadena de cuatro operaciones dependientes del
+  TwoSum, ~40 ciclos): si la suma es inexacta, el error ε = (a + b) − r es
+  un múltiplo no nulo del ulp del operando con ulp menor, y al restarle el
+  otro operando a r queda ese operando menos ε, que no redondea de vuelta a
+  él; si es exacta, las dos restas son exactas. En S además `frsp` ≠ r
+  (reemplaza la prueba de exponentes); producto, cociente y raíz por el
+  residuo con fma como en `cop1.c`.
+- **FCR31 perezoso.** C, la causa I de la última operación, la bandera I
+  acumulada y «RM ≠ 0 o I habilitada» viven en cr2 (no volátil; cr3.3
+  guarda «I habilitada» para ROUND/TRUNC/CEIL/FLOOR): una operación cuesta
+  uno o dos crops, BC1 un `bc` sobre el bit y C.cond un `fcmpu` y un crop.
+  Se escriben en `cpu->fcr31` al salir del bloque (con dos o tres saltos,
+  una vez por bloque), antes de que el intérprete corra una instrucción de
+  COP1 y en CFC1; después de una instrucción de COP1 por el intérprete se
+  vuelven a derivar de la memoria, y si dejó una causa que no es I (Z, V, O,
+  U sin excepción) el bloque sale, porque el estado perezoso no la
+  representa.
+- **CVT.S.W y CVT.D.W con `fcfid`.** MTC1 y LWC1 dejan además la palabra con
+  signo extendido en `cpu->rec_fw[p]` cuando una conversión la va a leer, y
+  la conversión la carga con `lfd` (un load-hit-store en vez de dos y sin el
+  `slw` microcodificado de la normalización en enteros).
+
+La prueba `executed_sequences_match_interp` (3000 secuencias de 2 a 8
+instrucciones de COP1 con cargas, almacenamientos, MTC1/MFC1, CFC1/CTC1 y
+operandos al azar, en un solo bloque) compara el resultado entero
+(registros, FCR31, excepciones, memoria) con el intérprete sobre el mismo
+estado inicial, y exige que más de 600 corran enteras en nativo.
 
 ### Cargas y almacenamientos no alineados
 

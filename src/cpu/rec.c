@@ -27,8 +27,12 @@
 #define OFF(field) ((int32_t)offsetof(struct salsa64_cpu, field))
 /* Sin REC_NATIVE (host que no es ppc64) no se usan, pero compilan igual. */
 #define REC_UNUSED __attribute__((unused))
-#define FRAME   256   /* marco de la entrada: 112 de enlace y parámetros + r14–r31 */
+#define FRAME   400   /* marco de la entrada: 112 de enlace y parámetros + r14–r31 + f14–f31 */
 #define SAVE    112
+#define FSAVE   256
+
+/* rec_emit_fpu.h: constantes en f26–f31 (ver rec.h). */
+const double salsa64_rec_fconst[6] = { 1.0, 0.0, 0x1p-60, 0x1p61, 0x1p-440, 0x1p441 };
 #define SCRATCH_WORDS  (2 * SALSA64_REC_BUF_WORDS)
 #define MAX_BLOCK_WORDS (2 * SALSA64_REC_BUF_WORDS)
 #define MAX_BLOCK_BYTES (4 * SALSA64_REC_MAX_INSNS)
@@ -264,6 +268,11 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	w[n++] = ppc_stdu(1, -FRAME, 1);
 	for (unsigned r = 14; r <= 31; r++)
 		w[n++] = ppc_std(r, SAVE + 8 * (int32_t)(r - 14), 1);
+	for (unsigned r = 14; r <= 31; r++)  /* la FPU residente (rec_emit_fpu.h) usa f14–f31, no volátiles */
+		w[n++] = ppc_stfd(r, FSAVE + 8 * (int32_t)(r - 14), 1);
+	n = pre_li64(w, n, 11, (uintptr_t)salsa64_rec_fconst);
+	for (unsigned k = 0; k < 6; k++)
+		w[n++] = ppc_lfd(26 + k, 8 * (int32_t)k, 11);
 	w[n++] = ppc_mr(31, 3);
 	w[n++] = ppc_ld(30, OFF(rdram), 31);
 	w[n++] = ppc_ld(29, OFF(cycles), 31);
@@ -314,11 +323,15 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 			w[n++] = ppc_std(SALSA64_REC_PIN_PPC + k, OFF(gpr) + 8 * salsa64_rec_pin[k], 31);
 	for (unsigned r = 14; r <= 31; r++)
 		w[n++] = ppc_ld(r, SAVE + 8 * (int32_t)(r - 14), 1);
+	for (unsigned r = 14; r <= 31; r++)
+		w[n++] = ppc_lfd(r, FSAVE + 8 * (int32_t)(r - 14), 1);
 	w[n++] = ppc_addi(1, 1, FRAME);
 	w[n++] = ppc_ld(0, 16, 1);
 	w[n++] = ppc_mtlr(0);
 	w[n++] = ppc_lwz(12, 8, 1);
-	w[n++] = ppc_mtcrf(0x38, 12);  /* cr2–cr4, los no volátiles */
+	w[n++] = ppc_mtocrf(0x20, 12);  /* cr2–cr4, los no volátiles (mtcrf de varios campos es microcódigo) */
+	w[n++] = ppc_mtocrf(0x10, 12);
+	w[n++] = ppc_mtocrf(0x08, 12);
 	w[n++] = PPC_BLR;
 
 	/* exit_jr: KSEG0, alineada y dentro de la RDRAM → map → blocks → código.

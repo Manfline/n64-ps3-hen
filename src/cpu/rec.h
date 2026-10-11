@@ -106,6 +106,10 @@ struct salsa64_rec_fixup {
  * páginas anotadas y no prellena, exit_jr mira solo la cabeza de xhash. Se
  * aplica al compilar y en el despachador: fijarla antes de salsa64_rec_init. */
 #define SALSA64_REC_OPT_LEGACY 8u
+/* Para medir A/B: la FPU como hasta el 2026-10-11, cada operación por
+ * cpu->fpr (rec_emit.c, emit_fpu) en vez de registros residentes y FCR31
+ * perezoso (rec_emit_fpu.h). Se aplica al compilar. */
+#define SALSA64_REC_OPT_FPU_MEM 16u
 /* Depuración (host, SALSA64_REC_OPTS): apagan una pieza nueva a la vez para
  * acotar una diferencia en --lockstep. LEGACY las apaga todas. */
 #define SALSA64_REC_DBG_NO_ENDLINK 0x100u   /* COP0 vuelve al despachador e interpreta el resto del bloque básico */
@@ -227,6 +231,11 @@ static const uint8_t salsa64_rec_pin[SALSA64_REC_PIN_N] __attribute__((unused)) 
 
 /* rec.c (interno): deja visible para el PPE el código recién escrito. */
 void salsa64_rec_sync(const void *p, size_t bytes);
+
+/* Constantes de la FPU residente (rec_emit_fpu.h): la entrada al código
+ * generado las deja en f26–f31, en este orden: 1,0; 0,0; y los bordes de la
+ * franja segura de fpu_fast_band en S (2^-60, 2^61) y en D (2^-440, 2^441). */
+extern const double salsa64_rec_fconst[6];
 
 /* rec_emit.c (interno): compila el bloque en `pc` (física `pa`, segmento
  * `seg` de rec_tlb.h) de hasta `max` instrucciones. Devuelve la palabra de
