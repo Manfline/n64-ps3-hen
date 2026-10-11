@@ -218,6 +218,21 @@ struct pending_exit {
 	uint64_t mask;     /* registros a escribir */
 };
 
+/* Estado de la FPU residente que depende del camino (rec_emit_fpu.h). */
+struct fpu_snap {
+	uint8_t ffmt[32], fw_ok[32];
+	bool ran, cw;
+};
+
+/* Salto condicional interno cuyo destino está dentro del bloque: su camino
+ * tomado se emite al llegar a la instrucción destino (cuando se sabe el
+ * estado que el código asume ahí) y salta a ella sin salir del bloque. */
+struct ijump {
+	uint8_t b, t;        /* el salto y la instrucción destino */
+	int label;           /* a dónde va el bc del salto (sección fría) */
+	struct fpu_snap snap;  /* estado después de su delay slot */
+};
+
 struct ctx {
 	struct salsa64_rec *rec;
 	uint64_t pc;
@@ -262,6 +277,10 @@ struct ctx {
 	uint8_t flive[32];                 /* formato con que se carga a la entrada (FR_NONE: no) */
 	uint8_t fw_ok[32];                 /* cpu->rec_fw[p] tiene la palabra W de p con signo extendido */
 	int exit_after_mem[SALSA64_REC_MAX_INSNS];  /* salida tras k con cpu->fcr31 ya como verdad */
+	/* Saltos internos con destino dentro del bloque. */
+	int insn_label[SALSA64_REC_MAX_INSNS];  /* etiqueta del código de la instrucción k (−1: nadie salta ahí) */
+	struct ijump ijumps[SALSA64_REC_MAX_INSNS];
+	unsigned nijumps;
 };
 
 static void restore_borrowed(struct ctx *c);
@@ -1695,11 +1714,103 @@ static void emit_branch_cond(struct ctx *c, unsigned b)
  * de r29 para que `cycles = r29 + k + 1` siga valiendo; su destino se carga
  * a la entrada (livein) para que lo que se escriba después tenga el valor
  * de antes en ese camino. */
+/* ¿El destino del salto interno en b es una instrucción del bloque a la que
+ * se puede saltar sin salir (docs/rec-ppe.md, «Saltos internos con destino
+ * dentro del bloque»)? No a un delay slot (su código vive dentro del de su
+ * salto), ni a la segunda de un par LWL/LWR (se emiten juntas), ni con la
+ * escritura temprana (sus almacenamientos diferidos se saltarían), ni en un
+ * bloque recortado. Devuelve la instrucción, o -1. */
+static int ijump_target(const struct ctx *c, unsigned b, uint64_t target)
+{
+	uint64_t off = target - c->pc;
+	if (c->temp || (c->rec->opts & SALSA64_REC_OPT_EAGER) || SALSA64_REC_OLD(c->rec, SALSA64_REC_DBG_NO_IJUMP))
+		return -1;
+	if ((off & 3) || off / 4 >= c->n)
+		return -1;
+	unsigned t = (unsigned)(off / 4);
+	if (t <= b + 1 || c->ds_of[t])
+		return -1;
+	if (t >= 1 && !c->ds_of[t - 1] && !is_branch(&c->d[t - 1]) && unaligned_pair(c, t - 1, t + 1))
+		return -1;
+	return (int)t;
+}
+
+/* Destino del salto condicional en b, sin su brinfo (para el análisis de
+ * la entrada, antes de emitir). */
+static uint64_t branch_target_of(const struct ctx *c, unsigned b)
+{
+	return insn_pc(c, b) + 4 + ((uint64_t)(int64_t)(int16_t)c->d[b].w << 2);
+}
+
+/* Registros que hay que cargar a la entrada por los saltos internos con
+ * destino dentro del bloque: lo que escriben las instrucciones que un salto
+ * se salta tiene que valer lo de la entrada en su camino tomado (los
+ * registros del bloque se escriben a cpu->gpr al salir, y lo que se lee
+ * después del destino tiene que ser lo de antes), como el delay slot de un
+ * branch-likely interno. Lo escrito antes del salto (o por él y su delay
+ * slot) ya vale lo mismo en los dos caminos. */
+static uint64_t ijump_livein(const struct ctx *c)
+{
+	uint64_t livein = 0, before = 0;
+	for (unsigned b = 0; b + 1 < c->n; b++) {
+		const struct dec *d = &c->d[b];
+		bool internal = !c->ds_of[b] && (d->kind == K_BRANCH || d->kind == K_BRANCH_L) &&
+				!(c->has_branch && b == c->n - 2);
+		if (internal) {
+			int t = ijump_target(c, b, branch_target_of(c, b));
+			if (t >= 0) {
+				uint64_t skipped = 0;
+				for (unsigned j = b + 2; j < (unsigned)t; j++)
+					skipped |= c->d[j].writes;
+				livein |= skipped & ~(before | d->writes | c->d[b + 1].writes);
+			}
+		}
+		before |= d->writes;
+	}
+	return livein;
+}
+
+/* Anota el salto interno de b a t con el estado de ahora (después de su
+ * delay slot); su camino tomado se emite al llegar a t (emit_ijumps_to). */
+static int ijump_add(struct ctx *c, unsigned b, unsigned t)
+{
+	struct ijump *ij = &c->ijumps[c->nijumps++];
+	ij->b = (uint8_t)b;
+	ij->t = (uint8_t)t;
+	ij->label = new_label(c);
+	fpu_snapshot(c, &ij->snap);
+	if (c->insn_label[t] < 0)
+		c->insn_label[t] = new_label(c);
+	return ij->label;
+}
+
+/* Al llegar a la instrucción k: los caminos tomados de los saltos internos
+ * que van a ella (sección fría): el estado de la FPU como lo asume el código
+ * de k, los ciclos (de b + 2 a k: el código de k asume k) y el salto. */
+static void emit_ijumps_to(struct ctx *c, unsigned k)
+{
+	if (c->insn_label[k] >= 0)
+		bind(c, c->insn_label[k]);
+	for (unsigned j = 0; j < c->nijumps; j++) {
+		const struct ijump *ij = &c->ijumps[j];
+		if (ij->t != k)
+			continue;
+		unsigned sec = c->sec;
+		c->sec = SEC_COLD;
+		bind(c, ij->label);
+		fpu_reconcile(c, &ij->snap);
+		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)ij->b + 2 - (int32_t)k));
+		emit_b(c, c->insn_label[k], false);
+		c->sec = sec;
+	}
+}
+
 static void emit_internal_branch(struct ctx *c, unsigned b)
 {
 	bool likely = c->d[b].kind == K_BRANCH_L;
 	emit_branch_cond(c, b);
 	const struct brinfo *br = &c->br[b];
+	int t = ijump_target(c, b, br->target);
 	if (likely) {
 		struct fpu_snap snap;
 		int nt = new_label(c);
@@ -1708,9 +1819,13 @@ static void emit_internal_branch(struct ctx *c, unsigned b)
 		c->in_ds = true;
 		emit_insn(c, b + 1);
 		c->in_ds = false;
-		writeback(c, c->written);
-		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)b + 2));
-		emit_exit_to(c, br->target);
+		if (t >= 0) {
+			emit_b(c, ijump_add(c, b, (unsigned)t), false);
+		} else {
+			writeback(c, c->written);
+			E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)b + 2));
+			emit_exit_to(c, br->target);
+		}
 		bind(c, nt);
 		fpu_restore(c, &snap);
 		E(c, ppc_addi(R_CYCLES, R_CYCLES, -1));
@@ -1719,6 +1834,10 @@ static void emit_internal_branch(struct ctx *c, unsigned b)
 	c->in_ds = true;
 	emit_insn(c, b + 1);
 	c->in_ds = false;
+	if (t >= 0) {
+		emit_bc(c, br->bo, br->bi, ijump_add(c, b, (unsigned)t));
+		return;
+	}
 	int taken = new_label(c);
 	emit_bc(c, br->bo, br->bi, taken);
 	unsigned sec = c->sec;
@@ -1831,11 +1950,13 @@ static uint32_t fetch(const struct salsa64_rec *rec, uint32_t pa)
 static void allocate(struct ctx *c, bool loop)
 {
 	unsigned count[34] = { 0 }, nslots = 0;
-	uint8_t slots[N_CACHE];
+	uint8_t slots[N_CACHE + 1];
 	uint64_t used = 0;
+	bool has_jr = false;  /* sin JR/JALR, r26 (su destino) queda para el bloque */
 	for (unsigned k = 0; k < c->n; k++) {
 		uint64_t m = c->d[k].reads | c->d[k].writes;
 		used |= m;
+		has_jr |= c->d[k].kind == K_JUMP_REG;
 		for (unsigned r = 1; r < 34; r++)
 			if (m & BIT(r))
 				count[r]++;
@@ -1849,9 +1970,11 @@ static void allocate(struct ctx *c, bool loop)
 		unsigned demand = (unsigned)__builtin_popcountll(used & ~pins & ~1ull);
 		for (unsigned r = R_CACHE0; r < SALSA64_REC_PIN_PPC; r++)
 			slots[nslots++] = (uint8_t)r;
+		if (!has_jr)
+			slots[nslots++] = R_TARGET;
 		for (unsigned k = 0; k < SALSA64_REC_PIN_N; k++) {
 			unsigned m = salsa64_rec_pin[k], p = SALSA64_REC_PIN_PPC + k;
-			if (loop && !(used & BIT(m)) && nslots < demand && nslots < N_CACHE) {
+			if (loop && !(used & BIT(m)) && nslots < demand && nslots < sizeof slots) {
 				c->borrowed |= BIT(m);
 				slots[nslots++] = (uint8_t)p;
 			} else {
@@ -1864,6 +1987,8 @@ static void allocate(struct ctx *c, bool loop)
 	} else {
 		for (unsigned r = R_CACHE0; r < R_CACHE0 + N_CACHE; r++)
 			slots[nslots++] = (uint8_t)r;
+		if (!has_jr)
+			slots[nslots++] = R_TARGET;
 	}
 	for (unsigned slot = 0; slot < nslots; slot++) {
 		unsigned best = 0;
@@ -1986,6 +2111,7 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	for (unsigned k = 0; k < n; k++) {
 		any_cop1 |= c->d[k].cop1;
 		c->exit_before[k] = c->exit_after[k] = c->exit_after_mem[k] = -1;
+		c->insn_label[k] = -1;
 	}
 	/* ¿Bucle? El salto final vuelve al inicio (emit_taken). */
 	bool loop = false;
@@ -2011,6 +2137,7 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 			if (c->d[k].writes & BIT(r))
 				c->last_write[r] = (uint8_t)(k + 1);
 	}
+	livein |= ijump_livein(c);  /* lo que se saltan los saltos internos con destino dentro del bloque */
 
 	rec->nbuf[0] = rec->nbuf[1] = 0;
 	rec->nlabels = rec->nfixups = 0;
@@ -2064,6 +2191,7 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	}
 
 	for (unsigned k = 0; k < n; k++) {
+		emit_ijumps_to(c, k);
 		if (c->has_branch && k == n - 2) {
 			emit_branch(c, k);
 			break;

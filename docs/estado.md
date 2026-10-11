@@ -48,11 +48,16 @@ después esta rama). Diseño en docs/rec-ppe.md.
   llamadas a C (COP0 1236, FPU 120, E/S 235), 11,9 instrucciones por bloque,
   0,80 de COP1 y 3,94 de memoria por bloque; registros más usados: v0 59 %,
   ra 57, a0 51, a1 42, sp 42, a2 33, v1 33, s0 31, at 30, a3 29, t6 26. Los
-  dos bloques más calientes (3,1 % cada uno) son un bucle de comparación
-  partido porque un salto condicional apunta dentro del mismo bloque
-  (pendiente: saltos internos con destino dentro del bloque). Más registros
-  fijos entre bloques (s0, at, t6) queda pendiente: con r26 (destino de JR)
-  y r27/r28 ocupados no hay dónde sin medir primero.
+  dos bloques más calientes (3,1 % cada uno) eran un bucle de comparación
+  partido porque un salto condicional apunta dentro del mismo bloque.
+- **Saltos internos con destino dentro del bloque** («Saltos internos con
+  destino dentro del bloque» en docs/rec-ppe.md): el camino tomado salta al
+  código de la instrucción destino sin salir, reponiendo el estado de la FPU
+  residente y de FCR31 que el código de ahí asume y ajustando `r29`. Y en
+  un bloque sin JR/JALR, r26 es un registro más para el bloque (5 con los
+  fijos). Más registros fijos entre bloques (s0 31 %, at 30 %, t6 26 %)
+  queda pendiente: r27 y r28 están ocupados y liberarlos cuesta cargas por
+  bloque; medir primero.
 
 Validado en qemu-ppc64 (todo con el árbol final): unitarias 365/365 en los
 cinco modos (incluida la FPU por memoria), nemu64-test 433 fallas (línea

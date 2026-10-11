@@ -592,11 +592,19 @@ tramos»), y por qué debería bajar los ~50 ciclos por instrucción:
 En qemu las cuentas del perfil (llamadas a C, instrucciones interpretadas)
 no cambian con la FPU residente: el dominio del camino rápido es el mismo
 y solo cambia lo que cuesta cada operación, que qemu no mide. GoldenEye
-hasta la presa (128 s, `goldeneye-dam.pad`), por campo: 1590 llamadas a C
-(COP0 1236, FPU 120, E/S 235), 482 entradas, 578 instrucciones
-interpretadas; 11,9 instrucciones por bloque, 0,80 de COP1 y 3,94 de
-memoria. Con los ayudantes de COP0 las 1236 llamadas de COP0 pasan a ~400
-TLBWR + ~400 ERET con rutinas chicas (las MTC0 son nativas).
+hasta la presa (128 s, `goldeneye-dam.pad`, caché de 24 MB del host), por
+campo, antes → con los ayudantes de COP0 y el desalojo por tramos:
+
+| | FPU residente (9d1eba0) | + COP0 y tramos (d719987) |
+|---|---|---|
+| Llamadas a C | 1590 (COP0 1236, FPU 120, E/S 235) | 1016 (COP0 661, FPU 120) |
+| Entradas desde C | 482 | 265 (el ERET sigue por `exit_jr`) |
+| Salidas por redirect (ERET, excepción) | 218 | 0 |
+| Instrucciones interpretadas | 578 | 578 |
+| Llamadas al intérprete en 128 s | 10,4 M | 6,0 M |
+| Entradas en 128 s | 3,69 M | 2,03 M |
+| Bloques compilados / vaciados / desalojos | 26 581 / 2 / — | 20 819 / 1 / 10 |
+| Instrucciones por bloque | 11,9 | 12,0 |
 
 **Pendiente: la PS3 real** (A/B con el mismo paquete SLSA00093 y los
 archivos `jit-fpu-memoria`, `jit-cop0-viejo`, `jit-sin-tramos`, `jit-viejo`

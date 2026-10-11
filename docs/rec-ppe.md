@@ -125,12 +125,36 @@ Detalles que mantienen la exactitud:
   internos son hacia adelante.
 - `SALSA64_REC_DBG_NO_SUPER` (y LEGACY) vuelven a cortar en cada salto.
 
+### Saltos internos con destino dentro del bloque (2026-10-11)
+
+Los dos bloques más ejecutados de GoldenEye (3,1 % cada uno) eran un bucle
+de comparación partido en dos: el cuerpo termina en el `bne` que vuelve al
+inicio, pero un `beql` del cuerpo salta a ese mismo `bne` (el final del
+bucle, dentro del bloque), y el camino tomado salía enlazado a un bloque
+de dos instrucciones que a su vez enlazaba de vuelta: dos salidas, dos
+entradas y la escritura y recarga de registros en cada vuelta. Ahora un
+salto condicional interno cuyo destino es una instrucción del mismo bloque
+(después de su delay slot) salta a su código sin salir
+(`ijump_target`): su camino tomado se emite en la sección fría cuando el
+emisor llega a la instrucción destino, porque ahí se sabe el estado que el
+código asume (`emit_ijumps_to`): los registros de la FPU residente se
+reponen en el formato que asume y lo pendiente de FCR31 que el código de
+ahí no escribiría se escribe antes (o se deriva de memoria lo que sí
+escribiría y en este camino no se calculó; `fpu_reconcile`), y `r29` se
+ajusta en `(b + 2) − t` para que `cycles = r29 + k + 1` siga valiendo. Los
+registros enteros no necesitan nada: el reparto es por bloque y las
+escrituras a `cpu->gpr` van por el conjunto acumulado, que incluye las de
+antes del salto. No se salta a un delay slot (su código vive dentro del de
+su salto), ni a la segunda de un par LWL/LWR, ni con la escritura temprana
+(saltaría sus almacenamientos diferidos), ni en bloques recortados.
+`SALSA64_REC_DBG_NO_IJUMP` lo apaga.
+
 ### Registros
 
 | PPE | Uso |
 |---|---|
 | r14–r25 | los 12 registros MIPS más usados del bloque (GPR, HI, LO) |
-| r26 | destino de JR/JALR (sobrevive al delay slot) |
+| r26 | destino de JR/JALR (sobrevive al delay slot); en un bloque sin JR/JALR, uno más para el bloque |
 | r27 | `sched->next` (se recarga después de cada llamada a C) |
 | r28 | `code_flags` |
 | r29 | `cycles` al entrar al bloque |

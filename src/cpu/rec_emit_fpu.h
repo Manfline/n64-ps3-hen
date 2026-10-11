@@ -903,12 +903,8 @@ static void fpu_loop_back(struct ctx *c)
 }
 
 /* Estado que depende del camino (el delay slot de un branch-likely interno
- * corre solo si se tomó). */
-struct fpu_snap {
-	uint8_t ffmt[32], fw_ok[32];
-	bool ran, cw;
-};
-
+ * corre solo si se tomó; un salto interno con destino dentro del bloque
+ * llega con otro estado): struct fpu_snap está en rec_emit.c. */
 static void fpu_snapshot(const struct ctx *c, struct fpu_snap *s)
 {
 	memcpy(s->ffmt, c->ffmt, sizeof s->ffmt);
@@ -923,6 +919,46 @@ static void fpu_restore(struct ctx *c, const struct fpu_snap *s)
 	memcpy(c->fw_ok, s->fw_ok, sizeof c->fw_ok);
 	c->fpu_ran = s->ran;
 	c->fc_written = s->cw;
+}
+
+/* Un salto interno llega a la instrucción actual con el estado `s` (el de
+ * después de su delay slot); el código de aquí en adelante asume el estado
+ * actual. Deja los registros y los bits de FCR31 como los asume (en la
+ * sección fría, en el camino tomado). */
+static void fpu_reconcile(struct ctx *c, const struct fpu_snap *s)
+{
+	if (!c->fpu_res)
+		return;
+	for (unsigned p = 0; p < 32; p++) {
+		if (!c->fmap[p])
+			continue;
+		if (c->ffmt[p] != FR_NONE && s->ffmt[p] != c->ffmt[p])
+			E(c, c->ffmt[p] == FR_S ? ppc_lfs(c->fmap[p], fhome_lo(p), R_CPU) : ppc_lfd(c->fmap[p], fhome(p), R_CPU));
+		if (c->fw_ok[p] && !s->fw_ok[p]) {
+			E(c, ppc_lwz(T_X, fhome_lo(p), R_CPU));
+			E(c, ppc_extsw(T_X, T_X));
+			E(c, ppc_std(T_X, fhome_w(p), R_CPU));
+		}
+	}
+	/* Lo pendiente que el código de aquí no va a escribir, a memoria; lo que
+	 * el código de aquí sí va a escribir y en este camino no se calculó, de
+	 * memoria (en este camino no corrió ninguna operación desde la entrada,
+	 * así que la bandera I acumulada es 0). */
+	if ((s->ran && !c->fpu_ran) || (s->cw && !c->fc_written)) {
+		fpu_flush_bits(c, s->ran && !c->fpu_ran, s->cw && !c->fc_written);
+		if (s->ran && !c->fpu_ran)
+			E(c, ppc_crclr(FCR_IS));
+	}
+	if ((!s->ran && c->fpu_ran) || (!s->cw && c->fc_written)) {
+		E(c, ppc_lwz(0, OFF(fcr31), R_CPU));
+		if (!s->ran && c->fpu_ran) {
+			E(c, ppc_rlwinm(T_X, 0, 20, 31, 31));  /* causa I (bit 12) */
+			E(c, ppc_cmpwi(CR_T, T_X, 0));
+			E(c, ppc_crnot(FCR_IC, PPC_BI(CR_T, PPC_EQ)));
+		}
+		if (!s->cw && c->fc_written)
+			fpu_derive(c, false, false, true);
+	}
 }
 
 /* ---- Cargas y almacenamientos de COP1 (desde emit_load y emit_store) ------------------ */
