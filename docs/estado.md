@@ -108,6 +108,15 @@ depuración `-DSALSA64_DEBUG_PI` (DMA del PI) y `-DSALSA64_DEBUG_DP`
 (registros del DP, escrituras de SP_STATUS e interrupción del DP), como
 `SALSA64_DEBUG_SPMEM`.
 
+Verificación (con main 705f4ac fusionado): `tools/build.sh test-host` 326
+(7 de targets); `tools/test-roms.sh` (nemu64-test 433 con HLE y 136 con
+LLE, vitest, controles, savetest ×6, gfxtest ×3, audiotest); test-phase2 en
+RPCS3 (gfxtest 22/22, spu-jobs, frontend F3DEX2 y F3D); `tools/test-rec.sh`
+(unitarias big-endian con el recompilador ×4, nemu64-test 433, vitest);
+`tools/build.sh` sin advertencias del compilador. Paquete subido a
+`/dev_hdd0/packages/salsa64-presentacion.pkg`; los respaldos de Banjo y
+Conker ya están en `/dev_hdd0/salsa64/`.
+
 Pendiente:
 - [ ] PS3 real (paquete «Salsa64 presentación», SLSA00084): Banjo sin
       parpadeo y entero (su respaldo ya está en `/dev_hdd0/salsa64/banjo.z64`),
