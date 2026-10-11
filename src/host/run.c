@@ -45,6 +45,10 @@
  * determinista: con --lockstep la referencia recibe lo mismo en el mismo
  * ciclo. --trace-from CAMPO retrasa las trazas (--trace-exc,
  * --trace-faults, --trace-rsp, --trace-gfx) hasta ese campo.
+ * --poke "CAMPO:DIR=VALOR;…" escribe la RDRAM al empezar ese campo (8, 16
+ * o 32 bits según los dígitos hexadecimales de VALOR: 0x04, 0x0400,
+ * 0x00000400): para forzar una escena (p. ej. la energía de un personaje)
+ * sin llegar jugando. No se repite en la referencia de --lockstep.
  *
  * Depuración de la HLE gráfica (compilar con EXTRA_CFLAGS=-DSALSA64_GFX_TRACE;
  * actúa solo en las tareas que traza --trace-gfx con SALSA64_GFX_VERBOSE):
@@ -89,6 +93,7 @@
 #define MAX_TEXT       255
 #define MAX_FAIL_TEXTS 4
 #define MAX_PADS       512
+#define MAX_POKES      64
 
 enum stop_reason {
 	STOP_NONE,
@@ -126,6 +131,16 @@ static struct {
 	struct { uint64_t cycle; struct salsa64_pad pad; } applied[MAX_PADS * 2];
 	unsigned napplied, ref_next;
 } pads;
+
+/* --poke: escrituras en la RDRAM por campo del VI (`size` en bytes). */
+struct poke {
+	uint32_t field, addr, value;
+	uint8_t size;
+};
+static struct {
+	struct poke at[MAX_POKES];
+	unsigned n, next;
+} pokes;
 
 static uint32_t trace_from;        /* --trace-from: campo desde el que se traza */
 static bool trace_exc_faults_only; /* --trace-faults: sin interrupciones */
@@ -206,6 +221,56 @@ static bool pad_parse(const char *spec)
 	return pads.n > 0;
 }
 
+/* "CAMPO:DIR=VALOR;…" (o separados por ','), en orden de campo. */
+static bool poke_parse(const char *spec)
+{
+	char sep = strchr(spec, ';') ? ';' : ',';
+	while (*spec) {
+		if (pokes.n == MAX_POKES)
+			return false;
+		char *end;
+		unsigned long field = strtoul(spec, &end, 0);
+		if (end == spec || *end != ':' || (pokes.n && field < pokes.at[pokes.n - 1].field))
+			return false;
+		unsigned long addr = strtoul(end + 1, &end, 16);
+		if (*end != '=')
+			return false;
+		const char *v = end + 1;
+		if (v[0] == '0' && (v[1] == 'x' || v[1] == 'X'))
+			v += 2;
+		unsigned long value = strtoul(v, &end, 16);
+		size_t digits = (size_t)(end - v);
+		if (digits != 2 && digits != 4 && digits != 8)
+			return false;
+		uint8_t size = (uint8_t)(digits / 2);
+		addr &= 0x1FFFFFFF;
+		if (addr & (size - 1u) || (*end && *end != sep))
+			return false;
+		pokes.at[pokes.n].field = (uint32_t)field;
+		pokes.at[pokes.n].addr = (uint32_t)addr;
+		pokes.at[pokes.n].value = (uint32_t)value;
+		pokes.at[pokes.n].size = size;
+		pokes.n++;
+		spec = *end == sep ? end + 1 : end;
+	}
+	return pokes.n > 0;
+}
+
+static void poke_field(void)
+{
+	uint32_t field = n64.bus.vi.fields;
+	while (pokes.next < pokes.n && field >= pokes.at[pokes.next].field) {
+		const struct poke *k = &pokes.at[pokes.next++];
+		if (k->addr + k->size > n64.bus.rdram_size)
+			continue;
+		uint8_t *p = n64.bus.rdram + k->addr;
+		for (unsigned i = 0; i < k->size; i++)
+			p[i] = (uint8_t)(k->value >> (8 * (k->size - 1 - i)));
+		if (tracing())
+			fprintf(stderr, "campo %u: poke %08x = %0*x\n", field, k->addr, 2 * k->size, k->value);
+	}
+}
+
 static void pad_apply(struct salsa64_n64 *m, const struct salsa64_pad *pad)
 {
 	salsa64_pif_set_pad(&m->bus, 0, pad);
@@ -239,6 +304,7 @@ static bool gfx_dump(const char *path);
 static void field_done(const char *gfx_path, uint32_t frame_every)
 {
 	pad_field();
+	poke_field();
 	if (frame_every && gfx_path && tracing() && n64.bus.vi.fields % frame_every == 0) {
 		char name[512];
 		size_t len = strlen(gfx_path);
@@ -1176,7 +1242,7 @@ static bool dump_frame(const char *path)
 
 /* Opciones largas sin letra (códigos fuera de ASCII). */
 enum { OPT_REC = 0x100, OPT_LOCKSTEP, OPT_PAD, OPT_TRACE_FROM, OPT_TRACE_FAULTS, OPT_RAM_DUMP, OPT_TRACE_AUDIO,
-       OPT_FRAME_EVERY, OPT_LLE, OPT_LLE_SPEED, OPT_LLE_CHECK };
+       OPT_FRAME_EVERY, OPT_LLE, OPT_LLE_SPEED, OPT_LLE_CHECK, OPT_POKE };
 
 static void usage(FILE *out)
 {
@@ -1194,6 +1260,8 @@ static void usage(FILE *out)
 	      "      --trace-from C    trazar solo desde el campo C del VI\n"
 	      "      --pad GUION       control 1 por campos: \"300:START;306:-;400:A+Z@0,80\"\n"
 	      "                        (también CAMPO:BOTONES,… con x80/y-50); vale hasta el siguiente\n"
+	      "      --poke GUION      escribir la RDRAM al empezar un campo: \"4300:8033B21E=0x0400\"\n"
+	      "                        (8/16/32 bits según los dígitos del valor)\n"
 	      "      --frame ARCHIVO   al terminar, guardar en PPM la imagen del VI\n"
 	      "      --ram-dump ARCHIVO  al terminar, volcar la RDRAM (tools/libultra-threads.py)\n"
 	      "      --rec             usar el recompilador (host ppc64 big-endian)\n"
@@ -1235,6 +1303,7 @@ int main(int argc, char **argv)
 		{ "rec", no_argument, NULL, OPT_REC },
 		{ "lockstep", optional_argument, NULL, OPT_LOCKSTEP },
 		{ "pad", required_argument, NULL, OPT_PAD },
+		{ "poke", required_argument, NULL, OPT_POKE },
 		{ "trace-from", required_argument, NULL, OPT_TRACE_FROM },
 		{ "trace-faults", required_argument, NULL, OPT_TRACE_FAULTS },
 		{ "ram-dump", required_argument, NULL, OPT_RAM_DUMP },
@@ -1294,6 +1363,12 @@ int main(int argc, char **argv)
 		case OPT_PAD:
 			if (!pad_parse(optarg)) {
 				fprintf(stderr, "salsa64-run: --pad: no se entiende \"%s\"\n", optarg);
+				return 3;
+			}
+			break;
+		case OPT_POKE:
+			if (!poke_parse(optarg)) {
+				fprintf(stderr, "salsa64-run: --poke: no se entiende \"%s\"\n", optarg);
 				return 3;
 			}
 			break;
@@ -1457,7 +1532,7 @@ int main(int argc, char **argv)
 				fprintf(stderr, "campo %u: origen %06x %ux%u stride %u bpp %u (V_VIDEO %08x Y_SCALE %08x)\n",
 					n64.bus.vi.fields, f.origin, f.width, f.height, f.stride, f.bpp,
 					n64.bus.vi.regs[SALSA64_VI_V_VIDEO], n64.bus.vi.regs[SALSA64_VI_Y_SCALE]);
-		} else if (pads.n) {
+		} else if (pads.n || pokes.n) {
 			/* Con controles programados, campo por campo: el control cambia
 			 * justo al empezar uno. */
 			salsa64_n64_run_field(&n64);
