@@ -582,6 +582,11 @@ sugerido: recorte → líneas del logo → framebuffer → JIT.
 - Gráficos pendientes (actualizado 2026-10-11): líneas del logo de Zelda (la
   HLE muestrea mal la segunda textura de ruido del texto «NINTENDO 64»),
   defecto en la túnica de Link, líneas azules en uniones de GoldenEye.
+- **Mario Kart, Luigi Raceway: negro arriba del muro de ladrillos** (PS3,
+  2026-10-11, en todos los paquetes): debería verse el cielo en degradado y el
+  fondo de la pista. Previo a las ramas de hoy; candidato: cómo se dibuja el
+  cielo (rectángulo o triángulos con degradado al fondo). Reproducir en el host
+  con docs/pads/mk64-luigi.pad y comparar contra mupen64plus.
 - Zelda: fondos prerrenderizados hechos (2026-10-11); JPEG a punto fijo
   (68 ms por sala en el PPE, meta < 10 ms); luego Majora's Mask.
 - Recompilador: FPU en registros, más registros fijos y refill de la TLB
