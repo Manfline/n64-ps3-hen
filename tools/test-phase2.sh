@@ -51,4 +51,16 @@ rc=$?
 printf '%-10s %s\n' f3d "$(grep 'RESULTADO' build/logs/rpcs3-gfxtest-f3d.log | tail -1 | sed 's/.*RESULTADO //')"
 grep -E 'gfxtest:|gfx:' build/logs/rpcs3-gfxtest-f3d.log | sed 's/^\[[^]]*\] /           /' | head -8
 [ $rc -eq 0 ] || fail=1
+
+# El menú (sin embedded): abre desde la lista gfxtest, audiotest y la
+# variante F3D, vuelve al menú después de cada una (cierre completo: el
+# segundo gfxtest prueba que el RDP, los SPEs y las colas quedaron limpios)
+# y sale por «Salir al XMB».
+tools/rpcs3-run.py build/salsa64/salsa64.elf --timeout 600 --menu tests/roms/homebrew/salsa64-gfxtest.z64 \
+	tests/roms/homebrew/salsa64-audiotest.z64 tests/roms/homebrew/salsa64-gfxtest-f3d.z64 \
+	>build/logs/rpcs3-menu.log 2>&1
+rc=$?
+printf '%-10s %s\n' menú "$(grep 'RESULTADO' build/logs/rpcs3-menu.log | tail -1 | sed 's/.*RESULTADO //')"
+grep -E 'prueba del juego:|cierre: (estado|ATENCI)' build/logs/rpcs3-menu.log | sed 's/^\[[^]]*\] /           /' | head -8
+[ $rc -eq 0 ] || fail=1
 exit $fail

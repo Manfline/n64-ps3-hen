@@ -8,12 +8,14 @@ CPU en pantalla. Licencia **MIT** (`LICENSE`), para que también la puedan
 usar proyectos que no son GPL.
 
 Estado: hace la inicialización del RSX y la salida de video, el ciclo de
-cuadro con doble búfer, un framebuffer 2D escalado y dibujo 3D en destinos
+cuadro con doble búfer, un framebuffer 2D escalado, dibujo 3D en destinos
 de render a una escala entera (triángulos con una combinación lineal de dos
 texturas y el color del vértice, o con un fragment program generado en
-tiempo de ejecución para cualquier polinomio en esas entradas). Lo que
-viene (conversión de texturas en SPE, filtros de posprocesado) se agregará
-con la misma regla: nada específico de un sistema emulado.
+tiempo de ejecución para cualquier polinomio en esas entradas), texto con
+una fuente de mapa de bits y un 2D para menús (rectángulos, texto
+escalable y ondas animadas en el RSX). Lo que viene (conversión de
+texturas en SPE, filtros de posprocesado) se agregará con la misma regla:
+nada específico de un sistema emulado.
 
 ## Compilar
 
@@ -223,6 +225,94 @@ rsxkit_draw_triangles(&d, first, count);
 Formato del microcódigo: ver la cabecera de `src/fpgen.c` y
 `docs/rsx-notes.md` del repositorio de Salsa64.
 
+### Texto en pantalla (`rsxkit/text.h`)
+
+Para menús y mensajes: texto con una fuente de mapa de bits sobre una imagen
+en memoria principal (un **lienzo**), que después se presenta como cualquier
+otra con `rsxkit_fb_upload` + `rsxkit_fb_draw`. No usa el RSX ni PSL1GHT, no
+asigna memoria y compila en cualquier host (se puede probar en la PC).
+
+```c
+#include <rsxkit/text.h>
+
+static uint32_t px[360][640];
+rsxkit_canvas c = { px, 640, 360, 640 * 4, RSXKIT_XRGB8888 };
+rsxkit_fill(&c, 0, 0, 640, 360, 0x101820);
+rsxkit_text_draw(&c, 24, 14, "Elige un juego…", 0, 0xE8ECF0, 1);
+rsxkit_fb_upload(fb, px, 640, 360, 640 * 4, RSXKIT_XRGB8888);
+rsxkit_fb_draw(fb, &(rsxkit_view){ RSXKIT_SCALE_FIT, RSXKIT_FILTER_NEAREST, 16.0f / 9.0f }, NULL);
+```
+
+| Función | Qué hace |
+|---|---|
+| `uint32_t rsxkit_color(format, rgb)` | `0xRRGGBB` en el formato del lienzo (alfa opaco). |
+| `void rsxkit_fill(c, x, y, w, h, rgb)` | Rellena un rectángulo, recortado al lienzo. |
+| `uint32_t rsxkit_text_draw(c, x, y, utf8, max_cells, rgb, scale)` | Dibuja una cadena UTF-8 con la esquina superior izquierda de la primera celda en (x, y); cada píxel de la fuente como un cuadro de `scale × scale`. Solo pinta los píxeles de los glifos y recorta en los bordes. Si la cadena tiene más de `max_cells` celdas (0 = sin límite), dibuja `max_cells − 1` y «…». Devuelve las celdas dibujadas. |
+| `uint32_t rsxkit_text_cells(utf8)` | Caracteres de una cadena UTF-8. |
+| `int rsxkit_font_has(cp)` | ¿La fuente tiene ese punto de código? |
+
+- Fuente: la «fixed» 8x13 de X11 (paquete misc-misc de X.Org, **dominio
+  público**: «Public domain font. Share and enjoy.»), celda de
+  `RSXKIT_FONT_W × RSXKIT_FONT_H` = 8 × 13 con la línea base en la fila 11.
+  Trae ASCII, Latin-1 (acentos, ñ, ¿¡) y unos símbolos para menús: flechas
+  ← ↑ → ↓, triángulos ▲ ▼ ◀ ▶, ● ○ ■ □ •, — – « » y «…». Lo que no tiene se
+  dibuja como «?»; cada byte de una secuencia UTF-8 inválida, como «�».
+- La tabla de glifos (`src/font_8x13.h`) la genera `tools/bdf2c.py` desde
+  el BDF; para otra fuente BDF de 8 píxeles de ancho y celda fija basta
+  volver a correrlo.
+- Los píxeles se escriben en el orden de bytes de la PS3 (big-endian) sea
+  cual sea el host, en cualquiera de los formatos de `rsxkit_format`.
+- Con un lienzo de 640 × 360 a 720p (2×) o 1080 (3×) y
+  `RSXKIT_FILTER_NEAREST`, el texto sale nítido: 80 columnas × 27 filas.
+
+### 2D en el RSX para menús (`rsxkit/ui.h`)
+
+Rectángulos con degradado, texto y ondas animadas, dibujados por el RSX
+sobre la pantalla del cuadro en curso con mezcla alfa. El PPE solo arma
+unos miles de vértices por cuadro.
+
+```c
+#include <rsxkit/ui.h>
+
+rsxkit_ui_init();                               /* una vez, después de rsxkit_init */
+for (;;) {
+	rsxkit_frame_begin(0x000000);
+	rsxkit_ui_begin(1280.0f, 720.0f);           /* espacio lógico */
+	rsxkit_ui_gradient(0, 0, 1280, 720, 0x123058FF, 0x123058FF, 0x2C1048FF, 0x2C1048FF);
+	rsxkit_wave ola = { 430, 210, { 29, 13 }, { 0.85f, 2.1f }, { 0.03f, -0.055f }, 0, 2.5f,
+	                    0xFFFFFF6C, 0xFFFFFF24 };
+	rsxkit_ui_wave(&ola, segundos);
+	rsxkit_ui_text(100, 300, "Hola", 3.0f, 0xFFFFFFFF, 0);
+	rsxkit_ui_end();
+	rsxkit_frame_end();
+}
+```
+
+| Función | Qué hace |
+|---|---|
+| `int rsxkit_ui_init(void)` | Reserva 2 MB de memoria principal mapeada al RSX: el atlas de la fuente y dos búferes de vértices que se turnan con una barrera. |
+| `void rsxkit_ui_begin(lw, lh)` / `rsxkit_ui_end()` | Empieza el lote sobre la pantalla del cuadro (`rsxkit_bind_frame`) con espacio lógico `lw × lh` / lo envía. |
+| `rsxkit_ui_gradient(x, y, w, h, tl, tr, bl, br)` / `rsxkit_ui_rect(x, y, w, h, rgba)` | Rectángulo con un color por esquina / de un color. |
+| `float rsxkit_ui_text(x, y, utf8, scale, rgba, max_cells)` | Texto: a escala 1 cada carácter mide 8 × 13 unidades. Con `max_cells`, «…» al final si no cabe. Devuelve el ancho. |
+| `rsxkit_ui_wave(const rsxkit_wave *w, float t)` | Una onda a lo ancho: cresta de dos senos con línea brillante y lámina que se desvanece hacia abajo, en el instante `t`. |
+| `void rsxkit_bind_frame(lw, lh)` (`rsxkit.h`) | El 3D de `rsxkit_draw_triangles` sobre la pantalla del cuadro en vez de un destino. |
+
+- Colores `0xRRGGBBAA`. Todo con mezcla alfa, sin profundidad.
+- El atlas tiene los glifos de `rsxkit/text.h` al doble (16 × 26) con
+  **Scale2x** (la regla de EPX de Andrea Mazzoleni: las diagonales salen
+  suaves) y alfa de 8 bits; con el filtro lineal del RSX el texto escala
+  bien. Con un espacio lógico de 720 de alto en una pantalla de 720 líneas,
+  la escala 2 va un téxel por píxel.
+- Cada llamada (rectángulo, texto, láminas y líneas de una onda) va en su
+  propia llamada de dibujo al RSX: lo que se superpone se mezcla en orden
+  también en RPCS3, que dentro de una sola llamada no ve lo dibujado antes
+  (el RSX real sí). Con el estado en caché, cada una son unas palabras del
+  búfer de comandos.
+- La geometría no usa el RSX: con `rsxkit_ui_batch` y `rsxkit_ui_atlas` se
+  arma en memoria propia, para pruebas y vistas previas en la PC.
+- Hasta `RSXKIT_UI_MAX_QUADS` (4096) quads por cuadro; los de más se
+  descartan y se cuentan (`rsxkit_ui_dropped`).
+
 ## Recursos del RSX que usa
 
 - Etiquetas 255 (`rsxkit_finish`), de 254 hacia abajo dos por framebuffer
@@ -244,11 +334,17 @@ Formato del microcódigo: ver la cabecera de `src/fpgen.c` y
 - Memoria local: 2 búferes de color + 1 de profundidad del tamaño de la
   pantalla (11 MB a 720p, 24 MB a 1080), `2 × max_w × max_h × 4` bytes por
   framebuffer y `w × h × 4` por destino y por profundidad.
+- Memoria principal mapeada: 2 MB si se usa `rsxkit_ui_init`.
 
 ## Origen del código
 
 Código propio. La inicialización del RSX sigue el sample `rsxtest` de
 PSL1GHT (MIT); el formato de instrucción del fragment program viene de
 `nvfx_shader.h` y `compilerfp.cpp` de cgcomp (PSL1GHT, MIT), cotejado con
-los programas que cgcomp compila de `shaders/rsxkit_lincomb*.fcg`. No
-contiene código de proyectos GPL ni de proyectos sin licencia clara.
+los programas que cgcomp compila de `shaders/rsxkit_lincomb*.fcg`. Los
+glifos de `src/font_8x13.h` son los de la fuente «fixed» 8x13 de X11
+(gitlab.freedesktop.org/xorg/font/misc-misc, `8x13.bdf`, de dominio
+público). El agrandado de los glifos del atlas (`src/ui_geom.c`) aplica la
+regla de Scale2x/EPX, escrita aquí a partir de su descripción pública (no
+se copió código). No contiene código de proyectos GPL ni de proyectos sin
+licencia clara.

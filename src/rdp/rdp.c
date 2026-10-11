@@ -127,19 +127,51 @@ int salsa64_rdp_init(uint32_t scale)
 	return RSXKIT_OK;
 }
 
-void salsa64_rdp_shutdown(void)
+static void release_targets(void)
 {
-	if (!rdp.ready)
-		return;
-	rsxkit_finish();
 	for (int i = 0; i < RDP_TARGETS_MAX; i++)
 		if (rdp.surf[i])
 			rsxkit_target_destroy(rdp.surf[i]);
 	for (int i = 0; i < MAX_DEPTHS; i++)
 		if (rdp.depths[i].used)
 			rsxkit_depth_destroy(rdp.depths[i].d);
+	memset(rdp.surf, 0, sizeof rdp.surf);
+	memset(rdp.depths, 0, sizeof rdp.depths);
+	rdp.bound_t = -1;
+	rdp.bound_d = NULL;
+	rdp_targets_init(&rdp.tg);  /* la tabla de destinos, vacía */
+}
+
+void salsa64_rdp_shutdown(void)
+{
+	if (!rdp.ready)
+		return;
+	rsxkit_finish();
+	release_targets();
 	/* La memoria mapeada queda reservada hasta el fin del proceso. */
 	rdp.ready = false;
+}
+
+uint32_t salsa64_rdp_reset(void)
+{
+	if (!rdp.ready)
+		return 0;
+	rsxkit_finish();
+	uint32_t pending = rdp.acquired - rdp.translated;
+	release_targets();
+	/* Lo que es de un juego vuelve a como lo deja salsa64_rdp_init; la
+	 * memoria mapeada (juegos de búferes y caché de texturas) se conserva. */
+	rdp.done_task = 0;
+	for (unsigned i = 0; i < SETS; i++) {
+		rdp.sets[i].fence = 0;
+		rdp.sets[i].fence_task = 0;
+		memset(&rdp.sets[i].res, 0, sizeof rdp.sets[i].res);
+	}
+	rdp.acquired = rdp.finished = rdp.translated = 0;
+	rdp.last_set = 0;
+	memset(&rdp.last_res, 0, sizeof rdp.last_res);
+	memset(&rdp.stats, 0, sizeof rdp.stats);
+	return pending;
 }
 
 const struct salsa64_gfx_sink *salsa64_rdp_sink(void)

@@ -6,7 +6,7 @@ dos hilos de hardware del PPE. Decidido el 2026-10-10.
 | Hilo | Prioridad | Qué hace |
 |---|---|---|
 | **Emulación** (`emu_thread`, creado con `sysThreadCreate`, pila de 256 KB) | 1000 | CPU de la N64 (`salsa64_n64_run_field`), planificador de eventos, PI/SI/AI/VI, arranque de tareas del RSP hacia el SPE 0 y espera de su fin, controles aplicados al PIF, copia de la imagen del VI, copia del guardado cuando toca volcarlo, medición A/B de vitest, texto del ISViewer |
-| **Presentación** (el hilo principal del proceso, `SYS_PROCESS_PARAM`) | 1001 | Traducción de la salida de la HLE a comandos del RSX (`salsa64_rdp_flush`), `rsxkit_frame_begin/end` (flip en vsync), DualShock 3 (`ioPad*`), callbacks de sysutil, escritura del guardado en el disco, log de estadísticas, capturas, volcados de la HLE, verificación propia (selftest de vitest y gfxtest), salida. Más adelante: audio y menú |
+| **Presentación** (el hilo principal del proceso, `SYS_PROCESS_PARAM`) | 1001 | Traducción de la salida de la HLE a comandos del RSX (`salsa64_rdp_flush`), `rsxkit_frame_begin/end` (flip en vsync), DualShock 3 (`ioPad*`), callbacks de sysutil, escritura del guardado en el disco, log de estadísticas, capturas, volcados de la HLE, verificación propia (selftest de vitest y gfxtest), salida y el menú para elegir ROM (entre juegos, sin hilo de emulación) |
 
 Los dos hilos del PPE comparten el núcleo (SMT): lo que hace el hilo de
 presentación no sale gratis, le quita ciclos a la emulación. Por eso el
@@ -34,7 +34,7 @@ Un solo productor y un solo consumidor por cola; las barreras son
 | Guardado del cartucho | `savefile_stage` (emulación): cuando `salsa64_save_due` dice que toca, copia los 32 KB a una zona de paso y marca `pending`; `savefile_write_staged` (presentación) los escribe al disco y limpia `pending`. Mientras está pendiente no se vuelve a copiar; la escritura nunca toca los datos vivos | emulación → presentación |
 | Resultado del selftest / petición de medición | Banderas de un `int` (monótonas): `selftest.c` las pone desde los dos hilos (ISViewer y RDRAM desde emulación; pantalla desde presentación) y `selftest_state` las lee en presentación. `bench_request` de presentación a emulación | ambos |
 | Estadísticas | Contadores de cada hilo en su propia estructura; el de presentación los lee cada 5 s sin lock (lecturas de 64 bits alineadas: atómicas en el PPE) | emulación → presentación |
-| Salida | `running` (presentación lo pone en 0: START + SELECT, «Salir del juego», fin de la prueba automática); `emu_done` (emulación lo pone al terminar su bucle) | ambos |
+| Salida | `running` (presentación lo pone en 0: START + SELECT, «Salir del juego», fin de la prueba automática); `emu_done` (emulación lo pone al terminar su bucle); `app_quit` (el callback de sysutil: «Salir del juego» cierra la aplicación aunque haya menú) | ambos |
 | Log | `salsa64_log` con un lwmutex alrededor de la línea (`src/platform/ps3/log.c`) | ambos |
 
 ## Ritmo: la emulación al paso de la tele emulada
@@ -122,6 +122,48 @@ por tarea con Zelda, 20–53 % del hilo de emulación. Ahora (`src/core/rsp.c`):
   mismo evento lo sondea.
 - `finish` sigue recogiendo el resultado (y bloquea si un backend no
   tiene `done`, como el síncrono del host).
+
+## Volver al menú: cerrar un juego y abrir otro
+
+Sin `embedded`, START + SELECT termina la sesión de juego (`run_game`) y
+vuelve al menú en vez de salir. Cada sesión arranca y se cierra completa,
+en el hilo de presentación y con el de emulación ya terminado
+(`game_close`, cada paso al log con el prefijo «cierre:»):
+
+1. `running = 0`; se drenan las colas hasta que emulación pone `emu_done`
+   (no la deja esperando un juego de búferes) y se hace `sysThreadJoin`.
+2. `savefile_close`: lo pendiente al disco y el guardado desconectado.
+3. `audio_out_shutdown`: sumidero del AI, HLE de audio (espera la tarea en
+   vuelo y para el SPE), hilo y puerto de audio; cada resultado al log.
+4. `salsa64_rsp_set_gfx(NULL)` (espera la tarea gráfica en vuelo; su fin
+   llama a `wake()`, por eso el semáforo vive todo el programa), el LLE y
+   su SPE, y el SPE de la HLE gráfica.
+5. `salsa64_rec_detach`: el siguiente `salsa64_rec_init` empieza con la
+   caché vacía.
+6. Último `drain` (sin presentar) y `salsa64_rdp_reset`: destinos y
+   profundidades del RSX liberados, colas de tareas y estadísticas en
+   cero; la memoria mapeada se conserva (no se puede devolver).
+7. Comprobación: hilo terminado, cola de campos vacía, ranuras del VI
+   libres, ninguna tarea sin traducir, SPEs de la HLE detenidos y el RSP
+   sin backends → «cierre: estado limpio» (o «ATENCIÓN, quedó algo en
+   vuelo» con lo que sea).
+
+`game_reset` pone en cero lo demás antes del siguiente juego: índices de las
+colas (incluido el del último campo encolado, que antes era un estático de
+`post_field`), ranuras, contadores y ventanas de estadísticas, banderas de
+las pruebas, capturas, ritmo, la línea a medias del ISViewer. La RDRAM se
+borra antes de `salsa64_n64_init`: un juego arranca igual venga después del
+que venga. Lo que dura todo el programa: rsxkit, el RDP (su memoria
+mapeada), el framebuffer 2D, las ranuras del VI, la RDRAM, el semáforo, los
+DualShock y el callback de sysutil.
+
+El menú corre en el hilo principal sin hilo de emulación (no le quita
+nada a la emulación: no existe mientras se ve el menú): lee los mandos,
+arma unos miles de vértices (columna, panel, texto, ondas; `menu_frame`)
+que dibuja el RSX (`rsxkit/ui.h`) y presenta un cuadro por vsync
+(`rsxkit_frame_end` lo frena). La prueba automática (`tools/rpcs3-run.py
+--menu`) abre varias ROMs de prueba seguidas y cada una tiene que pasar su
+verificación después del cierre de la anterior.
 
 ## Lo que no cambia
 

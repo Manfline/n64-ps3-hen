@@ -11,6 +11,7 @@
 #include <malloc.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/event_queue.h>
 #include <sys/systime.h>
@@ -67,7 +68,7 @@ static volatile uint32_t ai_peak;
 /* Para las estadísticas cada STATS_US. */
 static struct {
 	uint64_t t;
-	uint32_t tasks, unknown_abi;
+	uint32_t tasks, unknown_abi, spu_done;
 	uint64_t spu_ticks, wait_us, blocks, late, busy_us;
 	struct audio_sync_stats out;
 } prev;
@@ -229,6 +230,7 @@ static int open_port(void)
 	sysEventQueueDrain(port.queue);
 	memset(block_ptr(0), 0, (size_t)port.config.numBlocks * 2 * AUDIO_BLOCK_SAMPLES * sizeof(float));
 	port.quit = 0;
+	port.blocks = port.late = port.busy_us = 0;  /* desde el menú se abre una vez por juego */
 	if ((rc = audioPortStart(port.port)) != 0 ||
 	    (rc = sysThreadCreate(&port.thread, audio_thread, NULL, THREAD_PRIO, 0x10000, THREAD_JOINABLE,
 				  "salsa64_audio")) != 0) {
@@ -268,13 +270,26 @@ int audio_out_init(struct salsa64_n64 *n64)
 	if (hle == HLE_PPE)
 		salsa64_audio_sync_init(&hle_ppe, &hle_ppe_state, &n64->bus);
 	salsa64_rsp_set_audio(&n64->bus, hle == HLE_SPE ? &hle_spu.backend : hle == HLE_PPE ? &hle_ppe.backend : NULL);
+	dump.len = dump.rate = 0;
+	dump.full = 0;
+	dump.written = false;
+	ai_peak = 0;
 	if (cfg.dump_s) {
-		/* Se reserva al arrancar, no en el bucle. 50 kHz como máximo. */
+		/* Se reserva al arrancar, no en el bucle (y una sola vez aunque se
+		 * abran varios juegos desde el menú). 50 kHz como máximo. */
 		uint32_t s = cfg.dump_s > DUMP_MAX_S ? DUMP_MAX_S : cfg.dump_s;
+		if (dump.buf && dump.cap < s * 50000u * 4u) {
+			free(dump.buf);
+			dump.buf = NULL;
+		}
 		dump.cap = s * 50000u * 4u;
-		dump.buf = memalign(128, dump.cap);
+		if (!dump.buf)
+			dump.buf = memalign(128, dump.cap);
 		salsa64_log("audio: volcado de los primeros %u s del AI en %s%s", s, WAV_PATH,
 			    dump.buf ? "" : ": sin memoria");
+	} else if (dump.buf) {
+		free(dump.buf);
+		dump.buf = NULL;
 	}
 	salsa64_ai_set_sink(&n64->bus, ai_push, &sync_out);
 	if (cfg.task_us)
@@ -321,9 +336,8 @@ void audio_out_field(uint64_t now_us)
 		char where[160] = "";
 		if (hle == HLE_SPE) {
 			uint32_t done = hle_spu.stats.tasks;
-			static uint32_t done0;
-			uint32_t n = done - done0 ? done - done0 : 1;
-			done0 = done;
+			uint32_t n = done - prev.spu_done ? done - prev.spu_done : 1;
+			prev.spu_done = done;
 			snprintf(where, sizeof where, "; en el SPE %.3f ms por tarea (máx. %.3f), PPE esperando %.3f ms",
 				 (hle_spu.spu_ticks - prev.spu_ticks) * 1e3 / spukit_tick_hz() / n,
 				 hle_spu.spu_max * 1e3 / spukit_tick_hz(), (hle_spu.wait_us - prev.wait_us) / 1e3 / n);

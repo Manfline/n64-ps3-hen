@@ -53,6 +53,8 @@ int main(int argc, char **argv)
 	}
 
 	setvbuf(stdout, NULL, _IOLBF, 0);  /* que se vea hasta dónde llegó si se cuelga */
+	char tmp[] = "/tmp/salsa64-unit-XXXXXX";
+	t_tmp_dir = mkdtemp(tmp);
 	salsa64_unit_filter(getenv("SALSA64_TEST"));
 	int failed = salsa64_unit_run(print_line);
 	if (use_rec) {
@@ -72,6 +74,12 @@ int main(int argc, char **argv)
 		salsa64_unit_bench(print_line, now_us);
 		if (!use_rec)
 			salsa64_unit_bench_aligned(print_line, now_us);
+	}
+	if (t_tmp_dir) {
+		char cmd[64];
+		snprintf(cmd, sizeof cmd, "rm -rf %s", t_tmp_dir);
+		if (system(cmd) != 0)
+			fprintf(stderr, "no se pudo borrar %s\n", t_tmp_dir);
 	}
 	return failed ? 1 : 0;
 }

@@ -146,3 +146,23 @@ salen con el color esperado a 1280×720. Subir la textura y dibujar cuesta
 - `cgcomp` asigna las constantes del vertex program en orden de declaración
   y consecutivas (un `uniform float4 k[15]` queda como `k[0]`…`k[14]`), así
   que se pueden subir de una vez.
+
+## Mezcla alfa dentro de una sola llamada de dibujo (RPCS3, 2026-10-10)
+
+En RPCS3 (0.0.43, renderizador de la Mac), los triángulos translúcidos de
+**una misma** `rsxDrawVertexArray` no se mezclan con lo que dibujaron los
+triángulos anteriores de esa llamada: el destino que ven es el de antes de
+la llamada. Con el menú en un solo lote (fondo opaco y encima barras,
+paneles, ondas y sombras con alfa) todo lo translúcido salía como fuente ×
+alfa sobre negro (panel (0, 0, 0), sombras como cajas negras, ondas
+oscuras); con el fondo en una llamada aparte, la mezcla sobre él salía bien.
+Entre llamadas distintas el orden se respeta (gfxtest comprueba una mezcla
+al 50 % y pasa).
+
+El RSX real mezcla en el orden de las primitivas, como cualquier GPU; esto
+es de RPCS3. Para que se vea igual en los dos, `lib/rsxkit/ui.h` manda una
+llamada de dibujo por elemento (rectángulo, texto, láminas y líneas de cada
+onda: `rsxkit_ui_groups`); con el estado en caché, cada llamada son unas
+pocas palabras del búfer de comandos. Quien junte en un solo lote
+geometría translúcida que se superpone debería hacer lo mismo si quiere
+verla bien en RPCS3.

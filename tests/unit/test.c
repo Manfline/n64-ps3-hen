@@ -144,6 +144,7 @@ static int run_suites(void (*print)(const char *line), struct salsa64_rec *rec, 
 		{ "pacer", t_suite_pacer },
 		{ "targets", t_suite_targets },
 		{ "fpgen", t_suite_fpgen },
+		{ "menu", t_suite_menu },
 	};
 	char line[256];
 
