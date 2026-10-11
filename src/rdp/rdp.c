@@ -684,8 +684,13 @@ static void readbacks_wanted(struct set *s, const struct gfx_result *res)
 		const struct gfx_cmd *c = (const struct gfx_cmd *)(s->cmd + off);
 		if (c->op == GFX_OP_END || c->size < sizeof *c)
 			break;
+		/* Auxiliar: de otro ancho que el VI (aunque esté en la dirección
+		 * del framebuffer: Zelda dibuja a Link en sus primeros bytes con
+		 * ancho 64) o, del ancho del VI, fuera de los framebuffers
+		 * recientes. */
+		uint32_t vi_w = rdp.vi_ring.n ? rdp.vi_ring.width[(rdp.vi_ring.n - 1) % RDP_VI_RING] : 0;
 		if (c->op == GFX_OP_TARGET && (c->c & 0xFF) == 2u && rdp.vi_ring.n &&
-		    !rdp_vi_ring_covers(&rdp.vi_ring, c->a, c->b)) {
+		    (c->b != vi_w || !rdp_vi_ring_covers(&rdp.vi_ring, c->a, c->b))) {
 			uint32_t k = 0;
 			while (k < s->rb_n && s->rb_addr[k] != c->a)
 				k++;
