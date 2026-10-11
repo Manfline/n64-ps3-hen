@@ -139,4 +139,5 @@ y revisando los repositorios.
 
 | Recurso | Origen | Licencia |
 |---|---|---|
-| `assets/ps3/ICON0.PNG` (320×176) y `assets/ps3/PIC1.PNG` (1920×1080): logo de Salsa64 (chile low-poly de 8 segmentos y «SALSA64») | Aportado por el autor el 2026-10-10; escalado con `sips` (PIC1 recortado a 16:9) | Del proyecto. Sin marcas de Nintendo ni de Sony |
+| `assets/ps3/ICON0.PNG` (320×176): logo de Salsa64 (chile low-poly de 8 segmentos y «SALSA64») | Aportado por el autor el 2026-10-10; escalado con `sips` | Del proyecto. Sin marcas de Nintendo ni de Sony |
+| `assets/ps3/PIC1.PNG` (1920×1080): fondo del XMB (chile brillante, cintas de luz, sin texto) | Aportado por el autor el 2026-10-10; escalado y recortado a 16:9 con `sips` | Del proyecto. Sin marcas de Nintendo ni de Sony |
