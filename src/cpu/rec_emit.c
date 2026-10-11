@@ -15,7 +15,7 @@
  *   cr4 condición del salto (sobrevive al delay slot); cr0 y cr1 temporales.
  *
  * Forma de un bloque:
- *   entrada:  si es código mapeado y vtlb[] ya no traduce su página a la
+ *   entrada:  si es código mapeado y ktlb[] ya no traduce su página a la
  *             misma física: salir al despachador (rec_tlb.h)
  *             si cycles + n > next: salir (lo corre el intérprete hasta el
  *             evento); si hay COP1 y Status.CU1 = 0: salir igual
@@ -579,7 +579,8 @@ static void emit_exec(struct ctx *c, unsigned k)
 	li32u(c, 4, d->w);
 	emit_call(c, c->rec->h_exec);
 	reload(c, d->writes);
-	if (d->kind == K_END) {
+	if (d->kind == K_END && (c->rec->opts & SALSA64_REC_OPT_LEGACY)) {
+		/* Como antes: al despachador, que interpreta el resto del bloque básico. */
 		writeback(c, c->written);
 		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)k + 1));
 		emit_continue(c, k);
@@ -588,6 +589,15 @@ static void emit_exec(struct ctx *c, unsigned k)
 		return;
 	}
 	post_check(c, k);
+	if (d->kind == K_END) {
+		/* Última del bloque (COP0): rec_h_exec ya hizo lo que el despachador
+		 * haría antes del bloque siguiente (rec_tlb.h, Status.FR) y
+		 * post_check revisó el modo, las interrupciones y el evento: se
+		 * enlaza con el siguiente como cualquier salida a dirección fija. */
+		writeback(c, c->written);
+		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)k + 1));
+		emit_exit_to(c, insn_pc(c, k + 1));
+	}
 }
 
 /* Excepción segura (SYSCALL, BREAK) o condicional (desbordamiento, en la
@@ -621,12 +631,20 @@ static void branch_overflow(struct ctx *c, unsigned bo, unsigned bi)
  * RDRAM de 2^s bytes, (va >> s) vale -2^(31-s) en KSEG0 y -2^(31-s) + 2^(29-s)
  * en KSEG1; el `ori` junta los dos casos. Deja en r12 el desplazamiento
  * dentro de la RDRAM.
+ *
+ * Si no es KSEG0/KSEG1, en la sección fría se prueba ktlb[] (rec_tlb.h): la
+ * dirección es extensión de signo de 32 bits y está alineada, su página
+ * tiene la etiqueta y es válida (y D, al escribir) y la física cae en la
+ * RDRAM; entonces r12 queda igual y se vuelve al camino rápido. Lo demás
+ * (sin traducción, E/S, excepciones) va a `slow`, que llama a C; el camino
+ * lento anota la página en ktlb[] para la próxima vez.
  */
-static void emit_addr(struct ctx *c, unsigned rs, int16_t imm, unsigned align, int slow)
+static void emit_addr(struct ctx *c, unsigned rs, int16_t imm, unsigned align, int slow, bool store)
 {
 	struct salsa64_rec *r = c->rec;
 	unsigned s = r->rdram_shift;
 	int32_t k1 = 1 << (29 - s), region = -(1 << (31 - s)) | k1;
+	int mapped = new_label(c), back = new_label(c);
 	unsigned base = get(c, rs, T_ADDR);
 	E(c, ppc_addi(T_ADDR, base, imm));
 	E(c, ppc_sradi(T_X, T_ADDR, s));
@@ -637,8 +655,48 @@ static void emit_addr(struct ctx *c, unsigned rs, int16_t imm, unsigned align, i
 		E(c, ppc_or(T_X, T_X, T_Y));
 	}
 	E(c, ppc_cmpdi(CR_T, T_X, 0));
-	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
+	if (r->opts & SALSA64_REC_OPT_LEGACY) {  /* sin datos mapeados: todo lo demás a C */
+		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
+		E(c, ppc_clrldi(T_Y, T_ADDR, 64 - s));
+		return;
+	}
+	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), mapped);
 	E(c, ppc_clrldi(T_Y, T_ADDR, 64 - s));
+	bind(c, back);
+
+	unsigned sec = c->sec;
+	c->sec = SEC_COLD;
+	bind(c, mapped);
+	E(c, ppc_extsw(T_X, T_ADDR));
+	E(c, ppc_cmpd(CR_T, T_X, T_ADDR));
+	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
+	if (align) {
+		E(c, ppc_clrldi(0, T_ADDR, align == 1 ? 63 : align == 3 ? 62 : 61));
+		E(c, ppc_cmpdi(CR_T, 0, 0));
+		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
+	}
+	E(c, ppc_rlwinm(T_X, T_ADDR, 22, 16, 29));  /* ((va >> 12) & 16383) * 4 */
+	E(c, ppc_addis(T_Y, R_FLAGS, -1));         /* ktlb[] termina donde empieza flags */
+	E(c, ppc_lwzx(T_X, T_Y, T_X));
+	if (store) {
+		E(c, ppc_rlwinm(0, T_X, 8, 24, 31));       /* etiqueta, válida y D */
+		E(c, ppc_rlwinm(T_Y, T_ADDR, 8, 24, 29));
+		E(c, ppc_ori(T_Y, T_Y, 3));
+	} else {
+		E(c, ppc_rlwinm(0, T_X, 7, 25, 31));       /* etiqueta y válida */
+		E(c, ppc_rlwinm(T_Y, T_ADDR, 7, 25, 30));
+		E(c, ppc_ori(T_Y, T_Y, 1));
+	}
+	E(c, ppc_cmpw(CR_T, 0, T_Y));
+	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
+	E(c, ppc_rlwinm(T_Y, T_X, 12, 3, 19));      /* página física << 12 */
+	E(c, ppc_rlwinm(0, T_ADDR, 0, 20, 31));
+	E(c, ppc_or(T_Y, T_Y, 0));
+	E(c, ppc_srdi(0, T_Y, s));                  /* dentro de la RDRAM */
+	E(c, ppc_cmpdi(CR_T, 0, 0));
+	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
+	emit_b(c, back, false);
+	c->sec = sec;
 }
 
 /* Registros de la FPU en cpu->fpr según el Status.FR con que se compila
@@ -664,7 +722,7 @@ static void emit_load(struct ctx *c, unsigned k, unsigned kind, unsigned where)
 	unsigned rt = I_RT(i);
 	int slow = new_label(c), resume = new_label(c);
 
-	emit_addr(c, I_RS(i), (int16_t)i, align[kind], slow);
+	emit_addr(c, I_RS(i), (int16_t)i, align[kind], slow, false);
 	unsigned d = where == DST_GPR ? dst(c, rt, T_V) : T_V;
 	switch (kind) {
 	case SALSA64_REC_LB:  E(c, ppc_lbzx(d, R_RDRAM, T_Y)); E(c, ppc_extsb(d, d)); break;
@@ -725,7 +783,7 @@ static void emit_store(struct ctx *c, unsigned k, unsigned kind, unsigned from)
 	} else {
 		v = get(c, rt, T_S1);
 	}
-	emit_addr(c, I_RS(i), (int16_t)i, align[kind], slow);
+	emit_addr(c, I_RS(i), (int16_t)i, align[kind], slow, true);
 	/* Código recompilado en estos 128 bytes: por el camino lento. */
 	E(c, ppc_srdi(T_X, T_Y, SALSA64_REC_FLAG_SHIFT));
 	E(c, ppc_lbzx(T_X, R_FLAGS, T_X));
@@ -1765,13 +1823,21 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	/* Entrada: ¿cabe antes del próximo evento?, ¿COP1 usable? */
 	int start_exit = new_label(c), vt_miss = -1;
 	if (seg == SALSA64_REC_MAPPED) {
-		/* ¿vtlb[] (justo antes de flags, en r28) sigue traduciendo la
-		 * página igual? xoris deja 0 en la mitad alta solo si coincide;
-		 * cmplwi compara entonces la baja. */
-		uint32_t v = salsa64_rec_vt_value(pc, pa);
-		int32_t off = 4 * (int32_t)salsa64_rec_vt_slot(pc) - (int32_t)sizeof rec->x.vtlb;
+		/* ¿ktlb[] (justo antes de flags, en r28) sigue traduciendo la
+		 * página igual que ahora (el despachador la acaba de anotar, con su
+		 * bit D)? xoris deja 0 en la mitad alta solo si coincide; cmplwi
+		 * compara entonces la baja. */
+		uint32_t v = rec->x.ktlb[salsa64_rec_vt_slot(pc)];
+		int32_t off = 4 * (int32_t)salsa64_rec_vt_slot(pc) - (int32_t)sizeof rec->x.ktlb;
+		if ((v & ~SALSA64_REC_VT_DIRTY) != salsa64_rec_vt_value(pc, pa, false))
+			return 0;  /* no debería pasar: la página no está anotada como se pidió */
 		vt_miss = new_label(c);
-		E(c, ppc_lwz(0, off, R_FLAGS));
+		if (off < -32768) {
+			E(c, ppc_addis(T_X, R_FLAGS, -1));
+			E(c, ppc_lwz(0, off + 65536, T_X));
+		} else {
+			E(c, ppc_lwz(0, off, R_FLAGS));
+		}
 		E(c, ppc_xoris(0, 0, v >> 16));
 		E(c, ppc_cmplwi(0, 0, v & 0xFFFF));
 		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(0, PPC_EQ), vt_miss);
@@ -1790,6 +1856,12 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	reload(c, livein & ~c->pinned);
 	c->body = new_label(c);
 	bind(c, c->body);
+	if (rec->prof && rec->prof->blocks && rec->cur_id) {  /* perfil por bloque: una cuenta por paso por el cuerpo */
+		li64(c, T_X, (uintptr_t)&rec->prof->blocks->hits[rec->cur_id]);
+		E(c, ppc_ld(T_Y, 0, T_X));
+		E(c, ppc_addi(T_Y, T_Y, 1));  /* no r0: en addi vale 0 */
+		E(c, ppc_std(T_Y, 0, T_X));
+	}
 
 	for (unsigned k = 0; k < n; k++) {
 		if (c->has_branch && k == n - 2) {
@@ -1813,7 +1885,7 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	c->sec = SEC_COLD;
 	bind(c, start_exit);
 	li64(c, 3, pc);
-	emit_b(c, abs_label(c, rec->exit_mid), false);
+	emit_b(c, abs_label(c, rec->exit_start), false);
 	if (vt_miss >= 0) {  /* la página cambió de traducción: que la busque el despachador */
 		bind(c, vt_miss);
 		li64(c, 3, pc);
@@ -1828,6 +1900,21 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 		return 0;
 	if (!temp)
 		rec->used = (base + words + 31) & ~31u;  /* bloques alineados a 128 bytes */
+	if (rec->prof && rec->prof->blocks && rec->cur_id && !temp) {
+		struct salsa64_rec_prof_block *pb = &rec->prof->blocks->info[rec->cur_id];
+		unsigned fpu = 0, mem = 0;
+		pb->regs = 0;
+		for (unsigned k = 0; k < n; k++) {
+			uint32_t w = c->d[k].w;
+			pb->regs |= c->d[k].reads | c->d[k].writes;
+			fpu += I_OP(w) == 0x11 && (I_FMT(w) & ~1u) == FMT_S;
+			mem += I_OP(w) >= 0x20 && I_OP(w) != 0x2F;
+		}
+		pb->pc = (uint32_t)pc;
+		pb->n = (uint16_t)n;
+		pb->fpu = (uint8_t)fpu;
+		pb->mem = (uint8_t)mem;
+	}
 	if (rec->on_compile)
 		rec->on_compile(rec, pc, base, words, temp);
 	*n_out = n;

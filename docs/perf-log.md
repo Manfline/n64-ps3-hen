@@ -488,6 +488,36 @@ El RESULTADO de esa corrida dice FALLO por 4 verificaciones de cobertura
 las comparaciones de resultados pasaron en las tres variantes. Corregido
 después (las verificaciones no aplican con esa opción).
 
+### Recompilador: perfil por causa y salidas a C (2026-10-11)
+
+Perfil nuevo (`src/cpu/rec_prof.h`, docs/rec-ppe.md «Perfil por causa»).
+Primero las **cuentas** en qemu (no miden el Cell, pero dicen cuántas veces
+pasa cada cosa), GoldenEye NTSC hasta la presa con `docs/pads/goldeneye-dam.pad`
+(`SALSA64_REC_PROF=600`, 12 000 M ciclos = 128 s de consola), ventana de
+campos 4800–5400 (en juego), por campo:
+
+| | Antes (main 23a3289) | Después | |
+|---|---|---|---|
+| Entradas desde C al código generado | 1591 | 841 | −47 % |
+| Llamadas a C desde el código | 2109 (CACHE 1006, COP0 690, FPU 160, E/S 254) | 2589 (COP0 2173, FPU 162, E/S 254) | los COP0 que antes corría el intérprete «a mitad» ahora son llamadas |
+| Instrucciones interpretadas en el despachador | 13 872 (13 381 «a mitad», tras un COP0) | 507 (359 fallas de TLB al buscar código, 112 bloques sin compilar) | −96 % |
+| Traducciones de la TLB (`vt_probes`) | ~14 000 (109 M en 128 s) | 360 revisiones selectivas (3,5 M en 128 s) | |
+| Salidas por JR sin bloque a mano | 824 | 348 | la cadena de xhash y el prellenado de `ktlb` |
+| Salidas por ERET/excepción | 37 | 397 | el ERET ya no lo corre el intérprete |
+| Tiempo de qemu, 128 s de consola | 181,6 s | 165,4 s | orientativo |
+
+Perfect Dark (intro, 64 s de consola), total por campo: 3163 cargas y 201
+almacenamientos por C a direcciones mapeadas por la TLB (sus datos en una
+página de 4 MB en 0x70000000), 770 CACHE, 200 COP0. Con el camino rápido
+de datos mapeados y CACHE nativo, las llamadas a C pasan de 3923 a (ver
+corrida final abajo).
+
+**PS3 real:** pendiente del día de pruebas (11 de octubre), con el paquete
+SLSA00088 y `perfil`; el A/B es con el mismo binario (`jit-viejo`). Lo que
+hay que anotar aquí: campos/s y ms de emulación por campo en la presa, y el
+desglose nativo / llamadas a C / intérprete / eventos / compilar / ktlb /
+despachador, antes y después.
+
 ### Bench del intérprete tras traer la Fase 2: 21 → 14,7 MIPS (diagnóstico, 2026-10-10)
 
 En la PS3, el bench del intérprete bajó en todas las variantes al traer la

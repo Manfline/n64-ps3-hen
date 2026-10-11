@@ -37,6 +37,7 @@ static void decode_promote(uint32_t i, struct dec *d)
 		return;
 	case 0x1A: case 0x1B: case 0x22: case 0x26:                        /* LDL LDR LWL LWR */
 	case 0x2A: case 0x2C: case 0x2D: case 0x2E:                        /* SWL SDL SDR SWR */
+	case 0x2F:                                                         /* CACHE */
 		d->how = H_NATIVE;
 		return;
 	default:
@@ -49,6 +50,8 @@ static void decode_ext(const struct salsa64_rec *rec, uint32_t i, struct dec *d)
 	decode(i, d);
 	if (!(rec->opts & SALSA64_REC_OPT_RARE_EXEC))
 		decode_promote(i, d);
+	if ((rec->opts & SALSA64_REC_OPT_LEGACY) && I_OP(i) == 0x2F)
+		d->how = H_EXEC;  /* CACHE al intérprete, como antes */
 }
 
 /* ---- Camino lento ---------------------------------------------------------------- */
@@ -113,7 +116,7 @@ static void emit_unaligned(struct ctx *c, unsigned k)
 	int slow = new_label(c), resume = new_label(c);
 	unsigned v = store ? get(c, rt, T_S1) : 0;
 
-	emit_addr(c, I_RS(i), (int16_t)i, 0, slow);
+	emit_addr(c, I_RS(i), (int16_t)i, 0, slow, store);
 	if (store)
 		emit_code_check(c, 1, slow);
 	/* T_X = desplazamiento en bits; T_HI = palabra (o doble palabra) alineada. */
@@ -210,8 +213,12 @@ static bool emit_unaligned_pair(struct ctx *c, unsigned k, unsigned end)
 	c->k = k;
 	c->written_start = c->written;
 	unsigned v = store ? get(c, rt, T_S1) : 0;
-	emit_addr(c, I_RS(a), imm, 0, slow);
-	/* El cuarto byte también dentro de la RDRAM. */
+	emit_addr(c, I_RS(a), imm, 0, slow, store);
+	/* Los 4 bytes en la misma página (mapeada, la traducción es de la del
+	 * primero) y dentro de la RDRAM. */
+	E(c, ppc_rlwinm(0, T_ADDR, 0, 20, 31));
+	E(c, ppc_cmplwi(CR_T, 0, 0xFFC));
+	emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(CR_T, PPC_GT), slow);
 	E(c, ppc_addi(T_X, T_Y, 3));
 	E(c, ppc_srdi(T_X, T_X, c->rec->rdram_shift));
 	E(c, ppc_cmpdi(CR_T, T_X, 0));
@@ -243,6 +250,23 @@ static bool emit_unaligned_pair(struct ctx *c, unsigned k, unsigned end)
 	bind(c, resume);
 	emit_slow_exec(c, k, k + 1, slow, resume);
 	return true;
+}
+
+/* ---- CACHE ----------------------------------------------------------------------- */
+
+/* Sin cachés emuladas (interp.c): en modo kernel, el único en que corre un
+ * bloque, solo falta la dirección sin alinear a 4 (error de dirección, que
+ * lanza el intérprete). */
+static void emit_cache(struct ctx *c, unsigned k)
+{
+	uint32_t i = c->d[k].w;
+	int slow = new_label(c), resume = new_label(c);
+	unsigned base = get(c, I_RS(i), T_ADDR);
+	E(c, ppc_addi(T_ADDR, base, (int16_t)i));
+	E(c, ppc_andi_(0, T_ADDR, 3));
+	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(0, PPC_EQ), slow);
+	bind(c, resume);
+	emit_slow_exec(c, k, k, slow, resume);
 }
 
 /* ---- COP0: MFC0 y DMFC0 ------------------------------------------------------- */
@@ -601,6 +625,9 @@ static bool emit_ext(struct ctx *c, unsigned k)
 	case 0x1A: case 0x1B: case 0x22: case 0x26:
 	case 0x2A: case 0x2C: case 0x2D: case 0x2E:
 		emit_unaligned(c, k);
+		return true;
+	case 0x2F:
+		emit_cache(c, k);
 		return true;
 	default:
 		return false;

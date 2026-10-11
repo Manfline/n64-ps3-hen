@@ -107,6 +107,16 @@ static struct salsa64_n64 n64;
 static uint8_t rdram[SALSA64_RDRAM_MAX] __attribute__((aligned(128)));
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
 static struct salsa64_rec rec;
+/* SALSA64_REC_PROF=N: el perfil del recompilador (rec_prof.h, solo cuentas en
+ * el host) cada N campos y al final. */
+static struct salsa64_rec_prof prof, prof_prev;
+static uint32_t prof_every, prof_next;
+
+static void prof_line(void *ctx, const char *text)
+{
+	(void)ctx;
+	fprintf(stderr, "%s\n", text);
+}
 
 /* --lockstep: la máquina de referencia, solo con el intérprete. */
 static struct salsa64_n64 ref;
@@ -1517,6 +1527,12 @@ int main(int argc, char **argv)
 	if (use_rec) {
 		void *code = salsa64_host_rec_buffer();
 		rec.opts = salsa64_host_rec_opts();
+		if (getenv("SALSA64_REC_PROF")) {
+			rec.prof = &prof;
+			prof.blocks = calloc(1, sizeof *prof.blocks);
+			prof_every = (uint32_t)strtoul(getenv("SALSA64_REC_PROF"), NULL, 0);
+			prof_next = prof_every;
+		}
 		if (!code || !salsa64_rec_init(&rec, &n64.cpu, code, SALSA64_HOST_REC_BYTES)) {
 			fprintf(stderr, "salsa64-run: el recompilador no corre en este host\n");
 			return 3;
@@ -1580,6 +1596,12 @@ int main(int argc, char **argv)
 			salsa64_n64_run(&n64, max_cycles - done < slice ? max_cycles - done : slice);
 		}
 		pc_sample(n64.cpu.pc);
+		if (prof_every && n64.bus.vi.fields >= prof_next) {
+			char text[2048];
+			salsa64_rec_prof_report(&prof, &prof_prev, 0, prof_every, text, sizeof text);
+			fprintf(stderr, "campos %u–%u, %s\n", prof_next - prof_every, n64.bus.vi.fields, text);
+			prof_next = n64.bus.vi.fields + prof_every;
+		}
 		if (watch.hit != STOP_NONE)
 			reason = watch.hit;
 		else if (cpu_stuck())
@@ -1610,15 +1632,23 @@ int main(int argc, char **argv)
 		cycles ? 100.0 * idle_cycles / cycles : 0.0, (unsigned long long)n64.cpu.pc);
 	if (use_rec) {
 		const struct salsa64_rec_stats *st = &rec.stats;
-		fprintf(stderr, "salsa64-run: recompilador: %llu bloques (%llu fuera de KSEG0, %u KB de caché), "
-			"%llu solo intérprete, %llu entradas, %llu enlaces, %llu invalidados, %llu vaciados, "
-			"%llu traducciones, %llu instr. interpretadas (%.1f %%), %llu llamadas al intérprete%s\n",
-			(unsigned long long)st->compiled, (unsigned long long)st->compiled_x, salsa64_rec_used(&rec) / 256,
+		fprintf(stderr, "salsa64-run: recompilador: %llu bloques (%llu fuera de KSEG0, %llu reutilizados en otra "
+			"física, %u KB de caché), %llu solo intérprete, %llu entradas, %llu enlaces, %llu invalidados, "
+			"%llu vaciados, %llu traducciones, %llu instr. interpretadas (%.1f %%), %llu llamadas al intérprete%s\n",
+			(unsigned long long)st->compiled, (unsigned long long)st->compiled_x, (unsigned long long)st->rekeyed,
+			salsa64_rec_used(&rec) / 256,
 			(unsigned long long)st->interp_only, (unsigned long long)st->entries,
 			(unsigned long long)st->linked, (unsigned long long)st->invalidated,
 			(unsigned long long)st->flushes, (unsigned long long)st->vt_probes,
 			(unsigned long long)st->interp_steps, cycles ? 100.0 * (double)st->interp_steps / (double)cycles : 0.0,
 			(unsigned long long)st->exec_calls, lockstep ? "; --lockstep sin diferencias" : "");
+		if (rec.prof) {
+			char text[2048];
+			memset(&prof_prev, 0, sizeof prof_prev);
+			salsa64_rec_prof_report(&prof, &prof_prev, 0, n64.bus.vi.fields, text, sizeof text);
+			fprintf(stderr, "salsa64-run: %s\n", text);
+			salsa64_rec_prof_blocks_report(&rec, 40, prof_line, NULL);
+		}
 	}
 	savefile_close(&save_file);
 	if (regs)

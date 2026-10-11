@@ -1,5 +1,66 @@
 # Estado
 
+## 2026-10-11 — Recompilador: perfil por causa y menos salidas a C en GoldenEye y Perfect Dark (rama `upbeat-driscoll-1dd271`, paquete SLSA00088 «Salsa64 JIT»)
+
+Hecho (sin la PS3: la noche del 10 al 11 se trabajó en qemu; la medición
+en la consola queda para el día de pruebas):
+
+- **Perfil del recompilador por causa** (`src/cpu/rec_prof.h/.c`, docs/rec-ppe.md
+  «Perfil por causa»): tiempo con el timebase del PPE y cuentas de código
+  generado, llamadas a C (cargas y almacenamientos lentos por tipo de
+  dirección, instrucciones al intérprete por clase, excepciones), intérprete
+  en el despachador por motivo, eventos por tipo (el del RSP incluye el
+  sondeo y lo dormido esperando al SPE), compilar, `ktlb`, bucles de espera
+  y salidas por tipo. En la PS3 lo enciende `/dev_hdd0/salsa64/perfil` y
+  sale cada 5 s en ms por campo con las estadísticas; en el host,
+  `SALSA64_REC_PROF=N` (cuentas cada N campos y, al final, los bloques más
+  ejecutados con sus palabras y el uso de registros; `tools/mips-disasm.py`
+  los lee).
+- **Lo que las cuentas mandaron arreglar** (GoldenEye en la presa, qemu,
+  por campo, antes → después): instrucciones interpretadas 13 900 → 500
+  (cada COP0 terminaba el bloque y el intérprete seguía hasta el fin del
+  bloque básico: ahora el bloque enlaza con el siguiente y `rec_h_exec`
+  sincroniza la TLB del recompilador; tras un ERET tampoco se interpreta);
+  traducciones de la TLB 14 000 → 360 revisiones (`x_sync` compara las 32
+  entradas con una instantánea y borra solo las páginas de las que
+  cambiaron; además prellena las de la entrada nueva); CACHE al intérprete
+  1000 → 0 (nativo); salidas por JR 820 → 350 (`exit_jr` recorre la cadena
+  de xhash); entradas desde C 1590 → 840. Perfect Dark tiene sus datos en
+  una página de 4 MB mapeada (3200 cargas por campo por C en la intro): la
+  `vtlb` pasó a ser `ktlb` (16 384 páginas, con el bit D) y las cargas y
+  almacenamientos a direcciones mapeadas la prueban en línea («Datos
+  mapeados por la TLB»). GoldenEye además compilaba cada (vpc, marco
+  físico) como bloque nuevo al paginar su código (93 000 bloques y 6
+  vaciados de la caché en 128 s): un bloque vivo de la misma vpc con los
+  mismos bytes se reutiliza en la física nueva (`salsa64_rec_x_rekey`).
+- Opción `SALSA64_REC_OPT_LEGACY` (`/dev_hdd0/salsa64/jit-viejo`,
+  `SALSA64_REC_LEGACY=1`): el comportamiento anterior en el mismo binario,
+  para el A/B en la consola.
+- Exactitud: `--lockstep` sin diferencias en nemu64-test (primer lote; la
+  suite completa con todo corre al cerrar esta entrada: ver abajo).
+
+**Para el día de pruebas en la PS3 (orden sugerido: al final, tras recorte →
+líneas del logo → framebuffer):** instalar `build/salsa64-jit/salsa64-jit.pkg`
+(SLSA00088 «Salsa64 JIT»; subido como `salsa64-jit.pkg`), crear por FTP
+`/dev_hdd0/salsa64/perfil` (vacío) y poner `embedded` = `file:goldeneye.z64`.
+1. Abrir «Salsa64 JIT», jugar la presa ~3 min (misma ruta que las
+   mediciones anteriores), salir, bajar `/dev_hdd0/salsa64/salsa64.log`.
+2. Crear `/dev_hdd0/salsa64/jit-viejo` (vacío) y repetir: es el «antes» con
+   el mismo binario. Borrarlo después.
+3. Si hay tiempo: Perfect Dark en un nivel (es el que más gana con los
+   datos mapeados), y un minuto de Zelda, SM64 y Mario Kart (sin regresión).
+Lo que hay que leer del log: la línea «campos/s … emulación X ms por campo»
+y las de «perfil JIT por campo» (nativo, llamadas a C, intérprete, eventos,
+compilar, ktlb, despachador) en el tramo de la presa; anotarlas en
+docs/perf-log.md («Recompilador: perfil y salidas a C»).
+
+Pendiente / siguiente paso: con el desglose de la PS3 decidir el ataque al
+código nativo (lo que no se ve en qemu): registros de la FPU residentes en
+f14–f31 dentro del bloque (hoy cada operación pasa por `cpu->fpr`:
+load-hit-store entre operaciones dependientes), más registros fijos entre
+bloques (r26–r28 liberables), y MTC0 EntryLo/TLBWR/ERET con un ayudante
+propio en vez de `exec_one` (GoldenEye: 2200 llamadas por campo del refill).
+
 ## 2026-10-10 — Menú para elegir ROM (estilo XMB) y vuelta al menú con cierre limpio
 
 Hecho (rama `intelligent-yalow-4dd14d`, desde main e7184b7):

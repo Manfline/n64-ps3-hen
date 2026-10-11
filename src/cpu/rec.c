@@ -63,48 +63,138 @@ void salsa64_rec_sync(const void *p, size_t bytes)
 #endif
 }
 
+/* ---- Perfil (rec_prof.h) ---------------------------------------------------------- */
+
+/* Causa de una carga o un almacenamiento que vino por el camino lento, según
+ * la dirección virtual y lo que dio la traducción. El camino rápido toma
+ * KSEG0/KSEG1 alineado a la RDRAM (sin código recompilado, al escribir). */
+REC_UNUSED static unsigned mem_cause(const struct salsa64_cpu *cpu, uint64_t va, bool ok, uint32_t pa, bool store)
+{
+	unsigned base = store ? SALSA64_PROF_STORE_TLB_RDRAM : SALSA64_PROF_LOAD_TLB_RDRAM;
+	unsigned addr = store ? SALSA64_PROF_STORE_ADDR : SALSA64_PROF_LOAD_ADDR;
+	uint32_t a = (uint32_t)va;
+	if ((int64_t)va != (int32_t)va)
+		return addr;
+	if (a >= 0x80000000u && a < 0xC0000000u) {
+		if (!ok)
+			return addr;
+		if (pa >= cpu->rdram_size)
+			return store ? SALSA64_PROF_STORE_IO : SALSA64_PROF_LOAD_IO;
+		return store ? SALSA64_PROF_STORE_CODE : addr;
+	}
+	if (!ok)
+		return base + 2;  /* falla de TLB */
+	return pa < cpu->rdram_size ? base : base + 1;
+}
+
+/* Clase de una instrucción que corre el intérprete. */
+REC_UNUSED static unsigned exec_cause(uint32_t i)
+{
+	switch (I_OP(i)) {
+	case 0x00: return I_FUNCT(i) >= 0x30 && I_FUNCT(i) <= 0x36 ? SALSA64_PROF_EXEC_TRAP : SALSA64_PROF_EXEC_OTHER;
+	case 0x01: return I_RT(i) >= 0x08 && I_RT(i) <= 0x0E ? SALSA64_PROF_EXEC_TRAP : SALSA64_PROF_EXEC_OTHER;
+	case 0x10: return SALSA64_PROF_EXEC_COP0;
+	case 0x11: return SALSA64_PROF_EXEC_FPU;
+	case 0x2F: return SALSA64_PROF_EXEC_CACHE;
+	case 0x30: case 0x34: case 0x38: case 0x3C: return SALSA64_PROF_EXEC_LLSC;
+	default:   return SALSA64_PROF_EXEC_OTHER;
+	}
+}
+
+/* El evento vencido: uno solo, su ranura; varios, MANY. */
+static unsigned due_event(const struct salsa64_sched *s, uint64_t now)
+{
+	unsigned ev = SALSA64_PROF_EV_MANY, n = 0;
+	for (unsigned i = 0; i < SALSA64_EV_MAX; i++) {
+		if (s->when[i] <= now) {
+			n++;
+			ev = SALSA64_PROF_EV_STOP + i;
+		}
+	}
+	return n == 1 ? ev : SALSA64_PROF_EV_MANY;
+}
+
+_Static_assert(SALSA64_EV_MAX == 8 && SALSA64_PROF_EV_MANY == SALSA64_PROF_EV_STOP + SALSA64_EV_MAX,
+	       "el perfil cuenta los eventos en el orden de enum salsa64_event");
+_Static_assert(SALSA64_PROF_EXIT_START - SALSA64_PROF_EXIT_LINK == SALSA64_REC_EXIT_START - SALSA64_REC_EXIT_LINK,
+	       "el perfil cuenta las salidas en el orden de SALSA64_REC_EXIT_*");
+
 /* ---- Llamadas desde el código generado ------------------------------------------ */
 
 REC_UNUSED static uint64_t rec_h_load(struct salsa64_cpu *cpu, uint64_t va, unsigned kind)
 {
 	static const uint8_t align[] = { 0, 0, 1, 1, 3, 3, 7 };
-	uint32_t pa;
-	if (!vr4300_vaddr(cpu, va, align[kind], SALSA64_ACC_LOAD, &pa))
-		return 0;
-	switch (kind) {
-	case SALSA64_REC_LB:  return salsa64_sx8(vr4300_read8(cpu, pa));
-	case SALSA64_REC_LBU: return vr4300_read8(cpu, pa);
-	case SALSA64_REC_LH:  return salsa64_sx16(vr4300_read16(cpu, pa));
-	case SALSA64_REC_LHU: return vr4300_read16(cpu, pa);
-	case SALSA64_REC_LW:  return salsa64_sx32(vr4300_read32(cpu, pa));
-	case SALSA64_REC_LWU: return vr4300_read32(cpu, pa);
-	default:              return vr4300_read64(cpu, pa);
+	struct salsa64_rec_prof *prof = cpu->rec->prof;
+	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0, v = 0;
+	uint32_t pa = 0;
+	bool ok = vr4300_vaddr(cpu, va, align[kind], SALSA64_ACC_LOAD, &pa);
+	if (ok) {
+		if (!(cpu->rec->opts & SALSA64_REC_OPT_LEGACY))
+			salsa64_rec_x_data_fill(cpu->rec, va);
+		switch (kind) {
+		case SALSA64_REC_LB:  v = salsa64_sx8(vr4300_read8(cpu, pa)); break;
+		case SALSA64_REC_LBU: v = vr4300_read8(cpu, pa); break;
+		case SALSA64_REC_LH:  v = salsa64_sx16(vr4300_read16(cpu, pa)); break;
+		case SALSA64_REC_LHU: v = vr4300_read16(cpu, pa); break;
+		case SALSA64_REC_LW:  v = salsa64_sx32(vr4300_read32(cpu, pa)); break;
+		case SALSA64_REC_LWU: v = vr4300_read32(cpu, pa); break;
+		default:              v = vr4300_read64(cpu, pa); break;
+		}
 	}
+	if (prof)
+		salsa64_rec_prof_add(prof, mem_cause(cpu, va, ok, pa, false), salsa64_rec_prof_now() - t0);
+	return v;
 }
 
 REC_UNUSED static void rec_h_store(struct salsa64_cpu *cpu, uint64_t va, uint64_t v, unsigned kind)
 {
 	static const uint8_t align[] = { 0, 1, 3, 7 };
-	uint32_t pa;
-	if (!vr4300_vaddr(cpu, va, align[kind], SALSA64_ACC_STORE, &pa))
-		return;
-	switch (kind) {
-	case SALSA64_REC_SB: vr4300_write8(cpu, pa, v); return;
-	case SALSA64_REC_SH: vr4300_write16(cpu, pa, v); return;
-	case SALSA64_REC_SW: vr4300_write32(cpu, pa, (uint32_t)v); return;
-	default:             vr4300_write64(cpu, pa, v); return;
+	struct salsa64_rec_prof *prof = cpu->rec->prof;
+	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0;
+	uint32_t pa = 0;
+	bool ok = vr4300_vaddr(cpu, va, align[kind], SALSA64_ACC_STORE, &pa);
+	if (ok) {
+		if (!(cpu->rec->opts & SALSA64_REC_OPT_LEGACY))
+			salsa64_rec_x_data_fill(cpu->rec, va);
+		switch (kind) {
+		case SALSA64_REC_SB: vr4300_write8(cpu, pa, v); break;
+		case SALSA64_REC_SH: vr4300_write16(cpu, pa, v); break;
+		case SALSA64_REC_SW: vr4300_write32(cpu, pa, (uint32_t)v); break;
+		default:             vr4300_write64(cpu, pa, v); break;
+		}
 	}
+	if (prof)
+		salsa64_rec_prof_add(prof, mem_cause(cpu, va, ok, pa, true), salsa64_rec_prof_now() - t0);
 }
 
 REC_UNUSED static void rec_h_exec(struct salsa64_cpu *cpu, uint32_t instr)
 {
-	cpu->rec->stats.exec_calls++;
+	struct salsa64_rec *rec = cpu->rec;
+	struct salsa64_rec_prof *prof = rec->prof;
+	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0;
+	rec->stats.exec_calls++;
 	salsa64_vr4300_exec_one(cpu, instr);
+	if (I_OP(instr) == 0x10) {
+		/* COP0 termina el bloque y el código enlaza con el siguiente sin
+		 * pasar por el despachador: lo que este haría antes de correr un
+		 * bloque va aquí. La TLB, el ASID o ERL (rec_tlb.h); Status.FR (la
+		 * caché se compiló para el otro: que el despachador la vacíe). El
+		 * modo y las interrupciones los revisa el código al volver. */
+		salsa64_rec_x_sync(rec);
+		if ((cpu->status & SALSA64_ST_FR) != rec->fr)
+			cpu->rec_abort = 1;
+	}
+	if (prof)
+		salsa64_rec_prof_add(prof, exec_cause(instr), salsa64_rec_prof_now() - t0);
 }
 
 REC_UNUSED static void rec_h_exception(struct salsa64_cpu *cpu, unsigned code)
 {
+	struct salsa64_rec_prof *prof = cpu->rec->prof;
+	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0;
 	salsa64_vr4300_exception(cpu, (enum salsa64_exc)code, 0);
+	if (prof)
+		salsa64_rec_prof_add(prof, SALSA64_PROF_EXCEPTION, salsa64_rec_prof_now() - t0);
 }
 
 /* Dirección de código de una función de C (descriptor ELFv1: entrada, TOC). */
@@ -173,7 +263,7 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	w[n++] = ppc_mtctr(4);
 	w[n++] = PPC_BCTR;
 
-	uint32_t common = n + 12;
+	uint32_t common = n + 16;
 	rec->exit_link = n;
 	w[n++] = ppc_mflr(4);
 	w[n++] = ppc_addi(4, 4, -16);
@@ -191,6 +281,14 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	n++;
 	rec->exit_idle = n;
 	w[n++] = ppc_li(4, SALSA64_REC_EXIT_IDLE);
+	w[n] = ppc_b((int32_t)(common - n) * 4);
+	n++;
+	rec->exit_start = n;
+	w[n++] = ppc_li(4, SALSA64_REC_EXIT_START);
+	w[n] = ppc_b((int32_t)(common - n) * 4);
+	n++;
+	rec->exit_end = n;
+	w[n++] = ppc_li(4, SALSA64_REC_EXIT_END);
 	w[n] = ppc_b((int32_t)(common - n) * 4);
 	n++;
 	while (n < common)
@@ -240,9 +338,10 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	w[n++] = ppc_mtctr(12);
 	w[n++] = PPC_BCTR;
 
-	/* xjr (rec_tlb.h): extensión de signo de 32 bits → la primera de su
-	 * cabeza de xhash, si es la misma vpc → blocks → código. Si es un
-	 * bloque mapeado con otra física, su entrada lo nota y sale. */
+	/* xjr (rec_tlb.h): extensión de signo de 32 bits → su cadena de xhash,
+	 * el primero con la misma vpc → blocks → código. Si es un bloque
+	 * mapeado con otra física, su entrada lo nota y sale (el despachador
+	 * pone al frente el que vale). */
 	w[to_xjr] = ppc_bc(ne, EQ, (int32_t)(n - to_xjr) * 4);
 	w[n++] = ppc_extsw(11, 3);
 	w[n++] = ppc_cmpd(0, 11, 3);
@@ -250,14 +349,28 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	w[n++] = ppc_rlwinm(12, 3, 31, 17, 30);  /* ((vpc >> 2) & (XHASH - 1)) * 2 */
 	n = pre_li64(w, n, 11, (uintptr_t)rec->x.xhash);
 	w[n++] = ppc_lhzx(12, 11, 12);
+	if (rec->opts & SALSA64_REC_OPT_LEGACY) {  /* solo la cabeza, como antes */
+		w[n++] = ppc_cmpwi(0, 12, 0);
+		n = pre_bc(w, n, eq, EQ, rec->exit_jump);
+		w[n++] = ppc_sldi(0, 12, 3);
+		n = pre_li64(w, n, 11, (uintptr_t)rec->x.xb);
+		w[n++] = ppc_lwzx(0, 11, 0);
+		w[n++] = ppc_cmplw(0, 0, 3);
+		n = pre_bc(w, n, ne, EQ, rec->exit_jump);
+		w[n] = ppc_b((int32_t)(id_ok - n) * 4);
+		return n + 1;
+	}
+	n = pre_li64(w, n, 11, (uintptr_t)rec->x.xb);
+	w[n++] = ppc_addi(10, 11, (int32_t)offsetof(struct salsa64_rec_xblock, hnext));
+	uint32_t chain = n;  /* r12 = id, r11 = xb, r10 = xb + hnext */
 	w[n++] = ppc_cmpwi(0, 12, 0);
 	n = pre_bc(w, n, eq, EQ, rec->exit_jump);
 	w[n++] = ppc_sldi(0, 12, 3);
-	n = pre_li64(w, n, 11, (uintptr_t)rec->x.xb);
-	w[n++] = ppc_lwzx(0, 11, 0);
-	w[n++] = ppc_cmplw(0, 0, 3);
-	n = pre_bc(w, n, ne, EQ, rec->exit_jump);
-	w[n] = ppc_b((int32_t)(id_ok - n) * 4);
+	w[n++] = ppc_lwzx(9, 11, 0);
+	w[n++] = ppc_cmplw(0, 9, 3);
+	n = pre_bc(w, n, eq, EQ, id_ok);
+	w[n++] = ppc_lhzx(12, 10, 0);
+	w[n] = ppc_b((int32_t)(chain - n) * 4);
 	return n + 1;
 }
 
@@ -278,6 +391,10 @@ static uint32_t preamble_words(void)
 
 void salsa64_rec_flush(struct salsa64_rec *rec)
 {
+	if (rec->prof && rec->prof->blocks)
+		for (unsigned id = 1; id < rec->next_block; id++)
+			if (rec->blocks[id].code)
+				salsa64_rec_prof_fold(rec->prof, id, false);
 	if (rec->map_dirty) {
 		memset(rec->map, 0, (rec->rdram_size >> 2) * sizeof rec->map[0]);
 		memset(rec->flags, 0, rec->rdram_size >> SALSA64_REC_FLAG_SHIFT);
@@ -322,6 +439,8 @@ static void unlink_all(struct salsa64_rec *rec, struct salsa64_rec_block *b)
 static void kill_block(struct salsa64_rec *rec, unsigned id)
 {
 	struct salsa64_rec_block *b = &rec->blocks[id];
+	if (rec->prof && rec->prof->blocks)
+		salsa64_rec_prof_fold(rec->prof, id, false);
 	if (!salsa64_rec_x_remove(rec, id))
 		rec->map[b->pa >> 2] = 0;
 	if (b->pa < rec->rdram_size)  /* no en la ROM */
@@ -342,6 +461,23 @@ void salsa64_rec_kill_block(struct salsa64_rec *rec, unsigned id)
 void salsa64_rec_unlink_block(struct salsa64_rec *rec, unsigned id)
 {
 	unlink_all(rec, &rec->blocks[id]);
+}
+
+bool salsa64_rec_block_rekey(struct salsa64_rec *rec, unsigned id, uint32_t pa, uint32_t vt)
+{
+	struct salsa64_rec_block *b = &rec->blocks[id];
+	uint32_t *w = &rec->code[b->code];
+	/* La entrada de un bloque mapeado (rec_emit.c): [addis] lwz ; xoris hi ; cmplwi lo ; bne. */
+	unsigned k = (w[0] >> 26) == 15 ? 2 : 1;
+	if ((w[k] >> 26) != 27 || (w[k + 1] >> 26) != 10)
+		return false;
+	flags_add(rec, b->pa, b->pa + b->bytes, -1);
+	flags_add(rec, pa, pa + b->bytes, +1);
+	b->pa = pa;
+	w[k] = (w[k] & 0xFFFF0000u) | (vt >> 16);
+	w[k + 1] = (w[k + 1] & 0xFFFF0000u) | (vt & 0xFFFF);
+	salsa64_rec_sync(w, 4 * (k + 2));
+	return true;
 }
 
 void salsa64_rec_invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t len)
@@ -390,9 +526,6 @@ static unsigned new_block(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, uns
 {
 	if (!rec_space(rec))
 		salsa64_rec_flush(rec);
-	unsigned n = 0;
-	uint32_t bytes = 4;
-	uint32_t code = salsa64_rec_compile(rec, pc, pa, seg, SALSA64_REC_MAX_INSNS, false, &n, &bytes);
 	unsigned id;
 	if (rec->free_block) {
 		id = rec->free_block;
@@ -400,6 +533,11 @@ static unsigned new_block(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, uns
 	} else {
 		id = rec->next_block++;
 	}
+	unsigned n = 0;
+	uint32_t bytes = 4;
+	rec->cur_id = id;
+	uint32_t code = salsa64_rec_compile(rec, pc, pa, seg, SALSA64_REC_MAX_INSNS, false, &n, &bytes);
+	rec->cur_id = 0;
 	struct salsa64_rec_block *b = &rec->blocks[id];
 	b->pa = pa;
 	b->code = code;
@@ -446,21 +584,53 @@ static void link_block(struct salsa64_rec *rec, uint32_t site, unsigned id)
 
 /* ---- Despachador ----------------------------------------------------------------- */
 
-/* El intérprete avanza hasta terminar un delay slot, tomar una excepción o
- * (en modo estricto) una sola instrucción. Atiende los eventos que lleguen. */
-static void rec_interp(struct salsa64_rec *rec, bool to_boundary)
+/* Despacha los eventos vencidos y, con el perfil, los mide por tipo. */
+static void rec_dispatch(struct salsa64_rec *rec)
 {
 	struct salsa64_cpu *cpu = rec->cpu;
+	struct salsa64_sched *s = cpu->sched;
+	struct salsa64_rec_prof *prof = rec->prof;
+	if (!prof) {
+		salsa64_sched_dispatch(s, cpu->cycles);
+		return;
+	}
+	unsigned ev = due_event(s, cpu->cycles);
+	uint64_t t0 = salsa64_rec_prof_now();
+	salsa64_sched_dispatch(s, cpu->cycles);
+	prof->t[ev] += salsa64_rec_prof_now() - t0;
+	prof->n[ev]++;
+}
+
+/* El intérprete avanza hasta terminar un delay slot, tomar una excepción o
+ * (en modo estricto) una sola instrucción. Atiende los eventos que lleguen
+ * (como salsa64_cpu_step: después de cada instrucción). `why` es la causa
+ * para el perfil. */
+static void rec_interp(struct salsa64_rec *rec, bool to_boundary, unsigned why)
+{
+	struct salsa64_cpu *cpu = rec->cpu;
+	struct salsa64_sched *s = cpu->sched;
+	struct salsa64_rec_prof *prof = rec->prof;
+	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0, t_ev = 0;
 	uint32_t exc = cpu->exc_count;
 	unsigned k = 0;
 	do {
 		bool ds = cpu->branch != 0;
-		salsa64_cpu_step(cpu);
+		salsa64_cpu_step_only(cpu);
 		k++;
+		if (cpu->cycles >= s->next) {
+			uint64_t te = prof ? salsa64_rec_prof_now() : 0;
+			rec_dispatch(rec);
+			if (prof)
+				t_ev += salsa64_rec_prof_now() - te;
+		}
 		if (!to_boundary || cpu->exc_count != exc || (ds && !cpu->branch))
 			break;
 	} while (k < 4096 && cpu->running);
 	rec->stats.interp_steps += k;
+	if (prof) {
+		prof->t[why] += salsa64_rec_prof_now() - t0 - t_ev;
+		prof->n[why] += k;
+	}
 }
 
 /* El código salió en un salto tomado hacia atrás y corto (EXIT_IDLE): lo
@@ -492,24 +662,32 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 {
 	struct salsa64_cpu *cpu = rec->cpu;
 	struct salsa64_sched *s = cpu->sched;
-	bool to_boundary = false;
+	struct salsa64_rec_prof *prof = rec->prof;
+	bool to_boundary = false, from_start = false;
 	uint32_t site = 0, site_gen = 0;
+	uint64_t t_run = prof ? salsa64_rec_prof_now() : 0, t0 = 0;
 
 	cpu->running = 1;
 	while (cpu->running) {
 		if (cpu->cycles >= s->next) {
-			salsa64_sched_dispatch(s, cpu->cycles);
+			rec_dispatch(rec);
 			continue;
 		}
 		uint64_t pc = cpu->pc;
 		uint32_t pa = 0;
-		unsigned seg = SALSA64_REC_SEG_NONE;
+		unsigned seg = SALSA64_REC_SEG_NONE, why = 0;
 		if (!to_boundary && !cpu->irq_pending && !cpu->branch && cpu->mode == SALSA64_MODE_KERNEL) {
 			salsa64_rec_x_sync(rec);  /* antes de correr cualquier bloque (rec_tlb.h) */
 			seg = salsa64_rec_seg(rec, pc, &pa);
 		}
 		if (seg == SALSA64_REC_SEG_NONE) {
-			rec_interp(rec, !rec->strict);
+			if (prof)
+				why = to_boundary ? (from_start ? SALSA64_PROF_INTERP_START : SALSA64_PROF_INTERP_MID)
+				      : cpu->irq_pending ? SALSA64_PROF_INTERP_IRQ
+				      : cpu->branch ? SALSA64_PROF_INTERP_DS
+				      : cpu->mode != SALSA64_MODE_KERNEL ? SALSA64_PROF_INTERP_MODE
+				      : SALSA64_PROF_INTERP_SEG;
+			rec_interp(rec, !rec->strict, why);
 			to_boundary = false;
 			site = 0;
 			continue;
@@ -520,12 +698,21 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 		}
 
 		unsigned id = seg == SALSA64_REC_KSEG0 ? rec->map[pa >> 2] : salsa64_rec_x_find(rec, pc, pa);
-		if (!id)
+		if (!id && seg == SALSA64_REC_MAPPED && !(rec->opts & SALSA64_REC_OPT_LEGACY))
+			id = salsa64_rec_x_rekey(rec, pc, pa);
+		if (!id) {
+			if (prof)
+				t0 = salsa64_rec_prof_now();
 			id = new_block(rec, pc, pa, seg);
+			if (prof) {
+				prof->t[SALSA64_PROF_COMPILE] += salsa64_rec_prof_now() - t0;
+				prof->n[SALSA64_PROF_COMPILE]++;
+			}
+		}
 		const struct salsa64_rec_block *b = &rec->blocks[id];
 		uint32_t entry = b->code;
 		if (!entry) {
-			rec_interp(rec, !rec->strict);
+			rec_interp(rec, !rec->strict, SALSA64_PROF_INTERP_NOCODE);
 			site = 0;
 			continue;
 		}
@@ -534,13 +721,20 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 			 * intérprete; en modo estricto se compila recortado. */
 			unsigned n = 0;
 			uint32_t bytes = 0;
-			if (rec->strict)
+			if (rec->strict) {
+				if (prof)
+					t0 = salsa64_rec_prof_now();
 				entry = salsa64_rec_compile(rec, pc, pa, seg, (unsigned)(s->next - cpu->cycles), true, &n,
 							    &bytes);
-			else
+				if (prof) {
+					prof->t[SALSA64_PROF_COMPILE] += salsa64_rec_prof_now() - t0;
+					prof->n[SALSA64_PROF_COMPILE]++;
+				}
+			} else {
 				entry = 0;
+			}
 			if (!entry) {
-				rec_interp(rec, !rec->strict);
+				rec_interp(rec, !rec->strict, SALSA64_PROF_INTERP_NOFIT);
 				site = 0;
 				continue;
 			}
@@ -551,18 +745,39 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 		site = 0;
 
 		uint32_t exc = cpu->exc_count;
-		uint64_t cycles = cpu->cycles;
+		uint64_t cycles = cpu->cycles, nested = 0;
 		cpu->redirect = 0;  /* salsa64_cpu_set_pc lo deja en 1 para el intérprete; aquí pc ya está leído */
 		cpu->rec_site = 0;
 		cpu->rec_abort = 0;
 		rec->stats.entries++;
+		if (prof) {
+			nested = prof->nested;
+			t0 = salsa64_rec_prof_now();
+		}
 		uint64_t next = rec_enter(rec, entry);
+		if (prof) {
+			/* Lo que tardó el código generado sin sus llamadas a C. */
+			prof->t[SALSA64_PROF_NATIVE] += salsa64_rec_prof_now() - t0 - (prof->nested - nested);
+			prof->n[SALSA64_PROF_NATIVE]++;
+			prof->n[cpu->redirect ? SALSA64_PROF_EXIT_REDIRECT
+					      : SALSA64_PROF_EXIT_LINK + (cpu->rec_kind - SALSA64_REC_EXIT_LINK)]++;
+		}
+		from_start = false;
 		if (cpu->redirect) {
-			/* Excepción o ERET: pc, next_pc y branch ya están puestos. */
+			/* Excepción o ERET: pc, next_pc y branch ya están puestos; el
+			 * bloque que sigue se busca como cualquier otro (con LEGACY, tras
+			 * un ERET el intérprete hasta el fin del bloque básico, como antes). */
 			cpu->redirect = 0;
-			to_boundary = cpu->exc_count == exc && !rec->strict;
+			to_boundary = (rec->opts & SALSA64_REC_OPT_LEGACY) && cpu->exc_count == exc && !rec->strict;
 		} else if (cpu->rec_kind == SALSA64_REC_EXIT_IDLE) {
-			rec_idle_exit(rec, next);  /* deja el delay slot pendiente: lo corre el intérprete */
+			/* Deja el delay slot pendiente: lo corre el intérprete. */
+			if (prof)
+				t0 = salsa64_rec_prof_now();
+			rec_idle_exit(rec, next);
+			if (prof) {
+				prof->t[SALSA64_PROF_IDLE] += salsa64_rec_prof_now() - t0;
+				prof->n[SALSA64_PROF_IDLE]++;
+			}
 		} else {
 			cpu->pc = next;
 			cpu->next_pc = next + 4;
@@ -570,15 +785,18 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 			if (cpu->rec_kind == SALSA64_REC_EXIT_LINK && cpu->rec_site) {
 				site = (uint32_t)((cpu->rec_site - (uintptr_t)rec->code) / 4);
 				site_gen = rec->generation;
-			} else if (cpu->rec_kind == SALSA64_REC_EXIT_MID) {
+			} else if (cpu->rec_kind == SALSA64_REC_EXIT_MID || cpu->rec_kind == SALSA64_REC_EXIT_START) {
 				/* En modo estricto solo si el bloque no avanzó (salió en
 				 * la entrada, p. ej. con COP1 inusable): una instrucción. */
 				to_boundary = !rec->strict || cpu->cycles == cycles;
+				from_start = cpu->rec_kind == SALSA64_REC_EXIT_START;
 			}
 		}
 		if (rec->after_exit)
 			rec->after_exit(rec, pc, rec->after_exit_ctx);
 	}
+	if (prof)
+		prof->total += salsa64_rec_prof_now() - t_run;
 }
 
 /* ---- Inicio --------------------------------------------------------------------- */
@@ -594,16 +812,18 @@ bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *co
 	    size < (1u << 20) || (size & (size - 1)) || size > SALSA64_RDRAM_MAX)
 		return false;
 
-	/* Los ganchos de depuración los pone quien llama antes de iniciar. */
+	/* Los ganchos de depuración y el perfil los pone quien llama antes de iniciar. */
 	uint32_t opts = rec->opts;
 	void (*after_exit)(struct salsa64_rec *, uint64_t, void *) = rec->after_exit;
 	void (*on_compile)(struct salsa64_rec *, uint64_t, uint32_t, uint32_t, bool) = rec->on_compile;
 	void *after_exit_ctx = rec->after_exit_ctx;
+	struct salsa64_rec_prof *prof = rec->prof;
 	memset(rec, 0, sizeof *rec);
 	rec->opts = opts;
 	rec->after_exit = after_exit;
 	rec->after_exit_ctx = after_exit_ctx;
 	rec->on_compile = on_compile;
+	rec->prof = prof;
 	rec->cpu = cpu;
 	rec->code = code;
 	rec->code_words = (uint32_t)(bytes / 4 < UINT32_MAX ? bytes / 4 : UINT32_MAX);
