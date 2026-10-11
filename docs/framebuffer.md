@@ -36,10 +36,14 @@ campo 16107), en una sola tarea:
    textura en la misma tarea (hacia otras de 64: `289600`, `36ce60`), y
    alguna que el CPU escribe después (14 336 escrituras en `289600`).
 
-**Mario Kart 64**: en 50 s de carrera en Luigi Raceway (pad
-`mk64-luigi.pad`) ninguna carga a la TMEM viene de un destino y el CPU no
-toca los framebuffers. Las «pantallas gigantes» no están en esa escena:
-pendiente de saber dónde las vio el autor.
+**Mario Kart 64**: la «pantalla gigante» es la cámara sobre la entrada
+del túnel de Luigi Raceway. El volcado de la PS3 frente al túnel tiene una
+sola color image (el framebuffer) y ninguna textura con origen en un
+destino: el CPU lee el framebuffer y lo reduce a la textura de la pantalla
+(en 50 s de carrera lejos del túnel, con `mk64-luigi.pad`, no lo hace). De
+paso: todas las texturas del volcado salían sin origen porque libultra
+manda ancho 1 en `SETTIMG` para `LOADBLOCK`; ahora un bloque son texels
+seguidos y el paso lo da la tile que lee.
 
 **Conker y Perfect Dark**: nada en 3 minutos de intro (los efectos están
 dentro del juego: pausa, sombra, cámara espía).
@@ -80,6 +84,23 @@ superficie R5G6B5 **en memoria principal mapeada**, filtro lineal), espera
 la barrera y convierte a RGBA5551 escribiendo en la RDRAM
 (`rsxkit_pixels_565_to_5551`, 4 píxeles por palabra). Desde entonces el
 destino es «del CPU» (`cpu_owned`) hasta que el RDP lo vuelva a dibujar.
+La emulación solo espera la copia cuando la imagen **acaba de aparecer**
+(no se pidió en la tarea anterior: el fondo de la pausa de Zelda, una vez
+por pausa). Si la misma imagen se pide en tareas seguidas (la intro de
+Conker dibuja cada tarea una color image de 292 que no se presenta y el
+RDP no lee: 150 copias esperadas en 5 s, 16–18 ms cada una), la copia se
+hace sin esperar en uno de los dos búferes grandes y el CPU recibe el
+cuadro anterior: un efecto por cuadro queda con un cuadro de retraso en
+vez de frenar la emulación.
+
+**Espejo del framebuffer presentado.** Cada campo, el framebuffer que
+muestra el VI se reduce en el RSX a un búfer y, un campo después, el PPE
+lo escribe en la RDRAM (solo las filas que muestra el VI; sin esperas).
+Mario Kart fabrica con el CPU la textura de la cámara del túnel de Luigi
+Raceway leyendo el framebuffer: sin el espejo la pantalla salía negra. En
+la PS3 cuesta 0,0 ms medidos por campo en presentación (GoldenEye en Dam
+sigue a 45,8 campos/s, su rango).
+
 Las imágenes chicas (iconos, pantallas) no se esperan: al terminar la tarea
 que las dibujó se encola una **copia espejo** (solo las filas que llegaron
 las tijeras, hasta 64 KB, cuatro en vuelo) y se convierte a la RDRAM en
@@ -117,6 +138,9 @@ la PS3 en `docs/perf-log.md`; memoria en `docs/memory-budget.md`.
 ## Pendiente
 
 - Mario Kart: localizar la escena de las pantallas.
+- Conker, intro: qué es la color image de 292 que dibuja cada tarea sin
+  presentarla ni leerla (el host no la reproduce ni con START y A; en la
+  PS3 sí): un `gfxdump` en esa escena lo diría.
 - Perfect Dark y Conker: copias del z-buffer (rectángulos que leen la z
   image como color image), sombra y desenfoque de Conker; color images de
   32 bits y de 8 bits (CI8 de Conker) no se copian ni se ceban.

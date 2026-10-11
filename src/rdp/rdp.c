@@ -79,9 +79,14 @@ struct set {
 	volatile uint32_t fence_task;  /* número de la tarea antes de `fence` */
 	struct gfx_result res;      /* la deja done; la lee flush */
 	/* Color images de la tarea que hay que copiar a la RDRAM al traducirla
-	 * (lo decide done, en el hilo de emulación, que después espera). */
+	 * (lo decide done, en el hilo de emulación). rb_sync: la emulación
+	 * espera esa copia (la imagen acaba de aparecer: el CPU la va a leer
+	 * ya, como el fondo de la pausa de Zelda); si no, se copia sin esperar
+	 * (la misma imagen se pide en tareas seguidas: un efecto por cuadro
+	 * recibe el cuadro anterior, como la intro de Conker). */
 	uint32_t rb_addr[RB_PER_TASK];
-	uint32_t rb_n;
+	bool rb_sync[RB_PER_TASK];
+	uint32_t rb_n, rb_nsync;
 };
 
 static inline void lwsync(void) { __asm__ volatile("lwsync" ::: "memory"); }
@@ -137,6 +142,9 @@ static struct {
 		uint32_t addr, width, lw, rows, fence;
 	} mirrors[MIRRORS];
 	struct mirror frame;         /* el espejo del framebuffer presentado */
+	struct mirror big[RB_SLOTS]; /* copias grandes sin esperar, en los búferes de RB_SLOTS */
+	uint32_t rb_prev[RB_PER_TASK];  /* color images pedidas en la tarea anterior (hilo de emulación) */
+	uint32_t rb_prev_n;
 } rdp;
 
 static void acquire(void *ctx, struct gfx_job *job);
@@ -241,6 +249,8 @@ uint32_t salsa64_rdp_reset(void)
 	rdp.rb_late_logged = false;
 	memset(rdp.mirrors, 0, sizeof rdp.mirrors);
 	memset(&rdp.frame, 0, sizeof rdp.frame);
+	memset(rdp.big, 0, sizeof rdp.big);
+	rdp.rb_prev_n = 0;
 	memset(&rdp.vi_ring, 0, sizeof rdp.vi_ring);
 	memset(rdp.surf_dirty, 0, sizeof rdp.surf_dirty);
 	rdp.last_set = 0;
@@ -345,6 +355,14 @@ static void readbacks_finish(bool wait)
 		to_rdram(rdp.rb + FRAME_SLOT * RB_SLOT, RB_PITCH, f->addr, f->width, f->lw, f->rows);
 		f->used = false;
 		rdp.stats.frames_mirrored++;
+	}
+	for (int k = 0; k < RB_SLOTS; k++) {
+		struct mirror *m = &rdp.big[k];
+		if (m->used && (wait ? (rsxkit_fence_wait(m->fence), true) : rsxkit_fence_done(m->fence))) {
+			to_rdram(rdp.rb + k * RB_SLOT, RB_PITCH, m->addr, m->width, m->lw, m->rows);
+			m->used = false;
+			rdp.stats.mirrors++;
+		}
 	}
 	for (int k = 0; k < MIRRORS; k++) {
 		struct mirror *m = &rdp.mirrors[k];
@@ -606,9 +624,11 @@ static void to_rsxkit(const struct gfx_draw *g, const struct set *s, int cur, rs
  * del DP. Solo recorre las cabeceras de los registros. */
 static void readbacks_wanted(struct set *s, const struct gfx_result *res)
 {
-	s->rb_n = 0;
-	if (!rdp.rdram || rdp.fbfx < 2)
+	s->rb_n = s->rb_nsync = 0;
+	if (!rdp.rdram || rdp.fbfx < 2) {
+		rdp.rb_prev_n = 0;
 		return;
+	}
 	uint32_t off = 0;
 	while (off + sizeof(struct gfx_cmd) <= res->cmd_bytes) {
 		const struct gfx_cmd *c = (const struct gfx_cmd *)(s->cmd + off);
@@ -618,11 +638,19 @@ static void readbacks_wanted(struct set *s, const struct gfx_result *res)
 			uint32_t k = 0;
 			while (k < s->rb_n && s->rb_addr[k] != c->a)
 				k++;
-			if (k == s->rb_n && k < RB_PER_TASK)
+			if (k == s->rb_n && k < RB_PER_TASK) {
+				bool again = false;
+				for (uint32_t j = 0; j < rdp.rb_prev_n; j++)
+					again |= rdp.rb_prev[j] == c->a;
+				s->rb_sync[k] = !again;
+				s->rb_nsync += !again;
 				s->rb_addr[s->rb_n++] = c->a;
+			}
 		}
 		off += c->size;
 	}
+	memcpy(rdp.rb_prev, s->rb_addr, sizeof rdp.rb_prev);
+	rdp.rb_prev_n = s->rb_n;
 }
 
 static void done(void *ctx, const struct gfx_job *job, const struct gfx_result *res)
@@ -634,7 +662,7 @@ static void done(void *ctx, const struct gfx_job *job, const struct gfx_result *
 	readbacks_wanted(s, res);
 	lwsync();
 	rdp.finished = n + 1;
-	if (!s->rb_n)
+	if (!s->rb_nsync)
 		return;
 	if (rdp.wake)
 		rdp.wake();
@@ -720,25 +748,50 @@ static void translate(uint32_t n)
 	struct { int slot; uint32_t buf, rows; } rb[RB_SLOTS];
 	uint32_t nrb = 0;
 	bool sync_rb[RDP_TARGETS_MAX] = { false };
-	for (uint32_t k = 0; k < s->rb_n && nrb < RB_SLOTS; k++) {
+	uint32_t big_used = 0;  /* búferes grandes tomados en esta tarea */
+	for (int k = 0; k < RB_SLOTS; k++)
+		big_used |= rdp.big[k].used << k;
+	for (uint32_t k = 0; k < s->rb_n; k++) {
 		for (int i = 0; i < RDP_TARGETS_MAX; i++) {
 			const struct rdp_target *t = &rdp.tg.t[i];
 			uint32_t rows = drawn_rows[i] < t->lh ? drawn_rows[i] : t->lh;
 			if (!drawn[i] || !rows || t->addr != s->rb_addr[k] || t->bpp != 2 || t->lw > RB_MAX_W ||
 			    t->lh > RB_MAX_H || t->addr + t->width * 2 * rows > rdp.rdram_size)
 				continue;
+			/* Un búfer grande libre; si todos esperan una barrera, se
+			 * termina el pendiente más viejo (espera corta). */
+			int buf = -1;
+			for (int b = 0; b < RB_SLOTS && buf < 0; b++)
+				if (!(big_used & (1u << b)))
+					buf = b;
+			if (buf < 0) {
+				readbacks_finish(true);
+				big_used = 0;
+				buf = 0;
+			}
 			if (!rdp_targets_readback(&rdp.tg, i, true))
 				continue;
 			rsxkit_rect src = { 0, 0, t->lw * rdp.scale, rows * rdp.scale };
-			if (rsxkit_target_read(rdp.surf[i], &src, rdp.rb_off + nrb * RB_SLOT, RB_PITCH, t->lw, rows,
+			if (rsxkit_target_read(rdp.surf[i], &src, rdp.rb_off + buf * RB_SLOT, RB_PITCH, t->lw, rows,
 					       RSXKIT_RGB565) != RSXKIT_OK)
 				continue;
 			rdp.bound_t = -1;
+			big_used |= 1u << buf;
 			sync_rb[i] = true;
-			rb[nrb].slot = i;
-			rb[nrb].buf = nrb;
-			rb[nrb].rows = rows;
-			nrb++;
+			if (s->rb_sync[k]) {
+				rb[nrb].slot = i;
+				rb[nrb].buf = buf;
+				rb[nrb].rows = rows;
+				nrb++;
+			} else {
+				struct mirror *m = &rdp.big[buf];
+				m->used = true;
+				m->addr = t->addr;
+				m->width = t->width;
+				m->lw = t->lw;
+				m->rows = rows;
+				m->fence = 0;  /* se pone con la barrera de la tarea */
+			}
 			break;
 		}
 	}
@@ -781,6 +834,9 @@ static void translate(uint32_t n)
 	s->fence_task = n + 1;
 	for (uint32_t k = 0; k < nmirror; k++)
 		rdp.mirrors[mirror_k[k]].fence = s->fence;
+	for (int k = 0; k < RB_SLOTS; k++)
+		if (rdp.big[k].used && !rdp.big[k].fence)
+			rdp.big[k].fence = s->fence;
 	if (nrb) {
 		uint64_t t1 = sysGetSystemTime();
 		rsxkit_fence_wait(s->fence);

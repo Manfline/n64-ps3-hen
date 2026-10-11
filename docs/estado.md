@@ -20,9 +20,12 @@ el **espejo asíncrono del framebuffer presentado cada campo** (bf836f2;
 espejo: SM64 59,8, GoldenEye Dam 45,8 (su rango), Banjo 56–57, Conker 59,8
 campos/s. Números en docs/perf-log.md; logs en `build/ps3-logs/`,
 fuera de git. No eran de la rama: líneas del logo (HLE), tienda Kokiri, túnica,
-controles. Pendiente de la rama: la intro de Conker dibuja cada tarea una
-color image de 320 no presentada y la política la copia esperando (16–18
-ms por tarea; 100 % de NTSC igual, peor campo 44 ms).
+controles. La intro de Conker dibujaba cada tarea una color image de 292
+no presentada y la política la copiaba esperando (16–18 ms por tarea; 100 %
+de NTSC igual, peor campo 44 ms): ahora la emulación espera solo la
+primera copia de una imagen y las de tareas seguidas van sin esperar (el
+CPU recibe el cuadro anterior). Sin probar en la PS3; el host no reproduce
+esa escena.
 
 **La lista con la que se probó (2026-10-11):**
 
