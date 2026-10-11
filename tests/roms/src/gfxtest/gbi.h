@@ -226,13 +226,21 @@ enum { SIZ_4 = 0, SIZ_8 = 1, SIZ_16 = 2, SIZ_32 = 3 };
 
 /* othermode L */
 #define AC_THRESHOLD 0x0001u
+#define AA_EN        0x0008u
 #define Z_CMP        0x0010u
 #define Z_UPD        0x0020u
+#define CVG_X_ALPHA  0x1000u
+#define ALPHA_CVG_SEL 0x2000u
 #define FORCE_BL     0x4000u
 /* Mezcla en los dos ciclos: in·a + mem·(1−a). */
 #define BL_XLU       ((0u << 30) | (0u << 26) | (1u << 22) | (0u << 18) | \
                       (0u << 28) | (0u << 24) | (1u << 20) | (0u << 16))
 /* Sin FORCE_BL el blender deja pasar el color: BL_XLU sirve para lo opaco. */
+/* in·0 + in·1 en los dos ciclos, con la cobertura multiplicada por el alfa:
+ * los texels con alfa 0 no se escriben (bordes de texturas recortadas). */
+#define BL_IN        ((0u << 30) | (3u << 26) | (0u << 22) | (2u << 18) | \
+                      (0u << 28) | (3u << 24) | (0u << 20) | (2u << 16))
+#define RM_TEX_EDGE  (AA_EN | CVG_X_ALPHA | ALPHA_CVG_SEL | FORCE_BL | BL_IN)
 
 static inline void dp_othermode(gfx **dl, uint32_t h, uint32_t l)
 {
@@ -324,6 +332,11 @@ static inline void dp_scissor(gfx **dl, unsigned x0, unsigned y0, unsigned x1, u
 static inline void dp_prim_color(gfx **dl, uint32_t rgba)
 {
 	cmd(dl, 0xFA000000u, rgba);
+}
+
+static inline void dp_env_color(gfx **dl, uint32_t rgba)
+{
+	cmd(dl, 0xFB000000u, rgba);
 }
 
 static inline void dp_blend_color(gfx **dl, uint32_t rgba)

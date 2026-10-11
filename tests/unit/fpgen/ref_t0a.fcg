@@ -1,0 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* Referencia para test_fpgen.c: textura por su alfa y alfa del vértice,
+ * T0·T0.aaaa·X0 + C.aaaa·X1. */
+void main(float4 uv : TEXCOORD0, float4 col : COLOR0, float4 x0 : TEXCOORD1, float4 x1 : TEXCOORD2,
+	uniform sampler2D tex0 : TEXUNIT0, out float4 color : COLOR)
+{
+	float4 t0 = tex2D(tex0, uv.xy);
+	color = saturate(t0 * t0.aaaa * x0 + col.aaaa * x1);
+}

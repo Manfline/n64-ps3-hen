@@ -322,9 +322,13 @@ bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex, bool p
 /* Tamaño de la textura de una tile (potencia de 2 si se repite). */
 void gfx_tile_size(const struct gfx_tile *t, uint32_t *w, uint32_t *h);
 
-/* combine.c: combiner → combinación lineal. Devuelve true si tuvo que
- * aproximar. */
+/* combine.c: combiner → combinación lineal fija o términos del generador
+ * (gfx.h). Lee d->fog (con niebla deja un término sin factores). Devuelve
+ * true si tuvo que aproximar. */
 bool gfx_combine(const struct gfx_state *g, struct gfx_draw *d);
+/* Deja el dibujo con solo `ntex` texturas: anula (combinación lineal) o
+ * quita (términos) lo que leía las que faltan. */
+void gfx_combine_textures(struct gfx_draw *d, unsigned ntex);
 
 /* Segmentada → física. */
 static inline uint32_t gfx_addr(const struct gfx_state *g, uint32_t seg)

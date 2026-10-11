@@ -224,11 +224,91 @@ static void gfx_combiner_forms(void)
 	CHECK(fabsf(d.k[GFX_K_T0][1][0] - (1.0f - k)) < 1e-5f);
 	CHECK(fabsf(d.k[GFX_K_T1][1][0] - k) < 1e-5f);
 
-	/* TEXEL0 × TEXEL1: se aproxima. */
+	/* TEXEL0 × TEXEL1 (alfa 1): no cabe en la combinación lineal; va al
+	 * generador como un término T0·T1 (alfa: su carril 3 es T0a·T1a, que
+	 * vale 0 aquí, más un término sin factores con 1 en el alfa). */
 	gs.oh = 0;
 	gs.cc_hi = (1u << 20 | 2u << 15 | 7u << 12 | 7u << 9 | 1u << 5 | 2u);
 	gs.cc_lo = (15u << 28 | 15u << 24 | 7u << 21 | 7u << 18 | 7u << 15 | 7u << 12 | 6u << 9 | 7u << 6 | 7u << 3 | 6u);
-	CHECK(gfx_combine(&gs, &d));
+	CHECK(!gfx_combine(&gs, &d));
+	CHECK_EQ(d.nterms, 2);
+	CHECK_EQ(d.ntex, 2);
+	CHECK_EQ(d.factors[0][0], GFX_F_NONE);
+	CHECK_EQ(d.factors[1][0], GFX_F_T0);
+	CHECK_EQ(d.factors[1][1], GFX_F_T1);
+	CHECK_EQ(d.factors[1][2], GFX_F_NONE);
+	for (int lane = 0; lane < 3; lane++) {
+		CHECK(d.k[1][0][lane] == 1.0f);
+		CHECK(d.k[0][0][lane] == 0.0f);
+	}
+	CHECK(d.k[0][0][3] == 1.0f && d.k[1][0][3] == 0.0f);
+}
+
+/* lerp(ENV, TEXEL0, SHADE_ALPHA) en el primer ciclo y × SHADE en el
+ * segundo (la niebla por luz precalculada de GoldenEye y Perfect Dark):
+ * T0·S·Sa − E·S·Sa + E·S, con alfa (T0a − Ea)·Sa + Ea. Dos factores de
+ * sombreado: va al generador con los términos T0·C (×Ca en X) y C (E − E·Ca),
+ * más el término sin factores del alfa constante. */
+static void gfx_combiner_shade_squared(void)
+{
+	start();
+	struct gfx_draw d;
+	memset(&d, 0, sizeof d);
+	gs.oh = (uint32_t)G_CYC_2CYCLE << G_MDSFT_CYCLETYPE;
+	gs.env = 0x40800040;  /* E = (0,25, 0,5, 0, 0,25) */
+	gs.cc_hi = 0x159804;
+	gs.cc_lo = 0x5ffedbf8;
+	CHECK(!gfx_combine(&gs, &d));
+	CHECK_EQ(d.ntex, 1);
+	CHECK_EQ(d.nterms, 3);
+	/* Orden canónico: {} < {T0, C} < {C}. */
+	CHECK_EQ(d.factors[0][0], GFX_F_NONE);
+	CHECK_EQ(d.factors[1][0], GFX_F_T0);
+	CHECK_EQ(d.factors[1][1], GFX_F_C);
+	CHECK_EQ(d.factors[1][2], GFX_F_NONE);
+	CHECK_EQ(d.factors[2][0], GFX_F_C);
+	CHECK_EQ(d.factors[2][1], GFX_F_NONE);
+	const float e[4] = { 0x40 / 255.0f, 0x80 / 255.0f, 0.0f, 0x40 / 255.0f };
+	for (int lane = 0; lane < 3; lane++) {
+		CHECK(d.k[1][2][lane] == 1.0f);                   /* T0·C·Ca */
+		CHECK(d.k[1][0][lane] == 0.0f && d.k[1][1][lane] == 0.0f);
+		CHECK(fabsf(d.k[2][0][lane] - e[lane]) < 1e-6f);  /* E·C */
+		CHECK(fabsf(d.k[2][2][lane] + e[lane]) < 1e-6f);  /* −E·C·Ca */
+		CHECK(d.k[0][0][lane] == 0.0f);
+	}
+	/* Alfa: T0a·Sa en el término T0·C (carril 3 = T0a·Ca), −Ea·Sa en C
+	 * (Ca) y Ea en el término sin factores. */
+	CHECK(d.k[1][0][3] == 1.0f);
+	CHECK(fabsf(d.k[2][0][3] + e[3]) < 1e-6f);
+	CHECK(fabsf(d.k[0][0][3] - e[3]) < 1e-6f);
+
+	/* Sin textura (apagada): se quita el término T0·C; con una, no cambia. */
+	struct gfx_draw d2 = d;
+	gfx_combine_textures(&d2, 1);
+	CHECK(!memcmp(&d2, &d, sizeof d));
+	gfx_combine_textures(&d2, 0);
+	CHECK_EQ(d2.nterms, 2);
+	CHECK_EQ(d2.factors[0][0], GFX_F_NONE);
+	CHECK_EQ(d2.factors[1][0], GFX_F_C);
+	CHECK(fabsf(d2.k[1][0][0] - e[0]) < 1e-6f);
+	CHECK(d2.factors[2][0] == 0 && d2.k[2][0][0] == 0.0f);
+
+	/* Con niebla y sin alfa constante hace falta el término sin factores
+	 * igual: (T0 − 0)·SHADE_ALPHA·SHADE con alfa T0a·Sa. */
+	memset(&d, 0, sizeof d);
+	d.fog = 1;
+	gs.cc_hi = 0x159804;
+	gs.cc_lo = 0xfffffff8;  /* b = 0 y d = 0 en los dos ciclos; alfa del segundo = COMBINED */
+	CHECK(!gfx_combine(&gs, &d));
+	CHECK_EQ(d.nterms, 2);
+	CHECK_EQ(d.factors[0][0], GFX_F_NONE);
+	CHECK_EQ(d.factors[1][0], GFX_F_T0);
+	CHECK_EQ(d.factors[1][1], GFX_F_C);
+	CHECK(d.k[0][0][0] == 0.0f && d.k[0][0][3] == 0.0f);
+	d.fog = 0;
+	CHECK(!gfx_combine(&gs, &d));
+	CHECK_EQ(d.nterms, 1);
+	CHECK_EQ(d.factors[0][0], GFX_F_T0);
 }
 
 static void gfx_triangle_transform(void)
@@ -428,10 +508,22 @@ static void gfx_combiner_premul(void)
 	}
 	CHECK(fabsf(d.k[GFX_K_ONE][0][3] - 0xC0 / 255.0f) < 1e-6f);  /* alfa = ENV */
 
-	/* (TEXEL0 − 0)·TEXEL0_ALPHA + TEXEL0: T0·T0a + T0. */
+	/* (TEXEL0 − 0)·TEXEL0_ALPHA + TEXEL0: T0·T0a + T0. Ninguna textura
+	 * sirve para los dos: va al generador, exacto, sin premultiplicar. */
 	gs.cc_lo = 15u << 28 | 15u << 24 | 7u << 21 | 7u << 18 | 1u << 15 | 7u << 12 | 5u << 9 | 1u << 6 | 7u << 3 | 5u;
-	CHECK(gfx_combine(&gs, &d));
+	CHECK(!gfx_combine(&gs, &d));
 	CHECK(!(d.tex[0].flags & GFX_TEX_PREMUL));
+	CHECK_EQ(d.nterms, 3);
+	CHECK_EQ(d.factors[0][0], GFX_F_NONE);
+	CHECK_EQ(d.factors[1][0], GFX_F_T0);
+	CHECK_EQ(d.factors[1][1], GFX_F_NONE);
+	CHECK_EQ(d.factors[2][0], GFX_F_T0);
+	CHECK_EQ(d.factors[2][1], GFX_F_T0A);
+	for (int lane = 0; lane < 3; lane++)
+		CHECK(d.k[1][0][lane] == 1.0f && d.k[2][0][lane] == 1.0f && d.k[0][0][lane] == 0.0f);
+	/* Alfa = ENVa, constante: el término sin factores. */
+	CHECK(fabsf(d.k[0][0][3] - 0xC0 / 255.0f) < 1e-6f);
+	CHECK(d.k[1][0][3] == 0.0f && d.k[2][0][3] == 0.0f);
 }
 
 /* La misma textura premultiplicada al decodificar: alfa 0 → negro. */
@@ -591,6 +683,40 @@ static void gfx_draw_batching(void)
 		CHECK_EQ(b->h.a, 9);
 		CHECK_EQ(b->h.b, 3);
 		CHECK(a->k[GFX_K_ONE][0][0] == 1.0f && b->k[GFX_K_ONE][0][1] == 1.0f);
+	}
+}
+
+/* Prueba de alfa que sale de la cobertura (CVG_X_ALPHA). Sin FORCE_BL
+ * (G_RM_AA_ZB_TEX_EDGE) se recorta en la mitad; con FORCE_BL y AA_EN
+ * (G_RM_TEX_EDGE: el medidor de energía de SM64, que salía con su fondo
+ * transparente opaco) el RDP no escribe lo que tiene alfa < 32; sin AA_EN
+ * la cobertura no depende del alfa. */
+static void gfx_cvg_x_alpha(void)
+{
+	static const struct { uint32_t ol; uint8_t atest, aref; } c[] = {
+		{ 0x00553078, GFX_ATEST_GEQUAL, 128 },  /* G_RM_AA_ZB_TEX_EDGE */
+		{ 0x0F0A7008, GFX_ATEST_GEQUAL, 32 },   /* G_RM_TEX_EDGE */
+		{ 0x0F0A7000, GFX_ATEST_NONE, 0 },      /* el mismo sin AA_EN */
+		{ 0x0F0A4000, GFX_ATEST_NONE, 0 },      /* G_RM_OPA_SURF */
+	};
+	const struct vtx v[3] = { { 0, 0, 0, 0, 0, { 0 } }, { 1, 0, 0, 0, 0, { 0 } }, { 0, 1, 0, 0, 0, { 0 } } };
+	for (unsigned i = 0; i < sizeof c / sizeof c[0]; i++) {
+		start();
+		viewport_320x240();
+		load_mtx(ident, true);
+		load_mtx(ident, false);
+		set_combine(CC_A_ZERO, CC_ZERO, CC_C_ZERO, CC_SHADE, CC_ZERO, CC_ZERO, CC_ZERO, CC_SHADE);
+		dl(0xEF000000 | G_CYC_1CYCLE << 20, c[i].ol);  /* G_RDPSETOTHERMODE */
+		dl(0x01000000 | 3 << 12 | 3 << 1, put_vertices(v, 3));
+		dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);
+		run();
+		const struct gfx_draw *d = draw_n(0);
+		CHECK(d != NULL);
+		if (!d)
+			continue;
+		CHECK_EQ(d->atest, c[i].atest);
+		CHECK_EQ(d->aref, c[i].aref);
+		CHECK_EQ(d->blend, GFX_BLEND_OFF);
 	}
 }
 
@@ -995,6 +1121,7 @@ static void gfx_texcache_hash(void)
 void t_suite_gfx(void)
 {
 	RUN(gfx_combiner_forms);
+	RUN(gfx_combiner_shade_squared);
 	RUN(gfx_triangle_transform);
 	RUN(gfx_matrix_stack);
 	RUN(gfx_lighting);
@@ -1006,6 +1133,7 @@ void t_suite_gfx(void)
 	RUN(gfx_fill_and_zclear);
 	RUN(gfx_fill_1cycle_edge);
 	RUN(gfx_draw_batching);
+	RUN(gfx_cvg_x_alpha);
 	RUN(gfx_dl_flow);
 	RUN(gfx_load_ucode_skips_foreign);
 	RUN(gfx_texcache_across_tasks);

@@ -1,5 +1,160 @@
 # Estado
 
+## 2026-10-10 — Fase 4: generador de fragment programs del RSX en tiempo de ejecución (rama compassionate-shirley)
+
+Hecho:
+- **`lib/rsxkit` emite microcódigo de fragment program** (familia NV40) sin
+  compilador Cg en la consola: `include/rsxkit/fpgen.h` + `src/fpgen.c`
+  (codificador, C puro, sin PSL1GHT) y `src/fpcache.c` (caché por hash de
+  la descripción canónica, 128 programas en un pool de 96 KB de memoria
+  local del RSX; si se llena, espera al RSX y se vacía). La descripción es
+  genérica: `color = saturate(Σ_j (Π factores_j) · X_j)` con factores T0,
+  T0a, T1, T1a, C (color del vértice) y Ca, hasta 7 términos (un varying
+  TEXCOORD1..7 cada uno) de 4 factores; los `X_j = k0 + k1·C + k2·Ca` los
+  sigue armando el vertex program (`rsxkit_lincomb.vcg`, ahora con 7 X, 27
+  constantes, COLOR0 de salida y `fogsel` para sumar la niebla al término
+  sin factores). La combinación lineal fija (`nterms = 0`) sigue como
+  camino rápido con sus tres programas precompilados. API en
+  `lib/rsxkit/README.md`; formato en `docs/rsx-notes.md` y en la cabecera
+  de `fpgen.c` (fuentes MIT de cgcomp, `docs/THIRD_PARTY.md`).
+- **Verificación en el host sin consola:** `tests/unit/test_fpgen.c` trae
+  un intérprete del microcódigo (TEX, MOV, MUL, ADD, MAD, swizzle, H/R,
+  saturación) anclado a los `.fpo` que cgcomp compila de los shaders de la
+  combinación lineal y de tres shaders de referencia con productos
+  (`tests/unit/fpgen/*.fcg`, `tools/fpgen-ref.sh` → `tests/unit/fpgen_ref.h`):
+  primero los programas de cgcomp dan la fórmula de su shader, luego los
+  generados dan la misma, y para las descripciones equivalentes leen los
+  mismos TEXCOORD. Más pruebas de forma (fin de programa, un solo registro
+  de entrada por instrucción, perspectiva, máscara, R0 saturado al final),
+  canonización, hash y rechazo de descripciones inválidas.
+- **`src/rsp/gfx/combine.c`** evalúa el combiner con monomios dispersos
+  (cada textura a lo sumo una vez, dos texturas, hasta tres factores de
+  sombreado) y, si el resultado no cabe en la combinación lineal (o si
+  pide T0·T0a y T0 a la vez), lo agrupa en el menor número de términos
+  (cada X_j absorbe un factor de sombreado) en orden canónico, con el alfa
+  compartiendo términos con el color. `gfx_draw` lleva `nterms` y
+  `factors` (480 bytes; `GFX_K_TERMS` = 7); `src/rdp` los pasa a rsxkit y
+  el rasterizador del host los evalúa igual. El búfer de comandos de cada
+  juego pasa de 512 a 768 KB a costa del arena de texturas.
+- **gfxtest** tiene dos cuadros nuevos (N: TEXEL0·TEXEL1·SHADE; O:
+  lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE, la niebla por luz de GoldenEye) con
+  sus puntos en `expect.h`; las tres variantes dan 24/24 en el host y
+  `tools/test-roms.sh` exige 0 combiners aproximados. ROMs recompiladas
+  (SHA-256 nuevos).
+- **GoldenEye en Dam (host):** 97 449 → **0 combiners aproximados** en la
+  misma corrida (`--pad` con START y A pulsados y soltados cada 240
+  campos, 7 500 M ciclos). En el nivel solo dos combiners
+  (`159804:5ffedbf8` y `159a04:5ffefff8`) van por el generador: 3 términos
+  {}, {T0, C}, {C}.
+- Estadísticas nuevas en el log del frontend («gfx: fragment programs:
+  cambios por tarea, dibujos con programa generado, programas en la
+  caché»).
+
+Decisiones:
+- Una sola tabla combiner → programa, en rsxkit, por hash de la
+  descripción: la estructura de los términos depende también de los
+  valores de PRIM/ENV (un coeficiente en cero quita un término), así que
+  una tabla por palabras de G_SETCOMBINE en src/rdp sería incorrecta.
+- Operaciones en fp16 como las de cgcomp (entradas de 8 bits); R0 al
+  final con saturación. Registros: H2 acumula, H3/H4 texturas, H5
+  productos (`num_regs` ≤ 3).
+- La niebla sigue en el vertex program: escala por (1 − C.a) y suma
+  fog·C.a al primer término sin factores (`fogsel`); combine.c garantiza
+  ese término cuando hay niebla.
+
+Verificado:
+- [x] RPCS3: `tools/test-phase2.sh`: gfxtest en el frontend (HLE en el SPE,
+      RSX con programas generados) 24/24 puntos en F3DEX2 y F3D; 2
+      programas generados, 9 cambios de programa por tarea.
+- [x] `tools/test-rec.sh` (qemu ppc64, big-endian): 324/324 unitarias en
+      los cuatro modos del recompilador (el intérprete del microcódigo y
+      el generador también en big-endian), nemu64-test con las 433 fallas
+      de la línea base, vitest OK.
+- [x] Con main 5a0a1a3 fusionado (ad14e4b; gfxtest con el cuadro de
+      G_RM_TEX_EDGE de main como N y los del generador como P y Q, 26
+      puntos): test-host 325/325, test-roms 26/26 en las tres variantes,
+      RPCS3 26/26 en F3DEX2 y F3D, compilación PS3 sin advertencias,
+      test-rec en los cuatro modos del recompilador.
+
+- [x] **PS3 real** (SLSA00087 «Salsa64 fpgen», 136dff4 y luego ad14e4b con
+      main fusionado; el autor, 2026-10-10): GoldenEye 238 s hasta Dam con
+      la niebla por luz exacta en las capturas (34–55 campos/s en el
+      nivel, 4 programas generados, hasta 131 dibujos por tarea con
+      programa generado, 0 vaciados); Zelda OoT (144 s, Kokiri), SM64
+      (166 s, castillo; el medidor de energía ya sin fondo con main
+      fusionado) y Mario Kart 64 (81 s, pista) sin regresión visual, 0
+      programas generados y 54–60 campos/s. Números en
+      `docs/perf-log.md`.
+
+Pendiente:
+- [ ] Perfect Dark en la PS3 con el generador (su combiner de niebla por
+      luz es el de GoldenEye; en el host ya no se aproxima).
+- [ ] Medir el tiempo del RSX por cuadro cuando haya contadores (hoy solo
+      se mide el PPE).
+## 2026-10-10 — Medidor de energía de SM64 con fondo opaco: G_RM_TEX_EDGE
+
+Reporte (el autor, PS3, main de hoy): en Super Mario 64, al nadar, el
+medidor de energía («POWER», rueda azul y mano) salía con un cuadro café
+opaco detrás, del tamaño de su textura. Vidas, estrellas, agua y peces bien.
+
+Diagnóstico (rama `modest-archimedes-e639a4`, en la Mac):
+- Reproducido con `salsa64-run` nativo: `docs/pads/sm64-castillo.pad` lleva
+  a Mario al puente del castillo y `--poke "4200:8033B21E=0x0400"` (opción
+  nueva: escribe la RDRAM al empezar un campo) le baja la energía para que
+  aparezca el medidor. El rasterizador de referencia lo dibujaba igual de
+  opaco: era de la HLE, no de la traducción al RSX.
+- Con la traza por dibujo (`-DSALSA64_GFX_TRACE`): el medidor son dos
+  cuadros de 32×64 RGBA16 y la rueda de 32×32, en 1 ciclo, combiner
+  TEXEL0/TEXEL0 y othermode L 0x0F0A7008 = `G_RM_TEX_EDGE`: CVG_X_ALPHA |
+  ALPHA_CVG_SEL | **FORCE_BL** | AA_EN, blender in·0 + in·1. `blend_state`
+  solo ponía la prueba de alfa de CVG_X_ALPHA sin FORCE_BL (las
+  `G_RM_AA_*_TEX_EDGE`), así que salía sin prueba de alfa ni mezcla.
+- En el RDP la cobertura pasa a ser cvg·α (cvg = α/32 con el píxel
+  cubierto entero) y con AA_EN no se escriben los píxeles de cobertura 0.
+- No venía de 8ec50de (TEXRECT sin costuras): la condición estaba así desde
+  la primera HLE del RDP (87592d1).
+
+Arreglo (`src/rsp/gfx/rdp.c`, `blend_state`; nada en src/rdp): con
+CVG_X_ALPHA, FORCE_BL y AA_EN, prueba de alfa ≥ 32 (el RSX la recibe como
+`alpha_ref` 32). Sin AA_EN la cobertura no depende del alfa y no se prueba;
+sin FORCE_BL sigue el corte en 128 de antes.
+- Prueba unitaria `gfx_cvg_x_alpha` (G_RM_AA_ZB_TEX_EDGE → 128,
+  G_RM_TEX_EDGE → 32, sin AA_EN y G_RM_OPA_SURF → sin prueba) y escena N de
+  gfxtest: cuadro con textura RGBA16 de alfa de 1 bit en G_RM_TEX_EDGE; sin
+  el arreglo el texel con alfa 0 sale café (0xA55221). Ahora 24 de 24
+  puntos en las tres variantes, en el host y en RPCS3 (pantalla del RSX).
+- Sin cambios en otras escenas (comparación píxel a píxel del rasterizador
+  de la Mac, antes y después): SM64 (título, selección de archivo, intro,
+  castillo; solo cambia el recuadro del medidor), los menús de Mario
+  Kart 64 hasta la selección de pista y las intros de GoldenEye, Banjo,
+  Star Fox 64, Perfect Dark, Conker y Zelda OoT.
+- Pruebas: `tools/build.sh test-host` (320, 0 fallidas), `tools/test-roms.sh`
+  (nemu64-test 433 con HLE y 136 con LLE, gfxtest ×3, audiotest, vitest,
+  controles, savetest), `tools/build.sh` sin advertencias del compilador y
+  `tools/test-phase2.sh` en RPCS3 (24 de 24 en F3DEX2 y F3D).
+- Paquete para la PS3: `salsa64-alfa.pkg` (SLSA00085, «Salsa64 alfa»).
+- **PS3 real**: el autor confirmó el medidor de SM64 sin fondo. Log de la
+  corrida sin errores (`build/ps3-logs/sm64-medidor.log`, fuera de git).
+
+- **Mario Kart 64 en la PS3** con este paquete: menús y carrera bien según
+  el autor (la pantalla gigante negra de la pista es el efecto de
+  framebuffer ya pendiente, Fase 4). Vio además polígonos con «una punta que
+  se queda y se estira» en la transición del título a «GAME SELECT». No es
+  de esta rama: ninguna draw de Mario Kart pasa por la rama nueva de
+  `blend_state` (55 026 estados rastreados, campos 300–1900). En la Mac la
+  transición sale limpia: el fundido son 240 triángulos con w de 1940 a
+  2900 (ninguno con w ≤ 0) y «GAME SELECT» son solo rectángulos. Hipótesis:
+  el RSX lee vértices viejos (búfer que la tarea siguiente ya reescribió) en
+  src/rdp.
+
+Pendiente:
+- [ ] Polígonos estirados en la transición título → «GAME SELECT» de
+      Mario Kart 64 en la PS3 (tarea aparte: separar HLE de RSX con el
+      volcado `gfxdump.bin` y `--raster-dump`; revisar la vida de los
+      juegos de búferes de src/rdp/rdp.c).
+- [ ] `embedded` de vuelta a `file:oot.z64` (como lo dejó el trabajo de
+      presentación) cuando el autor termine con Mario Kart.
+
 ## 2026-10-10 — Presentación: Banjo-Kazooie (FREEZE del RDP y destino equivocado), pausa de Zelda y recorte del overscan
 
 Rama `bold-neumann-794fc0` (trabajo de presentación). Los tres casos

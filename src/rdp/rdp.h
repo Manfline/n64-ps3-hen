@@ -42,6 +42,12 @@ struct salsa64_rdp_stats {
 	 * doble búfer a 30 cps), sumada y la mayor. */
 	uint64_t age_sum;
 	uint32_t age_max;
+	/* Fragment programs generados (lib/rsxkit, rsxkit_fp_stats): dibujos
+	 * que usaron uno, programas distintos en la caché, generados en total,
+	 * vaciados de la caché y cargas de programa (cambios, contando los
+	 * precompilados). */
+	uint32_t draws_generated;
+	uint32_t fp_programs, fp_generated, fp_evictions, fp_loads;
 };
 
 /* Después de rsxkit_init. scale = 0: la mayor escala entera que cabe en la

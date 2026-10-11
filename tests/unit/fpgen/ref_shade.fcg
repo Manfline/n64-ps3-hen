@@ -1,0 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* Referencia para test_fpgen.c: sombreado × sombreado (la niebla por luz
+ * de GoldenEye), T0·C·C.aaaa·X0 + C·X1 + X2. */
+void main(float4 uv : TEXCOORD0, float4 col : COLOR0, float4 x0 : TEXCOORD1, float4 x1 : TEXCOORD2,
+	float4 x2 : TEXCOORD3, uniform sampler2D tex0 : TEXUNIT0, out float4 color : COLOR)
+{
+	float4 t0 = tex2D(tex0, uv.xy);
+	color = saturate(t0 * col * col.aaaa * x0 + col * x1 + x2);
+}
