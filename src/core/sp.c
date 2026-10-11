@@ -17,7 +17,8 @@
  * Los registros del DP: DPC_START/DPC_END entregan el tramo de comandos
  * al consumidor del RDP (bus->rsp.dpc; sin él, se descarta) y
  * DPC_CURRENT avanza hasta el final; DPC_STATUS lleva xbus (comandos en la
- * DMEM), freeze (los comandos esperan) y flush con sus pares de bits
+ * DMEM), freeze (los comandos esperan, y la interrupción de un SYNC_FULL
+ * ya visto llega al descongelar: rsp.c) y flush con sus pares de bits
  * (limpiar, poner), y los contadores se leen como cero.
  */
 #include "core/bus.h"
@@ -25,6 +26,10 @@
 #include <string.h>
 
 #define SP_PC_REG 0x80000u
+
+#ifdef SALSA64_DEBUG_DP
+void salsa64_debug_dp(int kind, uint32_t reg, uint32_t v);
+#endif
 
 uint32_t salsa64_sp_read(struct salsa64_bus *bus, uint32_t reg)
 {
@@ -90,6 +95,9 @@ static void sp_dma(struct salsa64_bus *bus, uint32_t v, bool to_rdram)
 static void sp_write_status(struct salsa64_bus *bus, uint32_t v)
 {
 	uint32_t clear = 0, set = 0;
+#ifdef SALSA64_DEBUG_DP
+	salsa64_debug_dp(2, 0x10, v);
+#endif
 
 	if ((v & 0x003) == 0x001) clear |= SALSA64_SP_STATUS_HALT;
 	if ((v & 0x003) == 0x002) set |= SALSA64_SP_STATUS_HALT;
@@ -152,7 +160,11 @@ uint32_t salsa64_dp_read(struct salsa64_bus *bus, uint32_t reg)
 {
 	salsa64_rsp_sync(bus);
 	uint32_t i = reg >> 2;
-	return i < SALSA64_DP_NREGS ? bus->dp[i] : 0;
+	uint32_t v = i < SALSA64_DP_NREGS ? bus->dp[i] : 0;
+#ifdef SALSA64_DEBUG_DP
+	salsa64_debug_dp(0, reg, v);
+#endif
+	return v;
 }
 
 /* [start, end) ya está en manos del RDP: lo consume el backend. */
@@ -194,6 +206,9 @@ void salsa64_dp_submit(struct salsa64_bus *bus, uint32_t start, uint32_t end, co
 void salsa64_dp_write(struct salsa64_bus *bus, uint32_t reg, uint32_t v)
 {
 	salsa64_rsp_sync(bus);
+#ifdef SALSA64_DEBUG_DP
+	salsa64_debug_dp(1, reg, v);
+#endif
 	uint32_t *dp = bus->dp;
 	uint32_t i = reg >> 2;
 	switch (i) {
@@ -221,8 +236,10 @@ void salsa64_dp_write(struct salsa64_bus *bus, uint32_t reg, uint32_t v)
 		if (v & 0x020) s |= SALSA64_DP_STATUS_FLUSH;
 		if (v & 0x200) dp[SALSA64_DP_CLOCK] = 0;
 		dp[SALSA64_DP_STATUS] = s;
-		if (v & 0x004)
+		if (v & 0x004) {
 			dp_flush(bus);
+			salsa64_rsp_dp_unfreeze(bus);
+		}
 		return;
 	}
 	case SALSA64_DP_CURRENT:

@@ -8,6 +8,10 @@
  * `translated`) y el RSX pasó su barrera (`fence`, que el hilo de
  * emulación consulta con rsxkit_fence_done: solo lee una etiqueta).
  *
+ * Destinos de render: la tabla (qué color image tiene superficie, cuál se
+ * recicla, cuál se presenta) es targets.c, portable y con pruebas en el
+ * host; aquí solo viven las superficies de rsxkit, una por ranura.
+ *
  * Caché de texturas (gfx.h): otra región mapeada que administra la HLE.
  * La tarea n lleva el número n + 1 y, como done_task, la última tarea
  * cuya barrera ya pasó, nunca la última traducida (salsa64_rdp_dump lee
@@ -20,25 +24,30 @@
 #include <string.h>
 #include <sys/systime.h>
 
+#include "rdp/targets.h"
 #include "rsp/gfx/gfx.h"
 #include "rsp/gfx/hle.h"
 
 #define SETS        3
 #define VTX_BYTES   (2u << 20)
-#define CMD_BYTES   (512u << 10)
-#define TEX_BYTES   (4u << 20)
+/* gfx_draw son 480 bytes: 1600 dibujos por tarea. El arena de texturas
+ * casi no se usa con la caché (docs/memory-budget.md): le cede 256 KB. */
+#define CMD_BYTES   (768u << 10)
+#define TEX_BYTES   ((4u << 20) - (256u << 10))
 #define SET_BYTES   (VTX_BYTES + CMD_BYTES + TEX_BYTES)
 #define SETS_BYTES  (((SETS * SET_BYTES) + 0xFFFFFu) & ~0xFFFFFu)
 #define CACHE_BYTES (8u << 20)  /* caché de texturas (docs/memory-budget.md) */
 #define POOL_BYTES  (SETS_BYTES + CACHE_BYTES)
-#define MAX_TARGETS 4
 #define MAX_DEPTHS  2
-#define STALE_FIELDS 30  /* un destino sin dibujar en tantos campos ya no se presenta */
 
 _Static_assert(sizeof(struct gfx_vertex) == sizeof(rsxkit_vertex), "vértice de la HLE = vértice de rsxkit");
 _Static_assert(sizeof(((struct gfx_draw *)0)->k) == sizeof(((rsxkit_draw *)0)->k), "términos k");
+_Static_assert(sizeof(((struct gfx_draw *)0)->factors) == sizeof(((rsxkit_draw *)0)->factors), "factores");
 _Static_assert((int)GFX_K_T0 == (int)RSXKIT_K_T0 && (int)GFX_K_T1A == (int)RSXKIT_K_T1A &&
 		       (int)GFX_K_ONE == (int)RSXKIT_K_ONE, "orden de k");
+_Static_assert((int)GFX_F_T0 == (int)RSXKIT_FP_T0 && (int)GFX_F_T0A == (int)RSXKIT_FP_T0A &&
+		       (int)GFX_F_T1 == (int)RSXKIT_FP_T1 && (int)GFX_F_T1A == (int)RSXKIT_FP_T1A &&
+		       (int)GFX_F_C == (int)RSXKIT_FP_C && (int)GFX_F_CA == (int)RSXKIT_FP_CA, "factores");
 _Static_assert((int)GFX_CULL_BACK == (int)RSXKIT_CULL_BACK && (int)GFX_CULL_FRONT == (int)RSXKIT_CULL_FRONT,
 	       "cull");
 _Static_assert(GFX_DEPTH_TEST == RSXKIT_DEPTH_TEST && GFX_DEPTH_WRITE == RSXKIT_DEPTH_WRITE &&
@@ -53,14 +62,6 @@ struct set {
 };
 
 static inline void lwsync(void) { __asm__ volatile("lwsync" ::: "memory"); }
-
-struct target {
-	bool used;
-	bool drawn;              /* dibujado desde la última presentación */
-	uint32_t addr, width, lw, lh, bpp;
-	uint32_t last_field;
-	rsxkit_target *t;
-};
 
 struct depth {
 	bool used;
@@ -84,14 +85,11 @@ static struct {
 	 * emulación); flush avanza `translated` (presentación). La tarea n usa
 	 * el juego n % SETS. */
 	volatile uint32_t acquired, finished, translated;
-	struct target targets[MAX_TARGETS];
-	/* Lo presentado en el último campo desde el RSX (NULL: la RDRAM). */
-	const struct target *shown;
-	uint32_t shown_origin, shown_field;
+	struct rdp_targets tg;                    /* la tabla de destinos (targets.c) */
+	rsxkit_target *surf[RDP_TARGETS_MAX];     /* la superficie de cada ranura */
 	struct depth depths[MAX_DEPTHS];
-	struct target *bound_t;
+	int bound_t;                 /* ranura ligada, o -1 */
 	struct depth *bound_d;
-	uint32_t field;
 	unsigned last_set;           /* juego de búferes de la última tarea dibujada */
 	struct gfx_result last_res;
 	struct salsa64_rdp_stats stats;
@@ -104,6 +102,8 @@ static const struct salsa64_gfx_sink sink = { NULL, acquire, done };
 int salsa64_rdp_init(uint32_t scale)
 {
 	memset(&rdp, 0, sizeof rdp);
+	rdp_targets_init(&rdp.tg);
+	rdp.bound_t = -1;
 	const rsxkit_screen *sc = rsxkit_screen_info();
 	rdp.scale = scale ? scale : (sc->height >= 240 ? sc->height / 240 : 1);
 	rdp.pool = memalign(1u << 20, POOL_BYTES);
@@ -129,17 +129,17 @@ int salsa64_rdp_init(uint32_t scale)
 
 static void release_targets(void)
 {
-	for (int i = 0; i < MAX_TARGETS; i++)
-		if (rdp.targets[i].used)
-			rsxkit_target_destroy(rdp.targets[i].t);
+	for (int i = 0; i < RDP_TARGETS_MAX; i++)
+		if (rdp.surf[i])
+			rsxkit_target_destroy(rdp.surf[i]);
 	for (int i = 0; i < MAX_DEPTHS; i++)
 		if (rdp.depths[i].used)
 			rsxkit_depth_destroy(rdp.depths[i].d);
-	memset(rdp.targets, 0, sizeof rdp.targets);
+	memset(rdp.surf, 0, sizeof rdp.surf);
 	memset(rdp.depths, 0, sizeof rdp.depths);
-	rdp.bound_t = NULL;
+	rdp.bound_t = -1;
 	rdp.bound_d = NULL;
-	rdp.shown = NULL;
+	rdp_targets_init(&rdp.tg);  /* la tabla de destinos, vacía */
 }
 
 void salsa64_rdp_shutdown(void)
@@ -168,8 +168,6 @@ uint32_t salsa64_rdp_reset(void)
 		memset(&rdp.sets[i].res, 0, sizeof rdp.sets[i].res);
 	}
 	rdp.acquired = rdp.finished = rdp.translated = 0;
-	rdp.shown_origin = rdp.shown_field = 0;
-	rdp.field = 0;
 	rdp.last_set = 0;
 	memset(&rdp.last_res, 0, sizeof rdp.last_res);
 	memset(&rdp.stats, 0, sizeof rdp.stats);
@@ -229,49 +227,52 @@ static void acquire(void *ctx, struct gfx_job *job)
 	rdp.acquired = n + 1;
 }
 
-/* Destino de una color image (o el menos usado, reciclado). */
-static struct target *get_target(uint32_t addr, uint32_t width, uint32_t siz)
+/* Hasta qué línea llegan las tijeras de los dibujos que siguen a un
+ * TARGET (hasta el siguiente): el alto mínimo de su superficie. */
+static uint32_t scissor_bottom(const struct set *s, uint32_t off, uint32_t cmd_bytes)
 {
-	struct target *free_t = NULL, *oldest = NULL;
-	for (int i = 0; i < MAX_TARGETS; i++) {
-		struct target *t = &rdp.targets[i];
-		if (!t->used) {
-			if (!free_t)
-				free_t = t;
-			continue;
+	uint32_t bottom = 0;
+	while (off + sizeof(struct gfx_cmd) <= cmd_bytes) {
+		const struct gfx_cmd *c = (const struct gfx_cmd *)(s->cmd + off);
+		if (c->op == GFX_OP_END || c->op == GFX_OP_TARGET || c->size < sizeof *c)
+			break;
+		if (c->op == GFX_OP_DRAW) {
+			uint32_t y1 = (((const struct gfx_draw *)c)->scissor[3] + 3) / 4;
+			if (y1 > bottom)
+				bottom = y1;
 		}
-		if (t->addr == addr && t->width == width)
-			return t;
-		if (!oldest || (int32_t)(t->last_field - oldest->last_field) < 0)
-			oldest = t;
+		off += c->size;
 	}
-	struct target *t = free_t ? free_t : oldest;
-	if (!t)
-		return NULL;
-	if (t->used) {
-		if (rdp.bound_t == t)
-			rdp.bound_t = NULL;
-		rsxkit_target_destroy(t->t);
-		t->used = false;
-	}
-	uint32_t lw = width ? width : 320, lh = lw * 3 / 4;
-	t->t = rsxkit_target_create(lw * rdp.scale, lh * rdp.scale);
-	if (!t->t)
-		return NULL;
-	t->used = true;
-	t->addr = addr;
-	t->width = width;
-	t->lw = lw;
-	t->lh = lh;
-	t->bpp = siz == G_IM_SIZ_32b ? 4 : siz == G_IM_SIZ_8b ? 1 : 2;
-	t->last_field = rdp.field;
-	t->drawn = false;
-	rdp.stats.targets_created++;
-	return t;
+	return bottom;
 }
 
-static struct depth *get_depth(uint32_t addr, const struct target *t)
+/* Ranura (con superficie) de una color image; -1 si el RSX no tiene
+ * memoria para una nueva. */
+static int get_target(uint32_t addr, uint32_t width, uint32_t siz, uint32_t min_lh)
 {
+	bool fresh;
+	int i = rdp_targets_get(&rdp.tg, addr, width, siz, min_lh, &fresh);
+	if (!fresh)
+		return i;
+	if (rdp.surf[i]) {
+		if (rdp.bound_t == i)
+			rdp.bound_t = -1;
+		rsxkit_target_destroy(rdp.surf[i]);
+		rdp.surf[i] = NULL;
+	}
+	const struct rdp_target *t = &rdp.tg.t[i];
+	rdp.surf[i] = rsxkit_target_create(t->lw * rdp.scale, t->lh * rdp.scale);
+	if (!rdp.surf[i]) {
+		rdp.tg.t[i].used = false;
+		return -1;
+	}
+	rdp.stats.targets_created++;
+	return i;
+}
+
+static struct depth *get_depth(uint32_t addr, int slot)
+{
+	const struct rdp_target *t = &rdp.tg.t[slot];
 	uint32_t w = t->lw * rdp.scale, h = t->lh * rdp.scale;
 	struct depth *free_d = NULL;
 	for (int i = 0; i < MAX_DEPTHS; i++) {
@@ -299,12 +300,13 @@ static struct depth *get_depth(uint32_t addr, const struct target *t)
 	return d;
 }
 
-static void bind(struct target *t, struct depth *d)
+static void bind(int slot, struct depth *d)
 {
-	if (t == rdp.bound_t && d == rdp.bound_d)
+	if (slot == rdp.bound_t && d == rdp.bound_d)
 		return;
-	rsxkit_bind(t->t, d ? d->d : NULL, (float)t->lw, (float)t->lh);
-	rdp.bound_t = t;
+	const struct rdp_target *t = &rdp.tg.t[slot];
+	rsxkit_bind(rdp.surf[slot], d ? d->d : NULL, (float)t->lw, (float)t->lh);
+	rdp.bound_t = slot;
 	rdp.bound_d = d;
 	if (d && d->clear_pending) {
 		rsxkit_clear(RSXKIT_CLEAR_DEPTH, 0, d->clear_value, d->clear_rect);
@@ -351,6 +353,8 @@ static void to_rsxkit(const struct gfx_draw *g, const struct set *s, rsxkit_draw
 	d->alpha_ref = g->atest ? (g->aref ? g->aref : 1) : 0;
 	d->ntex = g->ntex > 2 ? 2 : g->ntex;
 	d->fog = g->fog;
+	d->nterms = g->nterms;
+	memcpy(d->factors, g->factors, sizeof d->factors);
 	for (int i = 0; i < 4; i++) {
 		d->scissor[i] = g->scissor[i] / 4.0f;
 		d->fog_color[i] = ((g->fog_color >> (24 - 8 * i)) & 0xFF) / 255.0f;
@@ -388,9 +392,9 @@ static void translate(uint32_t n)
 	struct set *s = &rdp.sets[n % SETS];
 	const struct gfx_result *res = &s->res;
 	rsxkit_vertices(s->vtx_off, RSXKIT_MEM_MAIN);
-	rdp.bound_t = NULL;
+	rdp.bound_t = -1;
 	rdp.bound_d = NULL;
-	struct target *cur = NULL;
+	int cur = -1;
 
 	uint32_t off = 0;
 	rsxkit_draw rd;
@@ -400,24 +404,25 @@ static void translate(uint32_t n)
 			break;
 		switch (c->op) {
 		case GFX_OP_TARGET:
-			cur = get_target(c->a, c->b, c->c & 0xFF);
+			cur = get_target(c->a, c->b, c->c & 0xFF, scissor_bottom(s, off + c->size, res->cmd_bytes));
 			break;
 		case GFX_OP_ZCLEAR:
 			zclear((const struct gfx_zclear *)c);
 			break;
 		case GFX_OP_DRAW: {
 			const struct gfx_draw *g = (const struct gfx_draw *)c;
-			if (!cur || !g->h.b)
+			if (cur < 0 || !g->h.b)
 				break;
 			struct depth *d = rdp.bound_t == cur ? rdp.bound_d : NULL;
 			if (g->depth)
 				d = get_depth(g->zimg, cur);
 			bind(cur, d);
-			cur->last_field = rdp.field;
-			cur->drawn = true;
+			rdp_targets_drawn(&rdp.tg, cur);
 			to_rsxkit(g, s, &rd);
 			rsxkit_draw_triangles(&rd, g->h.a, g->h.b);
 			rdp.stats.draws++;
+			if (g->nterms)
+				rdp.stats.draws_generated++;
 			rdp.stats.triangles += g->h.b / 3;
 			break;
 		}
@@ -455,62 +460,31 @@ uint32_t salsa64_rdp_tasks_done(void)
 }
 
 bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const rsxkit_view *view,
-			 rsxkit_rect *out)
+			 const struct salsa64_overscan *crop, rsxkit_rect *out)
 {
-	rdp.field = field;
 	if (!rdp.ready)
 		return false;
-	/* rdp.field solo avanza cuando el VI muestra algo: lo dibujado mientras
-	 * estuvo en negro (SM64 lo apaga 26 campos al cambiar de escena) quedó
-	 * con el campo de antes y parecería viejo al volver la imagen. */
-	for (int i = 0; i < MAX_TARGETS; i++)
-		if (rdp.targets[i].drawn) {
-			rdp.targets[i].last_field = field;
-			rdp.targets[i].drawn = false;
-		}
-	/* Puede haber más de uno: tras un cambio de resolución, la misma
-	 * dirección con el ancho de antes (GoldenEye pasa de 320 a 440 al ir a
-	 * las carpetas y, en campos alternos, salía la imagen vieja). Se toma el
-	 * del ancho que muestra el VI y, entre iguales, el dibujado hace menos. */
-	const struct target *best = NULL;
-	for (int i = 0; i < MAX_TARGETS; i++) {
-		const struct target *t = &rdp.targets[i];
-		if (!t->used || field - t->last_field > STALE_FIELDS)
-			continue;
-		uint32_t line = t->width * t->bpp;
-		if (f->origin < t->addr || f->origin >= t->addr + line * t->lh)
-			continue;
-		if (best) {
-			bool tw = t->width == f->width, bw = best->width == f->width;
-			if (bw && !tw)
-				continue;
-			if (bw == tw && (int32_t)(t->last_field - best->last_field) <= 0)
-				continue;
-		}
-		best = t;
-	}
-	if (!best && rdp.shown && rdp.shown->used && f->origin == rdp.shown_origin &&
-	    field - rdp.shown_field <= 2) {
-		/* El juego sostiene la misma imagen sin dibujar (GoldenEye, un
-		 * segundo mientras carga las carpetas): con la HLE la RDRAM de ese
-		 * framebuffer no tiene lo que dibujó el RSX (salían datos viejos,
-		 * ruido), así que mientras el VI no cambie de origen se sigue
-		 * presentando el mismo destino. */
-		const struct target *t = rdp.shown;
-		if (f->origin >= t->addr && f->origin < t->addr + t->width * t->bpp * t->lh)
-			best = t;
-	}
-	rdp.shown = best;
-	rdp.shown_origin = f->origin;
-	rdp.shown_field = field;
-	if (!best)
+	struct rdp_present p;
+	rdp_targets_present(&rdp.tg, f, field, &p);
+	if (p.slot < 0 || !rdp.surf[p.slot] || !p.w || !p.h)
 		return false;
-	uint32_t line = best->width * best->bpp;
-	uint32_t y0 = (f->origin - best->addr) / line;
-	uint32_t w = f->width < best->lw ? f->width : best->lw;
-	uint32_t h = f->height < best->lh - y0 ? f->height : best->lh - y0;
-	rsxkit_rect src = { 0, (int32_t)(y0 * rdp.scale), w * rdp.scale, h * rdp.scale };
-	rsxkit_target_present(best->t, &src, f->width, f->height, view, out);
+	rdp.stats.age_sum += p.age;
+	if (p.age > rdp.stats.age_max)
+		rdp.stats.age_max = p.age;
+	/* Recorte del overscan: la región se achica por los cuatro lados y se
+	 * presenta como una imagen más chica (misma proporción de pantalla). */
+	uint32_t cl = 0, cr = 0, ct = 0, cb = 0;
+	if (crop) {
+		cl = crop->left, cr = crop->right, ct = crop->top, cb = crop->bottom;
+		if (cl + cr >= p.w)
+			cl = cr = 0;
+		if (ct + cb >= p.h)
+			ct = cb = 0;
+	}
+	uint32_t w = p.w - cl - cr, h = p.h - ct - cb;
+	rsxkit_rect src = { (int32_t)(cl * rdp.scale), (int32_t)((p.y0 + ct) * rdp.scale), w * rdp.scale,
+			    h * rdp.scale };
+	rsxkit_target_present(rdp.surf[p.slot], &src, w, h, view, out);
 	return true;
 }
 
@@ -574,4 +548,10 @@ bool salsa64_rdp_dump(const char *path)
 void salsa64_rdp_get_stats(struct salsa64_rdp_stats *out)
 {
 	*out = rdp.stats;
+	rsxkit_fp_stats fp;
+	rsxkit_fp_get_stats(&fp);
+	out->fp_programs = fp.programs;
+	out->fp_generated = fp.generated;
+	out->fp_evictions = fp.evictions;
+	out->fp_loads = fp.loads;
 }

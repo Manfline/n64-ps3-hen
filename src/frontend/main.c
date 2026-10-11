@@ -84,6 +84,11 @@
  * "audiotest" en embedded, la ROM de prueba del audio se verifica sola
  * (selftest_audio.c) y sigue sonando.
  *
+ * Presentación: la imagen del VI sin el overscan (SALSA64_DATA_DIR/
+ * overscan.cfg: píxeles por lado a 320 × 240; por omisión 8 y 6, 0 la
+ * apaga), escalada a 4:3. Qué destino del RSX se presenta lo decide
+ * src/rdp/targets.c.
+ *
  * Capturas: con una ROM del disco y SALSA64_DATA_DIR/capturas presente,
  * cada SHOT_US se guarda la pantalla en SALSA64_DATA_DIR/screen-N.ppm (N de
  * 1 a SHOT_MAX, en ronda), para verla desde la Mac por FTP. Cada captura
@@ -166,6 +171,7 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define MENU_CFG_PATH SALSA64_DATA_DIR "/menu.cfg"
 #define MENU_TEST_MAX 8
 #define MENU_IDLE_FIELDS 900  /* prueba automática: sin acción en tanto, falla */
+#define OVERSCAN_PATH SALSA64_DATA_DIR "/overscan.cfg"
 #define ROM_MAX      (64u << 20)
 #define FB_MAX_W     640
 #define FB_MAX_H     576
@@ -636,6 +642,59 @@ static enum salsa64_lle_mode lle_config(void)
 	return strcmp(word, "all") == 0 ? SALSA64_LLE_ALL : SALSA64_LLE_AUTO;
 }
 
+/* Recorte del overscan: los bordes de la imagen que una tele de tubo no
+ * muestra (y donde los juegos dejan basura: GoldenEye rellena de azul la
+ * primera y la última columna). En píxeles de la N64 a 320 × 240, por
+ * lado; se escala con la imagen del VI (a 640 de ancho recorta el doble).
+ * Por omisión 8 y 6 (2,5 % por lado); overscan.cfg lo cambia con un
+ * número (todos los lados), dos (horizontal, vertical) o cuatro
+ * (izquierda, derecha, arriba, abajo); 0 lo apaga. Las ROMs de prueba se
+ * presentan enteras (sus verificaciones leen la pantalla por posición). */
+static struct { uint32_t left, right, top, bottom; } overscan = { 8, 8, 6, 6 };
+
+static void load_overscan(void)
+{
+	FILE *f = fopen(OVERSCAN_PATH, "r");
+	if (!f) {
+		salsa64_log("overscan: recorte %u %u %u %u por omisión (no hay %s)", overscan.left, overscan.right,
+			    overscan.top, overscan.bottom, OVERSCAN_PATH);
+		return;
+	}
+	unsigned v[4] = { 0, 0, 0, 0 };
+	int n = fscanf(f, "%u %u %u %u", &v[0], &v[1], &v[2], &v[3]);
+	fclose(f);
+	for (int i = 0; i < 4; i++)
+		if (v[i] > 64)
+			v[i] = 64;
+	if (n == 1)
+		overscan.left = overscan.right = overscan.top = overscan.bottom = v[0];
+	else if (n == 2)
+		overscan.left = overscan.right = v[0], overscan.top = overscan.bottom = v[1];
+	else if (n == 4)
+		overscan.left = v[0], overscan.right = v[1], overscan.top = v[2], overscan.bottom = v[3];
+	else
+		salsa64_log("overscan: %s sin números; queda el recorte por omisión", OVERSCAN_PATH);
+	salsa64_log("overscan: recorte %u %u %u %u (%s)", overscan.left, overscan.right, overscan.top,
+		    overscan.bottom, OVERSCAN_PATH);
+}
+
+/* El recorte para una imagen del VI (0 con las ROMs de prueba). */
+static struct salsa64_overscan overscan_for(const struct salsa64_vi_frame *f)
+{
+	struct salsa64_overscan c = { 0, 0, 0, 0 };
+	if (selftest_on || gfxtest_on || audiotest_on || !f->width || !f->height)
+		return c;
+	c.left = overscan.left * f->width / 320;
+	c.right = overscan.right * f->width / 320;
+	c.top = overscan.top * f->height / 240;
+	c.bottom = overscan.bottom * f->height / 240;
+	if (c.left + c.right >= f->width)
+		c.left = c.right = 0;
+	if (c.top + c.bottom >= f->height)
+		c.top = c.bottom = 0;
+	return c;
+}
+
 /* ---- Hilo de emulación ------------------------------------------------------ */
 
 /* Al terminar un campo: la imagen del VI (copiada a una ranura) y el
@@ -827,6 +886,10 @@ static struct {
 	/* Estadísticas de la ventana en curso. */
 	uint64_t us_present, us_flip;
 	uint32_t presented, blank, rsx_frames, skipped;
+	/* Retraso de la presentación: campos que la emulación lleva de ventaja
+	 * al campo que se presenta (cola entre hilos), sumado y el mayor. */
+	uint64_t behind_sum;
+	uint32_t behind_max;
 } pres = { .view = { RSXKIT_SCALE_FIT, RSXKIT_FILTER_LINEAR, 4.0f / 3.0f } };
 
 /* Presenta (o salta) un campo encolado. */
@@ -852,16 +915,27 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	rsxkit_rect r = { 0, 0, 0, 0 };
 	bool check = false, check_gfx = false;
 	uint64_t t0 = sysGetSystemTime();
+	uint32_t behind = n64.bus.vi.fields - m->field;  /* lectura de 32 bits del otro hilo */
+	pres.behind_sum += behind;
+	if (behind > pres.behind_max)
+		pres.behind_max = behind;
 	rsxkit_frame_begin(0x000000);
+	/* Lo que se ve: la imagen del VI sin el overscan (las capturas van de
+	 * ese tamaño). */
+	struct salsa64_overscan crop = overscan_for(&m->f);
+	struct salsa64_vi_frame shown = m->f;
+	shown.width -= crop.left + crop.right;
+	shown.height -= crop.top + crop.bottom;
 	if (m->f.width) {
-		if (salsa64_rdp_present(&m->f, m->field, &pres.view, &r)) {
+		if (salsa64_rdp_present(&m->f, m->field, &pres.view, &crop, &r)) {
 			pres.rsx_frames++;
 			if (gfxtest_on && pres.result == SELFTEST_RUNNING)
 				check_gfx = gfxtest_want_screen();
 		} else if (have) {
 			check = (m->flags & FIELD_CHECK) != 0;
-			rsxkit_fb_upload(pres.fb, snap_buf[slot], m->f.width, m->f.height, m->f.width * m->f.bpp,
-					 m->f.bpp == 4 ? RSXKIT_RGBA8888 : RSXKIT_RGBA5551);
+			uint32_t line = m->f.width * m->f.bpp;
+			rsxkit_fb_upload(pres.fb, snap_buf[slot] + crop.top * line + crop.left * m->f.bpp, shown.width,
+					 shown.height, line, m->f.bpp == 4 ? RSXKIT_RGBA8888 : RSXKIT_RGBA5551);
 			rsxkit_fb_draw(pres.fb, &pres.view, &r);
 		} else {
 			pres.blank++;
@@ -881,14 +955,14 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		char path[64];
 		snprintf(path, sizeof path, SALSA64_DATA_DIR "/campo-%u.ppm", m->field);
 		rsxkit_finish();
-		salsa64_screenshot(path, &m->f, &r);
+		salsa64_screenshot(path, &shown, &r);
 		salsa64_log("captura %s", path);
 	} else if (pres.shots_on && !cap_every && !selftest_on && !gfxtest_on && !audiotest_on && m->f.width &&
 		   (pres.autotest ? m->field / AUTO_SHOT_FIELDS != pres.shots : now - pres.t_shot >= SHOT_US)) {
 		char path[64];
 		snprintf(path, sizeof path, SALSA64_DATA_DIR "/screen-%u.ppm", pres.shots % SHOT_MAX + 1);
 		rsxkit_finish();
-		salsa64_screenshot(path, &m->f, &r);
+		salsa64_screenshot(path, &shown, &r);
 		salsa64_log("captura %s (campo %u)", path, m->field);
 		pres.shots = pres.autotest ? m->field / AUTO_SHOT_FIELDS : pres.shots + 1;
 		pres.t_shot = now;
@@ -996,6 +1070,17 @@ static void stats(uint64_t now)
 	 * traducción a comandos del RSX y esperas por un juego de búferes. */
 	struct salsa64_rdp_stats rs;
 	salsa64_rdp_get_stats(&rs);
+	/* Retraso de lo que se ve, en campos: la cola entre hilos (campos que la
+	 * emulación lleva de ventaja al presentar) y la antigüedad del destino
+	 * (campos entre su dibujo y el campo que lo muestra: lo que tarda el
+	 * juego en mostrar lo que dibuja, 2 con doble búfer a 30 cps). Para
+	 * comparar la sensación de input lag entre compilaciones y juegos. */
+	if (pres.presented)
+		salsa64_log("retraso: cola %.2f campos (máx %u); destino %.2f campos de antigüedad (máx %u) en %u "
+			    "campos del RSX",
+			    (double)pres.behind_sum / pres.presented, pres.behind_max,
+			    pres.rsx_frames ? (double)(rs.age_sum - sw.rdp0.age_sum) / pres.rsx_frames : 0.0,
+			    rs.age_max, pres.rsx_frames);
 	uint32_t tasks = rs.tasks - sw.rdp0.tasks;
 	if (tasks) {
 		double spu_ms = 0, wait_ms = 0, sleep_ms = 0;
@@ -1025,6 +1110,11 @@ static void stats(uint64_t now)
 				    (gfx_spu.t_state - sw.gfx_state0) * k, (gfx_spu.t_tex - sw.gfx_tex0) * k,
 				    (gfx_spu.t_load - sw.gfx_load0) * k);
 		}
+		salsa64_log("gfx: fragment programs: %.1f cambios por tarea, %u dibujos con programa generado "
+			    "(%.1f por tarea), %u programas en la caché (%u generados, %u vaciados)",
+			    (double)(rs.fp_loads - sw.rdp0.fp_loads) / tasks, rs.draws_generated - sw.rdp0.draws_generated,
+			    (double)(rs.draws_generated - sw.rdp0.draws_generated) / tasks, rs.fp_programs,
+			    rs.fp_generated - sw.rdp0.fp_generated, rs.fp_evictions - sw.rdp0.fp_evictions);
 	}
 	if (lle_mode != SALSA64_LLE_OFF) {
 		uint32_t t = rsp_spu.tasks - sw.lle_tasks0;
@@ -1086,6 +1176,7 @@ static void stats(uint64_t now)
 	sw.idle0 = n64.cpu.idle_cycles;
 	pres.us_present = pres.us_flip = 0;
 	pres.presented = pres.blank = pres.rsx_frames = pres.skipped = 0;
+	pres.behind_sum = pres.behind_max = 0;
 }
 
 /* ---- Sesión de juego ------------------------------------------------------------ */
@@ -1130,6 +1221,7 @@ static void game_reset(void)
 	pres.shots = 0;
 	pres.us_present = pres.us_flip = 0;
 	pres.presented = pres.blank = pres.rsx_frames = pres.skipped = 0;
+	pres.behind_sum = pres.behind_max = 0;
 }
 
 /* Cierra lo que es del juego con la emulación ya detenida, en orden y con
@@ -1258,6 +1350,8 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 			    SALSA64_REC_CACHE_BYTES >> 20, salsa64_ps3_rec_cache(), rec.calls_near ? "con bl" : "por mtctr",
 			    rec.opts);
 
+	/* overscan.cfg: en cada juego (se cambia desde las Opciones del menú). */
+	load_overscan();
 	if (selftest_on)
 		selftest_start();
 	if (gfxtest_on)
