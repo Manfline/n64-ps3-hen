@@ -1,5 +1,96 @@
 # Estado
 
+## 2026-10-10 — Fase 4: generador de fragment programs del RSX en tiempo de ejecución (rama compassionate-shirley)
+
+Hecho:
+- **`lib/rsxkit` emite microcódigo de fragment program** (familia NV40) sin
+  compilador Cg en la consola: `include/rsxkit/fpgen.h` + `src/fpgen.c`
+  (codificador, C puro, sin PSL1GHT) y `src/fpcache.c` (caché por hash de
+  la descripción canónica, 128 programas en un pool de 96 KB de memoria
+  local del RSX; si se llena, espera al RSX y se vacía). La descripción es
+  genérica: `color = saturate(Σ_j (Π factores_j) · X_j)` con factores T0,
+  T0a, T1, T1a, C (color del vértice) y Ca, hasta 7 términos (un varying
+  TEXCOORD1..7 cada uno) de 4 factores; los `X_j = k0 + k1·C + k2·Ca` los
+  sigue armando el vertex program (`rsxkit_lincomb.vcg`, ahora con 7 X, 27
+  constantes, COLOR0 de salida y `fogsel` para sumar la niebla al término
+  sin factores). La combinación lineal fija (`nterms = 0`) sigue como
+  camino rápido con sus tres programas precompilados. API en
+  `lib/rsxkit/README.md`; formato en `docs/rsx-notes.md` y en la cabecera
+  de `fpgen.c` (fuentes MIT de cgcomp, `docs/THIRD_PARTY.md`).
+- **Verificación en el host sin consola:** `tests/unit/test_fpgen.c` trae
+  un intérprete del microcódigo (TEX, MOV, MUL, ADD, MAD, swizzle, H/R,
+  saturación) anclado a los `.fpo` que cgcomp compila de los shaders de la
+  combinación lineal y de tres shaders de referencia con productos
+  (`tests/unit/fpgen/*.fcg`, `tools/fpgen-ref.sh` → `tests/unit/fpgen_ref.h`):
+  primero los programas de cgcomp dan la fórmula de su shader, luego los
+  generados dan la misma, y para las descripciones equivalentes leen los
+  mismos TEXCOORD. Más pruebas de forma (fin de programa, un solo registro
+  de entrada por instrucción, perspectiva, máscara, R0 saturado al final),
+  canonización, hash y rechazo de descripciones inválidas.
+- **`src/rsp/gfx/combine.c`** evalúa el combiner con monomios dispersos
+  (cada textura a lo sumo una vez, dos texturas, hasta tres factores de
+  sombreado) y, si el resultado no cabe en la combinación lineal (o si
+  pide T0·T0a y T0 a la vez), lo agrupa en el menor número de términos
+  (cada X_j absorbe un factor de sombreado) en orden canónico, con el alfa
+  compartiendo términos con el color. `gfx_draw` lleva `nterms` y
+  `factors` (480 bytes; `GFX_K_TERMS` = 7); `src/rdp` los pasa a rsxkit y
+  el rasterizador del host los evalúa igual. El búfer de comandos de cada
+  juego pasa de 512 a 768 KB a costa del arena de texturas.
+- **gfxtest** tiene dos cuadros nuevos (N: TEXEL0·TEXEL1·SHADE; O:
+  lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE, la niebla por luz de GoldenEye) con
+  sus puntos en `expect.h`; las tres variantes dan 24/24 en el host y
+  `tools/test-roms.sh` exige 0 combiners aproximados. ROMs recompiladas
+  (SHA-256 nuevos).
+- **GoldenEye en Dam (host):** 97 449 → **0 combiners aproximados** en la
+  misma corrida (`--pad` con START y A pulsados y soltados cada 240
+  campos, 7 500 M ciclos). En el nivel solo dos combiners
+  (`159804:5ffedbf8` y `159a04:5ffefff8`) van por el generador: 3 términos
+  {}, {T0, C}, {C}.
+- Estadísticas nuevas en el log del frontend («gfx: fragment programs:
+  cambios por tarea, dibujos con programa generado, programas en la
+  caché»).
+
+Decisiones:
+- Una sola tabla combiner → programa, en rsxkit, por hash de la
+  descripción: la estructura de los términos depende también de los
+  valores de PRIM/ENV (un coeficiente en cero quita un término), así que
+  una tabla por palabras de G_SETCOMBINE en src/rdp sería incorrecta.
+- Operaciones en fp16 como las de cgcomp (entradas de 8 bits); R0 al
+  final con saturación. Registros: H2 acumula, H3/H4 texturas, H5
+  productos (`num_regs` ≤ 3).
+- La niebla sigue en el vertex program: escala por (1 − C.a) y suma
+  fog·C.a al primer término sin factores (`fogsel`); combine.c garantiza
+  ese término cuando hay niebla.
+
+Verificado:
+- [x] RPCS3: `tools/test-phase2.sh`: gfxtest en el frontend (HLE en el SPE,
+      RSX con programas generados) 24/24 puntos en F3DEX2 y F3D; 2
+      programas generados, 9 cambios de programa por tarea.
+- [x] `tools/test-rec.sh` (qemu ppc64, big-endian): 324/324 unitarias en
+      los cuatro modos del recompilador (el intérprete del microcódigo y
+      el generador también en big-endian), nemu64-test con las 433 fallas
+      de la línea base, vitest OK.
+- [x] Con main 5a0a1a3 fusionado (ad14e4b; gfxtest con el cuadro de
+      G_RM_TEX_EDGE de main como N y los del generador como P y Q, 26
+      puntos): test-host 325/325, test-roms 26/26 en las tres variantes,
+      RPCS3 26/26 en F3DEX2 y F3D, compilación PS3 sin advertencias,
+      test-rec en los cuatro modos del recompilador.
+
+- [x] **PS3 real** (SLSA00087 «Salsa64 fpgen», 136dff4 y luego ad14e4b con
+      main fusionado; el autor, 2026-10-10): GoldenEye 238 s hasta Dam con
+      la niebla por luz exacta en las capturas (34–55 campos/s en el
+      nivel, 4 programas generados, hasta 131 dibujos por tarea con
+      programa generado, 0 vaciados); Zelda OoT (144 s, Kokiri), SM64
+      (166 s, castillo; el medidor de energía ya sin fondo con main
+      fusionado) y Mario Kart 64 (81 s, pista) sin regresión visual, 0
+      programas generados y 54–60 campos/s. Números en
+      `docs/perf-log.md`.
+
+Pendiente:
+- [ ] Perfect Dark en la PS3 con el generador (su combiner de niebla por
+      luz es el de GoldenEye; en el host ya no se aproxima).
+- [ ] Medir el tiempo del RSX por cuadro cuando haya contadores (hoy solo
+      se mide el PPE).
 ## 2026-10-10 — Medidor de energía de SM64 con fondo opaco: G_RM_TEX_EDGE
 
 Reporte (el autor, PS3, main de hoy): en Super Mario 64, al nadar, el

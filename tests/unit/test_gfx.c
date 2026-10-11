@@ -224,11 +224,91 @@ static void gfx_combiner_forms(void)
 	CHECK(fabsf(d.k[GFX_K_T0][1][0] - (1.0f - k)) < 1e-5f);
 	CHECK(fabsf(d.k[GFX_K_T1][1][0] - k) < 1e-5f);
 
-	/* TEXEL0 × TEXEL1: se aproxima. */
+	/* TEXEL0 × TEXEL1 (alfa 1): no cabe en la combinación lineal; va al
+	 * generador como un término T0·T1 (alfa: su carril 3 es T0a·T1a, que
+	 * vale 0 aquí, más un término sin factores con 1 en el alfa). */
 	gs.oh = 0;
 	gs.cc_hi = (1u << 20 | 2u << 15 | 7u << 12 | 7u << 9 | 1u << 5 | 2u);
 	gs.cc_lo = (15u << 28 | 15u << 24 | 7u << 21 | 7u << 18 | 7u << 15 | 7u << 12 | 6u << 9 | 7u << 6 | 7u << 3 | 6u);
-	CHECK(gfx_combine(&gs, &d));
+	CHECK(!gfx_combine(&gs, &d));
+	CHECK_EQ(d.nterms, 2);
+	CHECK_EQ(d.ntex, 2);
+	CHECK_EQ(d.factors[0][0], GFX_F_NONE);
+	CHECK_EQ(d.factors[1][0], GFX_F_T0);
+	CHECK_EQ(d.factors[1][1], GFX_F_T1);
+	CHECK_EQ(d.factors[1][2], GFX_F_NONE);
+	for (int lane = 0; lane < 3; lane++) {
+		CHECK(d.k[1][0][lane] == 1.0f);
+		CHECK(d.k[0][0][lane] == 0.0f);
+	}
+	CHECK(d.k[0][0][3] == 1.0f && d.k[1][0][3] == 0.0f);
+}
+
+/* lerp(ENV, TEXEL0, SHADE_ALPHA) en el primer ciclo y × SHADE en el
+ * segundo (la niebla por luz precalculada de GoldenEye y Perfect Dark):
+ * T0·S·Sa − E·S·Sa + E·S, con alfa (T0a − Ea)·Sa + Ea. Dos factores de
+ * sombreado: va al generador con los términos T0·C (×Ca en X) y C (E − E·Ca),
+ * más el término sin factores del alfa constante. */
+static void gfx_combiner_shade_squared(void)
+{
+	start();
+	struct gfx_draw d;
+	memset(&d, 0, sizeof d);
+	gs.oh = (uint32_t)G_CYC_2CYCLE << G_MDSFT_CYCLETYPE;
+	gs.env = 0x40800040;  /* E = (0,25, 0,5, 0, 0,25) */
+	gs.cc_hi = 0x159804;
+	gs.cc_lo = 0x5ffedbf8;
+	CHECK(!gfx_combine(&gs, &d));
+	CHECK_EQ(d.ntex, 1);
+	CHECK_EQ(d.nterms, 3);
+	/* Orden canónico: {} < {T0, C} < {C}. */
+	CHECK_EQ(d.factors[0][0], GFX_F_NONE);
+	CHECK_EQ(d.factors[1][0], GFX_F_T0);
+	CHECK_EQ(d.factors[1][1], GFX_F_C);
+	CHECK_EQ(d.factors[1][2], GFX_F_NONE);
+	CHECK_EQ(d.factors[2][0], GFX_F_C);
+	CHECK_EQ(d.factors[2][1], GFX_F_NONE);
+	const float e[4] = { 0x40 / 255.0f, 0x80 / 255.0f, 0.0f, 0x40 / 255.0f };
+	for (int lane = 0; lane < 3; lane++) {
+		CHECK(d.k[1][2][lane] == 1.0f);                   /* T0·C·Ca */
+		CHECK(d.k[1][0][lane] == 0.0f && d.k[1][1][lane] == 0.0f);
+		CHECK(fabsf(d.k[2][0][lane] - e[lane]) < 1e-6f);  /* E·C */
+		CHECK(fabsf(d.k[2][2][lane] + e[lane]) < 1e-6f);  /* −E·C·Ca */
+		CHECK(d.k[0][0][lane] == 0.0f);
+	}
+	/* Alfa: T0a·Sa en el término T0·C (carril 3 = T0a·Ca), −Ea·Sa en C
+	 * (Ca) y Ea en el término sin factores. */
+	CHECK(d.k[1][0][3] == 1.0f);
+	CHECK(fabsf(d.k[2][0][3] + e[3]) < 1e-6f);
+	CHECK(fabsf(d.k[0][0][3] - e[3]) < 1e-6f);
+
+	/* Sin textura (apagada): se quita el término T0·C; con una, no cambia. */
+	struct gfx_draw d2 = d;
+	gfx_combine_textures(&d2, 1);
+	CHECK(!memcmp(&d2, &d, sizeof d));
+	gfx_combine_textures(&d2, 0);
+	CHECK_EQ(d2.nterms, 2);
+	CHECK_EQ(d2.factors[0][0], GFX_F_NONE);
+	CHECK_EQ(d2.factors[1][0], GFX_F_C);
+	CHECK(fabsf(d2.k[1][0][0] - e[0]) < 1e-6f);
+	CHECK(d2.factors[2][0] == 0 && d2.k[2][0][0] == 0.0f);
+
+	/* Con niebla y sin alfa constante hace falta el término sin factores
+	 * igual: (T0 − 0)·SHADE_ALPHA·SHADE con alfa T0a·Sa. */
+	memset(&d, 0, sizeof d);
+	d.fog = 1;
+	gs.cc_hi = 0x159804;
+	gs.cc_lo = 0xfffffff8;  /* b = 0 y d = 0 en los dos ciclos; alfa del segundo = COMBINED */
+	CHECK(!gfx_combine(&gs, &d));
+	CHECK_EQ(d.nterms, 2);
+	CHECK_EQ(d.factors[0][0], GFX_F_NONE);
+	CHECK_EQ(d.factors[1][0], GFX_F_T0);
+	CHECK_EQ(d.factors[1][1], GFX_F_C);
+	CHECK(d.k[0][0][0] == 0.0f && d.k[0][0][3] == 0.0f);
+	d.fog = 0;
+	CHECK(!gfx_combine(&gs, &d));
+	CHECK_EQ(d.nterms, 1);
+	CHECK_EQ(d.factors[0][0], GFX_F_T0);
 }
 
 static void gfx_triangle_transform(void)
@@ -428,10 +508,22 @@ static void gfx_combiner_premul(void)
 	}
 	CHECK(fabsf(d.k[GFX_K_ONE][0][3] - 0xC0 / 255.0f) < 1e-6f);  /* alfa = ENV */
 
-	/* (TEXEL0 − 0)·TEXEL0_ALPHA + TEXEL0: T0·T0a + T0. */
+	/* (TEXEL0 − 0)·TEXEL0_ALPHA + TEXEL0: T0·T0a + T0. Ninguna textura
+	 * sirve para los dos: va al generador, exacto, sin premultiplicar. */
 	gs.cc_lo = 15u << 28 | 15u << 24 | 7u << 21 | 7u << 18 | 1u << 15 | 7u << 12 | 5u << 9 | 1u << 6 | 7u << 3 | 5u;
-	CHECK(gfx_combine(&gs, &d));
+	CHECK(!gfx_combine(&gs, &d));
 	CHECK(!(d.tex[0].flags & GFX_TEX_PREMUL));
+	CHECK_EQ(d.nterms, 3);
+	CHECK_EQ(d.factors[0][0], GFX_F_NONE);
+	CHECK_EQ(d.factors[1][0], GFX_F_T0);
+	CHECK_EQ(d.factors[1][1], GFX_F_NONE);
+	CHECK_EQ(d.factors[2][0], GFX_F_T0);
+	CHECK_EQ(d.factors[2][1], GFX_F_T0A);
+	for (int lane = 0; lane < 3; lane++)
+		CHECK(d.k[1][0][lane] == 1.0f && d.k[2][0][lane] == 1.0f && d.k[0][0][lane] == 0.0f);
+	/* Alfa = ENVa, constante: el término sin factores. */
+	CHECK(fabsf(d.k[0][0][3] - 0xC0 / 255.0f) < 1e-6f);
+	CHECK(d.k[1][0][3] == 0.0f && d.k[2][0][3] == 0.0f);
 }
 
 /* La misma textura premultiplicada al decodificar: alfa 0 → negro. */
@@ -1029,6 +1121,7 @@ static void gfx_texcache_hash(void)
 void t_suite_gfx(void)
 {
 	RUN(gfx_combiner_forms);
+	RUN(gfx_combiner_shade_squared);
 	RUN(gfx_triangle_transform);
 	RUN(gfx_matrix_stack);
 	RUN(gfx_lighting);

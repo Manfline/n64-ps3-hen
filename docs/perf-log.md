@@ -24,6 +24,7 @@ antes, después, notas.
 | 2026-10-10 | 697922c → b3ba375 | **Caché de texturas** entre tareas (HLE gráfica en el SPE 0), Zelda OoT con el recompilador, ventanas fijas de 100 campos | PS3 real (mismo equipo), respaldo del usuario | HLE en el SPE 14,0–30,6 ms por tarea; escenas pesadas a 38–48 campos/s; peor campo 36–43 ms | **5,1–9,6 ms por tarea (×2,8–3,3); 59,8–60,2 campos/s en todas; peor campo 17–27 ms** | Decodificar texturas: 6,7–17,2 → 0,00–0,09 ms (0–1 textura decodificada por tarea); identificarlas (hash) 0,03–0,35 ms; cargas a la TMEM 3,7–7,3 → 1,4–3,0 ms (copia en bloque). Mismas capturas byte a byte. Ver «Caché de texturas» abajo |
 | 2026-10-10 | f416bee | **Zelda OoT (NTSC) en el frontend**, recompilador con registros fijos, HLE gráfica en el SPE | PS3 real (mismo equipo), respaldo del usuario | intérprete: 15,4–17,5 campos/s, emulación 56–64 ms por campo | **41–60 campos/s (69–100 %), emulación 4–14 ms por campo** | Logo e intro a 58–60; título y escenas con muchos triángulos 41–55, ahora limitadas por la espera a la HLE gráfica del SPE (10–30 ms por tarea), no por el CPU. 86–88 % del tiempo del CPU en bucles de espera. ~10 500 bloques, 7,9 MB de caché, 1,7 % de instrucciones interpretadas. Se ve igual que con el intérprete (el autor) |
 | 2026-10-10 | e210aeb | **Recompilador: conversiones de la FPU, LWL/LWR y MFC0 en nativo**, nemu64-test con registros fijos | PS3 real (mismo equipo), cpu-tests SLSA00077 | mismo binario con `RARE_EXEC` (como antes): 1894 ms (×4,29 del intérprete, 8118 ms) | **1816 ms (104,1 MIPS; ×4,47); −4,1 %** | Mismas 446 fallas, hash y ciclo. Entradas desde C 140 909 → 110 074; llamadas al intérprete 2,15 M → 1,77 M. Bench: cvt 4,2 → 40,7 MIPS, no alineadas 20,5 → 218,5, mfc0 9,8 → 701, espera por Count 8,3 → 488 (salidas a C 2 M → 8). Ver «Conversiones de la FPU…» abajo |
+| 2026-10-10 | 136dff4 (PS3: ad14e4b con main 5a0a1a3) | **Generador de fragment programs** (Fase 4), GoldenEye NTSC en Dam, ~3 min de juego | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00087 «Salsa64 fpgen», respaldo del usuario | combinación lineal sola: 36–50 campos/s en Dam (60–84 %), 97 449 combiners aproximados en 80 s de host | **34–55 campos/s (57–93 %), emulación 18–29 ms por campo; 0 combiners aproximados**; 4 programas generados en toda la corrida (0 vaciados), hasta 131 de 350 dibujos por tarea con programa generado, 7–23 cambios de programa por tarea, traducción al RSX 0,3–1,8 ms por tarea | La niebla por luz (lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE) exacta en las capturas de la presa. El cuello sigue en el CPU y la HLE del SPE (5–15 ms por tarea), no en el RSX. Zelda OoT 53–60 campos/s, SM64 54–60, Mario Kart 60: 0 programas generados (todo cabe en la combinación lineal), sin regresión visual. Ver «Generador de fragment programs» abajo |
 
 ## Caché de texturas (2026-10-10)
 
@@ -640,3 +641,31 @@ Ventanas de 5 s del log («rsp lle:»):
   estira). Es la primera medición del nivel en la PS3 (las anteriores eran
   de la intro); no hay A/B con el paquete de main.
 
+## Generador de fragment programs (2026-10-10)
+
+**PS3 real** (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00087 «Salsa64
+fpgen» (136dff4; la tercera y cuarta corridas con ad14e4b, main 5a0a1a3
+fusionado), respaldos del usuario fuera del repo, capturas cada 10 s
+(`capturas`). Ventanas de 5 s del log («gfx: fragment programs:»).
+
+| Juego | Escenas | Campos/s | Emulación por campo | Dibujos con programa generado por tarea | Programas generados | Cambios de programa por tarea |
+|---|---|---|---|---|---|---|
+| GoldenEye (238 s) | título, carpetas, Dam ~3 min | intro 56–60; Dam 34–55 | 3,5–5,7 ms; Dam 18–29 ms | 0; Dam 4–131 (de 56–351) | 4 (1 en la intro, 3 en Dam; 0 vaciados) | intro 2–6; Dam 7–23 |
+| Zelda OoT (144 s) | título, Kokiri | 53–60 | — | 0 | 0 | 8–23 |
+| Super Mario 64 (166 s) | castillo exterior | 54–60 | — | 0 | 0 | 8–10 |
+| Mario Kart 64 (81 s) | título, menús, pista | 60 | — | 0 | 0 | 8–9 |
+
+- Los «cambios de programa» cuentan también los precompilados (sin
+  textura, una, dos): es el costo de siempre, ~20 palabras del búfer de
+  comandos cada uno. El generador no agrega cambios en los juegos que no
+  lo usan.
+- GoldenEye es el único de los cuatro que necesita programas generados:
+  los dos combiners de niebla por luz del nivel (3 términos: {}, {T0, C},
+  {C}) y uno de la intro. La caché de 128 nunca se llena.
+- No hay medición del tiempo del RSX por cuadro (sin contadores de GPU):
+  la traducción en el PPE y el tiempo de emulación por campo no cambian
+  frente a la medición anterior de Dam (36–50 campos/s); el cuello sigue
+  en el CPU (~40 MIPS con 43 % en bucles de espera) y en la HLE del SPE
+  (hasta 15 ms por tarea con 3 500–3 900 triángulos).
+- Host (Mac, salsa64-run nativo, 7 500 M ciclos hasta Dam con
+  `docs/pads/goldeneye-dam.pad`): 97 449 → 0 combiners aproximados.

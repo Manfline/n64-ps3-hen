@@ -25,8 +25,10 @@
 
 #define SETS        3
 #define VTX_BYTES   (2u << 20)
-#define CMD_BYTES   (512u << 10)
-#define TEX_BYTES   (4u << 20)
+/* gfx_draw son 480 bytes: 1600 dibujos por tarea. El arena de texturas
+ * casi no se usa con la caché (docs/memory-budget.md): le cede 256 KB. */
+#define CMD_BYTES   (768u << 10)
+#define TEX_BYTES   ((4u << 20) - (256u << 10))
 #define SET_BYTES   (VTX_BYTES + CMD_BYTES + TEX_BYTES)
 #define SETS_BYTES  (((SETS * SET_BYTES) + 0xFFFFFu) & ~0xFFFFFu)
 #define CACHE_BYTES (8u << 20)  /* caché de texturas (docs/memory-budget.md) */
@@ -37,8 +39,12 @@
 
 _Static_assert(sizeof(struct gfx_vertex) == sizeof(rsxkit_vertex), "vértice de la HLE = vértice de rsxkit");
 _Static_assert(sizeof(((struct gfx_draw *)0)->k) == sizeof(((rsxkit_draw *)0)->k), "términos k");
+_Static_assert(sizeof(((struct gfx_draw *)0)->factors) == sizeof(((rsxkit_draw *)0)->factors), "factores");
 _Static_assert((int)GFX_K_T0 == (int)RSXKIT_K_T0 && (int)GFX_K_T1A == (int)RSXKIT_K_T1A &&
 		       (int)GFX_K_ONE == (int)RSXKIT_K_ONE, "orden de k");
+_Static_assert((int)GFX_F_T0 == (int)RSXKIT_FP_T0 && (int)GFX_F_T0A == (int)RSXKIT_FP_T0A &&
+		       (int)GFX_F_T1 == (int)RSXKIT_FP_T1 && (int)GFX_F_T1A == (int)RSXKIT_FP_T1A &&
+		       (int)GFX_F_C == (int)RSXKIT_FP_C && (int)GFX_F_CA == (int)RSXKIT_FP_CA, "factores");
 _Static_assert((int)GFX_CULL_BACK == (int)RSXKIT_CULL_BACK && (int)GFX_CULL_FRONT == (int)RSXKIT_CULL_FRONT,
 	       "cull");
 _Static_assert(GFX_DEPTH_TEST == RSXKIT_DEPTH_TEST && GFX_DEPTH_WRITE == RSXKIT_DEPTH_WRITE &&
@@ -317,6 +323,8 @@ static void to_rsxkit(const struct gfx_draw *g, const struct set *s, rsxkit_draw
 	d->alpha_ref = g->atest ? (g->aref ? g->aref : 1) : 0;
 	d->ntex = g->ntex > 2 ? 2 : g->ntex;
 	d->fog = g->fog;
+	d->nterms = g->nterms;
+	memcpy(d->factors, g->factors, sizeof d->factors);
 	for (int i = 0; i < 4; i++) {
 		d->scissor[i] = g->scissor[i] / 4.0f;
 		d->fog_color[i] = ((g->fog_color >> (24 - 8 * i)) & 0xFF) / 255.0f;
@@ -384,6 +392,8 @@ static void translate(uint32_t n)
 			to_rsxkit(g, s, &rd);
 			rsxkit_draw_triangles(&rd, g->h.a, g->h.b);
 			rdp.stats.draws++;
+			if (g->nterms)
+				rdp.stats.draws_generated++;
 			rdp.stats.triangles += g->h.b / 3;
 			break;
 		}
@@ -540,4 +550,10 @@ bool salsa64_rdp_dump(const char *path)
 void salsa64_rdp_get_stats(struct salsa64_rdp_stats *out)
 {
 	*out = rdp.stats;
+	rsxkit_fp_stats fp;
+	rsxkit_fp_get_stats(&fp);
+	out->fp_programs = fp.programs;
+	out->fp_generated = fp.generated;
+	out->fp_evictions = fp.evictions;
+	out->fp_loads = fp.loads;
 }

@@ -181,12 +181,20 @@ struct gfx_tex {
 enum { GFX_TEX_ARENA = 0, GFX_TEX_CACHE = 1 };
 enum { GFX_WRAP_CLAMP = 0, GFX_WRAP_REPEAT = 1, GFX_WRAP_MIRROR = 2 };
 
-/* Combinación lineal que evalúa el RSX (lib/rsxkit: RSXKIT_PROG_LINCOMB):
- *   X_k = k[k][0] + k[k][1] * C + k[k][2] * C.aaaa     (C: color del vértice)
- *   color = T0 * X_0 + T0.aaaa * X_1 + T1 * X_2 + T1.aaaa * X_3 + X_4
- * con T0, T1 las dos texturas. Cubre exactamente los combiners de la N64
- * que no multiplican una textura por otra ni el sombreado por sí mismo. */
-enum { GFX_K_T0, GFX_K_T0A, GFX_K_T1, GFX_K_T1A, GFX_K_ONE, GFX_K_TERMS };
+/* Lo que evalúa el RSX por píxel (lib/rsxkit, «Dibujo 3D»), con
+ *   X_j = k[j][0] + k[j][1] * C + k[j][2] * C.aaaa     (C: color del vértice)
+ * y T0, T1 las dos texturas:
+ * - nterms = 0, la combinación lineal fija (programas precompilados):
+ *   color = T0 * X_0 + T0.aaaa * X_1 + T1 * X_2 + T1.aaaa * X_3 + X_4.
+ *   Cubre exactamente los combiners de la N64 que no multiplican una
+ *   textura por otra ni el sombreado por sí mismo.
+ * - nterms > 0, un fragment program generado para estos términos:
+ *   color = Σ_j (Π factors[j]) * X_j, con los factores GFX_F_* (los mismos
+ *   valores que rsxkit/fpgen.h). Cubre el resto (combine.c). */
+enum { GFX_K_T0, GFX_K_T0A, GFX_K_T1, GFX_K_T1A, GFX_K_ONE, GFX_K_LINCOMB };
+#define GFX_K_TERMS   7  /* términos como máximo (y de la combinación lineal: los 5 primeros) */
+#define GFX_K_FACTORS 4  /* factores por término */
+enum { GFX_F_NONE = 0, GFX_F_T0, GFX_F_T0A, GFX_F_T1, GFX_F_T1A, GFX_F_C, GFX_F_CA };
 
 /* Modo de mezcla con el framebuffer. */
 enum gfx_blend {
@@ -218,6 +226,9 @@ struct gfx_draw {
 	uint32_t fog_color;      /* 0xRRGGBBAA */
 	uint32_t prim_kind;      /* informativo: 0 triángulos, 1 rectángulos, 2 relleno */
 	uint32_t prim_tile;      /* informativo: tile de los rectángulos */
+	uint8_t nterms;          /* 0: combinación lineal fija; si no, términos con `factors` */
+	uint8_t factors[GFX_K_TERMS][GFX_K_FACTORS];  /* GFX_F_*, 0 = fin de la lista */
+	uint8_t pad[3];
 	struct gfx_tex tex[2];
 	float k[GFX_K_TERMS][3][4];
 };

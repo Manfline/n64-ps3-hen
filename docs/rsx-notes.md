@@ -33,6 +33,50 @@ Hallazgos sobre el RSX en homebrew (documentación escasa: anotar todo aquí).
 - RPCS3 compila los shaders en segundo plano: la primera corrida después de
   cambiar un fragment program puede saltarse dibujos (pantalla negra en la
   captura). Repetir antes de concluir.
+
+## Microcódigo del fragment program (generador de lib/rsxkit, 2026-10-10)
+
+Lo que hace falta para emitir un fragment program sin cgcomp (fuentes:
+`nvfx_shader.h` y `compilerfp.cpp` de cgcomp, MIT, y los `.fpo` que
+compila; `lib/rsxkit/src/fpgen.c`):
+
+- Cuatro palabras de 32 bits por instrucción. En memoria, cada palabra va
+  con sus mitades de 16 bits intercambiadas (`endian_fp` de cgcomp:
+  escribe `SWAP32(palabra)` y luego intercambia mitades, así que un PPU
+  big-endian guarda `(w << 16) | (w >> 16)`). Si una fuente es constante
+  (tipo 2), los 16 bytes siguientes son sus cuatro floats, con el mismo
+  intercambio.
+- Palabra 0: bit 0 fin del programa; bits 1–6 registro destino; bit 7
+  destino H (media precisión; H2k y H2k+1 son las mitades de Rk); bits
+  9–12 máscara xyzw; bits 13–16 **el único registro de entrada que puede
+  leer la instrucción** (COL0 = 1, TEXCOORDn = 4 + n; las fuentes de tipo
+  1 lo toman de aquí: dos entradas distintas en una instrucción no
+  caben, hay que pasar una por MOV a un temporal); bits 17–20 unidad de
+  textura (TEX); bits 22–23 precisión (0 fp32, 1 fp16); bits 24–29 opcode
+  (MOV 1, MUL 2, ADD 3, MAD 4, TEX 0x17); bit 31 saturar.
+- Palabras 1–3 (fuentes 0–2): bits 0–1 tipo (0 temporal, 1 entrada, 2
+  constante); 2–7 índice del temporal; 8 temporal H; 9–16 swizzle (dos
+  bits por componente: identidad 0xE4, `.wwww` 0xFF, `.zwzw` 0xEE); 17
+  negar. cgcomp pone en toda instrucción, en la palabra 1, la condición
+  «siempre» (7 en los bits 18–20) con swizzle identidad (bits 21–28), y
+  en la palabra 3, cuando lee un TEXCOORD, 0x7FC en los bits 19–29. El
+  bit 31 de la palabra 3 quita la corrección de perspectiva (arriba).
+  Una fuente que no se usa va como temporal 0 con swizzle identidad.
+- `result.color` es R0 (precisión completa, bit 7 en 0). cgcomp hace las
+  operaciones en fp16 (precisión 1, temporales H) y en la última escribe
+  R0 con precisión 1 y saturación; TEX va con precisión 0.
+- Lo que `rsxLoadFragmentProgramLocation` necesita además del offset:
+  `num_regs` (registros R; mínimo 2), `fp_control` (0x40 = escribe el
+  color; se le suma `num_regs << 24` y el bit 10), y las máscaras
+  `texcoords`/`texcoord2D`/`texcoord3D` (un `NV40TCL_TEX_COORD_CONTROL(i)`
+  por TEXCOORD leído: bit 4 si es de 3 o 4 componentes, bit 0 si de 2).
+  rsxkit arma un `rsxFragmentProgram` con solo esos campos.
+- Verificación sin consola: `tests/unit/test_fpgen.c` interpreta el
+  microcódigo (TEX, MOV, MUL, ADD, MAD, swizzle, H/R, saturación) y
+  comprueba primero que los `.fpo` de cgcomp (`tests/unit/fpgen_ref.h`,
+  generado por `tools/fpgen-ref.sh`) dan la fórmula de su shader y luego
+  que los programas generados dan la misma. Los de referencia leen las
+  mismas entradas que los generados equivalentes (`texcoords` igual).
 - Orientación: con la y hacia arriba en el espacio de recorte, el frente de
   la N64 es antihorario (`rsxSetFrontFace(ctx, GCM_FRONTFACE_CCW)`). Con CW
   el culling sale al revés (faltaban el cielo y la luna en Zelda).

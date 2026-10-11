@@ -954,6 +954,11 @@ static void stats(uint64_t now, int gfx_on_spu, const struct salsa64_boot_info *
 				    (gfx_spu.t_state - gfx_state0) * k, (gfx_spu.t_tex - gfx_tex0) * k,
 				    (gfx_spu.t_load - gfx_load0) * k);
 		}
+		salsa64_log("gfx: fragment programs: %.1f cambios por tarea, %u dibujos con programa generado "
+			    "(%.1f por tarea), %u programas en la caché (%u generados, %u vaciados)",
+			    (double)(rs.fp_loads - rdp0.fp_loads) / tasks, rs.draws_generated - rdp0.draws_generated,
+			    (double)(rs.draws_generated - rdp0.draws_generated) / tasks, rs.fp_programs,
+			    rs.fp_generated - rdp0.fp_generated, rs.fp_evictions - rdp0.fp_evictions);
 	}
 	if (lle_mode != SALSA64_LLE_OFF) {
 		static uint32_t lle_tasks0, lle_jobs0, lle_polls0;
