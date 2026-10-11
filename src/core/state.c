@@ -139,11 +139,21 @@ static void sec_cpu(struct st *s, struct salsa64_cpu *c)
 	st_u64(s, &c->hi);
 	st_u64(s, &c->lo);
 	st_u64(s, &c->cycles);
-	st_u64(s, &c->cur_pc);
+	/* cur_pc y delay_slot son de la instrucción en curso: en el límite del
+	 * campo no hay ninguna y la siguiente los reescribe (el intérprete
+	 * siempre, el recompilador solo cuando los necesita). Van como los
+	 * pondrá ella, así el estado no depende de quién ejecutó antes. */
+	uint64_t cur = c->pc;
+	uint8_t ds = c->branch;
+	st_u64(s, &cur);
 	st_u64(s, &c->pc);
 	st_u64(s, &c->next_pc);
-	st_u8(s, &c->delay_slot);
+	st_u8(s, &ds);
 	st_u8(s, &c->branch);
+	if (s->load) {
+		c->cur_pc = cur;
+		c->delay_slot = ds;
+	}
 	st_u8(s, &c->llbit);
 	st_u32(s, &c->status);
 	st_u32(s, &c->cause);
