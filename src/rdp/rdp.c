@@ -157,6 +157,15 @@ uint32_t salsa64_rdp_scale(bool *reduced)
 	return rdp.scale;
 }
 
+void salsa64_rdp_set_scale(uint32_t scale)
+{
+	if (!rdp.ready)
+		return;
+	rsxkit_finish();
+	release_targets();
+	rdp.scale = rdp_scale_pick(scale, rsxkit_screen_info()->height, &rdp.scale_reduced);
+}
+
 void salsa64_rdp_shutdown(void)
 {
 	if (!rdp.ready)

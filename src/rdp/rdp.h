@@ -76,6 +76,10 @@ struct salsa64_rdp_stats {
 int salsa64_rdp_init(uint32_t scale);
 /* Escala-objetivo efectiva tras salsa64_rdp_init; *reduced: se bajó por memoria. */
 uint32_t salsa64_rdp_scale(bool *reduced);
+/* Cambia la escala pedida (0: automática) con el RDP ya iniciado y sin juego
+ * abierto: suelta los destinos y recalcula la escala-objetivo con la pantalla
+ * en curso (útil tras rsxkit_video_reconfigure). Conserva la memoria mapeada. */
+void salsa64_rdp_set_scale(uint32_t scale);
 void salsa64_rdp_shutdown(void);
 /* Entre juegos (menú): suelta los destinos y profundidades del RSX y vacía
  * las colas de tareas y las estadísticas; la memoria mapeada se conserva.

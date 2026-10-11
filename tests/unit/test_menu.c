@@ -427,9 +427,26 @@ static void menu_options_page(void)
 	CHECK_EQ(menu_input(&m, CROSS, t++), MENU_SETTINGS);
 	CHECK_EQ(m.set.scale, 0);
 	CHECK_EQ(m.set.resolution, MENU_RES_1080P);
+	/* Lo elegido (1080p) difiere de lo que corre (720p): aparece «Aplicar ahora». */
+	CHECK(menu_video_pending(&m));
 	menu_input(&m, 0, 77);
 	menu_input(&m, DOWN, 78);
-	CHECK_EQ(m.opt, MENU_OPT_BACK);
+	CHECK_EQ(m.opt, MENU_OPT_APPLY);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, RIGHT, 79), MENU_NONE);  /* sin valor que cambiar */
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, CROSS, 79), MENU_APPLY);
+	m.res_run = m.set.resolution;  /* main.c lo pone tras aplicar */
+	m.scale_run = m.set.scale;
+	CHECK(!menu_video_pending(&m));
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, 0, 79), MENU_NONE);
+	CHECK_EQ(m.opt, MENU_OPT_BACK);  /* la fila desapareció: el cursor pasa a «Volver» */
+	menu_input(&m, UP, 79);          /* y arriba está «Escala interna» */
+	CHECK_EQ(m.opt, MENU_OPT_SCALE);
+	menu_input(&m, 0, 79);
+	menu_input(&m, DOWN, 79);
+	CHECK_EQ(m.opt, MENU_OPT_BACK);  /* sin cambios pendientes se salta «Aplicar ahora» */
 	menu_input(&m, 0, 80);
 	CHECK_EQ(menu_input(&m, RIGHT, 90), MENU_NONE);  /* «Volver» no tiene valor */
 	menu_input(&m, 0, 100);
@@ -815,7 +832,7 @@ static void menu_preview(void)
 	struct menu m;
 	menu_init(&m, &frame_list, 4, NULL);
 	m.out_w = 1280, m.out_h = 720;
-	m.res_boot = MENU_RES_1080P;  /* pidió 1080p y quedó 720p: sale la pista */
+	m.res_run = MENU_RES_1080P;  /* pidió 1080p y quedó 720p: sale la pista */
 	snprintf(m.last, sizeof m.last, "%s", frame_list.e[4].path);
 	uint32_t n = frames(&m, 1000000, 13000000, 1280);
 	raster(rgb, 1280, 720, 1280, 720, n);
@@ -850,6 +867,25 @@ static void menu_preview(void)
 	n = frames(&m, 15500000, 15600000, 960);
 	raster(rgb, 960, 720, 960, 720, n);
 	snprintf(path, sizeof path, "%s-opciones43.ppm", out);
+	write_ppm(path, rgb, 960, 720);
+	menu_input(&m, 0, 15600500);
+	menu_input(&m, DOWN, 15601000);  /* «Aplicar ahora» */
+	snprintf(m.note, sizeof m.note, "No se pudo: sigue 1280x720");
+	n = frames(&m, 15601500, 16600000, 960);
+	raster(rgb, 960, 720, 960, 720, n);
+	snprintf(path, sizeof path, "%s-aplicar43.ppm", out);
+	write_ppm(path, rgb, 960, 720);
+	n = frames(&m, 16600000, 16700000, 1280);
+	raster(rgb, 1280, 720, 1280, 720, n);
+	snprintf(path, sizeof path, "%s-aplicar.ppm", out);
+	write_ppm(path, rgb, 1280, 720);
+	menu_input(&m, 0, 16701000);
+	menu_input(&m, UP, 16702000);  /* «Escala interna» con la nota */
+	menu_input(&m, 0, 16703000);
+	menu_input(&m, UP, 16704000);  /* «Resolución» con la nota */
+	n = frames(&m, 16705000, 17700000, 960);
+	raster(rgb, 960, 720, 960, 720, n);
+	snprintf(path, sizeof path, "%s-resolucion43.ppm", out);
 	write_ppm(path, rgb, 960, 720);
 	menu_init(&m, &frame_list, frame_list.count, NULL);
 	m.set.waves = false;

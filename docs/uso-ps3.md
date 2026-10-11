@@ -63,9 +63,10 @@ Opciones:
   amplio. Recorta los bordes de la imagen, donde algunos juegos dejan
   basura.
 - **Resolución**: 720p (por omisión, render a 3×) o 1080p (render a 4×).
-  Solo se aplica al volver a abrir Salsa64; el panel muestra la salida
-  actual y, si pediste 1080p y no se logró, recuerda activarlo en Ajustes de
-  pantalla del XMB.
+  Se guarda en video.cfg (así arranca la próxima vez) y se pone con
+  «Aplicar ahora», sin cerrar Salsa64; el panel muestra la salida actual y,
+  si pediste 1080p y no se logró, recuerda activarlo en Ajustes de pantalla
+  del XMB.
 - **Escala interna**: tamaño del render de la N64, independiente de la
   salida de video: Auto (3× a 720p, 4× a 1080p), 1× nativa (320 × 240, la
   imagen original), 2×, 3×, 4× o 5× (1600 × 1200). La escala fija un objetivo
@@ -75,8 +76,15 @@ Opciones:
   presentarla, con más nitidez y bordes suaves, a cambio de más trabajo
   para el RSX. Un tope de 96 MiB de memoria del RSX para las
   imágenes vivas recicla la más vieja si hace falta; a 5× el peor caso son
-  73 MiB (docs/memory-budget.md); el log dice «RDP listo: escala-objetivo …». Se aplica al volver a
-  abrir Salsa64.
+  73 MiB (docs/memory-budget.md); el log dice «RDP listo: escala-objetivo …». Se pone también con «Aplicar
+  ahora».
+- **Aplicar ahora**: solo aparece mientras la resolución o la escala elegidas
+  difieren de las que corren. Cambia el modo de video y la escala desde el
+  menú, sin juego abierto y sin cerrar Salsa64; la imagen parpadea un
+  instante al cambiar de modo. Si la tele no acepta el modo, queda el
+  anterior y el panel dice «No se pudo: sigue …»; si sale bien, «Aplicado:
+  1920x1080, escala 4×». El log dice «video: 1920x1080, escala 4×, aplicado
+  sin reiniciar». Cambiar solo la escala no toca el video.
 
 ## Controles en el juego
 
