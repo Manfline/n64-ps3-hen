@@ -48,9 +48,11 @@ static void do_moveword(struct gfx_state *g, uint32_t w0, uint32_t w1)
 		if ((offset % 24) == 0)
 			gfx_light_color(g, (int)(offset / 24), w1);
 		break;
+	case G_MW_CLIP:
+		gfx_clip_ratio(g, offset, w1);
+		break;
 	case G_MW_MATRIX:
 	case G_MW_FORCEMTX:
-	case G_MW_CLIP:
 	case G_MW_PERSPNORM:
 	default:
 		break;

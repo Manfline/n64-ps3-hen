@@ -72,6 +72,9 @@ struct gfx_job {
 #define GFX_JOB_NOCACHE 0x2u  /* no usar ni llenar la caché (para medir) */
 #define GFX_JOB_DPC 0x4u  /* comandos del RDP crudos (dpc.c), no una display list */
 #define GFX_JOB_XBUS 0x8u  /* con GFX_JOB_DPC: los comandos están en la DMEM */
+/* El microcódigo no recorta contra el plano cercano (los ".NoN" de su
+ * texto: Zelda OoT, Star Fox 64, Conker; y el de Perfect Dark, sync.c). */
+#define GFX_JOB_NONEAR 0x10u
 
 /* ---- Caché de texturas -------------------------------------------------------
  * Las texturas decodificadas viven en una región de memoria que pone el

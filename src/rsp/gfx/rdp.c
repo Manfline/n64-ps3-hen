@@ -219,6 +219,23 @@ static bool texture_state(struct gfx_state *g, struct gfx_draw *d, int tile, int
 	return true;
 }
 
+/* Los triángulos del RSP no salen de su caja de recorte, el viewport
+ * agrandado por la clip ratio: lo de fuera no llega al RDP. Aquí se suma a
+ * las tijeras (los vértices ya están en píxeles: el viewport del RSX es todo
+ * el destino). Mario Kart 64 abre la demo con un viewport que crece desde
+ * una ventana y tijeras hasta la esquina (0, 0). */
+static void clip_box(const struct gfx_state *g, uint16_t sc[4])
+{
+	for (int i = 0; i < 2; i++) {
+		float r = g->clip_ratio[i] * (g->vscale[i] < 0.0f ? -g->vscale[i] : g->vscale[i]);
+		float lo = (g->vtrans[i] - r) * 4.0f, hi = (g->vtrans[i] + r) * 4.0f;
+		if (lo > (float)sc[i])
+			sc[i] = lo >= 4095.0f ? 4095 : (uint16_t)(lo + 0.5f);
+		if (hi < (float)sc[i + 2])
+			sc[i + 2] = hi <= 0.0f ? 0 : (uint16_t)(hi + 0.5f);
+	}
+}
+
 /* Resume el estado vigente en `d` (sin el tramo de vértices). */
 static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind kind, int tile)
 {
@@ -227,6 +244,8 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 	d->h.size = sizeof *d;
 	d->zimg = g->zimg_addr;
 	memcpy(d->scissor, g->scissor, sizeof d->scissor);
+	if (kind == PRIM_TRI)
+		clip_box(g, d->scissor);
 	d->cycle = (uint8_t)((g->oh >> G_MDSFT_CYCLETYPE) & 3);
 
 	if (kind == PRIM_FILL || d->cycle == G_CYC_FILL) {
@@ -347,6 +366,23 @@ static struct gfx_vertex *begin_prim(struct gfx_state *g, enum prim_kind kind, i
 	return v;
 }
 
+/* Punto de a→b a la fracción t: la salida es lineal en las coordenadas de
+ * recorte, así que se interpola ya escrita. */
+static void lerp_vertex(struct gfx_vertex *o, const struct gfx_vertex *a, const struct gfx_vertex *b, float t)
+{
+	o->x = a->x + (b->x - a->x) * t;
+	o->y = a->y + (b->y - a->y) * t;
+	o->z = a->z + (b->z - a->z) * t;
+	o->w = a->w + (b->w - a->w) * t;
+	o->s = a->s + (b->s - a->s) * t;
+	o->t = a->t + (b->t - a->t) * t;
+	o->r = (uint8_t)(a->r + (b->r - a->r) * t + 0.5f);
+	o->g = (uint8_t)(a->g + (b->g - a->g) * t + 0.5f);
+	o->b = (uint8_t)(a->b + (b->b - a->b) * t + 0.5f);
+	o->a = (uint8_t)(a->a + (b->a - a->a) * t + 0.5f);
+	o->pad = 0;
+}
+
 void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
 {
 	if (a >= GFX_MAX_VTX || b >= GFX_MAX_VTX || c >= GFX_MAX_VTX)
@@ -355,20 +391,54 @@ void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
 	/* Fuera del mismo plano los tres: no se ve. */
 	if (v[0]->clip & v[1]->clip & v[2]->clip)
 		return;
-	struct gfx_vertex *o = begin_prim(g, PRIM_TRI, g->tex_tile, 3);
-	if (!o)
-		return;
-	g->res->triangles++;
+	struct gfx_vertex p[4];
 	for (int i = 0; i < 3; i++)
-		gfx_vtx_out(g, v[i], &o[i]);
+		gfx_vtx_out(g, v[i], &p[i]);
 	if (!(g->geom & G_SHADING_SMOOTH)) {
 		/* Sombreado plano: el color del primer vértice. */
 		for (int i = 1; i < 3; i++) {
-			o[i].r = o[0].r;
-			o[i].g = o[0].g;
-			o[i].b = o[0].b;
-			o[i].a = o[0].a;
+			p[i].r = p[0].r;
+			p[i].g = p[0].g;
+			p[i].b = p[0].b;
+			p[i].a = p[0].a;
 		}
+	}
+	/* Plano cercano (z = −w), como F3D y F3DEX: lo que queda detrás no se
+	 * dibuja y un triángulo que lo cruza sale como uno o dos. Sin esto, los
+	 * vértices con w ≈ 0 o negativa se proyectan lejísimos. */
+	unsigned n = 3;
+	if (g->near_clip) {
+		float d[3];
+		unsigned behind = 0;
+		for (int i = 0; i < 3; i++) {
+			d[i] = v[i]->z + v[i]->w;
+			behind += d[i] < 0.0f;
+		}
+		if (behind == 3)
+			return;
+		if (behind) {
+			struct gfx_vertex in[3] = { p[0], p[1], p[2] };
+			n = 0;
+			for (int i = 0; i < 3; i++) {
+				int j = i == 2 ? 0 : i + 1;
+				if (d[i] >= 0.0f)
+					p[n++] = in[i];
+				if ((d[i] < 0.0f) != (d[j] < 0.0f))
+					lerp_vertex(&p[n++], &in[i], &in[j], d[i] / (d[i] - d[j]));
+			}
+		}
+	}
+	struct gfx_vertex *o = begin_prim(g, PRIM_TRI, g->tex_tile, 3 * (n - 2));
+	if (!o)
+		return;
+	g->res->triangles++;
+	o[0] = p[0];
+	o[1] = p[1];
+	o[2] = p[2];
+	if (n == 4) {
+		o[3] = p[0];
+		o[4] = p[2];
+		o[5] = p[3];
 	}
 }
 

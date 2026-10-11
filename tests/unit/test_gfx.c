@@ -1117,7 +1117,6 @@ static void gfx_texcache_hash(void)
 	gfx_hash_final(&h, k1);
 	CHECK(k0[0] == k1[0] && k0[1] == k1[1]);
 }
-
 /* Procedencia de las texturas (gfx_tex.src_*): un LOADTILE de las filas
  * 10–15 de una imagen de 320 (un framebuffer) deja la dirección de su
  * texel (0, 0) y el paso de la imagen; un LOADBLOCK de una textura de 32×32
@@ -1216,11 +1215,50 @@ static void gfx_viscvg_flag(void)
 	CHECK_EQ(d1->viscvg, 1);
 }
 
+/* F3DEX2 arranca con clip ratio 2 (sus datos) y G_MOVEWORD G_MW_CLIP la
+ * cambia: la caja de recorte del RSP va en las tijeras de los triángulos. */
+static void gfx_clip_ratio_f3dex2(void)
+{
+	start();
+	uint32_t a = data_alloc(16);
+	const int16_t vp[8] = { 160, 120, 511, 0, 640, 480, 511, 0 };  /* 40×30 en (160, 120) */
+	for (int i = 0; i < 8; i++)
+		salsa64_wr16(t_n64.bus.rdram + a + 2 * i, (uint16_t)vp[i]);
+	dl(0xDC080008, a);
+	load_mtx(ident, true);
+	load_mtx(ident, false);
+	set_combine(CC_A_ZERO, CC_ZERO, CC_C_ZERO, CC_SHADE, CC_ZERO, CC_ZERO, CC_ZERO, CC_SHADE);
+	dl(0xD9000000, G_SHADING_SMOOTH);
+	dl(0xFF100000 | 319, 0x00100000);
+	const struct vtx v[3] = {
+		{ -4, -4, 0, 0, 0, { 255, 255, 255, 255 } },
+		{ 4, -4, 0, 0, 0, { 255, 255, 255, 255 } },
+		{ 0, 4, 0, 0, 0, { 255, 255, 255, 255 } },
+	};
+	dl(0x01000000 | 3 << 12 | 3 << 1, put_vertices(v, 3));
+	dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);
+	dl(0xDB040004, 1);       /* gSPClipRatio(FRUSTRATIO_1) */
+	dl(0xDB04000C, 1);
+	dl(0xDB040014, 0xFFFF);
+	dl(0xDB04001C, 0xFFFF);
+	dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);
+	run();
+	CHECK_EQ(res.triangles, 2);
+	const struct gfx_draw *d0 = draw_n(0), *d1 = draw_n(1);
+	CHECK(d0 && d1);
+	if (!d0 || !d1)
+		return;
+	CHECK(d0->scissor[0] == 80 * 4 && d0->scissor[1] == 60 * 4 && d0->scissor[2] == 240 * 4 &&
+	      d0->scissor[3] == 180 * 4);
+	CHECK(d1->scissor[0] == 120 * 4 && d1->scissor[1] == 90 * 4 && d1->scissor[2] == 200 * 4 &&
+	      d1->scissor[3] == 150 * 4);}
+
 void t_suite_gfx(void)
 {
 	RUN(gfx_combiner_forms);
 	RUN(gfx_combiner_shade_squared);
 	RUN(gfx_triangle_transform);
+	RUN(gfx_clip_ratio_f3dex2);
 	RUN(gfx_matrix_stack);
 	RUN(gfx_lighting);
 	RUN(gfx_texgen);

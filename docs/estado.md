@@ -205,6 +205,127 @@ Falta (opcional):
       escribe al log).
 - [ ] Probar el menú en una tele 4:3 o a 1080p (la vista previa del host
       cubre 4:3).
+
+## 2026-10-10 — Mario Kart 64: polígonos estirados en los zooms (recorte del RSP en la HLE)
+
+Reporte (el autor, PS3, «Salsa64 alfa» SLSA00085): en Mario Kart 64, al
+pasar del título a lo que sigue, «polígonos mal calculados, donde se queda
+una punta y se estira»; después precisó: «una pantalla que se hace pequeña,
+como un gameplay que sale».
+
+Diagnóstico (rama `reverent-meninsky-b3f79c`, en la Mac):
+- No era del RSX ni de la vida de los juegos de búferes de src/rdp: con
+  `salsa64-run` se simuló un SPE lento (`SALSA64_GFX_LATE=N` retrasa la HLE
+  N sondeos; con `SALSA64_GFX_TEAR` la corre también al arrancar y compara)
+  y en 245 tareas ninguna lectura de la RDRAM cambió durante la tarea; la
+  invalidación de la caché de vértices de PSL1GHT (`rsxInvalidateVertexCache`
+  escribe 0x1710 y 0x1714, como libgcm) está bien.
+- El cuadro malo no es título → «GAME SELECT» (solo rectángulos, sale
+  limpio) sino los **zooms de la demo**: entra creciendo desde una ventana
+  (campos ~1106–1141 tras START en el 400) y al terminar se encoge
+  (3300–3350 sin tocar nada). El juego los dibuja con un viewport chico que
+  crece (`G_MV_VIEWPORT`), tijeras del RDP hasta (0, 0) y
+  `gSPClipRatio(FRUSTRATIO_1)` cada cuadro. En el RSP real los triángulos se
+  recortan contra el viewport por la clip ratio y contra el plano cercano; la
+  HLE no hacía ninguna de las dos cosas: el suelo cruzaba el plano cercano
+  (w → 0, x/w de −8000) y salía de la ventana como una punta hacia la
+  esquina. Reproducido en el rasterizador de la Mac (campos 3310–3350 sin
+  pulsar nada); la otra rama miró la transición a «GAME SELECT», que es de
+  rectángulos, y por eso se vio limpia.
+
+Arreglo (`src/rsp/gfx`; nada en src/rdp ni en lib/rsxkit):
+- `G_MW_CLIP` (F3D, F3DEX, F3DEX2, el de Conker) guarda la clip ratio y
+  cada tarea arranca con la de los datos del microcódigo (vuelven a la
+  DMEM): **1** en la primera generación (F3D 2.0D/2.0G, F3DEX 0.95/1.21/1.22,
+  el de Perfect Dark) y **2** en la segunda (F3DZEX), leído de los datos de
+  los ucodes de los respaldos (offset 0x70 y 0x180: (1,0,0,r) (0,1,0,r)
+  (1,0,0,−r) (0,1,0,−r)). La caja viewport × ratio se suma a las tijeras de
+  los dibujos de triángulos (los rectángulos no pasan por el RSP); un
+  cambio de viewport abre dibujo nuevo. GoldenEye y Perfect Dark tienen
+  viewport = tijeras y no cambian.
+- Recorte contra el plano cercano (z = −w) en `gfx_triangle`: un vértice
+  detrás → dos triángulos, dos → uno, tres → nada; interpolación lineal en
+  coordenadas de recorte, como el RSP. Los microcódigos «.NoN» (Zelda OoT
+  F3DZEX.NoN, Star Fox 64 F3DEX.NoN, Conker F3DEXBG.NoN) no recortan: el
+  núcleo lo lee del texto del ucode (`rsp->gfx_nonear`) y va en
+  `GFX_JOB_NONEAR`. El de Perfect Dark (sin texto) se toma como NoN, **sin
+  verificar contra hardware**: el autor ya lo jugó sin recorte y GLide64
+  dibuja los muros cercanos de su intro que el recorte quitaría (cuadro
+  3000, un muro a la izquierda).
+- Efecto en otros juegos (rasterizador de la Mac, main contra la rama, un
+  cuadro cada 100 campos): Zelda, Star Fox, Conker, Perfect Dark y los menús
+  de Mario Kart idénticos. **SM64** en el castillo: el suelo cerca de la
+  cámara (cruza el plano cercano) se descartaba entero y se veía el agua del
+  foso debajo; ahora se dibuja, como en mupen64plus. **Banjo-Kazooie**: en
+  la intro unos polígonos delante del plano cercano tapaban todo de negro;
+  ahora se ve el logo con la abeja. **GoldenEye**: diferencias chicas dentro
+  de modelos que cruzan el plano cercano (créditos), a la vista iguales.
+- Pruebas: unitarias `f3dex_clip_ratio`, `f3d_near_clip`,
+  `gfx_clip_ratio_f3dex2` y `rsp_gfx_nonear`; gfxtest con las escenas O
+  (viewport chico + clip ratio 1 con tijeras de toda la pantalla) y R
+  (cuadro que cruza el plano cercano): 30 de 30 puntos en el host (tres
+  variantes) y en RPCS3 (F3DEX2 y F3D, pantalla del RSX); con main fallan
+  4 puntos. Con main fusionado (generador de fragment programs, escenas P y
+  Q): 329 unitarias y 32 de 32 puntos. `tools/build.sh test-host`,
+  `tools/test-roms.sh`, `tools/build.sh` sin advertencias y
+  `tools/test-phase2.sh`.
+- La traza por dibujo de `salsa64-run` imprime además x/w, y/w, tijeras,
+  viewport y la dirección de la textura.
+- Respaldo de Mario Kart (con permiso del autor) en
+  una carpeta de respaldos propios (`mk64.z64`) y en el dev_hdd0 de RPCS3.
+
+Pendiente:
+- [x] **PS3 real** con `build/salsa64/salsa64-recorte.pkg` (SLSA00090,
+      «Salsa64 recorte»; el SLSA00086 que había elegido el autor ya lo usa
+      «Salsa64 menú»): el autor confirmó que en Mario Kart «ya no se ve» lo
+      que reportaba (log `build/ps3-logs/mk64-recorte.log`, fuera de git:
+      sin errores, 60 campos/s).
+- [x] PS3 real, SM64 en el castillo: «todo se ve bien» (el autor; log
+      `build/ps3-logs/sm64-recorte.log`).
+- [ ] **GoldenEye en la PS3 (noche del 2026-10-10): líneas azules finas en
+      uniones de polígonos** que corren hacia la cámara (centro de la
+      carretera del túnel de Dam, base de la barrera; fotos del autor). Sin
+      atribuir. Lo que se descartó en el host: el punto de corte de una
+      arista compartida se calcula en distinto orden en cada triángulo
+      vecino, pero coincide hasta 0,001 px (`SALSA64_GFX_CUTCHECK`, 3572
+      vértices cortados en 619 campos de Dam) y el rasterizador de la Mac no
+      muestra ninguna grieta en las uniones con esta rama; las líneas no
+      corren a lo largo del corte del plano cercano (sería horizontal, abajo).
+      No se llegó al túnel sin manos (dos guiones chocan con paredes). El
+      cian de GoldenEye ya conocido era otra cosa (soldados y armas, por el
+      combiner). **Decide un A/B en la PS3**: «Salsa64 menú» o «Salsa64 alfa»
+      (main sin este recorte) en el mismo túnel. Si también salen, pendiente
+      aparte (no de esta rama); si no, el sospechoso es cómo el RSX
+      rasteriza los triángulos cortados (volcado `gfxdump` del campo malo
+      para dibujarlo en la Mac con `--raster-dump`).
+      **A/B hecho el 2026-10-11 (el autor, PS3): las líneas salen igual con
+      «Salsa64 menú» (main sin este recorte)** → no son de esta rama;
+      pendiente aparte, fuera de ella (logs `build/ps3-logs/goldeneye-recorte-2.log`
+      y `goldeneye-menu.log`, fuera de git). Fotos y logs guardados en
+      una carpeta propia.
+- [x] PS3 real, Perfect Dark con «Salsa64 recorte» (tomado como NoN): intro
+      de la ciudad y un nivel, «se ve todo bien» (el autor, 2026-10-11; log
+      `build/ps3-logs/perfectdark-recorte.log`).
+
+Lo que se vio el 2026-10-11 en la PS3 (paquete «Salsa64 recorte», SLSA00090;
+`embedded` en /dev_hdd0/salsa64/, se cambia por FTP; resultados arriba):
+1. `file:goldeneye.z64` con «Salsa64 recorte» y luego la misma escena con
+   «Salsa64 menú» o «Salsa64 alfa»: túnel de Dam con las barreras a rayas,
+   mirando el centro de la carretera y la base de la barrera. Lo esperado si
+   es de esta rama: líneas azules solo en «recorte».
+2. `file:perfectdark.z64`: intro (vuelo por la ciudad) y un nivel. Se toma
+   como NoN: lo esperado es verlo como antes; si hay puntas estiradas en
+   muros cercanos, su microcódigo sí recorta (una línea en
+   `src/rsp/gfx/sync.c`); si hay huecos negros, no.
+3. Ya confirmados hoy: Mario Kart (demo al entrar y al encogerse, sin
+   puntas) y SM64 en el castillo (suelo junto al foso), «todo se ve bien».
+- [ ] En RPCS3 el modo de prueba automática sale a los 1800 campos y el
+      zoom sin tocar nada cae en el 3300 (`capturas` "25 3500" no llega):
+      dejar que el M de `capturas N M` mande sobre AUTO_FIELDS si hace falta
+      verlo ahí.
+- [ ] Banjo-Kazooie en el host se queda en el logo de Rare (tarea del campo
+      68, luego solo audio): no es de esta rama.
+
 ## 2026-10-10 (noche) — Cierre de la jornada
 
 **Integrado y subido hoy** (main 8231305): controles y bucles de espera, guardado
@@ -230,11 +351,10 @@ aproximación del combiner con ENV de la HLE vieja, idéntica en SLSA00064; con 
 generador el autor vio GoldenEye normal en la PS3. Después, el menú estilo XMB
 (`intelligent-yalow-4dd14d`, merge 00eba22), confirmado en la PS3.
 
-**Trabajos abiertos** (sin integrar):
-- Polígonos estirados de Mario Kart (`reverent-meninsky-b3f79c`, paquete
-  «Salsa64 recorte» SLSA00090): en la PS3, Mario Kart arreglado y SM64 bien; en
-  GoldenEye el autor vio líneas azules en las uniones de texturas. Falta saber
-  si las causa el recorte o ya estaban en main antes de integrarlo.
+**Integrado el 2026-10-11:** recorte del RSP (`reverent-meninsky-b3f79c`,
+«Salsa64 recorte» SLSA00090): en la PS3, Mario Kart sin polígonos estirados,
+SM64 y Perfect Dark bien. Las líneas azules de GoldenEye salen también sin el
+recorte (A/B en la PS3): pendiente aparte, abajo.
 
 **Noche del 2026-10-10 → 11:** corren de noche, sin la PS3, los trabajos del JIT
 (`upbeat-driscoll-1dd271`, SLSA00088), de efectos de framebuffer
@@ -249,6 +369,18 @@ sugerido: recorte → líneas del logo → framebuffer → JIT.
   overscan escala 684 líneas a 720 con filtro lineal; probar con
   «Recorte del borde: Apagado» en el menú. Arreglo propuesto: tapar los bordes
   con negro sin escalar.
+- **Líneas azules en uniones de GoldenEye** (PS3 real, túnel de Dam): línea fina
+  del color del relleno de fondo a lo largo de uniones de polígonos que corren
+  hacia la cámara (centro de la carretera, base de la barrera). Salen igual con
+  «Salsa64 recorte» y con «Salsa64 menú» (A/B del 2026-10-11): no son del
+  recorte, están en lo común (rsxkit, src/rdp o la HLE). En el host no se
+  reproducen (sin grietas en el rasterizador de la Mac; los cortes de aristas
+  vecinas coinciden a 0,001 px). Siguiente paso: gfxdump del campo malo en la
+  PS3 y dibujarlo en la Mac con `--raster-dump`; si allí sale limpio, es la
+  rasterización del RSX (reglas de cobertura o vértices que no caen en el mismo
+  punto tras el redondeo). Evidencia (fotos y logs, fuera de git por ser
+  imágenes de un juego comercial):
+  en una carpeta propia.
 
 **Siguientes trabajos decididos con el autor:**
 - JIT («Recompilador: más velocidad del CPU en GoldenEye y Perfect

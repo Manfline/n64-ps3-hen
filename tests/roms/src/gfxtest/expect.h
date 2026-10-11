@@ -74,6 +74,11 @@ struct gfxtest_point {
 	{ 252, 232, 0xFF0000, "2 ciclos, TEXEL0·TEXEL1·SHADE (programa generado)" },       \
 	{ 287, 232, 0x804080, "2 ciclos, lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE (generado)" }, \
 	{ 150, 109, 0xFF00FF, "render a textura: color image de 64 leída como textura" },    \
-	{ 150, 119, 0xFF0000, "copia RSX → RDRAM: el CPU leyó la color image guardada" },
-
+	{ 150, 119, 0xFF0000, "copia RSX → RDRAM: el CPU leyó la color image guardada" }, \
+	{ 20, 90, 0x00FF80, "clip ratio 1: dentro del viewport chico" },              \
+	{ 5, 90, GFXTEST_BG, "clip ratio 1: fuera del viewport (izquierda)" },         \
+	{ 35, 90, GFXTEST_BG, "clip ratio 1: fuera del viewport (derecha)" },          \
+	{ 20, 78, GFXTEST_BG, "clip ratio 1: fuera del viewport (arriba)" },           \
+	{ 10, 120, 0xFF8080, "plano cercano: lo de delante se ve" },                  \
+	{ 30, 120, GFXTEST_BG, "plano cercano: lo de detrás no se dibuja" },
 #endif
