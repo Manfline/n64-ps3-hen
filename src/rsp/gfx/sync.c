@@ -55,6 +55,20 @@ static uint32_t sync_finish(void *ctx)
 	return salsa64_gfx_task_flags(&s->res);
 }
 
+void gfx_state_save(const struct gfx_state *g, uint8_t *out)
+{
+	gfx_state_pack_regs(g, out);
+	memcpy(out + GFX_STATE_REGS, g->tmem, sizeof g->tmem);
+}
+
+bool gfx_state_load(struct gfx_state *g, const uint8_t *in)
+{
+	if (!gfx_state_unpack_regs(g, in))
+		return false;
+	memcpy(g->tmem, in + GFX_STATE_REGS, sizeof g->tmem);
+	return true;
+}
+
 static bool sync_save_state(void *ctx, uint8_t *buf)
 {
 	struct salsa64_gfx_sync *s = ctx;

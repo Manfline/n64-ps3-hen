@@ -104,6 +104,33 @@ static uint32_t spu_finish(void *ctx)
 	return salsa64_gfx_task_flags(&s->res);
 }
 
+/* Estados guardados: el SPE deja o toma el estado del RDP en un búfer
+ * propio (alineado para el DMA), sin tarea en vuelo. */
+static uint8_t state_buf[GFX_STATE_BYTES] __attribute__((aligned(128)));
+
+static bool spu_state(struct salsa64_gfx_spu *s, uint32_t kind)
+{
+	if (s->pending || !s->worker)
+		return false;
+	struct gfx_state_job sj = { (uint64_t)(uintptr_t)state_buf };
+	const spukit_result *r = spukit_wait(s->worker, spukit_post(s->worker, kind, &sj, sizeof sj));
+	return !r->error;
+}
+
+static bool spu_save_state(void *ctx, uint8_t *buf)
+{
+	if (!spu_state(ctx, GFX_JOB_STATE_SAVE))
+		return false;
+	memcpy(buf, state_buf, sizeof state_buf);
+	return true;
+}
+
+static bool spu_load_state(void *ctx, const uint8_t *buf)
+{
+	memcpy(state_buf, buf, sizeof state_buf);
+	return spu_state(ctx, GFX_JOB_STATE_LOAD);
+}
+
 int salsa64_gfx_spu_init(struct salsa64_gfx_spu *s, const struct salsa64_bus *bus,
 			 const struct salsa64_gfx_sink *sink)
 {
@@ -112,6 +139,9 @@ int salsa64_gfx_spu_init(struct salsa64_gfx_spu *s, const struct salsa64_bus *bu
 	s->backend.start = spu_start;
 	s->backend.finish = spu_finish;
 	s->backend.done = spu_done;
+	s->backend.state_size = GFX_STATE_BYTES;
+	s->backend.save_state = spu_save_state;
+	s->backend.load_state = spu_load_state;
 	s->bus = bus;
 	s->sink = *sink;
 	s->worker = spukit_worker_start(spu_gfx_bin, "salsa64_gfx", 0);

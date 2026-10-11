@@ -68,10 +68,11 @@ struct menu_settings {
 	bool waves;     /* fondo animado («fondo = si|no») */
 	int overscan;   /* enum menu_overscan */
 	int resolution; /* enum menu_resolution */
+	bool fps;       /* contador de velocidad en el juego («fps = si|no»; SELECT + △) */
 };
 
 enum { MENU_PAGE_GAMES, MENU_PAGE_OPTIONS };
-enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_RESOLUTION, MENU_OPT_BACK, MENU_OPTS };
+enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_RESOLUTION, MENU_OPT_FPS, MENU_OPT_BACK, MENU_OPTS };
 
 struct menu {
 	const struct romlist *list;

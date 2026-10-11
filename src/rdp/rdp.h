@@ -60,6 +60,11 @@ void salsa64_rdp_shutdown(void);
  * último salsa64_rdp_flush. Devuelve las tareas que quedaban sin traducir
  * (0 si se consumió todo). */
 uint32_t salsa64_rdp_reset(void);
+/* Al cargar un estado guardado: suelta los destinos y profundidades (lo
+ * dibujado antes ya no es de esta máquina, y los números de campo
+ * retroceden) sin tocar las colas ni la numeración de las tareas, que
+ * siguen con el mismo SPE. Después del último salsa64_rdp_flush. */
+void salsa64_rdp_drop_targets(void);
 
 /* Las dos manos de un backend gráfico (rsp/gfx/backend.h). acquire puede
  * esperar a que el RSX libere un juego de búferes (nunca llama a rsxkit

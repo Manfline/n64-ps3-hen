@@ -68,6 +68,33 @@ static void spu_finish(void *ctx, struct salsa64_bus *bus)
 		salsa64_audio_written(bus, &res);
 }
 
+/* Estados guardados: el SPE deja o toma el estado de los ABI en un búfer
+ * propio (alineado para el DMA), sin tarea en vuelo. */
+static uint8_t state_buf[AUD_STATE_BYTES] __attribute__((aligned(128)));
+
+static bool spu_state(struct salsa64_audio_spu *s, uint32_t kind)
+{
+	if (s->pending || !s->worker)
+		return false;
+	struct aud_state_job sj = { (uint64_t)(uintptr_t)state_buf };
+	const spukit_result *r = spukit_wait(s->worker, spukit_post(s->worker, kind, &sj, sizeof sj));
+	return !r->error;
+}
+
+static bool spu_save_state(void *ctx, uint8_t *buf)
+{
+	if (!spu_state(ctx, AUD_JOB_STATE_SAVE))
+		return false;
+	memcpy(buf, state_buf, sizeof state_buf);
+	return true;
+}
+
+static bool spu_load_state(void *ctx, const uint8_t *buf)
+{
+	memcpy(state_buf, buf, sizeof state_buf);
+	return spu_state(ctx, AUD_JOB_STATE_LOAD);
+}
+
 /* Al arrancar: listas de prueba (selftest.c) en el SPE y en el PPE sobre
  * copias iguales de una RDRAM de mentira; deben quedar iguales. Además, en
  * RPCS3, el programa del SPE se compila aquí y no en la primera tarea del
@@ -117,6 +144,9 @@ int salsa64_audio_spu_init(struct salsa64_audio_spu *s, const struct salsa64_bus
 	s->backend.start = spu_start;
 	s->backend.finish = spu_finish;
 	s->backend.done = spu_done;
+	s->backend.state_size = AUD_STATE_BYTES;
+	s->backend.save_state = spu_save_state;
+	s->backend.load_state = spu_load_state;
 	s->bus = bus;
 	s->worker = spukit_worker_start(spu_audio_bin, "salsa64_audio", 0);
 	if (!s->worker)

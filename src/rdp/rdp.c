@@ -174,6 +174,14 @@ uint32_t salsa64_rdp_reset(void)
 	return pending;
 }
 
+void salsa64_rdp_drop_targets(void)
+{
+	if (!rdp.ready)
+		return;
+	rsxkit_finish();
+	release_targets();
+}
+
 const struct salsa64_gfx_sink *salsa64_rdp_sink(void)
 {
 	return &sink;

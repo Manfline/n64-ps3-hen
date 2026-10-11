@@ -17,8 +17,9 @@
  *     memoria de trabajo del MP3 2 KB)    11,7 KB
  *   lecturas y escrituras 2 × (4 KB + 32)  8,1 KB
  *   bloque de la lista                     1 KB
+ *   paso del estado guardado              11,8 KB
  *   spukit (descriptor, resultado…)      < 1 KB
- *   pila                                  el resto (~190 KB; la HLE usa
+ *   pila                                  el resto (~178 KB; la HLE usa
  *                                          < 2 KB)
  */
 #include <spukit/spu.h>
@@ -31,6 +32,8 @@ _Static_assert(sizeof(struct aud_result) <= SPUKIT_DATA_SIZE, "aud_result no cab
 
 static struct aud_state state __attribute__((aligned(128)));
 static struct aud_job job __attribute__((aligned(16)));
+/* Estados guardados: el estado en el formato portable, de paso al DMA. */
+static uint8_t blob[AUD_STATE_BYTES] __attribute__((aligned(128)));
 
 static int handler(void *ctx, const spukit_job *j, spukit_result *res)
 {
@@ -38,6 +41,21 @@ static int handler(void *ctx, const spukit_job *j, spukit_result *res)
 	if (j->kind == AUD_JOB_RESET) {
 		aud_init(&state);
 		return 0;
+	}
+	if (j->kind == AUD_JOB_STATE_SAVE || j->kind == AUD_JOB_STATE_LOAD) {
+		struct aud_state_job sj;
+		memcpy(&sj, j->data, sizeof sj);
+		if (sj.ea & 127)
+			return -1;
+		if (j->kind == AUD_JOB_STATE_SAVE) {
+			aud_state_save(&state, blob);
+			spukit_dma_put(blob, sj.ea, sizeof blob, 0);
+			spukit_dma_wait(1u << 0);
+			return 0;
+		}
+		spukit_dma_get(blob, sj.ea, sizeof blob, 0);
+		spukit_dma_wait(1u << 0);
+		return aud_state_load(&state, blob) ? 0 : -1;
 	}
 	if (j->kind != AUD_JOB_TASK)
 		return -1;

@@ -8,7 +8,8 @@
  * TMEM viven en el local store y persisten entre tareas.
  *
  * Presupuesto de local store (256 KB); los números exactos los imprime el
- * build (spu-size, 2026-10-11: texto 97,0 KB, datos 0,8 KB, bss 145,1 KB):
+ * build (spu-size, 2026-10-11, con los estados guardados: texto 98,8 KB,
+ * datos 0,8 KB, bss 145,1 KB):
  *   código (HLE + runtime)              ~ 97 KB (F3D y F3DEX: 3,6 KB;
  *                                         Perfect Dark 1,9 KB y Conker
  *                                         4,4 KB; el combiner con sus
@@ -26,7 +27,9 @@
  *   vértices 2 × 8 KB, comandos 2 × 4 KB    24 KB
  *   texturas 2 × 32 KB                      64 KB
  *   spukit (descriptor, resultado…)        < 1 KB
- *   pila                                    el resto (~ 13 KB; la cadena más
+ *   estados guardados (state.c y el
+ *     trabajo de guardar o cargar)           ~ 1,9 KB
+ *   pila                                    el resto (~ 11 KB; la cadena más
  *                                         honda, fondo S2DEX → TEXRECT →
  *                                         estado → combiner, usa ~8 KB
  *                                         según -fstack-usage)
@@ -38,6 +41,28 @@
 
 static struct gfx_state state __attribute__((aligned(128)));
 static struct gfx_job job __attribute__((aligned(16)));
+
+/* Estados guardados, entre tareas: los registros del RDP por la pila y la
+ * TMEM directo, una DMA cada uno (< 16 KB). Aparte y chica: el local store
+ * no sobra. */
+static __attribute__((noinline, cold)) int state_job(bool save, uint64_t ea)
+{
+	uint8_t regs[GFX_STATE_REGS] __attribute__((aligned(16)));
+	if (save) {
+		gfx_state_pack_regs(&state, regs);
+		mfc_put(regs, ea, GFX_STATE_REGS, 0, 0, 0);
+		mfc_put(state.tmem, ea + GFX_STATE_REGS, sizeof state.tmem, 0, 0, 0);
+		spukit_dma_wait(1u << 0);
+		return 0;
+	}
+	mfc_get(regs, ea, GFX_STATE_REGS, 0, 0, 0);
+	spukit_dma_wait(1u << 0);
+	if (!gfx_state_unpack_regs(&state, regs))
+		return -1;
+	mfc_get(state.tmem, ea + GFX_STATE_REGS, sizeof state.tmem, 0, 0, 0);
+	spukit_dma_wait(1u << 0);
+	return 0;
+}
 
 static int handler(void *ctx, const spukit_job *j, spukit_result *res)
 {
@@ -57,6 +82,8 @@ static int handler(void *ctx, const spukit_job *j, spukit_result *res)
 		memset(state.tmem, 0, sizeof state.tmem);
 		return 0;
 	}
+	if (j->kind == GFX_JOB_STATE_SAVE || j->kind == GFX_JOB_STATE_LOAD)
+		return state_job(j->kind == GFX_JOB_STATE_SAVE, ((const struct gfx_state_job *)(const void *)j->data)->ea);
 	if (j->kind != GFX_JOB_TASK)
 		return -1;
 	memcpy(&job, j->data, sizeof job);
