@@ -42,11 +42,14 @@ sin FORCE_BL sigue el corte en 128 de antes.
   controles, savetest), `tools/build.sh` sin advertencias del compilador y
   `tools/test-phase2.sh` en RPCS3 (24 de 24 en F3DEX2 y F3D).
 - Paquete para la PS3: `salsa64-alfa.pkg` (SLSA00085, «Salsa64 alfa»).
+- **PS3 real**: el autor confirmó el medidor de SM64 sin fondo. Log de la
+  corrida sin errores (`build/ps3-logs/sm64-medidor.log`, fuera de git).
 
 Pendiente:
-- [ ] PS3: el autor confirma el medidor sin fondo, el resto del HUD de SM64
-      y los menús de Mario Kart 64. `embedded` dice `file:oot.z64` (lo dejó
-      otro trabajo); para SM64 hay que ponerlo en `file:sm64.z64` y devolverlo.
+- [ ] PS3: un vistazo a los menús de Mario Kart 64 con «Salsa64 alfa»
+      (`embedded` = `file:mk64.z64`). Al terminar, `embedded` vuelve a
+      `file:oot.z64`, como lo dejó el trabajo de presentación (estaba así
+      antes de esta prueba).
 
 ## 2026-10-10 — Kokiri «en colores planos»: es el sol cenital, no la HLE (referencia con mupen64plus)
 
