@@ -31,17 +31,20 @@
 #define RDP_DEPTHS_MAX    4
 /* Superficies del RSX que el RDP puede tener vivas a la vez: una por
  * ranura, el scratch de los efectos de framebuffer (copia del destino
- * ligado cuando un dibujo lo lee) y las profundidades. lib/rsxkit admite 16
- * destinos y 16 profundidades: sobra. */
-#define RDP_SURFACES_MAX  (RDP_TARGETS_MAX + 1 + RDP_DEPTHS_MAX)
+ * ligado cuando un dibujo lo lee), las profundidades y la profundidad de
+ * la pantalla agrandada para ligar sin z image destinos más grandes que la
+ * pantalla (rdp_zeta_reserve). lib/rsxkit admite 16 destinos y 16
+ * profundidades: sobra. */
+#define RDP_SURFACES_MAX  (RDP_TARGETS_MAX + 1 + RDP_DEPTHS_MAX + 1)
 /* Escala interna máxima (320 × 240 × 5 = 1600 × 1200; 640 × 5 = 3200 cabe
  * en el límite de 4096 de las superficies del RSX). */
 #define RDP_SCALE_MAX     5
-/* Tope de memoria local del RSX para destinos, scratch y profundidades
- * vivos (ver docs/memory-budget.md): el peor caso a 5× (RDP_SURFACES_MAX
- * de 1600 × 1200, 95,2 MiB) entra; rdp.c recicla el destino más viejo si
- * aun así no cupiera. */
-#define RDP_VRAM_BUDGET   (96u << 20)
+/* Tope de memoria local del RSX para destinos, scratch, profundidades y la
+ * profundidad de la pantalla agrandada (ver docs/memory-budget.md): el peor
+ * caso a 5× (RDP_SURFACES_MAX de 1600 × 1200, 102,5 MiB) entra con 9,5 MiB
+ * de sobra (con 96 MiB, 5× se bajaba a 4×); rdp.c recicla el destino más
+ * viejo si aun así no cupiera. */
+#define RDP_VRAM_BUDGET   (112u << 20)
 /* Un destino sin dibujar en tantos campos ya no se presenta (ni se protege
  * del reciclado). */
 #define RDP_TARGETS_STALE 30
@@ -109,10 +112,26 @@ uint32_t rdp_surface_bytes(uint32_t w, uint32_t h);
  * 320·scale × 240·scale (el alto lógico de un destino es al menos 3/4 del
  * ancho y rdp_target_scale no pasa de 240·scale líneas; a 1× una de
  * 640 × 480 queda nativa, 1,2 MB), también el scratch (copia de un
- * destino) y cada profundidad (la del destino con que se usa, o la mayor de
- * dos si la comparten): RDP_SURFACES_MAX superficies (8 + 1 + 4). A 5× son
- * 99,8 MB (95,2 MiB); a 3×, 35,9 MB; a 4×, 63,9 MB. */
+ * destino), cada profundidad (la del destino con que se usa, o la mayor de
+ * dos si la comparten) y la profundidad de la pantalla agrandada
+ * (rdp_zeta_reserve; se cuenta entera aunque la pantalla ya tuviera una):
+ * RDP_SURFACES_MAX superficies (8 + 1 + 4 + 1). A 5× son 107,5 MB
+ * (102,5 MiB); a 3×, 38,7 MB; a 4×, 68,8 MB. */
 uint32_t rdp_vram_worst(uint32_t scale);
+
+/* Lo más que mide una superficie a la escala-objetivo `scale` (destino,
+ * scratch o profundidad): max(320·scale, 640) × max(240·scale, 480). */
+void rdp_surface_max(uint32_t scale, uint32_t *w, uint32_t *h);
+
+/* Profundidad de la pantalla para los destinos que se ligan sin z image
+ * propia (dibujos sin z, cebado, scratch): rsxkit_bind no liga un destino
+ * más grande que ella (una zeta más chica que el color puede fallar o
+ * recortar en el RSX). Si a esta escala algún destino puede ser más grande
+ * que la pantalla de screen_w × screen_h (4× y 5× en 720p, 5× en 1080p),
+ * devuelve true con el tamaño a reservar (rsxkit_depth_reserve: el mayor
+ * destino posible, rdp_surface_max); si no, false y 0 × 0 (la de la
+ * pantalla alcanza). */
+bool rdp_zeta_reserve(uint32_t scale, uint32_t screen_w, uint32_t screen_h, uint32_t *w, uint32_t *h);
 
 /* Región lógica (x, y, w, h) de un destino a escala `scale`, en píxeles
  * de su superficie: lo que leen las copias RSX → RDRAM (que la reducen a

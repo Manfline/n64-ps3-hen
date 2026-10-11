@@ -199,9 +199,17 @@ superficie usa la escala de **esa** superficie (`rdp_surface_rect`,
   de la pantalla (`rdp_present_integer`: 3× en 720p, 4× en 1080p, 1× por
   3); si quedaría chica (2× en 720p, un framebuffer de 640 × 480 a 1×) se
   ajusta como antes del recorte del overscan.
-- **Memoria**: el scratch cuenta en el tope de 96 MiB con los destinos y
-  las profundidades; el peor caso son 13 superficies (8 + scratch + 4) de
-  320 · g × 240 · g, 95,2 MiB a 5× (`docs/memory-budget.md`).
+- **Memoria**: el scratch cuenta en el tope de 112 MiB con los destinos,
+  las profundidades y la profundidad de la pantalla agrandada; el peor caso
+  son 14 superficies (8 + scratch + 4 + 1) de 320 · g × 240 · g, 102,5 MiB
+  a 5× (`docs/memory-budget.md`).
+- **Destinos ligados sin profundidad propia** (cebado, scratch, dibujos
+  sin z image): van con la profundidad de la pantalla, que a 4×–5× en 720p
+  era más chica que el destino. Ahora se agranda al mayor destino posible
+  al elegir la escala (`rsxkit_depth_reserve`, `rdp_zeta_reserve`) y
+  `rsxkit_bind`, `rsxkit_target_copy`, `rsxkit_target_fill` y
+  `rsxkit_target_read` se niegan con una zeta más chica (`RSXKIT_EDEPTH`).
+  Elección explicada en `src/rdp/rdp.h`.
 - **«Aplicar ahora»** (`salsa64_rdp_set_scale`, entre juegos): suelta
   destinos, scratch y profundidades y descarta las copias en vuelo; la
   memoria mapeada de las copias se conserva (no depende de la escala).

@@ -1283,16 +1283,17 @@ static void stats(uint64_t now)
 		uint32_t mir = rs.mirrors - sw.rdp0.mirrors, mirs = rs.mirrors_skipped - sw.rdp0.mirrors_skipped;
 		uint32_t fmir = rs.frames_mirrored - sw.rdp0.frames_mirrored;
 		uint32_t lost = rs.readbacks_lost - sw.rdp0.readbacks_lost, tfail = rs.targets_failed - sw.rdp0.targets_failed;
-		uint32_t tabs = rs.targets_absurd - sw.rdp0.targets_absurd;
-		if (rb || rbw || mir || mirs || fmir || trsx || trd || tself || primes || lost || tfail || tabs)
+		uint32_t tabs = rs.targets_absurd - sw.rdp0.targets_absurd, bfail = rs.binds_failed - sw.rdp0.binds_failed;
+		if (rb || rbw || mir || mirs || fmir || trsx || trd || tself || primes || lost || tfail || tabs || bfail)
 			salsa64_log("gfx: framebuffer: %u copias a la RDRAM (%.2f ms c/u en presentación), la emulación "
 				    "esperó %u tareas (%.2f ms c/u, %u tarde), %u copias espejo (%u sin búfer), %u cuadros "
 				    "copiados; texturas desde un destino: %u del RSX, %u de la RDRAM, %u del ligado; %u "
-				    "destinos cebados; %u copias perdidas, %u destinos sin superficie, %u color images imposibles",
+				    "destinos cebados; %u copias perdidas, %u destinos sin superficie, %u color images imposibles, "
+				    "%u dibujos sin ligar (ninguna profundidad cubría el destino)",
 				    rb, rb ? (rs.us_readback - sw.rdp0.us_readback) / 1e3 / rb : 0.0, rbw,
 				    rbw ? (rs.us_readback_wait - sw.rdp0.us_readback_wait) / 1e3 / rbw : 0.0,
 				    rs.readback_late - sw.rdp0.readback_late, mir, mirs, fmir, trsx, trd, tself, primes, lost,
-				    tfail, tabs);
+				    tfail, tabs, bfail);
 	}
 	if (lle_mode != SALSA64_LLE_OFF) {
 		uint32_t t = rsp_spu.tasks - sw.lle_tasks0;

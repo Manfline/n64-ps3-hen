@@ -381,17 +381,20 @@ static void targets_scale_pick(void)
 	}
 	CHECK_EQ(rdp_scale_pick(9, 720, &cut), 5u);  /* el tope no es por memoria */
 	CHECK(!cut);
-	/* Peor caso: 8 destinos, el scratch y 4 profundidades (13 superficies)
-	 * de 320 × 240 × 25 (7,68 MB c/u) = 95,2 MiB, dentro del tope. */
-	CHECK_EQ(RDP_SURFACES_MAX, 13);
-	CHECK_EQ(rdp_vram_worst(5), 13u * 1600 * 4 * 1200);
+	/* Peor caso: 8 destinos, el scratch, 4 profundidades y la profundidad
+	 * de la pantalla agrandada (14 superficies) de 320 × 240 × 25 (7,68 MB
+	 * c/u) = 102,5 MiB, dentro del tope de 112 MiB (con 96, 5× no entraba). */
+	CHECK_EQ(RDP_SURFACES_MAX, 14);
+	CHECK_EQ(RDP_VRAM_BUDGET, 112u << 20);
+	CHECK_EQ(rdp_vram_worst(5), 14u * 1600 * 4 * 1200);
 	CHECK(rdp_vram_worst(5) <= RDP_VRAM_BUDGET);
-	CHECK(rdp_vram_worst(5) > 95u << 20);
-	CHECK_EQ(rdp_vram_worst(1), 13u * 640 * 4 * 480);  /* a 1× una de 640 × 480 queda nativa */
+	CHECK(rdp_vram_worst(5) > 96u << 20);
+	CHECK(RDP_VRAM_BUDGET - rdp_vram_worst(5) > 9u << 20);  /* margen */
+	CHECK_EQ(rdp_vram_worst(1), 14u * 640 * 4 * 480);  /* a 1× una de 640 × 480 queda nativa */
 	CHECK_EQ(rdp_surface_bytes(1600, 1200), 1600u * 4 * 1200);
 	CHECK_EQ(rdp_surface_bytes(321, 1), 1408u);  /* pitch a 128 */
 	/* Con un presupuesto más chico baja la escala y avisa. */
-	CHECK_EQ(rdp_scale_pick_budget(5, 720, 64u << 20, &cut), 4u);
+	CHECK_EQ(rdp_scale_pick_budget(5, 720, 70u << 20, &cut), 4u);
 	CHECK(cut);
 	CHECK_EQ(rdp_scale_pick_budget(5, 720, 60u << 20, &cut), 3u);
 	CHECK(cut);
@@ -570,6 +573,55 @@ static void targets_texture_cross_scale(void)
 	}
 }
 
+/* Destinos sin z image propia: se ligan con la profundidad de la
+ * pantalla, que nunca puede ser más chica que el color (rsxkit_bind se
+ * niega). A 4× y 5× en 720p (5× en 1080p) un destino es más grande que la
+ * pantalla: rdp_zeta_reserve la agranda al mayor destino posible, y con eso
+ * cubre cualquier destino, scratch o profundidad a esa escala, en
+ * cualquier pantalla. */
+static void targets_zeta_covers(void)
+{
+	uint32_t w, h;
+	/* El caso: 5× en 720p, Link o el framebuffer de 320 × 240 a 1600 × 1200
+	 * no caben en la profundidad de 1280 × 720. */
+	CHECK_EQ(rdp_target_scale(5, 320, 240) * 240, 1200u);
+	CHECK(rdp_zeta_reserve(5, 1280, 720, &w, &h));
+	CHECK_EQ(w, 1600);
+	CHECK_EQ(h, 1200);
+	CHECK(rdp_zeta_reserve(4, 1280, 720, &w, &h));
+	CHECK_EQ(w, 1280);
+	CHECK_EQ(h, 960);
+	CHECK(rdp_zeta_reserve(5, 1920, 1080, &w, &h));  /* 1200 líneas > 1080 */
+	CHECK_EQ(h, 1200);
+	/* Donde la de la pantalla alcanza, no se agranda (0 × 0). */
+	CHECK(!rdp_zeta_reserve(3, 1280, 720, &w, &h));
+	CHECK_EQ(w, 0);
+	CHECK_EQ(h, 0);
+	CHECK(!rdp_zeta_reserve(4, 1920, 1080, &w, &h));
+	CHECK(!rdp_zeta_reserve(2, 720, 480, &w, &h));   /* 480p: 640 × 480 */
+	CHECK(!rdp_zeta_reserve(1, 720, 480, &w, &h));
+	/* Todas las pantallas y escalas: la zeta (la de la pantalla, agrandada
+	 * como rsxkit_depth_reserve) cubre cada superficie posible. */
+	static const uint32_t screens[][2] = { { 1280, 720 }, { 1920, 1080 }, { 720, 480 }, { 720, 576 } };
+	for (unsigned k = 0; k < sizeof screens / sizeof screens[0]; k++)
+		for (uint32_t g = 1; g <= RDP_SCALE_MAX; g++) {
+			uint32_t sw = screens[k][0], sh = screens[k][1];
+			bool grow = rdp_zeta_reserve(g, sw, sh, &w, &h);
+			uint32_t zw = w > sw ? w : sw, zh = h > sh ? h : sh;
+			bool all_fit = true, ok = true;
+			for (uint32_t lw = 8; lw <= 640; lw += 8)
+				for (uint32_t lh = lw * 3 / 4; lh <= 480; lh += 7) {
+					uint32_t sc = rdp_target_scale(g, lw, lh);
+					ok = ok && zw >= lw * sc && zh >= lh * sc;
+					all_fit = all_fit && sw >= lw * sc && sh >= lh * sc;
+				}
+			CHECK(ok);
+			CHECK(grow == !all_fit);  /* solo se agranda cuando hace falta */
+			if (grow)  /* y cuenta como una superficie más del peor caso */
+				CHECK(rdp_surface_bytes(w, h) * RDP_SURFACES_MAX <= rdp_vram_worst(g));
+		}
+}
+
 /* Presentar a un múltiplo entero o ajustar: entero si cabe y llena al
  * menos 3/4 del alto (lo de antes a la escala automática), ajustado si la
  * escala por destino deja la región chica. */
@@ -604,4 +656,5 @@ void t_suite_targets(void)
 	RUN(targets_readback_scaled);
 	RUN(targets_texture_cross_scale);
 	RUN(targets_present_integer);
+	RUN(targets_zeta_covers);
 }

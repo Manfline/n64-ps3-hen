@@ -63,6 +63,10 @@ struct salsa64_rdp_stats {
 	/* Copias pedidas que no encontraron su destino dibujado, superficies
 	 * que el RSX no pudo crear y color images imposibles ignoradas. */
 	uint32_t readbacks_lost, targets_failed, targets_absurd;
+	/* Dibujos saltados porque rsxkit no ligó su destino (ninguna
+	 * profundidad cubría la superficie; no debería pasar, ver
+	 * salsa64_rdp_init). */
+	uint32_t binds_failed;
 };
 
 /* Después de rsxkit_init. scale = 0 (automática): la mayor escala entera
@@ -84,23 +88,47 @@ struct salsa64_rdp_stats {
  * leído como textura desde otro de otra escala: u y v van normalizadas) y
  * el scratch (copia del ligado, con su tamaño y su escala).
  *
+ * Destinos sin z image propia. El RSX siempre liga una zeta junto al color;
+ * un destino que se dibuja sin z image (rectángulos, 2D, el cebado, el
+ * scratch) se liga con la profundidad de la pantalla, con la prueba y la
+ * escritura apagadas (lo que el juego espera sin z image). A 4×–5× en 720p
+ * (o 5× en 1080p) un destino es más grande que la pantalla, y una zeta más
+ * chica que el color puede fallar o recortar en el RSX. Se eligió agrandar
+ * la profundidad de la pantalla (rsxkit_depth_reserve) al mayor destino
+ * posible a la escala, al iniciar y en salsa64_rdp_set_scale, fuera del
+ * bucle: es lo más simple (un búfer que ya existía, sin tocar los
+ * dibujos) y lo más seguro (el RSX queda siempre con una zeta que cubre al
+ * color, la configuración que ya corre en la PS3 a 3× en 720p y a 4× en
+ * 1080p). «Sin zeta» no es una opción limpia: la superficie del RSX
+ * (gcmSurface) siempre lleva formato, dirección y pitch de zeta, y una
+ * zeta de pitch 64 (lo que se usa para los colores sin usar) seguiría
+ * siendo más chica que el color, que es justo el riesgo; una profundidad
+ * por destino costaría una superficie más por ranura.
+ * Cuesta a lo más una superficie del mayor tamaño (7,7 MB a 5×; en 720p,
+ * 4 MB más que la de la pantalla), contada en el tope. Además rsxkit_bind
+ * se niega a ligar con una zeta más chica (RSXKIT_EDEPTH) y el dibujo se
+ * salta (binds_failed): nunca pasa en silencio. Política en targets.c
+ * (rdp_zeta_reserve, con pruebas).
+ *
  * Política de memoria local del RSX (docs/memory-budget.md):
  * 1) al arrancar el objetivo se baja hasta que el peor caso (8 destinos, el
- * scratch y 4 profundidades de 320 × 240 a esa escala; rdp_vram_worst)
- * quepa en RDP_VRAM_BUDGET (96 MiB): a 5× son 95,2 MiB y entra; 2) en el
- * juego, lo vivo suma a lo más RDP_VRAM_BUDGET: para crear una superficie
- * que pasaría se suelta el scratch y se recicla el destino más viejo (no el
- * presentado en el último campo ni uno que una textura pueda estar
- * leyendo); si ni así cabe, o rsxkit no tiene memoria, esa imagen se queda
- * en la copia de la RDRAM y no se dibuja en el RSX, sin errores. */
+ * scratch, 4 profundidades y la profundidad de la pantalla agrandada, de
+ * 320 × 240 a esa escala; rdp_vram_worst) quepa en RDP_VRAM_BUDGET
+ * (112 MiB): a 5× son 102,5 MiB y entra; 2) en el juego, lo vivo suma a lo
+ * más RDP_VRAM_BUDGET: para crear una superficie que pasaría se suelta el
+ * scratch y se recicla el destino más viejo (no el presentado en el último
+ * campo ni uno que una textura pueda estar leyendo); si ni así cabe, o
+ * rsxkit no tiene memoria, esa imagen se queda en la copia de la RDRAM y no
+ * se dibuja en el RSX, sin errores. */
 int salsa64_rdp_init(uint32_t scale);
 /* Escala-objetivo efectiva tras salsa64_rdp_init; *reduced: se bajó por memoria. */
 uint32_t salsa64_rdp_scale(bool *reduced);
 /* Cambia la escala pedida (0: automática) con el RDP ya iniciado y sin juego
  * abierto: suelta los destinos, el scratch y las profundidades, descarta las
- * copias a la RDRAM en vuelo y recalcula la escala-objetivo con la pantalla
- * en curso (útil tras rsxkit_video_reconfigure). Conserva la memoria
- * mapeada (juegos de búferes, caché de texturas y búferes de las copias). */
+ * copias a la RDRAM en vuelo y recalcula la escala-objetivo y la
+ * profundidad de la pantalla con la pantalla en curso (después de
+ * rsxkit_video_reconfigure). Conserva la memoria mapeada (juegos de
+ * búferes, caché de texturas y búferes de las copias). */
 void salsa64_rdp_set_scale(uint32_t scale);
 void salsa64_rdp_shutdown(void);
 /* Entre juegos (menú): suelta los destinos y profundidades del RSX y vacía

@@ -23,8 +23,28 @@ uint32_t rdp_surface_bytes(uint32_t w, uint32_t h)
 
 uint32_t rdp_vram_worst(uint32_t scale)
 {
-	uint32_t a = rdp_surface_bytes(320 * scale, 240 * scale), b = rdp_surface_bytes(640, 480);
-	return RDP_SURFACES_MAX * (a > b ? a : b);  /* a 1× una de 640 × 480 queda nativa */
+	uint32_t w, h;
+	rdp_surface_max(scale, &w, &h);  /* a 1× una de 640 × 480 queda nativa */
+	return RDP_SURFACES_MAX * rdp_surface_bytes(w, h);
+}
+
+void rdp_surface_max(uint32_t scale, uint32_t *w, uint32_t *h)
+{
+	*w = 320 * scale > 640 ? 320 * scale : 640;
+	*h = 240 * scale > 480 ? 240 * scale : 480;
+}
+
+bool rdp_zeta_reserve(uint32_t scale, uint32_t screen_w, uint32_t screen_h, uint32_t *w, uint32_t *h)
+{
+	uint32_t mw, mh;
+	rdp_surface_max(scale, &mw, &mh);
+	if (mw <= screen_w && mh <= screen_h) {
+		*w = *h = 0;
+		return false;
+	}
+	*w = mw;
+	*h = mh;
+	return true;
 }
 
 void rdp_surface_rect(uint32_t scale, uint32_t x, uint32_t y, uint32_t w, uint32_t h, struct rdp_rect *out)

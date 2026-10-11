@@ -78,8 +78,8 @@ Opciones:
   1080p) se ajusta a la pantalla con filtro lineal; 1× se amplía a un
   múltiplo entero. Los efectos de framebuffer (pausa de Zelda, túnel de
   Mario Kart) usan la escala de cada imagen (docs/framebuffer.md). Un tope
-  de 96 MiB de memoria del RSX para las imágenes vivas recicla la más
-  vieja si hace falta; a 5× el peor caso son 95,2 MiB
+  de 112 MiB de memoria del RSX para las imágenes vivas recicla la más
+  vieja si hace falta; a 5× el peor caso son 102,5 MiB
   (docs/memory-budget.md); el log dice «RDP listo: escala-objetivo …». Se
   pone también con «Aplicar ahora».
 - **Aplicar ahora**: solo aparece mientras la resolución o la escala elegidas

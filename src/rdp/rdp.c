@@ -137,6 +137,7 @@ static struct {
 	uint32_t scale;
 	bool scale_reduced;          /* la escala se bajó por memoria */
 	uint32_t vram;               /* bytes vivos: destinos, scratch y profundidades */
+	uint32_t zeta_bytes;         /* profundidad de la pantalla agrandada (apply_scale), en el tope */
 	uint32_t surf_bytes[RDP_TARGETS_MAX];
 	uint32_t surf_scale[RDP_TARGETS_MAX];  /* escala de la superficie de cada ranura */
 	uint8_t *pool;
@@ -200,13 +201,40 @@ static void acquire(void *ctx, struct gfx_job *job);
 static void done(void *ctx, const struct gfx_job *job, const struct gfx_result *res);
 static const struct salsa64_gfx_sink sink = { NULL, acquire, done };
 
+/* Escala-objetivo para la pantalla en curso y la profundidad de la
+ * pantalla que la acompaña (ver rdp.h: un destino sin z image se liga con
+ * ella y rsxkit_bind no liga uno más grande): se agranda ahora, fuera del
+ * bucle, al mayor destino posible a esa escala (rdp_zeta_reserve), o
+ * vuelve al tamaño de la pantalla si alcanza. Si el RSX no tiene memoria
+ * para agrandarla, se baja la escala (a 1× ningún destino pasa de 640 × 480
+ * y siempre alcanza). */
+static void apply_scale(uint32_t requested)
+{
+	const rsxkit_screen *sc = rsxkit_screen_info();
+	uint32_t s = rdp_scale_pick(requested, sc->height, &rdp.scale_reduced);
+	for (;;) {
+		uint32_t w, h;
+		bool grow = rdp_zeta_reserve(s, sc->width, sc->height, &w, &h);
+		if (rsxkit_depth_reserve(w, h) == RSXKIT_OK) {
+			rdp.zeta_bytes = grow ? rdp_surface_bytes(w, h) : 0;
+			break;
+		}
+		if (s <= 1) {
+			rdp.zeta_bytes = 0;
+			break;
+		}
+		s--;
+		rdp.scale_reduced = true;
+	}
+	rdp.scale = s;
+}
+
 int salsa64_rdp_init(uint32_t scale)
 {
 	memset(&rdp, 0, sizeof rdp);
 	rdp_targets_init(&rdp.tg);
 	rdp.bound_t = -1;
-	const rsxkit_screen *sc = rsxkit_screen_info();
-	rdp.scale = rdp_scale_pick(scale, sc->height, &rdp.scale_reduced);
+	apply_scale(scale);
 	rdp.scratch_slot = -1;
 	rdp.pool = memalign(1u << 20, POOL_BYTES);
 	if (!rdp.pool)
@@ -294,7 +322,7 @@ void salsa64_rdp_set_scale(uint32_t scale)
 	memset(&rdp.frame, 0, sizeof rdp.frame);
 	memset(rdp.big, 0, sizeof rdp.big);
 	memset(rdp.rb_task, 0, sizeof rdp.rb_task);
-	rdp.scale = rdp_scale_pick(scale, rsxkit_screen_info()->height, &rdp.scale_reduced);
+	apply_scale(scale);
 }
 
 void salsa64_rdp_shutdown(void)
@@ -535,9 +563,9 @@ static void drop_surface(int i)
  * máximo de superficies. */
 static bool make_room(uint32_t bytes, int keep)
 {
-	if (rdp.vram + bytes > RDP_VRAM_BUDGET && rdp.scratch && rdp.scratch_slot != keep)
+	if (rdp.vram + rdp.zeta_bytes + bytes > RDP_VRAM_BUDGET && rdp.scratch && rdp.scratch_slot != keep)
 		drop_scratch();
-	while (rdp.vram + bytes > RDP_VRAM_BUDGET) {
+	while (rdp.vram + rdp.zeta_bytes + bytes > RDP_VRAM_BUDGET) {
 		int victim = -1;
 		for (int j = 0; j < RDP_TARGETS_MAX; j++) {
 			if (!rdp.surf[j] || j == keep || j == rdp.tg.shown ||
@@ -669,18 +697,31 @@ static struct depth *get_depth(uint32_t addr, int slot)
 	return d;
 }
 
-static void bind(int slot, struct depth *d)
+/* Liga el destino de la ranura con la profundidad `d` (NULL: sin z image,
+ * con la de la pantalla, que apply_scale dejó del tamaño del mayor destino).
+ * false si rsxkit no lo ligó (ninguna zeta lo cubre): el dibujo se salta en
+ * vez de ir con una zeta más chica que el color. */
+static bool bind(int slot, struct depth *d)
 {
 	if (slot == rdp.bound_t && d == rdp.bound_d)
-		return;
+		return true;
 	const struct rdp_target *t = &rdp.tg.t[slot];
-	rsxkit_bind(rdp.surf[slot], d ? d->d : NULL, (float)t->lw, (float)t->lh);
+	int rc = rsxkit_bind(rdp.surf[slot], d ? d->d : NULL, (float)t->lw, (float)t->lh);
+	if (rc != RSXKIT_OK) {
+		rdp.bound_t = -1;
+		rdp.bound_d = NULL;
+		rdp.stats.binds_failed++;
+		LOGN(10, "gfx: destino %06x/%u no se ligó (%d): ninguna profundidad cubre su superficie", t->addr, t->width,
+		     rc);
+		return false;
+	}
 	rdp.bound_t = slot;
 	rdp.bound_d = d;
 	if (d && d->clear_pending) {
 		rsxkit_clear(RSXKIT_CLEAR_DEPTH, 0, d->clear_value, d->clear_rect);
 		d->clear_pending = false;
 	}
+	return true;
 }
 
 /* Borrado del z-buffer: se aplica ahora si está ligado, o al ligarlo. */
@@ -1033,7 +1074,8 @@ static void translate(uint32_t n)
 			struct depth *d = rdp.bound_t == cur ? rdp.bound_d : NULL;
 			if (g->depth)
 				d = get_depth(g->zimg, cur);
-			bind(cur, d);
+			if (!bind(cur, d))
+				break;
 			rdp_targets_drawn(&rdp.tg, cur);
 			drawn[cur] = true;
 			rdp.surf_dirty[cur] = true;
