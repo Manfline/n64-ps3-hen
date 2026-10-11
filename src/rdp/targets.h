@@ -62,6 +62,10 @@ struct rdp_target {
 	 * desde entonces la verdad está ahí (el CPU puede haberla cambiado)
 	 * hasta que el RDP lo vuelva a dibujar. */
 	bool cpu_owned;
+	/* Lo dibujado ya está en la RDRAM por el espejo del framebuffer
+	 * (rdp_targets_mirrored), o no hay nada dibujado que copiar (recién
+	 * creado). Lo borra el próximo dibujo. */
+	bool mirrored;
 	uint8_t fmt;          /* G_IM_FMT_* de la color image (lo pone quien la crea; 0 si no se sabe) */
 	uint32_t addr;        /* color image: dirección física y ancho en píxeles */
 	uint32_t width;
@@ -223,6 +227,23 @@ enum rdp_texsrc rdp_targets_texture(struct rdp_targets *s, uint32_t addr, uint32
  * del CPU y devuelve true. Con `force`, se copia sin preguntar (lo decidió
  * otro hilo con rdp_readback_wanted). */
 bool rdp_targets_readback(struct rdp_targets *s, int slot, bool force);
+
+/* Espejo del framebuffer (rdp.c y el rasterizador del host): lo que el RDP
+ * dibuja en un framebuffer se copia a la RDRAM para que el CPU lea el
+ * cuadro y no basura (la cámara del túnel de Mario Kart), una sola vez por
+ * dibujo y cuanto antes: al terminar la tarea que lo dibujó si ya se sabe
+ * que es un framebuffer (rdp_targets_mirror_at_task_end: el VI lo mostró
+ * alguna vez, de 16 bits y del ancho del VI) y, si no, al presentarlo
+ * (rdp_targets_mirror_wanted). Copiar al presentar, o en cada campo, un
+ * cuadro que el RDP dibujó antes pisa lo que el CPU o un DMA escribieron
+ * entre medio: Super Mario 64, al pasar del logo a la cara de Mario,
+ * dibuja un framebuffer, carga por DMA datos encima de él y de otro y el
+ * VI los muestra uno o dos campos más; esas copias pisaban los datos y el
+ * juego se colgaba (dejaba de mandar tareas gráficas). */
+bool rdp_targets_mirror_wanted(const struct rdp_targets *s, int slot);
+bool rdp_targets_mirror_at_task_end(const struct rdp_targets *s, int slot);
+/* La copia del espejo de la ranura se hizo (o quedó encolada). */
+void rdp_targets_mirrored(struct rdp_targets *s, int slot);
 
 void rdp_vi_ring_push(struct rdp_vi_ring *r, uint32_t origin, uint32_t width);
 /* ¿Hay que copiar a la RDRAM la color image (addr, width, siz) cuando el

@@ -111,9 +111,11 @@ grandes repetidas (la intro de Conker dibuja cada tarea una color image de
 ms cada una, frenaban), que se copian en un búfer grande y el CPU recibe
 el cuadro anterior.
 
-**Espejo del framebuffer presentado.** Cada campo, el framebuffer que
-muestra el VI se reduce en el RSX a un búfer y, un campo después, el PPE
-lo escribe en la RDRAM (solo las filas que muestra el VI; sin esperas).
+**Espejo del framebuffer.** Lo que el RDP dibuja en un framebuffer se
+reduce en el RSX a un búfer y, pasada su barrera, el PPE lo escribe en la
+RDRAM (sin esperas), **una sola vez por dibujo**: al terminar la tarea que
+lo dibujó si el VI ya lo mostró alguna vez (16 bits, del ancho del VI) y,
+si no, al presentarlo por primera vez (solo las filas que muestra el VI).
 Mario Kart fabrica con el CPU la textura de la cámara del túnel de Luigi
 Raceway leyendo el framebuffer: sin el espejo la pantalla salía negra. En
 la PS3 cuesta 0,0 ms medidos por campo en presentación (GoldenEye en Dam
@@ -122,6 +124,22 @@ memoria de una copia reciente que se solape con el framebuffer (Link en sus
 primeros 14 KB; la cobertura plena de VISCVG, que el filtro del CPU lee
 durante ~1 s): sin eso, el CPU copiaba la esquina de la pantalla de pausa
 en vez de a Link.
+
+Antes (bf836f2) se copiaba el framebuffer presentado **en cada campo**, y
+eso pisa lo que el CPU o un DMA escriban en esa memoria después de que el
+RDP la dibujó: Super Mario 64, al pasar del logo a la cara de Mario (campo
+~343), dibuja un framebuffer (tarea 95), carga por DMA ~200 KB de datos de
+la cara encima de dos de sus framebuffers (`390000`–`3c2780`) mientras el
+VI todavía muestra uno, y lo presenta un campo más antes de apagar el VI;
+la copia pisaba esos datos y el juego no volvía a mandar tareas gráficas
+(en el host se quedaba en 96 tareas con `SALSA64_FBFX=2`). Copiarlo al
+presentarlo «una vez» tampoco basta (ese framebuffer se presenta por
+primera vez *después* del DMA): por eso la copia sigue al dibujo, como en
+la N64. En el host la copia es síncrona; en la PS3 llega a la RDRAM en una
+traducción o presentación posterior (uno o dos campos), así que un DMA
+sobre un framebuffer en el mismo campo en que el RDP lo terminó todavía
+podría quedar debajo de la copia (en SM64 pasan ~4 campos entre la tarea
+95 y el DMA).
 
 Las imágenes chicas (iconos, pantallas) no se esperan: al terminar la tarea
 que las dibujó se encola una **copia espejo** (solo las filas que llegaron
@@ -170,9 +188,9 @@ superficie usa la escala de **esa** superficie (`rdp_surface_rect`,
 `rdp_target_tex_map` en `targets.c`, con pruebas):
 
 - **Copias RSX → RDRAM** (esperadas, grandes sin esperar, espejos chicos y
-  el espejo del framebuffer presentado): la región leída es `lw · s ×
-  filas · s` con la `s` del destino copiado, y el RSX la reduce a `lw ×
-  filas`. Con la escala objetivo en su lugar, la copia de Link a 5× leía
+  el espejo del framebuffer, una vez por dibujo, al terminar la tarea o al
+  presentarlo): la región leída es `lw · s × filas · s` con la `s` del
+  destino copiado, y el RSX la reduce a `lw × filas`. Con la escala objetivo en su lugar, la copia de Link a 5× leía
   solo la esquina de la superficie, y la de un destino a 1× se salía de
   ella (rsxkit la rechazaba).
 - **Render a textura**: se ligan las filas `y0 · s … (y0 + alto) · s` del

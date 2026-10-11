@@ -1009,6 +1009,8 @@ static void done(void *ctx, const struct gfx_job *job, const struct gfx_result *
 	rdp.stats.us_readback_wait += sysGetSystemTime() - t0;
 }
 
+static void frame_mirror(int slot, uint32_t rows, bool wait);
+
 /* Traduce la salida de la tarea n a comandos del RSX. */
 static void translate(uint32_t n)
 {
@@ -1271,6 +1273,15 @@ static void translate(uint32_t n)
 		readbacks_finish(false);  /* pasó la barrera: los espejos también */
 		rdp.stats.us_readback += sysGetSystemTime() - t1;
 	}
+	/* Espejo de los framebuffers que dibujó la tarea (el VI ya los mostró
+	 * alguna vez): ahora, como el RDP, y no al presentarlos. Va después de
+	 * poner las barreras de las copias de arriba (readbacks_finish no debe
+	 * ver una sin barrera). */
+	for (int i = 0; rdp.rdram && rdp.fbfx >= 2 && i < RDP_TARGETS_MAX; i++) {
+		uint32_t rows = drawn_rows[i] < rdp.tg.t[i].lh ? drawn_rows[i] : rdp.tg.t[i].lh;
+		if (drawn[i] && !sync_rb[i] && rdp_targets_mirror_at_task_end(&rdp.tg, i))
+			frame_mirror(i, rows, true);
+	}
 	lwsync();  /* la RDRAM, antes de decir que está */
 	rdp.readback_done = n + 1;
 	rdp.last_res = *res;
@@ -1298,18 +1309,29 @@ uint32_t salsa64_rdp_tasks_done(void)
 	return rdp.finished;
 }
 
-/* Espejo del framebuffer que se presenta: el RSX lo reduce a un búfer y, un
- * campo después (readbacks_finish), el PPE lo escribe en la RDRAM. Así lo
- * que el CPU lea del framebuffer (Mario Kart reduce el cuadro para la
- * pantalla del túnel) es el cuadro anterior, no basura. Solo las filas que
- * el VI muestra; sin esperar; si el espejo anterior aún no pasó la
- * barrera, este campo se salta. */
-static void frame_mirror(int slot, uint32_t rows)
+/* Espejo de un framebuffer: el RSX lo reduce a un búfer y, pasada su
+ * barrera (readbacks_finish, en una traducción o presentación posterior),
+ * el PPE lo escribe en la RDRAM. Así lo que el CPU lea del framebuffer
+ * (Mario Kart reduce el cuadro para la pantalla del túnel) es el cuadro,
+ * no basura. Una sola vez por dibujo (targets.h): al terminar la tarea que
+ * lo dibujó (`wait`: si el espejo anterior aún no pasó su barrera, se
+ * espera) o, si entonces no se sabía que era un framebuffer, al
+ * presentarlo (solo las filas que muestra el VI; sin esperar: si el espejo
+ * anterior aún no pasó la barrera, este campo se salta). Copiar en cada
+ * campo, o al presentar, un cuadro que el RDP dibujó antes pisaba lo que
+ * el juego cargó por DMA después en esa memoria (SM64 al pasar del logo a
+ * la cara de Mario se colgaba). */
+static void frame_mirror(int slot, uint32_t rows, bool wait)
 {
 	const struct rdp_target *t = &rdp.tg.t[slot];
 	readbacks_finish(false);
-	if (rdp.frame.used || !rdp.rdram || rdp.fbfx < 2 || t->bpp != 2 || t->lw > RB_MAX_W || rows > RB_MAX_H ||
-	    !rows || t->addr + t->width * 2 * rows > rdp.rdram_size)
+	if (wait && rdp.frame.used) {
+		rsxkit_fence_wait(rdp.frame.fence);
+		readbacks_finish(false);
+	}
+	if (rdp.frame.used || !rdp.rdram || rdp.fbfx < 2 || !rdp.surf[slot] || t->bpp != 2 || t->lw > RB_MAX_W ||
+	    rows > RB_MAX_H || !rows || t->addr + t->width * 2 * rows > rdp.rdram_size ||
+	    !rdp_targets_mirror_wanted(&rdp.tg, slot))
 		return;
 	if (rows > t->lh)
 		rows = t->lh;
@@ -1329,6 +1351,7 @@ static void frame_mirror(int slot, uint32_t rows)
 			       RSXKIT_RGB565) != RSXKIT_OK)
 		return;
 	rdp.bound_t = -1;
+	rdp_targets_mirrored(&rdp.tg, slot);
 	rdp.frame.used = true;
 	rdp.frame.addr = t->addr;
 	rdp.frame.width = t->width;
@@ -1379,7 +1402,7 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 	} else {
 		rsxkit_target_present(rdp.surf[p.slot], &src, w, h, view, out);
 	}
-	frame_mirror(p.slot, p.y0 + p.h);
+	frame_mirror(p.slot, p.y0 + p.h, false);
 	return true;
 }
 

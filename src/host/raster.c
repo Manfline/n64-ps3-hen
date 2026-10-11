@@ -454,6 +454,34 @@ static void readback(const struct gfx_job *job, int slot, uint32_t rows)
 	}
 }
 
+/* Espejo del framebuffer (como frame_mirror en rdp.c): las `rows` primeras
+ * filas de la ranura a la RDRAM, una vez por dibujo, sin pisar lo que una
+ * copia reciente de una imagen que se solape dejó en esa memoria. */
+static void frame_mirror(const struct gfx_job *job, int slot, uint32_t rows, const char *when)
+{
+	const struct rdp_target *t = &tg.t[slot];
+	if (rows > t->lh)
+		rows = t->lh;
+	if (t->bpp != 2 || !rows || t->addr + t->width * 2 * rows > job->rdram_size ||
+	    !rdp_targets_mirror_wanted(&tg, slot))
+		return;
+	/* Como rdp.c: no pisar una copia reciente que se solape (Link en los
+	 * primeros bytes del framebuffer de Zelda; la cobertura de VISCVG). */
+	uint32_t lo = t->addr, hi = t->addr + t->width * 2 * rows;
+	for (int k = 0; k < RDP_TARGETS_MAX; k++) {
+		const struct rdp_target *a = &tg.t[k];
+		if (a->used && tg.task - rb_task[k] <= RB_KEEP_TASKS && a->addr < hi &&
+		    a->addr + a->width * a->bpp * a->lh > lo)
+			return;
+	}
+	readback(job, slot, rows);
+	rdp_targets_mirrored(&tg, slot);
+	frames++;
+	if (raster_trace_fb)
+		fprintf(stderr, "fb: campo %u tarea %u: espejo del framebuffer %06x/%u %s: %u filas\n", raster_field,
+			task_no, t->addr, t->width, when, rows);
+}
+
 void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 {
 	const uint8_t *cmd = (const uint8_t *)(uintptr_t)job->cmd_ea;
@@ -607,41 +635,42 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 			if (raster_trace_fb)
 				fprintf(stderr, "fb: campo %u tarea %u: copia espejo del destino %06x/%u: %u filas (alto conjeturado %u)\n",
 					raster_field, task_no, t->addr, t->width, rows, t->lh);
+		} else if (raster_fbfx >= 2 && rdp_targets_mirror_at_task_end(&tg, i)) {
+			/* Framebuffer: a la RDRAM al terminar la tarea que lo dibujó,
+			 * como el RDP (en la PS3, sin esperar). */
+			frame_mirror(job, i, rows, "al terminar la tarea");
 		}
 	}
 }
 
 void raster_vi(const struct salsa64_vi_frame *f)
 {
-	uint32_t origin = f->origin, width = f->width;
-	rdp_vi_ring_push(&vi_ring, origin, width);
+	rdp_vi_ring_push(&vi_ring, f->origin, f->width);
 	/* Como la PS3: qué destino se presenta (marca `presented`, el ancho del
 	 * VI y la ranura protegida del reciclado). Sin esto el host copiaba a
 	 * la RDRAM todos los destinos de cada tarea, framebuffers incluidos, y
 	 * no reproducía la política de la consola. */
 	struct rdp_present out;
 	rdp_targets_present(&tg, f, ++vi_field, &out);
-	/* Como la PS3: el framebuffer que muestra el VI se copia a la RDRAM
-	 * cada campo (lo que el CPU lea de él es el cuadro, no basura). */
-	if (raster_fbfx < 2 || !last_job.rdram_ea)
-		return;
-	for (int i = 0; i < RDP_TARGETS_MAX; i++) {
-		const struct rdp_target *t = &tg.t[i];
-		if (t->used && t->bpp == 2 && t->width == width && origin >= t->addr &&
-		    origin < t->addr + t->width * 2 * t->lh) {
-			/* Como rdp.c: no pisar una copia reciente que se solape. */
-			uint32_t lo = t->addr, hi = t->addr + t->width * 2 * t->lh;
-			for (int k = 0; k < RDP_TARGETS_MAX; k++) {
-				const struct rdp_target *a = &tg.t[k];
-				if (a->used && tg.task - rb_task[k] <= RB_KEEP_TASKS && a->addr < hi &&
-				    a->addr + a->width * a->bpp * a->lh > lo)
-					return;
-			}
-			readback(&last_job, i, t->lh);
-			frames++;
-			return;
-		}
-	}
+	/* Como la PS3: un framebuffer dibujado que aún no se copió a la RDRAM
+	 * (no se sabía que lo era al terminar su tarea) se copia al
+	 * presentarlo, solo las filas que muestra el VI. */
+	if (raster_fbfx >= 2 && last_job.rdram_ea && out.slot >= 0)
+		frame_mirror(&last_job, out.slot, out.y0 + out.h, "al presentarlo");
+}
+
+void raster_reset(void)
+{
+	memset(&tg, 0, sizeof tg);
+	memset(rgb, 0, sizeof rgb);
+	scratch_slot = 0;
+	memset(depths, 0, sizeof depths);
+	next_depth = 0;
+	task_no = vi_field = 0;
+	memset(&vi_ring, 0, sizeof vi_ring);
+	primes = readbacks = mirrors = frames = 0;
+	memset(rb_task, 0, sizeof rb_task);
+	memset(&last_job, 0, sizeof last_job);
 }
 
 void raster_fb_stats(uint32_t *n_readbacks, uint32_t *n_primes, uint32_t *tex_rsx, uint32_t *tex_rdram)
