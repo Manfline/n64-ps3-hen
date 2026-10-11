@@ -649,6 +649,29 @@ static void to_rsxkit(const struct gfx_draw *g, const struct set *s, int cur, rs
  * de Zelda, o Link recién dibujado que el CPU copia a otra parte); las que
  * se repiten en RB_HISTORY tareas van sin esperar (iconos de cada cuadro,
  * la intro de Conker). Solo recorre las cabeceras de los registros. */
+/* ¿Algún dibujo de la tarea lee como textura la color image (addr, width)?
+ * Si ninguno la lee, el único lector posible es el CPU. Mira el origen de
+ * las dos texturas de cada dibujo (gfx_tex.src_addr) contra la imagen con
+ * el alto de siempre (240 filas). */
+static bool rdp_reads_image(const struct set *s, const struct gfx_result *res, uint32_t addr, uint32_t width)
+{
+	uint32_t lo = addr, hi = addr + width * 2 * 240;
+	uint32_t off = 0;
+	while (off + sizeof(struct gfx_cmd) <= res->cmd_bytes) {
+		const struct gfx_cmd *c = (const struct gfx_cmd *)(s->cmd + off);
+		if (c->op == GFX_OP_END || c->size < sizeof *c)
+			break;
+		if (c->op == GFX_OP_DRAW && c->size >= sizeof(struct gfx_draw)) {
+			const struct gfx_draw *g = (const struct gfx_draw *)c;
+			for (int i = 0; i < g->ntex && i < 2; i++)
+				if (g->tex[i].src_addr >= lo && g->tex[i].src_addr < hi)
+					return true;
+		}
+		off += c->size;
+	}
+	return false;
+}
+
 static void readbacks_wanted(struct set *s, const struct gfx_result *res)
 {
 	s->rb_n = s->rb_nsync = 0;
@@ -671,8 +694,14 @@ static void readbacks_wanted(struct set *s, const struct gfx_result *res)
 				for (uint32_t h = 0; h < RB_HISTORY; h++)
 					for (uint32_t j = 0; j < rdp.rb_prev_n[h]; j++)
 						again |= rdp.rb_prev[h][j] == c->a;
-				s->rb_sync[k] = !again;
-				s->rb_nsync += !again;
+				/* Se espera si acaba de aparecer, o si es chica y ningún
+				 * dibujo la lee (Link redibujado entre los iconos de cada
+				 * cuadro, que el CPU copia a otro búfer). Las grandes
+				 * repetidas no se esperan (la intro de Conker). */
+				bool small = c->b * 2 * 240 <= MIRROR_BYTES * 4;
+				bool sync = !again || (small && !rdp_reads_image(s, res, c->a, c->b));
+				s->rb_sync[k] = sync;
+				s->rb_nsync += sync;
 				s->rb_addr[s->rb_n++] = c->a;
 			}
 		}
