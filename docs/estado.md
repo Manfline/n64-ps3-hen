@@ -60,9 +60,13 @@ en la consola queda para el día de pruebas):
   largas se anotan abajo.
 
 **Para el día de pruebas en la PS3 (orden sugerido: al final, tras recorte →
-líneas del logo → framebuffer):** instalar `build/salsa64-jit/salsa64-jit.pkg`
-(SLSA00088 «Salsa64 JIT»; subido como `salsa64-jit.pkg`), crear por FTP
-`/dev_hdd0/salsa64/perfil` (vacío) y poner `embedded` = `file:goldeneye.z64`.
+líneas del logo → framebuffer):** la consola no respondía en la noche (FTP
+sin conexión), así que el paquete está sin subir: desde este worktree
+`PS3_IP=x.x.x.x tools/deploy-ps3.sh ftp build/salsa64-jit/salsa64-jit.pkg`
+(el worktree no tiene `tools/ps3.conf`); instalarlo desde Package Manager
+(SLSA00088 «Salsa64 JIT»), crear por FTP `/dev_hdd0/salsa64/perfil` (vacío:
+`curl -T /dev/null ftp://x.x.x.x/dev_hdd0/salsa64/perfil`) y poner
+`embedded` = `file:goldeneye.z64`.
 1. Abrir «Salsa64 JIT», jugar la presa ~3 min (misma ruta que las
    mediciones anteriores), salir, bajar `/dev_hdd0/salsa64/salsa64.log`.
 2. Crear `/dev_hdd0/salsa64/jit-viejo` (vacío) y repetir: es el «antes» con

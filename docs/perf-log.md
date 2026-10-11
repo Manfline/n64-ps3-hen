@@ -508,9 +508,21 @@ campos 4800–5400 (en juego), por campo:
 
 Perfect Dark (intro, 64 s de consola), total por campo: 3163 cargas y 201
 almacenamientos por C a direcciones mapeadas por la TLB (sus datos en una
-página de 4 MB en 0x70000000), 770 CACHE, 200 COP0. Con el camino rápido
-de datos mapeados y CACHE nativo, las llamadas a C pasan de 3923 a (ver
-corrida final abajo).
+página de 4 MB en 0x70000000), 770 CACHE, 200 COP0.
+
+**Bloques, código y vaciados** (misma corrida de GoldenEye, 128 s; el
+perfil por bloque pesa por ejecuciones):
+
+| Estado | Bloques compilados | Instrucciones por bloque | Vaciados de la caché | Compilaciones por campo en la presa |
+|---|---|---|---|---|
+| main (antes) | 101 910 | 5,3 | 7 (16 MB) | 22 |
+| + bloques desprendidos | 40 851 (28 206 enganchados de vuelta) | 5,3 | 3 | 0,7 |
+| + superbloques | 131 228 | 11,8 | 17 (16 MB: ~900 bytes de PPC por bloque) | — |
+| + rutinas de ktlb y caché de 24 MB | 26 243 | 11,8 | 2 | — |
+| + camino lento compartido | 24 901 | 11,9 | 2 (10,3 MB al final; el segundo al cargar la presa) | 0,6 |
+
+Perfect Dark con lo mismo (64 s): 16,1 instrucciones por bloque (5,2 de
+memoria), 2 vaciados con 24 MB antes del camino lento compartido.
 
 **PS3 real:** pendiente del día de pruebas (11 de octubre), con el paquete
 SLSA00088 y `perfil`; el A/B es con el mismo binario (`jit-viejo`). Lo que

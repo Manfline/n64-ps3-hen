@@ -282,6 +282,13 @@ Ahora:
   (`ktlb_rtn[2][4]`, por alineación y lectura/escritura).
 - El preámbulo pasa de 256 a 1024 palabras.
 
+Resultado (mismo volcado de GoldenEye, 4392 bloques): media 316 → 248
+palabras por bloque, mediana 171 → 137, p90 789 → 621. Lo que queda grande
+son las operaciones de la FPU (~55 palabras cada una, con su camino lento
+al intérprete) y las salidas de los saltos internos. Con 24 MB, GoldenEye
+vacía la caché 2 veces en 128 s (al cargar la presa); cada vaciado
+recompila el conjunto vivo (~7000 bloques) a medida que se ejecuta.
+
 ### Memoria
 
 Camino rápido: `va >> log2(rdram)` vale lo mismo para KSEG0 y KSEG1 tras un
