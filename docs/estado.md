@@ -94,15 +94,26 @@ Verificado:
       gfxtest 32/32 ×3, audiotest); `tools/build.sh` sin advertencias;
       `test-phase2` en RPCS3 (gfxtest 32/32 F3DEX2 y F3D con la HLE en el
       SPE, menú con cierre limpio); `test-rec`: ver abajo.
-- [ ] **PS3 real** (paquete «Salsa64 Kokiri», SLSA00091, `embedded` =
-      `file:oot.z64`): entrar a la tienda Kokiri y a la casa de Link desde
-      el bosque. Esperado: piso, paredes y mostrador con textura (corteza y
-      madera) y Link tapado por el mostrador donde corresponde; en el log,
-      «JPEG: 75 tareas, 300 macrobloques en X ms del PPE» al entrar y «N
-      fondos de S2DEX» en las líneas `gfx:`. Decidir con ese X si el JPEG
-      se queda en el PPE (`docs/perf-log.md`).
+- [x] **PS3 real** (paquete «Salsa64 Kokiri», SLSA00091, 3b95776,
+      `embedded` = `file:oot.z64`; el autor, 2026-10-11): la tienda Kokiri y
+      la casa de Link «ya se ven bien». En el log, dos salas: «JPEG: 75
+      tareas, 300 macrobloques en 67,8 / 67,3 ms del PPE», 0 con parámetros
+      malos, y 14–47 «fondos de S2DEX» por ventana de 5 s. Las ventanas de
+      100 campos con la carga de sala quedan en 57,3–57,6 campos/s con el
+      peor campo en 37–39 ms de emulación (≈ 2 campos de tirón durante la
+      transición; el resto, 5–8 ms por campo). Log en
+      `build/ps3-logs/salsa64-kokiri.log` (fuera de git).
+- **Decisión:** el JPEG se queda en el PPE (una vez por sala, durante la
+  transición). Es ~110 veces más lento que en la Mac: flotantes con
+  conversiones a entero (en el PPE pasan por memoria) y `lrintf`/`floorf`
+  de la biblioteca; con una IDCT en punto fijo debería bajar a pocos ms
+  sin pasar a un SPE (pendiente abajo).
 
 Pendiente:
+- [ ] HLE JPEG en el PPE: IDCT y conversión a RGBA5551 en punto fijo (sin
+      flotantes ni `lrintf`/`floorf`), volver a medir contra el
+      microcódigo real (`--lle-check-jpeg`) y en la PS3; meta < 10 ms por
+      sala (hoy 68 ms).
 - [ ] LLE: al reanudar una tarea JPEG interrumpida (OS_TASK_YIELDED) el
       último macrobloque queda sin escribir (tarea 49 de la partida nueva).
 - [ ] LLE + RDP del host: los TEXRECT en modo copia que emite el S2DEX real
