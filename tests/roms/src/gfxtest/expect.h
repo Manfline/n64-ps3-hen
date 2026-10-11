@@ -68,6 +68,8 @@ struct gfxtest_point {
 	{ 295, 15, 0xFF8000, "w = 1000: PRIM·TEXEL0_ALPHA" },                          \
 	{ 271, 221, 0x00FF00, "textura cambiada en la RDRAM: texel (0,0)" },            \
 	{ 277, 227, 0xFF00FF, "textura cambiada en la RDRAM: texel (3,3), nuevo" },    \
-	{ 255, 221, 0xFF8400, "paleta cambiada en la RDRAM: índice 5, nuevo" },
+	{ 255, 221, 0xFF8400, "paleta cambiada en la RDRAM: índice 5, nuevo" },         \
+	{ 252, 232, 0xFF0000, "2 ciclos, TEXEL0·TEXEL1·SHADE (programa generado)" },       \
+	{ 287, 232, 0x804080, "2 ciclos, lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE (generado)" },
 
 #endif

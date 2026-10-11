@@ -146,6 +146,12 @@ for v in gfxtest gfxtest-f3d gfxtest-f3dex; do
 		echo "             falló: hay comandos sin implementar ($GLOG)"
 		fail=1
 	fi
+	# Los cuadros N y O (textura × textura, sombreado × sombreado) van por el
+	# generador de fragment programs: ningún combiner se aproxima.
+	if ! grep -q 'gfx:.* 0 combiners aproximados' "$GLOG"; then
+		echo "             falló: hay combiners aproximados ($GLOG)"
+		fail=1
+	fi
 	# Cada lista lleva un tramo de otro microcódigo (saltado) y la del cuadro
 	# GFXTEST_CUT_FRAME termina dentro de él: una sola tarea cortada (F3D no
 	# tiene G_LOAD_UCODE: sin tramo).

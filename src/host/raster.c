@@ -197,17 +197,49 @@ static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, 
 				for (int l = 0; l < 4; l++)
 					X[k][l] = d->k[k][0][l] + d->k[k][1][l] * c[l] + d->k[k][2][l] * c[3];
 			if (d->fog) {
+				/* Como el vertex program de rsxkit: todo por (1 − f) y el
+				 * color de niebla al término constante (el primero sin
+				 * factores, que combine.c garantiza). */
 				float f = c[3];
+				int fog_term = GFX_K_ONE;
+				if (d->nterms) {
+					fog_term = -1;
+					for (int k = 0; k < d->nterms && fog_term < 0; k++)
+						if (!d->factors[k][0])
+							fog_term = k;
+				}
 				for (int k = 0; k < GFX_K_TERMS; k++)
 					for (int l = 0; l < 3; l++)
 						X[k][l] *= 1.0f - f;
-				for (int l = 0; l < 3; l++)
-					X[GFX_K_ONE][l] += f * ((d->fog_color >> (24 - 8 * l)) & 0xFF) / 255.0f;
+				for (int l = 0; fog_term >= 0 && l < 3; l++)
+					X[fog_term][l] += f * ((d->fog_color >> (24 - 8 * l)) & 0xFF) / 255.0f;
 			}
 			float out[4];
-			for (int l = 0; l < 4; l++)
-				out[l] = clamp01(tx[0][l] * X[GFX_K_T0][l] + tx[0][3] * X[GFX_K_T0A][l] +
-						 tx[1][l] * X[GFX_K_T1][l] + tx[1][3] * X[GFX_K_T1A][l] + X[GFX_K_ONE][l]);
+			if (d->nterms) {
+				/* Términos del generador de fragment programs. */
+				for (int l = 0; l < 4; l++) {
+					float sum = 0.0f;
+					for (int k = 0; k < d->nterms; k++) {
+						float p = X[k][l];
+						for (int f = 0; f < GFX_K_FACTORS && d->factors[k][f]; f++)
+							switch (d->factors[k][f]) {
+							case GFX_F_T0: p *= tx[0][l]; break;
+							case GFX_F_T0A: p *= tx[0][3]; break;
+							case GFX_F_T1: p *= tx[1][l]; break;
+							case GFX_F_T1A: p *= tx[1][3]; break;
+							case GFX_F_C: p *= c[l]; break;
+							default: p *= c[3]; break;
+							}
+						sum += p;
+					}
+					out[l] = clamp01(sum);
+				}
+			} else {
+				for (int l = 0; l < 4; l++)
+					out[l] = clamp01(tx[0][l] * X[GFX_K_T0][l] + tx[0][3] * X[GFX_K_T0A][l] +
+							 tx[1][l] * X[GFX_K_T1][l] + tx[1][3] * X[GFX_K_T1A][l] +
+							 X[GFX_K_ONE][l]);
+			}
 			if (d->atest == GFX_ATEST_GEQUAL && out[3] * 255.0f + 0.5f < d->aref)
 				continue;
 #ifdef SALSA64_GFX_TRACE

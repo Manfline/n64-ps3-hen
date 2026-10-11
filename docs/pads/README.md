@@ -16,3 +16,8 @@ estado vale hasta el siguiente, por eso cada pulsación lleva su suelta `-`):
   campo 2800, izquierda en el 3250, arriba en el 3385, suelta en el 3470):
   Link queda en el balcón del bosque Kokiri desde el campo ~3500, sin más
   entrada. Sirve también como `M64P_PAD` de `tools/m64p-ref.sh`.
+- `goldeneye-dam.pad`: START en el campo 200 y A cada 240 campos (pulsada
+  8 campos): pasa el título, la carpeta y las pantallas de la misión hasta
+  jugar en Dam desde el campo ~4800 (con `-c 7500000000` llega a unos 80 s
+  de consola). Sirve para contar los combiners del nivel (0 aproximados con
+  el generador de fragment programs).
