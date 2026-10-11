@@ -647,7 +647,26 @@ generador el autor vio GoldenEye normal en la PS3. Después, el menú estilo XMB
 **Integrado el 2026-10-11:** recorte del RSP (`reverent-meninsky-b3f79c`,
 «Salsa64 recorte» SLSA00090): en la PS3, Mario Kart sin polígonos estirados,
 SM64 y Perfect Dark bien. Las líneas azules de GoldenEye salen también sin el
-recorte (A/B en la PS3): pendiente aparte, abajo.
+recorte (A/B en la PS3): pendiente aparte, abajo. Después, el mismo día:
+control (pulsaciones perdidas), fondos prerrenderizados de Zelda (JPEG + S2DEX),
+recompilador con perfil por causa, efectos de framebuffer (4baa6df) y el arreglo
+del espejo del framebuffer que colgaba SM64 en la cara de Mario (84ea55f; en la
+PS3 sin confirmar).
+
+**Para la próxima prueba en la PS3 (tarde del 2026-10-11):**
+1. Paquete principal de la rama `dev-a1388b259074798ab` (1647a25:
+   resolución 720p/1080p, escala interna 1×–5× por destino, «Aplicar ahora»,
+   ROM a su medida, más main con el framebuffer y el arreglo de SM64), en
+   `dev-a1388b259074798ab/build/salsa64/salsa64.pkg`. Ver a
+   720p/Auto y luego a 5×: SM64 del logo al castillo, pausa y equipo de Zelda,
+   túnel de Mario Kart, intro de Conker; «Aplicar ahora» 720p ↔ 1080p. Si pasa,
+   se integra esa rama.
+2. Estados guardados + contador de FPS (`wonderful-blackwell-6f40d3`,
+   SLSA00094): guion en su docs/estado.md.
+3. FPU en registros, COP0 nativo y caché por tramos (`jovial-jones-2408ac`,
+   SLSA00093): A/B con archivos-bandera en la presa de GoldenEye, junto al camión.
+4. Al final: rama de publicación (`distracted-vaughan-ab7980`) y la
+   reescritura de la historia, con el sí del autor.
 
 **Noche del 2026-10-10 → 11:** corren de noche, sin la PS3, los trabajos del JIT
 (`upbeat-driscoll-1dd271`, SLSA00088), de efectos de framebuffer
