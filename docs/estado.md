@@ -36,9 +36,10 @@ rango), Banjo 56–57, Conker 59,8 campos/s.
 - El modelo del host no llamaba a `rdp_targets_present`: copiaba todos los
   destinos de cada tarea y por eso «funcionaba» donde la consola no.
 
-**Verificación:** `test-host`, `test-roms`, `build.sh` sin avisos,
-`test-phase2` en RPCS3 (ver el cierre de esta sección); `test-rec` en
-tarea aparte. En el host, gfxtest 35/35 con los tres microcódigos y la
+**Verificación (árbol final, con main traído):** `test-host` 369 pruebas
+(617 939 verificaciones, 0 fallidas), `test-roms` en verde, `build.sh` sin
+avisos, `test-phase2` en RPCS3 en verde (gfxtest incluido); `test-rec` en
+tarea aparte (la parte unitaria 369/369 con el recompilador). En el host, gfxtest 35/35 con los tres microcódigos y la
 pausa de Zelda en el bosque Kokiri y dentro de la casa (pads en
 `docs/pads/`: `zelda-kokiri.pad` + `3600:START;…` llega a EQUIPMENT fuera
 de la casa).
