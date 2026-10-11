@@ -27,6 +27,18 @@ primera copia de una imagen y las de tareas seguidas van sin esperar (el
 CPU recibe el cuadro anterior). Sin probar en la PS3; el host no reproduce
 esa escena.
 
+**Para el próximo turno de la PS3** (paquete `salsa64-framebuffer.pkg`
+ya subido con lo de abajo, falta instalarlo):
+1. Zelda, pausa: ¿sigue el haz verde al abrir? (arreglo: sincronía tras
+   copiar al scratch). Fuera de la casa, R dos veces → EQUIPMENT: Link.
+   Si sigue roto, `gfxdump` en esa pantalla para ver de dónde lee la
+   textura.
+2. Conker, intro con START y A: en el log, «copias a la RDRAM» debe ser
+   1–2 por ventana y «copias espejo» muchas (antes 150 esperadas por
+   ventana); se ve igual que antes.
+3. Mario Kart, túnel: la cámara se sigue viendo (el espejo por campo no
+   cambió).
+
 **La lista con la que se probó (2026-10-11):**
 
 1. Subir e instalar `build/salsa64/salsa64-framebuffer.pkg` (SLSA00089,
@@ -172,8 +184,8 @@ Pendiente:
 - [ ] **Al abrir la pausa, un haz de polígonos verdes del centro a la
       esquina superior izquierda durante ~1 s** (PS3). Candidato: las
       franjas que leen el scratch del destino ligado justo después de
-      `rsxkit_target_copy` sin `rsxkit_texture_sync` (caché de texturas del
-      RSX con datos viejos). Probar con sincronía tras la copia.
+      `rsxkit_target_copy` sin esperar al RSX. Ya se sincroniza tras la
+      copia (sin probar en la PS3).
 - [ ] Perfect Dark y Conker: copias del z-buffer, sombra, desenfoque;
       color images de 32 y 8 bits.
 - [ ] Reducción con filtro de caja (hoy bilineal) y, si pesa, en un SPE.

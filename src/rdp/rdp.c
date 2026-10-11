@@ -513,6 +513,7 @@ static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_textur
 	if (GFX_TEX_WRAP_S(gt->flags) != GFX_WRAP_CLAMP && gt->width != tg->lw)
 		return false;
 	const rsxkit_target *from = rdp.surf[slot];
+	bool copied = false;
 	if (src == RDP_TEXSRC_SELF) {
 		/* Lee lo que está dibujando: una copia de la superficie tal como
 		 * está ahora (una por tarea; las franjas de Zelda leen cada una
@@ -533,6 +534,7 @@ static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_textur
 				return false;
 			rdp.bound_t = -1;  /* rsxkit_target_copy dejó ligado el scratch */
 			rdp.scratch_slot = slot;
+			copied = true;
 		}
 		from = rdp.scratch;
 	}
@@ -551,7 +553,10 @@ static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_textur
 	float w = (float)gt->width, lw = (float)tg->lw;
 	t->xf[0] = gt->xf[0] * w / lw;
 	t->xf[2] = ((float)x0 + gt->xf[2] * w) / lw;
-	return src == RDP_TEXSRC_RSX && rdp.surf_dirty[slot];
+	/* El primer dibujo que lee el scratch recién copiado también tiene que
+	 * esperar al RSX e invalidar su caché de texturas (si no, un cuadro con
+	 * basura: el haz verde al abrir la pausa de Zelda en la PS3). */
+	return copied || (src == RDP_TEXSRC_RSX && rdp.surf_dirty[slot]);
 }
 
 /* G_RM_VISCVG: en vez de dibujar, deja en la RDRAM «cobertura plena» en
