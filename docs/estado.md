@@ -272,12 +272,40 @@ RPCS3 (gfxtest 22/22, spu-jobs, frontend F3DEX2 y F3D); `tools/test-rec.sh`
 `/dev_hdd0/packages/salsa64-presentacion.pkg`; los respaldos de Banjo y
 Conker ya están en `/dev_hdd0/salsa64/`.
 
+**En la PS3 real (el autor, paquete «Salsa64 presentación» SLSA00084 con
+main 705f4ac):** Banjo ya sin parpadeo (destino de 1,5 campos de
+antigüedad, cola 0); Conker «se ve muy bien, sin temblores» (57 campos/s con
+escenas de 7600 triángulos); GoldenEye sin columnas azules; Zelda 100 % de
+NTSC. Lo que queda no es de presentación: en Banjo los modelos tiemblan,
+hay cosas dibujadas encima de otras y faltan polígonos (el rango de z, ver
+arriba); en Conker polígonos negros en la boca; y en GoldenEye soldados
+(y el plano frontal de Bond al entrar a Dam) teñidos de cian. Este último
+se investigó a fondo porque parecía regresión de la rama: el volcado
+(`gfxdump` en el campo 2400) de un cuadro con el soldado cian, dibujado en
+la Mac, sale cian igual; sus dibujos (#22 y #25) llevan
+`lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE` con ENV = (0,35, 0, 0), que la HLE
+de 705f4ac aproxima como `T0·Ca + (0,353·(C.r − C.a), 0, 0)`: con C.a ≈ 1 y
+C.r gris resta rojo. Repetido el mismo volcado en la PS3 con las dos apps
+(SLSA00064 de main 705f4ac y la de esta rama), las imágenes son idénticas
+píxel a píxel (0 de 75 840). El generador de fragment programs de main
+(b32a6e6, fusionado aquí) hace ese combiner exacto. También se comprobó
+que GoldenEye no escribe FREEZE en DPC_STATUS (solo 0x3c0, también en
+Dam): el cambio del núcleo no lo toca. RPCS3 no sirve para GoldenEye: su
+RSX muere («Verification failed») a los ~16 s con cualquier frontend.
+
+**Retraso de lo que se ve (duda del autor sobre el input lag de Zelda):**
+el log trae cada 5 s «retraso: cola X campos (máx N); destino Y campos de
+antigüedad (máx M)»: la cola es cuántos campos lleva la emulación de
+ventaja al presentar (lo nuestro: 0,00 en todos los juegos probados) y la
+antigüedad cuántos campos hay entre el dibujo del destino y el campo que
+lo muestra (lo del juego: 1,0 en GoldenEye, 1,5 en Banjo, 2,5 en Conker).
+Zelda queda por medir con el menú de pausa y un minuto de juego.
+
 Pendiente:
-- [ ] PS3 real (paquete «Salsa64 presentación», SLSA00084): Banjo sin
-      parpadeo y entero (su respaldo ya está en `/dev_hdd0/salsa64/banjo.z64`),
-      Conker con el 3D bien (`conker.z64`), pausa de Zelda visible, GoldenEye
-      sin las columnas azules, un minuto de Zelda, SM64 y Mario Kart sin
-      regresiones. El autor confirma.
+- [ ] PS3 real con el paquete que lleva main b32a6e6 (generador): soldados y
+      armas de GoldenEye (varias, y el plano de Bond al entrar a Dam) sin
+      tinte; pausa de Zelda visible y su «retraso»; un minuto de SM64 y
+      Mario Kart. El autor confirma.
 - [ ] HLE: el cielo y el paisaje de Banjo (arriba). Trabajo de F3D.
 - [ ] LLE: con `--lle=all` Banjo no arranca (la primera tarea corre 958 M
       instrucciones sin tocar COP0); no es del freeze. Trabajo del LLE.
