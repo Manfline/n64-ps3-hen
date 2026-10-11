@@ -1255,13 +1255,14 @@ static void stats(uint64_t now)
 		}
 		salsa64_log("gfx: %u tareas (%.1f/s); por tarea: %.0f dibujos, %.0f triángulos, HLE en el "
 			    "SPE %.2f ms, emulación esperando al SPE %.2f ms (%u esperas), %.1f sondeos y %.2f ms "
-			    "dormida en bucles de espera, traducción al RSX %.2f ms; %u destinos creados, %u esperas "
-			    "por un juego de búferes (%.2f ms); %u tareas cortadas, %u comandos de otro microcódigo "
-			    "saltados, %u fondos de S2DEX",
+			    "dormida en bucles de espera, traducción al RSX %.2f ms; %u destinos creados (%u reciclados por "
+			    "memoria), %u esperas por un juego de búferes (%.2f ms); %u tareas cortadas, %u comandos "
+			    "de otro microcódigo saltados, %u fondos de S2DEX",
 			    tasks, tasks * 1e6 / dt, (double)(rs.draws - sw.rdp0.draws) / tasks,
 			    (double)(rs.triangles - sw.rdp0.triangles) / tasks, spu_ms, wait_ms, waits,
 			    (double)polls / tasks, sleep_ms, (rs.us_translate - sw.rdp0.us_translate) / 1e3 / tasks,
-			    rs.targets_created - sw.rdp0.targets_created, rs.set_waits - sw.rdp0.set_waits,
+			    rs.targets_created - sw.rdp0.targets_created, rs.targets_evicted - sw.rdp0.targets_evicted,
+			    rs.set_waits - sw.rdp0.set_waits,
 			    (rs.us_set_wait - sw.rdp0.us_set_wait) / 1e3, n64.bus.rsp.stats.cut - sw.gfx_cut0,
 			    (unsigned)(gfx_spu.skipped - sw.gfx_skipped0), (unsigned)(gfx_spu.bg - sw.gfx_bg0));
 		if (gfx_on_spu) {

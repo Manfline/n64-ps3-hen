@@ -74,10 +74,14 @@ Opciones:
   pasarse: una de 640 × 480 usa 2× a 5×. Una escala mayor que la
   pantalla es supermuestreo: la imagen se reduce con filtro lineal al
   presentarla, con más nitidez y bordes suaves, a cambio de más trabajo
-  para el RSX. Un tope de 96 MiB de memoria del RSX para las
-  imágenes vivas recicla la más vieja si hace falta; a 5× el peor caso son
-  73 MiB (docs/memory-budget.md); el log dice «RDP listo: escala-objetivo …». Se pone también con «Aplicar
-  ahora».
+  para el RSX. Una escala que deja la imagen chica (2× en 720p, 3× en
+  1080p) se ajusta a la pantalla con filtro lineal; 1× se amplía a un
+  múltiplo entero. Los efectos de framebuffer (pausa de Zelda, túnel de
+  Mario Kart) usan la escala de cada imagen (docs/framebuffer.md). Un tope
+  de 96 MiB de memoria del RSX para las imágenes vivas recicla la más
+  vieja si hace falta; a 5× el peor caso son 95,2 MiB
+  (docs/memory-budget.md); el log dice «RDP listo: escala-objetivo …». Se
+  pone también con «Aplicar ahora».
 - **Aplicar ahora**: solo aparece mientras la resolución o la escala elegidas
   difieren de las que corren. Cambia el modo de video y la escala desde el
   menú, sin juego abierto y sin cerrar Salsa64; la imagen parpadea un

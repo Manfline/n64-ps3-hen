@@ -3,8 +3,9 @@
  * (src/rsp/gfx/gfx.h) y la dibuja con lib/rsxkit.
  *
  * Cada color image de la N64 (dirección en la RDRAM) tiene su destino de
- * render en el RSX, a una escala entera de la resolución de la N64 (3× a
- * 720p); cada z image, su profundidad. Al presentar un campo, si el VI
+ * render en el RSX, a una escala entera de la resolución de la N64 propia
+ * de ese destino (3× a 720p para un framebuffer de 320 × 240; ver
+ * salsa64_rdp_init); cada z image, su profundidad. Al presentar un campo, si el VI
  * muestra una color image que dibujó el RSX, se presenta ese destino; si
  * no (imagen hecha por el CPU), el frontend usa el framebuffer 2D. Qué
  * destino es ese, y cuál se recicla cuando no caben más, lo decide
@@ -75,23 +76,31 @@ struct salsa64_rdp_stats {
  * pasarse (rdp_target_scale): 320 × 240 a 5×, 640 × 480 a 2×, una auxiliar
  * chica a la misma escala que su alto pida (hasta 5×). Cada superficie lleva
  * su escala (surf_scale), y la profundidad la del destino de color con que
- * se usa; rsxkit ya trabaja en coordenadas lógicas (rsxkit_bind) y la
- * presentación convierte su región con la escala del destino.
+ * se usa; rsxkit ya trabaja en coordenadas lógicas (rsxkit_bind). Todo lo
+ * que pasa de coordenadas lógicas a píxeles de una superficie usa la escala
+ * de esa superficie (rdp_surface_rect, rdp_target_tex_map): la
+ * presentación, las copias RSX → RDRAM (reducen a 1× desde la escala del
+ * destino), el espejo del framebuffer, el render a textura (un destino
+ * leído como textura desde otro de otra escala: u y v van normalizadas) y
+ * el scratch (copia del ligado, con su tamaño y su escala).
  *
  * Política de memoria local del RSX (docs/memory-budget.md):
- * 1) al arrancar el objetivo se baja hasta que el peor caso (10 superficies
- * de 320 × 240 a esa escala; rdp_vram_worst) quepa en RDP_VRAM_BUDGET
- * (96 MiB): a 5× son 73 MiB y entra; 2) en el juego, los destinos y
- * profundidades vivos suman a lo más RDP_VRAM_BUDGET: para crear uno que
- * pasaría se recicla el destino más viejo (no el presentado en el último
- * campo); si ni así cabe, o rsxkit no tiene memoria, esa imagen se queda en
- * la copia de la RDRAM y no se dibuja en el RSX, sin errores. */
+ * 1) al arrancar el objetivo se baja hasta que el peor caso (8 destinos, el
+ * scratch y 4 profundidades de 320 × 240 a esa escala; rdp_vram_worst)
+ * quepa en RDP_VRAM_BUDGET (96 MiB): a 5× son 95,2 MiB y entra; 2) en el
+ * juego, lo vivo suma a lo más RDP_VRAM_BUDGET: para crear una superficie
+ * que pasaría se suelta el scratch y se recicla el destino más viejo (no el
+ * presentado en el último campo ni uno que una textura pueda estar
+ * leyendo); si ni así cabe, o rsxkit no tiene memoria, esa imagen se queda
+ * en la copia de la RDRAM y no se dibuja en el RSX, sin errores. */
 int salsa64_rdp_init(uint32_t scale);
 /* Escala-objetivo efectiva tras salsa64_rdp_init; *reduced: se bajó por memoria. */
 uint32_t salsa64_rdp_scale(bool *reduced);
 /* Cambia la escala pedida (0: automática) con el RDP ya iniciado y sin juego
- * abierto: suelta los destinos y recalcula la escala-objetivo con la pantalla
- * en curso (útil tras rsxkit_video_reconfigure). Conserva la memoria mapeada. */
+ * abierto: suelta los destinos, el scratch y las profundidades, descarta las
+ * copias a la RDRAM en vuelo y recalcula la escala-objetivo con la pantalla
+ * en curso (útil tras rsxkit_video_reconfigure). Conserva la memoria
+ * mapeada (juegos de búferes, caché de texturas y búferes de las copias). */
 void salsa64_rdp_set_scale(uint32_t scale);
 void salsa64_rdp_shutdown(void);
 /* Entre juegos (menú): suelta los destinos y profundidades del RSX y vacía

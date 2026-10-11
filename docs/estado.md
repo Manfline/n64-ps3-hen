@@ -44,6 +44,45 @@ pausa de Zelda en el bosque Kokiri y dentro de la casa (pads en
 `docs/pads/`: `zelda-kokiri.pad` + `3600:START;…` llega a EQUIPMENT fuera
 de la casa).
 
+**Convivencia con la escala interna 1×–5× (fusión del mismo día).** La
+escala interna llegó con escala por destino (`rdp_target_scale`,
+`surf_scale`: con la objetivo 3×, el framebuffer de 320 × 240 va a 3×, Link
+de 64 × 112 a 5× y un framebuffer de 640 × 480 a 1×), tope de 96 MiB y
+«Aplicar ahora»; los efectos de framebuffer suponían una escala global.
+Al juntarlos (detalle en `docs/framebuffer.md`, «Escala por destino»):
+
+- Todo lo que pasa de puntos lógicos a píxeles de una superficie usa la
+  escala de esa superficie (`rdp_surface_rect`, `rdp_target_tex_map`):
+  copias RSX → RDRAM (esperadas, grandes y espejos chicos), espejo del
+  framebuffer presentado, render a textura (filas ligadas en la escala del
+  destino leído; u y v normalizadas, así que el destino en que se dibuja
+  puede tener otra) y el scratch, que toma tamaño y escala de la
+  superficie copiada. Con la escala global, la copia de Link a 5× leía
+  solo una esquina de su superficie y la de un destino a 1× se salía.
+- Profundidades: si una z image la usan destinos de escalas distintas, se
+  rehace en la misma entrada con el mayor tamaño de los dos (antes
+  quedaban dos con la misma dirección y zclear borraba la vieja).
+- Memoria: peor caso de 13 superficies (8 destinos, el scratch y 4
+  profundidades), 95,2 MiB a 5×: cabe en el tope de 96 MiB, que se queda.
+  El scratch cuenta en el tope; `make_room` lo suelta primero y nunca
+  recicla un destino que una textura pueda estar leyendo.
+- Presentación: a múltiplo entero solo si llena al menos 3/4 del alto
+  (`rdp_present_integer`); 2× en 720p salía a 640 × 480 en el centro.
+- «Aplicar ahora» (`salsa64_rdp_set_scale`) suelta destinos, scratch y
+  profundidades y descarta las copias en vuelo.
+
+Verificación: `test-host` 374 pruebas (645 613 verificaciones, 0
+fallidas; en `targets`, escala y peor caso, copia RSX → RDRAM simulada a
+1×–5×, textura entre escalas y presentación entera), `test-roms` en verde
+(gfxtest 35/35 con los tres microcódigos en el host), `build.sh` sin
+avisos, `test-phase2` en RPCS3 en verde (gfxtest embebido y F3D 35/35; en
+el menú, F3D a 2× tras «Aplicar ahora», 35/35) y gfxtest en RPCS3 con
+`video.cfg` forzando la escala: 35/35 a 1×, 3× y 5×. Por confirmar en la
+PS3 real: pausa y pantalla de equipo de Zelda y túnel de Mario Kart a 1×,
+2× y 5×; costo de las copias desde 5×; y que las superficies a 4×–5× en
+720p, ligadas sin profundidad propia (cebado, scratch, dibujos sin z),
+no tropiecen con la profundidad de la pantalla, más chica.
+
 **Pendiente (otros trabajos):**
 
 - [ ] Polígono transitorio (verde o amarillo, ~1 s) al abrir la pausa de
@@ -62,8 +101,8 @@ de la casa).
 - [ ] Perfect Dark y Conker: copias del z-buffer (rectángulos que leen la
       z image como color image), sombra y desenfoque de Conker; color
       images de 32 bits no se copian ni se ceban.
-- [ ] Reducir 3× → 1× con filtro de caja (hoy bilineal del RSX) y, si
-      pesa, la conversión en un SPE.
+- [ ] Reducir s× → 1× con filtro de caja (hoy bilineal del RSX en el
+      centro de cada bloque) y, si pesa, la conversión en un SPE.
 - [ ] Controles que a veces no responden en la pausa (también en SM64):
       arreglado en main (fba3a95), por confirmar aquí.
 

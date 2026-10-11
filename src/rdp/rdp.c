@@ -55,7 +55,7 @@
 #define FRAME_SLOT  (RB_SLOTS + 1)
 #define FB_BYTES    (((RB_SLOTS + 2) * RB_SLOT + MIRRORS * MIRROR_BYTES + 0xFFFFFu) & ~0xFFFFFu)
 #define POOL_BYTES  (SETS_BYTES + CACHE_BYTES + FB_BYTES)
-#define MAX_DEPTHS  4  /* Zelda en pausa alterna tres z-buffers: el principal y uno por par de búferes de Link */
+#define MAX_DEPTHS  RDP_DEPTHS_MAX  /* targets.h: cuentan en rdp_vram_worst */
 #define RB_PER_TASK 8   /* color images que una tarea puede pedir copiar */
 /* Una imagen pedida también en la tarea anterior ya no se espera (iconos
  * de cada cuadro, la intro de Conker); con una ventana mayor, Link
@@ -122,7 +122,7 @@ void salsa64_rdp_set_log(void (*fn)(const char *fmt, ...))
 struct depth {
 	bool used;
 	uint32_t addr, w, h;
-	uint32_t bytes;
+	uint32_t bytes;              /* lo que cuenta en rdp.vram */
 	bool clear_pending;
 	float clear_rect[4];
 	float clear_value;
@@ -131,9 +131,12 @@ struct depth {
 
 static struct {
 	bool ready;
+	/* Escala-objetivo (240 × scale líneas); cada superficie tiene la suya
+	 * (surf_scale, rdp_target_scale) y todo lo que pasa de coordenadas
+	 * lógicas a píxeles de una superficie usa la de esa superficie. */
 	uint32_t scale;
 	bool scale_reduced;          /* la escala se bajó por memoria */
-	uint32_t vram;               /* bytes de destinos y profundidades vivos */
+	uint32_t vram;               /* bytes vivos: destinos, scratch y profundidades */
 	uint32_t surf_bytes[RDP_TARGETS_MAX];
 	uint32_t surf_scale[RDP_TARGETS_MAX];  /* escala de la superficie de cada ranura */
 	uint8_t *pool;
@@ -150,7 +153,8 @@ static struct {
 	rsxkit_target *surf[RDP_TARGETS_MAX];     /* la superficie de cada ranura */
 	bool surf_dirty[RDP_TARGETS_MAX];         /* dibujada desde la última rsxkit_texture_sync */
 	rsxkit_target *scratch;      /* copia del destino ligado cuando un dibujo lo lee (SELF) */
-	uint32_t scratch_w, scratch_h;
+	uint32_t scratch_w, scratch_h, scratch_bytes;
+	uint32_t scratch_scale;      /* escala de la superficie copiada (la del scratch) */
 	int scratch_slot;            /* ranura copiada en esta tarea, o -1 */
 	struct depth depths[MAX_DEPTHS];
 	int bound_t;                 /* ranura ligada, o -1 */
@@ -203,6 +207,7 @@ int salsa64_rdp_init(uint32_t scale)
 	rdp.bound_t = -1;
 	const rsxkit_screen *sc = rsxkit_screen_info();
 	rdp.scale = rdp_scale_pick(scale, sc->height, &rdp.scale_reduced);
+	rdp.scratch_slot = -1;
 	rdp.pool = memalign(1u << 20, POOL_BYTES);
 	if (!rdp.pool)
 		return RSXKIT_ENOMEM;
@@ -255,7 +260,8 @@ static void release_targets(void)
 	if (rdp.scratch)
 		rsxkit_target_destroy(rdp.scratch);
 	rdp.scratch = NULL;
-	rdp.scratch_w = rdp.scratch_h = 0;
+	rdp.scratch_w = rdp.scratch_h = rdp.scratch_bytes = rdp.scratch_scale = 0;
+	rdp.scratch_slot = -1;
 	memset(rdp.surf, 0, sizeof rdp.surf);
 	memset(rdp.surf_dirty, 0, sizeof rdp.surf_dirty);
 	memset(rdp.surf_bytes, 0, sizeof rdp.surf_bytes);
@@ -279,7 +285,15 @@ void salsa64_rdp_set_scale(uint32_t scale)
 	if (!rdp.ready)
 		return;
 	rsxkit_finish();
+	/* Todo lo que tiene superficie o tamaño de una superficie se suelta:
+	 * destinos, scratch, profundidades. Las copias en vuelo (espejos, el
+	 * cuadro, las grandes sin esperar) viven en memoria principal y no
+	 * dependen de la escala, pero son del juego anterior: se descartan. */
 	release_targets();
+	memset(rdp.mirrors, 0, sizeof rdp.mirrors);
+	memset(&rdp.frame, 0, sizeof rdp.frame);
+	memset(rdp.big, 0, sizeof rdp.big);
+	memset(rdp.rb_task, 0, sizeof rdp.rb_task);
 	rdp.scale = rdp_scale_pick(scale, rsxkit_screen_info()->height, &rdp.scale_reduced);
 }
 
@@ -396,6 +410,15 @@ static uint32_t scissor_bottom(const struct set *s, uint32_t off, uint32_t cmd_b
 	return bottom;
 }
 
+/* Región lógica (x, y, w, h) del destino de la ranura, en píxeles de su
+ * superficie: con la escala de ese destino (surf_scale), no la objetivo. */
+static rsxkit_rect surface_rect(int slot, uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+{
+	struct rdp_rect r;
+	rdp_surface_rect(rdp.surf_scale[slot], x, y, w, h, &r);
+	return (rsxkit_rect){ (int32_t)r.x, (int32_t)r.y, r.w, r.h };
+}
+
 /* Escribe en la RDRAM, como RGBA5551, `rows` filas de una copia RGB565 de
  * `lw` píxeles por fila con paso `pitch`. */
 static void to_rdram(const uint8_t *src, uint32_t pitch, uint32_t addr, uint32_t width, uint32_t lw, uint32_t rows,
@@ -475,30 +498,52 @@ static void prime(int i)
 	}
 }
 
-/* Suelta la superficie de una ranura (destruye, descuenta y deja la
- * ranura sin usar). */
+/* Suelta el scratch (se vuelve a crear cuando un dibujo lo pida). */
+static void drop_scratch(void)
+{
+	if (!rdp.scratch)
+		return;
+	rsxkit_target_destroy(rdp.scratch);
+	rdp.scratch = NULL;
+	rdp.vram -= rdp.scratch_bytes;
+	rdp.scratch_w = rdp.scratch_h = rdp.scratch_bytes = rdp.scratch_scale = 0;
+	rdp.scratch_slot = -1;
+}
+
+/* Suelta la superficie de una ranura (destruye y descuenta). */
 static void drop_surface(int i)
 {
 	if (rdp.bound_t == i)
 		rdp.bound_t = -1;
+	if (rdp.scratch_slot == i)
+		rdp.scratch_slot = -1;  /* el scratch era de esta superficie */
 	rsxkit_target_destroy(rdp.surf[i]);
 	rdp.surf[i] = NULL;
+	rdp.surf_dirty[i] = false;
 	rdp.vram -= rdp.surf_bytes[i];
 	rdp.surf_bytes[i] = 0;
 	rdp.surf_scale[i] = 0;
 }
 
-/* Hace sitio para `bytes` más bajo el tope RDP_VRAM_BUDGET reciclando el
- * destino más viejo (menos campos desde que se dibujó), sin tocar `keep` ni
- * el presentado en el último campo. false: ni así cabe. */
+/* Hace sitio para `bytes` más bajo el tope RDP_VRAM_BUDGET: primero suelta
+ * el scratch si no es de `keep` y después recicla el destino más viejo
+ * (menos campos desde que se dibujó), sin tocar `keep`, el presentado en el
+ * último campo ni uno dibujado hace RDP_TARGETS_FRESH tareas o menos (puede
+ * ser la textura del dibujo que se está armando). false: ni así cabe. Con
+ * el peor caso de rdp_vram_worst dentro del tope (rdp_scale_pick lo
+ * asegura) nunca llega a reciclar: es la red si cambian el tope o el
+ * máximo de superficies. */
 static bool make_room(uint32_t bytes, int keep)
 {
+	if (rdp.vram + bytes > RDP_VRAM_BUDGET && rdp.scratch && rdp.scratch_slot != keep)
+		drop_scratch();
 	while (rdp.vram + bytes > RDP_VRAM_BUDGET) {
 		int victim = -1;
 		for (int j = 0; j < RDP_TARGETS_MAX; j++) {
-			if (!rdp.surf[j] || j == keep || j == rdp.tg.shown)
+			if (!rdp.surf[j] || j == keep || j == rdp.tg.shown ||
+			    rdp.tg.task - rdp.tg.t[j].last_task <= RDP_TARGETS_FRESH)
 				continue;
-			if (victim < 0 || rdp.tg.t[j].last_field < rdp.tg.t[victim].last_field)
+			if (victim < 0 || (int32_t)(rdp.tg.t[j].last_field - rdp.tg.t[victim].last_field) < 0)
 				victim = j;
 		}
 		if (victim < 0)
@@ -511,7 +556,9 @@ static bool make_room(uint32_t bytes, int keep)
 }
 
 /* Ranura (con superficie) de una color image; -1 si el RSX no tiene
- * memoria para una nueva (esa imagen se queda en la copia de la RDRAM). */
+ * memoria para una nueva (esa imagen se queda en la copia de la RDRAM). La
+ * superficie va a la escala del destino (rdp_target_scale), que queda en
+ * surf_scale. */
 static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz, uint32_t min_lh)
 {
 	bool fresh;
@@ -555,8 +602,8 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
 		rdp.surf[i] = rsxkit_target_create(t->lw * sc, t->lh * sc);
 	if (!rdp.surf[i]) {
 		rdp.stats.targets_failed++;
-		LOGN(20, "gfx: destino %06x/%u: el RSX no dio una superficie de %u × %u", addr, width, t->lw * sc,
-		     t->lh * sc);
+		LOGN(20, "gfx: destino %06x/%u: el RSX no dio una superficie de %u × %u (%u×; %u KB vivos)", addr, width,
+		     t->lw * sc, t->lh * sc, sc, rdp.vram >> 10);
 		snprintf(rdp.last_get.how, sizeof rdp.last_get.how, "SIN SUPERFICIE");
 		rdp.tg.t[i].used = false;
 		return -1;
@@ -571,20 +618,35 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
 	return i;
 }
 
+/* Profundidad de la z image `addr` para dibujar en el destino `slot`. Va
+ * en píxeles de la superficie de ese destino (su escala: rsxkit_bind la
+ * pide al menos tan grande como el destino). Si la z image ya tiene una
+ * que no alcanza (la usó un destino de otra escala o de otro tamaño), se
+ * rehace en la misma entrada con el mayor de los dos tamaños: así no quedan
+ * dos con la misma dirección (zclear borraría la que no es) ni se destruye
+ * y crea a cada cambio de destino. Lo más que crece es lo que pesa el mayor
+ * destino posible (rdp_vram_worst). */
 static struct depth *get_depth(uint32_t addr, int slot)
 {
 	const struct rdp_target *t = &rdp.tg.t[slot];
-	/* La profundidad lleva la escala del destino de color con que se usa. */
-	uint32_t w = t->lw * rdp.surf_scale[slot], h = t->lh * rdp.surf_scale[slot];
-	struct depth *free_d = NULL;
+	uint32_t sc = rdp.surf_scale[slot] ? rdp.surf_scale[slot] : 1;
+	uint32_t w = t->lw * sc, h = t->lh * sc;
+	struct depth *same = NULL, *free_d = NULL;
 	for (int i = 0; i < MAX_DEPTHS; i++) {
 		struct depth *d = &rdp.depths[i];
-		if (d->used && d->addr == addr && d->w >= w && d->h >= h)
-			return d;
+		if (d->used && d->addr == addr) {
+			if (d->w >= w && d->h >= h)
+				return d;
+			same = d;
+		}
 		if (!d->used && !free_d)
 			free_d = d;
 	}
-	struct depth *d = free_d ? free_d : &rdp.depths[addr & 1];
+	struct depth *d = same ? same : free_d ? free_d : &rdp.depths[addr & 1];
+	if (same) {
+		w = same->w > w ? same->w : w;
+		h = same->h > h ? same->h : h;
+	}
 	if (d->used) {
 		if (rdp.bound_d == d)
 			rdp.bound_d = NULL;
@@ -644,9 +706,11 @@ static void zclear(const struct gfx_zclear *z)
 }
 
 /* Si la textura viene de un destino dibujado hace poco, se lee de su
- * superficie (a la escala del RSX) en vez de la copia decodificada de la
- * RDRAM. Devuelve true si hay que sincronizar antes del dibujo (la
- * superficie se dibujó desde la última vez). */
+ * superficie (a la escala de ese destino, que puede no ser la del destino
+ * en que se dibuja: u y v van normalizadas, así que solo las filas ligadas
+ * dependen de la escala, rdp_target_tex_map) en vez de la copia
+ * decodificada de la RDRAM. Devuelve true si hay que sincronizar antes del
+ * dibujo (la superficie se dibujó desde la última vez). */
 static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_texture *t)
 {
 	if (rdp.fbfx < 1 || !gt->src_addr || gt->src_siz != 2u)
@@ -661,33 +725,43 @@ static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_textur
 	if (GFX_TEX_WRAP_S(gt->flags) != GFX_WRAP_CLAMP && gt->width != tg->lw)
 		return false;
 	const rsxkit_target *from = rdp.surf[slot];
+	uint32_t sc = rdp.surf_scale[slot];
 	bool copied = false;
 	if (src == RDP_TEXSRC_SELF) {
 		/* Lee lo que está dibujando: una copia de la superficie tal como
 		 * está ahora (una por tarea; las franjas de Zelda leen cada una
-		 * filas que aún no reescribió). */
+		 * filas que aún no reescribió). El scratch toma el tamaño, y con él
+		 * la escala, de la superficie copiada. */
 		if (rdp.scratch_slot != slot) {
 			uint32_t w, h;
 			rsxkit_target_size(rdp.surf[slot], &w, &h);
-			if (rdp.scratch && (rdp.scratch_w != w || rdp.scratch_h != h)) {
-				rsxkit_target_destroy(rdp.scratch);
-				rdp.scratch = NULL;
-			}
+			if (rdp.scratch && (rdp.scratch_w != w || rdp.scratch_h != h))
+				drop_scratch();
 			if (!rdp.scratch) {
-				rdp.scratch = rsxkit_target_create(w, h);
-				rdp.scratch_w = w;
-				rdp.scratch_h = h;
+				uint32_t bytes = rdp_surface_bytes(w, h);
+				if (make_room(bytes, slot))
+					rdp.scratch = rsxkit_target_create(w, h);
+				if (rdp.scratch) {
+					rdp.scratch_w = w;
+					rdp.scratch_h = h;
+					rdp.scratch_bytes = bytes;
+					rdp.vram += bytes;
+				}
 			}
 			if (!rdp.scratch || rsxkit_target_copy(rdp.scratch, rdp.surf[slot]) != RSXKIT_OK)
 				return false;
 			rdp.bound_t = -1;  /* rsxkit_target_copy dejó ligado el scratch */
 			rdp.scratch_slot = slot;
+			rdp.scratch_scale = sc;
 			copied = true;
 		}
 		from = rdp.scratch;
+		sc = rdp.scratch_scale;
 	}
+	struct rdp_tex_map map;
+	rdp_target_tex_map(sc, tg->lw, x0, y0, gt->width, gt->height, gt->xf[0], gt->xf[2], &map);
 	rsxkit_texture nt;
-	rsxkit_target_texture(from, y0 * rdp.scale, gt->height * rdp.scale, &nt);
+	rsxkit_target_texture(from, map.row0, map.rows, &nt);
 	if (!nt.height)
 		return false;
 	t->offset = nt.offset;
@@ -698,9 +772,8 @@ static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_textur
 	t->format = nt.format;
 	t->wrap_s = RSXKIT_WRAP_CLAMP;
 	/* u recorre la fila entera del destino: la textura empieza en x0. */
-	float w = (float)gt->width, lw = (float)tg->lw;
-	t->xf[0] = gt->xf[0] * w / lw;
-	t->xf[2] = ((float)x0 + gt->xf[2] * w) / lw;
+	t->xf[0] = map.xf0;
+	t->xf[2] = map.xf2;
 	/* El primer dibujo que lee el scratch recién copiado también tiene que
 	 * esperar al RSX e invalidar su caché de texturas (si no, un cuadro con
 	 * basura: el haz verde al abrir la pausa de Zelda en la PS3). */
@@ -1049,7 +1122,8 @@ static void translate(uint32_t n)
 			}
 			if (!rdp_targets_readback(&rdp.tg, i, true))
 				continue;
-			rsxkit_rect src = { 0, 0, t->lw * rdp.scale, rows * rdp.scale };
+			/* El RSX reduce a 1× desde la escala de este destino. */
+			rsxkit_rect src = surface_rect(i, 0, 0, t->lw, rows);
 			if (rsxkit_target_read(rdp.surf[i], &src, rdp.rb_off + buf * RB_SLOT, RB_PITCH, t->lw, rows,
 					       RSXKIT_RGB565) != RSXKIT_OK) {
 				LOGN(10, "gfx: copia a la RDRAM de %06x/%u: rsxkit_target_read falló", t->addr, t->width);
@@ -1109,7 +1183,7 @@ static void translate(uint32_t n)
 			rdp.stats.mirrors_skipped++;
 			continue;
 		}
-		rsxkit_rect src = { 0, 0, t->lw * rdp.scale, rows * rdp.scale };
+		rsxkit_rect src = surface_rect(i, 0, 0, t->lw, rows);
 		if (rsxkit_target_read(rdp.surf[i], &src, rdp.rb_off + (RB_SLOTS + 2) * RB_SLOT + k * MIRROR_BYTES, pitch,
 				       t->lw, rows, RSXKIT_RGB565) != RSXKIT_OK)
 			continue;
@@ -1208,7 +1282,7 @@ static void frame_mirror(int slot, uint32_t rows)
 		if (alo < hi && ahi > lo)
 			return;
 	}
-	rsxkit_rect src = { 0, 0, t->lw * rdp.scale, rows * rdp.scale };
+	rsxkit_rect src = surface_rect(slot, 0, 0, t->lw, rows);
 	if (rsxkit_target_read(rdp.surf[slot], &src, rdp.rb_off + FRAME_SLOT * RB_SLOT, RB_PITCH, t->lw, rows,
 			       RSXKIT_RGB565) != RSXKIT_OK)
 		return;
@@ -1244,8 +1318,7 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 			ct = cb = 0;
 	}
 	uint32_t w = p.w - cl - cr, h = p.h - ct - cb;
-	uint32_t sc_t = rdp.surf_scale[p.slot];
-	rsxkit_rect src = { (int32_t)(cl * sc_t), (int32_t)((p.y0 + ct) * sc_t), w * sc_t, h * sc_t };
+	rsxkit_rect src = surface_rect(p.slot, cl, p.y0 + ct, w, h);
 	/* Si la región cabe en la pantalla, a 1:1 (modo entero con su tamaño
 	 * en píxeles de la superficie: factor 1, píxeles cuadrados, centrada;
 	 * en 480/576 el píxel no es cuadrado y el ancho se estira igual que
@@ -1253,9 +1326,12 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 	 * (912 × 684 a 960 × 720, ×1,053) y el filtro lineal repetía una fila
 	 * cada ~19: las líneas en el logo de N64 de Zelda. Lo que sobra queda
 	 * negro, que es como se borra el cuadro. Sin recorte no cambia nada:
-	 * 960 × 720 cabía justo. */
+	 * 960 × 720 cabía justo. Con la escala por destino la región puede
+	 * quedar muy por debajo de la pantalla (640 × 480 a 2×, o un
+	 * framebuffer de 640 × 480 a 1× con la escala-objetivo 3×, en 720p):
+	 * entonces se ajusta como siempre (rdp_present_integer). */
 	const rsxkit_screen *sc = rsxkit_screen_info();
-	if (view && view->scale == RSXKIT_SCALE_FIT && src.w <= sc->width && src.h <= sc->height) {
+	if (view && view->scale == RSXKIT_SCALE_FIT && rdp_present_integer(src.w, src.h, sc->width, sc->height)) {
 		rsxkit_view one = { RSXKIT_SCALE_INTEGER, view->filter, 0.0f };
 		rsxkit_target_present(rdp.surf[p.slot], &src, src.w, src.h, &one, out);
 	} else {

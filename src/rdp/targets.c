@@ -24,7 +24,37 @@ uint32_t rdp_surface_bytes(uint32_t w, uint32_t h)
 uint32_t rdp_vram_worst(uint32_t scale)
 {
 	uint32_t a = rdp_surface_bytes(320 * scale, 240 * scale), b = rdp_surface_bytes(640, 480);
-	return 10 * (a > b ? a : b);  /* a 1× una de 640 × 480 queda nativa */
+	return RDP_SURFACES_MAX * (a > b ? a : b);  /* a 1× una de 640 × 480 queda nativa */
+}
+
+void rdp_surface_rect(uint32_t scale, uint32_t x, uint32_t y, uint32_t w, uint32_t h, struct rdp_rect *out)
+{
+	if (!scale)
+		scale = 1;
+	out->x = x * scale;
+	out->y = y * scale;
+	out->w = w * scale;
+	out->h = h * scale;
+}
+
+void rdp_target_tex_map(uint32_t scale, uint32_t lw, uint32_t x0, uint32_t y0, uint32_t tex_w, uint32_t tex_h,
+			float xf0, float xf2, struct rdp_tex_map *out)
+{
+	if (!scale)
+		scale = 1;
+	out->row0 = y0 * scale;
+	out->rows = tex_h * scale;
+	float w = (float)tex_w, l = lw ? (float)lw : 1.0f;
+	out->xf0 = xf0 * w / l;
+	out->xf2 = ((float)x0 + xf2 * w) / l;
+}
+
+bool rdp_present_integer(uint32_t src_w, uint32_t src_h, uint32_t screen_w, uint32_t screen_h)
+{
+	if (!src_w || !src_h || src_w > screen_w || src_h > screen_h)
+		return false;
+	uint32_t k = screen_h / src_h;
+	return src_h * k * 4 >= screen_h * 3;
 }
 
 uint32_t rdp_target_scale(uint32_t global, uint32_t lw, uint32_t lh)

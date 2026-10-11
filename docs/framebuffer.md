@@ -8,8 +8,9 @@ la pausa de Zelda OoT, la cámara del túnel de Mario Kart 64, gfxtest 35/35.
 
 ## Problema
 
-Los juegos dibujan en destinos del RSX a resolución interna (3× a 720p) y
-nada vuelve a la RDRAM. Cuando un juego usa como textura una imagen que él
+Los juegos dibujan en destinos del RSX a resolución interna (3× a 720p con
+la escala automática; cada destino con su propia escala, ver «Escala por
+destino») y nada vuelve a la RDRAM. Cuando un juego usa como textura una imagen que él
 mismo dibujó, o el CPU la lee y la modifica, en la RDRAM hay basura o la
 imagen vieja: el fondo de la pausa de Zelda salía mal y faltaba Link en la
 pantalla de equipo.
@@ -73,7 +74,7 @@ pero no origen. Cuesta un registro de 32 bytes por carga.
 (`rdp_targets_texture`): dibujado hace `RDP_TARGETS_FRESH` (3) tareas o
 menos y no copiado a la RDRAM, la textura se lee de su superficie del RSX
 (`rsxkit_target_texture`: filas enteras desde `y0`, la columna va en `xf`),
-a 3×. Si es el destino ligado (Zelda lee lo que está dibujando), se copia
+a la escala de ese destino. Si es el destino ligado (Zelda lee lo que está dibujando), se copia
 antes la superficie a un scratch (`rsxkit_target_copy`, una vez por tarea)
 y se lee de ahí. Antes del primer dibujo que lee una superficie dibujada en
 el mismo tramo, `rsxkit_texture_sync` (espera al RSX e invalida su caché de
@@ -157,6 +158,58 @@ Zelda) no se pierda cuando el RDP dibuja encima.
 rectángulo; el filtro del CPU salta los píxeles cubiertos del todo y el
 fondo queda nítido (en la N64 solo se filtran los bordes).
 
+## Escala por destino
+
+La escala interna (1×–5×, `video.cfg` y «Escala interna» del menú) es un
+objetivo de 240 · g líneas, y cada destino tiene su propia escala
+(`rdp_target_scale`, guardada en `surf_scale`): con la objetivo 3×, el
+framebuffer de 320 × 240 va a 3×, Link (64 × 112) a 5× y un framebuffer de
+640 × 480 a 1×. Los efectos de framebuffer nacieron con una escala global;
+al juntarse, todo lo que pasa de coordenadas lógicas a píxeles de una
+superficie usa la escala de **esa** superficie (`rdp_surface_rect`,
+`rdp_target_tex_map` en `targets.c`, con pruebas):
+
+- **Copias RSX → RDRAM** (esperadas, grandes sin esperar, espejos chicos y
+  el espejo del framebuffer presentado): la región leída es `lw · s ×
+  filas · s` con la `s` del destino copiado, y el RSX la reduce a `lw ×
+  filas`. Con la escala objetivo en su lugar, la copia de Link a 5× leía
+  solo la esquina de la superficie, y la de un destino a 1× se salía de
+  ella (rsxkit la rechazaba).
+- **Render a textura**: se ligan las filas `y0 · s … (y0 + alto) · s` del
+  destino leído, con su `s`; u y v van normalizadas, así que el destino en
+  que se dibuja puede tener otra escala sin cambiar nada (con la objetivo
+  3×, Zelda copia el framebuffer a fbufSave, los dos a 3×; Link, a 5×, se
+  copia a su búfer del heap, también a 5×, y la pantalla de equipo lo
+  dibuja sobre el framebuffer a 3×).
+- **Scratch** (el destino ligado leído como textura): toma el tamaño de la
+  superficie copiada y, con él, su escala (`scratch_scale`); si en la
+  misma tarea esa superficie se rehace (crece), el scratch deja de valer.
+- **Profundidades**: en píxeles de la superficie del destino con que se
+  dibujan (rsxkit las pide al menos de ese tamaño). Si una z image ya tiene
+  profundidad y no alcanza (la usó un destino de otra escala), se rehace en
+  la misma entrada con el mayor tamaño de los dos en cada lado: antes
+  quedaban dos profundidades con la misma dirección (zclear borraba la
+  vieja) y, entre dos destinos que se turnan, se destruía y creaba a cada
+  cambio. Los borrados van en coordenadas lógicas del destino ligado.
+- **Cobertura (VISCVG) y cebado**: no dependen de la escala (la cobertura
+  se escribe en la RDRAM en puntos lógicos; el cebado estira la imagen de
+  la RDRAM sobre la superficie entera).
+- **Presentación**: la región en la escala del destino presentado. Se
+  presenta a un múltiplo entero solo si cabe y llena al menos 3/4 del alto
+  de la pantalla (`rdp_present_integer`: 3× en 720p, 4× en 1080p, 1× por
+  3); si quedaría chica (2× en 720p, un framebuffer de 640 × 480 a 1×) se
+  ajusta como antes del recorte del overscan.
+- **Memoria**: el scratch cuenta en el tope de 96 MiB con los destinos y
+  las profundidades; el peor caso son 13 superficies (8 + scratch + 4) de
+  320 · g × 240 · g, 95,2 MiB a 5× (`docs/memory-budget.md`).
+- **«Aplicar ahora»** (`salsa64_rdp_set_scale`, entre juegos): suelta
+  destinos, scratch y profundidades y descarta las copias en vuelo; la
+  memoria mapeada de las copias se conserva (no depende de la escala).
+
+La reducción a 1× es bilineal en el centro de cada bloque de s × s: a
+escala impar toma el píxel del centro; a escala par, el promedio de los
+2 × 2 centrales (`targets_readback_scaled` lo simula en el host a 1×–5×).
+
 El host (`src/host/raster.c`) sigue la misma política con la misma tabla:
 lee texturas de sus imágenes, copia a la RDRAM y ceba, de modo que la
 pausa de Zelda en la Mac muestra lo que mostrará la PS3 (sin los tiempos).
@@ -180,7 +233,10 @@ la PS3 en `docs/perf-log.md`; memoria en `docs/memory-budget.md`.
 - Perfect Dark y Conker: copias del z-buffer (rectángulos que leen la z
   image como color image), sombra y desenfoque de Conker; color images de
   32 bits y CI8 (Conker) no se copian ni se ceban.
-- Reducir 3× → 1× con filtro de caja (hoy bilineal del RSX: promedia 2 × 2
-  de cada 3 × 3) y, si hiciera falta por costo, la conversión en un SPE.
+- Reducir s× → 1× con filtro de caja (hoy bilineal del RSX en el centro de
+  cada bloque: el píxel central a escala impar, 2 × 2 a escala par) y, si
+  hiciera falta por costo, la conversión en un SPE.
+- Confirmar en la PS3 real la pausa y la pantalla de equipo de Zelda y el
+  túnel de Mario Kart a 1×, 2× y 5× (en RPCS3, gfxtest 35/35 a 1×, 3× y 5×).
 - La HLE emite dos color images imposibles al abrir la pausa de Zelda
   (anchos 1495 y 3770): de qué comando salen.
