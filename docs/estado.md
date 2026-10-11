@@ -9,7 +9,22 @@ sobre main, 0e2a3be, también fusionado aquí): la presentación 1:1 del
 destino del RSX cuando cabe en la pantalla, para las líneas del logo de
 Zelda (abajo).
 
-**Mañana en la PS3 (2026-10-11), para que el autor solo lo abra:**
+**PS3 real, 2026-10-11 (el autor, paquete SLSA00089):** gfxtest 28/28
+(el orden de bytes de la superficie R5G6B5 en memoria principal está
+bien); fondo de la pausa de Zelda bien; Link en la pantalla de equipo bien
+dentro de la casa y roto fuera (pendiente); haz verde ~1 s al abrir la
+pausa (pendiente); las «pantallas» de Mario Kart son la cámara del túnel
+de Luigi Raceway, que el CPU fabrica leyendo el framebuffer: resuelto con
+el **espejo asíncrono del framebuffer presentado cada campo** (bf836f2;
+0,0 ms medidos en presentación; la cámara se ve). Regresiones con el
+espejo: SM64 59,8, GoldenEye Dam 45,8 (su rango), Banjo 56–57, Conker 59,8
+campos/s. Números en docs/perf-log.md; logs en `build/ps3-logs/`,
+fuera de git. No eran de la rama: líneas del logo (HLE), tienda Kokiri, túnica,
+controles. Pendiente de la rama: la intro de Conker dibuja cada tarea una
+color image de 320 no presentada y la política la copia esperando (16–18
+ms por tarea; 100 % de NTSC igual, peor campo 44 ms).
+
+**La lista con la que se probó (2026-10-11):**
 
 1. Subir e instalar `build/salsa64/salsa64-framebuffer.pkg` (SLSA00089,
    «Salsa64 framebuffer»; `PS3_IP=x.x.x.x tools/deploy-ps3.sh ftp
