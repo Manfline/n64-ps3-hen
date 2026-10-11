@@ -1,5 +1,65 @@
 # Estado
 
+## 2026-10-10 — Kokiri «en colores planos»: es el sol cenital, no la HLE (referencia con mupen64plus)
+
+Reporte (PS3 y rasterizador de la Mac): en el bosque
+Kokiri de Zelda OoT el mundo sale en colores planos, «verde del shade», con
+la HUD bien; la casa de Link sí se ve con texturas.
+
+Diagnóstico (rama `frosty-golick-d1d71a`, en la Mac):
+- Las texturas **sí** llegan y se decodifican bien: corteza CI8 con paleta,
+  pasto RGBA16 (dos tiles, lerp por ENV_ALPHA), siluetas de troncos I4;
+  los combiners son exactos (T0·SHADE·PRIM y lerp(T0,T1)·SHADE), `ntex` =
+  1 o 2, las s/t por triángulo cubren ~20 texels. En el píxel (270,80) del
+  tronco el rasterizador escribe T0 = 0,54 × X0 = 0,23 → 0,13.
+- Lo que aplasta la textura es el **SHADE**: con `G_LIGHTING` los vértices
+  verticales quedan en 80–120/255. Luces de la escena: sol blanco (255)
+  con dirección (0, 0,99, 0,16), relleno (70,70,90) opuesto y ambiente
+  80. El sol es cenital porque el juego fija `dayTime` = 0x8000 (mediodía
+  exacto) al cargar la partida (leído de `gSaveContext` en el volcado de
+  la RDRAM; OoT 1.2, 0x8011AC80). Las normales son normales de verdad
+  (longitud ~120), no colores horneados.
+- **Referencia**: mupen64plus 2.6 (brew) con GLide64 y rsp-hle, con la
+  misma partida del autor, movido por `tools/m64p-ref.sh` (plugin de
+  entrada propio que reproduce el `--pad`; `docs/pads/zelda-kokiri.pad`
+  saca a Link al balcón). Mismos parches en 640×480: piso (56,56,3) vs
+  Salsa64 (55,54,1); tronco (31,29,17) vs (29,27,15); pared (43,27,18) vs
+  (37,23,14). Diferencias < 6/255 en todo: la escena **es así** a esa hora
+  (el piso recibe el sol de lleno, pero sus texturas ya tienen media
+  55/255). Imagen comparativa en `build/m64p-ref/kokiri-comparacion.png`
+  (fuera de git).
+- Única diferencia visible: zonas crema (arriba a la derecha y bajo el
+  balcón) donde el rasterizador de la Mac descarta triángulos con algún
+  w ≤ 0 (la pared lejana y el piso cruzan el plano de la cámara); GLide64
+  los recorta. El RSX recorta en hardware, así que en la PS3 no deberían
+  faltar; comprobarlo cuando la consola esté libre.
+- No se cambió nada de la HLE. Si en la PS3 la escena se ve distinta a la
+  Mac (verde liso sin la corteza tenue), el problema sería de src/rdp o
+  del RSX, no de la HLE: pendiente de confirmar con el autor.
+
+Herramientas que quedan (sin cambios funcionales):
+- Depuración de la HLE en el host con `EXTRA_CFLAGS=-DSALSA64_GFX_TRACE`
+  (cabecera de `src/host/run.c`): estado del RDP por dibujo (combiner,
+  othermode, tiles, luces, términos k), rango de s/t, vértices de un dibujo
+  (`SALSA64_GFX_VDUMP`), texturas en PPM (`SALSA64_GFX_TEXDUMP`), dibujos
+  pintados de magenta (`SALSA64_GFX_MARK`) y traza de un píxel
+  (`SALSA64_GFX_PIX`) en el rasterizador. En `rdp.c` es solo un gancho bajo
+  `#ifdef`; nada entra en el SPE.
+- `tools/m64p-ref.sh` + `tools/m64p-pad/pad_plugin.c`: captura de
+  referencia con mupen64plus (requiere `brew install mupen64plus`; el
+  teclado de su plugin de entrada no funciona con sdl2-compat; el `.sra` de
+  mupen64plus lleva los bytes de cada palabra de 32 bits invertidos; sus
+  cuadros de `--testshots` no son campos del VI).
+- El pad de Kokiri sirve de punto de partida para el menú de pausa y el
+  resto de pendientes de Zelda.
+
+Pendiente:
+- [ ] PS3: confirmar que Kokiri se ve como en la Mac/mupen64plus (oscuro,
+      textura tenue) y que no faltan la pared lejana ni el piso con w ≤ 0.
+- [ ] Rasterizador de la Mac: recorte contra w = 0 (hoy descarta el
+      triángulo entero), para que las capturas de referencia no tengan
+      huecos crema.
+
 ## 2026-10-10 — Zelda OoT se colgaba al elegir la ranura: G_LOAD_UCODE (S2DEX) y el RDP que nunca terminaba
 
 Síntoma (PS3 real, main f698afe): al elegir una partida, pantalla negra con
@@ -80,11 +140,11 @@ conocido, como en las pruebas de F3D) todo G_LOAD_UCODE es ajeno.
 Visto en esa corrida, para otros trabajos (reproducible en la Mac con
 `--pad "$(cat docs/pads/zelda-oot.pad)"`, las pulsaciones del autor
 sacadas de su log; receta en la entrada de arriba):
-- [ ] **Texturas del mundo** (trabajo F3D/texturas): en el bosque Kokiri la
-      geometría sale en colores planos (verde del shade), la HUD bien; igual
-      en el rasterizador de la Mac (campo 18600 de esa corrida), así que es
-      la HLE, no el RSX. La casa de Link (interior 3D en la intro) sí se ve
-      con texturas.
+- [x] **Texturas del mundo**: en el bosque Kokiri la geometría salía en
+      colores planos (verde del shade), igual en el rasterizador de la Mac.
+      No era error: es el sol cenital de mediodía (ver la entrada «Kokiri
+      “en colores planos”», con la referencia de mupen64plus). Queda
+      confirmar en la PS3 que se ve como en la Mac.
 - [ ] **Menú de pausa en negro** (frontend/rdp): con el menú abierto cada
       tarea (30/s) pone tres color images: dos de **64 de ancho** (0x3b8800
       y **0x3b5000, la misma dirección del framebuffer**) y luego

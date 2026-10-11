@@ -46,6 +46,15 @@
  * ciclo. --trace-from CAMPO retrasa las trazas (--trace-exc,
  * --trace-faults, --trace-rsp, --trace-gfx) hasta ese campo.
  *
+ * Depuración de la HLE gráfica (compilar con EXTRA_CFLAGS=-DSALSA64_GFX_TRACE;
+ * actúa solo en las tareas que traza --trace-gfx con SALSA64_GFX_VERBOSE):
+ * por cada dibujo se imprime el estado del RDP con que se armó (combiner,
+ * othermode, tiles, luces, términos k) y el rango de s/t; SALSA64_GFX_VDUMP=n
+ * lista los vértices del dibujo n, SALSA64_GFX_TEXDUMP=DIR escribe las
+ * texturas de cada dibujo en PPM (color y, debajo, el alfa), y en el
+ * rasterizador (--gfx-frame) SALSA64_GFX_MARK=n[,m…] pinta esos dibujos de
+ * magenta y SALSA64_GFX_PIX=x,y muestra qué dibujos escriben ese píxel.
+ *
  * Códigos de salida:
  *   0  apareció el texto de --until-text, o se agotaron los ciclos sin pedirlo
  *   1  apareció alguno de los textos de --fail-text
@@ -302,6 +311,92 @@ static unsigned trace_gfx_left;
 
 static bool trace_gfx_verbose;
 
+#ifdef SALSA64_GFX_TRACE
+int salsa64_gfx_trace_now;            /* la tarea en curso se traza (también la lee raster.c) */
+static unsigned trace_draw, trace_states;  /* dibujos y estados vistos en la tarea */
+
+/* Llamada desde rdp.c (build_state) por cada estado de dibujo que se arma. */
+void salsa64_gfx_trace_state(const struct gfx_state *g, const struct gfx_draw *d, int kind, int tile)
+{
+	if (!salsa64_gfx_trace_now)
+		return;
+	fprintf(stderr, "  ST kind %d tile %d cyc %u ntex %u texon %u cc %06x:%08x oh %06x ol %08x prim %08x env %08x "
+		"fog %08x mul %.0f off %.0f geom %08x texs %04x,%04x\n", kind, tile, d->cycle, d->ntex, g->tex_on,
+		g->cc_hi, g->cc_lo, g->oh, g->ol, g->prim, g->env, g->fog, g->fog_mul, g->fog_off, g->geom, g->tex_s,
+		g->tex_t);
+	for (int i = 0; i < 2; i++) {
+		const struct gfx_tile *t = &g->tiles[(tile + i) & 7];
+		fprintf(stderr, "     tile%d fmt %u siz %u pal %u line %u tmem %u cms %u cmt %u mask %u,%u shift %u,%u "
+			"sz %u,%u-%u,%u", (tile + i) & 7, t->fmt, t->siz, t->pal, t->line, t->tmem, t->cms, t->cmt,
+			t->masks, t->maskt, t->shifts, t->shiftt, t->uls, t->ult, t->lrs, t->lrt);
+		if (i < d->ntex)
+			fprintf(stderr, " -> %ux%u flags %x key %08x xf %.4f %.4f %.4f %.4f", d->tex[i].width,
+				d->tex[i].height, d->tex[i].flags, d->tex[i].key, d->tex[i].xf[0], d->tex[i].xf[1],
+				d->tex[i].xf[2], d->tex[i].xf[3]);
+		fputc('\n', stderr);
+	}
+	if (trace_states++ < 3) {
+		fprintf(stderr, "     luces %d:", g->num_lights);
+		for (int l = 0; l <= g->num_lights; l++)
+			fprintf(stderr, " [%.0f %.0f %.0f dir %.2f %.2f %.2f]", g->lights[l].col[0], g->lights[l].col[1],
+				g->lights[l].col[2], g->lights[l].dir[0], g->lights[l].dir[1], g->lights[l].dir[2]);
+		fputc('\n', stderr);
+	}
+	static const char *const tn[] = { "T0", "T0a", "T1", "T1a", "1" };
+	fprintf(stderr, "     k:");
+	for (int lane = 0; lane < 4; lane++) {
+		fprintf(stderr, " [%c]", "RGBA"[lane]);
+		for (int t = 0; t < GFX_K_TERMS; t++)
+			for (int k = 0; k < 3; k++)
+				if (d->k[t][k][lane] != 0.0f)
+					fprintf(stderr, " %+.2f%s%s", d->k[t][k][lane], tn[t], k == 0 ? "" : k == 1 ? "C" : "Ca");
+	}
+	fputc('\n', stderr);
+}
+
+/* Por dibujo (gfx_done): rango de s/t, vértices (SALSA64_GFX_VDUMP=n) y
+ * texturas en PPM (SALSA64_GFX_TEXDUMP=DIR). */
+static void trace_draw_extra(const struct gfx_draw *d)
+{
+	float smin = 1e30f, smax = -1e30f, tmin = 1e30f, tmax = -1e30f;
+	for (uint32_t i = 0; i < d->h.b; i++) {
+		const struct gfx_vertex *v = &gfx_vtx[d->h.a + i];
+		smin = v->s < smin ? v->s : smin, smax = v->s > smax ? v->s : smax;
+		tmin = v->t < tmin ? v->t : tmin, tmax = v->t > tmax ? v->t : tmax;
+	}
+	trace_draw++;
+	fprintf(stderr, " s %.1f..%.1f t %.1f..%.1f", smin, smax, tmin, tmax);
+	const char *vd = getenv("SALSA64_GFX_VDUMP");
+	if (vd && (unsigned)strtoul(vd, NULL, 0) == trace_draw)
+		for (uint32_t i = 0; i < d->h.b; i++) {
+			const struct gfx_vertex *v = &gfx_vtx[d->h.a + i];
+			fprintf(stderr, "\n     v%-3u x/w %7.2f y/w %7.2f w %8.2f s %8.2f t %8.2f rgba %3u %3u %3u %3u", i,
+				v->w != 0.0f ? v->x / v->w : 0.0f, v->w != 0.0f ? v->y / v->w : 0.0f, v->w, v->s, v->t,
+				v->r, v->g, v->b, v->a);
+		}
+	const char *dir = getenv("SALSA64_GFX_TEXDUMP");
+	for (int ti = 0; dir && ti < d->ntex; ti++) {
+		const struct gfx_tex *tx = &d->tex[ti];
+		const uint8_t *base = (tx->where == GFX_TEX_CACHE ? gfx_cache : gfx_tex) + tx->offset;
+		char name[512];
+		snprintf(name, sizeof name, "%s/d%03u-t%d.ppm", dir, trace_draw, ti);
+		FILE *f = fopen(name, "wb");
+		if (!f)
+			continue;
+		fprintf(f, "P6\n%u %u\n255\n", tx->width, tx->height * 2u);
+		for (unsigned y = 0; y < tx->height; y++)
+			for (unsigned x = 0; x < tx->width; x++)
+				fwrite(base + y * tx->pitch + 4 * x, 1, 3, f);
+		for (unsigned y = 0; y < tx->height; y++)
+			for (unsigned x = 0; x < tx->width; x++) {
+				uint8_t a = base[y * tx->pitch + 4 * x + 3], px[3] = { a, a, a };
+				fwrite(px, 1, 3, f);
+			}
+		fclose(f);
+	}
+}
+#endif
+
 static void gfx_acquire(void *ctx, struct gfx_job *job)
 {
 	(void)ctx;
@@ -319,6 +414,12 @@ static void gfx_acquire(void *ctx, struct gfx_job *job)
 	}
 	job->task = gfx.tasks + 1;
 	job->done_task = gfx.tasks;
+#ifdef SALSA64_GFX_TRACE
+	salsa64_gfx_trace_now = trace_gfx_verbose && trace_gfx_left && n64.bus.vi.fields > (trace_from ? trace_from : 500);
+	trace_draw = trace_states = 0;
+	if (salsa64_gfx_trace_now)
+		fprintf(stderr, "== tarea gfx (campo %u)\n", n64.bus.vi.fields);
+#endif
 }
 
 static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_result *res)
@@ -370,6 +471,9 @@ static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_resu
 					fprintf(stderr, "\n  D%-4u kind %u cyc %u ntex %u depth %u blend %u cull %u atest %u/%u fog %u "
 						"z/w %.3f..%.3f w %.1f..%.1f", d->h.b / 3, d->prim_kind, d->cycle, d->ntex,
 						d->depth, d->blend, d->cull, d->atest, d->aref, d->fog, zmin, zmax, wmin, wmax);
+#ifdef SALSA64_GFX_TRACE
+					trace_draw_extra(d);
+#endif
 					if (d->blend) {
 						static const char *const tn[] = { "T0", "T0a", "T1", "T1a", "1" };
 						fprintf(stderr, "\n        alfa:");
