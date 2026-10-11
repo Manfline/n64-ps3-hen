@@ -499,7 +499,7 @@ static void abi1_mixer_interleave(void)
 	run_abi(SALSA64_ABI_AUDIO);
 	CHECK_EQ(res.errors, 0);
 	for (int i = 0; i < 16; i++) {
-		int32_t l = 2 * i, r = -2 * i + ((l * 0x7FFF) >> 15);
+		int32_t l = 2 * i, r = -2 * i + ((l * 0x7FFF + 0x4000) >> 15);  /* redondeado */
 		CHECK_EQ(get16(DST + 4 * i), l);
 		CHECK_EQ(get16(DST + 4 * i + 2), r);
 	}

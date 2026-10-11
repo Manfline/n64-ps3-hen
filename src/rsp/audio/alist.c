@@ -362,12 +362,15 @@ void alist_envmix_nead(struct aud_state *st, bool swap_wet_lr, uint16_t dmem_dl,
 
 /* ---- Mezclas ---------------------------------------------------------------- */
 
+/* MIXER redondea el producto (+0x4000), como VMULF: el truncado de
+ * mupen64plus-rsp-hle dejaba ±1 LSB de diferencia con el microcódigo real
+ * (comparado en el LLE con Zelda OoT, Perfect Dark y Super Mario 64). */
 void alist_mix(struct aud_state *st, uint16_t dmemo, uint16_t dmemi, uint16_t count, int16_t gain)
 {
 	uint8_t *dst = aud_dm(st, dmemo);
 	const uint8_t *src = aud_dm(st, dmemi);
 	for (count >>= 1; count; count--, dst += 2, src += 2)
-		sample_mix(dst, aud_ld16(src), gain);
+		aud_st16(dst, aud_clamp16(aud_ld16(dst) + ((aud_ld16(src) * gain + 0x4000) >> 15)));
 }
 
 void alist_multQ44(struct aud_state *st, uint16_t dmem, uint16_t count, int8_t gain)
