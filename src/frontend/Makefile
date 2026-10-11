@@ -7,8 +7,9 @@ SRCS    := main.c audio_out.c audio_sync.c pacer.c padmap.c replay.c savefile.c 
 
 R       := ../..
 COMMON  := src/platform/ps3/log.c src/platform/ps3/rec_cache.c src/platform/ps3/gfx_spu.c \
-           src/platform/ps3/audio_spu.c src/rdp/rdp.c \
-           $(patsubst $(R)/%,%,$(wildcard $(R)/src/core/*.c $(R)/src/cpu/*.c $(R)/src/rsp/gfx/*.c $(R)/src/rsp/audio/*.c))
+           src/platform/ps3/audio_spu.c src/platform/ps3/rsp_spu.c src/rdp/rdp.c \
+           $(patsubst $(R)/%,%,$(wildcard $(R)/src/core/*.c $(R)/src/cpu/*.c $(R)/src/rsp/gfx/*.c $(R)/src/rsp/audio/*.c \
+                                          $(R)/src/rsp/lle/*.c))
 DATA    := vitest_rom gfxtest_rom audiotest_rom
 vitest_rom_FILE := tests/roms/homebrew/salsa64-vitest.z64
 gfxtest_rom_FILE := tests/roms/homebrew/salsa64-gfxtest.z64
@@ -16,12 +17,15 @@ audiotest_rom_FILE := tests/roms/homebrew/salsa64-audiotest.z64
 RSXKIT  := 1
 SPUKIT  := 1
 # HLE gráfica (SPE 0) y de audio (SPE 1): el mismo código de src/rsp/gfx y
-# src/rsp/audio con la E/S por DMA.
-SPU_PROGS := gfx audio
+# src/rsp/audio con la E/S por DMA. RSP a bajo nivel (otro SPE): el
+# intérprete de src/rsp/lle con la E/S por DMA de src/spu/rsp.
+SPU_PROGS := gfx audio rsp
 gfx_SRCS  := $(R)/src/spu/gfx/main.c $(R)/src/spu/gfx/io_spu.c \
              $(filter-out %/io_mem.c %/sync.c,$(wildcard $(R)/src/rsp/gfx/*.c))
 audio_SRCS := $(R)/src/spu/audio/main.c $(R)/src/spu/audio/io_spu.c \
               $(filter-out %/io_mem.c %/sync.c %/selftest.c,$(wildcard $(R)/src/rsp/audio/*.c))
+rsp_SRCS   := $(R)/src/spu/rsp/main.c $(R)/src/spu/rsp/io_spu.c \
+              $(filter-out %/core.c,$(wildcard $(R)/src/rsp/lle/*.c))
 CFLAGS  := -ffp-contract=off -fno-math-errno
 LIBS    := -lrsx -lgcm_sys -laudio -lio -lsysutil -lnet -lsysmodule -lrt -llv2 -lm
 # Caché del recompilador al final del segmento de texto (docs/rec-ppe.md).

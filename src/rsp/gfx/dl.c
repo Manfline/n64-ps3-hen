@@ -47,7 +47,9 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 	g->dl_pc = job->dl & 0x00FFFFFF;
 	gfx_io_begin(g);
 
-	if (job->gbi == SALSA64_GBI_F3D || job->gbi == SALSA64_GBI_F3DEX)
+	if (job->flags & GFX_JOB_DPC)
+		gfx_dl_dpc(g);
+	else if (job->gbi == SALSA64_GBI_F3D || job->gbi == SALSA64_GBI_F3DEX)
 		gfx_dl_f3d(g);
 	else
 		gfx_dl_f3dex2(g);

@@ -1,5 +1,5 @@
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
- *   Mupen64plus-rsp-hle - alist_audio.c, alist_nead.c                     *
+ *   Mupen64plus-rsp-hle - alist_audio.c, alist_nead.c, alist_naudio.c     *
  *   Mupen64Plus homepage: https://mupen64plus.org/                        *
  *   Copyright (C) 2014 Bobby Smiles                                       *
  *   Copyright (C) 2009 Richard Goedeken                                   *
@@ -23,17 +23,19 @@
 
 /*
  * Salsa64 — comandos de las listas de audio por ABI y ejecución de una
- * tarea. Adaptado de src/alist_audio.c, src/alist_nead.c y src/hle.c de
- * mupen64plus-rsp-hle (commit 8a7a472a, 2026-06-23) para Salsa64
- * (2026-10-10): mismas tablas de comandos y decodificación de cada uno,
- * sobre el estado de aud_state y las operaciones de alist.c.
+ * tarea. Adaptado de src/alist_audio.c, src/alist_nead.c,
+ * src/alist_naudio.c y src/hle.c de mupen64plus-rsp-hle (commit 8a7a472a,
+ * 2026-06-23) para Salsa64 (2026-10-10): mismas tablas de comandos y
+ * decodificación de cada uno, sobre el estado de aud_state y las
+ * operaciones de alist.c.
  *
  * Comando: w1 (opcode en los bits 24–30) y w2. ABI1 numera los búferes de
  * la DMEM desde 0x5C0 y usa direcciones segmentadas; nead usa direcciones
- * de la DMEM y de la RDRAM directas.
+ * de la DMEM y de la RDRAM directas; naudio cuenta desde 0x4F0 y casi
+ * todos sus comandos trabajan sobre búferes fijos de 0x170 bytes.
  *
- * Falta: naudio (Perfect Dark y los de Rare) y MusyX; esas tareas terminan
- * con un error en el resultado y sin tocar la RDRAM.
+ * Falta: MusyX; esas tareas terminan con un error en el resultado y sin
+ * tocar la RDRAM.
  */
 #include <string.h>
 
@@ -492,6 +494,175 @@ static const acmd_fn nead_mmb[0x18] = {
 	N_LOADBUFF, N_SAVEBUFF, N_ENVSETUP2,  UNKNOWN,
 };
 
+/* ---- naudio ------------------------------------------------------------------
+ * Banjo-Kazooie, Donkey Kong 64, Conker, Perfect Dark, Banjo-Tooie, Jet
+ * Force Gemini… Búferes fijos: la entrada principal (y una segunda para
+ * RESAMPLE y el filtro), dos salidas secas y dos de efecto. */
+
+enum {
+	NA_COUNT = 0x170,  /* 184 muestras */
+	NA_MAIN = 0x4F0,
+	NA_MAIN2 = 0x660,
+	NA_DRY_LEFT = 0x9D0,
+	NA_DRY_RIGHT = 0xB40,
+	NA_WET_LEFT = 0xCB0,
+	NA_WET_RIGHT = 0xE20,
+};
+
+static void NA_SETVOL(struct aud_state *st, uint32_t w1, uint32_t w2)
+{
+	struct aud_naudio *a = &st->naudio;
+	uint8_t flags = (uint8_t)(w1 >> 16);
+	if (flags & A_VOL) {
+		if (flags & A_LEFT) {
+			a->vol[0] = (int16_t)w1;
+			a->dry = (int16_t)(w2 >> 16);
+			a->wet = (int16_t)w2;
+		} else {
+			a->target[1] = (int16_t)w1;
+			a->rate[1] = (int32_t)w2;
+		}
+	} else {
+		a->target[0] = (int16_t)w1;
+		a->rate[0] = (int32_t)w2;
+	}
+}
+
+/* El comando 0x0E de naudio salta a la mitad de SETVOL (0x12B0 de la IMEM):
+ * cambia solo la parte baja de la velocidad derecha. */
+static void NA_SETVOL_RATE_LO(struct aud_state *st, uint32_t w1, uint32_t w2)
+{
+	(void)w1;
+	st->naudio.rate[1] = (int32_t)(((uint32_t)st->naudio.rate[1] & ~0xFFFFu) | (w2 & 0xFFFF));
+}
+
+static void NA_ENVMIXER(struct aud_state *st, uint32_t w1, uint32_t w2)
+{
+	struct aud_naudio *a = &st->naudio;
+	uint8_t flags = (uint8_t)(w1 >> 16);
+	a->vol[1] = (int16_t)w1;
+	alist_envmix(st, AUD_ENVMIX_LIN, flags & A_INIT, false, NA_DRY_LEFT, NA_DRY_RIGHT, NA_WET_LEFT,
+		     NA_WET_RIGHT, NA_MAIN, NA_COUNT, a->dry, a->wet, a->vol, a->target, a->rate, w2 & 0xFFFFFF);
+}
+
+static void NA_CLEARBUFF(struct aud_state *st, uint32_t w1, uint32_t w2)
+{
+	alist_clear(st, (uint16_t)(w1 + NA_MAIN), w2 & 0xFFF);
+}
+
+static void NA_MIXER(struct aud_state *st, uint32_t w1, uint32_t w2)
+{
+	alist_mix(st, (uint16_t)(w2 + NA_MAIN), (uint16_t)((w2 >> 16) + NA_MAIN), NA_COUNT, (int16_t)w1);
+}
+
+static void NA_LOADBUFF(struct aud_state *st, uint32_t w1, uint32_t w2)
+{
+	alist_load(st, (uint16_t)((w1 & 0xFFF) + NA_MAIN), w2 & 0xFFFFFF, (w1 >> 12) & 0xFFF);
+}
+
+static void NA_SAVEBUFF(struct aud_state *st, uint32_t w1, uint32_t w2)
+{
+	alist_save(st, (uint16_t)((w1 & 0xFFF) + NA_MAIN), w2 & 0xFFFFFF, (w1 >> 12) & 0xFFF);
+}
+
+static void NA_LOADADPCM(struct aud_state *st, uint32_t w1, uint32_t w2)
+{
+	uint32_t n = (uint16_t)w1 >> 1;
+	if (n > 16 * 16)
+		n = 16 * 16;
+	aud_load_s16(st, st->naudio.table, w2 & 0xFFFFFF, n);
+}
+
+static void NA_DMEMMOVE(struct aud_state *st, uint32_t w1, uint32_t w2)
+{
+	alist_move(st, (uint16_t)((w2 >> 16) + NA_MAIN), (uint16_t)(w1 + NA_MAIN),
+		   (uint16_t)aud_align((uint16_t)w2, 4));
+}
+
+static void NA_SETLOOP(struct aud_state *st, uint32_t w1, uint32_t w2)
+{
+	(void)w1;
+	st->naudio.loop = w2 & 0xFFFFFF;
+}
+
+/* ADPCM y RESAMPLE llevan la dirección del estado en w1 y los búferes en w2. */
+static void NA_ADPCM(struct aud_state *st, uint32_t w1, uint32_t w2)
+{
+	uint8_t flags = (uint8_t)(w2 >> 28);
+	uint16_t count = (w2 >> 16) & 0xFFF;
+	uint16_t dmemi = (uint16_t)(((w2 >> 12) & 0xF) + NA_MAIN), dmemo = (uint16_t)((w2 & 0xFFF) + NA_MAIN);
+	alist_adpcm(st, flags & A_INIT, flags & A_LOOP, false, dmemo, dmemi, (uint16_t)aud_align(count, 32),
+		    st->naudio.table, st->naudio.loop, w1 & 0xFFFFFF);
+}
+
+static void NA_RESAMPLE(struct aud_state *st, uint32_t w1, uint32_t w2)
+{
+	uint8_t flags = (uint8_t)(w2 >> 30);
+	uint16_t pitch = (uint16_t)(w2 >> 14);
+	uint16_t dmemi = (uint16_t)(((w2 >> 2) & 0xFFF) + NA_MAIN);
+	uint16_t dmemo = (w2 & 0x3) ? NA_MAIN2 : NA_MAIN;
+	alist_resample(st, flags & A_INIT, dmemo, dmemi, NA_COUNT, (uint32_t)pitch << 1, w1 & 0xFFFFFF);
+}
+
+static void NA_INTERLEAVE(struct aud_state *st, uint32_t w1, uint32_t w2)
+{
+	(void)w1, (void)w2;
+	alist_interleave(st, NA_MAIN, NA_DRY_LEFT, NA_DRY_RIGHT, NA_COUNT);
+}
+
+/* Filtro de los naudio con MP3: POLEF si los dos primeros coeficientes
+ * son cero, IIR si no. */
+static void NA_FILTER(struct aud_state *st, uint32_t w1, uint32_t w2)
+{
+	struct aud_naudio *a = &st->naudio;
+	uint8_t flags = (uint8_t)(w1 >> 16);
+	uint16_t dmem = (w2 >> 24) == 0 ? NA_MAIN : NA_MAIN2;
+	uint32_t address = w2 & 0xFFFFFF;
+	if (a->table[0] == 0 && a->table[1] == 0)
+		alist_polef(st, flags & A_INIT, dmem, dmem, NA_COUNT, (uint16_t)w1, a->table, address);
+	else
+		alist_iirf(st, flags & A_INIT, dmem, dmem, NA_COUNT, a->table, address);
+}
+
+/* Distorsión de Conker (comando 0 de los naudio con MP3). Como el original:
+ * 0x170 muestras, el doble que los demás comandos (que cuentan 0x170
+ * bytes). Sin verificar: ni Conker ni Perfect Dark lo mandaron en las
+ * escenas a las que llegan hoy. */
+static void NA_OVERLOAD(struct aud_state *st, uint32_t w1, uint32_t w2)
+{
+	alist_overload(st, (uint16_t)((w1 & 0xFFF) + NA_MAIN), 2 * NA_COUNT, (int16_t)w2, (uint16_t)(w2 >> 16));
+}
+
+static void NA_MP3(struct aud_state *st, uint32_t w1, uint32_t w2)
+{
+	aud_mp3(st, w1 & 0x1E, w2 & 0xFFFFFF);
+}
+
+static const acmd_fn naudio[0x10] = {
+	SPNOOP,       NA_ADPCM,     NA_CLEARBUFF, NA_ENVMIXER,
+	NA_LOADBUFF,  NA_RESAMPLE,  NA_SAVEBUFF,  UNKNOWN,
+	UNKNOWN,      NA_SETVOL,    NA_DMEMMOVE,  NA_LOADADPCM,
+	NA_MIXER,     NA_INTERLEAVE, NA_SETVOL_RATE_LO, NA_SETLOOP,
+};
+
+/* Donkey Kong 64: los comandos 7 y 8 son MIXER. Banjo-Kazooie usa la tabla
+ * de naudio. */
+static const acmd_fn naudio_dk[0x10] = {
+	SPNOOP,       NA_ADPCM,     NA_CLEARBUFF, NA_ENVMIXER,
+	NA_LOADBUFF,  NA_RESAMPLE,  NA_SAVEBUFF,  NA_MIXER,
+	NA_MIXER,     NA_SETVOL,    NA_DMEMMOVE,  NA_LOADADPCM,
+	NA_MIXER,     NA_INTERLEAVE, NA_SETVOL_RATE_LO, NA_SETLOOP,
+};
+
+/* Perfect Dark, Banjo-Tooie, Jet Force Gemini y Conker: MP3, filtro y
+ * distorsión; el 8 (MP3ADDY) no hace nada. */
+static const acmd_fn naudio_mp3[0x10] = {
+	NA_OVERLOAD,  NA_ADPCM,     NA_CLEARBUFF, NA_ENVMIXER,
+	NA_LOADBUFF,  NA_RESAMPLE,  NA_SAVEBUFF,  NA_MP3,
+	SPNOOP,       NA_SETVOL,    NA_DMEMMOVE,  NA_LOADADPCM,
+	NA_MIXER,     NA_INTERLEAVE, NA_FILTER,   NA_SETLOOP,
+};
+
 /* ---- Ejecución -------------------------------------------------------------- */
 
 struct abi_table {
@@ -519,6 +690,11 @@ static bool abi_table(uint32_t abi, struct abi_table *t)
 	case SALSA64_ABI_NEAD_MM:
 	case SALSA64_ABI_NEAD_AC:   t->fn = nead_mm; t->size = 0x18; return true;
 	case SALSA64_ABI_NEAD_MMB:  t->fn = nead_mmb; t->size = 0x18; return true;
+	case SALSA64_ABI_NAUDIO:
+	case SALSA64_ABI_NAUDIO_BK: t->fn = naudio; t->size = 0x10; return true;
+	case SALSA64_ABI_NAUDIO_DK: t->fn = naudio_dk; t->size = 0x10; return true;
+	case SALSA64_ABI_NAUDIO_MP3:
+	case SALSA64_ABI_NAUDIO_CBFD: t->fn = naudio_mp3; t->size = 0x10; return true;
 	default:                    return false;
 	}
 }

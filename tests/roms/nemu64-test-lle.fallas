@@ -1,0 +1,71 @@
+CACHE dcache create dirty exclusive (0x0D) then store/writeback
+CACHE dcache hit writeback invalidate (0x15)
+CACHE dcache index writeback invalidate clears valid (TagLo via load tag)
+CACHE icache hit invalidate clears valid when line hits
+CACHE icache hit writeback (0x18) pushes line to RAM
+CACHE icache index invalidate clears valid (TagLo via load tag)
+DCACHE: cached LW stale after uncached SW until invalidate
+DCACHE: hit writeback pushes dirty line to RAM
+ICACHE: uncached patch does not affect fetched line until invalidate
+MI Repeat: SB
+MI Repeat: SD
+MI Repeat: SH
+MI Repeat: SW
+MI Repeat: Wrap2KiB
+RDP STATUS: Flags during a run
+RDP STATUS: Run from DMEM (xbus)
+RDP STATUS: Run from DMEM (xbus) (end of dmem)
+RDP STATUS: Run from DMEM (xbus) (overflowing dmem)
+cache: Cache write unused bits
+cache: Conflicting CacheLineIndex vs Ptag
+cache: Hit Invalidate keeps dirty flag
+cache: Hit Write Back Invalidate keeps dirty flag
+cache: Index Write Back Invalidate keeps dirty flag
+cache: Move cache line
+cache: Read cached vs uncached
+cache: Write cache line manually (clean)
+cache: Write cache line manually (dirty)
+cart-writing: Temp value  decay
+cart-writing: Write16, Read32
+cart-writing: Write32 (outside of ROM), Read32
+cart-writing: Write32, Read16
+cart-writing: Write32, Read32 (beginning of rom)
+cart-writing: Write32, Read32 (different location, nearby)
+cart-writing: Write32, Read32 (end of rom)
+cart-writing: Write32, Read32 (same location)
+cart-writing: Write32, Read8
+cart-writing: Write32, check PI.STATUS IOBUSY
+cart-writing: Write64, Read32
+cart-writing: Write8 (with offset), Read32
+cart-writing: Write8, Read32
+cart_memory: DMA CART -> RDRAM (misaligned)
+cart_memory: DMA CART -> RDRAM (misaligned, cross page)
+cart_memory: DMA CART -> RDRAM (misaligned, end of page)
+cart_memory: DMA CART -> RDRAM (small sizes)
+data cache: Cache Hit Invalidate)
+data cache: Cache Hit Write Back Invalidate)
+data cache: Cache Hit Write Back)
+data cache: Cache Index Load Tag
+data cache: Create Dirty Exclusive)
+data cache: Index Write Back Invalidate)
+data cache: Write back (Using CACHE with Data-Index Write Back Invalidate with uncached address)
+data cache: Write back (Using CACHE with Data-Index Write Back Invalidate)
+data cache: Write back (Using LB 8kb+15 later)
+data cache: Write back (Using LBU 8kb+15 later)
+data cache: Write back (Using LD 8kb+8 later)
+data cache: Write back (Using LH 8kb+14 later)
+data cache: Write back (Using LW 8kb+12 later)
+data cache: Write back (Using LW 8kb+14 later)
+data cache: Write back (Using LWU 8kb+12 later)
+data cache: Write back (Using SB 8kb+15 later)
+data cache: Write back (Using SD 8kb+8 later)
+data cache: Write back (Using SH 8kb+14 later)
+data cache: Write back (Using SW 8kb+12 later)
+icache: Cache(Fill)
+icache: Cache(HitInvalidate)
+icache: Cache(HitWriteBack)
+icache: Cache(IndexInvalidate)
+icache: Cache(IndexStoreTag)
+icache: Modify cached
+icache: Modify cached (second instruction)
+icache: Self-modifying code within basic block (single write)

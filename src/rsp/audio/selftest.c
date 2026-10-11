@@ -8,6 +8,7 @@
  * mentira; algunas direcciones de la RDRAM no están alineadas a 16, para
  * probar los trozos del DMA del SPE.
  */
+#include <stdbool.h>
 #include <string.h>
 
 #include "core/endian.h"
@@ -22,6 +23,8 @@
 #define L_STATE  0x1000u  /* estados de ADPCM, RESAMPLE, ENVMIXER, FILTER, POLEF */
 #define L_LUT    0x1400u  /* tabla de FILTER */
 #define L_OUT    0x2000u  /* la DMEM guardada y lo demás */
+#define L_MP3    0x3400u  /* naudio: 8 bytes de ganancias y 0x480 de subbandas */
+#define L_POLEF  0x3900u  /* naudio: coeficientes con los dos primeros en cero */
 
 struct builder {
 	uint8_t *ram;
@@ -133,6 +136,50 @@ static void build_abi1(struct builder *b)
 	cmd(b, 0x06000000u, L_OUT + 0x818);
 }
 
+/* naudio: direcciones de la DMEM relativas a 0x4F0; los de MP3 cambian los
+ * comandos 0, 7, 8 y 0x0E. */
+static void build_naudio(struct builder *b, bool mp3)
+{
+	salsa64_wr32(b->ram + L_MP3, 0x00020000u);
+	salsa64_wr32(b->ram + L_MP3 + 4, 0xFFFE8000u);
+	fill16(b, L_MP3 + 8, 0x240, 2000);
+	salsa64_wr32(b->ram + L_POLEF, 0);
+	fill16(b, L_POLEF + 4, 14, 4000);
+
+	cmd(b, 0x0B000000u | 0x100, L_BOOK);                                /* LOADADPCM */
+	cmd(b, 0x0F000000u, L_STATE);                                       /* SETLOOP */
+	cmd(b, 0x04000000u | 0x90u << 12 | 0x004, L_ADPCM);                 /* LOADBUFF → 0x4F4 */
+	cmd(b, 0x01000000u | (L_STATE + 0x40), 0x1u << 28 | 0x100u << 16 | 0x4u << 12 | 0x200); /* ADPCM A_INIT */
+	cmd(b, 0x01000000u | (L_STATE + 0x60), 0x2u << 28 | 0x60u << 16 | 0x4u << 12 | 0x400);  /* ADPCM con bucle */
+	cmd(b, 0x05000000u | (L_STATE + 0x80), 0x1u << 30 | 0x5555u << 14 | 0x208u << 2);      /* RESAMPLE A_INIT → MAIN */
+	cmd(b, 0x05000000u | (L_STATE + 0x90), 0x9999u << 14 | 0x210u << 2 | 1);               /* RESAMPLE → MAIN2 */
+	cmd(b, 0x04000000u | 0x5C0u << 12 | 0x4E0, L_PCM + 0x10);           /* secos y efecto */
+	cmd(b, 0x02000000u | 0x7C0, 0x40);                                  /* CLEARBUFF */
+	cmd(b, 0x09000000u | 0x06u << 16 | 0x6000, 0x5000u << 16 | 0x2800); /* SETVOL: vol. izq., seco, efecto */
+	cmd(b, 0x09000000u | 0x04u << 16 | 0x7000, 0x00001234);             /* destino y velocidad der. */
+	cmd(b, 0x09000000u | 0x00u << 16 | 0x1000, 0xFFFF8000u);            /* destino y velocidad izq. */
+	if (!mp3)
+		cmd(b, 0x0E000000u, 0x0000ABCD);                            /* parte baja de la velocidad der. */
+	cmd(b, 0x03000000u | 0x01u << 16 | 0x5000, L_STATE + 0x100);        /* ENVMIXER A_INIT */
+	cmd(b, 0x03000000u | 0x5800, L_STATE + 0x100);                      /* y sigue del estado */
+	cmd(b, 0x0C000000u | 0x6000, 0x170u << 16 | 0x4E0);                 /* MIXER MAIN2 → seco izq. */
+	cmd(b, 0x0A000000u | 0x010, 0x0300u << 16 | 0x3E);                  /* DMEMMOVE */
+	if (mp3) {
+		cmd(b, 0x0E000000u | 0x01u << 16 | 0x1234, L_STATE + 0x180); /* filtro IIR sobre MAIN */
+		cmd(b, 0x0B000000u | 0x20, L_POLEF);
+		cmd(b, 0x0E000000u | 0x01u << 16 | 0x3000, 0x01u << 24 | (L_STATE + 0x1A0)); /* POLEF sobre MAIN2 */
+		cmd(b, 0x00000000u | 0x020, 0x9000u << 16 | 0x0003);        /* OVERLOAD */
+		cmd(b, 0x07000000u | 0x0A, L_MP3);                          /* MP3 */
+		cmd(b, 0x08000000u, 0);                                     /* MP3ADDY */
+		cmd(b, 0x07000000u | 0x06, L_MP3);                          /* y otra vez sobre su salida */
+	}
+	cmd(b, 0x0D000000u, 0);                                             /* INTERLEAVE */
+	cmd(b, 0x06000000u | 0x400u << 12 | 0xB10, L_OUT);                  /* SAVEBUFF: la DMEM desde 0 */
+	cmd(b, 0x06000000u | 0x400u << 12 | 0xF10, L_OUT + 0x408);
+	cmd(b, 0x06000000u | 0x400u << 12 | 0x310, L_OUT + 0x810);
+	cmd(b, 0x06000000u | 0x400u << 12 | 0x710, L_OUT + 0xC18);
+}
+
 uint32_t aud_selftest_build(uint8_t *ram, uint32_t abi, uint32_t seed)
 {
 	struct builder b = { ram, 0, seed };
@@ -140,6 +187,8 @@ uint32_t aud_selftest_build(uint8_t *ram, uint32_t abi, uint32_t seed)
 	inputs(&b);
 	if (abi == SALSA64_ABI_AUDIO || abi == SALSA64_ABI_AUDIO_GE)
 		build_abi1(&b);
+	else if (abi >= SALSA64_ABI_NAUDIO && abi <= SALSA64_ABI_NAUDIO_CBFD)
+		build_naudio(&b, abi == SALSA64_ABI_NAUDIO_MP3 || abi == SALSA64_ABI_NAUDIO_CBFD);
 	else
 		build_nead(&b);
 	return 8 * b.n;

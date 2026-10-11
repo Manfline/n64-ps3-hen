@@ -194,6 +194,8 @@ void gfx_io_tex_cache(struct gfx_state *g, uint32_t off, uint32_t size);
  * abajo con los parámetros ya extraídos. */
 void gfx_dl_f3dex2(struct gfx_state *g);
 void gfx_dl_f3d(struct gfx_state *g);
+/* dpc.c: comandos crudos del RDP [job->dl, job->dl_end) (GFX_JOB_DPC). */
+void gfx_dl_dpc(struct gfx_state *g);
 
 /* dl.c: recorrido de la display list y estado que el RSP pasa al RDP. */
 /* Siguiente comando (avanza dl_pc). false: la tarea termina (fuera de la
