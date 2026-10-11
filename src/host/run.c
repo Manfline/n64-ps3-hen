@@ -96,13 +96,14 @@
 #include "rsp/gfx/backend.h"
 #include "rsp/audio/backend.h"
 #include "rsp/gfx/hle.h"
+#include "rsp/jpeg/jpeg.h"
 #include "rsp/lle/core.h"
 
 #define DEFAULT_CYCLES (1ull << 32)  /* ~46 s de la consola */
 #define DEFAULT_SLICE  (1ull << 20)
 #define MAX_TEXT       255
 #define MAX_FAIL_TEXTS 4
-#define MAX_PADS       512
+#define MAX_PADS       2048
 #define MAX_POKES      64
 
 enum stop_reason {
@@ -504,10 +505,10 @@ void salsa64_gfx_trace_state(const struct gfx_state *g, const struct gfx_draw *d
 	if (!salsa64_gfx_trace_now)
 		return;
 	fprintf(stderr, "  ST kind %d tile %d cyc %u ntex %u texon %u cc %06x:%08x oh %06x ol %08x prim %08x env %08x "
-		"fog %08x mul %.0f off %.0f geom %08x texs %04x,%04x timg %06x/%u vp %.1f,%.1f±%.1f,%.1f\n", kind, tile,
+		"fog %08x mul %.0f off %.0f geom %08x texs %04x,%04x timg %06x/%u vp %.1f,%.1f±%.1f,%.1f dl %06x\n", kind, tile,
 		d->cycle, d->ntex, g->tex_on, g->cc_hi, g->cc_lo, g->oh, g->ol, g->prim, g->env, g->fog, g->fog_mul,
 		g->fog_off, g->geom, g->tex_s, g->tex_t, g->timg_addr, g->timg_width, g->vtrans[0], g->vtrans[1],
-		g->vscale[0], g->vscale[1]);
+		g->vscale[0], g->vscale[1], g->dl_pc);
 	for (int i = 0; i < 2; i++) {
 		const struct gfx_tile *t = &g->tiles[(tile + i) & 7];
 		fprintf(stderr, "     tile%d fmt %u siz %u pal %u line %u tmem %u cms %u cmt %u mask %u,%u shift %u,%u "
@@ -683,6 +684,7 @@ static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_resu
 	s->approx_cc += res->approx_cc;
 	s->dl_errors += res->dl_errors;
 	s->skipped += res->skipped;
+	s->bg += res->bg;
 	if (gfx.raster)
 		raster_task(job, res);
 	if (trace_gfx_left && n64.bus.vi.fields > (trace_from ? trace_from : 500)) {
@@ -878,9 +880,110 @@ static void shadow_start(const struct salsa64_task *t)
 	}
 }
 
+/* --lle-check-jpeg: las tareas JPEG van al microcódigo real (LLE) y la HLE
+ * (rsp/jpeg) corre la misma tarea sobre una copia de la RDRAM; cuando el
+ * microcódigo termina (jcheck_sync) se comparan los macrobloques escritos,
+ * píxel RGBA5551 por píxel, por canal de 5 bits. Las primeras diferencias
+ * van al stderr; SALSA64_JCHECK_ALL=1 las lista todas (tarea, macrobloque,
+ * x, y), para buscar sesgos. */
+static struct {
+	bool on, pending;
+	uint8_t *rdram;
+	struct salsa64_jpeg_result res;
+	uint32_t tasks, macroblocks, pixels, diff, bad;
+	uint32_t hist[32];      /* píxeles por diferencia máxima entre canales */
+	int reports;
+} jcheck;
+
+static void jcheck_compare(void)
+{
+	jcheck.pending = false;
+	uint32_t a = jcheck.res.out_addr & 0x7FFFFF, n = jcheck.res.out_bytes & ~1u;
+	if (a > n64.bus.rdram_size || n > n64.bus.rdram_size - a)
+		return;
+	/* Cada macrobloque ocupa mb_stride bytes y la salida, sus primeros
+	 * mb_out. */
+	uint32_t mb_stride = jcheck.res.mb_stride, mb_out = jcheck.res.mb_out;
+	bool all = getenv("SALSA64_JCHECK_ALL") != NULL;
+	uint32_t diff = 0, px = 0;
+	for (uint32_t k = 0; k < n; k += 2) {
+		if (mb_stride && k % mb_stride >= mb_out)
+			continue;
+		px++;
+		uint32_t x = salsa64_rd16(n64.bus.rdram + a + k), y = salsa64_rd16(jcheck.rdram + a + k);
+		int dm = 0;
+		for (int c = 0; c < 3; c++) {
+			int d = (int)((x >> (11 - 5 * c)) & 31) - (int)((y >> (11 - 5 * c)) & 31);
+			d = d < 0 ? -d : d;
+			dm = d > dm ? d : dm;
+		}
+		dm |= (x & 1) != (y & 1) ? 31 : 0;
+		jcheck.hist[dm]++;
+		diff += dm != 0;
+		if (dm && (all || jcheck.reports < 6)) {
+			jcheck.reports++;
+			uint32_t o = mb_stride ? k % mb_stride / 2 : k / 2;
+			fprintf(stderr, "lle-check: tarea JPEG %u, macrobloque %u (x %u, y %u): lle %04x, hle %04x\n",
+				jcheck.tasks, mb_stride ? k / mb_stride : 0, o % 16, o / 16, x, y);
+		}
+	}
+	jcheck.pixels += px;
+	jcheck.diff += diff;
+	jcheck.bad += diff != 0;
+}
+
+static void jcheck_start(const struct salsa64_task *t)
+{
+	uint32_t code = t->ucode & 0x7FFFFF;
+	if (code > n64.bus.rdram_size || t->ucode_size > n64.bus.rdram_size - code)
+		return;
+	enum salsa64_jpeg_kind kind = salsa64_jpeg_detect(n64.bus.rdram + code, t->ucode_size);
+	if (kind == SALSA64_JPEG_NONE)
+		return;
+	if (!jcheck.rdram)
+		jcheck.rdram = malloc(n64.bus.rdram_size);
+	memcpy(jcheck.rdram, n64.bus.rdram, n64.bus.rdram_size);
+	salsa64_jpeg_run(kind, jcheck.rdram, n64.bus.rdram_size, t->data_ptr, &jcheck.res);
+	jcheck.tasks++;
+	jcheck.macroblocks += jcheck.res.macroblocks;
+	jcheck.pending = !jcheck.res.bad;
+}
+
+/* El LLE del host se pone al día en cada acceso del CPU al SP o al DP: el
+ * primero con el RSP en HALT tras una tarea JPEG es el manejador de la
+ * interrupción, antes de que el juego copie la salida y vuelva a llenar el
+ * mismo búfer con la tarea siguiente. Ahí se compara. */
+static struct salsa64_lle_backend jcheck_lle;
+
+static void jcheck_sync(void *ctx)
+{
+	lle_host.backend.sync(ctx);
+	/* Solo al terminar: si el planificador del juego la interrumpió
+	 * (yield, SIG1) se reanuda más tarde con OS_TASK_YIELDED. */
+	uint32_t st = n64.bus.sp.regs[SALSA64_SP_STATUS];
+	if (jcheck.pending && (st & SALSA64_SP_STATUS_HALT) && (st & SALSA64_SP_STATUS_TASKDONE) &&
+	    !(st & SALSA64_SP_STATUS_SIG(1)))
+		jcheck_compare();
+}
+
+/* Reloj del host para lo que el RSP mide en el hilo del CPU (HLE JPEG). */
+static uint64_t host_clock_us(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
+}
+
 static void trace_rsp(void *ctx, const struct salsa64_task *t, enum salsa64_gbi gbi)
 {
 	(void)ctx;
+	/* Una tarea JPEG nueva (no la reanudación de una interrumpida, con
+	 * OS_TASK_YIELDED): la anterior ya terminó. */
+	if (jcheck.on && t->type == SALSA64_TASK_JPEG && !(t->flags & 1)) {
+		if (jcheck.pending)
+			jcheck_compare();
+		jcheck_start(t);
+	}
 	if (shadow.on) {
 		if (shadow.pending)
 			shadow_compare();
@@ -942,12 +1045,12 @@ static void gfx_summary(void)
 	fprintf(stderr, "salsa64-run: gfx: %u tareas (%u otras, %u con microcódigo desconocido); por tarea "
 		"%.0f comandos, %.0f triángulos, %.0f rectángulos, %.0f dibujos, %.1f cargas a la TMEM, %.1f texturas "
 		"decodificadas (+%.1f reusadas, %.1f de tareas anteriores; %.1f al arena, %.1f desalojadas); "
-		"%u comandos sin implementar (último 0x%02X), %u de otro microcódigo saltados, %u combiners "
-		"aproximados, %u errores, %u tareas cortadas, banderas 0x%02X\n",
+		"%u comandos sin implementar (último 0x%02X), %u de otro microcódigo saltados, %u fondos de S2DEX, "
+		"%u combiners aproximados, %u errores, %u tareas cortadas, banderas 0x%02X\n",
 		gfx.tasks, n64.bus.rsp.stats.other + n64.bus.rsp.stats.audio, n64.bus.rsp.stats.unknown_gbi,
 		s->commands / n, s->triangles / n, s->rects / n, s->draws / n, s->loads / n, s->textures / n,
 		s->tex_reused / n, s->tex_old / n, s->tex_arena / n, s->tex_evicted / n,
-		s->unknown_cmds, s->last_unknown, s->skipped, s->approx_cc, s->dl_errors, n64.bus.rsp.stats.cut,
+		s->unknown_cmds, s->last_unknown, s->skipped, s->bg, s->approx_cc, s->dl_errors, n64.bus.rsp.stats.cut,
 		s->flags);
 	if (gfx_late.tear)
 		fprintf(stderr, "salsa64-run: gfx: %u tareas comparadas entre el arranque y el fin, %u cambiaron\n",
@@ -1446,7 +1549,7 @@ static bool dump_frame(const char *path)
 
 /* Opciones largas sin letra (códigos fuera de ASCII). */
 enum { OPT_REC = 0x100, OPT_LOCKSTEP, OPT_PAD, OPT_TRACE_FROM, OPT_TRACE_FAULTS, OPT_RAM_DUMP, OPT_TRACE_AUDIO,
-       OPT_FRAME_EVERY, OPT_LLE, OPT_LLE_SPEED, OPT_LLE_CHECK, OPT_POKE };
+       OPT_FRAME_EVERY, OPT_LLE, OPT_LLE_SPEED, OPT_LLE_CHECK, OPT_LLE_CHECK_JPEG, OPT_POKE };
 
 static void usage(FILE *out)
 {
@@ -1488,7 +1591,9 @@ static void usage(FILE *out)
 	      "      --lle[=auto|all]  RSP a bajo nivel: el microcódigo real para lo que no tiene\n"
 	      "                        HLE (auto) o para todo (all); el RDP consume sus comandos\n"
 	      "      --lle-speed F     instrucciones del RSP por ciclo del CPU (nominal 0,667)\n"
-	      "      --lle-check-audio con --lle=all, comparar cada tarea de audio con la HLE\n", out);
+	      "      --lle-check-audio con --lle=all, comparar cada tarea de audio con la HLE\n"
+	      "      --lle-check-jpeg  las tareas JPEG al microcódigo real (implica --lle=auto) y\n"
+	      "                        compararlas con la HLE (rsp/jpeg)\n", out);
 }
 
 int main(int argc, char **argv)
@@ -1523,6 +1628,7 @@ int main(int argc, char **argv)
 		{ "lle", optional_argument, NULL, OPT_LLE },
 		{ "lle-speed", required_argument, NULL, OPT_LLE_SPEED },
 		{ "lle-check-audio", no_argument, NULL, OPT_LLE_CHECK },
+		{ "lle-check-jpeg", no_argument, NULL, OPT_LLE_CHECK_JPEG },
 		{ "trace-gfx", required_argument, NULL, 'Q' },
 		{ "raster-dump", required_argument, NULL, 'D' },
 		{ "audio-wav", required_argument, NULL, 'A' },
@@ -1607,6 +1713,7 @@ int main(int argc, char **argv)
 			break;
 		case OPT_LLE_SPEED: lle_speed = atof(optarg); break;
 		case OPT_LLE_CHECK: shadow.on = true; break;
+		case OPT_LLE_CHECK_JPEG: jcheck.on = true; break;
 		case 'D': dump_path = optarg; break;
 		case 'A': wav_path = optarg; break;
 		case 'Z': audio_check = true; break;
@@ -1668,13 +1775,20 @@ int main(int argc, char **argv)
 	salsa64_audio_sync_init(&aud_sync, &aud_state, &n64.bus);
 	salsa64_rsp_set_audio(&n64.bus, &aud_sync.backend);
 	salsa64_ai_set_sink(&n64.bus, audio_push, NULL);
+	if (jcheck.on && lle_mode == SALSA64_LLE_OFF)
+		lle_mode = SALSA64_LLE_AUTO;
 	if (lle_mode != SALSA64_LLE_OFF) {
 		salsa64_lle_host_init(&lle_host, &n64.bus);
 		if (lle_speed > 0.0)
 			salsa64_lle_host_speed(&lle_host, lle_speed);
-		salsa64_rsp_set_lle(&n64.bus, &lle_host.backend, lle_mode);
+		jcheck_lle = lle_host.backend;
+		if (jcheck.on)
+			jcheck_lle.sync = jcheck_sync;
+		salsa64_rsp_set_lle(&n64.bus, &jcheck_lle, lle_mode);
 	}
 	salsa64_rsp_set_dpc(&n64.bus, &gfx_sync.dpc);
+	n64.bus.rsp.jpeg_lle = jcheck.on;
+	n64.bus.rsp.clock_us = host_clock_us;
 	n64.bus.rsp.trace = trace_rsp;
 	if (trace_exc_left)
 		n64.cpu.exc_hook = trace_exc;
@@ -1815,10 +1929,25 @@ int main(int argc, char **argv)
 	}
 	if (gfx.tasks || n64.bus.rsp.stats.unknown_gbi)
 		gfx_summary();
+	if (n64.bus.rsp.stats.jpeg)
+		fprintf(stderr, "salsa64-run: jpeg: %u tareas en la HLE, %u macrobloques, %u con parámetros malos, "
+			"%.2f ms\n", n64.bus.rsp.stats.jpeg, n64.bus.rsp.stats.jpeg_mb, n64.bus.rsp.stats.jpeg_bad,
+			n64.bus.rsp.stats.jpeg_us / 1e3);
 	if (n64.bus.rsp.stats.audio || audio.dmas)
 		audio_summary();
 	if (lle_mode != SALSA64_LLE_OFF)
 		lle_summary();
+	if (jcheck.on) {
+		if (jcheck.pending)
+			jcheck_compare();
+		fprintf(stderr, "salsa64-run: lle-check: %u tareas JPEG comparadas con la HLE (%u macrobloques, %u "
+			"píxeles), %u píxeles distintos en %u tareas; por diferencia máxima de canal:", jcheck.tasks,
+			jcheck.macroblocks, jcheck.pixels, jcheck.diff, jcheck.bad);
+		for (int d = 0; d < 32; d++)
+			if (jcheck.hist[d])
+				fprintf(stderr, " %d:%u", d, jcheck.hist[d]);
+		fputc('\n', stderr);
+	}
 	if (shadow.on) {
 		if (shadow.pending)
 			shadow_compare();

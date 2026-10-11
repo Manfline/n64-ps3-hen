@@ -129,6 +129,7 @@ struct gfx_state {
 	uint16_t tex_s, tex_t;     /* escala de G_TEXTURE (0.16) */
 	uint8_t tex_tile, tex_level, tex_on;
 	uint32_t rdphalf1, rdphalf2;
+	uint32_t obj_rendermode;   /* G_OBJ_RENDERMODE de S2DEX (s2dex.c) */
 	uint32_t raw[44];          /* comando del RDP armado con G_RDPHALF_* */
 	uint8_t raw_n, raw_len;    /* dobles palabras recibidas y esperadas */
 	uint32_t dl_stack[GFX_DL_STACK];
@@ -230,6 +231,11 @@ bool gfx_dl_call(struct gfx_state *g, uint32_t seg, bool branch);
 bool gfx_dl_end(struct gfx_state *g);
 /* Salta un tramo de otro microcódigo hasta volver al de la tarea (dl.c). */
 bool gfx_dl_skip_foreign(struct gfx_state *g, uint32_t op_ucode, uint32_t op_dl, uint32_t op_enddl);
+/* s2dex.c: ¿los datos del microcódigo que carga un G_LOAD_UCODE son de
+ * S2DEX2? Y el tramo S2DEX2 hasta el G_LOAD_UCODE que vuelve al de la
+ * tarea (true: la lista sigue; false como gfx_dl_skip_foreign). */
+bool gfx_ucode_is_s2dex2(struct gfx_state *g, uint32_t data, uint32_t size);
+bool gfx_dl_s2dex2(struct gfx_state *g);
 /* G_TEXRECT y G_TEXRECTFLIP: s, t y dsdx, dtdy llegan en los dos comandos
  * siguientes si sus opcodes están en ops_st y ops_d (hasta 4 opcodes, uno
  * por byte). Si no, el rectángulo se descarta y ese comando sigue normal. */
