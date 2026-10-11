@@ -92,10 +92,16 @@ Pendiente:
       aparte (no de esta rama); si no, el sospechoso es cómo el RSX
       rasteriza los triángulos cortados (volcado `gfxdump` del campo malo
       para dibujarlo en la Mac con `--raster-dump`).
-- [ ] PS3 real, pendiente: la intro de Perfect Dark (muros cercanos).
+      **A/B hecho el 2026-10-11 (el autor, PS3): las líneas salen igual con
+      «Salsa64 menú» (main sin este recorte)** → no son de esta rama;
+      pendiente aparte, fuera de ella (logs `build/ps3-logs/goldeneye-recorte-2.log`
+      y `goldeneye-menu.log`, fuera de git).
+- [x] PS3 real, Perfect Dark con «Salsa64 recorte» (tomado como NoN): intro
+      de la ciudad y un nivel, «se ve todo bien» (el autor, 2026-10-11; log
+      `build/ps3-logs/perfectdark-recorte.log`).
 
-Qué ver mañana en la PS3 (paquete «Salsa64 recorte», SLSA00090;
-`embedded` en /dev_hdd0/salsa64/, se cambia por FTP):
+Lo que se vio el 2026-10-11 en la PS3 (paquete «Salsa64 recorte», SLSA00090;
+`embedded` en /dev_hdd0/salsa64/, se cambia por FTP; resultados arriba):
 1. `file:goldeneye.z64` con «Salsa64 recorte» y luego la misma escena con
    «Salsa64 menú» o «Salsa64 alfa»: túnel de Dam con las barreras a rayas,
    mirando el centro de la carretera y la base de la barrera. Lo esperado si
