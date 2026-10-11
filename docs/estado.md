@@ -1,5 +1,69 @@
 # Estado
 
+## 2026-10-10 — Menú para elegir ROM (estilo XMB) y vuelta al menú con cierre limpio
+
+Hecho (rama `intelligent-yalow-4dd14d`, desde main e7184b7):
+- **Sin `embedded`, menú** (`src/frontend/menu.c`, `romlist.c`). Con
+  `embedded`, todo arranca directo como antes (las pruebas, sin cambios).
+  - Lista: `.z64/.v64/.n64` de `/dev_hdd0/salsa64` y
+    `/dev_usb000…007/salsa64`, leyendo solo la cabecera (los tres órdenes de
+    bytes). Ignora los «._*» de macOS. Título interno (0x20; si no hay, el
+    nombre de archivo), código, región, tipo de guardado (tabla o
+    guardado.cfg) y tamaño. Ordenada por título.
+  - Disposición inspirada en el XMB, sin recursos de Sony: columna vertical
+    con la fila elegida más grande y el nombre de archivo debajo, columna que
+    se desliza con suavizado, panel de información que aparece al detenerse,
+    fondo en degradado que cambia despacio con tres ondas animadas, texto con
+    sombra, fundido de entrada y página de Opciones (fondo animado sí/no, en
+    `SALSA64_DATA_DIR/menu.cfg`; el overscan del trabajo de presentación puede
+    ir ahí). Íconos dibujados con rectángulos.
+  - Controles: cruceta con repetición (pulsación nueva para dar la vuelta),
+    izquierda/derecha para cambiar de página, X para abrir, triángulo para
+    Opciones y círculo para volver. Recuerda la última ROM en
+    `SALSA64_DATA_DIR/ultima-rom`. «Salir al XMB» va al final.
+- **START + SELECT dentro del juego vuelve al menú.**
+  - `main.c` quedó en sesiones de juego (`run_game`). `game_close` cierra
+    en orden, con cada paso al log («cierre: …»): guardado al disco, audio,
+    HLE gráfica y LLE con sus SPEs, recompilador, colas, destinos del RSX
+    (`salsa64_rdp_reset`, que conserva la memoria mapeada). Termina en
+    «cierre: estado limpio» o en «ATENCIÓN, quedó algo en vuelo».
+  - `game_reset` pone en cero el resto (incluidos estáticos que antes
+    sobrevivían: el último campo encolado, las ventanas de estadísticas, la
+    línea del ISViewer). `audio_out` quedó reentrante. «Salir del juego» del
+    sistema cierra la aplicación desde el juego o desde el menú.
+- **lib/rsxkit (MIT):**
+  - `rsxkit/text.h`: texto en un lienzo de la CPU. La fuente es la «fixed»
+    8x13 de X11, de dominio público (`docs/THIRD_PARTY.md`).
+  - `rsxkit/ui.h`: 2D en el RSX (rectángulos con degradado, texto con un
+    atlas Scale2x y filtro lineal, ondas) sobre la pantalla del cuadro
+    (`rsxkit_bind_frame`).
+  - En RPCS3 la mezcla alfa dentro de **una sola** llamada de dibujo no ve
+    lo dibujado antes en esa misma llamada (lo translúcido salía como sobre
+    negro). Por eso va una llamada por cada elemento, con el estado en
+    caché. Anotado en `lib/rsxkit/README.md`.
+- Memoria: el menú reserva al entrar un búfer de ROM de 64 MB y 2 MB
+  mapeados para el 2D (`docs/memory-budget.md`).
+
+Pruebas:
+- Host: suite «menu», 15 pruebas: cabeceras en los tres órdenes, títulos,
+  orden, directorio, última ROM, navegación, opciones, ajustes, atlas,
+  geometría y cuadros del menú. Con `SALSA64_MENU_PPM` se obtiene una vista
+  previa rasterizada como en el RSX (en `build/host/`).
+- `tools/rpcs3-run.py --menu ROM…` (en `tools/test-phase2.sh`): el menú se
+  maneja solo. Abre gfxtest, audiotest y gfxtest F3D seguidos y cada uno pasa
+  su verificación tras el cierre del anterior, con «cierre: estado limpio».
+  Deja una captura del menú en `dev_hdd0/salsa64/menu.ppm`.
+- `test-host`, `test-roms` (nemu64-test 433 fallas con HLE y 136 con LLE,
+  vitest, controles, savetest, gfxtest ×3, audiotest), build sin
+  advertencias, `test-phase1`, `test-phase2` y `test-rec`: verdes.
+
+Falta:
+- [ ] PS3 real (paquete «Salsa64 menú», SLSA00086): que el menú liste los
+      juegos propios, que abra Zelda y SM64, que START + SELECT vuelva y
+      deje abrir otro, que el guardado se conserve, y que la salida al XMB
+      sea limpia. Aprovechar para medir el menú (cuadros por segundo con
+      ondas).
+
 ## 2026-10-10 — Kokiri «en colores planos»: es el sol cenital, no la HLE (referencia con mupen64plus)
 
 Reporte (PS3 y rasterizador de la Mac): en el bosque

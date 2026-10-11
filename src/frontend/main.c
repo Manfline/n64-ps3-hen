@@ -35,17 +35,22 @@
  * SALSA64_DATA_DIR/rom.z64 (cualquiera de los tres órdenes de bytes) si
  * existe y si no gfxtest. START + SELECT sale al XMB.
  *
- * Sin embedded, el menú (menu.c, romlist.c): los .z64/.v64/.n64 de
- * SALSA64_DATA_DIR y de /dev_usbNNN/salsa64 con su título interno, tipo de
- * guardado y región, ordenados por título. Cruceta para elegir, X para
- * abrir; la última ROM abierta queda en SALSA64_DATA_DIR/ultima-rom y es la
- * elegida al volver. Dentro del juego, START + SELECT vuelve al menú: se
+ * Sin embedded, el menú (menu.c, romlist.c), con una disposición inspirada
+ * en el XMB y dibujado entero por el RSX (rsxkit/ui.h): los .z64/.v64/.n64
+ * de SALSA64_DATA_DIR y de /dev_usbNNN/salsa64 en una columna, ordenados
+ * por título, con un panel de información (archivo, código, región, tipo de
+ * guardado) y ondas de fondo que se apagan en Opciones (se guarda en
+ * SALSA64_DATA_DIR/menu.cfg). Cruceta para elegir, X para abrir, triángulo
+ * para Opciones; la última ROM abierta queda en SALSA64_DATA_DIR/ultima-rom
+ * y es la elegida al volver. Dentro del juego, START + SELECT vuelve al menú: se
  * cierra todo lo del juego (guardado al disco, audio, HLE gráfica y de
  * audio, SPEs, recompilador, destinos del RSX, colas entre hilos, ritmo;
  * cada paso al log, game_close) y se puede abrir otro. «Salir al XMB» está
  * al final de la lista. El menú reserva al arrancar un búfer para la ROM
- * más grande (64 MB) y su lienzo; nada más se asigna al cambiar de juego
- * salvo los bloques de control de los SPEs.
+ * más grande (64 MB) y los 2 MB mapeados del 2D; nada más se asigna al
+ * cambiar de juego salvo los bloques de control de los SPEs. Con
+ * SALSA64_DATA_DIR/capturas (o en prueba automática) deja una captura del
+ * menú en SALSA64_DATA_DIR/menu.ppm.
  *
  * Con las ROMs de prueba el frontend se verifica a sí mismo (selftest.c,
  * selftest_gfx.c) e imprime "RESULTADO frontend: OK/FALLO"; en modo de
@@ -117,6 +122,7 @@
 #include <sysutil/sysutil.h>
 
 #include <rsxkit/rsxkit.h>
+#include <rsxkit/ui.h>
 #include <spukit/spukit.h>
 
 #include "core/boot.h"
@@ -157,7 +163,7 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define SHOTS_PATH   SALSA64_DATA_DIR "/capturas"
 #define LAST_ROM_PATH SALSA64_DATA_DIR "/ultima-rom"
 #define MENU_TEST_PATH SALSA64_DATA_DIR "/menu-prueba"
-#define MENU_W       640   /* lienzo del menú: 640 × 360 (16:9) o 640 × 480 (4:3) */
+#define MENU_CFG_PATH SALSA64_DATA_DIR "/menu.cfg"
 #define MENU_TEST_MAX 8
 #define MENU_IDLE_FIELDS 900  /* prueba automática: sin acción en tanto, falla */
 #define ROM_MAX      (64u << 20)
@@ -1340,9 +1346,8 @@ static struct romlist roms;
 static struct menu menu;
 static struct {
 	uint8_t *rom;           /* búfer de la ROM (ROM_MAX), reservado al entrar al menú */
-	uint8_t *px;            /* lienzo XRGB8888 */
-	rsxkit_canvas canvas;
-	rsxkit_view view;
+	float lw, lh;           /* espacio lógico del menú */
+	struct menu_settings settings;
 	char save_cfg[4096];
 	size_t save_cfg_len;
 	/* Prueba automática (menu-prueba). */
@@ -1386,19 +1391,57 @@ static void menu_scan(const char *keep)
 	if (roms.skipped)
 		salsa64_log("menú: %u archivos con extensión de ROM que no se pudieron leer, muy chicos o sin lugar",
 			    roms.skipped);
-	menu_init(&menu, &roms, keep ? romlist_find(&roms, keep) : -1);
+	menu_init(&menu, &roms, keep ? romlist_find(&roms, keep) : -1, &mn.settings);
+	if (keep)
+		snprintf(menu.last, sizeof menu.last, "%s", keep);
 	menu.dirs[menu.ndirs++] = SALSA64_DATA_DIR;
 	menu.dirs[menu.ndirs++] = "/dev_usb000/salsa64 … /dev_usb007/salsa64";
 }
 
-/* Un cuadro del menú; el lienzo se sube al RSX solo si cambió. */
-static void menu_show(bool upload)
+/* Un cuadro del menú: todo lo dibuja el RSX (rsxkit/ui.h); el PPE solo
+ * arma unos miles de vértices. Con `shot`, además una captura (a la mitad
+ * de la resolución de 720p) en ese archivo. */
+static void menu_show(const char *shot)
 {
-	if (upload)
-		rsxkit_fb_upload(pres.fb, mn.px, mn.canvas.width, mn.canvas.height, mn.canvas.pitch, RSXKIT_XRGB8888);
-	rsxkit_frame_begin(MENU_BACK_RGB);
-	rsxkit_fb_draw(pres.fb, &mn.view, NULL);
+	rsxkit_frame_begin(0x000000);
+	rsxkit_ui_begin(mn.lw, mn.lh);
+	menu_frame(&menu, mn.lw, mn.lh, sysGetSystemTime());
+	rsxkit_ui_end();
+	if (shot) {
+		const rsxkit_screen *sc = rsxkit_screen_info();
+		struct salsa64_vi_frame f;
+		memset(&f, 0, sizeof f);
+		f.width = (uint32_t)(mn.lw / 2);
+		f.height = 360;
+		rsxkit_rect r = { 0, 0, sc->width, sc->height };
+		rsxkit_finish();
+		salsa64_screenshot(shot, &f, &r);
+		salsa64_log("menú: captura %s", shot);
+	}
 	rsxkit_frame_end();
+}
+
+static void menu_settings_load(void)
+{
+	char text[512];
+	menu_settings_default(&mn.settings);
+	FILE *f = fopen(MENU_CFG_PATH, "r");
+	if (!f)
+		return;
+	size_t n = fread(text, 1, sizeof text - 1, f);
+	fclose(f);
+	menu_settings_parse(&mn.settings, text, n);
+}
+
+static void menu_settings_save(void)
+{
+	char text[512];
+	int n = menu_settings_format(&mn.settings, text, sizeof text);
+	FILE *f = fopen(MENU_CFG_PATH, "w");
+	bool ok = f && fwrite(text, 1, (size_t)n, f) == (size_t)n;
+	if (f && fclose(f) != 0)
+		ok = false;
+	salsa64_log("menú: fondo animado %s%s", mn.settings.waves ? "sí" : "no", ok ? "" : " (no se pudo guardar)");
 }
 
 /* Fila a la que va la prueba automática: la próxima ROM de menu-prueba
@@ -1406,7 +1449,7 @@ static void menu_show(bool upload)
 static int menu_test_target(void)
 {
 	if (mn.next_test >= mn.ntest)
-		return (int)roms.count;
+		return menu_row_exit(&menu);
 	for (uint32_t i = 0; i < roms.count; i++)
 		if (!strcmp(romlist_name(&roms.e[i]), mn.test[mn.next_test]))
 			return (int)i;
@@ -1434,9 +1477,9 @@ static enum game_end menu_open(const struct rom_entry *e)
 	char path[ROMLIST_PATH_MAX], err[160];
 	memcpy(path, e->path, sizeof path);
 	salsa64_log("menú: abro %s (\"%s\")", path, romlist_display_title(e));
-	menu_draw_loading(&mn.canvas, e);
-	menu_show(true);
-	menu.dirty = true;  /* al volver se dibuja la lista otra vez */
+	menu.loading = romlist_display_title(e);
+	menu_show(NULL);
+	menu.loading = NULL;
 	uint32_t size = 0;
 	if (!read_rom_file(path, mn.rom, ROM_MAX, &size)) {
 		salsa64_log("menú: no se pudo leer %s", path);
@@ -1469,19 +1512,20 @@ static enum game_end menu_open(const struct rom_entry *e)
 static int menu_loop(void)
 {
 	const rsxkit_screen *sc = rsxkit_screen_info();
-	uint32_t h = sc->aspect > 1.5f ? 360 : 480;
-	mn.px = memalign(128, MENU_W * h * 4);
+	int rc = rsxkit_ui_init();
 	mn.rom = memalign(128, ROM_MAX);
-	if (!mn.px || !mn.rom) {
-		salsa64_log("%s: FALLO sin memoria para el menú", pres.autotest ? "RESULTADO frontend" : "menú");
+	if (rc != RSXKIT_OK || !mn.rom) {
+		salsa64_log("%s: FALLO al preparar el menú (2D del RSX %d, búfer de ROM %s)",
+			    pres.autotest ? "RESULTADO frontend" : "menú", rc, mn.rom ? "bien" : "sin memoria");
+		free(mn.rom);
+		mn.rom = NULL;
 		return 1;
 	}
-	mn.canvas = (rsxkit_canvas){ mn.px, MENU_W, h, MENU_W * 4, RSXKIT_XRGB8888 };
-	mn.view.scale = RSXKIT_SCALE_FIT;
-	mn.view.filter = sc->height % h == 0 ? RSXKIT_FILTER_NEAREST : RSXKIT_FILTER_LINEAR;
-	mn.view.aspect = (float)MENU_W / h;
-	salsa64_log("menú: lienzo de %ux%u (%s), búfer de ROM de %u MB", MENU_W, h,
-		    mn.view.filter == RSXKIT_FILTER_NEAREST ? "escala entera" : "escala con filtro", ROM_MAX >> 20);
+	mn.lh = 720.0f;
+	mn.lw = sc->aspect > 1.5f ? 1280.0f : 960.0f;
+	menu_settings_load();
+	salsa64_log("menú: espacio lógico de %.0fx%.0f sobre %ux%u, búfer de ROM de %u MB, fondo animado %s", mn.lw,
+		    mn.lh, sc->width, sc->height, ROM_MAX >> 20, mn.settings.waves ? "sí" : "no");
 
 	char last[ROMLIST_PATH_MAX];
 	bool have_last = romlist_load_last(LAST_ROM_PATH, last, sizeof last);
@@ -1491,6 +1535,10 @@ static int menu_loop(void)
 	if (pres.autotest)
 		menu_test_load();
 
+	/* Captura del menú (prueba automática o SALSA64_DATA_DIR/capturas): una
+	 * vez, cuando terminó de aparecer. */
+	bool want_shot = pres.autotest || file_exists(SHOTS_PATH);
+	uint32_t frames = 0;
 	int failed = 0;
 	while (!app_quit) {
 		sysUtilCheckCallback();
@@ -1508,9 +1556,14 @@ static int menu_loop(void)
 				failed = 1;
 				break;
 			}
-			buttons = menu_autopilot(&menu, target, mn.step++);
+			/* Primero deja que el menú aparezca entero (para la captura). */
+			buttons = frames < 50 ? 0 : menu_autopilot(&menu, target, mn.step++);
 		}
 		enum menu_action a = menu_input(&menu, buttons, sysGetSystemTime());
+		if (a == MENU_SETTINGS) {
+			mn.settings = menu.set;
+			menu_settings_save();
+		}
 		if (a == MENU_QUIT) {
 			salsa64_log("menú: «Salir al XMB»");
 			break;
@@ -1521,14 +1574,12 @@ static int menu_loop(void)
 			mn.next_test++;
 			mn.step = mn.idle = 0;
 		}
-		bool redraw = menu.dirty;
-		if (redraw)
-			menu_draw(&menu, &mn.canvas);
-		menu_show(redraw);
+		menu_show(want_shot && ++frames == 45 ? SALSA64_DATA_DIR "/menu.ppm" : NULL);
 	}
+	if (rsxkit_ui_dropped())
+		salsa64_log("menú: %u quads no cupieron en algún cuadro", rsxkit_ui_dropped());
 	free(mn.rom);
-	free(mn.px);
-	mn.rom = mn.px = NULL;
+	mn.rom = NULL;
 	if (!pres.autotest)
 		return 0;
 	bool ok = !failed && !mn.failures && mn.games == (int)mn.ntest;

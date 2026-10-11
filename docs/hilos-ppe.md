@@ -157,8 +157,10 @@ que venga. Lo que dura todo el programa: rsxkit, el RDP (su memoria
 mapeada), el framebuffer 2D, las ranuras del VI, la RDRAM, el semáforo, los
 DualShock y el callback de sysutil.
 
-El menú corre en el hilo principal sin hilo de emulación: lee los mandos,
-dibuja el lienzo solo si cambió y presenta un cuadro por vsync
+El menú corre en el hilo principal sin hilo de emulación (no le quita
+nada a la emulación: no existe mientras se ve el menú): lee los mandos,
+arma unos miles de vértices (columna, panel, texto, ondas; `menu_frame`)
+que dibuja el RSX (`rsxkit/ui.h`) y presenta un cuadro por vsync
 (`rsxkit_frame_end` lo frena). La prueba automática (`tools/rpcs3-run.py
 --menu`) abre varias ROMs de prueba seguidas y cada una tiene que pasar su
 verificación después del cierre de la anterior.
