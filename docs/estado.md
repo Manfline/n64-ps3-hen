@@ -3,7 +3,46 @@
 ## 2026-10-10 — Efectos de framebuffer: render a textura y copias RSX → RDRAM (rama hopeful-dirac)
 
 Rama `hopeful-dirac-f4e91b` (trabajo de efectos de framebuffer), desde
-main 5b62e9c. Diseño completo en `docs/framebuffer.md`.
+main 5b62e9c y con main 23a3289 traído. Diseño completo en
+`docs/framebuffer.md`. Aparte, en `zelda-logo-overscan` (un commit
+sobre main, 0e2a3be, también fusionado aquí): la presentación 1:1 del
+destino del RSX cuando cabe en la pantalla, para las líneas del logo de
+Zelda (abajo).
+
+**Mañana en la PS3 (2026-10-11), para que el autor solo lo abra:**
+
+1. Subir e instalar `build/salsa64/salsa64-framebuffer.pkg` (SLSA00089,
+   «Salsa64 framebuffer»; `PS3_IP=x.x.x.x tools/deploy-ps3.sh ftp
+   build/salsa64/salsa64-framebuffer.pkg`) y subir a `/dev_hdd0/salsa64/`
+   `tests/roms/homebrew/salsa64-gfxtest.z64`. Hoy `embedded` dice
+   `file:goldeneye.z64`: cambiarlo por FTP entre pruebas, o quitarlo y
+   elegir cada ROM en el menú.
+2. `file:salsa64-gfxtest.z64` (o desde el menú): tiene que decir
+   «gfxtest: pantalla bien (28 de 28 puntos)» en el log. Los dos puntos
+   nuevos valen por el orden de bytes de la superficie R5G6B5 en memoria
+   principal (en RPCS3 ya pasa; es la única suposición sin probar en el
+   hardware). Si dice 26 de 28 con «render a textura» o «copia RSX →
+   RDRAM» mal, hay que mirar `rsxkit_target_read` antes de seguir.
+3. `file:oot.z64`, partida ZELDA, bosque Kokiri:
+   - El logo de N64 del arranque, sin líneas de entrelazado (presentación
+     1:1). Si siguen, Opciones → «Recorte del borde: Apagado» para
+     descartar el recorte.
+   - START: el fondo de la pausa debe ser el bosque, nítido (antes ruido).
+     R dos veces → EQUIPMENT con Link en el centro. Cerrar y abrir la pausa
+     dos o tres veces. Un minuto jugando: 100 % de NTSC como antes.
+   - En el log, por pausa: «gfx: framebuffer: 1 copias a la RDRAM (X ms
+     c/u en presentación), la emulación esperó 1 tareas (Y ms c/u, 0
+     tarde)»; con la pausa abierta, «copias espejo» y «texturas desde un
+     destino: N del RSX». Anotar X e Y en docs/perf-log.md. Bajar
+     `/dev_hdd0/salsa64/salsa64.log` antes de abrir otro juego.
+4. Regresiones, un minuto cada uno: `sm64.z64`, `mk64.z64`,
+   `goldeneye.z64`, `banjo.z64`, `conker.z64`: lo esperado es «0 copias a
+   la RDRAM» (o ninguna línea «gfx: framebuffer:») y la misma velocidad.
+   Si algo se ve peor o más lento, `fbfx.cfg` con `0` en
+   `/dev_hdd0/salsa64/` apaga los efectos sin recompilar (`1`: solo render
+   a textura).
+5. Mario Kart: que el autor diga **en qué escena** vio las pantallas
+   gigantes (en Luigi Raceway el juego no lee sus framebuffers).
 
 **Qué hacen los juegos (medido en la Mac con `--trace-fb` y la vigilancia
 de accesos del CPU, build `-DSALSA64_WATCH_MEM`):**
@@ -82,6 +121,9 @@ Pendiente:
       Regresiones: GoldenEye, Banjo, Conker, SM64, Mario Kart un minuto
       cada uno.
 - [ ] Mario Kart: localizar la escena de las pantallas con el autor.
+- [ ] Líneas del logo de Zelda: confirmar en la PS3 que la presentación
+      1:1 las quita (si no, no era el recorte) y que el costo por campo no
+      cambia (mismo dibujo).
 - [ ] Perfect Dark y Conker: copias del z-buffer, sombra, desenfoque;
       color images de 32 y 8 bits.
 - [ ] Reducción con filtro de caja (hoy bilineal) y, si pesa, en un SPE.
