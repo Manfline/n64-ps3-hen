@@ -70,6 +70,11 @@ Verificado:
       los cuatro modos del recompilador (el intérprete del microcódigo y
       el generador también en big-endian), nemu64-test con las 433 fallas
       de la línea base, vitest OK.
+- [x] Con main 5a0a1a3 fusionado (ad14e4b; gfxtest con el cuadro de
+      G_RM_TEX_EDGE de main como N y los del generador como P y Q, 26
+      puntos): test-host 325/325, test-roms 26/26 en las tres variantes,
+      RPCS3 26/26 en F3DEX2 y F3D, compilación PS3 sin advertencias,
+      test-rec en los cuatro modos del recompilador.
 
 Pendiente:
 - [ ] PS3 real (paquete `salsa64-fpgen.pkg` subido a `/dev_hdd0/packages/`,
