@@ -22,6 +22,12 @@ sin tocar el control.
 | Perfect Dark | **F3DPD** (`src/rsp/gfx/f3dpd.c`), reconocido por el CRC-32 del código (c543d0a8, 0x1000 bytes): 6914 tareas, **0 comandos sin implementar**, 0 errores; 1 combiner aproximado (abajo) | Pantalla de identificación (alta resolución, 576×474), logo de Nintendo, cubo de N64 que se vuelve el logo de Rare, vuelo por la ciudad y Joanna en la azotea |
 | Conker's Bad Fur Day | **F3DEXBG** (`src/rsp/gfx/f3dexbg.c`), por su texto: 4468 tareas, **0 comandos sin implementar**, 0 combiners aproximados, 0 errores | Pantalla legal, logo de Nintendo, Conker con la motosierra, logo de Rareware, la taberna y el menú «GAME 1» |
 
+- **PS3 real** (paquete «Salsa64 Rare» con main ce8351d): Perfect Dark se
+  ve y suena bien, al 100 % de NTSC salvo la intro en alta resolución.
+  Conker arranca y suena, pero en el RSX el 3D sale quemado y parpadea (la
+  HLE del SPE es correcta: su volcado dibujado en la Mac sale bien); falla
+  de presentación con su destino CI de 8 bits y 64 de ancho a mitad de
+  cuadro, pasada al trabajo de presentación.
 - Con el control (`--pad`: START y luego A cada 5 s): Perfect Dark llega a
   «Enter Agent Name» (7782 tareas en 150 s) y Conker al comienzo del juego
   (6830 tareas en 260 s), los dos con 0 comandos sin implementar y 0

@@ -63,6 +63,69 @@ Falta:
       deje abrir otro, que el guardado se conserve, y que la salida al XMB
       sea limpia. Aprovechar para medir el menú (cuadros por segundo con
       ondas).
+## 2026-10-10 — Medidor de energía de SM64 con fondo opaco: G_RM_TEX_EDGE
+
+Reporte (el autor, PS3, main de hoy): en Super Mario 64, al nadar, el
+medidor de energía («POWER», rueda azul y mano) salía con un cuadro café
+opaco detrás, del tamaño de su textura. Vidas, estrellas, agua y peces bien.
+
+Diagnóstico (rama `modest-archimedes-e639a4`, en la Mac):
+- Reproducido con `salsa64-run` nativo: `docs/pads/sm64-castillo.pad` lleva
+  a Mario al puente del castillo y `--poke "4200:8033B21E=0x0400"` (opción
+  nueva: escribe la RDRAM al empezar un campo) le baja la energía para que
+  aparezca el medidor. El rasterizador de referencia lo dibujaba igual de
+  opaco: era de la HLE, no de la traducción al RSX.
+- Con la traza por dibujo (`-DSALSA64_GFX_TRACE`): el medidor son dos
+  cuadros de 32×64 RGBA16 y la rueda de 32×32, en 1 ciclo, combiner
+  TEXEL0/TEXEL0 y othermode L 0x0F0A7008 = `G_RM_TEX_EDGE`: CVG_X_ALPHA |
+  ALPHA_CVG_SEL | **FORCE_BL** | AA_EN, blender in·0 + in·1. `blend_state`
+  solo ponía la prueba de alfa de CVG_X_ALPHA sin FORCE_BL (las
+  `G_RM_AA_*_TEX_EDGE`), así que salía sin prueba de alfa ni mezcla.
+- En el RDP la cobertura pasa a ser cvg·α (cvg = α/32 con el píxel
+  cubierto entero) y con AA_EN no se escriben los píxeles de cobertura 0.
+- No venía de 8ec50de (TEXRECT sin costuras): la condición estaba así desde
+  la primera HLE del RDP (87592d1).
+
+Arreglo (`src/rsp/gfx/rdp.c`, `blend_state`; nada en src/rdp): con
+CVG_X_ALPHA, FORCE_BL y AA_EN, prueba de alfa ≥ 32 (el RSX la recibe como
+`alpha_ref` 32). Sin AA_EN la cobertura no depende del alfa y no se prueba;
+sin FORCE_BL sigue el corte en 128 de antes.
+- Prueba unitaria `gfx_cvg_x_alpha` (G_RM_AA_ZB_TEX_EDGE → 128,
+  G_RM_TEX_EDGE → 32, sin AA_EN y G_RM_OPA_SURF → sin prueba) y escena N de
+  gfxtest: cuadro con textura RGBA16 de alfa de 1 bit en G_RM_TEX_EDGE; sin
+  el arreglo el texel con alfa 0 sale café (0xA55221). Ahora 24 de 24
+  puntos en las tres variantes, en el host y en RPCS3 (pantalla del RSX).
+- Sin cambios en otras escenas (comparación píxel a píxel del rasterizador
+  de la Mac, antes y después): SM64 (título, selección de archivo, intro,
+  castillo; solo cambia el recuadro del medidor), los menús de Mario
+  Kart 64 hasta la selección de pista y las intros de GoldenEye, Banjo,
+  Star Fox 64, Perfect Dark, Conker y Zelda OoT.
+- Pruebas: `tools/build.sh test-host` (320, 0 fallidas), `tools/test-roms.sh`
+  (nemu64-test 433 con HLE y 136 con LLE, gfxtest ×3, audiotest, vitest,
+  controles, savetest), `tools/build.sh` sin advertencias del compilador y
+  `tools/test-phase2.sh` en RPCS3 (24 de 24 en F3DEX2 y F3D).
+- Paquete para la PS3: `salsa64-alfa.pkg` (SLSA00085, «Salsa64 alfa»).
+- **PS3 real**: el autor confirmó el medidor de SM64 sin fondo. Log de la
+  corrida sin errores (`build/ps3-logs/sm64-medidor.log`, fuera de git).
+
+- **Mario Kart 64 en la PS3** con este paquete: menús y carrera bien según
+  el autor (la pantalla gigante negra de la pista es el efecto de
+  framebuffer ya pendiente, Fase 4). Vio además polígonos con «una punta que
+  se queda y se estira» en la transición del título a «GAME SELECT». No es
+  de esta rama: ninguna draw de Mario Kart pasa por la rama nueva de
+  `blend_state` (55 026 estados rastreados, campos 300–1900). En la Mac la
+  transición sale limpia: el fundido son 240 triángulos con w de 1940 a
+  2900 (ninguno con w ≤ 0) y «GAME SELECT» son solo rectángulos. Hipótesis:
+  el RSX lee vértices viejos (búfer que la tarea siguiente ya reescribió) en
+  src/rdp.
+
+Pendiente:
+- [ ] Polígonos estirados en la transición título → «GAME SELECT» de
+      Mario Kart 64 en la PS3 (tarea aparte: separar HLE de RSX con el
+      volcado `gfxdump.bin` y `--raster-dump`; revisar la vida de los
+      juegos de búferes de src/rdp/rdp.c).
+- [ ] `embedded` de vuelta a `file:oot.z64` (como lo dejó el trabajo de
+      presentación) cuando el autor termine con Mario Kart.
 
 ## 2026-10-10 — Kokiri «en colores planos»: es el sol cenital, no la HLE (referencia con mupen64plus)
 
@@ -196,12 +259,24 @@ de arranque `amazing-noether-39a548` con `osCicId`, sin integrar):
   alta resolución.
 
 Pendiente:
-- [ ] PS3 real: Perfect Dark y Conker con el paquete «Salsa64 Rare»
-      (SLSA00081, ya en /dev_hdd0/packages/salsa64-rare.gnpdrm.pkg, con
-      main 755cbaa); que el autor confirme lo que se ve (y la boca de Conker
-      en la escena del logo de Rareware: oscura por dentro, parece
-      correcto), y un minuto de SM64 o Mario Kart por si hay regresión. Al
-      terminar, `embedded` como estaba.
+- [x] **PS3 real** (paquete «Salsa64 Rare», SLSA00081, be8f573 con main
+      ce8351d): **Perfect Dark** se ve y suena bien (el autor: «se ve y suena
+      espectacular»); 59,9 campos/s (100 % de NTSC) salvo la intro en alta
+      resolución (84–94 %), HLE en el SPE 1,4–8 ms por tarea, 0 tareas
+      cortadas, naudio con MP3 sin errores. **Mario Kart 64** (no
+      regresión): 65 s al 100 % de NTSC, 0 tareas cortadas. `embedded`
+      quedó como estaba (`file:oot.z64`).
+- [ ] **Conker en la PS3**: arranca y suena, pero el 3D sale quemado y
+      parpadea y no se ve el logo de N64; las capturas del RSX de las
+      escenas 3D (campos 3000, 3600, 4200) salen negras y el logo 2D de
+      Nintendo sí. El volcado de la HLE hecho en el SPE (`gfxdump` del campo
+      3600) dibujado en la Mac con `--raster-dump` sale bien e igual al
+      host: la HLE es correcta y la falla es de la traducción o la
+      presentación del RSX (`src/rdp/rdp.c`, lib/rsxkit). Lo propio de
+      Conker: a mitad de cada cuadro dibuja en un destino CI de 8 bits y 64
+      de ancho (0xDE080) y vuelve al principal (0x3D6300, 292×213 RGBA16, z
+      en 0xE9D80). Pasado al trabajo de presentación (mismo tipo que la pausa
+      de Zelda).
 - [ ] Perfect Dark aproxima `lerp(ENV, TEXEL0, SHADE_ALPHA)·SHADE` (el de
       GoldenEye): término S·Sa en el RSX (Fase 4).
 - [ ] Efectos de framebuffer de los dos (cámara espía y monitores de PD,

@@ -69,6 +69,7 @@ Datos tomados de terceros (no código):
 | Ronda de xxHash32 (acumulador + entrada·PRIME2, rotar 13, ·PRIME1), sus constantes PRIME1–3 y la mezcla final (avalanche) | `src/rsp/gfx/texcache.c` (hash de las texturas de la caché) | xxHash de Yann Collet, especificación `doc/xxhash_spec.md` (github.com/Cyan4973/xxHash) | BSD-2-Clause. Solo la ronda y las constantes; la disposición en ocho carriles de 16 bytes y el plegado a 64 bits son propios (no es xxHash compatible) |
 | Triángulos crudos del RDP (0xC8–0xCF): palabras de aristas (YL/YM/YH en s11.2, XL/XH/XM y pendientes en s11.16/s13.16), bloques de sombreado, textura (S, T, W en s10.21) y z, y que los valores iniciales están en (XH, floor(YH)) y la arista L empieza en YM; que F3D los pasa por G_RDPHALF_1/2/CONT se vio en las listas de GoldenEye | `src/rsp/gfx/rdp.c`, `dl.c`, `f3d.c` | n64brew.dev (Reality Display Processor/Commands, consultada el 2026-10-10) | documentación (CC BY-SA, reescrito) |
 | RDP: campos de othermode, blender, G_SETCOMBINE y sus entradas, TMEM (LOADBLOCK con dxt, LOADTILE, LOADTLUT, RGBA32 partido, intercambio en filas impares), formatos de textura, TEXRECT/FILLRECT en COPY/FILL, intercambio de TEXEL0/TEXEL1 en el segundo ciclo | `src/rsp/gfx/rdp.c`, `tmem.c`, `combine.c` | n64brew.dev (Reality Display Processor/Commands); parallel-rdp (MIT) y angrylion-rdp-plus (licencia MAME, no comercial: solo lectura) como confirmación | documentación (CC BY-SA, reescrito); MIT; solo consulta |
+| Cobertura con CVG_X_ALPHA: cvg·α redondeada a la cobertura de 3 bits (cvg = α/32 con el píxel cubierto entero) y, con AA_EN, el RDP no escribe los píxeles de cobertura 0 aunque haya FORCE_BL (G_RM_TEX_EDGE) | `src/rsp/gfx/rdp.c` (`blend_state`) | angrylion-rdp-plus (de memoria de su `combiner_1cycle`/`blender_1cycle`; licencia MAME, solo consulta); n64brew.dev (Set Other Modes) | solo consulta, sin copiar código; documentación |
 
 Aviso de PSL1GHT: Copyright (c) 2011 PSL1GHT Development Team, licencia MIT
 (compatible con GPLv2 o posterior).
@@ -136,3 +137,10 @@ y revisando los repositorios.
 | CPUTest de krom (github.com/PeterLemon/N64) | `7085543e` (2026-02-01) | Unlicense (desde 2025-09-27) | **Sí.** Cada ROM y `LIB/N64_BOOTCODE.BIN` contienen el IPL3 CIC-6102 de Nintendo; `BOOTCODE/BOOTCODE.asm` es su desensamblado | **Secundaria, pendiente: solo ensamblada desde fuente** con un bootcode libre (ceros, ya que arrancamos por HLE; el camino "plano" del HLE la arrancaría) en lugar de `N64_BOOTCODE.BIN`. Un `git clone` bajaría esos binarios: hay que traer solo los `.asm` de texto por la API. Nunca descargar ese archivo, `BOOTCODE.asm` ni los `.N64` precompilados. Reporta PASS/FAIL en el framebuffer (falta el VI para leerlo). |
 | Dillonb/n64-tests | — | Ninguna | Sí | Descartada: sin licencia no es redistribuible. |
 | Pruebas de libdragon | — | Unlicense | No | Descartada: prueban la biblioteca, no el CPU. |
+
+## Recursos gráficos
+
+| Recurso | Origen | Licencia |
+|---|---|---|
+| `assets/ps3/ICON0.PNG` (320×176): logo de Salsa64 (chile low-poly de 8 segmentos y «SALSA64») | Aportado por el autor el 2026-10-10; escalado con `sips` | Del proyecto. Sin marcas de Nintendo ni de Sony |
+| `assets/ps3/PIC1.PNG` (1920×1080): fondo del XMB (chile brillante, cintas de luz, sin texto) | Aportado por el autor el 2026-10-10; escalado y recortado a 16:9 con `sips` | Del proyecto. Sin marcas de Nintendo ni de Sony |

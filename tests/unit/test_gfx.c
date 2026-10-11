@@ -594,6 +594,40 @@ static void gfx_draw_batching(void)
 	}
 }
 
+/* Prueba de alfa que sale de la cobertura (CVG_X_ALPHA). Sin FORCE_BL
+ * (G_RM_AA_ZB_TEX_EDGE) se recorta en la mitad; con FORCE_BL y AA_EN
+ * (G_RM_TEX_EDGE: el medidor de energía de SM64, que salía con su fondo
+ * transparente opaco) el RDP no escribe lo que tiene alfa < 32; sin AA_EN
+ * la cobertura no depende del alfa. */
+static void gfx_cvg_x_alpha(void)
+{
+	static const struct { uint32_t ol; uint8_t atest, aref; } c[] = {
+		{ 0x00553078, GFX_ATEST_GEQUAL, 128 },  /* G_RM_AA_ZB_TEX_EDGE */
+		{ 0x0F0A7008, GFX_ATEST_GEQUAL, 32 },   /* G_RM_TEX_EDGE */
+		{ 0x0F0A7000, GFX_ATEST_NONE, 0 },      /* el mismo sin AA_EN */
+		{ 0x0F0A4000, GFX_ATEST_NONE, 0 },      /* G_RM_OPA_SURF */
+	};
+	const struct vtx v[3] = { { 0, 0, 0, 0, 0, { 0 } }, { 1, 0, 0, 0, 0, { 0 } }, { 0, 1, 0, 0, 0, { 0 } } };
+	for (unsigned i = 0; i < sizeof c / sizeof c[0]; i++) {
+		start();
+		viewport_320x240();
+		load_mtx(ident, true);
+		load_mtx(ident, false);
+		set_combine(CC_A_ZERO, CC_ZERO, CC_C_ZERO, CC_SHADE, CC_ZERO, CC_ZERO, CC_ZERO, CC_SHADE);
+		dl(0xEF000000 | G_CYC_1CYCLE << 20, c[i].ol);  /* G_RDPSETOTHERMODE */
+		dl(0x01000000 | 3 << 12 | 3 << 1, put_vertices(v, 3));
+		dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);
+		run();
+		const struct gfx_draw *d = draw_n(0);
+		CHECK(d != NULL);
+		if (!d)
+			continue;
+		CHECK_EQ(d->atest, c[i].atest);
+		CHECK_EQ(d->aref, c[i].aref);
+		CHECK_EQ(d->blend, GFX_BLEND_OFF);
+	}
+}
+
 /* Display lists anidadas, segmentos, CULLDL y BRANCH_Z. */
 static void gfx_dl_flow(void)
 {
@@ -1006,6 +1040,7 @@ void t_suite_gfx(void)
 	RUN(gfx_fill_and_zclear);
 	RUN(gfx_fill_1cycle_edge);
 	RUN(gfx_draw_batching);
+	RUN(gfx_cvg_x_alpha);
 	RUN(gfx_dl_flow);
 	RUN(gfx_load_ucode_skips_foreign);
 	RUN(gfx_texcache_across_tasks);
