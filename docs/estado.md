@@ -33,6 +33,17 @@ Diagnóstico (rama `frosty-golick-d1d71a`, en la Mac):
   w ≤ 0 (la pared lejana y el piso cruzan el plano de la cámara); GLide64
   los recorta. El RSX recorta en hardware, así que en la PS3 no deberían
   faltar; comprobarlo cuando la consola esté libre.
+- **Confirmación con el microcódigo real** (pedida en main:
+  GLide64 también es HLE): con main ce8351d fusionado, `salsa64-run
+  --lle=all` ejecuta el F3DZEX2 real (739 M instrucciones hasta el campo
+  3712) y sus triángulos crudos, con los colores de vértice que calcula el
+  RSP de verdad, dan los mismos parches en el campo 3700: piso (55,55,2),
+  tronco (29,27,15), pared (37,23,14), túnica (53,65,28), frente a la HLE
+  (55,54,1), (29,27,15), (37,23,14), (52,65,28). Las luces, normales y
+  ambiente de la HLE coinciden con el microcódigo. Y en la imagen del LLE
+  la pared lejana sí aparece (el microcódigo recorta contra el frustum
+  antes de emitir los triángulos): las zonas crema de la HLE son solo el
+  w ≤ 0 del rasterizador de la Mac.
 - No se cambió nada de la HLE. Si en la PS3 la escena se ve distinta a la
   Mac (verde liso sin la corteza tenue), el problema sería de src/rdp o
   del RSX, no de la HLE: pendiente de confirmar con el autor.
