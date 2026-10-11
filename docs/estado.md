@@ -1,5 +1,69 @@
 # Estado
 
+## 2026-10-10 — Medidor de energía de SM64 con fondo opaco: G_RM_TEX_EDGE
+
+Reporte (el autor, PS3, main de hoy): en Super Mario 64, al nadar, el
+medidor de energía («POWER», rueda azul y mano) salía con un cuadro café
+opaco detrás, del tamaño de su textura. Vidas, estrellas, agua y peces bien.
+
+Diagnóstico (rama `modest-archimedes-e639a4`, en la Mac):
+- Reproducido con `salsa64-run` nativo: `docs/pads/sm64-castillo.pad` lleva
+  a Mario al puente del castillo y `--poke "4200:8033B21E=0x0400"` (opción
+  nueva: escribe la RDRAM al empezar un campo) le baja la energía para que
+  aparezca el medidor. El rasterizador de referencia lo dibujaba igual de
+  opaco: era de la HLE, no de la traducción al RSX.
+- Con la traza por dibujo (`-DSALSA64_GFX_TRACE`): el medidor son dos
+  cuadros de 32×64 RGBA16 y la rueda de 32×32, en 1 ciclo, combiner
+  TEXEL0/TEXEL0 y othermode L 0x0F0A7008 = `G_RM_TEX_EDGE`: CVG_X_ALPHA |
+  ALPHA_CVG_SEL | **FORCE_BL** | AA_EN, blender in·0 + in·1. `blend_state`
+  solo ponía la prueba de alfa de CVG_X_ALPHA sin FORCE_BL (las
+  `G_RM_AA_*_TEX_EDGE`), así que salía sin prueba de alfa ni mezcla.
+- En el RDP la cobertura pasa a ser cvg·α (cvg = α/32 con el píxel
+  cubierto entero) y con AA_EN no se escriben los píxeles de cobertura 0.
+- No venía de 8ec50de (TEXRECT sin costuras): la condición estaba así desde
+  la primera HLE del RDP (87592d1).
+
+Arreglo (`src/rsp/gfx/rdp.c`, `blend_state`; nada en src/rdp): con
+CVG_X_ALPHA, FORCE_BL y AA_EN, prueba de alfa ≥ 32 (el RSX la recibe como
+`alpha_ref` 32). Sin AA_EN la cobertura no depende del alfa y no se prueba;
+sin FORCE_BL sigue el corte en 128 de antes.
+- Prueba unitaria `gfx_cvg_x_alpha` (G_RM_AA_ZB_TEX_EDGE → 128,
+  G_RM_TEX_EDGE → 32, sin AA_EN y G_RM_OPA_SURF → sin prueba) y escena N de
+  gfxtest: cuadro con textura RGBA16 de alfa de 1 bit en G_RM_TEX_EDGE; sin
+  el arreglo el texel con alfa 0 sale café (0xA55221). Ahora 24 de 24
+  puntos en las tres variantes, en el host y en RPCS3 (pantalla del RSX).
+- Sin cambios en otras escenas (comparación píxel a píxel del rasterizador
+  de la Mac, antes y después): SM64 (título, selección de archivo, intro,
+  castillo; solo cambia el recuadro del medidor), los menús de Mario
+  Kart 64 hasta la selección de pista y las intros de GoldenEye, Banjo,
+  Star Fox 64, Perfect Dark, Conker y Zelda OoT.
+- Pruebas: `tools/build.sh test-host` (320, 0 fallidas), `tools/test-roms.sh`
+  (nemu64-test 433 con HLE y 136 con LLE, gfxtest ×3, audiotest, vitest,
+  controles, savetest), `tools/build.sh` sin advertencias del compilador y
+  `tools/test-phase2.sh` en RPCS3 (24 de 24 en F3DEX2 y F3D).
+- Paquete para la PS3: `salsa64-alfa.pkg` (SLSA00085, «Salsa64 alfa»).
+- **PS3 real**: el autor confirmó el medidor de SM64 sin fondo. Log de la
+  corrida sin errores (`build/ps3-logs/sm64-medidor.log`, fuera de git).
+
+- **Mario Kart 64 en la PS3** con este paquete: menús y carrera bien según
+  el autor (la pantalla gigante negra de la pista es el efecto de
+  framebuffer ya pendiente, Fase 4). Vio además polígonos con «una punta que
+  se queda y se estira» en la transición del título a «GAME SELECT». No es
+  de esta rama: ninguna draw de Mario Kart pasa por la rama nueva de
+  `blend_state` (55 026 estados rastreados, campos 300–1900). En la Mac la
+  transición sale limpia: el fundido son 240 triángulos con w de 1940 a
+  2900 (ninguno con w ≤ 0) y «GAME SELECT» son solo rectángulos. Hipótesis:
+  el RSX lee vértices viejos (búfer que la tarea siguiente ya reescribió) en
+  src/rdp.
+
+Pendiente:
+- [ ] Polígonos estirados en la transición título → «GAME SELECT» de
+      Mario Kart 64 en la PS3 (tarea aparte: separar HLE de RSX con el
+      volcado `gfxdump.bin` y `--raster-dump`; revisar la vida de los
+      juegos de búferes de src/rdp/rdp.c).
+- [ ] `embedded` de vuelta a `file:oot.z64` (como lo dejó el trabajo de
+      presentación) cuando el autor termine con Mario Kart.
+
 ## 2026-10-10 — Kokiri «en colores planos»: es el sol cenital, no la HLE (referencia con mupen64plus)
 
 Reporte (PS3 y rasterizador de la Mac): en el bosque
