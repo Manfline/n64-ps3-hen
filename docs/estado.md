@@ -108,6 +108,13 @@ generador el autor vio GoldenEye normal en la PS3. Después, el menú estilo XMB
   GoldenEye el autor vio líneas azules en las uniones de texturas. Falta saber
   si las causa el recorte o ya estaban en main antes de integrarlo.
 
+**Noche del 2026-10-10 → 11:** corren de noche, sin la PS3, los trabajos del JIT
+(`upbeat-driscoll-1dd271`, SLSA00088), de efectos de framebuffer
+(`hopeful-dirac-f4e91b`, SLSA00089; primero las líneas del logo de Zelda)
+y del recorte (SLSA00090). El 11 es día de pruebas en la PS3: cada uno deja en
+el docs/estado.md de su rama qué ver, con qué `embedded` y qué esperar. Orden
+sugerido: recorte → líneas del logo → framebuffer → JIT.
+
 **Problemas abiertos:**
 - Líneas como de entrelazado en el logo de N64 de Zelda en la PS3; en el
   rasterizador de la Mac el cuadro sale limpio. Sospecha: el recorte del
