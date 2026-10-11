@@ -591,3 +591,51 @@ después de cada interrupción, y corre lo que el recompilador no toma
 (código fuera de KSEG0, un salto en el delay slot de otro). Pendiente
 medirlo por causa si llega a pesar.
 
+## RSP a bajo nivel (Fase 6, prototipo; 2026-10-10)
+
+Intérprete del microcódigo real (`src/rsp/lle`, docs/rsp-lle.md).
+
+**Host** (Mac, clang nativo sin sanitizadores, `salsa64-run -c 1500000000`
+= 16 s de consola de Zelda OoT, respaldo del usuario fuera del repo):
+
+| Modo | Tiempo real | Instrucciones del RSP | Por instrucción |
+|---|---|---|---|
+| HLE (gráficos y audio) | 0,95 s | — | — |
+| `--lle=all` (todo el microcódigo real) | 3,58 s | 211 M (1379 tareas, 153 000 por tarea, la más larga 542 000) | 12,5 ns (~40 ciclos del Mac) |
+
+- nemu64-test: 2,0 s sin LLE, 3,1 s con `--lle` (5,9 M instrucciones del
+  RSP en 240 000 arranques: la suite arranca el RSP por cada prueba).
+- Super Mario 64, 9,6 s de consola: 161 M instrucciones (858 tareas).
+
+**PS3 real** (2026-10-10, Slim CECH-3011A, HFW 4.91 + HEN; paquete «Salsa64
+LLE» SLSA00082 con main bd9fcd3 fusionado; Zelda OoT, respaldo del usuario,
+`lle` = `all`: todo el microcódigo real en un SPE, el RDP en el PPE).
+Ventanas de 5 s del log («rsp lle:»):
+
+| Tramo | Tareas (trabajos) | Instr. por tarea | SPE por tarea | ns por instrucción | MIPS del RSP emulado | Campos/s |
+|---|---|---|---|---|---|---|
+| Logo y título (F3DZEX2 + nead) | 251 (251) | 39 000 | 8,8 ms | 226 | 4,4 | 55 |
+| Título, más geometría | 207 (209) | 59 000 | 15,4 ms | 260 | 3,8 | 24 |
+| Intro, campo de Hyrule | 153 (153) | 96 000 | 27,0 ms | 282 | 3,6 | 30 |
+| Intro, escenas grandes | 97 (97) | 170 000 | 48,2 ms | 283 | 3,5 | 38 |
+| Intro, fondos S2DEX (DMA de muchas filas) | 53 (224) | 814 000 | 91 ms | 112 | 9,0 | — |
+
+- El RSP real hace ~62,5 M instrucciones/s: el intérprete en C en el SPE
+  va **14–18 veces más lento** (3,5–4,4 MIPS) en el microcódigo gráfico y
+  de audio, y 7 veces más lento donde casi todo es DMA. Mucho peor que la
+  estimación previa (0,3–1×): el SPU no tiene unidad escalar ni predicción
+  de saltos, el `switch` de despacho es un salto indirecto por instrucción
+  y cada acceso a COP0 que vive en el bus es un DMA atómico de ~1 µs.
+- Tráfico de COP0 por tarea (Zelda): SP_STATUS 180–430 lecturas, semáforo
+  2–190 tomas y sueltas (F3DEX2 lo usa como cerrojo del DMA), DMA 60–150
+  filas de entrada y 30–70 de salida, DP 25–60 lecturas, 0 reintentos
+  atómicos. Solo los accesos atómicos son 1,5–2,5 ms de los 8,8 ms por
+  tarea del primer tramo.
+- Con el mismo paquete y sin `lle` (HLE por omisión): Zelda 106 s al
+  100 % de NTSC, audio 0 faltas, «salida normal»; GoldenEye intro y
+  menús al 99–100 % y **en el nivel (Dam) 36–50 campos/s** (60–84 % de
+  NTSC: HLE gráfica en el SPE 8–10 ms por tarea con 3 000–3 700
+  triángulos, CPU a ~40 MIPS con 24–46 % en bucles de espera; el audio se
+  estira). Es la primera medición del nivel en la PS3 (las anteriores eran
+  de la intro); no hay A/B con el paquete de main.
+

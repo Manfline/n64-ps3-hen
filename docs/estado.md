@@ -20,6 +20,68 @@ Se lanza cuando cierre el trabajo de texturas de Kokiri. Los tres casos están e
 - [ ] **Recorte del overscan:** GoldenEye deja franjas azules a los costados
       (su scissor 3D cubre las columnas 1–318 sobre un relleno azul).
 
+## 2026-10-10 — Fase 6: prototipo de LLE del RSP (microcódigo real) en host y SPE
+
+Hecho (rama `nervous-lewin-ae6137`, desde main 3270538; sin
+integrar; diseño y mediciones en docs/rsp-lle.md):
+- **Intérprete portable del RSP** (`src/rsp/lle/`: escalar, COP0, unidad
+  vectorial completa con el acumulador de 48 bits y VCO/VCC/VCE, recíprocos
+  por tabla, todas las cargas/almacenamientos vectoriales). Semántica de
+  los casos raros de ares (ISC, registrado en THIRD_PARTY.md). Mismo código
+  en host, PPE y SPE, sin `#ifdef` de orden de bytes.
+- **nemu64-test con `--lle`: fallan 136 de 4637 (97 %) frente a 433 (90 %)
+  sin LLE. Las 214 pruebas «RSP …» pasan todas**; quedan 4 «RDP STATUS»
+  (el RDP no escribe el framebuffer en la RDRAM). Sin regresiones; 5
+  mejoras en el camino HLE (pares de bits de SP_STATUS, DPC_START/END).
+  `tools/test-roms.sh` corre nemu64 dos veces (líneas base
+  `nemu64-test.fallas`, 289 nombres, y `nemu64-test-lle.fallas`, 71).
+- **Enganche** (`rsp.c`: backend `salsa64_lle_backend`, modos
+  `off/auto/all`; `sp.c`: sincronía, SP_STATUS atómico, DPC con semántica
+  real) y **RDP a bajo nivel** (`src/rsp/gfx/dpc.c`: los comandos crudos
+  de DPC_START..END, también por xbus, van a `gfx_rdp_command`/
+  `gfx_rdp_triangle`, el camino de triángulos crudos existente).
+- **Host**: `salsa64-run --lle[=auto|all]`, `--lle-speed`,
+  `--lle-check-audio` (cada tarea de audio también en la HLE sobre una
+  copia de la RDRAM, comparando lo escrito). SM64: el Fast3D real corre y
+  el título con la cara de Mario sale igual que en HLE. Zelda: el nead
+  real suena (211 M instrucciones en 16 s); las primeras 30 tareas de
+  audio idénticas a la HLE byte a byte, y desde el primer sonido difiere
+  solo FILTER, donde mupen64plus-rsp-hle promedia las tablas (`>> 1`) y el
+  microcódigo real no → **la HLE de FILTER probablemente va a la mitad**;
+  confirmar de oído.
+- **SPE** (`src/spu/rsp/`, `src/platform/ps3/rsp_spu.c`): trabajo de
+  spukit con DMEM/IMEM en el local store, SP_STATUS y semáforo por DMA
+  atómico (getllar/putllc) contra los `__atomic_*` del PPE, DMA del SP
+  entre la RDRAM y el local store, registros del DP en el SPE con captura
+  de los comandos xbus para que el PPE los reproduzca (`salsa64_dp_submit`),
+  continuaciones cada 200 000 instrucciones. Frontend: archivo
+  `SALSA64_DATA_DIR/lle` con `auto` o `all`; líneas «rsp lle:» en el log.
+- 12 pruebas unitarias nuevas (301 en total con main).
+- Medido en el host: 12,5 ns por instrucción del RSP (docs/perf-log.md).
+- **PS3 real** (turno del autor): sanidad con HLE por omisión bien (Zelda
+  106 s al 100 % con audio; GoldenEye intro al 100 %, nivel a 36–50
+  campos/s con el audio estirado: primera medición del nivel, no es de
+  esta rama). Con `lle` = `all`, **Zelda se ve y suena con el microcódigo
+  real en el SPE**: 226–283 ns por instrucción (3,5–4,4 MIPS; el RSP real
+  ~62), 24–55 campos/s. Tres arreglos sobre la marcha (SP_PC pisado al
+  recoger el trabajo, estado del DP entre trabajos, DMA de muchas filas de
+  S2DEX en una transferencia) e instrumentación (contadores de COP0,
+  latido del SPE). Queda una divergencia: tras los fondos S2DEX de la
+  intro (~36 s) el microcódigo entra en un bucle sin fin que el host no
+  reproduce (detalle y pista en docs/rsp-lle.md).
+
+Pendiente:
+- [ ] Divergencia del SPE tras S2DEX: modelo del protocolo de trabajos del
+      SPE en el host (`lle_spu_run` con memcpy y cortes por `max_instr`)
+      para reproducirla con trazas; sin turnos de consola.
+- [ ] Confirmar de oído FILTER (HLE a la mitad vs microcódigo real).
+- [ ] Comparar la imagen de Zelda en LLE con la HLE (host, `--gfx-frame`).
+- [ ] Recompilador RSP → SPU (plan en docs/rsp-lle.md): es lo único que
+      lleva de 0,06× a velocidad real; mover el consumidor del RDP al SPE.
+- [ ] Homebrew de libdragon (rspq/rdpq) como prueba sin HLE.
+- [ ] Limitaciones del SPE: escrituras del CPU en DMEM/IMEM durante una
+      tarea, limpiar la interrupción del SP desde el microcódigo.
+
 ## 2026-10-10 — Zelda OoT se colgaba al elegir la ranura: G_LOAD_UCODE (S2DEX) y el RDP que nunca terminaba
 
 Síntoma (PS3 real, main f698afe): al elegir una partida, pantalla negra con
