@@ -518,8 +518,13 @@ void alist_adpcm(struct aud_state *st, bool init, bool loop, bool two_bit_per_sa
  * FILTER (nead): FIR de 8 coeficientes sobre bloques de 8 muestras. En
  * índices de la N64, con X = las 8 muestras guardadas seguidas del bloque:
  *   out[n] = Σ_{t=0..7} L[t] · X[8 + n − t],  redondeado (+0x4000) >> 15
- * Los coeficientes son el promedio de dos tablas del juego, que quedan
- * escritas con ese promedio (como hace el microcódigo). */
+ * Coeficientes: la tabla de la nota (lut_address[0]) se acerca a la mitad
+ * de camino a la de la llamada anterior, guardada detrás del estado
+ * (lut_address[1]): L = (anterior + nota + 1) >> 1, que queda escrita ahí;
+ * la de la nota no se toca. Así lo hace el microcódigo de Zelda OoT
+ * ejecutado en el LLE (rama del LLE del RSP, --lle-check-audio): mupen64plus-
+ * rsp-hle escribe el promedio redondeado hacia abajo en las dos tablas, y
+ * con la anterior en cero el filtro sonaba a la mitad (−6 dB). */
 void alist_filter(struct aud_state *st, uint16_t dmem, uint16_t count, uint32_t address,
 		  const uint32_t *lut_address)
 {
@@ -531,8 +536,7 @@ void alist_filter(struct aud_state *st, uint16_t dmem, uint16_t count, uint32_t 
 	aud_load_s16(st, lut6, lut_address[0], 8);
 	aud_load_s16(st, lut5, lut_address[1], 8);
 	for (unsigned i = 0; i < 8; i++)
-		lut5[i] = lut6[i] = (int16_t)((lut5[i] + lut6[i]) >> 1);
-	aud_store_s16(st, lut_address[0], lut6, 8);
+		lut5[i] = (int16_t)((lut5[i] + lut6[i] + 1) >> 1);
 	aud_store_s16(st, lut_address[1], lut5, 8);
 
 	aud_load_s16(st, x, address, 8);
@@ -542,7 +546,7 @@ void alist_filter(struct aud_state *st, uint16_t dmem, uint16_t count, uint32_t 
 		for (unsigned n = 0; n < 8 && blk + 2 * n < count; n++) {
 			int32_t v = 0;
 			for (unsigned t = 0; t < 8; t++)
-				v += lut6[t] * x[8 + n - t];
+				v += lut5[t] * x[8 + n - t];
 			aud_st16(io + 2 * n, (int16_t)((v + 0x4000) >> 15));
 		}
 		memcpy(x, x + 8, 8 * sizeof x[0]);
