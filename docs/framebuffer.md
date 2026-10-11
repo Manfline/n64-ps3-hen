@@ -1,9 +1,10 @@
 # Efectos de framebuffer
 
-Estado al 2026-10-10. Código: `src/rdp/targets.c` (política, portable, con
-pruebas), `src/rdp/rdp.c` (PS3), `src/host/raster.c` (el mismo modelo en la
-Mac), `lib/rsxkit/src/target.c` (lo genérico del RSX), `src/rsp/gfx/tmem.c`
-(procedencia de las texturas).
+Estado al 2026-10-11. Código: `src/rdp/targets.c` (política, portable, con
+pruebas), `src/rdp/rdp.c` (PS3), `src/host/raster.c` (el mismo modelo en el
+host), `lib/rsxkit/src/target.c` (lo genérico del RSX), `src/rsp/gfx/tmem.c`
+(procedencia de las texturas). Confirmado en la PS3 real: fondo y Link de
+la pausa de Zelda OoT, la cámara del túnel de Mario Kart 64, gfxtest 35/35.
 
 ## Problema
 
@@ -31,10 +32,19 @@ campo 16107), en una sola tarea:
    antialiasing/divot sobre `fbufSave` guiado por la cobertura) y escribe el
    resultado en `fbufSave`.
 5. Cada cuadro de la pausa restaura el fondo desde `fbufSave` (40 franjas)
-   y dibuja el menú encima. Los iconos son color images de 64 de ancho
-   sobre el framebuffer (`3da800/64`), que se dibujan y se leen como
-   textura en la misma tarea (hacia otras de 64: `289600`, `36ce60`), y
-   alguna que el CPU escribe después (14 336 escrituras en `289600`).
+   y dibuja el menú encima. Link se dibuja en **cada tarea** de la pausa
+   en una color image de 64 × 112 en los primeros bytes del framebuffer
+   que toca (`3da800/64` o `3b5000/64`, con su z-buffer 14 KB después:
+   `3de000/64`, `3b8800/64`), aunque nadie lo lea; al abrir la pausa y al
+   cambiar de equipo el RDP lo copia en 4 rectángulos a un búfer del heap
+   (`fbufSave` de Link, `279f00/64` o `289600/64` según la sala), deja su
+   cobertura con VISCVG y la copia a otro búfer **de 8 bits de intensidad**
+   (`cvgSave`, `35d760/64`), y el CPU filtra ese búfer leyendo los dos. La
+   pantalla de equipo lee a Link desde el búfer del heap, como textura,
+   durante todo el tiempo que esté abierta. Dos color images imposibles
+   (anchos 1495 y 3770) aparecen en las tareas de apertura: un comando mal
+   interpretado por la HLE; se ignoran. La cobertura del fondo también es
+   de 8 bits y vive en la dirección del framebuffer (`3da800/320 siz 1`).
 
 **Mario Kart 64**: la «pantalla gigante» es la cámara sobre la entrada
 del túnel de Luigi Raceway. El volcado de la PS3 frente al túnel tiene una
@@ -86,17 +96,19 @@ la barrera y convierte a RGBA5551 escribiendo en la RDRAM
 destino es «del CPU» (`cpu_owned`) hasta que el RDP lo vuelva a dibujar.
 Qué copias espera la emulación (`readbacks_wanted`, hilo de emulación,
 recorriendo los registros de la tarea): las imágenes auxiliares de 16
-bits (las que no son un framebuffer reciente del VI, de cualquier ancho)
-cuando **acaban de aparecer** (no se pidieron en la tarea anterior: el fondo
-de la pausa de Zelda, una vez por pausa), y las **chicas (≤ 64 KB) que
-ningún dibujo de la tarea lee como textura**: su único lector posible es el
-CPU (Zelda redibuja a Link en `3da800/64`, entre los iconos de cada cuadro,
-y el CPU lo copia a otro búfer para la pantalla de equipo; sin esperar, el
-CPU copiaba basura). Las demás van sin esperar: las chicas que lee el RDP
-(iconos), y las grandes repetidas (la intro de Conker dibuja cada tarea una
-color image de 292 que no se presenta y el RDP no lee: 150 copias
-esperadas en 5 s, 16–18 ms cada una, frenaban), que se copian en un búfer
-grande y el CPU recibe el cuadro anterior.
+bits o de 8 de intensidad (las que no son un framebuffer reciente del VI,
+de cualquier ancho razonable) cuando **acaban de aparecer** (no se pidieron
+en la tarea anterior: el fondo de la pausa de Zelda y los búferes de Link,
+una vez por pausa o por cambio de equipo), y las **chicas (≤ 64 KB) que
+ningún dibujo de la tarea lee como textura**, pero solo las dos primeras
+tareas seguidas: su único lector posible es el CPU, y una imagen que se
+redibuja en cada tarea (Link en la pausa) la recibe con una tarea de
+retraso sin que se note, mientras que esperarla costaba ~22 ms por tarea.
+Las demás van sin esperar: las chicas que lee el RDP (iconos), y las
+grandes repetidas (la intro de Conker dibuja cada tarea una color image de
+292 que no se presenta y el RDP no lee: 150 copias esperadas en 5 s, 16–18
+ms cada una, frenaban), que se copian en un búfer grande y el CPU recibe
+el cuadro anterior.
 
 **Espejo del framebuffer presentado.** Cada campo, el framebuffer que
 muestra el VI se reduce en el RSX a un búfer y, un campo después, el PPE
@@ -120,6 +132,20 @@ se dibuja en `289600/64` al abrir la pausa y se lee 395 tareas después), la
 RDRAM tiene lo que el RDP dejó. Las copias a la RDRAM escriben solo las
 filas dibujadas: el alto de un destino es una conjetura y pasarse
 pisaría datos del juego.
+
+**Lo que rompía a Link en la PS3** (y que el host no reproducía porque
+copiaba todos los destinos de cada tarea sin llamar a
+`rdp_targets_present`; ya lo llama): `rsxkit` admitía 8 superficies y la
+pausa tiene 9 color images vivas más el scratch, así que la novena no se
+creaba y lo dibujado en ella se perdía (el log cuenta «destinos sin
+superficie» y «copias perdidas»; ahora 16); la copia pedida se buscaba
+solo por dirección y `3da800` es el framebuffer y el búfer de Link a la
+vez; con más de dos copias esperadas por tarea la tercera pisaba el búfer
+de la primera; las color images imposibles reciclaban ranuras; la
+cobertura de 8 bits no se copiaba; y con dos profundidades los tres
+z-buffers de la pausa se destruían y creaban a cada tarea (ahora cuatro).
+Copias de 8 bits: solo de intensidad (`G_IM_FMT_I`), con el rojo del
+RGB565 como valor; una CI8 no se reconstruye desde el RSX.
 
 **Cebado.** La N64 dibuja siempre encima de lo que hay en la RDRAM. Una
 superficie nueva, o sin dibujar desde hace más de `RDP_TARGETS_FRESH`
@@ -146,12 +172,15 @@ la PS3 en `docs/perf-log.md`; memoria en `docs/memory-budget.md`.
 
 ## Pendiente
 
-- Mario Kart: localizar la escena de las pantallas.
+- Polígono transitorio (~1 s) al abrir la pausa de Zelda en la PS3:
+  confirmar que las cuatro profundidades lo quitan.
 - Conker, intro: qué es la color image de 292 que dibuja cada tarea sin
   presentarla ni leerla (el host no la reproduce ni con START y A; en la
   PS3 sí): un `gfxdump` en esa escena lo diría.
 - Perfect Dark y Conker: copias del z-buffer (rectángulos que leen la z
   image como color image), sombra y desenfoque de Conker; color images de
-  32 bits y de 8 bits (CI8 de Conker) no se copian ni se ceban.
+  32 bits y CI8 (Conker) no se copian ni se ceban.
 - Reducir 3× → 1× con filtro de caja (hoy bilineal del RSX: promedia 2 × 2
   de cada 3 × 3) y, si hiciera falta por costo, la conversión en un SPE.
+- La HLE emite dos color images imposibles al abrir la pausa de Zelda
+  (anchos 1495 y 3770): de qué comando salen.
