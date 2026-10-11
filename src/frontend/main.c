@@ -546,8 +546,8 @@ static bool fps_setting_load(void);
 static void state_command(int what)
 {
 	uint64_t now = sysGetSystemTime();
-	if (state_req)
-		return;  /* ya hay una en curso */
+	if (state_req || state_parked)
+		return;  /* ya hay una en curso, o emulación todavía sale de la anterior */
 	if (lle_mode != SALSA64_LLE_OFF) {
 		osd_notice(now, "Estados no disponibles con lle");
 		return;
@@ -1582,7 +1582,8 @@ static void state_test_step(void)
 	switch (state_test.stage) {
 	case ST_SAVE:
 	case ST_LOAD:
-		if (state_req || field < (state_test.stage == ST_SAVE ? state_test.save_at : state_test.load_at))
+		if (state_req || state_parked ||
+		    field < (state_test.stage == ST_SAVE ? state_test.save_at : state_test.load_at))
 			return;
 		state_test.done0 = state_done;
 		state_slot = 9;
