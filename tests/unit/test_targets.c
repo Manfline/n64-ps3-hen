@@ -363,6 +363,57 @@ static void targets_readback_wanted(void)
 	CHECK(rdp_readback_wanted(&r, 0x12c700, 440, 2));
 }
 
+/* Escala efectiva: automática por altura de pantalla, pedida (con tope en
+ * 5) y reducida cuando el peor caso no cabe en el presupuesto de memoria
+ * local del RSX. */
+static void targets_scale_pick(void)
+{
+	bool cut = true;
+	CHECK_EQ(rdp_scale_pick(0, 720, &cut), 3u);
+	CHECK(!cut);
+	CHECK_EQ(rdp_scale_pick(0, 1080, &cut), 4u);
+	CHECK(!cut);
+	CHECK_EQ(rdp_scale_pick(0, 480, &cut), 2u);
+	CHECK_EQ(rdp_scale_pick(0, 100, NULL), 1u);
+	for (uint32_t s = 1; s <= 5; s++) {
+		CHECK_EQ(rdp_scale_pick(s, 720, &cut), s);
+		CHECK(!cut);
+	}
+	CHECK_EQ(rdp_scale_pick(9, 720, &cut), 5u);  /* el tope no es por memoria */
+	CHECK(!cut);
+	/* Peor caso: 10 superficies de 320 × 240 × 25 (7,68 MB c/u) = 73 MiB. */
+	CHECK(rdp_vram_worst(5) < RDP_VRAM_BUDGET);
+	CHECK(rdp_vram_worst(5) > 70u << 20);
+	CHECK_EQ(rdp_surface_bytes(1600, 1200), 1600u * 4 * 1200);
+	CHECK_EQ(rdp_surface_bytes(321, 1), 1408u);  /* pitch a 128 */
+	/* Con un presupuesto más chico baja la escala y avisa. */
+	CHECK_EQ(rdp_scale_pick_budget(5, 720, 60u << 20, &cut), 4u);
+	CHECK(cut);
+	CHECK_EQ(rdp_scale_pick_budget(0, 1080, 40u << 20, &cut), 3u);
+	CHECK(cut);
+	CHECK_EQ(rdp_scale_pick_budget(5, 720, 1, &cut), 1u);
+	CHECK(cut);
+	CHECK_EQ(rdp_scale_pick_budget(3, 720, 100u << 20, &cut), 3u);
+	CHECK(!cut);
+	/* Escala por destino: el objetivo son 240 × escala líneas. */
+	CHECK_EQ(rdp_target_scale(5, 320, 240), 5u);
+	CHECK_EQ(rdp_target_scale(5, 640, 480), 2u);
+	CHECK_EQ(rdp_target_scale(5, 64, 48), 5u);     /* auxiliar chica, con tope */
+	CHECK_EQ(rdp_target_scale(5, 400, 300), 4u);
+	CHECK_EQ(rdp_target_scale(3, 640, 480), 1u);
+	CHECK_EQ(rdp_target_scale(3, 320, 240), 3u);
+	CHECK_EQ(rdp_target_scale(1, 320, 240), 1u);
+	CHECK_EQ(rdp_target_scale(5, 640, 2000), 1u);  /* nunca 0 */
+	CHECK_EQ(rdp_target_scale(5, 5000, 100), 1u);  /* límite de 4096 */
+	/* Ningún destino (en píxeles) pasa de uno de 320 × 240 a la escala-objetivo. */
+	for (uint32_t g = 2; g <= 5; g++)  /* a 1× una de 640 × 480 queda nativa (más grande) */
+		for (uint32_t w = 64; w <= 640; w += 16) {
+			uint32_t lh = w * 3 / 4, sc = rdp_target_scale(g, w, lh);
+			CHECK(w * sc * lh * sc <= 320 * g * 240 * g * 102 / 100);  /* lh = 3/4 w redondeado */
+		}
+	CHECK(640 * RDP_SCALE_MAX <= 4096);
+}
+
 void t_suite_targets(void)
 {
 	RUN(targets_locate);
@@ -375,4 +426,5 @@ void t_suite_targets(void)
 	RUN(targets_held_frame);
 	RUN(targets_drawn_while_blank);
 	RUN(targets_recycle_order);
+	RUN(targets_scale_pick);
 }

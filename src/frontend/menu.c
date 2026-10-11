@@ -43,6 +43,7 @@ void menu_settings_default(struct menu_settings *s)
 	s->waves = true;
 	s->overscan = MENU_OVERSCAN_NORMAL;
 	s->resolution = MENU_RES_720P;
+	s->scale = 0;
 }
 
 static const char *overscan_name(int o)
@@ -58,6 +59,18 @@ static const char *overscan_name(int o)
 static const char *resolution_name(int r)
 {
 	return r == MENU_RES_1080P ? "1080p" : "720p";
+}
+
+/* «Auto (3×)», «1× nativa», «4×»... */
+static const char *scale_name(const struct menu_settings *s, char *buf, size_t n)
+{
+	if (s->scale == 0)
+		snprintf(buf, n, "Auto (%d×)", s->resolution == MENU_RES_1080P ? 4 : 3);
+	else if (s->scale == 1)
+		snprintf(buf, n, "1× nativa");
+	else
+		snprintf(buf, n, "%d×", s->scale);
+	return buf;
 }
 
 static int lower(int c)
@@ -91,6 +104,58 @@ void menu_settings_parse(struct menu_settings *s, const char *text, size_t len)
 	}
 }
 
+void menu_video_parse(struct menu_settings *s, const char *text, size_t len)
+{
+	size_t i = 0;
+	while (i < len) {
+		size_t e = i;
+		while (e < len && text[e] != '\n')
+			e++;
+		char line[96];
+		size_t n = e - i < sizeof line - 1 ? e - i : sizeof line - 1;
+		memcpy(line, text + i, n);
+		line[n] = '\0';
+		i = e + 1;
+		char key[32], val[32];
+		if (line[0] == '#')
+			continue;
+		if (sscanf(line, " %31[^= ] = %31s", key, val) != 2) {
+			/* Formato viejo: la línea es la resolución. */
+			if (!strncmp(line, "1080", 4))
+				s->resolution = MENU_RES_1080P;
+			else if (!strncmp(line, "720", 3))
+				s->resolution = MENU_RES_720P;
+			continue;
+		}
+		for (char *p = key; *p; p++)
+			*p = (char)lower((unsigned char)*p);
+		for (char *p = val; *p; p++)
+			*p = (char)lower((unsigned char)*p);
+		if (!strcmp(key, "salida")) {
+			if (!strncmp(val, "1080", 4))
+				s->resolution = MENU_RES_1080P;
+			else if (!strncmp(val, "720", 3))
+				s->resolution = MENU_RES_720P;
+		} else if (!strcmp(key, "escala")) {
+			if (!strcmp(val, "auto"))
+				s->scale = 0;
+			else if (val[0] >= '1' && val[0] <= '5' && (!val[1] || (val[1] == 'x' && !val[2])))
+				s->scale = val[0] - '0';
+		}
+	}
+}
+
+int menu_video_format(const struct menu_settings *s, char *buf, size_t size)
+{
+	char scale[8] = "auto";
+	if (s->scale >= 1 && s->scale <= 5)
+		snprintf(scale, sizeof scale, "%d", s->scale);
+	return snprintf(buf, size,
+			"# Video de Salsa64 (se lee al arrancar)\n# salida = 720|1080; escala = auto|1|2|3|4|5\n"
+			"salida = %s\nescala = %s\n",
+			s->resolution == MENU_RES_1080P ? "1080" : "720", scale);
+}
+
 int menu_settings_format(const struct menu_settings *s, char *buf, size_t size)
 {
 	return snprintf(buf, size, "# Ajustes del menú de Salsa64\nfondo = %s\n", s->waves ? "si" : "no");
@@ -121,10 +186,23 @@ void menu_set_status(struct menu *m, const char *fmt, ...)
 	va_end(ap);
 }
 
+/* Fila mostrada de una opción: «Aplicar ahora» no ocupa lugar si no hay
+ * nada que aplicar. */
+static int opt_row(const struct menu *m, int opt)
+{
+	return opt > MENU_OPT_APPLY && !menu_video_pending(m) ? opt - 1 : opt;
+}
+
+static int opt_from_row(const struct menu *m, int row)
+{
+	return row >= MENU_OPT_APPLY && !menu_video_pending(m) ? row + 1 : row;
+}
+
 static void move(struct menu *m, uint32_t dir, bool wrap)
 {
 	bool games = m->page == MENU_PAGE_GAMES;
-	int n = games ? menu_rows(m) : MENU_OPTS, *s = games ? &m->sel : &m->opt;
+	int n = games ? menu_rows(m) : MENU_OPTS - !menu_video_pending(m);
+	int opt_v = opt_row(m, m->opt), *s = games ? &m->sel : &opt_v;
 	int page = games ? 6 : 1, v = *s;
 	if (dir == BIT(SALSA64_DS3_UP))
 		v = v > 0 ? v - 1 : wrap ? n - 1 : 0;
@@ -135,12 +213,16 @@ static void move(struct menu *m, uint32_t dir, bool wrap)
 	else if (dir == BIT(SALSA64_DS3_RIGHT))
 		v = v + page > n - 1 ? n - 1 : v + page;
 	*s = v;
+	if (!games)
+		m->opt = opt_from_row(m, v);
 }
 
 /* Botones de la página de opciones que no son mover la selección. */
 static enum menu_action options_buttons(struct menu *m, uint32_t pressed)
 {
 	uint32_t change = BIT(SALSA64_DS3_CROSS) | BIT(SALSA64_DS3_LEFT) | BIT(SALSA64_DS3_RIGHT);
+	if (m->opt == MENU_OPT_APPLY && !menu_video_pending(m))
+		m->opt = MENU_OPT_BACK;  /* ya se aplicó */
 	if ((pressed & (BIT(SALSA64_DS3_CIRCLE) | BIT(SALSA64_DS3_TRIANGLE))) ||
 	    (m->opt == MENU_OPT_BACK && (pressed & BIT(SALSA64_DS3_CROSS)))) {
 		m->page = MENU_PAGE_GAMES;
@@ -167,6 +249,14 @@ static enum menu_action options_buttons(struct menu *m, uint32_t pressed)
 		m->set.resolution = m->set.resolution == MENU_RES_1080P ? MENU_RES_720P : MENU_RES_1080P;
 		return MENU_SETTINGS;
 	}
+	if (m->opt == MENU_OPT_APPLY && (pressed & BIT(SALSA64_DS3_CROSS)))
+		return MENU_APPLY;
+	if (m->opt == MENU_OPT_SCALE && (pressed & change)) {
+		/* Auto → 1× → ... → 5× → Auto (izquierda, al revés). */
+		int v = m->set.scale + (pressed & BIT(SALSA64_DS3_LEFT) ? 5 : 1);
+		m->set.scale = v % 6;
+		return MENU_SETTINGS;
+	}
 	return MENU_NONE;
 }
 
@@ -174,7 +264,7 @@ static void open_options(struct menu *m)
 {
 	m->page = MENU_PAGE_OPTIONS;
 	m->opt = MENU_OPT_WAVES;
-	m->opt_pos = (float)m->opt;
+	m->opt_pos = (float)opt_row(m, m->opt);
 	m->rep_button = 0;
 }
 
@@ -464,7 +554,7 @@ static void panel(const struct menu *m, float W, float H, float a)
 
 	/* Lo de adentro aparece cuando la columna se detiene. */
 	bool games = m->page == MENU_PAGE_GAMES;
-	float settle = 1.0f - clampf(fabsf(games ? m->sel - m->pos : m->opt - m->opt_pos) * 1.6f, 0.0f, 1.0f);
+	float settle = 1.0f - clampf(fabsf(games ? m->sel - m->pos : opt_row(m, m->opt) - m->opt_pos) * 1.6f, 0.0f, 1.0f);
 	float ca = a * smooth(settle) * (games ? 1.0f - m->page_t : m->page_t);
 	/* Con tele 4:3 el panel es angosto: letra un poco más chica. */
 	bool narrow = pw < 450.0f;
@@ -482,18 +572,35 @@ static void panel(const struct menu *m, float W, float H, float a)
 							 "ver (ahí algunos juegos dejan", "basura).", NULL,
 							 "Normal: 8 y 6 puntos por lado;", "amplio: 16 y 12.",
 							 "Se guarda en overscan.cfg.", NULL, NULL };
-		static const char *const res_text[] = { "Salida de video: 720p (3x)", "o 1080p (4x). Se aplica al", "volver a abrir Salsa64.",
+		static const char *const res_text[] = { "Salida de video: 720p (3x)", "o 1080p (4x). Luego, abajo,", "«Aplicar ahora».",
 							"Se guarda en video.cfg.", NULL, NULL };
+		/* Escala interna: tamaño y texto dependen del valor. */
+		char scale_buf[24], size_buf[32];
+		int eff = m->set.scale ? m->set.scale : (m->set.resolution == MENU_RES_1080P ? 4 : 3);
+		snprintf(size_buf, sizeof size_buf, "%d× = %d×%d puntos", eff, 320 * eff, 240 * eff);
+		const char *const scale_text[] = { size_buf, "Mayor que la pantalla es", "supermuestreo: más nitidez",
+						   "y bordes suaves, pero más", "trabajo para el RSX.",
+						   "1×: la imagen original N64.", "Luego, «Aplicar ahora».", NULL, NULL };
+		char want_buf[40];
+		snprintf(want_buf, sizeof want_buf, "%s, escala %d×", resolution_name(m->set.resolution),
+			 m->set.scale ? m->set.scale : (m->set.resolution == MENU_RES_1080P ? 4 : 3));
+		const char *const apply_text[] = { "Pone la salida y la escala", "elegidas sin cerrar Salsa64:", want_buf, NULL,
+						   "Si la tele no acepta el", "modo, queda el anterior.", NULL, NULL };
 		static const char *const back_text[] = { "A la lista de juegos.", NULL, NULL };
 		const char *title = m->opt == MENU_OPT_WAVES ? "Fondo animado"
 				    : m->opt == MENU_OPT_OVERSCAN ? "Recorte del borde"
-				    : m->opt == MENU_OPT_RESOLUTION ? "Resolución" : "Volver";
+				    : m->opt == MENU_OPT_RESOLUTION ? "Resolución"
+				    : m->opt == MENU_OPT_SCALE ? "Escala interna"
+				    : m->opt == MENU_OPT_APPLY ? "Aplicar ahora" : "Volver";
 		const char *const *text = m->opt == MENU_OPT_WAVES ? waves_text
 					  : m->opt == MENU_OPT_OVERSCAN ? crop_text
-					  : m->opt == MENU_OPT_RESOLUTION ? res_text : back_text;
+					  : m->opt == MENU_OPT_RESOLUTION ? res_text
+					  : m->opt == MENU_OPT_SCALE ? scale_text
+					  : m->opt == MENU_OPT_APPLY ? apply_text : back_text;
 		const char *value = m->opt == MENU_OPT_WAVES ? (m->set.waves ? "Sí" : "No")
 				    : m->opt == MENU_OPT_OVERSCAN ? overscan_name(m->set.overscan)
-				    : m->opt == MENU_OPT_RESOLUTION ? resolution_name(m->set.resolution) : NULL;
+				    : m->opt == MENU_OPT_RESOLUTION ? resolution_name(m->set.resolution)
+				    : m->opt == MENU_OPT_SCALE ? scale_name(&m->set, scale_buf, sizeof scale_buf) : NULL;
 		stext(x, y, title, tscale, 0xFFFFFFu, ca, tmax);
 		y += 56.0f;
 		/* Líneas cortas (caben en 4:3); NULL es un renglón en blanco, dos
@@ -507,6 +614,8 @@ static void panel(const struct menu *m, float W, float H, float a)
 		}
 		if (value)
 			stext(x, y + 16.0f, value, tscale, C_ACCENT, ca, 0);
+		if (m->note[0] && (m->opt == MENU_OPT_RESOLUTION || m->opt == MENU_OPT_SCALE || m->opt == MENU_OPT_APPLY))
+			stext(x, py + ph - 44.0f, m->note, dscale, C_ACCENT, ca, lmax);
 		if (m->opt == MENU_OPT_RESOLUTION) {
 			y += 16.0f + 56.0f;
 			if (m->out_w && m->out_h) {
@@ -515,7 +624,7 @@ static void panel(const struct menu *m, float W, float H, float a)
 				y += 30.0f;
 			}
 			/* Pidió 1080p al arrancar y la tele o el XMB no lo dieron. */
-			if (m->res_boot == MENU_RES_1080P && m->out_h && m->out_h != 1080) {
+			if (m->res_run == MENU_RES_1080P && m->out_h && m->out_h != 1080) {
 				stext(x, y, "No hay 1080p: actívalo en", dscale, C_DIM, ca, lmax);
 				stext(x, y + 30.0f, "Ajustes de pantalla del XMB.", dscale, C_DIM, ca, lmax);
 			}
@@ -594,12 +703,19 @@ static void options_column(const struct menu *m, float x, float W, float H, floa
 	struct row waves = { "Fondo animado", "Ondas detrás del menú", 2, "~", 0, m->set.waves ? "Sí" : "No" };
 	struct row crop = { "Recorte del borde", "Overscan de la imagen del juego", 2, "□", 0,
 			    overscan_name(m->set.overscan) };
-	struct row res = { "Resolución", "Salida de video (al reabrir)", 2, "■", 0, resolution_name(m->set.resolution) };
+	struct row res = { "Resolución", "Salida de video", 2, "■", 0, resolution_name(m->set.resolution) };
+	char sbuf[24];
+	struct row scale = { "Escala interna", "Dibujo interno", 2, "▲", 0,
+			     scale_name(&m->set, sbuf, sizeof sbuf) };
+	struct row apply = { "Aplicar ahora", "Salida y escala elegidas", 2, "●", 0, NULL };
 	struct row back = { "Volver", "A la lista de juegos", 2, "◀", 0, NULL };
 	draw_row(&waves, MENU_OPT_WAVES - m->opt_pos, x, W, H, a);
 	draw_row(&crop, MENU_OPT_OVERSCAN - m->opt_pos, x, W, H, a);
 	draw_row(&res, MENU_OPT_RESOLUTION - m->opt_pos, x, W, H, a);
-	draw_row(&back, MENU_OPT_BACK - m->opt_pos, x, W, H, a);
+	draw_row(&scale, MENU_OPT_SCALE - m->opt_pos, x, W, H, a);
+	if (menu_video_pending(m))
+		draw_row(&apply, MENU_OPT_APPLY - m->opt_pos, x, W, H, a);
+	draw_row(&back, (float)opt_row(m, MENU_OPT_BACK) - m->opt_pos, x, W, H, a);
 }
 
 void menu_frame(struct menu *m, float lw, float lh, uint64_t now_us)
@@ -610,7 +726,9 @@ void menu_frame(struct menu *m, float lw, float lh, uint64_t now_us)
 	m->last_us = now_us;
 	m->t += dt;
 	ease(&m->pos, (float)m->sel, dt, 14.0f);
-	ease(&m->opt_pos, (float)m->opt, dt, 14.0f);
+	if (m->opt == MENU_OPT_APPLY && !menu_video_pending(m))
+		m->opt = MENU_OPT_BACK;  /* ya se aplicó */
+	ease(&m->opt_pos, (float)opt_row(m, m->opt), dt, 14.0f);
 	ease(&m->page_t, (float)m->page, dt, 10.0f);
 	m->intro = clampf(m->intro + dt / 0.45f, 0.0f, 1.0f);
 

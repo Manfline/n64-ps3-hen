@@ -410,8 +410,9 @@ Hecho (rama `intelligent-yalow-4dd14d`, desde main e7184b7):
     lo dibujado antes en esa misma llamada (lo translúcido salía como sobre
     negro). Por eso va una llamada por cada elemento, con el estado en
     caché. Anotado en `lib/rsxkit/README.md`.
-- Memoria: el menú reserva al entrar un búfer de ROM de 64 MB y 2 MB
-  mapeados para el 2D (`docs/memory-budget.md`).
+- Memoria: el menú reserva 2 MB mapeados para el 2D; la ROM va en un búfer
+  a su medida, reservado al abrir cada juego y liberado al cerrarlo
+  (`docs/memory-budget.md`).
 
 Pruebas:
 - Host: suite «menu», 15 pruebas: cabeceras en los tres órdenes, títulos,

@@ -16,6 +16,49 @@ void rdp_targets_init(struct rdp_targets *s)
 	s->vi_width = 320;
 }
 
+uint32_t rdp_surface_bytes(uint32_t w, uint32_t h)
+{
+	return ((w * 4 + 127) & ~127u) * h;
+}
+
+uint32_t rdp_vram_worst(uint32_t scale)
+{
+	uint32_t a = rdp_surface_bytes(320 * scale, 240 * scale), b = rdp_surface_bytes(640, 480);
+	return 10 * (a > b ? a : b);  /* a 1× una de 640 × 480 queda nativa */
+}
+
+uint32_t rdp_target_scale(uint32_t global, uint32_t lw, uint32_t lh)
+{
+	uint32_t s = lh ? 240 * global / lh : 1;
+	if (s > RDP_SCALE_MAX)
+		s = RDP_SCALE_MAX;
+	while (s > 1 && (lw * s > 4096 || lh * s > 4096))
+		s--;
+	return s ? s : 1;
+}
+
+uint32_t rdp_scale_pick(uint32_t requested, uint32_t screen_h, bool *reduced)
+{
+	return rdp_scale_pick_budget(requested, screen_h, RDP_VRAM_BUDGET, reduced);
+}
+
+uint32_t rdp_scale_pick_budget(uint32_t requested, uint32_t screen_h, uint32_t budget, bool *reduced)
+{
+	uint32_t s = requested;
+	if (!s)
+		s = screen_h >= 240 ? screen_h / 240 : 1;
+	if (s > RDP_SCALE_MAX)
+		s = RDP_SCALE_MAX;
+	bool cut = false;
+	while (s > 1 && rdp_vram_worst(s) > budget) {
+		s--;
+		cut = true;
+	}
+	if (reduced)
+		*reduced = cut;
+	return s;
+}
+
 static bool stale(const struct rdp_targets *s, const struct rdp_target *t)
 {
 	return s->field - t->last_field > RDP_TARGETS_STALE;

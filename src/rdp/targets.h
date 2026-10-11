@@ -26,6 +26,12 @@
 #include "core/rcp.h"
 
 #define RDP_TARGETS_MAX   8
+/* Escala interna máxima (320 × 240 × 5 = 1600 × 1200; 640 × 5 = 3200 cabe
+ * en el límite de 4096 de las superficies del RSX). */
+#define RDP_SCALE_MAX     5
+/* Tope de memoria local del RSX para destinos y profundidades vivos (ver
+ * docs/memory-budget.md); rdp.c recicla el destino más viejo para respetarlo. */
+#define RDP_VRAM_BUDGET   (96u << 20)
 /* Un destino sin dibujar en tantos campos ya no se presenta (ni se protege
  * del reciclado). */
 #define RDP_TARGETS_STALE 30
@@ -84,6 +90,30 @@ struct rdp_present {
 };
 
 void rdp_targets_init(struct rdp_targets *s);
+
+/* Bytes de una superficie de w × h píxeles de 32 bits (pitch alineado a
+ * 128, como lib/rsxkit). */
+uint32_t rdp_surface_bytes(uint32_t w, uint32_t h);
+
+/* Peor caso a la escala-objetivo `scale`: cada destino pesa a lo más una
+ * superficie de 320 × 240 × scale² (rdp_target_scale lleva las de otros
+ * tamaños a ≤ ese peso; a 1× una de 640 × 480 queda nativa, 1,2 MB), y hay hasta 8 color images y 2 profundidades:
+ * 10 superficies. A 5× son 77 MB (73 MiB). */
+uint32_t rdp_vram_worst(uint32_t scale);
+
+/* Escala entera de un destino de lw × lh puntos lógicos para la escala-
+ * objetivo `global` (1..RDP_SCALE_MAX): la mayor que no pasa de 240 × global
+ * líneas, al menos 1, con tope RDP_SCALE_MAX y de 4096 por lado. */
+uint32_t rdp_target_scale(uint32_t global, uint32_t lw, uint32_t lh);
+
+/* Escala-objetivo efectiva. requested = 0: la mayor entera que cabe en una pantalla
+ * de `screen_h` líneas (720 → 3, 1080 → 4); 1 .. RDP_SCALE_MAX: la pedida.
+ * En ambos casos se baja hasta que rdp_vram_worst(escala) ≤
+ * RDP_VRAM_BUDGET. *reduced: se bajó por memoria (no por el tope de 5 ni
+ * por ser automática). */
+uint32_t rdp_scale_pick(uint32_t requested, uint32_t screen_h, bool *reduced);
+/* Igual con otro presupuesto (pruebas). */
+uint32_t rdp_scale_pick_budget(uint32_t requested, uint32_t screen_h, uint32_t budget, bool *reduced);
 
 /* Ranura de la color image (addr, width, siz de G_SETCIMG), existente o
  * reciclada, con al menos `min_lh` líneas (0: las de siempre, 3/4 del

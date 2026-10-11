@@ -60,7 +60,9 @@
  * automática sin embedded el menú se maneja solo: abre en orden las ROMs
  * que nombra SALSA64_DATA_DIR/menu-prueba (una por línea; las de prueba se
  * verifican como las embebidas), vuelve al menú después de cada una y sale
- * con "RESULTADO frontend" del conjunto (tools/rpcs3-run.py --menu).
+ * con "RESULTADO frontend" del conjunto (tools/rpcs3-run.py --menu). Una
+ * línea «@video 720|1080 escala» aplica la salida y la escala como «Aplicar
+ * ahora», entre juegos.
  * Con vitest y fuera de la prueba automática, después mide 10 s sin
  * detección de bucles de espera y 10 s con ella ("MEDICIÓN …" en el log)
  * y sigue.
@@ -1648,14 +1650,13 @@ static const char *const rom_dirs[] = {
 	"/dev_usb004/salsa64", "/dev_usb005/salsa64", "/dev_usb006/salsa64", "/dev_usb007/salsa64",
 };
 
-static bool video_wants_1080(void);
-static void video_save(int resolution);
-static bool boot_1080;  /* video.cfg pedía 1080p al arrancar (rsxkit_init ya corrió) */
+static void video_load(struct menu_settings *set);
+static void video_save(const struct menu_settings *set);
+static struct menu_settings video_cfg;  /* video y escala que corren (video.cfg al arrancar o lo último aplicado) */
 
 static struct romlist roms;
 static struct menu menu;
 static struct {
-	uint8_t *rom;           /* búfer de la ROM (ROM_MAX), reservado al entrar al menú */
 	float lw, lh;           /* espacio lógico del menú */
 	struct menu_settings settings;
 	char save_cfg[4096];
@@ -1707,9 +1708,62 @@ static void menu_scan(const char *keep)
 	const rsxkit_screen *osc = rsxkit_screen_info();
 	menu.out_w = osc->width;
 	menu.out_h = osc->height;
-	menu.res_boot = boot_1080 ? MENU_RES_1080P : MENU_RES_720P;
+	menu.res_run = video_cfg.resolution;
+	menu.scale_run = video_cfg.scale;
 	menu.dirs[menu.ndirs++] = SALSA64_DATA_DIR;
 	menu.dirs[menu.ndirs++] = "/dev_usb000/salsa64 … /dev_usb007/salsa64";
+}
+
+static const rsxkit_config *video_config_for(int resolution, rsxkit_config *cfg);
+
+/* Espacio lógico del menú según la pantalla en curso. */
+static void menu_layout(void)
+{
+	mn.lh = 720.0f;
+	mn.lw = rsxkit_screen_info()->aspect > 1.5f ? 1280.0f : 960.0f;
+}
+
+/* «Aplicar ahora»: pone la salida y la escala elegidas sin cerrar Salsa64.
+ * No hay juego abierto (el RDP quedó limpio en game_close). Se rehacen solo
+ * los búferes de pantalla del RSX (rsxkit_video_reconfigure: el contexto, la
+ * memoria mapeada, el 2D del menú y el framebuffer se conservan) y la escala
+ * del RDP (salsa64_rdp_set_scale: conserva su memoria mapeada). Si la tele no
+ * acepta el modo, rsxkit deja el anterior y la escala no se toca. */
+static void menu_apply_video(void)
+{
+	const struct menu_settings want = menu.set;
+	const rsxkit_screen *sc = rsxkit_screen_info();
+	unsigned old_w = sc->width, old_h = sc->height;
+	int rc = RSXKIT_OK;
+	rsxkit_config vcfg;
+
+	/* Solo se toca el video si cambió la resolución pedida. */
+	if (want.resolution != video_cfg.resolution) {
+		rsxkit_finish();
+		rc = rsxkit_video_reconfigure(video_config_for(want.resolution, &vcfg));
+	}
+	if (rc != RSXKIT_OK) {
+		salsa64_log("video: no se pudo cambiar a %s (%d); sigue %ux%u, escala %u×", want.resolution == MENU_RES_1080P ? "1080p" : "720p",
+			    rc, old_w, old_h, salsa64_rdp_scale(NULL));
+		snprintf(menu.note, sizeof menu.note, "No se pudo: sigue %ux%u", old_w, old_h);
+		return;
+	}
+	salsa64_rdp_set_scale((uint32_t)want.scale);
+	bool cut;
+	uint32_t es = salsa64_rdp_scale(&cut);
+	video_cfg.resolution = want.resolution;
+	video_cfg.scale = want.scale;
+	sc = rsxkit_screen_info();
+	menu_layout();
+	menu.out_w = sc->width;
+	menu.out_h = sc->height;
+	menu.res_run = want.resolution;
+	menu.scale_run = want.scale;
+	snprintf(menu.note, sizeof menu.note, "Aplicado: %ux%u, escala %u×", sc->width, sc->height, es);
+	salsa64_log("video: %ux%u, escala %u× (%s%s), aplicado sin reiniciar", sc->width, sc->height, es,
+		    want.scale ? "pedida" : "automática", cut ? ", reducida por memoria del RSX" : "");
+	if (want.resolution == MENU_RES_1080P && sc->height != 1080)
+		salsa64_log("video: se pidió 1080p y la tele dio %ux%u", sc->width, sc->height);
 }
 
 /* Un cuadro del menú: todo lo dibuja el RSX (rsxkit/ui.h); el PPE solo
@@ -1770,6 +1824,25 @@ static int menu_test_target(void)
 	return -1;
 }
 
+/* Línea «@video 720|1080 escala» de menu-prueba: «Aplicar ahora» con esos
+ * valores, sin tocar video.cfg. Cuenta como un paso del conjunto. */
+static void menu_test_video(const char *line)
+{
+	int res = 0, scale = 0;
+	bool ok = sscanf(line, "@video %d %d", &res, &scale) == 2 && (res == 720 || res == 1080) && scale >= 0 &&
+		  scale <= 5;
+	if (ok) {
+		menu.set.resolution = res == 1080 ? MENU_RES_1080P : MENU_RES_720P;
+		menu.set.scale = scale;
+		menu_apply_video();
+		ok = !menu_video_pending(&menu) && (res == 1080 || rsxkit_screen_info()->height == 720) &&
+		     (!scale || salsa64_rdp_scale(NULL) <= (uint32_t)scale);
+	}
+	salsa64_log("menú, prueba automática: «%s»: %s", line, ok ? "bien" : "MAL");
+	mn.games++;
+	mn.failures += !ok;
+}
+
 static void menu_test_load(void)
 {
 	FILE *f = fopen(MENU_TEST_PATH, "r");
@@ -1795,7 +1868,9 @@ static enum game_end menu_open(const struct rom_entry *e)
 	menu_show(NULL);
 	menu.loading = NULL;
 	uint32_t size = 0;
-	if (!read_rom_file(path, mn.rom, ROM_MAX, &size)) {
+	/* Búfer a la medida de la ROM, solo mientras dura el juego. */
+	uint8_t *rom = read_rom_file(path, NULL, 0, &size);
+	if (!rom) {
 		salsa64_log("menú: no se pudo leer %s", path);
 		menu_set_status(&menu, "No se pudo leer %s", path);
 		mn.games++;
@@ -1806,7 +1881,8 @@ static enum game_end menu_open(const struct rom_entry *e)
 		salsa64_log("menú: no se pudo escribir %s", LAST_ROM_PATH);
 	game_reset();
 	test_flags_from_name(romlist_name(e));
-	enum game_end end = run_game(mn.rom, size, path, err, sizeof err);
+	enum game_end end = run_game(rom, size, path, err, sizeof err);
+	free(rom);  /* run_game ya cerró el juego: nada apunta a la ROM */
 	bool test = selftest_on || gfxtest_on || audiotest_on;
 	bool ok = end != GAME_FAILED && (test ? pres.result == SELFTEST_OK : !pres.autotest || game_auto_ok);
 	mn.games++;
@@ -1827,21 +1903,22 @@ static int menu_loop(void)
 {
 	const rsxkit_screen *sc = rsxkit_screen_info();
 	int rc = rsxkit_ui_init();
-	mn.rom = memalign(128, ROM_MAX);
-	if (rc != RSXKIT_OK || !mn.rom) {
-		salsa64_log("%s: FALLO al preparar el menú (2D del RSX %d, búfer de ROM %s)",
-			    pres.autotest ? "RESULTADO frontend" : "menú", rc, mn.rom ? "bien" : "sin memoria");
-		free(mn.rom);
-		mn.rom = NULL;
+	if (rc != RSXKIT_OK) {
+		salsa64_log("%s: FALLO al preparar el menú (2D del RSX %d)", pres.autotest ? "RESULTADO frontend" : "menú",
+			    rc);
 		return 1;
 	}
-	mn.lh = 720.0f;
-	mn.lw = sc->aspect > 1.5f ? 1280.0f : 960.0f;
+	menu_layout();
 	menu_settings_load();
 	load_overscan();
 	mn.settings.overscan = overscan_preset();
-	mn.settings.resolution = video_wants_1080() ? MENU_RES_1080P : MENU_RES_720P;
-	salsa64_log("menú: espacio lógico de %.0fx%.0f sobre %ux%u, búfer de ROM de %u MB, fondo animado %s", mn.lw,
+	{
+		struct menu_settings v = mn.settings;
+		video_load(&v);
+		mn.settings.resolution = v.resolution;
+		mn.settings.scale = v.scale;
+	}
+	salsa64_log("menú: espacio lógico de %.0fx%.0f sobre %ux%u, ROM con búfer a su medida (máx. %u MB), fondo animado %s", mn.lw,
 		    mn.lh, sc->width, sc->height, ROM_MAX >> 20, mn.settings.waves ? "sí" : "no");
 
 	char last[ROMLIST_PATH_MAX];
@@ -1861,6 +1938,10 @@ static int menu_loop(void)
 		sysUtilCheckCallback();
 		uint32_t buttons;
 		update_pads(&buttons);
+		if (pres.autotest && mn.next_test < mn.ntest && mn.test[mn.next_test][0] == '@') {
+			menu_test_video(mn.test[mn.next_test++]);
+			continue;
+		}
 		if (pres.autotest) {
 			int target = menu_test_target();
 			if (target < 0) {
@@ -1880,14 +1961,16 @@ static int menu_loop(void)
 		if (a == MENU_SETTINGS) {
 			if (menu.set.overscan != mn.settings.overscan)
 				overscan_save(menu.set.overscan);
-			if (menu.set.resolution != mn.settings.resolution)
-				video_save(menu.set.resolution);
+			if (menu.set.resolution != mn.settings.resolution || menu.set.scale != mn.settings.scale)
+				video_save(&menu.set);
 			if (menu.set.waves != mn.settings.waves) {
 				mn.settings.waves = menu.set.waves;
 				menu_settings_save();
 			}
 			mn.settings = menu.set;
 		}
+		if (a == MENU_APPLY)
+			menu_apply_video();
 		if (a == MENU_QUIT) {
 			salsa64_log("menú: «Salir al XMB»");
 			break;
@@ -1902,8 +1985,6 @@ static int menu_loop(void)
 	}
 	if (rsxkit_ui_dropped())
 		salsa64_log("menú: %u quads no cupieron en algún cuadro", rsxkit_ui_dropped());
-	free(mn.rom);
-	mn.rom = NULL;
 	if (!pres.autotest)
 		return 0;
 	bool ok = !failed && !mn.failures && mn.games == (int)mn.ntest;
@@ -1912,39 +1993,44 @@ static int menu_loop(void)
 	return ok ? 0 : 1;
 }
 
-/* video.cfg: «1080» prefiere 1080p, con el render de la N64 a 4× (1280×960);
- * sin archivo, o con otra cosa, 720p a 3× como siempre. Si la tele no acepta
- * 1080, sigue con el siguiente modo de la lista. */
+/* video.cfg: «salida = 1080» prefiere 1080p (también la línea sola «1080» del
+ * formato viejo); «escala = auto|1..5» es el tamaño del render de la N64
+ * (auto: 4× a 1080p, 3× a 720p). Sin archivo, 720p y escala automática.
+ * Si la tele no acepta 1080, sigue con el siguiente modo de la lista. */
 static const int32_t modes_1080[] = {
 	VIDEO_RESOLUTION_1080, VIDEO_RESOLUTION_720, VIDEO_RESOLUTION_480, VIDEO_RESOLUTION_576,
 };
 
-static bool video_wants_1080(void)
+static void video_load(struct menu_settings *set)
 {
+	char text[256];
+	size_t n = 0;
 	FILE *f = fopen(VIDEO_CFG_PATH, "r");
-	if (!f)
-		return false;
-	char line[16] = "";
-	bool want_1080 = fgets(line, sizeof line, f) && strncmp(line, "1080", 4) == 0;
-	fclose(f);
-	return want_1080;
+	if (f) {
+		n = fread(text, 1, sizeof text - 1, f);
+		fclose(f);
+	}
+	menu_video_parse(set, text, n);
 }
 
-/* Opción «Resolución» del menú: video.cfg con «1080» o «720». Solo se lee
- * al arrancar (rsxkit_init), así que el cambio vale al volver a abrir. */
-static void video_save(int resolution)
+/* Opciones «Resolución» y «Escala interna» del menú: video.cfg con
+ * «salida» y «escala». Se leen al arrancar; «Aplicar ahora» los pone sin
+ * reiniciar (menu_apply_video). */
+static void video_save(const struct menu_settings *set)
 {
+	char text[256];
+	int n = menu_video_format(set, text, sizeof text);
 	FILE *f = fopen(VIDEO_CFG_PATH, "w");
-	if (f) {
-		fputs(resolution == MENU_RES_1080P ? "1080\n" : "720\n", f);
-		fclose(f);
-	} else
+	bool ok = f && fwrite(text, 1, (size_t)n, f) == (size_t)n;
+	if (f && fclose(f) != 0)
+		ok = false;
+	if (!ok)
 		salsa64_log("menú: no se pudo escribir %s", VIDEO_CFG_PATH);
 }
 
-static const rsxkit_config *video_config(rsxkit_config *cfg)
+static const rsxkit_config *video_config_for(int resolution, rsxkit_config *cfg)
 {
-	if (!video_wants_1080())
+	if (resolution != MENU_RES_1080P)
 		return NULL;
 	memset(cfg, 0, sizeof *cfg);
 	cfg->modes = modes_1080;
@@ -1957,8 +2043,10 @@ int main(void)
 	salsa64_log_init("salsa64");
 	pres.autotest = salsa64_autotest();
 
+	menu_settings_default(&video_cfg);
+	video_load(&video_cfg);
 	rsxkit_config vcfg;
-	const rsxkit_config *vc = video_config(&vcfg);
+	const rsxkit_config *vc = video_config_for(video_cfg.resolution, &vcfg);
 	int rc = rsxkit_init(vc);
 	pres.fb = rc == RSXKIT_OK ? rsxkit_fb_create(FB_MAX_W, FB_MAX_H) : NULL;
 	if (!pres.fb) {
@@ -1966,15 +2054,20 @@ int main(void)
 		salsa64_log_shutdown();
 		return 1;
 	}
-	boot_1080 = vc != NULL;
 	const rsxkit_screen *sc = rsxkit_screen_info();
 	salsa64_log("RSX listo: %ux%u, tele %s%s", sc->width, sc->height, sc->aspect > 1.5f ? "16:9" : "4:3",
 		    vc ? " (video.cfg: 1080)" : "");
-	if ((rc = salsa64_rdp_init(0)) != RSXKIT_OK) {
+	if ((rc = salsa64_rdp_init((uint32_t)video_cfg.scale)) != RSXKIT_OK) {
 		salsa64_log("RESULTADO frontend: FALLO al preparar el RDP (%d)", rc);
 		rsxkit_shutdown();
 		salsa64_log_shutdown();
 		return 1;
+	}
+	{
+		bool cut;
+		uint32_t es = salsa64_rdp_scale(&cut);
+		salsa64_log("RDP listo: escala-objetivo %u× (%u líneas por imagen; cada destino, la entera que llega ahí), %s%s", es, 240 * es,
+			    video_cfg.scale ? "pedida" : "automática", cut ? ", reducida por memoria del RSX" : "");
 	}
 	rdp_sink = salsa64_rdp_sink();
 

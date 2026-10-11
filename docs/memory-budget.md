@@ -18,7 +18,7 @@ en PS3 real.
 | Estado del recompilador (`struct salsa64_rec`) | 8,5 | 6,3 | Mapa de bloques (4 MB: uint16_t por palabra de 8 MB), banderas de código (64 KB), 65 535 bloques (1 MB), 131 072 enlaces (1 MB), búferes de compilación (0,2 MB), bloques fuera de KSEG0 y TLB del recompilador (2,2 MB: `xb` 512 KB, `ktlb` 64 KB, `live` 32 KB, `xhash` 32 KB, `snap` 0,75 KB, y los bloques desprendidos: copia de bytes MIPS 1 MB, `copy_off` y `saved_code` 256 KB cada uno, `state` 64 KB); en .bss. 7 172 408 bytes medidos con sizeof el 2026-10-10, +74 KB por la `ktlb` de 16 384 páginas y +1,6 MB por los bloques desprendidos (2026-10-11) |
 | Caché de texturas (lado PPE/SPE) | 8 | 8 | `src/rdp`: región mapeada al RSX que administra la HLE del SPE (texturas RGBA8888 decodificadas, entre tareas); directorio de 1024 texturas en el local store. Se puede subir a 16 si el directorio crece |
 | Búfer de comandos RSX + memoria mapeada | 16 | 16 | `rsxkit_init` por omisión (rsx-triangle usa 32) |
-| ROM del cartucho | 64 | | máximo; el frontend la lee entera a memoria al arrancar. Con `embedded`, a su medida; con el menú, un búfer de 64 MB reservado al entrar al menú y reusado por cada juego (sin asignaciones al cambiar de juego) |
+| ROM del cartucho | 64 | | máximo; el frontend la lee entera a memoria al abrir el juego, en un búfer exactamente de su tamaño (alineado a 128 bytes), igual con `embedded` que con el menú. Con el menú se reserva al abrir cada juego, fuera del bucle de emulación, y se libera al cerrarlo: en el menú no queda ninguna ROM reservada (antes, 64 MB fijos mientras el menú estaba abierto; con Zelda de 32 MB, el juego usa 32 MB menos y el menú libera los 64 MB). Los juegos seguidos se turnan en la misma zona del heap sin fragmentarlo: al liberar, el bloque se junta con su vecino libre |
 | Menú para elegir ROM | 2,1 | | 2 MB de memoria principal mapeada al RSX para el 2D (`rsxkit_ui_init`: atlas de la fuente 441 KB y dos búferes de 4096 quads, 768 KB cada uno), reservados al entrar al menú y para siempre; lista de 256 ROMs (74 KB) y texto de guardado.cfg (4 KB), estáticos. Sin memoria local del RSX: dibuja sobre la pantalla |
 | Salida de la HLE gráfica SPU → RSX | 20 | 20 | `src/rdp`: 3 juegos de vértices 2 MB + comandos 768 KB + arena de texturas 3,75 MB, mapeados al RSX (`rsxkit_map_main`) junto con la caché de texturas (28 MB en total). Con la caché el arena casi no se usa: se podría achicar más. Los comandos crecieron de 512 a 768 KB cuando `gfx_draw` pasó de 352 a 480 bytes (términos del generador de fragment programs, 2026-10-10) y a 496 con el origen de cada textura (efectos de framebuffer) |
 | Efectos de framebuffer (copias RSX → RDRAM, espejos y cebado) | 3 | 3 | `src/rdp`: en el mismo pool mapeado, 2 búferes de 640 × 480 × 2 (RGB565 a la resolución de la N64, 600 KB c/u) para las copias que la emulación espera, 4 de 64 KB para las copias espejo de imágenes chicas y uno de 600 KB para cebar superficies desde la RDRAM; 2,0 MB redondeados a 3 (docs/framebuffer.md) |
@@ -35,10 +35,25 @@ en PS3 real.
 |---|---|---|---|
 | Framebuffers 1280×720 ×2 + Z | 11 | 11 | X8R8G8B8 + Z24S8 (`rsxkit_init`) |
 | Framebuffer 2D del VI | 3 | 2,8 | `rsxkit_fb_create(640, 576)`: 2 copias × 640 × 576 × 4 |
-| Destinos de render de la N64 (Fase 2) | 27 | | `src/rdp/targets.c`: hasta 8 color images a 3× (960×720×4 = 2,6 MB c/u; las auxiliares de 64 de ancho de Zelda en pausa pesan 0,25 MB) más un scratch y 4 profundidades (rsxkit admite 16 superficies y 16 profundidades); a 1080p, 4× (1280×960: 4,7 MB c/u, 44 MB en total). Lo normal son 2–4 vivas |
+| Destinos de render de la N64 (Fase 2) | 27 | | `src/rdp/targets.c`: hasta 8 color images y 2 profundidades, con escala por destino según la escala interna (3× a 720p, 4× a 1080p, o 1×–5× por «Escala interna»): 960×720×4 = 2,6 MB c/u a 3×; 1280×960: 4,7 MB a 4×; 1600×1200: 7,7 MB a 5×. Tope total de 96 MiB. Las auxiliares de 64 de ancho de Zelda en pausa pesan 0,1 MB. Lo normal son 2–4 vivas. Política y peor caso abajo |
 | Scratch de los efectos de framebuffer | 2,6 | | `src/rdp`: una copia del destino ligado cuando un dibujo lo lee como textura (la pausa de Zelda), del tamaño del destino (960×720×4); se crea la primera vez que hace falta |
 | Render interno 2x/3x | 60 | | Fase 5 (incluye lo anterior) |
 | Texturas | 64 | | Fase 4 |
+
+### Escala interna y tope de los destinos (2026-10-11)
+
+La escala elegida (`salsa64_rdp_init`, 0 = automática, 1–5) es un **objetivo de líneas**: 240 × escala (5× = 1200). Cada destino usa la escala entera que lleva su imagen a ese objetivo sin pasarse (`rdp_target_scale`, mínimo 1, máximo 5, y 4096 por lado): 320×240 a 5×, 640×480 a 2×, una auxiliar de 64 de ancho (48 líneas) a 5× (con tope). La superficie guarda su escala (`surf_scale` en `rdp.c`), la profundidad usa la del destino de color con que se pide, y la presentación convierte su región con la escala del destino; `rsxkit_bind` ya trabaja con tamaño lógico, así que lib/rsxkit no cambió. No hay otra copia RSX ↔ RDRAM que suponga la escala.
+
+| Destino a la escala-objetivo | 1× | 3× | 4× | 5× |
+|---|---|---|---|---|
+| 320×240 (escala del destino) | 0,3 MB (1×) | 2,8 (3×) | 4,9 (4×) | 7,7 (5×) |
+| 640×480 | 1,2 MB (1×) | 1,2 (1×) | 4,9 (2×) | 4,9 (2×) |
+
+- **Peor caso** (`rdp_vram_worst`): 10 superficies (8 color images y 2 profundidades), cada una a lo más del peso de una de 320×240 a la escala-objetivo (o de 640×480 nativa si es mayor): 1× 12 MB; 3× 28 MB; 4× 49 MB; 5× 77 MB (73 MiB). Antes, con escala global, ocho de 640×480 a 5× eran 245 MB.
+- **Tope total:** `RDP_VRAM_BUDGET` = 96 MiB para destinos y profundidades vivos (los 256 MB locales a 1080p: pantallas 24 MB, 2D del VI 2,8 MB, menú y shaders unos MB; quedan ~120 MB de margen para la fragmentación del montón de `rsxMemalign`).
+- **Al arrancar:** `rdp_scale_pick` baja el objetivo mientras el peor caso pase del tope; con las cifras de arriba 5× entra (73 MiB), así que no se reduce nunca hoy, y la regla protege si cambia el máximo o el tope. El log dice «RDP listo: escala-objetivo N× …, pedida|automática[, reducida por memoria del RSX]».
+- **En el juego:** `rdp.c` suma los bytes vivos. Para crear un destino o una profundidad que pasaría del tope, `make_room` recicla el destino más viejo (menor `last_field`; nunca el presentado en el último campo ni el que se está creando o para el que se pide la profundidad) hasta que quepa, y cuenta `targets_evicted`. Si ni así cabe, o rsxkit no tiene memoria, esa color image se queda en la copia de la RDRAM (no se dibuja en el RSX) y una profundidad que falta dibuja sin z-buffer: nunca falla una creación sin camino de respaldo.
+- **Presentación:** `rsxkit_target_present` lee el destino como textura con filtro lineal; lo más que reduce es 5× en 720p (1600×1200 → 960×720, 1,67×), sin aliasing apreciable. A 1× la imagen se amplía con el mismo filtro lineal.
 
 ## Local store de los SPEs (256 KB c/u)
 
