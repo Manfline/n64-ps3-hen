@@ -42,6 +42,7 @@ void menu_settings_default(struct menu_settings *s)
 {
 	s->waves = true;
 	s->overscan = MENU_OVERSCAN_NORMAL;
+	s->resolution = MENU_RES_720P;
 }
 
 static const char *overscan_name(int o)
@@ -52,6 +53,11 @@ static const char *overscan_name(int o)
 	case MENU_OVERSCAN_WIDE:   return "Amplio";
 	default:                   return "Personalizado";
 	}
+}
+
+static const char *resolution_name(int r)
+{
+	return r == MENU_RES_1080P ? "1080p" : "720p";
 }
 
 static int lower(int c)
@@ -155,6 +161,10 @@ static enum menu_action options_buttons(struct menu *m, uint32_t pressed)
 		else
 			o = o == MENU_OVERSCAN_WIDE ? MENU_OVERSCAN_OFF : o + 1;
 		m->set.overscan = o;
+		return MENU_SETTINGS;
+	}
+	if (m->opt == MENU_OPT_RESOLUTION && (pressed & change)) {
+		m->set.resolution = m->set.resolution == MENU_RES_1080P ? MENU_RES_720P : MENU_RES_1080P;
 		return MENU_SETTINGS;
 	}
 	return MENU_NONE;
@@ -472,13 +482,18 @@ static void panel(const struct menu *m, float W, float H, float a)
 							 "ver (ahí algunos juegos dejan", "basura).", NULL,
 							 "Normal: 8 y 6 puntos por lado;", "amplio: 16 y 12.",
 							 "Se guarda en overscan.cfg.", NULL, NULL };
+		static const char *const res_text[] = { "Salida de video: 720p (3x)", "o 1080p (4x). Se aplica al", "volver a abrir Salsa64.",
+							"Se guarda en video.cfg.", NULL, NULL };
 		static const char *const back_text[] = { "A la lista de juegos.", NULL, NULL };
 		const char *title = m->opt == MENU_OPT_WAVES ? "Fondo animado"
-				    : m->opt == MENU_OPT_OVERSCAN ? "Recorte del borde" : "Volver";
+				    : m->opt == MENU_OPT_OVERSCAN ? "Recorte del borde"
+				    : m->opt == MENU_OPT_RESOLUTION ? "Resolución" : "Volver";
 		const char *const *text = m->opt == MENU_OPT_WAVES ? waves_text
-					  : m->opt == MENU_OPT_OVERSCAN ? crop_text : back_text;
+					  : m->opt == MENU_OPT_OVERSCAN ? crop_text
+					  : m->opt == MENU_OPT_RESOLUTION ? res_text : back_text;
 		const char *value = m->opt == MENU_OPT_WAVES ? (m->set.waves ? "Sí" : "No")
-				    : m->opt == MENU_OPT_OVERSCAN ? overscan_name(m->set.overscan) : NULL;
+				    : m->opt == MENU_OPT_OVERSCAN ? overscan_name(m->set.overscan)
+				    : m->opt == MENU_OPT_RESOLUTION ? resolution_name(m->set.resolution) : NULL;
 		stext(x, y, title, tscale, 0xFFFFFFu, ca, tmax);
 		y += 56.0f;
 		/* Líneas cortas (caben en 4:3); NULL es un renglón en blanco, dos
@@ -492,6 +507,19 @@ static void panel(const struct menu *m, float W, float H, float a)
 		}
 		if (value)
 			stext(x, y + 16.0f, value, tscale, C_ACCENT, ca, 0);
+		if (m->opt == MENU_OPT_RESOLUTION) {
+			y += 16.0f + 56.0f;
+			if (m->out_w && m->out_h) {
+				snprintf(buf, sizeof buf, "Salida actual: %ux%u", m->out_w, m->out_h);
+				stext(x, y, buf, dscale, C_TEXT, ca, lmax);
+				y += 30.0f;
+			}
+			/* Pidió 1080p al arrancar y la tele o el XMB no lo dieron. */
+			if (m->res_boot == MENU_RES_1080P && m->out_h && m->out_h != 1080) {
+				stext(x, y, "No hay 1080p: actívalo en", dscale, C_DIM, ca, lmax);
+				stext(x, y + 30.0f, "Ajustes de pantalla del XMB.", dscale, C_DIM, ca, lmax);
+			}
+		}
 		return;
 	}
 	int s = menu_selected(m);
@@ -566,9 +594,11 @@ static void options_column(const struct menu *m, float x, float W, float H, floa
 	struct row waves = { "Fondo animado", "Ondas detrás del menú", 2, "~", 0, m->set.waves ? "Sí" : "No" };
 	struct row crop = { "Recorte del borde", "Overscan de la imagen del juego", 2, "□", 0,
 			    overscan_name(m->set.overscan) };
+	struct row res = { "Resolución", "Salida de video (al reabrir)", 2, "■", 0, resolution_name(m->set.resolution) };
 	struct row back = { "Volver", "A la lista de juegos", 2, "◀", 0, NULL };
 	draw_row(&waves, MENU_OPT_WAVES - m->opt_pos, x, W, H, a);
 	draw_row(&crop, MENU_OPT_OVERSCAN - m->opt_pos, x, W, H, a);
+	draw_row(&res, MENU_OPT_RESOLUTION - m->opt_pos, x, W, H, a);
 	draw_row(&back, MENU_OPT_BACK - m->opt_pos, x, W, H, a);
 }
 

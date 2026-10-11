@@ -30,24 +30,52 @@
  * del reciclado). */
 #define RDP_TARGETS_STALE 30
 
+/* Un destino dibujado hace más de tantas tareas ya no se lee del RSX como
+ * textura: lo que vale es la RDRAM (docs/framebuffer.md). Dos o tres por
+ * los framebuffers alternos (Zelda copia el suyo dos tareas después). */
+#define RDP_TARGETS_FRESH 3
+
 struct rdp_target {
 	bool used;
 	bool drawn;           /* dibujado desde la última presentación */
+	bool presented;       /* el VI lo mostró alguna vez: es un framebuffer */
+	/* Se copió a la RDRAM al terminar una tarea (rdp_targets_readback):
+	 * desde entonces la verdad está ahí (el CPU puede haberla cambiado)
+	 * hasta que el RDP lo vuelva a dibujar. */
+	bool cpu_owned;
+	/* Lo dibujado ya está en la RDRAM por el espejo del framebuffer
+	 * (rdp_targets_mirrored), o no hay nada dibujado que copiar (recién
+	 * creado). Lo borra el próximo dibujo. */
+	bool mirrored;
+	uint8_t fmt;          /* G_IM_FMT_* de la color image (lo pone quien la crea; 0 si no se sabe) */
 	uint32_t addr;        /* color image: dirección física y ancho en píxeles */
 	uint32_t width;
 	uint32_t bpp;         /* bytes por píxel: 1, 2 o 4 */
 	uint32_t lw, lh;      /* tamaño lógico (píxeles de la N64) de la superficie */
 	uint32_t last_field;  /* último campo en que se dibujó (o se creó) */
+	uint32_t last_task;   /* última tarea que lo dibujó */
 };
 
 struct rdp_targets {
 	struct rdp_target t[RDP_TARGETS_MAX];
 	uint32_t field;         /* campo en curso: el último presentado */
+	uint32_t task;          /* tarea gráfica en curso (rdp_targets_task) */
 	int shown;              /* ranura presentada en el último campo, o -1 */
 	uint32_t shown_origin;  /* origen del VI en ese campo */
 	uint32_t shown_field;
 	uint32_t vi_width;      /* ancho del VI en el último campo con imagen */
 	uint32_t created;       /* superficies creadas (estadística) */
+	uint32_t readbacks;     /* copias a la RDRAM (estadística) */
+	uint32_t tex_rsx, tex_rdram, tex_self;  /* texturas con origen en un destino: del RSX, de la RDRAM, del ligado */
+};
+
+/* Orígenes recientes del VI (campos con imagen), para saber desde el hilo
+ * que no tiene la tabla si una color image es un framebuffer o una imagen
+ * auxiliar: lo lleva quien corre el VI (rdp_vi_ring_push por campo). */
+#define RDP_VI_RING 8
+struct rdp_vi_ring {
+	uint32_t origin[RDP_VI_RING], width[RDP_VI_RING];
+	uint32_t n;
 };
 
 /* Lo que se presenta en un campo: la región lógica del destino que
@@ -75,6 +103,63 @@ int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32
 
 /* Se dibujó en la ranura durante el campo en curso. */
 void rdp_targets_drawn(struct rdp_targets *s, int slot);
+
+/* Ranura del destino que contiene la dirección `addr` de una imagen de
+ * `pitch` texels por fila y `bpp` bytes por texel (el origen de una textura:
+ * gfx_tex.src_*), con el texel (x0, y0) del destino en que cae; -1 si
+ * ninguno. Entre destinos que se solapan, el que empieza más cerca. No
+ * mira la antigüedad: quien llama decide con last_task. */
+int rdp_targets_locate(const struct rdp_targets *s, uint32_t addr, uint32_t pitch, uint32_t bpp, uint32_t *x0,
+		       uint32_t *y0);
+
+/* Empieza una tarea gráfica (antes de traducir sus comandos). */
+void rdp_targets_task(struct rdp_targets *s);
+
+/* De dónde leer una textura cuyo origen es (addr, pitch, bpp): de la
+ * superficie del RSX del destino `*slot` (render a textura: dibujado hace
+ * RDP_TARGETS_FRESH tareas o menos y no es del CPU), de una copia del
+ * destino ligado `cur` (SELF: el juego lee lo que está dibujando, como la
+ * pausa de Zelda sobre su framebuffer; quien llama copia la superficie a un
+ * scratch antes), de la RDRAM (la textura decodificada por la HLE: el
+ * destino es viejo o se copió a la RDRAM) o de ninguno (no cae en un
+ * destino). Cuenta en tex_rsx / tex_rdram / tex_self. */
+enum rdp_texsrc { RDP_TEXSRC_NONE = 0, RDP_TEXSRC_RSX, RDP_TEXSRC_RDRAM, RDP_TEXSRC_SELF };
+enum rdp_texsrc rdp_targets_texture(struct rdp_targets *s, uint32_t addr, uint32_t pitch, uint32_t bpp, int cur,
+				    int *slot, uint32_t *x0, uint32_t *y0);
+
+/* Al terminar una tarea que dibujó la ranura: si hay que copiarla a la
+ * RDRAM (rdp_readback_wanted con los orígenes del VI de la tabla) la marca
+ * del CPU y devuelve true. Con `force`, se copia sin preguntar (lo decidió
+ * otro hilo con rdp_readback_wanted). */
+bool rdp_targets_readback(struct rdp_targets *s, int slot, bool force);
+
+/* Espejo del framebuffer (rdp.c y el rasterizador del host): lo que el RDP
+ * dibuja en un framebuffer se copia a la RDRAM para que el CPU lea el
+ * cuadro y no basura (la cámara del túnel de Mario Kart), una sola vez por
+ * dibujo y cuanto antes: al terminar la tarea que lo dibujó si ya se sabe
+ * que es un framebuffer (rdp_targets_mirror_at_task_end: el VI lo mostró
+ * alguna vez, de 16 bits y del ancho del VI) y, si no, al presentarlo
+ * (rdp_targets_mirror_wanted). Copiar al presentar, o en cada campo, un
+ * cuadro que el RDP dibujó antes pisa lo que el CPU o un DMA escribieron
+ * entre medio: Super Mario 64, al pasar del logo a la cara de Mario,
+ * dibuja un framebuffer, carga por DMA datos encima de él y de otro y el
+ * VI los muestra uno o dos campos más; esas copias pisaban los datos y el
+ * juego se colgaba (dejaba de mandar tareas gráficas). */
+bool rdp_targets_mirror_wanted(const struct rdp_targets *s, int slot);
+bool rdp_targets_mirror_at_task_end(const struct rdp_targets *s, int slot);
+/* La copia del espejo de la ranura se hizo (o quedó encolada). */
+void rdp_targets_mirrored(struct rdp_targets *s, int slot);
+
+void rdp_vi_ring_push(struct rdp_vi_ring *r, uint32_t origin, uint32_t width);
+/* ¿Hay que copiar a la RDRAM la color image (addr, width, siz) cuando el
+ * RDP termine de dibujarla? Sí para una imagen de 16 bits del ancho del VI
+ * que no es ninguno de los framebuffers recientes: un cuadro guardado
+ * aparte, que el CPU suele leer (el fondo de la pausa de Zelda). Las
+ * imágenes chicas (iconos, pantallas) se quedan en el RSX como textura. */
+bool rdp_readback_wanted(const struct rdp_vi_ring *r, uint32_t addr, uint32_t width, uint32_t siz);
+/* ¿La color image (addr, width) está dentro de alguno de los framebuffers
+ * recientes del VI? Las que no lo están son imágenes auxiliares. */
+bool rdp_vi_ring_covers(const struct rdp_vi_ring *r, uint32_t addr, uint32_t width);
 
 /* Qué presentar en el campo `field` para la imagen `f` del VI: entre los
  * destinos recientes que cubren el origen, el del ancho del VI; entre

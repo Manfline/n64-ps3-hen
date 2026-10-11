@@ -41,7 +41,8 @@
  * por título, con un panel de información (archivo, código, región, tipo de
  * guardado) y ondas de fondo; en Opciones se apagan las ondas (se guarda
  * en SALSA64_DATA_DIR/menu.cfg) y se elige el recorte del overscan (se
- * escribe overscan.cfg, que run_game relee en cada juego). Cruceta para elegir, X para abrir, triángulo
+ * escribe overscan.cfg, que run_game relee en cada juego) y la resolución de
+ * salida (video.cfg; vale al volver a abrir Salsa64). Cruceta para elegir, X para abrir, triángulo
  * para Opciones; la última ROM abierta queda en SALSA64_DATA_DIR/ultima-rom
  * y es la elegida al volver. Dentro del juego, START + SELECT vuelve al menú: se
  * cierra todo lo del juego (guardado al disco, audio, HLE gráfica y de
@@ -128,6 +129,7 @@
 #include <sys/systime.h>
 #include <sys/thread.h>
 #include <sysutil/sysutil.h>
+#include <sysutil/video.h>
 
 #include <rsxkit/rsxkit.h>
 #include <rsxkit/ui.h>
@@ -175,6 +177,7 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define MENU_TEST_MAX 8
 #define MENU_IDLE_FIELDS 900  /* prueba automática: sin acción en tanto, falla */
 #define OVERSCAN_PATH SALSA64_DATA_DIR "/overscan.cfg"
+#define VIDEO_CFG_PATH SALSA64_DATA_DIR "/video.cfg"
 /* Con este archivo, la RDRAM emulada sale de sysMemoryAllocate con páginas
  * de 1 MB en vez del heap (memalign): para medir si el PPE pierde tiempo en
  * fallos de TLB (docs/perf-log.md). El tamaño de página real de cada zona
@@ -848,6 +851,7 @@ static void post_field(void)
 	m.snap = -1;
 
 	if (salsa64_vi_frame(&n64.bus, &m.f) && m.f.width <= FB_MAX_W && m.f.height <= FB_MAX_H) {
+		salsa64_rdp_vi(m.f.origin, m.f.width);  /* qué color images son framebuffers */
 		if (selftest_on && selftest_frame(&n64.bus, &m.f))
 			m.flags |= FIELD_CHECK;
 		if (cap_every && m.field % cap_every == 0)
@@ -1297,6 +1301,22 @@ static void stats(uint64_t now)
 			    (double)(rs.fp_loads - sw.rdp0.fp_loads) / tasks, rs.draws_generated - sw.rdp0.draws_generated,
 			    (double)(rs.draws_generated - sw.rdp0.draws_generated) / tasks, rs.fp_programs,
 			    rs.fp_generated - sw.rdp0.fp_generated, rs.fp_evictions - sw.rdp0.fp_evictions);
+		uint32_t rb = rs.readbacks - sw.rdp0.readbacks, rbw = rs.readback_waits - sw.rdp0.readback_waits;
+		uint32_t trsx = rs.tex_rsx - sw.rdp0.tex_rsx, trd = rs.tex_rdram - sw.rdp0.tex_rdram;
+		uint32_t tself = rs.tex_self - sw.rdp0.tex_self, primes = rs.primes - sw.rdp0.primes;
+		uint32_t mir = rs.mirrors - sw.rdp0.mirrors, mirs = rs.mirrors_skipped - sw.rdp0.mirrors_skipped;
+		uint32_t fmir = rs.frames_mirrored - sw.rdp0.frames_mirrored;
+		uint32_t lost = rs.readbacks_lost - sw.rdp0.readbacks_lost, tfail = rs.targets_failed - sw.rdp0.targets_failed;
+		uint32_t tabs = rs.targets_absurd - sw.rdp0.targets_absurd;
+		if (rb || rbw || mir || mirs || fmir || trsx || trd || tself || primes || lost || tfail || tabs)
+			salsa64_log("gfx: framebuffer: %u copias a la RDRAM (%.2f ms c/u en presentación), la emulación "
+				    "esperó %u tareas (%.2f ms c/u, %u tarde), %u copias espejo (%u sin búfer), %u cuadros "
+				    "copiados; texturas desde un destino: %u del RSX, %u de la RDRAM, %u del ligado; %u "
+				    "destinos cebados; %u copias perdidas, %u destinos sin superficie, %u color images imposibles",
+				    rb, rb ? (rs.us_readback - sw.rdp0.us_readback) / 1e3 / rb : 0.0, rbw,
+				    rbw ? (rs.us_readback_wait - sw.rdp0.us_readback_wait) / 1e3 / rbw : 0.0,
+				    rs.readback_late - sw.rdp0.readback_late, mir, mirs, fmir, trsx, trd, tself, primes, lost,
+				    tfail, tabs);
 	}
 	if (lle_mode != SALSA64_LLE_OFF) {
 		uint32_t t = rsp_spu.tasks - sw.lle_tasks0;
@@ -1576,6 +1596,20 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	if (audiotest_on)
 		audiotest_start();
 	{
+		/* SALSA64_DATA_DIR/fbfx.cfg: 0 sin efectos de framebuffer, 1 solo
+		 * render a textura, 2 también copias a la RDRAM (por omisión). */
+		int fbfx = 2;
+		FILE *ff = fopen(SALSA64_DATA_DIR "/fbfx.cfg", "r");
+		if (ff) {
+			if (fscanf(ff, "%d", &fbfx) != 1)
+				fbfx = 2;
+			fclose(ff);
+		}
+		salsa64_rdp_fbfx(fbfx);
+		salsa64_log("efectos de framebuffer: %s", fbfx <= 0 ? "apagados" : fbfx == 1 ? "render a textura" :
+								"render a textura y copias a la RDRAM");
+	}
+	{
 		FILE *df = fopen(SALSA64_DATA_DIR "/gfxdump", "r");
 		if (df) {
 			if (fscanf(df, "%u", &pres.dump_field) != 1)
@@ -1653,6 +1687,10 @@ static const char *const rom_dirs[] = {
 	"/dev_usb004/salsa64", "/dev_usb005/salsa64", "/dev_usb006/salsa64", "/dev_usb007/salsa64",
 };
 
+static bool video_wants_1080(void);
+static void video_save(int resolution);
+static bool boot_1080;  /* video.cfg pedía 1080p al arrancar (rsxkit_init ya corrió) */
+
 static struct romlist roms;
 static struct menu menu;
 static struct {
@@ -1705,6 +1743,10 @@ static void menu_scan(const char *keep)
 	menu_init(&menu, &roms, keep ? romlist_find(&roms, keep) : -1, &mn.settings);
 	if (keep)
 		snprintf(menu.last, sizeof menu.last, "%s", keep);
+	const rsxkit_screen *osc = rsxkit_screen_info();
+	menu.out_w = osc->width;
+	menu.out_h = osc->height;
+	menu.res_boot = boot_1080 ? MENU_RES_1080P : MENU_RES_720P;
 	menu.dirs[menu.ndirs++] = SALSA64_DATA_DIR;
 	menu.dirs[menu.ndirs++] = "/dev_usb000/salsa64 … /dev_usb007/salsa64";
 }
@@ -1837,6 +1879,7 @@ static int menu_loop(void)
 	menu_settings_load();
 	load_overscan();
 	mn.settings.overscan = overscan_preset();
+	mn.settings.resolution = video_wants_1080() ? MENU_RES_1080P : MENU_RES_720P;
 	salsa64_log("menú: espacio lógico de %.0fx%.0f sobre %ux%u, búfer de ROM de %u MB, fondo animado %s", mn.lw,
 		    mn.lh, sc->width, sc->height, ROM_MAX >> 20, mn.settings.waves ? "sí" : "no");
 
@@ -1876,6 +1919,8 @@ static int menu_loop(void)
 		if (a == MENU_SETTINGS) {
 			if (menu.set.overscan != mn.settings.overscan)
 				overscan_save(menu.set.overscan);
+			if (menu.set.resolution != mn.settings.resolution)
+				video_save(menu.set.resolution);
 			if (menu.set.waves != mn.settings.waves) {
 				mn.settings.waves = menu.set.waves;
 				menu_settings_save();
@@ -1906,20 +1951,64 @@ static int menu_loop(void)
 	return ok ? 0 : 1;
 }
 
+/* video.cfg: «1080» prefiere 1080p, con el render de la N64 a 4× (1280×960);
+ * sin archivo, o con otra cosa, 720p a 3× como siempre. Si la tele no acepta
+ * 1080, sigue con el siguiente modo de la lista. */
+static const int32_t modes_1080[] = {
+	VIDEO_RESOLUTION_1080, VIDEO_RESOLUTION_720, VIDEO_RESOLUTION_480, VIDEO_RESOLUTION_576,
+};
+
+static bool video_wants_1080(void)
+{
+	FILE *f = fopen(VIDEO_CFG_PATH, "r");
+	if (!f)
+		return false;
+	char line[16] = "";
+	bool want_1080 = fgets(line, sizeof line, f) && strncmp(line, "1080", 4) == 0;
+	fclose(f);
+	return want_1080;
+}
+
+/* Opción «Resolución» del menú: video.cfg con «1080» o «720». Solo se lee
+ * al arrancar (rsxkit_init), así que el cambio vale al volver a abrir. */
+static void video_save(int resolution)
+{
+	FILE *f = fopen(VIDEO_CFG_PATH, "w");
+	if (f) {
+		fputs(resolution == MENU_RES_1080P ? "1080\n" : "720\n", f);
+		fclose(f);
+	} else
+		salsa64_log("menú: no se pudo escribir %s", VIDEO_CFG_PATH);
+}
+
+static const rsxkit_config *video_config(rsxkit_config *cfg)
+{
+	if (!video_wants_1080())
+		return NULL;
+	memset(cfg, 0, sizeof *cfg);
+	cfg->modes = modes_1080;
+	cfg->num_modes = sizeof modes_1080 / sizeof modes_1080[0];
+	return cfg;
+}
+
 int main(void)
 {
 	salsa64_log_init("salsa64");
 	pres.autotest = salsa64_autotest();
 
-	int rc = rsxkit_init(NULL);
+	rsxkit_config vcfg;
+	const rsxkit_config *vc = video_config(&vcfg);
+	int rc = rsxkit_init(vc);
 	pres.fb = rc == RSXKIT_OK ? rsxkit_fb_create(FB_MAX_W, FB_MAX_H) : NULL;
 	if (!pres.fb) {
 		salsa64_log("RESULTADO frontend: FALLO al iniciar el RSX (%d)", rc);
 		salsa64_log_shutdown();
 		return 1;
 	}
+	boot_1080 = vc != NULL;
 	const rsxkit_screen *sc = rsxkit_screen_info();
-	salsa64_log("RSX listo: %ux%u, tele %s", sc->width, sc->height, sc->aspect > 1.5f ? "16:9" : "4:3");
+	salsa64_log("RSX listo: %ux%u, tele %s%s", sc->width, sc->height, sc->aspect > 1.5f ? "16:9" : "4:3",
+		    vc ? " (video.cfg: 1080)" : "");
 	if ((rc = salsa64_rdp_init(0)) != RSXKIT_OK) {
 		salsa64_log("RESULTADO frontend: FALLO al preparar el RDP (%d)", rc);
 		rsxkit_shutdown();
@@ -1967,6 +2056,10 @@ int main(void)
 		salsa64_log_shutdown();
 		return 1;
 	}
+	/* Efectos de framebuffer: copias RSX → RDRAM y el despertar del hilo de
+	 * presentación cuando una tarea las necesita (docs/framebuffer.md). */
+	salsa64_rdp_set_memory(rdram, SALSA64_RDRAM_MAX, wake);
+	salsa64_rdp_set_log(salsa64_log);
 	ioPadInit(7);
 	load_padmap();
 	sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, sysutil_cb, NULL);

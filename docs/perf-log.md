@@ -28,6 +28,36 @@ antes, después, notas.
 | 2026-10-11 | 3b95776 | **HLE de la tarea JPEG de Zelda OoT** en la PS3, dos salas (tienda Kokiri y casa de Link) | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00091 «Salsa64 Kokiri», respaldo del usuario | antes: fondo sin dibujar (malla en colores planos) | **67,8 y 67,3 ms del PPE por sala**; ventana de la carga 57,3–57,6 campos/s, peor campo 37–39 ms de emulación | ~110 veces lo de la Mac: flotantes y conversiones a entero por memoria en el PPE. Se queda en el PPE (una vez por sala, durante la transición); pendiente pasarlo a punto fijo |
 | 2026-10-11 | (rama fervent-hodgkin) | **HLE de la tarea JPEG de Zelda OoT** (fondos prerrenderizados), una sala: 75 tareas, 300 macrobloques | Mac (salsa64-run nativo, Apple Silicon) | antes: las tareas terminaban sin hacer nada (fondo basura) | **0,61 ms por sala** en el hilo del CPU, una vez al cargarla | Corre en el PPE (`core/rsp.c`); IDCT separable en flotante sin optimizar. El frontend escribe «JPEG: N tareas, M macrobloques en X ms del PPE» al terminar cada tanda: con esa medida se decide si se queda en el PPE o va a un SPE. El fondo se copia en el SPE 0 (40 tiras por cuadro, reutilizadas por la caché de texturas) |
 
+## Efectos de framebuffer (2026-10-11)
+
+Rama hopeful-dirac (docs/framebuffer.md). Lo que cuesta cada mecanismo lo
+escribe el frontend cada 5 s («gfx: framebuffer: N copias a la RDRAM (ms
+c/u en presentación), la emulación esperó N tareas (ms c/u, N tarde), N
+copias espejo, N cuadros copiados; texturas desde un destino: del RSX, de
+la RDRAM, del ligado; destinos cebados; copias perdidas, destinos sin
+superficie, color images imposibles»). Interruptor:
+`SALSA64_DATA_DIR/fbfx.cfg` (`0` apaga todo, `1` solo render a textura,
+`2` todo, por omisión).
+
+**RPCS3** (0.0.43; no vale para tiempos): gfxtest 35 de 35; 122 copias de
+320 × 240 en 120 cuadros, 2,05 ms cada una en presentación. Sirve solo
+para saber que el mecanismo funciona de punta a punta.
+
+**PS3 real** (2026-10-11, Slim CECH-3011A, HFW 4.91 + HEN, app SLSA00089
+«Salsa64 framebuffer», 720p a 3×; logs fuera del repo):
+
+| Juego | Escena | Campos/s | Copias a la RDRAM (esperadas por la emulación) | Espejos | Notas |
+|---|---|---|---|---|---|
+| gfxtest | 35 de 35 puntos | — | 1 por cuadro (la imagen de 64 que lee el CPU): 6,7–6,9 ms c/u en presentación; la emulación esperó 7,4–7,9 ms por tarea | 2 por cuadro | Un caso artificial que copia en cada cuadro: el peor costo posible |
+| Zelda OoT | bosque Kokiri, un minuto | 59,8 (100 %) | 0 | 0 | Emulación 4,0 ms por campo, igual que antes; 225–290 cuadros copiados por 5 s (espejo del framebuffer, 0,0 ms medidos) |
+| Zelda OoT | abrir la pausa | — | el fondo (320 × 240): 16 ms; y 4 chicas (64 × 112): Link, su z, su copia y la cobertura | — | Una vez por pausa; la N64 tarda ~1 s en filtrar el fondo |
+| Zelda OoT | pausa abierta (paquete con 16 superficies) | 59,9 (100 %) | 2 por tarea (Link y su z, redibujados cada tarea aunque nadie los lea): 7,4–8,4 ms c/u; la emulación esperó 16–24 ms por tarea | 0 | 44 texturas por tarea desde la RDRAM (las franjas del fondo y Link). El paquete final espera esas copias solo las dos primeras tareas: por medir |
+| Mario Kart 64 | Luigi Raceway, túnel | 60 | 0 | 0 | La cámara del túnel se ve gracias al espejo del framebuffer por campo |
+| SM64 | castillo exterior, un minuto | 59,8 (100 %) | 1 al arrancar (12 ms) | 0 | |
+| GoldenEye | Dam, un minuto | 45,8 (76 %) | 0 | 0 | Dentro del rango previo del nivel (34–55: va por el CPU); 225–229 cuadros copiados por 5 s, 0,0 ms por campo en presentación |
+| Banjo-Kazooie | intro y Spiral Mountain | 56–57 | 0 | 0 | Igual que antes |
+| Conker | intro, 3 minutos | 59,8 | 1–2 por ventana de 5 s (una color image de 292 que se dibuja cada tarea y no se presenta: la primera se espera, las demás van sin esperar) | muchas | Igual que antes |
+
 ## Caché de texturas (2026-10-10)
 
 **PS3 real** (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00070 «Salsa64

@@ -82,8 +82,132 @@ sin advertencias.
 en la presa junto al camión (escena fija), Perfect Dark en un nivel y un
 minuto de Zelda, SM64 y Mario Kart; anotar campos/s, ms de emulación,
 vaciados/desalojos y el peor campo en docs/perf-log.md. El paquete de
-cpu-tests SLSA00094 «Salsa64 CPU FPU» trae el bench (add.s, cvt…) para el
-costo por instrucción.
+cpu-tests SLSA00095 «Salsa64 CPU FPU» (`build/salsa64-cpu-fpu/`; SLSA00094
+es el de los estados guardados) trae el bench (add.s, cvt…) para el costo
+por instrucción. Los dos paquetes se rehicieron con main traído a la rama
+(69051fc: efectos de framebuffer, espejo de SM64, video.cfg), para que la
+medición sea sobre el main actual.
+
+## 2026-10-11 — SM64 se colgaba con los efectos de framebuffer: el espejo del framebuffer sigue al dibujo, no al VI
+
+**Síntoma** (host, main 4baa6df): Super Mario 64 con `SALSA64_FBFX=2` dejaba
+de mandar tareas gráficas en la 96 (campo ~343, paso del logo a la cara de
+Mario; el audio seguía). Bisección con `--first-parent` en la rama de los
+efectos: lo rompe b4d9d61 («Host: el modelo de copias sigue la política de
+la consola»); ya había fallado en bf836f2 (espejo del framebuffer por
+campo) y lo tapaba sin querer que el host copiara todos los framebuffers
+al terminar cada tarea (su `vi_width` quedaba en 0).
+
+**Causa** (docs/framebuffer.md, «Espejo del framebuffer»): el espejo
+copiaba el framebuffer presentado en cada campo. SM64 dibuja un
+framebuffer (tarea 95), carga por DMA ~200 KB de datos de la cara sobre dos
+de sus framebuffers (`390000`–`3c2780`) mientras el VI todavía muestra uno,
+y lo presenta un campo más: la copia pisaba esos datos (el código de la
+cara los lee en el campo 354) y el juego se colgaba. Copiar «una vez al
+presentar» no alcanza (ese framebuffer se presenta por primera vez después
+del DMA). Además el host copiaba el alto conjeturado (`lh`) en vez de las
+filas que muestra el VI: la intro de Conker se colgaba en la tarea 34 (en
+la PS3, que copia las filas del VI, no).
+
+**Arreglo**: lo dibujado en un framebuffer se copia a la RDRAM una vez por
+dibujo, al terminar la tarea si el VI ya lo mostró alguna vez y si no al
+presentarlo (`rdp_targets_mirror_at_task_end` / `rdp_targets_mirror_wanted`
+en `src/rdp/targets.c`), igual en `src/rdp/rdp.c` (PS3) y en
+`src/host/raster.c`. Pruebas: `targets_frame_mirror` (política) y
+`raster_frame_mirror_sm64` (el rasterizador del host de punta a punta,
+`tests/unit/test_raster.c`; falla con el raster.c de main).
+
+**¿La PS3?** El camino existe ahí: `frame_mirror` de `rdp.c` copia el
+presentado en cada campo desde bf836f2 y su copia llega un campo después,
+o sea después del DMA del campo 343 (el host con ese retraso simulado
+también se cuelga en la tarea 96). No hay registro de SM64 en la PS3 con el
+espejo: `build/ps3-logs/sm64.log` no tiene «cuadros copiados» (anterior a
+bf836f2). Hay que confirmarlo en la consola.
+
+**Verificación** (host nativo, respaldos fuera del repo): SM64 660 tareas
+en 1500 campos (como con `FBFX=1`) y hasta el castillo con el medidor de
+energía igual que con `FBFX=1`; Conker 395 tareas (main 34; igual que
+`FBFX=1`); Zelda: pausa (fondo difuminado) y pantalla de equipo con Link,
+53 capturas idénticas a main (partida nueva «A» creada con el control);
+Mario Kart en Luigi Raceway (`mk64-luigi.pad`) y GoldenEye idénticos a main
+(el pad no llega al túnel); Banjo con la misma imagen de la HLE.
+`test-host` 371/371, `test-roms` en verde (gfxtest 35/35 en las tres
+variantes), `build.sh` sin avisos, `test-phase2` en verde (gfxtest 35/35
+en RPCS3).
+
+**Pendiente (PS3 real):** SM64 del logo a la cara de Mario y al castillo,
+la cámara del túnel de Luigi Raceway, la pausa y la pantalla de equipo de
+Zelda, Conker. Queda una carrera solo de la PS3: la copia llega a la RDRAM
+uno o dos campos después de traducir la tarea, así que un DMA sobre un
+framebuffer en el mismo campo en que el RDP lo terminó podría quedar
+debajo (en SM64 pasan ~4 campos).
+
+## 2026-10-11 — Efectos de framebuffer: render a textura y copias RSX → RDRAM (rama hopeful-dirac)
+
+Diseño y hallazgos en `docs/framebuffer.md`; costos en `docs/perf-log.md`.
+Resuelto y confirmado en la PS3 real con el paquete SLSA00089 («Salsa64
+framebuffer»): el fondo de la pausa de Zelda OoT (nítido), Link en la
+pantalla de equipo (dentro y fuera de la casa, cambiando de equipo), la
+cámara del túnel de Luigi Raceway en Mario Kart 64 (el CPU fabrica esa
+textura leyendo el framebuffer), gfxtest 35 de 35 (tres casos nuevos: render
+a textura, copia a la RDRAM de una color image grande y de una chica que
+solo lee el CPU) y sin regresiones: SM64 59,8, GoldenEye en Dam 45,8 (su
+rango), Banjo 56–57, Conker 59,8 campos/s.
+
+**Lo que hizo falta** (todo medido con datos de la consola, no a ciegas):
+
+- Procedencia de las texturas en la HLE, tabla de destinos con política
+  (`src/rdp/targets.c`), render a textura desde la superficie del RSX,
+  copias RSX → RDRAM sincronizadas con la emulación, espejos asíncronos de
+  las imágenes chicas y del framebuffer presentado cada campo, cebado de
+  las superficies desde la RDRAM, VISCVG como cobertura plena.
+- `rsxkit` solo admitía 8 superficies: la pausa de Zelda tiene 9 color
+  images vivas más el scratch, la novena no se creaba y Link salía con
+  basura del heap. Ahora 16, y el log cuenta «destinos sin superficie».
+- La copia pedida se buscaba solo por dirección: `3da800` es el
+  framebuffer (320) y el búfer de Link (64) a la vez y se copiaba el
+  framebuffer entero (10 ms) en vez de Link.
+- Con más de dos copias esperadas en una tarea, la tercera pisaba el
+  búfer de la primera antes de que el RSX la leyera.
+- La HLE emite dos color images imposibles al abrir la pausa (anchos de
+  1495 y 3770): reciclaban ranuras buenas; ahora se ignoran.
+- La cobertura que Zelda guarda para su filtro es una color image de 8
+  bits de intensidad (`siz 1`): también se copia (las CI8 no).
+- En la pausa alternan tres z-buffers; con dos profundidades se destruían
+  y creaban a cada tarea (`rsxkit_finish` en cada una). Ahora cuatro.
+- El modelo del host no llamaba a `rdp_targets_present`: copiaba todos los
+  destinos de cada tarea y por eso «funcionaba» donde la consola no.
+
+**Verificación (árbol final, con main traído):** `test-host` 369 pruebas
+(617 939 verificaciones, 0 fallidas), `test-roms` en verde, `build.sh` sin
+avisos, `test-phase2` en RPCS3 en verde (gfxtest incluido); `test-rec` en
+tarea aparte (la parte unitaria 369/369 con el recompilador). En el host, gfxtest 35/35 con los tres microcódigos y la
+pausa de Zelda en el bosque Kokiri y dentro de la casa (pads en
+`docs/pads/`: `zelda-kokiri.pad` + `3600:START;…` llega a EQUIPMENT fuera
+de la casa).
+
+**Pendiente (otros trabajos):**
+
+- [ ] Polígono transitorio (verde o amarillo, ~1 s) al abrir la pausa de
+      Zelda en la PS3: volvió al caber los dos pares de búferes de Link;
+      la causa más probable eran las dos profundidades (arreglado a cuatro
+      en el último paquete, por confirmar en la consola).
+- [ ] Las copias chicas que se repiten cada tarea sin que ningún dibujo
+      las lea (Link redibujado en cada tarea de la pausa) se esperan solo
+      las dos primeras veces y después van sin esperar: medir que la
+      pausa baja de ~22 ms de espera por tarea a casi nada.
+- [ ] Líneas del logo de N64 de Zelda: no era la presentación (el host
+      también las dibuja): HLE del texto «NINTENDO 64» con la segunda
+      textura de ruido.
+- [ ] Túnica de Link con un defecto de textura (previo a la rama, también
+      con `fbfx.cfg` en 0).
+- [ ] Perfect Dark y Conker: copias del z-buffer (rectángulos que leen la
+      z image como color image), sombra y desenfoque de Conker; color
+      images de 32 bits no se copian ni se ceban.
+- [ ] Reducir 3× → 1× con filtro de caja (hoy bilineal del RSX) y, si
+      pesa, la conversión en un SPE.
+- [ ] Controles que a veces no responden en la pausa (también en SM64):
+      arreglado en main (fba3a95), por confirmar aquí.
 
 ## 2026-10-11 — Recompilador: perfil por causa y menos salidas a C en GoldenEye y Perfect Dark (rama `upbeat-driscoll-1dd271`, paquete SLSA00088 «Salsa64 JIT»)
 
@@ -611,7 +735,26 @@ generador el autor vio GoldenEye normal en la PS3. Después, el menú estilo XMB
 **Integrado el 2026-10-11:** recorte del RSP (`reverent-meninsky-b3f79c`,
 «Salsa64 recorte» SLSA00090): en la PS3, Mario Kart sin polígonos estirados,
 SM64 y Perfect Dark bien. Las líneas azules de GoldenEye salen también sin el
-recorte (A/B en la PS3): pendiente aparte, abajo.
+recorte (A/B en la PS3): pendiente aparte, abajo. Después, el mismo día:
+control (pulsaciones perdidas), fondos prerrenderizados de Zelda (JPEG + S2DEX),
+recompilador con perfil por causa, efectos de framebuffer (4baa6df) y el arreglo
+del espejo del framebuffer que colgaba SM64 en la cara de Mario (84ea55f; en la
+PS3 sin confirmar).
+
+**Para la próxima prueba en la PS3 (tarde del 2026-10-11):**
+1. Paquete principal de la rama `dev-a1388b259074798ab` (1647a25:
+   resolución 720p/1080p, escala interna 1×–5× por destino, «Aplicar ahora»,
+   ROM a su medida, más main con el framebuffer y el arreglo de SM64), en
+   `dev-a1388b259074798ab/build/salsa64/salsa64.pkg`. Ver a
+   720p/Auto y luego a 5×: SM64 del logo al castillo, pausa y equipo de Zelda,
+   túnel de Mario Kart, intro de Conker; «Aplicar ahora» 720p ↔ 1080p. Si pasa,
+   se integra esa rama.
+2. Estados guardados + contador de FPS (`wonderful-blackwell-6f40d3`,
+   SLSA00094): guion en su docs/estado.md.
+3. FPU en registros, COP0 nativo y caché por tramos (`jovial-jones-2408ac`,
+   SLSA00093): A/B con archivos-bandera en la presa de GoldenEye, junto al camión.
+4. Al final: rama de publicación (`distracted-vaughan-ab7980`) y la
+   reescritura de la historia, con el sí del autor.
 
 **Noche del 2026-10-10 → 11:** corren de noche, sin la PS3, los trabajos del JIT
 (`upbeat-driscoll-1dd271`, SLSA00088), de efectos de framebuffer
@@ -662,8 +805,26 @@ sugerido: recorte → líneas del logo → framebuffer → JIT.
 - JIT («Recompilador: más velocidad del CPU en GoldenEye y Perfect
   Dark»): ya puede abrirse (el menú está en main).
 - Efectos de framebuffer (pendiente de abajo): ya puede abrirse, presentación está en main.
-- HLE: z/w > 1 en Banjo (modelos que tiemblan, cielo), boca negra de Conker.
-- Zelda: fondos prerrenderizados (S2DEX + tarea JPEG); luego Majora's Mask.
+- HLE: **cara de Conker** (polígonos negros en la boca, visto en la PS3; no lo
+  explicaba la presentación) y z/w > 1 en Banjo (modelos que tiemblan, cielo).
+- Gráficos pendientes (actualizado 2026-10-11): líneas del logo de Zelda (la
+  HLE muestrea mal la segunda textura de ruido del texto «NINTENDO 64»),
+  defecto en la túnica de Link, líneas azules en uniones de GoldenEye.
+- **Mario Kart, Luigi Raceway: negro arriba del muro de ladrillos** (PS3,
+  2026-10-11, en todos los paquetes): debería verse el cielo en degradado y el
+  fondo de la pista. Previo a las ramas de hoy; candidato: cómo se dibuja el
+  cielo (rectángulo o triángulos con degradado al fondo). Reproducir en el host
+  con docs/pads/mk64-luigi.pad y comparar contra mupen64plus.
+- Zelda: fondos prerrenderizados hechos (2026-10-11); JPEG a punto fijo
+  (68 ms por sala en el PPE, meta < 10 ms); luego Majora's Mask.
+- Recompilador: FPU en registros, más registros fijos y refill de la TLB
+  (en curso desde el 2026-10-11).
+- **Quitarle trabajo al PPE** (decidido el 2026-10-11, después de cerrar los
+  trabajos abiertos): el VR4300 se queda en el PPE (memoria, FPU IEEE y saltos
+  no le van a un SPE), pero lo demás pasa a los SPEs libres (2–5) para que el
+  hilo 0 tenga el núcleo: tarea JPEG de Zelda (68 ms en el PPE), conversión de
+  texturas, lo que quede de la presentación del hilo 1. Ordenar con
+  docs/uso-cell.md (uso medido por componente y por juego).
 - Fase 5 (posprocesado, MSAA) después de presentación y menú; recompilador
   RSP→SPU para el LLE; conversión genérica de texturas en lib/rsxkit/spu.
 
