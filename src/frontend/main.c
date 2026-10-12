@@ -1129,8 +1129,13 @@ static void emu_thread(void *arg)
 		 * emulado no se adelanta) antes de encolar el campo, así su salida
 		 * va con él y las colas quedan vacías en la barrera. */
 		int req = state_req;
-		if (req)
+		if (req) {
+			salsa64_log("estado: emulación en el fin del campo %u: recojo la tarea del RSP (%s)", n64.bus.vi.fields,
+				    n64.bus.rsp.busy == SALSA64_TASK_GFX ? "gráfica" : n64.bus.rsp.busy == SALSA64_TASK_AUDIO ? "audio" :
+				    n64.bus.rsp.busy ? "otra" : "ninguna");
 			state_quiet = salsa64_rsp_quiesce(&n64.bus);
+			salsa64_log("estado: tarea recogida; encolo el campo y me detengo");
+		}
 		post_field(req ? FIELD_STATE : 0);
 		/* audio_out: si el audio necesita este hilo (fin de cada tarea
 		 * de audio), aquí. */
@@ -1257,6 +1262,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	}
 	if ((m->flags & FIELD_STATE) && state_req == STATE_SAVE) {
 		/* La miniatura del estado: la imagen sin el aviso encima. */
+		salsa64_log("estado: miniatura del campo %u (imagen %dx%d en %d,%d)", m->field, (int)r.w, (int)r.h, r.x, r.y);
 		rsxkit_finish();
 		states_thumb_capture(&r);
 	}
@@ -1539,11 +1545,15 @@ enum game_end {
  * salsa64_state_load. */
 static void state_barrier(void)
 {
+	salsa64_log("estado: barrera: emulación quieta en el campo %u (tarea del RSP %s)", n64.bus.vi.fields,
+		    state_quiet ? "recogida" : "sin recoger");
 	drain(sysGetSystemTime(), 1);
 	rsxkit_finish();
+	salsa64_log("estado: barrera: colas vacías y RSX terminado");
 	/* Ninguna copia RSX → RDRAM en vuelo: al guardar quedan en el estado y
 	 * al cargar no llegan tarde sobre la RDRAM cargada. */
 	salsa64_rdp_settle();
+	salsa64_log("estado: barrera: copias RSX → RDRAM en vuelo terminadas");
 	int req = state_req;
 	unsigned slot = state_req_slot;
 	char err[160] = "";

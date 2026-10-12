@@ -116,7 +116,10 @@ static bool spu_state(struct salsa64_gfx_spu *s, uint32_t kind)
 	if (s->pending || !s->worker)
 		return false;
 	struct gfx_state_job sj = { (uint64_t)(uintptr_t)((uint8_t *)&shadow + GFX_RAW_START) };
+	salsa64_log("estado de la HLE gráfica: trabajo %u al SPE (tramo %u–%u a %p)", kind, (unsigned)GFX_RAW_START,
+		    (unsigned)GFX_RAW_END, (void *)((uint8_t *)&shadow + GFX_RAW_START));
 	const spukit_result *r = spukit_wait(s->worker, spukit_post(s->worker, kind, &sj, sizeof sj));
+	salsa64_log("estado de la HLE gráfica: el SPE contestó (error %d)", r->error);
 	uint32_t where[2];
 	memcpy(where, r->data, sizeof where);
 	if (r->error || where[0] != GFX_RAW_START || where[1] != GFX_RAW_END) {
