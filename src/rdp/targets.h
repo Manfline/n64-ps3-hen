@@ -272,11 +272,20 @@ void rdp_targets_mirrored(struct rdp_targets *s, int slot);
  * 0x38f800, sus tres framebuffers seguidos, para limpiarlos con un solo
  * FILLRECT al arrancar y al cambiar de escena; también borra el borde de
  * 8 px que el juego nunca vuelve a tocar). No se crea un destino para ella:
- * los rellenos se reparten entre los destinos ya existentes que caben
- * enteros dentro. Devuelve cuántos y, por cada uno, la ranura y la fila de
- * la imagen alta en que empieza. */
+ * los rellenos se reparten entre los destinos ya existentes que empiezan
+ * dentro (alineados a sus líneas; el último puede asomar por abajo).
+ * Devuelve cuántos y, por cada uno, la ranura y la fila de la imagen alta
+ * en que empieza. */
 int rdp_targets_inside(const struct rdp_targets *s, uint32_t addr, uint32_t width, uint32_t bpp, uint32_t rows,
 		       int slots[RDP_TARGETS_MAX], uint32_t first_row[RDP_TARGETS_MAX]);
+/* ¿Una color image de `width` × `lh` es «alta»: más de pantalla y media
+ * (lh > 1,5 × 3/4 del ancho) o más de 480? Donkey Kong 64 rellena dos
+ * framebuffers de 320 × 240 seguidos con un FILLRECT de 459 filas: con un
+ * destino de 320 × 459 ese búfer salía a otra escala que el siguiente. */
+static inline bool rdp_targets_tall(uint32_t width, uint32_t lh)
+{
+	return lh > 480 || lh > width * 9 / 8;
+}
 
 #define RDP_DMA_RING 64
 struct rdp_dma_ring {
