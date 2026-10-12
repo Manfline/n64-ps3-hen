@@ -645,6 +645,29 @@ static void targets_present_integer(void)
  * a punta). La secuencia de Super Mario 64 al pasar del logo a la cara de
  * Mario: triple búfer; el RDP dibuja B; el VI sigue en A; un DMA carga
  * datos encima de A y de B; el VI muestra B sin que el RDP lo toque. */
+/* Anillo de DMA: los trozos seguidos de la misma tarea se funden; una
+ * copia de la tarea T solo se detiene por DMA desde T. */
+static void targets_dma_ring(void)
+{
+	struct rdp_dma_ring r;
+	memset(&r, 0, sizeof r);
+	for (uint32_t i = 0; i < 500; i++)
+		rdp_dma_note(&r, 0x38f800 + i * 256, 256, 67);  /* Star Fox: 125 KB en trozos */
+	CHECK_EQ(r.n, 1);
+	CHECK(rdp_dma_since(&r, 0x38f800, 0x38f800 + 640 * 232, 67));
+	CHECK(rdp_dma_since(&r, 0x38f800, 0x38f800 + 640 * 232, 60));
+	CHECK(!rdp_dma_since(&r, 0x38f800, 0x38f800 + 640 * 232, 68));  /* dibujado después del DMA */
+	CHECK(!rdp_dma_since(&r, 0x300000, 0x310000, 1));
+	rdp_dma_note(&r, 0x100000, 64, 68);
+	CHECK_EQ(r.n, 2);
+	CHECK(rdp_dma_since(&r, 0x100000, 0x100040, 68));
+	/* Se llena: sobreviven las últimas RDP_DMA_RING. */
+	for (uint32_t i = 0; i < RDP_DMA_RING + 5; i++)
+		rdp_dma_note(&r, 0x200000 + i * 4096, 16, 70 + i);
+	CHECK(!rdp_dma_since(&r, 0x100000, 0x100040, 68));
+	CHECK(rdp_dma_since(&r, 0x200000 + (RDP_DMA_RING + 4) * 4096, 0x200000 + (RDP_DMA_RING + 4) * 4096 + 16, 1));
+}
+
 static void targets_frame_mirror(void)
 {
 	const uint32_t A = 0x38f800, B = 0x3b5000, C = 0x3da800, LINE = 640;
@@ -710,6 +733,7 @@ static void targets_frame_mirror(void)
 
 void t_suite_targets(void)
 {
+	RUN(targets_dma_ring);
 	RUN(targets_locate);
 	RUN(targets_texture_policy);
 	RUN(targets_readback_wanted);

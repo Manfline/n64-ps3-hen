@@ -63,6 +63,10 @@ struct salsa64_bus {
 	salsa64_isv_fn isv_out;
 	void *isv_ctx;
 	struct salsa64_save *save;  /* guardado del cartucho o NULL (save.c) */
+	/* Aviso de salsa64_bus_rdram_written (efectos de framebuffer: una copia
+	 * del RDP no debe pisar lo que un DMA escribió después). */
+	void (*rdram_written)(void *ctx, uint32_t pa, uint32_t len);
+	void *rdram_written_ctx;
 
 	struct salsa64_mi mi;
 	struct salsa64_sp sp;

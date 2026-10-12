@@ -54,7 +54,25 @@ bool raster_trace_fb;
 uint32_t raster_field;
 int raster_fbfx = 2;
 static struct rdp_vi_ring vi_ring;
-static uint32_t primes, readbacks, mirrors, frames;
+static uint32_t primes, readbacks, mirrors, frames, dma_skipped;
+static struct rdp_dma_ring dma_ring;
+
+void raster_rdram_written(uint32_t pa, uint32_t len, uint32_t task)
+{
+	rdp_dma_note(&dma_ring, pa, len, task);
+}
+
+/* Un DMA escribió desde la tarea `task` en lo que se iba a copiar. */
+static bool dma_newer(uint32_t addr, uint32_t bytes, uint32_t task)
+{
+	if (!rdp_dma_since(&dma_ring, addr, addr + bytes, task))
+		return false;
+	dma_skipped++;
+	if (raster_trace_fb)
+		fprintf(stderr, "fb: campo %u tarea %u: copia de %06x no se hace: un DMA escribió ahí después\n", raster_field,
+			task_no, addr);
+	return true;
+}
 static uint32_t rb_task[RDP_TARGETS_MAX];  /* última tarea con copia a la RDRAM por ranura */
 #define RB_KEEP_TASKS 32
 #define MIRROR_BYTES 65536  /* como rdp.c: tope de una copia espejo (imagen chica) */
@@ -475,6 +493,8 @@ static void frame_mirror(const struct gfx_job *job, int slot, uint32_t rows, con
 		    a->addr + a->width * a->bpp * a->lh > lo)
 			return;
 	}
+	if (dma_newer(t->addr, t->width * 2 * rows, t->last_task))
+		return;
 	readback(job, slot, rows);
 	rdp_targets_mirrored(&tg, slot);
 	frames++;
@@ -621,6 +641,8 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 		uint32_t rows = drawn_rows[i] < t->lh ? drawn_rows[i] : t->lh;
 		if (raster_fbfx >= 2 && rdp_readback_wanted(&vi_ring, t->addr, t->width, t->bpp == 2 ? 2 : 0) &&
 		    rdp_targets_readback(&tg, i, true)) {
+			if (dma_newer(t->addr, t->width * t->bpp * rows, task_no))
+				continue;
 			readback(job, i, rows);
 			rb_task[i] = tg.task;
 			readbacks++;
@@ -630,6 +652,8 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 		} else if (raster_fbfx >= 2 && rows && !t->presented && (t->bpp == 2 || (t->bpp == 1 && t->fmt == 4)) &&
 			   t->width != tg.vi_width && t->width * t->bpp * rows <= MIRROR_BYTES) {
 			/* Espejo de una imagen auxiliar chica (en la PS3, sin esperar). */
+			if (dma_newer(t->addr, t->width * t->bpp * rows, task_no))
+				continue;
 			readback(job, i, rows);
 			rb_task[i] = tg.task;
 			mirrors++;
@@ -669,7 +693,8 @@ void raster_reset(void)
 	next_depth = 0;
 	task_no = vi_field = 0;
 	memset(&vi_ring, 0, sizeof vi_ring);
-	primes = readbacks = mirrors = frames = 0;
+	primes = readbacks = mirrors = frames = dma_skipped = 0;
+	memset(&dma_ring, 0, sizeof dma_ring);
 	memset(rb_task, 0, sizeof rb_task);
 	memset(&last_job, 0, sizeof last_job);
 }

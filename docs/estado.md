@@ -1,5 +1,30 @@
 # Estado
 
+## 2026-10-12 (noche) — Star Fox 64 colgado a los 5 s: el espejo del framebuffer pisaba un DMA (rama `infallible-wozniak-aa210c`)
+
+Main lo reportó de la PS3 real (Rev 1 y Rev 0: letras unos 5 s y negro, el
+CPU al 100 % sin bucles de espera reconocidos). En el host se reproduce
+solo con el espejo del framebuffer (`--gfx-frame`, que lo activa; con
+`SALSA64_FBFX=0` corre): el juego se queda en la tarea gráfica 67 con todos
+sus hilos de libultra esperando mensajes (`tools/libultra-threads.py`) y el
+hilo ocioso corriendo. No es el CIC 6101 ni el PIF ni la EEPROM (sigue
+leyendo el control; la EEPROM se inicializa bien).
+
+Causa (traza del PI y de las tareas, mismo campo 151): la tarea 67 limpia
+el framebuffer `38f800` con un FILLRECT y, antes de que el RSP termine
+(30 000 ciclos de HLE), el juego carga por DMA 113 KB de datos MIO0 encima
+(`38f800`–`3ab1d0`, en trozos de 256 bytes). En la N64 el RDP acaba antes
+y el DMA pasa por encima; en el host el espejo «al terminar la tarea» se
+escribía después del DMA y pisaba la cabecera del MIO0 (en la PS3, ms más
+tarde, pisaba más). Arreglo general (docs/framebuffer.md): un anillo de
+DMA (`rdp_dma_ring`, targets.c, lo alimenta `salsa64_bus_rdram_written`
+con la tarea gráfica en vuelo) y ninguna copia de la tarea T (espejo,
+copia esperada, espejo chico; host y PS3) pisa un tramo que un DMA tocó
+desde que T empezó. Pruebas: `targets_dma_ring` y `raster_mirror_after_dma`
+(falla sin el arreglo). Host: Star Fox Rev 1 con el espejo, 590 tareas en
+20 s y una sola copia descartada (la de la tarea 67). Por confirmar en la
+PS3 (paquete SLSA00099).
+
 ## 2026-10-12 (tarde) — Líneas azules de GoldenEye (cobertura AA), túnica de Link (máscara con clamp) y el negro de la intro de Banjo (niebla en el blender) (rama `infallible-wozniak-aa210c`)
 
 Con el volcado del autor en el túnel de Dam (SELECT + R2), las líneas azules

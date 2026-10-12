@@ -527,6 +527,13 @@ static void front_acquire(void *ctx, struct gfx_job *job)
 	rdp_sink->acquire(rdp_sink->ctx, job);
 }
 
+/* DMA a la RDRAM (hilo de emulación): las copias del RDP no lo pisan. */
+static void front_rdram_written(void *ctx, uint32_t pa, uint32_t len)
+{
+	(void)ctx;
+	salsa64_rdp_rdram_written(pa, len, n64.bus.rsp.busy == SALSA64_TASK_GFX);
+}
+
 static void front_done(void *ctx, const struct gfx_job *job, const struct gfx_result *res)
 {
 	(void)ctx;
@@ -1716,18 +1723,18 @@ static void stats(uint64_t now)
 		uint32_t trsx = rs.tex_rsx - sw.rdp0.tex_rsx, trd = rs.tex_rdram - sw.rdp0.tex_rdram;
 		uint32_t tself = rs.tex_self - sw.rdp0.tex_self, primes = rs.primes - sw.rdp0.primes;
 		uint32_t mir = rs.mirrors - sw.rdp0.mirrors, mirs = rs.mirrors_skipped - sw.rdp0.mirrors_skipped;
-		uint32_t fmir = rs.frames_mirrored - sw.rdp0.frames_mirrored;
+		uint32_t fmir = rs.frames_mirrored - sw.rdp0.frames_mirrored, dmas = rs.dma_skipped - sw.rdp0.dma_skipped;
 		uint32_t lost = rs.readbacks_lost - sw.rdp0.readbacks_lost, tfail = rs.targets_failed - sw.rdp0.targets_failed;
 		uint32_t tabs = rs.targets_absurd - sw.rdp0.targets_absurd, bfail = rs.binds_failed - sw.rdp0.binds_failed;
-		if (rb || rbw || mir || mirs || fmir || trsx || trd || tself || primes || lost || tfail || tabs || bfail)
+		if (rb || rbw || mir || mirs || fmir || dmas || trsx || trd || tself || primes || lost || tfail || tabs || bfail)
 			salsa64_log("gfx: framebuffer: %u copias a la RDRAM (%.2f ms c/u en presentación), la emulación "
 				    "esperó %u tareas (%.2f ms c/u, %u tarde), %u copias espejo (%u sin búfer), %u cuadros "
-				    "copiados; texturas desde un destino: %u del RSX, %u de la RDRAM, %u del ligado; %u "
+				    "copiados, %u copias descartadas por un DMA posterior; texturas desde un destino: %u del RSX, %u de la RDRAM, %u del ligado; %u "
 				    "destinos cebados; %u copias perdidas, %u destinos sin superficie, %u color images imposibles, "
 				    "%u dibujos sin ligar (ninguna profundidad cubría el destino)",
 				    rb, rb ? (rs.us_readback - sw.rdp0.us_readback) / 1e3 / rb : 0.0, rbw,
 				    rbw ? (rs.us_readback_wait - sw.rdp0.us_readback_wait) / 1e3 / rbw : 0.0,
-				    rs.readback_late - sw.rdp0.readback_late, mir, mirs, fmir, trsx, trd, tself, primes, lost,
+				    rs.readback_late - sw.rdp0.readback_late, mir, mirs, fmir, dmas, trsx, trd, tself, primes, lost,
 				    tfail, tabs, bfail);
 	}
 	if (lle_mode != SALSA64_LLE_OFF) {
@@ -2097,6 +2104,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	salsa64_rom_normalize(rom, rom_size);
 	memset(rdram, 0, SALSA64_RDRAM_MAX);  /* cada juego arranca igual, venga después del que venga */
 	salsa64_n64_init(&n64, rdram, SALSA64_RDRAM_MAX);
+	n64.bus.rdram_written = front_rdram_written;
 	salsa64_bus_set_isviewer(&n64.bus, isv_buf, isv_out, NULL);
 
 	/* HLE gráfica: en un SPE, o en el PPE si se pide. */

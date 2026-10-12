@@ -186,7 +186,39 @@ static void raster_frame_mirror_sm64(void)
 	raster_fbfx = fbfx;
 }
 
+/* Star Fox 64: una tarea limpia el framebuffer y, antes de que termine, el
+ * juego carga por DMA datos encima; el espejo al terminar la tarea no debe
+ * pisarlos. Un DMA anterior a la tarea sí se pisa (la copia es más nueva). */
+static void raster_mirror_after_dma(void)
+{
+	raster_reset();
+	memset(ram, 0, sizeof ram);
+	for (int k = 0; k < 40; k++)
+		task_fill_w(0x1000, 64, 0, 0, 0);
+	task_fill(FB_A, 255, 0, 0);
+	field(FB_A);
+	field(FB_A);
+	uint32_t t = 41;  /* tareas hechas: la próxima es la 42 */
+	/* DMA antes de la tarea 42: la tarea lo pisa, como el RDP. */
+	dma_data(FB_A);
+	raster_rdram_written(FB_A, FB, t);
+	task_fill(FB_A, 0, 255, 0);
+	CHECK_EQ(px(FB_A, 10, 30), rgba5551(0, 255, 0));
+	/* DMA mientras corre la tarea 43 (en vuelo: 43): el espejo no lo pisa. */
+	t = 43;
+	dma_data(FB_A);
+	raster_rdram_written(FB_A + 20 * LINE, 20 * LINE, t);
+	task_fill(FB_A, 0, 0, 255);
+	CHECK(data_intact(FB_A));
+	CHECK_EQ(px(FB_A, 10, 10), rgba5551(0, 255, 0));  /* el cuadro anterior sigue ahí */
+	/* La tarea 44 vuelve a dibujar después del DMA: se copia. */
+	task_fill(FB_A, 0, 0, 255);
+	CHECK_EQ(px(FB_A, 10, 30), rgba5551(0, 0, 255));
+	raster_reset();
+}
+
 void t_suite_raster(void)
 {
+	RUN(raster_mirror_after_dma);
 	RUN(raster_frame_mirror_sm64);
 }

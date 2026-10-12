@@ -179,7 +179,11 @@ static struct {
 	struct mirror {
 		bool used;
 		uint32_t addr, width, lw, rows, fence, bpp;
+		uint32_t task;  /* la tarea que dibujó lo copiado (rdp_dma_since) */
 	} mirrors[MIRRORS];
+	/* DMA a la RDRAM desde el hilo de emulación (targets.h): una copia de
+	 * la tarea T no pisa lo que un DMA escribió desde que T empezó. */
+	struct rdp_dma_ring dma;
 	struct mirror frame;         /* el espejo del framebuffer presentado */
 	/* Última tarea en que cada ranura se copió a la RDRAM (o se rellenó
 	 * su cobertura): el espejo del framebuffer no pisa esa zona mientras
@@ -286,6 +290,22 @@ void salsa64_rdp_fbfx(int level)
 	rdp.fbfx = level < 0 ? 0 : level > 2 ? 2 : level;
 }
 
+void salsa64_rdp_rdram_written(uint32_t pa, uint32_t len, bool gfx_in_flight)
+{
+	rdp_dma_note(&rdp.dma, pa, len, rdp.finished + (gfx_in_flight ? 1u : 0u));
+}
+
+/* Un DMA escribió desde la tarea `task` en lo que se iba a copiar: la
+ * copia se descarta (Star Fox 64 carga datos encima del framebuffer que
+ * acaba de limpiar). */
+static bool dma_newer(uint32_t addr, uint32_t bytes, uint32_t task)
+{
+	if (!rdp_dma_since(&rdp.dma, addr, addr + bytes, task))
+		return false;
+	rdp.stats.dma_skipped++;
+	return true;
+}
+
 static void release_targets(void)
 {
 	rdp.again.surf = NULL;
@@ -361,6 +381,7 @@ uint32_t salsa64_rdp_reset(void)
 		memset(&rdp.sets[i].res, 0, sizeof rdp.sets[i].res);
 	}
 	rdp.acquired = rdp.finished = rdp.translated = 0;
+	memset(&rdp.dma, 0, sizeof rdp.dma);
 	rdp.readback_done = 0;
 	rdp.rb_late_logged = false;
 	memset(rdp.mirrors, 0, sizeof rdp.mirrors);
@@ -517,16 +538,21 @@ static void readbacks_finish(bool wait)
 {
 	struct mirror *f = &rdp.frame;
 	if (f->used && (wait ? (rsxkit_fence_wait(f->fence), true) : rsxkit_fence_done(f->fence))) {
-		to_rdram(rdp.rb + FRAME_SLOT * RB_SLOT, RB_PITCH, f->addr, f->width, f->lw, f->rows, 2);
+		if (!dma_newer(f->addr, f->width * 2 * f->rows, f->task)) {
+			to_rdram(rdp.rb + FRAME_SLOT * RB_SLOT, RB_PITCH, f->addr, f->width, f->lw, f->rows, 2);
+			rdp.stats.frames_mirrored++;
+		}
 		f->used = false;
-		rdp.stats.frames_mirrored++;
 	}
 	for (int k = 0; k < RB_SLOTS; k++) {
 		struct mirror *m = &rdp.big[k];
 		if (m->used && (wait ? (rsxkit_fence_wait(m->fence), true) : rsxkit_fence_done(m->fence))) {
-			to_rdram(rdp.rb + k * RB_SLOT, RB_PITCH, m->addr, m->width, m->lw, m->rows, m->bpp ? m->bpp : 2);
+			uint32_t bpp = m->bpp ? m->bpp : 2;
+			if (!dma_newer(m->addr, m->width * bpp * m->rows, m->task)) {
+				to_rdram(rdp.rb + k * RB_SLOT, RB_PITCH, m->addr, m->width, m->lw, m->rows, bpp);
+				rdp.stats.mirrors++;
+			}
 			m->used = false;
-			rdp.stats.mirrors++;
 		}
 	}
 	for (int k = 0; k < MIRRORS; k++) {
@@ -537,11 +563,13 @@ static void readbacks_finish(bool wait)
 			rsxkit_fence_wait(m->fence);
 		else if (!rsxkit_fence_done(m->fence))
 			continue;
-		uint32_t pitch = (m->lw * 2 + 63) & ~63u;
-		to_rdram(rdp.rb + (RB_SLOTS + 2) * RB_SLOT + k * MIRROR_BYTES, pitch, m->addr, m->width, m->lw, m->rows,
-			 m->bpp ? m->bpp : 2);
+		uint32_t pitch = (m->lw * 2 + 63) & ~63u, bpp = m->bpp ? m->bpp : 2;
+		if (!dma_newer(m->addr, m->width * bpp * m->rows, m->task)) {
+			to_rdram(rdp.rb + (RB_SLOTS + 2) * RB_SLOT + k * MIRROR_BYTES, pitch, m->addr, m->width, m->lw, m->rows,
+				 bpp);
+			rdp.stats.mirrors++;
+		}
 		m->used = false;
-		rdp.stats.mirrors++;
 	}
 }
 
@@ -1197,6 +1225,8 @@ static void translate(uint32_t n)
 					rsxkit_fence_wait(rsxkit_fence());
 					for (uint32_t j = 0; j < nrb; j++) {
 						const struct rdp_target *tj = &rdp.tg.t[rb[j].slot];
+						if (dma_newer(tj->addr, tj->width * tj->bpp * rb[j].rows, n + 1))
+							continue;
 						to_rdram(rdp.rb + rb[j].buf * RB_SLOT, RB_PITCH, tj->addr, tj->width, tj->lw, rb[j].rows,
 							 tj->bpp);
 						rdp.stats.readbacks++;
@@ -1237,6 +1267,7 @@ static void translate(uint32_t n)
 				m->lw = t->lw;
 				m->rows = rows;
 				m->bpp = t->bpp;
+				m->task = n + 1;
 				m->fence = 0;  /* se pone con la barrera de la tarea */
 			}
 			break;
@@ -1283,6 +1314,7 @@ static void translate(uint32_t n)
 		m->lw = t->lw;
 		m->rows = rows;
 		m->bpp = t->bpp;
+		m->task = n + 1;
 		mirror_k[nmirror++] = k;
 	}
 	if (s->trace && rdp_log) {
@@ -1310,6 +1342,8 @@ static void translate(uint32_t n)
 		rsxkit_fence_wait(s->fence);
 		for (uint32_t k = 0; k < nrb; k++) {
 			const struct rdp_target *t = &rdp.tg.t[rb[k].slot];
+			if (dma_newer(t->addr, t->width * t->bpp * rb[k].rows, n + 1))
+				continue;
 			to_rdram(rdp.rb + rb[k].buf * RB_SLOT, RB_PITCH, t->addr, t->width, t->lw, rb[k].rows, t->bpp);
 			rdp.stats.readbacks++;
 		}
@@ -1400,6 +1434,7 @@ static void frame_mirror(int slot, uint32_t rows, bool wait)
 	rdp.frame.width = t->width;
 	rdp.frame.lw = t->lw;
 	rdp.frame.rows = rows;
+	rdp.frame.task = t->last_task;
 	rdp.frame.fence = rsxkit_fence();
 }
 
