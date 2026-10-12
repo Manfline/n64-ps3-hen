@@ -60,6 +60,8 @@ int main(void)
 	 * traducir conversiones, LWL/LWR y MFC0 (la diferencia es la ganancia). */
 	static const struct { uint32_t opts; const char *name; } variants[] = {
 		{ SALSA64_REC_OPT_PIN, "recompilador + registros fijos" },
+		{ SALSA64_REC_OPT_PIN | SALSA64_REC_OPT_FPU_RES,
+		  "recompilador + registros fijos, FPU residente (experimental)" },
 		{ SALSA64_REC_OPT_PIN | SALSA64_REC_OPT_RARE_EXEC,
 		  "recompilador + registros fijos, conversiones/LWL/MFC0 al intérprete (como antes)" },
 		{ 0, "recompilador" },
@@ -91,12 +93,14 @@ int main(void)
 		log_rombench(name, &rr);
 		const struct salsa64_rec_stats *st = &rec.stats;
 		salsa64_log("%s: %llu bloques (%llu fuera de KSEG0), %u KB de caché, %llu entradas desde C, %llu enlaces, "
-			    "%llu invalidados, %llu vaciados, %llu instr. interpretadas, %llu llamadas al intérprete", name,
+			    "%llu invalidados, %llu vaciados, %llu desalojos, %llu instr. interpretadas, "
+			    "%llu llamadas al intérprete", name,
 			    (unsigned long long)st->compiled, (unsigned long long)st->compiled_x,
 			    salsa64_rec_used(&rec) / 256,
 			    (unsigned long long)st->entries, (unsigned long long)st->linked,
 			    (unsigned long long)st->invalidated, (unsigned long long)st->flushes,
-			    (unsigned long long)st->interp_steps, (unsigned long long)st->exec_calls);
+			    (unsigned long long)st->evictions, (unsigned long long)st->interp_steps,
+			    (unsigned long long)st->exec_calls);
 		bool same = ri.finished && rr.finished && ri.failed == rr.failed &&
 			    ri.names_hash == rr.names_hash && ri.cycles == rr.cycles;
 		if (!same || v == 0)

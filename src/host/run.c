@@ -1997,7 +1997,7 @@ int main(int argc, char **argv)
 			prof_every = (uint32_t)strtoul(getenv("SALSA64_REC_PROF"), NULL, 0);
 			prof_next = prof_every;
 		}
-		if (!code || !salsa64_rec_init(&rec, &n64.cpu, code, SALSA64_HOST_REC_BYTES)) {
+		if (!code || !salsa64_rec_init(&rec, &n64.cpu, code, salsa64_host_rec_bytes())) {
 			fprintf(stderr, "salsa64-run: el recompilador no corre en este host\n");
 			return 3;
 		}
@@ -2107,13 +2107,13 @@ int main(int argc, char **argv)
 		const struct salsa64_rec_stats *st = &rec.stats;
 		fprintf(stderr, "salsa64-run: recompilador: %llu bloques (%llu fuera de KSEG0, %llu desprendidos y %llu "
 			"enganchados en otra física, %u KB de caché), %llu solo intérprete, %llu entradas, %llu enlaces, "
-			"%llu invalidados, %llu vaciados, %llu traducciones, %llu instr. interpretadas (%.1f %%), "
+			"%llu invalidados, %llu vaciados, %llu desalojos, %llu traducciones, %llu instr. interpretadas (%.1f %%), "
 			"%llu llamadas al intérprete%s\n",
 			(unsigned long long)st->compiled, (unsigned long long)st->compiled_x, (unsigned long long)st->detached,
 			(unsigned long long)st->rekeyed, salsa64_rec_used(&rec) / 256,
 			(unsigned long long)st->interp_only, (unsigned long long)st->entries,
 			(unsigned long long)st->linked, (unsigned long long)st->invalidated,
-			(unsigned long long)st->flushes, (unsigned long long)st->vt_probes,
+			(unsigned long long)st->flushes, (unsigned long long)st->evictions, (unsigned long long)st->vt_probes,
 			(unsigned long long)st->interp_steps, cycles ? 100.0 * (double)st->interp_steps / (double)cycles : 0.0,
 			(unsigned long long)st->exec_calls, lockstep ? "; --lockstep sin diferencias" : "");
 		if (rec.prof) {

@@ -27,8 +27,12 @@
 #define OFF(field) ((int32_t)offsetof(struct salsa64_cpu, field))
 /* Sin REC_NATIVE (host que no es ppc64) no se usan, pero compilan igual. */
 #define REC_UNUSED __attribute__((unused))
-#define FRAME   256   /* marco de la entrada: 112 de enlace y parámetros + r14–r31 */
+#define FRAME   400   /* marco de la entrada: 112 de enlace y parámetros + r14–r31 + f14–f31 */
 #define SAVE    112
+#define FSAVE   256
+
+/* rec_emit_fpu.h: constantes en f26–f31 (ver rec.h). */
+const double salsa64_rec_fconst[6] = { 1.0, 0.0, 0x1p-60, 0x1p61, 0x1p-440, 0x1p441 };
 #define SCRATCH_WORDS  (2 * SALSA64_REC_BUF_WORDS)
 #define MAX_BLOCK_WORDS (2 * SALSA64_REC_BUF_WORDS)
 #define MAX_BLOCK_BYTES (4 * SALSA64_REC_MAX_INSNS)
@@ -188,6 +192,40 @@ REC_UNUSED static void rec_h_exec(struct salsa64_cpu *cpu, uint32_t instr)
 		salsa64_rec_prof_add(prof, exec_cause(instr), salsa64_rec_prof_now() - t0);
 }
 
+/* TLBWI/TLBWR desde el código generado (rec_emit_ext.h, emit_tlbw): la
+ * escritura y la ktlb al día solo para esa entrada, sin el intérprete ni la
+ * comparación de las 32 entradas de salsa64_rec_x_sync. El bloque termina
+ * después y enlaza con el siguiente, cuya entrada revisa su página. */
+REC_UNUSED static void rec_h_tlbw(struct salsa64_cpu *cpu, uint32_t instr)
+{
+	struct salsa64_rec *rec = cpu->rec;
+	struct salsa64_rec_prof *prof = rec->prof;
+	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0;
+	rec->stats.exec_calls++;
+	salsa64_rec_x_tlb_written(rec, salsa64_vr4300_tlbw(cpu, I_FUNCT(instr) == 0x06));
+	if (prof)
+		salsa64_rec_prof_add(prof, SALSA64_PROF_EXEC_COP0, salsa64_rec_prof_now() - t0);
+}
+
+/* ERET desde el código generado (emit_eret): lo que hace el intérprete sin
+ * redirect, y devuelve el pc: el código sigue por exit_jr si el modo sigue
+ * siendo kernel y no hay interrupción (lo revisa él), si no sale al
+ * despachador con ese pc. Si cambió ERL, la ktlb se revisa aquí (antes lo
+ * hacía el despachador al volver). */
+REC_UNUSED static uint64_t rec_h_eret(struct salsa64_cpu *cpu)
+{
+	struct salsa64_rec *rec = cpu->rec;
+	struct salsa64_rec_prof *prof = rec->prof;
+	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0;
+	rec->stats.exec_calls++;
+	salsa64_vr4300_eret(cpu);
+	cpu->redirect = 0;
+	salsa64_rec_x_sync(rec);
+	if (prof)
+		salsa64_rec_prof_add(prof, SALSA64_PROF_EXEC_COP0, salsa64_rec_prof_now() - t0);
+	return cpu->pc;
+}
+
 REC_UNUSED static void rec_h_exception(struct salsa64_cpu *cpu, unsigned code)
 {
 	struct salsa64_rec_prof *prof = cpu->rec->prof;
@@ -264,6 +302,11 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	w[n++] = ppc_stdu(1, -FRAME, 1);
 	for (unsigned r = 14; r <= 31; r++)
 		w[n++] = ppc_std(r, SAVE + 8 * (int32_t)(r - 14), 1);
+	for (unsigned r = 14; r <= 31; r++)  /* la FPU residente (rec_emit_fpu.h) usa f14–f31, no volátiles */
+		w[n++] = ppc_stfd(r, FSAVE + 8 * (int32_t)(r - 14), 1);
+	n = pre_li64(w, n, 11, (uintptr_t)salsa64_rec_fconst);
+	for (unsigned k = 0; k < 6; k++)
+		w[n++] = ppc_lfd(26 + k, 8 * (int32_t)k, 11);
 	w[n++] = ppc_mr(31, 3);
 	w[n++] = ppc_ld(30, OFF(rdram), 31);
 	w[n++] = ppc_ld(29, OFF(cycles), 31);
@@ -314,11 +357,15 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 			w[n++] = ppc_std(SALSA64_REC_PIN_PPC + k, OFF(gpr) + 8 * salsa64_rec_pin[k], 31);
 	for (unsigned r = 14; r <= 31; r++)
 		w[n++] = ppc_ld(r, SAVE + 8 * (int32_t)(r - 14), 1);
+	for (unsigned r = 14; r <= 31; r++)
+		w[n++] = ppc_lfd(r, FSAVE + 8 * (int32_t)(r - 14), 1);
 	w[n++] = ppc_addi(1, 1, FRAME);
 	w[n++] = ppc_ld(0, 16, 1);
 	w[n++] = ppc_mtlr(0);
 	w[n++] = ppc_lwz(12, 8, 1);
-	w[n++] = ppc_mtcrf(0x38, 12);  /* cr2–cr4, los no volátiles */
+	w[n++] = ppc_mtocrf(0x20, 12);  /* cr2–cr4, los no volátiles (mtcrf de varios campos es microcódigo) */
+	w[n++] = ppc_mtocrf(0x10, 12);
+	w[n++] = ppc_mtocrf(0x08, 12);
 	w[n++] = PPC_BLR;
 
 	/* exit_jr: KSEG0, alineada y dentro de la RDRAM → map → blocks → código.
@@ -489,6 +536,42 @@ static uint32_t preamble_words(void)
 	return 1024;  /* emit_preamble usa menos; los bloques empiezan alineados */
 }
 
+/* ---- Tramos de la caché (docs/rec-ppe.md, «Desalojo por tramos») ------------- */
+
+static uint32_t seg_start(const struct salsa64_rec *rec, unsigned s)
+{
+	return preamble_words() + s * rec->seg_words;
+}
+
+static unsigned seg_of(const struct salsa64_rec *rec, uint32_t word)
+{
+	unsigned s = (word - preamble_words()) / rec->seg_words;
+	return s < SALSA64_REC_SEGMENTS ? s : SALSA64_REC_SEGMENTS - 1;
+}
+
+/* Al vaciar: el primer tramo (o toda la zona de bloques, sin desalojo). */
+static void seg_reset(struct salsa64_rec *rec)
+{
+	rec->cur_seg = 0;
+	rec->used = preamble_words();
+	rec->seg_end = SALSA64_REC_OLD(rec, SALSA64_REC_OPT_NO_EVICT) ? rec->scratch : seg_start(rec, 1);
+}
+
+/* ¿Las funciones de C quedan a menos de CALL_REACH de un bloque que empieza
+ * en la palabra `base` (y ocupa hasta MAX_BLOCK_WORDS)? Si no, ese bloque las
+ * llama por mtctr/bctrl (rec_emit.c). */
+bool salsa64_rec_calls_near_at(const struct salsa64_rec *rec, uint32_t base)
+{
+	uint64_t lo = (uintptr_t)(rec->code + base), hi = lo + 4ull * MAX_BLOCK_WORDS;
+	uint64_t h[6] = { rec->h_load, rec->h_store, rec->h_exec, rec->h_exception, rec->h_tlbw, rec->h_eret };
+	for (unsigned k = 0; k < 6; k++) {
+		uint64_t far = h[k] < lo ? hi - h[k] : h[k] > hi ? h[k] - lo : hi - lo;
+		if (far >= CALL_REACH)
+			return false;
+	}
+	return true;
+}
+
 void salsa64_rec_flush(struct salsa64_rec *rec)
 {
 	if (rec->prof && rec->prof->blocks)
@@ -506,7 +589,7 @@ void salsa64_rec_flush(struct salsa64_rec *rec)
 	rec->next_block = 1;
 	rec->free_link = 0;
 	rec->next_link = 0;
-	rec->used = preamble_words();
+	seg_reset(rec);
 	rec->generation++;
 	rec->cpu->rec_abort = 1;
 }
@@ -527,8 +610,10 @@ static void unlink_all(struct salsa64_rec *rec, struct salsa64_rec_block *b)
 	while (l) {
 		struct salsa64_rec_link *lk = &rec->links[l - 1];
 		uint32_t next = lk->next;
-		rec->code[lk->site] = PPC_NOP;
-		salsa64_rec_sync(&rec->code[lk->site], 4);
+		if (rec->seg_gen[seg_of(rec, lk->site)] == lk->gen) {  /* si no, el tramo del sitio se desalojó */
+			rec->code[lk->site] = PPC_NOP;
+			salsa64_rec_sync(&rec->code[lk->site], 4);
+		}
 		lk->next = rec->free_link;
 		rec->free_link = l;
 		l = next;
@@ -631,17 +716,49 @@ void salsa64_rec_code_written(struct salsa64_rec *rec, uint32_t pa, uint32_t len
 	salsa64_rec_invalidate(rec, pa, len);
 }
 
-static bool rec_space(struct salsa64_rec *rec)
+static bool rec_ids_ok(const struct salsa64_rec *rec)
 {
-	return rec->used + MAX_BLOCK_WORDS <= rec->scratch &&
-	       (rec->free_block || rec->next_block <= SALSA64_REC_MAX_BLOCKS) &&
+	return (rec->free_block || rec->next_block <= SALSA64_REC_MAX_BLOCKS) &&
 	       (rec->free_link || rec->next_link < SALSA64_REC_MAX_LINKS);
+}
+
+static bool rec_space(const struct salsa64_rec *rec)
+{
+	return rec->used + MAX_BLOCK_WORDS <= rec->seg_end && rec_ids_ok(rec);
+}
+
+/* El tramo en uso se llenó: pasar al siguiente (el más viejo) matando solo
+ * los bloques cuyo código, o el guardado si están desprendidos, está en él.
+ * Los enlaces que salen de ellos quedan en las listas de sus destinos con
+ * el sitio en este tramo: seg_gen[] sube para que no se parcheen al
+ * deshacerlos, y generation para los sitios anotados en el despachador. */
+static void evict_next_segment(struct salsa64_rec *rec)
+{
+	unsigned s = (rec->cur_seg + 1) % SALSA64_REC_SEGMENTS;
+	uint32_t lo = seg_start(rec, s), hi = seg_start(rec, s + 1);
+	for (unsigned id = 1; id < rec->next_block; id++) {
+		const struct salsa64_rec_block *b = &rec->blocks[id];
+		uint32_t code = b->code ? b->code : rec->x.state[id] == SALSA64_REC_X_DETACHED ? rec->x.saved_code[id] : 0;
+		if (code >= lo && code < hi)
+			kill_block(rec, id);
+	}
+	rec->seg_gen[s]++;
+	rec->generation++;
+	rec->cur_seg = s;
+	rec->used = lo;
+	rec->seg_end = hi;
+	rec->stats.evictions++;
+	rec->cpu->rec_abort = 1;
 }
 
 static unsigned new_block(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, unsigned seg)
 {
-	if (!rec_space(rec))
-		salsa64_rec_flush(rec);
+	if (!rec_space(rec)) {
+		if (!rec_ids_ok(rec) || SALSA64_REC_OLD(rec, SALSA64_REC_OPT_NO_EVICT))
+			salsa64_rec_flush(rec);
+		else
+			evict_next_segment(rec);
+	}
 	unsigned id;
 	if (rec->free_block) {
 		id = rec->free_block;
@@ -679,7 +796,7 @@ static void link_block(struct salsa64_rec *rec, uint32_t site, unsigned id)
 {
 	struct salsa64_rec_block *b = &rec->blocks[id];
 	int64_t disp = ((int64_t)b->code - site) * 4;
-	if (site >= rec->used || rec->code[site] != PPC_NOP || !ppc_fits_b(disp))
+	if (site < preamble_words() || site >= rec->scratch || rec->code[site] != PPC_NOP || !ppc_fits_b(disp))
 		return;
 	uint32_t l;
 	if (rec->free_link) {
@@ -691,6 +808,7 @@ static void link_block(struct salsa64_rec *rec, uint32_t site, unsigned id)
 		return;
 	}
 	rec->links[l - 1].site = site;
+	rec->links[l - 1].gen = rec->seg_gen[seg_of(rec, site)];
 	rec->links[l - 1].next = b->links;
 	b->links = l;
 	rec->code[site] = ppc_b((int32_t)disp);
@@ -958,16 +1076,17 @@ bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *co
 	ok &= t == my_toc;
 	rec->h_exception = fn_entry((const void *)rec_h_exception, &t);
 	ok &= t == my_toc;
+	rec->h_tlbw = fn_entry((const void *)rec_h_tlbw, &t);
+	ok &= t == my_toc;
+	rec->h_eret = fn_entry((const void *)rec_h_eret, &t);
+	ok &= t == my_toc;
 	if (!ok)
 		return false;  /* el código generado no cambia de TOC */
 
-	uint64_t lo = (uintptr_t)code, hi = lo + bytes, h[4] = { rec->h_load, rec->h_store, rec->h_exec, rec->h_exception };
-	rec->calls_near = true;
-	for (unsigned k = 0; k < 4; k++) {
-		uint64_t far = h[k] < lo ? hi - h[k] : h[k] > hi ? h[k] - lo : hi - lo;
-		if (far >= CALL_REACH)
-			rec->calls_near = false;
-	}
+	/* Tramos de la caché: el espacio de bloques entre el preámbulo y la zona
+	 * temporal, en partes iguales (múltiplos de 128 bytes). */
+	rec->seg_words = ((rec->scratch - preamble_words()) / SALSA64_REC_SEGMENTS) & ~31u;
+	rec->calls_near = salsa64_rec_calls_near_at(rec, 0);  /* el preámbulo y sus rutinas */
 
 	uint32_t n = emit_preamble(rec);
 	if (n > preamble_words())
@@ -977,7 +1096,7 @@ bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *co
 	rec->enter_opd[1] = my_toc;
 	rec->enter_opd[2] = 0;
 
-	rec->used = preamble_words();
+	seg_reset(rec);
 	rec->next_block = 1;
 	rec->fr = cpu->status & SALSA64_ST_FR;
 	salsa64_rec_x_init(rec);

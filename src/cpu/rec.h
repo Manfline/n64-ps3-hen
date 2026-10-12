@@ -44,6 +44,7 @@ struct salsa64_cpu;
 #define SALSA64_REC_BUF_WORDS   16384     /* búfer de compilación por sección */
 #define SALSA64_REC_MAX_LABELS  4096
 #define SALSA64_REC_MAX_FIXUPS  8192
+#define SALSA64_REC_SEGMENTS    8         /* tramos de la caché: llena, se desaloja el más viejo (docs/rec-ppe.md) */
 
 /* 16 bytes: la búsqueda de destinos de JR en el código generado indexa
  * blocks[] con un desplazamiento y lee `code` en +0. */
@@ -59,6 +60,8 @@ struct salsa64_rec_block {
 struct salsa64_rec_link {
 	uint32_t site;       /* palabra parcheada (un `b` al bloque; antes, un nop) */
 	uint32_t next;       /* índice + 1 del siguiente, 0 = fin */
+	uint32_t gen;        /* seg_gen[] del tramo del sitio al enlazar: si cambió, el sitio es de otro bloque */
+	uint32_t pad;
 };
 
 struct salsa64_rec_stats {
@@ -69,6 +72,7 @@ struct salsa64_rec_stats {
 	uint64_t linked;         /* enlaces parcheados */
 	uint64_t invalidated;    /* bloques invalidados */
 	uint64_t flushes;        /* vaciados completos de la caché */
+	uint64_t evictions;      /* tramos desalojados (en vez de vaciar todo) */
 	uint64_t interp_steps;   /* instrucciones que corrió el intérprete */
 	uint64_t exec_calls;     /* instrucciones que el código generado le pasó al intérprete */
 	uint64_t compiled_x;     /* de compiled, los de KSEG1 o mapeados (rec_tlb.c) */
@@ -106,6 +110,20 @@ struct salsa64_rec_fixup {
  * páginas anotadas y no prellena, exit_jr mira solo la cabeza de xhash. Se
  * aplica al compilar y en el despachador: fijarla antes de salsa64_rec_init. */
 #define SALSA64_REC_OPT_LEGACY 8u
+/* Experimental: la FPU con registros residentes y FCR31 perezoso
+ * (rec_emit_fpu.h) en vez de cada operación por cpu->fpr (rec_emit.c,
+ * emit_fpu). Medido en la PS3 el 2026-10-11 es más lenta (bench add.s
+ * 40,0 → 30,9 MIPS, mixto 168 → 135): apagada por omisión
+ * (docs/perf-log.md). Se aplica al compilar. */
+#define SALSA64_REC_OPT_FPU_RES 16u
+/* Para medir A/B: COP0 como hasta el 2026-10-11, todo por el intérprete
+ * (MTC0 de EntryLo/PageMask/Index, TLBWI/TLBWR y ERET tienen ahora camino
+ * propio: rec_emit_ext.h y rec_h_tlbw/rec_h_eret en rec.c). Se aplica al
+ * compilar. */
+#define SALSA64_REC_OPT_COP0_EXEC 32u
+/* Para medir A/B: la caché llena se vacía entera, como hasta el 2026-10-11,
+ * en vez de desalojar el tramo más viejo. Se aplica en el despachador. */
+#define SALSA64_REC_OPT_NO_EVICT 64u
 /* Depuración (host, SALSA64_REC_OPTS): apagan una pieza nueva a la vez para
  * acotar una diferencia en --lockstep. LEGACY las apaga todas. */
 #define SALSA64_REC_DBG_NO_ENDLINK 0x100u   /* COP0 vuelve al despachador e interpreta el resto del bloque básico */
@@ -116,6 +134,7 @@ struct salsa64_rec_fixup {
 #define SALSA64_REC_DBG_ERET_BOUND 0x2000u  /* tras un ERET, el intérprete hasta el fin del bloque básico */
 #define SALSA64_REC_DBG_NO_DETACH  0x4000u  /* invalidar mata el bloque (sin desprender ni enganchar) */
 #define SALSA64_REC_DBG_NO_SUPER   0x8000u  /* un salto condicional hacia adelante termina el bloque */
+#define SALSA64_REC_DBG_NO_IJUMP   0x10000u /* un salto interno con destino dentro del bloque sale enlazado */
 #define SALSA64_REC_OLD(rec, bit)  ((rec)->opts & (SALSA64_REC_OPT_LEGACY | (bit)))
 
 struct salsa64_rec {
@@ -123,9 +142,13 @@ struct salsa64_rec {
 	struct salsa64_cpu *cpu;
 	uint32_t *code;          /* caché de código */
 	uint32_t code_words;     /* capacidad, en palabras */
-	uint32_t used;           /* palabras ocupadas (asignación lineal) */
+	uint32_t used;           /* palabras ocupadas (asignación lineal dentro del tramo en uso) */
 	uint32_t scratch;        /* inicio de la zona de bloques temporales */
-	uint32_t generation;     /* sube en cada vaciado completo */
+	uint32_t generation;     /* sube en cada vaciado completo y en cada desalojo */
+	uint32_t seg_words;      /* palabras por tramo */
+	uint32_t seg_end;        /* fin del tramo en uso */
+	uint32_t cur_seg;
+	uint32_t seg_gen[SALSA64_REC_SEGMENTS];  /* sube al desalojar el tramo (enlaces con sitio en él) */
 	uint64_t enter_opd[3];   /* descriptor ELFv1 de la entrada al código generado */
 	uint32_t exit_link, exit_mid, exit_jump;  /* rutinas de salida (palabra en la caché) */
 	uint32_t exit_jr;        /* JR/JALR: busca el bloque destino y salta, o sale como exit_jump */
@@ -137,8 +160,8 @@ struct salsa64_rec {
 	uint32_t slow_load[7], slow_store[4];  /* camino lento compartido por tipo (rec_emit.c, emit_load/emit_store) */
 
 	/* Direcciones de entrada de las funciones de C que llama el código. */
-	uint64_t h_load, h_store, h_exec, h_exception;
-	bool calls_near;         /* todas a menos de 32 MB de la caché: `bl` directo */
+	uint64_t h_load, h_store, h_exec, h_exception, h_tlbw, h_eret;
+	bool calls_near;         /* todas a menos de 32 MB del preámbulo: `bl` directo (cada bloque lo decide para sí) */
 
 	uint32_t rdram_size;
 	unsigned rdram_shift;    /* log2(rdram_size) */
@@ -227,6 +250,14 @@ static const uint8_t salsa64_rec_pin[SALSA64_REC_PIN_N] __attribute__((unused)) 
 
 /* rec.c (interno): deja visible para el PPE el código recién escrito. */
 void salsa64_rec_sync(const void *p, size_t bytes);
+/* rec.c (interno): ¿un bloque que empieza en la palabra `base` llama a las
+ * funciones de C con `bl` (a menos de 32 MB)? Si no, por mtctr/bctrl. */
+bool salsa64_rec_calls_near_at(const struct salsa64_rec *rec, uint32_t base);
+
+/* Constantes de la FPU residente (rec_emit_fpu.h): la entrada al código
+ * generado las deja en f26–f31, en este orden: 1,0; 0,0; y los bordes de la
+ * franja segura de fpu_fast_band en S (2^-60, 2^61) y en D (2^-440, 2^441). */
+extern const double salsa64_rec_fconst[6];
 
 /* rec_emit.c (interno): compila el bloque en `pc` (física `pa`, segmento
  * `seg` de rec_tlb.h) de hasta `max` instrucciones. Devuelve la palabra de

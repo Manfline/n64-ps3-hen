@@ -121,6 +121,9 @@ void salsa64_rec_x_flush(struct salsa64_rec *rec);
 /* Antes de correr código generado (KSEG0 enlaza con mapeados) y tras cada
  * instrucción de COP0 que corre el intérprete desde el código. */
 void salsa64_rec_x_sync(struct salsa64_rec *rec);
+/* El código generado escribió la entrada n de la TLB (rec.c, rec_h_tlbw):
+ * ktlb[] al día solo para ella. */
+void salsa64_rec_x_tlb_written(struct salsa64_rec *rec, unsigned n);
 /* Segmento y física del código en `pc` (modo kernel), o SALSA64_REC_SEG_NONE. */
 unsigned salsa64_rec_seg(struct salsa64_rec *rec, uint64_t pc, uint32_t *pa);
 /* El camino lento acaba de traducir con éxito una carga o un almacenamiento

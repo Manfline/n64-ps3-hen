@@ -22,14 +22,15 @@ if ! tools/build-ppc64.sh >build/logs/build-ppc64.log 2>&1; then
 fi
 
 # Llamadas por bl y por mtctr, y con las opciones (registros fijos,
-# escritura temprana).
-for mode in plain far pin eager; do
+# escritura temprana, la FPU residente experimental).
+for mode in plain far pin eager fpures; do
 	log=build/logs/rec-unit-$mode.log
-	far=""; pin=""; eager=""
+	far=""; pin=""; eager=""; fpures=""
 	[ $mode = far ] && far=1
 	[ $mode = pin ] && pin=1
 	[ $mode = eager ] && eager=1 && pin=1
-	SALSA64_REC_FAR=$far SALSA64_REC_PIN=$pin SALSA64_REC_EAGER=$eager \
+	[ $mode = fpures ] && fpures=1 && pin=1
+	SALSA64_REC_FAR=$far SALSA64_REC_PIN=$pin SALSA64_REC_EAGER=$eager SALSA64_REC_FPU_RES=$fpures \
 		tools/qemu-ppc64.sh build/ppc64/salsa64-unit rec >"$log" 2>&1
 	rc=$?
 	printf '%-14s %s\n' "unit ($mode)" "$(grep '^total' "$log" | tail -1)"

@@ -20,9 +20,20 @@
 
 #define PPC_INLINE static inline __attribute__((unused))
 
-/* Campos de condición: bit dentro de un campo de CR. */
-enum { PPC_LT = 0, PPC_GT = 1, PPC_EQ = 2 };
+/* Campos de condición: bit dentro de un campo de CR (SO es "unordered" en
+ * las comparaciones de punto flotante). */
+enum { PPC_LT = 0, PPC_GT = 1, PPC_EQ = 2, PPC_SO = 3 };
 #define PPC_BI(cr, bit) ((cr) * 4 + (bit))
+
+/*
+ * Lo que en el PPE es microcódigo (manual del Cell, tabla A-3: ≥ 11 ciclos
+ * y vacía el pipeline) y aquí no se emite: toda forma con punto (andi.,
+ * andis., rlwinm., add., …), los desplazamientos y rotaciones por registro
+ * (slw, srw, sld, srd, sraw, srad, rldcl, rlwnm), lwa/lha, mtcrf de más de
+ * un campo (mtocrf de uno es de un ciclo), mcrfs, mtfsf*, lmw/stmw. mfcr
+ * cuesta ~34 ciclos y mffs 11–28. Los desplazamientos por registro quedan
+ * donde no hay otra forma (SLLV y compañía, LWL/LWR sueltos).
+ */
 
 /* BO con predicción estática (bits "at" de Power ISA 2.02). */
 enum {
@@ -164,6 +175,32 @@ PPC_INLINE uint32_t ppc_lfs(unsigned frt, int32_t d, unsigned ra) { return ppc_d
 PPC_INLINE uint32_t ppc_lfd(unsigned frt, int32_t d, unsigned ra) { return ppc_d(50, frt, ra, (uint32_t)d); }
 PPC_INLINE uint32_t ppc_stfs(unsigned frs, int32_t d, unsigned ra) { return ppc_d(52, frs, ra, (uint32_t)d); }
 PPC_INLINE uint32_t ppc_stfd(unsigned frs, int32_t d, unsigned ra) { return ppc_d(54, frs, ra, (uint32_t)d); }
+PPC_INLINE uint32_t ppc_lfsx(unsigned frt, unsigned ra, unsigned rb) { return ppc_x(frt, ra, rb, 535); }
+PPC_INLINE uint32_t ppc_lfdx(unsigned frt, unsigned ra, unsigned rb) { return ppc_x(frt, ra, rb, 599); }
+PPC_INLINE uint32_t ppc_stfsx(unsigned frs, unsigned ra, unsigned rb) { return ppc_x(frs, ra, rb, 663); }
+PPC_INLINE uint32_t ppc_stfdx(unsigned frs, unsigned ra, unsigned rb) { return ppc_x(frs, ra, rb, 727); }
+/* Copia y valor absoluto: operan sobre los bits (no levantan causas). */
+PPC_INLINE uint32_t ppc_fmr(unsigned frt, unsigned frb) { return 63u << 26 | (uint32_t)frt << 21 | (uint32_t)frb << 11 | 72u << 1; }
+PPC_INLINE uint32_t ppc_fabs(unsigned frt, unsigned frb) { return 63u << 26 | (uint32_t)frt << 21 | (uint32_t)frb << 11 | 264u << 1; }
+
+/* ---- Lógica sobre bits del CR (un ciclo en la unidad de saltos) ------------ */
+
+PPC_INLINE uint32_t ppc_crop(unsigned bt, unsigned ba, unsigned bb, unsigned xo)
+{
+	return 19u << 26 | (uint32_t)bt << 21 | (uint32_t)ba << 16 | (uint32_t)bb << 11 | xo << 1;
+}
+PPC_INLINE uint32_t ppc_crand(unsigned bt, unsigned ba, unsigned bb) { return ppc_crop(bt, ba, bb, 257); }
+PPC_INLINE uint32_t ppc_cror(unsigned bt, unsigned ba, unsigned bb) { return ppc_crop(bt, ba, bb, 449); }
+PPC_INLINE uint32_t ppc_crxor(unsigned bt, unsigned ba, unsigned bb) { return ppc_crop(bt, ba, bb, 193); }
+PPC_INLINE uint32_t ppc_crnor(unsigned bt, unsigned ba, unsigned bb) { return ppc_crop(bt, ba, bb, 33); }
+PPC_INLINE uint32_t ppc_creqv(unsigned bt, unsigned ba, unsigned bb) { return ppc_crop(bt, ba, bb, 289); }
+/* crandc: ba & ~bb; crorc: ba | ~bb */
+PPC_INLINE uint32_t ppc_crandc(unsigned bt, unsigned ba, unsigned bb) { return ppc_crop(bt, ba, bb, 129); }
+PPC_INLINE uint32_t ppc_crorc(unsigned bt, unsigned ba, unsigned bb) { return ppc_crop(bt, ba, bb, 417); }
+PPC_INLINE uint32_t ppc_crmove(unsigned bt, unsigned ba) { return ppc_cror(bt, ba, ba); }
+PPC_INLINE uint32_t ppc_crnot(unsigned bt, unsigned ba) { return ppc_crnor(bt, ba, ba); }
+PPC_INLINE uint32_t ppc_crclr(unsigned bt) { return ppc_crxor(bt, bt, bt); }
+PPC_INLINE uint32_t ppc_crset(unsigned bt) { return ppc_creqv(bt, bt, bt); }
 
 /* Forma A (opcode 63): frt, fra, frb, frc. */
 PPC_INLINE uint32_t ppc_fa(unsigned frt, unsigned fra, unsigned frb, unsigned frc, unsigned xo)
@@ -209,6 +246,8 @@ PPC_INLINE uint32_t ppc_mtcrf(unsigned fxm, unsigned rs)
 {
 	return 31u << 26 | (uint32_t)rs << 21 | (fxm & 0xFF) << 12 | 144u << 1;
 }
+/* mtocrf: un solo campo (fxm con un bit); mtcrf de varios es microcódigo. */
+PPC_INLINE uint32_t ppc_mtocrf(unsigned fxm, unsigned rs) { return ppc_mtcrf(fxm, rs) | 1u << 20; }
 
 /* Desplazamiento de un salto que cabe en la forma I o B. */
 PPC_INLINE int ppc_fits_b(int64_t disp) { return disp >= -(1 << 25) && disp < (1 << 25) && !(disp & 3); }

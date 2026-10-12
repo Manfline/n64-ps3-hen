@@ -120,10 +120,12 @@
  */
 #include <io/pad.h>
 #include <malloc.h>
+#include <ppu-lv2.h>
 #include <ppu-types.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/memory.h>
 #include <sys/process.h>
 #include <sys/sem.h>
 #include <sys/systime.h>
@@ -178,6 +180,11 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define MENU_IDLE_FIELDS 900  /* prueba automática: sin acción en tanto, falla */
 #define OVERSCAN_PATH SALSA64_DATA_DIR "/overscan.cfg"
 #define VIDEO_CFG_PATH SALSA64_DATA_DIR "/video.cfg"
+/* Con este archivo, la RDRAM emulada sale de sysMemoryAllocate con páginas
+ * de 1 MB en vez del heap (memalign): para medir si el PPE pierde tiempo en
+ * fallos de TLB (docs/perf-log.md). El tamaño de página real de cada zona
+ * se anota en el log al arrancar (sys_memory_get_page_attribute). */
+#define RDRAM_1M_PATH SALSA64_DATA_DIR "/rdram-1m"
 #define ROM_MAX      (64u << 20)
 #define FB_MAX_W     640
 #define FB_MAX_H     576
@@ -591,6 +598,26 @@ static int file_exists(const char *path)
 	if (f)
 		fclose(f);
 	return f != NULL;
+}
+
+/* Tamaño de página (KB) de la memoria donde cae `p`, por la syscall 351
+ * (sys_memory_get_page_attribute, sin envoltura en PSL1GHT; disposición de
+ * sys_page_attr_t como la documenta RPCS3); 0 si falla. */
+static struct {
+	u64 attribute, access_right;
+	u32 page_size, pad;
+	u64 reserve[4];
+} page_attr;
+
+static s32 page_attr_query(const void *p)
+{
+	lv2syscall2(351, (u64)(uintptr_t)p, (u64)(uintptr_t)&page_attr);
+	return_to_user_prog(s32);
+}
+
+static unsigned page_kb(const void *p)
+{
+	return page_attr_query(p) == 0 ? page_attr.page_size / 1024 : 0;
 }
 
 /* Texto del ISViewer: al log línea por línea (hilo de emulación). */
@@ -1326,13 +1353,13 @@ static void stats(uint64_t now)
 	if (use_rec) {
 		const struct salsa64_rec_stats *st = &rec.stats;
 		salsa64_log("recompilador: %llu bloques (%llu fuera de KSEG0), %u KB de caché, %llu entradas, "
-			    "%llu enlaces, %llu invalidados, %llu vaciados, %llu traducciones, "
+			    "%llu enlaces, %llu invalidados, %llu vaciados, %llu desalojos, %llu traducciones, "
 			    "%llu instr. interpretadas",
 			    (unsigned long long)st->compiled, (unsigned long long)st->compiled_x,
 			    salsa64_rec_used(&rec) / 256, (unsigned long long)st->entries,
 			    (unsigned long long)st->linked, (unsigned long long)st->invalidated,
-			    (unsigned long long)st->flushes, (unsigned long long)st->vt_probes,
-			    (unsigned long long)st->interp_steps);
+			    (unsigned long long)st->flushes, (unsigned long long)st->evictions,
+			    (unsigned long long)st->vt_probes, (unsigned long long)st->interp_steps);
 		if (rec.prof) {
 			char text[2048];
 			salsa64_rec_prof_report(rec.prof, &rec_prof_prev, spukit_tick_hz(), fields, text, sizeof text);
@@ -1541,16 +1568,28 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	rec.opts = SALSA64_REC_OPT_PIN;  /* +7 % en nemu64-test (docs/perf-log.md) */
 	if (salsa64_ps3_rec_legacy_wanted())
 		rec.opts |= SALSA64_REC_OPT_LEGACY;
+	if (salsa64_ps3_rec_fpu_res_wanted())
+		rec.opts |= SALSA64_REC_OPT_FPU_RES;
+	if (salsa64_ps3_rec_cop0_exec_wanted())
+		rec.opts |= SALSA64_REC_OPT_COP0_EXEC;
+	if (salsa64_ps3_rec_no_evict_wanted())
+		rec.opts |= SALSA64_REC_OPT_NO_EVICT;
 	rec.prof = salsa64_ps3_rec_prof_wanted() ? &rec_prof : NULL;
 	if (!salsa64_ps3_rec_wanted())
 		salsa64_log("recompilador apagado (%s): intérprete", SALSA64_NOREC_FLAG);
 	else if (!(use_rec = salsa64_rec_init(&rec, &n64.cpu, salsa64_ps3_rec_cache(), SALSA64_REC_CACHE_BYTES)))
 		salsa64_log("recompilador no disponible: intérprete");
 	else
-		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x%s%s",
+		salsa64_log("páginas: RDRAM %u KB, rec %u KB, n64 %u KB, caché de código %u KB, pila %u KB (0 = sin dato)",
+			    page_kb(rdram), page_kb(&rec), page_kb(&n64), page_kb(salsa64_ps3_rec_cache()),
+			    page_kb(__builtin_frame_address(0))),
+		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x%s%s%s%s%s",
 			    SALSA64_REC_CACHE_BYTES >> 20, salsa64_ps3_rec_cache(), rec.calls_near ? "con bl" : "por mtctr",
 			    rec.opts, rec.prof ? ", con perfil" : "",
-			    rec.opts & SALSA64_REC_OPT_LEGACY ? ", camino viejo (jit-viejo)" : "");
+			    rec.opts & SALSA64_REC_OPT_LEGACY ? ", camino viejo (jit-viejo)" : "",
+			    rec.opts & SALSA64_REC_OPT_FPU_RES ? ", FPU residente (jit-fpu-residente)" : "",
+			    rec.opts & SALSA64_REC_OPT_COP0_EXEC ? ", COP0 por el intérprete (jit-cop0-viejo)" : "",
+			    rec.opts & SALSA64_REC_OPT_NO_EVICT ? ", sin tramos (jit-sin-tramos)" : "");
 
 	/* overscan.cfg: en cada juego (se cambia desde las Opciones del menú). */
 	load_overscan();
@@ -2093,7 +2132,15 @@ int main(void)
 		return rr == 0 ? 0 : 1;
 	}
 
-	rdram = memalign(128, SALSA64_RDRAM_MAX);
+	rdram = NULL;
+	if (file_exists(RDRAM_1M_PATH)) {
+		sys_mem_addr_t addr = 0;
+		if (sysMemoryAllocate(SALSA64_RDRAM_MAX, SYS_MEMORY_PAGE_SIZE_1M, &addr) == 0)
+			rdram = (uint8_t *)(uintptr_t)addr;
+		salsa64_log("RDRAM con sysMemoryAllocate de 1 MB (rdram-1m): %s", rdram ? "bien" : "FALLO, por el heap");
+	}
+	if (!rdram)
+		rdram = memalign(128, SALSA64_RDRAM_MAX);
 	for (int i = 0; i < SNAP_SLOTS; i++)
 		snap_buf[i] = memalign(128, SNAP_BYTES);
 	sys_sem_attr_t sem_attr = { SYS_SEM_ATTR_PROTOCOL, SYS_SEM_ATTR_PSHARED, 0, 0, 0, "wake" };

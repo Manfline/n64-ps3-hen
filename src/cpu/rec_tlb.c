@@ -54,12 +54,17 @@ uint32_t salsa64_rec_code_end(const struct salsa64_rec *rec, uint32_t pa, unsign
 
 /* ---- TLB del recompilador (ktlb) -------------------------------------------------- */
 
+static void live_compact(struct salsa64_rec_x *x);
+
 static void vt_set(struct salsa64_rec *rec, uint64_t va, uint32_t pa, bool dirty)
 {
 	struct salsa64_rec_x *x = &rec->x;
 	unsigned s = salsa64_rec_vt_slot(va);
-	if (!x->ktlb[s])
+	if (!x->ktlb[s]) {
+		if (x->nlive == SALSA64_REC_VT_PAGES)  /* entradas borradas que nadie compactó (x_tlb_written) */
+			live_compact(x);
 		x->live[x->nlive++] = (uint16_t)s;
+	}
 	x->ktlb[s] = salsa64_rec_vt_value(va, pa, dirty);
 }
 
@@ -212,6 +217,30 @@ void salsa64_rec_x_sync(struct salsa64_rec *rec)
 		for (unsigned k = 0; k < nchanged; k++)  /* con todo borrado y live[] al día */
 			vt_prefill_entry(rec, &cpu->tlb[changed[k]]);
 	}
+	if (prof) {
+		prof->t[SALSA64_PROF_XSYNC] += salsa64_rec_prof_now() - t0;
+		prof->n[SALSA64_PROF_XSYNC]++;
+	}
+}
+
+/* El código generado acaba de escribir la entrada n de la TLB (rec.c,
+ * rec_h_tlbw, en vez del intérprete): lo que salsa64_rec_x_sync haría al
+ * comparar las 32 entradas con la instantánea, solo con esa y sin compactar
+ * live[] (vt_set lo hace si se llena). ASID y ERL no cambian con una
+ * escritura. GoldenEye hace ~400 por campo con el refill. */
+void salsa64_rec_x_tlb_written(struct salsa64_rec *rec, unsigned n)
+{
+	struct salsa64_rec_x *x = &rec->x;
+	const struct salsa64_tlb_entry *e = &rec->cpu->tlb[n & 31];
+	struct salsa64_rec_prof *prof = rec->prof;
+	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0;
+	if (!snap_same(&x->snap[n & 31], e)) {
+		vt_clear_entry(x, x->snap[n & 31].entry_hi, x->snap[n & 31].page_mask);
+		vt_clear_entry(x, e->entry_hi, e->page_mask);
+		snap_take(&x->snap[n & 31], e);
+		vt_prefill_entry(rec, e);
+	}
+	x->tlb_writes = rec->cpu->tlb_writes;
 	if (prof) {
 		prof->t[SALSA64_PROF_XSYNC] += salsa64_rec_prof_now() - t0;
 		prof->n[SALSA64_PROF_XSYNC]++;

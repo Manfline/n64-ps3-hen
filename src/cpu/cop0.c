@@ -476,6 +476,20 @@ static void op_eret(struct salsa64_cpu *cpu)
 	salsa64_vr4300_update_status(cpu);
 }
 
+/* Para el recompilador (rec.c): TLBWI o TLBWR, devolviendo la entrada
+ * escrita; y ERET. */
+unsigned salsa64_vr4300_tlbw(struct salsa64_cpu *cpu, bool random)
+{
+	unsigned n = (random ? cop0_random(cpu) : cpu->index) & 31;
+	tlb_write(cpu, n);
+	return n;
+}
+
+void salsa64_vr4300_eret(struct salsa64_cpu *cpu)
+{
+	op_eret(cpu);
+}
+
 void salsa64_vr4300_cop0(struct salsa64_cpu *cpu, uint32_t i)
 {
 	if (cpu->mode != SALSA64_MODE_KERNEL && !(cpu->status & SALSA64_ST_CU0)) {

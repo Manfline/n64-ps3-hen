@@ -1,5 +1,106 @@
 # Estado
 
+## 2026-10-11 — Recompilador: FPU residente, sin microcódigo del PPE, COP0 con rutinas propias y caché por tramos (rama `jovial-jones-2408ac`, paquete SLSA00093 «Salsa64 FPU»)
+
+Objetivo: bajar los ~50 ciclos del PPE por instrucción MIPS del código
+nativo (GoldenEye en la presa, 49,4 campos/s). Hecho en el host y en qemu;
+la medición en la PS3 queda para cuando haya turno (cola: estados guardados,
+después esta rama). Diseño en docs/rec-ppe.md.
+
+- **Microcódigo del PPE** (manual del Cell, tabla A-1/A.1.3): toda forma con
+  punto (`andi.`, `andis.`…), los desplazamientos por registro, `mcrfs` y
+  `mtcrf` de varios campos cuestan ≥ 11 ciclos y vacían el pipeline; `mfcr`
+  ~34. El emisor usaba `andi.` en cada ANDI de MIPS y en la compuerta de
+  cada operación de la FPU, `andis.` a la entrada de cada bloque con COP1 y
+  `mtcrf 0x38` en cada salida a C. Fuera (rlwinm, li+ori+and, mtocrf).
+- **FPU residente** (`src/cpu/rec_emit_fpu.h`): los 12 `cpu->fpr[p]` más
+  usados del bloque en f14–f25, casa siempre al día, clasificación con
+  `fabs` y `fcmpu` contra constantes en f27–f31 (nada pasa por enteros),
+  inexacto por `r − a == b ∧ r − b == a` en vez del TwoSum, FCR31 perezoso
+  en cr2 (C, causa I, bandera I, compuerta) escrito al salir del bloque,
+  LWC1/SWC1 directo entre la RDRAM y el registro, CVT.S.W/CVT.D.W con
+  `fcfid`. Prueba nueva `executed_sequences_match_interp` (3000 secuencias
+  de COP1 en un bloque contra el intérprete, con memoria de E/S), que
+  encontró tres errores antes de medir (alias fd = fs en CVT.S.D y ADD,
+  CTC1 sin escribir los enteros modificados, y el camino lento de LWC1
+  cargando el registro residente de la RDRAM: Perfect Dark abortaba).
+- **COP0 sin el intérprete**: MTC0 a EntryLo0/1, PageMask e Index nativos
+  (el bloque sigue); TLBWI/TLBWR con `rec_h_tlbw` (ktlb al día solo para
+  esa entrada, sin comparar las 32); ERET con `rec_h_eret` y salida por
+  `exit_jr` como un JR. GoldenEye hacía 2200 llamadas al intérprete por
+  campo por el refill (1,9 ms).
+- **Caché de código por tramos**: 32 MB (el techo por el alcance de los
+  saltos al preámbulo) en 8 tramos; llena, se desaloja el más viejo en vez
+  de vaciar todo (los vaciados completos recompilaban ~7000 bloques de
+  golpe: campos de 52 ms en el log de referencia de main). Cada bloque decide
+  si llama a C con `bl` o `mtctr` según dónde cae. Las invalidaciones de
+  GoldenEye (44 345 en el log de main) son en su mayoría páginas que vuelven
+  en otro marco y ya se reutilizan desprendidas y enganchadas (perfil en
+  qemu, 128 s: 30 105 invalidados, 29 171 desprendidos, 23 554 enganchados).
+- **Páginas de 1 MB** (pedido de main): el heap de PSL1GHT ya sale de un
+  mmapper de páginas de 1 MB (`ppu/librt/sbrk.c`), así que la RDRAM solo
+  ganaría alineación; la caché de código no puede ir en memoria de 1 MB
+  (con HEN no es ejecutable) y solo se alinea a 1 MB en `mk/rec-cache.ld`.
+  El frontend anota al arrancar el tamaño de página real de RDRAM, rec, n64,
+  caché y pila (syscall 351) y el archivo `rdram-1m` prueba
+  `sysMemoryAllocate` de 1 MB para la RDRAM.
+- Perfil de GoldenEye en qemu (128 s hasta la presa, por campo): 1590
+  llamadas a C (COP0 1236, FPU 120, E/S 235), 11,9 instrucciones por bloque,
+  0,80 de COP1 y 3,94 de memoria por bloque; registros más usados: v0 59 %,
+  ra 57, a0 51, a1 42, sp 42, a2 33, v1 33, s0 31, at 30, a3 29, t6 26. Los
+  dos bloques más calientes (3,1 % cada uno) eran un bucle de comparación
+  partido porque un salto condicional apunta dentro del mismo bloque.
+- **Saltos internos con destino dentro del bloque** («Saltos internos con
+  destino dentro del bloque» en docs/rec-ppe.md): el camino tomado salta al
+  código de la instrucción destino sin salir, reponiendo el estado de la FPU
+  residente y de FCR31 que el código de ahí asume y ajustando `r29`. Y en
+  un bloque sin JR/JALR, r26 es un registro más para el bloque (5 con los
+  fijos). Más registros fijos entre bloques (s0 31 %, at 30 %, t6 26 %)
+  queda pendiente: r27 y r28 están ocupados y liberarlos cuesta cargas por
+  bloque; medir primero.
+
+Validado en qemu-ppc64 (todo con el árbol final): unitarias 365/365 en los
+cinco modos (incluida la FPU por memoria), nemu64-test 433 fallas (línea
+base) con y sin registros fijos y con caché de 3 MB (93 desalojos), vitest
+OK (también con 2 MB), `--lockstep` sin diferencias en nemu64-test (también
+con caché de 3 MB y 92 desalojos), vitest y Perfect Dark 300 M ciclos;
+`tools/build.sh test-host` 365/365 y `tools/test-roms.sh` en verde. El
+lockstep de GoldenEye hasta la presa (7,5 G ciclos) pasó **sin
+diferencias** con la FPU residente (9d1eba0: 283,6 M salidas comparadas) y
+con el árbol final (15d6724: 204 M salidas, 1 vaciado y 6 desalojos); la
+intro de Perfect Dark (3 G ciclos) también, con el árbol final. Dos
+errores que solo el lockstep encontró: el camino lento de
+LWC1 cargando el registro residente de la RDRAM (Perfect Dark abortaba) y
+los saltos internos dejando basura en los registros escritos por las
+instrucciones saltadas (nemu64-test, bloque 80014c84). `tools/build.sh`
+sin advertencias.
+
+**Medido en la PS3 real (2026-10-11, noche;** tablas en docs/perf-log.md,
+«FPU residente, sin microcódigo…»; paquetes SLSA00093 «Salsa64 FPU» y
+SLSA00095 «Salsa64 CPU FPU» —SLSA00094 es el de los estados guardados—,
+con main 69051fc traído a la rama):
+- GoldenEye, presa junto al camión: 17,5 ns por instrucción ejecutada
+  contra 18,2 de main (−4 %), todo de los ayudantes de COP0 (llamadas a C
+  1,56 → 0,73 ns, ktlb 0,78 → 0,20). **El código nativo sigue en ~47 ciclos
+  por instrucción MIPS** con cualquier combinación de banderas: no lo
+  limitan las instrucciones emitidas sino, con toda probabilidad, el tamaño
+  del código (~7 MB de bloques vivos contra 512 KB de L2; la caché va en
+  páginas de 64 KB). Ese es el siguiente trabajo.
+- **La FPU residente resultó más lenta** en el bench del mismo paquete
+  (add.s 40,0 → 30,9 MIPS, mixto 168 → 135) y en GoldenEye no se distingue:
+  queda apagada por omisión (`SALSA64_REC_OPT_FPU_RES`, archivo
+  `jit-fpu-residente`). Quitar el microcódigo sí suma: con la FPU por
+  memoria, mixto 156,6 → 168,2, add.s 35,7 → 40,0, cvt 40,7 → 50,6.
+- Zelda, SM64 y Mario Kart a 59,6 campos/s, sin regresión (emulación por
+  campo 5–20 % menor que main). Perfect Dark baja a 49–50 campos/s en un
+  nivel por espera del RSP (SPE de la HLE gráfica, 14 ms por campo, 131
+  texturas decodificadas por tarea): lado gráfico, no el recompilador.
+- Páginas: la RDRAM ya va en 1 MB; `rdram-1m` no se midió (nada que ganar).
+
+A/B que siguen en el paquete (archivos vacíos en /dev_hdd0/salsa64/):
+`jit-fpu-residente`, `jit-cop0-viejo`, `jit-sin-tramos`, `jit-viejo`,
+`rdram-1m`, `perfil`.
+
 ## 2026-10-11 — SM64 se colgaba con los efectos de framebuffer: el espejo del framebuffer sigue al dibujo, no al VI
 
 **Síntoma** (host, main 4baa6df): Super Mario 64 con `SALSA64_FBFX=2` dejaba
