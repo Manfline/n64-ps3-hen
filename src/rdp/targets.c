@@ -400,3 +400,58 @@ void rdp_targets_present(struct rdp_targets *s, const struct salsa64_vi_frame *f
 	out->w = f->width < t->lw ? f->width : t->lw;
 	out->h = f->height < t->lh - best_y0 ? f->height : t->lh - best_y0;
 }
+
+void rdp_dma_note(struct rdp_dma_ring *r, uint32_t pa, uint32_t len, uint32_t task)
+{
+	if (!len)
+		return;
+	uint32_t n = __atomic_load_n(&r->n, __ATOMIC_RELAXED);
+	uint32_t lo = pa, hi = pa + len;
+	if (n) {
+		uint32_t k = (n - 1) % RDP_DMA_RING;
+		if (r->e[k].task == task && r->e[k].lo <= hi && r->e[k].hi >= lo) {
+			/* Sigue o solapa al último de la misma tarea: se funden. */
+			uint32_t nlo = r->e[k].lo < lo ? r->e[k].lo : lo, nhi = r->e[k].hi > hi ? r->e[k].hi : hi;
+			r->e[k].lo = nlo;
+			r->e[k].hi = nhi;
+			__atomic_thread_fence(__ATOMIC_RELEASE);
+			return;
+		}
+	}
+	uint32_t k = n % RDP_DMA_RING;
+	r->e[k].lo = lo;
+	r->e[k].hi = hi;
+	r->e[k].task = task;
+	__atomic_store_n(&r->n, n + 1, __ATOMIC_RELEASE);
+}
+
+bool rdp_dma_since(const struct rdp_dma_ring *r, uint32_t lo, uint32_t hi, uint32_t task)
+{
+	uint32_t n = __atomic_load_n(&r->n, __ATOMIC_ACQUIRE);
+	uint32_t m = n < RDP_DMA_RING ? n : RDP_DMA_RING;
+	for (uint32_t i = 0; i < m; i++) {
+		uint32_t k = (n - 1 - i) % RDP_DMA_RING;
+		if (r->e[k].task >= task && r->e[k].lo < hi && r->e[k].hi > lo)
+			return true;
+	}
+	return false;
+}
+
+int rdp_targets_inside(const struct rdp_targets *s, uint32_t addr, uint32_t width, uint32_t bpp, uint32_t rows,
+		       int slots[RDP_TARGETS_MAX], uint32_t first_row[RDP_TARGETS_MAX])
+{
+	uint32_t line = width * bpp;
+	int n = 0;
+	if (!line)
+		return 0;
+	for (int i = 0; i < RDP_TARGETS_MAX; i++) {
+		const struct rdp_target *t = &s->t[i];
+		if (!t->used || t->width != width || t->bpp != bpp || t->addr < addr || (t->addr - addr) % line ||
+		    t->addr + line * t->lh > addr + line * rows)
+			continue;
+		slots[n] = i;
+		first_row[n] = (t->addr - addr) / line;
+		n++;
+	}
+	return n;
+}

@@ -183,6 +183,21 @@ sobre un framebuffer en el mismo campo en que el RDP lo terminó todavía
 podría quedar debajo de la copia (en SM64 pasan ~4 campos entre la tarea
 95 y el DMA).
 
+Ese caso existe: **Star Fox 64** limpia la pantalla con una tarea (un
+FILLRECT) y, antes de que el RSP termine, carga por DMA 113 KB de datos
+MIO0 encima de ese mismo framebuffer (`38f800`, en trozos de 256 bytes). En
+la consola el RDP acaba en una fracción de ms y el DMA le pasa por encima;
+aquí la copia llegaba después (en el host, al terminar la tarea; en la PS3,
+ms más tarde) y pisaba la cabecera del MIO0: el juego descomprimía basura y
+todos sus hilos quedaban esperando (letras 5 s y negro). Por eso cada
+escritura a la RDRAM que no pasa por el CPU (`salsa64_bus_rdram_written`:
+DMA del PI, del SP, del SI, la HLE de audio) se anota en un anillo
+(`rdp_dma_ring`, targets.h) con la tarea gráfica en vuelo, y **ninguna copia
+de la tarea T (espejo del framebuffer, copia esperada, espejo chico) escribe
+un tramo que un DMA tocó desde que T empezó**: el dato del DMA es más nuevo.
+Un DMA anterior a la tarea sí se pisa, como en la N64. Las escrituras del
+propio CPU no se siguen (solo con el build `SALSA64_WATCH_MEM`).
+
 Las imágenes chicas (iconos, pantallas) no se esperan: al terminar la tarea
 que las dibujó se encola una **copia espejo** (solo las filas que llegaron
 las tijeras, hasta 64 KB, cuatro en vuelo) y se convierte a la RDRAM en

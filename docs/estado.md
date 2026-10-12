@@ -1,5 +1,61 @@
 # Estado
 
+## 2026-10-12 (noche) — Star Fox 64 colgado a los 5 s: el espejo del framebuffer pisaba un DMA (rama `infallible-wozniak-aa210c`)
+
+Main lo reportó de la PS3 real (Rev 1 y Rev 0: letras unos 5 s y negro, el
+CPU al 100 % sin bucles de espera reconocidos). En el host se reproduce
+solo con el espejo del framebuffer (`--gfx-frame`, que lo activa; con
+`SALSA64_FBFX=0` corre): el juego se queda en la tarea gráfica 67 con todos
+sus hilos de libultra esperando mensajes (`tools/libultra-threads.py`) y el
+hilo ocioso corriendo. No es el CIC 6101 ni el PIF ni la EEPROM (sigue
+leyendo el control; la EEPROM se inicializa bien).
+
+Causa (traza del PI y de las tareas, mismo campo 151): la tarea 67 limpia
+el framebuffer `38f800` con un FILLRECT y, antes de que el RSP termine
+(30 000 ciclos de HLE), el juego carga por DMA 113 KB de datos MIO0 encima
+(`38f800`–`3ab1d0`, en trozos de 256 bytes). En la N64 el RDP acaba antes
+y el DMA pasa por encima; en el host el espejo «al terminar la tarea» se
+escribía después del DMA y pisaba la cabecera del MIO0 (en la PS3, ms más
+tarde, pisaba más). Arreglo general (docs/framebuffer.md): un anillo de
+DMA (`rdp_dma_ring`, targets.c, lo alimenta `salsa64_bus_rdram_written`
+con la tarea gráfica en vuelo) y ninguna copia de la tarea T (espejo,
+copia esperada, espejo chico; host y PS3) pisa un tramo que un DMA tocó
+desde que T empezó. Pruebas: `targets_dma_ring` y `raster_mirror_after_dma`
+(falla sin el arreglo). Host: Star Fox Rev 1 con el espejo, 590 tareas en
+20 s y una sola copia descartada (la de la tarea 67). En la PS3 real (el
+autor, con 0b4108e): **ya arranca**, pero con «cuadros negros y ruido tipo
+estática en la parte superior» durante todo el juego, a velocidad 100 %.
+
+**Estática arriba:** Star Fox limpia sus tres framebuffers seguidos
+(`38f800`, `3b5000`, `3da800`) con un solo FILLRECT de 320 × 720 sobre una
+color image en el primero (al arrancar, campo 3, y al pasar a la escena,
+campo 158); después cada cuadro solo limpia 8..312 × 8..232 y el borde de
+8 px queda como lo dejó ese relleno. La PS3 rechazaba esa color image
+(«imposible», alto > 480) y el borde nunca se limpiaba: la superficie se
+ceba con la RDRAM, donde las filas 0–7 de `38f800` traen los datos MIO0
+cargados por DMA (en el host: basura de colores en la fila 0 del campo
+300; con el arreglo, negra). Ahora un relleno sobre una color image más
+alta que 480 se reparte entre los destinos existentes que caben enteros
+dentro (`rdp_targets_inside`, host y PS3; pruebas `targets_inside` y
+`raster_tall_fill`), sin crear un destino de 720.
+
+**Cuadros negros:** no reproducidos ni en el host ni en RPCS3 (capturas de
+cada campo hasta el 445 y cada 3 hasta el 1800 sin saltos de brillo;
+presentación toda del RSX, edad 2,5–3 campos). Para verlos en la consola,
+el frontend traza ahora la presentación por campo si existe
+`/dev_hdd0/salsa64/trace-vi` (con un número N de campos; por omisión 300):
+origen del VI, de dónde salió la imagen (RSX, RDRAM o nada), destino,
+ranura, campos desde que se dibujó y cuánto va por delante la emulación.
+PS3 real con 8c8e3cd (el autor): jugando ya no parpadea; queda el logo
+«1997 Nintendo presents». La traza por campo lo explica: los 1200 campos
+salen del RSX con 1–3 campos de edad, pero entre el campo 96 y el 107 no
+hay campos: la emulación esperó 200 ms (el tope) la copia a la RDRAM de la
+tarea 5 (3da800, «esperada», 1 tarde) porque con el VI apagado la
+presentación no la traducía. Es lo que arregla main en 98def88 (la
+presentación traduce siempre la tarea cuya copia espera la emulación),
+traído a la rama en 129a6bb. `trace-vi` queda renombrado a `trace-vi.off`
+en la consola.
+
 ## 2026-10-12 (tarde) — Líneas azules de GoldenEye (cobertura AA), túnica de Link (máscara con clamp) y el negro de la intro de Banjo (niebla en el blender) (rama `infallible-wozniak-aa210c`)
 
 Con el volcado del autor en el túnel de Dam (SELECT + R2), las líneas azules

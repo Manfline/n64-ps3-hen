@@ -186,12 +186,17 @@ static struct {
 	struct mirror {
 		bool used;
 		uint32_t addr, width, lw, rows, fence, bpp;
+		uint32_t task;  /* la tarea que dibujó lo copiado (rdp_dma_since) */
 	} mirrors[MIRRORS];
+	/* DMA a la RDRAM desde el hilo de emulación (targets.h): una copia de
+	 * la tarea T no pisa lo que un DMA escribió desde que T empezó. */
+	struct rdp_dma_ring dma;
 	struct mirror frame;         /* el espejo del framebuffer presentado */
 	/* Última tarea en que cada ranura se copió a la RDRAM (o se rellenó
 	 * su cobertura): el espejo del framebuffer no pisa esa zona mientras
 	 * el CPU pueda estar leyéndola. */
 	uint32_t rb_task[RDP_TARGETS_MAX];
+	struct rdp_present last_p;   /* lo que eligió la última presentación (traza por campo) */
 	struct mirror big[RB_SLOTS]; /* copias grandes sin esperar, en los búferes de RB_SLOTS */
 	/* Color images pedidas en las últimas RB_HISTORY tareas (hilo de
 	 * emulación): una que se repite ya no se espera. */
@@ -293,6 +298,29 @@ void salsa64_rdp_fbfx(int level)
 	rdp.fbfx = level < 0 ? 0 : level > 2 ? 2 : level;
 }
 
+void salsa64_rdp_last_present(int *slot, uint32_t *age, uint32_t *addr)
+{
+	*slot = rdp.last_p.slot;
+	*age = rdp.last_p.age;
+	*addr = rdp.last_p.slot >= 0 ? rdp.tg.t[rdp.last_p.slot].addr : 0;
+}
+
+void salsa64_rdp_rdram_written(uint32_t pa, uint32_t len, bool gfx_in_flight)
+{
+	rdp_dma_note(&rdp.dma, pa, len, rdp.finished + (gfx_in_flight ? 1u : 0u));
+}
+
+/* Un DMA escribió desde la tarea `task` en lo que se iba a copiar: la
+ * copia se descarta (Star Fox 64 carga datos encima del framebuffer que
+ * acaba de limpiar). */
+static bool dma_newer(uint32_t addr, uint32_t bytes, uint32_t task)
+{
+	if (!rdp_dma_since(&rdp.dma, addr, addr + bytes, task))
+		return false;
+	rdp.stats.dma_skipped++;
+	return true;
+}
+
 static void release_targets(void)
 {
 	rdp.again.surf = NULL;
@@ -374,6 +402,7 @@ uint32_t salsa64_rdp_reset(void)
 		memset(&rdp.sets[i].res, 0, sizeof rdp.sets[i].res);
 	}
 	rdp.acquired = rdp.finished = rdp.translated = 0;
+	memset(&rdp.dma, 0, sizeof rdp.dma);
 	rdp.readback_done = 0;
 	rdp.rb_late_logged = false;
 	memset(rdp.mirrors, 0, sizeof rdp.mirrors);
@@ -530,16 +559,21 @@ static void readbacks_finish(bool wait)
 {
 	struct mirror *f = &rdp.frame;
 	if (f->used && (wait ? (rsxkit_fence_wait(f->fence), true) : rsxkit_fence_done(f->fence))) {
-		to_rdram(rdp.rb + FRAME_SLOT * RB_SLOT, RB_PITCH, f->addr, f->width, f->lw, f->rows, 2);
+		if (!dma_newer(f->addr, f->width * 2 * f->rows, f->task)) {
+			to_rdram(rdp.rb + FRAME_SLOT * RB_SLOT, RB_PITCH, f->addr, f->width, f->lw, f->rows, 2);
+			rdp.stats.frames_mirrored++;
+		}
 		f->used = false;
-		rdp.stats.frames_mirrored++;
 	}
 	for (int k = 0; k < RB_SLOTS; k++) {
 		struct mirror *m = &rdp.big[k];
 		if (m->used && (wait ? (rsxkit_fence_wait(m->fence), true) : rsxkit_fence_done(m->fence))) {
-			to_rdram(rdp.rb + k * RB_SLOT, RB_PITCH, m->addr, m->width, m->lw, m->rows, m->bpp ? m->bpp : 2);
+			uint32_t bpp = m->bpp ? m->bpp : 2;
+			if (!dma_newer(m->addr, m->width * bpp * m->rows, m->task)) {
+				to_rdram(rdp.rb + k * RB_SLOT, RB_PITCH, m->addr, m->width, m->lw, m->rows, bpp);
+				rdp.stats.mirrors++;
+			}
 			m->used = false;
-			rdp.stats.mirrors++;
 		}
 	}
 	for (int k = 0; k < MIRRORS; k++) {
@@ -550,11 +584,13 @@ static void readbacks_finish(bool wait)
 			rsxkit_fence_wait(m->fence);
 		else if (!rsxkit_fence_done(m->fence))
 			continue;
-		uint32_t pitch = (m->lw * 2 + 63) & ~63u;
-		to_rdram(rdp.rb + (RB_SLOTS + 2) * RB_SLOT + k * MIRROR_BYTES, pitch, m->addr, m->width, m->lw, m->rows,
-			 m->bpp ? m->bpp : 2);
+		uint32_t pitch = (m->lw * 2 + 63) & ~63u, bpp = m->bpp ? m->bpp : 2;
+		if (!dma_newer(m->addr, m->width * bpp * m->rows, m->task)) {
+			to_rdram(rdp.rb + (RB_SLOTS + 2) * RB_SLOT + k * MIRROR_BYTES, pitch, m->addr, m->width, m->lw, m->rows,
+				 bpp);
+			rdp.stats.mirrors++;
+		}
 		m->used = false;
-		rdp.stats.mirrors++;
 	}
 }
 
@@ -1091,23 +1127,69 @@ static void translate(uint32_t n)
 
 	uint32_t off = 0;
 	rsxkit_draw rd;
+	struct { uint32_t addr, width, bpp, rows; } tall = { 0, 0, 0, 0 };  /* color image más alta que 480 */
 	while (off + sizeof(struct gfx_cmd) <= res->cmd_bytes) {
 		const struct gfx_cmd *c = (const struct gfx_cmd *)(s->cmd + off);
 		if (c->op == GFX_OP_END || c->size < sizeof *c)
 			break;
 		switch (c->op) {
-		case GFX_OP_TARGET:
-			cur = get_target(c->a, c->b, (c->c >> 8) & 0xFF, c->c & 0xFF,
-					 scissor_bottom(s, off + c->size, res->cmd_bytes));
+		case GFX_OP_TARGET: {
+			uint32_t lh = scissor_bottom(s, off + c->size, res->cmd_bytes), siz = c->c & 0xFF;
+			cur = get_target(c->a, c->b, (c->c >> 8) & 0xFF, siz, lh);
+			tall.rows = cur < 0 && c->b && c->b <= 640 && lh > 480 ? lh : 0;
+			tall.addr = c->a;
+			tall.width = c->b;
+			tall.bpp = siz == 3 ? 4 : siz == 2 ? 2 : 1;
 			if (s->trace && rdp_log)
 				rdp_log("gfx: fb tarea %u: color image %06x/%u siz %u → ranura %d (%s)", n, c->a, c->b,
 					c->c & 0xFF, cur, rdp.last_get.how);
 			break;
+		}
 		case GFX_OP_ZCLEAR:
 			zclear((const struct gfx_zclear *)c);
 			break;
 		case GFX_OP_DRAW: {
 			const struct gfx_draw *g = (const struct gfx_draw *)c;
+			if (cur < 0 && tall.rows && g->cycle == G_CYC_FILL && g->h.b >= 3) {
+				/* Relleno de la imagen alta (rdp_targets_inside): se borra el
+				 * rectángulo en cada destino que cae dentro. */
+				int slots[RDP_TARGETS_MAX];
+				uint32_t first[RDP_TARGETS_MAX];
+				const struct gfx_vertex *v = (const struct gfx_vertex *)(s->vtx) + g->h.a;
+				float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+				for (uint32_t k = 0; k < g->h.b; k++) {
+					if (!(v[k].w > 0.0f))
+						continue;
+					float x = v[k].x / v[k].w, y = v[k].y / v[k].w;
+					x0 = x < x0 ? x : x0, x1 = x > x1 ? x : x1;
+					y0 = y < y0 ? y : y0, y1 = y > y1 ? y : y1;
+				}
+				uint32_t color = (uint32_t)(g->k[GFX_K_ONE][0][0] * 255.0f + 0.5f) << 16 |
+						 (uint32_t)(g->k[GFX_K_ONE][0][1] * 255.0f + 0.5f) << 8 |
+						 (uint32_t)(g->k[GFX_K_ONE][0][2] * 255.0f + 0.5f);
+				int nin = rdp_targets_inside(&rdp.tg, tall.addr, tall.width, tall.bpp, tall.rows, slots, first);
+				for (int k = 0; k < nin && x1 > x0 && y1 > y0; k++) {
+					int i = slots[k];
+					const struct rdp_target *t = &rdp.tg.t[i];
+					float ya = y0 - (float)first[k], yb = y1 - (float)first[k];
+					ya = ya < 0.0f ? 0.0f : ya;
+					yb = yb > (float)t->lh ? (float)t->lh : yb;
+					float xa = x0 < 0.0f ? 0.0f : x0, xb = x1 > (float)t->lw ? (float)t->lw : x1;
+					if (yb <= ya || xb <= xa || !rdp.surf[i])
+						continue;
+					if (!bind(i, NULL))
+						continue;
+					float rect[4] = { xa, ya, xb, yb };
+					rsxkit_clear(RSXKIT_CLEAR_COLOR, color, 0.0f, rect);
+					rdp_targets_drawn(&rdp.tg, i);
+					drawn[i] = true;
+					rdp.surf_dirty[i] = true;
+					if ((uint32_t)(yb + 0.999f) > drawn_rows[i])
+						drawn_rows[i] = (uint32_t)(yb + 0.999f);
+					rdp.stats.tall_fills++;
+				}
+				break;
+			}
 			if (cur < 0 || !g->h.b)
 				break;
 			bool sync;
@@ -1216,6 +1298,8 @@ static void translate(uint32_t n)
 					rsxkit_fence_wait(rsxkit_fence());
 					for (uint32_t j = 0; j < nrb; j++) {
 						const struct rdp_target *tj = &rdp.tg.t[rb[j].slot];
+						if (dma_newer(tj->addr, tj->width * tj->bpp * rb[j].rows, n + 1))
+							continue;
 						to_rdram(rdp.rb + rb[j].buf * RB_SLOT, RB_PITCH, tj->addr, tj->width, tj->lw, rb[j].rows,
 							 tj->bpp);
 						rdp.stats.readbacks++;
@@ -1259,6 +1343,7 @@ static void translate(uint32_t n)
 				m->lw = t->lw;
 				m->rows = rows;
 				m->bpp = t->bpp;
+				m->task = n + 1;
 				m->fence = 0;  /* se pone con la barrera de la tarea */
 			}
 			break;
@@ -1305,6 +1390,7 @@ static void translate(uint32_t n)
 		m->lw = t->lw;
 		m->rows = rows;
 		m->bpp = t->bpp;
+		m->task = n + 1;
 		mirror_k[nmirror++] = k;
 	}
 	if (s->trace && rdp_log) {
@@ -1332,6 +1418,8 @@ static void translate(uint32_t n)
 		rsxkit_fence_wait(s->fence);
 		for (uint32_t k = 0; k < nrb; k++) {
 			const struct rdp_target *t = &rdp.tg.t[rb[k].slot];
+			if (dma_newer(t->addr, t->width * t->bpp * rb[k].rows, n + 1))
+				continue;
 			to_rdram(rdp.rb + rb[k].buf * RB_SLOT, RB_PITCH, t->addr, t->width, t->lw, rb[k].rows, t->bpp);
 			rdp.stats.readbacks++;
 		}
@@ -1425,6 +1513,7 @@ static void frame_mirror(int slot, uint32_t rows, bool wait)
 	rdp.frame.width = t->width;
 	rdp.frame.lw = t->lw;
 	rdp.frame.rows = rows;
+	rdp.frame.task = t->last_task;
 	rdp.frame.fence = rsxkit_fence();
 }
 
@@ -1437,6 +1526,7 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 	rdp_targets_present(&rdp.tg, f, field, &p);
 	if (p.slot < 0 || !rdp.surf[p.slot] || !p.w || !p.h)
 		return false;
+	rdp.last_p = p;
 	rdp.stats.age_sum += p.age;
 	if (p.age > rdp.stats.age_max)
 		rdp.stats.age_max = p.age;
