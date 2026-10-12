@@ -14,6 +14,7 @@
  */
 #include <string.h>
 
+#include "core/rcp.h"
 #include "rsp/gfx/hle.h"
 
 #ifdef SALSA64_GFX_TRACE
@@ -210,14 +211,20 @@ static bool texture_state(struct gfx_state *g, struct gfx_draw *d, int tile, int
 	uint16_t l[2] = { lim && ws == GFX_WRAP_CLAMP ? lim[0] : 0, lim && wt == GFX_WRAP_CLAMP ? lim[1] : 0 };
 	if (!gfx_tile_texture(g, tile & 7, t, premul, l))
 		return false;
+	/* Un eje decodificado en un solo periodo (tmem.c): espejo una vez y la
+	 * coordenada corrida un periodo (la textura es el segundo). */
+	if (t->flags & GFX_TEX_ONCE_S)
+		ws = GFX_WRAP_MIRROR_ONCE;
+	if (t->flags & GFX_TEX_ONCE_T)
+		wt = GFX_WRAP_MIRROR_ONCE;
 	bool bilinear = !copy && ((g->oh >> G_MDSFT_TEXTFILT) & 3) != G_TF_POINT;
 	float half = bilinear ? 0.5f : 0.0f;
 	t->flags = (uint8_t)(ws | wt << 2 | (bilinear ? GFX_TEX_BILINEAR : 0) | (premul ? GFX_TEX_PREMUL : 0));
 	float w = (float)t->width, h = (float)t->height;
 	t->xf[0] = shift_scale(ti->shifts) / w;
 	t->xf[1] = shift_scale(ti->shiftt) / h;
-	t->xf[2] = (half - ti->uls / 4.0f) / w;
-	t->xf[3] = (half - ti->ult / 4.0f) / h;
+	t->xf[2] = (half - ti->uls / 4.0f) / w - (ws == GFX_WRAP_MIRROR_ONCE ? 1.0f : 0.0f);
+	t->xf[3] = (half - ti->ult / 4.0f) / h - (wt == GFX_WRAP_MIRROR_ONCE ? 1.0f : 0.0f);
 	return true;
 }
 
@@ -302,6 +309,22 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 				   kind == PRIM_RECT && i == 0 ? g->rect_lim : NULL)) {
 			d->ntex = (uint8_t)i;
 			break;
+		}
+	/* Sin corrección de perspectiva (G_TP_NONE) el RDP no divide los
+	 * coeficientes de textura por el término 1/W que manda el RSP: usa
+	 * S·(1/W) tal cual. Los microcódigos de la segunda generación (F3DEX2,
+	 * F3DZEX, el de Conker) normalizan 1/W a ~0x4000 (la mitad de 0x8000)
+	 * en cada triángulo, así que la textura se muestrea a la mitad de la
+	 * coordenada del vértice; medido con el microcódigo real de Majora's
+	 * Mask: el sol del telescopio (un atlas de 64 × 32 con dos soles, s de
+	 * 0 a 63) muestra solo el sol izquierdo. Los TEXRECT llevan s y t
+	 * directos al RDP y no cambian. */
+	if (kind == PRIM_TRI && d->ntex && !((g->oh >> G_MDSFT_TEXTPERSP) & 1) &&
+	    (g->job->gbi == SALSA64_GBI_F3DEX2 || g->job->gbi == SALSA64_GBI_F3DZEX2 ||
+	     g->job->gbi == SALSA64_GBI_F3DEXBG))
+		for (unsigned i = 0; i < d->ntex; i++) {
+			d->tex[i].xf[0] *= 0.5f;
+			d->tex[i].xf[1] *= 0.5f;
 		}
 	/* Sin una textura (apagadas o arena lleno): lo que la leía se anula. */
 	if (d->nterms)

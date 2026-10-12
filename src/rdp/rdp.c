@@ -904,7 +904,7 @@ static void to_rsxkit(const struct gfx_draw *g, const struct set *s, int cur, rs
 	};
 	static const uint8_t wrap[] = {
 		[GFX_WRAP_CLAMP] = RSXKIT_WRAP_CLAMP, [GFX_WRAP_REPEAT] = RSXKIT_WRAP_REPEAT,
-		[GFX_WRAP_MIRROR] = RSXKIT_WRAP_MIRROR, [3] = RSXKIT_WRAP_CLAMP,
+		[GFX_WRAP_MIRROR] = RSXKIT_WRAP_MIRROR, [GFX_WRAP_MIRROR_ONCE] = RSXKIT_WRAP_MIRROR_ONCE,
 	};
 	memset(d, 0, offsetof(rsxkit_draw, k));
 	d->blend = g->blend < sizeof blend ? blend[g->blend] : RSXKIT_BLEND_OFF;

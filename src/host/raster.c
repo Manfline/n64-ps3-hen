@@ -128,6 +128,8 @@ static int wrap(int i, int n, unsigned mode)
 			i += p;
 		return i < n ? i : p - 1 - i;
 	}
+	if (mode == GFX_WRAP_MIRROR_ONCE && i < 0)
+		i = -1 - i;  /* reflejado una vez; más allá, el borde (abajo) */
 	return i < 0 ? 0 : i >= n ? n - 1 : i;
 }
 
