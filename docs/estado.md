@@ -178,7 +178,13 @@ de registros entre bloques, accesos a memoria y TLB, caché de código y FPU;
 licencia archivo por archivo antes de copiar nada a `src/` (nunca a
 `lib/rsxkit` ni `lib/spukit`). También ejecutar el IPL3 del cartucho al
 arrancar, como mupen64plus, para no depender de reproducir lo que deja cada
-CIC (protecciones de Rare).
+CIC (protecciones de Rare). Y HLE de funciones de libultra en el CPU (como
+UltraHLE): perfilar en GoldenEye y Perfect Dark cuánto tiempo va a funciones
+conocidas (matrices, trigonometría, raíz, copias de memoria) y, si pesa,
+reemplazarlas en el recompilador por versiones nativas con vectores del PPE.
+Detección por comportamiento o por huella (hash) del código, sin copiar nada
+de la biblioteca al repo; resultado exacto, porque la lógica del juego no
+admite aproximaciones.
 
 ## 2026-10-12 — Botón PS y cuadro al salir: el juego se pausa (rama `heuristic-agnesi-760f8c`, paquete SLSA00098 «Salsa64 botón PS»)
 
