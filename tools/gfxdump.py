@@ -4,8 +4,10 @@
 Sirve para aislar un dibujo que sale mal en el RSX: se edita el volcado en la
 Mac y se repite con `tools/rpcs3-run.py --replay` o `salsa64-run --raster-dump`.
 
-  tools/gfxdump.py list gfxdump.bin
+  tools/gfxdump.py list gfxdump.bin [--draw 3,7] [--vtx 7]
   tools/gfxdump.py edit gfxdump.bin out.bin --keep 3,7 --set 7:blend=0 --white 7
+  tools/gfxdump.py tex gfxdump.bin 7 0 tex.ppm     (textura 0 del dibujo 7: color y, debajo, alfa)
+  tools/gfxdump.py pixel gfxdump.bin 161 153      (triángulos que cubren ese píxel, en orden)
 
 --keep deja solo esos dibujos (los demás quedan con 0 vértices; destinos y
 borrados se conservan). --set N:campo=valor cambia un campo de un dibujo
@@ -21,6 +23,13 @@ MAGIC = 0x53344744
 OPS = {0: "END", 1: "TARGET", 2: "ZCLEAR", 3: "DRAW"}
 U8_FIELDS = ["cycle", "cull", "depth", "blend", "atest", "aref", "fog", "ntex"]
 BLEND = ["OFF", "ALPHA", "ADD", "KEEP"]
+# struct gfx_draw (gfx.h): desplazamientos desde el inicio del dibujo.
+OFF_NTERMS, OFF_FACTORS, OFF_VISCVG, OFF_AA = 48, 49, 77, 78
+OFF_TEX, TEX_SIZE = 80, 40            # struct gfx_tex tex[2]
+OFF_K, K_TERMS = 160, 7               # float k[7][3][4]
+TERM_NAMES = ["T0", "T0a", "T1", "T1a", "1", "t5", "t6"]
+FACTOR_NAMES = {1: "T0", 2: "T0a", 3: "T1", 4: "T1a", 5: "C", 6: "Ca"}
+VTX_SIZE = 32                          # struct gfx_vertex: x y z w s t, rgba, relleno
 
 
 def detect_endian(data):
@@ -60,10 +69,17 @@ class Dump:
                 n += 1
 
     def tex_at(self, off, i):
-        base = off + 48 + 32 * i
-        o, w, h, pitch, flags, _, key = struct.unpack_from(self.e + "IHHHBBI", self.cmd, base)
+        base = off + OFF_TEX + TEX_SIZE * i
+        o, w, h, pitch, flags, where, key = struct.unpack_from(self.e + "IHHHBBI", self.cmd, base)
         xf = struct.unpack_from(self.e + "4f", self.cmd, base + 16)
-        return base, dict(offset=o, width=w, height=h, pitch=pitch, flags=flags, key=key, xf=xf)
+        src, spitch, ssiz, sfmt = struct.unpack_from(self.e + "IHBB", self.cmd, base + 32)
+        return base, dict(offset=o, width=w, height=h, pitch=pitch, flags=flags, where=where, key=key, xf=xf,
+                          src_addr=src, src_pitch=spitch, src_siz=ssiz, src_fmt=sfmt)
+
+    def vertex(self, i):
+        x, y, z, w, s, t = struct.unpack_from(self.e + "6f", self.vtx, i * VTX_SIZE)
+        r, g, b, a = self.vtx[i * VTX_SIZE + 24:i * VTX_SIZE + 28]
+        return x, y, z, w, s, t, (r, g, b, a)
 
     def describe(self, n, off):
         e = self.e
@@ -79,13 +95,26 @@ class Dump:
         for i in range(f["ntex"]):
             _, t = self.tex_at(off, i)
             s += (f"\n      tex{i} off {t['offset']} {t['width']}x{t['height']} pitch {t['pitch']} "
-                  f"flags {t['flags']:#x} xf {[round(x, 5) for x in t['xf']]}")
-        k = struct.unpack_from(e + "60f", self.cmd, off + 112)
-        names = ["T0", "T0a", "T1", "T1a", "1"]
-        for t in range(5):
+                  f"flags {t['flags']:#x} key {t['key']:08x} xf {[round(x, 5) for x in t['xf']]} "
+                  f"de {t['src_addr']:06x}/{t['src_pitch']} siz {t['src_siz']} fmt {t['src_fmt']}")
+        nterms = self.cmd[off + OFF_NTERMS]
+        if self.cmd[off + OFF_VISCVG]:
+            s += "\n      viscvg"
+        if self.cmd[off + OFF_AA]:
+            s += "\n      aa (cobertura de 8 muestras)"
+        k = struct.unpack_from(e + f"{K_TERMS * 12}f", self.cmd, off + OFF_K)
+        for t in range(K_TERMS if nterms else 5):
             row = k[t * 12:(t + 1) * 12]
-            if any(abs(x) > 1e-6 for x in row):
-                s += f"\n      {names[t]:3s} k0 {fmt4(row[0:4])} kC {fmt4(row[4:8])} kCa {fmt4(row[8:12])}"
+            if nterms:
+                if t >= nterms:
+                    break
+                fac = self.cmd[off + OFF_FACTORS + 4 * t:off + OFF_FACTORS + 4 * t + 4]
+                name = "·".join(FACTOR_NAMES.get(x, str(x)) for x in fac if x) or "1"
+            elif any(abs(x) > 1e-6 for x in row):
+                name = TERM_NAMES[t]
+            else:
+                continue
+            s += f"\n      {name:7s} k0 {fmt4(row[0:4])} kC {fmt4(row[4:8])} kCa {fmt4(row[8:12])}"
         return s
 
 
@@ -108,8 +137,7 @@ def cmd_list(args):
         _, off = list(d.draws())[args.vtx]
         first, count = struct.unpack_from(d.e + "II", d.cmd, off + 4)
         for i in range(first, first + count):
-            x, y, z, w, s, t = struct.unpack_from(d.e + "6f", d.vtx, i * 32)
-            r, g, b, a = d.vtx[i * 32 + 24:i * 32 + 28]
+            x, y, z, w, s, t, (r, g, b, a) = d.vertex(i)
             print(f"      v{i}: x {x:9.2f} y {y:9.2f} z {z:9.2f} w {w:9.2f}  s {s:7.2f} t {t:7.2f}  "
                   f"rgba {r} {g} {b} {a}  ndc {x / w:6.3f} {y / w:6.3f} {z / w:6.4f}")
 
@@ -131,6 +159,8 @@ def cmd_edit(args):
         off = draws[int(n)]
         if key in U8_FIELDS:
             d.cmd[off + 28 + U8_FIELDS.index(key)] = int(val, 0)
+        elif key == "aa":
+            d.cmd[off + OFF_AA] = int(val, 0)
         elif key.startswith("tex") and "." in key:
             i, field = key[3:].split(".", 1)
             base, _ = d.tex_at(off, int(i))
@@ -144,19 +174,57 @@ def cmd_edit(args):
         tj, vals = rest.split("=", 1)
         t, j = (int(x) for x in tj.split(","))
         v = [float(x) for x in vals.split(",")]
-        struct.pack_into(d.e + "4f", d.cmd, draws[int(n)] + 112 + 48 * t + 16 * j, *v)
+        struct.pack_into(d.e + "4f", d.cmd, draws[int(n)] + OFF_K + 48 * t + 16 * j, *v)
     for n in args.normw:
         off = draws[n]
         first, count = struct.unpack_from(d.e + "II", d.cmd, off + 4)
         for i in range(first, first + count):
-            x, y, z, w = struct.unpack_from(d.e + "4f", d.vtx, i * 32)
-            struct.pack_into(d.e + "4f", d.vtx, i * 32, x / w, y / w, z / w, 1.0)
+            x, y, z, w = struct.unpack_from(d.e + "4f", d.vtx, i * VTX_SIZE)
+            struct.pack_into(d.e + "4f", d.vtx, i * VTX_SIZE, x / w, y / w, z / w, 1.0)
     for n in args.white:
         _, t = d.tex_at(draws[n], 0)
         for y in range(t["height"]):
             row = t["offset"] + y * t["pitch"]
             d.tex[row:row + 4 * t["width"]] = b"\xff" * (4 * t["width"])
     d.save(args.out)
+
+
+def cmd_tex(args):
+    """Textura `i` del dibujo `n` en PPM: color arriba, alfa (gris) abajo."""
+    d = Dump(open(args.dump, "rb").read())
+    _, t = d.tex_at(dict(d.draws())[args.n], args.i)
+    w, h = t["width"], t["height"]
+    with open(args.out, "wb") as f:
+        f.write(b"P6\n%d %d\n255\n" % (w, 2 * h))
+        for alpha in (False, True):
+            for y in range(h):
+                row = t["offset"] + y * t["pitch"]
+                for x in range(w):
+                    r, g, b, a = d.tex[row + 4 * x:row + 4 * x + 4]
+                    f.write(bytes((a, a, a)) if alpha else bytes((r, g, b)))
+    print(f"{args.out}: {w}x{h}, {t}")
+
+
+def cmd_pixel(args):
+    """Triángulos (en el orden en que se dibujan) que cubren el centro del píxel."""
+    d = Dump(open(args.dump, "rb").read())
+    px, py = args.x + 0.5, args.y + 0.5
+
+    def edge(a, b):
+        return (b[0] - a[0]) * (py - a[1]) - (b[1] - a[1]) * (px - a[0])
+    for n, off in d.draws():
+        first, count = struct.unpack_from(d.e + "II", d.cmd, off + 4)
+        for k in range(0, count - 2, 3):
+            v = [d.vertex(first + k + j) for j in range(3)]
+            if any(vv[3] <= 0 for vv in v):
+                continue
+            p = [(vv[0] / vv[3], vv[1] / vv[3]) for vv in v]
+            e = (edge(p[1], p[2]), edge(p[2], p[0]), edge(p[0], p[1]))
+            if all(x >= 0 for x in e) or all(x <= 0 for x in e):
+                print(d.describe(n, off).split("\n")[0] + f"  triángulo {k // 3}")
+                for vv in v:
+                    x, y, z, w, s, t, c = vv
+                    print(f"      x {x / w:8.2f} y {y / w:8.2f} z {z / w:.4f} w {w:9.2f} s {s:8.2f} t {t:8.2f} rgba {c}")
 
 
 def main():
@@ -176,6 +244,17 @@ def main():
     p.add_argument("--k", action="append", default=[], help="N:t,j=r,g,b,a: término t, coeficiente j")
     p.add_argument("--normw", type=int, action="append", default=[], help="vértices de N con w = 1")
     p.set_defaults(fn=cmd_edit)
+    p = sub.add_parser("tex")
+    p.add_argument("dump")
+    p.add_argument("n", type=int)
+    p.add_argument("i", type=int)
+    p.add_argument("out")
+    p.set_defaults(fn=cmd_tex)
+    p = sub.add_parser("pixel")
+    p.add_argument("dump")
+    p.add_argument("x", type=int)
+    p.add_argument("y", type=int)
+    p.set_defaults(fn=cmd_pixel)
     args = ap.parse_args()
     args.fn(args)
 

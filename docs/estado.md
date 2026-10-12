@@ -1,5 +1,84 @@
 # Estado
 
+## 2026-10-12 (tarde) — Líneas azules de GoldenEye (cobertura AA), túnica de Link (máscara con clamp) y el negro de la intro de Banjo (niebla en el blender) (rama `infallible-wozniak-aa210c`)
+
+Con el volcado del autor en el túnel de Dam (SELECT + R2), las líneas azules
+salen también en el raster del Mac: no son del RSX. `tools/gfxdump.py pixel`
+(nuevo, junto con `tex`; el script ya lee el `gfx_draw` actual) muestra que
+ningún triángulo cubre el centro de esos píxeles: es una unión en T entre el
+piso (dibujo 5, con un vértice a media arista) y la pared (dibujo 7, la
+arista entera). Ese vértice cae un píxel fuera de la recta de la pared y deja
+una cuña de hasta 0,56 px por la que se ve el relleno negro con el tinte
+azul del rectángulo final de la escena. La N64 la tapa porque con AA_EN el
+RDP escribe todo píxel con alguna de sus 8 muestras de cobertura dentro.
+
+`gfx_draw.aa` marca los triángulos opacos sin prueba de alfa con AA_EN
+(prueba `gfx_aa_flag`), pero las dos formas de reproducir la cobertura
+fallaron en la PS3 real (el autor, 2026-10-12):
+- POLYGON_SMOOTH del RSX: no hace nada (el volcado 2529 traía la marca en
+  100 de 109 dibujos y las líneas seguían). Ya está quitado.
+- Ensanchar los triángulos en la HLE (cada arista corrida lo que llegan las
+  8 muestras, vértices nuevos sobre el plano del triángulo): sí tapaba las
+  líneas de Dam, pero a escala interna alta engorda todos los bordes (0,5 px
+  de N64 son 1,5 px a 3×) y en mallas densas «los polígonos se superponen»,
+  en Zelda y en los modelos de GoldenEye; «se ve peor todo lo demás». Quitado
+  también, incluso como opción por juego. En el SPE costaba ~1 µs más por
+  triángulo (sin que el PPE esperara).
+Las líneas azules de GoldenEye quedan pendientes. Camino que falta probar:
+multimuestreo del RSX (superficie con 4 muestras y resolución al presentar)
+en rsxkit, que cubriría la cuña con la mezcla del fondo, como el VI de la N64
+a 1×; cuesta memoria y relleno. O ensanchar solo las aristas que no comparte
+ningún otro triángulo de la malla, lo que pide conocer la malla.
+
+`salsa64-run --raster-dump` dejaba volteados por palabras los bytes de
+`nterms` a `pad` de los volcados big-endian: los dibujos con combiners
+generados salían mal en el host. Con eso corregido, la túnica de Link del
+volcado del autor se ve igual en la PS3 y en el host.
+
+**Túnica de Link (OoT):** el autor ve cortado el patrón de sombra del
+pliegue. La textura del torso es una I8 de 16 texels de ancho en la TMEM
+(línea de 16 bytes) en una tile de 32 con máscara 4 y espejo más clamp en s.
+El RDP limita la coordenada a la tile y después la enmascara: las columnas
+16–31 son el reflejo de las 0–15. `tmem.c` veía el clamp, ignoraba la
+máscara y leía 32 texels seguidos (la mitad derecha salía de la fila
+siguiente de la TMEM). Ahora, con clamp y una máscara más chica que la tile,
+decodifica con la coordenada enmascarada, y eso entra en la llave de la
+caché. HLE y LLE coincidían porque la LLE usa la misma decodificación.
+Prueba: `gfx_tile_clamp_mirror_mask`. En siete juegos solo cambia OoT, y
+por debajo del umbral.
+
+**Pantalla negra de Banjo entre el logo de Rare y la cascada:** también en
+el host (campos 992–1020 con `banjo-casa.pad`), con la HLE y con la LLE. El
+juego funde con un rectángulo a pantalla completa con el blender
+FOG·A_FOG + MEM·(1 − A_FOG) y el combiner en 0. El blender toma el color de
+P, que aquí es la niebla, y eso no se hacía. Con la niebla blanca opaca
+salía negro (el combiner); con alfa 0xD8 no pintaba. Ahora `blend_constant`
+(src/rsp/gfx/rdp.c) pone la constante de P (niebla o blend) como color y el
+alfa que elige A. En el host la transición queda blanca y después se funde
+en la escena, sin el negro. Prueba: `gfx_blender_fog_color`.
+
+**Rompecabezas de Banjo (sigue pendiente):** en esa escena todas las tareas
+de Banjo terminan con el RDP congelado y la interrupción del DP sale al
+descongelar. Una espera de la copia en el `done` del RDP no sirve: la tarea
+congelada no se traduce hasta descongelar (si no, vuelve el temblor) y
+esperarla bloquearía la emulación. La espera tiene que ir al descongelar
+(`salsa64_rsp_dp_unfreeze`), con presentación traduciendo esa tarea en el
+acto. Queda para después.
+
+**PS3 real (el autor, 2026-10-12):** POLYGON_SMOOTH no hizo nada (las
+líneas seguían; el volcado 2529 traía la marca en 100 de 109 dibujos). Con
+el ensanchado, «ya no hay líneas azules en GoldenEye» y «la túnica sale
+bien». Pero en Zelda, a escala interna alta, «los polígonos se superponen»:
+el ensanchado engorda todos los bordes (0,5 px de N64 son 1,5 px a 3×) y en
+mallas densas se nota. Queda como opción por juego (`GFX_JOB_AAGROW`,
+sync.c, por el código "NGE" del encabezado): solo GoldenEye. En el SPE
+costó ~1 µs más por triángulo en Dam (4,4 → 5,5), sin que el PPE esperara;
+con recíprocos en vez de divisiones debería bajar (sin medir aún).
+
+Pendiente en la PS3: la transición de Banjo sin el negro, Zelda sin
+polígonos encimados con el paquete de la opción por juego, y los FPS de
+Dam con los recíprocos.
+
 ## 2026-10-12 — Banjo-Kazooie (protección del CIC 6103), cara de Conker (K5) y rayas del logo de Zelda (rama `infallible-wozniak-aa210c`, paquete SLSA00099 «Salsa64 gráficos»)
 
 Lo visto por el autor en la PS3 con v0.1.0 (modelos que tiemblan, cosas

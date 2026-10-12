@@ -118,7 +118,7 @@ static bool bl_eq(struct bl_factor f, float k, float ka)
 /* P·A + M·B (n64brew.dev: Set Other Modes) llevado a lo que hace el RSX:
  * se suman los factores del color que entra (IN) y del de la memoria (MEM).
  * A_SHADE se toma como el alfa que entra; MEM_A como 1; los colores
- * constantes (blend, fog) en P o M se ignoran. */
+ * constantes (blend, fog) en P los pone blend_constant, en M se ignoran. */
 static uint8_t classify_blend(unsigned p, unsigned a, unsigned m, unsigned b, uint32_t fog)
 {
 	struct bl_factor fa = { 0.0f, 0.0f }, fb = { 0.0f, 0.0f };
@@ -184,6 +184,76 @@ static void blend_state(const struct gfx_state *g, struct gfx_draw *d)
 		d->atest = GFX_ATEST_GEQUAL;
 		d->aref = 32;
 	}
+}
+
+/* Término sin factores de la combinación (donde va una constante); lo
+ * agrega si falta y hay lugar. -1 si no se puede. */
+static int constant_term(struct gfx_draw *d)
+{
+	if (!d->nterms)
+		return GFX_K_ONE;
+	for (int k = 0; k < d->nterms; k++)
+		if (!d->factors[k][0])
+			return k;
+	if (d->nterms >= GFX_K_TERMS)
+		return -1;
+	int k = d->nterms++;
+	memset(d->factors[k], 0, sizeof d->factors[k]);
+	memset(d->k[k], 0, sizeof d->k[k]);
+	return k;
+}
+
+/* El blender toma el color de P: con P = FOG o BL (el registro de blend)
+ * es esa constante, no la salida del combiner (sin FORCE_BL, el RDP
+ * escribe P tal cual). Banjo-Kazooie funde la intro con un rectángulo
+ * FOG·A_FOG + MEM·(1 − A_FOG) cuyo combiner da 0: con la niebla blanca
+ * opaca la pantalla queda blanca (salía negra medio segundo) y con alfa
+ * 0xD8 la escena se ve detrás (no se veía nada). El combiner pasa a dar la
+ * constante, y como alfa lo que elige A, que es el factor que usa la
+ * mezcla del RSX. Con M = IN y A = A_FOG (G_RM_FOG_PRIM_A), el color va
+ * hacia la constante en la proporción del alfa de la niebla. */
+static void blend_constant(const struct gfx_state *g, struct gfx_draw *d)
+{
+	uint32_t ol = g->ol;
+	unsigned sh = d->cycle == G_CYC_2CYCLE ? 0 : 2;  /* el ciclo que escribe */
+	unsigned p = (ol >> (28 + sh)) & 3, a = (ol >> (24 + sh)) & 3;
+	unsigned m = (ol >> (20 + sh)) & 3, b = (ol >> (16 + sh)) & 3;
+	if (p != BL_FOG && p != BL_BL)
+		return;
+	bool force = (ol & FORCE_BL) != 0;
+	bool toward = force && m == BL_IN && a == BA_FOG && b == BB_1MA;
+	if (force && m != BL_MEM && !toward)
+		return;
+	int one = constant_term(d);
+	if (one < 0)
+		return;
+	uint32_t c = p == BL_FOG ? g->fog : g->blend;
+	float rgb[3] = { (float)(c >> 24) / 255.0f, (float)((c >> 16) & 0xFF) / 255.0f,
+			 (float)((c >> 8) & 0xFF) / 255.0f };
+	float fa = (float)(g->fog & 0xFF) / 255.0f;
+	if (toward) {
+		for (int k = 0; k < GFX_K_TERMS; k++)
+			for (int j = 0; j < 3; j++)
+				for (int l = 0; l < 3; l++)
+					d->k[k][j][l] *= 1.0f - fa;
+		for (int l = 0; l < 3; l++)
+			d->k[one][0][l] += fa * rgb[l];
+		return;
+	}
+	bool alpha = force && a != BA_IN;
+	for (int k = 0; k < GFX_K_TERMS; k++)
+		for (int j = 0; j < 3; j++)
+			for (int l = 0; l < (alpha ? 4 : 3); l++)
+				d->k[k][j][l] = 0.0f;
+	for (int l = 0; l < 3; l++)
+		d->k[one][0][l] = rgb[l];
+	if (alpha && a == BA_FOG)
+		d->k[one][0][3] = fa;
+	else if (alpha && a == BA_SHADE)
+		d->k[one][2][3] = 1.0f;
+	d->fog = 0;
+	if (force)
+		d->blend = classify_blend(BL_IN, a, m, b, g->fog);
 }
 
 static float shift_scale(unsigned shift)
@@ -288,6 +358,8 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 	blend_state(g, d);
 	if (kind != PRIM_TRI || !(g->geom & G_FOG))
 		d->fog = 0;
+	d->aa = kind == PRIM_TRI && (g->ol & AA_EN) && d->blend == GFX_BLEND_OFF && d->atest == GFX_ATEST_NONE &&
+		!d->viscvg;
 
 	/* La niebla ya está decidida: con ella, gfx_combine deja el término al
 	 * que el vertex program suma el color de niebla. */
@@ -311,6 +383,7 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 		gfx_combine_textures(d, d->ntex);
 	else if (d->ntex < n)
 		gfx_combine_textures(d, d->ntex);
+	blend_constant(g, d);
 #ifdef SALSA64_GFX_TRACE
 	salsa64_gfx_trace_state(g, d, kind, tile);
 #endif
