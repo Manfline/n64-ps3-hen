@@ -111,6 +111,14 @@ Solo camino plano:
   qué queda exactamente en ellos tras el IPL3 de Nintendo.
 - $sp = 0xA4001FF0 (lo deja el IPL1).
 
+Solo CIC 6103 (lo que su IPL3 deja al saltar al juego y Banjo-Kazooie
+comprueba; fuentes en docs/THIRD_PARTY.md):
+
+| Qué | Efecto | Quién lo comprueba |
+|---|---|---|
+| Copia de su propia imagen | DMEM 0x4C0–0x764 → RDRAM 0x000–0x2A4 (de la ROM del usuario, como con el 6105). Los vectores de excepción que pone después el juego pisan parte | Banjo-Kazooie, antes de cada proyección: si 0x1D8 no tiene la palabra que viene de la ROM 0x698, cambia los planos cercano y lejano de 30 y 4000 por 750 y 1250 (faltan personajes, el cielo y el fondo; la profundidad tiembla) |
+| DMEM e IMEM | Todo en 0xFF salvo 6103 en IMEM 0x000 | Banjo-Kazooie al iniciar: solo con DMEM[0] = 0xFFFFFFFF e IMEM[0] = 6103 trae de la ROM (0xB70) el arranque del RSP; sin él, el microcódigo real no arranca |
+
 Solo CIC 6105/7105 (lo que su IPL3 deja además y los juegos comprueban;
 fuentes en docs/THIRD_PARTY.md):
 
@@ -124,7 +132,7 @@ fuentes en docs/THIRD_PARTY.md):
 Las variables de libultra (0x300–0x318, con `osCicId`) se escriben después
 y pisan la copia; de 0x31C a 0x337 queda lo copiado. `osCicId` se escribe
 solo con el 6103 y el 6105, las dos variantes de las que hay juegos que lo
-comprueban; con las demás queda en 0. No se reproduce lo que queda en
+comprueban; con las demás queda en 0. Con el 6105 no se reproduce lo que queda en
 IMEM 0x000–0x11F (el microcódigo, descifrado del residuo del IPL2 que deja la
 PIF ROM): es código de Nintendo. Tampoco el resto de los registros que deja
 cada IPL3 (los cálculos del checksum): no hay documentación pública ni juego

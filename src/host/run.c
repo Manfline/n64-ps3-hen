@@ -78,7 +78,8 @@
  * Estados guardados (core/state.c): --state-save CAMPO:ARCHIVO guarda la
  * máquina al terminar ese campo del VI (hasta 8; va campo por campo),
  * --state-load ARCHIVO la carga después del arranque y sigue desde ahí
- * (con --lockstep, también la referencia), y --fields N termina al acabar
+ * (con --lockstep, también la referencia; con --lle, el estado guardado con
+ * la HLE sigue con el microcódigo real), y --fields N termina al acabar
  * el campo N. Es el mismo formato que en la PS3: un estado de la consola
  * se reproduce aquí. La prueba de determinismo (tools/test-roms.sh) corre
  * de corrido hasta M y, aparte, guarda en N, carga y sigue hasta M: los dos
@@ -1472,6 +1473,10 @@ static void swap32s(void *p, uint32_t bytes)
 		w[i] = be32(w[i]);
 }
 
+_Static_assert(offsetof(struct gfx_draw, nterms) % 4 == 0 &&
+	       (offsetof(struct gfx_draw, tex) - offsetof(struct gfx_draw, nterms)) % 4 == 0,
+	       "bytes del combiner en palabras enteras");
+
 static int raster_dump(const char *path, const char *out)
 {
 	size_t size;
@@ -1504,6 +1509,8 @@ static int raster_dump(const char *path, const char *out)
 			swap32s(d->scissor, 8 + 8);  /* deshace scissor y los bytes de estado */
 			for (int i = 0; i < 4; i++)
 				d->scissor[i] = salsa64_rd16((uint8_t *)&d->scissor[i]);
+			/* Bytes de nterms a pad: factores, viscvg y aa. */
+			swap32s(&d->nterms, offsetof(struct gfx_draw, tex) - offsetof(struct gfx_draw, nterms));
 			for (int t = 0; t < 2; t++) {
 				struct gfx_tex *x = &d->tex[t];
 				swap32s(&x->width, 8);  /* deshace los de 16 y 8 bits */
@@ -1893,8 +1900,14 @@ static bool state_load_file(struct salsa64_n64 *m, const char *path)
 	char err[160] = "no se abre";
 	bool broken = false;
 	FILE *f = fopen(path, "rb");
+	/* Con --lle, el estado (guardado con la HLE) se carga con el LLE
+	 * apagado y se sigue con el microcódigo real: así se comparan las dos
+	 * en la misma escena sin correr todo el juego con el LLE. */
+	enum salsa64_lle_mode mode = m->bus.rsp.lle_mode;
+	m->bus.rsp.lle_mode = SALSA64_LLE_OFF;
 	bool ok = f && salsa64_rsp_quiesce(&m->bus) &&
 		  salsa64_state_load(m, state_fread, f, state_scratch, err, sizeof err, &broken);
+	m->bus.rsp.lle_mode = mode;
 	if (f)
 		fclose(f);
 	if (!ok) {

@@ -166,3 +166,15 @@ onda: `rsxkit_ui_groups`); con el estado en caché, cada llamada son unas
 pocas palabras del búfer de comandos. Quien junte en un solo lote
 geometría translúcida que se superpone debería hacer lo mismo si quiere
 verla bien en RPCS3.
+
+## Cobertura con AA_EN: POLYGON_SMOOTH no sirve (2026-10-12, PS3 real)
+
+Con AA_EN el RDP escribe un píxel si cualquiera de sus 8 muestras de
+cobertura cae dentro del triángulo; el RSX solo mira el centro. Se probó
+`POLYGON_SMOOTH_ENABLE` (método 0x1838 del NV40,
+`rsxSetPolygonSmoothEnable`) para que el RSX generara fragmentos también en
+los píxeles cubiertos en parte: en la PS3 real no cambia nada (el volcado de
+SELECT + R2 en el túnel de Dam traía la marca en 100 de 109 dibujos y la
+captura del RSX seguía con las grietas). RPCS3 también lo ignora. La
+cobertura se emula en la HLE, ensanchando los triángulos (`aa_grow` en
+src/rsp/gfx/rdp.c), que además sirve a cualquier escala interna.

@@ -125,6 +125,9 @@
  * Si SALSA64_DATA_DIR/gfxdump dice un número de campo,
  * en ese campo se vuelca la salida de la última tarea gráfica a
  * SALSA64_DATA_DIR/gfxdump.bin (salsa64-run --raster-dump la dibuja).
+ * SELECT + R2 en el juego hace lo mismo en el campo que se está mostrando,
+ * a gfxdump-<campo>.bin, con la captura del RSX de ese cuadro al lado
+ * (gfxdump-<campo>.ppm): para comparar el RSX con el rasterizador del host.
  *
  * Salir: «Salir al XMB» en el menú, START + SELECT sin menú (con embedded),
  * o "Salir del juego" desde el menú del sistema en cualquier momento.
@@ -623,6 +626,7 @@ static struct salsa64_ds3 ds3_from(const padData *d)
 /* ---- Estados guardados y atajos con SELECT (hilo de presentación) ---------- */
 
 static unsigned state_req_slot;  /* la ranura de la petición en curso */
+static bool dump_now;            /* SELECT + R2: volcar la HLE en el próximo cuadro */
 static int combos_on;            /* dentro del juego (no en el menú) */
 static uint32_t state_done;      /* barreras terminadas */
 static bool state_last_ok;       /* cómo terminó la última */
@@ -672,11 +676,12 @@ static void state_slot_step(int d)
 
 /* Atajos dentro del juego, con SELECT (la N64 no lo tiene; START + SELECT
  * vuelve al menú): + R1 guarda el estado en la ranura actual, + L1 lo
- * carga, + izquierda o derecha de la cruceta cambia de ranura y + △
- * muestra u oculta el contador de velocidad. Mientras SELECT está apretado
+ * carga, + izquierda o derecha de la cruceta cambia de ranura, + △
+ * muestra u oculta el contador de velocidad y + R2 vuelca la salida de la
+ * HLE gráfica con la captura del cuadro. Mientras SELECT está apretado
  * esos botones no llegan al juego. Devuelve los botones para el mapeo. */
 #define COMBO_MASK (1u << SALSA64_DS3_R1 | 1u << SALSA64_DS3_L1 | 1u << SALSA64_DS3_LEFT | \
-		    1u << SALSA64_DS3_RIGHT | 1u << SALSA64_DS3_TRIANGLE)
+		    1u << SALSA64_DS3_RIGHT | 1u << SALSA64_DS3_TRIANGLE | 1u << SALSA64_DS3_R2)
 
 static uint32_t pad_combos(unsigned port, uint32_t b)
 {
@@ -699,6 +704,8 @@ static uint32_t pad_combos(unsigned port, uint32_t b)
 		osd_notice(sysGetSystemTime(), "FPS: %s", fps.on ? "sí" : "no");
 		fps_setting_save(fps.on);
 	}
+	if (rise & 1u << SALSA64_DS3_R2)
+		dump_now = true;
 	return b & ~COMBO_MASK;
 }
 
@@ -1057,13 +1064,27 @@ static struct salsa64_overscan overscan_for(const struct salsa64_vi_frame *f)
  * lleva verificación, se marca para saltarlo y se le suelta la ranura. */
 static uint32_t post_last = ~0u;  /* índice del último campo encolado */
 
+/* Tareas gráficas que el RDP ya pudo dibujar, para presentación. Con el
+ * RDP congelado (DPC_STATUS FREEZE) la tarea terminada no se ejecuta hasta
+ * que el CPU lo descongela (rsp.c retiene su interrupción): Banjo-Kazooie
+ * arranca así la del cuadro siguiente sobre el búfer que el VI todavía
+ * muestra. Dibujarla antes en el RSX adelantaba ese cuadro un campo y luego
+ * el otro búfer mostraba el anterior: los modelos temblaban. */
+static volatile uint32_t tasks_visible;
+
+static uint32_t visible_tasks(void)
+{
+	return salsa64_rdp_tasks_done() - (n64.bus.rsp.dp_held ? 1u : 0u);
+}
+
 static void post_field(uint32_t flags)
 {
 	uint32_t last_idx = post_last;
 	struct field_msg m;
 	memset(&m, 0, sizeof m);
 	m.field = n64.bus.vi.fields;
-	m.tasks = salsa64_rdp_tasks_done();
+	m.tasks = visible_tasks();
+	tasks_visible = m.tasks;
 	m.snap = -1;
 	m.flags = flags;
 
@@ -1490,6 +1511,18 @@ static void present_field(const struct field_msg *m, uint64_t now)
 			    salsa64_rdp_dump(SALSA64_DATA_DIR "/gfxdump.bin") ? "bien" : "FALLO");
 		pres.dump_field = 0;
 	}
+	if (dump_now && m->f.width) {
+		char path[64], shot[64];
+		dump_now = false;
+		snprintf(path, sizeof path, SALSA64_DATA_DIR "/gfxdump-%u.bin", m->field);
+		snprintf(shot, sizeof shot, SALSA64_DATA_DIR "/gfxdump-%u.ppm", m->field);
+		rsxkit_finish();
+		bool ok = salsa64_rdp_dump(path);
+		salsa64_screenshot(shot, &shown, &r);
+		salsa64_log("volcado de la HLE (SELECT + R2) en %s con la captura %s: %s", path, shot,
+			    ok ? "bien" : "FALLO");
+		osd_notice(sysGetSystemTime(), ok ? "Volcado del campo %u" : "Volcado: falló", m->field);
+	}
 	present_overlay(sysGetSystemTime());
 	/* audio_out: una vez por campo presentado (estadísticas y volcado). */
 	uint64_t t1 = sysGetSystemTime();
@@ -1554,7 +1587,8 @@ static void present_still(void)
 }
 
 /* Consume lo encolado: campos en orden y, al final, las tareas gráficas que
- * ya terminaron (son del campo siguiente). Solo lo que había al entrar: con
+ * ya terminaron y el RDP pudo dibujar (son del campo siguiente; no la que
+ * espera a que el CPU descongele el RDP). Solo lo que había al entrar: con
  * el flip en vsync y la emulación al mismo ritmo, mientras se presenta un
  * campo llega el siguiente, la cola no se vacía y el bucle de presentación
  * no volvía a leer los mandos (7,4 s sin leerlos en la selección de ranura
@@ -1573,7 +1607,8 @@ static void drain(uint64_t now, int present)
 		lwsync();
 		field_tail++;
 	}
-	salsa64_rdp_flush(~0u);
+	/* Al cerrar (sin presentar) se traduce todo: no queda nada en vuelo. */
+	salsa64_rdp_flush(present ? tasks_visible : ~0u);
 }
 
 /* Estadísticas de los dos hilos, cada STATS_US: lo visto en la ventana
@@ -1823,6 +1858,9 @@ static void state_barrier(void)
 		bool broken = false;
 		ok = states_load(&n64, slot, &t, err, sizeof err, &broken);
 		if (ok) {
+			/* La tarea que esperaba al RDP congelado era de antes de
+			 * cargar: se traduce ya, sobre destinos que se sueltan. */
+			salsa64_rdp_flush(~0u);
 			salsa64_rdp_drop_targets();
 			audio_out_flush();
 			post_last = ~0u;
@@ -2225,8 +2263,9 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		salsa64_log("pausa: %s presente, el menú del sistema no pausa la emulación (diagnóstico)", NO_PAUSE_PATH);
 	combos_on = 1;
 	salsa64_log("estados: %s/<juego>.st0 … .st%d; SELECT + R1 guarda, + L1 carga, + izquierda/derecha cambia de "
-		    "ranura; FPS %s (SELECT + △); START + SELECT %s", STATES_DIR, SALSA64_STATE_SLOTS - 1,
-		    fps.on ? "sí" : "no", pause_ctl.confirm ? "pregunta antes de salir" : "sale directo (confirmar = no)");
+		    "ranura; FPS %s (SELECT + △); SELECT + R2 vuelca la HLE; START + SELECT %s", STATES_DIR,
+		    SALSA64_STATE_SLOTS - 1, fps.on ? "sí" : "no",
+		    pause_ctl.confirm ? "pregunta antes de salir" : "sale directo (confirmar = no)");
 
 	uint64_t now = sysGetSystemTime();
 	pres.t_shot = now;
