@@ -61,6 +61,7 @@ struct salsa64_rdp_stats {
 	uint32_t mirrors, mirrors_skipped;  /* copias espejo (sin esperar) y las que no cupieron */
 	uint32_t frames_mirrored;           /* campos cuyo framebuffer se copió a la RDRAM */
 	uint32_t dma_skipped;               /* copias descartadas porque un DMA escribió ahí después */
+	uint32_t tall_fills;                /* rellenos de una color image más alta que 480 repartidos a sus destinos */
 	uint32_t tex_rsx, tex_rdram, tex_self, primes;
 	/* Copias pedidas que no encontraron su destino dibujado, superficies
 	 * que el RSX no pudo crear y color images imposibles ignoradas. */
@@ -167,6 +168,9 @@ void salsa64_rdp_fbfx(int level);
  * `gfx_in_flight`, mientras corría una tarea gráfica. Las copias de esa
  * tarea y de las anteriores no pisan ese tramo (targets.h, rdp_dma_ring). */
 void salsa64_rdp_rdram_written(uint32_t pa, uint32_t len, bool gfx_in_flight);
+/* Lo que eligió la última salsa64_rdp_present: ranura (-1: nada del RSX),
+ * campos desde que se dibujó y dirección del destino (traza por campo). */
+void salsa64_rdp_last_present(int *slot, uint32_t *age, uint32_t *addr);
 
 /* Avisos y la traza de las copias (los escribe el frontend en su log). */
 void salsa64_rdp_set_log(void (*fn)(const char *fmt, ...));

@@ -22,8 +22,32 @@ con la tarea gráfica en vuelo) y ninguna copia de la tarea T (espejo,
 copia esperada, espejo chico; host y PS3) pisa un tramo que un DMA tocó
 desde que T empezó. Pruebas: `targets_dma_ring` y `raster_mirror_after_dma`
 (falla sin el arreglo). Host: Star Fox Rev 1 con el espejo, 590 tareas en
-20 s y una sola copia descartada (la de la tarea 67). Por confirmar en la
-PS3 (paquete SLSA00099).
+20 s y una sola copia descartada (la de la tarea 67). En la PS3 real (el
+autor, con 0b4108e): **ya arranca**, pero con «cuadros negros y ruido tipo
+estática en la parte superior» durante todo el juego, a velocidad 100 %.
+
+**Estática arriba:** Star Fox limpia sus tres framebuffers seguidos
+(`38f800`, `3b5000`, `3da800`) con un solo FILLRECT de 320 × 720 sobre una
+color image en el primero (al arrancar, campo 3, y al pasar a la escena,
+campo 158); después cada cuadro solo limpia 8..312 × 8..232 y el borde de
+8 px queda como lo dejó ese relleno. La PS3 rechazaba esa color image
+(«imposible», alto > 480) y el borde nunca se limpiaba: la superficie se
+ceba con la RDRAM, donde las filas 0–7 de `38f800` traen los datos MIO0
+cargados por DMA (en el host: basura de colores en la fila 0 del campo
+300; con el arreglo, negra). Ahora un relleno sobre una color image más
+alta que 480 se reparte entre los destinos existentes que caben enteros
+dentro (`rdp_targets_inside`, host y PS3; pruebas `targets_inside` y
+`raster_tall_fill`), sin crear un destino de 720.
+
+**Cuadros negros:** no reproducidos ni en el host ni en RPCS3 (capturas de
+cada campo hasta el 445 y cada 3 hasta el 1800 sin saltos de brillo;
+presentación toda del RSX, edad 2,5–3 campos). Para verlos en la consola,
+el frontend traza ahora la presentación por campo si existe
+`/dev_hdd0/salsa64/trace-vi` (con un número N de campos; por omisión 300):
+origen del VI, de dónde salió la imagen (RSX, RDRAM o nada), destino,
+ranura, campos desde que se dibujó y cuánto va por delante la emulación.
+Pendiente: paquete con el relleno alto y la traza, en la PS3 con
+`trace-vi`.
 
 ## 2026-10-12 (tarde) — Líneas azules de GoldenEye (cobertura AA), túnica de Link (máscara con clamp) y el negro de la intro de Banjo (niebla en el blender) (rama `infallible-wozniak-aa210c`)
 

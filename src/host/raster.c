@@ -516,6 +516,7 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 	uint32_t reads[RDP_TARGETS_MAX][RDP_TARGETS_MAX] = { { 0 } }, read_stale[RDP_TARGETS_MAX][RDP_TARGETS_MAX] = { { 0 } };
 	uint32_t read_age[RDP_TARGETS_MAX] = { 0 };
 	uint32_t suspect[RDP_TARGETS_MAX] = { 0 };
+	struct { uint32_t addr, width, bpp, rows; } tall = { 0, 0, 0, 0 };  /* color image más alta que 480 */
 	++task_no;  /* tg.field lo lleva el VI (raster_vi), como en la PS3 */
 	rdp_targets_task(&tg);
 	scratch_slot = -1;
@@ -531,10 +532,15 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 		if (c->op == GFX_OP_END || c->size == 0)
 			break;
 		switch (c->op) {
-		case GFX_OP_TARGET:
-			cur = get_target(job, c->a, c->b, (c->c >> 8) & 0xFF, c->c & 0xFF,
-					 scissor_bottom(cmd, off + c->size, res->cmd_bytes));
+		case GFX_OP_TARGET: {
+			uint32_t lh = scissor_bottom(cmd, off + c->size, res->cmd_bytes), siz = c->c & 0xFF;
+			cur = get_target(job, c->a, c->b, (c->c >> 8) & 0xFF, siz, lh);
+			tall.rows = cur < 0 && c->b && c->b <= 640 && lh > 480 ? lh : 0;
+			tall.addr = c->a;
+			tall.width = c->b;
+			tall.bpp = siz == 3 ? 4 : siz == 2 ? 2 : 1;
 			break;
+		}
 		case GFX_OP_ZCLEAR: {
 			const struct gfx_zclear *z = (const struct gfx_zclear *)c;
 			struct depth *zb = get_depth(c->a);
@@ -561,6 +567,42 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 				}
 			}
 #endif
+			if (cur < 0 && tall.rows && d->cycle == 3 && d->h.b >= 3  /* G_CYC_FILL */) {
+				/* Relleno de la imagen alta: a cada destino que cae dentro. */
+				int slots[RDP_TARGETS_MAX];
+				uint32_t first[RDP_TARGETS_MAX];
+				float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+				for (uint32_t k = 0; k < d->h.b; k++) {
+					const struct gfx_vertex *v = &vtx[d->h.a + k];
+					if (!(v->w > 0.0f))
+						continue;
+					float x = v->x / v->w, y = v->y / v->w;
+					x0 = x < x0 ? x : x0, x1 = x > x1 ? x : x1;
+					y0 = y < y0 ? y : y0, y1 = y > y1 ? y : y1;
+				}
+				uint32_t color = (uint32_t)(d->k[GFX_K_ONE][0][0] * 255.0f + 0.5f) << 16 |
+						 (uint32_t)(d->k[GFX_K_ONE][0][1] * 255.0f + 0.5f) << 8 |
+						 (uint32_t)(d->k[GFX_K_ONE][0][2] * 255.0f + 0.5f);
+				int n = rdp_targets_inside(&tg, tall.addr, tall.width, tall.bpp, tall.rows, slots, first);
+				for (int k = 0; k < n && x1 > x0 && y1 > y0; k++) {
+					int i = slots[k];
+					const struct rdp_target *t = &tg.t[i];
+					int ya = (int)(y0 - (float)first[k]), yb = (int)(y1 - (float)first[k] + 0.999f);
+					int xa = (int)x0, xb = (int)(x1 + 0.999f);
+					ya = ya < 0 ? 0 : ya, yb = yb > (int)t->lh ? (int)t->lh : yb;
+					xa = xa < 0 ? 0 : xa, xb = xb > (int)t->lw ? (int)t->lw : xb;
+					if (yb <= ya || xb <= xa)
+						continue;
+					for (int y = ya; y < yb && y < RASTER_H; y++)
+						for (int x = xa; x < xb && x < RASTER_W; x++)
+							rgb[i][y * RASTER_W + x] = color;
+					rdp_targets_drawn(&tg, i);
+					drawn[i] = true;
+					if ((uint32_t)yb > drawn_rows[i])
+						drawn_rows[i] = (uint32_t)yb;
+				}
+				break;
+			}
 			if (cur < 0)
 				break;
 			struct gfx_draw white;

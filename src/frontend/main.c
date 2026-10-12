@@ -380,6 +380,7 @@ static int snap_cas(int slot, uint32_t from, uint32_t to)
 #define FIELD_KEEP  (FIELD_CHECK | FIELD_SHOT | FIELD_STATE)
 #define GFX_WIN_FIELDS 100
 static uint32_t cap_every, exit_field;  /* capturas = "N M" */
+static uint32_t trace_vi_left;          /* SALSA64_DATA_DIR/trace-vi: campos que se registran al presentar */
 struct field_msg {
 	uint32_t field;             /* n64.bus.vi.fields al terminar */
 	uint32_t tasks;             /* tareas gráficas terminadas hasta ahí */
@@ -1483,6 +1484,17 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	} else {
 		pres.blank++;
 	}
+	if (trace_vi_left && m->f.width) {
+		int tslot;
+		uint32_t age, taddr;
+		salsa64_rdp_last_present(&tslot, &age, &taddr);
+		trace_vi_left--;
+		salsa64_log("vi campo %u: origen %06x %ux%u → %s (destino %06x ranura %d, dibujado hace %u campos; emulación %u "
+			    "campos por delante)",
+			    m->field, m->f.origin, m->f.width, m->f.height,
+			    pres.still == STILL_RSX ? "RSX" : pres.still == STILL_FB ? "RDRAM" : "nada", taddr, tslot, age,
+			    behind);
+	}
 	if (have)
 		snap_state[slot] = SNAP_FREE;  /* ya está en la memoria del RSX */
 	if (check || check_gfx) {
@@ -2206,6 +2218,17 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		salsa64_rdp_fbfx(fbfx);
 		salsa64_log("efectos de framebuffer: %s", fbfx <= 0 ? "apagados" : fbfx == 1 ? "render a textura" :
 								"render a textura y copias a la RDRAM");
+	}
+	{
+		/* SALSA64_DATA_DIR/trace-vi: registrar qué se presenta en cada uno
+		 * de los primeros N campos (por omisión 300). */
+		FILE *tf = fopen(SALSA64_DATA_DIR "/trace-vi", "r");
+		trace_vi_left = 0;
+		if (tf) {
+			if (fscanf(tf, "%u", &trace_vi_left) != 1)
+				trace_vi_left = 300;
+			fclose(tf);
+		}
 	}
 	{
 		FILE *df = fopen(SALSA64_DATA_DIR "/gfxdump", "r");

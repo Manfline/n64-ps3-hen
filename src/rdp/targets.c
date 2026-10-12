@@ -421,3 +421,22 @@ bool rdp_dma_since(const struct rdp_dma_ring *r, uint32_t lo, uint32_t hi, uint3
 	}
 	return false;
 }
+
+int rdp_targets_inside(const struct rdp_targets *s, uint32_t addr, uint32_t width, uint32_t bpp, uint32_t rows,
+		       int slots[RDP_TARGETS_MAX], uint32_t first_row[RDP_TARGETS_MAX])
+{
+	uint32_t line = width * bpp;
+	int n = 0;
+	if (!line)
+		return 0;
+	for (int i = 0; i < RDP_TARGETS_MAX; i++) {
+		const struct rdp_target *t = &s->t[i];
+		if (!t->used || t->width != width || t->bpp != bpp || t->addr < addr || (t->addr - addr) % line ||
+		    t->addr + line * t->lh > addr + line * rows)
+			continue;
+		slots[n] = i;
+		first_row[n] = (t->addr - addr) / line;
+		n++;
+	}
+	return n;
+}

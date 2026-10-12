@@ -44,6 +44,48 @@ static void set_vtx(struct gfx_vertex *v, float x, float y)
 	v->w = 1.0f;
 }
 
+/* Una tarea con un FILLRECT de `x0, y0`–`x1, y1` sobre una color image de
+ * `fb`/`w` cuyas tijeras llegan a la fila `lh` (más de una pantalla). */
+static void task_tall_fill(uint32_t fb, uint32_t w, uint32_t lh, float x0, float y0, float x1, float y1, uint32_t r,
+			   uint32_t g, uint32_t b)
+{
+	set_vtx(&vtx[0], x0, y0);
+	set_vtx(&vtx[1], x1, y0);
+	set_vtx(&vtx[2], x0, y1);
+	set_vtx(&vtx[3], x1, y0);
+	set_vtx(&vtx[4], x1, y1);
+	set_vtx(&vtx[5], x0, y1);
+	memset(cmd, 0, sizeof cmd);
+	struct gfx_cmd *t = (struct gfx_cmd *)cmd;
+	t->op = GFX_OP_TARGET;
+	t->size = sizeof *t;
+	t->a = fb;
+	t->b = w;
+	t->c = 2;
+	struct gfx_draw *d = (struct gfx_draw *)(cmd + sizeof *t);
+	d->h.op = GFX_OP_DRAW;
+	d->h.size = sizeof *d;
+	d->h.a = 0;
+	d->h.b = 6;
+	d->cycle = 3;  /* G_CYC_FILL */
+	d->scissor[2] = (uint16_t)(w * 4);
+	d->scissor[3] = (uint16_t)(lh * 4);
+	d->k[GFX_K_ONE][0][0] = r / 255.0f;
+	d->k[GFX_K_ONE][0][1] = g / 255.0f;
+	d->k[GFX_K_ONE][0][2] = b / 255.0f;
+	d->k[GFX_K_ONE][0][3] = 1.0f;
+	struct gfx_job job;
+	struct gfx_result res;
+	memset(&job, 0, sizeof job);
+	memset(&res, 0, sizeof res);
+	job.rdram_ea = (uint64_t)(uintptr_t)ram;
+	job.rdram_size = sizeof ram;
+	job.vtx_ea = (uint64_t)(uintptr_t)vtx;
+	job.cmd_ea = (uint64_t)(uintptr_t)cmd;
+	res.cmd_bytes = sizeof cmd;
+	raster_task(&job, &res);
+}
+
 /* Una tarea que pinta toda la color image `fb` (`w` de ancho, 16 bits). */
 static void task_fill_w(uint32_t fb, uint32_t w, uint32_t r, uint32_t g, uint32_t b)
 {
@@ -217,8 +259,37 @@ static void raster_mirror_after_dma(void)
 	raster_reset();
 }
 
+/* Star Fox 64: FILLRECT de 320 × 720 sobre una color image en el primer
+ * framebuffer, que limpia los tres seguidos (y su borde de 8 px, que el
+ * juego nunca vuelve a tocar). No se crea un destino de 720: el relleno va
+ * a cada framebuffer existente. */
+static void raster_tall_fill(void)
+{
+	raster_reset();
+	memset(ram, 0, sizeof ram);
+	task_fill(FB_A, 255, 0, 0);
+	task_fill(FB_B, 0, 255, 0);
+	task_fill(FB_C, 0, 0, 255);
+	task_tall_fill(FB_A, W, 3 * H, 0, 0, (float)W, 3.0f * H, 40, 50, 60);
+	uint32_t w = 0;
+	const uint32_t *a = raster_image(FB_A, &w), *b = raster_image(FB_B, &w), *c = raster_image(FB_C, &w);
+	CHECK(a && b && c);
+	if (!a || !b || !c)
+		return;
+	CHECK_EQ(a[3 * W + 3], 0x28323cu);  /* (40, 50, 60) */
+	CHECK_EQ(b[100 * W + 200], 0x28323cu);
+	CHECK_EQ(c[(H - 1) * W + (W - 1)], 0x28323cu);
+	/* Solo las filas 500–520 de la imagen alta: la parte alta de C. */
+	task_tall_fill(FB_A, W, 3 * H, 0, 500, (float)W, 520, 1, 2, 3);
+	CHECK_EQ(c[25 * W + 7], 0x010203u);
+	CHECK_EQ(c[41 * W + 7], 0x28323cu);
+	CHECK_EQ(b[100 * W + 200], 0x28323cu);
+	raster_reset();
+}
+
 void t_suite_raster(void)
 {
+	RUN(raster_tall_fill);
 	RUN(raster_mirror_after_dma);
 	RUN(raster_frame_mirror_sm64);
 }

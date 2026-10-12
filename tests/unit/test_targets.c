@@ -645,6 +645,30 @@ static void targets_present_integer(void)
  * a punta). La secuencia de Super Mario 64 al pasar del logo a la cara de
  * Mario: triple búfer; el RDP dibuja B; el VI sigue en A; un DMA carga
  * datos encima de A y de B; el VI muestra B sin que el RDP lo toque. */
+/* Color image de 320 × 720 (Star Fox 64): los tres framebuffers seguidos
+ * caben enteros dentro, con sus filas de inicio; otro ancho, no. */
+static void targets_inside(void)
+{
+	const uint32_t A = 0x38f800, B = 0x3b5000, C = 0x3da800;
+	bool fresh;
+	rdp_targets_init(&s);
+	int a = rdp_targets_get(&s, A, 320, SIZ_16b, 240, &fresh);
+	int b = rdp_targets_get(&s, B, 320, SIZ_16b, 240, &fresh);
+	int c = rdp_targets_get(&s, C, 320, SIZ_16b, 240, &fresh);
+	int slots[RDP_TARGETS_MAX];
+	uint32_t first[RDP_TARGETS_MAX];
+	int n = rdp_targets_inside(&s, A, 320, 2, 720, slots, first);
+	CHECK_EQ(n, 3);
+	for (int i = 0; i < n; i++) {
+		if (slots[i] == a) CHECK_EQ(first[i], 0);
+		if (slots[i] == b) CHECK_EQ(first[i], 240);
+		if (slots[i] == c) CHECK_EQ(first[i], 480);
+	}
+	CHECK_EQ(rdp_targets_inside(&s, A, 320, 2, 600, slots, first), 2);  /* C no cabe entero */
+	CHECK_EQ(rdp_targets_inside(&s, A, 640, 2, 720, slots, first), 0);
+	CHECK_EQ(rdp_targets_inside(&s, A + 2, 320, 2, 720, slots, first), 0);  /* desalineado */
+}
+
 /* Anillo de DMA: los trozos seguidos de la misma tarea se funden; una
  * copia de la tarea T solo se detiene por DMA desde T. */
 static void targets_dma_ring(void)
@@ -734,6 +758,7 @@ static void targets_frame_mirror(void)
 void t_suite_targets(void)
 {
 	RUN(targets_dma_ring);
+	RUN(targets_inside);
 	RUN(targets_locate);
 	RUN(targets_texture_policy);
 	RUN(targets_readback_wanted);
