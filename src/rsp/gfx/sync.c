@@ -56,6 +56,34 @@ static uint32_t sync_finish(void *ctx)
 	return salsa64_gfx_task_flags(&s->res);
 }
 
+void gfx_state_save(const struct gfx_state *g, uint8_t *out)
+{
+	gfx_state_pack_regs(g, out);
+	memcpy(out + GFX_STATE_REGS, g->tmem, sizeof g->tmem);
+}
+
+bool gfx_state_load(struct gfx_state *g, const uint8_t *in)
+{
+	if (!gfx_state_unpack_regs(g, in))
+		return false;
+	memcpy(g->tmem, in + GFX_STATE_REGS, sizeof g->tmem);
+	return true;
+}
+
+static bool sync_save_state(void *ctx, uint8_t *buf)
+{
+	struct salsa64_gfx_sync *s = ctx;
+	gfx_state_save(s->state, buf);
+	return true;
+}
+
+static bool sync_load_state(void *ctx, const uint8_t *buf)
+{
+	struct salsa64_gfx_sync *s = ctx;
+	s->reset = false;
+	return gfx_state_load(s->state, buf);
+}
+
 static uint32_t sync_dpc_run(void *ctx, uint32_t start, uint32_t end, const uint8_t *dmem)
 {
 	struct salsa64_gfx_sync *s = ctx;
@@ -93,6 +121,9 @@ void salsa64_gfx_sync_init(struct salsa64_gfx_sync *s, struct gfx_state *state, 
 	s->backend.ctx = s;
 	s->backend.start = sync_start;
 	s->backend.finish = sync_finish;
+	s->backend.state_size = GFX_STATE_BYTES;
+	s->backend.save_state = sync_save_state;
+	s->backend.load_state = sync_load_state;
 	s->dpc.ctx = s;
 	s->dpc.run = sync_dpc_run;
 	s->state = state;

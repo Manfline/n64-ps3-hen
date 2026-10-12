@@ -105,6 +105,46 @@ static uint32_t spu_finish(void *ctx)
 	return salsa64_gfx_task_flags(&s->res);
 }
 
+/* Estados guardados: el SPE copia el tramo crudo de su gfx_state (registros
+ * del RDP, tiles y TMEM) al mismo lugar de esta imagen, o lo trae de ella; el
+ * formato portable se arma aquí (rsp/gfx/state.c). Si el SPE dice que el
+ * tramo está en otro lugar de su struct (otra disposición), no se guarda ni
+ * se carga nada de la HLE. Sin tarea en vuelo. */
+static struct gfx_state shadow __attribute__((aligned(128)));
+
+static bool spu_state(struct salsa64_gfx_spu *s, uint32_t kind)
+{
+	if (s->pending || !s->worker)
+		return false;
+	struct gfx_state_job sj = { (uint64_t)(uintptr_t)((uint8_t *)&shadow + GFX_RAW_START) };
+	const spukit_result *r = spukit_wait(s->worker, spukit_post(s->worker, kind, &sj, sizeof sj));
+	uint32_t where[2];
+	memcpy(where, r->data, sizeof where);
+	if (r->error || where[0] != GFX_RAW_START || where[1] != GFX_RAW_END) {
+		salsa64_log("estado de la HLE gráfica: el SPE no lo dio (error %d, tramo %u–%u en el SPE, %u–%u aquí)",
+			    r->error, where[0], where[1], (unsigned)GFX_RAW_START, (unsigned)GFX_RAW_END);
+		return false;
+	}
+	return true;
+}
+
+static bool spu_save_state(void *ctx, uint8_t *buf)
+{
+	if (!spu_state(ctx, GFX_JOB_STATE_SAVE))
+		return false;
+	gfx_state_save(&shadow, buf);
+	return true;
+}
+
+static bool spu_load_state(void *ctx, const uint8_t *buf)
+{
+	/* Lo que comparte el tramo y no es del formato (tex_gen, el final del
+	 * estado de Rare) se conserva: primero se trae lo que tiene el SPE. */
+	if (!spu_state(ctx, GFX_JOB_STATE_SAVE) || !gfx_state_load(&shadow, buf))
+		return false;
+	return spu_state(ctx, GFX_JOB_STATE_LOAD);
+}
+
 int salsa64_gfx_spu_init(struct salsa64_gfx_spu *s, const struct salsa64_bus *bus,
 			 const struct salsa64_gfx_sink *sink)
 {
@@ -113,6 +153,9 @@ int salsa64_gfx_spu_init(struct salsa64_gfx_spu *s, const struct salsa64_bus *bu
 	s->backend.start = spu_start;
 	s->backend.finish = spu_finish;
 	s->backend.done = spu_done;
+	s->backend.state_size = GFX_STATE_BYTES;
+	s->backend.save_state = spu_save_state;
+	s->backend.load_state = spu_load_state;
 	s->bus = bus;
 	s->sink = *sink;
 	s->worker = spukit_worker_start(spu_gfx_bin, "salsa64_gfx", 0);

@@ -18,10 +18,16 @@ struct rsxkit_state {
 	gcmContextData *ctx;
 	void *host;
 	rsxkit_screen screen;
+	int32_t mode_id;        /* VIDEO_RESOLUTION_* en uso */
 	uint32_t color_pitch, depth_pitch;
 	uint32_t color_offset[2], depth_offset;
 	uint32_t *color_buf[2];
 	uint32_t *depth_buf;
+	/* La profundidad de la pantalla mide depth_w × depth_h: el mayor entre
+	 * la pantalla y lo pedido con rsxkit_depth_reserve (depth_min_*). Es la
+	 * que liga un destino sin profundidad propia, así que rsxkit_bind no
+	 * liga un destino que no quepa en ella. */
+	uint32_t depth_w, depth_h, depth_min_w, depth_min_h;
 	uint32_t cur;           /* búfer en que se dibuja */
 	uint32_t finish_seq;
 	uint32_t fence_seq;
@@ -88,5 +94,12 @@ void rsxkit_fp_shutdown(void);
  * (fb.c). */
 void rsxkit_blit(uint32_t offset, uint32_t pitch, uint32_t tex_w, uint32_t tex_h, float u0, float v0, float u1,
 		 float v1, rsxkit_format format, const rsxkit_rect *r, rsxkit_filter filter);
+/* Lo mismo sobre la superficie ya ligada, de surf_w × surf_h píxeles (no
+ * liga la pantalla): rsxkit_target_read dibuja así en su superficie de
+ * salida. rsxkit_blit_init carga los programas del blit (0 si están). */
+void rsxkit_blit_to(uint32_t offset, uint8_t location, uint32_t pitch, uint32_t tex_w, uint32_t tex_h, float u0,
+		    float v0, float u1, float v1, rsxkit_format format, const rsxkit_rect *r, uint32_t surf_w,
+		    uint32_t surf_h, rsxkit_filter filter);
+int rsxkit_blit_init(void);
 
 #endif

@@ -652,6 +652,13 @@ void salsa64_cpu_step(struct salsa64_cpu *cpu)
 		salsa64_sched_dispatch(cpu->sched, cpu->cycles);
 }
 
+/* Para el despachador del recompilador (rec.c): la instrucción sola; los
+ * eventos vencidos los despacha él (y los mide aparte). */
+void salsa64_cpu_step_only(struct salsa64_cpu *cpu)
+{
+	cpu_loop(cpu, true);
+}
+
 /* Para el recompilador (rec.c): una instrucción que no es salto, con
  * cur_pc, delay_slot y cycles ya puestos en la estructura. */
 void salsa64_vr4300_exec_one(struct salsa64_cpu *cpu, uint32_t instr)

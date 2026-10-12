@@ -73,6 +73,13 @@ static void task_event(void *ctx, uint64_t when)
 	uint64_t idle_now = bus->cpu ? bus->cpu->idle_cycles : 0;
 	bool idle = idle_now != rsp->poll_idle;
 	rsp->poll_idle = idle_now;
+	if (rsp->collected) {
+		/* Ya recogida (salsa64_rsp_quiesce): el backend no la tiene. */
+		flags = rsp->collected_flags;
+		rsp->collected = false;
+		rsp->collected_flags = 0;
+		goto finished;
+	}
 	if (!task_done(bus, idle)) {
 		rsp->stats.polls++;
 		salsa64_sched_set(rsp->sched, SALSA64_EV_SP_TASK, when + rsp->poll_cycles);
@@ -90,6 +97,7 @@ static void task_event(void *ctx, uint64_t when)
 		flags = rsp->gfx->finish(rsp->gfx->ctx);
 	else if (rsp->busy == SALSA64_TASK_AUDIO && rsp->audio)
 		rsp->audio->finish(rsp->audio->ctx, bus);
+finished:
 	rsp->busy = 0;
 	rsp_break(bus, SALSA64_SP_STATUS_TASKDONE);
 	/* La interrupción del DP llega si la lista pidió G_RDPFULLSYNC y también
@@ -147,6 +155,23 @@ void salsa64_rsp_dp_unfreeze(struct salsa64_bus *bus)
 	salsa64_rsp_dp_done(bus);
 }
 
+bool salsa64_rsp_quiesce(struct salsa64_bus *bus)
+{
+	struct salsa64_rsp *rsp = &bus->rsp;
+	if (rsp->busy == SALSA64_TASK_LLE || (rsp->lle && rsp->lle_mode != SALSA64_LLE_OFF))
+		return false;
+	if (!rsp->busy || rsp->collected)
+		return true;
+	uint32_t flags = 0;
+	if (rsp->busy == SALSA64_TASK_GFX && rsp->gfx)
+		flags = rsp->gfx->finish(rsp->gfx->ctx);
+	else if (rsp->busy == SALSA64_TASK_AUDIO && rsp->audio)
+		rsp->audio->finish(rsp->audio->ctx, bus);
+	rsp->collected = true;
+	rsp->collected_flags = flags;
+	return true;
+}
+
 void salsa64_rsp_sync(struct salsa64_bus *bus)
 {
 	const struct salsa64_lle_backend *lle = bus->rsp.lle;
@@ -184,13 +209,17 @@ void salsa64_rsp_reset(struct salsa64_bus *bus)
 	struct salsa64_rsp *rsp = &bus->rsp;
 	/* Una tarea gráfica en vuelo se espera: el backend no se puede abandonar
 	 * a medias. */
-	if (rsp->busy == SALSA64_TASK_GFX && rsp->gfx)
+	if (rsp->collected)
+		;  /* el backend ya la entregó */
+	else if (rsp->busy == SALSA64_TASK_GFX && rsp->gfx)
 		rsp->gfx->finish(rsp->gfx->ctx);
 	else if (rsp->busy == SALSA64_TASK_AUDIO && rsp->audio)
 		rsp->audio->finish(rsp->audio->ctx, bus);
 	else if (rsp->busy == SALSA64_TASK_LLE && rsp->lle)
 		rsp->lle->finish(rsp->lle->ctx);
 	rsp->busy = 0;
+	rsp->collected = false;
+	rsp->collected_flags = 0;
 	rsp->dp_held = false;
 	if (rsp->lle && rsp->lle->reset)
 		rsp->lle->reset(rsp->lle->ctx);

@@ -10,11 +10,11 @@ __asm__("	.section .salsa64_rec_cache,\"ax\",@nobits\n"
 	"	.balign 65536\n"
 	"	.globl salsa64_rec_cache_mem\n"
 	"salsa64_rec_cache_mem:\n"
-	"	.space 16777216\n"  /* SALSA64_REC_CACHE_BYTES */
+	"	.space 33554432\n"  /* SALSA64_REC_CACHE_BYTES */
 	"	.previous\n");
 
 extern unsigned char salsa64_rec_cache_mem[];
-_Static_assert(SALSA64_REC_CACHE_BYTES == 16777216, "actualizar el .space de arriba");
+_Static_assert(SALSA64_REC_CACHE_BYTES == 33554432, "actualizar el .space de arriba");
 
 void *salsa64_ps3_rec_cache(void)
 {

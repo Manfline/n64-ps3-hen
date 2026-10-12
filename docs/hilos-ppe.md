@@ -34,6 +34,8 @@ Un solo productor y un solo consumidor por cola; las barreras son
 | Flancos del PIF (log) | Cola de 32 entradas: al terminar cada campo, emulación anota cada cambio de botones en lo que el PIF entregó al juego (`pif.sent`, `pif.reads`); presentación los escribe como «PIF → juego» junto al «control N: … (campo M)» de `update_pads` | emulación → presentación |
 | Guardado del cartucho | `savefile_stage` (emulación): cuando `salsa64_save_due` dice que toca, copia los 32 KB a una zona de paso y marca `pending`; `savefile_write_staged` (presentación) los escribe al disco y limpia `pending`. Mientras está pendiente no se vuelve a copiar; la escritura nunca toca los datos vivos | emulación → presentación |
 | Resultado del selftest / petición de medición | Banderas de un `int` (monótonas): `selftest.c` las pone desde los dos hilos (ISViewer y RDRAM desde emulación; pantalla desde presentación) y `selftest_state` las lee en presentación. `bench_request` de presentación a emulación | ambos |
+| Estado guardado | `state_req` (presentación pide guardar o cargar; la baja al terminar) y `state_parked` (emulación quieta en el límite del campo). Mientras emulación espera, presentación toca la máquina sola (sección siguiente) | ambos |
+| Contador de velocidad | Presentación lee `vi.fields` y `cpu.cycles` (32 y 64 bits alineados) y cuenta los cuadros que presenta y los cambios del framebuffer del VI de cada campo encolado; nada en el hilo de emulación | emulación → presentación |
 | Estadísticas | Contadores de cada hilo en su propia estructura; el de presentación los lee cada 5 s sin lock (lecturas de 64 bits alineadas: atómicas en el PPE) | emulación → presentación |
 | Salida | `running` (presentación lo pone en 0: START + SELECT, «Salir del juego», fin de la prueba automática); `emu_done` (emulación lo pone al terminar su bucle); `app_quit` (el callback de sysutil: «Salir del juego» cierra la aplicación aunque haya menú) | ambos |
 | Log | `salsa64_log` con un lwmutex alrededor de la línea (`src/platform/ps3/log.c`) | ambos |
@@ -165,6 +167,25 @@ que dibuja el RSX (`rsxkit/ui.h`) y presenta un cuadro por vsync
 (`rsxkit_frame_end` lo frena). La prueba automática (`tools/rpcs3-run.py
 --menu`) abre varias ROMs de prueba seguidas y cada una tiene que pasar su
 verificación después del cierre de la anterior.
+
+## Estados guardados: la barrera
+
+Guardar o cargar un estado (docs/estados.md) necesita la máquina quieta y
+las colas vacías:
+
+1. SELECT + R1 o L1 (presentación, `pad_combos`) pone `state_req`.
+2. Emulación, al terminar el campo y antes de encolarlo, recoge la tarea del
+   RSP en vuelo (`salsa64_rsp_quiesce`: espera al SPE, su fin emulado no se
+   adelanta), encola el campo con `FIELD_STATE` (no se salta) y duerme en
+   `emu_park` (`sysUsleep` de 1 ms) hasta que `state_req` baje.
+3. Presentación ve `state_parked`: presenta lo encolado (del campo marcado
+   sale la miniatura), traduce las tareas, `rsxkit_finish` y guarda o carga
+   (`state_barrier`); con emulación quieta usa también los SPE de la HLE
+   (trabajos de estado) y la caché del recompilador.
+4. Al cargar suelta los destinos del RSX y vacía la cola de audio; baja
+   `state_req` y emulación sigue con el ritmo reiniciado.
+
+Si se sale del juego mientras emulación espera, `running = 0` la suelta.
 
 ## Lo que no cambia
 

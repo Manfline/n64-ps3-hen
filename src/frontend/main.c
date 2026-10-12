@@ -42,7 +42,8 @@
  * por título, con un panel de información (archivo, código, región, tipo de
  * guardado) y ondas de fondo; en Opciones se apagan las ondas (se guarda
  * en SALSA64_DATA_DIR/menu.cfg) y se elige el recorte del overscan (se
- * escribe overscan.cfg, que run_game relee en cada juego). Cruceta para elegir, X para abrir, triángulo
+ * escribe overscan.cfg, que run_game relee en cada juego) y la resolución de
+ * salida (video.cfg; vale al volver a abrir Salsa64). Cruceta para elegir, X para abrir, triángulo
  * para Opciones; la última ROM abierta queda en SALSA64_DATA_DIR/ultima-rom
  * y es la elegida al volver. Dentro del juego, START + SELECT vuelve al menú: se
  * cierra todo lo del juego (guardado al disco, audio, HLE gráfica y de
@@ -60,7 +61,9 @@
  * automática sin embedded el menú se maneja solo: abre en orden las ROMs
  * que nombra SALSA64_DATA_DIR/menu-prueba (una por línea; las de prueba se
  * verifican como las embebidas), vuelve al menú después de cada una y sale
- * con "RESULTADO frontend" del conjunto (tools/rpcs3-run.py --menu).
+ * con "RESULTADO frontend" del conjunto (tools/rpcs3-run.py --menu). Una
+ * línea «@video 720|1080 escala» aplica la salida y la escala como «Aplicar
+ * ahora», entre juegos.
  * Con vitest y fuera de la prueba automática, después mide 10 s sin
  * detección de bucles de espera y 10 s con ella ("MEDICIÓN …" en el log)
  * y sigue.
@@ -70,6 +73,17 @@
  * siempre tiene un control conectado (neutro sin mando): el DS3 tarda unos
  * cuadros en aparecer y los juegos buscan controles al arrancar. Los cambios
  * de botones van al log.
+ *
+ * Estados guardados (states.c, core/state.h, docs/estados.md): diez
+ * ranuras por juego en SALSA64_DATA_DIR/states. SELECT + R1 guarda en la
+ * ranura actual, SELECT + L1 carga, SELECT + izquierda/derecha cambia de
+ * ranura; mientras SELECT está apretado esos botones no llegan al juego.
+ * Se hacen en el límite de un campo con la emulación quieta: el hilo de
+ * emulación recoge la tarea del RSP en vuelo y espera; el de presentación
+ * vacía las colas, espera al RSX y guarda o carga (state_barrier). Un aviso
+ * corto en pantalla (osd.c) dice qué pasó. SELECT + △ muestra u oculta el
+ * contador de velocidad (VI/s y %, cuadros del juego y de la pantalla), que
+ * se recuerda en menu.cfg.
  *
  * Guardado del cartucho (EEPROM, SRAM; savefile.c): tipo por
  * SALSA64_DATA_DIR/guardado.cfg, la cabecera de homebrew o la tabla por
@@ -118,15 +132,18 @@
  */
 #include <io/pad.h>
 #include <malloc.h>
+#include <ppu-lv2.h>
 #include <ppu-types.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/memory.h>
 #include <sys/process.h>
 #include <sys/sem.h>
 #include <sys/systime.h>
 #include <sys/thread.h>
 #include <sysutil/sysutil.h>
+#include <sysutil/video.h>
 
 #include <rsxkit/rsxkit.h>
 #include <rsxkit/ui.h>
@@ -138,6 +155,7 @@
 #include "audiotest_rom_bin.h"
 #include "gfxtest_rom_bin.h"
 #include "menu.h"
+#include "osd.h"
 #include "pacer.h"
 #include "padmap.h"
 #include "platform/ps3/autotest.h"
@@ -154,6 +172,7 @@
 #include "selftest.h"
 #include "selftest_audio.h"
 #include "selftest_gfx.h"
+#include "states.h"
 #include "vitest_rom_bin.h"
 
 SYS_PROCESS_PARAM(1001, 0x100000);
@@ -174,6 +193,12 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define MENU_TEST_MAX 8
 #define MENU_IDLE_FIELDS 900  /* prueba automática: sin acción en tanto, falla */
 #define OVERSCAN_PATH SALSA64_DATA_DIR "/overscan.cfg"
+#define VIDEO_CFG_PATH SALSA64_DATA_DIR "/video.cfg"
+/* Con este archivo, la RDRAM emulada sale de sysMemoryAllocate con páginas
+ * de 1 MB en vez del heap (memalign): para medir si el PPE pierde tiempo en
+ * fallos de TLB (docs/perf-log.md). El tamaño de página real de cada zona
+ * se anota en el log al arrancar (sys_memory_get_page_attribute). */
+#define RDRAM_1M_PATH SALSA64_DATA_DIR "/rdram-1m"
 #define ROM_MAX      (64u << 20)
 #define FB_MAX_W     640
 #define FB_MAX_H     576
@@ -192,6 +217,7 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 
 static struct salsa64_n64 n64;
 static struct salsa64_rec rec;
+static struct salsa64_rec_prof rec_prof, rec_prof_prev;  /* perfil del recompilador (SALSA64_RECPROF_FLAG) */
 static bool use_rec;  /* el CPU corre con el recompilador */
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
 static struct salsa64_save save;
@@ -265,7 +291,8 @@ static int snap_cas(int slot, uint32_t from, uint32_t to)
 #define FIELD_QUEUE 8
 #define FIELD_CHECK 0x1u  /* verificar la pantalla (selftest): no se salta */
 #define FIELD_SHOT  0x2u  /* captura de un campo fijo (capturas = N): no se salta */
-#define FIELD_KEEP  (FIELD_CHECK | FIELD_SHOT)
+#define FIELD_STATE 0x4u  /* emulación se detiene después de este campo (estado guardado): miniatura */
+#define FIELD_KEEP  (FIELD_CHECK | FIELD_SHOT | FIELD_STATE)
 #define GFX_WIN_FIELDS 100
 static uint32_t cap_every, exit_field;  /* capturas = "N M" */
 struct field_msg {
@@ -386,6 +413,20 @@ static struct {
 /* Petición de presentación a emulación: empezar la medición A/B de vitest. */
 static volatile int bench_request;
 
+/* Estados guardados (states.c, core/state.h). Presentación pide guardar o
+ * cargar (SELECT + R1 / L1); emulación, al terminar el campo, recoge la
+ * tarea del RSP en vuelo, encola el campo con FIELD_STATE (de él sale la
+ * miniatura) y espera quieta; presentación vacía las colas, espera al RSX,
+ * hace el trabajo y la suelta (state_barrier). */
+enum { STATE_NONE, STATE_SAVE, STATE_LOAD };
+static volatile int state_req;     /* lo pone presentación; lo baja al terminar */
+static volatile int state_parked;  /* emulación espera en el límite del campo */
+static volatile int state_quiet;   /* la tarea del RSP quedó recogida (sin LLE) */
+static unsigned state_slot;        /* ranura actual, 0 … SALSA64_STATE_SLOTS − 1 */
+static struct osd_fps fps;         /* contador de velocidad (SELECT + △, menu.cfg) */
+static bool ui_ok;                 /* rsxkit_ui listo: aviso y contador sobre el juego */
+static float ui_lw, ui_lh;         /* su espacio lógico */
+
 /* Sink gráfico del frontend: el del RDP más el timbre a presentación. */
 static const struct salsa64_gfx_sink *rdp_sink;
 
@@ -491,6 +532,87 @@ static struct salsa64_ds3 ds3_from(const padData *d)
 	return s;
 }
 
+/* ---- Estados guardados y atajos con SELECT (hilo de presentación) ---------- */
+
+static unsigned state_req_slot;  /* la ranura de la petición en curso */
+static int combos_on;            /* dentro del juego (no en el menú) */
+static uint32_t state_done;      /* barreras terminadas */
+static bool state_last_ok;       /* cómo terminó la última */
+
+/* Prueba automática de los estados (SALSA64_DATA_DIR/estados-prueba = "A B",
+ * tools/rpcs3-run.py --estados): guardar en la ranura 9 al llegar al campo
+ * A y cargarla en el B; la ROM de prueba tiene que verificarse igual
+ * después. */
+#define STATE_TEST_PATH SALSA64_DATA_DIR "/estados-prueba"
+enum { ST_OFF, ST_SAVE, ST_SAVING, ST_LOAD, ST_LOADING, ST_DONE, ST_FAILED };
+static struct {
+	uint32_t save_at, load_at, done0;
+	int stage;
+} state_test;
+
+static void fps_setting_save(bool on);
+static bool fps_setting_load(void);
+
+static void state_command(int what)
+{
+	uint64_t now = sysGetSystemTime();
+	if (state_req || state_parked)
+		return;  /* ya hay una en curso, o emulación todavía sale de la anterior */
+	if (lle_mode != SALSA64_LLE_OFF) {
+		osd_notice(now, "Estados no disponibles con lle");
+		return;
+	}
+	if (what == STATE_LOAD && !states_slot_exists(&n64.bus, state_slot)) {
+		osd_notice(now, "No hay estado en la ranura %u", state_slot);
+		salsa64_log("estado: no hay estado en la ranura %u", state_slot);
+		return;
+	}
+	salsa64_log("estado: %s la ranura %u (pedido en el campo %u)", what == STATE_SAVE ? "guardar en" : "cargar",
+		    state_slot, n64.bus.vi.fields);
+	state_req_slot = state_slot;
+	lwsync();
+	state_req = what;
+}
+
+static void state_slot_step(int d)
+{
+	state_slot = (state_slot + SALSA64_STATE_SLOTS + (unsigned)d) % SALSA64_STATE_SLOTS;
+	bool have = states_slot_exists(&n64.bus, state_slot);
+	osd_notice(sysGetSystemTime(), have ? "Ranura %u" : "Ranura %u (vacía)", state_slot);
+}
+
+/* Atajos dentro del juego, con SELECT (la N64 no lo tiene; START + SELECT
+ * vuelve al menú): + R1 guarda el estado en la ranura actual, + L1 lo
+ * carga, + izquierda o derecha de la cruceta cambia de ranura y + △
+ * muestra u oculta el contador de velocidad. Mientras SELECT está apretado
+ * esos botones no llegan al juego. Devuelve los botones para el mapeo. */
+#define COMBO_MASK (1u << SALSA64_DS3_R1 | 1u << SALSA64_DS3_L1 | 1u << SALSA64_DS3_LEFT | \
+		    1u << SALSA64_DS3_RIGHT | 1u << SALSA64_DS3_TRIANGLE)
+
+static uint32_t pad_combos(unsigned port, uint32_t b)
+{
+	static uint32_t prev[SALSA64_PIF_PORTS];
+	uint32_t rise = b & ~prev[port];
+	prev[port] = b;
+	if (!combos_on || !(b & 1u << SALSA64_DS3_SELECT))
+		return b;
+	if (rise & 1u << SALSA64_DS3_R1)
+		state_command(STATE_SAVE);
+	if (rise & 1u << SALSA64_DS3_L1)
+		state_command(STATE_LOAD);
+	if (rise & 1u << SALSA64_DS3_RIGHT)
+		state_slot_step(1);
+	if (rise & 1u << SALSA64_DS3_LEFT)
+		state_slot_step(-1);
+	if (rise & 1u << SALSA64_DS3_TRIANGLE) {
+		fps.on = !fps.on;
+		osd_fps_reset(&fps);
+		osd_notice(sysGetSystemTime(), "FPS: %s", fps.on ? "sí" : "no");
+		fps_setting_save(fps.on);
+	}
+	return b & ~COMBO_MASK;
+}
+
 /* Lecturas de los mandos en la ventana de estadísticas y el hueco más
  * largo entre dos: una pulsación más corta que el hueco no llega a verse
  * (ioPadGetData da solo el último estado). */
@@ -548,7 +670,9 @@ static int update_pads(uint32_t *buttons)
 					    a->lx, a->ly, a->rx, a->ry);
 				raw_logged[i] = *a;
 			}
-			salsa64_padmap_apply(&padmap, &last[i], &p);
+			struct salsa64_ds3 d = last[i];
+			d.buttons = pad_combos(i, d.buttons);
+			salsa64_padmap_apply(&padmap, &d, &p);
 			all |= last[i].buttons;
 			if ((last[i].buttons & quit) == quit)
 				exit = 1;
@@ -586,6 +710,26 @@ static int file_exists(const char *path)
 	if (f)
 		fclose(f);
 	return f != NULL;
+}
+
+/* Tamaño de página (KB) de la memoria donde cae `p`, por la syscall 351
+ * (sys_memory_get_page_attribute, sin envoltura en PSL1GHT; disposición de
+ * sys_page_attr_t como la documenta RPCS3); 0 si falla. */
+static struct {
+	u64 attribute, access_right;
+	u32 page_size, pad;
+	u64 reserve[4];
+} page_attr;
+
+static s32 page_attr_query(const void *p)
+{
+	lv2syscall2(351, (u64)(uintptr_t)p, (u64)(uintptr_t)&page_attr);
+	return_to_user_prog(s32);
+}
+
+static unsigned page_kb(const void *p)
+{
+	return page_attr_query(p) == 0 ? page_attr.page_size / 1024 : 0;
 }
 
 /* Texto del ISViewer: al log línea por línea (hilo de emulación). */
@@ -811,7 +955,7 @@ static struct salsa64_overscan overscan_for(const struct salsa64_vi_frame *f)
  * lleva verificación, se marca para saltarlo y se le suelta la ranura. */
 static uint32_t post_last = ~0u;  /* índice del último campo encolado */
 
-static void post_field(void)
+static void post_field(uint32_t flags)
 {
 	uint32_t last_idx = post_last;
 	struct field_msg m;
@@ -819,8 +963,10 @@ static void post_field(void)
 	m.field = n64.bus.vi.fields;
 	m.tasks = salsa64_rdp_tasks_done();
 	m.snap = -1;
+	m.flags = flags;
 
 	if (salsa64_vi_frame(&n64.bus, &m.f) && m.f.width <= FB_MAX_W && m.f.height <= FB_MAX_H) {
+		salsa64_rdp_vi(m.f.origin, m.f.width);  /* qué color images son framebuffers */
 		if (selftest_on && selftest_frame(&n64.bus, &m.f))
 			m.flags |= FIELD_CHECK;
 		if (cap_every && m.field % cap_every == 0)
@@ -971,6 +1117,21 @@ static void log_jpeg(void)
 	jpeg_log.seen = st->jpeg;
 }
 
+/* Estado guardado pedido: emulación queda quieta en el límite del campo
+ * hasta que presentación termina (state_barrier). */
+static void emu_park(void)
+{
+	lwsync();
+	state_parked = 1;
+	wake();
+	while (state_req && running)
+		sysUsleep(1000);
+	lwsync();
+	state_parked = 0;
+	/* El reloj siguió mientras tanto: el ritmo empieza de nuevo. */
+	pacer_init(&pacer, pacer.enabled, pacer_sleep, NULL);
+}
+
 static void emu_thread(void *arg)
 {
 	(void)arg;
@@ -994,7 +1155,13 @@ static void emu_thread(void *arg)
 		if (paced)
 			pacer_advance(&pacer, cycles);
 		savefile_stage(&save_file, t1);
-		post_field();
+		/* Estado guardado: la tarea del RSP en vuelo se recoge (su fin
+		 * emulado no se adelanta) antes de encolar el campo, así su salida
+		 * va con él y las colas quedan vacías en la barrera. */
+		int req = state_req;
+		if (req)
+			state_quiet = salsa64_rsp_quiesce(&n64.bus);
+		post_field(req ? FIELD_STATE : 0);
 		/* audio_out: si el audio necesita este hilo (fin de cada tarea
 		 * de audio), aquí. */
 		if (bench_request && !bench.stage)
@@ -1006,6 +1173,8 @@ static void emu_thread(void *arg)
 			gfx_window(t1, t1 - t0);
 		lwsync();
 		emu_stats.fields++;
+		if (req)
+			emu_park();
 	}
 	lwsync();
 	emu_done = 1;
@@ -1031,12 +1200,20 @@ static struct {
 	 * al campo que se presenta (cola entre hilos), sumado y el mayor. */
 	uint64_t behind_sum;
 	uint32_t behind_max;
+	/* Contador de velocidad: cuadros nuevos del juego (cambios del
+	 * framebuffer del VI, también en campos saltados) y presentados en
+	 * total (no se vacían con las estadísticas). */
+	uint32_t last_origin, game_frames, frames_total;
 } pres = { .view = { RSXKIT_SCALE_FIT, RSXKIT_FILTER_LINEAR, 4.0f / 3.0f } };
 
 /* Presenta (o salta) un campo encolado. */
 static void present_field(const struct field_msg *m, uint64_t now)
 {
 	salsa64_rdp_flush(m->tasks);  /* las tareas de este campo, no las del siguiente */
+	if (m->f.width && m->f.origin != pres.last_origin) {
+		pres.last_origin = m->f.origin;
+		pres.game_frames++;
+	}
 	if (m->skip && !(m->flags & FIELD_KEEP)) {
 		if (m->snap >= 0)
 			snap_cas(m->snap, SNAP_QUEUED, SNAP_FREE);
@@ -1108,16 +1285,24 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		pres.shots = pres.autotest ? m->field / AUTO_SHOT_FIELDS : pres.shots + 1;
 		pres.t_shot = now;
 	}
+	if ((m->flags & FIELD_STATE) && state_req == STATE_SAVE) {
+		/* La miniatura del estado: la imagen sin el aviso encima. */
+		rsxkit_finish();
+		states_thumb_capture(&r);
+	}
 	if (pres.dump_field && m->field >= pres.dump_field) {
 		rsxkit_finish();
 		salsa64_log("volcado de la HLE en el campo %u: %s", m->field,
 			    salsa64_rdp_dump(SALSA64_DATA_DIR "/gfxdump.bin") ? "bien" : "FALLO");
 		pres.dump_field = 0;
 	}
+	if (ui_ok)
+		osd_draw(&fps, sysGetSystemTime(), ui_lw, ui_lh);
 	/* audio_out: una vez por campo presentado (estadísticas y volcado). */
 	uint64_t t1 = sysGetSystemTime();
 	audio_out_field(t1);
 	rsxkit_frame_end();
+	pres.frames_total++;
 	uint64_t t2 = sysGetSystemTime();
 	pres.us_present += t1 - t0;
 	pres.us_flip += t2 - t1;
@@ -1136,6 +1321,10 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		pres.result = selftest_on ? selftest_state(m->field)
 			    : gfxtest_on  ? gfxtest_state(m->field)
 					  : audiotest_state(m->field);
+		if (pres.result == SELFTEST_OK && state_test.stage && state_test.stage != ST_DONE) {
+			salsa64_log("estados, prueba automática: la ROM terminó antes de cargar el estado");
+			pres.result = SELFTEST_FAILED;
+		}
 		if (pres.result != SELFTEST_RUNNING) {
 			salsa64_log("%s: %s (campo %u)", res_tag, pres.result == SELFTEST_OK ? "OK" : "FALLO",
 				    m->field);
@@ -1249,13 +1438,14 @@ static void stats(uint64_t now)
 		}
 		salsa64_log("gfx: %u tareas (%.1f/s); por tarea: %.0f dibujos, %.0f triángulos, HLE en el "
 			    "SPE %.2f ms, emulación esperando al SPE %.2f ms (%u esperas), %.1f sondeos y %.2f ms "
-			    "dormida en bucles de espera, traducción al RSX %.2f ms; %u destinos creados, %u esperas "
-			    "por un juego de búferes (%.2f ms); %u tareas cortadas, %u comandos de otro microcódigo "
-			    "saltados, %u fondos de S2DEX",
+			    "dormida en bucles de espera, traducción al RSX %.2f ms; %u destinos creados (%u reciclados por "
+			    "memoria), %u esperas por un juego de búferes (%.2f ms); %u tareas cortadas, %u comandos "
+			    "de otro microcódigo saltados, %u fondos de S2DEX",
 			    tasks, tasks * 1e6 / dt, (double)(rs.draws - sw.rdp0.draws) / tasks,
 			    (double)(rs.triangles - sw.rdp0.triangles) / tasks, spu_ms, wait_ms, waits,
 			    (double)polls / tasks, sleep_ms, (rs.us_translate - sw.rdp0.us_translate) / 1e3 / tasks,
-			    rs.targets_created - sw.rdp0.targets_created, rs.set_waits - sw.rdp0.set_waits,
+			    rs.targets_created - sw.rdp0.targets_created, rs.targets_evicted - sw.rdp0.targets_evicted,
+			    rs.set_waits - sw.rdp0.set_waits,
 			    (rs.us_set_wait - sw.rdp0.us_set_wait) / 1e3, n64.bus.rsp.stats.cut - sw.gfx_cut0,
 			    (unsigned)(gfx_spu.skipped - sw.gfx_skipped0), (unsigned)(gfx_spu.bg - sw.gfx_bg0));
 		if (gfx_on_spu) {
@@ -1270,6 +1460,23 @@ static void stats(uint64_t now)
 			    (double)(rs.fp_loads - sw.rdp0.fp_loads) / tasks, rs.draws_generated - sw.rdp0.draws_generated,
 			    (double)(rs.draws_generated - sw.rdp0.draws_generated) / tasks, rs.fp_programs,
 			    rs.fp_generated - sw.rdp0.fp_generated, rs.fp_evictions - sw.rdp0.fp_evictions);
+		uint32_t rb = rs.readbacks - sw.rdp0.readbacks, rbw = rs.readback_waits - sw.rdp0.readback_waits;
+		uint32_t trsx = rs.tex_rsx - sw.rdp0.tex_rsx, trd = rs.tex_rdram - sw.rdp0.tex_rdram;
+		uint32_t tself = rs.tex_self - sw.rdp0.tex_self, primes = rs.primes - sw.rdp0.primes;
+		uint32_t mir = rs.mirrors - sw.rdp0.mirrors, mirs = rs.mirrors_skipped - sw.rdp0.mirrors_skipped;
+		uint32_t fmir = rs.frames_mirrored - sw.rdp0.frames_mirrored;
+		uint32_t lost = rs.readbacks_lost - sw.rdp0.readbacks_lost, tfail = rs.targets_failed - sw.rdp0.targets_failed;
+		uint32_t tabs = rs.targets_absurd - sw.rdp0.targets_absurd, bfail = rs.binds_failed - sw.rdp0.binds_failed;
+		if (rb || rbw || mir || mirs || fmir || trsx || trd || tself || primes || lost || tfail || tabs || bfail)
+			salsa64_log("gfx: framebuffer: %u copias a la RDRAM (%.2f ms c/u en presentación), la emulación "
+				    "esperó %u tareas (%.2f ms c/u, %u tarde), %u copias espejo (%u sin búfer), %u cuadros "
+				    "copiados; texturas desde un destino: %u del RSX, %u de la RDRAM, %u del ligado; %u "
+				    "destinos cebados; %u copias perdidas, %u destinos sin superficie, %u color images imposibles, "
+				    "%u dibujos sin ligar (ninguna profundidad cubría el destino)",
+				    rb, rb ? (rs.us_readback - sw.rdp0.us_readback) / 1e3 / rb : 0.0, rbw,
+				    rbw ? (rs.us_readback_wait - sw.rdp0.us_readback_wait) / 1e3 / rbw : 0.0,
+				    rs.readback_late - sw.rdp0.readback_late, mir, mirs, fmir, trsx, trd, tself, primes, lost,
+				    tfail, tabs, bfail);
 	}
 	if (lle_mode != SALSA64_LLE_OFF) {
 		uint32_t t = rsp_spu.tasks - sw.lle_tasks0;
@@ -1302,13 +1509,22 @@ static void stats(uint64_t now)
 	if (use_rec) {
 		const struct salsa64_rec_stats *st = &rec.stats;
 		salsa64_log("recompilador: %llu bloques (%llu fuera de KSEG0), %u KB de caché, %llu entradas, "
-			    "%llu enlaces, %llu invalidados, %llu vaciados, %llu traducciones, "
+			    "%llu enlaces, %llu invalidados, %llu vaciados, %llu desalojos, %llu traducciones, "
 			    "%llu instr. interpretadas",
 			    (unsigned long long)st->compiled, (unsigned long long)st->compiled_x,
 			    salsa64_rec_used(&rec) / 256, (unsigned long long)st->entries,
 			    (unsigned long long)st->linked, (unsigned long long)st->invalidated,
-			    (unsigned long long)st->flushes, (unsigned long long)st->vt_probes,
-			    (unsigned long long)st->interp_steps);
+			    (unsigned long long)st->flushes, (unsigned long long)st->evictions,
+			    (unsigned long long)st->vt_probes, (unsigned long long)st->interp_steps);
+		if (rec.prof) {
+			char text[2048];
+			salsa64_rec_prof_report(rec.prof, &rec_prof_prev, spukit_tick_hz(), fields, text, sizeof text);
+			for (char *l = text, *e; l && *l; l = e) {
+				if ((e = strchr(l, '\n')))
+					*e++ = '\0';
+				salsa64_log("%s", l);
+			}
+		}
 	}
 	sw.gfx_vtx0 = gfx_spu.t_vtx;
 	sw.gfx_state0 = gfx_spu.t_state;
@@ -1345,6 +1561,109 @@ enum game_end {
 	GAME_QUIT,     /* salir de la aplicación (sin menú, o «Salir del juego» del sistema) */
 	GAME_FAILED,   /* no arrancó */
 };
+
+/* Con la emulación quieta en el límite de un campo (state_parked): lo que
+ * quedaba en las colas se presenta (el campo con FIELD_STATE deja la
+ * miniatura), el RSX termina todo y se guarda o se carga. Al cargar se
+ * olvida lo que era de la imagen anterior: destinos del RSX, audio en cola,
+ * el último campo encolado y las ventanas que cuentan campos y ciclos (el
+ * número de campo retrocede). La caché del recompilador la vacía
+ * salsa64_state_load. */
+static void state_barrier(void)
+{
+	salsa64_log("estado: barrera: emulación quieta en el campo %u (tarea del RSP %s)", n64.bus.vi.fields,
+		    state_quiet ? "recogida" : "sin recoger");
+	drain(sysGetSystemTime(), 1);
+	rsxkit_finish();
+	salsa64_log("estado: barrera: colas vacías y RSX terminado");
+	/* Ninguna copia RSX → RDRAM en vuelo: al guardar quedan en el estado y
+	 * al cargar no llegan tarde sobre la RDRAM cargada. */
+	salsa64_rdp_settle();
+	salsa64_log("estado: barrera: copias RSX → RDRAM en vuelo terminadas");
+	int req = state_req;
+	unsigned slot = state_req_slot;
+	char err[160] = "";
+	struct states_timing t;
+	uint32_t field0 = n64.bus.vi.fields;
+	bool ok = false;
+	if (!state_quiet) {
+		osd_notice(sysGetSystemTime(), "Estados no disponibles con lle");
+	} else if (req == STATE_SAVE) {
+		ok = states_save(&n64, slot, &t, err, sizeof err);
+		if (ok) {
+			osd_notice(sysGetSystemTime(), "Estado guardado en ranura %u", slot);
+			salsa64_log("estado: guardado en la ranura %u (campo %u): %.1f ms, de ellos %.1f ms escribiendo; %u KB; "
+				    "miniatura %.1f ms", slot, field0, t.us_total / 1e3, t.us_io / 1e3, t.bytes >> 10,
+				    states_thumb_us() / 1e3);
+		} else {
+			osd_notice(sysGetSystemTime(), "No se pudo guardar: %s", err);
+			salsa64_log("estado: FALLO al guardar en la ranura %u: %s", slot, err);
+		}
+	} else if (req == STATE_LOAD) {
+		bool broken = false;
+		ok = states_load(&n64, slot, &t, err, sizeof err, &broken);
+		if (ok) {
+			salsa64_rdp_drop_targets();
+			audio_out_flush();
+			post_last = ~0u;
+			for (unsigned i = 0; i < SALSA64_PIF_PORTS; i++)
+				pif_edge_seen[i] = n64.bus.pif.sent[i].buttons;
+			gwin.field0 = n64.bus.vi.fields;
+			gwin.t0 = 0;
+			sw.cyc0 = n64.cpu.cycles;
+			sw.idle0 = n64.cpu.idle_cycles;
+			sw.pif_reads0 = n64.bus.pif.reads[0];
+			osd_fps_reset(&fps);
+			osd_notice(sysGetSystemTime(), "Estado cargado");
+			salsa64_log("estado: cargado de la ranura %u: campo %u → %u, %.1f ms, de ellos %.1f ms leyendo; %u KB",
+				    slot, field0, n64.bus.vi.fields, t.us_total / 1e3, t.us_io / 1e3, t.bytes >> 10);
+		} else {
+			osd_notice(sysGetSystemTime(), "No se pudo cargar: %s", err);
+			salsa64_log("estado: FALLO al cargar la ranura %u: %s%s", slot, err,
+				    broken ? " (la emulación quedó a medias: se cierra el juego)" : "");
+			if (broken)
+				running = 0;
+		}
+	}
+	states_thumb_clear();
+	state_last_ok = ok;
+	state_done++;
+	lwsync();
+	state_req = STATE_NONE;
+}
+
+static void state_test_step(void)
+{
+	uint32_t field = n64.bus.vi.fields;
+	switch (state_test.stage) {
+	case ST_SAVE:
+	case ST_LOAD:
+		if (state_req || state_parked ||
+		    field < (state_test.stage == ST_SAVE ? state_test.save_at : state_test.load_at))
+			return;
+		state_test.done0 = state_done;
+		state_slot = 9;
+		state_command(state_test.stage == ST_SAVE ? STATE_SAVE : STATE_LOAD);
+		state_test.stage++;
+		return;
+	case ST_SAVING:
+	case ST_LOADING:
+		if (state_done == state_test.done0)
+			return;
+		salsa64_log("estados, prueba automática: %s %s (campo %u)",
+			    state_test.stage == ST_SAVING ? "guardar" : "cargar", state_last_ok ? "bien" : "FALLO", field);
+		state_test.stage = !state_last_ok ? ST_FAILED : state_test.stage == ST_SAVING ? ST_LOAD : ST_DONE;
+		if (state_test.stage == ST_FAILED && pres.result == SELFTEST_RUNNING) {
+			pres.result = SELFTEST_FAILED;
+			salsa64_log("%s: FALLO (estado guardado, campo %u)", res_tag, field);
+			if (pres.autotest)
+				running = 0;
+		}
+		return;
+	default:
+		return;
+	}
+}
 
 /* Lo que es de un juego vuelve a como al arrancar el programa: colas entre
  * hilos, ranuras de la copia del VI, contadores y estadísticas, banderas de
@@ -1386,6 +1705,18 @@ static void game_reset(void)
 	pres.us_present = pres.us_flip = 0;
 	pres.presented = pres.blank = pres.rsx_frames = pres.skipped = 0;
 	pres.behind_sum = pres.behind_max = 0;
+	pres.last_origin = pres.game_frames = pres.frames_total = 0;
+	state_req = STATE_NONE;
+	state_parked = 0;
+	state_quiet = 0;
+	state_slot = 0;
+	combos_on = 0;
+	state_done = 0;
+	state_last_ok = false;
+	memset(&state_test, 0, sizeof state_test);
+	osd_notice_clear();
+	osd_fps_reset(&fps);
+	states_thumb_clear();
 }
 
 /* Cierra lo que es del juego con la emulación ya detenida, en orden y con
@@ -1437,6 +1768,24 @@ static void game_close(void)
 		    "sin traducir, destinos del RSX liberados, SPEs de la HLE %s, RSP %s)",
 		    clean ? "estado limpio" : "ATENCIÓN, quedó algo en vuelo", emu_done ? "terminado" : "VIVO", queued,
 		    snaps, untranslated, spes ? "VIVOS" : "detenidos", hooks ? "CON BACKENDS" : "sin backends");
+}
+
+/* rsxkit_ui: el menú y lo que se dibuja sobre el juego (aviso, contador);
+ * se prepara una vez (2 MB mapeados, para siempre). */
+static int ui_init_once(void)
+{
+	static int rc = 1;
+	if (rc == 1) {
+		rc = rsxkit_ui_init();
+		if (rc != RSXKIT_OK)
+			salsa64_log("2D del RSX no disponible (%d): sin avisos en pantalla", rc);
+	}
+	/* La salida puede cambiar sin reiniciar («Aplicar ahora»). */
+	const rsxkit_screen *sc = rsxkit_screen_info();
+	ui_lh = 720.0f;
+	ui_lw = sc->aspect > 1.5f ? 1280.0f : 960.0f;
+	ui_ok = rc == RSXKIT_OK;
+	return rc;
 }
 
 /* Una sesión de juego con la ROM ya en memoria (cualquier orden de bytes):
@@ -1506,14 +1855,30 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	savefile_open(&save_file, &save, &n64.bus, rom, SAVES_DIR, SAVE_CFG, SALSA64_SAVE_AUTO, salsa64_log);
 
 	rec.opts = SALSA64_REC_OPT_PIN;  /* +7 % en nemu64-test (docs/perf-log.md) */
+	if (salsa64_ps3_rec_legacy_wanted())
+		rec.opts |= SALSA64_REC_OPT_LEGACY;
+	if (salsa64_ps3_rec_fpu_res_wanted())
+		rec.opts |= SALSA64_REC_OPT_FPU_RES;
+	if (salsa64_ps3_rec_cop0_exec_wanted())
+		rec.opts |= SALSA64_REC_OPT_COP0_EXEC;
+	if (salsa64_ps3_rec_no_evict_wanted())
+		rec.opts |= SALSA64_REC_OPT_NO_EVICT;
+	rec.prof = salsa64_ps3_rec_prof_wanted() ? &rec_prof : NULL;
 	if (!salsa64_ps3_rec_wanted())
 		salsa64_log("recompilador apagado (%s): intérprete", SALSA64_NOREC_FLAG);
 	else if (!(use_rec = salsa64_rec_init(&rec, &n64.cpu, salsa64_ps3_rec_cache(), SALSA64_REC_CACHE_BYTES)))
 		salsa64_log("recompilador no disponible: intérprete");
 	else
-		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x",
+		salsa64_log("páginas: RDRAM %u KB, rec %u KB, n64 %u KB, caché de código %u KB, pila %u KB (0 = sin dato)",
+			    page_kb(rdram), page_kb(&rec), page_kb(&n64), page_kb(salsa64_ps3_rec_cache()),
+			    page_kb(__builtin_frame_address(0))),
+		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x%s%s%s%s%s",
 			    SALSA64_REC_CACHE_BYTES >> 20, salsa64_ps3_rec_cache(), rec.calls_near ? "con bl" : "por mtctr",
-			    rec.opts);
+			    rec.opts, rec.prof ? ", con perfil" : "",
+			    rec.opts & SALSA64_REC_OPT_LEGACY ? ", camino viejo (jit-viejo)" : "",
+			    rec.opts & SALSA64_REC_OPT_FPU_RES ? ", FPU residente (jit-fpu-residente)" : "",
+			    rec.opts & SALSA64_REC_OPT_COP0_EXEC ? ", COP0 por el intérprete (jit-cop0-viejo)" : "",
+			    rec.opts & SALSA64_REC_OPT_NO_EVICT ? ", sin tramos (jit-sin-tramos)" : "");
 
 	/* overscan.cfg: en cada juego (se cambia desde las Opciones del menú). */
 	load_overscan();
@@ -1523,6 +1888,20 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		gfxtest_start();
 	if (audiotest_on)
 		audiotest_start();
+	{
+		/* SALSA64_DATA_DIR/fbfx.cfg: 0 sin efectos de framebuffer, 1 solo
+		 * render a textura, 2 también copias a la RDRAM (por omisión). */
+		int fbfx = 2;
+		FILE *ff = fopen(SALSA64_DATA_DIR "/fbfx.cfg", "r");
+		if (ff) {
+			if (fscanf(ff, "%d", &fbfx) != 1)
+				fbfx = 2;
+			fclose(ff);
+		}
+		salsa64_rdp_fbfx(fbfx);
+		salsa64_log("efectos de framebuffer: %s", fbfx <= 0 ? "apagados" : fbfx == 1 ? "render a textura" :
+								"render a textura y copias a la RDRAM");
+	}
 	{
 		FILE *df = fopen(SALSA64_DATA_DIR "/gfxdump", "r");
 		if (df) {
@@ -1549,6 +1928,18 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	else if (pres.shots_on && !pres.autotest)
 		salsa64_log("capturas: screen-N.ppm cada %u s (%s)", SHOT_US / 1000000u, SHOTS_PATH);
 	gwin.on = gfx_on_spu;
+	{
+		FILE *tf = fopen(STATE_TEST_PATH, "r");
+		if (tf) {
+			if (fscanf(tf, "%u %u", &state_test.save_at, &state_test.load_at) == 2 &&
+			    state_test.save_at < state_test.load_at) {
+				state_test.stage = ST_SAVE;
+				salsa64_log("estados, prueba automática: guardar en el campo %u y cargar en el %u (ranura 9)",
+					    state_test.save_at, state_test.load_at);
+			}
+			fclose(tf);
+		}
+	}
 
 	/* El hilo de emulación. */
 	sys_ppu_thread_t emu_tid;
@@ -1561,6 +1952,13 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		return GAME_FAILED;
 	}
 	salsa64_log("hilos: emulación con prioridad %d, presentación con 1001", EMU_PRIO);
+	/* Avisos y atajos con SELECT (estados guardados, contador de FPS). */
+	ui_init_once();
+	fps.on = fps_setting_load();
+	osd_fps_reset(&fps);
+	combos_on = 1;
+	salsa64_log("estados: %s/<juego>.st0 … .st%d; SELECT + R1 guarda, + L1 carga, + izquierda/derecha cambia de "
+		    "ranura; FPS %s (SELECT + △)", STATES_DIR, SALSA64_STATE_SLOTS - 1, fps.on ? "sí" : "no");
 
 	uint64_t now = sysGetSystemTime();
 	pres.t_shot = now;
@@ -1575,8 +1973,15 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		now = sysGetSystemTime();
 		savefile_write_staged(&save_file, now);
 		drain(now, 1);
+		if (state_parked && state_req)
+			state_barrier();
+		if (state_test.stage)
+			state_test_step();
+		if (fps.on)
+			osd_fps_sample(&fps, now, n64.bus.vi.fields, n64.cpu.cycles, pres.game_frames, pres.frames_total);
 		stats(now);
 	}
+	combos_on = 0;
 	if (app_quit)
 		salsa64_log("«Salir del juego» del sistema");
 
@@ -1601,10 +2006,13 @@ static const char *const rom_dirs[] = {
 	"/dev_usb004/salsa64", "/dev_usb005/salsa64", "/dev_usb006/salsa64", "/dev_usb007/salsa64",
 };
 
+static void video_load(struct menu_settings *set);
+static void video_save(const struct menu_settings *set);
+static struct menu_settings video_cfg;  /* video y escala que corren (video.cfg al arrancar o lo último aplicado) */
+
 static struct romlist roms;
 static struct menu menu;
 static struct {
-	uint8_t *rom;           /* búfer de la ROM (ROM_MAX), reservado al entrar al menú */
 	float lw, lh;           /* espacio lógico del menú */
 	struct menu_settings settings;
 	char save_cfg[4096];
@@ -1653,8 +2061,65 @@ static void menu_scan(const char *keep)
 	menu_init(&menu, &roms, keep ? romlist_find(&roms, keep) : -1, &mn.settings);
 	if (keep)
 		snprintf(menu.last, sizeof menu.last, "%s", keep);
+	const rsxkit_screen *osc = rsxkit_screen_info();
+	menu.out_w = osc->width;
+	menu.out_h = osc->height;
+	menu.res_run = video_cfg.resolution;
+	menu.scale_run = video_cfg.scale;
 	menu.dirs[menu.ndirs++] = SALSA64_DATA_DIR;
 	menu.dirs[menu.ndirs++] = "/dev_usb000/salsa64 … /dev_usb007/salsa64";
+}
+
+static const rsxkit_config *video_config_for(int resolution, rsxkit_config *cfg);
+
+/* Espacio lógico del menú según la pantalla en curso. */
+static void menu_layout(void)
+{
+	mn.lh = 720.0f;
+	mn.lw = rsxkit_screen_info()->aspect > 1.5f ? 1280.0f : 960.0f;
+}
+
+/* «Aplicar ahora»: pone la salida y la escala elegidas sin cerrar Salsa64.
+ * No hay juego abierto (el RDP quedó limpio en game_close). Se rehacen solo
+ * los búferes de pantalla del RSX (rsxkit_video_reconfigure: el contexto, la
+ * memoria mapeada, el 2D del menú y el framebuffer se conservan) y la escala
+ * del RDP (salsa64_rdp_set_scale: conserva su memoria mapeada). Si la tele no
+ * acepta el modo, rsxkit deja el anterior y la escala no se toca. */
+static void menu_apply_video(void)
+{
+	const struct menu_settings want = menu.set;
+	const rsxkit_screen *sc = rsxkit_screen_info();
+	unsigned old_w = sc->width, old_h = sc->height;
+	int rc = RSXKIT_OK;
+	rsxkit_config vcfg;
+
+	/* Solo se toca el video si cambió la resolución pedida. */
+	if (want.resolution != video_cfg.resolution) {
+		rsxkit_finish();
+		rc = rsxkit_video_reconfigure(video_config_for(want.resolution, &vcfg));
+	}
+	if (rc != RSXKIT_OK) {
+		salsa64_log("video: no se pudo cambiar a %s (%d); sigue %ux%u, escala %u×", want.resolution == MENU_RES_1080P ? "1080p" : "720p",
+			    rc, old_w, old_h, salsa64_rdp_scale(NULL));
+		snprintf(menu.note, sizeof menu.note, "No se pudo: sigue %ux%u", old_w, old_h);
+		return;
+	}
+	salsa64_rdp_set_scale((uint32_t)want.scale);
+	bool cut;
+	uint32_t es = salsa64_rdp_scale(&cut);
+	video_cfg.resolution = want.resolution;
+	video_cfg.scale = want.scale;
+	sc = rsxkit_screen_info();
+	menu_layout();
+	menu.out_w = sc->width;
+	menu.out_h = sc->height;
+	menu.res_run = want.resolution;
+	menu.scale_run = want.scale;
+	snprintf(menu.note, sizeof menu.note, "Aplicado: %ux%u, escala %u×", sc->width, sc->height, es);
+	salsa64_log("video: %ux%u, escala %u× (%s%s), aplicado sin reiniciar", sc->width, sc->height, es,
+		    want.scale ? "pedida" : "automática", cut ? ", reducida por memoria del RSX" : "");
+	if (want.resolution == MENU_RES_1080P && sc->height != 1080)
+		salsa64_log("video: se pidió 1080p y la tele dio %ux%u", sc->width, sc->height);
 }
 
 /* Un cuadro del menú: todo lo dibuja el RSX (rsxkit/ui.h); el PPE solo
@@ -1680,27 +2145,57 @@ static void menu_show(const char *shot)
 	rsxkit_frame_end();
 }
 
-static void menu_settings_load(void)
+static void settings_read(struct menu_settings *s)
 {
 	char text[512];
-	menu_settings_default(&mn.settings);
+	menu_settings_default(s);
 	FILE *f = fopen(MENU_CFG_PATH, "r");
 	if (!f)
 		return;
 	size_t n = fread(text, 1, sizeof text - 1, f);
 	fclose(f);
-	menu_settings_parse(&mn.settings, text, n);
+	menu_settings_parse(s, text, n);
 }
 
-static void menu_settings_save(void)
+static bool settings_write(const struct menu_settings *s)
 {
 	char text[512];
-	int n = menu_settings_format(&mn.settings, text, sizeof text);
+	int n = menu_settings_format(s, text, sizeof text);
 	FILE *f = fopen(MENU_CFG_PATH, "w");
 	bool ok = f && fwrite(text, 1, (size_t)n, f) == (size_t)n;
 	if (f && fclose(f) != 0)
 		ok = false;
-	salsa64_log("menú: fondo animado %s%s", mn.settings.waves ? "sí" : "no", ok ? "" : " (no se pudo guardar)");
+	return ok;
+}
+
+static void menu_settings_load(void)
+{
+	settings_read(&mn.settings);
+}
+
+static void menu_settings_save(void)
+{
+	bool ok = settings_write(&mn.settings);
+	salsa64_log("menú: fondo animado %s, FPS %s%s", mn.settings.waves ? "sí" : "no", mn.settings.fps ? "sí" : "no",
+		    ok ? "" : " (no se pudo guardar)");
+}
+
+/* El contador de velocidad se recuerda en menu.cfg («fps = si|no»), también
+ * con embedded (sin menú): se relee el archivo y se cambia solo esa clave. */
+static bool fps_setting_load(void)
+{
+	struct menu_settings s;
+	settings_read(&s);
+	return s.fps;
+}
+
+static void fps_setting_save(bool on)
+{
+	struct menu_settings s;
+	settings_read(&s);
+	s.fps = on;
+	mn.settings.fps = on;
+	salsa64_log("FPS: %s%s", on ? "sí" : "no", settings_write(&s) ? "" : " (no se pudo guardar en menu.cfg)");
 }
 
 /* Fila a la que va la prueba automática: la próxima ROM de menu-prueba
@@ -1713,6 +2208,25 @@ static int menu_test_target(void)
 		if (!strcmp(romlist_name(&roms.e[i]), mn.test[mn.next_test]))
 			return (int)i;
 	return -1;
+}
+
+/* Línea «@video 720|1080 escala» de menu-prueba: «Aplicar ahora» con esos
+ * valores, sin tocar video.cfg. Cuenta como un paso del conjunto. */
+static void menu_test_video(const char *line)
+{
+	int res = 0, scale = 0;
+	bool ok = sscanf(line, "@video %d %d", &res, &scale) == 2 && (res == 720 || res == 1080) && scale >= 0 &&
+		  scale <= 5;
+	if (ok) {
+		menu.set.resolution = res == 1080 ? MENU_RES_1080P : MENU_RES_720P;
+		menu.set.scale = scale;
+		menu_apply_video();
+		ok = !menu_video_pending(&menu) && (res == 1080 || rsxkit_screen_info()->height == 720) &&
+		     (!scale || salsa64_rdp_scale(NULL) <= (uint32_t)scale);
+	}
+	salsa64_log("menú, prueba automática: «%s»: %s", line, ok ? "bien" : "MAL");
+	mn.games++;
+	mn.failures += !ok;
 }
 
 static void menu_test_load(void)
@@ -1740,7 +2254,9 @@ static enum game_end menu_open(const struct rom_entry *e)
 	menu_show(NULL);
 	menu.loading = NULL;
 	uint32_t size = 0;
-	if (!read_rom_file(path, mn.rom, ROM_MAX, &size)) {
+	/* Búfer a la medida de la ROM, solo mientras dura el juego. */
+	uint8_t *rom = read_rom_file(path, NULL, 0, &size);
+	if (!rom) {
 		salsa64_log("menú: no se pudo leer %s", path);
 		menu_set_status(&menu, "No se pudo leer %s", path);
 		mn.games++;
@@ -1751,7 +2267,8 @@ static enum game_end menu_open(const struct rom_entry *e)
 		salsa64_log("menú: no se pudo escribir %s", LAST_ROM_PATH);
 	game_reset();
 	test_flags_from_name(romlist_name(e));
-	enum game_end end = run_game(mn.rom, size, path, err, sizeof err);
+	enum game_end end = run_game(rom, size, path, err, sizeof err);
+	free(rom);  /* run_game ya cerró el juego: nada apunta a la ROM */
 	bool test = selftest_on || gfxtest_on || audiotest_on;
 	bool ok = end != GAME_FAILED && (test ? pres.result == SELFTEST_OK : !pres.autotest || game_auto_ok);
 	mn.games++;
@@ -1771,21 +2288,23 @@ static enum game_end menu_open(const struct rom_entry *e)
 static int menu_loop(void)
 {
 	const rsxkit_screen *sc = rsxkit_screen_info();
-	int rc = rsxkit_ui_init();
-	mn.rom = memalign(128, ROM_MAX);
-	if (rc != RSXKIT_OK || !mn.rom) {
-		salsa64_log("%s: FALLO al preparar el menú (2D del RSX %d, búfer de ROM %s)",
-			    pres.autotest ? "RESULTADO frontend" : "menú", rc, mn.rom ? "bien" : "sin memoria");
-		free(mn.rom);
-		mn.rom = NULL;
+	int rc = ui_init_once();
+	if (rc != RSXKIT_OK) {
+		salsa64_log("%s: FALLO al preparar el menú (2D del RSX %d)", pres.autotest ? "RESULTADO frontend" : "menú",
+			    rc);
 		return 1;
 	}
-	mn.lh = 720.0f;
-	mn.lw = sc->aspect > 1.5f ? 1280.0f : 960.0f;
+	menu_layout();
 	menu_settings_load();
 	load_overscan();
 	mn.settings.overscan = overscan_preset();
-	salsa64_log("menú: espacio lógico de %.0fx%.0f sobre %ux%u, búfer de ROM de %u MB, fondo animado %s", mn.lw,
+	{
+		struct menu_settings v = mn.settings;
+		video_load(&v);
+		mn.settings.resolution = v.resolution;
+		mn.settings.scale = v.scale;
+	}
+	salsa64_log("menú: espacio lógico de %.0fx%.0f sobre %ux%u, ROM con búfer a su medida (máx. %u MB), fondo animado %s", mn.lw,
 		    mn.lh, sc->width, sc->height, ROM_MAX >> 20, mn.settings.waves ? "sí" : "no");
 
 	char last[ROMLIST_PATH_MAX];
@@ -1805,6 +2324,10 @@ static int menu_loop(void)
 		sysUtilCheckCallback();
 		uint32_t buttons;
 		update_pads(&buttons);
+		if (pres.autotest && mn.next_test < mn.ntest && mn.test[mn.next_test][0] == '@') {
+			menu_test_video(mn.test[mn.next_test++]);
+			continue;
+		}
 		if (pres.autotest) {
 			int target = menu_test_target();
 			if (target < 0) {
@@ -1824,12 +2347,17 @@ static int menu_loop(void)
 		if (a == MENU_SETTINGS) {
 			if (menu.set.overscan != mn.settings.overscan)
 				overscan_save(menu.set.overscan);
-			if (menu.set.waves != mn.settings.waves) {
+			if (menu.set.resolution != mn.settings.resolution || menu.set.scale != mn.settings.scale)
+				video_save(&menu.set);
+			if (menu.set.waves != mn.settings.waves || menu.set.fps != mn.settings.fps) {
 				mn.settings.waves = menu.set.waves;
+				mn.settings.fps = menu.set.fps;
 				menu_settings_save();
 			}
 			mn.settings = menu.set;
 		}
+		if (a == MENU_APPLY)
+			menu_apply_video();
 		if (a == MENU_QUIT) {
 			salsa64_log("menú: «Salir al XMB»");
 			break;
@@ -1844,8 +2372,6 @@ static int menu_loop(void)
 	}
 	if (rsxkit_ui_dropped())
 		salsa64_log("menú: %u quads no cupieron en algún cuadro", rsxkit_ui_dropped());
-	free(mn.rom);
-	mn.rom = NULL;
 	if (!pres.autotest)
 		return 0;
 	bool ok = !failed && !mn.failures && mn.games == (int)mn.ntest;
@@ -1854,12 +2380,61 @@ static int menu_loop(void)
 	return ok ? 0 : 1;
 }
 
+/* video.cfg: «salida = 1080» prefiere 1080p (también la línea sola «1080» del
+ * formato viejo); «escala = auto|1..5» es el tamaño del render de la N64
+ * (auto: 4× a 1080p, 3× a 720p). Sin archivo, 720p y escala automática.
+ * Si la tele no acepta 1080, sigue con el siguiente modo de la lista. */
+static const int32_t modes_1080[] = {
+	VIDEO_RESOLUTION_1080, VIDEO_RESOLUTION_720, VIDEO_RESOLUTION_480, VIDEO_RESOLUTION_576,
+};
+
+static void video_load(struct menu_settings *set)
+{
+	char text[256];
+	size_t n = 0;
+	FILE *f = fopen(VIDEO_CFG_PATH, "r");
+	if (f) {
+		n = fread(text, 1, sizeof text - 1, f);
+		fclose(f);
+	}
+	menu_video_parse(set, text, n);
+}
+
+/* Opciones «Resolución» y «Escala interna» del menú: video.cfg con
+ * «salida» y «escala». Se leen al arrancar; «Aplicar ahora» los pone sin
+ * reiniciar (menu_apply_video). */
+static void video_save(const struct menu_settings *set)
+{
+	char text[256];
+	int n = menu_video_format(set, text, sizeof text);
+	FILE *f = fopen(VIDEO_CFG_PATH, "w");
+	bool ok = f && fwrite(text, 1, (size_t)n, f) == (size_t)n;
+	if (f && fclose(f) != 0)
+		ok = false;
+	if (!ok)
+		salsa64_log("menú: no se pudo escribir %s", VIDEO_CFG_PATH);
+}
+
+static const rsxkit_config *video_config_for(int resolution, rsxkit_config *cfg)
+{
+	if (resolution != MENU_RES_1080P)
+		return NULL;
+	memset(cfg, 0, sizeof *cfg);
+	cfg->modes = modes_1080;
+	cfg->num_modes = sizeof modes_1080 / sizeof modes_1080[0];
+	return cfg;
+}
+
 int main(void)
 {
 	salsa64_log_init("salsa64");
 	pres.autotest = salsa64_autotest();
 
-	int rc = rsxkit_init(NULL);
+	menu_settings_default(&video_cfg);
+	video_load(&video_cfg);
+	rsxkit_config vcfg;
+	const rsxkit_config *vc = video_config_for(video_cfg.resolution, &vcfg);
+	int rc = rsxkit_init(vc);
 	pres.fb = rc == RSXKIT_OK ? rsxkit_fb_create(FB_MAX_W, FB_MAX_H) : NULL;
 	if (!pres.fb) {
 		salsa64_log("RESULTADO frontend: FALLO al iniciar el RSX (%d)", rc);
@@ -1867,12 +2442,19 @@ int main(void)
 		return 1;
 	}
 	const rsxkit_screen *sc = rsxkit_screen_info();
-	salsa64_log("RSX listo: %ux%u, tele %s", sc->width, sc->height, sc->aspect > 1.5f ? "16:9" : "4:3");
-	if ((rc = salsa64_rdp_init(0)) != RSXKIT_OK) {
+	salsa64_log("RSX listo: %ux%u, tele %s%s", sc->width, sc->height, sc->aspect > 1.5f ? "16:9" : "4:3",
+		    vc ? " (video.cfg: 1080)" : "");
+	if ((rc = salsa64_rdp_init((uint32_t)video_cfg.scale)) != RSXKIT_OK) {
 		salsa64_log("RESULTADO frontend: FALLO al preparar el RDP (%d)", rc);
 		rsxkit_shutdown();
 		salsa64_log_shutdown();
 		return 1;
+	}
+	{
+		bool cut;
+		uint32_t es = salsa64_rdp_scale(&cut);
+		salsa64_log("RDP listo: escala-objetivo %u× (%u líneas por imagen; cada destino, la entera que llega ahí), %s%s", es, 240 * es,
+			    video_cfg.scale ? "pedida" : "automática", cut ? ", reducida por memoria del RSX" : "");
 	}
 	rdp_sink = salsa64_rdp_sink();
 
@@ -1896,7 +2478,15 @@ int main(void)
 		return rr == 0 ? 0 : 1;
 	}
 
-	rdram = memalign(128, SALSA64_RDRAM_MAX);
+	rdram = NULL;
+	if (file_exists(RDRAM_1M_PATH)) {
+		sys_mem_addr_t addr = 0;
+		if (sysMemoryAllocate(SALSA64_RDRAM_MAX, SYS_MEMORY_PAGE_SIZE_1M, &addr) == 0)
+			rdram = (uint8_t *)(uintptr_t)addr;
+		salsa64_log("RDRAM con sysMemoryAllocate de 1 MB (rdram-1m): %s", rdram ? "bien" : "FALLO, por el heap");
+	}
+	if (!rdram)
+		rdram = memalign(128, SALSA64_RDRAM_MAX);
 	for (int i = 0; i < SNAP_SLOTS; i++)
 		snap_buf[i] = memalign(128, SNAP_BYTES);
 	sys_sem_attr_t sem_attr = { SYS_SEM_ATTR_PROTOCOL, SYS_SEM_ATTR_PSHARED, 0, 0, 0, "wake" };
@@ -1907,6 +2497,10 @@ int main(void)
 		salsa64_log_shutdown();
 		return 1;
 	}
+	/* Efectos de framebuffer: copias RSX → RDRAM y el despertar del hilo de
+	 * presentación cuando una tarea las necesita (docs/framebuffer.md). */
+	salsa64_rdp_set_memory(rdram, SALSA64_RDRAM_MAX, wake);
+	salsa64_rdp_set_log(salsa64_log);
 	ioPadInit(7);
 	load_padmap();
 	sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, sysutil_cb, NULL);

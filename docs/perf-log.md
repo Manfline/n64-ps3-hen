@@ -28,6 +28,60 @@ antes, después, notas.
 | 2026-10-11 | 3b95776 | **HLE de la tarea JPEG de Zelda OoT** en la PS3, dos salas (tienda Kokiri y casa de Link) | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00091 «Salsa64 Kokiri», respaldo del usuario | antes: fondo sin dibujar (malla en colores planos) | **67,8 y 67,3 ms del PPE por sala**; ventana de la carga 57,3–57,6 campos/s, peor campo 37–39 ms de emulación | ~110 veces lo de la Mac: flotantes y conversiones a entero por memoria en el PPE. Se queda en el PPE (una vez por sala, durante la transición); pendiente pasarlo a punto fijo |
 | 2026-10-11 | (rama fervent-hodgkin) | **HLE de la tarea JPEG de Zelda OoT** (fondos prerrenderizados), una sala: 75 tareas, 300 macrobloques | Mac (salsa64-run nativo, Apple Silicon) | antes: las tareas terminaban sin hacer nada (fondo basura) | **0,61 ms por sala** en el hilo del CPU, una vez al cargarla | Corre en el PPE (`core/rsp.c`); IDCT separable en flotante sin optimizar. El frontend escribe «JPEG: N tareas, M macrobloques en X ms del PPE» al terminar cada tanda: con esa medida se decide si se queda en el PPE o va a un SPE. El fondo se copia en el SPE 0 (40 tiras por cuadro, reutilizadas por la caché de texturas) |
 
+## Estados guardados (2026-10-11)
+
+PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), paquete SLSA00094 «Salsa64
+estados», recompilador y efectos de framebuffer activos, 720p, juegos
+abiertos desde el menú. Tiempos que escribe el frontend en el log
+(«estado: guardado/cargado … ms»), desde la barrera hasta el archivo
+cerrado (docs/estados.md):
+
+| Operación | Veces | Media | Mín – máx | Disco | Notas |
+|---|---|---|---|---|---|
+| Guardar (~8,1 MB) | 14 | 568 ms | 417 – 1064 ms | 520 ms de media escribiendo (~16 MB/s) | Zelda, SM64, Mario Kart, GoldenEye, Perfect Dark. La miniatura cuesta 10 ms (19 200 lecturas del búfer del RSX); el estado de las HLE en los SPE, < 1 ms |
+| Cargar | 19 | 171 ms | 148 – 183 ms | 161 ms de media leyendo (~50 MB/s) | Lo demás (secciones, vaciar el recompilador, soltar destinos) ~10 ms |
+
+Lo que pesa es escribir 8 MB en el disco duro: si molesta, el próximo paso
+es comprimir (la RDRAM de 8 MB suele tener la mitad en ceros) o escribir
+desde otro hilo.
+
+Contador de velocidad (SELECT + △) encendido: GoldenEye en la presa a 45–49
+campos/s, como sin contador (45,8 en «Efectos de framebuffer» y 49,4 en el
+A/B del recompilador); Zelda, SM64 y Mario Kart a 59,4–60 campos/s. El
+dibujo del contador y del aviso cuesta < 0,2 ms por cuadro presentado en el
+hilo de presentación (presentación 0,2–0,6 ms por cuadro con él, igual que
+antes).
+
+## Efectos de framebuffer (2026-10-11)
+
+Rama hopeful-dirac (docs/framebuffer.md). Lo que cuesta cada mecanismo lo
+escribe el frontend cada 5 s («gfx: framebuffer: N copias a la RDRAM (ms
+c/u en presentación), la emulación esperó N tareas (ms c/u, N tarde), N
+copias espejo, N cuadros copiados; texturas desde un destino: del RSX, de
+la RDRAM, del ligado; destinos cebados; copias perdidas, destinos sin
+superficie, color images imposibles»). Interruptor:
+`SALSA64_DATA_DIR/fbfx.cfg` (`0` apaga todo, `1` solo render a textura,
+`2` todo, por omisión).
+
+**RPCS3** (0.0.43; no vale para tiempos): gfxtest 35 de 35; 122 copias de
+320 × 240 en 120 cuadros, 2,05 ms cada una en presentación. Sirve solo
+para saber que el mecanismo funciona de punta a punta.
+
+**PS3 real** (2026-10-11, Slim CECH-3011A, HFW 4.91 + HEN, app SLSA00089
+«Salsa64 framebuffer», 720p a 3×; logs fuera del repo):
+
+| Juego | Escena | Campos/s | Copias a la RDRAM (esperadas por la emulación) | Espejos | Notas |
+|---|---|---|---|---|---|
+| gfxtest | 35 de 35 puntos | — | 1 por cuadro (la imagen de 64 que lee el CPU): 6,7–6,9 ms c/u en presentación; la emulación esperó 7,4–7,9 ms por tarea | 2 por cuadro | Un caso artificial que copia en cada cuadro: el peor costo posible |
+| Zelda OoT | bosque Kokiri, un minuto | 59,8 (100 %) | 0 | 0 | Emulación 4,0 ms por campo, igual que antes; 225–290 cuadros copiados por 5 s (espejo del framebuffer, 0,0 ms medidos) |
+| Zelda OoT | abrir la pausa | — | el fondo (320 × 240): 16 ms; y 4 chicas (64 × 112): Link, su z, su copia y la cobertura | — | Una vez por pausa; la N64 tarda ~1 s en filtrar el fondo |
+| Zelda OoT | pausa abierta (paquete con 16 superficies) | 59,9 (100 %) | 2 por tarea (Link y su z, redibujados cada tarea aunque nadie los lea): 7,4–8,4 ms c/u; la emulación esperó 16–24 ms por tarea | 0 | 44 texturas por tarea desde la RDRAM (las franjas del fondo y Link). El paquete final espera esas copias solo las dos primeras tareas: por medir |
+| Mario Kart 64 | Luigi Raceway, túnel | 60 | 0 | 0 | La cámara del túnel se ve gracias al espejo del framebuffer por campo |
+| SM64 | castillo exterior, un minuto | 59,8 (100 %) | 1 al arrancar (12 ms) | 0 | |
+| GoldenEye | Dam, un minuto | 45,8 (76 %) | 0 | 0 | Dentro del rango previo del nivel (34–55: va por el CPU); 225–229 cuadros copiados por 5 s, 0,0 ms por campo en presentación |
+| Banjo-Kazooie | intro y Spiral Mountain | 56–57 | 0 | 0 | Igual que antes |
+| Conker | intro, 3 minutos | 59,8 | 1–2 por ventana de 5 s (una color image de 292 que se dibuja cada tarea y no se presenta: la primera se espera, las demás van sin esperar) | muchas | Igual que antes |
+
 ## Caché de texturas (2026-10-10)
 
 **PS3 real** (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00070 «Salsa64
@@ -489,6 +543,195 @@ El RESULTADO de esa corrida dice FALLO por 4 verificaciones de cobertura
 («corrió en nativo») que fallan a propósito en la variante `RARE_EXEC`;
 las comparaciones de resultados pasaron en las tres variantes. Corregido
 después (las verificaciones no aplican con esa opción).
+
+### Recompilador: perfil por causa y salidas a C (2026-10-11)
+
+Perfil nuevo (`src/cpu/rec_prof.h`, docs/rec-ppe.md «Perfil por causa»).
+Primero las **cuentas** en qemu (no miden el Cell, pero dicen cuántas veces
+pasa cada cosa), GoldenEye NTSC hasta la presa con `docs/pads/goldeneye-dam.pad`
+(`SALSA64_REC_PROF=600`, 12 000 M ciclos = 128 s de consola), ventana de
+campos 4800–5400 (en juego), por campo:
+
+| | Antes (main 23a3289) | Después | |
+|---|---|---|---|
+| Entradas desde C al código generado | 1591 | 841 | −47 % |
+| Llamadas a C desde el código | 2109 (CACHE 1006, COP0 690, FPU 160, E/S 254) | 2589 (COP0 2173, FPU 162, E/S 254) | los COP0 que antes corría el intérprete «a mitad» ahora son llamadas |
+| Instrucciones interpretadas en el despachador | 13 872 (13 381 «a mitad», tras un COP0) | 507 (359 fallas de TLB al buscar código, 112 bloques sin compilar) | −96 % |
+| Traducciones de la TLB (`vt_probes`) | ~14 000 (109 M en 128 s) | 360 revisiones selectivas (3,5 M en 128 s) | |
+| Salidas por JR sin bloque a mano | 824 | 348 | la cadena de xhash y el prellenado de `ktlb` |
+| Salidas por ERET/excepción | 37 | 397 | el ERET ya no lo corre el intérprete |
+| Tiempo de qemu, 128 s de consola | 181,6 s | 165,4 s | orientativo |
+
+Perfect Dark (intro, 64 s de consola), total por campo: 3163 cargas y 201
+almacenamientos por C a direcciones mapeadas por la TLB (sus datos en una
+página de 4 MB en 0x70000000), 770 CACHE, 200 COP0.
+
+**Bloques, código y vaciados** (misma corrida de GoldenEye, 128 s; el
+perfil por bloque pesa por ejecuciones):
+
+| Estado | Bloques compilados | Instrucciones por bloque | Vaciados de la caché | Compilaciones por campo en la presa |
+|---|---|---|---|---|
+| main (antes) | 101 910 | 5,3 | 7 (16 MB) | 22 |
+| + bloques desprendidos | 40 851 (28 206 enganchados de vuelta) | 5,3 | 3 | 0,7 |
+| + superbloques | 131 228 | 11,8 | 17 (16 MB: ~900 bytes de PPC por bloque) | — |
+| + rutinas de ktlb y caché de 24 MB | 26 243 | 11,8 | 2 | — |
+| + camino lento compartido | 24 901 | 11,9 | 2 (10,3 MB al final; el segundo al cargar la presa) | 0,6 |
+
+Perfect Dark con lo mismo (64 s): 16,1 instrucciones por bloque (5,2 de
+memoria), 2 vaciados con 24 MB antes del camino lento compartido.
+
+**PS3 real** (Slim CECH-3011A, HFW 4.91 + HEN; paquete SLSA00088 «Salsa64
+JIT» con main fusionado, `perfil` puesto; el A/B es con el mismo binario:
+`jit-viejo` repite el comportamiento anterior). GoldenEye NTSC en la presa,
+~2 min de juego cada uno (ventanas de 5 s del log, resumidas con
+`tools/jit-perfil.py`; las escenas no son idénticas, por eso también el
+tiempo por instrucción ejecutada):
+
+| | Camino viejo (`jit-viejo`) | Nuevo | |
+|---|---|---|---|
+| Campos/s en la presa | 33–59, media **43,0** (72 % de NTSC) | 41–59, media **49,4** (83 %) | +15 % |
+| MIPS (sin bucles de espera) | 37,5 | 50,6 | +35 % |
+| Emulación por campo | 22,7 ms | 20,1 ms | |
+| … nativo | 13,7 | 16,0 | igual por instrucción (15,7 vs 15,6 ns) |
+| … llamadas a C | 0,6 | 1,9 | los COP0 que antes corría el intérprete «a mitad» |
+| … intérprete | 2,8 | 0,8 | |
+| … eventos | 0,5 | 0,5 | |
+| … compilar | 0,3 | 0,3 | |
+| … ktlb (revisar tras la TLB) | 3,8 | 1,0 | |
+| … despachador | 1,0 | 0,0 | |
+| Tiempo por instrucción ejecutada | 26,0 ns | 19,6 ns | −25 % |
+| Bloques compilados / vaciados (≈110 s) | 67 988 / 2 | 35 913 / 2 | |
+| Traducciones de la TLB | 132,7 M | 4,4 M | |
+| Instrucciones interpretadas | 68,8 M | 7,7 M | |
+
+Lo que dice el desglose nuevo: **el código nativo es el 80 % del tiempo y
+cuesta ~50 ciclos del PPE por instrucción MIPS** (15,6 ns); los
+superbloques no bajaron ese costo por instrucción. Lo demás ya es chico:
+llamadas a C 1,9 ms (COP0 del refill: 2200 por campo), ktlb 1,0 ms (las
+~360 escrituras de la TLB por campo: la sincronía selectiva compara 32
+entradas y prellena con la búsqueda lineal; se puede traducir directo
+desde la entrada escrita), intérprete 0,8. Los 2 vaciados en ~110 s son
+por tamaño (23 MB de los 24): cada uno recompila el conjunto vivo. Siguiente
+objetivo: el costo por instrucción del nativo (FPU por memoria, registros
+entre bloques).
+
+Sin regresión en los ligeros con el mismo paquete (un minuto o más de
+juego cada uno, PS3 real): Zelda OoT 59,4 campos/s de media (99–100 %,
+emulación 7,7 ms por campo, 58 ventanas), Super Mario 64 59,5 (100 %, 5,4
+ms, 70 ventanas), Mario Kart 64 59,4 (100 %, 5,9 ms, 34 ventanas); los tres
+con «salida normal» y «cierre: estado limpio». Con `jit-viejo`, la primera
+corrida se quedó en negro: el preámbulo cortaba antes de las rutinas
+compartidas nuevas (arreglado; el camino viejo queda validado en qemu con
+nemu64-test y GoldenEye).
+
+### FPU residente, sin microcódigo, COP0 con rutinas y caché por tramos (2026-10-11, rama jovial-jones)
+
+Lo que cambia en el código nativo (docs/rec-ppe.md «Lo que el PPE hace en
+microcódigo», «FPU residente», «COP0 sin el intérprete», «Desalojo por
+tramos»), y por qué debería bajar los ~50 ciclos por instrucción:
+
+| Pieza | Antes (por instrucción afectada) | Ahora |
+|---|---|---|
+| ANDI de MIPS | `andi.` (microcódigo: ≥ 11 ciclos, vacía el pipeline) | `rlwinm` (1) o `li`+`ori`+`and` (3) |
+| Entrada de un bloque con COP1 | `andis.` (≥ 11) | `rlwinm`+`cmpwi` (2) |
+| Salida a C | `mtcrf 0x38` (microcódigo, 9 micropalabras) | 3 `mtocrf` (3) |
+| ADD.S en la franja, inexacto | ~40 palabras, 2 cargas de bits + 2 de valor, `andi.`, FCR31 leído, modificado y guardado, TwoSum o prueba de exponentes: ~90 ciclos (bench) | ~27 palabras sin cargas ni almacenamientos de FCR31: fabs×2, 6 fcmpu, op, frsp, 2 fsub, 3 fcmpu, crops; FCR31 se escribe al salir del bloque |
+| ADD.D | TwoSum: 5 operaciones dependientes (~50 ciclos de latencia) | dos restas independientes y dos comparaciones (~23) |
+| LWC1 → operación dependiente | `stw` a casa + `lwz`/`lfs` de casa (load-hit-store) | `lfsx` directo de la RDRAM al registro residente |
+| MTC0 EntryLo (×2 por refill) | exec_one + x_sync (~2800 ciclos cada llamada en la PS3, 2200 por campo) | 3 palabras |
+| TLBWR | exec_one + comparar 32 entradas + compactar `live[]` | rutina propia: solo esa entrada |
+| ERET | exec_one + redirect + despachador (buscar el bloque, entrar) | rutina propia + `exit_jr` al bloque destino |
+| Caché llena | vaciado completo: ~7000 bloques recompilados de golpe (campos de 52 ms) | desalojo del tramo más viejo (1/8 de 32 MB) |
+
+En qemu las cuentas del perfil (llamadas a C, instrucciones interpretadas)
+no cambian con la FPU residente: el dominio del camino rápido es el mismo
+y solo cambia lo que cuesta cada operación, que qemu no mide. GoldenEye
+hasta la presa (128 s, `goldeneye-dam.pad`, caché de 24 MB del host), por
+campo, antes → con los ayudantes de COP0 y el desalojo por tramos:
+
+| | FPU residente (9d1eba0) | + COP0 y tramos (d719987) | + saltos internos (15d6724) |
+|---|---|---|---|
+| Llamadas a C | 1590 (COP0 1236, FPU 120, E/S 235) | 1016 (COP0 661, FPU 120) | 1016 |
+| Entradas desde C | 482 | 265 (el ERET sigue por `exit_jr`) | 264 |
+| Salidas por redirect (ERET, excepción) | 218 | 0 | 0 |
+| Instrucciones interpretadas | 578 | 578 | 578 |
+| Llamadas al intérprete en 128 s | 10,4 M | 6,0 M | 6,0 M |
+| Entradas en 128 s | 3,69 M | 2,03 M | 2,02 M |
+| Ejecuciones de bloques en 128 s | 643 M | 637 M | **509 M** (−21 %: los saltos internos ya no cortan) |
+| Bloques compilados / vaciados / desalojos | 26 581 / 2 / — | 20 819 / 1 / 10 | 17 308 / 1 / 8 |
+| Instrucciones por bloque | 11,9 | 12,0 | 12,3 |
+
+**PS3 real** (2026-10-11, noche; Slim CECH-3011A, HFW 4.91 + HEN; paquetes
+SLSA00093 «Salsa64 FPU» y SLSA00095 «Salsa64 CPU FPU» de la rama con main
+69051fc; A/B con archivos-bandera, `perfil` puesto). GoldenEye NTSC en la
+presa hasta el camión; costo por instrucción ejecutada en las ventanas
+pesadas (MIPS > 40, espera ≤ 35 %), `emulación × campos/s / MIPS`. La
+referencia de main es su log del A/B de la tarde (`salsa64-jit-nuevo.log`,
+misma escena), medido igual:
+
+| GoldenEye, presa (ns por instrucción) | main (ee146b6) | rama | rama, `jit-fpu-memoria` | rama, `jit-cop0-viejo` | rama, `jit-sin-tramos` |
+|---|---|---|---|---|---|
+| Total | 18,2 | 17,5 | 17,2 | 17,7 | 16,1 |
+| … código nativo | 14,6 (47 ciclos) | 14,7 (47) | 14,9 (48) | 13,9 (44) | 13,8 (44) |
+| … llamadas a C | 1,56 | **0,73** | 0,78 | 1,50 | 0,72 |
+| … ktlb | 0,78 | **0,20** | 0,21 | 0,74 | 0,19 |
+| … despachador | 0,00 | 0,22 | 0,20 | 0,00 | 0,21 |
+| Ventanas pesadas | 10 | 20 | 11 | 7 | 8 |
+| Campos/s en esas ventanas | 44,6 | 48,4 | 51,1 | 46,8 | 48,3 |
+
+- **Lo que se ve:** los ayudantes de COP0 bajan las llamadas a C y la ktlb
+  a la mitad o menos (−1,4 ns por instrucción; con `jit-cop0-viejo` vuelven
+  a lo de main). En total la rama queda ~4 % por debajo de main por
+  instrucción (18,2 → 17,5).
+- **Lo que no se ve:** el código nativo sigue en ~47 ciclos del PPE por
+  instrucción MIPS con o sin la FPU residente, sin microcódigo y con saltos
+  internos. Las diferencias entre corridas del mismo binario (13,8–14,9 ns)
+  son de escena. El nativo no está limitado por las instrucciones que se
+  emiten: GoldenEye tiene ~7000 bloques vivos (~7 MB de código PPC) contra
+  512 KB de L2 (fallos de caché de instrucciones y de L2 en casi cada
+  bloque); el siguiente paso es el tamaño y la localidad del código, no
+  instrucción por instrucción.
+- **Desalojo por tramos:** en 5,7 min de la corrida 1, 38 desalojos y 1
+  vaciado (por ids agotados: 98 000 bloques compilados); los peores campos
+  (150–300 ms) son pantallas de carga en todas las corridas, también sin
+  tramos. Las corridas cortas no llegan a llenar los 32 MB.
+- **Páginas** (log al arrancar, syscall 351): la RDRAM ya está en páginas
+  de 1 MB (heap de PSL1GHT); `struct salsa64_rec`, `n64` (en .bss) y la
+  caché de código en páginas de 64 KB; la pila en 4 KB. `rdram-1m` no tiene
+  qué ganar y no se midió. La caché (32 MB) son 512 páginas de 64 KB, más
+  que el ERAT de instrucciones del PPE: otro motivo para achicar el código.
+
+**Bench del recompilador** (cpu-tests, mismo paquete, variante con la FPU
+residente y la de omisión; registros fijos):
+
+| bench | antes de la rama (e210aeb) | FPU por memoria (omisión) | FPU residente |
+|---|---|---|---|
+| mixto | 156,6 MIPS | **168,2** | 135,1 |
+| add.s | 35,7 | **40,0** | 30,9 |
+| cvt | 40,7 | **50,6** | 45,7 |
+| enteros / memoria / mov.s | 750 / 160 / 538 | 733 / 160 / 525 | 743 / 159 / 529 |
+| nemu64-test | ×4,47 | **×4,28** | ×4,20 |
+
+La FPU residente es **más lenta** (add.s −23 %, mixto −20 %): cada `fcmpu`
+que alimenta un salto o un crop espera toda la latencia de la FPU, y `fabs`
+agrega 10 ciclos a la clasificación; el camino por memoria clasifica en
+enteros (2 ciclos) y solo espera a la FPU en la comparación del inexacto.
+**Queda apagada por omisión** (`SALSA64_REC_OPT_FPU_RES`, archivo
+`jit-fpu-residente` en la PS3, para retomarla). Lo que sí suma es quitar el
+microcódigo: con la FPU por memoria, mixto 156,6 → 168,2 (+7 %), add.s
+35,7 → 40,0 (+12 %), cvt 40,7 → 50,6 (+24 %).
+
+Sin regresión en el resto (un minuto o más cada uno, sin banderas, FPU
+residente, comparado con los logs de main de la tarde):
+
+| Juego | campos/s main → rama | emulación por campo | nativo por instrucción |
+|---|---|---|---|
+| Zelda OoT (9 min) | 59,4 → 59,6 | 7,7 → 6,1 ms | 14,5 → 13,9 ns |
+| Super Mario 64 | 59,5 → 59,6 | 5,4 → 4,9 ms | 14,5 → 13,6 ns |
+| Mario Kart 64 | 59,4 → 59,6 | 5,9 → 5,6 ms | 13,3 → 12,4 ns |
+| Perfect Dark (un nivel) | — | 7–20 ms | 49–50 campos/s al final por el RSP: 14 ms por campo esperando al SPE de la HLE gráfica (~4500 triángulos y 131 texturas decodificadas por tarea); el CPU usa 4,5 ms |
+
+Logs en `build/ps3-logs/` de la rama (fpu-1 … fpu-8, cpu-fpu-bench*).
 
 ### Bench del intérprete tras traer la Fase 2: 21 → 14,7 MIPS (diagnóstico, 2026-10-10)
 

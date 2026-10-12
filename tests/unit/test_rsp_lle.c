@@ -382,7 +382,7 @@ static uint32_t hle_finish(void *ctx)
 	return 0;
 }
 
-static const struct salsa64_gfx_backend hle_backend = { NULL, hle_start, hle_finish, NULL };
+static const struct salsa64_gfx_backend hle_backend = { .start = hle_start, .finish = hle_finish };
 
 static void task_gfx(uint32_t ucode_data, const char *text)
 {

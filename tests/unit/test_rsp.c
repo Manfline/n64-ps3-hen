@@ -79,7 +79,7 @@ static uint32_t fake_finish(void *ctx)
 	return fake_flags;
 }
 
-static const struct salsa64_gfx_backend fake_backend = { NULL, fake_start, fake_finish, NULL };
+static const struct salsa64_gfx_backend fake_backend = { .start = fake_start, .finish = fake_finish };
 
 /* Backend que tarda: `done` dice que no las primeras `fake_busy` veces y
  * anota si el núcleo le avisó que el CPU estaba en un bucle de espera. */
@@ -93,7 +93,7 @@ static bool fake_done(void *ctx, bool idle)
 	return fake_busy-- <= 0;
 }
 
-static const struct salsa64_gfx_backend slow_backend = { NULL, fake_start, fake_finish, fake_done };
+static const struct salsa64_gfx_backend slow_backend = { .start = fake_start, .finish = fake_finish, .done = fake_done };
 
 static void put_task(uint32_t type, uint32_t ucode_data, uint32_t dl)
 {

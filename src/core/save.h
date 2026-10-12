@@ -125,6 +125,8 @@ int salsa64_save_parse_config(const char *text, size_t len, const uint8_t *rom, 
 /* Archivo del guardado: "<título>-<CRC1>.<eep|sra|fla>", con el título del
  * encabezado reducido a letras, dígitos y '_'. */
 void salsa64_save_filename(const uint8_t *rom, enum salsa64_save_type type, char *buf, size_t size);
+/* El mismo nombre sin extensión (también el de los estados guardados). */
+void salsa64_save_basename(const uint8_t *rom, char *buf, size_t size);
 
 /* Comandos joybus del canal 4 (pif.c): respuesta en `reply` (hasta 8
  * bytes) y su longitud, o -1 si no hay EEPROM que conteste. */

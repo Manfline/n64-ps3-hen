@@ -37,6 +37,9 @@ int audio_out_init(struct salsa64_n64 *n64);
 /* Una vez por campo, desde el hilo principal: estadísticas al log cada 5 s. */
 void audio_out_field(uint64_t now_us);
 void audio_out_shutdown(void);
+/* Lo que espera en la cola de salida ya no suena (estado guardado cargado).
+ * Desde el hilo de emulación o con él quieto. */
+void audio_out_flush(void);
 /* Para las autopruebas: lo que pasó por la salida. */
 const struct audio_sync_stats *audio_out_stats(void);
 /* Bloques del puerto llenados por el hilo de audio. */

@@ -17,6 +17,99 @@ void rdp_targets_init(struct rdp_targets *s)
 	s->vi_width = 320;
 }
 
+uint32_t rdp_surface_bytes(uint32_t w, uint32_t h)
+{
+	return ((w * 4 + 127) & ~127u) * h;
+}
+
+uint32_t rdp_vram_worst(uint32_t scale)
+{
+	uint32_t w, h;
+	rdp_surface_max(scale, &w, &h);  /* a 1× una de 640 × 480 queda nativa */
+	return RDP_SURFACES_MAX * rdp_surface_bytes(w, h);
+}
+
+void rdp_surface_max(uint32_t scale, uint32_t *w, uint32_t *h)
+{
+	*w = 320 * scale > 640 ? 320 * scale : 640;
+	*h = 240 * scale > 480 ? 240 * scale : 480;
+}
+
+bool rdp_zeta_reserve(uint32_t scale, uint32_t screen_w, uint32_t screen_h, uint32_t *w, uint32_t *h)
+{
+	uint32_t mw, mh;
+	rdp_surface_max(scale, &mw, &mh);
+	if (mw <= screen_w && mh <= screen_h) {
+		*w = *h = 0;
+		return false;
+	}
+	*w = mw;
+	*h = mh;
+	return true;
+}
+
+void rdp_surface_rect(uint32_t scale, uint32_t x, uint32_t y, uint32_t w, uint32_t h, struct rdp_rect *out)
+{
+	if (!scale)
+		scale = 1;
+	out->x = x * scale;
+	out->y = y * scale;
+	out->w = w * scale;
+	out->h = h * scale;
+}
+
+void rdp_target_tex_map(uint32_t scale, uint32_t lw, uint32_t x0, uint32_t y0, uint32_t tex_w, uint32_t tex_h,
+			float xf0, float xf2, struct rdp_tex_map *out)
+{
+	if (!scale)
+		scale = 1;
+	out->row0 = y0 * scale;
+	out->rows = tex_h * scale;
+	float w = (float)tex_w, l = lw ? (float)lw : 1.0f;
+	out->xf0 = xf0 * w / l;
+	out->xf2 = ((float)x0 + xf2 * w) / l;
+}
+
+bool rdp_present_integer(uint32_t src_w, uint32_t src_h, uint32_t screen_w, uint32_t screen_h)
+{
+	if (!src_w || !src_h || src_w > screen_w || src_h > screen_h)
+		return false;
+	uint32_t k = screen_h / src_h;
+	return src_h * k * 4 >= screen_h * 3;
+}
+
+uint32_t rdp_target_scale(uint32_t global, uint32_t lw, uint32_t lh)
+{
+	uint32_t s = lh ? 240 * global / lh : 1;
+	if (s > RDP_SCALE_MAX)
+		s = RDP_SCALE_MAX;
+	while (s > 1 && (lw * s > 4096 || lh * s > 4096))
+		s--;
+	return s ? s : 1;
+}
+
+uint32_t rdp_scale_pick(uint32_t requested, uint32_t screen_h, bool *reduced)
+{
+	return rdp_scale_pick_budget(requested, screen_h, RDP_VRAM_BUDGET, reduced);
+}
+
+uint32_t rdp_scale_pick_budget(uint32_t requested, uint32_t screen_h, uint32_t budget, bool *reduced)
+{
+	uint32_t s = requested;
+	if (!s)
+		s = screen_h >= 240 ? screen_h / 240 : 1;
+	if (s > RDP_SCALE_MAX)
+		s = RDP_SCALE_MAX;
+	bool cut = false;
+	while (s > 1 && rdp_vram_worst(s) > budget) {
+		s--;
+		cut = true;
+	}
+	if (reduced)
+		*reduced = cut;
+	return s;
+}
+
 static bool stale(const struct rdp_targets *s, const struct rdp_target *t)
 {
 	return s->field - t->last_field > RDP_TARGETS_STALE;
@@ -56,6 +149,7 @@ int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32
 			 * ahora se pierde; pasa una vez). */
 			t->lh = lh;
 			t->drawn = false;
+			t->mirrored = true;
 			s->created++;
 			*fresh = true;
 			return i;
@@ -77,12 +171,17 @@ int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32
 	struct rdp_target *t = &s->t[i];
 	t->used = true;
 	t->drawn = false;
+	t->presented = false;
+	t->cpu_owned = false;
+	t->mirrored = true;  /* nada dibujado aún que copiar a la RDRAM */
 	t->addr = addr;
 	t->width = width;
 	t->bpp = siz == IM_SIZ_32b ? 4 : siz == IM_SIZ_8b ? 1 : 2;
+	t->fmt = 0;
 	t->lw = lw;
 	t->lh = lh;
 	t->last_field = s->field;
+	t->last_task = s->task;
 	s->created++;
 	*fresh = true;
 	return i;
@@ -93,7 +192,126 @@ void rdp_targets_drawn(struct rdp_targets *s, int slot)
 	if (slot < 0 || slot >= RDP_TARGETS_MAX)
 		return;
 	s->t[slot].last_field = s->field;
+	s->t[slot].last_task = s->task;
 	s->t[slot].drawn = true;
+	s->t[slot].cpu_owned = false;  /* el RDP volvió a escribir: la verdad está en el RSX */
+	s->t[slot].mirrored = false;
+}
+
+void rdp_targets_task(struct rdp_targets *s)
+{
+	s->task++;
+}
+
+enum rdp_texsrc rdp_targets_texture(struct rdp_targets *s, uint32_t addr, uint32_t pitch, uint32_t bpp, int cur,
+				    int *slot, uint32_t *x0, uint32_t *y0)
+{
+	int i = rdp_targets_locate(s, addr, pitch, bpp, x0, y0);
+	*slot = i;
+	if (i < 0)
+		return RDP_TEXSRC_NONE;
+	const struct rdp_target *t = &s->t[i];
+	if (t->cpu_owned || s->task - t->last_task > RDP_TARGETS_FRESH) {
+		s->tex_rdram++;
+		return RDP_TEXSRC_RDRAM;
+	}
+	if (i == cur) {
+		s->tex_self++;
+		return RDP_TEXSRC_SELF;
+	}
+	s->tex_rsx++;
+	return RDP_TEXSRC_RSX;
+}
+
+bool rdp_targets_readback(struct rdp_targets *s, int slot, bool force)
+{
+	if (slot < 0 || slot >= RDP_TARGETS_MAX || !s->t[slot].used)
+		return false;
+	struct rdp_target *t = &s->t[slot];
+	if (!force) {
+		if (t->presented || t->bpp != 2 || t->width != s->vi_width)
+			return false;
+	}
+	t->cpu_owned = true;
+	s->readbacks++;
+	return true;
+}
+
+bool rdp_targets_mirror_wanted(const struct rdp_targets *s, int slot)
+{
+	return slot >= 0 && slot < RDP_TARGETS_MAX && s->t[slot].used && !s->t[slot].mirrored;
+}
+
+bool rdp_targets_mirror_at_task_end(const struct rdp_targets *s, int slot)
+{
+	if (!rdp_targets_mirror_wanted(s, slot))
+		return false;
+	const struct rdp_target *t = &s->t[slot];
+	return t->presented && t->bpp == 2 && t->width == s->vi_width;
+}
+
+void rdp_targets_mirrored(struct rdp_targets *s, int slot)
+{
+	if (slot >= 0 && slot < RDP_TARGETS_MAX)
+		s->t[slot].mirrored = true;
+}
+
+void rdp_vi_ring_push(struct rdp_vi_ring *r, uint32_t origin, uint32_t width)
+{
+	if (!width)
+		return;
+	for (uint32_t k = 0; k < RDP_VI_RING && k < r->n; k++)
+		if (r->origin[(r->n - 1 - k) % RDP_VI_RING] == origin)
+			return;
+	r->origin[r->n % RDP_VI_RING] = origin;
+	r->width[r->n % RDP_VI_RING] = width;
+	r->n++;
+}
+
+bool rdp_vi_ring_covers(const struct rdp_vi_ring *r, uint32_t addr, uint32_t width)
+{
+	(void)width;
+	for (uint32_t k = 0; k < RDP_VI_RING && k < r->n; k++) {
+		uint32_t o = r->origin[(r->n - 1 - k) % RDP_VI_RING], w = r->width[(r->n - 1 - k) % RDP_VI_RING];
+		/* Un framebuffer empieza un poco antes del origen (líneas que el VI
+		 * no muestra) y mide unas 3/4 del ancho de alto. */
+		uint32_t line = w * 2, lo = o > 8 * line ? o - 8 * line : 0, hi = o + line * (w * 3 / 4);
+		if (addr >= lo && addr < hi)
+			return true;
+	}
+	return false;
+}
+
+bool rdp_readback_wanted(const struct rdp_vi_ring *r, uint32_t addr, uint32_t width, uint32_t siz)
+{
+	if (siz != 2u || !r->n || width != r->width[(r->n - 1) % RDP_VI_RING])
+		return false;
+	return !rdp_vi_ring_covers(r, addr, width);
+}
+
+int rdp_targets_locate(const struct rdp_targets *s, uint32_t addr, uint32_t pitch, uint32_t bpp, uint32_t *x0,
+		       uint32_t *y0)
+{
+	int best = -1;
+	uint32_t best_off = 0;
+	for (int i = 0; i < RDP_TARGETS_MAX; i++) {
+		const struct rdp_target *t = &s->t[i];
+		uint32_t line = t->width * t->bpp;
+		if (!t->used || t->width != pitch || t->bpp != bpp || !line || addr < t->addr ||
+		    addr >= t->addr + line * t->lh)
+			continue;
+		uint32_t off = addr - t->addr;
+		if (best < 0 || off < best_off) {
+			best = i;
+			best_off = off;
+		}
+	}
+	if (best < 0)
+		return -1;
+	uint32_t line = s->t[best].width * bpp;
+	*x0 = (best_off % line) / bpp;
+	*y0 = best_off / line;
+	return best;
 }
 
 /* ¿El destino cubre el origen del VI? Da la línea lógica donde cae. */
@@ -155,6 +373,8 @@ void rdp_targets_present(struct rdp_targets *s, const struct salsa64_vi_frame *f
 	s->shown = best;
 	s->shown_origin = f->origin;
 	s->shown_field = field;
+	if (best >= 0)
+		s->t[best].presented = true;
 	out->slot = best;
 	out->y0 = out->w = out->h = out->age = 0;
 	if (best < 0)

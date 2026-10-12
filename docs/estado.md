@@ -1,5 +1,463 @@
 # Estado
 
+## 2026-10-11 — Estados guardados con 10 ranuras por juego y contador de FPS (rama `wonderful-blackwell-6f40d3`, paquete SLSA00094 «Salsa64 estados»)
+
+Hecho (diseño y decisiones en docs/estados.md):
+
+- **Núcleo portable** (`src/core/state.c`): cabecera de 64 bytes (magia,
+  versión, CRC1/CRC2 y tamaño de la ROM, título, RDRAM, campo) y secciones
+  «etiqueta + largo» descritas con una sola función para guardar y cargar,
+  en big-endian: el mismo archivo sirve en la PS3 y en `salsa64-run`. CPU con
+  COP0, TLB y FPU; planificador; MI, SP, DP, VI, AI, PI, RI, SI y la tarea del
+  RSP en curso; DMEM/IMEM; PIF; guardado del cartucho; estado de las HLE
+  gráfica (RDP + TMEM) y de audio (DMEM, ABI, MP3) entre tareas, también en
+  los SPE (trabajos nuevos); miniatura de 160 × 120; RDRAM al final sin
+  comprimir. Secciones cortas cargan con ceros (para crecer), versiones
+  viejas o nuevas, otro juego u otra RDRAM se rechazan con un mensaje.
+- **La tarea del RSP en vuelo** se recoge antes de guardar sin adelantar su
+  fin emulado (`salsa64_rsp_quiesce`): el estado sale en cualquier campo y
+  la continuación es idéntica.
+- **PS3** (`src/frontend/states.c`, `main.c`): SELECT + R1 guarda, SELECT +
+  L1 carga, SELECT + izquierda/derecha cambia de ranura (esos botones no
+  llegan al juego con SELECT apretado); `/dev_hdd0/salsa64/states/<título>-
+  <CRC1>.st0…st9`, escritos con sysFs a un .tmp y renombrados. Barrera en el
+  límite del campo: emulación recoge la tarea, encola el campo y espera;
+  presentación presenta lo que queda (miniatura), espera al RSX y guarda o
+  carga; al cargar vacía la caché del recompilador, suelta los destinos del
+  RSX (`salsa64_rdp_drop_targets`, sin tocar la numeración de las tareas) y
+  vacía la cola de audio con su transición (`audio_sync_flush`). Aviso de
+  ~2 s abajo en la pantalla (`src/frontend/osd.c`, rsxkit/ui).
+- **Contador de FPS** (pedido de la coordinación): «VI 59,9 (100 %) · juego
+  30 · pantalla 60», promedio de 0,5 s, contado solo en el hilo de
+  presentación; SELECT + △ y fila «Mostrar FPS» en Opciones; se recuerda en
+  menu.cfg (`fps = si|no`).
+- **Host**: `salsa64-run --state-save CAMPO:ARCHIVO`, `--state-load ARCHIVO`
+  (con `--lockstep` también la referencia) y `--fields N`.
+
+Pruebas:
+- Determinismo (guardar en N, cargar en otra corrida y seguir hasta M contra
+  de corrido: estado byte por byte e imágenes iguales): unitarias
+  (`test_state.c`, también con el recompilador), `tools/test-roms.sh`
+  (gfxtest, vitest, audiotest), `tools/test-rec.sh` (gfxtest con `--rec` =
+  intérprete) y respaldos propios en el host: Zelda (intro y Kokiri), SM64
+  (intro y castillo), GoldenEye (intro y la presa) y Mario Kart: idénticos.
+- RPCS3 (`tools/rpcs3-run.py --estados A,B`: guarda en A, carga en B y la ROM
+  de prueba se tiene que verificar después): vitest, gfxtest y audiotest OK,
+  cierre limpio (RPCS3 no sirve para medir los tiempos).
+- `tools/build.sh test-host` 383/383 (con main); `tools/test-roms.sh` verde;
+  `tools/test-rec.sh --lockstep` verde (unitarias en los cuatro modos,
+  nemu64-test con la línea base, estados con `--rec` = intérprete, y
+  `--lockstep` sin diferencias en nemu64-test, vitest y gfxtest desde un
+  estado cargado); `tools/test-phase2.sh` verde; `tools/build.sh` (todos los
+  programas) sin avisos. El SPE gráfico solo copia tal cual el tramo del
+  estado del RDP y el PPE arma el formato: 0,2 KB de código, la pila queda en
+  ~9,9 KB (main con los efectos de framebuffer: ~10,2 KB; la cadena más honda
+  usa ~8 KB).
+- Con los efectos de framebuffer de main: la barrera espera las copias RSX →
+  RDRAM en vuelo y las escribe antes de guardar o cargar
+  (`salsa64_rdp_settle`), y al cargar se olvidan también el scratch, los
+  espejos y el historial de copias (`salsa64_rdp_drop_targets`). La prueba
+  de determinismo de gfxtest corre con el rasterizador en las tres corridas
+  (copias espejo y a la RDRAM leídas por el CPU en cada tarea): idéntica; en
+  el host con respaldos, también la pausa de Zelda (16090 → 16300), el túnel
+  de Mario Kart, la presa de GoldenEye y SM64 (del logo a la cara de Mario y
+  el castillo, tras el arreglo de main de la copia del framebuffer, que
+  esta prueba encontró: el rasterizador del host dejaba de dibujar SM64 a
+  las 96 tareas). La marca de «ya copiado» de cada destino se reinicia al
+  cargar; lo dibujado que todavía no se copió no entra en el estado
+  (docs/estados.md, «Lo que no entra en un estado»).
+
+**PS3 real (2026-10-11, noche): funciona.** Guardar y cargar en Zelda,
+SM64, Mario Kart, GoldenEye (ranuras 0 y 1 independientes) y Perfect Dark;
+cargar después de volver al menú y reabrir el juego; «No hay estado en la
+ranura N» y «Ranura N (vacía)» donde corresponde; cierre limpio cada vez.
+Guardar 568 ms de media (casi todo escribir 8 MB en el disco), cargar 171
+ms (docs/perf-log.md, «Estados guardados»). El contador no cambia los
+campos/s (GoldenEye en la presa 45–49 con él, como sin él).
+
+La primera prueba colgó la consola entera al guardar: la traza por UDP
+paró justo antes de crear la carpeta `states`. Las funciones `sysFs*` de
+libsysfs son puentes al módulo cellFs del sistema, que hay que cargar con
+sysModuleLoad; sin cargarlo, en RPCS3 andan igual y en la PS3 real cuelgan
+todo. Ahora la E/S va con las llamadas al kernel (`sysLv2Fs*`,
+`<sys/file.h>`), como newlib.
+
+## 2026-10-11 — Recompilador: FPU residente, sin microcódigo del PPE, COP0 con rutinas propias y caché por tramos (rama `jovial-jones-2408ac`, paquete SLSA00093 «Salsa64 FPU»)
+
+Objetivo: bajar los ~50 ciclos del PPE por instrucción MIPS del código
+nativo (GoldenEye en la presa, 49,4 campos/s). Hecho en el host y en qemu;
+la medición en la PS3 queda para cuando haya turno (cola: estados guardados,
+después esta rama). Diseño en docs/rec-ppe.md.
+
+- **Microcódigo del PPE** (manual del Cell, tabla A-1/A.1.3): toda forma con
+  punto (`andi.`, `andis.`…), los desplazamientos por registro, `mcrfs` y
+  `mtcrf` de varios campos cuestan ≥ 11 ciclos y vacían el pipeline; `mfcr`
+  ~34. El emisor usaba `andi.` en cada ANDI de MIPS y en la compuerta de
+  cada operación de la FPU, `andis.` a la entrada de cada bloque con COP1 y
+  `mtcrf 0x38` en cada salida a C. Fuera (rlwinm, li+ori+and, mtocrf).
+- **FPU residente** (`src/cpu/rec_emit_fpu.h`): los 12 `cpu->fpr[p]` más
+  usados del bloque en f14–f25, casa siempre al día, clasificación con
+  `fabs` y `fcmpu` contra constantes en f27–f31 (nada pasa por enteros),
+  inexacto por `r − a == b ∧ r − b == a` en vez del TwoSum, FCR31 perezoso
+  en cr2 (C, causa I, bandera I, compuerta) escrito al salir del bloque,
+  LWC1/SWC1 directo entre la RDRAM y el registro, CVT.S.W/CVT.D.W con
+  `fcfid`. Prueba nueva `executed_sequences_match_interp` (3000 secuencias
+  de COP1 en un bloque contra el intérprete, con memoria de E/S), que
+  encontró tres errores antes de medir (alias fd = fs en CVT.S.D y ADD,
+  CTC1 sin escribir los enteros modificados, y el camino lento de LWC1
+  cargando el registro residente de la RDRAM: Perfect Dark abortaba).
+- **COP0 sin el intérprete**: MTC0 a EntryLo0/1, PageMask e Index nativos
+  (el bloque sigue); TLBWI/TLBWR con `rec_h_tlbw` (ktlb al día solo para
+  esa entrada, sin comparar las 32); ERET con `rec_h_eret` y salida por
+  `exit_jr` como un JR. GoldenEye hacía 2200 llamadas al intérprete por
+  campo por el refill (1,9 ms).
+- **Caché de código por tramos**: 32 MB (el techo por el alcance de los
+  saltos al preámbulo) en 8 tramos; llena, se desaloja el más viejo en vez
+  de vaciar todo (los vaciados completos recompilaban ~7000 bloques de
+  golpe: campos de 52 ms en el log de referencia de main). Cada bloque decide
+  si llama a C con `bl` o `mtctr` según dónde cae. Las invalidaciones de
+  GoldenEye (44 345 en el log de main) son en su mayoría páginas que vuelven
+  en otro marco y ya se reutilizan desprendidas y enganchadas (perfil en
+  qemu, 128 s: 30 105 invalidados, 29 171 desprendidos, 23 554 enganchados).
+- **Páginas de 1 MB** (pedido de main): el heap de PSL1GHT ya sale de un
+  mmapper de páginas de 1 MB (`ppu/librt/sbrk.c`), así que la RDRAM solo
+  ganaría alineación; la caché de código no puede ir en memoria de 1 MB
+  (con HEN no es ejecutable) y solo se alinea a 1 MB en `mk/rec-cache.ld`.
+  El frontend anota al arrancar el tamaño de página real de RDRAM, rec, n64,
+  caché y pila (syscall 351) y el archivo `rdram-1m` prueba
+  `sysMemoryAllocate` de 1 MB para la RDRAM.
+- Perfil de GoldenEye en qemu (128 s hasta la presa, por campo): 1590
+  llamadas a C (COP0 1236, FPU 120, E/S 235), 11,9 instrucciones por bloque,
+  0,80 de COP1 y 3,94 de memoria por bloque; registros más usados: v0 59 %,
+  ra 57, a0 51, a1 42, sp 42, a2 33, v1 33, s0 31, at 30, a3 29, t6 26. Los
+  dos bloques más calientes (3,1 % cada uno) eran un bucle de comparación
+  partido porque un salto condicional apunta dentro del mismo bloque.
+- **Saltos internos con destino dentro del bloque** («Saltos internos con
+  destino dentro del bloque» en docs/rec-ppe.md): el camino tomado salta al
+  código de la instrucción destino sin salir, reponiendo el estado de la FPU
+  residente y de FCR31 que el código de ahí asume y ajustando `r29`. Y en
+  un bloque sin JR/JALR, r26 es un registro más para el bloque (5 con los
+  fijos). Más registros fijos entre bloques (s0 31 %, at 30 %, t6 26 %)
+  queda pendiente: r27 y r28 están ocupados y liberarlos cuesta cargas por
+  bloque; medir primero.
+
+Validado en qemu-ppc64 (todo con el árbol final): unitarias 365/365 en los
+cinco modos (incluida la FPU por memoria), nemu64-test 433 fallas (línea
+base) con y sin registros fijos y con caché de 3 MB (93 desalojos), vitest
+OK (también con 2 MB), `--lockstep` sin diferencias en nemu64-test (también
+con caché de 3 MB y 92 desalojos), vitest y Perfect Dark 300 M ciclos;
+`tools/build.sh test-host` 365/365 y `tools/test-roms.sh` en verde. El
+lockstep de GoldenEye hasta la presa (7,5 G ciclos) pasó **sin
+diferencias** con la FPU residente (9d1eba0: 283,6 M salidas comparadas) y
+con el árbol final (15d6724: 204 M salidas, 1 vaciado y 6 desalojos); la
+intro de Perfect Dark (3 G ciclos) también, con el árbol final. Dos
+errores que solo el lockstep encontró: el camino lento de
+LWC1 cargando el registro residente de la RDRAM (Perfect Dark abortaba) y
+los saltos internos dejando basura en los registros escritos por las
+instrucciones saltadas (nemu64-test, bloque 80014c84). `tools/build.sh`
+sin advertencias.
+
+**Medido en la PS3 real (2026-10-11, noche;** tablas en docs/perf-log.md,
+«FPU residente, sin microcódigo…»; paquetes SLSA00093 «Salsa64 FPU» y
+SLSA00095 «Salsa64 CPU FPU» —SLSA00094 es el de los estados guardados—,
+con main 69051fc traído a la rama):
+- GoldenEye, presa junto al camión: 17,5 ns por instrucción ejecutada
+  contra 18,2 de main (−4 %), todo de los ayudantes de COP0 (llamadas a C
+  1,56 → 0,73 ns, ktlb 0,78 → 0,20). **El código nativo sigue en ~47 ciclos
+  por instrucción MIPS** con cualquier combinación de banderas: no lo
+  limitan las instrucciones emitidas sino, con toda probabilidad, el tamaño
+  del código (~7 MB de bloques vivos contra 512 KB de L2; la caché va en
+  páginas de 64 KB). Ese es el siguiente trabajo.
+- **La FPU residente resultó más lenta** en el bench del mismo paquete
+  (add.s 40,0 → 30,9 MIPS, mixto 168 → 135) y en GoldenEye no se distingue:
+  queda apagada por omisión (`SALSA64_REC_OPT_FPU_RES`, archivo
+  `jit-fpu-residente`). Quitar el microcódigo sí suma: con la FPU por
+  memoria, mixto 156,6 → 168,2, add.s 35,7 → 40,0, cvt 40,7 → 50,6.
+- Zelda, SM64 y Mario Kart a 59,6 campos/s, sin regresión (emulación por
+  campo 5–20 % menor que main). Perfect Dark baja a 49–50 campos/s en un
+  nivel por espera del RSP (SPE de la HLE gráfica, 14 ms por campo, 131
+  texturas decodificadas por tarea): lado gráfico, no el recompilador.
+- Páginas: la RDRAM ya va en 1 MB; `rdram-1m` no se midió (nada que ganar).
+
+A/B que siguen en el paquete (archivos vacíos en /dev_hdd0/salsa64/):
+`jit-fpu-residente`, `jit-cop0-viejo`, `jit-sin-tramos`, `jit-viejo`,
+`rdram-1m`, `perfil`.
+
+## 2026-10-11 — SM64 se colgaba con los efectos de framebuffer: el espejo del framebuffer sigue al dibujo, no al VI
+
+**Síntoma** (host, main 4baa6df): Super Mario 64 con `SALSA64_FBFX=2` dejaba
+de mandar tareas gráficas en la 96 (campo ~343, paso del logo a la cara de
+Mario; el audio seguía). Bisección con `--first-parent` en la rama de los
+efectos: lo rompe b4d9d61 («Host: el modelo de copias sigue la política de
+la consola»); ya había fallado en bf836f2 (espejo del framebuffer por
+campo) y lo tapaba sin querer que el host copiara todos los framebuffers
+al terminar cada tarea (su `vi_width` quedaba en 0).
+
+**Causa** (docs/framebuffer.md, «Espejo del framebuffer»): el espejo
+copiaba el framebuffer presentado en cada campo. SM64 dibuja un
+framebuffer (tarea 95), carga por DMA ~200 KB de datos de la cara sobre dos
+de sus framebuffers (`390000`–`3c2780`) mientras el VI todavía muestra uno,
+y lo presenta un campo más: la copia pisaba esos datos (el código de la
+cara los lee en el campo 354) y el juego se colgaba. Copiar «una vez al
+presentar» no alcanza (ese framebuffer se presenta por primera vez después
+del DMA). Además el host copiaba el alto conjeturado (`lh`) en vez de las
+filas que muestra el VI: la intro de Conker se colgaba en la tarea 34 (en
+la PS3, que copia las filas del VI, no).
+
+**Arreglo**: lo dibujado en un framebuffer se copia a la RDRAM una vez por
+dibujo, al terminar la tarea si el VI ya lo mostró alguna vez y si no al
+presentarlo (`rdp_targets_mirror_at_task_end` / `rdp_targets_mirror_wanted`
+en `src/rdp/targets.c`), igual en `src/rdp/rdp.c` (PS3) y en
+`src/host/raster.c`. Pruebas: `targets_frame_mirror` (política) y
+`raster_frame_mirror_sm64` (el rasterizador del host de punta a punta,
+`tests/unit/test_raster.c`; falla con el raster.c de main).
+
+**¿La PS3?** El camino existe ahí: `frame_mirror` de `rdp.c` copia el
+presentado en cada campo desde bf836f2 y su copia llega un campo después,
+o sea después del DMA del campo 343 (el host con ese retraso simulado
+también se cuelga en la tarea 96). No hay registro de SM64 en la PS3 con el
+espejo: `build/ps3-logs/sm64.log` no tiene «cuadros copiados» (anterior a
+bf836f2). Hay que confirmarlo en la consola.
+
+**Verificación** (host nativo, respaldos fuera del repo): SM64 660 tareas
+en 1500 campos (como con `FBFX=1`) y hasta el castillo con el medidor de
+energía igual que con `FBFX=1`; Conker 395 tareas (main 34; igual que
+`FBFX=1`); Zelda: pausa (fondo difuminado) y pantalla de equipo con Link,
+53 capturas idénticas a main (partida nueva «A» creada con el control);
+Mario Kart en Luigi Raceway (`mk64-luigi.pad`) y GoldenEye idénticos a main
+(el pad no llega al túnel); Banjo con la misma imagen de la HLE.
+`test-host` 371/371, `test-roms` en verde (gfxtest 35/35 en las tres
+variantes), `build.sh` sin avisos, `test-phase2` en verde (gfxtest 35/35
+en RPCS3).
+
+**Pendiente (PS3 real):** SM64 del logo a la cara de Mario y al castillo,
+la cámara del túnel de Luigi Raceway, la pausa y la pantalla de equipo de
+Zelda, Conker. Queda una carrera solo de la PS3: la copia llega a la RDRAM
+uno o dos campos después de traducir la tarea, así que un DMA sobre un
+framebuffer en el mismo campo en que el RDP lo terminó podría quedar
+debajo (en SM64 pasan ~4 campos).
+
+## 2026-10-11 — Efectos de framebuffer: render a textura y copias RSX → RDRAM (rama hopeful-dirac)
+
+Diseño y hallazgos en `docs/framebuffer.md`; costos en `docs/perf-log.md`.
+Resuelto y confirmado en la PS3 real con el paquete SLSA00089 («Salsa64
+framebuffer»): el fondo de la pausa de Zelda OoT (nítido), Link en la
+pantalla de equipo (dentro y fuera de la casa, cambiando de equipo), la
+cámara del túnel de Luigi Raceway en Mario Kart 64 (el CPU fabrica esa
+textura leyendo el framebuffer), gfxtest 35 de 35 (tres casos nuevos: render
+a textura, copia a la RDRAM de una color image grande y de una chica que
+solo lee el CPU) y sin regresiones: SM64 59,8, GoldenEye en Dam 45,8 (su
+rango), Banjo 56–57, Conker 59,8 campos/s.
+
+**Lo que hizo falta** (todo medido con datos de la consola, no a ciegas):
+
+- Procedencia de las texturas en la HLE, tabla de destinos con política
+  (`src/rdp/targets.c`), render a textura desde la superficie del RSX,
+  copias RSX → RDRAM sincronizadas con la emulación, espejos asíncronos de
+  las imágenes chicas y del framebuffer presentado cada campo, cebado de
+  las superficies desde la RDRAM, VISCVG como cobertura plena.
+- `rsxkit` solo admitía 8 superficies: la pausa de Zelda tiene 9 color
+  images vivas más el scratch, la novena no se creaba y Link salía con
+  basura del heap. Ahora 16, y el log cuenta «destinos sin superficie».
+- La copia pedida se buscaba solo por dirección: `3da800` es el
+  framebuffer (320) y el búfer de Link (64) a la vez y se copiaba el
+  framebuffer entero (10 ms) en vez de Link.
+- Con más de dos copias esperadas en una tarea, la tercera pisaba el
+  búfer de la primera antes de que el RSX la leyera.
+- La HLE emite dos color images imposibles al abrir la pausa (anchos de
+  1495 y 3770): reciclaban ranuras buenas; ahora se ignoran.
+- La cobertura que Zelda guarda para su filtro es una color image de 8
+  bits de intensidad (`siz 1`): también se copia (las CI8 no).
+- En la pausa alternan tres z-buffers; con dos profundidades se destruían
+  y creaban a cada tarea (`rsxkit_finish` en cada una). Ahora cuatro.
+- El modelo del host no llamaba a `rdp_targets_present`: copiaba todos los
+  destinos de cada tarea y por eso «funcionaba» donde la consola no.
+
+**Verificación (árbol final, con main traído):** `test-host` 369 pruebas
+(617 939 verificaciones, 0 fallidas), `test-roms` en verde, `build.sh` sin
+avisos, `test-phase2` en RPCS3 en verde (gfxtest incluido); `test-rec` en
+tarea aparte (la parte unitaria 369/369 con el recompilador). En el host, gfxtest 35/35 con los tres microcódigos y la
+pausa de Zelda en el bosque Kokiri y dentro de la casa (pads en
+`docs/pads/`: `zelda-kokiri.pad` + `3600:START;…` llega a EQUIPMENT fuera
+de la casa).
+
+**Convivencia con la escala interna 1×–5× (fusión del mismo día).** La
+escala interna llegó con escala por destino (`rdp_target_scale`,
+`surf_scale`: con la objetivo 3×, el framebuffer de 320 × 240 va a 3×, Link
+de 64 × 112 a 5× y un framebuffer de 640 × 480 a 1×), tope de memoria y
+«Aplicar ahora»; los efectos de framebuffer suponían una escala global.
+Al juntarlos (detalle en `docs/framebuffer.md`, «Escala por destino»):
+
+- Todo lo que pasa de puntos lógicos a píxeles de una superficie usa la
+  escala de esa superficie (`rdp_surface_rect`, `rdp_target_tex_map`):
+  copias RSX → RDRAM (esperadas, grandes y espejos chicos), espejo del
+  framebuffer presentado, render a textura (filas ligadas en la escala del
+  destino leído; u y v normalizadas, así que el destino en que se dibuja
+  puede tener otra) y el scratch, que toma tamaño y escala de la
+  superficie copiada. Con la escala global, la copia de Link a 5× leía
+  solo una esquina de su superficie y la de un destino a 1× se salía.
+- Profundidades: si una z image la usan destinos de escalas distintas, se
+  rehace en la misma entrada con el mayor tamaño de los dos (antes
+  quedaban dos con la misma dirección y zclear borraba la vieja).
+- Destinos ligados sin z image (cebado, scratch, dibujos sin z): iban
+  con la profundidad de la pantalla, más chica que el destino a 4×–5× en
+  720p (riesgo de que el RSX falle o recorte). Ahora la profundidad de la
+  pantalla se agranda al mayor destino posible al elegir la escala
+  (`rsxkit_depth_reserve`, `rdp_zeta_reserve`) y rsxkit se niega a ligar
+  con una zeta más chica (`RSXKIT_EDEPTH`; el dibujo se salta y el log
+  cuenta «dibujos sin ligar»). Elección explicada en `src/rdp/rdp.h`.
+- Memoria: peor caso de 14 superficies (8 destinos, el scratch, 4
+  profundidades y la profundidad de la pantalla agrandada), 102,5 MiB a
+  5×: el tope pasó de 96 a 112 MiB (con 96, 5× se habría bajado a 4×). El
+  scratch cuenta en el tope; `make_room` lo suelta primero y nunca recicla
+  un destino que una textura pueda estar leyendo.
+- Presentación: a múltiplo entero solo si llena al menos 3/4 del alto
+  (`rdp_present_integer`); 2× en 720p salía a 640 × 480 en el centro.
+- «Aplicar ahora» (`salsa64_rdp_set_scale`) suelta destinos, scratch y
+  profundidades y descarta las copias en vuelo.
+
+Verificación: `test-host` 374 pruebas (645 613 verificaciones, 0
+fallidas; en `targets`, escala y peor caso, copia RSX → RDRAM simulada a
+1×–5×, textura entre escalas y presentación entera), `test-roms` en verde
+(gfxtest 35/35 con los tres microcódigos en el host), `build.sh` sin
+avisos, `test-phase2` en RPCS3 en verde (gfxtest embebido y F3D 35/35; en
+el menú, F3D a 2× tras «Aplicar ahora», 35/35) y gfxtest en RPCS3 con
+`video.cfg` forzando la escala: 35/35 a 1×, 3× y 5×. Por confirmar en la
+PS3 real: pausa y pantalla de equipo de Zelda y túnel de Mario Kart a 1×,
+2× y 5×, y costo de las copias desde 5×. Con la profundidad de la
+pantalla agrandada (commit aparte): `test-host` 375, `test-roms`,
+`build.sh` y gfxtest en RPCS3 a 1× y 5× repetidos, todo en verde.
+
+**Pendiente (otros trabajos):**
+
+- [ ] Polígono transitorio (verde o amarillo, ~1 s) al abrir la pausa de
+      Zelda en la PS3: volvió al caber los dos pares de búferes de Link;
+      la causa más probable eran las dos profundidades (arreglado a cuatro
+      en el último paquete, por confirmar en la consola).
+- [ ] Las copias chicas que se repiten cada tarea sin que ningún dibujo
+      las lea (Link redibujado en cada tarea de la pausa) se esperan solo
+      las dos primeras veces y después van sin esperar: medir que la
+      pausa baja de ~22 ms de espera por tarea a casi nada.
+- [ ] Líneas del logo de N64 de Zelda: no era la presentación (el host
+      también las dibuja): HLE del texto «NINTENDO 64» con la segunda
+      textura de ruido.
+- [ ] Túnica de Link con un defecto de textura (previo a la rama, también
+      con `fbfx.cfg` en 0).
+- [ ] Perfect Dark y Conker: copias del z-buffer (rectángulos que leen la
+      z image como color image), sombra y desenfoque de Conker; color
+      images de 32 bits no se copian ni se ceban.
+- [ ] Reducir s× → 1× con filtro de caja (hoy bilineal del RSX en el
+      centro de cada bloque) y, si pesa, la conversión en un SPE.
+- [ ] Controles que a veces no responden en la pausa (también en SM64):
+      arreglado en main (fba3a95), por confirmar aquí.
+
+## 2026-10-11 — Recompilador: perfil por causa y menos salidas a C en GoldenEye y Perfect Dark (rama `upbeat-driscoll-1dd271`, paquete SLSA00088 «Salsa64 JIT»)
+
+Hecho (sin la PS3: la noche del 10 al 11 se trabajó en qemu; la medición
+en la consola queda para el día de pruebas):
+
+- **Perfil del recompilador por causa** (`src/cpu/rec_prof.h/.c`, docs/rec-ppe.md
+  «Perfil por causa»): tiempo con el timebase del PPE y cuentas de código
+  generado, llamadas a C (cargas y almacenamientos lentos por tipo de
+  dirección, instrucciones al intérprete por clase, excepciones), intérprete
+  en el despachador por motivo, eventos por tipo (el del RSP incluye el
+  sondeo y lo dormido esperando al SPE), compilar, `ktlb`, bucles de espera
+  y salidas por tipo. En la PS3 lo enciende `/dev_hdd0/salsa64/perfil` y
+  sale cada 5 s en ms por campo con las estadísticas; en el host,
+  `SALSA64_REC_PROF=N` (cuentas cada N campos y, al final, los bloques más
+  ejecutados con sus palabras y el uso de registros; `tools/mips-disasm.py`
+  los lee).
+- **Lo que las cuentas mandaron arreglar** (GoldenEye en la presa, qemu,
+  por campo, antes → después): instrucciones interpretadas 13 900 → 500
+  (cada COP0 terminaba el bloque y el intérprete seguía hasta el fin del
+  bloque básico: ahora el bloque enlaza con el siguiente y `rec_h_exec`
+  sincroniza la TLB del recompilador; tras un ERET tampoco se interpreta);
+  traducciones de la TLB 14 000 → 360 revisiones (`x_sync` compara las 32
+  entradas con una instantánea y borra solo las páginas de las que
+  cambiaron; además prellena las de la entrada nueva); CACHE al intérprete
+  1000 → 0 (nativo); salidas por JR 820 → 350 (`exit_jr` recorre la cadena
+  de xhash); entradas desde C 1590 → 840. Perfect Dark tiene sus datos en
+  una página de 4 MB mapeada (3200 cargas por campo por C en la intro): la
+  `vtlb` pasó a ser `ktlb` (16 384 páginas, con el bit D) y las cargas y
+  almacenamientos a direcciones mapeadas la prueban en línea («Datos
+  mapeados por la TLB»). GoldenEye además compilaba cada (vpc, marco
+  físico) como bloque nuevo al paginar su código (93 000 bloques y 6
+  vaciados de la caché en 128 s): un bloque vivo de la misma vpc con los
+  mismos bytes se reutiliza en la física nueva (`salsa64_rec_x_rekey`).
+- **Bloques desprendidos** («Bloques desprendidos» en docs/rec-ppe.md):
+  GoldenEye pagina su código y cada página vuelve en otro marco: compilaba
+  cada (vpc, marco) de nuevo (101 900 bloques y 7 vaciados completos de la
+  caché en 128 s). Un bloque mapeado invalidado se desprende con una copia
+  de sus bytes y se engancha donde vuelva su página con los mismos bytes
+  (parcheando la palabra de `ktlb` de su entrada): 40 850 bloques, 28 200
+  enganchados, compilaciones por campo en la presa 22 → 0,7, vaciados 7 → 3.
+- **Superbloques** («Saltos condicionales internos»): el perfil por bloque
+  dio 5,3 instrucciones por bloque; un condicional hacia adelante ya no
+  corta el bloque (su camino tomado sale enlazado, el no tomado sigue con
+  los registros en el PPE). Los tres bucles más calientes de GoldenEye eran
+  parejas de bloques.
+- Caché de código de 16 → 24 MB (GoldenEye la llenaba cada ~40 s; ~900 bytes
+  de PPC por bloque) y el camino de la `ktlb` en 8 rutinas compartidas del
+  preámbulo (3 palabras por acceso en vez de ~22).
+- Opción `SALSA64_REC_OPT_LEGACY` (`/dev_hdd0/salsa64/jit-viejo`,
+  `SALSA64_REC_LEGACY=1`): el comportamiento anterior en el mismo binario,
+  para el A/B en la consola. Bits `SALSA64_REC_OPTS` (host) para apagar una
+  pieza a la vez al acotar una diferencia.
+- **La referencia de `--lockstep` no tenía HLE** (gráfica ni de audio): no
+  recibía la interrupción del DP de las tareas con HLE y GoldenEye y Perfect
+  Dark, que ya dibujan, divergían igual con el camino viejo (bisect con los
+  bits de arriba: todos fallaban en el mismo ciclo). Ahora lleva la misma
+  HLE con su estado; con eso Perfect Dark pasa (200 M ciclos) y las corridas
+  largas se anotan abajo.
+
+**Para el día de pruebas en la PS3 (orden sugerido: al final, tras recorte →
+líneas del logo → framebuffer):** la consola no respondía en la noche (FTP
+sin conexión), así que el paquete está sin subir: desde este worktree
+`PS3_IP=x.x.x.x tools/deploy-ps3.sh ftp build/salsa64-jit/salsa64-jit.pkg`
+(el worktree no tiene `tools/ps3.conf`); instalarlo desde Package Manager
+(SLSA00088 «Salsa64 JIT»), crear por FTP `/dev_hdd0/salsa64/perfil` (vacío:
+`curl -T /dev/null ftp://x.x.x.x/dev_hdd0/salsa64/perfil`) y poner
+`embedded` = `file:goldeneye.z64`.
+1. Abrir «Salsa64 JIT», jugar la presa ~3 min (misma ruta que las
+   mediciones anteriores), salir, bajar `/dev_hdd0/salsa64/salsa64.log`.
+2. Crear `/dev_hdd0/salsa64/jit-viejo` (vacío) y repetir: es el «antes» con
+   el mismo binario. Borrarlo después.
+3. Si hay tiempo: Perfect Dark en un nivel (es el que más gana con los
+   datos mapeados), y un minuto de Zelda, SM64 y Mario Kart (sin regresión).
+Lo que hay que leer del log: la línea «campos/s … emulación X ms por campo»
+y las de «perfil JIT por campo» (nativo, llamadas a C, intérprete, eventos,
+compilar, ktlb, despachador) en el tramo de la presa; anotarlas en
+docs/perf-log.md («Recompilador: perfil y salidas a C»).
+
+Pruebas (todo con el árbol final, 2026-10-11):
+- `tools/test-rec.sh --lockstep`: unitarias 351/351 en los cuatro modos,
+  nemu64-test 433 fallas (línea base) con y sin pin+eager, vitest OK,
+  `--lockstep` sin diferencias en nemu64-test y vitest.
+- `tools/test-roms.sh`: nemu64-test 433 (HLE) y 136 (LLE), vitest,
+  controles, savetest ×3, gfxtest ×3, audiotest: verde. `tools/build.sh
+  test-host` 351/351.
+- `--lockstep` de Perfect Dark (3 G ciclos, intro) y de GoldenEye con
+  `goldeneye-dam.pad` hasta jugar en la presa (7,5 G ciclos, 283 M salidas
+  comparadas, 1 h 46 min de qemu): **sin diferencias**.
+- `tools/build.sh` (todos los programas) y el paquete: sin advertencias.
+- **PS3 real (2026-10-11, tarde), A/B con el mismo paquete en la presa de
+  GoldenEye:** 43,0 → 49,4 campos/s de media (+15 %), 37,5 → 50,6 MIPS
+  (+35 %), 26,0 → 19,6 ns por instrucción ejecutada (−25 %); intérprete
+  2,8 → 0,8 ms por campo, ktlb 3,8 → 1,0, despachador 1,0 → 0,0. **El
+  nativo es el 80 % y cuesta ~50 ciclos del PPE por instrucción MIPS**, igual
+  antes y después: ahí va el siguiente trabajo. Zelda, SM64 y Mario Kart
+  a 59,4–59,5 campos/s (sin regresión). Tabla en docs/perf-log.md.
+
+Pendiente / siguiente paso: con el desglose de la PS3 decidir el ataque al
+código nativo (lo que no se ve en qemu): registros de la FPU residentes en
+f14–f31 dentro del bloque (hoy cada operación pasa por `cpu->fpr`:
+load-hit-store entre operaciones dependientes; GoldenEye 0,78 por bloque),
+más registros fijos entre bloques (r26–r28 liberables; `at`, `s0`, `t6` son
+los más usados sin fijar), MTC0 EntryLo/TLBWR/ERET con un ayudante propio
+en vez de `exec_one` (GoldenEye: 2200 llamadas por campo del refill), y
+seguir bajando el tamaño del código (la FPU y las salidas de los saltos
+internos) para que la caché no se vacíe en la presa.
+
 ## 2026-10-11 — Pulsaciones perdidas del control: el bucle de presentación dejaba de leer los mandos (rama vibrant-hawking)
 
 Reporte (el autor, PS3, 2026-10-10 y 11): a veces un botón no responde
@@ -235,8 +693,9 @@ Hecho (rama `intelligent-yalow-4dd14d`, desde main e7184b7):
     lo dibujado antes en esa misma llamada (lo translúcido salía como sobre
     negro). Por eso va una llamada por cada elemento, con el estado en
     caché. Anotado en `lib/rsxkit/README.md`.
-- Memoria: el menú reserva al entrar un búfer de ROM de 64 MB y 2 MB
-  mapeados para el 2D (`docs/memory-budget.md`).
+- Memoria: el menú reserva 2 MB mapeados para el 2D; la ROM va en un búfer
+  a su medida, reservado al abrir cada juego y liberado al cerrarlo
+  (`docs/memory-budget.md`).
 
 Pruebas:
 - Host: suite «menu», 15 pruebas: cabeceras en los tres órdenes, títulos,
@@ -418,12 +877,18 @@ generador el autor vio GoldenEye normal en la PS3. Después, el menú estilo XMB
 **Integrado el 2026-10-11:** recorte del RSP (`reverent-meninsky-b3f79c`,
 «Salsa64 recorte» SLSA00090): en la PS3, Mario Kart sin polígonos estirados,
 SM64 y Perfect Dark bien. Las líneas azules de GoldenEye salen también sin el
-recorte (A/B en la PS3): pendiente aparte, abajo.
+recorte (A/B en la PS3): pendiente aparte, abajo. Después, el mismo día:
+control (pulsaciones perdidas), fondos prerrenderizados de Zelda (JPEG + S2DEX),
+recompilador con perfil por causa, efectos de framebuffer (4baa6df) y el arreglo
+del espejo del framebuffer que colgaba SM64 en la cara de Mario (84ea55f; en la
+PS3 sin confirmar).
 
-**En curso (2026-10-11):** ramas del JIT (`upbeat-driscoll-1dd271`, SLSA00088),
-de efectos de framebuffer (`hopeful-dirac-f4e91b`, SLSA00089; primero las
-líneas del logo de Zelda) y del recorte (SLSA00090). Cada una deja en el
-docs/estado.md de su rama qué ver en la PS3, con qué `embedded` y qué esperar.
+**Integrado después, el 2026-10-11:** resolución 720p/1080p y escala
+interna 1×–5× por destino con «Aplicar ahora» (rama
+`dev-a1388b259074798ab`, 1647a25), estados guardados con contador de FPS
+(`wonderful-blackwell-6f40d3`, SLSA00094) y FPU en registros, COP0 nativo y
+caché por tramos (`jovial-jones-2408ac`, SLSA00093). Detalle en las entradas
+de arriba y en docs/framebuffer.md.
 
 **Problemas abiertos:**
 - Líneas como de entrelazado en el logo de N64 de Zelda en la PS3; en el
@@ -464,8 +929,36 @@ docs/estado.md de su rama qué ver en la PS3, con qué `embedded` y qué esperar
 **Siguientes pasos:**
 - Recompilador: más velocidad del CPU en GoldenEye y Perfect Dark.
 - Efectos de framebuffer (pendiente de abajo), sobre la presentación ya en main.
-- HLE: z/w > 1 en Banjo (modelos que tiemblan, cielo), boca negra de Conker.
-- Zelda: fondos prerrenderizados (S2DEX + tarea JPEG); luego Majora's Mask.
+- HLE: **cara de Conker** (polígonos negros en la boca, visto en la PS3; no lo
+  explicaba la presentación) y z/w > 1 en Banjo (modelos que tiemblan, cielo).
+- Gráficos pendientes (actualizado 2026-10-11): líneas del logo de Zelda (la
+  HLE muestrea mal la segunda textura de ruido del texto «NINTENDO 64»),
+  defecto en la túnica de Link, líneas azules en uniones de GoldenEye.
+- **Mario Kart, Luigi Raceway: negro arriba del muro de ladrillos** (PS3,
+  2026-10-11, en todos los paquetes): debería verse el cielo en degradado y el
+  fondo de la pista. Previo a las ramas de hoy; candidato: cómo se dibuja el
+  cielo (rectángulo o triángulos con degradado al fondo). Reproducir en el host
+  con docs/pads/mk64-luigi.pad y comparar contra mupen64plus.
+- Zelda: fondos prerrenderizados hechos (2026-10-11); JPEG a punto fijo
+  (68 ms por sala en el PPE, meta < 10 ms); luego Majora's Mask.
+- Recompilador: FPU en registros, más registros fijos y refill de la TLB
+  (en curso desde el 2026-10-11).
+- **Recompilador, siguiente frente (medido en la PS3 el 2026-10-11):** el
+  código nativo cuesta ~47 ciclos del PPE por instrucción MIPS con cualquier
+  combinación de FPU, tramos y COP0; no lo limitan las instrucciones emitidas
+  sino el tamaño y la localidad del código (~7 MB de bloques vivos en GoldenEye
+  contra 512 KB de L2, caché en páginas de 64 KB). Trabajo: código más compacto
+  y bloques calientes juntos. La FPU residente quedó apagada (más lenta).
+- **Perfect Dark en un nivel a 49–50 campos/s por el lado gráfico:** 14 ms por
+  campo esperando al SPE 0, ~4500 triángulos y ~131 texturas decodificadas por
+  tarea (el CPU usa 4,5 ms). Candidato fuerte para pasar la conversión de
+  texturas a los SPEs 2–3.
+- **Quitarle trabajo al PPE** (decidido el 2026-10-11, después de cerrar los
+  trabajos abiertos): el VR4300 se queda en el PPE (memoria, FPU IEEE y saltos
+  no le van a un SPE), pero lo demás pasa a los SPEs libres (2–5) para que el
+  hilo 0 tenga el núcleo: tarea JPEG de Zelda (68 ms en el PPE), conversión de
+  texturas, lo que quede de la presentación del hilo 1. Ordenar con
+  docs/uso-cell.md (uso medido por componente y por juego).
 - Fase 5 (posprocesado, MSAA) después de presentación y menú; recompilador
   RSP→SPU para el LLE; conversión genérica de texturas en lib/rsxkit/spu.
 

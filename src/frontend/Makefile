@@ -3,8 +3,8 @@
 PROGRAM := salsa64
 TITLE   := Salsa64
 APPID   := SLSA00064
-SRCS    := main.c audio_out.c audio_sync.c menu.c pacer.c padmap.c replay.c romlist.c savefile.c screenshot.c selftest.c \
-           selftest_audio.c selftest_gfx.c
+SRCS    := main.c audio_out.c audio_sync.c menu.c osd.c osd_fps.c pacer.c padmap.c replay.c romlist.c savefile.c \
+           screenshot.c selftest.c selftest_audio.c selftest_gfx.c states.c
 
 R       := ../..
 ICON0   := $(R)/assets/ps3/ICON0.PNG
@@ -24,7 +24,7 @@ SPUKIT  := 1
 # intérprete de src/rsp/lle con la E/S por DMA de src/spu/rsp.
 SPU_PROGS := gfx audio rsp
 gfx_SRCS  := $(R)/src/spu/gfx/main.c $(R)/src/spu/gfx/io_spu.c \
-             $(filter-out %/io_mem.c %/sync.c,$(wildcard $(R)/src/rsp/gfx/*.c))
+             $(filter-out %/io_mem.c %/sync.c %/state.c,$(wildcard $(R)/src/rsp/gfx/*.c))
 audio_SRCS := $(R)/src/spu/audio/main.c $(R)/src/spu/audio/io_spu.c \
               $(filter-out %/io_mem.c %/sync.c %/selftest.c,$(wildcard $(R)/src/rsp/audio/*.c))
 rsp_SRCS   := $(R)/src/spu/rsp/main.c $(R)/src/spu/rsp/io_spu.c \

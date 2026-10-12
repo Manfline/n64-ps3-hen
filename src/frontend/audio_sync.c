@@ -58,6 +58,12 @@ void audio_sync_push(struct audio_sync *as, const uint8_t *samples, uint32_t byt
 	store_release(&as->wpos, w + n);
 }
 
+void audio_sync_flush(struct audio_sync *as)
+{
+	as->flush_from = as->wpos;
+	store_release(&as->flush_seq, as->flush_seq + 1);
+}
+
 /* ---- Consumidor: estirador ------------------------------------------------------ */
 
 static void setup(struct audio_sync *as, uint32_t rate)
@@ -148,6 +154,12 @@ static void make_hop(struct audio_sync *as)
 	int64_t low = (int64_t)as->low;
 	int64_t q = -1;
 
+	uint64_t fseq = load_acquire(&as->flush_seq);
+	if (fseq != as->flush_seen) {
+		/* Vaciado: lo viejo se desvanece y se espera lo nuevo. */
+		as->flush_seen = fseq;
+		go_silent(as, (double)as->flush_from);
+	}
 	if (!as->playing && (double)w - as->rpos >= target) {
 		as->playing = true;
 		as->prev = -1;

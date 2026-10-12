@@ -144,8 +144,11 @@ static int run_suites(void (*print)(const char *line), struct salsa64_rec *rec, 
 		{ "sync", t_suite_audio_sync },
 		{ "pacer", t_suite_pacer },
 		{ "targets", t_suite_targets },
+		{ "raster", t_suite_raster },
 		{ "fpgen", t_suite_fpgen },
 		{ "menu", t_suite_menu },
+		{ "state", t_suite_state },
+		{ "osd", t_suite_osd },
 	};
 	char line[256];
 

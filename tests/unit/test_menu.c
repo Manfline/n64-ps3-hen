@@ -390,8 +390,76 @@ static void menu_options_page(void)
 	menu_input(&m, LEFT, 69);
 	CHECK_EQ(m.set.overscan, MENU_OVERSCAN_NORMAL);
 	CHECK(m.set.waves);
+	/* Resolución: X o los lados alternan 720p / 1080p y piden guardar. */
 	menu_input(&m, 0, 69);
 	menu_input(&m, DOWN, 70);
+	CHECK_EQ(m.opt, MENU_OPT_RESOLUTION);
+	CHECK_EQ(m.set.resolution, MENU_RES_720P);
+	menu_input(&m, 0, 71);
+	CHECK_EQ(menu_input(&m, CROSS, 72), MENU_SETTINGS);
+	CHECK_EQ(m.set.resolution, MENU_RES_1080P);
+	menu_input(&m, 0, 73);
+	CHECK_EQ(menu_input(&m, LEFT, 74), MENU_SETTINGS);
+	CHECK_EQ(m.set.resolution, MENU_RES_720P);
+	menu_input(&m, 0, 75);
+	CHECK_EQ(menu_input(&m, RIGHT, 76), MENU_SETTINGS);
+	CHECK_EQ(m.set.resolution, MENU_RES_1080P);
+	CHECK_EQ(m.set.overscan, MENU_OVERSCAN_NORMAL);
+	CHECK(m.set.waves);
+	/* Escala interna: Auto → 1× … 5× → Auto (izquierda, al revés). */
+	menu_input(&m, 0, 77);
+	menu_input(&m, DOWN, 77);
+	CHECK_EQ(m.opt, MENU_OPT_SCALE);
+	CHECK_EQ(m.set.scale, 0);
+	uint64_t t = 200;
+	for (int want = 1; want <= 5; want++) {
+		menu_input(&m, 0, t++);
+		CHECK_EQ(menu_input(&m, RIGHT, t++), MENU_SETTINGS);
+		CHECK_EQ(m.set.scale, want);
+	}
+	menu_input(&m, 0, t++);
+	CHECK_EQ(menu_input(&m, RIGHT, t++), MENU_SETTINGS);
+	CHECK_EQ(m.set.scale, 0);
+	menu_input(&m, 0, t++);
+	CHECK_EQ(menu_input(&m, LEFT, t++), MENU_SETTINGS);
+	CHECK_EQ(m.set.scale, 5);
+	menu_input(&m, 0, t++);
+	CHECK_EQ(menu_input(&m, CROSS, t++), MENU_SETTINGS);
+	CHECK_EQ(m.set.scale, 0);
+	CHECK_EQ(m.set.resolution, MENU_RES_1080P);
+	/* Lo elegido (1080p) difiere de lo que corre (720p): aparece «Aplicar ahora». */
+	CHECK(menu_video_pending(&m));
+	menu_input(&m, 0, 77);
+	menu_input(&m, DOWN, 78);
+	CHECK_EQ(m.opt, MENU_OPT_APPLY);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, RIGHT, 79), MENU_NONE);  /* sin valor que cambiar */
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, CROSS, 79), MENU_APPLY);
+	m.res_run = m.set.resolution;  /* main.c lo pone tras aplicar */
+	m.scale_run = m.set.scale;
+	CHECK(!menu_video_pending(&m));
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, 0, 79), MENU_NONE);
+	CHECK_EQ(m.opt, MENU_OPT_BACK);  /* la fila desapareció: el cursor pasa a «Volver» */
+	menu_input(&m, UP, 79);          /* arriba, «Mostrar FPS» y luego «Escala interna» */
+	CHECK_EQ(m.opt, MENU_OPT_FPS);
+	menu_input(&m, 0, 79);
+	menu_input(&m, UP, 79);
+	CHECK_EQ(m.opt, MENU_OPT_SCALE);
+	menu_input(&m, 0, 79);
+	menu_input(&m, DOWN, 79);
+	CHECK_EQ(m.opt, MENU_OPT_FPS);   /* sin cambios pendientes se salta «Aplicar ahora» */
+	/* Mostrar FPS: alterna sí / no y pide guardar. */
+	CHECK(!m.set.fps);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, CROSS, 79), MENU_SETTINGS);
+	CHECK(m.set.fps);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, LEFT, 79), MENU_SETTINGS);
+	CHECK(!m.set.fps);
+	menu_input(&m, 0, 79);
+	menu_input(&m, DOWN, 79);
 	CHECK_EQ(m.opt, MENU_OPT_BACK);
 	menu_input(&m, 0, 80);
 	CHECK_EQ(menu_input(&m, RIGHT, 90), MENU_NONE);  /* «Volver» no tiene valor */
@@ -414,6 +482,7 @@ static void menu_settings_file(void)
 	menu_settings_default(&s);
 	CHECK(s.waves);
 	CHECK_EQ(s.overscan, MENU_OVERSCAN_NORMAL);
+	CHECK_EQ(s.resolution, MENU_RES_720P);
 	static const char off[] = "# comentario\n  FONDO = No\notra = cosa\n";
 	menu_settings_parse(&s, off, sizeof off - 1);
 	CHECK(!s.waves);
@@ -423,6 +492,10 @@ static void menu_settings_file(void)
 	static const char on[] = "fondo=sí";
 	menu_settings_parse(&s, on, sizeof on - 1);
 	CHECK(s.waves);
+	CHECK(!s.fps);
+	static const char fps[] = "fps = si\n";
+	menu_settings_parse(&s, fps, sizeof fps - 1);
+	CHECK(s.fps);
 	char text[128];
 	s.waves = false;
 	int n = menu_settings_format(&s, text, sizeof text);
@@ -430,6 +503,7 @@ static void menu_settings_file(void)
 	menu_settings_default(&t);
 	menu_settings_parse(&t, text, (size_t)n);
 	CHECK(!t.waves);
+	CHECK(t.fps);
 }
 
 static void menu_autopilot_opens_target(void)
@@ -726,6 +800,43 @@ static void menu_frame_geometry(void)
 	rsxkit_ui_batch(NULL, 0, 0, 0);
 }
 
+/* video.cfg: formato nuevo, formato viejo («1080» solo) y valores raros. */
+static void menu_video_file(void)
+{
+	struct menu_settings s;
+	menu_settings_default(&s);
+	CHECK_EQ(s.resolution, MENU_RES_720P);
+	CHECK_EQ(s.scale, 0);
+	const char old[] = "1080\n";
+	menu_video_parse(&s, old, sizeof old - 1);
+	CHECK_EQ(s.resolution, MENU_RES_1080P);
+	CHECK_EQ(s.scale, 0);
+	const char old720[] = "720\n";
+	menu_video_parse(&s, old720, sizeof old720 - 1);
+	CHECK_EQ(s.resolution, MENU_RES_720P);
+	const char nuevo[] = "# x\nSalida = 1080\nescala = 5\n";
+	menu_video_parse(&s, nuevo, sizeof nuevo - 1);
+	CHECK_EQ(s.resolution, MENU_RES_1080P);
+	CHECK_EQ(s.scale, 5);
+	const char bad[] = "escala = 9\nsalida = 4k\n";
+	menu_video_parse(&s, bad, sizeof bad - 1);
+	CHECK_EQ(s.scale, 5);
+	CHECK_EQ(s.resolution, MENU_RES_1080P);
+	const char autoc[] = "escala = auto\n";
+	menu_video_parse(&s, autoc, sizeof autoc - 1);
+	CHECK_EQ(s.scale, 0);
+	char text[256];
+	s.scale = 2;
+	s.resolution = MENU_RES_720P;
+	int n = menu_video_format(&s, text, sizeof text);
+	struct menu_settings t;
+	menu_settings_default(&t);
+	t.resolution = MENU_RES_1080P;
+	menu_video_parse(&t, text, (size_t)n);
+	CHECK_EQ(t.scale, 2);
+	CHECK_EQ(t.resolution, MENU_RES_720P);
+}
+
 /* SALSA64_MENU_PPM=<prefijo>: el menú como lo dibujaría el RSX en
  * <prefijo>-juegos.ppm, -opciones.ppm y -43.ppm, para verlo a ojo. */
 static void menu_preview(void)
@@ -739,6 +850,8 @@ static void menu_preview(void)
 	frame_list_setup();
 	struct menu m;
 	menu_init(&m, &frame_list, 4, NULL);
+	m.out_w = 1280, m.out_h = 720;
+	m.res_run = MENU_RES_1080P;  /* pidió 1080p y quedó 720p: sale la pista */
 	snprintf(m.last, sizeof m.last, "%s", frame_list.e[4].path);
 	uint32_t n = frames(&m, 1000000, 13000000, 1280);
 	raster(rgb, 1280, 720, 1280, 720, n);
@@ -746,10 +859,53 @@ static void menu_preview(void)
 	write_ppm(path, rgb, 1280, 720);
 	menu_input(&m, 0, 13100000);
 	menu_input(&m, BIT(SALSA64_DS3_TRIANGLE), 13100000);
+	menu_input(&m, 0, 13110000);
+	menu_input(&m, DOWN, 13111000);
+	menu_input(&m, 0, 13112000);
+	menu_input(&m, DOWN, 13113000);  /* la fila «Resolución» */
 	n = frames(&m, 13116000, 14500000, 1280);
+	raster(rgb, 1280, 720, 1280, 720, n);
+	snprintf(path, sizeof path, "%s-resolucion.ppm", out);
+	write_ppm(path, rgb, 1280, 720);
+	menu_input(&m, 0, 14510000);
+	menu_input(&m, DOWN, 14511000);  /* «Escala interna» */
+	menu_input(&m, 0, 14512000);
+	menu_input(&m, RIGHT, 14513000);
+	menu_input(&m, 0, 14514000);
+	menu_input(&m, RIGHT, 14515000);
+	menu_input(&m, 0, 14516000);
+	menu_input(&m, RIGHT, 14517000);
+	menu_input(&m, 0, 14518000);
+	menu_input(&m, RIGHT, 14519000);
+	menu_input(&m, 0, 14519500);
+	menu_input(&m, RIGHT, 14519900);  /* 5× */
+	n = frames(&m, 14520000, 15500000, 1280);
 	raster(rgb, 1280, 720, 1280, 720, n);
 	snprintf(path, sizeof path, "%s-opciones.ppm", out);
 	write_ppm(path, rgb, 1280, 720);
+	n = frames(&m, 15500000, 15600000, 960);
+	raster(rgb, 960, 720, 960, 720, n);
+	snprintf(path, sizeof path, "%s-opciones43.ppm", out);
+	write_ppm(path, rgb, 960, 720);
+	menu_input(&m, 0, 15600500);
+	menu_input(&m, DOWN, 15601000);  /* «Aplicar ahora» */
+	snprintf(m.note, sizeof m.note, "No se pudo: sigue 1280x720");
+	n = frames(&m, 15601500, 16600000, 960);
+	raster(rgb, 960, 720, 960, 720, n);
+	snprintf(path, sizeof path, "%s-aplicar43.ppm", out);
+	write_ppm(path, rgb, 960, 720);
+	n = frames(&m, 16600000, 16700000, 1280);
+	raster(rgb, 1280, 720, 1280, 720, n);
+	snprintf(path, sizeof path, "%s-aplicar.ppm", out);
+	write_ppm(path, rgb, 1280, 720);
+	menu_input(&m, 0, 16701000);
+	menu_input(&m, UP, 16702000);  /* «Escala interna» con la nota */
+	menu_input(&m, 0, 16703000);
+	menu_input(&m, UP, 16704000);  /* «Resolución» con la nota */
+	n = frames(&m, 16705000, 17700000, 960);
+	raster(rgb, 960, 720, 960, 720, n);
+	snprintf(path, sizeof path, "%s-resolucion43.ppm", out);
+	write_ppm(path, rgb, 960, 720);
 	menu_init(&m, &frame_list, frame_list.count, NULL);
 	m.set.waves = false;
 	menu_set_status(&m, "No se pudo leer /dev_usb000/salsa64/mk64.z64");
@@ -771,6 +927,7 @@ void t_suite_menu(void)
 	RUN(menu_needs_release_first);
 	RUN(menu_move_and_wrap);
 	RUN(menu_repeat);
+	RUN(menu_video_file);
 	RUN(menu_pages);
 	RUN(menu_options_page);
 	RUN(menu_settings_file);

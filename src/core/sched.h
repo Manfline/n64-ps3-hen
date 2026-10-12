@@ -15,6 +15,8 @@
 
 #define SALSA64_SCHED_NEVER UINT64_MAX
 
+/* Los estados guardados (state.c) guardan los tiempos por número de
+ * evento: uno nuevo va al final, nunca en medio. */
 enum salsa64_event {
 	SALSA64_EV_STOP,     /* fin del lapso pedido a salsa64_n64_run */
 	SALSA64_EV_COMPARE,  /* Count == Compare (COP0) */

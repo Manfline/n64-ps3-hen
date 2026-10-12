@@ -357,7 +357,7 @@ int salsa64_save_parse_config(const char *text, size_t len, const uint8_t *rom, 
 	return result;
 }
 
-void salsa64_save_filename(const uint8_t *rom, enum salsa64_save_type type, char *buf, size_t size)
+void salsa64_save_basename(const uint8_t *rom, char *buf, size_t size)
 {
 	char title[HDR_TITLE_LEN + 1];
 	size_t n = 0;
@@ -372,6 +372,13 @@ void salsa64_save_filename(const uint8_t *rom, enum salsa64_save_type type, char
 	while (n && title[n - 1] == '_')
 		n--;
 	title[n] = '\0';
+	snprintf(buf, size, "%s-%08X", n ? title : "rom", (unsigned)salsa64_rd32(rom + HDR_CRC1));
+}
+
+void salsa64_save_filename(const uint8_t *rom, enum salsa64_save_type type, char *buf, size_t size)
+{
+	char base[48];
+	salsa64_save_basename(rom, base, sizeof base);
 	const char *ext = (unsigned)type < SALSA64_SAVE_NTYPES && types[type].ext ? types[type].ext : "sav";
-	snprintf(buf, size, "%s-%08X.%s", n ? title : "rom", (unsigned)salsa64_rd32(rom + HDR_CRC1), ext);
+	snprintf(buf, size, "%s.%s", base, ext);
 }

@@ -17,15 +17,35 @@
 
 /* ---- Decodificación ------------------------------------------------------------ */
 
-static void decode_promote(uint32_t i, struct dec *d)
+static void decode_promote(const struct salsa64_rec *rec, uint32_t i, struct dec *d)
 {
-	unsigned op = I_OP(i), fmt = I_RS(i), f = I_FUNCT(i);
+	unsigned op = I_OP(i), fmt = I_RS(i), f = I_FUNCT(i), rd = I_RD(i);
 	switch (op) {
 	case 0x10:  /* MFC0 DMFC0: solo leen y el bloque sigue; Random, el intérprete */
 		if (fmt <= 0x01) {
 			d->kind = K_NORMAL;
 			d->reads &= ~BIT(I_RT(i));
 			d->how = I_RD(i) == SALSA64_CP0_RANDOM ? H_EXEC : H_NATIVE;
+			return;
+		}
+		if (rec->opts & SALSA64_REC_OPT_COP0_EXEC)
+			return;
+		/* MTC0/DMTC0 a un registro que solo guarda el valor: el bloque
+		 * sigue. TLBWI/TLBWR y ERET con rutina propia (rec.c), terminando el
+		 * bloque como antes. Lo demás de COP0 (Status, Cause, Compare,
+		 * EntryHi, Count…), el intérprete. */
+		if ((fmt == 0x04 || fmt == 0x05) &&
+		    (rd == SALSA64_CP0_ENTRYLO0 || rd == SALSA64_CP0_ENTRYLO1 || rd == SALSA64_CP0_PAGEMASK ||
+		     rd == SALSA64_CP0_INDEX)) {
+			d->kind = K_NORMAL;
+			d->how = H_MTC0;
+			d->writes = 0;
+		} else if (fmt >= 0x10 && (f == 0x02 || f == 0x06)) {
+			d->how = H_TLBW;
+			d->reads = d->writes = 0;
+		} else if (fmt >= 0x10 && f == 0x18) {
+			d->how = H_ERET;
+			d->reads = d->writes = 0;
 		}
 		return;
 	case 0x11:
@@ -38,6 +58,7 @@ static void decode_promote(uint32_t i, struct dec *d)
 		return;
 	case 0x1A: case 0x1B: case 0x22: case 0x26:                        /* LDL LDR LWL LWR */
 	case 0x2A: case 0x2C: case 0x2D: case 0x2E:                        /* SWL SDL SDR SWR */
+	case 0x2F:                                                         /* CACHE */
 		d->how = H_NATIVE;
 		return;
 	default:
@@ -49,7 +70,9 @@ static void decode_ext(const struct salsa64_rec *rec, uint32_t i, struct dec *d)
 {
 	decode(i, d);
 	if (!(rec->opts & SALSA64_REC_OPT_RARE_EXEC))
-		decode_promote(i, d);
+		decode_promote(rec, i, d);
+	if (SALSA64_REC_OLD(rec, SALSA64_REC_DBG_NO_CACHE) && I_OP(i) == 0x2F)
+		d->how = H_EXEC;  /* CACHE al intérprete, como antes */
 }
 
 /* ---- Camino lento ---------------------------------------------------------------- */
@@ -114,7 +137,7 @@ static void emit_unaligned(struct ctx *c, unsigned k)
 	int slow = new_label(c), resume = new_label(c);
 	unsigned v = store ? get(c, rt, T_S1) : 0;
 
-	emit_addr(c, I_RS(i), (int16_t)i, 0, slow);
+	emit_addr(c, I_RS(i), (int16_t)i, 0, slow, store);
 	if (store)
 		emit_code_check(c, 1, slow);
 	/* T_X = desplazamiento en bits; T_HI = palabra (o doble palabra) alineada. */
@@ -211,8 +234,12 @@ static bool emit_unaligned_pair(struct ctx *c, unsigned k, unsigned end)
 	c->k = k;
 	c->written_start = c->written;
 	unsigned v = store ? get(c, rt, T_S1) : 0;
-	emit_addr(c, I_RS(a), imm, 0, slow);
-	/* El cuarto byte también dentro de la RDRAM. */
+	emit_addr(c, I_RS(a), imm, 0, slow, store);
+	/* Los 4 bytes en la misma página (mapeada, la traducción es de la del
+	 * primero) y dentro de la RDRAM. */
+	E(c, ppc_rlwinm(0, T_ADDR, 0, 20, 31));
+	E(c, ppc_cmplwi(CR_T, 0, 0xFFC));
+	emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(CR_T, PPC_GT), slow);
 	E(c, ppc_addi(T_X, T_Y, 3));
 	E(c, ppc_srdi(T_X, T_X, c->rec->rdram_shift));
 	E(c, ppc_cmpdi(CR_T, T_X, 0));
@@ -244,6 +271,24 @@ static bool emit_unaligned_pair(struct ctx *c, unsigned k, unsigned end)
 	bind(c, resume);
 	emit_slow_exec(c, k, k + 1, slow, resume);
 	return true;
+}
+
+/* ---- CACHE ----------------------------------------------------------------------- */
+
+/* Sin cachés emuladas (interp.c): en modo kernel, el único en que corre un
+ * bloque, solo falta la dirección sin alinear a 4 (error de dirección, que
+ * lanza el intérprete). */
+static void emit_cache(struct ctx *c, unsigned k)
+{
+	uint32_t i = c->d[k].w;
+	int slow = new_label(c), resume = new_label(c);
+	unsigned base = get(c, I_RS(i), T_ADDR);
+	E(c, ppc_addi(T_ADDR, base, (int16_t)i));
+	E(c, ppc_rlwinm(0, T_ADDR, 0, 30, 31));
+	E(c, ppc_cmpwi(0, 0, 0));
+	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(0, PPC_EQ), slow);
+	bind(c, resume);
+	emit_slow_exec(c, k, k, slow, resume);
 }
 
 /* ---- COP0: MFC0 y DMFC0 ------------------------------------------------------- */
@@ -300,6 +345,75 @@ static void emit_cop0(struct ctx *c, unsigned k)
 		E(c, ppc_extsw(d, d));
 	}
 	put(c, rt, d);
+}
+
+/* ---- COP0: MTC0 de EntryLo, PageMask e Index; TLBWI/TLBWR; ERET (2026-10-11) ---- */
+
+/* MTC0 (y DMTC0) a un registro que solo guarda el valor
+ * (salsa64_cpu_cop0_write): el latch y el campo con su máscara. El refill de
+ * la TLB de GoldenEye escribe EntryLo0 y EntryLo1 ~800 veces por campo. */
+static void emit_mtc0(struct ctx *c, unsigned k)
+{
+	uint32_t i = c->d[k].w;
+	unsigned rd = I_RD(i), v = get(c, I_RT(i), T_S1);
+	E(c, ppc_std(v, OFF(cop0_latch), R_CPU));
+	switch (rd) {
+	case SALSA64_CP0_ENTRYLO0:
+	case SALSA64_CP0_ENTRYLO1:
+		E(c, ppc_rlwinm(T_X, v, 0, 2, 31));  /* 0x3FFFFFFF */
+		E(c, ppc_stw(T_X, rd == SALSA64_CP0_ENTRYLO0 ? OFF(entry_lo0) : OFF(entry_lo1), R_CPU));
+		return;
+	case SALSA64_CP0_PAGEMASK:
+		E(c, ppc_rlwinm(T_X, v, 0, 7, 18));  /* 0x01FFE000 */
+		E(c, ppc_stw(T_X, OFF(page_mask), R_CPU));
+		return;
+	default:                                 /* Index: 0x8000003F */
+		E(c, ppc_lis(T_X, (int16_t)0x8000));
+		E(c, ppc_ori(T_X, T_X, 0x3F));
+		E(c, ppc_and(T_X, v, T_X));
+		E(c, ppc_stw(T_X, OFF(index), R_CPU));
+		return;
+	}
+}
+
+/* TLBWI/TLBWR: la escritura y la ktlb de esa entrada en C (rec_h_tlbw: sin
+ * el intérprete ni la comparación de las 32 entradas), sin excepción,
+ * interrupción ni cambio de modo posibles; el bloque termina enlazado al
+ * siguiente, cuya entrada revisa su página (rec_tlb.h). */
+static void emit_tlbw(struct ctx *c, unsigned k)
+{
+	call_prep(c, k);  /* Random sale de cycles */
+	E(c, ppc_mr(3, R_CPU));
+	li32u(c, 4, c->d[k].w);
+	emit_call(c, c->rec->h_tlbw);
+	writeback(c, c->written);
+	E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)k + 1));
+	emit_exit_to(c, insn_pc(c, k + 1));
+}
+
+/* ERET: rec_h_eret deja pc, Status y el modo (cop0.c) y devuelve el pc; si
+ * el modo sigue siendo kernel y no hay interrupción, al bloque destino por
+ * exit_jr (como JR), si no al despachador con ese pc. Hasta ahora cada ERET
+ * salía por redirect al despachador (GoldenEye: ~400 por campo). */
+static void emit_eret(struct ctx *c, unsigned k)
+{
+	int mid = new_label(c);
+	writeback(c, c->written);
+	fpu_flush(c);
+	call_prep(c, k);
+	E(c, ppc_mr(3, R_CPU));
+	emit_call(c, c->rec->h_eret);
+	E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)k + 1));
+	E(c, ppc_lwz(0, OFF(irq_pending), R_CPU));  /* irq, redirect, abort y modo */
+	E(c, ppc_cmpwi(CR_T, 0, 0));
+	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), mid);
+	restore_borrowed(c);
+	emit_b(c, abs_label(c, c->temp || c->rec->no_link ? c->rec->exit_jump : c->rec->exit_jr), false);
+	bind(c, mid);
+	/* Como exit_jr sin bloque: el despachador atiende la interrupción o el
+	 * modo (exit_mid lo haría interpretar hasta el fin del bloque básico). */
+	restore_borrowed(c);
+	emit_b(c, abs_label(c, c->rec->exit_jump), false);
 }
 
 /* ---- COP1: CFC1 y CTC1 ---------------------------------------------------------- */
@@ -375,7 +489,9 @@ static void emit_fpu_range(struct ctx *c, bool is_s, unsigned bits, unsigned e, 
 static void emit_fcr31_gate(struct ctx *c, uint32_t mask, int slow)
 {
 	E(c, ppc_lwz(6, OFF(fcr31), R_CPU));
-	E(c, ppc_andi_(0, 6, mask));
+	E(c, ppc_li(0, (int32_t)mask));  /* andi. es microcódigo */
+	E(c, ppc_and(0, 6, 0));
+	E(c, ppc_cmpwi(0, 0, 0));
 	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(0, PPC_EQ), slow);
 }
 
@@ -480,7 +596,7 @@ static void emit_fpu_from_w(struct ctx *c, bool to_s, int32_t oa, int32_t od, in
 	E(c, ppc_cntlzw(12, 11));
 	E(c, ppc_slw(11, 11, 12));       /* el 1 más alto en el bit 31 */
 	if (to_s) {
-		E(c, ppc_andi_(5, 11, 0xFF));   /* lo que no cabe en 24 bits */
+		E(c, ppc_rlwinm(5, 11, 0, 24, 31));  /* lo que no cabe en 24 bits */
 		E(c, ppc_rlwinm(0, 11, 24, 31, 31));
 		E(c, ppc_add(11, 11, 0));
 		E(c, ppc_addi(11, 11, 0x7F));
@@ -602,6 +718,9 @@ static bool emit_ext(struct ctx *c, unsigned k)
 	case 0x1A: case 0x1B: case 0x22: case 0x26:
 	case 0x2A: case 0x2C: case 0x2D: case 0x2E:
 		emit_unaligned(c, k);
+		return true;
+	case 0x2F:
+		emit_cache(c, k);
 		return true;
 	default:
 		return false;

@@ -303,6 +303,11 @@ int audio_out_init(struct salsa64_n64 *n64)
 	return cfg.output ? open_port() : -1;
 }
 
+void audio_out_flush(void)
+{
+	audio_sync_flush(&sync_out);
+}
+
 const struct audio_sync_stats *audio_out_stats(void)
 {
 	return &sync_out.stats;

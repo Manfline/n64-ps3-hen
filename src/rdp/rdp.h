@@ -4,8 +4,9 @@
  * (src/rsp/gfx/gfx.h) y la dibuja con lib/rsxkit.
  *
  * Cada color image de la N64 (dirección en la RDRAM) tiene su destino de
- * render en el RSX, a una escala entera de la resolución de la N64 (3× a
- * 720p); cada z image, su profundidad. Al presentar un campo, si el VI
+ * render en el RSX, a una escala entera de la resolución de la N64 propia
+ * de ese destino (3× a 720p para un framebuffer de 320 × 240; ver
+ * salsa64_rdp_init); cada z image, su profundidad. Al presentar un campo, si el VI
  * muestra una color image que dibujó el RSX, se presenta ese destino; si
  * no (imagen hecha por el CPU), el frontend usa el framebuffer 2D. Qué
  * destino es ese, y cuál se recicla cuando no caben más, lo decide
@@ -35,6 +36,7 @@ struct salsa64_rdp_stats {
 	uint32_t tasks;
 	uint32_t draws, triangles;
 	uint32_t targets_created;
+	uint32_t targets_evicted;  /* destinos reciclados por el tope de memoria */
 	uint32_t set_waits;      /* veces que un juego de búferes seguía en uso (emulación) */
 	uint64_t us_translate;   /* PPE traduciendo a comandos del RSX (presentación) */
 	uint64_t us_set_wait;    /* hilo de emulación esperando un juego */
@@ -49,11 +51,86 @@ struct salsa64_rdp_stats {
 	 * precompilados). */
 	uint32_t draws_generated;
 	uint32_t fp_programs, fp_generated, fp_evictions, fp_loads;
+	/* Efectos de framebuffer (docs/framebuffer.md): copias RSX → RDRAM y
+	 * su tiempo en el hilo de presentación (esperar al RSX y convertir),
+	 * tareas que la emulación esperó por una copia y cuánto, texturas con
+	 * origen en un destino leídas de su superficie o de la RDRAM, y
+	 * destinos cebados desde la RDRAM. */
+	uint32_t readbacks, readback_waits, readback_late;
+	uint64_t us_readback, us_readback_wait;
+	uint32_t mirrors, mirrors_skipped;  /* copias espejo (sin esperar) y las que no cupieron */
+	uint32_t frames_mirrored;           /* campos cuyo framebuffer se copió a la RDRAM */
+	uint32_t tex_rsx, tex_rdram, tex_self, primes;
+	/* Copias pedidas que no encontraron su destino dibujado, superficies
+	 * que el RSX no pudo crear y color images imposibles ignoradas. */
+	uint32_t readbacks_lost, targets_failed, targets_absurd;
+	/* Dibujos saltados porque rsxkit no ligó su destino (ninguna
+	 * profundidad cubría la superficie; no debería pasar, ver
+	 * salsa64_rdp_init). */
+	uint32_t binds_failed;
 };
 
-/* Después de rsxkit_init. scale = 0: la mayor escala entera que cabe en la
- * pantalla. Devuelve 0 o un código negativo de rsxkit. */
+/* Después de rsxkit_init. scale = 0 (automática): la mayor escala entera
+ * que cabe en la pantalla (720p → 3×, 1080p → 4×); 1 .. 5: la pedida
+ * (1× es la imagen nativa de 320 × 240; más que la pantalla es
+ * supermuestreo: la presentación la reduce con filtro lineal). Devuelve 0
+ * o un código negativo de rsxkit.
+ *
+ * La escala elegida es un objetivo de líneas (240 × escala: 5× = 1200) y
+ * cada destino usa la escala entera que lleva su imagen a ese objetivo sin
+ * pasarse (rdp_target_scale): 320 × 240 a 5×, 640 × 480 a 2×, una auxiliar
+ * chica a la misma escala que su alto pida (hasta 5×). Cada superficie lleva
+ * su escala (surf_scale), y la profundidad la del destino de color con que
+ * se usa; rsxkit ya trabaja en coordenadas lógicas (rsxkit_bind). Todo lo
+ * que pasa de coordenadas lógicas a píxeles de una superficie usa la escala
+ * de esa superficie (rdp_surface_rect, rdp_target_tex_map): la
+ * presentación, las copias RSX → RDRAM (reducen a 1× desde la escala del
+ * destino), el espejo del framebuffer, el render a textura (un destino
+ * leído como textura desde otro de otra escala: u y v van normalizadas) y
+ * el scratch (copia del ligado, con su tamaño y su escala).
+ *
+ * Destinos sin z image propia. El RSX siempre liga una zeta junto al color;
+ * un destino que se dibuja sin z image (rectángulos, 2D, el cebado, el
+ * scratch) se liga con la profundidad de la pantalla, con la prueba y la
+ * escritura apagadas (lo que el juego espera sin z image). A 4×–5× en 720p
+ * (o 5× en 1080p) un destino es más grande que la pantalla, y una zeta más
+ * chica que el color puede fallar o recortar en el RSX. Se eligió agrandar
+ * la profundidad de la pantalla (rsxkit_depth_reserve) al mayor destino
+ * posible a la escala, al iniciar y en salsa64_rdp_set_scale, fuera del
+ * bucle: es lo más simple (un búfer que ya existía, sin tocar los
+ * dibujos) y lo más seguro (el RSX queda siempre con una zeta que cubre al
+ * color, la configuración que ya corre en la PS3 a 3× en 720p y a 4× en
+ * 1080p). «Sin zeta» no es una opción limpia: la superficie del RSX
+ * (gcmSurface) siempre lleva formato, dirección y pitch de zeta, y una
+ * zeta de pitch 64 (lo que se usa para los colores sin usar) seguiría
+ * siendo más chica que el color, que es justo el riesgo; una profundidad
+ * por destino costaría una superficie más por ranura.
+ * Cuesta a lo más una superficie del mayor tamaño (7,7 MB a 5×; en 720p,
+ * 4 MB más que la de la pantalla), contada en el tope. Además rsxkit_bind
+ * se niega a ligar con una zeta más chica (RSXKIT_EDEPTH) y el dibujo se
+ * salta (binds_failed): nunca pasa en silencio. Política en targets.c
+ * (rdp_zeta_reserve, con pruebas).
+ *
+ * Política de memoria local del RSX (docs/memory-budget.md):
+ * 1) al arrancar el objetivo se baja hasta que el peor caso (8 destinos, el
+ * scratch, 4 profundidades y la profundidad de la pantalla agrandada, de
+ * 320 × 240 a esa escala; rdp_vram_worst) quepa en RDP_VRAM_BUDGET
+ * (112 MiB): a 5× son 102,5 MiB y entra; 2) en el juego, lo vivo suma a lo
+ * más RDP_VRAM_BUDGET: para crear una superficie que pasaría se suelta el
+ * scratch y se recicla el destino más viejo (no el presentado en el último
+ * campo ni uno que una textura pueda estar leyendo); si ni así cabe, o
+ * rsxkit no tiene memoria, esa imagen se queda en la copia de la RDRAM y no
+ * se dibuja en el RSX, sin errores. */
 int salsa64_rdp_init(uint32_t scale);
+/* Escala-objetivo efectiva tras salsa64_rdp_init; *reduced: se bajó por memoria. */
+uint32_t salsa64_rdp_scale(bool *reduced);
+/* Cambia la escala pedida (0: automática) con el RDP ya iniciado y sin juego
+ * abierto: suelta los destinos, el scratch y las profundidades, descarta las
+ * copias a la RDRAM en vuelo y recalcula la escala-objetivo y la
+ * profundidad de la pantalla con la pantalla en curso (después de
+ * rsxkit_video_reconfigure). Conserva la memoria mapeada (juegos de
+ * búferes, caché de texturas y búferes de las copias). */
+void salsa64_rdp_set_scale(uint32_t scale);
 void salsa64_rdp_shutdown(void);
 /* Entre juegos (menú): suelta los destinos y profundidades del RSX y vacía
  * las colas de tareas y las estadísticas; la memoria mapeada se conserva.
@@ -61,10 +138,38 @@ void salsa64_rdp_shutdown(void);
  * último salsa64_rdp_flush. Devuelve las tareas que quedaban sin traducir
  * (0 si se consumió todo). */
 uint32_t salsa64_rdp_reset(void);
+/* Estados guardados, en la barrera (después del último salsa64_rdp_flush,
+ * con la emulación quieta): settle espera las copias RSX → RDRAM que
+ * quedaran en vuelo (espejos del framebuffer y de las imágenes chicas,
+ * copias grandes sin esperar) y las escribe en la RDRAM, así ninguna llega
+ * tarde. drop_targets, al cargar: suelta los destinos, profundidades y el
+ * scratch (lo dibujado ya no es de esta máquina y los números de campo
+ * retroceden) y olvida las copias y su historial, sin tocar las colas ni la
+ * numeración de las tareas, que siguen con el mismo SPE. */
+void salsa64_rdp_settle(void);
+void salsa64_rdp_drop_targets(void);
+
+/* Efectos de framebuffer (docs/framebuffer.md). La RDRAM emulada, para
+ * copiar ahí los destinos que el CPU va a leer y cebar superficies con lo
+ * que el CPU dibujó, y cómo despertar al hilo de presentación cuando una
+ * tarea necesita esa copia antes de terminar (`done` espera a que esté).
+ * Antes de la primera tarea; NULL apaga las copias. */
+void salsa64_rdp_set_memory(uint8_t *rdram, uint32_t rdram_size, void (*wake)(void));
+/* Hilo de emulación, al terminar cada campo con imagen: origen y ancho del
+ * VI, para distinguir framebuffers de imágenes auxiliares desde ese hilo. */
+void salsa64_rdp_vi(uint32_t origin, uint32_t width);
+/* Interruptor: 0 apaga los efectos de framebuffer (las texturas que
+ * vienen de un destino se leen de la RDRAM como antes y nada se copia), 1
+ * solo render a textura, 2 también las copias a la RDRAM (por omisión). */
+void salsa64_rdp_fbfx(int level);
+
+/* Avisos y la traza de las copias (los escribe el frontend en su log). */
+void salsa64_rdp_set_log(void (*fn)(const char *fmt, ...));
 
 /* Las dos manos de un backend gráfico (rsp/gfx/backend.h). acquire puede
  * esperar a que el RSX libere un juego de búferes (nunca llama a rsxkit
- * salvo rsxkit_fence_done). */
+ * salvo rsxkit_fence_done). done puede esperar a que el hilo de
+ * presentación copie un destino a la RDRAM (ver salsa64_rdp_set_memory). */
 const struct salsa64_gfx_sink *salsa64_rdp_sink(void);
 
 /* Traduce a comandos del RSX las tareas terminadas con número menor que
