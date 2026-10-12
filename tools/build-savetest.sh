@@ -1,12 +1,13 @@
 #!/bin/sh
 # Compila la ROM de prueba del guardado (tests/roms/src/savetest) igual que
-# vitest y saca tres variantes que solo difieren en el título y en la
+# vitest y saca cuatro variantes que solo difieren en el título y en la
 # cabecera de homebrew (n64brew.dev: ROM Header, "Advanced Homebrew ROM
 # Header": "ED" en 0x3C–0x3D y el tipo de guardado en los 4 bits altos de
-# 0x3F): EEPROM de 4 Kbit, de 16 Kbit y SRAM de 256 Kbit. nust64 no escribe
-# esa cabecera; se parchea después. El encabezado no entra en ninguna suma
-# de verificación (nust64 deja CRC1/CRC2 en cero y el arranque HLE no los
-# mira), así que el resultado sigue siendo reproducible.
+# 0x3F): EEPROM de 4 Kbit, de 16 Kbit, SRAM de 256 Kbit y FlashRAM de
+# 1 Mbit. nust64 no escribe esa cabecera; se parchea después. El encabezado
+# no entra en ninguna suma de verificación (nust64 deja CRC1/CRC2 en cero y
+# el arranque HLE no los mira), así que el resultado sigue siendo
+# reproducible.
 #   tools/build-savetest.sh [args extra para docker build]
 set -eu
 cd "$(dirname "$0")/.."
@@ -27,5 +28,6 @@ variant() {
 variant eeprom4k "SALSA64 SAVE EEP4K" 020   # 0x10
 variant eeprom16k "SALSA64 SAVE EEP16K" 040 # 0x20
 variant sram "SALSA64 SAVE SRAM" 060        # 0x30
+variant flashram "SALSA64 SAVE FLASH" 120   # 0x50
 rm -f "$BASE" "$BASE.sha256"
 cat "$DEST"/salsa64-savetest-*.sha256

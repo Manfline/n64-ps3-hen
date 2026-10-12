@@ -1,7 +1,8 @@
 /*
  * Salsa64 — pruebas del guardado del cartucho (src/core/save.c y savedb.c):
  * EEPROM por el PIF, SRAM por DMA del PI y acceso directo, tipo de cada ROM,
- * guardado.cfg, nombre del archivo y volcado diferido.
+ * guardado.cfg, nombre del archivo y volcado diferido. La FlashRAM tiene
+ * las suyas en test_flashram.c.
  */
 #include "test.h"
 
@@ -300,7 +301,7 @@ static void save_load(void)
 	CHECK(!salsa64_save_load(&save, file, sizeof file));
 
 	/* Los tipos sin emular quedan como ninguno. */
-	salsa64_save_init(&save, SALSA64_SAVE_FLASHRAM);
+	salsa64_save_init(&save, SALSA64_SAVE_SRAM_768K);
 	CHECK_EQ(save.type, SALSA64_SAVE_NONE);
 	CHECK_EQ(save.size, 0);
 }
@@ -358,8 +359,15 @@ static void detect_table(void)
 		/* Excepciones por región y versión. */
 		{ "NK4J", 0, SALSA64_SAVE_SRAM_256K }, { "NK4J", 1, SALSA64_SAVE_SRAM_256K },
 		{ "ND3J", 0, SALSA64_SAVE_EEPROM_16K }, { "NWTJ", 0, SALSA64_SAVE_EEPROM_4K },
-		/* Reconocidos sin emular. */
-		{ "NAFJ", 0, SALSA64_SAVE_FLASHRAM }, { "CDZJ", 0, SALSA64_SAVE_SRAM_768K },
+		/* FlashRAM: Majora's Mask en las tres regiones, Paper Mario,
+		 * Pokémon Snap, Pokémon Puzzle League y Doubutsu no Mori. */
+		{ "NZSE", 0, SALSA64_SAVE_FLASHRAM }, { "NZSJ", 1, SALSA64_SAVE_FLASHRAM },
+		{ "NZSP", 0, SALSA64_SAVE_FLASHRAM }, { "NMQE", 0, SALSA64_SAVE_FLASHRAM },
+		{ "NMQP", 0, SALSA64_SAVE_FLASHRAM }, { "NPFE", 0, SALSA64_SAVE_FLASHRAM },
+		{ "NPFJ", 0, SALSA64_SAVE_FLASHRAM }, { "NPNE", 0, SALSA64_SAVE_FLASHRAM },
+		{ "NAFJ", 0, SALSA64_SAVE_FLASHRAM },
+		/* Reconocido sin emular. */
+		{ "CDZJ", 0, SALSA64_SAVE_SRAM_768K },
 	};
 	enum salsa64_save_source src;
 	for (unsigned k = 0; k < sizeof cases / sizeof cases[0]; k++) {
@@ -423,6 +431,11 @@ static void filename(void)
 	memcpy(rom + 0x20, "  Mario/Kart:64\xB0\xB1    ", 20);
 	salsa64_save_filename(rom, SALSA64_SAVE_EEPROM_16K, name, sizeof name);
 	CHECK(strcmp(name, "Mario_Kart_64-EC7011B7.eep") == 0);
+
+	memcpy(rom + 0x20, "ZELDA MAJORA'S MASK ", 20);
+	salsa64_wr32(rom + 0x10, 0x5354631C);
+	salsa64_save_filename(rom, SALSA64_SAVE_FLASHRAM, name, sizeof name);
+	CHECK(strcmp(name, "ZELDA_MAJORA_S_MASK-5354631C.fla") == 0);
 
 	memset(rom + 0x20, ' ', 20);
 	salsa64_wr32(rom + 0x10, 0x00ABCDEF);

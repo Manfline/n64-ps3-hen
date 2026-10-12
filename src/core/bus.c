@@ -154,7 +154,7 @@ uint32_t salsa64_bus_read32(struct salsa64_bus *bus, uint32_t paddr)
 	if (paddr >= SALSA64_PIF_RAM_ADDR && paddr < SALSA64_PIF_RAM_ADDR + SALSA64_PIF_RAM_SIZE)
 		return salsa64_rd32(bus->pif_ram + (paddr - SALSA64_PIF_RAM_ADDR));
 	if (paddr - SALSA64_SRAM_ADDR < SALSA64_SRAM_SPAN)
-		return salsa64_save_sram_read32(bus, paddr);
+		return salsa64_save_dom2_read32(bus, paddr);
 	return 0;
 }
 
@@ -190,7 +190,7 @@ void salsa64_bus_write32(struct salsa64_bus *bus, uint32_t paddr, uint32_t value
 		return;
 	}
 	if (paddr - SALSA64_SRAM_ADDR < SALSA64_SRAM_SPAN) {
-		salsa64_save_sram_write32(bus, paddr, value);
+		salsa64_save_dom2_write32(bus, paddr, value);
 		return;
 	}
 	/* ROM del cartucho y huecos: se ignora. */

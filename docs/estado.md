@@ -65,6 +65,81 @@ Pendiente:
 - [ ] Otros juegos del 6103 (Diddy Kong Racing, Paper Mario) no se
       probaron; el arranque nuevo reproduce lo que deja la consola.
 
+## 2026-10-11 — FlashRAM: Majora's Mask guarda (rama `clever-tereshkova-aa0089`, paquete SLSA00096 «Salsa64 FlashRAM»)
+
+Problema (PS3 real, v0.1.0): en Majora's Mask, después de la escena inicial
+con Skull Kid, Link moría y aparecía con tres ocarinas en los botones C. El
+log decía «guardado: flashram (tabla por código de juego) todavía no se
+emula: sin guardado»: el juego identifica el chip al arrancar y lee sus
+partidas y el guardado del búho; sin chip leía ceros.
+
+Hecho:
+- **FlashRAM de 1 Mbit** (`src/core/flashram.c`, código propio desde
+  n64brew.dev «Flash», cotejado con ares y mupen64plus-core; fuente de cada
+  detalle en la cabecera y en docs/THIRD_PARTY.md): comandos en 0x08010000
+  (borrado de chip y de sector, programación de página, modos búfer de
+  página, estado, identificador y lectura), registro de estado (0x8C en
+  reposo), identificador 11118001 00C2001E, DMA del PI en los dos sentidos
+  y accesos de 32 bits del CPU. Un solo modelo, el MX29L1100 (direcciones de
+  lectura por palabra de 16 bits, ráfagas que no salen de su bloque de
+  32 KB): es el de Majora, Pokémon Snap y Puzzle League según ares y el que
+  mupen64plus da a todos; libultra elige el direccionamiento por el
+  identificador. Borrar y programar son instantáneos.
+- **Archivo** `saves/<título>-<CRC1>.fla` de 128 KB con el volcado diferido
+  de siempre; `SALSA64_SAVE_MAX` sube a 128 KB (búfer del guardado, zona de
+  paso y lectura al abrir: +0,3 MB, docs/memory-budget.md). El panel del
+  menú muestra «FlashRAM» sin «(sin emular)». Al cerrar, el log dice cuántos
+  comandos recibió el chip.
+- **Estados guardados**: los 128 KB en CART y el estado del chip en una
+  sección nueva, FLSH, con versión propia (docs/estados.md). El búfer de
+  paso sube de 128 a 256 KB.
+- **Tabla por código**: ya marcaba FlashRAM para Majora (NZS), Paper Mario
+  (NMQ), Pokémon Snap (NPF), Puzzle League (NPN), Stadium 1 y 2, Jet Force
+  Gemini y otros 13; ahora las pruebas lo comprueban en varias regiones.
+- **Pruebas**: suite `flashram` (10 pruebas: identificación, estado,
+  lectura por palabras con la vuelta de 32 KB, borrado de sector y de chip,
+  programación con AND y búfer a 0xFF, comandos raros, reset) y una de ida
+  y vuelta de FLSH en `state`; 401 en total, en verde. `savetest` tiene una
+  cuarta variante, `salsa64-savetest-flashram.z64`: identifica el chip,
+  borra el chip, programa las 1024 páginas, relee, borra el último sector y
+  comprueba que no toque el anterior; pasa sus dos arranques en
+  `tools/test-roms.sh` y entra en `save-tests` (RPCS3 y PS3).
+- **Majora's Mask en el host** (respaldo propio, `salsa64-run` nativo con
+  `--pad`): al arrancar pide el estado y el identificador por DMA de 8
+  bytes; con START en el título lee los sectores 0–3 en DMA de 8 KB, no
+  encuentra partida y escribe los sectores 2–5; al crear el archivo 1
+  («Please wait…») borra el sector 0 y programa sus 128 páginas. El archivo
+  abre con 3 corazones, la escena inicial (bosque, Skull Kid, Epona) se
+  pasa con A y Link queda jugable con 3 corazones, la espada en B y los
+  botones C vacíos, vivo mil campos después. La partida persiste entre
+  corridas (`--save-dir`). Para rastrear el chip:
+  `EXTRA_CFLAGS=-DSALSA64_DEBUG_FLASH` y `--trace-from`.
+
+- **PS3 real** (2026-10-11, paquete SLSA00096, salida a 1080p): el autor
+  creó su archivo, pasó la escena inicial y jugó unos 18 minutos: «ya es
+  jugable». En el log, el `.fla` nuevo, los dos volcados diferidos de la
+  creación (512 y 128 escrituras del juego: sectores 2–5 y 0), 1959
+  comandos al chip en la primera sesión (0 desconocidos) y «cerrado sin
+  cambios pendientes»; al reabrir, los 128 KB leídos del `.fla` y el estado
+  de la ranura 0 cargado (campo 270 → 39145); más tarde el juego volvió a
+  escribir (256 escrituras, volcado diferido). Estados guardados y
+  cargados varias veces (8384 KB, ~0,7 s al guardar, 0,18–0,53 s al
+  cargar). 59,8 campos/s, CPU ~3,3 ms por campo. En el `.fla` bajado: la
+  partida en el sector 0 («ZELDA3» en 0x24) y los sectores 2–5 escritos.
+  El guardado con búho o con la Canción del Tiempo queda para más adelante
+  (hace falta jugar bastante para llegar).
+
+Falta:
+- [ ] Guardar con un búho o con la Canción del Tiempo en la PS3, salir y
+      reabrir (la creación del archivo y los estados ya están probados).
+- [ ] Probar Paper Mario, Pokémon Snap y Puzzle League con respaldos
+      propios. mupen64plus pone en 1 el bit 0 del estado al pedir el
+      identificador «para Pokémon Puzzle League»; aquí, como en ares, una
+      lectura de E/S en modo identificador da 0x11118001 (bit 0 en 1) y el
+      estado vale 0x8C. Si Puzzle League no guarda, mirar eso primero.
+- [ ] Otros modelos (MX29L1101 por byte, MN63F8MPN de Matsushita) solo si
+      algún juego no se adapta al MX29L1100.
+
 ## 2026-10-11 — Estados guardados con 10 ranuras por juego y contador de FPS (rama `wonderful-blackwell-6f40d3`, paquete SLSA00094 «Salsa64 estados»)
 
 Hecho (diseño y decisiones en docs/estados.md):
@@ -2506,7 +2581,8 @@ Notas:
 Falta:
 - [ ] Probarlo con Zelda (SRAM) y un juego con EEPROM cuando la Fase 2
       permita llegar a guardar (respaldos propios, fuera del repo).
-- [ ] FlashRAM (y SRAM de 768 Kbit y 1 Mbit) cuando un juego la pida.
+- [x] FlashRAM (2026-10-11, entrada de arriba); faltan la SRAM de 768 Kbit
+      y la de 1 Mbit.
 - [x] `src/core/rcp.h`: el comentario del SI ya menciona la EEPROM (al
       integrar con la Fase 2) y el del PI, la SRAM.
 
