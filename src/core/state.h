@@ -18,7 +18,9 @@
  *           tarea del RSP en curso (ya recogida del backend)
  *     SPME  DMEM e IMEM del RSP
  *     PIF0  controles retenidos, intercambios del PIF y la PIF RAM
- *     CART  guardado del cartucho en memoria (EEPROM o SRAM)
+ *     CART  guardado del cartucho en memoria (EEPROM, SRAM o FlashRAM)
+ *     FLSH  con FlashRAM: versión de la sección y estado del chip (modo,
+ *           registro de estado, borrado preparado, búfer de página)
  *     HLEG  estado de la HLE gráfica entre tareas (RDP y TMEM), formato del
  *           backend
  *     HLEA  estado de la HLE de audio entre tareas, formato del backend
@@ -47,7 +49,7 @@
 #define SALSA64_STATE_VERSION     1u
 #define SALSA64_STATE_MIN_VERSION 1u
 #define SALSA64_STATE_HEADER      64u
-#define SALSA64_STATE_SCRATCH     (128u << 10)
+#define SALSA64_STATE_SCRATCH     (256u << 10)  /* FlashRAM 128 KB + miniatura y lo demás */
 #define SALSA64_STATE_SLOTS       10
 #define SALSA64_STATE_FLAG_THUMB  0x1u
 

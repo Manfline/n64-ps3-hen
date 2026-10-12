@@ -85,7 +85,7 @@
  * contador de velocidad (VI/s y %, cuadros del juego y de la pantalla), que
  * se recuerda en menu.cfg.
  *
- * Guardado del cartucho (EEPROM, SRAM; savefile.c): tipo por
+ * Guardado del cartucho (EEPROM, SRAM, FlashRAM; savefile.c): tipo por
  * SALSA64_DATA_DIR/guardado.cfg, la cabecera de homebrew o la tabla por
  * código de juego; un archivo por juego en SALSA64_DATA_DIR/saves, escrito
  * unos segundos después de la última escritura del juego y al salir.

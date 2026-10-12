@@ -286,6 +286,52 @@ static void state_cart_save(void)
 	rom_off();
 }
 
+/* FlashRAM: los 128 KB van en CART y el estado del chip en FLSH, con su
+ * versión; una versión que no se conoce deja el chip como al encender (los
+ * datos se cargan igual). */
+static void state_flash(void)
+{
+	static struct salsa64_save sv;
+	rom_on(0x11223344);
+	salsa64_save_init(&sv, SALSA64_SAVE_FLASHRAM);
+	salsa64_save_attach(&t_n64.bus, &sv);
+	sv.data[0x1FFFF] = 0x5A;
+	sv.flash.mode = SALSA64_FLASH_LOAD_PAGE;
+	sv.flash.erase = 1;
+	sv.flash.erase_sector = 6;
+	sv.flash.page[5] = 0x42;
+	sv.flash.commands = 77;
+	CHECK(save_to(&fa));
+	CHECK_EQ(fa.len, salsa64_state_size(&t_n64, false));
+
+	salsa64_save_init(&sv, SALSA64_SAVE_FLASHRAM);
+	char err[128] = "";
+	CHECK(load_from(&fa, err, sizeof err));
+	CHECK_EQ(sv.data[0x1FFFF], 0x5A);
+	CHECK_EQ(sv.flash.mode, SALSA64_FLASH_LOAD_PAGE);
+	CHECK_EQ(sv.flash.erase, 1);
+	CHECK_EQ(sv.flash.erase_sector, 6);
+	CHECK_EQ(sv.flash.page[5], 0x42);
+	CHECK_EQ(sv.flash.page[6], 0xFF);
+	CHECK_EQ(sv.flash.commands, 77);
+	CHECK(salsa64_save_dirty(&sv));  /* al disco con el ritmo de siempre */
+
+	uint32_t at = SALSA64_STATE_HEADER;
+	while (at + 12 <= fa.len && memcmp(fa.data + at, "FLSH", 4) != 0)
+		at++;
+	CHECK(at + 12 <= fa.len);
+	CHECK_EQ(salsa64_rd32(fa.data + at + 8), 1);
+	salsa64_wr32(fa.data + at + 8, 99);
+	salsa64_save_init(&sv, SALSA64_SAVE_FLASHRAM);
+	sv.flash.mode = SALSA64_FLASH_STATUS;
+	CHECK(load_from(&fa, err, sizeof err));
+	CHECK_EQ(sv.flash.mode, SALSA64_FLASH_READ_ARRAY);
+	CHECK_EQ(sv.flash.page[5], 0xFF);
+	CHECK_EQ(sv.data[0x1FFFF], 0x5A);
+	salsa64_save_attach(&t_n64.bus, NULL);
+	rom_off();
+}
+
 /* Una tarea gráfica en vuelo se recoge antes de guardar: su fin llega a su
  * hora con el resultado, sin volver a llamar al backend. */
 static int fin_calls;
@@ -430,6 +476,7 @@ void t_suite_state(void)
 	RUN(state_rejects);
 	RUN(state_short_section);
 	RUN(state_cart_save);
+	RUN(state_flash);
 	RUN(state_rsp_quiesce);
 	RUN(gfx_state_round_trip);
 	RUN(audio_state_round_trip);

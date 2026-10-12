@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * Salsa64 — archivos de guardado del cartucho (EEPROM, SRAM) en el disco.
+ * Salsa64 — archivos de guardado del cartucho (EEPROM, SRAM, FlashRAM) en el
+ * disco.
  *
  * Un archivo por juego y tipo en el directorio que se indique (en la PS3,
  * SALSA64_DATA_DIR/saves; en salsa64-run, --save-dir), con el nombre de
- * salsa64_save_filename ("<título>-<CRC1>.eep|sra"). Los datos viven en el
+ * salsa64_save_filename ("<título>-<CRC1>.eep|sra|fla"). Los datos viven en el
  * struct salsa64_save que pone quien llama (preasignado); aquí solo se leen
  * al abrir y se escriben cuando salsa64_save_due lo pide (unos segundos sin
  * escrituras del juego) y al cerrar. Nada se escribe en cada escritura del

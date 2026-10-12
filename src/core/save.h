@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * Salsa64 — memoria de guardado del cartucho: EEPROM (canal 4 del PIF) y
- * SRAM (dominio 2 del PI).
+ * Salsa64 — memoria de guardado del cartucho: EEPROM (canal 4 del PIF),
+ * SRAM y FlashRAM (dominio 2 del PI).
  *
  * Comportamiento (n64brew.dev: Joybus Protocol, Peripheral Interface y
  * Memory map, consultadas el 2026-10-10):
@@ -20,11 +20,14 @@
  *     dos sentidos (PI_WR_LEN: cartucho → RDRAM; PI_RD_LEN: RDRAM →
  *     cartucho) y accesos directos del CPU de 32 bits. Se repite cada
  *     32 KB en todo el dominio (0x08000000–0x0FFFFFFF). Sin latencias.
+ *   - FlashRAM de 1 Mbit (128 KB) en el mismo lugar: un chip con modos
+ *     (lectura, estado, identificador, búfer de página) que se manejan con
+ *     comandos en 0x08010000. Detalle y fuentes en flashram.c.
  *
  * Se reconocen pero todavía no se emulan (quedan como "ninguno" y quien
- * llama lo avisa): SRAM de 768 Kbit en bancos, FlashRAM de 1 Mbit y SRAM de
- * 1 Mbit. Para agregarlos: crece SALSA64_SAVE_MAX y salsa64_save_pi_dma y
- * los accesos directos despachan por tipo.
+ * llama lo avisa): SRAM de 768 Kbit en bancos y SRAM de 1 Mbit. Para
+ * agregarlos: salsa64_save_pi_dma y los accesos directos despachan por
+ * tipo.
  *
  * Tipo de guardado de una ROM (salsa64_save_detect), en este orden:
  *   1. ajuste manual: en el frontend, SALSA64_DATA_DIR/guardado.cfg
@@ -42,7 +45,7 @@
  *   EC7011B7 = ninguno    CRC1 del encabezado (8 dígitos hex): una ROM
  *   * = eeprom4k          cualquier ROM
  * Gana la línea más específica (CRC1, luego 4, 3 y *). Tipos: ninguno,
- * eeprom4k, eeprom16k, sram256k (o sram), y sram768k, flashram, sram1m
+ * eeprom4k, eeprom16k, sram256k (o sram), flashram, y sram768k, sram1m
  * (reconocidos, sin emular).
  *
  * Persistencia: la hace quien llama (frontend o salsa64-run), con un
@@ -63,7 +66,7 @@ enum salsa64_save_type {
 	SALSA64_SAVE_EEPROM_16K,
 	SALSA64_SAVE_SRAM_256K,
 	SALSA64_SAVE_SRAM_768K,  /* reconocido, sin emular */
-	SALSA64_SAVE_FLASHRAM,   /* reconocido, sin emular */
+	SALSA64_SAVE_FLASHRAM,
 	SALSA64_SAVE_SRAM_1M,    /* reconocido, sin emular */
 	SALSA64_SAVE_NTYPES
 };
@@ -79,11 +82,45 @@ enum salsa64_save_source {
 /* Valor de `manual` para salsa64_save_detect sin ajuste manual. */
 #define SALSA64_SAVE_AUTO (-1)
 
-#define SALSA64_SAVE_MAX        (32u << 10)  /* el tipo emulado más grande */
+#define SALSA64_SAVE_MAX        (128u << 10)  /* el tipo emulado más grande */
 #define SALSA64_SRAM_ADDR       0x08000000u
 #define SALSA64_SRAM_SPAN       0x08000000u  /* dominio 2 hasta la ROM */
 #define SALSA64_SAVE_QUIET_US   2000000u
 #define SALSA64_SAVE_MAX_DELAY_US 30000000u
+
+/* FlashRAM (flashram.c). Se emula un solo modelo, el MX29L1100 de Macronix,
+ * con direcciones de lectura en palabras de 16 bits. */
+#define SALSA64_FLASH_SIZE      (128u << 10)
+#define SALSA64_FLASH_PAGE      128u
+#define SALSA64_FLASH_CMD       0x10000u      /* registro de comandos, desde 0x08000000 */
+#define SALSA64_FLASH_TYPE_ID   0x11118001u   /* primera palabra del identificador */
+#define SALSA64_FLASH_MX29L1100 0x00C2001Eu   /* fabricante (Macronix) y dispositivo */
+
+enum salsa64_flash_mode {
+	SALSA64_FLASH_READ_ARRAY,  /* el dominio muestra los datos */
+	SALSA64_FLASH_STATUS,      /* el registro de estado */
+	SALSA64_FLASH_SILICON_ID,  /* el identificador de 8 bytes */
+	SALSA64_FLASH_LOAD_PAGE,   /* el búfer de página */
+};
+
+/* Bits del registro de estado. */
+#define SALSA64_FLASH_ST_READY       0x80u  /* WSM_READY: acepta borrar y programar */
+#define SALSA64_FLASH_ST_ERASE_OK    0x08u
+#define SALSA64_FLASH_ST_PROGRAM_OK  0x04u
+#define SALSA64_FLASH_ST_ERASE_BUSY  0x02u
+#define SALSA64_FLASH_ST_PROGRAM_BUSY 0x01u
+
+/* Estado del chip (lo que no son los datos). Va en los estados guardados:
+ * sección FLSH de state.c. */
+struct salsa64_flash {
+	uint8_t mode;          /* enum salsa64_flash_mode */
+	uint8_t status;
+	uint8_t erase;         /* borrado preparado: 0 ninguno, 1 sector, 2 chip */
+	uint8_t erase_sector;  /* 0–7, con erase = 1 */
+	uint32_t commands;     /* comandos recibidos, para el log y las pruebas */
+	uint32_t unknown;      /* comandos que no se reconocieron */
+	uint8_t page[SALSA64_FLASH_PAGE];
+};
 
 struct salsa64_save {
 	enum salsa64_save_type type;  /* NONE si el tipo pedido no se emula */
@@ -93,6 +130,7 @@ struct salsa64_save {
 	uint32_t seen;                /* `writes` en la última consulta a _due */
 	uint64_t seen_us;             /* cuándo se vio cambiar `writes` */
 	uint64_t dirty_us;            /* primer cambio desde el último volcado */
+	struct salsa64_flash flash;   /* solo con SALSA64_SAVE_FLASHRAM */
 	uint8_t data[SALSA64_SAVE_MAX] __attribute__((aligned(128)));
 };
 
@@ -132,12 +170,23 @@ void salsa64_save_basename(const uint8_t *rom, char *buf, size_t size);
  * bytes) y su longitud, o -1 si no hay EEPROM que conteste. */
 int salsa64_save_joybus(struct salsa64_save *s, const uint8_t *tx, unsigned txlen, uint8_t *reply);
 /* DMA del PI ya programado (pi.c): si su dirección del cartucho cae en la
- * SRAM, lo hace con la interrupción y devuelve true. `to_rdram` = PI_WR_LEN. */
+ * SRAM o la FlashRAM, lo hace con la interrupción y devuelve true.
+ * `to_rdram` = PI_WR_LEN. */
 bool salsa64_save_pi_dma(struct salsa64_bus *bus, bool to_rdram);
-/* Accesos directos del CPU al dominio 2 (bus.c), alineados a 4. Sin SRAM,
- * lectura 0 y la escritura se ignora. */
-uint32_t salsa64_save_sram_read32(const struct salsa64_bus *bus, uint32_t paddr);
-void salsa64_save_sram_write32(struct salsa64_bus *bus, uint32_t paddr, uint32_t value);
+/* Accesos directos del CPU al dominio 2 (bus.c), alineados a 4. Sin SRAM
+ * ni FlashRAM, lectura 0 y la escritura se ignora. */
+uint32_t salsa64_save_dom2_read32(const struct salsa64_bus *bus, uint32_t paddr);
+void salsa64_save_dom2_write32(struct salsa64_bus *bus, uint32_t paddr, uint32_t value);
+
+/* FlashRAM (flashram.c); `off` es la dirección desde 0x08000000. */
+void salsa64_flash_reset(struct salsa64_flash *f);
+uint32_t salsa64_flash_read32(const struct salsa64_save *s, uint32_t off);
+void salsa64_flash_write32(struct salsa64_save *s, uint32_t off, uint32_t value);
+/* DMA de `len` bytes entre `rdram` y el chip (`to_rdram` = PI_WR_LEN). */
+void salsa64_flash_dma(struct salsa64_save *s, uint32_t off, uint8_t *rdram, uint32_t len, bool to_rdram);
+/* Escritura del juego en los datos (save.c): solo cuenta en `writes` si
+ * cambia algo. */
+void salsa64_save_store(struct salsa64_save *s, uint32_t off, const uint8_t *src, uint32_t len);
 
 /* Hay cambios sin volcar. */
 bool salsa64_save_dirty(const struct salsa64_save *s);

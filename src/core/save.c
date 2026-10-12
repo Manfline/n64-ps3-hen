@@ -4,7 +4,7 @@
  *
  * Escrito desde n64brew.dev (Joybus Protocol, Peripheral Interface, Memory
  * map y ROM Header, consultadas el 2026-10-10); no deriva de código de
- * otros emuladores.
+ * otros emuladores. La FlashRAM va aparte, en flashram.c.
  */
 #include "core/save.h"
 
@@ -39,7 +39,7 @@ static const struct {
 	[SALSA64_SAVE_EEPROM_16K] = { "eeprom16k", "eep", 2048 },
 	[SALSA64_SAVE_SRAM_256K]  = { "sram256k", "sra", 32768 },
 	[SALSA64_SAVE_SRAM_768K]  = { "sram768k", "sra", 0 },
-	[SALSA64_SAVE_FLASHRAM]   = { "flashram", "fla", 0 },
+	[SALSA64_SAVE_FLASHRAM]   = { "flashram", "fla", SALSA64_FLASH_SIZE },
 	[SALSA64_SAVE_SRAM_1M]    = { "sram1m", "sra", 0 },
 };
 
@@ -69,6 +69,7 @@ void salsa64_save_init(struct salsa64_save *s, enum salsa64_save_type type)
 	s->size = types[s->type].size;
 	s->writes = s->flushed = s->seen = 0;
 	s->seen_us = s->dirty_us = 0;
+	salsa64_flash_reset(&s->flash);
 	memset(s->data, 0xFF, sizeof s->data);
 }
 
@@ -83,8 +84,7 @@ void salsa64_save_attach(struct salsa64_bus *bus, struct salsa64_save *s)
 	bus->save = s;
 }
 
-/* Escritura del juego: solo cuenta si cambia algo. */
-static void store(struct salsa64_save *s, uint32_t off, const uint8_t *src, uint32_t len)
+void salsa64_save_store(struct salsa64_save *s, uint32_t off, const uint8_t *src, uint32_t len)
 {
 	if (memcmp(s->data + off, src, len) == 0)
 		return;
@@ -119,7 +119,7 @@ int salsa64_save_joybus(struct salsa64_save *s, const uint8_t *tx, unsigned txle
 	case EEP_WRITE:
 		if (txlen < 2 + EEP_BLOCK)
 			return -1;
-		store(s, (tx[1] * EEP_BLOCK) & (s->size - 1), tx + 2, EEP_BLOCK);
+		salsa64_save_store(s, (tx[1] * EEP_BLOCK) & (s->size - 1), tx + 2, EEP_BLOCK);
 		reply[0] = 0x00;  /* no ocupada */
 		return 1;
 	default:
@@ -127,39 +127,45 @@ int salsa64_save_joybus(struct salsa64_save *s, const uint8_t *tx, unsigned txle
 	}
 }
 
-/* ---- SRAM (dominio 2 del PI) --------------------------------------------- */
+/* ---- SRAM y FlashRAM (dominio 2 del PI) ------------------------------------ */
 
-static struct salsa64_save *sram(const struct salsa64_bus *bus)
+static struct salsa64_save *dom2(const struct salsa64_bus *bus)
 {
 	struct salsa64_save *s = bus->save;
-	return s && s->type == SALSA64_SAVE_SRAM_256K ? s : NULL;
+	return s && (s->type == SALSA64_SAVE_SRAM_256K || s->type == SALSA64_SAVE_FLASHRAM) ? s : NULL;
 }
 
 bool salsa64_save_pi_dma(struct salsa64_bus *bus, bool to_rdram)
 {
-	struct salsa64_save *s = sram(bus);
+	struct salsa64_save *s = dom2(bus);
 	uint32_t cart = bus->pi[SALSA64_PI_CART_ADDR] & 0xFFFFFFFE;
 	if (!s || cart - SALSA64_SRAM_ADDR >= SALSA64_SRAM_SPAN)
 		return false;
 	uint32_t dram = bus->pi[SALSA64_PI_DRAM_ADDR] & 0x00FFFFFE;
 	uint32_t len = (bus->pi[to_rdram ? SALSA64_PI_WR_LEN : SALSA64_PI_RD_LEN] & 0x00FFFFFF) + 1;
 
-	/* Lo que caiga fuera de la RDRAM se descarta. */
-	for (uint32_t done = 0; done < len;) {
-		uint32_t d = dram + done;
-		if (d >= bus->rdram_size)
-			break;
-		uint32_t off = (cart - SALSA64_SRAM_ADDR + done) & (s->size - 1);
-		uint32_t chunk = len - done;
-		if (chunk > bus->rdram_size - d)
-			chunk = bus->rdram_size - d;
-		if (chunk > s->size - off)
-			chunk = s->size - off;
-		if (to_rdram)
-			memcpy(bus->rdram + d, s->data + off, chunk);
-		else
-			store(s, off, bus->rdram + d, chunk);
-		done += chunk;
+	if (s->type == SALSA64_SAVE_FLASHRAM) {
+		/* Lo que caiga fuera de la RDRAM se descarta. */
+		if (dram < bus->rdram_size)
+			salsa64_flash_dma(s, cart - SALSA64_SRAM_ADDR, bus->rdram + dram,
+					  len < bus->rdram_size - dram ? len : bus->rdram_size - dram, to_rdram);
+	} else {
+		for (uint32_t done = 0; done < len;) {
+			uint32_t d = dram + done;
+			if (d >= bus->rdram_size)
+				break;
+			uint32_t off = (cart - SALSA64_SRAM_ADDR + done) & (s->size - 1);
+			uint32_t chunk = len - done;
+			if (chunk > bus->rdram_size - d)
+				chunk = bus->rdram_size - d;
+			if (chunk > s->size - off)
+				chunk = s->size - off;
+			if (to_rdram)
+				memcpy(bus->rdram + d, s->data + off, chunk);
+			else
+				salsa64_save_store(s, off, bus->rdram + d, chunk);
+			done += chunk;
+		}
 	}
 	if (to_rdram && dram < bus->rdram_size)
 		salsa64_bus_rdram_written(bus, dram, len);  /* código recompilado ahí: descartarlo */
@@ -171,22 +177,28 @@ bool salsa64_save_pi_dma(struct salsa64_bus *bus, bool to_rdram)
 	return true;
 }
 
-uint32_t salsa64_save_sram_read32(const struct salsa64_bus *bus, uint32_t paddr)
+uint32_t salsa64_save_dom2_read32(const struct salsa64_bus *bus, uint32_t paddr)
 {
-	const struct salsa64_save *s = sram(bus);
+	const struct salsa64_save *s = dom2(bus);
 	if (!s)
 		return 0;
+	if (s->type == SALSA64_SAVE_FLASHRAM)
+		return salsa64_flash_read32(s, paddr - SALSA64_SRAM_ADDR);
 	return salsa64_rd32(s->data + ((paddr - SALSA64_SRAM_ADDR) & (s->size - 4)));
 }
 
-void salsa64_save_sram_write32(struct salsa64_bus *bus, uint32_t paddr, uint32_t value)
+void salsa64_save_dom2_write32(struct salsa64_bus *bus, uint32_t paddr, uint32_t value)
 {
-	struct salsa64_save *s = sram(bus);
+	struct salsa64_save *s = dom2(bus);
 	if (!s)
 		return;
+	if (s->type == SALSA64_SAVE_FLASHRAM) {
+		salsa64_flash_write32(s, paddr - SALSA64_SRAM_ADDR, value);
+		return;
+	}
 	uint8_t w[4];
 	salsa64_wr32(w, value);
-	store(s, (paddr - SALSA64_SRAM_ADDR) & (s->size - 4), w, sizeof w);
+	salsa64_save_store(s, (paddr - SALSA64_SRAM_ADDR) & (s->size - 4), w, sizeof w);
 }
 
 /* ---- Volcado diferido ------------------------------------------------------ */
