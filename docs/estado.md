@@ -1,5 +1,18 @@
 # Estado
 
+## 2026-10-12 (noche) — Star Fox 64: la «estela» del menú es del juego (rama `infallible-wozniak-aa210c`)
+
+En el menú principal, al elegir una opción, las etiquetas se ven repetidas
+(«se replican muchas veces»). No es un error: en cada cuadro de esa
+animación el primer dibujo es un rectángulo a toda pantalla (8..312 ×
+8..232) sin textura, combiner G_CC_PRIMITIVE con PRIM = 0x0000002c (negro,
+alfa 17 %) y mezcla alfa, sin borrar antes el framebuffer: oscurece un 17 %
+lo que había en ese búfer (el cuadro de hace tres, triple búfer) y dibuja
+encima: el afterimage de ese menú. En el host se reproduce igual (3–4
+copias de «Main Game» apagándose). GLide64 en mupen64plus no lo muestra
+porque no conserva el framebuffer entre cuadros; el hardware sí, como
+nosotros.
+
 ## 2026-10-12 (noche) — Interbloqueo de la PS3 con más de SETS tareas gráficas en un campo (Paper Mario, Mario Party, Mario Party 3; rama `infallible-wozniak-aa210c`)
 
 Main lo reportó del candidato de v0.2.0: PM se queda quieto al pulsar START
