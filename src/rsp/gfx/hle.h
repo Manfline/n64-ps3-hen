@@ -126,6 +126,20 @@ struct gfx_tilememo {
 	struct gfx_tex tex;
 };
 
+/* El último resultado del combiner (gfx_combine) y sus entradas: el
+ * combiner (cc_hi, cc_lo), PRIM, ENV, PRIM_LOD, K4, K5, el tipo de ciclo y
+ * si el dibujo lleva niebla. Los estados de dibujo seguidos suelen repetir
+ * combiner (las 180 franjas de Perfect Dark, muchos dibujos de Conker) y
+ * gfx_combine es caro: en el SPE 0 va con -Os por la pila (rdp.c,
+ * combine). El resultado depende solo de esas entradas, así que vale entre
+ * tareas. key[5] = 0: vacío. Campos de 32 bits por el SPE. */
+struct gfx_ccmemo {
+	uint32_t key[6];
+	uint32_t approx, nterms, ntex, premul;
+	uint8_t factors[GFX_K_TERMS][GFX_K_FACTORS];
+	float k[GFX_K_TERMS][3][4];
+};
+
 struct gfx_state {
 	/* --- RSP (se reinicia por tarea) --- */
 	float mv[GFX_MTX_STACK][16];
@@ -179,6 +193,7 @@ struct gfx_state {
 	uint32_t load_next;
 	uint8_t tmem[4096] __attribute__((aligned(16)));
 	struct gfx_texcache tc;
+	struct gfx_ccmemo ccmemo;
 
 	/* --- Salida de la tarea en curso --- */
 	const struct gfx_job *job;
