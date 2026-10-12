@@ -195,23 +195,24 @@ static float shift_scale(unsigned shift)
 	return (float)(1u << (16 - shift));
 }
 
-/* `clamp`: ejes que se limitan aunque la tile repita (gfx_texrect). */
-static bool texture_state(struct gfx_state *g, struct gfx_draw *d, int tile, int slot, bool copy, unsigned clamp)
+/* `clamp`: ejes que se limitan aunque la tile repita (gfx_texrect); `lim`:
+ * texels que muestrea en cada eje (0: todos), solo para los que se limitan. */
+static bool texture_state(struct gfx_state *g, struct gfx_draw *d, int tile, int slot, bool copy, unsigned clamp,
+			  const uint16_t lim[2])
 {
 	struct gfx_tex *t = &d->tex[slot];
 	bool premul = (t->flags & GFX_TEX_PREMUL) != 0;  /* lo pidió gfx_combine */
-	if (!gfx_tile_texture(g, tile & 7, t, premul))
-		return false;
 	const struct gfx_tile *ti = &g->tiles[tile & 7];
+	unsigned ws = ti->masks && !(ti->cms & 2) && !(clamp & 1) ? ((ti->cms & 1) ? GFX_WRAP_MIRROR : GFX_WRAP_REPEAT)
+								    : GFX_WRAP_CLAMP;
+	unsigned wt = ti->maskt && !(ti->cmt & 2) && !(clamp & 2) ? ((ti->cmt & 1) ? GFX_WRAP_MIRROR : GFX_WRAP_REPEAT)
+								    : GFX_WRAP_CLAMP;
+	uint16_t l[2] = { lim && ws == GFX_WRAP_CLAMP ? lim[0] : 0, lim && wt == GFX_WRAP_CLAMP ? lim[1] : 0 };
+	if (!gfx_tile_texture(g, tile & 7, t, premul, l))
+		return false;
 	bool bilinear = !copy && ((g->oh >> G_MDSFT_TEXTFILT) & 3) != G_TF_POINT;
 	float half = bilinear ? 0.5f : 0.0f;
-	t->flags = (uint8_t)((ti->masks && !(ti->cms & 2) && !(clamp & 1)
-				      ? ((ti->cms & 1) ? GFX_WRAP_MIRROR : GFX_WRAP_REPEAT)
-				      : GFX_WRAP_CLAMP) |
-			     (ti->maskt && !(ti->cmt & 2) && !(clamp & 2)
-				      ? ((ti->cmt & 1) ? GFX_WRAP_MIRROR : GFX_WRAP_REPEAT)
-				      : GFX_WRAP_CLAMP) << 2 |
-			     (bilinear ? GFX_TEX_BILINEAR : 0) | (premul ? GFX_TEX_PREMUL : 0));
+	t->flags = (uint8_t)(ws | wt << 2 | (bilinear ? GFX_TEX_BILINEAR : 0) | (premul ? GFX_TEX_PREMUL : 0));
 	float w = (float)t->width, h = (float)t->height;
 	t->xf[0] = shift_scale(ti->shifts) / w;
 	t->xf[1] = shift_scale(ti->shiftt) / h;
@@ -262,7 +263,7 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 		for (int lane = 0; lane < 4; lane++)
 			d->k[GFX_K_T0][0][lane] = 1.0f;
 		d->ntex = 1;
-		if (!texture_state(g, d, tile, 0, true, g->rect_clamp & 3u))
+		if (!texture_state(g, d, tile, 0, true, g->rect_clamp & 3u, g->rect_lim))
 			d->ntex = 0;
 		if ((g->ol & G_AC_MASK) == G_AC_THRESHOLD) {
 			d->atest = GFX_ATEST_GEQUAL;
@@ -298,7 +299,8 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 	unsigned n = d->ntex;
 	for (unsigned i = 0; i < n; i++)
 		if (!texture_state(g, d, tile + (int)i, (int)i, false,
-				   kind == PRIM_RECT ? (g->rect_clamp >> (2 * i)) & 3u : 0)) {
+				   kind == PRIM_RECT ? (g->rect_clamp >> (2 * i)) & 3u : 0,
+				   kind == PRIM_RECT && i == 0 ? g->rect_lim : NULL)) {
 			d->ntex = (uint8_t)i;
 			break;
 		}
@@ -448,12 +450,18 @@ void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
  * en cada esquina (0: arriba a la izquierda, 1: arriba a la derecha,
  * 2: abajo a la izquierda, 3: abajo a la derecha). */
 static void rect(struct gfx_state *g, enum prim_kind kind, int tile, float x0, float y0, float x1, float y1,
-		 const float s[4], const float t[4], unsigned clamp)
+		 const float s[4], const float t[4], unsigned clamp, const uint16_t lim[2])
 {
 	if (x1 <= x0 || y1 <= y0)
 		return;
 	if (clamp != g->rect_clamp) {
 		g->rect_clamp = (uint8_t)clamp;
+		g->dirty = true;
+	}
+	uint16_t l0 = lim ? lim[0] : 0, l1 = lim ? lim[1] : 0;
+	if (l0 != g->rect_lim[0] || l1 != g->rect_lim[1]) {
+		g->rect_lim[0] = l0;
+		g->rect_lim[1] = l1;
 		g->dirty = true;
 	}
 	struct gfx_vertex *o = begin_prim(g, kind, tile, 6);
@@ -474,6 +482,14 @@ static void rect(struct gfx_state *g, enum prim_kind kind, int tile, float x0, f
 		o[i].r = o[i].g = o[i].b = o[i].a = 0;
 		o[i].pad = 0;
 	}
+}
+
+/* Texels desde el 0 hasta el que muestrea u < hi (y el siguiente con
+ * filtro); 0 si son todos los n. */
+static uint16_t sampled(float hi, bool bilinear, uint32_t n)
+{
+	uint32_t k = hi < 0.0f ? 1 : (uint32_t)hi + (bilinear ? 2 : 1);
+	return k < n ? (uint16_t)k : 0;
 }
 
 void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uint32_t w3, bool flip)
@@ -509,22 +525,26 @@ void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uin
 	 * fila y recorrería media textura (rayas). Ahí el rectángulo sale en
 	 * una tira por fila. Un fondo achicado (S2DEX) avanza pocos texels por
 	 * fila y queda entero. */
+	const struct gfx_tile *ti = &g->tiles[tile];
+	uint32_t tw, th;
+	gfx_tile_size(ti, &tw, &th);
 	float ns = flip ? h : w, nt = flip ? w : h;  /* muestras en s y en t */
+	float ks = shift_scale(ti->shifts), kt = shift_scale(ti->shiftt);
 	unsigned clamp = 0;
 	bool rows = false;
 	for (int i = 0; i < (cycle == G_CYC_2CYCLE ? 2 : 1); i++) {
-		const struct gfx_tile *ti = &g->tiles[(tile + i) & 7];
-		uint32_t tw, th;
-		gfx_tile_size(ti, &tw, &th);
-		float ks = shift_scale(ti->shifts), kt = shift_scale(ti->shiftt);
-		float sa = s0 * ks - ti->uls / 4.0f, sb = (s0 + (ns - 1.0f) * dsdx) * ks - ti->uls / 4.0f;
-		float ta = t0 * kt - ti->ult / 4.0f, tb = (t0 + (nt - 1.0f) * dtdy) * kt - ti->ult / 4.0f;
-		if ((sa < sb ? sa : sb) > -0.01f && (sa < sb ? sb : sa) < (float)tw - 0.99f)
+		const struct gfx_tile *ui = &g->tiles[(tile + i) & 7];
+		uint32_t uw, uh;
+		gfx_tile_size(ui, &uw, &uh);
+		float us = shift_scale(ui->shifts), ut = shift_scale(ui->shiftt);
+		float sa = s0 * us - ui->uls / 4.0f, sb = (s0 + (ns - 1.0f) * dsdx) * us - ui->uls / 4.0f;
+		float ta = t0 * ut - ui->ult / 4.0f, tb = (t0 + (nt - 1.0f) * dtdy) * ut - ui->ult / 4.0f;
+		if ((sa < sb ? sa : sb) > -0.01f && (sa < sb ? sb : sa) < (float)uw - 0.99f)
 			clamp |= 1u << (2 * i);
-		if ((ta < tb ? ta : tb) > -0.01f && (ta < tb ? tb : ta) < (float)th - 0.99f)
+		if ((ta < tb ? ta : tb) > -0.01f && (ta < tb ? tb : ta) < (float)uh - 0.99f)
 			clamp |= 2u << (2 * i);
-		float step = dtdy * kt;
-		rows |= (step < 0.0f ? -step : step) >= 2.0f && (step < 0.0f ? -step : step) * 2.0f >= (float)th;
+		float step = dtdy * ut;
+		rows |= (step < 0.0f ? -step : step) >= 2.0f && (step < 0.0f ? -step : step) * 2.0f >= (float)uh;
 	}
 	rows = rows && !flip && h <= 16.0f && (cycle == G_CYC_1CYCLE || cycle == G_CYC_2CYCLE);
 
@@ -537,6 +557,21 @@ void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uin
 		s0 -= 0.5f * dsdx;
 		t0 -= 0.5f * dtdy;
 	}
+	/* Texels que puede muestrear el rectángulo, desde el 0 de la tile: el
+	 * RSX (con u = s·k − uls, como en texture_state) toma floor(u) y, con
+	 * filtro, el siguiente, para todo u dentro del rectángulo (también
+	 * entre las muestras del RDP, a más resolución). En un eje limitado, lo
+	 * de más allá no se usa: no hace falta decodificarlo. Solo con tiles
+	 * más grandes que la TMEM (Perfect Dark copia el cuadro anterior en
+	 * franjas de 320 × 1 con una tile de 513 × 9): con una que cabe, los
+	 * rectángulos que la comparten (tiras de un fondo de S2DEX, letras de
+	 * una misma textura) siguen en un dibujo y una sola textura. */
+	uint16_t lim[2] = { 0, 0 };
+	if (tw * th * (4u << ti->siz) > 4096u * 8u) {
+		float se = s0 + ns * dsdx, te = t0 + nt * dtdy;
+		lim[0] = sampled((se > s0 ? se : s0) * ks - ti->uls / 4.0f, bilinear, tw);
+		lim[1] = sampled((te > t0 ? te : t0) * kt - ti->ult / 4.0f, bilinear, th);
+	}
 	float s[4], t[4];
 	if (rows) {
 		/* La t de la fila r es la de su esquina (sin el medio píxel). */
@@ -544,7 +579,7 @@ void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uin
 		s[0] = s0, s[1] = s0 + w * dsdx, s[2] = s0, s[3] = s0 + w * dsdx;
 		for (float y = uly; y < lry; y += 1.0f, tr += dtdy) {
 			t[0] = t[1] = t[2] = t[3] = tr;
-			rect(g, PRIM_RECT, tile, ulx, y, lrx, y + 1.0f < lry ? y + 1.0f : lry, s, t, clamp);
+			rect(g, PRIM_RECT, tile, ulx, y, lrx, y + 1.0f < lry ? y + 1.0f : lry, s, t, clamp, lim);
 		}
 		return;
 	}
@@ -555,7 +590,7 @@ void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uin
 		s[0] = s0, s[1] = s0, s[2] = s0 + h * dsdx, s[3] = s0 + h * dsdx;
 		t[0] = t0, t[1] = t0 + w * dtdy, t[2] = t0, t[3] = t0 + w * dtdy;
 	}
-	rect(g, PRIM_RECT, tile, ulx, uly, lrx, lry, s, t, clamp);
+	rect(g, PRIM_RECT, tile, ulx, uly, lrx, lry, s, t, clamp, lim);
 }
 
 /* ---- Triángulos crudos del RDP --------------------------------------------
@@ -732,7 +767,7 @@ static void fillrect(struct gfx_state *g, uint32_t w0, uint32_t w1)
 		g->res->rects++;
 		return;
 	}
-	rect(g, cycle == G_CYC_FILL ? PRIM_FILL : PRIM_RECT, 0, ulx, uly, lrx, lry, NULL, NULL, 3);
+	rect(g, cycle == G_CYC_FILL ? PRIM_FILL : PRIM_RECT, 0, ulx, uly, lrx, lry, NULL, NULL, 3, NULL);
 }
 
 static void set_image(uint32_t w0, uint8_t *fmt, uint8_t *siz, uint16_t *width)

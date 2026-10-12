@@ -157,6 +157,19 @@ perfil (caché de 16 MB, sin líneas de perfil JIT). **No hay un nivel medido.**
 | Memoria | XDR ≈ 140 MB [est]: ROM de 32 MB + ~108 |
 | **Cuello de botella** | PPE hilo 0 en las ventanas pesadas (hasta 76 % de NTSC); SPE 1 el segundo en importancia (MP3) |
 
+**Intro hasta la azotea de dataDyne y la escena siguiente** (2026-10-11,
+c17e790, escala 1×; `build/ps3-logs/salsa64-texturas-c17e790.log`, sin
+tocar el control, 19 ventanas de 5 s). Con la v0.1.0 la azotea iba a
+50 campos/s con el SPE 0 en 40–61 ms por tarea (el desenfoque de
+movimiento decodificaba la tile entera de cada franja; docs/texturas.md).
+
+| Componente | Azotea (t = 50–95 s) | Escena siguiente (t = 98–123 s) |
+|---|---|---|
+| Velocidad | **55,2–60,4 campos/s** | **44,8–52,9 campos/s** (75–88 %) |
+| PPE hilo 0 | Emulación 10,3–15,7 ms por campo, 26–49 MIPS, 43–72 % en bucles de espera | Emulación **17,6–21,6 ms por campo**, 41–63 MIPS, 11–50 % en espera: saturado |
+| SPE 0 | **3,5–9,2 ms por tarea** × 29–38 tareas/s (11–32 %); decodificar 0,5–0,65 ms con 133–181 texturas nuevas por tarea; el CPU lo espera 2,5–5,7 ms por tarea | 4,1–8,8 ms por tarea × 29–45/s; nada que decodificar; el CPU lo espera 0,02–4,4 ms por tarea (0,02–0,85 en las ventanas por debajo de 50 campos/s) |
+| **Cuello de botella** | Ninguno fijo: el CPU en las ventanas de 55–57 | **PPE hilo 0** (código recompilado), como GoldenEye en la presa |
+
 ### Banjo-Kazooie y Conker
 
 **No hay un log reciente con estadísticas de estos dos** (ni en `build/ps3-logs/` ni

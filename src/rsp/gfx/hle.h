@@ -21,7 +21,7 @@
 #define GFX_MTX_STACK   32   /* F3D: 10, F3DEX2: 18 en la RDRAM */
 #define GFX_DL_STACK    32   /* F3D: 10, F3DEX2: 18 */
 #define GFX_MAX_LIGHTS  11   /* + la ambiental; F3DEX2: 7, Conker: 11 */
-#define GFX_TEX_ARENA   128  /* texturas en el arena por tarea */
+#define GFX_ARENA_TEXTURES 64  /* texturas del arena que se recuerdan por tarea */
 #define GFX_TC_ENTRIES  1024 /* texturas en la caché entre tareas */
 #define GFX_TC_SLOTS    2048 /* índice por hash de la caché (potencia de 2) */
 #define GFX_MAX_COMMANDS (1u << 20)
@@ -119,6 +119,7 @@ struct gfx_load {
 struct gfx_tilememo {
 	uint32_t gen;
 	uint8_t tt, ok, premul;
+	uint16_t lim[2];
 	struct gfx_tex tex;
 };
 
@@ -182,12 +183,13 @@ struct gfx_state {
 	bool near_clip;            /* recortar contra el plano cercano (sin GFX_JOB_NONEAR) */
 	bool dirty;                /* cambió algo del estado de dibujo */
 	uint8_t rect_clamp;        /* TEXRECT en curso: 1 limitar s, 2 limitar t; tile + 1 en 4 y 8 */
+	uint16_t rect_lim[2];      /* TEXRECT en curso: texels de s y t que muestrea (0: todos) */
 	bool target_sent;          /* GFX_OP_TARGET de la color image actual */
 	bool have_draw;            /* `draw` está abierto */
 	struct gfx_draw draw __attribute__((aligned(16)));
 	uint32_t vtx_count;        /* vértices escritos en la tarea */
 	bool tc_on;                /* la tarea usa la caché de texturas */
-	struct gfx_texentry arena_tex[GFX_TEX_ARENA];
+	struct gfx_texentry arena_tex[GFX_ARENA_TEXTURES];
 	uint32_t narena_tex;
 	struct gfx_tilememo tilememo[8];
 
@@ -348,9 +350,11 @@ void gfx_load_block(struct gfx_state *g, uint32_t w0, uint32_t w1);
 void gfx_load_tile(struct gfx_state *g, uint32_t w0, uint32_t w1);
 void gfx_load_tlut(struct gfx_state *g, uint32_t w0, uint32_t w1);
 /* Decodifica la tile a RGBA8888 (o la toma de la caché) y llena `tex`
- * salvo flags y xf; con premul, RGB·A (otra entrada de la caché). false si
- * no hay lugar. */
-bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex, bool premul);
+ * salvo flags y xf; con premul, RGB·A (otra entrada de la caché). lim[0] y
+ * lim[1], si no son 0, acotan el ancho y el alto a los texels que se
+ * muestrean (desde el 0; el eje debe limitarse, no repetir). false si no
+ * hay lugar. */
+bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex, bool premul, const uint16_t lim[2]);
 /* Tamaño de la textura de una tile (potencia de 2 si se repite). */
 void gfx_tile_size(const struct gfx_tile *t, uint32_t *w, uint32_t *h);
 
