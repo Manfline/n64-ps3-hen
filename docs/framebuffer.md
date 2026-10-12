@@ -281,6 +281,16 @@ escala impar toma el píxel del centro; a escala par, el promedio de los
 El host (`src/host/raster.c`) sigue la misma política con la misma tabla:
 lee texturas de sus imágenes, copia a la RDRAM y ceba, de modo que la
 pausa de Zelda en la Mac muestra lo que mostrará la PS3 (sin los tiempos).
+Sus destinos de 16 bits guardan cada canal con la precisión de la N64 (los
+5 bits altos, los mismos que guarda la copia a la RDRAM, y de vuelta a 8
+como `v << 3 | v >> 2`, igual que la HLE decodifica el RGBA16): así leer
+un destino o su copia en la RDRAM da exactamente lo mismo, y la RDRAM no
+cambia. Hace falta para los estados guardados: al cargar,
+los destinos se sueltan y lo dibujado se lee de la RDRAM; con 8 bits por
+canal en el host, un efecto que vuelve a leer lo que dibujó (el
+acumulador del desenfoque de Majora's Mask) daba, guardando a mitad del
+baile del Espantapájaros, 40 bytes de RDRAM distintos de la corrida de
+corrido. La PS3 sigue a 8 bits por canal (el RSX) y no es determinista.
 
 ## Interruptor y costo
 

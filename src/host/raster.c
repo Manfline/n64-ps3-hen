@@ -194,8 +194,25 @@ static float edge(float ax, float ay, float bx, float by, float px, float py)
 	return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
 }
 
+/* Canal de 0 a 1 a 8 bits. En un destino de 16 bits, con la precisión de
+ * la N64: los 5 bits altos, los mismos que guarda la copia a la RDRAM
+ * (readback), y de vuelta a 8 como v << 3 | v >> 2, como la HLE decodifica
+ * el RGBA16 y el cebado lee la RDRAM. Así leer un destino o su copia en la
+ * RDRAM da lo mismo (la RDRAM no cambia), y un efecto que vuelve a leer lo
+ * que dibujó (el desenfoque de movimiento de Majora's Mask y de Perfect
+ * Dark) sigue igual tras cargar un estado, en que los destinos se sueltan
+ * y lo dibujado sale de la RDRAM. */
+static uint32_t channel(float v, bool q5)
+{
+	uint32_t c = (uint32_t)(v * 255.0f + 0.5f);
+	if (!q5)
+		return c;
+	c >>= 3;
+	return c << 3 | c >> 2;
+}
+
 static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, const struct texmem *m,
-			  const struct texsrc src[2], uint32_t *tg_rgb, struct depth *zb)
+			  const struct texsrc src[2], uint32_t *tg_rgb, bool q5, struct depth *zb)
 {
 	float sx[3], sy[3], sz[3], iw[3];
 	for (int i = 0; i < 3; i++) {
@@ -324,8 +341,7 @@ static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, 
 				else if (d->blend == GFX_BLEND_ADD)
 					out[l] = clamp01(out[l] * out[3] + dst[l]);
 			}
-			tg_rgb[idx] = (uint32_t)(out[0] * 255.0f + 0.5f) << 16 | (uint32_t)(out[1] * 255.0f + 0.5f) << 8 |
-				      (uint32_t)(out[2] * 255.0f + 0.5f);
+			tg_rgb[idx] = channel(out[0], q5) << 16 | channel(out[1], q5) << 8 | channel(out[2], q5);
 			if ((d->depth & GFX_DEPTH_WRITE) && zb)
 				zb->z[idx] = z;
 		}
@@ -586,7 +602,7 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 			}
 			struct depth *zb = d->depth ? get_depth(d->zimg) : NULL;
 			for (uint32_t i = 0; i + 3 <= d->h.b; i += 3)
-				draw_triangle(d, vtx + d->h.a + i, &m, src, rgb[cur], zb);
+				draw_triangle(d, vtx + d->h.a + i, &m, src, rgb[cur], tg.t[cur].bpp == 2, zb);
 			if (!drawn[cur])
 				rdp_targets_drawn(&tg, cur);
 			drawn[cur] = true;
