@@ -76,8 +76,16 @@ más carga de CPU (49 MIPS, 43 % en espera).
   el CPU (antes, en la presa: 54,1 y 6,42); Conker 59,8 (mín. 54,8), SPE
   3,72 (máx. 30,1 en la intro, igual que antes: 59,8, 7,26, máx. 30,5). En
   los tres, decodificar sigue en 0,00–0,05 ms por tarea.
-- Logs: `build/ps3-logs/salsa64-texturas-c17e790.log` (fuera de git) y el
-  de antes, `salsa64-v010-pd-majora.log`.
+- **A 3× (720p, escala automática)**, la misma corrida repetida: la azotea
+  a 59,3–60,2 campos/s con el SPE en 3,3–7,1 ms por tarea y las mismas
+  texturas; de 2200 a 3900, 47,9–60,2 (las bajadas, en las mismas ventanas
+  que a 1×, con más MIPS); la escena siguiente, 43–59. El RSX no limita: el
+  flip espera el vsync 4–11 ms por campo y el espejo del framebuffer copia
+  145–202 cuadros cada 5 s sin que la emulación lo espere. El autor: «se
+  ve muy fluida y nítida».
+- Logs: `build/ps3-logs/salsa64-texturas-c17e790.log` y
+  `salsa64-texturas-c17e790-3x.log` (fuera de git) y el de antes,
+  `salsa64-v010-pd-majora.log`.
 
 ## Estados guardados (2026-10-11)
 
