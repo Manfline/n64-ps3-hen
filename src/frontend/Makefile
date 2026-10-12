@@ -29,9 +29,22 @@ audio_SRCS := $(R)/src/spu/audio/main.c $(R)/src/spu/audio/io_spu.c \
               $(filter-out %/io_mem.c %/sync.c %/selftest.c,$(wildcard $(R)/src/rsp/audio/*.c))
 rsp_SRCS   := $(R)/src/spu/rsp/main.c $(R)/src/spu/rsp/io_spu.c \
               $(filter-out %/core.c,$(wildcard $(R)/src/rsp/lle/*.c))
+# Pila del SPE 0 (src/spu/gfx/main.c): el enlace falla si entre la cadena de
+# llamadas más honda y el final del programa quedan menos de 1,5 KB. Las
+# variantes de Rare se llaman por puntero desde su familia; lo demás que
+# llama por puntero es el arranque y la salida de la biblioteca de C.
+gfx_STACK_MIN  := 1536
+gfx_STACK_ARGS := --edge gfx_dl_f3d:pd_command --edge gfx_dl_f3dex2:cbfd_command \
+                  --ignore exit --ignore __call_exitprocs --ignore __do_global_ctors_aux \
+                  --ignore __do_global_dtors_aux --ignore register_tm_clones --ignore deregister_tm_clones
 CFLAGS  := -ffp-contract=off -fno-math-errno
 LIBS    := -lrsx -lgcm_sys -laudio -lio -lsysutil -lnet -lsysmodule -lrt -llv2 -lm
 # Caché del recompilador al final del segmento de texto (docs/rec-ppe.md).
 LDFLAGS := -T $(abspath $(R))/mk/rec-cache.ld -T lv2.ld
 
 include $(R)/mk/ps3.mk
+
+# El combiner, con -Os en el SPE 0: 5,6 KB menos de código (de 16,8 a 11,2
+# KB) que quedan para la pila. Corre una vez por estado de dibujo, no por
+# píxel ni por vértice.
+$(OBJ)/spu/src/rsp/gfx/combine.c.o: SPU_CFLAGS += -Os
