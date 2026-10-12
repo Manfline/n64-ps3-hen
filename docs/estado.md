@@ -1,5 +1,23 @@
 # Estado
 
+## 2026-10-12 (noche) — Smash: el KO se cae con las copias a la RDRAM (acotado, pendiente; rama `infallible-wozniak-aa210c`)
+
+Main lo acotó en la PS3 (con fbfx.cfg = 1 no se cae; en v0.1.0 ya pasaba
+con Smash Remix). En el host nativo se reproduce con `--gfx-frame` (demo,
+las tareas gráficas paran en el campo 1424): sin el espejo del framebuffer
+se cuelga igual; sin las copias esperadas corre toda la demo (12 987
+tareas); saltando solo la copia del destino `0a3940/320`, también. Ese
+destino es el z-buffer: en el KO el juego hace `ZCLEAR 0a3940` +
+`TARGET 0a3940/320` (limpia el z con un FILLRECT como color image), dibuja
+128 triángulos ahí (la silueta) y el CPU lee esa memoria cada campo (273
+lecturas por campo desde `800c7840`, en +0x23f00). La HLE convierte el
+relleno en ZCLEAR (solo profundidad), la color image nunca recibe el
+relleno, y la copia esperada escribe el contenido viejo de la superficie
+más los triángulos (y alfa siempre 1); el hardware deja 0xFFFC con la
+silueta encima. Arreglo pendiente: con ZCLEAR sobre una color image del
+mismo destino, rellenar también la superficie de color con el color de
+relleno (host y PS3) y no forzar alfa 1 en la copia; prueba en test_raster.
+
 ## 2026-10-12 (noche) — Star Fox 64: la «estela» del menú es del juego (rama `infallible-wozniak-aa210c`)
 
 En el menú principal, al elegir una opción, las etiquetas se ven repetidas
