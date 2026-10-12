@@ -27,6 +27,7 @@ static const uint8_t magic[8] = { 'S', 'L', 'S', '6', '4', 'S', 'T', 0 };
 #define TAG_SPME TAG('S', 'P', 'M', 'E')
 #define TAG_PIF0 TAG('P', 'I', 'F', '0')
 #define TAG_CART TAG('C', 'A', 'R', 'T')
+#define TAG_FLSH TAG('F', 'L', 'S', 'H')
 #define TAG_HLEG TAG('H', 'L', 'E', 'G')
 #define TAG_HLEA TAG('H', 'L', 'E', 'A')
 #define TAG_RDRM TAG('R', 'D', 'R', 'M')
@@ -294,6 +295,27 @@ static void sec_pif(struct st *s, struct salsa64_bus *b)
 	st_raw(s, b->pif_ram, SALSA64_PIF_RAM_SIZE);
 }
 
+/* FlashRAM: el estado del chip (sus datos van en CART). Con versión propia:
+ * un cambio incompatible la sube y una versión que no se conoce deja el
+ * chip como al encender. */
+#define FLSH_VERSION 1u
+
+static void sec_flash(struct st *s, struct salsa64_flash *f)
+{
+	st_u8(s, &f->mode);
+	st_u8(s, &f->status);
+	st_u8(s, &f->erase);
+	st_u8(s, &f->erase_sector);
+	st_u32(s, &f->commands);
+	st_u32(s, &f->unknown);
+	st_raw(s, f->page, sizeof f->page);
+}
+
+static bool is_flash(const struct salsa64_bus *b)
+{
+	return b->save && b->save->type == SALSA64_SAVE_FLASHRAM;
+}
+
 /* ---- Guardar ------------------------------------------------------------------- */
 
 static void fail(char *err, size_t n, const char *msg)
@@ -373,6 +395,13 @@ static bool save_sections(struct salsa64_n64 *n64, const struct salsa64_state_th
 		st_u32(s, &type);
 		st_u32(s, &size);
 		st_raw(s, b->save->data, size);
+		section_end(s, h);
+	}
+	if (is_flash(b)) {
+		h = section_begin(s, TAG_FLSH);
+		uint32_t version = FLSH_VERSION;
+		st_u32(s, &version);
+		sec_flash(s, &b->save->flash);
 		section_end(s, h);
 	}
 
@@ -679,6 +708,20 @@ bool salsa64_state_load(struct salsa64_n64 *n64, salsa64_state_read_fn read, voi
 			memcpy(sv->data, cs->data + 8, size);
 			sv->writes++;  /* al disco con el ritmo de siempre */
 		}
+	}
+	if (is_flash(b)) {
+		struct salsa64_flash fl;
+		uint32_t version = 0;
+		salsa64_flash_reset(&fl);
+		if ((cs = find_section(sec, nsec, TAG_FLSH)) != NULL) {
+			s = st_reader(cs->data, cs->len);
+			st_u32(&s, &version);
+			if (version == FLSH_VERSION)
+				sec_flash(&s, &fl);
+		}
+		if (version != FLSH_VERSION || fl.mode > SALSA64_FLASH_LOAD_PAGE || fl.erase > 2 || fl.erase_sector > 7)
+			salsa64_flash_reset(&fl);
+		b->save->flash = fl;
 	}
 	load_hle(find_section(sec, nsec, TAG_HLEG), r->gfx ? r->gfx->state_size : 0, r->gfx ? r->gfx->load_state : NULL,
 		 r->gfx ? r->gfx->ctx : NULL);

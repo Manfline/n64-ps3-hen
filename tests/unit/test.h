@@ -106,6 +106,7 @@ void t_suite_ai(void);
 void t_suite_pif(void);
 void t_suite_idle(void);
 void t_suite_save(void);
+void t_suite_flashram(void);
 void t_suite_rsp(void);
 void t_suite_rsp_lle(void);
 void t_suite_gfx(void);

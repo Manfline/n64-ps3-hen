@@ -1,17 +1,19 @@
 /*
  * Salsa64 — Fase 1: guardado del cartucho en la PS3.
  *
- * Corre sin pantalla las tres ROMs savetest (tests/roms/src/savetest:
- * EEPROM de 4 y 16 Kbit y SRAM de 256 Kbit) con el núcleo y
+ * Corre sin pantalla las cuatro ROMs savetest (tests/roms/src/savetest:
+ * EEPROM de 4 y 16 Kbit, SRAM de 256 Kbit y FlashRAM de 1 Mbit) con el
+ * núcleo y
  * frontend/savefile.c, lo mismo que usa el frontend con un juego: tipo por
  * la cabecera, un archivo por ROM en SALSA64_DATA_DIR/saves, volcado
- * diferido con el reloj del sistema (EEPROM de 4 Kbit y SRAM) y escritura
+ * diferido con el reloj del sistema (EEPROM de 4 Kbit, SRAM y FlashRAM) y
+ * escritura
  * al cerrar con cambios pendientes (EEPROM de 16 Kbit: se cierra sin
  * esperar el diferido, como quien sale del juego justo después de guardar).
  *
  * Cada ROM verifica lo que dejó su arranque anterior y escribe y relee el
  * suyo. Abrir el programa dos veces prueba que el guardado sobrevive a
- * cerrar y volver a abrir: la segunda vez las tres dicen "persistió".
+ * cerrar y volver a abrir: la segunda vez las cuatro dicen "persistió".
  * Imprime "RESULTADO save-tests: OK/FALLO (…)".
  */
 #include <malloc.h>
@@ -27,6 +29,7 @@
 #include "platform/ps3/log.h"
 #include "savetest_eeprom16k_bin.h"
 #include "savetest_eeprom4k_bin.h"
+#include "savetest_flashram_bin.h"
 #include "savetest_sram_bin.h"
 
 SYS_PROCESS_PARAM(1001, 0x100000);
@@ -128,11 +131,13 @@ int main(void)
 		{ "eeprom4k", savetest_eeprom4k_bin, &savetest_eeprom4k_bin_size, false },
 		{ "eeprom16k", savetest_eeprom16k_bin, &savetest_eeprom16k_bin_size, true },
 		{ "sram256k", savetest_sram_bin, &savetest_sram_bin_size, false },
+		{ "flashram", savetest_flashram_bin, &savetest_flashram_bin_size, false },
 	};
+	enum { NROMS = sizeof roms / sizeof roms[0] };
 	salsa64_log_init("save-tests");
 
 	uint32_t rom_max = 0;
-	for (unsigned k = 0; k < 3; k++)
+	for (unsigned k = 0; k < NROMS; k++)
 		if (*roms[k].size > rom_max)
 			rom_max = *roms[k].size;
 	uint8_t *rom = memalign(128, rom_max);
@@ -145,18 +150,18 @@ int main(void)
 	salsa64_n64_init(&n64, rdram, SALSA64_RDRAM_MAX);
 	salsa64_bus_set_isviewer(&n64.bus, isv_buf, isv_out, NULL);
 
-	uint32_t boots[3];
+	uint32_t boots[NROMS];
 	bool ok = true;
-	for (unsigned k = 0; k < 3; k++) {
+	for (unsigned k = 0; k < NROMS; k++) {
 		boots[k] = run_rom(roms[k].type, roms[k].bin, *roms[k].size, rom, roms[k].at_exit);
 		ok = ok && boots[k] != 0 && boots[k] == boots[0];
 	}
 	if (ok)
-		salsa64_log("RESULTADO save-tests: OK (arranque %u de eeprom4k, eeprom16k y sram256k; %s)", boots[0],
-			    boots[0] > 1 ? "persistió el anterior" : "abrir otra vez para ver la persistencia");
+		salsa64_log("RESULTADO save-tests: OK (arranque %u de eeprom4k, eeprom16k, sram256k y flashram; %s)",
+			    boots[0], boots[0] > 1 ? "persistió el anterior" : "abrir otra vez para ver la persistencia");
 	else
-		salsa64_log("RESULTADO save-tests: FALLO (arranques %u, %u y %u; ver el log)", boots[0], boots[1],
-			    boots[2]);
+		salsa64_log("RESULTADO save-tests: FALLO (arranques %u, %u, %u y %u; ver el log)", boots[0], boots[1],
+			    boots[2], boots[3]);
 	salsa64_log_shutdown();
 	return 0;
 }

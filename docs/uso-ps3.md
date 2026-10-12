@@ -156,17 +156,23 @@ Para cambiar el mapeo, ver `controles.cfg` más abajo.
 
 ## Partidas guardadas
 
-Salsa64 guarda lo que el cartucho guardaría (EEPROM y SRAM de 256 Kbit) en
-`/dev_hdd0/salsa64/saves`, un archivo por juego, con el nombre
-`<título>-<CRC1>.<extensión>` (`.eep` para EEPROM, `.sra` para SRAM). Se
-escribe unos segundos después de la última escritura del juego y al volver
-al menú o salir. Para respaldarlas, copiar esa carpeta por FTP.
+Salsa64 guarda lo que el cartucho guardaría (EEPROM, SRAM de 256 Kbit y
+FlashRAM de 1 Mbit) en `/dev_hdd0/salsa64/saves`, un archivo por juego, con
+el nombre `<título>-<CRC1>.<extensión>` (`.eep` para EEPROM, `.sra` para
+SRAM, `.fla` para FlashRAM, de 128 KB). Se escribe unos segundos después de
+la última escritura del juego y al volver al menú o salir. Para respaldarlas,
+copiar esa carpeta por FTP. Los archivos van en el orden de bytes de la N64:
+los `.sra` y `.fla` de mupen64plus traen invertidos los bytes de cada palabra
+de 32 bits y hay que darlos vuelta para usarlos aquí.
 
 El tipo de guardado se detecta solo: primero lo que diga `guardado.cfg`, luego
 la cabecera de los homebrew y por último una tabla interna por código de
-juego. Si un juego no guarda, el panel del menú mostrará «—» como tipo de
-guardado: se fija a mano en `guardado.cfg`. FlashRAM, SRAM de 768 Kbit y
-SRAM de 1 Mbit se reconocen pero todavía no se emulan.
+juego. El panel del menú lo muestra («EEPROM 4K», «SRAM», «FlashRAM»…); si
+un juego no guarda y el panel dice «—», se fija a mano en `guardado.cfg`.
+Usan FlashRAM, entre otros, Zelda: Majora's Mask, Paper Mario, Pokémon Snap,
+Pokémon Puzzle League, Pokémon Stadium 1 y 2 y Jet Force Gemini. La SRAM de
+768 Kbit y la de 1 Mbit se reconocen pero todavía no se emulan (el panel
+dice «(sin emular)»).
 
 ## Estados guardados
 
@@ -193,7 +199,8 @@ revés.
 
 A tener en cuenta:
 
-- Cargar un estado también vuelve la partida del cartucho (EEPROM o SRAM) a
+- Cargar un estado también vuelve la partida del cartucho (EEPROM, SRAM o
+  FlashRAM) a
   como estaba en ese momento, y así se escribe en `saves/`: un estado viejo
   deshace lo guardado después dentro del juego.
 - Un estado es de una ROM: con otra (u otra versión del mismo juego) se
@@ -289,8 +296,9 @@ EC7011B7 = ninguno    # CRC1 de la cabecera (8 dígitos hex): una ROM
 * = eeprom4k          # cualquier ROM
 ```
 
-Tipos: `ninguno`, `eeprom4k`, `eeprom16k`, `sram256k` (o `sram`). Los demás
-(`sram768k`, `flashram`, `sram1m`) se reconocen pero no se emulan.
+Tipos: `ninguno`, `eeprom4k`, `eeprom16k`, `sram256k` (o `sram`) y
+`flashram`. Los demás (`sram768k`, `sram1m`) se reconocen pero no se
+emulan.
 
 ### `audio.cfg`
 
