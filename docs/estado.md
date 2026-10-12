@@ -1,6 +1,6 @@
 # Estado
 
-## 2026-10-12 — Banjo-Kazooie: la protección anticopia del CIC 6103 (planos 750 y 1250) y el arranque del RSP (rama `infallible-wozniak-aa210c`, paquete SLSA00099 «Salsa64 gráficos»)
+## 2026-10-12 — Banjo-Kazooie (protección del CIC 6103), cara de Conker (K5) y rayas del logo de Zelda (rama `infallible-wozniak-aa210c`, paquete SLSA00099 «Salsa64 gráficos»)
 
 Lo visto por el autor en la PS3 con v0.1.0 (modelos que tiemblan, cosas
 dibujadas encima de otras, polígonos que faltan, el cielo) no era de la HLE
@@ -55,13 +55,62 @@ Herramientas: `--state-load` con `--lle` carga el estado (guardado con la
 HLE) y sigue con el microcódigo real, para comparar las dos en la misma
 escena; `docs/pads/banjo-casa.pad`.
 
-Verificación: `tools/build.sh test-host` 391/391 (prueba nueva
-`boot_cic6103_leftovers`), `tools/test-roms.sh` (gfxtest 35/35 ×3),
-`tools/build.sh` sin avisos.
+Verificación (con main b445531): `tools/build.sh test-host` 406/406
+(pruebas nuevas `boot_cic6103_leftovers`, `gfx_setconvert_k5` y
+`gfx_texrect_two_tiles`), `tools/test-roms.sh` (gfxtest 35/35 ×3),
+`tools/build.sh` sin avisos, `tools/test-rec.sh` y `tools/test-phase2.sh`.
 
-Pendiente:
-- [ ] PS3 real: Banjo-Kazooie en la intro, la casa y Spiral Mountain con
-      el paquete «Salsa64 gráficos» (SLSA00099); confirma el autor.
+**Cara de Conker (polígonos negros en la boca):** el hocico y la boca se
+dibujan con `(SHADE − ENV)·K5 + PRIM` en el segundo ciclo y K5 = 255
+(`G_SETCONVERT`); la HLE ignoraba ese comando y K5 valía 0. El microcódigo
+real (LLE) daba la misma cara negra: era del RDP común. K4 y K5 (9 bits con
+signo) van ahora al combiner y al estado del RDP, al final del formato de los
+estados guardados (los viejos los cargan en cero). En el host, Conker frente
+al logo de Rare: 1047 píxeles cambian (el hocico). Prueba
+`gfx_setconvert_k5`.
+
+**Rayas del logo de N64 de Zelda:** el texto «NINTENDO 64» va en
+rectángulos de 2 filas en 2 ciclos: el texto en la tile 0 y un ruido I8 de
+32 × 32 en la tile 1 con t × 32 (`shiftt` 11), que vuelve al mismo renglón
+en cada fila y cambia de renglón por franja. El límite del TEXRECT se
+calculaba con la tile 0 y se aplicaba también a la tile 1: el ruido quedaba
+pegado a su primer renglón en una fila de cada dos (en el verde del trazo de
+la «N», la fila de arriba de cada franja fija en 134). Ahora cada tile tiene
+su límite. Además, a 2×–5× el RSX interpolaba t dentro de la fila y recorría
+media textura de ruido por píxel de la N64: cuando una tile avanza media
+textura o más por fila, el rectángulo sale en una tira por fila con la t de
+esa fila. Prueba `gfx_texrect_two_tiles`. La «N» del logo sale más pálida
+que en mupen64plus (GLide64), pero el microcódigo real da las mismas
+coordenadas del mapa de entorno (82 píxeles distintos en todo el cuadro) y
+el muestreo cae sobre el brillo de la textura: no hay evidencia de un error
+nuestro.
+
+**Mario Kart, cielo de Luigi Raceway:** en el host el cielo (un cuadro en
+pantalla con w = 1, sin profundidad) y el fondo se ven en toda la carrera
+del guion `mk64-luigi.pad`, también imitando el zclamp del RSX: lo de la PS3
+no se reproduce aquí. Para eso, **SELECT + R2** (`src/frontend/main.c`)
+guarda `gfxdump-<campo>.bin` con la salida de la HLE del cuadro en pantalla
+y `gfxdump-<campo>.ppm` con la captura del RSX de ese mismo cuadro: se
+dibuja en la Mac con `salsa64-run --raster-dump` y se compara.
+
+Comparación de capturas cada 500 campos contra main: solo cambian Banjo,
+Conker y el logo de Zelda (SM64, Mario Kart, GoldenEye y Perfect Dark
+idénticos).
+
+Pendiente (PS3 real, paquete «Salsa64 gráficos» SLSA00099; confirma el
+autor):
+- [ ] Banjo-Kazooie: la intro (Banjo tocando con la cascada y los árboles
+      detrás), partida nueva, la casa por dentro y Spiral Mountain con
+      cielo; que no tiemblen los modelos ni falten polígonos.
+- [ ] Conker: la cara (hocico y boca) en la intro con el logo de Rare.
+- [ ] Zelda: el logo de N64 al arrancar, a la escala de siempre (sin las
+      líneas de entrelazado).
+- [ ] Mario Kart en Luigi Raceway, GoldenEye en el túnel de Dam y la túnica
+      de Link: SELECT + R2 cuando se vea el negro sobre el muro, las líneas
+      azules o el defecto de la túnica, y bajar `gfxdump-*.bin` y `.ppm` por
+      FTP para dibujarlos en la Mac. En el host, Link en su casa (guion
+      `zelda-kokiri.pad` con la partida del autor) no muestra un defecto
+      visible en la túnica.
 - [ ] Otros juegos del 6103 (Diddy Kong Racing, Paper Mario) no se
       probaron; el arranque nuevo reproduce lo que deja la consola.
 
