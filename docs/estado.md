@@ -46,8 +46,15 @@ el frontend traza ahora la presentación por campo si existe
 `/dev_hdd0/salsa64/trace-vi` (con un número N de campos; por omisión 300):
 origen del VI, de dónde salió la imagen (RSX, RDRAM o nada), destino,
 ranura, campos desde que se dibujó y cuánto va por delante la emulación.
-Pendiente: paquete con el relleno alto y la traza, en la PS3 con
-`trace-vi`.
+PS3 real con 8c8e3cd (el autor): jugando ya no parpadea; queda el logo
+«1997 Nintendo presents». La traza por campo lo explica: los 1200 campos
+salen del RSX con 1–3 campos de edad, pero entre el campo 96 y el 107 no
+hay campos: la emulación esperó 200 ms (el tope) la copia a la RDRAM de la
+tarea 5 (3da800, «esperada», 1 tarde) porque con el VI apagado la
+presentación no la traducía. Es lo que arregla main en 98def88 (la
+presentación traduce siempre la tarea cuya copia espera la emulación),
+traído a la rama en 129a6bb. `trace-vi` queda renombrado a `trace-vi.off`
+en la consola.
 
 ## 2026-10-12 (tarde) — Líneas azules de GoldenEye (cobertura AA), túnica de Link (máscara con clamp) y el negro de la intro de Banjo (niebla en el blender) (rama `infallible-wozniak-aa210c`)
 
