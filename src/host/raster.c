@@ -35,6 +35,8 @@
 /* G_IM_SIZ_16b (gbi): color images y texturas de 16 bits. */
 #define IM_SIZ_16b 2u
 
+_Static_assert(GFX_FB_FRESH == RDP_TARGETS_FRESH, "la HLE y la tabla cuentan igual la antigüedad de un destino");
+
 struct depth {
 	uint32_t addr;
 	bool used;
@@ -133,15 +135,16 @@ struct texmem {
 };
 
 /* De dónde se lee cada textura del dibujo: un destino (render a textura)
- * o su memoria. */
+ * o sus texels (de la HLE o, si la HLE la dejó para leerla de un destino y
+ * no se puede, decodificados aquí desde la RDRAM). */
 struct texsrc {
 	int slot;            /* ranura del destino, o -1 */
 	const uint32_t *pix; /* su imagen, o la copia (scratch) si es el ligado */
 	uint32_t x0, y0;     /* texel (0, 0) de la textura dentro del destino */
+	const uint8_t *data; /* con slot = -1: los texels RGBA8888 */
 };
 
-static void fetch(const struct gfx_tex *t, const struct texmem *m, const struct texsrc *s, int x, int y,
-		  float out[4])
+static void fetch(const struct gfx_tex *t, const struct texsrc *s, int x, int y, float out[4])
 {
 	x = wrap(x, t->width, GFX_TEX_WRAP_S(t->flags));
 	y = wrap(y, t->height, GFX_TEX_WRAP_T(t->flags));
@@ -158,29 +161,28 @@ static void fetch(const struct gfx_tex *t, const struct texmem *m, const struct 
 		out[3] = 1.0f;
 		return;
 	}
-	const uint8_t *p = m->base[t->where & 1] + t->offset + (uint32_t)y * t->pitch + 4u * (uint32_t)x;
+	const uint8_t *p = s->data + (uint32_t)y * t->pitch + 4u * (uint32_t)x;
 	for (int k = 0; k < 4; k++)
 		out[k] = p[k] / 255.0f;
 }
 
 /* Muestra con semántica del RSX: u, v normalizados; centros de texel en
  * (i + 0,5) / tamaño. */
-static void sample(const struct gfx_tex *t, const struct texmem *m, const struct texsrc *s, float u, float v,
-		   float out[4])
+static void sample(const struct gfx_tex *t, const struct texsrc *s, float u, float v, float out[4])
 {
 	float x = u * t->width, y = v * t->height;
 	if (!(t->flags & GFX_TEX_BILINEAR)) {
-		fetch(t, m, s, (int)floorf(x), (int)floorf(y), out);
+		fetch(t, s, (int)floorf(x), (int)floorf(y), out);
 		return;
 	}
 	x -= 0.5f;
 	y -= 0.5f;
 	int x0 = (int)floorf(x), y0 = (int)floorf(y);
 	float fx = x - x0, fy = y - y0, a[4], b[4], c[4], d[4];
-	fetch(t, m, s, x0, y0, a);
-	fetch(t, m, s, x0 + 1, y0, b);
-	fetch(t, m, s, x0, y0 + 1, c);
-	fetch(t, m, s, x0 + 1, y0 + 1, d);
+	fetch(t, s, x0, y0, a);
+	fetch(t, s, x0 + 1, y0, b);
+	fetch(t, s, x0, y0 + 1, c);
+	fetch(t, s, x0 + 1, y0 + 1, d);
 	for (int k = 0; k < 4; k++)
 		out[k] = (a[k] * (1 - fx) + b[k] * fx) * (1 - fy) + (c[k] * (1 - fx) + d[k] * fx) * fy;
 }
@@ -190,8 +192,8 @@ static float edge(float ax, float ay, float bx, float by, float px, float py)
 	return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
 }
 
-static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, const struct texmem *m,
-			  const struct texsrc src[2], uint32_t *tg_rgb, struct depth *zb)
+static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, const struct texsrc src[2],
+			  uint32_t *tg_rgb, struct depth *zb)
 {
 	float sx[3], sy[3], sz[3], iw[3];
 	for (int i = 0; i < 3; i++) {
@@ -246,7 +248,7 @@ static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, 
 			float tx[2][4] = { { 1, 1, 1, 1 }, { 1, 1, 1, 1 } };
 			for (int i = 0; i < d->ntex && i < 2; i++) {
 				const struct gfx_tex *te = &d->tex[i];
-				sample(te, m, &src[i], s * te->xf[0] + te->xf[2], t * te->xf[1] + te->xf[3], tx[i]);
+				sample(te, &src[i], s * te->xf[0] + te->xf[2], t * te->xf[1] + te->xf[3], tx[i]);
 			}
 			float X[GFX_K_TERMS][4];
 			for (int k = 0; k < GFX_K_TERMS; k++)
@@ -346,18 +348,39 @@ static uint32_t scissor_bottom(const uint8_t *cmd, uint32_t off, uint32_t cmd_by
 	return bottom;
 }
 
+/* Texturas que la HLE dejó para leer de un destino (GFX_TEX_TARGET) y que
+ * se decodificaron aquí desde la RDRAM porque para la tabla no eran de un
+ * destino vivo (como rdp.c en la PS3). Un búfer por textura del dibujo. */
+static uint8_t tex_here[2][GFX_TEX_MAX];
+static uint32_t tex_decoded_here;
+
 /* El origen de una textura del dibujo, si es un destino dibujado hace
- * poco (raster_fresh tareas o menos). */
-static int texture_source(const struct gfx_tex *t, int cur, struct texsrc *s)
+ * poco (RDP_TARGETS_FRESH tareas o menos); si no, sus texels (s->data). */
+static int texture_source(const struct gfx_job *job, const struct texmem *m, const struct gfx_tex *t, int k, int cur,
+			  struct texsrc *s)
 {
 	s->slot = -1;
-	if (!t->src_addr || t->src_siz != IM_SIZ_16b)
-		return -1;
-	uint32_t x0, y0;
-	int i;
-	enum rdp_texsrc src = rdp_targets_texture(&tg, t->src_addr, t->src_pitch, 2, cur, &i, &x0, &y0);
-	if ((src != RDP_TEXSRC_RSX && src != RDP_TEXSRC_SELF) || !raster_fbfx)
+	s->data = m->base[t->where & 1] + t->offset;
+	int i = -1;
+	uint32_t x0 = 0, y0 = 0;
+	enum rdp_texsrc src = RDP_TEXSRC_NONE;
+	if (t->src_addr && t->src_siz == IM_SIZ_16b)
+		src = rdp_targets_texture(&tg, t->src_addr, t->src_pitch, 2, cur, &i, &x0, &y0);
+	if ((src != RDP_TEXSRC_RSX && src != RDP_TEXSRC_SELF) || !raster_fbfx) {
+		if (t->where == GFX_TEX_TARGET) {
+			memset(tex_here[k], 0, sizeof tex_here[k]);
+			if (job->rdram_ea && (uint32_t)t->pitch * t->height <= sizeof tex_here[k])
+				rdp_decode_rgba16((const uint8_t *)(uintptr_t)job->rdram_ea, job->rdram_size, t->src_addr,
+						  t->src_pitch, t->width, t->height, tex_here[k], t->pitch);
+			s->data = tex_here[k];
+			tex_decoded_here++;
+			if (raster_trace_fb)
+				fprintf(stderr, "fb: campo %u tarea %u: textura %ux%u desde %06x/%u sin decodificar por la HLE: "
+					"se decodifica de la RDRAM (%s)\n", raster_field, task_no, t->width, t->height,
+					t->src_addr, t->src_pitch, src == RDP_TEXSRC_RDRAM ? "destino viejo o del CPU" : "sin destino");
+		}
 		return i;
+	}
 	if (src == RDP_TEXSRC_SELF) {
 		if (scratch_slot != i) {
 			memcpy(scratch, rgb[i], sizeof scratch);
@@ -563,7 +586,7 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 			for (int i = 0; i < 2; i++) {
 				src[i].slot = -1;
 				if (i < d->ntex) {
-					int k = texture_source(&d->tex[i], cur, &src[i]);
+					int k = texture_source(job, &m, &d->tex[i], i, cur, &src[i]);
 					if (k < 0 && raster_trace_fb && d->tex[i].src_addr) {
 						int j = locate_any(d->tex[i].src_addr);
 						if (j >= 0 && suspect[j]++ == 0)
@@ -582,7 +605,7 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 			}
 			struct depth *zb = d->depth ? get_depth(d->zimg) : NULL;
 			for (uint32_t i = 0; i + 3 <= d->h.b; i += 3)
-				draw_triangle(d, vtx + d->h.a + i, &m, src, rgb[cur], zb);
+				draw_triangle(d, vtx + d->h.a + i, src, rgb[cur], zb);
 			if (!drawn[cur])
 				rdp_targets_drawn(&tg, cur);
 			drawn[cur] = true;
@@ -669,17 +692,19 @@ void raster_reset(void)
 	next_depth = 0;
 	task_no = vi_field = 0;
 	memset(&vi_ring, 0, sizeof vi_ring);
-	primes = readbacks = mirrors = frames = 0;
+	primes = readbacks = mirrors = frames = tex_decoded_here = 0;
 	memset(rb_task, 0, sizeof rb_task);
 	memset(&last_job, 0, sizeof last_job);
 }
 
-void raster_fb_stats(uint32_t *n_readbacks, uint32_t *n_primes, uint32_t *tex_rsx, uint32_t *tex_rdram)
+void raster_fb_stats(uint32_t *n_readbacks, uint32_t *n_primes, uint32_t *tex_rsx, uint32_t *tex_rdram,
+		     uint32_t *tex_decoded)
 {
 	*n_readbacks = readbacks;
 	*n_primes = primes;
 	*tex_rsx = tg.tex_rsx;
 	*tex_rdram = tg.tex_rdram;
+	*tex_decoded = tex_decoded_here;
 }
 
 const uint32_t *raster_image(uint32_t addr, uint32_t *width)

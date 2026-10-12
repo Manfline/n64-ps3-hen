@@ -21,7 +21,10 @@
 #define GFX_MTX_STACK   32   /* F3D: 10, F3DEX2: 18 en la RDRAM */
 #define GFX_DL_STACK    32   /* F3D: 10, F3DEX2: 18 */
 #define GFX_MAX_LIGHTS  11   /* + la ambiental; F3DEX2: 7, Conker: 11 */
-#define GFX_ARENA_TEXTURES 64  /* texturas del arena que se recuerdan por tarea */
+/* Texturas del arena que se recuerdan por tarea (para no decodificar dos
+ * veces la misma con la caché llena o apagada): 32 entradas, 1,5 KB del
+ * local store del SPE 0. */
+#define GFX_ARENA_TEXTURES 32
 #define GFX_TC_ENTRIES  1024 /* texturas en la caché entre tareas */
 #define GFX_TC_SLOTS    2048 /* índice por hash de la caché (potencia de 2) */
 #define GFX_MAX_COMMANDS (1u << 20)
@@ -118,9 +121,26 @@ struct gfx_load {
  * cargas a la TMEM ni cambios de tiles (tex_gen) ni del modo de paleta. */
 struct gfx_tilememo {
 	uint32_t gen;
-	uint8_t tt, ok, premul;
+	uint8_t tt, ok, premul, clamp_s;
 	uint16_t lim[2];
 	struct gfx_tex tex;
+};
+
+/* Color images de 16 bits que la HLE vio dibujar, para no decodificar con
+ * GFX_JOB_FBTEX las texturas que el consumidor va a leer de su destino
+ * (tmem.c). Imitan los destinos del consumidor (src/rdp/targets.c): las
+ * mismas color images de 1 a 640 de ancho, con el alto conjeturado igual
+ * (3/4 del ancho, o hasta donde llegan las tijeras de sus dibujos), y la
+ * misma antigüedad en tareas. Lo que el consumidor sabe y la HLE no (qué
+ * copió a la RDRAM para el CPU, qué superficie no pudo crear o reciclar)
+ * lo resuelve él decodificando la textura (gfx.h). Campos de 32 bits: en
+ * el SPE, los de 8 y 16 cuestan varias instrucciones por acceso. */
+#define GFX_FB_IMAGES 8
+struct gfx_fbimg {
+	uint32_t addr;
+	uint32_t task;          /* última tarea que la dibujó (job->task) */
+	uint32_t width;         /* en píxeles; 0: libre */
+	uint32_t lh;            /* alto conjeturado, en píxeles */
 };
 
 struct gfx_state {
@@ -175,6 +195,9 @@ struct gfx_state {
 	uint32_t load_next;
 	uint8_t tmem[4096] __attribute__((aligned(16)));
 	struct gfx_texcache tc;
+	/* Fuera del tramo de los estados guardados: al cargar uno se olvida
+	 * (gfx_fb_forget), como el consumidor suelta sus destinos. */
+	struct gfx_fbimg fbimg[GFX_FB_IMAGES];
 
 	/* --- Salida de la tarea en curso --- */
 	const struct gfx_job *job;
@@ -184,6 +207,7 @@ struct gfx_state {
 	uint8_t rect_clamp;        /* TEXRECT en curso: 1 limitar s, 2 limitar t */
 	uint16_t rect_lim[2];      /* TEXRECT en curso: texels de s y t que muestrea (0: todos) */
 	bool target_sent;          /* GFX_OP_TARGET de la color image actual */
+	int32_t fbimg_cur;         /* su entrada en fbimg (send_target), o -1 */
 	bool have_draw;            /* `draw` está abierto */
 	struct gfx_draw draw __attribute__((aligned(16)));
 	uint32_t vtx_count;        /* vértices escritos en la tarea */
@@ -216,9 +240,8 @@ bool gfx_io_dl(struct gfx_state *g, uint32_t addr, uint32_t *w0, uint32_t *w1);
 struct gfx_vertex *gfx_io_vtx(struct gfx_state *g, uint32_t n);
 /* Escribe un registro de comando (size múltiplo de 16). false si no cabe. */
 bool gfx_io_cmd(struct gfx_state *g, const void *rec, uint32_t size);
-/* Área para decodificar una textura de `size` bytes (≤ GFX_TEX_MAX) y su
- * entrega al arena: devuelve el offset o -1 si no cabe. */
-#define GFX_TEX_MAX 32768u
+/* Área para decodificar una textura de `size` bytes (≤ GFX_TEX_MAX, gfx.h)
+ * y su entrega al arena: devuelve el offset o -1 si no cabe. */
 uint8_t *gfx_io_tex_begin(struct gfx_state *g, uint32_t size);
 int32_t gfx_io_tex_commit(struct gfx_state *g, uint32_t size);
 /* Entrega la textura (del área de gfx_io_tex_begin) a la región de la
@@ -313,6 +336,8 @@ void gfx_vtx_out(const struct gfx_state *g, const struct gfx_vtx *v, struct gfx_
 
 /* rdp.c: estado y primitivas del RDP. */
 void gfx_rdp_reset(struct gfx_state *g);
+/* Olvida las color images dibujadas (reset, estado cargado). */
+void gfx_fb_forget(struct gfx_state *g);
 void gfx_rdp_command(struct gfx_state *g, uint32_t w0, uint32_t w1);
 void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c);
 void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uint32_t w3, bool flip);
@@ -351,9 +376,12 @@ void gfx_load_tlut(struct gfx_state *g, uint32_t w0, uint32_t w1);
 /* Decodifica la tile a RGBA8888 (o la toma de la caché) y llena `tex`
  * salvo flags y xf; con premul, RGB·A (otra entrada de la caché). lim[0] y
  * lim[1], si no son 0, acotan el ancho y el alto a los texels que se
- * muestrean (desde el 0; el eje debe limitarse, no repetir). false si no
+ * muestrean (desde el 0; el eje debe limitarse, no repetir). clamp_s: el
+ * dibujo limita s (no repite); con GFX_JOB_FBTEX, una textura que viene
+ * de un destino reciente no se decodifica (GFX_TEX_TARGET). false si no
  * hay lugar. */
-bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex, bool premul, const uint16_t lim[2]);
+bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex, bool premul, const uint16_t lim[2],
+		      bool clamp_s);
 /* Tamaño de la textura de una tile (potencia de 2 si se repite). */
 void gfx_tile_size(const struct gfx_tile *t, uint32_t *w, uint32_t *h);
 

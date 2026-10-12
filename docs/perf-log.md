@@ -29,6 +29,57 @@ antes, después, notas.
 | 2026-10-11 | (rama fervent-hodgkin) | **HLE de la tarea JPEG de Zelda OoT** (fondos prerrenderizados), una sala: 75 tareas, 300 macrobloques | Mac (salsa64-run nativo, Apple Silicon) | antes: las tareas terminaban sin hacer nada (fondo basura) | **0,61 ms por sala** en el hilo del CPU, una vez al cargarla | Corre en el PPE (`core/rsp.c`); IDCT separable en flotante sin optimizar. El frontend escribe «JPEG: N tareas, M macrobloques en X ms del PPE» al terminar cada tanda: con esa medida se decide si se queda en el PPE o va a un SPE. El fondo se copia en el SPE 0 (40 tiras por cuadro, reutilizadas por la caché de texturas) |
 
 | 2026-10-11 | e0aa556 (v0.1.0) → c17e790 | **Perfect Dark, intro (azotea de dataDyne con desenfoque de movimiento)**: decodificar solo lo que muestrea cada TEXRECT y decodificación de 4 en 4 texels | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00097 «Salsa64 texturas», respaldo del usuario, sin tocar el control | 50,0–51,1 campos/s; HLE en el SPE 39,7–61,4 ms por tarea, de ellos decodificar 36,8–58,4 ms (90–143 texturas por tarea); el CPU dormía 28–40 ms por tarea esperando al SPE | **59,8–60,3 campos/s; SPE 3,3–5,0 ms por tarea (×11–17), decodificar 0,48–0,65 ms (133–181 texturas, ×77–94)**; dormida 3,0–5,5 ms | Antes a 4× automática, después a 1× pedida (la HLE no depende de la escala). Zelda, GoldenEye y Conker sin cambios. La escena siguiente (campos 4300–5500) va a 45–53 campos/s por el CPU emulado (41–63 MIPS, 18–22 ms por campo; en las ventanas más lentas casi no espera al SPE). Ver «Texturas que cambian en cada cuadro» abajo |
+## El desenfoque de Perfect Dark desde el destino del RSX (2026-10-12)
+
+Rama wonderful-jepsen (docs/framebuffer.md, «Texturas desde un destino sin
+decodificar»): las 180 franjas por tarea del cuadro anterior se reconocen
+como de su framebuffer y se leen del RSX a la resolución interna; la HLE ya
+no las decodifica (`GFX_TEX_TARGET`).
+
+**Host** (Mac, `salsa64-run` nativo con `-DSALSA64_GFX_TRACE`,
+`--gfx-frame` y `SALSA64_TEXSTAT=100`, sin tocar el control; antes = main
+b445531). Por tarea gráfica, ventanas de 100 campos:
+
+| Campos | Texturas pedidas | Decodificadas | Texels decodificados | Sin decodificar (desde un destino) | Texturas distintas en la ventana |
+|---|---|---|---|---|---|
+| 2029–2129 | 198,3 | 180,1 → 0,1 | 115 632 → 72 | 0 → 180,0 | 23 717 → 92 KB |
+| 2129–2229 | 207,2 | 180,7 → 0,5 | 116 376 → 519 | 0 → 180,0 | 23 821 → 196 KB |
+| 2229–2329 | 222,7 | 180,0 → 0,0 | 115 583 → 23 | 0 → 180,0 | 23 817 → 192 KB |
+| 2329–2430 | 235,4 | 180,3 → 0,2 | 115 861 → 141 | 0 → 180,0 | 24 326 → 228 KB |
+| 2430–2530 | 292,6 | 180,3 → 0,3 | 115 854 → 253 | 0 → 180,0 | 23 906 → 281 KB |
+
+En toda la corrida (1622 tareas hasta el campo 2600): 34,2 → 0,5 texturas
+decodificadas por tarea y 33,6 → 0,0 desalojadas de la caché. El
+rasterizador leyó 59 260 franjas de su imagen y decodificó 360 desde la
+RDRAM (dos tareas al empezar el efecto, con el destino copiado para el
+CPU). La HLE en el SPE no se mide en el host; en la PS3 decodificar las
+franjas costaba 0,48–0,65 ms por tarea (arriba).
+
+Capturas en campos fijos, antes contra después: la pausa de Zelda OoT
+(16, `zelda-oot.pad` con la partida del autor), Banjo (12), SM64 (15), Mario
+Kart (19), GoldenEye (10) y Conker (11) idénticas byte a byte; gfxtest 35/35
+en sus tres variantes (`tools/test-roms.sh`) y en RPCS3 con el frontend
+(`tools/test-phase2.sh`: 45 texturas del RSX, 0 decodificadas en el PPE).
+En la pausa de Zelda el consumidor decodificó 360 franjas de 320 × 6: las
+40 del fondo guardado para el CPU en las tres tareas después de cada una de
+las tres copias. Perfect Dark (15):
+distintas solo en las 180 filas de las franjas, en 1 nivel de 255 (hasta 3
+en el campo 2600, una escena oscura con mucho movimiento): el host dibuja a
+1× y su imagen tiene 8 bits por canal, contra los 5 de la copia en la
+RDRAM que se leía antes; la diferencia se acumula con la realimentación del
+desenfoque.
+
+**SPE 0** (`spu-size`): texto 102 624 → 104 368 bytes, bss 146 704 →
+145 296 (la tabla de color images +128; el registro del arena de 64 a 32
+entradas −1 536). La cadena más honda de la pila no cambia (9 056 bytes
+desde `main`, por el fondo S2DEX de Conker, `-fstack-usage` y el grafo de
+llamadas de `spu-objdump`): holgura 2 928 → 2 592 bytes. Sin achicar el
+arena quedaba en 1 056.
+
+**PS3 real**: pendiente (paquete SLSA00101 «Salsa64 desenfoque»): campos/s,
+ms del SPE y texturas por tarea en la azotea a 3×, y el desenfoque a ojo
+contra el de la copia a 1×.
+
 ## Texturas que cambian en cada cuadro: Perfect Dark (2026-10-11)
 
 **PS3 real** (Slim CECH-3011A, HFW 4.91 + HEN), Perfect Dark NTSC

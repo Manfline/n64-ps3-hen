@@ -75,6 +75,64 @@ void gfx_rdp_reset(struct gfx_state *g)
 	g->load_next = 0;
 	memset(g->tmem, 0, sizeof g->tmem);
 	g->tex_gen++;
+	gfx_fb_forget(g);
+}
+
+void gfx_fb_forget(struct gfx_state *g)
+{
+	memset(g->fbimg, 0, sizeof g->fbimg);
+	g->fbimg_cur = -1;
+}
+
+/* La color image actual recibe un dibujo en esta tarea: su entrada en
+ * fbimg (la misma dirección y ancho, una libre o la dibujada hace más
+ * tareas), como el consumidor elige la ranura de un destino. Solo las de 16
+ * bits (las únicas que lee como textura desde su destino) y no las
+ * imposibles (ancho 0 o de más de 640): el consumidor las ignora. */
+static __attribute__((noinline, cold)) void fb_drawn(struct gfx_state *g)
+{
+	g->fbimg_cur = -1;
+	uint32_t w = g->cimg_width, addr = g->cimg_addr, task = g->job->task;
+	if (w - 1 >= 640 || g->cimg_siz != G_IM_SIZ_16b)
+		return;
+	/* La misma imagen o, si no está, la libre o la dibujada hace más. */
+	int best = 0;
+	uint32_t oldest = 0;
+#pragma GCC unroll 1
+	for (int i = 0; i < GFX_FB_IMAGES; i++) {
+		const struct gfx_fbimg *e = &g->fbimg[i];
+		if (e->addr == addr && e->width == w) {
+			best = i;
+			break;
+		}
+		uint32_t age = e->width ? task - e->task : ~0u;
+		if (age > oldest) {
+			oldest = age;
+			best = i;
+		}
+	}
+	struct gfx_fbimg *e = &g->fbimg[best];
+	if (e->addr != addr || e->width != w) {
+		e->addr = addr;
+		e->width = w;
+		e->lh = w * 3 / 4;
+	}
+	e->task = task;
+	g->fbimg_cur = best;
+}
+
+/* Un dibujo de la color image actual llega hasta la fila `bottom` (sus
+ * tijeras): el alto conjeturado crece como el del destino del consumidor,
+ * que ignora una color image de más de 480 filas. */
+static void fb_rows(struct gfx_state *g, uint32_t bottom)
+{
+	if (g->fbimg_cur < 0)
+		return;
+	struct gfx_fbimg *e = &g->fbimg[g->fbimg_cur];
+	if (bottom > 480)
+		e->width = 0;
+	else if (bottom > e->lh)
+		e->lh = bottom;
 }
 
 void gfx_init(struct gfx_state *g)
@@ -208,7 +266,7 @@ static bool texture_state(struct gfx_state *g, struct gfx_draw *d, int tile, int
 	unsigned wt = ti->maskt && !(ti->cmt & 2) && !(clamp & 2) ? ((ti->cmt & 1) ? GFX_WRAP_MIRROR : GFX_WRAP_REPEAT)
 								    : GFX_WRAP_CLAMP;
 	uint16_t l[2] = { lim && ws == GFX_WRAP_CLAMP ? lim[0] : 0, lim && wt == GFX_WRAP_CLAMP ? lim[1] : 0 };
-	if (!gfx_tile_texture(g, tile & 7, t, premul, l))
+	if (!gfx_tile_texture(g, tile & 7, t, premul, l, ws == GFX_WRAP_CLAMP))
 		return false;
 	bool bilinear = !copy && ((g->oh >> G_MDSFT_TEXTFILT) & 3) != G_TF_POINT;
 	float half = bilinear ? 0.5f : 0.0f;
@@ -331,8 +389,10 @@ static void send_target(struct gfx_state *g)
 	struct gfx_cmd c = { GFX_OP_TARGET, sizeof c, g->cimg_addr, g->cimg_width,
 			     (uint32_t)g->cimg_fmt << 8 | g->cimg_siz };
 	gfx_flush_draw(g);
-	if (gfx_io_cmd(g, &c, sizeof c))
+	if (gfx_io_cmd(g, &c, sizeof c)) {
 		g->target_sent = true;
+		fb_drawn(g);
+	}
 }
 
 /* Deja abierto un dibujo con el estado vigente para `nvtx` vértices más y
@@ -359,6 +419,7 @@ static struct gfx_vertex *begin_prim(struct gfx_state *g, enum prim_kind kind, i
 			g->draw.h.a = g->vtx_count;
 			g->draw.h.b = 0;
 			g->have_draw = true;
+			fb_rows(g, (d.scissor[3] + 3u) / 4u);
 		}
 	}
 	struct gfx_vertex *v = gfx_io_vtx(g, nvtx);
@@ -484,10 +545,18 @@ static void rect(struct gfx_state *g, enum prim_kind kind, int tile, float x0, f
 }
 
 /* Texels desde el 0 hasta el que muestrea u < hi (y el siguiente con
- * filtro); 0 si son todos los n. */
+ * filtro); 0 si son todos los n. Con filtro puntual, floor(u) < hi: ceil(hi)
+ * texels (una franja de una fila con t de 0 a 1 es de una fila, no dos: así
+ * su procedencia no depende del paso, tmem.c). */
 static uint16_t sampled(float hi, bool bilinear, uint32_t n)
 {
-	uint32_t k = hi < 0.0f ? 1 : (uint32_t)hi + (bilinear ? 2 : 1);
+	uint32_t k;
+	if (hi < 0.0f)
+		k = 1;
+	else if (bilinear)
+		k = (uint32_t)hi + 2;
+	else
+		k = hi == 0.0f ? 1 : (uint32_t)hi + ((float)(uint32_t)hi < hi);
 	return k < n ? (uint16_t)k : 0;
 }
 
@@ -856,6 +925,7 @@ void gfx_rdp_command(struct gfx_state *g, uint32_t w0, uint32_t w1)
 		if (addr != g->cimg_addr || width != g->cimg_width || siz != g->cimg_siz) {
 			gfx_flush_draw(g);
 			g->target_sent = false;
+			g->fbimg_cur = -1;
 		}
 		g->cimg_addr = addr;
 		g->cimg_fmt = fmt;

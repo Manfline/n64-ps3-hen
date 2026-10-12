@@ -10,6 +10,7 @@
 
 #include "core/endian.h"
 #include "rsp/gfx/backend.h"
+#include "rdp/targets.h"
 #include "rsp/gfx/hle.h"
 
 #define DL_PA   0x10000u
@@ -26,6 +27,7 @@ static uint32_t cache_task;  /* tarea de la caché de texturas (0: sin caché) *
 static struct gfx_result res;
 static uint32_t dl_pc, data_pc;
 static uint32_t job_ucode;   /* dirección física del microcódigo de la tarea */
+static uint32_t job_flags;   /* GFX_JOB_* de las tareas */
 
 /* ---- Armado de la display list ---- */
 
@@ -48,6 +50,7 @@ static void start(void)
 	dl_pc = DL_PA;
 	data_pc = DATA_PA;
 	cache_task = 0;
+	job_flags = 0;
 	gfx_init(&gs);
 }
 
@@ -80,6 +83,7 @@ static void run(void)
 	job.gbi = SALSA64_GBI_F3DEX2;
 	job.dl = DL_PA;
 	job.ucode = job_ucode;
+	job.flags = job_flags;
 	gfx_run(&gs, &job, &res);
 }
 
@@ -1512,8 +1516,10 @@ static void gfx_tmem_decode_formats(void)
 
 /* Perfect Dark copia el cuadro anterior en franjas: LOADBLOCK de una fila de
  * 320 texels y TEXRECT de 320 × 1 con una tile de 513 × 9 (más grande que
- * la TMEM). Solo se decodifica lo que el rectángulo puede muestrear: 321 × 2
- * con filtro puntual. Con una tile que cabe en la TMEM, la tile entera. */
+ * la TMEM). Solo se decodifica lo que el rectángulo puede muestrear: 320 × 1
+ * con filtro puntual, y como es una sola fila su origen tiene el paso de
+ * SETTIMG (320), no el de la línea de la tile (640). Con una tile que cabe
+ * en la TMEM, la tile entera, con el paso de la línea. */
 static void gfx_texrect_sampled_texels(void)
 {
 	for (int fits = 0; fits < 2; fits++) {
@@ -1540,8 +1546,10 @@ static void gfx_texrect_sampled_texels(void)
 		CHECK(d && d->ntex == 1);
 		if (!d || !d->ntex)
 			return;
-		CHECK_EQ(d->tex[0].width, fits ? 64 : 321);
-		CHECK_EQ(d->tex[0].height, fits ? 8 : 2);
+		CHECK_EQ(d->tex[0].width, fits ? 64 : 320);
+		CHECK_EQ(d->tex[0].height, fits ? 8 : 1);
+		CHECK_EQ(d->tex[0].src_addr, TEX_PA);
+		CHECK_EQ(d->tex[0].src_pitch, fits ? 640 : 320);
 		const uint8_t *tex = tex_of(&d->tex[0]);
 		unsigned bad = 0;
 		for (uint32_t x = 0; x < (fits ? 64u : 320u); x++)
@@ -1550,6 +1558,149 @@ static void gfx_texrect_sampled_texels(void)
 		/* u = s·xf0 + xf2 normaliza al ancho decodificado. */
 		CHECK(fabsf(d->tex[0].xf[0] * d->tex[0].width - 1.0f) < 1e-5f);
 	}
+}
+
+/* Una franja de la fila `y` de un framebuffer RGBA16 de 320 en `fb`, como
+ * la copia Perfect Dark: SETTIMG de 320 en la fila, LOADBLOCK de 320
+ * texels, tile de 513 × 9 (1280 bytes por línea) y TEXRECT de 320 × 1 en la
+ * misma fila, filtro puntual. */
+static void pd_stripe(uint32_t fb, uint32_t y)
+{
+	dl(0xFD100000 | 319, fb + y * 640);
+	dl(0xF5100000, 0x07000000);
+	dl(0xF3000000, 0x07000000 | 319 << 12);
+	dl(0xF5100000 | 160 << 9, 0);
+	dl(0xF2000000, 2048u << 12 | 32u);
+	dl(0xE4000000 | 320u << 14 | (y + 1) << 2, y << 2);
+	dl(0xE1000000, 0);
+	dl(0xF1000000, 0x04000400);
+}
+
+/* Un dibujo en la color image de 320 en `fb` (rectángulo de relleno). */
+static void draw_on(uint32_t fb)
+{
+	dl(0xFF100000 | 319, fb);
+	set_cycle(G_CYC_FILL);
+	dl(0xF7000000, 0xF801F801);
+	dl(0xF6000000 | (319 << 2) << 12 | (239 << 2), 0);
+}
+
+/* Con GFX_JOB_FBTEX, una textura RGBA16 que viene de una color image que la
+ * HLE vio dibujar hace GFX_FB_FRESH tareas o menos no se identifica ni se
+ * decodifica: sale como GFX_TEX_TARGET con su tamaño y su procedencia, para
+ * que el consumidor la lea del destino (el cuadro anterior de Perfect Dark;
+ * las franjas de Zelda sobre su propio framebuffer). Se decodifica como
+ * siempre sin la bandera, de una imagen sin dibujar desde hace más tareas,
+ * con otro paso, o si la tile no es RGBA16. */
+static void gfx_texture_from_target(void)
+{
+	const uint32_t FB_A = 0x100000, FB_B = 0x140000;
+	start();
+	for (int x = 0; x < 320; x++)
+		salsa64_wr16(t_n64.bus.rdram + FB_A + 20 * 640 + 2 * x, (uint16_t)(x << 1 | 1));
+	job_flags = GFX_JOB_FBTEX;
+	next_task();  /* tarea 1: se dibuja FB_A */
+	draw_on(FB_A);
+	run();
+	CHECK_EQ(gs.fbimg[0].width, 320);
+	CHECK_EQ(gs.fbimg[0].addr, FB_A);
+	CHECK_EQ(gs.fbimg[0].lh, 240);
+
+	/* Tarea 2: la franja de FB_A sobre FB_B no se decodifica. */
+	next_task();
+	draw_on(FB_B);
+	set_cycle(G_CYC_1CYCLE);
+	set_combine(CC(CC_ZERO, CC_ZERO, CC_C_ZERO, CC_T0), CC(CC_A_ZERO, CC_A_ZERO, 7, 6));
+	pd_stripe(FB_A, 20);
+	run();
+	const struct gfx_draw *d = draw_n(1);
+	CHECK(d && d->ntex == 1);
+	if (!d || !d->ntex)
+		return;
+	CHECK_EQ(d->tex[0].where, GFX_TEX_TARGET);
+	CHECK_EQ(d->tex[0].offset, 0);
+	CHECK_EQ(d->tex[0].width, 320);
+	CHECK_EQ(d->tex[0].height, 1);
+	CHECK_EQ(d->tex[0].pitch, (320 * 4 + 63) & ~63u);
+	CHECK_EQ(d->tex[0].src_addr, FB_A + 20 * 640);
+	CHECK_EQ(d->tex[0].src_pitch, 320);
+	CHECK_EQ(d->tex[0].src_siz, G_IM_SIZ_16b);
+	CHECK_EQ(res.textures, 0);
+	CHECK_EQ(res.tex_target, 1);
+	CHECK_EQ(res.tex_bytes, 0);
+	/* Lo que decodificaría el consumidor desde la RDRAM es lo que habría
+	 * dado la HLE: el texel 5 (canales de 5 bits = 5 >> 1 en el azul…). */
+	uint8_t here[320 * 4];
+	rdp_decode_rgba16(t_n64.bus.rdram, t_n64.bus.rdram_size, d->tex[0].src_addr, d->tex[0].src_pitch, 320, 1, here,
+			  sizeof here);
+	CHECK_EQ(here[4 * 5 + 2], ref_c5(5));
+	CHECK_EQ(here[4 * 5 + 3], 0xFF);
+
+	/* Sin la bandera, la misma franja se decodifica (y da lo mismo). */
+	job_flags = 0;
+	next_task();
+	draw_on(FB_B);
+	set_cycle(G_CYC_1CYCLE);
+	set_combine(CC(CC_ZERO, CC_ZERO, CC_C_ZERO, CC_T0), CC(CC_A_ZERO, CC_A_ZERO, 7, 6));
+	pd_stripe(FB_A, 20);
+	run();
+	d = draw_n(1);
+	CHECK(d && d->ntex == 1 && d->tex[0].where != GFX_TEX_TARGET);
+	if (d && d->ntex == 1 && d->tex[0].where != GFX_TEX_TARGET)
+		CHECK(memcmp(tex_of(&d->tex[0]), here, sizeof here) == 0);
+	CHECK_EQ(res.tex_target, 0);
+
+	/* FB_A dibujada hace exactamente GFX_FB_FRESH tareas: todavía del
+	 * destino; una tarea más tarde, de la RDRAM (decodificada o de la caché). */
+	job_flags = GFX_JOB_FBTEX;
+	next_task();
+	draw_on(FB_A);
+	run();
+	for (int k = 0; k < GFX_FB_FRESH - 1; k++) {
+		next_task();
+		draw_on(FB_B);
+		run();
+	}
+	for (int k = 0; k < 2; k++) {
+		next_task();
+		draw_on(FB_B);
+		set_cycle(G_CYC_1CYCLE);
+		set_combine(CC(CC_ZERO, CC_ZERO, CC_C_ZERO, CC_T0), CC(CC_A_ZERO, CC_A_ZERO, 7, 6));
+		pd_stripe(FB_A, 20);
+		run();
+		CHECK_EQ(res.tex_target, k == 0 ? 1u : 0u);
+	}
+	CHECK(res.textures + res.tex_reused >= 1);
+
+	/* En la misma tarea: Zelda copia su framebuffer en franjas de 320 × 6
+	 * con LOADTILE (paso de SETTIMG) y la tile IA16 de la misma imagen sí se
+	 * decodifica. */
+	next_task();
+	draw_on(FB_A);
+	set_cycle(G_CYC_COPY);
+	dl(0xFD100000 | 319, FB_A);
+	dl(0xF5100000 | 80 << 9, 0x07000000);
+	dl(0xF4000000 | (10 << 2), 0x07000000 | (319 << 2) << 12 | (15 << 2));
+	dl(0xF5100000 | 80 << 9, 0x00000000);
+	dl(0xF2000000, (319 << 2) << 12 | (5 << 2));
+	dl(0xE4000000 | (319 << 2) << 12 | (15 << 2), (0 << 2) << 12 | (10 << 2));
+	dl(0xE1000000, 0);
+	dl(0xF1000000, 0x10000400);
+	dl(0xF5700000 | 80 << 9, 0x00000000);                     /* tile 0: IA16 */
+	dl(0xE4000000 | (319 << 2) << 12 | (15 << 2), (0 << 2) << 12 | (10 << 2));
+	dl(0xE1000000, 0);
+	dl(0xF1000000, 0x10000400);
+	run();
+	const struct gfx_draw *z0 = draw_n(1), *z1 = draw_n(2);
+	CHECK(z0 && z1);
+	if (!z0 || !z1)
+		return;
+	CHECK_EQ(z0->tex[0].where, GFX_TEX_TARGET);
+	CHECK_EQ(z0->tex[0].src_addr, FB_A + 10 * 640);
+	CHECK_EQ(z0->tex[0].src_pitch, 320);
+	CHECK_EQ(z0->tex[0].height, 6);
+	CHECK(z1->tex[0].where != GFX_TEX_TARGET);
+	CHECK_EQ(res.tex_target, 1);
 }
 
 /* G_RM_VISCVG (IM_RD | FORCE_BL, blender IN·0 + BL·A_MEM): el dibujo sale
@@ -1650,5 +1801,6 @@ void t_suite_gfx(void)
 	RUN(gfx_texcache_ring);
 	RUN(gfx_texcache_hash);
 	RUN(gfx_texture_provenance);
+	RUN(gfx_texture_from_target);
 	RUN(gfx_viscvg_flag);
 }

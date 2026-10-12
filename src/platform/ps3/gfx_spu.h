@@ -42,6 +42,7 @@ struct salsa64_gfx_spu {
 	uint64_t tex_old, tex_arena, tex_evicted, t_hash;
 	uint64_t skipped;    /* comandos de otro microcódigo saltados (G_LOAD_UCODE) */
 	uint64_t bg;         /* fondos de S2DEX dibujados (G_BG_COPY, G_BG_1CYC) */
+	uint64_t tex_target; /* texturas sin decodificar: se leen de un destino (GFX_TEX_TARGET) */
 };
 
 /* Arranca el trabajador (spukit_init ya llamado). Devuelve 0 o el error de

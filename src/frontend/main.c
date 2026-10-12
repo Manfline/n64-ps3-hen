@@ -1051,14 +1051,14 @@ static void gfx_window(uint64_t now, uint64_t us_field)
 		double k = 1e3 / spukit_tick_hz() / tasks;
 		salsa64_log("gfx campos %u–%u: %.1f campos/s (peor campo %.1f ms de emulación), %u tareas; por tarea: "
 			    "%.0f dibujos, %.0f triángulos, %.1f texturas decodificadas (+%.1f reusadas, %.1f de tareas "
-			    "anteriores; %.1f al arena, %.1f desalojadas), %.1f cargas a la TMEM (%.1f lecturas); SPE %.2f ms "
-			    "(vértices %.2f, estado %.2f, identificar texturas %.2f, decodificar %.2f, cargas %.2f), PPE "
-			    "esperando %.2f ms, traducción al RSX %.2f ms",
+			    "anteriores; %.1f al arena, %.1f desalojadas; %.1f sin decodificar, desde un destino), %.1f "
+			    "cargas a la TMEM (%.1f lecturas); SPE %.2f ms (vértices %.2f, estado %.2f, identificar texturas "
+			    "%.2f, decodificar %.2f, cargas %.2f), PPE esperando %.2f ms, traducción al RSX %.2f ms",
 			    gwin.field0, field - 1, (field - gwin.field0) * 1e6 / (now - gwin.t0), gwin.worst / 1e3, tasks,
 			    (double)(rs.draws - gwin.rdp.draws) / tasks, (double)(rs.triangles - gwin.rdp.triangles) / tasks,
 			    (double)(s->textures - s0->textures) / tasks, (double)(s->tex_reused - s0->tex_reused) / tasks,
 			    (double)(s->tex_old - s0->tex_old) / tasks, (double)(s->tex_arena - s0->tex_arena) / tasks,
-			    (double)(s->tex_evicted - s0->tex_evicted) / tasks,
+			    (double)(s->tex_evicted - s0->tex_evicted) / tasks, (double)(s->tex_target - s0->tex_target) / tasks,
 			    (double)(s->loads - s0->loads) / tasks, (double)(s->load_reads - s0->load_reads) / tasks,
 			    (s->spu_ticks - s0->spu_ticks) * k, (s->t_vtx - s0->t_vtx) * k, (s->t_state - s0->t_state) * k,
 			    (s->t_hash - s0->t_hash) * k, (s->t_tex - s0->t_tex) * k, (s->t_load - s0->t_load) * k,
@@ -1467,16 +1467,19 @@ static void stats(uint64_t now)
 		uint32_t fmir = rs.frames_mirrored - sw.rdp0.frames_mirrored;
 		uint32_t lost = rs.readbacks_lost - sw.rdp0.readbacks_lost, tfail = rs.targets_failed - sw.rdp0.targets_failed;
 		uint32_t tabs = rs.targets_absurd - sw.rdp0.targets_absurd, bfail = rs.binds_failed - sw.rdp0.binds_failed;
-		if (rb || rbw || mir || mirs || fmir || trsx || trd || tself || primes || lost || tfail || tabs || bfail)
+		uint32_t tppe = rs.tex_ppe - sw.rdp0.tex_ppe, tppel = rs.tex_ppe_lost - sw.rdp0.tex_ppe_lost;
+		if (rb || rbw || mir || mirs || fmir || trsx || trd || tself || primes || lost || tfail || tabs || bfail ||
+		    tppe || tppel)
 			salsa64_log("gfx: framebuffer: %u copias a la RDRAM (%.2f ms c/u en presentación), la emulación "
 				    "esperó %u tareas (%.2f ms c/u, %u tarde), %u copias espejo (%u sin búfer), %u cuadros "
-				    "copiados; texturas desde un destino: %u del RSX, %u de la RDRAM, %u del ligado; %u "
-				    "destinos cebados; %u copias perdidas, %u destinos sin superficie, %u color images imposibles, "
-				    "%u dibujos sin ligar (ninguna profundidad cubría el destino)",
+				    "copiados; texturas desde un destino: %u del RSX, %u de la RDRAM, %u del ligado, %u "
+				    "decodificadas en el PPE (%u sin lugar); %u destinos cebados; %u copias perdidas, %u "
+				    "destinos sin superficie, %u color images imposibles, %u dibujos sin ligar (ninguna "
+				    "profundidad cubría el destino)",
 				    rb, rb ? (rs.us_readback - sw.rdp0.us_readback) / 1e3 / rb : 0.0, rbw,
 				    rbw ? (rs.us_readback_wait - sw.rdp0.us_readback_wait) / 1e3 / rbw : 0.0,
-				    rs.readback_late - sw.rdp0.readback_late, mir, mirs, fmir, trsx, trd, tself, primes, lost,
-				    tfail, tabs, bfail);
+				    rs.readback_late - sw.rdp0.readback_late, mir, mirs, fmir, trsx, trd, tself, tppe, tppel,
+				    primes, lost, tfail, tabs, bfail);
 	}
 	if (lle_mode != SALSA64_LLE_OFF) {
 		uint32_t t = rsp_spu.tasks - sw.lle_tasks0;

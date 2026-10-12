@@ -70,6 +70,27 @@ void rdp_target_tex_map(uint32_t scale, uint32_t lw, uint32_t x0, uint32_t y0, u
 	out->xf2 = ((float)x0 + xf2 * w) / l;
 }
 
+void rdp_decode_rgba16(const uint8_t *rdram, uint32_t rdram_size, uint32_t addr, uint32_t pitch, uint32_t w,
+		       uint32_t h, uint8_t *out, uint32_t out_pitch)
+{
+	for (uint32_t y = 0; y < h; y++) {
+		uint8_t *o = out + y * out_pitch;
+		uint32_t a = addr + y * pitch * 2;
+		for (uint32_t x = 0; x < w; x++, a += 2, o += 4) {
+			if (a + 2 > rdram_size || a < addr) {
+				memset(o, 0, 4);
+				continue;
+			}
+			uint32_t p = (uint32_t)rdram[a] << 8 | rdram[a + 1];
+			uint32_t r = p >> 11, g = (p >> 6) & 31, b = (p >> 1) & 31;
+			o[0] = (uint8_t)(r << 3 | r >> 2);
+			o[1] = (uint8_t)(g << 3 | g >> 2);
+			o[2] = (uint8_t)(b << 3 | b >> 2);
+			o[3] = (p & 1) ? 0xFF : 0;
+		}
+	}
+}
+
 bool rdp_present_integer(uint32_t src_w, uint32_t src_h, uint32_t screen_w, uint32_t screen_h)
 {
 	if (!src_w || !src_h || src_w > screen_w || src_h > screen_h)

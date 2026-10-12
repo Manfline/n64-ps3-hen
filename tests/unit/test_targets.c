@@ -276,6 +276,40 @@ static void targets_locate(void)
 	CHECK_EQ(y0, 3);
 }
 
+/* Una textura que la HLE dejó para leer de un destino y que hay que
+ * decodificar de la RDRAM (rdp_decode_rgba16): RGBA16 big-endian de un
+ * framebuffer de 4 de ancho, dos filas desde la columna 1, a RGBA8888 con
+ * 5 bits extendidos a 8 y el bit de alfa a 0 o 255; lo que cae fuera de la
+ * RDRAM queda en cero. */
+static void targets_decode_rgba16(void)
+{
+	uint8_t ram[32];
+	for (int i = 0; i < 16; i++) {
+		/* r = i, g = 31 − i, b = 2i, alfa en los impares. */
+		uint32_t p = (uint32_t)i << 11 | (31u - i) << 6 | (2u * i & 31) << 1 | (i & 1);
+		ram[2 * i] = (uint8_t)(p >> 8);
+		ram[2 * i + 1] = (uint8_t)p;
+	}
+	uint8_t out[2][16];
+	memset(out, 0xAA, sizeof out);
+	rdp_decode_rgba16(ram, sizeof ram, 2, 4, 3, 2, out[0], sizeof out[0]);
+	unsigned bad = 0;
+	for (uint32_t y = 0; y < 2; y++)
+		for (uint32_t x = 0; x < 3; x++) {
+			uint32_t i = y * 4 + 1 + x, r = i, g = 31 - i, b = 2 * i & 31;
+			const uint8_t *o = &out[y][4 * x];
+			bad += o[0] != (r << 3 | r >> 2) || o[1] != (g << 3 | g >> 2) || o[2] != (b << 3 | b >> 2) ||
+			       o[3] != ((i & 1) ? 0xFF : 0);
+		}
+	CHECK_EQ(bad, 0);
+	CHECK_EQ(out[0][12], 0xAA);  /* el cuarto texel no se escribe */
+	/* Desde el texel 14: el 14 y el 15 están, el 16 cae fuera de la RDRAM. */
+	rdp_decode_rgba16(ram, sizeof ram, 2 * 14, 4, 3, 1, out[0], sizeof out[0]);
+	CHECK(out[0][4] != 0 || out[0][5] != 0);
+	for (int k = 8; k < 12; k++)
+		CHECK_EQ(out[0][k], 0);
+}
+
 /* De dónde se lee una textura que viene de un destino (docs/framebuffer.md):
  * del RSX si lo dibujó una tarea reciente y no es el ligado ni se copió a
  * la RDRAM; si no, de la RDRAM. La pausa de Zelda: el framebuffer dibujado
@@ -711,6 +745,7 @@ static void targets_frame_mirror(void)
 void t_suite_targets(void)
 {
 	RUN(targets_locate);
+	RUN(targets_decode_rgba16);
 	RUN(targets_texture_policy);
 	RUN(targets_readback_wanted);
 	RUN(targets_height_from_scissor);

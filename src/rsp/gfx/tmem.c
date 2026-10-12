@@ -94,9 +94,21 @@ static void note_load(struct gfx_state *g, uint32_t tmem, uint32_t bytes, uint32
 	l->fmt = g->timg_fmt;
 }
 
+/* El origen de una textura: los campos src_* de gfx_tex, que van seguidos
+ * (8 bytes), para armarlo aparte y copiarlo de una vez. */
+struct tex_src {
+	uint32_t src_addr;
+	uint16_t src_pitch;
+	uint8_t src_siz, src_fmt;
+} __attribute__((aligned(8)));
+_Static_assert(sizeof(struct tex_src) == 8 &&
+		       offsetof(struct gfx_tex, src_fmt) + 1 - offsetof(struct gfx_tex, src_addr) == 8,
+	       "el origen de una textura son 8 bytes seguidos");
+
 /* De qué carga lee la tile (la más reciente que escribió su inicio en la
- * TMEM con las mismas filas) y dónde está en la RDRAM su texel (0, 0). */
-static void provenance(const struct gfx_state *g, const struct gfx_tile *t, struct gfx_tex *tex)
+ * TMEM con las mismas filas) y dónde está en la RDRAM su texel (0, 0).
+ * `rows`: filas de la textura que muestrea el dibujo. */
+static void provenance(const struct gfx_state *g, const struct gfx_tile *t, uint32_t rows, struct tex_src *tex)
 {
 	for (uint32_t k = 1; k <= GFX_LOADS; k++) {
 		const struct gfx_load *l = &g->loads[(g->load_next - k) & (GFX_LOADS - 1)];
@@ -110,9 +122,17 @@ static void provenance(const struct gfx_state *g, const struct gfx_tile *t, stru
 		if (l->line == 0) {
 			/* LOADBLOCK: texels seguidos (libultra manda ancho 1 en SETTIMG):
 			 * las filas son las de la tile que lee, y el paso de la imagen
-			 * de origen, el ancho de esa fila. */
+			 * de origen, el ancho de esa fila. Si el dibujo muestrea una
+			 * sola fila, el paso no cambia ningún texel que lea: vale el
+			 * ancho de la imagen que declaró SETTIMG (con el que el RDP
+			 * ubica la fila de la carga), si lo declaró. Perfect Dark copia
+			 * el cuadro anterior fila por fila con tiles de 1280 bytes por
+			 * línea sobre un framebuffer de 320: con el de la tile, la
+			 * franja no caía en el framebuffer (paso 640). */
 			tex->src_addr = l->addr + off;
-			tex->src_pitch = (uint16_t)(t->line * 2 / half_bytes(t->siz));
+			tex->src_pitch = (uint16_t)(((uint32_t)t->line * 2) >> t->siz);  /* half_bytes(siz) = 1 << siz */
+			if (rows == 1 && l->pitch > 1)
+				tex->src_pitch = (uint16_t)(((uint32_t)l->pitch << (l->siz & 3)) >> t->siz);
 		} else {
 			if (l->line != t->line)
 				continue;
@@ -436,12 +456,54 @@ static void decode(const struct gfx_state *g, const struct gfx_tile *t, uint32_t
 	}
 }
 
-static bool resolve_content(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, bool premul,
-			    const uint16_t lim[2], struct gfx_tex *tex);
+static bool resolve_content(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, bool premul, uint32_t w,
+			    uint32_t h, struct gfx_tex *tex);
+
+/* Tamaño de la textura de la tile: lo que el dibujo no puede muestrear no
+ * se decodifica (Perfect Dark copia el cuadro anterior en franjas de 320 × 1
+ * con tiles de 513 × 9), ni más filas de las que caben en el área de
+ * decodificación. false si no queda nada. */
+static bool tex_size(const struct gfx_tile *t, const uint16_t lim[2], uint32_t *w, uint32_t *h)
+{
+	gfx_tile_size(t, w, h);
+	if (lim[0] && lim[0] < *w)
+		*w = lim[0];
+	if (lim[1] && lim[1] < *h)
+		*h = lim[1];
+	uint32_t pitch = (*w * 4 + 63) & ~63u;
+	if (pitch * *h > GFX_TEX_MAX)
+		*h = GFX_TEX_MAX / pitch;
+	return *h != 0;
+}
+
+/* Con GFX_JOB_FBTEX: ¿el consumidor va a leer la textura de su destino? Sí
+ * si es una RGBA16 (sin paleta ni RGB·A) que cae en una color image de 16
+ * bits dibujada hace GFX_FB_FRESH tareas o menos, buscada como la busca él
+ * (rdp_targets_locate: del ancho del paso, dentro de su alto conjeturado) y,
+ * si repite en s, del ancho de la imagen (texture_from_target la liga en
+ * filas enteras). Lo que él sabe y la HLE no lo arregla decodificándola. */
+static __attribute__((noinline)) bool from_target(const struct gfx_state *g, const struct gfx_tile *t, unsigned tt,
+						 bool premul, bool clamp_s, uint32_t w, const struct tex_src *src)
+{
+	if (!(g->job->flags & GFX_JOB_FBTEX) || !src->src_addr || src->src_siz != G_IM_SIZ_16b ||
+	    t->siz != G_IM_SIZ_16b || t->fmt != G_IM_FMT_RGBA || tt != G_TT_NONE || premul)
+		return false;
+	uint32_t addr = src->src_addr, pitch = src->src_pitch, task = g->job->task;
+	/* Sin desenrollar: en el SPE, el código cuesta pila (local store). */
+#pragma GCC unroll 1
+	for (int i = 0; i < GFX_FB_IMAGES; i++) {
+		const struct gfx_fbimg *e = &g->fbimg[i];
+		if (e->width == pitch && addr - e->addr < e->width * 2 * e->lh && task - e->task <= GFX_FB_FRESH &&
+		    (clamp_s || w == e->width))
+			return true;
+	}
+	return false;
+}
 
 /* La textura de la tile (contenido, de la caché o decodificado) y de
- * dónde vino. El origen se pone después: dos tiles con el mismo contenido
- * comparten textura pero pueden venir de distinto lugar. */
+ * dónde vino. El origen se pone aparte: dos tiles con el mismo contenido
+ * comparten textura pero pueden venir de distinto lugar. Si el consumidor
+ * la va a leer de un destino, no se identifica ni se decodifica. */
 #ifdef SALSA64_GFX_TRACE
 /* Depuración en el host (src/host/run.c): cada textura que pide un dibujo. */
 void salsa64_gfx_trace_tex(const struct gfx_state *g, const struct gfx_tile *t, const struct gfx_tex *tex,
@@ -449,47 +511,41 @@ void salsa64_gfx_trace_tex(const struct gfx_state *g, const struct gfx_tile *t, 
 #endif
 
 static bool resolve(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, bool premul, const uint16_t lim[2],
-		    struct gfx_tex *tex)
+		    bool clamp_s, struct gfx_tex *tex)
 {
+	uint32_t w, h;
+	if (!tex_size(t, lim, &w, &h))
+		return false;
+	struct tex_src src = { 0, 0, 0, 0 };
+	provenance(g, t, h, &src);
 #ifdef SALSA64_GFX_TRACE
 	uint32_t before = g->res->textures;
 #endif
-	if (!resolve_content(g, t, tt, premul, lim, tex))
+	memset(tex, 0, sizeof *tex);
+	tex->width = (uint16_t)w;
+	tex->height = (uint16_t)h;
+	tex->pitch = (uint16_t)((w * 4 + 63) & ~63u);
+	if (from_target(g, t, tt, premul, clamp_s, w, &src)) {
+		tex->where = GFX_TEX_TARGET;
+		g->res->tex_target++;
+	} else if (!resolve_content(g, t, tt, premul, w, h, tex)) {
 		return false;
-	tex->src_addr = 0;
-	tex->src_pitch = 0;
-	tex->src_siz = tex->src_fmt = 0;
-	provenance(g, t, tex);
+	}
+	memcpy(&tex->src_addr, &src, sizeof src);
 #ifdef SALSA64_GFX_TRACE
 	salsa64_gfx_trace_tex(g, t, tex, g->res->textures != before);
 #endif
 	return true;
 }
 
-static bool resolve_content(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, bool premul,
-			    const uint16_t lim[2], struct gfx_tex *tex)
+static bool resolve_content(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, bool premul, uint32_t w,
+			    uint32_t h, struct gfx_tex *tex)
 {
-	uint32_t w, h;
-	gfx_tile_size(t, &w, &h);
-	/* Lo que el dibujo no puede muestrear no se decodifica (Perfect Dark
-	 * copia el cuadro anterior en franjas de 320 × 1 con tiles de 513 × 9). */
-	if (lim[0] && lim[0] < w)
-		w = lim[0];
-	if (lim[1] && lim[1] < h)
-		h = lim[1];
 	uint32_t pitch = (w * 4 + 63) & ~63u;
-	if (pitch * h > GFX_TEX_MAX)
-		h = GFX_TEX_MAX / pitch;
-	if (h == 0)
-		return false;
 	uint32_t t0 = gfx_io_clock();
 	uint32_t key[2];
 	tile_key(g, t, w, h, tt, premul, key);
-	memset(tex, 0, sizeof *tex);
-	tex->width = (uint16_t)w;
-	tex->height = (uint16_t)h;
-	tex->pitch = (uint16_t)pitch;
-	tex->key = key[0];
+	tex->key = key[0];  /* el tamaño ya lo puso resolve */
 
 	/* Ya decodificada: en el arena de esta tarea o en la caché. */
 	const struct gfx_tc_entry *found = NULL;
@@ -547,7 +603,8 @@ static bool resolve_content(struct gfx_state *g, const struct gfx_tile *t, unsig
 	return true;
 }
 
-bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex, bool premul, const uint16_t lim[2])
+bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex, bool premul, const uint16_t lim[2],
+		      bool clamp_s)
 {
 	const struct gfx_tile *t = &g->tiles[tile & 7];
 	/* La paleta se usa con texturas de 4 y 8 bits si el othermode la activa. */
@@ -555,18 +612,22 @@ bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex, bool p
 	if (t->siz > G_IM_SIZ_8b || tt < G_TT_RGBA16)
 		tt = G_TT_NONE;
 	struct gfx_tilememo *m = &g->tilememo[tile & 7];
-	if (m->ok && m->gen == g->tex_gen && m->tt == tt && m->premul == premul && m->lim[0] == lim[0] &&
-	    m->lim[1] == lim[1]) {
+	if (m->ok && m->gen == g->tex_gen && m->tt == tt && m->premul == premul && m->clamp_s == clamp_s &&
+	    m->lim[0] == lim[0] && m->lim[1] == lim[1]) {
 		*tex = m->tex;
-		g->res->tex_reused++;
+		if (tex->where == GFX_TEX_TARGET)
+			g->res->tex_target++;
+		else
+			g->res->tex_reused++;
 		return true;
 	}
-	if (!resolve(g, t, tt, premul, lim, tex))
+	if (!resolve(g, t, tt, premul, lim, clamp_s, tex))
 		return false;
 	m->ok = 1;
 	m->gen = g->tex_gen;
 	m->tt = (uint8_t)tt;
 	m->premul = premul;
+	m->clamp_s = clamp_s;
 	m->lim[0] = lim[0];
 	m->lim[1] = lim[1];
 	m->tex = *tex;
