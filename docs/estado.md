@@ -1,5 +1,29 @@
 # Estado
 
+## 2026-10-12 (noche) — Donkey Kong 64: logos entrelazados y «zoom» en el juego (presentación; rama `infallible-wozniak-aa210c`)
+
+Main lo reportó de la PS3 real con la rama del recompilador (DK64 al 100 %):
+1. **Logos (campos ~100–460)**: el VI muestra 640 × 237 por campo con
+   stride 2560 (VI_WIDTH 1280) y el origen alterna dos líneas seguidas: un
+   búfer de 640 × 480 del que cada campo muestra una línea de cada dos. En
+   el host el destino es `034000/640` (y `0ca000/640`) de 480 filas. La
+   presentación tomaba 237 líneas seguidas desde el origen: la mitad de
+   arriba estirada, y saltando una línea entre campos. Ahora
+   `rdp_targets_present` ve que el stride es k veces la línea del destino y
+   presenta k × 237 líneas desde la primera (alineada a k): el cuadro
+   entero, estable (prueba `targets_present_interlaced`).
+2. **Juego: «zoom» cada 2 campos** (VI de 320 × 237 fijo, dos
+   framebuffers `034000/320` y `059800/320` alternando). El primero
+   comparte dirección con el `034000/640` de los logos, y la superficie de
+   cada destino lleva su propia escala (presupuesto de VRAM y
+   `rdp_target_scale` al crearla); el modo 1:1 de la presentación usaba el
+   tamaño en píxeles de la superficie, así que un búfer a 2× y otro a 3× se
+   veían de tamaños distintos. Ahora la decisión y el tamaño en pantalla
+   salen del tamaño lógico por la escala objetivo. El log de la PS3 anota
+   cada destino al crearlo (`gfx: destino …: lw × lh a N×`) para confirmar
+   la escala de cada uno. Sin reproducir en el host (no hay escala por
+   destino): por confirmar en la PS3.
+
 ## 2026-10-12 (noche) — Star Fox 64 colgado a los 5 s: el espejo del framebuffer pisaba un DMA (rama `infallible-wozniak-aa210c`)
 
 Main lo reportó de la PS3 real (Rev 1 y Rev 0: letras unos 5 s y negro, el
