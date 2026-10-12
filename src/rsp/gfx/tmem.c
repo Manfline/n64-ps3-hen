@@ -340,14 +340,38 @@ static uint32_t texel(const struct gfx_state *g, const struct gfx_tile *t, uint3
 
 /* Hash de lo que lee texel() para la tile: las filas de texels (con la
  * paleta, si se usa) y los parámetros que cambian el resultado. */
+/* Con clamp y una máscara más chica que la tile, el RDP limita la
+ * coordenada al rango de la tile y después la enmascara (con espejo si
+ * cms/cmt lo pide): la textura de `n` texels repite los primeros
+ * 1 << máscara. La túnica de Link en OoT es una I8 de 16 de ancho en una
+ * tile de 32 con máscara 4, espejo y clamp: el pliegue y su reflejo.
+ * Devuelve la máscara que hay que aplicar al decodificar (0: ninguna). */
+static unsigned clamp_mask(unsigned mask, unsigned cm, uint32_t n)
+{
+	if (mask > 10)
+		mask = 10;
+	return mask && (cm & 2) && n > (1u << mask) ? mask : 0;
+}
+
+static uint32_t masked(uint32_t v, unsigned mask, unsigned cm)
+{
+	if ((cm & 1) && ((v >> mask) & 1))
+		v = ~v;
+	return v & ((1u << mask) - 1);
+}
+
 static void tile_key(const struct gfx_state *g, const struct gfx_tile *t, uint32_t w, uint32_t h, unsigned tt,
 		     bool premul, uint32_t key[2])
 {
 	struct gfx_hash hs;
 	gfx_hash_init(&hs);
-	/* Versión de la decodificación (1) y si va premultiplicada. */
+	/* Versión de la decodificación (1), máscaras dentro del clamp y si va
+	 * premultiplicada. */
+	unsigned ms = clamp_mask(t->masks, t->cms, w), mt = clamp_mask(t->maskt, t->cmt, h);
+	uint32_t masks = ms ? ms | (t->cms & 1u) << 4 : 0;
+	masks |= mt ? (mt | (t->cmt & 1u) << 4) << 8 : 0;
 	gfx_hash_words(&hs, (uint32_t)t->fmt << 24 | (uint32_t)t->siz << 16 | (uint32_t)t->pal << 8 | tt,
-		       (uint32_t)t->line << 16 | (t->tmem & 15), w << 16 | h, 1u | (uint32_t)premul << 31);
+		       (uint32_t)t->line << 16 | (t->tmem & 15), w << 16 | h, 1u | masks << 8 | (uint32_t)premul << 31);
 	/* texel() lee por fila 8 bytes enteros (la fila impar intercambia
 	 * mitades dentro de cada palabra) y solo 256 filas distintas. */
 	uint32_t row = t->siz == G_IM_SIZ_4b ? (w + 1) / 2 : t->siz == G_IM_SIZ_8b ? w : 2 * w;
@@ -416,18 +440,21 @@ static void row_rgba16(const uint8_t *tmem, uint32_t row, uint32_t odd, uint32_t
 static void decode(const struct gfx_state *g, const struct gfx_tile *t, uint32_t w, uint32_t h, uint32_t pitch,
 		   unsigned tt, bool premul, uint8_t *out)
 {
+	unsigned ms = clamp_mask(t->masks, t->cms, w), mt = clamp_mask(t->maskt, t->cmt, h);
 	bool rgba = t->siz == G_IM_SIZ_16b && t->fmt != G_IM_FMT_IA && t->fmt != G_IM_FMT_I &&
-		    t->fmt != G_IM_FMT_YUV && !premul;
+		    t->fmt != G_IM_FMT_YUV && !premul && !ms;
 	for (uint32_t y = 0; y < h; y++) {
 		uint8_t *row = out + y * pitch;
+		uint32_t ty = mt ? masked(y, mt, t->cmt) : y;
 		if (rgba) {
-			row_rgba16(g->tmem, t->tmem + (y & 0xFF) * t->line, y & 1, w, row);
+			row_rgba16(g->tmem, t->tmem + (ty & 0xFF) * t->line, ty & 1, w, row);
 			continue;
 		}
 		for (uint32_t x = 0; x < w; x += 4) {
 			uint32_t c[4];
 			for (int i = 0; i < 4; i++) {
-				c[i] = texel(g, t, x + i, y, tt);
+				uint32_t tx = ms ? masked(x + (uint32_t)i, ms, t->cms) : x + (uint32_t)i;
+				c[i] = texel(g, t, tx, ty, tt);
 				if (premul)
 					c[i] = premultiply(c[i]);
 			}
