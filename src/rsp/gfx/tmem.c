@@ -25,9 +25,6 @@
 #include "core/endian.h"
 #include "rsp/gfx/hle.h"
 
-#ifdef __SPU__
-#include <spu_intrinsics.h>
-#endif
 
 #define TMEM_MASK 0xFFFu
 
@@ -262,6 +259,19 @@ static uint32_t rgba16(uint32_t p)
 	       ((p & 1) ? 0xFF : 0);
 }
 
+/* Cuatro texels a la vez con los vectores de GCC y clang: el mismo código
+ * en el host, el PPE y el SPE (allí, una instrucción por operación para los
+ * cuatro), así que las pruebas del host cubren la aritmética. */
+typedef uint32_t v4u __attribute__((vector_size(16)));
+
+/* rgba16() de cada carril: cada canal de 5 bits a 8 (v << 3 | v >> 2),
+ * sin ramas. */
+static inline v4u rgba16x4(v4u p)
+{
+	return (p & 0xF800) << 16 | (p & 0xE000) << 11 | (p & 0x07C0) << 13 | (p & 0x0700) << 8 |
+	       (p & 0x003E) << 10 | (p & 0x0038) << 5 | ((0 - (p & 1)) & 0xFF);
+}
+
 static uint32_t ia16(uint32_t p)
 {
 	uint32_t i = p >> 8;
@@ -370,19 +380,22 @@ static uint32_t premultiply(uint32_t c)
 }
 
 /* Cuatro texels seguidos en la salida (alineada a 16), en el orden de bytes
- * de la N64. En el SPE, un solo almacenamiento de 16 bytes: uno por texel
- * lee y reescribe el mismo quadword cuatro veces, uno tras otro. */
-static inline void put4(uint8_t *o, uint32_t a, uint32_t b, uint32_t c, uint32_t d)
+ * de la N64. En el SPE y el PPE, un solo almacenamiento de 16 bytes (en el
+ * SPE, uno por texel lee y reescribe el mismo quadword cuatro veces). */
+static inline void put4v(uint8_t *o, v4u c)
 {
-#ifdef __SPU__
-	*(vec_uint4 *)(void *)o = (vec_uint4){ a, b, c, d };
+#if SALSA64_HOST_BIG_ENDIAN
+	*(v4u *)(void *)o = c;
 #else
 	tword *q = (tword *)(void *)o;
-	q[0] = SALSA64_BE32(a);
-	q[1] = SALSA64_BE32(b);
-	q[2] = SALSA64_BE32(c);
-	q[3] = SALSA64_BE32(d);
+	for (int i = 0; i < 4; i++)
+		q[i] = SALSA64_BE32(c[i]);
 #endif
+}
+
+static inline void put4(uint8_t *o, uint32_t a, uint32_t b, uint32_t c, uint32_t d)
+{
+	put4v(o, (v4u){ a, b, c, d });
 }
 
 /* Una fila de una tile de 16 bits RGBA (o CI sin paleta, que se lee igual)
@@ -394,7 +407,7 @@ static void row_rgba16(const uint8_t *tmem, uint32_t row, uint32_t odd, uint32_t
 	for (uint32_t x = 0; x < w; x += 4, row += 8, o += 16) {
 		const tword *q = (const tword *)(const void *)(tmem + (row & TMEM_MASK));
 		uint32_t a = SALSA64_BE32(q[odd]), b = SALSA64_BE32(q[odd ^ 1]);
-		put4(o, rgba16(a >> 16), rgba16(a & 0xFFFF), rgba16(b >> 16), rgba16(b & 0xFFFF));
+		put4v(o, rgba16x4((v4u){ a >> 16, a & 0xFFFF, b >> 16, b & 0xFFFF }));
 	}
 }
 

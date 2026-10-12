@@ -10,7 +10,7 @@
  *
  * Presupuesto de local store (256 KB); los números exactos los imprime el
  * build (spu-size, 2026-10-11, con la decodificación de 4 en 4 texels y el
- * recorte de los TEXRECT: texto 100,1 KB, datos 0,8 KB, bss 143,3 KB):
+ * recorte de los TEXRECT: texto 100,2 KB, datos 0,8 KB, bss 143,3 KB):
  *   código (HLE + runtime)              ~ 97 KB (F3D y F3DEX: 3,6 KB;
  *                                         Perfect Dark 1,9 KB y Conker
  *                                         4,4 KB; el combiner con sus
@@ -30,7 +30,7 @@
  *   texturas 2 × 32 KB                      64 KB
  *   spukit (descriptor, resultado…)        < 1 KB
  *   trabajo de los estados guardados        ~ 0,2 KB
- *   pila                                    el resto (~ 11,8 KB; la cadena
+ *   pila                                    el resto (~ 11,7 KB; la cadena
  *                                         más honda, fondo S2DEX → TEXRECT →
  *                                         estado → combiner, usa 8,4 KB
  *                                         según -fstack-usage y el grafo de

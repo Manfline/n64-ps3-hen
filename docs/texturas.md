@@ -122,11 +122,14 @@ Arreglos (`src/rsp/gfx/rdp.c`, `tmem.c`):
    siguen en un dibujo y una textura.
 2. **Decodificación sin accesos byte por byte.** RGBA16 (y CI16 sin paleta)
    va de palabra en palabra de 64 bits de la TMEM, cuatro texels por vuelta
-   con las mitades intercambiadas en las filas impares; los demás formatos
-   leen con accesos alineados; todo se escribe de cuatro en cuatro texels
-   (en el SPE, un almacenamiento de 16 bytes). La salida es la misma byte
-   a byte (prueba `gfx_tmem_decode_formats` contra una referencia aparte,
-   con filas impares, vueltas de la TMEM y anchos que no son múltiplo de 4).
+   con las mitades intercambiadas en las filas impares, convertidos a la
+   vez con los vectores de GCC y clang (el mismo código en el host, el PPE
+   y el SPE: en el SPE, ~48 instrucciones por cuatro texels, ~10 ciclos por
+   texel, contra ~280 antes); los demás formatos leen con accesos
+   alineados; todo se escribe de cuatro en cuatro texels (en el SPE, un
+   almacenamiento de 16 bytes). La salida es la misma byte a byte (prueba
+   `gfx_tmem_decode_formats` contra una referencia aparte, con filas
+   impares, vueltas de la TMEM y anchos que no son múltiplo de 4).
 
 En el host, con el rasterizador: 136 cuadros de Perfect Dark, Zelda, SM64,
 Mario Kart, GoldenEye, Banjo y Conker y gfxtest ×3 idénticos byte a byte;
