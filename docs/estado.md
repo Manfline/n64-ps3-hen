@@ -1,5 +1,34 @@
 # Estado
 
+## 2026-10-12 (madrugada) — Para retomar: pruebas pendientes en la PS3
+
+Publicado el 2026-10-11: el repositorio es público y está el release
+**v0.1.0** (pre-release, etiqueta en e0aa556, con `salsa64-v0.1.0.pkg`).
+Después entraron en main la FlashRAM (7ede061: Majora's Mask jugable) y la
+decodificación de texturas recortada y con vectores del SPE (5853614: intro de
+Perfect Dark de 50 a 60 campos/s).
+
+Ramas listas que esperan la prueba en la PS3, en este orden:
+1. `heuristic-agnesi-760f8c` (SLSA00098 «Salsa64 botón PS»): volver del menú
+   del sistema (botón PS) sin colgarse, y cuadro de confirmación al salir con
+   START + SELECT (opción «Confirmar al salir» en el menú).
+2. `infallible-wozniak-aa210c` (SLSA00099 «Salsa64 gráficos»): Banjo-Kazooie
+   (lo que deja el arranque del CIC 6103 en la RDRAM, DMEM e IMEM; sin eso su
+   protección cambiaba los planos de la cámara) y la cara de Conker
+   (`G_SETCONVERT`, K4/K5 en el estado del RDP).
+3. `charming-spence-f80224` (SLSA00100 «Salsa64 Majora»): campanadas del fin
+   del día (los destinos distinguen el tamaño de píxel, no solo dirección y
+   ancho) y desenfoque de movimiento (baile del Espantapájaros, recuerdo de
+   Zelda); estados de prueba en las ranuras 5 y 6. El telescopio necesita un
+   estado guardado frente a él.
+
+Pendientes: el telescopio de Majora; leer el cuadro anterior del desenfoque
+desde el destino del RSX en alta resolución (hoy sale de la copia a 1×); el
+cielo de Luigi Raceway; las líneas del logo y la túnica de Zelda; las líneas
+de GoldenEye; la localidad del código del recompilador (GoldenEye en la presa y
+la segunda escena de la intro de Perfect Dark, limitadas por el CPU); y un
+release v0.2.0 cuando entren las tres ramas de arriba.
+
 ## 2026-10-11 — FlashRAM: Majora's Mask guarda (rama `clever-tereshkova-aa0089`, paquete SLSA00096 «Salsa64 FlashRAM»)
 
 Problema (PS3 real, v0.1.0): en Majora's Mask, después de la escena inicial
