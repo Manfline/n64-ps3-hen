@@ -289,11 +289,10 @@ gfxtest (1 textura por tarea, siempre de su destino; en RPCS3 con el
 frontend, 45 del RSX y 0 en el PPE). En las escenas medidas de Banjo, SM64,
 Mario Kart, GoldenEye y Conker no hay texturas desde un destino.
 
-**Costo en el SPE 0.** Texto +1,7 KB y la tabla 128 bytes; para no
-comerse la pila (la holgura bajaba de 2,9 a 1,0 KB), el registro de
-texturas del arena por tarea pasó de 64 a 32 entradas (−1,5 KB): solo se
-usa con la caché llena o apagada, y el único juego que la llenaba era
-Perfect Dark con estas franjas. Holgura de la pila: 2,5 KB (`src/spu/gfx/main.c`).
+**Costo en el SPE 0.** Texto +2,1 KB y la tabla 128 bytes. Para no
+comerse la pila, los fondos de S2DEX se compilan con `-Os` (−0,9 KB de
+código y 112 bytes menos en la cadena más honda): holgura de la pila
+2,6 KB (`src/spu/gfx/main.c`; el build falla por debajo de 1,5 KB).
 
 **Determinismo de los estados en el host.** Leer el cuadro anterior desde
 la imagen del rasterizador (8 bits por canal) y no desde su copia en la

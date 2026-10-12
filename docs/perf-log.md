@@ -29,6 +29,42 @@ antes, después, notas.
 | 2026-10-11 | (rama fervent-hodgkin) | **HLE de la tarea JPEG de Zelda OoT** (fondos prerrenderizados), una sala: 75 tareas, 300 macrobloques | Mac (salsa64-run nativo, Apple Silicon) | antes: las tareas terminaban sin hacer nada (fondo basura) | **0,61 ms por sala** en el hilo del CPU, una vez al cargarla | Corre en el PPE (`core/rsp.c`); IDCT separable en flotante sin optimizar. El frontend escribe «JPEG: N tareas, M macrobloques en X ms del PPE» al terminar cada tanda: con esa medida se decide si se queda en el PPE o va a un SPE. El fondo se copia en el SPE 0 (40 tiras por cuadro, reutilizadas por la caché de texturas) |
 
 | 2026-10-11 | e0aa556 (v0.1.0) → c17e790 | **Perfect Dark, intro (azotea de dataDyne con desenfoque de movimiento)**: decodificar solo lo que muestrea cada TEXRECT y decodificación de 4 en 4 texels | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00097 «Salsa64 texturas», respaldo del usuario, sin tocar el control | 50,0–51,1 campos/s; HLE en el SPE 39,7–61,4 ms por tarea, de ellos decodificar 36,8–58,4 ms (90–143 texturas por tarea); el CPU dormía 28–40 ms por tarea esperando al SPE | **59,8–60,3 campos/s; SPE 3,3–5,0 ms por tarea (×11–17), decodificar 0,48–0,65 ms (133–181 texturas, ×77–94)**; dormida 3,0–5,5 ms | Antes a 4× automática, después a 1× pedida (la HLE no depende de la escala). Zelda, GoldenEye y Conker sin cambios. La escena siguiente (campos 4300–5500) va a 45–53 campos/s por el CPU emulado (41–63 MIPS, 18–22 ms por campo; en las ventanas más lentas casi no espera al SPE). Ver «Texturas que cambian en cada cuadro» abajo |
+
+## Pila del SPE 0 (2026-10-12)
+
+En el SPE la pila baja desde lo alto del local store hasta el final del
+programa y nada avisa si se pasa: pisa las últimas variables del bss (en el
+SPE 0, las lecturas por DMA de vértices, matrices y cargas de la TMEM).
+Medido con `tools/spu-stack.py` (marcos de `-fstack-usage` y grafo de
+llamadas de `spu-objdump`; la cadena más honda es el fondo S2DEX de las
+salas prerrenderizadas de Zelda → TEXRECT → estado de dibujo → combiner):
+
+| Versión | Texto | bss | Libre (`_end`–`__stack`) | Cadena más honda | Holgura |
+|---|---|---|---|---|---|
+| b445531 (texturas de Perfect Dark) | 102 624 | 146 704 | ~11 980 | 9 056 | ~2 930 |
+| 11ff7d1 (más arreglos gráficos) | 106 776 | 146 704 | 7 648 | 9 472 | **−1 824** |
+| 8c876ac (efectos de Majora's Mask) | 107 904 | 146 704 | 6 496 | 9 504 | **−3 008** |
+| este arreglo, sobre 8c876ac | 102 560 | 145 168 | 13 408 | 9 600 | **3 808** |
+| con el desenfoque de Perfect Dark y S2DEX en `-Os` | 103 744 | 145 296 | 12 128 | 9 488 | **2 640** |
+
+La rama de los arreglos gráficos sumó 4,1 KB de código (estado de dibujo,
+TEXRECT por tile, decodificación con máscara, blender con constante) y
+duplicó el marco de `gfx_texrect` (416 → 832 bytes); la de Majora, 1,1 KB
+más. El arreglo:
+
+- El combiner (`combine.c`) se compila con `-Os` en el SPE 0: 16 768 →
+  11 152 bytes de código (los marcos crecen 350 bytes en la cadena). Corre
+  una vez por estado de dibujo; **falta medir en la PS3 real** si el
+  «estado» de la línea de la HLE (ms por tarea) cambia.
+- El cálculo por tile de `gfx_texrect` va en una función aparte: su marco
+  baja a 464 bytes (−368 en la cadena, +272 de código).
+- El registro de texturas del arena por tarea, de 64 a 32 entradas (−1 536
+  bytes de bss): solo se usa con la caché llena o apagada.
+
+El build ahora lo comprueba: `gfx_STACK_MIN` (1,5 KB) en
+`src/frontend/Makefile`; si la holgura baja de ahí, el enlace de `spu_gfx`
+falla con la cadena más honda.
+
 ## El desenfoque de Perfect Dark desde el destino del RSX (2026-10-12)
 
 Rama wonderful-jepsen (docs/framebuffer.md, «Texturas desde un destino sin
@@ -69,12 +105,12 @@ en el campo 2600, una escena oscura con mucho movimiento): el host dibuja a
 RDRAM que se leía antes; la diferencia se acumula con la realimentación del
 desenfoque.
 
-**SPE 0** (`spu-size`): texto 102 624 → 104 368 bytes, bss 146 704 →
-145 296 (la tabla de color images +128; el registro del arena de 64 a 32
-entradas −1 536). La cadena más honda de la pila no cambia (9 056 bytes
-desde `main`, por el fondo S2DEX de Conker, `-fstack-usage` y el grafo de
-llamadas de `spu-objdump`): holgura 2 928 → 2 592 bytes. Sin achicar el
-arena quedaba en 1 056.
+**SPE 0** (`spu-size` y `tools/spu-stack.py`, sobre main da2adcd): texto
+102 560 → 103 744 bytes (+2 080 de las texturas desde un destino y −896 de
+compilar los fondos de S2DEX con `-Os`), bss +128 (la tabla de color
+images). Holgura de la pila: 3 808 → 2 640 bytes; sin el S2DEX en `-Os`
+quedaba en 1 632, apenas sobre el mínimo de 1 536 que comprueba el build
+(«Pila del SPE 0», arriba).
 
 **PS3 real**: pendiente (paquete SLSA00101 «Salsa64 desenfoque»): campos/s,
 ms del SPE y texturas por tarea en la azotea a 3×, y el desenfoque a ojo

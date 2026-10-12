@@ -138,8 +138,8 @@ dibujos.
 
 Para que el código nuevo no se comiera la pila del SPE 0, el registro de
 texturas del arena por tarea (para no decodificar dos veces la misma si
-la caché está llena o apagada) bajó de 128 a 64 entradas (−3 KB); y a 32
-con las texturas que se leen de un destino (abajo).
+la caché está llena o apagada) bajó de 128 a 64 entradas (−3 KB), y
+después a 32 por la pila del SPE 0 (docs/perf-log.md, «Pila del SPE 0»).
 
 **En la PS3 real** (c17e790, docs/perf-log.md): la azotea pasa de 50–51 a
 59,8–60,3 campos/s; la HLE en el SPE, de 40–61 a 3,3–5,0 ms por tarea, y
