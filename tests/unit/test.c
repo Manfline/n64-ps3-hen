@@ -150,6 +150,7 @@ static int run_suites(void (*print)(const char *line), struct salsa64_rec *rec, 
 		{ "menu", t_suite_menu },
 		{ "state", t_suite_state },
 		{ "osd", t_suite_osd },
+		{ "pausectl", t_suite_pausectl },
 	};
 	char line[256];
 

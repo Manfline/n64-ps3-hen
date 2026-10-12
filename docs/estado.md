@@ -9,9 +9,8 @@ decodificación de texturas recortada y con vectores del SPE (5853614: intro de
 Perfect Dark de 50 a 60 campos/s).
 
 Ramas listas que esperan la prueba en la PS3, en este orden:
-1. `heuristic-agnesi-760f8c` (SLSA00098 «Salsa64 botón PS»): volver del menú
-   del sistema (botón PS) sin colgarse, y cuadro de confirmación al salir con
-   START + SELECT (opción «Confirmar al salir» en el menú).
+1. ~~`heuristic-agnesi-760f8c` (SLSA00098 «Salsa64 botón PS»)~~: confirmada en
+   la PS3 real e integrada el 2026-10-12 (entrada de abajo).
 2. `infallible-wozniak-aa210c` (SLSA00099 «Salsa64 gráficos»): Banjo-Kazooie
    (lo que deja el arranque del CIC 6103 en la RDRAM, DMEM e IMEM; sin eso su
    protección cambiaba los planos de la cámara) y la cara de Conker
@@ -28,6 +27,68 @@ cielo de Luigi Raceway; las líneas del logo y la túnica de Zelda; las líneas
 de GoldenEye; la localidad del código del recompilador (GoldenEye en la presa y
 la segunda escena de la intro de Perfect Dark, limitadas por el CPU); y un
 release v0.2.0 cuando entren las tres ramas de arriba.
+
+Después de cerrar lo anterior: revisar (solo lectura primero) el recompilador
+de Wii64 y Not64 y el port `emukidid/wii64-ps3` (base de Cell64): asignación
+de registros entre bloques, accesos a memoria y TLB, caché de código y FPU;
+licencia archivo por archivo antes de copiar nada a `src/` (nunca a
+`lib/rsxkit` ni `lib/spukit`). También ejecutar el IPL3 del cartucho al
+arrancar, como mupen64plus, para no depender de reproducir lo que deja cada
+CIC (protecciones de Rare).
+
+## 2026-10-12 — Botón PS y cuadro al salir: el juego se pausa (rama `heuristic-agnesi-760f8c`, paquete SLSA00098 «Salsa64 botón PS»)
+
+Problema (PS3 real, v0.1.0): dentro de un juego, el botón PS abría el menú
+del sistema y, al volver, Salsa64 ya no respondía y había que cerrarlo desde
+el sistema (visto en Banjo-Kazooie). `sysutil_cb` solo atendía «Salir del
+juego»: la emulación, el audio y los mandos seguían detrás del menú. No hay
+log de ese cuelgue, así que la causa exacta no se vio.
+
+Hecho (docs/hilos-ppe.md, «Botón PS y pausa»; docs/uso-ps3.md):
+- **Pausa** con el menú del sistema abierto (`SYSUTIL_MENU_OPEN` … `CLOSE`,
+  o el bit del sistema en `padInfo.info`): la emulación queda quieta al
+  empezar el campo siguiente y al volver el ritmo empieza de nuevo; el audio
+  calla sin perder lo encolado y sin que el hueco entre en la medición de
+  velocidad (`audio_sync_pause`); se sigue presentando el último cuadro con
+  flip (`present_still`, `salsa64_rdp_present_again`) y llamando a
+  `sysUtilCheckCallback`. Mandos sueltos mientras los tiene el sistema; nada
+  queda pegado al volver. Al log: «sistema: menú abierto/cerrado», «pausa: …»,
+  «mandos: …».
+- **Cuadro de START + SELECT** sobre la misma pausa: «¿Volver al menú?» (con
+  `embedded`, «¿Salir al XMB?»), × sale, ○ o el atajo otra vez siguen; lo
+  apretado al abrir o cerrar no llega al juego hasta soltarse. «Confirmar al
+  salir» en Opciones (`confirmar = si|no` en menu.cfg, sí por omisión).
+- **Latido**: un hilo que avisa en el log dónde se queda quieto cada hilo si
+  uno no da vueltas en 2 s. `sin-pausa` (archivo de diagnóstico): el menú
+  del sistema no pausa, como en v0.1.0, para ver con el latido qué colgaba.
+- `pads_apply` ya no gira sin fin si el sistema desaloja a presentación a
+  mitad de publicar los mandos.
+- **Pruebas**: suite `pausectl` (9: menú del sistema, mandos tomados, cuadro
+  con ○, ×, el atajo otra vez y sin confirmación, cuadro con el menú del
+  sistema encima, geometría en 4:3 y 16:9, y el hueco de 6 s contra el
+  ritmo: ni ráfaga ni esperas largas al volver) y dos en `sync` (con la
+  pausa, el audio vuelve en < 150 ms sin estirar; sin ella, el hueco lo
+  estiraba). test-host, test-roms, test-rec, test-phase2 (menú: 5 juegos
+  abiertos y cerrados) y el build sin avisos, en verde, también después de
+  traer main con la FlashRAM.
+
+**En la PS3 real (2026-10-12)** la pausa sola no bastó: al volver del menú
+del sistema la app seguía viva (eventos, mandos, flips) pero la pantalla
+quedaba negra. Con el latido y leyendo píxeles del búfer trasero se vio la
+causa, que seguramente es la de v0.1.0: el sistema **pisa el estado del
+RSX en cada flip** de la aplicación mientras su menú está encima y un rato
+después, y con el RSX parado en `gcmSetWaitFlip` cada flip tardaba 2,3–4,5 s.
+Arreglo en `lib/rsxkit`: el flip anterior se espera en el PPE
+(`rsxkit_frame_begin`) y después de cada flip se olvida todo el estado que
+rsxkit daba por puesto (`rsxkit_forget_state`), más `rsxkit_after_system` y
+`rsxkit_frame_ready` (docs/hilos-ppe.md). Confirmado: en el menú de Salsa64
+y dentro de un juego, PS y volver tres veces cada uno (el XMB se ve con el
+menú debajo, al volver todo sigue y responde; la emulación se detuvo y
+retomó cada vez), el cuadro de salir con × y «Salir del juego».
+
+También con Majora's Mask sonando: dos vueltas del botón PS (la salida
+cuenta la pausa; en la ventana siguiente 0 % estirado y 0 faltas), el cuadro
+con «No» y con ×, y cierre limpio. Criterio de cierre cumplido.
 
 ## 2026-10-12 — Majora's Mask: campanadas, recuerdo de Zelda y telescopio en «tablero de ajedrez» (rama `charming-spence-f80224`, paquete SLSA00100 «Salsa64 Majora»)
 

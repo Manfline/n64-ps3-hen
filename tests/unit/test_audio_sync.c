@@ -8,6 +8,7 @@
 #include "test.h"
 
 #include <math.h>
+#include <stdbool.h>
 #include <string.h>
 
 #include "core/endian.h"
@@ -214,6 +215,112 @@ static void flush_drops_queued_audio(void)
 	CHECK(step < 0.05f);
 }
 
+/* Pausa del juego (menú del sistema, cuadro de salir): 3 s sonando, 5 s
+ * sin que la emulación entregue nada y 2 s más. Con `pause`, como en la
+ * PS3 (audio_out_pause), si no solo el hueco. */
+#define GAP_FROM 3.0
+#define GAP_TO   8.0
+
+struct gap_result {
+	double max_step;        /* mayor salto entre muestras seguidas */
+	float quiet_max;        /* mayor |muestra| en la pausa, tras el desvanecimiento */
+	double back_after;      /* segundos desde el fin de la pausa hasta volver a sonar */
+	uint32_t underruns_gap, silences_gap;  /* faltas y silencios durante la pausa */
+	uint64_t stretch_after; /* muestras estiradas después */
+	double speed_end;
+};
+
+static void simulate_gap(bool pause, struct gap_result *r)
+{
+	audio_sync_init(&as, AUDIO_STRETCH, 60);
+	uint64_t produced = 0, n = 0;
+	double emu_frames = 0.0;
+	uint32_t total = AUDIO_OUT_RATE * SECONDS;
+	float block[STEP * 2];
+	uint32_t under0 = 0, sil0 = 0;
+	uint64_t stretch0 = 0;
+	bool paused = false;
+	for (uint32_t k = 0; k + STEP <= total; k += STEP) {
+		uint64_t now_us = (uint64_t)k * 1000000u / AUDIO_OUT_RATE;
+		double t = (double)k / AUDIO_OUT_RATE;
+		bool gap = t >= GAP_FROM && t < GAP_TO;
+		if (gap != paused) {
+			if (gap) {
+				under0 = as.stats.underruns;
+				sil0 = as.stats.silences;
+			} else {
+				r->underruns_gap = as.stats.underruns - under0;
+				r->silences_gap = as.stats.silences - sil0;
+				stretch0 = as.stats.stretch_frames;
+			}
+			if (pause)
+				audio_sync_pause(&as, gap);
+			paused = gap;
+		}
+		if (!gap) {
+			emu_frames += (double)STEP * IN_RATE / AUDIO_OUT_RATE;
+			while (produced + CHUNK <= emu_frames) {
+				for (uint32_t i = 0; i < CHUNK; i++, n++) {
+					int16_t v = (int16_t)lrint(AMP * sin(2.0 * M_PI * 440.0 * n / IN_RATE));
+					salsa64_wr16(chunk_buf + 4 * i, (uint16_t)v);
+					salsa64_wr16(chunk_buf + 4 * i + 2, (uint16_t)v);
+				}
+				audio_sync_push(&as, chunk_buf, sizeof chunk_buf, IN_RATE);
+				produced += CHUNK;
+			}
+		}
+		audio_sync_pull(&as, block, STEP, now_us);
+		for (uint32_t i = 0; i < STEP; i++)
+			out[k + i] = block[2 * i];
+	}
+	r->stretch_after = as.stats.stretch_frames - stretch0;
+	r->speed_end = as.speed_est;
+	r->max_step = 0.0;
+	for (uint32_t i = AUDIO_OUT_RATE; i < total; i++) {
+		double d = fabs(out[i] - out[i - 1]);
+		if (d > r->max_step)
+			r->max_step = d;
+	}
+	r->quiet_max = 0.0f;
+	for (uint32_t i = (uint32_t)((GAP_FROM + 0.05) * AUDIO_OUT_RATE); i < GAP_TO * AUDIO_OUT_RATE; i++)
+		if (fabsf(out[i]) > r->quiet_max)
+			r->quiet_max = fabsf(out[i]);
+	r->back_after = 99.0;
+	for (uint32_t i = (uint32_t)(GAP_TO * AUDIO_OUT_RATE); i < total; i++) {
+		if (fabsf(out[i]) > 0.3f) {
+			r->back_after = (double)i / AUDIO_OUT_RATE - GAP_TO;
+			break;
+		}
+	}
+}
+
+/* Con la pausa: se desvanece, calla sin contar faltas, vuelve a sonar al
+ * juntar el nivel y sigue sin estirar ni chasquidos. */
+static void pause_keeps_speed_and_resumes(void)
+{
+	struct gap_result r;
+	simulate_gap(true, &r);
+	CHECK(r.max_step < SMOOTH);
+	CHECK(r.quiet_max == 0.0f);
+	CHECK_EQ(r.underruns_gap, 0);
+	CHECK_EQ(r.silences_gap, 0);
+	CHECK(r.back_after < 0.15);
+	CHECK_EQ(r.stretch_after, 0);
+	CHECK(r.speed_end > 0.97 && r.speed_end < 1.03);
+	CHECK_EQ(as.stats.pauses, 1);
+}
+
+/* Sin ella, el hueco cuenta como emulación lenta: la velocidad medida cae
+ * y al volver el audio sale estirado un buen rato (por eso la pausa). */
+static void gap_without_pause_stretches(void)
+{
+	struct gap_result r;
+	simulate_gap(false, &r);
+	CHECK(r.underruns_gap > 0);
+	CHECK(r.stretch_after > AUDIO_OUT_RATE / 2);
+	CHECK_EQ(as.stats.pauses, 0);
+}
+
 void t_suite_audio_sync(void)
 {
 	RUN(full_speed_is_transparent);
@@ -222,4 +329,6 @@ void t_suite_audio_sync(void)
 	RUN(fast_emulation_stays_bounded);
 	RUN(no_audio_is_silence);
 	RUN(flush_drops_queued_audio);
+	RUN(pause_keeps_speed_and_resumes);
+	RUN(gap_without_pause_stretches);
 }

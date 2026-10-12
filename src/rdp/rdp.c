@@ -196,6 +196,14 @@ static struct {
 	 * hasta 3 veces por corrida. */
 	uint32_t quiet_tasks, trace_left, trace_events;
 	struct { int slot; char how[48]; } last_get;  /* qué hizo get_target (traza) */
+	/* Lo último presentado, para repetirlo tal cual en una pausa
+	 * (salsa64_rdp_present_again); surf NULL: nada que repetir. */
+	struct {
+		rsxkit_target *surf;
+		rsxkit_rect src;
+		uint32_t w, h;
+		rsxkit_view view;
+	} again;
 } rdp;
 
 static void acquire(void *ctx, struct gfx_job *job);
@@ -280,6 +288,7 @@ void salsa64_rdp_fbfx(int level)
 
 static void release_targets(void)
 {
+	rdp.again.surf = NULL;
 	for (int i = 0; i < RDP_TARGETS_MAX; i++)
 		if (rdp.surf[i])
 			rsxkit_target_destroy(rdp.surf[i]);
@@ -583,6 +592,8 @@ static void drop_surface(int i)
 		rdp.bound_t = -1;
 	if (rdp.scratch_slot == i)
 		rdp.scratch_slot = -1;  /* el scratch era de esta superficie */
+	if (rdp.again.surf == rdp.surf[i])
+		rdp.again.surf = NULL;
 	rsxkit_target_destroy(rdp.surf[i]);
 	rdp.surf[i] = NULL;
 	rdp.surf_dirty[i] = false;
@@ -1440,13 +1451,28 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 	 * framebuffer de 640 × 480 a 1× con la escala-objetivo 3×, en 720p):
 	 * entonces se ajusta como siempre (rdp_present_integer). */
 	const rsxkit_screen *sc = rsxkit_screen_info();
+	rdp.again.surf = rdp.surf[p.slot];
+	rdp.again.src = src;
 	if (view && view->scale == RSXKIT_SCALE_FIT && rdp_present_integer(src.w, src.h, sc->width, sc->height)) {
 		rsxkit_view one = { RSXKIT_SCALE_INTEGER, view->filter, 0.0f };
-		rsxkit_target_present(rdp.surf[p.slot], &src, src.w, src.h, &one, out);
+		rdp.again.w = src.w;
+		rdp.again.h = src.h;
+		rdp.again.view = one;
 	} else {
-		rsxkit_target_present(rdp.surf[p.slot], &src, w, h, view, out);
+		rdp.again.w = w;
+		rdp.again.h = h;
+		rdp.again.view = view ? *view : (rsxkit_view){ RSXKIT_SCALE_FIT, RSXKIT_FILTER_LINEAR, 0.0f };
 	}
+	rsxkit_target_present(rdp.again.surf, &rdp.again.src, rdp.again.w, rdp.again.h, &rdp.again.view, out);
 	frame_mirror(p.slot, p.y0 + p.h, false);
+	return true;
+}
+
+bool salsa64_rdp_present_again(rsxkit_rect *out)
+{
+	if (!rdp.ready || !rdp.again.surf)
+		return false;
+	rsxkit_target_present(rdp.again.surf, &rdp.again.src, rdp.again.w, rdp.again.h, &rdp.again.view, out);
 	return true;
 }
 

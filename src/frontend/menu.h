@@ -63,7 +63,8 @@ enum menu_resolution {
 	MENU_RES_1080P,
 };
 
-/* Ajustes del menú: el fondo va en SALSA64_DATA_DIR/menu.cfg; el recorte
+/* Ajustes del menú: el fondo, el contador y la confirmación al salir van en
+ * SALSA64_DATA_DIR/menu.cfg; el recorte
  * es el de overscan.cfg y la resolución la de video.cfg, que leen y
  * escriben en main.c. */
 struct menu_settings {
@@ -72,11 +73,12 @@ struct menu_settings {
 	int resolution; /* enum menu_resolution */
 	int scale;      /* escala interna del render: 0 automática, 1 .. 5 */
 	bool fps;       /* contador de velocidad en el juego («fps = si|no»; SELECT + △) */
+	bool confirm;   /* START + SELECT pregunta antes de salir del juego («confirmar = si|no») */
 };
 
 enum { MENU_PAGE_GAMES, MENU_PAGE_OPTIONS };
-enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_RESOLUTION, MENU_OPT_SCALE, MENU_OPT_APPLY, MENU_OPT_FPS, MENU_OPT_BACK,
-       MENU_OPTS };
+enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_RESOLUTION, MENU_OPT_SCALE, MENU_OPT_APPLY, MENU_OPT_FPS,
+       MENU_OPT_CONFIRM, MENU_OPT_BACK, MENU_OPTS };
 /* «Aplicar ahora» solo existe mientras lo elegido difiere de lo que corre. */
 
 struct menu {

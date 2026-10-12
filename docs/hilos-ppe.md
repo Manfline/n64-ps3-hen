@@ -6,7 +6,8 @@ dos hilos de hardware del PPE. Decidido el 2026-10-10.
 | Hilo | Prioridad | Qué hace |
 |---|---|---|
 | **Emulación** (`emu_thread`, creado con `sysThreadCreate`, pila de 256 KB) | 1000 | CPU de la N64 (`salsa64_n64_run_field`), planificador de eventos, PI/SI/AI/VI, arranque de tareas del RSP hacia el SPE 0 y espera de su fin, controles aplicados al PIF, copia de la imagen del VI, copia del guardado cuando toca volcarlo, medición A/B de vitest, texto del ISViewer |
-| **Presentación** (el hilo principal del proceso, `SYS_PROCESS_PARAM`) | 1001 | Traducción de la salida de la HLE a comandos del RSX (`salsa64_rdp_flush`), `rsxkit_frame_begin/end` (flip en vsync), DualShock 3 (`ioPad*`), callbacks de sysutil, escritura del guardado en el disco, log de estadísticas, capturas, volcados de la HLE, verificación propia (selftest de vitest y gfxtest), salida y el menú para elegir ROM (entre juegos, sin hilo de emulación) |
+| **Presentación** (el hilo principal del proceso, `SYS_PROCESS_PARAM`) | 1001 | Traducción de la salida de la HLE a comandos del RSX (`salsa64_rdp_flush`), `rsxkit_frame_begin/end` (flip en vsync), DualShock 3 (`ioPad*`), callbacks de sysutil, la pausa (menú del sistema, cuadro de salir), escritura del guardado en el disco, log de estadísticas, capturas, volcados de la HLE, verificación propia (selftest de vitest y gfxtest), salida y el menú para elegir ROM (entre juegos, sin hilo de emulación) |
+| **Latido** (`watch_thread`, pila de 64 KB) | 500 | Cada 0,5 s mira que los otros dos den vueltas; si uno se queda quieto más de 2 s, dice al log dónde está cada uno (sección «Botón PS y pausa»). Solo lee |
 
 Los dos hilos del PPE comparten el núcleo (SMT): lo que hace el hilo de
 presentación no sale gratis, le quita ciclos a la emulación. Por eso el
@@ -35,9 +36,11 @@ Un solo productor y un solo consumidor por cola; las barreras son
 | Guardado del cartucho | `savefile_stage` (emulación): cuando `salsa64_save_due` dice que toca, copia los 32 KB a una zona de paso y marca `pending`; `savefile_write_staged` (presentación) los escribe al disco y limpia `pending`. Mientras está pendiente no se vuelve a copiar; la escritura nunca toca los datos vivos | emulación → presentación |
 | Resultado del selftest / petición de medición | Banderas de un `int` (monótonas): `selftest.c` las pone desde los dos hilos (ISViewer y RDRAM desde emulación; pantalla desde presentación) y `selftest_state` las lee en presentación. `bench_request` de presentación a emulación | ambos |
 | Estado guardado | `state_req` (presentación pide guardar o cargar; la baja al terminar) y `state_parked` (emulación quieta en el límite del campo). Mientras emulación espera, presentación toca la máquina sola (sección siguiente) | ambos |
+| Pausa | `pause_req` (presentación: motivos de `pausectl`, menú del sistema o cuadro de salir) y `emu_paused` (emulación quieta al empezar un campo). El audio, aparte: `audio_out_pause` (bandera del anillo, la lee el hilo de audio) | ambos |
+| Latido | `beat`: vueltas de cada hilo y una cadena con dónde está (`pres_at`, `emu_at`); el hilo del latido solo los lee | los tres |
 | Contador de velocidad | Presentación lee `vi.fields` y `cpu.cycles` (32 y 64 bits alineados) y cuenta los cuadros que presenta y los cambios del framebuffer del VI de cada campo encolado; nada en el hilo de emulación | emulación → presentación |
 | Estadísticas | Contadores de cada hilo en su propia estructura; el de presentación los lee cada 5 s sin lock (lecturas de 64 bits alineadas: atómicas en el PPE) | emulación → presentación |
-| Salida | `running` (presentación lo pone en 0: START + SELECT, «Salir del juego», fin de la prueba automática); `emu_done` (emulación lo pone al terminar su bucle); `app_quit` (el callback de sysutil: «Salir del juego» cierra la aplicación aunque haya menú) | ambos |
+| Salida | `running` (presentación lo pone en 0: START + SELECT confirmado, «Salir del juego», fin de la prueba automática; suelta también una pausa); `emu_done` (emulación lo pone al terminar su bucle); `app_quit` (el callback de sysutil: «Salir del juego» cierra la aplicación aunque haya menú) | ambos |
 | Log | `salsa64_log` con un lwmutex alrededor de la línea (`src/platform/ps3/log.c`) | ambos |
 
 ## Ritmo: la emulación al paso de la tele emulada
@@ -158,7 +161,8 @@ las pruebas, capturas, ritmo, la línea a medias del ISViewer. La RDRAM se
 borra antes de `salsa64_n64_init`: un juego arranca igual venga después del
 que venga. Lo que dura todo el programa: rsxkit, el RDP (su memoria
 mapeada), el framebuffer 2D, las ranuras del VI, la RDRAM, el semáforo, los
-DualShock y el callback de sysutil.
+DualShock, el callback de sysutil, el estado del menú del sistema
+(`pause_ctl`) y el hilo del latido.
 
 El menú corre en el hilo principal sin hilo de emulación (no le quita
 nada a la emulación: no existe mientras se ve el menú): lee los mandos,
@@ -187,6 +191,107 @@ las colas vacías:
 
 Si se sale del juego mientras emulación espera, `running = 0` la suelta.
 
+## Botón PS y pausa
+
+Antes (v0.1.0, PS3 real), al pulsar el botón PS dentro de un juego se abría
+el menú del sistema y, al volver, Salsa64 ya no respondía (visto en
+Banjo-Kazooie): `sysutil_cb` solo atendía «Salir del juego» y la emulación
+seguía corriendo detrás del menú, con el audio y los mandos tal cual. Ahora
+el menú del sistema (y el cuadro de confirmación de START + SELECT) es una
+**pausa**:
+
+1. **Eventos** (`sysutil_cb`, dentro de `sysUtilCheckCallback`, en el hilo
+   de presentación o en el del menú): `SYSUTIL_MENU_OPEN` y `MENU_CLOSE`
+   abren y cierran la pausa (`pausectl_system_menu`); `DRAW_BEGIN` y
+   `DRAW_END` (el sistema dibuja encima) solo van al log. Cada uno al log:
+   «sistema: menú abierto (campo N)», «sistema: menú cerrado tras X s».
+2. **Mandos** (`update_pads`): con el menú abierto o con el bit 0 de
+   `padInfo.info` (los mandos los tiene el sistema; también pausa aunque no
+   llegue el aviso del menú), el juego recibe todo suelto y el último
+   estado de cada mando se olvida: lo que se suelte allá no se ve aquí
+   (`ioPadGetData` da `len = 0` sin cambios), así que nada queda pegado al
+   volver. Lo decide `src/frontend/pausectl.c` (portable, con pruebas).
+3. **Emulación**: presentación pone `pause_req`; emulación lo ve al empezar
+   el campo siguiente, se queda quieta (`emu_pause`, `sysUsleep` de 2 ms;
+   `emu_paused = 1`) y al soltarla reinicia el ritmo (el reloj saltó lo que
+   duró la pausa: sin ráfaga para «recuperar» ni esperas largas). Las
+   tareas del RSP en vuelo terminan en su SPE; su fin emulado llega en el
+   campo siguiente, como siempre.
+4. **Audio**: `audio_out_pause` → `audio_sync_pause`. El hilo de audio
+   desvanece lo que suena (la transición de siempre), calla sin leer y sin
+   contar faltas, y al volver sigue donde iba en cuanto junta el nivel. El
+   hueco no entra en la medición de velocidad: sin esto la velocidad medida
+   caía a 0 y el audio salía estirado varios segundos al volver (prueba
+   `gap_without_pause_stretches`). El puerto de audio sigue abierto,
+   entregando silencio.
+5. **Presentación**: el flip sigue (el sistema dibuja su menú en los flips
+   de la aplicación: sin flips se queda en el reloj de espera). Si en una
+   vuelta no llegó ningún campo y pasaron 16 ms del último flip,
+   `present_still` repite lo último que se vio: el destino del RSX con
+   `salsa64_rdp_present_again` (mismo destino, región y escala; no toca la
+   tabla de destinos ni las copias a la RDRAM) o la textura de la copia del
+   VI (`rsxkit_fb_draw`), con el aviso, el contador y el cuadro de salir
+   encima. Con el sistema encima, solo si el flip anterior ya salió
+   (`rsxkit_frame_ready`): sus flips tardan segundos y no hay que esperarlos.
+   `sysUtilCheckCallback` se sigue llamando en cada vuelta (cada 4 ms como
+   máximo; con el sistema encima, cada 10 ms en el menú).
+6. **Menú de Salsa64** (sin juego): no hay emulación que detener; el menú
+   sigue presentando un cuadro por vsync y con los mandos sueltos no hace
+   nada hasta volver.
+
+Al log: «pausa: emulación detenida en el campo N (menú del sistema)», «pausa:
+la emulación sigue tras X s (N cuadros repetidos, …)», «mandos: los tiene el
+sistema» / «de vuelta del sistema».
+
+**Lo que hace el sistema con el RSX** (medido en la PS3 real el 2026-10-12,
+con el latido y leyendo píxeles del búfer trasero): mientras su menú está
+encima, y **también un rato después de cerrarlo**, pisa el estado del RSX en
+cada flip de la aplicación (constantes del vertex program, programas,
+arreglos de vértices): lo dibujado con el estado que rsxkit daba por puesto
+salía negro, y el menú de Salsa64 solo se veía ~2 s al volver. Además, con
+`gcmSetWaitFlip` en el búfer de comandos (el RSX parado esperando el flip)
+cada flip tardaba 2,3–4,5 s. Por eso ahora `lib/rsxkit`:
+- espera el flip anterior en el PPE, en `rsxkit_frame_begin` (`wait_flip`),
+  nunca en el RSX;
+- después de cada `rsxkit_frame_end` olvida todo el estado que daba por
+  puesto (`rsxkit_forget_state`): el próximo dibujo lo manda de nuevo (unos
+  cientos de bytes por cuadro);
+- al cerrarse el menú del sistema, `rsxkit_after_system` revisa además los
+  programas precompilados en la memoria del RSX (suma de verificación;
+  nunca estuvieron cambiados) y los mapeos de la memoria principal.
+`frame_begin`/`frame_end` de main.c anotan al log cualquier flip que tarde
+más de 100 ms, con los vblanks que pasaron.
+
+**Cuadro de START + SELECT** (misma pausa, motivo `PAUSECTL_CONFIRM`): con
+«Confirmar al salir» (menu.cfg, `confirmar = si`, por omisión), el atajo
+abre «¿Volver al menú?» (con `embedded`, «¿Salir al XMB?») sobre el último
+cuadro: × sale, ○ o START + SELECT otra vez siguen. Mientras está a la vista
+nada llega al juego, y lo que estaba apretado al abrirlo o cerrarlo no llega
+hasta soltarse (el ○ del «No» no es un B; el START del atajo no pausa el
+juego al volver; el × del «Sí» no abre otra ROM en el menú).
+
+**Latido.** Un tercer hilo (`watch_thread`, prioridad 500, más que los otros
+dos para correr aunque uno gire) mira cada 0,5 s que presentación (en el
+juego o en el menú) y emulación (cuando corre: no en pausa ni en la
+barrera de un estado) sigan dando vueltas. Si una se queda quieta más de
+2 s, al log dónde está cada una (`beat.pres_at`, `beat.emu_at`: «flip»,
+«cuadro repetido», «campo», «ritmo», «encolar»…), el campo, lo que hay en
+cola, el estado del menú del sistema y de la pausa, y los bloques del
+audio; otra vez cada 5 s, y «se movió de nuevo» al reanudarse. Un cuelgue
+deja así su huella en el log UDP aunque el de archivo pierda las últimas
+líneas. Leer una ROM grande en el menú también lo dispara («menú: leyendo
+la ROM»): es esperado.
+
+Diagnóstico: con `SALSA64_DATA_DIR/sin-pausa` presente, el menú del sistema
+no pausa la emulación (como hasta v0.1.0; los mandos siguen sueltos y el
+cuadro de salir pausa igual): con el latido, dice dónde se quedaba quieto lo
+que colgaba antes.
+
+Además, la espera del seqlock de los controles en emulación (`pads_apply`)
+ya no gira para siempre: emulación tiene más prioridad que presentación y,
+si el sistema desaloja a presentación a mitad de la escritura, después de
+64 vueltas duerme 20 µs entre intentos.
+
 ## Lo que no cambia
 
 - Verificación propia del frontend, capturas `screen-N.ppm`, volcado
@@ -212,6 +317,7 @@ después de `salsa64_n64_run_field`.
 | Ranuras de la copia del VI (3 × 640 × 576 × 4) | 4,4 MB |
 | Zona de paso del guardado | 32 KB |
 | Pila del hilo de emulación | 256 KB |
+| Pila del hilo del latido | 64 KB |
 | Colas (campos, tareas) y buzones | < 2 KB |
 
 Registrado en docs/memory-budget.md.
