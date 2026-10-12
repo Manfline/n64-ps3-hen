@@ -27,9 +27,9 @@
 /* Con este archivo, el recompilador se comporta como antes del 2026-10-10
  * (SALSA64_REC_OPT_LEGACY, rec.h): para medir A/B con el mismo paquete. */
 #define SALSA64_RECLEGACY_FLAG SALSA64_DATA_DIR "/jit-viejo"
-/* Con este archivo, la FPU como hasta el 2026-10-11 (SALSA64_REC_OPT_FPU_MEM,
- * rec.h): cada operación por cpu->fpr, sin registros residentes. */
-#define SALSA64_RECFPUMEM_FLAG SALSA64_DATA_DIR "/jit-fpu-memoria"
+/* Con este archivo, la FPU con registros residentes (SALSA64_REC_OPT_FPU_RES,
+ * rec.h; experimental, más lenta en la PS3). */
+#define SALSA64_RECFPURES_FLAG SALSA64_DATA_DIR "/jit-fpu-residente"
 
 void *salsa64_ps3_rec_cache(void);
 
@@ -51,10 +51,10 @@ static inline int salsa64_ps3_rec_legacy_wanted(void)
 	return stat(SALSA64_RECLEGACY_FLAG, &st) == 0;
 }
 
-static inline int salsa64_ps3_rec_fpu_mem_wanted(void)
+static inline int salsa64_ps3_rec_fpu_res_wanted(void)
 {
 	struct stat st;
-	return stat(SALSA64_RECFPUMEM_FLAG, &st) == 0;
+	return stat(SALSA64_RECFPURES_FLAG, &st) == 0;
 }
 
 /* Con este archivo, COP0 como hasta el 2026-10-11, todo por el intérprete

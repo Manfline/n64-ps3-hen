@@ -1545,7 +1545,7 @@ static void emit_fpu(struct ctx *c, unsigned k)
 /* Conversiones y raíz de la FPU, CFC1/CTC1, LWL/LWR y compañía, MFC0. */
 #include "cpu/rec_emit_ext.h"
 /* La FPU con registros residentes (reemplaza a emit_fpu, emit_cop1 y a lo de
- * COP1 de rec_emit_ext.h salvo con SALSA64_REC_OPT_FPU_MEM). */
+ * COP1 de rec_emit_ext.h solo con SALSA64_REC_OPT_FPU_RES, experimental). */
 #include "cpu/rec_emit_fpu.h"
 
 static void emit_insn(struct ctx *c, unsigned k)

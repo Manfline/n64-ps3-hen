@@ -110,10 +110,12 @@ struct salsa64_rec_fixup {
  * páginas anotadas y no prellena, exit_jr mira solo la cabeza de xhash. Se
  * aplica al compilar y en el despachador: fijarla antes de salsa64_rec_init. */
 #define SALSA64_REC_OPT_LEGACY 8u
-/* Para medir A/B: la FPU como hasta el 2026-10-11, cada operación por
- * cpu->fpr (rec_emit.c, emit_fpu) en vez de registros residentes y FCR31
- * perezoso (rec_emit_fpu.h). Se aplica al compilar. */
-#define SALSA64_REC_OPT_FPU_MEM 16u
+/* Experimental: la FPU con registros residentes y FCR31 perezoso
+ * (rec_emit_fpu.h) en vez de cada operación por cpu->fpr (rec_emit.c,
+ * emit_fpu). Medido en la PS3 el 2026-10-11 es más lenta (bench add.s
+ * 40,0 → 30,9 MIPS, mixto 168 → 135): apagada por omisión
+ * (docs/perf-log.md). Se aplica al compilar. */
+#define SALSA64_REC_OPT_FPU_RES 16u
 /* Para medir A/B: COP0 como hasta el 2026-10-11, todo por el intérprete
  * (MTC0 de EntryLo/PageMask/Index, TLBWI/TLBWR y ERET tienen ahora camino
  * propio: rec_emit_ext.h y rec_h_tlbw/rec_h_eret en rec.c). Se aplica al

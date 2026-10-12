@@ -75,18 +75,31 @@ los saltos internos dejando basura en los registros escritos por las
 instrucciones saltadas (nemu64-test, bloque 80014c84). `tools/build.sh`
 sin advertencias.
 
-**Para la PS3 (A/B con el mismo paquete, archivos vacíos en
-/dev_hdd0/salsa64/):** `jit-fpu-memoria` (FPU como antes), `jit-cop0-viejo`
-(COP0 por el intérprete), `jit-sin-tramos` (vaciado completo), `jit-viejo`
-(todo lo anterior al 2026-10-10), `rdram-1m`, y `perfil`. Medir GoldenEye
-en la presa junto al camión (escena fija), Perfect Dark en un nivel y un
-minuto de Zelda, SM64 y Mario Kart; anotar campos/s, ms de emulación,
-vaciados/desalojos y el peor campo en docs/perf-log.md. El paquete de
-cpu-tests SLSA00095 «Salsa64 CPU FPU» (`build/salsa64-cpu-fpu/`; SLSA00094
-es el de los estados guardados) trae el bench (add.s, cvt…) para el costo
-por instrucción. Los dos paquetes se rehicieron con main traído a la rama
-(69051fc: efectos de framebuffer, espejo de SM64, video.cfg), para que la
-medición sea sobre el main actual.
+**Medido en la PS3 real (2026-10-11, noche;** tablas en docs/perf-log.md,
+«FPU residente, sin microcódigo…»; paquetes SLSA00093 «Salsa64 FPU» y
+SLSA00095 «Salsa64 CPU FPU» —SLSA00094 es el de los estados guardados—,
+con main 69051fc traído a la rama):
+- GoldenEye, presa junto al camión: 17,5 ns por instrucción ejecutada
+  contra 18,2 de main (−4 %), todo de los ayudantes de COP0 (llamadas a C
+  1,56 → 0,73 ns, ktlb 0,78 → 0,20). **El código nativo sigue en ~47 ciclos
+  por instrucción MIPS** con cualquier combinación de banderas: no lo
+  limitan las instrucciones emitidas sino, con toda probabilidad, el tamaño
+  del código (~7 MB de bloques vivos contra 512 KB de L2; la caché va en
+  páginas de 64 KB). Ese es el siguiente trabajo.
+- **La FPU residente resultó más lenta** en el bench del mismo paquete
+  (add.s 40,0 → 30,9 MIPS, mixto 168 → 135) y en GoldenEye no se distingue:
+  queda apagada por omisión (`SALSA64_REC_OPT_FPU_RES`, archivo
+  `jit-fpu-residente`). Quitar el microcódigo sí suma: con la FPU por
+  memoria, mixto 156,6 → 168,2, add.s 35,7 → 40,0, cvt 40,7 → 50,6.
+- Zelda, SM64 y Mario Kart a 59,6 campos/s, sin regresión (emulación por
+  campo 5–20 % menor que main). Perfect Dark baja a 49–50 campos/s en un
+  nivel por espera del RSP (SPE de la HLE gráfica, 14 ms por campo, 131
+  texturas decodificadas por tarea): lado gráfico, no el recompilador.
+- Páginas: la RDRAM ya va en 1 MB; `rdram-1m` no se midió (nada que ganar).
+
+A/B que siguen en el paquete (archivos vacíos en /dev_hdd0/salsa64/):
+`jit-fpu-residente`, `jit-cop0-viejo`, `jit-sin-tramos`, `jit-viejo`,
+`rdram-1m`, `perfil`.
 
 ## 2026-10-11 — SM64 se colgaba con los efectos de framebuffer: el espejo del framebuffer sigue al dibujo, no al VI
 

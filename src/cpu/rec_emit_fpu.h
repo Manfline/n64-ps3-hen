@@ -1,9 +1,12 @@
 /*
  * Salsa64 — recompilador: la FPU con los registros residentes en el PPE
  * (2026-10-11). Diseño en docs/rec-ppe.md, «FPU residente». Lo incluye
- * rec_emit.c (usa su contexto y sus funciones estáticas); la opción
- * SALSA64_REC_OPT_FPU_MEM vuelve al camino anterior (emit_fpu, emit_cop1 y
- * rec_emit_ext.h: cada operación por cpu->fpr), para medir A/B.
+ * rec_emit.c (usa su contexto y sus funciones estáticas). Solo con
+ * SALSA64_REC_OPT_FPU_RES: medida en la PS3 es más lenta que el camino por
+ * cpu->fpr (emit_fpu, emit_cop1 y rec_emit_ext.h), que es el de omisión.
+ * Por qué, en docs/rec-ppe.md («FPU residente»): cada fcmpu que alimenta un
+ * salto o un crop espera toda la latencia de la FPU, y fabs agrega 10
+ * ciclos a la clasificación.
  *
  * Resumen:
  *   - cpu->fpr[p] vive en f14–f25 mientras el bloque lo usa (los 12 más
@@ -836,7 +839,7 @@ static void fpu_allocate(struct ctx *c)
 	memset(c->fw_ok, 0, sizeof c->fw_ok);
 	c->fpu_res = c->fneed_gate = c->fneed_ien = c->fneed_c = false;
 	c->fpu_ran = c->fc_written = false;
-	if (c->rec->opts & SALSA64_REC_OPT_FPU_MEM)
+	if (!(c->rec->opts & SALSA64_REC_OPT_FPU_RES))
 		return;
 	for (unsigned k = 0; k < c->n; k++) {
 		uint32_t w = c->d[k].w;

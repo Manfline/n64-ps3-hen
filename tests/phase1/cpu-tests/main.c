@@ -60,6 +60,8 @@ int main(void)
 	 * traducir conversiones, LWL/LWR y MFC0 (la diferencia es la ganancia). */
 	static const struct { uint32_t opts; const char *name; } variants[] = {
 		{ SALSA64_REC_OPT_PIN, "recompilador + registros fijos" },
+		{ SALSA64_REC_OPT_PIN | SALSA64_REC_OPT_FPU_RES,
+		  "recompilador + registros fijos, FPU residente (experimental)" },
 		{ SALSA64_REC_OPT_PIN | SALSA64_REC_OPT_RARE_EXEC,
 		  "recompilador + registros fijos, conversiones/LWL/MFC0 al intérprete (como antes)" },
 		{ 0, "recompilador" },

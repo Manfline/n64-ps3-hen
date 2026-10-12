@@ -285,14 +285,25 @@ de unos seguidos) o `li`+`ori`+`and`; las pruebas de bits son
 desplazamientos de SLLV y compañía y de LWL/LWR sueltos (no hay otra forma;
 los pares LWL/LWR van byte a byte).
 
-### FPU residente (2026-10-11)
+### FPU residente (2026-10-11; experimental, apagada por omisión)
 
-Hasta aquí cada operación de la FPU cargaba sus operandos de `cpu->fpr`
+**Medida en la PS3 es más lenta que la FPU por memoria** (bench del mismo
+paquete: add.s 40,0 → 30,9 MIPS, mixto 168 → 135; en GoldenEye no se
+distingue, la FPU es ~6 % de sus instrucciones): cada `fcmpu` que alimenta
+un salto o un crop espera toda la latencia de la FPU, y `fabs` agrega 10
+ciclos a la clasificación, mientras el camino por memoria clasifica los
+bits en enteros (2 ciclos) y solo espera a la FPU en la comparación del
+inexacto. Queda detrás de `SALSA64_REC_OPT_FPU_RES` (`SALSA64_REC_FPU_RES=1`
+en el host, el archivo `jit-fpu-residente` en la PS3) para retomarla; la
+idea que queda por probar es clasificar sin saltos intermedios (una sola
+comprobación al final de la operación, con la deshecha por el intérprete) y
+sin `fabs`. Lo que sigue describe el diseño tal como está.
+
+Cada operación de la FPU carga sus operandos de `cpu->fpr`
 (los bits a un registro entero para clasificarlos y el valor a uno de punto
-flotante), escribía el resultado y leía, modificaba y guardaba FCR31: unas
-40 palabras y ~90 ciclos por ADD.S (bench), con load-hit-store entre
-operaciones dependientes. Ahora (`rec_emit_fpu.h`; `SALSA64_REC_OPT_FPU_MEM`
-y el archivo `jit-fpu-memoria` en la PS3 vuelven a lo de antes para medir):
+flotante), escribe el resultado y lee, modifica y guarda FCR31: unas
+40 palabras por ADD.S, con load-hit-store entre
+operaciones dependientes. Con la opción (`rec_emit_fpu.h`):
 
 - **Registros residentes.** Los 12 `cpu->fpr[p]` más usados del bloque
   viven en f14–f25 (no volátiles: sobreviven a las llamadas a C; la entrada

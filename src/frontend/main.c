@@ -1564,8 +1564,8 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	rec.opts = SALSA64_REC_OPT_PIN;  /* +7 % en nemu64-test (docs/perf-log.md) */
 	if (salsa64_ps3_rec_legacy_wanted())
 		rec.opts |= SALSA64_REC_OPT_LEGACY;
-	if (salsa64_ps3_rec_fpu_mem_wanted())
-		rec.opts |= SALSA64_REC_OPT_FPU_MEM;
+	if (salsa64_ps3_rec_fpu_res_wanted())
+		rec.opts |= SALSA64_REC_OPT_FPU_RES;
 	if (salsa64_ps3_rec_cop0_exec_wanted())
 		rec.opts |= SALSA64_REC_OPT_COP0_EXEC;
 	if (salsa64_ps3_rec_no_evict_wanted())
@@ -1583,7 +1583,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 			    SALSA64_REC_CACHE_BYTES >> 20, salsa64_ps3_rec_cache(), rec.calls_near ? "con bl" : "por mtctr",
 			    rec.opts, rec.prof ? ", con perfil" : "",
 			    rec.opts & SALSA64_REC_OPT_LEGACY ? ", camino viejo (jit-viejo)" : "",
-			    rec.opts & SALSA64_REC_OPT_FPU_MEM ? ", FPU por memoria (jit-fpu-memoria)" : ", FPU residente",
+			    rec.opts & SALSA64_REC_OPT_FPU_RES ? ", FPU residente (jit-fpu-residente)" : "",
 			    rec.opts & SALSA64_REC_OPT_COP0_EXEC ? ", COP0 por el intérprete (jit-cop0-viejo)" : "",
 			    rec.opts & SALSA64_REC_OPT_NO_EVICT ? ", sin tramos (jit-sin-tramos)" : "");
 

@@ -637,14 +637,77 @@ campo, antes → con los ayudantes de COP0 y el desalojo por tramos:
 | Bloques compilados / vaciados / desalojos | 26 581 / 2 / — | 20 819 / 1 / 10 | 17 308 / 1 / 8 |
 | Instrucciones por bloque | 11,9 | 12,0 | 12,3 |
 
-**Pendiente: la PS3 real** (A/B con el mismo paquete SLSA00093 y los
-archivos `jit-fpu-memoria`, `jit-cop0-viejo`, `jit-sin-tramos`, `jit-viejo`
-y `rdram-1m`), en la escena fija «GoldenEye, presa, junto al camión»
-(referencia del log de main `salsa64-1080-5x-final.log`, campos 7100–7699:
-40–46 campos/s, 20–23 ms de emulación por campo, 3 vaciados y 44 345
-invalidados en la partida, peores campos de 52 ms), Perfect Dark en un
-nivel, y un minuto de Zelda, SM64 y Mario Kart (sin regresión). El bench de
-cpu-tests (SLSA00094) da el costo por instrucción de add.s, mov.s y cvt.
+**PS3 real** (2026-10-11, noche; Slim CECH-3011A, HFW 4.91 + HEN; paquetes
+SLSA00093 «Salsa64 FPU» y SLSA00095 «Salsa64 CPU FPU» de la rama con main
+69051fc; A/B con archivos-bandera, `perfil` puesto). GoldenEye NTSC en la
+presa hasta el camión; costo por instrucción ejecutada en las ventanas
+pesadas (MIPS > 40, espera ≤ 35 %), `emulación × campos/s / MIPS`. La
+referencia de main es su log del A/B de la tarde (`salsa64-jit-nuevo.log`,
+misma escena), medido igual:
+
+| GoldenEye, presa (ns por instrucción) | main (ee146b6) | rama | rama, `jit-fpu-memoria` | rama, `jit-cop0-viejo` | rama, `jit-sin-tramos` |
+|---|---|---|---|---|---|
+| Total | 18,2 | 17,5 | 17,2 | 17,7 | 16,1 |
+| … código nativo | 14,6 (47 ciclos) | 14,7 (47) | 14,9 (48) | 13,9 (44) | 13,8 (44) |
+| … llamadas a C | 1,56 | **0,73** | 0,78 | 1,50 | 0,72 |
+| … ktlb | 0,78 | **0,20** | 0,21 | 0,74 | 0,19 |
+| … despachador | 0,00 | 0,22 | 0,20 | 0,00 | 0,21 |
+| Ventanas pesadas | 10 | 20 | 11 | 7 | 8 |
+| Campos/s en esas ventanas | 44,6 | 48,4 | 51,1 | 46,8 | 48,3 |
+
+- **Lo que se ve:** los ayudantes de COP0 bajan las llamadas a C y la ktlb
+  a la mitad o menos (−1,4 ns por instrucción; con `jit-cop0-viejo` vuelven
+  a lo de main). En total la rama queda ~4 % por debajo de main por
+  instrucción (18,2 → 17,5).
+- **Lo que no se ve:** el código nativo sigue en ~47 ciclos del PPE por
+  instrucción MIPS con o sin la FPU residente, sin microcódigo y con saltos
+  internos. Las diferencias entre corridas del mismo binario (13,8–14,9 ns)
+  son de escena. El nativo no está limitado por las instrucciones que se
+  emiten: GoldenEye tiene ~7000 bloques vivos (~7 MB de código PPC) contra
+  512 KB de L2 (fallos de caché de instrucciones y de L2 en casi cada
+  bloque); el siguiente paso es el tamaño y la localidad del código, no
+  instrucción por instrucción.
+- **Desalojo por tramos:** en 5,7 min de la corrida 1, 38 desalojos y 1
+  vaciado (por ids agotados: 98 000 bloques compilados); los peores campos
+  (150–300 ms) son pantallas de carga en todas las corridas, también sin
+  tramos. Las corridas cortas no llegan a llenar los 32 MB.
+- **Páginas** (log al arrancar, syscall 351): la RDRAM ya está en páginas
+  de 1 MB (heap de PSL1GHT); `struct salsa64_rec`, `n64` (en .bss) y la
+  caché de código en páginas de 64 KB; la pila en 4 KB. `rdram-1m` no tiene
+  qué ganar y no se midió. La caché (32 MB) son 512 páginas de 64 KB, más
+  que el ERAT de instrucciones del PPE: otro motivo para achicar el código.
+
+**Bench del recompilador** (cpu-tests, mismo paquete, variante con la FPU
+residente y la de omisión; registros fijos):
+
+| bench | antes de la rama (e210aeb) | FPU por memoria (omisión) | FPU residente |
+|---|---|---|---|
+| mixto | 156,6 MIPS | **168,2** | 135,1 |
+| add.s | 35,7 | **40,0** | 30,9 |
+| cvt | 40,7 | **50,6** | 45,7 |
+| enteros / memoria / mov.s | 750 / 160 / 538 | 733 / 160 / 525 | 743 / 159 / 529 |
+| nemu64-test | ×4,47 | **×4,28** | ×4,20 |
+
+La FPU residente es **más lenta** (add.s −23 %, mixto −20 %): cada `fcmpu`
+que alimenta un salto o un crop espera toda la latencia de la FPU, y `fabs`
+agrega 10 ciclos a la clasificación; el camino por memoria clasifica en
+enteros (2 ciclos) y solo espera a la FPU en la comparación del inexacto.
+**Queda apagada por omisión** (`SALSA64_REC_OPT_FPU_RES`, archivo
+`jit-fpu-residente` en la PS3, para retomarla). Lo que sí suma es quitar el
+microcódigo: con la FPU por memoria, mixto 156,6 → 168,2 (+7 %), add.s
+35,7 → 40,0 (+12 %), cvt 40,7 → 50,6 (+24 %).
+
+Sin regresión en el resto (un minuto o más cada uno, sin banderas, FPU
+residente, comparado con los logs de main de la tarde):
+
+| Juego | campos/s main → rama | emulación por campo | nativo por instrucción |
+|---|---|---|---|
+| Zelda OoT (9 min) | 59,4 → 59,6 | 7,7 → 6,1 ms | 14,5 → 13,9 ns |
+| Super Mario 64 | 59,5 → 59,6 | 5,4 → 4,9 ms | 14,5 → 13,6 ns |
+| Mario Kart 64 | 59,4 → 59,6 | 5,9 → 5,6 ms | 13,3 → 12,4 ns |
+| Perfect Dark (un nivel) | — | 7–20 ms | 49–50 campos/s al final por el RSP: 14 ms por campo esperando al SPE de la HLE gráfica (~4500 triángulos y 131 texturas decodificadas por tarea); el CPU usa 4,5 ms |
+
+Logs en `build/ps3-logs/` de la rama (fpu-1 … fpu-8, cpu-fpu-bench*).
 
 ### Bench del intérprete tras traer la Fase 2: 21 → 14,7 MIPS (diagnóstico, 2026-10-10)
 
