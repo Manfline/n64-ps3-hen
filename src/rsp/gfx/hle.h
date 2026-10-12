@@ -11,6 +11,7 @@
 #define SALSA64_RSP_GFX_HLE_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "rsp/gfx/gfx.h"
@@ -350,6 +351,25 @@ void gfx_load_tlut(struct gfx_state *g, uint32_t w0, uint32_t w1);
 bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex, bool premul);
 /* Tamaño de la textura de una tile (potencia de 2 si se repite). */
 void gfx_tile_size(const struct gfx_tile *t, uint32_t *w, uint32_t *h);
+
+/* Tramo de gfx_state con lo que persiste entre tareas, alineado a 16 para
+ * el DMA: desde othermode (y lo que comparta su bloque de 16 bytes con el
+ * final del estado de las variantes de Rare, que se reinicia en cada tarea)
+ * hasta el final de la TMEM. El trabajo de estado del SPE lo copia tal cual
+ * (gfx.h). */
+#define GFX_RAW_START (offsetof(struct gfx_state, oh) & ~(size_t)15)
+#define GFX_RAW_END   (offsetof(struct gfx_state, tmem) + sizeof(((struct gfx_state *)0)->tmem))
+_Static_assert(GFX_RAW_END % 16 == 0 && GFX_RAW_END - GFX_RAW_START <= 16384,
+	       "el tramo del estado del RDP no cabe en una DMA");
+
+/* state.c: lo que persiste entre tareas, en el formato portable de
+ * GFX_STATE_* (gfx.h): los registros solos (el SPE manda la TMEM por DMA)
+ * y, en sync.c (fuera del SPE), todo junto (GFX_STATE_BYTES). false si el
+ * formato no es este. */
+void gfx_state_pack_regs(const struct gfx_state *g, uint8_t out[GFX_STATE_REGS]);
+bool gfx_state_unpack_regs(struct gfx_state *g, const uint8_t in[GFX_STATE_REGS]);
+void gfx_state_save(const struct gfx_state *g, uint8_t *out);
+bool gfx_state_load(struct gfx_state *g, const uint8_t *in);
 
 /* combine.c: combiner → combinación lineal fija o términos del generador
  * (gfx.h). Lee d->fog (con niebla deja un término sin factores). Devuelve

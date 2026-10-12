@@ -366,6 +366,37 @@ uint32_t salsa64_rdp_reset(void)
 	return pending;
 }
 
+static void readbacks_finish(bool wait);
+
+void salsa64_rdp_settle(void)
+{
+	if (!rdp.ready)
+		return;
+	rsxkit_finish();
+	readbacks_finish(true);
+}
+
+void salsa64_rdp_drop_targets(void)
+{
+	if (!rdp.ready)
+		return;
+	rsxkit_finish();
+	release_targets();
+	/* Las copias que quedaran en vuelo y la memoria de lo copiado eran de la
+	 * máquina anterior (salsa64_rdp_settle ya las vació): nada de eso va a
+	 * la RDRAM cargada. La numeración de las tareas y readback_done siguen. */
+	memset(rdp.mirrors, 0, sizeof rdp.mirrors);
+	memset(&rdp.frame, 0, sizeof rdp.frame);
+	memset(rdp.big, 0, sizeof rdp.big);
+	memset(rdp.rb_task, 0, sizeof rdp.rb_task);
+	memset(rdp.rb_prev, 0, sizeof rdp.rb_prev);
+	memset(rdp.rb_prev_rep, 0, sizeof rdp.rb_prev_rep);
+	memset(rdp.rb_prev_n, 0, sizeof rdp.rb_prev_n);
+	rdp.rb_prev_i = 0;
+	memset(&rdp.vi_ring, 0, sizeof rdp.vi_ring);
+	rdp.scratch_slot = -1;
+}
+
 const struct salsa64_gfx_sink *salsa64_rdp_sink(void)
 {
 	return &sink;

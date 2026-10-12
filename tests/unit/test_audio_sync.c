@@ -171,6 +171,49 @@ static void no_audio_is_silence(void)
 	CHECK_EQ(as.stats.silent_frames, STEP);
 }
 
+/* Vaciado (cargar un estado guardado): lo que había en el anillo no vuelve
+ * a sonar; lo nuevo sí, sin escalones. */
+static void push_const(int16_t v, uint32_t frames)
+{
+	for (uint32_t done = 0; done < frames; done += CHUNK) {
+		for (uint32_t i = 0; i < CHUNK; i++) {
+			salsa64_wr16(chunk_buf + 4 * i, (uint16_t)v);
+			salsa64_wr16(chunk_buf + 4 * i + 2, (uint16_t)v);
+		}
+		audio_sync_push(&as, chunk_buf, sizeof chunk_buf, IN_RATE);
+	}
+}
+
+static void flush_drops_queued_audio(void)
+{
+	float block[STEP * 2];
+	audio_sync_init(&as, AUDIO_STRETCH, 60);
+	push_const(8000, IN_RATE / 4);  /* 250 ms de lo viejo */
+	uint64_t t = 0;
+	for (int k = 0; k < 8; k++, t += 5333)
+		audio_sync_pull(&as, block, STEP, t);
+	CHECK(fabsf(block[2 * STEP - 2] - 8000.0f / 32768.0f) < 0.01f);  /* sonaba lo viejo */
+	audio_sync_flush(&as);
+	push_const(-4000, IN_RATE / 4);  /* lo nuevo */
+	float old_max = 0.0f, prev = block[2 * STEP - 2], step = 0.0f;
+	int saw_new = 0;
+	for (int k = 0; k < 40; k++, t += 5333) {
+		audio_sync_pull(&as, block, STEP, t);
+		for (uint32_t i = 0; i < STEP; i++) {
+			float v = block[2 * i];
+			if (k > 2 && v > old_max)
+				old_max = v;  /* después del desvanecimiento, nada de lo viejo */
+			if (fabsf(v - prev) > step)
+				step = fabsf(v - prev);
+			prev = v;
+			saw_new |= fabsf(v + 4000.0f / 32768.0f) < 0.01f;
+		}
+	}
+	CHECK(old_max < 0.01f);
+	CHECK(saw_new);
+	CHECK(step < 0.05f);
+}
+
 void t_suite_audio_sync(void)
 {
 	RUN(full_speed_is_transparent);
@@ -178,4 +221,5 @@ void t_suite_audio_sync(void)
 	RUN(slow_emulation_silence_policy);
 	RUN(fast_emulation_stays_bounded);
 	RUN(no_audio_is_silence);
+	RUN(flush_drops_queued_audio);
 }

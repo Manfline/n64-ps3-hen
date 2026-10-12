@@ -5,7 +5,9 @@
 #      estricto), con llamadas a C por `bl` y por mtctr/bctrl;
 #   2. nemu64-test con --rec: las fallas tienen que ser las de la línea base;
 #   3. vitest con --rec;
-#   4. con --lockstep (lento, ~10 min): nemu64-test y vitest comparados
+#   4. estados guardados con --rec (gfxtest): guardar, cargar y seguir da lo
+#      mismo que de corrido y que el intérprete;
+#   5. con --lockstep (lento, ~10 min): nemu64-test y vitest comparados
 #      bloque a bloque contra el intérprete.
 #   tools/test-rec.sh [--lockstep]
 # Imágenes: tools/docker-image-ppc64.sh. Rendimiento: solo en la PS3 real.
@@ -69,7 +71,39 @@ rc=$?
 printf '%-14s %s\n' vitest "$(grep 'vitest:' build/logs/rec-vitest.log | tail -1)"
 [ $rc -eq 0 ] || fail=1
 
+# Estados guardados con el recompilador (gfxtest): guardar en el campo 150,
+# cargar en otra corrida (la caché del recompilador se vacía) y seguir hasta
+# el 300 da el mismo estado que de corrido, y el mismo que el intérprete.
+G=tests/roms/homebrew/salsa64-gfxtest.z64
+SD=build/states/rec
+rm -rf $SD
+mkdir -p $SD
+R="build/ppc64/salsa64-run -q"
+if run build/logs/rec-estados-a.log $R --rec --fields 300 --state-save 300:$SD/m.st $G &&
+   run build/logs/rec-estados-b.log $R --rec --fields 150 --state-save 150:$SD/n.st $G &&
+   run build/logs/rec-estados-c.log $R --rec --state-load $SD/n.st --fields 300 --state-save 300:$SD/m2.st $G &&
+   run build/logs/rec-estados-i.log $R --fields 300 --state-save 300:$SD/mi.st $G; then
+	if cmp -s $SD/m.st $SD/m2.st && cmp -s $SD/m.st $SD/mi.st; then
+		printf '%-14s %s\n' estados "gfxtest con --rec: guardar en 150 y cargar = de corrido hasta 300 = intérprete"
+	else
+		printf '%-14s %s\n' estados "FALLO: con carga $(cmp $SD/m.st $SD/m2.st | head -1); intérprete $(cmp $SD/m.st $SD/mi.st | head -1)"
+		fail=1
+	fi
+else
+	printf '%-14s %s\n' estados "FALLO (build/logs/rec-estados-*.log)"
+	fail=1
+fi
+
 if [ "${1:-}" = "--lockstep" ]; then
+	# Cargar un estado con --lockstep: la referencia carga el mismo.
+	run build/logs/lock-estados.log $R --lockstep=100000 --state-load $SD/n.st --fields 300 $G
+	rc=$?
+	if [ $rc -eq 0 ]; then
+		printf '%-14s %s\n' "lockstep" "gfxtest desde un estado cargado: sin diferencias"
+	else
+		printf '%-14s %s\n' "lockstep" "gfxtest desde un estado cargado: FALLO (código $rc, build/logs/lock-estados.log)"
+		fail=1
+	fi
 	for rom in $NEMU $VITEST; do
 		name=$(basename "$rom" .z64)
 		log=build/logs/lock-$name.log

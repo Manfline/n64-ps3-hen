@@ -1,5 +1,87 @@
 # Estado
 
+## 2026-10-11 — Estados guardados con 10 ranuras por juego y contador de FPS (rama `wonderful-blackwell-6f40d3`, paquete SLSA00094 «Salsa64 estados»)
+
+Hecho (diseño y decisiones en docs/estados.md):
+
+- **Núcleo portable** (`src/core/state.c`): cabecera de 64 bytes (magia,
+  versión, CRC1/CRC2 y tamaño de la ROM, título, RDRAM, campo) y secciones
+  «etiqueta + largo» descritas con una sola función para guardar y cargar,
+  en big-endian: el mismo archivo sirve en la PS3 y en `salsa64-run`. CPU con
+  COP0, TLB y FPU; planificador; MI, SP, DP, VI, AI, PI, RI, SI y la tarea del
+  RSP en curso; DMEM/IMEM; PIF; guardado del cartucho; estado de las HLE
+  gráfica (RDP + TMEM) y de audio (DMEM, ABI, MP3) entre tareas, también en
+  los SPE (trabajos nuevos); miniatura de 160 × 120; RDRAM al final sin
+  comprimir. Secciones cortas cargan con ceros (para crecer), versiones
+  viejas o nuevas, otro juego u otra RDRAM se rechazan con un mensaje.
+- **La tarea del RSP en vuelo** se recoge antes de guardar sin adelantar su
+  fin emulado (`salsa64_rsp_quiesce`): el estado sale en cualquier campo y
+  la continuación es idéntica.
+- **PS3** (`src/frontend/states.c`, `main.c`): SELECT + R1 guarda, SELECT +
+  L1 carga, SELECT + izquierda/derecha cambia de ranura (esos botones no
+  llegan al juego con SELECT apretado); `/dev_hdd0/salsa64/states/<título>-
+  <CRC1>.st0…st9`, escritos con sysFs a un .tmp y renombrados. Barrera en el
+  límite del campo: emulación recoge la tarea, encola el campo y espera;
+  presentación presenta lo que queda (miniatura), espera al RSX y guarda o
+  carga; al cargar vacía la caché del recompilador, suelta los destinos del
+  RSX (`salsa64_rdp_drop_targets`, sin tocar la numeración de las tareas) y
+  vacía la cola de audio con su transición (`audio_sync_flush`). Aviso de
+  ~2 s abajo en la pantalla (`src/frontend/osd.c`, rsxkit/ui).
+- **Contador de FPS** (pedido de la coordinación): «VI 59,9 (100 %) · juego
+  30 · pantalla 60», promedio de 0,5 s, contado solo en el hilo de
+  presentación; SELECT + △ y fila «Mostrar FPS» en Opciones; se recuerda en
+  menu.cfg (`fps = si|no`).
+- **Host**: `salsa64-run --state-save CAMPO:ARCHIVO`, `--state-load ARCHIVO`
+  (con `--lockstep` también la referencia) y `--fields N`.
+
+Pruebas:
+- Determinismo (guardar en N, cargar en otra corrida y seguir hasta M contra
+  de corrido: estado byte por byte e imágenes iguales): unitarias
+  (`test_state.c`, también con el recompilador), `tools/test-roms.sh`
+  (gfxtest, vitest, audiotest), `tools/test-rec.sh` (gfxtest con `--rec` =
+  intérprete) y respaldos propios en el host: Zelda (intro y Kokiri), SM64
+  (intro y castillo), GoldenEye (intro y la presa) y Mario Kart: idénticos.
+- RPCS3 (`tools/rpcs3-run.py --estados A,B`: guarda en A, carga en B y la ROM
+  de prueba se tiene que verificar después): vitest, gfxtest y audiotest OK,
+  cierre limpio (RPCS3 no sirve para medir los tiempos).
+- `tools/build.sh test-host` 383/383 (con main); `tools/test-roms.sh` verde;
+  `tools/test-rec.sh --lockstep` verde (unitarias en los cuatro modos,
+  nemu64-test con la línea base, estados con `--rec` = intérprete, y
+  `--lockstep` sin diferencias en nemu64-test, vitest y gfxtest desde un
+  estado cargado); `tools/test-phase2.sh` verde; `tools/build.sh` (todos los
+  programas) sin avisos. El SPE gráfico solo copia tal cual el tramo del
+  estado del RDP y el PPE arma el formato: 0,2 KB de código, la pila queda en
+  ~9,9 KB (main con los efectos de framebuffer: ~10,2 KB; la cadena más honda
+  usa ~8 KB).
+- Con los efectos de framebuffer de main: la barrera espera las copias RSX →
+  RDRAM en vuelo y las escribe antes de guardar o cargar
+  (`salsa64_rdp_settle`), y al cargar se olvidan también el scratch, los
+  espejos y el historial de copias (`salsa64_rdp_drop_targets`). La prueba
+  de determinismo de gfxtest corre con el rasterizador en las tres corridas
+  (copias espejo y a la RDRAM leídas por el CPU en cada tarea): idéntica; en
+  el host con respaldos, también la pausa de Zelda (16090 → 16300), el túnel
+  de Mario Kart, la presa de GoldenEye y SM64 (del logo a la cara de Mario y
+  el castillo, tras el arreglo de main de la copia del framebuffer, que
+  esta prueba encontró: el rasterizador del host dejaba de dibujar SM64 a
+  las 96 tareas). La marca de «ya copiado» de cada destino se reinicia al
+  cargar; lo dibujado que todavía no se copió no entra en el estado
+  (docs/estados.md, «Lo que no entra en un estado»).
+
+**PS3 real (2026-10-11, noche): funciona.** Guardar y cargar en Zelda,
+SM64, Mario Kart, GoldenEye (ranuras 0 y 1 independientes) y Perfect Dark;
+cargar después de volver al menú y reabrir el juego; «No hay estado en la
+ranura N» y «Ranura N (vacía)» donde corresponde; cierre limpio cada vez.
+Guardar 568 ms de media (casi todo escribir 8 MB en el disco), cargar 171
+ms (docs/perf-log.md, «Estados guardados»). El contador no cambia los
+campos/s (GoldenEye en la presa 45–49 con él, como sin él).
+
+La primera prueba colgó la consola entera al guardar: la traza por UDP
+paró justo antes de crear la carpeta `states`. Las funciones `sysFs*` de
+libsysfs son puentes al módulo cellFs del sistema, que hay que cargar con
+sysModuleLoad; sin cargarlo, en RPCS3 andan igual y en la PS3 real cuelgan
+todo. Ahora la E/S va con las llamadas al kernel (`sysLv2Fs*`,
+`<sys/file.h>`), como newlib.
+
 ## 2026-10-11 — Recompilador: FPU residente, sin microcódigo del PPE, COP0 con rutinas propias y caché por tramos (rama `jovial-jones-2408ac`, paquete SLSA00093 «Salsa64 FPU»)
 
 Objetivo: bajar los ~50 ciclos del PPE por instrucción MIPS del código

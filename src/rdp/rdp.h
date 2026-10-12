@@ -137,6 +137,16 @@ void salsa64_rdp_shutdown(void);
  * último salsa64_rdp_flush. Devuelve las tareas que quedaban sin traducir
  * (0 si se consumió todo). */
 uint32_t salsa64_rdp_reset(void);
+/* Estados guardados, en la barrera (después del último salsa64_rdp_flush,
+ * con la emulación quieta): settle espera las copias RSX → RDRAM que
+ * quedaran en vuelo (espejos del framebuffer y de las imágenes chicas,
+ * copias grandes sin esperar) y las escribe en la RDRAM, así ninguna llega
+ * tarde. drop_targets, al cargar: suelta los destinos, profundidades y el
+ * scratch (lo dibujado ya no es de esta máquina y los números de campo
+ * retroceden) y olvida las copias y su historial, sin tocar las colas ni la
+ * numeración de las tareas, que siguen con el mismo SPE. */
+void salsa64_rdp_settle(void);
+void salsa64_rdp_drop_targets(void);
 
 /* Efectos de framebuffer (docs/framebuffer.md). La RDRAM emulada, para
  * copiar ahí los destinos que el CPU va a leer y cebar superficies con lo

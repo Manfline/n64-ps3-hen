@@ -68,6 +68,15 @@
  * la HLE puso sobre el plano cercano entre triángulos vecinos (una grieta
  * en una arista compartida sería ≥ 1 px).
  *
+ * Estados guardados (core/state.c): --state-save CAMPO:ARCHIVO guarda la
+ * máquina al terminar ese campo del VI (hasta 8; va campo por campo),
+ * --state-load ARCHIVO la carga después del arranque y sigue desde ahí
+ * (con --lockstep, también la referencia), y --fields N termina al acabar
+ * el campo N. Es el mismo formato que en la PS3: un estado de la consola
+ * se reproduce aquí. La prueba de determinismo (tools/test-roms.sh) corre
+ * de corrido hasta M y, aparte, guarda en N, carga y sigue hasta M: los dos
+ * estados en M deben ser iguales byte por byte.
+ *
  * Códigos de salida:
  *   0  apareció el texto de --until-text, o se agotaron los ciclos sin pedirlo
  *   1  apareció alguno de los textos de --fail-text
@@ -89,6 +98,7 @@
 #include "../../tests/roms/src/gfxtest/expect.h"
 #include "core/boot.h"
 #include "core/endian.h"
+#include "core/state.h"
 #include "cpu/rec.h"
 #include "host/rec_host.h"
 #include "frontend/savefile.h"
@@ -113,6 +123,7 @@ enum stop_reason {
 	STOP_FAIL,
 	STOP_CYCLES,
 	STOP_STUCK,
+	STOP_FIELDS,
 };
 
 static struct salsa64_n64 n64;
@@ -1717,7 +1728,78 @@ static bool dump_frame(const char *path)
 
 /* Opciones largas sin letra (códigos fuera de ASCII). */
 enum { OPT_REC = 0x100, OPT_LOCKSTEP, OPT_PAD, OPT_TRACE_FROM, OPT_TRACE_FAULTS, OPT_RAM_DUMP, OPT_TRACE_AUDIO,
-       OPT_FRAME_EVERY, OPT_LLE, OPT_LLE_SPEED, OPT_LLE_CHECK, OPT_LLE_CHECK_JPEG, OPT_POKE, OPT_TRACE_FB };
+       OPT_FRAME_EVERY, OPT_LLE, OPT_LLE_SPEED, OPT_LLE_CHECK, OPT_LLE_CHECK_JPEG, OPT_POKE, OPT_TRACE_FB, OPT_STATE_SAVE,
+       OPT_STATE_LOAD, OPT_FIELDS };
+
+/* ---- Estados guardados (--state-save, --state-load) ------------------------- */
+
+#define MAX_STATE_SAVES 8
+static struct {
+	uint32_t field[MAX_STATE_SAVES];
+	const char *path[MAX_STATE_SAVES];
+	unsigned n;
+} state_saves;
+static const char *state_load_path;
+static uint32_t stop_field;
+static uint8_t state_scratch[SALSA64_STATE_SCRATCH] __attribute__((aligned(16)));
+
+static bool state_fwrite(void *ctx, const void *data, uint32_t len)
+{
+	return fwrite(data, 1, len, ctx) == len;
+}
+
+static bool state_fread(void *ctx, void *data, uint32_t len)
+{
+	return fread(data, 1, len, ctx) == len;
+}
+
+static bool state_save_file(const char *path)
+{
+	char err[160];
+	if (!salsa64_rsp_quiesce(&n64.bus)) {
+		fprintf(stderr, "salsa64-run: --state-save: sin estados con --lle\n");
+		return false;
+	}
+	FILE *f = fopen(path, "wb");
+	bool ok = f && salsa64_state_save(&n64, NULL, state_fwrite, f, state_scratch, err, sizeof err);
+	if (f && fclose(f) != 0)
+		ok = false;
+	if (!ok) {
+		fprintf(stderr, "salsa64-run: no se pudo guardar el estado en %s: %s\n", path, f ? err : "no se abre");
+		return false;
+	}
+	fprintf(stderr, "salsa64-run: estado del campo %u en %s (%u bytes)\n", n64.bus.vi.fields, path,
+		salsa64_state_size(&n64, false));
+	return true;
+}
+
+static bool state_load_file(struct salsa64_n64 *m, const char *path)
+{
+	char err[160] = "no se abre";
+	bool broken = false;
+	FILE *f = fopen(path, "rb");
+	bool ok = f && salsa64_rsp_quiesce(&m->bus) &&
+		  salsa64_state_load(m, state_fread, f, state_scratch, err, sizeof err, &broken);
+	if (f)
+		fclose(f);
+	if (!ok) {
+		fprintf(stderr, "salsa64-run: no se pudo cargar el estado %s: %s\n", path, err);
+		return false;
+	}
+	if (m == &n64)
+		fprintf(stderr, "salsa64-run: estado %s cargado (campo %u, ciclo %llu)\n", path, m->bus.vi.fields,
+			(unsigned long long)m->cpu.cycles);
+	return true;
+}
+
+/* Al terminar cada campo: los --state-save que tocan. */
+static bool state_fields_done(void)
+{
+	for (unsigned k = 0; k < state_saves.n; k++)
+		if (state_saves.field[k] == n64.bus.vi.fields && !state_save_file(state_saves.path[k]))
+			return false;
+	return true;
+}
 
 static void usage(FILE *out)
 {
@@ -1763,7 +1845,10 @@ static void usage(FILE *out)
 	      "      --lle-speed F     instrucciones del RSP por ciclo del CPU (nominal 0,667)\n"
 	      "      --lle-check-audio con --lle=all, comparar cada tarea de audio con la HLE\n"
 	      "      --lle-check-jpeg  las tareas JPEG al microcódigo real (implica --lle=auto) y\n"
-	      "                        compararlas con la HLE (rsp/jpeg)\n", out);
+	      "                        compararlas con la HLE (rsp/jpeg)\n"
+	      "      --state-save C:ARCHIVO  guardar un estado al terminar el campo C (hasta 8)\n"
+	      "      --state-load ARCHIVO    cargar un estado después del arranque y seguir desde ahí\n"
+	      "      --fields N        terminar (código 0) al acabar el campo N del VI\n", out);
 }
 
 int main(int argc, char **argv)
@@ -1799,6 +1884,9 @@ int main(int argc, char **argv)
 		{ "lle-speed", required_argument, NULL, OPT_LLE_SPEED },
 		{ "lle-check-audio", no_argument, NULL, OPT_LLE_CHECK },
 		{ "lle-check-jpeg", no_argument, NULL, OPT_LLE_CHECK_JPEG },
+		{ "state-save", required_argument, NULL, OPT_STATE_SAVE },
+		{ "state-load", required_argument, NULL, OPT_STATE_LOAD },
+		{ "fields", required_argument, NULL, OPT_FIELDS },
 		{ "trace-gfx", required_argument, NULL, 'Q' },
 		{ "trace-fb", no_argument, NULL, OPT_TRACE_FB },
 		{ "raster-dump", required_argument, NULL, 'D' },
@@ -1808,6 +1896,7 @@ int main(int argc, char **argv)
 		{ NULL, 0, NULL, 0 },
 	};
 	uint64_t max_cycles = DEFAULT_CYCLES, slice = DEFAULT_SLICE;
+	bool cycles_set = false;
 	uint32_t ram = SALSA64_RDRAM_MAX;
 	int tv = SALSA64_BOOT_TV_AUTO, save_type = SALSA64_SAVE_AUTO, c;
 	bool regs = false, idle = true, use_rec = false, lockstep = false;
@@ -1819,7 +1908,7 @@ int main(int argc, char **argv)
 
 	while ((c = getopt_long(argc, argv, "c:u:f:qrh", opts, NULL)) != -1) {
 		switch (c) {
-		case 'c': max_cycles = strtoull(optarg, NULL, 0); break;
+		case 'c': max_cycles = strtoull(optarg, NULL, 0); cycles_set = true; break;
 		case 'u': watch.until = optarg; break;
 		case 'f':
 			if (watch.nfail == MAX_FAIL_TEXTS) {
@@ -1885,6 +1974,18 @@ int main(int argc, char **argv)
 		case OPT_LLE_SPEED: lle_speed = atof(optarg); break;
 		case OPT_LLE_CHECK: shadow.on = true; break;
 		case OPT_LLE_CHECK_JPEG: jcheck.on = true; break;
+		case OPT_STATE_SAVE: {
+			char *colon = strchr(optarg, ':');
+			if (!colon || colon == optarg || !colon[1] || state_saves.n == MAX_STATE_SAVES) {
+				fprintf(stderr, "salsa64-run: --state-save CAMPO:ARCHIVO (hasta %d)\n", MAX_STATE_SAVES);
+				return 3;
+			}
+			state_saves.field[state_saves.n] = (uint32_t)strtoul(optarg, NULL, 0);
+			state_saves.path[state_saves.n++] = colon + 1;
+			break;
+		}
+		case OPT_STATE_LOAD: state_load_path = optarg; break;
+		case OPT_FIELDS: stop_field = (uint32_t)strtoul(optarg, NULL, 0); break;
 		case 'D': dump_path = optarg; break;
 		case 'A': wav_path = optarg; break;
 		case 'Z': audio_check = true; break;
@@ -1907,6 +2008,8 @@ int main(int argc, char **argv)
 	}
 	if (dump_path)
 		return raster_dump(dump_path, gfx_path);
+	if (stop_field && !cycles_set)
+		max_cycles = UINT64_MAX;  /* --fields manda */
 	size_t longest = watch.until ? strlen(watch.until) : 0;
 	for (unsigned k = 0; k < watch.nfail; k++)
 		if (strlen(watch.fail[k]) > longest)
@@ -1945,7 +2048,7 @@ int main(int argc, char **argv)
 	if (getenv("SALSA64_GFX_LATE")) {
 		gfx_late.polls = (unsigned)strtoul(getenv("SALSA64_GFX_LATE"), NULL, 0);
 		gfx_late.tear = getenv("SALSA64_GFX_TEAR") != NULL;
-		gfx_late.backend = (struct salsa64_gfx_backend){ NULL, late_start, late_finish, late_done };
+		gfx_late.backend = (struct salsa64_gfx_backend){ .start = late_start, .finish = late_finish, .done = late_done };
 		salsa64_rsp_set_gfx(&n64.bus, &gfx_late.backend);
 	}
 	salsa64_audio_sync_init(&aud_sync, &aud_state, &n64.bus);
@@ -2034,9 +2137,21 @@ int main(int argc, char **argv)
 			code, rec.calls_near ? "con bl" : "por mtctr/bctrl");
 	}
 
+	if (state_load_path) {
+		if (!state_load_file(&n64, state_load_path) || (lockstep && !state_load_file(&ref, state_load_path))) {
+			free(rom);
+			return 3;
+		}
+		/* Lo programado hasta el campo del estado ya está en él. */
+		while (pokes.next < pokes.n && n64.bus.vi.fields >= pokes.at[pokes.next].field)
+			pokes.next++;
+	}
+
 	/* Un control programado en el campo 0 está conectado desde el arranque
 	 * (como el puerto 1 en la PS3): hay juegos que solo lo buscan al
-	 * iniciar y sin él no pasan del logo (Banjo-Kazooie). */
+	 * iniciar y sin él no pasan del logo (Banjo-Kazooie). Tras --state-load,
+	 * el último hasta el campo del estado (el PIF ya lo tiene: no cambia
+	 * nada). */
 	pad_field();
 
 	/* Bucle principal: bloques de `slice` ciclos y verificación entre ellos. */
@@ -2059,12 +2174,19 @@ int main(int argc, char **argv)
 				fprintf(stderr, "campo %u: origen %06x %ux%u stride %u bpp %u (V_VIDEO %08x Y_SCALE %08x)\n",
 					n64.bus.vi.fields, f.origin, f.width, f.height, f.stride, f.bpp,
 					n64.bus.vi.regs[SALSA64_VI_V_VIDEO], n64.bus.vi.regs[SALSA64_VI_Y_SCALE]);
-		} else if (pads.n || pokes.n || gfx.raster) {
+		} else if (pads.n || pokes.n || gfx.raster || state_saves.n || stop_field) {
 			/* Con controles programados, campo por campo: el control cambia
 			 * justo al empezar uno. Con el rasterizador también, para darle
-			 * el origen del VI de cada campo (raster_vi). */
+			 * el origen del VI de cada campo (raster_vi). Los estados se
+			 * guardan en el límite del campo, como en la PS3. */
 			salsa64_n64_run_field(&n64);
 			field_done(gfx_path, frame_every);
+			if (!state_fields_done()) {
+				free(rom);
+				return 3;
+			}
+			if (stop_field && n64.bus.vi.fields >= stop_field && watch.hit == STOP_NONE)
+				watch.hit = STOP_FIELDS;
 		} else {
 			salsa64_n64_run(&n64, max_cycles - done < slice ? max_cycles - done : slice);
 		}
@@ -2091,6 +2213,7 @@ int main(int argc, char **argv)
 		[STOP_FAIL] = "apareció el texto de falla",
 		[STOP_CYCLES] = "se agotaron los ciclos",
 		[STOP_STUCK] = "bucle infinito sin interrupciones posibles",
+		[STOP_FIELDS] = "se llegó al campo pedido",
 	};
 	uint64_t samples = pc_samples[SEG_KSEG0] + pc_samples[SEG_KSEG1] + pc_samples[SEG_TLB];
 	if (samples)
@@ -2125,6 +2248,13 @@ int main(int argc, char **argv)
 		}
 	}
 	savefile_close(&save_file);
+	for (unsigned k = 0; k < state_saves.n; k++)
+		if (state_saves.field[k] > n64.bus.vi.fields) {
+			fprintf(stderr, "salsa64-run: --state-save: no se llegó al campo %u (terminó en el %u)\n",
+				state_saves.field[k], n64.bus.vi.fields);
+			free(rom);
+			return 3;
+		}
 	if (regs)
 		dump_regs();
 	if (ram_path) {

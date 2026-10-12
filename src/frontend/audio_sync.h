@@ -84,8 +84,13 @@ struct audio_sync {
 	volatile uint32_t rate;     /* Hz de lo último que llegó */
 	volatile uint32_t chunk;    /* muestras por entrega (promedio) */
 	volatile uint32_t dropped;
+	/* Vaciado pedido por el productor (audio_sync_flush): lo anterior a
+	 * flush_from ya no suena. */
+	volatile uint64_t flush_from;
+	volatile uint64_t flush_seq;
 
 	/* ---- Consumidor (hilo de la salida) ---- */
+	uint64_t flush_seen;
 	enum audio_policy policy;
 	uint32_t min_level_ms;
 	uint32_t in_rate;           /* con la que se armó el estirador */
@@ -113,6 +118,11 @@ void audio_sync_init(struct audio_sync *as, enum audio_policy policy, uint32_t m
 
 /* Productor: muestras del AI (16 bits estéreo en el orden de la N64). */
 void audio_sync_push(struct audio_sync *as, const uint8_t *samples, uint32_t bytes, uint32_t rate_hz);
+
+/* Productor: lo que está en el anillo ya no debe sonar (se cargó un estado
+ * guardado). El consumidor lo salta con la transición de siempre y espera
+ * a juntar el nivel con lo nuevo. */
+void audio_sync_flush(struct audio_sync *as);
 
 /* Consumidor: `frames` muestras estéreo a 48 kHz en `out` (flotantes
  * intercalados, ±1). `now_us`: reloj de pared, para medir la velocidad de

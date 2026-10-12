@@ -10,6 +10,8 @@
 # audiotest (ROM propia del AI y de la HLE de audio, tests/roms/src/audiotest):
 # se verifica sola y lo que sale por el AI se compara muestra por muestra con
 # su tono (build/audiotest.wav).
+# Estados guardados con gfxtest, vitest y audiotest: guardar en un campo,
+# cargar y seguir da el mismo estado y la misma imagen que de corrido.
 #
 # La lista de pruebas de nemu64-test que fallan se compara con la línea base
 # tests/roms/nemu64-test.fallas (lo que falta emular: RSP sin LLE, cachés,
@@ -160,6 +162,46 @@ for v in gfxtest gfxtest-f3d gfxtest-f3dex; do
 		fail=1
 	fi
 done
+
+# Estados guardados (core/state.c): de corrido hasta el campo M contra
+# guardar en N, cargar en otra corrida y seguir hasta M. Los dos estados en M
+# tienen que ser iguales byte por byte (CPU, RDRAM, RCP, planificador, HLE)
+# y las imágenes del VI y de la HLE, también.
+estados() {  # nombre rom N M [gfx: también la imagen de la HLE gráfica]
+	d=build/states/$1
+	ELOG=build/logs/estados-$1.run.log
+	rm -rf "$d"
+	mkdir -p "$d"
+	R="ASAN_OPTIONS=detect_leaks=0 build/host/salsa64-run -q"
+	g1="" gn="" g2=""
+	if [ "${5:-}" = gfx ]; then
+		# El rasterizador en las tres corridas: con él la HLE copia destinos
+		# a la RDRAM (efectos de framebuffer) y eso es parte del estado.
+		g1="--gfx-frame $d/m-gfx.ppm" gn="--gfx-frame $d/n-gfx.ppm" g2="--gfx-frame $d/m2-gfx.ppm"
+	else
+		: >"$d/m-gfx.ppm"; : >"$d/m2-gfx.ppm"
+	fi
+	tools/build.sh --sh "$R --fields $4 --state-save $4:$d/m.st --frame $d/m.ppm $g1 $2 && \
+		$R --fields $3 --state-save $3:$d/n.st $gn $2 && \
+		$R --state-load $d/n.st --fields $4 --state-save $4:$d/m2.st --frame $d/m2.ppm $g2 $2" \
+		>"$ELOG" 2>&1
+	erc=$?
+	if [ $erc -ne 0 ]; then
+		printf '%-12s %s\n' estados "$1: FALLO (código $erc, $ELOG)"
+		fail=1
+	elif ! cmp -s "$d/m.st" "$d/m2.st"; then
+		printf '%-12s %s\n' estados "$1: FALLO, los estados en el campo $4 difieren ($(cmp "$d/m.st" "$d/m2.st" | head -1))"
+		fail=1
+	elif ! cmp -s "$d/m.ppm" "$d/m2.ppm" || ! cmp -s "$d/m-gfx.ppm" "$d/m2-gfx.ppm"; then
+		printf '%-12s %s\n' estados "$1: FALLO, las imágenes en el campo $4 difieren ($d)"
+		fail=1
+	else
+		printf '%-12s %s\n' estados "$1: guardado en el campo $3 y cargado = de corrido hasta el $4 ($(wc -c <"$d/m.st" | tr -d ' ') bytes)"
+	fi
+}
+estados gfxtest tests/roms/homebrew/salsa64-gfxtest.z64 150 300 gfx
+estados vitest tests/roms/homebrew/salsa64-vitest.z64 120 240
+estados audiotest tests/roms/homebrew/salsa64-audiotest.z64 100 200
 
 ALOG=build/logs/audiotest.run.log
 tools/build.sh --sh "ASAN_OPTIONS=detect_leaks=0 build/host/salsa64-run -c 600000000 \

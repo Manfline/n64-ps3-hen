@@ -31,6 +31,21 @@
 
 #define GFX_JOB_TASK 1  /* kind del trabajo en spukit */
 #define GFX_JOB_HASH 2  /* prueba del hash (struct gfx_hash_job), antes de las tareas */
+/* Estados guardados, entre tareas: el SPE copia tal cual el tramo de su
+ * gfx_state con lo que persiste entre tareas (GFX_RAW_START a GFX_RAW_END de
+ * hle.h: registros del RDP, tiles y TMEM) a `ea`, o lo trae de ahí, y
+ * contesta dónde empieza y termina ese tramo en su struct (dos uint32_t) para
+ * que el PPE compruebe que la disposición es la misma. El formato portable
+ * (GFX_STATE_BYTES: GFX_STATE_REGS bytes de registros y la TMEM, state.c) lo
+ * arma el PPE: en el SPE no sobra local store. */
+#define GFX_JOB_STATE_SAVE 3
+#define GFX_JOB_STATE_LOAD 4
+#define GFX_STATE_REGS  256u
+#define GFX_STATE_BYTES (GFX_STATE_REGS + 4096u)
+
+struct gfx_state_job {
+	uint64_t ea;
+};
 
 /* Hash de `len` bytes desde `start` de un anillo de `size` bytes (≤ 4096,
  * potencia de 2) en `ea`; el resultado son las dos palabras de la clave. */

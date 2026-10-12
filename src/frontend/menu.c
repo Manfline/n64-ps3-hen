@@ -44,6 +44,7 @@ void menu_settings_default(struct menu_settings *s)
 	s->overscan = MENU_OVERSCAN_NORMAL;
 	s->resolution = MENU_RES_720P;
 	s->scale = 0;
+	s->fps = false;
 }
 
 static const char *overscan_name(int o)
@@ -101,6 +102,8 @@ void menu_settings_parse(struct menu_settings *s, const char *text, size_t len)
 		bool no = !strcmp(val, "no") || !strcmp(val, "0");
 		if (!strcmp(key, "fondo") && (yes || no))
 			s->waves = yes;
+		else if (!strcmp(key, "fps") && (yes || no))
+			s->fps = yes;
 	}
 }
 
@@ -158,7 +161,8 @@ int menu_video_format(const struct menu_settings *s, char *buf, size_t size)
 
 int menu_settings_format(const struct menu_settings *s, char *buf, size_t size)
 {
-	return snprintf(buf, size, "# Ajustes del menú de Salsa64\nfondo = %s\n", s->waves ? "si" : "no");
+	return snprintf(buf, size, "# Ajustes del menú de Salsa64\nfondo = %s\nfps = %s\n", s->waves ? "si" : "no",
+			s->fps ? "si" : "no");
 }
 
 void menu_init(struct menu *m, const struct romlist *list, int sel, const struct menu_settings *set)
@@ -255,6 +259,10 @@ static enum menu_action options_buttons(struct menu *m, uint32_t pressed)
 		/* Auto → 1× → ... → 5× → Auto (izquierda, al revés). */
 		int v = m->set.scale + (pressed & BIT(SALSA64_DS3_LEFT) ? 5 : 1);
 		m->set.scale = v % 6;
+		return MENU_SETTINGS;
+	}
+	if (m->opt == MENU_OPT_FPS && (pressed & change)) {
+		m->set.fps = !m->set.fps;
 		return MENU_SETTINGS;
 	}
 	return MENU_NONE;
@@ -574,6 +582,9 @@ static void panel(const struct menu *m, float W, float H, float a)
 							 "Se guarda en overscan.cfg.", NULL, NULL };
 		static const char *const res_text[] = { "Salida de video: 720p (3x)", "o 1080p (4x). Luego, abajo,", "«Aplicar ahora».",
 							"Se guarda en video.cfg.", NULL, NULL };
+		static const char *const fps_text[] = { "Campos del VI por segundo y", "velocidad, cuadros del juego",
+							"y de la pantalla, en una", "esquina. En el juego,",
+							"SELECT + triángulo.", "Se guarda en menu.cfg.", NULL, NULL };
 		/* Escala interna: tamaño y texto dependen del valor. */
 		char scale_buf[24], size_buf[32];
 		int eff = m->set.scale ? m->set.scale : (m->set.resolution == MENU_RES_1080P ? 4 : 3);
@@ -591,16 +602,19 @@ static void panel(const struct menu *m, float W, float H, float a)
 				    : m->opt == MENU_OPT_OVERSCAN ? "Recorte del borde"
 				    : m->opt == MENU_OPT_RESOLUTION ? "Resolución"
 				    : m->opt == MENU_OPT_SCALE ? "Escala interna"
-				    : m->opt == MENU_OPT_APPLY ? "Aplicar ahora" : "Volver";
+				    : m->opt == MENU_OPT_APPLY ? "Aplicar ahora"
+				    : m->opt == MENU_OPT_FPS ? "Mostrar FPS" : "Volver";
 		const char *const *text = m->opt == MENU_OPT_WAVES ? waves_text
 					  : m->opt == MENU_OPT_OVERSCAN ? crop_text
 					  : m->opt == MENU_OPT_RESOLUTION ? res_text
 					  : m->opt == MENU_OPT_SCALE ? scale_text
-					  : m->opt == MENU_OPT_APPLY ? apply_text : back_text;
+					  : m->opt == MENU_OPT_APPLY ? apply_text
+					  : m->opt == MENU_OPT_FPS ? fps_text : back_text;
 		const char *value = m->opt == MENU_OPT_WAVES ? (m->set.waves ? "Sí" : "No")
 				    : m->opt == MENU_OPT_OVERSCAN ? overscan_name(m->set.overscan)
 				    : m->opt == MENU_OPT_RESOLUTION ? resolution_name(m->set.resolution)
-				    : m->opt == MENU_OPT_SCALE ? scale_name(&m->set, scale_buf, sizeof scale_buf) : NULL;
+				    : m->opt == MENU_OPT_SCALE ? scale_name(&m->set, scale_buf, sizeof scale_buf)
+				    : m->opt == MENU_OPT_FPS ? (m->set.fps ? "Sí" : "No") : NULL;
 		stext(x, y, title, tscale, 0xFFFFFFu, ca, tmax);
 		y += 56.0f;
 		/* Líneas cortas (caben en 4:3); NULL es un renglón en blanco, dos
@@ -635,8 +649,8 @@ static void panel(const struct menu *m, float W, float H, float a)
 	if (s < 0) {
 		bool exit = m->sel == menu_row_exit(m);
 		stext(x, y, exit ? "Salir al XMB" : "Opciones", tscale, 0xFFFFFFu, ca, tmax);
-		stext(x, y + 56.0f, exit ? "Cierra Salsa64 y vuelve" : "Fondo animado del menú", dscale, C_TEXT, ca, lmax);
-		stext(x, y + 86.0f, exit ? "al menú de la consola." : "y recorte del borde.", dscale, C_TEXT, ca, lmax);
+		stext(x, y + 56.0f, exit ? "Cierra Salsa64 y vuelve" : "Fondo, recorte del borde,", dscale, C_TEXT, ca, lmax);
+		stext(x, y + 86.0f, exit ? "al menú de la consola." : "resolución y FPS.", dscale, C_TEXT, ca, lmax);
 		return;
 	}
 	const struct rom_entry *e = &m->list->e[s];
@@ -708,6 +722,7 @@ static void options_column(const struct menu *m, float x, float W, float H, floa
 	struct row scale = { "Escala interna", "Dibujo interno", 2, "▲", 0,
 			     scale_name(&m->set, sbuf, sizeof sbuf) };
 	struct row apply = { "Aplicar ahora", "Salida y escala elegidas", 2, "●", 0, NULL };
+	struct row fps = { "Mostrar FPS", "Velocidad en una esquina del juego", 2, "#", 0, m->set.fps ? "Sí" : "No" };
 	struct row back = { "Volver", "A la lista de juegos", 2, "◀", 0, NULL };
 	draw_row(&waves, MENU_OPT_WAVES - m->opt_pos, x, W, H, a);
 	draw_row(&crop, MENU_OPT_OVERSCAN - m->opt_pos, x, W, H, a);
@@ -715,6 +730,7 @@ static void options_column(const struct menu *m, float x, float W, float H, floa
 	draw_row(&scale, MENU_OPT_SCALE - m->opt_pos, x, W, H, a);
 	if (menu_video_pending(m))
 		draw_row(&apply, MENU_OPT_APPLY - m->opt_pos, x, W, H, a);
+	draw_row(&fps, (float)opt_row(m, MENU_OPT_FPS) - m->opt_pos, x, W, H, a);
 	draw_row(&back, (float)opt_row(m, MENU_OPT_BACK) - m->opt_pos, x, W, H, a);
 }
 

@@ -70,10 +70,12 @@ struct menu_settings {
 	int overscan;   /* enum menu_overscan */
 	int resolution; /* enum menu_resolution */
 	int scale;      /* escala interna del render: 0 automática, 1 .. 5 */
+	bool fps;       /* contador de velocidad en el juego («fps = si|no»; SELECT + △) */
 };
 
 enum { MENU_PAGE_GAMES, MENU_PAGE_OPTIONS };
-enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_RESOLUTION, MENU_OPT_SCALE, MENU_OPT_APPLY, MENU_OPT_BACK, MENU_OPTS };
+enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_RESOLUTION, MENU_OPT_SCALE, MENU_OPT_APPLY, MENU_OPT_FPS, MENU_OPT_BACK,
+       MENU_OPTS };
 /* «Aplicar ahora» solo existe mientras lo elegido difiere de lo que corre. */
 
 struct menu {

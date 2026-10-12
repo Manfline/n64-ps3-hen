@@ -25,9 +25,10 @@ en PS3 real.
 | Copias de la imagen del VI entre hilos | 4,4 | 4,4 | Frontend (docs/hilos-ppe.md): 3 ranuras de 640 × 576 × 4; el hilo de emulación copia el framebuffer al terminar el campo y el de presentación lo sube al RSX |
 | Zona de paso del guardado + pila del hilo de emulación | 0,3 | | 32 KB en `struct savefile` y 256 KB de pila (`sysThreadCreate`) |
 | Audio | 2 | 0,3 | `src/frontend/audio_out.c`: anillo de `audio_sync` 256 KB (65 536 muestras estéreo de 16 bits, ~2 s a 32 kHz) + estirador y remuestreo 12 KB, estáticos; HLE en el PPE (si no arranca el SPE) 9,2 KB; prueba del arranque (SPE contra PPE) 2 × 16 KB + 9,2 KB; pila del hilo de audio 64 KB; el puerto de audio (16 bloques × 256 × 2 flotantes = 32 KB) es memoria del sistema. Con `volcado_s` en audio.cfg, 200 KB por segundo (hasta 6 MB), reservados al arrancar |
+| Estados guardados | 0,2 | | `src/frontend/states.c`: búfer de paso de 128 KB (cabecera y secciones chicas; la RDRAM va directo de y hacia su búfer, sin copia) y miniatura de 160 × 120 × 2 (37,5 KB), estáticos; imagen de gfx_state del SPE para el estado de la HLE gráfica (48 KB, `gfx_spu.c`: el SPE copia ahí el tramo del RDP) y búfer de paso del de audio (11,75 KB, `audio_spu.c`). docs/estados.md |
 | Código, pila, heap de newlib | 16 | | |
 | Bloques de control de spukit | 0,01 | 0,01 | ~2,3 KB por trabajador |
-| **Total previsto** | **162** | | con una ROM de 64 MB (150 de la Fase 2 con la caché de texturas de 8 MB + 6,8 del estado del recompilador + 4,7 de los dos hilos) |
+| **Total previsto** | **162** | | con una ROM de 64 MB (150 de la Fase 2 con la caché de texturas de 8 MB + 6,8 del estado del recompilador + 4,7 de los dos hilos + 0,2 de los estados guardados) |
 
 ## Memoria local del RSX (GDDR3)
 
@@ -63,5 +64,13 @@ La escala elegida (`salsa64_rdp_init`, 0 = automática, 1–5) es un **objetivo 
 |---|---|---|---|---|
 | `spu-compute/spu/mix.c` | 2,6 KB | 0,8 KB + 64 KB | ~69 KB | `spu-size` en el build |
 | `spu-jobs/spu/scale.c` | 3,6 KB | 0,8 KB + 65 KB | ~70 KB | `spu-size` |
-| `src/spu/audio` (HLE de las listas de audio, SPE 1) | 27 KB | 0,8 KB + 19 KB | ~47 KB (+ pila ~208 KB) | `spu-size`: aud_state 9,2 KB (DMEM 4 KB + margen 4 KB, estado de ABI1 y nead), lecturas y escrituras 2 × 4 KB, bloque de la lista 1 KB |
-| `src/spu/gfx` (HLE de F3DEX2 + RDP, SPE 0) | 55 KB | 0,8 KB + 144 KB | ~200 KB (+ pila ~56 KB) | `spu-size`: gfx_state 53 KB (de ellos el directorio de la caché de texturas 32 KB), texturas 2 × 32 KB, vértices 2 × 8 KB, comandos 2 × 4 KB, display list 2 × 1 KB, lecturas 5,8 KB |
+| `src/spu/audio` (HLE de las listas de audio, SPE 1) | 45 KB | 0,8 KB + 33,6 KB | ~80 KB (+ pila ~176 KB) | `spu-size` (2026-10-11): aud_state 11,7 KB (DMEM 4 KB + margen 4 KB, estado de ABI1, nead y naudio, MP3 2 KB), lecturas y escrituras 2 × 4 KB, bloque de la lista 1 KB, paso del estado guardado 11,75 KB |
+| `src/spu/gfx` (HLE de F3DEX2 + RDP, SPE 0) | 99,0 KB | 0,8 KB + 146,3 KB | ~246 KB (+ pila ~9,9 KB) | `spu-size` (2026-10-11, con los efectos de framebuffer): gfx_state 48 KB (de ellos el directorio de la caché de texturas 32 KB), texturas 2 × 32 KB, vértices 2 × 8 KB, comandos 2 × 4 KB, display list 2 × 1 KB, lecturas 5,8 KB. Los estados guardados agregan 0,2 KB de código: el SPE copia tal cual el tramo del estado del RDP y el PPE arma el formato (sin ellos la pila era ~10,2 KB). La cadena más honda de la pila usa ~8 KB |
+
+## Disco (HDD de la PS3)
+
+| Uso | Tamaño | Notas |
+|---|---|---|
+| Un estado guardado | ~8,1 MB | `/dev_hdd0/salsa64/states/<título>-<CRC1>.stN`: cabecera 64 bytes, miniatura 37,5 KB, CPU y RCP ~3 KB, DMEM/IMEM 8 KB, guardado del cartucho (hasta 32 KB), HLE gráfica 4,25 KB y de audio 11,75 KB, RDRAM 8 MB. Medido en el host (mismo formato): 8 415 818 bytes con las ROMs de prueba (sin miniatura), 8 448 602 con Zelda OoT (SRAM de 32 KB); con miniatura, +38 416 |
+| Diez ranuras de un juego | ~81 MB | Sin compresión (docs/estados.md) |
+| Partidas del cartucho | ≤ 32 KB por juego | `saves/` |

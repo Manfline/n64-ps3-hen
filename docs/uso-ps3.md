@@ -89,6 +89,8 @@ Opciones:
   anterior y el panel dice «No se pudo: sigue …»; si sale bien, «Aplicado:
   1920x1080, escala 4×». El log dice «video: 1920x1080, escala 4×, aplicado
   sin reiniciar». Cambiar solo la escala no toca el video.
+- **Mostrar FPS**: el contador de velocidad dentro del juego (abajo, en
+  «Contador de velocidad»). También se cambia en el juego con SELECT + △.
 
 ## Controles en el juego
 
@@ -106,12 +108,24 @@ Los DualShock 3 de los puertos 1 a 4 son los controles 1 a 4 de la N64.
 | R | R1 |
 | Start | START |
 
-○, △, R2, L3, R3 y SELECT no tienen función en la N64.
+○, △, R2, L3, R3 y SELECT no tienen función en la N64. SELECT sirve para
+los atajos de Salsa64:
 
-- **START + SELECT** cierra el juego y vuelve al menú (guarda la partida,
-  apaga el audio y los SPEs).
-- «Salir del juego» del menú del sistema (botón PS) sale en cualquier
-  momento.
+| Atajo | Qué hace |
+|---|---|
+| START + SELECT | Cierra el juego y vuelve al menú (guarda la partida, apaga el audio y los SPEs) |
+| SELECT + R1 | Guarda el estado en la ranura actual |
+| SELECT + L1 | Carga el estado de la ranura actual |
+| SELECT + derecha / izquierda (cruceta) | Cambia de ranura (0 a 9, en ronda) |
+| SELECT + △ | Muestra u oculta el contador de velocidad |
+
+Mientras SELECT está apretado, R1, L1, △ y la cruceta izquierda/derecha no
+llegan al juego (no se mueve el personaje al cambiar de ranura). Si
+`controles.cfg` asigna SELECT a un botón de la N64, ese botón se pulsa
+también con los atajos.
+
+«Salir del juego» del menú del sistema (botón PS) sale en cualquier
+momento.
 
 Para cambiar el mapeo, ver `controles.cfg` más abajo.
 
@@ -128,6 +142,58 @@ la cabecera de los homebrew y por último una tabla interna por código de
 juego. Si un juego no guarda, el panel del menú mostrará «—» como tipo de
 guardado: se fija a mano en `guardado.cfg`. FlashRAM, SRAM de 768 Kbit y
 SRAM de 1 Mbit se reconocen pero todavía no se emulan.
+
+## Estados guardados
+
+Un estado guarda el juego entero en el instante (como pausar la consola y
+sacarle una foto a la memoria): se vuelve exactamente a ese punto, en
+cualquier parte del juego, no solo donde el juego deja guardar. Hay diez
+ranuras por juego (0 a 9); al abrir un juego la ranura actual es la 0.
+
+- **SELECT + R1** guarda en la ranura actual (si había algo, lo reemplaza).
+- **SELECT + L1** carga la ranura actual.
+- **SELECT + derecha / izquierda** cambia de ranura.
+
+Un aviso abajo en la pantalla dice qué pasó durante unos 2 segundos:
+«Estado guardado en ranura 3», «Ranura 4 (vacía)», «Estado cargado», «No
+hay estado en la ranura 2». Guardar detiene la imagen medio segundo (lo que
+tarda la PS3 en escribir unos 8 MB en el disco) y cargar, menos de un quinto
+de segundo; los tiempos quedan en el log.
+
+Los archivos van en `/dev_hdd0/salsa64/states`, con el mismo nombre que la
+partida del juego en `saves/` y la ranura en la extensión:
+`<título>-<CRC1>.st0` … `.st9` (unos 8 MB cada uno). Para respaldarlos,
+copiar esa carpeta por FTP. Sirven también en `salsa64-run` (la PC) y al
+revés.
+
+A tener en cuenta:
+
+- Cargar un estado también vuelve la partida del cartucho (EEPROM o SRAM) a
+  como estaba en ese momento, y así se escribe en `saves/`: un estado viejo
+  deshace lo guardado después dentro del juego.
+- Un estado es de una ROM: con otra (u otra versión del mismo juego) se
+  rechaza. También se rechazan los de una versión de Salsa64 que ya no los
+  entiende; el aviso lo dice.
+- Con `lle` (RSP de bajo nivel, experimental) no hay estados.
+- El primer cuadro después de cargar puede salir negro.
+
+## Contador de velocidad
+
+Con **SELECT + △** (o «Mostrar FPS» en Opciones) aparece arriba a la
+izquierda una línea como:
+
+```
+VI 59,9 (100 %) · juego 30 · pantalla 60
+```
+
+- **VI**: campos de video que emula Salsa64 por segundo y, entre paréntesis,
+  la velocidad respecto de la consola (100 % es velocidad completa, NTSC o
+  PAL).
+- **juego**: cuadros nuevos que dibuja el juego por segundo (muchos juegos
+  van a 20 o 30 aunque la tele vaya a 60).
+- **pantalla**: cuadros que presenta la PS3 por segundo.
+
+Es un promedio de medio segundo. Se recuerda en `menu.cfg` (`fps = si`).
 
 ## Abrir una ROM sin menú
 
@@ -149,7 +215,7 @@ se crean por FTP.
 
 | Archivo | Formato | Qué hace |
 |---|---|---|
-| `menu.cfg` | `fondo = si` o `fondo = no` | Fondo animado del menú. Lo escribe el menú al cambiarlo en Opciones |
+| `menu.cfg` | Líneas `fondo = si\|no` y `fps = si\|no` | Fondo animado del menú y contador de velocidad en el juego. Lo escriben el menú (Opciones) y SELECT + △ |
 | `overscan.cfg` | Uno, dos o cuatro números: `8`, `8 6` o `izq der arr abajo` | Recorte de la imagen en píxeles de la N64 (a 320 × 240) por lado. Por omisión `8 6`; `0` lo apaga; máximo 64. Lo escribe el menú (`0`, `8 6` o `16 12`) |
 | `video.cfg` | `salida = 720` o `1080`; `escala = auto` o `1` a `5` | Salida de video y escala interna del render de la N64 (se leen al arrancar). Sin archivo: 720p y escala automática (3×, 960 × 720; a 1080p, 4×, 1280 × 960). Si la tele o el XMB no aceptan 1080, usa el siguiente modo. Acepta el formato viejo de una línea (`1080` o `720`). Lo escribe el menú con «Resolución» y «Escala interna» |
 | `controles.cfg` | Líneas `BOTON_N64 = BOTON_DS3`; `#` comenta | Mapeo del control (abajo) |
@@ -163,7 +229,7 @@ se crean por FTP.
 | `gfx_ppe` | Basta con que exista | Corre la HLE gráfica en el PPE en lugar del SPE (para comparar tiempos) |
 | `embedded` | `file:nombre` | Abre una ROM sin menú (sección anterior) |
 
-La carpeta también contiene el log (`salsa64.log`) y archivos de diagnóstico
+La carpeta también contiene `states/` (estados guardados), el log (`salsa64.log`) y archivos de diagnóstico
 que escribe la aplicación (`gfxdump.bin`, `screen-N.ppm`, `menu.ppm`);
 no hace falta tocarlos.
 

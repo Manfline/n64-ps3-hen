@@ -442,11 +442,25 @@ static void menu_options_page(void)
 	menu_input(&m, 0, 79);
 	CHECK_EQ(menu_input(&m, 0, 79), MENU_NONE);
 	CHECK_EQ(m.opt, MENU_OPT_BACK);  /* la fila desapareció: el cursor pasa a «Volver» */
-	menu_input(&m, UP, 79);          /* y arriba está «Escala interna» */
+	menu_input(&m, UP, 79);          /* arriba, «Mostrar FPS» y luego «Escala interna» */
+	CHECK_EQ(m.opt, MENU_OPT_FPS);
+	menu_input(&m, 0, 79);
+	menu_input(&m, UP, 79);
 	CHECK_EQ(m.opt, MENU_OPT_SCALE);
 	menu_input(&m, 0, 79);
 	menu_input(&m, DOWN, 79);
-	CHECK_EQ(m.opt, MENU_OPT_BACK);  /* sin cambios pendientes se salta «Aplicar ahora» */
+	CHECK_EQ(m.opt, MENU_OPT_FPS);   /* sin cambios pendientes se salta «Aplicar ahora» */
+	/* Mostrar FPS: alterna sí / no y pide guardar. */
+	CHECK(!m.set.fps);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, CROSS, 79), MENU_SETTINGS);
+	CHECK(m.set.fps);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, LEFT, 79), MENU_SETTINGS);
+	CHECK(!m.set.fps);
+	menu_input(&m, 0, 79);
+	menu_input(&m, DOWN, 79);
+	CHECK_EQ(m.opt, MENU_OPT_BACK);
 	menu_input(&m, 0, 80);
 	CHECK_EQ(menu_input(&m, RIGHT, 90), MENU_NONE);  /* «Volver» no tiene valor */
 	menu_input(&m, 0, 100);
@@ -478,6 +492,10 @@ static void menu_settings_file(void)
 	static const char on[] = "fondo=sí";
 	menu_settings_parse(&s, on, sizeof on - 1);
 	CHECK(s.waves);
+	CHECK(!s.fps);
+	static const char fps[] = "fps = si\n";
+	menu_settings_parse(&s, fps, sizeof fps - 1);
+	CHECK(s.fps);
 	char text[128];
 	s.waves = false;
 	int n = menu_settings_format(&s, text, sizeof text);
@@ -485,6 +503,7 @@ static void menu_settings_file(void)
 	menu_settings_default(&t);
 	menu_settings_parse(&t, text, (size_t)n);
 	CHECK(!t.waves);
+	CHECK(t.fps);
 }
 
 static void menu_autopilot_opens_target(void)
