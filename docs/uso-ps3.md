@@ -133,8 +133,9 @@ ranuras por juego (0 a 9); al abrir un juego la ranura actual es la 0.
 
 Un aviso abajo en la pantalla dice qué pasó durante unos 2 segundos:
 «Estado guardado en ranura 3», «Ranura 4 (vacía)», «Estado cargado», «No
-hay estado en la ranura 2». Guardar o cargar detiene la imagen un instante
-(lo que tarda la PS3 en escribir o leer unos 8 MB; queda en el log).
+hay estado en la ranura 2». Guardar detiene la imagen medio segundo (lo que
+tarda la PS3 en escribir unos 8 MB en el disco) y cargar, menos de un quinto
+de segundo; los tiempos quedan en el log.
 
 Los archivos van en `/dev_hdd0/salsa64/states`, con el mismo nombre que la
 partida del juego en `saves/` y la ranura en la extensión:

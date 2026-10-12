@@ -8,8 +8,6 @@
 #include <string.h>
 #include <sys/systime.h>
 
-#include "platform/ps3/log.h"
-
 static uint8_t scratch[SALSA64_STATE_SCRATCH] __attribute__((aligned(128)));
 static uint16_t thumb_px[SALSA64_STATE_THUMB_W * SALSA64_STATE_THUMB_H];
 static bool thumb_ok;
@@ -72,7 +70,6 @@ bool states_save(struct salsa64_n64 *n64, unsigned slot, struct states_timing *t
 		snprintf(err, err_size, "no se pudo crear %s", tmp);
 		return false;
 	}
-	salsa64_log("estado: %s abierto; guardando", tmp);
 	const struct salsa64_state_thumb th = { SALSA64_STATE_THUMB_W, SALSA64_STATE_THUMB_H, thumb_px };
 	bool ok = salsa64_state_save(n64, thumb_ok ? &th : NULL, fs_write, &io, scratch, err, err_size);
 	uint64_t tc = sysGetSystemTime();
@@ -81,7 +78,6 @@ bool states_save(struct salsa64_n64 *n64, unsigned slot, struct states_timing *t
 		ok = false;
 	}
 	io.us += sysGetSystemTime() - tc;
-	salsa64_log("estado: escrito y cerrado (%s)", ok ? "bien" : err);
 	if (!ok) {
 		sysLv2FsUnlink(tmp);
 		return false;

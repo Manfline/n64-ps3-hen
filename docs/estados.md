@@ -82,7 +82,13 @@ consola se reproduce en `salsa64-run` y al revés.
   cuadro).
 
 Sin compresión: 8 MB de RDRAM se escriben de y hacia su búfer sin copias,
-y comprimir costaría tiempo del PPE. Tamaño en disco: ~8,1 MB por ranura
+y comprimir costaría tiempo del PPE. En la PS3 real guardar tarda ~0,6 s
+(casi todo el disco) y cargar ~0,17 s (docs/perf-log.md).
+
+La E/S en la PS3 va con las llamadas al kernel (`sysLv2Fs*` de
+`<sys/file.h>`), no con `sysFs*` de libsysfs: esas son puentes al módulo
+cellFs del sistema, que hay que cargar antes; sin cargarlo, en RPCS3 andan
+y en la consola real colgaban todo al primer `mkdir`. Tamaño en disco: ~8,1 MB por ranura
 (RDRAM de 8 MB más ~70 KB de secciones y miniatura), ~81 MB por juego con
 las diez ranuras llenas (docs/memory-budget.md).
 

@@ -67,9 +67,20 @@ Pruebas:
   cargar; lo dibujado que todavía no se copió no entra en el estado
   (docs/estados.md, «Lo que no entra en un estado»).
 
-Pendiente: la PS3 real (guardar y cargar en Zelda, SM64, Mario Kart y
-GoldenEye con varias ranuras, cargar tras volver al menú, tiempos, y que el
-contador no cambie los campos/s).
+**PS3 real (2026-10-11, noche): funciona.** Guardar y cargar en Zelda,
+SM64, Mario Kart, GoldenEye (ranuras 0 y 1 independientes) y Perfect Dark;
+cargar después de volver al menú y reabrir el juego; «No hay estado en la
+ranura N» y «Ranura N (vacía)» donde corresponde; cierre limpio cada vez.
+Guardar 568 ms de media (casi todo escribir 8 MB en el disco), cargar 171
+ms (docs/perf-log.md, «Estados guardados»). El contador no cambia los
+campos/s (GoldenEye en la presa 45–49 con él, como sin él).
+
+La primera prueba colgó la consola entera al guardar: la traza por UDP
+paró justo antes de crear la carpeta `states`. Las funciones `sysFs*` de
+libsysfs son puentes al módulo cellFs del sistema, que hay que cargar con
+sysModuleLoad; sin cargarlo, en RPCS3 andan igual y en la PS3 real cuelgan
+todo. Ahora la E/S va con las llamadas al kernel (`sysLv2Fs*`,
+`<sys/file.h>`), como newlib.
 
 ## 2026-10-11 — SM64 se colgaba con los efectos de framebuffer: el espejo del framebuffer sigue al dibujo, no al VI
 

@@ -28,6 +28,30 @@ antes, después, notas.
 | 2026-10-11 | 3b95776 | **HLE de la tarea JPEG de Zelda OoT** en la PS3, dos salas (tienda Kokiri y casa de Link) | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00091 «Salsa64 Kokiri», respaldo del usuario | antes: fondo sin dibujar (malla en colores planos) | **67,8 y 67,3 ms del PPE por sala**; ventana de la carga 57,3–57,6 campos/s, peor campo 37–39 ms de emulación | ~110 veces lo de la Mac: flotantes y conversiones a entero por memoria en el PPE. Se queda en el PPE (una vez por sala, durante la transición); pendiente pasarlo a punto fijo |
 | 2026-10-11 | (rama fervent-hodgkin) | **HLE de la tarea JPEG de Zelda OoT** (fondos prerrenderizados), una sala: 75 tareas, 300 macrobloques | Mac (salsa64-run nativo, Apple Silicon) | antes: las tareas terminaban sin hacer nada (fondo basura) | **0,61 ms por sala** en el hilo del CPU, una vez al cargarla | Corre en el PPE (`core/rsp.c`); IDCT separable en flotante sin optimizar. El frontend escribe «JPEG: N tareas, M macrobloques en X ms del PPE» al terminar cada tanda: con esa medida se decide si se queda en el PPE o va a un SPE. El fondo se copia en el SPE 0 (40 tiras por cuadro, reutilizadas por la caché de texturas) |
 
+## Estados guardados (2026-10-11)
+
+PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), paquete SLSA00094 «Salsa64
+estados», recompilador y efectos de framebuffer activos, 720p, juegos
+abiertos desde el menú. Tiempos que escribe el frontend en el log
+(«estado: guardado/cargado … ms»), desde la barrera hasta el archivo
+cerrado (docs/estados.md):
+
+| Operación | Veces | Media | Mín – máx | Disco | Notas |
+|---|---|---|---|---|---|
+| Guardar (~8,1 MB) | 14 | 568 ms | 417 – 1064 ms | 520 ms de media escribiendo (~16 MB/s) | Zelda, SM64, Mario Kart, GoldenEye, Perfect Dark. La miniatura cuesta 10 ms (19 200 lecturas del búfer del RSX); el estado de las HLE en los SPE, < 1 ms |
+| Cargar | 19 | 171 ms | 148 – 183 ms | 161 ms de media leyendo (~50 MB/s) | Lo demás (secciones, vaciar el recompilador, soltar destinos) ~10 ms |
+
+Lo que pesa es escribir 8 MB en el disco duro: si molesta, el próximo paso
+es comprimir (la RDRAM de 8 MB suele tener la mitad en ceros) o escribir
+desde otro hilo.
+
+Contador de velocidad (SELECT + △) encendido: GoldenEye en la presa a 45–49
+campos/s, como sin contador (45,8 en «Efectos de framebuffer» y 49,4 en el
+A/B del recompilador); Zelda, SM64 y Mario Kart a 59,4–60 campos/s. El
+dibujo del contador y del aviso cuesta < 0,2 ms por cuadro presentado en el
+hilo de presentación (presentación 0,2–0,6 ms por cuadro con él, igual que
+antes).
+
 ## Efectos de framebuffer (2026-10-11)
 
 Rama hopeful-dirac (docs/framebuffer.md). Lo que cuesta cada mecanismo lo

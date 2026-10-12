@@ -77,9 +77,9 @@ static bool spu_state(struct salsa64_audio_spu *s, uint32_t kind)
 	if (s->pending || !s->worker)
 		return false;
 	struct aud_state_job sj = { (uint64_t)(uintptr_t)state_buf };
-	salsa64_log("estado de la HLE de audio: trabajo %u al SPE", kind);
 	const spukit_result *r = spukit_wait(s->worker, spukit_post(s->worker, kind, &sj, sizeof sj));
-	salsa64_log("estado de la HLE de audio: el SPE contestó (error %d)", r->error);
+	if (r->error)
+		salsa64_log("estado de la HLE de audio: el SPE no lo dio (error %d)", r->error);
 	return !r->error;
 }
 
