@@ -755,6 +755,40 @@ static void targets_present_integer(void)
  * a punta). La secuencia de Super Mario 64 al pasar del logo a la cara de
  * Mario: triple búfer; el RDP dibuja B; el VI sigue en A; un DMA carga
  * datos encima de A y de B; el VI muestra B sin que el RDP lo toque. */
+/* Logos de Donkey Kong 64: destino de 640 × 480 y VI de 640 × 237 con
+ * stride 2560 (una línea de cada dos), origen en la línea 0 o la 1 según
+ * el campo: se presentan las 474 líneas desde la 0 en los dos casos. Con
+ * el stride normal, las 237 desde el origen. */
+static void targets_present_interlaced(void)
+{
+	const uint32_t A = 0x34000;
+	bool fresh;
+	rdp_targets_init(&s);
+	int a = rdp_targets_get(&s, A, 640, SIZ_16b, 480, &fresh);
+	rdp_targets_drawn(&s, a);
+	struct salsa64_vi_frame f;
+	memset(&f, 0, sizeof f);
+	f.type = SALSA64_VI_RGBA5551;
+	f.width = 640;
+	f.height = 237;
+	f.stride = 2560;
+	f.bpp = 2;
+	struct rdp_present p;
+	for (uint32_t par = 0; par < 2; par++) {
+		f.origin = A + par * 1280;
+		rdp_targets_present(&s, &f, 10 + par, &p);
+		CHECK_EQ(p.slot, a);
+		CHECK_EQ(p.y0, 0);
+		CHECK_EQ(p.w, 640);
+		CHECK_EQ(p.h, 474);
+	}
+	f.stride = 1280;
+	f.origin = A + 1280;
+	rdp_targets_present(&s, &f, 12, &p);
+	CHECK_EQ(p.y0, 1);
+	CHECK_EQ(p.h, 237);
+}
+
 /* Color image de 320 × 720 (Star Fox 64): los tres framebuffers seguidos
  * caben enteros dentro, con sus filas de inicio; otro ancho, no. */
 static void targets_inside(void)
@@ -774,9 +808,16 @@ static void targets_inside(void)
 		if (slots[i] == b) CHECK_EQ(first[i], 240);
 		if (slots[i] == c) CHECK_EQ(first[i], 480);
 	}
-	CHECK_EQ(rdp_targets_inside(&s, A, 320, 2, 600, slots, first), 2);  /* C no cabe entero */
+	CHECK_EQ(rdp_targets_inside(&s, A, 320, 2, 600, slots, first), 3);  /* C asoma por abajo */
+	CHECK_EQ(rdp_targets_inside(&s, A, 320, 2, 480, slots, first), 2);  /* C empieza fuera */
 	CHECK_EQ(rdp_targets_inside(&s, A, 640, 2, 720, slots, first), 0);
 	CHECK_EQ(rdp_targets_inside(&s, A + 2, 320, 2, 720, slots, first), 0);  /* desalineado */
+	CHECK(rdp_targets_tall(320, 459));
+	CHECK(rdp_targets_tall(320, 720));
+	CHECK(!rdp_targets_tall(320, 240));
+	CHECK(!rdp_targets_tall(320, 288));  /* PAL */
+	CHECK(!rdp_targets_tall(640, 480));
+	CHECK(rdp_targets_tall(640, 720));
 }
 
 /* Anillo de DMA: los trozos seguidos de la misma tarea se funden; una
@@ -869,6 +910,7 @@ void t_suite_targets(void)
 {
 	RUN(targets_dma_ring);
 	RUN(targets_inside);
+	RUN(targets_present_interlaced);
 	RUN(targets_locate);
 	RUN(targets_decode_rgba16);
 	RUN(targets_texture_policy);

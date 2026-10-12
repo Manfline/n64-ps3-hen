@@ -284,6 +284,14 @@ static void raster_tall_fill(void)
 	CHECK_EQ(c[25 * W + 7], 0x010203u);
 	CHECK_EQ(c[41 * W + 7], 0x28323cu);
 	CHECK_EQ(b[100 * W + 200], 0x28323cu);
+	/* Donkey Kong 64: 459 filas sobre dos búferes (más de pantalla y
+	 * media): también se reparte, sin crear un destino de 320 × 459. */
+	task_tall_fill(FB_A, W, 459, 0, 0, (float)W, 459, 9, 8, 7);
+	CHECK_EQ(a[0], 0x090807u);
+	CHECK_EQ(b[218 * W + 5], 0x090807u);
+	CHECK_EQ(b[230 * W + 5], 0x28323cu);
+	uint32_t bw = 0;
+	CHECK(raster_image(FB_A, &bw) == a);  /* sigue siendo el de 240 */
 	raster_reset();
 }
 

@@ -34,6 +34,36 @@
   (`p_term`, sumas de polinomios): en el SPU cada llamada sin pista de
   salto cuesta ~18 ciclos.
 
+## 2026-10-12 (noche) — Donkey Kong 64: logos entrelazados y «zoom» en el juego (presentación; rama `infallible-wozniak-aa210c`)
+
+Main lo reportó de la PS3 real con la rama del recompilador (DK64 al 100 %):
+1. **Logos (campos ~100–460)**: el VI muestra 640 × 237 por campo con
+   stride 2560 (VI_WIDTH 1280) y el origen alterna dos líneas seguidas: un
+   búfer de 640 × 480 del que cada campo muestra una línea de cada dos. En
+   el host el destino es `034000/640` (y `0ca000/640`) de 480 filas. La
+   presentación tomaba 237 líneas seguidas desde el origen: la mitad de
+   arriba estirada, y saltando una línea entre campos. Ahora
+   `rdp_targets_present` ve que el stride es k veces la línea del destino y
+   presenta k × 237 líneas desde la primera (alineada a k): el cuadro
+   entero, estable (prueba `targets_present_interlaced`).
+2. **Juego: «zoom» cada 2 campos** (VI de 320 × 237 fijo, dos
+   framebuffers `034000/320` y `059800/320` alternando). El primero
+   comparte dirección con el `034000/640` de los logos, y la superficie de
+   cada destino lleva su propia escala (presupuesto de VRAM y
+   `rdp_target_scale` al crearla); el modo 1:1 de la presentación usaba el
+   tamaño en píxeles de la superficie, así que un búfer a 2× y otro a 3× se
+   veían de tamaños distintos. Ahora la decisión y el tamaño en pantalla
+   salen del tamaño lógico por la escala objetivo. El log de la PS3 anota
+   cada destino al crearlo (`gfx: destino …: lw × lh a N×`). Confirmado en
+   la PS3 real (el autor, 64b37ba): logos completos y sin zoom; el log
+   muestra la causa: `02a200/320: 320 × 459 a 2×` y `04fa00/320: 320 × 240
+   a 5×`. El 459 viene de un FILLRECT de DK64 sobre dos búferes seguidos
+   (como el de 720 de Star Fox, pero sin pasar de 480): ahora una color
+   image de más de pantalla y media (`rdp_targets_tall`: lh > 9/8 del
+   ancho, o > 480) también se trata como alta y su relleno se reparte
+   entre los destinos que empiezan dentro (el último puede asomar por
+   abajo), así los dos búferes quedan a la misma escala (en el host ya no
+   aparece el destino de 459). Zelda y SM64 bien con el modo 1:1 nuevo.
 ## 2026-10-12 — Donkey Kong 64 al 20 %: el recompilador vaciaba la caché en cada cambio de Status.FR (rama `zealous-wilbur-cec8b5`, paquete SLSA00102 «Salsa64 DK64»)
 
 - **Síntoma (PS3 real, main 8c876ac):** DK64 a 12–13 campos/s con 1,4 MIPS
@@ -410,6 +440,17 @@ reemplazarlas en el recompilador por versiones nativas con vectores del PPE.
 Detección por comportamiento o por huella (hash) del código, sin copiar nada
 de la biblioteca al repo; resultado exacto, porque la lógica del juego no
 admite aproximaciones.
+
+Anotado la tarde del 2026-10-12, para después de v0.2.0:
+- **Sombras cuadradas en Conker** (PS3 real, desde antes de las ramas de hoy):
+  las sombras redondas de los personajes salen como bloques. Probablemente la
+  textura de la sombra (degradado con alfa) se dibuja sin su alfa o con el
+  formato o el modo de ciclo equivocado; comparar contra mupen64plus en la
+  misma escena.
+- **Hacks** (reportes de usuarios): Smash Remix 2.0.1 arranca y corre bien,
+  pero se cuelga cuando cae un personaje; The Sealed Palace (hack de Ocarina
+  of Time) se queda en pantalla negra. Revisar con el log de la PS3 antes de
+  suponer la causa (tamaño de ROM, CIC, microcódigo F3DEX3 u otro).
 
 ## 2026-10-12 — Botón PS y cuadro al salir: el juego se pausa (rama `heuristic-agnesi-760f8c`, paquete SLSA00098 «Salsa64 botón PS»)
 

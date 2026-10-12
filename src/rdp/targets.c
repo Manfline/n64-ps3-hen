@@ -419,7 +419,17 @@ void rdp_targets_present(struct rdp_targets *s, const struct salsa64_vi_frame *f
 	out->age = age[best];
 	out->y0 = best_y0;
 	out->w = f->width < t->lw ? f->width : t->lw;
-	out->h = f->height < t->lh - best_y0 ? f->height : t->lh - best_y0;
+	/* Entrelazado de alta resolución (los logos de Donkey Kong 64: un
+	 * búfer de 640 × 480 del que cada campo muestra una línea de cada dos,
+	 * con el VI a 1280 de ancho y el origen alternando entre dos líneas
+	 * seguidas): el campo abarca k líneas del destino por cada una suya.
+	 * Se presenta el cuadro entero desde la primera de esas líneas, que
+	 * ocupa en pantalla lo mismo que el campo y no salta entre campos. */
+	uint32_t line = t->width * t->bpp, k = line && f->stride > line && f->stride % line == 0 ? f->stride / line : 1;
+	uint32_t rows = f->height * k;
+	if (k > 1)
+		out->y0 = best_y0 - best_y0 % k;
+	out->h = rows < t->lh - out->y0 ? rows : t->lh - out->y0;
 }
 
 void rdp_dma_note(struct rdp_dma_ring *r, uint32_t pa, uint32_t len, uint32_t task)
@@ -467,8 +477,10 @@ int rdp_targets_inside(const struct rdp_targets *s, uint32_t addr, uint32_t widt
 		return 0;
 	for (int i = 0; i < RDP_TARGETS_MAX; i++) {
 		const struct rdp_target *t = &s->t[i];
+		/* Empieza dentro, alineado a sus líneas; puede asomar por abajo
+		 * (DK64: 459 filas sobre dos búferes de 240). */
 		if (!t->used || t->width != width || t->bpp != bpp || t->addr < addr || (t->addr - addr) % line ||
-		    t->addr + line * t->lh > addr + line * rows)
+		    t->addr >= addr + line * rows)
 			continue;
 		slots[n] = i;
 		first_row[n] = (t->addr - addr) / line;
