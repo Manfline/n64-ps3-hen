@@ -147,12 +147,34 @@ a mitad del desenfoque de Perfect Dark y en la pausa de Zelda OoT (16090 →
 16300). La RDRAM no cambia: Zelda OoT, Mario Kart, SM64, Conker y Perfect
 Dark, cuadro por cuadro iguales a main con la misma precisión.
 
+**PS3 real (2026-10-12, paquete SLSA00100):** campanadas bien, también
+con la pausa abierta antes (el autor las ve «con más resolución»: el efecto
+lee la superficie del RSX a 3×); baile del Espantapájaros con la estela
+limpia y fluida. Telescopio: ya sin tablero de ajedrez, pero faltaba la
+máscara ovalada del lente y el sol salía seis veces. Con los estados del
+autor en el host (docs/texturas.md):
+- **Lente**: una I4 de 64 × 64 con espejo y clamp en una tile de
+  128 × 128. La decodificación con la coordenada enmascarada (f393824, de
+  la rama de gráficos) arregla el ancho; el alto no cabe en los 32 KB de
+  textura del SPE: se decodifica un solo periodo y el eje va con «mirror
+  once» del RSX.
+- **Sol**: un atlas de dos soles dibujado sin corrección de perspectiva
+  (`G_TP_NONE`): el RDP usa S·(1/W) tal cual y los microcódigos F3DEX2
+  normalizan 1/W a la mitad, así que la textura se muestrea a la mitad de
+  la coordenada (medido con el microcódigo real). La HLE lo hace ahora en
+  los triángulos de la segunda generación.
+- Las dos escenas quedan como con el RSP real (`--lle=all`), que es la
+  referencia que confirmó ambas causas.
+
 Falta:
-- [ ] Confirmar en la PS3 real las campanadas (estado preparado: cargar,
-      abrir y cerrar la pausa, esperar ~10 s), el recuerdo o el baile del
-      Espantapájaros, el telescopio y, sin regresiones, la pausa de Zelda
-      OoT y el túnel de Mario Kart.
-- [ ] El telescopio en el host con un estado de esa escena.
+- [ ] Confirmar en la PS3 real el lente (modo MIRROR_ONCE del RSX, nunca
+      usado antes), el sol y, sin regresiones, la pausa de Zelda OoT y el
+      túnel de Mario Kart.
+- [ ] Cambios bruscos de iluminación en el alcantarillado de Ciudad Reloj
+      (ranuras 2, 3 y 7 del autor: amarilla, gris y verde): el host da lo
+      mismo que la consola, no es del RSX; comparar con mupen64plus.
+- [ ] Escena de gfxtest para «mirror once» y para los triángulos sin
+      perspectiva.
 
 ## 2026-10-11 — FlashRAM: Majora's Mask guarda (rama `clever-tereshkova-aa0089`, paquete SLSA00096 «Salsa64 FlashRAM»)
 

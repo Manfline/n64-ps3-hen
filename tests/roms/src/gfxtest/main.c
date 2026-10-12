@@ -31,9 +31,10 @@
  * detrás no se dibuja), una color image de 64 que se dibuja y se lee como
  * textura en la misma lista (S: render a textura) y una del ancho del
  * framebuffer que el RDP llena y el CPU lee en el cuadro siguiente (T:
- * copia RSX → RDRAM) y la memoria de una color image de 8 bits que,
- * cuadros después, es una de 16 bits leída como textura (V). Al final de
- * cada lista, un tramo de otro microcódigo (G_LOAD_UCODE) que la
+ * copia RSX → RDRAM), una I4 con espejo y clamp en una tile de dos
+ * periodos más grande que una textura de 32 KB (W: «mirror once») y la
+ * memoria de una color image de 8 bits que, cuadros después, es una de 16
+ * bits leída como textura (V). Al final de cada lista, un tramo de otro microcódigo (G_LOAD_UCODE) que la
  * HLE debe saltar; en GFXTEST_CUT_FRAME la lista termina dentro de él (no
  * en la variante F3D, que no tiene G_LOAD_UCODE).
  *
@@ -141,6 +142,7 @@ struct rsp_data {
 	uint16_t chg[4 * 4] __attribute__((aligned(8)));
 	uint16_t pal2[16] __attribute__((aligned(8)));
 	uint16_t edge[8 * 8] __attribute__((aligned(8)));
+	uint8_t mirror4[64 * 64 / 2] __attribute__((aligned(8)));  /* W: I4 de 64 × 64 en bloques de 16 */
 } __attribute__((aligned(64)));
 
 static struct rsp_data rsp_mem __attribute__((section(".rsp")));
@@ -344,6 +346,14 @@ static void init_data(void)
 	for (int y = 0; y < 8; y++)
 		for (int x = 0; x < 8; x++)
 			r->edge[y * 8 + x] = x < 4 ? rgba16(31, 0, 0) : (uint16_t)(rgba16(20, 10, 4) & ~1u);
+	/* W: I4 de 64 × 64 en bloques de 16 × 16 con intensidad
+	 * ((x / 16) + 2 · (y / 16)) mod 4, en grises 0, 85, 170 y 255. */
+	for (int y = 0; y < 64; y++)
+		for (int x = 0; x < 64; x += 2) {
+			unsigned a = (unsigned)(((x / 16) + 2 * (y / 16)) & 3) * 5;
+			unsigned b = (unsigned)((((x + 1) / 16) + 2 * (y / 16)) & 3) * 5;
+			r->mirror4[(y * 64 + x) / 2] = (uint8_t)(a << 4 | b);
+		}
 	/* L y M (expect.h): verde y una paleta con el índice 5 azul; el cuadro
 	 * GFXTEST_CHANGE_FRAME cambia el texel (3,3) y el índice 5. */
 	for (int i = 0; i < 16; i++) {
@@ -413,7 +423,7 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	sp_matrix(&dl, &r->ortho, G_MTX_LOAD | G_MTX_MODELVIEW);
 
 	/* A y B con z-buffer: el verde va detrás aunque se dibuja después. */
-	dp_othermode(&dl, CYC_1CYCLE | TF_POINT, Z_CMP | Z_UPD | BL_XLU);
+	dp_othermode(&dl, CYC_1CYCLE | TF_POINT | TP_PERSP, Z_CMP | Z_UPD | BL_XLU);
 	dp_combine(&dl, CC_A_0, CC_B_0, CC_C_0, CC_SHADE, CCA_0, CCA_0, CCA_0, CC_SHADE);
 	sp_geometry(&dl, 0, G_ZBUFFER | G_SHADE | G_SHADING_SMOOTH);
 	sp_vertex(&dl, r->quad_a, 4, 0);
@@ -423,13 +433,13 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 
 	/* C: triángulo Gouraud sin z. */
 	sp_geometry(&dl, G_ZBUFFER, 0);
-	dp_othermode(&dl, CYC_1CYCLE, BL_XLU);
+	dp_othermode(&dl, CYC_1CYCLE | TP_PERSP, BL_XLU);
 	sp_vertex(&dl, r->tri_c, 3, 0);
 	sp_tri(&dl, 0, 1, 2);
 
 	/* D: textura RGBA16 con muestreo puntual. */
 	load_checker(&dl, 0, 0);
-	dp_othermode(&dl, CYC_1CYCLE | TF_POINT, BL_XLU);
+	dp_othermode(&dl, CYC_1CYCLE | TF_POINT | TP_PERSP, BL_XLU);
 	dp_combine(&dl, CC_A_0, CC_B_0, CC_C_0, CC_TEXEL0, CCA_0, CCA_0, CCA_0, CC_D_1);
 	sp_texture(&dl, 0xFFFF, 0xFFFF, 0, 1);
 	sp_vertex(&dl, r->quad_d, 4, 0);
@@ -467,7 +477,7 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	sp_texrect(&dl, 0, 20, 200, 35, 203, 0, 0, 4 << 10, 1 << 10);
 
 	/* G: cuadro blanco con alfa 0x80 mezclado sobre el fondo. */
-	dp_othermode(&dl, CYC_1CYCLE, FORCE_BL | BL_XLU);
+	dp_othermode(&dl, CYC_1CYCLE | TP_PERSP, FORCE_BL | BL_XLU);
 	dp_prim_color(&dl, 0xFFFFFF80);
 	dp_combine(&dl, CC_A_0, CC_B_0, CC_C_0, CC_PRIM, CCA_0, CCA_0, CCA_0, CC_PRIM);
 	sp_vertex(&dl, r->quad_g, 4, 0);
@@ -476,7 +486,7 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	/* Culling: cuadros de color plano con G_CULL_BACK y G_CULL_FRONT. Los
 	 * de set_quad son horarios (0,1,2 va a la derecha y abajo); invertir el
 	 * orden los hace antihorarios. */
-	dp_othermode(&dl, CYC_1CYCLE, BL_XLU);
+	dp_othermode(&dl, CYC_1CYCLE | TP_PERSP, BL_XLU);
 	dp_combine(&dl, CC_A_0, CC_B_0, CC_C_0, CC_SHADE, CCA_0, CCA_0, CCA_0, CC_SHADE);
 	sp_vertex(&dl, r->cull, 16, 0);
 	sp_geometry(&dl, G_CULL_FRONT | G_ZBUFFER, G_CULL_BACK | G_SHADE | G_SHADING_SMOOTH);
@@ -502,7 +512,7 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	dp_tile_size(&dl, 0, 0, 0, 3, 3);
 	dp_tile(&dl, FMT_RGBA, SIZ_16, 1, 32, 1, 0, 0, 2, 0);
 	dp_tile_size(&dl, 1, 0, 0, 3, 3);
-	dp_othermode(&dl, CYC_2CYCLE | TF_POINT, BL_XLU);
+	dp_othermode(&dl, CYC_2CYCLE | TF_POINT | TP_PERSP, BL_XLU);
 	dp_prim_color(&dl, 0xFFFFFF80);
 	{
 		/* Ciclo 0: a=TEXEL1, b=TEXEL0, c=PRIM_ALPHA (10), d=TEXEL0; alfa 1.
@@ -527,7 +537,7 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	sp_light(&dl, &r->sun, 0);
 	sp_light(&dl, &r->ambient, 1);
 	sp_geometry(&dl, 0, G_ZBUFFER | G_SHADE | G_LIGHTING | G_CULL_BACK | G_SHADING_SMOOTH);
-	dp_othermode(&dl, CYC_1CYCLE, Z_CMP | Z_UPD | BL_XLU);
+	dp_othermode(&dl, CYC_1CYCLE | TP_PERSP, Z_CMP | Z_UPD | BL_XLU);
 	dp_combine(&dl, CC_A_0, CC_B_0, CC_C_0, CC_SHADE, CCA_0, CCA_0, CCA_0, CC_SHADE);
 	for (int half = 0; half < 2; half++) {
 		sp_vertex(&dl, &r->cube[half * 12], 12, 0);
@@ -580,7 +590,7 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	dp_tile_size(&dl, 0, 0, 0, 3, 3);
 	dp_tile(&dl, FMT_RGBA, SIZ_16, 1, 32, 1, 0, 0, 2, 0);
 	dp_tile_size(&dl, 1, 0, 0, 3, 3);
-	dp_othermode(&dl, CYC_2CYCLE | TF_POINT, BL_XLU);
+	dp_othermode(&dl, CYC_2CYCLE | TF_POINT | TP_PERSP, BL_XLU);
 	{
 		/* Ciclo 0: a=TEXEL0, b=0, c=TEXEL1 (2), d=0; alfa 0·0 + 1.
 		 * Ciclo 1: a=COMBINED, b=0, c=SHADE (4), d=0; alfa 0·0 + 1. */
@@ -650,7 +660,7 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	dp_sync(&dl, SYNC_PIPE);
 	dp_tile(&dl, FMT_RGBA, SIZ_16, 2, 0, 0, 0, 2, 3, 0);
 	dp_tile_size(&dl, 0, 0, 0, 7, 7);
-	dp_othermode(&dl, CYC_1CYCLE | TF_POINT, RM_TEX_EDGE);
+	dp_othermode(&dl, CYC_1CYCLE | TF_POINT | TP_PERSP, RM_TEX_EDGE);
 	dp_combine(&dl, CC_A_0, CC_B_0, CC_C_0, CC_TEXEL0, CCA_0, CCA_0, CCA_0, CC_TEXEL0);
 	sp_texture(&dl, 0xFFFF, 0xFFFF, 0, 1);
 	sp_vertex(&dl, r->quad_n, 4, 0);
@@ -661,7 +671,7 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	 * (la demo de Mario Kart 64): lo que sale de la ventana no se dibuja. */
 	sp_matrix(&dl, &r->ident, G_MTX_LOAD | G_MTX_PROJECTION);
 	sp_matrix(&dl, &r->ortho, G_MTX_LOAD | G_MTX_MODELVIEW);
-	dp_othermode(&dl, CYC_1CYCLE, BL_XLU);
+	dp_othermode(&dl, CYC_1CYCLE | TP_PERSP, BL_XLU);
 	dp_combine(&dl, CC_A_0, CC_B_0, CC_C_0, CC_SHADE, CCA_0, CCA_0, CCA_0, CC_SHADE);
 	sp_geometry(&dl, G_ZBUFFER | G_CULL_FRONT | G_CULL_BACK | G_LIGHTING | G_TEXTURE_GEN,
 		    G_SHADE | G_SHADING_SMOOTH);
@@ -727,6 +737,22 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	dp_scissor(&dl, 0, 0, W, H);
 	dp_fill_color(&dl, (uint32_t)small_pixel << 16 | small_pixel);
 	dp_fill_rect(&dl, 176, 106, 207, 113);
+
+	/* W: espejo y clamp con una máscara más chica que la tile y una tile
+	 * de dos periodos que no cabe en una textura de 32 KB (el lente del
+	 * telescopio de Majora's Mask): la I4 de 64 × 64 con máscara 64 en una
+	 * tile de 128 × 128, muestreada a 4 texels por píxel en un TEXRECT de
+	 * 32 × 32. Los texels 64–127 de cada eje son el reflejo de los 63–0. */
+	dp_texture_image(&dl, FMT_I, SIZ_16, 1, r->mirror4);
+	dp_tile(&dl, FMT_I, SIZ_16, 0, 0, 7, 0, 0, 0, 0);
+	dp_sync(&dl, SYNC_LOAD);
+	dp_load_block(&dl, 7, 1024, 512);  /* 2 KB: 64 filas de 4 palabras */
+	dp_sync(&dl, SYNC_PIPE);
+	dp_tile(&dl, FMT_I, SIZ_4, 4, 0, 0, 0, 3, 6, 0);  /* espejo + clamp, máscara 6 */
+	dp_tile_size(&dl, 0, 0, 0, 127, 127);
+	dp_othermode(&dl, CYC_1CYCLE | TF_POINT, BL_XLU);
+	dp_combine(&dl, CC_A_0, CC_B_0, CC_C_0, CC_TEXEL0, CCA_0, CCA_0, CCA_0, CC_D_1);
+	sp_texrect(&dl, 0, 152, 206, 184, 238, 0, 0, 4 << 10, 4 << 10);
 
 	/* V: la misma memoria con otro tamaño de texel (las campanadas del fin
 	 * del día en Majora's Mask: la pausa usa esa dirección como cobertura

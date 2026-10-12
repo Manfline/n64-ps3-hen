@@ -80,6 +80,12 @@ struct gfxtest_point {
 	{ 150, 119, 0xFF0000, "copia RSX → RDRAM: el CPU leyó la color image guardada" }, \
 	{ 190, 109, 0x00FF00, "copia RSX → RDRAM de una color image de 64 de ancho (el CPU la leyó)" }, \
 	{ 190, 119, 0x00FFFF, "la misma memoria, de 8 bits y después de 16: leída como textura de 16" }, \
+	{ 154, 208, 0x000000, "espejo + clamp de dos periodos: bloque (0,0)" },                   \
+	{ 165, 208, 0xFFFFFF, "espejo + clamp de dos periodos: bloque (3,0)" },                   \
+	{ 181, 208, 0x000000, "espejo + clamp de dos periodos: columna 116, reflejo del bloque (0,0)" }, \
+	{ 154, 235, 0x000000, "espejo + clamp de dos periodos: fila 116, reflejo del bloque (0,0)" },    \
+	{ 165, 219, 0x555555, "espejo + clamp de dos periodos: bloque (3,3)" },                   \
+	{ 181, 235, 0x000000, "espejo + clamp de dos periodos: reflejo en los dos ejes" },        \
 	{ 20, 90, 0x00FF80, "clip ratio 1: dentro del viewport chico" },              \
 	{ 5, 90, GFXTEST_BG, "clip ratio 1: fuera del viewport (izquierda)" },         \
 	{ 35, 90, GFXTEST_BG, "clip ratio 1: fuera del viewport (derecha)" },          \
