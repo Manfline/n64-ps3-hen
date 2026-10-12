@@ -29,6 +29,14 @@ de GoldenEye; la localidad del código del recompilador (GoldenEye en la presa y
 la segunda escena de la intro de Perfect Dark, limitadas por el CPU); y un
 release v0.2.0 cuando entren las tres ramas de arriba.
 
+Después de cerrar lo anterior: revisar (solo lectura primero) el recompilador
+de Wii64 y Not64 y el port `emukidid/wii64-ps3` (base de Cell64): asignación
+de registros entre bloques, accesos a memoria y TLB, caché de código y FPU;
+licencia archivo por archivo antes de copiar nada a `src/` (nunca a
+`lib/rsxkit` ni `lib/spukit`). También ejecutar el IPL3 del cartucho al
+arrancar, como mupen64plus, para no depender de reproducir lo que deja cada
+CIC (protecciones de Rare).
+
 ## 2026-10-11 — FlashRAM: Majora's Mask guarda (rama `clever-tereshkova-aa0089`, paquete SLSA00096 «Salsa64 FlashRAM»)
 
 Problema (PS3 real, v0.1.0): en Majora's Mask, después de la escena inicial
