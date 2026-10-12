@@ -471,7 +471,9 @@ static void lerp_vertex(struct gfx_vertex *o, const struct gfx_vertex *a, const 
  * la derecha, 0,25 arriba y a la izquierda). Los vértices nuevos van sobre
  * el plano del triángulo, con pesos de perspectiva: los atributos quedan
  * donde estaban. Eso tapa las uniones en T del modelo (piso y pared de
- * Dam en GoldenEye). */
+ * Dam en GoldenEye). Solo con GFX_JOB_AAGROW: a escala interna alta
+ * engorda todos los bordes (1,5 px a 3×), y la N64 a 1× los suaviza con
+ * el filtro del VI. */
 static const float aa_reach[8][2] = {
 	{ 0.5f, 0.5f },  { 0.0f, 0.5f },  { 0.25f, 0.25f },  { -0.25f, 0.25f },
 	{ 0.5f, 0.0f },  { 0.0f, 0.0f },  { 0.25f, -0.25f }, { -0.25f, -0.25f },
@@ -612,7 +614,7 @@ void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
 		o[4] = p[2];
 		o[5] = p[3];
 	}
-	if (g->draw.aa) {
+	if (g->aa_grow && g->draw.aa) {
 		aa_grow(o);
 		if (n == 4)
 			aa_grow(o + 3);

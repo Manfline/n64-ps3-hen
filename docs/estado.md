@@ -61,9 +61,19 @@ esperarla bloquearía la emulación. La espera tiene que ir al descongelar
 (`salsa64_rsp_dp_unfreeze`), con presentación traduciendo esa tarea en el
 acto. Queda para después.
 
-Pendiente en la PS3: que el ensanchado tape las líneas en Dam con la escala
-interna alta y lo que cuesta (GoldenEye y Perfect Dark); la túnica con el
-pliegue entero; y la transición de Banjo sin el negro.
+**PS3 real (el autor, 2026-10-12):** POLYGON_SMOOTH no hizo nada (las
+líneas seguían; el volcado 2529 traía la marca en 100 de 109 dibujos). Con
+el ensanchado, «ya no hay líneas azules en GoldenEye» y «la túnica sale
+bien». Pero en Zelda, a escala interna alta, «los polígonos se superponen»:
+el ensanchado engorda todos los bordes (0,5 px de N64 son 1,5 px a 3×) y en
+mallas densas se nota. Queda como opción por juego (`GFX_JOB_AAGROW`,
+sync.c, por el código "NGE" del encabezado): solo GoldenEye. En el SPE
+costó ~1 µs más por triángulo en Dam (4,4 → 5,5), sin que el PPE esperara;
+con recíprocos en vez de divisiones debería bajar (sin medir aún).
+
+Pendiente en la PS3: la transición de Banjo sin el negro, Zelda sin
+polígonos encimados con el paquete de la opción por juego, y los FPS de
+Dam con los recíprocos.
 
 ## 2026-10-12 — Banjo-Kazooie (protección del CIC 6103), cara de Conker (K5) y rayas del logo de Zelda (rama `infallible-wozniak-aa210c`, paquete SLSA00099 «Salsa64 gráficos»)
 

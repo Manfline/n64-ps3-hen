@@ -26,6 +26,7 @@ static uint32_t cache_task;  /* tarea de la caché de texturas (0: sin caché) *
 static struct gfx_result res;
 static uint32_t dl_pc, data_pc;
 static uint32_t job_ucode;   /* dirección física del microcódigo de la tarea */
+static uint32_t job_flags;   /* GFX_JOB_* de la tarea (start los pone en 0) */
 
 /* ---- Armado de la display list ---- */
 
@@ -48,6 +49,7 @@ static void start(void)
 	dl_pc = DL_PA;
 	data_pc = DATA_PA;
 	cache_task = 0;
+	job_flags = 0;
 	gfx_init(&gs);
 }
 
@@ -80,6 +82,7 @@ static void run(void)
 	job.gbi = SALSA64_GBI_F3DEX2;
 	job.dl = DL_PA;
 	job.ucode = job_ucode;
+	job.flags = job_flags;
 	gfx_run(&gs, &job, &res);
 }
 
@@ -947,18 +950,20 @@ static void gfx_aa_flag(void)
  * del RDP. En pantalla (160,120), (320,120), (160,0): la arista de abajo
  * baja 0,5 px, la de la izquierda va 0,25 a la izquierda y la hipotenusa
  * (normal (0,6, −0,8)) se corre 0,35, lo que llega la muestra (0,25, −0,25).
- * Sin AA_EN no se toca. */
+ * Sin AA_EN, o sin GFX_JOB_AAGROW (la opción de GoldenEye), no se toca. */
 static void gfx_aa_grow(void)
 {
 	static const float want[3][2] = { { 159.75f, 120.5f }, { 321.25f, 120.5f }, { 159.75f, -0.625f } };
 	const struct vtx v[3] = { { 0, 0, 0, 0, 0, { 0 } }, { 1, 0, 0, 0, 0, { 0 } }, { 0, 1, 0, 0, 0, { 0 } } };
-	for (int aa = 0; aa < 2; aa++) {
+	for (int c = 0; c < 3; c++) {
+		int aa = c == 2;  /* 0: ZB_OPA con la opción; 1: AA_ZB_OPA sin ella; 2: los dos */
 		start();
+		job_flags = c != 1 ? GFX_JOB_AAGROW : 0;
 		viewport_320x240();
 		load_mtx(ident, true);
 		load_mtx(ident, false);
 		set_combine(CC_A_ZERO, CC_ZERO, CC_C_ZERO, CC_SHADE, CC_ZERO, CC_ZERO, CC_ZERO, CC_SHADE);
-		dl(0xEF000000 | G_CYC_1CYCLE << 20, aa ? 0x00552078u : 0x00552230u);  /* AA_ZB_OPA o ZB_OPA */
+		dl(0xEF000000 | G_CYC_1CYCLE << 20, c ? 0x00552078u : 0x00552230u);  /* AA_ZB_OPA o ZB_OPA */
 		dl(0x01000000 | 3 << 12 | 3 << 1, put_vertices(v, 3));
 		dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);
 		run();
@@ -974,6 +979,29 @@ static void gfx_aa_grow(void)
 			CHECK(fabsf(y - wy) < 1e-3f);
 			CHECK(fabsf(o[i].w - 1.0f) < 1e-6f);
 		}
+	}
+}
+
+/* La opción del ensanchado sale del código del juego en el encabezado de
+ * la ROM: GoldenEye ("NGE") sí, otro juego no. */
+static void gfx_aa_grow_game(void)
+{
+	static uint8_t rom[0x40];
+	static const char *const codes[2] = { "NGE", "NZL" };
+	struct salsa64_task task;
+	memset(&task, 0, sizeof task);
+	for (int i = 0; i < 2; i++) {
+		memset(rom, 0, sizeof rom);
+		memcpy(rom + 0x3B, codes[i], 3);
+		const uint8_t *rom0 = t_n64.bus.rom;
+		uint32_t size0 = t_n64.bus.rom_size;
+		t_n64.bus.rom = rom;
+		t_n64.bus.rom_size = sizeof rom;
+		struct gfx_job j;
+		salsa64_gfx_job(&j, &t_n64.bus, &task, SALSA64_GBI_F3DEX2);
+		CHECK_EQ((j.flags & GFX_JOB_AAGROW) != 0, i == 0);
+		t_n64.bus.rom = rom0;
+		t_n64.bus.rom_size = size0;
 	}
 }
 
@@ -1913,6 +1941,7 @@ void t_suite_gfx(void)
 	RUN(gfx_viscvg_flag);
 	RUN(gfx_aa_flag);
 	RUN(gfx_aa_grow);
+	RUN(gfx_aa_grow_game);
 	RUN(gfx_tile_clamp_mirror_mask);
 	RUN(gfx_blender_fog_color);
 }

@@ -91,6 +91,10 @@ struct gfx_job {
 /* El microcódigo no recorta contra el plano cercano (los ".NoN" de su
  * texto: Zelda OoT, Star Fox 64, Conker; y el de Perfect Dark, sync.c). */
 #define GFX_JOB_NONEAR 0x10u
+/* Ensanchar los triángulos opacos con AA_EN como la cobertura del RDP
+ * (aa_grow en rdp.c). Por juego (sync.c): tapa las uniones en T de
+ * GoldenEye, pero a escala interna alta engorda todos los bordes. */
+#define GFX_JOB_AAGROW 0x20u
 
 /* ---- Caché de texturas -------------------------------------------------------
  * Las texturas decodificadas viven en una región de memoria que pone el
@@ -263,10 +267,10 @@ struct gfx_draw {
 	 * dibuja: deja «cobertura plena» en la RDRAM (docs/framebuffer.md). */
 	uint8_t viscvg;
 	/* Triángulos opacos con AA_EN: el RDP escribe el píxel si cualquiera de
-	 * sus 8 muestras de cobertura cae dentro, no solo el centro. Sus
-	 * vértices ya salen ensanchados (aa_grow en rdp.c): tapan las grietas
-	 * de medio píxel de las uniones en T (piso y paredes de Dam en
-	 * GoldenEye). Informativo para quien dibuja. */
+	 * sus 8 muestras de cobertura cae dentro, no solo el centro. Con
+	 * GFX_JOB_AAGROW sus vértices ya salen ensanchados (aa_grow en rdp.c):
+	 * tapan las grietas de medio píxel de las uniones en T (piso y paredes
+	 * de Dam en GoldenEye). Informativo para quien dibuja. */
 	uint8_t aa;
 	uint8_t pad;
 	struct gfx_tex tex[2];
