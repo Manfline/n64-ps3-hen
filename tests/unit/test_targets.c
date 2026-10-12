@@ -774,9 +774,16 @@ static void targets_inside(void)
 		if (slots[i] == b) CHECK_EQ(first[i], 240);
 		if (slots[i] == c) CHECK_EQ(first[i], 480);
 	}
-	CHECK_EQ(rdp_targets_inside(&s, A, 320, 2, 600, slots, first), 2);  /* C no cabe entero */
+	CHECK_EQ(rdp_targets_inside(&s, A, 320, 2, 600, slots, first), 3);  /* C asoma por abajo */
+	CHECK_EQ(rdp_targets_inside(&s, A, 320, 2, 480, slots, first), 2);  /* C empieza fuera */
 	CHECK_EQ(rdp_targets_inside(&s, A, 640, 2, 720, slots, first), 0);
 	CHECK_EQ(rdp_targets_inside(&s, A + 2, 320, 2, 720, slots, first), 0);  /* desalineado */
+	CHECK(rdp_targets_tall(320, 459));
+	CHECK(rdp_targets_tall(320, 720));
+	CHECK(!rdp_targets_tall(320, 240));
+	CHECK(!rdp_targets_tall(320, 288));  /* PAL */
+	CHECK(!rdp_targets_tall(640, 480));
+	CHECK(rdp_targets_tall(640, 720));
 }
 
 /* Anillo de DMA: los trozos seguidos de la misma tarea se funden; una

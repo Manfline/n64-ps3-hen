@@ -456,8 +456,10 @@ int rdp_targets_inside(const struct rdp_targets *s, uint32_t addr, uint32_t widt
 		return 0;
 	for (int i = 0; i < RDP_TARGETS_MAX; i++) {
 		const struct rdp_target *t = &s->t[i];
+		/* Empieza dentro, alineado a sus líneas; puede asomar por abajo
+		 * (DK64: 459 filas sobre dos búferes de 240). */
 		if (!t->used || t->width != width || t->bpp != bpp || t->addr < addr || (t->addr - addr) % line ||
-		    t->addr + line * t->lh > addr + line * rows)
+		    t->addr >= addr + line * rows)
 			continue;
 		slots[n] = i;
 		first_row[n] = (t->addr - addr) / line;

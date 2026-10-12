@@ -20,9 +20,16 @@ Main lo reportó de la PS3 real con la rama del recompilador (DK64 al 100 %):
    tamaño en píxeles de la superficie, así que un búfer a 2× y otro a 3× se
    veían de tamaños distintos. Ahora la decisión y el tamaño en pantalla
    salen del tamaño lógico por la escala objetivo. El log de la PS3 anota
-   cada destino al crearlo (`gfx: destino …: lw × lh a N×`) para confirmar
-   la escala de cada uno. Sin reproducir en el host (no hay escala por
-   destino): por confirmar en la PS3.
+   cada destino al crearlo (`gfx: destino …: lw × lh a N×`). Confirmado en
+   la PS3 real (el autor, 64b37ba): logos completos y sin zoom; el log
+   muestra la causa: `02a200/320: 320 × 459 a 2×` y `04fa00/320: 320 × 240
+   a 5×`. El 459 viene de un FILLRECT de DK64 sobre dos búferes seguidos
+   (como el de 720 de Star Fox, pero sin pasar de 480): ahora una color
+   image de más de pantalla y media (`rdp_targets_tall`: lh > 9/8 del
+   ancho, o > 480) también se trata como alta y su relleno se reparte
+   entre los destinos que empiezan dentro (el último puede asomar por
+   abajo), así los dos búferes quedan a la misma escala (en el host ya no
+   aparece el destino de 459). Zelda y SM64 bien con el modo 1:1 nuevo.
 
 ## 2026-10-12 (noche) — Star Fox 64 colgado a los 5 s: el espejo del framebuffer pisaba un DMA (rama `infallible-wozniak-aa210c`)
 

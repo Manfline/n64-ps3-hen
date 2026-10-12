@@ -686,7 +686,7 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
 	/* Una color image imposible (la HLE la sacó de un comando mal
 	 * interpretado: Zelda al abrir la pausa manda anchos de 1495 y 3770) no
 	 * toca la tabla: reciclaría una ranura buena para nada. */
-	if (!width || width > 640 || min_lh > 480) {
+	if (!width || width > 640 || rdp_targets_tall(width, min_lh)) {
 		rdp.stats.targets_absurd++;
 		snprintf(rdp.last_get.how, sizeof rdp.last_get.how, "imposible, ignorada");
 		LOGN(10, "gfx: color image imposible %06x/%u (alto %u): se ignora", addr, width, min_lh);
@@ -1138,7 +1138,7 @@ static void translate(uint32_t n)
 		case GFX_OP_TARGET: {
 			uint32_t lh = scissor_bottom(s, off + c->size, res->cmd_bytes), siz = c->c & 0xFF;
 			cur = get_target(c->a, c->b, (c->c >> 8) & 0xFF, siz, lh);
-			tall.rows = cur < 0 && c->b && c->b <= 640 && lh > 480 ? lh : 0;
+			tall.rows = cur < 0 && c->b && c->b <= 640 && rdp_targets_tall(c->b, lh) ? lh : 0;
 			tall.addr = c->a;
 			tall.width = c->b;
 			tall.bpp = siz == 3 ? 4 : siz == 2 ? 2 : 1;
