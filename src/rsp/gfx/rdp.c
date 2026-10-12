@@ -262,7 +262,7 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 		for (int lane = 0; lane < 4; lane++)
 			d->k[GFX_K_T0][0][lane] = 1.0f;
 		d->ntex = 1;
-		if (!texture_state(g, d, tile, 0, true, g->rect_clamp))
+		if (!texture_state(g, d, tile, 0, true, g->rect_clamp & 3u))
 			d->ntex = 0;
 		if ((g->ol & G_AC_MASK) == G_AC_THRESHOLD) {
 			d->atest = GFX_ATEST_GEQUAL;
@@ -297,7 +297,8 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 		d->ntex = 0;
 	unsigned n = d->ntex;
 	for (unsigned i = 0; i < n; i++)
-		if (!texture_state(g, d, tile + (int)i, (int)i, false, kind == PRIM_RECT ? g->rect_clamp : 0)) {
+		if (!texture_state(g, d, tile + (int)i, (int)i, false,
+				   kind == PRIM_RECT ? (g->rect_clamp >> (2 * i)) & 3u : 0)) {
 			d->ntex = (uint8_t)i;
 			break;
 		}
@@ -499,19 +500,33 @@ void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uin
 	 * limita aunque repita. Da lo mismo que en la N64 y evita que, a más
 	 * resolución, el filtro mezcle el borde con el lado opuesto (Mario
 	 * Kart 64 dibuja sus imágenes en tiras de 2 filas que repiten: salían
-	 * líneas). */
-	const struct gfx_tile *ti = &g->tiles[tile];
-	uint32_t tw, th;
-	gfx_tile_size(ti, &tw, &th);
+	 * líneas). Cada tile con su desplazamiento y su origen: la tile + 1
+	 * del segundo ciclo (el ruido del texto «NINTENDO 64» de Zelda, que se
+	 * repite) va en los bits 2–3.
+	 * Una tile que avanza media tile o más por fila (ese ruido: la tile
+	 * entera, ×32) la N64 la muestrea con la t de cada fila, la misma en
+	 * toda la fila; a más resolución el RSX interpolaría t dentro de la
+	 * fila y recorrería media textura (rayas). Ahí el rectángulo sale en
+	 * una tira por fila. Un fondo achicado (S2DEX) avanza pocos texels por
+	 * fila y queda entero. */
 	float ns = flip ? h : w, nt = flip ? w : h;  /* muestras en s y en t */
-	float ks = shift_scale(ti->shifts), kt = shift_scale(ti->shiftt);
-	float sa = s0 * ks - ti->uls / 4.0f, sb = (s0 + (ns - 1.0f) * dsdx) * ks - ti->uls / 4.0f;
-	float ta = t0 * kt - ti->ult / 4.0f, tb = (t0 + (nt - 1.0f) * dtdy) * kt - ti->ult / 4.0f;
 	unsigned clamp = 0;
-	if ((sa < sb ? sa : sb) > -0.01f && (sa < sb ? sb : sa) < (float)tw - 0.99f)
-		clamp |= 1;
-	if ((ta < tb ? ta : tb) > -0.01f && (ta < tb ? tb : ta) < (float)th - 0.99f)
-		clamp |= 2;
+	bool rows = false;
+	for (int i = 0; i < (cycle == G_CYC_2CYCLE ? 2 : 1); i++) {
+		const struct gfx_tile *ti = &g->tiles[(tile + i) & 7];
+		uint32_t tw, th;
+		gfx_tile_size(ti, &tw, &th);
+		float ks = shift_scale(ti->shifts), kt = shift_scale(ti->shiftt);
+		float sa = s0 * ks - ti->uls / 4.0f, sb = (s0 + (ns - 1.0f) * dsdx) * ks - ti->uls / 4.0f;
+		float ta = t0 * kt - ti->ult / 4.0f, tb = (t0 + (nt - 1.0f) * dtdy) * kt - ti->ult / 4.0f;
+		if ((sa < sb ? sa : sb) > -0.01f && (sa < sb ? sb : sa) < (float)tw - 0.99f)
+			clamp |= 1u << (2 * i);
+		if ((ta < tb ? ta : tb) > -0.01f && (ta < tb ? tb : ta) < (float)th - 0.99f)
+			clamp |= 2u << (2 * i);
+		float step = dtdy * kt;
+		rows |= (step < 0.0f ? -step : step) >= 2.0f && (step < 0.0f ? -step : step) * 2.0f >= (float)th;
+	}
+	rows = rows && !flip && h <= 16.0f && (cycle == G_CYC_1CYCLE || cycle == G_CYC_2CYCLE);
 
 	/* El RDP muestrea en la esquina de cada píxel; el RSX, en el centro:
 	 * con filtro bilineal se corre medio píxel para no mezclar texels
@@ -523,6 +538,16 @@ void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uin
 		t0 -= 0.5f * dtdy;
 	}
 	float s[4], t[4];
+	if (rows) {
+		/* La t de la fila r es la de su esquina (sin el medio píxel). */
+		float tr = bilinear ? t0 + 0.5f * dtdy : t0;
+		s[0] = s0, s[1] = s0 + w * dsdx, s[2] = s0, s[3] = s0 + w * dsdx;
+		for (float y = uly; y < lry; y += 1.0f, tr += dtdy) {
+			t[0] = t[1] = t[2] = t[3] = tr;
+			rect(g, PRIM_RECT, tile, ulx, y, lrx, y + 1.0f < lry ? y + 1.0f : lry, s, t, clamp);
+		}
+		return;
+	}
 	if (!flip) {
 		s[0] = s0, s[1] = s0 + w * dsdx, s[2] = s0, s[3] = s0 + w * dsdx;
 		t[0] = t0, t[1] = t0, t[2] = t0 + h * dtdy, t[3] = t0 + h * dtdy;

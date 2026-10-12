@@ -181,7 +181,7 @@ struct gfx_state {
 	struct gfx_result *res;
 	bool near_clip;            /* recortar contra el plano cercano (sin GFX_JOB_NONEAR) */
 	bool dirty;                /* cambió algo del estado de dibujo */
-	uint8_t rect_clamp;        /* TEXRECT en curso: 1 limitar s, 2 limitar t */
+	uint8_t rect_clamp;        /* TEXRECT en curso: 1 limitar s, 2 limitar t; tile + 1 en 4 y 8 */
 	bool target_sent;          /* GFX_OP_TARGET de la color image actual */
 	bool have_draw;            /* `draw` está abierto */
 	struct gfx_draw draw __attribute__((aligned(16)));

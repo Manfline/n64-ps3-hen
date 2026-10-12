@@ -174,6 +174,40 @@ enum { CC_A_ZERO = 15 };
 
 /* ---- Pruebas ---- */
 
+/* TEXRECT en 2 ciclos con dos tiles (el texto «NINTENDO 64» de Zelda): la
+ * tile 0 cae entera en su textura y se limita, la tile 1 (ruido I8 de
+ * 32×32, t × 32 con shiftt 11) se repite: cada tile con su propio límite.
+ * Como la tile 1 avanza una textura entera por fila, sale una tira por
+ * fila con la t de esa fila. */
+static void gfx_texrect_two_tiles(void)
+{
+	start();
+	dl(0xFD100000 | 0, TEX_PA);                                /* SETTIMG de 16 bits */
+	dl(0xF5100000, 0x07000000);
+	dl(0xF3000000, 0x07000000 | 511 << 12 | 512);             /* LOADBLOCK 1 KB */
+	dl(0xF5880000 | 4 << 9, 0x00000000);                       /* tile 0: I8, línea 32 bytes */
+	dl(0xF2000000, (31 << 2) << 12 | (1 << 2));                /* 32×2 */
+	dl(0xF5880000 | 4 << 9, 0x01000000 | 5 << 14 | 11 << 10 | 5 << 4);  /* tile 1: mask 5, ×32 en t */
+	dl(0xF2000000 | 119, 0x01000000 | (124 << 12) | 124);      /* ult = 29,75 */
+	set_cycle(G_CYC_2CYCLE);
+	set_combine(CC_T0, CC_ZERO, CC_T1, CC_ZERO, CC_ZERO, CC_ZERO, CC_ZERO, CC_ONE);
+	dl(0xE4000000 | (32 << 2) << 12 | (2 << 2), 0);            /* TEXRECT 0,0–32,2 */
+	dl(0xE1000000, 0);                                         /* s = t = 0 */
+	dl(0xF1000000, 0x04000400);                                /* dsdx = dtdy = 1 */
+	run();
+	CHECK_EQ(res.rects, 2);
+	const struct gfx_draw *d = draw_n(0);
+	CHECK(d != NULL);
+	if (!d)
+		return;
+	CHECK_EQ(d->ntex, 2);
+	CHECK_EQ(GFX_TEX_WRAP_T(d->tex[0].flags), GFX_WRAP_CLAMP);
+	CHECK_EQ(GFX_TEX_WRAP_T(d->tex[1].flags), GFX_WRAP_REPEAT);
+	CHECK_EQ(d->h.b, 12);
+	for (uint32_t i = 0; i < 12 && i < d->h.b; i++)
+		CHECK(out_vtx[d->h.a + i].t == (i < 6 ? 0.0f : 1.0f));
+}
+
 /* G_SETCONVERT: K5 entra al combiner (Conker: (SHADE − ENV)·K5 + PRIM en el
  * segundo ciclo, con K5 = 255; si se ignora, la cara sale negra) y persiste
  * en el estado del RDP. */
@@ -1512,6 +1546,7 @@ void t_suite_gfx(void)
 {
 	RUN(gfx_combiner_forms);
 	RUN(gfx_setconvert_k5);
+	RUN(gfx_texrect_two_tiles);
 	RUN(gfx_combiner_shade_squared);
 	RUN(gfx_triangle_transform);
 	RUN(gfx_clip_ratio_f3dex2);
