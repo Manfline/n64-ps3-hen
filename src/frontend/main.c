@@ -380,6 +380,7 @@ static int snap_cas(int slot, uint32_t from, uint32_t to)
 #define FIELD_KEEP  (FIELD_CHECK | FIELD_SHOT | FIELD_STATE)
 #define GFX_WIN_FIELDS 100
 static uint32_t cap_every, exit_field;  /* capturas = "N M" */
+static uint32_t trace_vi_left;          /* SALSA64_DATA_DIR/trace-vi: campos que se registran al presentar */
 struct field_msg {
 	uint32_t field;             /* n64.bus.vi.fields al terminar */
 	uint32_t tasks;             /* tareas gráficas terminadas hasta ahí */
@@ -525,6 +526,13 @@ static void front_acquire(void *ctx, struct gfx_job *job)
 {
 	(void)ctx;
 	rdp_sink->acquire(rdp_sink->ctx, job);
+}
+
+/* DMA a la RDRAM (hilo de emulación): las copias del RDP no lo pisan. */
+static void front_rdram_written(void *ctx, uint32_t pa, uint32_t len)
+{
+	(void)ctx;
+	salsa64_rdp_rdram_written(pa, len, n64.bus.rsp.busy == SALSA64_TASK_GFX);
 }
 
 static void front_done(void *ctx, const struct gfx_job *job, const struct gfx_result *res)
@@ -1476,6 +1484,17 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	} else {
 		pres.blank++;
 	}
+	if (trace_vi_left && m->f.width) {
+		int tslot;
+		uint32_t age, taddr;
+		salsa64_rdp_last_present(&tslot, &age, &taddr);
+		trace_vi_left--;
+		salsa64_log("vi campo %u: origen %06x %ux%u → %s (destino %06x ranura %d, dibujado hace %u campos; emulación %u "
+			    "campos por delante)",
+			    m->field, m->f.origin, m->f.width, m->f.height,
+			    pres.still == STILL_RSX ? "RSX" : pres.still == STILL_FB ? "RDRAM" : "nada", taddr, tslot, age,
+			    behind);
+	}
 	if (have)
 		snap_state[slot] = SNAP_FREE;  /* ya está en la memoria del RSX */
 	if (check || check_gfx) {
@@ -1716,18 +1735,18 @@ static void stats(uint64_t now)
 		uint32_t trsx = rs.tex_rsx - sw.rdp0.tex_rsx, trd = rs.tex_rdram - sw.rdp0.tex_rdram;
 		uint32_t tself = rs.tex_self - sw.rdp0.tex_self, primes = rs.primes - sw.rdp0.primes;
 		uint32_t mir = rs.mirrors - sw.rdp0.mirrors, mirs = rs.mirrors_skipped - sw.rdp0.mirrors_skipped;
-		uint32_t fmir = rs.frames_mirrored - sw.rdp0.frames_mirrored;
+		uint32_t fmir = rs.frames_mirrored - sw.rdp0.frames_mirrored, dmas = rs.dma_skipped - sw.rdp0.dma_skipped;
 		uint32_t lost = rs.readbacks_lost - sw.rdp0.readbacks_lost, tfail = rs.targets_failed - sw.rdp0.targets_failed;
 		uint32_t tabs = rs.targets_absurd - sw.rdp0.targets_absurd, bfail = rs.binds_failed - sw.rdp0.binds_failed;
-		if (rb || rbw || mir || mirs || fmir || trsx || trd || tself || primes || lost || tfail || tabs || bfail)
+		if (rb || rbw || mir || mirs || fmir || dmas || trsx || trd || tself || primes || lost || tfail || tabs || bfail)
 			salsa64_log("gfx: framebuffer: %u copias a la RDRAM (%.2f ms c/u en presentación), la emulación "
 				    "esperó %u tareas (%.2f ms c/u, %u tarde), %u copias espejo (%u sin búfer), %u cuadros "
-				    "copiados; texturas desde un destino: %u del RSX, %u de la RDRAM, %u del ligado; %u "
+				    "copiados, %u copias descartadas por un DMA posterior; texturas desde un destino: %u del RSX, %u de la RDRAM, %u del ligado; %u "
 				    "destinos cebados; %u copias perdidas, %u destinos sin superficie, %u color images imposibles, "
 				    "%u dibujos sin ligar (ninguna profundidad cubría el destino)",
 				    rb, rb ? (rs.us_readback - sw.rdp0.us_readback) / 1e3 / rb : 0.0, rbw,
 				    rbw ? (rs.us_readback_wait - sw.rdp0.us_readback_wait) / 1e3 / rbw : 0.0,
-				    rs.readback_late - sw.rdp0.readback_late, mir, mirs, fmir, trsx, trd, tself, primes, lost,
+				    rs.readback_late - sw.rdp0.readback_late, mir, mirs, fmir, dmas, trsx, trd, tself, primes, lost,
 				    tfail, tabs, bfail);
 	}
 	if (lle_mode != SALSA64_LLE_OFF) {
@@ -2106,6 +2125,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	salsa64_rom_normalize(rom, rom_size);
 	memset(rdram, 0, SALSA64_RDRAM_MAX);  /* cada juego arranca igual, venga después del que venga */
 	salsa64_n64_init(&n64, rdram, SALSA64_RDRAM_MAX);
+	n64.bus.rdram_written = front_rdram_written;
 	salsa64_bus_set_isviewer(&n64.bus, isv_buf, isv_out, NULL);
 
 	/* HLE gráfica: en un SPE, o en el PPE si se pide. */
@@ -2207,6 +2227,17 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		salsa64_rdp_fbfx(fbfx);
 		salsa64_log("efectos de framebuffer: %s", fbfx <= 0 ? "apagados" : fbfx == 1 ? "render a textura" :
 								"render a textura y copias a la RDRAM");
+	}
+	{
+		/* SALSA64_DATA_DIR/trace-vi: registrar qué se presenta en cada uno
+		 * de los primeros N campos (por omisión 300). */
+		FILE *tf = fopen(SALSA64_DATA_DIR "/trace-vi", "r");
+		trace_vi_left = 0;
+		if (tf) {
+			if (fscanf(tf, "%u", &trace_vi_left) != 1)
+				trace_vi_left = 300;
+			fclose(tf);
+		}
 	}
 	{
 		FILE *df = fopen(SALSA64_DATA_DIR "/gfxdump", "r");

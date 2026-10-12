@@ -15,6 +15,8 @@ void salsa64_bus_rdram_written(struct salsa64_bus *bus, uint32_t pa, uint32_t le
 {
 	if (bus->cpu && bus->cpu->rec)
 		salsa64_rec_invalidate(bus->cpu->rec, pa, len);
+	if (bus->rdram_written)
+		bus->rdram_written(bus->rdram_written_ctx, pa, len);
 }
 
 void salsa64_bus_init(struct salsa64_bus *bus, uint8_t *rdram, uint32_t rdram_size)

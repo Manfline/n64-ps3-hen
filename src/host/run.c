@@ -836,6 +836,15 @@ static void watch_fb_task(void)
 }
 #endif
 
+/* DMA a la RDRAM: el rasterizador no pisa con copias viejas lo que llegó
+ * después (raster_rdram_written). La tarea en vuelo es gfx.tasks + 1. */
+static void rdram_written(void *ctx, uint32_t pa, uint32_t len)
+{
+	(void)ctx;
+	if (gfx.raster)
+		raster_rdram_written(pa, len, gfx.tasks + (n64.bus.rsp.busy == SALSA64_TASK_GFX ? 1u : 0u));
+}
+
 static void gfx_acquire(void *ctx, struct gfx_job *job)
 {
 	(void)ctx;
@@ -2151,6 +2160,7 @@ int main(int argc, char **argv)
 	if (getenv("SALSA64_FBFX"))
 		raster_fbfx = atoi(getenv("SALSA64_FBFX"));
 	const struct salsa64_gfx_sink sink = { NULL, gfx_acquire, gfx_done };
+	n64.bus.rdram_written = rdram_written;
 	salsa64_gfx_sync_init(&gfx_sync, &gfx_state, &n64.bus, &sink);
 	salsa64_rsp_set_gfx(&n64.bus, &gfx_sync.backend);
 	if (getenv("SALSA64_GFX_LATE")) {
