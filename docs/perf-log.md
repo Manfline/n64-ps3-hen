@@ -28,6 +28,57 @@ antes, después, notas.
 | 2026-10-11 | 3b95776 | **HLE de la tarea JPEG de Zelda OoT** en la PS3, dos salas (tienda Kokiri y casa de Link) | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00091 «Salsa64 Kokiri», respaldo del usuario | antes: fondo sin dibujar (malla en colores planos) | **67,8 y 67,3 ms del PPE por sala**; ventana de la carga 57,3–57,6 campos/s, peor campo 37–39 ms de emulación | ~110 veces lo de la Mac: flotantes y conversiones a entero por memoria en el PPE. Se queda en el PPE (una vez por sala, durante la transición); pendiente pasarlo a punto fijo |
 | 2026-10-11 | (rama fervent-hodgkin) | **HLE de la tarea JPEG de Zelda OoT** (fondos prerrenderizados), una sala: 75 tareas, 300 macrobloques | Mac (salsa64-run nativo, Apple Silicon) | antes: las tareas terminaban sin hacer nada (fondo basura) | **0,61 ms por sala** en el hilo del CPU, una vez al cargarla | Corre en el PPE (`core/rsp.c`); IDCT separable en flotante sin optimizar. El frontend escribe «JPEG: N tareas, M macrobloques en X ms del PPE» al terminar cada tanda: con esa medida se decide si se queda en el PPE o va a un SPE. El fondo se copia en el SPE 0 (40 tiras por cuadro, reutilizadas por la caché de texturas) |
 
+| 2026-10-11 | e0aa556 (v0.1.0) → c17e790 | **Perfect Dark, intro (azotea de dataDyne con desenfoque de movimiento)**: decodificar solo lo que muestrea cada TEXRECT y decodificación de 4 en 4 texels | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00097 «Salsa64 texturas», respaldo del usuario, sin tocar el control | 50,0–51,1 campos/s; HLE en el SPE 39,7–61,4 ms por tarea, de ellos decodificar 36,8–58,4 ms (90–143 texturas por tarea); el CPU dormía 28–40 ms por tarea esperando al SPE | **59,8–60,3 campos/s; SPE 3,3–5,0 ms por tarea (×11–17), decodificar 0,48–0,65 ms (133–181 texturas, ×77–94)**; dormida 3,0–5,5 ms | Antes a 4× automática, después a 1× pedida (la HLE no depende de la escala). Zelda, GoldenEye y Conker sin cambios. La escena siguiente (campos 4300–5500) va a 45–53 campos/s por el CPU emulado (41–63 MIPS, 18–22 ms por campo; en las ventanas más lentas casi no espera al SPE). Ver «Texturas que cambian en cada cuadro» abajo |
+## Texturas que cambian en cada cuadro: Perfect Dark (2026-10-11)
+
+**PS3 real** (Slim CECH-3011A, HFW 4.91 + HEN), Perfect Dark NTSC
+(respaldo del usuario, fuera del repo) desde el menú, sin tocar el control:
+la intro hasta la azotea de dataDyne (campo ~1800), donde el juego copia el
+cuadro anterior sobre el nuevo en 180 franjas de 320 × 1 por tarea
+(diagnóstico en docs/texturas.md). «Antes» = release v0.1.0 (e0aa556),
+escala automática 4×; «después» = c17e790 (app SLSA00097 «Salsa64
+texturas»), escala 1× pedida. La HLE no depende de la escala (los tiempos
+del SPE se comparan tal cual); los campos/s de antes estaban limitados por
+el SPE, no por el RSX. Por tarea gráfica, ventanas de 100 campos:
+
+| Campos | Campos/s | Tareas | Texturas decodificadas | HLE en el SPE | Decodificar | Vértices |
+|---|---|---|---|---|---|---|
+| 1700–1799 | 53,0 → 57,3 | 25 → 25 | 2,2 → 2,2 | 3,52 → 2,75 ms | 0,74 → 0,05 | 0,71 → 0,70 |
+| 1800–1899 | **51,1 → 59,8** | 36 → 50 | 90,3 → 133,3 | 39,72 → 3,29 ms | 36,84 → 0,48 | 0,77 → 0,77 |
+| 1900–1999 | **50,0 → 59,9** | 30 → 50 | 143,1 → 172,8 | 61,35 → 3,51 ms | 58,40 → 0,62 | 0,77 → 0,78 |
+| 2000–2099 | **50,1 → 59,8** | 33 → 50 | 132,2 → 176,9 | 57,32 → 4,16 ms | 53,76 → 0,65 | 0,97 → 0,97 |
+| 2100–2199 | **50,0 → 60,3** | 32 → 51 | 129,2 → 173,1 | 57,10 → 5,01 ms | 52,69 → 0,62 | 1,45 → 1,48 |
+
+(La corrida de antes terminó en el campo 2278.) Después, de los campos 2200
+a 3900 (la azotea con más geometría, hasta 4400 triángulos por tarea):
+57,0–60,3 campos/s, SPE 6,0–10,1 ms por tarea, decodificar 0,50–0,67 ms
+con 140–181 texturas por tarea; dos ventanas a 47,8 y 53,4 coinciden con
+más carga de CPU (49 MIPS, 43 % en espera).
+
+- El juego sigue pidiendo texturas nuevas en cada tarea (las franjas son
+  el cuadro anterior: 133–181 decodificadas por tarea, antes 90–143); lo
+  que cambió es el costo de cada una: 408 µs por franja de 513 × 9 (88 ns
+  por texel) → 3,6 µs por franja de 321 × 2 (5,6 ns por texel, con el
+  hash, la caché y el DMA de salida).
+- El CPU emulado dormía 28–40 ms por tarea esperando al SPE; ahora 3,0–5,5
+  ms (ventanas de 5 s).
+- **Límite que queda en Perfect Dark:** la escena siguiente de la intro
+  (campos 4300–5500, t = 98–123 s) va a 44,8–52,9 campos/s sin decodificar
+  nada (0–0,6 texturas por tarea): emulación 18–22 ms por campo, 41–63
+  MIPS emulados y 11–50 % en bucles de espera; en las ventanas por debajo
+  de 50 campos/s el CPU espera al SPE 0,02–0,85 ms por tarea. Es el hilo 0
+  del PPE con el código recompilado, como GoldenEye en la presa
+  (docs/uso-cell.md), no la HLE.
+- **Sin regresiones** (un minuto de cada uno, jugando; escenas no idénticas
+  a las de referencia, medianas de las ventanas de 5 s): Zelda OoT 59,8
+  campos/s (mín. 58,7), SPE 4,50 ms por tarea (antes, en el log de la
+  v0.1.0: 59,8 y 5,69); GoldenEye 53,4 (mín. 47,6), SPE 7,59, limitado por
+  el CPU (antes, en la presa: 54,1 y 6,42); Conker 59,8 (mín. 54,8), SPE
+  3,72 (máx. 30,1 en la intro, igual que antes: 59,8, 7,26, máx. 30,5). En
+  los tres, decodificar sigue en 0,00–0,05 ms por tarea.
+- Logs: `build/ps3-logs/salsa64-texturas-c17e790.log` (fuera de git) y el
+  de antes, `salsa64-v010-pd-majora.log`.
+
 ## Estados guardados (2026-10-11)
 
 PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), paquete SLSA00094 «Salsa64

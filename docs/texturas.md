@@ -140,6 +140,13 @@ Para que el código nuevo no se comiera la pila del SPE 0, el registro de
 texturas del arena por tarea (para no decodificar dos veces la misma si
 la caché está llena o apagada) bajó de 128 a 64 entradas (−3 KB).
 
+**En la PS3 real** (c17e790, docs/perf-log.md): la azotea pasa de 50–51 a
+59,8–60,3 campos/s; la HLE en el SPE, de 40–61 a 3,3–5,0 ms por tarea, y
+decodificar, de 37–58 a 0,5–0,65 ms con 133–181 texturas nuevas por tarea
+(3,6 µs por franja). Zelda, GoldenEye y Conker, igual que antes. Lo que
+queda lento en la intro de Perfect Dark (45–53 campos/s en la escena
+siguiente) es el CPU emulado, no la HLE.
+
 ## Decisión: SPE 0 o SPE 2–3
 
 **La caché y la decodificación se quedan en el SPE 0.** Con la caché, lo
@@ -157,6 +164,15 @@ cambiar de escena), decodificación por adelantado. Se revisa si el peor
 campo en un cambio de escena pasa de un campo de tele (16,7 ms) por
 decodificar.
 
+**Revisado con Perfect Dark (2026-10-11):** es el primer juego que cambia
+muchas texturas en cada cuadro (180 franjas del cuadro anterior por
+tarea), y aun así la decisión se mantiene. Decodificar solo lo que se
+muestrea y sin accesos byte por byte deja 0,5–0,65 ms por tarea en el SPE
+0, menos que lo que costaría repartir el trabajo y sincronizar otro SPE.
+Si un juego decodificara en cada cuadro tiles enteras grandes (no franjas),
+lo siguiente sería la conversión con SIMD del SPE en toda la fila y, solo
+después, otro SPE.
+
 ## Pendiente
 
 - Cargas a la TMEM: pedir por adelantado las filas de LOADTILE (hoy un DMA
@@ -164,5 +180,14 @@ decodificar.
 - Decodificación por formato con SIMD y salidas de 16 bits del RSX
   (R5G5B5A1 tal cual, IA como G8B8) en `lib/rsxkit/` (MIT): solo importa
   cuando falla la caché; medir el peor campo en cambios de escena antes.
+  RGBA16 ya va de 4 en 4 texels (vectores de GCC); los demás formatos,
+  texel por texel con accesos alineados.
+- El desenfoque de Perfect Dark lee el cuadro anterior desde la RDRAM (la
+  copia a 1× del espejo del framebuffer): leerlo del destino del RSX
+  (render a textura) lo vería a la resolución interna y no decodificaría
+  nada, pero la procedencia de las franjas no se reconoce (`LOADBLOCK` de
+  una fila con una tile de 1280 bytes por línea: «paso 640» contra un
+  destino de 320) y el SPE tendría que saber de antemano que no hace falta
+  decodificar.
 - El arena de texturas por juego (4 MB × 3) casi no se usa: se puede
   achicar.
