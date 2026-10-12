@@ -377,6 +377,17 @@ Detección por comportamiento o por huella (hash) del código, sin copiar nada
 de la biblioteca al repo; resultado exacto, porque la lógica del juego no
 admite aproximaciones.
 
+Anotado la tarde del 2026-10-12, para después de v0.2.0:
+- **Sombras cuadradas en Conker** (PS3 real, desde antes de las ramas de hoy):
+  las sombras redondas de los personajes salen como bloques. Probablemente la
+  textura de la sombra (degradado con alfa) se dibuja sin su alfa o con el
+  formato o el modo de ciclo equivocado; comparar contra mupen64plus en la
+  misma escena.
+- **Hacks** (reportes de usuarios): Smash Remix 2.0.1 arranca y corre bien,
+  pero se cuelga cuando cae un personaje; The Sealed Palace (hack de Ocarina
+  of Time) se queda en pantalla negra. Revisar con el log de la PS3 antes de
+  suponer la causa (tamaño de ROM, CIC, microcódigo F3DEX3 u otro).
+
 ## 2026-10-12 — Botón PS y cuadro al salir: el juego se pausa (rama `heuristic-agnesi-760f8c`, paquete SLSA00098 «Salsa64 botón PS»)
 
 Problema (PS3 real, v0.1.0): dentro de un juego, el botón PS abría el menú
