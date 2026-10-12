@@ -174,6 +174,123 @@ enum { CC_A_ZERO = 15 };
 
 /* ---- Pruebas ---- */
 
+/* Textura apagada (sin G_TEXTURE) con un combiner que lee TEXEL0
+ * (TEXEL0·SHADE, la tapa del muro de Luigi Raceway): TEXEL0 vale 1 y la
+ * combinación queda sin términos de textura (el RSX no muestrea nada sin
+ * ligar). */
+static void gfx_untextured_texel(void)
+{
+	start();
+	float ident[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+	load_mtx(ident, true);
+	load_mtx(ident, false);
+	set_combine(CC_T0, CC_ZERO, CC_SHADE, CC_ZERO, CC_T0, CC_ZERO, CC_SHADE, CC_ZERO);
+	dl(0xD9000000, G_SHADING_SMOOTH);                /* geometry mode, sin textura */
+	dl(0xFF100000 | 319, 0x00100000);
+	const struct vtx v[3] = {
+		{ 0, 0, 0, 0, 0, { 252, 252, 252, 255 } },
+		{ 1, 0, 0, 0, 0, { 252, 252, 252, 255 } },
+		{ 0, 1, 0, 0, 0, { 252, 252, 252, 255 } },
+	};
+	dl(0x01000000 | 3 << 12 | 3 << 1, put_vertices(v, 3));
+	dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);
+	run();
+	const struct gfx_draw *d = draw_n(0);
+	CHECK(d != NULL);
+	if (!d)
+		return;
+	CHECK_EQ(d->ntex, 0);
+	for (int t = GFX_K_T0; t <= GFX_K_T1A; t++)
+		for (int i = 0; i < 3; i++)
+			for (int l = 0; l < 4; l++)
+				CHECK(d->k[t][i][l] == 0.0f);
+	for (int l = 0; l < 3; l++)
+		CHECK(fabsf(d->k[GFX_K_ONE][1][l] - 1.0f) < 1e-6f);  /* = SHADE */
+	CHECK(fabsf(d->k[GFX_K_ONE][2][3] - 1.0f) < 1e-6f || fabsf(d->k[GFX_K_ONE][1][3] - 1.0f) < 1e-6f);
+}
+
+/* TEXRECT en 2 ciclos con dos tiles (el texto «NINTENDO 64» de Zelda): la
+ * tile 0 cae entera en su textura y se limita, la tile 1 (ruido I8 de
+ * 32×32, t × 32 con shiftt 11) se repite: cada tile con su propio límite.
+ * Como la tile 1 avanza una textura entera por fila, sale una tira por
+ * fila con la t de esa fila. */
+static void gfx_texrect_two_tiles(void)
+{
+	start();
+	dl(0xFD100000 | 0, TEX_PA);                                /* SETTIMG de 16 bits */
+	dl(0xF5100000, 0x07000000);
+	dl(0xF3000000, 0x07000000 | 511 << 12 | 512);             /* LOADBLOCK 1 KB */
+	dl(0xF5880000 | 4 << 9, 0x00000000);                       /* tile 0: I8, línea 32 bytes */
+	dl(0xF2000000, (31 << 2) << 12 | (1 << 2));                /* 32×2 */
+	dl(0xF5880000 | 4 << 9, 0x01000000 | 5 << 14 | 11 << 10 | 5 << 4);  /* tile 1: mask 5, ×32 en t */
+	dl(0xF2000000 | 119, 0x01000000 | (124 << 12) | 124);      /* ult = 29,75 */
+	set_cycle(G_CYC_2CYCLE);
+	set_combine(CC_T0, CC_ZERO, CC_T1, CC_ZERO, CC_ZERO, CC_ZERO, CC_ZERO, CC_ONE);
+	dl(0xE4000000 | (32 << 2) << 12 | (2 << 2), 0);            /* TEXRECT 0,0–32,2 */
+	dl(0xE1000000, 0);                                         /* s = t = 0 */
+	dl(0xF1000000, 0x04000400);                                /* dsdx = dtdy = 1 */
+	run();
+	CHECK_EQ(res.rects, 2);
+	const struct gfx_draw *d = draw_n(0);
+	CHECK(d != NULL);
+	if (!d)
+		return;
+	CHECK_EQ(d->ntex, 2);
+	CHECK_EQ(GFX_TEX_WRAP_T(d->tex[0].flags), GFX_WRAP_CLAMP);
+	CHECK_EQ(GFX_TEX_WRAP_T(d->tex[1].flags), GFX_WRAP_REPEAT);
+	CHECK_EQ(d->h.b, 12);
+	for (uint32_t i = 0; i < 12 && i < d->h.b; i++)
+		CHECK(out_vtx[d->h.a + i].t == (i < 6 ? 0.0f : 1.0f));
+}
+
+/* G_SETCONVERT: K5 entra al combiner (Conker: (SHADE − ENV)·K5 + PRIM en el
+ * segundo ciclo, con K5 = 255; si se ignora, la cara sale negra) y persiste
+ * en el estado del RDP. */
+static void gfx_setconvert_k5(void)
+{
+	start();
+	dl(0xEC000000, 0x00000000 | 0x41u << 9 | 0xFFu);  /* K4 = 0x41, K5 = 0xFF */
+	run();
+	CHECK_EQ(gs.k4, 0x41);
+	CHECK_EQ(gs.k5, 0xFF);
+
+	struct gfx_draw d;
+	memset(&d, 0, sizeof d);
+	gs.prim = 0;
+	gs.env = 0;
+	gs.oh = (uint32_t)G_CYC_2CYCLE << G_MDSFT_CYCLETYPE;
+	/* Ciclo 0 en cero; ciclo 1: rgb (SHADE − ENV)·K5 + PRIM, alfa SHADE. */
+	gs.cc_hi = 15u << 20 | 31u << 15 | 7u << 12 | 7u << 9 | 4u << 5 | 15u;
+	gs.cc_lo = 15u << 28 | 5u << 24 | 7u << 21 | 7u << 18 | 7u << 15 | 7u << 12 | 4u << 9 | 3u << 6 | 7u << 3 | 4u;
+	CHECK(!gfx_combine(&gs, &d));
+	CHECK_EQ(d.ntex, 0);
+	for (int lane = 0; lane < 3; lane++)
+		CHECK(fabsf(d.k[GFX_K_ONE][1][lane] - 1.0f) < 1e-6f);
+
+	gs.k5 = 0x80;  /* 128/255 */
+	CHECK(!gfx_combine(&gs, &d));
+	CHECK(fabsf(d.k[GFX_K_ONE][1][0] - 128.0f / 255.0f) < 1e-6f);
+	gs.k5 = 0x1FF;  /* 9 bits con signo: −1 */
+	CHECK(!gfx_combine(&gs, &d));
+	CHECK(fabsf(d.k[GFX_K_ONE][1][0] + 1.0f / 255.0f) < 1e-6f);
+
+	/* Estado guardado: K4 y K5 van y vuelven; un estado sin ellos (bytes
+	 * en cero al final) los deja en cero. */
+	uint8_t buf[GFX_STATE_REGS];
+	gfx_state_pack_regs(&gs, buf);
+	gs.k4 = gs.k5 = 0;
+	CHECK(gfx_state_unpack_regs(&gs, buf));
+	CHECK_EQ(gs.k4, 0x41);
+	CHECK_EQ(gs.k5, 0x1FF);
+	unsigned i = GFX_STATE_REGS;
+	while (i > 0 && buf[i - 1] == 0)
+		i--;
+	memset(buf + i - 4, 0, 4);
+	CHECK(gfx_state_unpack_regs(&gs, buf));
+	CHECK_EQ(gs.k4, 0);
+	CHECK_EQ(gs.k5, 0);
+}
+
 static void gfx_combiner_forms(void)
 {
 	/* SHADE: todo en X_4, coeficiente del color del vértice. */
@@ -1624,6 +1741,9 @@ static void gfx_clip_ratio_f3dex2(void)
 void t_suite_gfx(void)
 {
 	RUN(gfx_combiner_forms);
+	RUN(gfx_setconvert_k5);
+	RUN(gfx_texrect_two_tiles);
+	RUN(gfx_untextured_texel);
 	RUN(gfx_combiner_shade_squared);
 	RUN(gfx_triangle_transform);
 	RUN(gfx_clip_ratio_f3dex2);

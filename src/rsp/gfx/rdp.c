@@ -263,7 +263,7 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 		for (int lane = 0; lane < 4; lane++)
 			d->k[GFX_K_T0][0][lane] = 1.0f;
 		d->ntex = 1;
-		if (!texture_state(g, d, tile, 0, true, g->rect_clamp, g->rect_lim))
+		if (!texture_state(g, d, tile, 0, true, g->rect_clamp & 3u, g->rect_lim))
 			d->ntex = 0;
 		if ((g->ol & G_AC_MASK) == G_AC_THRESHOLD) {
 			d->atest = GFX_ATEST_GEQUAL;
@@ -294,11 +294,14 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 	if (gfx_combine(g, d))
 		g->res->approx_cc++;
 	bool textured = kind == PRIM_RECT || (kind < PRIM_RAW ? g->tex_on != 0 : (kind & 1) != 0);
-	if (!textured)
+	if (!textured && d->ntex) {
 		d->ntex = 0;
+		gfx_combine_untextured(d);
+	}
 	unsigned n = d->ntex;
 	for (unsigned i = 0; i < n; i++)
-		if (!texture_state(g, d, tile + (int)i, (int)i, false, kind == PRIM_RECT ? g->rect_clamp : 0,
+		if (!texture_state(g, d, tile + (int)i, (int)i, false,
+				   kind == PRIM_RECT ? (g->rect_clamp >> (2 * i)) & 3u : 0,
 				   kind == PRIM_RECT && i == 0 ? g->rect_lim : NULL)) {
 			d->ntex = (uint8_t)i;
 			break;
@@ -515,19 +518,37 @@ void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uin
 	 * limita aunque repita. Da lo mismo que en la N64 y evita que, a más
 	 * resolución, el filtro mezcle el borde con el lado opuesto (Mario
 	 * Kart 64 dibuja sus imágenes en tiras de 2 filas que repiten: salían
-	 * líneas). */
+	 * líneas). Cada tile con su desplazamiento y su origen: la tile + 1
+	 * del segundo ciclo (el ruido del texto «NINTENDO 64» de Zelda, que se
+	 * repite) va en los bits 2–3.
+	 * Una tile que avanza media tile o más por fila (ese ruido: la tile
+	 * entera, ×32) la N64 la muestrea con la t de cada fila, la misma en
+	 * toda la fila; a más resolución el RSX interpolaría t dentro de la
+	 * fila y recorrería media textura (rayas). Ahí el rectángulo sale en
+	 * una tira por fila. Un fondo achicado (S2DEX) avanza pocos texels por
+	 * fila y queda entero. */
 	const struct gfx_tile *ti = &g->tiles[tile];
 	uint32_t tw, th;
 	gfx_tile_size(ti, &tw, &th);
 	float ns = flip ? h : w, nt = flip ? w : h;  /* muestras en s y en t */
 	float ks = shift_scale(ti->shifts), kt = shift_scale(ti->shiftt);
-	float sa = s0 * ks - ti->uls / 4.0f, sb = (s0 + (ns - 1.0f) * dsdx) * ks - ti->uls / 4.0f;
-	float ta = t0 * kt - ti->ult / 4.0f, tb = (t0 + (nt - 1.0f) * dtdy) * kt - ti->ult / 4.0f;
 	unsigned clamp = 0;
-	if ((sa < sb ? sa : sb) > -0.01f && (sa < sb ? sb : sa) < (float)tw - 0.99f)
-		clamp |= 1;
-	if ((ta < tb ? ta : tb) > -0.01f && (ta < tb ? tb : ta) < (float)th - 0.99f)
-		clamp |= 2;
+	bool rows = false;
+	for (int i = 0; i < (cycle == G_CYC_2CYCLE ? 2 : 1); i++) {
+		const struct gfx_tile *ui = &g->tiles[(tile + i) & 7];
+		uint32_t uw, uh;
+		gfx_tile_size(ui, &uw, &uh);
+		float us = shift_scale(ui->shifts), ut = shift_scale(ui->shiftt);
+		float sa = s0 * us - ui->uls / 4.0f, sb = (s0 + (ns - 1.0f) * dsdx) * us - ui->uls / 4.0f;
+		float ta = t0 * ut - ui->ult / 4.0f, tb = (t0 + (nt - 1.0f) * dtdy) * ut - ui->ult / 4.0f;
+		if ((sa < sb ? sa : sb) > -0.01f && (sa < sb ? sb : sa) < (float)uw - 0.99f)
+			clamp |= 1u << (2 * i);
+		if ((ta < tb ? ta : tb) > -0.01f && (ta < tb ? tb : ta) < (float)uh - 0.99f)
+			clamp |= 2u << (2 * i);
+		float step = dtdy * ut;
+		rows |= (step < 0.0f ? -step : step) >= 2.0f && (step < 0.0f ? -step : step) * 2.0f >= (float)uh;
+	}
+	rows = rows && !flip && h <= 16.0f && (cycle == G_CYC_1CYCLE || cycle == G_CYC_2CYCLE);
 
 	/* El RDP muestrea en la esquina de cada píxel; el RSX, en el centro:
 	 * con filtro bilineal se corre medio píxel para no mezclar texels
@@ -537,14 +558,6 @@ void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uin
 	if (bilinear) {
 		s0 -= 0.5f * dsdx;
 		t0 -= 0.5f * dtdy;
-	}
-	float s[4], t[4];
-	if (!flip) {
-		s[0] = s0, s[1] = s0 + w * dsdx, s[2] = s0, s[3] = s0 + w * dsdx;
-		t[0] = t0, t[1] = t0, t[2] = t0 + h * dtdy, t[3] = t0 + h * dtdy;
-	} else {
-		s[0] = s0, s[1] = s0, s[2] = s0 + h * dsdx, s[3] = s0 + h * dsdx;
-		t[0] = t0, t[1] = t0 + w * dtdy, t[2] = t0, t[3] = t0 + w * dtdy;
 	}
 	/* Texels que puede muestrear el rectángulo, desde el 0 de la tile: el
 	 * RSX (con u = s·k − uls, como en texture_state) toma floor(u) y, con
@@ -560,6 +573,24 @@ void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uin
 		float se = s0 + ns * dsdx, te = t0 + nt * dtdy;
 		lim[0] = sampled((se > s0 ? se : s0) * ks - ti->uls / 4.0f, bilinear, tw);
 		lim[1] = sampled((te > t0 ? te : t0) * kt - ti->ult / 4.0f, bilinear, th);
+	}
+	float s[4], t[4];
+	if (rows) {
+		/* La t de la fila r es la de su esquina (sin el medio píxel). */
+		float tr = bilinear ? t0 + 0.5f * dtdy : t0;
+		s[0] = s0, s[1] = s0 + w * dsdx, s[2] = s0, s[3] = s0 + w * dsdx;
+		for (float y = uly; y < lry; y += 1.0f, tr += dtdy) {
+			t[0] = t[1] = t[2] = t[3] = tr;
+			rect(g, PRIM_RECT, tile, ulx, y, lrx, y + 1.0f < lry ? y + 1.0f : lry, s, t, clamp, lim);
+		}
+		return;
+	}
+	if (!flip) {
+		s[0] = s0, s[1] = s0 + w * dsdx, s[2] = s0, s[3] = s0 + w * dsdx;
+		t[0] = t0, t[1] = t0, t[2] = t0 + h * dtdy, t[3] = t0 + h * dtdy;
+	} else {
+		s[0] = s0, s[1] = s0, s[2] = s0 + h * dsdx, s[3] = s0 + h * dsdx;
+		t[0] = t0, t[1] = t0 + w * dtdy, t[2] = t0, t[3] = t0 + w * dtdy;
 	}
 	rect(g, PRIM_RECT, tile, ulx, uly, lrx, lry, s, t, clamp, lim);
 }
@@ -760,8 +791,13 @@ void gfx_rdp_command(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	case G_RDPTILESYNC:
 	case G_SETKEYGB:
 	case G_SETKEYR:
-	case G_SETCONVERT:
 		return;
+	case G_SETCONVERT:
+		/* K0–K3 son de la conversión YUV (sin uso aquí); K4 y K5 son
+		 * entradas del combiner (Conker: (SHADE − ENV)·K5 + PRIM). */
+		g->k4 = (uint16_t)((w1 >> 9) & 0x1FF);
+		g->k5 = (uint16_t)(w1 & 0x1FF);
+		break;
 	case G_SETSCISSOR:
 		g->scissor[0] = (w0 >> 12) & 0xFFF;
 		g->scissor[1] = w0 & 0xFFF;

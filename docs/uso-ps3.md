@@ -121,8 +121,9 @@ los atajos de Salsa64:
 | SELECT + L1 | Carga el estado de la ranura actual |
 | SELECT + derecha / izquierda (cruceta) | Cambia de ranura (0 a 9, en ronda) |
 | SELECT + △ | Muestra u oculta el contador de velocidad |
+| SELECT + R2 | Depuración gráfica: guarda en `/dev_hdd0/salsa64/` la salida de la HLE del cuadro en pantalla (`gfxdump-<campo>.bin`) y su captura (`gfxdump-<campo>.ppm`) |
 
-Mientras SELECT está apretado, R1, L1, △ y la cruceta izquierda/derecha no
+Mientras SELECT está apretado, R1, L1, R2, △ y la cruceta izquierda/derecha no
 llegan al juego (no se mueve el personaje al cambiar de ranura). Si
 `controles.cfg` asigna SELECT a un botón de la N64, ese botón se pulsa
 también con los atajos.

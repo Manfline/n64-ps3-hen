@@ -161,6 +161,7 @@ struct gfx_state {
 	uint32_t prim, env, fog, blend, fill;  /* 0xRRGGBBAA, fill: como el RDP */
 	uint8_t prim_lod, prim_min;
 	uint16_t prim_z, prim_dz;
+	uint16_t k4, k5;           /* G_SETCONVERT: 9 bits con signo */
 	uint16_t scissor[4];       /* 10.2 */
 	uint32_t cimg_addr;
 	uint16_t cimg_width;
@@ -181,7 +182,7 @@ struct gfx_state {
 	struct gfx_result *res;
 	bool near_clip;            /* recortar contra el plano cercano (sin GFX_JOB_NONEAR) */
 	bool dirty;                /* cambió algo del estado de dibujo */
-	uint8_t rect_clamp;        /* TEXRECT en curso: 1 limitar s, 2 limitar t */
+	uint8_t rect_clamp;        /* TEXRECT en curso: 1 limitar s, 2 limitar t; tile + 1 en 4 y 8 */
 	uint16_t rect_lim[2];      /* TEXRECT en curso: texels de s y t que muestrea (0: todos) */
 	bool target_sent;          /* GFX_OP_TARGET de la color image actual */
 	bool have_draw;            /* `draw` está abierto */
@@ -383,6 +384,7 @@ bool gfx_combine(const struct gfx_state *g, struct gfx_draw *d);
 /* Deja el dibujo con solo `ntex` texturas: anula (combinación lineal) o
  * quita (términos) lo que leía las que faltan. */
 void gfx_combine_textures(struct gfx_draw *d, unsigned ntex);
+void gfx_combine_untextured(struct gfx_draw *d);
 
 /* Segmentada → física. */
 static inline uint32_t gfx_addr(const struct gfx_state *g, uint32_t seg)
