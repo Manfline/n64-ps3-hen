@@ -880,6 +880,16 @@ sugerido: recorte → líneas del logo → framebuffer → JIT.
   (68 ms por sala en el PPE, meta < 10 ms); luego Majora's Mask.
 - Recompilador: FPU en registros, más registros fijos y refill de la TLB
   (en curso desde el 2026-10-11).
+- **Recompilador, siguiente frente (medido en la PS3 el 2026-10-11):** el
+  código nativo cuesta ~47 ciclos del PPE por instrucción MIPS con cualquier
+  combinación de FPU, tramos y COP0; no lo limitan las instrucciones emitidas
+  sino el tamaño y la localidad del código (~7 MB de bloques vivos en GoldenEye
+  contra 512 KB de L2, caché en páginas de 64 KB). Trabajo: código más compacto
+  y bloques calientes juntos. La FPU residente quedó apagada (más lenta).
+- **Perfect Dark en un nivel a 49–50 campos/s por el lado gráfico:** 14 ms por
+  campo esperando al SPE 0, ~4500 triángulos y ~131 texturas decodificadas por
+  tarea (el CPU usa 4,5 ms). Candidato fuerte para pasar la conversión de
+  texturas a los SPEs 2–3.
 - **Quitarle trabajo al PPE** (decidido el 2026-10-11, después de cerrar los
   trabajos abiertos): el VR4300 se queda en el PPE (memoria, FPU IEEE y saltos
   no le van a un SPE), pero lo demás pasa a los SPEs libres (2–5) para que el
