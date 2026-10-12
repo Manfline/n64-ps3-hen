@@ -1453,6 +1453,10 @@ static void swap32s(void *p, uint32_t bytes)
 		w[i] = be32(w[i]);
 }
 
+_Static_assert(offsetof(struct gfx_draw, nterms) % 4 == 0 &&
+	       (offsetof(struct gfx_draw, tex) - offsetof(struct gfx_draw, nterms)) % 4 == 0,
+	       "bytes del combiner en palabras enteras");
+
 static int raster_dump(const char *path, const char *out)
 {
 	size_t size;
@@ -1485,6 +1489,8 @@ static int raster_dump(const char *path, const char *out)
 			swap32s(d->scissor, 8 + 8);  /* deshace scissor y los bytes de estado */
 			for (int i = 0; i < 4; i++)
 				d->scissor[i] = salsa64_rd16((uint8_t *)&d->scissor[i]);
+			/* Bytes de nterms a pad: factores, viscvg y aa. */
+			swap32s(&d->nterms, offsetof(struct gfx_draw, tex) - offsetof(struct gfx_draw, nterms));
 			for (int t = 0; t < 2; t++) {
 				struct gfx_tex *x = &d->tex[t];
 				swap32s(&x->width, 8);  /* deshace los de 16 y 8 bits */
