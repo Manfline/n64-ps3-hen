@@ -128,6 +128,11 @@
  *
  * Salir: «Salir al XMB» en el menú, START + SELECT sin menú (con embedded),
  * o "Salir del juego" desde el menú del sistema en cualquier momento.
+ * START + SELECT pregunta antes (cuadro «¿Volver al menú?» o «¿Salir al
+ * XMB?», × sí, ○ no; «confirmar = no» en menu.cfg sale directo). Con el
+ * menú del sistema abierto (botón PS) o el cuadro a la vista, la emulación
+ * y el audio quedan en pausa y se sigue presentando el último cuadro
+ * (pausectl.h, docs/hilos-ppe.md).
  * Lo que la ROM imprime por el ISViewer va al log.
  */
 #include <io/pad.h>
@@ -158,6 +163,7 @@
 #include "osd.h"
 #include "pacer.h"
 #include "padmap.h"
+#include "pausectl.h"
 #include "platform/ps3/autotest.h"
 #include "platform/ps3/gfx_spu.h"
 #include "platform/ps3/rsp_spu.h"
@@ -194,6 +200,9 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define MENU_IDLE_FIELDS 900  /* prueba automática: sin acción en tanto, falla */
 #define OVERSCAN_PATH SALSA64_DATA_DIR "/overscan.cfg"
 #define VIDEO_CFG_PATH SALSA64_DATA_DIR "/video.cfg"
+/* Diagnóstico: con este archivo, el menú del sistema no pausa la emulación
+ * (como hasta v0.1.0); los mandos siguen sueltos y el latido mira. */
+#define NO_PAUSE_PATH SALSA64_DATA_DIR "/sin-pausa"
 /* Con este archivo, la RDRAM emulada sale de sysMemoryAllocate con páginas
  * de 1 MB en vez del heap (memalign): para medir si el PPE pierde tiempo en
  * fallos de TLB (docs/perf-log.md). El tamaño de página real de cada zona
@@ -214,6 +223,13 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define EMU_PRIO     1000
 #define EMU_STACK    (256u << 10)
 #define WAKE_US      4000  /* el hilo de presentación revisa controles y colas al menos cada tanto */
+#define STILL_US     16000 /* en pausa, el último cuadro se vuelve a presentar cada tanto (flip) */
+/* Latido: un hilo aparte mira que los dos se muevan y, si uno se queda
+ * quieto más de STALL_US, dice dónde (docs/hilos-ppe.md). */
+#define WATCH_PRIO   500
+#define WATCH_US     500000u
+#define STALL_US     2000000u
+#define STALL_LOG_US 5000000u
 
 static struct salsa64_n64 n64;
 static struct salsa64_rec rec;
@@ -226,6 +242,22 @@ static uint8_t *rdram;
 static volatile int running;    /* la sesión de juego sigue */
 static volatile int emu_done;   /* el hilo de emulación salió de su bucle */
 static volatile int app_quit;   /* «Salir del juego» del sistema: salir de la aplicación */
+/* Pausa (pausectl.h): el menú del sistema y el cuadro de START + SELECT.
+ * pause_ctl es solo del hilo de presentación (el callback de sysutil corre
+ * en él); pause_req es lo que pide a emulación, que se detiene al empezar
+ * el campo siguiente y lo dice con emu_paused. */
+static struct pausectl pause_ctl;
+static volatile uint32_t pause_req;
+static volatile int emu_paused;
+static uint64_t sys_menu_t0;    /* cuándo se abrió el menú del sistema */
+static bool sys_no_pause;       /* NO_PAUSE_PATH: el menú del sistema no pausa */
+static volatile int emu_live;   /* el hilo de emulación existe (el latido lo espera) */
+/* Dónde anda cada hilo, para el latido (watch_thread). */
+static struct {
+	volatile uint32_t pres, emu;  /* vueltas */
+	const char *volatile pres_at, *volatile emu_at;
+	volatile int quit;
+} beat = { 0, 0, "arranque", "-", 0 };
 static int in_menu;             /* sin embedded: START + SELECT vuelve al menú */
 /* Las líneas de resultado de una ROM de prueba: con el menú, la final es la
  * del conjunto (tools/rpcs3-run.py corta 30 s después de la primera). */
@@ -260,12 +292,40 @@ static void wake(void)
 	sysSemPost(wake_sem, 1);  /* si ya está en 1, da error: no importa */
 }
 
+/* Eventos del sistema. Corre dentro de sysUtilCheckCallback, en el hilo
+ * de presentación (o el del menú): puede tocar pause_ctl y escribir al log. */
 static void sysutil_cb(u64 status, u64 param, void *user)
 {
-	(void)param, (void)user;
-	if (status == SYSUTIL_EXIT_GAME) {
+	(void)user;
+	uint64_t now = sysGetSystemTime();
+	switch (status) {
+	case SYSUTIL_EXIT_GAME:
+		salsa64_log("sistema: «Salir del juego»");
 		app_quit = 1;
 		running = 0;
+		break;
+	case SYSUTIL_MENU_OPEN:
+		pausectl_system_menu(&pause_ctl, true);
+		sys_menu_t0 = now;
+		if (emu_live)
+			salsa64_log("sistema: menú abierto (campo %u)", n64.bus.vi.fields);
+		else
+			salsa64_log("sistema: menú abierto (sin juego)");
+		break;
+	case SYSUTIL_MENU_CLOSE:
+		pausectl_system_menu(&pause_ctl, false);
+		salsa64_log("sistema: menú cerrado tras %.1f s", sys_menu_t0 ? (now - sys_menu_t0) / 1e6 : 0.0);
+		break;
+	case SYSUTIL_DRAW_BEGIN:
+		salsa64_log("sistema: empieza a dibujar encima");
+		break;
+	case SYSUTIL_DRAW_END:
+		salsa64_log("sistema: deja de dibujar encima");
+		break;
+	default:
+		salsa64_log("sistema: evento 0x%llx (parámetro 0x%llx)", (unsigned long long)status,
+			    (unsigned long long)param);
+		break;
 	}
 }
 
@@ -338,10 +398,16 @@ static void pads_publish(const struct salsa64_pad pads[SALSA64_PIF_PORTS])
 static void pads_apply(void)
 {
 	struct salsa64_pad pads[SALSA64_PIF_PORTS];
-	for (;;) {
+	for (unsigned spins = 0;; spins++) {
 		uint32_t s1 = pad_box.seq;
-		if (s1 & 1)
-			continue;  /* presentación está escribiendo: son unos nanosegundos */
+		if (s1 & 1) {
+			/* Presentación está escribiendo: son unos nanosegundos, salvo
+			 * que el sistema la haya desalojado a la mitad; este hilo tiene
+			 * más prioridad, así que no se gira para siempre. */
+			if (spins > 64)
+				sysUsleep(20);
+			continue;
+		}
 		lwsync();
 		memcpy(pads, pad_box.pads, sizeof pads);
 		lwsync();
@@ -552,6 +618,7 @@ static struct {
 
 static void fps_setting_save(bool on);
 static bool fps_setting_load(void);
+static bool confirm_setting_load(void);
 
 static void state_command(int what)
 {
@@ -623,8 +690,13 @@ static struct {
 
 /* DualShock 3 → controles de la N64, publicados para el hilo de emulación.
  * ioPadGetData da len = 0 cuando nada cambió: se conserva el último
- * estado. Devuelve 1 si algún mando tiene START + SELECT; en `buttons`
- * (puede ser NULL), los botones de todos los mandos juntos (el menú). */
+ * estado. Con el menú del sistema abierto o los mandos tomados por el
+ * sistema (bit 0 de padInfo.info), todo suelto: lo que se suelte allá no se
+ * ve aquí, así que nada queda pegado al volver. pausectl decide qué llega al
+ * juego (nada con el cuadro de salir a la vista; lo apretado al abrirlo o
+ * cerrarlo, hasta que se suelte). Devuelve 1 si hay que salir del juego
+ * (START + SELECT, confirmado o sin confirmación); en `buttons` (puede ser
+ * NULL), los botones de todos los mandos juntos (el menú). */
 static int update_pads(uint32_t *buttons)
 {
 	static struct salsa64_ds3 last[SALSA64_PIF_PORTS] = {
@@ -635,11 +707,11 @@ static int update_pads(uint32_t *buttons)
 		[0 ... SALSA64_PIF_PORTS - 1] = { 0, 128, 128, 128, 128 },
 	};
 	static uint8_t present[SALSA64_PIF_PORTS];
-	const uint32_t quit = 1u << SALSA64_DS3_START | 1u << SALSA64_DS3_SELECT;
+	const struct salsa64_ds3 neutral = { 0, 128, 128, 128, 128 };
 	struct salsa64_pad pads[SALSA64_PIF_PORTS];
+	uint32_t raw[SALSA64_PIF_PORTS], game[SALSA64_PIF_PORTS];
 	padInfo info;
 	padData data;
-	int exit = 0;
 	uint32_t all = 0;
 
 	if (buttons)
@@ -652,16 +724,26 @@ static int update_pads(uint32_t *buttons)
 	pif_edges_log();
 	if (ioPadGetInfo(&info) != 0)
 		return 0;
+	bool intercepted = (info.info & 1) != 0;
+	if (intercepted != pause_ctl.intercepted)
+		salsa64_log("mandos: %s", intercepted ? "los tiene el sistema" : "de vuelta del sistema");
+	bool sys = intercepted || pause_ctl.system;
 	for (unsigned i = 0; i < SALSA64_PIF_PORTS; i++) {
-		struct salsa64_pad p = { 0, 0, 0, i == 0 };
 		if (present[i] != !!info.status[i]) {
 			present[i] = !!info.status[i];
 			salsa64_log("mando %u %s", i + 1, present[i] ? "conectado" : "desconectado");
-			last[i] = (struct salsa64_ds3){ 0, 128, 128, 128, 128 };  /* nada pegado */
+			last[i] = neutral;  /* nada pegado */
 		}
+		if (info.status[i] && ioPadGetData(i, &data) == 0 && data.len > 0 && !sys)
+			last[i] = ds3_from(&data);
+		if (sys)
+			last[i] = neutral;
+		raw[i] = info.status[i] ? last[i].buttons : 0;
+	}
+	enum pausectl_action act = pausectl_pads(&pause_ctl, raw, intercepted, combos_on != 0, game);
+	for (unsigned i = 0; i < SALSA64_PIF_PORTS; i++) {
+		struct salsa64_pad p = { 0, 0, 0, i == 0 };
 		if (info.status[i]) {
-			if (ioPadGetData(i, &data) == 0 && data.len > 0)
-				last[i] = ds3_from(&data);
 			/* Los sticks del DS3 tal como llegan, para revisar el mapeo. */
 			const struct salsa64_ds3 *a = &last[i], *b = &raw_logged[i];
 			if (abs(a->lx - b->lx) >= 40 || abs(a->ly - b->ly) >= 40 ||
@@ -671,11 +753,9 @@ static int update_pads(uint32_t *buttons)
 				raw_logged[i] = *a;
 			}
 			struct salsa64_ds3 d = last[i];
-			d.buttons = pad_combos(i, d.buttons);
+			d.buttons = pad_combos(i, game[i]);
 			salsa64_padmap_apply(&padmap, &d, &p);
-			all |= last[i].buttons;
-			if ((last[i].buttons & quit) == quit)
-				exit = 1;
+			all |= game[i];
 		}
 		pads[i] = p;
 
@@ -699,7 +779,7 @@ static int update_pads(uint32_t *buttons)
 	pads_publish(pads);
 	if (buttons)
 		*buttons = all;
-	return exit;
+	return act == PAUSECTL_EXIT;
 }
 
 /* ---- ROM ------------------------------------------------------------------ */
@@ -1121,6 +1201,7 @@ static void log_jpeg(void)
  * hasta que presentación termina (state_barrier). */
 static void emu_park(void)
 {
+	beat.emu_at = "estado guardado";
 	lwsync();
 	state_parked = 1;
 	wake();
@@ -1132,23 +1213,50 @@ static void emu_park(void)
 	pacer_init(&pacer, pacer.enabled, pacer_sleep, NULL);
 }
 
+/* Pausa (menú del sistema, cuadro de salir): quieta en el límite del campo
+ * hasta que presentación baje pause_req. Las tareas del RSP en vuelo
+ * terminan solas en su SPE y su fin emulado llega en el campo siguiente;
+ * el AI no entrega nada, y el audio calla aparte (audio_out_pause). */
+static void emu_pause(void)
+{
+	beat.emu_at = "pausa";
+	lwsync();
+	emu_paused = 1;
+	wake();
+	while (pause_req && running)
+		sysUsleep(2000);
+	lwsync();
+	emu_paused = 0;
+	/* El reloj saltó lo que duró la pausa: el ritmo empieza de nuevo. */
+	pacer_init(&pacer, pacer.enabled, pacer_sleep, NULL);
+}
+
 static void emu_thread(void *arg)
 {
 	(void)arg;
 	while (running) {
+		beat.emu++;
+		if (pause_req) {
+			emu_pause();
+			continue;
+		}
 		uint64_t t0 = sysGetSystemTime();
 		/* Al ritmo de la tele emulada; la medición A/B va al máximo y
 		 * queda fuera del ritmo (ni espera ni avanza la referencia). */
 		int paced = bench.stage != 1 && bench.stage != 2;
 		if (paced) {
+			beat.emu_at = "ritmo";
 			pacer_wait(&pacer, t0);
 			uint64_t tp = sysGetSystemTime();
 			emu_stats.us_pace += tp - t0;
 			t0 = tp;
 		}
+		beat.emu_at = "mandos";
 		pads_apply();  /* después de la espera: lo más reciente de los mandos */
+		beat.emu_at = "campo";
 		uint64_t cycles = salsa64_n64_run_field(&n64);
 		uint64_t t1 = sysGetSystemTime();
+		beat.emu_at = "fin del campo";
 		pif_edges_note();
 		log_unknown_gbi();
 		log_jpeg();
@@ -1161,6 +1269,7 @@ static void emu_thread(void *arg)
 		int req = state_req;
 		if (req)
 			state_quiet = salsa64_rsp_quiesce(&n64.bus);
+		beat.emu_at = "encolar";
 		post_field(req ? FIELD_STATE : 0);
 		/* audio_out: si el audio necesita este hilo (fin de cada tarea
 		 * de audio), aquí. */
@@ -1176,6 +1285,7 @@ static void emu_thread(void *arg)
 		if (req)
 			emu_park();
 	}
+	beat.emu_at = "terminado";
 	lwsync();
 	emu_done = 1;
 	wake();
@@ -1204,7 +1314,23 @@ static struct {
 	 * framebuffer del VI, también en campos saltados) y presentados en
 	 * total (no se vacían con las estadísticas). */
 	uint32_t last_origin, game_frames, frames_total;
+	/* Pausa: qué fue lo último que se vio (para repetirlo, present_still),
+	 * cuándo fue el último flip y cuántos cuadros se repitieron. */
+	enum { STILL_NONE, STILL_RSX, STILL_FB } still;
+	uint64_t t_flip;
+	uint32_t still_frames;
 } pres = { .view = { RSXKIT_SCALE_FIT, RSXKIT_FILTER_LINEAR, 4.0f / 3.0f } };
+
+/* Lo que va encima del juego: aviso, contador y, si está, el cuadro de
+ * START + SELECT. */
+static void present_overlay(uint64_t now)
+{
+	if (!ui_ok)
+		return;
+	osd_draw(&fps, now, ui_lw, ui_lh);
+	if (pause_ctl.dialog)
+		osd_confirm_draw(in_menu ? "¿Volver al menú?" : "¿Salir al XMB?", "×: Sí     ○: No", ui_lw, ui_lh);
+}
 
 /* Presenta (o salta) un campo encolado. */
 static void present_field(const struct field_msg *m, uint64_t now)
@@ -1244,9 +1370,11 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	struct salsa64_vi_frame shown = m->f;
 	shown.width -= crop.left + crop.right;
 	shown.height -= crop.top + crop.bottom;
+	pres.still = STILL_NONE;
 	if (m->f.width) {
 		if (salsa64_rdp_present(&m->f, m->field, &pres.view, &crop, &r)) {
 			pres.rsx_frames++;
+			pres.still = STILL_RSX;
 			if (gfxtest_on && pres.result == SELFTEST_RUNNING)
 				check_gfx = gfxtest_want_screen();
 		} else if (have) {
@@ -1255,6 +1383,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 			rsxkit_fb_upload(pres.fb, snap_buf[slot] + crop.top * line + crop.left * m->f.bpp, shown.width,
 					 shown.height, line, m->f.bpp == 4 ? RSXKIT_RGBA8888 : RSXKIT_RGBA5551);
 			rsxkit_fb_draw(pres.fb, &pres.view, &r);
+			pres.still = STILL_FB;
 		} else {
 			pres.blank++;
 		}
@@ -1296,14 +1425,16 @@ static void present_field(const struct field_msg *m, uint64_t now)
 			    salsa64_rdp_dump(SALSA64_DATA_DIR "/gfxdump.bin") ? "bien" : "FALLO");
 		pres.dump_field = 0;
 	}
-	if (ui_ok)
-		osd_draw(&fps, sysGetSystemTime(), ui_lw, ui_lh);
+	present_overlay(sysGetSystemTime());
 	/* audio_out: una vez por campo presentado (estadísticas y volcado). */
 	uint64_t t1 = sysGetSystemTime();
 	audio_out_field(t1);
+	beat.pres_at = "flip";
 	rsxkit_frame_end();
+	beat.pres_at = "cola";
 	pres.frames_total++;
 	uint64_t t2 = sysGetSystemTime();
+	pres.t_flip = t2;
 	pres.us_present += t1 - t0;
 	pres.us_flip += t2 - t1;
 	pres.presented++;
@@ -1334,6 +1465,29 @@ static void present_field(const struct field_msg *m, uint64_t now)
 				bench_request = 1;
 		}
 	}
+}
+
+/* En pausa no llegan campos: se repite lo último que se vio (sin traducir
+ * nada ni tocar la tabla de destinos ni la RDRAM) con lo de encima, y el
+ * flip sigue al ritmo de la tele: el sistema lo necesita con su menú
+ * abierto, y así el cuadro de salir se dibuja sobre el juego. */
+static void present_still(void)
+{
+	uint64_t now = sysGetSystemTime();
+	rsxkit_rect r;
+	beat.pres_at = "cuadro repetido";
+	rsxkit_frame_begin(0x000000);
+	if (pres.still == STILL_RSX && !salsa64_rdp_present_again(&r))
+		pres.still = STILL_NONE;  /* el destino se soltó: negro */
+	else if (pres.still == STILL_FB)
+		rsxkit_fb_draw(pres.fb, &pres.view, &r);
+	present_overlay(now);
+	beat.pres_at = "flip (pausa)";
+	rsxkit_frame_end();
+	beat.pres_at = "pausa";
+	pres.frames_total++;
+	pres.still_frames++;
+	pres.t_flip = sysGetSystemTime();
 }
 
 /* Consume lo encolado: campos en orden y, al final, las tareas gráficas que
@@ -1665,6 +1819,42 @@ static void state_test_step(void)
 	}
 }
 
+/* Lo que pide pause_ctl (menú del sistema, cuadro de salir) pasa a la
+ * emulación y al audio; cada cambio, al log. */
+static struct {
+	uint64_t t0;      /* inicio de la pausa en curso */
+	uint32_t still0;  /* cuadros repetidos al empezarla */
+} pause_log;
+
+static void pause_update(void)
+{
+	uint32_t want = pausectl_reasons(&pause_ctl), was = pause_req;
+	if (sys_no_pause)
+		want &= ~PAUSECTL_SYSTEM;
+	if (want == was)
+		return;
+	uint64_t now = sysGetSystemTime();
+	if (want & ~was & PAUSECTL_CONFIRM)
+		salsa64_log("salida: START + SELECT, cuadro «%s» (× sí, ○ no)", in_menu ? "¿Volver al menú?" : "¿Salir al XMB?");
+	if (was & ~want & PAUSECTL_CONFIRM)
+		salsa64_log("salida: «No», el juego sigue");
+	if (!was) {
+		pause_log.t0 = now;
+		pause_log.still0 = pres.still_frames;
+		audio_out_pause(true);
+		salsa64_log("pausa: emulación detenida en el campo %u (%s%s%s)", n64.bus.vi.fields,
+			    want & PAUSECTL_SYSTEM ? "menú del sistema" : "", want == (PAUSECTL_SYSTEM | PAUSECTL_CONFIRM) ? " y " : "",
+			    want & PAUSECTL_CONFIRM ? "cuadro de salir" : "");
+	} else if (!want) {
+		audio_out_pause(false);
+		salsa64_log("pausa: la emulación sigue tras %.1f s (%u cuadros repetidos, emulación %s)",
+			    (now - pause_log.t0) / 1e6, pres.still_frames - pause_log.still0,
+			    emu_paused ? "quieta en el límite del campo" : "todavía sin detenerse");
+	}
+	lwsync();
+	pause_req = want;
+}
+
 /* Lo que es de un juego vuelve a como al arrancar el programa: colas entre
  * hilos, ranuras de la copia del VI, contadores y estadísticas, banderas de
  * las pruebas, capturas. Antes de cada run_game. */
@@ -1706,6 +1896,12 @@ static void game_reset(void)
 	pres.presented = pres.blank = pres.rsx_frames = pres.skipped = 0;
 	pres.behind_sum = pres.behind_max = 0;
 	pres.last_origin = pres.game_frames = pres.frames_total = 0;
+	pres.still = STILL_NONE;
+	pres.t_flip = 0;
+	pres.still_frames = 0;
+	pause_req = 0;
+	emu_paused = 0;
+	pausectl_game_end(&pause_ctl);
 	state_req = STATE_NONE;
 	state_parked = 0;
 	state_quiet = 0;
@@ -1951,41 +2147,65 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		game_close();
 		return GAME_FAILED;
 	}
+	emu_live = 1;
 	salsa64_log("hilos: emulación con prioridad %d, presentación con 1001", EMU_PRIO);
 	/* Avisos y atajos con SELECT (estados guardados, contador de FPS). */
 	ui_init_once();
 	fps.on = fps_setting_load();
 	osd_fps_reset(&fps);
+	pause_ctl.confirm = confirm_setting_load();
+	sys_no_pause = file_exists(NO_PAUSE_PATH);
+	if (sys_no_pause)
+		salsa64_log("pausa: %s presente, el menú del sistema no pausa la emulación (diagnóstico)", NO_PAUSE_PATH);
 	combos_on = 1;
 	salsa64_log("estados: %s/<juego>.st0 … .st%d; SELECT + R1 guarda, + L1 carga, + izquierda/derecha cambia de "
-		    "ranura; FPS %s (SELECT + △)", STATES_DIR, SALSA64_STATE_SLOTS - 1, fps.on ? "sí" : "no");
+		    "ranura; FPS %s (SELECT + △); START + SELECT %s", STATES_DIR, SALSA64_STATE_SLOTS - 1,
+		    fps.on ? "sí" : "no", pause_ctl.confirm ? "pregunta antes de salir" : "sale directo (confirmar = no)");
 
 	uint64_t now = sysGetSystemTime();
 	pres.t_shot = now;
 	stats(now);
 	while (running) {
+		beat.pres++;
+		beat.pres_at = "espera";
 		sysSemWait(wake_sem, WAKE_US);
+		beat.pres_at = "sysutil";
 		sysUtilCheckCallback();
+		beat.pres_at = "mandos";
 		if (update_pads(NULL)) {
-			salsa64_log("START + SELECT: %s", in_menu ? "vuelta al menú" : "salida");
+			salsa64_log("START + SELECT%s: %s", pause_ctl.confirm ? " y ×" : "", in_menu ? "vuelta al menú" : "salida");
 			break;
 		}
+		pause_update();
 		now = sysGetSystemTime();
+		beat.pres_at = "guardado";
 		savefile_write_staged(&save_file, now);
+		beat.pres_at = "cola";
+		uint32_t shown = pres.frames_total;
 		drain(now, 1);
-		if (state_parked && state_req)
+		if (state_parked && state_req) {
+			beat.pres_at = "barrera";
 			state_barrier();
+		}
+		/* En pausa: el último cuadro otra vez si no llegó ninguno. */
+		if (pause_req && pres.frames_total == shown && sysGetSystemTime() - pres.t_flip >= STILL_US)
+			present_still();
 		if (state_test.stage)
 			state_test_step();
 		if (fps.on)
 			osd_fps_sample(&fps, now, n64.bus.vi.fields, n64.cpu.cycles, pres.game_frames, pres.frames_total);
 		stats(now);
 	}
+	beat.pres_at = "cierre";
 	combos_on = 0;
 	if (app_quit)
 		salsa64_log("«Salir del juego» del sistema");
+	if (pause_req)
+		salsa64_log("pausa: el juego se cierra en pausa (%.1f s)", (sysGetSystemTime() - pause_log.t0) / 1e6);
+	pausectl_game_end(&pause_ctl);
 
-	/* Parar la emulación sin dejarla esperando un juego de búferes. */
+	/* Parar la emulación sin dejarla esperando un juego de búferes (si
+	 * estaba en pausa, running = 0 la suelta). */
 	running = 0;
 	while (!emu_done) {
 		drain(sysGetSystemTime(), 0);
@@ -1993,6 +2213,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	}
 	u64 ret;
 	sysThreadJoin(emu_tid, &ret);
+	emu_live = 0;
 	drain(sysGetSystemTime(), 0);
 	game_close();
 	return app_quit || !in_menu ? GAME_QUIT : GAME_TO_MENU;
@@ -2142,6 +2363,7 @@ static void menu_show(const char *shot)
 		salsa64_screenshot(shot, &f, &r);
 		salsa64_log("menú: captura %s", shot);
 	}
+	beat.pres_at = "menú: flip";
 	rsxkit_frame_end();
 }
 
@@ -2176,8 +2398,8 @@ static void menu_settings_load(void)
 static void menu_settings_save(void)
 {
 	bool ok = settings_write(&mn.settings);
-	salsa64_log("menú: fondo animado %s, FPS %s%s", mn.settings.waves ? "sí" : "no", mn.settings.fps ? "sí" : "no",
-		    ok ? "" : " (no se pudo guardar)");
+	salsa64_log("menú: fondo animado %s, FPS %s, confirmar al salir %s%s", mn.settings.waves ? "sí" : "no",
+		    mn.settings.fps ? "sí" : "no", mn.settings.confirm ? "sí" : "no", ok ? "" : " (no se pudo guardar)");
 }
 
 /* El contador de velocidad se recuerda en menu.cfg («fps = si|no»), también
@@ -2187,6 +2409,15 @@ static bool fps_setting_load(void)
 	struct menu_settings s;
 	settings_read(&s);
 	return s.fps;
+}
+
+/* «Confirmar al salir» (menu.cfg, «confirmar = si|no»; sí sin el archivo),
+ * también con embedded. */
+static bool confirm_setting_load(void)
+{
+	struct menu_settings s;
+	settings_read(&s);
+	return s.confirm;
 }
 
 static void fps_setting_save(bool on)
@@ -2255,7 +2486,9 @@ static enum game_end menu_open(const struct rom_entry *e)
 	menu.loading = NULL;
 	uint32_t size = 0;
 	/* Búfer a la medida de la ROM, solo mientras dura el juego. */
+	beat.pres_at = "menú: leyendo la ROM";
 	uint8_t *rom = read_rom_file(path, NULL, 0, &size);
+	beat.pres_at = "arranque del juego";
 	if (!rom) {
 		salsa64_log("menú: no se pudo leer %s", path);
 		menu_set_status(&menu, "No se pudo leer %s", path);
@@ -2321,9 +2554,13 @@ static int menu_loop(void)
 	uint32_t frames = 0;
 	int failed = 0;
 	while (!app_quit) {
+		beat.pres++;
+		beat.pres_at = "menú: sysutil";
 		sysUtilCheckCallback();
+		beat.pres_at = "menú: mandos";
 		uint32_t buttons;
 		update_pads(&buttons);
+		beat.pres_at = "menú";
 		if (pres.autotest && mn.next_test < mn.ntest && mn.test[mn.next_test][0] == '@') {
 			menu_test_video(mn.test[mn.next_test++]);
 			continue;
@@ -2349,9 +2586,11 @@ static int menu_loop(void)
 				overscan_save(menu.set.overscan);
 			if (menu.set.resolution != mn.settings.resolution || menu.set.scale != mn.settings.scale)
 				video_save(&menu.set);
-			if (menu.set.waves != mn.settings.waves || menu.set.fps != mn.settings.fps) {
+			if (menu.set.waves != mn.settings.waves || menu.set.fps != mn.settings.fps ||
+			    menu.set.confirm != mn.settings.confirm) {
 				mn.settings.waves = menu.set.waves;
 				mn.settings.fps = menu.set.fps;
+				mn.settings.confirm = menu.set.confirm;
 				menu_settings_save();
 			}
 			mn.settings = menu.set;
@@ -2425,10 +2664,64 @@ static const rsxkit_config *video_config_for(int resolution, rsxkit_config *cfg)
 	return cfg;
 }
 
+/* Latido: cada WATCH_US mira que presentación (juego o menú) y emulación
+ * (cuando corre: no en pausa ni en la barrera de un estado) sigan dando
+ * vueltas. Si una se queda quieta más de STALL_US, al log dónde está cada
+ * una (beat.*_at) y lo que hay en vuelo, y otra vez cada STALL_LOG_US: un
+ * cuelgue (el del botón PS, 2026-10-11) deja su huella en el log UDP aunque
+ * el de archivo pierda las últimas líneas. Solo lee; con más prioridad que
+ * los dos para correr aunque uno gire. */
+static void watch_thread(void *arg)
+{
+	(void)arg;
+	uint32_t pres0 = beat.pres, emu0 = beat.emu;
+	uint64_t now = sysGetSystemTime(), pres_t = now, emu_t = now, pres_said = 0, emu_said = 0;
+	while (!beat.quit) {
+		sysUsleep(WATCH_US);
+		now = sysGetSystemTime();
+		if (beat.pres != pres0 || !beat.pres) {  /* antes de la primera vuelta: el arranque */
+			if (pres_said)
+				salsa64_log("latido: presentación se movió de nuevo tras %.1f s", (now - pres_t) / 1e6);
+			pres0 = beat.pres;
+			pres_t = now;
+			pres_said = 0;
+		} else if (now - pres_t >= STALL_US && (!pres_said || now - pres_said >= STALL_LOG_US)) {
+			pres_said = now;
+			salsa64_log("latido: presentación quieta hace %.1f s en «%s» (emulación en «%s»; campo %u, %u en "
+				    "cola; menú del sistema %s, pausa 0x%x, emulación %s; audio %llu bloques)",
+				    (now - pres_t) / 1e6, beat.pres_at, emu_live ? beat.emu_at : "sin juego", n64.bus.vi.fields,
+				    field_head - field_tail, pause_ctl.system ? "abierto" : "cerrado", pause_req,
+				    emu_paused ? "quieta" : "andando", (unsigned long long)audio_out_blocks());
+		}
+		bool expect = emu_live && running && !emu_done && !emu_paused && !state_parked;
+		if (!expect || beat.emu != emu0) {
+			if (emu_said && expect)
+				salsa64_log("latido: emulación se movió de nuevo tras %.1f s", (now - emu_t) / 1e6);
+			emu0 = beat.emu;
+			emu_t = now;
+			emu_said = 0;
+		} else if (now - emu_t >= STALL_US && (!emu_said || now - emu_said >= STALL_LOG_US)) {
+			emu_said = now;
+			salsa64_log("latido: emulación quieta hace %.1f s en «%s» (campo %u, %u emulados, %u en cola, RSP "
+				    "%s, %u tareas gráficas terminadas, %u esperas al SPE; presentación en «%s»; pausa 0x%x)",
+				    (now - emu_t) / 1e6, beat.emu_at, n64.bus.vi.fields, emu_stats.fields,
+				    field_head - field_tail, n64.bus.rsp.busy ? "ocupado" : "libre", salsa64_rdp_tasks_done(),
+				    gfx_spu.waits, beat.pres_at, pause_req);
+		}
+	}
+	sysThreadExit(0);
+}
+
 int main(void)
 {
 	salsa64_log_init("salsa64");
 	pres.autotest = salsa64_autotest();
+	sys_ppu_thread_t watch_tid;
+	bool watching = sysThreadCreate(&watch_tid, watch_thread, NULL, WATCH_PRIO, 0x10000, THREAD_JOINABLE,
+					(char *)"salsa64_latido") == 0;
+	if (!watching)
+		salsa64_log("latido: no se pudo crear su hilo");
+	pausectl_init(&pause_ctl, true);
 
 	menu_settings_default(&video_cfg);
 	video_load(&video_cfg);
@@ -2531,6 +2824,11 @@ int main(void)
 	salsa64_rdp_shutdown();
 	rsxkit_shutdown();
 	ioPadEnd();
+	if (watching) {
+		u64 rv;
+		beat.quit = 1;
+		sysThreadJoin(watch_tid, &rv);
+	}
 	salsa64_log("salida normal%s", app_quit ? " («Salir del juego» del sistema)" : "");
 	salsa64_log_shutdown();
 	return status;
