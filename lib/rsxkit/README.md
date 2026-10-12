@@ -150,7 +150,7 @@ memoria de video):
 | `void rsxkit_texture_sync(void)` | Antes del primer dibujo que lea como textura un destino dibujado en el mismo tramo: espera al RSX e invalida su caché de texturas. |
 | `int rsxkit_target_copy(dst, src)` | Copia todo `src` en `dst` (para leer lo que se está dibujando: se copia y se lee la copia). Deja `dst` ligado sin profundidad. |
 | `int rsxkit_target_fill(t, src_offset, src_pitch, w, h, format)` | Pinta todo el destino con una imagen de la memoria principal mapeada, estirada sin filtro (cebar un destino con lo que la CPU dejó en su memoria). Deja `t` ligado sin profundidad. |
-| `int rsxkit_target_read(t, src, dst_offset, dst_pitch, img_w, img_h, format)` | Reduce la región `src` del destino a `img_w × img_h` (filtro lineal) y la escribe en memoria principal mapeada, en `RSXKIT_RGB565` o `RSXKIT_XRGB8888`, con el pipeline 3D sobre una superficie en memoria principal. Encola y vuelve: `rsxkit_fence` / `rsxkit_fence_wait` dicen cuándo está. Los píxeles de 16 bits quedan en orden de bytes de la PS3. Deshace lo ligado. |
+| `int rsxkit_target_read(t, src, dst_offset, dst_pitch, img_w, img_h, format)` | Reduce la región `src` del destino a `img_w × img_h` (filtro lineal) y la escribe en memoria principal mapeada, en `RSXKIT_RGB565` o `RSXKIT_XRGB8888`, con el pipeline 3D sobre una superficie en memoria principal. Encola y vuelve: `rsxkit_fence` / `rsxkit_fence_wait` dicen cuándo está. Los píxeles de 16 bits quedan en orden de bytes de la PS3, sin tramado (el RSX no suma su patrón de *dithering*: una imagen que vuelve por aquí cada cuadro lo acumularía). Deshace lo ligado. |
 | `void rsxkit_pixels_565_to_5551(dst, src, n)` | RGB565 → RGBA5551 con alfa 1 (el formato de 16 bits de una consola), cuatro píxeles por palabra; `dst` y `src` pueden ser el mismo. |
 
 ### Dibujo 3D
@@ -178,8 +178,10 @@ rsxkit_draw_triangles(&d, first, count);
 - **Términos con programa generado** (`nterms > 0`): ver «Generador de
   fragment programs» más abajo.
 - **Texturas** (`rsxkit_texture`): lineales, en memoria local o principal,
-  con los formatos de `rsxkit_format`, repetición/espejo/límite, filtro y
-  la transformación `u = s·xf[0] + xf[2]`, `v = t·xf[1] + xf[3]`.
+  con los formatos de `rsxkit_format`, repetición, espejo, límite o espejo
+  una sola vez (`RSXKIT_WRAP_MIRROR_ONCE`: u en [−1, 0] es el reflejo de
+  [0, 1] y fuera de [−1, 1] se fija el borde), filtro y la transformación
+  `u = s·xf[0] + xf[2]`, `v = t·xf[1] + xf[3]`.
 - **Estado**: mezcla (opaca, alfa, aditiva, sin color), profundidad (prueba
   LEQUAL, escritura, desplazamiento para calcomanías), recorte de caras
   (frente = antihorario con la y hacia arriba), prueba de alfa, tijeras
