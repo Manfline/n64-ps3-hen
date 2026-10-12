@@ -53,7 +53,6 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 	g->job = job;
 	g->res = res;
 	g->near_clip = !(job->flags & GFX_JOB_NONEAR);
-	g->aa_grow = (job->flags & GFX_JOB_AAGROW) != 0;
 	if (job->flags & GFX_JOB_RESET)
 		gfx_rdp_reset(g);
 	reset_rsp(g);

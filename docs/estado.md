@@ -12,19 +12,23 @@ una cuña de hasta 0,56 px por la que se ve el relleno negro con el tinte
 azul del rectángulo final de la escena. La N64 la tapa porque con AA_EN el
 RDP escribe todo píxel con alguna de sus 8 muestras de cobertura dentro.
 
-Ahora `gfx_draw.aa` marca los triángulos opacos sin prueba de alfa con
-AA_EN y la HLE los ensancha (`aa_grow`): cada arista se corre hacia afuera
-lo que llega una de las 8 muestras respecto del centro en su normal (0,5 px
-abajo y a la derecha, 0,25 arriba y a la izquierda), con los vértices
-nuevos sobre el plano del triángulo (los atributos no se mueven). Primero se
-probó POLYGON_SMOOTH en el RSX: en la PS3 real no hace nada (las líneas
-seguían; el autor: «el problema está cuando se aumenta la resolución
-interna»: a 3× más muestras caen en la cuña). El ensanchado es geométrico y
-cierra la cuña a cualquier escala. Con el estado del autor en el túnel, el
-host pasa de 11 píxeles de grieta a 0. En siete juegos, cada 500 campos,
-solo cambian bordes de un píxel (los polígonos AA quedan algo más gordos,
-como en la N64). Pruebas: `gfx_aa_grow` (vértices esperados de un triángulo
-rectángulo) y `gfx_aa_flag` (qué modos lo encienden).
+`gfx_draw.aa` marca los triángulos opacos sin prueba de alfa con AA_EN
+(prueba `gfx_aa_flag`), pero las dos formas de reproducir la cobertura
+fallaron en la PS3 real (el autor, 2026-10-12):
+- POLYGON_SMOOTH del RSX: no hace nada (el volcado 2529 traía la marca en
+  100 de 109 dibujos y las líneas seguían). Ya está quitado.
+- Ensanchar los triángulos en la HLE (cada arista corrida lo que llegan las
+  8 muestras, vértices nuevos sobre el plano del triángulo): sí tapaba las
+  líneas de Dam, pero a escala interna alta engorda todos los bordes (0,5 px
+  de N64 son 1,5 px a 3×) y en mallas densas «los polígonos se superponen»,
+  en Zelda y en los modelos de GoldenEye; «se ve peor todo lo demás». Quitado
+  también, incluso como opción por juego. En el SPE costaba ~1 µs más por
+  triángulo (sin que el PPE esperara).
+Las líneas azules de GoldenEye quedan pendientes. Camino que falta probar:
+multimuestreo del RSX (superficie con 4 muestras y resolución al presentar)
+en rsxkit, que cubriría la cuña con la mezcla del fondo, como el VI de la N64
+a 1×; cuesta memoria y relleno. O ensanchar solo las aristas que no comparte
+ningún otro triángulo de la malla, lo que pide conocer la malla.
 
 `salsa64-run --raster-dump` dejaba volteados por palabras los bytes de
 `nterms` a `pad` de los volcados big-endian: los dibujos con combiners

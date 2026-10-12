@@ -21,11 +21,6 @@ void salsa64_gfx_job(struct gfx_job *job, const struct salsa64_bus *bus, const s
 	 * que el recorte quitaría; no está verificado contra hardware. */
 	if (bus->rsp.gfx_nonear || gbi == SALSA64_GBI_F3DPD)
 		job->flags |= GFX_JOB_NONEAR;
-	/* Cobertura AA ensanchando los triángulos: solo GoldenEye (código del
-	 * encabezado). Tapa las líneas azules de Dam; en Zelda, a escala
-	 * interna 3×, los polígonos se veían encimados. */
-	if (bus->rom && bus->rom_size > 0x3E && !memcmp(bus->rom + 0x3B, "NGE", 3))
-		job->flags |= GFX_JOB_AAGROW;
 }
 
 uint32_t salsa64_gfx_task_flags(const struct gfx_result *res)

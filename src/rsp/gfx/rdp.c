@@ -462,101 +462,6 @@ static void lerp_vertex(struct gfx_vertex *o, const struct gfx_vertex *a, const 
 	o->pad = 0;
 }
 
-/* Cobertura del RDP con AA_EN: escribe el píxel si alguna de sus 8
- * muestras (cuatro subscanlines de un cuarto de píxel, con dos x
- * alternadas) cae dentro del triángulo. El RSX y el host solo miran el
- * centro (POLYGON_SMOOTH no lo cambia en la PS3 real), así que el
- * triángulo se ensancha: cada arista se corre hacia afuera lo más que
- * llega una muestra respecto del centro en esa dirección (0,5 px abajo y a
- * la derecha, 0,25 arriba y a la izquierda). Los vértices nuevos van sobre
- * el plano del triángulo, con pesos de perspectiva: los atributos quedan
- * donde estaban. Eso tapa las uniones en T del modelo (piso y pared de
- * Dam en GoldenEye). Solo con GFX_JOB_AAGROW: a escala interna alta
- * engorda todos los bordes (1,5 px a 3×), y la N64 a 1× los suaviza con
- * el filtro del VI. */
-static const float aa_reach[8][2] = {
-	{ 0.5f, 0.5f },  { 0.0f, 0.5f },  { 0.25f, 0.25f },  { -0.25f, 0.25f },
-	{ 0.5f, 0.0f },  { 0.0f, 0.0f },  { 0.25f, -0.25f }, { -0.25f, -0.25f },
-};
-#define AA_MAX_GROW 1.5f  /* lo más que se mueve un vértice en x o en y (ángulos agudos) */
-
-static uint8_t aa_byte(float v)
-{
-	return v <= 0.0f ? 0 : v >= 255.0f ? 255 : (uint8_t)(v + 0.5f);
-}
-
-/* En el SPE la división son varias instrucciones: un recíproco por
- * vértice, por arista y por suma, y lo demás multiplicaciones. */
-static void aa_grow(struct gfx_vertex v[3])
-{
-	float iw[3], sx[3], sy[3];
-	for (int i = 0; i < 3; i++) {
-		if (!(v[i].w > 1e-6f))
-			return;
-		iw[i] = 1.0f / v[i].w;
-		sx[i] = v[i].x * iw[i];
-		sy[i] = v[i].y * iw[i];
-	}
-	float area = (sx[1] - sx[0]) * (sy[2] - sy[0]) - (sy[1] - sy[0]) * (sx[2] - sx[0]);
-	if (!(area > 1e-3f || area < -1e-3f))
-		return;
-	float ia = 1.0f / area;
-	float sgn = area > 0.0f ? 1.0f : -1.0f;
-	/* Arista i, de v[i] a v[i + 1]: normal hacia afuera (sin normalizar) y
-	 * su recta corrida, n·p = c. */
-	float nx[3], ny[3], c[3];
-	for (int i = 0; i < 3; i++) {
-		int j = i == 2 ? 0 : i + 1;
-		nx[i] = sgn * (sy[j] - sy[i]);
-		ny[i] = -sgn * (sx[j] - sx[i]);
-		float h = 0.0f;
-		for (int k = 0; k < 8; k++) {
-			float d = aa_reach[k][0] * nx[i] + aa_reach[k][1] * ny[i];
-			if (d > h)
-				h = d;
-		}
-		c[i] = nx[i] * sx[i] + ny[i] * sy[i] + h;
-	}
-	struct gfx_vertex in[3] = { v[0], v[1], v[2] };
-	for (int i = 0; i < 3; i++) {
-		int e = i == 0 ? 2 : i - 1;  /* la otra arista que llega a v[i] */
-		float det = nx[e] * ny[i] - ny[e] * nx[i];
-		if (!(det > 1e-9f || det < -1e-9f))
-			continue;
-		float idet = 1.0f / det;
-		float px = (c[e] * ny[i] - ny[e] * c[i]) * idet, py = (nx[e] * c[i] - c[e] * nx[i]) * idet;
-		float dx = px - sx[i], dy = py - sy[i];
-		float m = (dx < 0.0f ? -dx : dx) > (dy < 0.0f ? -dy : dy) ? (dx < 0.0f ? -dx : dx) : (dy < 0.0f ? -dy : dy);
-		if (m > AA_MAX_GROW) {
-			float k = AA_MAX_GROW / m;
-			px = sx[i] + dx * k;
-			py = sy[i] + dy * k;
-		}
-		/* Baricéntricas de pantalla y, divididas por w, los pesos sobre
-		 * los vértices de recorte. */
-		float l0 = ((sx[1] - px) * (sy[2] - py) - (sy[1] - py) * (sx[2] - px)) * ia;
-		float l1 = ((sx[2] - px) * (sy[0] - py) - (sy[2] - py) * (sx[0] - px)) * ia;
-		float b[3] = { l0 * iw[0], l1 * iw[1], (1.0f - l0 - l1) * iw[2] };
-		float sum = b[0] + b[1] + b[2];
-		if (!(sum > 1e-12f))
-			continue;
-		float isum = 1.0f / sum;
-		for (int k = 0; k < 3; k++)
-			b[k] *= isum;
-		struct gfx_vertex *o = &v[i];
-		o->x = b[0] * in[0].x + b[1] * in[1].x + b[2] * in[2].x;
-		o->y = b[0] * in[0].y + b[1] * in[1].y + b[2] * in[2].y;
-		o->z = b[0] * in[0].z + b[1] * in[1].z + b[2] * in[2].z;
-		o->w = b[0] * in[0].w + b[1] * in[1].w + b[2] * in[2].w;
-		o->s = b[0] * in[0].s + b[1] * in[1].s + b[2] * in[2].s;
-		o->t = b[0] * in[0].t + b[1] * in[1].t + b[2] * in[2].t;
-		o->r = aa_byte(b[0] * in[0].r + b[1] * in[1].r + b[2] * in[2].r);
-		o->g = aa_byte(b[0] * in[0].g + b[1] * in[1].g + b[2] * in[2].g);
-		o->b = aa_byte(b[0] * in[0].b + b[1] * in[1].b + b[2] * in[2].b);
-		o->a = aa_byte(b[0] * in[0].a + b[1] * in[1].a + b[2] * in[2].a);
-	}
-}
-
 void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
 {
 	if (a >= GFX_MAX_VTX || b >= GFX_MAX_VTX || c >= GFX_MAX_VTX)
@@ -613,11 +518,6 @@ void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
 		o[3] = p[0];
 		o[4] = p[2];
 		o[5] = p[3];
-	}
-	if (g->aa_grow && g->draw.aa) {
-		aa_grow(o);
-		if (n == 4)
-			aa_grow(o + 3);
 	}
 }
 

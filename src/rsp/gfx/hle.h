@@ -181,7 +181,6 @@ struct gfx_state {
 	const struct gfx_job *job;
 	struct gfx_result *res;
 	bool near_clip;            /* recortar contra el plano cercano (sin GFX_JOB_NONEAR) */
-	bool aa_grow;              /* ensanchar los triángulos AA (GFX_JOB_AAGROW) */
 	bool dirty;                /* cambió algo del estado de dibujo */
 	uint8_t rect_clamp;        /* TEXRECT en curso: 1 limitar s, 2 limitar t; tile + 1 en 4 y 8 */
 	uint16_t rect_lim[2];      /* TEXRECT en curso: texels de s y t que muestrea (0: todos) */
