@@ -1780,13 +1780,22 @@ static void stats(uint64_t now)
 	if (use_rec) {
 		const struct salsa64_rec_stats *st = &rec.stats;
 		salsa64_log("recompilador: %llu bloques (%llu fuera de KSEG0), %u KB de caché, %llu entradas, "
-			    "%llu enlaces, %llu invalidados, %llu vaciados, %llu desalojos, %llu traducciones, "
-			    "%llu instr. interpretadas",
+			    "%llu enlaces, %llu invalidados, %llu vaciados (ids %llu, enlaces %llu, RDRAM %llu, bucles %llu, "
+			    "ROM %llu, estado %llu, otros %llu), %llu desalojos, %llu traducciones, %llu dependen de FR "
+			    "(%llu gemelos, %llu salidas por FR, %llu por CU1), %llu instr. interpretadas",
 			    (unsigned long long)st->compiled, (unsigned long long)st->compiled_x,
 			    salsa64_rec_used(&rec) / 256, (unsigned long long)st->entries,
 			    (unsigned long long)st->linked, (unsigned long long)st->invalidated,
-			    (unsigned long long)st->flushes, (unsigned long long)st->evictions,
-			    (unsigned long long)st->vt_probes, (unsigned long long)st->interp_steps);
+			    (unsigned long long)st->flushes, (unsigned long long)st->flushes_by[SALSA64_REC_FLUSH_IDS],
+			    (unsigned long long)st->flushes_by[SALSA64_REC_FLUSH_LINKS],
+			    (unsigned long long)st->flushes_by[SALSA64_REC_FLUSH_RDRAM],
+			    (unsigned long long)st->flushes_by[SALSA64_REC_FLUSH_IDLE],
+			    (unsigned long long)st->flushes_by[SALSA64_REC_FLUSH_ROM],
+			    (unsigned long long)st->flushes_by[SALSA64_REC_FLUSH_STATE],
+			    (unsigned long long)st->flushes_by[SALSA64_REC_FLUSH_OTHER], (unsigned long long)st->evictions,
+			    (unsigned long long)st->vt_probes, (unsigned long long)st->fr_dep,
+			    (unsigned long long)st->fr_twins, (unsigned long long)st->fr_exits,
+			    (unsigned long long)st->cu1_exits, (unsigned long long)st->interp_steps);
 		if (rec.prof) {
 			char text[2048];
 			salsa64_rec_prof_report(rec.prof, &rec_prof_prev, spukit_tick_hz(), fields, text, sizeof text);
