@@ -86,6 +86,24 @@ static void task_tall_fill(uint32_t fb, uint32_t w, uint32_t lh, float x0, float
 	raster_task(&job, &res);
 }
 
+/* Lo mismo con un dibujo normal (1 ciclo) en vez de un relleno. */
+static void task_tall_draw(uint32_t fb, uint32_t w, uint32_t lh, float x0, float y0, float x1, float y1, uint32_t r,
+			   uint32_t g, uint32_t b)
+{
+	task_tall_fill(fb, w, lh, x0, y0, x1, y1, r, g, b);  /* arma el comando... */
+	((struct gfx_draw *)(cmd + sizeof(struct gfx_cmd)))->cycle = 0;  /* ...y se repite como 1 ciclo */
+	struct gfx_job job;
+	struct gfx_result res;
+	memset(&job, 0, sizeof job);
+	memset(&res, 0, sizeof res);
+	job.rdram_ea = (uint64_t)(uintptr_t)ram;
+	job.rdram_size = sizeof ram;
+	job.vtx_ea = (uint64_t)(uintptr_t)vtx;
+	job.cmd_ea = (uint64_t)(uintptr_t)cmd;
+	res.cmd_bytes = sizeof cmd;
+	raster_task(&job, &res);
+}
+
 /* Una tarea que pinta toda la color image `fb` (`w` de ancho, 16 bits). */
 static void task_fill_w(uint32_t fb, uint32_t w, uint32_t r, uint32_t g, uint32_t b)
 {
@@ -292,6 +310,12 @@ static void raster_tall_fill(void)
 	CHECK_EQ(b[230 * W + 5], 0x28323cu);
 	uint32_t bw = 0;
 	CHECK(raster_image(FB_A, &bw) == a);  /* sigue siendo el de 240 */
+	CHECK(raster_image(FB_A + 250 * LINE, &bw) == b);  /* no hay un destino de 459 */
+	/* Con un dibujo de verdad (la transición del cierre de DK64, que el CPU
+	 * lee después) la imagen de 320 × 459 sí se crea tal cual. */
+	task_tall_draw(FB_A, W, 459, 0, 0, (float)W, 459, 100, 110, 120);
+	const uint32_t *t = raster_image(FB_A + 250 * LINE, &bw);
+	CHECK(t && t != b);
 	raster_reset();
 }
 

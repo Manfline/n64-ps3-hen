@@ -504,6 +504,24 @@ static void acquire(void *ctx, struct gfx_job *job)
 
 /* Hasta qué línea llegan las tijeras de los dibujos que siguen a un
  * TARGET (hasta el siguiente): el alto mínimo de su superficie. */
+/* ¿Los dibujos hasta el próximo TARGET son todos rellenos (FILLRECT)? Una
+ * color image alta con solo rellenos limpia varios framebuffers de una vez
+ * (Star Fox 64, DK64) y se reparte; con dibujos de verdad es una imagen
+ * (la transición del cierre de DK64, de 320 × 459, que el CPU lee después)
+ * y se crea tal cual. */
+static bool fills_only(const struct set *s, uint32_t off, uint32_t cmd_bytes)
+{
+	while (off + sizeof(struct gfx_cmd) <= cmd_bytes) {
+		const struct gfx_cmd *c = (const struct gfx_cmd *)(s->cmd + off);
+		if (c->op == GFX_OP_END || c->op == GFX_OP_TARGET || c->size < sizeof *c)
+			break;
+		if (c->op == GFX_OP_DRAW && ((const struct gfx_draw *)c)->cycle != G_CYC_FILL)
+			return false;
+		off += c->size;
+	}
+	return true;
+}
+
 static uint32_t scissor_bottom(const struct set *s, uint32_t off, uint32_t cmd_bytes)
 {
 	uint32_t bottom = 0;
@@ -686,7 +704,7 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
 	/* Una color image imposible (la HLE la sacó de un comando mal
 	 * interpretado: Zelda al abrir la pausa manda anchos de 1495 y 3770) no
 	 * toca la tabla: reciclaría una ranura buena para nada. */
-	if (!width || width > 640 || rdp_targets_tall(width, min_lh)) {
+	if (!width || width > 640 || min_lh > 480) {
 		rdp.stats.targets_absurd++;
 		snprintf(rdp.last_get.how, sizeof rdp.last_get.how, "imposible, ignorada");
 		LOGN(10, "gfx: color image imposible %06x/%u (alto %u): se ignora", addr, width, min_lh);
@@ -1137,8 +1155,12 @@ static void translate(uint32_t n)
 		switch (c->op) {
 		case GFX_OP_TARGET: {
 			uint32_t lh = scissor_bottom(s, off + c->size, res->cmd_bytes), siz = c->c & 0xFF;
-			cur = get_target(c->a, c->b, (c->c >> 8) & 0xFF, siz, lh);
-			tall.rows = cur < 0 && c->b && c->b <= 640 && rdp_targets_tall(c->b, lh) ? lh : 0;
+			bool is_tall = c->b && c->b <= 640 && rdp_targets_tall(c->b, lh) &&
+				       fills_only(s, off + c->size, res->cmd_bytes);
+			cur = is_tall ? -1 : get_target(c->a, c->b, (c->c >> 8) & 0xFF, siz, lh);
+			if (is_tall)
+				snprintf(rdp.last_get.how, sizeof rdp.last_get.how, "alta, rellenos repartidos");
+			tall.rows = is_tall ? lh : 0;
 			tall.addr = c->a;
 			tall.width = c->b;
 			tall.bpp = siz == 3 ? 4 : siz == 2 ? 2 : 1;

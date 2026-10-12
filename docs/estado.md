@@ -30,6 +30,15 @@ Main lo reportó de la PS3 real con la rama del recompilador (DK64 al 100 %):
    entre los destinos que empiezan dentro (el último puede asomar por
    abajo), así los dos búferes quedan a la misma escala (en el host ya no
    aparece el destino de 459). Zelda y SM64 bien con el modo 1:1 nuevo.
+   **Corrección:** eso dejó negra «la escena del cierre» (el autor, con
+   main 5182004): esa misma color image de 320 × 459 lleva a veces dibujos
+   de verdad, no solo rellenos, y el CPU la copia después (en el log:
+   «imposible … copia 02a200/320 esperada PERDIDA»). Ahora una color image
+   es «alta» solo si todos sus dibujos hasta el próximo TARGET son
+   rellenos (`fills_only`, host y PS3); con dibujos reales se crea tal cual
+   (a la escala que le toque, que la presentación ya no convierte en
+   zoom). Prueba: `raster_tall_fill` cubre los dos casos. En el host no se
+   llegó a esa escena con los guiones probados; por confirmar en la PS3.
 ## 2026-10-12 — Donkey Kong 64 al 20 %: el recompilador vaciaba la caché en cada cambio de Status.FR (rama `zealous-wilbur-cec8b5`, paquete SLSA00102 «Salsa64 DK64»)
 
 - **Síntoma (PS3 real, main 8c876ac):** DK64 a 12–13 campos/s con 1,4 MIPS

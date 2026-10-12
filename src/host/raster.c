@@ -88,7 +88,7 @@ static int get_target(const struct gfx_job *job, uint32_t addr, uint32_t width, 
 {
 	bool fresh;
 	/* Como rdp.c: una color image imposible no toca la tabla. */
-	if (!width || width > 640 || rdp_targets_tall(width, min_lh)) {
+	if (!width || width > 640 || min_lh > 480) {
 		if (raster_trace_fb)
 			fprintf(stderr, "fb: campo %u tarea %u: color image imposible %06x/%u (alto %u): se ignora\n", raster_field,
 				task_no, addr, width, min_lh);
@@ -367,6 +367,20 @@ static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, 
 		}
 }
 
+/* Como rdp.c: ¿los dibujos hasta el próximo TARGET son todos rellenos? */
+static bool fills_only(const uint8_t *cmd, uint32_t off, uint32_t cmd_bytes)
+{
+	while (off + sizeof(struct gfx_cmd) <= cmd_bytes) {
+		const struct gfx_cmd *c = (const struct gfx_cmd *)(cmd + off);
+		if (c->op == GFX_OP_END || c->op == GFX_OP_TARGET || c->size < sizeof *c)
+			break;
+		if (c->op == GFX_OP_DRAW && ((const struct gfx_draw *)c)->cycle != 3 /* G_CYC_FILL */)
+			return false;
+		off += c->size;
+	}
+	return true;
+}
+
 /* Hasta qué línea llegan las tijeras de los dibujos que siguen a un TARGET
  * (como rdp.c en la PS3): el alto mínimo de su imagen. */
 static uint32_t scissor_bottom(const uint8_t *cmd, uint32_t off, uint32_t cmd_bytes)
@@ -556,8 +570,10 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 		switch (c->op) {
 		case GFX_OP_TARGET: {
 			uint32_t lh = scissor_bottom(cmd, off + c->size, res->cmd_bytes), siz = c->c & 0xFF;
-			cur = get_target(job, c->a, c->b, (c->c >> 8) & 0xFF, siz, lh);
-			tall.rows = cur < 0 && c->b && c->b <= 640 && rdp_targets_tall(c->b, lh) ? lh : 0;
+			bool is_tall = c->b && c->b <= 640 && rdp_targets_tall(c->b, lh) &&
+				       fills_only(cmd, off + c->size, res->cmd_bytes);
+			cur = is_tall ? -1 : get_target(job, c->a, c->b, (c->c >> 8) & 0xFF, siz, lh);
+			tall.rows = is_tall ? lh : 0;
 			tall.addr = c->a;
 			tall.width = c->b;
 			tall.bpp = siz == 3 ? 4 : siz == 2 ? 2 : 1;
