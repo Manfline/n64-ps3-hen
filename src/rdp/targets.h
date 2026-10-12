@@ -266,6 +266,36 @@ bool rdp_targets_mirror_at_task_end(const struct rdp_targets *s, int slot);
 /* La copia del espejo de la ranura se hizo (o quedó encolada). */
 void rdp_targets_mirrored(struct rdp_targets *s, int slot);
 
+/* Escrituras a la RDRAM que no pasan por el CPU (DMA del PI, del SP, del SI,
+ * salida de la HLE de audio), con el número de la tarea gráfica en vuelo
+ * al ocurrir (o la última terminada, si no había ninguna). Una copia a la
+ * RDRAM de lo que dibujó la tarea T no debe pisar lo que un DMA escribió
+ * desde que T empezó: en la consola el RDP termina antes de que llegue el
+ * DMA, aquí la copia llega después (en la PS3, varios ms). Star Fox 64
+ * limpia la pantalla con una tarea y en el mismo campo carga por DMA
+ * datos comprimidos encima de ese framebuffer; el espejo los pisaba y el
+ * juego se quedaba esperando. Los tramos seguidos de la misma tarea se
+ * funden (los DMA van en trozos de 256 bytes). Lo escribe el hilo de
+ * emulación y lo lee el de presentación: `n` se publica al final. */
+/* Color image más alta que una pantalla (Star Fox 64: 320 × 720 en
+ * 0x38f800, sus tres framebuffers seguidos, para limpiarlos con un solo
+ * FILLRECT al arrancar y al cambiar de escena; también borra el borde de
+ * 8 px que el juego nunca vuelve a tocar). No se crea un destino para ella:
+ * los rellenos se reparten entre los destinos ya existentes que caben
+ * enteros dentro. Devuelve cuántos y, por cada uno, la ranura y la fila de
+ * la imagen alta en que empieza. */
+int rdp_targets_inside(const struct rdp_targets *s, uint32_t addr, uint32_t width, uint32_t bpp, uint32_t rows,
+		       int slots[RDP_TARGETS_MAX], uint32_t first_row[RDP_TARGETS_MAX]);
+
+#define RDP_DMA_RING 64
+struct rdp_dma_ring {
+	struct { uint32_t lo, hi, task; } e[RDP_DMA_RING];
+	uint32_t n;  /* entradas escritas en total (las válidas: las últimas RDP_DMA_RING) */
+};
+void rdp_dma_note(struct rdp_dma_ring *r, uint32_t pa, uint32_t len, uint32_t task);
+/* ¿Algún DMA desde la tarea `task` (inclusive) tocó [lo, hi)? */
+bool rdp_dma_since(const struct rdp_dma_ring *r, uint32_t lo, uint32_t hi, uint32_t task);
+
 void rdp_vi_ring_push(struct rdp_vi_ring *r, uint32_t origin, uint32_t width);
 /* ¿Hay que copiar a la RDRAM la color image (addr, width, siz) cuando el
  * RDP termine de dibujarla? Sí para una imagen de 16 bits del ancho del VI

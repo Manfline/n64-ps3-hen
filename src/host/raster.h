@@ -22,6 +22,9 @@
 
 /* Dibuja la salida de una tarea en las imágenes de cada color image. */
 void raster_task(const struct gfx_job *job, const struct gfx_result *res);
+/* La RDRAM [pa, pa + len) la escribió un DMA; `task` es la tarea gráfica en
+ * vuelo (o la última terminada): sus copias y las anteriores no la pisan. */
+void raster_rdram_written(uint32_t pa, uint32_t len, uint32_t task);
 /* Imagen (0xRRGGBB, RASTER_W de paso) que contiene la dirección `addr`, o
  * NULL si ninguna tarea dibujó ahí. */
 const uint32_t *raster_image(uint32_t addr, uint32_t *width);
