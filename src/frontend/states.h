@@ -5,7 +5,10 @@
  * Archivos: SALSA64_DATA_DIR/states/<título>-<CRC1>.st0 … .st9, el mismo
  * nombre base que las partidas de saves/. Se escriben en un .tmp y se
  * renombran (un corte a mitad no pisa el estado anterior). La E/S va con
- * sysFs directo: la RDRAM (8 MB) sale y entra de su búfer sin copias.
+ * las llamadas al kernel (sysLv2Fs*, <sys/file.h>): la RDRAM (8 MB) sale y
+ * entra de su búfer sin copias. No con sysFs* de libsysfs: esos son puentes
+ * al módulo cellFs del sistema, que hay que cargar antes; en RPCS3 andan
+ * igual, pero en la PS3 real colgaban la consola entera al primer mkdir.
  *
  * Todo con la emulación quieta (main.c: el hilo de emulación espera en el
  * límite del campo con la tarea del RSP recogida) y desde el hilo de

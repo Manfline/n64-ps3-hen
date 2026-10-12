@@ -3,7 +3,7 @@
  */
 #include "states.h"
 
-#include <lv2/sysfs.h>
+#include <sys/file.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/systime.h>
@@ -17,7 +17,7 @@ static uint64_t thumb_us;
 
 struct fsio {
 	s32 fd;
-	uint64_t us;    /* tiempo en sysFs */
+	uint64_t us;    /* tiempo en el sistema de archivos */
 	uint32_t bytes;
 };
 
@@ -25,7 +25,7 @@ static bool fs_write(void *ctx, const void *data, uint32_t len)
 {
 	struct fsio *io = ctx;
 	uint64_t t0 = sysGetSystemTime(), done = 0;
-	bool ok = sysFsWrite(io->fd, data, len, &done) == 0 && done == len;
+	bool ok = sysLv2FsWrite(io->fd, data, len, &done) == 0 && done == len;
 	io->us += sysGetSystemTime() - t0;
 	io->bytes += len;
 	return ok;
@@ -35,7 +35,7 @@ static bool fs_read(void *ctx, void *data, uint32_t len)
 {
 	struct fsio *io = ctx;
 	uint64_t t0 = sysGetSystemTime(), done = 0;
-	bool ok = sysFsRead(io->fd, data, len, &done) == 0 && done == len;
+	bool ok = sysLv2FsRead(io->fd, data, len, &done) == 0 && done == len;
 	io->us += sysGetSystemTime() - t0;
 	io->bytes += len;
 	return ok;
@@ -55,7 +55,7 @@ bool states_slot_exists(const struct salsa64_bus *bus, unsigned slot)
 	if (!bus->rom)
 		return false;
 	slot_path(bus, slot, path, sizeof path);
-	return sysFsStat(path, &st) == 0 && st.st_size >= SALSA64_STATE_HEADER;
+	return sysLv2FsStat(path, &st) == 0 && st.st_size >= SALSA64_STATE_HEADER;
 }
 
 bool states_save(struct salsa64_n64 *n64, unsigned slot, struct states_timing *t, char *err, size_t err_size)
@@ -65,10 +65,10 @@ bool states_save(struct salsa64_n64 *n64, unsigned slot, struct states_timing *t
 	memset(t, 0, sizeof *t);
 	slot_path(&n64->bus, slot, path, sizeof path);
 	snprintf(tmp, sizeof tmp, "%s.tmp", path);
-	sysFsMkdir(STATES_DIR, 0777);  /* si ya existe, da error y no pasa nada */
+	sysLv2FsMkdir(STATES_DIR, 0777);  /* si ya existe, da error y no pasa nada */
 
 	struct fsio io = { -1, 0, 0 };
-	if (sysFsOpen(tmp, SYS_O_WRONLY | SYS_O_CREAT | SYS_O_TRUNC, &io.fd, NULL, 0) != 0) {
+	if (sysLv2FsOpen(tmp, SYS_O_WRONLY | SYS_O_CREAT | SYS_O_TRUNC, &io.fd, 0666, NULL, 0) != 0) {
 		snprintf(err, err_size, "no se pudo crear %s", tmp);
 		return false;
 	}
@@ -76,21 +76,21 @@ bool states_save(struct salsa64_n64 *n64, unsigned slot, struct states_timing *t
 	const struct salsa64_state_thumb th = { SALSA64_STATE_THUMB_W, SALSA64_STATE_THUMB_H, thumb_px };
 	bool ok = salsa64_state_save(n64, thumb_ok ? &th : NULL, fs_write, &io, scratch, err, err_size);
 	uint64_t tc = sysGetSystemTime();
-	if (sysFsClose(io.fd) != 0 && ok) {
+	if (sysLv2FsClose(io.fd) != 0 && ok) {
 		snprintf(err, err_size, "no se pudo cerrar el archivo");
 		ok = false;
 	}
 	io.us += sysGetSystemTime() - tc;
 	salsa64_log("estado: escrito y cerrado (%s)", ok ? "bien" : err);
 	if (!ok) {
-		sysFsUnlink(tmp);
+		sysLv2FsUnlink(tmp);
 		return false;
 	}
-	sysFsChmod(tmp, 0666);
-	if (rename(tmp, path) != 0) {
+	sysLv2FsChmod(tmp, 0666);
+	if (sysLv2FsRename(tmp, path) != 0) {
 		/* Sin reemplazo atómico: quitar el viejo y volver a intentar. */
-		sysFsUnlink(path);
-		if (rename(tmp, path) != 0) {
+		sysLv2FsUnlink(path);
+		if (sysLv2FsRename(tmp, path) != 0) {
 			snprintf(err, err_size, "no se pudo renombrar %s", tmp);
 			return false;
 		}
@@ -110,12 +110,12 @@ bool states_load(struct salsa64_n64 *n64, unsigned slot, struct states_timing *t
 	*broken = false;
 	slot_path(&n64->bus, slot, path, sizeof path);
 	struct fsio io = { -1, 0, 0 };
-	if (sysFsOpen(path, SYS_O_RDONLY, &io.fd, NULL, 0) != 0) {
+	if (sysLv2FsOpen(path, SYS_O_RDONLY, &io.fd, 0, NULL, 0) != 0) {
 		snprintf(err, err_size, "no hay estado");
 		return false;
 	}
 	bool ok = salsa64_state_load(n64, fs_read, &io, scratch, err, err_size, broken);
-	sysFsClose(io.fd);
+	sysLv2FsClose(io.fd);
 	t->us_io = io.us;
 	t->bytes = io.bytes;
 	t->us_total = sysGetSystemTime() - t0;

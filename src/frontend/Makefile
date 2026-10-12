@@ -29,7 +29,7 @@ audio_SRCS := $(R)/src/spu/audio/main.c $(R)/src/spu/audio/io_spu.c \
 rsp_SRCS   := $(R)/src/spu/rsp/main.c $(R)/src/spu/rsp/io_spu.c \
               $(filter-out %/core.c,$(wildcard $(R)/src/rsp/lle/*.c))
 CFLAGS  := -ffp-contract=off -fno-math-errno
-LIBS    := -lrsx -lgcm_sys -laudio -lio -lsysutil -lnet -lsysmodule -lsysfs -lrt -llv2 -lm
+LIBS    := -lrsx -lgcm_sys -laudio -lio -lsysutil -lnet -lsysmodule -lrt -llv2 -lm
 # Caché del recompilador al final del segmento de texto (docs/rec-ppe.md).
 LDFLAGS := -T $(abspath $(R))/mk/rec-cache.ld -T lv2.ld
 
