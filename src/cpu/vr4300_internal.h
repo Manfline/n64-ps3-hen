@@ -53,6 +53,10 @@ bool salsa64_vr4300_fetch_probe(const struct salsa64_cpu *cpu, uint64_t va, uint
 bool salsa64_vr4300_kernel_probe(const struct salsa64_cpu *cpu, uint64_t va, uint32_t *pa, bool *dirty);
 void salsa64_vr4300_update_status(struct salsa64_cpu *cpu);
 void salsa64_vr4300_cop0(struct salsa64_cpu *cpu, uint32_t instr);
+/* cop0.c, para el recompilador: TLBWI (o TLBWR con `random`), devuelve la
+ * entrada escrita; ERET (deja pc, Status, el modo y redirect). */
+unsigned salsa64_vr4300_tlbw(struct salsa64_cpu *cpu, bool random);
+void salsa64_vr4300_eret(struct salsa64_cpu *cpu);
 /* interp.c: una instrucción que no es salto (la usa el recompilador). */
 void salsa64_vr4300_exec_one(struct salsa64_cpu *cpu, uint32_t instr);
 /* interp.c: salsa64_cpu_step sin despachar los eventos vencidos (rec.c los

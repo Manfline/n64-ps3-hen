@@ -125,18 +125,47 @@ Detalles que mantienen la exactitud:
   internos son hacia adelante.
 - `SALSA64_REC_DBG_NO_SUPER` (y LEGACY) vuelven a cortar en cada salto.
 
+### Saltos internos con destino dentro del bloque (2026-10-11)
+
+Los dos bloques más ejecutados de GoldenEye (3,1 % cada uno) eran un bucle
+de comparación partido en dos: el cuerpo termina en el `bne` que vuelve al
+inicio, pero un `beql` del cuerpo salta a ese mismo `bne` (el final del
+bucle, dentro del bloque), y el camino tomado salía enlazado a un bloque
+de dos instrucciones que a su vez enlazaba de vuelta: dos salidas, dos
+entradas y la escritura y recarga de registros en cada vuelta. Ahora un
+salto condicional interno cuyo destino es una instrucción del mismo bloque
+(después de su delay slot) salta a su código sin salir
+(`ijump_target`): su camino tomado se emite en la sección fría cuando el
+emisor llega a la instrucción destino, porque ahí se sabe el estado que el
+código asume (`emit_ijumps_to`): los registros de la FPU residente se
+reponen en el formato que asume y lo pendiente de FCR31 que el código de
+ahí no escribiría se escribe antes (o se deriva de memoria lo que sí
+escribiría y en este camino no se calculó; `fpu_reconcile`), y `r29` se
+ajusta en `(b + 2) − t` para que `cycles = r29 + k + 1` siga valiendo. Los
+registros enteros no necesitan nada: el reparto es por bloque y las
+escrituras a `cpu->gpr` van por el conjunto acumulado, que incluye las de
+antes del salto. No se salta a un delay slot (su código vive dentro del de
+su salto), ni a la segunda de un par LWL/LWR, ni con la escritura temprana
+(saltaría sus almacenamientos diferidos), ni en bloques recortados.
+`SALSA64_REC_DBG_NO_IJUMP` lo apaga.
+
 ### Registros
 
 | PPE | Uso |
 |---|---|
 | r14–r25 | los 12 registros MIPS más usados del bloque (GPR, HI, LO) |
-| r26 | destino de JR/JALR (sobrevive al delay slot) |
+| r26 | destino de JR/JALR (sobrevive al delay slot); en un bloque sin JR/JALR, uno más para el bloque |
 | r27 | `sched->next` (se recarga después de cada llamada a C) |
 | r28 | `code_flags` |
 | r29 | `cycles` al entrar al bloque |
 | r30 | RDRAM |
 | r31 | `struct salsa64_cpu` |
 | r3–r12, r0 | temporales |
+| f14–f25 | los 12 `cpu->fpr[p]` más usados del bloque («FPU residente») |
+| f26–f31 | constantes: 1,0, 0,0 y los bordes de la franja segura en S y D |
+| f0–f13 | temporales de la FPU |
+| cr2, cr3.3 | FCR31 perezoso: C, causa I, bandera I, compuerta |
+| cr4 | condición del salto (sobrevive al delay slot) |
 
 Al entrar se cargan los registros que el bloque lee antes de escribir. Cada
 registro modificado se escribe en `cpu->gpr` apenas recibe su último valor
@@ -173,7 +202,9 @@ Lo que se llama a C:
   fuera de la RDRAM, código en la zona escrita);
 - instrucciones raras o con mucho estado, que ejecuta el intérprete
   (`salsa64_vr4300_exec_one`): LL/SC, traps, COP0 salvo MFC0/DMFC0
-  (y MFC0 de Random), CVT.S/D.L, y los caminos lentos de lo que se traduce
+  (y MFC0 de Random), MTC0 a EntryLo/PageMask/Index, TLBWI/TLBWR y ERET
+  (estos tres últimos con rutina propia, ver «COP0 sin el intérprete»),
+  CVT.S/D.L, y los caminos lentos de lo que se traduce
   (operandos fuera de la franja, redondeo dirigido, causas habilitadas);
 - excepciones (SYSCALL, BREAK, desbordamiento).
 
@@ -232,6 +263,127 @@ La prueba `executed_conversions_match_full` (8000 instrucciones: SQRT, las
 conversiones con enteros con fracción, empates, bordes de 2³¹ y 2⁵³ y de la
 franja de CVT.S.D, CFC1/CTC1) compara el CPU con el camino completo y, con
 el recompilador, exige que más de 3000 hayan corrido sin el intérprete.
+
+### Lo que el PPE hace en microcódigo (2026-10-11)
+
+Del manual del Cell (tabla A-1, A.1.3): una instrucción microcodificada
+vacía el pipeline y tarda al menos 11 ciclos. Lo son **todas las formas con
+punto** (`andi.`, `andis.`, `and.`, `rlwinm.`, `add.`…), los desplazamientos
+y rotaciones por registro (`slw`, `srw`, `sld`, `srd`, `sraw`, `srad`,
+`rldcl`, `rlwnm`), `lwa`/`lha`, `mtcrf` de más de un campo (`mtocrf` de uno
+cuesta un ciclo), `mcrfs` y `mtfsf*`, `lmw`/`stmw`. `mfcr` cuesta ~34 ciclos
+y `mffs` 11–28. Lo demás: `fcmpu` deja su bit del CR al ciclo siguiente;
+`fadd`/`fmul`/`frsp`/`fsel`/`fabs`/`fctid`/`fcfid` 10 ciclos; `fdiv` 56–74 y
+`fsqrt` 66–84 (sin pipeline); enteros 2 ciclos; `mulli` 6, `mulld` 15 (y
+detienen el pipeline); cargas 2.
+
+El emisor usaba `andi.` en cada ANDI de MIPS (muy frecuente) y en la
+compuerta de cada operación de la FPU, `andis.` a la entrada de cada bloque
+con COP1 y `mtcrf 0x38` en cada salida a C. Ahora ANDI es `rlwinm` (máscara
+de unos seguidos) o `li`+`ori`+`and`; las pruebas de bits son
+`rlwinm`+`cmpwi`; la salida usa tres `mtocrf`. Quedan por registro los
+desplazamientos de SLLV y compañía y de LWL/LWR sueltos (no hay otra forma;
+los pares LWL/LWR van byte a byte).
+
+### FPU residente (2026-10-11; experimental, apagada por omisión)
+
+**Medida en la PS3 es más lenta que la FPU por memoria** (bench del mismo
+paquete: add.s 40,0 → 30,9 MIPS, mixto 168 → 135; en GoldenEye no se
+distingue, la FPU es ~6 % de sus instrucciones): cada `fcmpu` que alimenta
+un salto o un crop espera toda la latencia de la FPU, y `fabs` agrega 10
+ciclos a la clasificación, mientras el camino por memoria clasifica los
+bits en enteros (2 ciclos) y solo espera a la FPU en la comparación del
+inexacto. Queda detrás de `SALSA64_REC_OPT_FPU_RES` (`SALSA64_REC_FPU_RES=1`
+en el host, el archivo `jit-fpu-residente` en la PS3) para retomarla; la
+idea que queda por probar es clasificar sin saltos intermedios (una sola
+comprobación al final de la operación, con la deshecha por el intérprete) y
+sin `fabs`. Lo que sigue describe el diseño tal como está.
+
+Cada operación de la FPU carga sus operandos de `cpu->fpr`
+(los bits a un registro entero para clasificarlos y el valor a uno de punto
+flotante), escribe el resultado y lee, modifica y guarda FCR31: unas
+40 palabras por ADD.S, con load-hit-store entre
+operaciones dependientes. Con la opción (`rec_emit_fpu.h`):
+
+- **Registros residentes.** Los 12 `cpu->fpr[p]` más usados del bloque
+  viven en f14–f25 (no volátiles: sobreviven a las llamadas a C; la entrada
+  guarda y repone f14–f31). Un registro del PPE tiene el valor en un
+  formato: S (la mitad baja como double, lo que da `lfs`) o D (los 64 bits);
+  un uso en otro formato lo recarga de casa. Los vivos a la entrada se cargan
+  en el formato de su primer uso; al volver al cuerpo (bucle) se reponen los
+  que cambiaron de formato.
+- **Casa siempre al día.** Cada resultado se escribe en `cpu->fpr` en cuanto
+  está (el almacenamiento espera por el valor, pero la comparación ya esperó
+  por él): ninguna salida ni llamada a C escribe registros de la FPU y el
+  intérprete (camino lento) siempre lee lo correcto. LWC1/LDC1 cargan el
+  registro residente directo de la RDRAM (`lfsx`/`lfdx`) además de escribir
+  casa; SWC1/SDC1 de un valor residente almacenan con `stfsx`/`stfdx`.
+- **Clasificación en punto flotante.** Mover bits entre la FPU y los enteros
+  pasa por memoria (load-hit-store), y `fcmpu` da su bit al ciclo siguiente:
+  la franja segura de `fpu_fast_band` (|x| en [2⁻⁶⁰, 2⁶¹) en S, [2⁻⁴⁴⁰,
+  2⁴⁴¹) en D, o cero) se prueba con `fabs` y tres `fcmpu` contra constantes
+  que la entrada deja en f27–f31 (1,0 en f26 para CEIL/FLOOR); NaN e
+  infinito fallan todas las comparaciones. Las comparaciones de los operandos
+  se emiten antes de la operación y corren en paralelo con ella; un solo
+  salto al camino lento junta todo con crops.
+- **Inexacto sin TwoSum.** La suma en double `r = a + b` es exacta si y solo
+  si `r − a == b` y `r − b == a` (dos restas independientes y dos
+  comparaciones, en vez de la cadena de cuatro operaciones dependientes del
+  TwoSum, ~40 ciclos): si la suma es inexacta, el error ε = (a + b) − r es
+  un múltiplo no nulo del ulp del operando con ulp menor, y al restarle el
+  otro operando a r queda ese operando menos ε, que no redondea de vuelta a
+  él; si es exacta, las dos restas son exactas. En S además `frsp` ≠ r
+  (reemplaza la prueba de exponentes); producto, cociente y raíz por el
+  residuo con fma como en `cop1.c`.
+- **FCR31 perezoso.** C, la causa I de la última operación, la bandera I
+  acumulada y «RM ≠ 0 o I habilitada» viven en cr2 (no volátil; cr3.3
+  guarda «I habilitada» para ROUND/TRUNC/CEIL/FLOOR): una operación cuesta
+  uno o dos crops, BC1 un `bc` sobre el bit y C.cond un `fcmpu` y un crop.
+  Se escriben en `cpu->fcr31` al salir del bloque (con dos o tres saltos,
+  una vez por bloque), antes de que el intérprete corra una instrucción de
+  COP1 y en CFC1; después de una instrucción de COP1 por el intérprete se
+  vuelven a derivar de la memoria, y si dejó una causa que no es I (Z, V, O,
+  U sin excepción) el bloque sale, porque el estado perezoso no la
+  representa.
+- **CVT.S.W y CVT.D.W con `fcfid`.** MTC1 y LWC1 dejan además la palabra con
+  signo extendido en `cpu->rec_fw[p]` cuando una conversión la va a leer, y
+  la conversión la carga con `lfd` (un load-hit-store en vez de dos y sin el
+  `slw` microcodificado de la normalización en enteros).
+
+La prueba `executed_sequences_match_interp` (3000 secuencias de 2 a 8
+instrucciones de COP1 con cargas, almacenamientos, MTC1/MFC1, CFC1/CTC1 y
+operandos al azar, en un solo bloque) compara el resultado entero
+(registros, FCR31, excepciones, memoria) con el intérprete sobre el mismo
+estado inicial, y exige que más de 600 corran enteras en nativo.
+
+### COP0 sin el intérprete: MTC0 EntryLo, TLBWR y ERET (2026-10-11)
+
+El refill de la TLB de GoldenEye (~400 por campo) son cuatro instrucciones
+de COP0 (dos MTC0 a EntryLo, TLBWR y ERET), y cada una costaba una llamada
+a `salsa64_vr4300_exec_one` más, tras cada COP0, `salsa64_rec_x_sync`
+(comparar las 32 entradas de la TLB con la instantánea) y, en el ERET, la
+vuelta al despachador por `redirect` (buscar el bloque, entrar de nuevo):
+2200 llamadas y ~1,9 ms por campo en la PS3. Ahora
+(`SALSA64_REC_OPT_COP0_EXEC` y el archivo `jit-cop0-viejo` repiten lo de
+antes para medir):
+
+- **MTC0 y DMTC0 a EntryLo0, EntryLo1, PageMask e Index** son nativos y no
+  terminan el bloque: el latch (`cop0_latch`) y el campo con su máscara
+  (`salsa64_cpu_cop0_write`). No cambian la traducción hasta la escritura
+  de la TLB. Status, Cause, Compare, Count, EntryHi (cambia el ASID) y lo
+  demás siguen por el intérprete y terminan el bloque.
+- **TLBWI/TLBWR** llaman a `rec_h_tlbw` (rec.c): la escritura
+  (`salsa64_vr4300_tlbw`, que devuelve la entrada) y `salsa64_rec_x_tlb_written`,
+  que pone `ktlb[]` al día solo para esa entrada (borrar sus páginas de antes
+  y de ahora, instantánea y prellenado) sin recorrer las 32 ni compactar
+  `live[]` (`vt_set` compacta si se llena). No hay excepción, interrupción
+  ni cambio de modo posibles, así que no se revisa nada al volver: el bloque
+  termina enlazado al siguiente, cuya entrada revisa su página.
+- **ERET** llama a `rec_h_eret`: lo que hace el intérprete (`op_eret`) sin
+  dejar `redirect`, revisa la ktlb si cambió ERL y devuelve el pc; el código
+  mira la palabra de interrupción/modo y, si sigue en kernel sin
+  interrupción, va al bloque destino por `exit_jr` como un JR; si no, al
+  despachador con ese pc (`exit_mid`).
 
 ### Cargas y almacenamientos no alineados
 
@@ -494,14 +646,37 @@ ejecuciones.
 
 ### Caché de código
 
-PS3: cola NOBITS de 24 MB (16 hasta el 2026-10-11: GoldenEye la llenaba cada
+PS3: cola NOBITS de 32 MB (16 hasta el 2026-10-11: GoldenEye la llenaba cada
 ~40 s, con un vaciado completo cada vez; ~900 bytes de PPC por bloque de 5
 instrucciones, sobre todo caminos fríos de memoria, que ahora llaman a
-rutinas compartidas del preámbulo para la `ktlb`) al final del segmento de texto
-(`mk/rec-cache.ld`, docs/jit-ppe.md). Las funciones de C quedan a menos de
-32 MB: el código las llama con `bl` directo. `struct salsa64_rec` (mapa,
-banderas, bloques, enlaces, la tabla de bloques fuera de KSEG0 y búferes de
-compilación) ocupa 6,8 MB y se reserva una vez (docs/memory-budget.md).
+rutinas compartidas del preámbulo para la `ktlb`; 24 MB después) al final
+del segmento de texto (`mk/rec-cache.ld`, docs/jit-ppe.md). 32 MB es el
+techo: los saltos al preámbulo (`b`/`bl`, ±32 MB) tienen que alcanzarlo
+desde el final de la caché. Las funciones de C quedan a menos de 32 MB del
+preámbulo y de los primeros tramos, que las llaman con `bl` directo; cada
+bloque decide al compilarse (`calls_near` por bloque) y los del final usan
+`mtctr`/`bctrl`. `struct salsa64_rec` (mapa, banderas, bloques, enlaces, la
+tabla de bloques fuera de KSEG0 y búferes de compilación) ocupa 7,8 MB y se
+reserva una vez (docs/memory-budget.md).
+
+**Desalojo por tramos (2026-10-11).** Hasta ahora, llena la caché, se
+vaciaba entera y el conjunto vivo (~7000 bloques en GoldenEye) se
+recompilaba de golpe: en la PS3, 3 vaciados por partida en la presa y
+campos de hasta 52 ms. Ahora la zona de bloques se parte en
+`SALSA64_REC_SEGMENTS` (8) tramos iguales y se asigna linealmente dentro
+del tramo en uso; cuando no cabe otro bloque, se pasa al siguiente tramo
+(el más viejo) y se matan solo los bloques cuyo código (o el guardado, si
+están desprendidos) está en él: salen del mapa y de `xhash`, se deshacen
+los enlaces que llegan a ellos y sus ids vuelven a la lista libre. Los
+enlaces que *salen* de un bloque desalojado viven en la lista de su
+destino con el sitio parcheado dentro del tramo: cada enlace guarda la
+generación del tramo de su sitio (`seg_gen[]`, que sube al desalojar) y al
+deshacerlo se salta si ya no coincide (la palabra pertenece a otro bloque).
+El despachador también deja de parchear los sitios anotados antes de un
+desalojo (`generation` sube). Las copias de bytes de los bloques
+desprendidos (`x.copy[]`) no se recuperan hasta un vaciado completo, que
+sigue ocurriendo si se agotan los ids o los enlaces. `SALSA64_REC_OPT_NO_EVICT`
+(`jit-sin-tramos` en la PS3) y `jit-viejo` vuelven al vaciado completo.
 
 ## Pruebas en el host
 
@@ -576,5 +751,9 @@ compiler error: Segmentation fault"; repetir compila bien
 | 2026-10-10 | nemu64-test y bench con y sin `RARE_EXEC` (conversiones, LWL/LWR y MFC0 al intérprete) | **PS3 real**, e210aeb | nemu64-test 1894 → 1816 ms (−4,1 %), mismas fallas; bench cvt ×9,7, no alineadas ×10,7, mfc0 ×71, espera por Count ×59 |
 | 2026-10-11 | `tools/test-rec.sh --lockstep` con enlace tras COP0, ktlb de datos, bloques desprendidos, superbloques y caminos lentos compartidos | qemu-ppc64 | unitarias 351/351 en los cuatro modos; nemu64-test 433 fallas (línea base) con y sin pin+eager; vitest OK; `--lockstep` sin diferencias en nemu64-test y vitest |
 | 2026-10-11 | `--lockstep` con la referencia con HLE: Perfect Dark 3 G ciclos (intro); GoldenEye con `goldeneye-dam.pad` 7,5 G ciclos (80 s de consola, hasta jugar en la presa) | qemu-ppc64 | **sin diferencias** en los dos; GoldenEye 283 M salidas comparadas en 1 h 46 min, 16 606 bloques (17 031 enganchados de vuelta) |
+| 2026-10-11 | FPU residente, sin microcódigo, COP0 con rutinas propias (9d1eba0, 1cf4c09, 952366c) | qemu-ppc64 | unitarias 365/365 en cinco modos (plain, far, pin, eager y FPU por memoria), con la prueba nueva `executed_sequences_match_interp`; nemu64-test 433 fallas (línea base) con y sin pin+eager; vitest OK; `--lockstep` sin diferencias en nemu64-test, vitest y Perfect Dark 300 M ciclos. Antes del arreglo del camino lento de LWC1, Perfect Dark abortaba (SIGSEGV en qemu) |
+| 2026-10-11 | Caché de 32 MB por tramos, con `SALSA64_REC_CACHE_MB` para forzar desalojos | qemu-ppc64 | unitarias 365/365 con 2 MB; nemu64-test 433 fallas con 3 MB (93 desalojos, 0 nuevas); vitest OK con 2 MB; `--lockstep` de nemu64-test con 3 MB **sin diferencias** (92 desalojos); Perfect Dark 300 M ciclos sin diferencias |
+| 2026-10-11 | FPU residente (9d1eba0): GoldenEye con `goldeneye-dam.pad` 7,5 G ciclos en `--lockstep` | qemu-ppc64 | **sin diferencias**, 283,6 M salidas comparadas, 16 606 bloques (17 031 enganchados de vuelta) |
+| 2026-10-11 | Saltos internos con destino dentro del bloque y r26 para el bloque (árbol final, 15d6724) | qemu-ppc64 | unitarias 365/365 con y sin fijos; nemu64-test 433 fallas y `--lockstep` sin diferencias (la primera versión dejaba basura en los registros escritos por las instrucciones saltadas: el lockstep lo encontró en el bloque 80014c84); vitest OK; Perfect Dark 300 M sin diferencias; GoldenEye hasta la presa: ejecuciones de bloques 643 M → 509 M en 128 s (perfil) y `--lockstep` 7,5 G ciclos **sin diferencias** (204 M salidas comparadas, 14 860 bloques, 1 vaciado y 6 desalojos con la caché de 24 MB del host); Perfect Dark 3 G ciclos (intro) **sin diferencias** (4 desalojos) |
 
 Rendimiento: solo en la PS3 real (docs/perf-log.md, «Recompilador»).

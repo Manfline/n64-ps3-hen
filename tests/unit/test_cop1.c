@@ -886,6 +886,155 @@ static void executed_conversions_match_full(void)
 		CHECK(native > 3000);
 }
 
+/* Una instrucción al azar de COP1, o una carga, almacenamiento o movimiento
+ * con enteros que la toca: operandos al azar, memoria en T_DATA (base T0,
+ * desplazamientos alineados a 8) o, una de cada cuatro, en la DMEM del SP
+ * (base S1: fuera de la RDRAM, el camino lento del recompilador), registros
+ * enteros t1–s0. */
+static uint32_t fz_cop1_insn(void)
+{
+	uint64_t r = fz_rand();
+	unsigned kind = (unsigned)(r % 24), fmt = (r >> 8 & 1) ? F_D : F_S;
+	unsigned fs = r >> 16 & 31, ft = r >> 21 & 31, fd = r >> 26 & 31, rt = 9 + (unsigned)(r >> 32 & 7);
+	unsigned x = (unsigned)(r >> 48), base = (r >> 44 & 3) == 0 ? S1 : T0;
+	int off = (int)(r >> 40 & 7) * 8;
+	switch (kind) {
+	case 0: case 1: case 2: return ADD_F(fmt, fd, fs, ft);
+	case 3:          return SUB_F(fmt, fd, fs, ft);
+	case 4: case 5:  return MUL_F(fmt, fd, fs, ft);
+	case 6:          return DIV_F(fmt, fd, fs, ft);
+	case 7:          return SQRT_F(fmt, fd, fs);
+	case 8:          return (x & 1) ? ABS_F(fmt, fd, fs) : NEG_F(fmt, fd, fs);
+	case 9:          return MOV_F(fmt, fd, fs);
+	case 10:         return C_F(fmt, x & 15, fs, ft);
+	case 11:         return fmt == F_S ? CVT_D(F_S, fd, fs) : CVT_S(F_D, fd, fs);
+	case 12:         return (x & 1) ? CVT_S(F_W, fd, fs) : CVT_D(F_W, fd, fs);
+	case 13:         return FOP(fmt, 0x08 + (x & 7), fd, fs, 0);  /* ROUND TRUNC CEIL FLOOR a L y W */
+	case 14:         return (x & 1) ? CVT_W(fmt, fd, fs) : CVT_L(fmt, fd, fs);
+	case 15:         return MFC1(rt, fs);
+	case 16:         return MTC1(rt, fs);
+	case 17:         return (x & 1) ? DMFC1(rt, fs) : DMTC1(rt, fs);
+	case 18: case 19: return LWC1(ft, off, base);
+	case 20:         return LDC1(ft, off, base);
+	case 21:         return SWC1(ft, off, base);
+	case 22:         return SDC1(ft, off, base);
+	default:         return (x & 3) ? CFC1(rt, 31) : CTC1(rt, 31);
+	}
+}
+
+/*
+ * Secuencias de instrucciones de COP1 en un solo bloque, contra el
+ * intérprete sobre el mismo estado inicial (registros, FCR31, memoria). Con
+ * el recompilador y la FPU residente (rec_emit_fpu.h) los valores pasan de
+ * una operación a la siguiente en registros del PPE y FCR31 se escribe al
+ * salir: lo que executed_matches_full (una instrucción por bloque) no ve.
+ * Con el intérprete solo, se compara consigo mismo (control).
+ */
+static void executed_sequences_match_interp(void)
+{
+	enum { DATA_WORDS = 32, MAX_LEN = 8, DMEM_PA = 0x04000100 };
+	const uint64_t DMEM = 0xFFFFFFFFA4000100ull;  /* la DMEM del SP por KSEG1 */
+	static struct salsa64_cpu init, ref;
+	static uint32_t data_init[DATA_WORDS], data_ref[DATA_WORDS], dmem_ref[DATA_WORDS];
+	struct salsa64_rec *rec = CPU->rec;
+	unsigned failed = 0, native = 0;
+
+	for (unsigned n = 0; n < 3000; n++) {
+		bool fr = (fz_rand() & 3) != 0;
+		unsigned len = 2 + (unsigned)(fz_rand() % (MAX_LEN - 1));
+		uint32_t code[MAX_LEN];
+		uint64_t r = fz_rand();
+		uint32_t fcr31 = ((r & 7) == 0 ? (uint32_t)(r >> 3) & 3 : 0) |
+				 ((uint32_t)(r >> 8) & 0x1F) << 2 |
+				 ((r >> 16 & 15) == 0 ? ((uint32_t)(r >> 20) & 0x1F) << 7 : 0) |
+				 ((r >> 26 & 3) == 0 ? ((uint32_t)(r >> 28) & 0x1F) << 12 : 0) |
+				 ((r >> 32 & 3) == 0 ? SALSA64_FCR31_FS : 0) |
+				 ((r >> 40 & 1) ? SALSA64_FCR31_C : 0);
+
+		for (unsigned k = 0; k < len; k++)
+			code[k] = fz_cop1_insn();
+		t_set_status(fr ? T_STATUS : T_STATUS & ~SALSA64_ST_FR);
+		for (unsigned k = 0; k < 32; k++) {
+			/* Casi siempre un valor dentro de la franja segura, en S (la
+			 * mitad alta en 0) o en D, para que las secuencias corran en
+			 * nativo; a veces lo de fz_operand (especiales, bordes). */
+			uint64_t x = fz_rand(), m = fz_rand();
+			if ((x & 15) == 0)
+				CPU->fpr[k] = fz_operand(x >> 4 & 1);
+			else if (x & 1)
+				CPU->fpr[k] = (m >> 63) << 31 | (uint64_t)(100 + (unsigned)(m % 55)) << 23 | (m >> 8 & 0x7FFFFF);
+			else
+				CPU->fpr[k] = (m >> 63) << 63 | (uint64_t)(990 + (unsigned)(m % 66)) << 52 | (m >> 4 & 0xFFFFFFFFFFFFFull);
+		}
+		for (unsigned k = 9; k <= 16; k++)
+			R[k] = (fz_rand() & 1) ? (uint64_t)(int64_t)(int32_t)(fz_rand() % 200001 - 100000) : fz_rand();
+		R[T0] = T_DATA;
+		R[S1] = DMEM;  /* fuera de la RDRAM: por el bus, el camino lento */
+		for (unsigned k = 0; k < DATA_WORDS; k++) {
+			data_init[k] = (fz_rand() & 1) ? (uint32_t)fz_operand(true) : (uint32_t)fz_rand();
+			t_wr32(T_DATA_PA + 4 * k, data_init[k]);
+			salsa64_bus_write32(&t_n64.bus, DMEM_PA + 4 * k, data_init[k], 0xFFFFFFFFu);
+		}
+		CPU->fcr31 = fcr31;
+		CPU->cause = 0;
+		t_load(code, len);
+		salsa64_cpu_set_pc(CPU, T_CODE);
+		CPU->cur_pc = T_CODE;
+		memcpy(&init, CPU, sizeof init);
+
+		/* Referencia: el intérprete, hasta el mismo ciclo que t_step(len). */
+		uint64_t target = CPU->cycles + len;
+		CPU->rec = NULL;
+		while (CPU->cycles < target)
+			salsa64_cpu_step(CPU);
+		CPU->rec = rec;
+		memcpy(&ref, CPU, sizeof ref);
+		for (unsigned k = 0; k < DATA_WORDS; k++) {
+			data_ref[k] = t_rd32(T_DATA_PA + 4 * k);
+			dmem_ref[k] = salsa64_bus_read32(&t_n64.bus, DMEM_PA + 4 * k);
+		}
+
+		/* De nuevo desde el mismo estado, por el camino normal (con el
+		 * recompilador, el bloque entero en nativo). */
+		memcpy(CPU, &init, sizeof init);
+		for (unsigned k = 0; k < DATA_WORDS; k++) {
+			t_wr32(T_DATA_PA + 4 * k, data_init[k]);
+			salsa64_bus_write32(&t_n64.bus, DMEM_PA + 4 * k, data_init[k], 0xFFFFFFFFu);
+		}
+		salsa64_cpu_set_pc(CPU, T_CODE);
+		uint64_t calls = rec ? rec->stats.exec_calls : 0;
+		t_step(len);
+		native += rec && rec->stats.exec_calls == calls;
+
+		bool same = memcmp(ref.fpr, CPU->fpr, sizeof ref.fpr) == 0 && memcmp(ref.gpr, CPU->gpr, sizeof ref.gpr) == 0 &&
+			    ref.fcr31 == CPU->fcr31 && ref.cause == CPU->cause && ref.status == CPU->status &&
+			    ref.pc == CPU->pc && ref.epc == CPU->epc && ref.cycles == CPU->cycles;
+		for (unsigned k = 0; same && k < DATA_WORDS; k++)
+			same = data_ref[k] == t_rd32(T_DATA_PA + 4 * k) &&
+			       dmem_ref[k] == salsa64_bus_read32(&t_n64.bus, DMEM_PA + 4 * k);
+		t_checks++;
+		if (!same && failed++ < 8) {
+			unsigned bad = 32;
+			for (unsigned k = 0; k < 32 && bad == 32; k++)
+				if (ref.fpr[k] != CPU->fpr[k])
+					bad = k;
+			t_fail(__FILE__, __LINE__,
+			       "secuencia %u (%u instr., FR=%u, FCR31 0x%08x): %08x %08x %08x %08x %08x %08x %08x %08x; "
+			       "f%u 0x%016llx/0x%016llx, FCR31 0x%08x/0x%08x, pc 0x%llx/0x%llx (intérprete/ejecutado)",
+			       n, len, fr, fcr31, code[0], len > 1 ? code[1] : 0, len > 2 ? code[2] : 0, len > 3 ? code[3] : 0,
+			       len > 4 ? code[4] : 0, len > 5 ? code[5] : 0, len > 6 ? code[6] : 0, len > 7 ? code[7] : 0,
+			       bad & 31, (unsigned long long)ref.fpr[bad & 31], (unsigned long long)CPU->fpr[bad & 31],
+			       ref.fcr31, CPU->fcr31, (unsigned long long)ref.pc, (unsigned long long)CPU->pc);
+		}
+	}
+	/* Con el recompilador, que muchas secuencias hayan corrido enteras en
+	 * nativo (los operandos especiales, CTC1 y C.cond con NaN mandan otras
+	 * al intérprete). */
+	t_checks++;
+	if (rec && !(rec->opts & SALSA64_REC_OPT_RARE_EXEC) && native <= 500)  /* ~650 en qemu */
+		t_fail(__FILE__, __LINE__, "solo %u de 3000 secuencias corrieron enteras en nativo", native);
+}
+
 void t_suite_cop1(void)
 {
 	RUN(cop1_unusable);
@@ -928,4 +1077,5 @@ void t_suite_cop1(void)
 	RUN(fast_path_matches_full);
 	RUN(executed_matches_full);
 	RUN(executed_conversions_match_full);
+	RUN(executed_sequences_match_interp);
 }

@@ -26,6 +26,25 @@
 #include "core/rcp.h"
 
 #define RDP_TARGETS_MAX   8
+/* Profundidades vivas (rdp.c; Zelda en pausa alterna tres z-buffers: el
+ * principal y uno por par de búferes de Link). */
+#define RDP_DEPTHS_MAX    4
+/* Superficies del RSX que el RDP puede tener vivas a la vez: una por
+ * ranura, el scratch de los efectos de framebuffer (copia del destino
+ * ligado cuando un dibujo lo lee), las profundidades y la profundidad de
+ * la pantalla agrandada para ligar sin z image destinos más grandes que la
+ * pantalla (rdp_zeta_reserve). lib/rsxkit admite 16 destinos y 16
+ * profundidades: sobra. */
+#define RDP_SURFACES_MAX  (RDP_TARGETS_MAX + 1 + RDP_DEPTHS_MAX + 1)
+/* Escala interna máxima (320 × 240 × 5 = 1600 × 1200; 640 × 5 = 3200 cabe
+ * en el límite de 4096 de las superficies del RSX). */
+#define RDP_SCALE_MAX     5
+/* Tope de memoria local del RSX para destinos, scratch, profundidades y la
+ * profundidad de la pantalla agrandada (ver docs/memory-budget.md): el peor
+ * caso a 5× (RDP_SURFACES_MAX de 1600 × 1200, 102,5 MiB) entra con 9,5 MiB
+ * de sobra (con 96 MiB, 5× se bajaba a 4×); rdp.c recicla el destino más
+ * viejo si aun así no cupiera. */
+#define RDP_VRAM_BUDGET   (112u << 20)
 /* Un destino sin dibujar en tantos campos ya no se presenta (ni se protege
  * del reciclado). */
 #define RDP_TARGETS_STALE 30
@@ -88,6 +107,82 @@ struct rdp_present {
 };
 
 void rdp_targets_init(struct rdp_targets *s);
+
+/* Bytes de una superficie de w × h píxeles de 32 bits (pitch alineado a
+ * 128, como lib/rsxkit). */
+uint32_t rdp_surface_bytes(uint32_t w, uint32_t h);
+
+/* Peor caso a la escala-objetivo `scale`: cada superficie mide a lo más
+ * 320·scale × 240·scale (el alto lógico de un destino es al menos 3/4 del
+ * ancho y rdp_target_scale no pasa de 240·scale líneas; a 1× una de
+ * 640 × 480 queda nativa, 1,2 MB), también el scratch (copia de un
+ * destino), cada profundidad (la del destino con que se usa, o la mayor de
+ * dos si la comparten) y la profundidad de la pantalla agrandada
+ * (rdp_zeta_reserve; se cuenta entera aunque la pantalla ya tuviera una):
+ * RDP_SURFACES_MAX superficies (8 + 1 + 4 + 1). A 5× son 107,5 MB
+ * (102,5 MiB); a 3×, 38,7 MB; a 4×, 68,8 MB. */
+uint32_t rdp_vram_worst(uint32_t scale);
+
+/* Lo más que mide una superficie a la escala-objetivo `scale` (destino,
+ * scratch o profundidad): max(320·scale, 640) × max(240·scale, 480). */
+void rdp_surface_max(uint32_t scale, uint32_t *w, uint32_t *h);
+
+/* Profundidad de la pantalla para los destinos que se ligan sin z image
+ * propia (dibujos sin z, cebado, scratch): rsxkit_bind no liga un destino
+ * más grande que ella (una zeta más chica que el color puede fallar o
+ * recortar en el RSX). Si a esta escala algún destino puede ser más grande
+ * que la pantalla de screen_w × screen_h (4× y 5× en 720p, 5× en 1080p),
+ * devuelve true con el tamaño a reservar (rsxkit_depth_reserve: el mayor
+ * destino posible, rdp_surface_max); si no, false y 0 × 0 (la de la
+ * pantalla alcanza). */
+bool rdp_zeta_reserve(uint32_t scale, uint32_t screen_w, uint32_t screen_h, uint32_t *w, uint32_t *h);
+
+/* Región lógica (x, y, w, h) de un destino a escala `scale`, en píxeles
+ * de su superficie: lo que leen las copias RSX → RDRAM (que la reducen a
+ * w × h), el espejo del framebuffer y la presentación. Siempre con la
+ * escala del destino que se lee, no la objetivo. */
+struct rdp_rect {
+	uint32_t x, y, w, h;
+};
+void rdp_surface_rect(uint32_t scale, uint32_t x, uint32_t y, uint32_t w, uint32_t h, struct rdp_rect *out);
+
+/* Render a textura: una textura de la HLE de tex_w × tex_h texels que
+ * empieza en el texel (x0, y0) de un destino de `lw` puntos lógicos de
+ * ancho, cuya superficie está a escala `scale`, con u = s·xf0 + xf2
+ * normalizada a tex_w. Se liga como textura desde la fila row0 de la
+ * superficie, `rows` filas (filas enteras: el offset de una textura va
+ * alineado a 128), y u pasa a normalizarse a la fila entera del destino
+ * (xf0, xf2 de salida). u y v quedan normalizadas, así que el destino en
+ * que se dibuja puede tener otra escala sin cambiar nada más. */
+struct rdp_tex_map {
+	uint32_t row0, rows;
+	float xf0, xf2;
+};
+void rdp_target_tex_map(uint32_t scale, uint32_t lw, uint32_t x0, uint32_t y0, uint32_t tex_w, uint32_t tex_h,
+			float xf0, float xf2, struct rdp_tex_map *out);
+
+/* ¿La región de src_w × src_h píxeles de superficie se presenta a un
+ * múltiplo entero (sin el estiramiento fraccionario que repetía filas con
+ * el recorte del overscan) en vez de ajustarse a la pantalla? Sí si cabe y
+ * el múltiplo llena al menos 3/4 del alto de la pantalla (960 × 720 o
+ * 912 × 684 en 720p, 1280 × 960 en 1080p, 320 × 240 a 1× por 3); no si
+ * quedaría chica (640 × 480 en 720p, 960 × 720 en 1080p) o no cabe
+ * (supermuestreo: se reduce con filtro lineal). */
+bool rdp_present_integer(uint32_t src_w, uint32_t src_h, uint32_t screen_w, uint32_t screen_h);
+
+/* Escala entera de un destino de lw × lh puntos lógicos para la escala-
+ * objetivo `global` (1..RDP_SCALE_MAX): la mayor que no pasa de 240 × global
+ * líneas, al menos 1, con tope RDP_SCALE_MAX y de 4096 por lado. */
+uint32_t rdp_target_scale(uint32_t global, uint32_t lw, uint32_t lh);
+
+/* Escala-objetivo efectiva. requested = 0: la mayor entera que cabe en una pantalla
+ * de `screen_h` líneas (720 → 3, 1080 → 4); 1 .. RDP_SCALE_MAX: la pedida.
+ * En ambos casos se baja hasta que rdp_vram_worst(escala) ≤
+ * RDP_VRAM_BUDGET. *reduced: se bajó por memoria (no por el tope de 5 ni
+ * por ser automática). */
+uint32_t rdp_scale_pick(uint32_t requested, uint32_t screen_h, bool *reduced);
+/* Igual con otro presupuesto (pruebas). */
+uint32_t rdp_scale_pick_budget(uint32_t requested, uint32_t screen_h, uint32_t budget, bool *reduced);
 
 /* Ranura de la color image (addr, width, siz de G_SETCIMG), existente o
  * reciclada, con al menos `min_lh` líneas (0: las de siempre, 3/4 del

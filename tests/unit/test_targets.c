@@ -363,6 +363,283 @@ static void targets_readback_wanted(void)
 	CHECK(rdp_readback_wanted(&r, 0x12c700, 440, 2));
 }
 
+/* Escala efectiva: automática por altura de pantalla, pedida (con tope en
+ * 5) y reducida cuando el peor caso no cabe en el presupuesto de memoria
+ * local del RSX. */
+static void targets_scale_pick(void)
+{
+	bool cut = true;
+	CHECK_EQ(rdp_scale_pick(0, 720, &cut), 3u);
+	CHECK(!cut);
+	CHECK_EQ(rdp_scale_pick(0, 1080, &cut), 4u);
+	CHECK(!cut);
+	CHECK_EQ(rdp_scale_pick(0, 480, &cut), 2u);
+	CHECK_EQ(rdp_scale_pick(0, 100, NULL), 1u);
+	for (uint32_t s = 1; s <= 5; s++) {
+		CHECK_EQ(rdp_scale_pick(s, 720, &cut), s);
+		CHECK(!cut);
+	}
+	CHECK_EQ(rdp_scale_pick(9, 720, &cut), 5u);  /* el tope no es por memoria */
+	CHECK(!cut);
+	/* Peor caso: 8 destinos, el scratch, 4 profundidades y la profundidad
+	 * de la pantalla agrandada (14 superficies) de 320 × 240 × 25 (7,68 MB
+	 * c/u) = 102,5 MiB, dentro del tope de 112 MiB (con 96, 5× no entraba). */
+	CHECK_EQ(RDP_SURFACES_MAX, 14);
+	CHECK_EQ(RDP_VRAM_BUDGET, 112u << 20);
+	CHECK_EQ(rdp_vram_worst(5), 14u * 1600 * 4 * 1200);
+	CHECK(rdp_vram_worst(5) <= RDP_VRAM_BUDGET);
+	CHECK(rdp_vram_worst(5) > 96u << 20);
+	CHECK(RDP_VRAM_BUDGET - rdp_vram_worst(5) > 9u << 20);  /* margen */
+	CHECK_EQ(rdp_vram_worst(1), 14u * 640 * 4 * 480);  /* a 1× una de 640 × 480 queda nativa */
+	CHECK_EQ(rdp_surface_bytes(1600, 1200), 1600u * 4 * 1200);
+	CHECK_EQ(rdp_surface_bytes(321, 1), 1408u);  /* pitch a 128 */
+	/* Con un presupuesto más chico baja la escala y avisa. */
+	CHECK_EQ(rdp_scale_pick_budget(5, 720, 70u << 20, &cut), 4u);
+	CHECK(cut);
+	CHECK_EQ(rdp_scale_pick_budget(5, 720, 60u << 20, &cut), 3u);
+	CHECK(cut);
+	CHECK_EQ(rdp_scale_pick_budget(0, 1080, 40u << 20, &cut), 3u);
+	CHECK(cut);
+	CHECK_EQ(rdp_scale_pick_budget(5, 720, 1, &cut), 1u);
+	CHECK(cut);
+	CHECK_EQ(rdp_scale_pick_budget(3, 720, 100u << 20, &cut), 3u);
+	CHECK(!cut);
+	/* Escala por destino: el objetivo son 240 × escala líneas. */
+	CHECK_EQ(rdp_target_scale(5, 320, 240), 5u);
+	CHECK_EQ(rdp_target_scale(5, 640, 480), 2u);
+	CHECK_EQ(rdp_target_scale(5, 64, 48), 5u);     /* auxiliar chica, con tope */
+	CHECK_EQ(rdp_target_scale(5, 400, 300), 4u);
+	CHECK_EQ(rdp_target_scale(3, 640, 480), 1u);
+	CHECK_EQ(rdp_target_scale(3, 320, 240), 3u);
+	CHECK_EQ(rdp_target_scale(3, 64, 112), 5u);    /* Link en la pausa de Zelda */
+	CHECK_EQ(rdp_target_scale(1, 320, 240), 1u);
+	CHECK_EQ(rdp_target_scale(5, 640, 2000), 1u);  /* nunca 0 */
+	CHECK_EQ(rdp_target_scale(5, 5000, 100), 1u);  /* límite de 4096 */
+	/* Ninguna superficie pasa de 320·g × 240·g (o 640 × 480 a 1×) en ningún
+	 * lado, sea cual sea su tamaño lógico (alto ≥ 3/4 del ancho, como da
+	 * rdp_targets_get, hasta 640 × 480): ni un destino, ni el scratch (su
+	 * copia), ni una profundidad (la de un destino, o la mayor de dos en
+	 * cada lado). Así RDP_SURFACES_MAX caben en rdp_vram_worst. */
+	for (uint32_t g = 1; g <= RDP_SCALE_MAX; g++) {
+		uint32_t mw = 320 * g > 640 ? 320 * g : 640, mh = 240 * g > 480 ? 240 * g : 480;
+		for (uint32_t w = 8; w <= 640; w += 8)
+			for (uint32_t lh = w * 3 / 4; lh <= 480; lh += 7) {
+				uint32_t sc = rdp_target_scale(g, w, lh);
+				CHECK(w * sc <= mw && lh * sc <= mh);
+				CHECK(rdp_surface_bytes(w * sc, lh * sc) * RDP_SURFACES_MAX <= rdp_vram_worst(g));
+			}
+	}
+	CHECK(640 * RDP_SCALE_MAX <= 4096);
+}
+
+/* Imagen lógica de prueba (0xRRGGBB por punto). Su superficie a escala
+ * `sc` tiene cada punto lógico en un bloque de sc × sc píxeles, como lo
+ * dibuja el RSX con rsxkit_bind en coordenadas lógicas: el píxel (x, y) es
+ * el punto (x / sc, y / sc). */
+#define SIM_LW 320
+#define SIM_LH 240
+static uint32_t sim_img[SIM_LH][SIM_LW];
+
+static void sim_fill(uint32_t lw, uint32_t lh, uint32_t seed)
+{
+	for (uint32_t y = 0; y < lh; y++)
+		for (uint32_t x = 0; x < lw; x++) {
+			seed = seed * 1103515245u + 12345u;
+			sim_img[y][x] = seed >> 8 & 0xFFFFFF;
+		}
+}
+
+/* Muestreo lineal de la superficie a escala `sc` (sw × sh píxeles) en
+ * (u, v) en píxeles, como la textura del blit del RSX (centros en .5,
+ * borde repetido). */
+static uint32_t sim_bilinear(uint32_t sc, uint32_t sw, uint32_t sh, float u, float v)
+{
+	float fx = u - 0.5f, fy = v - 0.5f;
+	int x0 = (int)(fx < 0.0f ? fx - 1.0f : fx), y0 = (int)(fy < 0.0f ? fy - 1.0f : fy);
+	float ax = fx - (float)x0, ay = fy - (float)y0;
+	uint32_t out = 0;
+	for (int ch = 0; ch < 3; ch++) {
+		float acc = 0.0f;
+		for (int j = 0; j < 2; j++)
+			for (int i = 0; i < 2; i++) {
+				int x = x0 + i, y = y0 + j;
+				x = x < 0 ? 0 : x >= (int)sw ? (int)sw - 1 : x;
+				y = y < 0 ? 0 : y >= (int)sh ? (int)sh - 1 : y;
+				float wgt = (i ? ax : 1.0f - ax) * (j ? ay : 1.0f - ay);
+				acc += wgt * (float)(sim_img[(uint32_t)y / sc][(uint32_t)x / sc] >> (8 * ch) & 0xFF);
+			}
+		out |= (uint32_t)(acc + 0.5f) << (8 * ch);
+	}
+	return out;
+}
+
+/* Copia RSX → RDRAM simulada (rsxkit_target_read: un quad de lw × rows
+ * con filtro lineal sobre la región de la superficie que da
+ * rdp_surface_rect con la escala `rect_sc`). ¿Devuelve las `rows` primeras
+ * filas de la imagen lógica? */
+static bool sim_readback_ok(uint32_t lw, uint32_t lh, uint32_t sc, uint32_t rect_sc, uint32_t rows)
+{
+	struct rdp_rect r;
+	rdp_surface_rect(rect_sc, 0, 0, lw, rows, &r);
+	if (r.x + r.w > lw * sc || r.y + r.h > lh * sc)
+		return false;  /* rsxkit_target_read la rechazaría */
+	for (uint32_t y = 0; y < rows; y++)
+		for (uint32_t x = 0; x < lw; x++) {
+			float u = (float)r.x + ((float)x + 0.5f) * (float)r.w / (float)lw;
+			float v = (float)r.y + ((float)y + 0.5f) * (float)r.h / (float)rows;
+			if (sim_bilinear(sc, lw * sc, lh * sc, u, v) != sim_img[y][x])
+				return false;
+		}
+	return true;
+}
+
+/* Copias RSX → RDRAM con la escala del destino, distinta de 3×: cada
+ * destino se reduce a 1× desde su propia escala (la objetivo no sirve: Link
+ * de 64 × 112 va a 5× con la objetivo 3×, un framebuffer de 640 × 480 a
+ * 1×). Con cualquier escala entera el muestreo lineal en el centro de cada
+ * bloque da el punto lógico. */
+static void targets_readback_scaled(void)
+{
+	static const struct {
+		uint32_t g, lw, lh, rows;
+	} c[] = {
+		{ 3, 64, 112, 112 },  /* Link: 5× */
+		{ 3, 64, 112, 70 },   /* solo las filas dibujadas */
+		{ 1, 320, 240, 240 }, { 2, 320, 240, 200 }, { 4, 320, 240, 240 }, { 5, 320, 240, 237 },
+		{ 3, 320, 240, 240 },
+		{ 5, 64, 48, 48 },    /* auxiliar chica: 5× con tope */
+		{ 1, 64, 48, 48 },    /* 5× aunque la objetivo sea 1× */
+	};
+	for (unsigned k = 0; k < sizeof c / sizeof c[0]; k++) {
+		uint32_t sc = rdp_target_scale(c[k].g, c[k].lw, c[k].lh);
+		sim_fill(c[k].lw, c[k].lh, 7 + k);
+		CHECK(sim_readback_ok(c[k].lw, c[k].lh, sc, sc, c[k].rows));
+	}
+	/* Con la escala objetivo (3×) en vez de la del destino (5×), la copia de
+	 * Link lee solo una parte de la superficie y sale otra imagen. */
+	CHECK_EQ(rdp_target_scale(3, 64, 112), 5u);
+	sim_fill(64, 112, 99);
+	CHECK(!sim_readback_ok(64, 112, 5, 3, 112));
+	/* Un framebuffer de 640 × 480 con la objetivo 3× queda a 1×; leer un
+	 * destino a 1× con la escala objetivo saca la región de la superficie. */
+	CHECK_EQ(rdp_target_scale(3, 640, 480), 1u);
+	sim_fill(SIM_LW, SIM_LH, 5);
+	CHECK(!sim_readback_ok(SIM_LW, SIM_LH, 1, 3, SIM_LH));
+	CHECK(sim_readback_ok(SIM_LW, SIM_LH, 1, 1, SIM_LH));
+	/* La presentación con recorte del overscan: la región en la escala del
+	 * destino. */
+	struct rdp_rect r;
+	rdp_surface_rect(5, 8, 6 + 2, 304, 228, &r);
+	CHECK_EQ(r.x, 40);
+	CHECK_EQ(r.y, 40);
+	CHECK_EQ(r.w, 1520);
+	CHECK_EQ(r.h, 1140);
+}
+
+/* Render a textura entre destinos de escalas distintas: se dibuja en el
+ * framebuffer (3×) con una textura que sale de Link (64 × 112, a 5×). Las
+ * filas ligadas van en la escala del destino leído y u, v quedan
+ * normalizadas: cada texel de la textura de la HLE cae en su punto lógico
+ * del destino leído, sea cual sea la escala del destino en que se dibuja. */
+static void targets_texture_cross_scale(void)
+{
+	static const struct {
+		uint32_t sc, lw, lh, x0, y0, tw, th, ds;
+	} c[] = {
+		{ 5, 64, 112, 0, 0, 64, 112, 0 },   /* Link entero */
+		{ 5, 64, 112, 8, 20, 32, 40, 0 },   /* una parte */
+		{ 3, 320, 240, 0, 6, 320, 6, 0 },   /* una franja de la pausa de Zelda */
+		{ 1, 640, 480, 100, 50, 64, 32, 0 },
+		{ 2, 320, 240, 16, 0, 64, 64, 16 }, /* desplazada 16 texels en s */
+	};
+	for (unsigned k = 0; k < sizeof c / sizeof c[0]; k++) {
+		uint32_t sc = c[k].sc, sw = c[k].lw * sc;
+		struct rdp_tex_map m;
+		/* La HLE normaliza u a la textura: u = s / tw + ds / tw. */
+		float xf0 = 1.0f / (float)c[k].tw, xf2 = (float)c[k].ds / (float)c[k].tw;
+		rdp_target_tex_map(sc, c[k].lw, c[k].x0, c[k].y0, c[k].tw, c[k].th, xf0, xf2, &m);
+		CHECK_EQ(m.row0, c[k].y0 * sc);
+		CHECK_EQ(m.rows, c[k].th * sc);
+		CHECK(m.row0 + m.rows <= c[k].lh * sc);
+		bool ok = true;
+		for (uint32_t t = 0; t < c[k].th && ok; t++)
+			for (uint32_t s2 = 0; s2 + c[k].ds < c[k].tw && ok; s2++) {
+				float u = ((float)s2 + 0.5f) * m.xf0 + m.xf2;  /* sobre la fila entera */
+				float v = ((float)t + 0.5f) / (float)c[k].th;  /* sobre las filas ligadas */
+				uint32_t px = (uint32_t)(u * (float)sw), py = m.row0 + (uint32_t)(v * (float)m.rows);
+				ok = px / sc == c[k].x0 + c[k].ds + s2 && py / sc == c[k].y0 + t;
+			}
+		CHECK(ok);
+	}
+}
+
+/* Destinos sin z image propia: se ligan con la profundidad de la
+ * pantalla, que nunca puede ser más chica que el color (rsxkit_bind se
+ * niega). A 4× y 5× en 720p (5× en 1080p) un destino es más grande que la
+ * pantalla: rdp_zeta_reserve la agranda al mayor destino posible, y con eso
+ * cubre cualquier destino, scratch o profundidad a esa escala, en
+ * cualquier pantalla. */
+static void targets_zeta_covers(void)
+{
+	uint32_t w, h;
+	/* El caso: 5× en 720p, Link o el framebuffer de 320 × 240 a 1600 × 1200
+	 * no caben en la profundidad de 1280 × 720. */
+	CHECK_EQ(rdp_target_scale(5, 320, 240) * 240, 1200u);
+	CHECK(rdp_zeta_reserve(5, 1280, 720, &w, &h));
+	CHECK_EQ(w, 1600);
+	CHECK_EQ(h, 1200);
+	CHECK(rdp_zeta_reserve(4, 1280, 720, &w, &h));
+	CHECK_EQ(w, 1280);
+	CHECK_EQ(h, 960);
+	CHECK(rdp_zeta_reserve(5, 1920, 1080, &w, &h));  /* 1200 líneas > 1080 */
+	CHECK_EQ(h, 1200);
+	/* Donde la de la pantalla alcanza, no se agranda (0 × 0). */
+	CHECK(!rdp_zeta_reserve(3, 1280, 720, &w, &h));
+	CHECK_EQ(w, 0);
+	CHECK_EQ(h, 0);
+	CHECK(!rdp_zeta_reserve(4, 1920, 1080, &w, &h));
+	CHECK(!rdp_zeta_reserve(2, 720, 480, &w, &h));   /* 480p: 640 × 480 */
+	CHECK(!rdp_zeta_reserve(1, 720, 480, &w, &h));
+	/* Todas las pantallas y escalas: la zeta (la de la pantalla, agrandada
+	 * como rsxkit_depth_reserve) cubre cada superficie posible. */
+	static const uint32_t screens[][2] = { { 1280, 720 }, { 1920, 1080 }, { 720, 480 }, { 720, 576 } };
+	for (unsigned k = 0; k < sizeof screens / sizeof screens[0]; k++)
+		for (uint32_t g = 1; g <= RDP_SCALE_MAX; g++) {
+			uint32_t sw = screens[k][0], sh = screens[k][1];
+			bool grow = rdp_zeta_reserve(g, sw, sh, &w, &h);
+			uint32_t zw = w > sw ? w : sw, zh = h > sh ? h : sh;
+			bool all_fit = true, ok = true;
+			for (uint32_t lw = 8; lw <= 640; lw += 8)
+				for (uint32_t lh = lw * 3 / 4; lh <= 480; lh += 7) {
+					uint32_t sc = rdp_target_scale(g, lw, lh);
+					ok = ok && zw >= lw * sc && zh >= lh * sc;
+					all_fit = all_fit && sw >= lw * sc && sh >= lh * sc;
+				}
+			CHECK(ok);
+			CHECK(grow == !all_fit);  /* solo se agranda cuando hace falta */
+			if (grow)  /* y cuenta como una superficie más del peor caso */
+				CHECK(rdp_surface_bytes(w, h) * RDP_SURFACES_MAX <= rdp_vram_worst(g));
+		}
+}
+
+/* Presentar a un múltiplo entero o ajustar: entero si cabe y llena al
+ * menos 3/4 del alto (lo de antes a la escala automática), ajustado si la
+ * escala por destino deja la región chica. */
+static void targets_present_integer(void)
+{
+	CHECK(rdp_present_integer(960, 720, 1280, 720));     /* 3× en 720p */
+	CHECK(rdp_present_integer(912, 684, 1280, 720));     /* 3× con recorte */
+	CHECK(rdp_present_integer(320, 240, 1280, 720));     /* 1×: por 3 */
+	CHECK(rdp_present_integer(1280, 960, 1920, 1080));   /* 4× en 1080p */
+	CHECK(rdp_present_integer(640, 480, 1920, 1080));    /* 2× en 1080p: por 2 */
+	CHECK(rdp_present_integer(640, 480, 720, 480));      /* 2× en 480p */
+	CHECK(!rdp_present_integer(640, 480, 1280, 720));    /* 2× en 720p, o 640 × 480 a 1× */
+	CHECK(!rdp_present_integer(960, 720, 1920, 1080));   /* 3× en 1080p */
+	CHECK(!rdp_present_integer(1600, 1200, 1280, 720));  /* 5×: supermuestreo */
+	CHECK(!rdp_present_integer(1280, 960, 1280, 720));   /* 4× en 720p */
+	CHECK(!rdp_present_integer(0, 240, 1280, 720));
+}
+
 /* Espejo del framebuffer, una vez por dibujo (la política que siguen rdp.c
  * y el rasterizador del host; tests/unit/test_raster.c la prueba de punta
  * a punta). La secuencia de Super Mario 64 al pasar del logo a la cara de
@@ -444,4 +721,9 @@ void t_suite_targets(void)
 	RUN(targets_drawn_while_blank);
 	RUN(targets_recycle_order);
 	RUN(targets_frame_mirror);
+	RUN(targets_scale_pick);
+	RUN(targets_readback_scaled);
+	RUN(targets_texture_cross_scale);
+	RUN(targets_present_integer);
+	RUN(targets_zeta_covers);
 }

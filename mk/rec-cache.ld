@@ -11,6 +11,9 @@
  */
 SECTIONS
 {
-	.salsa64_rec_cache (NOLOAD) : ALIGN(64K) { KEEP (*(.salsa64_rec_cache)) } : hdr_text
+	/* Alineada a 1 MB por si lv2 da páginas grandes al segmento (se mide al
+	 * arrancar; docs/perf-log.md). ALIGN(1M) en la sección mueve el inicio del
+	 * segmento de texto a 0: por eso el ajuste va dentro. */
+	.salsa64_rec_cache (NOLOAD) : ALIGN(64K) { . = ALIGN(1M); KEEP (*(.salsa64_rec_cache)) } : hdr_text
 }
 INSERT AFTER .sys_proc_prx_param;

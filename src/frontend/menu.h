@@ -44,6 +44,7 @@ enum menu_action {
 	MENU_OPEN,      /* abrir menu_selected() */
 	MENU_QUIT,      /* «Salir al XMB» */
 	MENU_SETTINGS,  /* cambió un ajuste: guardarlo */
+	MENU_APPLY,     /* «Aplicar ahora»: poner la salida y la escala elegidas */
 };
 
 /* Recorte del overscan (SALSA64_DATA_DIR/overscan.cfg, ver main.c). */
@@ -54,8 +55,8 @@ enum menu_overscan {
 	MENU_OVERSCAN_CUSTOM,  /* otros números en overscan.cfg (se muestran, no se eligen) */
 };
 
-/* Resolución de salida (SALSA64_DATA_DIR/video.cfg, ver main.c): solo se
- * aplica al volver a abrir Salsa64. */
+/* Resolución de salida (SALSA64_DATA_DIR/video.cfg, ver main.c): se lee al
+ * arrancar y la fila «Aplicar ahora» la pone sin cerrar Salsa64. */
 enum menu_resolution {
 	MENU_RES_720P,
 	MENU_RES_1080P,
@@ -68,11 +69,14 @@ struct menu_settings {
 	bool waves;     /* fondo animado («fondo = si|no») */
 	int overscan;   /* enum menu_overscan */
 	int resolution; /* enum menu_resolution */
+	int scale;      /* escala interna del render: 0 automática, 1 .. 5 */
 	bool fps;       /* contador de velocidad en el juego («fps = si|no»; SELECT + △) */
 };
 
 enum { MENU_PAGE_GAMES, MENU_PAGE_OPTIONS };
-enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_RESOLUTION, MENU_OPT_FPS, MENU_OPT_BACK, MENU_OPTS };
+enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_RESOLUTION, MENU_OPT_SCALE, MENU_OPT_APPLY, MENU_OPT_FPS, MENU_OPT_BACK,
+       MENU_OPTS };
+/* «Aplicar ahora» solo existe mientras lo elegido difiere de lo que corre. */
 
 struct menu {
 	const struct romlist *list;
@@ -80,10 +84,13 @@ struct menu {
 	int page;              /* MENU_PAGE_* */
 	int sel;               /* juegos: 0 .. count + 1 (count: Opciones; count + 1: Salir) */
 	int opt;               /* opciones: MENU_OPT_* */
-	/* Salida con la que arrancó la app (la pone main.c): ancho × alto y la
-	 * resolución que se pidió en video.cfg al arrancar. */
+	/* Lo que corre ahora (lo pone main.c): ancho × alto de la salida y la
+	 * resolución y la escala pedidas (las de set.resolution y set.scale
+	 * cuando coinciden, no hay nada que aplicar). */
 	unsigned out_w, out_h;
-	int res_boot;          /* enum menu_resolution */
+	int res_run;           /* enum menu_resolution */
+	int scale_run;         /* 0 automática, 1 .. 5 */
+	char note[48];         /* resultado del último «Aplicar ahora» */
 	bool armed;            /* ya se vieron todos los botones sueltos */
 	uint32_t held;         /* botones del llamado anterior */
 	uint32_t rep_button;   /* bit de la dirección que repite, o 0 */
@@ -111,6 +118,11 @@ int menu_selected(const struct menu *m);
 /* Filas de la página de juegos: ROMs + Opciones + Salir. */
 static inline int menu_rows(const struct menu *m) { return (int)m->list->count + 2; }
 static inline int menu_row_exit(const struct menu *m) { return (int)m->list->count + 1; }
+/* Hay un cambio de salida o de escala por aplicar. */
+static inline bool menu_video_pending(const struct menu *m)
+{
+	return m->set.resolution != m->res_run || m->set.scale != m->scale_run;
+}
 void menu_set_status(struct menu *m, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
 /* Avanza la animación a now_us y dibuja el menú entero con rsxkit_ui_* en
@@ -121,6 +133,12 @@ void menu_frame(struct menu *m, float lw, float lh, uint64_t now_us);
 void menu_settings_default(struct menu_settings *s);
 void menu_settings_parse(struct menu_settings *s, const char *text, size_t len);
 int menu_settings_format(const struct menu_settings *s, char *buf, size_t size);
+
+/* video.cfg: «salida = 1080|720» y «escala = auto|1..5». También acepta el
+ * formato viejo, una sola línea «1080» o «720». Solo toca resolution y
+ * scale; lo que no entiende lo deja como estaba. */
+void menu_video_parse(struct menu_settings *s, const char *text, size_t len);
+int menu_video_format(const struct menu_settings *s, char *buf, size_t size);
 
 /* Para la prueba automática: los botones que acercan la selección a la
  * fila `target` de la página de juegos (0 .. menu_row_exit) y la abren;
