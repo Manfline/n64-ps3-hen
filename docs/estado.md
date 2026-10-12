@@ -33,6 +33,12 @@
   uno); (b) dejar `-Os` pero forzar inline lo caliente del combiner
   (`p_term`, sumas de polinomios): en el SPU cada llamada sin pista de
   salto cuesta ~18 ciclos.
+- **PS3 real con todo (ece6049):** Zelda «sublime» (59,8 campos/s, estado
+  1,38 ms), GoldenEye igual que antes (limita el CPU en Dam), PD a 59,8 en
+  la azotea con el estado en 0,70 ms; sus tirones son campos saltados por la
+  presentación (5,8 % contra 0,9 % del paquete anterior, con la emulación a
+  60), que vinieron con 99686a7 y siguen en la rama de los arreglos
+  gráficos (docs/perf-log.md, «Pila del SPE 0»).
 
 ## 2026-10-12 (noche) — Donkey Kong 64: logos entrelazados y «zoom» en el juego (presentación; rama `infallible-wozniak-aa210c`)
 
