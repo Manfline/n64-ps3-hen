@@ -31,8 +31,9 @@
  * detrás no se dibuja), una color image de 64 que se dibuja y se lee como
  * textura en la misma lista (S: render a textura) y una del ancho del
  * framebuffer que el RDP llena y el CPU lee en el cuadro siguiente (T:
- * copia RSX → RDRAM). Al
- * final de cada lista, un tramo de otro microcódigo (G_LOAD_UCODE) que la
+ * copia RSX → RDRAM) y la memoria de una color image de 8 bits que,
+ * cuadros después, es una de 16 bits leída como textura (V). Al final de
+ * cada lista, un tramo de otro microcódigo (G_LOAD_UCODE) que la
  * HLE debe saltar; en GFXTEST_CUT_FRAME la lista termina dentro de él (no
  * en la variante F3D, que no tiene G_LOAD_UCODE).
  *
@@ -151,6 +152,8 @@ static uint16_t zbuf[W * H] __attribute__((section(".fb"), aligned(64)));
 static uint16_t fb_small[64 * 16] __attribute__((section(".fb"), aligned(64)));
 static uint16_t fb_save[W * H] __attribute__((section(".fb"), aligned(64)));
 static uint16_t fb_cpu[64 * 16] __attribute__((section(".fb"), aligned(64)));
+/* La misma memoria primero como color image de 8 bits y después de 16. */
+static uint16_t fb_alias[64 * 16] __attribute__((section(".fb"), aligned(64)));
 static uint16_t saved_pixel;  /* lo que el CPU leyó de fb_save tras el cuadro anterior */
 static uint16_t small_pixel;  /* lo que el CPU leyó de fb_cpu (64 de ancho) */
 
@@ -724,6 +727,43 @@ static gfx *build_dl(uint16_t *color, unsigned frame)
 	dp_scissor(&dl, 0, 0, W, H);
 	dp_fill_color(&dl, (uint32_t)small_pixel << 16 | small_pixel);
 	dp_fill_rect(&dl, 176, 106, 207, 113);
+
+	/* V: la misma memoria con otro tamaño de texel (las campanadas del fin
+	 * del día en Majora's Mask: la pausa usa esa dirección como cobertura
+	 * de 8 bits y el efecto, como copia de 16 bits del cuadro). Hasta
+	 * GFXTEST_ALIAS_FRAME − 10, fb_alias es una color image de 8 bits que
+	 * el RDP llena; desde GFXTEST_ALIAS_FRAME, una de 16 bits del mismo
+	 * ancho que se llena de cian y se dibuja como textura de 16 bits. Es
+	 * otra imagen: si la PS3 la tomara por la de 8 bits, la textura no la
+	 * encontraría en el RSX y saldría lo que hay en la RDRAM. */
+	if (frame < GFXTEST_ALIAS_FRAME - 10) {
+		dp_othermode(&dl, CYC_FILL, 0);
+		dp_color_image(&dl, FMT_I, SIZ_8, 64, fb_alias);
+		dp_scissor(&dl, 0, 0, 64, 16);
+		dp_fill_color(&dl, 0x40404040u);
+		dp_fill_rect(&dl, 0, 0, 63, 15);
+		dp_sync(&dl, SYNC_PIPE);
+	} else if (frame >= GFXTEST_ALIAS_FRAME) {
+		dp_othermode(&dl, CYC_FILL, 0);
+		dp_color_image(&dl, FMT_RGBA, SIZ_16, 64, fb_alias);
+		dp_scissor(&dl, 0, 0, 64, 16);
+		dp_fill_color(&dl, 0x07FF07FFu);  /* (0, 31, 31, 1) */
+		dp_fill_rect(&dl, 0, 0, 63, 15);
+		dp_sync(&dl, SYNC_PIPE);
+		dp_color_image(&dl, FMT_RGBA, SIZ_16, W, color);
+		dp_scissor(&dl, 0, 0, W, H);
+		dp_texture_image(&dl, FMT_RGBA, SIZ_16, 64, fb_alias);
+		dp_tile(&dl, FMT_RGBA, SIZ_16, 8, 0, 7, 0, 0, 0, 0);
+		dp_sync(&dl, SYNC_LOAD);
+		dp_load_tile(&dl, 7, 0, 0, 31, 7);
+		dp_sync(&dl, SYNC_PIPE);
+		dp_tile(&dl, FMT_RGBA, SIZ_16, 8, 0, 0, 0, 0, 0, 0);
+		dp_tile_size(&dl, 0, 0, 0, 31, 7);
+		dp_othermode(&dl, CYC_COPY, 0);
+		sp_texrect(&dl, 0, 176, 116, 207, 123, 0, 0, 4 << 10, 1 << 10);
+	}
+	dp_color_image(&dl, FMT_RGBA, SIZ_16, W, color);
+	dp_scissor(&dl, 0, 0, W, H);
 
 	/* Tramo de otro microcódigo (como S2DEX en Zelda OoT): G_LOAD_UCODE a
 	 * otra dirección, comandos que la HLE debe saltar (si los ejecutara, el

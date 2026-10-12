@@ -56,6 +56,9 @@ int raster_fbfx = 2;
 static struct rdp_vi_ring vi_ring;
 static uint32_t primes, readbacks, mirrors, frames;
 static uint32_t rb_task[RDP_TARGETS_MAX];  /* última tarea con copia a la RDRAM por ranura */
+/* Última tarea con copia pedida (rdp_readback_wanted) por ranura: una que se
+ * repite en tareas seguidas va en la PS3 sin esperar y no pasa al CPU. */
+static uint32_t rb_wanted_task[RDP_TARGETS_MAX];
 #define RB_KEEP_TASKS 32
 #define MIRROR_BYTES 65536  /* como rdp.c: tope de una copia espejo (imagen chica) */
 static struct gfx_job last_job;  /* la RDRAM, para el espejo de cada campo */
@@ -77,6 +80,7 @@ static int get_target(const struct gfx_job *job, uint32_t addr, uint32_t width, 
 	if (fresh) {
 		memset(rgb[i], 0, sizeof rgb[i]);
 		tg.t[i].fmt = (uint8_t)fmt;
+		rb_wanted_task[i] = 0;
 	}
 	if (fresh || tg.task - tg.t[i].last_task > RDP_TARGETS_FRESH)
 		prime(job, i);
@@ -619,8 +623,13 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 		/* Como en la PS3: lo decide el ancho del VI y sus orígenes. */
 		const struct rdp_target *t = &tg.t[i];
 		uint32_t rows = drawn_rows[i] < t->lh ? drawn_rows[i] : t->lh;
-		if (raster_fbfx >= 2 && rdp_readback_wanted(&vi_ring, t->addr, t->width, t->bpp == 2 ? 2 : 0) &&
-		    rdp_targets_readback(&tg, i, true)) {
+		/* Como la PS3: la copia pedida también en la tarea anterior va sin
+		 * esperar y la imagen sigue siendo del RDP (targets.h). */
+		bool wanted = raster_fbfx >= 2 && rdp_readback_wanted(&vi_ring, t->addr, t->width, t->bpp == 2 ? 2 : 0);
+		bool again = rb_wanted_task[i] && rb_wanted_task[i] + 1 == tg.task;
+		if (wanted)
+			rb_wanted_task[i] = tg.task;
+		if (wanted && rdp_targets_readback(&tg, i, true, !again)) {
 			readback(job, i, rows);
 			rb_task[i] = tg.task;
 			readbacks++;

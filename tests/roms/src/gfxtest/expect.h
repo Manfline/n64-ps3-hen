@@ -35,6 +35,9 @@
  * volver ni llegar al G_RDPFULLSYNC): la interrupción del DP debe llegar
  * igual. */
 #define GFXTEST_CUT_FRAME 7
+/* Cuadro desde el que fb_alias, que hasta 10 cuadros antes fue una color
+ * image de 8 bits, es una de 16 bits leída como textura (escena V). */
+#define GFXTEST_ALIAS_FRAME 40
 
 struct gfxtest_point {
 	unsigned short x, y;
@@ -76,6 +79,7 @@ struct gfxtest_point {
 	{ 150, 109, 0xFF00FF, "render a textura: color image de 64 leída como textura" },    \
 	{ 150, 119, 0xFF0000, "copia RSX → RDRAM: el CPU leyó la color image guardada" }, \
 	{ 190, 109, 0x00FF00, "copia RSX → RDRAM de una color image de 64 de ancho (el CPU la leyó)" }, \
+	{ 190, 119, 0x00FFFF, "la misma memoria, de 8 bits y después de 16: leída como textura de 16" }, \
 	{ 20, 90, 0x00FF80, "clip ratio 1: dentro del viewport chico" },              \
 	{ 5, 90, GFXTEST_BG, "clip ratio 1: fuera del viewport (izquierda)" },         \
 	{ 35, 90, GFXTEST_BG, "clip ratio 1: fuera del viewport (derecha)" },          \
