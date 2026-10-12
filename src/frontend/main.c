@@ -125,6 +125,9 @@
  * Si SALSA64_DATA_DIR/gfxdump dice un número de campo,
  * en ese campo se vuelca la salida de la última tarea gráfica a
  * SALSA64_DATA_DIR/gfxdump.bin (salsa64-run --raster-dump la dibuja).
+ * SELECT + R2 en el juego hace lo mismo en el campo que se está mostrando,
+ * a gfxdump-<campo>.bin, con la captura del RSX de ese cuadro al lado
+ * (gfxdump-<campo>.ppm): para comparar el RSX con el rasterizador del host.
  *
  * Salir: «Salir al XMB» en el menú, START + SELECT sin menú (con embedded),
  * o "Salir del juego" desde el menú del sistema en cualquier momento.
@@ -535,6 +538,7 @@ static struct salsa64_ds3 ds3_from(const padData *d)
 /* ---- Estados guardados y atajos con SELECT (hilo de presentación) ---------- */
 
 static unsigned state_req_slot;  /* la ranura de la petición en curso */
+static bool dump_now;            /* SELECT + R2: volcar la HLE en el próximo cuadro */
 static int combos_on;            /* dentro del juego (no en el menú) */
 static uint32_t state_done;      /* barreras terminadas */
 static bool state_last_ok;       /* cómo terminó la última */
@@ -583,11 +587,12 @@ static void state_slot_step(int d)
 
 /* Atajos dentro del juego, con SELECT (la N64 no lo tiene; START + SELECT
  * vuelve al menú): + R1 guarda el estado en la ranura actual, + L1 lo
- * carga, + izquierda o derecha de la cruceta cambia de ranura y + △
- * muestra u oculta el contador de velocidad. Mientras SELECT está apretado
+ * carga, + izquierda o derecha de la cruceta cambia de ranura, + △
+ * muestra u oculta el contador de velocidad y + R2 vuelca la salida de la
+ * HLE gráfica con la captura del cuadro. Mientras SELECT está apretado
  * esos botones no llegan al juego. Devuelve los botones para el mapeo. */
 #define COMBO_MASK (1u << SALSA64_DS3_R1 | 1u << SALSA64_DS3_L1 | 1u << SALSA64_DS3_LEFT | \
-		    1u << SALSA64_DS3_RIGHT | 1u << SALSA64_DS3_TRIANGLE)
+		    1u << SALSA64_DS3_RIGHT | 1u << SALSA64_DS3_TRIANGLE | 1u << SALSA64_DS3_R2)
 
 static uint32_t pad_combos(unsigned port, uint32_t b)
 {
@@ -610,6 +615,8 @@ static uint32_t pad_combos(unsigned port, uint32_t b)
 		osd_notice(sysGetSystemTime(), "FPS: %s", fps.on ? "sí" : "no");
 		fps_setting_save(fps.on);
 	}
+	if (rise & 1u << SALSA64_DS3_R2)
+		dump_now = true;
 	return b & ~COMBO_MASK;
 }
 
@@ -1296,6 +1303,18 @@ static void present_field(const struct field_msg *m, uint64_t now)
 			    salsa64_rdp_dump(SALSA64_DATA_DIR "/gfxdump.bin") ? "bien" : "FALLO");
 		pres.dump_field = 0;
 	}
+	if (dump_now && m->f.width) {
+		char path[64], shot[64];
+		dump_now = false;
+		snprintf(path, sizeof path, SALSA64_DATA_DIR "/gfxdump-%u.bin", m->field);
+		snprintf(shot, sizeof shot, SALSA64_DATA_DIR "/gfxdump-%u.ppm", m->field);
+		rsxkit_finish();
+		bool ok = salsa64_rdp_dump(path);
+		salsa64_screenshot(shot, &shown, &r);
+		salsa64_log("volcado de la HLE (SELECT + R2) en %s con la captura %s: %s", path, shot,
+			    ok ? "bien" : "FALLO");
+		osd_notice(sysGetSystemTime(), ok ? "Volcado del campo %u" : "Volcado: falló", m->field);
+	}
 	if (ui_ok)
 		osd_draw(&fps, sysGetSystemTime(), ui_lw, ui_lh);
 	/* audio_out: una vez por campo presentado (estadísticas y volcado). */
@@ -1958,7 +1977,8 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	osd_fps_reset(&fps);
 	combos_on = 1;
 	salsa64_log("estados: %s/<juego>.st0 … .st%d; SELECT + R1 guarda, + L1 carga, + izquierda/derecha cambia de "
-		    "ranura; FPS %s (SELECT + △)", STATES_DIR, SALSA64_STATE_SLOTS - 1, fps.on ? "sí" : "no");
+		    "ranura; FPS %s (SELECT + △); SELECT + R2 vuelca la HLE", STATES_DIR, SALSA64_STATE_SLOTS - 1,
+		    fps.on ? "sí" : "no");
 
 	uint64_t now = sysGetSystemTime();
 	pres.t_shot = now;
