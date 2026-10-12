@@ -13,12 +13,18 @@ azul del rectángulo final de la escena. La N64 la tapa porque con AA_EN el
 RDP escribe todo píxel con alguna de sus 8 muestras de cobertura dentro.
 
 Ahora `gfx_draw.aa` marca los triángulos opacos sin prueba de alfa con
-AA_EN. El host los dibuja con las 8 muestras y el RSX con POLYGON_SMOOTH
-(`docs/rsx-notes.md`). Con el volcado marcado, las 25 grietas del cuadro
-desaparecen. En siete juegos, cada 500 campos, solo cambian bordes de un
-píxel (los polígonos AA quedan algo más gordos, como en la N64). Pruebas:
-`raster_aa_tjunction` (dos franjas a 0,4 px) y `gfx_aa_flag` (qué modos lo
-encienden).
+AA_EN y la HLE los ensancha (`aa_grow`): cada arista se corre hacia afuera
+lo que llega una de las 8 muestras respecto del centro en su normal (0,5 px
+abajo y a la derecha, 0,25 arriba y a la izquierda), con los vértices
+nuevos sobre el plano del triángulo (los atributos no se mueven). Primero se
+probó POLYGON_SMOOTH en el RSX: en la PS3 real no hace nada (las líneas
+seguían; el autor: «el problema está cuando se aumenta la resolución
+interna»: a 3× más muestras caen en la cuña). El ensanchado es geométrico y
+cierra la cuña a cualquier escala. Con el estado del autor en el túnel, el
+host pasa de 11 píxeles de grieta a 0. En siete juegos, cada 500 campos,
+solo cambian bordes de un píxel (los polígonos AA quedan algo más gordos,
+como en la N64). Pruebas: `gfx_aa_grow` (vértices esperados de un triángulo
+rectángulo) y `gfx_aa_flag` (qué modos lo encienden).
 
 `salsa64-run --raster-dump` dejaba volteados por palabras los bytes de
 `nterms` a `pad` de los volcados big-endian: los dibujos con combiners
@@ -55,9 +61,9 @@ esperarla bloquearía la emulación. La espera tiene que ir al descongelar
 (`salsa64_rsp_dp_unfreeze`), con presentación traduciendo esa tarea en el
 acto. Queda para después.
 
-Pendiente en la PS3: que POLYGON_SMOOTH tape las líneas en Dam y cuánto
-cuesta (GoldenEye y Perfect Dark); la túnica con el pliegue entero; y la
-transición de Banjo sin el negro.
+Pendiente en la PS3: que el ensanchado tape las líneas en Dam con la escala
+interna alta y lo que cuesta (GoldenEye y Perfect Dark); la túnica con el
+pliegue entero; y la transición de Banjo sin el negro.
 
 ## 2026-10-12 — Banjo-Kazooie (protección del CIC 6103), cara de Conker (K5) y rayas del logo de Zelda (rama `infallible-wozniak-aa210c`, paquete SLSA00099 «Salsa64 gráficos»)
 

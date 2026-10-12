@@ -263,10 +263,10 @@ struct gfx_draw {
 	 * dibuja: deja «cobertura plena» en la RDRAM (docs/framebuffer.md). */
 	uint8_t viscvg;
 	/* Triángulos opacos con AA_EN: el RDP escribe el píxel si cualquiera de
-	 * sus 8 muestras de cobertura cae dentro, no solo el centro. Los
-	 * polígonos quedan algo más gordos y tapan las grietas de medio píxel
-	 * de las uniones en T (piso y paredes de Dam en GoldenEye). En el RSX,
-	 * POLYGON_SMOOTH; en el host, las 8 muestras (src/host/raster.c). */
+	 * sus 8 muestras de cobertura cae dentro, no solo el centro. Sus
+	 * vértices ya salen ensanchados (aa_grow en rdp.c): tapan las grietas
+	 * de medio píxel de las uniones en T (piso y paredes de Dam en
+	 * GoldenEye). Informativo para quien dibuja. */
 	uint8_t aa;
 	uint8_t pad;
 	struct gfx_tex tex[2];

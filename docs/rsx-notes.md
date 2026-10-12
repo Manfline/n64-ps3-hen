@@ -167,20 +167,14 @@ pocas palabras del búfer de comandos. Quien junte en un solo lote
 geometría translúcida que se superpone debería hacer lo mismo si quiere
 verla bien en RPCS3.
 
-## Cobertura con AA_EN: POLYGON_SMOOTH (2026-10-12, sin confirmar en la PS3)
+## Cobertura con AA_EN: POLYGON_SMOOTH no sirve (2026-10-12, PS3 real)
 
 Con AA_EN el RDP escribe un píxel si cualquiera de sus 8 muestras de
-cobertura (cuatro subscanlines de un cuarto de píxel, dos posiciones de x
-alternadas en cada una) cae dentro del triángulo; el RSX, como cualquier
-GPU, solo mira el centro. Una unión en T del modelo deja una cuña de menos
-de un píxel que la N64 tapa y aquí se ve el fondo: las líneas azules del
-túnel de Dam en GoldenEye (el piso tiene un vértice a media arista que cae
-un píxel fuera del borde de la pared).
-
-Para los triángulos opacos sin prueba de alfa con AA_EN (`gfx_draw.aa`),
-rsxkit enciende `POLYGON_SMOOTH_ENABLE` (método 0x1838 del NV40,
-`rsxSetPolygonSmoothEnable`): el RSX genera fragmentos también en los
-píxeles cubiertos en parte y multiplica su alfa por la cobertura (sin
-mezcla no cambia el color). El rasterizador del host hace las 8 muestras
-de la N64. Por confirmar en la PS3: que el RSX lo haga en hardware y lo
-que cuesta; RPCS3 lo ignora.
+cobertura cae dentro del triángulo; el RSX solo mira el centro. Se probó
+`POLYGON_SMOOTH_ENABLE` (método 0x1838 del NV40,
+`rsxSetPolygonSmoothEnable`) para que el RSX generara fragmentos también en
+los píxeles cubiertos en parte: en la PS3 real no cambia nada (el volcado de
+SELECT + R2 en el túnel de Dam traía la marca en 100 de 109 dibujos y la
+captura del RSX seguía con las grietas). RPCS3 también lo ignora. La
+cobertura se emula en la HLE, ensanchando los triángulos (`aa_grow` en
+src/rsp/gfx/rdp.c), que además sirve a cualquier escala interna.

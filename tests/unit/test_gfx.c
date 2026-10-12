@@ -943,6 +943,40 @@ static void gfx_aa_flag(void)
 	}
 }
 
+/* Triángulo opaco con AA_EN, ensanchado como la cobertura de 8 muestras
+ * del RDP. En pantalla (160,120), (320,120), (160,0): la arista de abajo
+ * baja 0,5 px, la de la izquierda va 0,25 a la izquierda y la hipotenusa
+ * (normal (0,6, −0,8)) se corre 0,35, lo que llega la muestra (0,25, −0,25).
+ * Sin AA_EN no se toca. */
+static void gfx_aa_grow(void)
+{
+	static const float want[3][2] = { { 159.75f, 120.5f }, { 321.25f, 120.5f }, { 159.75f, -0.625f } };
+	const struct vtx v[3] = { { 0, 0, 0, 0, 0, { 0 } }, { 1, 0, 0, 0, 0, { 0 } }, { 0, 1, 0, 0, 0, { 0 } } };
+	for (int aa = 0; aa < 2; aa++) {
+		start();
+		viewport_320x240();
+		load_mtx(ident, true);
+		load_mtx(ident, false);
+		set_combine(CC_A_ZERO, CC_ZERO, CC_C_ZERO, CC_SHADE, CC_ZERO, CC_ZERO, CC_ZERO, CC_SHADE);
+		dl(0xEF000000 | G_CYC_1CYCLE << 20, aa ? 0x00552078u : 0x00552230u);  /* AA_ZB_OPA o ZB_OPA */
+		dl(0x01000000 | 3 << 12 | 3 << 1, put_vertices(v, 3));
+		dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);
+		run();
+		const struct gfx_draw *d = draw_n(0);
+		CHECK(d && d->h.b == 3);
+		if (!d || d->h.b != 3)
+			continue;
+		const struct gfx_vertex *o = &out_vtx[d->h.a];
+		for (int i = 0; i < 3; i++) {
+			float x = o[i].x / o[i].w, y = o[i].y / o[i].w;
+			float wx = aa ? want[i][0] : v[i].x ? 320.0f : 160.0f, wy = aa ? want[i][1] : v[i].y ? 0.0f : 120.0f;
+			CHECK(fabsf(x - wx) < 1e-3f);
+			CHECK(fabsf(y - wy) < 1e-3f);
+			CHECK(fabsf(o[i].w - 1.0f) < 1e-6f);
+		}
+	}
+}
+
 /* Display lists anidadas, segmentos, CULLDL y BRANCH_Z. */
 static void gfx_dl_flow(void)
 {
@@ -1878,6 +1912,7 @@ void t_suite_gfx(void)
 	RUN(gfx_texture_provenance);
 	RUN(gfx_viscvg_flag);
 	RUN(gfx_aa_flag);
+	RUN(gfx_aa_grow);
 	RUN(gfx_tile_clamp_mirror_mask);
 	RUN(gfx_blender_fog_color);
 }
