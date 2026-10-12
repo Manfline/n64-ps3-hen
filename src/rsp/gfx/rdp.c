@@ -288,6 +288,8 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 	blend_state(g, d);
 	if (kind != PRIM_TRI || !(g->geom & G_FOG))
 		d->fog = 0;
+	d->aa = kind == PRIM_TRI && (g->ol & AA_EN) && d->blend == GFX_BLEND_OFF && d->atest == GFX_ATEST_NONE &&
+		!d->viscvg;
 
 	/* La niebla ya está decidida: con ella, gfx_combine deja el término al
 	 * que el vertex program suma el color de niebla. */

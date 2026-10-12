@@ -262,7 +262,13 @@ struct gfx_draw {
 	 * el CPU filtre los bordes del fondo de la pausa. El consumidor no lo
 	 * dibuja: deja «cobertura plena» en la RDRAM (docs/framebuffer.md). */
 	uint8_t viscvg;
-	uint8_t pad[2];
+	/* Triángulos opacos con AA_EN: el RDP escribe el píxel si cualquiera de
+	 * sus 8 muestras de cobertura cae dentro, no solo el centro. Los
+	 * polígonos quedan algo más gordos y tapan las grietas de medio píxel
+	 * de las uniones en T (piso y paredes de Dam en GoldenEye). En el RSX,
+	 * POLYGON_SMOOTH; en el host, las 8 muestras (src/host/raster.c). */
+	uint8_t aa;
+	uint8_t pad;
 	struct gfx_tex tex[2];
 	float k[GFX_K_TERMS][3][4];
 };

@@ -24,7 +24,7 @@ OPS = {0: "END", 1: "TARGET", 2: "ZCLEAR", 3: "DRAW"}
 U8_FIELDS = ["cycle", "cull", "depth", "blend", "atest", "aref", "fog", "ntex"]
 BLEND = ["OFF", "ALPHA", "ADD", "KEEP"]
 # struct gfx_draw (gfx.h): desplazamientos desde el inicio del dibujo.
-OFF_NTERMS, OFF_FACTORS, OFF_VISCVG = 48, 49, 77
+OFF_NTERMS, OFF_FACTORS, OFF_VISCVG, OFF_AA = 48, 49, 77, 78
 OFF_TEX, TEX_SIZE = 80, 40            # struct gfx_tex tex[2]
 OFF_K, K_TERMS = 160, 7               # float k[7][3][4]
 TERM_NAMES = ["T0", "T0a", "T1", "T1a", "1", "t5", "t6"]
@@ -100,6 +100,8 @@ class Dump:
         nterms = self.cmd[off + OFF_NTERMS]
         if self.cmd[off + OFF_VISCVG]:
             s += "\n      viscvg"
+        if self.cmd[off + OFF_AA]:
+            s += "\n      aa (cobertura de 8 muestras)"
         k = struct.unpack_from(e + f"{K_TERMS * 12}f", self.cmd, off + OFF_K)
         for t in range(K_TERMS if nterms else 5):
             row = k[t * 12:(t + 1) * 12]
@@ -157,6 +159,8 @@ def cmd_edit(args):
         off = draws[int(n)]
         if key in U8_FIELDS:
             d.cmd[off + 28 + U8_FIELDS.index(key)] = int(val, 0)
+        elif key == "aa":
+            d.cmd[off + OFF_AA] = int(val, 0)
         elif key.startswith("tex") and "." in key:
             i, field = key[3:].split(".", 1)
             base, _ = d.tex_at(off, int(i))

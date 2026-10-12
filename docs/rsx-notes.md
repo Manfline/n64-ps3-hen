@@ -166,3 +166,21 @@ onda: `rsxkit_ui_groups`); con el estado en caché, cada llamada son unas
 pocas palabras del búfer de comandos. Quien junte en un solo lote
 geometría translúcida que se superpone debería hacer lo mismo si quiere
 verla bien en RPCS3.
+
+## Cobertura con AA_EN: POLYGON_SMOOTH (2026-10-12, sin confirmar en la PS3)
+
+Con AA_EN el RDP escribe un píxel si cualquiera de sus 8 muestras de
+cobertura (cuatro subscanlines de un cuarto de píxel, dos posiciones de x
+alternadas en cada una) cae dentro del triángulo; el RSX, como cualquier
+GPU, solo mira el centro. Una unión en T del modelo deja una cuña de menos
+de un píxel que la N64 tapa y aquí se ve el fondo: las líneas azules del
+túnel de Dam en GoldenEye (el piso tiene un vértice a media arista que cae
+un píxel fuera del borde de la pared).
+
+Para los triángulos opacos sin prueba de alfa con AA_EN (`gfx_draw.aa`),
+rsxkit enciende `POLYGON_SMOOTH_ENABLE` (método 0x1838 del NV40,
+`rsxSetPolygonSmoothEnable`): el RSX genera fragmentos también en los
+píxeles cubiertos en parte y multiplica su alfa por la cobertura (sin
+mezcla no cambia el color). El rasterizador del host hace las 8 muestras
+de la N64. Por confirmar en la PS3: que el RSX lo haga en hardware y lo
+que cuesta; RPCS3 lo ignora.

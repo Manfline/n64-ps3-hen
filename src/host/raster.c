@@ -190,6 +190,13 @@ static float edge(float ax, float ay, float bx, float by, float px, float py)
 	return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
 }
 
+/* Muestras de cobertura del RDP dentro del píxel: cuatro subscanlines de
+ * un cuarto de píxel con dos posiciones de x alternadas en cada una. */
+static const float cvg_sample[8][2] = {
+	{ 0.0f, 0.0f },   { 0.5f, 0.0f },   { 0.25f, 0.25f }, { 0.75f, 0.25f },
+	{ 0.0f, 0.5f },   { 0.5f, 0.5f },   { 0.25f, 0.75f }, { 0.75f, 0.75f },
+};
+
 static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, const struct texmem *m,
 			  const struct texsrc src[2], uint32_t *tg_rgb, struct depth *zb)
 {
@@ -214,8 +221,9 @@ static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, 
 	float x1 = d->scissor[2] / 4.0f, y1 = d->scissor[3] / 4.0f;
 	float minx = fminf(fminf(sx[0], sx[1]), sx[2]), maxx = fmaxf(fmaxf(sx[0], sx[1]), sx[2]);
 	float miny = fminf(fminf(sy[0], sy[1]), sy[2]), maxy = fmaxf(fmaxf(sy[0], sy[1]), sy[2]);
-	int px0 = (int)floorf(fmaxf(minx, x0)), px1 = (int)ceilf(fminf(maxx, x1));
-	int py0 = (int)floorf(fmaxf(miny, y0)), py1 = (int)ceilf(fminf(maxy, y1));
+	float grow = d->aa ? 1.0f : 0.0f;
+	int px0 = (int)floorf(fmaxf(minx - grow, x0)), px1 = (int)ceilf(fminf(maxx + grow, x1));
+	int py0 = (int)floorf(fmaxf(miny - grow, y0)), py1 = (int)ceilf(fminf(maxy + grow, y1));
 	if (px0 < 0) px0 = 0;
 	if (py0 < 0) py0 = 0;
 	if (px1 > RASTER_W) px1 = RASTER_W;
@@ -229,8 +237,21 @@ static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, 
 			float b0 = edge(sx[1], sy[1], sx[2], sy[2], cx, cy) / area;
 			float b1 = edge(sx[2], sy[2], sx[0], sy[0], cx, cy) / area;
 			float b2 = 1.0f - b0 - b1;
-			if (b0 < 0.0f || b1 < 0.0f || b2 < 0.0f)
-				continue;
+			if (b0 < 0.0f || b1 < 0.0f || b2 < 0.0f) {
+				/* Con AA basta una muestra de cobertura; el color se
+				 * evalúa en ella (dentro del triángulo). */
+				int k = d->aa ? 0 : 8;
+				for (; k < 8; k++) {
+					float qx = x + cvg_sample[k][0], qy = y + cvg_sample[k][1];
+					b0 = edge(sx[1], sy[1], sx[2], sy[2], qx, qy) / area;
+					b1 = edge(sx[2], sy[2], sx[0], sy[0], qx, qy) / area;
+					b2 = 1.0f - b0 - b1;
+					if (b0 >= 0.0f && b1 >= 0.0f && b2 >= 0.0f)
+						break;
+				}
+				if (k == 8)
+					continue;
+			}
 			float z = b0 * sz[0] + b1 * sz[1] + b2 * sz[2];
 			int idx = y * RASTER_W + x;
 			if ((d->depth & GFX_DEPTH_TEST) && zb && z > zb->z[idx] + ((d->depth & GFX_DEPTH_DECAL) ? 1e-3f : 0.0f))

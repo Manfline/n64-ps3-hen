@@ -905,6 +905,7 @@ static void to_rsxkit(const struct gfx_draw *g, const struct set *s, int cur, rs
 	d->ntex = g->ntex > 2 ? 2 : g->ntex;
 	d->fog = g->fog;
 	d->nterms = g->nterms;
+	d->smooth = g->aa;
 	memcpy(d->factors, g->factors, sizeof d->factors);
 	for (int i = 0; i < 4; i++) {
 		d->scissor[i] = g->scissor[i] / 4.0f;

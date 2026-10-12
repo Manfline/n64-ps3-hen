@@ -837,6 +837,41 @@ static void gfx_cvg_x_alpha(void)
 	}
 }
 
+/* Cobertura con AA_EN (gfx_draw.aa): solo triángulos opacos sin prueba de
+ * alfa; ni los translúcidos, ni los recortados por el alfa, ni sin AA_EN,
+ * ni los rectángulos. */
+static void gfx_aa_flag(void)
+{
+	static const struct { uint32_t ol; uint8_t aa; } c[] = {
+		{ 0x00552078, 1 },  /* G_RM_AA_ZB_OPA_SURF */
+		{ 0x00552048, 1 },  /* G_RM_AA_OPA_SURF */
+		{ 0x005049D8, 0 },  /* G_RM_AA_ZB_XLU_SURF */
+		{ 0x00553078, 0 },  /* G_RM_AA_ZB_TEX_EDGE */
+		{ 0x00552230, 0 },  /* G_RM_ZB_OPA_SURF */
+	};
+	const struct vtx v[3] = { { 0, 0, 0, 0, 0, { 0 } }, { 1, 0, 0, 0, 0, { 0 } }, { 0, 1, 0, 0, 0, { 0 } } };
+	for (unsigned i = 0; i < sizeof c / sizeof c[0]; i++) {
+		start();
+		viewport_320x240();
+		load_mtx(ident, true);
+		load_mtx(ident, false);
+		set_combine(CC_A_ZERO, CC_ZERO, CC_C_ZERO, CC_SHADE, CC_ZERO, CC_ZERO, CC_ZERO, CC_SHADE);
+		dl(0xEF000000 | G_CYC_1CYCLE << 20, c[i].ol);  /* G_RDPSETOTHERMODE */
+		dl(0x01000000 | 3 << 12 | 3 << 1, put_vertices(v, 3));
+		dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);
+		dl(0xE4000000 | (40 << 2) << 12 | (40 << 2), 0);  /* G_TEXRECT */
+		dl(0xE1000000, 0);
+		dl(0xF1000000, 0x04000400);
+		run();
+		const struct gfx_draw *d = draw_n(0), *r = draw_n(1);
+		CHECK(d && r);
+		if (!d || !r)
+			continue;
+		CHECK_EQ(d->aa, c[i].aa);
+		CHECK_EQ(r->aa, 0);
+	}
+}
+
 /* Display lists anidadas, segmentos, CULLDL y BRANCH_Z. */
 static void gfx_dl_flow(void)
 {
@@ -1771,4 +1806,5 @@ void t_suite_gfx(void)
 	RUN(gfx_texcache_hash);
 	RUN(gfx_texture_provenance);
 	RUN(gfx_viscvg_flag);
+	RUN(gfx_aa_flag);
 }

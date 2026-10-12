@@ -1,5 +1,36 @@
 # Estado
 
+## 2026-10-12 (tarde) — Líneas azules de GoldenEye: cobertura de los triángulos con AA_EN (rama `infallible-wozniak-aa210c`)
+
+Con el volcado del autor en el túnel de Dam (SELECT + R2), las líneas azules
+salen también en el raster del Mac: no son del RSX. `tools/gfxdump.py pixel`
+(nuevo, junto con `tex`; el script ya lee el `gfx_draw` actual) muestra que
+ningún triángulo cubre el centro de esos píxeles: es una unión en T entre el
+piso (dibujo 5, con un vértice a media arista) y la pared (dibujo 7, la
+arista entera). Ese vértice cae un píxel fuera de la recta de la pared y deja
+una cuña de hasta 0,56 px por la que se ve el relleno negro con el tinte
+azul del rectángulo final de la escena. La N64 la tapa porque con AA_EN el
+RDP escribe todo píxel con alguna de sus 8 muestras de cobertura dentro.
+
+Ahora `gfx_draw.aa` marca los triángulos opacos sin prueba de alfa con
+AA_EN. El host los dibuja con las 8 muestras y el RSX con POLYGON_SMOOTH
+(`docs/rsx-notes.md`). Con el volcado marcado, las 25 grietas del cuadro
+desaparecen. En siete juegos, cada 500 campos, solo cambian bordes de un
+píxel (los polígonos AA quedan algo más gordos, como en la N64). Pruebas:
+`raster_aa_tjunction` (dos franjas a 0,4 px) y `gfx_aa_flag` (qué modos lo
+encienden).
+
+`salsa64-run --raster-dump` dejaba volteados por palabras los bytes de
+`nterms` a `pad` de los volcados big-endian: los dibujos con combiners
+generados salían mal en el host. Con eso corregido, la túnica de Link del
+volcado del autor se ve igual en la PS3 y en el host. Con su estado, HLE y
+LLE también coinciden: no hay un defecto atribuible en la túnica; falta que
+el autor diga qué ve (si eran costuras entre partes del modelo, es lo mismo
+que en GoldenEye).
+
+Pendiente en la PS3: que POLYGON_SMOOTH tape las líneas en Dam, y medir lo
+que cuesta (GoldenEye y Perfect Dark).
+
 ## 2026-10-12 — Banjo-Kazooie (protección del CIC 6103), cara de Conker (K5) y rayas del logo de Zelda (rama `infallible-wozniak-aa210c`, paquete SLSA00099 «Salsa64 gráficos»)
 
 Lo visto por el autor en la PS3 con v0.1.0 (modelos que tiemblan, cosas
