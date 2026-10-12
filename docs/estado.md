@@ -76,6 +76,16 @@ Hecho:
   `tools/test-roms.sh` (gfxtest 36/36 en sus tres variantes), compilación
   de la PS3 sin avisos.
 
+Después, en la misma rama: **el host con la precisión de la N64.** Con el
+acumulador leído del destino, guardar un estado a mitad del baile y
+cargarlo daba 40 bytes de RDRAM distintos de la corrida de corrido (tras
+cargar, lo dibujado sale de la RDRAM a 5 bits; de corrido, del búfer del
+host a 8). Los destinos de 16 bits del host guardan ahora los 5 bits por
+canal de la copia a la RDRAM: idéntico guardando en tres puntos del baile,
+a mitad del desenfoque de Perfect Dark y en la pausa de Zelda OoT (16090 →
+16300). La RDRAM no cambia: Zelda OoT, Mario Kart, SM64, Conker y Perfect
+Dark, cuadro por cuadro iguales a main con la misma precisión.
+
 Falta:
 - [ ] Confirmar en la PS3 real las campanadas (estado preparado: cargar,
       abrir y cerrar la pausa, esperar ~10 s), el recuerdo o el baile del
