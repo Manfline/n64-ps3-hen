@@ -224,6 +224,8 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define EMU_STACK    (256u << 10)
 #define WAKE_US      4000  /* el hilo de presentación revisa controles y colas al menos cada tanto */
 #define STILL_US     16000 /* en pausa, el último cuadro se vuelve a presentar cada tanto (flip) */
+#define OVERLAY_US   10000 /* con el sistema encima, el menú atiende eventos y mandos cada tanto */
+#define SLOW_FLIP_US 100000 /* un flip que tarda más, al log */
 /* Latido: un hilo aparte mira que los dos se muevan y, si uno se queda
  * quieto más de STALL_US, dice dónde (docs/hilos-ppe.md). */
 #define WATCH_PRIO   500
@@ -292,12 +294,28 @@ static void wake(void)
 	sysSemPost(wake_sem, 1);  /* si ya está en 1, da error: no importa */
 }
 
+/* Diagnóstico de la pantalla: cuántos cuadros faltan para leer dos píxeles
+ * del cuadro dibujado (frame_end); al arrancar y al volver del sistema. */
+static uint32_t screen_probe = 30;
+
+/* Cuando el sistema deja de estar encima: el estado del RSX de la
+ * aplicación puede no ser el que rsxkit da por puesto (después de su menú,
+ * la PS3 quedaba en negro aunque se siguiera presentando). */
+static void system_overlay_off(void)
+{
+	int bad = rsxkit_after_system();
+	salsa64_log("sistema: al volver, estado del RSX puesto de nuevo; %d programas cambiados en su memoria, %d mapeos "
+		    "de la memoria principal distintos", bad, rsxkit_main_maps_bad());
+	screen_probe = 30;  /* medio segundo después: lo que quedó en pantalla */
+}
+
 /* Eventos del sistema. Corre dentro de sysUtilCheckCallback, en el hilo
  * de presentación (o el del menú): puede tocar pause_ctl y escribir al log. */
 static void sysutil_cb(u64 status, u64 param, void *user)
 {
 	(void)user;
 	uint64_t now = sysGetSystemTime();
+	bool was_over = pausectl_overlay(&pause_ctl);
 	switch (status) {
 	case SYSUTIL_EXIT_GAME:
 		salsa64_log("sistema: «Salir del juego»");
@@ -317,9 +335,11 @@ static void sysutil_cb(u64 status, u64 param, void *user)
 		salsa64_log("sistema: menú cerrado tras %.1f s", sys_menu_t0 ? (now - sys_menu_t0) / 1e6 : 0.0);
 		break;
 	case SYSUTIL_DRAW_BEGIN:
+		pausectl_system_draw(&pause_ctl, true);
 		salsa64_log("sistema: empieza a dibujar encima");
 		break;
 	case SYSUTIL_DRAW_END:
+		pausectl_system_draw(&pause_ctl, false);
 		salsa64_log("sistema: deja de dibujar encima");
 		break;
 	default:
@@ -327,6 +347,8 @@ static void sysutil_cb(u64 status, u64 param, void *user)
 			    (unsigned long long)param);
 		break;
 	}
+	if (was_over && !pausectl_overlay(&pause_ctl))
+		system_overlay_off();
 }
 
 static struct salsa64_padmap padmap;
@@ -727,7 +749,7 @@ static int update_pads(uint32_t *buttons)
 	bool intercepted = (info.info & 1) != 0;
 	if (intercepted != pause_ctl.intercepted)
 		salsa64_log("mandos: %s", intercepted ? "los tiene el sistema" : "de vuelta del sistema");
-	bool sys = intercepted || pause_ctl.system;
+	bool sys = intercepted || pausectl_overlay(&pause_ctl);
 	for (unsigned i = 0; i < SALSA64_PIF_PORTS; i++) {
 		if (present[i] != !!info.status[i]) {
 			present[i] = !!info.status[i];
@@ -1321,6 +1343,49 @@ static struct {
 	uint32_t still_frames;
 } pres = { .view = { RSXKIT_SCALE_FIT, RSXKIT_FILTER_LINEAR, 4.0f / 3.0f } };
 
+/* rsxkit_frame_begin y _end con el tiempo que se esperó el flip anterior:
+ * si pasa de SLOW_FLIP_US, al log con los vblanks que pasaron desde que se
+ * pidió (con el sistema encima, la PS3 retenía los flips segundos: por eso
+ * entonces solo se presenta con rsxkit_frame_ready). */
+static uint64_t flip_vbl;  /* vblanks al pedir el último flip */
+
+static void flip_wait_note(uint64_t t0, const char *where)
+{
+	uint64_t dt = sysGetSystemTime() - t0;
+	if (dt > SLOW_FLIP_US)
+		salsa64_log("flip: %.0f ms esperando en «%s» (sistema %s; %llu vblanks desde que se pidió)", dt / 1e3,
+			    where, pausectl_overlay(&pause_ctl) ? "encima" : "sin dibujar",
+			    (unsigned long long)(rsxkit_vblank_count() - flip_vbl));
+}
+
+static void frame_begin(const char *where)
+{
+	uint64_t t0 = sysGetSystemTime();
+	beat.pres_at = where;
+	rsxkit_frame_begin(0x000000);
+	flip_wait_note(t0, where);
+}
+
+static void frame_end(const char *where)
+{
+	if (screen_probe && --screen_probe == 0) {
+		uint32_t pitch;
+		const rsxkit_screen *sc = rsxkit_screen_info();
+		rsxkit_finish();
+		const volatile uint32_t *px = rsxkit_back_buffer(&pitch);
+		uint32_t w = pitch / 4;
+		salsa64_log("pantalla: cuadro de «%s»: píxel central %08x, (%u,%u) %08x, (%u,%u) %08x", where,
+			    px[sc->height / 2 * w + sc->width / 2], sc->width / 8, sc->height / 8,
+			    px[sc->height / 8 * w + sc->width / 8], sc->width / 2, sc->height / 8,
+			    px[sc->height / 8 * w + sc->width / 2]);
+	}
+	uint64_t t0 = sysGetSystemTime();
+	beat.pres_at = where;
+	rsxkit_frame_end();
+	flip_wait_note(t0, where);
+	flip_vbl = rsxkit_vblank_count();
+}
+
 /* Lo que va encima del juego: aviso, contador y, si está, el cuadro de
  * START + SELECT. */
 static void present_overlay(uint64_t now)
@@ -1363,7 +1428,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	pres.behind_sum += behind;
 	if (behind > pres.behind_max)
 		pres.behind_max = behind;
-	rsxkit_frame_begin(0x000000);
+	frame_begin("flip anterior");
 	/* Lo que se ve: la imagen del VI sin el overscan (las capturas van de
 	 * ese tamaño). */
 	struct salsa64_overscan crop = overscan_for(&m->f);
@@ -1429,8 +1494,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	/* audio_out: una vez por campo presentado (estadísticas y volcado). */
 	uint64_t t1 = sysGetSystemTime();
 	audio_out_field(t1);
-	beat.pres_at = "flip";
-	rsxkit_frame_end();
+	frame_end("flip");
 	beat.pres_at = "cola";
 	pres.frames_total++;
 	uint64_t t2 = sysGetSystemTime();
@@ -1475,15 +1539,14 @@ static void present_still(void)
 {
 	uint64_t now = sysGetSystemTime();
 	rsxkit_rect r;
+	frame_begin("flip anterior (pausa)");
 	beat.pres_at = "cuadro repetido";
-	rsxkit_frame_begin(0x000000);
 	if (pres.still == STILL_RSX && !salsa64_rdp_present_again(&r))
 		pres.still = STILL_NONE;  /* el destino se soltó: negro */
 	else if (pres.still == STILL_FB)
 		rsxkit_fb_draw(pres.fb, &pres.view, &r);
 	present_overlay(now);
-	beat.pres_at = "flip (pausa)";
-	rsxkit_frame_end();
+	frame_end("flip (pausa)");
 	beat.pres_at = "pausa";
 	pres.frames_total++;
 	pres.still_frames++;
@@ -2180,15 +2243,26 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		now = sysGetSystemTime();
 		beat.pres_at = "guardado";
 		savefile_write_staged(&save_file, now);
-		beat.pres_at = "cola";
+		/* Con el sistema encima (su menú, un aviso), el sistema dibuja lo
+		 * suyo en cada flip de la aplicación: el último cuadro se sigue
+		 * presentando, pero solo si el flip anterior ya salió, para no
+		 * esperarlo. Los campos quedan en cola (emulación en pausa); los
+		 * eventos y los mandos, cada vuelta. */
+		bool overlay = pausectl_overlay(&pause_ctl);
 		uint32_t shown = pres.frames_total;
-		drain(now, 1);
-		if (state_parked && state_req) {
-			beat.pres_at = "barrera";
-			state_barrier();
+		if (!overlay) {
+			beat.pres_at = "cola";
+			drain(now, 1);
+			if (state_parked && state_req) {
+				beat.pres_at = "barrera";
+				state_barrier();
+			}
+		} else {
+			beat.pres_at = "sistema encima";
 		}
 		/* En pausa: el último cuadro otra vez si no llegó ninguno. */
-		if (pause_req && pres.frames_total == shown && sysGetSystemTime() - pres.t_flip >= STILL_US)
+		if (pause_req && pres.frames_total == shown && sysGetSystemTime() - pres.t_flip >= STILL_US &&
+		    (!overlay || rsxkit_frame_ready()))
 			present_still();
 		if (state_test.stage)
 			state_test_step();
@@ -2348,7 +2422,7 @@ static void menu_apply_video(void)
  * de la resolución de 720p) en ese archivo. */
 static void menu_show(const char *shot)
 {
-	rsxkit_frame_begin(0x000000);
+	frame_begin("menú: flip anterior");
 	rsxkit_ui_begin(mn.lw, mn.lh);
 	menu_frame(&menu, mn.lw, mn.lh, sysGetSystemTime());
 	rsxkit_ui_end();
@@ -2363,8 +2437,7 @@ static void menu_show(const char *shot)
 		salsa64_screenshot(shot, &f, &r);
 		salsa64_log("menú: captura %s", shot);
 	}
-	beat.pres_at = "menú: flip";
-	rsxkit_frame_end();
+	frame_end("menú: flip");
 }
 
 static void settings_read(struct menu_settings *s)
@@ -2561,6 +2634,15 @@ static int menu_loop(void)
 		uint32_t buttons;
 		update_pads(&buttons);
 		beat.pres_at = "menú";
+		/* Con el sistema encima el menú sigue presentándose (el sistema
+		 * dibuja el suyo en cada flip de la aplicación: sin flips se queda
+		 * en el reloj de espera), pero solo si el flip anterior ya salió,
+		 * para no dejar de atender sus eventos. */
+		if (pausectl_overlay(&pause_ctl) && !rsxkit_frame_ready()) {
+			beat.pres_at = "menú: sistema encima";
+			sysUsleep(OVERLAY_US);
+			continue;
+		}
 		if (pres.autotest && mn.next_test < mn.ntest && mn.test[mn.next_test][0] == '@') {
 			menu_test_video(mn.test[mn.next_test++]);
 			continue;
@@ -2688,12 +2770,12 @@ static void watch_thread(void *arg)
 		} else if (now - pres_t >= STALL_US && (!pres_said || now - pres_said >= STALL_LOG_US)) {
 			pres_said = now;
 			salsa64_log("latido: presentación quieta hace %.1f s en «%s» (emulación en «%s»; campo %u, %u en "
-				    "cola; menú del sistema %s, pausa 0x%x, emulación %s; audio %llu bloques)",
+				    "cola; sistema %s, pausa 0x%x, emulación %s; audio %llu bloques)",
 				    (now - pres_t) / 1e6, beat.pres_at, emu_live ? beat.emu_at : "sin juego", n64.bus.vi.fields,
-				    field_head - field_tail, pause_ctl.system ? "abierto" : "cerrado", pause_req,
+				    field_head - field_tail, pausectl_overlay(&pause_ctl) ? "encima" : "sin dibujar", pause_req,
 				    emu_paused ? "quieta" : "andando", (unsigned long long)audio_out_blocks());
 		}
-		bool expect = emu_live && running && !emu_done && !emu_paused && !state_parked;
+		bool expect = emu_live && running && !emu_done && !emu_paused && !state_parked && !pause_req;
 		if (!expect || beat.emu != emu0) {
 			if (emu_said && expect)
 				salsa64_log("latido: emulación se movió de nuevo tras %.1f s", (now - emu_t) / 1e6);

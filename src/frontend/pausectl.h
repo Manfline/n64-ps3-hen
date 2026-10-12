@@ -30,7 +30,7 @@
 #define PAUSECTL_PORTS 4
 
 /* Motivos de la pausa (pausectl_reasons). */
-#define PAUSECTL_SYSTEM  0x1u  /* menú del sistema, o mandos tomados por el sistema */
+#define PAUSECTL_SYSTEM  0x1u  /* menú del sistema, su dibujo encima o mandos tomados por el sistema */
 #define PAUSECTL_CONFIRM 0x2u  /* cuadro de confirmación de START + SELECT */
 
 enum pausectl_action {
@@ -41,6 +41,7 @@ enum pausectl_action {
 struct pausectl {
 	bool confirm;      /* pedir confirmación (menu.cfg, «confirmar = si|no») */
 	bool system;       /* entre SYSUTIL_MENU_OPEN y SYSUTIL_MENU_CLOSE */
+	bool drawing;      /* entre SYSUTIL_DRAW_BEGIN y SYSUTIL_DRAW_END */
 	bool intercepted;  /* en la última vuelta, los mandos eran del sistema */
 	bool dialog;       /* el cuadro está a la vista */
 	uint32_t prev[PAUSECTL_PORTS];     /* botones de la vuelta anterior */
@@ -50,6 +51,15 @@ struct pausectl {
 void pausectl_init(struct pausectl *p, bool confirm);
 /* Del callback del sistema: SYSUTIL_MENU_OPEN (true) o SYSUTIL_MENU_CLOSE. */
 void pausectl_system_menu(struct pausectl *p, bool open);
+/* SYSUTIL_DRAW_BEGIN (true) o SYSUTIL_DRAW_END: el sistema dibuja encima
+ * (su menú o un aviso). También pausa. */
+void pausectl_system_draw(struct pausectl *p, bool on);
+/* El sistema está encima (menú o dibujo): en la PS3 retiene los flips de la
+ * aplicación (segundos cada uno), así que no hay que esperarlos. */
+static inline bool pausectl_overlay(const struct pausectl *p)
+{
+	return p->system || p->drawing;
+}
 /* Una lectura de los mandos: `raw`, los botones del DualShock 3 de cada
  * puerto (bits SALSA64_DS3_* de padmap.h; 0 sin mando); `intercepted`, el
  * bit del sistema; `in_game`, dentro de un juego (en el menú de Salsa64 no

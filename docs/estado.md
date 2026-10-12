@@ -36,12 +36,23 @@ Hecho (docs/hilos-ppe.md, «Botón PS y pausa»; docs/uso-ps3.md):
   abiertos y cerrados) y el build sin avisos, en verde, también después de
   traer main con la FlashRAM.
 
-Pendiente: **probarlo en la PS3 real** (el paquete se subió, pero la prueba
-no llegó a hacerse): en el menú de Salsa64, en Zelda (andando y con el juego
-en pausa) y en Banjo, pulsar PS y volver varias veces (que sigan la imagen,
-el sonido y los mandos); el cuadro con ○, con START + SELECT y con ×; y
-«Salir del juego» desde el menú del sistema. Si algo se cuelga, el latido
-dice dónde; con `sin-pausa` se puede buscar la causa del cuelgue de v0.1.0.
+**En la PS3 real (2026-10-12)** la pausa sola no bastó: al volver del menú
+del sistema la app seguía viva (eventos, mandos, flips) pero la pantalla
+quedaba negra. Con el latido y leyendo píxeles del búfer trasero se vio la
+causa, que seguramente es la de v0.1.0: el sistema **pisa el estado del
+RSX en cada flip** de la aplicación mientras su menú está encima y un rato
+después, y con el RSX parado en `gcmSetWaitFlip` cada flip tardaba 2,3–4,5 s.
+Arreglo en `lib/rsxkit`: el flip anterior se espera en el PPE
+(`rsxkit_frame_begin`) y después de cada flip se olvida todo el estado que
+rsxkit daba por puesto (`rsxkit_forget_state`), más `rsxkit_after_system` y
+`rsxkit_frame_ready` (docs/hilos-ppe.md). Confirmado: en el menú de Salsa64
+y dentro de un juego, PS y volver tres veces cada uno (el XMB se ve con el
+menú debajo, al volver todo sigue y responde; la emulación se detuvo y
+retomó cada vez), el cuadro de salir con × y «Salir del juego».
+
+También con Majora's Mask sonando: dos vueltas del botón PS (la salida
+cuenta la pausa; en la ventana siguiente 0 % estirado y 0 faltas), el cuadro
+con «No» y con ×, y cierre limpio. Criterio de cierre cumplido.
 
 ## 2026-10-11 — FlashRAM: Majora's Mask guarda (rama `clever-tereshkova-aa0089`, paquete SLSA00096 «Salsa64 FlashRAM»)
 

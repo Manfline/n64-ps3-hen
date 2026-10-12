@@ -224,14 +224,17 @@ el menú del sistema (y el cuadro de confirmación de START + SELECT) es una
    caía a 0 y el audio salía estirado varios segundos al volver (prueba
    `gap_without_pause_stretches`). El puerto de audio sigue abierto,
    entregando silencio.
-5. **Presentación**: el flip sigue (el sistema lo necesita con su menú
-   abierto). Si en una vuelta no llegó ningún campo y pasaron 16 ms del
-   último flip, `present_still` repite lo último que se vio: el destino del
-   RSX con `salsa64_rdp_present_again` (mismo destino, región y escala; no
-   toca la tabla de destinos ni las copias a la RDRAM) o la textura de la
-   copia del VI (`rsxkit_fb_draw`), con el aviso, el contador y el cuadro
-   de salir encima. `sysUtilCheckCallback` se sigue llamando en cada vuelta
-   (cada 4 ms como máximo).
+5. **Presentación**: el flip sigue (el sistema dibuja su menú en los flips
+   de la aplicación: sin flips se queda en el reloj de espera). Si en una
+   vuelta no llegó ningún campo y pasaron 16 ms del último flip,
+   `present_still` repite lo último que se vio: el destino del RSX con
+   `salsa64_rdp_present_again` (mismo destino, región y escala; no toca la
+   tabla de destinos ni las copias a la RDRAM) o la textura de la copia del
+   VI (`rsxkit_fb_draw`), con el aviso, el contador y el cuadro de salir
+   encima. Con el sistema encima, solo si el flip anterior ya salió
+   (`rsxkit_frame_ready`): sus flips tardan segundos y no hay que esperarlos.
+   `sysUtilCheckCallback` se sigue llamando en cada vuelta (cada 4 ms como
+   máximo; con el sistema encima, cada 10 ms en el menú).
 6. **Menú de Salsa64** (sin juego): no hay emulación que detener; el menú
    sigue presentando un cuadro por vsync y con los mandos sueltos no hace
    nada hasta volver.
@@ -239,6 +242,25 @@ el menú del sistema (y el cuadro de confirmación de START + SELECT) es una
 Al log: «pausa: emulación detenida en el campo N (menú del sistema)», «pausa:
 la emulación sigue tras X s (N cuadros repetidos, …)», «mandos: los tiene el
 sistema» / «de vuelta del sistema».
+
+**Lo que hace el sistema con el RSX** (medido en la PS3 real el 2026-10-12,
+con el latido y leyendo píxeles del búfer trasero): mientras su menú está
+encima, y **también un rato después de cerrarlo**, pisa el estado del RSX en
+cada flip de la aplicación (constantes del vertex program, programas,
+arreglos de vértices): lo dibujado con el estado que rsxkit daba por puesto
+salía negro, y el menú de Salsa64 solo se veía ~2 s al volver. Además, con
+`gcmSetWaitFlip` en el búfer de comandos (el RSX parado esperando el flip)
+cada flip tardaba 2,3–4,5 s. Por eso ahora `lib/rsxkit`:
+- espera el flip anterior en el PPE, en `rsxkit_frame_begin` (`wait_flip`),
+  nunca en el RSX;
+- después de cada `rsxkit_frame_end` olvida todo el estado que daba por
+  puesto (`rsxkit_forget_state`): el próximo dibujo lo manda de nuevo (unos
+  cientos de bytes por cuadro);
+- al cerrarse el menú del sistema, `rsxkit_after_system` revisa además los
+  programas precompilados en la memoria del RSX (suma de verificación;
+  nunca estuvieron cambiados) y los mapeos de la memoria principal.
+`frame_begin`/`frame_end` de main.c anotan al log cualquier flip que tarde
+más de 100 ms, con los vblanks que pasaron.
 
 **Cuadro de START + SELECT** (misma pausa, motivo `PAUSECTL_CONFIRM`): con
 «Confirmar al salir» (menu.cfg, `confirmar = si`, por omisión), el atajo

@@ -25,11 +25,16 @@ void pausectl_system_menu(struct pausectl *p, bool open)
 	p->system = open;
 }
 
+void pausectl_system_draw(struct pausectl *p, bool on)
+{
+	p->drawing = on;
+}
+
 enum pausectl_action pausectl_pads(struct pausectl *p, const uint32_t raw[PAUSECTL_PORTS], bool intercepted,
 				   bool in_game, uint32_t game[PAUSECTL_PORTS])
 {
 	enum pausectl_action act = PAUSECTL_NONE;
-	bool sys = intercepted || p->system;
+	bool sys = intercepted || pausectl_overlay(p);
 	uint32_t now[PAUSECTL_PORTS], rise = 0;
 	bool combo = false;
 
@@ -75,7 +80,7 @@ enum pausectl_action pausectl_pads(struct pausectl *p, const uint32_t raw[PAUSEC
 
 uint32_t pausectl_reasons(const struct pausectl *p)
 {
-	return (p->system || p->intercepted ? PAUSECTL_SYSTEM : 0) | (p->dialog ? PAUSECTL_CONFIRM : 0);
+	return (pausectl_overlay(p) || p->intercepted ? PAUSECTL_SYSTEM : 0) | (p->dialog ? PAUSECTL_CONFIRM : 0);
 }
 
 void pausectl_game_end(struct pausectl *p)
