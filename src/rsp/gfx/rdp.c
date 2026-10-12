@@ -590,6 +590,35 @@ static uint16_t sampled(float hi, bool bilinear, uint32_t n)
 	return k < n ? (uint16_t)k : 0;
 }
 
+/* Ejes que se limitan aunque repitan (bits 0–1 la tile, 2–3 la del segundo
+ * ciclo) y si el rectángulo va en una tira por fila: ver gfx_texrect.
+ * Aparte y sin inline: en el SPE sus temporales no ocupan la pila mientras
+ * gfx_texrect llama a rect, que está en la cadena más honda (fondo S2DEX →
+ * TEXRECT → estado → combiner; src/spu/gfx/main.c). */
+static __attribute__((noinline)) unsigned texrect_clamp(const struct gfx_state *g, int tile, unsigned cycle, float s0,
+							 float t0, float dsdx, float dtdy, float ns, float nt,
+							 bool *rows)
+{
+	unsigned clamp = 0;
+	bool r = false;
+	for (int i = 0; i < (cycle == G_CYC_2CYCLE ? 2 : 1); i++) {
+		const struct gfx_tile *ui = &g->tiles[(tile + i) & 7];
+		uint32_t uw, uh;
+		gfx_tile_size(ui, &uw, &uh);
+		float us = shift_scale(ui->shifts), ut = shift_scale(ui->shiftt);
+		float sa = s0 * us - ui->uls / 4.0f, sb = (s0 + (ns - 1.0f) * dsdx) * us - ui->uls / 4.0f;
+		float ta = t0 * ut - ui->ult / 4.0f, tb = (t0 + (nt - 1.0f) * dtdy) * ut - ui->ult / 4.0f;
+		if ((sa < sb ? sa : sb) > -0.01f && (sa < sb ? sb : sa) < (float)uw - 0.99f)
+			clamp |= 1u << (2 * i);
+		if ((ta < tb ? ta : tb) > -0.01f && (ta < tb ? tb : ta) < (float)uh - 0.99f)
+			clamp |= 2u << (2 * i);
+		float step = dtdy * ut;
+		r |= (step < 0.0f ? -step : step) >= 2.0f && (step < 0.0f ? -step : step) * 2.0f >= (float)uh;
+	}
+	*rows = r;
+	return clamp;
+}
+
 void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uint32_t w3, bool flip)
 {
 	unsigned cycle = (g->oh >> G_MDSFT_CYCLETYPE) & 3;
@@ -628,22 +657,8 @@ void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uin
 	gfx_tile_size(ti, &tw, &th);
 	float ns = flip ? h : w, nt = flip ? w : h;  /* muestras en s y en t */
 	float ks = shift_scale(ti->shifts), kt = shift_scale(ti->shiftt);
-	unsigned clamp = 0;
-	bool rows = false;
-	for (int i = 0; i < (cycle == G_CYC_2CYCLE ? 2 : 1); i++) {
-		const struct gfx_tile *ui = &g->tiles[(tile + i) & 7];
-		uint32_t uw, uh;
-		gfx_tile_size(ui, &uw, &uh);
-		float us = shift_scale(ui->shifts), ut = shift_scale(ui->shiftt);
-		float sa = s0 * us - ui->uls / 4.0f, sb = (s0 + (ns - 1.0f) * dsdx) * us - ui->uls / 4.0f;
-		float ta = t0 * ut - ui->ult / 4.0f, tb = (t0 + (nt - 1.0f) * dtdy) * ut - ui->ult / 4.0f;
-		if ((sa < sb ? sa : sb) > -0.01f && (sa < sb ? sb : sa) < (float)uw - 0.99f)
-			clamp |= 1u << (2 * i);
-		if ((ta < tb ? ta : tb) > -0.01f && (ta < tb ? tb : ta) < (float)uh - 0.99f)
-			clamp |= 2u << (2 * i);
-		float step = dtdy * ut;
-		rows |= (step < 0.0f ? -step : step) >= 2.0f && (step < 0.0f ? -step : step) * 2.0f >= (float)uh;
-	}
+	bool rows;
+	unsigned clamp = texrect_clamp(g, tile, cycle, s0, t0, dsdx, dtdy, ns, nt, &rows);
 	rows = rows && !flip && h <= 16.0f && (cycle == G_CYC_1CYCLE || cycle == G_CYC_2CYCLE);
 
 	/* El RDP muestrea en la esquina de cada píxel; el RSX, en el centro:
