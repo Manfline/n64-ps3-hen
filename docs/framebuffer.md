@@ -405,9 +405,9 @@ memoria en `docs/memory-budget.md`.
 - Perfect Dark y Conker: copias del z-buffer (rectángulos que leen la z
   image como color image), sombra y desenfoque de Conker; color images de
   32 bits y CI8 (Conker) no se copian ni se ceban.
-- El desenfoque de Perfect Dark leído del RSX: medirlo en la PS3 real a 3×
-  (campos/s, ms del SPE y texturas por tarea) y compararlo a ojo con el de
-  la copia a 1×.
+- El «estado» del SPE con las franjas de Perfect Dark casi se duplicó
+  (combiner en `-Os`, docs/perf-log.md): guardar el resultado del combiner
+  mientras no cambien sus entradas si llega a costar campos/s.
 - Comprobar que el baile del Espantapájaros y el recuerdo de Zelda en
   Majora's Mask también salen por `GFX_TEX_TARGET` (hace falta un estado en
   esas escenas).

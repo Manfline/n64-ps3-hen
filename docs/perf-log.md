@@ -115,9 +115,36 @@ images). Holgura de la pila: 3 808 → 2 640 bytes; sin el S2DEX en `-Os`
 quedaba en 1 632, apenas sobre el mínimo de 1 536 que comprueba el build
 («Pila del SPE 0», arriba).
 
-**PS3 real**: pendiente (paquete SLSA00101 «Salsa64 desenfoque»): campos/s,
-ms del SPE y texturas por tarea en la azotea a 3×, y el desenfoque a ojo
-contra el de la copia a 1×.
+**PS3 real** (2026-10-12, Slim CECH-3011A, HFW 4.91 + HEN; paquete
+SLSA00101 «Salsa64 desenfoque», 7b20d0b sobre main 98def88; 1080p, escala
+5× pedida; Perfect Dark NTSC, respaldo del autor, intro sin tocar el
+control). Contra c17e790 a 3× (la versión anterior, mismas ventanas):
+
+| Campos | Campos/s | Texturas decodificadas | Sin decodificar (del RSX) | SPE | Estado | Decodificar |
+|---|---|---|---|---|---|---|
+| 1800–1899 | 59,8 → 59,8 | 133,3 → 0,1 | 0 → 180 | 3,29 → 4,66 ms | 1,55 → 2,89 | 0,48 → 0,01 |
+| 2000–2099 | 59,8 → 59,8 | 176,9 → 0,5 | 0 → 180 | 4,16 → 5,78 ms | 1,91 → 3,50 | 0,65 → 0,03 |
+| 2400–2499 | 59,9 → 59,7 | 144,9 → 0,0 | 0 → 180 | 10,10 → 14,30 ms | 2,86 → 7,04 | 0,54 → 0,00 |
+| 3000–3099 | 59,8 → 59,8 | 178,5 → 0,0 | 0 → 180 | 6,01 → 8,11 ms | 2,14 → 4,21 | 0,67 → 0,00 |
+| 3800–3899 | 60,1 → 59,8 | 175,2 → 0,0 | 0 → 180 | 6,02 → 8,27 ms | 2,17 → 4,39 | 0,64 → 0,00 |
+
+- 250 560 franjas leídas del destino del RSX; el PPE decodificó 760, en las
+  tareas en que empieza el efecto (el destino recién copiado para el CPU,
+  como en el host). El autor: el desenfoque se ve «sutil pero visible».
+- Los campos/s no cambian; las bajadas (2500–2699, 3700) son las de antes,
+  por el CPU.
+- El «estado» del SPE casi se duplica aunque ya no se decodifica ni se
+  identifica por hash: cada franja es un dibujo con estado nuevo y llama al
+  combiner (180 veces por tarea), que desde da2adcd va con `-Os` en el SPE
+  0 (pila); la rama de los arreglos gráficos también agregó trabajo al
+  estado (blender). Sin aislar. No cuesta campos/s en Perfect Dark (14 ms
+  como mucho, contra 33 por tarea); si hiciera falta, las 180 franjas
+  comparten combiner y se puede guardar su resultado mientras no cambien
+  sus entradas.
+- Intro en alta resolución (campos 400–599): 57,8–59,7 campos/s con las
+  copias esperadas en 3,7–10,7 ms y ninguna tarde; antes de 98def88 se
+  cumplían por el tope de 200 ms y la intro iba a 4,9 campos/s
+  (docs/framebuffer.md, «Copia RSX → RDRAM»).
 
 ## Texturas que cambian en cada cuadro: Perfect Dark (2026-10-11)
 
