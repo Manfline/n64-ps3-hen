@@ -77,6 +77,7 @@ enum salsa64_rec_prof_item {
 	SALSA64_PROF_EXIT_IDLE,
 	SALSA64_PROF_EXIT_START,
 	SALSA64_PROF_EXIT_END,
+	SALSA64_PROF_EXIT_FR,         /* en la entrada: Status.FR distinto del de la compilación (o CU1 = 0) */
 	SALSA64_PROF_EXIT_REDIRECT,   /* excepción o ERET dentro del bloque */
 	SALSA64_PROF_N
 };

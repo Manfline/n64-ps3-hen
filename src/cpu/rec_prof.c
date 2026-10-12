@@ -88,7 +88,7 @@ void salsa64_rec_prof_report(const struct salsa64_rec_prof *now, struct salsa64_
 						    "sin código", "no cabe" };
 	static const char *const ev_names[] = { "parada", "Compare", "VI intr", "VI campo", "RSP", "DP", "AI", "RSP LLE",
 						"varios" };
-	static const char *const exit_names[] = { "enlace", "mitad", "salto", "espera", "inicio", "fin", "redirect" };
+	static const char *const exit_names[] = { "enlace", "mitad", "salto", "espera", "inicio", "fin", "FR", "redirect" };
 	struct salsa64_rec_prof d;
 	struct out o = { buf, size, 0 };
 	struct scale s = { hz, fields ? fields : 1 };

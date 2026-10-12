@@ -376,6 +376,7 @@ bool salsa64_rec_x_remove(struct salsa64_rec *rec, unsigned id)
 unsigned salsa64_rec_x_find(struct salsa64_rec *rec, uint64_t pc, uint32_t pa)
 {
 	struct salsa64_rec_x *x = &rec->x;
+	bool fr = (rec->cpu->status & SALSA64_ST_FR) != 0;
 	uint16_t *head = &x->xhash[xhash_slot(pc)], *p = head;
 	for (unsigned id = *p; id; p = &x->xb[id].hnext, id = *p) {
 		if (x->xb[id].vpc != (uint32_t)pc || x->state[id] != SALSA64_REC_X_LIVE)
@@ -385,6 +386,8 @@ unsigned salsa64_rec_x_find(struct salsa64_rec *rec, uint64_t pc, uint32_t pa)
 				salsa64_rec_unlink_block(rec, id);
 			continue;
 		}
+		if (!salsa64_rec_block_fr_ok(&rec->blocks[id], fr))
+			continue;  /* el gemelo del otro Status.FR: sigue en la cadena para cuando vuelva */
 		if (p != head) {
 			*p = x->xb[id].hnext;
 			x->xb[id].hnext = *head;
@@ -405,6 +408,7 @@ unsigned salsa64_rec_x_rekey(struct salsa64_rec *rec, uint64_t pc, uint32_t pa)
 	struct salsa64_rec_x *x = &rec->x;
 	const uint8_t *rdram = rec->cpu->rdram;
 	uint32_t vt = x->ktlb[salsa64_rec_vt_slot(pc)];
+	bool fr = (rec->cpu->status & SALSA64_ST_FR) != 0;
 	if (pa >= rec->rdram_size || (vt & ~SALSA64_REC_VT_DIRTY) != salsa64_rec_vt_value(pc, pa, false))
 		return 0;
 	uint16_t *head = &x->xhash[xhash_slot(pc)], *p = head;
@@ -413,7 +417,7 @@ unsigned salsa64_rec_x_rekey(struct salsa64_rec *rec, uint64_t pc, uint32_t pa)
 		bool detached = x->state[id] == SALSA64_REC_X_DETACHED;
 		uint32_t old = b->pa, code = detached ? x->saved_code[id] : b->code;
 		if (x->xb[id].vpc != (uint32_t)pc || !x->copy_off[id] || !code || pa + b->bytes > rec->rdram_size ||
-		    memcmp(x->copy + x->copy_off[id] - 1, rdram + pa, b->bytes) != 0)
+		    !salsa64_rec_block_fr_ok(b, fr) || memcmp(x->copy + x->copy_off[id] - 1, rdram + pa, b->bytes) != 0)
 			continue;
 		if (!salsa64_rec_block_rekey(rec, id, pa, vt, code, !detached))
 			continue;

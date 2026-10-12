@@ -320,5 +320,5 @@ void salsa64_cpu_set_idle(struct salsa64_cpu *cpu, bool on)
 	/* El recompilador decidió al compilar qué saltos consultan la tabla
 	 * (rec_emit.c, idle_candidate): con la tabla vacía, todo de nuevo. */
 	if (cpu->rec)
-		salsa64_rec_flush(cpu->rec);
+		salsa64_rec_flush_why(cpu->rec, SALSA64_REC_FLUSH_IDLE);
 }

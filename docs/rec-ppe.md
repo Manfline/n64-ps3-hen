@@ -474,7 +474,48 @@ escrituras externas (`salsa64_bus_rdram_written`: DMA del PI y del SI,
 cargador, pruebas). Un bloque invalidado se saca del mapa, se deshacen los
 enlaces que llegan a él (el `b` vuelve a ser `nop`) y, si fue durante la
 ejecución, el código sale al despachador (`rec_abort`). La caché se vacía
-entera cuando se llena, cuando cambia Status.FR o con un reset.
+entera con un reset, al cambiar la ROM o cargar un estado, y cuando se
+agotan los ids de bloque o los enlaces (`stats.flushes_by[]` cuenta por
+causa; salsa64-run y el frontend lo imprimen). Hasta el 2026-10-12 también
+cada vez que cambiaba Status.FR (ver «Status.FR»).
+
+### Status.FR: gemelos en vez de vaciar (2026-10-12)
+
+Donkey Kong 64 corre hilos con Status.FR = 1 y otros con FR = 0, y cada
+cambio de hilo (~260 por segundo de consola) cambia el bit al reponer SR.
+Como la caché se compilaba para un FR y se vaciaba entera al cambiar, en la
+PS3 el juego iba al 20 % de NTSC compilando 1 340 bloques por campo (4 173
+vaciados y 1,28 M bloques en 16 s de consola en qemu; medido en la PS3:
+959 vaciados y 446 000 bloques en 30 s). Ahora:
+
+- El código de un bloque depende de FR solo si accede a un **registro impar
+  de la FPU** por fs (MFC1, MTC1, DMFC1, DMTC1 y las operaciones) o por ft
+  (LWC1, LDC1, SWC1, SDC1): con FR = 0 ese registro es la mitad alta de la
+  pareja (`fpr32_off`, `fpr64_off`, `fslot32`, `fslot64`). `fr_dependent`
+  lo decide por instrucción al decodificar; los demás bloques, también los
+  de COP1 con registros pares, valen con los dos FR.
+- Un bloque que depende de FR se compila con el FR del momento
+  (`rec->fr`, `blocks[id].fr` lo guarda con `SALSA64_REC_FR_SET` y
+  `SALSA64_REC_FR_DEP`) y su entrada revisa CU1 y FR de una vez (`lwz
+  status ; rlwinm 6,28,31 ; rlwinm 0,31,28 ; cmpwi 8|fr ; bne`): una
+  instrucción más que la comprobación de CU1 que ya tenía. Si no coincide
+  sale por `exit_fr` (`SALSA64_REC_EXIT_FR`) y el despachador busca el
+  **gemelo** para el otro FR (`block_for_fr`): en KSEG0 `rec->twin[id]`, y
+  el mapa pasa a apuntar al último usado, así `exit_jr` (que no mira FR)
+  acierta mientras el FR no cambie; fuera de KSEG0 el gemelo es otro bloque
+  de la misma clave en `xhash`, que `salsa64_rec_x_find` y `x_rekey` filtran
+  por FR. Si no existe, se compila (`stats.fr_twins`). Con CU1 = 0 la misma
+  salida hace lo de siempre: el intérprete lanza la excepción.
+- Los gemelos cubren los mismos bytes: `kill_block` deja el mapa apuntando
+  al que queda y `salsa64_rec_invalidate` mata a los dos; un desalojo por
+  tramos puede llevarse uno solo. Los ids de los gemelos son ids normales.
+- `rec_h_exec` ya no aborta tras un MTC0 que cambia FR: el bloque termina en
+  el COP0 y la entrada del siguiente, si depende de FR, lo nota.
+
+La prueba `fr_switch_keeps_code_cache` (test_cop1.c) cambia FR varias veces
+sobre un bloque con `$f1` y otro con registros pares y exige que no haya
+vaciados, un gemelo por FR, ninguno para los pares, y que una escritura en
+el código mate a los dos.
 
 **Pendiente para la Fase 2:** el DMA del SP (que aún no existe) tiene que
 llamar a `salsa64_bus_rdram_written` al escribir la RDRAM.

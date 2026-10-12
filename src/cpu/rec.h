@@ -54,8 +54,33 @@ struct salsa64_rec_block {
 	uint32_t pa;         /* dirección física de la primera instrucción */
 	uint32_t links;      /* enlaces que llegan aquí: índice + 1 en links[], 0 = ninguno;
 			      * en un id libre, el siguiente id libre */
-	uint16_t n;          /* instrucciones del camino más largo */
 	uint16_t bytes;      /* bytes de MIPS que cubre */
+	uint8_t n;           /* instrucciones del camino más largo (≤ SALSA64_REC_MAX_INSNS) */
+	uint8_t fr;          /* SALSA64_REC_FR_*: Status.FR con que se compiló y si el código depende de él */
+};
+/* Un bloque que lee o escribe un registro impar de la FPU depende de
+ * Status.FR (con FR = 0 el impar es la mitad alta de la pareja): su entrada
+ * revisa el bit y, si cambió, sale al despachador (exit_fr), que busca o
+ * compila el gemelo para el otro FR (twin[]). Los demás bloques valen con
+ * los dos (docs/rec-ppe.md, «Status.FR»). */
+#define SALSA64_REC_FR_SET  1u  /* compilado con FR = 1 */
+#define SALSA64_REC_FR_DEP  2u  /* el código depende de FR */
+/* ¿El bloque vale con Status.FR = `fr`? */
+static inline bool salsa64_rec_block_fr_ok(const struct salsa64_rec_block *b, bool fr)
+{
+	return !(b->fr & SALSA64_REC_FR_DEP) || ((b->fr & SALSA64_REC_FR_SET) != 0) == fr;
+}
+
+/* Por qué se vació la caché entera (stats.flushes_by[]). */
+enum salsa64_rec_flush_cause {
+	SALSA64_REC_FLUSH_IDS,     /* se agotaron los ids de bloque */
+	SALSA64_REC_FLUSH_LINKS,   /* se agotaron los enlaces */
+	SALSA64_REC_FLUSH_RDRAM,   /* se reescribió la RDRAM entera (reset, carga) */
+	SALSA64_REC_FLUSH_IDLE,    /* cambió la detección de bucles de espera (reset del CPU) */
+	SALSA64_REC_FLUSH_ROM,     /* cambió la ROM o el ISViewer */
+	SALSA64_REC_FLUSH_STATE,   /* se cargó un estado guardado */
+	SALSA64_REC_FLUSH_OTHER,   /* salsa64_rec_flush sin causa (pruebas, opciones) */
+	SALSA64_REC_FLUSH_N
 };
 
 struct salsa64_rec_link {
@@ -81,6 +106,11 @@ struct salsa64_rec_stats {
 	uint64_t detached;       /* bloques mapeados desprendidos al reescribirse su página (rec_tlb.c) */
 	uint64_t vt_probes;      /* traducciones con la TLB del CPU (rec_tlb.c) */
 	uint64_t compile_us;     /* reservado para quien mida el tiempo de compilación */
+	uint64_t fr_dep;         /* de compiled, los que dependen de Status.FR */
+	uint64_t fr_twins;       /* de fr_dep, los compilados como gemelo de uno para el otro FR */
+	uint64_t fr_exits;       /* salidas en la entrada porque cambió Status.FR (exit_fr) */
+	uint64_t cu1_exits;      /* de las salidas por exit_fr, las que eran COP1 inusable (CU1 = 0) */
+	uint64_t flushes_by[SALSA64_REC_FLUSH_N];  /* de flushes, por causa */
 };
 
 /* Etiquetas y correcciones del ensamblador de rec_emit.c. */
@@ -155,6 +185,7 @@ struct salsa64_rec {
 	uint32_t exit_jr;        /* JR/JALR: busca el bloque destino y salta, o sale como exit_jump */
 	uint32_t exit_idle;      /* salto que el intérprete consultaría como bucle de espera */
 	uint32_t exit_start;     /* el bloque salió en la entrada (no cabe antes del evento, COP1 inusable) */
+	uint32_t exit_fr;        /* el bloque salió en la entrada: Status.FR no es el de su compilación (o CU1 = 0) */
 	uint32_t exit_end;       /* el bloque terminó en una instrucción que vuelve a C (COP0, SYSCALL…) */
 	uint32_t ktlb_rtn[2][4]; /* traducción de datos por ktlb[] (rec_tlb.h): [almacena][alineación 0, 1, 3, 7];
 				  * r3 = va; vuelve con cr1 eq y r12 = desplazamiento en la RDRAM, o cr1 ne */
@@ -166,7 +197,8 @@ struct salsa64_rec {
 
 	uint32_t rdram_size;
 	unsigned rdram_shift;    /* log2(rdram_size) */
-	uint32_t fr;             /* Status.FR con que se compiló la caché */
+	uint32_t fr;             /* Status.FR con que se compila el bloque en curso (rec_emit.c lo lee) */
+	bool compiled_fr_dep;    /* el último bloque compilado depende de Status.FR (lo deja rec_emit.c) */
 	bool strict;             /* pruebas: nunca interpreta lo que se puede recompilar */
 	bool no_link;            /* sin enlaces: cada bloque (o bucle de un bloque) vuelve a C */
 	bool map_dirty;
@@ -201,6 +233,7 @@ struct salsa64_rec {
 	struct salsa64_rec_x x;                       /* fuera de KSEG0 (rec_tlb.h): justo antes de flags */
 	uint8_t flags[SALSA64_REC_FLAG_BYTES];        /* bloques que tocan cada 128 bytes (satura en 255) */
 	struct salsa64_rec_block blocks[SALSA64_REC_MAX_BLOCKS + 1];
+	uint16_t twin[SALSA64_REC_MAX_BLOCKS + 1];    /* gemelo de un bloque de KSEG0 que depende de FR, para el otro FR */
 	struct salsa64_rec_link links[SALSA64_REC_MAX_LINKS];
 };
 
@@ -219,8 +252,9 @@ void salsa64_rec_run(struct salsa64_rec *rec);
 /* La RDRAM [pa, pa + len) cambió fuera del CPU (DMA, carga de la ROM,
  * pruebas): descarta el código que dependa de ella. */
 void salsa64_rec_invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t len);
-/* Descarta todo el código generado. */
-void salsa64_rec_flush(struct salsa64_rec *rec);
+/* Descarta todo el código generado (y cuenta por qué). */
+void salsa64_rec_flush_why(struct salsa64_rec *rec, enum salsa64_rec_flush_cause why);
+static inline void salsa64_rec_flush(struct salsa64_rec *rec) { salsa64_rec_flush_why(rec, SALSA64_REC_FLUSH_OTHER); }
 /* Palabras de la caché ocupadas. */
 static inline uint32_t salsa64_rec_used(const struct salsa64_rec *rec) { return rec->used; }
 
@@ -234,6 +268,7 @@ enum {
 	SALSA64_REC_EXIT_IDLE = 4,  /* r3 = pc de un salto tomado, antes de su delay slot (idle.c) */
 	SALSA64_REC_EXIT_START = 5, /* como EXIT_MID, en la entrada del bloque: no cabe antes del evento o COP1 inusable */
 	SALSA64_REC_EXIT_END = 6,   /* el bloque terminó completo en una instrucción de K_END; sigue en r3 */
+	SALSA64_REC_EXIT_FR = 7,    /* en la entrada: Status.FR no es el de la compilación, o CU1 = 0 */
 };
 
 /* Tipos de acceso del camino lento (salsa64_rec_h_load/h_store). */
