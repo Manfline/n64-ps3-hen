@@ -1,8 +1,38 @@
 # Estado
 
+## 2026-10-12 (noche) — v0.2.0 publicada y censo de compatibilidad
+
+Publicada la **v0.2.0** (pre-release, etiqueta en ad72ebf, con
+`salsa64-v0.2.0.pkg`; notas en el release y en `CHANGELOG.md`). Pasada final
+en la PS3 real sin cuelgues: Paper Mario, Donkey Kong 64 (zipper incluido),
+Perfect Dark y Zelda.
+
+Censo con el candidato (PS3 real, respaldos NTSC del autor), para después de
+v0.2.0:
+
+| Juego | Resultado | Pista |
+|---|---|---|
+| Zelda OoT, SM64, MK64, Majora, Paper Mario, Mario Party 1 y 3 | bien | Majora: iluminación de algunas zonas |
+| Donkey Kong 64 | 100 % | tirones al entrar a zonas nuevas (traducción) |
+| Perfect Dark, GoldenEye, Conker | jugables | CPU en las escenas pesadas; Conker: sombras cuadradas, escena pesada de la intro a 49–55 (combiner: guardar 2–4 resultados o forzar en línea lo caliente) |
+| Star Fox 64 | bien | falla breve en el logo inicial (falta descripción exacta); la estela del menú es del juego |
+| Super Smash Bros. (y Smash Remix) | se congela en el primer KO | causa en la entrada de arriba (z-buffer como color image) |
+| Kirby 64, Pokémon Stadium 2 | ~97–100 %, texturas con ruido o ajedrez | estado de Stadium 2 en la ranura 0 |
+| Pokémon Snap | jugable, texturas estiradas | ¿recorte del RSP, como MK64? |
+| Doom 64 | ~40 % | ~4,5 M instrucciones interpretadas por segundo: algo que el recompilador no traduce |
+| Banjo-Tooie | negro, sin tareas gráficas | arranque (CIC 6105) o protección de Rare |
+| F-Zero X | negro, CPU quieto desde el arranque | CIC 6106, entrada en 0x80067000 |
+| Diddy Kong Racing | negro | microcódigo propio de Rare sin HLE |
+| Indiana Jones | negro, 18 % | microcódigo de Factor 5 (LLE del RSP) |
+| Resident Evil 2 | parpadeo y texturas rotas desde el inicio | estado en la ranura 0 |
+
+Además: cadencia de la presentación (se pierde un campo de cada dos cuando
+la emulación va sobrada; 5,8 % saltados en la intro de Perfect Dark a 5×),
+las uniones azules de GoldenEye y el rompecabezas de Banjo.
+
 ## 2026-10-12 (noche) — Smash: el KO se cae con las copias a la RDRAM (acotado, pendiente; rama `infallible-wozniak-aa210c`)
 
-Main lo acotó en la PS3 (con fbfx.cfg = 1 no se cae; en v0.1.0 ya pasaba
+Se acotó en la PS3 (con fbfx.cfg = 1 no se cae; en v0.1.0 ya pasaba
 con Smash Remix). En el host nativo se reproduce con `--gfx-frame` (demo,
 las tareas gráficas paran en el campo 1424): sin el espejo del framebuffer
 se cuelga igual; sin las copias esperadas corre toda la demo (12 987
@@ -33,7 +63,7 @@ nosotros.
 
 ## 2026-10-12 (noche) — Interbloqueo de la PS3 con más de SETS tareas gráficas en un campo (Paper Mario, Mario Party, Mario Party 3; rama `infallible-wozniak-aa210c`)
 
-Main lo reportó del candidato de v0.2.0: PM se queda quieto al pulsar START
+Salió en el candidato de v0.2.0: PM se queda quieto al pulsar START
 en el telón (campo 688), MP tras los logos (681) y MP3 (516): «RSP ocupado»,
 MIPS 0, «presentación en espera», y en esa ventana «1 esperas por un juego
 de búferes». En el host nativo (intérprete + HLE) los tres pasan con las
@@ -94,7 +124,7 @@ Sin prueba unitaria (son los hilos de la PS3); por confirmar en la consola.
 
 ## 2026-10-12 (noche) — Donkey Kong 64: logos entrelazados y «zoom» en el juego (presentación; rama `infallible-wozniak-aa210c`)
 
-Main lo reportó de la PS3 real con la rama del recompilador (DK64 al 100 %):
+Salió en la PS3 real con la rama del recompilador (DK64 al 100 %):
 1. **Logos (campos ~100–460)**: el VI muestra 640 × 237 por campo con
    stride 2560 (VI_WIDTH 1280) y el origen alterna dos líneas seguidas: un
    búfer de 640 × 480 del que cada campo muestra una línea de cada dos. En
@@ -185,7 +215,7 @@ Main lo reportó de la PS3 real con la rama del recompilador (DK64 al 100 %):
 
 ## 2026-10-12 (noche) — Star Fox 64 colgado a los 5 s: el espejo del framebuffer pisaba un DMA (rama `infallible-wozniak-aa210c`)
 
-Main lo reportó de la PS3 real (Rev 1 y Rev 0: letras unos 5 s y negro, el
+Salió en la PS3 real (Rev 1 y Rev 0: letras unos 5 s y negro, el
 CPU al 100 % sin bucles de espera reconocidos). En el host se reproduce
 solo con el espejo del framebuffer (`--gfx-frame`, que lo activa; con
 `SALSA64_FBFX=0` corre): el juego se queda en la tarea gráfica 67 con todos
