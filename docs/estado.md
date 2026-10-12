@@ -1,5 +1,48 @@
 # Estado
 
+## 2026-10-12 — Botón PS y cuadro al salir: el juego se pausa (rama `heuristic-agnesi-760f8c`, paquete SLSA00098 «Salsa64 botón PS»)
+
+Problema (PS3 real, v0.1.0): dentro de un juego, el botón PS abría el menú
+del sistema y, al volver, Salsa64 ya no respondía y había que cerrarlo desde
+el sistema (visto en Banjo-Kazooie). `sysutil_cb` solo atendía «Salir del
+juego»: la emulación, el audio y los mandos seguían detrás del menú. No hay
+log de ese cuelgue, así que la causa exacta no se vio.
+
+Hecho (docs/hilos-ppe.md, «Botón PS y pausa»; docs/uso-ps3.md):
+- **Pausa** con el menú del sistema abierto (`SYSUTIL_MENU_OPEN` … `CLOSE`,
+  o el bit del sistema en `padInfo.info`): la emulación queda quieta al
+  empezar el campo siguiente y al volver el ritmo empieza de nuevo; el audio
+  calla sin perder lo encolado y sin que el hueco entre en la medición de
+  velocidad (`audio_sync_pause`); se sigue presentando el último cuadro con
+  flip (`present_still`, `salsa64_rdp_present_again`) y llamando a
+  `sysUtilCheckCallback`. Mandos sueltos mientras los tiene el sistema; nada
+  queda pegado al volver. Al log: «sistema: menú abierto/cerrado», «pausa: …»,
+  «mandos: …».
+- **Cuadro de START + SELECT** sobre la misma pausa: «¿Volver al menú?» (con
+  `embedded`, «¿Salir al XMB?»), × sale, ○ o el atajo otra vez siguen; lo
+  apretado al abrir o cerrar no llega al juego hasta soltarse. «Confirmar al
+  salir» en Opciones (`confirmar = si|no` en menu.cfg, sí por omisión).
+- **Latido**: un hilo que avisa en el log dónde se queda quieto cada hilo si
+  uno no da vueltas en 2 s. `sin-pausa` (archivo de diagnóstico): el menú
+  del sistema no pausa, como en v0.1.0, para ver con el latido qué colgaba.
+- `pads_apply` ya no gira sin fin si el sistema desaloja a presentación a
+  mitad de publicar los mandos.
+- **Pruebas**: suite `pausectl` (9: menú del sistema, mandos tomados, cuadro
+  con ○, ×, el atajo otra vez y sin confirmación, cuadro con el menú del
+  sistema encima, geometría en 4:3 y 16:9, y el hueco de 6 s contra el
+  ritmo: ni ráfaga ni esperas largas al volver) y dos en `sync` (con la
+  pausa, el audio vuelve en < 150 ms sin estirar; sin ella, el hueco lo
+  estiraba). test-host, test-roms, test-rec, test-phase2 (menú: 5 juegos
+  abiertos y cerrados) y el build sin avisos, en verde, también después de
+  traer main con la FlashRAM.
+
+Pendiente: **probarlo en la PS3 real** (el paquete se subió, pero la prueba
+no llegó a hacerse): en el menú de Salsa64, en Zelda (andando y con el juego
+en pausa) y en Banjo, pulsar PS y volver varias veces (que sigan la imagen,
+el sonido y los mandos); el cuadro con ○, con START + SELECT y con ×; y
+«Salir del juego» desde el menú del sistema. Si algo se cuelga, el latido
+dice dónde; con `sin-pausa` se puede buscar la causa del cuelgue de v0.1.0.
+
 ## 2026-10-11 — FlashRAM: Majora's Mask guarda (rama `clever-tereshkova-aa0089`, paquete SLSA00096 «Salsa64 FlashRAM»)
 
 Problema (PS3 real, v0.1.0): en Majora's Mask, después de la escena inicial
