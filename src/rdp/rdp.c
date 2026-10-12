@@ -82,6 +82,7 @@ _Static_assert((int)GFX_CULL_BACK == (int)RSXKIT_CULL_BACK && (int)GFX_CULL_FRON
 	       "cull");
 _Static_assert(GFX_DEPTH_TEST == RSXKIT_DEPTH_TEST && GFX_DEPTH_WRITE == RSXKIT_DEPTH_WRITE &&
 		       GFX_DEPTH_DECAL == RSXKIT_DEPTH_OFFSET, "profundidad");
+_Static_assert(GFX_FB_FRESH == RDP_TARGETS_FRESH, "la HLE y la tabla cuentan igual la antigüedad de un destino");
 
 struct set {
 	uint8_t *vtx, *cmd, *tex;
@@ -158,6 +159,7 @@ static struct {
 	uint32_t scratch_w, scratch_h, scratch_bytes;
 	uint32_t scratch_scale;      /* escala de la superficie copiada (la del scratch) */
 	int scratch_slot;            /* ranura copiada en esta tarea, o -1 */
+	uint32_t ppe_tex_off;        /* arena de la tarea en traducción: hasta dónde está ocupado */
 	struct depth depths[MAX_DEPTHS];
 	int bound_t;                 /* ranura ligada, o -1 */
 	struct depth *bound_d;
@@ -499,6 +501,11 @@ static void acquire(void *ctx, struct gfx_job *job)
 	job->cmd_cap = CMD_BYTES;
 	job->tex_ea = (uint64_t)(uintptr_t)s->tex;
 	job->tex_cap = TEX_BYTES;
+	/* Lo que viene de un destino reciente se lee del RSX: que la HLE no lo
+	 * decodifique (texture_from_target y, si al final no se puede, la
+	 * decodificación en el PPE). */
+	if (rdp.fbfx >= 1)
+		job->flags |= GFX_JOB_FBTEX;
 	rdp.acquired = n + 1;
 }
 
@@ -847,10 +854,11 @@ static void zclear(const struct gfx_zclear *z)
  * superficie (a la escala de ese destino, que puede no ser la del destino
  * en que se dibuja: u y v van normalizadas, así que solo las filas ligadas
  * dependen de la escala, rdp_target_tex_map) en vez de la copia
- * decodificada de la RDRAM. Devuelve true si hay que sincronizar antes del
- * dibujo (la superficie se dibujó desde la última vez). */
-static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_texture *t)
+ * decodificada de la RDRAM (*bound). Devuelve true si hay que sincronizar
+ * antes del dibujo (la superficie se dibujó desde la última vez). */
+static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_texture *t, bool *bound)
 {
+	*bound = false;
 	if (rdp.fbfx < 1 || !gt->src_addr || gt->src_siz != 2u)
 		return false;
 	int slot;
@@ -912,6 +920,7 @@ static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_textur
 	/* u recorre la fila entera del destino: la textura empieza en x0. */
 	t->xf[0] = map.xf0;
 	t->xf[2] = map.xf2;
+	*bound = true;
 	/* El primer dibujo que lee el scratch recién copiado también tiene que
 	 * esperar al RSX e invalidar su caché de texturas (si no, un cuadro con
 	 * basura: el haz verde al abrir la pausa de Zelda en la PS3). */
@@ -940,7 +949,31 @@ static void viscvg(int cur, const struct gfx_draw *g)
 	}
 }
 
-static void to_rsxkit(const struct gfx_draw *g, const struct set *s, int cur, rsxkit_draw *d, bool *sync)
+/* Una textura que la HLE dejó para leer de un destino (GFX_TEX_TARGET) y
+ * que no se pudo leer de él (para la tabla el destino es viejo, es del CPU
+ * o no tiene superficie): se decodifica de la RDRAM en el arena de la
+ * tarea, detrás de lo que escribió la HLE (el arena casi no se usa con la
+ * caché de texturas). false si no cabe. */
+static bool texture_from_rdram(const struct gfx_tex *gt, struct set *s, rsxkit_texture *t)
+{
+	uint32_t off = (rdp.ppe_tex_off + 127) & ~127u, size = (uint32_t)gt->pitch * gt->height;
+	if (!rdp.rdram || off + size > TEX_BYTES) {
+		rdp.stats.tex_ppe_lost++;
+		LOGN(10, "gfx: textura %ux%u desde %06x/%u: no cabe en el arena para decodificarla en el PPE", gt->width,
+		     gt->height, gt->src_addr, gt->src_pitch);
+		return false;
+	}
+	rdp_decode_rgba16(rdp.rdram, rdp.rdram_size, gt->src_addr, gt->src_pitch, gt->width, gt->height, s->tex + off,
+			  gt->pitch);
+	rdp.ppe_tex_off = off + size;
+	t->offset = s->tex_off + off;
+	rdp.stats.tex_ppe++;
+	return true;
+}
+
+/* false: el dibujo no se puede hacer (una textura que no hubo dónde
+ * decodificar). */
+static bool to_rsxkit(const struct gfx_draw *g, struct set *s, int cur, rsxkit_draw *d, bool *sync)
 {
 	*sync = false;
 	static const uint8_t blend[] = {
@@ -977,10 +1010,14 @@ static void to_rsxkit(const struct gfx_draw *g, const struct set *s, int cur, rs
 		t->wrap_t = wrap[GFX_TEX_WRAP_T(gt->flags)];
 		t->filter = (gt->flags & GFX_TEX_BILINEAR) ? RSXKIT_FILTER_LINEAR : RSXKIT_FILTER_NEAREST;
 		memcpy(t->xf, gt->xf, sizeof t->xf);
-		if (texture_from_target(gt, cur, t))
+		bool from_target = false;
+		if (texture_from_target(gt, cur, t, &from_target))
 			*sync = true;
+		if (gt->where == GFX_TEX_TARGET && !from_target && !texture_from_rdram(gt, s, t))
+			return false;
 	}
 	memcpy(d->k, g->k, sizeof d->k);
+	return true;
 }
 
 /* Color images auxiliares de 16 bits de la tarea (las que no son un
@@ -1122,6 +1159,7 @@ static void translate(uint32_t n)
 	rdp.bound_d = NULL;
 	rdp_targets_task(&rdp.tg);
 	rdp.scratch_slot = -1;
+	rdp.ppe_tex_off = res->tex_bytes;
 	readbacks_finish(false);
 	int cur = -1;
 	bool drawn[RDP_TARGETS_MAX] = { false };
@@ -1211,8 +1249,8 @@ static void translate(uint32_t n)
 				for (int lane = 0; lane < 4; lane++)
 					w.k[GFX_K_ONE][0][lane] = 1.0f;
 				to_rsxkit(&w, s, cur, &rd, &sync);
-			} else {
-				to_rsxkit(g, s, cur, &rd, &sync);
+			} else if (!to_rsxkit(g, s, cur, &rd, &sync)) {
+				break;
 			}
 			if (sync) {
 				/* Lee una superficie dibujada en este mismo tramo. */
@@ -1596,14 +1634,19 @@ bool salsa64_rdp_dump(const char *path)
 	uint32_t max = 2 * (r->cmd_bytes / sizeof(struct gfx_draw)) + 1;
 	uint8_t *cmd = malloc(r->cmd_bytes);
 	uint32_t *src = malloc(max * 2 * sizeof *src), *len = src + max;
-	if (!cmd || !src) {
+	const struct gfx_tex **tgt = malloc(max * sizeof *tgt);
+	uint8_t *here = malloc(GFX_TEX_MAX);
+	if (!cmd || !src || !tgt || !here) {
 		free(cmd);
 		free(src);
+		free(tgt);
+		free(here);
 		return false;
 	}
 	memcpy(cmd, s->cmd, r->cmd_bytes);
 	/* Las texturas de la caché se copian detrás del arena (una vez cada
-	 * una) y los dibujos pasan a apuntar ahí. */
+	 * una) y los dibujos pasan a apuntar ahí; las que se leían de un destino
+	 * (GFX_TEX_TARGET), decodificadas de la RDRAM de ahora. */
 	uint32_t arena = (r->tex_bytes + 127) & ~127u, tex_bytes = arena, n = 0;
 	for (uint32_t off = 0; off + sizeof(struct gfx_cmd) <= r->cmd_bytes;) {
 		struct gfx_cmd *c = (struct gfx_cmd *)(cmd + off);
@@ -1612,13 +1655,15 @@ bool salsa64_rdp_dump(const char *path)
 		struct gfx_draw *d = (struct gfx_draw *)c;
 		for (int i = 0; c->op == GFX_OP_DRAW && i < d->ntex && i < 2; i++) {
 			struct gfx_tex *t = &d->tex[i];
-			if (t->where != GFX_TEX_CACHE)
+			if (t->where == GFX_TEX_ARENA)
 				continue;
+			bool target = t->where == GFX_TEX_TARGET;
 			uint32_t k = 0, dst = arena;
-			while (k < n && src[k] != t->offset)
+			while (k < n && (target || tgt[k] || src[k] != t->offset))
 				dst += (len[k++] + 127) & ~127u;
 			if (k == n && n < max) {
 				src[n] = t->offset;
+				tgt[n] = target ? t : NULL;
 				len[n++] = (uint32_t)t->pitch * t->height;
 				tex_bytes += (len[k] + 127) & ~127u;
 			}
@@ -1635,12 +1680,23 @@ bool salsa64_rdp_dump(const char *path)
 		  fwrite(zero, 1, arena - r->tex_bytes, f) == arena - r->tex_bytes;
 	for (uint32_t k = 0; ok && k < n; k++) {
 		uint32_t pad = ((len[k] + 127) & ~127u) - len[k];
-		ok = fwrite(rdp.cache + src[k], 1, len[k], f) == len[k] && fwrite(zero, 1, pad, f) == pad;
+		const uint8_t *p = rdp.cache + src[k];
+		if (tgt[k]) {
+			memset(here, 0, GFX_TEX_MAX);
+			if (rdp.rdram && len[k] <= GFX_TEX_MAX)
+				rdp_decode_rgba16(rdp.rdram, rdp.rdram_size, tgt[k]->src_addr, tgt[k]->src_pitch, tgt[k]->width,
+						  tgt[k]->height, here, tgt[k]->pitch);
+			p = here;
+		}
+		ok = len[k] <= (tgt[k] ? GFX_TEX_MAX : CACHE_BYTES) && fwrite(p, 1, len[k], f) == len[k] &&
+		     fwrite(zero, 1, pad, f) == pad;
 	}
 	if (f)
 		fclose(f);
 	free(cmd);
 	free(src);
+	free(tgt);
+	free(here);
 	return ok;
 }
 

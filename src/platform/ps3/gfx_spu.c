@@ -101,6 +101,7 @@ static uint32_t spu_finish(void *ctx)
 	s->t_hash += s->res.t_hash;
 	s->skipped += s->res.skipped;
 	s->bg += s->res.bg;
+	s->tex_target += s->res.tex_target;
 	s->sink.done(s->sink.ctx, &s->job, &s->res);
 	return salsa64_gfx_task_flags(&s->res);
 }

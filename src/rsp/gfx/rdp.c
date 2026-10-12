@@ -76,6 +76,64 @@ void gfx_rdp_reset(struct gfx_state *g)
 	g->load_next = 0;
 	memset(g->tmem, 0, sizeof g->tmem);
 	g->tex_gen++;
+	gfx_fb_forget(g);
+}
+
+void gfx_fb_forget(struct gfx_state *g)
+{
+	memset(g->fbimg, 0, sizeof g->fbimg);
+	g->fbimg_cur = -1;
+}
+
+/* La color image actual recibe un dibujo en esta tarea: su entrada en
+ * fbimg (la misma dirección y ancho, una libre o la dibujada hace más
+ * tareas), como el consumidor elige la ranura de un destino. Solo las de 16
+ * bits (las únicas que lee como textura desde su destino) y no las
+ * imposibles (ancho 0 o de más de 640): el consumidor las ignora. */
+static __attribute__((noinline, cold)) void fb_drawn(struct gfx_state *g)
+{
+	g->fbimg_cur = -1;
+	uint32_t w = g->cimg_width, addr = g->cimg_addr, task = g->job->task;
+	if (w - 1 >= 640 || g->cimg_siz != G_IM_SIZ_16b)
+		return;
+	/* La misma imagen o, si no está, la libre o la dibujada hace más. */
+	int best = 0;
+	uint32_t oldest = 0;
+#pragma GCC unroll 1
+	for (int i = 0; i < GFX_FB_IMAGES; i++) {
+		const struct gfx_fbimg *e = &g->fbimg[i];
+		if (e->addr == addr && e->width == w) {
+			best = i;
+			break;
+		}
+		uint32_t age = e->width ? task - e->task : ~0u;
+		if (age > oldest) {
+			oldest = age;
+			best = i;
+		}
+	}
+	struct gfx_fbimg *e = &g->fbimg[best];
+	if (e->addr != addr || e->width != w) {
+		e->addr = addr;
+		e->width = w;
+		e->lh = w * 3 / 4;
+	}
+	e->task = task;
+	g->fbimg_cur = best;
+}
+
+/* Un dibujo de la color image actual llega hasta la fila `bottom` (sus
+ * tijeras): el alto conjeturado crece como el del destino del consumidor,
+ * que ignora una color image de más de 480 filas. */
+static void fb_rows(struct gfx_state *g, uint32_t bottom)
+{
+	if (g->fbimg_cur < 0)
+		return;
+	struct gfx_fbimg *e = &g->fbimg[g->fbimg_cur];
+	if (bottom > 480)
+		e->width = 0;
+	else if (bottom > e->lh)
+		e->lh = bottom;
 }
 
 void gfx_init(struct gfx_state *g)
@@ -279,7 +337,7 @@ static bool texture_state(struct gfx_state *g, struct gfx_draw *d, int tile, int
 	unsigned wt = ti->maskt && !(ti->cmt & 2) && !(clamp & 2) ? ((ti->cmt & 1) ? GFX_WRAP_MIRROR : GFX_WRAP_REPEAT)
 								    : GFX_WRAP_CLAMP;
 	uint16_t l[2] = { lim && ws == GFX_WRAP_CLAMP ? lim[0] : 0, lim && wt == GFX_WRAP_CLAMP ? lim[1] : 0 };
-	if (!gfx_tile_texture(g, tile & 7, t, premul, l))
+	if (!gfx_tile_texture(g, tile & 7, t, premul, l, ws == GFX_WRAP_CLAMP))
 		return false;
 	/* Un eje decodificado en un solo periodo (tmem.c): espejo una vez y la
 	 * coordenada corrida un periodo (la textura es el segundo). */
@@ -313,6 +371,69 @@ static void clip_box(const struct gfx_state *g, uint16_t sc[4])
 		if (hi < (float)sc[i + 2])
 			sc[i + 2] = hi <= 0.0f ? 0 : (uint16_t)(hi + 0.5f);
 	}
+}
+
+/* El combiner con el resultado anterior si sus entradas no cambiaron
+ * (struct gfx_ccmemo): combine_cached lo copia y dice si estaba, y
+ * combine_keep guarda el que acaba de calcular gfx_combine. Aparte y sin
+ * inline: no suman marco a la cadena más honda de la pila del SPE 0 (que
+ * pasa por gfx_combine) y el código de las copias queda en un solo lugar. */
+/* Copias chicas sin las expansiones en línea de memcpy (en el SPE, cada
+ * una pasaba de 1 KB de código): por palabras los términos k, por bytes
+ * los factores. */
+typedef uint32_t __attribute__((may_alias)) cc_word;
+
+static __attribute__((noinline)) void cc_copy(void *dst, const void *src, uint32_t words, uint32_t bytes)
+{
+	cc_word *d = dst;
+	const cc_word *s = src;
+#pragma GCC unroll 1
+	for (uint32_t i = 0; i < words; i++)
+		d[i] = s[i];
+	uint8_t *db = (uint8_t *)dst + 4 * words;
+	const uint8_t *sb = (const uint8_t *)src + 4 * words;
+#pragma GCC unroll 1
+	for (uint32_t i = 0; i < bytes; i++)
+		db[i] = sb[i];
+}
+
+static uint32_t combine_key5(const struct gfx_state *g, const struct gfx_draw *d)
+{
+	return g->prim_lod | ((g->oh >> G_MDSFT_CYCLETYPE) & 3) << 8 | (uint32_t)(d->fog != 0) << 10 | 1u << 11;
+}
+
+static __attribute__((noinline)) bool combine_cached(const struct gfx_state *g, struct gfx_draw *d, bool *approx)
+{
+	const struct gfx_ccmemo *m = &g->ccmemo;
+	if (m->key[0] != g->cc_hi || m->key[1] != g->cc_lo || m->key[2] != g->prim || m->key[3] != g->env ||
+	    m->key[4] != ((uint32_t)g->k4 | (uint32_t)g->k5 << 16) || m->key[5] != combine_key5(g, d))
+		return false;
+	cc_copy(d->k, m->k, sizeof d->k / 4, 0);
+	cc_copy(d->factors, m->factors, 0, sizeof d->factors);
+	d->nterms = (uint8_t)m->nterms;
+	d->ntex = (uint8_t)m->ntex;
+	for (int i = 0; i < 2; i++)
+		d->tex[i].flags = (uint8_t)((d->tex[i].flags & ~GFX_TEX_PREMUL) |
+					    ((m->premul >> i) & 1 ? GFX_TEX_PREMUL : 0));
+	*approx = m->approx != 0;
+	return true;
+}
+
+static __attribute__((noinline)) void combine_keep(struct gfx_state *g, const struct gfx_draw *d, bool approx)
+{
+	struct gfx_ccmemo *m = &g->ccmemo;
+	m->key[0] = g->cc_hi;
+	m->key[1] = g->cc_lo;
+	m->key[2] = g->prim;
+	m->key[3] = g->env;
+	m->key[4] = (uint32_t)g->k4 | (uint32_t)g->k5 << 16;
+	m->key[5] = combine_key5(g, d);
+	cc_copy(m->k, d->k, sizeof m->k / 4, 0);
+	cc_copy(m->factors, d->factors, 0, sizeof m->factors);
+	m->nterms = d->nterms;
+	m->ntex = d->ntex;
+	m->premul = (d->tex[0].flags & GFX_TEX_PREMUL ? 1u : 0u) | (d->tex[1].flags & GFX_TEX_PREMUL ? 2u : 0u);
+	m->approx = approx;
 }
 
 /* Resume el estado vigente en `d` (sin el tramo de vértices). */
@@ -370,7 +491,12 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 
 	/* La niebla ya está decidida: con ella, gfx_combine deja el término al
 	 * que el vertex program suma el color de niebla. */
-	if (gfx_combine(g, d))
+	bool approx;
+	if (!combine_cached(g, d, &approx)) {
+		approx = gfx_combine(g, d);
+		combine_keep(g, d, approx);
+	}
+	if (approx)
 		g->res->approx_cc++;
 	bool textured = kind == PRIM_RECT || (kind < PRIM_RAW ? g->tex_on != 0 : (kind & 1) != 0);
 	if (!textured && d->ntex) {
@@ -430,8 +556,10 @@ static void send_target(struct gfx_state *g)
 	struct gfx_cmd c = { GFX_OP_TARGET, sizeof c, g->cimg_addr, g->cimg_width,
 			     (uint32_t)g->cimg_fmt << 8 | g->cimg_siz };
 	gfx_flush_draw(g);
-	if (gfx_io_cmd(g, &c, sizeof c))
+	if (gfx_io_cmd(g, &c, sizeof c)) {
 		g->target_sent = true;
+		fb_drawn(g);
+	}
 }
 
 /* Deja abierto un dibujo con el estado vigente para `nvtx` vértices más y
@@ -458,6 +586,7 @@ static struct gfx_vertex *begin_prim(struct gfx_state *g, enum prim_kind kind, i
 			g->draw.h.a = g->vtx_count;
 			g->draw.h.b = 0;
 			g->have_draw = true;
+			fb_rows(g, (d.scissor[3] + 3u) / 4u);
 		}
 	}
 	struct gfx_vertex *v = gfx_io_vtx(g, nvtx);
@@ -583,10 +712,18 @@ static void rect(struct gfx_state *g, enum prim_kind kind, int tile, float x0, f
 }
 
 /* Texels desde el 0 hasta el que muestrea u < hi (y el siguiente con
- * filtro); 0 si son todos los n. */
+ * filtro); 0 si son todos los n. Con filtro puntual, floor(u) < hi: ceil(hi)
+ * texels (una franja de una fila con t de 0 a 1 es de una fila, no dos: así
+ * su procedencia no depende del paso, tmem.c). */
 static uint16_t sampled(float hi, bool bilinear, uint32_t n)
 {
-	uint32_t k = hi < 0.0f ? 1 : (uint32_t)hi + (bilinear ? 2 : 1);
+	uint32_t k;
+	if (hi < 0.0f)
+		k = 1;
+	else if (bilinear)
+		k = (uint32_t)hi + 2;
+	else
+		k = hi == 0.0f ? 1 : (uint32_t)hi + ((float)(uint32_t)hi < hi);
 	return k < n ? (uint16_t)k : 0;
 }
 
@@ -1003,6 +1140,7 @@ void gfx_rdp_command(struct gfx_state *g, uint32_t w0, uint32_t w1)
 		if (addr != g->cimg_addr || width != g->cimg_width || siz != g->cimg_siz) {
 			gfx_flush_draw(g);
 			g->target_sent = false;
+			g->fbimg_cur = -1;
 		}
 		g->cimg_addr = addr;
 		g->cimg_fmt = fmt;

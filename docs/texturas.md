@@ -1,6 +1,6 @@
 # Caché de texturas de la HLE gráfica
 
-Estado al 2026-10-10. Código: `src/rsp/gfx/texcache.c`, `src/rsp/gfx/tmem.c`,
+Estado al 2026-10-12. Código: `src/rsp/gfx/texcache.c`, `src/rsp/gfx/tmem.c`,
 `src/rdp/rdp.c` (región y barreras), `src/spu/gfx/io_spu.c` (DMA).
 
 ## Problema
@@ -40,8 +40,11 @@ la TMEM ni SETTILE/SETTILESIZE) ni siquiera se vuelve a hashear.
 
 **Dónde viven.** En una región de 8 MB de memoria principal mapeada al RSX
 (`src/rdp`, junto a los búferes de salida); el RSX lee las texturas de ahí
-sin copiarlas. El directorio (1024 entradas de 28 bytes + índice de 2048
-ranuras: 32 KB) vive en el local store del SPE 0, dentro de `gfx_state`.
+sin copiarlas. El directorio (896 entradas de 28 bytes + índice de 2048
+ranuras: 28,5 KB) vive en el local store del SPE 0, dentro de `gfx_state`.
+Eran 1024 entradas: bajaron por la pila del SPE 0 (docs/perf-log.md, «Pila
+del SPE 0»); en el host, el máximo de texturas distintas en 100 campos es
+428 (GoldenEye en Dam).
 
 **Reemplazo.** La región se llena como anillo: las entradas forman una cola en
 el orden en que ocupan la región; se reserva en `head_off` y se desaloja lo
@@ -138,7 +141,8 @@ dibujos.
 
 Para que el código nuevo no se comiera la pila del SPE 0, el registro de
 texturas del arena por tarea (para no decodificar dos veces la misma si
-la caché está llena o apagada) bajó de 128 a 64 entradas (−3 KB).
+la caché está llena o apagada) bajó de 128 a 64 entradas (−3 KB), y
+después a 32 por la pila del SPE 0 (docs/perf-log.md, «Pila del SPE 0»).
 
 **En la PS3 real** (c17e790, docs/perf-log.md): la azotea pasa de 50–51 a
 59,8–60,3 campos/s; la HLE en el SPE, de 40–61 a 3,3–5,0 ms por tarea, y
@@ -146,6 +150,20 @@ decodificar, de 37–58 a 0,5–0,65 ms con 133–181 texturas nuevas por tarea
 (3,6 µs por franja). Zelda, GoldenEye y Conker, igual que antes. Lo que
 queda lento en la intro de Perfect Dark (45–53 campos/s en la escena
 siguiente) es el CPU emulado, no la HLE.
+
+**Las franjas, del destino del RSX (2026-10-12).** Las franjas son el
+cuadro anterior, que el RSX tiene a la resolución interna: ahora se leen de
+ahí (docs/framebuffer.md, «Texturas desde un destino sin decodificar») y
+la HLE no las decodifica. Dos cambios en la HLE: la procedencia de un
+`LOADBLOCK` del que el dibujo muestrea una sola fila toma el paso de
+`SETTIMG` (320) y no el de la línea de la tile (640), y el recorte con
+filtro puntual es exacto (`ceil(hi)`: franjas de 320 × 1, antes 321 × 2);
+con eso la textura cae en el framebuffer anterior y, con `GFX_JOB_FBTEX`,
+sale como `GFX_TEX_TARGET` sin hash ni decodificación. En el host, de los
+campos 2029 a 2530: decodificadas por tarea 180 → 0,0–0,5, texels 116 000 →
+23–519, y la caché ya no se llena: 33,6 → 0 texturas desalojadas por tarea
+y el conjunto de texturas de cada ventana de 100 campos pasa de 23,8 MB a
+0,1–0,3 MB.
 
 ## Decisión: SPE 0 o SPE 2–3
 
@@ -215,12 +233,7 @@ lente salía solo en una esquina (y después en la mitad de arriba).
   cuando falla la caché; medir el peor campo en cambios de escena antes.
   RGBA16 ya va de 4 en 4 texels (vectores de GCC); los demás formatos,
   texel por texel con accesos alineados.
-- El desenfoque de Perfect Dark lee el cuadro anterior desde la RDRAM (la
-  copia a 1× del espejo del framebuffer): leerlo del destino del RSX
-  (render a textura) lo vería a la resolución interna y no decodificaría
-  nada, pero la procedencia de las franjas no se reconoce (`LOADBLOCK` de
-  una fila con una tile de 1280 bytes por línea: «paso 640» contra un
-  destino de 320) y el SPE tendría que saber de antemano que no hace falta
-  decodificar.
+- Medir en la PS3 real el desenfoque de Perfect Dark leído del destino del
+  RSX (2026-10-12, arriba).
 - El arena de texturas por juego (4 MB × 3) casi no se usa: se puede
   achicar.

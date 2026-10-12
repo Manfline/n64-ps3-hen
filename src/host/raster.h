@@ -46,7 +46,9 @@ void raster_vi(const struct salsa64_vi_frame *f);
  * (pruebas unitarias; salsa64-run no lo necesita). */
 void raster_reset(void);
 /* Totales: copias a la RDRAM, destinos cebados, texturas desde un destino
- * (de su imagen) y desde la RDRAM. */
-void raster_fb_stats(uint32_t *readbacks, uint32_t *primes, uint32_t *tex_rsx, uint32_t *tex_rdram);
+ * (de su imagen) y desde la RDRAM, y las que la HLE dejó para leer de un
+ * destino (GFX_TEX_TARGET) y hubo que decodificar aquí. */
+void raster_fb_stats(uint32_t *readbacks, uint32_t *primes, uint32_t *tex_rsx, uint32_t *tex_rdram,
+		     uint32_t *tex_decoded);
 
 #endif

@@ -91,6 +91,11 @@ struct gfx_job {
 /* El microcódigo no recorta contra el plano cercano (los ".NoN" de su
  * texto: Zelda OoT, Star Fox 64, Conker; y el de Perfect Dark, sync.c). */
 #define GFX_JOB_NONEAR 0x10u
+/* El consumidor lee del RSX las texturas que vienen de una color image
+ * dibujada hace poco (render a textura) y sabe decodificar él mismo las que
+ * al final no pueda leer de ahí: la HLE no decodifica esas (GFX_TEX_TARGET;
+ * ver «Texturas desde un destino»). */
+#define GFX_JOB_FBTEX 0x20u
 
 /* ---- Caché de texturas -------------------------------------------------------
  * Las texturas decodificadas viven en una región de memoria que pone el
@@ -131,6 +136,7 @@ struct gfx_result {
 	uint32_t t_hash;         /* ticks identificando texturas (hash y búsqueda) */
 	uint32_t skipped;        /* comandos saltados de otro microcódigo (G_LOAD_UCODE) */
 	uint32_t bg;             /* fondos de S2DEX dibujados (G_BG_COPY, G_BG_1CYC) */
+	uint32_t tex_target;     /* texturas sin decodificar: se leen de un destino (GFX_TEX_TARGET) */
 };
 
 #define GFX_RES_FULLSYNC     0x01u  /* G_RDPFULLSYNC: interrupción del DP */
@@ -181,13 +187,22 @@ struct gfx_zclear {
 };
 
 /* Textura de un dibujo: texels RGBA8888 (bytes R, G, B, A) en el arena de
- * la tarea o en la región de la caché. */
+ * la tarea o en la región de la caché.
+ *
+ * Texturas desde un destino (GFX_TEX_TARGET, solo con GFX_JOB_FBTEX): una
+ * RGBA16 cuyo origen cae en una color image de 16 bits que la HLE vio
+ * dibujar hace GFX_FB_FRESH tareas o menos no se decodifica: no hay texels
+ * (offset y key valen 0) y el consumidor la lee de su destino (render a
+ * textura). Si no puede (para él el destino es viejo, es del CPU o no tiene
+ * superficie), la decodifica él: width × height texels RGBA16 de la RDRAM
+ * desde src_addr con src_pitch texels por fila, a RGBA8888 con `pitch`
+ * bytes por fila, lo mismo que habría dado la HLE con la RDRAM de ahora. */
 struct gfx_tex {
 	uint32_t offset;    /* desde el inicio del arena o de la región */
 	uint16_t width, height;
 	uint16_t pitch;     /* bytes por fila */
 	uint8_t flags;      /* GFX_TEX_* */
-	uint8_t where;      /* GFX_TEX_ARENA o GFX_TEX_CACHE */
+	uint8_t where;      /* GFX_TEX_ARENA, GFX_TEX_CACHE o GFX_TEX_TARGET */
 	uint32_t key;       /* identidad de la textura (32 bits del hash) */
 	/* s, t (texels de la N64) → coordenadas normalizadas de la textura:
 	 * u = s * xf[0] + xf[2], v = t * xf[1] + xf[3]. */
@@ -212,7 +227,13 @@ struct gfx_tex {
  * GFX_WRAP_MIRROR_ONCE y u o v corridos un periodo (rdp.c). */
 #define GFX_TEX_ONCE_S      0x40u
 #define GFX_TEX_ONCE_T      0x80u
-enum { GFX_TEX_ARENA = 0, GFX_TEX_CACHE = 1 };
+enum { GFX_TEX_ARENA = 0, GFX_TEX_CACHE = 1, GFX_TEX_TARGET = 2 };
+/* Ninguna textura pasa de tantos bytes (pitch × height): las que no caben
+ * pierden filas (el área de decodificación del SPE). */
+#define GFX_TEX_MAX 32768u
+/* Tareas que una color image dibujada sigue leyéndose del RSX como textura:
+ * la misma cuenta que RDP_TARGETS_FRESH del consumidor (src/rdp/targets.h). */
+#define GFX_FB_FRESH 3
 /* GFX_WRAP_MIRROR_ONCE: refleja una vez alrededor de 0 (u en [−1, 0] es el
  * espejo de [0, 1]) y fija el borde más allá, como el RDP con espejo y
  * clamp en una tile de dos periodos. */

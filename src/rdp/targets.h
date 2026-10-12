@@ -162,6 +162,15 @@ struct rdp_tex_map {
 void rdp_target_tex_map(uint32_t scale, uint32_t lw, uint32_t x0, uint32_t y0, uint32_t tex_w, uint32_t tex_h,
 			float xf0, float xf2, struct rdp_tex_map *out);
 
+/* Una textura que la HLE no decodificó porque venía de un destino
+ * (GFX_TEX_TARGET, rsp/gfx/gfx.h) y que al final no se puede leer de él
+ * (para la tabla el destino es viejo, es del CPU o no tiene superficie):
+ * w × h texels RGBA16 de la RDRAM desde `addr`, con `pitch` texels por fila,
+ * a RGBA8888 (bytes R, G, B, A) con `out_pitch` bytes por fila, como los
+ * decodifica la HLE. Lo que cae fuera de la RDRAM queda en cero. */
+void rdp_decode_rgba16(const uint8_t *rdram, uint32_t rdram_size, uint32_t addr, uint32_t pitch, uint32_t w,
+		       uint32_t h, uint8_t *out, uint32_t out_pitch);
+
 /* ¿La región de src_w × src_h píxeles de superficie se presenta a un
  * múltiplo entero (sin el estiramiento fraccionario que repetía filas con
  * el recorte del overscan) en vez de ajustarse a la pantalla? Sí si cabe y

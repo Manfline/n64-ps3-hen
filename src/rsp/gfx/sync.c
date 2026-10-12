@@ -67,6 +67,7 @@ bool gfx_state_load(struct gfx_state *g, const uint8_t *in)
 	if (!gfx_state_unpack_regs(g, in))
 		return false;
 	memcpy(g->tmem, in + GFX_STATE_REGS, sizeof g->tmem);
+	gfx_fb_forget(g);  /* el consumidor también suelta sus destinos */
 	return true;
 }
 

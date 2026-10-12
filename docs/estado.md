@@ -1,5 +1,39 @@
 # Estado
 
+## 2026-10-12 — El desenfoque de Perfect Dark desde el destino del RSX; copias esperadas a 200 ms y el «estado» del SPE al triple (rama `wonderful-jepsen-ebf467`, paquete SLSA00101 «Salsa64 desenfoque»)
+
+- **Desenfoque (docs/framebuffer.md, «Texturas desde un destino sin
+  decodificar»):** las 180 franjas por tarea del cuadro anterior se
+  reconocen como de su framebuffer (un `LOADBLOCK` del que se muestrea una
+  fila toma el paso de `SETTIMG`) y la HLE no las decodifica
+  (`GFX_TEX_TARGET`); el consumidor las lee del RSX a la resolución interna
+  o, si no puede, las decodifica en el PPE. PS3 real: PD a 59,7–60,2
+  campos/s en la azotea con 0,0–0,5 texturas decodificadas por tarea (antes
+  133–181) y el desenfoque «sutil pero visible»; el baile del Espantapájaros
+  de Majora's Mask sale por el mismo camino (96 texturas por tarea leídas del
+  RSX), «sublime».
+- **Copias esperadas a 200 ms (98def88, en main):** desde que la presentación
+  traduce solo las tareas «visibles» (temblor de Banjo-Kazooie), la tarea
+  cuya copia a la RDRAM espera la emulación no se traducía hasta el tope de
+  `RB_WAIT_US`: la intro de PD a 4,9 campos/s en la PS3 (también con main
+  sin esta rama). `salsa64_rdp_flush` traduce siempre esa tarea.
+- **Pila del SPE 0 y combiner:** la pila no alcanzaba en main (holgura
+  −3 008 bytes: docs/perf-log.md, «Pila del SPE 0»); el arreglo compiló el
+  combiner con `-Os`, y en la PS3 eso triplicó el «estado» del SPE en todos
+  los juegos. Ahora el resultado del combiner se memoriza con sus entradas
+  (b8d9041), S2DEX va con `-Os` y el directorio de la caché de texturas
+  baja a 896 entradas: holgura 3 520 bytes, comprobada en el build.
+- **Pendiente: el «estado» de Conker.** En la escena pesada de su intro
+  (campos 4400–4999) va a 49,3–55,4 campos/s con el SPE en 30,4–34,9 ms
+  por tarea y el «estado» en 4,1–7,6 ms; antes del `-Os` iba a 51,8–58,3
+  (SPE 28,7–31,1, estado 2,5–3,9) y con el `-Os` sin memorizar a 44,1–50,5
+  (SPE 33,7–39,0, estado 7,5–11,8). Conker cambia de combiner o de PRIM/ENV
+  entre dibujos más que PD y un solo resultado guardado no alcanza.
+  Opciones, a medir en la PS3: (a) guardar 2–4 resultados (~0,4 KB cada
+  uno); (b) dejar `-Os` pero forzar inline lo caliente del combiner
+  (`p_term`, sumas de polinomios): en el SPU cada llamada sin pista de
+  salto cuesta ~18 ciclos.
+
 ## 2026-10-12 (noche) — Donkey Kong 64: logos entrelazados y «zoom» en el juego (presentación; rama `infallible-wozniak-aa210c`)
 
 Main lo reportó de la PS3 real con la rama del recompilador (DK64 al 100 %):

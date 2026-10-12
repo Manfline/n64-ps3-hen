@@ -66,6 +66,7 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 	g->clip_ratio[0] = g->clip_ratio[1] = gen1 ? 1.0f : 2.0f;
 	g->have_draw = false;
 	g->target_sent = false;
+	g->fbimg_cur = -1;
 	g->dirty = true;
 	g->vtx_count = 0;
 	g->narena_tex = 0;

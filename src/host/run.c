@@ -667,7 +667,7 @@ static struct ts_key {
 	uint32_t key, window;  /* última ventana en que se pidió (0: libre) */
 } ts_keys[TS_KEYS];
 static struct {
-	uint32_t window, from_field, tasks, req, dec, dec_new, dec_same_src, distinct;
+	uint32_t window, from_field, tasks, req, dec, dec_new, dec_same_src, distinct, target;
 	uint64_t dec_texels, distinct_bytes;
 } ts = { .window = 1 };
 static uint32_t ts_src[TS_KEYS];  /* origen y tamaño → última clave */
@@ -678,6 +678,12 @@ void salsa64_gfx_trace_tex(const struct gfx_state *g, const struct gfx_tile *t, 
 	(void)g;
 	if (!getenv("SALSA64_TEXSTAT"))
 		return;
+	if (tex->where == GFX_TEX_TARGET) {
+		/* Sin texels ni clave: se lee de un destino. */
+		ts.req++;
+		ts.target++;
+		return;
+	}
 	struct ts_key *k = &ts_keys[(tex->key * 0x9E3779B1u) >> 12];
 	while (k->window && k->key != tex->key)
 		k = k == &ts_keys[TS_KEYS - 1] ? ts_keys : k + 1;
@@ -720,10 +726,10 @@ static void ts_window(void)
 		return;
 	double n = ts.tasks;
 	fprintf(stderr, "texstat campos %u–%u: %u tareas; por tarea %.1f pedidas, %.1f decodificadas (%.1f nuevas, "
-		"%.1f vistas antes; %.1f nuevas desde un origen ya visto con otro contenido), %.0f texels; en la "
-		"ventana %u claves distintas, %.0f KB\n", ts.from_field, n64.bus.vi.fields, ts.tasks, ts.req / n,
-		ts.dec / n, ts.dec_new / n, (ts.dec - ts.dec_new) / n, ts.dec_same_src / n, ts.dec_texels / n,
-		ts.distinct, ts.distinct_bytes / 1024.0);
+		"%.1f vistas antes; %.1f nuevas desde un origen ya visto con otro contenido), %.0f texels, %.1f sin "
+		"decodificar (desde un destino); en la ventana %u claves distintas, %.0f KB\n", ts.from_field,
+		n64.bus.vi.fields, ts.tasks, ts.req / n, ts.dec / n, ts.dec_new / n, (ts.dec - ts.dec_new) / n,
+		ts.dec_same_src / n, ts.dec_texels / n, ts.target / n, ts.distinct, ts.distinct_bytes / 1024.0);
 	uint32_t window = ts.window + 1, from = n64.bus.vi.fields;
 	memset(&ts, 0, sizeof ts);
 	ts.window = window;
@@ -753,6 +759,8 @@ static void trace_draw_extra(const struct gfx_draw *d)
 	const char *dir = getenv("SALSA64_GFX_TEXDUMP");
 	for (int ti = 0; dir && ti < d->ntex; ti++) {
 		const struct gfx_tex *tx = &d->tex[ti];
+		if (tx->where == GFX_TEX_TARGET)
+			continue;  /* sin texels: se lee de un destino */
 		const uint8_t *base = (tx->where == GFX_TEX_CACHE ? gfx_cache : gfx_tex) + tx->offset;
 		char name[512];
 		snprintf(name, sizeof name, "%s/d%03u-t%d.ppm", dir, trace_draw, ti);
@@ -865,6 +873,10 @@ static void gfx_acquire(void *ctx, struct gfx_job *job)
 	}
 	job->task = gfx.tasks + 1;
 	job->done_task = gfx.tasks;
+	/* Como la PS3: el rasterizador lee de sus imágenes lo que viene de un
+	 * destino reciente y decodifica él lo que al final no pueda leer. */
+	if (gfx.raster && raster_fbfx >= 1 && !getenv("SALSA64_NO_FBTEX"))
+		job->flags |= GFX_JOB_FBTEX;
 #ifdef SALSA64_GFX_TRACE
 	salsa64_gfx_trace_now = trace_gfx_verbose && trace_gfx_left && n64.bus.vi.fields > (trace_from ? trace_from : 500);
 	trace_draw = trace_states = 0;
@@ -946,6 +958,7 @@ static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_resu
 	s->tex_old += res->tex_old;
 	s->tex_arena += res->tex_arena;
 	s->tex_evicted += res->tex_evicted;
+	s->tex_target += res->tex_target;
 	s->loads += res->loads;
 	s->unknown_cmds += res->unknown_cmds;
 	if (res->unknown_cmds)
@@ -1336,6 +1349,13 @@ static void gfx_summary(void)
 		s->tex_reused / n, s->tex_old / n, s->tex_arena / n, s->tex_evicted / n,
 		s->unknown_cmds, s->last_unknown, s->skipped, s->bg, s->approx_cc, s->dl_errors, n64.bus.rsp.stats.cut,
 		s->flags);
+	if (gfx.raster) {
+		uint32_t rb, pr, trsx, trd, tdec;
+		raster_fb_stats(&rb, &pr, &trsx, &trd, &tdec);
+		fprintf(stderr, "salsa64-run: gfx: framebuffer: %u copias a la RDRAM, %u destinos cebados; texturas desde un "
+			"destino: %u de su imagen, %u de la RDRAM; %u sin decodificar en la HLE (%.1f por tarea), %u de ellas "
+			"decodificadas por el rasterizador\n", rb, pr, trsx, trd, s->tex_target, s->tex_target / n, tdec);
+	}
 	if (gfx_late.tear)
 		fprintf(stderr, "salsa64-run: gfx: %u tareas comparadas entre el arranque y el fin, %u cambiaron\n",
 			gfx_late.compared, gfx_late.torn_tasks);
