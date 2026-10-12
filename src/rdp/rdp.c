@@ -180,6 +180,13 @@ static struct {
 	 * lo termina, así que cada copia esperada se cumplía por el tope de
 	 * RB_WAIT_US (200 ms por tarea en la intro de Perfect Dark: 5 campos/s). */
 	volatile uint32_t rb_waiting;
+	/* Lo mismo para acquire: tarea (n − SETS + 1) que tiene que estar
+	 * traducida para que el juego de búferes n % SETS quede libre, o 0. Sin
+	 * esto, un juego que manda más de SETS tareas gráficas dentro de un
+	 * campo (Paper Mario al abrir el telón, Mario Party tras los logos) se
+	 * quedaba esperando en acquire sin cerrar el campo, la presentación no
+	 * recibía las tareas visibles y nunca traducía esa: interbloqueo. */
+	volatile uint32_t set_waiting;
 	bool rb_late_logged;
 	/* Copias espejo en vuelo: el RSX escribe el búfer; cuando pasa la
 	 * barrera se convierte a la RDRAM (readbacks_finish). */
@@ -471,11 +478,19 @@ static void acquire(void *ctx, struct gfx_job *job)
 			if (!t0) {
 				t0 = sysGetSystemTime();
 				rdp.stats.set_waits++;
+				/* Que la presentación traduzca esa tarea aunque todavía no
+				 * sea visible (el campo no se cierra mientras se espera). */
+				rdp.set_waiting = n - SETS + 1;
+				lwsync();
+				if (rdp.wake)
+					rdp.wake();
 			}
 			sysUsleep(50);
 		}
-		if (t0)
+		if (t0) {
+			rdp.set_waiting = 0;
 			rdp.stats.us_set_wait += sysGetSystemTime() - t0;
+		}
 	}
 	/* Tareas que el RSX ya terminó: la de cada juego cuya barrera pasó (las
 	 * hace en orden). fence_task se lee antes que fence: si es la nueva,
@@ -1474,6 +1489,9 @@ uint32_t salsa64_rdp_flush(uint32_t upto)
 	if (upto == ~0u)
 		upto = done_n;
 	uint32_t w = rdp.rb_waiting;  /* la que espera la emulación, siempre */
+	if (w && (int32_t)(w - upto) > 0)
+		upto = w;
+	w = rdp.set_waiting;  /* y la que libera el juego de búferes que espera acquire */
 	if (w && (int32_t)(w - upto) > 0)
 		upto = w;
 	while ((int32_t)(n - done_n) < 0 && (int32_t)(n - upto) < 0) {

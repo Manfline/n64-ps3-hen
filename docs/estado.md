@@ -1,5 +1,27 @@
 # Estado
 
+## 2026-10-12 (noche) — Interbloqueo de la PS3 con más de SETS tareas gráficas en un campo (Paper Mario, Mario Party, Mario Party 3; rama `infallible-wozniak-aa210c`)
+
+Main lo reportó del candidato de v0.2.0: PM se queda quieto al pulsar START
+en el telón (campo 688), MP tras los logos (681) y MP3 (516): «RSP ocupado»,
+MIPS 0, «presentación en espera», y en esa ventana «1 esperas por un juego
+de búferes». En el host nativo (intérprete + HLE) los tres pasan con las
+pulsaciones exactas; en qemu con el recompilador también: es de los hilos
+de la PS3.
+
+Causa: `acquire()` (hilo de emulación) espera sin tope a que la tarea
+n − SETS + 1 esté traducida para reusar su juego de búferes; la
+presentación solo traduce hasta las tareas «visibles» que la emulación
+publica al cerrar cada campo (df45ac1, temblor de Banjo). Si un juego manda
+más de SETS (3) tareas gráficas dentro de un campo, la emulación se bloquea
+en acquire sin cerrar el campo, no publica las visibles y la presentación
+nunca traduce esa tarea. Desde 98def88 las tareas ya no se frenan 200 ms en
+`done()`, así que es más fácil que caigan varias en un campo (por eso PM
+pasaba por la mañana). Arreglo igual al de 98def88 para las copias:
+`acquire` publica en `rdp.set_waiting` la tarea que espera y despierta a
+presentación; `salsa64_rdp_flush` traduce hasta ella aunque no sea visible.
+Sin prueba unitaria (son los hilos de la PS3); por confirmar en la consola.
+
 ## 2026-10-12 (noche) — Donkey Kong 64: logos entrelazados y «zoom» en el juego (presentación; rama `infallible-wozniak-aa210c`)
 
 Main lo reportó de la PS3 real con la rama del recompilador (DK64 al 100 %):
