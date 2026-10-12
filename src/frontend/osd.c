@@ -10,6 +10,8 @@
 #include <rsxkit/ui.h>
 #include <rsxkit/text.h>
 
+#include "pausectl.h"
+
 static struct {
 	char text[96];
 	uint64_t until;
@@ -62,5 +64,18 @@ void osd_draw(const struct osd_fps *f, uint64_t now_us, float lw, float lh)
 		rsxkit_ui_rect(x, y, w + 2 * pad, h + 2 * pad, 0x10101000 | (a * 0xC0 / 255));
 		rsxkit_ui_text(x + pad, y + pad, notice.text, sc, 0xFFFFFF00 | a, 0);
 	}
+	rsxkit_ui_end();
+}
+
+void osd_confirm_draw(const char *question, const char *answers, float lw, float lh)
+{
+	struct pausectl_box b;
+	pausectl_layout(question, answers, lw, lh, &b);
+	rsxkit_ui_begin(lw, lh);
+	rsxkit_ui_rect(0.0f, 0.0f, lw, lh, 0x00000070);
+	rsxkit_ui_rect(b.x - 2.0f, b.y - 2.0f, b.w + 4.0f, b.h + 4.0f, 0xFFFFFF60);
+	rsxkit_ui_rect(b.x, b.y, b.w, b.h, 0x141414F0);
+	rsxkit_ui_text(b.qx, b.qy, question, b.qscale, 0xFFFFFFFF, 0);
+	rsxkit_ui_text(b.ax, b.ay, answers, b.ascale, 0xC8C8C8FF, 0);
 	rsxkit_ui_end();
 }

@@ -91,6 +91,9 @@ Opciones:
   sin reiniciar». Cambiar solo la escala no toca el video.
 - **Mostrar FPS**: el contador de velocidad dentro del juego (abajo, en
   «Contador de velocidad»). También se cambia en el juego con SELECT + △.
+- **Confirmar al salir**: con «Sí» (por omisión), START + SELECT en el juego
+  pregunta antes de cerrarlo (abajo, en «Salir del juego»); con «No», sale
+  directo como antes. Se guarda en `menu.cfg` (`confirmar = si|no`).
 
 ## Controles en el juego
 
@@ -113,7 +116,7 @@ los atajos de Salsa64:
 
 | Atajo | Qué hace |
 |---|---|
-| START + SELECT | Cierra el juego y vuelve al menú (guarda la partida, apaga el audio y los SPEs) |
+| START + SELECT | Pausa el juego y pregunta «¿Volver al menú?»: × cierra el juego y vuelve al menú (guarda la partida, apaga el audio y los SPEs); ○ sigue jugando. Ver «Salir del juego» |
 | SELECT + R1 | Guarda el estado en la ranura actual |
 | SELECT + L1 | Carga el estado de la ranura actual |
 | SELECT + derecha / izquierda (cruceta) | Cambia de ranura (0 a 9, en ronda) |
@@ -127,6 +130,28 @@ también con los atajos.
 
 «Salir del juego» del menú del sistema (botón PS) sale en cualquier
 momento.
+
+## Salir del juego y el botón PS
+
+START + SELECT pausa el juego (imagen y sonido quietos) y muestra sobre el
+último cuadro «¿Volver al menú?» (con `embedded`, «¿Salir al XMB?»):
+
+| Botón | Qué hace |
+|---|---|
+| × | Sí: cierra el juego como siempre |
+| ○, o START + SELECT otra vez | No: el juego sigue donde estaba, con su sonido |
+
+Mientras el cuadro está a la vista, nada de lo que se apriete llega al
+juego, y el botón con que se cierra tampoco (el ○ del «No» no cuenta como B
+al volver; hay que soltarlo). Para salir directo, sin cuadro, «Confirmar al
+salir: No» en Opciones.
+
+El **botón PS** abre el menú del sistema encima del juego: Salsa64 pausa la
+emulación y el sonido mientras está abierto y sigue mostrando el último
+cuadro; al cerrarlo, el juego sigue donde estaba. Los botones que se
+aprieten en el menú del sistema no llegan al juego, y ninguno queda pegado
+al volver. Desde ahí, «Salir del juego» cierra Salsa64 en cualquier momento
+(también en el menú de Salsa64).
 
 Para cambiar el mapeo, ver `controles.cfg` más abajo.
 
@@ -214,7 +239,8 @@ file:mijuego.z64
 
 (una sola línea, el nombre de un archivo que esté en `/dev_hdd0/salsa64`).
 Con este archivo presente START + SELECT sale al XMB en lugar de volver al
-menú. Para recuperar el menú, borrar `embedded`.
+menú (con el cuadro «¿Salir al XMB?» si «Confirmar al salir» está en sí).
+Para recuperar el menú, borrar `embedded`.
 
 ## Archivos de configuración
 
@@ -223,7 +249,7 @@ se crean por FTP.
 
 | Archivo | Formato | Qué hace |
 |---|---|---|
-| `menu.cfg` | Líneas `fondo = si\|no` y `fps = si\|no` | Fondo animado del menú y contador de velocidad en el juego. Lo escriben el menú (Opciones) y SELECT + △ |
+| `menu.cfg` | Líneas `fondo = si\|no`, `fps = si\|no` y `confirmar = si\|no` | Fondo animado del menú, contador de velocidad en el juego y si START + SELECT pregunta antes de salir (sí sin la línea). Lo escriben el menú (Opciones) y SELECT + △ |
 | `overscan.cfg` | Uno, dos o cuatro números: `8`, `8 6` o `izq der arr abajo` | Recorte de la imagen en píxeles de la N64 (a 320 × 240) por lado. Por omisión `8 6`; `0` lo apaga; máximo 64. Lo escribe el menú (`0`, `8 6` o `16 12`) |
 | `video.cfg` | `salida = 720` o `1080`; `escala = auto` o `1` a `5` | Salida de video y escala interna del render de la N64 (se leen al arrancar). Sin archivo: 720p y escala automática (3×, 960 × 720; a 1080p, 4×, 1280 × 960). Si la tele o el XMB no aceptan 1080, usa el siguiente modo. Acepta el formato viejo de una línea (`1080` o `720`). Lo escribe el menú con «Resolución» y «Escala interna» |
 | `controles.cfg` | Líneas `BOTON_N64 = BOTON_DS3`; `#` comenta | Mapeo del control (abajo) |
@@ -235,6 +261,7 @@ se crean por FTP.
 | `capturas` | Basta con que exista | Guarda capturas de pantalla (`screen-N.ppm`) cada pocos segundos; frena la imagen un instante en cada una |
 | `lle` | Vacío o `all` | Prueba el RSP de bajo nivel (experimental, lento). Vacío: solo microcódigo sin HLE; `all`: todo |
 | `gfx_ppe` | Basta con que exista | Corre la HLE gráfica en el PPE en lugar del SPE (para comparar tiempos) |
+| `sin-pausa` | Basta con que exista | El menú del sistema (botón PS) no pausa la emulación, como hasta v0.1.0 (para diagnosticar; docs/hilos-ppe.md) |
 | `embedded` | `file:nombre` | Abre una ROM sin menú (sección anterior) |
 
 La carpeta también contiene `states/` (estados guardados), el log (`salsa64.log`) y archivos de diagnóstico
