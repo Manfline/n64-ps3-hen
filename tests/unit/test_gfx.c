@@ -174,6 +174,41 @@ enum { CC_A_ZERO = 15 };
 
 /* ---- Pruebas ---- */
 
+/* Clamp con una máscara más chica que la tile (la túnica de Link en OoT:
+ * I8 de 16 de ancho en la TMEM, tile de 32 con máscara 4, espejo y clamp):
+ * el RDP limita la coordenada a la tile y después la enmascara, así que
+ * las columnas 16–31 son el reflejo de las 0–15 (antes salía la fila
+ * siguiente de la TMEM y el pliegue quedaba cortado). */
+static const uint8_t *tex_of(const struct gfx_tex *t);
+
+static void gfx_tile_clamp_mirror_mask(void)
+{
+	start();
+	for (uint32_t i = 0; i < 64; i++)
+		t_n64.bus.rdram[TEX_PA + i] = (uint8_t)(3 * i + 1);       /* 16 × 4 texels I8 */
+	dl(0xFD100000 | 0, TEX_PA);                                /* SETTIMG de 16 bits */
+	dl(0xF5100000, 0x07000000);
+	dl(0xF3000000, 0x07000000 | 31 << 12 | 1024);              /* LOADBLOCK 64 bytes, línea de 16 */
+	dl(0xF5880000 | 2 << 9, 2u << 18 | 2u << 14 | 3u << 8 | 4u << 4);  /* tile 0: I8, clamp en t; espejo y clamp en s */
+	dl(0xF2000000, (31 << 2) << 12 | (3 << 2));                /* 32×4 */
+	set_cycle(G_CYC_1CYCLE);
+	set_combine(CC_T0, CC_ZERO, CC_SHADE, CC_ZERO, CC_T0, CC_ZERO, CC_SHADE, CC_ZERO);
+	dl(0xE4000000 | (32 << 2) << 12 | (4 << 2), 0);            /* TEXRECT 0,0–32,4 */
+	dl(0xE1000000, 0);
+	dl(0xF1000000, 0x04000400);
+	run();
+	const struct gfx_draw *d = draw_n(0);
+	CHECK(d && d->ntex == 1);
+	if (!d || d->ntex != 1)
+		return;
+	CHECK_EQ(d->tex[0].width, 32);
+	CHECK_EQ(d->tex[0].height, 4);
+	const uint8_t *p = tex_of(&d->tex[0]);
+	for (uint32_t y = 0; y < 4; y++)
+		for (uint32_t x = 0; x < 32; x++)
+			CHECK_EQ(p[y * d->tex[0].pitch + 4 * x], t_n64.bus.rdram[TEX_PA + 16 * y + (x < 16 ? x : 31 - x)]);
+}
+
 static void gfx_combiner_forms(void)
 {
 	/* SHADE: todo en X_4, coeficiente del color del vértice. */
@@ -1651,4 +1686,5 @@ void t_suite_gfx(void)
 	RUN(gfx_texcache_hash);
 	RUN(gfx_texture_provenance);
 	RUN(gfx_viscvg_flag);
+	RUN(gfx_tile_clamp_mirror_mask);
 }
