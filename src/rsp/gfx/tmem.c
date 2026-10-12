@@ -508,12 +508,17 @@ static bool tex_size(const struct gfx_tile *t, const uint16_t lim[2], uint32_t *
  * bits dibujada hace GFX_FB_FRESH tareas o menos, buscada como la busca él
  * (rdp_targets_locate: del ancho del paso, dentro de su alto conjeturado) y,
  * si repite en s, del ancho de la imagen (texture_from_target la liga en
- * filas enteras). Lo que él sabe y la HLE no lo arregla decodificándola. */
+ * filas enteras), y sin una máscara dentro del clamp. Lo que él sabe y la
+ * HLE no lo arregla decodificándola. */
 static __attribute__((noinline)) bool from_target(const struct gfx_state *g, const struct gfx_tile *t, unsigned tt,
-						 bool premul, bool clamp_s, uint32_t w, const struct tex_src *src)
+						 bool premul, bool clamp_s, uint32_t w, uint32_t h,
+						 const struct tex_src *src)
 {
+	/* Con una máscara dentro del clamp la textura repite sus primeros texels
+	 * (decode), y ni el destino ni el consumidor lo hacen. */
 	if (!(g->job->flags & GFX_JOB_FBTEX) || !src->src_addr || src->src_siz != G_IM_SIZ_16b ||
-	    t->siz != G_IM_SIZ_16b || t->fmt != G_IM_FMT_RGBA || tt != G_TT_NONE || premul)
+	    t->siz != G_IM_SIZ_16b || t->fmt != G_IM_FMT_RGBA || tt != G_TT_NONE || premul ||
+	    clamp_mask(t->masks, t->cms, w) || clamp_mask(t->maskt, t->cmt, h))
 		return false;
 	uint32_t addr = src->src_addr, pitch = src->src_pitch, task = g->job->task;
 	/* Sin desenrollar: en el SPE, el código cuesta pila (local store). */
@@ -552,7 +557,7 @@ static bool resolve(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, 
 	tex->width = (uint16_t)w;
 	tex->height = (uint16_t)h;
 	tex->pitch = (uint16_t)((w * 4 + 63) & ~63u);
-	if (from_target(g, t, tt, premul, clamp_s, w, &src)) {
+	if (from_target(g, t, tt, premul, clamp_s, w, h, &src)) {
 		tex->where = GFX_TEX_TARGET;
 		g->res->tex_target++;
 	} else if (!resolve_content(g, t, tt, premul, w, h, tex)) {
