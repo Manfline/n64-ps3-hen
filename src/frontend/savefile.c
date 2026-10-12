@@ -203,6 +203,9 @@ void savefile_close(struct savefile *f)
 		f->retry_us = 0;
 		savefile_write_staged(f, ~0ull);
 	}
+	if (f->save->type == SALSA64_SAVE_FLASHRAM)
+		f->log("guardado: la FlashRAM recibió %u comandos (%u desconocidos)", (unsigned)f->save->flash.commands,
+		       (unsigned)f->save->flash.unknown);
 	if (f->path[0] && !f->pending && !salsa64_save_dirty(f->save))
 		f->log("guardado: cerrado sin cambios pendientes");
 	flush(f, "al salir");

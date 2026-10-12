@@ -1,15 +1,16 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — savetest: ROM de prueba del guardado del cartucho (EEPROM de 4
- * y 16 Kbit, SRAM de 256 Kbit). Código propio, sin libultra ni libdragon; se
- * empaqueta con el IPL3 libre de libdragon (nust64).
+ * y 16 Kbit, SRAM de 256 Kbit, FlashRAM de 1 Mbit). Código propio, sin
+ * libultra ni libdragon; se empaqueta con el IPL3 libre de libdragon
+ * (nust64).
  *
  * El tipo de guardado lo declara la ROM en su cabecera de homebrew ("ED" en
  * 0x3C–0x3D, tipo en los 4 bits altos de 0x3F): tools/build-savetest.sh
- * saca tres ROMs que solo difieren en el título y en esa cabecera. La ROM
+ * saca cuatro ROMs que solo difieren en el título y en esa cabecera. La ROM
  * lee su cabecera del cartucho y comprueba que el emulador le dé justo eso:
- * la EEPROM de ese tamaño en el canal 4 del PIF, o la SRAM en el dominio 2
- * del PI y nada en el canal 4.
+ * la EEPROM de ese tamaño en el canal 4 del PIF, o la SRAM o la FlashRAM en
+ * el dominio 2 del PI y nada en el canal 4.
  *
  * En cada arranque:
  *   1. Lee todo el guardado. Si empieza con la marca "SLSA", verifica el
@@ -18,18 +19,23 @@
  *      sigue, para que el arranque siguiente vuelva a probar.
  *   2. Escribe en todo el guardado el patrón del arranque N = anterior + 1
  *      (EEPROM: bloque a bloque con el comando 0x05; SRAM: DMA RDRAM →
- *      cartucho salvo el último KB, que va con escrituras directas del CPU)
- *      y lo relee completo (EEPROM: comando 0x04; SRAM: DMA cartucho → RDRAM
- *      y unas lecturas directas). En la EEPROM de 4 Kbit comprueba además
- *      que los bloques 64–255 repitan los 0–63.
+ *      cartucho salvo el último KB, que va con escrituras directas del CPU;
+ *      FlashRAM: borra el chip, comprueba que quede en 0xFF y programa las
+ *      1024 páginas) y lo relee completo (EEPROM: comando 0x04; SRAM y
+ *      FlashRAM: DMA cartucho → RDRAM y unas lecturas directas). En la
+ *      EEPROM de 4 Kbit comprueba además que los bloques 64–255 repitan los
+ *      0–63; en la FlashRAM, que borrar el último sector no toque el
+ *      anterior, y vuelve a programarlo.
  *   3. Imprime por el ISViewer "savetest: OK <tipo> arranque N …" o
  *      "savetest: FALLO <tipo> …" y pinta la pantalla: azul en el primer
  *      arranque (falta ver la persistencia), verde si el anterior persistió,
  *      rojo si algo falló; arriba, N cuadros blancos (hasta 20).
  *
  * Comandos del PIF y registros del PI y del VI: n64brew.dev (Joybus
- * Protocol, Peripheral Interface, Video Interface). Modo de video: el
- * estándar de 320×240 que usa vitest.
+ * Protocol, Peripheral Interface, Video Interface). FlashRAM: n64brew.dev,
+ * página «Flash» (comandos en 0x08010000, identificador por DMA de 8
+ * bytes, chips que leen por palabra o por byte, ráfagas que no cruzan los
+ * bloques de 32 KB). Modo de video: el estándar de 320×240 que usa vitest.
  */
 #include <stdint.h>
 
@@ -62,6 +68,8 @@
 #define SI_STATUS    REG(0x04800018)
 #define PIF_RAM      0x1FC007C0u
 #define SRAM_ADDR    0x08000000u
+#define FLASH_CMD    REG(0x08010000)
+#define FLASH_TYPE   0x11118001u
 #define ROM_HEADER   0x1000003Cu      /* "ED", destino y tipo de guardado */
 #define BOOT_FLAGS   REG(0x04000008)  /* DMEM: el IPL3 de libdragon deja el tipo de TV en [23:16] */
 
@@ -72,8 +80,11 @@
 #define W 320
 #define H 240
 #define CTRL_16 0x3202u  /* pixel advance 3, solo remuestreo, RGBA5551 */
-#define SAVE_MAX 32768u
+#define SAVE_MAX 131072u
 #define DIRECT 1024u     /* SRAM: el último KB va por accesos directos */
+#define FLASH_PAGE 128u
+#define FLASH_SECTOR 16384u
+#define FLASH_BURST 32768u  /* una ráfaga de DMA no cruza estos bloques */
 #define MAGIC 0x534C5341u  /* "SLSA" */
 
 enum { BLUE = 0x0010u << 1 | 1, GREEN = 0x0018u << 6 | 1, RED = 0x001Fu << 11 | 1, WHITE = 0xFFFFu };
@@ -85,13 +96,15 @@ static const struct {
 } types[] = {
 	[1] = { "eeprom4k", 512, 0x0080 },
 	[2] = { "eeprom16k", 2048, 0x00C0 },
-	[3] = { "sram256k", SAVE_MAX, 0 },
+	[3] = { "sram256k", 32768, 0 },
+	[5] = { "flashram", SAVE_MAX, 0 },
 };
 
 /* Fuera de .bss: solo se usan por KSEG1 (sin caché, por el DMA). */
 static uint16_t fb[W * H] __attribute__((section(".fb"), aligned(64)));
 static uint8_t data[SAVE_MAX] __attribute__((section(".fb"), aligned(64)));
 static uint32_t pif_buf[16] __attribute__((section(".fb"), aligned(64)));
+static uint32_t flash_id[4] __attribute__((section(".fb"), aligned(64)));
 
 void *memset(void *d, int c, __SIZE_TYPE__ n)
 {
@@ -258,6 +271,105 @@ static void sram_dma(uint32_t off, const void *rdram, uint32_t len, int to_sram)
 	PI_STATUS = 2;  /* baja la interrupción del PI */
 }
 
+/* ---- FlashRAM (dominio 2 del PI) ----------------------------------------- */
+
+static int flash_words;  /* el chip lee por palabras de 16 bits */
+
+static void flash_command(uint32_t c)
+{
+	pi_wait();
+	FLASH_CMD = c;
+	pi_wait();
+}
+
+/* Registro de estado: modo estado y una lectura de E/S. El comando va dos
+ * veces: algunos MX29L1100 lo necesitan para cambiar de modo (n64brew). */
+static uint32_t flash_status(void)
+{
+	flash_command(0xD2000000);
+	flash_command(0xD2000000);
+	pi_wait();
+	return REG(SRAM_ADDR) & 0xFF;
+}
+
+/* Modo estado y un 0 en la dirección 0. */
+static void flash_clear_status(void)
+{
+	flash_command(0xD2000000);
+	pi_wait();
+	REG(SRAM_ADDR) = 0;
+	pi_wait();
+}
+
+/* Identificador (modo E1 y DMA de 8 bytes); según el fabricante y el
+ * dispositivo, direcciones por palabra (MX29L0000, MX29L0001, MX29L1100) o
+ * por byte (los demás). Devuelve la palabra del fabricante y el dispositivo,
+ * o 0 si la primera no es 0x11118001. */
+static uint32_t flash_identify(void)
+{
+	volatile uint32_t *id = uncached(flash_id);
+	id[0] = id[1] = 0;
+	flash_command(0xE1000000);
+	flash_command(0xE1000000);
+	sram_dma(0, flash_id, 8, 0);
+	uint32_t model = id[1];
+	flash_words = model == 0x00C20000u || model == 0x00C20001u || model == 0x00C2001Eu;
+	return id[0] == FLASH_TYPE ? model : 0;
+}
+
+/* Modo lectura y DMA desde el byte `off`, partido en los bloques de 32 KB. */
+static void flash_read(uint32_t off, void *rdram, uint32_t len)
+{
+	flash_command(0xF0000000);
+	pi_wait();
+	(void)REG(SRAM_ADDR);  /* lectura de E/S antes del DMA, como libultra */
+	uint8_t *dst = rdram;
+	while (len) {
+		uint32_t n = FLASH_BURST - off % FLASH_BURST;
+		if (n > len)
+			n = len;
+		sram_dma(flash_words ? off / 2 : off, dst, n, 0);
+		off += n;
+		dst += n;
+		len -= n;
+	}
+}
+
+/* Espera a que se apague `busy` en el estado y devuelve el estado final. */
+static uint32_t flash_wait(uint32_t busy)
+{
+	uint32_t st = 0;
+	for (int k = 0; k < 1000000; k++) {
+		pi_wait();
+		st = REG(SRAM_ADDR) & 0xFF;
+		if (!(st & busy))
+			break;
+	}
+	return st;
+}
+
+/* Borra el chip (sector < 0) o un sector. Devuelve el estado final. */
+static uint32_t flash_erase(int sector)
+{
+	flash_command(sector < 0 ? 0x3C000000 : 0x4B000000 | (uint32_t)sector * 128);
+	flash_command(0x78000000);
+	uint32_t st = flash_wait(0x02);
+	flash_clear_status();
+	return st;
+}
+
+/* Programa una página: modo búfer de página, DMA de 128 bytes y comando
+ * A5. Devuelve el estado final. */
+static uint32_t flash_program(uint32_t page, const void *rdram)
+{
+	flash_command(0xB4000000);
+	sram_dma(0, rdram, FLASH_PAGE, 1);
+	flash_command(0xA5000000 | page);
+	uint32_t st = flash_wait(0x01);
+	flash_clear_status();
+	return st;
+}
+
 /* ---- Patrón ------------------------------------------------------------- */
 
 static uint8_t pattern(uint32_t boot, uint32_t i)
@@ -367,9 +479,15 @@ static void fail_byte(const char *what, int32_t at, const volatile uint8_t *d, u
 	isv_flush();
 }
 
+static int flash;  /* el guardado es FlashRAM */
+
 /* Lee todo el guardado en `d`. */
 static int read_all(volatile uint8_t *d, uint32_t size, int eeprom)
 {
+	if (flash) {
+		flash_read(0, data, size);
+		return 1;
+	}
 	if (!eeprom) {
 		sram_dma(0, data, size, 0);
 		return 1;
@@ -404,6 +522,7 @@ int main(void)
 	type_name = types[kind].name;
 	uint32_t size = types[kind].size, want = types[kind].eeprom_id;
 	int eeprom = want != 0;
+	flash = size == SAVE_MAX;
 
 	/* 1. Lo que hay en el canal 4 y lo que dejó el arranque anterior. */
 	uint32_t id = eep_probe();
@@ -416,6 +535,31 @@ int main(void)
 		put("\n");
 		isv_flush();
 		ok = 0;
+	}
+	if (ok && flash) {
+		uint32_t model = flash_identify();
+		if (!model) {
+			fail_begin();
+			put("el identificador no empieza con ");
+			put_x(FLASH_TYPE, 8);
+			put("\n");
+			isv_flush();
+			ok = 0;
+		} else {
+			put("savetest: FlashRAM ");
+			put_x(model, 8);
+			put(flash_words ? " (por palabras)\n" : " (por bytes)\n");
+			isv_flush();
+		}
+		uint32_t st = flash_status();
+		if (ok && !(st & 0x80)) {
+			fail_begin();
+			put("el estado no dice WSM_READY: ");
+			put_x(st, 2);
+			put("\n");
+			isv_flush();
+			ok = 0;
+		}
 	}
 	uint32_t prev = 0;
 	if (ok && !read_all(d, size, eeprom)) {
@@ -439,7 +583,48 @@ int main(void)
 	if (ok) {
 		for (uint32_t i = 0; i < size; i++)
 			d[i] = expected(boot, size, i);
-		if (eeprom) {
+		if (flash) {
+			uint32_t st = flash_erase(-1);
+			if (!(st & 0x08)) {
+				fail_begin();
+				put("borrado del chip: estado ");
+				put_x(st, 2);
+				put("\n");
+				isv_flush();
+				ok = 0;
+			}
+			if (ok) {
+				for (uint32_t i = 0; i < size; i++)
+					d[i] = 0;
+				flash_read(0, data, size);
+				for (uint32_t i = 0; i < size && ok; i++)
+					if (d[i] != 0xFF) {
+						fail_begin();
+						put("después de borrar el chip, byte ");
+						put_x(i, 5);
+						put(" = ");
+						put_x(d[i], 2);
+						put("\n");
+						isv_flush();
+						ok = 0;
+					}
+				for (uint32_t i = 0; i < size; i++)
+					d[i] = expected(boot, size, i);
+			}
+			for (uint32_t p = 0; p < size / FLASH_PAGE && ok; p++) {
+				uint32_t st = flash_program(p, data + p * FLASH_PAGE);
+				if (!(st & 0x04)) {
+					fail_begin();
+					put("programación de la página ");
+					put_u(p);
+					put(": estado ");
+					put_x(st, 2);
+					put("\n");
+					isv_flush();
+					ok = 0;
+				}
+			}
+		} else if (eeprom) {
 			for (uint32_t b = 0; b < size / 8 && ok; b++) {
 				uint32_t st = eep_write(b, d + 8 * b);
 				if (st != 0) {
@@ -494,15 +679,56 @@ int main(void)
 			}
 		}
 	}
+	if (ok && flash) {
+		/* Borrar el último sector no toca el anterior; después se vuelve a
+		 * programar. */
+		uint32_t last = size - FLASH_SECTOR;
+		flash_erase(7);
+		for (uint32_t i = last - 1024; i < size; i++)
+			d[i] = 0x55;
+		flash_read(last - 1024, data + last - 1024, 1024 + FLASH_SECTOR);
+		for (uint32_t i = last - 1024; i < size && ok; i++) {
+			uint8_t want_b = i < last ? expected(boot, size, i) : 0xFF;
+			if (d[i] != want_b) {
+				fail_begin();
+				put("borrado del sector 7: byte ");
+				put_x(i, 5);
+				put(" = ");
+				put_x(d[i], 2);
+				put(", se esperaba ");
+				put_x(want_b, 2);
+				put("\n");
+				isv_flush();
+				ok = 0;
+			}
+		}
+		for (uint32_t i = last; i < size; i++)
+			d[i] = expected(boot, size, i);
+		for (uint32_t p = last / FLASH_PAGE; p < size / FLASH_PAGE && ok; p++)
+			if (!(flash_program(p, data + p * FLASH_PAGE) & 0x04))
+				ok = 0;
+		if (ok) {
+			for (uint32_t i = 0; i < size; i++)
+				d[i] = 0x55;
+			int32_t at = read_all(d, size, eeprom) ? mismatch(d, boot, size) : 0;
+			if (at >= 0) {
+				fail_byte("relectura tras el sector 7", at, d, boot, size);
+				ok = 0;
+			}
+		}
+		flash_command(0xF0000000);
+	}
 	if (ok && !eeprom) {
-		/* Lecturas directas del CPU, una por KB. */
+		/* Lecturas directas del CPU, una por KB (la FlashRAM por palabras
+		 * cuenta la dirección en medias palabras). */
 		for (uint32_t i = 0x40; i < size && ok; i += 1024) {
+			uint32_t at = flash && flash_words ? i / 2 : i;
 			pi_wait();
-			uint32_t got = REG(SRAM_ADDR + i), want_w = rd_be32(d + i);
+			uint32_t got = REG(SRAM_ADDR + at), want_w = rd_be32(d + i);
 			if (got != want_w) {
 				fail_begin();
 				put("lectura directa en ");
-				put_x(SRAM_ADDR + i, 8);
+				put_x(SRAM_ADDR + at, 8);
 				put(" = ");
 				put_x(got, 8);
 				put(", se esperaba ");

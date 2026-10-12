@@ -33,9 +33,9 @@ Work in progress, but already playable on a real PS3:
 - **RDP on the RSX:** combiners translated to RSX fragment programs generated
   at run time (there is no Cg compiler on the console).
 - **Frontend:** XMB-style ROM menu, DualShock 3 → N64 controller mapping,
-  EEPROM and SRAM saves.
-- **Not yet:** FlashRAM and large SRAM saves, Controller/Rumble/Transfer Pak,
-  framebuffer effects (render-to-texture, pause backgrounds), internal
+  EEPROM, SRAM and FlashRAM saves.
+- **Not yet:** large SRAM saves (768 Kbit, 1 Mbit), Controller/Rumble/Transfer
+  Pak, framebuffer effects (render-to-texture, pause backgrounds), internal
   resolution upscaling and post-processing filters.
 
 Performance numbers are logged in [docs/perf-log.md](docs/perf-log.md). Only

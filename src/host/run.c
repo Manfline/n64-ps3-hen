@@ -69,6 +69,10 @@
  * la HLE puso sobre el plano cercano entre triángulos vecinos (una grieta
  * en una arista compartida sería ≥ 1 px).
  *
+ * FlashRAM (compilar con EXTRA_CFLAGS=-DSALSA64_DEBUG_FLASH): desde
+ * --trace-from, cada comando, acceso de E/S y DMA del chip con su modo (las
+ * primeras 4000 líneas, a stderr).
+ *
  * Estados guardados (core/state.c): --state-save CAMPO:ARCHIVO guarda la
  * máquina al terminar ese campo del VI (hasta 8; va campo por campo),
  * --state-load ARCHIVO la carga después del arranque y sigue desde ahí
@@ -935,6 +939,18 @@ void salsa64_debug_pi(uint32_t cart, uint32_t dram, uint32_t len)
 		return;
 	fprintf(stderr, "PI campo %u ciclo %llu: cart %08x -> rdram %06x, %u bytes (pc %08llx)\n", n64.bus.vi.fields,
 		(unsigned long long)n64.cpu.cycles, cart, dram, len, (unsigned long long)n64.cpu.cur_pc);
+}
+#endif
+
+#ifdef SALSA64_DEBUG_FLASH
+/* FlashRAM (flashram.c), desde --trace-from: comandos, E/S y DMA. */
+void salsa64_debug_flash(char kind, unsigned mode, uint32_t off, uint32_t value)
+{
+	static unsigned n;
+	if (!tracing() || n++ >= 4000)
+		return;
+	fprintf(stderr, "flash campo %u: %c modo %u %05x %08x (pc %08llx)\n", n64.bus.vi.fields, kind, mode, off, value,
+		(unsigned long long)n64.cpu.cur_pc);
 }
 #endif
 
@@ -1827,7 +1843,7 @@ static void usage(FILE *out)
 	      "                        bloque, y la RDRAM en cada campo del VI y cada N bloques\n"
 	      "                        (por omisión 4096)\n"
 	      "      --no-idle         no saltar los bucles de espera\n"
-	      "      --save TIPO       tipo de guardado: ninguno, eeprom4k, eeprom16k, sram256k\n"
+	      "      --save TIPO       tipo de guardado: ninguno, eeprom4k, eeprom16k, sram256k, flashram\n"
 	      "      --save-dir DIR    leer y escribir el guardado del cartucho en DIR\n"
 	      "      --gfx-frame ARCHIVO  al terminar, guardar en PPM lo que dibujó la HLE gráfica\n"
 	      "      --gfx-frame-every N  con --pad, además cada N campos desde --trace-from (ARCHIVO-<campo>.ppm)\n"

@@ -12,8 +12,8 @@ en PS3 real.
 |---|---|---|---|
 | RDRAM emulada | 8 | | 4 MB + Expansion Pak; la pone quien llama a `salsa64_n64_init` |
 | Estado de la máquina (`struct salsa64_n64`) | 0,01 | 0,01 | 10,4 KB: CPU 1,7 KB, bus 8,5 KB (incluye SP DMEM/IMEM) |
-| Guardado del cartucho (`struct salsa64_save`) | 0,03 | | 32 896 bytes (32 KB de datos alineados a 128), estático en el frontend: EEPROM (512 B / 2 KB) o SRAM (32 KB). Crece a 128 KB con FlashRAM o SRAM de 1 Mbit |
-| Lectura de archivos de guardado (`savefile.c`) | 0,03 | | 32 KB + 1, estático; solo al abrir una ROM |
+| Guardado del cartucho (`struct salsa64_save`) | 0,13 | | 131 328 bytes (128 KB de datos alineados a 128 y el estado del chip de FlashRAM, 140 bytes), estático en el frontend: EEPROM (512 B / 2 KB), SRAM (32 KB) o FlashRAM (128 KB). Antes de la FlashRAM (2026-10-11) eran 32 896 |
+| Lectura de archivos de guardado (`savefile.c`) | 0,13 | | 128 KB + 1, estático; solo al abrir una ROM |
 | Caché del recompilador | 32 | 32 | Fase 3: cola NOBITS del segmento de texto (`mk/rec-cache.ld`, docs/rec-ppe.md); 16 hasta el 2026-10-11, 24 después y 32 desde el desalojo por tramos (es el techo: los saltos al preámbulo alcanzan ±32 MB). nemu64-test entero usa ~9 MB; GoldenEye en la presa ~17 MB |
 | Estado del recompilador (`struct salsa64_rec`) | 8,5 | 6,3 | Mapa de bloques (4 MB: uint16_t por palabra de 8 MB), banderas de código (64 KB), 65 535 bloques (1 MB), 131 072 enlaces (1 MB), búferes de compilación (0,2 MB), bloques fuera de KSEG0 y TLB del recompilador (2,2 MB: `xb` 512 KB, `ktlb` 64 KB, `live` 32 KB, `xhash` 32 KB, `snap` 0,75 KB, y los bloques desprendidos: copia de bytes MIPS 1 MB, `copy_off` y `saved_code` 256 KB cada uno, `state` 64 KB); en .bss. 7 172 408 bytes medidos con sizeof el 2026-10-10, +74 KB por la `ktlb` de 16 384 páginas y +1,6 MB por los bloques desprendidos (2026-10-11) |
 | Caché de texturas (lado PPE/SPE) | 8 | 8 | `src/rdp`: región mapeada al RSX que administra la HLE del SPE (texturas RGBA8888 decodificadas, entre tareas); directorio de 1024 texturas en el local store. Se puede subir a 16 si el directorio crece |
@@ -23,12 +23,12 @@ en PS3 real.
 | Salida de la HLE gráfica SPU → RSX | 20 | 20 | `src/rdp`: 3 juegos de vértices 2 MB + comandos 768 KB + arena de texturas 3,75 MB, mapeados al RSX (`rsxkit_map_main`) junto con la caché de texturas (28 MB en total). Con la caché el arena casi no se usa: se podría achicar más. Los comandos crecieron de 512 a 768 KB cuando `gfx_draw` pasó de 352 a 480 bytes (términos del generador de fragment programs, 2026-10-10) y a 496 con el origen de cada textura (efectos de framebuffer) |
 | Efectos de framebuffer (copias RSX → RDRAM, espejos y cebado) | 3 | 3 | `src/rdp`: en el mismo pool mapeado, 2 búferes de 640 × 480 × 2 (RGB565 a la resolución de la N64, 600 KB c/u) para las copias que la emulación espera, 4 de 64 KB para las copias espejo de imágenes chicas y uno de 600 KB para cebar superficies desde la RDRAM; 2,0 MB redondeados a 3 (docs/framebuffer.md) |
 | Copias de la imagen del VI entre hilos | 4,4 | 4,4 | Frontend (docs/hilos-ppe.md): 3 ranuras de 640 × 576 × 4; el hilo de emulación copia el framebuffer al terminar el campo y el de presentación lo sube al RSX |
-| Zona de paso del guardado + pila del hilo de emulación | 0,3 | | 32 KB en `struct savefile` y 256 KB de pila (`sysThreadCreate`) |
+| Zona de paso del guardado + pila del hilo de emulación | 0,4 | | 128 KB en `struct savefile` (131 648 bytes en total) y 256 KB de pila (`sysThreadCreate`) |
 | Audio | 2 | 0,3 | `src/frontend/audio_out.c`: anillo de `audio_sync` 256 KB (65 536 muestras estéreo de 16 bits, ~2 s a 32 kHz) + estirador y remuestreo 12 KB, estáticos; HLE en el PPE (si no arranca el SPE) 9,2 KB; prueba del arranque (SPE contra PPE) 2 × 16 KB + 9,2 KB; pila del hilo de audio 64 KB; el puerto de audio (16 bloques × 256 × 2 flotantes = 32 KB) es memoria del sistema. Con `volcado_s` en audio.cfg, 200 KB por segundo (hasta 6 MB), reservados al arrancar |
-| Estados guardados | 0,2 | | `src/frontend/states.c`: búfer de paso de 128 KB (cabecera y secciones chicas; la RDRAM va directo de y hacia su búfer, sin copia) y miniatura de 160 × 120 × 2 (37,5 KB), estáticos; imagen de gfx_state del SPE para el estado de la HLE gráfica (48 KB, `gfx_spu.c`: el SPE copia ahí el tramo del RDP) y búfer de paso del de audio (11,75 KB, `audio_spu.c`). docs/estados.md |
+| Estados guardados | 0,4 | | `src/frontend/states.c`: búfer de paso de 256 KB (cabecera y secciones chicas, que con la FlashRAM de 128 KB y la miniatura llegan a ~200 KB; antes del 2026-10-11, 128 KB; la RDRAM va directo de y hacia su búfer, sin copia) y miniatura de 160 × 120 × 2 (37,5 KB), estáticos; imagen de gfx_state del SPE para el estado de la HLE gráfica (48 KB, `gfx_spu.c`: el SPE copia ahí el tramo del RDP) y búfer de paso del de audio (11,75 KB, `audio_spu.c`). docs/estados.md |
 | Código, pila, heap de newlib | 16 | | |
 | Bloques de control de spukit | 0,01 | 0,01 | ~2,3 KB por trabajador |
-| **Total previsto** | **162** | | con una ROM de 64 MB (150 de la Fase 2 con la caché de texturas de 8 MB + 6,8 del estado del recompilador + 4,7 de los dos hilos + 0,2 de los estados guardados) |
+| **Total previsto** | **162,5** | | con una ROM de 64 MB (150 de la Fase 2 con la caché de texturas de 8 MB + 6,8 del estado del recompilador + 4,7 de los dos hilos + 0,4 de los estados guardados + 0,3 que agregó la FlashRAM al guardado del cartucho) |
 
 ## Memoria local del RSX (GDDR3)
 
@@ -71,6 +71,6 @@ La escala elegida (`salsa64_rdp_init`, 0 = automática, 1–5) es un **objetivo 
 
 | Uso | Tamaño | Notas |
 |---|---|---|
-| Un estado guardado | ~8,1 MB | `/dev_hdd0/salsa64/states/<título>-<CRC1>.stN`: cabecera 64 bytes, miniatura 37,5 KB, CPU y RCP ~3 KB, DMEM/IMEM 8 KB, guardado del cartucho (hasta 32 KB), HLE gráfica 4,25 KB y de audio 11,75 KB, RDRAM 8 MB. Medido en el host (mismo formato): 8 415 818 bytes con las ROMs de prueba (sin miniatura), 8 448 602 con Zelda OoT (SRAM de 32 KB); con miniatura, +38 416 |
+| Un estado guardado | ~8,1 MB | `/dev_hdd0/salsa64/states/<título>-<CRC1>.stN`: cabecera 64 bytes, miniatura 37,5 KB, CPU y RCP ~3 KB, DMEM/IMEM 8 KB, guardado del cartucho (hasta 128 KB) y, con FlashRAM, el estado del chip (FLSH, 152 bytes), HLE gráfica 4,25 KB y de audio 11,75 KB, RDRAM 8 MB. Medido en el host (mismo formato): 8 415 818 bytes con las ROMs de prueba (sin miniatura), 8 448 602 con Zelda OoT (SRAM de 32 KB), 8 547 058 con Majora's Mask (FlashRAM de 128 KB); con miniatura, +38 416 |
 | Diez ranuras de un juego | ~81 MB | Sin compresión (docs/estados.md) |
-| Partidas del cartucho | ≤ 32 KB por juego | `saves/` |
+| Partidas del cartucho | ≤ 128 KB por juego (FlashRAM) | `saves/` |

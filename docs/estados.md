@@ -36,7 +36,11 @@ Lo que hace falta para continuar ciclo a ciclo:
 - **SPME** — DMEM e IMEM (8 KB).
 - **PIF0** — los controles como los vio el PIF, las pulsaciones retenidas,
   los intercambios preparados y la PIF RAM.
-- **CART** — el guardado del cartucho en memoria (EEPROM o SRAM).
+- **CART** — el guardado del cartucho en memoria (EEPROM, SRAM o FlashRAM).
+- **FLSH** — solo con FlashRAM: una versión propia (1) y el estado del chip
+  (modo, registro de estado, borrado preparado, búfer de página). Una
+  versión que no se conoce, o un estado sin FLSH, deja el chip como al
+  encender; los datos de CART se cargan igual.
 - **HLEG** — lo que la HLE gráfica conserva entre tareas, como el RDP de la
   consola: othermode, combiner, colores, scissor, color/z/texture image,
   las 8 tiles y la TMEM (4 KB).

@@ -109,13 +109,13 @@ else
 	fail=1
 fi
 
-# savetest: guardado del cartucho (EEPROM de 4 y 16 Kbit, SRAM de 256 Kbit;
-# tests/roms/src/savetest). Dos arranques por tipo con el mismo directorio
-# de guardado, vacío al empezar: el primero escribe y relee; el segundo
-# además comprueba que persistió lo del primero.
+# savetest: guardado del cartucho (EEPROM de 4 y 16 Kbit, SRAM de 256 Kbit,
+# FlashRAM de 1 Mbit; tests/roms/src/savetest). Dos arranques por tipo con
+# el mismo directorio de guardado, vacío al empezar: el primero escribe y
+# relee; el segundo además comprueba que persistió lo del primero.
 SDIR=build/saves-test
 rm -rf "$SDIR"
-for t in eeprom4k eeprom16k sram; do
+for t in eeprom4k eeprom16k sram flashram; do
 	for n in 1 2; do
 		SLOG=build/logs/savetest-$t-$n.run.log
 		tools/build.sh --sh "ASAN_OPTIONS=detect_leaks=0 build/host/salsa64-run -c 400000000 \
