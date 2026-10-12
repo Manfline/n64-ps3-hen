@@ -308,6 +308,11 @@ void audio_out_flush(void)
 	audio_sync_flush(&sync_out);
 }
 
+void audio_out_pause(bool on)
+{
+	audio_sync_pause(&sync_out, on);
+}
+
 const struct audio_sync_stats *audio_out_stats(void)
 {
 	return &sync_out.stats;
@@ -363,14 +368,14 @@ void audio_out_field(uint64_t now_us)
 	uint64_t out = o->out_frames - prev.out.out_frames;
 	if (port.open && out) {
 		salsa64_log("audio: salida %.0f ms de colchón, emulación al %.0f %%, %s; en 5 s: %.0f %% en silencio, "
-			    "%.0f %% estirado, %u faltas, %u silencios, %u saltos, %u descartadas, %u bloques tarde; "
-			    "hilo %.2f %% del tiempo; del AI %u Hz, pico %.0f dBFS",
+			    "%.0f %% estirado, %u faltas, %u silencios, %u saltos, %u descartadas, %u pausas, %u bloques "
+			    "tarde; hilo %.2f %% del tiempo; del AI %u Hz, pico %.0f dBFS",
 			    audio_sync_level_ms(&sync_out), sync_out.speed_est * 100.0,
 			    sync_out.stretching ? "estirando" : "normal",
 			    100.0 * (o->silent_frames - prev.out.silent_frames) / out,
 			    100.0 * (o->stretch_frames - prev.out.stretch_frames) / out,
 			    o->underruns - prev.out.underruns, o->silences - prev.out.silences,
-			    o->skips - prev.out.skips, o->dropped - prev.out.dropped,
+			    o->skips - prev.out.skips, o->dropped - prev.out.dropped, o->pauses - prev.out.pauses,
 			    (unsigned)(port.late - prev.late), 100.0 * (port.busy_us - prev.busy_us) / dt,
 			    sync_out.rate, ai_peak ? 20.0 * log10(ai_peak / 32768.0) : -99.0);
 		ai_peak = 0;

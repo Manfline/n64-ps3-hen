@@ -75,6 +75,7 @@ struct audio_sync_stats {
 	uint32_t silences;         /* veces que calló por eso */
 	uint32_t skips;            /* saltos por desborde */
 	uint32_t dropped;          /* muestras que no cupieron en el anillo */
+	uint32_t pauses;           /* pausas (audio_sync_pause) */
 };
 
 struct audio_sync {
@@ -89,6 +90,8 @@ struct audio_sync {
 	 * flush_from ya no suena. */
 	volatile uint64_t flush_from;
 	volatile uint64_t flush_seq;
+	/* Pausa pedida (audio_sync_pause): el consumidor calla sin leer. */
+	volatile uint32_t paused;
 
 	/* ---- Consumidor (hilo de la salida) ---- */
 	uint64_t flush_seen;
@@ -103,6 +106,7 @@ struct audio_sync {
 	int64_t prev;               /* inicio del grano anterior; −1: ninguno */
 	double rpos;                /* posición nominal del grano siguiente */
 	bool playing;
+	bool held;                  /* en pausa (lo vio el consumidor) */
 	bool stretching;
 	uint32_t starve;            /* muestras de entrada repetidas sin datos nuevos */
 	double speed;               /* velocidad de lectura actual (1 = normal) */
@@ -124,6 +128,15 @@ void audio_sync_push(struct audio_sync *as, const uint8_t *samples, uint32_t byt
  * guardado). El consumidor lo salta con la transición de siempre y espera
  * a juntar el nivel con lo nuevo. */
 void audio_sync_flush(struct audio_sync *as);
+
+/* La emulación se detiene (menú del sistema, cuadro de salir) o sigue. En
+ * pausa, lo que suena se desvanece con la transición de siempre y la
+ * lectura queda donde iba: al volver sigue ahí, sin perder nada, en cuanto
+ * junta el nivel. El hueco no cuenta como falta ni entra en la medición de
+ * la velocidad (que si no caería a 0 y estiraría el audio al volver). La
+ * llama quien sea (presentación); el consumidor la ve en el bloque
+ * siguiente. */
+void audio_sync_pause(struct audio_sync *as, bool on);
 
 /* Consumidor: `frames` muestras estéreo a 48 kHz en `out` (flotantes
  * intercalados, ±1). `now_us`: reloj de pared, para medir la velocidad de

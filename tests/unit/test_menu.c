@@ -442,7 +442,10 @@ static void menu_options_page(void)
 	menu_input(&m, 0, 79);
 	CHECK_EQ(menu_input(&m, 0, 79), MENU_NONE);
 	CHECK_EQ(m.opt, MENU_OPT_BACK);  /* la fila desapareció: el cursor pasa a «Volver» */
-	menu_input(&m, UP, 79);          /* arriba, «Mostrar FPS» y luego «Escala interna» */
+	menu_input(&m, UP, 79);          /* arriba, «Confirmar al salir», «Mostrar FPS» y «Escala interna» */
+	CHECK_EQ(m.opt, MENU_OPT_CONFIRM);
+	menu_input(&m, 0, 79);
+	menu_input(&m, UP, 79);
 	CHECK_EQ(m.opt, MENU_OPT_FPS);
 	menu_input(&m, 0, 79);
 	menu_input(&m, UP, 79);
@@ -458,6 +461,17 @@ static void menu_options_page(void)
 	menu_input(&m, 0, 79);
 	CHECK_EQ(menu_input(&m, LEFT, 79), MENU_SETTINGS);
 	CHECK(!m.set.fps);
+	menu_input(&m, 0, 79);
+	menu_input(&m, DOWN, 79);
+	CHECK_EQ(m.opt, MENU_OPT_CONFIRM);
+	/* Confirmar al salir: sí por omisión; alterna y pide guardar. */
+	CHECK(m.set.confirm);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, CROSS, 79), MENU_SETTINGS);
+	CHECK(!m.set.confirm);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, RIGHT, 79), MENU_SETTINGS);
+	CHECK(m.set.confirm);
 	menu_input(&m, 0, 79);
 	menu_input(&m, DOWN, 79);
 	CHECK_EQ(m.opt, MENU_OPT_BACK);
@@ -496,14 +510,20 @@ static void menu_settings_file(void)
 	static const char fps[] = "fps = si\n";
 	menu_settings_parse(&s, fps, sizeof fps - 1);
 	CHECK(s.fps);
+	CHECK(s.confirm);  /* sin la línea: pregunta antes de salir */
+	static const char direct[] = "confirmar = no\n";
+	menu_settings_parse(&s, direct, sizeof direct - 1);
+	CHECK(!s.confirm);
 	char text[128];
 	s.waves = false;
 	int n = menu_settings_format(&s, text, sizeof text);
+	CHECK(n > 0 && (size_t)n < sizeof text);
 	struct menu_settings t;
 	menu_settings_default(&t);
 	menu_settings_parse(&t, text, (size_t)n);
 	CHECK(!t.waves);
 	CHECK(t.fps);
+	CHECK(!t.confirm);
 }
 
 static void menu_autopilot_opens_target(void)

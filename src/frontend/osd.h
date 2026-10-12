@@ -56,4 +56,10 @@ void osd_notice_clear(void);
  * No hace nada si no hay qué mostrar. Solo PS3. */
 void osd_draw(const struct osd_fps *f, uint64_t now_us, float lw, float lh);
 
+/* El cuadro de confirmación de START + SELECT (geometría de
+ * pausectl_layout): la imagen del juego un poco oscurecida y, al centro, la
+ * pregunta y las respuestas. Mismo cuadro en curso y espacio lógico que
+ * osd_draw. Solo PS3. */
+void osd_confirm_draw(const char *question, const char *answers, float lw, float lh);
+
 #endif

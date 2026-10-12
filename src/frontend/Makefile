@@ -3,7 +3,7 @@
 PROGRAM := salsa64
 TITLE   := Salsa64
 APPID   := SLSA00064
-SRCS    := main.c audio_out.c audio_sync.c menu.c osd.c osd_fps.c pacer.c padmap.c replay.c romlist.c savefile.c \
+SRCS    := main.c audio_out.c audio_sync.c menu.c osd.c osd_fps.c pacer.c padmap.c pausectl.c replay.c romlist.c savefile.c \
            screenshot.c selftest.c selftest_audio.c selftest_gfx.c states.c
 
 R       := ../..
