@@ -303,9 +303,9 @@ static void targets_texture_policy(void)
 	CHECK_EQ(rdp_targets_texture(&s, FB, 320, 2, fb, &slot, &x0, &y0), RDP_TEXSRC_SELF);
 	CHECK_EQ(slot, fb);
 	/* Al terminar la tarea, SAVE se copia a la RDRAM: es del CPU. */
-	CHECK(rdp_targets_readback(&s, save, false));
+	CHECK(rdp_targets_readback(&s, save, false, true));
 	CHECK(s.t[save].cpu_owned);
-	CHECK(!rdp_targets_readback(&s, fb, false));  /* ya presentado: no */
+	CHECK(!rdp_targets_readback(&s, fb, false, true));  /* ya presentado: no */
 	rdp_targets_task(&s);  /* tarea 4: restaurar desde SAVE */
 	CHECK_EQ(rdp_targets_texture(&s, SAVE + 640 * 6, 320, 2, fb, &slot, &x0, &y0), RDP_TEXSRC_RDRAM);
 	CHECK_EQ(slot, save);
@@ -318,7 +318,7 @@ static void targets_texture_policy(void)
 	CHECK_EQ(rdp_targets_texture(&s, ICON + 128 * 2, 64, 2, fb, &slot, &x0, &y0), RDP_TEXSRC_RSX);
 	CHECK_EQ(slot, icon);
 	CHECK_EQ(y0, 2);
-	CHECK(!rdp_targets_readback(&s, icon, false));  /* chico: se queda en el RSX */
+	CHECK(!rdp_targets_readback(&s, icon, false, true));  /* chico: se queda en el RSX */
 	/* Viejo: tras RDP_TARGETS_FRESH tareas sin dibujarlo, de la RDRAM. */
 	for (int k = 0; k <= RDP_TARGETS_FRESH; k++)
 		rdp_targets_task(&s);
@@ -328,7 +328,83 @@ static void targets_texture_policy(void)
 	CHECK_EQ(s.tex_self, 1);
 	CHECK_EQ(s.readbacks, 1);
 	/* Sin VI presentado no se sabe qué es framebuffer: con force se copia. */
-	CHECK(rdp_targets_readback(&s, fb, true));
+	CHECK(rdp_targets_readback(&s, fb, true, true));
+}
+
+/* La misma memoria con otro tamaño de texel. Majora's Mask: la pausa usa
+ * 784600/320 como cobertura de 8 bits; cientos de tareas después, las
+ * campanadas del fin del día copian el cuadro ahí en 16 bits y lo leen
+ * como textura de 16: tiene que ser otra imagen (de 16 bits, que las
+ * texturas encuentren), no la ranura de 8. Zelda OoT, en cambio, pone su
+ * framebuffer de 16 bits como color image de 8 en la misma tarea en que lo
+ * dibujó (la cobertura para el filtro de la pausa): sigue siendo la misma
+ * ranura, de 16 bits. */
+static void targets_same_memory_other_size(void)
+{
+	const uint32_t W = 0x784600, FB = 0x3da800;
+	bool fresh;
+	uint32_t x0, y0;
+	int slot;
+	rdp_targets_init(&s);
+	rdp_targets_task(&s);
+	int w = rdp_targets_get(&s, W, 320, 1u, 0, &fresh);
+	CHECK(fresh);
+	rdp_targets_drawn(&s, w);
+	CHECK_EQ(s.t[w].bpp, 1);
+	for (int k = 0; k < 100; k++)
+		rdp_targets_task(&s);
+	CHECK_EQ(rdp_targets_get(&s, W, 320, SIZ_16b, 0, &fresh), w);
+	CHECK(fresh);  /* otra imagen: la superficie se vuelve a crear */
+	CHECK_EQ(s.t[w].bpp, 2);
+	CHECK(!s.t[w].cpu_owned);
+	rdp_targets_drawn(&s, w);
+	CHECK_EQ(rdp_targets_texture(&s, W + 640 * 6, 320, 2, -1, &slot, &x0, &y0), RDP_TEXSRC_RSX);
+	CHECK_EQ(slot, w);
+	CHECK_EQ(y0, 6);
+	CHECK_EQ(s.created, 2);
+
+	rdp_targets_init(&s);
+	rdp_targets_task(&s);
+	int fb = draw(FB, 320);
+	CHECK_EQ(rdp_targets_get(&s, FB, 320, 1u, 0, &fresh), fb);
+	CHECK(!fresh);
+	CHECK_EQ(s.t[fb].bpp, 2);
+	rdp_targets_drawn(&s, fb);
+	/* Las franjas que lo copian sobre sí mismo lo siguen encontrando. */
+	CHECK_EQ(rdp_targets_texture(&s, FB, 320, 2, fb, &slot, &x0, &y0), RDP_TEXSRC_SELF);
+	CHECK_EQ(s.created, 1);
+}
+
+/* El acumulador del desenfoque de movimiento de Majora's Mask (3a92c0/320):
+ * cada tarea lo dibuja (el cuadro mezclado con el anterior) y la siguiente
+ * lo lee como textura. La primera copia a la RDRAM se espera y pasa al CPU;
+ * las siguientes, sin esperar, no: el RDP lo sigue leyendo del RSX. */
+static void targets_repeated_copy_stays_rsx(void)
+{
+	const uint32_t M = 0x3a92c0, FB = 0x7da800;
+	uint32_t x0, y0;
+	int slot;
+	rdp_targets_init(&s);
+	s.vi_width = 320;
+	rdp_targets_task(&s);
+	int fb = draw(FB, 320);
+	int m = draw(M, 320);
+	CHECK(rdp_targets_readback(&s, m, true, true));  /* apareció: esperada */
+	CHECK(s.t[m].cpu_owned);
+	rdp_targets_task(&s);
+	CHECK_EQ(rdp_targets_texture(&s, M, 320, 2, fb, &slot, &x0, &y0), RDP_TEXSRC_RDRAM);
+	draw(FB, 320);
+	draw(M, 320);
+	CHECK(rdp_targets_readback(&s, m, true, false));  /* repetida: sin esperar */
+	CHECK(!s.t[m].cpu_owned);
+	rdp_targets_task(&s);
+	CHECK_EQ(rdp_targets_texture(&s, M, 320, 2, fb, &slot, &x0, &y0), RDP_TEXSRC_RSX);
+	CHECK_EQ(slot, m);
+	CHECK_EQ(s.readbacks, 2);
+	/* Cuando el efecto termina y envejece, vale la última copia. */
+	for (int k = 0; k <= RDP_TARGETS_FRESH; k++)
+		rdp_targets_task(&s);
+	CHECK_EQ(rdp_targets_texture(&s, M, 320, 2, fb, &slot, &x0, &y0), RDP_TEXSRC_RDRAM);
 }
 
 /* Lo que decide el hilo de emulación con los orígenes del VI: una color
@@ -762,6 +838,8 @@ void t_suite_targets(void)
 	RUN(targets_locate);
 	RUN(targets_texture_policy);
 	RUN(targets_readback_wanted);
+	RUN(targets_same_memory_other_size);
+	RUN(targets_repeated_copy_stays_rsx);
 	RUN(targets_height_from_scissor);
 	RUN(targets_two_buffers_overlapping);
 	RUN(targets_same_addr_two_widths);

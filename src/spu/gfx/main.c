@@ -9,20 +9,21 @@
  * TMEM viven en el local store y persisten entre tareas.
  *
  * Presupuesto de local store (256 KB); los números exactos los imprime el
- * build (spu-size, 2026-10-11, con la decodificación de 4 en 4 texels y el
- * recorte de los TEXRECT: texto 100,2 KB, datos 0,8 KB, bss 143,3 KB):
+ * build (spu-size y tools/spu-stack.py, 2026-10-12, con el combiner en -Os:
+ * texto 100,2 KB, datos 0,8 KB, bss 141,8 KB):
  *   código (HLE + runtime)              ~ 97 KB (F3D y F3DEX: 3,6 KB;
  *                                         Perfect Dark 1,9 KB y Conker
  *                                         4,4 KB; el combiner con sus
  *                                         términos para el generador de
- *                                         fragment programs, ~9 KB; el
- *                                         tramo S2DEX de los fondos de
- *                                         Zelda OoT, 4,8 KB)
+ *                                         fragment programs, 11 KB con -Os
+ *                                         y 16,8 KB con -O2; el tramo S2DEX
+ *                                         de los fondos de Zelda OoT,
+ *                                         4,8 KB)
  *   gfx_state (RDP, TMEM 4 KB, matrices,
- *     búfer de vértices, 64 texturas del
- *     arena de la tarea 3 KB, directorio
+ *     búfer de vértices, 32 texturas del
+ *     arena de la tarea 1,5 KB, directorio
  *     de la caché de texturas 32 KB, luces
- *     de Conker)                           ~ 46 KB
+ *     de Conker)                           ~ 44 KB
  *   lecturas por DMA (vértices, matrices,
  *     luces, cargas de TMEM)               ~ 5,8 KB
  *   display list 2 × 1 KB                    2 KB
@@ -30,11 +31,17 @@
  *   texturas 2 × 32 KB                      64 KB
  *   spukit (descriptor, resultado…)        < 1 KB
  *   trabajo de los estados guardados        ~ 0,2 KB
- *   pila                                    el resto (~ 11,7 KB; la cadena
- *                                         más honda, fondo S2DEX → TEXRECT →
- *                                         estado → combiner, usa 8,4 KB
- *                                         según -fstack-usage y el grafo de
- *                                         llamadas del binario)
+ *   pila                                    el resto (13,1 KB: de _end a
+ *                                         __stack); la cadena más honda,
+ *                                         fondo S2DEX → TEXRECT → estado →
+ *                                         combiner, usa 9,4 KB según
+ *                                         -fstack-usage y el grafo de
+ *                                         llamadas del binario: holgura
+ *                                         3,7 KB. El enlace falla si baja de
+ *                                         1,5 KB (gfx_STACK_MIN en
+ *                                         src/frontend/Makefile): pasada la
+ *                                         pila, el SPE pisa sin aviso las
+ *                                         lecturas por DMA del final del bss.
  */
 #include <spukit/spu.h>
 #include <sys/spu_thread.h>

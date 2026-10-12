@@ -128,9 +128,10 @@ static int evict_class(const struct rdp_targets *s, const struct rdp_target *t)
 int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32_t siz, uint32_t min_lh,
 		    bool *fresh)
 {
-	int free_i = -1, victim = -1;
+	int free_i = -1, victim = -1, again = -1;
 	uint32_t lw = width ? width : 320;
 	uint32_t lh = lw * 3 / 4;
+	uint32_t bpp = siz == IM_SIZ_32b ? 4 : siz == IM_SIZ_8b ? 1 : 2;
 	if (min_lh > lh)
 		lh = min_lh;
 	for (int i = 0; i < RDP_TARGETS_MAX; i++) {
@@ -139,6 +140,19 @@ int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32
 			if (free_i < 0)
 				free_i = i;
 			continue;
+		}
+		if (t->addr == addr && t->width == width && t->bpp != bpp && s->task - t->last_task > RDP_TARGETS_FRESH) {
+			/* La misma memoria con otro tamaño de texel, y lo de antes ya
+			 * es viejo: es otra imagen. Majora's Mask usa 784600/320 como
+			 * cobertura de 8 bits en la pausa y como copia de 16 bits del
+			 * cuadro en las campanadas del fin del día; con la ranura de 8
+			 * bits, las texturas de 16 no la encontraban y la copia a la
+			 * RDRAM escribía bytes de intensidad. Si lo de antes está vivo
+			 * se comparte, como hasta ahora: Zelda OoT pone su framebuffer
+			 * de 16 bits como color image de 8 en la misma tarea para dejar
+			 * la cobertura. */
+			again = i;
+			break;
 		}
 		if (t->addr == addr && t->width == width) {
 			if (t->lh >= lh) {
@@ -165,7 +179,7 @@ int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32
 		if (ct < cv || (ct == cv && (int32_t)(t->last_field - v->last_field) < 0))
 			victim = i;
 	}
-	int i = free_i >= 0 ? free_i : victim;
+	int i = again >= 0 ? again : free_i >= 0 ? free_i : victim;
 	if (i < 0)
 		i = s->shown >= 0 ? s->shown : 0;  /* no pasa: hay más de una ranura */
 	struct rdp_target *t = &s->t[i];
@@ -176,7 +190,7 @@ int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32
 	t->mirrored = true;  /* nada dibujado aún que copiar a la RDRAM */
 	t->addr = addr;
 	t->width = width;
-	t->bpp = siz == IM_SIZ_32b ? 4 : siz == IM_SIZ_8b ? 1 : 2;
+	t->bpp = bpp;
 	t->fmt = 0;
 	t->lw = lw;
 	t->lh = lh;
@@ -223,7 +237,7 @@ enum rdp_texsrc rdp_targets_texture(struct rdp_targets *s, uint32_t addr, uint32
 	return RDP_TEXSRC_RSX;
 }
 
-bool rdp_targets_readback(struct rdp_targets *s, int slot, bool force)
+bool rdp_targets_readback(struct rdp_targets *s, int slot, bool force, bool cpu_owns)
 {
 	if (slot < 0 || slot >= RDP_TARGETS_MAX || !s->t[slot].used)
 		return false;
@@ -232,7 +246,8 @@ bool rdp_targets_readback(struct rdp_targets *s, int slot, bool force)
 		if (t->presented || t->bpp != 2 || t->width != s->vi_width)
 			return false;
 	}
-	t->cpu_owned = true;
+	if (cpu_owns)
+		t->cpu_owned = true;
 	s->readbacks++;
 	return true;
 }

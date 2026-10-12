@@ -1672,6 +1672,96 @@ static uint32_t ref_texel(const uint8_t *tm, unsigned fmt, unsigned siz, unsigne
  * referencia, con filas impares, anchos que no son múltiplo de 4 y tiles
  * que dan la vuelta a la TMEM. La TMEM se llena con LOADBLOCK sin dxt: los
  * mismos bytes que la RDRAM. */
+/* Espejo y clamp con una tile de dos periodos que no cabe en GFX_TEX_MAX
+ * (el lente del telescopio de Majora's Mask: I4 de 64 × 64 en una tile de
+ * 128 × 128, 64 KB en RGBA): se decodifica solo el segundo periodo de t
+ * (las filas 64–127, reflejo de las 63–0), el eje va con
+ * GFX_WRAP_MIRROR_ONCE y v corrido un periodo; s, que sí cabe, se
+ * decodifica entero con su reflejo. */
+static void gfx_tile_mirror_once(void)
+{
+	start();
+	for (int i = 0; i < 2048; i++)
+		t_n64.bus.rdram[TEX_PA + i] = (uint8_t)(37 * i + 11);
+	dl(0xFD100000, TEX_PA);                                 /* SETTIMG de 16 bits */
+	dl(0xF5100000, 0x07000000);
+	dl(0xF3000000, 0x07000000 | 1023 << 12);                /* LOADBLOCK 2 KB */
+	dl(0xF5000000 | (uint32_t)G_IM_FMT_I << 21 | (uint32_t)G_IM_SIZ_4b << 19 | 4u << 9,
+	   3u << 18 | 6u << 14 | 3u << 8 | 6u << 4);              /* tile 0: I4, línea 32, espejo + clamp, máscara 64 */
+	dl(0xF2000000, (uint32_t)(127 << 2) << 12 | (127 << 2)); /* 128 × 128 */
+	dl(0xE3000000 | (32 - 12 - 2) << 8 | 1, 0);             /* filtro puntual */
+	set_cycle(G_CYC_1CYCLE);
+	set_combine(CC_T0, CC_ZERO, CC_SHADE, CC_ZERO, CC_T0, CC_ZERO, CC_SHADE, CC_ZERO);
+	dl(0xE4000000 | (uint32_t)(128 << 2) << 12 | (128 << 2), 0);
+	dl(0xE1000000, 0);
+	dl(0xF1000000, 0x04000400);
+	run();
+	const struct gfx_draw *d = draw_n(0);
+	CHECK(d && d->ntex == 1);
+	if (!d || d->ntex != 1)
+		return;
+	CHECK_EQ(d->tex[0].width, 128);
+	CHECK_EQ(d->tex[0].height, 64);
+	CHECK_EQ(GFX_TEX_WRAP_S(d->tex[0].flags), GFX_WRAP_CLAMP);
+	CHECK_EQ(GFX_TEX_WRAP_T(d->tex[0].flags), GFX_WRAP_MIRROR_ONCE);
+	CHECK(d->tex[0].xf[3] > -1.001f && d->tex[0].xf[3] < -0.999f);
+	CHECK(d->tex[0].xf[1] > 1.0f / 64.0f - 1e-6f && d->tex[0].xf[1] < 1.0f / 64.0f + 1e-6f);
+	const uint8_t *p = tex_of(&d->tex[0]);
+	unsigned bad = 0;
+	for (uint32_t y = 0; y < 64; y++)
+		for (uint32_t x = 0; x < 128; x++)
+			bad += salsa64_rd32(p + y * d->tex[0].pitch + 4 * x) !=
+			       ref_texel(gs.tmem, G_IM_FMT_I, G_IM_SIZ_4b, 0, 0, 0, 32, x < 64 ? x : 127 - x, 63 - y);
+	t_checks++;
+	if (bad)
+		t_fail(__FILE__, __LINE__, "%u texels distintos del reflejo", bad);
+}
+
+/* Sin corrección de perspectiva (G_TP_NONE) la textura de un triángulo
+ * se muestrea a la mitad de la coordenada del vértice (el RDP usa S·(1/W)
+ * tal cual y F3DEX2 normaliza 1/W a la mitad; el sol del telescopio de
+ * Majora's Mask): la escala de s y t de la textura se reduce a la mitad.
+ * Con G_TP_PERSP no cambia. Los TEXRECT no cambian. */
+static void gfx_tri_no_persp_half(void)
+{
+	for (int persp = 0; persp < 2; persp++) {
+		start();
+		viewport_320x240();
+		load_mtx(ident, true);
+		load_mtx(ident, false);
+		for (uint32_t i = 0; i < 64; i++)
+			t_n64.bus.rdram[TEX_PA + i] = (uint8_t)(5 * i + 3);
+		dl(0xFD100000, TEX_PA);
+		dl(0xF5100000, 0x07000000);
+		dl(0xF3000000, 0x07000000 | 31 << 12 | 1024);
+		dl(0xF5880000 | 2 << 9, 2u << 18 | 2u << 8);          /* tile 0: I8 de 16 × 4, clamp */
+		dl(0xF2000000, (15 << 2) << 12 | (3 << 2));
+		set_cycle(G_CYC_1CYCLE);
+		dl(0xE3000000 | (32 - 19 - 1) << 8 | 0, (uint32_t)persp << 19);  /* G_TP_NONE o G_TP_PERSP */
+		set_combine(CC_T0, CC_ZERO, CC_SHADE, CC_ZERO, CC_T0, CC_ZERO, CC_SHADE, CC_ZERO);
+		dl(0xD7000002, 0xFFFFFFFF);                            /* G_TEXTURE encendida, escala 1 */
+		dl(0xD9000000, G_SHADING_SMOOTH);
+		dl(0xFF100000 | 319, 0x00100000);
+		const struct vtx v[3] = {
+			{ 0, 0, 0, 0, 0, { 255, 255, 255, 255 } },
+			{ 1, 0, 0, 16 * 32, 0, { 255, 255, 255, 255 } },
+			{ 0, 1, 0, 0, 4 * 32, { 255, 255, 255, 255 } },
+		};
+		uint32_t va = put_vertices(v, 3);
+		dl(0x01000000 | 3 << 12 | (0 + 3) << 1, va);
+		dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);
+		dl(0xE9000000, 0);
+		run();
+		const struct gfx_draw *d = draw_n(0);
+		CHECK(d && d->ntex == 1);
+		if (!d || d->ntex != 1)
+			return;
+		float k = persp ? 1.0f : 0.5f;
+		CHECK(d->tex[0].xf[0] > k / 16.0f - 1e-6f && d->tex[0].xf[0] < k / 16.0f + 1e-6f);
+		CHECK(d->tex[0].xf[1] > k / 4.0f - 1e-6f && d->tex[0].xf[1] < k / 4.0f + 1e-6f);
+	}
+}
+
 static void gfx_tmem_decode_formats(void)
 {
 	static const struct {
@@ -1880,4 +1970,6 @@ void t_suite_gfx(void)
 	RUN(gfx_aa_flag);
 	RUN(gfx_tile_clamp_mirror_mask);
 	RUN(gfx_blender_fog_color);
+	RUN(gfx_tile_mirror_once);
+	RUN(gfx_tri_no_persp_half);
 }

@@ -14,6 +14,7 @@
  */
 #include <string.h>
 
+#include "core/rcp.h"
 #include "rsp/gfx/hle.h"
 
 #ifdef SALSA64_GFX_TRACE
@@ -280,14 +281,20 @@ static bool texture_state(struct gfx_state *g, struct gfx_draw *d, int tile, int
 	uint16_t l[2] = { lim && ws == GFX_WRAP_CLAMP ? lim[0] : 0, lim && wt == GFX_WRAP_CLAMP ? lim[1] : 0 };
 	if (!gfx_tile_texture(g, tile & 7, t, premul, l))
 		return false;
+	/* Un eje decodificado en un solo periodo (tmem.c): espejo una vez y la
+	 * coordenada corrida un periodo (la textura es el segundo). */
+	if (t->flags & GFX_TEX_ONCE_S)
+		ws = GFX_WRAP_MIRROR_ONCE;
+	if (t->flags & GFX_TEX_ONCE_T)
+		wt = GFX_WRAP_MIRROR_ONCE;
 	bool bilinear = !copy && ((g->oh >> G_MDSFT_TEXTFILT) & 3) != G_TF_POINT;
 	float half = bilinear ? 0.5f : 0.0f;
 	t->flags = (uint8_t)(ws | wt << 2 | (bilinear ? GFX_TEX_BILINEAR : 0) | (premul ? GFX_TEX_PREMUL : 0));
 	float w = (float)t->width, h = (float)t->height;
 	t->xf[0] = shift_scale(ti->shifts) / w;
 	t->xf[1] = shift_scale(ti->shiftt) / h;
-	t->xf[2] = (half - ti->uls / 4.0f) / w;
-	t->xf[3] = (half - ti->ult / 4.0f) / h;
+	t->xf[2] = (half - ti->uls / 4.0f) / w - (ws == GFX_WRAP_MIRROR_ONCE ? 1.0f : 0.0f);
+	t->xf[3] = (half - ti->ult / 4.0f) / h - (wt == GFX_WRAP_MIRROR_ONCE ? 1.0f : 0.0f);
 	return true;
 }
 
@@ -377,6 +384,22 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 				   kind == PRIM_RECT && i == 0 ? g->rect_lim : NULL)) {
 			d->ntex = (uint8_t)i;
 			break;
+		}
+	/* Sin corrección de perspectiva (G_TP_NONE) el RDP no divide los
+	 * coeficientes de textura por el término 1/W que manda el RSP: usa
+	 * S·(1/W) tal cual. Los microcódigos de la segunda generación (F3DEX2,
+	 * F3DZEX, el de Conker) normalizan 1/W a ~0x4000 (la mitad de 0x8000)
+	 * en cada triángulo, así que la textura se muestrea a la mitad de la
+	 * coordenada del vértice; medido con el microcódigo real de Majora's
+	 * Mask: el sol del telescopio (un atlas de 64 × 32 con dos soles, s de
+	 * 0 a 63) muestra solo el sol izquierdo. Los TEXRECT llevan s y t
+	 * directos al RDP y no cambian. */
+	if (kind == PRIM_TRI && d->ntex && !((g->oh >> G_MDSFT_TEXTPERSP) & 1) &&
+	    (g->job->gbi == SALSA64_GBI_F3DEX2 || g->job->gbi == SALSA64_GBI_F3DZEX2 ||
+	     g->job->gbi == SALSA64_GBI_F3DEXBG))
+		for (unsigned i = 0; i < d->ntex; i++) {
+			d->tex[i].xf[0] *= 0.5f;
+			d->tex[i].xf[1] *= 0.5f;
 		}
 	/* Sin una textura (apagadas o arena lleno): lo que la leía se anula. */
 	if (d->nterms)
@@ -567,6 +590,35 @@ static uint16_t sampled(float hi, bool bilinear, uint32_t n)
 	return k < n ? (uint16_t)k : 0;
 }
 
+/* Ejes que se limitan aunque repitan (bits 0–1 la tile, 2–3 la del segundo
+ * ciclo) y si el rectángulo va en una tira por fila: ver gfx_texrect.
+ * Aparte y sin inline: en el SPE sus temporales no ocupan la pila mientras
+ * gfx_texrect llama a rect, que está en la cadena más honda (fondo S2DEX →
+ * TEXRECT → estado → combiner; src/spu/gfx/main.c). */
+static __attribute__((noinline)) unsigned texrect_clamp(const struct gfx_state *g, int tile, unsigned cycle, float s0,
+							 float t0, float dsdx, float dtdy, float ns, float nt,
+							 bool *rows)
+{
+	unsigned clamp = 0;
+	bool r = false;
+	for (int i = 0; i < (cycle == G_CYC_2CYCLE ? 2 : 1); i++) {
+		const struct gfx_tile *ui = &g->tiles[(tile + i) & 7];
+		uint32_t uw, uh;
+		gfx_tile_size(ui, &uw, &uh);
+		float us = shift_scale(ui->shifts), ut = shift_scale(ui->shiftt);
+		float sa = s0 * us - ui->uls / 4.0f, sb = (s0 + (ns - 1.0f) * dsdx) * us - ui->uls / 4.0f;
+		float ta = t0 * ut - ui->ult / 4.0f, tb = (t0 + (nt - 1.0f) * dtdy) * ut - ui->ult / 4.0f;
+		if ((sa < sb ? sa : sb) > -0.01f && (sa < sb ? sb : sa) < (float)uw - 0.99f)
+			clamp |= 1u << (2 * i);
+		if ((ta < tb ? ta : tb) > -0.01f && (ta < tb ? tb : ta) < (float)uh - 0.99f)
+			clamp |= 2u << (2 * i);
+		float step = dtdy * ut;
+		r |= (step < 0.0f ? -step : step) >= 2.0f && (step < 0.0f ? -step : step) * 2.0f >= (float)uh;
+	}
+	*rows = r;
+	return clamp;
+}
+
 void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uint32_t w3, bool flip)
 {
 	unsigned cycle = (g->oh >> G_MDSFT_CYCLETYPE) & 3;
@@ -605,22 +657,8 @@ void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uin
 	gfx_tile_size(ti, &tw, &th);
 	float ns = flip ? h : w, nt = flip ? w : h;  /* muestras en s y en t */
 	float ks = shift_scale(ti->shifts), kt = shift_scale(ti->shiftt);
-	unsigned clamp = 0;
-	bool rows = false;
-	for (int i = 0; i < (cycle == G_CYC_2CYCLE ? 2 : 1); i++) {
-		const struct gfx_tile *ui = &g->tiles[(tile + i) & 7];
-		uint32_t uw, uh;
-		gfx_tile_size(ui, &uw, &uh);
-		float us = shift_scale(ui->shifts), ut = shift_scale(ui->shiftt);
-		float sa = s0 * us - ui->uls / 4.0f, sb = (s0 + (ns - 1.0f) * dsdx) * us - ui->uls / 4.0f;
-		float ta = t0 * ut - ui->ult / 4.0f, tb = (t0 + (nt - 1.0f) * dtdy) * ut - ui->ult / 4.0f;
-		if ((sa < sb ? sa : sb) > -0.01f && (sa < sb ? sb : sa) < (float)uw - 0.99f)
-			clamp |= 1u << (2 * i);
-		if ((ta < tb ? ta : tb) > -0.01f && (ta < tb ? tb : ta) < (float)uh - 0.99f)
-			clamp |= 2u << (2 * i);
-		float step = dtdy * ut;
-		rows |= (step < 0.0f ? -step : step) >= 2.0f && (step < 0.0f ? -step : step) * 2.0f >= (float)uh;
-	}
+	bool rows;
+	unsigned clamp = texrect_clamp(g, tile, cycle, s0, t0, dsdx, dtdy, ns, nt, &rows);
 	rows = rows && !flip && h <= 16.0f && (cycle == G_CYC_1CYCLE || cycle == G_CYC_2CYCLE);
 
 	/* El RDP muestrea en la esquina de cada píxel; el RSX, en el centro:

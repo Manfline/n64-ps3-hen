@@ -1,6 +1,6 @@
 # Efectos de framebuffer
 
-Estado al 2026-10-11. Código: `src/rdp/targets.c` (política, portable, con
+Estado al 2026-10-12. Código: `src/rdp/targets.c` (política, portable, con
 pruebas), `src/rdp/rdp.c` (PS3), `src/host/raster.c` (el mismo modelo en el
 host), `lib/rsxkit/src/target.c` (lo genérico del RSX), `src/rsp/gfx/tmem.c`
 (procedencia de las texturas). Confirmado en la PS3 real: fondo y Link de
@@ -59,6 +59,22 @@ seguidos y el paso lo da la tile que lee.
 **Conker y Perfect Dark**: nada en 3 minutos de intro (los efectos están
 dentro del juego: pausa, sombra, cámara espía).
 
+**Majora's Mask** (2026-10-12, estados de la consola cargados en el host):
+
+- *Desenfoque de movimiento* (el baile del Espantapájaros, el recuerdo de
+  Zelda con la Canción del Tiempo): un acumulador de 320 × 240 en
+  `3a92c0`. Cada tarea dibuja el cuadro en el framebuffer, encima el
+  acumulador en 48 franjas con alfa 0,706 (lo viejo pesa 70 %) y copia el
+  resultado al acumulador en 48 franjas: la tarea siguiente lo vuelve a
+  leer. Nadie más lo lee; el CPU, nunca.
+- *Campanadas del fin del día*: copia el framebuffer en 40 franjas (modo
+  COPY) a `784600/320` y lo redibuja desplazado en 60 franjas, con alfa
+  constante 1 y la comparación por cobertura. La **pausa** usa esa misma
+  dirección y ancho como imagen de 8 bits de intensidad (la cobertura de
+  su filtro, como Zelda OoT).
+- *Pausa*: como Zelda OoT, `383ac0/320` (16 bits) y la cobertura en
+  `784600/320` de 8 bits, las dos copiadas a la RDRAM al abrirla.
+
 ## Diseño
 
 Tres mecanismos, decididos con la tabla de destinos (`targets.c`):
@@ -109,7 +125,33 @@ Las demás van sin esperar: las chicas que lee el RDP (iconos), y las
 grandes repetidas (la intro de Conker dibuja cada tarea una color image de
 292 que no se presenta y el RDP no lee: 150 copias esperadas en 5 s, 16–18
 ms cada una, frenaban), que se copian en un búfer grande y el CPU recibe
-el cuadro anterior.
+el cuadro anterior. Una copia sin esperar **no pasa la imagen al CPU**
+(`rdp_targets_readback(…, cpu_owns = false)`): el RDP la sigue leyendo de
+su superficie mientras esté viva. El acumulador del desenfoque de
+movimiento de Majora's Mask se lee en la tarea siguiente a la que lo
+dibujó; leído de la copia de la RDRAM llegaba con una o dos tareas de
+retraso, a 1× y cuantizado a 16 bits, y como cada cuadro mezcla 70 % del
+anterior, el error se acumulaba (en el host, sin retraso, la estela salía
+hasta 17 niveles más oscura; en la PS3, además, con el tramado del RSX:
+un tablero de ajedrez).
+
+**Sin tramado en las copias.** `rsxkit_target_read` escribe la superficie
+de 16 bits (R5G6B5) con el *dithering* del RSX apagado: si está encendido,
+suma un patrón fijo por posición antes de redondear, y una imagen que
+vuelve a pasar por la copia cuadro tras cuadro lo acumula.
+
+**La misma memoria con otro tamaño de texel.** Un destino es (dirección,
+ancho) y su tamaño de texel. Si llega una color image con la misma
+dirección y ancho pero otro tamaño de texel y la ranura no se dibujó en
+`RDP_TARGETS_FRESH` tareas, es otra imagen y la ranura se rehace
+(`rdp_targets_get`): Majora's Mask usa `784600/320` como cobertura de 8
+bits en la pausa y, mucho después, como copia de 16 bits del cuadro en las
+campanadas; con la ranura de 8 bits, las texturas de 16 no la encontraban
+(se leían de la RDRAM) y la copia a la RDRAM escribía bytes de intensidad
+en una imagen de 16 bits: un patrón fino de píxeles intercalados. Si la
+ranura está viva se comparte, como antes: Zelda OoT pone su framebuffer
+de 16 bits como color image de 8 en la misma tarea para dejar la
+cobertura. Escena V de gfxtest.
 
 **Espejo del framebuffer.** Lo que el RDP dibuja en un framebuffer se
 reduce en el RSX a un búfer y, pasada su barrera, el PPE lo escribe en la
@@ -254,6 +296,16 @@ escala impar toma el píxel del centro; a escala par, el promedio de los
 El host (`src/host/raster.c`) sigue la misma política con la misma tabla:
 lee texturas de sus imágenes, copia a la RDRAM y ceba, de modo que la
 pausa de Zelda en la Mac muestra lo que mostrará la PS3 (sin los tiempos).
+Sus destinos de 16 bits guardan cada canal con la precisión de la N64 (los
+5 bits altos, los mismos que guarda la copia a la RDRAM, y de vuelta a 8
+como `v << 3 | v >> 2`, igual que la HLE decodifica el RGBA16): así leer
+un destino o su copia en la RDRAM da exactamente lo mismo, y la RDRAM no
+cambia. Hace falta para los estados guardados: al cargar,
+los destinos se sueltan y lo dibujado se lee de la RDRAM; con 8 bits por
+canal en el host, un efecto que vuelve a leer lo que dibujó (el
+acumulador del desenfoque de Majora's Mask) daba, guardando a mitad del
+baile del Espantapájaros, 40 bytes de RDRAM distintos de la corrida de
+corrido. La PS3 sigue a 8 bits por canal (el RSX) y no es determinista.
 
 ## Interruptor y costo
 

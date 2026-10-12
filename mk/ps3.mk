@@ -7,7 +7,10 @@
 #   SRCS        fuentes PPU, relativas al directorio del programa
 #   COMMON      fuentes PPU compartidas, relativas a la raíz del repo
 #   LIBS        bibliotecas de PSL1GHT a enlazar
-#   SPU_PROGS   programas SPU a embeber; para cada uno, <nombre>_SRCS
+#   SPU_PROGS   programas SPU a embeber; para cada uno, <nombre>_SRCS y,
+#               opcional, <nombre>_STACK_MIN (holgura mínima de la pila en
+#               bytes: si no alcanza, falla el enlace; tools/spu-stack.py) y
+#               <nombre>_STACK_ARGS (sus --edge y --ignore)
 #   SHADERS     shaders Cg (.vcg/.fcg), relativos al directorio del programa
 #   CFLAGS      opcional, se agrega a los flags de compilación PPU
 #   LDFLAGS     opcional, se agrega a los flags de enlace PPU
@@ -49,7 +52,9 @@ PPU_CFLAGS  := -std=gnu11 -O2 -Wall -Wextra -mcpu=cell -mno-relative-jumptables 
                -I$(PSL1GHT)/ppu/include -I$(PSL1GHT)/ppu/include/simdmath \
                -I$(ROOT)/src -I$(HERE) -I$(OBJ) $(CFLAGS)
 PPU_LDFLAGS := $(PPU_MACHDEP) -L$(PSL1GHT)/ppu/lib -Wl,-Map,$(OUT)/$(PROGRAM).map $(LDFLAGS)
-SPU_CFLAGS  := -std=gnu11 -O2 -Wall -Wextra $(SPU_MACHDEP) \
+# -fstack-usage: el marco de cada función en un .su junto al objeto, para
+# medir la pila de los programas SPU (tools/spu-stack.py).
+SPU_CFLAGS  := -std=gnu11 -O2 -Wall -Wextra $(SPU_MACHDEP) -fstack-usage \
                -I$(PSL1GHT)/spu/include -I$(PSL1GHT)/spu/include/simdmath \
                -I$(ROOT)/src -I$(HERE) $(SPU_EXTRA_CFLAGS)
 SPU_LDFLAGS := $(SPU_MACHDEP) -L$(PSL1GHT)/spu/lib
@@ -160,6 +165,8 @@ $$(OBJ)/spu_$(1).bin: $$($(1)_OBJS)
 	@echo "  SPU LD  spu_$(1)"
 	$$(VERB)spu-gcc $$(SPU_LDFLAGS) $$^ $$(SPU_LIBS) -o $$@
 	$$(VERB)spu-size $$@ | tail -n 1 | awk '{ printf "          local store: text %d, data %d, bss %d bytes\n", $$$$1, $$$$2, $$$$3 }'
+	$$(if $$($(1)_STACK_MIN),$$(VERB)python3 $$(ROOT)/tools/spu-stack.py --bin $$@ --min $$($(1)_STACK_MIN) \
+		$$($(1)_STACK_ARGS) $$($(1)_OBJS) || { rm -f $$@; exit 1; })
 endef
 $(foreach p,$(SPU_PROGS),$(eval $(call SPU_PROG_RULES,$(p))))
 

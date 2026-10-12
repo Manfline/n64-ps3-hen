@@ -193,7 +193,12 @@ uint32_t rdp_scale_pick_budget(uint32_t requested, uint32_t screen_h, uint32_t b
  * Al reciclar, nunca se toma la ranura presentada en el último campo;
  * entre las demás se prefiere una vieja (RDP_TARGETS_STALE), después una
  * de un ancho distinto al del VI (imagen auxiliar, no un framebuffer) y
- * al final la dibujada hace más campos. */
+ * al final la dibujada hace más campos. La misma dirección y ancho con
+ * otro tamaño de texel es la misma ranura si se dibujó hace
+ * RDP_TARGETS_FRESH tareas o menos (Zelda OoT deja la cobertura de 8 bits
+ * sobre su framebuffer vivo) y, si no, otra imagen en su lugar (Majora's
+ * Mask: cobertura de 8 bits en la pausa, copia de 16 bits del cuadro en
+ * las campanadas). */
 int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32_t siz, uint32_t min_lh,
 		    bool *fresh);
 
@@ -224,10 +229,16 @@ enum rdp_texsrc rdp_targets_texture(struct rdp_targets *s, uint32_t addr, uint32
 				    int *slot, uint32_t *x0, uint32_t *y0);
 
 /* Al terminar una tarea que dibujó la ranura: si hay que copiarla a la
- * RDRAM (rdp_readback_wanted con los orígenes del VI de la tabla) la marca
- * del CPU y devuelve true. Con `force`, se copia sin preguntar (lo decidió
- * otro hilo con rdp_readback_wanted). */
-bool rdp_targets_readback(struct rdp_targets *s, int slot, bool force);
+ * RDRAM (rdp_readback_wanted con los orígenes del VI de la tabla) devuelve
+ * true y, con `cpu_owns`, la marca del CPU: desde entonces las texturas que
+ * la lean salen de la RDRAM. Con `force`, se copia sin preguntar (lo
+ * decidió otro hilo con rdp_readback_wanted). Sin `cpu_owns` (una copia
+ * sin esperar: la misma imagen se copia tarea tras tarea, como el
+ * acumulador del desenfoque de movimiento de Majora's Mask), el RDP la
+ * sigue leyendo del RSX mientras esté viva: la copia llega a la RDRAM una
+ * o dos tareas después, a la resolución de la N64 y en 16 bits, y la
+ * realimentación del efecto acumulaba ese retraso y ese redondeo. */
+bool rdp_targets_readback(struct rdp_targets *s, int slot, bool force, bool cpu_owns);
 
 /* Espejo del framebuffer (rdp.c y el rasterizador del host): lo que el RDP
  * dibuja en un framebuffer se copia a la RDRAM para que el CPU lea el
