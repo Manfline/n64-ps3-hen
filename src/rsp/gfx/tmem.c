@@ -25,10 +25,21 @@
 #include "core/endian.h"
 #include "rsp/gfx/hle.h"
 
+#ifdef __SPU__
+#include <spu_intrinsics.h>
+#endif
+
 #define TMEM_MASK 0xFFFu
 
-/* Mitad de una palabra de 64 bits de la TMEM (alineada a 8). */
+/* Mitad de una palabra de 64 bits de la TMEM (alineada a 8), y un texel
+ * de 16 bits: lecturas alineadas (en el SPE, sin armar byte por byte). */
 typedef uint32_t __attribute__((may_alias, aligned(4))) tword;
+typedef uint16_t __attribute__((may_alias, aligned(2))) thalf;
+
+static inline uint32_t tmem16(const uint8_t *tmem, uint32_t addr)
+{
+	return SALSA64_BE16(*(const thalf *)(const void *)(tmem + addr));
+}
 
 static inline void swap_halves(uint8_t *tmem, uint32_t addr)
 {
@@ -265,7 +276,7 @@ static uint32_t gray(uint32_t i, uint32_t a)
 /* Entrada de la paleta: 8 bytes por entrada desde 0x800. */
 static uint32_t tlut(const struct gfx_state *g, uint32_t index, unsigned type)
 {
-	uint32_t p = salsa64_rd16(g->tmem + 0x800 + ((index * 8) & 0x7FF));
+	uint32_t p = tmem16(g->tmem, 0x800 + ((index * 8) & 0x7FF));
 	return type == G_TT_IA16 ? ia16(p) : rgba16(p);
 }
 
@@ -302,7 +313,7 @@ static uint32_t texel(const struct gfx_state *g, const struct gfx_tile *t, uint3
 		return gray(b, b);
 	}
 	case G_IM_SIZ_16b: {
-		uint32_t p = salsa64_rd16(g->tmem + (((row + 2 * x) ^ odd) & TMEM_MASK & ~1u));
+		uint32_t p = tmem16(g->tmem, ((row + 2 * x) ^ odd) & TMEM_MASK & ~1u);
 		if (t->fmt == G_IM_FMT_IA || t->fmt == G_IM_FMT_I)
 			return ia16(p);
 		if (t->fmt == G_IM_FMT_YUV)
@@ -311,7 +322,7 @@ static uint32_t texel(const struct gfx_state *g, const struct gfx_tile *t, uint3
 	}
 	default: {
 		uint32_t idx = ((t->tmem / 2 + (y & 0xFF) * (t->line / 2) + x) ^ (odd ? 2 : 0)) & 0x3FF;
-		uint32_t rg = salsa64_rd16(g->tmem + idx * 2), ba = salsa64_rd16(g->tmem + 0x800 + idx * 2);
+		uint32_t rg = tmem16(g->tmem, idx * 2), ba = tmem16(g->tmem, 0x800 + idx * 2);
 		return rg << 16 | ba;
 	}
 	}
@@ -358,40 +369,101 @@ static uint32_t premultiply(uint32_t c)
 	return r << 24 | g << 16 | b << 8 | a;
 }
 
+/* Cuatro texels seguidos en la salida (alineada a 16), en el orden de bytes
+ * de la N64. En el SPE, un solo almacenamiento de 16 bytes: uno por texel
+ * lee y reescribe el mismo quadword cuatro veces, uno tras otro. */
+static inline void put4(uint8_t *o, uint32_t a, uint32_t b, uint32_t c, uint32_t d)
+{
+#ifdef __SPU__
+	*(vec_uint4 *)(void *)o = (vec_uint4){ a, b, c, d };
+#else
+	tword *q = (tword *)(void *)o;
+	q[0] = SALSA64_BE32(a);
+	q[1] = SALSA64_BE32(b);
+	q[2] = SALSA64_BE32(c);
+	q[3] = SALSA64_BE32(d);
+#endif
+}
+
+/* Una fila de una tile de 16 bits RGBA (o CI sin paleta, que se lee igual)
+ * desde el byte `row` de la TMEM: de palabra en palabra de 64 bits, cuatro
+ * texels por vuelta; en las filas impares las mitades van intercambiadas.
+ * Es lo que más se decodifica en cada cuadro (copias del framebuffer). */
+static void row_rgba16(const uint8_t *tmem, uint32_t row, uint32_t odd, uint32_t w, uint8_t *o)
+{
+	for (uint32_t x = 0; x < w; x += 4, row += 8, o += 16) {
+		const tword *q = (const tword *)(const void *)(tmem + (row & TMEM_MASK));
+		uint32_t a = SALSA64_BE32(q[odd]), b = SALSA64_BE32(q[odd ^ 1]);
+		put4(o, rgba16(a >> 16), rgba16(a & 0xFFFF), rgba16(b >> 16), rgba16(b & 0xFFFF));
+	}
+}
+
+/* La salida tiene `pitch` bytes por fila, múltiplo de 64: se escribe de 4
+ * en 4 texels, hasta 3 de más al final de cada fila (no se muestrean). */
 static void decode(const struct gfx_state *g, const struct gfx_tile *t, uint32_t w, uint32_t h, uint32_t pitch,
 		   unsigned tt, bool premul, uint8_t *out)
 {
+	bool rgba = t->siz == G_IM_SIZ_16b && t->fmt != G_IM_FMT_IA && t->fmt != G_IM_FMT_I &&
+		    t->fmt != G_IM_FMT_YUV && !premul;
 	for (uint32_t y = 0; y < h; y++) {
 		uint8_t *row = out + y * pitch;
-		for (uint32_t x = 0; x < w; x++) {
-			uint32_t c = texel(g, t, x, y, tt);
-			salsa64_wr32(row + 4 * x, premul ? premultiply(c) : c);
+		if (rgba) {
+			row_rgba16(g->tmem, t->tmem + (y & 0xFF) * t->line, y & 1, w, row);
+			continue;
+		}
+		for (uint32_t x = 0; x < w; x += 4) {
+			uint32_t c[4];
+			for (int i = 0; i < 4; i++) {
+				c[i] = texel(g, t, x + i, y, tt);
+				if (premul)
+					c[i] = premultiply(c[i]);
+			}
+			put4(row + 4 * x, c[0], c[1], c[2], c[3]);
 		}
 	}
 }
 
 static bool resolve_content(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, bool premul,
-			    struct gfx_tex *tex);
+			    const uint16_t lim[2], struct gfx_tex *tex);
 
 /* La textura de la tile (contenido, de la caché o decodificado) y de
  * dónde vino. El origen se pone después: dos tiles con el mismo contenido
  * comparten textura pero pueden venir de distinto lugar. */
-static bool resolve(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, bool premul, struct gfx_tex *tex)
+#ifdef SALSA64_GFX_TRACE
+/* Depuración en el host (src/host/run.c): cada textura que pide un dibujo. */
+void salsa64_gfx_trace_tex(const struct gfx_state *g, const struct gfx_tile *t, const struct gfx_tex *tex,
+			   bool decoded);
+#endif
+
+static bool resolve(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, bool premul, const uint16_t lim[2],
+		    struct gfx_tex *tex)
 {
-	if (!resolve_content(g, t, tt, premul, tex))
+#ifdef SALSA64_GFX_TRACE
+	uint32_t before = g->res->textures;
+#endif
+	if (!resolve_content(g, t, tt, premul, lim, tex))
 		return false;
 	tex->src_addr = 0;
 	tex->src_pitch = 0;
 	tex->src_siz = tex->src_fmt = 0;
 	provenance(g, t, tex);
+#ifdef SALSA64_GFX_TRACE
+	salsa64_gfx_trace_tex(g, t, tex, g->res->textures != before);
+#endif
 	return true;
 }
 
 static bool resolve_content(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, bool premul,
-			    struct gfx_tex *tex)
+			    const uint16_t lim[2], struct gfx_tex *tex)
 {
 	uint32_t w, h;
 	gfx_tile_size(t, &w, &h);
+	/* Lo que el dibujo no puede muestrear no se decodifica (Perfect Dark
+	 * copia el cuadro anterior en franjas de 320 × 1 con tiles de 513 × 9). */
+	if (lim[0] && lim[0] < w)
+		w = lim[0];
+	if (lim[1] && lim[1] < h)
+		h = lim[1];
 	uint32_t pitch = (w * 4 + 63) & ~63u;
 	if (pitch * h > GFX_TEX_MAX)
 		h = GFX_TEX_MAX / pitch;
@@ -450,7 +522,7 @@ static bool resolve_content(struct gfx_state *g, const struct gfx_tile *t, unsig
 		tex->where = GFX_TEX_ARENA;
 		tex->offset = (uint32_t)off;
 		g->res->tex_arena += g->tc_on;
-		if (g->narena_tex < GFX_TEX_ARENA) {
+		if (g->narena_tex < GFX_ARENA_TEXTURES) {
 			g->arena_tex[g->narena_tex].key[0] = key[0];
 			g->arena_tex[g->narena_tex].key[1] = key[1];
 			g->arena_tex[g->narena_tex].tex = *tex;
@@ -462,7 +534,7 @@ static bool resolve_content(struct gfx_state *g, const struct gfx_tile *t, unsig
 	return true;
 }
 
-bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex, bool premul)
+bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex, bool premul, const uint16_t lim[2])
 {
 	const struct gfx_tile *t = &g->tiles[tile & 7];
 	/* La paleta se usa con texturas de 4 y 8 bits si el othermode la activa. */
@@ -470,17 +542,20 @@ bool gfx_tile_texture(struct gfx_state *g, int tile, struct gfx_tex *tex, bool p
 	if (t->siz > G_IM_SIZ_8b || tt < G_TT_RGBA16)
 		tt = G_TT_NONE;
 	struct gfx_tilememo *m = &g->tilememo[tile & 7];
-	if (m->ok && m->gen == g->tex_gen && m->tt == tt && m->premul == premul) {
+	if (m->ok && m->gen == g->tex_gen && m->tt == tt && m->premul == premul && m->lim[0] == lim[0] &&
+	    m->lim[1] == lim[1]) {
 		*tex = m->tex;
 		g->res->tex_reused++;
 		return true;
 	}
-	if (!resolve(g, t, tt, premul, tex))
+	if (!resolve(g, t, tt, premul, lim, tex))
 		return false;
 	m->ok = 1;
 	m->gen = g->tex_gen;
 	m->tt = (uint8_t)tt;
 	m->premul = premul;
+	m->lim[0] = lim[0];
+	m->lim[1] = lim[1];
 	m->tex = *tex;
 	return true;
 }

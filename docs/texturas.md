@@ -84,6 +84,59 @@ por tarea, sin desalojos en 3510 campos); el hash y la búsqueda cuestan
 0,03–0,35 ms. Las escenas que iban a 41–48 campos/s llegan a 60, y las
 capturas en campos fijos son idénticas byte a byte a las de antes.
 
+## Texturas que cambian en cada cuadro: Perfect Dark (2026-10-11)
+
+En la PS3 real, la intro de Perfect Dark (la azotea de dataDyne, desde el
+campo ~1800, sin tocar el control) bajaba a 50 campos/s: la HLE tardaba
+40–58 ms por tarea, casi todo en decodificar 129–143 texturas por tarea,
+cada una desalojando otra. Medido en el host con `salsa64-run --gfx-frame`
+(el rasterizador hace las mismas copias a la RDRAM que la PS3) y
+`SALSA64_TEXSTAT=100` (build con `-DSALSA64_GFX_TRACE`):
+
+- **No es la caché.** Sin el rasterizador (sin copias a la RDRAM) la escena
+  decodifica 0,1–0,5 texturas por tarea. Con él, 180 por tarea, todas con
+  una clave nunca vista y desde un origen ya visto con otro contenido.
+- **Es un desenfoque de movimiento.** Después de la escena, el juego copia
+  el cuadro anterior (el otro framebuffer, `665dc0/320`, que el espejo del
+  framebuffer deja en la RDRAM) sobre el nuevo, fila por fila: 180 veces
+  `LOADBLOCK` de una fila (320 texels RGBA16) y un `TEXRECT` de 320 × 1
+  con filtro puntual y alfa 0x17 (9 %). El contenido cambia en cada cuadro:
+  ninguna caché lo evita.
+- **Lo caro era el tamaño de la tile.** La tile es de 513 × 9 (línea de
+  1280 bytes: más grande que la TMEM, da la vuelta), y la HLE decodificaba
+  la tile entera: 4617 texels por franja para 320 que se muestrean,
+  831 000 texels por tarea. En el SPE, el bucle genérico costaba ~88 ns por
+  texel (lecturas y escrituras de 2 y 4 bytes sin alineación conocida:
+  byte por byte, y cada escritura relee el quadword).
+
+Arreglos (`src/rsp/gfx/rdp.c`, `tmem.c`):
+
+1. **Solo lo que se muestrea.** `gfx_texrect` calcula hasta qué texel puede
+   leer el RSX en cada eje (todo u dentro del rectángulo, también entre las
+   muestras del RDP a más resolución, más el vecino con filtro) y, si la
+   tile no cabe en la TMEM y el eje se limita (no repite), la textura se
+   decodifica solo hasta ahí (`gfx_tile_texture(…, lim)`, que entra en la
+   clave). Las franjas quedan en 321 × 2: 116 000 texels por tarea en vez
+   de 831 000 (×7,2). Con tiles que caben en la TMEM no cambia nada: los
+   rectángulos que comparten una tile (tiras de un fondo de S2DEX, letras)
+   siguen en un dibujo y una textura.
+2. **Decodificación sin accesos byte por byte.** RGBA16 (y CI16 sin paleta)
+   va de palabra en palabra de 64 bits de la TMEM, cuatro texels por vuelta
+   con las mitades intercambiadas en las filas impares; los demás formatos
+   leen con accesos alineados; todo se escribe de cuatro en cuatro texels
+   (en el SPE, un almacenamiento de 16 bytes). La salida es la misma byte
+   a byte (prueba `gfx_tmem_decode_formats` contra una referencia aparte,
+   con filas impares, vueltas de la TMEM y anchos que no son múltiplo de 4).
+
+En el host, con el rasterizador: 136 cuadros de Perfect Dark, Zelda, SM64,
+Mario Kart, GoldenEye, Banjo y Conker y gfxtest ×3 idénticos byte a byte;
+en los demás juegos, las mismas texturas decodificadas y los mismos
+dibujos.
+
+Para que el código nuevo no se comiera la pila del SPE 0, el registro de
+texturas del arena por tarea (para no decodificar dos veces la misma si
+la caché está llena o apagada) bajó de 128 a 64 entradas (−3 KB).
+
 ## Decisión: SPE 0 o SPE 2–3
 
 **La caché y la decodificación se quedan en el SPE 0.** Con la caché, lo
