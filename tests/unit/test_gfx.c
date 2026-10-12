@@ -278,6 +278,42 @@ static void gfx_tile_clamp_mirror_mask(void)
 			CHECK_EQ(p[y * d->tex[0].pitch + 4 * x], t_n64.bus.rdram[TEX_PA + 16 * y + (x < 16 ? x : 31 - x)]);
 }
 
+/* P = FOG en el blender: el color es la niebla, no el combiner. El fundido
+ * de la intro de Banjo-Kazooie es un rectángulo FOG·A_FOG + MEM·(1 − A_FOG)
+ * (othermode L 0xC4404340) con el combiner en 0: con la niebla blanca
+ * opaca, blanco sin mezcla (salía negro); con alfa 0xD8, mezcla con ese
+ * alfa. */
+static void gfx_blender_fog_color(void)
+{
+	static const struct { uint32_t fog; uint8_t blend; } c[] = {
+		{ 0xFFFFFFFF, GFX_BLEND_OFF },
+		{ 0xFFFFFFD8, GFX_BLEND_ALPHA },
+	};
+	for (unsigned i = 0; i < sizeof c / sizeof c[0]; i++) {
+		start();
+		set_cycle(G_CYC_1CYCLE);
+		dl(0xFCFFFFFF, 0xFFFFFFFF);                      /* combiner: todo 0 */
+		dl(0xF8000000, c[i].fog);                        /* G_SETFOGCOLOR */
+		dl(0xEF000000 | G_CYC_1CYCLE << 20, 0xC4404340);  /* FOG·A_FOG + MEM·(1 − A_FOG) */
+		dl(0xE4000000 | (40 << 2) << 12 | (40 << 2), 0);  /* G_TEXRECT */
+		dl(0xE1000000, 0);
+		dl(0xF1000000, 0x04000400);
+		run();
+		const struct gfx_draw *d = draw_n(0);
+		CHECK(d != NULL);
+		if (!d)
+			continue;
+		CHECK_EQ(d->blend, c[i].blend);
+		float out[4] = { 0, 0, 0, 0 };
+		for (int k = 0; k < GFX_K_TERMS; k++)
+			for (int l = 0; l < 4; l++)
+				out[l] += d->k[k][0][l];  /* sin textura ni color de vértice: solo k0 */
+		for (int l = 0; l < 3; l++)
+			CHECK(fabsf(out[l] - 1.0f) < 1e-6f);
+		CHECK(fabsf(out[3] - (float)(c[i].fog & 0xFF) / 255.0f) < 1e-6f);
+	}
+}
+
 /* G_SETCONVERT: K5 entra al combiner (Conker: (SHADE − ENV)·K5 + PRIM en el
  * segundo ciclo, con K5 = 255; si se ignora, la cara sale negra) y persiste
  * en el estado del RDP. */
@@ -1843,4 +1879,5 @@ void t_suite_gfx(void)
 	RUN(gfx_viscvg_flag);
 	RUN(gfx_aa_flag);
 	RUN(gfx_tile_clamp_mirror_mask);
+	RUN(gfx_blender_fog_color);
 }

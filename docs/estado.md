@@ -1,6 +1,6 @@
 # Estado
 
-## 2026-10-12 (tarde) — Líneas azules de GoldenEye: cobertura de los triángulos con AA_EN (rama `infallible-wozniak-aa210c`)
+## 2026-10-12 (tarde) — Líneas azules de GoldenEye (cobertura AA), túnica de Link (máscara con clamp) y el negro de la intro de Banjo (niebla en el blender) (rama `infallible-wozniak-aa210c`)
 
 Con el volcado del autor en el túnel de Dam (SELECT + R2), las líneas azules
 salen también en el raster del Mac: no son del RSX. `tools/gfxdump.py pixel`
@@ -23,13 +23,41 @@ encienden).
 `salsa64-run --raster-dump` dejaba volteados por palabras los bytes de
 `nterms` a `pad` de los volcados big-endian: los dibujos con combiners
 generados salían mal en el host. Con eso corregido, la túnica de Link del
-volcado del autor se ve igual en la PS3 y en el host. Con su estado, HLE y
-LLE también coinciden: no hay un defecto atribuible en la túnica; falta que
-el autor diga qué ve (si eran costuras entre partes del modelo, es lo mismo
-que en GoldenEye).
+volcado del autor se ve igual en la PS3 y en el host.
 
-Pendiente en la PS3: que POLYGON_SMOOTH tape las líneas en Dam, y medir lo
-que cuesta (GoldenEye y Perfect Dark).
+**Túnica de Link (OoT):** el autor ve cortado el patrón de sombra del
+pliegue. La textura del torso es una I8 de 16 texels de ancho en la TMEM
+(línea de 16 bytes) en una tile de 32 con máscara 4 y espejo más clamp en s.
+El RDP limita la coordenada a la tile y después la enmascara: las columnas
+16–31 son el reflejo de las 0–15. `tmem.c` veía el clamp, ignoraba la
+máscara y leía 32 texels seguidos (la mitad derecha salía de la fila
+siguiente de la TMEM). Ahora, con clamp y una máscara más chica que la tile,
+decodifica con la coordenada enmascarada, y eso entra en la llave de la
+caché. HLE y LLE coincidían porque la LLE usa la misma decodificación.
+Prueba: `gfx_tile_clamp_mirror_mask`. En siete juegos solo cambia OoT, y
+por debajo del umbral.
+
+**Pantalla negra de Banjo entre el logo de Rare y la cascada:** también en
+el host (campos 992–1020 con `banjo-casa.pad`), con la HLE y con la LLE. El
+juego funde con un rectángulo a pantalla completa con el blender
+FOG·A_FOG + MEM·(1 − A_FOG) y el combiner en 0. El blender toma el color de
+P, que aquí es la niebla, y eso no se hacía. Con la niebla blanca opaca
+salía negro (el combiner); con alfa 0xD8 no pintaba. Ahora `blend_constant`
+(src/rsp/gfx/rdp.c) pone la constante de P (niebla o blend) como color y el
+alfa que elige A. En el host la transición queda blanca y después se funde
+en la escena, sin el negro. Prueba: `gfx_blender_fog_color`.
+
+**Rompecabezas de Banjo (sigue pendiente):** en esa escena todas las tareas
+de Banjo terminan con el RDP congelado y la interrupción del DP sale al
+descongelar. Una espera de la copia en el `done` del RDP no sirve: la tarea
+congelada no se traduce hasta descongelar (si no, vuelve el temblor) y
+esperarla bloquearía la emulación. La espera tiene que ir al descongelar
+(`salsa64_rsp_dp_unfreeze`), con presentación traduciendo esa tarea en el
+acto. Queda para después.
+
+Pendiente en la PS3: que POLYGON_SMOOTH tape las líneas en Dam y cuánto
+cuesta (GoldenEye y Perfect Dark); la túnica con el pliegue entero; y la
+transición de Banjo sin el negro.
 
 ## 2026-10-12 — Banjo-Kazooie (protección del CIC 6103), cara de Conker (K5) y rayas del logo de Zelda (rama `infallible-wozniak-aa210c`, paquete SLSA00099 «Salsa64 gráficos»)
 
