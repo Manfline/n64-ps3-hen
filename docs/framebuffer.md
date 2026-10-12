@@ -3,8 +3,9 @@
 Estado al 2026-10-12. Código: `src/rdp/targets.c` (política, portable, con
 pruebas), `src/rdp/rdp.c` (PS3), `src/host/raster.c` (el mismo modelo en el
 host), `lib/rsxkit/src/target.c` (lo genérico del RSX), `src/rsp/gfx/tmem.c`
-(procedencia de las texturas). Confirmado en la PS3 real: fondo y Link de
-la pausa de Zelda OoT, la cámara del túnel de Mario Kart 64, gfxtest 35/35.
+(procedencia de las texturas y cuáles no se decodifican). Confirmado en la
+PS3 real: fondo y Link de la pausa de Zelda OoT, la cámara del túnel de
+Mario Kart 64, gfxtest 35/35.
 
 ## Problema
 
@@ -56,8 +57,17 @@ paso: todas las texturas del volcado salían sin origen porque libultra
 manda ancho 1 en `SETTIMG` para `LOADBLOCK`; ahora un bloque son texels
 seguidos y el paso lo da la tile que lee.
 
-**Conker y Perfect Dark**: nada en 3 minutos de intro (los efectos están
-dentro del juego: pausa, sombra, cámara espía).
+**Conker**: nada en 3 minutos de intro (los efectos están dentro del
+juego: pausa, sombra).
+
+**Perfect Dark**, intro (la azotea de dataDyne, desde el campo ~1800 en la
+PS3 y ~2000 en el host, sin tocar el control): un desenfoque de movimiento.
+Después de dibujar la escena, el juego copia el cuadro anterior (el otro
+framebuffer: `6211c0/320` mientras dibuja en `665dc0/320`, y al revés) sobre
+el nuevo en 180 franjas por tarea: `SETTIMG` de 320 en la fila, `LOADBLOCK`
+de una fila (320 texels RGBA16), una tile de 513 × 9 con línea de 1280
+bytes y un `TEXRECT` de 320 × 1 con filtro puntual y alfa 0x17 (9 %). Ver
+«Texturas desde un destino sin decodificar».
 
 **Majora's Mask** (2026-10-12, estados de la consola cargados en el host):
 
@@ -82,9 +92,19 @@ Tres mecanismos, decididos con la tabla de destinos (`targets.c`):
 **Procedencia de las texturas.** La HLE anota las últimas cargas a la TMEM
 (`gfx_load`: tramo escrito, dirección en la RDRAM, filas) y, al resolver una
 tile, deja en `gfx_tex.src_*` la dirección del texel (0, 0) de la textura en
-la imagen de origen, su paso en texels y su formato. Se asigna después de la
-búsqueda en la caché: dos tiles con el mismo contenido comparten textura
-pero no origen. Cuesta un registro de 32 bytes por carga.
+la imagen de origen, su paso en texels y su formato. Va aparte del
+contenido: dos tiles con el mismo contenido comparten textura pero no
+origen. Cuesta un registro de 32 bytes por carga. Con `LOADTILE` el paso es
+el ancho de `SETTIMG`; con `LOADBLOCK` (texels seguidos) es la línea de la
+tile, porque la fila 1 de la textura está una línea más adelante en la
+TMEM y, por lo tanto, en la RDRAM. Pero si el dibujo muestrea **una sola
+fila**, el paso no cambia ningún texel que lea y vale el ancho que declaró
+`SETTIMG` (con el que el RDP ubica la fila de la carga), si lo declaró
+(libultra manda 1): las franjas de Perfect Dark tienen línea de 1280 bytes
+(paso 640) sobre un framebuffer de 320 y no se reconocían. Para saber que
+muestrea una fila, el recorte del `TEXRECT` con filtro puntual es exacto:
+`floor(u) < hi` da `ceil(hi)` texels (antes `floor(hi) + 1`: las franjas
+salían de 321 × 2 y ahora de 320 × 1).
 
 **Render a textura.** Si el origen cae en un destino vivo
 (`rdp_targets_texture`): dibujado hace `RDP_TARGETS_FRESH` (3) tareas o
@@ -95,7 +115,8 @@ antes la superficie a un scratch (`rsxkit_target_copy`, una vez por tarea)
 y se lee de ahí. Antes del primer dibujo que lee una superficie dibujada en
 el mismo tramo, `rsxkit_texture_sync` (espera al RSX e invalida su caché de
 texturas). Si el destino es viejo o se copió a la RDRAM, vale la textura
-decodificada por la HLE desde la RDRAM, como antes.
+decodificada por la HLE desde la RDRAM, como antes; y si la HLE no la
+decodificó por venir de un destino (abajo), la decodifica el consumidor.
 
 **Copia RSX → RDRAM.** Solo para las color images de 16 bits del ancho del
 VI que no son ninguno de los framebuffers recientes (`rdp_readback_wanted`
@@ -233,6 +254,74 @@ Zelda) no se pierda cuando el RDP dibuja encima.
 rectángulo; el filtro del CPU salta los píxeles cubiertos del todo y el
 fondo queda nítido (en la N64 solo se filtran los bordes).
 
+## Texturas desde un destino sin decodificar (2026-10-12)
+
+Antes, toda textura se decodificaba en el SPE desde la TMEM aunque el
+consumidor fuera a leerla de un destino del RSX. En el desenfoque de
+Perfect Dark eso eran 180 franjas nuevas por tarea, 116 000 texels, que
+además llenaban la caché de texturas y desalojaban ~34 texturas por tarea;
+y como la procedencia no se reconocía (paso 640 contra un destino de 320,
+arriba), el «fantasma» salía de la copia a 1× del espejo del framebuffer:
+de baja resolución a 3×.
+
+**Qué no decodifica la HLE.** La HLE lleva su propia cuenta de las color
+images de 16 bits que dibujó (`gfx_state.fbimg`, 8 entradas, como las
+ranuras de `targets.c`: misma dirección y ancho, alto conjeturado de 3/4 del
+ancho o hasta donde llegan las tijeras, ancho de 1 a 640, la tarea en que
+se dibujó por última vez; fuera del tramo de los estados guardados, se
+olvida al cargar uno o con un reset). Si el trabajo trae `GFX_JOB_FBTEX`
+(lo pone el consumidor cuando lee de sus destinos: `fbfx.cfg` ≥ 1), una
+textura RGBA16 sin paleta ni RGB·A cuyo origen cae en una de esas imágenes,
+dibujada hace `GFX_FB_FRESH` (= `RDP_TARGETS_FRESH`, 3) tareas o menos,
+buscada como la busca `rdp_targets_locate` (paso = ancho) y que no repite
+en s salvo que mida lo que la imagen, sale como `GFX_TEX_TARGET`: con su
+tamaño, su `pitch` y su origen, sin texels, sin hash y sin pasar por la
+caché (`res->tex_target` las cuenta).
+
+**El consumidor.** La lee de su destino como cualquier textura con origen
+en un destino (`texture_from_target`). Lo que él sabe y la HLE no
+—que copió ese destino a la RDRAM para el CPU (`cpu_owned`), que no pudo
+crear su superficie o la recicló, que el render a textura está apagado—
+lo resuelve decodificándola él desde la RDRAM con
+`rdp_decode_rgba16` (`targets.c`, portable): en la PS3, en el PPE, en el
+arena de la tarea detrás de lo que escribió la HLE (el arena casi no se
+usa con la caché); en el host, en un búfer del rasterizador. Da lo mismo
+que habría dado la HLE con la RDRAM de ese momento. Si no hay lugar en el
+arena, el dibujo se salta y se cuenta. `salsa64_rdp_dump` las escribe
+decodificadas para que la repetición en el host las tenga.
+
+Así el caso viejo o «del CPU» no se rompe: la predicción de la HLE solo
+decide dónde se decodifica, nunca qué se ve. Medido en el host, el
+respaldo se usa poco: en la intro de Perfect Dark, 2 tareas al empezar el
+desenfoque (360 franjas: el consumidor copió `665dc0` a la RDRAM porque el
+VI todavía no lo había mostrado, así que lo lee de ahí) de 59 620; en la
+pausa de Zelda (`zelda-oot.pad` con la partida del autor, campos hasta el
+19400), 360 de 498: las 40 franjas que restauran el fondo desde
+`fbufSave` en las tres tareas que siguen a cada copia para el CPU (tres
+aperturas de la pausa; la HLE lo vio dibujar, el consumidor lo tiene como
+del CPU), 1920 texels cada una; y ninguna en
+gfxtest (1 textura por tarea, siempre de su destino; en RPCS3 con el
+frontend, 45 del RSX y 0 en el PPE). En las escenas medidas de Banjo, SM64,
+Mario Kart, GoldenEye y Conker no hay texturas desde un destino.
+
+**Costo en el SPE 0.** Texto +2,1 KB y la tabla 128 bytes. Para no
+comerse la pila, los fondos de S2DEX se compilan con `-Os` (−0,9 KB de
+código y 112 bytes menos en la cadena más honda): holgura de la pila
+2,6 KB (`src/spu/gfx/main.c`; el build falla por debajo de 1,5 KB).
+
+**Determinismo de los estados en el host.** Al cargar un estado los
+destinos se sueltan y la primera tarea lee el cuadro anterior de la RDRAM;
+de corrido, de la imagen del rasterizador. Con imágenes de 8 bits por canal
+eso daba otra RDRAM (4699 bytes dos campos después de cargar a mitad del
+desenfoque de Perfect Dark). Desde que los destinos de 16 bits del host
+guardan 5 bits por canal (rama de Majora's Mask), las dos lecturas dan lo
+mismo: guardar en el campo 2100 y cargar da la misma RDRAM que de corrido
+dos campos después y la misma RDRAM e imagen cien campos después (main sin
+esta rama: 83 bytes distintos en el campo 2200). Diez campos después de
+cargar difieren los dos, igual con o sin esta rama, en 147 274 bytes: el
+espejo del framebuffer, que tras cargar se copia al presentarlo y no al
+terminar la tarea.
+
 ## Escala por destino
 
 La escala interna (1×–5×, `video.cfg` y «Escala interna» del menú) es un
@@ -313,8 +402,13 @@ corrido. La PS3 sigue a 8 bits por canal (el RSX) y no es determinista.
 a textura, `2` también copias y cebado (por omisión). En el host,
 `SALSA64_FBFX`. El log escribe cada 5 s «gfx: framebuffer: N copias (ms
 c/u), la emulación esperó N tareas (ms c/u, N tarde), texturas desde un
-destino: del RSX, de la RDRAM, del ligado; destinos cebados». Mediciones en
-la PS3 en `docs/perf-log.md`; memoria en `docs/memory-budget.md`.
+destino: del RSX, de la RDRAM, del ligado, decodificadas en el PPE (sin
+lugar); destinos cebados», y la línea de la HLE cuántas texturas por tarea
+no decodificó por venir de un destino. En el host, `salsa64-run` lo resume
+al final («sin decodificar en la HLE, decodificadas por el rasterizador»)
+y `SALSA64_TEXSTAT` lo cuenta por ventana; `SALSA64_NO_FBTEX=1` vuelve a
+decodificarlas todas en la HLE. Mediciones en la PS3 en `docs/perf-log.md`;
+memoria en `docs/memory-budget.md`.
 
 ## Pendiente
 
@@ -326,6 +420,15 @@ la PS3 en `docs/perf-log.md`; memoria en `docs/memory-budget.md`.
 - Perfect Dark y Conker: copias del z-buffer (rectángulos que leen la z
   image como color image), sombra y desenfoque de Conker; color images de
   32 bits y CI8 (Conker) no se copian ni se ceban.
+- El «estado» del SPE con las franjas de Perfect Dark casi se duplicó
+  (combiner en `-Os`, docs/perf-log.md): guardar el resultado del combiner
+  mientras no cambien sus entradas si llega a costar campos/s.
+- Comprobar que el baile del Espantapájaros y el recuerdo de Zelda en
+  Majora's Mask también salen por `GFX_TEX_TARGET` (hace falta un estado en
+  esas escenas).
+- Una franja de `LOADBLOCK` de libultra (ancho 1 en `SETTIMG`) con una tile
+  de línea distinta del ancho de la imagen sigue sin reconocerse: no hay de
+  dónde sacar el paso (no se vio en ningún juego).
 - Reducir s× → 1× con filtro de caja (hoy bilineal del RSX en el centro de
   cada bloque: el píxel central a escala impar, 2 × 2 a escala par) y, si
   hiciera falta por costo, la conversión en un SPE.

@@ -63,6 +63,10 @@ struct salsa64_rdp_stats {
 	uint32_t dma_skipped;               /* copias descartadas porque un DMA escribió ahí después */
 	uint32_t tall_fills;                /* rellenos de una color image más alta que 480 repartidos a sus destinos */
 	uint32_t tex_rsx, tex_rdram, tex_self, primes;
+	/* Texturas que la HLE no decodificó por venir de un destino
+	 * (GFX_TEX_TARGET) y que no se pudieron leer de él: decodificadas en el
+	 * PPE desde la RDRAM, y las que no cupieron en el arena (dibujo saltado). */
+	uint32_t tex_ppe, tex_ppe_lost;
 	/* Copias pedidas que no encontraron su destino dibujado, superficies
 	 * que el RSX no pudo crear y color images imposibles ignoradas. */
 	uint32_t readbacks_lost, targets_failed, targets_absurd;

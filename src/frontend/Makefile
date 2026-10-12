@@ -48,3 +48,9 @@ include $(R)/mk/ps3.mk
 # KB) que quedan para la pila. Corre una vez por estado de dibujo, no por
 # píxel ni por vértice.
 $(OBJ)/spu/src/rsp/gfx/combine.c.o: SPU_CFLAGS += -Os
+# Los fondos de S2DEX (salas prerrenderizadas de Zelda OoT), también: 0,9 KB
+# menos de código y 112 bytes menos de marco en la cadena más honda de la
+# pila; se dibujan en unas decenas de tiras por cuadro.
+$(OBJ)/spu/src/rsp/gfx/s2dex.c.o: SPU_CFLAGS += -Os
+# make no ve un cambio de banderas: que se recompilen si cambia este archivo.
+$(OBJ)/spu/src/rsp/gfx/combine.c.o $(OBJ)/spu/src/rsp/gfx/s2dex.c.o: Makefile
