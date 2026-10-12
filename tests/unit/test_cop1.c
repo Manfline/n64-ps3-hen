@@ -75,6 +75,94 @@ static void fr1_independent_registers(void)
 	CHECK_EQ(R[T3], 0x22222222);
 }
 
+/* Cambiar Status.FR no vacía la caché del recompilador: un bloque que toca un
+ * registro impar se compila para cada FR (gemelos, rec.h) y los demás, también
+ * los de COP1 con registros pares, valen con los dos. Escribir el código mata
+ * a los dos gemelos. Con el intérprete solo comprueba los resultados. */
+static void fr_switch_keeps_code_cache(void)
+{
+	const struct salsa64_rec *rec = CPU->rec;
+	uint64_t flushes = rec ? rec->stats.flushes : 0, compiled = rec ? rec->stats.compiled : 0;
+	uint64_t twins = rec ? rec->stats.fr_twins : 0, killed = rec ? rec->stats.invalidated : 0;
+	uint64_t fr_dep = rec ? rec->stats.fr_dep : 0;
+
+	/* FR = 1 (T_STATUS): los impares son registros propios. */
+	R[T0] = 0x11111111;
+	R[T1] = 0x22222222;
+	T_LOAD(MTC1(T0, 0), MTC1(T1, 1), DMFC1(T2, 0), MFC1(T3, 1));
+	t_step(4);
+	CHECK_EQ(R[T2], 0x11111111);
+	CHECK_EQ(R[T3], 0x22222222);
+	if (rec) {
+		CHECK_EQ(rec->stats.compiled, compiled + 1);
+		CHECK_EQ(rec->stats.fr_dep, fr_dep + 1);  /* $f1 impar */
+	}
+
+	/* El mismo código con FR = 0: $f1 es la mitad alta de la pareja. Un
+	 * gemelo, sin vaciar. */
+	t_set_status(T_STATUS & ~SALSA64_ST_FR);
+	salsa64_cpu_set_pc(CPU, T_CODE);
+	CPU->fpr[0] = CPU->fpr[1] = 0;
+	t_step(4);
+	CHECK_EQ(R[T2], 0x2222222211111111ull);
+	CHECK_EQ(R[T3], 0x22222222);
+	CHECK_EQ(CPU->fpr[1], 0);
+	if (rec) {
+		CHECK_EQ(rec->stats.flushes, flushes);
+		CHECK_EQ(rec->stats.compiled, compiled + 2);
+		CHECK_EQ(rec->stats.fr_twins, twins + 1);
+	}
+
+	/* De vuelta a FR = 1 y a FR = 0: los gemelos ya están. */
+	for (unsigned fr = 1, k = 0; k < 4; k++, fr ^= 1) {
+		t_set_status(fr ? T_STATUS : T_STATUS & ~SALSA64_ST_FR);
+		salsa64_cpu_set_pc(CPU, T_CODE);
+		CPU->fpr[0] = CPU->fpr[1] = 0;
+		t_step(4);
+		CHECK_EQ(R[T2], fr ? 0x11111111 : 0x2222222211111111ull);
+		CHECK_EQ(R[T3], 0x22222222);
+	}
+	if (rec) {
+		CHECK_EQ(rec->stats.flushes, flushes);
+		CHECK_EQ(rec->stats.compiled, compiled + 2);
+		CHECK_EQ(rec->stats.invalidated, killed);
+	}
+
+	/* Escribir el código invalida a los dos gemelos; después se compilan de
+	 * nuevo (con FR = 0 y con FR = 1). */
+	t_wr32(T_CODE_PA + 12, MFC1(T3, 0));
+	for (unsigned fr = 0, k = 0; k < 2; k++, fr ^= 1) {
+		t_set_status(fr ? T_STATUS : T_STATUS & ~SALSA64_ST_FR);
+		salsa64_cpu_set_pc(CPU, T_CODE);
+		CPU->fpr[0] = CPU->fpr[1] = 0;
+		t_step(4);
+		CHECK_EQ(R[T3], 0x11111111);
+	}
+	if (rec) {
+		CHECK_EQ(rec->stats.invalidated, killed + 2);
+		CHECK_EQ(rec->stats.compiled, compiled + 4);
+		CHECK_EQ(rec->stats.fr_twins, twins + 2);
+		CHECK_EQ(rec->stats.flushes, flushes);
+	}
+
+	/* Un bloque de COP1 con registros pares no depende de FR: uno solo. */
+	R[T0] = 0x33333333;
+	T_LOAD(MTC1(T0, 2), MFC1(T1, 2), DMFC1(T2, 2), MTC1(T0, 4));
+	for (unsigned fr = 1, k = 0; k < 2; k++, fr ^= 1) {
+		t_set_status(fr ? T_STATUS : T_STATUS & ~SALSA64_ST_FR);
+		salsa64_cpu_set_pc(CPU, T_CODE);
+		R[T1] = R[T2] = 0;
+		t_step(4);
+		CHECK_EQ(R[T1], 0x33333333);
+		CHECK_EQ(R[T2], 0x33333333);
+	}
+	if (rec) {
+		CHECK_EQ(rec->stats.compiled, compiled + 5);
+		CHECK_EQ(rec->stats.fr_dep, fr_dep + 4);  /* los gemelos cuentan */
+		CHECK_EQ(rec->stats.flushes, flushes);
+	}
+}
+
 static void fr0_double_arith(void)
 {
 	t_set_status(T_STATUS & ~SALSA64_ST_FR);
@@ -1078,4 +1166,5 @@ void t_suite_cop1(void)
 	RUN(executed_matches_full);
 	RUN(executed_conversions_match_full);
 	RUN(executed_sequences_match_interp);
+	RUN(fr_switch_keeps_code_cache);
 }

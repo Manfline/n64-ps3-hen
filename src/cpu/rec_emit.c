@@ -109,6 +109,21 @@ static bool is_branch(const struct dec *d)
 	return d->kind >= K_BRANCH && d->kind <= K_JUMP_REG;
 }
 
+/* ¿El código de la instrucción depende de Status.FR? Solo si accede a un
+ * registro impar de la FPU por fs (MFC1, MTC1, DMFC1, DMTC1 y las
+ * operaciones) o por ft (LWC1, LDC1, SWC1, SDC1): con FR = 0 ese registro
+ * es la mitad alta de la pareja (fpr32_off, fpr64_off, fslot32, fslot64).
+ * CFC1, CTC1 y BC1 no tocan registros de la FPU. */
+static bool fr_dependent(uint32_t i)
+{
+	unsigned op = I_OP(i), rs = I_RS(i);
+	if (op == 0x31 || op == 0x35 || op == 0x39 || op == 0x3D)
+		return (I_RT(i) & 1) != 0;
+	if (op == 0x11 && rs != 0x02 && rs != 0x06 && rs != 0x08)
+		return (I_FS(i) & 1) != 0;
+	return false;
+}
+
 static void decode(uint32_t i, struct dec *d)
 {
 	unsigned rs = I_RS(i), rt = I_RT(i), rd = I_RD(i);
@@ -256,6 +271,7 @@ struct ctx {
 	unsigned k;             /* instrucción en curso */
 	bool in_ds;
 	int body;               /* etiqueta del cuerpo (vuelta de los bucles) */
+	bool fr_check;          /* el código depende de Status.FR: la entrada lo revisa (fr_dependent) */
 	int exit_before[SALSA64_REC_MAX_INSNS];
 	int exit_after[SALSA64_REC_MAX_INSNS];
 	struct pending_exit pending[2 * SALSA64_REC_MAX_INSNS];
@@ -2111,9 +2127,11 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	c->n = n;
 	for (unsigned k = 0; k < n; k++) {
 		any_cop1 |= c->d[k].cop1;
+		c->fr_check |= fr_dependent(c->d[k].w);
 		c->exit_before[k] = c->exit_after[k] = c->exit_after_mem[k] = -1;
 		c->insn_label[k] = -1;
 	}
+	rec->compiled_fr_dep = c->fr_check;
 	/* ¿Bucle? El salto final vuelve al inicio (emit_taken). */
 	bool loop = false;
 	if (c->has_branch && !temp) {
@@ -2170,7 +2188,19 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	E(c, ppc_addi(0, R_CYCLES, (int32_t)n));
 	E(c, ppc_cmpld(0, 0, R_NEXT));
 	emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(0, PPC_GT), start_exit);
-	if (any_cop1) {
+	int fr_exit = -1;
+	if (any_cop1 && c->fr_check) {
+		/* CU1 y FR de una vez: rotar 6 deja CU1, CU0, RP y FR en los cuatro
+		 * bits bajos y la máscara envolvente (bits 31 y 0–28) quita CU0 y
+		 * RP. Si no es «CU1 = 1 y el FR de la compilación», al despachador
+		 * (exit_fr: busca el gemelo, o con CU1 = 0 interpreta). */
+		fr_exit = new_label(c);
+		E(c, ppc_lwz(0, OFF(status), R_CPU));
+		E(c, ppc_rlwinm(0, 0, 6, 28, 31));
+		E(c, ppc_rlwinm(0, 0, 0, 31, 28));
+		E(c, ppc_cmpwi(0, 0, 8 | (rec->fr ? 1 : 0)));
+		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(0, PPC_EQ), fr_exit);
+	} else if (any_cop1) {
 		E(c, ppc_lwz(0, OFF(status), R_CPU));
 		E(c, ppc_rlwinm(0, 0, 3, 31, 31));  /* CU1 (bit 29); andis. es microcódigo */
 		E(c, ppc_cmpwi(0, 0, 0));
@@ -2223,6 +2253,11 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	bind(c, start_exit);
 	li64(c, 3, pc);
 	emit_b(c, abs_label(c, rec->exit_start), false);
+	if (fr_exit >= 0) {
+		bind(c, fr_exit);
+		li64(c, 3, pc);
+		emit_b(c, abs_label(c, rec->exit_fr), false);
+	}
 	if (vt_miss >= 0) {  /* la página cambió de traducción: que la busque el despachador */
 		bind(c, vt_miss);
 		li64(c, 3, pc);

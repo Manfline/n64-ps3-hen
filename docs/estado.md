@@ -1,5 +1,57 @@
 # Estado
 
+## 2026-10-12 — Donkey Kong 64 al 20 %: el recompilador vaciaba la caché en cada cambio de Status.FR (rama `zealous-wilbur-cec8b5`, paquete SLSA00102 «Salsa64 DK64»)
+
+- **Síntoma (PS3 real, main 8c876ac):** DK64 a 12–13 campos/s con 1,4 MIPS
+  útiles y 65–75 ms de emulación por campo; el log decía 445 864 bloques,
+  959 vaciados y 1 desalojo en 30 s. La HLE gráfica (1 ms por tarea) y el
+  audio no pesaban.
+- **Causa (confirmada en el host con un contador en la escritura de
+  Status):** DK64 corre hilos con FR = 1 y otros con FR = 0, y cada cambio
+  de hilo cambia el bit al reponer SR: ~260 cambios por segundo de consola
+  (4 100 en 16 s). El recompilador compilaba toda la caché para un FR y la
+  vaciaba entera al cambiar (`salsa64_rec_run`): en qemu, 4 173 vaciados y
+  1,28 M bloques compilados en 16 s de consola (1 340 por campo), 236 s de
+  reloj. No era el DMA del PI, ni CACHE, ni la TLB, ni los ids: los
+  vaciados ahora se cuentan por causa (`stats.flushes_by[]`, en la línea
+  «recompilador:» del frontend y de salsa64-run).
+- **Arreglo (docs/rec-ppe.md, «Status.FR: gemelos en vez de vaciar»):**
+  solo depende de FR un bloque que accede a un registro impar de la FPU
+  (`fr_dependent`, por instrucción); su entrada revisa CU1 y FR de una vez
+  (una instrucción más que antes) y, si no coinciden, sale por `exit_fr` y
+  el despachador busca o compila el gemelo para el otro FR (`twin[]` en
+  KSEG0, filtro por FR en `xhash` fuera); los demás bloques valen con los
+  dos. `salsa64_rec_invalidate` mata a los dos gemelos. +128 KB
+  (docs/memory-budget.md).
+- **Host (qemu, DK64 16 s de consola, `--rec`):** 236 → 7,5 s de reloj,
+  1 284 166 → 8 867 bloques, 4 173 → 0 vaciados, 256 bloques dependen de FR
+  y **0 gemelos** (los hilos con FR = 0 no tocan registros impares: el
+  mismo código no corre con los dos FR).
+- **La cuenta de «93 % en bucles de espera» es coherente:** DK64 ya da 81 %
+  con el intérprete en el host; con 12 campos/s el CPU emula 19 M ciclos
+  por segundo y el 7 % útil son 1,4 MIPS. Lo que estaba mal era el costo de
+  ese 7 %, no la cuenta.
+- **Validación en el host:** unitarias 426/426 con el recompilador en los
+  cinco modos (nueva `fr_switch_keeps_code_cache`), nemu64-test con las
+  433 fallas de la línea base, vitest, estados y `--lockstep` de
+  nemu64-test y vitest sin diferencias (`tools/test-rec.sh --lockstep`);
+  GoldenEye hasta la presa (7,5 G ciclos) y la intro de Perfect Dark (3 G)
+  en `--lockstep` sin diferencias. Build de PS3 sin avisos.
+- **PS3 real (paquete SLSA00102 «Salsa64 DK64», ad18cce + main da2adcd;
+  el autor):** DK64 **59,6–60,0 campos/s (100 % de NTSC)** en la intro, la
+  isla y el juego, emulación 4–6,5 ms por campo (antes 65–75), 11 908
+  bloques y **0 vaciados** en 2 min (antes 445 864 y 959 en 30 s); una sola
+  ventana a 48 campos/s al cargar la isla. 756 bloques dependen de FR y 0
+  gemelos: el código con registros impares no corre con los dos FR. Zelda
+  (con estado cargado y pausa) y SM64 al 100 %, un vaciado cada uno (el de
+  cargar el estado); Perfect Dark al 7 % por la espera de copias de
+  da2adcd, ya arreglada en main (98def88). Quedan dos defectos de
+  presentación en DK64 que no son del recompilador y pasan a la rama de
+  gráficos: los logos en alta resolución entrelazada (640×474, VI_WIDTH
+  1280, origen y V_VIDEO alternando por campo) salen como la mitad de
+  arriba estirada, y en el juego la imagen hace «zoom» cada 2 campos con
+  el VI fijo (320×237, dos búferes alternos): escala distinta por destino.
+
 ## 2026-10-12 (noche) — Star Fox 64 colgado a los 5 s: el espejo del framebuffer pisaba un DMA (rama `infallible-wozniak-aa210c`)
 
 Main lo reportó de la PS3 real (Rev 1 y Rev 0: letras unos 5 s y negro, el
