@@ -97,12 +97,36 @@ Comparación de capturas cada 500 campos contra main: solo cambian Banjo,
 Conker y el logo de Zelda (SM64, Mario Kart, GoldenEye y Perfect Dark
 idénticos).
 
+**Temblor de Banjo (PS3, visto por el autor con el paquete de arriba):**
+los modelos «avanzan y retroceden». Banjo arranca la tarea del cuadro
+siguiente con el RDP congelado (FREEZE) sobre el búfer que el VI todavía
+muestra y lo descongela al cambiar de búfer; el núcleo ya retenía la
+interrupción del DP, pero presentación traducía la tarea al RSX en cuanto
+terminaba: ese búfer mostraba el cuadro nuevo un campo antes y después el
+otro búfer el anterior. Ahora cada campo cuenta como visibles solo las tareas
+que el RDP pudo ejecutar (sin la retenida, `rsp.dp_held`). Confirmado por el
+autor con su estado de la escena de la bruja: ya no tiembla.
+
+**Rompecabezas de Banjo negro en la PS3 (pendiente, efectos de
+framebuffer):** las piezas son texturas que el CPU copia del framebuffer en
+la RDRAM (70 080 lecturas de 0x3a5d00, medido en el host). Al rearmarse, el
+juego dibuja el título en un búfer que el VI no muestra y lo copia 2–4 campos
+después; en el host el espejo del framebuffer es inmediato y las piezas
+llevan el título, en la PS3 llega tarde y el CPU copia lo que había (negro, o
+la imagen de antes). Reproducido con dos estados del autor: desde ellos el
+host dibuja las piezas bien y la PS3 negras. Arreglo posible: esperar el
+espejo antes de la interrupción del DP, como opción por juego (cuesta
+milisegundos por cuadro); queda para después (decisión del autor).
+La pantalla negra entre el logo de Rare y la cascada no está atribuida: en
+el host ahí hay un fundido blanco (una nube 3D enorme pegada a la cámara);
+falta un SELECT + R2 en la PS3.
+
 Pendiente (PS3 real, paquete «Salsa64 gráficos» SLSA00099; confirma el
 autor):
-- [ ] Banjo-Kazooie: la intro (Banjo tocando con la cascada y los árboles
-      detrás), partida nueva, la casa por dentro y Spiral Mountain con
-      cielo; que no tiemblen los modelos ni falten polígonos.
-- [ ] Conker: la cara (hocico y boca) en la intro con el logo de Rare.
+- [x] Banjo-Kazooie: se ven los modelos, las texturas y el cielo; ya no
+      tiembla (el autor, 2026-10-12).
+- [x] Conker: la cara (hocico y boca) en la intro con el logo de Rare:
+      «ya sale bien» (el autor, 2026-10-12).
 - [ ] Zelda: el logo de N64 al arrancar, a la escala de siempre (sin las
       líneas de entrelazado).
 - [ ] Mario Kart en Luigi Raceway, GoldenEye en el túnel de Dam y la túnica
