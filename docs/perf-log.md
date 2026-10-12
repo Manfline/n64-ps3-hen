@@ -46,6 +46,8 @@ salas prerrenderizadas de Zelda → TEXRECT → estado de dibujo → combiner):
 | 8c876ac (efectos de Majora's Mask) | 107 904 | 146 704 | 6 496 | 9 504 | **−3 008** |
 | este arreglo, sobre 8c876ac | 102 560 | 145 168 | 13 408 | 9 600 | **3 808** |
 | con el desenfoque de Perfect Dark y S2DEX en `-Os` | 103 744 | 145 296 | 12 128 | 9 488 | **2 640** |
+| más el combiner memorizado (b8d9041) | 105 488 | 145 680 | 9 952 | 9 504 | **448** |
+| más el directorio de la caché de texturas en 896 entradas | 105 984 | 142 096 | 13 024 | 9 504 | **3 520** |
 
 La rama de los arreglos gráficos sumó 4,1 KB de código (estado de dibujo,
 TEXRECT por tile, decodificación con máscara, blender con constante) y
@@ -129,8 +131,11 @@ host y en RPCS3.
 102 560 → 103 744 bytes (+2 080 de las texturas desde un destino y −896 de
 compilar los fondos de S2DEX con `-Os`), bss +128 (la tabla de color
 images). Holgura de la pila: 3 808 → 2 640 bytes; sin el S2DEX en `-Os`
-quedaba en 1 632, apenas sobre el mínimo de 1 536 que comprueba el build
-(«Pila del SPE 0», arriba).
+quedaba en 1 632, apenas sobre el mínimo de 1 536 que comprueba el build.
+Con el combiner memorizado encima bajaba a 448, y el directorio de la caché
+de texturas pasó de 1024 a 896 entradas (−3,5 KB; en el host, el máximo de
+texturas distintas en 100 campos es 428, GoldenEye en Dam): 3 520 («Pila
+del SPE 0», arriba).
 
 **PS3 real** (2026-10-12, Slim CECH-3011A, HFW 4.91 + HEN; paquete
 SLSA00101 «Salsa64 desenfoque», 7b20d0b sobre main 98def88; 1080p, escala

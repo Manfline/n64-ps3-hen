@@ -25,7 +25,10 @@
  * veces la misma con la caché llena o apagada): 32 entradas, 1,5 KB del
  * local store del SPE 0. */
 #define GFX_ARENA_TEXTURES 32
-#define GFX_TC_ENTRIES  1024 /* texturas en la caché entre tareas */
+/* Texturas en la caché entre tareas: 896 (antes 1024) para la pila del SPE
+ * 0; en el host, el máximo de texturas distintas en 100 campos es 428
+ * (GoldenEye en Dam). No hace falta potencia de 2 (texcache.c usa %). */
+#define GFX_TC_ENTRIES  896
 #define GFX_TC_SLOTS    2048 /* índice por hash de la caché (potencia de 2) */
 #define GFX_MAX_COMMANDS (1u << 20)
 

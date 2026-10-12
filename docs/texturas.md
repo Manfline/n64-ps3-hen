@@ -40,8 +40,11 @@ la TMEM ni SETTILE/SETTILESIZE) ni siquiera se vuelve a hashear.
 
 **Dónde viven.** En una región de 8 MB de memoria principal mapeada al RSX
 (`src/rdp`, junto a los búferes de salida); el RSX lee las texturas de ahí
-sin copiarlas. El directorio (1024 entradas de 28 bytes + índice de 2048
-ranuras: 32 KB) vive en el local store del SPE 0, dentro de `gfx_state`.
+sin copiarlas. El directorio (896 entradas de 28 bytes + índice de 2048
+ranuras: 28,5 KB) vive en el local store del SPE 0, dentro de `gfx_state`.
+Eran 1024 entradas: bajaron por la pila del SPE 0 (docs/perf-log.md, «Pila
+del SPE 0»); en el host, el máximo de texturas distintas en 100 campos es
+428 (GoldenEye en Dam).
 
 **Reemplazo.** La región se llena como anillo: las entradas forman una cola en
 el orden en que ocupan la región; se reserva en `head_off` y se desaloja lo
