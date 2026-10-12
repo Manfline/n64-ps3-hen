@@ -46,3 +46,10 @@ estado vale hasta el siguiente, por eso cada pulsación lleva su suelta `-`):
   desde el 2650 A sostenida con el stick a la derecha en tres tramos: la
   carrera empieza en el campo ~2550 y el kart da tumbos por la pista hasta
   el ~6000. En esos campos no hay cargas a la TMEM desde un framebuffer.
+- `banjo-casa.pad`: Banjo-Kazooie (USA) sin partida: deja correr la intro
+  (Banjo tocando con el fondo de la cascada, campos ~1700–2600), START en
+  el título, el archivo vacío «GAME 1» con A y la presentación de
+  Gruntilda, Tooty y Bottles con A cada 60 campos hasta el 16000 (la casa
+  por dentro hacia el ~11000). Banjo sale de su casa a Spiral Mountain
+  desde el campo ~17000. Con el arranque del 6103 completo (2026-10-12):
+  con el de antes el juego cambia por otro camino y los campos no coinciden.

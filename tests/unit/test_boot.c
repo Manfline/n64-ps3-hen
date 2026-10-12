@@ -173,7 +173,7 @@ static void rom_ipl3_pattern(void)
 }
 
 /* Dirección de arranque y semilla por variante; nada en la RDRAM baja salvo
- * las variables de libultra. */
+ * las variables de libultra (y lo propio del 6103 y del 6105, abajo). */
 static void boot_by_cic(void)
 {
 	static const struct {
@@ -207,12 +207,45 @@ static void boot_by_cic(void)
 		CHECK_EQ(t_rd32(0x310), v[i].cic_id);  /* osCicId */
 		CHECK_EQ(t_rd32(0x318), 0x800000);
 		if (v[i].cic != SALSA64_CIC_6105) {
-			CHECK_EQ(t_rd32(0x004), 0);
+			if (v[i].cic != SALSA64_CIC_6103)
+				CHECK_EQ(t_rd32(0x004), 0);
 			CHECK_EQ(t_rd32(0x2E8), 0);
 			CHECK_EQ(t_rd32(0x3F0), 0);
 			CHECK_EQ(t_rd32(0x2FB1F0), 0);
 		}
+		if (v[i].cic != SALSA64_CIC_6103) {
+			CHECK_EQ(salsa64_rd32(t_n64.bus.sp_mem), 0);
+			CHECK_EQ(salsa64_rd32(t_n64.bus.sp_mem + 0x1000), 0);
+		}
 	}
+	done();
+}
+
+/* CIC 6103: copia de DMEM 0x4C0–0x764 a RDRAM 0x000–0x2A4 (Banjo-Kazooie
+ * comprueba 0x1D8 antes de cada proyección) y la DMEM y la IMEM en 0xFF con
+ * 6103 en IMEM 0x000 (lo comprueba antes de traer el arranque del RSP). */
+static void boot_cic6103_leftovers(void)
+{
+	struct salsa64_boot_info info;
+	rom_header(0x80100400, 'E');
+	rom_ipl3_pattern();
+	salsa64_bus_set_rom(&t_n64.bus, rom, sizeof rom);
+	CHECK(salsa64_boot_hle_as(&t_n64, SALSA64_BOOT_TV_AUTO, SALSA64_CIC_6103, &info));
+
+	CHECK_EQ(t_rd32(0x000), salsa64_rd32(rom + 0x4C0));
+	CHECK_EQ(t_rd32(0x1D8), salsa64_rd32(rom + 0x698));
+	CHECK_EQ(t_rd32(0x2A0), salsa64_rd32(rom + 0x760));
+	CHECK_EQ(t_rd32(0x2A4), 0);
+	CHECK_EQ(t_rd32(0x300), SALSA64_TV_NTSC);
+	CHECK_EQ(t_rd32(0x310), 6103);  /* osCicId */
+	CHECK_EQ(t_rd32(0x318), 0x800000);
+
+	const uint8_t *dmem = t_n64.bus.sp_mem, *imem = dmem + 0x1000;
+	CHECK_EQ(salsa64_rd32(dmem), 0xFFFFFFFF);
+	CHECK_EQ(salsa64_rd32(dmem + 0xFFC), 0xFFFFFFFF);
+	CHECK_EQ(salsa64_rd32(imem), 6103);
+	CHECK_EQ(salsa64_rd32(imem + 4), 0xFFFFFFFF);
+	CHECK_EQ(salsa64_rd32(imem + 0xFFC), 0xFFFFFFFF);
 	done();
 }
 
@@ -340,6 +373,7 @@ void t_suite_boot(void)
 	RUN(boot_elf_errors);
 	RUN(boot_flat_like_libultra);
 	RUN(boot_by_cic);
+	RUN(boot_cic6103_leftovers);
 	RUN(boot_cic6105_leftovers);
 	RUN(isviewer_prints);
 	RUN(pi_bus_subword_reads);

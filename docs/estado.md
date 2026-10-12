@@ -1,5 +1,70 @@
 # Estado
 
+## 2026-10-12 — Banjo-Kazooie: la protección anticopia del CIC 6103 (planos 750 y 1250) y el arranque del RSP (rama `infallible-wozniak-aa210c`, paquete SLSA00099 «Salsa64 gráficos»)
+
+Lo visto por el autor en la PS3 con v0.1.0 (modelos que tiemblan, cosas
+dibujadas encima de otras, polígonos que faltan, el cielo) no era de la HLE
+ni del RSX: el juego dibujaba así a propósito porque nuestro arranque HLE no
+dejaba lo que deja el IPL3 del CIC 6103.
+
+Diagnóstico (host, respaldo propio, `docs/pads/banjo-casa.pad`):
+- La proyección de Banjo (`G_MTX` de la perspectiva y tres rotaciones)
+  traía en toda escena cerca = 750 y lejos = 1250 (escala 0,5, perspNorm
+  65). En la intro el fondo (árboles, cascada, cielo) quedaba detrás del
+  plano lejano y la HLE rechaza los triángulos con los tres vértices ahí;
+  Tooty, Bottles, la casa por dentro y el cielo de Spiral Mountain (una
+  malla a w 35–135 alrededor de la cámara) quedaban delante del cercano y se
+  recortaban; lo que quedaba en medio tenía su profundidad en una franja
+  estrecha (z/w normalizada de 0,84 a 1,07 para Banjo): temblores y
+  superposiciones. En el campo 2400 de la intro, 75,5 % de la imagen negra.
+- El microcódigo real (LLE, desde el mismo estado) daba la misma imagen que
+  la HLE: fondo negro y Tooty cortada. Así se descartaron `src/rsp/gfx`,
+  rsxkit y el rasterizador.
+- La decomp de Banjo-Kazooie (`viewport_setRenderPerspectiveMatrix`, bloque
+  `ANTI_TAMPER`) lee la RDRAM física 0x1D8 antes de cada proyección; si no
+  vale lo que deja el IPL3, cambia 30 y 4000 por 750 y 1250. Ejecutando en
+  el emulador el IPL3 del propio respaldo (sin desensamblarlo) se midió lo
+  que deja: su imagen de DMEM 0x4C0–0x764 en RDRAM 0x000–0x2A4 (0x1D8 = ROM
+  0x698), y la DMEM y la IMEM en 0xFF salvo 6103 en IMEM 0x000.
+- La segunda la comprueba `ucode_load` al iniciar: sin ella el juego no
+  trae de la ROM (0xB70) el arranque del RSP y su búfer queda en ceros. Por
+  eso `--lle=all` no arrancaba (pendiente del 2026-10-10: «la primera tarea
+  corre 958 M instrucciones sin tocar COP0»).
+
+Arreglo (`src/core/boot.c`, `boot_x103`, como el del 6105): copia de DMEM
+0x4C0–0x764 (los bytes del cartucho del usuario) a RDRAM 0x000–0x2A4, DMEM e
+IMEM en 0xFF y 6103 en IMEM 0x000. Fuentes en docs/THIRD_PARTY.md y tabla
+en docs/cpu-vr4300.md («Arranque HLE»).
+
+Medido en el host:
+- Intro, campo 2400: 582 → 862 triángulos por tarea; píxeles negros 75,5 %
+  → 0,4 %. Se ven el fondo, Tooty entera, la casa con Banjo en la cama, el
+  cielo nocturno y Spiral Mountain con su cielo.
+- HLE contra el microcódigo real (`--lle=all` desde el mismo estado, 40
+  campos después; el LLE ahora arranca solo): 2109 y 3230 píxeles distintos
+  de 76 800 en la intro (campos 2470, 2830), 5468 en la casa (11490), 1281 y
+  1329 en juego frente a la casa (17000, 17600); 16 671 en la vista aérea
+  (9490) con la cámara en movimiento. Lo distinto es movimiento (el LLE
+  lleva otro ritmo), no geometría.
+- Zelda, SM64, Mario Kart, GoldenEye, Perfect Dark y Conker: capturas cada
+  500 campos idénticas a las de main (no pasan por el 6103).
+- La protección no depende de la HLE gráfica: en la PS3 debería verse igual
+  que en el host.
+
+Herramientas: `--state-load` con `--lle` carga el estado (guardado con la
+HLE) y sigue con el microcódigo real, para comparar las dos en la misma
+escena; `docs/pads/banjo-casa.pad`.
+
+Verificación: `tools/build.sh test-host` 391/391 (prueba nueva
+`boot_cic6103_leftovers`), `tools/test-roms.sh` (gfxtest 35/35 ×3),
+`tools/build.sh` sin avisos.
+
+Pendiente:
+- [ ] PS3 real: Banjo-Kazooie en la intro, la casa y Spiral Mountain con
+      el paquete «Salsa64 gráficos» (SLSA00099); confirma el autor.
+- [ ] Otros juegos del 6103 (Diddy Kong Racing, Paper Mario) no se
+      probaron; el arranque nuevo reproduce lo que deja la consola.
+
 ## 2026-10-11 — Estados guardados con 10 ranuras por juego y contador de FPS (rama `wonderful-blackwell-6f40d3`, paquete SLSA00094 «Salsa64 estados»)
 
 Hecho (diseño y decisiones en docs/estados.md):
@@ -930,7 +995,8 @@ de arriba y en docs/framebuffer.md.
 - Recompilador: más velocidad del CPU en GoldenEye y Perfect Dark.
 - Efectos de framebuffer (pendiente de abajo), sobre la presentación ya en main.
 - HLE: **cara de Conker** (polígonos negros en la boca, visto en la PS3; no lo
-  explicaba la presentación) y z/w > 1 en Banjo (modelos que tiemblan, cielo).
+  explicaba la presentación). Lo de Banjo (z/w > 1, modelos que tiemblan,
+  cielo) era la protección anticopia del 6103 (entrada del 2026-10-12).
 - Gráficos pendientes (actualizado 2026-10-11): líneas del logo de Zelda (la
   HLE muestrea mal la segunda textura de ruido del texto «NINTENDO 64»),
   defecto en la túnica de Link, líneas azules en uniones de GoldenEye.
@@ -1211,6 +1277,12 @@ posición) y las capturas salen del tamaño recortado. En rsxkit,
 fila entera y la columna va en las coordenadas de textura; antes el offset
 se redondeaba a 32 píxeles).
 
+> **Corrección (2026-10-12):** el z/w > 1 y el domo fuera del plano lejano
+> venían de la proyección de 750 y 1250 que pone la protección anticopia
+> cuando falta lo que deja el IPL3 del 6103 (entrada del 2026-10-12). Además,
+> rsxkit no descarta por z/w > 1: el RSX tiene zclamp y sin descarte de los
+> planos cercano y lejano (`rsxSetZMinMaxControl`).
+
 **Fondo negro de Banjo (c) — no es presentación:** en la Mac también sale
 negro (cielo y paisaje) tras Banjo tocando. En la tarea del campo 2400 el
 primer dibujo tras el borrado son 8 triángulos con textura, w de −88 a
@@ -1284,9 +1356,12 @@ quedó en `file:oot.z64`.
 Pendiente:
 - [ ] Integración en main (la rama lleva main
       b32a6e6 fusionado y la verificación completa en verde).
-- [ ] HLE: el cielo y el paisaje de Banjo (arriba). Trabajo de F3D.
-- [ ] LLE: con `--lle=all` Banjo no arranca (la primera tarea corre 958 M
-      instrucciones sin tocar COP0); no es del freeze. Trabajo del LLE.
+- [x] HLE: el cielo y el paisaje de Banjo (arriba). No era de F3D: la
+      protección anticopia del 6103 (entrada del 2026-10-12).
+- [x] LLE: con `--lle=all` Banjo no arranca (la primera tarea corre 958 M
+      instrucciones sin tocar COP0); no es del freeze. Era la misma
+      protección: sin lo que deja el IPL3 el juego no trae el arranque del
+      RSP (entrada del 2026-10-12).
 - [ ] El VI de Banjo muestra 213 de 240 líneas (V_VIDEO 61–488): en una
       tele quedarían bandas; aquí se estira a 4:3. Colocar la imagen según
       la ventana del VI cuando haya un caso que lo necesite.

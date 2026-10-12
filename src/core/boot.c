@@ -12,6 +12,7 @@
  *     libultra en 0x80000300.
  *   - CIC 6105: solo direcciones y tamaños, de varias fuentes cotejadas
  *     (docs/THIRD_PARTY.md); los bytes los pone el cartucho del usuario.
+ *   - CIC 6103: lo mismo para su copia a la RDRAM (docs/THIRD_PARTY.md).
  */
 #include "core/boot.h"
 
@@ -29,6 +30,13 @@
 #define PT_LOAD          1u
 #define PT_N64_DECOMP    0x64E36341u
 #define PF_N64_COMPRESSED 0x1000u
+
+/* CIC 6103: copia de su imagen en DMEM a la RDRAM baja; DMEM e IMEM en
+ * 0xFF salvo el número del CIC en IMEM 0x000. */
+#define X103_COPY_SRC    0x4C0u      /* DMEM, = ROM */
+#define X103_COPY_END    0x764u
+#define X103_COPY_DST    0x000u
+#define X103_IMEM_CIC    6103u
 
 /* CIC 6105: copia de su imagen en DMEM a la RDRAM y DMA con paso del RSP. */
 #define X105_COPY_SRC    0x554u      /* DMEM, = ROM (el IPL2 copia 0x40–0xFFF) */
@@ -180,6 +188,26 @@ static void boot_x105(struct salsa64_bus *bus)
 	salsa64_wr32(ram + X105_MEMSIZE, bus->rdram_size);
 }
 
+/*
+ * Lo que el IPL3 del 6103 deja al saltar al juego, y que Banjo-Kazooie
+ * comprueba:
+ *   - su imagen de DMEM 0x4C0–0x764 (la parte que corre desde ahí al final)
+ *     en la RDRAM 0x000–0x2A4. Antes de cada proyección el juego lee 0x1D8
+ *     y, si no está, cambia los planos cercano y lejano (30 y 4000) por 750
+ *     y 1250: falta lo cercano (personajes, el cielo), lo lejano (el fondo)
+ *     y la profundidad tiembla. Los vectores de excepción que pone después
+ *     el juego pisan parte de la copia, como en la consola;
+ *   - la DMEM y la IMEM en 0xFF salvo 6103 en IMEM 0x000. Si no, el juego no
+ *     trae de la ROM el arranque del RSP (con la HLE no se nota; el
+ *     microcódigo real no arranca).
+ */
+static void boot_x103(struct salsa64_bus *bus)
+{
+	memcpy(bus->rdram + X103_COPY_DST, bus->rom + X103_COPY_SRC, X103_COPY_END - X103_COPY_SRC);
+	memset(bus->sp_mem, 0xFF, SALSA64_SP_MEM_SIZE);
+	salsa64_wr32(bus->sp_mem + 0x1000, X103_IMEM_CIC);
+}
+
 static bool boot_flat(struct salsa64_n64 *n64, struct salsa64_boot_info *info)
 {
 	struct salsa64_bus *bus = &n64->bus;
@@ -199,7 +227,9 @@ static bool boot_flat(struct salsa64_n64 *n64, struct salsa64_boot_info *info)
 	if (!rdram_range(bus, entry, len, &pa))
 		return fail(info, "la dirección de arranque del encabezado no cae en la RDRAM");
 	memcpy(bus->rdram + pa, bus->rom + SALSA64_ROM_IPL3_END, len);
-	if (info->cic == SALSA64_CIC_6105)
+	if (info->cic == SALSA64_CIC_6103)
+		boot_x103(bus);
+	else if (info->cic == SALSA64_CIC_6105)
 		boot_x105(bus);
 
 	/* Variables de arranque de libultra (osTvType, osRomType, osRomBase,

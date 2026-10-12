@@ -72,7 +72,8 @@
  * Estados guardados (core/state.c): --state-save CAMPO:ARCHIVO guarda la
  * máquina al terminar ese campo del VI (hasta 8; va campo por campo),
  * --state-load ARCHIVO la carga después del arranque y sigue desde ahí
- * (con --lockstep, también la referencia), y --fields N termina al acabar
+ * (con --lockstep, también la referencia; con --lle, el estado guardado con
+ * la HLE sigue con el microcódigo real), y --fields N termina al acabar
  * el campo N. Es el mismo formato que en la PS3: un estado de la consola
  * se reproduce aquí. La prueba de determinismo (tools/test-roms.sh) corre
  * de corrido hasta M y, aparte, guarda en N, carga y sigue hasta M: los dos
@@ -1779,8 +1780,14 @@ static bool state_load_file(struct salsa64_n64 *m, const char *path)
 	char err[160] = "no se abre";
 	bool broken = false;
 	FILE *f = fopen(path, "rb");
+	/* Con --lle, el estado (guardado con la HLE) se carga con el LLE
+	 * apagado y se sigue con el microcódigo real: así se comparan las dos
+	 * en la misma escena sin correr todo el juego con el LLE. */
+	enum salsa64_lle_mode mode = m->bus.rsp.lle_mode;
+	m->bus.rsp.lle_mode = SALSA64_LLE_OFF;
 	bool ok = f && salsa64_rsp_quiesce(&m->bus) &&
 		  salsa64_state_load(m, state_fread, f, state_scratch, err, sizeof err, &broken);
+	m->bus.rsp.lle_mode = mode;
 	if (f)
 		fclose(f);
 	if (!ok) {
