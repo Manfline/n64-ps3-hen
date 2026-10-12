@@ -98,12 +98,15 @@ en sus tres variantes (`tools/test-roms.sh`) y en RPCS3 con el frontend
 (`tools/test-phase2.sh`: 45 texturas del RSX, 0 decodificadas en el PPE).
 En la pausa de Zelda el consumidor decodificó 360 franjas de 320 × 6: las
 40 del fondo guardado para el CPU en las tres tareas después de cada una de
-las tres copias. Perfect Dark (15):
-distintas solo en las 180 filas de las franjas, en 1 nivel de 255 (hasta 3
-en el campo 2600, una escena oscura con mucho movimiento): el host dibuja a
-1× y su imagen tiene 8 bits por canal, contra los 5 de la copia en la
-RDRAM que se leía antes; la diferencia se acumula con la realimentación del
-desenfoque.
+las tres copias. Perfect Dark (15): sobre b445531, distintas solo en las
+180 filas de las franjas, en 1 nivel de 255 (hasta 3 en el campo 2600),
+porque la imagen del host tenía 8 bits por canal y la copia en la RDRAM 5.
+Sobre main da2adcd, con los destinos de 16 bits del host a 5 bits por
+canal, 14 de 15 idénticas; en el campo 2000, al empezar el efecto, 11
+píxeles casi negros difieren en un paso de 5 bits (0 contra 8 en un canal),
+sin causa identificada. Con esa base, las de la pausa de Zelda, SM64, Mario
+Kart, GoldenEye, Banjo y Conker siguen idénticas, y gfxtest 42/42 en el
+host y en RPCS3.
 
 **SPE 0** (`spu-size` y `tools/spu-stack.py`, sobre main da2adcd): texto
 102 560 → 103 744 bytes (+2 080 de las texturas desde un destino y −896 de

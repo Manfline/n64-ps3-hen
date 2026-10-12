@@ -294,13 +294,18 @@ comerse la pila, los fondos de S2DEX se compilan con `-Os` (−0,9 KB de
 código y 112 bytes menos en la cadena más honda): holgura de la pila
 2,6 KB (`src/spu/gfx/main.c`; el build falla por debajo de 1,5 KB).
 
-**Determinismo de los estados en el host.** Leer el cuadro anterior desde
-la imagen del rasterizador (8 bits por canal) y no desde su copia en la
-RDRAM (5 bits) hace que, al cargar un estado a mitad del desenfoque, la
-primera tarea lea la copia y la RDRAM difiera unos campos (4699 bytes dos
-campos después; igual a 100 campos). La rama de los efectos de Majora's
-Mask guarda los destinos de 16 bits del host con 5 bits por canal, que lo
-resuelve: se comprueba al traerla.
+**Determinismo de los estados en el host.** Al cargar un estado los
+destinos se sueltan y la primera tarea lee el cuadro anterior de la RDRAM;
+de corrido, de la imagen del rasterizador. Con imágenes de 8 bits por canal
+eso daba otra RDRAM (4699 bytes dos campos después de cargar a mitad del
+desenfoque de Perfect Dark). Desde que los destinos de 16 bits del host
+guardan 5 bits por canal (rama de Majora's Mask), las dos lecturas dan lo
+mismo: guardar en el campo 2100 y cargar da la misma RDRAM que de corrido
+dos campos después y la misma RDRAM e imagen cien campos después (main sin
+esta rama: 83 bytes distintos en el campo 2200). Diez campos después de
+cargar difieren los dos, igual con o sin esta rama, en 147 274 bytes: el
+espejo del framebuffer, que tras cargar se copia al presentarlo y no al
+terminar la tarea.
 
 ## Escala por destino
 
@@ -403,10 +408,9 @@ memoria en `docs/memory-budget.md`.
 - El desenfoque de Perfect Dark leído del RSX: medirlo en la PS3 real a 3×
   (campos/s, ms del SPE y texturas por tarea) y compararlo a ojo con el de
   la copia a 1×.
-- Traer la rama de Majora (destinos del host a 5 bits por canal) y repetir
-  la prueba de determinismo con Perfect Dark a mitad del desenfoque, y
-  comprobar que el baile del Espantapájaros y el recuerdo de Zelda también
-  salen por `GFX_TEX_TARGET`.
+- Comprobar que el baile del Espantapájaros y el recuerdo de Zelda en
+  Majora's Mask también salen por `GFX_TEX_TARGET` (hace falta un estado en
+  esas escenas).
 - Una franja de `LOADBLOCK` de libultra (ancho 1 en `SETTIMG`) con una tile
   de línea distinta del ancho de la imagen sigue sin reconocerse: no hay de
   dónde sacar el paso (no se vio en ningún juego).
