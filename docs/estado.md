@@ -50,9 +50,23 @@ Hecho:
   corridas (`--save-dir`). Para rastrear el chip:
   `EXTRA_CFLAGS=-DSALSA64_DEBUG_FLASH` y `--trace-from`.
 
+- **PS3 real** (2026-10-11, paquete SLSA00096, salida a 1080p): el autor
+  creó su archivo, pasó la escena inicial y jugó unos 18 minutos: «ya es
+  jugable». En el log, el `.fla` nuevo, los dos volcados diferidos de la
+  creación (512 y 128 escrituras del juego: sectores 2–5 y 0), 1959
+  comandos al chip en la primera sesión (0 desconocidos) y «cerrado sin
+  cambios pendientes»; al reabrir, los 128 KB leídos del `.fla` y el estado
+  de la ranura 0 cargado (campo 270 → 39145); más tarde el juego volvió a
+  escribir (256 escrituras, volcado diferido). Estados guardados y
+  cargados varias veces (8384 KB, ~0,7 s al guardar, 0,18–0,53 s al
+  cargar). 59,8 campos/s, CPU ~3,3 ms por campo. En el `.fla` bajado: la
+  partida en el sector 0 («ZELDA3» en 0x24) y los sectores 2–5 escritos.
+  El guardado con búho o con la Canción del Tiempo queda para más adelante
+  (hace falta jugar bastante para llegar).
+
 Falta:
-- [ ] PS3 real: Majora desde el menú, guardar con un búho o con la Canción
-      del Tiempo, salir, reabrir y ver la partida.
+- [ ] Guardar con un búho o con la Canción del Tiempo en la PS3, salir y
+      reabrir (la creación del archivo y los estados ya están probados).
 - [ ] Probar Paper Mario, Pokémon Snap y Puzzle League con respaldos
       propios. mupen64plus pone en 1 el bit 0 del estado al pedir el
       identificador «para Pokémon Puzzle League»; aquí, como en ares, una
