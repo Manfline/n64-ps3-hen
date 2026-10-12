@@ -127,8 +127,8 @@ autor):
       tiembla (el autor, 2026-10-12).
 - [x] Conker: la cara (hocico y boca) en la intro con el logo de Rare:
       «ya sale bien» (el autor, 2026-10-12).
-- [ ] Zelda: el logo de N64 al arrancar, a la escala de siempre (sin las
-      líneas de entrelazado).
+- [x] Zelda: el logo de N64 al arrancar sin las líneas de entrelazado: «ya
+      sale bien» (el autor, 2026-10-12).
 - [ ] Mario Kart en Luigi Raceway, GoldenEye en el túnel de Dam y la túnica
       de Link: SELECT + R2 cuando se vea el negro sobre el muro, las líneas
       azules o el defecto de la túnica, y bajar `gfxdump-*.bin` y `.ppm` por
