@@ -483,18 +483,22 @@ static uint8_t aa_byte(float v)
 	return v <= 0.0f ? 0 : v >= 255.0f ? 255 : (uint8_t)(v + 0.5f);
 }
 
+/* En el SPE la división son varias instrucciones: un recíproco por
+ * vértice, por arista y por suma, y lo demás multiplicaciones. */
 static void aa_grow(struct gfx_vertex v[3])
 {
-	float sx[3], sy[3];
+	float iw[3], sx[3], sy[3];
 	for (int i = 0; i < 3; i++) {
 		if (!(v[i].w > 1e-6f))
 			return;
-		sx[i] = v[i].x / v[i].w;
-		sy[i] = v[i].y / v[i].w;
+		iw[i] = 1.0f / v[i].w;
+		sx[i] = v[i].x * iw[i];
+		sy[i] = v[i].y * iw[i];
 	}
 	float area = (sx[1] - sx[0]) * (sy[2] - sy[0]) - (sy[1] - sy[0]) * (sx[2] - sx[0]);
 	if (!(area > 1e-3f || area < -1e-3f))
 		return;
+	float ia = 1.0f / area;
 	float sgn = area > 0.0f ? 1.0f : -1.0f;
 	/* Arista i, de v[i] a v[i + 1]: normal hacia afuera (sin normalizar) y
 	 * su recta corrida, n·p = c. */
@@ -517,23 +521,26 @@ static void aa_grow(struct gfx_vertex v[3])
 		float det = nx[e] * ny[i] - ny[e] * nx[i];
 		if (!(det > 1e-9f || det < -1e-9f))
 			continue;
-		float px = (c[e] * ny[i] - ny[e] * c[i]) / det, py = (nx[e] * c[i] - c[e] * nx[i]) / det;
+		float idet = 1.0f / det;
+		float px = (c[e] * ny[i] - ny[e] * c[i]) * idet, py = (nx[e] * c[i] - c[e] * nx[i]) * idet;
 		float dx = px - sx[i], dy = py - sy[i];
 		float m = (dx < 0.0f ? -dx : dx) > (dy < 0.0f ? -dy : dy) ? (dx < 0.0f ? -dx : dx) : (dy < 0.0f ? -dy : dy);
 		if (m > AA_MAX_GROW) {
-			px = sx[i] + dx * (AA_MAX_GROW / m);
-			py = sy[i] + dy * (AA_MAX_GROW / m);
+			float k = AA_MAX_GROW / m;
+			px = sx[i] + dx * k;
+			py = sy[i] + dy * k;
 		}
 		/* Baricéntricas de pantalla y, divididas por w, los pesos sobre
 		 * los vértices de recorte. */
-		float l0 = ((sx[1] - px) * (sy[2] - py) - (sy[1] - py) * (sx[2] - px)) / area;
-		float l1 = ((sx[2] - px) * (sy[0] - py) - (sy[2] - py) * (sx[0] - px)) / area;
-		float b[3] = { l0 / in[0].w, l1 / in[1].w, (1.0f - l0 - l1) / in[2].w };
+		float l0 = ((sx[1] - px) * (sy[2] - py) - (sy[1] - py) * (sx[2] - px)) * ia;
+		float l1 = ((sx[2] - px) * (sy[0] - py) - (sy[2] - py) * (sx[0] - px)) * ia;
+		float b[3] = { l0 * iw[0], l1 * iw[1], (1.0f - l0 - l1) * iw[2] };
 		float sum = b[0] + b[1] + b[2];
 		if (!(sum > 1e-12f))
 			continue;
+		float isum = 1.0f / sum;
 		for (int k = 0; k < 3; k++)
-			b[k] /= sum;
+			b[k] *= isum;
 		struct gfx_vertex *o = &v[i];
 		o->x = b[0] * in[0].x + b[1] * in[1].x + b[2] * in[2].x;
 		o->y = b[0] * in[0].y + b[1] * in[1].y + b[2] * in[2].y;
