@@ -962,13 +962,27 @@ static struct salsa64_overscan overscan_for(const struct salsa64_vi_frame *f)
  * lleva verificación, se marca para saltarlo y se le suelta la ranura. */
 static uint32_t post_last = ~0u;  /* índice del último campo encolado */
 
+/* Tareas gráficas que el RDP ya pudo dibujar, para presentación. Con el
+ * RDP congelado (DPC_STATUS FREEZE) la tarea terminada no se ejecuta hasta
+ * que el CPU lo descongela (rsp.c retiene su interrupción): Banjo-Kazooie
+ * arranca así la del cuadro siguiente sobre el búfer que el VI todavía
+ * muestra. Dibujarla antes en el RSX adelantaba ese cuadro un campo y luego
+ * el otro búfer mostraba el anterior: los modelos temblaban. */
+static volatile uint32_t tasks_visible;
+
+static uint32_t visible_tasks(void)
+{
+	return salsa64_rdp_tasks_done() - (n64.bus.rsp.dp_held ? 1u : 0u);
+}
+
 static void post_field(uint32_t flags)
 {
 	uint32_t last_idx = post_last;
 	struct field_msg m;
 	memset(&m, 0, sizeof m);
 	m.field = n64.bus.vi.fields;
-	m.tasks = salsa64_rdp_tasks_done();
+	m.tasks = visible_tasks();
+	tasks_visible = m.tasks;
 	m.snap = -1;
 	m.flags = flags;
 
@@ -1356,7 +1370,8 @@ static void present_field(const struct field_msg *m, uint64_t now)
 }
 
 /* Consume lo encolado: campos en orden y, al final, las tareas gráficas que
- * ya terminaron (son del campo siguiente). Solo lo que había al entrar: con
+ * ya terminaron y el RDP pudo dibujar (son del campo siguiente; no la que
+ * espera a que el CPU descongele el RDP). Solo lo que había al entrar: con
  * el flip en vsync y la emulación al mismo ritmo, mientras se presenta un
  * campo llega el siguiente, la cola no se vacía y el bucle de presentación
  * no volvía a leer los mandos (7,4 s sin leerlos en la selección de ranura
@@ -1375,7 +1390,8 @@ static void drain(uint64_t now, int present)
 		lwsync();
 		field_tail++;
 	}
-	salsa64_rdp_flush(~0u);
+	/* Al cerrar (sin presentar) se traduce todo: no queda nada en vuelo. */
+	salsa64_rdp_flush(present ? tasks_visible : ~0u);
 }
 
 /* Estadísticas de los dos hilos, cada STATS_US: lo visto en la ventana
@@ -1622,6 +1638,9 @@ static void state_barrier(void)
 		bool broken = false;
 		ok = states_load(&n64, slot, &t, err, sizeof err, &broken);
 		if (ok) {
+			/* La tarea que esperaba al RDP congelado era de antes de
+			 * cargar: se traduce ya, sobre destinos que se sueltan. */
+			salsa64_rdp_flush(~0u);
 			salsa64_rdp_drop_targets();
 			audio_out_flush();
 			post_last = ~0u;
