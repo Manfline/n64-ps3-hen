@@ -85,10 +85,15 @@ coordenadas del mapa de entorno (82 píxeles distintos en todo el cuadro) y
 el muestreo cae sobre el brillo de la textura: no hay evidencia de un error
 nuestro.
 
-**Mario Kart, cielo de Luigi Raceway:** en el host el cielo (un cuadro en
-pantalla con w = 1, sin profundidad) y el fondo se ven en toda la carrera
-del guion `mk64-luigi.pad`, también imitando el zclamp del RSX: lo de la PS3
-no se reproduce aquí. Para eso, **SELECT + R2** (`src/frontend/main.c`)
+**Mario Kart, negro arriba del muro de Luigi Raceway (resuelto):** era la
+tapa del muro, una franja que el juego dibuja con la textura apagada y un
+combiner TEXEL0·SHADE. La HLE dejaba ntex en 0 con los términos de textura:
+el host toma la textura que falta como 1 (blanco) y el RSX muestreaba una
+sin ligar (negro). Ahora con la textura apagada TEXEL0/TEXEL1 = 1 en la HLE
+(`gfx_combine_untextured`). Hallado con volcados SELECT + R2 de la PS3 (la
+captura del RSX con la franja negra, el mismo volcado en el host sin ella) y
+`tools/gfxdump.py`; confirmado por el autor en la PS3. Antes, en el host el
+cielo se veía siempre (no era el cielo: era esa franja). Para eso, **SELECT + R2** (`src/frontend/main.c`)
 guarda `gfxdump-<campo>.bin` con la salida de la HLE del cuadro en pantalla
 y `gfxdump-<campo>.ppm` con la captura del RSX de ese mismo cuadro: se
 dibuja en la Mac con `salsa64-run --raster-dump` y se compara.
@@ -129,12 +134,13 @@ autor):
       «ya sale bien» (el autor, 2026-10-12).
 - [x] Zelda: el logo de N64 al arrancar sin las líneas de entrelazado: «ya
       sale bien» (el autor, 2026-10-12).
-- [ ] Mario Kart en Luigi Raceway, GoldenEye en el túnel de Dam y la túnica
-      de Link: SELECT + R2 cuando se vea el negro sobre el muro, las líneas
-      azules o el defecto de la túnica, y bajar `gfxdump-*.bin` y `.ppm` por
-      FTP para dibujarlos en la Mac. En el host, Link en su casa (guion
-      `zelda-kokiri.pad` con la partida del autor) no muestra un defecto
-      visible en la túnica.
+- [x] Mario Kart, Luigi Raceway: el muro sin la franja negra (el autor,
+      2026-10-12).
+- [ ] GoldenEye en el túnel de Dam y la túnica de Link: SELECT + R2 cuando
+      se vean las líneas azules o el defecto de la túnica, y bajar
+      `gfxdump-*.bin` y `.ppm` por FTP para dibujarlos en la Mac. En el
+      host, Link en su casa (guion `zelda-kokiri.pad` con la partida del
+      autor) no muestra un defecto visible en la túnica.
 - [ ] Otros juegos del 6103 (Diddy Kong Racing, Paper Mario) no se
       probaron; el arranque nuevo reproduce lo que deja la consola.
 
