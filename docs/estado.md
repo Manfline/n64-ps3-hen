@@ -1,5 +1,232 @@
 # Estado
 
+## 2026-10-12 (tarde) — Líneas azules de GoldenEye (cobertura AA), túnica de Link (máscara con clamp) y el negro de la intro de Banjo (niebla en el blender) (rama `infallible-wozniak-aa210c`)
+
+Con el volcado del autor en el túnel de Dam (SELECT + R2), las líneas azules
+salen también en el raster del Mac: no son del RSX. `tools/gfxdump.py pixel`
+(nuevo, junto con `tex`; el script ya lee el `gfx_draw` actual) muestra que
+ningún triángulo cubre el centro de esos píxeles: es una unión en T entre el
+piso (dibujo 5, con un vértice a media arista) y la pared (dibujo 7, la
+arista entera). Ese vértice cae un píxel fuera de la recta de la pared y deja
+una cuña de hasta 0,56 px por la que se ve el relleno negro con el tinte
+azul del rectángulo final de la escena. La N64 la tapa porque con AA_EN el
+RDP escribe todo píxel con alguna de sus 8 muestras de cobertura dentro.
+
+`gfx_draw.aa` marca los triángulos opacos sin prueba de alfa con AA_EN
+(prueba `gfx_aa_flag`), pero las dos formas de reproducir la cobertura
+fallaron en la PS3 real (el autor, 2026-10-12):
+- POLYGON_SMOOTH del RSX: no hace nada (el volcado 2529 traía la marca en
+  100 de 109 dibujos y las líneas seguían). Ya está quitado.
+- Ensanchar los triángulos en la HLE (cada arista corrida lo que llegan las
+  8 muestras, vértices nuevos sobre el plano del triángulo): sí tapaba las
+  líneas de Dam, pero a escala interna alta engorda todos los bordes (0,5 px
+  de N64 son 1,5 px a 3×) y en mallas densas «los polígonos se superponen»,
+  en Zelda y en los modelos de GoldenEye; «se ve peor todo lo demás». Quitado
+  también, incluso como opción por juego. En el SPE costaba ~1 µs más por
+  triángulo (sin que el PPE esperara).
+Las líneas azules de GoldenEye quedan pendientes. Camino que falta probar:
+multimuestreo del RSX (superficie con 4 muestras y resolución al presentar)
+en rsxkit, que cubriría la cuña con la mezcla del fondo, como el VI de la N64
+a 1×; cuesta memoria y relleno. O ensanchar solo las aristas que no comparte
+ningún otro triángulo de la malla, lo que pide conocer la malla.
+
+`salsa64-run --raster-dump` dejaba volteados por palabras los bytes de
+`nterms` a `pad` de los volcados big-endian: los dibujos con combiners
+generados salían mal en el host. Con eso corregido, la túnica de Link del
+volcado del autor se ve igual en la PS3 y en el host.
+
+**Túnica de Link (OoT):** el autor ve cortado el patrón de sombra del
+pliegue. La textura del torso es una I8 de 16 texels de ancho en la TMEM
+(línea de 16 bytes) en una tile de 32 con máscara 4 y espejo más clamp en s.
+El RDP limita la coordenada a la tile y después la enmascara: las columnas
+16–31 son el reflejo de las 0–15. `tmem.c` veía el clamp, ignoraba la
+máscara y leía 32 texels seguidos (la mitad derecha salía de la fila
+siguiente de la TMEM). Ahora, con clamp y una máscara más chica que la tile,
+decodifica con la coordenada enmascarada, y eso entra en la llave de la
+caché. HLE y LLE coincidían porque la LLE usa la misma decodificación.
+Prueba: `gfx_tile_clamp_mirror_mask`. En siete juegos solo cambia OoT, y
+por debajo del umbral.
+
+**Pantalla negra de Banjo entre el logo de Rare y la cascada:** también en
+el host (campos 992–1020 con `banjo-casa.pad`), con la HLE y con la LLE. El
+juego funde con un rectángulo a pantalla completa con el blender
+FOG·A_FOG + MEM·(1 − A_FOG) y el combiner en 0. El blender toma el color de
+P, que aquí es la niebla, y eso no se hacía. Con la niebla blanca opaca
+salía negro (el combiner); con alfa 0xD8 no pintaba. Ahora `blend_constant`
+(src/rsp/gfx/rdp.c) pone la constante de P (niebla o blend) como color y el
+alfa que elige A. En el host la transición queda blanca y después se funde
+en la escena, sin el negro. Prueba: `gfx_blender_fog_color`.
+
+**Rompecabezas de Banjo (sigue pendiente):** en esa escena todas las tareas
+de Banjo terminan con el RDP congelado y la interrupción del DP sale al
+descongelar. Una espera de la copia en el `done` del RDP no sirve: la tarea
+congelada no se traduce hasta descongelar (si no, vuelve el temblor) y
+esperarla bloquearía la emulación. La espera tiene que ir al descongelar
+(`salsa64_rsp_dp_unfreeze`), con presentación traduciendo esa tarea en el
+acto. Queda para después.
+
+**PS3 real (el autor, 2026-10-12):** POLYGON_SMOOTH no hizo nada (las
+líneas seguían; el volcado 2529 traía la marca en 100 de 109 dibujos). Con
+el ensanchado, «ya no hay líneas azules en GoldenEye» y «la túnica sale
+bien». Pero en Zelda, a escala interna alta, «los polígonos se superponen»:
+el ensanchado engorda todos los bordes (0,5 px de N64 son 1,5 px a 3×) y en
+mallas densas se nota. Queda como opción por juego (`GFX_JOB_AAGROW`,
+sync.c, por el código "NGE" del encabezado): solo GoldenEye. En el SPE
+costó ~1 µs más por triángulo en Dam (4,4 → 5,5), sin que el PPE esperara;
+con recíprocos en vez de divisiones debería bajar (sin medir aún).
+
+**PS3 real con 4e35681 (el autor, 2026-10-12):** túnica de Link bien;
+Zelda y GoldenEye con los polígonos normales; en la intro de Banjo ya no
+está el negro de medio segundo, queda un negro de uno o dos campos al
+cambiar de escena que en el host no existe (323 campos seguidos sin saltos
+de brillo): probablemente el VI muestra el framebuffer recién cambiado antes
+de que el RDP lo dibuje. Menor; sin perseguir. Las líneas azules de
+GoldenEye siguen pendientes (arriba).
+
+## 2026-10-12 — Banjo-Kazooie (protección del CIC 6103), cara de Conker (K5) y rayas del logo de Zelda (rama `infallible-wozniak-aa210c`, paquete SLSA00099 «Salsa64 gráficos»)
+
+Lo visto por el autor en la PS3 con v0.1.0 (modelos que tiemblan, cosas
+dibujadas encima de otras, polígonos que faltan, el cielo) no era de la HLE
+ni del RSX: el juego dibujaba así a propósito porque nuestro arranque HLE no
+dejaba lo que deja el IPL3 del CIC 6103.
+
+Diagnóstico (host, respaldo propio, `docs/pads/banjo-casa.pad`):
+- La proyección de Banjo (`G_MTX` de la perspectiva y tres rotaciones)
+  traía en toda escena cerca = 750 y lejos = 1250 (escala 0,5, perspNorm
+  65). En la intro el fondo (árboles, cascada, cielo) quedaba detrás del
+  plano lejano y la HLE rechaza los triángulos con los tres vértices ahí;
+  Tooty, Bottles, la casa por dentro y el cielo de Spiral Mountain (una
+  malla a w 35–135 alrededor de la cámara) quedaban delante del cercano y se
+  recortaban; lo que quedaba en medio tenía su profundidad en una franja
+  estrecha (z/w normalizada de 0,84 a 1,07 para Banjo): temblores y
+  superposiciones. En el campo 2400 de la intro, 75,5 % de la imagen negra.
+- El microcódigo real (LLE, desde el mismo estado) daba la misma imagen que
+  la HLE: fondo negro y Tooty cortada. Así se descartaron `src/rsp/gfx`,
+  rsxkit y el rasterizador.
+- La decomp de Banjo-Kazooie (`viewport_setRenderPerspectiveMatrix`, bloque
+  `ANTI_TAMPER`) lee la RDRAM física 0x1D8 antes de cada proyección; si no
+  vale lo que deja el IPL3, cambia 30 y 4000 por 750 y 1250. Ejecutando en
+  el emulador el IPL3 del propio respaldo (sin desensamblarlo) se midió lo
+  que deja: su imagen de DMEM 0x4C0–0x764 en RDRAM 0x000–0x2A4 (0x1D8 = ROM
+  0x698), y la DMEM y la IMEM en 0xFF salvo 6103 en IMEM 0x000.
+- La segunda la comprueba `ucode_load` al iniciar: sin ella el juego no
+  trae de la ROM (0xB70) el arranque del RSP y su búfer queda en ceros. Por
+  eso `--lle=all` no arrancaba (pendiente del 2026-10-10: «la primera tarea
+  corre 958 M instrucciones sin tocar COP0»).
+
+Arreglo (`src/core/boot.c`, `boot_x103`, como el del 6105): copia de DMEM
+0x4C0–0x764 (los bytes del cartucho del usuario) a RDRAM 0x000–0x2A4, DMEM e
+IMEM en 0xFF y 6103 en IMEM 0x000. Fuentes en docs/THIRD_PARTY.md y tabla
+en docs/cpu-vr4300.md («Arranque HLE»).
+
+Medido en el host:
+- Intro, campo 2400: 582 → 862 triángulos por tarea; píxeles negros 75,5 %
+  → 0,4 %. Se ven el fondo, Tooty entera, la casa con Banjo en la cama, el
+  cielo nocturno y Spiral Mountain con su cielo.
+- HLE contra el microcódigo real (`--lle=all` desde el mismo estado, 40
+  campos después; el LLE ahora arranca solo): 2109 y 3230 píxeles distintos
+  de 76 800 en la intro (campos 2470, 2830), 5468 en la casa (11490), 1281 y
+  1329 en juego frente a la casa (17000, 17600); 16 671 en la vista aérea
+  (9490) con la cámara en movimiento. Lo distinto es movimiento (el LLE
+  lleva otro ritmo), no geometría.
+- Zelda, SM64, Mario Kart, GoldenEye, Perfect Dark y Conker: capturas cada
+  500 campos idénticas a las de main (no pasan por el 6103).
+- La protección no depende de la HLE gráfica: en la PS3 debería verse igual
+  que en el host.
+
+Herramientas: `--state-load` con `--lle` carga el estado (guardado con la
+HLE) y sigue con el microcódigo real, para comparar las dos en la misma
+escena; `docs/pads/banjo-casa.pad`.
+
+Verificación (con main b445531): `tools/build.sh test-host` 406/406
+(pruebas nuevas `boot_cic6103_leftovers`, `gfx_setconvert_k5` y
+`gfx_texrect_two_tiles`), `tools/test-roms.sh` (gfxtest 35/35 ×3),
+`tools/build.sh` sin avisos, `tools/test-rec.sh` y `tools/test-phase2.sh`.
+
+**Cara de Conker (polígonos negros en la boca):** el hocico y la boca se
+dibujan con `(SHADE − ENV)·K5 + PRIM` en el segundo ciclo y K5 = 255
+(`G_SETCONVERT`); la HLE ignoraba ese comando y K5 valía 0. El microcódigo
+real (LLE) daba la misma cara negra: era del RDP común. K4 y K5 (9 bits con
+signo) van ahora al combiner y al estado del RDP, al final del formato de los
+estados guardados (los viejos los cargan en cero). En el host, Conker frente
+al logo de Rare: 1047 píxeles cambian (el hocico). Prueba
+`gfx_setconvert_k5`.
+
+**Rayas del logo de N64 de Zelda:** el texto «NINTENDO 64» va en
+rectángulos de 2 filas en 2 ciclos: el texto en la tile 0 y un ruido I8 de
+32 × 32 en la tile 1 con t × 32 (`shiftt` 11), que vuelve al mismo renglón
+en cada fila y cambia de renglón por franja. El límite del TEXRECT se
+calculaba con la tile 0 y se aplicaba también a la tile 1: el ruido quedaba
+pegado a su primer renglón en una fila de cada dos (en el verde del trazo de
+la «N», la fila de arriba de cada franja fija en 134). Ahora cada tile tiene
+su límite. Además, a 2×–5× el RSX interpolaba t dentro de la fila y recorría
+media textura de ruido por píxel de la N64: cuando una tile avanza media
+textura o más por fila, el rectángulo sale en una tira por fila con la t de
+esa fila. Prueba `gfx_texrect_two_tiles`. La «N» del logo sale más pálida
+que en mupen64plus (GLide64), pero el microcódigo real da las mismas
+coordenadas del mapa de entorno (82 píxeles distintos en todo el cuadro) y
+el muestreo cae sobre el brillo de la textura: no hay evidencia de un error
+nuestro.
+
+**Mario Kart, negro arriba del muro de Luigi Raceway (resuelto):** era la
+tapa del muro, una franja que el juego dibuja con la textura apagada y un
+combiner TEXEL0·SHADE. La HLE dejaba ntex en 0 con los términos de textura:
+el host toma la textura que falta como 1 (blanco) y el RSX muestreaba una
+sin ligar (negro). Ahora con la textura apagada TEXEL0/TEXEL1 = 1 en la HLE
+(`gfx_combine_untextured`). Hallado con volcados SELECT + R2 de la PS3 (la
+captura del RSX con la franja negra, el mismo volcado en el host sin ella) y
+`tools/gfxdump.py`; confirmado por el autor en la PS3. Antes, en el host el
+cielo se veía siempre (no era el cielo: era esa franja). Para eso, **SELECT + R2** (`src/frontend/main.c`)
+guarda `gfxdump-<campo>.bin` con la salida de la HLE del cuadro en pantalla
+y `gfxdump-<campo>.ppm` con la captura del RSX de ese mismo cuadro: se
+dibuja en la Mac con `salsa64-run --raster-dump` y se compara.
+
+Comparación de capturas cada 500 campos contra main: solo cambian Banjo,
+Conker y el logo de Zelda (SM64, Mario Kart, GoldenEye y Perfect Dark
+idénticos).
+
+**Temblor de Banjo (PS3, visto por el autor con el paquete de arriba):**
+los modelos «avanzan y retroceden». Banjo arranca la tarea del cuadro
+siguiente con el RDP congelado (FREEZE) sobre el búfer que el VI todavía
+muestra y lo descongela al cambiar de búfer; el núcleo ya retenía la
+interrupción del DP, pero presentación traducía la tarea al RSX en cuanto
+terminaba: ese búfer mostraba el cuadro nuevo un campo antes y después el
+otro búfer el anterior. Ahora cada campo cuenta como visibles solo las tareas
+que el RDP pudo ejecutar (sin la retenida, `rsp.dp_held`). Confirmado por el
+autor con su estado de la escena de la bruja: ya no tiembla.
+
+**Rompecabezas de Banjo negro en la PS3 (pendiente, efectos de
+framebuffer):** las piezas son texturas que el CPU copia del framebuffer en
+la RDRAM (70 080 lecturas de 0x3a5d00, medido en el host). Al rearmarse, el
+juego dibuja el título en un búfer que el VI no muestra y lo copia 2–4 campos
+después; en el host el espejo del framebuffer es inmediato y las piezas
+llevan el título, en la PS3 llega tarde y el CPU copia lo que había (negro, o
+la imagen de antes). Reproducido con dos estados del autor: desde ellos el
+host dibuja las piezas bien y la PS3 negras. Arreglo posible: esperar el
+espejo antes de la interrupción del DP, como opción por juego (cuesta
+milisegundos por cuadro); queda para después (decisión del autor).
+La pantalla negra entre el logo de Rare y la cascada no está atribuida: en
+el host ahí hay un fundido blanco (una nube 3D enorme pegada a la cámara);
+falta un SELECT + R2 en la PS3.
+
+Pendiente (PS3 real, paquete «Salsa64 gráficos» SLSA00099; confirma el
+autor):
+- [x] Banjo-Kazooie: se ven los modelos, las texturas y el cielo; ya no
+      tiembla (el autor, 2026-10-12).
+- [x] Conker: la cara (hocico y boca) en la intro con el logo de Rare:
+      «ya sale bien» (el autor, 2026-10-12).
+- [x] Zelda: el logo de N64 al arrancar sin las líneas de entrelazado: «ya
+      sale bien» (el autor, 2026-10-12).
+- [x] Mario Kart, Luigi Raceway: el muro sin la franja negra (el autor,
+      2026-10-12).
+- [ ] GoldenEye en el túnel de Dam y la túnica de Link: SELECT + R2 cuando
+      se vean las líneas azules o el defecto de la túnica, y bajar
+      `gfxdump-*.bin` y `.ppm` por FTP para dibujarlos en la Mac. En el
+      host, Link en su casa (guion `zelda-kokiri.pad` con la partida del
+      autor) no muestra un defecto visible en la túnica.
+- [ ] Otros juegos del 6103 (Diddy Kong Racing, Paper Mario) no se
+      probaron; el arranque nuevo reproduce lo que deja la consola.
+
 ## 2026-10-12 (madrugada) — Para retomar: pruebas pendientes en la PS3
 
 Publicado el 2026-10-11: el repositorio es público y está el release
@@ -34,7 +261,13 @@ de registros entre bloques, accesos a memoria y TLB, caché de código y FPU;
 licencia archivo por archivo antes de copiar nada a `src/` (nunca a
 `lib/rsxkit` ni `lib/spukit`). También ejecutar el IPL3 del cartucho al
 arrancar, como mupen64plus, para no depender de reproducir lo que deja cada
-CIC (protecciones de Rare).
+CIC (protecciones de Rare). Y HLE de funciones de libultra en el CPU (como
+UltraHLE): perfilar en GoldenEye y Perfect Dark cuánto tiempo va a funciones
+conocidas (matrices, trigonometría, raíz, copias de memoria) y, si pesa,
+reemplazarlas en el recompilador por versiones nativas con vectores del PPE.
+Detección por comportamiento o por huella (hash) del código, sin copiar nada
+de la biblioteca al repo; resultado exacto, porque la lógica del juego no
+admite aproximaciones.
 
 ## 2026-10-12 — Botón PS y cuadro al salir: el juego se pausa (rama `heuristic-agnesi-760f8c`, paquete SLSA00098 «Salsa64 botón PS»)
 
@@ -1183,7 +1416,8 @@ de arriba y en docs/framebuffer.md.
 - Recompilador: más velocidad del CPU en GoldenEye y Perfect Dark.
 - Efectos de framebuffer (pendiente de abajo), sobre la presentación ya en main.
 - HLE: **cara de Conker** (polígonos negros en la boca, visto en la PS3; no lo
-  explicaba la presentación) y z/w > 1 en Banjo (modelos que tiemblan, cielo).
+  explicaba la presentación). Lo de Banjo (z/w > 1, modelos que tiemblan,
+  cielo) era la protección anticopia del 6103 (entrada del 2026-10-12).
 - Gráficos pendientes (actualizado 2026-10-11): líneas del logo de Zelda (la
   HLE muestrea mal la segunda textura de ruido del texto «NINTENDO 64»),
   defecto en la túnica de Link, líneas azules en uniones de GoldenEye.
@@ -1464,6 +1698,12 @@ posición) y las capturas salen del tamaño recortado. En rsxkit,
 fila entera y la columna va en las coordenadas de textura; antes el offset
 se redondeaba a 32 píxeles).
 
+> **Corrección (2026-10-12):** el z/w > 1 y el domo fuera del plano lejano
+> venían de la proyección de 750 y 1250 que pone la protección anticopia
+> cuando falta lo que deja el IPL3 del 6103 (entrada del 2026-10-12). Además,
+> rsxkit no descarta por z/w > 1: el RSX tiene zclamp y sin descarte de los
+> planos cercano y lejano (`rsxSetZMinMaxControl`).
+
 **Fondo negro de Banjo (c) — no es presentación:** en la Mac también sale
 negro (cielo y paisaje) tras Banjo tocando. En la tarea del campo 2400 el
 primer dibujo tras el borrado son 8 triángulos con textura, w de −88 a
@@ -1537,9 +1777,12 @@ quedó en `file:oot.z64`.
 Pendiente:
 - [ ] Integración en main (la rama lleva main
       b32a6e6 fusionado y la verificación completa en verde).
-- [ ] HLE: el cielo y el paisaje de Banjo (arriba). Trabajo de F3D.
-- [ ] LLE: con `--lle=all` Banjo no arranca (la primera tarea corre 958 M
-      instrucciones sin tocar COP0); no es del freeze. Trabajo del LLE.
+- [x] HLE: el cielo y el paisaje de Banjo (arriba). No era de F3D: la
+      protección anticopia del 6103 (entrada del 2026-10-12).
+- [x] LLE: con `--lle=all` Banjo no arranca (la primera tarea corre 958 M
+      instrucciones sin tocar COP0); no es del freeze. Era la misma
+      protección: sin lo que deja el IPL3 el juego no trae el arranque del
+      RSP (entrada del 2026-10-12).
 - [ ] El VI de Banjo muestra 213 de 240 líneas (V_VIDEO 61–488): en una
       tele quedarían bandas; aquí se estira a 4:3. Colocar la imagen según
       la ventana del VI cuando haya un caso que lo necesite.

@@ -7,9 +7,9 @@
  * GFX_STATE_REGS bytes con una versión y los registros, campo por campo en
  * el orden de la tabla de abajo, y después la TMEM tal cual (sus bytes ya
  * están en el orden de la N64). Lo del RSP (matrices, luces, segmentos) no
- * va: se reinicia en cada tarea. Agregar un campo: al final de la tabla
- * (los estados viejos lo dejan en cero) y subir FORMAT solo si cambia el
- * sentido de uno que ya estaba.
+ * va: se reinicia en cada tarea. Agregar un campo: al final de regs2,
+ * después de las tiles (los estados viejos lo dejan en cero), y subir
+ * FORMAT solo si cambia el sentido de uno que ya estaba.
  *
  * Corre en el host y en el PPE, nunca en el SPE: el SPE solo copia el tramo
  * crudo de su estado (GFX_RAW_START a GFX_RAW_END) y el PPE lo pasa a este
@@ -46,6 +46,13 @@ static const struct field tile[] = {
 };
 #undef T
 
+/* Agregados después de las tiles (los estados viejos los dejan en cero). */
+#define F(f) { offsetof(struct gfx_state, f), sizeof(((struct gfx_state *)0)->f) }
+static const struct field regs2[] = {
+	F(k4), F(k5),
+};
+#undef F
+
 _Static_assert(sizeof(struct gfx_state) <= 0xFFFF, "los desplazamientos de la tabla no caben en 16 bits");
 
 static uint32_t get(const uint8_t *p, unsigned size)
@@ -73,10 +80,11 @@ static unsigned walk(struct gfx_state *g, uint8_t *buf, bool load)
 	uint8_t *base = (uint8_t *)g;
 	unsigned pos = 4;
 	const unsigned nr = sizeof regs / sizeof regs[0], nt = sizeof tile / sizeof tile[0];
-	for (unsigned i = 0; i < nr + 8 * nt; i++) {
-		const struct field *f = i < nr ? &regs[i] : &tile[(i - nr) % nt];
+	const unsigned n2 = sizeof regs2 / sizeof regs2[0];
+	for (unsigned i = 0; i < nr + 8 * nt + n2; i++) {
+		const struct field *f = i < nr ? &regs[i] : i < nr + 8 * nt ? &tile[(i - nr) % nt] : &regs2[i - nr - 8 * nt];
 		uint8_t *p = base + f->off;
-		if (i >= nr)
+		if (i >= nr && i < nr + 8 * nt)
 			p += offsetof(struct gfx_state, tiles) + (i - nr) / nt * sizeof(struct gfx_tile);
 		if (load) {
 			uint32_t v = 0;
@@ -109,7 +117,7 @@ bool gfx_state_unpack_regs(struct gfx_state *g, const uint8_t in[GFX_STATE_REGS]
 	return true;
 }
 
-/* 4 de la versión + 70 de los registros + 8 × 21 de las tiles. */
-_Static_assert(4 + 70 + 8 * 21 <= GFX_STATE_REGS, "los registros del RDP no caben en GFX_STATE_REGS");
+/* 4 de la versión + 70 de los registros + 8 × 21 de las tiles + 4 de K4 y K5. */
+_Static_assert(4 + 70 + 8 * 21 + 4 <= GFX_STATE_REGS, "los registros del RDP no caben en GFX_STATE_REGS");
 _Static_assert(sizeof(((struct gfx_state *)0)->tmem) == GFX_STATE_BYTES - GFX_STATE_REGS,
 	       "la TMEM no es lo que resta de GFX_STATE_BYTES");

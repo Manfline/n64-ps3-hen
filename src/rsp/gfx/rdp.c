@@ -119,7 +119,7 @@ static bool bl_eq(struct bl_factor f, float k, float ka)
 /* P·A + M·B (n64brew.dev: Set Other Modes) llevado a lo que hace el RSX:
  * se suman los factores del color que entra (IN) y del de la memoria (MEM).
  * A_SHADE se toma como el alfa que entra; MEM_A como 1; los colores
- * constantes (blend, fog) en P o M se ignoran. */
+ * constantes (blend, fog) en P los pone blend_constant, en M se ignoran. */
 static uint8_t classify_blend(unsigned p, unsigned a, unsigned m, unsigned b, uint32_t fog)
 {
 	struct bl_factor fa = { 0.0f, 0.0f }, fb = { 0.0f, 0.0f };
@@ -185,6 +185,76 @@ static void blend_state(const struct gfx_state *g, struct gfx_draw *d)
 		d->atest = GFX_ATEST_GEQUAL;
 		d->aref = 32;
 	}
+}
+
+/* Término sin factores de la combinación (donde va una constante); lo
+ * agrega si falta y hay lugar. -1 si no se puede. */
+static int constant_term(struct gfx_draw *d)
+{
+	if (!d->nterms)
+		return GFX_K_ONE;
+	for (int k = 0; k < d->nterms; k++)
+		if (!d->factors[k][0])
+			return k;
+	if (d->nterms >= GFX_K_TERMS)
+		return -1;
+	int k = d->nterms++;
+	memset(d->factors[k], 0, sizeof d->factors[k]);
+	memset(d->k[k], 0, sizeof d->k[k]);
+	return k;
+}
+
+/* El blender toma el color de P: con P = FOG o BL (el registro de blend)
+ * es esa constante, no la salida del combiner (sin FORCE_BL, el RDP
+ * escribe P tal cual). Banjo-Kazooie funde la intro con un rectángulo
+ * FOG·A_FOG + MEM·(1 − A_FOG) cuyo combiner da 0: con la niebla blanca
+ * opaca la pantalla queda blanca (salía negra medio segundo) y con alfa
+ * 0xD8 la escena se ve detrás (no se veía nada). El combiner pasa a dar la
+ * constante, y como alfa lo que elige A, que es el factor que usa la
+ * mezcla del RSX. Con M = IN y A = A_FOG (G_RM_FOG_PRIM_A), el color va
+ * hacia la constante en la proporción del alfa de la niebla. */
+static void blend_constant(const struct gfx_state *g, struct gfx_draw *d)
+{
+	uint32_t ol = g->ol;
+	unsigned sh = d->cycle == G_CYC_2CYCLE ? 0 : 2;  /* el ciclo que escribe */
+	unsigned p = (ol >> (28 + sh)) & 3, a = (ol >> (24 + sh)) & 3;
+	unsigned m = (ol >> (20 + sh)) & 3, b = (ol >> (16 + sh)) & 3;
+	if (p != BL_FOG && p != BL_BL)
+		return;
+	bool force = (ol & FORCE_BL) != 0;
+	bool toward = force && m == BL_IN && a == BA_FOG && b == BB_1MA;
+	if (force && m != BL_MEM && !toward)
+		return;
+	int one = constant_term(d);
+	if (one < 0)
+		return;
+	uint32_t c = p == BL_FOG ? g->fog : g->blend;
+	float rgb[3] = { (float)(c >> 24) / 255.0f, (float)((c >> 16) & 0xFF) / 255.0f,
+			 (float)((c >> 8) & 0xFF) / 255.0f };
+	float fa = (float)(g->fog & 0xFF) / 255.0f;
+	if (toward) {
+		for (int k = 0; k < GFX_K_TERMS; k++)
+			for (int j = 0; j < 3; j++)
+				for (int l = 0; l < 3; l++)
+					d->k[k][j][l] *= 1.0f - fa;
+		for (int l = 0; l < 3; l++)
+			d->k[one][0][l] += fa * rgb[l];
+		return;
+	}
+	bool alpha = force && a != BA_IN;
+	for (int k = 0; k < GFX_K_TERMS; k++)
+		for (int j = 0; j < 3; j++)
+			for (int l = 0; l < (alpha ? 4 : 3); l++)
+				d->k[k][j][l] = 0.0f;
+	for (int l = 0; l < 3; l++)
+		d->k[one][0][l] = rgb[l];
+	if (alpha && a == BA_FOG)
+		d->k[one][0][3] = fa;
+	else if (alpha && a == BA_SHADE)
+		d->k[one][2][3] = 1.0f;
+	d->fog = 0;
+	if (force)
+		d->blend = classify_blend(BL_IN, a, m, b, g->fog);
 }
 
 static float shift_scale(unsigned shift)
@@ -270,7 +340,7 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 		for (int lane = 0; lane < 4; lane++)
 			d->k[GFX_K_T0][0][lane] = 1.0f;
 		d->ntex = 1;
-		if (!texture_state(g, d, tile, 0, true, g->rect_clamp, g->rect_lim))
+		if (!texture_state(g, d, tile, 0, true, g->rect_clamp & 3u, g->rect_lim))
 			d->ntex = 0;
 		if ((g->ol & G_AC_MASK) == G_AC_THRESHOLD) {
 			d->atest = GFX_ATEST_GEQUAL;
@@ -295,17 +365,22 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 	blend_state(g, d);
 	if (kind != PRIM_TRI || !(g->geom & G_FOG))
 		d->fog = 0;
+	d->aa = kind == PRIM_TRI && (g->ol & AA_EN) && d->blend == GFX_BLEND_OFF && d->atest == GFX_ATEST_NONE &&
+		!d->viscvg;
 
 	/* La niebla ya está decidida: con ella, gfx_combine deja el término al
 	 * que el vertex program suma el color de niebla. */
 	if (gfx_combine(g, d))
 		g->res->approx_cc++;
 	bool textured = kind == PRIM_RECT || (kind < PRIM_RAW ? g->tex_on != 0 : (kind & 1) != 0);
-	if (!textured)
+	if (!textured && d->ntex) {
 		d->ntex = 0;
+		gfx_combine_untextured(d);
+	}
 	unsigned n = d->ntex;
 	for (unsigned i = 0; i < n; i++)
-		if (!texture_state(g, d, tile + (int)i, (int)i, false, kind == PRIM_RECT ? g->rect_clamp : 0,
+		if (!texture_state(g, d, tile + (int)i, (int)i, false,
+				   kind == PRIM_RECT ? (g->rect_clamp >> (2 * i)) & 3u : 0,
 				   kind == PRIM_RECT && i == 0 ? g->rect_lim : NULL)) {
 			d->ntex = (uint8_t)i;
 			break;
@@ -331,6 +406,7 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 		gfx_combine_textures(d, d->ntex);
 	else if (d->ntex < n)
 		gfx_combine_textures(d, d->ntex);
+	blend_constant(g, d);
 #ifdef SALSA64_GFX_TRACE
 	salsa64_gfx_trace_state(g, d, kind, tile);
 #endif
@@ -538,19 +614,37 @@ void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uin
 	 * limita aunque repita. Da lo mismo que en la N64 y evita que, a más
 	 * resolución, el filtro mezcle el borde con el lado opuesto (Mario
 	 * Kart 64 dibuja sus imágenes en tiras de 2 filas que repiten: salían
-	 * líneas). */
+	 * líneas). Cada tile con su desplazamiento y su origen: la tile + 1
+	 * del segundo ciclo (el ruido del texto «NINTENDO 64» de Zelda, que se
+	 * repite) va en los bits 2–3.
+	 * Una tile que avanza media tile o más por fila (ese ruido: la tile
+	 * entera, ×32) la N64 la muestrea con la t de cada fila, la misma en
+	 * toda la fila; a más resolución el RSX interpolaría t dentro de la
+	 * fila y recorrería media textura (rayas). Ahí el rectángulo sale en
+	 * una tira por fila. Un fondo achicado (S2DEX) avanza pocos texels por
+	 * fila y queda entero. */
 	const struct gfx_tile *ti = &g->tiles[tile];
 	uint32_t tw, th;
 	gfx_tile_size(ti, &tw, &th);
 	float ns = flip ? h : w, nt = flip ? w : h;  /* muestras en s y en t */
 	float ks = shift_scale(ti->shifts), kt = shift_scale(ti->shiftt);
-	float sa = s0 * ks - ti->uls / 4.0f, sb = (s0 + (ns - 1.0f) * dsdx) * ks - ti->uls / 4.0f;
-	float ta = t0 * kt - ti->ult / 4.0f, tb = (t0 + (nt - 1.0f) * dtdy) * kt - ti->ult / 4.0f;
 	unsigned clamp = 0;
-	if ((sa < sb ? sa : sb) > -0.01f && (sa < sb ? sb : sa) < (float)tw - 0.99f)
-		clamp |= 1;
-	if ((ta < tb ? ta : tb) > -0.01f && (ta < tb ? tb : ta) < (float)th - 0.99f)
-		clamp |= 2;
+	bool rows = false;
+	for (int i = 0; i < (cycle == G_CYC_2CYCLE ? 2 : 1); i++) {
+		const struct gfx_tile *ui = &g->tiles[(tile + i) & 7];
+		uint32_t uw, uh;
+		gfx_tile_size(ui, &uw, &uh);
+		float us = shift_scale(ui->shifts), ut = shift_scale(ui->shiftt);
+		float sa = s0 * us - ui->uls / 4.0f, sb = (s0 + (ns - 1.0f) * dsdx) * us - ui->uls / 4.0f;
+		float ta = t0 * ut - ui->ult / 4.0f, tb = (t0 + (nt - 1.0f) * dtdy) * ut - ui->ult / 4.0f;
+		if ((sa < sb ? sa : sb) > -0.01f && (sa < sb ? sb : sa) < (float)uw - 0.99f)
+			clamp |= 1u << (2 * i);
+		if ((ta < tb ? ta : tb) > -0.01f && (ta < tb ? tb : ta) < (float)uh - 0.99f)
+			clamp |= 2u << (2 * i);
+		float step = dtdy * ut;
+		rows |= (step < 0.0f ? -step : step) >= 2.0f && (step < 0.0f ? -step : step) * 2.0f >= (float)uh;
+	}
+	rows = rows && !flip && h <= 16.0f && (cycle == G_CYC_1CYCLE || cycle == G_CYC_2CYCLE);
 
 	/* El RDP muestrea en la esquina de cada píxel; el RSX, en el centro:
 	 * con filtro bilineal se corre medio píxel para no mezclar texels
@@ -560,14 +654,6 @@ void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uin
 	if (bilinear) {
 		s0 -= 0.5f * dsdx;
 		t0 -= 0.5f * dtdy;
-	}
-	float s[4], t[4];
-	if (!flip) {
-		s[0] = s0, s[1] = s0 + w * dsdx, s[2] = s0, s[3] = s0 + w * dsdx;
-		t[0] = t0, t[1] = t0, t[2] = t0 + h * dtdy, t[3] = t0 + h * dtdy;
-	} else {
-		s[0] = s0, s[1] = s0, s[2] = s0 + h * dsdx, s[3] = s0 + h * dsdx;
-		t[0] = t0, t[1] = t0 + w * dtdy, t[2] = t0, t[3] = t0 + w * dtdy;
 	}
 	/* Texels que puede muestrear el rectángulo, desde el 0 de la tile: el
 	 * RSX (con u = s·k − uls, como en texture_state) toma floor(u) y, con
@@ -583,6 +669,24 @@ void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uin
 		float se = s0 + ns * dsdx, te = t0 + nt * dtdy;
 		lim[0] = sampled((se > s0 ? se : s0) * ks - ti->uls / 4.0f, bilinear, tw);
 		lim[1] = sampled((te > t0 ? te : t0) * kt - ti->ult / 4.0f, bilinear, th);
+	}
+	float s[4], t[4];
+	if (rows) {
+		/* La t de la fila r es la de su esquina (sin el medio píxel). */
+		float tr = bilinear ? t0 + 0.5f * dtdy : t0;
+		s[0] = s0, s[1] = s0 + w * dsdx, s[2] = s0, s[3] = s0 + w * dsdx;
+		for (float y = uly; y < lry; y += 1.0f, tr += dtdy) {
+			t[0] = t[1] = t[2] = t[3] = tr;
+			rect(g, PRIM_RECT, tile, ulx, y, lrx, y + 1.0f < lry ? y + 1.0f : lry, s, t, clamp, lim);
+		}
+		return;
+	}
+	if (!flip) {
+		s[0] = s0, s[1] = s0 + w * dsdx, s[2] = s0, s[3] = s0 + w * dsdx;
+		t[0] = t0, t[1] = t0, t[2] = t0 + h * dtdy, t[3] = t0 + h * dtdy;
+	} else {
+		s[0] = s0, s[1] = s0, s[2] = s0 + h * dsdx, s[3] = s0 + h * dsdx;
+		t[0] = t0, t[1] = t0 + w * dtdy, t[2] = t0, t[3] = t0 + w * dtdy;
 	}
 	rect(g, PRIM_RECT, tile, ulx, uly, lrx, lry, s, t, clamp, lim);
 }
@@ -783,8 +887,13 @@ void gfx_rdp_command(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	case G_RDPTILESYNC:
 	case G_SETKEYGB:
 	case G_SETKEYR:
-	case G_SETCONVERT:
 		return;
+	case G_SETCONVERT:
+		/* K0–K3 son de la conversión YUV (sin uso aquí); K4 y K5 son
+		 * entradas del combiner (Conker: (SHADE − ENV)·K5 + PRIM). */
+		g->k4 = (uint16_t)((w1 >> 9) & 0x1FF);
+		g->k5 = (uint16_t)(w1 & 0x1FF);
+		break;
 	case G_SETSCISSOR:
 		g->scissor[0] = (w0 >> 12) & 0xFFF;
 		g->scissor[1] = w0 & 0xFFF;
