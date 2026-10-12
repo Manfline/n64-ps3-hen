@@ -294,8 +294,10 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 	if (gfx_combine(g, d))
 		g->res->approx_cc++;
 	bool textured = kind == PRIM_RECT || (kind < PRIM_RAW ? g->tex_on != 0 : (kind & 1) != 0);
-	if (!textured)
+	if (!textured && d->ntex) {
 		d->ntex = 0;
+		gfx_combine_untextured(d);
+	}
 	unsigned n = d->ntex;
 	for (unsigned i = 0; i < n; i++)
 		if (!texture_state(g, d, tile + (int)i, (int)i, false,

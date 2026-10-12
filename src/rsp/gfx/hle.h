@@ -384,6 +384,7 @@ bool gfx_combine(const struct gfx_state *g, struct gfx_draw *d);
 /* Deja el dibujo con solo `ntex` texturas: anula (combinación lineal) o
  * quita (términos) lo que leía las que faltan. */
 void gfx_combine_textures(struct gfx_draw *d, unsigned ntex);
+void gfx_combine_untextured(struct gfx_draw *d);
 
 /* Segmentada → física. */
 static inline uint32_t gfx_addr(const struct gfx_state *g, uint32_t seg)

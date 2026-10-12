@@ -551,6 +551,32 @@ bool gfx_combine(const struct gfx_state *g, struct gfx_draw *d)
 	return x.approx;
 }
 
+/* Con la textura apagada (G_TEXTURE en off) un combiner que lee TEXEL0 o
+ * TEXEL1 los toma como 1: así lo dibuja el host (una textura que falta vale
+ * 1) y así sale en el RSX, que si no muestrearía una textura sin ligar (la
+ * tapa del muro de Luigi Raceway, TEXEL0·SHADE sin textura, salía negra). */
+void gfx_combine_untextured(struct gfx_draw *d)
+{
+	if (d->nterms == 0) {
+		for (int t = GFX_K_T0; t <= GFX_K_T1A; t++) {
+			for (int i = 0; i < 3; i++)
+				for (int l = 0; l < 4; l++)
+					d->k[GFX_K_ONE][i][l] += d->k[t][i][l];
+			memset(d->k[t], 0, sizeof d->k[t]);
+		}
+		return;
+	}
+	for (unsigned j = 0; j < d->nterms; j++) {
+		uint8_t *f = d->factors[j];
+		unsigned n = 0;
+		for (int k = 0; k < GFX_K_FACTORS && f[k]; k++)
+			if (f[k] != GFX_F_T0 && f[k] != GFX_F_T0A && f[k] != GFX_F_T1 && f[k] != GFX_F_T1A)
+				f[n++] = f[k];
+		for (; n < GFX_K_FACTORS; n++)
+			f[n] = 0;
+	}
+}
+
 void gfx_combine_textures(struct gfx_draw *d, unsigned ntex)
 {
 	if (d->nterms == 0) {

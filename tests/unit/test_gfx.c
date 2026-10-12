@@ -174,6 +174,41 @@ enum { CC_A_ZERO = 15 };
 
 /* ---- Pruebas ---- */
 
+/* Textura apagada (sin G_TEXTURE) con un combiner que lee TEXEL0
+ * (TEXEL0·SHADE, la tapa del muro de Luigi Raceway): TEXEL0 vale 1 y la
+ * combinación queda sin términos de textura (el RSX no muestrea nada sin
+ * ligar). */
+static void gfx_untextured_texel(void)
+{
+	start();
+	float ident[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+	load_mtx(ident, true);
+	load_mtx(ident, false);
+	set_combine(CC_T0, CC_ZERO, CC_SHADE, CC_ZERO, CC_T0, CC_ZERO, CC_SHADE, CC_ZERO);
+	dl(0xD9000000, G_SHADING_SMOOTH);                /* geometry mode, sin textura */
+	dl(0xFF100000 | 319, 0x00100000);
+	const struct vtx v[3] = {
+		{ 0, 0, 0, 0, 0, { 252, 252, 252, 255 } },
+		{ 1, 0, 0, 0, 0, { 252, 252, 252, 255 } },
+		{ 0, 1, 0, 0, 0, { 252, 252, 252, 255 } },
+	};
+	dl(0x01000000 | 3 << 12 | 3 << 1, put_vertices(v, 3));
+	dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);
+	run();
+	const struct gfx_draw *d = draw_n(0);
+	CHECK(d != NULL);
+	if (!d)
+		return;
+	CHECK_EQ(d->ntex, 0);
+	for (int t = GFX_K_T0; t <= GFX_K_T1A; t++)
+		for (int i = 0; i < 3; i++)
+			for (int l = 0; l < 4; l++)
+				CHECK(d->k[t][i][l] == 0.0f);
+	for (int l = 0; l < 3; l++)
+		CHECK(fabsf(d->k[GFX_K_ONE][1][l] - 1.0f) < 1e-6f);  /* = SHADE */
+	CHECK(fabsf(d->k[GFX_K_ONE][2][3] - 1.0f) < 1e-6f || fabsf(d->k[GFX_K_ONE][1][3] - 1.0f) < 1e-6f);
+}
+
 /* TEXRECT en 2 ciclos con dos tiles (el texto «NINTENDO 64» de Zelda): la
  * tile 0 cae entera en su textura y se limita, la tile 1 (ruido I8 de
  * 32×32, t × 32 con shiftt 11) se repite: cada tile con su propio límite.
@@ -1708,6 +1743,7 @@ void t_suite_gfx(void)
 	RUN(gfx_combiner_forms);
 	RUN(gfx_setconvert_k5);
 	RUN(gfx_texrect_two_tiles);
+	RUN(gfx_untextured_texel);
 	RUN(gfx_combiner_shade_squared);
 	RUN(gfx_triangle_transform);
 	RUN(gfx_clip_ratio_f3dex2);
