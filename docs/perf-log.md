@@ -84,7 +84,25 @@ PRIM, ENV, PRIM_LOD, K4, K5, el tipo de ciclo y si hay niebla:
 en vez de recalcularlo (`combine_cached` y `combine_keep` en `rdp.c`, aparte
 para no sumar a la cadena de la pila; copias por palabras en vez de
 `memcpy`, que en el SPE se expandía a más de 1 KB por copia). Holgura sobre
-98def88: 1 728 bytes. Falta medir el «estado» en la PS3.
+98def88: 1 728 bytes. Con las texturas desde un destino encima, el
+directorio de la caché de texturas pasa a 896 entradas (holgura 3 520).
+
+En la PS3 real (paquete SLSA00101 sobre ece6049, 1080p a 5×; medianas de
+las ventanas de 100 campos; «antes» = c17e790, «-Os» = el paquete con el
+combiner en `-Os` sin memorizar):
+
+| Juego | Campos/s (mín.) | SPE por tarea | Estado: antes → -Os → memorizado |
+|---|---|---|---|
+| Zelda OoT | 59,8 (56,6) | 5,16 ms | 0,80 → 2,77 → 1,38 ms |
+| GoldenEye (Dam) | 59,7 (41,6, CPU) | 6,37 ms | 2,70 → 7,26 → 1,82 ms |
+| Conker (intro) | 59,8 (49,3) | 4,81 ms | 0,36 → 1,29 → 0,78 ms |
+| Perfect Dark (intro) | 59,8 (42,8, CPU) | 4,23 ms | 1,93 → 2,92 → 0,70 ms |
+
+En la escena pesada de Conker (campos 4400–4999) el «estado» queda en
+4,1–7,6 ms (antes 2,5–3,9, con `-Os` 7,5–11,8) y los campos/s en
+49,3–55,4 (antes 51,8–58,3): pendiente en docs/estado.md. Las expulsiones
+de la caché de texturas con 896 entradas, en GoldenEye, iguales que con
+1024 (0–2,2 por tarea).
 
 ## El desenfoque de Perfect Dark desde el destino del RSX (2026-10-12)
 
