@@ -65,6 +65,23 @@ El build ahora lo comprueba: `gfx_STACK_MIN` (1,5 KB) en
 `src/frontend/Makefile`; si la holgura baja de ahí, el enlace de `spu_gfx`
 falla con la cadena más honda.
 
+**El combiner en `-Os` en la PS3 real** (2026-10-12, paquete SLSA00101 con
+98def88; medianas de las ventanas de 100 campos contra c17e790 a 3× y la
+rama de los arreglos gráficos): el «estado» de la HLE en el SPE sube ×2,7–3,6
+en todos los juegos (Zelda OoT 0,80 → 2,77 ms por tarea, GoldenEye 2,70 →
+7,26, Conker 0,36 → 1,29, Perfect Dark 1,93 → 2,92) y, donde el SPE manda,
+cuesta campos/s: la escena pesada de la intro de Conker (campos 4400–4999)
+baja de 51,8–58,3 a 44,1–50,5 campos/s con el SPE en 33,7–39,0 ms por
+tarea. Volver a `-O2` no cabe (holgura −1 360 bytes sobre 98def88).
+
+Arreglo: el resultado del combiner se guarda con sus entradas (el combiner,
+PRIM, ENV, PRIM_LOD, K4, K5, el tipo de ciclo y si hay niebla:
+`struct gfx_ccmemo`) y un estado de dibujo con las mismas entradas lo copia
+en vez de recalcularlo (`combine_cached` y `combine_keep` en `rdp.c`, aparte
+para no sumar a la cadena de la pila; copias por palabras en vez de
+`memcpy`, que en el SPE se expandía a más de 1 KB por copia). Holgura sobre
+98def88: 1 728 bytes. Falta medir el «estado» en la PS3.
+
 ## El desenfoque de Perfect Dark desde el destino del RSX (2026-10-12)
 
 Rama wonderful-jepsen (docs/framebuffer.md, «Texturas desde un destino sin
