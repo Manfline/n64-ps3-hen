@@ -222,6 +222,11 @@ struct gfx_tex {
 #define GFX_TEX_WRAP_T(f)   (((f) >> 2) & 3u)
 #define GFX_TEX_BILINEAR    0x10u
 #define GFX_TEX_PREMUL      0x20u  /* texels con RGB·A (combine.c) */
+/* La textura es el segundo periodo (el reflejado) de una tile con espejo y
+ * clamp más grande que su máscara (tmem.c): el eje va con
+ * GFX_WRAP_MIRROR_ONCE y u o v corridos un periodo (rdp.c). */
+#define GFX_TEX_ONCE_S      0x40u
+#define GFX_TEX_ONCE_T      0x80u
 enum { GFX_TEX_ARENA = 0, GFX_TEX_CACHE = 1, GFX_TEX_TARGET = 2 };
 /* Ninguna textura pasa de tantos bytes (pitch × height): las que no caben
  * pierden filas (el área de decodificación del SPE). */
@@ -229,7 +234,10 @@ enum { GFX_TEX_ARENA = 0, GFX_TEX_CACHE = 1, GFX_TEX_TARGET = 2 };
 /* Tareas que una color image dibujada sigue leyéndose del RSX como textura:
  * la misma cuenta que RDP_TARGETS_FRESH del consumidor (src/rdp/targets.h). */
 #define GFX_FB_FRESH 3
-enum { GFX_WRAP_CLAMP = 0, GFX_WRAP_REPEAT = 1, GFX_WRAP_MIRROR = 2 };
+/* GFX_WRAP_MIRROR_ONCE: refleja una vez alrededor de 0 (u en [−1, 0] es el
+ * espejo de [0, 1]) y fija el borde más allá, como el RDP con espejo y
+ * clamp en una tile de dos periodos. */
+enum { GFX_WRAP_CLAMP = 0, GFX_WRAP_REPEAT = 1, GFX_WRAP_MIRROR = 2, GFX_WRAP_MIRROR_ONCE = 3 };
 
 /* Lo que evalúa el RSX por píxel (lib/rsxkit, «Dibujo 3D»), con
  *   X_j = k[j][0] + k[j][1] * C + k[j][2] * C.aaaa     (C: color del vértice)

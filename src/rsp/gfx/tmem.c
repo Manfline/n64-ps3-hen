@@ -381,7 +381,7 @@ static uint32_t masked(uint32_t v, unsigned mask, unsigned cm)
 }
 
 static void tile_key(const struct gfx_state *g, const struct gfx_tile *t, uint32_t w, uint32_t h, unsigned tt,
-		     bool premul, uint32_t key[2])
+		     bool premul, uint8_t once, uint32_t key[2])
 {
 	struct gfx_hash hs;
 	gfx_hash_init(&hs);
@@ -390,6 +390,7 @@ static void tile_key(const struct gfx_state *g, const struct gfx_tile *t, uint32
 	unsigned ms = clamp_mask(t->masks, t->cms, w), mt = clamp_mask(t->maskt, t->cmt, h);
 	uint32_t masks = ms ? ms | (t->cms & 1u) << 4 : 0;
 	masks |= mt ? (mt | (t->cmt & 1u) << 4) << 8 : 0;
+	masks |= (uint32_t)once << 16;  /* un solo periodo decodificado (GFX_TEX_ONCE_*) */
 	gfx_hash_words(&hs, (uint32_t)t->fmt << 24 | (uint32_t)t->siz << 16 | (uint32_t)t->pal << 8 | tt,
 		       (uint32_t)t->line << 16 | (t->tmem & 15), w << 16 | h, 1u | masks << 8 | (uint32_t)premul << 31);
 	/* texel() lee por fila 8 bytes enteros (la fila impar intercambia
@@ -458,14 +459,16 @@ static void row_rgba16(const uint8_t *tmem, uint32_t row, uint32_t odd, uint32_t
 /* La salida tiene `pitch` bytes por fila, múltiplo de 64: se escribe de 4
  * en 4 texels, hasta 3 de más al final de cada fila (no se muestrean). */
 static void decode(const struct gfx_state *g, const struct gfx_tile *t, uint32_t w, uint32_t h, uint32_t pitch,
-		   unsigned tt, bool premul, uint8_t *out)
+		   uint32_t x0, uint32_t y0, unsigned tt, bool premul, uint8_t *out)
 {
-	unsigned ms = clamp_mask(t->masks, t->cms, w), mt = clamp_mask(t->maskt, t->cmt, h);
+	/* (x0, y0): primer texel de la tile que se decodifica (el segundo
+	 * periodo de un eje con espejo y clamp: resolve_content). */
+	unsigned ms = clamp_mask(t->masks, t->cms, w + x0), mt = clamp_mask(t->maskt, t->cmt, h + y0);
 	bool rgba = t->siz == G_IM_SIZ_16b && t->fmt != G_IM_FMT_IA && t->fmt != G_IM_FMT_I &&
 		    t->fmt != G_IM_FMT_YUV && !premul && !ms;
 	for (uint32_t y = 0; y < h; y++) {
 		uint8_t *row = out + y * pitch;
-		uint32_t ty = mt ? masked(y, mt, t->cmt) : y;
+		uint32_t ty = mt ? masked(y + y0, mt, t->cmt) : y;
 		if (rgba) {
 			row_rgba16(g->tmem, t->tmem + (ty & 0xFF) * t->line, ty & 1, w, row);
 			continue;
@@ -473,7 +476,7 @@ static void decode(const struct gfx_state *g, const struct gfx_tile *t, uint32_t
 		for (uint32_t x = 0; x < w; x += 4) {
 			uint32_t c[4];
 			for (int i = 0; i < 4; i++) {
-				uint32_t tx = ms ? masked(x + (uint32_t)i, ms, t->cms) : x + (uint32_t)i;
+				uint32_t tx = ms ? masked(x + (uint32_t)i + x0, ms, t->cms) : x + (uint32_t)i;
 				c[i] = texel(g, t, tx, ty, tt);
 				if (premul)
 					c[i] = premultiply(c[i]);
@@ -484,23 +487,52 @@ static void decode(const struct gfx_state *g, const struct gfx_tile *t, uint32_t
 }
 
 static bool resolve_content(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, bool premul, uint32_t w,
-			    uint32_t h, struct gfx_tex *tex);
+			    uint32_t h, uint32_t x0, uint32_t y0, uint8_t once, struct gfx_tex *tex);
 
 /* Tamaño de la textura de la tile: lo que el dibujo no puede muestrear no
  * se decodifica (Perfect Dark copia el cuadro anterior en franjas de 320 × 1
  * con tiles de 513 × 9), ni más filas de las que caben en el área de
- * decodificación. false si no queda nada. */
-static bool tex_size(const struct gfx_tile *t, const uint16_t lim[2], uint32_t *w, uint32_t *h)
+ * decodificación. Una tile con espejo y clamp de hasta dos periodos de su
+ * máscara que no cabe en GFX_TEX_MAX (el lente del telescopio de Majora's
+ * Mask: una I4 de 64 × 64 en una tile de 128 × 128, 64 KB en RGBA) se
+ * decodifica en un solo periodo, el segundo (el reflejado), desde el texel
+ * (x0, y0), y el eje va con GFX_WRAP_MIRROR_ONCE (once: GFX_TEX_ONCE_*): el
+ * RSX refleja la coordenada una vez y fija el borde más allá, como el RDP.
+ * Primero t (las filas), después s. false si no queda nada. */
+static bool tex_size(const struct gfx_tile *t, const uint16_t lim[2], uint32_t *wp, uint32_t *hp, uint32_t *x0p,
+		     uint32_t *y0p, uint8_t *oncep)
 {
-	gfx_tile_size(t, w, h);
-	if (lim[0] && lim[0] < *w)
-		*w = lim[0];
-	if (lim[1] && lim[1] < *h)
-		*h = lim[1];
-	uint32_t pitch = (*w * 4 + 63) & ~63u;
-	if (pitch * *h > GFX_TEX_MAX)
-		*h = GFX_TEX_MAX / pitch;
-	return *h != 0;
+	uint32_t w, h, x0 = 0, y0 = 0;
+	uint8_t once = 0;
+	gfx_tile_size(t, &w, &h);
+	if (lim[0] && lim[0] < w)
+		w = lim[0];
+	if (lim[1] && lim[1] < h)
+		h = lim[1];
+	uint32_t pitch = (w * 4 + 63) & ~63u;
+	if (pitch * h > GFX_TEX_MAX) {
+		unsigned mt = clamp_mask(t->maskt, t->cmt, h);
+		if (mt && (t->cmt & 1) && h <= 2u << mt) {
+			h = y0 = 1u << mt;
+			once |= GFX_TEX_ONCE_T;
+		}
+	}
+	if (pitch * h > GFX_TEX_MAX) {
+		unsigned ms = clamp_mask(t->masks, t->cms, w);
+		if (ms && (t->cms & 1) && w <= 2u << ms) {
+			w = x0 = 1u << ms;
+			pitch = (w * 4 + 63) & ~63u;
+			once |= GFX_TEX_ONCE_S;
+		}
+	}
+	if (pitch * h > GFX_TEX_MAX)
+		h = GFX_TEX_MAX / pitch;
+	*wp = w;
+	*hp = h;
+	*x0p = x0;
+	*y0p = y0;
+	*oncep = once;
+	return h != 0;
 }
 
 /* Con GFX_JOB_FBTEX: ¿el consumidor va a leer la textura de su destino? Sí
@@ -545,8 +577,9 @@ void salsa64_gfx_trace_tex(const struct gfx_state *g, const struct gfx_tile *t, 
 static bool resolve(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, bool premul, const uint16_t lim[2],
 		    bool clamp_s, struct gfx_tex *tex)
 {
-	uint32_t w, h;
-	if (!tex_size(t, lim, &w, &h))
+	uint32_t w, h, x0, y0;
+	uint8_t once;
+	if (!tex_size(t, lim, &w, &h, &x0, &y0, &once))
 		return false;
 	struct tex_src src = { 0, 0, 0, 0 };
 	provenance(g, t, h, &src);
@@ -554,13 +587,15 @@ static bool resolve(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, 
 	uint32_t before = g->res->textures;
 #endif
 	memset(tex, 0, sizeof *tex);
+	tex->flags = once;
 	tex->width = (uint16_t)w;
 	tex->height = (uint16_t)h;
 	tex->pitch = (uint16_t)((w * 4 + 63) & ~63u);
+	/* from_target no deja pasar una máscara dentro del clamp: once es 0. */
 	if (from_target(g, t, tt, premul, clamp_s, w, h, &src)) {
 		tex->where = GFX_TEX_TARGET;
 		g->res->tex_target++;
-	} else if (!resolve_content(g, t, tt, premul, w, h, tex)) {
+	} else if (!resolve_content(g, t, tt, premul, w, h, x0, y0, once, tex)) {
 		return false;
 	}
 	memcpy(&tex->src_addr, &src, sizeof src);
@@ -571,13 +606,13 @@ static bool resolve(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, 
 }
 
 static bool resolve_content(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, bool premul, uint32_t w,
-			    uint32_t h, struct gfx_tex *tex)
+			    uint32_t h, uint32_t x0, uint32_t y0, uint8_t once, struct gfx_tex *tex)
 {
 	uint32_t pitch = (w * 4 + 63) & ~63u;
 	uint32_t t0 = gfx_io_clock();
 	uint32_t key[2];
-	tile_key(g, t, w, h, tt, premul, key);
-	tex->key = key[0];  /* el tamaño ya lo puso resolve */
+	tile_key(g, t, w, h, tt, premul, once, key);
+	tex->key = key[0];  /* el tamaño y las banderas ya los puso resolve */
 
 	/* Ya decodificada: en el arena de esta tarea o en la caché. */
 	const struct gfx_tc_entry *found = NULL;
@@ -605,7 +640,7 @@ static bool resolve_content(struct gfx_state *g, const struct gfx_tile *t, unsig
 	if (!out)
 		return false;
 	t0 = gfx_io_clock();
-	decode(g, t, w, h, pitch, tt, premul, out);
+	decode(g, t, w, h, pitch, x0, y0, tt, premul, out);
 	struct gfx_tc_entry *e = g->tc_on ? gfx_tc_insert(g, key, size) : NULL;
 	if (e) {
 		e->width = (uint16_t)w;

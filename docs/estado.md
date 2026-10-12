@@ -323,6 +323,94 @@ También con Majora's Mask sonando: dos vueltas del botón PS (la salida
 cuenta la pausa; en la ventana siguiente 0 % estirado y 0 faltas), el cuadro
 con «No» y con ×, y cierre limpio. Criterio de cierre cumplido.
 
+## 2026-10-12 — Majora's Mask: campanadas, recuerdo de Zelda y telescopio en «tablero de ajedrez» (rama `charming-spence-f80224`, paquete SLSA00100 «Salsa64 Majora»)
+
+Problema (PS3 real, main 7ede061): en Zelda: Majora's Mask (NZSE) la
+deformación de la pantalla con las campanadas del fin del día, el recuerdo
+de Zelda enseñando la Canción del Tiempo y la vista del telescopio del
+Observatorio se veían «como una matriz de píxeles muy pequeños
+intercalados, como un tablero de ajedrez».
+
+Medido (estados de la consola cargados en el host, log de la PS3; detalle
+en docs/framebuffer.md, «Majora's Mask»):
+- **Campanadas** (desde las ~5:36 hasta las 6:00): cada tarea copia el
+  framebuffer a `784600/320` en 40 franjas y lo redibuja desplazado en
+  56–60. La **pausa** usa esa dirección y ancho como imagen de 8 bits (la
+  cobertura de su filtro). La tabla de destinos emparejaba solo dirección
+  y ancho: después de abrir la pausa una vez, la ranura quedaba de 8 bits;
+  las texturas de 16 bits no la encontraban (en el log de la consola, 40
+  lecturas del RSX por tarea en vez de 100) y la copia a la RDRAM escribía
+  bytes de intensidad en una imagen de 16 bits. En el host se reproduce
+  igual (pausa, y después las campanadas: ruido) y sin la pausa sale bien.
+- **Recuerdo de Zelda y baile del Espantapájaros**: desenfoque de
+  movimiento con un acumulador en `3a92c0/320` que cada tarea mezcla con el
+  cuadro (70 % de lo anterior) y lee en la siguiente. Se leía de su copia
+  sin esperar en la RDRAM: una o dos tareas tarde, a 1× y en 16 bits; con
+  la realimentación, el redondeo se acumula (en el host, sin retraso, la
+  estela salía hasta 17 niveles más oscura) y, con el tramado del RSX en
+  las copias a 16 bits, deja un patrón fijo por píxel.
+- **Telescopio**: en el log de la consola, dos copias esperadas al entrar
+  y ~39 lecturas por tarea de una imagen guardada en la RDRAM; falta un
+  estado de esa escena para verlo en el host.
+
+Hecho:
+- `rdp_targets_get`: la misma dirección y ancho con otro tamaño de texel
+  es otra imagen si la ranura no se dibujó en `RDP_TARGETS_FRESH` tareas
+  (si está viva se comparte, como necesita la pausa de Zelda OoT).
+- Las copias a la RDRAM sin esperar (la misma imagen tarea tras tarea) ya
+  no pasan la imagen al CPU: el RDP la sigue leyendo del RSX mientras esté
+  viva (`rdp_targets_readback(…, cpu_owns)`; el host modela lo mismo).
+- `rsxkit_target_read` apaga el tramado (*dithering*) del RSX.
+- El log ya no da contadores de texturas negativos tras cargar un estado.
+- gfxtest, escena V: una color image de 8 bits que diez cuadros después es
+  una de 16 bits leída como textura (36 puntos; sin el arreglo, negro).
+- Host, contra main con las mismas entradas: pausa y equipo de Zelda OoT,
+  túnel de Mario Kart, SM64 del logo a la cara e intros de Conker y
+  Perfect Dark, cuadro por cuadro idénticos. Pruebas: 403 unitarias,
+  `tools/test-roms.sh` (gfxtest 36/36 en sus tres variantes), compilación
+  de la PS3 sin avisos.
+
+Después, en la misma rama: **el host con la precisión de la N64.** Con el
+acumulador leído del destino, guardar un estado a mitad del baile y
+cargarlo daba 40 bytes de RDRAM distintos de la corrida de corrido (tras
+cargar, lo dibujado sale de la RDRAM a 5 bits; de corrido, del búfer del
+host a 8). Los destinos de 16 bits del host guardan ahora los 5 bits por
+canal de la copia a la RDRAM: idéntico guardando en tres puntos del baile,
+a mitad del desenfoque de Perfect Dark y en la pausa de Zelda OoT (16090 →
+16300). La RDRAM no cambia: Zelda OoT, Mario Kart, SM64, Conker y Perfect
+Dark, cuadro por cuadro iguales a main con la misma precisión.
+
+**PS3 real (2026-10-12, paquete SLSA00100):** campanadas bien, también
+con la pausa abierta antes (el autor las ve «con más resolución»: el efecto
+lee la superficie del RSX a 3×); baile del Espantapájaros con la estela
+limpia y fluida. Telescopio: ya sin tablero de ajedrez, pero faltaba la
+máscara ovalada del lente y el sol salía seis veces. Con los estados del
+autor en el host (docs/texturas.md):
+- **Lente**: una I4 de 64 × 64 con espejo y clamp en una tile de
+  128 × 128. La decodificación con la coordenada enmascarada (f393824, de
+  la rama de gráficos) arregla el ancho; el alto no cabe en los 32 KB de
+  textura del SPE: se decodifica un solo periodo y el eje va con «mirror
+  once» del RSX.
+- **Sol**: un atlas de dos soles dibujado sin corrección de perspectiva
+  (`G_TP_NONE`): el RDP usa S·(1/W) tal cual y los microcódigos F3DEX2
+  normalizan 1/W a la mitad, así que la textura se muestrea a la mitad de
+  la coordenada (medido con el microcódigo real). La HLE lo hace ahora en
+  los triángulos de la segunda generación.
+- Las dos escenas quedan como con el RSP real (`--lle=all`), que es la
+  referencia que confirmó ambas causas.
+
+**PS3 real, segunda vuelta (2026-10-12, paquete 86d005f):** lente completo
+(primer uso del MIRROR_ONCE del RSX), un solo sol, y sin regresión en la
+pausa de Zelda OoT ni en el túnel de Mario Kart. Criterio de cierre
+cumplido.
+
+Falta:
+- [ ] Cambios bruscos de iluminación en el alcantarillado de Ciudad Reloj
+      (ranuras 2, 3 y 7 del autor: amarilla, gris y verde): el host da lo
+      mismo que la consola, no es del RSX; comparar con mupen64plus.
+- [ ] Escena de gfxtest para «mirror once» y para los triángulos sin
+      perspectiva.
+
 ## 2026-10-11 — FlashRAM: Majora's Mask guarda (rama `clever-tereshkova-aa0089`, paquete SLSA00096 «Salsa64 FlashRAM»)
 
 Problema (PS3 real, v0.1.0): en Majora's Mask, después de la escena inicial

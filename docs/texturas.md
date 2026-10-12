@@ -188,6 +188,39 @@ Si un juego decodificara en cada cuadro tiles enteras grandes (no franjas),
 lo siguiente sería la conversión con SIMD del SPE en toda la fila y, solo
 después, otro SPE.
 
+## Sin corrección de perspectiva: la mitad (2026-10-12)
+
+Con `G_TP_NONE` el RDP no divide los coeficientes de textura de un
+triángulo por el término 1/W que manda el RSP: usa S·(1/W) tal cual. Los
+microcódigos de la segunda generación (F3DEX2, F3DZEX, el de Conker)
+normalizan 1/W a ~0x4000, la mitad de 0x8000, en cada triángulo (medido con
+el microcódigo real de Majora's Mask: con perspectiva, el término vale
+16383–16408 en todos los dibujos de una escena; sin ella, 16384,5), así que
+con perspectiva el RDP recupera la coordenada del vértice y sin ella la
+textura se muestrea a la **mitad**. La HLE lo aplica en `rdp.c` a la escala
+de s y t de los triángulos (no de los TEXRECT, que llevan s y t directos).
+Caso: el sol visto por el telescopio del Observatorio de Majora's Mask, un
+atlas I8 de 64 × 32 con dos soles y s de 0 a 63: la consola muestra solo el
+izquierdo, ampliado; sin esto salían los dos, en cada una de sus tres
+bandas (seis soles). Con el RSP real (`--lle=all`) la escena queda igual
+que la HLE (0,09 de diferencia media por canal). Para F3D, F3DEX 1.x y el
+microcódigo de Perfect Dark no está medido: se dejan como estaban.
+
+## Espejo y clamp en dos periodos: «mirror once» (2026-10-12)
+
+Una tile con espejo y clamp cuya máscara es más chica que la tile se
+decodifica con la coordenada enmascarada (f393824). Si además no cabe en
+`GFX_TEX_MAX` (32 KB: el lente del telescopio de Majora's Mask es una I4 de
+64 × 64 con espejo en una tile de 128 × 128, 64 KB en RGBA), `tmem.c`
+decodifica solo el **segundo** periodo del eje (el reflejado) y marca el
+eje (`GFX_TEX_ONCE_T` o `_S`); `rdp.c` lo traduce a `GFX_WRAP_MIRROR_ONCE`
+(el RSX refleja la coordenada una vez alrededor de 0 y fija el borde fuera
+de [−1, 1]: `MIRROR_ONCE_CLAMP_TO_EDGE`) y corre u o v un periodo, de modo
+que el primer periodo es el reflejo del segundo y fuera de la tile queda el
+borde, como en el RDP. Primero t, después s. El host lo imita en
+`raster.c`. Prueba `gfx_tile_mirror_once`. Sin esto la máscara ovalada del
+lente salía solo en una esquina (y después en la mitad de arriba).
+
 ## Pendiente
 
 - Cargas a la TMEM: pedir por adelantado las filas de LOADTILE (hoy un DMA

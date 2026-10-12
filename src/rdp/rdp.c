@@ -310,7 +310,13 @@ static void release_targets(void)
 	memset(rdp.depths, 0, sizeof rdp.depths);
 	rdp.bound_t = -1;
 	rdp.bound_d = NULL;
-	rdp_targets_init(&rdp.tg);  /* la tabla de destinos, vacía */
+	/* La tabla de destinos, vacía. Sus contadores de texturas siguen: el
+	 * log los resta entre informes y, al cargar un estado, salían negativos. */
+	uint32_t tex_rsx = rdp.tg.tex_rsx, tex_rdram = rdp.tg.tex_rdram, tex_self = rdp.tg.tex_self;
+	rdp_targets_init(&rdp.tg);
+	rdp.tg.tex_rsx = tex_rsx;
+	rdp.tg.tex_rdram = tex_rdram;
+	rdp.tg.tex_self = tex_self;
 }
 
 uint32_t salsa64_rdp_scale(bool *reduced)
@@ -650,11 +656,12 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
 		LOGN(10, "gfx: color image imposible %06x/%u (alto %u): se ignora", addr, width, min_lh);
 		return -1;
 	}
-	struct { bool used; uint32_t addr, width; } before[RDP_TARGETS_MAX];
+	struct { bool used; uint32_t addr, width, bpp; } before[RDP_TARGETS_MAX];
 	for (int k = 0; k < RDP_TARGETS_MAX; k++) {
 		before[k].used = rdp.tg.t[k].used;
 		before[k].addr = rdp.tg.t[k].addr;
 		before[k].width = rdp.tg.t[k].width;
+		before[k].bpp = rdp.tg.t[k].bpp;
 	}
 	int i = rdp_targets_get(&rdp.tg, addr, width, siz, min_lh, &fresh);
 	rdp.last_get.slot = i;
@@ -669,6 +676,8 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
 	if (before[i].used && (before[i].addr != addr || before[i].width != width))
 		snprintf(rdp.last_get.how, sizeof rdp.last_get.how, "nueva, recicla %06x/%u", before[i].addr,
 			 before[i].width);
+	else if (before[i].used && before[i].bpp != rdp.tg.t[i].bpp)
+		snprintf(rdp.last_get.how, sizeof rdp.last_get.how, "nueva, era de %u bits", before[i].bpp * 8);
 	else
 		snprintf(rdp.last_get.how, sizeof rdp.last_get.how, before[i].used ? "crece" : "nueva");
 	if (rdp.surf[i])
@@ -928,7 +937,7 @@ static bool to_rsxkit(const struct gfx_draw *g, struct set *s, int cur, rsxkit_d
 	};
 	static const uint8_t wrap[] = {
 		[GFX_WRAP_CLAMP] = RSXKIT_WRAP_CLAMP, [GFX_WRAP_REPEAT] = RSXKIT_WRAP_REPEAT,
-		[GFX_WRAP_MIRROR] = RSXKIT_WRAP_MIRROR, [3] = RSXKIT_WRAP_CLAMP,
+		[GFX_WRAP_MIRROR] = RSXKIT_WRAP_MIRROR, [GFX_WRAP_MIRROR_ONCE] = RSXKIT_WRAP_MIRROR_ONCE,
 	};
 	memset(d, 0, offsetof(rsxkit_draw, k));
 	d->blend = g->blend < sizeof blend ? blend[g->blend] : RSXKIT_BLEND_OFF;
@@ -1245,7 +1254,10 @@ static void translate(uint32_t n)
 				big_used = 0;
 				buf = 0;
 			}
-			if (!rdp_targets_readback(&rdp.tg, i, true))
+			/* La esperada pasa al CPU (la va a leer y quizá cambiar: el
+			 * fondo de la pausa de Zelda); la que se repite sin esperar no:
+			 * el RDP la sigue leyendo del RSX (targets.h). */
+			if (!rdp_targets_readback(&rdp.tg, i, true, s->rb_sync[k]))
 				continue;
 			/* El RSX reduce a 1× desde la escala de este destino. */
 			rsxkit_rect src = surface_rect(i, 0, 0, t->lw, rows);
