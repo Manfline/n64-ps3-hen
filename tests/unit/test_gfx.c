@@ -1391,6 +1391,167 @@ static void gfx_texture_provenance(void)
 	CHECK(res.tex_reused >= 1);
 }
 
+/* Referencia aparte de tmem.c (n64brew.dev, TMEM): texel (x, y) de una
+ * tile en 0xRRGGBBAA. Filas de `line` bytes desde `tmem`, las impares con
+ * las mitades de cada palabra intercambiadas; 32 bits partidos en dos
+ * mitades de la TMEM; paletas de 16 bits en la mitad alta, 8 bytes por
+ * entrada. */
+static uint32_t ref_c5(uint32_t v)
+{
+	return (v << 3 | v >> 2) & 0xFF;
+}
+
+static uint32_t ref_16(uint32_t p, bool ia)
+{
+	if (ia)
+		return (p >> 8) * 0x01010100u | (p & 0xFF);
+	return ref_c5(p >> 11) << 24 | ref_c5((p >> 6) & 31) << 16 | ref_c5((p >> 1) & 31) << 8 | ((p & 1) ? 0xFF : 0);
+}
+
+static uint32_t ref_texel(const uint8_t *tm, unsigned fmt, unsigned siz, unsigned pal, unsigned tt, uint32_t tmem,
+			  uint32_t line, uint32_t x, uint32_t y)
+{
+	uint32_t row = tmem + (y & 0xFF) * line, sw = (y & 1) ? 4 : 0;
+	if (siz == G_IM_SIZ_32b) {
+		uint32_t i = ((tmem / 2 + (y & 0xFF) * (line / 2) + x) ^ (sw / 2)) & 0x3FF;
+		return salsa64_rd16(tm + 2 * i) << 16 | salsa64_rd16(tm + 0x800 + 2 * i);
+	}
+	if (siz == G_IM_SIZ_16b) {
+		uint32_t p = salsa64_rd16(tm + (((row + 2 * x) ^ sw) & 0xFFE));
+		return fmt == G_IM_FMT_YUV ? 0xFF : ref_16(p, fmt == G_IM_FMT_IA || fmt == G_IM_FMT_I);
+	}
+	uint32_t v;
+	if (siz == G_IM_SIZ_8b) {
+		v = tm[((row + x) ^ sw) & 0xFFF];
+	} else {
+		uint8_t b = tm[((row + x / 2) ^ sw) & 0xFFF];
+		v = (x & 1) ? b & 15 : b >> 4;
+		if (tt || fmt == G_IM_FMT_CI)
+			v |= pal << 4;
+	}
+	if (tt)
+		return ref_16(salsa64_rd16(tm + 0x800 + ((v * 8) & 0x7FF)), tt == G_TT_IA16);
+	uint32_t i = v, a = v;
+	if (siz == G_IM_SIZ_4b && fmt == G_IM_FMT_IA) {
+		i = (v >> 1) << 5 | (v >> 1) << 2 | (v >> 1) >> 1;
+		a = (v & 1) ? 0xFF : 0;
+	} else if (siz == G_IM_SIZ_4b && fmt != G_IM_FMT_CI) {
+		i = a = v * 17;
+	} else if (siz == G_IM_SIZ_8b && fmt == G_IM_FMT_IA) {
+		i = (v >> 4) * 17;
+		a = (v & 15) * 17;
+	}
+	return i * 0x01010100u | a;
+}
+
+/* La decodificación de cada formato (la de RGBA16 va de palabra en
+ * palabra; las demás, texel por texel, de 4 en 4 a la salida) contra la
+ * referencia, con filas impares, anchos que no son múltiplo de 4 y tiles
+ * que dan la vuelta a la TMEM. La TMEM se llena con LOADBLOCK sin dxt: los
+ * mismos bytes que la RDRAM. */
+static void gfx_tmem_decode_formats(void)
+{
+	static const struct {
+		uint8_t fmt, siz, pal, tt;
+		uint16_t tmem, line, w, h;
+	} cases[] = {
+		{ G_IM_FMT_RGBA, G_IM_SIZ_16b, 0, 0, 0, 16, 7, 5 },
+		{ G_IM_FMT_RGBA, G_IM_SIZ_16b, 0, 0, 4064, 24, 11, 6 },  /* da la vuelta */
+		{ G_IM_FMT_CI, G_IM_SIZ_16b, 0, 0, 8, 32, 16, 3 },
+		{ G_IM_FMT_IA, G_IM_SIZ_16b, 0, 0, 8, 8, 4, 3 },
+		{ G_IM_FMT_I, G_IM_SIZ_16b, 0, 0, 2048, 16, 5, 4 },
+		{ G_IM_FMT_YUV, G_IM_SIZ_16b, 0, 0, 0, 8, 3, 2 },
+		{ G_IM_FMT_RGBA, G_IM_SIZ_32b, 0, 0, 0, 8, 4, 3 },
+		{ G_IM_FMT_RGBA, G_IM_SIZ_32b, 0, 0, 2040, 16, 6, 3 },
+		{ G_IM_FMT_IA, G_IM_SIZ_8b, 0, 0, 16, 16, 13, 4 },
+		{ G_IM_FMT_I, G_IM_SIZ_8b, 0, 0, 4088, 16, 9, 3 },
+		{ G_IM_FMT_CI, G_IM_SIZ_8b, 0, 0, 0, 8, 8, 2 },
+		{ G_IM_FMT_CI, G_IM_SIZ_8b, 0, G_TT_RGBA16, 64, 24, 21, 5 },
+		{ G_IM_FMT_CI, G_IM_SIZ_8b, 0, G_TT_IA16, 64, 8, 6, 3 },
+		{ G_IM_FMT_IA, G_IM_SIZ_4b, 0, 0, 24, 8, 15, 3 },
+		{ G_IM_FMT_I, G_IM_SIZ_4b, 0, 0, 0, 16, 31, 5 },
+		{ G_IM_FMT_CI, G_IM_SIZ_4b, 5, 0, 32, 8, 9, 2 },
+		{ G_IM_FMT_CI, G_IM_SIZ_4b, 3, G_TT_RGBA16, 4080, 8, 16, 4 },
+	};
+	uint32_t seed = 0x5A15A64u;
+	for (unsigned c = 0; c < sizeof cases / sizeof cases[0]; c++) {
+		start();
+		for (int i = 0; i < 4096; i++)
+			t_n64.bus.rdram[TEX_PA + i] = (uint8_t)(lcg(&seed) >> 24);
+		dl(0xFD100000, TEX_PA);                            /* SETTIMG RGBA16 */
+		dl(0xF5100000, 0x07000000);                        /* SETTILE 7, tmem 0 */
+		dl(0xF3000000, 0x07000000 | 2047 << 12);           /* LOADBLOCK 4 KB, sin dxt */
+		dl(0xF5000000 | (uint32_t)cases[c].fmt << 21 | (uint32_t)cases[c].siz << 19 |
+			   (uint32_t)(cases[c].line / 8) << 9 | cases[c].tmem / 8,
+		   (uint32_t)cases[c].pal << 20);
+		dl(0xF2000000, (uint32_t)(cases[c].w - 1) << 14 | (uint32_t)(cases[c].h - 1) << 2);
+		dl(0xE3000000 | (32 - 14 - 2) << 8 | 1, (uint32_t)cases[c].tt << 14);
+		set_cycle(G_CYC_COPY);
+		dl(0xE4000000 | (uint32_t)(cases[c].w - 1) << 14 | (uint32_t)(cases[c].h - 1) << 2, 0);
+		dl(0xE1000000, 0);
+		dl(0xF1000000, 0x10000400);
+		run();
+		const struct gfx_draw *d = draw_n(0);
+		CHECK(d && d->ntex == 1);
+		if (!d || !d->ntex)
+			return;
+		CHECK_EQ(d->tex[0].width, cases[c].w);
+		CHECK_EQ(d->tex[0].height, cases[c].h);
+		const uint8_t *tex = tex_of(&d->tex[0]);
+		unsigned bad = 0;
+		for (uint32_t y = 0; y < cases[c].h; y++)
+			for (uint32_t x = 0; x < cases[c].w; x++)
+				bad += salsa64_rd32(tex + y * d->tex[0].pitch + 4 * x) !=
+				       ref_texel(gs.tmem, cases[c].fmt, cases[c].siz, cases[c].pal, cases[c].tt,
+						 cases[c].tmem, cases[c].line, x, y);
+		t_checks++;
+		if (bad)
+			t_fail(__FILE__, __LINE__, "caso %u: %u texels distintos de la referencia", c, bad);
+	}
+}
+
+/* Perfect Dark copia el cuadro anterior en franjas: LOADBLOCK de una fila de
+ * 320 texels y TEXRECT de 320 × 1 con una tile de 513 × 9 (más grande que
+ * la TMEM). Solo se decodifica lo que el rectángulo puede muestrear: 321 × 2
+ * con filtro puntual. Con una tile que cabe en la TMEM, la tile entera. */
+static void gfx_texrect_sampled_texels(void)
+{
+	for (int fits = 0; fits < 2; fits++) {
+		start();
+		for (int i = 0; i < 320; i++)
+			salsa64_wr16(t_n64.bus.rdram + TEX_PA + 2 * i, (uint16_t)(i << 1 | 1));
+		dl(0xFD100000 | 319, TEX_PA);                      /* SETTIMG RGBA16, 320 de ancho */
+		dl(0xF5100000, 0x07000000);
+		dl(0xF3000000, 0x07000000 | 319 << 12);            /* LOADBLOCK 320 texels */
+		dl(0xF5100000 | 160 << 9, 0);                      /* tile 0: línea 1280 bytes */
+		if (fits)
+			dl(0xF2000000, 63u << 14 | 7u << 2);           /* 64 × 8: 1 KB */
+		else
+			dl(0xF2000000, 2048u << 12 | 32u);             /* 513 × 9: 9 KB */
+		set_cycle(G_CYC_1CYCLE);  /* filtro puntual */
+		set_combine(CC(CC_ZERO, CC_ZERO, CC_C_ZERO, CC_T0), CC(CC_A_ZERO, CC_A_ZERO, 7, 6));
+		uint32_t right = fits ? 40 : 320;
+		/* TEXRECT (0, 20)–(right, 21), s = t = 0, dsdx = dtdy = 1. */
+		dl(0xE4000000 | right << 14 | 21 << 2, 20 << 2);
+		dl(0xE1000000, 0);
+		dl(0xF1000000, 0x04000400);
+		run();
+		const struct gfx_draw *d = draw_n(0);
+		CHECK(d && d->ntex == 1);
+		if (!d || !d->ntex)
+			return;
+		CHECK_EQ(d->tex[0].width, fits ? 64 : 321);
+		CHECK_EQ(d->tex[0].height, fits ? 8 : 2);
+		const uint8_t *tex = tex_of(&d->tex[0]);
+		unsigned bad = 0;
+		for (uint32_t x = 0; x < (fits ? 64u : 320u); x++)
+			bad += tex[4 * x + 2] != ref_c5(x & 31) || tex[4 * x + 3] != 0xFF;
+		CHECK_EQ(bad, 0);
+		/* u = s·xf0 + xf2 normaliza al ancho decodificado. */
+		CHECK(fabsf(d->tex[0].xf[0] * d->tex[0].width - 1.0f) < 1e-5f);
+	}
+}
+
 /* G_RM_VISCVG (IM_RD | FORCE_BL, blender IN·0 + BL·A_MEM): el dibujo sale
  * marcado para que el consumidor deje cobertura plena en vez de dibujar;
  * G_RM_PASS (FORCE_BL, IN·0 + IN·1), no. */
@@ -1471,6 +1632,8 @@ void t_suite_gfx(void)
 	RUN(gfx_texgen);
 	RUN(gfx_tmem_rgba16_block);
 	RUN(gfx_tmem_ci4_tlut);
+	RUN(gfx_tmem_decode_formats);
+	RUN(gfx_texrect_sampled_texels);
 	RUN(gfx_combiner_premul);
 	RUN(gfx_tmem_premul);
 	RUN(gfx_fill_and_zclear);
