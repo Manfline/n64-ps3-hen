@@ -109,6 +109,7 @@ struct salsa64_rec_stats {
 	uint64_t fr_dep;         /* de compiled, los que dependen de Status.FR */
 	uint64_t fr_twins;       /* de fr_dep, los compilados como gemelo de uno para el otro FR */
 	uint64_t fr_exits;       /* salidas en la entrada porque cambió Status.FR (exit_fr) */
+	uint64_t cu1_exits;      /* de las salidas por exit_fr, las que eran COP1 inusable (CU1 = 0) */
 	uint64_t flushes_by[SALSA64_REC_FLUSH_N];  /* de flushes, por causa */
 };
 

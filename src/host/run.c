@@ -2339,7 +2339,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "salsa64-run: recompilador: %llu bloques (%llu fuera de KSEG0, %llu desprendidos y %llu "
 			"enganchados en otra física, %u KB de caché), %llu solo intérprete, %llu entradas, %llu enlaces, "
 			"%llu invalidados, %llu vaciados (ids %llu, enlaces %llu, RDRAM %llu, bucles %llu, ROM %llu, estado %llu, "
-			"otros %llu), %llu desalojos, %llu traducciones, %llu dependen de FR (%llu gemelos, %llu salidas por FR), "
+			"otros %llu), %llu desalojos, %llu traducciones, %llu dependen de FR (%llu gemelos, %llu salidas por FR, %llu por CU1), "
 			"%llu instr. interpretadas (%.1f %%), %llu llamadas al intérprete%s\n",
 			(unsigned long long)st->compiled, (unsigned long long)st->compiled_x, (unsigned long long)st->detached,
 			(unsigned long long)st->rekeyed, salsa64_rec_used(&rec) / 256,
@@ -2351,6 +2351,7 @@ int main(int argc, char **argv)
 			(unsigned long long)st->flushes_by[SALSA64_REC_FLUSH_STATE], (unsigned long long)st->flushes_by[SALSA64_REC_FLUSH_OTHER],
 			(unsigned long long)st->evictions, (unsigned long long)st->vt_probes,
 			(unsigned long long)st->fr_dep, (unsigned long long)st->fr_twins, (unsigned long long)st->fr_exits,
+			(unsigned long long)st->cu1_exits,
 			(unsigned long long)st->interp_steps, cycles ? 100.0 * (double)st->interp_steps / (double)cycles : 0.0,
 			(unsigned long long)st->exec_calls, lockstep ? "; --lockstep sin diferencias" : "");
 		if (rec.prof) {

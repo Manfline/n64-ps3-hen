@@ -1099,8 +1099,10 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 				 * se llegó: el despachador busca o compila su gemelo. Con
 				 * CU1 = 0 es la salida de COP1 inusable de siempre (la
 				 * misma comprobación): que el intérprete lance la excepción. */
-				rec->stats.fr_exits++;
-				if (!(cpu->status & SALSA64_ST_CU1)) {
+				if (cpu->status & SALSA64_ST_CU1) {
+					rec->stats.fr_exits++;
+				} else {
+					rec->stats.cu1_exits++;
 					to_boundary = !rec->strict || cpu->cycles == cycles;
 					from_start = true;
 				}
