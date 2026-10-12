@@ -9,8 +9,8 @@
  * TMEM viven en el local store y persisten entre tareas.
  *
  * Presupuesto de local store (256 KB); los números exactos los imprime el
- * build (spu-size, 2026-10-11, con los efectos de framebuffer y los estados
- * guardados: texto 99,0 KB, datos 0,8 KB, bss 146,3 KB):
+ * build (spu-size, 2026-10-11, con la decodificación de 4 en 4 texels y el
+ * recorte de los TEXRECT: texto 100,2 KB, datos 0,8 KB, bss 143,3 KB):
  *   código (HLE + runtime)              ~ 97 KB (F3D y F3DEX: 3,6 KB;
  *                                         Perfect Dark 1,9 KB y Conker
  *                                         4,4 KB; el combiner con sus
@@ -19,9 +19,10 @@
  *                                         tramo S2DEX de los fondos de
  *                                         Zelda OoT, 4,8 KB)
  *   gfx_state (RDP, TMEM 4 KB, matrices,
- *     búfer de vértices, texturas de la
- *     tarea, directorio de la caché de
- *     texturas 32 KB, luces de Conker)     ~ 53 KB
+ *     búfer de vértices, 64 texturas del
+ *     arena de la tarea 3 KB, directorio
+ *     de la caché de texturas 32 KB, luces
+ *     de Conker)                           ~ 46 KB
  *   lecturas por DMA (vértices, matrices,
  *     luces, cargas de TMEM)               ~ 5,8 KB
  *   display list 2 × 1 KB                    2 KB
@@ -29,10 +30,11 @@
  *   texturas 2 × 32 KB                      64 KB
  *   spukit (descriptor, resultado…)        < 1 KB
  *   trabajo de los estados guardados        ~ 0,2 KB
- *   pila                                    el resto (~ 9,9 KB; la cadena más
- *                                         honda, fondo S2DEX → TEXRECT →
- *                                         estado → combiner, usa ~8 KB
- *                                         según -fstack-usage)
+ *   pila                                    el resto (~ 11,7 KB; la cadena
+ *                                         más honda, fondo S2DEX → TEXRECT →
+ *                                         estado → combiner, usa 8,4 KB
+ *                                         según -fstack-usage y el grafo de
+ *                                         llamadas del binario)
  */
 #include <spukit/spu.h>
 #include <sys/spu_thread.h>

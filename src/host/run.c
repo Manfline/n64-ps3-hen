@@ -59,6 +59,8 @@
  * texturas de cada dibujo en PPM (color y, debajo, el alfa), y en el
  * rasterizador (--gfx-frame) SALSA64_GFX_MARK=n[,m…] pinta esos dibujos de
  * magenta y SALSA64_GFX_PIX=x,y muestra qué dibujos escriben ese píxel.
+ * SALSA64_TEXSTAT=N (en todas las tareas) resume cada N campos las texturas
+ * pedidas y decodificadas por tarea y por qué no salieron de la caché.
  *
  * Sincronía de la HLE gráfica (sin -D): SALSA64_GFX_LATE=N la retrasa al
  * fin de la tarea, tras N sondeos del RSP, como un SPE lento mientras el CPU
@@ -654,6 +656,79 @@ void salsa64_gfx_trace_load(const struct gfx_state *g, uint32_t addr, uint32_t b
 	}
 }
 
+/* SALSA64_TEXSTAT=N (con este build): cada N campos, cuántas texturas
+ * piden los dibujos, cuántas se decodifican y por qué (clave nunca vista, o
+ * vista y desalojada de la caché), cuántos texels y cuántas claves
+ * distintas hay; SALSA64_TEXSTAT_V lista cada decodificación desde
+ * --trace-from. Las claves son los 32 bits de gfx_tex.key. */
+#define TS_KEYS (1u << 20)
+static struct ts_key {
+	uint32_t key, window;  /* última ventana en que se pidió (0: libre) */
+} ts_keys[TS_KEYS];
+static struct {
+	uint32_t window, from_field, tasks, req, dec, dec_new, dec_same_src, distinct;
+	uint64_t dec_texels, distinct_bytes;
+} ts = { .window = 1 };
+static uint32_t ts_src[TS_KEYS];  /* origen y tamaño → última clave */
+
+void salsa64_gfx_trace_tex(const struct gfx_state *g, const struct gfx_tile *t, const struct gfx_tex *tex,
+			   bool decoded)
+{
+	(void)g;
+	if (!getenv("SALSA64_TEXSTAT"))
+		return;
+	struct ts_key *k = &ts_keys[(tex->key * 0x9E3779B1u) >> 12];
+	while (k->window && k->key != tex->key)
+		k = k == &ts_keys[TS_KEYS - 1] ? ts_keys : k + 1;
+	bool seen = k->window != 0;
+	ts.req++;
+	if (k->window != ts.window) {
+		ts.distinct++;
+		ts.distinct_bytes += (uint32_t)tex->pitch * tex->height;
+	}
+	k->key = tex->key;
+	k->window = ts.window;
+	if (!decoded)
+		return;
+	ts.dec++;
+	ts.dec_texels += (uint32_t)tex->width * tex->height;
+	if (!seen) {
+		ts.dec_new++;
+		uint32_t *src = &ts_src[(tex->src_addr * 0x9E3779B1u ^ (uint32_t)tex->width << 16 ^ tex->height) &
+					(TS_KEYS - 1)];
+		ts.dec_same_src += tex->src_addr && *src && *src != tex->key;
+		if (tex->src_addr)
+			*src = tex->key;
+	}
+	if (getenv("SALSA64_TEXSTAT_V") && tracing())
+		fprintf(stderr, "tex: campo %u tarea %u %s key %08x %ux%u fmt %u siz %u tmem %u line %u pal %u "
+			"mask %u,%u cm %u,%u sz %u,%u-%u,%u src %06x/%u\n", n64.bus.vi.fields, gfx.tasks + 1,
+			seen ? "vista" : "nueva", tex->key, tex->width, tex->height, t->fmt, t->siz, t->tmem, t->line,
+			t->pal, t->masks, t->maskt, t->cms, t->cmt, t->uls, t->ult, t->lrs, t->lrt, tex->src_addr,
+			tex->src_pitch);
+}
+
+static void ts_window(void)
+{
+	const char *e = getenv("SALSA64_TEXSTAT");
+	uint32_t every = e ? (uint32_t)strtoul(e, NULL, 0) : 0;
+	if (!every)
+		return;
+	ts.tasks++;
+	if (n64.bus.vi.fields < ts.from_field + every)
+		return;
+	double n = ts.tasks;
+	fprintf(stderr, "texstat campos %u–%u: %u tareas; por tarea %.1f pedidas, %.1f decodificadas (%.1f nuevas, "
+		"%.1f vistas antes; %.1f nuevas desde un origen ya visto con otro contenido), %.0f texels; en la "
+		"ventana %u claves distintas, %.0f KB\n", ts.from_field, n64.bus.vi.fields, ts.tasks, ts.req / n,
+		ts.dec / n, ts.dec_new / n, (ts.dec - ts.dec_new) / n, ts.dec_same_src / n, ts.dec_texels / n,
+		ts.distinct, ts.distinct_bytes / 1024.0);
+	uint32_t window = ts.window + 1, from = n64.bus.vi.fields;
+	memset(&ts, 0, sizeof ts);
+	ts.window = window;
+	ts.from_field = from;
+}
+
 /* Por dibujo (gfx_done): rango de s/t, vértices (SALSA64_GFX_VDUMP=n) y
  * texturas en PPM (SALSA64_GFX_TEXDUMP=DIR). */
 static void trace_draw_extra(const struct gfx_draw *d)
@@ -848,6 +923,9 @@ static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_resu
 	if (getenv("SALSA64_GFX_CUTCHECK") && n64.bus.vi.fields >= trace_from)
 		cut_check(res);
 	gfx.tasks++;
+#ifdef SALSA64_GFX_TRACE
+	ts_window();
+#endif
 	s->flags |= res->flags;
 	s->commands += res->commands;
 	s->triangles += res->triangles;
