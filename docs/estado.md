@@ -166,10 +166,12 @@ autor en el host (docs/texturas.md):
 - Las dos escenas quedan como con el RSP real (`--lle=all`), que es la
   referencia que confirmó ambas causas.
 
+**PS3 real, segunda vuelta (2026-10-12, paquete 86d005f):** lente completo
+(primer uso del MIRROR_ONCE del RSX), un solo sol, y sin regresión en la
+pausa de Zelda OoT ni en el túnel de Mario Kart. Criterio de cierre
+cumplido.
+
 Falta:
-- [ ] Confirmar en la PS3 real el lente (modo MIRROR_ONCE del RSX, nunca
-      usado antes), el sol y, sin regresiones, la pausa de Zelda OoT y el
-      túnel de Mario Kart.
 - [ ] Cambios bruscos de iluminación en el alcantarillado de Ciudad Reloj
       (ranuras 2, 3 y 7 del autor: amarilla, gris y verde): el host da lo
       mismo que la consola, no es del RSX; comparar con mupen64plus.
