@@ -121,7 +121,8 @@ static unsigned due_event(const struct salsa64_sched *s, uint64_t now)
 
 _Static_assert(SALSA64_EV_MAX == 8 && SALSA64_PROF_EV_MANY == SALSA64_PROF_EV_STOP + SALSA64_EV_MAX,
 	       "el perfil cuenta los eventos en el orden de enum salsa64_event");
-_Static_assert(SALSA64_PROF_EXIT_START - SALSA64_PROF_EXIT_LINK == SALSA64_REC_EXIT_START - SALSA64_REC_EXIT_LINK,
+_Static_assert(SALSA64_PROF_EXIT_START - SALSA64_PROF_EXIT_LINK == SALSA64_REC_EXIT_START - SALSA64_REC_EXIT_LINK &&
+	       SALSA64_PROF_EXIT_FR - SALSA64_PROF_EXIT_LINK == SALSA64_REC_EXIT_FR - SALSA64_REC_EXIT_LINK,
 	       "el perfil cuenta las salidas en el orden de SALSA64_REC_EXIT_*");
 
 /* ---- Llamadas desde el código generado ------------------------------------------ */
@@ -182,12 +183,11 @@ REC_UNUSED static void rec_h_exec(struct salsa64_cpu *cpu, uint32_t instr)
 	if (I_OP(instr) == 0x10) {
 		/* COP0 termina el bloque y el código enlaza con el siguiente sin
 		 * pasar por el despachador: lo que este haría antes de correr un
-		 * bloque va aquí. La TLB, el ASID o ERL (rec_tlb.h); Status.FR (la
-		 * caché se compiló para el otro: que el despachador la vacíe). El
-		 * modo y las interrupciones los revisa el código al volver. */
+		 * bloque va aquí. La TLB, el ASID o ERL (rec_tlb.h). Si cambió
+		 * Status.FR, la entrada de cada bloque que dependa de él lo nota y
+		 * sale (exit_fr). El modo y las interrupciones los revisa el código
+		 * al volver. */
 		salsa64_rec_x_sync(rec);
-		if ((cpu->status & SALSA64_ST_FR) != rec->fr)
-			cpu->rec_abort = 1;
 	}
 	if (prof)
 		salsa64_rec_prof_add(prof, exec_cause(instr), salsa64_rec_prof_now() - t0);
@@ -320,7 +320,7 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	w[n++] = ppc_mtctr(4);
 	w[n++] = PPC_BCTR;
 
-	uint32_t common = n + 16;
+	uint32_t common = n + 18;
 	rec->exit_link = n;
 	w[n++] = ppc_mflr(4);
 	w[n++] = ppc_addi(4, 4, -16);
@@ -346,6 +346,10 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	n++;
 	rec->exit_end = n;
 	w[n++] = ppc_li(4, SALSA64_REC_EXIT_END);
+	w[n] = ppc_b((int32_t)(common - n) * 4);
+	n++;
+	rec->exit_fr = n;
+	w[n++] = ppc_li(4, SALSA64_REC_EXIT_FR);
 	w[n] = ppc_b((int32_t)(common - n) * 4);
 	n++;
 	while (n < common)
@@ -573,7 +577,7 @@ bool salsa64_rec_calls_near_at(const struct salsa64_rec *rec, uint32_t base)
 	return true;
 }
 
-void salsa64_rec_flush(struct salsa64_rec *rec)
+void salsa64_rec_flush_why(struct salsa64_rec *rec, enum salsa64_rec_flush_cause why)
 {
 	if (rec->prof && rec->prof->blocks)
 		for (unsigned id = 1; id < rec->next_block; id++)
@@ -582,9 +586,11 @@ void salsa64_rec_flush(struct salsa64_rec *rec)
 	if (rec->map_dirty) {
 		memset(rec->map, 0, (rec->rdram_size >> 2) * sizeof rec->map[0]);
 		memset(rec->flags, 0, rec->rdram_size >> SALSA64_REC_FLAG_SHIFT);
+		memset(rec->twin, 0, rec->next_block * sizeof rec->twin[0]);
 		salsa64_rec_x_flush(rec);
 		rec->map_dirty = false;
 		rec->stats.flushes++;
+		rec->stats.flushes_by[why]++;
 	}
 	rec->free_block = 0;
 	rec->next_block = 1;
@@ -628,8 +634,16 @@ static void kill_block(struct salsa64_rec *rec, unsigned id)
 	bool detached = rec->x.state[id] == SALSA64_REC_X_DETACHED;  /* ya sin banderas, enlaces ni código */
 	if (rec->prof && rec->prof->blocks)
 		salsa64_rec_prof_fold(rec->prof, id, false);
-	if (!salsa64_rec_x_remove(rec, id))
-		rec->map[b->pa >> 2] = 0;
+	if (!salsa64_rec_x_remove(rec, id)) {
+		/* KSEG0: el mapa queda apuntando al gemelo (del otro FR), si lo hay. */
+		unsigned t = rec->twin[id];
+		if (rec->map[b->pa >> 2] == id)
+			rec->map[b->pa >> 2] = (uint16_t)t;
+		if (t) {
+			rec->twin[t] = 0;
+			rec->twin[id] = 0;
+		}
+	}
 	if (b->pa < rec->rdram_size && !detached)  /* no en la ROM */
 		flags_add(rec, b->pa, b->pa + b->bytes, -1);
 	unlink_all(rec, b);
@@ -689,7 +703,7 @@ void salsa64_rec_invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t len)
 	if (len > rec->rdram_size - pa)
 		len = rec->rdram_size - pa;
 	if (pa == 0 && len == rec->rdram_size) {
-		salsa64_rec_flush(rec);
+		salsa64_rec_flush_why(rec, SALSA64_REC_FLUSH_RDRAM);
 		return;
 	}
 	uint32_t end = pa + len, lo = pa > MAX_BLOCK_BYTES ? pa - MAX_BLOCK_BYTES : 0;
@@ -704,8 +718,9 @@ void salsa64_rec_invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t len)
 		if (w1 > end)
 			w1 = end;
 		for (uint32_t w = w0; w < w1; w += 4) {
-			unsigned id = rec->map[w >> 2];
-			if (id && rec->blocks[id].pa + rec->blocks[id].bytes > pa)
+			/* Matar uno deja su gemelo en el mapa: los dos cubren los mismos bytes. */
+			unsigned id;
+			while ((id = rec->map[w >> 2]) != 0 && rec->blocks[id].pa + rec->blocks[id].bytes > pa)
 				kill_block(rec, id);
 		}
 	}
@@ -752,14 +767,24 @@ static void evict_next_segment(struct salsa64_rec *rec)
 	rec->cpu->rec_abort = 1;
 }
 
+/* Lugar para otro bloque: desalojar el tramo más viejo o, sin ids o enlaces
+ * libres (o con NO_EVICT), vaciar todo. Puede matar cualquier bloque. */
+static void make_room(struct salsa64_rec *rec)
+{
+	if (rec_space(rec))
+		return;
+	if (!rec_ids_ok(rec) || SALSA64_REC_OLD(rec, SALSA64_REC_OPT_NO_EVICT))
+		salsa64_rec_flush_why(rec, !rec->free_block && rec->next_block > SALSA64_REC_MAX_BLOCKS ? SALSA64_REC_FLUSH_IDS
+				      : !rec->free_link && rec->next_link >= SALSA64_REC_MAX_LINKS ? SALSA64_REC_FLUSH_LINKS
+				      : SALSA64_REC_FLUSH_OTHER);
+	else
+		evict_next_segment(rec);
+}
+
+/* Compila el bloque de (pc, pa) con el Status.FR actual y lo registra (en
+ * KSEG0 pasa a ser el del mapa). Quien llama ya hizo lugar (make_room). */
 static unsigned new_block(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, unsigned seg)
 {
-	if (!rec_space(rec)) {
-		if (!rec_ids_ok(rec) || SALSA64_REC_OLD(rec, SALSA64_REC_OPT_NO_EVICT))
-			salsa64_rec_flush(rec);
-		else
-			evict_next_segment(rec);
-	}
 	unsigned id;
 	if (rec->free_block) {
 		id = rec->free_block;
@@ -770,14 +795,18 @@ static unsigned new_block(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, uns
 	unsigned n = 0;
 	uint32_t bytes = 4;
 	rec->cur_id = id;
+	rec->fr = rec->cpu->status & SALSA64_ST_FR;
+	rec->compiled_fr_dep = false;
 	uint32_t code = salsa64_rec_compile(rec, pc, pa, seg, SALSA64_REC_MAX_INSNS, false, &n, &bytes);
 	rec->cur_id = 0;
 	struct salsa64_rec_block *b = &rec->blocks[id];
 	b->pa = pa;
 	b->code = code;
-	b->n = (uint16_t)n;
+	b->n = (uint8_t)n;
 	b->bytes = (uint16_t)(code ? bytes : 4);
 	b->links = 0;
+	b->fr = (uint8_t)((rec->fr ? SALSA64_REC_FR_SET : 0) | (code && rec->compiled_fr_dep ? SALSA64_REC_FR_DEP : 0));
+	rec->twin[id] = 0;
 	if (seg == SALSA64_REC_KSEG0)
 		rec->map[pa >> 2] = (uint16_t)id;
 	salsa64_rec_x_add(rec, id, pc, pa, seg, code != 0);
@@ -786,10 +815,54 @@ static unsigned new_block(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, uns
 		flags_add(rec, b->pa, b->pa + b->bytes, +1);
 	if (code) {
 		rec->stats.compiled++;
+		rec->stats.fr_dep += (b->fr & SALSA64_REC_FR_DEP) != 0;
 	} else {
 		rec->stats.interp_only++;
 	}
 	return id;
+}
+
+/* ¿El bloque `id` se compiló para el otro Status.FR y su código depende de él? */
+static inline bool fr_mismatch(const struct salsa64_rec *rec, unsigned id)
+{
+	return !salsa64_rec_block_fr_ok(&rec->blocks[id], (rec->cpu->status & SALSA64_ST_FR) != 0);
+}
+
+/* El bloque de (pc, pa) para el Status.FR de ahora: el que hay si vale con
+ * este FR; si no, su gemelo (en KSEG0, twin[]; fuera, otro bloque de la
+ * misma clave en xhash, que salsa64_rec_x_find ya filtra por FR), compilado
+ * si no existe. El mapa de KSEG0 apunta al último que se usó, así exit_jr
+ * (que lo lee sin mirar FR) acierta mientras el FR no cambie. Vacía la
+ * caché cuando no caben más bloques (make_room): entonces `id` pudo morir y
+ * se vuelve a buscar. */
+static unsigned block_for_fr(struct salsa64_rec *rec, unsigned id, uint64_t pc, uint32_t pa, unsigned seg)
+{
+	if (id && !fr_mismatch(rec, id))
+		return id;
+	uint32_t gen = rec->generation;
+	if (id && seg == SALSA64_REC_KSEG0 && rec->twin[id]) {
+		unsigned t = rec->twin[id];
+		rec->map[pa >> 2] = (uint16_t)t;
+		return t;
+	}
+	make_room(rec);
+	if (rec->generation != gen) {
+		/* Un desalojo o un vaciado: lo que había puede haber muerto. */
+		id = seg == SALSA64_REC_KSEG0 ? rec->map[pa >> 2] : salsa64_rec_x_find(rec, pc, pa);
+		if (id && !fr_mismatch(rec, id))
+			return id;
+	}
+	unsigned t = new_block(rec, pc, pa, seg);
+	if (id && seg == SALSA64_REC_KSEG0) {
+		if (rec->blocks[t].code && (rec->blocks[t].fr & SALSA64_REC_FR_DEP)) {
+			rec->twin[id] = (uint16_t)t;
+			rec->twin[t] = (uint16_t)id;
+			rec->stats.fr_twins++;
+		} else {
+			kill_block(rec, id);  /* no debería pasar (mismos bytes): que no quede huérfano fuera del mapa */
+		}
+	}
+	return t;
 }
 
 /* Parchea el nop de `site` con un `b` al bloque. */
@@ -927,18 +1000,13 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 			site = 0;
 			continue;
 		}
-		if ((cpu->status & SALSA64_ST_FR) != rec->fr) {
-			salsa64_rec_flush(rec);
-			rec->fr = cpu->status & SALSA64_ST_FR;
-		}
-
 		unsigned id = seg == SALSA64_REC_KSEG0 ? rec->map[pa >> 2] : salsa64_rec_x_find(rec, pc, pa);
 		if (!id && seg == SALSA64_REC_MAPPED && !SALSA64_REC_OLD(rec, SALSA64_REC_DBG_NO_DETACH))
 			id = salsa64_rec_x_rekey(rec, pc, pa);
-		if (!id) {
+		if (!id || fr_mismatch(rec, id)) {
 			if (prof)
 				t0 = salsa64_rec_prof_now();
-			id = new_block(rec, pc, pa, seg);
+			id = block_for_fr(rec, id, pc, pa, seg);
 			if (prof) {
 				prof->t[SALSA64_PROF_COMPILE] += salsa64_rec_prof_now() - t0;
 				prof->n[SALSA64_PROF_COMPILE]++;
@@ -959,6 +1027,7 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 			if (rec->strict) {
 				if (prof)
 					t0 = salsa64_rec_prof_now();
+				rec->fr = cpu->status & SALSA64_ST_FR;
 				entry = salsa64_rec_compile(rec, pc, pa, seg, (unsigned)(s->next - cpu->cycles), true, &n,
 							    &bytes);
 				if (prof) {
@@ -1025,6 +1094,16 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 				 * la entrada, p. ej. con COP1 inusable): una instrucción. */
 				to_boundary = !rec->strict || cpu->cycles == cycles;
 				from_start = cpu->rec_kind == SALSA64_REC_EXIT_START;
+			} else if (cpu->rec_kind == SALSA64_REC_EXIT_FR) {
+				/* Status.FR ya no es el de la compilación del bloque al que
+				 * se llegó: el despachador busca o compila su gemelo. Con
+				 * CU1 = 0 es la salida de COP1 inusable de siempre (la
+				 * misma comprobación): que el intérprete lance la excepción. */
+				rec->stats.fr_exits++;
+				if (!(cpu->status & SALSA64_ST_CU1)) {
+					to_boundary = !rec->strict || cpu->cycles == cycles;
+					from_start = true;
+				}
 			}
 		}
 		if (rec->after_exit)

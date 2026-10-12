@@ -730,7 +730,7 @@ bool salsa64_state_load(struct salsa64_n64 *n64, salsa64_state_read_fn read, voi
 
 	/* El código generado puede depender de la RDRAM de antes. */
 	if (c->rec)
-		salsa64_rec_flush(c->rec);
+		salsa64_rec_flush_why(c->rec, SALSA64_REC_FLUSH_STATE);
 	return true;
 }
 

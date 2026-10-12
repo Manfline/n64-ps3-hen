@@ -48,7 +48,7 @@ void salsa64_bus_set_rom(struct salsa64_bus *bus, const uint8_t *rom, uint32_t s
 	bus->rom = rom;
 	bus->rom_size = size > max ? max : size;
 	if (bus->cpu && bus->cpu->rec)  /* puede haber código compilado desde la ROM anterior */
-		salsa64_rec_flush(bus->cpu->rec);
+		salsa64_rec_flush_why(bus->cpu->rec, SALSA64_REC_FLUSH_ROM);
 }
 
 void salsa64_bus_set_isviewer(struct salsa64_bus *bus, uint8_t *buf, salsa64_isv_fn out, void *ctx)
@@ -59,7 +59,7 @@ void salsa64_bus_set_isviewer(struct salsa64_bus *bus, uint8_t *buf, salsa64_isv
 	if (buf)
 		memset(buf, 0, SALSA64_ISV_SIZE);
 	if (bus->cpu && bus->cpu->rec)  /* el ISViewer tapa la ROM: no se compila ahí */
-		salsa64_rec_flush(bus->cpu->rec);
+		salsa64_rec_flush_why(bus->cpu->rec, SALSA64_REC_FLUSH_ROM);
 }
 
 static inline bool isv_hit(const struct salsa64_bus *bus, uint32_t paddr)
