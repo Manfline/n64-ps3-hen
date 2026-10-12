@@ -729,8 +729,13 @@ void gfx_rdp_command(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	case G_RDPTILESYNC:
 	case G_SETKEYGB:
 	case G_SETKEYR:
-	case G_SETCONVERT:
 		return;
+	case G_SETCONVERT:
+		/* K0–K3 son de la conversión YUV (sin uso aquí); K4 y K5 son
+		 * entradas del combiner (Conker: (SHADE − ENV)·K5 + PRIM). */
+		g->k4 = (uint16_t)((w1 >> 9) & 0x1FF);
+		g->k5 = (uint16_t)(w1 & 0x1FF);
+		break;
 	case G_SETSCISSOR:
 		g->scissor[0] = (w0 >> 12) & 0xFFF;
 		g->scissor[1] = w0 & 0xFFF;

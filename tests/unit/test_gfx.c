@@ -174,6 +174,54 @@ enum { CC_A_ZERO = 15 };
 
 /* ---- Pruebas ---- */
 
+/* G_SETCONVERT: K5 entra al combiner (Conker: (SHADE − ENV)·K5 + PRIM en el
+ * segundo ciclo, con K5 = 255; si se ignora, la cara sale negra) y persiste
+ * en el estado del RDP. */
+static void gfx_setconvert_k5(void)
+{
+	start();
+	dl(0xEC000000, 0x00000000 | 0x41u << 9 | 0xFFu);  /* K4 = 0x41, K5 = 0xFF */
+	run();
+	CHECK_EQ(gs.k4, 0x41);
+	CHECK_EQ(gs.k5, 0xFF);
+
+	struct gfx_draw d;
+	memset(&d, 0, sizeof d);
+	gs.prim = 0;
+	gs.env = 0;
+	gs.oh = (uint32_t)G_CYC_2CYCLE << G_MDSFT_CYCLETYPE;
+	/* Ciclo 0 en cero; ciclo 1: rgb (SHADE − ENV)·K5 + PRIM, alfa SHADE. */
+	gs.cc_hi = 15u << 20 | 31u << 15 | 7u << 12 | 7u << 9 | 4u << 5 | 15u;
+	gs.cc_lo = 15u << 28 | 5u << 24 | 7u << 21 | 7u << 18 | 7u << 15 | 7u << 12 | 4u << 9 | 3u << 6 | 7u << 3 | 4u;
+	CHECK(!gfx_combine(&gs, &d));
+	CHECK_EQ(d.ntex, 0);
+	for (int lane = 0; lane < 3; lane++)
+		CHECK(fabsf(d.k[GFX_K_ONE][1][lane] - 1.0f) < 1e-6f);
+
+	gs.k5 = 0x80;  /* 128/255 */
+	CHECK(!gfx_combine(&gs, &d));
+	CHECK(fabsf(d.k[GFX_K_ONE][1][0] - 128.0f / 255.0f) < 1e-6f);
+	gs.k5 = 0x1FF;  /* 9 bits con signo: −1 */
+	CHECK(!gfx_combine(&gs, &d));
+	CHECK(fabsf(d.k[GFX_K_ONE][1][0] + 1.0f / 255.0f) < 1e-6f);
+
+	/* Estado guardado: K4 y K5 van y vuelven; un estado sin ellos (bytes
+	 * en cero al final) los deja en cero. */
+	uint8_t buf[GFX_STATE_REGS];
+	gfx_state_pack_regs(&gs, buf);
+	gs.k4 = gs.k5 = 0;
+	CHECK(gfx_state_unpack_regs(&gs, buf));
+	CHECK_EQ(gs.k4, 0x41);
+	CHECK_EQ(gs.k5, 0x1FF);
+	unsigned i = GFX_STATE_REGS;
+	while (i > 0 && buf[i - 1] == 0)
+		i--;
+	memset(buf + i - 4, 0, 4);
+	CHECK(gfx_state_unpack_regs(&gs, buf));
+	CHECK_EQ(gs.k4, 0);
+	CHECK_EQ(gs.k5, 0);
+}
+
 static void gfx_combiner_forms(void)
 {
 	/* SHADE: todo en X_4, coeficiente del color del vértice. */
@@ -1463,6 +1511,7 @@ static void gfx_clip_ratio_f3dex2(void)
 void t_suite_gfx(void)
 {
 	RUN(gfx_combiner_forms);
+	RUN(gfx_setconvert_k5);
 	RUN(gfx_combiner_shade_squared);
 	RUN(gfx_triangle_transform);
 	RUN(gfx_clip_ratio_f3dex2);

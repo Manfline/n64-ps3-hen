@@ -522,6 +522,9 @@ bool gfx_combine(const struct gfx_state *g, struct gfx_draw *d)
 	rgba(g->env, x.env);
 	x.prim_lod = g->prim_lod / 255.0f;
 	x.noise = 0.5f;
+	/* K4 y K5 tienen 9 bits con signo, en la escala de los colores (255 = 1). */
+	x.k4 = (float)((int32_t)((uint32_t)g->k4 << 23) >> 23) / 255.0f;
+	x.k5 = (float)((int32_t)((uint32_t)g->k5 << 23) >> 23) / 255.0f;
 
 	struct cc_cycle cyc[2];
 	unpack(g->cc_hi, g->cc_lo, cyc);
