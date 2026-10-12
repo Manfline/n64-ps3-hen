@@ -182,6 +182,13 @@ static struct {
 	 * lo termina, así que cada copia esperada se cumplía por el tope de
 	 * RB_WAIT_US (200 ms por tarea en la intro de Perfect Dark: 5 campos/s). */
 	volatile uint32_t rb_waiting;
+	/* Lo mismo para acquire: tarea (n − SETS + 1) que tiene que estar
+	 * traducida para que el juego de búferes n % SETS quede libre, o 0. Sin
+	 * esto, un juego que manda más de SETS tareas gráficas dentro de un
+	 * campo (Paper Mario al abrir el telón, Mario Party tras los logos) se
+	 * quedaba esperando en acquire sin cerrar el campo, la presentación no
+	 * recibía las tareas visibles y nunca traducía esa: interbloqueo. */
+	volatile uint32_t set_waiting;
 	bool rb_late_logged;
 	/* Copias espejo en vuelo: el RSX escribe el búfer; cuando pasa la
 	 * barrera se convierte a la RDRAM (readbacks_finish). */
@@ -473,11 +480,19 @@ static void acquire(void *ctx, struct gfx_job *job)
 			if (!t0) {
 				t0 = sysGetSystemTime();
 				rdp.stats.set_waits++;
+				/* Que la presentación traduzca esa tarea aunque todavía no
+				 * sea visible (el campo no se cierra mientras se espera). */
+				rdp.set_waiting = n - SETS + 1;
+				lwsync();
+				if (rdp.wake)
+					rdp.wake();
 			}
 			sysUsleep(50);
 		}
-		if (t0)
+		if (t0) {
+			rdp.set_waiting = 0;
 			rdp.stats.us_set_wait += sysGetSystemTime() - t0;
+		}
 	}
 	/* Tareas que el RSX ya terminó: la de cada juego cuya barrera pasó (las
 	 * hace en orden). fence_task se lee antes que fence: si es la nueva,
@@ -511,6 +526,24 @@ static void acquire(void *ctx, struct gfx_job *job)
 
 /* Hasta qué línea llegan las tijeras de los dibujos que siguen a un
  * TARGET (hasta el siguiente): el alto mínimo de su superficie. */
+/* ¿Los dibujos hasta el próximo TARGET son todos rellenos (FILLRECT)? Una
+ * color image alta con solo rellenos limpia varios framebuffers de una vez
+ * (Star Fox 64, DK64) y se reparte; con dibujos de verdad es una imagen
+ * (la transición del cierre de DK64, de 320 × 459, que el CPU lee después)
+ * y se crea tal cual. */
+static bool fills_only(const struct set *s, uint32_t off, uint32_t cmd_bytes)
+{
+	while (off + sizeof(struct gfx_cmd) <= cmd_bytes) {
+		const struct gfx_cmd *c = (const struct gfx_cmd *)(s->cmd + off);
+		if (c->op == GFX_OP_END || c->op == GFX_OP_TARGET || c->size < sizeof *c)
+			break;
+		if (c->op == GFX_OP_DRAW && ((const struct gfx_draw *)c)->cycle != G_CYC_FILL)
+			return false;
+		off += c->size;
+	}
+	return true;
+}
+
 static uint32_t scissor_bottom(const struct set *s, uint32_t off, uint32_t cmd_bytes)
 {
 	uint32_t bottom = 0;
@@ -693,7 +726,7 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
 	/* Una color image imposible (la HLE la sacó de un comando mal
 	 * interpretado: Zelda al abrir la pausa manda anchos de 1495 y 3770) no
 	 * toca la tabla: reciclaría una ranura buena para nada. */
-	if (!width || width > 640 || rdp_targets_tall(width, min_lh)) {
+	if (!width || width > 640 || min_lh > 480) {
 		rdp.stats.targets_absurd++;
 		snprintf(rdp.last_get.how, sizeof rdp.last_get.how, "imposible, ignorada");
 		LOGN(10, "gfx: color image imposible %06x/%u (alto %u): se ignora", addr, width, min_lh);
@@ -1175,8 +1208,12 @@ static void translate(uint32_t n)
 		switch (c->op) {
 		case GFX_OP_TARGET: {
 			uint32_t lh = scissor_bottom(s, off + c->size, res->cmd_bytes), siz = c->c & 0xFF;
-			cur = get_target(c->a, c->b, (c->c >> 8) & 0xFF, siz, lh);
-			tall.rows = cur < 0 && c->b && c->b <= 640 && rdp_targets_tall(c->b, lh) ? lh : 0;
+			bool is_tall = c->b && c->b <= 640 && rdp_targets_tall(c->b, lh) &&
+				       fills_only(s, off + c->size, res->cmd_bytes);
+			cur = is_tall ? -1 : get_target(c->a, c->b, (c->c >> 8) & 0xFF, siz, lh);
+			if (is_tall)
+				snprintf(rdp.last_get.how, sizeof rdp.last_get.how, "alta, rellenos repartidos");
+			tall.rows = is_tall ? lh : 0;
 			tall.addr = c->a;
 			tall.width = c->b;
 			tall.bpp = siz == 3 ? 4 : siz == 2 ? 2 : 1;
@@ -1490,6 +1527,9 @@ uint32_t salsa64_rdp_flush(uint32_t upto)
 	if (upto == ~0u)
 		upto = done_n;
 	uint32_t w = rdp.rb_waiting;  /* la que espera la emulación, siempre */
+	if (w && (int32_t)(w - upto) > 0)
+		upto = w;
+	w = rdp.set_waiting;  /* y la que libera el juego de búferes que espera acquire */
 	if (w && (int32_t)(w - upto) > 0)
 		upto = w;
 	while ((int32_t)(n - done_n) < 0 && (int32_t)(n - upto) < 0) {

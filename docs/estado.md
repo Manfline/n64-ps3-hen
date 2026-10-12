@@ -1,5 +1,39 @@
 # Estado
 
+## 2026-10-12 (noche) — Star Fox 64: la «estela» del menú es del juego (rama `infallible-wozniak-aa210c`)
+
+En el menú principal, al elegir una opción, las etiquetas se ven repetidas
+(«se replican muchas veces»). No es un error: en cada cuadro de esa
+animación el primer dibujo es un rectángulo a toda pantalla (8..312 ×
+8..232) sin textura, combiner G_CC_PRIMITIVE con PRIM = 0x0000002c (negro,
+alfa 17 %) y mezcla alfa, sin borrar antes el framebuffer: oscurece un 17 %
+lo que había en ese búfer (el cuadro de hace tres, triple búfer) y dibuja
+encima: el afterimage de ese menú. En el host se reproduce igual (3–4
+copias de «Main Game» apagándose). GLide64 en mupen64plus no lo muestra
+porque no conserva el framebuffer entre cuadros; el hardware sí, como
+nosotros.
+
+## 2026-10-12 (noche) — Interbloqueo de la PS3 con más de SETS tareas gráficas en un campo (Paper Mario, Mario Party, Mario Party 3; rama `infallible-wozniak-aa210c`)
+
+Main lo reportó del candidato de v0.2.0: PM se queda quieto al pulsar START
+en el telón (campo 688), MP tras los logos (681) y MP3 (516): «RSP ocupado»,
+MIPS 0, «presentación en espera», y en esa ventana «1 esperas por un juego
+de búferes». En el host nativo (intérprete + HLE) los tres pasan con las
+pulsaciones exactas; en qemu con el recompilador también: es de los hilos
+de la PS3.
+
+Causa: `acquire()` (hilo de emulación) espera sin tope a que la tarea
+n − SETS + 1 esté traducida para reusar su juego de búferes; la
+presentación solo traduce hasta las tareas «visibles» que la emulación
+publica al cerrar cada campo (df45ac1, temblor de Banjo). Si un juego manda
+más de SETS (3) tareas gráficas dentro de un campo, la emulación se bloquea
+en acquire sin cerrar el campo, no publica las visibles y la presentación
+nunca traduce esa tarea. Desde 98def88 las tareas ya no se frenan 200 ms en
+`done()`, así que es más fácil que caigan varias en un campo (por eso PM
+pasaba por la mañana). Arreglo igual al de 98def88 para las copias:
+`acquire` publica en `rdp.set_waiting` la tarea que espera y despierta a
+presentación; `salsa64_rdp_flush` traduce hasta ella aunque no sea visible.
+Sin prueba unitaria (son los hilos de la PS3); por confirmar en la consola.
 ## 2026-10-12 — El desenfoque de Perfect Dark desde el destino del RSX; copias esperadas a 200 ms y el «estado» del SPE al triple (rama `wonderful-jepsen-ebf467`, paquete SLSA00101 «Salsa64 desenfoque»)
 
 - **Desenfoque (docs/framebuffer.md, «Texturas desde un destino sin
@@ -70,6 +104,15 @@ Main lo reportó de la PS3 real con la rama del recompilador (DK64 al 100 %):
    entre los destinos que empiezan dentro (el último puede asomar por
    abajo), así los dos búferes quedan a la misma escala (en el host ya no
    aparece el destino de 459). Zelda y SM64 bien con el modo 1:1 nuevo.
+   **Corrección:** eso dejó negra «la escena del cierre» (el autor, con
+   main 5182004): esa misma color image de 320 × 459 lleva a veces dibujos
+   de verdad, no solo rellenos, y el CPU la copia después (en el log:
+   «imposible … copia 02a200/320 esperada PERDIDA»). Ahora una color image
+   es «alta» solo si todos sus dibujos hasta el próximo TARGET son
+   rellenos (`fills_only`, host y PS3); con dibujos reales se crea tal cual
+   (a la escala que le toque, que la presentación ya no convierte en
+   zoom). Prueba: `raster_tall_fill` cubre los dos casos. En el host no se
+   llegó a esa escena con los guiones probados; por confirmar en la PS3.
 ## 2026-10-12 — Donkey Kong 64 al 20 %: el recompilador vaciaba la caché en cada cambio de Status.FR (rama `zealous-wilbur-cec8b5`, paquete SLSA00102 «Salsa64 DK64»)
 
 - **Síntoma (PS3 real, main 8c876ac):** DK64 a 12–13 campos/s con 1,4 MIPS
