@@ -173,7 +173,8 @@ void salsa64_rdp_set_log(void (*fn)(const char *fmt, ...));
 const struct salsa64_gfx_sink *salsa64_rdp_sink(void);
 
 /* Traduce a comandos del RSX las tareas terminadas con número menor que
- * `upto` (~0u: todas). Devuelve cuántas van traducidas en total. */
+ * `upto` (~0u: todas) y, siempre, la que la emulación espera en done por
+ * una copia a la RDRAM. Devuelve cuántas van traducidas en total. */
 uint32_t salsa64_rdp_flush(uint32_t upto);
 /* Tareas terminadas (done) hasta ahora; para el hilo de emulación, que lo
  * manda con cada campo. */

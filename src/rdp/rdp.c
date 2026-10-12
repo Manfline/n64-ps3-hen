@@ -173,6 +173,13 @@ static struct {
 	uint8_t *rb;                 /* búferes de copia (RB_SLOTS) y de cebado, mapeados */
 	uint32_t rb_off;
 	volatile uint32_t readback_done;  /* última tarea con sus copias ya en la RDRAM */
+	/* Tarea (n + 1) cuya copia a la RDRAM espera ahora done, o 0:
+	 * salsa64_rdp_flush la traduce aunque quien llama todavía no la cuente.
+	 * La presentación traduce solo las tareas que el RDP pudo dibujar, y eso
+	 * lo dice el hilo de emulación al terminar cada campo; esperando aquí no
+	 * lo termina, así que cada copia esperada se cumplía por el tope de
+	 * RB_WAIT_US (200 ms por tarea en la intro de Perfect Dark: 5 campos/s). */
+	volatile uint32_t rb_waiting;
 	bool rb_late_logged;
 	/* Copias espejo en vuelo: el RSX escribe el búfer; cuando pasa la
 	 * barrera se convierte a la RDRAM (readbacks_finish). */
@@ -1047,6 +1054,8 @@ static void done(void *ctx, const struct gfx_job *job, const struct gfx_result *
 	rdp.finished = n + 1;
 	if (!s->rb_nsync)
 		return;
+	rdp.rb_waiting = n + 1;
+	lwsync();  /* antes de despertar a quien traduce */
 	if (rdp.wake)
 		rdp.wake();
 	uint64_t t0 = sysGetSystemTime();
@@ -1058,6 +1067,7 @@ static void done(void *ctx, const struct gfx_job *job, const struct gfx_result *
 			break;
 		}
 	}
+	rdp.rb_waiting = 0;
 	rdp.stats.us_readback_wait += sysGetSystemTime() - t0;
 }
 
@@ -1351,6 +1361,9 @@ uint32_t salsa64_rdp_flush(uint32_t upto)
 	lwsync();  /* los resultados, después de ver `finished` */
 	if (upto == ~0u)
 		upto = done_n;
+	uint32_t w = rdp.rb_waiting;  /* la que espera la emulación, siempre */
+	if (w && (int32_t)(w - upto) > 0)
+		upto = w;
 	while ((int32_t)(n - done_n) < 0 && (int32_t)(n - upto) < 0) {
 		translate(n);
 		lwsync();  /* la barrera del juego, antes de darlo por traducido */
