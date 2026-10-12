@@ -75,9 +75,13 @@ sync.c, por el código "NGE" del encabezado): solo GoldenEye. En el SPE
 costó ~1 µs más por triángulo en Dam (4,4 → 5,5), sin que el PPE esperara;
 con recíprocos en vez de divisiones debería bajar (sin medir aún).
 
-Pendiente en la PS3: la transición de Banjo sin el negro, Zelda sin
-polígonos encimados con el paquete de la opción por juego, y los FPS de
-Dam con los recíprocos.
+**PS3 real con 4e35681 (el autor, 2026-10-12):** túnica de Link bien;
+Zelda y GoldenEye con los polígonos normales; en la intro de Banjo ya no
+está el negro de medio segundo, queda un negro de uno o dos campos al
+cambiar de escena que en el host no existe (323 campos seguidos sin saltos
+de brillo): probablemente el VI muestra el framebuffer recién cambiado antes
+de que el RDP lo dibuje. Menor; sin perseguir. Las líneas azules de
+GoldenEye siguen pendientes (arriba).
 
 ## 2026-10-12 — Banjo-Kazooie (protección del CIC 6103), cara de Conker (K5) y rayas del logo de Zelda (rama `infallible-wozniak-aa210c`, paquete SLSA00099 «Salsa64 gráficos»)
 
