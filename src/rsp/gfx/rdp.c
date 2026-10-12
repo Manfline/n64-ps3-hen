@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — HLE del RDP: estado (othermode, combiner, colores, tiles,
  * imágenes), rectángulos y salida de triángulos agrupados por estado.

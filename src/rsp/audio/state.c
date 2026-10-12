@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — HLE de audio: el estado que persiste entre tareas, para los
  * estados guardados. Ver AUD_STATE_* en audio.h.

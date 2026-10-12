@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — HLE gráfica: ejecución de una tarea y lo que comparten los
  * microcódigos (F3D, F3DEX y F3DEX2): recorrido de la display list, G_TEXRECT

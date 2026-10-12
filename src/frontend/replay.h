@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — repetición de un volcado de la HLE gráfica (gfxdump.bin) en el
  * RSX, sin emular nada: para depurar el lado del RSX con la salida exacta

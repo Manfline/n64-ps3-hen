@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — acceso a memoria en el orden de bytes de la N64 (big-endian).
  *

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — lo que se dibuja encima del juego (hilo de presentación, con
  * rsxkit/ui.h): un aviso corto (~2 s) y, si está encendido, el contador de

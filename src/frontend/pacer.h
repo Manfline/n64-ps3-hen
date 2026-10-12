@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — ritmo de la emulación: cada campo del VI a la hora que le toca
  * según la tele emulada (NTSC 59,83 campos/s, PAL 49,92), con un reloj de

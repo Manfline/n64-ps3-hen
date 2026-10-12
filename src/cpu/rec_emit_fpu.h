@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — recompilador: la FPU con los registros residentes en el PPE
  * (2026-10-11). Diseño en docs/rec-ppe.md, «FPU residente». Lo incluye

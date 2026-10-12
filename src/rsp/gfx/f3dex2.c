@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — HLE del microcódigo F3DEX2 (y su familia: F3DZEX2, F3DLX2…).
  *

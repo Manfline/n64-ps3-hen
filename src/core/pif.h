@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — PIF: comandos joybus en la PIF RAM (controles).
  *

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — LLE del RSP en el SPE: E/S del intérprete (COP0 sobre el bus
  * por DMA) y la ejecución de un trabajo. Ver io_spu.c y rsp/lle/job.h.

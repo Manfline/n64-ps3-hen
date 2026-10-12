@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — registros del RCP mapeados en memoria (MI, SP, DP, VI, AI, PI,
  * RI, SI) y de la RDRAM.

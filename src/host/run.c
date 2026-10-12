@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — ejecutor de línea de comandos para el host, para pruebas
  * automatizadas (tools/test-roms.sh). No depende de PSL1GHT.

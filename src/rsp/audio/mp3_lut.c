@@ -1,9 +1,16 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — ventana de síntesis del MP3 (33 bloques × 2 × 16, Q15). Sale
  * de la ventana estándar de MPEG-1 (ISO/IEC 11172-3, D[i], vía
  * ff_mpa_enwindow de FFmpeg, LGPL 2.1+), escalada a 32767 en el pico y en
  * el orden en que la recorre mp3.c; no es la tabla del microcódigo. La
  * genera tools/audio-mp3-lut.py (no editar a mano).
+ *
+ * ff_mpa_enwindow: FFmpeg, libavcodec/mpegaudiodata.c («MPEG Audio common
+ * tables», copyright (c) 2002 Fabrice Bellard; hoy en
+ * libavcodec/mpegaudiodsp_data.c). This file is part of FFmpeg: libre bajo
+ * la GNU Lesser General Public License 2.1 o posterior, que permite
+ * distribuirla bajo la GPL v2 o posterior como el resto de Salsa64.
  */
 #include "rsp/audio/hle.h"
 

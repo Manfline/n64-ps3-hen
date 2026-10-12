@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — verificación del frontend con la ROM audiotest
  * (tests/roms/src/audiotest): que la ROM reporte por el ISViewer que el AI

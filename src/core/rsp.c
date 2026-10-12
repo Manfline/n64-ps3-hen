@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — tareas del RSP: lectura del OSTask, detección del microcódigo
  * gráfico y fin de la tarea (interrupciones SP y DP). Ver rcp.h.

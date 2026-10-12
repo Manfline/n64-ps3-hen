@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — cuentas del contador de velocidad (portable, con pruebas en
  * tests/unit/test_osd.c). Ver osd.h.

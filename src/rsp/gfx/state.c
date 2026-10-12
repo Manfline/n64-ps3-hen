@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — HLE gráfica: el estado que persiste entre tareas (el del RDP y
  * la TMEM) para los estados guardados. Ver GFX_STATE_* en gfx.h.

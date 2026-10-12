@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — LLE del RSP en un SPE: formato del trabajo de lib/spukit que
  * comparten el PPE (src/platform/ps3/rsp_spu.c) y el programa SPU

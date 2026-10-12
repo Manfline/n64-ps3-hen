@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — verificación del frontend con la ROM vitest
  * (tests/roms/src/vitest): que la ROM se verifique a sí misma por el

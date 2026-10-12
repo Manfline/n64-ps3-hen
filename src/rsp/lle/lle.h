@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — LLE del RSP: intérprete del microcódigo real (Fase 6).
  *

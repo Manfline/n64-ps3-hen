@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — recompilador: instrucciones que el código generado le pasaba
  * al intérprete y ahora traduce (2026-10-10): conversiones y raíz de la FPU,

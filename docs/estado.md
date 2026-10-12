@@ -503,8 +503,7 @@ Hecho:
   mismo «PIF → juego» con `--pad`.
 - `docs/hilos-ppe.md` al día (fila de controles y de flancos del PIF).
 
-**PS3 real** (paquete «Salsa64 control», SLSA00092; logs fuera de git en
-una carpeta propia):
+**PS3 real** (paquete «Salsa64 control», SLSA00092; logs fuera de git):
 - Antes de acotar `drain()`: huecos de 7402, 929, 831, 595 y 251 ms sin
   leer los mandos; el autor: el stick no bajaba en la selección de ranura.
 - Después, Zelda: «ya funciona»; hueco máximo 19–31 ms en el juego (312 ms
@@ -795,8 +794,8 @@ Arreglo (`src/rsp/gfx`; nada en src/rdp ni en lib/rsxkit):
   `tools/test-phase2.sh`.
 - La traza por dibujo de `salsa64-run` imprime además x/w, y/w, tijeras,
   viewport y la dirección de la textura.
-- Respaldo de Mario Kart (con permiso del autor) en
-  una carpeta de respaldos propios (`mk64.z64`) y en el dev_hdd0 de RPCS3.
+- Respaldo propio de Mario Kart (`mk64.z64`) fuera del repo y en el
+  dev_hdd0 de RPCS3.
 
 Pendiente:
 - [x] **PS3 real** con `build/salsa64/salsa64-recorte.pkg` (SLSA00090,
@@ -825,8 +824,8 @@ Pendiente:
       **A/B hecho el 2026-10-11 (el autor, PS3): las líneas salen igual con
       «Salsa64 menú» (main sin este recorte)** → no son de esta rama;
       pendiente aparte, fuera de ella (logs `build/ps3-logs/goldeneye-recorte-2.log`
-      y `goldeneye-menu.log`, fuera de git). Fotos y logs guardados en
-      una carpeta propia.
+      y `goldeneye-menu.log`, fuera de git). Fotos y logs guardados fuera
+      del repo.
 - [x] PS3 real, Perfect Dark con «Salsa64 recorte» (tomado como NoN): intro
       de la ciudad y un nivel, «se ve todo bien» (el autor, 2026-10-11; log
       `build/ps3-logs/perfectdark-recorte.log`).
@@ -850,7 +849,7 @@ Lo que se vio el 2026-10-11 en la PS3 (paquete «Salsa64 recorte», SLSA00090;
 - [ ] Banjo-Kazooie en el host se queda en el logo de Rare (tarea del campo
       68, luego solo audio): no es de esta rama.
 
-## 2026-10-10 (noche) — Cierre de la jornada
+## 2026-10-10 (noche) — Resumen del día y problemas abiertos
 
 **Integrado y subido hoy** (main 8231305): controles y bucles de espera, guardado
 del cartucho, Fase 2 gráfica (F3DEX2 en el SPE 0), recompilador (Fase 3) con TLB,
@@ -884,27 +883,12 @@ recompilador con perfil por causa, efectos de framebuffer (4baa6df) y el arreglo
 del espejo del framebuffer que colgaba SM64 en la cara de Mario (84ea55f; en la
 PS3 sin confirmar).
 
-**Para la próxima prueba en la PS3 (tarde del 2026-10-11):**
-1. Paquete principal de la rama `dev-a1388b259074798ab` (1647a25:
-   resolución 720p/1080p, escala interna 1×–5× por destino, «Aplicar ahora»,
-   ROM a su medida, más main con el framebuffer y el arreglo de SM64), en
-   `dev-a1388b259074798ab/build/salsa64/salsa64.pkg`. Ver a
-   720p/Auto y luego a 5×: SM64 del logo al castillo, pausa y equipo de Zelda,
-   túnel de Mario Kart, intro de Conker; «Aplicar ahora» 720p ↔ 1080p. Si pasa,
-   se integra esa rama.
-2. Estados guardados + contador de FPS (`wonderful-blackwell-6f40d3`,
-   SLSA00094): guion en su docs/estado.md.
-3. FPU en registros, COP0 nativo y caché por tramos (`jovial-jones-2408ac`,
-   SLSA00093): A/B con archivos-bandera en la presa de GoldenEye, junto al camión.
-4. Al final: rama de publicación (`distracted-vaughan-ab7980`) y la
-   reescritura de la historia, con el sí del autor.
-
-**Noche del 2026-10-10 → 11:** corren de noche, sin la PS3, los trabajos del JIT
-(`upbeat-driscoll-1dd271`, SLSA00088), de efectos de framebuffer
-(`hopeful-dirac-f4e91b`, SLSA00089; primero las líneas del logo de Zelda)
-y del recorte (SLSA00090). El 11 es día de pruebas en la PS3: cada uno deja en
-el docs/estado.md de su rama qué ver, con qué `embedded` y qué esperar. Orden
-sugerido: recorte → líneas del logo → framebuffer → JIT.
+**Integrado después, el 2026-10-11:** resolución 720p/1080p y escala
+interna 1×–5× por destino con «Aplicar ahora» (rama
+`dev-a1388b259074798ab`, 1647a25), estados guardados con contador de FPS
+(`wonderful-blackwell-6f40d3`, SLSA00094) y FPU en registros, COP0 nativo y
+caché por tramos (`jovial-jones-2408ac`, SLSA00093). Detalle en las entradas
+de arriba y en docs/framebuffer.md.
 
 **Problemas abiertos:**
 - Líneas como de entrelazado en el logo de N64 de Zelda en la PS3; en el
@@ -921,9 +905,8 @@ sugerido: recorte → líneas del logo → framebuffer → JIT.
   vecinas coinciden a 0,001 px). Siguiente paso: gfxdump del campo malo en la
   PS3 y dibujarlo en la Mac con `--raster-dump`; si allí sale limpio, es la
   rasterización del RSX (reglas de cobertura o vértices que no caen en el mismo
-  punto tras el redondeo). Evidencia (fotos y logs, fuera de git por ser
-  imágenes de un juego comercial):
-  en una carpeta propia.
+  punto tras el redondeo). Evidencia: fotos y logs, fuera del repo por ser
+  imágenes de un juego comercial.
 - **Kokiri en colores planos, reabierto (2026-10-11).** *Resuelto en la rama
   `fervent-hodgkin-d38e1e` (entrada de arriba): eran las salas
   prerrenderizadas (fondo JPEG + S2DEX sin HLE); lo de abajo era la casa vista
@@ -936,18 +919,16 @@ sugerido: recorte → líneas del logo → framebuffer → JIT.
   PS3. También en la tienda del bosque Kokiri (foto en la PS3, 2026-10-11):
   piso amarillo y paredes y mostrador naranja lisos, con los personajes y
   objetos texturizados; igual con `fbfx.cfg` = 0, así que es de la HLE. Afecta
-  a las mallas de las salas, no a los actores. Evidencia (fuera de git):
-  en una carpeta propia.
-  Trabajo sugerido: «Diagnosticar Kokiri y su tienda en colores planos» (SLSA00091).
+  a las mallas de las salas, no a los actores. Evidencia fuera del repo.
+  Siguiente: diagnosticar Kokiri y su tienda en colores planos (SLSA00091).
 - **Pulsaciones perdidas** (PS3, 2026-10-11): resuelto en la rama
   vibrant-hawking (ver la entrada del 2026-10-11 arriba): el bucle de
   presentación dejaba de leer los mandos hasta 7,4 s; confirmado por
   el autor en Zelda y SM64 (SLSA00092).
 
-**Siguientes trabajos decididos con el autor:**
-- JIT («Recompilador: más velocidad del CPU en GoldenEye y Perfect
-  Dark»): ya puede abrirse (el menú está en main).
-- Efectos de framebuffer (pendiente de abajo): ya puede abrirse, presentación está en main.
+**Siguientes pasos:**
+- Recompilador: más velocidad del CPU en GoldenEye y Perfect Dark.
+- Efectos de framebuffer (pendiente de abajo), sobre la presentación ya en main.
 - HLE: **cara de Conker** (polígonos negros en la boca, visto en la PS3; no lo
   explicaba la presentación) y z/w > 1 en Banjo (modelos que tiemblan, cielo).
 - Gráficos pendientes (actualizado 2026-10-11): líneas del logo de Zelda (la
@@ -983,8 +964,7 @@ sugerido: recorte → líneas del logo → framebuffer → JIT.
 
 **Notas:** el input lag de Zelda es antiguo y solo en Zelda (SM64 bien);
 sospecha: los dos hilos más el retraso propio de Zelda; presentación agregó al
-log la línea «retraso: cola … destino …» para medirlo. Algunos trabajos no pueden
-escribir `embedded` por FTP: lo cambia el autor.
+log la línea «retraso: cola … destino …» para medirlo.
 `embedded` quedó en el último valor que dejó presentación. Con el menú en main:
 si existe `/dev_hdd0/salsa64/embedded`, cualquier app (también la principal)
 arranca directo esa ROM sin menú; el menú sale solo cuando el archivo no existe.
@@ -1180,7 +1160,7 @@ el que empieza más cerca del origen; luego el más reciente), 12, todos de
 arranque o cambio de escena (el otro framebuffer aún sin dibujar).
 
 **Conker en la PS3 (3D quemado y parpadeando, capturas del RSX negras;
-pedido en main tras integrar la rama de Rare):** mismo error
+pedido tras integrar la rama de Rare):** mismo error
 que Banjo. La repetición del volcado de la PS3 (campo 3600) en RPCS3 con
 `tools/rpcs3-run.py --replay` dibuja la escena bien: la traducción al RSX
 es correcta. En la Mac (70 s con `--trace-vi` y `--trace-gfx`) Conker
@@ -1240,8 +1220,8 @@ se pasa de 1 también en objetos normales: 1,05–1,36). Le toca a la HLE
 (trabajo de F3D): la proyección o el recorte de esos triángulos. El síntoma
 (b) (escena «desplazada», mitad izquierda vacía, pasto solo abajo) coincide
 con la escena sin fondo: Banjo a la derecha sobre una franja de pasto y
-todo lo demás negro. Pedir al autor que lo vuelva a mirar con el fondo
-arreglado antes de buscar otra cosa.
+todo lo demás negro. Volver a mirarlo en la PS3 con el fondo arreglado
+antes de buscar otra cosa.
 
 Herramientas (`salsa64-run`): `--pad "0:…"` conecta el control desde el
 arranque (antes el primer estado entraba al terminar el campo 1; en la PS3
@@ -1350,8 +1330,8 @@ Diagnóstico (rama `frosty-golick-d1d71a`, en la Mac):
   w ≤ 0 (la pared lejana y el piso cruzan el plano de la cámara); GLide64
   los recorta. El RSX recorta en hardware, así que en la PS3 no deberían
   faltar; comprobarlo cuando la consola esté libre.
-- **Confirmación con el microcódigo real** (pedida en main:
-  GLide64 también es HLE): con main ce8351d fusionado, `salsa64-run
+- **Confirmación con el microcódigo real** (GLide64
+  también es HLE): con main ce8351d fusionado, `salsa64-run
   --lle=all` ejecuta el F3DZEX2 real (739 M instrucciones hasta el campo
   3712) y sus triángulos crudos, con los colores de vértice que calcula el
   RSP de verdad, dan los mismos parches en el campo 3700: piso (55,55,2),
@@ -1477,19 +1457,19 @@ Pendiente:
 - [ ] La luz de Conker sigue a GLideN64 (en el modo básico la direccional
       no cuenta); contrastar con la PS3 cuando haya escenas de juego.
 
-## Pendiente: trabajo de efectos de framebuffer (anotado el 2026-10-10)
+## Pendiente: efectos de framebuffer (anotado el 2026-10-10)
 
-Se lanza cuando se integre el trabajo de presentación (se monta sobre su tabla de destinos).
+Va después de la presentación (se monta sobre su tabla de destinos).
 Detectar cuándo el juego usa como textura o lee con el CPU una imagen dibujada en el RSX; copiar
 RSX → RDRAM (bajando de 3× a la resolución de la N64) solo en esos casos, y para el render a
 textura usar directo el destino del RSX. Casos:
 - [ ] Zelda OoT: fondo difuminado de la pausa (lo difumina el CPU) y Link en la pantalla de equipo
-      (render a textura); la pausa ya se ve con el trabajo de presentación, pero con esos dos defectos
+      (render a textura); la pausa ya se ve con la presentación, pero con esos dos defectos
       (confirmado por el autor en la PS3).
 - [ ] Mario Kart 64: pantallas gigantes que transmiten la carrera.
 - [ ] Perfect Dark: cámara espía y otros; Majora's Mask (Canción del Vuelo, transformaciones).
 
-## Pendiente: trabajo de presentación (anotado el 2026-10-10)
+## Pendiente: presentación (anotado el 2026-10-10)
 
 Resuelto en la entrada «Presentación: Banjo-Kazooie…» de arriba (falta
 confirmar en la PS3). Los tres casos estaban en `src/rdp/rdp.c` (qué
@@ -1548,7 +1528,7 @@ integrar; diseño y mediciones en docs/rsp-lle.md):
   `SALSA64_DATA_DIR/lle` con `auto` o `all`; líneas «rsp lle:» en el log.
 - 12 pruebas unitarias nuevas (301 en total con main).
 - Medido en el host: 12,5 ns por instrucción del RSP (docs/perf-log.md).
-- **PS3 real** (turno del autor): sanidad con HLE por omisión bien (Zelda
+- **PS3 real**: sanidad con HLE por omisión bien (Zelda
   106 s al 100 % con audio; GoldenEye intro al 100 %, nivel a 36–50
   campos/s con el audio estirado: primera medición del nivel, no es de
   esta rama). Con `lle` = `all`, **Zelda se ve y suena con el microcódigo
@@ -1739,7 +1719,7 @@ Hecho (rama `charming-allen-a8e4b3`, con main 485a747):
   `/dev_hdd0/salsa64/` como `banjo.z64` y `conker.z64`; `embedded` quedó
   en `file:perfectdark.z64`, como estaba al empezar.
 
-- **Después, pedido en main:**
+- **Después, al integrar:**
   - `tools/test-rec.sh` se caía en la suite `sync` bajo qemu: SIGILL por
     `mffscrni` en `sin`/`cos`/`floor` de la glibc estática de ppc64 (Power
     ISA 3.0; qemu 7.2 solo lo acepta desde power9). `tools/qemu-ppc64.sh`
@@ -1782,7 +1762,7 @@ Falta:
       microcódigo (para poder comparar más allá de la primera tarea de
       cada voz) y revisar los ±1 LSB que quedan en naudio.
 - [ ] docs/compatibilidad.md: la columna de audio de Banjo, Conker y
-      Perfect Dark (queda para main, es del censo).
+      Perfect Dark (es del censo).
 ## 2026-10-10 — Arranque del CIC 6105 y censo de compatibilidad
 
 Hecho (rama `amazing-noether-39a548`; detalle en docs/cpu-vr4300.md,
@@ -2266,7 +2246,7 @@ Hecho (rama `musing-mcclintock-6b5e2c`; diseño en docs/hilos-ppe.md):
 - Lugar para el audio marcado con `audio_out:` en main.c (inicio, cada
   campo presentado, cierre; y `emu_thread` si necesita el hilo de
   emulación).
-- Ritmo (`src/frontend/pacer.c`, pedido en main): cada
+- Ritmo (`src/frontend/pacer.c`): cada
   campo a la hora de la tele emulada con el reloj real, sin acumular
   deuda; `SALSA64_DATA_DIR/turbo` lo quita para medir el máximo; la
   medición A/B de vitest va sin límite. Enganche para que el audio marque
@@ -2498,7 +2478,7 @@ Siguiente:
 - [ ] Repartir emulación y presentación entre los dos hilos del PPE (ya
       importa: con vitest la emulación baja a 35 ms por campo).
 
-## 2026-10-10 — Cierre de la jornada (2): Fase 0 y Fase 1 en PS3 real
+## 2026-10-10 — Resumen: Fase 0 y Fase 1 en PS3 real
 
 Hecho hoy en hardware real (Slim CECH-3011A, HFW 4.91 + HEN; sin CFW posible):
 - Fase 0 completa: udplog, spu-compute (6 SPUs), rsx-triangle, cpu-tests y
@@ -2508,11 +2488,11 @@ Hecho hoy en hardware real (Slim CECH-3011A, HFW 4.91 + HEN; sin CFW posible):
 - Intérprete en el PPE: 8,7 → 21,2 MIPS; no llegará a ~60 sin recompilador.
 - Referencia Cell64 en la misma consola: Zelda en Kokiri 45–50 VI/s, ~15 cps,
   y cuatro fallas gráficas como casos de prueba (docs/referencia-cell64.md).
-- Proyecto renombrado a **Salsa64**; repo privado github.com/ricowp81/Salsa64.
+- Proyecto renombrado a **Salsa64**; repo en github.com/ricowp81/Salsa64.
 - Herramientas: log también en disco (`/dev_hdd0/salsa64/<prog>.log`),
   `tools/ps3-live.py` (monitor en vivo), `tools/ps3.conf` con la IP.
 
-Siguiente (trabajos lanzados al cerrar; una prueba en la PS3 a la vez):
+Siguiente (una prueba en la PS3 a la vez):
 - [ ] Fase 2: RSP gráfico (F3DEX2) en SPE 0 + RDP mínimo en el RSX sobre
       `lib/rsxkit`, con la infraestructura de trabajos SPE.
 - [ ] Fase 3: recompilador MIPS → PPC64 en el PPE.

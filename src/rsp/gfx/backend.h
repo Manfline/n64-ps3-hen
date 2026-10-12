@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — backends de la HLE gráfica para el núcleo (salsa64_gfx_backend).
  *

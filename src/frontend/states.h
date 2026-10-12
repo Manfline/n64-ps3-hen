@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — estados guardados en la PS3: los archivos de las ranuras y la
  * miniatura (el formato y lo que entra en él: core/state.h).

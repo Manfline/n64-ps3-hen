@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — HLE de audio: operaciones comunes (alist.c), E/S por plataforma
  * y acceso a la DMEM. Ver audio.h.

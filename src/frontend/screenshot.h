@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — captura de la pantalla del RSX muestreada a la resolución de la
  * imagen del VI (un píxel por píxel de la N64), en PPM. Para ver desde la

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — HLE de los microcódigos de la primera generación: Fast3D (F3D;
  * Super Mario 64 y los primeros juegos) y F3DEX 1.x (y F3DLX, F3DLP, que

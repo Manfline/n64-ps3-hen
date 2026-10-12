@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Salsa64 — frontend para PS3: el emulador con presentación por lib/rsxkit.
 PROGRAM := salsa64
 TITLE   := Salsa64

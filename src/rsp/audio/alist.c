@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
  *   Mupen64plus-rsp-hle - alist.c                                         *
  *   Mupen64Plus homepage: https://mupen64plus.org/                        *

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — estados guardados (save states): toda la máquina en un archivo
  * para seguir exactamente desde ahí.

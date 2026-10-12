@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — perfil del recompilador: el texto del desglose. Ver rec_prof.h.
  */

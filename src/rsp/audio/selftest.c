@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — listas de audio de prueba para comparar dos ejecuciones de la
  * HLE (el SPE contra el PPE al arrancar en la PS3; el host en las pruebas

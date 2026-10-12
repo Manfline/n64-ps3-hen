@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — RSP a bajo nivel en un SPE. Ver rsp_spu.h.
  */

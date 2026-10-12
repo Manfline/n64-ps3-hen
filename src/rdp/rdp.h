@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — RDP sobre el RSX: consume la salida de la HLE gráfica
  * (src/rsp/gfx/gfx.h) y la dibuja con lib/rsxkit.

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — destinos de render del RDP: qué color image de la N64 tiene
  * superficie en el RSX, cuál se recicla cuando no caben más y cuál se

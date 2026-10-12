@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — aviso y contador sobre el juego (PS3). Ver osd.h.
  */

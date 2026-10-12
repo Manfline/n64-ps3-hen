@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — repetición de un volcado de la HLE en el RSX. Ver replay.h.
  */

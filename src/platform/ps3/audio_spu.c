@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — backend de la HLE de audio en un SPE. Ver audio_spu.h.
  */

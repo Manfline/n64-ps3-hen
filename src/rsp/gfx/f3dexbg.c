@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — HLE del microcódigo gráfico de Conker's Bad Fur Day
  * («F3DEXBG.NoN fifo 2.08», variante de Rare de F3DEX2; GLideN64 la llama

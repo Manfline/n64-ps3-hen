@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — perfil del recompilador: dónde se va el tiempo del hilo de
  * emulación cuando corre el código generado, por causa.

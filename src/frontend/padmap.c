@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — mapeo del DualShock 3 al control de N64. Ver padmap.h.
  */

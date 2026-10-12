@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — recompilador: despachador, caché de bloques, enlaces e
  * invalidación. La traducción está en rec_emit.c; diseño en docs/rec-ppe.md.

@@ -1,47 +1,141 @@
 # Salsa64
 
-Emulador de Nintendo 64 para PlayStation 3 (homebrew) diseñado alrededor del
-Cell: el PPE ejecuta el VR4300, los SPEs hacen el trabajo vectorial (RSP,
-audio, posprocesado) y el RSX dibuja. Licencia GPLv2 o posterior, salvo la
-capa gráfica genérica `lib/rsxkit/`, que es MIT (ver `lib/rsxkit/LICENSE`).
+A Nintendo 64 emulator for the PlayStation 3 (homebrew, runs on HEN or CFW),
+designed around the Cell processor: the PPE runs the VR4300 CPU with a
+dynamic recompiler, the SPEs do the vector work (RSP graphics and audio
+HLE), and the RSX draws.
 
-Estado: ya juega en una PS3 real Zelda: Ocarina of Time, Super Mario 64,
-Mario Kart 64, GoldenEye 007 y Perfect Dark, con ajustes pendientes por juego.
-Ver `docs/estado.md` para el detalle y las mediciones.
+Why another one: RetroArch on the PS3 has no working N64 core (the existing
+cores need OpenGL, which the PS3 does not offer), and no N64 emulator for the
+PS3 uses the SPEs. Both machines are big-endian, so emulated RAM needs no
+byte swapping, and the N64's RSP (MIPS + vector unit + local memory with DMA)
+maps naturally onto an SPE.
 
-## Usar en la PS3
+> Most project documentation (`docs/`) is written in Spanish. This README and
+> [CONTRIBUTING.md](CONTRIBUTING.md) are in English.
 
-Se instala el `.pkg` desde el Package Manager y se ponen las ROMs propias
-(`.z64`, `.v64` o `.n64`) en `/dev_hdd0/salsa64` (por FTP de webMAN MOD) o en
-una carpeta `salsa64` en la raíz de una memoria USB en FAT32. El menú las
-lista, × abre la elegida y START + SELECT vuelve al menú. Detalles, controles,
-partidas guardadas y archivos de configuración en `docs/uso-ps3.md`.
+## Status
 
-## Compilar
+Work in progress, but already playable on a real PS3:
 
-Requiere Docker (en las Macs: contexto `colima-dev`).
+- **Playable on real hardware:** Zelda: Ocarina of Time, Super Mario 64 and
+  Mario Kart 64 at full speed; GoldenEye 007 and Perfect Dark with sound,
+  GoldenEye still below full speed in heavy scenes. Each game has open
+  issues (mostly graphical); see [docs/estado.md](docs/estado.md) and
+  [docs/compatibilidad.md](docs/compatibilidad.md).
+- **CPU:** VR4300 interpreter and a MIPS → PPC64 dynamic recompiler on the
+  PPE (with TLB-mapped code, FPU and idle-loop detection).
+- **RSP:** high-level emulation of graphics microcodes (Fast3D, F3DEX 0.95/1.x,
+  F3DEX2 and F3DZEX2, Rare's variants for Perfect Dark and Conker, S2DEX
+  backgrounds, the JPEG task of Zelda) on SPE 0, and of audio microcodes (ABI1,
+  nead, naudio with MP3) on SPE 1. An experimental low-level RSP interpreter
+  (real microcode on an SPE) exists for microcodes without HLE.
+- **RDP on the RSX:** combiners translated to RSX fragment programs generated
+  at run time (there is no Cg compiler on the console).
+- **Frontend:** XMB-style ROM menu, DualShock 3 → N64 controller mapping,
+  EEPROM and SRAM saves.
+- **Not yet:** FlashRAM and large SRAM saves, Controller/Rumble/Transfer Pak,
+  framebuffer effects (render-to-texture, pause backgrounds), internal
+  resolution upscaling and post-processing filters.
+
+Performance numbers are logged in [docs/perf-log.md](docs/perf-log.md). Only
+measurements on a real PS3 count; RPCS3 is used for functional tests.
+
+## Using it on a PS3
+
+Full guide (in Spanish): [docs/uso-ps3.md](docs/uso-ps3.md).
+
+1. Install `salsa64.pkg` with the XMB Package Manager (HEN or CFW). It shows
+   up as "Salsa64" under Games.
+2. Copy your own ROM dumps (`.z64`, `.v64` or `.n64`, any byte order, up to
+   64 MB) to `/dev_hdd0/salsa64` (for example over webMAN MOD's FTP) or to a
+   `salsa64` folder at the root of a FAT32 USB stick.
+3. Start Salsa64 and pick a game from the menu.
+
+| N64 | DualShock 3 |
+|---|---|
+| Analog stick | Left stick |
+| C buttons | Right stick |
+| D-pad | D-pad |
+| A / B | × / □ |
+| Z | L2 |
+| L / R | L1 / R1 |
+| Start | START |
+
+- **START + SELECT** closes the game (saving first) and returns to the menu.
+- Saves go to `/dev_hdd0/salsa64/saves`, one file per game.
+- Optional text files in `/dev_hdd0/salsa64` change the button mapping
+  (`controles.cfg`), the save type per game (`guardado.cfg`), audio
+  (`audio.cfg`) and overscan cropping (`overscan.cfg`); see the guide.
+
+## Building
+
+Everything builds inside a Docker image with
+[ps3toolchain](https://github.com/ps3dev/ps3toolchain) and
+[PSL1GHT](https://github.com/ps3dev/PSL1GHT); nothing from Sony's official SDK
+is used. Requirements:
+
+- Docker (or a compatible engine) with several GB free. On arm64 hosts
+  (Apple Silicon) the engine must also be able to run `linux/amd64`
+  containers (Docker Desktop does; with colima, enable Rosetta or binfmt),
+  because NVIDIA's Cg Toolkit, used by `cgcomp`, only exists for x86_64.
+- Python 3 for the helper scripts on the host.
 
 ```sh
-tools/docker-image.sh        # una vez: imagen salsa64-toolchain:dev (~10 min)
-tools/build.sh               # compila los programas de tests/phase0 y phase1
-tools/build.sh test-host     # pruebas unitarias del núcleo con gcc nativo
-tools/test-phase1.sh         # las mismas pruebas en RPCS3 (big-endian)
-tools/build.sh host          # salsa64-run: corre una ROM en el host
-tools/test-roms.sh           # nemu64-test con salsa64-run, contra la línea base
-tools/build-nemu64-test.sh   # recompila tests/roms/homebrew/nemu64-test.z64
-tools/validate-toolchain.sh  # samples de PSL1GHT + shaders de referencia
+tools/docker-image.sh                  # once: builds salsa64-toolchain:dev (GCC for PPU/SPU; 15–60 min)
+tools/build.sh                         # all PS3 programs: test programs and the emulator
+tools/build.sh -C src/frontend pkg     # build/salsa64/salsa64.pkg
+tools/build.sh test-host               # core unit tests with the native gcc (ASan/UBSan)
+tools/build.sh host                    # build/host/salsa64-run: run a ROM on the host
+tools/test-roms.sh                     # homebrew ROM suites on the host, against the baseline
 ```
 
-Salidas en `build/<programa>/`: `.elf` (RPCS3, ps3load), `.self`,
-`.fake.self` y, con `tools/build.sh -C <dir> pkg`, `.pkg`.
+Outputs go to `build/<program>/`: `.elf` (RPCS3, ps3load), `.self`,
+`.fake.self` and, with `pkg`, `.pkg`. Tests in RPCS3, deploying to a PS3 and
+the other test scripts are described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Probar en la PS3
+## Repository layout
 
-```sh
-tools/udplog.py                                   # log UDP en la Mac
-PS3_IP=x.x.x.x tools/deploy-ps3.sh ps3load build/salsa64-jit-ppe/salsa64-jit-ppe.self
+```
+src/core/      N64 core: memory, interfaces (PI, SI, VI, AI), PIF, boot HLE
+src/cpu/       VR4300 interpreter and MIPS → PPC64 recompiler
+src/rsp/       RSP graphics, audio and JPEG HLE; low-level RSP interpreter
+src/spu/       SPE programs (graphics HLE on SPE 0, audio on SPE 1, LLE)
+src/rdp/       N64 RDP and combiners on top of lib/rsxkit
+src/frontend/  PS3 application: menu, input, audio output, saves
+src/host/      salsa64-run, the host-side runner used for tests
+lib/rsxkit/    generic RSX graphics layer, no N64 code (MIT)
+lib/spukit/    batched SPE jobs: queue + mailbox doorbell (MIT)
+tests/         unit tests, PS3 test programs, homebrew test ROMs
+tools/         build, test and deploy scripts
+docs/          design notes, measurements, third-party sources (Spanish)
 ```
 
-Aviso legal: no se incluyen ni se aceptan ROMs comerciales, BIOS, PIF ROMs ni material de
-Nintendo o Sony. Cada usuario usa sus propios respaldos. Las pruebas
-automatizadas usan solo homebrew de libre distribución.
+Goals, architecture and roadmap: [docs/proyecto.md](docs/proyecto.md).
+
+## License
+
+Copyright (C) 2026 ricowp81.
+
+Salsa64 is free software under the **GNU General Public License, version 2 or
+(at your option) any later version** ([LICENSE](LICENSE)). Files that adapt
+code from other projects keep their original copyright notices (see
+[docs/THIRD_PARTY.md](docs/THIRD_PARTY.md)).
+
+`lib/rsxkit/` and `lib/spukit/` are under the **MIT license** (their own
+`LICENSE` files) so that other emulators and homebrew, including projects
+whose licenses cannot link GPL code, can reuse them. Third-party sources and
+references are listed in [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md).
+
+## Legal notice
+
+Salsa64 is not affiliated with, endorsed or sponsored by Nintendo or Sony.
+"Nintendo 64" and "PlayStation" are trademarks of their respective owners.
+
+This repository does not contain, and will not accept, commercial ROMs,
+BIOS or PIF ROM images, IPL3 boot code from Nintendo, encryption keys, or any
+other material copyrighted by Nintendo or Sony, nor any part of Sony's
+official PS3 SDK. The emulator boots games without a PIF ROM (high-level
+emulation of the boot process). Use it only with dumps of games you own.
+The test ROMs in `tests/roms/homebrew/` are freely licensed homebrew built
+from source (see their README).

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — LLE del RSP en el SPE: la E/S de COP0 sobre el bus del PPE.
  *

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — recompilador: código y datos fuera de KSEG0 (KSEG1 y mapeados
  * por la TLB). Ver rec_tlb.h y docs/rec-ppe.md, «Código fuera de KSEG0».
