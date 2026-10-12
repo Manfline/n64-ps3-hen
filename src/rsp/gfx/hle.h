@@ -21,7 +21,10 @@
 #define GFX_MTX_STACK   32   /* F3D: 10, F3DEX2: 18 en la RDRAM */
 #define GFX_DL_STACK    32   /* F3D: 10, F3DEX2: 18 */
 #define GFX_MAX_LIGHTS  11   /* + la ambiental; F3DEX2: 7, Conker: 11 */
-#define GFX_ARENA_TEXTURES 64  /* texturas del arena que se recuerdan por tarea */
+/* Texturas del arena que se recuerdan por tarea (para no decodificar dos
+ * veces la misma con la caché llena o apagada): 32 entradas, 1,5 KB del
+ * local store del SPE 0. */
+#define GFX_ARENA_TEXTURES 32
 #define GFX_TC_ENTRIES  1024 /* texturas en la caché entre tareas */
 #define GFX_TC_SLOTS    2048 /* índice por hash de la caché (potencia de 2) */
 #define GFX_MAX_COMMANDS (1u << 20)
