@@ -64,6 +64,16 @@ void audio_sync_flush(struct audio_sync *as)
 	store_release(&as->flush_seq, as->flush_seq + 1);
 }
 
+void audio_sync_pause(struct audio_sync *as, bool on)
+{
+	__atomic_store_n(&as->paused, on ? 1u : 0u, __ATOMIC_RELEASE);
+}
+
+static bool pause_wanted(const struct audio_sync *as)
+{
+	return __atomic_load_n(&as->paused, __ATOMIC_ACQUIRE) != 0;
+}
+
 /* ---- Consumidor: estirador ------------------------------------------------------ */
 
 static void setup(struct audio_sync *as, uint32_t rate)
@@ -160,7 +170,23 @@ static void make_hop(struct audio_sync *as)
 		as->flush_seen = fseq;
 		go_silent(as, (double)as->flush_from);
 	}
-	if (!as->playing && (double)w - as->rpos >= target) {
+	bool held = pause_wanted(as);
+	if (held && !as->held) {
+		/* Pausa: lo que quedaba del grano se desvanece en este salto y la
+		 * lectura sigue después, donde iba. */
+		as->stats.pauses++;
+		if (as->playing) {
+			int64_t resume = as->prev >= 0 ? as->prev + hop : (int64_t)floor(as->rpos);
+			if (resume > (int64_t)w)
+				resume = (int64_t)w;
+			as->playing = false;
+			as->prev = -1;
+			as->starve = 0;
+			as->rpos = (double)resume;
+		}
+	}
+	as->held = held;
+	if (!held && !as->playing && (double)w - as->rpos >= target) {
 		as->playing = true;
 		as->prev = -1;
 		as->starve = 0;
@@ -261,6 +287,10 @@ static void next_in(struct audio_sync *as, float f[2])
 static void control(struct audio_sync *as, uint64_t now_us)
 {
 	uint64_t w = load_acquire(&as->wpos);
+	if (pause_wanted(as)) {
+		as->measured = false;  /* la medición empieza de nuevo al volver */
+		return;
+	}
 	if (!as->measured) {
 		as->measured = true;
 		as->meas_pos = w;

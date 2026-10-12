@@ -62,7 +62,11 @@ Full guide (in Spanish): [docs/uso-ps3.md](docs/uso-ps3.md).
 | L / R | L1 / R1 |
 | Start | START |
 
-- **START + SELECT** closes the game (saving first) and returns to the menu.
+- **START + SELECT** pauses and asks before closing the game: × closes it
+  (saving first) and returns to the menu, ○ keeps playing. The question can
+  be turned off in Options («Confirmar al salir»).
+- The **PS button** pauses emulation and sound while the system menu is open;
+  the game resumes where it was when the menu closes.
 - Saves go to `/dev_hdd0/salsa64/saves`, one file per game.
 - Optional text files in `/dev_hdd0/salsa64` change the button mapping
   (`controles.cfg`), the save type per game (`guardado.cfg`), audio

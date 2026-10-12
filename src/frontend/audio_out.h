@@ -40,6 +40,9 @@ void audio_out_shutdown(void);
 /* Lo que espera en la cola de salida ya no suena (estado guardado cargado).
  * Desde el hilo de emulación o con él quieto. */
 void audio_out_flush(void);
+/* Pausa del juego (menú del sistema, cuadro de salir): la salida calla sin
+ * perder lo que estaba en cola y sigue al volver (audio_sync_pause). */
+void audio_out_pause(bool on);
 /* Para las autopruebas: lo que pasó por la salida. */
 const struct audio_sync_stats *audio_out_stats(void);
 /* Bloques del puerto llenados por el hilo de audio. */
