@@ -364,18 +364,20 @@ static void rec_records_exit_sites_of_hot_blocks(void)
 	CHECK_EQ(tbl.sites[0].taken, 0);
 	CHECK_EQ(tbl.entries[i - 1].flags, SALSA64_RPF_FR_SEEN1);  /* T_STATUS tiene FR; no usa la FPU */
 
+	/* Tomado: ADDIU, BNE y su delay slot, el bloque del destino (JR y su
+	 * delay slot, que así queda compilado y con entrada) y una más en RA. El
+	 * paso tiene que dar para el bloque entero: si no cabe antes del evento,
+	 * el modo estricto compila uno recortado, sin contadores. */
 	R[T0] = 2;
 	salsa64_cpu_set_pc(CPU, T_CODE);
-	t_step(3);  /* tomado: ADDIU, BNE y su delay slot */
+	t_step(6);
 	CHECK_EQ(R[T0], 1);
-	CHECK_EQ(CPU->pc, T_CODE + 24);
+	CHECK_EQ(CPU->pc, T_CODE + 0x104);
 	CHECK_EQ(tbl.sites[0].taken, 1);
 	CHECK_EQ(rec->hits[id], 2);
-
-	/* El bloque del destino, compilado y con entrada: el sucesor se resuelve. */
-	t_step(2);
-	CHECK_EQ(CPU->pc, T_CODE + 0x100);
 	CHECK_EQ(tbl.count, 2);
+
+	/* El sucesor se resuelve a la huella del bloque del destino. */
 	salsa64_rec_profile_fold(rec);
 	CHECK_EQ(tbl.entries[i - 1].hits, 2);
 	CHECK_EQ(tbl.sites[0].succ_hash, salsa64_rec_profile_hash(dest, 2));
