@@ -6,7 +6,7 @@ antes, después, notas.
 
 | Fecha | Commit | Prueba | Entorno | Antes | Después | Notas |
 |---|---|---|---|---|---|---|
-| 2026-10-13 | fd1891c → (rama del código compacto) | **Código compacto del recompilador**: palabras de PPC por instrucción MIPS, GoldenEye hasta la presa (`goldeneye-dam.pad`, 7,5 G ciclos), pesado por ejecuciones de bloque | Mac, qemu-ppc64 (`salsa64-run --rec` con `SALSA64_REC_DUMP=1`, `tools/rec-expansion.py --counter 8`), respaldo del autor | 20,2 por instrucción (9,3 calientes, 11,0 frías); 17,2 MB de PPC, 305 palabras por bloque | **15,6 (8,2 calientes, 7,4 frías): −23 %**; 13,2 MB, 234 por bloque; mismo recorrido (mismas cuentas del perfil), 4 desalojos en vez de 6 | Prueba de KSEG0 en 4 palabras, un camino lento por bloque (rutina única + trampolín), cadena de escritura, enlaces de 3 palabras. PS3: pendiente (A/B con `jit-ancho`). Ver «Código compacto» abajo |
+| 2026-10-13 | fd1891c → (rama del código compacto) | **Código compacto del recompilador**: palabras de PPC por instrucción MIPS, GoldenEye hasta la presa (`goldeneye-dam.pad`, 7,5 G ciclos), pesado por ejecuciones de bloque | Mac, qemu-ppc64 (`salsa64-run --rec` con `SALSA64_REC_DUMP=1`, `tools/rec-expansion.py --counter 8`), respaldo del autor | 20,2 por instrucción (9,3 calientes, 11,0 frías); 17,2 MB de PPC, 305 palabras por bloque | **15,6 (8,2 calientes, 7,4 frías): −23 %**; 13,2 MB, 234 por bloque; mismo recorrido (mismas cuentas del perfil), 4 desalojos en vez de 6 | Prueba de KSEG0 en 4 palabras, un camino lento por bloque (rutina única + trampolín), cadena de escritura, enlaces de 3 palabras. **PS3 real** (mismo paquete, A/B con `jit-ancho`): GoldenEye en la presa 17,26 → 16,30 / 16,03 ns por instrucción emulada (−6…−7 %, 47,5 → 50–53 campos/s), Perfect Dark 14,85 → 14,45 (−3 %), SM64 y Zelda sin regresión. Ver «Código compacto» abajo |
 | 2026-10-10 | 419731a → c14268c | Intérprete, `bench` mixto | PS3 real: Slim CECH-3011A, HFW 4.91 + HEN | 8,7 MIPS | 17,1 MIPS (×2,0) | Estado del bucle en registros, sin llamadas por instrucción, r0 sin escribir, tablas de `switch` sin `lwax`, FPU rápida sin pasar valores por memoria. Desglose en «Líneas base de la Fase 1» |
 | 2026-10-10 | c14268c → 147d5ac | Intérprete, `bench` mixto | PS3 real (mismo equipo) | 17,1 MIPS | 21,2 MIPS (×1,24; ×2,4 desde 8,7) | Un solo despacho (SPECIAL en la misma tabla), FPU rápida sin comparaciones de punto flotante para clasificar, movimientos de COP1 en el bucle |
 | 2026-10-10 | 940f6f8 | Frontend con vitest, emulación por campo | PS3 real (mismo equipo) | 65,6 ms (15,2 campos/s) | 35,0 ms (28,3 campos/s; ×1,9) | Detección de bucles de espera (`src/cpu/idle.c`): 45,6 % del tiempo saltado. Medición A/B automática del frontend, 10 s cada una, dos corridas iguales (65,56/65,66 → 34,97/34,84 ms). Lo que queda es el dibujo de vitest con el CPU |
@@ -1096,25 +1096,37 @@ En la fría, lo que queda por acceso: el camino lento (`li`, `bl`, `bne`,
 pendientes de la instrucción (3 y 5–6, compartidas con lo demás que salga
 en esa instrucción), más el trampolín del bloque (4, una vez).
 
-**PS3 real, primera corrida** (2026-10-13, Slim CECH-3011A, HFW 4.91 + HEN;
-paquete SLSA00106 «Salsa64 compacto» con main b93d4ce fusionado; una sola
-ejecución de la app; sin `perfil`, así que el costo es por instrucción
-emulada en total, `emulación × campos/s / MIPS`, en las ventanas de 5 s con
-MIPS ≥ 40 y espera ≤ 35 %; `jit-ancho` = el código de antes con el mismo
-binario):
+**PS3 real** (2026-10-13, Slim CECH-3011A, HFW 4.91 + HEN; paquete
+SLSA00106 «Salsa64 compacto» con main b93d4ce fusionado; una ejecución de
+la app para GE compacto → PD compacto → `jit-ancho` (el código de antes,
+mismo binario) → GE → PD → SM64 y Zelda sin `jit-ancho`, y otra con
+GoldenEye compacto 2 min más; sin `perfil`, así que el costo es por
+instrucción emulada en total, `emulación × campos/s / MIPS`, en las
+ventanas de 5 s con MIPS ≥ 40 y espera ≤ 35 %). Logs
+`build/ps3-logs/compacto-2026-10-12.log` y `compacto-ge-2026-10-12.log`.
 
 | | Compacto | Ancho (`jit-ancho`) | |
 |---|---|---|---|
-| Perfect Dark, intro a 5×, segunda escena (ventanas pesadas) | 15,2 / 14,5 / 16,9 / 15,2 ns → **15,4** | 16,5 / 15,5 / 16,1 → 16,0 | −4 % |
-| Perfect Dark, primera escena pesada | 10,6 | 11,3 | −7 % |
-| GoldenEye en la presa | **sin medir**: la corrida compacta duró 30 s (una ventana pesada: 13,6 ns a 67,7 MIPS) | 16,7 / 19,3 / 17,5 / 17,2 / 17,7 (y 11,3 al entrar): como la base del día anterior (17,15) | pendiente de repetir 2 min |
+| GoldenEye presa, 1.ª corrida: ventanas pesadas (9 de 24) | **16,30 ns/instr**, 50,2 campos/s, 60,0 MIPS, 19,5 ms por campo | — | |
+| GoldenEye presa, repetición (19 de 45) | **16,03 ns/instr**, 53,0 campos/s, 59,7 MIPS, 18,1 ms | — | |
+| GoldenEye presa, ancho (12 de 24) | — | 17,26 ns/instr, 47,5 campos/s, 55,5 MIPS, 20,4 ms | **−5,6 % / −7,1 %** por instrucción; +6…+12 % de campos/s |
+| GoldenEye, todas las ventanas (lo ligero inflado por las esperas) | 17,2 / 16,8 ns, 55,9 / 56,6 campos/s | 19,8 ns, 53,0 campos/s | |
+| Perfect Dark intro a 5×, pesadas (5 y 4) | 14,45 ns (2.ª escena 15,2 / 14,5 / 16,9 / 15,2 → 15,4) | 14,85 ns (2.ª escena 16,5 / 15,5 / 16,1 → 16,0) | **−3 % / −4 %**; primera escena pesada 10,6 contra 11,3 (−7 %) |
 | SM64 y Zelda OoT, 30 s | 59,7 y 59,5 campos/s (4,4 y 6,8 ms de emulación por campo) | — | sin regresión |
 
-Las escenas no son idénticas entre corridas (el autor juega); por eso se
-compara el costo por instrucción y no los campos/s. Lo que falta: GoldenEye
-compacto 2 min (y con `perfil`, el desglose nativo / llamadas a C), y el
-muestreo por tiempo (docs/rec-ppe.md, «Muestreo por tiempo») para ver qué
-bloques se llevan el tiempo antes y después.
+En la presa ventana a ventana (de pie, jugando): compacto 16,0–17,5 ns con
+46–57 campos/s; ancho 17,2–18,6 ns con 40–53 campos/s; las ventanas de
+entrada a la presa (menos espera, 68 MIPS) dan 11–14 en los dos. El autor
+lo notó a ojo (5–10 % y menos tirones en lo pesado). Es la primera palanca
+del recompilador que mueve el costo por instrucción del nativo desde la
+Fase 3 (la FPU residente, el microcódigo y las rutinas de COP0 no lo
+movieron; docs/cache-ppe.md, sección 2): confirma que lo que manda son las
+líneas de caché por instrucción. Las escenas no son idénticas entre
+corridas (el autor juega); por eso se compara el costo por instrucción y no
+los campos/s. Pendiente: el muestreo por tiempo (abajo) para ver qué bloques
+se llevan el tiempo antes y después, y con `perfil` el desglose nativo /
+llamadas a C.
+
 ### Perfil persistente y zona caliente (2026-10-12, rama fervent-noyce)
 
 Diseño en docs/rec-ppe.md, «Perfil persistente y bloques calientes». Lo que

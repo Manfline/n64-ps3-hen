@@ -44,12 +44,14 @@ nemu64-test, vitest, Perfect Dark y GoldenEye sin diferencias
 (r0 como base vale 0 en el PPE) y la cadena entrando por el extremo
 equivocado.
 
-**PS3 real, primera corrida** (2026-10-13, misma noche; detalle en
-docs/perf-log.md, «Código compacto»): Perfect Dark en la segunda escena de
-la intro 15,4 → 16,0 ns por instrucción emulada del compacto al ancho
-(−4 %; −7 % en la primera escena pesada); GoldenEye compacto duró 30 s y no
-alcanza para concluir (una ventana pesada a 13,6 ns contra 16,7–17,7 del
-ancho): por repetir 2 min. SM64 y Zelda a 59,5–59,7 campos/s.
+**PS3 real** (2026-10-13, misma noche; detalle en docs/perf-log.md,
+«Código compacto»; A/B con `jit-ancho`, el código de antes en el mismo
+paquete): GoldenEye en la presa **17,26 → 16,30 / 16,03 ns por instrucción
+emulada (−6…−7 %)** en las ventanas pesadas, 47,5 → 50–53 campos/s; Perfect
+Dark intro 14,85 → 14,45 (−3 %; −4 % en la segunda escena, −7 % en la
+primera pesada); SM64 y Zelda a 59,5–59,7 campos/s sin regresión. Es la
+primera palanca del recompilador que mueve el costo por instrucción del
+nativo desde la Fase 3. El autor lo notó a ojo (5–10 %, menos tirones).
 
 **Muestreo por tiempo** (mismo día, a pedido de main; docs/rec-ppe.md,
 «Muestreo por tiempo»): `src/cpu/rec_sample.c`, archivo `muestreo` en la
