@@ -83,7 +83,9 @@ enemigos hacia la cámara cambiando la matriz combinada con
 (`gfx_insert_matrix`) y la de F3DEX2 ignoraba: los modelos quedaban
 aplastados (el cuerpo dorado no se veía; el enemigo de fuego era una
 línea). Smash también lo usa: en su demo cambian detalles de menos de un
-píxel (Congo Jungle, Fox).
+píxel (Congo Jungle, Fox). Candidato a la misma causa, sin probar (no
+hay respaldo en la Mac): Earthworm Jim 3D, donde el modelo de Jim no se ve
+(issue #3).
 
 **Pokémon Stadium 2: fondo del título como ruido.** El fondo es un JPEG
 que decodifica el microcódigo JPEG del RSP: el mismo código que el de
