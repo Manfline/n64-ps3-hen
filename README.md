@@ -18,11 +18,14 @@ maps naturally onto an SPE.
 
 Work in progress, but already playable on a real PS3:
 
-- **Playable on real hardware:** Zelda: Ocarina of Time, Super Mario 64 and
-  Mario Kart 64 at full speed; GoldenEye 007 and Perfect Dark with sound,
-  GoldenEye still below full speed in heavy scenes. Each game has open
-  issues (mostly graphical); see [docs/estado.md](docs/estado.md) and
-  [docs/compatibilidad.md](docs/compatibilidad.md).
+- **Playable on real hardware (v0.2.2):** Zelda: Ocarina of Time and
+  Majora's Mask, Super Mario 64, Mario Kart 64, Donkey Kong 64, Paper Mario
+  and Mario Party at full speed; Perfect Dark, GoldenEye 007, Conker, Star
+  Fox 64 and Banjo-Kazooie playable (GoldenEye 45–60 fps in the Dam). Note:
+  Conker shows a black screen for 25–30 s at boot before the logos (just
+  wait); Super Smash Bros. freezes on the first KO. Full list (Spanish):
+  [docs/compatibilidad.md](docs/compatibilidad.md); release notes:
+  [CHANGELOG.md](CHANGELOG.md).
 - **CPU:** VR4300 interpreter and a MIPS → PPC64 dynamic recompiler on the
   PPE (with TLB-mapped code, FPU and idle-loop detection).
 - **RSP:** high-level emulation of graphics microcodes (Fast3D, F3DEX 0.95/1.x,
@@ -34,9 +37,11 @@ Work in progress, but already playable on a real PS3:
   at run time (there is no Cg compiler on the console).
 - **Frontend:** XMB-style ROM menu, DualShock 3 → N64 controller mapping,
   EEPROM, SRAM and FlashRAM saves.
+- **Video:** 720p or 1080p output with internal render scale 1× to 5×;
+  framebuffer effects (render to texture, copies back to N64 memory, motion
+  blur read from the RSX); save states, FPS counter, PS button pause.
 - **Not yet:** large SRAM saves (768 Kbit, 1 Mbit), Controller/Rumble/Transfer
-  Pak, framebuffer effects (render-to-texture, pause backgrounds), internal
-  resolution upscaling and post-processing filters.
+  Pak and post-processing filters (CRT, scaling).
 
 Performance numbers are logged in [docs/perf-log.md](docs/perf-log.md). Only
 measurements on a real PS3 count; RPCS3 is used for functional tests.

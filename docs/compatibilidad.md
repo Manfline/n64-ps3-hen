@@ -11,6 +11,32 @@ compilador de la Mac (el Docker de desarrollo no ve las carpetas de fuera del
 proyecto) y deja log e imágenes en `build/censo/`. Los textos, CRC y palabras
 de identificación de los microcódigos salen de `--trace-rsp`.
 
+## 2026-10-12 — Censo en la PS3 real (v0.2.0 a v0.2.2)
+
+PS3 con HEN, respaldos NTSC (EE. UU.), salida a 1080p con escala 5×. Es la
+lista vigente; las secciones de abajo son censos anteriores en la Mac.
+
+| Juego | Estado | Notas |
+|---|---|---|
+| Zelda: Ocarina of Time | velocidad completa | sin tirón en las salas prerrenderizadas desde v0.2.1 |
+| Zelda: Majora's Mask | velocidad completa | guardado en FlashRAM; la iluminación de algunas zonas salta entre fuentes de luz |
+| Super Mario 64, Mario Kart 64 | velocidad completa | |
+| Donkey Kong 64 | velocidad completa | cámara estable desde v0.2.1; tirones breves al entrar a zonas nuevas |
+| Paper Mario, Mario Party, Mario Party 3 | velocidad completa | |
+| Perfect Dark | velocidad completa en la intro y menús | 43–55 cuadros/s en las escenas más pesadas (CPU) |
+| GoldenEye 007 | 45–60 cuadros/s | la presa es la zona más pesada; líneas azules finas en algunas uniones |
+| Conker's Bad Fur Day | ~60 en juego | **al arrancar se queda en negro unos 25–30 s antes de los logos: hay que esperar**; sombras cuadradas |
+| Star Fox 64, Banjo-Kazooie | velocidad completa | Banjo: las pantallas del rompecabezas salen en negro |
+| Kirby 64, Pokémon Stadium 2 | ~97–100 % | algunas texturas con ruido o en ajedrez |
+| Pokémon Snap | jugable | texturas estiradas en algunos polígonos |
+| Super Smash Bros. | velocidad completa | **se congela en el primer KO**; mientras se arregla, crear `/dev_hdd0/salsa64/fbfx.cfg` con un `1` (algunas texturas se ven estiradas) y quitarlo para los demás juegos |
+| Doom 64 | ~40 % | limitado por el CPU |
+| Banjo-Tooie, F-Zero X | pantalla negra | arranque (CIC 6105 / 6106) |
+| Diddy Kong Racing | pantalla negra | microcódigo propio de Rare; en desarrollo con el RSP a bajo nivel |
+| Indiana Jones, Resident Evil 2 | no jugables | microcódigos de Factor 5 / Capcom |
+
+Las versiones europeas (PAL) y japonesas no se han probado.
+
 ## 2026-10-10 (3) — microcódigos gráficos de Rare (Perfect Dark y Conker)
 
 Código medido: rama `competent-haslett-3bad2a` (main 3270538 con la

@@ -228,6 +228,16 @@ VI 59,9 (100 %) · juego 30 · pantalla 60
 
 Es un promedio de medio segundo. Se recuerda en `menu.cfg` (`fps = si`).
 
+## Notas por juego
+
+- **Conker's Bad Fur Day**: al arrancar se queda en negro unos 25–30
+  segundos antes de los logos. No está colgado: hay que esperar.
+- **Super Smash Bros.**: se congela en el primer KO. Mientras se arregla,
+  crear `/dev_hdd0/salsa64/fbfx.cfg` con un `1` adentro (apaga las copias del
+  framebuffer a la memoria de la N64; algunas texturas se ven estiradas) y
+  quitarlo para los demás juegos.
+- Lista completa de lo probado en la PS3 real: [compatibilidad.md](compatibilidad.md).
+
 ## Abrir una ROM sin menú
 
 Si existe `/dev_hdd0/salsa64/embedded`, el menú no aparece y se arranca
