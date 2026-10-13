@@ -1,0 +1,7 @@
+LW with address not sign extended
+SW with address not sign extended
+Unaligned LW exception
+Unaligned LW exception (delay slot)
+Unaligned LW exception (with high bits of context set)
+Unaligned LWC1 exception (with high bits of context set)
+Unaligned SW exception

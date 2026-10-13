@@ -176,6 +176,7 @@
 #include "padmap.h"
 #include "pausectl.h"
 #include "platform/ps3/autotest.h"
+#include "platform/ps3/fastmem.h"
 #include "platform/ps3/gfx_spu.h"
 #include "platform/ps3/jpeg_spu.h"
 #include "platform/ps3/rsp_spu.h"
@@ -2629,6 +2630,14 @@ static void stats(uint64_t now)
 			    (unsigned long long)st->vt_probes, (unsigned long long)st->fr_dep,
 			    (unsigned long long)st->fr_twins, (unsigned long long)st->fr_exits,
 			    (unsigned long long)st->cu1_exits, (unsigned long long)st->interp_steps);
+		if (rec.fastmem || st->fm_off) {
+			uint32_t fa, fu, fs;
+			salsa64_ps3_fastmem_counts(&fa, &fu, &fs);
+			salsa64_log("fastmem: %s; %llu accesos sin prueba, %llu parchados tras fallar; ayudante: %u fallos atendidos, "
+				    "%u desconocidos, %u de SPE",
+				    rec.fastmem ? "activo" : "apagado", (unsigned long long)st->fm_sites,
+				    (unsigned long long)st->fm_faults, fa, fu, fs);
+		}
 		if (rsmp.on) {
 			char text[320];
 			salsa64_rec_sample_split(rec_sample, &rsmp.prev, text, sizeof text);
@@ -3551,6 +3560,11 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	savefile_open(&save_file, &save, &n64.bus, rom, SAVES_DIR, SAVE_CFG, SALSA64_SAVE_AUTO, salsa64_log);
 
 	rec.opts = SALSA64_REC_OPT_PIN;  /* +7 % en nemu64-test (docs/perf-log.md) */
+	rec.fm_window = NULL;
+	if (salsa64_ps3_fastmem_ptr() && rdram == salsa64_ps3_fastmem_ptr()) {
+		rec.opts |= SALSA64_REC_OPT_FASTMEM;
+		rec.fm_window = rdram;
+	}
 	if (salsa64_ps3_rec_legacy_wanted())
 		rec.opts |= SALSA64_REC_OPT_LEGACY;
 	if (salsa64_ps3_rec_fpu_res_wanted())
@@ -3570,18 +3584,22 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		salsa64_log("recompilador apagado (%s): intérprete", SALSA64_NOREC_FLAG);
 	else if (!(use_rec = salsa64_rec_init(&rec, &n64.cpu, salsa64_ps3_rec_cache(), SALSA64_REC_CACHE_BYTES)))
 		salsa64_log("recompilador no disponible: intérprete");
-	else
+	else {
+		if (rec.fastmem && !salsa64_ps3_fastmem_start(&rec))
+			salsa64_rec_fastmem_off(&rec);
 		salsa64_log("páginas: RDRAM %u KB, rec %u KB, n64 %u KB, caché de código %u KB, pila %u KB (0 = sin dato)",
 			    page_kb(rdram), page_kb(&rec), page_kb(&n64), page_kb(salsa64_ps3_rec_cache()),
-			    page_kb(__builtin_frame_address(0))),
-		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x%s%s%s%s%s%s",
+			    page_kb(__builtin_frame_address(0)));
+		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x%s%s%s%s%s%s%s",
 			    SALSA64_REC_CACHE_BYTES >> 20, salsa64_ps3_rec_cache(), rec.calls_near ? "con bl" : "por mtctr",
 			    rec.opts, rec.prof ? ", con perfil" : "",
 			    rec.opts & SALSA64_REC_OPT_LEGACY ? ", camino viejo (jit-viejo)" : "",
 			    rec.opts & SALSA64_REC_OPT_FPU_RES ? ", FPU residente (jit-fpu-residente)" : "",
 			    rec.opts & SALSA64_REC_OPT_COP0_EXEC ? ", COP0 por el intérprete (jit-cop0-viejo)" : "",
 			    rec.opts & SALSA64_REC_OPT_NO_EVICT ? ", sin tramos (jit-sin-tramos)" : "",
-			    rec.opts & SALSA64_REC_OPT_WIDE ? ", código ancho (jit-ancho)" : "");
+			    rec.opts & SALSA64_REC_OPT_WIDE ? ", código ancho (jit-ancho)" : "",
+			    rec.fastmem ? ", fastmem (jit-fastmem)" : rec.opts & SALSA64_REC_OPT_FASTMEM ? ", fastmem APAGADO" : "");
+	}
 	profile_open(rom);
 	sample_open();
 
@@ -4499,7 +4517,15 @@ int main(void)
 	}
 
 	rdram = NULL;
-	if (file_exists(RDRAM_1M_PATH)) {
+	if (salsa64_ps3_fastmem_wanted() && salsa64_ps3_rec_wanted()) {
+		/* fastmem (docs/fastmem.md): la RDRAM al principio de una ventana de
+		 * 512 MB sin mapear; el recompilador la aprovecha si la autoprueba
+		 * pasa (más abajo, al abrir el juego). */
+		rdram = salsa64_ps3_fastmem_window(SALSA64_RDRAM_MAX);
+		if (!rdram)
+			salsa64_log("fastmem (jit-fastmem): sin ventana, la RDRAM va como siempre");
+	}
+	if (!rdram && file_exists(RDRAM_1M_PATH)) {
 		sys_mem_addr_t addr = 0;
 		if (sysMemoryAllocate(SALSA64_RDRAM_MAX, SYS_MEMORY_PAGE_SIZE_1M, &addr) == 0)
 			rdram = (uint8_t *)(uintptr_t)addr;
@@ -4557,6 +4583,7 @@ int main(void)
 		sysThreadJoin(watch_tid, &rv);
 	}
 	salsa64_log("salida normal%s", app_quit ? " («Salir del juego» del sistema)" : "");
+	salsa64_ps3_fastmem_stop();
 	salsa64_log_shutdown();
 	return status;
 }

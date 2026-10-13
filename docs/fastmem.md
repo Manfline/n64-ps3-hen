@@ -256,7 +256,30 @@ Resultados en qemu (ppc64, `tools/qemu-ppc64.sh`):
 | nemu64-test `--rec` con registros fijos | **440 fallas = las 433 de la línea base + 7 esperadas**: «LW/SW with address not sign extended» (una dirección de 64 bits sin extensión de signo es error de dirección en la N64; fastmem la recorta a 32 bits) y «Unaligned LW/SW/LWC1 exception» (no se comprueba la alineación). Las dos son fallos de programa en la consola real y ningún juego del censo las produce. Fastmem se apagó solo a mitad de la suite (sus pruebas de la TLB mapean kuseg bajo) y el resto corrió con la prueba: 10 201 accesos sin prueba, 31 parchados |
 | nemu64-test `--lockstep` | diverge en la prueba de LW no alineado (badvaddr …a26: el intérprete lanza AdEL), como corresponde; no sirve de lockstep con fastmem |
 | GoldenEye hasta la presa `--lockstep`, Perfect Dark 3 G `--lockstep` | en curso |
-| Expansión (GoldenEye, `tools/rec-expansion.py`) | en curso |
+| Expansión (GoldenEye hasta la presa, `SALSA64_REC_DUMP=1 SALSA64_REC_PROF=12000 SALSA64_REC_PROF_TOP=4000 SALSA64_REC_PIN=1`, `tools/rec-expansion.py --counter 8`, pesado por ejecuciones) | **calientes 8,16 → 6,87 palabras por instrucción MIPS (−16 %)**, lo estimado en la sección 1; frías 7,40 → 10,06 (+36 %: la copia del acceso con su prueba, 7 palabras por carga y 11 por almacenamiento) y en total 15,57 → 16,93 (+9 %). 74 037 accesos sin prueba y **282 parchados** en 80 s de consola (los registros del VI, SP, AI y PI, la ROM y el PIF): el fallo es una rareza, no un costo. En los 25 bloques más ejecutados, 8,1 → 6,8 calientes |
+
+Lo que la expansión dice para la PS3: la ganancia está en las líneas
+calientes; la sección fría crece, y como hoy va pegada al cuerpo (en main;
+la rama de la caché del PPE la separa), parte de ese crecimiento entra en
+la L2 con el cuerpo. El A/B en la consola lo dirá.
+
+### El lado de la PS3 (`src/platform/ps3/fastmem.c`, por probar)
+
+Con el archivo `jit-fastmem`: la RDRAM se pide a sys_mmapper (región de 512
+MB en páginas de 1 MB, objeto de 8 MB mapeado al principio) y el frontend
+pasa la ventana al recompilador; al abrir el primer juego, un hilo
+ayudante (prioridad 900) espera en una cola de eventos con la notificación
+de fallos de la región (327) y una **autoprueba** hace fallar una carga
+desde un hilo propio con código en el final de la caché: si el evento llega,
+el contexto (58) trae el pc (la autoprueba lo localiza buscando el pc de su
+carga en el volcado, y ese índice vale después) y el hilo sigue por la
+instrucción parchada, fastmem queda activo; si no, apagado con el motivo en
+el log. Los fallos del juego: el ayudante toma el pc del contexto,
+`salsa64_rec_fastmem_fault` parchea y reanuda (57); un fallo que no es de un
+sitio conocido deja el hilo detenido y lo dice. El log de cada 5 s cuenta
+accesos sin prueba, parchados, fallos atendidos, desconocidos y de SPE.
+Pendiente de la consola: que lv2 avise, que el contexto traiga el pc, y que
+los SPE (HLE gráfica, audio, JPEG) puedan hacer DMA sobre la ventana.
 
 ## 7. Resultados en la PS3
 
