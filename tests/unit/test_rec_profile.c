@@ -375,7 +375,7 @@ static void rec_records_exit_sites_of_hot_blocks(void)
 	CHECK_EQ(CPU->pc, T_CODE + 0x104);
 	CHECK_EQ(tbl.sites[0].taken, 1);
 	CHECK_EQ(rec->hits[id], 2);
-	CHECK_EQ(tbl.count, 2);
+	CHECK_EQ(tbl.count, 3);  /* el destino y el bloque de RA (que corrió recortado, pero se compiló entero) */
 
 	/* El sucesor se resuelve a la huella del bloque del destino. */
 	salsa64_rec_profile_fold(rec);
@@ -402,7 +402,7 @@ static void rec_records_exit_sites_of_hot_blocks(void)
 	salsa64_cpu_set_pc(CPU, T_CODE);
 	t_step(6);
 	CHECK_EQ(R[T1], 2);
-	CHECK_EQ(tbl.count, 3);
+	CHECK_EQ(tbl.count, 4);
 	CHECK_EQ(tbl.nsites, 1);
 	rec->profile_sites = true;
 
