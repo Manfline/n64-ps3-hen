@@ -153,8 +153,8 @@ static void prof_line(void *ctx, const char *text)
  * unitarias), para desensamblarlo (tools/rec-disasm.sh) o medirlo. */
 static void dump_block(struct salsa64_rec *r, uint64_t pc, uint32_t entry, uint32_t words, bool temp)
 {
-	fprintf(stderr, "bloque %016llx%s entrada %u, %u palabras:", (unsigned long long)pc,
-		temp ? " (recortado)" : "", entry, words);
+	fprintf(stderr, "bloque %016llx%s entrada %u, %u palabras (%u calientes):", (unsigned long long)pc,
+		temp ? " (recortado)" : "", entry, words, r->nbuf[0]);  /* nbuf[0]: la sección caliente del último bloque */
 	for (uint32_t k = 0; k < words; k++)
 		fprintf(stderr, " %08x", r->code[entry + k]);
 	fputc('\n', stderr);
@@ -2433,7 +2433,8 @@ int main(int argc, char **argv)
 			memset(&prof_prev, 0, sizeof prof_prev);
 			salsa64_rec_prof_report(&prof, &prof_prev, 0, n64.bus.vi.fields, text, sizeof text);
 			fprintf(stderr, "salsa64-run: %s\n", text);
-			salsa64_rec_prof_blocks_report(&rec, 40, prof_line, NULL);
+			salsa64_rec_prof_blocks_report(&rec, getenv("SALSA64_REC_PROF_TOP") ? (unsigned)strtoul(getenv("SALSA64_REC_PROF_TOP"), NULL, 0) : 40,
+					       prof_line, NULL);  /* más bloques para pesar la expansión (tools/rec-expansion.py) */
 		}
 	}
 	savefile_close(&save_file);

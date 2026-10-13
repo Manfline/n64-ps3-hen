@@ -367,10 +367,7 @@ static void fpu_slow(struct ctx *c, unsigned k, int slow, int resume, int reload
 	c->sec = SEC_COLD;
 	bind(c, slow);
 	fpu_flush_bits(c, ran0, cw0);
-	call_prep(c, k);
-	E(c, ppc_mr(3, R_CPU));
-	li32u(c, 4, c->d[k].w);
-	emit_call(c, c->rec->h_exec);
+	emit_exec_call(c, k);
 	post_check_mem(c, k);
 	fpu_after_cop1_call(c, k);  /* deja fpu_ran; deriva C si el rápido lo escribió */
 	fpu_reload(c, reload_p, reload_fmt);
@@ -789,10 +786,7 @@ static void emit_cop1_res(struct ctx *c, unsigned k)
 		c->sec = SEC_COLD;
 		bind(c, slow);
 		store_regs(c, BIT(I_RT(i)) & (c->written | c->pinned));
-		call_prep(c, k);
-		E(c, ppc_mr(3, R_CPU));
-		li32u(c, 4, i);
-		emit_call(c, c->rec->h_exec);
+		emit_exec_call(c, k);
 		post_check_mem(c, k);
 		E(c, ppc_lwz(0, OFF(fcr31), R_CPU));
 		E(c, ppc_crclr(FCR_IS));

@@ -155,6 +155,12 @@ struct salsa64_rec_fixup {
 /* Para medir A/B: la caché llena se vacía entera, como hasta el 2026-10-11,
  * en vez de desalojar el tramo más viejo. Se aplica en el despachador. */
 #define SALSA64_REC_OPT_NO_EVICT 64u
+/* Para medir A/B con el mismo binario: el código «ancho» de antes del
+ * 2026-10-13 (docs/rec-ppe.md, «Código compacto»): la prueba de KSEG0 en 7
+ * palabras, el camino lento de cada acceso con sus argumentos y su escritura
+ * de registros propios, y las llamadas al intérprete en línea. Se aplica al
+ * compilar. */
+#define SALSA64_REC_OPT_WIDE 128u
 /* Depuración (host, SALSA64_REC_OPTS): apagan una pieza nueva a la vez para
  * acotar una diferencia en --lockstep. LEGACY las apaga todas. */
 #define SALSA64_REC_DBG_NO_ENDLINK 0x100u   /* COP0 vuelve al despachador e interpreta el resto del bloque básico */
@@ -189,7 +195,8 @@ struct salsa64_rec {
 	uint32_t exit_end;       /* el bloque terminó en una instrucción que vuelve a C (COP0, SYSCALL…) */
 	uint32_t ktlb_rtn[2][4]; /* traducción de datos por ktlb[] (rec_tlb.h): [almacena][alineación 0, 1, 3, 7];
 				  * r3 = va; vuelve con cr1 eq y r12 = desplazamiento en la RDRAM, o cr1 ne */
-	uint32_t slow_load[7], slow_store[4];  /* camino lento compartido por tipo (rec_emit.c, emit_load/emit_store) */
+	uint32_t slow_rtn;       /* camino lento compartido: cargas, almacenamientos, una instrucción al intérprete y
+				  * excepciones, según r6 (rec_emit.c, emit_slow_call) */
 
 	/* Direcciones de entrada de las funciones de C que llama el código. */
 	uint64_t h_load, h_store, h_exec, h_exception, h_tlbw, h_eret;

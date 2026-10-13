@@ -422,7 +422,8 @@ que repetían la escritura de los registros modificados. Con superbloques y
 la caché de 16 MB, GoldenEye la llenaba cada 7,5 s (17 vaciados en 128 s).
 Ahora:
 - El camino lento de cargas y almacenamientos son 11 rutinas compartidas
-  del preámbulo (`slow_load[7]`, `slow_store[4]`): el sitio escribe sus
+  del preámbulo (`slow_load[7]`, `slow_store[4]`; desde el 2026-10-13 una
+  sola, con trampolín por bloque: «Código compacto»): el sitio escribe sus
   registros sucios (solo en ese camino, el rápido no cambia), pasa k, el
   delay slot y n en r6 y el pc en r7, y la rutina deja `cycles`, `cur_pc` y
   `delay_slot` como el intérprete, llama a C (guardando LR en
@@ -440,6 +441,75 @@ son las operaciones de la FPU (~55 palabras cada una, con su camino lento
 al intérprete) y las salidas de los saltos internos. Con 24 MB, GoldenEye
 vacía la caché 2 veces en 128 s (al cargar la presa); cada vaciado
 recompila el conjunto vivo (~7000 bloques) a medida que se ejecuta.
+
+### Código compacto: palabras por instrucción MIPS (2026-10-13)
+
+Medido en la PS3 el 2026-10-12 (docs/perf-log.md, «Perfil persistente y
+zona caliente»): juntar los bloques calientes en una zona contigua no cambia
+el costo del nativo; lo que manda es cuántas líneas de caché toca cada
+instrucción emulada. El volcado de GoldenEye hasta la presa
+(`SALSA64_REC_DUMP=1` con el perfil por bloque, `tools/rec-expansion.py`
+pesa cada bloque por sus ejecuciones) daba **20,9 palabras de PPC por
+instrucción MIPS: 9,9 en la sección caliente y 11,0 en la fría**; por
+mnemónico, lo que más pesaba en la caliente era la prueba de KSEG0 de cada
+acceso a memoria (`sradi`, `ori`, `addi`, `clrldi`, `or`, `cmpdi`, `bne`,
+`clrldi`: 8 palabras más la carga y su `extsw`) y en la fría las constantes
+y saltos de los caminos lentos (`lis`/`ori` 30 %, `b`/`bl`/`bne` 31 %) y la
+escritura de los registros sucios antes de cada llamada a C (`std` 10 %).
+Tres cambios, con `SALSA64_REC_OPT_WIDE` (`jit-ancho` en la PS3,
+`SALSA64_REC_WIDE=1` en el host) para medir contra el código de antes con
+el mismo binario:
+
+- **Prueba de KSEG0 en 4 palabras** (`emit_addr`). Con el bit 29 puesto
+  (`oris 0x2000`) KSEG0 y KSEG1 son la misma dirección, y sumarle 2³⁰ + 2²⁹
+  (`addis 0x6000`) a 0xFFFFFFFF_A0000000 da exactamente 2⁶⁴: de una
+  dirección de KSEG0 o KSEG1 dentro de la RDRAM quedan solo los bits del
+  desplazamiento, ya en r12 para el acceso. Un `rldicl` rota al tope los
+  bits del desplazamiento por encima de la alineación y los recorta: queda 0
+  si la dirección vale (segmento, tamaño de la RDRAM y alineación de una
+  vez), y `cmpdi` + `bne` van al camino de la ktlb. Son 4 palabras y ningún
+  registro extra, contra 8 antes (y la rutina de la ktlb sigue devolviendo
+  el desplazamiento en r12).
+- **Un camino lento por bloque, no por acceso.** Una sola rutina del
+  preámbulo (`slow_rtn`; antes `slow_load[7]` y `slow_store[4]`, y las
+  llamadas al intérprete y a las excepciones iban en línea) recibe `r6 =
+  (k + 1) | delay slot << 8 | tipo << 9 | qué << 12 | n << 16` y `r7 = pc
+  del bloque`, deriva `cur_pc = pc + 4k`, deja cycles, cur_pc y delay_slot
+  como el intérprete y despacha por «qué»: carga (`r3 = va`),
+  almacenamiento (`r5 = valor`), una instrucción al intérprete (`r4 = la
+  instrucción`) o una excepción (`r4 = el código`). Cada sitio pasa solo
+  `li r6` (una palabra; y `lis`/`ori` de la instrucción, o `li` del
+  código) y hace `bl` al **trampolín del bloque**, que agrega lo que es del
+  bloque entero (`lis`/`ori` del pc, `oris` de n) y sigue a la rutina: 4
+  palabras una vez por bloque en vez de 5–8 por sitio. Al volver, `cr5 gt`
+  dice si hay que salir (también por excepción en el caso del intérprete);
+  las cargas y los almacenamientos mantienen `cr1 ne` para la excepción.
+  El `call_prep` + llamada + revisión en línea (~19 palabras) de cada
+  instrucción al intérprete, cada camino lento de la FPU y cada
+  desbordamiento de ADD/ADDI pasa a 4–6. El tramo frío que prueba la ktlb
+  de un acceso va pegado a su camino lento (`emit_addr_cold`: si traduce
+  vuelve al rápido, si no sigue de largo), y con desplazamiento 0 la
+  dirección se toma del registro base sin copiarla (`addi` de menos en el
+  camino caliente; los caminos fríos la copian a r3).
+- **Cadena de escritura** (`chain_build`, `emit_chain`). Una salida a C por
+  el camino lento tiene que dejar en `cpu->gpr` los registros del bloque que
+  ya tienen valor; antes cada sitio escribía los suyos (`std` por registro
+  sucio, repetido en cada acceso). Como cada registro del PPE tiene el
+  valor correcto desde la primera instrucción que lo escribe (y antes, si se
+  cargó a la entrada, el mismo que la memoria), los que hay que escribir al
+  salir en k son los de primera escritura ≤ k (< k si k no terminó):
+  ordenados por primera escritura descendente son un sufijo de una sola
+  secuencia de `std` terminada en `blr`, y cada salida entra con `bl` en el
+  último que ya tiene valor. Un `std` por registro por bloque. Las salidas
+  por excepción ya no cargan r3 (el despachador sigue por `redirect`). Los
+  caminos tomados de los saltos internos y las salidas finales siguen
+  escribiendo en línea (son calientes; `bl`/`blr` les costaría ciclos).
+- **Enlaces de 3 palabras** (en los dos modos): el destino va como dato
+  después del `bl exit_link`, que lo lee de LR («Enlaces»).
+
+Resultado en el host (mismo volcado de GoldenEye, pesado por ejecuciones;
+las cuentas de abajo descuentan las 8 palabras por bloque del contador del
+perfil, que la PS3 no lleva): ver docs/perf-log.md, «Código compacto».
 
 ### Memoria
 
@@ -522,9 +592,12 @@ llamar a `salsa64_bus_rdram_written` al escribir la RDRAM.
 
 ### Enlaces
 
-Una salida a dirección fija deja `nop ; lis r3 ; ori r3 ; bl exit_link`. La
-primera vez vuelve a C; el despachador encuentra o compila el destino y
-cambia el `nop` por un `b` directo. Un salto al propio bloque vuelve al
+Una salida a dirección fija deja `nop ; bl exit_link ; <destino>` (desde el
+2026-10-13; antes el destino iba en `lis`/`ori` antes del `bl`, una palabra
+más por salida). La palabra del destino nunca se ejecuta: `exit_link` la lee
+de LR, la extiende con signo a 64 bits y vuelve a C con el sitio del `nop`
+(LR − 8); el despachador encuentra o compila el destino y cambia el `nop`
+por un `b` directo. Un salto al propio bloque vuelve al
 cuerpo (después de escribir los registros modificados y con la misma
 prueba del próximo evento), sin recargar nada. JR/JALR buscan el destino en
 el propio código (`exit_jr`): en KSEG0 por `map[]`, fuera de KSEG0 recorre

@@ -1,5 +1,55 @@
 # Estado
 
+## 2026-10-13 — Recompilador: código compacto, 20,2 → 15,6 palabras de PPC por instrucción MIPS (rama `sleepy-mestorf`, paquete SLSA00106 «Salsa64 compacto»)
+
+Sigue a la medición del perfil persistente (2026-10-12): juntar los bloques
+calientes no cambió el costo del nativo; lo que manda es cuántas líneas de
+caché toca cada instrucción emulada (~21 palabras de PPC por instrucción
+MIPS en los bloques calientes de GoldenEye). Esta rama ataca esa
+expansión (docs/rec-ppe.md, «Código compacto»; docs/perf-log.md, «Código
+compacto»):
+
+- **Prueba de KSEG0 en 4 palabras** por acceso a memoria (antes 8): `oris`
+  del bit 29 + `addis 0x6000` dejan solo el desplazamiento si la dirección
+  es de KSEG0/KSEG1 dentro de la RDRAM; un `rldicl` comprueba segmento,
+  tamaño y alineación de una vez. Con desplazamiento 0, sin `addi`.
+- **Un camino lento por bloque**: una sola rutina del preámbulo
+  (`slow_rtn`: cargas, almacenamientos, instrucción al intérprete y
+  excepciones, según r6) y un trampolín por bloque con su pc y su n; cada
+  sitio pasa una palabra. Lo que antes eran ~19–25 palabras por sitio (FPU,
+  COP0, desbordamientos, accesos) son 4–6.
+- **Cadena de escritura**: los registros con valor al salir por un camino
+  lento se escriben con una sola secuencia de `std` por bloque (entrada
+  según la instrucción), en vez de repetir los sucios en cada sitio.
+- **Enlaces de 3 palabras**: el destino va como dato después del `bl
+  exit_link`.
+- `SALSA64_REC_OPT_WIDE` (`jit-ancho` en la PS3, `SALSA64_REC_WIDE=1` en
+  el host) repite el código de antes para el A/B con el mismo binario.
+- `tools/rec-expansion.py` mide la expansión del volcado
+  (`SALSA64_REC_DUMP=1`, ahora con las palabras calientes por bloque)
+  pesada por ejecuciones (`SALSA64_REC_PROF_TOP` lista más bloques).
+
+Medido en el host (GoldenEye hasta la presa, pesado por ejecuciones):
+**20,2 → 15,6 palabras por instrucción (−23 %)**; calientes 9,3 → 8,2
+(−12 %), frías 11,0 → 7,4 (−33 %); volcado 17,2 → 13,2 MB. Mismo recorrido
+exacto (mismas cuentas del perfil).
+
+Corrección: unitarias 437/437 en los cinco modos (plain, far, pin, eager,
+FPU residente), nemu64-test 433 fallos (línea base) con y sin fijos, vitest,
+estados guardados, lockstep de nemu64-test y vitest sin diferencias; el
+lockstep de Perfect Dark (3 G ciclos) y GoldenEye hasta la presa (7,5 G)
+estaba corriendo al escribir esto (resultado en docs/rec-ppe.md,
+«Resultados»). Dos errores que encontraron las pruebas: `addi r0, 0, -4`
+(r0 como base vale 0 en el PPE) y la cadena entrando por el extremo
+equivocado.
+
+Pendiente: medir en la PS3 real (protocolo en docs/perf-log.md) con el
+A/B de `jit-ancho`; la ganancia esperada es por líneas de caché, no por
+instrucciones ejecutadas (el camino caliente ejecuta ~3 palabras menos por
+acceso). Lo que queda grande por instrucción: la entrada de bloque (ktlb +
+evento, 7–8 palabras), la salida (escritura + enlace), la ALU de 32 bits con
+su `extsw` y la FPU en línea (~35–40 palabras por operación).
+
 ## 2026-10-12 (noche) — Quitarle trabajo al PPE: medición del hilo 1 y tarea JPEG en un SPE, sin tirón (rama `determined-grothendieck`, paquete SLSA00103 «Salsa64 PPE»)
 
 Pasos 1 y 2 de «Quitarle trabajo al PPE» (entrada del 2026-10-11). Medido en

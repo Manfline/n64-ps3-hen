@@ -2496,6 +2496,8 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		rec.opts |= SALSA64_REC_OPT_COP0_EXEC;
 	if (salsa64_ps3_rec_no_evict_wanted())
 		rec.opts |= SALSA64_REC_OPT_NO_EVICT;
+	if (salsa64_ps3_rec_wide_wanted())
+		rec.opts |= SALSA64_REC_OPT_WIDE;
 	rec.prof = salsa64_ps3_rec_prof_wanted() ? &rec_prof : NULL;
 	if (!salsa64_ps3_rec_wanted())
 		salsa64_log("recompilador apagado (%s): intérprete", SALSA64_NOREC_FLAG);
@@ -2511,7 +2513,8 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 			    rec.opts & SALSA64_REC_OPT_LEGACY ? ", camino viejo (jit-viejo)" : "",
 			    rec.opts & SALSA64_REC_OPT_FPU_RES ? ", FPU residente (jit-fpu-residente)" : "",
 			    rec.opts & SALSA64_REC_OPT_COP0_EXEC ? ", COP0 por el intérprete (jit-cop0-viejo)" : "",
-			    rec.opts & SALSA64_REC_OPT_NO_EVICT ? ", sin tramos (jit-sin-tramos)" : "");
+			    rec.opts & SALSA64_REC_OPT_NO_EVICT ? ", sin tramos (jit-sin-tramos)" : "",
+			    rec.opts & SALSA64_REC_OPT_WIDE ? ", código ancho (jit-ancho)" : "");
 
 	/* overscan.cfg: en cada juego (se cambia desde las Opciones del menú). */
 	load_overscan();

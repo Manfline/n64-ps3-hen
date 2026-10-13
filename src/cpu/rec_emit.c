@@ -225,6 +225,11 @@ static void decode(uint32_t i, struct dec *d)
 
 enum { SEC_HOT, SEC_COLD, SEC_ABS, SEC_NONE };
 
+/* Qué hace la rutina compartida del camino lento (rec.c, emit_preamble,
+ * slow_rtn): va en los bits 12–13 de r6. Cada bloque le llega por un
+ * trampolín propio que deja su pc y su n (emit_trampolines). */
+enum { SLOW_LOAD = 0, SLOW_STORE = 1, SLOW_EXEC = 2, SLOW_EXC = 3 };
+
 /* Salida pendiente de una instrucción (se emite al final, en la sección fría). */
 struct pending_exit {
 	uint16_t label;
@@ -298,6 +303,25 @@ struct ctx {
 	int insn_label[SALSA64_REC_MAX_INSNS];  /* etiqueta del código de la instrucción k (−1: nadie salta ahí) */
 	struct ijump ijumps[SALSA64_REC_MAX_INSNS];
 	unsigned nijumps;
+	/* Código compacto (docs/rec-ppe.md, «Código compacto»); `wide` repite el
+	 * de antes del 2026-10-13 (SALSA64_REC_OPT_WIDE) para medir A/B. */
+	bool wide;
+	int tramp;                         /* trampolín del bloque a la rutina compartida (−1: no la usa) */
+	/* Dirección de un acceso (emit_addr): el tramo frío que prueba la ktlb
+	 * se emite pegado al camino lento del acceso (emit_addr_cold). */
+	struct {
+		int mapped, back;
+		uint8_t va, align;
+		bool store, pending;
+	} addr;
+	/* Cadena de escritura: los registros del bloque que escribe, por primera
+	 * escritura descendente; una salida entra donde empiezan los que ya
+	 * tienen valor y ejecuta hasta el blr (chain_call). */
+	uint8_t chain_reg[N_CACHE + 1];
+	uint8_t chain_fw[N_CACHE + 1];     /* primera instrucción que lo escribe */
+	unsigned nchain;
+	int chain_label[N_CACHE + 2];      /* entrada i: desde chain_reg[i]; nchain: solo el blr */
+	bool chain_used;
 };
 
 static void restore_borrowed(struct ctx *c);
@@ -401,6 +425,120 @@ static void li32u(struct ctx *c, unsigned rt, uint32_t v)
 		E(c, ppc_oris(rt, rt, v >> 16));
 	if (v & 0xFFFF)
 		E(c, ppc_ori(rt, rt, v & 0xFFFF));
+}
+
+/* Constante de 32 bits en dos palabras, con el signo extendido (quien la
+ * recibe como uint32_t la recorta: las rutinas compartidas hacen clrldi). */
+static void li32s(struct ctx *c, unsigned rt, uint32_t v)
+{
+	E(c, ppc_lis(rt, (int16_t)(v >> 16)));
+	if (v & 0xFFFF)
+		E(c, ppc_ori(rt, rt, v & 0xFFFF));
+}
+
+/* ---- Camino lento compartido (código compacto) -------------------------------------- */
+
+/*
+ * Lo que una carga, un almacenamiento, una instrucción al intérprete o una
+ * excepción necesitan de C vive en rutinas del preámbulo (rec.c,
+ * emit_preamble): dejan cycles, cur_pc y delay_slot como el intérprete,
+ * llaman, recargan sched->next y dicen si hay que salir. El sitio solo pasa
+ * r6 = (k + 1) | delay slot << 8 (una palabra) y salta al trampolín del
+ * bloque para esa rutina, que agrega lo que es del bloque entero (su pc en
+ * r7 y n en la mitad alta de r6) y sigue a la rutina. Antes cada sitio
+ * repetía el pc, n, la llamada y la revisión (~25 palabras).
+ */
+/* Lo que el sitio pasa en r6 (sin n, que agrega el trampolín). */
+static uint32_t slow_arg(const struct ctx *c, unsigned what, unsigned kind, unsigned k)
+{
+	return (k + 1) | (c->in_ds ? 0x100u : 0) | kind << 9 | what << 12;
+}
+
+/* r6 = (k + 1) | delay slot << 8 | tipo << 9 | qué << 12 y a la rutina por
+ * el trampolín del bloque. */
+static void emit_slow_call(struct ctx *c, unsigned what, unsigned kind, unsigned k)
+{
+	if (c->tramp < 0)
+		c->tramp = new_label(c);
+	E(c, ppc_li(6, (int32_t)slow_arg(c, what, kind, k)));
+	emit_b(c, c->tramp, true);
+}
+
+/* Al final del bloque (sección fría): el trampolín, si lo usó. */
+static void emit_trampolines(struct ctx *c)
+{
+	if (c->tramp < 0)
+		return;
+	bind(c, c->tramp);
+	li64(c, 7, c->pc);
+	E(c, ppc_oris(6, 6, c->n));
+	emit_b(c, abs_label(c, c->rec->slow_rtn), false);
+}
+
+/*
+ * Cadena de escritura. Una salida a C por el camino lento (excepción,
+ * interrupción, evento, código invalidado) tiene que dejar en cpu->gpr los
+ * registros del bloque que ya recibieron un valor. Cada registro del PPE
+ * tiene el valor correcto desde la primera instrucción que lo escribe (y
+ * antes, si se cargó a la entrada, el mismo que la memoria), así que «los que
+ * hay que escribir al salir en k» son los de primera escritura ≤ k (< k si k
+ * no terminó). Ordenados por primera escritura descendente, son un sufijo de
+ * una sola secuencia de std: la salida entra en el primero que le toca y
+ * ejecuta hasta el blr. Un std por registro por bloque, en vez de uno por
+ * registro sucio en cada camino lento (en GoldenEye, el 28 % de la sección
+ * fría de los bloques con muchos accesos).
+ */
+static void chain_build(struct ctx *c)
+{
+	c->nchain = 0;
+	c->chain_used = false;
+	for (unsigned k = 0; k < c->n; k++) {
+		uint64_t m = c->d[k].writes & c->cached & ~c->pinned;
+		for (unsigned r = 1; m && r < 34; r++) {
+			if (!(m & BIT(r)))
+				continue;
+			bool seen = false;
+			for (unsigned i = 0; i < c->nchain; i++)
+				seen |= c->chain_reg[i] == r;
+			if (!seen && c->nchain < N_CACHE + 1) {  /* en orden de primera escritura; se emite al revés */
+				c->chain_reg[c->nchain] = (uint8_t)r;
+				c->chain_fw[c->nchain] = (uint8_t)k;
+				c->nchain++;
+			}
+		}
+	}
+	for (unsigned i = 0; i <= c->nchain; i++)
+		c->chain_label[i] = new_label(c);
+}
+
+/* Escribe los registros con valor al salir en k (después de k si `after`):
+ * una llamada a la cadena, o nada si no hay ninguno. chain_reg[] va por
+ * primera escritura ascendente: los m primeros son los que ya tienen valor,
+ * y la entrada m − 1 de la cadena los escribe todos. */
+static void chain_call(struct ctx *c, unsigned k, bool after)
+{
+	unsigned m = 0;
+	while (m < c->nchain && (after ? c->chain_fw[m] <= k : c->chain_fw[m] < k))
+		m++;
+	if (!m)
+		return;
+	c->chain_used = true;
+	emit_b(c, c->chain_label[m - 1], true);
+}
+
+static void emit_chain(struct ctx *c)
+{
+	if (!c->chain_used)
+		return;
+	/* La entrada i escribe chain_reg[i], chain_reg[i − 1], …, chain_reg[0]:
+	 * los std en orden inverso de primera escritura, con una etiqueta antes
+	 * de cada uno. */
+	for (unsigned i = c->nchain; i-- > 0;) {
+		bind(c, c->chain_label[i]);
+		E(c, ppc_std(c->map[c->chain_reg[i]], off_reg(c->chain_reg[i]), R_CPU));
+	}
+	bind(c, c->chain_label[c->nchain]);  /* no se usa (nada que escribir = sin llamada) */
+	E(c, PPC_BLR);
 }
 
 /* ---- Registros del bloque ------------------------------------------------------ */
@@ -524,9 +662,10 @@ static void emit_continue(struct ctx *c, unsigned k)
 }
 
 /* Salida desde la instrucción k: antes (excepción: no escribió nada) o
- * después de completarla. Se emite al final, en la sección fría. Con `wb`,
- * escribe los registros modificados; sin él, el sitio ya los escribió antes
- * de llamar a C (emit_load/emit_store) y la salida solo ajusta cycles. */
+ * después de completarla. Se emite al final, en la sección fría, y escribe
+ * los registros con valor por la cadena de escritura (chain_call). Con el
+ * código ancho, `wb` dice si escribe los registros modificados o si el sitio
+ * ya los escribió antes de llamar a C (emit_load/emit_store). */
 static int exit_label(struct ctx *c, unsigned k, bool after, bool wb)
 {
 	int *slot = after ? &c->exit_after[k] : &c->exit_before[k];
@@ -537,7 +676,7 @@ static int exit_label(struct ctx *c, unsigned k, bool after, bool wb)
 	p->k = (uint8_t)k;
 	p->after = after;
 	p->fflush = c->fpu_res ? (uint8_t)((c->fpu_ran ? 1 : 0) | (c->fc_written ? 2 : 0)) : 0;
-	p->mask = wb ? c->written_start | (after ? c->d[k].writes & c->cached : 0) : 0;
+	p->mask = wb && c->wide ? c->written_start | (after ? c->d[k].writes & c->cached : 0) : 0;
 	*slot = p->label;
 	return p->label;
 }
@@ -553,7 +692,7 @@ static int exit_label_mem(struct ctx *c, unsigned k)
 	p->k = (uint8_t)k;
 	p->after = true;
 	p->fflush = 0;
-	p->mask = c->written_start | (c->d[k].writes & c->cached);
+	p->mask = c->wide ? c->written_start | (c->d[k].writes & c->cached) : 0;
 	c->exit_after_mem[k] = p->label;
 	return p->label;
 }
@@ -566,12 +705,15 @@ static void emit_pending_exits(struct ctx *c)
 		bind(c, p->label);
 		if (p->fflush)
 			fpu_flush_bits(c, p->fflush & 1, (p->fflush & 2) != 0);
-		writeback(c, p->mask);
+		if (c->wide)
+			writeback(c, p->mask);
+		else
+			chain_call(c, p->k, p->after);
 		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)p->k + 1));
 		if (p->after)
 			emit_continue(c, p->k);
-		else
-			li64(c, 3, insn_pc(c, p->k));  /* no se usa: hay excepción (redirect) */
+		else if (c->wide)
+			li64(c, 3, insn_pc(c, p->k));  /* no se usa: hay excepción (redirect); el compacto no lo emite */
 		restore_borrowed(c);
 		emit_b(c, abs_label(c, c->rec->exit_mid), false);
 	}
@@ -579,16 +721,18 @@ static void emit_pending_exits(struct ctx *c)
 
 /* Salida a una dirección fija, con los registros ya escritos y cycles al día.
  * Deja un enlace que rec.c parchea con un `b` al bloque destino:
- *   nop ; lis r3 ; ori r3 ; bl exit_link   (exit_link calcula el nop = LR - 16) */
+ *   nop ; bl exit_link ; <destino, 32 bits>
+ * exit_link lee el destino de la palabra que sigue al bl (nunca se ejecuta:
+ * no vuelve) y calcula el nop = LR - 8. Hasta el 2026-10-13 el destino iba
+ * en lis/ori antes del bl: una palabra más en cada salida. */
 static void emit_exit_to(struct ctx *c, uint64_t target)
 {
 	fpu_flush(c);
 	restore_borrowed(c);
 	if (!c->temp && !c->rec->no_link && (int64_t)target == (int32_t)target) {
 		E(c, PPC_NOP);
-		E(c, ppc_lis(3, (int16_t)(target >> 16)));
-		E(c, ppc_ori(3, 3, (uint32_t)target & 0xFFFF));
 		emit_b(c, abs_label(c, c->rec->exit_link), true);
+		E(c, (uint32_t)target);
 		return;
 	}
 	li64(c, 3, target);
@@ -654,15 +798,41 @@ static void post_check_to(struct ctx *c, int out)
 	emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(CR_T, PPC_GT), out);
 }
 
+/* La instrucción k al intérprete (salsa64_vr4300_exec_one). Compacto: la
+ * rutina compartida slow_exec, que deja cr5 gt si hay que salir
+ * (emit_exec_check lo mira después de recargar lo que la instrucción
+ * escribió). Ancho: todo en línea. */
+static void emit_exec_call(struct ctx *c, unsigned k)
+{
+	if (c->wide) {
+		call_prep(c, k);
+		E(c, ppc_mr(3, R_CPU));
+		li32u(c, 4, c->d[k].w);
+		emit_call(c, c->rec->h_exec);
+		return;
+	}
+	li32s(c, 4, c->d[k].w);
+	emit_slow_call(c, SLOW_EXEC, 0, k);
+}
+
+/* Después de emit_exec_call (y de recargar): salir a `out` si hace falta. */
+static void emit_exec_check(struct ctx *c, int out)
+{
+	if (c->wide)
+		post_check_to(c, out);
+	else
+		emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(5, PPC_GT), out);
+}
+
 static void post_check(struct ctx *c, unsigned k)
 {
-	post_check_to(c, exit_label(c, k, true, true));
+	emit_exec_check(c, exit_label(c, k, true, true));
 }
 
 /* Tras una instrucción de COP1 corrida por el intérprete (rec_emit_fpu.h). */
 static void post_check_mem(struct ctx *c, unsigned k)
 {
-	post_check_to(c, exit_label_mem(c, k));
+	emit_exec_check(c, exit_label_mem(c, k));
 }
 
 /* Instrucción que corre el intérprete. */
@@ -675,10 +845,7 @@ static void emit_exec(struct ctx *c, unsigned k)
 	store_regs(c, (d->reads | d->writes) & (c->written | c->pinned));
 	if (cop1)  /* y lee FCR31 */
 		fpu_flush_bits(c, c->fpu_ran, c->fc_written);
-	call_prep(c, k);
-	E(c, ppc_mr(3, R_CPU));
-	li32u(c, 4, d->w);
-	emit_call(c, c->rec->h_exec);
+	emit_exec_call(c, k);
 	reload(c, d->writes);
 	if (d->kind == K_END && SALSA64_REC_OLD(c->rec, SALSA64_REC_DBG_NO_ENDLINK)) {
 		/* Como antes: al despachador, que interpreta el resto del bloque básico. */
@@ -716,10 +883,15 @@ static void emit_exec(struct ctx *c, unsigned k)
  * sección fría). Siempre sale. */
 static void emit_exception(struct ctx *c, unsigned k, unsigned code)
 {
-	call_prep(c, k);
-	E(c, ppc_mr(3, R_CPU));
-	E(c, ppc_li(4, (int32_t)code));
-	emit_call(c, c->rec->h_exception);
+	if (c->wide) {
+		call_prep(c, k);
+		E(c, ppc_mr(3, R_CPU));
+		E(c, ppc_li(4, (int32_t)code));
+		emit_call(c, c->rec->h_exception);
+	} else {
+		E(c, ppc_li(4, (int32_t)code));
+		emit_slow_call(c, SLOW_EXC, 0, k);
+	}
 	emit_b(c, exit_label(c, k, false, true), false);
 }
 
@@ -751,39 +923,84 @@ static void branch_overflow(struct ctx *c, unsigned bo, unsigned bi)
  * (sin traducción, E/S, excepciones) va a `slow`, que llama a C; el camino
  * lento anota la página en ktlb[] para la próxima vez.
  */
-static void emit_addr(struct ctx *c, unsigned rs, int16_t imm, unsigned align, int slow, bool store)
+/* El tramo frío de emit_addr: la dirección a r3 si no estaba, la rutina
+ * compartida del preámbulo (rec.c: cr1 eq y r12 listo, o ne) y, si traduce,
+ * de vuelta al camino rápido. Si no traduce sigue en lo que venga después:
+ * quien lo llama emite a continuación el camino lento del acceso. */
+static void emit_addr_cold(struct ctx *c)
+{
+	const struct salsa64_rec *r = c->rec;
+	unsigned align = c->addr.align;
+	if (!c->addr.pending)
+		return;
+	c->addr.pending = false;
+	bind(c, c->addr.mapped);
+	if (c->addr.va != T_ADDR)
+		E(c, ppc_mr(T_ADDR, c->addr.va));
+	emit_b(c, abs_label(c, r->ktlb_rtn[c->addr.store][align == 0 ? 0 : align == 1 ? 1 : align == 3 ? 2 : 3]), true);
+	emit_bc(c, PPC_BO_TRUE_LIKELY, PPC_BI(CR_T, PPC_EQ), c->addr.back);
+}
+
+static unsigned emit_addr(struct ctx *c, unsigned rs, int16_t imm, unsigned align, int slow, bool store)
 {
 	struct salsa64_rec *r = c->rec;
-	unsigned s = r->rdram_shift;
-	int32_t k1 = 1 << (29 - s), region = -(1 << (31 - s)) | k1;
+	unsigned s = r->rdram_shift, abits = align == 7 ? 3 : align == 3 ? 2 : align;
 	int mapped = new_label(c), back = new_label(c);
-	unsigned base = get(c, rs, T_ADDR);
-	E(c, ppc_addi(T_ADDR, base, imm));
-	E(c, ppc_sradi(T_X, T_ADDR, s));
-	E(c, ppc_ori(T_X, T_X, (uint32_t)k1));
-	E(c, ppc_addi(T_X, T_X, -region));
-	if (align) {
-		E(c, ppc_clrldi(T_Y, T_ADDR, align == 1 ? 63 : align == 3 ? 62 : 61));
-		E(c, ppc_or(T_X, T_X, T_Y));
+	unsigned base = get(c, rs, T_ADDR), va = T_ADDR;
+	if (!c->wide && imm == 0 && base != T_ADDR)
+		va = base;  /* la dirección ya está en un registro: los caminos lentos la copian a r3 */
+	else
+		E(c, ppc_addi(T_ADDR, base, imm));
+	if (c->wide) {
+		int32_t k1 = 1 << (29 - s), region = -(1 << (31 - s)) | k1;
+		E(c, ppc_sradi(T_X, T_ADDR, s));
+		E(c, ppc_ori(T_X, T_X, (uint32_t)k1));
+		E(c, ppc_addi(T_X, T_X, -region));
+		if (align) {
+			E(c, ppc_clrldi(T_Y, T_ADDR, align == 1 ? 63 : align == 3 ? 62 : 61));
+			E(c, ppc_or(T_X, T_X, T_Y));
+		}
+		E(c, ppc_cmpdi(CR_T, T_X, 0));
+	} else {
+		/* Compacto: el bit 29 puesto lleva KSEG0 a KSEG1, y sumar 2^30 + 2^29
+		 * a 0xFFFFFFFF_A0000000 da 2^64: de una dirección de KSEG0 o KSEG1
+		 * dentro de la RDRAM quedan solo los bits del desplazamiento (r12,
+		 * listo para el acceso). Rotar los bits del desplazamiento por
+		 * encima de la alineación al tope y recortarlos deja 0 si vale. */
+		E(c, ppc_oris(T_Y, va, 0x2000));
+		E(c, ppc_addis(T_Y, T_Y, 0x6000));
+		E(c, ppc_rldicl(T_X, T_Y, 64 - s, s - abits));
+		E(c, ppc_cmpdi(CR_T, T_X, 0));
 	}
-	E(c, ppc_cmpdi(CR_T, T_X, 0));
+	c->addr.pending = false;
 	if (SALSA64_REC_OLD(r, SALSA64_REC_DBG_NO_DATA)) {  /* sin datos mapeados: todo lo demás a C */
 		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
-		E(c, ppc_clrldi(T_Y, T_ADDR, 64 - s));
-		return;
+		if (c->wide)
+			E(c, ppc_clrldi(T_Y, T_ADDR, 64 - s));
+		return va;
 	}
 	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), mapped);
-	E(c, ppc_clrldi(T_Y, T_ADDR, 64 - s));
+	if (c->wide)
+		E(c, ppc_clrldi(T_Y, T_ADDR, 64 - s));
 	bind(c, back);
 
-	/* La rutina compartida del preámbulo (rec.c): cr1 eq y r12 listo, o ne. */
-	unsigned sec = c->sec;
-	c->sec = SEC_COLD;
-	bind(c, mapped);
-	emit_b(c, abs_label(c, r->ktlb_rtn[store][align == 0 ? 0 : align == 1 ? 1 : align == 3 ? 2 : 3]), true);
-	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
-	emit_b(c, back, false);
-	c->sec = sec;
+	/* La prueba de la ktlb (sección fría): compacto, pegada al camino lento
+	 * del acceso (emit_addr_cold, que llama quien emite ese camino); ancho,
+	 * aquí mismo, con un salto más. */
+	c->addr.mapped = mapped;
+	c->addr.back = back;
+	c->addr.va = (uint8_t)va;
+	c->addr.align = (uint8_t)align;
+	c->addr.store = store;
+	c->addr.pending = true;
+	if (c->wide) {
+		unsigned sec = c->sec;
+		c->sec = SEC_COLD;
+		emit_addr_cold(c);
+		emit_b(c, slow, false);
+		c->sec = sec;
+	}
+	return va;
 }
 
 /* Registros de la FPU en cpu->fpr según el Status.FR con que se compila
@@ -809,7 +1026,7 @@ static void emit_load(struct ctx *c, unsigned k, unsigned kind, unsigned where)
 	unsigned rt = I_RT(i);
 	int slow = new_label(c), resume = new_label(c);
 
-	emit_addr(c, I_RS(i), (int16_t)i, align[kind], slow, false);
+	unsigned va = emit_addr(c, I_RS(i), (int16_t)i, align[kind], slow, false);
 	unsigned d = where == DST_GPR ? dst(c, rt, T_V) : T_V;
 	switch (kind) {
 	case SALSA64_REC_LB:  E(c, ppc_lbzx(d, R_RDRAM, T_Y)); E(c, ppc_extsb(d, d)); break;
@@ -831,16 +1048,39 @@ static void emit_load(struct ctx *c, unsigned k, unsigned kind, unsigned where)
 		fpu_loaded(c, k, rt, where == DST_FPR64, d, true);
 	bind(c, resume);
 	/* El valor queda en d por los dos caminos. Camino lento: la rutina
-	 * compartida del preámbulo (rec.c, slow_load); lo sucio se escribe antes
-	 * para que las salidas no tengan que hacerlo. */
+	 * compartida del preámbulo (rec.c, slow_load), por el trampolín del
+	 * bloque; cr1 ne es excepción (rt sin escribir) y cr5 gt, salir después
+	 * de la instrucción con el valor ya en su lugar (la cadena de escritura
+	 * se encarga de rt si está en un registro del bloque). */
 	unsigned save_sec = c->sec;
 	c->sec = SEC_COLD;
-	{
+	if (!c->wide) {
+		emit_addr_cold(c);
+		bind(c, slow);
+		if (va != T_ADDR)
+			E(c, ppc_mr(T_ADDR, va));
+		emit_slow_call(c, SLOW_LOAD, kind, k);
+		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(1, PPC_EQ), exit_label(c, k, false, false));
+		if (d != 3)
+			E(c, ppc_mr(d, 3));
+		if (where == DST_FPR32)
+			E(c, ppc_stw(d, fpr32_off(c, rt), R_CPU));
+		else if (where == DST_FPR64)
+			E(c, ppc_std(d, fpr64_off(c, rt), R_CPU));
+		else if (rt && !c->map[rt])
+			E(c, ppc_std(d, off_reg(rt), R_CPU));
+		if (where != DST_GPR && c->fpu_res)
+			fpu_loaded(c, k, rt, where == DST_FPR64, d, false);
+		emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(5, PPC_GT), exit_label(c, k, true, false));
+		emit_b(c, resume, false);
+	} else {
+		/* Ancho: lo sucio se escribe antes de llamar, para que las salidas
+		 * no tengan que hacerlo. */
 		bind(c, slow);
 		store_regs(c, c->written_start);
-		li64(c, 7, insn_pc(c, k));
-		li32u(c, 6, (k + 1) | (c->in_ds ? 0x100u : 0) | (uint32_t)c->n << 16);
-		emit_b(c, abs_label(c, c->rec->slow_load[kind]), true);
+		li64(c, 7, c->pc);
+		li32u(c, 6, slow_arg(c, SLOW_LOAD, kind, k) | (uint32_t)c->n << 16);
+		emit_b(c, abs_label(c, c->rec->slow_rtn), true);
 		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(1, PPC_EQ), exit_label(c, k, false, false));
 		int out = new_label(c);
 		emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(5, PPC_GT), out);
@@ -892,7 +1132,7 @@ static void emit_store(struct ctx *c, unsigned k, unsigned kind, unsigned from)
 	} else {
 		v = get(c, rt, T_S1);
 	}
-	emit_addr(c, I_RS(i), (int16_t)i, align[kind], slow, true);
+	unsigned va = emit_addr(c, I_RS(i), (int16_t)i, align[kind], slow, true);
 	/* Código recompilado en estos 128 bytes: por el camino lento. */
 	E(c, ppc_srdi(T_X, T_Y, SALSA64_REC_FLAG_SHIFT));
 	E(c, ppc_lbzx(T_X, R_FLAGS, T_X));
@@ -911,15 +1151,23 @@ static void emit_store(struct ctx *c, unsigned k, unsigned kind, unsigned from)
 	bind(c, resume);
 	unsigned save_sec = c->sec;
 	c->sec = SEC_COLD;
+	emit_addr_cold(c);
 	bind(c, slow);
-	store_regs(c, c->written_start);
+	if (c->wide)
+		store_regs(c, c->written_start);
+	else if (va != T_ADDR)
+		E(c, ppc_mr(T_ADDR, va));
 	if (fv)
 		E(c, from == DST_FPR64 ? ppc_ld(5, fpr64_off(c, rt), R_CPU) : ppc_lwz(5, fpr32_off(c, rt), R_CPU));
 	else if (v != 5)
 		E(c, ppc_mr(5, v));
-	li64(c, 7, insn_pc(c, k));
-	li32u(c, 6, (k + 1) | (c->in_ds ? 0x100u : 0) | (uint32_t)c->n << 16);
-	emit_b(c, abs_label(c, c->rec->slow_store[kind]), true);
+	if (c->wide) {
+		li64(c, 7, c->pc);
+		li32u(c, 6, slow_arg(c, SLOW_STORE, kind, k) | (uint32_t)c->n << 16);
+		emit_b(c, abs_label(c, c->rec->slow_rtn), true);
+	} else {
+		emit_slow_call(c, SLOW_STORE, kind, k);
+	}
 	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(1, PPC_EQ), exit_label(c, k, false, false));
 	emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(5, PPC_GT), exit_label(c, k, true, false));
 	emit_b(c, resume, false);
@@ -1550,10 +1798,7 @@ static void emit_fpu(struct ctx *c, unsigned k)
 	unsigned sec = c->sec;
 	c->sec = SEC_COLD;
 	bind(c, slow);
-	call_prep(c, k);
-	E(c, ppc_mr(3, R_CPU));
-	li32u(c, 4, i);
-	emit_call(c, c->rec->h_exec);
+	emit_exec_call(c, k);
 	post_check(c, k);
 	emit_b(c, resume, false);
 	c->sec = sec;
@@ -2087,6 +2332,8 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	c->pc = pc;
 	c->pa = pa;
 	c->temp = temp;
+	c->wide = (rec->opts & SALSA64_REC_OPT_WIDE) != 0;
+	c->tramp = -1;
 	c->calls_near = salsa64_rec_calls_near_at(rec, temp ? rec->scratch : rec->used);
 	if (max > SALSA64_REC_MAX_INSNS)
 		max = SALSA64_REC_MAX_INSNS;
@@ -2161,6 +2408,8 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	rec->nbuf[0] = rec->nbuf[1] = 0;
 	rec->nlabels = rec->nfixups = 0;
 	rec->overflow = false;
+	if (!c->wide)
+		chain_build(c);
 	c->sec = SEC_HOT;
 
 	/* Entrada: ¿cabe antes del próximo evento?, ¿COP1 usable? */
@@ -2264,6 +2513,10 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 		emit_b(c, abs_label(c, rec->exit_jump), false);
 	}
 	emit_pending_exits(c);
+	if (!c->wide) {
+		emit_chain(c);
+		emit_trampolines(c);
+	}
 
 	uint32_t base = temp ? rec->scratch : rec->used;
 	uint32_t limit = temp ? rec->code_words : rec->seg_end;  /* el tramo en uso (rec.c) */

@@ -6,6 +6,7 @@ antes, después, notas.
 
 | Fecha | Commit | Prueba | Entorno | Antes | Después | Notas |
 |---|---|---|---|---|---|---|
+| 2026-10-13 | fd1891c → (rama del código compacto) | **Código compacto del recompilador**: palabras de PPC por instrucción MIPS, GoldenEye hasta la presa (`goldeneye-dam.pad`, 7,5 G ciclos), pesado por ejecuciones de bloque | Mac, qemu-ppc64 (`salsa64-run --rec` con `SALSA64_REC_DUMP=1`, `tools/rec-expansion.py --counter 8`), respaldo del autor | 20,2 por instrucción (9,3 calientes, 11,0 frías); 17,2 MB de PPC, 305 palabras por bloque | **15,6 (8,2 calientes, 7,4 frías): −23 %**; 13,2 MB, 234 por bloque; mismo recorrido (mismas cuentas del perfil), 4 desalojos en vez de 6 | Prueba de KSEG0 en 4 palabras, un camino lento por bloque (rutina única + trampolín), cadena de escritura, enlaces de 3 palabras. PS3: pendiente (A/B con `jit-ancho`). Ver «Código compacto» abajo |
 | 2026-10-10 | 419731a → c14268c | Intérprete, `bench` mixto | PS3 real: Slim CECH-3011A, HFW 4.91 + HEN | 8,7 MIPS | 17,1 MIPS (×2,0) | Estado del bucle en registros, sin llamadas por instrucción, r0 sin escribir, tablas de `switch` sin `lwax`, FPU rápida sin pasar valores por memoria. Desglose en «Líneas base de la Fase 1» |
 | 2026-10-10 | c14268c → 147d5ac | Intérprete, `bench` mixto | PS3 real (mismo equipo) | 17,1 MIPS | 21,2 MIPS (×1,24; ×2,4 desde 8,7) | Un solo despacho (SPECIAL en la misma tabla), FPU rápida sin comparaciones de punto flotante para clasificar, movimientos de COP1 en el bucle |
 | 2026-10-10 | 940f6f8 | Frontend con vitest, emulación por campo | PS3 real (mismo equipo) | 65,6 ms (15,2 campos/s) | 35,0 ms (28,3 campos/s; ×1,9) | Detección de bucles de espera (`src/cpu/idle.c`): 45,6 % del tiempo saltado. Medición A/B automática del frontend, 10 s cada una, dos corridas iguales (65,56/65,66 → 34,97/34,84 ms). Lo que queda es el dibujo de vitest con el CPU |
@@ -1047,6 +1048,56 @@ residente, comparado con los logs de main de la tarde):
 | Perfect Dark (un nivel) | — | 7–20 ms | 49–50 campos/s al final por el RSP: 14 ms por campo esperando al SPE de la HLE gráfica (~4500 triángulos y 131 texturas decodificadas por tarea); el CPU usa 4,5 ms |
 
 Logs en `build/ps3-logs/` de la rama (fpu-1 … fpu-8, cpu-fpu-bench*).
+
+### Código compacto: palabras por instrucción MIPS (2026-10-13)
+
+Diseño en docs/rec-ppe.md, «Código compacto». Medición en el host (qemu no
+mide el Cell: cuenta palabras de PPC, que es lo que toca la caché de
+instrucciones por instrucción emulada), GoldenEye NTSC hasta la presa con
+`docs/pads/goldeneye-dam.pad`, 7,5 G ciclos, `SALSA64_REC_DUMP=1
+SALSA64_REC_PROF=12000 SALSA64_REC_PROF_TOP=4000 SALSA64_REC_PIN=1`;
+`tools/rec-expansion.py base.log nuevo.log --counter 8` pesa cada bloque
+por sus ejecuciones y descuenta las 8 palabras del contador del perfil (que
+la PS3 no lleva). Los dos volcados tienen los mismos 14 826 bloques y las
+mismas cuentas del perfil (el recorrido es idéntico).
+
+| | Antes (fd1891c) | Después | |
+|---|---|---|---|
+| Palabras por instrucción MIPS, pesadas por ejecuciones | 20,23 | **15,56** | −23 % |
+| … sección caliente (la que se ejecuta) | 9,26 | **8,15** | −12 % |
+| … sección fría (caminos lentos y salidas) | 10,97 | **7,40** | −33 % |
+| Los 25 bloques más ejecutados (242 instrucciones) | 19,7 (9,1 + 10,6) | 15,4 (8,1 + 7,3) | |
+| Volcado completo | 17,2 MB, 305 palabras por bloque (141 calientes) | 13,2 MB, 234 (125) | −23 % |
+| Desalojos de tramos en la corrida | 6 | 4 | |
+
+Por bloque (los más ejecutados; palabras totales antes → después, calientes
+entre paréntesis): un bucle de 53 instrucciones con 26 accesos a memoria
+(7F0BA3B8) 1285 → 900 (487 → 402); 20 instrucciones con 5 de COP1 y 6
+accesos (7F0B0064) 781 → 583 (414 → 395); 13 instrucciones con 3 de COP1
+(7F0B05C0) 370 → 275 (185 → 173); `jr ra` + `lw` (70012230) 59 → 51 (31 →
+28); `bnel` + `lhu` (7F06C87C) 67 → 61 (33 → 28). El bloque de 2
+instrucciones con SQRT.S (7001F7E0) baja solo en lo frío (92 → 78; 59
+calientes): la raíz en línea sigue en 35 palabras.
+
+Por mnemónico en la sección caliente de los 40 bloques más ejecutados
+(palabras por instrucción MIPS, pesadas): antes `addi` 1,27, `bne` 0,70,
+`ori` 0,66, `clrldi` 0,57, `cmpdi` 0,46, `or` 0,41, `extsw` 0,35, `sradi`
+0,34, `std` 0,34, `lwz` 0,30; después `addi` 0,86, `bne` 0,70, `cmpdi`
+0,46, `oris` 0,42, `addis` 0,35, `extsw` 0,35, `std` 0,33, `lwz` 0,30,
+`ld` 0,27, `rldicl` 0,26. La prueba de dirección (`oris`, `addis`,
+`rldicl`, `cmpdi`, `bne`: 5 palabras por acceso) y la carga con su `extsw`
+son ahora el grueso de cada acceso; lo que queda grande por bloque es la
+entrada (ktlb 4–5 palabras + evento 3) y la salida (escritura de registros +
+`addi` + enlace de 3), y por instrucción la ALU de 32 bits con su `extsw`.
+
+En la fría, lo que queda por acceso: el camino lento (`li`, `bl`, `bne`,
+`mr`, `bgt`, `b`: 6), la prueba de la ktlb pegada (3) y las dos salidas
+pendientes de la instrucción (3 y 5–6, compartidas con lo demás que salga
+en esa instrucción), más el trampolín del bloque (4, una vez).
+
+**PS3 real:** pendiente. Protocolo: GoldenEye en la presa 2 min, Perfect
+Dark intro a 5× hasta la segunda escena, SM64 y Zelda 30 s; A/B con el
+mismo paquete creando `/dev_hdd0/salsa64/jit-ancho` (el código de antes).
 
 ### Bench del intérprete tras traer la Fase 2: 21 → 14,7 MIPS (diagnóstico, 2026-10-10)
 
