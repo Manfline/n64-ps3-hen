@@ -1,5 +1,35 @@
 # Estado
 
+## 2026-10-13 — Copias a la RDRAM: el ancho del VI es el del último campo (rama `arreglo-ancho-vi`)
+
+`readbacks_wanted` (src/rdp/rdp.c, hilo de emulación) copia a la RDRAM, y
+la emulación espera, toda color image de 16 bits que es de otro ancho que
+el VI o que no cae en los framebuffers recientes. El «ancho del VI» era el
+del último origen *agregado* al anillo (`rdp_vi_ring`), y un origen que ya
+está entre los 8 recientes no se vuelve a agregar: al volver a
+framebuffers ya vistos después de una imagen de otro ancho, el ancho
+quedaba en el viejo y cada cuadro parecía una imagen auxiliar.
+
+- **Dónde se vio**: GoldenEye en la presa con el tope de cuadros de 30 (la
+  rama de interpolación de cuadros, docs/interpolacion.md): tras las
+  pantallas de la misión (440 de ancho) la presa (320) hacía una copia
+  esperada por cuadro (15 ms c/u, ~8 ms por campo de la emulación en la
+  PS3 real), y el CPU emulado trabajaba un tercio menos sin que bajara el
+  tiempo por campo. Con la emulación libre el orden de los orígenes lo
+  tapaba por casualidad.
+- **Arreglo**: el anillo guarda también `cur_width`, el ancho del último
+  campo, y lo usan `readbacks_wanted` (PS3) y `rdp_readback_wanted` (el
+  rasterizador del host). Prueba en tests/unit/test_targets.c.
+- **Cuánto cambia, en el host** con la regla de la PS3 (nuevo:
+  `SALSA64_PS3_RB=1` con `--gfx-frame` cuenta las copias que pediría con el
+  ancho nuevo y con el viejo): **Perfect Dark sin tope, en la intro (1800
+  campos), de 1167 copias esperadas a 3**; GoldenEye en la presa, 4 y 4
+  (con el tope de 30, de 1083 a 4); Zelda (pausa nueva), Super Mario 64,
+  Mario Kart, Banjo-Kazooie, Conker (417) y Smash (80), iguales. Volcados
+  del host idénticos a los de antes en esos juegos.
+- **Por medir en la PS3 real**: Perfect Dark sin tope (deberían desaparecer
+  las copias esperadas de la intro).
+
 ## 2026-10-13 — Filtros CRT del autor en el RSX (rama `upbeat-tereshkova`, paquete SLSA00109 «Salsa64 filtros»)
 
 Los filtros CRT originales del autor (máscara de sombra v1.3 y CRT con

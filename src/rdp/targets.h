@@ -122,11 +122,18 @@ struct rdp_targets {
 
 /* Orígenes recientes del VI (campos con imagen), para saber desde el hilo
  * que no tiene la tabla si una color image es un framebuffer o una imagen
- * auxiliar: lo lleva quien corre el VI (rdp_vi_ring_push por campo). */
+ * auxiliar: lo lleva quien corre el VI (rdp_vi_ring_push por campo). Un
+ * origen que ya está entre los recientes no se vuelve a agregar; el ancho
+ * del VI de ahora es cur_width (el del último campo), no el del último
+ * origen agregado: GoldenEye pasa de las pantallas de la misión (440 de
+ * ancho) a la presa (320) con framebuffers que ya estaban en el anillo, y
+ * con el ancho del último agregado (440) cada cuadro de la presa parecía
+ * una imagen auxiliar y se copiaba a la RDRAM esperando. */
 #define RDP_VI_RING 8
 struct rdp_vi_ring {
 	uint32_t origin[RDP_VI_RING], width[RDP_VI_RING];
 	uint32_t n;
+	uint32_t cur_width;
 };
 
 /* Lo que se presenta en un campo: la región lógica del destino que

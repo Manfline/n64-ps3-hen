@@ -57,6 +57,7 @@ uint32_t raster_field;
 int raster_fbfx = 2;
 static struct rdp_vi_ring vi_ring;
 static uint32_t primes, readbacks, mirrors, frames, dma_skipped;
+uint32_t ps3_rb, ps3_rb_old;  /* diagnóstico (SALSA64_PS3_RB) */
 static struct rdp_dma_ring dma_ring;
 
 void raster_rdram_written(uint32_t pa, uint32_t len, uint32_t task)
@@ -602,6 +603,17 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 		switch (c->op) {
 		case GFX_OP_TARGET: {
 			uint32_t lh = scissor_bottom(cmd, off + c->size, res->cmd_bytes), siz = c->c & 0xFF;
+			if (getenv("SALSA64_PS3_RB")) {
+				/* Diagnóstico: cuántas color images pediría copiar la regla
+				 * de readbacks_wanted de la PS3 (src/rdp/rdp.c), con el ancho
+				 * del VI de ahora y con el del último origen agregado al
+				 * anillo (la regla de antes del 2026-10-13). */
+				uint32_t fmt = (c->c >> 8) & 0xFF, old_w = vi_ring.width[(vi_ring.n + RDP_VI_RING - 1) % RDP_VI_RING];
+				bool img = (siz == 2u || (siz == 1u && fmt == 4u)) && c->b && c->b <= 640 && vi_ring.n;
+				bool cov = img && rdp_vi_ring_covers(&vi_ring, c->a, c->b);
+				ps3_rb += img && (c->b != vi_ring.cur_width || !cov);
+				ps3_rb_old += img && (c->b != old_w || !cov);
+			}
 			bool is_tall = c->b && c->b <= 640 && rdp_targets_tall(c->b, lh) &&
 				       fills_only(cmd, off + c->size, res->cmd_bytes);
 			cur = is_tall ? -1 : get_target(job, c->a, c->b, (c->c >> 8) & 0xFF, siz, lh);

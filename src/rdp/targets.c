@@ -339,6 +339,7 @@ void rdp_vi_ring_push(struct rdp_vi_ring *r, uint32_t origin, uint32_t width)
 {
 	if (!width)
 		return;
+	r->cur_width = width;
 	for (uint32_t k = 0; k < RDP_VI_RING && k < r->n; k++)
 		if (r->origin[(r->n - 1 - k) % RDP_VI_RING] == origin)
 			return;
@@ -363,7 +364,7 @@ bool rdp_vi_ring_covers(const struct rdp_vi_ring *r, uint32_t addr, uint32_t wid
 
 bool rdp_readback_wanted(const struct rdp_vi_ring *r, uint32_t addr, uint32_t width, uint32_t siz)
 {
-	if (siz != 2u || !r->n || width != r->width[(r->n - 1) % RDP_VI_RING])
+	if (siz != 2u || !r->n || width != r->cur_width)
 		return false;
 	return !rdp_vi_ring_covers(r, addr, width);
 }
