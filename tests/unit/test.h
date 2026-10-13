@@ -123,6 +123,7 @@ void t_suite_menu(void);
 void t_suite_state(void);
 void t_suite_osd(void);
 void t_suite_pausectl(void);
+void t_suite_rec_profile(void);
 
 /* Directorio donde las pruebas pueden escribir (lo pone quien llama; NULL:
  * las pruebas que tocan el disco no corren). */

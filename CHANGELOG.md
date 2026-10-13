@@ -4,6 +4,23 @@ All notable changes to Salsa64. Speeds are measured on a real PS3 (HEN,
 NTSC backups); `docs/perf-log.md` has the detailed numbers and
 `docs/estado.md` the work log (both in Spanish).
 
+## [0.2.1] — 2026-10-12
+
+### Fixed
+- **Donkey Kong 64:** the camera no longer zooms in and out every ~42 frames.
+  The game reads the depth buffer from N64 memory to check whether DK is
+  hidden; the depth clear is now written back to memory.
+- **Zelda: Ocarina of Time:** Navi's glow and the torch halos are drawn again
+  (the game also decides them by reading the depth buffer).
+- **Zelda: Ocarina of Time:** no more hitch when entering pre-rendered rooms.
+  The JPEG task now runs on a free SPE, vectorized (2.9 ms per room on the SPE
+  and 0.3 ms on the emulation thread, down from 68 ms on the PPE).
+
+### Diagnostics
+- The presentation thread's time per field is always measured and logged;
+  a synthetic load (`carga-hilo1` file) measures its cost to emulation
+  (~2.5 % in the GoldenEye Dam).
+
 ## [0.2.0] — 2026-10-12
 
 ### Games
@@ -70,5 +87,6 @@ First public preview.
 - Full speed: Zelda: Ocarina of Time, Super Mario 64, Mario Kart 64.
   Playable: GoldenEye, Perfect Dark, Banjo-Kazooie, Conker.
 
+[0.2.1]: https://github.com/ricowp81/Salsa64/releases/tag/v0.2.1
 [0.2.0]: https://github.com/ricowp81/Salsa64/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ricowp81/Salsa64/releases/tag/v0.1.0

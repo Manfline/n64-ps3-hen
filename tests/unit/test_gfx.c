@@ -811,6 +811,8 @@ static void gfx_fill_and_zclear(void)
 	if (z) {
 		CHECK_EQ(z->h.a, 0x200000);
 		CHECK_EQ(z->h.b, 0xFFFC);
+		CHECK_EQ(z->h.c, 2u << 16 | 320);  /* 16 bits, 320 de ancho */
+		CHECK_EQ(z->fill, 0xFFFCFFFC);
 		CHECK_EQ(z->rect[2], 320);
 		CHECK_EQ(z->rect[3], 240);
 	}
@@ -824,6 +826,93 @@ static void gfx_fill_and_zclear(void)
 	CHECK(out_vtx[5].x == 320.0f && out_vtx[5].y == 240.0f);
 	/* El TARGET de la color image real llega antes del dibujo. */
 	CHECK(find_cmd(GFX_OP_TARGET, 0) != NULL);
+}
+
+/* El relleno de la z image también va a la RDRAM, como lo deja el RDP
+ * (Donkey Kong 64 lee la profundidad donde se ve al jugador y, si lee 0,
+ * lo cree tapado y mueve la cámara cada 21 cuadros). */
+#define ZF_PA 0x200000u
+#define ZF_W  64u
+
+static uint16_t zf_rd16(uint32_t pa)
+{
+	return (uint16_t)(t_rd32(pa & ~3u) >> ((pa & 2) ? 0 : 16));
+}
+
+static void zf_prepare(void)
+{
+	for (uint32_t pa = ZF_PA; pa < ZF_PA + ZF_W * 8 * 2; pa += 4)
+		t_wr32(pa, 0x12345678);
+	dl(0xFE000000, ZF_PA);                       /* z image */
+	dl(0xFF100000 | (ZF_W - 1), ZF_PA);          /* color image = z image */
+	set_cycle(G_CYC_FILL);
+	dl(0xF7000000, 0xFFFC0002);  /* mitades distintas: se ve cuál va en cada píxel */
+	dl(0xF6000000 | (9 << 2) << 12 | (4 << 2), (3 << 2) << 12 | (2 << 2));    /* x 3..9, y 2..4 */
+	dl(0xF6000000 | (70 << 2) << 12 | (6 << 2), (60 << 2) << 12 | (6 << 2));  /* x 60..70: sale del ancho */
+}
+
+/* Cada píxel del rectángulo (dentro del ancho) con la mitad del color que le
+ * toca por su dirección; lo demás, intacto. */
+static void zf_check(bool filled)
+{
+	for (uint32_t y = 0; y < 8; y++)
+		for (uint32_t x = 0; x < ZF_W; x++) {
+			uint32_t pa = ZF_PA + (y * ZF_W + x) * 2;
+			bool in = filled && ((x >= 3 && x <= 9 && y >= 2 && y <= 4) || (x >= 60 && y == 6));
+			uint16_t want = in ? ((pa & 2) ? 0x0002 : 0xFFFC) : ((pa & 2) ? 0x5678 : 0x1234);
+			if (zf_rd16(pa) != want) {
+				CHECK_EQ(zf_rd16(pa), want);
+				return;
+			}
+		}
+}
+
+static void gfx_zclear_fills_rdram(void)
+{
+	start();
+	zf_prepare();
+	run();
+	zf_check(false);  /* gfx_run no escribe la RDRAM */
+	salsa64_gfx_rdram_fills(&t_n64.bus, &job, &res);
+	zf_check(true);
+}
+
+/* En el backend síncrono el relleno llega al terminar la tarea (finish),
+ * cuando el RDP la daría por hecha, no al arrancarla. */
+static struct gfx_state zf_state;
+
+static void zf_acquire(void *ctx, struct gfx_job *j)
+{
+	(void)ctx;
+	j->vtx_ea = (uint64_t)(uintptr_t)out_vtx;
+	j->vtx_cap = sizeof out_vtx;
+	j->cmd_ea = (uint64_t)(uintptr_t)out_cmd;
+	j->cmd_cap = sizeof out_cmd;
+	j->tex_ea = (uint64_t)(uintptr_t)out_tex;
+	j->tex_cap = sizeof out_tex;
+}
+
+static void zf_done(void *ctx, const struct gfx_job *j, const struct gfx_result *r)
+{
+	(void)ctx, (void)j, (void)r;
+}
+
+static void gfx_zclear_rdram_at_finish(void)
+{
+	static struct salsa64_gfx_sync s;
+	const struct salsa64_gfx_sink sink = { NULL, zf_acquire, zf_done };
+	start();
+	zf_prepare();
+	dl(0xDF000000, 0);  /* G_ENDDL */
+	salsa64_gfx_sync_init(&s, &zf_state, &t_n64.bus, &sink);
+	struct salsa64_task task;
+	memset(&task, 0, sizeof task);
+	task.type = SALSA64_TASK_GFX;
+	task.data_ptr = DL_PA;
+	s.backend.start(s.backend.ctx, &task, SALSA64_GBI_F3DEX2);
+	zf_check(false);
+	s.backend.finish(s.backend.ctx);
+	zf_check(true);
 }
 
 /* FILLRECT en 1 ciclo: borde inferior derecho exclusivo, salvo cuando se
@@ -2104,6 +2193,8 @@ void t_suite_gfx(void)
 	RUN(gfx_combiner_premul);
 	RUN(gfx_tmem_premul);
 	RUN(gfx_fill_and_zclear);
+	RUN(gfx_zclear_fills_rdram);
+	RUN(gfx_zclear_rdram_at_finish);
 	RUN(gfx_fill_1cycle_edge);
 	RUN(gfx_draw_batching);
 	RUN(gfx_cvg_x_alpha);

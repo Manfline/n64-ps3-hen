@@ -262,6 +262,9 @@ struct ctx {
 	bool temp;
 	bool has_branch;
 	bool calls_near;        /* este bloque llama a C con `bl` (a menos de 32 MB); si no, mtctr/bctrl */
+	uint8_t seg_kind;       /* SALSA64_REC_KSEG0, KSEG1 o MAPPED (rec_tlb.h) */
+	bool hot;               /* se emite en la zona caliente: registra sus sitios de salida (rec_profile.h) */
+	unsigned pent;          /* su entrada del perfil (índice + 1), 0 = ninguna */
 	unsigned sec;
 	struct dec d[SALSA64_REC_MAX_INSNS];
 	uint8_t map[34];        /* registro MIPS → registro del PPE, 0 = en memoria */
@@ -755,6 +758,29 @@ static void emit_taken(struct ctx *c, uint64_t target)
 	restore_borrowed(c);
 	li64(c, 3, c->pc);
 	emit_b(c, abs_label(c, c->rec->exit_mid), false);
+}
+
+/* Perfil persistente (rec_profile.h): el sitio de salida (k, clase,
+ * destino) de un bloque caliente cuenta cuántas veces se pasa por él:
+ * cuatro palabras en el camino que sale, con la dirección absoluta del
+ * contador (la tabla vive en .bss: cabe en 32 bits; si no, no se cuenta).
+ * r11 y r12 están libres en todos los sitios donde se llama. */
+static void emit_site(struct ctx *c, unsigned k, unsigned kind, uint64_t target)
+{
+	struct salsa64_rec *rec = c->rec;
+	if (!c->hot || !c->pent || c->temp || !rec->profile || !rec->profile_sites)
+		return;
+	unsigned j = salsa64_rec_profile_site(rec->profile, c->pent, k, kind, (uint32_t)target);
+	if (!j)
+		return;
+	uintptr_t a = (uintptr_t)&rec->profile->sites[j - 1].taken;
+	if (a >= 0x7FFF8000u)
+		return;
+	int32_t hi = ((int32_t)a + 0x8000) >> 16, lo = (int32_t)a - (hi << 16);
+	E(c, ppc_lis(T_X, hi));
+	E(c, ppc_lwz(T_Y, lo, T_X));
+	E(c, ppc_addi(T_Y, T_Y, 1));
+	E(c, ppc_stw(T_Y, lo, T_X));
 }
 
 /* ---- Llamadas a C ---------------------------------------------------------------- */
@@ -2060,6 +2086,7 @@ static void emit_ijumps_to(struct ctx *c, unsigned k)
 		unsigned sec = c->sec;
 		c->sec = SEC_COLD;
 		bind(c, ij->label);
+		emit_site(c, ij->b, SALSA64_RPF_SITE_COND, insn_pc(c, k));
 		fpu_reconcile(c, &ij->snap);
 		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)ij->b + 2 - (int32_t)k));
 		emit_b(c, c->insn_label[k], false);
@@ -2086,6 +2113,7 @@ static void emit_internal_branch(struct ctx *c, unsigned b)
 		} else {
 			writeback(c, c->written);
 			E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)b + 2));
+			emit_site(c, b, SALSA64_RPF_SITE_COND, br->target);
 			emit_exit_to(c, br->target);
 		}
 		bind(c, nt);
@@ -2107,6 +2135,7 @@ static void emit_internal_branch(struct ctx *c, unsigned b)
 	bind(c, taken);
 	writeback(c, c->written);
 	E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)b + 2));
+	emit_site(c, b, SALSA64_RPF_SITE_COND, br->target);
 	emit_exit_to(c, br->target);
 	c->sec = sec;
 }
@@ -2155,6 +2184,7 @@ static void emit_branch(struct ctx *c, unsigned b)
 		bind(c, nt);
 		writeback(c, c->written);
 		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)b + 1));
+		emit_site(c, b, SALSA64_RPF_SITE_FALL, br->fall);
 		emit_exit_to(c, br->fall);
 		c->sec = sec;
 	}
@@ -2178,17 +2208,23 @@ static void emit_branch(struct ctx *c, unsigned b)
 		return;
 	case K_BRANCH: {
 		if (idle) {  /* el tomado ya salió antes del delay slot */
+			emit_site(c, b, SALSA64_RPF_SITE_FALL, br->fall);
 			emit_exit_to(c, br->fall);
 			return;
 		}
 		int taken = new_label(c);
 		emit_bc(c, br->bo, br->bi, taken);
+		emit_site(c, b, SALSA64_RPF_SITE_FALL, br->fall);
 		emit_exit_to(c, br->fall);
 		bind(c, taken);
+		if (br->target != c->pc)  /* la vuelta al propio bloque no se cuenta (camino caliente) */
+			emit_site(c, b, SALSA64_RPF_SITE_COND, br->target);
 		emit_taken(c, br->target);
 		return;
 	}
 	default:  /* J/JAL o branch-likely tomado */
+		if (br->target != c->pc)
+			emit_site(c, b, d->kind == K_JUMP ? SALSA64_RPF_SITE_JUMP : SALSA64_RPF_SITE_COND, br->target);
 		emit_taken(c, br->target);
 		return;
 	}
@@ -2320,65 +2356,54 @@ static uint32_t finalize(struct salsa64_rec *rec, uint32_t base, uint32_t limit)
 	return nhot + ncold;
 }
 
-uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, unsigned seg, unsigned max,
-			     bool temp, unsigned *n_out, uint32_t *bytes_out)
+/* Deja en el contexto solo lo que dejó la decodificación (para emitir el
+ * mismo bloque otra vez, en otra zona de la caché). */
+static void reset_emission(struct ctx *c)
 {
-	static struct ctx ctx;  /* grande para la pila; el recompilador corre en un solo hilo */
-	struct ctx *c = &ctx;
-	uint32_t end = salsa64_rec_code_end(rec, pa, seg);  /* fuera de KSEG0, sin cruzar páginas */
-
+	struct salsa64_rec *rec = c->rec;
+	uint64_t pc = c->pc;
+	uint32_t pa = c->pa;
+	unsigned n = c->n;
+	bool temp = c->temp, has_branch = c->has_branch, fr_check = c->fr_check;
+	uint8_t seg_kind = c->seg_kind;
+	unsigned pent = c->pent;
+	struct dec d[SALSA64_REC_MAX_INSNS];
+	uint8_t ds_of[SALSA64_REC_MAX_INSNS];
+	memcpy(d, c->d, sizeof d);
+	memcpy(ds_of, c->ds_of, sizeof ds_of);
 	memset(c, 0, sizeof *c);
 	c->rec = rec;
 	c->pc = pc;
 	c->pa = pa;
+	c->n = n;
 	c->temp = temp;
 	c->wide = (rec->opts & SALSA64_REC_OPT_WIDE) != 0;
 	c->tramp = -1;
-	c->calls_near = salsa64_rec_calls_near_at(rec, temp ? rec->scratch : rec->used);
-	if (max > SALSA64_REC_MAX_INSNS)
-		max = SALSA64_REC_MAX_INSNS;
+	c->has_branch = has_branch;
+	c->fr_check = fr_check;
+	c->seg_kind = seg_kind;
+	c->pent = pent;
+	memcpy(c->d, d, sizeof d);
+	memcpy(c->ds_of, ds_of, sizeof ds_of);
+}
 
-	/* Decodificación: hasta un salto con su delay slot, una instrucción que
-	 * termina el bloque, el máximo o el final de la RDRAM. Un salto cuyo
-	 * delay slot no se puede compilar (otro salto, COP0…) queda fuera. */
-	unsigned n = 0;
-	bool any_cop1 = false;
-	while (n < max && pa + 4 * n + 4 <= end) {
-		struct dec *d = &c->d[n];
-		decode_ext(rec, fetch(rec, pa + 4 * n), d);
-		if (is_branch(d)) {
-			if (n + 1 >= max || pa + 4 * n + 8 > end)
-				break;
-			decode_ext(rec, fetch(rec, pa + 4 * n + 4), &c->d[n + 1]);
-			if (c->d[n + 1].kind != K_NORMAL)
-				break;
-			c->ds_of[n + 1] = (uint8_t)(n + 1);
-			/* Un condicional hacia adelante no corta el bloque: su camino
-			 * tomado sale enlazado (emit_internal_branch). */
-			uint64_t bpc = pc + 4ull * n, target = bpc + 4 + ((uint64_t)(int64_t)(int16_t)d->w << 2);
-			bool internal = (d->kind == K_BRANCH || d->kind == K_BRANCH_L) && target > bpc &&
-					!SALSA64_REC_OLD(rec, SALSA64_REC_DBG_NO_SUPER);
-			n += 2;
-			if (!internal) {
-				c->has_branch = true;
-				break;
-			}
-			continue;
-		}
-		n++;
-		if (d->kind == K_END)
-			break;
-	}
-	if (n == 0)
-		return 0;
-	c->n = n;
+/* Emite el bloque decodificado en `c` a partir de la palabra `base` de la
+ * caché, sin pasar de `limit`. Devuelve las palabras usadas, o 0 si no
+ * cupo. */
+static uint32_t emit_block(struct ctx *c, uint32_t base, uint32_t limit)
+{
+	struct salsa64_rec *rec = c->rec;
+	uint64_t pc = c->pc;
+	uint32_t pa = c->pa;
+	unsigned n = c->n, seg = c->seg_kind;
+	bool temp = c->temp, any_cop1 = false;
+
+	c->calls_near = salsa64_rec_calls_near_at(rec, base);
 	for (unsigned k = 0; k < n; k++) {
 		any_cop1 |= c->d[k].cop1;
-		c->fr_check |= fr_dependent(c->d[k].w);
 		c->exit_before[k] = c->exit_after[k] = c->exit_after_mem[k] = -1;
 		c->insn_label[k] = -1;
 	}
-	rec->compiled_fr_dep = c->fr_check;
 	/* ¿Bucle? El salto final vuelve al inicio (emit_taken). */
 	bool loop = false;
 	if (c->has_branch && !temp) {
@@ -2455,6 +2480,17 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 		E(c, ppc_cmpwi(0, 0, 0));
 		emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(0, PPC_EQ), start_exit);
 	}
+	if (rec->profile && rec->cur_id && !temp) {
+		/* Perfil persistente (rec_profile.h): hits[id]++ al entrar (no en
+		 * cada vuelta de un bucle), a desplazamiento fijo de flags (r28). */
+		int32_t off = (int32_t)(offsetof(struct salsa64_rec, hits) - offsetof(struct salsa64_rec, flags)) +
+			      4 * (int32_t)rec->cur_id;
+		int32_t hi = (off + 0x8000) >> 16, lo = off - (hi << 16);
+		E(c, ppc_addis(T_X, R_FLAGS, hi));
+		E(c, ppc_lwz(T_Y, lo, T_X));
+		E(c, ppc_addi(T_Y, T_Y, 1));
+		E(c, ppc_stw(T_Y, lo, T_X));
+	}
 	for (unsigned r = 1; c->borrowed && r < 32; r++)  /* fijos prestados: a cpu->gpr */
 		if (c->borrowed & BIT(r))
 			E(c, ppc_std(pin_ppc(r), off_reg(r), R_CPU));
@@ -2495,6 +2531,7 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	if (!c->has_branch && c->d[n - 1].kind != K_END) {
 		writeback(c, c->written);
 		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)n));
+		emit_site(c, n, SALSA64_RPF_SITE_END, pc + 4ull * n);
 		emit_exit_to(c, pc + 4ull * n);
 	}
 
@@ -2518,13 +2555,109 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 		emit_trampolines(c);
 	}
 
-	uint32_t base = temp ? rec->scratch : rec->used;
-	uint32_t limit = temp ? rec->code_words : rec->seg_end;  /* el tramo en uso (rec.c) */
-	uint32_t words = finalize(rec, base, limit);
-	if (!words)
+	return finalize(rec, base, limit);
+}
+
+uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, unsigned seg, unsigned max,
+			     bool temp, unsigned *n_out, uint32_t *bytes_out)
+{
+	static struct ctx ctx;  /* grande para la pila; el recompilador corre en un solo hilo */
+	struct ctx *c = &ctx;
+	uint32_t end = salsa64_rec_code_end(rec, pa, seg);  /* fuera de KSEG0, sin cruzar páginas */
+
+	memset(c, 0, sizeof *c);
+	c->rec = rec;
+	c->pc = pc;
+	c->pa = pa;
+	c->temp = temp;
+	c->seg_kind = (uint8_t)seg;
+	c->wide = (rec->opts & SALSA64_REC_OPT_WIDE) != 0;
+	c->tramp = -1;
+	if (max > SALSA64_REC_MAX_INSNS)
+		max = SALSA64_REC_MAX_INSNS;
+
+	/* Decodificación: hasta un salto con su delay slot, una instrucción que
+	 * termina el bloque, el máximo o el final de la RDRAM. Un salto cuyo
+	 * delay slot no se puede compilar (otro salto, COP0…) queda fuera. */
+	unsigned n = 0;
+	while (n < max && pa + 4 * n + 4 <= end) {
+		struct dec *d = &c->d[n];
+		decode_ext(rec, fetch(rec, pa + 4 * n), d);
+		if (is_branch(d)) {
+			if (n + 1 >= max || pa + 4 * n + 8 > end)
+				break;
+			decode_ext(rec, fetch(rec, pa + 4 * n + 4), &c->d[n + 1]);
+			if (c->d[n + 1].kind != K_NORMAL)
+				break;
+			c->ds_of[n + 1] = (uint8_t)(n + 1);
+			/* Un condicional hacia adelante no corta el bloque: su camino
+			 * tomado sale enlazado (emit_internal_branch). */
+			uint64_t bpc = pc + 4ull * n, target = bpc + 4 + ((uint64_t)(int64_t)(int16_t)d->w << 2);
+			bool internal = (d->kind == K_BRANCH || d->kind == K_BRANCH_L) && target > bpc &&
+					!SALSA64_REC_OLD(rec, SALSA64_REC_DBG_NO_SUPER);
+			n += 2;
+			if (!internal) {
+				c->has_branch = true;
+				break;
+			}
+			continue;
+		}
+		n++;
+		if (d->kind == K_END)
+			break;
+	}
+	if (n == 0)
 		return 0;
-	if (!temp)
-		rec->used = (base + words + 31) & ~31u;  /* bloques alineados a 128 bytes */
+	c->n = n;
+	for (unsigned k = 0; k < n; k++)
+		c->fr_check |= fr_dependent(c->d[k].w);
+	rec->compiled_fr_dep = c->fr_check;
+
+	/* Perfil persistente (rec_profile.h): la entrada del bloque por su
+	 * dirección y la huella de sus instrucciones, y si va a la zona
+	 * caliente. Un bloque cuya huella no coincide es otro bloque. */
+	unsigned pent = 0;
+	bool hot = false;
+	if (rec->profile && !temp && rec->cur_id) {
+		uint32_t w[SALSA64_REC_MAX_INSNS];
+		for (unsigned k = 0; k < n; k++)
+			w[k] = c->d[k].w;
+		pent = salsa64_rec_profile_lookup(rec->profile, (uint32_t)pc, salsa64_rec_profile_hash(w, n), n, 0, true);
+		hot = pent && rec->hot_words && rec->profile->entries[pent - 1].hot;
+		rec->pent[rec->cur_id] = (uint16_t)pent;
+		salsa64_rec_profile_set_flags(rec->profile, pent, (c->fr_check ? SALSA64_RPF_FR_DEP : 0) |
+				(rec->fr ? SALSA64_RPF_FR_SEEN1 : SALSA64_RPF_FR_SEEN0));
+		c->pent = pent;
+	}
+
+	/* Si un bloque caliente no cabe en su mitad, se emite de nuevo para la
+	 * zona fría (las llamadas a C dependen de dónde cae) y la próxima
+	 * compilación pasa a la otra mitad (make_room, rec.c). */
+	uint32_t base, words;
+	for (;;) {
+		base = temp ? rec->scratch : hot ? rec->used_hot : rec->used;
+		uint32_t limit = temp ? rec->code_words : hot ? rec->hot_end : rec->seg_end;
+		c->hot = hot;
+		words = emit_block(c, base, limit);
+		if (words)
+			break;
+		if (!hot)
+			return 0;
+		hot = false;
+		rec->hot_full = true;
+		rec->stats.hot_full++;
+		reset_emission(c);
+	}
+	if (!temp) {
+		uint32_t next = (base + words + 31) & ~31u;  /* bloques alineados a 128 bytes */
+		if (hot)
+			rec->used_hot = next;
+		else
+			rec->used = next;
+		rec->placed_hot = hot;
+		if (pent)
+			salsa64_rec_profile_set_words(rec->profile, pent, words);
+	}
 	if (rec->prof && rec->prof->blocks && rec->cur_id && !temp) {
 		struct salsa64_rec_prof_block *pb = &rec->prof->blocks->info[rec->cur_id];
 		unsigned fpu = 0, mem = 0;

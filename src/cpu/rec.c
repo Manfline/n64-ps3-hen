@@ -602,23 +602,113 @@ static uint32_t preamble_words(void)
 
 /* ---- Tramos de la caché (docs/rec-ppe.md, «Desalojo por tramos») ------------- */
 
+/* Después del preámbulo van las dos mitades de la zona caliente (si hay
+ * perfil: hot_words cada una) y después los SALSA64_REC_SEGMENTS tramos
+ * fríos; los tramos se numeran seguidos: 0 y 1 calientes, 2 en adelante
+ * fríos. */
+static uint32_t cold_base(const struct salsa64_rec *rec)
+{
+	return preamble_words() + SALSA64_REC_HOT_SEGMENTS * rec->hot_words;
+}
+
 static uint32_t seg_start(const struct salsa64_rec *rec, unsigned s)
 {
-	return preamble_words() + s * rec->seg_words;
+	if (s < SALSA64_REC_HOT_SEGMENTS)
+		return preamble_words() + s * rec->hot_words;
+	return cold_base(rec) + (s - SALSA64_REC_HOT_SEGMENTS) * rec->seg_words;
+}
+
+static uint32_t seg_limit(const struct salsa64_rec *rec, unsigned s)
+{
+	return seg_start(rec, s) + (s < SALSA64_REC_HOT_SEGMENTS ? rec->hot_words : rec->seg_words);
 }
 
 static unsigned seg_of(const struct salsa64_rec *rec, uint32_t word)
 {
-	unsigned s = (word - preamble_words()) / rec->seg_words;
-	return s < SALSA64_REC_SEGMENTS ? s : SALSA64_REC_SEGMENTS - 1;
+	if (word < cold_base(rec)) {
+		unsigned s = (word - preamble_words()) / rec->hot_words;
+		return s < SALSA64_REC_HOT_SEGMENTS ? s : SALSA64_REC_HOT_SEGMENTS - 1;
+	}
+	unsigned s = (word - cold_base(rec)) / rec->seg_words;
+	return SALSA64_REC_HOT_SEGMENTS + (s < SALSA64_REC_SEGMENTS ? s : SALSA64_REC_SEGMENTS - 1);
 }
 
-/* Al vaciar: el primer tramo (o toda la zona de bloques, sin desalojo). */
+/* Al vaciar: el primer tramo frío (o toda la zona fría, sin desalojo) y la
+ * primera mitad caliente. */
 static void seg_reset(struct salsa64_rec *rec)
 {
-	rec->cur_seg = 0;
-	rec->used = preamble_words();
-	rec->seg_end = SALSA64_REC_OLD(rec, SALSA64_REC_OPT_NO_EVICT) ? rec->scratch : seg_start(rec, 1);
+	rec->cur_seg = SALSA64_REC_HOT_SEGMENTS;
+	rec->used = cold_base(rec);
+	rec->seg_end = SALSA64_REC_OLD(rec, SALSA64_REC_OPT_NO_EVICT) ? rec->scratch : seg_limit(rec, rec->cur_seg);
+	rec->cur_hot = 0;
+	rec->used_hot = preamble_words();
+	rec->hot_end = preamble_words() + rec->hot_words;
+	rec->hot_full = false;
+}
+
+uint32_t salsa64_rec_used(const struct salsa64_rec *rec)
+{
+	return rec->used_hot + rec->used - cold_base(rec);
+}
+
+uint32_t salsa64_rec_hot_capacity(const struct salsa64_rec *rec)
+{
+	return SALSA64_REC_HOT_SEGMENTS * rec->hot_words;
+}
+
+uint32_t salsa64_rec_hot_used(const struct salsa64_rec *rec)
+{
+	return rec->used_hot - seg_start(rec, rec->cur_hot);
+}
+
+/* ---- Perfil persistente (rec_profile.h) ------------------------------------------ */
+
+/* Las entradas contadas del bloque `id`, al perfil; su contador queda en 0. */
+static void fold_block(struct salsa64_rec *rec, unsigned id)
+{
+	uint32_t h = rec->hits[id];
+	if (!h)
+		return;
+	rec->hits[id] = 0;
+	if (rec->profile && rec->pent[id]) {
+		salsa64_rec_profile_count(rec->profile, rec->pent[id], h);
+		rec->stats.prof_folded += h;
+	}
+}
+
+/* El bloque vivo que hay hoy en la dirección virtual `vpc`, o 0. */
+static unsigned block_at_vpc(const struct salsa64_rec *rec, uint32_t vpc)
+{
+	if (vpc >= 0x80000000u && vpc < 0xA0000000u) {
+		uint32_t pa = vpc & 0x1FFFFFFFu;
+		return pa < rec->rdram_size ? rec->map[pa >> 2] : 0;
+	}
+	return salsa64_rec_x_find_vpc(rec, (uint64_t)(int64_t)(int32_t)vpc);
+}
+
+void salsa64_rec_profile_fold(struct salsa64_rec *rec)
+{
+	struct salsa64_rec_profile *p = rec->profile;
+	if (!p)
+		return;
+	for (unsigned id = 1; id < rec->next_block; id++)
+		fold_block(rec, id);
+	/* Sucesores: la huella del bloque que hay en el destino de cada sitio
+	 * registrado (si lo hay y tiene entrada); se vuelve a mirar cada vez,
+	 * por si el código del destino cambió. */
+	for (uint32_t j = 0; j < p->nsites; j++) {
+		struct salsa64_rec_profile_site *s = &p->sites[j];
+		unsigned id = block_at_vpc(rec, s->target);
+		if (id && rec->blocks[id].code && rec->pent[id])
+			s->succ_hash = p->entries[rec->pent[id] - 1].hash;
+	}
+}
+
+void salsa64_rec_profile_detach(struct salsa64_rec *rec)
+{
+	salsa64_rec_profile_fold(rec);
+	rec->profile = NULL;
+	memset(rec->pent, 0, rec->next_block * sizeof rec->pent[0]);
 }
 
 /* ¿Las funciones de C quedan a menos de CALL_REACH de un bloque que empieza
@@ -642,6 +732,10 @@ void salsa64_rec_flush_why(struct salsa64_rec *rec, enum salsa64_rec_flush_cause
 		for (unsigned id = 1; id < rec->next_block; id++)
 			if (rec->blocks[id].code)
 				salsa64_rec_prof_fold(rec->prof, id, false);
+	for (unsigned id = 1; id < rec->next_block; id++) {
+		fold_block(rec, id);
+		rec->pent[id] = 0;
+	}
 	if (rec->map_dirty) {
 		memset(rec->map, 0, (rec->rdram_size >> 2) * sizeof rec->map[0]);
 		memset(rec->flags, 0, rec->rdram_size >> SALSA64_REC_FLAG_SHIFT);
@@ -693,6 +787,8 @@ static void kill_block(struct salsa64_rec *rec, unsigned id)
 	bool detached = rec->x.state[id] == SALSA64_REC_X_DETACHED;  /* ya sin banderas, enlaces ni código */
 	if (rec->prof && rec->prof->blocks)
 		salsa64_rec_prof_fold(rec->prof, id, false);
+	fold_block(rec, id);
+	rec->pent[id] = 0;
 	if (!salsa64_rec_x_remove(rec, id)) {
 		/* KSEG0: el mapa queda apuntando al gemelo (del otro FR), si lo hay. */
 		unsigned t = rec->twin[id];
@@ -802,15 +898,15 @@ static bool rec_space(const struct salsa64_rec *rec)
 	return rec->used + MAX_BLOCK_WORDS <= rec->seg_end && rec_ids_ok(rec);
 }
 
-/* El tramo en uso se llenó: pasar al siguiente (el más viejo) matando solo
- * los bloques cuyo código, o el guardado si están desprendidos, está en él.
- * Los enlaces que salen de ellos quedan en las listas de sus destinos con
- * el sitio en este tramo: seg_gen[] sube para que no se parcheen al
- * deshacerlos, y generation para los sitios anotados en el despachador. */
-static void evict_next_segment(struct salsa64_rec *rec)
+/* Un tramo (frío o mitad caliente) se llenó: pasar al tramo `s` (el más
+ * viejo de su clase) matando solo los bloques cuyo código, o el guardado si
+ * están desprendidos, está en él. Los enlaces que salen de ellos quedan en
+ * las listas de sus destinos con el sitio en este tramo: seg_gen[] sube para
+ * que no se parcheen al deshacerlos, y generation para los sitios anotados
+ * en el despachador. */
+static void evict_segment(struct salsa64_rec *rec, unsigned s)
 {
-	unsigned s = (rec->cur_seg + 1) % SALSA64_REC_SEGMENTS;
-	uint32_t lo = seg_start(rec, s), hi = seg_start(rec, s + 1);
+	uint32_t lo = seg_start(rec, s), hi = seg_limit(rec, s);
 	for (unsigned id = 1; id < rec->next_block; id++) {
 		const struct salsa64_rec_block *b = &rec->blocks[id];
 		uint32_t code = b->code ? b->code : rec->x.state[id] == SALSA64_REC_X_DETACHED ? rec->x.saved_code[id] : 0;
@@ -819,17 +915,29 @@ static void evict_next_segment(struct salsa64_rec *rec)
 	}
 	rec->seg_gen[s]++;
 	rec->generation++;
-	rec->cur_seg = s;
-	rec->used = lo;
-	rec->seg_end = hi;
-	rec->stats.evictions++;
+	if (s < SALSA64_REC_HOT_SEGMENTS) {
+		rec->cur_hot = s;
+		rec->used_hot = lo;
+		rec->hot_end = hi;
+		rec->hot_full = false;
+		rec->stats.hot_evictions++;
+	} else {
+		rec->cur_seg = s;
+		rec->used = lo;
+		rec->seg_end = hi;
+		rec->stats.evictions++;
+	}
 	rec->cpu->rec_abort = 1;
 }
 
 /* Lugar para otro bloque: desalojar el tramo más viejo o, sin ids o enlaces
- * libres (o con NO_EVICT), vaciar todo. Puede matar cualquier bloque. */
+ * libres (o con NO_EVICT), vaciar todo. Si un bloque caliente no cupo en su
+ * mitad (hot_full, rec_emit.c), se pasa a la otra mitad. Puede matar
+ * cualquier bloque. */
 static void make_room(struct salsa64_rec *rec)
 {
+	if (rec->hot_full && rec->hot_words)
+		evict_segment(rec, (rec->cur_hot + 1) % SALSA64_REC_HOT_SEGMENTS);
 	if (rec_space(rec))
 		return;
 	if (!rec_ids_ok(rec) || SALSA64_REC_OLD(rec, SALSA64_REC_OPT_NO_EVICT))
@@ -837,7 +945,7 @@ static void make_room(struct salsa64_rec *rec)
 				      : !rec->free_link && rec->next_link >= SALSA64_REC_MAX_LINKS ? SALSA64_REC_FLUSH_LINKS
 				      : SALSA64_REC_FLUSH_OTHER);
 	else
-		evict_next_segment(rec);
+		evict_segment(rec, SALSA64_REC_HOT_SEGMENTS + (rec->cur_seg - SALSA64_REC_HOT_SEGMENTS + 1) % SALSA64_REC_SEGMENTS);
 }
 
 /* Compila el bloque de (pc, pa) con el Status.FR actual y lo registra (en
@@ -856,6 +964,9 @@ static unsigned new_block(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, uns
 	rec->cur_id = id;
 	rec->fr = rec->cpu->status & SALSA64_ST_FR;
 	rec->compiled_fr_dep = false;
+	rec->placed_hot = false;
+	rec->hits[id] = 0;
+	rec->pent[id] = 0;
 	uint32_t code = salsa64_rec_compile(rec, pc, pa, seg, SALSA64_REC_MAX_INSNS, false, &n, &bytes);
 	rec->cur_id = 0;
 	struct salsa64_rec_block *b = &rec->blocks[id];
@@ -875,6 +986,7 @@ static unsigned new_block(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, uns
 	if (code) {
 		rec->stats.compiled++;
 		rec->stats.fr_dep += (b->fr & SALSA64_REC_FR_DEP) != 0;
+		rec->stats.hot_placed += rec->placed_hot;
 	} else {
 		rec->stats.interp_only++;
 	}
@@ -1188,13 +1300,14 @@ bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *co
 		return false;
 
 	/* Los ganchos de depuración y el perfil los pone quien llama antes de iniciar. */
-	uint32_t opts = rec->opts;
+	uint32_t opts = rec->opts, hot_bytes = rec->hot_bytes;
 	void (*after_exit)(struct salsa64_rec *, uint64_t, void *) = rec->after_exit;
 	void (*on_compile)(struct salsa64_rec *, uint64_t, uint32_t, uint32_t, bool) = rec->on_compile;
 	void *after_exit_ctx = rec->after_exit_ctx;
 	struct salsa64_rec_prof *prof = rec->prof;
 	memset(rec, 0, sizeof *rec);
 	rec->opts = opts;
+	rec->profile_sites = true;
 	rec->after_exit = after_exit;
 	rec->after_exit_ctx = after_exit_ctx;
 	rec->on_compile = on_compile;
@@ -1224,9 +1337,21 @@ bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *co
 	if (!ok)
 		return false;  /* el código generado no cambia de TOC */
 
-	/* Tramos de la caché: el espacio de bloques entre el preámbulo y la zona
-	 * temporal, en partes iguales (múltiplos de 128 bytes). */
-	rec->seg_words = ((rec->scratch - preamble_words()) / SALSA64_REC_SEGMENTS) & ~31u;
+	/* Zona caliente: lo pedido en hot_bytes, a lo más un cuarto del espacio
+	 * de bloques y dejando a los tramos fríos lugar para cuatro bloques
+	 * máximos; mitades de al menos 8 KB, si no, sin zona. */
+	uint32_t area = rec->scratch - preamble_words();
+	uint32_t hot = hot_bytes / 4 / SALSA64_REC_HOT_SEGMENTS;
+	if (hot > area / 4 / SALSA64_REC_HOT_SEGMENTS)
+		hot = area / 4 / SALSA64_REC_HOT_SEGMENTS;
+	if (hot > (area - 4 * MAX_BLOCK_WORDS) / SALSA64_REC_HOT_SEGMENTS)
+		hot = (area - 4 * MAX_BLOCK_WORDS) / SALSA64_REC_HOT_SEGMENTS;
+	hot &= ~31u;
+	rec->hot_bytes = hot_bytes;
+	rec->hot_words = hot >= 2048 ? hot : 0;
+	/* Tramos fríos: el resto del espacio de bloques hasta la zona temporal,
+	 * en partes iguales (múltiplos de 128 bytes). */
+	rec->seg_words = ((rec->scratch - cold_base(rec)) / SALSA64_REC_SEGMENTS) & ~31u;
 	rec->calls_near = salsa64_rec_calls_near_at(rec, 0);  /* el preámbulo y sus rutinas */
 
 	uint32_t n = emit_preamble(rec);

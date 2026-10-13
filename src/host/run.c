@@ -142,6 +142,10 @@ static struct salsa64_rec rec;
  * el host) cada N campos y al final. */
 static struct salsa64_rec_prof prof, prof_prev;
 static uint32_t prof_every, prof_next;
+/* --profile: el perfil persistente por juego (rec_profile.h); las entradas
+ * contadas se suman a la tabla cada tanto (como el frontend, entre campos). */
+static struct salsa64_rec_profile profile;
+static uint32_t profile_fold_next;
 
 static void prof_line(void *ctx, const char *text)
 {
@@ -1904,7 +1908,7 @@ static bool dump_frame(const char *path)
 /* Opciones largas sin letra (códigos fuera de ASCII). */
 enum { OPT_REC = 0x100, OPT_LOCKSTEP, OPT_PAD, OPT_TRACE_FROM, OPT_TRACE_FAULTS, OPT_RAM_DUMP, OPT_TRACE_AUDIO,
        OPT_FRAME_EVERY, OPT_LLE, OPT_LLE_SPEED, OPT_LLE_CHECK, OPT_LLE_CHECK_JPEG, OPT_POKE, OPT_TRACE_FB, OPT_STATE_SAVE,
-       OPT_STATE_LOAD, OPT_FIELDS };
+       OPT_STATE_LOAD, OPT_FIELDS, OPT_PROFILE };
 
 /* ---- Estados guardados (--state-save, --state-load) ------------------------- */
 
@@ -2007,6 +2011,9 @@ static void usage(FILE *out)
 	      "                        bloque, y la RDRAM en cada campo del VI y cada N bloques\n"
 	      "                        (por omisión 4096)\n"
 	      "      --no-idle         no saltar los bucles de espera\n"
+	      "      --profile ARCHIVO con --rec, perfil persistente por juego (rec_profile.h): se carga al\n"
+	      "                        empezar (si existe) y se guarda al terminar; SALSA64_REC_HOT_KB fija la\n"
+	      "                        zona caliente (1024) y SALSA64_REC_SITES=0 no registra sitios de salida\n"
 	      "      --save TIPO       tipo de guardado: ninguno, eeprom4k, eeprom16k, sram256k, flashram\n"
 	      "      --save-dir DIR    leer y escribir el guardado del cartucho en DIR\n"
 	      "      --gfx-frame ARCHIVO  al terminar, guardar en PPM lo que dibujó la HLE gráfica\n"
@@ -2068,6 +2075,7 @@ int main(int argc, char **argv)
 		{ "state-save", required_argument, NULL, OPT_STATE_SAVE },
 		{ "state-load", required_argument, NULL, OPT_STATE_LOAD },
 		{ "fields", required_argument, NULL, OPT_FIELDS },
+		{ "profile", required_argument, NULL, OPT_PROFILE },
 		{ "trace-gfx", required_argument, NULL, 'Q' },
 		{ "trace-fb", no_argument, NULL, OPT_TRACE_FB },
 		{ "raster-dump", required_argument, NULL, 'D' },
@@ -2081,7 +2089,7 @@ int main(int argc, char **argv)
 	uint32_t ram = SALSA64_RDRAM_MAX;
 	int tv = SALSA64_BOOT_TV_AUTO, save_type = SALSA64_SAVE_AUTO, c;
 	bool regs = false, idle = true, use_rec = false, lockstep = false;
-	const char *frame_path = NULL, *gfx_path = NULL, *save_dir = NULL;
+	const char *frame_path = NULL, *gfx_path = NULL, *save_dir = NULL, *profile_path = NULL;
 	bool gfx_check = false, audio_check = false;
 	const char *wav_path = NULL;
 	const char *dump_path = NULL, *ram_path = NULL;
@@ -2167,6 +2175,7 @@ int main(int argc, char **argv)
 		}
 		case OPT_STATE_LOAD: state_load_path = optarg; break;
 		case OPT_FIELDS: stop_field = (uint32_t)strtoul(optarg, NULL, 0); break;
+		case OPT_PROFILE: profile_path = optarg; break;
 		case 'D': dump_path = optarg; break;
 		case 'A': wav_path = optarg; break;
 		case 'Z': audio_check = true; break;
@@ -2282,9 +2291,23 @@ int main(int argc, char **argv)
 			prof_every = (uint32_t)strtoul(getenv("SALSA64_REC_PROF"), NULL, 0);
 			prof_next = prof_every;
 		}
+		rec.hot_bytes = salsa64_host_rec_hot_bytes();
 		if (!code || !salsa64_rec_init(&rec, &n64.cpu, code, salsa64_host_rec_bytes())) {
 			fprintf(stderr, "salsa64-run: el recompilador no corre en este host\n");
 			return 3;
+		}
+		if (profile_path) {
+			struct salsa64_rec_profile_game game;
+			salsa64_rec_profile_game_of(&game, rom);
+			bool loaded = salsa64_rec_profile_load(&profile, profile_path, &game);
+			salsa64_rec_profile_mark_hot(&profile, salsa64_rec_hot_capacity(&rec) * 3 / 4);
+			rec.profile = &profile;
+			rec.profile_sites = !getenv("SALSA64_REC_SITES") || salsa64_host_env_on("SALSA64_REC_SITES");
+			fprintf(stderr, "salsa64-run: perfil %s: %s, %u entradas y %u sitios, %u calientes (%u KB, umbral %u); "
+				"zona caliente %u KB en dos mitades, sitios de salida %s\n", profile_path,
+				loaded ? "cargado" : "vacío (sin archivo, corrupto o de otro juego)", profile.count, profile.nsites,
+				profile.hot_entries, profile.hot_words / 256, profile.hot_threshold,
+				salsa64_rec_hot_capacity(&rec) / 256, rec.profile_sites ? "sí" : "no");
 		}
 		if (lockstep) {
 			/* La referencia arranca igual; cada bloque vuelve a C para comparar. */
@@ -2373,6 +2396,10 @@ int main(int argc, char **argv)
 			salsa64_n64_run(&n64, max_cycles - done < slice ? max_cycles - done : slice);
 		}
 		pc_sample(n64.cpu.pc);
+		if (rec.profile && n64.bus.vi.fields >= profile_fold_next) {
+			salsa64_rec_profile_fold(&rec);
+			profile_fold_next = n64.bus.vi.fields + 60;
+		}
 		if (prof_every && n64.bus.vi.fields >= prof_next) {
 			char text[2048];
 			salsa64_rec_prof_report(&prof, &prof_prev, 0, prof_every, text, sizeof text);
@@ -2435,6 +2462,19 @@ int main(int argc, char **argv)
 			fprintf(stderr, "salsa64-run: %s\n", text);
 			salsa64_rec_prof_blocks_report(&rec, getenv("SALSA64_REC_PROF_TOP") ? (unsigned)strtoul(getenv("SALSA64_REC_PROF_TOP"), NULL, 0) : 40,
 					       prof_line, NULL);  /* más bloques para pesar la expansión (tools/rec-expansion.py) */
+		}
+		if (rec.profile) {
+			salsa64_rec_profile_fold(&rec);
+			bool saved = salsa64_rec_profile_save(&profile, profile_path);
+			fprintf(stderr, "salsa64-run: perfil: %u entradas (%u cargadas, %u sin lugar) y %u sitios de salida (%u "
+				"sin lugar), %llu entradas a bloques contadas (sesión %s), %llu bloques en la zona caliente (%llu no "
+				"cupieron, %llu desalojos de mitad, %u KB usados); %s %s\n", profile.count, profile.loaded, profile.full,
+				profile.nsites, profile.sites_full, (unsigned long long)profile.session,
+				profile.session >= SALSA64_RPF_LONG_SESSION ? "larga" : "corta",
+				(unsigned long long)st->hot_placed, (unsigned long long)st->hot_full,
+				(unsigned long long)st->hot_evictions, salsa64_rec_hot_used(&rec) / 256,
+				saved ? "guardado en" : "NO se pudo guardar en", profile_path);
+			salsa64_rec_profile_detach(&rec);
 		}
 	}
 	savefile_close(&save_file);

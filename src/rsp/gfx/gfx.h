@@ -170,7 +170,8 @@ enum gfx_op {
 	GFX_OP_TARGET,  /* a = dirección física de la color image, b = ancho,
 	                   c = formato << 8 | tamaño (G_IM_FMT_*, G_IM_SIZ_*) */
 	GFX_OP_ZCLEAR,  /* a = dirección de la z image, b = valor (16 bits de la
-	                   N64), c = 0; gfx_zclear */
+	                   N64), c = tamaño de píxel de la color image
+	                   (G_IM_SIZ_*) << 16 | su ancho; gfx_zclear */
 	GFX_OP_DRAW,    /* gfx_draw */
 };
 
@@ -180,10 +181,13 @@ struct gfx_cmd {
 	uint32_t a, b, c;
 };
 
+/* El relleno también va a la RDRAM, como lo deja el RDP: el CPU puede leer
+ * la z image (salsa64_gfx_rdram_fills, rsp/gfx/backend.h). */
 struct gfx_zclear {
 	struct gfx_cmd h;
 	uint16_t rect[4];  /* x0, y0, x1, y1 en píxeles (x1, y1 exclusivos) */
-	uint32_t pad[2];
+	uint32_t fill;     /* color de relleno del RDP (32 bits, como G_SETFILLCOLOR) */
+	uint32_t pad;
 };
 
 /* Textura de un dibujo: texels RGBA8888 (bytes R, G, B, A) en el arena de

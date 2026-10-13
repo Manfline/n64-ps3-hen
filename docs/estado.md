@@ -49,6 +49,70 @@ instrucciones ejecutadas (el camino caliente ejecuta ~3 palabras menos por
 acceso). Lo que queda grande por instrucción: la entrada de bloque (ktlb +
 evento, 7–8 palabras), la salida (escritura + enlace), la ALU de 32 bits con
 su `extsw` y la FPU en línea (~35–40 palabras por operación).
+## 2026-10-12 (noche) — Donkey Kong 64: la cámara que se acerca y se aleja leía una z image vacía (rama `focused-hermann-680a6f`, paquete SLSA00105 «Salsa64 cámara»)
+
+Síntoma (PS3 real, v0.2.0, DK64 al 100 %): la cámara 3D se acerca y se
+aleja sin parar, también en espacios abiertos; el HUD queda quieto.
+
+Diagnóstico, desde el estado que el autor guardó en la escena (túnel,
+campo 4714):
+- **No es el recompilador ni los gemelos por Status.FR.** El intérprete
+  del host hace lo mismo, y `--lockstep` desde el estado (qemu, 186 campos,
+  más de cuatro vaivenes) no tiene diferencias; en esa escena no hay
+  gemelos ni salidas por FR (también lo decía el log de la PS3).
+- Lo que oscila es el ojo de la cámara (`449990`): DK (actor `449100`)
+  está quieto y el ojo avanza hacia él durante 21 cuadros (42 campos) y
+  vuelve de golpe al punto de partida, con el control suelto o empujado.
+- El juego lee la **z image de la RDRAM** (`5d5600`, 320 × 240) donde se
+  ve a DK y a ±40 píxeles (`80700ae4`: valor de 16 bits con exponente de 3
+  y mantisa de 11) y, si lo ve tapado 21 cuadros seguidos (contador de la
+  cámara en `806210d0`), recoloca la cámara detrás de él (`80620628`). La
+  HLE dibuja en el RSX y la z image de la RDRAM estaba entera en 0 (lo más
+  cerca posible): DK siempre tapado. Llenándola a mano con 0xFFFC la cámara
+  converge y se queda quieta.
+- **Ya estaba antes de v0.2.0** (desde la primera HLE de la Fase 2: el
+  borrado de la Z nunca llegó a la RDRAM); al 20 % el vaivén iba cinco
+  veces más lento.
+
+Arreglo (docs/framebuffer.md, «La z image en la RDRAM»): el borrado de la
+z image (FILLRECT en modo FILL sobre ella, `GFX_OP_ZCLEAR`) se escribe
+también en la RDRAM, como lo deja el RDP: `salsa64_gfx_rdram_fills`
+(`src/rsp/gfx/sync.c`) en el `finish` del backend síncrono y del SPE, antes
+de entregar la tarea a la presentación (las copias esperadas de la misma
+tarea quedan encima, como en el hardware). `GFX_OP_ZCLEAR` lleva ahora el
+tamaño de píxel y el ancho de la color image y el color de 32 bits.
+Pruebas: `gfx_zclear_fills_rdram` (color por dirección, bordes sin alinear,
+recorte al ancho, nada fuera del rectángulo) y `gfx_zclear_rdram_at_finish`
+(se escribe al terminar la tarea, no al arrancarla).
+
+Efecto en otros juegos (host, capturas cada 300 campos antes y después,
+con los guiones de docs/pads): Mario Kart 64, Super Mario 64, Perfect
+Dark (intro) y Banjo-Kazooie, idénticas. Zelda OoT decide si dibuja el
+resplandor de las luces puntuales leyendo la z image en su posición; antes
+las veía tapadas y ahora destapadas: las antorchas del castillo del intro
+tienen su halo, el resplandor de Navi sale completo (como en la consola
+cuando nada los tapa) y cambian las motas del bosque Kokiri. GoldenEye en
+Dam diverge un poco desde que empieza la misión (la vista se desplaza
+menos de un píxel; mismo motivo), sin cambio visible. Lo dibujado no llega
+a la z image de la RDRAM, así que una luz detrás de un muro también
+brilla, y en DK64 la cámara no se recoloca cuando un muro tapa de verdad a
+DK (pendiente en docs/framebuffer.md). Super Smash Bros. (el KO) no se
+arregla con esto: ver su entrada.
+
+Verificado:
+- [x] Host: desde el estado de la consola, la cámara converge a su lugar
+      en el túnel y se queda quieta (antes, vaivén cada 42 campos).
+- [x] `test-host` 439/439 (Docker, ASan/UBSan); `test-rec` (unitarias en
+      los cinco modos 439/439, nemu64-test en su línea base de 433, vitest,
+      estados); `test-roms` (nemu64-test 433 / 136 con LLE, vitest,
+      savetest, gfxtest ×3, estados, audiotest); `tools/build.sh` sin
+      avisos.
+- [x] `--lockstep` de DK64 desde el estado con el arreglo (qemu, 186
+      campos, también la RDRAM): sin diferencias.
+- [x] **PS3 real** (paquete «Salsa64 cámara», SLSA00105, 54798d9; el
+      autor, 2026-10-12): la cámara de DK64 resuelta (estado de la ranura 0
+      y un espacio abierto), a 59,8 campos/s con 7,0 ms de emulación por
+      campo, como antes; en Zelda, Navi se ve completo.
 
 ## 2026-10-12 (noche) — Quitarle trabajo al PPE: medición del hilo 1 y tarea JPEG en un SPE, sin tirón (rama `determined-grothendieck`, paquete SLSA00103 «Salsa64 PPE»)
 
@@ -134,6 +198,85 @@ Decisión y pendiente:
   (partida nueva, `--save-dir` a una carpeta vacía; Link despierta en la
   casa hacia el campo 14 300, 150 tareas JPEG hasta el 15 500).
 
+## 2026-10-12 (noche) — Recompilador: perfil persistente por juego y zona caliente, medidos en la PS3 (rama `fervent-noyce-db464c`, paquete SLSA00104 «Salsa64 perfil»)
+
+Objetivo: la localidad del código del recompilador (GoldenEye en la presa y
+la segunda escena de la intro de Perfect Dark, limitadas por el CPU: ~47
+ciclos del PPE por instrucción MIPS con ~7 MB de bloques vivos contra 512 KB
+de L2). Hecho y medido; diseño en docs/rec-ppe.md («Perfil persistente y
+bloques calientes» y «Siguientes pasos»), números en docs/perf-log.md.
+
+- **Perfil por juego** (`src/cpu/rec_profile.c`): cada bloque cuenta sus
+  entradas (cuatro palabras a la entrada, no en la vuelta de un bucle), la
+  cuenta se suma entre campos a una tabla por (dirección, huella de las
+  instrucciones, cantidad) y se guarda en `perfiles/<juego>.prf` al cerrar
+  el juego (también al volver al menú) y cada 2 min por trozos desde el
+  hilo de presentación. Identidad por contenido: un bloque reescrito en la
+  misma dirección es otra entrada; los gemelos por FR comparten la suya.
+  El archivo lleva código de cartucho y CRC de la ROM, no contiene ni un
+  byte del juego ni código traducido (direcciones, huellas de un solo
+  sentido, cuentas y banderas), y si falta, está corrupto o es de otro
+  juego el perfil arranca vacío. Entre sesiones, una sesión larga hace
+  decaer a la mitad lo que no corrió; una corta solo suma.
+- **Zona caliente**: 1 MB al principio de la caché en dos mitades que se
+  turnan; al cargar el perfil se marcan las entradas de mayor puntaje
+  hasta tres cuartos de la zona y sus bloques se compilan ahí.
+- **Sitios de salida de los bloques calientes** (pedido de main para los
+  pasos siguientes): cada salida con destino fijo cuenta cuántas veces se
+  pasa; de ahí salen tomado/no tomado de cada condicional y los dos
+  sucesores más frecuentes de cada bloque, con la huella del bloque del
+  destino. Solo se registra.
+- Interruptores: `perfil-activo` (apagado por omisión; en la medición de
+  abajo el paquete lo traía encendido y `sin-perfil` lo apagaba) y
+  `perfil.cfg` (`caliente = KB`, `saltos = si|no`), documentados en
+  docs/uso-ps3.md; en el host,
+  `salsa64-run --profile` y `SALSA64_REC_HOT_KB`/`SALSA64_REC_SITES`.
+
+Validado: unitarias host 440/440 y ppc64 con recompilador 440/440 (plain,
+pin, caché chica; suite `perfil` nueva: tabla, mezcla, marcado, archivo con
+corrupción e identidad, y con el recompilador contador, zona caliente,
+huella distinta, rotación de mitad y sitios); nemu64-test 433 fallas (línea
+base) con perfil nuevo y cargado, también con caché de 3 MB y zona de 256 KB
+(rotaciones); `--lockstep` sin diferencias en nemu64-test (las dos cachés),
+vitest y Perfect Dark 3 G ciclos con el perfil cargado; test-roms en verde;
+build de la PS3 sin avisos. GoldenEye hasta la presa (7,5 G ciclos) en
+lockstep con el perfil cargado: sin diferencias, con el binario anterior al
+formato 2 y con el final (692 calientes, 1483 sitios de salida).
+
+**Medido en la PS3 (el autor, una sola ejecución de la app):** la zona
+caliente **no da ganancia**: GoldenEye en la presa 15,54 → 15,80 ns por
+instrucción de nativo entre la primera sesión (perfil vacío) y la segunda
+(762 bloques calientes juntos, 1592 sitios), Perfect Dark 12,73 → 12,39:
+ruido. Contar cuesta ~5 % en GoldenEye (base con `sin-perfil` 14,82 ns de
+nativo y 17,15 en total contra 15,54 y 18,19). SM64, Zelda y Majora sin
+regresión (59–60 campos/s). La conclusión es que lo que manda no es dónde
+está cada bloque sino cuántas líneas toca por instrucción: en qemu, los 25
+bloques más ejecutados de GoldenEye son 21,3 palabras de PPC por instrucción
+MIPS (9,9 en la sección que se ejecuta, 11,4 en caminos lentos y salidas);
+cada acceso a datos mapeados cuesta ~10 palabras calientes y ~35 frías, y
+la entrada de un bloque 16–20. Las palancas (un camino lento por bloque,
+escritura de sucios por máscara, camino de la ktlb en línea, entrada más
+corta) y los usos del perfil (pistas de salto: en GoldenEye 612 de 931
+condicionales se toman más del 80 % de las veces y 184 menos del 20 %;
+sucesor contiguo; traducción por adelantado y JIT por niveles en el hilo 1
+del PPE, que duerme el 85 %) están en docs/rec-ppe.md, «Siguientes pasos».
+
+Decidido con main: el perfil queda **apagado por omisión** (sin el archivo
+`perfil-activo` no hay tabla, contador ni zona caliente: costo cero en el
+hilo 0); se enciende para recoger datos o cuando los pasos siguientes lo
+usen. Anotada la idea de contar gratis por muestreo desde el hilo 1 (lee
+cada N µs el bloque en curso) y dejar la instrumentación solo para sitios y
+sucesores. `caliente = 256` (lo que cabría en la L2 con los datos) quedó sin
+medir. Los perfiles de la consola están en `build/ps3-logs/prf/` de la rama
+(y en `build/ps3-logs/perfil-2026-10-12/` del árbol principal, 13 juegos).
+Con las huellas, 445 bloques idénticos aparecen en cinco o más de los 13
+perfiles (libultra). El puntaje cuenta entradas, no tiempo: por entradas son
+~9 % de cada juego, pero ponderado por instrucciones solo ~3 % (mediana;
+máx. 6 %), porque son bloques diminutos (esperas, raíz cuadrada). Zelda y
+Majora comparten 973 bloques; GoldenEye y Perfect Dark, 807. Hacerlos
+nativos ganaría del orden de 1–3 %; la palanca mayor es compactar el código
+traducido.
+
 ## 2026-10-12 (noche) — v0.2.0 publicada y censo de compatibilidad
 
 Publicada la **v0.2.0** (pre-release, etiqueta en ad72ebf, con
@@ -181,6 +324,15 @@ más los triángulos (y alfa siempre 1); el hardware deja 0xFFFC con la
 silueta encima. Arreglo pendiente: con ZCLEAR sobre una color image del
 mismo destino, rellenar también la superficie de color con el color de
 relleno (host y PS3) y no forzar alfa 1 en la copia; prueba en test_raster.
+**Probado y no basta** (2026-10-12, con el borrado de la Z ya escrito en la
+RDRAM, entrada de la cámara de DK64): en el host, la demo con
+`--gfx-frame` se sigue parando (1373 tareas a los 1500 campos) también
+rellenando la superficie de color y copiando 0xFFFC sin alfa forzado; solo
+saltando la copia de `0a3940/320` sigue (1432). Lo que rompe es lo que el
+RSX dibuja ahí (la silueta), no el borrado: mirar qué escriben esos 128
+triángulos en el RDP (¿profundidades como color?). Saltar la copia de lo
+que se borró como Z en la misma tarea no sirve en general: la pausa de
+Zelda borra su Z y copia el cuadro a esa dirección en la misma tarea.
 
 ## 2026-10-12 (noche) — Star Fox 64: la «estela» del menú es del juego (rama `infallible-wozniak-aa210c`)
 

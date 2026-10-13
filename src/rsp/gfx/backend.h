@@ -30,6 +30,14 @@ void salsa64_gfx_job(struct gfx_job *job, const struct salsa64_bus *bus, const s
 		     enum salsa64_gbi gbi);
 /* Lo que `finish` devuelve al núcleo por un resultado (SALSA64_GFX_*). */
 uint32_t salsa64_gfx_task_flags(const struct gfx_result *res);
+/* Al terminar la tarea (en `finish`, en el hilo del CPU): los rellenos de
+ * la z image de su salida (GFX_OP_ZCLEAR) se escriben en la RDRAM, como los
+ * deja el RDP. El CPU puede leerla: Donkey Kong 64 mira la profundidad
+ * donde se ve al jugador y, si algo lo tapa 21 cuadros seguidos, mueve la
+ * cámara; sin el relleno leía 0 (tapado) y la cámara iba y venía. Lo que
+ * se dibuja encima no llega: la z image queda como recién borrada. */
+void salsa64_gfx_rdram_fills(const struct salsa64_bus *bus, const struct gfx_job *job,
+			     const struct gfx_result *res);
 
 /* Backend síncrono: la HLE corre en el hilo del CPU al arrancar la tarea. */
 struct gfx_state;

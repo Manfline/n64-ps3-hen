@@ -42,6 +42,13 @@ static inline size_t salsa64_host_rec_bytes(void)
 	return SALSA64_HOST_REC_BYTES;
 }
 
+/* Zona caliente (rec.h, hot_bytes): SALSA64_REC_HOT_KB; por omisión 1 MB. */
+static inline uint32_t salsa64_host_rec_hot_bytes(void)
+{
+	const char *v = getenv("SALSA64_REC_HOT_KB");
+	return v ? (uint32_t)(strtoul(v, NULL, 0) << 10) : 1u << 20;
+}
+
 static inline void *salsa64_host_rec_buffer(void)
 {
 	if (!salsa64_host_env_on("SALSA64_REC_FAR") &&

@@ -1008,10 +1008,12 @@ static void fillrect(struct gfx_state *g, uint32_t w0, uint32_t w1)
 		z.h.size = sizeof z;
 		z.h.a = g->zimg_addr;
 		z.h.b = g->fill & 0xFFFF;
+		z.h.c = (uint32_t)g->cimg_siz << 16 | g->cimg_width;
 		z.rect[0] = (uint16_t)ulx;
 		z.rect[1] = (uint16_t)uly;
 		z.rect[2] = (uint16_t)lrx;
 		z.rect[3] = (uint16_t)lry;
+		z.fill = g->fill;
 		gfx_flush_draw(g);
 		gfx_io_cmd(g, &z, sizeof z);
 		g->res->rects++;
