@@ -398,6 +398,15 @@ unsigned salsa64_rec_x_find(struct salsa64_rec *rec, uint64_t pc, uint32_t pa)
 	return 0;
 }
 
+unsigned salsa64_rec_x_find_vpc(const struct salsa64_rec *rec, uint64_t vpc)
+{
+	const struct salsa64_rec_x *x = &rec->x;
+	for (unsigned id = x->xhash[xhash_slot(vpc)]; id; id = x->xb[id].hnext)
+		if (x->xb[id].vpc == (uint32_t)vpc && x->state[id] == SALSA64_REC_X_LIVE && rec->blocks[id].code)
+			return id;
+	return 0;
+}
+
 /* GoldenEye pagina su código bajo demanda, cada página vuelve en el marco
  * que toque y el DMA que trae otra página al marco invalida los bloques que
  * había: sin esto, cada (vpc, marco) era un bloque nuevo (93 000 en 128 s,

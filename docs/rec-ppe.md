@@ -719,6 +719,324 @@ desprendidos (`x.copy[]`) no se recuperan hasta un vaciado completo, que
 sigue ocurriendo si se agotan los ids o los enlaces. `SALSA64_REC_OPT_NO_EVICT`
 (`jit-sin-tramos` en la PS3) y `jit-viejo` vuelven al vaciado completo.
 
+### Perfil persistente y bloques calientes (2026-10-12)
+
+Código: `src/cpu/rec_profile.c` (la tabla y el archivo), `rec.c` (zona
+caliente, sumas) y `rec_emit.c` (consulta y contador). Medido en la PS3 el
+2026-10-11: el código nativo cuesta ~47 ciclos por instrucción MIPS con
+cualquier combinación de banderas; no lo limitan las instrucciones emitidas
+sino el tamaño y la localidad del código (GoldenEye: ~7 MB de bloques vivos
+contra 512 KB de L2, con la caché en páginas de 64 KB y el ERAT de
+instrucciones del PPE cubriendo mucho menos). Lo que corre seguido está
+repartido por toda la caché porque los bloques se colocan en el orden en
+que se compilan. Ahora:
+
+- **Contador por bloque.** Con un perfil conectado (`rec->profile`), la
+  entrada de cada bloque incrementa `rec->hits[id]` (`addis`, `lwz`,
+  `addi`, `stw`: cuatro palabras, a desplazamiento fijo de `flags`, que
+  vive en r28) después de las comprobaciones de la entrada (evento, CU1,
+  FR, página) y antes de cargar registros: cuenta **entradas**, no vueltas
+  de un bucle dentro del bloque (la vuelta salta al cuerpo, después del
+  contador), que es lo que pesa en la caché de instrucciones. Los 256 KB de
+  `hits[]` se tocan a 4 bytes por entrada; los recortados (modo estricto)
+  no cuentan. Entre campos, el hilo que emula suma los contadores a la
+  tabla y los deja en 0 (`salsa64_rec_profile_fold`, cada 60 campos en el
+  frontend); también al morir un bloque y al vaciar.
+- **Identidad por contenido.** La entrada de la tabla es (dirección
+  virtual, huella FNV-1a de las instrucciones MIPS del bloque, cuántas
+  son). El código de la N64 llega por DMA en overlays y a veces se
+  reescribe: un bloque con la misma dirección y otra huella es otra entrada,
+  y nunca hereda el puntaje de la anterior. Los gemelos por Status.FR tienen
+  los mismos bytes y comparten la entrada (los dos van calientes). La
+  consulta se hace al compilar (`salsa64_rec_profile_lookup`, índice abierto
+  por dirección; se agrega si no está, hasta 32 768 entradas) y el bloque
+  guarda su entrada en `rec->pent[id]`.
+- **Zona caliente.** Después del preámbulo, dos mitades (`hot_words` cada
+  una; `rec->hot_bytes` las dimensiona, por omisión 1 MB entre las dos en la
+  PS3, `perfil.cfg`) y después los ocho tramos fríos. Al cargar el perfil
+  se marcan calientes las entradas de mayor puntaje cuyas palabras de PPC
+  (las que ocuparon la última vez que se compilaron) suman hasta tres
+  cuartos de la zona (`salsa64_rec_profile_mark_hot`: busca el umbral de
+  puntaje por bisección, sin ordenar). Un bloque marcado se emite en la
+  mitad caliente en uso; si no cabe se emite de nuevo para la zona fría
+  (`emit_block` otra vez: las llamadas a C con `bl` o `mtctr` dependen de
+  dónde cae) y `hot_full` hace que la próxima compilación pase a la otra
+  mitad, matando lo que había en ella (`evict_segment`, como un tramo
+  frío). Las mitades nunca se desalojan por llenarse los tramos fríos. El
+  resto es igual: enlaces, invalidación, gemelos y bloques desprendidos no
+  distinguen zonas (`seg_of` numera las mitades 0 y 1 y los tramos fríos
+  desde 2).
+- **Sitios de salida de los bloques calientes.** Un bloque que se emite en
+  la zona caliente registra además cada sitio por donde sale con destino
+  fijo: salto condicional tomado (interno o final, también los que saltan
+  dentro del propio bloque), el salto final no tomado, J/JAL y el fin de
+  bloque sin salto; cada uno cuenta cuántas veces se pasa por él (cuatro
+  palabras en ese camino, con la dirección absoluta del contador; nunca en
+  el cuerpo). La vuelta de un bucle al inicio del propio bloque no se
+  cuenta (sería costo en el camino caliente; se asume tomada), ni los
+  JR/JALR (destino calculado: sin sucesor). Hasta 8 sitios por bloque y
+  8192 en total (`SALSA64_RPF_SITES`); `saltos = no` en `perfil.cfg` lo
+  apaga para medir. Al guardar, de cada condicional sale cuántas veces se
+  tomó y cuántas no (el final tiene su no tomado explícito; el interno se
+  deriva: entradas al bloque menos lo que salió por los saltos anteriores,
+  aproximado si el bloque salta a su propio interior), y de cada bloque sus
+  dos sucesores más frecuentes: el destino y la huella del bloque que había
+  ahí la última vez que se miró (lo resuelve la suma entre campos con el
+  mapa de bloques). Solo se registra; los usos están en «Siguientes pasos».
+- **Archivo.** `perfiles/<juego>.prf` (el nombre de las partidas: título
+  y CRC1). **No contiene ni un byte de código del juego ni de código
+  traducido**: direcciones virtuales, huellas FNV-1a de 64 bits de un solo
+  sentido (no se puede reconstruir el bloque a partir de ellas), cuentas y
+  banderas; por eso un perfil se puede compartir sin distribuir material del
+  juego. La caché de código generado no se persiste nunca: se vuelve a
+  traducir en cada sesión. Versión 2, big-endian, campo por campo:
+  - cabecera (32 bytes): magia `SPRF`, versión, entradas, sitios, código del
+    cartucho (4 letras de la cabecera de la ROM) y CRC1/CRC2 de esa
+    cabecera: un archivo de otro juego se rechaza;
+  - por entrada (24 bytes): dirección virtual, huella, puntaje,
+    instrucciones, palabras de PPC, banderas (depende de Status.FR; se
+    compiló con FR = 0 y con FR = 1; tiene más sitios de los registrados) y
+    cuántos sucesores siguen, y por sucesor (16 bytes): destino, huella del
+    bloque de ahí y cuenta;
+  - por sitio (16 bytes): entrada, instrucción del salto, clase (condicional
+    tomado, final no tomado, J, fin), destino, tomado y no tomado;
+  - suma de verificación FNV-1a de todo lo anterior (8 bytes).
+  Lo que no cuadra (magia, versión, identidad, cantidades, longitud, suma)
+  se descarta entero y el perfil arranca vacío: el emulador funciona igual.
+  Se escribe al cerrar el juego (también al volver al menú) y cada 2 min si
+  hubo cuentas nuevas, por trozos de 512 entradas o sitios por vuelta del
+  hilo de presentación (nada de búferes de un megabyte ni de parar la
+  presentación; el que escribe lee `count` y `nsites` una vez y lo nuevo
+  entra en el archivo siguiente; una cuenta a medias es solo un número un
+  poco menor). Primero `.tmp` y `rename`, como las partidas. `perfil-activo`
+  y `perfil.cfg` se leen al abrir cada juego.
+- **Entre sesiones.** El puntaje guardado mezcla el del archivo con lo
+  contado: en una sesión larga (2²⁶ entradas a bloques o más: entre medio
+  minuto y un minuto de juego, Perfect Dark cuenta 1,2 M por segundo de
+  consola) lo que no se ejecutó decae a la mitad, `max(hits, (score + hits) /
+  2)`; en una corta solo puede subir, `max(score, hits)`, para que diez
+  arranques de prueba no borren lo aprendido en una partida larga. Los
+  puntajes saturan en 2³² − 1. Las cuentas de los sitios solo se suman entre
+  sesiones (sin decaimiento), saturando igual.
+- **Apagado por omisión** (decidido el 2026-10-12 con la medición de
+  abajo): sin el archivo `perfil-activo` en `/dev_hdd0/salsa64` no hay
+  tabla (se reserva con `memalign` la primera vez que se enciende, fuera del
+  bucle), no se emite el contador y no hay zona caliente: costo cero en el
+  hilo 0. Con el archivo, cuenta, guarda y coloca; `perfil.cfg` con
+  `caliente = 0` cuenta y guarda pero no coloca. En el host, `salsa64-run
+  --profile archivo` y `SALSA64_REC_HOT_KB`; las unitarias con recompilador
+  tienen zona caliente de un dieciseisavo de la caché.
+- **Resultado en la PS3** (docs/perf-log.md): juntar los 762 bloques más
+  calientes de GoldenEye en 1 MB no cambia el costo del nativo (15,5 →
+  15,8 ns por instrucción; Perfect Dark 12,7 → 12,4), y contar cuesta ~5 %.
+  Lo que manda no es dónde está cada bloque sino cuántas líneas de caché
+  toca por instrucción: ~21 palabras de PPC por instrucción MIPS en los
+  calientes (punto 2 de «Siguientes pasos»). Lo que queda del trabajo es
+  el perfil mismo: cobertura, sucesores y cuentas de los condicionales.
+
+Memoria: `hits[]` 256 KB y `pent[]` 128 KB en `struct salsa64_rec`; la
+tabla, 1 MB de entradas, 256 KB de sitios y 128 KB de índice, estática en el
+frontend (docs/memory-budget.md).
+
+La prueba `rec_counts_entries_and_places_hot_blocks` (test_rec_profile.c)
+comprueba con el recompilador que un bloque marcado cae en la zona
+caliente, que cuenta entradas y no vueltas, que el código reescrito en la
+misma dirección es otra entrada y va a la zona fría, que al morir suma su
+cuenta, y que con `hot_full` la siguiente compilación pasa a la otra mitad
+sin tocar la primera; `rec_records_exit_sites_of_hot_blocks`, que un
+condicional interno que sale del bloque registra su sitio, lo cuenta solo
+cuando se toma, resuelve su sucesor a la huella del bloque del destino y
+guarda tomado y no tomado, y que `saltos = no` no registra nada; las demás
+prueban la tabla, la mezcla, el marcado, la identidad del juego y el
+archivo (truncado, un byte cambiado, bytes de más, otro juego).
+
+#### Siguientes pasos (diseño, sin implementar)
+
+0. **Usar lo que ya registra el perfil de los bloques calientes** (sitios
+   de salida y sucesores):
+   - *Pistas estáticas de salto.* El PPE predice mal y un salto mal
+     predicho cuesta ~20 ciclos; `bc` admite los bits de predicción
+     estática (BO con `y`/`a+t`), que hoy el emisor pone con
+     `PPC_BO_*_LIKELY/UNLIKELY` por convención (salida al camino lento =
+     improbable). Con tomado/no tomado de cada condicional del perfil, el
+     condicional interno se emite con la pista que diga la cuenta (y, si la
+     cuenta dice que casi siempre se toma, invertido: el camino tomado en
+     línea y el no tomado como salida), y el salto final igual.
+   - *Sucesor probable contiguo.* Al compilar un bloque caliente cuyo
+     sucesor más frecuente (dirección + huella) no está compilado, compilar
+     el sucesor inmediatamente después en la zona caliente, y si ya está,
+     nada: el enlace es un `b` y lo que importa es que las dos piezas
+     queden en líneas y páginas vecinas. Con la huella se comprueba que el
+     sucesor que hay hoy en el destino es el del perfil.
+   - *Contar gratis, por muestreo desde el hilo 1.* El contador de cuatro
+     palabras por entrada cuesta ~5 %. Alternativa: el hilo 1, que duerme
+     el 85 % y le cuesta al hilo 0 ~0,13 ms por ms de trabajo, lee cada
+     N µs qué bloque está corriendo el hilo 0 (el código generado deja el
+     id en una palabra de `struct salsa64_cpu` solo al entrar, un `stw`:
+     o nada, si el despachador lo anota al entrar desde C y las vueltas por
+     enlace se atribuyen al último conocido) y suma una muestra a su
+     entrada: puntajes proporcionales al tiempo, no a las entradas, que es
+     lo que importa para «caliente», sin tocar el camino caliente. La
+     instrumentación de sitios y sucesores queda solo para cuando se use.
+   - *Traducción fuera del hilo de emulación.* La traducción es cálculo
+     puro (palabras MIPS de entrada, palabras PPC de salida, más el estado
+     que fija la forma del bloque: FR, segmento, palabra de la ktlb que
+     compara la entrada, opciones) y con el perfil se sabe qué bloques van
+     a correr (los calientes y sus sucesores). Dónde hacerla: ver el punto
+     1 (el hilo 1 del PPE, antes que un SPE).
+
+1. **Traducir por adelantado en el hilo 1 del PPE.** Hoy un bloque se
+   compila la primera vez que se ejecuta: al entrar a una zona nueva (Zelda
+   al cambiar de sala, DK64 al cargar un nivel) se compilan cientos de
+   bloques en los primeros campos, 7–10 µs cada uno, y el campo se va a
+   30–50 ms (tirón). Medido en la PS3 el 2026-10-12 (rama del PPE,
+   GoldenEye en la presa): el hilo 1 (presentación) duerme ~85 % del tiempo
+   y 1 ms de trabajo suyo le cuesta ~0,13 ms al hilo 0 (casi lineal hasta
+   3 ms por campo, sin salto por la L2); el 79 % del hilo 0 es código
+   nativo del recompilador. Así que el lugar natural para el trabajo de
+   fondo del JIT es el hilo 1, no un SPE (que pediría un emisor compilable
+   para SPU): traducir 100 bloques ahí cuesta ~1 ms del hilo 1 y ~0,13 ms
+   del hilo 0, contra ~1 ms del hilo 0 si los compila él.
+   - *Qué se traduce.* Cuando un DMA del PI escribe la RDRAM
+     (`salsa64_bus_rdram_written` ya avisa al recompilador para invalidar),
+     el hilo 0 recorre las entradas del perfil cuya dirección cae en
+     páginas que ese DMA pudo traer (para KSEG0, la física es la virtual
+     sin el segmento; para código mapeado, solo cuando la TLB ya traduce esa
+     página: en el refill, `salsa64_rec_x_tlb_written` sabe qué páginas
+     entran), compara la huella de lo que hay ahora en memoria con la de la
+     entrada y, si coincide, encola una petición: vpc, física, segmento,
+     FR, la palabra de la ktlb esperada y **una copia de las palabras MIPS**
+     (hasta 64), para que el hilo 1 nunca lea la RDRAM, que el hilo 0 puede
+     estar escribiendo. Índice que hace falta: las entradas del perfil
+     ordenadas por página virtual (un `uint16_t` por entrada, ordenado al
+     cargar). Se limita a las calientes o de puntaje mayor que un umbral,
+     para no gastar caché y tiempo en bloques que esta sesión no corre.
+   - *Cómo traduce el hilo 1.* Con un contexto y búferes de compilación
+     propios (hoy `static struct ctx` en rec_emit.c y `rec->buf[]`: pasan a
+     ser del contexto, ~200 KB más) y sin tocar nada vivo del recompilador:
+     ni mapa, ni enlaces, ni banderas, ni ktlb, ni ids. Lo que el emisor
+     lee hoy de `rec` son constantes de la sesión (rutinas del preámbulo,
+     direcciones de `blocks[]`, `hits[]` y los sitios del perfil, opciones)
+     y el estado de la petición. Entrega las palabras PPC con sus
+     correcciones (`fixups`) sin resolver, porque la base en la caché la
+     decide el hilo 0 al instalar (y con ella `calls_near`: o se traduce
+     siempre con `mtctr` para lo encolado, o se resuelven las llamadas al
+     instalar como el resto de los fixups).
+   - *Cómo instala el hilo 0.* Entre campos (o en el despachador cuando
+     va sobrado): toma un bloque terminado de la cola (un productor, un
+     consumidor, barreras `lwsync` como en lib/spukit), comprueba que la
+     huella de la memoria sigue siendo la de la petición y que la página
+     traduce igual, pide id y lugar (`make_room`), resuelve los fixups con
+     la base, copia, `salsa64_rec_sync` (dcbst/sync/icbi/isync, en el hilo
+     que escribió) y registra como `new_block`. Si la huella cambió, se
+     descarta. Todo lo que puede chocar con la invalidación pasa por el
+     hilo 0, así que no hay invalidación concurrente: un bloque encolado no
+     existe para el recompilador hasta que se instala.
+   - *Riesgos.* (1) Invalidación concurrente: resuelta con la copia de las
+     palabras y la comprobación al instalar; después de instalado, la
+     invalidación normal. (2) Enlaces: solo el hilo 0 parchea; un bloque
+     instalado se enlaza cuando se ejecuta, como hoy. (3) Caché de
+     instrucciones: el `icbi` lo hace el hilo 0 sobre código que nadie
+     ejecuta todavía; nunca se escribe código que el hilo 0 pueda estar
+     ejecutando. (4) Costo por SMT en el hilo 0: 0,13 ms por ms del hilo 1;
+     limitar las traducciones por campo. (5) Memoria: contexto y búferes
+     del hilo 1 y la cola (unas decenas de peticiones de hasta 64 palabras).
+   - *Primer uso:* la misma traducción de hoy, solo movida de hilo, con la
+     cola y la validación al instalar; quita los tirones de entrar a zonas
+     nuevas. Es el paso previo al siguiente.
+
+1b. **JIT por niveles.** Con la traducción de fondo en pie, el hilo 0
+   traduce rápido (nivel 0: lo de hoy, o incluso sin superbloques ni FPU en
+   línea para los fríos) y el hilo 1 retraduce los bloques calientes
+   (los del perfil, y los que pasen un umbral de `hits[]` en la sesión) con
+   lo que cuesta tiempo de compilación: asignación de registros entre
+   bloques (el sucesor probable compilado sabiendo qué registros deja el
+   predecesor en el PPE, sin escribir ni recargar `cpu->gpr`: trazas de
+   dos o tres bloques), pistas de salto y sucesor contiguo del punto 0,
+   desenrollado de copias. La versión nueva se instala en otro lugar de la
+   zona caliente y se **cambia la entrada de forma atómica**: la palabra
+   `blocks[id].code` (32 bits, una escritura) y, al deshacer y rehacer los
+   enlaces entrantes como en `unlink_all`, el `b` de cada sitio (otra
+   escritura de 32 bits, con `icbi`); la versión vieja sigue siendo válida
+   para quien ya esté en ella y muere con el tramo. Riesgos: los mismos de
+   arriba más (6) dos versiones del mismo bloque vivas a la vez (como los
+   gemelos por FR: ids distintos, mismos bytes, `kill_block` tiene que matar
+   a las dos), y (7) los contadores (`hits[id]`, sitios del perfil): la
+   versión nueva hereda la entrada del perfil y los sitios por (k, clase,
+   destino), así las cuentas siguen.
+2. **Optimizar más fuerte lo caliente y más compacto lo frío.** Hoy cada
+   bloque se emite igual.
+
+   *De dónde sale la expansión* (medido el 2026-10-12 en qemu con el volcado
+   de bloques de GoldenEye hasta la presa, `SALSA64_REC_DUMP=1`, 14 826
+   bloques, 17,9 MB de PPC; el perfil de la PS3 de la primera sesión
+   coincide: 24 773 bloques y el 90 % del puntaje en 1098). Los 25 bloques
+   más ejecutados (16 % de las entradas): 242 instrucciones MIPS en 5166
+   palabras, **21,3 por instrucción: 9,9 en la sección caliente** (la que
+   se ejecuta) **y 11,4 en la fría** (caminos lentos y salidas, que solo
+   ocupan líneas vecinas); en todo el volcado la caliente es el 44 % (media
+   317 palabras por bloque, 140 calientes; mediana 156, p90 800). Casi
+   todo el código caliente del juego es mapeado por la TLB (0x7F… y
+   0x70…), y sus datos también.
+   - Un bloque de 2 instrucciones (7001F7E0: SQRT.S y JR, 89 palabras, 56
+     calientes): la entrada son 18 palabras (comprobación de la página de
+     la ktlb 5, del evento 3, de CU1 4, el contador del perfil 4, la
+     recarga de `ra` y el destino del JR 2), la SQRT.S en línea 35
+     (compuerta de FCR31 5, clasificación del operando 8, `fsqrt`, `frsp` y
+     el inexacto 10, resultado y FCR31 12), la salida 3; la sección fría
+     (33) es el camino al intérprete (15 de llamada con `li64` del pc y
+     9 de revisión al volver) y tres salidas de 3.
+   - Un bloque de 53 instrucciones con 26 accesos a memoria (7F0BA3B8:
+     1365 palabras, 487 calientes): la sección caliente son 9,2 palabras
+     por instrucción (ALU 51 %, saltos 13 %, estado del CPU por r31 11 %,
+     comparaciones 11 %, constantes 9 %, RDRAM 5 %); la fría (878) son
+     **saltos y llamadas 31 %, constantes 30 % y escrituras de estado
+     28 %**: por cada acceso a memoria mapeada, ~6 palabras de vuelta de
+     la rutina de la ktlb y ~30 del camino lento (`li64` del pc, los
+     argumentos, la llamada y la escritura de los registros sucios antes de
+     ella). Es decir, **cada acceso a datos mapeados cuesta ~10 palabras
+     calientes y ~35 frías**.
+   - La categoría «contador del perfil» son 4 palabras por bloque (0,3 por
+     instrucción con 12 por bloque): no es la palanca.
+
+   Palancas, por tamaño: (a) un solo camino lento por bloque en vez de uno
+   por acceso (el índice del acceso en un registro y la rutina compartida
+   deriva pc y argumentos: la fría de un bloque con muchos accesos baja a
+   un tercio); (b) la escritura de registros sucios antes de un camino
+   lento como máscara en un registro y un bucle en el preámbulo, en vez de
+   `std` por registro en cada sitio (hoy 28 % de la fría de ese bloque);
+   (c) para los juegos de datos mapeados, el camino rápido de la ktlb en
+   línea antes que el de KSEG0 (el perfil puede anotar por acceso si fue
+   KSEG0 o mapeado, como los sitios de salida); (d) en la entrada, fundir
+   las comprobaciones (página, evento, CU1) en menos saltos. Con la clase
+   conocida al compilar (y, con el JIT por niveles, con el hilo 1 pagando
+   el tiempo de lo caliente):
+   - Frío: sin superbloques ni saltos internos (menos salidas duplicadas y
+     caminos fríos), sin FPU en línea (al intérprete con una llamada: ~55
+     palabras menos por operación), sin camino rápido de datos mapeados
+     (la rutina compartida de `ktlb` en vez del código en línea), y los
+     registros fijos sin préstamo. Meta: la mitad de las palabras (hoy
+     media 248 por bloque), que es la mitad de L2 y de páginas que un
+     bloque frío roba al caliente cuando se ejecuta una vez.
+   - Caliente: lo de hoy más lo que hoy no compensa en general porque
+     cuesta tamaño: desenrollar los pares LWL/LWR y las copias, más
+     registros fijos entre bloques (s0, at, t6: 26–31 % de las ejecuciones
+     en GoldenEye), y las rutinas de libultra por huella (HLE de funciones:
+     matrices, trigonometría, copias) solo donde el perfil diga que pesan.
+   - La clase se decide con el perfil cargado; un bloque sin entrada se
+     compila como ahora. Primero medir en la PS3 cuánto baja el tamaño de
+     los fríos y si el nativo por instrucción se mueve; si la ganancia de
+     esta rama es chica, el límite es otro (ERAT: una zona caliente que
+     quepa en 64 páginas de 4 KB, 256 KB, podría pesar más que una de 1 MB).
+3. **Separar las rutas frías de los bloques calientes** (opcional): las
+   secciones frías (caminos lentos, salidas pendientes) van hoy pegadas al
+   cuerpo, a `bc` de ±32 KB. Para ponerlas en otra zona hacen falta
+   trampolines (`bc` a un `b` lejano) o `bc` invertidos sobre un `b`:
+   una palabra y un salto más por camino frío, a cambio de que las líneas
+   de 128 bytes del cuerpo no arrastren código que casi nunca corre. Solo
+   si la medición de la zona caliente muestra que el tamaño del cuerpo
+   manda.
+
 ## Pruebas en el host
 
 RPCS3 no ejecuta código generado (docs/rpcs3.md). En la Mac se compila el
@@ -797,5 +1115,7 @@ compiler error: Segmentation fault"; repetir compila bien
 | 2026-10-11 | FPU residente (9d1eba0): GoldenEye con `goldeneye-dam.pad` 7,5 G ciclos en `--lockstep` | qemu-ppc64 | **sin diferencias**, 283,6 M salidas comparadas, 16 606 bloques (17 031 enganchados de vuelta) |
 | 2026-10-11 | Saltos internos con destino dentro del bloque y r26 para el bloque (árbol final, 15d6724) | qemu-ppc64 | unitarias 365/365 con y sin fijos; nemu64-test 433 fallas y `--lockstep` sin diferencias (la primera versión dejaba basura en los registros escritos por las instrucciones saltadas: el lockstep lo encontró en el bloque 80014c84); vitest OK; Perfect Dark 300 M sin diferencias; GoldenEye hasta la presa: ejecuciones de bloques 643 M → 509 M en 128 s (perfil) y `--lockstep` 7,5 G ciclos **sin diferencias** (204 M salidas comparadas, 14 860 bloques, 1 vaciado y 6 desalojos con la caché de 24 MB del host); Perfect Dark 3 G ciclos (intro) **sin diferencias** (4 desalojos) |
 | 2026-10-12 | Gemelos por Status.FR en vez de vaciar la caché (ad18cce) | qemu-ppc64 | unitarias 426/426 en los cinco modos (con `fr_switch_keeps_code_cache`); nemu64-test 433 fallas (línea base), vitest, estados y `--lockstep` de nemu64-test y vitest sin diferencias; Perfect Dark 3 G ciclos **sin diferencias** (20 971 salidas por CU1: libultra habilita la FPU por excepción); GoldenEye hasta la presa 7,5 G ciclos **sin diferencias** (14 825 bloques, 0 vaciados, 6 desalojos, 2 h 0 min); Paper Mario 1,9 G ciclos sin diferencias. DK64 en qemu: 4 173 → 0 vaciados |
+| 2026-10-12 | Perfil persistente y zona caliente (4809ec2; el lockstep de GoldenEye con el binario de ae46fb7, sin sitios de salida) | qemu-ppc64 | unitarias 440/440 en plain, pin y caché chica (suite `perfil`); nemu64-test 433 fallas con perfil nuevo y cargado, también con caché de 3 MB y zona de 256 KB (rotaciones de mitad); `--lockstep` **sin diferencias** en nemu64-test (las dos cachés), vitest y Perfect Dark 3 G ciclos con el perfil cargado (624 calientes, 1367 sitios); GoldenEye hasta la presa 7,5 G ciclos con el perfil cargado (692 calientes, 1 rotación) **sin diferencias** (1 h 20 min) |
+| 2026-10-12 | Formato 2 del perfil con sitios de salida (4809ec2, el árbol final del núcleo) | qemu-ppc64 | GoldenEye hasta la presa 7,5 G ciclos en `--lockstep` con el perfil cargado (692 calientes, 1483 sitios de salida contando en los caminos que salen) **sin diferencias** (1 h 26 min) |
 
 Rendimiento: solo en la PS3 real (docs/perf-log.md, «Recompilador»).
