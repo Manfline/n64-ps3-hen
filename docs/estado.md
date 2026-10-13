@@ -1,5 +1,77 @@
 # Estado
 
+## 2026-10-12 (noche) — Quitarle trabajo al PPE: medición del hilo 1 y tarea JPEG en un SPE (rama `determined-grothendieck`, paquete SLSA00103 «Salsa64 PPE»)
+
+Pasos 1 y 2 de «Quitarle trabajo al PPE» (entrada del 2026-10-11). Medido en
+la PS3 real (4ca4c2a, escala 5×; detalle en docs/perf-log.md, «Quitarle
+trabajo al PPE: el hilo 1 y la tarea JPEG»).
+
+**Corrección:** la tarea JPEG de Zelda no corría en el hilo de presentación
+sino en el de **emulación** (síncrona, dentro de `salsa64_rsp_start`): sus
+68 ms por sala frenaban directamente al CPU emulado.
+
+Hecho:
+- **Medición del hilo 1** (siempre encendida, solo contadores `mftb`;
+  docs/hilos-ppe.md): cada 5 s, cuánto estuvo despierta presentación por
+  campo emulado, desglosado (traducción, copias a la RDRAM, texturas en el
+  PPE, presentar, otros; dormido en barreras del RSX y en el flip), y los
+  campos de la emulación agrupados por cuánto se solaparon, con ns por ciclo
+  emulado. Diagnóstico `carga-hilo1` («A B [KB]»): trabajo de mentira en
+  fases de 0, A y B µs por campo presentado, para el A/B en la misma
+  corrida.
+- **HLE JPEG en enteros** (`src/rsp/jpeg/jpeg.c`): IDCT con constantes Q15
+  (filas con 2 bits de fracción recortadas a 16 bits, columnas al
+  dieciseisavo) y color en Q14. El SPE redondea los flotantes de simple
+  precisión hacia cero: con flotantes el SPE y el PPE no podían dar lo
+  mismo. Contra el microcódigo real (casa de Link con partida nueva, 150
+  tareas): 99,06 % de los píxeles iguales (con flotantes, 99,03 %).
+- **La tarea en un SPE libre** (`src/spu/jpeg`, 8,7 KB de código; backend
+  `src/platform/ps3/jpeg_spu.c` sobre lib/spukit): termina por sondeo, como
+  una gráfica (`salsa64_jpeg_backend` en `core/rcp.h`). Prueba del arranque:
+  dos tareas sintéticas (`rsp/jpeg/selftest.c`, con coeficientes que
+  saturan y desbordan) en el SPE y en el PPE, comparadas entre sí y con el
+  CRC que fija la prueba del host. Con `SALSA64_DATA_DIR/jpeg-ppe`, la tarea
+  en el PPE (diagnóstico).
+- `salsa64-run`: `SALSA64_JCHECK_DUMP=archivo` (con `--lle-check-jpeg`)
+  vuelca la entrada y la salida del microcódigo para probar otra IDCT sin
+  correr el juego. El pad de partida nueva (`docs/pads/zelda-pausa-nueva.pad`)
+  ya no llega a la casa con el build de hoy (se queda escribiendo el
+  nombre): el nuevo es `docs/pads/zelda-casa-nueva.pad`.
+
+Medido (PS3 real):
+- **Hilo 1:** GoldenEye en la presa, despierto 2,88 ms por campo emulado
+  (15,8 %; 3,2–4,4 en las ventanas a 45–50 campos/s), de ellos traducción
+  1,81 y copias 0,43; Perfect Dark 1,6–2,2 (la escena del desenfoque:
+  copias 1,2–1,5 y barreras 1,1–1,8); Zelda 1,1–1,3; SM64 ~1,0.
+- **Costo para la emulación:** ~0,13 ms por ms de trabajo del hilo 1 (A/B en
+  la presa: +0,10 ms con 0,80 ms de carga por campo, +0,37 ms con 2,63),
+  casi en línea; los ns por ciclo no suben con el solape natural. Hoy, ~0,4
+  de 15,5 ms por campo en la presa (2,5 %).
+- **Tarea JPEG**, por sala (75 tareas, 300 macrobloques): hilo de emulación
+  67,8 ms (flotantes) → 29–30 ms (enteros en el PPE) → **0,34–0,38 ms (SPE)**.
+  El SPE tarda 41,9 ms y el juego espera cada tarea: la emulación duerme en
+  los sondeos y el **tirón casi no cambia** (peor campo 37–39 → 32–36 ms con
+  el SPE, 30–31 con el PPE en enteros; ventanas de 100 campos 57,3 → 59,3–60,0).
+  El autor no nota diferencia. Prueba del arranque: SPE = PPE = host
+  (EEC26FE1).
+
+Verificado: `test-host` 436/436 (Docker, ASan/UBSan) y nativo; `test-roms`;
+`test-phase2` en RPCS3 (menú con cierre limpio y el SPE de la tarea JPEG
+detenido); `tools/build.sh` sin avisos; `--lle-check-jpeg` en el host.
+
+Decisión y pendiente:
+- **Paso 4 (traducción al RSX en un SPE): no por CPU.** Ganaría ~0,25 ms por
+  campo en la presa (~+0,7 campos/s en lo peor) con un rediseño grande; lo
+  que limita es el código nativo del recompilador (79 % del hilo 0).
+- [ ] **JPEG en el SPE, vectorizado**: la IDCT con multiplicar y sumar de 16
+      bits en 4 carriles (mismo resultado, lo valida la prueba del arranque)
+      debería bajar de 41,9 a 3–5 ms por sala, y con eso el tirón (la
+      espera del juego). Mientras tanto, el SPE escalar deja libre el hilo 0
+      pero no acorta la carga.
+- Receta de la casa de Link en el host: `docs/pads/zelda-casa-nueva.pad`
+  (partida nueva, `--save-dir` a una carpeta vacía; Link despierta en la
+  casa hacia el campo 14 300, 150 tareas JPEG hasta el 15 500).
+
 ## 2026-10-12 (noche) — v0.2.0 publicada y censo de compatibilidad
 
 Publicada la **v0.2.0** (pre-release, etiqueta en ad72ebf, con

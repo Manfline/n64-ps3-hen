@@ -28,9 +28,97 @@ antes, después, notas.
 | 2026-10-11 | 3b95776 | **HLE de la tarea JPEG de Zelda OoT** en la PS3, dos salas (tienda Kokiri y casa de Link) | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00091 «Salsa64 Kokiri», respaldo del usuario | antes: fondo sin dibujar (malla en colores planos) | **67,8 y 67,3 ms del PPE por sala**; ventana de la carga 57,3–57,6 campos/s, peor campo 37–39 ms de emulación | ~110 veces lo de la Mac: flotantes y conversiones a entero por memoria en el PPE. Se queda en el PPE (una vez por sala, durante la transición); pendiente pasarlo a punto fijo |
 | 2026-10-11 | (rama fervent-hodgkin) | **HLE de la tarea JPEG de Zelda OoT** (fondos prerrenderizados), una sala: 75 tareas, 300 macrobloques | Mac (salsa64-run nativo, Apple Silicon) | antes: las tareas terminaban sin hacer nada (fondo basura) | **0,61 ms por sala** en el hilo del CPU, una vez al cargarla | Corre en el PPE (`core/rsp.c`); IDCT separable en flotante sin optimizar. El frontend escribe «JPEG: N tareas, M macrobloques en X ms del PPE» al terminar cada tanda: con esa medida se decide si se queda en el PPE o va a un SPE. El fondo se copia en el SPE 0 (40 tiras por cuadro, reutilizadas por la caché de texturas) |
 
+| 2026-10-12 | 479c0e7 → 4ca4c2a | **Tarea JPEG de Zelda OoT en un SPE** (HLE en enteros), tres cargas de sala prerrenderizada | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00103 «Salsa64 PPE», respaldo del autor, escala 5× | flotantes en el PPE (SLSA00091, 3b95776): **67,3–67,8 ms del hilo de emulación por sala**; peor campo 37–39 ms; ventana de 100 campos 57,3–57,6 campos/s | **SPE: 0,34–0,38 ms del hilo de emulación** (el SPE tarda 41,9 ms, 0,56 ms la tarea más larga); peor campo 31,9–36,4 ms; ventanas 59,3–59,9. Enteros en el PPE (`jpeg-ppe`): 29,0–30,2 ms del hilo 0, peor campo 30,2–30,8 (43,5 la primera), ventanas 59,7–60,0 | El tirón casi no cambia (el autor no nota diferencia): el juego espera cada tarea del RSP, así que mientras el SPE decodifica la emulación duerme en los sondeos (~36 ms por sala). Lo que queda es la velocidad del SPE (140 µs por macrobloque, escalar). Prueba del arranque en la PS3: SPE = PPE = host (CRC EEC26FE1). Ver «Quitarle trabajo al PPE» abajo |
+| 2026-10-12 | 2241c32 → 4ca4c2a | **Cuánto le quita el hilo de presentación a la emulación** (medición, sin cambio de rendimiento) | PS3 real (mismo equipo y app), respaldos del autor, escala 5× | — | GoldenEye en la presa: hilo 1 despierto **2,88 ms por campo emulado (15,8 %)**, de ellos traducción 1,81. A/B con carga de mentira en la misma corrida: **~0,13 ms de emulación perdidos por ms del hilo 1** (0,80 ms → +0,10 ms; 2,63 ms → +0,37 ms). Costo actual ≈ 0,4 de 15,5 ms por campo (2,5 %) | Pasar la traducción al RSX a un SPE ganaría ~0,25 ms por campo (~+0,7 campos/s en lo peor de la presa): no vale la pena por CPU. Ver «Quitarle trabajo al PPE» abajo |
 | 2026-10-12 | 8c876ac → ad18cce | **Donkey Kong 64**: la caché del recompilador ya no se vacía al cambiar Status.FR (gemelos por FR) | Mac, qemu-ppc64 (`salsa64-run --rec`, 16 s de consola, respaldo del autor) | 236 s de reloj, 1,2 MIPS; 1 284 166 bloques, 4 173 vaciados (1 340 bloques compilados por campo) | **7,5 s (×31), 38 MIPS; 8 867 bloques, 0 vaciados, 9 bloques por campo** | DK64 cambia FR en cada cambio de hilo (~260/s). 256 bloques dependen de FR, 0 gemelos |
 | 2026-10-12 | 8c876ac → ad18cce (PS3: + main da2adcd) | **Donkey Kong 64** en el frontend: intro, isla y juego, ~2 min | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00102 «Salsa64 DK64», respaldo del autor | 12,0–13,6 campos/s (20–23 %), 1,4–1,6 MIPS, emulación 65–75 ms por campo; 445 864 bloques y 959 vaciados en 30 s | **59,6–60,0 campos/s (100 %)**, 6,8–29,8 MIPS, emulación 4,0–6,5 ms por campo; 11 908 bloques, **0 vaciados**, 4 desalojos en 2 min | Una ventana a 47,9 al cargar la isla. 756 bloques dependen de FR, 0 gemelos. Zelda y SM64 al 100 % con el mismo paquete (un vaciado cada uno: cargar un estado) |
 | 2026-10-11 | e0aa556 (v0.1.0) → c17e790 | **Perfect Dark, intro (azotea de dataDyne con desenfoque de movimiento)**: decodificar solo lo que muestrea cada TEXRECT y decodificación de 4 en 4 texels | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00097 «Salsa64 texturas», respaldo del usuario, sin tocar el control | 50,0–51,1 campos/s; HLE en el SPE 39,7–61,4 ms por tarea, de ellos decodificar 36,8–58,4 ms (90–143 texturas por tarea); el CPU dormía 28–40 ms por tarea esperando al SPE | **59,8–60,3 campos/s; SPE 3,3–5,0 ms por tarea (×11–17), decodificar 0,48–0,65 ms (133–181 texturas, ×77–94)**; dormida 3,0–5,5 ms | Antes a 4× automática, después a 1× pedida (la HLE no depende de la escala). Zelda, GoldenEye y Conker sin cambios. La escena siguiente (campos 4300–5500) va a 45–53 campos/s por el CPU emulado (41–63 MIPS, 18–22 ms por campo; en las ventanas más lentas casi no espera al SPE). Ver «Texturas que cambian en cada cuadro» abajo |
+
+## Quitarle trabajo al PPE: el hilo 1 y la tarea JPEG (2026-10-12)
+
+PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00103 «Salsa64 PPE»
+(4ca4c2a), respaldos del autor (NTSC), escala 5×, una sola ejecución con el
+menú: GoldenEye en la presa sin carga de mentira, la intro de Perfect Dark
+sin tocar el control, GoldenEye otra vez con `carga-hilo1` («1000 3000»),
+SM64 con la carga, Zelda con la tarea JPEG en el SPE y Zelda con
+`jpeg-ppe`. Log `build/ps3-logs/ppe-hilo1-jpeg-2026-10-12.log` (fuera de
+git). Método en docs/hilos-ppe.md, «Cuánto le quita el hilo de presentación
+a la emulación».
+
+### Trabajo del hilo 1 (ms por campo emulado, media de las ventanas de 5 s)
+
+| Escena | Despierto (% del tiempo) | Traducción | Copias a la RDRAM | Presentar | Otros | Dormido en barreras del RSX | Emulación (hilo 0) |
+|---|---|---|---|---|---|---|---|
+| GoldenEye, presa (30 ventanas) | **2,88 (15,8 %)** | 1,81 | 0,43 | 0,11 | 0,52 | 0,01 | 15,5 ms, 55,8 campos/s (mín. 45,2) |
+| GoldenEye, ventanas a 45–50 campos/s (8) | 3,2–4,4 (15–22 %) | 2,1–2,9 | 0,33–0,48 | 0,10 | 0,45–1,37 | 0–0,02 | 19,7–21,8 ms |
+| Perfect Dark, intro entera (19 ventanas) | 2,21 (12,6 %) | 0,82 | 0,52 | 0,17 | 0,34 | 0,37 | 13,3 ms |
+| Perfect Dark, escena del desenfoque (t 214–229 s) | 3,3–4,5 (20–27 %) | 0,46–0,51 | **1,21–1,54** | 0,28–0,33 | 0,24–0,34 | **1,06–1,83** | 7–12 ms (60 campos/s) |
+| Perfect Dark, segunda escena (CPU; 5 ventanas) | 1,64 (8,2 %) | 0,73 | 0,33 | 0,15 | 0,43 | 0,01 | 18,3 ms, 50,0 campos/s |
+| SM64 (sin contar la carga) | ~0,97 | 0,24 | 0,19 | 0,13 | 0,40 | 0,01 | 4,8 ms |
+| Zelda (dos vueltas, 21 ventanas) | 1,1–1,3 (7 %) | 0,48–0,54 | 0,12–0,15 | 0,17–0,25 | 0,20–0,32 | 0–0,13 | 7–8 ms |
+
+Texturas decodificadas en el PPE: 0 en todas. La traducción por tarea, a
+5×, va a 2,3–3,6 ms en la presa (1,0–3,7 en Zelda). El resto del tiempo el
+hilo 1 duerme (semáforo y flip anterior: 4–13 ms por campo).
+
+### Lo que le cuesta a la emulación
+
+**A/B en la misma corrida** (GoldenEye en la presa con `carga-hilo1`,
+fases de medio segundo; 24 ventanas, ~2 200 campos por fase):
+
+| Fase | Carga dentro del campo | Emulación por campo | ns por ciclo emulado | Diferencia |
+|---|---|---|---|---|
+| 0 µs | 0 | 14,75 ms | 17,82 | — |
+| 1000 µs | 0,80 ms | 14,85 ms | 17,87 | +0,10 ms (+0,3 % ns/ciclo) |
+| 3000 µs | 2,63 ms | 15,12 ms | 18,48 | +0,37 ms (+3,7 % ns/ciclo) |
+
+**Pendiente: ~0,13 ms de emulación por ms de trabajo del hilo 1** (0,125 y
+0,14), casi en línea en ms por campo; con 3 ms de carga los ns por ciclo
+suben algo más (la L2 compartida), sin salto. El hilo 0 está detenido la
+mayor parte del tiempo (unos 47 ciclos del PPE por instrucción emulada,
+docs/estado.md): el otro hilo usa los ciclos que él deja libres.
+
+**Solape natural** (campos sin carga, la misma presa): los ns por ciclo no
+suben con el solape (0,1–1 ms: 18,01; 1–3 ms: 17,71; ≥ 3 ms: 17,55), de
+acuerdo con una pendiente chica. En SM64 la medición no dice nada (89 % en
+bucles de espera: la carga cae en la espera, +0,08–0,12 ms por campo).
+
+**Costo actual del hilo 1** (pendiente × trabajo): GoldenEye en la presa
+≈ 0,38 de 15,5 ms por campo (2,5 %); en las ventanas pesadas ≈ 0,5 de 21
+(2,3 %); Perfect Dark, segunda escena, ≈ 0,21 de 18,3 (1,2 %).
+
+**Conclusión para el paso 4 (traducción al RSX en un SPE): no por CPU.**
+Moverla entera a un SPE devolvería ~0,25 ms por campo en la presa (1,8 ms
+de traducción × 0,13), del orden de +0,7 campos/s en lo peor (45 → 46), y
+pide un rediseño grande (rsxkit es de un solo hilo, los fragment programs se
+generan y cachean en el PPE). Lo que limita es el código nativo del
+recompilador (79 % del hilo 0 en la presa).
+
+### Tarea JPEG de Zelda (salas prerrenderizadas)
+
+Tres cargas de sala con el JPEG en el SPE y cuatro con `jpeg-ppe` (la
+misma ruta: la tienda Kokiri y la casa de Link). Cada carga son 75 tareas y
+300 macrobloques.
+
+| Variante | Hilo de emulación por sala | Otro procesador | Peor campo de la tanda | Ventana de 100 campos |
+|---|---|---|---|---|
+| Flotantes en el PPE (2026-10-11, SLSA00091) | 67,3–67,8 ms | — | 37–39 ms | 57,3–57,6 campos/s |
+| Enteros en el PPE (`jpeg-ppe`) | **29,0–30,2 ms** | — | 30,2–30,8 ms (43,5 la primera) | 59,7–60,0 |
+| Enteros en el SPE | **0,34–0,38 ms** (0 esperas, ~360 sondeos) | SPE 41,9 ms (0,56 ms la tarea más larga) | 31,9–36,4 ms | 59,3–59,9 |
+
+- El hilo 0 queda libre (×180 contra los flotantes), pero **el tirón casi
+  no cambia** (el autor no nota diferencia; la primera salida de la casa,
+  «un pelín más rápida» con el SPE): el juego espera cada tarea del RSP
+  antes de mandar la siguiente, así que mientras el SPE decodifica la
+  emulación duerme en los sondeos (36 ms por sala). Lo que pesa es la
+  duración de la decodificación, en el procesador que sea.
+- El SPE escalar va a 140 µs por macrobloque (más lento que el PPE en
+  enteros, 100 µs): cargas de 16 bits desde bytes, productos de 16 × 16
+  uno por uno. La IDCT vectorizada (multiplicar y sumar de 16 bits en 4
+  carriles, el mismo resultado byte a byte que valida la prueba del
+  arranque) debería bajarlo a 3–5 ms por sala.
+- Prueba del arranque en la PS3 real: SPE, PPE y host dan el mismo CRC
+  (EEC26FE1) en los seis arranques, 3,5 ms.
 
 ## Pila del SPE 0 (2026-10-12)
 

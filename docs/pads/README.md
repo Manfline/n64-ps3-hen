@@ -41,6 +41,13 @@ estado vale hasta el siguiente, por eso cada pulsación lleva su suelta `-`):
   cae en la tarea del campo 16107 (`--trace-fb`); con `-c 26500000000`
   alcanza hasta el campo ~16900. La partida que deja en `--save-dir`
   sirve para repetirlo sin el nombre (los campos no cambian).
+- `zelda-casa-nueva.pad` (2026-10-12): Zelda OoT con partida nueva
+  (`--save-dir` a una carpeta vacía), como `zelda-pausa-nueva.pad` pero con
+  los tiempos del build de hoy: título con START, ranura 1, nombre «A»,
+  START hasta END y A, la ranura se abre con A y desde el campo 2000 A cada
+  40 campos por el intro. Link despierta en su casa (sala prerrenderizada)
+  hacia el campo 14 300: con `--lle-check-jpeg`, 150 tareas JPEG hasta el
+  15 500.
 - `mk64-luigi.pad`: Mario Kart 64: START en el 900, A cada 150 campos por
   los menús (1P, Mario GP, 50cc, Mario, Mushroom Cup, Luigi Raceway) y
   desde el 2650 A sostenida con el stick a la derecha en tres tramos: la
