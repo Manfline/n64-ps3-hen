@@ -72,10 +72,20 @@ def main():
         else:
             prec[p] += 1
         if verbose:
-            lines.append("%4d %-5s %s → %s%d.%s%s" % (n, name, ("fp32", "fp16", "fx12", "?")[p],
-                                                "H" if (w[0] >> 7) & 1 else "R", (w[0] >> 1) & 0x3F,
-                                                "".join(c for b, c in enumerate("xyzw") if (w[0] >> (9 + b)) & 1),
-                                                " sat" if w[0] >> 31 else ""))
+            srcs = []
+            for k in (1, 2, 3):
+                t = w[k] & 3
+                sw = "".join("xyzw"[(w[k] >> (9 + 2 * c)) & 3] for c in range(4))
+                neg = "-" if (w[k] >> 17) & 1 else ""
+                srcs.append(neg + ("R%d" % ((w[k] >> 2) & 0x3F) if t == 0 else "in" if t == 1 else "c") + "." + sw)
+            # Valor absoluto: bit 29 de la palabra 1 (fuente 0) y bit 18 de
+            # las palabras 2 y 3 (fuentes 1 y 2), como en nvfx_shader.h.
+            absf = [(w[1] >> 29) & 1, (w[2] >> 18) & 1, (w[3] >> 18) & 1]
+            srcs = ["|%s|" % x if a else x for x, a in zip(srcs, absf)]
+            lines.append("%4d %-5s %s → %s%d.%s%s   %s" % (n, name, ("fp32", "fp16", "fx12", "?")[p],
+                                                     "H" if (w[0] >> 7) & 1 else "R", (w[0] >> 1) & 0x3F,
+                                                     "".join(c for b, c in enumerate("xyzw") if (w[0] >> (9 + b)) & 1),
+                                                     " sat" if w[0] >> 31 else "", ", ".join(srcs)))
         if has_const:
             const_at[ucode_off + i + 16 - ucode_off] = True
         end = w[0] & 1

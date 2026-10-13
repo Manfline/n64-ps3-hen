@@ -60,11 +60,50 @@ Lo que queda distinto del original:
 - El ruido del cuadro (`FRAME_PHASE`) va en 0, como en los presets: el
   patrón del compuesto no se mueve.
 
-La tesela de la máscara se verificó en el host contra el cálculo original
-del punto más cercano en cada píxel de pantallas enteras
-(`tests/unit/test_crt.c`). `tools/crt-ref.c` es el filtro original píxel
-por píxel en doble precisión, para comparar contra una captura de la
-pantalla con filtro (`capturas-pantalla`).
+## Verificación
+
+- La tesela de la máscara se verificó en el host contra el cálculo original
+  del punto más cercano en cada píxel de pantallas enteras
+  (`tests/unit/test_crt.c`).
+- `tools/crt-ref.c` es el filtro original píxel por píxel en doble
+  precisión; con el sufijo `-rsx` (`mascara-rsx`…) hace el resplandor como
+  el RSX (rejilla con la luz lineal), para separar esa aproximación del
+  resto. Se compara contra la pantalla con filtro (`capturas-pantalla`, o
+  los `filtro-<clave>-<alto>-pantalla.ppm` que la app guarda la primera vez
+  que dibuja cada filtro en cada resolución, con la imagen que le entró en
+  `-fuente.ppm`):
+
+      cc -O2 -o build/crt-ref tools/crt-ref.c -lm
+      build/crt-ref mascara-rsx fuente.ppm 1280 720 ref.ppm
+      build/crt-ref compara ref.ppm pantalla.ppm diferencia.ppm
+
+En RPCS3 (gfxtest como juego, escala 1×, 720p; 2026-10-13), diferencia por
+canal en el rectángulo de la imagen:
+
+| Filtro | contra el original | contra el original con el resplandor del RSX |
+|---|---|---|
+| Máscara de sombra | promedio 0,54/255, máximo 18 | 0,03, máximo 1 (100 % a 1 o menos) |
+| Cable RGB | 0,65, máximo 43 | 0,13, máximo 36 (98,5 % a 1 o menos) |
+| Cable S-Video | 0,74, máximo 65 | 0,26, máximo 64 (96,5 %) |
+| Cable compuesto | 0,72, máximo 45 | 0,25, máximo 45 (96,6 %) |
+
+Lo que queda en los cables viene de interpolar las muestras de la señal
+entre columnas (bordes nítidos); en la máscara, nada más que el
+resplandor. RPCS3 traduce el microcódigo del RSX a GLSL: la PS3 real puede
+diferir en el filtrado de fp16 y el modo BORDER; la app lo comprueba sola la
+primera vez que dibuja cada filtro (el log dice «comprobación en el RSX»).
+
+## Errores de cgcomp que se cruzaron
+
+Los filtros sacaron a la luz tres errores del ensamblador de cgcomp (y uno
+de la API de PSL1GHT), anotados en `docs/rsx-notes.md`: los códigos de
+condición (`?:`) no se ensamblan bien; el color de salida se escribe en R0
+aunque Cg lo use de temporal; y `|R0.z|` sale como `|R0.zxxx|`. Además Cg
+corre en silencio y `lerp(1.0, vector, k)` trunca el vector. El build de los
+filtros (`FPO_CHECK` en mk/ps3.mk) corrige en el ensamblador el choque del
+color de salida y el valor absoluto antes de reensamblarlo
+(`tools/cg-salida.py`) y falla si quedan códigos de condición
+(`tools/fpo-info.py --sin-condiciones`).
 
 ## Costo en el RSX
 

@@ -48,9 +48,12 @@ void main(float4 pos : TEXCOORD0, uniform sampler2D e : TEXUNIT0,
 	float3 d = abs(ph - float3(1.0, 3.0, 5.0) / 6.0);
 	d = min(d, 1.0 - d);
 	float3 t = saturate((d - q3.z) * q3.w);
-	float3 mn = lerp(1.0, (1.0 - t * t * (3.0 - 2.0 * t)) * q4.xyz, q3.y);
-	float3 op = saturate((q5.xyz - 1.0 / max(core, 1e-4)) * q6.xyz);
-	float3 amp = core * lerp(mn, 1.0, op * q2.z) * q2.w;
+	/* Los argumentos de lerp, todos float3: con un escalar primero, Cg elige
+	 * lerp(float, float, float) y se queda con la x del vector. */
+	const float3 one = float3(1.0, 1.0, 1.0);
+	float3 mn = lerp(one, (one - t * t * (3.0 - 2.0 * t)) * q4.xyz, q3.yyy);
+	float3 op = saturate((q5.xyz - one / max(core, float3(1e-4, 1e-4, 1e-4))) * q6.xyz);
+	float3 amp = core * lerp(mn, one, op * q2.z) * q2.w;
 	color = float4(amp, 0.72134752 * rs.x * rs.x);
 #else
 	color = float4(0.72134752 * rs.y * rs.y, 0.72134752 * rs.z * rs.z, 0.0, 0.0);

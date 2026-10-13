@@ -33,6 +33,7 @@
 
 #include "frontend/filters/crt_params.h"
 #include "platform/ps3/log.h"
+#include "platform/ps3/paths.h"
 
 #include "crt_cable_decode27_fpo.h"
 #include "crt_cable_decode9_fpo.h"
@@ -373,6 +374,57 @@ static void texel16(int s, int x, int y, float out[4])
 		out[c] = half_to_float(t[c]);
 }
 
+/* Una vez por filtro y por alto de la salida en cada corrida: la imagen que
+ * entra al filtro (la reducida) y lo que dibujó en la pantalla, para
+ * compararlos en la Mac con el filtro original (tools/crt-ref.c). En
+ * SALSA64_DATA_DIR/filtro-<clave>-<alto>-fuente.ppm y -pantalla.ppm. */
+static void dump_once(void)
+{
+	static uint32_t done[SALSA64_FILTERS][2];
+	uint32_t *d = &done[fl.filter][fl.oh >= 1000];
+	if (*d)
+		return;
+	*d = 1;
+	char path[96];
+	uint32_t ps, pitch;
+	const volatile uint8_t *S = rsxkit_surface_data(fl.surf[S_SRC], &ps);
+	snprintf(path, sizeof path, SALSA64_DATA_DIR "/filtro-%s-%u-fuente.ppm", salsa64_filter_key(fl.filter), fl.oh);
+	FILE *f = fopen(path, "wb");
+	if (f && S) {
+		static uint8_t line[3 * 640];
+		fprintf(f, "P6\n%u %u\n255\n", fl.sw, fl.sh);
+		for (uint32_t y = 0; y < fl.sh; y++) {
+			for (uint32_t x = 0; x < fl.sw; x++)
+				for (int c = 0; c < 3; c++)
+					line[3 * x + c] = S[y * ps + x * 4 + 1 + c];
+			fwrite(line, 3, fl.sw, f);
+		}
+	}
+	if (f)
+		fclose(f);
+	const uint32_t *px = rsxkit_back_buffer(&pitch);
+	snprintf(path, sizeof path, SALSA64_DATA_DIR "/filtro-%s-%u-pantalla.ppm", salsa64_filter_key(fl.filter), fl.oh);
+	f = fopen(path, "wb");
+	if (f && px) {
+		static uint8_t line[3 * 1920];
+		fprintf(f, "P6\n%u %u\n255\n", fl.ow, fl.oh);
+		for (uint32_t y = 0; y < fl.oh; y++) {
+			const volatile uint32_t *row = px + y * (pitch / 4);
+			for (uint32_t x = 0; x < fl.ow && x < 1920; x++) {
+				uint32_t c = row[x];
+				line[3 * x] = (uint8_t)(c >> 16);
+				line[3 * x + 1] = (uint8_t)(c >> 8);
+				line[3 * x + 2] = (uint8_t)c;
+			}
+			fwrite(line, 3, fl.ow < 1920 ? fl.ow : 1920, f);
+		}
+	}
+	if (f)
+		fclose(f);
+	salsa64_log("filtros: entrada y pantalla de «%s» en filtro-%s-%u-fuente.ppm y -pantalla.ppm",
+		    salsa64_filter_name(fl.filter), salsa64_filter_key(fl.filter), fl.oh);
+}
+
 static void check_tables(void)
 {
 	fl.check = false;
@@ -458,6 +510,7 @@ static void check_tables(void)
 	salsa64_log("filtros: comprobación en el RSX («%s»): luz lineal error máx. %.4f (%.4f con R y B cambiados); "
 		    "resplandor error máx. %.5f contra bilineal (%.5f contra el texel más cercano)%s",
 		    salsa64_filter_name(fl.filter), lin_err, lin_swap, glow_err, glow_point, extra);
+	dump_once();
 }
 
 /* Lee las marcas de los cuadros cuya barrera ya pasó. */

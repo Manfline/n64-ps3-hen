@@ -1,5 +1,38 @@
 # Estado
 
+## 2026-10-13 — Filtros CRT del autor en el RSX (rama `upbeat-tereshkova`, paquete SLSA00109 «Salsa64 filtros»)
+
+Los filtros CRT originales del autor (máscara de sombra v1.3 y CRT con
+cable v1.1: RGB, S-Video y compuesto), portados de sus versiones de
+RetroMac, en la parte GPL (`src/frontend/filters/`), sobre una maquinaria
+genérica de posprocesado nueva en `lib/rsxkit` (MIT, `rsxkit/post.h`:
+superficies intermedias RGBA8 y fp16, programas precompilados con sus
+constantes parcheadas, pasadas con constantes por dibujo, reducción con
+filtro de caja y marcas de tiempo del RSX). Fila «Filtro» en Opciones
+(`menu.cfg`, `filtro = …`); capturas, miniaturas y pruebas siguen sin
+filtro. Diseño y verificación en docs/filtros.md.
+
+- **Verificado en RPCS3** contra el original píxel por píxel en doble
+  precisión (`tools/crt-ref.c`): la máscara coincide a 1/255 en todo píxel
+  salvo el resplandor desde la rejilla (hasta 18/255 en bordes de alto
+  contraste); los cables, promedio 0,13–0,26/255 y hasta 36–64/255 en bordes
+  nítidos por interpolar las muestras de la señal.
+- **Errores del toolchain que costaron vueltas** (docs/rsx-notes.md):
+  `rsxSetTimeStamp` de PSL1GHT escribe el reporte en un lugar cualquiera (el
+  RSX se colgaba en RPCS3); cgcomp no ensambla bien los códigos de condición
+  (`?:`), escribe el color de salida en R0 aunque Cg lo use de temporal y
+  codifica `|R0.z|` como `|R0.zxxx|`; Cg corre en silencio y `lerp(1.0,
+  vector, k)` trunca el vector. El build de los filtros corrige o rechaza
+  los casos de cgcomp (`tools/cg-salida.py`, `tools/fpo-info.py`).
+- **Medición en la PS3**: pendiente. El archivo `filtros-ciclo` pasa por
+  todos los filtros cada 20 s y el log dice el costo de cada pasada en el
+  RSX y el de la emulación. La app también comprueba sola, la primera vez
+  que dibuja cada filtro, que las tablas fp16 (filtro bilineal, BORDER,
+  orden de canales) dan lo mismo que la cuenta en la CPU, y guarda la
+  entrada y la pantalla de cada filtro por resolución
+  (`filtro-<clave>-<alto>-fuente.ppm` y `-pantalla.ppm`) para compararlas en
+  la Mac con `tools/crt-ref.c`.
+
 ## 2026-10-12 (cierre del día) — Para retomar
 
 Publicadas hoy: **v0.2.0** (DK64 al 100 %, Majora con FlashRAM y efectos,

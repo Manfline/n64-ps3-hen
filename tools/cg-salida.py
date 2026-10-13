@@ -18,7 +18,10 @@ Sale con error (y dice dónde) si hay choque.
   tools/cg-salida.py programa.fpo.dump --corrige programa.asm
 Escribe el ensamblador listo para `cgcomp -a`: si hay choque, las
 escrituras de oCol van a un temporal nuevo y un `MOVR oCol` al final lo
-copia (una instrucción más); si no, el mismo texto.
+copia (una instrucción más). Además corrige otro error del ensamblador de
+cgcomp: un valor absoluto con swizzle de un componente (`-|R0.z|`) lo
+codifica como `.zxxx` en vez de `.zzzz` (visto en el GLSL que registra
+RPCS3 y en el .fpo); se escribe con los cuatro (`-|R0.zzzz|`).
 """
 import re
 import sys
@@ -101,6 +104,16 @@ def fix(path, out):
     open(out, "w").write("\n".join(lines) + "\n")
 
 
+ABS1 = re.compile(r"\|(\s*-?)([A-Za-z]\w*(?:\[\d+\])?)\.([xyzw])\|")
+
+
+def fix_abs(path):
+    """|R.c| → |R.cccc| (cgcomp completa el swizzle con x)."""
+    text = open(path).read()
+    fixed = ABS1.sub(lambda m: "|%s%s.%s|" % (m.group(1), m.group(2), m.group(3) * 4), text)
+    open(path, "w").write(fixed)
+
+
 def main():
     path = sys.argv[1]
     bad = check(path)
@@ -113,6 +126,7 @@ def main():
                 sys.exit(1)
         else:
             open(out, "w").write(open(path).read())
+        fix_abs(out)
         return
     if bad:
         for n, opc, ops, what in bad:

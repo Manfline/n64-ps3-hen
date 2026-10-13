@@ -37,6 +37,30 @@ antes, después, notas.
 | 2026-10-12 | 1be3ce5 → 4d75242 (rama fervent-noyce) | **Perfil persistente del recompilador y zona caliente**, GoldenEye en la presa 1–2 min: mismo binario con `sin-perfil` → 1.ª sesión (cuenta) → 2.ª sesión (762 bloques calientes juntos en 1 MB) | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00104 «Salsa64 perfil», respaldo del autor | 17,15 ns por instrucción (nativo 14,82 = 47 ciclos), 49,9 campos/s en las ventanas pesadas | 1.ª: 18,19 (15,54 = 50), 45,5 campos/s; 2.ª: 18,26 (15,80 = 51), 45,8 campos/s: **sin ganancia**; contar cuesta ~5 % | Perfect Dark intro: 15,10 → 15,16 ns, igual. SM64, Zelda y Majora a 59–60 campos/s. Los perfiles (24 773 bloques, 1592 sitios y 809 sucesores en GoldenEye) quedan para los pasos siguientes. Ver «Perfil persistente y zona caliente» abajo |
 | 2026-10-11 | e0aa556 (v0.1.0) → c17e790 | **Perfect Dark, intro (azotea de dataDyne con desenfoque de movimiento)**: decodificar solo lo que muestrea cada TEXRECT y decodificación de 4 en 4 texels | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00097 «Salsa64 texturas», respaldo del usuario, sin tocar el control | 50,0–51,1 campos/s; HLE en el SPE 39,7–61,4 ms por tarea, de ellos decodificar 36,8–58,4 ms (90–143 texturas por tarea); el CPU dormía 28–40 ms por tarea esperando al SPE | **59,8–60,3 campos/s; SPE 3,3–5,0 ms por tarea (×11–17), decodificar 0,48–0,65 ms (133–181 texturas, ×77–94)**; dormida 3,0–5,5 ms | Antes a 4× automática, después a 1× pedida (la HLE no depende de la escala). Zelda, GoldenEye y Conker sin cambios. La escena siguiente (campos 4300–5500) va a 45–53 campos/s por el CPU emulado (41–63 MIPS, 18–22 ms por campo; en las ventanas más lentas casi no espera al SPE). Ver «Texturas que cambian en cada cuadro» abajo |
 
+## Filtros CRT en el RSX (2026-10-13)
+
+Los filtros de la presentación (docs/filtros.md) se miden en el RSX con
+marcas de tiempo entre pasadas (`rsxkit_stamp`); la emulación y la
+presentación, con marcas al principio y al final de cada tramo de órdenes
+(cota superior: incluye lo que el RSX esperó órdenes del PPE dentro del
+tramo). El log de la PS3 escribe cada 5 s:
+
+    rsx: emulación X ms por campo emulado, presentación Y ms por campo presentado (Z % del tiempo ocupado)
+    rsx: filtro «…» WxH desde wxh: T ms del RSX por cuadro (reducir …, lineal y resplandor …, …)
+
+Costo por píxel de cada pasada (instrucciones del fragment program, de
+`tools/fpo-info.py`), que es lo que manda en el RSX: reducir 27 (9
+lecturas), lineal 12, resplandor 31 (12), tesela 56, puntos 143 (10), final
+de la máscara 33 (7); señal 31, decodificación 49 (9) o 103 (27), líneas
+51–58 + 26–31, final del tubo 44 (5). A 1080p la imagen 4:3 son 1440 × 1080
+= 1,56 M píxeles; a 720p, 960 × 720 = 0,69 M; las tablas del cable miden
+~710 × 240 (señal y decodificación) y 1440 × 240 o 960 × 240 (líneas), las
+de la máscara ~365 × 362 o ~245 × 243 (puntos) y 12 × 6 (teselas).
+
+Pendiente: la medición en la PS3 real (paquete SLSA00109 «Salsa64
+filtros», con `filtros-ciclo`, GoldenEye, Perfect Dark y Conker a escala
+5×, 720p y 1080p). RPCS3 no sirve para medir.
+
 ## Quitarle trabajo al PPE: el hilo 1 y la tarea JPEG (2026-10-12)
 
 PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00103 «Salsa64 PPE»

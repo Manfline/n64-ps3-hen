@@ -225,6 +225,21 @@ Lo que hizo falta saber para escribir fragment programs largos en Cg
   nuevo y copiándolo con un `MOVR oCol` al final; `cgcomp -a` ensambla ese
   texto (con los nombres de las constantes: sin cambios, sale el mismo
   .fpo). Los shaders de rsxkit no tienen el choque (revisados).
+- **Valor absoluto con un componente**: el ensamblador de cgcomp codifica
+  `-|R0.z|` con el swizzle `.zxxx` (completa con x en vez de repetir el
+  componente; con `-R0.z` sin las barras lo hace bien). En la pasada de
+  líneas del compuesto, el peso de la segunda tabla en G y B salía de la
+  columna y no de la fase: tinte rojo en toda la imagen (lo mostró el GLSL
+  que registra RPCS3 con «Log shader programs», `abs(r0.zxxx)`).
+  `tools/cg-salida.py --corrige` lo escribe como `-|R0.zzzz|` antes de
+  reensamblar; `tools/fpo-info.py -v` muestra swizzles y barras de cada
+  fuente del .fpo.
+- **cgcomp llama a Cg en silencio** (`-q`): sus avisos no se ven. Uno
+  importa: con un escalar como primer argumento, `lerp(1.0, v, k)` elige
+  `lerp(float, float, float)` y convierte el vector a escalar (se queda con
+  la x; aviso C7011). En la máscara de franjas del CRT con cable los tres
+  canales salían con la franja del rojo. Escribir los argumentos de las
+  funciones como vectores del mismo tamaño (`float3(1.0, 1.0, 1.0)`).
 - Cg traduce `exp(x)` como `pow(e, x)`, que cgcomp expande a LG2 + MUL +
   EX2 por componente: usar `exp2(x · log2 e)`. `sqrt` sale como RSQ + RCP
   (sqrt(0) = 0). LG2, EX2, RCP y RSQ son escalares: `pow` de un `float3`
