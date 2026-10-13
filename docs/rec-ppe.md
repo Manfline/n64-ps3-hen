@@ -537,6 +537,14 @@ costo/beneficio; ninguna está hecha:
   A/B de `jit-ancho`.
 - Descartado: páginas de 1 MB para la caché de código (el ERAT cubre 4 KB
   por entrada aunque la página sea grande).
+- Lo que dijo el primer muestreo en la PS3 (docs/perf-log.md, «Muestreo
+  por tiempo en la PS3»): el tiempo está repartido plano entre cientos de
+  bloques (ninguno pasa del 3 %), los que más pesan son grandes con mucha
+  FPU en línea (~20 palabras calientes por instrucción), el refill de la
+  TLB se lleva ~2 % y el intérprete 3 %. Candidatos en ese orden: la FPU
+  (~40 palabras por operación: compartir la clasificación y FCR31 en una
+  rutina, o volver a la residente sin sus saltos), el refill (TLBWR y ERET
+  por la rutina compartida) y los bloques que no caben antes del evento.
 
 ### Muestreo por tiempo desde el otro hilo (2026-10-13)
 

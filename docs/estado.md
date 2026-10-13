@@ -58,10 +58,21 @@ nativo desde la Fase 3. El autor lo notó a ojo (5–10 %, menos tirones).
 PS3 y `SALSA64_REC_SAMPLE=1` en el host. La entrada de cada bloque deja su
 id (2 palabras), el preámbulo y el despachador marcan lo que se hace en C,
 y un hilo de prioridad 1100 muestrea cada 200 µs; al cerrar el juego, los
-30 bloques con más tiempo con sus palabras de PPC. Probado en qemu
-(nemu64-test con muestreo: mismos 433 fallos; GoldenEye corto: informe
-coherente). Falta la primera corrida en la PS3 (paquete SLSA00106 del
-22:53 con el muestreo).
+30 bloques con más tiempo con sus palabras de PPC. Primera corrida en la
+PS3 (docs/perf-log.md, «Muestreo por tiempo en la PS3»): GoldenEye en la
+presa pasa el 64–66 % en código generado, 21–22 % durmiendo al ritmo, 3 %
+en el intérprete, 2,6 % en el despachador, 2,5–2,9 % en eventos y 1,6–2,8 %
+en los caminos lentos; el reparto por bloque es plano (los 30 primeros
+suman ~30 % del nativo, ninguno pasa del 3 %) e igual con el compacto y el
+ancho. Contra el perfil de entradas × palabras: el bloque de más «costo»
+(7F0BA3B8) se lleva el 0,7 % del tiempo (sale por sus saltos internos) y
+pesan de más el refill de la TLB (80000000, 2,1 %), JR + SQRT.S (7001F7E0,
+1,9 %, `fsqrt`) y los bloques grandes con FPU en línea (20 palabras
+calientes por instrucción). El muestreo cuesta ~5 % (dos palabras y un
+almacenamiento por entrada a bloque): se mide con él apagado. Pendiente:
+marcar como camino lento la C de TLBWR/ERET (hecho en el código, por
+probar), y lo que señala para compactar: la FPU en línea, el refill y el 3 %
+de intérprete.
 
 Lo que queda grande por instrucción: la entrada de bloque (ktlb + evento,
 7–8 palabras), la salida (escritura + enlace), la ALU de 32 bits con su
