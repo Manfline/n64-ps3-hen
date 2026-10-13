@@ -121,6 +121,11 @@
 #include "rsp/jpeg/jpeg.h"
 #include "rsp/lle/core.h"
 
+#include <signal.h>
+#if defined(__powerpc64__) && defined(__linux__)
+#include <ucontext.h>
+#endif
+
 #define DEFAULT_CYCLES (1ull << 32)  /* ~46 s de la consola */
 #define DEFAULT_SLICE  (1ull << 20)
 #define MAX_TEXT       255
@@ -138,9 +143,41 @@ enum stop_reason {
 };
 
 static struct salsa64_n64 n64;
-static uint8_t rdram[SALSA64_RDRAM_MAX] __attribute__((aligned(128)));
+static uint8_t rdram_buf[SALSA64_RDRAM_MAX] __attribute__((aligned(128)));
+static uint8_t *rdram = rdram_buf;  /* o el principio de la ventana de fastmem (rec_host.h) */
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
 static struct salsa64_rec rec;
+
+/* fastmem (docs/fastmem.md): un acceso del código generado fuera de la RDRAM
+ * cae en la ventana sin permisos; el manejador parchea el sitio hacia su
+ * camino frío y vuelve, y la instrucción (ahora un salto) se repite. Lo que
+ * no es un sitio conocido muere como antes. Solo tiene sentido en ppc64
+ * Linux (qemu), donde corre el recompilador. */
+#if defined(__powerpc64__) && defined(__linux__)
+static void fastmem_segv(int sig, siginfo_t *si, void *uc_)
+{
+	ucontext_t *uc = uc_;
+	(void)si;
+	if (salsa64_rec_fastmem_fault(&rec, (uintptr_t)uc->uc_mcontext.gp_regs[PT_NIP]))
+		return;
+	signal(sig, SIG_DFL);
+}
+
+static bool fastmem_install_handler(void)
+{
+	struct sigaction sa;
+	memset(&sa, 0, sizeof sa);
+	sa.sa_sigaction = fastmem_segv;
+	sa.sa_flags = SA_SIGINFO;
+	sigemptyset(&sa.sa_mask);
+	return sigaction(SIGSEGV, &sa, NULL) == 0;
+}
+#else
+static bool fastmem_install_handler(void)
+{
+	return false;
+}
+#endif
 /* SALSA64_REC_PROF=N: el perfil del recompilador (rec_prof.h, solo cuentas en
  * el host) cada N campos y al final. */
 static struct salsa64_rec_prof prof, prof_prev;
@@ -2242,6 +2279,15 @@ int main(int argc, char **argv)
 	static const char *const fmt_names[] = { ".z64", ".v64 (convertida)", ".n64 (convertida)" };
 	enum salsa64_rom_format fmt = salsa64_rom_normalize(rom, rom_size);
 
+	void *fm_window = NULL;
+	if (use_rec && salsa64_host_env_on("SALSA64_REC_FASTMEM")) {
+		fm_window = salsa64_host_fastmem_window(ram);
+		if (!fm_window) {
+			fprintf(stderr, "salsa64-run: no se pudo reservar la ventana de fastmem\n");
+			return 3;
+		}
+		rdram = fm_window;
+	}
 	salsa64_n64_init(&n64, rdram, ram);
 	if (getenv("SALSA64_GFX_CYCLES"))
 		n64.bus.rsp.gfx_cycles = (uint32_t)strtoul(getenv("SALSA64_GFX_CYCLES"), NULL, 0);
@@ -2314,8 +2360,17 @@ int main(int argc, char **argv)
 			prof_next = prof_every;
 		}
 		rec.hot_bytes = salsa64_host_rec_hot_bytes();
+		rec.fm_window = fm_window;
 		if (!code || !salsa64_rec_init(&rec, &n64.cpu, code, salsa64_host_rec_bytes())) {
 			fprintf(stderr, "salsa64-run: el recompilador no corre en este host\n");
+			return 3;
+		}
+		if (fm_window && !rec.fastmem) {
+			fprintf(stderr, "salsa64-run: fastmem pedido pero no activo\n");
+			return 3;
+		}
+		if (rec.fastmem && !fastmem_install_handler()) {
+			fprintf(stderr, "salsa64-run: fastmem sin manejador de SIGSEGV en este host\n");
 			return 3;
 		}
 		if (salsa64_host_env_on("SALSA64_REC_SAMPLE")) {
@@ -2367,8 +2422,9 @@ int main(int argc, char **argv)
 			rec.no_link = true;
 			rec.after_exit = lockstep_check;
 		}
-		fprintf(stderr, "salsa64-run: recompilador activo%s%s; caché en %p, llamadas a C %s\n",
+		fprintf(stderr, "salsa64-run: recompilador activo%s%s%s; caché en %p, llamadas a C %s\n",
 			lockstep ? " con --lockstep" : "", rec.opts & SALSA64_REC_OPT_PIN ? ", registros fijos" : "",
+			rec.fastmem ? ", fastmem" : "",
 			code, rec.calls_near ? "con bl" : "por mtctr/bctrl");
 	}
 
@@ -2485,6 +2541,10 @@ int main(int argc, char **argv)
 			(unsigned long long)st->cu1_exits,
 			(unsigned long long)st->interp_steps, cycles ? 100.0 * (double)st->interp_steps / (double)cycles : 0.0,
 			(unsigned long long)st->exec_calls, lockstep ? "; --lockstep sin diferencias" : "");
+		if (st->fm_sites || st->fm_off)
+			fprintf(stderr, "salsa64-run: fastmem: %llu accesos sin prueba, %llu parchados tras fallar, %s\n",
+				(unsigned long long)st->fm_sites, (unsigned long long)st->fm_faults,
+				rec.fastmem ? "activo al terminar" : "apagado");
 		if (rec.prof) {
 			char text[2048];
 			memset(&prof_prev, 0, sizeof prof_prev);

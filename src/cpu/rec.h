@@ -122,6 +122,9 @@ struct salsa64_rec_stats {
 	uint64_t hot_full;       /* calientes que fueron a la zona fría porque la caliente estaba llena */
 	uint64_t hot_evictions;  /* mitades de la zona caliente desalojadas */
 	uint64_t prof_folded;    /* entradas a bloques sumadas al perfil (rec->hits[] → entries) */
+	uint64_t fm_sites;       /* fastmem: accesos compilados sin prueba */
+	uint64_t fm_faults;      /* fastmem: accesos parchados tras fallar */
+	uint64_t fm_off;         /* fastmem apagado (TLB que choca con la ventana, tabla de sitios llena) */
 };
 
 /* Etiquetas y correcciones del ensamblador de rec_emit.c. */
@@ -136,6 +139,18 @@ struct salsa64_rec_fixup {
 	uint8_t sec;         /* sección de la palabra */
 	uint8_t cond;        /* 1 = bc (14 bits), 0 = b/bl (24 bits) */
 };
+
+/* fastmem: un acceso caliente parcheable y su camino frío (palabras de la
+ * caché), con la generación del tramo del sitio (seg_gen[], o scratch_gen
+ * en la zona temporal) para descartar los de bloques desalojados. */
+struct salsa64_rec_fmsite {
+	uint32_t site;       /* 0 = vacío (la palabra 0 es del preámbulo) */
+	uint32_t cold;
+	uint32_t gen;
+};
+#define SALSA64_REC_FM_SITES_LOG 18
+#define SALSA64_REC_FM_SITES     (1u << SALSA64_REC_FM_SITES_LOG)
+#define SALSA64_REC_FM_PROBES    64
 
 /* Opciones: se ponen en rec->opts antes de salsa64_rec_init, que las
  * conserva. */
@@ -172,6 +187,15 @@ struct salsa64_rec_fixup {
  * de registros propios, y las llamadas al intérprete en línea. Se aplica al
  * compilar. */
 #define SALSA64_REC_OPT_WIDE 128u
+/* fastmem (docs/fastmem.md): la RDRAM vive al principio de una ventana de
+ * 512 MB (rec->fm_window, la pone quien llama antes de salsa64_rec_init) y
+ * los accesos de KSEG0/KSEG1 del código generado van sin prueba de segmento:
+ * índice va & 0x1FFFFFFF sobre r30. Lo que no es RDRAM cae en una página sin
+ * mapear y el acceso falla; quien atiende el fallo (señal en el host, hilo
+ * ayudante en la PS3) llama a salsa64_rec_fastmem_fault con el pc, que
+ * parchea el acceso hacia su camino frío (la prueba de siempre). Se aplica
+ * al compilar; una entrada de la TLB que choque con la ventana lo apaga. */
+#define SALSA64_REC_OPT_FASTMEM 256u
 /* Depuración (host, SALSA64_REC_OPTS): apagan una pieza nueva a la vez para
  * acotar una diferencia en --lockstep. LEGACY las apaga todas. */
 #define SALSA64_REC_DBG_NO_ENDLINK 0x100u   /* COP0 vuelve al despachador e interpreta el resto del bloque básico */
@@ -262,6 +286,14 @@ struct salsa64_rec {
 
 	struct salsa64_rec_stats stats;
 
+	/* fastmem (SALSA64_REC_OPT_FASTMEM, docs/fastmem.md). */
+	bool fastmem;            /* activo: la RDRAM está en fm_window y los accesos se compilan sin prueba */
+	void *fm_window;         /* la ventana de 512 MB (quien llama, antes de salsa64_rec_init) */
+	uint32_t scratch_gen;    /* sube con cada bloque temporal: generación de sus sitios */
+	unsigned fm_npend, fm_nnew;
+	uint16_t fm_pend_site[SALSA64_REC_MAX_INSNS], fm_pend_cold[SALSA64_REC_MAX_INSNS];  /* etiquetas (rec_emit.c) */
+	uint32_t fm_new_site[SALSA64_REC_MAX_INSNS], fm_new_cold[SALSA64_REC_MAX_INSNS];    /* palabras (finalize) */
+
 	/* Compilación (rec_emit.c). */
 	uint32_t buf[2][SALSA64_REC_BUF_WORDS];
 	uint32_t nbuf[2];
@@ -281,6 +313,7 @@ struct salsa64_rec {
 	struct salsa64_rec_block blocks[SALSA64_REC_MAX_BLOCKS + 1];
 	uint16_t twin[SALSA64_REC_MAX_BLOCKS + 1];    /* gemelo de un bloque de KSEG0 que depende de FR, para el otro FR */
 	struct salsa64_rec_link links[SALSA64_REC_MAX_LINKS];
+	struct salsa64_rec_fmsite fm_sites[SALSA64_REC_FM_SITES];  /* fastmem: sitio → camino frío (3 MB) */
 };
 
 /*
@@ -293,6 +326,18 @@ struct salsa64_rec {
 bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *code, size_t bytes);
 /* Vuelve al intérprete. */
 void salsa64_rec_detach(struct salsa64_rec *rec);
+/* fastmem: un acceso del código generado falló en `nip`. Si es un sitio
+ * conocido, lo parchea hacia su camino frío (quien llama reanuda el hilo,
+ * que repite la instrucción) y devuelve true; si no, false (el fallo es de
+ * otra cosa). Sin reservar memoria ni llamar fuera: sirve desde un manejador
+ * de señal o desde otro hilo con el que falló suspendido. */
+bool salsa64_rec_fastmem_fault(struct salsa64_rec *rec, uintptr_t nip);
+/* fastmem: ¿una entrada de la TLB mapea direcciones que, dobladas a la
+ * ventana (va & 0x1FFFFFFF), caerían en la RDRAM? Solo kuseg y kseg2/3
+ * con direcciones de 32 bits: KSEG0/KSEG1 no pasan por la TLB. */
+bool salsa64_rec_fastmem_collides(const struct salsa64_rec *rec, const struct salsa64_tlb_entry *e);
+/* fastmem: apagarlo (vacía la caché; los bloques se recompilan con la prueba). */
+void salsa64_rec_fastmem_off(struct salsa64_rec *rec);
 /* Igual que salsa64_cpu_run, con el recompilador. */
 void salsa64_rec_run(struct salsa64_rec *rec);
 /* La RDRAM [pa, pa + len) cambió fuera del CPU (DMA, carga de la ROM,

@@ -144,7 +144,7 @@ static void emit_unaligned(struct ctx *c, unsigned k)
 	int slow = new_label(c), resume = new_label(c);
 	unsigned v = store ? get(c, rt, T_S1) : 0;
 
-	emit_addr(c, I_RS(i), (int16_t)i, 0, slow, store);
+	emit_addr(c, I_RS(i), (int16_t)i, 0, slow, store, false);
 	if (store)
 		emit_code_check(c, 1, slow);
 	/* T_X = desplazamiento en bits; T_HI = palabra (o doble palabra) alineada. */
@@ -242,7 +242,7 @@ static bool emit_unaligned_pair(struct ctx *c, unsigned k, unsigned end)
 	c->k = k;
 	c->written_start = c->written;
 	unsigned v = store ? get(c, rt, T_S1) : 0;
-	unsigned va = emit_addr(c, I_RS(a), imm, 0, slow, store);
+	unsigned va = emit_addr(c, I_RS(a), imm, 0, slow, store, false);
 	/* Los 4 bytes en la misma página (mapeada, la traducción es de la del
 	 * primero) y dentro de la RDRAM. */
 	E(c, ppc_rlwinm(0, va, 0, 20, 31));

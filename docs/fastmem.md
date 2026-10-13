@@ -213,8 +213,57 @@ Si `fallo_lectura` mató el proceso (lv2 no avisa), las demás fases de fallo
 se omiten: fastmem queda descartado tal como está planteado y la ganancia
 posible se reduce a lo que dé una prueba de segmento más corta.
 
-## 6. Resultados
+## 6. El prototipo en el host (2026-10-13)
 
-Pendiente de la PS3 real (2026-10-13). En RPCS3 (no concluyente: no ejecuta
-código generado y su contexto de fallo está vacío) sirve solo para validar
-el programa.
+Hecho sobre main (v0.2.2), con el interruptor `SALSA64_REC_OPT_FASTMEM`
+(`SALSA64_REC_FASTMEM=1` en el host; en la PS3, cuando esté, el archivo
+`jit-fastmem`):
+
+- **Emisión** (`src/cpu/rec_emit.c`): `emit_addr` con `fm` deja el índice
+  en T_Y con `rlwinm` y nada más; `fm_access` emite el acceso (el sitio) y
+  anota (sitio, camino frío); `emit_addr_cold` emite en la sección fría la
+  prueba de siempre (`emit_kseg_test`), la copia del acceso (con su prueba
+  de `code_flags` si almacena, `emit_store_check`, que con fastmem recorta
+  el índice a la tabla) y el salto de vuelta, y después lo de siempre
+  (`ktlb` y camino lento). Solo `emit_load` y `emit_store`; LWL/LWR y
+  compañía siguen con la prueba. `finalize` pasa los sitios a palabras de la
+  caché y `rec.c` los mete en una tabla abierta sitio → camino frío
+  (`fm_sites`, 2¹⁸ entradas de 12 bytes, 3 MB) con la generación del tramo
+  (`seg_gen[]`, o `scratch_gen` para los bloques temporales; el vaciado
+  completo sube todas) para descartar los de bloques desalojados.
+- **El fallo** (`salsa64_rec_fastmem_fault(rec, nip)`): busca el sitio,
+  escribe `b camino_frío` en su lugar, `dcbst`/`icbi`, y quien llama reanuda.
+  En el host es un manejador de `SIGSEGV` con `SA_SIGINFO` que toma el pc de
+  `uc_mcontext.gp_regs[PT_NIP]` (`src/host/run.c`); bajo qemu-user el fallo
+  del invitado llega así y la instrucción parchada se repite (probado con
+  un programa suelto antes de tocar el emisor; la trampa: gcc ve que el
+  descriptor ELFv1 es un objeto local y optimiza la llamada a basura; hay
+  que ocultárselo).
+- **La ventana** (`src/host/rec_host.h`): 512 MB `PROT_NONE` y la RDRAM
+  `MAP_FIXED` al principio; `salsa64_rec_init` solo enciende fastmem si
+  `cpu->rdram == rec->fm_window` y ninguna entrada de la TLB choca.
+- **Colisiones** (`salsa64_rec_fastmem_collides`): en cada escritura de la
+  TLB (`rec_tlb.c`, por el código generado o por el intérprete), una
+  entrada de kuseg o kseg2/3 cuyo tramo, con los bits 31–29 quitados, cae
+  en la RDRAM apaga fastmem (`salsa64_rec_fastmem_off`: vacía la caché, los
+  bloques se recompilan con la prueba; `stats.fm_off`).
+
+Resultados en qemu (ppc64, `tools/qemu-ppc64.sh`):
+
+| Prueba | Resultado |
+|---|---|
+| vitest `--rec` | OK; 474 accesos sin prueba, 41 parchados tras fallar (la pantalla por KSEG1 y los registros del VI) |
+| nemu64-test `--rec` con registros fijos | **440 fallas = las 433 de la línea base + 7 esperadas**: «LW/SW with address not sign extended» (una dirección de 64 bits sin extensión de signo es error de dirección en la N64; fastmem la recorta a 32 bits) y «Unaligned LW/SW/LWC1 exception» (no se comprueba la alineación). Las dos son fallos de programa en la consola real y ningún juego del censo las produce. Fastmem se apagó solo a mitad de la suite (sus pruebas de la TLB mapean kuseg bajo) y el resto corrió con la prueba: 10 201 accesos sin prueba, 31 parchados |
+| nemu64-test `--lockstep` | diverge en la prueba de LW no alineado (badvaddr …a26: el intérprete lanza AdEL), como corresponde; no sirve de lockstep con fastmem |
+| GoldenEye hasta la presa `--lockstep`, Perfect Dark 3 G `--lockstep` | en curso |
+| Expansión (GoldenEye, `tools/rec-expansion.py`) | en curso |
+
+## 7. Resultados en la PS3
+
+Pendiente (2026-10-13): la prueba de viabilidad está en la cola de la
+consola. En RPCS3 (no concluyente) `reservas`, `mapeo` y `datos` pasan:
+regiones de hasta 1 GB (en 0x80000000, con cualquier alineación admitida),
+espejo del mismo objeto en dos direcciones, 256 objetos de 64 KB, mapear
+64 KB 18 µs y 1 MB 58 µs, desmapear 3–4 µs; las fases de fallo no fallan
+ahí (RPCS3 deja leer las páginas reservadas sin mapear) y la de parche no
+corre (RPCS3 no ejecuta código generado).

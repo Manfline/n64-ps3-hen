@@ -316,7 +316,15 @@ struct ctx {
 		int mapped, back;
 		uint8_t va, align;
 		bool store, pending;
+		/* fastmem (docs/fastmem.md): el acceso caliente va sin prueba; la
+		 * prueba de siempre y una copia del acceso quedan en la sección
+		 * fría (fm_cold), adonde se parchea el acceso si falla. */
+		bool fm;
+		bool check;         /* almacenamiento: la copia repite la prueba de code_flags */
+		int fm_cold, fm_after, slow;
+		uint32_t word;      /* el acceso, para la copia fría */
 	} addr;
+	bool fastmem;           /* rec->fastmem y no `wide`: los accesos de emit_load/emit_store sin prueba */
 	/* Cadena de escritura: los registros del bloque que escribe, por primera
 	 * escritura descendente; una salida entra donde empiezan los que ya
 	 * tienen valor y ejecuta hasta el blr (chain_call). */
@@ -960,6 +968,9 @@ static void branch_overflow(struct ctx *c, unsigned bo, unsigned bi)
  * (sin traducción, E/S, excepciones) va a `slow`, que llama a C; el camino
  * lento anota la página en ktlb[] para la próxima vez.
  */
+static void emit_kseg_test(struct ctx *c, unsigned va, unsigned align);
+static void emit_store_check(struct ctx *c, int slow);
+
 /* El tramo frío de emit_addr: la dirección a r3 si no estaba, la rutina
  * compartida del preámbulo (rec.c: cr1 eq y r12 listo, o ne) y, si traduce,
  * de vuelta al camino rápido. Si no traduce sigue en lo que venga después:
@@ -971,6 +982,20 @@ static void emit_addr_cold(struct ctx *c)
 	if (!c->addr.pending)
 		return;
 	c->addr.pending = false;
+	if (c->addr.fm) {
+		/* fastmem: la prueba de siempre y la copia del acceso (con su
+		 * prueba de code_flags si almacena), para cuando el acceso
+		 * caliente falló y quedó parchado hacia aquí; de vuelta a la
+		 * instrucción que sigue al acceso. */
+		bind(c, c->addr.fm_cold);
+		emit_kseg_test(c, c->addr.va, align);
+		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), c->addr.mapped);
+		bind(c, c->addr.back);
+		if (c->addr.check)
+			emit_store_check(c, c->addr.slow);
+		E(c, c->addr.word);
+		emit_b(c, c->addr.fm_after, false);
+	}
 	bind(c, c->addr.mapped);
 	if (c->addr.va != T_ADDR)
 		E(c, ppc_mr(T_ADDR, c->addr.va));
@@ -978,16 +1003,90 @@ static void emit_addr_cold(struct ctx *c)
 	emit_bc(c, PPC_BO_TRUE_LIKELY, PPC_BI(CR_T, PPC_EQ), c->addr.back);
 }
 
-static unsigned emit_addr(struct ctx *c, unsigned rs, int16_t imm, unsigned align, int slow, bool store)
+/* La prueba compacta de KSEG0/KSEG1 (ver emit_addr): deja el desplazamiento
+ * en T_Y y cr1 eq si la dirección vale. */
+static void emit_kseg_test(struct ctx *c, unsigned va, unsigned align)
+{
+	unsigned s = c->rec->rdram_shift, abits = align == 7 ? 3 : align == 3 ? 2 : align;
+	E(c, ppc_oris(T_Y, va, 0x2000));
+	E(c, ppc_addis(T_Y, T_Y, 0x6000));
+	E(c, ppc_rldicl(T_X, T_Y, 64 - s, s - abits));
+	E(c, ppc_cmpdi(CR_T, T_X, 0));
+}
+
+/* La prueba de code_flags de un almacenamiento en T_Y (una entrada por 128
+ * bytes): con código recompilado ahí, por el camino lento. Con fastmem el
+ * índice se recorta a la tabla (fuera de la RDRAM apunta a cualquier
+ * bandera: si está puesta el almacenamiento va a C, que es correcto; si no,
+ * falla y se parchea). */
+static void emit_store_check(struct ctx *c, int slow)
+{
+	if (c->addr.fm)
+		E(c, ppc_rlwinm(T_X, T_Y, 32 - SALSA64_REC_FLAG_SHIFT, 16, 31));
+	else
+		E(c, ppc_srdi(T_X, T_Y, SALSA64_REC_FLAG_SHIFT));
+	E(c, ppc_lbzx(T_X, R_FLAGS, T_X));
+	E(c, ppc_cmpwi(CR_T, T_X, 0));
+	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
+}
+
+/* El acceso de emit_load/emit_store. Con fastmem (emit_addr con `fm`), es
+ * el sitio que se parchea si falla: queda anotado con su camino frío
+ * (rec->fm_pend; finalize los pasa a palabras de la caché). */
+static void fm_access(struct ctx *c, uint32_t word, bool check)
 {
 	struct salsa64_rec *r = c->rec;
-	unsigned s = r->rdram_shift, abits = align == 7 ? 3 : align == 3 ? 2 : align;
+	if (!c->addr.fm) {
+		E(c, word);
+		return;
+	}
+	int site = new_label(c);
+	bind(c, site);
+	E(c, word);
+	bind(c, c->addr.fm_after);
+	c->addr.word = word;
+	c->addr.check = check;
+	if (r->fm_npend < SALSA64_REC_MAX_INSNS) {
+		r->fm_pend_site[r->fm_npend] = (uint16_t)site;
+		r->fm_pend_cold[r->fm_npend] = (uint16_t)c->addr.fm_cold;
+		r->fm_npend++;
+	} else {
+		r->overflow = true;
+	}
+}
+
+static unsigned emit_addr(struct ctx *c, unsigned rs, int16_t imm, unsigned align, int slow, bool store, bool fm)
+{
+	struct salsa64_rec *r = c->rec;
+	unsigned s = r->rdram_shift;
 	int mapped = new_label(c), back = new_label(c);
 	unsigned base = get(c, rs, T_ADDR), va = T_ADDR;
 	if (!c->wide && imm == 0 && base != T_ADDR)
 		va = base;  /* la dirección ya está en un registro: los caminos lentos la copian a r3 */
 	else
 		E(c, ppc_addi(T_ADDR, base, imm));
+	c->addr.fm = false;
+	if (fm && c->fastmem && !SALSA64_REC_OLD(r, SALSA64_REC_DBG_NO_DATA)) {
+		/* fastmem: índice en la ventana de 512 MB (va & 0x1FFFFFFF, en 32
+		 * bits), sin prueba: KSEG0 y KSEG1 caen en la RDRAM y lo demás en
+		 * páginas sin mapear, donde el acceso falla y se parchea hacia
+		 * fm_cold (emit_addr_cold: la prueba de siempre y la copia del
+		 * acceso). `back` y `mapped` quedan en la sección fría. */
+		E(c, ppc_rlwinm(T_Y, va, 0, 3, 31));
+		c->addr.mapped = mapped;
+		c->addr.back = back;
+		c->addr.va = (uint8_t)va;
+		c->addr.align = (uint8_t)align;
+		c->addr.store = store;
+		c->addr.pending = true;
+		c->addr.fm = true;
+		c->addr.fm_cold = new_label(c);
+		c->addr.fm_after = new_label(c);
+		c->addr.slow = slow;
+		c->addr.check = false;
+		r->stats.fm_sites++;
+		return va;
+	}
 	if (c->wide) {
 		int32_t k1 = 1 << (29 - s), region = -(1 << (31 - s)) | k1;
 		E(c, ppc_sradi(T_X, T_ADDR, s));
@@ -1004,10 +1103,7 @@ static unsigned emit_addr(struct ctx *c, unsigned rs, int16_t imm, unsigned alig
 		 * dentro de la RDRAM quedan solo los bits del desplazamiento (r12,
 		 * listo para el acceso). Rotar los bits del desplazamiento por
 		 * encima de la alineación al tope y recortarlos deja 0 si vale. */
-		E(c, ppc_oris(T_Y, va, 0x2000));
-		E(c, ppc_addis(T_Y, T_Y, 0x6000));
-		E(c, ppc_rldicl(T_X, T_Y, 64 - s, s - abits));
-		E(c, ppc_cmpdi(CR_T, T_X, 0));
+		emit_kseg_test(c, va, align);
 	}
 	c->addr.pending = false;
 	if (SALSA64_REC_OLD(r, SALSA64_REC_DBG_NO_DATA)) {  /* sin datos mapeados: todo lo demás a C */
@@ -1063,16 +1159,16 @@ static void emit_load(struct ctx *c, unsigned k, unsigned kind, unsigned where)
 	unsigned rt = I_RT(i);
 	int slow = new_label(c), resume = new_label(c);
 
-	unsigned va = emit_addr(c, I_RS(i), (int16_t)i, align[kind], slow, false);
+	unsigned va = emit_addr(c, I_RS(i), (int16_t)i, align[kind], slow, false, true);
 	unsigned d = where == DST_GPR ? dst(c, rt, T_V) : T_V;
 	switch (kind) {
-	case SALSA64_REC_LB:  E(c, ppc_lbzx(d, R_RDRAM, T_Y)); E(c, ppc_extsb(d, d)); break;
-	case SALSA64_REC_LBU: E(c, ppc_lbzx(d, R_RDRAM, T_Y)); break;
-	case SALSA64_REC_LH:  E(c, ppc_lhzx(d, R_RDRAM, T_Y)); E(c, ppc_extsh(d, d)); break;
-	case SALSA64_REC_LHU: E(c, ppc_lhzx(d, R_RDRAM, T_Y)); break;
-	case SALSA64_REC_LW:  E(c, ppc_lwzx(d, R_RDRAM, T_Y)); E(c, ppc_extsw(d, d)); break;
-	case SALSA64_REC_LWU: E(c, ppc_lwzx(d, R_RDRAM, T_Y)); break;
-	default:              E(c, ppc_ldx(d, R_RDRAM, T_Y)); break;
+	case SALSA64_REC_LB:  fm_access(c, ppc_lbzx(d, R_RDRAM, T_Y), false); E(c, ppc_extsb(d, d)); break;
+	case SALSA64_REC_LBU: fm_access(c, ppc_lbzx(d, R_RDRAM, T_Y), false); break;
+	case SALSA64_REC_LH:  fm_access(c, ppc_lhzx(d, R_RDRAM, T_Y), false); E(c, ppc_extsh(d, d)); break;
+	case SALSA64_REC_LHU: fm_access(c, ppc_lhzx(d, R_RDRAM, T_Y), false); break;
+	case SALSA64_REC_LW:  fm_access(c, ppc_lwzx(d, R_RDRAM, T_Y), false); E(c, ppc_extsw(d, d)); break;
+	case SALSA64_REC_LWU: fm_access(c, ppc_lwzx(d, R_RDRAM, T_Y), false); break;
+	default:              fm_access(c, ppc_ldx(d, R_RDRAM, T_Y), false); break;
 	}
 	/* COP1: a casa y al registro residente directo de la RDRAM (T_Y),
 	 * antes de `resume`: el camino lento llega ahí sin T_Y y lo carga de
@@ -1169,22 +1265,21 @@ static void emit_store(struct ctx *c, unsigned k, unsigned kind, unsigned from)
 	} else {
 		v = get(c, rt, T_S1);
 	}
-	unsigned va = emit_addr(c, I_RS(i), (int16_t)i, align[kind], slow, true);
+	unsigned va = emit_addr(c, I_RS(i), (int16_t)i, align[kind], slow, true, true);
 	/* Código recompilado en estos 128 bytes: por el camino lento. */
-	E(c, ppc_srdi(T_X, T_Y, SALSA64_REC_FLAG_SHIFT));
-	E(c, ppc_lbzx(T_X, R_FLAGS, T_X));
-	E(c, ppc_cmpwi(CR_T, T_X, 0));
-	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
+	emit_store_check(c, slow);
+	uint32_t w;
 	if (fv) {
-		E(c, from == DST_FPR64 ? ppc_stfdx(fv, R_RDRAM, T_Y) : ppc_stfsx(fv, R_RDRAM, T_Y));
+		w = from == DST_FPR64 ? ppc_stfdx(fv, R_RDRAM, T_Y) : ppc_stfsx(fv, R_RDRAM, T_Y);
 	} else {
 		switch (kind) {
-		case SALSA64_REC_SB: E(c, ppc_stbx(v, R_RDRAM, T_Y)); break;
-		case SALSA64_REC_SH: E(c, ppc_sthx(v, R_RDRAM, T_Y)); break;
-		case SALSA64_REC_SW: E(c, ppc_stwx(v, R_RDRAM, T_Y)); break;
-		default:             E(c, ppc_stdx(v, R_RDRAM, T_Y)); break;
+		case SALSA64_REC_SB: w = ppc_stbx(v, R_RDRAM, T_Y); break;
+		case SALSA64_REC_SH: w = ppc_sthx(v, R_RDRAM, T_Y); break;
+		case SALSA64_REC_SW: w = ppc_stwx(v, R_RDRAM, T_Y); break;
+		default:             w = ppc_stdx(v, R_RDRAM, T_Y); break;
 		}
 	}
+	fm_access(c, w, true);
 	bind(c, resume);
 	unsigned save_sec = c->sec;
 	c->sec = SEC_COLD;
@@ -2335,6 +2430,7 @@ static void restore_borrowed(struct ctx *c)
 static uint32_t finalize(struct salsa64_rec *rec, uint32_t base, uint32_t limit)
 {
 	uint32_t nhot = rec->nbuf[SEC_HOT], ncold = rec->nbuf[SEC_COLD];
+	rec->fm_nnew = 0;
 	if (rec->overflow || base + nhot + ncold > limit)
 		return 0;
 	uint32_t start[2] = { base, base + nhot };
@@ -2361,6 +2457,16 @@ static uint32_t finalize(struct salsa64_rec *rec, uint32_t base, uint32_t limit)
 			*w = (*w & ~0x03FFFFFCu) | ((uint32_t)disp & 0x03FFFFFC);
 		}
 	}
+	/* fastmem: los sitios y sus caminos fríos, en palabras de la caché
+	 * (rec.c los anota con la generación del tramo al instalar el bloque). */
+	for (unsigned k = 0; k < rec->fm_npend; k++) {
+		const struct salsa64_rec_label *ls = &rec->labels[rec->fm_pend_site[k]], *lc = &rec->labels[rec->fm_pend_cold[k]];
+		if (ls->sec > SEC_COLD || lc->sec > SEC_COLD)
+			return 0;
+		rec->fm_new_site[k] = start[ls->sec] + ls->pos;
+		rec->fm_new_cold[k] = start[lc->sec] + lc->pos;
+	}
+	rec->fm_nnew = rec->fm_npend;
 	memcpy(rec->code + start[0], rec->buf[SEC_HOT], nhot * 4);
 	memcpy(rec->code + start[1], rec->buf[SEC_COLD], ncold * 4);
 	salsa64_rec_sync(rec->code + base, (nhot + ncold) * 4);
@@ -2389,6 +2495,7 @@ static void reset_emission(struct ctx *c)
 	c->n = n;
 	c->temp = temp;
 	c->wide = (rec->opts & SALSA64_REC_OPT_WIDE) != 0;
+	c->fastmem = rec->fastmem && !c->wide;
 	c->tramp = -1;
 	c->has_branch = has_branch;
 	c->fr_check = fr_check;
@@ -2443,6 +2550,7 @@ static uint32_t emit_block(struct ctx *c, uint32_t base, uint32_t limit)
 
 	rec->nbuf[0] = rec->nbuf[1] = 0;
 	rec->nlabels = rec->nfixups = 0;
+	rec->fm_npend = 0;
 	rec->overflow = false;
 	if (!c->wide)
 		chain_build(c);
@@ -2587,6 +2695,7 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	c->temp = temp;
 	c->seg_kind = (uint8_t)seg;
 	c->wide = (rec->opts & SALSA64_REC_OPT_WIDE) != 0;
+	c->fastmem = rec->fastmem && !c->wide;
 	c->tramp = -1;
 	if (max > SALSA64_REC_MAX_INSNS)
 		max = SALSA64_REC_MAX_INSNS;
