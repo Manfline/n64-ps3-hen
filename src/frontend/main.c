@@ -1162,23 +1162,11 @@ static int file_exists(const char *path)
 }
 
 /* Tamaño de página (KB) de la memoria donde cae `p`, por la syscall 351
- * (sys_memory_get_page_attribute, sin envoltura en PSL1GHT; disposición de
- * sys_page_attr_t como la documenta RPCS3); 0 si falla. */
-static struct {
-	u64 attribute, access_right;
-	u32 page_size, pad;
-	u64 reserve[4];
-} page_attr;
-
-static s32 page_attr_query(const void *p)
-{
-	lv2syscall2(351, (u64)(uintptr_t)p, (u64)(uintptr_t)&page_attr);
-	return_to_user_prog(s32);
-}
-
+ * (platform/ps3/rec_cache.h); 0 si falla. */
 static unsigned page_kb(const void *p)
 {
-	return page_attr_query(p) == 0 ? page_attr.page_size / 1024 : 0;
+	struct salsa64_ps3_page_attr a;
+	return salsa64_ps3_page_attr(p, &a) == 0 ? a.page_size / 1024 : 0;
 }
 
 /* Texto del ISViewer: al log línea por línea (hilo de emulación). */
@@ -3566,8 +3554,21 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		bool sites;
 		rec.hot_bytes = file_exists(PROFILE_ON_PATH) ? profile_hot_kb(&sites) << 10 : 0;
 	}
-	if (!salsa64_ps3_rec_wanted())
+	char probe_why[160];
+	bool rec_wanted = salsa64_ps3_rec_wanted(), probe_ok = false, probe_first = false;
+	if (rec_wanted) {
+		/* Antes de tocar la caché: con CFW el hilo podía quedarse trabado
+		 * en salsa64_rec_init (issue #2; rec_cache.h). */
+		probe_ok = salsa64_ps3_rec_probe_wait(probe_why, sizeof probe_why, &probe_first);
+		if (!probe_ok)
+			salsa64_log("recompilador no disponible en esta consola (%s): intérprete", probe_why);
+		else if (probe_first)
+			salsa64_log("recompilador: caché de código probada (%s)", probe_why);
+	}
+	if (!rec_wanted)
 		salsa64_log("recompilador apagado (%s): intérprete", SALSA64_NOREC_FLAG);
+	else if (!probe_ok)
+		;
 	else if (!(use_rec = salsa64_rec_init(&rec, &n64.cpu, salsa64_ps3_rec_cache(), SALSA64_REC_CACHE_BYTES)))
 		salsa64_log("recompilador no disponible: intérprete");
 	else
@@ -4442,6 +4443,10 @@ int main(void)
 	if (!version_build(salsa64_title, salsa64_appid, build_text, sizeof build_text))
 		build_text[0] = '\0';
 	pres.autotest = salsa64_autotest();
+	/* La caché del recompilador se prueba en otro hilo mientras arranca el
+	 * menú (rec_cache.h); run_game espera el resultado. */
+	if (salsa64_ps3_rec_wanted())
+		salsa64_ps3_rec_probe_start(SALSA64_REC_PROBE_FILE, salsa64_version);
 	sys_ppu_thread_t watch_tid;
 	bool watching = sysThreadCreate(&watch_tid, watch_thread, NULL, WATCH_PRIO, 0x10000, THREAD_JOINABLE,
 					(char *)"salsa64_latido") == 0;
