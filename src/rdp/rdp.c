@@ -26,6 +26,7 @@
 #include <sys/systime.h>
 
 #include "rdp/targets.h"
+#include "rdp/vmatch.h"
 #include "rsp/gfx/gfx.h"
 #include "rsp/gfx/hle.h"
 
@@ -69,6 +70,19 @@
  * filtro de la pausa lee la cobertura ~1 s). */
 #define RB_KEEP_TASKS 32
 #define RB_WAIT_US  200000  /* la emulación no espera una copia más que esto */
+/* Interpolación por geometría (salsa64_rdp_interp, docs/interpolacion.md):
+ * los vértices de una tarea con GFX_JOB_INTERP ocupan hasta VTX_INTERP de su
+ * juego de búferes y detrás van sus posiciones en la tarea anterior (un
+ * float[4] por vértice, en el mismo orden). Las tablas del emparejamiento
+ * (vmatch.c) son dos, de VM_GROUPS grupos y VM_CLIP vértices (Zelda OoT usa
+ * ~360 y ~2900 por cuadro; GoldenEye ~250 y ~3400); un cuadro que no cabe no
+ * se interpola. */
+#define VTX_INTERP  ((VTX_BYTES / 3 * 2) & ~31u)
+#define VM_GROUPS   2048
+#define VM_CLIP     32768
+#define INTERP_DISP 120.0f  /* corte (vmatch_pair): píxeles de la N64 por cuadro del juego */
+_Static_assert((VTX_BYTES - VTX_INTERP) / 16 >= VTX_INTERP / sizeof(struct gfx_vertex),
+	       "una posición anterior por vértice");
 
 _Static_assert(sizeof(struct gfx_vertex) == sizeof(rsxkit_vertex), "vértice de la HLE = vértice de rsxkit");
 _Static_assert(sizeof(((struct gfx_draw *)0)->k) == sizeof(((rsxkit_draw *)0)->k), "términos k");
@@ -102,6 +116,7 @@ struct set {
 	bool rb_sync[RB_PER_TASK];
 	uint32_t rb_n, rb_nsync;
 	bool trace;  /* tarea con traza detallada en el log (ver readbacks_wanted) */
+	bool interp; /* se envió con GFX_JOB_INTERP (vértices hasta VTX_INTERP) */
 };
 
 static inline void lwsync(void) { __asm__ volatile("lwsync" ::: "memory"); }
@@ -121,6 +136,16 @@ void salsa64_rdp_set_log(void (*fn)(const char *fmt, ...))
 {
 	rdp_log = fn;
 }
+
+/* Tablas del emparejamiento: memalign la primera vez que se enciende la
+ * interpolación (fuera del bucle) y quedan; apagada no se reservan. */
+struct vm_frame {
+	struct vmatch_group g[VM_GROUPS];
+	float clip[VM_CLIP][4];
+	uint32_t index[4 * VM_GROUPS];
+	struct vmatch_table t;
+};
+static struct vm_frame *vm;
 
 struct depth {
 	bool used;
@@ -240,6 +265,13 @@ static struct {
 	} again;
 	/* salsa64_rdp_present dibuja (sin filtro) o solo elige la fuente. */
 	bool no_draw;
+	/* Interpolación por geometría (salsa64_rdp_interp). */
+	struct {
+		bool on;         /* las tareas que se envían llevan GFX_JOB_INTERP */
+		float t;         /* < 1: cada tarea se dibuja en esa fracción (prueba) */
+		uint32_t cur;    /* tabla de la última tarea traducida (vm[cur]) */
+		bool have_prev;  /* vm[cur] es de la tarea anterior a la que se traduce */
+	} interp;
 } rdp;
 
 static void acquire(void *ctx, struct gfx_job *job);
@@ -320,6 +352,20 @@ void salsa64_rdp_vi(uint32_t origin, uint32_t width)
 void salsa64_rdp_fbfx(int level)
 {
 	rdp.fbfx = level < 0 ? 0 : level > 2 ? 2 : level;
+}
+
+int salsa64_rdp_interp(bool on, float t)
+{
+	if (on && !vm) {
+		vm = memalign(128, 2 * sizeof *vm);
+		if (!vm)
+			return RSXKIT_ENOMEM;
+		for (int i = 0; i < 2; i++)
+			vmatch_table_init(&vm[i].t, vm[i].g, VM_GROUPS, vm[i].clip, VM_CLIP, vm[i].index, 4 * VM_GROUPS);
+	}
+	rdp.interp.t = t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t;
+	rdp.interp.on = on;
+	return RSXKIT_OK;
 }
 
 void salsa64_rdp_last_present(int *slot, uint32_t *age, uint32_t *addr)
@@ -438,6 +484,7 @@ uint32_t salsa64_rdp_reset(void)
 	memset(rdp.surf_dirty, 0, sizeof rdp.surf_dirty);
 	rdp.last_set = 0;
 	memset(&rdp.last_res, 0, sizeof rdp.last_res);
+	rdp.interp.have_prev = false;
 	memset(&rdp.stats, 0, sizeof rdp.stats);
 	memset(&rdp.tb, 0, sizeof rdp.tb);
 	return pending;
@@ -537,6 +584,11 @@ static void acquire(void *ctx, struct gfx_job *job)
 	 * decodificación en el PPE). */
 	if (rdp.fbfx >= 1)
 		job->flags |= GFX_JOB_FBTEX;
+	s->interp = rdp.interp.on && vm;
+	if (s->interp) {
+		job->flags |= GFX_JOB_INTERP;
+		job->vtx_cap = VTX_INTERP;
+	}
 	rdp.acquired = n + 1;
 }
 
@@ -1232,6 +1284,35 @@ static void frame_mirror(int slot, uint32_t rows, bool wait);
 static void again_set(int slot, uint32_t y0, uint32_t pw, uint32_t ph, const rsxkit_view *view,
 		      const struct salsa64_overscan *crop);
 
+/* Interpolación: empareja los vértices de la tarea con los de la anterior
+ * (vmatch.c) y deja sus posiciones de allá detrás de los vértices. Sin
+ * pareja (o en un corte), la de ahora. */
+static void interp_task(struct set *s, const struct gfx_result *res)
+{
+	uint64_t t0 = sysGetSystemTime();
+	uint32_t c = rdp.interp.cur ^ 1;
+	struct vmatch_table *cur = &vm[c].t, *prev = rdp.interp.have_prev ? &vm[c ^ 1].t : NULL;
+	vmatch_build(cur, s->cmd, res->cmd_bytes, rdp.rdram, rdp.rdram_size);
+	struct vmatch_stats st;
+	vmatch_pair(prev, cur, INTERP_DISP, &st);
+	uint32_t nv = res->vtx_bytes / sizeof(struct gfx_vertex);
+	uint32_t paired = vmatch_prev(prev, cur, &st, (const struct gfx_vertex *)s->vtx, nv,
+				      (float(*)[4])(s->vtx + VTX_INTERP));
+	rdp.interp.cur = c;
+	rdp.interp.have_prev = true;
+	if (prev) {
+		rdp.stats.interp_tasks++;
+		rdp.stats.interp_cuts += st.cut;
+		rdp.stats.interp_full += cur->full;
+		rdp.stats.interp_vertices += nv;
+		rdp.stats.interp_paired += paired;
+		rdp.stats.interp_content += st.by_content;
+	}
+	if (rdp.interp.t < 1.0f)
+		rsxkit_vertices_prev(s->vtx_off + VTX_INTERP, RSXKIT_MEM_MAIN, rdp.interp.t);
+	rdp.stats.us_interp += sysGetSystemTime() - t0;
+}
+
 /* Traduce la salida de la tarea n a comandos del RSX. */
 static void translate(uint32_t n)
 {
@@ -1239,6 +1320,10 @@ static void translate(uint32_t n)
 	struct set *s = &rdp.sets[n % SETS];
 	const struct gfx_result *res = &s->res;
 	rsxkit_vertices(s->vtx_off, RSXKIT_MEM_MAIN);
+	if (s->interp)
+		interp_task(s, res);
+	else
+		rdp.interp.have_prev = false;
 	rdp.bound_t = -1;
 	rdp.bound_d = NULL;
 	rdp_targets_task(&rdp.tg);

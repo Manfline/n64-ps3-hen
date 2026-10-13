@@ -74,6 +74,13 @@ struct salsa64_rdp_stats {
 	 * profundidad cubría la superficie; no debería pasar, ver
 	 * salsa64_rdp_init). */
 	uint32_t binds_failed;
+	/* Interpolación por geometría (salsa64_rdp_interp): tareas emparejadas
+	 * con la anterior, las que fueron un corte o no cupieron en las tablas,
+	 * sus vértices de salida y los que tienen pareja, grupos hallados por el
+	 * contenido y el tiempo del PPE (presentación). */
+	uint32_t interp_tasks, interp_cuts, interp_full;
+	uint32_t interp_vertices, interp_paired, interp_content;
+	uint64_t us_interp;
 };
 
 /* Después de rsxkit_init. scale = 0 (automática): la mayor escala entera
@@ -168,6 +175,15 @@ void salsa64_rdp_vi(uint32_t origin, uint32_t width);
  * vienen de un destino se leen de la RDRAM como antes y nada se copia), 1
  * solo render a textura, 2 también las copias a la RDRAM (por omisión). */
 void salsa64_rdp_fbfx(int level);
+/* Interpolación de cuadros por geometría (docs/interpolacion.md), en
+ * preparación: con `on`, las tareas que se envían piden a la HLE la
+ * identidad de sus vértices (GFX_JOB_INTERP) y al traducir cada una el PPE
+ * empareja sus vértices con los de la anterior (vmatch.c) y deja sus
+ * posiciones de allá junto a los vértices; t < 1 (para probar) dibuja cada
+ * tarea en prev + (pos − prev)·t. Apagada no cambia nada ni reserva memoria;
+ * la primera vez que se enciende reserva las tablas (~1,3 MB). Fuera del
+ * bucle; devuelve 0 o RSXKIT_ENOMEM. */
+int salsa64_rdp_interp(bool on, float t);
 /* Hilo de emulación: un DMA escribió la RDRAM [pa, pa + len); con
  * `gfx_in_flight`, mientras corría una tarea gráfica. Las copias de esa
  * tarea y de las anteriores no pisan ese tramo (targets.h, rdp_dma_ring). */

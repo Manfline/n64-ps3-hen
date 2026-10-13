@@ -512,13 +512,17 @@ recorte cercano (NoN: no hay vértices inventados por el recorte) y con
 1. **La HLE da la identidad, sin local store nuevo** (SPE 0). Con la
    bandera del trabajo `GFX_JOB_INTERP`:
    - por cada G_VTX, un registro en el flujo de comandos que ya existe
-     (`GFX_OP_VGROUP`: dirección y paso de la lista del juego, hash del
-     contenido, v0, n, el viewport y las n coordenadas de recorte que ya
-     calculó; ≤ 1 KB), así no hace falta otro búfer de DMA;
+     (`GFX_OP_VGROUP`: dirección y paso de la lista del juego, v0, n, el
+     viewport y las n coordenadas de recorte que ya calculó; ≤ 1 KB), así
+     no hace falta otro búfer de DMA; el hash del contenido lo saca el PPE
+     de la RDRAM;
    - en el `pad` libre de cada vértice de salida, de qué grupo y lugar
-     sale (el RSX no lo lee).
-   Sin la bandera no se emite nada: el SPE 0 hace lo de hoy. ~1 KB de
-   código.
+     sale (el RSX no lo lee); los que agrega el recorte cercano, su grupo
+     y sus dos extremos (en GoldenEye, SM64 y Mario Kart los dos extremos
+     son siempre del mismo G_VTX), y la fracción la recalcula el PPE con
+     las coordenadas de recorte del registro.
+   Sin la bandera no se emite nada: el SPE 0 hace lo de hoy (las
+   identidades quedan en 0). En `src/rsp/gfx/vgroup.c`, con -Os.
 2. **Emparejamiento en el PPE, al traducir** (hilo 1; código portable,
    probado en el host): índice de los grupos del cuadro anterior (dirección
    + repeticiones, contenido de respaldo), reglas de corte por grupo y por
@@ -542,6 +546,52 @@ recorte cercano (NoN: no hay vértices inventados por el recorte) y con
    se vea; en la PS3, Zelda en el bosque Kokiri y en el campo de Hyrule:
    ms del RSX (la escena ×3), hilo 1, campos/s de la emulación (no deben
    bajar) y a simple vista.
+
+### Pasos 1–3: hechos en el host y en RPCS3 (2026-10-13)
+
+- **HLE (SPE 0).** `src/rsp/gfx/vgroup.c` (con -Os) arma el registro
+  `GFX_OP_VGROUP` de cada G_VTX cuando el trabajo trae `GFX_JOB_INTERP`;
+  la identidad viaja en los bits altos de `gfx_vtx.clip` hasta
+  `gfx_vertex.pad`. Los vértices que agrega el recorte cercano llevan su
+  grupo y sus dos extremos: medidos en el host, GoldenEye (2604), SM64
+  (760) y Mario Kart (822) los tienen siempre en el mismo G_VTX; la
+  fracción la recalcula el PPE con las coordenadas del registro. El
+  contador de grupos va en un hueco de `gfx_state` (el estado no crece).
+  Local store: +952 bytes de código (107 680 contra 106 728 de main), el
+  mismo bss, holgura de la pila 1856 (mínimo 1536). Con `--gc-sections`
+  en el enlace de los SPU (commit aparte) el SPE 0 queda en 104 928, con
+  la interpolación incluida, y holgura 4672. Apagada: una prueba de la
+  bandera por G_VTX y las identidades en 0.
+- **Emparejamiento (PPE).** `src/rdp/vmatch.c`, portable: el mismo en el
+  host (`salsa64-run --interp`) y en la PS3. En el host da lo mismo que el
+  prototipo (GoldenEye contra la verdad, k = 3: 30,05 dB y 3,30 % de
+  píxeles malos). En la PS3 corre al traducir cada tarea (hilo de
+  presentación), con dos tablas de 2048 grupos y 32 768 vértices (~1,3 MB,
+  reservadas la primera vez que se enciende); las posiciones anteriores
+  van detrás de los vértices, en el mismo juego de búferes (con la bandera
+  la HLE escribe vértices hasta 4/3 MB de los 2).
+- **rsxkit.** `rsxkit_vertices_prev(offset, location, t)` liga un arreglo
+  más de posiciones (TEXCOORD1) y dibuja con `rsxkit_lincomb_lerp.vcg`, el
+  mismo vertex program con `prev + (pos − prev)·t`. Sin llamarla, el
+  programa y el estado de siempre.
+- **Prueba sin presentación nueva:** `/dev_hdd0/salsa64/interp-prueba`
+  (con «t»): cada tarea se empareja con la anterior y se dibuja en t. En
+  RPCS3, gfxtest con t = 1 sale idéntico (los mismos bytes) a sin el
+  archivo, y con t = 0 el cubo que gira sale un cuadro atrás (0,71 % de
+  los píxeles) y lo demás igual. Zelda (la intro, 1800 campos, con
+  t = 1): 72–83 % de los vértices de salida con pareja por ventana de
+  5 s (~1000–4000 por tarea), un corte, nada sin lugar en las tablas, y
+  0,18–0,26 ms del PPE por tarea (el tiempo de RPCS3 no es concluyente);
+  en el host la misma intro da 75,8 %: el PPE empareja como el prototipo
+  (en el vuelo de Navi, 95,8 %). GoldenEye no llega a jugar en RPCS3 con
+  ningún build (el RSX muere a los ~16 s; docs/estado.md).
+- **Apagada = main:** en el host, 105 imágenes de 7 escenas (Perfect
+  Dark, la pausa de Zelda, SM64, Mario Kart, GoldenEye, Banjo y Conker)
+  idénticas a las de antes; pruebas unitarias bien (494; solo falla
+  test_cover en macOS, como en main). En RPCS3, la imagen de gfxtest de
+  la rama sin el archivo es la misma (byte a byte) que la de main.
+
+Falta el paso 4 (presentar los campos intermedios) y medir en la PS3.
 
 ## Reproducir en la Mac
 
@@ -573,6 +623,10 @@ cp tools/interp-index.html build/interp/index.html
   `SALSA64_INTERP_SIN_IMAGENES=1` solo cuenta.
 - `--interp-k K` (campos por cuadro), `--interp-decimate` (1 de cada K
   tareas es el cuadro del juego), `--interp-disp PX` (umbral de corte, 120).
+- En RPCS3 (pasos 1–3, sin presentación nueva): `tools/rpcs3-run.py
+  build/salsa64/salsa64.elf --embedded gfxtest --bandera interp-prueba=0`
+  dibuja cada tarea un cuadro atrás (el cubo); con `=1`, igual que sin el
+  archivo, y el log de cada 5 s trae la línea «gfx: interpolación».
 - `SALSA64_DP_CYCLES=3000000` hace de tope de 30 en GoldenEye y Perfect
   Dark; `-DSALSA64_CPI=2` (en `EXTRA_CFLAGS`) cobra dos ciclos por
   instrucción.

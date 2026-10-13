@@ -221,6 +221,11 @@ SYS_PROCESS_PARAM(1001, 0x100000);
  * (como hasta v0.1.0); los mandos siguen sueltos y el latido mira. */
 #define NO_PAUSE_PATH SALSA64_DATA_DIR "/sin-pausa"
 #define JPEG_PPE_PATH SALSA64_DATA_DIR "/jpeg-ppe"  /* diagnóstico: la tarea JPEG en el PPE */
+/* Prueba de la interpolación por geometría en preparación (salsa64_rdp_interp):
+ * con el archivo, cada tarea se empareja con la anterior; su contenido («t»,
+ * por omisión 1) es la fracción en que se dibuja cada tarea desde la
+ * anterior (1: igual que sin el archivo; 0: un cuadro atrás). */
+#define INTERP_TEST_PATH SALSA64_DATA_DIR "/interp-prueba"
 /* Filtro de la presentación (frontend/filters): el de menu.cfg («filtro =
  * …»). Con el archivo `filtro` (una clave, p. ej. «crt-mascara»), ese,
  * también en las pruebas automáticas; con `filtros-ciclo`, todos por turnos
@@ -2561,6 +2566,17 @@ static void stats(uint64_t now)
 			    (double)(rs.fp_loads - sw.rdp0.fp_loads) / tasks, rs.draws_generated - sw.rdp0.draws_generated,
 			    (double)(rs.draws_generated - sw.rdp0.draws_generated) / tasks, rs.fp_programs,
 			    rs.fp_generated - sw.rdp0.fp_generated, rs.fp_evictions - sw.rdp0.fp_evictions);
+		uint32_t itasks = rs.interp_tasks - sw.rdp0.interp_tasks;
+		if (itasks) {
+			uint32_t iv = rs.interp_vertices - sw.rdp0.interp_vertices;
+			uint32_t ip = rs.interp_paired - sw.rdp0.interp_paired;
+			salsa64_log("gfx: interpolación: %u tareas con anterior (%u cortes, %u sin lugar en las tablas), "
+				    "vértices de salida con pareja %.1f %% (%.0f por tarea), %u grupos por el contenido, "
+				    "%.3f ms del PPE por tarea", itasks, rs.interp_cuts - sw.rdp0.interp_cuts,
+				    rs.interp_full - sw.rdp0.interp_full, iv ? 100.0 * ip / iv : 0.0, (double)iv / itasks,
+				    rs.interp_content - sw.rdp0.interp_content,
+				    (rs.us_interp - sw.rdp0.us_interp) / 1e3 / tasks);
+		}
 		uint32_t rb = rs.readbacks - sw.rdp0.readbacks, rbw = rs.readback_waits - sw.rdp0.readback_waits;
 		uint32_t trsx = rs.tex_rsx - sw.rdp0.tex_rsx, trd = rs.tex_rdram - sw.rdp0.tex_rdram;
 		uint32_t tself = rs.tex_self - sw.rdp0.tex_self, primes = rs.primes - sw.rdp0.primes;
@@ -3610,6 +3626,22 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		salsa64_rdp_fbfx(fbfx);
 		salsa64_log("efectos de framebuffer: %s", fbfx <= 0 ? "apagados" : fbfx == 1 ? "render a textura" :
 								"render a textura y copias a la RDRAM");
+	}
+	{
+		FILE *fi = fopen(INTERP_TEST_PATH, "r");
+		float t = 1.0f;
+		if (fi) {
+			if (fscanf(fi, "%f", &t) != 1)
+				t = 1.0f;
+			fclose(fi);
+			if (salsa64_rdp_interp(true, t) == 0)
+				salsa64_log("interpolación (prueba, " INTERP_TEST_PATH "): emparejar cada tarea con la "
+					    "anterior y dibujarla en t = %.2f", (double)t);
+			else
+				salsa64_log("interpolación (prueba): sin memoria para las tablas");
+		} else {
+			salsa64_rdp_interp(false, 1.0f);
+		}
 	}
 	{
 		/* SALSA64_DATA_DIR/trace-vi: registrar qué se presenta en cada uno
