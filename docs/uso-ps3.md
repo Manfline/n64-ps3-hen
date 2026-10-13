@@ -44,15 +44,18 @@ Reglas de la búsqueda:
 
 Se dibuja con el RSX; el panel de la derecha muestra el archivo, su
 ubicación, el código del juego, el tamaño, la región y el tipo de guardado
-detectado. La última ROM abierta queda elegida al volver al menú.
+detectado y, si la hay, la carátula del juego (abajo, «Carátulas»). La
+última ROM abierta queda elegida al volver al menú.
 
 | Botón (DualShock 3) | Acción |
 |---|---|
 | Cruceta arriba/abajo | Elegir (mantenida, repite y acelera) |
 | Cruceta izquierda/derecha | Saltar una página |
 | × | Abrir la ROM elegida (o la opción) |
+| □ | Trucos de la ROM elegida (abajo, «Trucos») |
+| SELECT | Ajustes de la ROM elegida (abajo, «Ajustes por juego») |
 | △ | Ir a Opciones |
-| ○ | Volver de Opciones |
+| ○ | Volver de Opciones, de los trucos o de los ajustes |
 
 Al final de la lista están «Opciones» y «Salir al XMB».
 
@@ -62,6 +65,18 @@ Opciones:
 - **Recorte del borde (overscan)**: sin recorte, normal (por omisión) o
   amplio. Recorta los bordes de la imagen, donde algunos juegos dejan
   basura.
+- **Aspecto**: 4:3 (la imagen original, con franjas a los lados en una tele
+  panorámica) o 16:9 (la estira a lo ancho para llenar la pantalla). Vale al
+  abrir el juego; se guarda en `menu.cfg` (`aspecto = 4:3|16:9`). Con 16:9 no
+  se usa la presentación 1:1 de la escala entera.
+- **Filtro**: cómo se ve la imagen del juego al escalarla. **Suave** (por
+  omisión, la de siempre: los píxeles se mezclan), **Nítida** (puntos
+  cuadrados, sin mezclar; se nota cuando la escala interna no coincide con la
+  pantalla), **Líneas suaves** y **Líneas fuertes** (filas oscurecidas
+  encima de la imagen, como una tele de tubo; las capturas salen sin ellas).
+  Vale al abrir el juego; se guarda en `menu.cfg` (`filtro =
+  suave|nitido|lineas|lineas+`). Estos cuatro son de VIDEOGAMES SCZ (el panel
+  dice de quién es cada filtro).
 - **Resolución**: 720p (por omisión, render a 3×) o 1080p (render a 4×).
   Se guarda en video.cfg (así arranca la próxima vez) y se pone con
   «Aplicar ahora», sin cerrar Salsa64; el panel muestra la salida actual y,
@@ -91,9 +106,127 @@ Opciones:
   sin reiniciar». Cambiar solo la escala no toca el video.
 - **Mostrar FPS**: el contador de velocidad dentro del juego (abajo, en
   «Contador de velocidad»). También se cambia en el juego con SELECT + △.
-- **Confirmar al salir**: con «Sí» (por omisión), START + SELECT en el juego
-  pregunta antes de cerrarlo (abajo, en «Salir del juego»); con «No», sale
-  directo como antes. Se guarda en `menu.cfg` (`confirmar = si|no`).
+- **Confirmar al salir**: con «Sí» (por omisión), «Salir» del menú de pausa
+  pregunta antes de cerrar el juego (abajo, en «Salir del juego»); con «No»,
+  sale directo. Se guarda en `menu.cfg` (`confirmar = si|no`).
+- **Idioma**: español (por omisión), English, Français, Deutsch, Italiano o
+  Português. Traduce el menú, los paneles, los avisos del juego, el menú de
+  pausa y la lista de trucos (los títulos de los juegos y las rutas quedan
+  como están). Se guarda en `menu.cfg` (`idioma = es|en|fr|de|it|pt`). La
+  fuente tiene ASCII y Latin-1: no hay japonés, ruso ni chino.
+- **Descargar carátulas** / **Descargar trucos**: experimental y oculto por
+  omisión (abajo, «Descargas»).
+
+### Carátulas
+
+Si hay una imagen del juego en `/dev_hdd0/salsa64/covers/`, el panel la
+muestra a la izquierda de los datos cuando la selección se detiene un
+momento. Solo **PNG** (todos los tipos de color, también entrelazados, de
+hasta 8 MB); se reducen a 320 × 448 como máximo. Salsa64 no trae carátulas:
+se ponen por FTP. Se busca, en este orden:
+
+1. el nombre de la ROM sin la extensión: `mijuego.z64` → `mijuego.png`;
+2. el código del juego de 4 letras que muestra el panel (`NXXE.png`);
+3. un nombre parecido, como los de los paquetes de carátulas de RetroArch
+   («Nombre del juego (USA).png»): se ignoran mayúsculas, signos y lo que va
+   entre paréntesis o corchetes, y vale que uno esté dentro del otro
+   («NOMBREJUEGO64» ↔ «Nombre Juego 64 (USA).png»), siempre de la misma región
+   que la ROM (por las etiquetas `(U)`, `(E)`, `(J)`, `(USA)`, `(Europe)`… o
+   por la letra de región del código). Si el parecido cuadra con varios
+   juegos, no se elige ninguno.
+
+Si no encuentra ninguna, el log dice «carátula: ninguna para …» con el código
+del juego, para renombrar la imagen a `<código>.png`. Una imagen dañada o
+demasiado grande se ignora y el log dice por qué.
+
+### Trucos
+
+□ sobre una ROM abre su página de trucos: × activa o desactiva el elegido,
+○ vuelve. Los activos se aplican al abrir el juego, en cada campo de video, y
+se recuerdan en `<nombre>.on`, al lado del `.cht`, sin tocar el `.cht`.
+
+Los archivos van en `/dev_hdd0/salsa64/cheats/` y se buscan como las
+carátulas (nombre de la ROM con `.cht`, sin distinguir mayúsculas, o un
+nombre parecido de la misma región; para los parecidos se piden 8 letras del
+nombre, porque un truco de otro juego escribiría en otra memoria). Valen dos
+formatos, que se reconocen solos:
+
+- **Project64** (`Config/Cheats`): secciones `[CRC1-CRC2-C:xx]`; se usa la
+  del CRC de la ROM (si ninguna coincide, la primera, y el menú avisa). Cada
+  `$Grupo\Nombre` sale como «Grupo > Nombre»; los trucos con opciones (`??`
+  en el valor y líneas `nn Opción` debajo) salen como un truco por opción.
+- **RetroArch**:
+
+  ```
+  cheats = 1
+  cheat0_desc = "Vidas infinitas"
+  cheat0_code = "8107A6C4 0063"
+  cheat0_enable = false
+  ```
+
+  Varias líneas de código se separan con `+`.
+
+Códigos GameShark que se aplican: `80`, `A0`, `F0` (un byte), `81`, `A1`,
+`F1` (16 bits), `D0`–`D3` (la línea siguiente solo si el byte o los 16 bits
+son iguales o distintos) y `50` (repite la línea siguiente). Los demás tipos
+(botones del GameShark, etc.) se ignoran y el panel lo avisa. Hasta 4096
+trucos y 65 536 líneas por juego; `.cht` de hasta 1 MB. Un truco que se apaga
+deja la memoria como quedó (como en la consola): para deshacerlo del todo,
+cargar un estado o reiniciar el juego.
+
+En el juego, **SELECT + □** (o «Trucos» en el menú de pausa) abre la lista de
+trucos con el juego en pausa: cruceta arriba/abajo elige (mantenida, repite),
+izquierda/derecha o L1/R1 saltan 8, × activa o desactiva (se guarda al
+momento), ○, START o SELECT + □ cierran y el juego sigue. Si el juego no tiene
+trucos, un aviso lo dice.
+
+### Ajustes por juego
+
+SELECT sobre una ROM abre sus ajustes: **Aspecto**, **Filtro** y **Recorte
+del borde**, cada uno «Global» (lo de Opciones) o un valor propio para ese
+juego. Se guardan en `/dev_hdd0/salsa64/juegos/<nombre de la ROM sin
+extensión>.cfg`:
+
+```
+aspecto = 16:9      # 4:3 | 16:9 | global
+filtro = lineas     # suave | nitido | lineas | lineas+ | global
+recorte = apagado   # apagado | normal | amplio | global
+```
+
+Al abrir el juego, el log dice «imagen: … (con ajustes de este juego)».
+
+### Descargas (experimental, apagadas)
+
+Opciones puede bajar de internet las carátulas y los trucos que falten a las
+ROMs de la lista, pero está **apagado y oculto por omisión**: la PS3 solo
+habla TLS antiguo (GitHub exige uno moderno, así que es probable que falle) y
+Salsa64 no puede verificar los certificados HTTPS (los de la consola son
+viejos): la conexión no está protegida contra quien se meta en medio. Solo
+se bajan PNG y `.cht` (nada que se ejecute), a `covers/` y `cheats/`, con
+nombres sin carpetas, y nunca se pisa un archivo que ya esté. Todavía no se
+probó en la PS3 real.
+
+Para encenderlo, crear `/dev_hdd0/salsa64/descargas.cfg` con:
+
+```
+activar = si
+# Opcional: otras direcciones (base terminada en «/» e índice con la lista
+# de archivos: un nombre por línea, o el JSON de la API de GitHub).
+caratulas = http://IP-DE-TU-PC:8000/covers/
+caratulas_indice = http://IP-DE-TU-PC:8000/covers/index.txt
+trucos = http://IP-DE-TU-PC:8000/cheats/
+trucos_indice = http://IP-DE-TU-PC:8000/cheats/index.txt
+```
+
+Sin direcciones propias usa las de GitHub (el paquete de carátulas
+«RetroArch-Nintendo-64-USA-Box-Art» y `Config/Cheats` de Project64). La
+salida más segura es un servidor HTTP en la red de casa: bajar los archivos a
+la PC, escribir `index.txt` con un nombre por línea y servir la carpeta (por
+ejemplo con `python3 -m http.server 8000`). Aparecen dos filas en Opciones,
+«Descargar carátulas» y «Descargar trucos»: × empieza (para cada ROM sin
+carátula o sin `.cht` busca en el índice con el mismo criterio de nombres
+parecidos), el pie muestra «Descargando… N de M» y ○ cancela. Sin red, dice
+«No hay red».
 
 ## Controles en el juego
 
@@ -116,7 +249,8 @@ los atajos de Salsa64:
 
 | Atajo | Qué hace |
 |---|---|
-| START + SELECT | Pausa el juego y pregunta «¿Volver al menú?»: × cierra el juego y vuelve al menú (guarda la partida, apaga el audio y los SPEs); ○ sigue jugando. Ver «Salir del juego» |
+| START + SELECT | Menú de pausa: continuar, estados, trucos, FPS y salir. Ver «Salir del juego» |
+| SELECT + □ | Lista de trucos del juego, con el juego en pausa (ver «Trucos») |
 | SELECT + R1 | Guarda el estado en la ranura actual |
 | SELECT + L1 | Carga el estado de la ranura actual |
 | SELECT + derecha / izquierda (cruceta) | Cambia de ranura (0 a 9, en ronda) |
@@ -124,7 +258,7 @@ los atajos de Salsa64:
 | SELECT + R2 | Depuración gráfica: guarda en `/dev_hdd0/salsa64/` la salida de la HLE del cuadro en pantalla (`gfxdump-<campo>.bin`) y su captura (`gfxdump-<campo>.ppm`) |
 
 Mientras SELECT está apretado, R1, L1, R2, △ y la cruceta izquierda/derecha no
-llegan al juego (no se mueve el personaje al cambiar de ranura). Si
+llegan al juego (□ tampoco, cuando abre la lista de trucos) (no se mueve el personaje al cambiar de ranura). Si
 `controles.cfg` asigna SELECT a un botón de la N64, ese botón se pulsa
 también con los atajos.
 
@@ -133,18 +267,24 @@ momento.
 
 ## Salir del juego y el botón PS
 
-START + SELECT pausa el juego (imagen y sonido quietos) y muestra sobre el
-último cuadro «¿Volver al menú?» (con `embedded`, «¿Salir al XMB?»):
+START + SELECT pausa el juego (imagen y sonido quietos) y abre el **menú de
+pausa** sobre el último cuadro (START solo no sirve: los juegos de la N64 lo
+usan):
 
-| Botón | Qué hace |
+| Fila | Qué hace |
 |---|---|
-| × | Sí: cierra el juego como siempre |
-| ○, o START + SELECT otra vez | No: el juego sigue donde estaba, con su sonido |
+| Continuar | El juego sigue donde estaba |
+| Guardar estado / Cargar estado | En la ranura actual, como SELECT + R1 / L1 |
+| Ranura ◀ n ▶ | Cambia la ranura (cruceta izquierda/derecha o ×) |
+| Trucos | La lista de trucos del juego (si tiene) |
+| Mostrar FPS | Enciende o apaga el contador de velocidad |
+| Volver al menú (con `embedded`, Salir al XMB) | Cierra el juego como siempre (guarda la partida, apaga el audio y los SPEs). Con «Confirmar al salir: Sí» pregunta antes: × sí, ○ sigue jugando |
 
-Mientras el cuadro está a la vista, nada de lo que se apriete llega al
-juego, y el botón con que se cierra tampoco (el ○ del «No» no cuenta como B
-al volver; hay que soltarlo). Para salir directo, sin cuadro, «Confirmar al
-salir: No» en Opciones.
+Cruceta arriba/abajo elige (da la vuelta), × acepta; ○, START o START +
+SELECT otra vez cierran el menú y el juego sigue. Mientras el menú o el
+cuadro de confirmación están a la vista, nada de lo que se apriete llega al
+juego, y el botón con que se cierran tampoco (el ○ no cuenta como B al
+volver; hay que soltarlo). Los atajos de SELECT siguen funcionando igual.
 
 El **botón PS** abre el menú del sistema encima del juego: Salsa64 pausa la
 emulación y el sonido mientras está abierto y sigue mostrando el último
@@ -248,8 +388,9 @@ file:mijuego.z64
 ```
 
 (una sola línea, el nombre de un archivo que esté en `/dev_hdd0/salsa64`).
-Con este archivo presente START + SELECT sale al XMB en lugar de volver al
-menú (con el cuadro «¿Salir al XMB?» si «Confirmar al salir» está en sí).
+Con este archivo presente, «Salir al XMB» del menú de pausa (START + SELECT)
+sale al XMB en lugar de volver al menú (con el cuadro «¿Salir al XMB?» si
+«Confirmar al salir» está en sí).
 Para recuperar el menú, borrar `embedded`.
 
 ## Archivos de configuración
@@ -259,7 +400,9 @@ se crean por FTP.
 
 | Archivo | Formato | Qué hace |
 |---|---|---|
-| `menu.cfg` | Líneas `fondo = si\|no`, `fps = si\|no` y `confirmar = si\|no` | Fondo animado del menú, contador de velocidad en el juego y si START + SELECT pregunta antes de salir (sí sin la línea). Lo escriben el menú (Opciones) y SELECT + △ |
+| `menu.cfg` | Líneas `fondo = si\|no`, `fps = si\|no`, `confirmar = si\|no`, `aspecto = 4:3\|16:9`, `filtro = suave\|nitido\|lineas\|lineas+` e `idioma = es\|en\|fr\|de\|it\|pt` | Fondo animado del menú, contador de velocidad en el juego, si «Salir» del menú de pausa pregunta antes (sí sin la línea), aspecto, filtro e idioma. Lo escriben el menú (Opciones) y SELECT + △ |
+| `juegos/<ROM>.cfg` | `aspecto`, `filtro`, `recorte` = valor o `global` | Ajustes de un juego (sección «Ajustes por juego»). Lo escribe el menú (SELECT sobre una ROM) |
+| `descargas.cfg` | `activar = si` y direcciones | Enciende las descargas experimentales (sección «Descargas») |
 | `overscan.cfg` | Uno, dos o cuatro números: `8`, `8 6` o `izq der arr abajo` | Recorte de la imagen en píxeles de la N64 (a 320 × 240) por lado. Por omisión `8 6`; `0` lo apaga; máximo 64. Lo escribe el menú (`0`, `8 6` o `16 12`) |
 | `video.cfg` | `salida = 720` o `1080`; `escala = auto` o `1` a `5` | Salida de video y escala interna del render de la N64 (se leen al arrancar). Sin archivo: 720p y escala automática (3×, 960 × 720; a 1080p, 4×, 1280 × 960). Si la tele o el XMB no aceptan 1080, usa el siguiente modo. Acepta el formato viejo de una línea (`1080` o `720`). Lo escribe el menú con «Resolución» y «Escala interna» |
 | `controles.cfg` | Líneas `BOTON_N64 = BOTON_DS3`; `#` comenta | Mapeo del control (abajo) |
@@ -278,7 +421,8 @@ se crean por FTP.
 | `jit-ancho` | Basta con que exista | El recompilador emite el código «ancho» de antes del 2026-10-13 (prueba de KSEG0 de 8 palabras, un camino lento por acceso), para medir el compacto contra él con el mismo paquete (docs/rec-ppe.md, «Código compacto») |
 | `muestreo` | Basta con que exista | Muestreo por tiempo del recompilador: un hilo de baja prioridad mira cada 200 µs qué bloque corre el hilo de emulación (o si está en C: camino lento, intérprete, eventos…); cada 5 s el reparto al log y, al salir del juego, los 30 bloques con más tiempo con sus palabras de PPC (docs/rec-ppe.md, «Muestreo por tiempo»). Costo: dos palabras por entrada a bloque |
 
-La carpeta también contiene `states/` (estados guardados), `perfiles/` (el
+La carpeta también puede tener `covers/` (carátulas), `cheats/` (trucos y
+sus `.on`), `juegos/` (ajustes por juego), `states/` (estados guardados), `perfiles/` (el
 perfil del recompilador de cada juego, `<juego>.prf`, solo con
 `perfil-activo`; no contiene nada del juego, solo direcciones, huellas y
 cuentas, y se puede borrar), el log (`salsa64.log`) y archivos de diagnóstico

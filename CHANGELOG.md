@@ -4,6 +4,38 @@ All notable changes to Salsa64. Speeds are measured on a real PS3 (HEN,
 NTSC backups); `docs/perf-log.md` has the detailed numbers and
 `docs/estado.md` the work log (both in Spanish).
 
+## [Unreleased]
+
+### Added — contributed by VIDEOGAMES SCZ
+- **Pause menu** (START + SELECT): resume, save/load state, state slot,
+  cheats, FPS counter and quit (with the «Confirmar al salir» question when it
+  is on). It replaces the old «¿Volver al menú?» box; the SELECT shortcuts
+  still work.
+- **Cheats** per game: Project64 (`Config/Cheats`, section chosen by the ROM
+  CRC, options with `??`) and RetroArch `.cht` files in
+  `/dev_hdd0/salsa64/cheats`, found by ROM name or by a similar name of the
+  same region. GameShark codes 80/81/A0/A1/F0/F1, D0–D3 and 50. Page in the
+  menu (□ on a ROM) and list inside the game (SELECT + □), with the active
+  ones remembered next to the `.cht`.
+- **Box art** in the menu: PNG files in `/dev_hdd0/salsa64/covers` (any color
+  type, interlaced too), by ROM name, game code or a RetroArch-style name.
+  Built-in PNG decoder (no zlib needed).
+- **Aspect** option: 4:3 (original) or 16:9 (stretched).
+- **Simple image filters**: Smooth (as before), Sharp (nearest-neighbour) and
+  soft or strong scanlines.
+- **Per-game settings** (SELECT on a ROM): aspect, filter and overscan,
+  saved in `juegos/<ROM>.cfg`.
+- **Six menu languages**: Spanish, English, French, German, Italian and
+  Portuguese.
+- **Downloads of box art and cheats** from the menu — experimental and
+  **off by default** (hidden unless `descargas.cfg` has `activar = si`): the
+  PS3 only speaks old TLS and HTTPS certificates cannot be verified. Not yet
+  tried on a real PS3.
+
+### Changed
+- `lib/rsxkit`: the 2D layer can draw an RGBA image slot
+  (`rsxkit_ui_image_set` / `rsxkit_ui_image`); it maps 3 MB instead of 2.
+
 ## [0.2.2] — 2026-10-12
 
 ### Performance

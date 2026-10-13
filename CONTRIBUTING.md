@@ -72,6 +72,7 @@ Run what applies to your change before opening a pull request:
 | Command | What it checks | Needs |
 |---|---|---|
 | `tools/build.sh test-host` | Core unit tests (CPU, RSP HLE, RDP, saves, menu…) with the native gcc, ASan and UBSan | Docker |
+| `tools/build.sh -C tests/fuzz run` | Short fuzzing (ASan/UBSan) of what the frontend reads from third-party files: PNG box art, `.cht` cheats, download indexes. `N=` and `SEED=` change the length and the seed | Docker |
 | `tools/test-roms.sh` | Homebrew ROMs on the host with `salsa64-run`: nemu64-test against its baseline of known failures (`tests/roms/nemu64-test.fallas`), plus vitest, savetest, gfxtest (three microcode variants, image checked) and audiotest (sample by sample) | Docker |
 | `tools/test-rec.sh` | The recompiler on a big-endian ppc64 host under qemu, in strict mode (`--lockstep` also compares it with the interpreter, ~10 min) | `tools/docker-image-ppc64.sh` once |
 | `tools/test-phase0.sh`, `test-phase1.sh`, `test-phase2.sh` | PS3 programs and the emulator in RPCS3 (RSX, SPE jobs, graphics HLE on the SPE) | RPCS3 with PS3 firmware |

@@ -81,7 +81,9 @@
  * Se hacen en el límite de un campo con la emulación quieta: el hilo de
  * emulación recoge la tarea del RSP en vuelo y espera; el de presentación
  * vacía las colas, espera al RSX y guarda o carga (state_barrier). Un aviso
- * corto en pantalla (osd.c) dice qué pasó. SELECT + △ muestra u oculta el
+ * corto en pantalla (osd.c) dice qué pasó. SELECT + □ abre la lista de
+ * trucos del juego con la emulación en pausa (× activa o desactiva, ○ cierra;
+ * lo activo se guarda junto al .cht). SELECT + △ muestra u oculta el
  * contador de velocidad (VI/s y %, cuadros del juego y de la pantalla), que
  * se recuerda en menu.cfg.
  *
@@ -148,6 +150,7 @@
 #include <sys/memory.h>
 #include <sys/process.h>
 #include <sys/sem.h>
+#include <sys/stat.h>
 #include <sys/systime.h>
 #include <sys/thread.h>
 #include <sysutil/sysutil.h>
@@ -161,7 +164,11 @@
 #include "cpu/rec.h"
 #include "audio_out.h"
 #include "audiotest_rom_bin.h"
+#include "cheats.h"
+#include "cover.h"
+#include "download.h"
 #include "gfxtest_rom_bin.h"
+#include "i18n.h"
 #include "menu.h"
 #include "osd.h"
 #include "pacer.h"
@@ -200,6 +207,9 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define LAST_ROM_PATH SALSA64_DATA_DIR "/ultima-rom"
 #define MENU_TEST_PATH SALSA64_DATA_DIR "/menu-prueba"
 #define MENU_CFG_PATH SALSA64_DATA_DIR "/menu.cfg"
+#define CHEATS_DIR    SALSA64_DATA_DIR "/cheats"
+#define COVERS_DIR    SALSA64_DATA_DIR "/covers"
+#define GAMES_DIR     SALSA64_DATA_DIR "/juegos"
 #define MENU_TEST_MAX 8
 #define MENU_IDLE_FIELDS 900  /* prueba automática: sin acción en tanto, falla */
 #define OVERSCAN_PATH SALSA64_DATA_DIR "/overscan.cfg"
@@ -256,6 +266,9 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define STALL_LOG_US 5000000u
 
 static struct salsa64_n64 n64;
+/* Trucos del juego que corre (cheats.h): se cargan al abrirlo y el hilo de
+ * emulación los aplica al final de cada campo. */
+static struct cheat_set game_cheats;
 static struct salsa64_rec rec;
 static struct salsa64_rec_prof rec_prof, rec_prof_prev;  /* perfil del recompilador (SALSA64_RECPROF_FLAG) */
 static bool use_rec;  /* el CPU corre con el recompilador */
@@ -904,6 +917,62 @@ static void state_slot_step(int d)
 	osd_notice(sysGetSystemTime(), have ? "Ranura %u" : "Ranura %u (vacía)", state_slot);
 }
 
+/* Lo que pidió la lista de trucos del juego (pausectl): activar o desactivar
+ * el elegido y avisar de que no hay trucos. */
+static bool pm_slot_have;  /* la ranura actual tiene estado (para el menú de pausa) */
+
+/* Lo que pidió el menú de pausa (pausectl): estados, ranura, FPS. */
+static void pause_menu_events(void)
+{
+	static bool was_open;
+	if (pause_ctl.menu && !was_open)
+		pm_slot_have = states_slot_exists(&n64.bus, state_slot);
+	was_open = pause_ctl.menu;
+	int d = pause_ctl.menu_do;
+	if (d < 0)
+		return;
+	pause_ctl.menu_do = -1;
+	uint64_t now = sysGetSystemTime();
+	switch (d) {
+	case PM_SAVE:
+		state_command(STATE_SAVE);
+		break;
+	case PM_LOAD:
+		state_command(STATE_LOAD);
+		break;
+	case PM_SLOT:
+		state_slot = (state_slot + SALSA64_STATE_SLOTS + (unsigned)pause_ctl.menu_arg) % SALSA64_STATE_SLOTS;
+		pm_slot_have = states_slot_exists(&n64.bus, state_slot);
+		break;
+	case PM_FPS:
+		fps.on = !fps.on;
+		osd_fps_reset(&fps);
+		fps_setting_save(fps.on);
+		break;
+	case PM_CHEATS:
+		osd_notice(now, "No hay trucos para este juego");
+		break;
+	}
+}
+
+static void cheat_panel_events(void)
+{
+	if (pause_ctl.panel_denied) {
+		pause_ctl.panel_denied = false;
+		osd_notice(sysGetSystemTime(), "No hay trucos para este juego");
+	}
+	int t = pause_ctl.toggle;
+	if (t < 0)
+		return;
+	pause_ctl.toggle = -1;
+	if ((unsigned)t >= game_cheats.n)
+		return;
+	game_cheats.c[t].on = !game_cheats.c[t].on;
+	bool ok = cheats_save(&game_cheats);
+	salsa64_log("trucos: «%s» %s, %u activos%s", game_cheats.c[t].desc, game_cheats.c[t].on ? "activado" : "desactivado",
+		    cheats_active(&game_cheats), ok ? "" : " (no se pudo guardar)");
+}
+
 /* Atajos dentro del juego, con SELECT (la N64 no lo tiene; START + SELECT
  * vuelve al menú): + R1 guarda el estado en la ranura actual, + L1 lo
  * carga, + izquierda o derecha de la cruceta cambia de ranura, + △
@@ -931,7 +1000,7 @@ static uint32_t pad_combos(unsigned port, uint32_t b)
 	if (rise & 1u << SALSA64_DS3_TRIANGLE) {
 		fps.on = !fps.on;
 		osd_fps_reset(&fps);
-		osd_notice(sysGetSystemTime(), "FPS: %s", fps.on ? "sí" : "no");
+		osd_notice(sysGetSystemTime(), "FPS: %s", tr(fps.on ? "sí" : "no"));
 		fps_setting_save(fps.on);
 	}
 	if (rise & 1u << SALSA64_DS3_R2)
@@ -999,7 +1068,11 @@ static int update_pads(uint32_t *buttons)
 			last[i] = neutral;
 		raw[i] = info.status[i] ? last[i].buttons : 0;
 	}
+	pause_ctl.panel_avail = game_cheats.n > 0;
+	pause_ctl.panel_rows = game_cheats.n;
 	enum pausectl_action act = pausectl_pads(&pause_ctl, raw, intercepted, combos_on != 0, game);
+	cheat_panel_events();
+	pause_menu_events();
 	for (unsigned i = 0; i < SALSA64_PIF_PORTS; i++) {
 		struct salsa64_pad p = { 0, 0, 0, i == 0 };
 		if (info.status[i]) {
@@ -1221,6 +1294,8 @@ static struct { uint32_t left, right, top, bottom; } overscan = { 8, 8, 6, 6 };
 
 static void load_overscan(void)
 {
+	overscan.left = overscan.right = 8;  /* por omisión (un juego con ajustes propios los cambió) */
+	overscan.top = overscan.bottom = 6;
 	FILE *f = fopen(OVERSCAN_PATH, "r");
 	if (!f) {
 		salsa64_log("overscan: recorte %u %u %u %u por omisión (no hay %s)", overscan.left, overscan.right,
@@ -1567,6 +1642,7 @@ static void emu_thread(void *arg)
 		ovl_note(tb1 - tb0, busy_at(&h1.busy, tb1) - o0, busy_at(&h1.load_clock, tb1) - l0,
 			 (n64.cpu.cycles - c0) - (n64.cpu.idle_cycles - i0), gfx_spu.sleep_us + jpeg_spu.sleep_us - s0,
 			 h1.load && h1.load_phase == ph0 ? (int)ph0 : -1);
+		cheats_apply(&game_cheats, &n64.bus);  /* los activos del juego (vacío si no hay) */
 		uint64_t t1 = sysGetSystemTime();
 		n64.cpu.rec_mark = SALSA64_SMP_OTHER;
 		beat.emu_at = "fin del campo";
@@ -1703,13 +1779,31 @@ static void frame_end(const char *where)
 
 /* Lo que va encima del juego: aviso, contador y, si está, el cuadro de
  * START + SELECT. */
+static int scan_level;       /* 0 sin líneas, 1 suaves, 2 fuertes (filtro del juego) */
+static rsxkit_rect scan_r;   /* dónde quedó la imagen, en puntos de la pantalla */
+static uint32_t scan_lines;  /* líneas de la imagen del juego */
+
 static void present_overlay(uint64_t now)
 {
 	if (!ui_ok)
 		return;
+	if (scan_level && scan_r.w && scan_lines) {
+		const rsxkit_screen *sc = rsxkit_screen_info();
+		float k = ui_lw / (float)sc->width;
+		osd_scanlines_set(scan_level, (float)scan_r.x * k, (float)scan_r.y * k, (float)scan_r.w * k,
+				  (float)scan_r.h * k, scan_lines > 300 ? scan_lines / 2 : scan_lines);
+	} else {
+		osd_scanlines_set(0, 0.0f, 0.0f, 0.0f, 0.0f, 0);
+	}
 	osd_draw(&fps, now, ui_lw, ui_lh);
-	if (pause_ctl.dialog)
+	if (pause_ctl.menu) {
+		struct osd_pause_menu pm = { pause_ctl.menu_sel, state_slot, pm_slot_have, fps.on, in_menu,
+					     game_cheats.n, cheats_active(&game_cheats) };
+		osd_pause_menu_draw(&pm, ui_lw, ui_lh);
+	} else if (pause_ctl.dialog)
 		osd_confirm_draw(in_menu ? "¿Volver al menú?" : "¿Salir al XMB?", "×: Sí     ○: No", ui_lw, ui_lh);
+	else if (pause_ctl.panel)
+		osd_cheats_draw(&game_cheats, pause_ctl.panel_sel, ui_lw, ui_lh);
 }
 
 /* Presenta (o salta) un campo encolado. */
@@ -1827,6 +1921,10 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		salsa64_log("volcado de la HLE (SELECT + R2) en %s con la captura %s: %s", path, shot,
 			    ok ? "bien" : "FALLO");
 		osd_notice(sysGetSystemTime(), ok ? "Volcado del campo %u" : "Volcado: falló", m->field);
+	}
+	if (r.w) {
+		scan_r = r;
+		scan_lines = shown.height;
 	}
 	present_overlay(sysGetSystemTime());
 	/* audio_out: una vez por campo presentado (estadísticas y volcado). */
@@ -2325,9 +2423,10 @@ static void pause_update(void)
 		pause_log.t0 = now;
 		pause_log.still0 = pres.still_frames;
 		audio_out_pause(true);
-		salsa64_log("pausa: emulación detenida en el campo %u (%s%s%s)", n64.bus.vi.fields,
-			    want & PAUSECTL_SYSTEM ? "menú del sistema" : "", want == (PAUSECTL_SYSTEM | PAUSECTL_CONFIRM) ? " y " : "",
-			    want & PAUSECTL_CONFIRM ? "cuadro de salir" : "");
+		salsa64_log("pausa: emulación detenida en el campo %u (%s%s%s%s)", n64.bus.vi.fields,
+			    want & PAUSECTL_SYSTEM ? "menú del sistema" : "",
+			    (want & PAUSECTL_SYSTEM) && (want & ~PAUSECTL_SYSTEM) ? " y " : "",
+			    want & PAUSECTL_CONFIRM ? "cuadro de salir" : "", want & PAUSECTL_PANEL ? "lista de trucos" : want & PAUSECTL_MENU ? "menú de pausa" : "");
 	} else if (!want) {
 		audio_out_pause(false);
 		salsa64_log("pausa: la emulación sigue tras %.1f s (%u cuadros repetidos, emulación %s)",
@@ -2336,6 +2435,100 @@ static void pause_update(void)
 	}
 	lwsync();
 	pause_req = want;
+}
+
+static void settings_read(struct menu_settings *s);
+static void rom_names(const char *path, const char **title, const char **code, uint32_t *crc1, uint32_t *crc2);
+
+/* Los trucos del juego (game_cheats) se cargan al abrirlo. */
+static void load_cheats(const char *source)
+{
+	const char *name = source ? strrchr(source, '/') : NULL;
+	name = name ? name + 1 : source;
+	memset(&game_cheats, 0, sizeof game_cheats);
+	if (!name || !name[0])
+		return;
+	const char *title = NULL, *code = NULL;
+	uint32_t crc1 = 0, crc2 = 0;
+	rom_names(source, &title, &code, &crc1, &crc2);
+	unsigned n = cheats_load(&game_cheats, CHEATS_DIR, name, title, code, crc1, crc2);
+	if (!n) {
+		salsa64_log("trucos: ninguno (%s)", game_cheats.cht_path);
+		return;
+	}
+	salsa64_log("trucos: %u en %s, %u activos%s", n, game_cheats.cht_path, cheats_active(&game_cheats),
+		    game_cheats.unsupported ? " (hay líneas que no se aplican)" : "");
+	if (game_cheats.crc_mismatch)
+		salsa64_log("trucos: el CRC de la ROM no es el de ninguna sección del .cht (se usó la primera)");
+}
+
+/* juegos/<ROM sin extensión>.cfg: lo que un juego cambia de lo global. */
+static void game_cfg_path(const char *rom, char *out, size_t n)
+{
+	const char *name = strrchr(rom, '/');
+	name = name ? name + 1 : rom;
+	const char *dot = strrchr(name, '.');
+	int len = (int)(dot && dot > name ? (size_t)(dot - name) : strlen(name));
+	snprintf(out, n, GAMES_DIR "/%.*s.cfg", len, name);
+}
+
+static void game_cfg_read(const char *rom, struct menu_game *g)
+{
+	char path[320], text[512];
+	menu_game_default(g);
+	game_cfg_path(rom, path, sizeof path);
+	FILE *f = fopen(path, "r");
+	if (!f)
+		return;
+	size_t n = fread(text, 1, sizeof text - 1, f);
+	fclose(f);
+	menu_game_parse(g, text, n);
+}
+
+static bool game_cfg_write(const char *rom, const struct menu_game *g)
+{
+	char path[320], text[512];
+	game_cfg_path(rom, path, sizeof path);
+	mkdir(GAMES_DIR, 0777);
+	int n = menu_game_format(g, text, sizeof text);
+	FILE *f = fopen(path, "w");
+	bool ok = f && fwrite(text, 1, (size_t)n, f) == (size_t)n;
+	if (f && fclose(f) != 0)
+		ok = false;
+	return ok;
+}
+
+/* Aspecto, filtro y recorte del juego: lo suyo (juegos/) o, si no, lo de
+ * menu.cfg y overscan.cfg. Antes de cada juego. */
+static void load_view(const char *source)
+{
+	struct menu_settings s;
+	struct menu_game g;
+	int aspect, filter, crop;
+	settings_read(&s);
+	if (source)
+		game_cfg_read(source, &g);
+	else
+		menu_game_default(&g);
+	menu_game_effective(&s, &g, &aspect, &filter, &crop);
+	if (selftest_on || gfxtest_on || audiotest_on) {
+		aspect = MENU_ASPECT_4_3;  /* sus verificaciones leen la pantalla */
+		filter = MENU_FILTER_SMOOTH;
+	}
+	pres.view.aspect = aspect == MENU_ASPECT_16_9 ? 16.0f / 9.0f : 4.0f / 3.0f;
+	pres.view.filter = filter == MENU_FILTER_SHARP ? RSXKIT_FILTER_NEAREST : RSXKIT_FILTER_LINEAR;
+	scan_level = filter == MENU_FILTER_SCAN_SOFT ? 1 : filter == MENU_FILTER_SCAN_STRONG ? 2 : 0;
+	scan_r.w = 0;
+	scan_lines = 0;
+	if (g.overscan >= 0 && g.overscan <= MENU_OVERSCAN_WIDE) {
+		uint32_t h = g.overscan == MENU_OVERSCAN_WIDE ? 16 : g.overscan == MENU_OVERSCAN_NORMAL ? 8 : 0;
+		overscan.left = overscan.right = h;
+		overscan.top = overscan.bottom = h * 3 / 4;
+	}
+	salsa64_log("imagen: %s, filtro %s, recorte %u %u %u %u%s", aspect == MENU_ASPECT_16_9 ? "16:9 estirada" : "4:3",
+		    filter == MENU_FILTER_SHARP ? "nítido" : scan_level == 1 ? "líneas suaves" : scan_level == 2 ? "líneas fuertes" : "suave",
+		    overscan.left, overscan.right, overscan.top, overscan.bottom,
+		    g.aspect >= 0 || g.filter >= 0 || g.overscan >= 0 ? " (con ajustes de este juego)" : "");
 }
 
 /* Lo que es de un juego vuelve a como al arrancar el programa: colas entre
@@ -2825,6 +3018,8 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 
 	/* overscan.cfg: en cada juego (se cambia desde las Opciones del menú). */
 	load_overscan();
+	load_view(source);
+	load_cheats(source);
 	if (selftest_on)
 		selftest_start();
 	if (gfxtest_on)
@@ -2934,7 +3129,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		sysUtilCheckCallback();
 		beat.pres_at = "mandos";
 		if (update_pads(NULL)) {
-			salsa64_log("START + SELECT%s: %s", pause_ctl.confirm ? " y ×" : "", in_menu ? "vuelta al menú" : "salida");
+			salsa64_log("menú de pausa%s: %s", pause_ctl.confirm ? " y confirmación" : "", in_menu ? "vuelta al menú" : "salida");
 			break;
 		}
 		pause_update();
@@ -3015,7 +3210,20 @@ static void video_save(const struct menu_settings *set);
 static struct menu_settings video_cfg;  /* video y escala que corren (video.cfg al arrancar o lo último aplicado) */
 
 static struct romlist roms;
+
+/* Título y código de una ROM de la lista (NULL si no está: p. ej. sin menú). */
+static void rom_names(const char *path, const char **title, const char **code, uint32_t *crc1, uint32_t *crc2)
+{
+	int i = romlist_find(&roms, path);
+	if (i < 0)
+		return;
+	*title = romlist_display_title(&roms.e[i]);
+	*code = roms.e[i].code;
+	*crc1 = roms.e[i].crc1;
+	*crc2 = roms.e[i].crc2;
+}
 static struct menu menu;
+static struct cheat_set menu_cheats;  /* los de la ROM cuya página está abierta */
 static struct {
 	float lw, lh;           /* espacio lógico del menú */
 	struct menu_settings settings;
@@ -3070,6 +3278,7 @@ static void menu_scan(const char *keep)
 	menu.out_h = osc->height;
 	menu.res_run = video_cfg.resolution;
 	menu.scale_run = video_cfg.scale;
+	menu.dl_enabled = dl_enabled();  /* experimental: solo con descargas.cfg «activar = si» */
 	menu.dirs[menu.ndirs++] = SALSA64_DATA_DIR;
 	menu.dirs[menu.ndirs++] = "/dev_usb000/salsa64 … /dev_usb007/salsa64";
 }
@@ -3105,7 +3314,7 @@ static void menu_apply_video(void)
 	if (rc != RSXKIT_OK) {
 		salsa64_log("video: no se pudo cambiar a %s (%d); sigue %ux%u, escala %u×", want.resolution == MENU_RES_1080P ? "1080p" : "720p",
 			    rc, old_w, old_h, salsa64_rdp_scale(NULL));
-		snprintf(menu.note, sizeof menu.note, "No se pudo: sigue %ux%u", old_w, old_h);
+		snprintf(menu.note, sizeof menu.note, tr("No se pudo: sigue %ux%u"), old_w, old_h);
 		return;
 	}
 	salsa64_rdp_set_scale((uint32_t)want.scale);
@@ -3119,7 +3328,7 @@ static void menu_apply_video(void)
 	menu.out_h = sc->height;
 	menu.res_run = want.resolution;
 	menu.scale_run = want.scale;
-	snprintf(menu.note, sizeof menu.note, "Aplicado: %ux%u, escala %u×", sc->width, sc->height, es);
+	snprintf(menu.note, sizeof menu.note, tr("Aplicado: %ux%u, escala %u×"), sc->width, sc->height, es);
 	salsa64_log("video: %ux%u, escala %u× (%s%s), aplicado sin reiniciar", sc->width, sc->height, es,
 		    want.scale ? "pedida" : "automática", cut ? ", reducida por memoria del RSX" : "");
 	if (want.resolution == MENU_RES_1080P && sc->height != 1080)
@@ -3129,6 +3338,106 @@ static void menu_apply_video(void)
 /* Un cuadro del menú: todo lo dibuja el RSX (rsxkit/ui.h); el PPE solo
  * arma unos miles de vértices. Con `shot`, además una captura (a la mitad
  * de la resolución de 720p) en ese archivo. */
+/* Carátula de la ROM elegida: cuando la selección lleva quieta un momento la
+ * busca en COVERS_DIR, la decodifica y la sube a la ranura 0 de la UI (entre
+ * cuadros, que es cuando rsxkit_ui_image_set puede esperar al RSX). */
+#define COVER_SETTLE_US 200000u
+static uint8_t cover_rgba[COVER_RGBA_BYTES];
+static int cover_tried = -1;
+static uint64_t cover_since;
+
+static void menu_cover_update(void)
+{
+	if (!menu_settled(&menu)) {
+		cover_since = 0;
+		return;
+	}
+	uint64_t now = sysGetSystemTime();
+	int s = menu_selected(&menu);
+	if (!cover_since)
+		cover_since = now;
+	if (now - cover_since < COVER_SETTLE_US || s == menu.cover_rom || s == cover_tried)
+		return;
+	cover_tried = s;
+	const struct rom_entry *e = &roms.e[s];
+	char path[256];
+	if (!cover_find(COVERS_DIR, romlist_name(e), romlist_display_title(e), e->code, path, sizeof path)) {
+		salsa64_log("carátula: ninguna para %s (título «%s», código %s)", romlist_name(e), romlist_display_title(e),
+			    e->code[0] ? e->code : "-");
+		return;
+	}
+	unsigned w = 0, h = 0;
+	enum cover_result r = cover_load_png(path, cover_rgba, &w, &h);
+	if (r != COVER_OK) {
+		salsa64_log("carátula: %s: %s", path, cover_result_name(r));
+		return;
+	}
+	int rc = rsxkit_ui_image_set(0, cover_rgba, w, h);
+	if (rc != RSXKIT_OK) {
+		salsa64_log("carátula: %s: no se pudo subir (%d)", path, rc);
+		return;
+	}
+	menu.cover_w = w;
+	menu.cover_h = h;
+	menu.cover_rom = s;
+	salsa64_log("carátula: %s (%ux%u)", path, w, h);
+}
+
+/* Descargas (download.h): lo que se va viendo en el pie del menú. */
+static bool dl_shown;
+
+static void download_begin(int what)
+{
+	static struct dl_rom list[ROMLIST_MAX];
+	if (!roms.count) {
+		menu_set_status(&menu, "No encontré ROMs (.z64, .v64, .n64) en:");
+		return;
+	}
+	unsigned n = 0;
+	for (uint32_t i = 0; i < roms.count; i++) {
+		const struct rom_entry *e = &roms.e[i];
+		snprintf(list[n].name, sizeof list[n].name, "%s", romlist_name(e));
+		snprintf(list[n].title, sizeof list[n].title, "%s", romlist_display_title(e));
+		snprintf(list[n].code, sizeof list[n].code, "%s", e->code);
+		n++;
+	}
+	if (!dl_start(what, list, n)) {
+		menu_set_status(&menu, "No se pudo bajar el índice: %s", "hilo");
+		return;
+	}
+	dl_shown = true;
+	menu_set_status(&menu, what ? "Descargando trucos…" : "Descargando carátulas…");
+}
+
+/* Una vez por cuadro del menú: avance, cancelación con ○ y resultado. */
+static void download_poll(uint32_t buttons)
+{
+	if (!dl_shown)
+		return;
+	struct dl_status st;
+	dl_get(&st);
+	if (st.state == DL_RUNNING) {
+		if (buttons & (1u << SALSA64_DS3_CIRCLE))
+			dl_cancel();
+		char line[MENU_STATUS_MAX];
+		snprintf(line, sizeof line, tr("Descargando… %u de %u"), st.done, st.total);
+		menu_set_status(&menu, "%s   %s", line, tr("○  Cancelar"));
+		return;
+	}
+	dl_shown = false;
+	dl_shutdown();
+	if (st.state == DL_FAILED) {
+		menu_set_status(&menu, "%s", st.err);
+	} else if (st.state == DL_CANCELLED) {
+		menu_set_status(&menu, "Descarga cancelada");
+	} else {
+		menu_set_status(&menu, "%s: %u nuevas, %u ya estaban, %u sin coincidencia", tr(st.what ? "Trucos" : "Carátulas"),
+				st.got, st.have, st.missing);
+		if (!st.what && st.got)
+			menu.cover_rom = cover_tried = -1;  /* a buscar las carátulas de nuevo */
+	}
+}
+
 static void menu_show(const char *shot)
 {
 	frame_begin("menú: flip anterior");
@@ -3175,6 +3484,7 @@ static bool settings_write(const struct menu_settings *s)
 static void menu_settings_load(void)
 {
 	settings_read(&mn.settings);
+	i18n_set(mn.settings.lang);
 }
 
 static void menu_settings_save(void)
@@ -3378,28 +3688,74 @@ static int menu_loop(void)
 			if (menu.set.resolution != mn.settings.resolution || menu.set.scale != mn.settings.scale)
 				video_save(&menu.set);
 			if (menu.set.waves != mn.settings.waves || menu.set.fps != mn.settings.fps ||
-			    menu.set.confirm != mn.settings.confirm) {
+			    menu.set.confirm != mn.settings.confirm || menu.set.aspect != mn.settings.aspect ||
+			    menu.set.filter != mn.settings.filter || menu.set.lang != mn.settings.lang) {
 				mn.settings.waves = menu.set.waves;
 				mn.settings.fps = menu.set.fps;
 				mn.settings.confirm = menu.set.confirm;
+				mn.settings.aspect = menu.set.aspect;
+				mn.settings.filter = menu.set.filter;
+				mn.settings.lang = menu.set.lang;
+				i18n_set(mn.settings.lang);
 				menu_settings_save();
 			}
 			mn.settings = menu.set;
 		}
 		if (a == MENU_APPLY)
 			menu_apply_video();
+		if (a == MENU_CHEATS) {
+			const struct rom_entry *e = &roms.e[menu_selected(&menu)];
+			if (cheats_load(&menu_cheats, CHEATS_DIR, romlist_name(e), romlist_display_title(e), e->code, e->crc1, e->crc2)) {
+				menu_cheats_open(&menu, &menu_cheats, romlist_display_title(e));
+				if (menu_cheats.crc_mismatch)
+					menu_set_status(&menu, "Ojo: el CRC de la ROM no es el de esos trucos");
+			} else {
+				const char *f = strrchr(menu_cheats.cht_path, '/');
+				menu_set_status(&menu, "No hay trucos: pon cheats/%s", f ? f + 1 : menu_cheats.cht_path);
+				salsa64_log("trucos: ninguno para %s (%s)", romlist_name(e), menu_cheats.cht_path);
+			}
+		}
+		if (a == MENU_GAME) {
+			const struct rom_entry *e = &roms.e[menu_selected(&menu)];
+			struct menu_game g;
+			game_cfg_read(romlist_name(e), &g);
+			menu_game_open(&menu, &g, romlist_display_title(e));
+		}
+		if (a == MENU_GAME_CHANGED) {
+			const struct rom_entry *e = &roms.e[menu.game_rom];
+			bool ok = game_cfg_write(romlist_name(e), &menu.game);
+			salsa64_log("ajustes de %s: aspecto %d, filtro %d, recorte %d%s", romlist_name(e), menu.game.aspect,
+				    menu.game.filter, menu.game.overscan, ok ? "" : " (no se pudo guardar)");
+			if (!ok)
+				menu_set_status(&menu, "No se pudieron guardar los ajustes");
+		}
+		if (a == MENU_CHEATS_CHANGED) {
+			bool ok = cheats_save(&menu_cheats);
+			salsa64_log("trucos: %u activos de %u%s", cheats_active(&menu_cheats), menu_cheats.n,
+				    ok ? "" : " (no se pudo guardar)");
+			if (!ok)
+				menu_set_status(&menu, "No se pudieron guardar los trucos");
+		}
+		if (a == MENU_DOWNLOAD)
+			download_begin(menu.dl_what);
+		download_poll(buttons);
 		if (a == MENU_QUIT) {
 			salsa64_log("menú: «Salir al XMB»");
 			break;
 		}
 		if (a == MENU_OPEN) {
+			dl_shutdown();
+			dl_shown = false;
 			if (menu_open(&roms.e[menu_selected(&menu)]) == GAME_QUIT)
 				break;
 			mn.next_test++;
 			mn.step = mn.idle = 0;
+			menu.cover_rom = cover_tried = -1;
 		}
+		menu_cover_update();
 		menu_show(want_shot && ++frames == 45 ? SALSA64_DATA_DIR "/menu.ppm" : NULL);
 	}
+	dl_shutdown();
 	if (rsxkit_ui_dropped())
 		salsa64_log("menú: %u quads no cupieron en algún cuadro", rsxkit_ui_dropped());
 	if (!pres.autotest)

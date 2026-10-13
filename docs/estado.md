@@ -38,6 +38,89 @@ sobrada); Doom 64 al ~40 % (instrucciones interpretadas); estados
 comprimidos; Rumble Pak y Controller Pak; Fase 5 (medir el margen del RSX a
 5×, multimuestreo para GoldenEye, filtros CRT).
 
+## 2026-10-13 — Contribución de VIDEOGAMES SCZ: menú de pausa, trucos, carátulas, aspecto, filtros sencillos, ajustes por juego e idiomas (paquete SLSA00110 «Salsa64 extras»)
+
+VIDEOGAMES SCZ (creador de contenido de PS3) mandó sus extras hechos sobre
+main `da2adcd` (36 archivos, +6043/−153 líneas) con permiso para integrarlos
+con su crédito. Se revisaron como código ajeno (sin ejecutar nada de lo que
+venía fuera del árbol del proyecto) y se aplicaron sobre v0.2.2 con una
+fusión a 3 vías; los choques fueron solo de contexto (`main.c` junto al
+muestreo del hilo 1, la presentación 1:1 por tamaño lógico de `rdp.c` y las
+suites de las pruebas). Qué trae (docs/uso-ps3.md):
+
+- **Menú de pausa** (START + SELECT): Continuar, Guardar/Cargar estado,
+  Ranura, Trucos, Mostrar FPS y Salir; sustituye al cuadro «¿Volver al
+  menú?», que queda como confirmación de «Salir» si «Confirmar al salir» está
+  en sí. La pausa es la misma de siempre (`pausectl`, motivos `PAUSECTL_MENU`
+  y `PAUSECTL_PANEL`), así que el botón PS encima sigue igual.
+- **Trucos** (`cheats.c`): `.cht` de Project64 y de RetroArch, GameShark
+  80/81/A0/A1/F0/F1/D0–D3/50, página en el menú (□) y en el juego (SELECT +
+  □). Se aplican al final de cada campo en el hilo de emulación.
+- **Carátulas** (`cover.c`): PNG propio (desinflado según puff, todos los
+  tipos, Adam7) reducido a 320 × 448 y subido a una ranura de imagen nueva
+  del 2D de rsxkit; búsqueda por nombre, código o nombre parecido de la misma
+  región (`namematch.c`).
+- **Aspecto** 4:3/16:9 (16:9 no usa la presentación 1:1), **filtros
+  sencillos** (Suave, Nítida, Líneas suaves/fuertes, dibujadas con el 2D),
+  **ajustes por juego** (`juegos/<ROM>.cfg`) y **6 idiomas** (`tr()`, tabla
+  ordenada en `i18n.c`).
+- **Descargas** de carátulas y trucos (`download.c`, libhttp/SSL en un hilo).
+
+Cambios al integrar:
+
+- **Seguridad del PNG y de los `.cht`**: pruebas con ASan/UBSan y un fuzzer
+  nuevo (`tests/fuzz`, mutador propio sobre PNG y `.cht` sintéticos, cada
+  truncado, longitudes de trozo enormes, cabecera zlib y CRC dañados; 2
+  semillas × 3,25 M entradas sin fallos). Encontró que el lector de `.cht`
+  leía más allá del texto (`hex_token` y `enable`): no pasaba en la consola
+  porque `read_file` deja un `'\0'`, pero ahora todo respeta el largo. La
+  segunda pasada del PNG se para en IEND y comprueba cada largo; topes de 8 MB
+  de archivo y 24 MB desinflados (antes 12 y 40) y búfer del tamaño del
+  archivo; las rutas de los trucos que no caben ya no se cortan en silencio.
+- **Los trucos no tocan el anillo de DMA**: escriben como el CPU
+  (`salsa64_bus_rdram_patched`: solo el recompilador descarta código), para
+  que un truco que cambia muchas direcciones no desplace del anillo de 64 los
+  DMA de verdad que protegen las copias del RDP.
+- **Descargas apagadas y ocultas** salvo `descargas.cfg` con `activar = si`
+  (la PS3 no habla el TLS de GitHub y los certificados no se verifican; sin
+  probar en la consola). La red ya no se baja al terminar (`netDeinitialize`
+  le cortaba el log UDP al logger), los módulos se cargan solo si faltaban
+  (también `HTTP_UTIL` y `NETCTL`, que no se cargaban) y no se pisa un
+  archivo existente. Solo escribe en `covers/` y `cheats/` (nombres sin
+  carpetas, sin `..` ni punto inicial).
+- **Fila «Filtro» lista para los filtros CRT** de la otra rama: tabla única
+  (clave, nombre y crédito por filtro) y el crédito bajo el valor elegido en
+  el panel («Filtro de VIDEOGAMES SCZ»); el texto de ayuda del filtro se
+  salía del panel y se acortó.
+- Las líneas de barrido van en el mismo lote del 2D que el aviso y el
+  contador (antes, un `rsxkit_ui_begin` más por cuadro).
+- Las pruebas automáticas (vitest, gfxtest, audiotest) fuerzan 4:3 además
+  del filtro suave.
+- La pila del SPE 0 no cambia (holgura 3 520 bytes).
+- La carátula deja sitio abajo para «● Último abierto» (en 16:9 lo pisaba).
+
+Pruebas: 481 unitarias del host con ASan/UBSan; `tools/test-roms.sh` sin
+regresiones; `tools/test-phase2.sh` en RPCS3 bien, con una carátula y un
+truco sintéticos en su `dev_hdd0` (la carátula se dibuja en el menú y
+gfxtest pasa con el truco activo, que escribe fuera de la RDRAM; las
+descargas dicen «apagadas»); build de la PS3 sin avisos. Riesgo menor: la
+búsqueda por nombre parecido acepta un archivo cuyo nombre está dentro del
+de la ROM (la variante F3D de gfxtest tomó la carátula y los trucos de
+gfxtest); los trucos igual hay que activarlos a mano.
+
+**Licencias.** Los archivos nuevos son GPLv2+. `cover.c` sigue a puff.c
+función por función: se trata como versión modificada y lleva el aviso de
+zlib (`GPL-2.0-or-later AND Zlib`; docs/THIRD_PARTY.md). Sus cambios en
+`lib/rsxkit` (ranura de imagen del 2D: `ui.h`, `ui.c`, `ui_geom.c`) quedan
+bajo **MIT** como el resto de la biblioteca, con su conformidad (dada por
+correo el 2026-10-13); nada impide publicarlos.
+
+Falta en la PS3 real (paquete SLSA00110 «Salsa64 extras», al lado del
+oficial): menú con carátulas, un truco simple, aspecto 16:9, filtros
+sencillos, menú de pausa y su salida, cambio de idioma, ajustes por juego,
+botón PS dentro del menú y del juego, y dos o tres juegos para descartar
+regresiones.
+
 ## 2026-10-13 — Recompilador: código compacto, 20,2 → 15,6 palabras de PPC por instrucción MIPS (rama `sleepy-mestorf`, paquete SLSA00106 «Salsa64 compacto»)
 
 Sigue a la medición del perfil persistente (2026-10-12): juntar los bloques

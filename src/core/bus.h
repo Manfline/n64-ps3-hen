@@ -108,5 +108,9 @@ void salsa64_bus_write64(struct salsa64_bus *bus, uint32_t paddr, uint64_t value
 /* La RDRAM [pa, pa + len) cambió sin pasar por el CPU (DMA, cargador,
  * pruebas): el recompilador descarta el código que dependa de ella. */
 void salsa64_bus_rdram_written(struct salsa64_bus *bus, uint32_t pa, uint32_t len);
+/* Lo mismo para una escritura que no es un DMA (los trucos, como si fuera el
+ * CPU): solo el recompilador se entera; el anillo de DMA de las copias del
+ * RDP (rdram_written) no, para que no pierda los DMA de verdad. */
+void salsa64_bus_rdram_patched(struct salsa64_bus *bus, uint32_t pa, uint32_t len);
 
 #endif

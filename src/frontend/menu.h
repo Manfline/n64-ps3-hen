@@ -31,6 +31,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "cheats.h"
 #include "romlist.h"
 
 #define MENU_REPEAT_DELAY_US      400000u
@@ -46,6 +47,11 @@ enum menu_action {
 	MENU_QUIT,      /* «Salir al XMB» */
 	MENU_SETTINGS,  /* cambió un ajuste: guardarlo */
 	MENU_APPLY,     /* «Aplicar ahora»: poner la salida y la escala elegidas */
+	MENU_CHEATS,    /* □ sobre una ROM: cargar sus trucos y llamar a menu_cheats_open */
+	MENU_CHEATS_CHANGED, /* se activó o desactivó un truco: guardar los activos */
+	MENU_GAME,      /* SELECT sobre una ROM: cargar sus ajustes y llamar a menu_game_open */
+	MENU_GAME_CHANGED, /* cambió un ajuste de ese juego: guardarlo */
+	MENU_DOWNLOAD,  /* «Descargar»: carátulas o trucos (menu.dl_what) */
 };
 
 /* Recorte del overscan (SALSA64_DATA_DIR/overscan.cfg, ver main.c). */
@@ -63,6 +69,35 @@ enum menu_resolution {
 	MENU_RES_1080P,
 };
 
+/* Aspecto de la imagen del juego (menu.cfg, «aspecto = 4:3|16:9»): 4:3 es
+ * la original; 16:9 la estira a lo ancho para llenar una tele panorámica. */
+enum menu_aspect {
+	MENU_ASPECT_4_3,
+	MENU_ASPECT_16_9,
+};
+
+/* Filtro de la imagen del juego (menu.cfg, «filtro = ...»; clave y nombre en
+ * menu.c, filter_info). Los sencillos son de VIDEOGAMES SCZ; otras familias
+ * (los filtros CRT) van después, con su propio crédito en el panel. */
+enum menu_filter {
+	MENU_FILTER_SMOOTH,       /* suavizada (la de siempre) */
+	MENU_FILTER_SHARP,        /* nítida: píxeles sin suavizar */
+	MENU_FILTER_SCAN_SOFT,    /* líneas de barrido suaves */
+	MENU_FILTER_SCAN_STRONG,  /* líneas de barrido marcadas */
+	MENU_FILTERS,
+};
+
+/* Idioma del menú (menu.cfg, «idioma = es|en|fr|de|it|pt»), ver i18n.h. */
+enum menu_lang { MENU_LANG_ES, MENU_LANG_EN, MENU_LANG_FR, MENU_LANG_DE, MENU_LANG_IT, MENU_LANG_PT, MENU_LANGS };
+
+/* Ajustes de un solo juego (juegos/<ROM>.cfg): -1 es «lo global». */
+struct menu_game {
+	int aspect;    /* -1 o enum menu_aspect */
+	int filter;    /* -1 o enum menu_filter */
+	int overscan;  /* -1 o MENU_OVERSCAN_OFF / NORMAL / WIDE */
+};
+enum { MENU_GAME_ASPECT, MENU_GAME_FILTER, MENU_GAME_OVERSCAN, MENU_GAME_BACK, MENU_GAME_ROWS };
+
 /* Ajustes del menú: el fondo, el contador y la confirmación al salir van en
  * SALSA64_DATA_DIR/menu.cfg; el recorte
  * es el de overscan.cfg y la resolución la de video.cfg, que leen y
@@ -74,11 +109,15 @@ struct menu_settings {
 	int scale;      /* escala interna del render: 0 automática, 1 .. 5 */
 	bool fps;       /* contador de velocidad en el juego («fps = si|no»; SELECT + △) */
 	bool confirm;   /* START + SELECT pregunta antes de salir del juego («confirmar = si|no») */
+	int aspect;     /* enum menu_aspect («aspecto = 4:3|16:9») */
+	int filter;     /* enum menu_filter («filtro = suave|nitido|lineas|lineas+») */
+	int lang;       /* enum menu_lang */
 };
 
-enum { MENU_PAGE_GAMES, MENU_PAGE_OPTIONS };
-enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_RESOLUTION, MENU_OPT_SCALE, MENU_OPT_APPLY, MENU_OPT_FPS,
-       MENU_OPT_CONFIRM, MENU_OPT_BACK, MENU_OPTS };
+enum { MENU_PAGE_GAMES, MENU_PAGE_OPTIONS, MENU_PAGE_CHEATS, MENU_PAGE_GAME };
+enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_ASPECT, MENU_OPT_FILTER, MENU_OPT_RESOLUTION, MENU_OPT_SCALE,
+       MENU_OPT_APPLY, MENU_OPT_FPS, MENU_OPT_CONFIRM, MENU_OPT_LANG, MENU_OPT_DL_COVERS, MENU_OPT_DL_CHEATS,
+       MENU_OPT_BACK, MENU_OPTS };
 /* «Aplicar ahora» solo existe mientras lo elegido difiere de lo que corre. */
 
 struct menu {
@@ -87,6 +126,25 @@ struct menu {
 	int page;              /* MENU_PAGE_* */
 	int sel;               /* juegos: 0 .. count + 1 (count: Opciones; count + 1: Salir) */
 	int opt;               /* opciones: MENU_OPT_* */
+	/* Trucos de la ROM elegida (los carga main.c): una fila por truco y «Volver». */
+	struct cheat_set *cheats;
+	const char *cht_title; /* título de esa ROM */
+	int cht_sel;
+	float cht_pos, cht_t;  /* fila mostrada y entrada de la página (0 .. 1) */
+	/* Ajustes de la ROM elegida (los carga main.c). */
+	struct menu_game game;
+	const char *game_title;
+	int game_sel;
+	int game_rom;          /* la ROM de esa página (índice en la lista) */
+	float game_pos, game_t;
+	int dl_what;           /* con MENU_DOWNLOAD: 0 carátulas, 1 trucos */
+	bool dl_enabled;       /* filas «Descargar …» (experimental: download.h, dl_enabled) */
+	/* Carátula de la ROM cover_rom, ya subida a la ranura 0 de rsxkit_ui por
+	 * main.c (-1: ninguna), de cover_w × cover_h puntos. cover_t es su
+	 * aparición, 0 .. 1. */
+	int cover_rom;
+	unsigned cover_w, cover_h;
+	float cover_t;
 	/* Lo que corre ahora (lo pone main.c): ancho × alto de la salida y la
 	 * resolución y la escala pedidas (las de set.resolution y set.scale
 	 * cuando coinciden, no hay nada que aplicar). */
@@ -126,7 +184,29 @@ static inline bool menu_video_pending(const struct menu *m)
 {
 	return m->set.resolution != m->res_run || m->set.scale != m->scale_run;
 }
+/* La selección lleva quieta lo suficiente para cargar su carátula: página de
+ * juegos, sobre una ROM, con la columna ya detenida. */
+static inline bool menu_settled(const struct menu *m)
+{
+	float d = m->pos - (float)m->sel;
+	return menu_selected(m) >= 0 && m->page_t < 0.01f && d > -0.02f && d < 0.02f;
+}
 void menu_set_status(struct menu *m, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+
+/* Abre la página de trucos de `title` con `cs` (que debe seguir vivo mientras
+ * esté abierta; X cambia sus `on`). */
+void menu_cheats_open(struct menu *m, struct cheat_set *cs, const char *title);
+static inline int menu_cheat_rows(const struct menu *m) { return (m->cheats ? (int)m->cheats->n : 0) + 1; }
+
+/* Abre la página de ajustes de `title` con `g` (se copia). */
+void menu_game_open(struct menu *m, const struct menu_game *g, const char *title);
+void menu_game_default(struct menu_game *g);
+/* juegos/<ROM>.cfg: «aspecto|filtro|recorte = global|...». */
+void menu_game_parse(struct menu_game *g, const char *text, size_t len);
+int menu_game_format(const struct menu_game *g, char *buf, size_t size);
+/* Lo que vale para un juego: lo suyo, o si es -1 lo global. */
+void menu_game_effective(const struct menu_settings *s, const struct menu_game *g, int *aspect, int *filter,
+			 int *overscan);
 
 /* Avanza la animación a now_us y dibuja el menú entero con rsxkit_ui_* en
  * un espacio lógico de lw × lh (alto 720; ancho según la tele). */

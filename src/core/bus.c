@@ -11,10 +11,15 @@
 #include "cpu/rec.h"
 #include "cpu/vr4300.h"
 
-void salsa64_bus_rdram_written(struct salsa64_bus *bus, uint32_t pa, uint32_t len)
+void salsa64_bus_rdram_patched(struct salsa64_bus *bus, uint32_t pa, uint32_t len)
 {
 	if (bus->cpu && bus->cpu->rec)
 		salsa64_rec_invalidate(bus->cpu->rec, pa, len);
+}
+
+void salsa64_bus_rdram_written(struct salsa64_bus *bus, uint32_t pa, uint32_t len)
+{
+	salsa64_bus_rdram_patched(bus, pa, len);
 	if (bus->rdram_written)
 		bus->rdram_written(bus->rdram_written_ctx, pa, len);
 }

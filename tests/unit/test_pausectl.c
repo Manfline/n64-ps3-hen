@@ -64,44 +64,174 @@ static void intercept_alone_pauses(void)
 	CHECK_EQ(pausectl_reasons(&pc), 0);
 }
 
-/* START + SELECT abre el cuadro (START no llega al juego); ○ lo cierra y el
- * ○ no llega como B hasta soltarse y volver a apretarse. */
-static void confirm_no_resumes(void)
+/* Pulsa y suelta un botón. */
+static enum pausectl_action tap(uint32_t b)
+{
+	enum pausectl_action a = poll1(b, false, true);
+	poll1(0, false, true);
+	return a;
+}
+
+/* Abre el menú de pausa (START + SELECT) y lo deja soltado. */
+static void open_menu(void)
+{
+	poll1(B(SELECT), false, true);
+	poll1(QUIT, false, true);
+	poll1(0, false, true);
+}
+
+/* Abre el menú y va a la fila de salir y la acepta. */
+static enum pausectl_action choose_exit(void)
+{
+	open_menu();
+	tap(B(UP));  /* da la vuelta: Continuar → Salir */
+	CHECK_EQ(pc.menu_sel, PM_EXIT);
+	return tap(B(CROSS));
+}
+
+/* START + SELECT abre el menú (START no llega al juego) y pausa; ○ lo cierra
+ * sin que el ○ llegue como B hasta soltarse. */
+static void menu_opens_and_closes(void)
 {
 	pausectl_init(&pc, true);
 	poll1(B(SELECT), false, true);
 	CHECK_EQ(game[0], B(SELECT));
 	CHECK_EQ(poll1(QUIT, false, true), PAUSECTL_NONE);
-	CHECK(pc.dialog);
-	CHECK_EQ(pausectl_reasons(&pc), PAUSECTL_CONFIRM);
+	CHECK(pc.menu && !pc.dialog);
+	CHECK_EQ(pausectl_reasons(&pc), PAUSECTL_MENU);
+	CHECK_EQ(pc.menu_sel, PM_RESUME);
 	CHECK_EQ(game[0], 0);
-	/* Mantener el atajo no lo cierra ni lo vuelve a abrir. */
 	for (int i = 0; i < 5; i++)
 		CHECK_EQ(poll1(QUIT, false, true), PAUSECTL_NONE);
-	CHECK(pc.dialog);
+	CHECK(pc.menu);
 	poll1(0, false, true);
-	poll1(B(UP), false, true);
-	CHECK_EQ(game[0], 0);  /* con el cuadro, nada llega al juego */
-	CHECK(pc.dialog);
+	poll1(B(RIGHT), false, true);
+	CHECK_EQ(game[0], 0);  /* con el menú, nada llega al juego */
+	poll1(0, false, true);
 	CHECK_EQ(poll1(B(CIRCLE), false, true), PAUSECTL_NONE);
-	CHECK(!pc.dialog);
+	CHECK(!pc.menu);
 	CHECK_EQ(pausectl_reasons(&pc), 0);
 	CHECK_EQ(game[0], 0);
 	poll1(B(CIRCLE) | B(CROSS), false, true);
-	CHECK_EQ(game[0], B(CROSS));  /* lo nuevo sí; el ○ del «No», no */
+	CHECK_EQ(game[0], B(CROSS));
 	poll1(0, false, true);
 	poll1(B(CIRCLE), false, true);
 	CHECK_EQ(game[0], B(CIRCLE));
 }
 
-/* × sale; lo apretado no llega a lo siguiente (el menú de Salsa64) hasta
- * soltarse. */
+/* El atajo otra vez, START o «Continuar» también cierran el menú. */
+static void menu_other_closers(void)
+{
+	pausectl_init(&pc, true);
+	open_menu();
+	poll1(QUIT, false, true);
+	CHECK(!pc.menu);
+	CHECK_EQ(game[0], 0);  /* START tragado: no pausa el juego al volver */
+	poll1(0, false, true);
+	poll1(B(START), false, true);
+	CHECK_EQ(game[0], B(START));
+	poll1(0, false, true);
+	open_menu();
+	tap(B(START));
+	CHECK(!pc.menu);
+	open_menu();
+	tap(B(CROSS));  /* Continuar */
+	CHECK(!pc.menu);
+	CHECK_EQ(pc.menu_do, -1);
+}
+
+/* ↑↓ dan la vuelta; guardar y cargar piden la acción y cierran; la ranura
+ * cambia con ← → y × sin cerrar; FPS pide el cambio sin cerrar. */
+static void menu_rows(void)
+{
+	pausectl_init(&pc, true);
+	open_menu();
+	tap(B(DOWN));
+	CHECK_EQ(pc.menu_sel, PM_SAVE);
+	tap(B(UP));
+	tap(B(UP));
+	CHECK_EQ(pc.menu_sel, PM_EXIT);
+	tap(B(DOWN));
+	CHECK_EQ(pc.menu_sel, PM_RESUME);
+	tap(B(DOWN));
+	tap(B(CROSS));
+	CHECK(!pc.menu);
+	CHECK_EQ(pc.menu_do, PM_SAVE);
+	pc.menu_do = -1;
+	open_menu();
+	tap(B(DOWN));
+	tap(B(DOWN));
+	CHECK_EQ(pc.menu_sel, PM_LOAD);
+	tap(B(CROSS));
+	CHECK(!pc.menu);
+	CHECK_EQ(pc.menu_do, PM_LOAD);
+	pc.menu_do = -1;
+	open_menu();
+	for (int i = 0; i < PM_SLOT; i++)
+		tap(B(DOWN));
+	tap(B(RIGHT));
+	CHECK(pc.menu);
+	CHECK_EQ(pc.menu_do, PM_SLOT);
+	CHECK_EQ(pc.menu_arg, 1);
+	pc.menu_do = -1;
+	tap(B(LEFT));
+	CHECK_EQ(pc.menu_do, PM_SLOT);
+	CHECK_EQ(pc.menu_arg, -1);
+	pc.menu_do = -1;
+	tap(B(CROSS));
+	CHECK(pc.menu);
+	CHECK_EQ(pc.menu_do, PM_SLOT);
+	CHECK_EQ(pc.menu_arg, 1);
+	pc.menu_do = -1;
+	tap(B(DOWN));
+	tap(B(DOWN));
+	CHECK_EQ(pc.menu_sel, PM_FPS);
+	tap(B(CROSS));
+	CHECK(pc.menu);
+	CHECK_EQ(pc.menu_do, PM_FPS);
+}
+
+/* «Trucos» abre la lista si hay; si no, avisa sin cerrar el menú. */
+static void menu_cheats_row(void)
+{
+	pausectl_init(&pc, true);
+	open_menu();
+	for (int i = 0; i < PM_CHEATS; i++)
+		tap(B(DOWN));
+	tap(B(CROSS));
+	CHECK(pc.menu && !pc.panel);
+	CHECK_EQ(pc.menu_do, PM_CHEATS);
+	pc.menu_do = -1;
+	pc.panel_avail = true;
+	pc.panel_rows = 10;
+	tap(B(CROSS));
+	CHECK(!pc.menu && pc.panel);
+	CHECK_EQ(pc.menu_do, -1);
+	CHECK_EQ(pausectl_reasons(&pc), PAUSECTL_PANEL);
+}
+
+/* «Salir»: con confirmación pregunta; sin ella sale directo. */
+static void menu_exit_row(void)
+{
+	pausectl_init(&pc, true);
+	CHECK_EQ(choose_exit(), PAUSECTL_NONE);
+	CHECK(pc.dialog && !pc.menu);
+	CHECK_EQ(pausectl_reasons(&pc), PAUSECTL_CONFIRM);
+	CHECK_EQ(game[0], 0);
+	CHECK_EQ(tap(B(CIRCLE)), PAUSECTL_NONE);
+	CHECK(!pc.dialog);
+	CHECK_EQ(pausectl_reasons(&pc), 0);
+	pausectl_init(&pc, false);
+	CHECK_EQ(choose_exit(), PAUSECTL_EXIT);
+}
+
+/* × en el cuadro sale; lo apretado no llega a lo siguiente (el menú de
+ * Salsa64) hasta soltarse. */
 static void confirm_yes_exits(void)
 {
 	pausectl_init(&pc, true);
-	poll1(QUIT, false, true);
+	choose_exit();
 	CHECK(pc.dialog);
-	poll1(0, false, true);
 	CHECK_EQ(poll1(B(CROSS), false, true), PAUSECTL_EXIT);
 	CHECK(!pc.dialog);
 	pausectl_game_end(&pc);
@@ -112,61 +242,44 @@ static void confirm_yes_exits(void)
 	CHECK_EQ(game[0], B(CROSS));
 }
 
-/* El atajo otra vez (soltado y apretado de nuevo) cierra el cuadro. */
-static void combo_again_closes(void)
-{
-	pausectl_init(&pc, true);
-	poll1(QUIT, false, true);
-	CHECK(pc.dialog);
-	poll1(B(START), false, true);
-	CHECK(pc.dialog);
-	CHECK_EQ(poll1(QUIT, false, true), PAUSECTL_NONE);
-	CHECK(!pc.dialog);
-	CHECK_EQ(game[0], 0);  /* START tragado: no pausa el juego al volver */
-	poll1(B(START), false, true);
-	CHECK_EQ(game[0], 0);
-	CHECK(!pc.dialog);
-	poll1(0, false, true);
-	poll1(B(START), false, true);
-	CHECK_EQ(game[0], B(START));
-}
-
-/* Con «confirmar = no», el atajo sale directo; en el menú de Salsa64 no
- * hace nada; START en un mando y SELECT en otro no es el atajo. */
+/* En el menú de Salsa64 el atajo no hace nada; START en un mando y SELECT en
+ * otro no es el atajo; al terminar el juego el menú se va. */
 static void combo_variants(void)
 {
-	pausectl_init(&pc, false);
-	CHECK_EQ(poll1(QUIT, false, true), PAUSECTL_EXIT);
-	CHECK(!pc.dialog);
 	pausectl_init(&pc, true);
 	CHECK_EQ(poll1(QUIT, false, false), PAUSECTL_NONE);
-	CHECK(!pc.dialog);
+	CHECK(!pc.menu && !pc.dialog);
 	CHECK_EQ(game[0], QUIT);
 	pausectl_init(&pc, true);
 	memset(raw, 0, sizeof raw);
 	raw[0] = B(START);
 	raw[1] = B(SELECT);
 	CHECK_EQ(pausectl_pads(&pc, raw, false, true, game), PAUSECTL_NONE);
-	CHECK(!pc.dialog);
+	CHECK(!pc.menu);
 	CHECK_EQ(game[0], B(START));
 	CHECK_EQ(game[1], B(SELECT));
+	open_menu();
+	pausectl_game_end(&pc);
+	CHECK(!pc.menu);
+	CHECK_EQ(pc.menu_do, -1);
 }
 
-/* Con el cuadro abierto llega el menú del sistema: el × apretado allá no
- * cuenta; al volver, el × nuevo sí. */
-static void dialog_survives_system_menu(void)
+/* Con el menú de pausa abierto llega el menú del sistema: el × apretado allá
+ * no cuenta; al volver, el × nuevo sí. */
+static void menu_survives_system_menu(void)
 {
 	pausectl_init(&pc, true);
-	poll1(QUIT, false, true);
-	poll1(0, false, true);
+	open_menu();
+	tap(B(UP));
 	pausectl_system_menu(&pc, true);
-	CHECK_EQ(pausectl_reasons(&pc), PAUSECTL_SYSTEM | PAUSECTL_CONFIRM);
+	CHECK_EQ(pausectl_reasons(&pc), PAUSECTL_SYSTEM | PAUSECTL_MENU);
 	CHECK_EQ(poll1(B(CROSS), true, true), PAUSECTL_NONE);
-	CHECK(pc.dialog);
+	CHECK(pc.menu);
 	pausectl_system_menu(&pc, false);
 	CHECK_EQ(poll1(0, false, true), PAUSECTL_NONE);
-	CHECK_EQ(pausectl_reasons(&pc), PAUSECTL_CONFIRM);
-	CHECK_EQ(poll1(B(CROSS), false, true), PAUSECTL_EXIT);
+	CHECK_EQ(pausectl_reasons(&pc), PAUSECTL_MENU);
+	poll1(B(CROSS), false, true);
+	CHECK(pc.dialog);
 }
 
 /* El cuadro cabe en 4:3 y en 16:9, centrado, con el texto adentro. */
@@ -251,15 +364,117 @@ static void pause_gap_keeps_rhythm(void)
 	CHECK(fields >= 3 * 59 && fields <= 3 * 61);  /* 2 s antes y 1 s después */
 }
 
+/* SELECT + □ abre la lista de trucos con el juego en pausa: el juego no recibe
+ * nada, ↑↓ eligen (y repiten), × pide el cambio y ○ cierra sin que el ○ llegue
+ * al juego. */
+static void cheat_panel(void)
+{
+	pausectl_init(&pc, true);
+	/* Sin trucos: no abre, avisa y el □ no llega al juego. */
+	poll1(B(SELECT), false, true);
+	CHECK_EQ(poll1(B(SELECT) | B(SQUARE), false, true), PAUSECTL_NONE);
+	CHECK(!pc.panel && pc.panel_denied);
+	CHECK_EQ(game[0] & B(SQUARE), 0);
+	pc.panel_denied = false;
+	poll1(0, false, true);
+	/* Con trucos. */
+	pc.panel_avail = true;
+	pc.panel_rows = 20;
+	poll1(B(SELECT), false, true);
+	poll1(B(SELECT) | B(SQUARE), false, true);
+	CHECK(pc.panel);
+	CHECK_EQ(pausectl_reasons(&pc), PAUSECTL_PANEL);
+	CHECK_EQ(game[0], 0);
+	poll1(0, false, true);
+	CHECK_EQ(pc.panel_sel, 0);
+	/* ↓ una vez, y mantenido repite pasado un rato. */
+	poll1(B(DOWN), false, true);
+	CHECK_EQ(pc.panel_sel, 1);
+	for (int i = 0; i < 10; i++)
+		poll1(B(DOWN), false, true);
+	CHECK_EQ(pc.panel_sel, 1);  /* todavía no repite */
+	for (int i = 0; i < 30; i++)
+		poll1(B(DOWN), false, true);
+	CHECK(pc.panel_sel > 5);
+	poll1(0, false, true);
+	int at = pc.panel_sel;
+	poll1(B(UP), false, true);
+	CHECK_EQ(pc.panel_sel, at - 1);
+	poll1(0, false, true);
+	/* Saltos con ← → y L1/R1, parados en los extremos. */
+	poll1(B(RIGHT), false, true);
+	CHECK_EQ(pc.panel_sel, at - 1 + PAUSECTL_PANEL_PAGE > 19 ? 19 : at - 1 + PAUSECTL_PANEL_PAGE);
+	poll1(0, false, true);
+	pc.panel_sel = 0;
+	poll1(B(UP), false, true);
+	CHECK_EQ(pc.panel_sel, 19);  /* un paso da la vuelta */
+	poll1(0, false, true);
+	poll1(B(L1), false, true);
+	CHECK_EQ(pc.panel_sel, 11);
+	poll1(0, false, true);
+	/* × pide cambiar el elegido; el juego no ve el ×. */
+	CHECK_EQ(pc.toggle, -1);
+	poll1(B(CROSS), false, true);
+	CHECK_EQ(pc.toggle, 11);
+	CHECK_EQ(game[0], 0);
+	pc.toggle = -1;
+	poll1(0, false, true);
+	/* ○ cierra; el ○ y lo que siga apretado no llegan al juego hasta soltarse. */
+	poll1(B(CIRCLE), false, true);
+	CHECK(!pc.panel);
+	CHECK_EQ(pausectl_reasons(&pc), 0);
+	CHECK_EQ(game[0], 0);
+	poll1(B(CIRCLE) | B(CROSS), false, true);
+	CHECK_EQ(game[0], B(CROSS));  /* el × nuevo sí; el ○ no */
+	poll1(0, false, true);
+	/* Se reabre con SELECT + □ en la misma fila, y el mismo atajo la cierra. */
+	poll1(B(SELECT), false, true);
+	poll1(B(SELECT) | B(SQUARE), false, true);
+	CHECK(pc.panel && pc.panel_sel == 11);
+	poll1(B(SELECT), false, true);
+	poll1(B(SELECT) | B(SQUARE), false, true);
+	CHECK(!pc.panel);
+	poll1(0, false, true);
+	/* START cierra; el menú del sistema encima no cierra ni cambia nada. */
+	poll1(B(SELECT), false, true);
+	poll1(B(SELECT) | B(SQUARE), false, true);
+	poll1(0, false, true);
+	pausectl_system_menu(&pc, true);
+	poll1(B(CROSS) | B(CIRCLE), true, true);
+	CHECK(pc.panel && pc.toggle == -1);
+	pausectl_system_menu(&pc, false);
+	poll1(0, false, true);
+	poll1(0, false, true);
+	poll1(B(START), false, true);
+	CHECK(!pc.panel);
+	/* Fuera del juego (menú de Salsa64) no hay lista; al terminar el juego se va. */
+	poll1(0, false, true);
+	poll1(B(SELECT), false, true);
+	poll1(B(SELECT) | B(SQUARE), false, true);
+	CHECK(pc.panel);
+	pausectl_game_end(&pc);
+	CHECK(!pc.panel && !pc.panel_avail);
+	/* La ventana de filas sigue al elegido. */
+	CHECK_EQ(pausectl_panel_top(0, 20), 0);
+	CHECK_EQ(pausectl_panel_top(5, 20), 0);
+	CHECK_EQ(pausectl_panel_top(10, 20), 5);
+	CHECK_EQ(pausectl_panel_top(19, 20), 9);
+	CHECK_EQ(pausectl_panel_top(3, 5), 0);
+}
+
 void t_suite_pausectl(void)
 {
 	RUN(system_menu_pauses_and_releases);
+	RUN(cheat_panel);
 	RUN(intercept_alone_pauses);
-	RUN(confirm_no_resumes);
+	RUN(menu_opens_and_closes);
+	RUN(menu_other_closers);
+	RUN(menu_rows);
+	RUN(menu_cheats_row);
+	RUN(menu_exit_row);
 	RUN(confirm_yes_exits);
-	RUN(combo_again_closes);
 	RUN(combo_variants);
-	RUN(dialog_survives_system_menu);
+	RUN(menu_survives_system_menu);
 	RUN(dialog_layout_fits);
 	RUN(pause_gap_keeps_rhythm);
 }

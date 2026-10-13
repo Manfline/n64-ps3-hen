@@ -13,6 +13,7 @@
  * SALSA64_MENU_PPM=<prefijo> en el host, el menú rasterizado como lo
  * dibujaría el RSX se guarda en imágenes para revisarlo a ojo.
  */
+#include "frontend/cover.h"
 #include "test.h"
 
 #include <math.h>
@@ -27,6 +28,7 @@
 
 #include "core/rom.h"
 #include "core/save.h"
+#include "frontend/i18n.h"
 #include "frontend/menu.h"
 #include "frontend/padmap.h"
 #include "frontend/romlist.h"
@@ -354,6 +356,90 @@ static void menu_pages(void)
 	CHECK_EQ(m.sel, menu_row_exit(&m));
 }
 
+static void menu_game_page(void)
+{
+	struct menu m;
+	nav_setup(&m, 3, 0);
+	menu_input(&m, 0, 0);
+	m.sel = 1;
+	/* SELECT sobre una ROM pide sus ajustes. */
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_SELECT), 10), MENU_GAME);
+	CHECK_EQ(m.game_rom, 1);
+	struct menu_game g;
+	menu_game_default(&g);
+	CHECK_EQ(g.aspect, -1);
+	menu_game_open(&m, &g, "Juego");
+	CHECK_EQ(m.page, MENU_PAGE_GAME);
+	menu_input(&m, 0, 20);
+	/* Aspecto: Global → 4:3 → 16:9 → Global. */
+	CHECK_EQ(menu_input(&m, RIGHT, 30), MENU_GAME_CHANGED);
+	CHECK_EQ(m.game.aspect, MENU_ASPECT_4_3);
+	menu_input(&m, 0, 40);
+	CHECK_EQ(menu_input(&m, CROSS, 50), MENU_GAME_CHANGED);
+	CHECK_EQ(m.game.aspect, MENU_ASPECT_16_9);
+	menu_input(&m, 0, 60);
+	CHECK_EQ(menu_input(&m, CROSS, 70), MENU_GAME_CHANGED);
+	CHECK_EQ(m.game.aspect, -1);
+	menu_input(&m, 0, 80);
+	CHECK_EQ(menu_input(&m, LEFT, 90), MENU_GAME_CHANGED);
+	CHECK_EQ(m.game.aspect, MENU_ASPECT_16_9);
+	/* Filtro y recorte. */
+	menu_input(&m, 0, 100);
+	menu_input(&m, DOWN, 110);
+	CHECK_EQ(m.game_sel, MENU_GAME_FILTER);
+	menu_input(&m, 0, 120);
+	menu_input(&m, LEFT, 130);
+	CHECK_EQ(m.game.filter, MENU_FILTER_SCAN_STRONG);
+	menu_input(&m, 0, 140);
+	menu_input(&m, DOWN, 150);
+	CHECK_EQ(m.game_sel, MENU_GAME_OVERSCAN);
+	menu_input(&m, 0, 160);
+	menu_input(&m, RIGHT, 170);
+	CHECK_EQ(m.game.overscan, MENU_OVERSCAN_OFF);
+	/* Lo efectivo: lo del juego o, si es global, lo de Opciones. */
+	m.set.aspect = MENU_ASPECT_4_3;
+	m.set.filter = MENU_FILTER_SHARP;
+	m.set.overscan = MENU_OVERSCAN_WIDE;
+	int a, f, o;
+	menu_game_effective(&m.set, &m.game, &a, &f, &o);
+	CHECK_EQ(a, MENU_ASPECT_16_9);
+	CHECK_EQ(f, MENU_FILTER_SCAN_STRONG);
+	CHECK_EQ(o, MENU_OVERSCAN_OFF);
+	m.game.filter = -1;
+	menu_game_effective(&m.set, &m.game, NULL, &f, NULL);
+	CHECK_EQ(f, MENU_FILTER_SHARP);
+	/* Texto del archivo: ida y vuelta, y global ante lo que no entiende. */
+	char buf[256];
+	int n = menu_game_format(&m.game, buf, sizeof buf);
+	CHECK(n > 0 && n < (int)sizeof buf);
+	struct menu_game back;
+	menu_game_default(&back);
+	menu_game_parse(&back, buf, (size_t)n);
+	CHECK_EQ(back.aspect, MENU_ASPECT_16_9);
+	CHECK_EQ(back.filter, -1);
+	CHECK_EQ(back.overscan, MENU_OVERSCAN_OFF);
+	const char *junk = "aspecto = 5:4\nfiltro = raro\nrecorte = x\n";
+	menu_game_parse(&back, junk, strlen(junk));
+	CHECK_EQ(back.aspect, -1);
+	CHECK_EQ(back.filter, -1);
+	CHECK_EQ(back.overscan, -1);
+	/* ○ vuelve a la lista. */
+	menu_input(&m, 0, 180);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_CIRCLE), 190), MENU_NONE);
+	CHECK_EQ(m.page, MENU_PAGE_GAMES);
+	/* menu.cfg: filtro e idioma van y vienen. */
+	struct menu_settings st;
+	menu_settings_default(&st);
+	st.filter = MENU_FILTER_SCAN_SOFT;
+	st.lang = MENU_LANG_DE;
+	n = menu_settings_format(&st, buf, sizeof buf);
+	struct menu_settings st2;
+	menu_settings_default(&st2);
+	menu_settings_parse(&st2, buf, (size_t)n);
+	CHECK_EQ(st2.filter, MENU_FILTER_SCAN_SOFT);
+	CHECK_EQ(st2.lang, MENU_LANG_DE);
+}
+
 static void menu_options_page(void)
 {
 	struct menu m;
@@ -390,6 +476,34 @@ static void menu_options_page(void)
 	menu_input(&m, LEFT, 69);
 	CHECK_EQ(m.set.overscan, MENU_OVERSCAN_NORMAL);
 	CHECK(m.set.waves);
+	/* Aspecto: X o los lados alternan 4:3 / 16:9 y piden guardar. */
+	menu_input(&m, 0, 69);
+	menu_input(&m, DOWN, 69);
+	CHECK_EQ(m.opt, MENU_OPT_ASPECT);
+	CHECK_EQ(m.set.aspect, MENU_ASPECT_4_3);
+	menu_input(&m, 0, 69);
+	CHECK_EQ(menu_input(&m, CROSS, 69), MENU_SETTINGS);
+	CHECK_EQ(m.set.aspect, MENU_ASPECT_16_9);
+	menu_input(&m, 0, 69);
+	CHECK_EQ(menu_input(&m, LEFT, 69), MENU_SETTINGS);
+	CHECK_EQ(m.set.aspect, MENU_ASPECT_4_3);
+	/* Filtro: derecha avanza (Suave → Nítida → Líneas suaves → Líneas fuertes → Suave), izquierda vuelve. */
+	menu_input(&m, 0, 69);
+	menu_input(&m, DOWN, 69);
+	CHECK_EQ(m.opt, MENU_OPT_FILTER);
+	CHECK_EQ(m.set.filter, MENU_FILTER_SMOOTH);
+	for (int want = 1; want < MENU_FILTERS; want++) {
+		menu_input(&m, 0, 69);
+		CHECK_EQ(menu_input(&m, RIGHT, 69), MENU_SETTINGS);
+		CHECK_EQ(m.set.filter, want);
+	}
+	menu_input(&m, 0, 69);
+	menu_input(&m, CROSS, 69);
+	CHECK_EQ(m.set.filter, MENU_FILTER_SMOOTH);
+	menu_input(&m, 0, 69);
+	CHECK_EQ(menu_input(&m, LEFT, 69), MENU_SETTINGS);
+	CHECK_EQ(m.set.filter, MENU_FILTER_SCAN_STRONG);
+	m.set.filter = MENU_FILTER_SMOOTH;
 	/* Resolución: X o los lados alternan 720p / 1080p y piden guardar. */
 	menu_input(&m, 0, 69);
 	menu_input(&m, DOWN, 70);
@@ -442,7 +556,26 @@ static void menu_options_page(void)
 	menu_input(&m, 0, 79);
 	CHECK_EQ(menu_input(&m, 0, 79), MENU_NONE);
 	CHECK_EQ(m.opt, MENU_OPT_BACK);  /* la fila desapareció: el cursor pasa a «Volver» */
-	menu_input(&m, UP, 79);          /* arriba, «Confirmar al salir», «Mostrar FPS» y «Escala interna» */
+	/* Sin descargas.cfg con «activar = si» las filas de descarga no están:
+	 * arriba de «Volver» va el idioma. */
+	CHECK(!m.dl_enabled);
+	menu_input(&m, UP, 79);
+	CHECK_EQ(m.opt, MENU_OPT_LANG);
+	menu_input(&m, 0, 79);
+	menu_input(&m, DOWN, 79);
+	CHECK_EQ(m.opt, MENU_OPT_BACK);
+	menu_input(&m, 0, 79);
+	m.dl_enabled = true;             /* encendidas (main.c, dl_enabled) */
+	menu_input(&m, UP, 79);          /* arriba: descargas, idioma, «Confirmar al salir», «Mostrar FPS» y «Escala interna» */
+	CHECK_EQ(m.opt, MENU_OPT_DL_CHEATS);
+	menu_input(&m, 0, 79);
+	menu_input(&m, UP, 79);
+	CHECK_EQ(m.opt, MENU_OPT_DL_COVERS);
+	menu_input(&m, 0, 79);
+	menu_input(&m, UP, 79);
+	CHECK_EQ(m.opt, MENU_OPT_LANG);
+	menu_input(&m, 0, 79);
+	menu_input(&m, UP, 79);
 	CHECK_EQ(m.opt, MENU_OPT_CONFIRM);
 	menu_input(&m, 0, 79);
 	menu_input(&m, UP, 79);
@@ -472,6 +605,35 @@ static void menu_options_page(void)
 	menu_input(&m, 0, 79);
 	CHECK_EQ(menu_input(&m, RIGHT, 79), MENU_SETTINGS);
 	CHECK(m.set.confirm);
+	/* Idioma: derecha avanza con vuelta; izquierda al revés. */
+	menu_input(&m, 0, 79);
+	menu_input(&m, DOWN, 79);
+	CHECK_EQ(m.opt, MENU_OPT_LANG);
+	CHECK_EQ(m.set.lang, MENU_LANG_ES);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, RIGHT, 79), MENU_SETTINGS);
+	CHECK_EQ(m.set.lang, MENU_LANG_EN);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, LEFT, 79), MENU_SETTINGS);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, LEFT, 79), MENU_SETTINGS);
+	CHECK_EQ(m.set.lang, MENU_LANG_PT);
+	m.set.lang = MENU_LANG_ES;
+	/* Descargas: × pide bajar carátulas o trucos; los lados no hacen nada. */
+	menu_input(&m, 0, 79);
+	menu_input(&m, DOWN, 79);
+	CHECK_EQ(m.opt, MENU_OPT_DL_COVERS);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, RIGHT, 79), MENU_NONE);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, CROSS, 79), MENU_DOWNLOAD);
+	CHECK_EQ(m.dl_what, 0);
+	menu_input(&m, 0, 79);
+	menu_input(&m, DOWN, 79);
+	CHECK_EQ(m.opt, MENU_OPT_DL_CHEATS);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, CROSS, 79), MENU_DOWNLOAD);
+	CHECK_EQ(m.dl_what, 1);
 	menu_input(&m, 0, 79);
 	menu_input(&m, DOWN, 79);
 	CHECK_EQ(m.opt, MENU_OPT_BACK);
@@ -511,10 +673,17 @@ static void menu_settings_file(void)
 	menu_settings_parse(&s, fps, sizeof fps - 1);
 	CHECK(s.fps);
 	CHECK(s.confirm);  /* sin la línea: pregunta antes de salir */
+	CHECK_EQ(s.aspect, MENU_ASPECT_4_3);
+	static const char wide[] = "aspecto = 16:9\n";
+	menu_settings_parse(&s, wide, sizeof wide - 1);
+	CHECK_EQ(s.aspect, MENU_ASPECT_16_9);
+	static const char junk[] = "aspecto = raro\n";
+	menu_settings_parse(&s, junk, sizeof junk - 1);
+	CHECK_EQ(s.aspect, MENU_ASPECT_16_9);  /* un valor que no entiende no lo cambia */
 	static const char direct[] = "confirmar = no\n";
 	menu_settings_parse(&s, direct, sizeof direct - 1);
 	CHECK(!s.confirm);
-	char text[128];
+	char text[320];
 	s.waves = false;
 	int n = menu_settings_format(&s, text, sizeof text);
 	CHECK(n > 0 && (size_t)n < sizeof text);
@@ -690,10 +859,19 @@ static void ui_geometry(void)
 
 /* Rasteriza el lote como lo haría el RSX (téxeles con filtro bilineal,
  * textura × color, mezcla alfa) en una imagen RGB de w × h. */
+static const uint8_t *img_px[RSXKIT_UI_IMAGES];  /* carátulas de la vista previa */
+static uint32_t img_w[RSXKIT_UI_IMAGES], img_h[RSXKIT_UI_IMAGES];
+
 static void raster(uint8_t *rgb, int w, int h, float lw, float lh, uint32_t n)
 {
 	float sx = w / lw, sy = h / lh;
+	const uint32_t *gfirst;
+	uint32_t ng = rsxkit_ui_groups(&gfirst), g = 0;
 	for (uint32_t t = 0; t + 2 < n; t += 3) {
+		while (g + 1 < ng && gfirst[g + 1] <= t)
+			g++;
+		uint32_t gi = ng ? rsxkit_ui_group_image(g) : 0;
+		const uint8_t *im = gi ? img_px[gi - 1] : NULL;
 		const rsxkit_vertex *v[3] = { &verts[t], &verts[t + 1], &verts[t + 2] };
 		float x[3], y[3];
 		for (int k = 0; k < 3; k++)
@@ -715,7 +893,22 @@ static void raster(uint8_t *rgb, int w, int h, float lw, float lh, uint32_t n)
 				float s = b0 * v[0]->st[0] + b1 * v[1]->st[0] + b2 * v[2]->st[0] - 0.5f;
 				float tt = b0 * v[0]->st[1] + b1 * v[1]->st[1] + b2 * v[2]->st[1] - 0.5f;
 				int is = (int)floorf(s), it = (int)floorf(tt);
-				float fs = s - is, ft = tt - it, ta = 0;
+				float fs = s - is, ft = tt - it, ta = 0, tc[3] = { 1, 1, 1 };
+				if (im) {
+					uint32_t iw = img_w[gi - 1], ih = img_h[gi - 1];
+					ta = 0;
+					tc[0] = tc[1] = tc[2] = 0;
+					for (int k = 0; k < 4; k++) {
+						int ax = is + (k & 1), ay = it + (k >> 1);
+						ax = ax < 0 ? 0 : ax >= (int)iw ? (int)iw - 1 : ax;
+						ay = ay < 0 ? 0 : ay >= (int)ih ? (int)ih - 1 : ay;
+						float wgt = ((k & 1) ? fs : 1 - fs) * ((k >> 1) ? ft : 1 - ft);
+						const uint8_t *tp = im + 4 * ((size_t)ay * iw + ax);
+						ta += wgt * tp[3] / 255.0f;
+						for (int c = 0; c < 3; c++)
+							tc[c] += wgt * tp[c] / 255.0f;
+					}
+				} else
 				for (int k = 0; k < 4; k++) {
 					int ax = is + (k & 1), ay = it + (k >> 1);
 					ax = ax < 0 ? 0 : ax >= RSXKIT_UI_ATLAS_W ? RSXKIT_UI_ATLAS_W - 1 : ax;
@@ -727,7 +920,7 @@ static void raster(uint8_t *rgb, int w, int h, float lw, float lh, uint32_t n)
 				uint8_t *o = rgb + 3 * ((size_t)py * w + px);
 				for (int c = 0; c < 3; c++) {
 					float col = b0 * v[0]->rgba[c] + b1 * v[1]->rgba[c] + b2 * v[2]->rgba[c];
-					o[c] = (uint8_t)(col * a + o[c] * (1 - a) + 0.5f);
+					o[c] = (uint8_t)(col * tc[c] * a + o[c] * (1 - a) + 0.5f);
 				}
 			}
 	}
@@ -933,6 +1126,224 @@ static void menu_preview(void)
 	raster(rgb, 960, 720, 960, 720, n);
 	snprintf(path, sizeof path, "%s-43.ppm", out);
 	write_ppm(path, rgb, 960, 720);
+	/* Ajustes por juego, filtro e idiomas. */
+	{
+		struct menu_game g = { MENU_ASPECT_16_9, -1, MENU_OVERSCAN_OFF };
+		for (int lang = 0; lang <= 5; lang += 1) {
+			if (lang == 2 || lang == 4)
+				continue;  /* en, de y pt bastan para el aspecto; fr e it se ven en las pruebas de ancho */
+			i18n_set(lang);
+			menu_init(&m, &frame_list, 4, NULL);
+			m.set.lang = lang;
+			m.set.filter = MENU_FILTER_SCAN_SOFT;
+			snprintf(m.last, sizeof m.last, "%s", frame_list.e[4].path);
+			n = frames(&m, 1000000, 13000000, 960);
+			raster(rgb, 960, 720, 960, 720, n);
+			snprintf(path, sizeof path, "%s-juegos43-l%d.ppm", out, lang);
+			write_ppm(path, rgb, 960, 720);
+			menu_game_open(&m, &g, "Perfect Dark");
+			m.game_sel = 1;
+			n = frames(&m, 13000000, 14000000, 1280);
+			raster(rgb, 1280, 720, 1280, 720, n);
+			snprintf(path, sizeof path, "%s-ajustes-l%d.ppm", out, lang);
+			write_ppm(path, rgb, 1280, 720);
+			n = frames(&m, 14000000, 14100000, 960);
+			raster(rgb, 960, 720, 960, 720, n);
+			snprintf(path, sizeof path, "%s-ajustes43-l%d.ppm", out, lang);
+			write_ppm(path, rgb, 960, 720);
+			menu_init(&m, &frame_list, 4, NULL);
+			m.set.lang = lang;
+			m.set.filter = MENU_FILTER_SCAN_STRONG;
+			m.page = MENU_PAGE_OPTIONS;
+			m.opt = MENU_OPT_FILTER;
+			n = frames(&m, 1000000, 13000000, 1280);
+			raster(rgb, 1280, 720, 1280, 720, n);
+			snprintf(path, sizeof path, "%s-filtro-l%d.ppm", out, lang);
+			write_ppm(path, rgb, 1280, 720);
+			m.dl_enabled = true;  /* experimentales: solo con descargas.cfg */
+			m.opt = MENU_OPT_DL_COVERS;
+			n = frames(&m, 13000000, 14000000, 960);
+			raster(rgb, 960, 720, 960, 720, n);
+			snprintf(path, sizeof path, "%s-descargar43-l%d.ppm", out, lang);
+			write_ppm(path, rgb, 960, 720);
+			menu_set_status(&m, "%s: %u nuevas, %u ya estaban, %u sin coincidencia", tr("Carátulas"), 12u, 40u, 3u);
+			n = frames(&m, 14000000, 14100000, 1280);
+			raster(rgb, 1280, 720, 1280, 720, n);
+			snprintf(path, sizeof path, "%s-estado-l%d.ppm", out, lang);
+			write_ppm(path, rgb, 1280, 720);
+		}
+		i18n_set(0);
+	}
+	/* La página de trucos. */
+	{
+		static struct cheat_set cs;
+		static const char text[] =
+			"cheat0_desc = \"Vidas infinitas\"\ncheat0_code = \"8107A6C4 0063\"\ncheat0_enable = true\n"
+			"cheat1_desc = \"Salud y munición al máximo (todas las armas)\"\ncheat1_code = \"8100FFFF 0001+8100FFFE 0002\"\n"
+			"cheat2_desc = \"Saltar de nivel\"\ncheat2_code = \"89001000 0001\"\n"
+			"cheat3_desc = \"Tiempo infinito\"\ncheat3_code = \"81001000 0001\"\n";
+		cheats_parse(&cs, text, sizeof text - 1);
+		menu_init(&m, &frame_list, 4, NULL);
+		menu_cheats_open(&m, &cs, frame_list.e[4].path + 1);
+		m.cht_title = "Perfect Dark";
+		m.cht_sel = 1;
+		n = frames(&m, 1000000, 2000000, 1280);
+		raster(rgb, 1280, 720, 1280, 720, n);
+		snprintf(path, sizeof path, "%s-trucos.ppm", out);
+		write_ppm(path, rgb, 1280, 720);
+		n = frames(&m, 2000000, 2100000, 960);
+		raster(rgb, 960, 720, 960, 720, n);
+		snprintf(path, sizeof path, "%s-trucos43.ppm", out);
+		write_ppm(path, rgb, 960, 720);
+	}
+	/* Con carátula: una de 320×448 hecha aquí (degradado y un marco). */
+	{
+		static uint8_t cov[512 * 448 * 4];
+		for (int y = 0; y < 448; y++)
+			for (int x = 0; x < 320; x++) {
+				uint8_t *p = cov + 4 * (y * 320 + x);
+				bool edge = x < 8 || y < 8 || x >= 312 || y >= 440;
+				p[0] = edge ? 240 : (uint8_t)(40 + y / 3);
+				p[1] = edge ? 200 : (uint8_t)(60 + x / 3);
+				p[2] = edge ? 40 : 160;
+				p[3] = 255;
+			}
+		img_px[0] = cov, img_w[0] = 320, img_h[0] = 448;
+		rsxkit_ui_image_size(0, 320, 448);
+		menu_init(&m, &frame_list, 4, NULL);
+		m.cover_rom = 4, m.cover_w = 320, m.cover_h = 448;
+		snprintf(m.last, sizeof m.last, "%s", frame_list.e[4].path);
+		n = frames(&m, 1000000, 13000000, 1280);
+		raster(rgb, 1280, 720, 1280, 720, n);
+		snprintf(path, sizeof path, "%s-caratula.ppm", out);
+		write_ppm(path, rgb, 1280, 720);
+		n = frames(&m, 13000000, 13100000, 960);
+		raster(rgb, 960, 720, 960, 720, n);
+		snprintf(path, sizeof path, "%s-caratula43.ppm", out);
+		write_ppm(path, rgb, 960, 720);
+		/* Y una apaisada, como las de RetroArch (512×372). */
+		for (int y = 0; y < 372; y++)
+			for (int x = 0; x < 512; x++) {
+				uint8_t *p = cov + 4 * (y * 512 + x);
+				p[0] = (uint8_t)(x / 2), p[1] = (uint8_t)(y / 2), p[2] = 90, p[3] = 255;
+			}
+		img_w[0] = 512, img_h[0] = 372;
+		rsxkit_ui_image_size(0, 512, 372);
+		m.cover_w = 512, m.cover_h = 372;
+		n = frames(&m, 13100000, 13200000, 1280);
+		raster(rgb, 1280, 720, 1280, 720, n);
+		snprintf(path, sizeof path, "%s-caratula-apaisada.ppm", out);
+		write_ppm(path, rgb, 1280, 720);
+		n = frames(&m, 13200000, 13300000, 960);
+		raster(rgb, 960, 720, 960, 720, n);
+		snprintf(path, sizeof path, "%s-caratula-apaisada43.ppm", out);
+		write_ppm(path, rgb, 960, 720);
+		img_px[0] = NULL;
+	}
+	rsxkit_ui_batch(NULL, 0, 0, 0);
+}
+
+
+static void menu_cover_state(void)
+{
+	frame_list_setup();
+	struct menu m;
+	menu_init(&m, &frame_list, 2, NULL);
+	CHECK_EQ(m.cover_rom, -1);
+	frames(&m, 1000000, 2000000, 1280);
+	CHECK(menu_settled(&m));
+	/* Sin carátula cargada no se muestra; con la de otra ROM tampoco. */
+	CHECK(m.cover_t == 0.0f);
+	m.cover_rom = 3, m.cover_w = 320, m.cover_h = 448;
+	frames(&m, 2000000, 3000000, 1280);
+	CHECK(m.cover_t == 0.0f);
+	/* La de la ROM elegida aparece. */
+	m.cover_rom = 2;
+	frames(&m, 3000000, 4000000, 1280);
+	CHECK(m.cover_t > 0.99f);
+	/* Moviendo la selección ya no está quieta, y la carátula se va. */
+	menu_input(&m, 0, 4000000);
+	menu_input(&m, BIT(SALSA64_DS3_DOWN), 4010000);
+	frames(&m, 4010000, 4020000, 1280);
+	CHECK(!menu_settled(&m));
+	frames(&m, 4020000, 5000000, 1280);
+	CHECK(menu_settled(&m));
+	CHECK(m.cover_t < 0.01f);
+	rsxkit_ui_batch(NULL, 0, 0, 0);
+}
+
+static void menu_cheats_page(void)
+{
+	struct menu m;
+	nav_setup(&m, 3, 1);
+	menu_input(&m, 0, 0);
+	/* □ sobre una ROM pide los trucos; sobre «Opciones» no. */
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_SQUARE), 10), MENU_CHEATS);
+	CHECK_EQ(m.page, MENU_PAGE_GAMES);  /* la página la abre main.c cuando los tiene */
+	menu_input(&m, 0, 20);
+	m.sel = 3;
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_SQUARE), 30), MENU_NONE);
+	m.sel = 1;
+	menu_input(&m, 0, 40);
+
+	static struct cheat_set cs;
+	static const char text[] = "cheat0_desc = \"A\"\ncheat0_code = \"80000000 0001\"\n"
+				   "cheat1_desc = \"B\"\ncheat1_code = \"80000001 0001\"\n"
+				   "cheat2_desc = \"C\"\ncheat2_code = \"80000002 0001\"\n";
+	cheats_parse(&cs, text, sizeof text - 1);
+	menu_set_status(&m, "No hay trucos");
+	menu_cheats_open(&m, &cs, "ROM 01");
+	CHECK_EQ(m.page, MENU_PAGE_CHEATS);
+	CHECK_EQ(m.cht_sel, 0);
+	CHECK(!m.status[0]);
+	CHECK_EQ(menu_cheat_rows(&m), 4);  /* tres trucos y «Volver» */
+	CHECK_EQ(menu_selected(&m), -1);   /* la ROM no cuenta como elegida en esta página */
+	/* × cambia el truco elegido y pide guardar; ◂▸ no cambian nada. */
+	menu_input(&m, 0, 50);
+	CHECK_EQ(menu_input(&m, CROSS, 60), MENU_CHEATS_CHANGED);
+	CHECK(cs.c[0].on);
+	menu_input(&m, 0, 70);
+	CHECK_EQ(menu_input(&m, CROSS, 80), MENU_CHEATS_CHANGED);
+	CHECK(!cs.c[0].on);
+	/* Abajo baja; en el último («Volver») × vuelve a la lista. */
+	menu_input(&m, 0, 90);
+	menu_input(&m, DOWN, 100);
+	CHECK_EQ(m.cht_sel, 1);
+	menu_input(&m, 0, 110);
+	menu_input(&m, DOWN, 120);
+	menu_input(&m, 0, 130);
+	menu_input(&m, DOWN, 140);
+	CHECK_EQ(m.cht_sel, 3);
+	menu_input(&m, 0, 150);
+	menu_input(&m, DOWN, 160);
+	CHECK_EQ(m.cht_sel, 0);  /* da la vuelta */
+	menu_input(&m, 0, 170);
+	menu_input(&m, UP, 180);
+	CHECK_EQ(m.cht_sel, 3);
+	menu_input(&m, 0, 190);
+	CHECK_EQ(menu_input(&m, CROSS, 200), MENU_NONE);
+	CHECK_EQ(m.page, MENU_PAGE_GAMES);
+	CHECK_EQ(m.sel, 1);  /* la misma ROM */
+	/* ○ también vuelve, y □ cierra lo que □ abrió. */
+	menu_cheats_open(&m, &cs, "ROM 01");
+	menu_input(&m, 0, 210);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_CIRCLE), 220), MENU_NONE);
+	CHECK_EQ(m.page, MENU_PAGE_GAMES);
+	menu_cheats_open(&m, &cs, "ROM 01");
+	menu_input(&m, 0, 230);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_SQUARE), 240), MENU_NONE);
+	CHECK_EQ(m.page, MENU_PAGE_GAMES);
+
+	/* Dibujo de la página (con y sin tele ancha) sin descartar nada. */
+	menu_cheats_open(&m, &cs, "ROM 01 con un título bastante largo para que no quepa");
+	uint32_t dropped = rsxkit_ui_dropped();  /* acumulado: otras pruebas apuran el lote a propósito */
+	for (int k = 0; k < 2; k++) {
+		float lw = k ? 960.0f : 1280.0f;
+		m.cht_sel = 2;
+		uint32_t n = frames(&m, 1000000, 1400000, lw);
+		CHECK(n > 0);
+		CHECK_EQ(rsxkit_ui_dropped(), dropped);
+	}
 	rsxkit_ui_batch(NULL, 0, 0, 0);
 }
 
@@ -950,6 +1361,7 @@ void t_suite_menu(void)
 	RUN(menu_video_file);
 	RUN(menu_pages);
 	RUN(menu_options_page);
+	RUN(menu_game_page);
 	RUN(menu_settings_file);
 	RUN(menu_autopilot_opens_target);
 	RUN(text_glyph_bytes);
@@ -957,5 +1369,7 @@ void t_suite_menu(void)
 	RUN(ui_atlas_scale2x);
 	RUN(ui_geometry);
 	RUN(menu_frame_geometry);
+	RUN(menu_cheats_page);
+	RUN(menu_cover_state);
 	RUN(menu_preview);
 }

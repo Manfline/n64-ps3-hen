@@ -39,6 +39,7 @@ struct rom_entry {
 	uint8_t tv;                        /* enum salsa64_tv_type */
 	uint8_t save;                      /* enum salsa64_save_type */
 	uint32_t size;                     /* bytes del archivo */
+	uint32_t crc1, crc2;               /* sumas de la cabecera (0x10 y 0x14), como las usan los .cht de Project64 */
 };
 
 struct romlist {

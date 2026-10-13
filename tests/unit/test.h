@@ -125,6 +125,10 @@ void t_suite_osd(void);
 void t_suite_pausectl(void);
 void t_suite_rec_profile(void);
 void t_suite_rec_sample(void);
+void t_suite_cheats(void);
+void t_suite_cover(void);
+void t_suite_dlutil(void);
+void t_suite_i18n(void);
 
 /* Directorio donde las pruebas pueden escribir (lo pone quien llama; NULL:
  * las pruebas que tocan el disco no corren). */
