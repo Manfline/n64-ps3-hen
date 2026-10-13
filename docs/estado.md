@@ -26,14 +26,21 @@ en docs/filtros.md.
   codifica `|R0.z|` como `|R0.zxxx|`; Cg corre en silencio y `lerp(1.0,
   vector, k)` trunca el vector. El build de los filtros corrige o rechaza
   los casos de cgcomp (`tools/cg-salida.py`, `tools/fpo-info.py`).
-- **Medición en la PS3**: pendiente. El archivo `filtros-ciclo` pasa por
-  todos los filtros cada 20 s y el log dice el costo de cada pasada en el
-  RSX y el de la emulación. La app también comprueba sola, la primera vez
-  que dibuja cada filtro, que las tablas fp16 (filtro bilineal, BORDER,
-  orden de canales) dan lo mismo que la cuenta en la CPU, y guarda la
-  entrada y la pantalla de cada filtro por resolución
-  (`filtro-<clave>-<alto>-fuente.ppm` y `-pantalla.ppm`) para compararlas en
-  la Mac con `tools/crt-ref.c`.
+- **Medido en la PS3 real** (`filtros-ciclo`, GoldenEye a 720p y 1080p,
+  Perfect Dark y Conker a 1080p, escala 5×; docs/perf-log.md): ms del RSX
+  por cuadro a 720p / 1080p, máscara 6,7 / 9,6, RGB 8,4 / 11,9, S-Video
+  9,6 / 13,0, compuesto 11,9 / 15,4. Con el juego (5,5–5,7 ms por campo), a
+  720p caben la máscara y RGB; a 1080p se presentan 51, 40, 36 y 30 cuadros
+  por segundo (la emulación no se frena). Reducir la superficie de 5× cuesta
+  3,1 ms en todos. Lo dibujado en la consola coincide con la referencia como
+  en RPCS3 (cables: a 1/255 o menos en el 99,0–99,7 % contra el modelo del
+  RSX), y la comprobación de las tablas fp16 en la consola da error 0,0010.
+- **Propuestas para bajar el costo** (sin implementar, con estimados en
+  docs/perf-log.md): escala 2× cuando hay un CRT (~6–7 ms menos por campo;
+  en una escena sintética casi no se nota, 1× sí), no rehacer el filtro en
+  los campos que repiten imagen (GoldenEye y Perfect Dark dibujan 20–30 por
+  segundo) y la señal y decodificación de los cables en un SPE (1–3,5 ms
+  menos, solo S-Video y compuesto).
 
 ## 2026-10-12 (cierre del día) — Para retomar
 

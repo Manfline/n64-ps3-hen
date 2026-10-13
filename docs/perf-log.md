@@ -7,6 +7,7 @@ antes, después, notas.
 | Fecha | Commit | Prueba | Entorno | Antes | Después | Notas |
 |---|---|---|---|---|---|---|
 | 2026-10-13 | fd1891c → (rama del código compacto) | **Código compacto del recompilador**: palabras de PPC por instrucción MIPS, GoldenEye hasta la presa (`goldeneye-dam.pad`, 7,5 G ciclos), pesado por ejecuciones de bloque | Mac, qemu-ppc64 (`salsa64-run --rec` con `SALSA64_REC_DUMP=1`, `tools/rec-expansion.py --counter 8`), respaldo del autor | 20,2 por instrucción (9,3 calientes, 11,0 frías); 17,2 MB de PPC, 305 palabras por bloque | **15,6 (8,2 calientes, 7,4 frías): −23 %**; 13,2 MB, 234 por bloque; mismo recorrido (mismas cuentas del perfil), 4 desalojos en vez de 6 | Prueba de KSEG0 en 4 palabras, un camino lento por bloque (rutina única + trampolín), cadena de escritura, enlaces de 3 palabras. **PS3 real** (mismo paquete, A/B con `jit-ancho`): GoldenEye en la presa 17,26 → 16,30 / 16,03 ns por instrucción emulada (−6…−7 %, 47,5 → 50–53 campos/s), Perfect Dark 14,85 → 14,45 (−3 %), SM64 y Zelda sin regresión. Ver «Código compacto» abajo |
+| 2026-10-13 | 6f2a888 | **Filtros CRT del autor en el RSX** (máscara de sombra y CRT con cable RGB, S-Video y compuesto), ciclo de 20 s por filtro, GoldenEye a 720p y 1080p, Perfect Dark y Conker a 1080p | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00109 «Salsa64 filtros», respaldos del autor, escala 5× | sin filtro: RSX ocupado 39–44 %, 59–60 cuadros presentados por segundo | GoldenEye, ms del RSX por cuadro a 720p / 1080p: **máscara 6,7 / 9,6, RGB 8,4 / 11,9, S-Video 9,6 / 13,0, compuesto 11,9 / 15,4**; a 1080p se presentan 51, 40, 36 y 30 cuadros por segundo | Reducir la superficie de 5× cuesta 3,1 ms en todos (la lectura, no las cuentas). Propuestas: escala 2× con un CRT (~6–7 ms menos), no rehacer el filtro en campos repetidos, señal del cable en un SPE (1–3,5 ms). Ver «Filtros CRT en el RSX» abajo |
 | 2026-10-10 | 419731a → c14268c | Intérprete, `bench` mixto | PS3 real: Slim CECH-3011A, HFW 4.91 + HEN | 8,7 MIPS | 17,1 MIPS (×2,0) | Estado del bucle en registros, sin llamadas por instrucción, r0 sin escribir, tablas de `switch` sin `lwax`, FPU rápida sin pasar valores por memoria. Desglose en «Líneas base de la Fase 1» |
 | 2026-10-10 | c14268c → 147d5ac | Intérprete, `bench` mixto | PS3 real (mismo equipo) | 17,1 MIPS | 21,2 MIPS (×1,24; ×2,4 desde 8,7) | Un solo despacho (SPECIAL en la misma tabla), FPU rápida sin comparaciones de punto flotante para clasificar, movimientos de COP1 en el bucle |
 | 2026-10-10 | 940f6f8 | Frontend con vitest, emulación por campo | PS3 real (mismo equipo) | 65,6 ms (15,2 campos/s) | 35,0 ms (28,3 campos/s; ×1,9) | Detección de bucles de espera (`src/cpu/idle.c`): 45,6 % del tiempo saltado. Medición A/B automática del frontend, 10 s cada una, dos corridas iguales (65,56/65,66 → 34,97/34,84 ms). Lo que queda es el dibujo de vitest con el CPU |
@@ -57,9 +58,158 @@ de la máscara 33 (7); señal 31, decodificación 49 (9) o 103 (27), líneas
 ~710 × 240 (señal y decodificación) y 1440 × 240 o 960 × 240 (líneas), las
 de la máscara ~365 × 362 o ~245 × 243 (puntos) y 12 × 6 (teselas).
 
-Pendiente: la medición en la PS3 real (paquete SLSA00109 «Salsa64
-filtros», con `filtros-ciclo`, GoldenEye, Perfect Dark y Conker a escala
-5×, 720p y 1080p). RPCS3 no sirve para medir.
+### Medición en la PS3 real
+
+PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00109 «Salsa64
+filtros» (6f2a888), respaldos del autor (NTSC), escala 5×, `filtros-ciclo`
+(ninguno → máscara → RGB → S-Video → compuesto, 20 s cada uno), jugando y
+no en una escena fija: GoldenEye a 720p y a 1080p, Perfect Dark a 1080p y
+Conker a 1080p (en negro por la regresión del relleno de Z: sirve para el
+costo del filtro, no para el del juego). Medianas de las ventanas de 5 s
+(200–300 cuadros cada una), sin la primera ventana después de cada cambio.
+Log `build/ps3-logs/rsp-ps3-10-udp-2026-10-13.log` (fuera de git).
+
+**Costo por pasada**, ms del RSX por cuadro, GoldenEye (imagen de
+320 × 237; a 5× la superficie del RDP mide 1600 × 1185):
+
+| Filtro | Salida | Reducir | Lineal y resplandor | Teselas y puntos / señal y decodificación | Líneas | Final | Total |
+|---|---|---|---|---|---|---|---|
+| Máscara | 960 × 720 | 3,07 | 1,15 | 0,63 | — | 1,83 | **6,69** |
+| RGB | 960 × 720 | 3,07 | 1,15 | 0,88 | 1,09 | 2,25 | **8,44** |
+| S-Video | 960 × 720 | 3,07 | 1,15 | 2,04 | 1,09 | 2,25 | **9,60** |
+| Compuesto | 960 × 720 | 3,07 | 1,15 | 4,08 | 1,34 | 2,25 | **11,89** |
+| Máscara | 1440 × 1080 | 3,12 | 1,15 | 1,26 | — | 4,11 | **9,64** |
+| RGB | 1440 × 1080 | 3,12 | 1,15 | 0,88 | 1,66 | 5,04 | **11,86** |
+| S-Video | 1440 × 1080 | 3,12 | 1,16 | 2,05 | 1,66 | 5,04 | **13,02** |
+| Compuesto | 1440 × 1080 | 3,12 | 1,16 | 4,09 | 2,02 | 5,04 | **15,43** |
+
+Perfect Dark a 1080p (320 × 218): máscara 9,29, RGB 11,30, S-Video 12,39,
+compuesto 14,62 (reducir 2,87); con la imagen de alta resolución
+(576 × 474) la máscara sube a 12,07 (reducir 4,92). Conker a 1080p
+(292 × 213, la imagen en negro llega a 1×): reducir 0,10, máscara 6,41,
+S-Video 9,42, compuesto 11,59.
+
+- Las pasadas siguen el modelo de instrucciones por píxel de arriba con
+  ~12 G instrucciones por segundo (24 unidades a 500 MHz): el final de la
+  máscara da 4,28 ms calculados contra 4,11 medidos; puntos, señal,
+  decodificación, líneas y el final del tubo, entre 0,7 y 1,1 veces lo
+  calculado (lineal y resplandor, 1,3). Lo que va por píxel de salida crece 2,25 veces de 720p a
+  1080p; lo que va sobre la imagen chica (reducir, lineal, resplandor,
+  señal) no cambia.
+- **Reducir es la excepción**: 3,1 ms donde sus 27 instrucciones por píxel
+  darían 0,17. No cambia con la escena (3,11–3,13 ms en todas las ventanas
+  de GoldenEye a 1080p) y baja a 0,10 ms cuando la imagen llega a 1×: es
+  leer la superficie de 5× (7,6 MB a ~2,5 GB/s). Esa superficie es lineal
+  (rsxkit no usa las regiones con tiles del RSX), y cada píxel de la salida
+  lee un bloque de 5 × 5 de filas distintas.
+- **Lo que pasa en la pantalla** (GoldenEye; «presentados» por segundo,
+  con los campos de la N64 que se emularon):
+
+  | | 720p: RSX ocupado | presentados | 1080p: RSX ocupado | presentados | campos/s (1080p) |
+  |---|---|---|---|---|---|
+  | Sin filtro | 39 % | 60 | 44 % | 59 | 59,0 |
+  | Máscara | 62 % | 50 (todos) | 81 % | 51 | 53,4 |
+  | RGB | 83 % | 58 (todos) | 82 % | 40 | 59,3 |
+  | S-Video | 86 % | 51 | 84 % | 36 | 56,5 |
+  | Compuesto | 86 % | 40 | 82 % | 30 | 59,6 |
+
+  El juego usa 5,5–5,7 ms del RSX por campo («emulación», cota superior) y
+  el campo dura 16,7 ms. A 720p caben la máscara y RGB (se presentan todos
+  los campos); S-Video pierde ~6 % de los campos presentados y el
+  compuesto ~30 %. A 1080p la máscara casi cabe (~4 % saltados); RGB
+  pierde un tercio, S-Video ~40 % y el compuesto la mitad. La emulación no
+  se frena: el PPE no espera al filtro (los campos/s cambian con la
+  escena); con los cables a 1080p el hilo de presentación duerme 3–5 ms por
+  campo esperando al RSX.
+- **Lo dibujado en la PS3 contra la referencia** (`tools/crt-ref.c`, las
+  capturas `filtro-*-fuente.ppm` y `-pantalla.ppm` de la misma corrida):
+  RGB, S-Video y compuesto contra el modelo del RSX (`-rsx`), promedio
+  0,06–0,10/255, a 1 o menos en el 99,0–99,7 % y hasta 20–31 en bordes;
+  contra el original, promedio 0,17–0,27, a 1 o menos en el 96–98 %. Es lo
+  mismo que en RPCS3. La máscara a 720p da 1/255 o menos en todo píxel (la
+  captura de 1080p salió de un cuadro negro). La comprobación de la app en
+  la consola: luz lineal con error 0,0010 y resplandor con 0,00001 contra
+  el bilineal.
+
+### Cómo bajar el costo (propuestas, sin implementar)
+
+**(a) Bajar la escala interna cuando hay un CRT.** El filtro trabaja sobre
+la imagen a la resolución de la N64; la escala interna solo le llega como
+supermuestreo (la reducción promedia f × f muestras por píxel).
+
+- Lo que se ahorra: *reducir* pasa de 3,1 ms a ~0,1 ms a 1× (medido con la
+  imagen de Conker) y a ~0,5 ms estimados a 2× (6,25 veces menos datos).
+  El *render del juego* (5,5–5,7 ms por campo a 5×) tiene 6,25 veces menos
+  píxeles a 2× y 25 veces menos a 1×; lo que va por dibujo (200–380 por
+  tarea) no baja. Estimado: 3–4 ms menos a 2×. En total, **~6–7 ms menos
+  por campo a 2×**: a 1080p con el compuesto, de ~21 ms (5,7 + 15,4) a
+  ~14–15, dentro de los 16,7 ms; los cuatro filtros cabrían.
+- Si se nota: prueba en la Mac con una escena sintética (bordes, un cable
+  de 0,3 y uno de 0,6 píxeles y un piso con tablero sin mipmaps),
+  dibujada con 1, 2, 3 y 5 muestras por eje, reducida y pasada por
+  `crt-ref`. Contra 5×: a **2×**, promedio 0,5–0,6/255, p99 11–14; lo único
+  que cambia a la vista es el cable de 0,3 píxeles, que queda un poco
+  punteado. A **1×**, promedio 1,6–1,8, p99 33–41: los cables finos salen
+  como cuentas, el piso lejano hace moiré y en movimiento eso centellea. A
+  3×, p99 5–7: igual a la vista. Los escalones de los bordes los tapa el
+  CRT en las tres. Imagen de la comparación:
+  `build/ps3-1/escala-crt-1x-2x-5x.png` (fuera de git; columnas 1×, 2× y
+  5×; filas RGB y compuesto).
+- Se puede medir ya, sin paquete nuevo: Opciones → escala 2× (y después
+  1×) con `filtros-ciclo`, GoldenEye a 1080p. El log da reducir, emulación,
+  ocupado y presentados.
+- Cambio propuesto (chico): una escala propia para cuando hay un CRT (2×
+  por omisión, 1× para quien prefiera la imagen sin supermuestreo, como
+  la consola), que se aplica al elegir el filtro y se deshace al quitarlo,
+  sin reiniciar (eso ya existe).
+
+**(b) Señal, resplandor y líneas en un SPE.** El RSX deja la imagen chica
+en la memoria principal, el SPE calcula y el RSX lee el resultado como
+textura.
+
+- Vale solo para **señal y decodificación de los cables**: trabajan sobre
+  ~710 × 237 muestras (el doble en compuesto) y el resultado es chico
+  (1,35 MB en S-Video, 2,7 MB en compuesto, en fp16). El resplandor no: el
+  RSX lo hace en ~1 ms gracias a su filtro bilineal (12 lecturas
+  bilineales en 640 × 474), y en un SPE serían ~4–5 ms (48 lecturas y ~48
+  FMA por píxel). Las líneas tampoco: su tabla mide lo que la salida
+  (1440 × 237, dos tablas, 5,5 MB) y mandarla cuesta más que calcularla
+  (1,7–2,0 ms en el RSX). La máscara no tiene qué mover: lo caro va por
+  píxel de salida (final 4,1 ms y puntos 1,3 a 1080p).
+- Estimado del SPE (4 carriles, una FMA por ciclo, los corrimientos en el
+  otro pipe): ~22 ciclos por muestra con 27 tomas. S-Video ~1,2 ms en un
+  SPE, compuesto ~2,3 (1,2 en dos), RGB ~0,5. Se reservan 6 SPE y se usan 3
+  (HLE gráfica, audio, JPEG).
+- La ida y vuelta: la reducción escribe la imagen de 320 × 237 en la
+  memoria principal (300 KB, ~0,05 ms); el RSX escribe una etiqueta, el SPE
+  la sondea, calcula, deja la tabla y escribe otra etiqueta; el RSX la
+  espera (sin el PPE de por medio) antes de las líneas y lee la tabla desde
+  la memoria principal (+0,3–0,9 ms estimados en las líneas: el RSX lee
+  más lento de la XDR). Mientras, el RSX hace lineal y resplandor
+  (1,15 ms): si el SPE termina antes, no espera, y no se agrega latencia.
+  Hacerlo un cuadro atrás para no esperar agregaría 16,7 ms de retraso.
+- Ahorro neto estimado: **compuesto 2,5–3,5 ms (con dos SPE), S-Video 1–1,5, RGB ~0,3 (no
+  vale la pena), máscara nada**. Trabajo: superficies en la memoria
+  principal y una espera del RSX en una etiqueta dentro de rsxkit
+  (genérico, MIT), el programa del SPE en la parte GPL, el enganche en el
+  PPE y la comparación contra `crt-ref` (en fp32, más cerca del original
+  que las tablas fp16).
+
+**Además:**
+
+- **(c) No rehacer el filtro si la imagen no cambió.** GoldenEye y Perfect
+  Dark dibujan 20–30 imágenes por segundo, pero el filtro corre en cada uno
+  de los 60 campos, y los cuatro filtros son fijos para una imagen fija
+  (`frame_phase` = 0). Volver a presentar el resultado anterior (o no
+  hacer el flip) en los campos repetidos ahorra entre la mitad y dos
+  tercios del filtro en esos juegos; nada en los que van a 60.
+- **Regiones con tiles del RSX** (`gcmSetTileInfo`) para las superficies
+  del RDP: ninguna superficie las usa hoy. Podrían bajar reducir y el
+  propio render a 5×. A medir.
+
+**Orden recomendado:** (a) primero (pocas líneas, todos los filtros, ~6–7
+ms); (c) también es barato; (b) solo si el compuesto a 1080p sigue sin
+caber después de (a) y (c).
 
 ## Quitarle trabajo al PPE: el hilo 1 y la tarea JPEG (2026-10-12)
 

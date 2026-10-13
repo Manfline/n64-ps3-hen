@@ -396,15 +396,22 @@ los estados y los volcados siguen sin filtro.
 ### Costo de los filtros
 
 Cada filtro se mide en el RSX con marcas de tiempo entre sus pasadas (el log
-lo escribe cada 5 s, «rsx: filtro …»). La tabla se llena con la medición
-en la PS3 real (docs/perf-log.md); RPCS3 no sirve para medir.
+lo escribe cada 5 s, «rsx: filtro …»). Medido en la PS3 real con GoldenEye
+a escala 5× (docs/perf-log.md): ms del RSX por cuadro y cuadros
+presentados por segundo, de 60. Sin filtro, el RSX va al 39–44 %.
 
 | Filtro | 720p | 1080p |
 |---|---|---|
-| CRT máscara de sombra | pendiente | pendiente |
-| CRT cable RGB | pendiente | pendiente |
-| CRT cable S-Video | pendiente | pendiente |
-| CRT cable compuesto | pendiente | pendiente |
+| CRT máscara de sombra | 6,7 ms (todos) | 9,6 ms (51) |
+| CRT cable RGB | 8,4 ms (todos) | 11,9 ms (40) |
+| CRT cable S-Video | 9,6 ms (51) | 13,0 ms (36) |
+| CRT cable compuesto | 11,9 ms (40) | 15,4 ms (30) |
+
+La emulación no se frena: si el RSX no alcanza, se saltan cuadros de la
+pantalla. Para que no se salten, bajar la escala interna a 2× o 3× con un
+CRT: el filtro trabaja a la resolución de la N64 y la escala solo le llega
+como supermuestreo; a 2× casi no se nota y el RSX se ahorra ~6–7 ms por
+cuadro (estimado; docs/perf-log.md).
 
 ## Notas por juego
 
