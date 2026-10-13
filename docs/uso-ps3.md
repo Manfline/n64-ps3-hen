@@ -526,6 +526,8 @@ se crean por FTP.
 | `filtros-spe` | Basta con que exista | La señal y la decodificación de «CRT S-Video» y «CRT compuesto» en dos SPEs en lugar del RSX (experimental); con `filtros-ciclo`, cada vuelta las alterna entre los SPEs y el RSX (y la reducción queda en dos pasadas), para comparar en la misma corrida. Si un SPE falla, vuelven al RSX y el log lo dice |
 | `capturas-pantalla` | Basta con que exista | Con `capturas`: además guarda la pantalla entera como se ve, con el filtro (`pantalla-N.ppm`) |
 | `filtro-ver` | El nombre de una tabla y una escala (`puntos 0.5`) | Diagnóstico de los filtros: dibuja esa tabla intermedia en la esquina de la pantalla (docs/filtros.md) |
+| `jit-sin-grupos` | Basta con que exista | El recompilador no agrupa los accesos a memoria por registro base (la «base en caché», docs/fastmem.md §8, encendida por omisión): cada acceso con su prueba, como hasta el 2026-10-13, para medir con el mismo paquete |
+| `jit-fastmem` | Basta con que exista | Experimental: la RDRAM en una ventana de 512 MB de sys_mmapper y los accesos de KSEG0/KSEG1 sin prueba; solo se enciende si lv2 avisa de los fallos de página (docs/fastmem.md); hoy en la PS3 con HEN no lo hace y queda apagado con el motivo en el log |
 | `muestreo` | Basta con que exista | Muestreo por tiempo del recompilador: un hilo de baja prioridad mira cada 200 µs qué bloque corre el hilo de emulación (o si está en C: camino lento, intérprete, eventos…); cada 5 s el reparto al log y, al salir del juego, los 30 bloques con más tiempo con sus palabras de PPC (docs/rec-ppe.md, «Muestreo por tiempo»). Costo: dos palabras por entrada a bloque |
 
 La carpeta también puede tener `covers/` (carátulas), `cheats/` (trucos y

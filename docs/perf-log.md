@@ -275,6 +275,33 @@ con imagen repetida no llegaron completos (ahora van en líneas aparte).
   en una sola cadena de FMA (6 ciclos cada una). Con varias sumas parciales
   independientes y dos columnas entrelazadas debería acercarse a 25–30
   ciclos por muestra (S-Video ~0,8 ms y compuesto ~1,6 ms por SPE): a medir.
+## Fastmem y base en caché en el host (2026-10-13)
+
+Diseño y detalle en docs/fastmem.md. Medición en el host con los volcados
+(`SALSA64_REC_DUMP=1 SALSA64_REC_PROF=12000 SALSA64_REC_PROF_TOP=4000
+SALSA64_REC_PIN=1`, `tools/rec-expansion.py --counter 8`, pesado por
+ejecuciones): palabras de PPC por instrucción MIPS, calientes (las que se
+ejecutan) y frías. La PS3 está pendiente (fastmem depende de que lv2 avise
+de los fallos de página, que hoy con HEN no hace; la base en caché no
+depende de nada y va en el mismo paquete con `jit-sin-grupos` para el A/B).
+
+| | GoldenEye hasta la presa (7,5 G ciclos) | Perfect Dark intro (3 G) |
+|---|---|---|
+| v0.2.2 (código compacto) | 8,16 calientes + 7,40 frías = 15,57 | 6,84 + 6,50 = 13,34 |
+| fastmem (`SALSA64_REC_FASTMEM=1`; ventana con SIGSEGV) | **6,87** + 10,06 = 16,93 (calientes −16 %) | — |
+| base en caché (por omisión) | **7,75** + 7,31 = 15,05 (calientes −5 %) | **6,45** + 6,09 = 12,54 (−6 %) |
+
+Los dos son exactos en `--lockstep` (GoldenEye hasta la presa y Perfect
+Dark sin diferencias; nemu64-test entero con la base en caché; con fastmem
+nemu64 diverge solo en las pruebas de accesos no alineados y de direcciones
+sin extensión de signo, que son excepciones que fastmem no lanza:
+`tests/roms/nemu64-test.fastmem.fallas`). Fastmem parchea 282 (GoldenEye)
+y 764 (Perfect Dark) sitios en toda la corrida: el fallo no es un costo.
+
+Censo de accesos a datos (intérprete, `-DSALSA64_MEM_CENSUS`, 11 juegos):
+KSEG0 97,9–99,97 %, KSEG1 ≤ 0,6 %, por la TLB 2 % en Perfect Dark y 0,1 %
+en GoldenEye, 0 no alineados; y el 70–77 % de los accesos comparten base
+con otro del mismo bloque (docs/fastmem.md, secciones 2 y 8).
 
 ## Quitarle trabajo al PPE: el hilo 1 y la tarea JPEG (2026-10-12)
 
