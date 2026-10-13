@@ -94,11 +94,20 @@ static inline bool vr4300_vaddr(struct salsa64_cpu *cpu, uint64_t vaddr, uint32_
 				enum salsa64_access acc, uint32_t *paddr)
 {
 	if (SALSA64_UNLIKELY(vaddr & align)) {
+#ifdef SALSA64_MEM_CENSUS
+		salsa64_mem_census.misaligned++;
+#endif
 		salsa64_vr4300_address_error(cpu, vaddr, acc);
 		return false;
 	}
 	/* 0xFFFFFFFF80000000–0xFFFFFFFFBFFFFFFF: KSEG0 y KSEG1, sin TLB. */
 	if (SALSA64_LIKELY((vaddr >> 30) == 0x3FFFFFFFEull && cpu->mode == SALSA64_MODE_KERNEL)) {
+#ifdef SALSA64_MEM_CENSUS
+		if (vaddr & 0x20000000)
+			salsa64_mem_census.kseg1++;
+		else
+			salsa64_mem_census.kseg0++;
+#endif
 		*paddr = (uint32_t)vaddr & 0x1FFFFFFF;
 		return true;
 	}

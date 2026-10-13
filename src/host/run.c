@@ -2514,6 +2514,35 @@ int main(int argc, char **argv)
 			salsa64_rec_profile_detach(&rec);
 		}
 	}
+#ifdef SALSA64_MEM_CENSUS
+	{
+		const struct salsa64_mem_census *mc = &salsa64_mem_census;
+		uint64_t tlb = 0;
+		for (unsigned k = 0; k < 13; k++)
+			tlb += mc->tlb_ps[k];
+		uint64_t total = mc->kseg0 + mc->kseg1 + tlb + mc->erl + mc->x64 + mc->kseg23;
+		fprintf(stderr, "salsa64-run: censo de accesos a datos: %llu; KSEG0 %.2f %%, KSEG1 %.2f %% (%llu), por la TLB %.3f %% "
+			"(%llu; kseg2/3 %llu; fallas %llu, inválidas %llu, modificación %llu), ERL directo %llu, 64 bits %llu, "
+			"no alineados %llu; doblados a 1 GB chocan %llu, a 2 GB %llu\n",
+			(unsigned long long)total, total ? 100.0 * (double)mc->kseg0 / (double)total : 0.0,
+			total ? 100.0 * (double)mc->kseg1 / (double)total : 0.0, (unsigned long long)mc->kseg1,
+			total ? 100.0 * (double)tlb / (double)total : 0.0, (unsigned long long)tlb, (unsigned long long)mc->kseg23,
+			(unsigned long long)mc->miss, (unsigned long long)mc->invalid, (unsigned long long)mc->modified,
+			(unsigned long long)mc->erl, (unsigned long long)mc->x64, (unsigned long long)mc->misaligned,
+			(unsigned long long)mc->collide_1g, (unsigned long long)mc->collide_2g);
+		static const char *const ps_names[13] = { "4K", "8K", "16K", "32K", "64K", "128K", "256K", "512K", "1M", "2M", "4M", "8M", "16M" };
+		fprintf(stderr, "salsa64-run: censo por tamaño de página (accesos / escrituras de la TLB):");
+		for (unsigned k = 0; k < 13; k++)
+			if (mc->tlb_ps[k] || mc->tlbw_ps[k])
+				fprintf(stderr, " %s %llu/%llu", ps_names[k], (unsigned long long)mc->tlb_ps[k], (unsigned long long)mc->tlbw_ps[k]);
+		fprintf(stderr, "\nsalsa64-run: censo: ranuras de 8 MB tocadas por la TLB:");
+		for (unsigned s = 0; s < 8; s++)
+			for (unsigned b = 0; b < 32; b++)
+				if (mc->slots[s] & (1u << b))
+					fprintf(stderr, " %08X", (s << 28) | (b << 23));
+		fputc('\n', stderr);
+	}
+#endif
 	savefile_close(&save_file);
 	for (unsigned k = 0; k < state_saves.n; k++)
 		if (state_saves.field[k] > n64.bus.vi.fields) {
