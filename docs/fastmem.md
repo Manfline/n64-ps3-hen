@@ -455,3 +455,66 @@ presa y Perfect Dark, ns por instrucción del nativo).
 
 Las frías también bajan: los miembros de un grupo no tienen camino frío
 (las cargas) o solo el de `code_flags` (los almacenamientos).
+
+## 9. La FPU compacta: las operaciones como rutinas del preámbulo (2026-10-13)
+
+Lo que señalaron el muestreo por tiempo en la PS3 (los bloques que se llevan
+el tiempo son los de FPU en línea, ~20 palabras calientes por instrucción) y
+docs/cache-ppe.md §7.2 de la ronda de la caché. Medido en los volcados del
+host (pesado por ejecuciones): las operaciones de la FPU son **0,06 por
+instrucción MIPS en GoldenEye** (MUL.S 0,020, ADD.S 0,011, C.cond.S 0,010,
+SUB.S 0,010, CVT.S.W 0,005, MOV 0,003, NEG 0,002, TRUNC.W 0,001, SQRT y DIV
+0,001), 0,043 en Perfect Dark y 0,018 en Zelda; a ~35–40 palabras calientes
+cada una son **~2,2 de las 8,2 palabras calientes por instrucción de
+GoldenEye (27 %)**: la palanca más grande que queda, por delante de fastmem
+(−1,3) y de la base en caché (−0,5).
+
+Diseño (`src/cpu/rec_emit_fpurtn.h`, encendido por omisión;
+`jit-fpu-en-linea` en la PS3 y `SALSA64_REC_FPU_INLINE=1` en el host repiten
+el código en línea para el A/B):
+
+- **El mismo código, una vez.** Las rutinas son los mismos emisores de la
+  FPU en línea (compuerta de FCR31, clasificación de los operandos con la
+  franja segura, la operación con su redondeo y el inexacto, el resultado y
+  FCR31) con los desplazamientos de los operandos en registros en vez de
+  inmediatos (`lwzx`/`lfsx`/`stfdx` sobre r31). Se emiten al iniciar el
+  recompilador, después del preámbulo (que pasa de 1024 a 4096 palabras),
+  con el ensamblador de bloques (`finalize` sobre esa zona): 38 rutinas, una
+  por clase: ADD/SUB/MUL/DIV × S/D, C.cond × S/D (la condición en r10),
+  ABS/NEG × S/D (NEG en r10), SQRT × S/D, CVT.D.S y CVT.S.D, CVT.S.W y
+  CVT.D.W, y las 20 conversiones a entero (ROUND/TRUNC/CEIL/FLOOR a W y L,
+  CVT.W y CVT.L, por formato). MOV queda en línea (dos palabras).
+- **El sitio**: `li r3, oa` (fs), `li r4, ob` (ft, si la hay), `li r8, od`
+  (fd), `li r10, extra` si hace falta, `bl rutina` y `bne cr1 → lento`:
+  **5–6 palabras calientes** en vez de 35–40. El camino lento es el de
+  siempre (el intérprete, con la revisión de después). La rutina vuelve
+  con cr1 eq si hizo la operación o cr1 ne sin escribir nada: la misma
+  frontera entre nativo e intérprete que antes, así que los mismos bits,
+  causas y banderas.
+- **Registros**: la rutina pisa r0, r3–r6, r8–r12, f0–f5, cr0 y cr1; no
+  toca r7 (la base en caché de un grupo sigue viva a través de una
+  operación de la FPU) ni LR más allá del `blr`. Es una llamada al
+  preámbulo, no a C: no guarda nada en `cpu->rec_tb`.
+- **Costo**: un `bl`/`blr` por operación (destino fijo; la vuelta va por el
+  registro de enlace, que el PPE predice) y las rutinas viven en el
+  preámbulo, que es lo más caliente de la caché.
+- **Medición**: expansión en el host (GoldenEye y Perfect Dark), unitarias
+  (`executed_matches_full` y `executed_conversions_match_full` comparan
+  miles de operaciones aleatorias con el camino completo), nemu64-test (433)
+  y los lockstep de siempre; en la PS3, A/B con `jit-fpu-en-linea`.
+
+Resultado en el host (2026-10-13, con la base en caché también encendida;
+`tools/rec-expansion.py` sobre v0.2.2):
+
+| | Calientes por instrucción MIPS | Frías | Total |
+|---|---|---|---|
+| GoldenEye hasta la presa | 8,16 → **5,54 (−32 %)** | 7,40 → 7,27 (−2 %) | 15,57 → 12,81 (−18 %) |
+| Perfect Dark intro | 6,84 → **5,22 (−24 %)** | 6,50 → 6,05 (−7 %) | 13,34 → 11,27 (−16 %) |
+
+(La base en caché sola era −6 % y −7 %: la FPU compacta pone −26 % y −17 %
+más.) Corrección: unitarias 491/491 en plain, pin y FPU residente
+(`executed_matches_full` y `executed_conversions_match_full` incluidas),
+nemu64-test 433 y en lockstep entero, vitest, Perfect Dark 6 G ciclos y
+GoldenEye hasta la presa en lockstep, todo sin diferencias. Pendiente la
+PS3 (A/B con `jit-fpu-en-linea`).
+

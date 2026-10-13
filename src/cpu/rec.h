@@ -135,6 +135,23 @@ struct salsa64_rec_label {
 	uint8_t sec;         /* 0 caliente, 1 fría, 2 absoluta (palabra de la caché), 3 sin fijar */
 };
 
+/* Las rutinas compartidas de la FPU (rec_emit_fpurtn.h): índices de
+ * rec->fpu_rtn[]. ADD/SUB/MUL/DIV en S y en D (la funct es el índice bajo),
+ * C.cond, ABS/NEG, SQRT, CVT.D.S y CVT.S.D, CVT.S.W y CVT.D.W, y las
+ * conversiones a entero (ROUND/TRUNC/CEIL/FLOOR a W y L, CVT.W, CVT.L),
+ * diez por formato. */
+enum {
+	SALSA64_FPR_ADD_S, SALSA64_FPR_SUB_S, SALSA64_FPR_MUL_S, SALSA64_FPR_DIV_S,
+	SALSA64_FPR_ADD_D, SALSA64_FPR_SUB_D, SALSA64_FPR_MUL_D, SALSA64_FPR_DIV_D,
+	SALSA64_FPR_CMP_S, SALSA64_FPR_CMP_D,
+	SALSA64_FPR_ABSNEG_S, SALSA64_FPR_ABSNEG_D,
+	SALSA64_FPR_SQRT_S, SALSA64_FPR_SQRT_D,
+	SALSA64_FPR_CVT_D_S, SALSA64_FPR_CVT_S_D,
+	SALSA64_FPR_CVT_S_W, SALSA64_FPR_CVT_D_W,
+	SALSA64_FPR_TOINT,
+	SALSA64_FPR_N = SALSA64_FPR_TOINT + 20
+};
+
 struct salsa64_rec_fixup {
 	uint32_t at;         /* palabra que se corrige */
 	uint16_t label;
@@ -201,6 +218,10 @@ struct salsa64_rec_fmsite {
 /* Para medir A/B: sin la base en caché (docs/fastmem.md §8): cada acceso con
  * su prueba, como hasta el 2026-10-13. Se aplica al compilar. */
 #define SALSA64_REC_OPT_NO_GROUP 512u
+/* Para medir A/B: la FPU en línea en cada sitio, como hasta el 2026-10-13,
+ * en vez de las rutinas compartidas del preámbulo (rec_emit_fpurtn.h). Se
+ * aplica al iniciar (las rutinas no se emiten) y al compilar. */
+#define SALSA64_REC_OPT_FPU_INLINE 1024u
 /* Depuración (host, SALSA64_REC_OPTS): apagan una pieza nueva a la vez para
  * acotar una diferencia en --lockstep. LEGACY las apaga todas. */
 #define SALSA64_REC_DBG_NO_ENDLINK 0x100u   /* COP0 vuelve al despachador e interpreta el resto del bloque básico */
@@ -247,6 +268,9 @@ struct salsa64_rec {
 				  * r3 = va; vuelve con cr1 eq y r12 = desplazamiento en la RDRAM, o cr1 ne */
 	uint32_t slow_rtn;       /* camino lento compartido: cargas, almacenamientos, una instrucción al intérprete y
 				  * excepciones, según r6 (rec_emit.c, emit_slow_call) */
+	uint32_t fpu_rtn[SALSA64_FPR_N];  /* la FPU compacta (rec_emit_fpurtn.h): palabra de cada rutina */
+	uint32_t fpu_rtn_words;  /* lo que ocupan en el preámbulo */
+	bool fpu_rtn_ok;         /* están: los sitios de la FPU las llaman en vez de emitir en línea */
 
 	/* Direcciones de entrada de las funciones de C que llama el código. */
 	uint64_t h_load, h_store, h_exec, h_exception, h_tlbw, h_eret;
@@ -406,6 +430,9 @@ extern const double salsa64_rec_fconst[6];
  * `seg` de rec_tlb.h) de hasta `max` instrucciones. Devuelve la palabra de
  * entrada en la caché, o 0 si no se pudo; `n` recibe las instrucciones del
  * camino más largo y `bytes` las que cubre. */
+/* La FPU compacta: emite las rutinas compartidas a partir de la palabra
+ * `base` (el final del preámbulo) sin pasar de `limit`; false si no caben. */
+bool salsa64_rec_emit_fpu_rtns(struct salsa64_rec *rec, uint32_t base, uint32_t limit);
 uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, unsigned seg, unsigned max,
 			     bool temp, unsigned *n, uint32_t *bytes);
 

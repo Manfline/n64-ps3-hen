@@ -81,6 +81,7 @@ static inline uint32_t salsa64_host_rec_opts(void)
 {
 	return (salsa64_host_env_on("SALSA64_REC_FASTMEM") ? SALSA64_REC_OPT_FASTMEM : 0) |
 	       (salsa64_host_env_on("SALSA64_REC_NO_GROUP") ? SALSA64_REC_OPT_NO_GROUP : 0) |
+	       (salsa64_host_env_on("SALSA64_REC_FPU_INLINE") ? SALSA64_REC_OPT_FPU_INLINE : 0) |
 	       (salsa64_host_env_on("SALSA64_REC_PIN") ? SALSA64_REC_OPT_PIN : 0) |
 	       (salsa64_host_env_on("SALSA64_REC_EAGER") ? SALSA64_REC_OPT_EAGER : 0) |
 	       (salsa64_host_env_on("SALSA64_REC_RARE_EXEC") ? SALSA64_REC_OPT_RARE_EXEC : 0) |

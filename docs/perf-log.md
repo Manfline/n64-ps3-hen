@@ -289,9 +289,15 @@ depende de nada y va en el mismo paquete con `jit-sin-grupos` para el A/B).
 |---|---|---|
 | v0.2.2 (código compacto) | 8,16 calientes + 7,40 frías = 15,57 | 6,84 + 6,50 = 13,34 |
 | fastmem (`SALSA64_REC_FASTMEM=1`; ventana con SIGSEGV) | **6,87** + 10,06 = 16,93 (calientes −16 %) | — |
-| base en caché (por omisión) | **7,75** + 7,31 = 15,05 (calientes −5 %) | **6,45** + 6,09 = 12,54 (−6 %) |
+| base en caché (por omisión; con el arreglo del delay slot likely y FCR31 en T_V) | **7,65** + 7,20 = 14,85 (calientes −6 %) | **6,39** + 6,10 = 12,49 (−7 %) |
+| base en caché + FPU compacta (por omisión; docs/fastmem.md §9) | **5,54** + 7,27 = 12,81 (calientes **−32 %**) | **5,22** + 6,05 = 11,27 (**−24 %**) |
 
-Los dos son exactos en `--lockstep` (GoldenEye hasta la presa y Perfect
+En la PS3 (2026-10-13, paquete con la base en caché antes del arreglo):
+GoldenEye en la presa 16,63 ns por instrucción (12 ventanas pesadas) contra
+16,03/16,30 de v0.2.2: sin ganancia; Perfect Dark, primera ventana pesada,
+10,07 contra 10,51 sin grupos (−4 %). La FPU compacta está por medir.
+
+Todos son exactos en `--lockstep` (GoldenEye hasta la presa y Perfect
 Dark sin diferencias; nemu64-test entero con la base en caché; con fastmem
 nemu64 diverge solo en las pruebas de accesos no alineados y de direcciones
 sin extensión de signo, que son excepciones que fastmem no lanza:

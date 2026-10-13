@@ -2102,6 +2102,38 @@ static void emit_fpu(struct ctx *c, unsigned k)
 	}
 
 	int slow = new_label(c), resume = new_label(c);
+	if (c->rec->fpu_rtn_ok) {
+		/* La FPU compacta: los desplazamientos en r3, r4 y T_V (y el extra
+		 * en r10), la rutina del preámbulo y, si no pudo, el intérprete. */
+		unsigned kind;
+		int extra = -1;
+		if (funct == 0x05 || funct == 0x07) {
+			kind = is_s ? SALSA64_FPR_ABSNEG_S : SALSA64_FPR_ABSNEG_D;
+			extra = funct == 0x07;
+		} else if (funct >= 0x30) {
+			kind = is_s ? SALSA64_FPR_CMP_S : SALSA64_FPR_CMP_D;
+			extra = (int)(funct & 15);
+		} else {
+			kind = (is_s ? SALSA64_FPR_ADD_S : SALSA64_FPR_ADD_D) + funct;
+		}
+		E(c, ppc_li(3, oa));
+		if (funct >= 0x30 || funct <= 0x03)
+			E(c, ppc_li(4, ob));
+		E(c, ppc_li(T_V, od));
+		if (extra >= 0)
+			E(c, ppc_li(10, extra));
+		emit_b(c, abs_label(c, c->rec->fpu_rtn[kind]), true);
+		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(1, PPC_EQ), slow);
+		bind(c, resume);
+		unsigned sec2 = c->sec;
+		c->sec = SEC_COLD;
+		bind(c, slow);
+		emit_exec_call(c, k);
+		post_check(c, k);
+		emit_b(c, resume, false);
+		c->sec = sec2;
+		return;
+	}
 	if (funct == 0x05 || funct == 0x07) {  /* ABS, NEG */
 		int ok = new_label(c);
 		unsigned emax = is_s ? 0xFF : 0x7FF;
@@ -2274,6 +2306,9 @@ static void emit_fpu(struct ctx *c, unsigned k)
 
 /* Conversiones y raíz de la FPU, CFC1/CTC1, LWL/LWR y compañía, MFC0. */
 #include "cpu/rec_emit_ext.h"
+/* La FPU compacta: las operaciones como rutinas compartidas del preámbulo. */
+static uint32_t finalize(struct salsa64_rec *rec, uint32_t base, uint32_t limit);
+#include "cpu/rec_emit_fpurtn.h"
 /* La FPU con registros residentes (reemplaza a emit_fpu, emit_cop1 y a lo de
  * COP1 de rec_emit_ext.h solo con SALSA64_REC_OPT_FPU_RES, experimental). */
 #include "cpu/rec_emit_fpu.h"

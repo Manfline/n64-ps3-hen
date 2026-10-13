@@ -609,7 +609,7 @@ static uint64_t rec_enter(struct salsa64_rec *rec, uint32_t entry)
 
 static uint32_t preamble_words(void)
 {
-	return 1024;  /* emit_preamble usa menos; los bloques empiezan alineados */
+	return 4096;  /* emit_preamble y las rutinas de la FPU usan menos; los bloques empiezan alineados */
 }
 
 /* ---- Tramos de la caché (docs/rec-ppe.md, «Desalojo por tramos») ------------- */
@@ -1506,6 +1506,8 @@ bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *co
 	if (n > preamble_words())
 		return false;
 	salsa64_rec_sync(rec->code, n * 4);
+	/* La FPU compacta: sus rutinas después del preámbulo (rec_emit_fpurtn.h). */
+	rec->fpu_rtn_ok = !(opts & SALSA64_REC_OPT_FPU_INLINE) && salsa64_rec_emit_fpu_rtns(rec, n, preamble_words());
 	rec->enter_opd[0] = (uintptr_t)code;
 	rec->enter_opd[1] = my_toc;
 	rec->enter_opd[2] = 0;

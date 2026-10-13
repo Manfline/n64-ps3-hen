@@ -646,10 +646,26 @@ calientes por acceso en el código compacto). Hecho hoy:
   doblada tras C (mapeado por la TLB → puntero fuera de la RDRAM), y la
   carga residente de la FPU desde T_Y.
 
-Pendiente: la consola (fastmem2 y el A/B de la base en caché con
-`jit-sin-grupos` contra v0.2.2: GoldenEye presa 16,0–16,3 ns/instr, Perfect
-Dark ~15); agrupar entre operaciones de COP1 (r6/r7 en FCR31) y un segundo
-`Tb`; después registros vivos entre bloques y la FPU 1 a 1 (pasos 3 y 4).
+- **PS3, corrida A** (paquete d939fb46): GoldenEye presa 16,63 ns/instr
+  (v0.2.2 16,0–16,3: sin ganancia); Perfect Dark se congeló en la segunda
+  escena: la cabeza de un grupo quedó en el delay slot de un BC1FL (el
+  filtro de alineación dejaba fuera al primer acceso) y un miembro del
+  camino no tomado usó r7 sin valor. Arreglado y verificado (PD 9 G con
+  enlaces y en lockstep, GE lockstep); FCR31 en T_V (los grupos ya no se
+  cortan en COP1): GE −6 %, PD −7 % de calientes. Cierre forzado del
+  frontend si la emulación no responde en 5 s (para los SPE y sale). Rama
+  rebasada sobre v0.2.4.
+- **FPU compacta** (docs/fastmem.md §9, `src/cpu/rec_emit_fpurtn.h`): las
+  operaciones de la FPU como 38 rutinas compartidas del preámbulo (el
+  mismo código en línea con los desplazamientos en registros); el sitio son
+  5–6 palabras en vez de 35–40. Host: **GoldenEye calientes 8,16 → 5,54
+  (−32 %), Perfect Dark 6,84 → 5,22 (−24 %)** (con los grupos); exacta en
+  todo (unitarias, nemu64 y lockstep, PD y GE en lockstep). Interruptor
+  `jit-fpu-en-linea` / `SALSA64_REC_FPU_INLINE=1`.
+
+Pendiente: la consola (fastmem2; el A/B de PD con `jit-sin-grupos` y
+`jit-fpu-en-linea`, y GoldenEye en la presa con la FPU compacta); después
+registros vivos entre bloques y la FPU 1 a 1 (pasos 3 y 4).
 
 ## 2026-10-13 — Recompilador: código compacto, 20,2 → 15,6 palabras de PPC por instrucción MIPS (rama `sleepy-mestorf`, paquete SLSA00106 «Salsa64 compacto»)
 
