@@ -122,6 +122,7 @@
 #include "rsp/lle/core.h"
 
 #include <signal.h>
+#include <unistd.h>
 #if defined(__powerpc64__) && defined(__linux__)
 #include <ucontext.h>
 #endif
@@ -154,12 +155,50 @@ static struct salsa64_rec rec;
  * no es un sitio conocido muere como antes. Solo tiene sentido en ppc64
  * Linux (qemu), donde corre el recompilador. */
 #if defined(__powerpc64__) && defined(__linux__)
+/* Un SIGSEGV que no es de fastmem: dónde (pc, y si es código generado, la
+ * palabra de la caché) y qué dirección, a stderr sin pasar por stdio, y
+ * morir como siempre. Para encontrar el bloque en un volcado
+ * (SALSA64_REC_DUMP=1: «bloque <pc> entrada <palabra> …»). */
+static void segv_report(uintptr_t nip, uintptr_t addr)
+{
+	char b[160];
+	int n = 0;
+	const char *h = "0123456789abcdef";
+	const char *t = "salsa64-run: SIGSEGV en pc=0x";
+	while (*t)
+		b[n++] = *t++;
+	for (int i = 60; i >= 0; i -= 4)
+		b[n++] = h[(nip >> i) & 15];
+	t = " direccion=0x";
+	while (*t)
+		b[n++] = *t++;
+	for (int i = 60; i >= 0; i -= 4)
+		b[n++] = h[(addr >> i) & 15];
+	if (rec.code && nip >= (uintptr_t)rec.code && nip < (uintptr_t)(rec.code + rec.code_words)) {
+		uintptr_t w = (nip - (uintptr_t)rec.code) / 4;
+		t = " palabra=";
+		while (*t)
+			b[n++] = *t++;
+		char d[12];
+		int m = 0;
+		do {
+			d[m++] = (char)('0' + w % 10);
+			w /= 10;
+		} while (w);
+		while (m)
+			b[n++] = d[--m];
+	}
+	b[n++] = '\n';
+	write(2, b, (size_t)n);
+}
+
 static void fastmem_segv(int sig, siginfo_t *si, void *uc_)
 {
 	ucontext_t *uc = uc_;
-	(void)si;
-	if (salsa64_rec_fastmem_fault(&rec, (uintptr_t)uc->uc_mcontext.gp_regs[PT_NIP]))
+	uintptr_t nip = (uintptr_t)uc->uc_mcontext.gp_regs[PT_NIP];
+	if (rec.fastmem && salsa64_rec_fastmem_fault(&rec, nip))
 		return;
+	segv_report(nip, (uintptr_t)si->si_addr);
 	signal(sig, SIG_DFL);
 }
 
@@ -2369,7 +2408,7 @@ int main(int argc, char **argv)
 			fprintf(stderr, "salsa64-run: fastmem pedido pero no activo\n");
 			return 3;
 		}
-		if (rec.fastmem && !fastmem_install_handler()) {
+		if (!fastmem_install_handler() && rec.fastmem) {
 			fprintf(stderr, "salsa64-run: fastmem sin manejador de SIGSEGV en este host\n");
 			return 3;
 		}

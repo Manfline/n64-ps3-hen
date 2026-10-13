@@ -1093,15 +1093,14 @@ static bool group_access(uint32_t w, unsigned *size, bool *store)
 }
 
 /* Instrucciones que pisan T_HI en el camino caliente: MULT y compañía
- * (emit_hilo), LWL/LWR y compañía (rec_emit_ext.h) y COP1 (r6 y r7 en la
- * escritura de FCR31). Cortan el grupo. */
+ * (emit_hilo) y LWL/LWR y compañía (rec_emit_ext.h). Cortan el grupo. (La
+ * escritura de FCR31 de las operaciones de COP1 usaba r7; ahora T_V.) */
 static bool clobbers_thi(uint32_t w)
 {
 	unsigned op = I_OP(w);
 	if (op == 0)
 		return (I_FUNCT(w) & ~7u) == 0x18;
-	return op == 0x11 || op == 0x1A || op == 0x1B || op == 0x22 || op == 0x26 || op == 0x2A || op == 0x2C ||
-	       op == 0x2D || op == 0x2E;
+	return op == 0x1A || op == 0x1B || op == 0x22 || op == 0x26 || op == 0x2A || op == 0x2C || op == 0x2D || op == 0x2E;
 }
 
 /* Arma los grupos del bloque: desde cada acceso, los que siguen con el
@@ -1171,6 +1170,15 @@ static void group_pass(struct ctx *c)
 		}
 		if (nm < 2)
 			continue;
+		/* va_lo = base + lo con lo redondeado hacia abajo a la alineación
+		 * del acceso más grande: así un byte en +1 no deja fuera a las
+		 * palabras en +0x18 y +0x30 (la prueba exige x_lo alineado a `big`
+		 * de todos modos). Un miembro cuyo desplazamiento respecto de lo no
+		 * es múltiplo de su tamaño va con su prueba. */
+		unsigned align = big - 1;
+		lo -= ((lo % (int)big) + (int)big) % (int)big;
+		if (hi - lo > 0x7FF8)
+			continue;
 		unsigned kept[SALSA64_REC_MAX_INSNS], nk = 0;
 		for (unsigned m = 0; m < nm; m++) {
 			unsigned sz;
@@ -1179,14 +1187,19 @@ static void group_pass(struct ctx *c)
 			if ((((int16_t)c->d[members[m]].w - lo) % (int)sz) == 0)
 				kept[nk++] = members[m];
 		}
-		if (nk < 2)
+		/* La cabeza final tampoco puede ser el delay slot de un
+		 * branch-likely (el primero sí se revisó arriba, pero el filtro
+		 * pudo dejar fuera al primero). */
+		unsigned first = 0;
+		while (first < nk && c->ds_of[kept[first]] && c->d[c->ds_of[kept[first]] - 1].kind == K_BRANCH_L)
+			first++;
+		if (nk - first < 2)
 			continue;
-		unsigned align = big - 1;
 		uint16_t span = (uint16_t)((unsigned)(hi - lo) & ~align);
 		cover = (int)kept[nk - 1];
-		for (unsigned m = 0; m < nk; m++) {
+		for (unsigned m = first; m < nk; m++) {
 			struct grp *g = &c->grp[kept[m]];
-			g->head = (uint8_t)kept[0];
+			g->head = (uint8_t)kept[first];
 			g->align = (uint8_t)align;
 			g->last = m == nk - 1;
 			g->store = any_store;
@@ -2029,20 +2042,23 @@ static void emit_cop1(struct ctx *c, uint32_t i)
  */
 
 /* r6 = FCR31 leído antes; r5 = 1 si el resultado es inexacto (o NULL: no).
- * Borra las causas, pone I si hace falta y escribe solo si cambió. */
+ * Borra las causas, pone I si hace falta y escribe solo si cambió. El nuevo
+ * FCR31 se arma en T_V (libre en las operaciones de la FPU), no en r7: r7
+ * es la base en caché de un grupo de accesos (T_HI) y así los grupos no se
+ * cortan en las operaciones de COP1. */
 static void emit_fcr31_cause(struct ctx *c, bool inexact_in_r5)
 {
 	int same = new_label(c);
-	E(c, ppc_rlwinm(7, 6, 0, 20, 13));  /* causas (bits 12–17) en 0 */
-	if (inexact_in_r5) {               /* causa I (bit 12) y bandera I (bit 2); r5 es 0 o 1 */
+	E(c, ppc_rlwinm(T_V, 6, 0, 20, 13));  /* causas (bits 12–17) en 0 */
+	if (inexact_in_r5) {                 /* causa I (bit 12) y bandera I (bit 2); r5 es 0 o 1 */
 		E(c, ppc_rlwinm(0, 5, 12, 19, 19));
-		E(c, ppc_or(7, 7, 0));
+		E(c, ppc_or(T_V, T_V, 0));
 		E(c, ppc_rlwinm(0, 5, 2, 29, 29));
-		E(c, ppc_or(7, 7, 0));
+		E(c, ppc_or(T_V, T_V, 0));
 	}
-	E(c, ppc_cmpw(CR_T, 7, 6));
+	E(c, ppc_cmpw(CR_T, T_V, 6));
 	emit_bc(c, PPC_BO_TRUE, PPC_BI(CR_T, PPC_EQ), same);
-	E(c, ppc_stw(7, OFF(fcr31), R_CPU));
+	E(c, ppc_stw(T_V, OFF(fcr31), R_CPU));
 	bind(c, same);
 }
 
@@ -2150,20 +2166,20 @@ static void emit_fpu(struct ctx *c, unsigned k)
 		E(c, ppc_subf(12, 10, 12));
 		E(c, ppc_cmpd(CR_T, 11, 12));
 		E(c, ppc_lwz(6, OFF(fcr31), R_CPU));
-		E(c, ppc_rlwinm(7, 6, 0, 20, 13));  /* causas en 0 */
-		E(c, ppc_rlwinm(7, 7, 0, 9, 7));    /* C (bit 23) en 0 */
+		E(c, ppc_rlwinm(T_V, 6, 0, 20, 13));  /* causas en 0 (en T_V, no en r7: ver emit_fcr31_cause) */
+		E(c, ppc_rlwinm(T_V, T_V, 0, 9, 7));  /* C (bit 23) en 0 */
 		if (cond & 4)
 			emit_bc(c, PPC_BO_TRUE, PPC_BI(CR_T, PPC_LT), set);
 		if (cond & 2)
 			emit_bc(c, PPC_BO_TRUE, PPC_BI(CR_T, PPC_EQ), set);
 		emit_b(c, done, false);
 		bind(c, set);
-		E(c, ppc_oris(7, 7, 0x0080));
+		E(c, ppc_oris(T_V, T_V, 0x0080));
 		bind(c, done);
 		int same = new_label(c);
-		E(c, ppc_cmpw(CR_T, 7, 6));
+		E(c, ppc_cmpw(CR_T, T_V, 6));
 		emit_bc(c, PPC_BO_TRUE, PPC_BI(CR_T, PPC_EQ), same);
-		E(c, ppc_stw(7, OFF(fcr31), R_CPU));
+		E(c, ppc_stw(T_V, OFF(fcr31), R_CPU));
 		bind(c, same);
 	} else {  /* ADD SUB MUL DIV */
 		int done = new_label(c);

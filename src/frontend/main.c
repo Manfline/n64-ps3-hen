@@ -141,6 +141,7 @@
  * Lo que la ROM imprime por el ISViewer va al log.
  */
 #include <io/pad.h>
+#include <lv2/process.h>
 #include <malloc.h>
 #include <ppu-lv2.h>
 #include <ppu-types.h>
@@ -3400,6 +3401,31 @@ static void profile_close(void)
 	rprof.on = false;
 }
 
+/* Cuánto se espera al hilo de emulación al cerrar antes de rendirse. */
+#define QUIT_WAIT_US 5000000
+
+/* El hilo de emulación no responde (girando en código generado o en C):
+ * no hay cómo detenerlo desde fuera. Salir del juego por el XMB con los
+ * grupos de SPU vivos colgó la consola entera (2026-10-13): se paran los
+ * SPE que se pueden parar sin el hilo de emulación y se termina el
+ * proceso con sys_process_exit, con lo que haya quedado en el log. */
+static void forced_exit(const char *why)
+{
+	salsa64_log("cierre forzado: %s tras %u s (pc 0x%08llx, ciclos %llu, marca %u, bloque %u); se paran los SPE y se sale",
+		    why, QUIT_WAIT_US / 1000000, (unsigned long long)n64.cpu.cur_pc, (unsigned long long)n64.cpu.cycles,
+		    n64.cpu.rec_mark, n64.cpu.rec_cur);
+	audio_out_shutdown();
+	if (jpeg_on_spu)
+		salsa64_jpeg_spu_shutdown(&jpeg_spu);
+	if (lle_mode != SALSA64_LLE_OFF)
+		salsa64_rsp_spu_shutdown(&rsp_spu);
+	if (gfx_on_spu)
+		salsa64_gfx_spu_shutdown(&gfx_spu);
+	salsa64_log("cierre forzado: SPE detenidos; saliendo");
+	salsa64_log_shutdown();
+	sysProcessExit(1);
+}
+
 static void game_close(void)
 {
 	salsa64_filters_release();
@@ -3779,9 +3805,12 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	/* Parar la emulación sin dejarla esperando un juego de búferes (si
 	 * estaba en pausa, running = 0 la suelta). */
 	running = 0;
+	u64 stop_t0 = sysGetSystemTime();
 	while (!emu_done) {
 		drain(sysGetSystemTime(), 0);
 		sysUsleep(500);
+		if (sysGetSystemTime() - stop_t0 > QUIT_WAIT_US)
+			forced_exit("la emulación no respondió al cierre");
 	}
 	u64 ret;
 	sysThreadJoin(emu_tid, &ret);
@@ -4445,10 +4474,12 @@ static void watch_thread(void *arg)
 		} else if (now - emu_t >= STALL_US && (!emu_said || now - emu_said >= STALL_LOG_US)) {
 			emu_said = now;
 			salsa64_log("latido: emulación quieta hace %.1f s en «%s» (campo %u, %u emulados, %u en cola, RSP "
-				    "%s, %u tareas gráficas terminadas, %u esperas al SPE; presentación en «%s»; pausa 0x%x)",
+				    "%s, %u tareas gráficas terminadas, %u esperas al SPE; presentación en «%s»; pausa 0x%x; "
+				    "cpu: pc 0x%08llx, ciclos %llu, marca %u, bloque %u)",
 				    (now - emu_t) / 1e6, beat.emu_at, n64.bus.vi.fields, emu_stats.fields,
 				    field_head - field_tail, n64.bus.rsp.busy ? "ocupado" : "libre", salsa64_rdp_tasks_done(),
-				    gfx_spu.waits, beat.pres_at, pause_req);
+				    gfx_spu.waits, beat.pres_at, pause_req, (unsigned long long)n64.cpu.cur_pc,
+				    (unsigned long long)n64.cpu.cycles, n64.cpu.rec_mark, n64.cpu.rec_cur);
 		}
 	}
 	sysThreadExit(0);

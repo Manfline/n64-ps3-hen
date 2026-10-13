@@ -407,7 +407,15 @@ Sobre las 8,16 palabras calientes por instrucción de GoldenEye es −9 %
 - **Un grupo no cruza un destino de salto interno** (al volver por el lazo
   el base pudo cambiar después del grupo) **ni empieza en el delay slot de
   un branch-likely** (solo corre si se toma: los de después no verían
-  `Tb`).
+  `Tb`). Esto último se comprueba sobre la cabeza *final*: el filtro de
+  alineación puede dejar fuera al primer acceso y dejar de cabeza a uno
+  posterior; con un `sb` en el delay slot de un BC1FL como cabeza, Perfect
+  Dark se congeló en la PS3 en la segunda escena de la intro (el miembro
+  siguiente, por el camino no tomado, usaba r7 sin valor: en el host el
+  mismo bloque muere con SIGSEGV en la dirección −44). El mínimo del tramo
+  se redondea hacia abajo a la alineación del acceso más grande, para que
+  un byte en +1 no deje fuera a las palabras en +0x18 y +0x30 del mismo
+  base.
 - Interruptor para el A/B: `SALSA64_REC_OPT_NO_GROUP` (`jit-sin-grupos` en
   la PS3, `SALSA64_REC_NO_GROUP=1` en el host). Encendido por omisión: es
   exacto (nemu64-test en `--lockstep` entero sin diferencias; las unitarias
@@ -418,7 +426,23 @@ Medido en el host (volcados con el perfil por bloque, `tools/rec-expansion.py`):
 | | Calientes por instrucción MIPS | Frías | Total |
 |---|---|---|---|
 | Perfect Dark, intro (3 G ciclos) | 6,84 → 6,45 (**−6 %**) | 6,50 → 6,09 (−6 %) | 13,34 → 12,54 (−6 %) |
-| GoldenEye hasta la presa (7,5 G ciclos) | 8,16 → 7,75 (**−5 %**) | 7,40 → 7,31 (−1 %) | 15,57 → 15,05 (−3 %) |
+| GoldenEye hasta la presa (7,5 G ciclos) | 8,16 → 7,65 (**−6 %**) | 7,40 → 7,20 (−3 %) | 15,57 → 14,85 (−5 %) |
+
+(Con la cabeza final nunca en un delay slot likely, el mínimo redondeado y
+FCR31 en T_V, que ya no corta los grupos en las operaciones de COP1;
+Perfect Dark 6,84 → 6,39 con lo mismo. Corrección de esta versión: unitarias
+en plain, pin y FPU residente, nemu64-test 433 y lockstep entero, Perfect
+Dark 9 G ciclos con enlaces y en lockstep, GoldenEye hasta la presa en
+lockstep, todo sin diferencias.)
+
+**En la PS3 (2026-10-13, primera corrida, paquete d939fb46 con el error del
+delay slot likely):** GoldenEye en la presa 16,63 ns por instrucción en 12
+ventanas pesadas (14,7–18,8), contra 16,03/16,30 de v0.2.2: **no gana** en
+la presa pese a −5 % de palabras calientes (las escenas no son idénticas;
+tampoco hay señal de mejora). Perfect Dark, primera ventana pesada de la
+intro: 10,07 contra 10,51 sin grupos (−4 %); la segunda escena se congeló
+por el error. Pendiente la corrida con el arreglo (PD entero con y sin
+`jit-sin-grupos`).
 
 Corrección: unitarias 449/449 en los cinco modos, nemu64-test 433 (la línea
 base exacta) y en `--lockstep` entero sin diferencias, vitest, y los
