@@ -394,8 +394,8 @@ Es un promedio de medio segundo. Se recuerda en `menu.cfg` (`fps = si`).
   Con esas versiones, crear `/dev_hdd0/salsa64/fbfx.cfg` con un `1` adentro
   (apaga las copias del framebuffer a la memoria de la N64) y quitarlo para
   los demás juegos. Arreglado en el código en curso (por confirmar en la PS3
-  real). Algunas texturas se ven estiradas, con o sin ese archivo: es otro
-  error, pendiente.
+  real), igual que las texturas estiradas del Castillo de Hyrule (otro
+  error, que salía con o sin ese archivo).
 - Lista completa de lo probado en la PS3 real: [compatibilidad.md](compatibilidad.md).
 
 ## Abrir una ROM sin menú

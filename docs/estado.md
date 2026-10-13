@@ -90,6 +90,32 @@ tools/test-roms.sh pasan. Por confirmar en la PS3 real: Smash y Smash Remix
 hasta varios KO sin `fbfx.cfg`, y la pausa de Zelda, la cámara de DK64, Navi
 y las antorchas de OoT, el túnel de MK64, Majora, Perfect Dark y Conker.
 
+## 2026-10-13 — Smash: texturas estiradas en el Castillo de Hyrule (misma rama, paquete SLSA00113)
+
+El autor las vio en la PS3, con y sin `fbfx.cfg`, en Smash y en Smash Remix
+(los ladrillos de las torres y del muro, alargados). El volcado de la consola
+en ese escenario (`--raster-dump`) da en el host la misma imagen: es de la
+HLE, no del RSX. Las texturas de las torres son CI4 de 32 × 32 (y otra de
+64 de periodo) en tiles de 160 × 160 y 128 × 256 con **clamp y máscara**:
+el RDP repite el periodo dentro de la tile. La HLE las decodificaba al
+tamaño de la tile con la máscara aplicada, pero eso no cabe en el área de
+decodificación (`GFX_TEX_MAX`, 32 KB: 160 × 51 y 128 × 64 texels), así que
+se cortaban filas y, con el clamp, la última fila se estiraba por el resto
+de la torre. Ahora (`tex_size` en tmem.c), si no cabe, ese eje se
+decodifica en un periodo de su máscara y va con GFX_WRAP_REPEAT (o
+GFX_WRAP_MIRROR con espejo): dentro de la tile es exacto; solo más allá de
+su borde, donde el RDP fija el último texel, aquí se sigue repitiendo. El
+caso de espejo con hasta dos periodos (el telescopio de Majora's Mask,
+MIRROR_ONCE) no cambia. Prueba nueva en test_gfx
+(`gfx_tile_clamp_mask_period`).
+
+En el host no hay cómo llegar a Hyrule (la demo no pasa por ahí), pero la
+demo de Smash tenía lo mismo: en la intro de Kongo Jungle unas franjas
+amarillo-verdes estiradas abajo a la izquierda ahora son hojas y pasto.
+Contra la rama anterior, DK64, Perfect Dark, MK64, Banjo, Conker y
+GoldenEye salen iguales píxel por píxel; solo cambian cuadros de Smash.
+Por confirmar en la PS3: el Castillo de Hyrule en Smash y en Smash Remix.
+
 ## 2026-10-13 — Conker en negro tras «For Mature» desde la v0.2.1, y sus 29 s de negro al arrancar (rama `objective-bun-2517c7`, paquete SLSA00112 «Salsa64 Conker»)
 
 Síntoma (PS3 real con v0.2.1, v0.2.2 y main; igual en la Mac): después de

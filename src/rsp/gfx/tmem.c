@@ -390,7 +390,7 @@ static void tile_key(const struct gfx_state *g, const struct gfx_tile *t, uint32
 	unsigned ms = clamp_mask(t->masks, t->cms, w), mt = clamp_mask(t->maskt, t->cmt, h);
 	uint32_t masks = ms ? ms | (t->cms & 1u) << 4 : 0;
 	masks |= mt ? (mt | (t->cmt & 1u) << 4) << 8 : 0;
-	masks |= (uint32_t)once << 16;  /* un solo periodo decodificado (GFX_TEX_ONCE_*) */
+	masks |= (uint32_t)once << 16;  /* un solo periodo decodificado (GFX_TEX_ONCE_*, GFX_WRAP_* por eje) */
 	gfx_hash_words(&hs, (uint32_t)t->fmt << 24 | (uint32_t)t->siz << 16 | (uint32_t)t->pal << 8 | tt,
 		       (uint32_t)t->line << 16 | (t->tmem & 15), w << 16 | h, 1u | masks << 8 | (uint32_t)premul << 31);
 	/* texel() lee por fila 8 bytes enteros (la fila impar intercambia
@@ -498,6 +498,15 @@ static bool resolve_content(struct gfx_state *g, const struct gfx_tile *t, unsig
  * decodifica en un solo periodo, el segundo (el reflejado), desde el texel
  * (x0, y0), y el eje va con GFX_WRAP_MIRROR_ONCE (once: GFX_TEX_ONCE_*): el
  * RSX refleja la coordenada una vez y fija el borde más allá, como el RDP.
+ * Una tile con clamp y una máscara más chica que no cabe de otro modo se
+ * decodifica en un periodo de su máscara y el eje repite (o se refleja):
+ * dentro de la tile es lo que muestrea el RDP; solo más allá de su borde,
+ * donde el RDP fija el último texel, aquí se sigue repitiendo. El eje lo
+ * dice `once` con su GFX_WRAP_* en los bits de GFX_TEX_WRAP_S / _T. Antes
+ * se cortaban filas y la última se estiraba: el Castillo de Hyrule de
+ * Super Smash Bros. tiene CI4 de 32 × 32 en tiles de 160 × 160 con clamp y
+ * máscara 5 (y 64 de periodo en tiles de 128 × 256); de 51 o 64 filas, la
+ * los ladrillos de las torres y del muro salían alargados.
  * Primero t (las filas), después s. false si no queda nada. */
 static bool tex_size(const struct gfx_tile *t, const uint16_t lim[2], uint32_t *wp, uint32_t *hp, uint32_t *x0p,
 		     uint32_t *y0p, uint8_t *oncep)
@@ -523,6 +532,21 @@ static bool tex_size(const struct gfx_tile *t, const uint16_t lim[2], uint32_t *
 			w = x0 = 1u << ms;
 			pitch = (w * 4 + 63) & ~63u;
 			once |= GFX_TEX_ONCE_S;
+		}
+	}
+	if (pitch * h > GFX_TEX_MAX) {
+		unsigned mt = clamp_mask(t->maskt, t->cmt, h);
+		if (mt && !(once & GFX_TEX_ONCE_T)) {
+			h = 1u << mt;
+			once |= ((t->cmt & 1) ? GFX_WRAP_MIRROR : GFX_WRAP_REPEAT) << 2;
+		}
+	}
+	if (pitch * h > GFX_TEX_MAX) {
+		unsigned ms = clamp_mask(t->masks, t->cms, w);
+		if (ms && !(once & GFX_TEX_ONCE_S)) {
+			w = 1u << ms;
+			pitch = (w * 4 + 63) & ~63u;
+			once |= (t->cms & 1) ? GFX_WRAP_MIRROR : GFX_WRAP_REPEAT;
 		}
 	}
 	if (pitch * h > GFX_TEX_MAX)
