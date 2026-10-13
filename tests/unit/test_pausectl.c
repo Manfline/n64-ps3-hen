@@ -183,8 +183,8 @@ static void menu_rows(void)
 	CHECK_EQ(pc.menu_do, PM_SLOT);
 	CHECK_EQ(pc.menu_arg, 1);
 	pc.menu_do = -1;
-	tap(B(DOWN));
-	tap(B(DOWN));
+	for (int i = PM_SLOT; i < PM_FPS; i++)
+		tap(B(DOWN));
 	CHECK_EQ(pc.menu_sel, PM_FPS);
 	tap(B(CROSS));
 	CHECK(pc.menu);
@@ -208,6 +208,81 @@ static void menu_cheats_row(void)
 	CHECK(!pc.menu && pc.panel);
 	CHECK_EQ(pc.menu_do, -1);
 	CHECK_EQ(pausectl_reasons(&pc), PAUSECTL_PANEL);
+}
+
+/* «Imagen»: su página; ←→ y × piden cambiar el valor, × en «Guardar» pide
+ * guardar; ○ o «Volver» regresan al menú de pausa y START cierra todo, sin
+ * que el START llegue al juego hasta soltarse. */
+static void menu_image_page(void)
+{
+	pausectl_init(&pc, true);
+	open_menu();
+	for (int i = 0; i < PM_IMAGE; i++)
+		tap(B(DOWN));
+	CHECK_EQ(pc.menu_sel, PM_IMAGE);
+	tap(B(CROSS));
+	CHECK(pc.image && !pc.menu);
+	CHECK_EQ(pc.image_sel, IM_FILTER);
+	CHECK_EQ(pc.image_do, -1);
+	CHECK_EQ(pausectl_reasons(&pc), PAUSECTL_MENU);
+	poll1(B(RIGHT), false, true);
+	CHECK_EQ(game[0], 0);
+	poll1(0, false, true);
+	CHECK_EQ(pc.image_do, IM_FILTER);
+	CHECK_EQ(pc.image_arg, 1);
+	pc.image_do = -1;
+	for (int i = IM_FILTER; i < IM_SCALE; i++)
+		tap(B(DOWN));
+	CHECK_EQ(pc.image_sel, IM_SCALE);
+	tap(B(LEFT));
+	CHECK_EQ(pc.image_do, IM_SCALE);
+	CHECK_EQ(pc.image_arg, -1);
+	pc.image_do = -1;
+	tap(B(CROSS));
+	CHECK_EQ(pc.image_do, IM_SCALE);
+	CHECK_EQ(pc.image_arg, 1);
+	pc.image_do = -1;
+	tap(B(DOWN));
+	CHECK_EQ(pc.image_sel, IM_SAVE);
+	tap(B(RIGHT));
+	CHECK_EQ(pc.image_do, -1);  /* «Guardar» no tiene valor */
+	tap(B(CROSS));
+	CHECK_EQ(pc.image_do, IM_SAVE);
+	CHECK(pc.image);
+	pc.image_do = -1;
+	tap(B(CIRCLE));
+	CHECK(!pc.image && pc.menu);
+	CHECK_EQ(pc.menu_sel, PM_IMAGE);
+	CHECK_EQ(pausectl_reasons(&pc), PAUSECTL_MENU);
+	tap(B(CROSS));
+	CHECK(pc.image);
+	tap(B(UP));
+	CHECK_EQ(pc.image_sel, IM_BACK);  /* da la vuelta */
+	tap(B(CROSS));
+	CHECK(!pc.image && pc.menu);
+	tap(B(CROSS));
+	CHECK(pc.image);
+	poll1(B(START), false, true);
+	CHECK(!pc.image && !pc.menu);
+	CHECK_EQ(pausectl_reasons(&pc), 0);
+	CHECK_EQ(game[0], 0);
+	poll1(0, false, true);
+	poll1(B(START), false, true);
+	CHECK_EQ(game[0], B(START));
+	poll1(0, false, true);
+	/* START + SELECT también cierra todo desde «Imagen». */
+	open_menu();
+	for (int i = 0; i < PM_IMAGE; i++)
+		tap(B(DOWN));
+	tap(B(CROSS));
+	CHECK(pc.image);
+	poll1(B(SELECT), false, true);
+	poll1(QUIT, false, true);
+	CHECK(!pc.image && !pc.menu);
+	poll1(0, false, true);
+	pausectl_game_end(&pc);
+	CHECK(!pc.image);
+	CHECK_EQ(pc.image_do, -1);
 }
 
 /* «Salir»: con confirmación pregunta; sin ella sale directo. */
@@ -471,6 +546,7 @@ void t_suite_pausectl(void)
 	RUN(menu_other_closers);
 	RUN(menu_rows);
 	RUN(menu_cheats_row);
+	RUN(menu_image_page);
 	RUN(menu_exit_row);
 	RUN(confirm_yes_exits);
 	RUN(combo_variants);

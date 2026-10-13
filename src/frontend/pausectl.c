@@ -23,6 +23,7 @@ void pausectl_init(struct pausectl *p, bool confirm)
 	p->confirm = confirm;
 	p->toggle = -1;
 	p->menu_do = -1;
+	p->image_do = -1;
 }
 
 void pausectl_system_menu(struct pausectl *p, bool open)
@@ -46,7 +47,7 @@ enum pausectl_action pausectl_pads(struct pausectl *p, const uint32_t raw[PAUSEC
 
 	p->intercepted = intercepted;
 	if (!in_game)
-		p->dialog = p->panel = p->menu = false;
+		p->dialog = p->panel = p->menu = p->image = false;
 	for (unsigned i = 0; i < PAUSECTL_PORTS; i++) {
 		uint32_t b = sys ? 0 : raw[i];
 		p->swallow[i] &= b;  /* lo soltado vuelve a contar */
@@ -63,9 +64,28 @@ enum pausectl_action pausectl_pads(struct pausectl *p, const uint32_t raw[PAUSEC
 		now[i] = b;
 	}
 
-	bool was = p->dialog, was_panel = p->panel, was_menu = p->menu, denied_now = false;
+	bool was = p->dialog, was_panel = p->panel, was_menu = p->menu, was_image = p->image, denied_now = false;
 	if (!sys && in_game) {
-		if (p->panel) {
+		if (p->image) {
+			uint32_t up = BIT(SALSA64_DS3_UP), down = BIT(SALSA64_DS3_DOWN);
+			bool left = rise & BIT(SALSA64_DS3_LEFT), right = rise & BIT(SALSA64_DS3_RIGHT);
+			if ((rise & BIT(SALSA64_DS3_START)) || combo) {
+				p->image = false;  /* todo cerrado: el juego sigue */
+			} else if ((rise & BIT(SALSA64_DS3_CIRCLE)) ||
+				   (p->image_sel == IM_BACK && (rise & BIT(SALSA64_DS3_CROSS)))) {
+				p->image = false;
+				p->menu = true;
+			} else if (rise & up) {
+				p->image_sel = (p->image_sel + IM_ROWS - 1) % IM_ROWS;
+			} else if (rise & down) {
+				p->image_sel = (p->image_sel + 1) % IM_ROWS;
+			} else if (p->image_sel <= IM_SCALE && (left || right || (rise & BIT(SALSA64_DS3_CROSS)))) {
+				p->image_do = p->image_sel;
+				p->image_arg = left ? -1 : 1;
+			} else if (p->image_sel == IM_SAVE && (rise & BIT(SALSA64_DS3_CROSS))) {
+				p->image_do = IM_SAVE;
+			}
+		} else if (p->panel) {
 			if ((rise & (BIT(SALSA64_DS3_CIRCLE) | BIT(SALSA64_DS3_START))) || open_combo || combo) {
 				p->panel = false;
 			} else {
@@ -134,6 +154,11 @@ enum pausectl_action pausectl_pads(struct pausectl *p, const uint32_t raw[PAUSEC
 						p->menu_do = PM_CHEATS;
 					}
 					break;
+				case PM_IMAGE:
+					p->menu = false;
+					p->image = true;
+					p->image_sel = IM_FILTER;
+					break;
 				case PM_FPS:
 					p->menu_do = PM_FPS;
 					break;
@@ -167,24 +192,26 @@ enum pausectl_action pausectl_pads(struct pausectl *p, const uint32_t raw[PAUSEC
 			}
 		}
 	}
-	if (p->dialog != was || p->panel != was_panel || p->menu != was_menu || denied_now || act != PAUSECTL_NONE)
+	if (p->dialog != was || p->panel != was_panel || p->menu != was_menu || p->image != was_image || denied_now ||
+	    act != PAUSECTL_NONE)
 		for (unsigned i = 0; i < PAUSECTL_PORTS; i++)
 			p->swallow[i] |= now[i];
 	for (unsigned i = 0; i < PAUSECTL_PORTS; i++)
-		game[i] = sys || p->dialog || p->panel || p->menu ? 0 : now[i] & ~p->swallow[i];
+		game[i] = sys || p->dialog || p->panel || p->menu || p->image ? 0 : now[i] & ~p->swallow[i];
 	return act;
 }
 
 uint32_t pausectl_reasons(const struct pausectl *p)
 {
 	return (pausectl_overlay(p) || p->intercepted ? PAUSECTL_SYSTEM : 0) | (p->dialog ? PAUSECTL_CONFIRM : 0) |
-	       (p->panel ? PAUSECTL_PANEL : 0) | (p->menu ? PAUSECTL_MENU : 0);
+	       (p->panel ? PAUSECTL_PANEL : 0) | (p->menu || p->image ? PAUSECTL_MENU : 0);
 }
 
 void pausectl_game_end(struct pausectl *p)
 {
-	p->dialog = p->panel = p->menu = false;
+	p->dialog = p->panel = p->menu = p->image = false;
 	p->menu_do = -1;
+	p->image_do = -1;
 	p->panel_avail = false;
 	p->panel_rows = 0;
 	p->panel_sel = 0;

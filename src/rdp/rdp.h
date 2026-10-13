@@ -210,13 +210,18 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 void salsa64_rdp_present_draw(bool draw);
 /* Lo último que eligió salsa64_rdp_present como textura (el destino
  * entero), la región que se ve (en píxeles del destino, sin el overscan) y
- * la escala de ese destino. false si no hay. */
-bool salsa64_rdp_present_source(rsxkit_texture *tex, rsxkit_rect *region, uint32_t *scale);
+ * la escala de ese destino; con `view` o `crop`, antes los aplica como
+ * salsa64_rdp_present_again (en la pausa). false si no hay. */
+bool salsa64_rdp_present_source(const rsxkit_view *view, const struct salsa64_overscan *crop, rsxkit_texture *tex,
+				rsxkit_rect *region, uint32_t *scale);
 /* Vuelve a dibujar lo último que presentó salsa64_rdp_present (mismo
  * destino, región y escala), sin tocar la tabla de destinos ni las copias a
  * la RDRAM: para seguir mostrando el último cuadro con la emulación en
- * pausa. false si no hay (nada presentado, o el destino se soltó). */
-bool salsa64_rdp_present_again(rsxkit_rect *out);
+ * pausa. Con `view` o `crop` (si no, NULL), con esa vista y ese recorte (el
+ * menú de pausa los cambia en vivo; las dos cosas se piden juntas: un NULL
+ * es «sin recorte» o «la vista por omisión»). false si no hay (nada
+ * presentado, o el destino se soltó). */
+bool salsa64_rdp_present_again(const rsxkit_view *view, const struct salsa64_overscan *crop, rsxkit_rect *out);
 
 void salsa64_rdp_get_stats(struct salsa64_rdp_stats *out);
 

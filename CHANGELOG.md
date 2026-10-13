@@ -32,6 +32,15 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
   PS3 only speaks old TLS and HTTPS certificates cannot be verified. Not yet
   tried on a real PS3.
 
+### Added
+- **«Imagen» in the pause menu**: filter, aspect, overscan and internal scale
+  of the running game. Filter, aspect and overscan change live on the paused
+  frame; the scale applies when the game resumes. «Guardar para este juego»
+  stores them as per-game settings.
+- **Per-game internal scale** (`escala` in `juegos/<ROM>.cfg`, also on the
+  SELECT page): set when the game opens, back to the Options one when it
+  closes.
+
 ### Changed
 - `lib/rsxkit`: the 2D layer can draw an RGBA image slot
   (`rsxkit_ui_image_set` / `rsxkit_ui_image`); it maps 3 MB instead of 2.

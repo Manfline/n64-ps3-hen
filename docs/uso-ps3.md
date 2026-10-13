@@ -185,18 +185,22 @@ trucos, un aviso lo dice.
 
 ### Ajustes por juego
 
-SELECT sobre una ROM abre sus ajustes: **Aspecto**, **Filtro** y **Recorte
-del borde**, cada uno «Global» (lo de Opciones) o un valor propio para ese
-juego. Se guardan en `/dev_hdd0/salsa64/juegos/<nombre de la ROM sin
+SELECT sobre una ROM abre sus ajustes: **Aspecto**, **Filtro**, **Recorte
+del borde** y **Escala interna**, cada uno «Global» (lo de Opciones) o un
+valor propio para ese juego (también se guardan desde «Imagen» en el menú de
+pausa). Se guardan en `/dev_hdd0/salsa64/juegos/<nombre de la ROM sin
 extensión>.cfg`:
 
 ```
 aspecto = 16:9      # 4:3 | 16:9 | global
 filtro = lineas     # suave | nitido | lineas | lineas+ | crt-mascara | crt-rgb | crt-svideo | crt-compuesto | global
 recorte = apagado   # apagado | normal | amplio | global
+escala = 2          # auto | 1 … 5 | global
 ```
 
-Al abrir el juego, el log dice «imagen: … (con ajustes de este juego)».
+Al abrir el juego, el log dice «imagen: … (con ajustes de este juego)» y, si
+la escala es otra que la de Opciones, «escala interna: …, al abrir el
+juego»; al cerrarlo vuelve la de Opciones.
 
 ### Descargas (experimental, apagadas)
 
@@ -280,6 +284,7 @@ usan):
 | Guardar estado / Cargar estado | En la ranura actual, como SELECT + R1 / L1 |
 | Ranura ◀ n ▶ | Cambia la ranura (cruceta izquierda/derecha o ×) |
 | Trucos | La lista de trucos del juego (si tiene) |
+| Imagen | Filtro, aspecto, recorte del borde y escala interna del juego en curso (abajo) |
 | Mostrar FPS | Enciende o apaga el contador de velocidad |
 | Volver al menú (con `embedded`, Salir al XMB) | Cierra el juego como siempre (guarda la partida, apaga el audio y los SPEs). Con «Confirmar al salir: Sí» pregunta antes: × sí, ○ sigue jugando |
 
@@ -288,6 +293,18 @@ SELECT otra vez cierran el menú y el juego sigue. Mientras el menú o el
 cuadro de confirmación están a la vista, nada de lo que se apriete llega al
 juego, y el botón con que se cierran tampoco (el ○ no cuenta como B al
 volver; hay que soltarlo). Los atajos de SELECT siguen funcionando igual.
+
+**Imagen** abre un cuadro abajo a la izquierda, sin oscurecer el juego,
+con **Filtro**, **Aspecto**, **Recorte del borde** y **Escala interna**:
+cruceta izquierda/derecha (o ×) cambia el valor. El filtro, el aspecto y el
+recorte se ven al momento sobre el cuadro en pausa (el recorte de una imagen
+que el juego dibujó con el CPU, al seguir). La escala interna se pone al
+seguir jugando: cambiarla suelta las imágenes del juego en el RSX, que se
+vuelven a dibujar a la escala nueva en el cuadro siguiente (puede verse un
+cuadro raro en los juegos que reusan el anterior). Lo elegido vale para esta
+partida; **Guardar para este juego** lo deja en `juegos/<ROM>.cfg` (lo que
+coincide con Opciones queda «global»). ○ o «Volver» regresan al menú de
+pausa; START cierra todo y el juego sigue.
 
 El **botón PS** abre el menú del sistema encima del juego: Salsa64 pausa la
 emulación y el sonido mientras está abierto y sigue mostrando el último
@@ -446,7 +463,7 @@ se crean por FTP.
 | Archivo | Formato | Qué hace |
 |---|---|---|
 | `menu.cfg` | Líneas `fondo = si\|no`, `fps = si\|no`, `confirmar = si\|no`, `aspecto = 4:3\|16:9`, `filtro = suave\|nitido\|lineas\|lineas+\|crt-mascara\|crt-rgb\|crt-svideo\|crt-compuesto` e `idioma = es\|en\|fr\|de\|it\|pt` | Fondo animado del menú, contador de velocidad en el juego, si «Salir» del menú de pausa pregunta antes (sí sin la línea), aspecto, filtro e idioma. Lo escriben el menú (Opciones) y SELECT + △ |
-| `juegos/<ROM>.cfg` | `aspecto`, `filtro`, `recorte` = valor o `global` | Ajustes de un juego (sección «Ajustes por juego»). Lo escribe el menú (SELECT sobre una ROM) |
+| `juegos/<ROM>.cfg` | `aspecto`, `filtro`, `recorte`, `escala` = valor o `global` | Ajustes de un juego (sección «Ajustes por juego»). Lo escriben el menú (SELECT sobre una ROM) y «Imagen» del menú de pausa |
 | `descargas.cfg` | `activar = si` y direcciones | Enciende las descargas experimentales (sección «Descargas») |
 | `overscan.cfg` | Uno, dos o cuatro números: `8`, `8 6` o `izq der arr abajo` | Recorte de la imagen en píxeles de la N64 (a 320 × 240) por lado. Por omisión `8 6`; `0` lo apaga; máximo 64. Lo escribe el menú (`0`, `8 6` o `16 12`) |
 | `video.cfg` | `salida = 720` o `1080`; `escala = auto` o `1` a `5` | Salida de video y escala interna del render de la N64 (se leen al arrancar). Sin archivo: 720p y escala automática (3×, 960 × 720; a 1080p, 4×, 1280 × 960). Si la tele o el XMB no aceptan 1080, usa el siguiente modo. Acepta el formato viejo de una línea (`1080` o `720`). Lo escribe el menú con «Resolución» y «Escala interna» |

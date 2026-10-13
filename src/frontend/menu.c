@@ -94,6 +94,26 @@ static const char *filter_key(int f)
 {
 	return filter_info[f >= 0 && f < MENU_FILTERS ? f : MENU_FILTER_SMOOTH].key;
 }
+
+const char *menu_filter_name(int f)
+{
+	return filter_name(f);
+}
+
+const char *menu_filter_credit(int f)
+{
+	return filter_info[f >= 0 && f < MENU_FILTERS ? f : MENU_FILTER_SMOOTH].credit;
+}
+
+const char *menu_aspect_name(int a)
+{
+	return aspect_name(a);
+}
+
+const char *menu_overscan_name(int o)
+{
+	return overscan_name(o);
+}
 static const char *const lang_key[MENU_LANGS] = { "es", "en", "fr", "de", "it", "pt" };
 static const char *const lang_label[MENU_LANGS] = { "Español", "English", "Français", "Deutsch", "Italiano", "Português" };
 
@@ -103,15 +123,20 @@ static const char *resolution_name(int r)
 }
 
 /* «Auto (3×)», «1× nativa», «4×»... */
-static const char *scale_name(const struct menu_settings *s, char *buf, size_t n)
+const char *menu_scale_name(int scale, int resolution, char *buf, size_t n)
 {
-	if (s->scale == 0)
-		snprintf(buf, n, "Auto (%d×)", s->resolution == MENU_RES_1080P ? 4 : 3);
-	else if (s->scale == 1)
+	if (scale == 0)
+		snprintf(buf, n, "Auto (%d×)", resolution == MENU_RES_1080P ? 4 : 3);
+	else if (scale == 1)
 		snprintf(buf, n, "1× nativa");
 	else
-		snprintf(buf, n, "%d×", s->scale);
+		snprintf(buf, n, "%d×", scale);
 	return buf;
+}
+
+static const char *scale_name(const struct menu_settings *s, char *buf, size_t n)
+{
+	return menu_scale_name(s->scale, s->resolution, buf, n);
 }
 
 static int lower(int c)
@@ -167,7 +192,7 @@ void menu_settings_parse(struct menu_settings *s, const char *text, size_t len)
 
 void menu_game_default(struct menu_game *g)
 {
-	g->aspect = g->filter = g->overscan = -1;
+	g->aspect = g->filter = g->overscan = g->scale = -1;
 }
 
 void menu_game_parse(struct menu_game *g, const char *text, size_t len)
@@ -200,6 +225,9 @@ void menu_game_parse(struct menu_game *g, const char *text, size_t len)
 			g->overscan = !strcmp(val, "apagado") ? MENU_OVERSCAN_OFF
 				      : !strcmp(val, "normal") ? MENU_OVERSCAN_NORMAL
 				      : !strcmp(val, "amplio") ? MENU_OVERSCAN_WIDE : -1;
+		} else if (!strcmp(key, "escala")) {
+			g->scale = !strcmp(val, "auto") ? 0
+				   : val[0] >= '1' && val[0] <= '0' + MENU_SCALE_MAX && !val[1] ? val[0] - '0' : -1;
 		}
 	}
 }
@@ -207,14 +235,18 @@ void menu_game_parse(struct menu_game *g, const char *text, size_t len)
 int menu_game_format(const struct menu_game *g, char *buf, size_t size)
 {
 	static const char *const crop[] = { "apagado", "normal", "amplio" };
-	return snprintf(buf, size, "# Ajustes de este juego (global = los de menu.cfg)\naspecto = %s\nfiltro = %s\nrecorte = %s\n",
+	static const char *const scale[] = { "auto", "1", "2", "3", "4", "5" };
+	_Static_assert(sizeof scale / sizeof scale[0] == MENU_SCALE_MAX + 1, "una clave por escala");
+	return snprintf(buf, size,
+			"# Ajustes de este juego (global = los de Opciones)\naspecto = %s\nfiltro = %s\nrecorte = %s\nescala = %s\n",
 			g->aspect == MENU_ASPECT_16_9 ? "16:9" : g->aspect == MENU_ASPECT_4_3 ? "4:3" : "global",
 			g->filter >= 0 && g->filter < MENU_FILTERS ? filter_key(g->filter) : "global",
-			g->overscan >= MENU_OVERSCAN_OFF && g->overscan <= MENU_OVERSCAN_WIDE ? crop[g->overscan] : "global");
+			g->overscan >= MENU_OVERSCAN_OFF && g->overscan <= MENU_OVERSCAN_WIDE ? crop[g->overscan] : "global",
+			g->scale >= 0 && g->scale <= MENU_SCALE_MAX ? scale[g->scale] : "global");
 }
 
 void menu_game_effective(const struct menu_settings *s, const struct menu_game *g, int *aspect, int *filter,
-			 int *overscan)
+			 int *overscan, int *scale)
 {
 	if (aspect)
 		*aspect = g->aspect >= 0 ? g->aspect : s->aspect;
@@ -222,6 +254,8 @@ void menu_game_effective(const struct menu_settings *s, const struct menu_game *
 		*filter = g->filter >= 0 ? g->filter : s->filter;
 	if (overscan)
 		*overscan = g->overscan >= 0 ? g->overscan : s->overscan;
+	if (scale)
+		*scale = g->scale >= 0 ? g->scale : s->scale;
 }
 
 void menu_video_parse(struct menu_settings *s, const char *text, size_t len)
@@ -489,8 +523,11 @@ static enum menu_action game_buttons(struct menu *m, uint32_t pressed)
 	}
 	/* Global → valor 0 → ... → último → Global (izquierda, al revés). */
 	int *v = m->game_sel == MENU_GAME_ASPECT ? &m->game.aspect
-		 : m->game_sel == MENU_GAME_FILTER ? &m->game.filter : &m->game.overscan;
-	int count = m->game_sel == MENU_GAME_ASPECT ? 2 : m->game_sel == MENU_GAME_FILTER ? MENU_FILTERS : 3;
+		 : m->game_sel == MENU_GAME_FILTER ? &m->game.filter
+		 : m->game_sel == MENU_GAME_SCALE ? &m->game.scale : &m->game.overscan;
+	int count = m->game_sel == MENU_GAME_ASPECT ? 2
+		    : m->game_sel == MENU_GAME_FILTER ? MENU_FILTERS
+		    : m->game_sel == MENU_GAME_SCALE ? MENU_SCALE_MAX + 1 : 3;
 	int slot = *v + 1;  /* 0 = global */
 	slot = (slot + (pressed & BIT(SALSA64_DS3_LEFT) ? count : 1)) % (count + 1);
 	*v = slot - 1;
@@ -910,6 +947,10 @@ static const char *game_value(const struct menu *m, int row)
 	case MENU_GAME_ASPECT:   return m->game.aspect < 0 ? "Global" : aspect_name(m->game.aspect);
 	case MENU_GAME_FILTER:   return m->game.filter < 0 ? "Global" : filter_name(m->game.filter);
 	case MENU_GAME_OVERSCAN: return m->game.overscan < 0 ? "Global" : overscan_name(m->game.overscan);
+	case MENU_GAME_SCALE: {
+		static char buf[24];
+		return m->game.scale < 0 ? "Global" : menu_scale_name(m->game.scale, m->set.resolution, buf, sizeof buf);
+	}
 	}
 	return NULL;
 }
@@ -922,15 +963,19 @@ static void game_panel(const struct menu *m, float px, float py, float pw, float
 	float x = px + 26.0f, y = py + 24.0f;
 	uint32_t tmax = (uint32_t)((pw - 48.0f) / (RSXKIT_FONT_W * tscale));
 	uint32_t lmax = (uint32_t)((pw - 48.0f) / (RSXKIT_FONT_W * dscale));
-	int a, f, o;
-	menu_game_effective(&m->set, &m->game, &a, &f, &o);
+	int a, f, o, s;
+	char sbuf[24];
+	menu_game_effective(&m->set, &m->game, &a, &f, &o, &s);
 	stext(x, y, m->game_title ? m->game_title : "Ajustes", tscale, 0xFFFFFFu, ca, tmax);
 	y += 56.0f;
 	stext(x, y, "Ajustes de este juego", dscale, C_DIM, ca, lmax);
 	y += 44.0f;
-	static const char *const names[] = { "Aspecto", "Filtro", "Recorte del borde" };
-	for (int i = 0; i < 3; i++) {
-		const char *v = i == 0 ? aspect_name(a) : i == 1 ? filter_name(f) : overscan_name(o);
+	static const char *const names[] = { "Aspecto", "Filtro", "Recorte del borde", "Escala interna" };
+	for (int i = 0; i < 4; i++) {
+		const char *v = i == 0   ? aspect_name(a)
+				: i == 1 ? filter_name(f)
+				: i == 2 ? overscan_name(o)
+					 : menu_scale_name(s, m->set.resolution, sbuf, sizeof sbuf);
 		stext(x, y, names[i], 1.3f, C_DIM, ca, 0);
 		stext(x, y + 16.0f, v, dscale, m->game_sel == i ? C_ACCENT : C_TEXT, ca, lmax);
 		y += 52.0f;
@@ -941,10 +986,11 @@ static void game_panel(const struct menu *m, float px, float py, float pw, float
 
 static void game_column(const struct menu *m, float x, float W, float H, float a)
 {
-	static const char *const titles[] = { "Aspecto", "Filtro", "Recorte del borde", "Volver" };
+	static const char *const titles[] = { "Aspecto", "Filtro", "Recorte del borde", "Escala interna", "Volver" };
 	static const char *const subs[] = { "Forma de la imagen", "Suave, nítida o con líneas", "Overscan de este juego",
-					    "A la lista de juegos" };
-	static const char *const glyphs[] = { "▶", "─", "□", "◀" };
+					    "Dibujo interno", "A la lista de juegos" };
+	static const char *const glyphs[] = { "▶", "─", "□", "▲", "◀" };
+	_Static_assert(sizeof titles / sizeof titles[0] == MENU_GAME_ROWS, "una fila por ajuste");
 	for (int i = 0; i < MENU_GAME_ROWS; i++) {
 		float d = i - m->game_pos;
 		struct row r = { titles[i], subs[i], 2, glyphs[i], 0, game_value(m, i) };
