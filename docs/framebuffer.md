@@ -410,7 +410,38 @@ y `SALSA64_TEXSTAT` lo cuenta por ventana; `SALSA64_NO_FBTEX=1` vuelve a
 decodificarlas todas en la HLE. Mediciones en la PS3 en `docs/perf-log.md`;
 memoria en `docs/memory-budget.md`.
 
+## La z image en la RDRAM (2026-10-12)
+
+**Donkey Kong 64** lee la profundidad desde el CPU: cada cuadro mira la z
+image (`5d5600`, 320 × 240) en el punto de la pantalla donde se ve al
+jugador y a ±40 píxeles (rutina en `80700ae4`: el valor de 16 bits con 3
+bits de exponente y 11 de mantisa) y, si algo lo tapa 21 cuadros seguidos,
+recoloca la cámara detrás de él. Como la profundidad solo vivía en el RSX,
+en la RDRAM había ceros (lo más cerca posible): el juego veía al jugador
+tapado siempre y la cámara iba y volvía cada 21 cuadros.
+
+El borrado de la z image (FILLRECT en modo FILL con la color image en la
+z image, `GFX_OP_ZCLEAR`) se escribe ahora también en la RDRAM, como lo deja
+el RDP: `salsa64_gfx_rdram_fills` (`src/rsp/gfx/sync.c`) recorre la salida
+de la tarea en su `finish` (backend síncrono y el del SPE, en el hilo del
+CPU) y pone el color de relleno de 32 bits por dirección (sirve para 8, 16
+y 32 bits por píxel), recortado al ancho de la imagen. Va antes de entregar
+la tarea a la presentación, así que las copias esperadas de esa misma
+tarea (Zelda copia el cuadro a la dirección del z-buffer en la pausa) la
+pisan después, en el mismo orden que en el hardware. Invalida el código
+recompilado del tramo y no avisa a los efectos de framebuffer
+(`rdram_written` es para DMA).
+
+Lo que se dibuja no llega: la z image de la RDRAM queda como recién
+borrada, y para el juego nada tapa al jugador (en el hardware, un muro sí).
+
 ## Pendiente
+
+- Profundidad de lo dibujado en la z image de la RDRAM (ver «La z image
+  en la RDRAM»): rasterizarla en un SPE, como la referencia de software de
+  otros emuladores, o copiarla del RSX. Hoy los juegos que la leen la ven
+  siempre borrada (Donkey Kong 64: la cámara no se recoloca por oclusión;
+  posible el destello del sol de Zelda aun detrás de un muro).
 
 - Polígono transitorio (~1 s) al abrir la pausa de Zelda en la PS3:
   confirmar que las cuatro profundidades lo quitan.

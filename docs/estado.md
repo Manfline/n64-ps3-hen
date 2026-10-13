@@ -1,5 +1,70 @@
 # Estado
 
+## 2026-10-12 (noche) — Donkey Kong 64: la cámara que se acerca y se aleja leía una z image vacía (rama `focused-hermann-680a6f`, paquete SLSA00105 «Salsa64 cámara»)
+
+Síntoma (PS3 real, v0.2.0, DK64 al 100 %): la cámara 3D se acerca y se
+aleja sin parar, también en espacios abiertos; el HUD queda quieto.
+
+Diagnóstico, desde el estado que el autor guardó en la escena (túnel,
+campo 4714):
+- **No es el recompilador ni los gemelos por Status.FR.** El intérprete
+  del host hace lo mismo, y `--lockstep` desde el estado (qemu, 186 campos,
+  más de cuatro vaivenes) no tiene diferencias; en esa escena no hay
+  gemelos ni salidas por FR (también lo decía el log de la PS3).
+- Lo que oscila es el ojo de la cámara (`449990`): DK (actor `449100`)
+  está quieto y el ojo avanza hacia él durante 21 cuadros (42 campos) y
+  vuelve de golpe al punto de partida, con el control suelto o empujado.
+- El juego lee la **z image de la RDRAM** (`5d5600`, 320 × 240) donde se
+  ve a DK y a ±40 píxeles (`80700ae4`: valor de 16 bits con exponente de 3
+  y mantisa de 11) y, si lo ve tapado 21 cuadros seguidos (contador de la
+  cámara en `806210d0`), recoloca la cámara detrás de él (`80620628`). La
+  HLE dibuja en el RSX y la z image de la RDRAM estaba entera en 0 (lo más
+  cerca posible): DK siempre tapado. Llenándola a mano con 0xFFFC la cámara
+  converge y se queda quieta.
+- **Ya estaba antes de v0.2.0** (desde la primera HLE de la Fase 2: el
+  borrado de la Z nunca llegó a la RDRAM); al 20 % el vaivén iba cinco
+  veces más lento.
+
+Arreglo (docs/framebuffer.md, «La z image en la RDRAM»): el borrado de la
+z image (FILLRECT en modo FILL sobre ella, `GFX_OP_ZCLEAR`) se escribe
+también en la RDRAM, como lo deja el RDP: `salsa64_gfx_rdram_fills`
+(`src/rsp/gfx/sync.c`) en el `finish` del backend síncrono y del SPE, antes
+de entregar la tarea a la presentación (las copias esperadas de la misma
+tarea quedan encima, como en el hardware). `GFX_OP_ZCLEAR` lleva ahora el
+tamaño de píxel y el ancho de la color image y el color de 32 bits.
+Pruebas: `gfx_zclear_fills_rdram` (color por dirección, bordes sin alinear,
+recorte al ancho, nada fuera del rectángulo) y `gfx_zclear_rdram_at_finish`
+(se escribe al terminar la tarea, no al arrancarla).
+
+Efecto en otros juegos (host, capturas cada 300 campos antes y después,
+con los guiones de docs/pads): Mario Kart 64, Super Mario 64, Perfect
+Dark (intro) y Banjo-Kazooie, idénticas. Zelda OoT decide si dibuja el
+resplandor de las luces puntuales leyendo la z image en su posición; antes
+las veía tapadas y ahora destapadas: las antorchas del castillo del intro
+tienen su halo, el resplandor de Navi sale completo (como en la consola
+cuando nada los tapa) y cambian las motas del bosque Kokiri. GoldenEye en
+Dam diverge un poco desde que empieza la misión (la vista se desplaza
+menos de un píxel; mismo motivo), sin cambio visible. Lo dibujado no llega
+a la z image de la RDRAM, así que una luz detrás de un muro también
+brilla, y en DK64 la cámara no se recoloca cuando un muro tapa de verdad a
+DK (pendiente en docs/framebuffer.md). Super Smash Bros. (el KO) no se
+arregla con esto: ver su entrada.
+
+Verificado:
+- [x] Host: desde el estado de la consola, la cámara converge a su lugar
+      en el túnel y se queda quieta (antes, vaivén cada 42 campos).
+- [x] `test-host` 439/439 (Docker, ASan/UBSan); `test-rec` (unitarias en
+      los cinco modos 439/439, nemu64-test en su línea base de 433, vitest,
+      estados); `test-roms` (nemu64-test 433 / 136 con LLE, vitest,
+      savetest, gfxtest ×3, estados, audiotest); `tools/build.sh` sin
+      avisos.
+- [x] `--lockstep` de DK64 desde el estado con el arreglo (qemu, 186
+      campos, también la RDRAM): sin diferencias.
+- [x] **PS3 real** (paquete «Salsa64 cámara», SLSA00105, 54798d9; el
+      autor, 2026-10-12): la cámara de DK64 resuelta (estado de la ranura 0
+      y un espacio abierto), a 59,8 campos/s con 7,0 ms de emulación por
+      campo, como antes; en Zelda, Navi se ve completo.
+
 ## 2026-10-12 (noche) — Quitarle trabajo al PPE: medición del hilo 1 y tarea JPEG en un SPE, sin tirón (rama `determined-grothendieck`, paquete SLSA00103 «Salsa64 PPE»)
 
 Pasos 1 y 2 de «Quitarle trabajo al PPE» (entrada del 2026-10-11). Medido en
@@ -131,6 +196,15 @@ más los triángulos (y alfa siempre 1); el hardware deja 0xFFFC con la
 silueta encima. Arreglo pendiente: con ZCLEAR sobre una color image del
 mismo destino, rellenar también la superficie de color con el color de
 relleno (host y PS3) y no forzar alfa 1 en la copia; prueba en test_raster.
+**Probado y no basta** (2026-10-12, con el borrado de la Z ya escrito en la
+RDRAM, entrada de la cámara de DK64): en el host, la demo con
+`--gfx-frame` se sigue parando (1373 tareas a los 1500 campos) también
+rellenando la superficie de color y copiando 0xFFFC sin alfa forzado; solo
+saltando la copia de `0a3940/320` sigue (1432). Lo que rompe es lo que el
+RSX dibuja ahí (la silueta), no el borrado: mirar qué escriben esos 128
+triángulos en el RDP (¿profundidades como color?). Saltar la copia de lo
+que se borró como Z en la misma tarea no sirve en general: la pausa de
+Zelda borra su Z y copia el cuadro a esa dirección en la misma tarea.
 
 ## 2026-10-12 (noche) — Star Fox 64: la «estela» del menú es del juego (rama `infallible-wozniak-aa210c`)
 

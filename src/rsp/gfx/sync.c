@@ -4,6 +4,9 @@
  */
 #include <string.h>
 
+#include "core/endian.h"
+#include "cpu/rec.h"
+#include "cpu/vr4300.h"
 #include "rsp/gfx/backend.h"
 #include "rsp/gfx/hle.h"
 
@@ -33,6 +36,51 @@ uint32_t salsa64_gfx_task_flags(const struct gfx_result *res)
 	return f;
 }
 
+/* Un relleno en modo FILL: cada byte de la imagen toma el byte del color
+ * de 32 bits que le toca por su dirección (el RDP repite el color en
+ * palabras de 64 bits), así sirve para píxeles de 8, 16 y 32 bits. */
+static void fill_rdram(const struct salsa64_bus *bus, const struct gfx_zclear *z)
+{
+	static const uint8_t bpp[4] = { 0, 1, 2, 4 };
+	uint32_t width = z->h.c & 0xFFFF, bytes = bpp[(z->h.c >> 16) & 3];
+	uint32_t x0 = z->rect[0], x1 = z->rect[2] < width ? z->rect[2] : width;
+	if (!bytes || x0 >= x1)
+		return;
+	uint32_t lo = ~0u, hi = 0;
+	for (uint32_t y = z->rect[1]; y < z->rect[3]; y++) {
+		uint32_t row = (z->h.a & 0x00FFFFFF) + (y * width + x0) * bytes, len = (x1 - x0) * bytes;
+		if (row >= bus->rdram_size || len > bus->rdram_size - row)
+			break;
+		uint32_t a = row, end = row + len;
+		for (; a < end && (a & 3); a++)
+			bus->rdram[a] = (uint8_t)(z->fill >> (24 - 8 * (a & 3)));
+		for (; a + 4 <= end; a += 4)
+			salsa64_wr32(bus->rdram + a, z->fill);
+		for (; a < end; a++)
+			bus->rdram[a] = (uint8_t)(z->fill >> (24 - 8 * (a & 3)));
+		lo = row < lo ? row : lo;
+		hi = end;
+	}
+	/* Lo escribe el RDP, no un DMA: no es un aviso para los efectos de
+	 * framebuffer (rdram_written), solo para el código recompilado. */
+	if (hi > lo && bus->cpu && bus->cpu->rec)
+		salsa64_rec_invalidate(bus->cpu->rec, lo, hi - lo);
+}
+
+void salsa64_gfx_rdram_fills(const struct salsa64_bus *bus, const struct gfx_job *job,
+			     const struct gfx_result *res)
+{
+	const uint8_t *cmd = (const uint8_t *)(uintptr_t)job->cmd_ea;
+	for (uint32_t off = 0; off + sizeof(struct gfx_cmd) <= res->cmd_bytes;) {
+		const struct gfx_cmd *c = (const struct gfx_cmd *)(cmd + off);
+		if (c->op == GFX_OP_END || c->size < sizeof(struct gfx_cmd))
+			break;
+		if (c->op == GFX_OP_ZCLEAR && c->size >= sizeof(struct gfx_zclear))
+			fill_rdram(bus, (const struct gfx_zclear *)c);
+		off += c->size;
+	}
+}
+
 static void sync_start(void *ctx, const struct salsa64_task *task, enum salsa64_gbi gbi)
 {
 	struct salsa64_gfx_sync *s = ctx;
@@ -52,6 +100,7 @@ static uint32_t sync_finish(void *ctx)
 	if (!s->pending)
 		return 0;
 	s->pending = false;
+	salsa64_gfx_rdram_fills(s->bus, &s->job, &s->res);
 	s->sink.done(s->sink.ctx, &s->job, &s->res);
 	return salsa64_gfx_task_flags(&s->res);
 }
@@ -103,6 +152,7 @@ static uint32_t sync_dpc_run(void *ctx, uint32_t start, uint32_t end, const uint
 	}
 	s->sink.acquire(s->sink.ctx, &job);
 	gfx_run(s->state, &job, &res);
+	salsa64_gfx_rdram_fills(s->bus, &job, &res);
 	s->sink.done(s->sink.ctx, &job, &res);
 	s->dpc_runs++;
 	s->dpc_sum.commands += res.commands;
