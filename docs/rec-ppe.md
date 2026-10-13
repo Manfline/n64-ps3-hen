@@ -858,41 +858,95 @@ archivo (truncado, un byte cambiado, bytes de más, otro juego).
      nada: el enlace es un `b` y lo que importa es que las dos piezas
      queden en líneas y páginas vecinas. Con la huella se comprueba que el
      sucesor que hay hoy en el destino es el del perfil.
-   - *Traducción por adelantado en un SPE.* La traducción es cálculo puro
-     (palabras MIPS de entrada, palabras PPC de salida, más el estado que
-     fija la forma del bloque: FR, segmento, página de la ktlb). Con el
-     perfil se sabe qué bloques van a correr (los calientes y sus
-     sucesores): un SPE podría traducirlos en lote mientras el PPE juega y
-     dejar el código listo para que el despachador solo lo enganche. Pide
-     mover el emisor a código compilable para SPU (sin punteros a
-     `struct salsa64_rec`, direcciones de las rutinas del preámbulo como
-     parámetros) y resolver en el PPE lo que depende del estado vivo
-     (enlaces, ktlb). Es el paso grande; los dos anteriores no lo necesitan.
+   - *Traducción fuera del hilo de emulación.* La traducción es cálculo
+     puro (palabras MIPS de entrada, palabras PPC de salida, más el estado
+     que fija la forma del bloque: FR, segmento, palabra de la ktlb que
+     compara la entrada, opciones) y con el perfil se sabe qué bloques van
+     a correr (los calientes y sus sucesores). Dónde hacerla: ver el punto
+     1 (el hilo 1 del PPE, antes que un SPE).
 
-1. **Traducir por adelantado los bloques calientes cuando su código llega a
-   la RDRAM.** Hoy un bloque se compila la primera vez que se ejecuta: al
-   entrar a una zona nueva (Zelda al cambiar de sala, DK64 al cargar un
-   nivel) se compilan cientos de bloques en los primeros campos, 7–10 µs
-   cada uno, y el campo se va a 30–50 ms (tirón). Con el perfil se sabe de
-   antemano qué bloques van a correr y cómo son: cuando un DMA del PI
-   escribe la RDRAM (`salsa64_bus_rdram_written` ya avisa al recompilador
-   para invalidar), se recorren las entradas del perfil cuya dirección cae
-   en páginas que ese DMA pudo traer (para KSEG0, la física es la virtual
-   sin el segmento; para código mapeado, solo cuando la TLB ya traduce esa
-   página: en el refill, `salsa64_rec_x_tlb_written` sabe qué páginas
-   entran) y, si la huella de lo que hay ahora en memoria coincide con la
-   de la entrada, se compila el bloque en ese momento, en la zona que le
-   toque. Para no cargar el DMA (que ocurre dentro del campo) con cientos
-   de compilaciones, se encolan las candidatas y se compilan de a pocas por
-   campo mientras el campo va sobrado (el frontend sabe cuánto duró el
-   anterior). La huella se recalcula al compilar, así que un bloque que
-   llegó distinto no se toca. Índice que hace falta: las entradas del
-   perfil ordenadas por página virtual (un `uint16_t` por entrada,
-   ordenado al cargar). Riesgo: compilar bloques que esta sesión no va a
-   ejecutar (gasto de caché y tiempo); se limita a las entradas calientes o
-   de puntaje mayor que un umbral.
+1. **Traducir por adelantado en el hilo 1 del PPE.** Hoy un bloque se
+   compila la primera vez que se ejecuta: al entrar a una zona nueva (Zelda
+   al cambiar de sala, DK64 al cargar un nivel) se compilan cientos de
+   bloques en los primeros campos, 7–10 µs cada uno, y el campo se va a
+   30–50 ms (tirón). Medido en la PS3 el 2026-10-12 (rama del PPE,
+   GoldenEye en la presa): el hilo 1 (presentación) duerme ~85 % del tiempo
+   y 1 ms de trabajo suyo le cuesta ~0,13 ms al hilo 0 (casi lineal hasta
+   3 ms por campo, sin salto por la L2); el 79 % del hilo 0 es código
+   nativo del recompilador. Así que el lugar natural para el trabajo de
+   fondo del JIT es el hilo 1, no un SPE (que pediría un emisor compilable
+   para SPU): traducir 100 bloques ahí cuesta ~1 ms del hilo 1 y ~0,13 ms
+   del hilo 0, contra ~1 ms del hilo 0 si los compila él.
+   - *Qué se traduce.* Cuando un DMA del PI escribe la RDRAM
+     (`salsa64_bus_rdram_written` ya avisa al recompilador para invalidar),
+     el hilo 0 recorre las entradas del perfil cuya dirección cae en
+     páginas que ese DMA pudo traer (para KSEG0, la física es la virtual
+     sin el segmento; para código mapeado, solo cuando la TLB ya traduce esa
+     página: en el refill, `salsa64_rec_x_tlb_written` sabe qué páginas
+     entran), compara la huella de lo que hay ahora en memoria con la de la
+     entrada y, si coincide, encola una petición: vpc, física, segmento,
+     FR, la palabra de la ktlb esperada y **una copia de las palabras MIPS**
+     (hasta 64), para que el hilo 1 nunca lea la RDRAM, que el hilo 0 puede
+     estar escribiendo. Índice que hace falta: las entradas del perfil
+     ordenadas por página virtual (un `uint16_t` por entrada, ordenado al
+     cargar). Se limita a las calientes o de puntaje mayor que un umbral,
+     para no gastar caché y tiempo en bloques que esta sesión no corre.
+   - *Cómo traduce el hilo 1.* Con un contexto y búferes de compilación
+     propios (hoy `static struct ctx` en rec_emit.c y `rec->buf[]`: pasan a
+     ser del contexto, ~200 KB más) y sin tocar nada vivo del recompilador:
+     ni mapa, ni enlaces, ni banderas, ni ktlb, ni ids. Lo que el emisor
+     lee hoy de `rec` son constantes de la sesión (rutinas del preámbulo,
+     direcciones de `blocks[]`, `hits[]` y los sitios del perfil, opciones)
+     y el estado de la petición. Entrega las palabras PPC con sus
+     correcciones (`fixups`) sin resolver, porque la base en la caché la
+     decide el hilo 0 al instalar (y con ella `calls_near`: o se traduce
+     siempre con `mtctr` para lo encolado, o se resuelven las llamadas al
+     instalar como el resto de los fixups).
+   - *Cómo instala el hilo 0.* Entre campos (o en el despachador cuando
+     va sobrado): toma un bloque terminado de la cola (un productor, un
+     consumidor, barreras `lwsync` como en lib/spukit), comprueba que la
+     huella de la memoria sigue siendo la de la petición y que la página
+     traduce igual, pide id y lugar (`make_room`), resuelve los fixups con
+     la base, copia, `salsa64_rec_sync` (dcbst/sync/icbi/isync, en el hilo
+     que escribió) y registra como `new_block`. Si la huella cambió, se
+     descarta. Todo lo que puede chocar con la invalidación pasa por el
+     hilo 0, así que no hay invalidación concurrente: un bloque encolado no
+     existe para el recompilador hasta que se instala.
+   - *Riesgos.* (1) Invalidación concurrente: resuelta con la copia de las
+     palabras y la comprobación al instalar; después de instalado, la
+     invalidación normal. (2) Enlaces: solo el hilo 0 parchea; un bloque
+     instalado se enlaza cuando se ejecuta, como hoy. (3) Caché de
+     instrucciones: el `icbi` lo hace el hilo 0 sobre código que nadie
+     ejecuta todavía; nunca se escribe código que el hilo 0 pueda estar
+     ejecutando. (4) Costo por SMT en el hilo 0: 0,13 ms por ms del hilo 1;
+     limitar las traducciones por campo. (5) Memoria: contexto y búferes
+     del hilo 1 y la cola (unas decenas de peticiones de hasta 64 palabras).
+   - *Primer uso:* la misma traducción de hoy, solo movida de hilo, con la
+     cola y la validación al instalar; quita los tirones de entrar a zonas
+     nuevas. Es el paso previo al siguiente.
+
+1b. **JIT por niveles.** Con la traducción de fondo en pie, el hilo 0
+   traduce rápido (nivel 0: lo de hoy, o incluso sin superbloques ni FPU en
+   línea para los fríos) y el hilo 1 retraduce los bloques calientes
+   (los del perfil, y los que pasen un umbral de `hits[]` en la sesión) con
+   lo que cuesta tiempo de compilación: asignación de registros entre
+   bloques (el sucesor probable compilado sabiendo qué registros deja el
+   predecesor en el PPE, sin escribir ni recargar `cpu->gpr`: trazas de
+   dos o tres bloques), pistas de salto y sucesor contiguo del punto 0,
+   desenrollado de copias. La versión nueva se instala en otro lugar de la
+   zona caliente y se **cambia la entrada de forma atómica**: la palabra
+   `blocks[id].code` (32 bits, una escritura) y, al deshacer y rehacer los
+   enlaces entrantes como en `unlink_all`, el `b` de cada sitio (otra
+   escritura de 32 bits, con `icbi`); la versión vieja sigue siendo válida
+   para quien ya esté en ella y muere con el tramo. Riesgos: los mismos de
+   arriba más (6) dos versiones del mismo bloque vivas a la vez (como los
+   gemelos por FR: ids distintos, mismos bytes, `kill_block` tiene que matar
+   a las dos), y (7) los contadores (`hits[id]`, sitios del perfil): la
+   versión nueva hereda la entrada del perfil y los sitios por (k, clase,
+   destino), así las cuentas siguen.
 2. **Optimizar más fuerte lo caliente y más compacto lo frío.** Hoy cada
-   bloque se emite igual. Con la clase conocida al compilar:
+   bloque se emite igual. Con la clase conocida al compilar (y, con el JIT
+   por niveles, con el hilo 1 pagando el tiempo de lo caliente):
    - Frío: sin superbloques ni saltos internos (menos salidas duplicadas y
      caminos fríos), sin FPU en línea (al intérprete con una llamada: ~55
      palabras menos por operación), sin camino rápido de datos mapeados
