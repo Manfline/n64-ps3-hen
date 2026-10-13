@@ -3,6 +3,10 @@
 #   cola NOBITS de NOBITS_MB (memsz > filesz) al final del segmento.
 # PRUEBA=mecanismos: los 8 mecanismos de memoria de la primera corrida, con
 #   una zona de nops de 64 KB.
+# PRUEBA=cfw: la prueba para usuarios (CFW o HEN) de docs/jit-cfw.md, con
+#   pantalla, la prueba de la caché de la aplicación sobre su misma caché y
+#   las escrituras por PS3MAPI y por la syscall 905 (cfw.c). Paquete aparte:
+#   «Salsa64 JIT test», build/salsa64-jit-test/.
 # Ver docs/jit-ppe.md.
 PRUEBA    ?= cache
 CAVE_MB   ?= 32
@@ -15,7 +19,18 @@ SRCS    := main.c
 COMMON  := src/platform/ps3/log.c
 LIBS    := -lnet -lsysmodule -lsysutil -lrt -llv2 -lm
 
-ifeq ($(PRUEBA),cache)
+ifeq ($(PRUEBA),cfw)
+PROGRAM := salsa64-jit-test
+TITLE   := Salsa64 JIT test
+APPID   := SLSA00118
+SRCS    := cfw.c
+COMMON  := src/platform/ps3/log.c src/platform/ps3/rec_cache.c
+LIBS    := -lrsx -lgcm_sys -lio -lsysutil -lnet -lsysmodule -lrt -llv2 -lm
+RSXKIT  := 1
+R       := ../../..
+ICON0   := $(R)/assets/ps3/ICON0.PNG
+LDFLAGS := -T $(abspath $(R))/mk/rec-cache.ld -T lv2.ld
+else ifeq ($(PRUEBA),cache)
 CFLAGS  := -DJIT_PRUEBA_CACHE -DJIT_CAVE_MB=$(CAVE_MB) -DJIT_NOBITS_MB=$(NOBITS_MB)
 # Con -T, gcc ya no agrega lv2.ld: se pasa a mano y después del script con
 # INSERT, que debe ir antes del script al que se inserta.
