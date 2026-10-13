@@ -113,6 +113,7 @@
 #include "cpu/rec.h"
 #include "host/rec_host.h"
 #include "frontend/savefile.h"
+#include "interp.h"
 #include "raster.h"
 #include "rdp/targets.h"
 #include "rsp/gfx/backend.h"
@@ -899,6 +900,7 @@ static void gfx_acquire(void *ctx, struct gfx_job *job)
 	}
 	job->task = gfx.tasks + 1;
 	job->done_task = gfx.tasks;
+	interp_task_begin(&gfx_state, n64.bus.vi.fields);
 	/* Como la PS3: el rasterizador lee de sus imágenes lo que viene de un
 	 * destino reciente y decodifica él lo que al final no pueda leer. */
 	if (gfx.raster && raster_fbfx >= 1 && !getenv("SALSA64_NO_FBTEX"))
@@ -996,7 +998,9 @@ static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_resu
 	if (gfx.raster) {
 		raster_field = n64.bus.vi.fields;
 		raster_trace_fb = trace_fb && tracing();
+		interp_before_raster();
 		raster_task(job, res);
+		interp_after_raster(job, res, n64.bus.vi.fields);
 	}
 	if (trace_gfx_left && n64.bus.vi.fields > (trace_from ? trace_from : 500)) {
 		trace_gfx_left--;
@@ -1930,7 +1934,7 @@ static bool dump_frame(const char *path)
 /* Opciones largas sin letra (códigos fuera de ASCII). */
 enum { OPT_REC = 0x100, OPT_LOCKSTEP, OPT_PAD, OPT_TRACE_FROM, OPT_TRACE_FAULTS, OPT_RAM_DUMP, OPT_TRACE_AUDIO,
        OPT_FRAME_EVERY, OPT_LLE, OPT_LLE_SPEED, OPT_LLE_CHECK, OPT_LLE_CHECK_JPEG, OPT_POKE, OPT_TRACE_FB, OPT_STATE_SAVE,
-       OPT_STATE_LOAD, OPT_FIELDS, OPT_PROFILE };
+       OPT_STATE_LOAD, OPT_FIELDS, OPT_PROFILE, OPT_INTERP, OPT_INTERP_K, OPT_INTERP_DECIMATE, OPT_INTERP_DISP };
 
 /* ---- Estados guardados (--state-save, --state-load) ------------------------- */
 
@@ -2058,7 +2062,12 @@ static void usage(FILE *out)
 	      "                        compararlas con la HLE (rsp/jpeg)\n"
 	      "      --state-save C:ARCHIVO  guardar un estado al terminar el campo C (hasta 8)\n"
 	      "      --state-load ARCHIVO    cargar un estado después del arranque y seguir desde ahí\n"
-	      "      --fields N        terminar (código 0) al acabar el campo N del VI\n", out);
+	      "      --fields N        terminar (código 0) al acabar el campo N del VI\n"
+	      "      --interp DIR      prototipo de interpolación de cuadros (docs/interpolacion.md): desde\n"
+	      "                        --trace-from, cuadros intermedios por geometría y por imagen en DIR\n"
+	      "      --interp-k K      campos por cuadro del juego (3: intermedios en 1/3 y 2/3)\n"
+	      "      --interp-decimate 1 de cada K tareas es el cuadro del juego; las demás, la verdad\n"
+	      "      --interp-disp PX  desplazamiento por cuadro (píxeles de la N64) que ya es un corte (120)\n", out);
 }
 
 int main(int argc, char **argv)
@@ -2097,6 +2106,10 @@ int main(int argc, char **argv)
 		{ "state-save", required_argument, NULL, OPT_STATE_SAVE },
 		{ "state-load", required_argument, NULL, OPT_STATE_LOAD },
 		{ "fields", required_argument, NULL, OPT_FIELDS },
+		{ "interp", required_argument, NULL, OPT_INTERP },
+		{ "interp-k", required_argument, NULL, OPT_INTERP_K },
+		{ "interp-decimate", no_argument, NULL, OPT_INTERP_DECIMATE },
+		{ "interp-disp", required_argument, NULL, OPT_INTERP_DISP },
 		{ "profile", required_argument, NULL, OPT_PROFILE },
 		{ "trace-gfx", required_argument, NULL, 'Q' },
 		{ "trace-fb", no_argument, NULL, OPT_TRACE_FB },
@@ -2116,6 +2129,7 @@ int main(int argc, char **argv)
 	const char *wav_path = NULL;
 	const char *dump_path = NULL, *ram_path = NULL;
 	uint32_t frame_every = 0;
+	struct interp_opts iopt = { .k = 3, .max_disp = 120.0f, .block = 8, .range = 8 };
 
 	while ((c = getopt_long(argc, argv, "c:u:f:qrh", opts, NULL)) != -1) {
 		switch (c) {
@@ -2197,6 +2211,10 @@ int main(int argc, char **argv)
 		}
 		case OPT_STATE_LOAD: state_load_path = optarg; break;
 		case OPT_FIELDS: stop_field = (uint32_t)strtoul(optarg, NULL, 0); break;
+		case OPT_INTERP: iopt.dir = optarg; gfx.raster = true; break;
+		case OPT_INTERP_K: iopt.k = (unsigned)strtoul(optarg, NULL, 0); break;
+		case OPT_INTERP_DECIMATE: iopt.decimate = true; break;
+		case OPT_INTERP_DISP: iopt.max_disp = strtof(optarg, NULL); break;
 		case OPT_PROFILE: profile_path = optarg; break;
 		case 'D': dump_path = optarg; break;
 		case 'A': wav_path = optarg; break;
@@ -2257,6 +2275,8 @@ int main(int argc, char **argv)
 	const struct salsa64_gfx_sink sink = { NULL, gfx_acquire, gfx_done };
 	n64.bus.rdram_written = rdram_written;
 	salsa64_gfx_sync_init(&gfx_sync, &gfx_state, &n64.bus, &sink);
+	iopt.from_field = trace_from;
+	interp_init(&iopt);
 	salsa64_rsp_set_gfx(&n64.bus, &gfx_sync.backend);
 	if (getenv("SALSA64_GFX_LATE")) {
 		gfx_late.polls = (unsigned)strtoul(getenv("SALSA64_GFX_LATE"), NULL, 0);
@@ -2563,6 +2583,7 @@ int main(int argc, char **argv)
 		free(rom);
 		return 3;
 	}
+	interp_report();
 	if (getenv("SALSA64_PS3_RB")) {
 		extern uint32_t ps3_rb, ps3_rb_old;
 		fprintf(stderr, "salsa64-run: ps3-rb: la regla de copias de la PS3 pediría %u (con el ancho del último origen "

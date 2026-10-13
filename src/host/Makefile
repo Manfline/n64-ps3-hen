@@ -11,7 +11,7 @@ OUT  ?= $(ROOT)/build/host
 CC      ?= gcc
 SAN     ?= -fsanitize=address,undefined -fno-sanitize-recover=undefined
 CFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffp-contract=off -fno-math-errno \
-           -I$(ROOT)/src $(SAN) $(EXTRA_CFLAGS)
+           -DSALSA64_GFX_INTERP -I$(ROOT)/src $(SAN) $(EXTRA_CFLAGS)
 LDFLAGS := $(SAN) $(EXTRA_LDFLAGS)
 LDLIBS  := -lm -pthread
 

@@ -53,6 +53,7 @@ static uint32_t task_no;
 static uint32_t vi_field;  /* campos del VI con imagen (rdp_targets_present) */
 
 bool raster_trace_fb;
+bool raster_clip_w;
 uint32_t raster_field;
 int raster_fbfx = 2;
 static struct rdp_vi_ring vi_ring;
@@ -376,6 +377,56 @@ static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, 
 }
 
 /* Como rdp.c: ¿los dibujos hasta el próximo TARGET son todos rellenos? */
+/* Con raster_clip_w (cuadros inventados, interp.c): el triángulo se recorta
+ * contra w = ε en vez de descartarse si algún vértice queda detrás. Los
+ * atributos de salida son lineales en coordenadas de recorte. */
+static void lerp_out(struct gfx_vertex *o, const struct gfx_vertex *a, const struct gfx_vertex *b, float t)
+{
+	o->x = a->x + (b->x - a->x) * t;
+	o->y = a->y + (b->y - a->y) * t;
+	o->z = a->z + (b->z - a->z) * t;
+	o->w = a->w + (b->w - a->w) * t;
+	o->s = a->s + (b->s - a->s) * t;
+	o->t = a->t + (b->t - a->t) * t;
+	o->r = (uint8_t)(a->r + (b->r - a->r) * t + 0.5f);
+	o->g = (uint8_t)(a->g + (b->g - a->g) * t + 0.5f);
+	o->b = (uint8_t)(a->b + (b->b - a->b) * t + 0.5f);
+	o->a = (uint8_t)(a->a + (b->a - a->a) * t + 0.5f);
+	o->pad = 0;
+}
+
+static void draw_triangle_clip(const struct gfx_draw *d, const struct gfx_vertex *v, const struct texsrc src[2],
+			       uint32_t *tg_rgb, bool q5, struct depth *zb, float prim_z)
+{
+	const float eps = 1e-3f;
+	if (!raster_clip_w || (v[0].w > eps && v[1].w > eps && v[2].w > eps)) {
+		draw_triangle(d, v, src, tg_rgb, q5, zb, prim_z);
+		return;
+	}
+	/* Solo si el triángulo del cuadro original estaba entero delante
+	 * (interp.c lo marca en pad): lo que el original descartaba (los
+	 * microcódigos sin recorte cercano) se sigue descartando. */
+	if (!(v[0].pad & v[1].pad & v[2].pad))
+		return;
+	struct gfx_vertex p[4];
+	unsigned n = 0;
+	for (int i = 0; i < 3; i++) {
+		int j = i == 2 ? 0 : i + 1;
+		float di = v[i].w - eps, dj = v[j].w - eps;
+		if (di >= 0.0f)
+			p[n++] = v[i];
+		if ((di < 0.0f) != (dj < 0.0f))
+			lerp_out(&p[n++], &v[i], &v[j], di / (di - dj));
+	}
+	if (n < 3)
+		return;
+	draw_triangle(d, p, src, tg_rgb, q5, zb, prim_z);
+	if (n == 4) {
+		struct gfx_vertex q[3] = { p[0], p[2], p[3] };
+		draw_triangle(d, q, src, tg_rgb, q5, zb, prim_z);
+	}
+}
+
 static bool fills_only(const uint8_t *cmd, uint32_t off, uint32_t cmd_bytes)
 {
 	while (off + sizeof(struct gfx_cmd) <= cmd_bytes) {
@@ -735,7 +786,7 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 			 * exacta en todo el dibujo, no la de cada vértice entre su w. */
 			float prim_z = (d->depth & GFX_DEPTH_PRIM) ? gfx_prim_z(vtx + d->h.a, d->h.b) : 0.0f;
 			for (uint32_t i = 0; i + 3 <= d->h.b; i += 3)
-				draw_triangle(d, vtx + d->h.a + i, src, rgb[cur], tg.t[cur].bpp == 2, zb, prim_z);
+				draw_triangle_clip(d, vtx + d->h.a + i, src, rgb[cur], tg.t[cur].bpp == 2, zb, prim_z);
 			if (!drawn[cur])
 				rdp_targets_drawn(&tg, cur);
 			drawn[cur] = true;
@@ -876,4 +927,32 @@ bool raster_target_info(int slot, uint32_t *addr, uint32_t *width, uint32_t *bpp
 	*bpp = tg.t[slot].bpp;
 	*lh = tg.t[slot].lh;
 	return true;
+}
+
+/* Todo el estado del rasterizador, para dibujar cuadros inventados
+ * (interp.c) sin tocar los destinos del juego. */
+#define RASTER_STATE(X)                                                                              \
+	X(tg) X(rgb) X(scratch) X(scratch_slot) X(depths) X(next_depth) X(task_no) X(vi_field) X(vi_ring) \
+	X(primes) X(readbacks) X(mirrors) X(frames) X(dma_skipped) X(dma_ring) X(rb_task) X(rb_wanted_task) \
+	X(last_job) X(tex_decoded_here)
+#define RASTER_SIZE(v) + sizeof(v)
+size_t raster_state_size(void)
+{
+	return 0 RASTER_STATE(RASTER_SIZE);
+}
+
+void raster_state_save(void *buf)
+{
+	uint8_t *p = buf;
+#define RASTER_SAVE(v) memcpy(p, &(v), sizeof(v)), p += sizeof(v);
+	RASTER_STATE(RASTER_SAVE)
+#undef RASTER_SAVE
+}
+
+void raster_state_restore(const void *buf)
+{
+	const uint8_t *p = buf;
+#define RASTER_LOAD(v) memcpy(&(v), p, sizeof(v)), p += sizeof(v);
+	RASTER_STATE(RASTER_LOAD)
+#undef RASTER_LOAD
 }

@@ -37,6 +37,9 @@ bool raster_target_info(int slot, uint32_t *addr, uint32_t *width, uint32_t *bpp
  * como salsa64_rdp_fbfx (0 apagados, 1 render a textura, 2 también copias
  * a la RDRAM). */
 extern bool raster_trace_fb;
+/* Recortar contra w = ε en vez de descartar los triángulos con un vértice
+ * detrás (solo los cuadros inventados de interp.c; apagado por omisión). */
+extern bool raster_clip_w;
 extern uint32_t raster_field;
 extern int raster_fbfx;
 /* Cada campo con imagen: el origen y ancho del VI (como salsa64_rdp_vi). */
@@ -50,5 +53,12 @@ void raster_reset(void);
  * destino (GFX_TEX_TARGET) y hubo que decodificar aquí. */
 void raster_fb_stats(uint32_t *readbacks, uint32_t *primes, uint32_t *tex_rsx, uint32_t *tex_rdram,
 		     uint32_t *tex_decoded);
+
+/* Todo el estado (destinos, imágenes, profundidades, cuentas), para dibujar
+ * un cuadro inventado y volver (interp.c). */
+#include <stddef.h>
+size_t raster_state_size(void);
+void raster_state_save(void *buf);
+void raster_state_restore(const void *buf);
 
 #endif

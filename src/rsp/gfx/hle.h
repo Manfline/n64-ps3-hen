@@ -47,6 +47,13 @@ struct gfx_vtx {
 	float s, t;           /* texels, con la escala de G_TEXTURE */
 	uint8_t c[4];         /* color final (luz y niebla aplicadas) */
 	uint32_t clip;
+#ifdef SALSA64_GFX_INTERP
+	/* Interpolación por geometría (docs/interpolacion.md): coordenadas de
+	 * recorte del mismo vértice en el cuadro anterior del juego, si se
+	 * encontró (gfx_interp_vertices). */
+	float prev[4];
+	uint32_t matched;
+#endif
 };
 
 struct gfx_light {
@@ -237,6 +244,9 @@ struct gfx_state {
 	struct gfx_tilememo tilememo[8];
 
 	void *io;                  /* estado de la plataforma (gfx_io.h) */
+#ifdef SALSA64_GFX_INTERP
+	struct gfx_interp *interp; /* NULL: interpolación apagada */
+#endif
 };
 
 /* ---- E/S: la implementa cada plataforma (io_mem.c, src/spu/gfx/io_spu.c) ----
@@ -267,6 +277,24 @@ int32_t gfx_io_tex_commit(struct gfx_state *g, uint32_t size);
 /* Entrega la textura (del área de gfx_io_tex_begin) a la región de la
  * caché, `off` bytes desde su inicio (múltiplo de 128). */
 void gfx_io_tex_cache(struct gfx_state *g, uint32_t off, uint32_t size);
+
+#ifdef SALSA64_GFX_INTERP
+/* ---- Interpolación de cuadros por geometría (docs/interpolacion.md) ----
+ * Solo con -DSALSA64_GFX_INTERP (hoy, el prototipo del host): sin la
+ * definición el estado y el código son los de siempre. Con g->interp, la
+ * plataforma empareja cada vértice cargado con el mismo vértice del cuadro
+ * anterior del juego y la HLE da, por cada vértice de salida, también su
+ * posición en ese cuadro.
+ *
+ * gfx_interp_vertices: se cargaron n vértices en vtx[v0…] desde la RDRAM
+ * `addr` (`stride` bytes por vértice en la lista del juego); la plataforma
+ * llena prev y matched. gfx_interp_emit: los vértices de salida [first,
+ * first + n) tienen esas posiciones en el cuadro anterior (pad = 1 si se
+ * emparejó). */
+struct gfx_interp;
+void gfx_interp_vertices(struct gfx_state *g, uint32_t addr, uint32_t stride, uint32_t v0, uint32_t n);
+void gfx_interp_emit(struct gfx_state *g, uint32_t first, const struct gfx_vertex *prev, uint32_t n);
+#endif
 
 /* ---- Módulos ---- */
 
