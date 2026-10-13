@@ -279,12 +279,27 @@ static void step(const char *phase, const char *what)
 	state_append("%s PASO %s", phase, what);
 }
 
+/* La primera línea del archivo de estado dice de qué versión de la prueba
+ * es; uno de otra versión (otras fases) se descarta. */
+#define FM_VERSION_LINE "version 2"
+
 static void state_load(void)
 {
 	FILE *f = fopen(FM_STATE, "r");
-	if (!f)
+	if (!f) {
+		state_append("%s", FM_VERSION_LINE);
 		return;
+	}
 	char line[sizeof states[0].line];
+	if (!fgets(line, sizeof line, f) || strncmp(line, FM_VERSION_LINE, strlen(FM_VERSION_LINE)) != 0) {
+		fclose(f);
+		salsa64_log("el estado guardado es de otra versión de la prueba: se descarta");
+		int fd = open(FM_STATE, O_WRONLY | O_TRUNC | O_CREAT, 0666);
+		if (fd >= 0)
+			close(fd);
+		state_append("%s", FM_VERSION_LINE);
+		return;
+	}
 	while (fgets(line, sizeof line, f)) {
 		line[strcspn(line, "\r\n")] = '\0';
 		char name[24], status[16];
