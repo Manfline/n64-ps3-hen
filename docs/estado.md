@@ -47,7 +47,12 @@ en docs/filtros.md.
   copiadas por el RSX a la memoria principal y escritas por otro hilo (la
   imagen ya no se congela ~2 s); «Aplicando filtro…» si preparar un filtro
   tarda más de un par de cuadros; la comprobación fp16, una vez por filtro.
-  Falta medirlo en la PS3.
+  **Medido en la PS3** (GoldenEye en la presa a 1080p): máscara 7,4, RGB
+  9,4, S-Video 10,6, compuesto 13,2 y Trinitron 10,1 ms por cuadro, todos
+  los campos presentados (antes, a 5×, 30–51 por segundo); reducir 3,12 →
+  1,2 ms y el render del juego 5,6 → 2,1 ms. GoldenEye casi no repite
+  imagen en la presa (una tarea gráfica por campo): el reuso ahí casi no
+  aplica.
 - **Tercera ronda** (paquete en `build/ps3-5`): con `filtros-spe`, la señal
   y la decodificación de S-Video y compuesto en dos SPEs (src/spu/crt; el
   RSX deja la imagen en la memoria principal con una etiqueta, los SPEs
@@ -55,7 +60,10 @@ en docs/filtros.md.
   linealizarla; etiquetas genéricas nuevas en rsxkit); el ciclo alterna SPE
   y RSX por vuelta y el log da la espera del RSX, la ida y vuelta y el
   trabajo del SPE. En RPCS3 da lo mismo que el RSX contra la referencia.
-  Falta medirlo en la PS3.
+  **Medido en la PS3**: S-Video 0,45 ms menos, compuesto 0,5 ms más (el
+  SPE tarda ~3 veces lo estimado y el RSX lo espera); queda apagado por
+  omisión. Lo probable es la latencia de la cadena de FMA del filtro (ver
+  docs/perf-log.md).
 - **Propuestas para bajar el costo** (con estimados en docs/perf-log.md;
   la segunda ronda ya trae el tope de escala, las dos pasadas y el reuso, y
   el SPE va en un paquete aparte): escala 2× cuando hay un CRT (~5–6 ms menos por campo;

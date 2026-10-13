@@ -75,9 +75,10 @@ void salsa64_filters_options(bool captures, int reduce_passes);
  * termina a tiempo, vuelven al RSX por el resto de la corrida. */
 void salsa64_filters_spe(bool on);
 
-/* Línea para el log con lo que tardó en el RSX cada pasada, en promedio
- * por cuadro, desde el llamado anterior (vacía las cuentas). false si en
- * ese tiempo no se dibujó con filtro. */
+/* Líneas para el log (separadas por '\n') con lo que tardó en el RSX cada
+ * pasada, en promedio por cuadro, desde el llamado anterior, y aparte el
+ * SPE y los cuadros con la imagen repetida (vacía las cuentas). false si
+ * en ese tiempo no se dibujó con filtro. */
 bool salsa64_filters_report(char *buf, size_t size);
 
 /* Diagnóstico: después de cada cuadro con filtro, dibuja en la esquina de

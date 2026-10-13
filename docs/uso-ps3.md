@@ -430,21 +430,22 @@ la reducción de la imagen grande.
 
 Cada filtro se mide en el RSX con marcas de tiempo entre sus pasadas (el log
 lo escribe cada 5 s, «rsx: filtro …»). Medido en la PS3 real con GoldenEye
-a escala 5× (docs/perf-log.md): ms del RSX por cuadro y cuadros
-presentados por segundo, de 60. Sin filtro, el RSX va al 39–44 %.
+en la presa a 1080p (docs/perf-log.md), en ms del RSX por cuadro: con el
+tope de 3× y la reducción en dos pasadas se presentan todos los campos con
+cualquiera de los cinco; antes, a 5×, se saltaban cuadros.
 
-| Filtro | 720p | 1080p |
-|---|---|---|
-| CRT máscara de sombra | 6,7 ms (todos) | 9,6 ms (51) |
-| CRT cable RGB | 8,4 ms (todos) | 11,9 ms (40) |
-| CRT cable S-Video | 9,6 ms (51) | 13,0 ms (36) |
-| CRT cable compuesto | 11,9 ms (40) | 15,4 ms (30) |
+| Filtro | 1080p, tope de 3× | Antes: 1080p a 5× (cuadros por segundo) | Antes: 720p a 5× |
+|---|---|---|---|
+| CRT máscara de sombra | 7,4 ms | 9,6 ms (51) | 6,7 ms (todos) |
+| CRT cable RGB | 9,4 ms | 11,9 ms (40) | 8,4 ms (todos) |
+| CRT cable S-Video | 10,6 ms | 13,0 ms (36) | 9,6 ms (51) |
+| CRT cable compuesto | 13,2 ms | 15,4 ms (30) | 11,9 ms (40) |
+| CRT Trinitron | 10,1 ms | — | — |
 
 La emulación no se frena: si el RSX no alcanza, se saltan cuadros de la
-pantalla. Esa medición fue a 5×; con el tope de 3× (arriba), la reducción
-de dos pasadas y el reuso de las tablas cuando el juego repite imagen
-(GoldenEye y Perfect Dark dibujan 20–30 por segundo) el costo baja: está
-por medirse (docs/perf-log.md).
+pantalla. Con el tope, el render del juego también baja (de 5,6 a 2,1 ms
+por campo en la presa). `filtros-spe` (la señal del cable en dos SPEs) por
+ahora no ahorra: S-Video 0,45 ms menos, compuesto 0,5 ms más.
 
 ## Notas por juego
 

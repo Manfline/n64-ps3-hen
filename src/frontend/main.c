@@ -2490,9 +2490,14 @@ static void stats(uint64_t now)
 	memset(rt.ns, 0, sizeof rt.ns);
 	memset(rt.n, 0, sizeof rt.n);
 	{
-		char line[320];
+		char line[1024];
 		if (salsa64_filters_report(line, sizeof line))
-			salsa64_log("rsx: %s", line);
+			for (char *p = line, *nl; p; p = nl) {
+				nl = strchr(p, '\n');
+				if (nl)
+					*nl++ = '\0';
+				salsa64_log("rsx: %s", p);
+			}
 	}
 	/* Tareas gráficas: tiempo de la HLE (en el SPE), espera del PPE,
 	 * traducción a comandos del RSX y esperas por un juego de búferes. */

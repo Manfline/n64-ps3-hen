@@ -1389,7 +1389,7 @@ bool salsa64_filters_report(char *buf, size_t size)
 	if (fl.measured_spe && n > 0 && (size_t)n < size) {
 		double hz = (double)spukit_tick_hz();
 		n += snprintf(buf + n, size - (size_t)n,
-			      "; señal y decodificación en %d SPE: el RSX esperó %.2f ms, ida y vuelta %.2f ms (%u medidos); "
+			      "\nfiltro, señal y decodificación en %d SPE: el RSX esperó %.2f ms, ida y vuelta %.2f ms (%u medidos); "
 			      "el SPE más lento, %.2f ms de trabajo y %.2f ms esperando la imagen (%u cuadros)",
 			      CRT_SPE_WORKERS, fl.ns_spe_wait * 1e-6 / fl.measured_spe, fl.ns_spe_trip * 1e-6 / fl.measured_spe,
 			      fl.measured_spe, spe.frames ? spe.work_ticks * 1e3 / hz / spe.frames : 0.0,
@@ -1400,7 +1400,7 @@ bool salsa64_filters_report(char *buf, size_t size)
 		uint32_t m = fl.measured + fl.measured_reused;
 		double avg = m ? (total * fl.measured + fin * fl.measured_reused) / m : 0.0;
 		snprintf(buf + n, size - (size_t)n,
-			 "; %u con la imagen repetida, solo la pasada final: %.2f ms (%u medidos); promedio %.2f ms por cuadro",
+			 "\nfiltro, %u con la imagen repetida, solo la pasada final: %.2f ms (%u medidos); promedio %.2f ms por cuadro",
 			 fl.reused, fin, fl.measured_reused, avg);
 	}
 	memset(fl.ns, 0, sizeof fl.ns);

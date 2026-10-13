@@ -178,9 +178,13 @@ Medido con marcas de tiempo del RSX entre pasadas (`rsxkit_stamp`); el log
 de la PS3 lo escribe cada 5 s («rsx: filtro …»). El archivo `filtros-ciclo`
 pasa por todos los filtros cada 20 s para medirlos en una sola corrida.
 
-Medido en la PS3 real con GoldenEye a escala 5× (docs/perf-log.md, «Filtros
-CRT en el RSX»): máscara 6,7 / 9,6 ms por cuadro a 720p / 1080p, RGB
-8,4 / 11,9, S-Video 9,6 / 13,0 y compuesto 11,9 / 15,4. Las pasadas siguen
+Medido en la PS3 real con GoldenEye (docs/perf-log.md, «Filtros CRT en el
+RSX»). Primero a escala 5×: máscara 6,7 / 9,6 ms por cuadro a 720p /
+1080p, RGB 8,4 / 11,9, S-Video 9,6 / 13,0 y compuesto 11,9 / 15,4; a
+1080p se saltaban cuadros. Con el tope de 3× y la reducción en dos pasadas,
+a 1080p: máscara 7,4, RGB 9,4, S-Video 10,6, compuesto 13,2 y Trinitron
+10,1, sin saltar ningún campo; la señal del cable en el SPE, por ahora, no
+ahorra (S-Video −0,45 ms, compuesto +0,5). Las pasadas siguen
 las instrucciones por píxel de sus programas, salvo la reducción: 3,1 ms en
 todas por leer la superficie de 5× (7,6 MB). Lo que va por píxel de salida
 (el final, los puntos, las líneas) crece 2,25 veces de 720p a 1080p; lo que
