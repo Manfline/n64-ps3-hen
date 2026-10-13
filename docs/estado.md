@@ -63,6 +63,13 @@ un cuadro abajo a la izquierda, sin oscurecer el juego (pausectl, IM_*):
   ROMs de prueba respetan la escala del juego (verifican a cualquier escala)
   y siguen forzando aspecto, filtro y recorte.
 
+**Confirmado en la PS3 real** (2026-10-13, GoldenEye y Zelda OoT a 1080p, en
+un paquete de prueba junto con los filtros CRT de la Fase 5). En vivo desde
+la pausa: los filtros sencillos y los CRT, 4:3 ↔ 16:9, recorte del borde
+(8/8/6/6 y 16/16/12/12), escala 5× ↔ 3× al seguir jugando, «Guardar para este
+juego» y la vuelta a lo de Opciones en otro juego. Sin cuadros raros al
+cambiar la escala.
+
 ## 2026-10-13 — Contribución de VIDEOGAMES SCZ: menú de pausa, trucos, carátulas, aspecto, filtros sencillos, ajustes por juego e idiomas (paquete SLSA00110 «Salsa64 extras»)
 
 VIDEOGAMES SCZ (creador de contenido de PS3) mandó sus extras hechos sobre
