@@ -53,6 +53,20 @@ en docs/filtros.md.
   pantalla (ahora se rehace del tamaño justo), y un fallo apagaba el filtro
   hasta salir del juego (ahora se reintenta al cambiar la imagen o el filtro).
   Reproducido y comprobado en RPCS3 forzando el cambio en vivo.
+- **PS3 colgada con «CRT Trinitron» en Opciones** (arreglado para la
+  v0.2.5; visto en la PS3 con la v0.2.4: ocho × desde «Suave», el latido
+  quieto en «menú: flip anterior» y la consola entera colgada). La ayuda
+  del Trinitron tenía un solo NULL al final y el panel, que dibuja hasta
+  dos NULL seguidos, leía como texto lo que el enlazador puso después (las
+  tablas de otras pantallas) hasta una dirección mala. En RPCS3, igual al
+  octavo ×: «Segfault reading location 3f0f5c9a3eb851ec» en el hilo
+  principal (dos floats de la tabla de las ondas tomados por puntero). No
+  toca el RSX ni los filtros (cambiar el filtro en Opciones solo escribe
+  menu.cfg); «flip anterior» es lo que dice el latido mientras se dibuja
+  el menú. Ahora cada ayuda de CRT tiene sitio para sus dos NULL, y
+  `menu_options_help` (pruebas del host, con ASan) recorre cada fila de
+  Opciones, cada filtro y cada densidad con el panel lleno; en RPCS3, la
+  vuelta entera de los filtros en Opciones deja el menú vivo.
 - **Densidad de la máscara** (para la v0.2.5, decisión del autor): fila
   «Densidad: Normal / Fina» en Opciones, en los ajustes por juego
   (`densidad = normal|fina|global`) y en «Imagen», solo con «CRT máscara».

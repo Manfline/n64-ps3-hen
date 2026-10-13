@@ -1195,8 +1195,10 @@ static void panel(const struct menu *m, float W, float H, float a)
 		static const char *const filter_text[] = { "Suave: la imagen se mezcla", "al escalar (la de siempre).", "Nítida: puntos cuadrados,",
 							   "sin difuminar.", "Líneas: oscurece filas como", "una tele de tubo (suaves o", "fuertes).", NULL,
 							   NULL };
-		/* Los CRT, cada uno con lo suyo. */
-		static const char *const crt_text[5][7] = {
+		/* Los CRT, cada uno con lo suyo. Cada fila termina en dos NULL
+		 * (los que falten los pone el tamaño): con uno solo, el bucle de
+		 * abajo leía fuera del arreglo y colgaba la PS3. */
+		static const char *const crt_text[5][8] = {
 			{ "CRT de máscara de sombra", "(experimental).", "Puntos de fósforo", "redondos en triángulo.", NULL, NULL,
 			  NULL },
 			{ "CRT con cable RGB", "(experimental).", "Tele Trinitron chica por", "euroconector RGB: imagen", "limpia.",
@@ -1206,7 +1208,7 @@ static void panel(const struct menu *m, float W, float H, float a)
 			{ "CRT con cable compuesto", "(experimental).", "Tele Trinitron chica por", "compuesto: sangrado de",
 			  "color y dot crawl.", NULL, NULL },
 			{ "CRT Trinitron", "(experimental).", "Sony KV-29 de la sala,", "sin la señal del cable:",
-			  "franjas de fósforo y", "líneas del haz.", NULL },
+			  "franjas de fósforo y", "líneas del haz.", NULL, NULL },
 		};
 		bool crt = m->set.filter >= MENU_FILTER_CRT_MASK && m->set.filter <= MENU_FILTER_CRT_TRINITRON;
 		static const char *const density_text[] = { "Los puntos de fósforo del", "CRT de máscara de sombra.",

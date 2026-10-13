@@ -1112,6 +1112,68 @@ static void menu_frame_geometry(void)
 	rsxkit_ui_batch(NULL, 0, 0, 0);
 }
 
+/* El menú quieto `ms` milisegundos desde `t`, dibujando cada cuadro. */
+static uint64_t settle_draw(struct menu *m, uint64_t t, uint32_t ms)
+{
+	for (uint64_t end = t + ms * 1000ull; t <= end; t += 16683) {
+		menu_input(m, 0, t);
+		rsxkit_ui_batch(verts, sizeof verts / sizeof verts[0], 1280, 720);
+		menu_frame(m, 1280, 720, t);
+	}
+	return t;
+}
+
+/* Opciones: la ayuda de cada fila, de cada filtro y de cada densidad, con
+ * el panel lleno. Cada texto termina en dos NULL; si a uno le falta, el
+ * bucle del panel sigue leyendo lo que haya después en la memoria (con
+ * ASan, desborde de global). En la PS3, «CRT Trinitron» en Opciones colgaba
+ * el menú: leía como texto los arreglos de al lado hasta una dirección
+ * mala. */
+static void menu_options_help(void)
+{
+	frame_list_setup();
+	uint32_t dropped0 = rsxkit_ui_dropped();
+	struct menu m;
+	menu_init(&m, &frame_list, 3, NULL);
+	m.dl_enabled = true;
+	uint64_t t = settle_draw(&m, 0, 1500);
+	menu_input(&m, BIT(SALSA64_DS3_TRIANGLE), t);
+	t = settle_draw(&m, t + 16683, 800);
+	CHECK_EQ(m.page, MENU_PAGE_OPTIONS);
+	uint32_t rows = 0, filters = 0, densities = 0;
+	for (int i = 0; i < 2 * MENU_OPTS; i++) {
+		rows |= 1u << m.opt;
+		if (m.opt == MENU_OPT_FILTER) {
+			/* Todos los filtros (la vuelta entera) y luego la máscara,
+			 * para que aparezca la fila de la densidad. */
+			for (int k = 0; k < MENU_FILTERS || m.set.filter != MENU_FILTER_CRT_MASK; k++) {
+				CHECK_EQ(menu_input(&m, RIGHT, t), MENU_SETTINGS);
+				t = settle_draw(&m, t + 16683, 300);
+				filters |= 1u << m.set.filter;
+			}
+		}
+		if (m.opt == MENU_OPT_DENSITY)
+			for (int k = 0; k < MENU_DENSITIES; k++) {
+				CHECK_EQ(menu_input(&m, RIGHT, t), MENU_SETTINGS);
+				t = settle_draw(&m, t + 16683, 300);
+				densities |= 1u << m.set.density;
+			}
+		if (m.opt == MENU_OPT_SCALE) {  /* con un cambio pendiente aparece «Aplicar ahora» */
+			CHECK_EQ(menu_input(&m, RIGHT, t), MENU_SETTINGS);
+			t = settle_draw(&m, t + 16683, 300);
+		}
+		if (m.opt == MENU_OPT_BACK)
+			break;
+		menu_input(&m, DOWN, t);
+		t = settle_draw(&m, t + 16683, 300);
+	}
+	CHECK_EQ(rows, (1u << MENU_OPTS) - 1);
+	CHECK_EQ(filters, (1u << MENU_FILTERS) - 1);
+	CHECK_EQ(densities, (1u << MENU_DENSITIES) - 1);
+	CHECK_EQ(rsxkit_ui_dropped(), dropped0);
+	rsxkit_ui_batch(NULL, 0, 0, 0);
+}
+
 /* video.cfg: formato nuevo, formato viejo («1080» solo) y valores raros. */
 static void menu_video_file(void)
 {
@@ -1469,6 +1531,7 @@ void t_suite_menu(void)
 	RUN(ui_atlas_scale2x);
 	RUN(ui_geometry);
 	RUN(menu_frame_geometry);
+	RUN(menu_options_help);
 	RUN(menu_cheats_page);
 	RUN(menu_cover_state);
 	RUN(menu_preview);
