@@ -11,7 +11,7 @@ compilador de la Mac (el Docker de desarrollo no ve las carpetas de fuera del
 proyecto) y deja log e imágenes en `build/censo/`. Los textos, CRC y palabras
 de identificación de los microcódigos salen de `--trace-rsp`.
 
-## 2026-10-12 — Censo en la PS3 real (v0.2.0 a v0.2.3)
+## 2026-10-12 — Censo en la PS3 real (v0.2.0 a v0.2.4)
 
 PS3 con HEN, respaldos NTSC (EE. UU.), salida a 1080p con escala 5×. Es la
 lista vigente; las secciones de abajo son censos anteriores en la Mac.
@@ -29,7 +29,7 @@ lista vigente; las secciones de abajo son censos anteriores en la Mac.
 | Star Fox 64, Banjo-Kazooie | velocidad completa | Banjo: las pantallas del rompecabezas salen en negro |
 | Kirby 64, Pokémon Stadium 2 | ~97–100 % | algunas texturas con ruido o en ajedrez |
 | Pokémon Snap | jugable | texturas estiradas en algunos polígonos |
-| Super Smash Bros. | velocidad completa | **se congela en el primer KO** en v0.2.3 (arreglado en el código en curso, por confirmar en la PS3; con v0.2.3, crear `/dev_hdd0/salsa64/fbfx.cfg` con un `1` y quitarlo para los demás juegos); texturas estiradas en el Castillo de Hyrule, con o sin ese archivo (arreglado en el código en curso, por confirmar en la PS3) |
+| Super Smash Bros. (y Smash Remix) | velocidad completa | desde v0.2.4 pasa los KO y el Castillo de Hyrule se ve bien (confirmado en la PS3 real); en v0.2.3 y anteriores se congelaba en el primer KO (`/dev_hdd0/salsa64/fbfx.cfg` con un `1` lo evitaba) |
 | Doom 64 | ~40 % | limitado por el CPU |
 | Banjo-Tooie, F-Zero X | pantalla negra | arranque (CIC 6105 / 6106) |
 | Diddy Kong Racing | pantalla negra | microcódigo propio de Rare; en desarrollo con el RSP a bajo nivel |

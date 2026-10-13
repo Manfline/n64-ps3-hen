@@ -4,6 +4,34 @@ All notable changes to Salsa64. Speeds are measured on a real PS3 (HEN,
 NTSC backups); `docs/perf-log.md` has the detailed numbers and
 `docs/estado.md` the work log (both in Spanish).
 
+## [0.2.4] — 2026-10-13
+
+### Fixed
+- **Super Smash Bros.** (and Smash Remix) no longer freeze on the first KO.
+  The game keeps code and pointers in the margins of its z-buffer and, in the
+  KO, draws a mask there; copies back to N64 memory now write only what the
+  RDP could have drawn (the box of each drawing inside its scissor). The
+  `fbfx.cfg` workaround is no longer needed.
+- Stretched textures when a tile with clamp and mask did not fit the decode
+  area (Smash: Hyrule Castle stage, Kongo Jungle leaves): one period of the
+  mask is decoded and repeated instead of cutting rows.
+
+### Added
+- **Five CRT filters** made for Salsa64, still experimental: shadow mask,
+  a small Trinitron TV over RGB, S-Video or composite, and a big Trinitron
+  (Sony KV-29). In Options, per game and live from «Imagen» in the pause
+  menu. While a CRT filter is on, the internal scale is capped at 3× (no
+  visible difference above it). Measured on a real PS3 at 1080p (GoldenEye,
+  Dam): 7.4–13.2 ms of RSX per frame, every field presented. A short
+  «Aplicando filtro…» notice shows while a filter is prepared.
+- Experimental: the signal stage of the S-Video and composite filters on
+  two SPEs (`filtros-spe` file, off by default; not faster yet).
+
+### Changed
+- `lib/rsxkit`: post-processing reduces the image in two passes (width, then
+  height). The CRT filters redo only their final pass when the game repeats
+  a frame.
+
 ## [0.2.3] — 2026-10-13
 
 ### Added — contributed by VIDEOGAMES SCZ

@@ -18,12 +18,13 @@ maps naturally onto an SPE.
 
 Work in progress, but already playable on a real PS3:
 
-- **Playable on real hardware (v0.2.3):** Zelda: Ocarina of Time and
-  Majora's Mask, Super Mario 64, Mario Kart 64, Donkey Kong 64, Paper Mario
-  and Mario Party at full speed; Perfect Dark, GoldenEye 007, Conker, Star
-  Fox 64 and Banjo-Kazooie playable (GoldenEye 45–60 fps in the Dam). Note:
-  Conker stays black after the «For Mature» screen in 0.2.1 and 0.2.2 (fixed
-  in 0.2.3); Super Smash Bros. freezes on the first KO. Full list (Spanish):
+- **Playable on real hardware (v0.2.4):** Zelda: Ocarina of Time and
+  Majora's Mask, Super Mario 64, Mario Kart 64, Donkey Kong 64, Paper Mario,
+  Mario Party and Super Smash Bros. (also Smash Remix) at full speed; Perfect
+  Dark, GoldenEye 007, Conker, Star Fox 64 and Banjo-Kazooie playable
+  (GoldenEye 45–60 fps in the Dam). Fixed recently: Conker (black after «For
+  Mature» in 0.2.1–0.2.2, fixed in 0.2.3) and the Smash freeze on the first
+  KO (fixed in 0.2.4). Full list (Spanish):
   [docs/compatibilidad.md](docs/compatibilidad.md); release notes:
   [CHANGELOG.md](CHANGELOG.md).
 - **CPU:** VR4300 interpreter and a MIPS → PPC64 dynamic recompiler on the
@@ -40,8 +41,11 @@ Work in progress, but already playable on a real PS3:
 - **Video:** 720p or 1080p output with internal render scale 1× to 5×;
   framebuffer effects (render to texture, copies back to N64 memory, motion
   blur read from the RSX); save states, FPS counter, PS button pause.
-- **Not yet:** large SRAM saves (768 Kbit, 1 Mbit), Controller/Rumble/Transfer
-  Pak and post-processing filters (CRT, scaling).
+- **Filters:** five CRT filters made for this project (shadow mask, a small
+  Trinitron TV over RGB, S-Video or composite, and a big Trinitron), still
+  experimental; on a real PS3 all five fit in the frame time at 1080p.
+- **Not yet:** large SRAM saves (768 Kbit, 1 Mbit) and Controller/Rumble/
+  Transfer Pak.
 
 Performance numbers are logged in [docs/perf-log.md](docs/perf-log.md). Only
 measurements on a real PS3 count; RPCS3 is used for functional tests.
@@ -75,8 +79,9 @@ Full guide (in Spanish): [docs/uso-ps3.md](docs/uso-ps3.md).
   RetroArch `.cht` files in `/dev_hdd0/salsa64/cheats`) and **SELECT** its
   own settings (aspect, filter, overscan). PNG box art in
   `/dev_hdd0/salsa64/covers` shows next to the game info.
-- Options also set the aspect (4:3 or 16:9), a simple image filter (smooth,
-  sharp, scanlines) and the menu language (Spanish, English, French, German,
+- Options also set the aspect (4:3 or 16:9), the image filter (smooth,
+  sharp, scanlines, or one of the five experimental CRT filters) and the menu
+  language (Spanish, English, French, German,
   Italian, Portuguese).
 - The **PS button** pauses emulation and sound while the system menu is open;
   the game resumes where it was when the menu closes.

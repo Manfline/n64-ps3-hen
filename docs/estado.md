@@ -190,6 +190,14 @@ Contra la rama anterior, DK64, Perfect Dark, MK64, Banjo, Conker y
 GoldenEye salen iguales píxel por píxel; solo cambian cuadros de Smash.
 Por confirmar en la PS3: el Castillo de Hyrule en Smash y en Smash Remix.
 
+**Confirmado en la PS3 real** (2026-10-13, paquete SLSA00113, sin fbfx.cfg):
+Smash y Smash Remix pasan varios KO; Hyrule Castle se ve bien. Sin
+regresiones en la pausa de Zelda, el túnel de Luigi Raceway, la pausa de
+Majora, el desenfoque de la intro de Perfect Dark y la pausa de Conker. Los
+tirones de ~125 ms al caminar por el árbol Deku de Zelda también salen en
+v0.2.3 (código nuevo que se traduce al cargar enemigos y salas). Sale en
+v0.2.4 junto con los filtros CRT.
+
 ## 2026-10-13 — Conker en negro tras «For Mature» desde la v0.2.1, y sus 29 s de negro al arrancar (rama `objective-bun-2517c7`, paquete SLSA00112 «Salsa64 Conker»)
 
 Síntoma (PS3 real con v0.2.1, v0.2.2 y main; igual en la Mac): después de
