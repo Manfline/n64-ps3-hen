@@ -18,7 +18,7 @@ maps naturally onto an SPE.
 
 Work in progress, but already playable on a real PS3:
 
-- **Playable on real hardware (v0.2.4):** Zelda: Ocarina of Time and
+- **Playable on real hardware (v0.2.5):** Zelda: Ocarina of Time and
   Majora's Mask, Super Mario 64, Mario Kart 64, Donkey Kong 64, Paper Mario,
   Mario Party and Super Smash Bros. (also Smash Remix) at full speed; Perfect
   Dark, GoldenEye 007, Conker, Star Fox 64 and Banjo-Kazooie playable

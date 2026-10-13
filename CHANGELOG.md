@@ -4,6 +4,24 @@ All notable changes to Salsa64. Speeds are measured on a real PS3 (HEN,
 NTSC backups); `docs/perf-log.md` has the detailed numbers and
 `docs/estado.md` the work log (both in Spanish).
 
+## [0.2.5] — 2026-10-13
+
+### Fixed
+- **Console freeze in Options:** with «CRT Trinitron» chosen as the filter,
+  moving to the Filter row in Options (main menu) froze the PS3 (its help
+  text was missing an end marker and the menu read past it). The pause menu
+  was not affected.
+- **Fewer copies back to N64 memory:** after a change in the screen width
+  (Perfect Dark's intro, GoldenEye after the mission screens) every frame
+  was taken for an auxiliary image and copied back, with the emulation
+  waiting each time; Perfect Dark's intro went from about one copy per
+  frame to almost none.
+
+### Added
+- **Mask density** for the «CRT máscara» filter: Normal or Fine (smaller,
+  closer dots: 9 px triads instead of 12), in Options, per game and live in
+  «Imagen». The choice made in Options is now saved like the rest.
+
 ## [0.2.4] — 2026-10-13
 
 ### Fixed

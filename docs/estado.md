@@ -30,6 +30,12 @@ quedaba en el viejo y cada cuadro parecía una imagen auxiliar.
 - **Por medir en la PS3 real**: Perfect Dark sin tope (deberían desaparecer
   las copias esperadas de la intro).
 
+**Candidato de la v0.2.5 en la PS3 real** (2026-10-13): Opciones recorre todos
+los filtros (también «CRT Trinitron», con un menu.cfg que ya lo traía) sin
+colgarse; la densidad Fina elegida en Opciones llega al juego y a «Imagen»;
+la intro de Perfect Dark hace 0–3 copias esperadas a la RDRAM cada 5 s (antes
+una por cuadro) y va a velocidad completa (57–60 campos/s).
+
 ## 2026-10-13 — Filtros CRT del autor en el RSX (rama `upbeat-tereshkova`, paquete SLSA00109 «Salsa64 filtros»)
 
 Los filtros CRT originales del autor (máscara de sombra v1.3 y CRT con

@@ -11,7 +11,7 @@ compilador de la Mac (el Docker de desarrollo no ve las carpetas de fuera del
 proyecto) y deja log e imágenes en `build/censo/`. Los textos, CRC y palabras
 de identificación de los microcódigos salen de `--trace-rsp`.
 
-## 2026-10-12 — Censo en la PS3 real (v0.2.0 a v0.2.4)
+## 2026-10-12 — Censo en la PS3 real (v0.2.0 a v0.2.5)
 
 PS3 con HEN, respaldos NTSC (EE. UU.), salida a 1080p con escala 5×. Es la
 lista vigente; las secciones de abajo son censos anteriores en la Mac.
