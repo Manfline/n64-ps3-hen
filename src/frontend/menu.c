@@ -79,10 +79,12 @@ static const struct {
 	[MENU_FILTER_SHARP] = { "nitido", "Nítida", "Filtro de VIDEOGAMES SCZ" },
 	[MENU_FILTER_SCAN_SOFT] = { "lineas", "Líneas suaves", "Filtro de VIDEOGAMES SCZ" },
 	[MENU_FILTER_SCAN_STRONG] = { "lineas+", "Líneas fuertes", "Filtro de VIDEOGAMES SCZ" },
-	[MENU_FILTER_CRT_MASK] = { "crt-mascara", "CRT máscara de sombra", "Filtro original del autor" },
-	[MENU_FILTER_CRT_RGB] = { "crt-rgb", "CRT cable RGB", "Filtro original del autor" },
-	[MENU_FILTER_CRT_SVIDEO] = { "crt-svideo", "CRT cable S-Video", "Filtro original del autor" },
-	[MENU_FILTER_CRT_COMPOSITE] = { "crt-compuesto", "CRT cable compuesto", "Filtro original del autor" },
+	/* Los CRT son experimentales: el nombre corto (cabe en la fila de la
+	 * pausa) y el largo, con «(experimental)», en la ayuda del panel. */
+	[MENU_FILTER_CRT_MASK] = { "crt-mascara", "CRT máscara (exp.)", "Filtro original del autor" },
+	[MENU_FILTER_CRT_RGB] = { "crt-rgb", "CRT RGB (exp.)", "Filtro original del autor" },
+	[MENU_FILTER_CRT_SVIDEO] = { "crt-svideo", "CRT S-Video (exp.)", "Filtro original del autor" },
+	[MENU_FILTER_CRT_COMPOSITE] = { "crt-compuesto", "CRT compuesto (exp.)", "Filtro original del autor" },
 };
 
 static const char *filter_name(int f)
@@ -1127,11 +1129,15 @@ static void panel(const struct menu *m, float W, float H, float a)
 							   "sin difuminar.", "Líneas: oscurece filas como", "una tele de tubo (suaves o", "fuertes).", NULL,
 							   NULL };
 		/* Los CRT, cada uno con lo suyo. */
-		static const char *const crt_text[4][6] = {
-			{ "Monitor con puntos de", "fósforo redondos en", "triángulo (máscara de", "sombra).", NULL, NULL },
-			{ "Tele Trinitron por", "euroconector RGB: imagen", "limpia.", NULL, NULL, NULL },
-			{ "Tele Trinitron por", "S-Video: el color se", "corre un poco.", NULL, NULL, NULL },
-			{ "Tele Trinitron por", "compuesto: sangrado de", "color y dot crawl.", NULL, NULL, NULL },
+		static const char *const crt_text[4][7] = {
+			{ "CRT de máscara de sombra", "(experimental).", "Puntos de fósforo", "redondos en triángulo.", NULL, NULL,
+			  NULL },
+			{ "CRT con cable RGB", "(experimental).", "Tele Trinitron por", "euroconector RGB: imagen", "limpia.", NULL,
+			  NULL },
+			{ "CRT con cable S-Video", "(experimental).", "Tele Trinitron por", "S-Video: el color se", "corre un poco.",
+			  NULL, NULL },
+			{ "CRT con cable compuesto", "(experimental).", "Tele Trinitron por", "compuesto: sangrado de",
+			  "color y dot crawl.", NULL, NULL },
 		};
 		bool crt = m->set.filter >= MENU_FILTER_CRT_MASK && m->set.filter <= MENU_FILTER_CRT_COMPOSITE;
 		static const char *const lang_text[] = { "Idioma del menú y de los", "avisos del juego.", NULL, "Se guarda en menu.cfg.", NULL, NULL };

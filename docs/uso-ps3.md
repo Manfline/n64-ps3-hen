@@ -75,8 +75,9 @@ Opciones:
   pantalla), **Líneas suaves** y **Líneas fuertes** (filas oscurecidas
   encima de la imagen, como una tele de tubo; las capturas salen sin ellas).
   Estos cuatro son de VIDEOGAMES SCZ. Después vienen los **filtros CRT
-  originales del autor**: «CRT máscara de sombra» y «CRT cable RGB /
-  S-Video / compuesto» (abajo, en «Filtros CRT»). Vale al abrir el juego;
+  originales del autor**, todavía experimentales: «CRT máscara (exp.)»,
+  «CRT RGB (exp.)», «CRT S-Video (exp.)» y «CRT compuesto (exp.)» (abajo, en
+  «Filtros CRT»). Vale al abrir el juego;
   se guarda en `menu.cfg` (`filtro = suave|nitido|lineas|lineas+|
   crt-mascara|crt-rgb|crt-svideo|crt-compuesto`). El panel dice de quién es
   cada filtro.
@@ -391,7 +392,9 @@ Es un promedio de medio segundo. Se recuerda en `menu.cfg` (`fps = si`).
 ## Filtros CRT
 
 Salsa64 trae los **filtros CRT originales del autor, portados de sus
-versiones de RetroMac** (sus apps para Mac y Apple TV):
+versiones de RetroMac** (sus apps para Mac y Apple TV). Son
+**experimentales**: en el menú se llaman «CRT … (exp.)» y su costo en el
+RSX todavía se está midiendo.
 
 - «CRT máscara de sombra» (`crt-mascara`): un monitor con puntos de
   fósforo redondos en triángulo, con el haz más grueso en lo brillante y

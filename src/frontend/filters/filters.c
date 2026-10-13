@@ -54,10 +54,10 @@ static const struct {
 	const char *name, *key;
 } crt_names[SALSA64_CRTS] = {
 	[SALSA64_CRT_NONE] = { "Ninguno", "ninguno" },
-	[SALSA64_CRT_MASK] = { "CRT máscara de sombra", "crt-mascara" },
-	[SALSA64_CRT_RGB] = { "CRT cable RGB", "crt-rgb" },
-	[SALSA64_CRT_SVIDEO] = { "CRT cable S-Video", "crt-svideo" },
-	[SALSA64_CRT_COMPOSITE] = { "CRT cable compuesto", "crt-compuesto" },
+	[SALSA64_CRT_MASK] = { "CRT máscara de sombra (experimental)", "crt-mascara" },
+	[SALSA64_CRT_RGB] = { "CRT cable RGB (experimental)", "crt-rgb" },
+	[SALSA64_CRT_SVIDEO] = { "CRT cable S-Video (experimental)", "crt-svideo" },
+	[SALSA64_CRT_COMPOSITE] = { "CRT cable compuesto (experimental)", "crt-compuesto" },
 };
 
 const char *salsa64_crt_name(int f)
