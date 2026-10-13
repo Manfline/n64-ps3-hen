@@ -355,6 +355,32 @@ temporales r3–r12 se pierden en las llamadas a C de los caminos lentos, por
 eso el camino frío lo recompone; entre accesos sin camino lento basta con
 reservar uno de los temporales (r10, T_S2) mientras el grupo esté abierto.
 Con fastmem encima, la prueba del grupo se reduce a `addi` + `rlwinm` +
-`add` (3 palabras) y lo demás es igual. Medición: la expansión en el host
-(cuántos accesos caen en grupos de ≥ 2 en GoldenEye y Perfect Dark) antes
-de escribir el emisor; se anota aquí.
+`add` (3 palabras) y lo demás es igual.
+
+**Cuánto agrupa** (volcados del host con el perfil por bloque, los 4000
+bloques más ejecutados, pesado por ejecuciones; grupos con el mismo base
+sin escribirlo en medio, tramo de `imm` ≤ 32 KB y alineación compatible):
+
+| Juego | Accesos por instrucción | En grupos de ≥ 2 | Palabras calientes de los accesos por instrucción: hoy → agrupado |
+|---|---|---|---|
+| GoldenEye (presa) | 0,326 | 72 % | 2,73 → 1,97 (**−0,76**) |
+| Perfect Dark (intro) | 0,267 | 70 % | 2,25 → 1,57 (−0,68) |
+| Mario Kart 64 | 0,268 | 70 % | 2,29 → 1,63 (−0,66) |
+| Zelda OoT | 0,397 | 77 % | 3,46 → 2,25 (**−1,21**) |
+
+Sobre las 8,16 palabras calientes por instrucción de GoldenEye es −9 %
+(fastmem solo: −16 %; los dos juntos, más). Y no depende de nada de lv2.
+
+Lo que falta decidir para el emisor: (1) el registro de `Tb` (los
+temporales r3–r12 los pisan las instrucciones de en medio; candidatos:
+r7/T_HI, que solo usan MULT/DIV, LWL/LWR y compañía —el grupo se corta
+ahí—, o r26/R_TARGET en los bloques sin JR); (2) si la prueba del grupo
+falla, el camino frío del primer acceso prueba la `ktlb` con la página de
+va_lo (si el tramo cabe en la página, `Tb` sale de la física) y, si no,
+**sale al intérprete antes de ese acceso** (exit_before: el resto del bloque
+básico lo corre el intérprete), porque los accesos siguientes no llevan
+prueba propia; los grupos de E/S (los cuatro registros del PI) pagan eso
+unas pocas veces por campo; (3) un grupo no cruza un destino de salto
+interno (al volver por el lazo, `rs` pudo cambiar después del grupo); (4)
+`code_flags` de los almacenamientos indexado por la dirección del host
+(`addi` + `rlwinm` con máscara de 16 bits) exige la RDRAM alineada a 8 MB.

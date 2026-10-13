@@ -545,36 +545,132 @@ static bool victim_run(victim_t *v, int mode)
 	return true;
 }
 
-static bool fault_setup(void)
+/* Una cola de eventos para la notificación; NULL = la de siempre (PPU,
+ * FIFO, clave local, 32 entradas). */
+static bool make_queue(sys_event_queue_t *q, u32 protocol, s32 type, u64 key, s32 size)
 {
 	sys_event_queue_attr_t attr;
 	memset(&attr, 0, sizeof attr);
-	attr.attr_protocol = SYS_EVENT_QUEUE_FIFO;
-	attr.type = SYS_EVENT_QUEUE_PPU;
+	attr.attr_protocol = protocol;
+	attr.type = type;
 	memcpy(attr.name, "fmfault", 8);
-	s32 rc = sysEventQueueCreate(&fault.queue, &attr, SYS_EVENT_QUEUE_KEY_LOCAL, 32);
-	if (rc != 0) {
-		salsa64_log("sysEventQueueCreate: 0x%08x", (unsigned)rc);
-		return false;
-	}
-	fault_region = region;
-	rc = sc_enable_page_fault_notification(region, (u32)fault.queue);
-	salsa64_log("sys_mmapper_enable_page_fault_notification(0x%08x, cola 0x%x): 0x%08x", region, (unsigned)fault.queue, (unsigned)rc);
-	if (rc != 0) {
-		/* En la primera corrida (2026-10-13) la tercera vez dio 0x80010002
-		 * con el mismo rango de siempre: ¿se quedó registrado el de un
-		 * proceso muerto? Probar con otra región. */
-		sys_mem_addr_t other = 0;
-		if (sysMMapperAllocateAddress(0x10000000, SYS_MEMORY_PAGE_SIZE_64K, 0x10000000, &other) == 0) {
-			rc = sc_enable_page_fault_notification(other, (u32)fault.queue);
-			salsa64_log("sys_mmapper_enable_page_fault_notification(0x%08x, otra región): 0x%08x", other, (unsigned)rc);
-			if (rc == 0)
-				fault_region = other;
+	s32 rc = sysEventQueueCreate(q, &attr, key, size);
+	if (rc != 0)
+		salsa64_log("sysEventQueueCreate(protocolo %u, tipo %d, clave 0x%llx, %d): 0x%08x", protocol, type,
+			   (unsigned long long)key, size, (unsigned)rc);
+	return rc == 0;
+}
+
+/* Las variantes de la llamada a 327 (en la PS3 con HEN la primera, tal
+ * cual, dio 0x80010002 el 2026-10-13): región de 64 KB o de 1 MB, con una
+ * página ya mapeada, con derechos de acceso, de 512 MB, la fija de 326,
+ * memoria de sysMemoryAllocate, la dirección de una página mapeada en vez
+ * de la base; cola PRIO, con clave propia, de tipo SPU, chica; y los
+ * argumentos al revés. La primera que acepte es la que usan las fases de
+ * fallo. Todas quedan en el log con su rc. */
+static bool enable_variants(void)
+{
+	sys_event_queue_t q0 = fault.queue, q;
+	char out[600] = "";
+	int pos = 0;
+	bool ok = false;
+#define TRY(name, a, b, region_used, queue_used)                                                          \
+	do {                                                                                              \
+		s32 rc_ = sc_enable_page_fault_notification((u32)(a), (u32)(b));                          \
+		pos += snprintf(out + pos, sizeof out - (size_t)pos, " %s:0x%08x", name, (unsigned)rc_); \
+		salsa64_log("327 %s (0x%08x, 0x%08x): 0x%08x", name, (unsigned)(a), (unsigned)(b), (unsigned)rc_); \
+		if (rc_ == 0 && !ok) {                                                                    \
+			ok = true;                                                                        \
+			fault_region = (region_used);                                                     \
+			fault.queue = (queue_used);                                                       \
+			salsa64_log("notificación aceptada con la variante %s", name);                    \
+		}                                                                                         \
+	} while (0)
+
+	TRY("64K", region, q0, region, q0);
+	if (!ok && region_1m)
+		TRY("1M", region_1m, q0, region_1m, q0);
+	if (!ok) {
+		/* Con una página mapeada en la base y, después, la dirección de
+		 * esa página mapeada fuera de la base. */
+		sys_mem_id_t id = 0, out_id;
+		if (sysMMapperAllocateMemory(64 * 1024, SYS_MEMORY_PAGE_SIZE_64K, &id) == 0) {
+			if (sysMMapperMapMemory(region, id, SYS_MEMORY_PROT_READ_WRITE) == 0) {
+				TRY("64K+pagina", region, q0, region, q0);
+				if (!ok)
+					sysMMapperUnmapMemory(region, &out_id);
+			}
+			if (!ok && sysMMapperMapMemory(region + OFF_MAP, id, SYS_MEMORY_PROT_READ_WRITE) == 0) {
+				TRY("pagina", region + OFF_MAP, q0, region, q0);
+				sysMMapperUnmapMemory(region + OFF_MAP, &out_id);
+			}
+			if (!ok)
+				sysMMapperFreeMemory(id);
 		}
 	}
-	if (rc != 0)
+	if (!ok) {
+		sys_mem_addr_t r = 0;
+		if (sysMMapperAllocateAddress(0x10000000, SYS_MEMORY_PAGE_SIZE_64K | SYS_MEMORY_ACCESS_RIGHT_ANY, 0x10000000, &r) == 0) {
+			TRY("derechos", r, q0, r, q0);
+			if (!ok)
+				sysMMapperFreeAddress(r);
+		}
+	}
+	if (!ok) {
+		sys_mem_addr_t r = 0;
+		if (sysMMapperAllocateAddress(0x10000000, SYS_MEMORY_PAGE_SIZE_1M | SYS_MEMORY_ACCESS_RIGHT_ANY, 0x10000000, &r) == 0) {
+			TRY("1M+derechos", r, q0, r, q0);
+			if (!ok)
+				sysMMapperFreeAddress(r);
+		}
+	}
+	if (!ok) {
+		sys_mem_addr_t r = 0;
+		if (sysMMapperAllocateAddress(0x20000000, SYS_MEMORY_PAGE_SIZE_64K, 0x20000000, &r) == 0) {
+			TRY("512M", r, q0, r, q0);
+			if (!ok)
+				sysMMapperFreeAddress(r);
+		}
+	}
+	if (!ok && sc_allocate_fixed_address() == 0) {
+		TRY("fija", 0xB0000000u, q0, 0xB0000000u, q0);
+		if (!ok)
+			sysMMapperFreeAddress(0xB0000000u);
+	}
+	if (!ok) {
+		sys_mem_addr_t m = 0;
+		if (sysMemoryAllocate(MB, SYS_MEMORY_PAGE_SIZE_1M, &m) == 0) {
+			TRY("sysmem", m, q0, m, q0);
+			if (!ok)
+				sysMemoryFree(m);
+		}
+	}
+	if (!ok && make_queue(&q, SYS_EVENT_QUEUE_PRIO, SYS_EVENT_QUEUE_PPU, SYS_EVENT_QUEUE_KEY_LOCAL, 32))
+		TRY("prio", region, q, region, q);
+	if (!ok && make_queue(&q, SYS_EVENT_QUEUE_FIFO, SYS_EVENT_QUEUE_PPU, 0x53414C5341363401ull, 32))
+		TRY("clave", region, q, region, q);
+	if (!ok && make_queue(&q, SYS_EVENT_QUEUE_FIFO, SYS_EVENT_QUEUE_SPU, SYS_EVENT_QUEUE_KEY_LOCAL, 32))
+		TRY("spu", region, q, region, q);
+	if (!ok && make_queue(&q, SYS_EVENT_QUEUE_FIFO, SYS_EVENT_QUEUE_PPU, SYS_EVENT_QUEUE_KEY_LOCAL, 8))
+		TRY("cola8", region, q, region, q);
+	if (!ok)
+		TRY("inverso", q0, region, region, q0);
+	if (!ok && region_1m)
+		TRY("inverso1M", q0, region_1m, region_1m, q0);
+#undef TRY
+	salsa64_log("variantes de 327:%s", out);
+	state_append("notificacion %s%s", ok ? "OK" : "NO_DISPONIBLE", out);
+	return ok;
+}
+
+static bool fault_setup(void)
+{
+	if (!make_queue(&fault.queue, SYS_EVENT_QUEUE_FIFO, SYS_EVENT_QUEUE_PPU, SYS_EVENT_QUEUE_KEY_LOCAL, 32))
 		return false;
-	rc = sysMMapperAllocateMemory(64 * 1024, SYS_MEMORY_PAGE_SIZE_64K, &fault.spare);
+	fault_region = region;
+	if (!enable_variants())
+		return false;
+	s32 rc = sysMMapperAllocateMemory(64 * 1024, SYS_MEMORY_PAGE_SIZE_64K, &fault.spare);
 	if (rc != 0) {
 		salsa64_log("sysMMapperAllocateMemory (repuesto de 64 KB): 0x%08x", (unsigned)rc);
 		return false;
