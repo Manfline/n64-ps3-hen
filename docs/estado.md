@@ -1,5 +1,84 @@
 # Estado
 
+## 2026-10-13 — Recompilador: código compacto, 20,2 → 15,6 palabras de PPC por instrucción MIPS (rama `sleepy-mestorf`, paquete SLSA00106 «Salsa64 compacto»)
+
+Sigue a la medición del perfil persistente (2026-10-12): juntar los bloques
+calientes no cambió el costo del nativo; lo que manda es cuántas líneas de
+caché toca cada instrucción emulada (~21 palabras de PPC por instrucción
+MIPS en los bloques calientes de GoldenEye). Esta rama ataca esa
+expansión (docs/rec-ppe.md, «Código compacto»; docs/perf-log.md, «Código
+compacto»):
+
+- **Prueba de KSEG0 en 4 palabras** por acceso a memoria (antes 8): `oris`
+  del bit 29 + `addis 0x6000` dejan solo el desplazamiento si la dirección
+  es de KSEG0/KSEG1 dentro de la RDRAM; un `rldicl` comprueba segmento,
+  tamaño y alineación de una vez. Con desplazamiento 0, sin `addi`.
+- **Un camino lento por bloque**: una sola rutina del preámbulo
+  (`slow_rtn`: cargas, almacenamientos, instrucción al intérprete y
+  excepciones, según r6) y un trampolín por bloque con su pc y su n; cada
+  sitio pasa una palabra. Lo que antes eran ~19–25 palabras por sitio (FPU,
+  COP0, desbordamientos, accesos) son 4–6.
+- **Cadena de escritura**: los registros con valor al salir por un camino
+  lento se escriben con una sola secuencia de `std` por bloque (entrada
+  según la instrucción), en vez de repetir los sucios en cada sitio.
+- **Enlaces de 3 palabras**: el destino va como dato después del `bl
+  exit_link`.
+- `SALSA64_REC_OPT_WIDE` (`jit-ancho` en la PS3, `SALSA64_REC_WIDE=1` en
+  el host) repite el código de antes para el A/B con el mismo binario.
+- `tools/rec-expansion.py` mide la expansión del volcado
+  (`SALSA64_REC_DUMP=1`, ahora con las palabras calientes por bloque)
+  pesada por ejecuciones (`SALSA64_REC_PROF_TOP` lista más bloques).
+
+Medido en el host (GoldenEye hasta la presa, pesado por ejecuciones):
+**20,2 → 15,6 palabras por instrucción (−23 %)**; calientes 9,3 → 8,2
+(−12 %), frías 11,0 → 7,4 (−33 %); volcado 17,2 → 13,2 MB. Mismo recorrido
+exacto (mismas cuentas del perfil).
+
+Corrección: unitarias 437/437 en los cinco modos (plain, far, pin, eager,
+FPU residente), nemu64-test 433 fallos (línea base) con y sin fijos, vitest,
+estados guardados, y lockstep de nemu64-test, vitest, Perfect Dark (3 G
+ciclos) y GoldenEye hasta la presa (7,5 G ciclos, 204 M salidas comparadas)
+**sin diferencias**; con main fusionado (perfil persistente), de nuevo
+nemu64-test, vitest, Perfect Dark y GoldenEye sin diferencias
+(docs/rec-ppe.md, «Resultados»). Dos errores que encontraron las pruebas: `addi r0, 0, -4`
+(r0 como base vale 0 en el PPE) y la cadena entrando por el extremo
+equivocado.
+
+**PS3 real** (2026-10-13, misma noche; detalle en docs/perf-log.md,
+«Código compacto»; A/B con `jit-ancho`, el código de antes en el mismo
+paquete): GoldenEye en la presa **17,26 → 16,30 / 16,03 ns por instrucción
+emulada (−6…−7 %)** en las ventanas pesadas, 47,5 → 50–53 campos/s; Perfect
+Dark intro 14,85 → 14,45 (−3 %; −4 % en la segunda escena, −7 % en la
+primera pesada); SM64 y Zelda a 59,5–59,7 campos/s sin regresión. Es la
+primera palanca del recompilador que mueve el costo por instrucción del
+nativo desde la Fase 3. El autor lo notó a ojo (5–10 %, menos tirones).
+
+**Muestreo por tiempo** (mismo día, a pedido de main; docs/rec-ppe.md,
+«Muestreo por tiempo»): `src/cpu/rec_sample.c`, archivo `muestreo` en la
+PS3 y `SALSA64_REC_SAMPLE=1` en el host. La entrada de cada bloque deja su
+id (2 palabras), el preámbulo y el despachador marcan lo que se hace en C,
+y un hilo de prioridad 1100 muestrea cada 200 µs; al cerrar el juego, los
+30 bloques con más tiempo con sus palabras de PPC. Primera corrida en la
+PS3 (docs/perf-log.md, «Muestreo por tiempo en la PS3»): GoldenEye en la
+presa pasa el 64–66 % en código generado, 21–22 % durmiendo al ritmo, 3 %
+en el intérprete, 2,6 % en el despachador, 2,5–2,9 % en eventos y 1,6–2,8 %
+en los caminos lentos; el reparto por bloque es plano (los 30 primeros
+suman ~30 % del nativo, ninguno pasa del 3 %) e igual con el compacto y el
+ancho. Contra el perfil de entradas × palabras: el bloque de más «costo»
+(7F0BA3B8) se lleva el 0,7 % del tiempo (sale por sus saltos internos) y
+pesan de más el refill de la TLB (80000000, 2,1 %), JR + SQRT.S (7001F7E0,
+1,9 %, `fsqrt`) y los bloques grandes con FPU en línea (20 palabras
+calientes por instrucción). El muestreo cuesta ~5 % (dos palabras y un
+almacenamiento por entrada a bloque): se mide con él apagado. Pendiente:
+marcar como camino lento la C de TLBWR/ERET (hecho en el código, por
+probar), y lo que señala para compactar: la FPU en línea, el refill y el 3 %
+de intérprete.
+
+Lo que queda grande por instrucción: la entrada de bloque (ktlb + evento,
+7–8 palabras), la salida (escritura + enlace), la ALU de 32 bits con su
+`extsw` y la FPU en línea (~35–40 palabras por operación). Ideas anotadas
+para después en docs/rec-ppe.md (datos por trabajo, precarga del sucesor,
+bench de huella).
 ## 2026-10-12 (noche) — Plan para la jerarquía de memoria del PPE (docs/cache-ppe.md)
 
 Documento de diseño, sin código: dónde se van los ~54 ciclos por

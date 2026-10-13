@@ -91,10 +91,7 @@ static void emit_slow_exec(struct ctx *c, unsigned k, unsigned last, int slow, i
 	bind(c, slow);
 	store_regs(c, touched & (c->written_start | c->pinned));
 	for (unsigned j = k; j <= last; j++) {
-		call_prep(c, j);
-		E(c, ppc_mr(3, R_CPU));
-		li32u(c, 4, c->d[j].w);
-		emit_call(c, c->rec->h_exec);
+		emit_exec_call(c, j);
 		reload(c, c->d[j].writes);
 		post_check(c, j);
 	}
@@ -103,6 +100,16 @@ static void emit_slow_exec(struct ctx *c, unsigned k, unsigned last, int slow, i
 }
 
 /* ---- LWL, LWR, LDL, LDR, SWL, SWR, SDL, SDR ---------------------------------------- */
+
+/* El tramo frío de la ktlb (emit_addr_cold) justo antes del camino lento que
+ * emite emit_slow_exec (que empieza en la sección fría). */
+static void addr_cold_then(struct ctx *c)
+{
+	unsigned sec = c->sec;
+	c->sec = SEC_COLD;
+	emit_addr_cold(c);
+	c->sec = sec;
+}
 
 /* Almacenamiento en [T_Y, T_Y + bytes): por el camino lento si hay código
  * recompilado en esos 128 bytes (o en los siguientes, si los cruza). */
@@ -192,6 +199,7 @@ static void emit_unaligned(struct ctx *c, unsigned k)
 		put(c, rt, d);
 	}
 	bind(c, resume);
+	addr_cold_then(c);
 	emit_slow_exec(c, k, k, slow, resume);
 }
 
@@ -234,10 +242,10 @@ static bool emit_unaligned_pair(struct ctx *c, unsigned k, unsigned end)
 	c->k = k;
 	c->written_start = c->written;
 	unsigned v = store ? get(c, rt, T_S1) : 0;
-	emit_addr(c, I_RS(a), imm, 0, slow, store);
+	unsigned va = emit_addr(c, I_RS(a), imm, 0, slow, store);
 	/* Los 4 bytes en la misma página (mapeada, la traducción es de la del
 	 * primero) y dentro de la RDRAM. */
-	E(c, ppc_rlwinm(0, T_ADDR, 0, 20, 31));
+	E(c, ppc_rlwinm(0, va, 0, 20, 31));
 	E(c, ppc_cmplwi(CR_T, 0, 0xFFC));
 	emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(CR_T, PPC_GT), slow);
 	E(c, ppc_addi(T_X, T_Y, 3));
@@ -269,6 +277,7 @@ static bool emit_unaligned_pair(struct ctx *c, unsigned k, unsigned end)
 		put(c, rt, d);
 	}
 	bind(c, resume);
+	addr_cold_then(c);
 	emit_slow_exec(c, k, k + 1, slow, resume);
 	return true;
 }
@@ -385,7 +394,9 @@ static void emit_tlbw(struct ctx *c, unsigned k)
 	call_prep(c, k);  /* Random sale de cycles */
 	E(c, ppc_mr(3, R_CPU));
 	li32u(c, 4, c->d[k].w);
+	emit_sample_mark(c, SALSA64_SMP_SLOW);
 	emit_call(c, c->rec->h_tlbw);
+	emit_sample_mark(c, SALSA64_SMP_NATIVE);
 	writeback(c, c->written);
 	E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)k + 1));
 	emit_exit_to(c, insn_pc(c, k + 1));
@@ -402,7 +413,9 @@ static void emit_eret(struct ctx *c, unsigned k)
 	fpu_flush(c);
 	call_prep(c, k);
 	E(c, ppc_mr(3, R_CPU));
+	emit_sample_mark(c, SALSA64_SMP_SLOW);
 	emit_call(c, c->rec->h_eret);
+	emit_sample_mark(c, SALSA64_SMP_NATIVE);
 	E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)k + 1));
 	E(c, ppc_lwz(0, OFF(irq_pending), R_CPU));  /* irq, redirect, abort y modo */
 	E(c, ppc_cmpwi(CR_T, 0, 0));

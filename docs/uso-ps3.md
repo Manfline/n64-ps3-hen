@@ -265,6 +265,8 @@ se crean por FTP.
 | `perfil-activo` | Basta con que exista | Enciende el perfil persistente del recompilador (apagado por omisión): cuenta las entradas a cada bloque, las guarda en `perfiles/<juego>.prf` y compila los calientes juntos. Medido en la PS3: contar cuesta ~5 % y juntarlos no gana nada (el costo lo pone cuántas líneas toca cada instrucción); sirve para recoger datos para lo que sigue (docs/rec-ppe.md) |
 | `perfil.cfg` | `caliente = KB`, `saltos = si\|no` | Con `perfil-activo`: tamaño de la zona caliente de la caché de código (por omisión 1024 KB, en dos mitades; `0` cuenta y guarda el perfil sin zona caliente) y si los bloques calientes registran sus sitios de salida (sí por omisión) |
 | `embedded` | `file:nombre` | Abre una ROM sin menú (sección anterior) |
+| `jit-ancho` | Basta con que exista | El recompilador emite el código «ancho» de antes del 2026-10-13 (prueba de KSEG0 de 8 palabras, un camino lento por acceso), para medir el compacto contra él con el mismo paquete (docs/rec-ppe.md, «Código compacto») |
+| `muestreo` | Basta con que exista | Muestreo por tiempo del recompilador: un hilo de baja prioridad mira cada 200 µs qué bloque corre el hilo de emulación (o si está en C: camino lento, intérprete, eventos…); cada 5 s el reparto al log y, al salir del juego, los 30 bloques con más tiempo con sus palabras de PPC (docs/rec-ppe.md, «Muestreo por tiempo»). Costo: dos palabras por entrada a bloque |
 
 La carpeta también contiene `states/` (estados guardados), `perfiles/` (el
 perfil del recompilador de cada juego, `<juego>.prf`, solo con

@@ -96,6 +96,7 @@
 #define _GNU_SOURCE
 #include <getopt.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -151,6 +152,25 @@ static void prof_line(void *ctx, const char *text)
 {
 	(void)ctx;
 	fprintf(stderr, "%s\n", text);
+}
+
+/* SALSA64_REC_SAMPLE=1: el muestreo por tiempo (rec_sample.h) desde un hilo
+ * propio cada 200 µs, como en la PS3; al final, los bloques con más
+ * muestras. En qemu el tiempo no es el del Cell: prueba el mecanismo (el id
+ * que deja cada bloque, las marcas, el plegado y el informe). */
+static struct salsa64_rec_sample host_sample;
+static volatile int sample_stop;
+static pthread_t sample_tid;
+
+static void *sample_thread(void *arg)
+{
+	(void)arg;
+	while (!sample_stop) {
+		struct timespec ts = { 0, 200000 };
+		nanosleep(&ts, NULL);
+		salsa64_rec_sample_tick(&host_sample, &n64.cpu);
+	}
+	return NULL;
 }
 
 /* SALSA64_REC_DUMP=1: cada bloque compilado en hexadecimal (como en las
@@ -2296,6 +2316,14 @@ int main(int argc, char **argv)
 			fprintf(stderr, "salsa64-run: el recompilador no corre en este host\n");
 			return 3;
 		}
+		if (salsa64_host_env_on("SALSA64_REC_SAMPLE")) {
+			salsa64_rec_sample_init(&host_sample);
+			rec.sample = &host_sample;
+			if (pthread_create(&sample_tid, NULL, sample_thread, NULL) != 0) {
+				fprintf(stderr, "salsa64-run: no se pudo crear el hilo del muestreo\n");
+				rec.sample = NULL;
+			}
+		}
 		if (profile_path) {
 			struct salsa64_rec_profile_game game;
 			salsa64_rec_profile_game_of(&game, rom);
@@ -2460,7 +2488,15 @@ int main(int argc, char **argv)
 			memset(&prof_prev, 0, sizeof prof_prev);
 			salsa64_rec_prof_report(&prof, &prof_prev, 0, n64.bus.vi.fields, text, sizeof text);
 			fprintf(stderr, "salsa64-run: %s\n", text);
-			salsa64_rec_prof_blocks_report(&rec, 40, prof_line, NULL);
+			salsa64_rec_prof_blocks_report(&rec, getenv("SALSA64_REC_PROF_TOP") ? (unsigned)strtoul(getenv("SALSA64_REC_PROF_TOP"), NULL, 0) : 40,
+					       prof_line, NULL);  /* más bloques para pesar la expansión (tools/rec-expansion.py) */
+		}
+		if (rec.sample) {
+			sample_stop = 1;
+			pthread_join(sample_tid, NULL);
+			fprintf(stderr, "salsa64-run: muestreo: %llu muestras\n", (unsigned long long)host_sample.ticks);
+			salsa64_rec_sample_report(&rec, 30, prof_line, NULL);
+			rec.sample = NULL;
 		}
 		if (rec.profile) {
 			salsa64_rec_profile_fold(&rec);

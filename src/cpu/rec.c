@@ -250,7 +250,8 @@ REC_UNUSED static uint64_t fn_entry(const void *fn, uint64_t *toc)
  * enter(cpu, código): guarda LR, CR y r14–r31 en un marco propio, carga los
  * registros fijos y salta al bloque. Las salidas dejan en r3 la dirección
  * MIPS donde sigue la ejecución:
- *   exit_link: viene de `bl` en un enlace; el nop parcheable está en LR - 16.
+ *   exit_link: viene de `bl` en un enlace; la palabra que sigue al bl (LR)
+ *     es el destino MIPS (32 bits) y el nop parcheable está en LR - 8.
  *   exit_mid, exit_jump: tipo de salida en r4.
  *   común: guarda cycles y el tipo, restaura y vuelve a C.
  *   exit_jr: destino de JR/JALR en r3; si ya hay un bloque compilado ahí,
@@ -292,6 +293,46 @@ REC_UNUSED static uint32_t pre_call(uint32_t *w, uint32_t n, const struct salsa6
 	return n;
 }
 
+/* Entrada de una rutina del camino lento: con r6 = (k + 1) | delay slot << 8
+ * | n << 16 y r7 = pc del bloque, deja cycles, cur_pc y delay_slot como el
+ * intérprete antes de la instrucción k, y guarda LR y cycles + n en
+ * cpu->rec_lr y rec_tmp (la llamada a C pisa r6, r7 y LR). */
+REC_UNUSED static uint32_t pre_slow_prep(uint32_t *w, uint32_t n)
+{
+	w[n++] = ppc_rlwinm(0, 6, 0, 24, 31);       /* k + 1 */
+	w[n++] = ppc_add(0, 0, 29);
+	w[n++] = ppc_std(0, OFF(cycles), 31);
+	w[n++] = ppc_rlwinm(11, 6, 2, 22, 29);      /* (k + 1) * 4 */
+	w[n++] = ppc_add(11, 11, 7);
+	w[n++] = ppc_addi(11, 11, -4);              /* pc + 4k (no r0: en addi vale 0) */
+	w[n++] = ppc_std(11, OFF(cur_pc), 31);
+	w[n++] = ppc_rlwinm(0, 6, 24, 31, 31);      /* delay slot (bit 8) */
+	w[n++] = ppc_stb(0, OFF(delay_slot), 31);
+	w[n++] = ppc_rlwinm(0, 6, 16, 24, 31);      /* n */
+	w[n++] = ppc_add(0, 0, 29);
+	w[n++] = ppc_std(0, OFF(rec_tmp), 31);
+	w[n++] = ppc_mflr(0);
+	w[n++] = ppc_std(0, OFF(rec_lr), 31);
+	return n;
+}
+
+/* Salida de una rutina del camino lento, después de la llamada y de reponer
+ * LR: cr5 gt si hay que salir (interrupción, redirect, código invalidado,
+ * modo, o el bloque ya no cabe antes del evento), con sched->next recargado
+ * en r27. */
+REC_UNUSED static uint32_t pre_slow_check(uint32_t *w, uint32_t n)
+{
+	w[n++] = ppc_lwz(0, OFF(irq_pending), 31);         /* irq, redirect, abort y modo */
+	w[n++] = ppc_cmpwi(5, 0, 0);
+	w[n++] = ppc_bclr(PPC_BO_FALSE, PPC_BI(5, PPC_EQ));  /* salir: cr5 gt */
+	w[n++] = ppc_ld(11, OFF(sched), 31);
+	w[n++] = ppc_ld(27, (int32_t)offsetof(struct salsa64_sched, next), 11);
+	w[n++] = ppc_ld(0, OFF(rec_tmp), 31);
+	w[n++] = ppc_cmpld(5, 0, 27);                       /* no cabe: cr5 gt */
+	w[n++] = PPC_BLR;
+	return n;
+}
+
 REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 {
 	uint32_t *w = rec->code, n = 0;
@@ -317,13 +358,17 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	if (rec->opts & SALSA64_REC_OPT_PIN)
 		for (unsigned k = 0; k < SALSA64_REC_PIN_N; k++)
 			w[n++] = ppc_ld(SALSA64_REC_PIN_PPC + k, OFF(gpr) + 8 * salsa64_rec_pin[k], 31);
+	w[n++] = ppc_li(0, SALSA64_SMP_NATIVE);  /* muestreo (rec_sample.h): en código generado */
+	w[n++] = ppc_stb(0, OFF(rec_mark), 31);
 	w[n++] = ppc_mtctr(4);
 	w[n++] = PPC_BCTR;
 
-	uint32_t common = n + 18;
+	uint32_t common = n + 20;
 	rec->exit_link = n;
 	w[n++] = ppc_mflr(4);
-	w[n++] = ppc_addi(4, 4, -16);
+	w[n++] = ppc_lwz(3, 0, 4);      /* el destino, en la palabra después del bl */
+	w[n++] = ppc_extsw(3, 3);
+	w[n++] = ppc_addi(4, 4, -8);
 	w[n++] = ppc_std(4, OFF(rec_site), 31);
 	w[n++] = ppc_li(4, SALSA64_REC_EXIT_LINK);
 	w[n] = ppc_b((int32_t)(common - n) * 4);
@@ -357,6 +402,8 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 
 	w[n++] = ppc_std(29, OFF(cycles), 31);
 	w[n++] = ppc_stw(4, OFF(rec_kind), 31);
+	w[n++] = ppc_li(0, SALSA64_SMP_DISPATCH);  /* muestreo: de vuelta en C */
+	w[n++] = ppc_stb(0, OFF(rec_mark), 31);
 	if (rec->opts & SALSA64_REC_OPT_PIN)
 		for (unsigned k = 0; k < SALSA64_REC_PIN_N; k++)
 			w[n++] = ppc_std(SALSA64_REC_PIN_PPC + k, OFF(gpr) + 8 * salsa64_rec_pin[k], 31);
@@ -481,48 +528,72 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 		}
 	}
 
-	/* Camino lento de cargas y almacenamientos, compartido por tipo
-	 * (rec_emit.c, emit_load/emit_store): r3 = va (r5 = valor al almacenar),
-	 * r6 = (k + 1) | delay slot << 8 | n << 16, r7 = pc de la instrucción.
-	 * Deja cycles, cur_pc y delay_slot como el intérprete, llama a C y recarga
-	 * sched->next (r27). Vuelve con r3 = valor y cr1 ne si hubo excepción
-	 * (redirect); si no, cr5 gt si hay que salir (interrupción, código
-	 * invalidado, modo, o el bloque ya no cabe antes del evento). Guarda LR y
-	 * el fin del bloque en cpu->rec_lr y rec_tmp. Antes se repetía todo esto
-	 * (~25 palabras) en cada carga y almacenamiento. */
-	for (unsigned st = 0; st < 2; st++) {
-		for (unsigned kind = 0; kind < (st ? 4u : 7u); kind++) {
-			(st ? rec->slow_store : rec->slow_load)[kind] = n;
-			w[n++] = ppc_rlwinm(0, 6, 0, 24, 31);       /* k + 1 */
-			w[n++] = ppc_add(0, 0, 29);
-			w[n++] = ppc_std(0, OFF(cycles), 31);
-			w[n++] = ppc_std(7, OFF(cur_pc), 31);
-			w[n++] = ppc_rlwinm(0, 6, 24, 31, 31);      /* delay slot (bit 8) */
-			w[n++] = ppc_stb(0, OFF(delay_slot), 31);
-			w[n++] = ppc_rlwinm(0, 6, 16, 24, 31);      /* n */
-			w[n++] = ppc_add(0, 0, 29);
-			w[n++] = ppc_std(0, OFF(rec_tmp), 31);
-			w[n++] = ppc_mflr(0);
-			w[n++] = ppc_std(0, OFF(rec_lr), 31);
-			w[n++] = ppc_mr(4, 3);
-			w[n++] = ppc_mr(3, 31);
-			w[n++] = ppc_li(st ? 6 : 5, (int32_t)kind);
-			n = pre_call(w, n, rec, st ? rec->h_store : rec->h_load);
-			w[n++] = ppc_ld(0, OFF(rec_lr), 31);
-			w[n++] = ppc_mtlr(0);
-			w[n++] = ppc_lbz(0, OFF(redirect), 31);
-			w[n++] = ppc_cmpwi(1, 0, 0);
-			w[n++] = ppc_bclr(PPC_BO_FALSE, PPC_BI(1, PPC_EQ));  /* excepción: cr1 ne */
-			w[n++] = ppc_lwz(0, OFF(irq_pending), 31);         /* irq, redirect, abort y modo */
-			w[n++] = ppc_cmpwi(5, 0, 0);
-			w[n++] = ppc_bclr(PPC_BO_FALSE, PPC_BI(5, PPC_EQ));  /* salir: cr5 gt */
-			w[n++] = ppc_ld(11, OFF(sched), 31);
-			w[n++] = ppc_ld(27, (int32_t)offsetof(struct salsa64_sched, next), 11);
-			w[n++] = ppc_ld(0, OFF(rec_tmp), 31);
-			w[n++] = ppc_cmpld(5, 0, 27);                       /* no cabe: cr5 gt */
-			w[n++] = PPC_BLR;
-		}
-	}
+	/* Camino lento compartido (rec_emit.c, emit_slow_call y el trampolín por
+	 * bloque): r6 = (k + 1) | delay slot << 8 | tipo << 9 | qué << 12 |
+	 * n << 16 y r7 = pc del bloque; la rutina deja cycles, cur_pc (pc + 4k) y
+	 * delay_slot como el intérprete, guarda LR y el fin del bloque (cycles +
+	 * n) en cpu->rec_lr y rec_tmp, llama a C y recarga sched->next (r27).
+	 * Antes se repetía todo esto (~25 palabras) en cada sitio. «Qué»:
+	 *   0  carga: r3 = va, tipo = SALSA64_REC_LB…; vuelve con r3 = valor y
+	 *      cr1 ne si hubo excepción (redirect), si no cr5 gt si hay que salir
+	 *      (interrupción, código invalidado, modo, o el bloque ya no cabe
+	 *      antes del evento);
+	 *   1  almacenamiento: r3 = va, r5 = valor, tipo = SALSA64_REC_SB…; igual;
+	 *   2  una instrucción al intérprete: r4 = la instrucción (con el signo
+	 *      extendido: li32s); cr5 gt si hay que salir, también por excepción;
+	 *   3  una excepción: r4 = el código; quien llama sale siempre. */
+	rec->slow_rtn = n;
+	n = pre_slow_prep(w, n);
+	w[n++] = ppc_li(0, SALSA64_SMP_SLOW);       /* muestreo: camino lento en C */
+	w[n++] = ppc_stb(0, OFF(rec_mark), 31);
+	w[n++] = ppc_rlwinm(0, 6, 20, 30, 31);      /* qué */
+	w[n++] = ppc_cmpwi(0, 0, 2);
+	uint32_t to_exec = n++, to_exc = n++;
+	w[n++] = ppc_cmpwi(0, 0, 1);
+	uint32_t to_store = n++;
+	/* 0, carga */
+	w[n++] = ppc_rlwinm(5, 6, 23, 29, 31);      /* tipo */
+	w[n++] = ppc_mr(4, 3);
+	w[n++] = ppc_mr(3, 31);
+	n = pre_call(w, n, rec, rec->h_load);
+	uint32_t after_mem = n;
+	w[n++] = ppc_li(0, SALSA64_SMP_NATIVE);
+	w[n++] = ppc_stb(0, OFF(rec_mark), 31);
+	w[n++] = ppc_ld(0, OFF(rec_lr), 31);
+	w[n++] = ppc_mtlr(0);
+	w[n++] = ppc_lbz(0, OFF(redirect), 31);
+	w[n++] = ppc_cmpwi(1, 0, 0);
+	w[n++] = ppc_bclr(PPC_BO_FALSE, PPC_BI(1, PPC_EQ));  /* excepción: cr1 ne */
+	uint32_t check = n;
+	n = pre_slow_check(w, n);
+	/* 1, almacenamiento */
+	w[to_store] = ppc_bc(PPC_BO_TRUE, PPC_BI(0, PPC_EQ), (int32_t)(n - to_store) * 4);
+	w[n++] = ppc_rlwinm(6, 6, 23, 29, 31);      /* tipo */
+	w[n++] = ppc_mr(4, 3);
+	w[n++] = ppc_mr(3, 31);
+	n = pre_call(w, n, rec, rec->h_store);
+	w[n] = ppc_b((int32_t)(after_mem - n) * 4);
+	n++;
+	/* 2, una instrucción al intérprete */
+	w[to_exec] = ppc_bc(PPC_BO_TRUE, PPC_BI(0, PPC_EQ), (int32_t)(n - to_exec) * 4);
+	w[n++] = ppc_clrldi(4, 4, 32);
+	w[n++] = ppc_mr(3, 31);
+	n = pre_call(w, n, rec, rec->h_exec);
+	w[n++] = ppc_li(0, SALSA64_SMP_NATIVE);
+	w[n++] = ppc_stb(0, OFF(rec_mark), 31);
+	w[n++] = ppc_ld(0, OFF(rec_lr), 31);
+	w[n++] = ppc_mtlr(0);
+	w[n] = ppc_b((int32_t)(check - n) * 4);
+	n++;
+	/* 3, una excepción */
+	w[to_exc] = ppc_bc(PPC_BO_TRUE, PPC_BI(0, PPC_GT), (int32_t)(n - to_exc) * 4);
+	w[n++] = ppc_mr(3, 31);
+	n = pre_call(w, n, rec, rec->h_exception);
+	w[n++] = ppc_li(0, SALSA64_SMP_NATIVE);
+	w[n++] = ppc_stb(0, OFF(rec_mark), 31);
+	w[n++] = ppc_ld(0, OFF(rec_lr), 31);
+	w[n++] = ppc_mtlr(0);
+	w[n++] = PPC_BLR;
 	return n;
 }
 
@@ -669,6 +740,8 @@ bool salsa64_rec_calls_near_at(const struct salsa64_rec *rec, uint32_t base)
 
 void salsa64_rec_flush_why(struct salsa64_rec *rec, enum salsa64_rec_flush_cause why)
 {
+	if (rec->sample)
+		salsa64_rec_sample_fold_all(rec);
 	if (rec->prof && rec->prof->blocks)
 		for (unsigned id = 1; id < rec->next_block; id++)
 			if (rec->blocks[id].code)
@@ -726,6 +799,8 @@ static void kill_block(struct salsa64_rec *rec, unsigned id)
 {
 	struct salsa64_rec_block *b = &rec->blocks[id];
 	bool detached = rec->x.state[id] == SALSA64_REC_X_DETACHED;  /* ya sin banderas, enlaces ni código */
+	if (rec->sample)
+		salsa64_rec_sample_fold(rec, id);
 	if (rec->prof && rec->prof->blocks)
 		salsa64_rec_prof_fold(rec->prof, id, false);
 	fold_block(rec, id);
@@ -1010,8 +1085,11 @@ static void rec_dispatch(struct salsa64_rec *rec)
 	struct salsa64_cpu *cpu = rec->cpu;
 	struct salsa64_sched *s = cpu->sched;
 	struct salsa64_rec_prof *prof = rec->prof;
+	uint8_t mark = cpu->rec_mark;
+	cpu->rec_mark = SALSA64_SMP_EVENTS;  /* muestreo (rec_sample.h) */
 	if (!prof) {
 		salsa64_sched_dispatch(s, cpu->cycles);
+		cpu->rec_mark = mark;
 		return;
 	}
 	unsigned ev = due_event(s, cpu->cycles);
@@ -1019,6 +1097,7 @@ static void rec_dispatch(struct salsa64_rec *rec)
 	salsa64_sched_dispatch(s, cpu->cycles);
 	prof->t[ev] += salsa64_rec_prof_now() - t0;
 	prof->n[ev]++;
+	cpu->rec_mark = mark;
 }
 
 /* El intérprete avanza hasta terminar un delay slot, tomar una excepción o
@@ -1033,6 +1112,7 @@ static void rec_interp(struct salsa64_rec *rec, bool to_boundary, unsigned why)
 	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0, t_ev = 0;
 	uint32_t exc = cpu->exc_count;
 	unsigned k = 0;
+	cpu->rec_mark = SALSA64_SMP_INTERP;
 	do {
 		bool ds = cpu->branch != 0;
 		salsa64_cpu_step_only(cpu);
@@ -1047,6 +1127,7 @@ static void rec_interp(struct salsa64_rec *rec, bool to_boundary, unsigned why)
 			break;
 	} while (k < 4096 && cpu->running);
 	rec->stats.interp_steps += k;
+	cpu->rec_mark = SALSA64_SMP_DISPATCH;
 	if (prof) {
 		prof->t[why] += salsa64_rec_prof_now() - t0 - t_ev;
 		prof->n[why] += k;
@@ -1088,6 +1169,7 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 	uint64_t t_run = prof ? salsa64_rec_prof_now() : 0, t0 = 0;
 
 	cpu->running = 1;
+	cpu->rec_mark = SALSA64_SMP_DISPATCH;
 	while (cpu->running) {
 		if (cpu->cycles >= s->next) {
 			rec_dispatch(rec);
@@ -1118,7 +1200,9 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 		if (!id || fr_mismatch(rec, id)) {
 			if (prof)
 				t0 = salsa64_rec_prof_now();
+			cpu->rec_mark = SALSA64_SMP_COMPILE;
 			id = block_for_fr(rec, id, pc, pa, seg);
+			cpu->rec_mark = SALSA64_SMP_DISPATCH;
 			if (prof) {
 				prof->t[SALSA64_PROF_COMPILE] += salsa64_rec_prof_now() - t0;
 				prof->n[SALSA64_PROF_COMPILE]++;
@@ -1140,8 +1224,10 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 				if (prof)
 					t0 = salsa64_rec_prof_now();
 				rec->fr = cpu->status & SALSA64_ST_FR;
+				cpu->rec_mark = SALSA64_SMP_COMPILE;
 				entry = salsa64_rec_compile(rec, pc, pa, seg, (unsigned)(s->next - cpu->cycles), true, &n,
 							    &bytes);
+				cpu->rec_mark = SALSA64_SMP_DISPATCH;
 				if (prof) {
 					prof->t[SALSA64_PROF_COMPILE] += salsa64_rec_prof_now() - t0;
 					prof->n[SALSA64_PROF_COMPILE]++;
@@ -1189,7 +1275,9 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 			/* Deja el delay slot pendiente: lo corre el intérprete. */
 			if (prof)
 				t0 = salsa64_rec_prof_now();
+			cpu->rec_mark = SALSA64_SMP_IDLE;
 			rec_idle_exit(rec, next);
+			cpu->rec_mark = SALSA64_SMP_DISPATCH;
 			if (prof) {
 				prof->t[SALSA64_PROF_IDLE] += salsa64_rec_prof_now() - t0;
 				prof->n[SALSA64_PROF_IDLE]++;

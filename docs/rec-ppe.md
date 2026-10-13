@@ -422,7 +422,8 @@ que repetían la escritura de los registros modificados. Con superbloques y
 la caché de 16 MB, GoldenEye la llenaba cada 7,5 s (17 vaciados en 128 s).
 Ahora:
 - El camino lento de cargas y almacenamientos son 11 rutinas compartidas
-  del preámbulo (`slow_load[7]`, `slow_store[4]`): el sitio escribe sus
+  del preámbulo (`slow_load[7]`, `slow_store[4]`; desde el 2026-10-13 una
+  sola, con trampolín por bloque: «Código compacto»): el sitio escribe sus
   registros sucios (solo en ese camino, el rápido no cambia), pasa k, el
   delay slot y n en r6 y el pc en r7, y la rutina deja `cycles`, `cur_pc` y
   `delay_slot` como el intérprete, llama a C (guardando LR en
@@ -440,6 +441,153 @@ son las operaciones de la FPU (~55 palabras cada una, con su camino lento
 al intérprete) y las salidas de los saltos internos. Con 24 MB, GoldenEye
 vacía la caché 2 veces en 128 s (al cargar la presa); cada vaciado
 recompila el conjunto vivo (~7000 bloques) a medida que se ejecuta.
+
+### Código compacto: palabras por instrucción MIPS (2026-10-13)
+
+Medido en la PS3 el 2026-10-12 (docs/perf-log.md, «Perfil persistente y
+zona caliente»): juntar los bloques calientes en una zona contigua no cambia
+el costo del nativo; lo que manda es cuántas líneas de caché toca cada
+instrucción emulada. El volcado de GoldenEye hasta la presa
+(`SALSA64_REC_DUMP=1` con el perfil por bloque, `tools/rec-expansion.py`
+pesa cada bloque por sus ejecuciones) daba **20,9 palabras de PPC por
+instrucción MIPS: 9,9 en la sección caliente y 11,0 en la fría**; por
+mnemónico, lo que más pesaba en la caliente era la prueba de KSEG0 de cada
+acceso a memoria (`sradi`, `ori`, `addi`, `clrldi`, `or`, `cmpdi`, `bne`,
+`clrldi`: 8 palabras más la carga y su `extsw`) y en la fría las constantes
+y saltos de los caminos lentos (`lis`/`ori` 30 %, `b`/`bl`/`bne` 31 %) y la
+escritura de los registros sucios antes de cada llamada a C (`std` 10 %).
+Tres cambios, con `SALSA64_REC_OPT_WIDE` (`jit-ancho` en la PS3,
+`SALSA64_REC_WIDE=1` en el host) para medir contra el código de antes con
+el mismo binario:
+
+- **Prueba de KSEG0 en 4 palabras** (`emit_addr`). Con el bit 29 puesto
+  (`oris 0x2000`) KSEG0 y KSEG1 son la misma dirección, y sumarle 2³⁰ + 2²⁹
+  (`addis 0x6000`) a 0xFFFFFFFF_A0000000 da exactamente 2⁶⁴: de una
+  dirección de KSEG0 o KSEG1 dentro de la RDRAM quedan solo los bits del
+  desplazamiento, ya en r12 para el acceso. Un `rldicl` rota al tope los
+  bits del desplazamiento por encima de la alineación y los recorta: queda 0
+  si la dirección vale (segmento, tamaño de la RDRAM y alineación de una
+  vez), y `cmpdi` + `bne` van al camino de la ktlb. Son 4 palabras y ningún
+  registro extra, contra 8 antes (y la rutina de la ktlb sigue devolviendo
+  el desplazamiento en r12).
+- **Un camino lento por bloque, no por acceso.** Una sola rutina del
+  preámbulo (`slow_rtn`; antes `slow_load[7]` y `slow_store[4]`, y las
+  llamadas al intérprete y a las excepciones iban en línea) recibe `r6 =
+  (k + 1) | delay slot << 8 | tipo << 9 | qué << 12 | n << 16` y `r7 = pc
+  del bloque`, deriva `cur_pc = pc + 4k`, deja cycles, cur_pc y delay_slot
+  como el intérprete y despacha por «qué»: carga (`r3 = va`),
+  almacenamiento (`r5 = valor`), una instrucción al intérprete (`r4 = la
+  instrucción`) o una excepción (`r4 = el código`). Cada sitio pasa solo
+  `li r6` (una palabra; y `lis`/`ori` de la instrucción, o `li` del
+  código) y hace `bl` al **trampolín del bloque**, que agrega lo que es del
+  bloque entero (`lis`/`ori` del pc, `oris` de n) y sigue a la rutina: 4
+  palabras una vez por bloque en vez de 5–8 por sitio. Al volver, `cr5 gt`
+  dice si hay que salir (también por excepción en el caso del intérprete);
+  las cargas y los almacenamientos mantienen `cr1 ne` para la excepción.
+  El `call_prep` + llamada + revisión en línea (~19 palabras) de cada
+  instrucción al intérprete, cada camino lento de la FPU y cada
+  desbordamiento de ADD/ADDI pasa a 4–6. El tramo frío que prueba la ktlb
+  de un acceso va pegado a su camino lento (`emit_addr_cold`: si traduce
+  vuelve al rápido, si no sigue de largo), y con desplazamiento 0 la
+  dirección se toma del registro base sin copiarla (`addi` de menos en el
+  camino caliente; los caminos fríos la copian a r3).
+- **Cadena de escritura** (`chain_build`, `emit_chain`). Una salida a C por
+  el camino lento tiene que dejar en `cpu->gpr` los registros del bloque que
+  ya tienen valor; antes cada sitio escribía los suyos (`std` por registro
+  sucio, repetido en cada acceso). Como cada registro del PPE tiene el
+  valor correcto desde la primera instrucción que lo escribe (y antes, si se
+  cargó a la entrada, el mismo que la memoria), los que hay que escribir al
+  salir en k son los de primera escritura ≤ k (< k si k no terminó):
+  ordenados por primera escritura descendente son un sufijo de una sola
+  secuencia de `std` terminada en `blr`, y cada salida entra con `bl` en el
+  último que ya tiene valor. Un `std` por registro por bloque. Las salidas
+  por excepción ya no cargan r3 (el despachador sigue por `redirect`). Los
+  caminos tomados de los saltos internos y las salidas finales siguen
+  escribiendo en línea (son calientes; `bl`/`blr` les costaría ciclos).
+- **Enlaces de 3 palabras** (en los dos modos): el destino va como dato
+  después del `bl exit_link`, que lo lee de LR («Enlaces»).
+
+Resultado en el host (mismo volcado de GoldenEye, pesado por ejecuciones;
+las cuentas de abajo descuentan las 8 palabras por bloque del contador del
+perfil, que la PS3 no lleva): ver docs/perf-log.md, «Código compacto».
+
+#### Ideas anotadas para después (2026-10-13; de docs/cache-ppe.md y del autor)
+
+Por evaluar con el muestreo por tiempo y el volcado, en este orden de
+costo/beneficio; ninguna está hecha:
+
+- **Cambiar datos por trabajo** (sobra cálculo y falta caché; el camino
+  lento compartido ya es eso): (a) no traducir lo tibio, bloques con pocas
+  ejecuciones en un intérprete compacto o código enhebrado, para que el
+  código traducido vivo sea menor (docs/cache-ppe.md 3.8); (b) estructuras
+  de la ktlb más chicas aunque cuesten un cálculo más, si las actuales
+  desbordan la caché de datos (3.6); (c) secuencias repetidas en lo
+  caliente a subrutinas compartidas con un salto de costo aceptable (la
+  prueba de KSEG0 de 4 palabras y la carga ya están cerca del mínimo; las
+  candidatas son la entrada de bloque y la FPU en línea).
+- **Precarga del sucesor probable**: con los sucesores del perfil
+  (rec_profile.h), emitir al entrar a un bloque caliente una precarga del
+  código del sucesor (`icbt`, o lo que el PPE ofrezca sin microcódigo) y de
+  la línea de datos o de la ktlb que va a tocar (`dcbt`); medir con el
+  muestreo si baja el tiempo por instrucción sin subir el tamaño caliente
+  (3.5).
+- **Bench de huella** (docs/cache-ppe.md, sección 5): cadenas sintéticas de
+  bloques que ocupen 16 KB … 16 MB de PPC, para dibujar la curva L1 → ERAT
+  → L2 → XDR en la PS3 y saber en qué régimen está cada juego; junto con el
+  A/B de `jit-ancho`.
+- Descartado: páginas de 1 MB para la caché de código (el ERAT cubre 4 KB
+  por entrada aunque la página sea grande).
+- Lo que dijo el primer muestreo en la PS3 (docs/perf-log.md, «Muestreo
+  por tiempo en la PS3»): el tiempo está repartido plano entre cientos de
+  bloques (ninguno pasa del 3 %), los que más pesan son grandes con mucha
+  FPU en línea (~20 palabras calientes por instrucción), el refill de la
+  TLB se lleva ~2 % y el intérprete 3 %. Candidatos en ese orden: la FPU
+  (~40 palabras por operación: compartir la clasificación y FCR31 en una
+  rutina, o volver a la residente sin sus saltos), el refill (TLBWR y ERET
+  por la rutina compartida) y los bloques que no caben antes del evento.
+
+### Muestreo por tiempo desde el otro hilo (2026-10-13)
+
+Código: `src/cpu/rec_sample.c` y `rec_sample.h`; el frontend lo enciende con
+el archivo `/dev_hdd0/salsa64/muestreo` y en el host `SALSA64_REC_SAMPLE=1`
+(salsa64-run, con un hilo propio). Por qué: el perfil persistente cuenta
+entradas a bloques, y eso engaña (los más entrados son los de 2–4
+instrucciones); lo que cuesta es tiempo, y sin el PMU del Cell la forma de
+medirlo es muestrear.
+
+- El hilo que emula deja dos bytes en `struct salsa64_cpu`: `rec_cur`, el id
+  del bloque que corre (lo escribe la entrada de cada bloque, `li` + `sth`,
+  dos palabras que solo se emiten con el muestreo puesto al compilar; los
+  bucles no vuelven a pasar por ahí), y `rec_mark`, 0 en código generado o
+  la categoría de lo que hace fuera de él: la rutina compartida del camino
+  lento al llamar a C, el despachador, el intérprete, los eventos, compilar,
+  los bucles de espera, el ritmo (duerme) y lo demás del hilo. Los marca el
+  preámbulo (entrada, salida común, `slow_rtn`) y el despachador en C.
+- Un hilo de prioridad 1100 (por debajo de emulación, 1000, y presentación,
+  1001: corre en el hilo de hardware que esté libre, el de presentación
+  duerme el 85 %) lee los dos bytes cada 200 µs y suma una muestra al
+  bloque (`samples[id]`) o a la categoría. Al morir un bloque, o al informar,
+  sus muestras pasan a una tabla por dirección virtual (16 384 entradas,
+  índice abierto): un bloque recompilado varias veces suma todo bajo su
+  dirección, con las palabras de PPC (y las calientes) del último compilado
+  ahí. Costo para el hilo que emula: ~0,13 ms por ms de trabajo del otro
+  hilo, y una muestra son decenas de ciclos (5000 por segundo); las dos
+  palabras por entrada a bloque son el único costo en el camino caliente.
+- Al log: cada ventana de 5 s el reparto por categoría; al cerrar el juego,
+  el total (muestras, % en código generado, palabras por instrucción pesadas
+  por muestras) y los 30 bloques con más muestras: dirección, muestras, % del
+  tiempo y del nativo, instrucciones MIPS, palabras de PPC (calientes). Con
+  el perfil de entradas de la PS3 (`perfiles/*.prf`) se compara por
+  dirección: un bloque con más tiempo del que dicen sus entradas × palabras
+  espera memoria (fallos de caché o de ERAT).
+- Lo que no puede dar: en qué parte del cuerpo de un bloque está el hilo
+  (desde usuario no se lee el pc nativo del otro hilo). Sí distingue el
+  cuerpo del bloque, los caminos lentos en C y el resto del emulador.
+- Carreras: el hilo que muestrea incrementa contadores que el que emula lee
+  y pone a cero al plegar; se puede perder una muestra en la ventana. Es
+  estadística. La prueba `t_suite_rec_sample` (tests/unit/test_rec_sample.c)
+  cubre la clasificación, el plegado por dirección con ids reutilizados y
+  el informe.
 
 ### Memoria
 
@@ -522,9 +670,12 @@ llamar a `salsa64_bus_rdram_written` al escribir la RDRAM.
 
 ### Enlaces
 
-Una salida a dirección fija deja `nop ; lis r3 ; ori r3 ; bl exit_link`. La
-primera vez vuelve a C; el despachador encuentra o compila el destino y
-cambia el `nop` por un `b` directo. Un salto al propio bloque vuelve al
+Una salida a dirección fija deja `nop ; bl exit_link ; <destino>` (desde el
+2026-10-13; antes el destino iba en `lis`/`ori` antes del `bl`, una palabra
+más por salida). La palabra del destino nunca se ejecuta: `exit_link` la lee
+de LR, la extiende con signo a 64 bits y vuelve a C con el sitio del `nop`
+(LR − 8); el despachador encuentra o compila el destino y cambia el `nop`
+por un `b` directo. Un salto al propio bloque vuelve al
 cuerpo (después de escribir los registros modificados y con la misma
 prueba del próximo evento), sin recargar nada. JR/JALR buscan el destino en
 el propio código (`exit_jr`): en KSEG0 por `map[]`, fuera de KSEG0 recorre
@@ -1117,5 +1268,5 @@ compiler error: Segmentation fault"; repetir compila bien
 | 2026-10-12 | Gemelos por Status.FR en vez de vaciar la caché (ad18cce) | qemu-ppc64 | unitarias 426/426 en los cinco modos (con `fr_switch_keeps_code_cache`); nemu64-test 433 fallas (línea base), vitest, estados y `--lockstep` de nemu64-test y vitest sin diferencias; Perfect Dark 3 G ciclos **sin diferencias** (20 971 salidas por CU1: libultra habilita la FPU por excepción); GoldenEye hasta la presa 7,5 G ciclos **sin diferencias** (14 825 bloques, 0 vaciados, 6 desalojos, 2 h 0 min); Paper Mario 1,9 G ciclos sin diferencias. DK64 en qemu: 4 173 → 0 vaciados |
 | 2026-10-12 | Perfil persistente y zona caliente (4809ec2; el lockstep de GoldenEye con el binario de ae46fb7, sin sitios de salida) | qemu-ppc64 | unitarias 440/440 en plain, pin y caché chica (suite `perfil`); nemu64-test 433 fallas con perfil nuevo y cargado, también con caché de 3 MB y zona de 256 KB (rotaciones de mitad); `--lockstep` **sin diferencias** en nemu64-test (las dos cachés), vitest y Perfect Dark 3 G ciclos con el perfil cargado (624 calientes, 1367 sitios); GoldenEye hasta la presa 7,5 G ciclos con el perfil cargado (692 calientes, 1 rotación) **sin diferencias** (1 h 20 min) |
 | 2026-10-12 | Formato 2 del perfil con sitios de salida (4809ec2, el árbol final del núcleo) | qemu-ppc64 | GoldenEye hasta la presa 7,5 G ciclos en `--lockstep` con el perfil cargado (692 calientes, 1483 sitios de salida contando en los caminos que salen) **sin diferencias** (1 h 26 min) |
-
+| 2026-10-13 | Código compacto (2be85a4; con main a9df32a) | qemu-ppc64 | unitarias 437/437 (446/446 con main) en los cinco modos; nemu64-test 433 fallas (línea base) con y sin fijos; vitest y estados OK; `--lockstep` **sin diferencias** en nemu64-test, vitest, Perfect Dark 3 G ciclos (38,8 M salidas comparadas) y GoldenEye hasta la presa 7,5 G ciclos (204 M salidas, 14 825 bloques, 2 h 15 min); con main fusionado (a9df32a), otra vez nemu64-test, vitest, Perfect Dark y GoldenEye hasta la presa (204 M salidas) sin diferencias; con el muestreo por tiempo encendido (a5ea24e), unitarias 449/449, nemu64-test 433 fallas y su `--lockstep` sin diferencias. Dos errores que atraparon las pruebas antes de pasar: `addi r0, 0, -4` en la rutina compartida (r0 como base vale 0: cur_pc salía −4 y las excepciones iban a cualquier parte) y la cadena de escritura entrando por el extremo equivocado (escribía solo el primer registro: `dsub_and_daddi` y el lockstep de nemu64-test lo vieron) |
 Rendimiento: solo en la PS3 real (docs/perf-log.md, «Recompilador»).

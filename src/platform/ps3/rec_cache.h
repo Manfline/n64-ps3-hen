@@ -78,4 +78,27 @@ static inline int salsa64_ps3_rec_no_evict_wanted(void)
 	return stat(SALSA64_RECNOEVICT_FLAG, &st) == 0;
 }
 
+/* Con este archivo, el muestreo por tiempo del recompilador (rec_sample.h):
+ * la entrada de cada bloque deja su id y un hilo de baja prioridad muestrea
+ * cada SAMPLE_US; al cerrar el juego, al log los bloques que más tiempo se
+ * llevan. */
+#define SALSA64_RECSAMPLE_FLAG SALSA64_DATA_DIR "/muestreo"
+
+static inline int salsa64_ps3_rec_sample_wanted(void)
+{
+	struct stat st;
+	return stat(SALSA64_RECSAMPLE_FLAG, &st) == 0;
+}
+
+/* Con este archivo, el código generado «ancho» de antes del 2026-10-13
+ * (SALSA64_REC_OPT_WIDE): para medir el compacto contra él con el mismo
+ * paquete. */
+#define SALSA64_RECWIDE_FLAG SALSA64_DATA_DIR "/jit-ancho"
+
+static inline int salsa64_ps3_rec_wide_wanted(void)
+{
+	struct stat st;
+	return stat(SALSA64_RECWIDE_FLAG, &st) == 0;
+}
+
 #endif
