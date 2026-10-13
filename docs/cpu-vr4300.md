@@ -77,7 +77,8 @@ Estado común a los dos:
 |---|---|---|
 | Status | 0x34000000 (CU1, CU0, FR) | IPL1 (n64brew.dev: Initial Program Load); nemu64-test lo verifica (StartupTest) |
 | Config | 0x7006E463 (valor de reset) | IPL1 escribe 0x0006E463; nemu64-test lee 0x7006E463 |
-| Cause, Count, Compare | 0 | libdragon `boot/ipl3.c` (stage1) |
+| Cause, Compare | 0 | libdragon `boot/ipl3.c` (stage1) |
+| Count | 23 437 500 (0,5 s) con un IPL3 de Nintendo reconocido; 0 en el camino ELF y sin IPL3 reconocido | El IPL3 de Nintendo lo pone en 0 al empezar (visto corriendo el del cartucho en el host) y tarda ~500 ms en frío (n64brew.dev: IPL3). `osContInit` espera hasta 0,5 s de `osGetTime()`: con 0, Conker dormía ahí ~29 s (docs/estado.md, 2026-10-13). libdragon `boot/ipl3.c` (stage1) lo pone en 0 |
 | FCR31 | 0 (tras encender) | nemu64-test, StartupTest |
 | PI_BSD_DOM1 LAT/PWD/PGS/RLS | bytes 3, 2, 1 (bits 0–3) y 1 (bits 4–5) del encabezado | n64brew.dev: ROM Header |
 | RI_SELECT | 0x14 (TSEL = 1, RSEL = 4) | n64brew.dev: RDRAM Interface |

@@ -25,6 +25,15 @@
 #define VI_V_INTR_BOOT   0x3FFu
 #define FLAT_LOAD_SIZE   0x100000u    /* 1 MB, fijo en el IPL3 de Nintendo */
 #define FLAT_SP          0xFFFFFFFFA4001FF0ull
+/* Count al saltar al juego con un IPL3 de Nintendo: lo pone en 0 al empezar
+ * (visto corriendo el IPL3 del cartucho) y tarda unos 500 ms en frío
+ * (n64brew.dev: IPL3), a 46,875 MHz. libultra mide el tiempo desde ahí:
+ * osContInit duerme hasta que osGetTime() llega a 0,5 s, y en la consola
+ * ese plazo ya pasó. Con 0 dormía, y como su osSetTimer pierde lo que
+ * llevaba el temporizador cada vez que otro más corto se pone delante
+ * (Conker arma uno de 20 000 cuentas cada dos campos para el audio), la
+ * espera de 0,4 s se volvía de 29 s de pantalla negra. */
+#define FLAT_IPL3_COUNT  23437500u
 #define ELF_SEARCH_LIMIT (64u << 20)  /* el IPL3 de libdragon busca en 64 MB */
 #define ELF_MAGIC        0x7F454C46u
 #define PT_LOAD          1u
@@ -231,6 +240,8 @@ static bool boot_flat(struct salsa64_n64 *n64, struct salsa64_boot_info *info)
 		boot_x103(bus);
 	else if (info->cic == SALSA64_CIC_6105)
 		boot_x105(bus);
+	if (info->cic != SALSA64_CIC_UNKNOWN)
+		salsa64_cpu_cop0_write(cpu, SALSA64_CP0_COUNT, FLAT_IPL3_COUNT);
 
 	/* Variables de arranque de libultra (osTvType, osRomType, osRomBase,
 	 * osResetType, osVersion, osMemSize), como las deja el IPL3. */

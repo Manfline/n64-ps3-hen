@@ -107,6 +107,7 @@ static void boot_elf_like_libdragon(void)
 	CHECK_EQ(info.loaded, 8);
 	CHECK_EQ(CPU->pc, 0xFFFFFFFF80001000ull);
 	CHECK_EQ(CPU->status, 0x34000000);
+	CHECK_EQ(salsa64_cpu_count(CPU), 0);
 	CHECK_EQ(R[SP], 0xFFFFFFFF807FFFF0ull);  /* fin de los 8 MB - 0x10 */
 	CHECK_EQ(t_rd32(0x1004), ADDU(T1, SP, ZERO));
 	CHECK_EQ(t_rd32(0x1008), 0);
@@ -157,6 +158,7 @@ static void boot_flat_like_libultra(void)
 	CHECK_EQ(R[S4], SALSA64_TV_PAL);
 	CHECK_EQ(R[S6], 0x3F);
 	CHECK_EQ(R[SP], 0xFFFFFFFFA4001FF0ull);
+	CHECK_EQ(salsa64_cpu_count(CPU), 0);           /* sin IPL3 de Nintendo reconocido */
 	t_step(1);
 	CHECK_EQ(R[T0], 0x77);
 
@@ -202,6 +204,7 @@ static void boot_by_cic(void)
 		CHECK_EQ(info.entry, v[i].entry);
 		CHECK_EQ(CPU->pc, 0xFFFFFFFF00000000ull | v[i].entry);
 		CHECK_EQ(R[S6], v[i].seed);
+		CHECK_EQ(salsa64_cpu_count(CPU), 23437500);  /* 0,5 s que tarda el IPL3 */
 		CHECK_EQ(t_rd32(v[i].entry & 0x1FFFFFFF), ADDIU(T0, ZERO, 0x66));
 		CHECK_EQ(t_rd32(0x300), SALSA64_TV_NTSC);
 		CHECK_EQ(t_rd32(0x310), v[i].cic_id);  /* osCicId */
