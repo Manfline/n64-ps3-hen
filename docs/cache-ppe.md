@@ -427,6 +427,206 @@ caben en 32 bits (dos de 6 ciclos en paralelo en vez de un `mulld` de
   siempre ya está medido a ~250 ciclos por instrucción y lo tibio pesa
   poco (3.8); un intérprete nuevo no se paga.
 
+### 3.11 Un SPE como «acomodador» de datos para el PPE
+
+**Mecanismo.** Un SPE junta por DMA en un búfer compacto lo que el hilo 0
+va a leer disperso, para que el PPE toque una línea donde hoy toca diez.
+Vale cuando se cumplen tres cosas: se sabe **antes** qué se va a leer, lo
+que se lee está repartido en muchas líneas, y el PPE lo lee varias veces
+o lo lee en serie (porque el búfer que el SPE escribe **no entra en la
+L2 del PPE**: el DMA va a la XDR y a la L2 solo le invalida las líneas que
+tuviera, así que la primera lectura del búfer compacto es un fallo de L2
+por línea; el ahorro es «un fallo en vez de diez», nunca «cero»).
+
+Dónde podría aplicar en la emulación, y por qué hoy no:
+
+- *Los datos del juego* (0,33 accesos por instrucción, lo más grande de
+  la fila «datos del juego» de la sección 2): la dirección se conoce una
+  o dos instrucciones antes del acceso y la decide el juego; no hay nada
+  que acomodar sin interpretar el programa antes de ejecutarlo.
+- *Las tablas del recompilador* que el camino caliente recorre
+  (`xhash` → `xb` → `blocks` en cada JR; `map[]` en KSEG0): sí son
+  lecturas dispersas y previsibles, pero el remedio es construir la tabla
+  compacta en el propio PPE al compilar y enlazar (la caché de destinos de
+  3.3: 8 KB que viven en la L1), no pedirla a otro procesador. Un SPE que
+  la reconstruyera entre campos llegaría tarde a los bloques nuevos y
+  tendría que verse con la invalidación.
+- *`ktlb[]`, el estado de las interfaces (`struct salsa64_bus`, 8,5 KB,
+  solo en los caminos lentos) y las listas del planificador
+  (`sched->when[]`, 200 bytes)*: ya son compactos; las entradas calientes
+  de la `ktlb` caben en dos líneas.
+- *Listas que el CPU emulado recorre* (colas de mensajes de libultra,
+  display lists, listas de actores): son datos del juego en la RDRAM y el
+  juego los recorre con su propio código; reordenarlos cambiaría lo que el
+  juego ve.
+
+**Ganancia estimada: ~0 hoy.** No hay en el hilo 0 un recorrido previsible
+y disperso que no esté ya cubierto por una tabla compacta propia. Donde el
+patrón existe (la copia del VI, las conversiones RSX → RDRAM, la tarea
+JPEG), lo que paga es que el SPE haga **el trabajo entero** sobre los datos
+dispersos (3.7), no que los acomode para el PPE. **Costo** de una prueba:
+dos días con `lib/spukit`. **Riesgo:** coherencia (el PPE leyendo un búfer
+que el SPE todavía escribe) y el mailbox por campo. **Cómo medir** si
+aparece un candidato: contar líneas distintas que toca el recorrido en el
+PPE (un `mftb` alrededor y el cálculo de líneas por el rango de
+direcciones) antes y después; si no supera las 20–30 líneas por campo, no
+hay nada que ganar. **Dependencia:** un candidato que hoy no está; dejar
+anotado para cuando entre una HLE de funciones de libultra que recorra
+estructuras grandes (el reparto natural sería hacerla entera en el SPE).
+
+### 3.12 Caché por software en el local store de un SPE
+
+**Mecanismo.** El SDK de IBM para el Cell trae una caché por software para
+programas del SPE (la «software-managed cache»: líneas en el local store,
+etiquetas, lectura con DMA bajo demanda y escritura diferida; interfaz de
+`cache_rd`/`cache_wr` por macros), pensada para que código del SPE acceda
+a memoria principal con patrón irregular sin programar el DMA a mano. Con
+ella, un trabajo que hoy hace el PPE sobre datos grandes podría pasar a un
+SPE aunque sus accesos no sean lineales. Solo como referencia pública: su
+licencia se revisa antes de tomar una línea (docs/THIRD_PARTY.md), y
+`lib/spukit` ya cubre el caso lineal con doble búfer.
+
+Qué hace hoy el PPE sobre datos grandes, y qué patrón tiene:
+
+| Trabajo | Dónde | Por campo | Patrón |
+|---|---|---|---|
+| Copia de la imagen del VI | hilo 0 | 0,20–0,30 ms, 150–300 KB | lineal: doble búfer, no caché (3.7) |
+| Conversiones RSX → RDRAM, espejos, cebado | hilo 1 | 0,4–1,5 ms | lineal por filas; ídem |
+| DMA del PI (ROM → RDRAM) | hilo 0, en ráfagas | hasta varios MB al cargar un nivel | lineal; un `memcpy` por DMA de un SPE, con `dcbz` si queda en el PPE |
+| Borrado de la z image en la RDRAM | hilo 0 | 150 KB cuando el juego borra | lineal |
+| Estados guardados, perfil | hilo 1, fuera del juego | — | no importa |
+| El intérprete sobre lo tibio | hilo 0 | 0,6–0,8 ms (GoldenEye, presa) | **irregular** (los datos del juego), pero con el estado del CPU de por medio |
+
+Todo lo que es lineal se hace mejor con el DMA a mano que con una caché;
+lo único irregular es el intérprete, y llevar el intérprete a un SPE no
+es cosa de la caché de datos: cada bloque interpretado tendría que
+mandar y traer el estado del CPU (2,9 KB, más la TLB) por el mailbox y
+el DMA, del orden de microsegundos por ida y vuelta, por bloques que en
+el PPE cuestan 1–5 µs enteros; y el SPE es malo en código escalar con
+saltos (el prototipo de LLE del RSP lo midió: docs/rsp-lle.md).
+
+**Ganancia estimada: ~0 hoy**; el techo de todo lo que el hilo 0 hace
+sobre datos grandes es la copia del VI más las ráfagas del PI (1–2 % del
+campo, y en los tirones de carga algo más), que se mueven con `spukit` y
+DMA lineal, sin caché. **Costo** de traer la caché: un día de adaptación
+al toolchain y la revisión de licencia. **Riesgo:** ninguno en el PPE; en
+el SPE, local store (una caché útil son ≥ 64 KB, y el SPE 0 está a 244
+KB). **Cómo medir:** no hay qué medir hasta tener un trabajo irregular
+en un SPE; el día que lo haya, el A/B es ms por tarea con DMA a mano
+contra con la caché. **Dependencia:** un trabajo irregular para un SPE
+(el candidato más probable a futuro es la LLE del RSP con su propia
+memoria, que ya tiene su DMEM/IMEM en el local store).
+
+### 3.13 El hilo 1 como hilo ayudante de precarga
+
+**Mecanismo.** La L2 es compartida: un hilo que corra por delante del
+hilo 0 y toque (`dcbt`) las líneas que este va a pedir las deja en la L2
+antes de que lleguen (la idea de los *helper threads* para SMT: Collins,
+Wang, Tullsen, Hughes, Lee, Lavery y Shen, «Speculative precomputation»,
+ISCA 2001, e Intel para el Pentium 4 con Hyper-Threading, 2002). El hilo
+1 duerme el 85 % del tiempo; el perfil ya da los sucesores probables de
+cada bloque caliente. Lo que puede y no puede precargar, qué tiene que
+saber y cuánto cuesta:
+
+*Qué puede precargar.* Solo **código traducido**: la dirección del
+código de un sucesor es fija y conocida (`blocks[id].code`). Los datos del
+juego no: la dirección de cada carga la calcula el bloque una o dos
+instrucciones antes con registros que solo tiene el hilo 0; para que el
+ayudante la calculara tendría que ejecutar por delante la «rebanada» del
+bloque que la produce con una copia del estado (precomputación
+especulativa), y el estado de la N64 está en los registros del hilo 0 y
+cambia 50 millones de veces por segundo. Las tablas del emulador que el
+camino caliente recorre (las de los JR) desaparecen con 3.3. Lo que queda
+es la fila «fetch de código» de la sección 2, y de ella solo la parte que
+**falla la L2** (unos 380 ciclos por línea): un `dcbt` del hilo 1 trae la
+línea a la L2 y a su propia L1 de datos, pero la L1 de instrucciones del
+hilo 0 sigue fallando (41 ciclos, que no se recuperan).
+
+*Cómo sabe dónde va el hilo 0.* El hilo 0 tiene que publicarlo: un
+`stw` de su id de bloque al entrar (dos palabras, `li` + `stw`, sin
+leer-modificar-escribir; ~1–2 % como el contador del perfil, que cuesta 5 %
+con la lectura). Publicar solo en las entradas desde C (gratis) no
+sirve: en régimen los bloques van enlazados y el despachador no ve pasar
+el 99 % de las transiciones.
+
+*Cuánto adelantarse, y qué tan tarde llega.* Un bloque caliente dura
+~12 instrucciones × 54 ciclos ≈ 650 ciclos ≈ 200 ns. Un fallo a XDR tarda
+~120 ns: la línea tiene que pedirse al menos un bloque antes de usarse.
+Pero el aviso tarda en llegar: el `stw` del hilo 0 baja por la cola de
+almacenamiento a la L2 (decenas de ciclos), el hilo 1 lo ve cuando su
+propia L1 se invalida y recarga (otros ~40), decide y emite el `dcbt`:
+100–150 ns después de la publicación, cuando el hilo 0 ya va por el
+bloque siguiente. Así que el ayudante tiene que apuntar **dos o más
+bloques por delante** con los sucesores del perfil: con el 82 % de
+acierto por arista, el segundo sucesor acierta el 67 %, el cuarto el 45 %.
+En un retorno de función (24 % de los finales) no hay sucesor en el perfil
+y la cadena se corta.
+
+*Costo de predecir mal.* Cada línea traída de más desplaza una de la L2
+(8 vías, pseudo-LRU) que probablemente era del conjunto caliente del hilo
+0: con la L2 ya saturada, una precarga equivocada no es neutra, cuesta un
+fallo futuro. Con 45–67 % de acierto, un tercio o la mitad del trabajo
+del ayudante contamina.
+
+*Interferencia por SMT.* Está medida: 1 ms de trabajo del hilo 1 le
+cuesta 0,13 ms al hilo 0 (docs/perf-log.md). Un ayudante útil tiene que
+estar **despierto siempre que el hilo 0 corra código caliente**, es decir,
+todo el campo (15–20 ms en la presa): 2–2,5 ms por campo, **un 13 % del
+hilo 0**, antes de ganar nada. Dormirlo entre bloques no es posible a esta
+escala (`sysUsleep` y los semáforos se miden en decenas de
+microsegundos y cuestan al hilo 0 por el cambio de contexto). Las formas
+de bajar la prioridad del hilo en la emisión (`or 1,1,1` y compañía)
+existen en POWER5; si el PPE las respeta no está en la documentación
+pública que se consultó y habría que medirlo. Y la medición de 0,13 fue
+con un hilo que sobre todo esperaba a la memoria; un bucle que sondea una
+línea de la L1 sin parar compite por los huecos de emisión y puede costar
+más.
+
+**Ganancia estimada.** El techo es la parte de «fetch de código» que son
+fallos de L2: si son el 20 % de las líneas, unos 0,35 × 0,2 × 340 ≈
+**20 ciclos por instrucción** con predicción perfecta y a tiempo; con
+45–67 % de acierto, la contaminación de lo demás y el retraso del aviso,
+quedan **5–8 ciclos (10–15 %)**, contra **un costo de 13 % por SMT más 1–2 %
+por publicar**. Neto: alrededor de cero, con riesgo de negativo. No es que
+la idea sea mala: es que en este núcleo el hilo ayudante paga un impuesto
+fijo alto y llega tarde a un bloque de 200 ns.
+
+**Lo mismo sin el impuesto: que el hilo 0 se precargue a sí mismo.**
+Todo lo que el ayudante podría tocar lo sabe mejor el hilo 0, que está
+exactamente donde está y conoce su sucesor al enlazar:
+
+- el `dcbt` de la primera línea del sucesor en la entrada del bloque
+  (3.5): un bloque de 200 ns de adelanto alcanza para los 120 ns de la
+  XDR, cuesta tres palabras y un hueco de emisión, acierta cuando el
+  enlace se toma (82 %) y no contamina cuando no (trae una línea que
+  igual es del conjunto caliente);
+- con los dos sucesores del perfil, un segundo `dcbt` para el sucesor del
+  sucesor (67 %) y, en los JAL, el del bloque de retorno (3.3 lo sabe);
+- **listas de precarga por transición**: en una arista que el perfil marca
+  como entrada a una zona (un JAL al renderizador, al audio, al
+  planificador de libultra), un bucle corto de `dcbt` sobre las primeras
+  líneas de los 20–50 bloques que siguen (una lista por sitio, armada al
+  cargar el perfil con los sucesores encadenados): 50 `dcbt` son ~100
+  ciclos una vez por transición, frente a 50 fallos de 380. Es el único
+  caso donde un ayudante «lejos por delante» tendría sentido, y el hilo
+  0 lo hace por el 1 % del costo;
+- y la **traducción por adelantado en el hilo 1** (docs/rec-ppe.md,
+  «Siguientes pasos», 1) es ya una precarga gratis: el código que el
+  hilo 1 escribe queda en la L2 compartida y el hilo 0 lo encuentra ahí
+  la primera vez que lo ejecuta, justo en los tirones de entrar a una
+  zona nueva, que es donde más falla.
+
+**Costo y riesgo** de la forma en línea: los de 3.5 (bajo). **Cómo medir**
+las dos: un interruptor por archivo (`precarga`: `no`, `en-linea`,
+`hilo1`) en el mismo paquete; GoldenEye en la presa y Perfect Dark, ns
+por instrucción del nativo y la línea «hilo 1: despierto» (que con el
+ayudante tiene que subir a ~100 % y cuyo costo ya da la pendiente
+medida). Antes de construir el ayudante, el bench de huella de código
+(5.1) dice cuánto del fetch son fallos de L2: si son pocos, ni la forma
+en línea paga. **Dependencias:** el perfil con sucesores (ya en main),
+3.3 para el retorno, 3.1.1 para que la precarga secuencial del hardware
+siga sola a partir de la línea traída.
+
 ## 4. Qué sabe el perfil y qué le falta
 
 El perfil por juego (`perfiles/<juego>.prf`, docs/rec-ppe.md) ya da lo que
@@ -491,11 +691,13 @@ variante con `mftb`) y en un solo paquete; media hora de consola.
 | 4 | 3.3 Pila de retorno y caché de destinos de JR | 3–6 % | 3–5 días | Independiente, barata, sin riesgo de exactitud; también para los juegos de KSEG0 |
 | 5 | 3.1.3 Zona caliente de 256 KB y 3.1.2 frío de verdad para lo frío | 3–8 % | 1 día + 3 días | Con la fría fuera y el bench de huella se sabe cuánto vale el ERAT |
 | 6 | 3.2 Trazas por el sucesor dominante | 4–8 % | 2–3 semanas | La de más alcance y más riesgo; después de 1–5 el emisor está compacto y el perfil probado |
-| 7 | 3.4 Pistas de salto, 3.5 precarga del sucesor | 1–2 % y 3–5 % | 1 día y 2 días | Chicas y seguras; la precarga vale menos cuanto más fundan las trazas |
+| 7 | 3.4 Pistas de salto, 3.5 precarga del sucesor (con las listas por transición de 3.13) | 1–2 % y 3–5 % | 1 día y 2–3 días | Chicas y seguras; la precarga vale menos cuanto más fundan las trazas |
 | 8 | 3.6 `code_flags` chica | 1–2 % | 1–2 días | Chica; de paso con 6 |
 | 9 | 3.7 Copia del VI por SPE, `dcbz` | 1–2 % del campo | 2 días | Fuera del recompilador: puede ir en paralelo con cualquiera |
 | 10 | 3.8 Compilar a la segunda | < 2 %, menos tirones | 1 día | Cuando se trabaje la traducción por adelantado |
 | — | 3.9 microcódigo, 3.10 páginas grandes, RMT, precarga de datos | — | — | No son palanca, o no son accesibles |
+| — | 3.11 SPE acomodador de datos, 3.12 caché por software en un SPE | ~0 hoy | — | Sin un recorrido previsible y disperso en el hilo 0, ni un trabajo irregular para un SPE; lo lineal va con DMA a mano (3.7) |
+| — | 3.13 Hilo 1 ayudante de precarga | 10–15 % de techo contra ~13 % de impuesto por SMT: ~0 neto | 1 semana | Solo precarga código, llega un bloque tarde y paga por estar despierto; su carga útil la hace el hilo 0 en línea (3.5) y la traducción por adelantado |
 
 Si todo sale como se estima, el nativo de GoldenEye en la presa baja de
 ~54 a ~35–40 ciclos por instrucción: de 46 a ~60 campos/s en las escenas
