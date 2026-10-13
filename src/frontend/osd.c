@@ -19,6 +19,14 @@ static struct {
 	uint64_t until;
 } notice;
 
+/* Líneas de barrido (osd_scanlines_set): van en el mismo lote que el aviso
+ * y el contador, una sola llamada a rsxkit_ui_begin por cuadro. */
+static struct {
+	int level;
+	float x, y, w, h;
+	unsigned lines;
+} scan;
+
 void osd_notice(uint64_t now_us, const char *fmt, ...)
 {
 	va_list ap;
@@ -43,12 +51,28 @@ static unsigned cells(const char *s)
 	return n;
 }
 
+void osd_scanlines_set(int level, float x, float y, float w, float h, unsigned lines)
+{
+	scan.level = lines && h / (float)lines >= 1.5f ? level : 0;  /* sin espacio entre líneas, nada */
+	scan.x = x;
+	scan.y = y;
+	scan.w = w;
+	scan.h = h;
+	scan.lines = lines;
+}
+
 void osd_draw(const struct osd_fps *f, uint64_t now_us, float lw, float lh)
 {
 	bool show_notice = now_us < notice.until;
-	if (!show_notice && !f->on)
+	if (!show_notice && !f->on && !scan.level)
 		return;
 	rsxkit_ui_begin(lw, lh);
+	if (scan.level) {
+		float pitch = scan.h / (float)scan.lines;
+		uint32_t color = scan.level >= 2 ? 0x000000A8u : 0x00000052u;
+		for (unsigned i = 0; i < scan.lines; i++)
+			rsxkit_ui_rect(scan.x, scan.y + (float)i * pitch + pitch * 0.55f, scan.w, pitch * 0.45f, color);
+	}
 	if (f->on) {
 		char line[96];
 		const float sc = 1.5f, pad = 6.0f;
@@ -125,24 +149,12 @@ void osd_cheats_draw(const struct cheat_set *cs, int sel, float lw, float lh)
 	rsxkit_ui_end();
 }
 
-void osd_scanlines_draw(int level, float x, float y, float w, float h, unsigned lines, float lw, float lh)
-{
-	if (!lines || h / (float)lines < 1.5f)
-		return;
-	float pitch = h / (float)lines;
-	uint32_t color = level >= 2 ? 0x000000A8u : 0x00000052u;
-	rsxkit_ui_begin(lw, lh);
-	for (unsigned i = 0; i < lines; i++)
-		rsxkit_ui_rect(x, y + (float)i * pitch + pitch * 0.55f, w, pitch * 0.45f, color);
-	rsxkit_ui_end();
-}
-
 void osd_pause_menu_draw(const struct osd_pause_menu *m, float lw, float lh)
 {
 	const float sc = 2.0f, row_h = 46.0f, pad = 26.0f, w = lw * 0.5f < 560.0f ? 560.0f : lw * 0.5f;
 	float h = 60.0f + PM_ROWS * row_h + 50.0f + 2 * pad;
 	float x = (lw - w) / 2, y = (lh - h) / 2;
-	char line[96], val[40];
+	char line[96], val[112];
 	rsxkit_ui_begin(lw, lh);
 	rsxkit_ui_rect(0.0f, 0.0f, lw, lh, 0x00000090);
 	rsxkit_ui_rect(x - 2.0f, y - 2.0f, w + 4.0f, h + 4.0f, 0xFFFFFF60);

@@ -1790,8 +1790,10 @@ static void present_overlay(uint64_t now)
 	if (scan_level && scan_r.w && scan_lines) {
 		const rsxkit_screen *sc = rsxkit_screen_info();
 		float k = ui_lw / (float)sc->width;
-		osd_scanlines_draw(scan_level, (float)scan_r.x * k, (float)scan_r.y * k, (float)scan_r.w * k,
-				   (float)scan_r.h * k, scan_lines > 300 ? scan_lines / 2 : scan_lines, ui_lw, ui_lh);
+		osd_scanlines_set(scan_level, (float)scan_r.x * k, (float)scan_r.y * k, (float)scan_r.w * k,
+				  (float)scan_r.h * k, scan_lines > 300 ? scan_lines / 2 : scan_lines);
+	} else {
+		osd_scanlines_set(0, 0.0f, 0.0f, 0.0f, 0.0f, 0);
 	}
 	osd_draw(&fps, now, ui_lw, ui_lh);
 	if (pause_ctl.menu) {
@@ -2509,8 +2511,10 @@ static void load_view(const char *source)
 	else
 		menu_game_default(&g);
 	menu_game_effective(&s, &g, &aspect, &filter, &crop);
-	if (selftest_on || gfxtest_on || audiotest_on)
-		filter = MENU_FILTER_SMOOTH;  /* sus verificaciones leen la pantalla */
+	if (selftest_on || gfxtest_on || audiotest_on) {
+		aspect = MENU_ASPECT_4_3;  /* sus verificaciones leen la pantalla */
+		filter = MENU_FILTER_SMOOTH;
+	}
 	pres.view.aspect = aspect == MENU_ASPECT_16_9 ? 16.0f / 9.0f : 4.0f / 3.0f;
 	pres.view.filter = filter == MENU_FILTER_SHARP ? RSXKIT_FILTER_NEAREST : RSXKIT_FILTER_LINEAR;
 	scan_level = filter == MENU_FILTER_SCAN_SOFT ? 1 : filter == MENU_FILTER_SCAN_STRONG ? 2 : 0;
@@ -3274,6 +3278,7 @@ static void menu_scan(const char *keep)
 	menu.out_h = osc->height;
 	menu.res_run = video_cfg.resolution;
 	menu.scale_run = video_cfg.scale;
+	menu.dl_enabled = dl_enabled();  /* experimental: solo con descargas.cfg «activar = si» */
 	menu.dirs[menu.ndirs++] = SALSA64_DATA_DIR;
 	menu.dirs[menu.ndirs++] = "/dev_usb000/salsa64 … /dev_usb007/salsa64";
 }

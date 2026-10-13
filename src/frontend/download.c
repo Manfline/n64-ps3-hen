@@ -17,6 +17,7 @@
 #include <sys/thread.h>
 #include <sysmodule/sysmodule.h>
 
+#include "cover.h"
 #include "dlutil.h"
 #include "i18n.h"
 #include "namematch.h"
@@ -31,7 +32,7 @@
 #define CONN_US     (10 * 1000 * 1000)
 #define RECV_US     (15 * 1000 * 1000)
 #define INDEX_MAX   (6u << 20)
-#define COVER_MAX   (12u << 20)
+#define COVER_MAX   COVER_MAX_FILE_BYTES
 #define CHEAT_MAX   (2u << 20)
 #define USER_AGENT  "Mozilla/5.0 (PLAYSTATION 3; 1.00) Salsa64"
 
@@ -48,10 +49,18 @@ static struct {
 
 /* ---- La pila de red (se levanta y se baja en cada descarga) ---- */
 
+/* Módulos del sistema que hacen falta; cada uno se carga solo si no lo
+ * estaba y se descarga solo si lo cargó esta descarga. La red (libnet) es
+ * del logger UDP (platform/ps3/log.c): netInitialize no hace nada si ya está
+ * y aquí nunca se llama a netDeinitialize, que le cortaría el log. */
+static const sysModuleId net_mods[] = { SYSMODULE_NET, SYSMODULE_NETCTL, SYSMODULE_HTTP, SYSMODULE_HTTP_UTIL,
+					SYSMODULE_SSL, SYSMODULE_HTTPS };
+#define NET_MODS (sizeof net_mods / sizeof net_mods[0])
+
 static struct {
 	void *http_pool, *ssl_pool, *certs;
 	httpsData ca;
-	bool net, http, https, ssl, mod_net, mod_http, mod_https, mod_ssl;
+	bool http, https, ssl, mod[NET_MODS];
 } stack;
 
 static void net_down(void)
@@ -62,16 +71,9 @@ static void net_down(void)
 		sslEnd();
 	if (stack.http)
 		httpEnd();
-	if (stack.net)
-		netDeinitialize();
-	if (stack.mod_ssl)
-		sysModuleUnload(SYSMODULE_SSL);
-	if (stack.mod_https)
-		sysModuleUnload(SYSMODULE_HTTPS);
-	if (stack.mod_http)
-		sysModuleUnload(SYSMODULE_HTTP);
-	if (stack.mod_net)
-		sysModuleUnload(SYSMODULE_NET);
+	for (size_t i = NET_MODS; i-- > 0;)
+		if (stack.mod[i])
+			sysModuleUnload(net_mods[i]);
 	free(stack.http_pool);
 	free(stack.ssl_pool);
 	free(stack.certs);
@@ -84,18 +86,17 @@ static int net_up(const char **what)
 	int rc;
 	u32 cert_size = 0;
 	memset(&stack, 0, sizeof stack);
-	*what = "módulo de red";
-	if ((rc = sysModuleLoad(SYSMODULE_NET)) < 0)
-		return rc;
-	stack.mod_net = true;
+	*what = "módulos de red";
+	for (size_t i = 0; i < NET_MODS; i++) {
+		if (sysModuleIsLoaded(net_mods[i]) == 0)
+			continue;  /* ya estaba (libnet, por el logger) */
+		if ((rc = sysModuleLoad(net_mods[i])) < 0)
+			return rc;
+		stack.mod[i] = true;
+	}
 	*what = "netInitialize";
 	if ((rc = netInitialize()) < 0)
 		return rc;
-	stack.net = true;
-	*what = "módulo http";
-	if ((rc = sysModuleLoad(SYSMODULE_HTTP)) < 0)
-		return rc;
-	stack.mod_http = true;
 	stack.http_pool = malloc(HTTP_POOL);
 	*what = "memoria";
 	if (!stack.http_pool)
@@ -104,13 +105,6 @@ static int net_up(const char **what)
 	if ((rc = httpInit(stack.http_pool, HTTP_POOL)) < 0)
 		return rc;
 	stack.http = true;
-	*what = "módulo https";
-	if ((rc = sysModuleLoad(SYSMODULE_HTTPS)) < 0)
-		return rc;
-	stack.mod_https = true;
-	if ((rc = sysModuleLoad(SYSMODULE_SSL)) < 0)
-		return rc;
-	stack.mod_ssl = true;
 	stack.ssl_pool = malloc(SSL_POOL);
 	*what = "memoria";
 	if (!stack.ssl_pool)
@@ -266,25 +260,26 @@ static void fail(const char *fmt, ...)
 	job.state = DL_FAILED;
 }
 
-static void read_cfg(struct dl_cfg *cfg)
+/* descargas.cfg; false si no existe (las descargas están apagadas). */
+static bool read_cfg(struct dl_cfg *cfg)
 {
 	char text[2048];
 	dl_cfg_default(cfg);
 	FILE *f = fopen(DL_CFG_PATH, "r");
-	if (!f) {
-		const char *t = dl_cfg_template();
-		mkdir(SALSA64_DATA_DIR, 0777);
-		f = fopen(DL_CFG_PATH, "w");
-		if (f) {
-			fputs(t, f);
-			fclose(f);
-			salsa64_log("descargas: creado %s con las direcciones por omisión", DL_CFG_PATH);
-		}
-		return;
-	}
+	if (!f)
+		return false;
 	size_t n = fread(text, 1, sizeof text - 1, f);
 	fclose(f);
 	dl_cfg_parse(cfg, text, n);
+	return true;
+}
+
+bool dl_enabled(void)
+{
+	struct dl_cfg cfg;
+	bool on = read_cfg(&cfg) && cfg.enabled;
+	salsa64_log("descargas: %s", on ? "encendidas (experimental, descargas.cfg)" : "apagadas");
+	return on;
 }
 
 /* Nombre que se puede guardar: sin carpetas ni puntos al principio. */
@@ -307,7 +302,10 @@ static void job_main(void *arg)
 	const char *step = "";
 	bool netctl = false;
 
-	read_cfg(&cfg);
+	if (!read_cfg(&cfg) || !cfg.enabled) {
+		fail("Las descargas están apagadas (descargas.cfg)");
+		goto out;
+	}
 	const char *base = covers ? cfg.covers : cfg.cheats;
 	char index_url[DL_URL_MAX + 16];
 	snprintf(index_url, sizeof index_url, "%s", covers ? cfg.covers_index : cfg.cheats_index);
@@ -370,9 +368,14 @@ static void job_main(void *arg)
 		} else {
 			dl_url_escape(found, esc, sizeof esc);
 			snprintf(url, sizeof url, "%s%s", base, esc);
+			snprintf(path, sizeof path, "%s/%s", dir, found);
 			size_t flen = 0;
-			if (http_get(url, &file, &flen, cap, &code) == 0) {
-				snprintf(path, sizeof path, "%s/%s", dir, found);
+			FILE *old = fopen(path, "rb");
+			if (old) {
+				/* Un archivo del usuario con ese nombre no se pisa. */
+				fclose(old);
+				job.have++;
+			} else if (http_get(url, &file, &flen, cap, &code) == 0) {
 				if (write_file(path, file, flen)) {
 					job.got++;
 					salsa64_log("descargas: %s -> %s (%zu bytes)", r->name, path, flen);

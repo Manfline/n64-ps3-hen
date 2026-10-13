@@ -13,11 +13,13 @@
 
 #define DL_URL_MAX 400
 
-/* descargas.cfg: de dónde se baja cada cosa. Las dos direcciones base
- * terminan en «/»; el índice es una dirección que devuelve la lista de
- * archivos (una por línea o la respuesta JSON de la API de GitHub). Sin
- * índice se usa «<base>index.txt». */
+/* descargas.cfg: si las descargas están encendidas («activar = si»; sin
+ * eso, o sin el archivo, el menú no las ofrece) y de dónde se baja cada
+ * cosa. Las dos direcciones base terminan en «/»; el índice es una dirección
+ * que devuelve la lista de archivos (una por línea o la respuesta JSON de la
+ * API de GitHub). Sin índice se usa «<base>index.txt». */
 struct dl_cfg {
+	bool enabled;
 	char covers[DL_URL_MAX], covers_index[DL_URL_MAX];
 	char cheats[DL_URL_MAX], cheats_index[DL_URL_MAX];
 };
@@ -25,7 +27,7 @@ struct dl_cfg {
 void dl_cfg_default(struct dl_cfg *c);
 /* «clave = dirección» por línea; # comenta. Lo que no entiende lo deja. */
 void dl_cfg_parse(struct dl_cfg *c, const char *text, size_t len);
-/* El texto con que se crea descargas.cfg la primera vez (con comentarios). */
+/* Un descargas.cfg de ejemplo, con comentarios (para la documentación). */
 const char *dl_cfg_template(void);
 
 /* Escapa un nombre de archivo para ponerlo en una dirección (%20, %28...). */

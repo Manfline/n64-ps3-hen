@@ -27,6 +27,9 @@ static void cfg(void)
 	CHECK(!strcmp(t.covers_index, c.covers_index));
 	CHECK(!strcmp(t.cheats, c.cheats));
 	CHECK(!strcmp(t.cheats_index, c.cheats_index));
+	/* Apagadas salvo «activar = si»; la plantilla las enciende. */
+	CHECK(!c.enabled);
+	CHECK(t.enabled);
 	/* Un servidor propio: se le pone la «/» final a la base y no al índice. */
 	static const char own[] = "# mío\r\ncaratulas = http://10.0.0.20:8000/covers\r\n  trucos=http://10.0.0.20:8000/cheats/ \n"
 				  "trucos_indice = http://10.0.0.20:8000/cheats/index.txt\nrara = 5\nsinigual\n";
@@ -35,6 +38,12 @@ static void cfg(void)
 	CHECK(!strcmp(c.cheats, "http://10.0.0.20:8000/cheats/"));
 	CHECK(!strcmp(c.cheats_index, "http://10.0.0.20:8000/cheats/index.txt"));
 	CHECK(strstr(c.covers_index, "api.github.com") != NULL);  /* lo que no se dice queda */
+	CHECK(!c.enabled);
+	static const char on[] = "activar = si\n", off[] = "activar=no\n";
+	dl_cfg_parse(&c, on, sizeof on - 1);
+	CHECK(c.enabled);
+	dl_cfg_parse(&c, off, sizeof off - 1);
+	CHECK(!c.enabled);
 	/* Una línea enorme no rompe nada ni se toma. */
 	char big[900];
 	memset(big, 'a', sizeof big);

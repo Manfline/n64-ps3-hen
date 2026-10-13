@@ -42,18 +42,19 @@ static int hexval(int c)
 	return -1;
 }
 
-/* Un número hexadecimal de `min` a `max` dígitos; avanza *p. */
-static bool hex_token(const char **p, unsigned min, unsigned max, uint32_t *out)
+/* Un número hexadecimal de `min` a `max` dígitos antes de `end`; avanza *p.
+ * No lee más allá de `end`: el texto no tiene por qué terminar en '\0'. */
+static bool hex_token(const char **p, const char *end, unsigned min, unsigned max, uint32_t *out)
 {
 	const char *s = *p;
 	uint32_t v = 0;
 	unsigned n = 0;
-	while (n < max && hexval((unsigned char)*s) >= 0) {
+	while (n < max && s < end && hexval((unsigned char)*s) >= 0) {
 		v = (v << 4) | (uint32_t)hexval((unsigned char)*s);
 		s++;
 		n++;
 	}
-	if (n < min || (hexval((unsigned char)*s) >= 0))
+	if (n < min || (s < end && hexval((unsigned char)*s) >= 0))
 		return false;  /* corto, o con más dígitos de los que caben */
 	*out = v;
 	*p = s;
@@ -72,10 +73,10 @@ static unsigned parse_code(struct cheat_set *cs, const char *s, const char *end)
 			break;
 		const char *piece = s;
 		uint32_t a, v;
-		bool ok = hex_token(&s, 8, 8, &a);
+		bool ok = hex_token(&s, end, 8, 8, &a);
 		while (ok && s < end && (*s == ' ' || *s == '\t'))
 			s++;
-		ok = ok && hex_token(&s, 1, 8, &v);
+		ok = ok && hex_token(&s, end, 1, 8, &v);
 		if (!ok) {
 			/* Hasta el próximo «+» (o el final). */
 			s = piece;
@@ -172,7 +173,7 @@ void cheats_parse(struct cheat_set *cs, const char *text, size_t len)
 				tmp[idx].count = (uint16_t)parse_code(cs, val, lend);
 			}
 		} else if (klen == 6 && !strncasecmp(p, "enable", 6)) {
-			tmp[idx].on = !strncasecmp(val, "true", 4) || *val == '1';
+			tmp[idx].on = (lend - val >= 4 && !strncasecmp(val, "true", 4)) || (val < lend && *val == '1');
 		}
 	}
 
@@ -311,9 +312,9 @@ void cheats_parse_pj64(struct cheat_set *cs, const char *text, size_t len, uint3
 		while (e < len && text[e] != '\n')
 			e++;
 		if (text[i] == '[' && e - i >= 19) {
-			const char *q = text + i + 1;
+			const char *q = text + i + 1, *qe = text + e;
 			uint32_t a = 0, b = 0;
-			bool ok = hex_token(&q, 8, 8, &a) && *q == '-' && (q++, hex_token(&q, 8, 8, &b));
+			bool ok = hex_token(&q, qe, 8, 8, &a) && q < qe && *q == '-' && (q++, hex_token(&q, qe, 8, 8, &b));
 			if (ok) {
 				if (found && sec_end == len)
 					sec_end = i;
@@ -369,7 +370,7 @@ void cheats_parse_pj64(struct cheat_set *cs, const char *text, size_t len, uint3
 			continue;
 		const char *s = line;
 		uint32_t a, v = 0, mask = 0;
-		if (hex_token(&s, 8, 8, &a)) {
+		if (hex_token(&s, lend, 8, 8, &a)) {
 			while (s < lend && (*s == ' ' || *s == '\t'))
 				s++;
 			unsigned nd = 0;
@@ -405,7 +406,7 @@ void cheats_parse_pj64(struct cheat_set *cs, const char *text, size_t len, uint3
 		}
 		/* «20 Nombre de la opción», solo después de un «??». */
 		uint32_t ov;
-		if (p.nq && hex_token(&s, 1, 4, &ov) && s < lend && *s == ' ' && p.nopt < 48) {
+		if (p.nq && hex_token(&s, lend, 1, 4, &ov) && s < lend && *s == ' ' && p.nopt < 48) {
 			while (s < lend && *s == ' ')
 				s++;
 			size_t n = (size_t)(lend - s);
@@ -487,11 +488,17 @@ static char *read_file(const char *path, size_t max, size_t *len)
 	return buf;
 }
 
-/* «<dir>/<stem>.cht» y «<dir>/<stem>.on» (stem = la ROM sin extensión). */
-static void set_paths(struct cheat_set *cs, const char *dir, const char *stem, size_t stem_len)
+/* «<dir>/<stem>.cht» y «<dir>/<stem>.on» (stem = la ROM sin extensión).
+ * false si no caben: una ruta cortada podría ser la de otro archivo. */
+static bool set_paths(struct cheat_set *cs, const char *dir, const char *stem, size_t stem_len)
 {
-	snprintf(cs->cht_path, sizeof cs->cht_path, "%s/%.*s.cht", dir, (int)stem_len, stem);
-	snprintf(cs->on_path, sizeof cs->on_path, "%s/%.*s.on", dir, (int)stem_len, stem);
+	int a = snprintf(cs->cht_path, sizeof cs->cht_path, "%s/%.*s.cht", dir, (int)stem_len, stem);
+	int b = snprintf(cs->on_path, sizeof cs->on_path, "%s/%.*s.on", dir, (int)stem_len, stem);
+	if (a < 0 || b < 0 || (size_t)a >= sizeof cs->cht_path || (size_t)b >= sizeof cs->on_path) {
+		cs->cht_path[0] = cs->on_path[0] = '\0';
+		return false;
+	}
+	return true;
 }
 
 unsigned cheats_load(struct cheat_set *cs, const char *dir, const char *rom_name, const char *title, const char *code,
@@ -500,7 +507,8 @@ unsigned cheats_load(struct cheat_set *cs, const char *dir, const char *rom_name
 	memset(cs, 0, sizeof *cs);
 	const char *dot = strrchr(rom_name, '.');
 	size_t stem_len = dot && dot > rom_name ? (size_t)(dot - rom_name) : strlen(rom_name);
-	set_paths(cs, dir, rom_name, stem_len);
+	if (!set_paths(cs, dir, rom_name, stem_len))
+		return 0;
 
 	size_t len = 0;
 	char *text = read_file(cs->cht_path, CHT_MAX_BYTES, &len);
@@ -513,10 +521,14 @@ unsigned cheats_load(struct cheat_set *cs, const char *dir, const char *rom_name
 				size_t n = strlen(de->d_name);
 				if (n == stem_len + 4 && !strncasecmp(de->d_name, rom_name, stem_len) &&
 				    !strcasecmp(de->d_name + stem_len, ".cht")) {
-					set_paths(cs, dir, de->d_name, stem_len);
-					/* La extensión también como está en el disco. */
-					snprintf(cs->cht_path, sizeof cs->cht_path, "%s/%s", dir, de->d_name);
-					text = read_file(cs->cht_path, CHT_MAX_BYTES, &len);
+					/* El nombre como está en el disco, también la extensión
+					 * (mide lo mismo que el que se buscó: cabe). */
+					char path[CHEATS_PATH_MAX];
+					int w = snprintf(path, sizeof path, "%s/%s", dir, de->d_name);
+					if (w > 0 && (size_t)w < sizeof path && set_paths(cs, dir, de->d_name, stem_len)) {
+						memcpy(cs->cht_path, path, sizeof path);
+						text = read_file(cs->cht_path, CHT_MAX_BYTES, &len);
+					}
 					break;
 				}
 			}
@@ -529,9 +541,10 @@ unsigned cheats_load(struct cheat_set *cs, const char *dir, const char *rom_name
 		if (name_find(dir, ".cht", rom_name, title, code, 8, found, sizeof found)) {
 			const char *base = strrchr(found, '/');
 			base = base ? base + 1 : found;
-			set_paths(cs, dir, base, strlen(base) - 4);
-			snprintf(cs->cht_path, sizeof cs->cht_path, "%s", found);
-			text = read_file(cs->cht_path, CHT_MAX_BYTES, &len);
+			if (strlen(base) > 4 && set_paths(cs, dir, base, strlen(base) - 4)) {
+				snprintf(cs->cht_path, sizeof cs->cht_path, "%s", found);
+				text = read_file(cs->cht_path, CHT_MAX_BYTES, &len);
+			}
 		}
 	}
 	if (!text)
@@ -593,7 +606,7 @@ static void write_mem(struct salsa64_bus *bus, uint32_t a, uint32_t size, uint32
 			return;
 		salsa64_wr16(p, (uint16_t)v);
 	}
-	salsa64_bus_rdram_written(bus, a, size);
+	salsa64_bus_rdram_patched(bus, a, size);
 }
 
 static uint32_t read_mem(const struct salsa64_bus *bus, uint32_t a, uint32_t size)

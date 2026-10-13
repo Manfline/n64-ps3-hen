@@ -556,6 +556,16 @@ static void menu_options_page(void)
 	menu_input(&m, 0, 79);
 	CHECK_EQ(menu_input(&m, 0, 79), MENU_NONE);
 	CHECK_EQ(m.opt, MENU_OPT_BACK);  /* la fila desapareció: el cursor pasa a «Volver» */
+	/* Sin descargas.cfg con «activar = si» las filas de descarga no están:
+	 * arriba de «Volver» va el idioma. */
+	CHECK(!m.dl_enabled);
+	menu_input(&m, UP, 79);
+	CHECK_EQ(m.opt, MENU_OPT_LANG);
+	menu_input(&m, 0, 79);
+	menu_input(&m, DOWN, 79);
+	CHECK_EQ(m.opt, MENU_OPT_BACK);
+	menu_input(&m, 0, 79);
+	m.dl_enabled = true;             /* encendidas (main.c, dl_enabled) */
 	menu_input(&m, UP, 79);          /* arriba: descargas, idioma, «Confirmar al salir», «Mostrar FPS» y «Escala interna» */
 	CHECK_EQ(m.opt, MENU_OPT_DL_CHEATS);
 	menu_input(&m, 0, 79);
@@ -1150,6 +1160,7 @@ static void menu_preview(void)
 			raster(rgb, 1280, 720, 1280, 720, n);
 			snprintf(path, sizeof path, "%s-filtro-l%d.ppm", out, lang);
 			write_ppm(path, rgb, 1280, 720);
+			m.dl_enabled = true;  /* experimentales: solo con descargas.cfg */
 			m.opt = MENU_OPT_DL_COVERS;
 			n = frames(&m, 13000000, 14000000, 960);
 			raster(rgb, 960, 720, 960, 720, n);

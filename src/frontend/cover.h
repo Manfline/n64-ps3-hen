@@ -23,8 +23,10 @@
 #define COVER_MAX_H 448
 #define COVER_RGBA_BYTES (COVER_MAX_W * COVER_MAX_H * 4)
 
-#define COVER_MAX_FILE_BYTES (12u << 20)  /* PNG más grande que esto no se lee */
-#define COVER_MAX_RAW_BYTES  (40u << 20)  /* ni los que desinflados pasan de esto */
+/* Topes del pico de memoria en el menú (archivo + IDAT + desinflado, unos
+ * 40 MB; docs/memory-budget.md): una carátula de 2400 × 2500 RGBA cabe. */
+#define COVER_MAX_FILE_BYTES (8u << 20)   /* PNG más grande que esto no se lee */
+#define COVER_MAX_RAW_BYTES  (24u << 20)  /* ni los que desinflados pasan de esto */
 
 enum cover_result {
 	COVER_OK,

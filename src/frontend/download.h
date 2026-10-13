@@ -35,6 +35,12 @@ struct dl_status {
 	char err[96];                      /* con DL_FAILED, el motivo (ya traducido) */
 };
 
+/* Las descargas son experimentales y están apagadas: solo con
+ * SALSA64_DATA_DIR/descargas.cfg y «activar = si» en él (la PS3 no habla el
+ * TLS de GitHub y los certificados no se verifican). Lo lee el menú al
+ * arrancar para mostrar u ocultar las filas. */
+bool dl_enabled(void);
+
 /* Empieza una descarga de lo que falta a las `n` ROMs (se copian). false si
  * ya hay una en curso o no se pudo crear el hilo. */
 bool dl_start(int what, const struct dl_rom *roms, unsigned n);

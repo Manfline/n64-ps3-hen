@@ -15,6 +15,7 @@
 
 void dl_cfg_default(struct dl_cfg *c)
 {
+	c->enabled = false;
 	snprintf(c->covers, sizeof c->covers, "%s", COVERS_BASE);
 	snprintf(c->covers_index, sizeof c->covers_index, "%s", COVERS_INDEX);
 	snprintf(c->cheats, sizeof c->cheats, "%s", CHEATS_BASE);
@@ -23,12 +24,14 @@ void dl_cfg_default(struct dl_cfg *c)
 
 const char *dl_cfg_template(void)
 {
-	return "# Salsa64: de dónde se bajan las carátulas y los trucos (Opciones > Descargar).\n"
+	return "# Salsa64: descargas de carátulas y trucos (Opciones > Descargar). Experimental:\n"
+	       "# sin «activar = si» el menú no las ofrece. Los certificados HTTPS no se verifican.\n"
+	       "activar = si\n"
 	       "# Cada cosa tiene una dirección base (donde están los archivos) y un índice\n"
 	       "# (una dirección que devuelve la lista de archivos: un nombre por línea, o la\n"
 	       "# respuesta JSON de la API de GitHub). Si no pones índice se usa <base>index.txt.\n"
 	       "# Si la consola no consigue conectar por HTTPS (GitHub exige TLS moderno), pon\n"
-	       "# aquí un servidor HTTP tuyo, p. ej. http://IP-DE-TU-PC:8000/covers/\n"
+	       "# aquí un servidor HTTP de tu red, p. ej. http://IP-DE-TU-PC:8000/covers/\n"
 	       "caratulas = " COVERS_BASE "\n"
 	       "caratulas_indice = " COVERS_INDEX "\n"
 	       "trucos = " CHEATS_BASE "\n"
@@ -74,7 +77,9 @@ void dl_cfg_parse(struct dl_cfg *c, const char *text, size_t len)
 			k[-1] = '\0';
 		while (*val == ' ' || *val == '\t')
 			val++;
-		if (!strcasecmp(key, "caratulas"))
+		if (!strcasecmp(key, "activar"))
+			c->enabled = !strcasecmp(val, "si") || !strcasecmp(val, "sí") || !strcmp(val, "1");
+		else if (!strcasecmp(key, "caratulas"))
 			set_url(c->covers, val, true);
 		else if (!strcasecmp(key, "caratulas_indice"))
 			set_url(c->covers_index, val, false);

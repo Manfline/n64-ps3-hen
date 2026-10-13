@@ -69,17 +69,27 @@ static const char *aspect_name(int a)
 	return a == MENU_ASPECT_16_9 ? "16:9 (estirada)" : "4:3 (original)";
 }
 
+/* Fila «Filtro» (menu.cfg «filtro = …», también por juego): clave, nombre y
+ * crédito de cada uno, en el orden de enum menu_filter. Uno nuevo se agrega
+ * aquí y en el enum; main.c (load_view) decide cómo se dibuja. */
+static const struct {
+	const char *key, *name, *credit;
+} filter_info[MENU_FILTERS] = {
+	[MENU_FILTER_SMOOTH] = { "suave", "Suave", "Filtro de VIDEOGAMES SCZ" },
+	[MENU_FILTER_SHARP] = { "nitido", "Nítida", "Filtro de VIDEOGAMES SCZ" },
+	[MENU_FILTER_SCAN_SOFT] = { "lineas", "Líneas suaves", "Filtro de VIDEOGAMES SCZ" },
+	[MENU_FILTER_SCAN_STRONG] = { "lineas+", "Líneas fuertes", "Filtro de VIDEOGAMES SCZ" },
+};
+
 static const char *filter_name(int f)
 {
-	switch (f) {
-	case MENU_FILTER_SHARP:       return "Nítida";
-	case MENU_FILTER_SCAN_SOFT:   return "Líneas suaves";
-	case MENU_FILTER_SCAN_STRONG: return "Líneas fuertes";
-	default:                      return "Suave";
-	}
+	return filter_info[f >= 0 && f < MENU_FILTERS ? f : MENU_FILTER_SMOOTH].name;
 }
 
-static const char *const filter_key[MENU_FILTERS] = { "suave", "nitido", "lineas", "lineas+" };
+static const char *filter_key(int f)
+{
+	return filter_info[f >= 0 && f < MENU_FILTERS ? f : MENU_FILTER_SMOOTH].key;
+}
 static const char *const lang_key[MENU_LANGS] = { "es", "en", "fr", "de", "it", "pt" };
 static const char *const lang_label[MENU_LANGS] = { "Español", "English", "Français", "Deutsch", "Italiano", "Português" };
 
@@ -139,7 +149,7 @@ void menu_settings_parse(struct menu_settings *s, const char *text, size_t len)
 				s->aspect = MENU_ASPECT_4_3;
 		} else if (!strcmp(key, "filtro")) {
 			for (int f = 0; f < MENU_FILTERS; f++)
-				if (!strcmp(val, filter_key[f]))
+				if (!strcmp(val, filter_key(f)))
 					s->filter = f;
 		} else if (!strcmp(key, "idioma")) {
 			for (int l = 0; l < MENU_LANGS; l++)
@@ -180,7 +190,7 @@ void menu_game_parse(struct menu_game *g, const char *text, size_t len)
 		} else if (!strcmp(key, "filtro")) {
 			g->filter = -1;
 			for (int f = 0; f < MENU_FILTERS; f++)
-				if (!strcmp(val, filter_key[f]))
+				if (!strcmp(val, filter_key(f)))
 					g->filter = f;
 		} else if (!strcmp(key, "recorte")) {
 			g->overscan = !strcmp(val, "apagado") ? MENU_OVERSCAN_OFF
@@ -195,7 +205,7 @@ int menu_game_format(const struct menu_game *g, char *buf, size_t size)
 	static const char *const crop[] = { "apagado", "normal", "amplio" };
 	return snprintf(buf, size, "# Ajustes de este juego (global = los de menu.cfg)\naspecto = %s\nfiltro = %s\nrecorte = %s\n",
 			g->aspect == MENU_ASPECT_16_9 ? "16:9" : g->aspect == MENU_ASPECT_4_3 ? "4:3" : "global",
-			g->filter >= 0 && g->filter < MENU_FILTERS ? filter_key[g->filter] : "global",
+			g->filter >= 0 && g->filter < MENU_FILTERS ? filter_key(g->filter) : "global",
 			g->overscan >= MENU_OVERSCAN_OFF && g->overscan <= MENU_OVERSCAN_WIDE ? crop[g->overscan] : "global");
 }
 
@@ -269,7 +279,7 @@ int menu_settings_format(const struct menu_settings *s, char *buf, size_t size)
 			"fondo = %s\nfps = %s\nconfirmar = %s\naspecto = %s\nfiltro = %s\nidioma = %s\n",
 			s->waves ? "si" : "no", s->fps ? "si" : "no", s->confirm ? "si" : "no",
 			s->aspect == MENU_ASPECT_16_9 ? "16:9" : "4:3",
-			filter_key[s->filter >= 0 && s->filter < MENU_FILTERS ? s->filter : 0],
+			filter_key(s->filter),
 			lang_key[s->lang >= 0 && s->lang < MENU_LANGS ? s->lang : 0]);
 }
 
@@ -299,16 +309,33 @@ void menu_set_status(struct menu *m, const char *fmt, ...)
 	va_end(ap);
 }
 
-/* Fila mostrada de una opción: «Aplicar ahora» no ocupa lugar si no hay
- * nada que aplicar. */
+/* Opciones que no siempre ocupan una fila: «Aplicar ahora», solo con algo
+ * que aplicar; las descargas, solo encendidas (descargas.cfg, download.h). */
+static bool opt_visible(const struct menu *m, int opt)
+{
+	if (opt == MENU_OPT_APPLY)
+		return menu_video_pending(m);
+	if (opt == MENU_OPT_DL_COVERS || opt == MENU_OPT_DL_CHEATS)
+		return m->dl_enabled;
+	return true;
+}
+
+/* Fila mostrada de una opción (una oculta da la de la siguiente); con
+ * MENU_OPTS, cuántas filas hay. */
 static int opt_row(const struct menu *m, int opt)
 {
-	return opt > MENU_OPT_APPLY && !menu_video_pending(m) ? opt - 1 : opt;
+	int row = 0;
+	for (int o = 0; o < opt; o++)
+		row += opt_visible(m, o);
+	return row;
 }
 
 static int opt_from_row(const struct menu *m, int row)
 {
-	return row >= MENU_OPT_APPLY && !menu_video_pending(m) ? row + 1 : row;
+	for (int o = 0; o < MENU_OPTS; o++)
+		if (opt_visible(m, o) && row-- == 0)
+			return o;
+	return MENU_OPT_BACK;
 }
 
 static void move(struct menu *m, uint32_t dir, bool wrap)
@@ -336,7 +363,7 @@ static void move(struct menu *m, uint32_t dir, bool wrap)
 		return;
 	}
 	bool games = m->page == MENU_PAGE_GAMES;
-	int n = games ? menu_rows(m) : MENU_OPTS - !menu_video_pending(m);
+	int n = games ? menu_rows(m) : opt_row(m, MENU_OPTS);
 	int opt_v = opt_row(m, m->opt), *s = games ? &m->sel : &opt_v;
 	int page = games ? 6 : 1, v = *s;
 	if (dir == BIT(SALSA64_DS3_UP))
@@ -935,7 +962,8 @@ static void rom_info(const struct menu *m, const struct rom_entry *e, float px, 
 	(void)dscale;
 	if (cover) {
 		/* Carátula: cabe en cw × chh sin cambiar su proporción. */
-		float cw = pw * (m->cover_w > m->cover_h ? 0.52f : 0.42f), chh = ph - 24.0f - 60.0f - 20.0f;
+		/* Abajo queda sitio para «● Último abierto». */
+		float cw = pw * (m->cover_w > m->cover_h ? 0.52f : 0.42f), chh = ph - 24.0f - 60.0f - 44.0f;
 		float s = fminf(cw / (float)m->cover_w, chh / (float)m->cover_h);
 		float iw = (float)m->cover_w * s, ih = (float)m->cover_h * s;
 		float iy = py + 24.0f + 60.0f;
@@ -1044,9 +1072,10 @@ static void panel(const struct menu *m, float W, float H, float a)
 		static const char *const aspect_text[] = { "4:3: la imagen original de", "la N64, con franjas a los lados", "en una tele panorámica.",
 							   "16:9: la estira para llenar", "la pantalla.", NULL,
 							   "Vale al abrir el juego.", "Se guarda en menu.cfg.", NULL, NULL };
+		/* Sin las líneas de «vale al abrir»: abajo del valor va el crédito. */
 		static const char *const filter_text[] = { "Suave: la imagen se mezcla", "al escalar (la de siempre).", "Nítida: puntos cuadrados,",
 							   "sin difuminar.", "Líneas: oscurece filas como", "una tele de tubo (suaves o", "fuertes).", NULL,
-							   "Vale al abrir el juego.", "Se guarda en menu.cfg.", NULL, NULL };
+							   NULL };
 		static const char *const lang_text[] = { "Idioma del menú y de los", "avisos del juego.", NULL, "Se guarda en menu.cfg.", NULL, NULL };
 		static const char *const dlc_text[] = { "Baja las carátulas de los", "juegos de la lista a", "covers/. Hace falta red", "y la dirección en",
 							"descargas.cfg.", NULL, "×: descargar.", NULL, NULL };
@@ -1121,6 +1150,10 @@ static void panel(const struct menu *m, float W, float H, float a)
 			stext(x, y + 16.0f, value, tscale, C_ACCENT, ca, 0);
 		if (m->note[0] && (m->opt == MENU_OPT_RESOLUTION || m->opt == MENU_OPT_SCALE || m->opt == MENU_OPT_APPLY))
 			stext(x, py + ph - 44.0f, m->note, dscale, C_ACCENT, ca, lmax);
+		if (m->opt == MENU_OPT_FILTER) {  /* quién hizo el filtro elegido */
+			int f = m->set.filter >= 0 && m->set.filter < MENU_FILTERS ? m->set.filter : MENU_FILTER_SMOOTH;
+			stext(x, y + 16.0f + 46.0f, filter_info[f].credit, 1.35f, C_DIM, ca, lmax);
+		}
 		if (m->opt == MENU_OPT_RESOLUTION) {
 			y += 16.0f + 56.0f;
 			if (m->out_w && m->out_h) {
@@ -1216,8 +1249,10 @@ static void options_column(const struct menu *m, float x, float W, float H, floa
 	draw_row(&fps, (float)opt_row(m, MENU_OPT_FPS) - m->opt_pos, x, W, H, a);
 	draw_row(&confirm, (float)opt_row(m, MENU_OPT_CONFIRM) - m->opt_pos, x, W, H, a);
 	draw_row(&lang, (float)opt_row(m, MENU_OPT_LANG) - m->opt_pos, x, W, H, a);
-	draw_row(&dlc, (float)opt_row(m, MENU_OPT_DL_COVERS) - m->opt_pos, x, W, H, a);
-	draw_row(&dlt, (float)opt_row(m, MENU_OPT_DL_CHEATS) - m->opt_pos, x, W, H, a);
+	if (m->dl_enabled) {
+		draw_row(&dlc, (float)opt_row(m, MENU_OPT_DL_COVERS) - m->opt_pos, x, W, H, a);
+		draw_row(&dlt, (float)opt_row(m, MENU_OPT_DL_CHEATS) - m->opt_pos, x, W, H, a);
+	}
 	draw_row(&back, (float)opt_row(m, MENU_OPT_BACK) - m->opt_pos, x, W, H, a);
 }
 

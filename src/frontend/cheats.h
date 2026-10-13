@@ -92,7 +92,8 @@ bool cheats_save(const struct cheat_set *cs);
 unsigned cheats_active(const struct cheat_set *cs);
 
 /* Aplica los activos a la RDRAM (una vez por campo). Si cambia memoria,
- * avisa al bus para que el recompilador descarte código que dependa de ella. */
+ * avisa al bus (salsa64_bus_rdram_patched) para que el recompilador descarte
+ * código que dependa de ella. */
 void cheats_apply(const struct cheat_set *cs, struct salsa64_bus *bus);
 
 #endif

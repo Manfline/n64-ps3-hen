@@ -139,6 +139,8 @@ static const struct entry table[] = {
 	  { "Missing URL in descargas.cfg", "Adresse absente de descargas.cfg", "Adresse fehlt in descargas.cfg", "Indirizzo mancante in descargas.cfg", "Falta o endereço em descargas.cfg" } },
 	{ "Filtro",
 	  { "Filter", "Filtre", "Filter", "Filtro", "Filtro" } },
+	{ "Filtro de VIDEOGAMES SCZ",
+	  { "Filter by VIDEOGAMES SCZ", "Filtre de VIDEOGAMES SCZ", "Filter von VIDEOGAMES SCZ", "Filtro di VIDEOGAMES SCZ", "Filtro de VIDEOGAMES SCZ" } },
 	{ "Filtro de imagen",
 	  { "Image filter", "Filtre d'image", "Bildfilter", "Filtro immagine", "Filtro de imagem" } },
 	{ "Fondo animado",

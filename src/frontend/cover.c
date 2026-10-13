@@ -1,10 +1,39 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* SPDX-License-Identifier: GPL-2.0-or-later AND Zlib */
 /*
- * Salsa64 — carátulas (PNG → RGBA8888 reducido). Ver cover.h.
+ * Salsa64 — carátulas (PNG → RGBA8888 reducido). Ver cover.h. Contribución
+ * de VIDEOGAMES SCZ.
  *
  * El desinflado sigue el método de puff.c de Mark Adler (zlib/contrib/puff:
  * códigos de Huffman canónicos decodificados bit a bit, simple y sin tablas
- * grandes), escrito de nuevo aquí con códigos de error en vez de setjmp.
+ * grandes), escrito de nuevo aquí con códigos de error en vez de setjmp. Como
+ * su estructura sigue la de puff función por función, es una versión
+ * modificada de puff y conserva su aviso (licencia de zlib, compatible con
+ * GPLv2+; docs/THIRD_PARTY.md):
+ *
+ *   puff.h
+ *   Copyright (C) 2002-2013 Mark Adler, all rights reserved
+ *   version 2.3, 21 Jan 2013
+ *
+ *   This software is provided 'as-is', without any express or implied
+ *   warranty.  In no event will the author be held liable for any damages
+ *   arising from the use of this software.
+ *
+ *   Permission is granted to anyone to use this software for any purpose,
+ *   including commercial applications, and to alter it and redistribute it
+ *   freely, subject to the following restrictions:
+ *
+ *   1. The origin of this software must not be misrepresented; you must not
+ *      claim that you wrote the original software. If you use this software
+ *      in a product, an acknowledgment in the product documentation would be
+ *      appreciated but is not required.
+ *   2. Altered source versions must be plainly marked as such, and must not be
+ *      misrepresented as being the original software.
+ *   3. This notice may not be removed or altered from any source distribution.
+ *
+ *   Mark Adler    madler@alumni.caltech.edu
+ *
+ * Cambios respecto de puff: códigos de error en vez de setjmp/longjmp, salida
+ * de tamaño fijo, sin la variante SLOW ni el modo de solo medir.
  */
 #include "cover.h"
 #include "namematch.h"
@@ -508,12 +537,15 @@ enum cover_result cover_decode_png(const uint8_t *data, size_t size, uint8_t *rg
 		free(raw);
 		return COVER_TOO_BIG;
 	}
-	/* Segunda: los IDAT juntos. */
+	/* Segunda: los IDAT juntos, con los mismos trozos que la primera (hasta
+	 * IEND y sin salirse del archivo). */
 	size_t zn = 0;
 	pos = 8;
 	while (pos + 12 <= size) {
 		uint32_t len = be32(data + pos);
-		if (!memcmp(data + pos + 4, "IDAT", 4) && zn + len <= idat_total) {
+		if (len > size - pos - 12 || !memcmp(data + pos + 4, "IEND", 4))
+			break;
+		if (!memcmp(data + pos + 4, "IDAT", 4) && len <= idat_total - zn) {
 			memcpy(zbuf + zn, data + pos + 8, len);
 			zn += len;
 		}
@@ -608,12 +640,17 @@ enum cover_result cover_load_png(const char *path, uint8_t *rgba, unsigned *w, u
 	FILE *f = fopen(path, "rb");
 	if (!f)
 		return COVER_NO_FILE;
-	uint8_t *buf = malloc(COVER_MAX_FILE_BYTES + 1);
+	/* Búfer del tamaño del archivo (el tope solo si es más grande o no se
+	 * sabe): se lee un byte más para ver si se pasa. */
+	long size = fseek(f, 0, SEEK_END) == 0 ? ftell(f) : -1;
+	size_t cap = size < 0 || (unsigned long)size > COVER_MAX_FILE_BYTES ? COVER_MAX_FILE_BYTES : (size_t)size;
+	rewind(f);
+	uint8_t *buf = malloc(cap + 1);
 	if (!buf) {
 		fclose(f);
 		return COVER_TOO_BIG;
 	}
-	size_t n = fread(buf, 1, COVER_MAX_FILE_BYTES + 1, f);
+	size_t n = fread(buf, 1, cap + 1, f);
 	fclose(f);
 	enum cover_result r = n > COVER_MAX_FILE_BYTES ? COVER_TOO_BIG : cover_decode_png(buf, n, rgba, w, h);
 	free(buf);

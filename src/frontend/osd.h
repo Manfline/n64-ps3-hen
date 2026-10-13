@@ -68,9 +68,11 @@ void osd_confirm_draw(const char *question, const char *answers, float lw, float
 struct cheat_set;
 void osd_cheats_draw(const struct cheat_set *cs, int sel, float lw, float lh);
 
-/* Líneas de barrido sobre la imagen del juego (`level` 1 suaves, 2 fuertes):
- * x, y, w, h en el espacio lógico lw × lh, `lines` líneas de la imagen. */
-void osd_scanlines_draw(int level, float x, float y, float w, float h, unsigned lines, float lw, float lh);
+/* Líneas de barrido sobre la imagen del juego (filtros «Líneas» de
+ * VIDEOGAMES SCZ; `level` 0 ninguna, 1 suaves, 2 fuertes): x, y, w, h en el
+ * espacio lógico de osd_draw, `lines` líneas de la imagen. Las dibuja
+ * osd_draw, debajo del aviso y del contador, en el mismo lote. */
+void osd_scanlines_set(int level, float x, float y, float w, float h, unsigned lines);
 
 /* Menú de pausa (START + SELECT, pausectl.h): lo que se muestra. */
 struct osd_pause_menu {
