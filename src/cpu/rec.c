@@ -617,12 +617,32 @@ static void fold_block(struct salsa64_rec *rec, unsigned id)
 	}
 }
 
+/* El bloque vivo que hay hoy en la dirección virtual `vpc`, o 0. */
+static unsigned block_at_vpc(const struct salsa64_rec *rec, uint32_t vpc)
+{
+	if (vpc >= 0x80000000u && vpc < 0xA0000000u) {
+		uint32_t pa = vpc & 0x1FFFFFFFu;
+		return pa < rec->rdram_size ? rec->map[pa >> 2] : 0;
+	}
+	return salsa64_rec_x_find_vpc(rec, (uint64_t)(int64_t)(int32_t)vpc);
+}
+
 void salsa64_rec_profile_fold(struct salsa64_rec *rec)
 {
-	if (!rec->profile)
+	struct salsa64_rec_profile *p = rec->profile;
+	if (!p)
 		return;
 	for (unsigned id = 1; id < rec->next_block; id++)
 		fold_block(rec, id);
+	/* Sucesores: la huella del bloque que hay en el destino de cada sitio
+	 * registrado (si lo hay y tiene entrada); se vuelve a mirar cada vez,
+	 * por si el código del destino cambió. */
+	for (uint32_t j = 0; j < p->nsites; j++) {
+		struct salsa64_rec_profile_site *s = &p->sites[j];
+		unsigned id = block_at_vpc(rec, s->target);
+		if (id && rec->blocks[id].code && rec->pent[id])
+			s->succ_hash = p->entries[rec->pent[id] - 1].hash;
+	}
 }
 
 void salsa64_rec_profile_detach(struct salsa64_rec *rec)
@@ -1228,6 +1248,7 @@ bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *co
 	struct salsa64_rec_prof *prof = rec->prof;
 	memset(rec, 0, sizeof *rec);
 	rec->opts = opts;
+	rec->profile_sites = true;
 	rec->after_exit = after_exit;
 	rec->after_exit_ctx = after_exit_ctx;
 	rec->on_compile = on_compile;

@@ -133,6 +133,9 @@ unsigned salsa64_rec_seg(struct salsa64_rec *rec, uint64_t pc, uint32_t *pa);
 void salsa64_rec_x_data_fill(struct salsa64_rec *rec, uint64_t va);
 /* El bloque fuera de KSEG0 de (pc, pa), o 0. */
 unsigned salsa64_rec_x_find(struct salsa64_rec *rec, uint64_t pc, uint32_t pa);
+/* El primer bloque vivo, con código, de `vpc` (cualquier física), o 0: para
+ * resolver sucesores del perfil (rec.c). No reordena la cadena. */
+unsigned salsa64_rec_x_find_vpc(const struct salsa64_rec *rec, uint64_t vpc);
 /* No hay bloque de (pc, pa) mapeado: si hay uno de pc (vivo en otra física,
  * o desprendido) cuya copia de bytes coincide con lo que hay en pa (la
  * página volvió en otro marco), lo engancha en pa y lo devuelve; si no, 0. */

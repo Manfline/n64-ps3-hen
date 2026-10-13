@@ -110,35 +110,84 @@ static void hot_marking_fills_capacity_by_score(void)
 }
 
 #define N_FILE 3000u
+#define SITES_ENTRY 10u   /* la entrada con sitios: n = 10 */
+#define ENT_LEN 24u
+#define HDR_LEN 32u
+
+static const struct salsa64_rec_profile_game game_a = { { 'N', 'S', 'M', 'E' }, 0x635A2BFFu, 0x8B022326u };
+static const struct salsa64_rec_profile_game game_b = { { 'N', 'Z', 'L', 'E' }, 0x11111111u, 0x22222222u };
 
 static void fill(struct salsa64_rec_profile *p)
 {
 	salsa64_rec_profile_init(p);
+	p->game = game_a;
 	for (uint32_t k = 0; k < N_FILE; k++) {
 		unsigned i = salsa64_rec_profile_lookup(p, 0x80000000 + 4 * k, 0x9E3779B97F4A7C15ull * (k + 1),
 							1 + k % 64, k % 500, true);
 		CHECK_EQ(i, k + 1);
 		p->entries[i - 1].score = 3 * k;
 		p->entries[i - 1].hits = k;
+		p->entries[i - 1].flags = (uint8_t)(k & 7);
 	}
+	/* Sitios de la entrada 10 (vpc 0x80000024, n = 10, hits = 9): dos
+	 * condicionales internos, y el salto final con su no tomado. */
+	unsigned a = salsa64_rec_profile_site(p, SITES_ENTRY, 2, SALSA64_RPF_SITE_COND, 0x80001000);
+	unsigned b = salsa64_rec_profile_site(p, SITES_ENTRY, 5, SALSA64_RPF_SITE_COND, 0x80002000);
+	unsigned c = salsa64_rec_profile_site(p, SITES_ENTRY, 9, SALSA64_RPF_SITE_FALL, 0x8000004C);
+	unsigned d = salsa64_rec_profile_site(p, SITES_ENTRY, 9, SALSA64_RPF_SITE_COND, 0x80003000);
+	CHECK_EQ(a, 1);
+	CHECK_EQ(b, 2);
+	CHECK_EQ(c, 3);
+	CHECK_EQ(d, 4);
+	CHECK_EQ(salsa64_rec_profile_site(p, SITES_ENTRY, 5, SALSA64_RPF_SITE_COND, 0x80002000), 2);  /* repetido */
+	CHECK_EQ(p->nsites, 4);
+	CHECK_EQ(p->entries[SITES_ENTRY - 1].nsites, 4);
+	p->sites[0].taken = 5, p->sites[0].taken0 = 7, p->sites[0].not_taken0 = 1, p->sites[0].succ_hash = 0xAAA;
+	p->sites[1].taken = 3, p->sites[1].succ_hash = 0xCCC;
+	p->sites[2].taken = 1;  /* no tomado del salto final: sin huella (no es sucesor) */
+	p->sites[3].taken = 4, p->sites[3].succ_hash = 0xBBB;
 }
 
-static void check_loaded(const struct salsa64_rec_profile *p, bool long_session)
+static void check_loaded(struct salsa64_rec_profile *p, bool long_session)
 {
 	CHECK_EQ(p->count, N_FILE);
 	CHECK_EQ(p->loaded, N_FILE);
 	CHECK(!p->dirty);
 	CHECK_EQ(p->session, 0);
+	CHECK(memcmp(p->game.code, game_a.code, 4) == 0 && p->game.crc1 == game_a.crc1 && p->game.crc2 == game_a.crc2);
 	for (uint32_t k = 0; k < N_FILE; k += 97) {
-		unsigned i = salsa64_rec_profile_lookup((struct salsa64_rec_profile *)p, 0x80000000 + 4 * k,
-							0x9E3779B97F4A7C15ull * (k + 1), 1 + k % 64, 0, false);
+		unsigned i = salsa64_rec_profile_lookup(p, 0x80000000 + 4 * k, 0x9E3779B97F4A7C15ull * (k + 1), 1 + k % 64,
+							0, false);
 		CHECK(i != 0);
 		if (!i)
 			continue;
 		CHECK_EQ(p->entries[i - 1].score, salsa64_rec_profile_merge(3 * k, k, long_session));
 		CHECK_EQ(p->entries[i - 1].hits, 0);
 		CHECK_EQ(p->entries[i - 1].words, k % 500);
+		CHECK_EQ(p->entries[i - 1].flags, k & 7);
 		CHECK_EQ(p->entries[i - 1].hot, 0);
+	}
+	/* Los sitios, con lo tomado sumado y lo no tomado derivado: el de k = 2
+	 * alcanza las 9 entradas (9 − 5 = 4, más 1 del archivo); el de k = 5,
+	 * 9 − 5 = 4 (4 − 3 = 1); el final tiene su no tomado explícito (1). */
+	CHECK_EQ(p->nsites, 4);
+	unsigned a = salsa64_rec_profile_site(p, SITES_ENTRY, 2, SALSA64_RPF_SITE_COND, 0x80001000);
+	unsigned b = salsa64_rec_profile_site(p, SITES_ENTRY, 5, SALSA64_RPF_SITE_COND, 0x80002000);
+	unsigned c = salsa64_rec_profile_site(p, SITES_ENTRY, 9, SALSA64_RPF_SITE_FALL, 0x8000004C);
+	unsigned d = salsa64_rec_profile_site(p, SITES_ENTRY, 9, SALSA64_RPF_SITE_COND, 0x80003000);
+	CHECK_EQ(p->nsites, 4);
+	CHECK(a && b && c && d);
+	if (a && b && c && d) {
+		CHECK_EQ(p->sites[a - 1].taken0, 12);
+		CHECK_EQ(p->sites[a - 1].not_taken0, 5);
+		CHECK_EQ(p->sites[a - 1].taken, 0);
+		CHECK_EQ(p->sites[b - 1].taken0, 3);
+		CHECK_EQ(p->sites[b - 1].not_taken0, 1);
+		CHECK_EQ(p->sites[c - 1].taken0, 1);
+		CHECK_EQ(p->sites[c - 1].not_taken0, 0);
+		CHECK_EQ(p->sites[d - 1].taken0, 4);
+		CHECK_EQ(p->sites[d - 1].not_taken0, 1);
+		CHECK_EQ(p->sites[a - 1].succ_hash, 0);  /* se resuelve en cada sesión */
 	}
 }
 
@@ -161,22 +210,62 @@ static bool write_file(const char *path, const uint8_t *buf, size_t n)
 	return fclose(f) == 0 && ok;
 }
 
+static uint32_t rd32(const uint8_t *b)
+{
+	return (uint32_t)b[0] << 24 | (uint32_t)b[1] << 16 | (uint32_t)b[2] << 8 | b[3];
+}
+
 static void file_round_trip_rejects_corruption(void)
 {
-	static uint8_t buf[80000];
+	static uint8_t buf[90000];
 	char path[512];
 	if (!t_tmp_dir)
 		return;
 	snprintf(path, sizeof path, "%s/juego.prf", t_tmp_dir);
 
-	/* Sin archivo: vacío y false. */
-	CHECK(!salsa64_rec_profile_load(&tbl2, path));
+	/* Sin archivo: vacío y false, con la identidad pedida. */
+	CHECK(!salsa64_rec_profile_load(&tbl2, path, &game_a));
 	CHECK_EQ(tbl2.count, 0);
+	CHECK_EQ(tbl2.game.crc1, game_a.crc1);
 
 	fill(&tbl);
 	CHECK(salsa64_rec_profile_save(&tbl, path));
-	CHECK(salsa64_rec_profile_load(&tbl2, path));
+	CHECK(salsa64_rec_profile_load(&tbl2, path, &game_a));
 	check_loaded(&tbl2, false);
+	/* Sin identidad: toma la del archivo. De otro juego: se rechaza. */
+	CHECK(salsa64_rec_profile_load(&tbl2, path, NULL));
+	check_loaded(&tbl2, false);
+	CHECK(!salsa64_rec_profile_load(&tbl2, path, &game_b));
+	CHECK_EQ(tbl2.count, 0);
+	CHECK_EQ(tbl2.nsites, 0);
+
+	/* Lo escrito: cabecera, entradas (la 10 con dos sucesores, por cuenta
+	 * total: 0xAAA con 12 y 0xBBB con 4; el no tomado no es sucesor), sitios
+	 * y suma. */
+	long n = file_size(path, buf, sizeof buf);
+	CHECK_EQ(n, HDR_LEN + N_FILE * ENT_LEN + 2 * 16 + 4 * 16 + 8);
+	CHECK(memcmp(buf, "SPRF", 4) == 0);
+	CHECK_EQ(rd32(buf + 4), 2);
+	CHECK_EQ(rd32(buf + 8), N_FILE);
+	CHECK_EQ(rd32(buf + 12), 4);
+	CHECK(memcmp(buf + 16, "NSME", 4) == 0);
+	CHECK_EQ(rd32(buf + 20), game_a.crc1);
+	CHECK_EQ(rd32(buf + 24), game_a.crc2);
+	const uint8_t *e10 = buf + HDR_LEN + (SITES_ENTRY - 1) * ENT_LEN;
+	CHECK_EQ(rd32(e10), 0x80000000 + 4 * (SITES_ENTRY - 1));
+	CHECK_EQ(e10[20], (SITES_ENTRY - 1) & 7);
+	CHECK_EQ(e10[21], 2);
+	CHECK_EQ(rd32(e10 + ENT_LEN), 0x80001000);
+	CHECK_EQ(rd32(e10 + ENT_LEN + 8), 0xAAA);
+	CHECK_EQ(rd32(e10 + ENT_LEN + 12), 12);
+	CHECK_EQ(rd32(e10 + ENT_LEN + 16), 0x80003000);
+	CHECK_EQ(rd32(e10 + ENT_LEN + 24), 0xBBB);
+	CHECK_EQ(rd32(e10 + ENT_LEN + 28), 4);
+	const uint8_t *s0 = buf + HDR_LEN + N_FILE * ENT_LEN + 2 * 16;
+	CHECK_EQ(rd32(s0), (uint32_t)SITES_ENTRY << 16 | 2 << 8 | SALSA64_RPF_SITE_COND);
+	CHECK_EQ(rd32(s0 + 4), 0x80001000);
+	CHECK_EQ(rd32(s0 + 8), 12);
+	CHECK_EQ(rd32(s0 + 12), 5);
 
 	/* Sesión larga: con decaimiento. Y por trozos, con la tabla cambiando
 	 * entre trozos (las cuentas nuevas pueden entrar o no). */
@@ -187,39 +276,136 @@ static void file_round_trip_rejects_corruption(void)
 	int r = salsa64_rec_profile_save_step(&tbl, &w, 1000);
 	CHECK_EQ(r, 0);
 	salsa64_rec_profile_lookup(&tbl, 0x80100000, 0x77, 3, 9, true);  /* después de count: no entra en este archivo */
+	salsa64_rec_profile_site(&tbl, 5, 0, SALSA64_RPF_SITE_END, 0x80000100);  /* después de nsites: tampoco */
 	while ((r = salsa64_rec_profile_save_step(&tbl, &w, 700)) == 0)
 		;
 	CHECK_EQ(r, 1);
 	CHECK(!w.f);
-	CHECK(salsa64_rec_profile_load(&tbl2, path));
+	CHECK(salsa64_rec_profile_load(&tbl2, path, &game_a));
 	check_loaded(&tbl2, true);
 
 	/* Truncado: se descarta entero. */
-	long n = file_size(path, buf, sizeof buf);
-	CHECK_EQ(n, 16 + N_FILE * 20 + 8);
+	n = file_size(path, buf, sizeof buf);
+	CHECK_EQ(n, HDR_LEN + N_FILE * ENT_LEN + 2 * 16 + 4 * 16 + 8);
 	CHECK(write_file(path, buf, (size_t)n - 5));
-	CHECK(!salsa64_rec_profile_load(&tbl2, path));
+	CHECK(!salsa64_rec_profile_load(&tbl2, path, &game_a));
 	CHECK_EQ(tbl2.count, 0);
 	/* Un byte cambiado en medio: la suma no cuadra. */
-	buf[16 + 20 * 1234 + 13] ^= 0x40;
+	buf[HDR_LEN + ENT_LEN * 1234 + 13] ^= 0x40;
 	CHECK(write_file(path, buf, (size_t)n));
-	CHECK(!salsa64_rec_profile_load(&tbl2, path));
+	CHECK(!salsa64_rec_profile_load(&tbl2, path, &game_a));
 	CHECK_EQ(tbl2.count, 0);
-	buf[16 + 20 * 1234 + 13] ^= 0x40;
+	buf[HDR_LEN + ENT_LEN * 1234 + 13] ^= 0x40;
 	/* Con algo de más al final, tampoco. */
 	buf[n] = 0;
 	CHECK(write_file(path, buf, (size_t)n + 1));
-	CHECK(!salsa64_rec_profile_load(&tbl2, path));
+	CHECK(!salsa64_rec_profile_load(&tbl2, path, &game_a));
 	/* Intacto otra vez: carga. */
 	CHECK(write_file(path, buf, (size_t)n));
-	CHECK(salsa64_rec_profile_load(&tbl2, path));
+	CHECK(salsa64_rec_profile_load(&tbl2, path, &game_a));
 	CHECK_EQ(tbl2.count, N_FILE);
+	CHECK_EQ(tbl2.nsites, 4);
 	/* Tabla vacía: archivo válido de cero entradas. */
 	salsa64_rec_profile_init(&tbl);
 	CHECK(salsa64_rec_profile_save(&tbl, path));
-	CHECK(salsa64_rec_profile_load(&tbl2, path));
+	CHECK(salsa64_rec_profile_load(&tbl2, path, NULL));
 	CHECK_EQ(tbl2.count, 0);
 	remove(path);
+}
+
+static void game_identity_from_rom_header(void)
+{
+	uint8_t rom[64] = { 0 };
+	struct salsa64_rec_profile_game g;
+	rom[0x10] = 0x63, rom[0x11] = 0x5A, rom[0x12] = 0x2B, rom[0x13] = 0xFF;
+	rom[0x14] = 0x8B, rom[0x15] = 0x02, rom[0x16] = 0x23, rom[0x17] = 0x26;
+	memcpy(rom + 0x3B, "NSME", 4);
+	salsa64_rec_profile_game_of(&g, rom);
+	CHECK(memcmp(g.code, "NSME", 4) == 0);
+	CHECK_EQ(g.crc1, 0x635A2BFFu);
+	CHECK_EQ(g.crc2, 0x8B022326u);
+}
+
+/* Con el recompilador: un bloque caliente registra sus sitios de salida
+ * (aquí el condicional interno que sale del bloque; el JR no da sitio), el
+ * código generado los cuenta solo cuando pasa por ellos, el sucesor se
+ * resuelve a la huella del bloque que hay en el destino, y con `saltos = no`
+ * no se registra nada. */
+static void rec_records_exit_sites_of_hot_blocks(void)
+{
+	struct salsa64_rec *rec = CPU->rec;
+	if (!rec)
+		return;
+	static const uint32_t code[6] = { ADDIU(T0, T0, -1), BNE(T0, ZERO, 4), NOP, ADDIU(T1, T1, 1), JR(RA), NOP };
+	static const uint32_t dest[2] = { JR(RA), NOP };
+	salsa64_rec_profile_init(&tbl);
+	unsigned i = salsa64_rec_profile_lookup(&tbl, (uint32_t)T_CODE, salsa64_rec_profile_hash(code, 6), 6, 0, true);
+	tbl.entries[i - 1].score = 10;
+	salsa64_rec_profile_mark_hot(&tbl, 1000);
+	rec->profile = &tbl;
+	rec->profile_sites = true;
+
+	t_load(code, 6);
+	t_wr32(T_CODE_PA + 24, dest[0]);  /* el destino del BNE: T_CODE + 24, fuera del bloque */
+	t_wr32(T_CODE_PA + 28, dest[1]);
+	R[RA] = T_CODE + 0x100;
+	R[T0] = 1;
+	R[T1] = 0;
+	t_step(6);  /* no tomado */
+	CHECK_EQ(R[T1], 1);
+	unsigned id = rec->map[T_CODE_PA >> 2];
+	CHECK(id != 0);
+	CHECK_EQ(rec->pent[id], i);
+	CHECK_EQ(tbl.nsites, 1);
+	CHECK_EQ(tbl.entries[i - 1].nsites, 1);
+	CHECK_EQ(tbl.sites[0].k, 1);
+	CHECK_EQ(tbl.sites[0].kind, SALSA64_RPF_SITE_COND);
+	CHECK_EQ(tbl.sites[0].target, (uint32_t)T_CODE + 24);
+	CHECK_EQ(tbl.sites[0].taken, 0);
+	CHECK_EQ(tbl.entries[i - 1].flags, SALSA64_RPF_FR_SEEN1);  /* T_STATUS tiene FR; no usa la FPU */
+
+	R[T0] = 2;
+	salsa64_cpu_set_pc(CPU, T_CODE);
+	t_step(3);  /* tomado: ADDIU, BNE y su delay slot */
+	CHECK_EQ(R[T0], 1);
+	CHECK_EQ(CPU->pc, T_CODE + 24);
+	CHECK_EQ(tbl.sites[0].taken, 1);
+	CHECK_EQ(rec->hits[id], 2);
+
+	/* El bloque del destino, compilado y con entrada: el sucesor se resuelve. */
+	t_step(2);
+	CHECK_EQ(CPU->pc, T_CODE + 0x100);
+	CHECK_EQ(tbl.count, 2);
+	salsa64_rec_profile_fold(rec);
+	CHECK_EQ(tbl.entries[i - 1].hits, 2);
+	CHECK_EQ(tbl.sites[0].succ_hash, salsa64_rec_profile_hash(dest, 2));
+
+	/* Guardado: tomado 1, no tomado 2 − 1 = 1. */
+	if (t_tmp_dir) {
+		char path[512];
+		snprintf(path, sizeof path, "%s/sitios.prf", t_tmp_dir);
+		CHECK(salsa64_rec_profile_save(&tbl, path));
+		CHECK(salsa64_rec_profile_load(&tbl2, path, NULL));
+		CHECK_EQ(tbl2.nsites, 1);
+		CHECK_EQ(tbl2.sites[0].taken0, 1);
+		CHECK_EQ(tbl2.sites[0].not_taken0, 1);
+		remove(path);
+	}
+
+	/* Sin registro de sitios: el bloque recompilado no agrega ninguno. */
+	rec->profile_sites = false;
+	t_wr32(T_CODE_PA + 12, ADDIU(T1, T1, 2));  /* otra huella: otra entrada, fría */
+	R[T0] = 1;
+	R[T1] = 0;
+	salsa64_cpu_set_pc(CPU, T_CODE);
+	t_step(6);
+	CHECK_EQ(R[T1], 2);
+	CHECK_EQ(tbl.count, 3);
+	CHECK_EQ(tbl.nsites, 1);
+	rec->profile_sites = true;
+
+	salsa64_rec_profile_detach(rec);
+	salsa64_rec_flush(rec);
 }
 
 /* Con el recompilador: cada bloque cuenta sus entradas (no las vueltas de
@@ -335,5 +521,7 @@ void t_suite_rec_profile(void)
 	RUN(merge_decays_only_in_long_sessions);
 	RUN(hot_marking_fills_capacity_by_score);
 	RUN(file_round_trip_rejects_corruption);
+	RUN(game_identity_from_rom_header);
 	RUN(rec_counts_entries_and_places_hot_blocks);
+	RUN(rec_records_exit_sites_of_hot_blocks);
 }

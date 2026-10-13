@@ -1826,11 +1826,12 @@ static void stats(uint64_t now)
 			    (unsigned long long)st->fr_twins, (unsigned long long)st->fr_exits,
 			    (unsigned long long)st->cu1_exits, (unsigned long long)st->interp_steps);
 		if (rprof.on)
-			salsa64_log("perfil del recompilador: %u entradas (%u calientes, %u sin lugar), %llu bloques en la zona "
-				    "caliente (%u de %u KB en la mitad %u, %llu no cupieron, %llu desalojos de mitad), %llu "
-				    "entradas a bloques contadas, %u escrituras (%u fallidas)",
-				    rec_profile.count, rec_profile.hot_entries, rec_profile.full,
-				    (unsigned long long)st->hot_placed, salsa64_rec_hot_used(&rec) / 256,
+			salsa64_log("perfil del recompilador: %u entradas (%u calientes, %u sin lugar) y %u sitios de salida "
+				    "(%u sin lugar), %llu bloques en la zona caliente (%u de %u KB en la mitad %u, %llu no "
+				    "cupieron, %llu desalojos de mitad), %llu entradas a bloques contadas, %u escrituras (%u "
+				    "fallidas)",
+				    rec_profile.count, rec_profile.hot_entries, rec_profile.full, rec_profile.nsites,
+				    rec_profile.sites_full, (unsigned long long)st->hot_placed, salsa64_rec_hot_used(&rec) / 256,
 				    rec.hot_words / 256, rec.cur_hot, (unsigned long long)st->hot_full,
 				    (unsigned long long)st->hot_evictions, (unsigned long long)rec_profile.session, rprof.saves,
 				    rprof.save_errors);
@@ -2089,18 +2090,22 @@ static void game_reset(void)
  * una línea que dice si quedó algo en vuelo. */
 /* ---- Perfil persistente del recompilador (cpu/rec_profile.h) ----------------- */
 
-/* perfil.cfg: `caliente = KB` (0: contar sin zona caliente). */
-static uint32_t profile_hot_kb(void)
+/* perfil.cfg: `caliente = KB` (0: contar sin zona caliente) y `saltos =
+ * si|no` (registrar los sitios de salida de los bloques calientes). */
+static uint32_t profile_hot_kb(bool *sites)
 {
 	uint32_t kb = PROFILE_HOT_KB;
+	*sites = true;
 	FILE *f = fopen(PROFILE_CFG_PATH, "r");
 	if (!f)
 		return kb;
-	char line[128];
+	char line[128], word[16];
 	while (fgets(line, sizeof line, f)) {
 		unsigned v;
 		if (sscanf(line, " caliente = %u", &v) == 1)
 			kb = v;
+		else if (sscanf(line, " saltos = %15s", word) == 1)
+			*sites = word[0] != 'n' && word[0] != 'N' && word[0] != '0';
 	}
 	fclose(f);
 	return kb;
@@ -2122,15 +2127,22 @@ static void profile_open(const uint8_t *rom)
 	mkdir(PROFILE_DIR, 0777);
 	salsa64_save_basename(rom, base, sizeof base);
 	snprintf(rprof.path, sizeof rprof.path, "%s/%s.prf", PROFILE_DIR, base);
-	bool loaded = salsa64_rec_profile_load(&rec_profile, rprof.path);
+	struct salsa64_rec_profile_game game;
+	salsa64_rec_profile_game_of(&game, rom);
+	bool loaded = salsa64_rec_profile_load(&rec_profile, rprof.path, &game);
 	salsa64_rec_profile_mark_hot(&rec_profile, salsa64_rec_hot_capacity(&rec) * 3 / 4);
+	bool sites;
+	profile_hot_kb(&sites);
+	rec.profile_sites = sites;
 	rec.profile = &rec_profile;
 	rprof.on = true;
 	rprof.t_saved = sysGetSystemTime();
-	salsa64_log("perfil del recompilador: %s %s (%u entradas; %u calientes con %u KB, umbral %u); zona caliente "
-		    "de %u KB en dos mitades, se guarda cada %llu s y al cerrar",
-		    loaded ? "cargado" : "nuevo", rprof.path, rec_profile.count, rec_profile.hot_entries,
-		    rec_profile.hot_words / 256, rec_profile.hot_threshold, salsa64_rec_hot_capacity(&rec) / 256,
+	salsa64_log("perfil del recompilador: %s %s (%u entradas y %u sitios de salida; %u calientes con %u KB, "
+		    "umbral %u); zona caliente de %u KB en dos mitades, sitios de salida %s, se guarda cada %llu s y "
+		    "al cerrar",
+		    loaded ? "cargado" : "nuevo", rprof.path, rec_profile.count, rec_profile.nsites,
+		    rec_profile.hot_entries, rec_profile.hot_words / 256, rec_profile.hot_threshold,
+		    salsa64_rec_hot_capacity(&rec) / 256, sites ? "sí" : "no (saltos = no)",
 		    (unsigned long long)(PROFILE_SAVE_US / 1000000));
 }
 
@@ -2169,11 +2181,11 @@ static void profile_close(void)
 	salsa64_rec_profile_save_abort(&rec_profile_w);
 	salsa64_rec_profile_fold(&rec);
 	bool ok = salsa64_rec_profile_save(&rec_profile, rprof.path);
-	salsa64_log("cierre: perfil del recompilador %s %s: %u entradas (%u cargadas, %u sin lugar), %llu entradas a "
-		    "bloques contadas (sesión %s), %llu bloques en la zona caliente (%llu no cupieron, %llu desalojos "
-		    "de mitad), %u escrituras periódicas (%u fallidas)",
+	salsa64_log("cierre: perfil del recompilador %s %s: %u entradas (%u cargadas, %u sin lugar) y %u sitios de "
+		    "salida (%u sin lugar), %llu entradas a bloques contadas (sesión %s), %llu bloques en la zona "
+		    "caliente (%llu no cupieron, %llu desalojos de mitad), %u escrituras periódicas (%u fallidas)",
 		    ok ? "guardado en" : "NO se pudo guardar en", rprof.path, rec_profile.count, rec_profile.loaded,
-		    rec_profile.full, (unsigned long long)rec_profile.session,
+		    rec_profile.full, rec_profile.nsites, rec_profile.sites_full, (unsigned long long)rec_profile.session,
 		    rec_profile.session >= SALSA64_RPF_LONG_SESSION ? "larga" : "corta",
 		    (unsigned long long)st->hot_placed, (unsigned long long)st->hot_full,
 		    (unsigned long long)st->hot_evictions, rprof.saves, rprof.save_errors);
@@ -2324,7 +2336,10 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	if (salsa64_ps3_rec_no_evict_wanted())
 		rec.opts |= SALSA64_REC_OPT_NO_EVICT;
 	rec.prof = salsa64_ps3_rec_prof_wanted() ? &rec_prof : NULL;
-	rec.hot_bytes = file_exists(NO_PROFILE_PATH) ? 0 : profile_hot_kb() << 10;
+	{
+		bool sites;
+		rec.hot_bytes = file_exists(NO_PROFILE_PATH) ? 0 : profile_hot_kb(&sites) << 10;
+	}
 	if (!salsa64_ps3_rec_wanted())
 		salsa64_log("recompilador apagado (%s): intérprete", SALSA64_NOREC_FLAG);
 	else if (!(use_rec = salsa64_rec_init(&rec, &n64.cpu, salsa64_ps3_rec_cache(), SALSA64_REC_CACHE_BYTES)))

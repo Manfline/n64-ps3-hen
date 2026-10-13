@@ -1969,7 +1969,7 @@ static void usage(FILE *out)
 	      "      --no-idle         no saltar los bucles de espera\n"
 	      "      --profile ARCHIVO con --rec, perfil persistente por juego (rec_profile.h): se carga al\n"
 	      "                        empezar (si existe) y se guarda al terminar; SALSA64_REC_HOT_KB fija la\n"
-	      "                        zona caliente (1024)\n"
+	      "                        zona caliente (1024) y SALSA64_REC_SITES=0 no registra sitios de salida\n"
 	      "      --save TIPO       tipo de guardado: ninguno, eeprom4k, eeprom16k, sram256k, flashram\n"
 	      "      --save-dir DIR    leer y escribir el guardado del cartucho en DIR\n"
 	      "      --gfx-frame ARCHIVO  al terminar, guardar en PPM lo que dibujó la HLE gráfica\n"
@@ -2253,13 +2253,17 @@ int main(int argc, char **argv)
 			return 3;
 		}
 		if (profile_path) {
-			bool loaded = salsa64_rec_profile_load(&profile, profile_path);
+			struct salsa64_rec_profile_game game;
+			salsa64_rec_profile_game_of(&game, rom);
+			bool loaded = salsa64_rec_profile_load(&profile, profile_path, &game);
 			salsa64_rec_profile_mark_hot(&profile, salsa64_rec_hot_capacity(&rec) * 3 / 4);
 			rec.profile = &profile;
-			fprintf(stderr, "salsa64-run: perfil %s: %s, %u entradas, %u calientes (%u KB, umbral %u); zona "
-				"caliente %u KB en dos mitades\n", profile_path, loaded ? "cargado" : "vacío (sin archivo o corrupto)",
-				profile.count, profile.hot_entries, profile.hot_words / 256, profile.hot_threshold,
-				salsa64_rec_hot_capacity(&rec) / 256);
+			rec.profile_sites = !getenv("SALSA64_REC_SITES") || salsa64_host_env_on("SALSA64_REC_SITES");
+			fprintf(stderr, "salsa64-run: perfil %s: %s, %u entradas y %u sitios, %u calientes (%u KB, umbral %u); "
+				"zona caliente %u KB en dos mitades, sitios de salida %s\n", profile_path,
+				loaded ? "cargado" : "vacío (sin archivo, corrupto o de otro juego)", profile.count, profile.nsites,
+				profile.hot_entries, profile.hot_words / 256, profile.hot_threshold,
+				salsa64_rec_hot_capacity(&rec) / 256, rec.profile_sites ? "sí" : "no");
 		}
 		if (lockstep) {
 			/* La referencia arranca igual; cada bloque vuelve a C para comparar. */
@@ -2417,10 +2421,10 @@ int main(int argc, char **argv)
 		if (rec.profile) {
 			salsa64_rec_profile_fold(&rec);
 			bool saved = salsa64_rec_profile_save(&profile, profile_path);
-			fprintf(stderr, "salsa64-run: perfil: %u entradas (%u cargadas, %u sin lugar), %llu entradas a bloques "
-				"contadas (sesión %s), %llu bloques en la zona caliente (%llu no cupieron, %llu desalojos de "
-				"mitad, %u KB usados); %s %s\n", profile.count, profile.loaded, profile.full,
-				(unsigned long long)profile.session,
+			fprintf(stderr, "salsa64-run: perfil: %u entradas (%u cargadas, %u sin lugar) y %u sitios de salida (%u "
+				"sin lugar), %llu entradas a bloques contadas (sesión %s), %llu bloques en la zona caliente (%llu no "
+				"cupieron, %llu desalojos de mitad, %u KB usados); %s %s\n", profile.count, profile.loaded, profile.full,
+				profile.nsites, profile.sites_full, (unsigned long long)profile.session,
 				profile.session >= SALSA64_RPF_LONG_SESSION ? "larga" : "corta",
 				(unsigned long long)st->hot_placed, (unsigned long long)st->hot_full,
 				(unsigned long long)st->hot_evictions, salsa64_rec_hot_used(&rec) / 256,

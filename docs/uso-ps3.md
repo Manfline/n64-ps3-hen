@@ -263,13 +263,14 @@ se crean por FTP.
 | `gfx_ppe` | Basta con que exista | Corre la HLE gráfica en el PPE en lugar del SPE (para comparar tiempos) |
 | `sin-pausa` | Basta con que exista | El menú del sistema (botón PS) no pausa la emulación, como hasta v0.1.0 (para diagnosticar; docs/hilos-ppe.md) |
 | `sin-perfil` | Basta con que exista | Apaga el perfil persistente del recompilador: no cuenta, no lee ni escribe `perfiles/` y no hay zona caliente (para medir A/B; docs/rec-ppe.md) |
-| `perfil.cfg` | `caliente = KB` | Tamaño de la zona caliente de la caché de código (por omisión 1024 KB, en dos mitades); `0` cuenta y guarda el perfil sin zona caliente |
+| `perfil.cfg` | `caliente = KB`, `saltos = si\|no` | Tamaño de la zona caliente de la caché de código (por omisión 1024 KB, en dos mitades; `0` cuenta y guarda el perfil sin zona caliente) y si los bloques calientes registran sus sitios de salida (sí por omisión) |
 | `embedded` | `file:nombre` | Abre una ROM sin menú (sección anterior) |
 
 La carpeta también contiene `states/` (estados guardados), `perfiles/` (el
 perfil del recompilador de cada juego, `<juego>.prf`, que se enriquece en
-cada sesión; se puede borrar sin perder nada más que la velocidad de arranque
-de las primeras escenas), el log (`salsa64.log`) y archivos de diagnóstico
+cada sesión; no contiene nada del juego, solo direcciones, huellas y cuentas,
+y se puede borrar sin perder nada más que la velocidad de arranque de las
+primeras escenas), el log (`salsa64.log`) y archivos de diagnóstico
 que escribe la aplicación (`gfxdump.bin`, `screen-N.ppm`, `menu.ppm`);
 no hace falta tocarlos.
 

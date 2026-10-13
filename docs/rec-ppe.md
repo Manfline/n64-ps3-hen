@@ -766,24 +766,58 @@ que se compilan. Ahora:
   resto es igual: enlaces, invalidación, gemelos y bloques desprendidos no
   distinguen zonas (`seg_of` numera las mitades 0 y 1 y los tramos fríos
   desde 2).
-- **Archivo.** `perfiles/<juego>.prf` (el nombre de las partidas:
-  título y CRC1), big-endian: magia `SPRF`, versión, cantidad, y por entrada
-  dirección, huella, puntaje, instrucciones y palabras; al final una suma
-  FNV-1a de todo. Lo que no cuadra (magia, versión, cantidad, longitud,
-  suma) se descarta entero y el perfil arranca vacío: el emulador funciona
-  igual. Se escribe al cerrar el juego y cada 2 min si hubo cuentas nuevas,
-  por trozos de 512 entradas por vuelta del hilo de presentación (nada de
-  búferes de un megabyte ni de parar la presentación; el que escribe lee
-  `count` una vez y las entradas nuevas entran en el archivo siguiente; una
-  cuenta a medias es solo un número un poco menor). Primero `.tmp` y
-  `rename`, como las partidas.
+- **Sitios de salida de los bloques calientes.** Un bloque que se emite en
+  la zona caliente registra además cada sitio por donde sale con destino
+  fijo: salto condicional tomado (interno o final, también los que saltan
+  dentro del propio bloque), el salto final no tomado, J/JAL y el fin de
+  bloque sin salto; cada uno cuenta cuántas veces se pasa por él (cuatro
+  palabras en ese camino, con la dirección absoluta del contador; nunca en
+  el cuerpo). La vuelta de un bucle al inicio del propio bloque no se
+  cuenta (sería costo en el camino caliente; se asume tomada), ni los
+  JR/JALR (destino calculado: sin sucesor). Hasta 8 sitios por bloque y
+  8192 en total (`SALSA64_RPF_SITES`); `saltos = no` en `perfil.cfg` lo
+  apaga para medir. Al guardar, de cada condicional sale cuántas veces se
+  tomó y cuántas no (el final tiene su no tomado explícito; el interno se
+  deriva: entradas al bloque menos lo que salió por los saltos anteriores,
+  aproximado si el bloque salta a su propio interior), y de cada bloque sus
+  dos sucesores más frecuentes: el destino y la huella del bloque que había
+  ahí la última vez que se miró (lo resuelve la suma entre campos con el
+  mapa de bloques). Solo se registra; los usos están en «Siguientes pasos».
+- **Archivo.** `perfiles/<juego>.prf` (el nombre de las partidas: título
+  y CRC1). **No contiene ni un byte de código del juego ni de código
+  traducido**: direcciones virtuales, huellas FNV-1a de 64 bits de un solo
+  sentido (no se puede reconstruir el bloque a partir de ellas), cuentas y
+  banderas; por eso un perfil se puede compartir sin distribuir material del
+  juego. La caché de código generado no se persiste nunca: se vuelve a
+  traducir en cada sesión. Versión 2, big-endian, campo por campo:
+  - cabecera (32 bytes): magia `SPRF`, versión, entradas, sitios, código del
+    cartucho (4 letras de la cabecera de la ROM) y CRC1/CRC2 de esa
+    cabecera: un archivo de otro juego se rechaza;
+  - por entrada (24 bytes): dirección virtual, huella, puntaje,
+    instrucciones, palabras de PPC, banderas (depende de Status.FR; se
+    compiló con FR = 0 y con FR = 1; tiene más sitios de los registrados) y
+    cuántos sucesores siguen, y por sucesor (16 bytes): destino, huella del
+    bloque de ahí y cuenta;
+  - por sitio (16 bytes): entrada, instrucción del salto, clase (condicional
+    tomado, final no tomado, J, fin), destino, tomado y no tomado;
+  - suma de verificación FNV-1a de todo lo anterior (8 bytes).
+  Lo que no cuadra (magia, versión, identidad, cantidades, longitud, suma)
+  se descarta entero y el perfil arranca vacío: el emulador funciona igual.
+  Se escribe al cerrar el juego (también al volver al menú) y cada 2 min si
+  hubo cuentas nuevas, por trozos de 512 entradas o sitios por vuelta del
+  hilo de presentación (nada de búferes de un megabyte ni de parar la
+  presentación; el que escribe lee `count` y `nsites` una vez y lo nuevo
+  entra en el archivo siguiente; una cuenta a medias es solo un número un
+  poco menor). Primero `.tmp` y `rename`, como las partidas. `sin-perfil` y
+  `perfil.cfg` se leen al abrir cada juego.
 - **Entre sesiones.** El puntaje guardado mezcla el del archivo con lo
   contado: en una sesión larga (2²⁶ entradas a bloques o más: entre medio
   minuto y un minuto de juego, Perfect Dark cuenta 1,2 M por segundo de
   consola) lo que no se ejecutó decae a la mitad, `max(hits, (score + hits) /
   2)`; en una corta solo puede subir, `max(score, hits)`, para que diez
   arranques de prueba no borren lo aprendido en una partida larga. Los
-  puntajes saturan en 2³² − 1.
+  puntajes saturan en 2³² − 1. Las cuentas de los sitios solo se suman entre
+  sesiones (sin decaimiento), saturando igual.
 - **Apagarlo:** el archivo `sin-perfil` en `/dev_hdd0/salsa64` (no cuenta,
   no lee ni escribe, sin zona caliente); `perfil.cfg` con `caliente = 0`
   cuenta y guarda pero no coloca. En el host, `salsa64-run --profile
@@ -791,18 +825,49 @@ que se compilan. Ahora:
   zona caliente de un dieciseisavo de la caché.
 
 Memoria: `hits[]` 256 KB y `pent[]` 128 KB en `struct salsa64_rec`; la
-tabla, 1 MB más 128 KB de índice, estática en el frontend
-(docs/memory-budget.md).
+tabla, 1 MB de entradas, 256 KB de sitios y 128 KB de índice, estática en el
+frontend (docs/memory-budget.md).
 
 La prueba `rec_counts_entries_and_places_hot_blocks` (test_rec_profile.c)
 comprueba con el recompilador que un bloque marcado cae en la zona
 caliente, que cuenta entradas y no vueltas, que el código reescrito en la
 misma dirección es otra entrada y va a la zona fría, que al morir suma su
 cuenta, y que con `hot_full` la siguiente compilación pasa a la otra mitad
-sin tocar la primera; las demás prueban la tabla, la mezcla, el marcado y
-el archivo (truncado, un byte cambiado, bytes de más).
+sin tocar la primera; `rec_records_exit_sites_of_hot_blocks`, que un
+condicional interno que sale del bloque registra su sitio, lo cuenta solo
+cuando se toma, resuelve su sucesor a la huella del bloque del destino y
+guarda tomado y no tomado, y que `saltos = no` no registra nada; las demás
+prueban la tabla, la mezcla, el marcado, la identidad del juego y el
+archivo (truncado, un byte cambiado, bytes de más, otro juego).
 
 #### Siguientes pasos (diseño, sin implementar)
+
+0. **Usar lo que ya registra el perfil de los bloques calientes** (sitios
+   de salida y sucesores):
+   - *Pistas estáticas de salto.* El PPE predice mal y un salto mal
+     predicho cuesta ~20 ciclos; `bc` admite los bits de predicción
+     estática (BO con `y`/`a+t`), que hoy el emisor pone con
+     `PPC_BO_*_LIKELY/UNLIKELY` por convención (salida al camino lento =
+     improbable). Con tomado/no tomado de cada condicional del perfil, el
+     condicional interno se emite con la pista que diga la cuenta (y, si la
+     cuenta dice que casi siempre se toma, invertido: el camino tomado en
+     línea y el no tomado como salida), y el salto final igual.
+   - *Sucesor probable contiguo.* Al compilar un bloque caliente cuyo
+     sucesor más frecuente (dirección + huella) no está compilado, compilar
+     el sucesor inmediatamente después en la zona caliente, y si ya está,
+     nada: el enlace es un `b` y lo que importa es que las dos piezas
+     queden en líneas y páginas vecinas. Con la huella se comprueba que el
+     sucesor que hay hoy en el destino es el del perfil.
+   - *Traducción por adelantado en un SPE.* La traducción es cálculo puro
+     (palabras MIPS de entrada, palabras PPC de salida, más el estado que
+     fija la forma del bloque: FR, segmento, página de la ktlb). Con el
+     perfil se sabe qué bloques van a correr (los calientes y sus
+     sucesores): un SPE podría traducirlos en lote mientras el PPE juega y
+     dejar el código listo para que el despachador solo lo enganche. Pide
+     mover el emisor a código compilable para SPU (sin punteros a
+     `struct salsa64_rec`, direcciones de las rutinas del preámbulo como
+     parámetros) y resolver en el PPE lo que depende del estado vivo
+     (enlaces, ktlb). Es el paso grande; los dos anteriores no lo necesitan.
 
 1. **Traducir por adelantado los bloques calientes cuando su código llega a
    la RDRAM.** Hoy un bloque se compila la primera vez que se ejecuta: al

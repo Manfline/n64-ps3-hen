@@ -243,6 +243,10 @@ struct salsa64_rec {
 	 * marcada; con él, cada bloque cuenta sus entradas en hits[] y los
 	 * marcados van a la zona caliente. */
 	struct salsa64_rec_profile *profile;
+	/* Con el perfil: registrar los sitios de salida de los bloques calientes
+	 * (cuatro palabras en cada camino que sale; rec_profile.h). Lo deja en
+	 * true salsa64_rec_init; quien llama lo apaga después si quiere. */
+	bool profile_sites;
 
 	struct salsa64_rec_stats stats;
 

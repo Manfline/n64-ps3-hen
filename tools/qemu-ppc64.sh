@@ -5,7 +5,7 @@
 # no conserva el orden entre los dos). Pasa al programa las variables
 # SALSA64_TEST, SALSA64_REC_DUMP, SALSA64_REC_FAR, SALSA64_REC_PIN,
 # SALSA64_REC_EAGER, SALSA64_REC_RARE_EXEC, SALSA64_REC_PROF, SALSA64_REC_LEGACY,
-# SALSA64_REC_CACHE_MB y SALSA64_REC_HOT_KB.
+# SALSA64_REC_CACHE_MB, SALSA64_REC_HOT_KB y SALSA64_REC_SITES.
 #
 # CPU power9 (SALSA64_QEMU_CPU cambia el modelo): con -cpu 970 (el más
 # parecido al PPE, Power ISA 2.01) qemu 7.2 da resultados erróneos (el
@@ -31,6 +31,6 @@ exec docker run --rm -i --user "$(id -u):$(id -g)" -v "$ROOT:/src" -w /src \
 	-e SALSA64_TEST -e SALSA64_REC_DUMP -e SALSA64_REC_FAR -e SALSA64_REC_PIN -e SALSA64_REC_EAGER \
 	-e SALSA64_REC_RARE_EXEC -e SALSA64_REC_PROF -e SALSA64_REC_LEGACY -e SALSA64_REC_OPTS \
 	-e SALSA64_REC_FPU_RES -e SALSA64_REC_COP0_EXEC -e SALSA64_REC_NO_EVICT -e SALSA64_REC_CACHE_MB \
-	-e SALSA64_REC_HOT_KB "$IMAGE" \
+	-e SALSA64_REC_HOT_KB -e SALSA64_REC_SITES "$IMAGE" \
 	sh -c 'cpu=$1; shift; exec timeout "$0" qemu-ppc64-static -cpu "$cpu" "$@" 2>&1' \
 	"${QEMU_TIMEOUT:-600}" "${SALSA64_QEMU_CPU:-power9}" "$@"
