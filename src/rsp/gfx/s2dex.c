@@ -27,6 +27,8 @@
  *   salía con la paleta que hubiera quedado en la TMEM. El microcódigo se
  *   salta la carga si la palabra de estado `sid` ya trae `flag` (bajo
  *   `mask`): es solo un ahorro, aquí se carga siempre.
+ * - G_RDPHALF_0 (0xE4) seguido de G_RDPHALF_1 y G_RDPHALF_2: un TEXRECT,
+ *   como en F3DEX2.
  * Lo demás de S2DEX (sprites, el resto de G_OBJ_*) se cuenta como saltado.
  *
  * Campos de uObjBg/uObjScaleBg y su punto fijo (u10.5, u10.2, s10.2;
@@ -45,7 +47,7 @@
 enum {
 	S2_OBJ_LOADTXTR = 0x05, S2_BG_1CYC = 0x09, S2_BG_COPY = 0x0A, S2_OBJ_RENDERMODE = 0x0B,
 	S2_MOVEWORD = 0xDB, S2_LOAD_UCODE = 0xDD, S2_DL = 0xDE, S2_ENDDL = 0xDF,
-	S2_RDPHALF_1 = 0xE1, S2_SETOTHERMODE_L = 0xE2, S2_SETOTHERMODE_H = 0xE3,
+	S2_RDPHALF_1 = 0xE1, S2_SETOTHERMODE_L = 0xE2, S2_SETOTHERMODE_H = 0xE3, S2_RDPHALF_0 = 0xE4,
 	S2_RDPHALF_2 = 0xF1,
 };
 
@@ -286,6 +288,7 @@ bool gfx_dl_s2dex2(struct gfx_state *g)
 	struct gfx_result *res = g->res;
 	uint32_t w0, w1;
 	res->flags |= GFX_RES_LOAD_UCODE;
+	g->raw[0] = 0;
 	while (gfx_dl_next(g, &w0, &w1)) {
 		uint32_t op = w0 >> 24;
 		switch (op) {
@@ -315,6 +318,10 @@ bool gfx_dl_s2dex2(struct gfx_state *g)
 			break;
 		case S2_RDPHALF_2:
 			g->rdphalf2 = w1;
+			if (g->raw[0] >> 24 == S2_RDPHALF_0) {
+				gfx_texrect(g, g->raw[0], g->raw[1], g->rdphalf1, w1, false);
+				g->raw[0] = 0;
+			}
 			break;
 		case S2_SETOTHERMODE_L:
 		case S2_SETOTHERMODE_H: {
@@ -333,8 +340,17 @@ bool gfx_dl_s2dex2(struct gfx_state *g)
 		case S2_OBJ_LOADTXTR:
 			obj_load_txtr(g, w1);
 			break;
+		case S2_RDPHALF_0:
+			/* Seguido de G_RDPHALF_1 y G_RDPHALF_2 es un TEXRECT (el
+			 * cielo de Kirby 64): se dibuja con G_RDPHALF_2. Queda en
+			 * raw[], libre en este tramo, y no en locales ni pasando por
+			 * gfx_dl_texrect: este marco está en la cadena más honda de la
+			 * pila del SPE. */
+			g->raw[0] = w0;
+			g->raw[1] = w1;
+			break;
 		default:
-			/* Comandos del RDP (0xE4 es G_RDPHALF_0 de S2DEX2). */
+			/* Comandos del RDP. */
 			if (op >= 0xE6)
 				gfx_rdp_command(g, w0, w1);
 			else

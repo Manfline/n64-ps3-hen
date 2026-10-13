@@ -61,7 +61,19 @@ negro en vez del ajedrez beige, el logotipo en arcoíris, la selección de
 archivo ilegible). Ahora `G_OBJ_LOADTXTR` hace la carga de sus tres tipos
 (bloque, tile y paleta) con la tile 7, siempre (el microcódigo se la salta
 si su palabra de estado ya trae la misma; es solo un ahorro). Intro,
-título y «Select File» como en mupen64plus.
+título y «Select File» como en mupen64plus. Segunda vuelta, tras probarlo
+en la PS3 (cielo negro con unas esferas grises en el nivel 1-1): el cielo
+se dibuja con TEXRECT dentro del tramo S2DEX (`G_RDPHALF_0`, 0xE4, seguido
+de `G_RDPHALF_1` y `G_RDPHALF_2`, como el TEXRECT de F3DEX2), y la HLE lo
+saltaba. Ahora sale el cielo azul con nubes y colinas, y en la tarea ya no
+se salta ningún comando de S2DEX. El TEXRECT pendiente queda en `raw[]`
+del estado (libre en ese tramo) y se dibuja al llegar `G_RDPHALF_2`, sin
+locales ni otra llamada: `gfx_dl_s2dex2` está en la cadena más honda de la
+pila del SPE 0 y la holgura quedaba en 1344 < 1536 bytes. Para pagar el
+código, `f3dpd.c` (el despacho de comandos de Perfect Dark; vértices y
+texturas siguen en geom.c y tmem.c con -O2) pasa a -Os: holgura de 1600
+(en `b650d80`) a 1984 bytes. Medir en la PS3 que Perfect Dark no pierda
+velocidad en el SPE.
 
 **Pokémon Stadium 2: fondo del título como ruido.** El fondo es un JPEG
 que decodifica el microcódigo JPEG del RSP: el mismo código que el de
