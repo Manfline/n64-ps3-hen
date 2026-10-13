@@ -418,7 +418,16 @@ Medido en el host (volcados con el perfil por bloque, `tools/rec-expansion.py`):
 | | Calientes por instrucción MIPS | Frías | Total |
 |---|---|---|---|
 | Perfect Dark, intro (3 G ciclos) | 6,84 → 6,45 (**−6 %**) | 6,50 → 6,09 (−6 %) | 13,34 → 12,54 (−6 %) |
-| GoldenEye hasta la presa | (en curso) | | |
+| GoldenEye hasta la presa (7,5 G ciclos) | 8,16 → 7,75 (**−5 %**) | 7,40 → 7,31 (−1 %) | 15,57 → 15,05 (−3 %) |
+
+Corrección: unitarias 449/449 en los cinco modos, nemu64-test 433 (la línea
+base exacta) y en `--lockstep` entero sin diferencias, vitest, y los
+lockstep de Perfect Dark (3 G ciclos) y GoldenEye hasta la presa (7,5 G)
+sin diferencias. Lo que no agrupa todavía, por orden de lo que vale: los
+accesos entre operaciones de COP1 (r6/r7 en la escritura de FCR31: cambiar
+esos temporales), un segundo `Tb` para los grupos solapados, y los pares
+LWL/LWR. En la PS3: A/B con `jit-sin-grupos` en el mismo paquete (GoldenEye
+presa y Perfect Dark, ns por instrucción del nativo).
 
 Las frías también bajan: los miembros de un grupo no tienen camino frío
 (las cargas) o solo el de `code_flags` (los almacenamientos).

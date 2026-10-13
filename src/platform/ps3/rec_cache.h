@@ -101,4 +101,14 @@ static inline int salsa64_ps3_rec_wide_wanted(void)
 	return stat(SALSA64_RECWIDE_FLAG, &st) == 0;
 }
 
+/* Con este archivo, sin la base en caché (SALSA64_REC_OPT_NO_GROUP,
+ * docs/fastmem.md §8): cada acceso con su prueba, para el A/B. */
+#define SALSA64_RECNOGROUP_FLAG SALSA64_DATA_DIR "/jit-sin-grupos"
+
+static inline int salsa64_ps3_rec_no_group_wanted(void)
+{
+	struct stat st;
+	return stat(SALSA64_RECNOGROUP_FLAG, &st) == 0;
+}
+
 #endif

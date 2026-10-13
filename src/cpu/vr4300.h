@@ -211,6 +211,7 @@ struct salsa64_cpu {
 	uint8_t rec_mark;        /* muestreo: 0 en código generado, o la categoría de lo que hace en C */
 	uint64_t rec_site;       /* dirección del enlace a parchear, o 0; en un bucle de espera, la instrucción del salto */
 	uint64_t rec_lr, rec_tmp;  /* las rutinas compartidas del camino lento (rec.c) guardan LR y el fin del bloque */
+	uint64_t rec_tb;           /* la base en caché de un grupo (T_HI) mientras el código generado llama a C (rec_emit.c) */
 	uint64_t rec_fw[32];       /* la palabra W de fpr[p] con signo extendido, para CVT.S.W/CVT.D.W con fcfid (rec_emit_fpu.h) */
 
 	/* Depuración: si no es NULL, se llama al tomar cada excepción (con

@@ -325,6 +325,18 @@ struct ctx {
 		uint32_t word;      /* el acceso, para la copia fría */
 	} addr;
 	bool fastmem;           /* rec->fastmem y no `wide`: los accesos de emit_load/emit_store sin prueba */
+	/* Base en caché (docs/fastmem.md §8): accesos seguidos con el mismo
+	 * registro base; la prueba una vez, en la cabeza, y T_HI = RDRAM +
+	 * x_lo + span mientras dura el grupo (group_pass, emit_group_head). */
+	struct grp {
+		uint8_t head;       /* cabeza del grupo; GRP_NONE: no agrupado */
+		uint8_t align;      /* la del acceso más grande: 0, 1, 3, 7 */
+		bool last, store;   /* último del grupo; el grupo almacena (la ktlb mira D) */
+		int16_t min_imm;
+		uint16_t span;      /* max_imm − min_imm, redondeado abajo a la alineación */
+	} grp[SALSA64_REC_MAX_INSNS];
+	bool grp_live;          /* hay un grupo abierto: T_HI vale (se repone tras llamar a C) */
+	unsigned grp_cur;       /* su cabeza */
 	/* Cadena de escritura: los registros del bloque que escribe, por primera
 	 * escritura descendente; una salida entra donde empiezan los que ya
 	 * tienen valor y ejecuta hasta el blr (chain_call). */
@@ -334,6 +346,8 @@ struct ctx {
 	int chain_label[N_CACHE + 2];      /* entrada i: desde chain_reg[i]; nchain: solo el blr */
 	bool chain_used;
 };
+
+#define GRP_NONE 0xFF
 
 static void restore_borrowed(struct ctx *c);
 /* rec_emit_fpu.h */
@@ -471,8 +485,16 @@ static void emit_slow_call(struct ctx *c, unsigned what, unsigned kind, unsigned
 {
 	if (c->tramp < 0)
 		c->tramp = new_label(c);
+	/* La C pisa T_HI (el trampolín deja ahí el pc): con un grupo abierto se
+	 * guarda en cpu->rec_tb y se repone; el puntero sigue valiendo (la
+	 * RDRAM no se mueve y lo que cambia la TLB termina el bloque). */
+	bool keep = c->grp_live && what != SLOW_EXC;
+	if (keep)
+		E(c, ppc_std(T_HI, OFF(rec_tb), R_CPU));
 	E(c, ppc_li(6, (int32_t)slow_arg(c, what, kind, k)));
 	emit_b(c, c->tramp, true);
+	if (keep)
+		E(c, ppc_ld(T_HI, OFF(rec_tb), R_CPU));
 }
 
 /* Al final del bloque (sección fría): el trampolín, si lo usó. */
@@ -1055,6 +1077,197 @@ static void fm_access(struct ctx *c, uint32_t word, bool check)
 	}
 }
 
+/* ---- Base en caché (docs/fastmem.md §8) ------------------------------------------ */
+
+/* Un acceso que entra en un grupo (los de emit_load y emit_store): tamaño y
+ * si almacena. */
+static bool group_access(uint32_t w, unsigned *size, bool *store)
+{
+	switch (I_OP(w)) {
+	case 0x20: case 0x24: case 0x28: *size = 1; *store = I_OP(w) == 0x28; return true;
+	case 0x21: case 0x25: case 0x29: *size = 2; *store = I_OP(w) == 0x29; return true;
+	case 0x23: case 0x27: case 0x2B: case 0x31: case 0x39: *size = 4; *store = I_OP(w) == 0x2B || I_OP(w) == 0x39; return true;
+	case 0x37: case 0x3F: case 0x35: case 0x3D: *size = 8; *store = I_OP(w) == 0x3F || I_OP(w) == 0x3D; return true;
+	}
+	return false;
+}
+
+/* Instrucciones que pisan T_HI en el camino caliente: MULT y compañía
+ * (emit_hilo), LWL/LWR y compañía (rec_emit_ext.h) y COP1 (r6 y r7 en la
+ * escritura de FCR31). Cortan el grupo. */
+static bool clobbers_thi(uint32_t w)
+{
+	unsigned op = I_OP(w);
+	if (op == 0)
+		return (I_FUNCT(w) & ~7u) == 0x18;
+	return op == 0x11 || op == 0x1A || op == 0x1B || op == 0x22 || op == 0x26 || op == 0x2A || op == 0x2C ||
+	       op == 0x2D || op == 0x2E;
+}
+
+/* Arma los grupos del bloque: desde cada acceso, los que siguen con el
+ * mismo base hasta que se escribe el base, una instrucción pisa T_HI o
+ * hay un destino de salto interno (al volver por ahí el base pudo cambiar
+ * después del grupo); tramo de imm de hasta 32 KB; la alineación de cada
+ * miembro respecto del menor imm es la de su tamaño. Grupos de uno no
+ * cuentan. */
+static void group_pass(struct ctx *c)
+{
+	unsigned n = c->n;
+	bool target[SALSA64_REC_MAX_INSNS];
+	for (unsigned k = 0; k < n; k++) {
+		c->grp[k].head = GRP_NONE;
+		target[k] = false;
+	}
+	c->grp_live = false;
+	if (c->wide || c->fastmem || (c->rec->opts & SALSA64_REC_OPT_NO_GROUP))
+		return;
+	for (unsigned k = 0; k < n; k++) {
+		const struct dec *d = &c->d[k];
+		if (d->kind == K_BRANCH || d->kind == K_BRANCH_L) {
+			int64_t t = (int64_t)k + 1 + (int16_t)d->w;
+			if (t > (int64_t)k && t < (int64_t)n)
+				target[t] = true;
+		}
+	}
+	/* Un solo T_HI: mientras un grupo está abierto (hasta su último
+	 * miembro) ningún acceso con otro base empieza otro; esos van con su
+	 * prueba, que no toca T_HI. */
+	int cover = -1;
+	for (unsigned k = 0; k < n; k++) {
+		unsigned size;
+		bool st;
+		if ((int)k <= cover || c->grp[k].head != GRP_NONE || !group_access(c->d[k].w, &size, &st))
+			continue;
+		unsigned rs = I_RS(c->d[k].w);
+		if (rs == 0)
+			continue;
+		/* El delay slot de un branch-likely solo corre si se toma: no puede
+		 * ser la cabeza (los miembros de después no verían T_HI). */
+		if (c->ds_of[k] && c->d[c->ds_of[k] - 1].kind == K_BRANCH_L)
+			continue;
+		unsigned members[SALSA64_REC_MAX_INSNS], nm = 0, big = 1;
+		int lo = 0x7FFF, hi = -0x8000;
+		bool any_store = false;
+		for (unsigned j = k; j < n; j++) {
+			uint32_t w = c->d[j].w;
+			if (j > k && (target[j] || clobbers_thi(w)))
+				break;
+			unsigned sz;
+			bool s2;
+			if (group_access(w, &sz, &s2) && I_RS(w) == rs && c->grp[j].head == GRP_NONE) {
+				int imm = (int16_t)w;
+				int nlo = imm < lo ? imm : lo, nhi = imm > hi ? imm : hi;
+				if (nhi - nlo > 0x7FF8)
+					break;
+				lo = nlo;
+				hi = nhi;
+				members[nm++] = j;
+				if (sz > big)
+					big = sz;
+				any_store |= s2;
+			}
+			if (c->d[j].writes & BIT(rs))
+				break;
+		}
+		if (nm < 2)
+			continue;
+		unsigned kept[SALSA64_REC_MAX_INSNS], nk = 0;
+		for (unsigned m = 0; m < nm; m++) {
+			unsigned sz;
+			bool s2;
+			group_access(c->d[members[m]].w, &sz, &s2);
+			if ((((int16_t)c->d[members[m]].w - lo) % (int)sz) == 0)
+				kept[nk++] = members[m];
+		}
+		if (nk < 2)
+			continue;
+		unsigned align = big - 1;
+		uint16_t span = (uint16_t)((unsigned)(hi - lo) & ~align);
+		cover = (int)kept[nk - 1];
+		for (unsigned m = 0; m < nk; m++) {
+			struct grp *g = &c->grp[kept[m]];
+			g->head = (uint8_t)kept[0];
+			g->align = (uint8_t)align;
+			g->last = m == nk - 1;
+			g->store = any_store;
+			g->min_imm = (int16_t)lo;
+			g->span = span;
+		}
+	}
+}
+
+/* La cabeza del grupo: la prueba compacta sobre x_lo + span (segmento,
+ * tamaño y alineación de una vez) y T_HI. Si falla, en la sección fría la
+ * ktlb con va_lo: si traduce y el tramo cabe en la página, T_HI sale de la
+ * física; si no, al intérprete antes de esta instrucción (los miembros no
+ * llevan prueba propia). */
+static void emit_group_head(struct ctx *c, unsigned k, int slow)
+{
+	struct salsa64_rec *r = c->rec;
+	const struct grp *g = &c->grp[k];
+	unsigned s = r->rdram_shift, abits = g->align == 7 ? 3 : g->align == 3 ? 2 : g->align;
+	int cold = new_label(c), back = new_label(c);
+	unsigned base = get(c, I_RS(c->d[k].w), T_ADDR), va = T_ADDR;
+	if (g->min_imm == 0 && base != T_ADDR)
+		va = base;
+	else
+		E(c, ppc_addi(T_ADDR, base, g->min_imm));
+	E(c, ppc_oris(T_Y, va, 0x2000));
+	E(c, ppc_addis(T_Y, T_Y, 0x6000));
+	if (g->span)
+		E(c, ppc_addi(T_Y, T_Y, g->span));
+	E(c, ppc_rldicl(T_X, T_Y, 64 - s, s - abits));
+	E(c, ppc_cmpdi(CR_T, T_X, 0));
+	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), cold);
+	bind(c, back);
+	E(c, ppc_add(T_HI, R_RDRAM, T_Y));
+	c->grp_live = true;
+	c->grp_cur = k;
+	r->stats.grp_heads++;
+
+	/* Frío: la ktlb con va_lo; si traduce y el tramo cabe en la página,
+	 * de vuelta con T_Y = física; si no, `slow`: quien llama hace el
+	 * acceso de la cabeza por C (que anota la página si traduce) y vuelve a
+	 * probar (emit_group_reprobe). */
+	unsigned sec = c->sec;
+	c->sec = SEC_COLD;
+	bind(c, cold);
+	if (va != T_ADDR)
+		E(c, ppc_mr(T_ADDR, va));
+	emit_b(c, abs_label(c, r->ktlb_rtn[g->store][g->align == 0 ? 0 : g->align == 1 ? 1 : g->align == 3 ? 2 : 3]), true);
+	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(1, PPC_EQ), slow);
+	if (g->span) {
+		E(c, ppc_rlwinm(0, T_Y, 0, 20, 31));  /* desplazamiento en la página de 4 KB */
+		E(c, ppc_cmplwi(CR_T, 0, 0xFFFu - g->span));
+		emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(CR_T, PPC_GT), slow);
+		E(c, ppc_addi(T_Y, T_Y, g->span));
+	}
+	emit_b(c, back, false);
+	c->sec = sec;
+}
+
+/* Tras el acceso de la cabeza por C (sección fría): la ktlb otra vez con
+ * va_lo (la C anotó la página si traduce) y T_HI; si sigue sin traducir, o
+ * el tramo no cabe en la página, el intérprete sigue después de la cabeza. */
+static void emit_group_reprobe(struct ctx *c, unsigned k)
+{
+	struct salsa64_rec *r = c->rec;
+	const struct grp *g = &c->grp[k];
+	int give_up = exit_label(c, k, true, false);
+	unsigned base = get(c, I_RS(c->d[k].w), T_ADDR);
+	if (g->min_imm || base != T_ADDR)
+		E(c, ppc_addi(T_ADDR, base, g->min_imm));
+	emit_b(c, abs_label(c, r->ktlb_rtn[g->store][g->align == 0 ? 0 : g->align == 1 ? 1 : g->align == 3 ? 2 : 3]), true);
+	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(1, PPC_EQ), give_up);
+	if (g->span) {
+		E(c, ppc_rlwinm(0, T_Y, 0, 20, 31));
+		E(c, ppc_cmplwi(CR_T, 0, 0xFFFu - g->span));
+		emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(CR_T, PPC_GT), give_up);
+		E(c, ppc_addi(T_Y, T_Y, g->span));
+	}
+	E(c, ppc_add(T_HI, R_RDRAM, T_Y));
+}
+
 static unsigned emit_addr(struct ctx *c, unsigned rs, int16_t imm, unsigned align, int slow, bool store, bool fm)
 {
 	struct salsa64_rec *r = c->rec;
@@ -1159,6 +1372,63 @@ static void emit_load(struct ctx *c, unsigned k, unsigned kind, unsigned where)
 	unsigned rt = I_RT(i);
 	int slow = new_label(c), resume = new_label(c);
 
+	const struct grp *g = &c->grp[k];
+	if (g->head != GRP_NONE) {
+		/* Base en caché: sin prueba ni camino frío (la cabeza probó el
+		 * tramo entero); el valor directo de T_HI + desplazamiento. */
+		if (g->head == k)
+			emit_group_head(c, k, slow);
+		int32_t disp = (int16_t)i - g->min_imm - g->span;
+		unsigned d = where == DST_GPR ? dst(c, rt, T_V) : T_V;
+		switch (kind) {
+		case SALSA64_REC_LB:  E(c, ppc_lbz(d, disp, T_HI)); E(c, ppc_extsb(d, d)); break;
+		case SALSA64_REC_LBU: E(c, ppc_lbz(d, disp, T_HI)); break;
+		case SALSA64_REC_LH:  E(c, ppc_lhz(d, disp, T_HI)); E(c, ppc_extsh(d, d)); break;
+		case SALSA64_REC_LHU: E(c, ppc_lhz(d, disp, T_HI)); break;
+		case SALSA64_REC_LW:  E(c, ppc_lwz(d, disp, T_HI)); E(c, ppc_extsw(d, d)); break;
+		case SALSA64_REC_LWU: E(c, ppc_lwz(d, disp, T_HI)); break;
+		default:              E(c, ppc_ld(d, disp, T_HI)); break;
+		}
+		if (where == DST_FPR32)
+			E(c, ppc_stw(d, fpr32_off(c, rt), R_CPU));
+		else if (where == DST_FPR64)
+			E(c, ppc_std(d, fpr64_off(c, rt), R_CPU));
+		if (where != DST_GPR && c->fpu_res)
+			fpu_loaded(c, k, rt, where == DST_FPR64, d, false);  /* de casa: T_Y no es el desplazamiento */
+		bind(c, resume);
+		if (where == DST_GPR)
+			put(c, rt, d);
+		c->rec->stats.grp_members++;
+		if (g->head == k) {
+			/* La cabeza sin ktlb: su carga por C, el valor a su lugar y la
+			 * prueba de nuevo para los que siguen. */
+			unsigned save_sec = c->sec;
+			c->sec = SEC_COLD;
+			bind(c, slow);
+			unsigned base = get(c, I_RS(i), T_ADDR);
+			if ((int16_t)i || base != T_ADDR)
+				E(c, ppc_addi(T_ADDR, base, (int16_t)i));
+			emit_slow_call(c, SLOW_LOAD, kind, k);
+			emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(1, PPC_EQ), exit_label(c, k, false, false));
+			if (d != 3)
+				E(c, ppc_mr(d, 3));
+			if (where == DST_FPR32)
+				E(c, ppc_stw(d, fpr32_off(c, rt), R_CPU));
+			else if (where == DST_FPR64)
+				E(c, ppc_std(d, fpr64_off(c, rt), R_CPU));
+			else if (rt && !c->map[rt])
+				E(c, ppc_std(d, off_reg(rt), R_CPU));
+			if (where != DST_GPR && c->fpu_res)
+				fpu_loaded(c, k, rt, where == DST_FPR64, d, false);
+			emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(5, PPC_GT), exit_label(c, k, true, false));
+			emit_group_reprobe(c, k);
+			emit_b(c, resume, false);
+			c->sec = save_sec;
+		}
+		if (g->last)
+			c->grp_live = false;
+		return;
+	}
 	unsigned va = emit_addr(c, I_RS(i), (int16_t)i, align[kind], slow, false, true);
 	unsigned d = where == DST_GPR ? dst(c, rt, T_V) : T_V;
 	switch (kind) {
@@ -1264,6 +1534,56 @@ static void emit_store(struct ctx *c, unsigned k, unsigned kind, unsigned from)
 		E(c, ppc_ld(T_S1, fpr64_off(c, rt), R_CPU));
 	} else {
 		v = get(c, rt, T_S1);
+	}
+	const struct grp *g = &c->grp[k];
+	if (g->head != GRP_NONE) {
+		/* Base en caché: la prueba de code_flags sobre el desplazamiento
+		 * (dirección del host menos la RDRAM) y el almacenamiento directo;
+		 * el camino lento (código en la zona) recompone la dirección. */
+		if (g->head == k)
+			emit_group_head(c, k, slow);
+		int32_t disp = (int16_t)i - g->min_imm - g->span;
+		E(c, ppc_addi(T_X, T_HI, disp));
+		E(c, ppc_subf(T_X, R_RDRAM, T_X));
+		E(c, ppc_srdi(T_X, T_X, SALSA64_REC_FLAG_SHIFT));
+		E(c, ppc_lbzx(T_X, R_FLAGS, T_X));
+		E(c, ppc_cmpwi(CR_T, T_X, 0));
+		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
+		if (fv) {
+			E(c, from == DST_FPR64 ? ppc_stfd(fv, disp, T_HI) : ppc_stfs(fv, disp, T_HI));
+		} else {
+			switch (kind) {
+			case SALSA64_REC_SB: E(c, ppc_stb(v, disp, T_HI)); break;
+			case SALSA64_REC_SH: E(c, ppc_sth(v, disp, T_HI)); break;
+			case SALSA64_REC_SW: E(c, ppc_stw(v, disp, T_HI)); break;
+			default:             E(c, ppc_std(v, disp, T_HI)); break;
+			}
+		}
+		bind(c, resume);
+		c->rec->stats.grp_members++;
+		/* Camino lento (código en la zona, o la cabeza sin ktlb): el
+		 * almacenamiento por C; la cabeza prueba de nuevo para los que
+		 * siguen. */
+		unsigned save = c->sec;
+		c->sec = SEC_COLD;
+		bind(c, slow);
+		unsigned base = get(c, I_RS(i), T_ADDR);
+		if ((int16_t)i || base != T_ADDR)
+			E(c, ppc_addi(T_ADDR, base, (int16_t)i));
+		if (fv)
+			E(c, from == DST_FPR64 ? ppc_ld(5, fpr64_off(c, rt), R_CPU) : ppc_lwz(5, fpr32_off(c, rt), R_CPU));
+		else if (v != 5)
+			E(c, ppc_mr(5, v));
+		emit_slow_call(c, SLOW_STORE, kind, k);
+		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(1, PPC_EQ), exit_label(c, k, false, false));
+		emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(5, PPC_GT), exit_label(c, k, true, false));
+		if (g->head == k)
+			emit_group_reprobe(c, k);
+		emit_b(c, resume, false);
+		c->sec = save;
+		if (g->last)
+			c->grp_live = false;
+		return;
 	}
 	unsigned va = emit_addr(c, I_RS(i), (int16_t)i, align[kind], slow, true, true);
 	/* Código recompilado en estos 128 bytes: por el camino lento. */
@@ -2517,6 +2837,7 @@ static uint32_t emit_block(struct ctx *c, uint32_t base, uint32_t limit)
 	bool temp = c->temp, any_cop1 = false;
 
 	c->calls_near = salsa64_rec_calls_near_at(rec, base);
+	group_pass(c);
 	for (unsigned k = 0; k < n; k++) {
 		any_cop1 |= c->d[k].cop1;
 		c->exit_before[k] = c->exit_after[k] = c->exit_after_mem[k] = -1;

@@ -125,6 +125,8 @@ struct salsa64_rec_stats {
 	uint64_t fm_sites;       /* fastmem: accesos compilados sin prueba */
 	uint64_t fm_faults;      /* fastmem: accesos parchados tras fallar */
 	uint64_t fm_off;         /* fastmem apagado (TLB que choca con la ventana, tabla de sitios llena) */
+	uint64_t grp_heads;      /* base en caché: grupos compilados */
+	uint64_t grp_members;    /* base en caché: accesos de esos grupos (cabezas incluidas) */
 };
 
 /* Etiquetas y correcciones del ensamblador de rec_emit.c. */
@@ -196,6 +198,9 @@ struct salsa64_rec_fmsite {
  * parchea el acceso hacia su camino frío (la prueba de siempre). Se aplica
  * al compilar; una entrada de la TLB que choque con la ventana lo apaga. */
 #define SALSA64_REC_OPT_FASTMEM 256u
+/* Para medir A/B: sin la base en caché (docs/fastmem.md §8): cada acceso con
+ * su prueba, como hasta el 2026-10-13. Se aplica al compilar. */
+#define SALSA64_REC_OPT_NO_GROUP 512u
 /* Depuración (host, SALSA64_REC_OPTS): apagan una pieza nueva a la vez para
  * acotar una diferencia en --lockstep. LEGACY las apaga todas. */
 #define SALSA64_REC_DBG_NO_ENDLINK 0x100u   /* COP0 vuelve al despachador e interpreta el resto del bloque básico */

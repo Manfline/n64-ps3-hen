@@ -628,10 +628,28 @@ calientes por acceso en el código compacto). Hecho hoy:
   viabilidad (que lv2 avise, que el contexto traiga el pc, que los SPE
   hagan DMA sobre la ventana).
 
-Pendiente: la consola (viabilidad y después el A/B contra v0.2.2: GoldenEye
-presa 16,0–16,3 ns/instr, Perfect Dark ~15); la base en caché (un `add` por
-registro base y `lwz` con desplazamiento: 1–2 palabras por acceso); después
-registros vivos entre bloques y la FPU 1 a 1 (pasos 3 y 4 del plan).
+- **Corrección de main (tarde)**: en la PS3 hubo una sola corrida y 327
+  (`sys_mmapper_enable_page_fault_notification`) devolvió EINVAL desde la
+  primera llamada (los arranques que «llegaron a fallo_parche» eran mi
+  RPCS3 en el mismo receptor UDP). fastmem2 (`build/ps3-2/`) prueba 14
+  variantes de la llamada con el rc de cada una; en la cola de la consola.
+- **Base en caché** (docs/fastmem.md §8; sin fallos, exacta, encendida por
+  omisión, `jit-sin-grupos` / `SALSA64_REC_NO_GROUP=1` para el A/B): la
+  prueba de KSEG0 una vez por registro base con margen (`emit_group_head`)
+  y cada acceso del grupo `lwz d, disp(r7)`; T_HI = r7 como base, guardado
+  en `cpu->rec_tb` alrededor de las llamadas a C; si la `ktlb` no traduce,
+  el acceso de la cabeza va por C (anota la página) y se vuelve a probar.
+  Host: **GoldenEye calientes 8,16 → 7,75 (−5 %), Perfect Dark 6,84 → 6,45
+  (−6 %)**; unitarias, nemu64 (433 exacto, lockstep entero), vitest, PD y
+  GoldenEye en lockstep sin diferencias. Tres errores que encontró el
+  lockstep: grupos solapados (un solo r7), la base recompuesta con la
+  doblada tras C (mapeado por la TLB → puntero fuera de la RDRAM), y la
+  carga residente de la FPU desde T_Y.
+
+Pendiente: la consola (fastmem2 y el A/B de la base en caché con
+`jit-sin-grupos` contra v0.2.2: GoldenEye presa 16,0–16,3 ns/instr, Perfect
+Dark ~15); agrupar entre operaciones de COP1 (r6/r7 en FCR31) y un segundo
+`Tb`; después registros vivos entre bloques y la FPU 1 a 1 (pasos 3 y 4).
 
 ## 2026-10-13 — Recompilador: código compacto, 20,2 → 15,6 palabras de PPC por instrucción MIPS (rama `sleepy-mestorf`, paquete SLSA00106 «Salsa64 compacto»)
 
