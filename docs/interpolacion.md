@@ -562,10 +562,12 @@ recorte cercano (NoN: no hay vértices inventados por el recorte) y con
   (760) y Mario Kart (822) los tienen siempre en el mismo G_VTX; la
   fracción la recalcula el PPE con las coordenadas del registro. El
   contador de grupos va en un hueco de `gfx_state` (el estado no crece).
-  Local store: +952 bytes de código (107 680 contra 106 728 de main), el
-  mismo bss, holgura de la pila 1856 (mínimo 1536). Con `--gc-sections`
-  en el enlace de los SPU (commit aparte) el SPE 0 queda en 104 928, con
-  la interpolación incluida, y holgura 4672. Apagada: una prueba de la
+  Local store: +952 bytes de código, el mismo bss. Sobre main 0571a0b
+  (con los gráficos de Snap y Kirby y gSPInsertMatrix) el SPE 0 de main
+  tiene 107 552 bytes de código y holgura de la pila 1984 (mínimo 1536):
+  sin más, la interpolación no cabría. Con `--gc-sections` en el enlace de
+  los SPU (el primer commit de la rama) queda en 105 752 con la
+  interpolación incluida, y holgura 3776. Apagada: una prueba de la
   bandera por G_VTX y las identidades en 0.
 - **Emparejamiento (PPE).** `src/rdp/vmatch.c`, portable: el mismo en el
   host (`salsa64-run --interp`) y en la PS3. En el host da lo mismo que el
@@ -630,6 +632,10 @@ idiomas. Con «Por geometría» (`SALSA64_INTERP_FIELDS`, src/rdp/rdp.c):
 - **Log** cada 5 s: «gfx: interpolación: … vértices de salida con pareja X %
   …, emparejar Y ms del PPE por tarea; N campos intermedios (n/s, m
   saltados), redibujar Z ms del PPE por campo intermedio».
+
+Sobre main 0571a0b, en el host las 105 imágenes de las 7 escenas siguen
+idénticas a main con la opción apagada, y en RPCS3 gfxtest sale igual byte
+a byte que el de main y el menú pasa.
 
 En RPCS3 (Zelda, la intro, 1800 campos, «Por geometría» en `menu.cfg`): 40
 campos intermedios por segundo en las ventanas del juego a 20 (dos por
