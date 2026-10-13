@@ -157,8 +157,8 @@ static void prof_line(void *ctx, const char *text)
  * unitarias), para desensamblarlo (tools/rec-disasm.sh) o medirlo. */
 static void dump_block(struct salsa64_rec *r, uint64_t pc, uint32_t entry, uint32_t words, bool temp)
 {
-	fprintf(stderr, "bloque %016llx%s entrada %u, %u palabras:", (unsigned long long)pc,
-		temp ? " (recortado)" : "", entry, words);
+	fprintf(stderr, "bloque %016llx%s entrada %u, %u palabras (%u calientes):", (unsigned long long)pc,
+		temp ? " (recortado)" : "", entry, words, r->nbuf[0]);  /* nbuf[0]: la sección caliente del último bloque */
 	for (uint32_t k = 0; k < words; k++)
 		fprintf(stderr, " %08x", r->code[entry + k]);
 	fputc('\n', stderr);

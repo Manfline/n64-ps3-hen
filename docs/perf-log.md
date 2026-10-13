@@ -971,6 +971,16 @@ tamaño de código de PPC de los bloques ordenados por entradas:
 
 GoldenEye cuenta 2,5 M entradas a bloques por segundo de consola (204 M en
 80 s) y Perfect Dark 1,2 M; el contador son cuatro palabras por entrada.
+
+Expansión del código (mismo volcado de GoldenEye, `SALSA64_REC_DUMP=1`, con
+las palabras de la sección caliente en cada línea; `build/`-scripts de la
+rama): 14 826 bloques, 17,9 MB de PPC, la sección caliente 8,0 MB (44 %);
+media 317 palabras por bloque (140 calientes), mediana 156, p90 800. Los 25
+bloques más ejecutados (perfil por bloque, 16 % de las entradas): 242
+instrucciones MIPS en 5166 palabras, 21,3 por instrucción (9,9 calientes,
+11,4 frías); de 10,7 (12 instrucciones, 2 accesos) a 44,5 (2 instrucciones
+con SQRT.S) por instrucción. Desglose en docs/rec-ppe.md, «Siguientes
+pasos», punto 2.
 Con la zona de 1 MB (dos mitades de 512 KB) GoldenEye marca 663 bloques
 calientes (767 KB, umbral 53 259 entradas) y Perfect Dark 576 (764 KB).
 En qemu no se mide tiempo del Cell: lo que importa (ms por campo, ns por

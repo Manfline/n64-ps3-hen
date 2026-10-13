@@ -945,8 +945,52 @@ archivo (truncado, un byte cambiado, bytes de más, otro juego).
    versión nueva hereda la entrada del perfil y los sitios por (k, clase,
    destino), así las cuentas siguen.
 2. **Optimizar más fuerte lo caliente y más compacto lo frío.** Hoy cada
-   bloque se emite igual. Con la clase conocida al compilar (y, con el JIT
-   por niveles, con el hilo 1 pagando el tiempo de lo caliente):
+   bloque se emite igual.
+
+   *De dónde sale la expansión* (medido el 2026-10-12 en qemu con el volcado
+   de bloques de GoldenEye hasta la presa, `SALSA64_REC_DUMP=1`, 14 826
+   bloques, 17,9 MB de PPC; el perfil de la PS3 de la primera sesión
+   coincide: 24 773 bloques y el 90 % del puntaje en 1098). Los 25 bloques
+   más ejecutados (16 % de las entradas): 242 instrucciones MIPS en 5166
+   palabras, **21,3 por instrucción: 9,9 en la sección caliente** (la que
+   se ejecuta) **y 11,4 en la fría** (caminos lentos y salidas, que solo
+   ocupan líneas vecinas); en todo el volcado la caliente es el 44 % (media
+   317 palabras por bloque, 140 calientes; mediana 156, p90 800). Casi
+   todo el código caliente del juego es mapeado por la TLB (0x7F… y
+   0x70…), y sus datos también.
+   - Un bloque de 2 instrucciones (7001F7E0: SQRT.S y JR, 89 palabras, 56
+     calientes): la entrada son 18 palabras (comprobación de la página de
+     la ktlb 5, del evento 3, de CU1 4, el contador del perfil 4, la
+     recarga de `ra` y el destino del JR 2), la SQRT.S en línea 35
+     (compuerta de FCR31 5, clasificación del operando 8, `fsqrt`, `frsp` y
+     el inexacto 10, resultado y FCR31 12), la salida 3; la sección fría
+     (33) es el camino al intérprete (15 de llamada con `li64` del pc y
+     9 de revisión al volver) y tres salidas de 3.
+   - Un bloque de 53 instrucciones con 26 accesos a memoria (7F0BA3B8:
+     1365 palabras, 487 calientes): la sección caliente son 9,2 palabras
+     por instrucción (ALU 51 %, saltos 13 %, estado del CPU por r31 11 %,
+     comparaciones 11 %, constantes 9 %, RDRAM 5 %); la fría (878) son
+     **saltos y llamadas 31 %, constantes 30 % y escrituras de estado
+     28 %**: por cada acceso a memoria mapeada, ~6 palabras de vuelta de
+     la rutina de la ktlb y ~30 del camino lento (`li64` del pc, los
+     argumentos, la llamada y la escritura de los registros sucios antes de
+     ella). Es decir, **cada acceso a datos mapeados cuesta ~10 palabras
+     calientes y ~35 frías**.
+   - La categoría «contador del perfil» son 4 palabras por bloque (0,3 por
+     instrucción con 12 por bloque): no es la palanca.
+
+   Palancas, por tamaño: (a) un solo camino lento por bloque en vez de uno
+   por acceso (el índice del acceso en un registro y la rutina compartida
+   deriva pc y argumentos: la fría de un bloque con muchos accesos baja a
+   un tercio); (b) la escritura de registros sucios antes de un camino
+   lento como máscara en un registro y un bucle en el preámbulo, en vez de
+   `std` por registro en cada sitio (hoy 28 % de la fría de ese bloque);
+   (c) para los juegos de datos mapeados, el camino rápido de la ktlb en
+   línea antes que el de KSEG0 (el perfil puede anotar por acceso si fue
+   KSEG0 o mapeado, como los sitios de salida); (d) en la entrada, fundir
+   las comprobaciones (página, evento, CU1) en menos saltos. Con la clase
+   conocida al compilar (y, con el JIT por niveles, con el hilo 1 pagando
+   el tiempo de lo caliente):
    - Frío: sin superbloques ni saltos internos (menos salidas duplicadas y
      caminos fríos), sin FPU en línea (al intérprete con una llamada: ~55
      palabras menos por operación), sin camino rápido de datos mapeados
