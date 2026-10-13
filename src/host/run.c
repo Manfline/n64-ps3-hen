@@ -1182,10 +1182,15 @@ static void shadow_start(const struct salsa64_task *t)
  * microcódigo termina (jcheck_sync) se comparan los macrobloques escritos,
  * píxel RGBA5551 por píxel, por canal de 5 bits. Las primeras diferencias
  * van al stderr; SALSA64_JCHECK_ALL=1 las lista todas (tarea, macrobloque,
- * x, y), para buscar sesgos. */
+ * x, y), para buscar sesgos. SALSA64_JCHECK_DUMP=archivo agrega por tarea
+ * la entrada y la salida del microcódigo (jcheck_dump), para probar otra
+ * IDCT sin volver a correr el juego; el archivo es del juego: fuera del
+ * repositorio. */
 static struct {
 	bool on, pending;
 	uint8_t *rdram;
+	uint8_t *input;         /* los macrobloques antes de la tarea (volcado) */
+	FILE *dump;
 	struct salsa64_jpeg_result res;
 	uint32_t tasks, macroblocks, pixels, diff, bad;
 	uint32_t hist[32];      /* píxeles por diferencia máxima entre canales */
@@ -1227,6 +1232,22 @@ static void jcheck_compare(void)
 	jcheck.pixels += px;
 	jcheck.diff += diff;
 	jcheck.bad += diff != 0;
+	if (jcheck.dump) {
+		/* Registro: "JPEG", modo, macrobloques, las 3 tablas de
+		 * cuantización (3 × 128 bytes), la entrada (n × mb_stride) y lo que
+		 * escribió el microcódigo (n × mb_out); todo en el orden de bytes
+		 * de la N64. */
+		uint32_t count = mb_stride ? (n + mb_stride - 1) / mb_stride : 0;
+		uint8_t h[16];
+		memcpy(h, "JPEG", 4);
+		salsa64_wr32(h + 4, mb_stride == 768 ? 2 : 0);
+		salsa64_wr32(h + 8, count);
+		salsa64_wr32(h + 12, 0);
+		fwrite(h, 1, sizeof h, jcheck.dump);
+		fwrite(jcheck.input, 1, 3 * 128 + count * mb_stride, jcheck.dump);
+		for (uint32_t m = 0; m < count; m++)
+			fwrite(n64.bus.rdram + a + m * mb_stride, 1, mb_out, jcheck.dump);
+	}
 }
 
 static void jcheck_start(const struct salsa64_task *t)
@@ -1240,6 +1261,29 @@ static void jcheck_start(const struct salsa64_task *t)
 	if (!jcheck.rdram)
 		jcheck.rdram = malloc(n64.bus.rdram_size);
 	memcpy(jcheck.rdram, n64.bus.rdram, n64.bus.rdram_size);
+	const char *dump = getenv("SALSA64_JCHECK_DUMP");
+	if (dump && !jcheck.dump && !(jcheck.dump = fopen(dump, "wb")))
+		fprintf(stderr, "lle-check: no se pudo abrir %s\n", dump);
+	if (jcheck.dump) {
+		/* Las tablas y los macrobloques antes de la tarea (la HLE de abajo
+		 * los pisa en la copia). */
+		uint32_t d = t->data_ptr & 0x7FFFFF;
+		if (!jcheck.input)
+			jcheck.input = malloc(3 * 128 + 64 * 768);
+		memset(jcheck.input, 0, 3 * 128 + 64 * 768);
+		if (d + 24 <= n64.bus.rdram_size) {
+			const uint8_t *p = n64.bus.rdram + d;
+			uint32_t addr = salsa64_rd32(p) & 0x7FFFFF, count = salsa64_rd32(p + 4);
+			uint32_t bytes = (salsa64_rd32(p + 8) == 2 ? 768 : 512) * (count < 64 ? count : 64);
+			for (int q = 0; q < 3; q++) {
+				uint32_t qa = salsa64_rd32(p + 12 + 4 * q) & 0x7FFFFF;
+				if (qa + 128 <= n64.bus.rdram_size)
+					memcpy(jcheck.input + 128 * q, n64.bus.rdram + qa, 128);
+			}
+			if (addr + bytes <= n64.bus.rdram_size)
+				memcpy(jcheck.input + 3 * 128, n64.bus.rdram + addr, bytes);
+		}
+	}
 	salsa64_jpeg_run(kind, jcheck.rdram, n64.bus.rdram_size, t->data_ptr, &jcheck.res);
 	jcheck.tasks++;
 	jcheck.macroblocks += jcheck.res.macroblocks;

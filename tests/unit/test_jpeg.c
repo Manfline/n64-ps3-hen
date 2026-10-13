@@ -5,10 +5,13 @@
 #include "test.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "core/endian.h"
+#include "core/rom.h"
 #include "rsp/jpeg/jpeg.h"
+#include "rsp/jpeg/selftest.h"
 
 #define TASK_PA 0x40000u  /* estructura de la tarea */
 #define Q_PA    0x40100u  /* tres tablas de cuantización */
@@ -195,6 +198,183 @@ static void jpeg_count_and_bad(void)
 	CHECK_EQ(salsa64_jpeg_detect(junk, 0x800), SALSA64_JPEG_NONE);
 }
 
+/* Solo DC, en todo el rango de un JPEG (±2048 niveles de 8 bits): la IDCT
+ * entera da exactamente 2·DC dieciseisavos, como la exacta. */
+static void jpeg_dc_exact(void)
+{
+	static const int16_t q[3][64] = { { 1 }, { 1 }, { 1 } };
+	uint8_t mb[768], out[512];
+	for (int dc = -1024; dc < 1024; dc++) {
+		memset(mb, 0, sizeof mb);
+		salsa64_wr16(mb, (uint16_t)(int16_t)dc);  /* Y0; U y V en 0 */
+		salsa64_jpeg_mb(2, q, mb, out);
+		int level = 2048 + 2 * dc;
+		unsigned v = level < 0 ? 0 : level > 0xFF0 ? 31 : (unsigned)(level & 0xF80) >> 7;
+		CHECK_EQ(salsa64_rd16(out), gray(v));
+		CHECK_EQ(salsa64_rd16(out + 32 * 7 + 14), gray(v));
+	}
+}
+
+/* Las tareas de prueba del arranque en la PS3 (rsp/jpeg/selftest.c): todos
+ * los macrobloques, en su lugar (el macrobloque por separado da lo mismo
+ * que la tarea), y el CRC que deben dar también el PPE y el SPE. */
+static void jpeg_selftest_crc(void)
+{
+	static uint8_t a[JPEG_SELFTEST_RAM], b[JPEG_SELFTEST_RAM];
+	jpeg_selftest_build(a, JPEG_SELFTEST_SEED);
+	memcpy(b, a, sizeof b);
+	for (uint32_t t = 0; t < 2; t++) {
+		salsa64_jpeg_run(SALSA64_JPEG_OOT, a, sizeof a, jpeg_selftest_task(t), &jres);
+		CHECK(!jres.bad);
+		CHECK_EQ(jres.macroblocks, JPEG_SELFTEST_MBS);
+		/* Lo mismo macrobloque por macrobloque, a otro búfer. */
+		struct salsa64_jpeg_task task;
+		CHECK(salsa64_jpeg_task_read(b + (jpeg_selftest_task(t) & 0xFFFF), &task));
+		int16_t q[3][64];
+		for (int i = 0; i < 3; i++)
+			salsa64_jpeg_qtable(b + task.qaddr[i], q[i]);
+		for (uint32_t m = 0; m < task.count; m++) {
+			uint32_t at = task.addr + m * SALSA64_JPEG_MB_IN(task.mode);
+			uint8_t out[512];
+			salsa64_jpeg_mb(task.mode, q, b + at, out);
+			memcpy(b + at, out, SALSA64_JPEG_MB_OUT(task.mode));
+		}
+	}
+	CHECK(memcmp(a, b, sizeof a) == 0);
+	uint32_t crc = salsa64_crc32(a, sizeof a);
+	if (crc != JPEG_SELFTEST_CRC)
+		fprintf(stderr, "jpeg: CRC de las tareas de prueba %08X (JPEG_SELFTEST_CRC dice %08X)\n", crc,
+			JPEG_SELFTEST_CRC);
+	CHECK_EQ(crc, JPEG_SELFTEST_CRC);
+}
+
+/* ---- La tarea JPEG por el RSP (core/rsp.c) -------------------------------- */
+
+#define UCODE_PA 0x100000u
+#define SP_STATUS_PA (0x04040000u + 4 * SALSA64_SP_STATUS)
+
+/* Un «microcódigo» de 4 KB en cero salvo sus últimos 4 bytes, elegidos para
+ * que su CRC-32 sea el del de OoT (0x761D8504): rsp.c lo toma por el JPEG
+ * de OoT sin tener nada del juego. */
+static void put_jpeg_task(void)
+{
+	memset(ram(UCODE_PA), 0, 0x1000);
+	salsa64_wr32(ram(UCODE_PA + 0xFFC), 0x03EE3280u);
+	uint8_t *d = t_n64.bus.sp_mem + SALSA64_TASK_DMEM;
+	memset(d, 0, 64);
+	salsa64_wr32(d + 0x00, SALSA64_TASK_JPEG);
+	salsa64_wr32(d + 0x08, 0x80100000u);         /* ucode_boot */
+	salsa64_wr32(d + 0x0C, 0xD0);
+	salsa64_wr32(d + 0x10, 0x80000000u | UCODE_PA);
+	salsa64_wr32(d + 0x14, 0x1000);
+	salsa64_wr32(d + 0x18, 0x80000000u | (UCODE_PA + 0x1000));
+	salsa64_wr32(d + 0x1C, 0x800);
+	salsa64_wr32(d + 0x30, 0x80000000u | TASK_PA);
+	salsa64_wr32(d + 0x34, 0x20);
+	uint8_t *t = ram(TASK_PA);
+	salsa64_wr32(t, 0x80000000u | MB_PA);
+	salsa64_wr32(t + 4, 2);
+	salsa64_wr32(t + 8, 2);
+	for (int i = 0; i < 3; i++)
+		salsa64_wr32(t + 12 + 4 * i, 0x80000000u | (Q_PA + 128 * i));
+}
+
+/* Backend de mentira (el SPE en la PS3): `done` dice que no las primeras
+ * veces; `finish` corre la HLE sobre la RDRAM. */
+static struct {
+	int starts, dones, finishes, busy;
+	unsigned kind;
+	uint32_t data_ptr;
+} jb;
+
+static void jb_start(void *ctx, const struct salsa64_task *task, unsigned kind)
+{
+	(void)ctx;
+	jb.starts++;
+	jb.kind = kind;
+	jb.data_ptr = task->data_ptr;
+}
+
+static bool jb_done(void *ctx, bool idle)
+{
+	(void)ctx, (void)idle;
+	jb.dones++;
+	return jb.busy-- <= 0;
+}
+
+static void jb_finish(void *ctx, struct salsa64_jpeg_result *res)
+{
+	(void)ctx;
+	jb.finishes++;
+	salsa64_jpeg_run(jb.kind, t_n64.bus.rdram, t_n64.bus.rdram_size, jb.data_ptr, res);
+}
+
+static const struct salsa64_jpeg_backend jpeg_backend = { NULL, jb_start, jb_done, jb_finish };
+
+/* Sin backend la tarea se hace en el acto (TASKDONE al arrancar); con
+ * backend termina por sondeo, el CPU sigue mientras tanto y la RDRAM queda
+ * igual que en el hilo del CPU. Un estado guardado la recoge antes. */
+static void jpeg_rsp_backend(void)
+{
+	struct salsa64_bus *bus = &t_n64.bus;
+	static uint8_t sync_out[2 * 768];
+	setup(2);
+	coef(2, 0, 0, 0, 300);
+	coef(2, 1, 4, 3, -40);
+	put_jpeg_task();
+	salsa64_rsp_set_jpeg(bus, NULL);
+	struct salsa64_rsp_stats st0 = bus->rsp.stats;
+	salsa64_bus_write32(bus, SP_STATUS_PA, 0x1 | 0x4 | 0x100 | 0x2000, ~0u);  /* HALT, BROKE y TASKDONE fuera */
+	CHECK_EQ(bus->rsp.busy, 0);
+	CHECK(salsa64_bus_read32(bus, SP_STATUS_PA) & SALSA64_SP_STATUS_TASKDONE);
+	CHECK_EQ(bus->rsp.stats.jpeg, st0.jpeg + 1);
+	CHECK_EQ(bus->rsp.stats.jpeg_mb, st0.jpeg_mb + 2);
+	memcpy(sync_out, ram(MB_PA), sizeof sync_out);
+
+	setup(2);
+	coef(2, 0, 0, 0, 300);
+	coef(2, 1, 4, 3, -40);
+	put_jpeg_task();
+	memset(&jb, 0, sizeof jb);
+	jb.busy = 2;
+	salsa64_rsp_set_jpeg(bus, &jpeg_backend);
+	salsa64_bus_write32(bus, SP_STATUS_PA, 0x1 | 0x4 | 0x100 | 0x2000, ~0u);
+	CHECK_EQ(jb.starts, 1);
+	CHECK_EQ(jb.kind, SALSA64_JPEG_OOT);
+	CHECK_EQ(jb.data_ptr, 0x80000000u | TASK_PA);
+	CHECK_EQ(bus->rsp.busy, SALSA64_TASK_JPEG);
+	CHECK_EQ(salsa64_bus_read32(bus, SP_STATUS_PA) & (SALSA64_SP_STATUS_HALT | SALSA64_SP_STATUS_TASKDONE), 0);
+	uint64_t t = t_n64.cpu.cycles + bus->rsp.jpeg_cycles;
+	for (int i = 0; i < 2; i++, t += bus->rsp.poll_cycles) {
+		salsa64_sched_dispatch(&t_n64.sched, t);
+		CHECK_EQ(jb.finishes, 0);
+		CHECK_EQ(bus->rsp.busy, SALSA64_TASK_JPEG);
+	}
+	salsa64_sched_dispatch(&t_n64.sched, t);
+	CHECK_EQ(jb.finishes, 1);
+	CHECK_EQ(bus->rsp.busy, 0);
+	CHECK(salsa64_bus_read32(bus, SP_STATUS_PA) & SALSA64_SP_STATUS_TASKDONE);
+	CHECK_EQ(bus->rsp.stats.jpeg, st0.jpeg + 2);
+	CHECK_EQ(bus->rsp.stats.jpeg_mb, st0.jpeg_mb + 4);
+	CHECK(memcmp(sync_out, ram(MB_PA), sizeof sync_out) == 0);
+
+	/* Estado guardado con la tarea en vuelo: se recoge y su fin llega a su
+	 * hora sin volver a llamar al backend. */
+	put_jpeg_task();
+	memset(&jb, 0, sizeof jb);
+	jb.busy = 100;
+	salsa64_bus_write32(bus, SP_STATUS_PA, 0x1 | 0x4 | 0x100 | 0x2000, ~0u);
+	CHECK_EQ(bus->rsp.busy, SALSA64_TASK_JPEG);
+	CHECK(salsa64_rsp_quiesce(bus));
+	CHECK_EQ(jb.finishes, 1);
+	salsa64_sched_dispatch(&t_n64.sched, t_n64.cpu.cycles + bus->rsp.jpeg_cycles);
+	CHECK_EQ(jb.finishes, 1);
+	CHECK_EQ(jb.dones, 0);
+	CHECK_EQ(bus->rsp.busy, 0);
+	CHECK(salsa64_bus_read32(bus, SP_STATUS_PA) & SALSA64_SP_STATUS_TASKDONE);
+	salsa64_rsp_set_jpeg(bus, NULL);
+}
+
 void t_suite_jpeg(void)
 {
 	RUN(jpeg_dc_quadrants);
@@ -202,4 +382,7 @@ void t_suite_jpeg(void)
 	RUN(jpeg_zigzag_orientation);
 	RUN(jpeg_idct_reference);
 	RUN(jpeg_count_and_bad);
+	RUN(jpeg_dc_exact);
+	RUN(jpeg_selftest_crc);
+	RUN(jpeg_rsp_backend);
 }

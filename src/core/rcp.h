@@ -189,6 +189,24 @@ struct salsa64_audio_backend {
 	bool (*load_state)(void *ctx, const uint8_t *buf);
 };
 
+/* ---- Tarea JPEG en otro procesador (src/rsp/jpeg) ------------------------
+ * Opcional. Sin backend, la HLE JPEG corre en el hilo del CPU al arrancar la
+ * tarea, que termina en el acto. Con backend (en la PS3, un SPE: la HLE con
+ * E/S por DMA), la tarea dura jpeg_cycles y su fin se sondea como el de las
+ * gráficas (done/finish); entre medias el CPU sigue emulando. */
+struct salsa64_jpeg_result;
+
+struct salsa64_jpeg_backend {
+	void *ctx;
+	/* Publica la tarea (kind: enum salsa64_jpeg_kind). Vuelve enseguida. */
+	void (*start)(void *ctx, const struct salsa64_task *task, unsigned kind);
+	/* ¿Terminó? Sin bloquear; con el CPU en un bucle de espera (`idle`)
+	 * puede dormir un poco antes de contestar. */
+	bool (*done)(void *ctx, bool idle);
+	/* Espera la tarea en vuelo y deja su resultado (la RDRAM ya escrita). */
+	void (*finish)(void *ctx, struct salsa64_jpeg_result *res);
+};
+
 /* ---- RSP a bajo nivel (LLE, Fase 6: src/rsp/lle) ---------------------------
  * Un backend opcional que ejecuta el microcódigo real. Al quitarle HALT al
  * RSP, rsp.c le pasa el arranque si la tarea no tiene HLE (modo `auto`) o
@@ -248,7 +266,7 @@ struct salsa64_rsp_stats {
 	uint32_t jpeg;         /* tareas JPEG hechas por la HLE (rsp/jpeg) */
 	uint32_t jpeg_mb;      /* sus macrobloques */
 	uint32_t jpeg_bad;     /* con parámetros que no valían */
-	uint64_t jpeg_us;      /* tiempo en ellas (con clock_us) */
+	uint64_t jpeg_us;      /* tiempo del hilo del CPU en ellas (con clock_us) */
 };
 
 struct salsa64_rsp {
@@ -256,6 +274,7 @@ struct salsa64_rsp {
 	const struct salsa64_gfx_backend *gfx;
 	const struct salsa64_audio_backend *audio;
 	const struct salsa64_lle_backend *lle;
+	const struct salsa64_jpeg_backend *jpeg_be;  /* NULL: la HLE JPEG en el hilo del CPU */
 	enum salsa64_lle_mode lle_mode;
 	/* Diagnóstico: las tareas JPEG van al microcódigo real (LLE) aunque
 	 * tengan HLE, para compararlas (salsa64-run --lle-check-jpeg). */
@@ -269,7 +288,7 @@ struct salsa64_rsp {
 	bool gfx_nonear;        /* su microcódigo no recorta el plano cercano (".NoN") */
 	enum salsa64_abi abi;   /* de la última tarea de audio */
 	/* Duración aparente de cada tarea, en ciclos del VR4300. */
-	uint32_t gfx_cycles, audio_cycles, dp_cycles;
+	uint32_t gfx_cycles, audio_cycles, dp_cycles, jpeg_cycles;
 	/* Interrupción del DP retenida: el RDP terminó (SYNC_FULL) mientras
 	 * estaba congelado (DPC_STATUS FREEZE); llega al descongelarlo. */
 	bool dp_held;
@@ -426,12 +445,14 @@ const char *salsa64_abi_name(enum salsa64_abi abi);
 void salsa64_rsp_set_lle(struct salsa64_bus *bus, const struct salsa64_lle_backend *lle,
 			 enum salsa64_lle_mode mode);
 void salsa64_rsp_set_dpc(struct salsa64_bus *bus, const struct salsa64_dpc_backend *dpc);
+/* Tareas JPEG en otro procesador (NULL: en el hilo del CPU). */
+void salsa64_rsp_set_jpeg(struct salsa64_bus *bus, const struct salsa64_jpeg_backend *jpeg);
 /* Un tramo de comandos del RDP ya entregado (lo que un SPE anotó al correr
  * el microcódigo): deja DPC_START/END/CURRENT como si el RDP lo hubiera
  * consumido y lo pasa al consumidor. `dmem` como en salsa64_dpc_backend. */
 void salsa64_dp_submit(struct salsa64_bus *bus, uint32_t start, uint32_t end, const uint8_t *dmem);
 /* Estados guardados: con la emulación quieta, espera a que el backend
- * termine la tarea en curso (gráfica o de audio) y guarda su resultado; el
+ * termine la tarea en curso (gráfica, de audio o JPEG) y guarda su resultado; el
  * fin emulado de la tarea no se adelanta (llega a su hora con ese
  * resultado). Devuelve false si el RSP corre microcódigo real (LLE): sin
  * estados guardados. */

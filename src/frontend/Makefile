@@ -10,7 +10,7 @@ R       := ../..
 ICON0   := $(R)/assets/ps3/ICON0.PNG
 PIC1    := $(R)/assets/ps3/PIC1.PNG
 COMMON  := src/platform/ps3/log.c src/platform/ps3/rec_cache.c src/platform/ps3/gfx_spu.c \
-           src/platform/ps3/audio_spu.c src/platform/ps3/rsp_spu.c src/rdp/rdp.c src/rdp/targets.c \
+           src/platform/ps3/audio_spu.c src/platform/ps3/jpeg_spu.c src/platform/ps3/rsp_spu.c src/rdp/rdp.c src/rdp/targets.c \
            $(patsubst $(R)/%,%,$(wildcard $(R)/src/core/*.c $(R)/src/cpu/*.c $(R)/src/rsp/gfx/*.c $(R)/src/rsp/audio/*.c $(R)/src/rsp/jpeg/*.c \
                                           $(R)/src/rsp/lle/*.c))
 DATA    := vitest_rom gfxtest_rom audiotest_rom
@@ -21,14 +21,16 @@ RSXKIT  := 1
 SPUKIT  := 1
 # HLE gráfica (SPE 0) y de audio (SPE 1): el mismo código de src/rsp/gfx y
 # src/rsp/audio con la E/S por DMA. RSP a bajo nivel (otro SPE): el
-# intérprete de src/rsp/lle con la E/S por DMA de src/spu/rsp.
-SPU_PROGS := gfx audio rsp
+# intérprete de src/rsp/lle con la E/S por DMA de src/spu/rsp. Tarea JPEG
+# (otro SPE): src/rsp/jpeg/jpeg.c con el bucle de DMA de src/spu/jpeg.
+SPU_PROGS := gfx audio rsp jpeg
 gfx_SRCS  := $(R)/src/spu/gfx/main.c $(R)/src/spu/gfx/io_spu.c \
              $(filter-out %/io_mem.c %/sync.c %/state.c,$(wildcard $(R)/src/rsp/gfx/*.c))
 audio_SRCS := $(R)/src/spu/audio/main.c $(R)/src/spu/audio/io_spu.c \
               $(filter-out %/io_mem.c %/sync.c %/selftest.c,$(wildcard $(R)/src/rsp/audio/*.c))
 rsp_SRCS   := $(R)/src/spu/rsp/main.c $(R)/src/spu/rsp/io_spu.c \
               $(filter-out %/core.c,$(wildcard $(R)/src/rsp/lle/*.c))
+jpeg_SRCS  := $(R)/src/spu/jpeg/main.c $(R)/src/rsp/jpeg/jpeg.c
 # Pila del SPE 0 (src/spu/gfx/main.c): el enlace falla si entre la cadena de
 # llamadas más honda y el final del programa quedan menos de 1,5 KB. Las
 # variantes de Rare se llaman por puntero desde su familia; lo demás que

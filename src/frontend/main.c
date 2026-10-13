@@ -169,6 +169,7 @@
 #include "pausectl.h"
 #include "platform/ps3/autotest.h"
 #include "platform/ps3/gfx_spu.h"
+#include "platform/ps3/jpeg_spu.h"
 #include "platform/ps3/rsp_spu.h"
 #include "platform/ps3/log.h"
 #include "platform/ps3/rec_cache.h"
@@ -206,6 +207,7 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 /* Diagnóstico: con este archivo, el menú del sistema no pausa la emulación
  * (como hasta v0.1.0); los mandos siguen sueltos y el latido mira. */
 #define NO_PAUSE_PATH SALSA64_DATA_DIR "/sin-pausa"
+#define JPEG_PPE_PATH SALSA64_DATA_DIR "/jpeg-ppe"  /* diagnóstico: la tarea JPEG en el PPE */
 /* Con este archivo, la RDRAM emulada sale de sysMemoryAllocate con páginas
  * de 1 MB en vez del heap (memalign): para medir si el PPE pierde tiempo en
  * fallos de TLB (docs/perf-log.md). El tamaño de página real de cada zona
@@ -280,6 +282,8 @@ static struct gfx_state gfx_ppe_state;
  * microcódigo real corre en un SPE para lo que no tiene HLE ("auto") o
  * para todo ("all"); el RDP lo consume gfx_ppe en el PPE. */
 static struct salsa64_rsp_spu rsp_spu;
+static struct salsa64_jpeg_spu jpeg_spu;
+static int jpeg_on_spu;  /* las tareas JPEG van al SPE (jpeg_spu) */
 static enum salsa64_lle_mode lle_mode;
 static sys_sem_t wake_sem;  /* la emulación despierta a la presentación */
 static struct pacer pacer;  /* ritmo de la tele emulada (hilo de emulación) */
@@ -1219,12 +1223,14 @@ static void log_unknown_gbi(void)
 }
 
 /* Fondos prerrenderizados (Zelda OoT): las tareas JPEG de una sala llegan
- * en tanda al cargarla (la HLE corre en el PPE, en el hilo del CPU); al
- * terminar la tanda (un campo sin tareas nuevas), al log cuántas y cuánto
- * tardaron. */
+ * en tanda al cargarla (la HLE corre en un SPE o, con JPEG_PPE_PATH, en el
+ * hilo de emulación); al terminar la tanda (un campo sin tareas nuevas), al
+ * log cuántas, cuánto tardaron y el tirón: los campos de la tanda y el más
+ * lento de emulación (sin la espera del ritmo). */
 static struct {
-	uint32_t seen, tasks, mb;
-	uint64_t us;
+	uint32_t seen, tasks, mb, field0, fields;
+	uint64_t us, us_max, spu_ticks, sleep_us, wait_us;
+	uint32_t polls, waits, on_ppe;
 } jpeg_log;
 
 static uint64_t clock_us(void)
@@ -1232,18 +1238,46 @@ static uint64_t clock_us(void)
 	return (uint64_t)sysGetSystemTime();
 }
 
-static void log_jpeg(void)
+static void log_jpeg(uint64_t us_field)
 {
 	const struct salsa64_rsp_stats *st = &n64.bus.rsp.stats;
+	const struct salsa64_jpeg_spu *js = &jpeg_spu;
 	if (st->jpeg < jpeg_log.tasks)
 		memset(&jpeg_log, 0, sizeof jpeg_log);  /* otro juego */
-	if (st->jpeg == jpeg_log.seen && st->jpeg != jpeg_log.tasks) {
-		salsa64_log("JPEG: %u tareas, %u macrobloques en %.2f ms del PPE (fondo prerrenderizado); %u con "
-			    "parámetros malos en total", st->jpeg - jpeg_log.tasks, st->jpeg_mb - jpeg_log.mb,
-			    (st->jpeg_us - jpeg_log.us) / 1e3, st->jpeg_bad);
+	if (st->jpeg != jpeg_log.seen) {
+		/* Un campo de la tanda. */
+		if (!jpeg_log.fields++)
+			jpeg_log.field0 = n64.bus.vi.fields;
+		if (us_field > jpeg_log.us_max)
+			jpeg_log.us_max = us_field;
+	} else if (st->jpeg != jpeg_log.tasks) {
+		uint32_t tasks = st->jpeg - jpeg_log.tasks;
+		if (jpeg_on_spu)
+			salsa64_log("JPEG: %u tareas, %u macrobloques en el SPE: %.2f ms (la más larga %.3f ms), %u devueltas al "
+				    "PPE; hilo de emulación %.2f ms (%u esperas de %.2f ms, %u sondeos, %.1f ms dormido); "
+				    "campos %u–%u, el más lento %.1f ms de emulación; %u con parámetros malos en total",
+				    tasks, st->jpeg_mb - jpeg_log.mb, (js->spu_ticks - jpeg_log.spu_ticks) * 1e3 / spukit_tick_hz(),
+				    js->spu_max * 1e3 / spukit_tick_hz(), js->on_ppe - jpeg_log.on_ppe,
+				    (st->jpeg_us - jpeg_log.us) / 1e3, js->waits - jpeg_log.waits,
+				    (js->wait_us - jpeg_log.wait_us) / 1e3, js->polls - jpeg_log.polls,
+				    (js->sleep_us - jpeg_log.sleep_us) / 1e3, jpeg_log.field0,
+				    jpeg_log.field0 + jpeg_log.fields - 1, jpeg_log.us_max / 1e3, st->jpeg_bad);
+		else
+			salsa64_log("JPEG: %u tareas, %u macrobloques en %.2f ms del PPE (hilo de emulación); campos %u–%u, el "
+				    "más lento %.1f ms de emulación; %u con parámetros malos en total",
+				    tasks, st->jpeg_mb - jpeg_log.mb, (st->jpeg_us - jpeg_log.us) / 1e3, jpeg_log.field0,
+				    jpeg_log.field0 + jpeg_log.fields - 1, jpeg_log.us_max / 1e3, st->jpeg_bad);
 		jpeg_log.tasks = st->jpeg;
 		jpeg_log.mb = st->jpeg_mb;
 		jpeg_log.us = st->jpeg_us;
+		jpeg_log.spu_ticks = js->spu_ticks;
+		jpeg_log.sleep_us = js->sleep_us;
+		jpeg_log.wait_us = js->wait_us;
+		jpeg_log.polls = js->polls;
+		jpeg_log.waits = js->waits;
+		jpeg_log.on_ppe = js->on_ppe;
+		jpeg_log.fields = 0;
+		jpeg_log.us_max = 0;
 	}
 	jpeg_log.seen = st->jpeg;
 }
@@ -1310,7 +1344,7 @@ static void emu_thread(void *arg)
 		beat.emu_at = "fin del campo";
 		pif_edges_note();
 		log_unknown_gbi();
-		log_jpeg();
+		log_jpeg(t1 - t0);
 		if (paced)
 			pacer_advance(&pacer, cycles);
 		savefile_stage(&save_file, t1);
@@ -2063,6 +2097,12 @@ static void game_close(void)
 	salsa64_log("cierre: audio cerrado (%u tareas de audio)", n64.bus.rsp.stats.audio);
 	salsa64_rsp_set_gfx(&n64.bus, NULL);  /* espera la tarea en vuelo */
 	salsa64_log("cierre: HLE gráfica suelta (%u tareas gráficas)", n64.bus.rsp.stats.gfx);
+	if (jpeg_on_spu) {
+		salsa64_rsp_set_jpeg(&n64.bus, NULL);
+		salsa64_log("cierre: SPE de la tarea JPEG detenido (%u tareas, %u macrobloques, %u en el PPE; salida %d)",
+			    jpeg_spu.tasks, jpeg_spu.macroblocks, jpeg_spu.on_ppe, salsa64_jpeg_spu_shutdown(&jpeg_spu));
+		jpeg_on_spu = 0;
+	}
 	if (lle_mode != SALSA64_LLE_OFF) {
 		salsa64_rsp_set_lle(&n64.bus, NULL, SALSA64_LLE_OFF);
 		salsa64_rsp_set_dpc(&n64.bus, NULL);
@@ -2089,8 +2129,8 @@ static void game_close(void)
 	for (int i = 0; i < SNAP_SLOTS; i++)
 		snaps += snap_state[i] != SNAP_FREE;
 	uint32_t queued = field_head - field_tail;
-	bool spes = gfx_spu.worker || rsp_spu.worker;
-	bool hooks = n64.bus.rsp.gfx || n64.bus.rsp.audio || n64.bus.rsp.lle || n64.bus.rsp.busy;
+	bool spes = gfx_spu.worker || rsp_spu.worker || jpeg_spu.worker;
+	bool hooks = n64.bus.rsp.gfx || n64.bus.rsp.audio || n64.bus.rsp.lle || n64.bus.rsp.jpeg_be || n64.bus.rsp.busy;
 	bool clean = emu_done && !queued && !snaps && !untranslated && !spes && !hooks;
 	salsa64_log("cierre: %s (hilo de emulación %s, %u campos en cola, %d ranuras del VI ocupadas, %u tareas "
 		    "sin traducir, destinos del RSX liberados, SPEs de la HLE %s, RSP %s)",
@@ -2150,6 +2190,23 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	n64.bus.rsp.clock_us = clock_us;
 	/* audio_out: inicio (HLE en el SPE 1, sumidero del AI, puerto de audio). */
 	audio_out_init(&n64);
+	/* Tarea JPEG (fondos prerrenderizados de Zelda OoT) en otro SPE, salvo
+	 * que se pida el PPE o que el SPE no dé lo mismo que el PPE. */
+	jpeg_on_spu = 0;
+	if (!file_exists(JPEG_PPE_PATH)) {
+		bool same;
+		spukit_init(6);
+		if ((rc = salsa64_jpeg_spu_init(&jpeg_spu, &n64.bus, &same)) != 0) {
+			salsa64_log("JPEG: no arrancó el SPE (%d)", rc);
+		} else if (!same) {
+			salsa64_jpeg_spu_shutdown(&jpeg_spu);
+		} else {
+			salsa64_rsp_set_jpeg(&n64.bus, &jpeg_spu.backend);
+			jpeg_on_spu = 1;
+		}
+	}
+	salsa64_log("JPEG: tareas en %s", jpeg_on_spu ? "un SPE"
+						      : file_exists(JPEG_PPE_PATH) ? "el PPE (" JPEG_PPE_PATH ")" : "el PPE");
 	/* RSP a bajo nivel en otro SPE. */
 	lle_mode = lle_config();
 	if (lle_mode != SALSA64_LLE_OFF) {
