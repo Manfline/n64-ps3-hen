@@ -41,9 +41,9 @@ huella distinta, rotación de mitad y sitios); nemu64-test 433 fallas (línea
 base) con perfil nuevo y cargado, también con caché de 3 MB y zona de 256 KB
 (rotaciones); `--lockstep` sin diferencias en nemu64-test (las dos cachés),
 vitest y Perfect Dark 3 G ciclos con el perfil cargado; test-roms en verde;
-build de la PS3 sin avisos. GoldenEye hasta la presa en lockstep con el
-perfil cargado: en curso con el binario anterior al formato 2 (se repite con
-el final antes de integrar).
+build de la PS3 sin avisos. GoldenEye hasta la presa (7,5 G ciclos) en
+lockstep con el perfil cargado: sin diferencias, con el binario anterior al
+formato 2 y con el final (692 calientes, 1483 sitios de salida).
 
 **Medido en la PS3 (el autor, una sola ejecución de la app):** la zona
 caliente **no da ganancia**: GoldenEye en la presa 15,54 → 15,80 ns por
