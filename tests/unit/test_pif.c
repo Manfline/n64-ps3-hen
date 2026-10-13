@@ -438,6 +438,31 @@ static void padmap_config(void)
 				    128, 128, 128, 128);
 	salsa64_padmap_apply(&m, &in, &p);
 	CHECK_EQ(p.buttons, SALSA64_PAD_Z | SALSA64_PAD_C_DOWN | SALSA64_PAD_START);
+
+	/* Dos botones del DS3 para el mismo botón de la N64; con uno solo, el
+	 * segundo se borra. */
+	static const char two[] = "Z = L2 R2\nL = l1, triangulo\nR = R1\nA = CRUZ CRUZ CRUZ\nB = L2 EQUIS";
+	salsa64_padmap_default(&m);
+	CHECK_EQ(salsa64_padmap_parse(&m, two, sizeof two - 1, NULL, 0), 2);
+	CHECK_EQ(m.source[SALSA64_IN_Z], SALSA64_DS3_L2);
+	CHECK_EQ(m.source2[SALSA64_IN_Z], SALSA64_DS3_R2);
+	CHECK_EQ(m.source[SALSA64_IN_L], SALSA64_DS3_L1);
+	CHECK_EQ(m.source2[SALSA64_IN_L], SALSA64_DS3_TRIANGLE);
+	CHECK_EQ(m.source2[SALSA64_IN_R], SALSA64_DS3_NONE);
+	CHECK_EQ(m.source[SALSA64_IN_A], SALSA64_DS3_CROSS);   /* tres: línea mala */
+	CHECK_EQ(m.source[SALSA64_IN_B], SALSA64_DS3_SQUARE);  /* botón desconocido */
+	in = ds3(DS3(R2), 128, 128, 128, 128);
+	salsa64_padmap_apply(&m, &in, &p);
+	CHECK_EQ(p.buttons, SALSA64_PAD_Z);
+	in = ds3(DS3(L2), 128, 128, 128, 128);
+	salsa64_padmap_apply(&m, &in, &p);
+	CHECK_EQ(p.buttons, SALSA64_PAD_Z);
+	in = ds3(DS3(TRIANGLE), 128, 128, 128, 128);
+	salsa64_padmap_apply(&m, &in, &p);
+	CHECK_EQ(p.buttons, SALSA64_PAD_L);
+	static const char one[] = "Z = R2";
+	CHECK_EQ(salsa64_padmap_parse(&m, one, sizeof one - 1, NULL, 0), 0);
+	CHECK_EQ(m.source2[SALSA64_IN_Z], SALSA64_DS3_NONE);
 }
 
 static void padmap_describe(void)

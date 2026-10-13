@@ -13,11 +13,11 @@
  *   START → Start. ○, △, R2, L3, R3 y SELECT libres (START + SELECT sale
  *   del emulador).
  *
- * Cada botón de la N64 sale de un botón del DS3 (o de ninguno), y se
- * cambia con un archivo de texto (SALSA64_DATA_DIR/controles.cfg):
+ * Cada botón de la N64 sale de uno o dos botones del DS3 (o de ninguno), y
+ * se cambia con un archivo de texto (SALSA64_DATA_DIR/controles.cfg):
  *
  *   # comentario
- *   Z = R2
+ *   Z = L2 R2
  *   START = START
  *   C_ABAJO = CIRCULO
  *   zona_muerta = 12
@@ -63,6 +63,7 @@ enum salsa64_n64_input {
 
 struct salsa64_padmap {
 	uint8_t source[SALSA64_IN_COUNT];  /* botón del DS3 o SALSA64_DS3_NONE */
+	uint8_t source2[SALSA64_IN_COUNT]; /* otro botón que hace lo mismo, o SALSA64_DS3_NONE */
 	uint8_t deadzone;     /* stick izquierdo: desplazamiento del DS3 que se ignora */
 	uint8_t range;        /* valor de la N64 con el stick a fondo */
 	uint8_t c_threshold;  /* stick derecho: desplazamiento que activa un botón C */

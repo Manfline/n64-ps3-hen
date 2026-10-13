@@ -54,6 +54,7 @@ void salsa64_padmap_default(struct salsa64_padmap *map)
 		[SALSA64_IN_C_RIGHT] = SALSA64_DS3_NONE,
 	};
 	memcpy(map->source, def, sizeof def);
+	memset(map->source2, SALSA64_DS3_NONE, sizeof map->source2);
 	map->deadzone = 12;
 	map->range = 80;      /* lo que da un control original a fondo */
 	map->c_threshold = 64;
@@ -80,8 +81,9 @@ void salsa64_padmap_apply(const struct salsa64_padmap *map, const struct salsa64
 {
 	uint16_t b = 0;
 	for (int k = 0; k < SALSA64_IN_COUNT; k++) {
-		uint8_t src = map->source[k];
-		if (src < SALSA64_DS3_NBUTTONS && (in->buttons & (1u << src)))
+		uint8_t src = map->source[k], src2 = map->source2[k];
+		if ((src < SALSA64_DS3_NBUTTONS && (in->buttons & (1u << src))) ||
+		    (src2 < SALSA64_DS3_NBUTTONS && (in->buttons & (1u << src2))))
 			b |= n64_inputs[k].bit;
 	}
 	int t = map->c_threshold, cx = (int)in->rx - 128, cy = (int)in->ry - 128;
@@ -147,6 +149,40 @@ static int parse_number(const char *s, size_t n, long lo, long hi, uint8_t *out)
 	return 1;
 }
 
+/* Nombre de un botón del DS3 → índice, o -1. */
+static int ds3_button(const char *s, size_t n)
+{
+	for (int d = 0; d < SALSA64_DS3_NBUTTONS; d++)
+		if (same_word(s, n, ds3_names[d]))
+			return d;
+	return -1;
+}
+
+/* Uno o dos botones del DS3 separados por espacios o una coma
+ * ("R2", "L2 R2", "L2, R2"). Devuelve cuántos leyó (0 si algo sobra o no
+ * es un botón). */
+static int parse_buttons(const char *s, size_t n, int out[2])
+{
+	int count = 0;
+	size_t i = 0;
+	while (i < n) {
+		while (i < n && (is_space(s[i]) || s[i] == ','))
+			i++;
+		if (i == n)
+			break;
+		size_t start = i;
+		while (i < n && !is_space(s[i]) && s[i] != ',')
+			i++;
+		if (count == 2)
+			return 0;
+		int d = ds3_button(s + start, i - start);
+		if (d < 0)
+			return 0;
+		out[count++] = d;
+	}
+	return count;
+}
+
 /* Una línea "clave = valor" ya sin comentarios ni espacios a los lados. */
 static int parse_line(struct salsa64_padmap *map, const char *line, size_t n)
 {
@@ -170,15 +206,16 @@ static int parse_line(struct salsa64_padmap *map, const char *line, size_t n)
 			continue;
 		if (same_word(val, vlen, "NADA")) {
 			map->source[k] = SALSA64_DS3_NONE;
+			map->source2[k] = SALSA64_DS3_NONE;
 			return 1;
 		}
-		for (int d = 0; d < SALSA64_DS3_NBUTTONS; d++) {
-			if (same_word(val, vlen, ds3_names[d])) {
-				map->source[k] = (uint8_t)d;
-				return 1;
-			}
-		}
-		return 0;
+		int d[2];
+		int count = parse_buttons(val, vlen, d);
+		if (count == 0)
+			return 0;
+		map->source[k] = (uint8_t)d[0];
+		map->source2[k] = count == 2 ? (uint8_t)d[1] : SALSA64_DS3_NONE;
+		return 1;
 	}
 	return 0;
 }

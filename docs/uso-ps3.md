@@ -277,10 +277,13 @@ no hace falta tocarlos.
 
 ```
 # comentario
-Z = R2
+Z = L2 R2
 C_ABAJO = CIRCULO
 zona_muerta = 12
 ```
+
+- Cada botón de la N64 acepta uno o dos botones del DualShock 3, separados
+  por espacios o una coma: `Z = L2 R2` deja Z en los dos gatillos.
 
 - N64: `A B Z START L R ARRIBA ABAJO IZQUIERDA DERECHA C_ARRIBA C_ABAJO
   C_IZQUIERDA C_DERECHA`.
