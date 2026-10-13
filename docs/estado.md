@@ -36,9 +36,10 @@ exacto (mismas cuentas del perfil).
 
 Corrección: unitarias 437/437 en los cinco modos (plain, far, pin, eager,
 FPU residente), nemu64-test 433 fallos (línea base) con y sin fijos, vitest,
-estados guardados, lockstep de nemu64-test y vitest sin diferencias; el
-lockstep de Perfect Dark (3 G ciclos) y GoldenEye hasta la presa (7,5 G)
-estaba corriendo al escribir esto (resultado en docs/rec-ppe.md,
+estados guardados, y lockstep de nemu64-test, vitest, Perfect Dark (3 G
+ciclos) y GoldenEye hasta la presa (7,5 G ciclos, 204 M salidas comparadas)
+**sin diferencias**; con main fusionado (perfil persistente), de nuevo
+nemu64-test, vitest y Perfect Dark sin diferencias (docs/rec-ppe.md,
 «Resultados»). Dos errores que encontraron las pruebas: `addi r0, 0, -4`
 (r0 como base vale 0 en el PPE) y la cadena entrando por el extremo
 equivocado.
