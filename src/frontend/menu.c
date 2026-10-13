@@ -9,6 +9,8 @@
  */
 #include "menu.h"
 
+#include "i18n.h"
+
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -47,6 +49,9 @@ void menu_settings_default(struct menu_settings *s)
 	s->scale = 0;
 	s->fps = false;
 	s->confirm = true;
+	s->aspect = MENU_ASPECT_4_3;
+	s->filter = MENU_FILTER_SMOOTH;
+	s->lang = MENU_LANG_ES;
 }
 
 static const char *overscan_name(int o)
@@ -58,6 +63,25 @@ static const char *overscan_name(int o)
 	default:                   return "Personalizado";
 	}
 }
+
+static const char *aspect_name(int a)
+{
+	return a == MENU_ASPECT_16_9 ? "16:9 (estirada)" : "4:3 (original)";
+}
+
+static const char *filter_name(int f)
+{
+	switch (f) {
+	case MENU_FILTER_SHARP:       return "Nítida";
+	case MENU_FILTER_SCAN_SOFT:   return "Líneas suaves";
+	case MENU_FILTER_SCAN_STRONG: return "Líneas fuertes";
+	default:                      return "Suave";
+	}
+}
+
+static const char *const filter_key[MENU_FILTERS] = { "suave", "nitido", "lineas", "lineas+" };
+static const char *const lang_key[MENU_LANGS] = { "es", "en", "fr", "de", "it", "pt" };
+static const char *const lang_label[MENU_LANGS] = { "Español", "English", "Français", "Deutsch", "Italiano", "Português" };
 
 static const char *resolution_name(int r)
 {
@@ -108,7 +132,82 @@ void menu_settings_parse(struct menu_settings *s, const char *text, size_t len)
 			s->fps = yes;
 		else if (!strcmp(key, "confirmar") && (yes || no))
 			s->confirm = yes;
+		else if (!strcmp(key, "aspecto")) {
+			if (!strcmp(val, "16:9"))
+				s->aspect = MENU_ASPECT_16_9;
+			else if (!strcmp(val, "4:3"))
+				s->aspect = MENU_ASPECT_4_3;
+		} else if (!strcmp(key, "filtro")) {
+			for (int f = 0; f < MENU_FILTERS; f++)
+				if (!strcmp(val, filter_key[f]))
+					s->filter = f;
+		} else if (!strcmp(key, "idioma")) {
+			for (int l = 0; l < MENU_LANGS; l++)
+				if (!strcmp(val, lang_key[l]))
+					s->lang = l;
+		}
 	}
+}
+
+/* ---- Ajustes de un juego ---- */
+
+void menu_game_default(struct menu_game *g)
+{
+	g->aspect = g->filter = g->overscan = -1;
+}
+
+void menu_game_parse(struct menu_game *g, const char *text, size_t len)
+{
+	size_t i = 0;
+	while (i < len) {
+		size_t e = i;
+		while (e < len && text[e] != '\n')
+			e++;
+		char line[96];
+		size_t n = e - i < sizeof line - 1 ? e - i : sizeof line - 1;
+		memcpy(line, text + i, n);
+		line[n] = '\0';
+		i = e + 1;
+		char key[32], val[32];
+		if (line[0] == '#' || sscanf(line, " %31[^= ] = %31s", key, val) != 2)
+			continue;
+		for (char *p = key; *p; p++)
+			*p = (char)lower((unsigned char)*p);
+		for (char *p = val; *p; p++)
+			*p = (char)lower((unsigned char)*p);
+		if (!strcmp(key, "aspecto")) {
+			g->aspect = !strcmp(val, "16:9") ? MENU_ASPECT_16_9 : !strcmp(val, "4:3") ? MENU_ASPECT_4_3 : -1;
+		} else if (!strcmp(key, "filtro")) {
+			g->filter = -1;
+			for (int f = 0; f < MENU_FILTERS; f++)
+				if (!strcmp(val, filter_key[f]))
+					g->filter = f;
+		} else if (!strcmp(key, "recorte")) {
+			g->overscan = !strcmp(val, "apagado") ? MENU_OVERSCAN_OFF
+				      : !strcmp(val, "normal") ? MENU_OVERSCAN_NORMAL
+				      : !strcmp(val, "amplio") ? MENU_OVERSCAN_WIDE : -1;
+		}
+	}
+}
+
+int menu_game_format(const struct menu_game *g, char *buf, size_t size)
+{
+	static const char *const crop[] = { "apagado", "normal", "amplio" };
+	return snprintf(buf, size, "# Ajustes de este juego (global = los de menu.cfg)\naspecto = %s\nfiltro = %s\nrecorte = %s\n",
+			g->aspect == MENU_ASPECT_16_9 ? "16:9" : g->aspect == MENU_ASPECT_4_3 ? "4:3" : "global",
+			g->filter >= 0 && g->filter < MENU_FILTERS ? filter_key[g->filter] : "global",
+			g->overscan >= MENU_OVERSCAN_OFF && g->overscan <= MENU_OVERSCAN_WIDE ? crop[g->overscan] : "global");
+}
+
+void menu_game_effective(const struct menu_settings *s, const struct menu_game *g, int *aspect, int *filter,
+			 int *overscan)
+{
+	if (aspect)
+		*aspect = g->aspect >= 0 ? g->aspect : s->aspect;
+	if (filter)
+		*filter = g->filter >= 0 ? g->filter : s->filter;
+	if (overscan)
+		*overscan = g->overscan >= 0 ? g->overscan : s->overscan;
 }
 
 void menu_video_parse(struct menu_settings *s, const char *text, size_t len)
@@ -165,8 +264,13 @@ int menu_video_format(const struct menu_settings *s, char *buf, size_t size)
 
 int menu_settings_format(const struct menu_settings *s, char *buf, size_t size)
 {
-	return snprintf(buf, size, "# Ajustes del menú de Salsa64\nfondo = %s\nfps = %s\nconfirmar = %s\n",
-			s->waves ? "si" : "no", s->fps ? "si" : "no", s->confirm ? "si" : "no");
+	return snprintf(buf, size,
+			"# Ajustes del menú de Salsa64\n# aspecto = 4:3|16:9; filtro = suave|nitido|lineas|lineas+; idioma = es|en|fr|de|it|pt\n"
+			"fondo = %s\nfps = %s\nconfirmar = %s\naspecto = %s\nfiltro = %s\nidioma = %s\n",
+			s->waves ? "si" : "no", s->fps ? "si" : "no", s->confirm ? "si" : "no",
+			s->aspect == MENU_ASPECT_16_9 ? "16:9" : "4:3",
+			filter_key[s->filter >= 0 && s->filter < MENU_FILTERS ? s->filter : 0],
+			lang_key[s->lang >= 0 && s->lang < MENU_LANGS ? s->lang : 0]);
 }
 
 void menu_init(struct menu *m, const struct romlist *list, int sel, const struct menu_settings *set)
@@ -179,6 +283,7 @@ void menu_init(struct menu *m, const struct romlist *list, int sel, const struct
 		menu_settings_default(&m->set);
 	m->sel = sel >= 0 && sel < (int)list->count ? sel : 0;
 	m->pos = (float)m->sel;
+	m->cover_rom = -1;
 }
 
 int menu_selected(const struct menu *m)
@@ -190,7 +295,7 @@ void menu_set_status(struct menu *m, const char *fmt, ...)
 {
 	va_list ap;
 	va_start(ap, fmt);
-	vsnprintf(m->status, sizeof m->status, fmt, ap);
+	vsnprintf(m->status, sizeof m->status, tr(fmt), ap);
 	va_end(ap);
 }
 
@@ -208,6 +313,28 @@ static int opt_from_row(const struct menu *m, int row)
 
 static void move(struct menu *m, uint32_t dir, bool wrap)
 {
+	if (m->page == MENU_PAGE_CHEATS) {
+		int n = menu_cheat_rows(m), v = m->cht_sel;
+		if (dir == BIT(SALSA64_DS3_UP))
+			v = v > 0 ? v - 1 : wrap ? n - 1 : 0;
+		else if (dir == BIT(SALSA64_DS3_DOWN))
+			v = v < n - 1 ? v + 1 : wrap ? 0 : n - 1;
+		else if (dir == BIT(SALSA64_DS3_LEFT))
+			v = v - 6 < 0 ? 0 : v - 6;
+		else if (dir == BIT(SALSA64_DS3_RIGHT))
+			v = v + 6 > n - 1 ? n - 1 : v + 6;
+		m->cht_sel = v;
+		return;
+	}
+	if (m->page == MENU_PAGE_GAME) {
+		int v = m->game_sel;
+		if (dir == BIT(SALSA64_DS3_UP))
+			v = v > 0 ? v - 1 : wrap ? MENU_GAME_ROWS - 1 : 0;
+		else if (dir == BIT(SALSA64_DS3_DOWN))
+			v = v < MENU_GAME_ROWS - 1 ? v + 1 : wrap ? 0 : MENU_GAME_ROWS - 1;
+		m->game_sel = v;
+		return;
+	}
 	bool games = m->page == MENU_PAGE_GAMES;
 	int n = games ? menu_rows(m) : MENU_OPTS - !menu_video_pending(m);
 	int opt_v = opt_row(m, m->opt), *s = games ? &m->sel : &opt_v;
@@ -253,6 +380,22 @@ static enum menu_action options_buttons(struct menu *m, uint32_t pressed)
 		m->set.overscan = o;
 		return MENU_SETTINGS;
 	}
+	if (m->opt == MENU_OPT_ASPECT && (pressed & change)) {
+		m->set.aspect = m->set.aspect == MENU_ASPECT_16_9 ? MENU_ASPECT_4_3 : MENU_ASPECT_16_9;
+		return MENU_SETTINGS;
+	}
+	if (m->opt == MENU_OPT_FILTER && (pressed & change)) {
+		m->set.filter = (m->set.filter + (pressed & BIT(SALSA64_DS3_LEFT) ? MENU_FILTERS - 1 : 1)) % MENU_FILTERS;
+		return MENU_SETTINGS;
+	}
+	if (m->opt == MENU_OPT_LANG && (pressed & change)) {
+		m->set.lang = (m->set.lang + (pressed & BIT(SALSA64_DS3_LEFT) ? MENU_LANGS - 1 : 1)) % MENU_LANGS;
+		return MENU_SETTINGS;
+	}
+	if ((m->opt == MENU_OPT_DL_COVERS || m->opt == MENU_OPT_DL_CHEATS) && (pressed & BIT(SALSA64_DS3_CROSS))) {
+		m->dl_what = m->opt == MENU_OPT_DL_CHEATS;
+		return MENU_DOWNLOAD;
+	}
 	if (m->opt == MENU_OPT_RESOLUTION && (pressed & change)) {
 		m->set.resolution = m->set.resolution == MENU_RES_1080P ? MENU_RES_720P : MENU_RES_1080P;
 		return MENU_SETTINGS;
@@ -272,6 +415,72 @@ static enum menu_action options_buttons(struct menu *m, uint32_t pressed)
 	if (m->opt == MENU_OPT_CONFIRM && (pressed & change)) {
 		m->set.confirm = !m->set.confirm;
 		return MENU_SETTINGS;
+	}
+	return MENU_NONE;
+}
+
+void menu_cheats_open(struct menu *m, struct cheat_set *cs, const char *title)
+{
+	m->cheats = cs;
+	m->cht_title = title;
+	m->cht_sel = 0;
+	m->cht_pos = 0.0f;
+	m->page = MENU_PAGE_CHEATS;
+	m->rep_button = 0;
+	m->status[0] = '\0';
+}
+
+void menu_game_open(struct menu *m, const struct menu_game *g, const char *title)
+{
+	m->game = *g;
+	m->game_title = title;
+	m->game_sel = 0;
+	m->game_pos = 0.0f;
+	m->page = MENU_PAGE_GAME;
+	m->rep_button = 0;
+	m->status[0] = '\0';
+}
+
+/* Botones de la página de ajustes del juego que no son mover la selección. */
+static enum menu_action game_buttons(struct menu *m, uint32_t pressed)
+{
+	uint32_t change = BIT(SALSA64_DS3_CROSS) | BIT(SALSA64_DS3_LEFT) | BIT(SALSA64_DS3_RIGHT);
+	if (pressed & (BIT(SALSA64_DS3_CIRCLE) | BIT(SALSA64_DS3_TRIANGLE) | BIT(SALSA64_DS3_SELECT))) {
+		m->page = MENU_PAGE_GAMES;
+		return MENU_NONE;
+	}
+	if (!(pressed & change))
+		return MENU_NONE;
+	if (m->game_sel == MENU_GAME_BACK) {
+		if (pressed & BIT(SALSA64_DS3_CROSS))
+			m->page = MENU_PAGE_GAMES;
+		return MENU_NONE;
+	}
+	/* Global → valor 0 → ... → último → Global (izquierda, al revés). */
+	int *v = m->game_sel == MENU_GAME_ASPECT ? &m->game.aspect
+		 : m->game_sel == MENU_GAME_FILTER ? &m->game.filter : &m->game.overscan;
+	int count = m->game_sel == MENU_GAME_ASPECT ? 2 : m->game_sel == MENU_GAME_FILTER ? MENU_FILTERS : 3;
+	int slot = *v + 1;  /* 0 = global */
+	slot = (slot + (pressed & BIT(SALSA64_DS3_LEFT) ? count : 1)) % (count + 1);
+	*v = slot - 1;
+	return MENU_GAME_CHANGED;
+}
+
+/* Botones de la página de trucos que no son mover la selección. */
+static enum menu_action cheats_buttons(struct menu *m, uint32_t pressed)
+{
+	int n = m->cheats ? (int)m->cheats->n : 0;
+	if (pressed & (BIT(SALSA64_DS3_CIRCLE) | BIT(SALSA64_DS3_SQUARE) | BIT(SALSA64_DS3_TRIANGLE))) {
+		m->page = MENU_PAGE_GAMES;
+		return MENU_NONE;
+	}
+	if (pressed & BIT(SALSA64_DS3_CROSS)) {
+		if (m->cht_sel >= n) {
+			m->page = MENU_PAGE_GAMES;  /* «Volver» */
+			return MENU_NONE;
+		}
+		m->cheats->c[m->cht_sel].on = !m->cheats->c[m->cht_sel].on;
+		return MENU_CHEATS_CHANGED;
 	}
 	return MENU_NONE;
 }
@@ -304,7 +513,36 @@ enum menu_action menu_input(struct menu *m, uint32_t buttons, uint64_t now_us)
 		}
 		pressed &= updown;
 		buttons &= updown;
+	} else if (m->page == MENU_PAGE_GAME) {
+		/* Arriba y abajo mueven; × y ←→ cambian el ajuste, ○ vuelve. */
+		enum menu_action a = game_buttons(m, pressed & ~updown);
+		if (a != MENU_NONE || m->page != MENU_PAGE_GAME) {
+			m->rep_button = 0;
+			return a;
+		}
+		pressed &= updown;
+		buttons &= updown;
+	} else if (m->page == MENU_PAGE_CHEATS) {
+		/* Arriba y abajo mueven; × cambia el truco, ○ vuelve. */
+		enum menu_action a = cheats_buttons(m, pressed & ~updown);
+		if (a != MENU_NONE || m->page != MENU_PAGE_CHEATS) {
+			m->rep_button = 0;
+			return a;
+		}
+		pressed &= updown;
+		buttons &= updown;
+	} else if (pressed & BIT(SALSA64_DS3_SELECT)) {
+		m->status[0] = '\0';
+		if (menu_selected(m) >= 0) {
+			m->game_rom = m->sel;
+			return MENU_GAME;
+		}
+	} else if (pressed & BIT(SALSA64_DS3_SQUARE)) {
+		m->status[0] = '\0';
+		if (menu_selected(m) >= 0)
+			return MENU_CHEATS;
 	} else if (pressed & BIT(SALSA64_DS3_CROSS)) {
+		m->status[0] = '\0';
 		if (menu_selected(m) >= 0)
 			return MENU_OPEN;
 		if (m->sel == menu_row_exit(m))
@@ -387,7 +625,7 @@ static void ease(float *x, float target, float dt, float rate)
 
 static float cells_w(const char *s, float scale)
 {
-	return rsxkit_text_cells(s) * RSXKIT_FONT_W * scale;
+	return rsxkit_text_cells(tr(s)) * RSXKIT_FONT_W * scale;
 }
 
 /* Texto con sombra. */
@@ -395,6 +633,7 @@ static void stext(float x, float y, const char *s, float scale, uint32_t rgb, fl
 {
 	if (a <= 0.004f)
 		return;
+	s = tr(s);
 	float off = scale >= 2.0f ? 2.0f : 1.5f;
 	rsxkit_ui_text(x + off, y + off, s, scale, rgba(0x000000u, a * 0.55f), max);
 	rsxkit_ui_text(x, y, s, scale, rgba(rgb, a), max);
@@ -523,10 +762,15 @@ static void draw_row(const struct row *r, float d, float x, float W, float H, fl
 		icon_glyph(x, y - s * 0.5f, s, r->glyph, alpha);
 	float scale = 2.0f + 0.85f * k, tx = x + 90.0f, th = RSXKIT_FONT_H * scale;
 	float ty = y - th * 0.5f - 10.0f * k;
-	uint32_t max = (uint32_t)((W * 0.53f - tx) / (RSXKIT_FONT_W * scale));
-	stext(tx, ty, r->title, scale, k > 0.5f ? 0xFFFFFFu : C_TEXT, alpha, max);
+	float room = W * 0.53f - tx;
 	if (r->value)
-		stext(tx + cells_w(r->title, scale) + 24.0f, ty, r->value, scale, C_ACCENT, alpha, 0);
+		room -= cells_w(r->value, scale) + 24.0f;  /* el valor queda siempre dentro de la columna */
+	uint32_t max = room > 0.0f ? (uint32_t)(room / (RSXKIT_FONT_W * scale)) : 1;
+	stext(tx, ty, r->title, scale, k > 0.5f ? 0xFFFFFFu : C_TEXT, alpha, max);
+	if (r->value) {
+		float tw = cells_w(r->title, scale), mw = (float)max * RSXKIT_FONT_W * scale;
+		stext(tx + (tw < mw ? tw : mw) + 24.0f, ty, r->value, scale, C_ACCENT, alpha, 0);
+	}
 	float ks = smooth((k - 0.35f) / 0.65f);
 	if (r->sub && ks > 0.0f)
 		stext(tx, ty + th + 6.0f, r->sub, 1.5f, C_DIM, alpha * ks, (uint32_t)((W * 0.53f - tx) / 12.0f));
@@ -537,7 +781,7 @@ static const char *location(const char *path, char *buf, size_t n)
 	if (!strncmp(path, "/dev_hdd0/", 10))
 		return "Disco duro";
 	if (!strncmp(path, "/dev_usb", 8) && strlen(path) > 10) {
-		snprintf(buf, n, "Memoria USB %c", path[10]);
+		snprintf(buf, n, tr("Memoria USB %c"), path[10]);
 		return buf;
 	}
 	return path;
@@ -561,6 +805,204 @@ static void info_line(float x, float *y, float vx, float vscale, const char *lab
 	*y += 34.0f;
 }
 
+/* Panel de la página de trucos: el truco elegido y cuántos hay. */
+static void cheats_panel(const struct menu *m, float px, float py, float pw, float ph, float ca)
+{
+	bool narrow = pw < 450.0f;
+	float tscale = narrow ? 2.0f : 2.5f, dscale = narrow ? 1.35f : 1.6f;
+	float x = px + 26.0f, y = py + 24.0f;
+	uint32_t tmax = (uint32_t)((pw - 48.0f) / (RSXKIT_FONT_W * tscale));
+	uint32_t lmax = (uint32_t)((pw - 48.0f) / (RSXKIT_FONT_W * dscale));
+	const struct cheat_set *cs = m->cheats;
+	char buf[96];
+
+	stext(x, y, m->cht_title ? m->cht_title : "Trucos", tscale, 0xFFFFFFu, ca, tmax);
+	y += 56.0f;
+	snprintf(buf, sizeof buf, tr("%u trucos, %u activos"), cs->n, cheats_active(cs));
+	stext(x, y, buf, dscale, C_DIM, ca, lmax);
+	y += 44.0f;
+	if (m->cht_sel < (int)cs->n) {
+		const struct cheat *c = &cs->c[m->cht_sel];
+		/* La descripción en dos renglones si no cabe en uno. */
+		char l1[CHEAT_DESC_MAX], l2[CHEAT_DESC_MAX];
+		size_t len = strlen(c->desc), cut = lmax && len > lmax ? lmax : len;
+		if (cut < len) {
+			while (cut > 0 && c->desc[cut] != ' ')
+				cut--;
+			if (cut == 0)
+				cut = lmax;
+		}
+		snprintf(l1, sizeof l1, "%.*s", (int)cut, c->desc);
+		snprintf(l2, sizeof l2, "%s", c->desc + cut + (c->desc[cut] == ' ' ? 1 : 0));
+		stext(x, y, l1, dscale, C_TEXT, ca, lmax);
+		if (l2[0])
+			stext(x, y + 30.0f, l2, dscale, C_TEXT, ca, lmax);
+		y += l2[0] ? 74.0f : 44.0f;
+		stext(x, y, c->on ? "Activado" : "Desactivado", tscale, c->on ? C_ACCENT : C_DIM, ca, 0);
+		y += 56.0f;
+		snprintf(buf, sizeof buf, tr(c->count == 1 ? "%u línea de código" : "%u líneas de código"), c->count);
+		stext(x, y, buf, dscale, C_DIM, ca, lmax);
+	} else {
+		stext(x, y, "A la lista de juegos.", dscale, C_TEXT, ca, lmax);
+	}
+	if (cs->unsupported)
+		stext(x, py + ph - 74.0f, "Algunos códigos no se aplican.", dscale, C_WARN, ca, lmax);
+	stext(x, py + ph - 44.0f, "Se recuerdan por juego.", dscale, C_DIM, ca, lmax);
+}
+
+static void cheats_column(const struct menu *m, float x, float W, float H, float a)
+{
+	int n = menu_cheat_rows(m);
+	for (int i = 0; i < n; i++) {
+		float d = i - m->cht_pos;
+		if (fabsf(d) > 7.0f)
+			continue;
+		struct row r = { 0 };
+		r.icon = 2;
+		if (i < n - 1) {
+			const struct cheat *c = &m->cheats->c[i];
+			r.title = c->desc;
+			r.glyph = c->on ? "●" : "○";
+			r.value = c->on ? "Sí" : "No";
+		} else {
+			r.title = "Volver";
+			r.sub = "A la lista de juegos";
+			r.glyph = "◀";
+		}
+		draw_row(&r, d, x, W, H, a);
+	}
+}
+
+static const char *game_value(const struct menu *m, int row)
+{
+	switch (row) {
+	case MENU_GAME_ASPECT:   return m->game.aspect < 0 ? "Global" : aspect_name(m->game.aspect);
+	case MENU_GAME_FILTER:   return m->game.filter < 0 ? "Global" : filter_name(m->game.filter);
+	case MENU_GAME_OVERSCAN: return m->game.overscan < 0 ? "Global" : overscan_name(m->game.overscan);
+	}
+	return NULL;
+}
+
+/* Panel de los ajustes del juego: qué vale ahora de cada cosa. */
+static void game_panel(const struct menu *m, float px, float py, float pw, float ph, float ca)
+{
+	bool narrow = pw < 450.0f;
+	float tscale = narrow ? 2.0f : 2.5f, dscale = narrow ? 1.35f : 1.6f;
+	float x = px + 26.0f, y = py + 24.0f;
+	uint32_t tmax = (uint32_t)((pw - 48.0f) / (RSXKIT_FONT_W * tscale));
+	uint32_t lmax = (uint32_t)((pw - 48.0f) / (RSXKIT_FONT_W * dscale));
+	int a, f, o;
+	menu_game_effective(&m->set, &m->game, &a, &f, &o);
+	stext(x, y, m->game_title ? m->game_title : "Ajustes", tscale, 0xFFFFFFu, ca, tmax);
+	y += 56.0f;
+	stext(x, y, "Ajustes de este juego", dscale, C_DIM, ca, lmax);
+	y += 44.0f;
+	static const char *const names[] = { "Aspecto", "Filtro", "Recorte del borde" };
+	for (int i = 0; i < 3; i++) {
+		const char *v = i == 0 ? aspect_name(a) : i == 1 ? filter_name(f) : overscan_name(o);
+		stext(x, y, names[i], 1.3f, C_DIM, ca, 0);
+		stext(x, y + 16.0f, v, dscale, m->game_sel == i ? C_ACCENT : C_TEXT, ca, lmax);
+		y += 52.0f;
+	}
+	stext(x, py + ph - 74.0f, "«Global» usa lo de Opciones.", dscale, C_DIM, ca, lmax);
+	stext(x, py + ph - 44.0f, "Se guardan en juegos/.", dscale, C_DIM, ca, lmax);
+}
+
+static void game_column(const struct menu *m, float x, float W, float H, float a)
+{
+	static const char *const titles[] = { "Aspecto", "Filtro", "Recorte del borde", "Volver" };
+	static const char *const subs[] = { "Forma de la imagen", "Suave, nítida o con líneas", "Overscan de este juego",
+					    "A la lista de juegos" };
+	static const char *const glyphs[] = { "▶", "─", "□", "◀" };
+	for (int i = 0; i < MENU_GAME_ROWS; i++) {
+		float d = i - m->game_pos;
+		struct row r = { titles[i], subs[i], 2, glyphs[i], 0, game_value(m, i) };
+		draw_row(&r, d, x, W, H, a);
+	}
+}
+
+/* Los datos de una ROM en el panel. Con carátula (`cover`): ella a la
+ * izquierda y los datos, cada uno con su rótulo encima, a su derecha. */
+static void rom_info(const struct menu *m, const struct rom_entry *e, float px, float py, float pw, float ph, float ca,
+		     bool cover)
+{
+	bool narrow = pw < 450.0f;
+	float tscale = narrow ? 2.0f : 2.5f, vscale = narrow ? 1.5f : 1.75f, dscale = narrow ? 1.35f : 1.6f;
+	float x = px + 26.0f, y = py + 24.0f, vx = x + (narrow ? 124.0f : 140.0f);
+	uint32_t vmax = (uint32_t)((px + pw - 20.0f - vx) / (RSXKIT_FONT_W * vscale));
+	uint32_t tmax = (uint32_t)((pw - 48.0f) / (RSXKIT_FONT_W * tscale));
+	char buf[ROMLIST_PATH_MAX + 32], loc[24];
+	(void)dscale;
+	if (cover) {
+		/* Carátula: cabe en cw × chh sin cambiar su proporción. */
+		float cw = pw * (m->cover_w > m->cover_h ? 0.52f : 0.42f), chh = ph - 24.0f - 60.0f - 20.0f;
+		float s = fminf(cw / (float)m->cover_w, chh / (float)m->cover_h);
+		float iw = (float)m->cover_w * s, ih = (float)m->cover_h * s;
+		float iy = py + 24.0f + 60.0f;
+		rsxkit_ui_rect(x - 3.0f, iy - 3.0f, iw + 6.0f, ih + 6.0f, rgba(0x000000u, ca * 0.55f));
+		rsxkit_ui_image(0, x, iy, iw, ih, rgba(0xFFFFFFu, ca));
+		vx = x + cw + 16.0f;
+		vscale = narrow || m->cover_w > m->cover_h ? 1.35f : 1.5f;
+		vmax = (uint32_t)((px + pw - 14.0f - vx) / (RSXKIT_FONT_W * vscale));
+		stext(x, y, romlist_display_title(e), tscale, 0xFFFFFFu, ca, tmax);
+		y = iy;
+		float step = narrow ? 44.0f : 50.0f;
+		#define COVER_LINE(label, value, color)                                          \
+			do {                                                                      \
+				stext(vx, y, label, 1.2f, C_DIM, ca, 0);                          \
+				stext(vx, y + 16.0f, value, vscale, color, ca, vmax);             \
+				y += step;                                                        \
+			} while (0)
+		COVER_LINE("Archivo", romlist_name(e), C_TEXT);
+		if (e->code[0])
+			snprintf(buf, sizeof buf, "%s v%u", e->code, e->version);
+		else
+			snprintf(buf, sizeof buf, "—");
+		COVER_LINE("Código", buf, C_TEXT);
+		size_text(e->size, buf, sizeof buf);
+		COVER_LINE("Tamaño", buf, C_TEXT);
+		{
+			const char *region = romlist_region_name(e->region),
+				   *tv = e->tv == SALSA64_TV_PAL ? "PAL" : e->tv == SALSA64_TV_MPAL ? "PAL-M" : "NTSC";
+			if (strcmp(region, "?"))
+				snprintf(buf, sizeof buf, "%s (%s)", region, tv);
+			else
+				snprintf(buf, sizeof buf, "%s", tv);
+			COVER_LINE("Región", buf, C_TEXT);
+		}
+		bool emulated = e->save == SALSA64_SAVE_NONE || salsa64_save_emulated((enum salsa64_save_type)e->save);
+		snprintf(buf, sizeof buf, "%s%s", romlist_save_label(e->save), emulated ? "" : tr(" (sin emular)"));
+		COVER_LINE("Guardado", buf, emulated ? C_TEXT : C_WARN);
+		#undef COVER_LINE
+		if (m->last[0] && !strcmp(m->last, e->path))
+			stext(x, py + ph - 30.0f, "● Último abierto", 1.2f, C_ACCENT, ca, 0);
+		return;
+	}
+	stext(x, y, romlist_display_title(e), tscale, 0xFFFFFFu, ca, tmax);
+	y += 60.0f;
+	info_line(x, &y, vx, vscale, "Archivo", romlist_name(e), C_TEXT, ca, vmax);
+	info_line(x, &y, vx, vscale, "Ubicación", location(e->path, loc, sizeof loc), C_TEXT, ca, vmax);
+	if (e->code[0])
+		snprintf(buf, sizeof buf, tr("%s, versión %u"), e->code, e->version);
+	else
+		snprintf(buf, sizeof buf, "—");
+	info_line(x, &y, vx, vscale, "Código", buf, C_TEXT, ca, vmax);
+	size_text(e->size, buf, sizeof buf);
+	info_line(x, &y, vx, vscale, "Tamaño", buf, C_TEXT, ca, vmax);
+	const char *region = romlist_region_name(e->region),
+		   *tv = e->tv == SALSA64_TV_PAL ? "PAL" : e->tv == SALSA64_TV_MPAL ? "PAL-M" : "NTSC";
+	if (strcmp(region, "?"))
+		snprintf(buf, sizeof buf, "%s (%s)", region, tv);
+	else
+		snprintf(buf, sizeof buf, "%s", tv);
+	info_line(x, &y, vx, vscale, "Región", buf, C_TEXT, ca, vmax);
+	bool emulated = e->save == SALSA64_SAVE_NONE || salsa64_save_emulated((enum salsa64_save_type)e->save);
+	snprintf(buf, sizeof buf, "%s%s", romlist_save_label(e->save), emulated ? "" : tr(" (sin emular)"));
+	info_line(x, &y, vx, vscale, "Guardado", buf, emulated ? C_TEXT : C_WARN, ca, vmax);
+	if (m->last[0] && !strcmp(m->last, e->path))
+		stext(x, py + ph - 44.0f, "● Último juego abierto", 1.5f, C_ACCENT, ca, 0);
+}
+
 static void panel(const struct menu *m, float W, float H, float a)
 {
 	float px = W * 0.555f, py = H * 0.17f, pw = W * 0.39f, ph = H * 0.56f;
@@ -568,18 +1010,29 @@ static void panel(const struct menu *m, float W, float H, float a)
 			   rgba(0x000000u, a * 0.24f), rgba(0x000000u, a * 0.14f));
 	rsxkit_ui_rect(px, py, pw, 2.0f, rgba(0xFFFFFFu, a * 0.32f));
 
+	/* Los trucos de la ROM, cuando la página está (o se está yendo). */
+	float ct = smooth(m->cht_t);
+	if (ct > 0.001f && m->cheats)
+		cheats_panel(m, px, py, pw, ph, a * ct * (1.0f - clampf(fabsf(m->cht_sel - m->cht_pos) * 1.6f, 0.0f, 1.0f)));
+	if (m->page == MENU_PAGE_CHEATS)
+		return;
+	float gt = smooth(m->game_t);
+	if (gt > 0.001f)
+		game_panel(m, px, py, pw, ph, a * gt);
+	if (m->page == MENU_PAGE_GAME)
+		return;
+
 	/* Lo de adentro aparece cuando la columna se detiene. */
 	bool games = m->page == MENU_PAGE_GAMES;
 	float settle = 1.0f - clampf(fabsf(games ? m->sel - m->pos : opt_row(m, m->opt) - m->opt_pos) * 1.6f, 0.0f, 1.0f);
-	float ca = a * smooth(settle) * (games ? 1.0f - m->page_t : m->page_t);
+	float ca = a * smooth(settle) * (games ? 1.0f - m->page_t : m->page_t) * (1.0f - ct) * (1.0f - gt);
 	/* Con tele 4:3 el panel es angosto: letra un poco más chica. */
 	bool narrow = pw < 450.0f;
-	float tscale = narrow ? 2.0f : 2.5f, vscale = narrow ? 1.5f : 1.75f, dscale = narrow ? 1.35f : 1.6f;
-	float x = px + 26.0f, y = py + 24.0f, vx = x + (narrow ? 124.0f : 140.0f);
-	uint32_t vmax = (uint32_t)((px + pw - 20.0f - vx) / (RSXKIT_FONT_W * vscale));
+	float tscale = narrow ? 2.0f : 2.5f, dscale = narrow ? 1.35f : 1.6f;
+	float x = px + 26.0f, y = py + 24.0f;
 	uint32_t tmax = (uint32_t)((pw - 48.0f) / (RSXKIT_FONT_W * tscale));
 	uint32_t lmax = (uint32_t)((pw - 48.0f) / (RSXKIT_FONT_W * dscale));
-	char buf[ROMLIST_PATH_MAX + 32], loc[24];
+	char buf[ROMLIST_PATH_MAX + 32];
 
 	if (!games) {
 		static const char *const waves_text[] = { "Ondas en movimiento de fondo.", "Apágalas para un fondo fijo.",
@@ -588,6 +1041,17 @@ static void panel(const struct menu *m, float W, float H, float a)
 							 "ver (ahí algunos juegos dejan", "basura).", NULL,
 							 "Normal: 8 y 6 puntos por lado;", "amplio: 16 y 12.",
 							 "Se guarda en overscan.cfg.", NULL, NULL };
+		static const char *const aspect_text[] = { "4:3: la imagen original de", "la N64, con franjas a los lados", "en una tele panorámica.",
+							   "16:9: la estira para llenar", "la pantalla.", NULL,
+							   "Vale al abrir el juego.", "Se guarda en menu.cfg.", NULL, NULL };
+		static const char *const filter_text[] = { "Suave: la imagen se mezcla", "al escalar (la de siempre).", "Nítida: puntos cuadrados,",
+							   "sin difuminar.", "Líneas: oscurece filas como", "una tele de tubo (suaves o", "fuertes).", NULL,
+							   "Vale al abrir el juego.", "Se guarda en menu.cfg.", NULL, NULL };
+		static const char *const lang_text[] = { "Idioma del menú y de los", "avisos del juego.", NULL, "Se guarda en menu.cfg.", NULL, NULL };
+		static const char *const dlc_text[] = { "Baja las carátulas de los", "juegos de la lista a", "covers/. Hace falta red", "y la dirección en",
+							"descargas.cfg.", NULL, "×: descargar.", NULL, NULL };
+		static const char *const dlt_text[] = { "Baja los trucos de los", "juegos de la lista a", "cheats/. Hace falta red", "y la dirección en",
+							"descargas.cfg.", NULL, "×: descargar.", NULL, NULL };
 		static const char *const res_text[] = { "Salida de video: 720p (3x)", "o 1080p (4x). Luego, abajo,", "«Aplicar ahora».",
 							"Se guarda en video.cfg.", NULL, NULL };
 		static const char *const fps_text[] = { "Campos del VI por segundo y", "velocidad, cuadros del juego",
@@ -599,25 +1063,35 @@ static void panel(const struct menu *m, float W, float H, float a)
 		/* Escala interna: tamaño y texto dependen del valor. */
 		char scale_buf[24], size_buf[32];
 		int eff = m->set.scale ? m->set.scale : (m->set.resolution == MENU_RES_1080P ? 4 : 3);
-		snprintf(size_buf, sizeof size_buf, "%d× = %d×%d puntos", eff, 320 * eff, 240 * eff);
+		snprintf(size_buf, sizeof size_buf, tr("%d× = %d×%d puntos"), eff, 320 * eff, 240 * eff);
 		const char *const scale_text[] = { size_buf, "Mayor que la pantalla es", "supermuestreo: más nitidez",
 						   "y bordes suaves, pero más", "trabajo para el RSX.",
 						   "1×: la imagen original N64.", "Luego, «Aplicar ahora».", NULL, NULL };
 		char want_buf[40];
-		snprintf(want_buf, sizeof want_buf, "%s, escala %d×", resolution_name(m->set.resolution),
+		snprintf(want_buf, sizeof want_buf, tr("%s, escala %d×"), resolution_name(m->set.resolution),
 			 m->set.scale ? m->set.scale : (m->set.resolution == MENU_RES_1080P ? 4 : 3));
 		const char *const apply_text[] = { "Pone la salida y la escala", "elegidas sin cerrar Salsa64:", want_buf, NULL,
 						   "Si la tele no acepta el", "modo, queda el anterior.", NULL, NULL };
 		static const char *const back_text[] = { "A la lista de juegos.", NULL, NULL };
 		const char *title = m->opt == MENU_OPT_WAVES ? "Fondo animado"
 				    : m->opt == MENU_OPT_OVERSCAN ? "Recorte del borde"
-				    : m->opt == MENU_OPT_RESOLUTION ? "Resolución"
+				    : m->opt == MENU_OPT_ASPECT ? "Aspecto"
+				    : m->opt == MENU_OPT_FILTER ? "Filtro de imagen"
+					    : m->opt == MENU_OPT_LANG ? "Idioma"
+					    : m->opt == MENU_OPT_DL_COVERS ? "Descargar carátulas"
+					    : m->opt == MENU_OPT_DL_CHEATS ? "Descargar trucos"
+					    : m->opt == MENU_OPT_RESOLUTION ? "Resolución"
 				    : m->opt == MENU_OPT_SCALE ? "Escala interna"
 				    : m->opt == MENU_OPT_APPLY ? "Aplicar ahora"
 				    : m->opt == MENU_OPT_FPS ? "Mostrar FPS"
 				    : m->opt == MENU_OPT_CONFIRM ? "Confirmar al salir" : "Volver";
 		const char *const *text = m->opt == MENU_OPT_WAVES ? waves_text
 					  : m->opt == MENU_OPT_OVERSCAN ? crop_text
+					  : m->opt == MENU_OPT_ASPECT ? aspect_text
+					  : m->opt == MENU_OPT_FILTER ? filter_text
+					  : m->opt == MENU_OPT_LANG ? lang_text
+					  : m->opt == MENU_OPT_DL_COVERS ? dlc_text
+					  : m->opt == MENU_OPT_DL_CHEATS ? dlt_text
 					  : m->opt == MENU_OPT_RESOLUTION ? res_text
 					  : m->opt == MENU_OPT_SCALE ? scale_text
 					  : m->opt == MENU_OPT_APPLY ? apply_text
@@ -625,6 +1099,9 @@ static void panel(const struct menu *m, float W, float H, float a)
 					  : m->opt == MENU_OPT_CONFIRM ? confirm_text : back_text;
 		const char *value = m->opt == MENU_OPT_WAVES ? (m->set.waves ? "Sí" : "No")
 				    : m->opt == MENU_OPT_OVERSCAN ? overscan_name(m->set.overscan)
+				    : m->opt == MENU_OPT_ASPECT ? aspect_name(m->set.aspect)
+				    : m->opt == MENU_OPT_FILTER ? filter_name(m->set.filter)
+				    : m->opt == MENU_OPT_LANG ? lang_label[m->set.lang]
 				    : m->opt == MENU_OPT_RESOLUTION ? resolution_name(m->set.resolution)
 				    : m->opt == MENU_OPT_SCALE ? scale_name(&m->set, scale_buf, sizeof scale_buf)
 				    : m->opt == MENU_OPT_FPS ? (m->set.fps ? "Sí" : "No")
@@ -647,7 +1124,7 @@ static void panel(const struct menu *m, float W, float H, float a)
 		if (m->opt == MENU_OPT_RESOLUTION) {
 			y += 16.0f + 56.0f;
 			if (m->out_w && m->out_h) {
-				snprintf(buf, sizeof buf, "Salida actual: %ux%u", m->out_w, m->out_h);
+				snprintf(buf, sizeof buf, tr("Salida actual: %ux%u"), m->out_w, m->out_h);
 				stext(x, y, buf, dscale, C_TEXT, ca, lmax);
 				y += 30.0f;
 			}
@@ -663,34 +1140,16 @@ static void panel(const struct menu *m, float W, float H, float a)
 	if (s < 0) {
 		bool exit = m->sel == menu_row_exit(m);
 		stext(x, y, exit ? "Salir al XMB" : "Opciones", tscale, 0xFFFFFFu, ca, tmax);
-		stext(x, y + 56.0f, exit ? "Cierra Salsa64 y vuelve" : "Fondo, recorte del borde,", dscale, C_TEXT, ca, lmax);
-		stext(x, y + 86.0f, exit ? "al menú de la consola." : "resolución y FPS.", dscale, C_TEXT, ca, lmax);
+		stext(x, y + 56.0f, exit ? "Cierra Salsa64 y vuelve" : "Fondo, recorte, filtro,", dscale, C_TEXT, ca, lmax);
+		stext(x, y + 86.0f, exit ? "al menú de la consola." : "resolución, idioma y FPS.", dscale, C_TEXT, ca, lmax);
 		return;
 	}
 	const struct rom_entry *e = &m->list->e[s];
-	stext(x, y, romlist_display_title(e), tscale, 0xFFFFFFu, ca, tmax);
-	y += 60.0f;
-	info_line(x, &y, vx, vscale, "Archivo", romlist_name(e), C_TEXT, ca, vmax);
-	info_line(x, &y, vx, vscale, "Ubicación", location(e->path, loc, sizeof loc), C_TEXT, ca, vmax);
-	if (e->code[0])
-		snprintf(buf, sizeof buf, "%s, versión %u", e->code, e->version);
-	else
-		snprintf(buf, sizeof buf, "—");
-	info_line(x, &y, vx, vscale, "Código", buf, C_TEXT, ca, vmax);
-	size_text(e->size, buf, sizeof buf);
-	info_line(x, &y, vx, vscale, "Tamaño", buf, C_TEXT, ca, vmax);
-	const char *region = romlist_region_name(e->region),
-		   *tv = e->tv == SALSA64_TV_PAL ? "PAL" : e->tv == SALSA64_TV_MPAL ? "PAL-M" : "NTSC";
-	if (strcmp(region, "?"))
-		snprintf(buf, sizeof buf, "%s (%s)", region, tv);
-	else
-		snprintf(buf, sizeof buf, "%s", tv);
-	info_line(x, &y, vx, vscale, "Región", buf, C_TEXT, ca, vmax);
-	bool emulated = e->save == SALSA64_SAVE_NONE || salsa64_save_emulated((enum salsa64_save_type)e->save);
-	snprintf(buf, sizeof buf, "%s%s", romlist_save_label(e->save), emulated ? "" : " (sin emular)");
-	info_line(x, &y, vx, vscale, "Guardado", buf, emulated ? C_TEXT : C_WARN, ca, vmax);
-	if (m->last[0] && !strcmp(m->last, e->path))
-		stext(x, py + ph - 44.0f, "● Último juego abierto", 1.5f, C_ACCENT, ca, 0);
+	float cv = m->cover_rom == s && m->cover_w ? smooth(m->cover_t) : 0.0f;
+	if (cv < 0.999f)
+		rom_info(m, e, px, py, pw, ph, ca * (1.0f - cv), false);
+	if (cv > 0.001f)
+		rom_info(m, e, px, py, pw, ph, ca * cv, true);
 }
 
 static void games_column(const struct menu *m, float x, float W, float H, float a)
@@ -708,7 +1167,7 @@ static void games_column(const struct menu *m, float x, float W, float H, float 
 			r.sub = romlist_name(e);
 		} else if (i == (int)m->list->count) {
 			r.title = "Opciones";
-			r.sub = "Fondo animado y recorte del borde";
+			r.sub = "Fondo, imagen, idioma y descargas";
 			r.icon = 1;
 		} else {
 			r.title = "Salir al XMB";
@@ -731,6 +1190,12 @@ static void options_column(const struct menu *m, float x, float W, float H, floa
 	struct row waves = { "Fondo animado", "Ondas detrás del menú", 2, "~", 0, m->set.waves ? "Sí" : "No" };
 	struct row crop = { "Recorte del borde", "Overscan de la imagen del juego", 2, "□", 0,
 			    overscan_name(m->set.overscan) };
+	struct row aspect = { "Aspecto", "Forma de la imagen del juego (al abrir uno)", 2, "▶", 0,
+			      aspect_name(m->set.aspect) };
+	struct row filter = { "Filtro", "Suave, nítida o con líneas de barrido", 2, "─", 0, filter_name(m->set.filter) };
+	struct row lang = { "Idioma", "Idioma del menú y de los avisos", 2, "A", 0, lang_label[m->set.lang] };
+	struct row dlc = { "Descargar carátulas", "De internet a la carpeta covers", 2, "↓", 0, NULL };
+	struct row dlt = { "Descargar trucos", "De internet a la carpeta cheats", 2, "↓", 0, NULL };
 	struct row res = { "Resolución", "Salida de video", 2, "■", 0, resolution_name(m->set.resolution) };
 	char sbuf[24];
 	struct row scale = { "Escala interna", "Dibujo interno", 2, "▲", 0,
@@ -742,12 +1207,17 @@ static void options_column(const struct menu *m, float x, float W, float H, floa
 	struct row back = { "Volver", "A la lista de juegos", 2, "◀", 0, NULL };
 	draw_row(&waves, MENU_OPT_WAVES - m->opt_pos, x, W, H, a);
 	draw_row(&crop, MENU_OPT_OVERSCAN - m->opt_pos, x, W, H, a);
+	draw_row(&aspect, MENU_OPT_ASPECT - m->opt_pos, x, W, H, a);
+	draw_row(&filter, MENU_OPT_FILTER - m->opt_pos, x, W, H, a);
 	draw_row(&res, MENU_OPT_RESOLUTION - m->opt_pos, x, W, H, a);
 	draw_row(&scale, MENU_OPT_SCALE - m->opt_pos, x, W, H, a);
 	if (menu_video_pending(m))
 		draw_row(&apply, MENU_OPT_APPLY - m->opt_pos, x, W, H, a);
 	draw_row(&fps, (float)opt_row(m, MENU_OPT_FPS) - m->opt_pos, x, W, H, a);
 	draw_row(&confirm, (float)opt_row(m, MENU_OPT_CONFIRM) - m->opt_pos, x, W, H, a);
+	draw_row(&lang, (float)opt_row(m, MENU_OPT_LANG) - m->opt_pos, x, W, H, a);
+	draw_row(&dlc, (float)opt_row(m, MENU_OPT_DL_COVERS) - m->opt_pos, x, W, H, a);
+	draw_row(&dlt, (float)opt_row(m, MENU_OPT_DL_CHEATS) - m->opt_pos, x, W, H, a);
 	draw_row(&back, (float)opt_row(m, MENU_OPT_BACK) - m->opt_pos, x, W, H, a);
 }
 
@@ -762,7 +1232,12 @@ void menu_frame(struct menu *m, float lw, float lh, uint64_t now_us)
 	if (m->opt == MENU_OPT_APPLY && !menu_video_pending(m))
 		m->opt = MENU_OPT_BACK;  /* ya se aplicó */
 	ease(&m->opt_pos, (float)opt_row(m, m->opt), dt, 14.0f);
-	ease(&m->page_t, (float)m->page, dt, 10.0f);
+	ease(&m->page_t, m->page == MENU_PAGE_OPTIONS ? 1.0f : 0.0f, dt, 10.0f);
+	ease(&m->cht_pos, (float)m->cht_sel, dt, 14.0f);
+	ease(&m->cht_t, m->page == MENU_PAGE_CHEATS ? 1.0f : 0.0f, dt, 10.0f);
+	ease(&m->game_pos, (float)m->game_sel, dt, 14.0f);
+	ease(&m->game_t, m->page == MENU_PAGE_GAME ? 1.0f : 0.0f, dt, 10.0f);
+	ease(&m->cover_t, m->cover_rom >= 0 && m->cover_rom == menu_selected(m) && m->cover_w ? 1.0f : 0.0f, dt, 10.0f);
 	m->intro = clampf(m->intro + dt / 0.45f, 0.0f, 1.0f);
 
 	float W = lw, H = lh, a = smooth(m->intro);
@@ -770,32 +1245,41 @@ void menu_frame(struct menu *m, float lw, float lh, uint64_t now_us)
 
 	/* Encabezado. */
 	stext(W * 0.06f, H * 0.055f, "Salsa64", 2.5f, 0xFFFFFFu, a, 0);
-	stext(W * 0.06f + 7 * 20.0f + 22.0f, H * 0.055f + 8.0f, m->page == MENU_PAGE_GAMES ? "Juegos" : "Opciones",
-	      2.0f, C_DIM, a, 0);
+	stext(W * 0.06f + 7 * 20.0f + 22.0f, H * 0.055f + 8.0f,
+	      m->page == MENU_PAGE_GAMES ? "Juegos" : m->page == MENU_PAGE_CHEATS ? "Trucos"
+				    : m->page == MENU_PAGE_GAME ? "Ajustes" : "Opciones", 2.0f, C_DIM, a, 0);
 	char count[24];
-	snprintf(count, sizeof count, m->list->count == 1 ? "%u juego" : "%u juegos", m->list->count);
+	snprintf(count, sizeof count, tr(m->list->count == 1 ? "%u juego" : "%u juegos"), m->list->count);
 	stext(W * 0.94f - cells_w(count, 1.75f), H * 0.055f + 10.0f, count, 1.75f, C_DIM, a, 0);
 
 	/* Columna (se desliza al cambiar de página) y panel. */
-	float x = W * 0.07f, p = smooth(m->page_t);
-	if (p < 0.999f)
-		games_column(m, x - p * W * 0.06f, W, H, a * (1.0f - p));
+	float x = W * 0.07f, p = smooth(m->page_t), ch = smooth(m->cht_t), gm = smooth(m->game_t);
+	float g = (1.0f - p) * (1.0f - ch) * (1.0f - gm);
+	if (g > 0.001f)
+		games_column(m, x - p * W * 0.06f - ch * W * 0.06f - gm * W * 0.06f, W, H, a * g);
+	if (gm > 0.001f)
+		game_column(m, x + (1.0f - gm) * W * 0.06f, W, H, a * gm);
 	if (p > 0.001f)
 		options_column(m, x + (1.0f - p) * W * 0.06f, W, H, a * p);
+	if (ch > 0.001f && m->cheats)
+		cheats_column(m, x + (1.0f - ch) * W * 0.06f, W, H, a * ch);
 	panel(m, W, H, a);
 
 	/* Pie: mensaje, botones y cómo volver. */
 	if (m->status[0])
 		stext(W * 0.06f, H * 0.815f, m->status, 1.6f, C_WARN, a, (uint32_t)(W * 0.88f / 12.8f));
 	stext(W * 0.06f, H * 0.865f,
-	      m->page == MENU_PAGE_GAMES ? "×  Abrir      ↑↓  Elegir      △  Opciones" : "×  Cambiar      ○  Volver", 1.6f,
-	      C_TEXT, a, 0);
-	stext(W * 0.06f, H * 0.865f + 30.0f, "En el juego, START + SELECT vuelve a este menú.", 1.35f, C_DIM, a, 0);
+	      m->page == MENU_PAGE_GAMES ? "×  Abrir   ↑↓  Elegir   □  Trucos   SELECT  Ajustes   △  Opciones"
+		      : m->page == MENU_PAGE_GAME ? "×  Cambiar      ↑↓  Elegir      ○  Volver"
+	      : m->page == MENU_PAGE_CHEATS ? "×  Activar o desactivar      ↑↓  Elegir      ○  Volver"
+					     : "×  Cambiar      ○  Volver",
+	      1.6f, C_TEXT, a, 0);
+	stext(W * 0.06f, H * 0.865f + 30.0f, "En el juego, START + SELECT abre el menú de pausa.", 1.35f, C_DIM, a, 0);
 
 	if (m->loading) {
 		rsxkit_ui_rect(0, 0, W, H, rgba(0x000000u, 0.55f));
 		char line[ROMLIST_PATH_MAX + 32];
-		snprintf(line, sizeof line, "Cargando %s…", m->loading);
+		snprintf(line, sizeof line, tr("Cargando %s…"), m->loading);
 		float w = cells_w(line, 2.5f);
 		if (w > W * 0.9f)
 			w = W * 0.9f;

@@ -4,7 +4,7 @@ PROGRAM := salsa64
 TITLE   := Salsa64
 APPID   := SLSA00064
 SRCS    := main.c audio_out.c audio_sync.c menu.c osd.c osd_fps.c pacer.c padmap.c pausectl.c replay.c romlist.c savefile.c \
-           screenshot.c selftest.c selftest_audio.c selftest_gfx.c states.c
+           cheats.c cover.c download.c dlutil.c i18n.c namematch.c screenshot.c selftest.c selftest_audio.c selftest_gfx.c states.c
 
 R       := ../..
 ICON0   := $(R)/assets/ps3/ICON0.PNG
@@ -41,7 +41,7 @@ gfx_STACK_ARGS := --edge gfx_dl_f3d:pd_command --edge gfx_dl_f3dex2:cbfd_command
                   --ignore exit --ignore __call_exitprocs --ignore __do_global_ctors_aux \
                   --ignore __do_global_dtors_aux --ignore register_tm_clones --ignore deregister_tm_clones
 CFLAGS  := -ffp-contract=off -fno-math-errno
-LIBS    := -lrsx -lgcm_sys -laudio -lio -lsysutil -lnet -lsysmodule -lrt -llv2 -lm
+LIBS    := -lrsx -lgcm_sys -laudio -lio -lsysutil -lhttp -lhttputil -lssl -lnetctl -lnet -lsysmodule -lrt -llv2 -lm
 # Caché del recompilador al final del segmento de texto (docs/rec-ppe.md).
 LDFLAGS := -T $(abspath $(R))/mk/rec-cache.ld -T lv2.ld
 
