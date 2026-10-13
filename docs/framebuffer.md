@@ -425,7 +425,10 @@ z image, `GFX_OP_ZCLEAR`) se escribe ahora también en la RDRAM, como lo deja
 el RDP: `salsa64_gfx_rdram_fills` (`src/rsp/gfx/sync.c`) recorre la salida
 de la tarea en su `finish` (backend síncrono y el del SPE, en el hilo del
 CPU) y pone el color de relleno de 32 bits por dirección (sirve para 8, 16
-y 32 bits por píxel), recortado al ancho de la imagen. Va antes de entregar
+y 32 bits por píxel), recortado al ancho de la imagen y, desde la HLE, al
+scissor (borde inferior derecho exclusivo, como el RDP): Conker borra 217
+filas con un scissor de 216 y guarda una lista enlazada en la fila que el
+RDP no toca (docs/estado.md, 2026-10-13). Va antes de entregar
 la tarea a la presentación, así que las copias esperadas de esa misma
 tarea (Zelda copia el cuadro a la dirección del z-buffer en la pausa) la
 pisan después, en el mismo orden que en el hardware. Invalida el código
