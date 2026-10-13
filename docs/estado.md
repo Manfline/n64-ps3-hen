@@ -1,5 +1,25 @@
 # Estado
 
+## 2026-10-12 (noche) — Plan para la jerarquía de memoria del PPE (docs/cache-ppe.md)
+
+Documento de diseño, sin código: dónde se van los ~54 ciclos por
+instrucción MIPS del código nativo (GoldenEye en la presa: 10–14 de
+trabajo, ~40 de espera), con el reparto estimado entre fetch de código,
+ERAT, datos del juego, JR/JALR, fronteras de bloque y saltos, a partir de
+las cifras públicas del PPE (L2 ~41 ciclos, fallo a XDR ~380, ERAT de 64
+entradas de 4 KB aunque la página sea grande, salto mal predicho 24) y de
+los perfiles por juego de la PS3 (256 KB de código generado cubren el
+54–66 % de las entradas; el 24 % de los bloques terminan en JR; el 82 %
+de las salidas van por un sucesor dominante). Palancas con mecanismo,
+estimación, costo, medición y dependencias, y el orden recomendado:
+código compacto (rama en curso) → bench de huella en la PS3 → la sección
+fría fuera del cuerpo → pila de retorno y caché de destinos para JR →
+zona caliente de 256 KB y frío de verdad → trazas por el sucesor dominante
+→ pistas de salto y precarga → `code_flags` chica → copia del VI por SPE →
+compilar a la segunda. Descartadas: páginas de 1 MB para la caché (el ERAT
+no las aprovecha y el texto lo mapea lv2), la RMT de la L2 (privilegiada),
+precarga de datos del juego.
+
 ## 2026-10-12 (noche) — Donkey Kong 64: la cámara que se acerca y se aleja leía una z image vacía (rama `focused-hermann-680a6f`, paquete SLSA00105 «Salsa64 cámara»)
 
 Síntoma (PS3 real, v0.2.0, DK64 al 100 %): la cámara 3D se acerca y se
