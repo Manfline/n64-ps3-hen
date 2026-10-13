@@ -514,6 +514,8 @@ se crean por FTP.
 | `capturas` | Basta con que exista | Guarda capturas de pantalla (`screen-N.ppm`) cada pocos segundos; frena la imagen un instante en cada una |
 | `lle` | Vacío o `all` | Prueba el RSP de bajo nivel (experimental, lento). Vacío: solo microcódigo sin HLE; `all`: todo |
 | `gfx_ppe` | Basta con que exista | Corre la HLE gráfica en el PPE en lugar del SPE (para comparar tiempos) |
+| `sin-recompilador` | Basta con que exista | Apaga el recompilador dinámico: todo corre en el intérprete (más lento). No hace falta con CFW: si el recompilador no puede usar su memoria en la consola, Salsa64 pasa solo al intérprete y lo dice en el log (docs/jit-cfw.md) |
+| `jit-prueba.txt` | Lo escribe Salsa64 | Marca de la prueba del recompilador al arrancar; solo queda si una prueba cerró la aplicación, y entonces esa versión usa el intérprete. Borrarlo para que vuelva a probar |
 | `sin-pausa` | Basta con que exista | El menú del sistema (botón PS) no pausa la emulación, como hasta v0.1.0 (para diagnosticar; docs/hilos-ppe.md) |
 | `perfil-activo` | Basta con que exista | Enciende el perfil persistente del recompilador (apagado por omisión): cuenta las entradas a cada bloque, las guarda en `perfiles/<juego>.prf` y compila los calientes juntos. Medido en la PS3: contar cuesta ~5 % y juntarlos no gana nada (el costo lo pone cuántas líneas toca cada instrucción); sirve para recoger datos para lo que sigue (docs/rec-ppe.md) |
 | `perfil.cfg` | `caliente = KB`, `saltos = si\|no` | Con `perfil-activo`: tamaño de la zona caliente de la caché de código (por omisión 1024 KB, en dos mitades; `0` cuenta y guarda el perfil sin zona caliente) y si los bloques calientes registran sus sitios de salida (sí por omisión) |

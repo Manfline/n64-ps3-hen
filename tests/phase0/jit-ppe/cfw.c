@@ -585,11 +585,11 @@ static void ui_frame(void)
 	for (int i = 0; i < NUM_MECHS; i++, y += 16) {
 		char row[96];
 		snprintf(row, sizeof row, "%2d. %-16s %s", i + 1, mechs[i].name, mechs[i].desc);
-		rsxkit_text_draw(&c, 16, y, row, 70, i == current ? 0xFFFFFF : 0xB0B8C0, 1);
+		rsxkit_text_draw(&c, 16, y, row, 62, i == current ? 0xFFFFFF : 0xB0B8C0, 1);
 		const char *s = short_status(i);
 		uint32_t col = !strcmp(s, "OK") ? 0x60E060 : !strcmp(s, "...") ? 0xFFFFFF : !strcmp(s, "N/A") ? 0xA0A0A0
 			       : 0xFF7060;
-		rsxkit_text_draw(&c, 16 + 8 * 72, y, s, 0, col, 1);
+		rsxkit_text_draw(&c, 16 + 8 * 64, y, s, 0, col, 1);
 	}
 	y += 12;
 	if (finished) {
