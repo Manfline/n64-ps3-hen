@@ -295,7 +295,12 @@ depende de nada y va en el mismo paquete con `jit-sin-grupos` para el A/B).
 En la PS3 (2026-10-13, paquete con la base en caché antes del arreglo):
 GoldenEye en la presa 16,63 ns por instrucción (12 ventanas pesadas) contra
 16,03/16,30 de v0.2.2: sin ganancia; Perfect Dark, primera ventana pesada,
-10,07 contra 10,51 sin grupos (−4 %). La FPU compacta está por medir.
+10,07 contra 10,51 sin grupos (−4 %). Con la FPU compacta (paquete
+`build/ps3-4`, sin banderas): GoldenEye en la presa **15,66 / 15,54**
+(media / mediana de 13 ventanas pesadas; −2…−4 % contra v0.2.2, −6 % contra
+la corrida A) y Perfect Dark en la segunda escena **14,1–14,7** contra ~15,4
+(−5…−8 %). La ganancia de huella del host no se traslada entera: el
+`bl`/`blr` por operación y lo que no es el PPE (docs/fastmem.md §9).
 
 Todos son exactos en `--lockstep` (GoldenEye hasta la presa y Perfect
 Dark sin diferencias; nemu64-test entero con la base en caché; con fastmem

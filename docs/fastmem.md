@@ -515,6 +515,25 @@ Resultado en el host (2026-10-13, con la base en caché también encendida;
 más.) Corrección: unitarias 491/491 en plain, pin y FPU residente
 (`executed_matches_full` y `executed_conversions_match_full` incluidas),
 nemu64-test 433 y en lockstep entero, vitest, Perfect Dark 6 G ciclos y
-GoldenEye hasta la presa en lockstep, todo sin diferencias. Pendiente la
-PS3 (A/B con `jit-fpu-en-linea`).
+GoldenEye hasta la presa en lockstep, todo sin diferencias.
+
+**En la PS3 (2026-10-13, paquete `build/ps3-4/salsa64-fpu-app-SLSA00111.pkg`,
+sin banderas: base en caché y FPU compacta encendidas; `tools/jit-perfil.py`
+sobre `build/ps3-4/fpu-ge-pd-udp.log`, ventanas de 5 s con MIPS ≥ 40 y
+espera ≤ 35 %):**
+
+| | ns por instrucción (media / mediana) | v0.2.2 | Base en caché sola (corrida A) |
+|---|---|---|---|
+| GoldenEye en la presa (13 ventanas pesadas; 61,6 MIPS, 51,2 campos/s) | **15,66 / 15,54** (mín 13,67, máx 17,15) | 16,03 / 16,30 | 16,63 |
+| Perfect Dark intro (4 ventanas pesadas) | **12,92 / 13,27** (mín 10,47, máx 14,69); la segunda escena 14,13–14,69 | ~15,4 en la segunda escena | 10,07 en la primera ventana |
+
+Con el criterio laxo (MIPS > 30, espera < 40 %) GoldenEye da 17 ventanas,
+15,78 / 15,66. Es decir: GoldenEye −2…−4 % contra v0.2.2 y −6 % contra la
+corrida A de los grupos; Perfect Dark −5…−8 % en la segunda escena. Mucho
+menos que el −32 % / −24 % de palabras calientes del host: el `bl`/`blr`
+de cada operación y el que la rutina ya no comparta el fetch con el bloque
+se comen buena parte de lo ahorrado en huella, y el resto de la escena
+(RSP, RDP, espera) no cambia. El autor ve Perfect Dark bien y GoldenEye
+todavía con atoros en las partes pesadas. Queda el A/B estricto en el
+mismo paquete (`jit-fpu-en-linea`, `jit-sin-grupos`).
 

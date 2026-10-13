@@ -661,11 +661,17 @@ calientes por acceso en el código compacto). Hecho hoy:
   5–6 palabras en vez de 35–40. Host: **GoldenEye calientes 8,16 → 5,54
   (−32 %), Perfect Dark 6,84 → 5,22 (−24 %)** (con los grupos); exacta en
   todo (unitarias, nemu64 y lockstep, PD y GE en lockstep). Interruptor
-  `jit-fpu-en-linea` / `SALSA64_REC_FPU_INLINE=1`.
+  `jit-fpu-en-linea` / `SALSA64_REC_FPU_INLINE=1`. **PS3** (paquete
+  `build/ps3-4`, sin banderas): GoldenEye presa 15,66 / 15,54 ns/instr
+  (media / mediana; v0.2.2 16,03 / 16,30: −2…−4 %), Perfect Dark segunda
+  escena 14,1–14,7 contra ~15,4 (−5…−8 %). Menos que la huella del host
+  prometía (el `bl`/`blr` por operación y lo que no es el PPE); PD se ve
+  bien, GoldenEye sigue con atoros en lo pesado. Rama rebasada sobre
+  b890a7b (versión visible, gráficos, Kirby) para integrar tal cual.
 
-Pendiente: la consola (fastmem2; el A/B de PD con `jit-sin-grupos` y
-`jit-fpu-en-linea`, y GoldenEye en la presa con la FPU compacta); después
-registros vivos entre bloques y la FPU 1 a 1 (pasos 3 y 4).
+Pendiente: la consola (fastmem2; el A/B estricto con `jit-sin-grupos` y
+`jit-fpu-en-linea` en el mismo paquete); después registros vivos entre
+bloques y la FPU 1 a 1 (pasos 3 y 4).
 
 ## 2026-10-13 — Recompilador: código compacto, 20,2 → 15,6 palabras de PPC por instrucción MIPS (rama `sleepy-mestorf`, paquete SLSA00106 «Salsa64 compacto»)
 
