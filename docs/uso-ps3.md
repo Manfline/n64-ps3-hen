@@ -410,7 +410,7 @@ presentados por segundo, de 60. Sin filtro, el RSX va al 39–44 %.
 La emulación no se frena: si el RSX no alcanza, se saltan cuadros de la
 pantalla. Para que no se salten, bajar la escala interna a 2× o 3× con un
 CRT: el filtro trabaja a la resolución de la N64 y la escala solo le llega
-como supermuestreo; a 2× casi no se nota y el RSX se ahorra ~6–7 ms por
+como supermuestreo; a 2× casi no se nota y el RSX se ahorra ~5–6 ms por
 cuadro (estimado; docs/perf-log.md).
 
 ## Notas por juego

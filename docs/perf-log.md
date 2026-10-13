@@ -7,7 +7,7 @@ antes, después, notas.
 | Fecha | Commit | Prueba | Entorno | Antes | Después | Notas |
 |---|---|---|---|---|---|---|
 | 2026-10-13 | fd1891c → (rama del código compacto) | **Código compacto del recompilador**: palabras de PPC por instrucción MIPS, GoldenEye hasta la presa (`goldeneye-dam.pad`, 7,5 G ciclos), pesado por ejecuciones de bloque | Mac, qemu-ppc64 (`salsa64-run --rec` con `SALSA64_REC_DUMP=1`, `tools/rec-expansion.py --counter 8`), respaldo del autor | 20,2 por instrucción (9,3 calientes, 11,0 frías); 17,2 MB de PPC, 305 palabras por bloque | **15,6 (8,2 calientes, 7,4 frías): −23 %**; 13,2 MB, 234 por bloque; mismo recorrido (mismas cuentas del perfil), 4 desalojos en vez de 6 | Prueba de KSEG0 en 4 palabras, un camino lento por bloque (rutina única + trampolín), cadena de escritura, enlaces de 3 palabras. **PS3 real** (mismo paquete, A/B con `jit-ancho`): GoldenEye en la presa 17,26 → 16,30 / 16,03 ns por instrucción emulada (−6…−7 %, 47,5 → 50–53 campos/s), Perfect Dark 14,85 → 14,45 (−3 %), SM64 y Zelda sin regresión. Ver «Código compacto» abajo |
-| 2026-10-13 | 6f2a888 | **Filtros CRT del autor en el RSX** (máscara de sombra y CRT con cable RGB, S-Video y compuesto), ciclo de 20 s por filtro, GoldenEye a 720p y 1080p, Perfect Dark y Conker a 1080p | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00109 «Salsa64 filtros», respaldos del autor, escala 5× | sin filtro: RSX ocupado 39–44 %, 59–60 cuadros presentados por segundo | GoldenEye, ms del RSX por cuadro a 720p / 1080p: **máscara 6,7 / 9,6, RGB 8,4 / 11,9, S-Video 9,6 / 13,0, compuesto 11,9 / 15,4**; a 1080p se presentan 51, 40, 36 y 30 cuadros por segundo | Reducir la superficie de 5× cuesta 3,1 ms en todos (la lectura, no las cuentas). Propuestas: escala 2× con un CRT (~6–7 ms menos), no rehacer el filtro en campos repetidos, señal del cable en un SPE (1–3,5 ms). Ver «Filtros CRT en el RSX» abajo |
+| 2026-10-13 | 6f2a888 | **Filtros CRT del autor en el RSX** (máscara de sombra y CRT con cable RGB, S-Video y compuesto), ciclo de 20 s por filtro, GoldenEye a 720p y 1080p, Perfect Dark y Conker a 1080p | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00109 «Salsa64 filtros», respaldos del autor, escala 5× | sin filtro: RSX ocupado 39–44 %, 59–60 cuadros presentados por segundo | GoldenEye, ms del RSX por cuadro a 720p / 1080p: **máscara 6,7 / 9,6, RGB 8,4 / 11,9, S-Video 9,6 / 13,0, compuesto 11,9 / 15,4**; a 1080p se presentan 51, 40, 36 y 30 cuadros por segundo | Reducir la superficie de 5× cuesta 3,1 ms en todos (la lectura, no las cuentas). Medido con Zelda en pausa: reducir 3,12 ms a 5×, 1,73 a 3×, 0,13 a 1×. Propuestas: escala 2× con un CRT (~5–6 ms menos), reducir en dos pasadas o con tiles, no rehacer el filtro en campos repetidos, señal del cable en un SPE (1–3,5 ms). Ver «Filtros CRT en el RSX» abajo |
 | 2026-10-10 | 419731a → c14268c | Intérprete, `bench` mixto | PS3 real: Slim CECH-3011A, HFW 4.91 + HEN | 8,7 MIPS | 17,1 MIPS (×2,0) | Estado del bucle en registros, sin llamadas por instrucción, r0 sin escribir, tablas de `switch` sin `lwax`, FPU rápida sin pasar valores por memoria. Desglose en «Líneas base de la Fase 1» |
 | 2026-10-10 | c14268c → 147d5ac | Intérprete, `bench` mixto | PS3 real (mismo equipo) | 17,1 MIPS | 21,2 MIPS (×1,24; ×2,4 desde 8,7) | Un solo despacho (SPECIAL en la misma tabla), FPU rápida sin comparaciones de punto flotante para clasificar, movimientos de COP1 en el bucle |
 | 2026-10-10 | 940f6f8 | Frontend con vitest, emulación por campo | PS3 real (mismo equipo) | 65,6 ms (15,2 campos/s) | 35,0 ms (28,3 campos/s; ×1,9) | Detección de bucles de espera (`src/cpu/idle.c`): 45,6 % del tiempo saltado. Medición A/B automática del frontend, 10 s cada una, dos corridas iguales (65,56/65,66 → 34,97/34,84 ms). Lo que queda es el dibujo de vitest con el CPU |
@@ -98,10 +98,14 @@ S-Video 9,42, compuesto 11,59.
   señal) no cambia.
 - **Reducir es la excepción**: 3,1 ms donde sus 27 instrucciones por píxel
   darían 0,17. No cambia con la escena (3,11–3,13 ms en todas las ventanas
-  de GoldenEye a 1080p) y baja a 0,10 ms cuando la imagen llega a 1×: es
-  leer la superficie de 5× (7,6 MB a ~2,5 GB/s). Esa superficie es lineal
-  (rsxkit no usa las regiones con tiles del RSX), y cada píxel de la salida
-  lee un bloque de 5 × 5 de filas distintas.
+  de GoldenEye a 1080p) ni con el juego en pausa (Zelda con el menú de
+  pausa, sin nada del juego en el RSX: 3,13), así que no es esperar al
+  render del juego: es leer la superficie de 5× (7,6 MB a ~2,5 GB/s). Con
+  la misma imagen de Zelda, cambiando la escala desde la pausa: **5× 3,12
+  ms, 3× 1,73, 1× 0,13**. Crece casi en línea con la escala y no con el
+  área: lo que cuesta es cuántas filas distintas lee cada píxel de la
+  salida (un bloque de f × f de una superficie lineal de 6400 bytes por
+  fila; rsxkit no usa las regiones con tiles del RSX).
 - **Lo que pasa en la pantalla** (GoldenEye; «presentados» por segundo,
   con los campos de la N64 que se emularon):
 
@@ -137,13 +141,13 @@ S-Video 9,42, compuesto 11,59.
 la imagen a la resolución de la N64; la escala interna solo le llega como
 supermuestreo (la reducción promedia f × f muestras por píxel).
 
-- Lo que se ahorra: *reducir* pasa de 3,1 ms a ~0,1 ms a 1× (medido con la
-  imagen de Conker) y a ~0,5 ms estimados a 2× (6,25 veces menos datos).
-  El *render del juego* (5,5–5,7 ms por campo a 5×) tiene 6,25 veces menos
-  píxeles a 2× y 25 veces menos a 1×; lo que va por dibujo (200–380 por
-  tarea) no baja. Estimado: 3–4 ms menos a 2×. En total, **~6–7 ms menos
-  por campo a 2×**: a 1080p con el compuesto, de ~21 ms (5,7 + 15,4) a
-  ~14–15, dentro de los 16,7 ms; los cuatro filtros cabrían.
+- Lo que se ahorra: *reducir* pasa de 3,12 ms a 0,13 a 1× y a 1,73 a 3×
+  (medido) y a ~0,9 a 2× (interpolado). El *render del juego* (5,5–5,7 ms
+  por campo a 5×) tiene 6,25 veces menos píxeles a 2× y 25 veces menos a
+  1×; lo que va por dibujo (200–380 por tarea) no baja. Estimado: 3–4 ms
+  menos a 2× (falta medirlo con el juego corriendo). En total, **~5–6 ms
+  menos por campo a 2×**: a 1080p con el compuesto, de ~21 ms (5,7 + 15,4)
+  a ~15–16, justo dentro de los 16,7 ms; los cuatro filtros cabrían.
 - Si se nota: prueba en la Mac con una escena sintética (bordes, un cable
   de 0,3 y uno de 0,6 píxeles y un piso con tablero sin mipmaps),
   dibujada con 1, 2, 3 y 5 muestras por eje, reducida y pasada por
@@ -155,9 +159,10 @@ supermuestreo (la reducción promedia f × f muestras por píxel).
   CRT en las tres. Imagen de la comparación:
   `build/ps3-1/escala-crt-1x-2x-5x.png` (fuera de git; columnas 1×, 2× y
   5×; filas RGB y compuesto).
-- Se puede medir ya, sin paquete nuevo: Opciones → escala 2× (y después
-  1×) con `filtros-ciclo`, GoldenEye a 1080p. El log da reducir, emulación,
-  ocupado y presentados.
+- Se puede medir ya, sin paquete nuevo: la escala se cambia desde la
+  pausa (Imagen) o en Opciones; con `filtros-ciclo`, GoldenEye a 1080p a
+  5×, 3×, 2× y 1×, jugando. El log da reducir, emulación, ocupado y
+  presentados.
 - Cambio propuesto (chico): una escala propia para cuando hay un CRT (2×
   por omisión, 1× para quien prefiera la imagen sin supermuestreo, como
   la consola), que se aplica al elegir el filtro y se deshace al quitarlo,
@@ -203,13 +208,17 @@ textura.
   (`frame_phase` = 0). Volver a presentar el resultado anterior (o no
   hacer el flip) en los campos repetidos ahorra entre la mitad y dos
   tercios del filtro en esos juegos; nada en los que van a 60.
-- **Regiones con tiles del RSX** (`gcmSetTileInfo`) para las superficies
-  del RDP: ninguna superficie las usa hoy. Podrían bajar reducir y el
-  propio render a 5×. A medir.
+- **(d) Reducir más barato sin bajar la escala.** Como el costo va por
+  filas leídas, dos pasadas (primero a lo ancho, 1600 × 1185 → 320 × 1185,
+  leyendo filas seguidas; después a lo alto, sobre la tabla chica) o la
+  superficie del RDP en una región con tiles del RSX (`gcmSetTileInfo`;
+  hoy ninguna superficie las usa, y también podría abaratar el propio
+  render a 5×) deberían bajar buena parte de los 3,1 ms conservando el
+  supermuestreo. Es barato de probar; a medir.
 
-**Orden recomendado:** (a) primero (pocas líneas, todos los filtros, ~6–7
-ms); (c) también es barato; (b) solo si el compuesto a 1080p sigue sin
-caber después de (a) y (c).
+**Orden recomendado:** (a) y (d) primero (pocas líneas, todos los
+filtros); (c) también es barato; (b) solo si el compuesto a 1080p sigue
+sin caber después de esas.
 
 ## Quitarle trabajo al PPE: el hilo 1 y la tarea JPEG (2026-10-12)
 

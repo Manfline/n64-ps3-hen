@@ -31,16 +31,19 @@ en docs/filtros.md.
   por cuadro a 720p / 1080p, máscara 6,7 / 9,6, RGB 8,4 / 11,9, S-Video
   9,6 / 13,0, compuesto 11,9 / 15,4. Con el juego (5,5–5,7 ms por campo), a
   720p caben la máscara y RGB; a 1080p se presentan 51, 40, 36 y 30 cuadros
-  por segundo (la emulación no se frena). Reducir la superficie de 5× cuesta
-  3,1 ms en todos. Lo dibujado en la consola coincide con la referencia como
-  en RPCS3 (cables: a 1/255 o menos en el 99,0–99,7 % contra el modelo del
-  RSX), y la comprobación de las tablas fp16 en la consola da error 0,0010.
+  por segundo (la emulación no se frena). Reducir la superficie de 5×
+  cuesta 3,1 ms en todos (no es esperar al juego: en pausa da lo mismo).
+  Lo dibujado en la consola coincide con la referencia como en RPCS3
+  (cables: a 1/255 o menos en el 99,0–99,7 % contra el modelo del RSX), y
+  la comprobación de las tablas fp16 en la consola da error 0,0010.
 - **Propuestas para bajar el costo** (sin implementar, con estimados en
-  docs/perf-log.md): escala 2× cuando hay un CRT (~6–7 ms menos por campo;
-  en una escena sintética casi no se nota, 1× sí), no rehacer el filtro en
-  los campos que repiten imagen (GoldenEye y Perfect Dark dibujan 20–30 por
-  segundo) y la señal y decodificación de los cables en un SPE (1–3,5 ms
-  menos, solo S-Video y compuesto).
+  docs/perf-log.md): escala 2× cuando hay un CRT (~5–6 ms menos por campo;
+  reducir mide 3,12 ms a 5×, 1,73 a 3× y 0,13 a 1×; en una escena
+  sintética 2× casi no se nota, 1× sí), reducir en dos pasadas o con las
+  regiones con tiles del RSX, no rehacer el filtro en los campos que
+  repiten imagen (GoldenEye y Perfect Dark dibujan 20–30 por segundo) y la
+  señal y decodificación de los cables en un SPE (1–3,5 ms menos, solo
+  S-Video y compuesto).
 
 ## 2026-10-12 (cierre del día) — Para retomar
 
