@@ -278,6 +278,21 @@ static struct {
 	sys_ppu_thread_t tid;
 	sys_sem_t sem;
 } rprof;
+/* Muestreo por tiempo del recompilador (rec_sample.h; archivo `muestreo`):
+ * un hilo de prioridad SAMPLE_PRIO, por debajo de emulación y presentación
+ * (corre en el hilo de hardware que esté libre: el de presentación duerme
+ * el 85 %), lee cada SAMPLE_US dónde está el hilo de emulación. Al cerrar el
+ * juego, los 30 bloques con más muestras van al log. */
+#define SAMPLE_PRIO 1100
+#define SAMPLE_US   200u
+static struct salsa64_rec_sample *rec_sample;  /* ~1 MB, solo con el archivo */
+static struct {
+	bool on;
+	volatile int stop;
+	sys_ppu_thread_t tid;
+	uint64_t t0;
+	struct salsa64_rec_sample_prev prev;  /* para el reparto de cada ventana de estadísticas */
+} rsmp;
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
 static struct salsa64_save save;
 static struct savefile save_file;
@@ -1534,11 +1549,13 @@ static void emu_thread(void *arg)
 		int paced = bench.stage != 1 && bench.stage != 2;
 		if (paced) {
 			beat.emu_at = "ritmo";
+			n64.cpu.rec_mark = SALSA64_SMP_PACE;  /* muestreo (rec_sample.h) */
 			pacer_wait(&pacer, t0);
 			uint64_t tp = sysGetSystemTime();
 			emu_stats.us_pace += tp - t0;
 			t0 = tp;
 		}
+		n64.cpu.rec_mark = SALSA64_SMP_OTHER;
 		beat.emu_at = "mandos";
 		pads_apply();  /* después de la espera: lo más reciente de los mandos */
 		beat.emu_at = "campo";
@@ -1551,6 +1568,7 @@ static void emu_thread(void *arg)
 			 (n64.cpu.cycles - c0) - (n64.cpu.idle_cycles - i0), gfx_spu.sleep_us + jpeg_spu.sleep_us - s0,
 			 h1.load && h1.load_phase == ph0 ? (int)ph0 : -1);
 		uint64_t t1 = sysGetSystemTime();
+		n64.cpu.rec_mark = SALSA64_SMP_OTHER;
 		beat.emu_at = "fin del campo";
 		pif_edges_note();
 		log_unknown_gbi();
@@ -2117,6 +2135,11 @@ static void stats(uint64_t now)
 			    (unsigned long long)st->vt_probes, (unsigned long long)st->fr_dep,
 			    (unsigned long long)st->fr_twins, (unsigned long long)st->fr_exits,
 			    (unsigned long long)st->cu1_exits, (unsigned long long)st->interp_steps);
+		if (rsmp.on) {
+			char text[320];
+			salsa64_rec_sample_split(rec_sample, &rsmp.prev, text, sizeof text);
+			salsa64_log("%s", text);
+		}
 		if (rprof.on)
 			salsa64_log("perfil del recompilador: %u entradas (%u calientes, %u sin lugar) y %u sitios de salida "
 				    "(%u sin lugar), %llu bloques en la zona caliente (%u de %u KB en la mitad %u, %llu no "
@@ -2408,6 +2431,64 @@ static uint32_t profile_hot_kb(bool *sites)
 
 static void profile_io_thread(void *arg);
 
+/* ---- Muestreo por tiempo (rec_sample.h) ------------------------------------------- */
+
+static void sample_thread(void *arg)
+{
+	(void)arg;
+	while (!rsmp.stop) {
+		sysUsleep(SAMPLE_US);
+		salsa64_rec_sample_tick(rec_sample, &n64.cpu);
+	}
+	sysThreadExit(0);
+}
+
+static void sample_line(void *ctx, const char *text)
+{
+	(void)ctx;
+	salsa64_log("%s", text);
+}
+
+/* Con el archivo `muestreo` y el recompilador activo: la tabla, el hilo y
+ * rec.sample (desde entonces cada bloque compilado deja su id al entrar). */
+static void sample_open(void)
+{
+	if (!use_rec || !salsa64_ps3_rec_sample_wanted())
+		return;
+	if (!rec_sample && !(rec_sample = memalign(128, sizeof *rec_sample))) {
+		salsa64_log("muestreo del recompilador: sin memoria para la tabla (%u KB)", (unsigned)(sizeof *rec_sample >> 10));
+		return;
+	}
+	salsa64_rec_sample_init(rec_sample);
+	memset(&rsmp, 0, sizeof rsmp);
+	rec.sample = rec_sample;
+	if (sysThreadCreate(&rsmp.tid, sample_thread, NULL, SAMPLE_PRIO, 0x4000, THREAD_JOINABLE, (char *)"salsa64_muestreo") !=
+	    0) {
+		rec.sample = NULL;
+		salsa64_log("muestreo del recompilador: no se pudo crear el hilo");
+		return;
+	}
+	rsmp.on = true;
+	rsmp.t0 = sysGetSystemTime();
+	salsa64_log("muestreo del recompilador: una muestra cada %u µs desde un hilo de prioridad %d (archivo muestreo); "
+		    "la entrada de cada bloque deja su id (2 palabras)",
+		    SAMPLE_US, SAMPLE_PRIO);
+}
+
+/* Al cerrar el juego, con el hilo de emulación ya terminado. */
+static void sample_close(void)
+{
+	u64 rv;
+	rsmp.stop = 1;
+	sysThreadJoin(rsmp.tid, &rv);
+	double secs = (sysGetSystemTime() - rsmp.t0) / 1e6;
+	salsa64_log("cierre: muestreo: %llu muestras en %.1f s (%.0f por segundo; pedidas %.0f)",
+		    (unsigned long long)rec_sample->ticks, secs, secs > 0 ? rec_sample->ticks / secs : 0.0, 1e6 / SAMPLE_US);
+	salsa64_rec_sample_report(&rec, 30, sample_line, NULL);
+	rec.sample = NULL;
+	rsmp.on = false;
+}
+
 /* Al abrir un juego, con el recompilador ya iniciado: carga su perfil (o
  * empieza uno), marca los calientes y lo conecta. */
 static void profile_open(const uint8_t *rom)
@@ -2579,6 +2660,8 @@ static void game_close(void)
 		salsa64_gfx_spu_shutdown(&gfx_spu);
 		salsa64_log("cierre: SPE de la HLE gráfica detenido (%u tareas)", gfx_spu.tasks);
 	}
+	if (rsmp.on)
+		sample_close();
 	if (rprof.on)
 		profile_close();
 	if (use_rec) {
@@ -2729,7 +2812,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		salsa64_log("páginas: RDRAM %u KB, rec %u KB, n64 %u KB, caché de código %u KB, pila %u KB (0 = sin dato)",
 			    page_kb(rdram), page_kb(&rec), page_kb(&n64), page_kb(salsa64_ps3_rec_cache()),
 			    page_kb(__builtin_frame_address(0))),
-		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x%s%s%s%s%s",
+		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x%s%s%s%s%s%s",
 			    SALSA64_REC_CACHE_BYTES >> 20, salsa64_ps3_rec_cache(), rec.calls_near ? "con bl" : "por mtctr",
 			    rec.opts, rec.prof ? ", con perfil" : "",
 			    rec.opts & SALSA64_REC_OPT_LEGACY ? ", camino viejo (jit-viejo)" : "",
@@ -2738,6 +2821,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 			    rec.opts & SALSA64_REC_OPT_NO_EVICT ? ", sin tramos (jit-sin-tramos)" : "",
 			    rec.opts & SALSA64_REC_OPT_WIDE ? ", código ancho (jit-ancho)" : "");
 	profile_open(rom);
+	sample_open();
 
 	/* overscan.cfg: en cada juego (se cambia desde las Opciones del menú). */
 	load_overscan();

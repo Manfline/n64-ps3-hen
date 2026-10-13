@@ -2491,6 +2491,10 @@ static uint32_t emit_block(struct ctx *c, uint32_t base, uint32_t limit)
 		E(c, ppc_addi(T_Y, T_Y, 1));
 		E(c, ppc_stw(T_Y, lo, T_X));
 	}
+	if (rec->sample && rec->cur_id && !temp) {  /* muestreo (rec_sample.h): el bloque en curso */
+		E(c, ppc_li(0, (int16_t)rec->cur_id));
+		E(c, ppc_sth(0, OFF(rec_cur), R_CPU));
+	}
 	for (unsigned r = 1; c->borrowed && r < 32; r++)  /* fijos prestados: a cpu->gpr */
 		if (c->borrowed & BIT(r))
 			E(c, ppc_std(pin_ppc(r), off_reg(r), R_CPU));
@@ -2657,6 +2661,8 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 		rec->placed_hot = hot;
 		if (pent)
 			salsa64_rec_profile_set_words(rec->profile, pent, words);
+		if (rec->sample && rec->cur_id)
+			salsa64_rec_sample_compiled(rec->sample, rec->cur_id, words, rec->nbuf[SEC_HOT]);
 	}
 	if (rec->prof && rec->prof->blocks && rec->cur_id && !temp) {
 		struct salsa64_rec_prof_block *pb = &rec->prof->blocks->info[rec->cur_id];

@@ -152,6 +152,7 @@ static int run_suites(void (*print)(const char *line), struct salsa64_rec *rec, 
 		{ "osd", t_suite_osd },
 		{ "pausectl", t_suite_pausectl },
 		{ "perfil", t_suite_rec_profile },
+		{ "muestreo", t_suite_rec_sample },
 	};
 	char line[256];
 

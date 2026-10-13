@@ -511,6 +511,76 @@ Resultado en el host (mismo volcado de GoldenEye, pesado por ejecuciones;
 las cuentas de abajo descuentan las 8 palabras por bloque del contador del
 perfil, que la PS3 no lleva): ver docs/perf-log.md, «Código compacto».
 
+#### Ideas anotadas para después (2026-10-13; de docs/cache-ppe.md y del autor)
+
+Por evaluar con el muestreo por tiempo y el volcado, en este orden de
+costo/beneficio; ninguna está hecha:
+
+- **Cambiar datos por trabajo** (sobra cálculo y falta caché; el camino
+  lento compartido ya es eso): (a) no traducir lo tibio, bloques con pocas
+  ejecuciones en un intérprete compacto o código enhebrado, para que el
+  código traducido vivo sea menor (docs/cache-ppe.md 3.8); (b) estructuras
+  de la ktlb más chicas aunque cuesten un cálculo más, si las actuales
+  desbordan la caché de datos (3.6); (c) secuencias repetidas en lo
+  caliente a subrutinas compartidas con un salto de costo aceptable (la
+  prueba de KSEG0 de 4 palabras y la carga ya están cerca del mínimo; las
+  candidatas son la entrada de bloque y la FPU en línea).
+- **Precarga del sucesor probable**: con los sucesores del perfil
+  (rec_profile.h), emitir al entrar a un bloque caliente una precarga del
+  código del sucesor (`icbt`, o lo que el PPE ofrezca sin microcódigo) y de
+  la línea de datos o de la ktlb que va a tocar (`dcbt`); medir con el
+  muestreo si baja el tiempo por instrucción sin subir el tamaño caliente
+  (3.5).
+- **Bench de huella** (docs/cache-ppe.md, sección 5): cadenas sintéticas de
+  bloques que ocupen 16 KB … 16 MB de PPC, para dibujar la curva L1 → ERAT
+  → L2 → XDR en la PS3 y saber en qué régimen está cada juego; junto con el
+  A/B de `jit-ancho`.
+- Descartado: páginas de 1 MB para la caché de código (el ERAT cubre 4 KB
+  por entrada aunque la página sea grande).
+
+### Muestreo por tiempo desde el otro hilo (2026-10-13)
+
+Código: `src/cpu/rec_sample.c` y `rec_sample.h`; el frontend lo enciende con
+el archivo `/dev_hdd0/salsa64/muestreo` y en el host `SALSA64_REC_SAMPLE=1`
+(salsa64-run, con un hilo propio). Por qué: el perfil persistente cuenta
+entradas a bloques, y eso engaña (los más entrados son los de 2–4
+instrucciones); lo que cuesta es tiempo, y sin el PMU del Cell la forma de
+medirlo es muestrear.
+
+- El hilo que emula deja dos bytes en `struct salsa64_cpu`: `rec_cur`, el id
+  del bloque que corre (lo escribe la entrada de cada bloque, `li` + `sth`,
+  dos palabras que solo se emiten con el muestreo puesto al compilar; los
+  bucles no vuelven a pasar por ahí), y `rec_mark`, 0 en código generado o
+  la categoría de lo que hace fuera de él: la rutina compartida del camino
+  lento al llamar a C, el despachador, el intérprete, los eventos, compilar,
+  los bucles de espera, el ritmo (duerme) y lo demás del hilo. Los marca el
+  preámbulo (entrada, salida común, `slow_rtn`) y el despachador en C.
+- Un hilo de prioridad 1100 (por debajo de emulación, 1000, y presentación,
+  1001: corre en el hilo de hardware que esté libre, el de presentación
+  duerme el 85 %) lee los dos bytes cada 200 µs y suma una muestra al
+  bloque (`samples[id]`) o a la categoría. Al morir un bloque, o al informar,
+  sus muestras pasan a una tabla por dirección virtual (16 384 entradas,
+  índice abierto): un bloque recompilado varias veces suma todo bajo su
+  dirección, con las palabras de PPC (y las calientes) del último compilado
+  ahí. Costo para el hilo que emula: ~0,13 ms por ms de trabajo del otro
+  hilo, y una muestra son decenas de ciclos (5000 por segundo); las dos
+  palabras por entrada a bloque son el único costo en el camino caliente.
+- Al log: cada ventana de 5 s el reparto por categoría; al cerrar el juego,
+  el total (muestras, % en código generado, palabras por instrucción pesadas
+  por muestras) y los 30 bloques con más muestras: dirección, muestras, % del
+  tiempo y del nativo, instrucciones MIPS, palabras de PPC (calientes). Con
+  el perfil de entradas de la PS3 (`perfiles/*.prf`) se compara por
+  dirección: un bloque con más tiempo del que dicen sus entradas × palabras
+  espera memoria (fallos de caché o de ERAT).
+- Lo que no puede dar: en qué parte del cuerpo de un bloque está el hilo
+  (desde usuario no se lee el pc nativo del otro hilo). Sí distingue el
+  cuerpo del bloque, los caminos lentos en C y el resto del emulador.
+- Carreras: el hilo que muestrea incrementa contadores que el que emula lee
+  y pone a cero al plegar; se puede perder una muestra en la ventana. Es
+  estadística. La prueba `t_suite_rec_sample` (tests/unit/test_rec_sample.c)
+  cubre la clasificación, el plegado por dirección con ids reutilizados y
+  el informe.
+
 ### Memoria
 
 Camino rápido: `va >> log2(rdram)` vale lo mismo para KSEG0 y KSEG1 tras un

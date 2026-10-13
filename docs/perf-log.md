@@ -1096,9 +1096,25 @@ En la fría, lo que queda por acceso: el camino lento (`li`, `bl`, `bne`,
 pendientes de la instrucción (3 y 5–6, compartidas con lo demás que salga
 en esa instrucción), más el trampolín del bloque (4, una vez).
 
-**PS3 real:** pendiente. Protocolo: GoldenEye en la presa 2 min, Perfect
-Dark intro a 5× hasta la segunda escena, SM64 y Zelda 30 s; A/B con el
-mismo paquete creando `/dev_hdd0/salsa64/jit-ancho` (el código de antes).
+**PS3 real, primera corrida** (2026-10-13, Slim CECH-3011A, HFW 4.91 + HEN;
+paquete SLSA00106 «Salsa64 compacto» con main b93d4ce fusionado; una sola
+ejecución de la app; sin `perfil`, así que el costo es por instrucción
+emulada en total, `emulación × campos/s / MIPS`, en las ventanas de 5 s con
+MIPS ≥ 40 y espera ≤ 35 %; `jit-ancho` = el código de antes con el mismo
+binario):
+
+| | Compacto | Ancho (`jit-ancho`) | |
+|---|---|---|---|
+| Perfect Dark, intro a 5×, segunda escena (ventanas pesadas) | 15,2 / 14,5 / 16,9 / 15,2 ns → **15,4** | 16,5 / 15,5 / 16,1 → 16,0 | −4 % |
+| Perfect Dark, primera escena pesada | 10,6 | 11,3 | −7 % |
+| GoldenEye en la presa | **sin medir**: la corrida compacta duró 30 s (una ventana pesada: 13,6 ns a 67,7 MIPS) | 16,7 / 19,3 / 17,5 / 17,2 / 17,7 (y 11,3 al entrar): como la base del día anterior (17,15) | pendiente de repetir 2 min |
+| SM64 y Zelda OoT, 30 s | 59,7 y 59,5 campos/s (4,4 y 6,8 ms de emulación por campo) | — | sin regresión |
+
+Las escenas no son idénticas entre corridas (el autor juega); por eso se
+compara el costo por instrucción y no los campos/s. Lo que falta: GoldenEye
+compacto 2 min (y con `perfil`, el desglose nativo / llamadas a C), y el
+muestreo por tiempo (docs/rec-ppe.md, «Muestreo por tiempo») para ver qué
+bloques se llevan el tiempo antes y después.
 ### Perfil persistente y zona caliente (2026-10-12, rama fervent-noyce)
 
 Diseño en docs/rec-ppe.md, «Perfil persistente y bloques calientes». Lo que

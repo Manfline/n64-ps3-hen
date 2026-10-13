@@ -358,6 +358,8 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	if (rec->opts & SALSA64_REC_OPT_PIN)
 		for (unsigned k = 0; k < SALSA64_REC_PIN_N; k++)
 			w[n++] = ppc_ld(SALSA64_REC_PIN_PPC + k, OFF(gpr) + 8 * salsa64_rec_pin[k], 31);
+	w[n++] = ppc_li(0, SALSA64_SMP_NATIVE);  /* muestreo (rec_sample.h): en código generado */
+	w[n++] = ppc_stb(0, OFF(rec_mark), 31);
 	w[n++] = ppc_mtctr(4);
 	w[n++] = PPC_BCTR;
 
@@ -400,6 +402,8 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 
 	w[n++] = ppc_std(29, OFF(cycles), 31);
 	w[n++] = ppc_stw(4, OFF(rec_kind), 31);
+	w[n++] = ppc_li(0, SALSA64_SMP_DISPATCH);  /* muestreo: de vuelta en C */
+	w[n++] = ppc_stb(0, OFF(rec_mark), 31);
 	if (rec->opts & SALSA64_REC_OPT_PIN)
 		for (unsigned k = 0; k < SALSA64_REC_PIN_N; k++)
 			w[n++] = ppc_std(SALSA64_REC_PIN_PPC + k, OFF(gpr) + 8 * salsa64_rec_pin[k], 31);
@@ -540,6 +544,8 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	 *   3  una excepción: r4 = el código; quien llama sale siempre. */
 	rec->slow_rtn = n;
 	n = pre_slow_prep(w, n);
+	w[n++] = ppc_li(0, SALSA64_SMP_SLOW);       /* muestreo: camino lento en C */
+	w[n++] = ppc_stb(0, OFF(rec_mark), 31);
 	w[n++] = ppc_rlwinm(0, 6, 20, 30, 31);      /* qué */
 	w[n++] = ppc_cmpwi(0, 0, 2);
 	uint32_t to_exec = n++, to_exc = n++;
@@ -551,6 +557,8 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	w[n++] = ppc_mr(3, 31);
 	n = pre_call(w, n, rec, rec->h_load);
 	uint32_t after_mem = n;
+	w[n++] = ppc_li(0, SALSA64_SMP_NATIVE);
+	w[n++] = ppc_stb(0, OFF(rec_mark), 31);
 	w[n++] = ppc_ld(0, OFF(rec_lr), 31);
 	w[n++] = ppc_mtlr(0);
 	w[n++] = ppc_lbz(0, OFF(redirect), 31);
@@ -571,6 +579,8 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	w[n++] = ppc_clrldi(4, 4, 32);
 	w[n++] = ppc_mr(3, 31);
 	n = pre_call(w, n, rec, rec->h_exec);
+	w[n++] = ppc_li(0, SALSA64_SMP_NATIVE);
+	w[n++] = ppc_stb(0, OFF(rec_mark), 31);
 	w[n++] = ppc_ld(0, OFF(rec_lr), 31);
 	w[n++] = ppc_mtlr(0);
 	w[n] = ppc_b((int32_t)(check - n) * 4);
@@ -579,6 +589,8 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	w[to_exc] = ppc_bc(PPC_BO_TRUE, PPC_BI(0, PPC_GT), (int32_t)(n - to_exc) * 4);
 	w[n++] = ppc_mr(3, 31);
 	n = pre_call(w, n, rec, rec->h_exception);
+	w[n++] = ppc_li(0, SALSA64_SMP_NATIVE);
+	w[n++] = ppc_stb(0, OFF(rec_mark), 31);
 	w[n++] = ppc_ld(0, OFF(rec_lr), 31);
 	w[n++] = ppc_mtlr(0);
 	w[n++] = PPC_BLR;
@@ -728,6 +740,8 @@ bool salsa64_rec_calls_near_at(const struct salsa64_rec *rec, uint32_t base)
 
 void salsa64_rec_flush_why(struct salsa64_rec *rec, enum salsa64_rec_flush_cause why)
 {
+	if (rec->sample)
+		salsa64_rec_sample_fold_all(rec);
 	if (rec->prof && rec->prof->blocks)
 		for (unsigned id = 1; id < rec->next_block; id++)
 			if (rec->blocks[id].code)
@@ -785,6 +799,8 @@ static void kill_block(struct salsa64_rec *rec, unsigned id)
 {
 	struct salsa64_rec_block *b = &rec->blocks[id];
 	bool detached = rec->x.state[id] == SALSA64_REC_X_DETACHED;  /* ya sin banderas, enlaces ni código */
+	if (rec->sample)
+		salsa64_rec_sample_fold(rec, id);
 	if (rec->prof && rec->prof->blocks)
 		salsa64_rec_prof_fold(rec->prof, id, false);
 	fold_block(rec, id);
@@ -1069,8 +1085,11 @@ static void rec_dispatch(struct salsa64_rec *rec)
 	struct salsa64_cpu *cpu = rec->cpu;
 	struct salsa64_sched *s = cpu->sched;
 	struct salsa64_rec_prof *prof = rec->prof;
+	uint8_t mark = cpu->rec_mark;
+	cpu->rec_mark = SALSA64_SMP_EVENTS;  /* muestreo (rec_sample.h) */
 	if (!prof) {
 		salsa64_sched_dispatch(s, cpu->cycles);
+		cpu->rec_mark = mark;
 		return;
 	}
 	unsigned ev = due_event(s, cpu->cycles);
@@ -1078,6 +1097,7 @@ static void rec_dispatch(struct salsa64_rec *rec)
 	salsa64_sched_dispatch(s, cpu->cycles);
 	prof->t[ev] += salsa64_rec_prof_now() - t0;
 	prof->n[ev]++;
+	cpu->rec_mark = mark;
 }
 
 /* El intérprete avanza hasta terminar un delay slot, tomar una excepción o
@@ -1092,6 +1112,7 @@ static void rec_interp(struct salsa64_rec *rec, bool to_boundary, unsigned why)
 	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0, t_ev = 0;
 	uint32_t exc = cpu->exc_count;
 	unsigned k = 0;
+	cpu->rec_mark = SALSA64_SMP_INTERP;
 	do {
 		bool ds = cpu->branch != 0;
 		salsa64_cpu_step_only(cpu);
@@ -1106,6 +1127,7 @@ static void rec_interp(struct salsa64_rec *rec, bool to_boundary, unsigned why)
 			break;
 	} while (k < 4096 && cpu->running);
 	rec->stats.interp_steps += k;
+	cpu->rec_mark = SALSA64_SMP_DISPATCH;
 	if (prof) {
 		prof->t[why] += salsa64_rec_prof_now() - t0 - t_ev;
 		prof->n[why] += k;
@@ -1147,6 +1169,7 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 	uint64_t t_run = prof ? salsa64_rec_prof_now() : 0, t0 = 0;
 
 	cpu->running = 1;
+	cpu->rec_mark = SALSA64_SMP_DISPATCH;
 	while (cpu->running) {
 		if (cpu->cycles >= s->next) {
 			rec_dispatch(rec);
@@ -1177,7 +1200,9 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 		if (!id || fr_mismatch(rec, id)) {
 			if (prof)
 				t0 = salsa64_rec_prof_now();
+			cpu->rec_mark = SALSA64_SMP_COMPILE;
 			id = block_for_fr(rec, id, pc, pa, seg);
+			cpu->rec_mark = SALSA64_SMP_DISPATCH;
 			if (prof) {
 				prof->t[SALSA64_PROF_COMPILE] += salsa64_rec_prof_now() - t0;
 				prof->n[SALSA64_PROF_COMPILE]++;
@@ -1199,8 +1224,10 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 				if (prof)
 					t0 = salsa64_rec_prof_now();
 				rec->fr = cpu->status & SALSA64_ST_FR;
+				cpu->rec_mark = SALSA64_SMP_COMPILE;
 				entry = salsa64_rec_compile(rec, pc, pa, seg, (unsigned)(s->next - cpu->cycles), true, &n,
 							    &bytes);
+				cpu->rec_mark = SALSA64_SMP_DISPATCH;
 				if (prof) {
 					prof->t[SALSA64_PROF_COMPILE] += salsa64_rec_prof_now() - t0;
 					prof->n[SALSA64_PROF_COMPILE]++;
@@ -1248,7 +1275,9 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 			/* Deja el delay slot pendiente: lo corre el intérprete. */
 			if (prof)
 				t0 = salsa64_rec_prof_now();
+			cpu->rec_mark = SALSA64_SMP_IDLE;
 			rec_idle_exit(rec, next);
+			cpu->rec_mark = SALSA64_SMP_DISPATCH;
 			if (prof) {
 				prof->t[SALSA64_PROF_IDLE] += salsa64_rec_prof_now() - t0;
 				prof->n[SALSA64_PROF_IDLE]++;

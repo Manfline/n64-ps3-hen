@@ -13,7 +13,7 @@ SAN     ?= -fsanitize=address,undefined -fno-sanitize-recover=undefined
 CFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffp-contract=off -fno-math-errno \
            -I$(ROOT)/src $(SAN) $(EXTRA_CFLAGS)
 LDFLAGS := $(SAN) $(EXTRA_LDFLAGS)
-LDLIBS  := -lm
+LDLIBS  := -lm -pthread
 
 CORE_SRCS := $(wildcard $(ROOT)/src/core/*.c $(ROOT)/src/cpu/*.c $(ROOT)/src/rsp/gfx/*.c $(ROOT)/src/rsp/audio/*.c $(ROOT)/src/rsp/jpeg/*.c $(ROOT)/src/rsp/lle/*.c) $(ROOT)/src/frontend/savefile.c $(ROOT)/src/rdp/targets.c
 HOST_SRCS := $(wildcard $(CURDIR)/*.c)

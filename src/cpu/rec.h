@@ -32,6 +32,7 @@
 #include "core/bus.h"
 #include "core/types.h"
 #include "cpu/rec_prof.h"
+#include "cpu/rec_sample.h"
 #include "cpu/rec_profile.h"
 #include "cpu/rec_tlb.h"
 
@@ -254,6 +255,10 @@ struct salsa64_rec {
 	 * (cuatro palabras en cada camino que sale; rec_profile.h). Lo deja en
 	 * true salsa64_rec_init; quien llama lo apaga después si quiere. */
 	bool profile_sites;
+	/* Muestreo por tiempo (rec_sample.h); NULL = apagado. Lo pone quien
+	 * llama después de salsa64_rec_init; con él, la entrada de cada bloque
+	 * deja su id en cpu->rec_cur. */
+	struct salsa64_rec_sample *sample;
 
 	struct salsa64_rec_stats stats;
 
