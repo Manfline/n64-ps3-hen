@@ -121,6 +121,12 @@
 #include "rsp/jpeg/jpeg.h"
 #include "rsp/lle/core.h"
 
+#include <signal.h>
+#include <unistd.h>
+#if defined(__powerpc64__) && defined(__linux__)
+#include <ucontext.h>
+#endif
+
 #define DEFAULT_CYCLES (1ull << 32)  /* ~46 s de la consola */
 #define DEFAULT_SLICE  (1ull << 20)
 #define MAX_TEXT       255
@@ -138,9 +144,79 @@ enum stop_reason {
 };
 
 static struct salsa64_n64 n64;
-static uint8_t rdram[SALSA64_RDRAM_MAX] __attribute__((aligned(128)));
+static uint8_t rdram_buf[SALSA64_RDRAM_MAX] __attribute__((aligned(128)));
+static uint8_t *rdram = rdram_buf;  /* o el principio de la ventana de fastmem (rec_host.h) */
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
 static struct salsa64_rec rec;
+
+/* fastmem (docs/fastmem.md): un acceso del código generado fuera de la RDRAM
+ * cae en la ventana sin permisos; el manejador parchea el sitio hacia su
+ * camino frío y vuelve, y la instrucción (ahora un salto) se repite. Lo que
+ * no es un sitio conocido muere como antes. Solo tiene sentido en ppc64
+ * Linux (qemu), donde corre el recompilador. */
+#if defined(__powerpc64__) && defined(__linux__)
+/* Un SIGSEGV que no es de fastmem: dónde (pc, y si es código generado, la
+ * palabra de la caché) y qué dirección, a stderr sin pasar por stdio, y
+ * morir como siempre. Para encontrar el bloque en un volcado
+ * (SALSA64_REC_DUMP=1: «bloque <pc> entrada <palabra> …»). */
+static void segv_report(uintptr_t nip, uintptr_t addr)
+{
+	char b[160];
+	int n = 0;
+	const char *h = "0123456789abcdef";
+	const char *t = "salsa64-run: SIGSEGV en pc=0x";
+	while (*t)
+		b[n++] = *t++;
+	for (int i = 60; i >= 0; i -= 4)
+		b[n++] = h[(nip >> i) & 15];
+	t = " direccion=0x";
+	while (*t)
+		b[n++] = *t++;
+	for (int i = 60; i >= 0; i -= 4)
+		b[n++] = h[(addr >> i) & 15];
+	if (rec.code && nip >= (uintptr_t)rec.code && nip < (uintptr_t)(rec.code + rec.code_words)) {
+		uintptr_t w = (nip - (uintptr_t)rec.code) / 4;
+		t = " palabra=";
+		while (*t)
+			b[n++] = *t++;
+		char d[12];
+		int m = 0;
+		do {
+			d[m++] = (char)('0' + w % 10);
+			w /= 10;
+		} while (w);
+		while (m)
+			b[n++] = d[--m];
+	}
+	b[n++] = '\n';
+	write(2, b, (size_t)n);
+}
+
+static void fastmem_segv(int sig, siginfo_t *si, void *uc_)
+{
+	ucontext_t *uc = uc_;
+	uintptr_t nip = (uintptr_t)uc->uc_mcontext.gp_regs[PT_NIP];
+	if (rec.fastmem && salsa64_rec_fastmem_fault(&rec, nip))
+		return;
+	segv_report(nip, (uintptr_t)si->si_addr);
+	signal(sig, SIG_DFL);
+}
+
+static bool fastmem_install_handler(void)
+{
+	struct sigaction sa;
+	memset(&sa, 0, sizeof sa);
+	sa.sa_sigaction = fastmem_segv;
+	sa.sa_flags = SA_SIGINFO;
+	sigemptyset(&sa.sa_mask);
+	return sigaction(SIGSEGV, &sa, NULL) == 0;
+}
+#else
+static bool fastmem_install_handler(void)
+{
+	return false;
+}
+#endif
 /* SALSA64_REC_PROF=N: el perfil del recompilador (rec_prof.h, solo cuentas en
  * el host) cada N campos y al final. */
 static struct salsa64_rec_prof prof, prof_prev;
@@ -2242,6 +2318,15 @@ int main(int argc, char **argv)
 	static const char *const fmt_names[] = { ".z64", ".v64 (convertida)", ".n64 (convertida)" };
 	enum salsa64_rom_format fmt = salsa64_rom_normalize(rom, rom_size);
 
+	void *fm_window = NULL;
+	if (use_rec && salsa64_host_env_on("SALSA64_REC_FASTMEM")) {
+		fm_window = salsa64_host_fastmem_window(ram);
+		if (!fm_window) {
+			fprintf(stderr, "salsa64-run: no se pudo reservar la ventana de fastmem\n");
+			return 3;
+		}
+		rdram = fm_window;
+	}
 	salsa64_n64_init(&n64, rdram, ram);
 	if (getenv("SALSA64_GFX_CYCLES"))
 		n64.bus.rsp.gfx_cycles = (uint32_t)strtoul(getenv("SALSA64_GFX_CYCLES"), NULL, 0);
@@ -2314,8 +2399,17 @@ int main(int argc, char **argv)
 			prof_next = prof_every;
 		}
 		rec.hot_bytes = salsa64_host_rec_hot_bytes();
+		rec.fm_window = fm_window;
 		if (!code || !salsa64_rec_init(&rec, &n64.cpu, code, salsa64_host_rec_bytes())) {
 			fprintf(stderr, "salsa64-run: el recompilador no corre en este host\n");
+			return 3;
+		}
+		if (fm_window && !rec.fastmem) {
+			fprintf(stderr, "salsa64-run: fastmem pedido pero no activo\n");
+			return 3;
+		}
+		if (!fastmem_install_handler() && rec.fastmem) {
+			fprintf(stderr, "salsa64-run: fastmem sin manejador de SIGSEGV en este host\n");
 			return 3;
 		}
 		if (salsa64_host_env_on("SALSA64_REC_SAMPLE")) {
@@ -2367,8 +2461,9 @@ int main(int argc, char **argv)
 			rec.no_link = true;
 			rec.after_exit = lockstep_check;
 		}
-		fprintf(stderr, "salsa64-run: recompilador activo%s%s; caché en %p, llamadas a C %s\n",
+		fprintf(stderr, "salsa64-run: recompilador activo%s%s%s; caché en %p, llamadas a C %s\n",
 			lockstep ? " con --lockstep" : "", rec.opts & SALSA64_REC_OPT_PIN ? ", registros fijos" : "",
+			rec.fastmem ? ", fastmem" : "",
 			code, rec.calls_near ? "con bl" : "por mtctr/bctrl");
 	}
 
@@ -2485,6 +2580,10 @@ int main(int argc, char **argv)
 			(unsigned long long)st->cu1_exits,
 			(unsigned long long)st->interp_steps, cycles ? 100.0 * (double)st->interp_steps / (double)cycles : 0.0,
 			(unsigned long long)st->exec_calls, lockstep ? "; --lockstep sin diferencias" : "");
+		if (st->fm_sites || st->fm_off)
+			fprintf(stderr, "salsa64-run: fastmem: %llu accesos sin prueba, %llu parchados tras fallar, %s\n",
+				(unsigned long long)st->fm_sites, (unsigned long long)st->fm_faults,
+				rec.fastmem ? "activo al terminar" : "apagado");
 		if (rec.prof) {
 			char text[2048];
 			memset(&prof_prev, 0, sizeof prof_prev);
@@ -2514,6 +2613,35 @@ int main(int argc, char **argv)
 			salsa64_rec_profile_detach(&rec);
 		}
 	}
+#ifdef SALSA64_MEM_CENSUS
+	{
+		const struct salsa64_mem_census *mc = &salsa64_mem_census;
+		uint64_t tlb = 0;
+		for (unsigned k = 0; k < 13; k++)
+			tlb += mc->tlb_ps[k];
+		uint64_t total = mc->kseg0 + mc->kseg1 + tlb + mc->erl + mc->x64 + mc->kseg23;
+		fprintf(stderr, "salsa64-run: censo de accesos a datos: %llu; KSEG0 %.2f %%, KSEG1 %.2f %% (%llu), por la TLB %.3f %% "
+			"(%llu; kseg2/3 %llu; fallas %llu, inválidas %llu, modificación %llu), ERL directo %llu, 64 bits %llu, "
+			"no alineados %llu; doblados a 1 GB chocan %llu, a 2 GB %llu\n",
+			(unsigned long long)total, total ? 100.0 * (double)mc->kseg0 / (double)total : 0.0,
+			total ? 100.0 * (double)mc->kseg1 / (double)total : 0.0, (unsigned long long)mc->kseg1,
+			total ? 100.0 * (double)tlb / (double)total : 0.0, (unsigned long long)tlb, (unsigned long long)mc->kseg23,
+			(unsigned long long)mc->miss, (unsigned long long)mc->invalid, (unsigned long long)mc->modified,
+			(unsigned long long)mc->erl, (unsigned long long)mc->x64, (unsigned long long)mc->misaligned,
+			(unsigned long long)mc->collide_1g, (unsigned long long)mc->collide_2g);
+		static const char *const ps_names[13] = { "4K", "8K", "16K", "32K", "64K", "128K", "256K", "512K", "1M", "2M", "4M", "8M", "16M" };
+		fprintf(stderr, "salsa64-run: censo por tamaño de página (accesos / escrituras de la TLB):");
+		for (unsigned k = 0; k < 13; k++)
+			if (mc->tlb_ps[k] || mc->tlbw_ps[k])
+				fprintf(stderr, " %s %llu/%llu", ps_names[k], (unsigned long long)mc->tlb_ps[k], (unsigned long long)mc->tlbw_ps[k]);
+		fprintf(stderr, "\nsalsa64-run: censo: ranuras de 8 MB tocadas por la TLB:");
+		for (unsigned s = 0; s < 8; s++)
+			for (unsigned b = 0; b < 32; b++)
+				if (mc->slots[s] & (1u << b))
+					fprintf(stderr, " %08X", (s << 28) | (b << 23));
+		fputc('\n', stderr);
+	}
+#endif
 	savefile_close(&save_file);
 	for (unsigned k = 0; k < state_saves.n; k++)
 		if (state_saves.field[k] > n64.bus.vi.fields) {

@@ -66,6 +66,20 @@ struct salsa64_sched;
 #define SALSA64_TLB_ENTRIES  32
 #define SALSA64_IDLE_CACHE   64   /* saltos descartados como bucle de espera (potencia de 2) */
 
+#ifdef SALSA64_MEM_CENSUS
+/* Censo de los accesos a datos del intérprete por segmento y tamaño de
+ * página de la TLB (docs/fastmem.md): solo en el host, compilando con
+ * -DSALSA64_MEM_CENSUS; salsa64-run lo imprime al terminar. */
+struct salsa64_mem_census {
+	uint64_t kseg0, kseg1, misaligned, erl, x64, kseg23, miss, invalid, modified;
+	uint64_t tlb_ps[13];      /* accesos traducidos por la TLB, por log2(página) - 12 */
+	uint64_t tlbw_ps[13];     /* escrituras de la TLB, por tamaño de página */
+	uint64_t collide_1g, collide_2g;  /* accesos por la TLB cuya dirección doblada a 1 o 2 GB cae en una imagen de la RDRAM */
+	uint32_t slots[8];        /* ranuras de 8 MB de kuseg/kseg2-3 tocadas por la TLB (bit por ranura de 32 bits de dirección) */
+};
+extern struct salsa64_mem_census salsa64_mem_census;
+#endif
+
 enum salsa64_exc {
 	SALSA64_EXC_INT  = 0,
 	SALSA64_EXC_MOD  = 1,
@@ -197,6 +211,7 @@ struct salsa64_cpu {
 	uint8_t rec_mark;        /* muestreo: 0 en código generado, o la categoría de lo que hace en C */
 	uint64_t rec_site;       /* dirección del enlace a parchear, o 0; en un bucle de espera, la instrucción del salto */
 	uint64_t rec_lr, rec_tmp;  /* las rutinas compartidas del camino lento (rec.c) guardan LR y el fin del bloque */
+	uint64_t rec_tb;           /* la base en caché de un grupo (T_HI) mientras el código generado llama a C (rec_emit.c) */
 	uint64_t rec_fw[32];       /* la palabra W de fpr[p] con signo extendido, para CVT.S.W/CVT.D.W con fcfid (rec_emit_fpu.h) */
 
 	/* Depuración: si no es NULL, se llama al tomar cada excepción (con

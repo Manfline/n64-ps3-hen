@@ -141,6 +141,7 @@
  * Lo que la ROM imprime por el ISViewer va al log.
  */
 #include <io/pad.h>
+#include <lv2/process.h>
 #include <malloc.h>
 #include <ppu-lv2.h>
 #include <ppu-types.h>
@@ -176,6 +177,7 @@
 #include "padmap.h"
 #include "pausectl.h"
 #include "platform/ps3/autotest.h"
+#include "platform/ps3/fastmem.h"
 #include "platform/ps3/gfx_spu.h"
 #include "platform/ps3/jpeg_spu.h"
 #include "platform/ps3/rsp_spu.h"
@@ -2629,6 +2631,14 @@ static void stats(uint64_t now)
 			    (unsigned long long)st->vt_probes, (unsigned long long)st->fr_dep,
 			    (unsigned long long)st->fr_twins, (unsigned long long)st->fr_exits,
 			    (unsigned long long)st->cu1_exits, (unsigned long long)st->interp_steps);
+		if (rec.fastmem || st->fm_off) {
+			uint32_t fa, fu, fs;
+			salsa64_ps3_fastmem_counts(&fa, &fu, &fs);
+			salsa64_log("fastmem: %s; %llu accesos sin prueba, %llu parchados tras fallar; ayudante: %u fallos atendidos, "
+				    "%u desconocidos, %u de SPE",
+				    rec.fastmem ? "activo" : "apagado", (unsigned long long)st->fm_sites,
+				    (unsigned long long)st->fm_faults, fa, fu, fs);
+		}
 		if (rsmp.on) {
 			char text[320];
 			salsa64_rec_sample_split(rec_sample, &rsmp.prev, text, sizeof text);
@@ -3391,6 +3401,31 @@ static void profile_close(void)
 	rprof.on = false;
 }
 
+/* Cuánto se espera al hilo de emulación al cerrar antes de rendirse. */
+#define QUIT_WAIT_US 5000000
+
+/* El hilo de emulación no responde (girando en código generado o en C):
+ * no hay cómo detenerlo desde fuera. Salir del juego por el XMB con los
+ * grupos de SPU vivos colgó la consola entera (2026-10-13): se paran los
+ * SPE que se pueden parar sin el hilo de emulación y se termina el
+ * proceso con sys_process_exit, con lo que haya quedado en el log. */
+static void forced_exit(const char *why)
+{
+	salsa64_log("cierre forzado: %s tras %u s (pc 0x%08llx, ciclos %llu, marca %u, bloque %u); se paran los SPE y se sale",
+		    why, QUIT_WAIT_US / 1000000, (unsigned long long)n64.cpu.cur_pc, (unsigned long long)n64.cpu.cycles,
+		    n64.cpu.rec_mark, n64.cpu.rec_cur);
+	audio_out_shutdown();
+	if (jpeg_on_spu)
+		salsa64_jpeg_spu_shutdown(&jpeg_spu);
+	if (lle_mode != SALSA64_LLE_OFF)
+		salsa64_rsp_spu_shutdown(&rsp_spu);
+	if (gfx_on_spu)
+		salsa64_gfx_spu_shutdown(&gfx_spu);
+	salsa64_log("cierre forzado: SPE detenidos; saliendo");
+	salsa64_log_shutdown();
+	sysProcessExit(1);
+}
+
 static void game_close(void)
 {
 	salsa64_filters_release();
@@ -3551,6 +3586,11 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	savefile_open(&save_file, &save, &n64.bus, rom, SAVES_DIR, SAVE_CFG, SALSA64_SAVE_AUTO, salsa64_log);
 
 	rec.opts = SALSA64_REC_OPT_PIN;  /* +7 % en nemu64-test (docs/perf-log.md) */
+	rec.fm_window = NULL;
+	if (salsa64_ps3_fastmem_ptr() && rdram == salsa64_ps3_fastmem_ptr()) {
+		rec.opts |= SALSA64_REC_OPT_FASTMEM;
+		rec.fm_window = rdram;
+	}
 	if (salsa64_ps3_rec_legacy_wanted())
 		rec.opts |= SALSA64_REC_OPT_LEGACY;
 	if (salsa64_ps3_rec_fpu_res_wanted())
@@ -3561,6 +3601,10 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		rec.opts |= SALSA64_REC_OPT_NO_EVICT;
 	if (salsa64_ps3_rec_wide_wanted())
 		rec.opts |= SALSA64_REC_OPT_WIDE;
+	if (salsa64_ps3_rec_no_group_wanted())
+		rec.opts |= SALSA64_REC_OPT_NO_GROUP;
+	if (salsa64_ps3_rec_fpu_inline_wanted())
+		rec.opts |= SALSA64_REC_OPT_FPU_INLINE;
 	rec.prof = salsa64_ps3_rec_prof_wanted() ? &rec_prof : NULL;
 	{
 		bool sites;
@@ -3570,18 +3614,24 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		salsa64_log("recompilador apagado (%s): intérprete", SALSA64_NOREC_FLAG);
 	else if (!(use_rec = salsa64_rec_init(&rec, &n64.cpu, salsa64_ps3_rec_cache(), SALSA64_REC_CACHE_BYTES)))
 		salsa64_log("recompilador no disponible: intérprete");
-	else
+	else {
+		if (rec.fastmem && !salsa64_ps3_fastmem_start(&rec))
+			salsa64_rec_fastmem_off(&rec);
 		salsa64_log("páginas: RDRAM %u KB, rec %u KB, n64 %u KB, caché de código %u KB, pila %u KB (0 = sin dato)",
 			    page_kb(rdram), page_kb(&rec), page_kb(&n64), page_kb(salsa64_ps3_rec_cache()),
-			    page_kb(__builtin_frame_address(0))),
-		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x%s%s%s%s%s%s",
+			    page_kb(__builtin_frame_address(0)));
+		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x%s%s%s%s%s%s%s%s%s",
 			    SALSA64_REC_CACHE_BYTES >> 20, salsa64_ps3_rec_cache(), rec.calls_near ? "con bl" : "por mtctr",
 			    rec.opts, rec.prof ? ", con perfil" : "",
 			    rec.opts & SALSA64_REC_OPT_LEGACY ? ", camino viejo (jit-viejo)" : "",
 			    rec.opts & SALSA64_REC_OPT_FPU_RES ? ", FPU residente (jit-fpu-residente)" : "",
 			    rec.opts & SALSA64_REC_OPT_COP0_EXEC ? ", COP0 por el intérprete (jit-cop0-viejo)" : "",
 			    rec.opts & SALSA64_REC_OPT_NO_EVICT ? ", sin tramos (jit-sin-tramos)" : "",
-			    rec.opts & SALSA64_REC_OPT_WIDE ? ", código ancho (jit-ancho)" : "");
+			    rec.opts & SALSA64_REC_OPT_WIDE ? ", código ancho (jit-ancho)" : "",
+			    rec.fastmem ? ", fastmem (jit-fastmem)" : rec.opts & SALSA64_REC_OPT_FASTMEM ? ", fastmem APAGADO" : "",
+			    rec.opts & SALSA64_REC_OPT_NO_GROUP ? ", sin base en caché (jit-sin-grupos)" : "",
+			    rec.opts & SALSA64_REC_OPT_FPU_INLINE ? ", FPU en línea (jit-fpu-en-linea)" : rec.fpu_rtn_ok ? "" : ", FPU en línea (las rutinas no cupieron)");
+	}
 	profile_open(rom);
 	sample_open();
 
@@ -3758,9 +3808,12 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	/* Parar la emulación sin dejarla esperando un juego de búferes (si
 	 * estaba en pausa, running = 0 la suelta). */
 	running = 0;
+	u64 stop_t0 = sysGetSystemTime();
 	while (!emu_done) {
 		drain(sysGetSystemTime(), 0);
 		sysUsleep(500);
+		if (sysGetSystemTime() - stop_t0 > QUIT_WAIT_US)
+			forced_exit("la emulación no respondió al cierre");
 	}
 	u64 ret;
 	sysThreadJoin(emu_tid, &ret);
@@ -4424,10 +4477,12 @@ static void watch_thread(void *arg)
 		} else if (now - emu_t >= STALL_US && (!emu_said || now - emu_said >= STALL_LOG_US)) {
 			emu_said = now;
 			salsa64_log("latido: emulación quieta hace %.1f s en «%s» (campo %u, %u emulados, %u en cola, RSP "
-				    "%s, %u tareas gráficas terminadas, %u esperas al SPE; presentación en «%s»; pausa 0x%x)",
+				    "%s, %u tareas gráficas terminadas, %u esperas al SPE; presentación en «%s»; pausa 0x%x; "
+				    "cpu: pc 0x%08llx, ciclos %llu, marca %u, bloque %u)",
 				    (now - emu_t) / 1e6, beat.emu_at, n64.bus.vi.fields, emu_stats.fields,
 				    field_head - field_tail, n64.bus.rsp.busy ? "ocupado" : "libre", salsa64_rdp_tasks_done(),
-				    gfx_spu.waits, beat.pres_at, pause_req);
+				    gfx_spu.waits, beat.pres_at, pause_req, (unsigned long long)n64.cpu.cur_pc,
+				    (unsigned long long)n64.cpu.cycles, n64.cpu.rec_mark, n64.cpu.rec_cur);
 		}
 	}
 	sysThreadExit(0);
@@ -4499,7 +4554,15 @@ int main(void)
 	}
 
 	rdram = NULL;
-	if (file_exists(RDRAM_1M_PATH)) {
+	if (salsa64_ps3_fastmem_wanted() && salsa64_ps3_rec_wanted()) {
+		/* fastmem (docs/fastmem.md): la RDRAM al principio de una ventana de
+		 * 512 MB sin mapear; el recompilador la aprovecha si la autoprueba
+		 * pasa (más abajo, al abrir el juego). */
+		rdram = salsa64_ps3_fastmem_window(SALSA64_RDRAM_MAX);
+		if (!rdram)
+			salsa64_log("fastmem (jit-fastmem): sin ventana, la RDRAM va como siempre");
+	}
+	if (!rdram && file_exists(RDRAM_1M_PATH)) {
 		sys_mem_addr_t addr = 0;
 		if (sysMemoryAllocate(SALSA64_RDRAM_MAX, SYS_MEMORY_PAGE_SIZE_1M, &addr) == 0)
 			rdram = (uint8_t *)(uintptr_t)addr;
@@ -4557,6 +4620,7 @@ int main(void)
 		sysThreadJoin(watch_tid, &rv);
 	}
 	salsa64_log("salida normal%s", app_quit ? " («Salir del juego» del sistema)" : "");
+	salsa64_ps3_fastmem_stop();
 	salsa64_log_shutdown();
 	return status;
 }

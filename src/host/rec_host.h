@@ -60,9 +60,29 @@ static inline void *salsa64_host_rec_buffer(void)
 	return p == MAP_FAILED ? NULL : p;
 }
 
+/* fastmem (docs/fastmem.md): SALSA64_REC_FASTMEM=1. La ventana de 512 MB
+ * sin permisos con la RDRAM al principio; el resto falla con SIGSEGV y el
+ * manejador de quien llama (run.c) parchea el acceso (salsa64_rec_fastmem_fault). */
+#define SALSA64_HOST_FM_WINDOW (512u << 20)
+
+static inline void *salsa64_host_fastmem_window(size_t rdram_bytes)
+{
+	void *w = mmap(NULL, SALSA64_HOST_FM_WINDOW, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+	if (w == MAP_FAILED)
+		return NULL;
+	if (mmap(w, rdram_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) != w) {
+		munmap(w, SALSA64_HOST_FM_WINDOW);
+		return NULL;
+	}
+	return w;
+}
+
 static inline uint32_t salsa64_host_rec_opts(void)
 {
-	return (salsa64_host_env_on("SALSA64_REC_PIN") ? SALSA64_REC_OPT_PIN : 0) |
+	return (salsa64_host_env_on("SALSA64_REC_FASTMEM") ? SALSA64_REC_OPT_FASTMEM : 0) |
+	       (salsa64_host_env_on("SALSA64_REC_NO_GROUP") ? SALSA64_REC_OPT_NO_GROUP : 0) |
+	       (salsa64_host_env_on("SALSA64_REC_FPU_INLINE") ? SALSA64_REC_OPT_FPU_INLINE : 0) |
+	       (salsa64_host_env_on("SALSA64_REC_PIN") ? SALSA64_REC_OPT_PIN : 0) |
 	       (salsa64_host_env_on("SALSA64_REC_EAGER") ? SALSA64_REC_OPT_EAGER : 0) |
 	       (salsa64_host_env_on("SALSA64_REC_RARE_EXEC") ? SALSA64_REC_OPT_RARE_EXEC : 0) |
 	       (salsa64_host_env_on("SALSA64_REC_LEGACY") ? SALSA64_REC_OPT_LEGACY : 0) |

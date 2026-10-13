@@ -71,6 +71,33 @@ rc=$?
 printf '%-14s %s\n' vitest "$(grep 'vitest:' build/logs/rec-vitest.log | tail -1)"
 [ $rc -eq 0 ] || fail=1
 
+# fastmem (docs/fastmem.md): los accesos de KSEG0/KSEG1 sin prueba sobre la
+# ventana; nemu64-test suma las fallas de tests/roms/nemu64-test.fastmem.fallas
+# (direcciones no alineadas o sin extensión de signo, que en la N64 son
+# excepciones y con fastmem no) y nada más.
+log=build/logs/rec-nemu-fastmem.log
+SALSA64_REC_FASTMEM=1 SALSA64_REC_PIN=1 run "$log" build/ppc64/salsa64-run -c 4000000000 \
+	-u 'success rate)' -f 'Exception storm' -f 'panicked at' --rec $NEMU
+rc=$?
+grep "^Test '" "$log" | sed "s/^Test '\([^']*\)'.*/\1/" | LC_ALL=C sort -u >build/logs/rec-nemu-fastmem.fallas
+LC_ALL=C sort -u tests/roms/nemu64-test.fallas tests/roms/nemu64-test.fastmem.fallas >build/logs/rec-nemu-fastmem.base
+new=$(LC_ALL=C comm -13 build/logs/rec-nemu-fastmem.base build/logs/rec-nemu-fastmem.fallas)
+gone=$(LC_ALL=C comm -23 build/logs/rec-nemu-fastmem.base build/logs/rec-nemu-fastmem.fallas)
+printf '%-14s %s\n' "nemu64 fastmem" "$(grep 'success rate)' "$log" | tail -1)"
+grep 'fastmem:' "$log" | tail -1 | sed 's/^/               /'
+[ $rc -eq 0 ] || fail=1
+if [ -n "$new" ] || [ -n "$gone" ]; then
+	echo "DIFERENCIA con la línea base de fastmem:"
+	echo "$new" | sed 's/^/  nueva: /'
+	echo "$gone" | sed 's/^/  ya no falla: /'
+	fail=1
+fi
+SALSA64_REC_FASTMEM=1 run build/logs/rec-vitest-fastmem.log build/ppc64/salsa64-run -c 400000000 \
+	-u 'vitest: OK' -f 'vitest: FALLO' --rec $VITEST
+rc=$?
+printf '%-14s %s\n' "vitest fastmem" "$(grep 'vitest:' build/logs/rec-vitest-fastmem.log | tail -1)"
+[ $rc -eq 0 ] || fail=1
+
 # Estados guardados con el recompilador (gfxtest): guardar en el campo 150,
 # cargar en otra corrida (la caché del recompilador se vacía) y seguir hasta
 # el 300 da el mismo estado que de corrido, y el mismo que el intérprete.

@@ -101,4 +101,25 @@ static inline int salsa64_ps3_rec_wide_wanted(void)
 	return stat(SALSA64_RECWIDE_FLAG, &st) == 0;
 }
 
+/* Con este archivo, sin la base en caché (SALSA64_REC_OPT_NO_GROUP,
+ * docs/fastmem.md §8): cada acceso con su prueba, para el A/B. */
+#define SALSA64_RECNOGROUP_FLAG SALSA64_DATA_DIR "/jit-sin-grupos"
+
+static inline int salsa64_ps3_rec_no_group_wanted(void)
+{
+	struct stat st;
+	return stat(SALSA64_RECNOGROUP_FLAG, &st) == 0;
+}
+
+/* Con este archivo, la FPU en línea en cada sitio como hasta el 2026-10-13
+ * (SALSA64_REC_OPT_FPU_INLINE) en vez de las rutinas compartidas del
+ * preámbulo (docs/fastmem.md §9), para el A/B. */
+#define SALSA64_RECFPUINLINE_FLAG SALSA64_DATA_DIR "/jit-fpu-en-linea"
+
+static inline int salsa64_ps3_rec_fpu_inline_wanted(void)
+{
+	struct stat st;
+	return stat(SALSA64_RECFPUINLINE_FLAG, &st) == 0;
+}
+
 #endif

@@ -605,6 +605,88 @@ oficial): menú con carátulas, un truco simple, aspecto 16:9, filtros
 sencillos, menú de pausa y su salida, cambio de idioma, ajustes por juego,
 botón PS dentro del menú y del juego, y dos o tres juegos para descartar
 regresiones.
+## 2026-10-13 — Fastmem en el PPE: viabilidad, diseño y prototipo en el host (rama `quirky-solomon`, paquete SLSA00111 «Salsa64 fastmem»)
+
+Objetivo (docs/fastmem.md): que un acceso de la N64 a la RDRAM sea una
+carga o un almacenamiento del PPE sin la prueba de segmento (5 palabras
+calientes por acceso en el código compacto). Hecho hoy:
+
+- **Censo de accesos a datos** en el intérprete (`-DSALSA64_MEM_CENSUS`, 11
+  juegos): KSEG0 es el 97,9–99,97 % en todos, KSEG1 ≤ 0,6 %, por la TLB
+  solo Perfect Dark pesa (2 %, la página de 4 MB de 0x70000000) y GoldenEye
+  0,1 %; ningún acceso no alineado, ninguna colisión con una ventana doblada.
+  Por eso fastmem es solo para KSEG0/KSEG1, con una ventana de 512 MB
+  (`va & 0x1FFFFFFF`: KSEG1 cae sola en la RDRAM, sin espejo) y **no hace
+  falta el espejo de la TLB** (además lv2 mapea en 64 KB y la N64 en 4 KB).
+- **Prueba de viabilidad para la PS3** (`tests/phase0/fastmem`, paquete
+  SLSA00111): regiones de sys_mmapper, mapeo, espejo, permisos, costo por
+  lectura, y los fallos de página atrapados desde otro hilo con la
+  notificación de lv2 (327), el contexto (58) y la reanudación (57),
+  incluido parchear código generado que falló. Validada en RPCS3 (reservas,
+  mapeo y datos; ahí los fallos no se producen). **En la cola de la consola**
+  (pedido a main; protocolo: relanzar hasta «RESULTADO fastmem»).
+- **Prototipo en el host** (`SALSA64_REC_FASTMEM=1`, commit 089377a):
+  emisión sin prueba con la copia del acceso en la sección fría, tabla de
+  sitios → camino frío por generación, el fallo parchea `b camino_frío`
+  desde el manejador de SIGSEGV (qemu-user entrega el pc), apagado si una
+  entrada de la TLB choca con la ventana. vitest OK; nemu64-test 433 + 7
+  esperadas (no alineados y direcciones sin extensión de signo: excepciones
+  que fastmem no lanza; `tests/roms/nemu64-test.fastmem.fallas` y
+  `tools/test-rec.sh` las contemplan). **Expansión en GoldenEye: calientes
+  8,16 → 6,87 palabras por instrucción (−16 %)**, frías 7,40 → 10,06; 282
+  fallos parchados en 80 s de consola. Lockstep de GoldenEye hasta la presa
+  y Perfect Dark: en curso.
+- **Lado de la PS3** (`src/platform/ps3/fastmem.c`, archivo `jit-fastmem`):
+  ventana y RDRAM por sys_mmapper, hilo ayudante con la cola de eventos,
+  autoprueba al abrir el juego (localiza el pc en el contexto), estadísticas
+  cada 5 s. Sin probar en la consola: depende de lo que diga la prueba de
+  viabilidad (que lv2 avise, que el contexto traiga el pc, que los SPE
+  hagan DMA sobre la ventana).
+
+- **Corrección de main (tarde)**: en la PS3 hubo una sola corrida y 327
+  (`sys_mmapper_enable_page_fault_notification`) devolvió EINVAL desde la
+  primera llamada (los arranques que «llegaron a fallo_parche» eran mi
+  RPCS3 en el mismo receptor UDP). fastmem2 (`build/ps3-2/`) prueba 14
+  variantes de la llamada con el rc de cada una; en la cola de la consola.
+- **Base en caché** (docs/fastmem.md §8; sin fallos, exacta, encendida por
+  omisión, `jit-sin-grupos` / `SALSA64_REC_NO_GROUP=1` para el A/B): la
+  prueba de KSEG0 una vez por registro base con margen (`emit_group_head`)
+  y cada acceso del grupo `lwz d, disp(r7)`; T_HI = r7 como base, guardado
+  en `cpu->rec_tb` alrededor de las llamadas a C; si la `ktlb` no traduce,
+  el acceso de la cabeza va por C (anota la página) y se vuelve a probar.
+  Host: **GoldenEye calientes 8,16 → 7,75 (−5 %), Perfect Dark 6,84 → 6,45
+  (−6 %)**; unitarias, nemu64 (433 exacto, lockstep entero), vitest, PD y
+  GoldenEye en lockstep sin diferencias. Tres errores que encontró el
+  lockstep: grupos solapados (un solo r7), la base recompuesta con la
+  doblada tras C (mapeado por la TLB → puntero fuera de la RDRAM), y la
+  carga residente de la FPU desde T_Y.
+
+- **PS3, corrida A** (paquete d939fb46): GoldenEye presa 16,63 ns/instr
+  (v0.2.2 16,0–16,3: sin ganancia); Perfect Dark se congeló en la segunda
+  escena: la cabeza de un grupo quedó en el delay slot de un BC1FL (el
+  filtro de alineación dejaba fuera al primer acceso) y un miembro del
+  camino no tomado usó r7 sin valor. Arreglado y verificado (PD 9 G con
+  enlaces y en lockstep, GE lockstep); FCR31 en T_V (los grupos ya no se
+  cortan en COP1): GE −6 %, PD −7 % de calientes. Cierre forzado del
+  frontend si la emulación no responde en 5 s (para los SPE y sale). Rama
+  rebasada sobre v0.2.4.
+- **FPU compacta** (docs/fastmem.md §9, `src/cpu/rec_emit_fpurtn.h`): las
+  operaciones de la FPU como 38 rutinas compartidas del preámbulo (el
+  mismo código en línea con los desplazamientos en registros); el sitio son
+  5–6 palabras en vez de 35–40. Host: **GoldenEye calientes 8,16 → 5,54
+  (−32 %), Perfect Dark 6,84 → 5,22 (−24 %)** (con los grupos); exacta en
+  todo (unitarias, nemu64 y lockstep, PD y GE en lockstep). Interruptor
+  `jit-fpu-en-linea` / `SALSA64_REC_FPU_INLINE=1`. **PS3** (paquete
+  `build/ps3-4`, sin banderas): GoldenEye presa 15,66 / 15,54 ns/instr
+  (media / mediana; v0.2.2 16,03 / 16,30: −2…−4 %), Perfect Dark segunda
+  escena 14,1–14,7 contra ~15,4 (−5…−8 %). Menos que la huella del host
+  prometía (el `bl`/`blr` por operación y lo que no es el PPE); PD se ve
+  bien, GoldenEye sigue con atoros en lo pesado. Rama rebasada sobre
+  b890a7b (versión visible, gráficos, Kirby) para integrar tal cual.
+
+Pendiente: la consola (fastmem2; el A/B estricto con `jit-sin-grupos` y
+`jit-fpu-en-linea` en el mismo paquete); después registros vivos entre
+bloques y la FPU 1 a 1 (pasos 3 y 4).
 
 ## 2026-10-13 — Recompilador: código compacto, 20,2 → 15,6 palabras de PPC por instrucción MIPS (rama `sleepy-mestorf`, paquete SLSA00106 «Salsa64 compacto»)
 
