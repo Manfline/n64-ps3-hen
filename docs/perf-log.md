@@ -951,6 +951,31 @@ residente, comparado con los logs de main de la tarde):
 
 Logs en `build/ps3-logs/` de la rama (fpu-1 … fpu-8, cpu-fpu-bench*).
 
+### Perfil persistente y zona caliente (2026-10-12, rama fervent-noyce)
+
+Diseño en docs/rec-ppe.md, «Perfil persistente y bloques calientes». Lo que
+se puede saber sin la PS3: cuánto del código que corre cabe en una zona
+caliente de un tamaño dado. Perfiles generados en qemu (`salsa64-run --rec
+--profile`), entradas a bloques (no vueltas de bucle) acumuladas por
+tamaño de código de PPC de los bloques ordenados por entradas:
+
+| Zona caliente | GoldenEye hasta la presa (80 s, 14 336 bloques, 17,9 MB de código) | Perfect Dark, intro (32 s, 9351 bloques, 11,2 MB) | nemu64-test (23 510 bloques, 20,9 MB) |
+|---|---|---|---|
+| 128 KB | 116 bloques, 47,0 % de las entradas | 120 bloques, 73,6 % | 176 bloques, 93,3 % |
+| 256 KB | 229, 61,2 % | 202, 82,3 % | 329, 96,3 % |
+| 512 KB | 462, 76,8 % | 399, 89,9 % | 626, 97,4 % |
+| **768 KB** (lo que se marca con la zona de 1 MB) | **664, 83,3 %** | **577, 92,9 %** | 985, 97,9 % |
+| 1 MB | 888, 88,0 % | 784, 95,0 % | 1324, 98,2 % |
+| 2 MB | 1701, 94,6 % | 1810, 98,8 % | 2150, 98,6 % |
+| 4 MB | 3494, 98,5 % | 3414, 99,9 % | 4160, 99,0 % |
+
+GoldenEye cuenta 2,5 M entradas a bloques por segundo de consola (204 M en
+80 s) y Perfect Dark 1,2 M; el contador son cuatro palabras por entrada.
+Con la zona de 1 MB (dos mitades de 512 KB) GoldenEye marca 663 bloques
+calientes (767 KB, umbral 53 259 entradas) y Perfect Dark 576 (764 KB).
+En qemu no se mide tiempo del Cell: lo que importa (ms por campo, ns por
+instrucción del nativo) va abajo, medido en la PS3.
+
 ### Bench del intérprete tras traer la Fase 2: 21 → 14,7 MIPS (diagnóstico, 2026-10-10)
 
 En la PS3, el bench del intérprete bajó en todas las variantes al traer la
