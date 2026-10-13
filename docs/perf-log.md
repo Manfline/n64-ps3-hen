@@ -30,6 +30,7 @@ antes, después, notas.
 
 | 2026-10-12 | 8c876ac → ad18cce | **Donkey Kong 64**: la caché del recompilador ya no se vacía al cambiar Status.FR (gemelos por FR) | Mac, qemu-ppc64 (`salsa64-run --rec`, 16 s de consola, respaldo del autor) | 236 s de reloj, 1,2 MIPS; 1 284 166 bloques, 4 173 vaciados (1 340 bloques compilados por campo) | **7,5 s (×31), 38 MIPS; 8 867 bloques, 0 vaciados, 9 bloques por campo** | DK64 cambia FR en cada cambio de hilo (~260/s). 256 bloques dependen de FR, 0 gemelos |
 | 2026-10-12 | 8c876ac → ad18cce (PS3: + main da2adcd) | **Donkey Kong 64** en el frontend: intro, isla y juego, ~2 min | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00102 «Salsa64 DK64», respaldo del autor | 12,0–13,6 campos/s (20–23 %), 1,4–1,6 MIPS, emulación 65–75 ms por campo; 445 864 bloques y 959 vaciados en 30 s | **59,6–60,0 campos/s (100 %)**, 6,8–29,8 MIPS, emulación 4,0–6,5 ms por campo; 11 908 bloques, **0 vaciados**, 4 desalojos en 2 min | Una ventana a 47,9 al cargar la isla. 756 bloques dependen de FR, 0 gemelos. Zelda y SM64 al 100 % con el mismo paquete (un vaciado cada uno: cargar un estado) |
+| 2026-10-12 | 1be3ce5 → 4d75242 (rama fervent-noyce) | **Perfil persistente del recompilador y zona caliente**, GoldenEye en la presa 1–2 min: mismo binario con `sin-perfil` → 1.ª sesión (cuenta) → 2.ª sesión (762 bloques calientes juntos en 1 MB) | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00104 «Salsa64 perfil», respaldo del autor | 17,15 ns por instrucción (nativo 14,82 = 47 ciclos), 49,9 campos/s en las ventanas pesadas | 1.ª: 18,19 (15,54 = 50), 45,5 campos/s; 2.ª: 18,26 (15,80 = 51), 45,8 campos/s: **sin ganancia**; contar cuesta ~5 % | Perfect Dark intro: 15,10 → 15,16 ns, igual. SM64, Zelda y Majora a 59–60 campos/s. Los perfiles (24 773 bloques, 1592 sitios y 809 sucesores en GoldenEye) quedan para los pasos siguientes. Ver «Perfil persistente y zona caliente» abajo |
 | 2026-10-11 | e0aa556 (v0.1.0) → c17e790 | **Perfect Dark, intro (azotea de dataDyne con desenfoque de movimiento)**: decodificar solo lo que muestrea cada TEXRECT y decodificación de 4 en 4 texels | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00097 «Salsa64 texturas», respaldo del usuario, sin tocar el control | 50,0–51,1 campos/s; HLE en el SPE 39,7–61,4 ms por tarea, de ellos decodificar 36,8–58,4 ms (90–143 texturas por tarea); el CPU dormía 28–40 ms por tarea esperando al SPE | **59,8–60,3 campos/s; SPE 3,3–5,0 ms por tarea (×11–17), decodificar 0,48–0,65 ms (133–181 texturas, ×77–94)**; dormida 3,0–5,5 ms | Antes a 4× automática, después a 1× pedida (la HLE no depende de la escala). Zelda, GoldenEye y Conker sin cambios. La escena siguiente (campos 4300–5500) va a 45–53 campos/s por el CPU emulado (41–63 MIPS, 18–22 ms por campo; en las ventanas más lentas casi no espera al SPE). Ver «Texturas que cambian en cada cuadro» abajo |
 
 ## Pila del SPE 0 (2026-10-12)
@@ -985,6 +986,58 @@ Con la zona de 1 MB (dos mitades de 512 KB) GoldenEye marca 663 bloques
 calientes (767 KB, umbral 53 259 entradas) y Perfect Dark 576 (764 KB).
 En qemu no se mide tiempo del Cell: lo que importa (ms por campo, ns por
 instrucción del nativo) va abajo, medido en la PS3.
+
+**PS3 real** (2026-10-12, noche; Slim CECH-3011A, HFW 4.91 + HEN; paquete
+SLSA00104 «Salsa64 perfil», 4d75242 + main 1be3ce5; una sola ejecución de la
+app, `perfil` presente, volviendo al menú entre juegos). Costo por
+instrucción ejecutada en las ventanas pesadas (MIPS > 40, espera ≤ 35 %),
+`emulación × campos/s / MIPS`; «base» es el mismo binario con `sin-perfil`:
+
+| GoldenEye, presa, 1–2 min cada una | base (`sin-perfil`) | 1.ª sesión (perfil vacío: solo cuenta) | 2.ª sesión (perfil cargado: 715 calientes marcados, 762 colocados, 1592 sitios) |
+|---|---|---|---|
+| ns por instrucción, total | 17,15 | 18,19 (+6 %) | 18,26 |
+| … código nativo | 14,82 (47 ciclos) | 15,54 (50) | 15,80 (51) |
+| … llamadas a C | 0,83 | 0,79 | 0,85 |
+| Ventanas pesadas: campos/s, MIPS, emulación | 13: 49,9, 56,9, 19,65 ms | 11: 45,5, 54,3, 21,73 ms | 7: 45,8, 54,0, 21,73 ms |
+| Todas las ventanas: campos/s, emulación | 34: 55,0, 15,82 ms | 24: 52,5, 16,93 ms | 30: 53,8, 16,77 ms |
+
+| Perfect Dark, intro a 5× hasta la segunda escena | 1.ª sesión | 2.ª sesión (555 calientes marcados, 593 colocados, 1544 sitios) |
+|---|---|---|
+| ns por instrucción, total / nativo / llamadas a C | 15,10 / 12,73 (41 ciclos) / 0,44 | 15,16 / 12,39 (40) / 0,39 |
+| Ventanas pesadas: campos/s, MIPS, emulación | 5: 47,9, 60,9, 19,36 ms | 3: 47,6, 57,9, 18,77 ms |
+| Todas: campos/s, emulación | 22: 55,7, 14,09 ms | 19: 55,9, 13,48 ms |
+
+Sin regresión en lo ligero (una sesión, perfil nuevo): Super Mario 64 58,9
+campos/s y 4,90 ms de emulación por campo (29 ventanas), Zelda OoT 59,5 y
+7,40 ms (12), Majora's Mask 59,1 y 6,23 ms (13).
+
+- **La zona caliente no se nota**: GoldenEye 15,54 → 15,80 ns por
+  instrucción de nativo entre la primera y la segunda sesión, Perfect Dark
+  12,73 → 12,39; las dos diferencias están dentro de lo que varía entre
+  corridas de la misma escena (13,8–14,9 en mediciones anteriores). Los
+  762 bloques más calientes de GoldenEye juntos en 1 MB (dos mitades de
+  512 KB, una rotación) no cambian el costo del nativo. Lo que manda no es
+  dónde está cada bloque sino cuántas líneas de caché toca por instrucción
+  (21 palabras de PPC por instrucción MIPS en los bloques calientes, arriba):
+  con eso, el conjunto que corre por campo no cabe en la L2 lo pongan donde
+  lo pongan. La zona de 256 KB (la que sí cabría con los datos) quedó sin
+  medir: `caliente = 256` en `perfil.cfg`.
+- **Contar cuesta ~5 %** en GoldenEye (nativo 14,82 → 15,54 ns; total
+  17,15 → 18,19): cuatro palabras y un almacenamiento por entrada a bloque
+  (2,5 M por segundo) más las líneas de `hits[]`. Más de lo estimado
+  (2 %); parte puede ser escena (las ventanas pesadas de la 1.ª sesión
+  fueron más pesadas: 21,7 contra 19,7 ms). Los sitios de salida de la 2.ª
+  sesión (1592 contadores en los caminos que salen) no se distinguen del
+  ruido.
+- **Lo que sí queda:** el perfil por juego con la cobertura (90 % del
+  puntaje de GoldenEye en 1098 bloques; 256 KB de código cubren el 66 %),
+  los sucesores (809 en GoldenEye, 659 en Perfect Dark) y las cuentas de
+  los condicionales: de 931 con cien pasadas o más en GoldenEye, 612 se
+  toman más del 80 % de las veces y 184 menos del 20 %; en Perfect Dark
+  580 y 203 de 927. Es la base de las pistas de salto, el sucesor contiguo
+  y la traducción por adelantado (docs/rec-ppe.md, «Siguientes pasos»).
+  Logs en `build/ps3-logs/perfil-ps3-ftp-3.log` y perfiles en
+  `build/ps3-logs/prf/` de la rama.
 
 ### Bench del intérprete tras traer la Fase 2: 21 → 14,7 MIPS (diagnóstico, 2026-10-10)
 
