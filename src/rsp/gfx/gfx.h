@@ -279,6 +279,12 @@ enum gfx_blend {
  * vértices dividiendo entre w (cada uno redondea distinto y dos dibujos
  * con la misma z se pisan al azar): usa gfx_prim_z. */
 #define GFX_DEPTH_PRIM   0x08u
+/* ZMODE_XLU con la z del primitivo: el RDP solo deja pasar lo que queda
+ * estrictamente delante (o lo que cae donde el z-buffer sigue borrado); con
+ * la misma z, no. Snap dibuja sus capas translúcidas (setos, neblina) con
+ * la misma z del primitivo que el escenario ya escrito: el RDP las
+ * descarta, con ≤ se veían como cajas. */
+#define GFX_DEPTH_LESS   0x10u
 
 /* La z de un dibujo con GFX_DEPTH_PRIM, exacta: la de su primer vértice
  * delante de la cámara, en la rejilla de G_SETPRIMDEPTH (15 bits). */

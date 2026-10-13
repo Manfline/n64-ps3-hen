@@ -31,6 +31,27 @@ RPCS3 no reproduce el error (dibuja bien Snap con y sin el arreglo): hay
 que confirmarlo en la PS3. Con el arreglo, la intro de Snap en RPCS3 sale
 como la de mupen64plus.
 
+Segunda vuelta, tras probarlo en la PS3 (orden bien, pero cajas
+translúcidas de seto y neblina sobre las colinas y una franja verde
+vertical detrás del logo de HAL; volcados de los campos 207 y 664): en la
+intro Snap nunca fija la z del primitivo (no hay G_SETPRIMDEPTH en los
+primeros 1300 campos; en el juego la fija por objeto, entre 0x7C90 y
+0x7D44), así que todo empata. Los opacos (ZMODE_OPA) pasan con el empate y
+quedan en el orden de la lista; las capas translúcidas (ZMODE_XLU: setos,
+neblina, pasto) en el RDP solo pasan si quedan estrictamente delante o
+donde el z-buffer sigue borrado (`sz < oz || oz == máx`, la comparación de
+angrylion y ParaLLEl-RDP). Con ≤ se veían enteras, con sus cajas. Ahora
+esos dibujos llevan `GFX_DEPTH_LESS` (`RSXKIT_DEPTH_LESS`: GCM_LESS; el
+rasterizador del host igual), solo con la z del primitivo: con la de cada
+píxel, la z en coma flotante no es la del RDP y un empate de más o de
+menos sería al azar (con la regla para todo XLU se perdían luces de los
+edificios de Perfect Dark). En el juego, con una z por objeto, el seto
+con z mayor que el terreno solo se ve sobre lo más lejano, como quiere el
+juego. mupen64plus (GLide64) dibuja la intro con la z de cada píxel y
+ahí sí muestra el seto detrás de las colinas y el pasto delante de Todd;
+con la regla del RDP, en «JACK and BEANS» se ve a Todd con su cámara en
+primer plano. Pendiente de confirmar en la PS3.
+
 **Kirby 64: fondos y logotipos con ruido y en ajedrez.** Kirby cambia a
 S2DEX dentro de la tarea para sus fondos CI8 (`G_BG_1CYC`) y carga la
 paleta con `G_OBJ_LOADTXTR` (uObjTxtr de tipo paleta, 256 colores en la
@@ -52,7 +73,7 @@ coeficientes en la RDRAM. Ahora se reconoce por el CRC del código. Contra
 el microcódigo real (`--lle-check-jpeg`): 98,7 % de los píxeles idénticos
 y el resto a ±1 en un canal de 5 bits, como con OoT.
 
-Verificación en el host, píxel por píxel contra `main` con las mismas
+Verificación en el host (con la segunda vuelta), píxel por píxel contra `main` con las mismas
 capturas cada 150–250 campos (intros y guiones de `docs/pads`): idénticos
 Zelda OoT (con sus 75 tareas JPEG), Kokiri, Majora, SM64, MK64, DK64,
 Banjo, Perfect Dark, GoldenEye, Conker y Paper Mario. Cambian Kirby, Snap y

@@ -81,7 +81,7 @@ _Static_assert((int)GFX_F_T0 == (int)RSXKIT_FP_T0 && (int)GFX_F_T0A == (int)RSXK
 _Static_assert((int)GFX_CULL_BACK == (int)RSXKIT_CULL_BACK && (int)GFX_CULL_FRONT == (int)RSXKIT_CULL_FRONT,
 	       "cull");
 _Static_assert(GFX_DEPTH_TEST == RSXKIT_DEPTH_TEST && GFX_DEPTH_WRITE == RSXKIT_DEPTH_WRITE &&
-		       GFX_DEPTH_DECAL == RSXKIT_DEPTH_OFFSET && GFX_DEPTH_PRIM == RSXKIT_DEPTH_CONST,
+		       GFX_DEPTH_DECAL == RSXKIT_DEPTH_OFFSET && GFX_DEPTH_PRIM == RSXKIT_DEPTH_CONST && GFX_DEPTH_LESS == RSXKIT_DEPTH_LESS,
 	       "profundidad");
 _Static_assert(GFX_FB_FRESH == RDP_TARGETS_FRESH, "la HLE y la tabla cuentan igual la antigüedad de un destino");
 

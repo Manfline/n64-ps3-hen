@@ -280,6 +280,9 @@ static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, 
 			int idx = y * RASTER_W + x;
 			if ((d->depth & GFX_DEPTH_TEST) && zb && z > zb->z[idx] + ((d->depth & GFX_DEPTH_DECAL) ? 1e-3f : 0.0f))
 				continue;
+			/* ZMODE_XLU: estrictamente delante, o el z-buffer aún borrado. */
+			if ((d->depth & GFX_DEPTH_LESS) && zb && z >= zb->z[idx] && zb->z[idx] < 1.0f)
+				continue;
 			/* Interpolación con perspectiva. */
 			float p0 = b0 * iw[0], p1 = b1 * iw[1], p2 = b2 * iw[2], pw = p0 + p1 + p2;
 			p0 /= pw, p1 /= pw, p2 /= pw;

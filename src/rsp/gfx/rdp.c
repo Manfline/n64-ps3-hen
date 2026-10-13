@@ -485,6 +485,13 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 		d->depth |= GFX_DEPTH_DECAL;
 	if ((d->depth & (GFX_DEPTH_TEST | GFX_DEPTH_WRITE)) && (g->ol & G_ZS_PRIM))
 		d->depth |= GFX_DEPTH_PRIM;
+	/* Solo con la z del primitivo: ahí el empate es exacto, como en el RDP.
+	 * Con la de cada píxel, la z en coma flotante no es la del RDP y un
+	 * empate de más o de menos sería al azar (las luces de los edificios de
+	 * Perfect Dark, capas XLU sobre la misma geometría, se perdían). */
+	if ((d->depth & (GFX_DEPTH_TEST | GFX_DEPTH_PRIM)) == (GFX_DEPTH_TEST | GFX_DEPTH_PRIM) &&
+	    (g->ol & ZMODE_MASK) == ZMODE_XLU)
+		d->depth |= GFX_DEPTH_LESS;
 	if (kind == PRIM_TRI) {
 		if ((g->geom & (G_CULL_FRONT | G_CULL_BACK)) == G_CULL_BACK)
 			d->cull = GFX_CULL_BACK;
