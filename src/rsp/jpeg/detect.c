@@ -6,13 +6,17 @@
 #include "core/rom.h"
 #include "rsp/jpeg/jpeg.h"
 
-/* Microcódigo de Zelda OoT (4 KB, sin texto de identificación): CRC-32. */
-#define OOT_UCODE_CRC  0x761D8504u
-#define OOT_UCODE_SIZE 0x1000u
+/* Microcódigo de Zelda OoT, Pokémon Stadium y Pokémon Stadium 2 (sin
+ * texto de identificación): el mismo código, de 0xAF0 bytes (termina en
+ * `jr ra` y `mtc0 $0, SP_SEMAPHORE`). La tarea pide 4 KB (ucode_size) y lo
+ * que sigue al código es lo que el juego tenga detrás en la RDRAM: distinto
+ * en cada juego. Se reconoce por el CRC-32 del código. */
+#define PS_UCODE_CODE 0xAF0u
+#define PS_UCODE_CRC  0xF055B8ABu
 
 enum salsa64_jpeg_kind salsa64_jpeg_detect(const uint8_t *ucode, uint32_t size)
 {
-	if (size == OOT_UCODE_SIZE && salsa64_crc32(ucode, size) == OOT_UCODE_CRC)
+	if (size >= PS_UCODE_CODE && salsa64_crc32(ucode, PS_UCODE_CODE) == PS_UCODE_CRC)
 		return SALSA64_JPEG_OOT;
 	return SALSA64_JPEG_NONE;
 }

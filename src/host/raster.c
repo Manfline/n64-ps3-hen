@@ -234,7 +234,7 @@ static uint32_t channel(float v, bool q5)
 }
 
 static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, const struct texsrc src[2],
-			  uint32_t *tg_rgb, bool q5, struct depth *zb)
+			  uint32_t *tg_rgb, bool q5, struct depth *zb, float prim_z)
 {
 	float sx[3], sy[3], sz[3], iw[3];
 	for (int i = 0; i < 3; i++) {
@@ -245,6 +245,8 @@ static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, 
 		sy[i] = v[i].y * iw[i];
 		sz[i] = v[i].z * iw[i];
 	}
+	if (d->depth & GFX_DEPTH_PRIM)
+		sz[0] = sz[1] = sz[2] = prim_z;
 	float area = edge(sx[0], sy[0], sx[1], sy[1], sx[2], sy[2]);
 	if (area == 0.0f)
 		return;
@@ -714,8 +716,11 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 				}
 			}
 			struct depth *zb = d->depth ? get_depth(d->zimg) : NULL;
+			/* Como el RSX (rsxkit, RSXKIT_DEPTH_CONST): la z del primitivo
+			 * exacta en todo el dibujo, no la de cada vértice entre su w. */
+			float prim_z = (d->depth & GFX_DEPTH_PRIM) ? gfx_prim_z(vtx + d->h.a, d->h.b) : 0.0f;
 			for (uint32_t i = 0; i + 3 <= d->h.b; i += 3)
-				draw_triangle(d, vtx + d->h.a + i, src, rgb[cur], tg.t[cur].bpp == 2, zb);
+				draw_triangle(d, vtx + d->h.a + i, src, rgb[cur], tg.t[cur].bpp == 2, zb, prim_z);
 			if (!drawn[cur])
 				rdp_targets_drawn(&tg, cur);
 			drawn[cur] = true;

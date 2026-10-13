@@ -5,7 +5,8 @@
  * Zelda OoT decodifica en el CPU el JPEG del fondo de una sala
  * prerrenderizada hasta los coeficientes de cada macrobloque y manda al RSP
  * tareas que descuantizan, hacen la IDCT y convierten a RGBA5551, escribiendo
- * cada macrobloque en su mismo lugar de la RDRAM. Ver jpeg.c.
+ * cada macrobloque en su mismo lugar de la RDRAM. Ver jpeg.c. Pokémon
+ * Stadium 2 usa el mismo microcódigo para sus fondos (la pantalla de título).
  *
  * Todo en enteros: el host, el PPE y el SPE (src/spu/jpeg) dan el mismo
  * resultado byte a byte.
@@ -19,7 +20,7 @@
 /* Variante del microcódigo (la reconoce core/rsp.c por el CRC-32). */
 enum salsa64_jpeg_kind {
 	SALSA64_JPEG_NONE = 0,
-	SALSA64_JPEG_OOT,     /* Zelda OoT: salida RGBA5551, sin reescalar Y/UV */
+	SALSA64_JPEG_OOT,     /* Zelda OoT y Pokémon Stadium 1 y 2: salida RGBA5551, sin reescalar Y/UV */
 };
 
 /* Bytes de entrada de un macrobloque ((modo + 4) bloques de 64

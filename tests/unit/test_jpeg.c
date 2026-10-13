@@ -52,6 +52,16 @@ static void run_task(uint32_t mode, uint32_t count, uint32_t addr)
 	salsa64_jpeg_run(SALSA64_JPEG_OOT, t_n64.bus.rdram, t_n64.bus.rdram_size, 0x80000000u | TASK_PA, &jres);
 }
 
+/* Un «microcódigo» de 4 KB en cero salvo los últimos 4 bytes de su código
+ * (0xAEC), elegidos para que el CRC-32 de los primeros 0xAF0 sea el del
+ * JPEG de OoT y Pokémon Stadium 2 (0xF055B8AB): rsp.c lo toma por ese
+ * microcódigo sin tener nada del juego. */
+static void put_fake_ucode(uint8_t *p)
+{
+	memset(p, 0, 0x1000);
+	salsa64_wr32(p + 0xAEC, 0x48A738B1u);
+}
+
 static uint16_t px(uint32_t mb_addr, int x, int y)
 {
 	return salsa64_rd16(ram(mb_addr + 32 * y + 2 * x));
@@ -197,6 +207,18 @@ static void jpeg_count_and_bad(void)
 	memset(junk, 0x5A, sizeof junk);
 	CHECK_EQ(salsa64_jpeg_detect(junk, sizeof junk), SALSA64_JPEG_NONE);
 	CHECK_EQ(salsa64_jpeg_detect(junk, 0x800), SALSA64_JPEG_NONE);
+
+	/* Se reconoce por el código (los primeros 0xAF0 bytes), sea lo que sea
+	 * lo que va detrás hasta los 4 KB que pide la tarea: OoT y Pokémon
+	 * Stadium 2 traen el mismo código con otra cosa detrás. */
+	put_fake_ucode(junk);
+	CHECK_EQ(salsa64_jpeg_detect(junk, sizeof junk), SALSA64_JPEG_OOT);
+	memset(junk + 0xAF0, 0xA5, sizeof junk - 0xAF0);
+	CHECK_EQ(salsa64_jpeg_detect(junk, sizeof junk), SALSA64_JPEG_OOT);
+	CHECK_EQ(salsa64_jpeg_detect(junk, 0xAF0), SALSA64_JPEG_OOT);
+	CHECK_EQ(salsa64_jpeg_detect(junk, 0xAEC), SALSA64_JPEG_NONE);
+	junk[0x10] ^= 1;
+	CHECK_EQ(salsa64_jpeg_detect(junk, sizeof junk), SALSA64_JPEG_NONE);
 }
 
 /* Solo DC, en todo el rango de un JPEG (±2048 niveles de 8 bits): la IDCT
@@ -254,13 +276,9 @@ static void jpeg_selftest_crc(void)
 #define UCODE_PA 0x100000u
 #define SP_STATUS_PA (0x04040000u + 4 * SALSA64_SP_STATUS)
 
-/* Un «microcódigo» de 4 KB en cero salvo sus últimos 4 bytes, elegidos para
- * que su CRC-32 sea el del de OoT (0x761D8504): rsp.c lo toma por el JPEG
- * de OoT sin tener nada del juego. */
 static void put_jpeg_task(void)
 {
-	memset(ram(UCODE_PA), 0, 0x1000);
-	salsa64_wr32(ram(UCODE_PA + 0xFFC), 0x03EE3280u);
+	put_fake_ucode(ram(UCODE_PA));
 	uint8_t *d = t_n64.bus.sp_mem + SALSA64_TASK_DMEM;
 	memset(d, 0, 64);
 	salsa64_wr32(d + 0x00, SALSA64_TASK_JPEG);

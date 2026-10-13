@@ -483,6 +483,8 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 		d->depth |= GFX_DEPTH_WRITE;
 	if ((g->ol & ZMODE_MASK) == ZMODE_DEC)
 		d->depth |= GFX_DEPTH_DECAL;
+	if ((d->depth & (GFX_DEPTH_TEST | GFX_DEPTH_WRITE)) && (g->ol & G_ZS_PRIM))
+		d->depth |= GFX_DEPTH_PRIM;
 	if (kind == PRIM_TRI) {
 		if ((g->geom & (G_CULL_FRONT | G_CULL_BACK)) == G_CULL_BACK)
 			d->cull = GFX_CULL_BACK;
@@ -582,13 +584,17 @@ static struct gfx_vertex *begin_prim(struct gfx_state *g, enum prim_kind kind, i
 		d.prim_kind = kind;
 		d.prim_tile = (uint32_t)tile;
 		g->dirty = false;
-		/* Mismo estado que el dibujo abierto: se continúa. */
+		/* Mismo estado que el dibujo abierto: se continúa. Con la z del
+		 * primitivo, también la misma z: el consumidor da una sola a
+		 * todo el dibujo (gfx_prim_z). */
 		bool same = g->have_draw &&
 			    memcmp((const uint8_t *)&d + sizeof d.h, (const uint8_t *)&g->draw + sizeof d.h,
-				   sizeof d - sizeof d.h) == 0;
+				   sizeof d - sizeof d.h) == 0 &&
+			    (!(d.depth & GFX_DEPTH_PRIM) || g->draw_prim_z == g->prim_z);
 		if (!same) {
 			gfx_flush_draw(g);
 			g->draw = d;
+			g->draw_prim_z = g->prim_z;
 			g->draw.h.a = g->vtx_count;
 			g->draw.h.b = 0;
 			g->have_draw = true;
@@ -962,7 +968,10 @@ void gfx_rdp_triangle(struct gfx_state *g, const uint32_t *w)
 			o->w = ww;
 			o->x = x * ww;
 			o->y = y * ww;
-			float zz = zb ? (z + dzde * e + dzdx * d) * (1.0f / 32768.0f) : 0.0f;
+			/* Con G_ZS_PRIM el RDP no usa la z del triángulo. */
+			float zz = !zb ? 0.0f
+				   : (g->ol & G_ZS_PRIM) ? (float)g->prim_z / 32767.0f
+							 : (z + dzde * e + dzdx * d) * (1.0f / 32768.0f);
 			o->z = (zz < 0.0f ? 0.0f : zz > 1.0f ? 1.0f : zz) * ww;
 			o->s = t[0] / 32.0f * ww;
 			o->t = t[1] / 32.0f * ww;
@@ -1073,10 +1082,16 @@ void gfx_rdp_command(struct gfx_state *g, uint32_t w0, uint32_t w1)
 		g->scissor[2] = (w1 >> 12) & 0xFFF;
 		g->scissor[3] = w1 & 0xFFF;
 		break;
-	case G_SETPRIMDEPTH:
-		g->prim_z = (uint16_t)(w1 >> 16);
+	case G_SETPRIMDEPTH: {
+		/* La z del primitivo es de 15 bits: el RDP ignora el de arriba
+		 * (Smash la pone en 0x9000 para su fondo). */
+		uint16_t z = (uint16_t)(w1 >> 16) & 0x7FFF;
+		if ((g->ol & G_ZS_PRIM) && g->prim_z != z)
+			g->dirty = true;  /* otro dibujo: una z por dibujo */
+		g->prim_z = z;
 		g->prim_dz = (uint16_t)w1;
 		break;
+	}
 	case G_RDPSETOTHERMODE:
 		g->oh = w0 & 0x00FFFFFF;
 		g->ol = w1;

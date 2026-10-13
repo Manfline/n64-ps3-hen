@@ -81,7 +81,8 @@ _Static_assert((int)GFX_F_T0 == (int)RSXKIT_FP_T0 && (int)GFX_F_T0A == (int)RSXK
 _Static_assert((int)GFX_CULL_BACK == (int)RSXKIT_CULL_BACK && (int)GFX_CULL_FRONT == (int)RSXKIT_CULL_FRONT,
 	       "cull");
 _Static_assert(GFX_DEPTH_TEST == RSXKIT_DEPTH_TEST && GFX_DEPTH_WRITE == RSXKIT_DEPTH_WRITE &&
-		       GFX_DEPTH_DECAL == RSXKIT_DEPTH_OFFSET, "profundidad");
+		       GFX_DEPTH_DECAL == RSXKIT_DEPTH_OFFSET && GFX_DEPTH_PRIM == RSXKIT_DEPTH_CONST,
+	       "profundidad");
 _Static_assert(GFX_FB_FRESH == RDP_TARGETS_FRESH, "la HLE y la tabla cuentan igual la antigüedad de un destino");
 
 struct set {
@@ -1067,6 +1068,8 @@ static bool to_rsxkit(const struct gfx_draw *g, struct set *s, int cur, rsxkit_d
 	d->blend = g->blend < sizeof blend ? blend[g->blend] : RSXKIT_BLEND_OFF;
 	d->cull = g->cull;
 	d->depth = g->depth;
+	if (g->depth & GFX_DEPTH_PRIM)
+		d->z = gfx_prim_z((const struct gfx_vertex *)(s->vtx) + g->h.a, g->h.b);
 	d->alpha_ref = g->atest ? (g->aref ? g->aref : 1) : 0;
 	d->ntex = g->ntex > 2 ? 2 : g->ntex;
 	d->fog = g->fog;
