@@ -13,7 +13,9 @@
 #ifndef SALSA64_PLATFORM_PS3_REC_CACHE_H
 #define SALSA64_PLATFORM_PS3_REC_CACHE_H
 
+#include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <sys/stat.h>
 
 #include "platform/ps3/paths.h"
@@ -22,6 +24,38 @@
  * desde el final (docs/rec-ppe.md, «Caché de código»). */
 #define SALSA64_REC_CACHE_BYTES (32u << 20)
 #define SALSA64_NOREC_FLAG SALSA64_DATA_DIR "/sin-recompilador"
+
+/* Prueba de la caché antes de usarla (issue #2: con CFW Evilnat 4.91 el
+ * hilo se quedaba trabado en salsa64_rec_init, sin matar el proceso). Un
+ * hilo aparte escribe en la caché, limpia cachés, ejecuta lo escrito, lo
+ * reescribe y lo vuelve a ejecutar, al principio y al final, y toca cada
+ * página; quien abre un juego espera su resultado hasta SALSA64_REC_PROBE_US
+ * desde que empezó. Si no volvió o falló, intérprete. Con HEN dura menos de
+ * un milisegundo y se lanza al arrancar la aplicación: al abrir un juego ya
+ * terminó.
+ *
+ * Si el fallo mata el proceso en vez de trabar el hilo, el archivo de marca
+ * queda escrito («probando <versión>»): el siguiente arranque con la misma
+ * versión no repite la prueba y va al intérprete (borrar el archivo para
+ * repetirla). docs/jit-cfw.md. */
+#define SALSA64_REC_PROBE_FILE SALSA64_DATA_DIR "/jit-prueba.txt"
+#define SALSA64_REC_PROBE_US   2000000u
+#define SALSA64_REC_PROBE_PRIO 2000  /* por debajo de todos los hilos del frontend */
+
+/* Lanza la prueba (una vez por proceso). marker: archivo de marca o NULL;
+ * tag: versión que se escribe en él. */
+void salsa64_ps3_rec_probe_start(const char *marker, const char *tag);
+/* Resultado de la prueba (la lanza sin marca si nadie lo hizo). true si la
+ * caché sirve; `why` dice qué paso no volvió o falló, o, si sirve, cuánto
+ * tardó y los atributos de su página. *first: es la primera consulta. */
+bool salsa64_ps3_rec_probe_wait(char *why, size_t n, bool *first);
+
+/* sys_memory_get_page_attribute (syscall 351). Devuelve su código (0 = bien). */
+struct salsa64_ps3_page_attr {
+	uint64_t attribute, access_right;
+	uint32_t page_size;
+};
+int32_t salsa64_ps3_page_attr(const void *p, struct salsa64_ps3_page_attr *out);
 /* Con este archivo, el perfil del recompilador por causa (src/cpu/rec_prof.h)
  * va al log con las estadísticas. */
 #define SALSA64_RECPROF_FLAG SALSA64_DATA_DIR "/perfil"

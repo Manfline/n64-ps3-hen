@@ -1,5 +1,36 @@
 # Estado
 
+## 2026-10-13 — CFW (issue #2): respaldo automático al intérprete y prueba del JIT para usuarios (rama `nifty-knuth-a7c921`, paquetes SLSA00119 «Salsa64 CFW 1» y SLSA00118 «Salsa64 JIT test»)
+
+Con CFW Evilnat 4.91 (CECH-2501A) ningún juego arrancaba: el hilo
+principal se quedaba en `salsa64_rec_init`, entre el log del guardado y
+«páginas:», con la aplicación viva. Con `sin-recompilador` los juegos
+arrancan (Majora a 60 fps con el intérprete). Lo único de ese tramo que
+toca algo distinto de la memoria de datos es la primera escritura en la
+caché de código (cola NOBITS del segmento de texto) y la syscall 351 del
+log de páginas; lo probable es lo primero: un fallo de página que con ese
+CFW deja el hilo detenido en vez de matar el proceso (docs/jit-cfw.md).
+
+- La aplicación prueba la caché en un hilo aparte al arrancar (escribir,
+  limpiar, ejecutar, reescribir, al principio y al final, y cada página) y
+  `run_game` espera el resultado hasta 2 s; si no vuelve, intérprete y una
+  línea clara en el log. Con HEN la prueba termina antes de abrir un
+  juego. Si el fallo matara el proceso, `jit-prueba.txt` lo recuerda y esa
+  versión va directo al intérprete.
+- `tests/phase0/jit-ppe` con `PRUEBA=cfw`: la prueba para usuarios, con
+  pantalla, cada vía en un hilo con tiempo límite (COLGADO sin reiniciar)
+  y reanudación tras un cierre. Además de la caché de la aplicación, prueba
+  escribir por PS3MAPI (`SET_PROC_MEM`), páginas ejecutables de PS3MAPI y
+  `sys_dbg_write_process_memory`: si con CFW la caché no se puede escribir
+  directo, alguna de esas vías puede servir al recompilador, y la prueba
+  mide su costo. Instrucciones en inglés y español en docs/jit-cfw.md.
+
+Probado en RPCS3 (no concluyente para el JIT): la prueba completa su ciclo
+con reinicios, y con un cuelgue simulado la aplicación pasa al intérprete
+a los 2 s (vitest OK) y la prueba marca COLGADO y sigue. Falta: el paquete
+de la aplicación en la PS3 con HEN (que no cambie nada) y la prueba en la
+consola con CFW.
+
 ## 2026-10-13 — Pokémon Snap, Kirby 64 y Pokémon Stadium 2: z del primitivo exacta en el RSX, paletas de S2DEX y JPEG de Stadium (rama `modest-yonath-bc13d3`, paquete SLSA00114 «Salsa64 gráficos»)
 
 Tres causas distintas detrás de lo que se veía en la PS3 real desde la

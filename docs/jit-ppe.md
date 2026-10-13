@@ -102,6 +102,11 @@ de lv2); sirve solo para validar que el programa corre.
 CFW no se puede probar con la consola disponible: la CECH-3011A tiene firmware
 mínimo de fábrica ≥ 3.60 y solo admite HEN.
 
+Con CFW Evilnat 4.91 (issue #2) el recompilador no arrancaba: el hilo se
+quedaba trabado al escribir en la caché. La aplicación ahora prueba la
+caché antes de usarla y pasa al intérprete, y hay una prueba para usuarios
+con CFW («Salsa64 JIT test»): docs/jit-cfw.md.
+
 En RPCS3 todos los mecanismos reservan memoria bien y todos caen al ejecutar,
 porque el emulador solo ejecuta código de los módulos cargados (ver
 docs/rpcs3.md); eso no dice nada del hardware. Sí valida el programa: la
