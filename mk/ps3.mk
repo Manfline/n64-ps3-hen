@@ -61,7 +61,10 @@ PPU_LDFLAGS := $(PPU_MACHDEP) -L$(PSL1GHT)/ppu/lib -Wl,-Map,$(OUT)/$(PROGRAM).ma
 SPU_CFLAGS  := -std=gnu11 -O2 -Wall -Wextra $(SPU_MACHDEP) -fstack-usage \
                -I$(PSL1GHT)/spu/include -I$(PSL1GHT)/spu/include/simdmath \
                -I$(ROOT)/src -I$(HERE) $(SPU_EXTRA_CFLAGS)
-SPU_LDFLAGS := $(SPU_MACHDEP) -L$(PSL1GHT)/spu/lib
+# Con -ffunction-sections, --gc-sections deja fuera del local store lo que
+# nadie llama (de la biblioteca de C y de las fuentes compartidas con el
+# host): 2,4–2,7 KB menos en los SPEs de la HLE gráfica, del RSP y del JPEG.
+SPU_LDFLAGS := $(SPU_MACHDEP) -Wl,--gc-sections -L$(PSL1GHT)/spu/lib
 SPU_LIBS    ?= -lsputhread
 
 CONTENTID ?= UP0001-$(APPID)_00-0000000000000000
