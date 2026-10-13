@@ -394,7 +394,9 @@ static void emit_tlbw(struct ctx *c, unsigned k)
 	call_prep(c, k);  /* Random sale de cycles */
 	E(c, ppc_mr(3, R_CPU));
 	li32u(c, 4, c->d[k].w);
+	emit_sample_mark(c, SALSA64_SMP_SLOW);
 	emit_call(c, c->rec->h_tlbw);
+	emit_sample_mark(c, SALSA64_SMP_NATIVE);
 	writeback(c, c->written);
 	E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)k + 1));
 	emit_exit_to(c, insn_pc(c, k + 1));
@@ -411,7 +413,9 @@ static void emit_eret(struct ctx *c, unsigned k)
 	fpu_flush(c);
 	call_prep(c, k);
 	E(c, ppc_mr(3, R_CPU));
+	emit_sample_mark(c, SALSA64_SMP_SLOW);
 	emit_call(c, c->rec->h_eret);
+	emit_sample_mark(c, SALSA64_SMP_NATIVE);
 	E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)k + 1));
 	E(c, ppc_lwz(0, OFF(irq_pending), R_CPU));  /* irq, redirect, abort y modo */
 	E(c, ppc_cmpwi(CR_T, 0, 0));

@@ -841,6 +841,17 @@ static void emit_exec_call(struct ctx *c, unsigned k)
 	emit_slow_call(c, SLOW_EXEC, 0, k);
 }
 
+/* Muestreo (rec_sample.h): las llamadas a C que no pasan por la rutina
+ * compartida (TLBWI/TLBWR, ERET) marcan «camino lento» alrededor; sin
+ * muestreo no se emite nada. */
+static void emit_sample_mark(struct ctx *c, unsigned mark)
+{
+	if (!c->rec->sample)
+		return;
+	E(c, ppc_li(0, (int32_t)mark));
+	E(c, ppc_stb(0, OFF(rec_mark), R_CPU));
+}
+
 /* Después de emit_exec_call (y de recargar): salir a `out` si hace falta. */
 static void emit_exec_check(struct ctx *c, int out)
 {

@@ -1127,6 +1127,58 @@ los campos/s. Pendiente: el muestreo por tiempo (abajo) para ver qué bloques
 se llevan el tiempo antes y después, y con `perfil` el desglose nativo /
 llamadas a C.
 
+### Muestreo por tiempo en la PS3 (2026-10-13)
+
+Primera corrida del muestreo (docs/rec-ppe.md, «Muestreo por tiempo»;
+archivo `muestreo`, paquete SLSA00106 a5ea24e): GoldenEye en la presa y la
+intro de Perfect Dark a 5×, compacto y `jit-ancho`, 95–200 s cada una;
+4050–4300 muestras por segundo de las 5000 pedidas (el hilo pierde ~15 %
+de sus despertares).
+
+| | GoldenEye compacto | GoldenEye ancho | Perfect Dark compacto | Perfect Dark ancho |
+|---|---|---|---|---|
+| Muestras (s) | 774 936 (190) | 795 950 (197) | 415 053 (96) | 438 895 (102) |
+| Código generado | 63,7 % | 66,0 % | 41,5 % | 46,2 % |
+| Durmiendo al ritmo | 22,3 % | 21,2 % | 24,5 % | 19,7 % |
+| Intérprete | 3,3 % | 3,0 % | 1,3 % | 1,3 % |
+| Despachador | 2,6 % | 2,6 % | 0,8 % | 0,8 % |
+| Eventos | 2,5 % | 2,9 % | 24,6 % | 25,1 % |
+| Camino lento en C | 2,8 % | 1,6 % | 2,1 % | 1,3 % |
+| Compilar | 0,6 % | 0,8 % | 2,1 % | 2,6 % |
+| Ventanas pesadas: ns por instrucción emulada | 17,10 (9) | 17,63 (11) | 15,01 (5) | 15,24 (5) |
+
+- **El muestreo cuesta ~5 %**: las mismas escenas sin él dieron 16,0–16,3
+  (compacto) y 17,26 (ancho) en GoldenEye; con él, 17,10 y 17,63. Son las
+  dos palabras y el almacenamiento por entrada a bloque (2,5 M por segundo)
+  más el otro hilo de hardware despierto 4000 veces por segundo. Para medir
+  ganancias se corre apagado; sirve para el reparto.
+- **El reparto por bloque es plano**: en GoldenEye los 30 bloques con más
+  tiempo suman ~30 % del nativo y ninguno pasa del 3 %; y es el mismo con el
+  compacto y con el ancho (razón 0,9–1,2 por bloque). La ganancia del
+  compacto está repartida por todo el código, como corresponde a «líneas
+  por instrucción».
+- **Tiempo contra entradas × palabras** (el perfil de la PS3 del día
+  anterior): 7F0BA3B8, el primero por costo estimado (6,8 %), se lleva el
+  0,7 % del tiempo (razón 0,10): superbloque de 53 instrucciones que sale
+  por sus saltos internos casi siempre; las entradas no son instrucciones
+  ejecutadas. Al revés, 80000000 (el refill de la TLB, 2,1 % del nativo,
+  razón 15: incluye la C de TLBWR y ERET, que el siguiente paquete marca
+  como camino lento), 7001F7E0 (JR + SQRT.S, 1,9 %, razón 4: `fsqrt` son
+  66–84 ciclos sin pipeline), 7F03E470 (6,6) y 7000B2D0 (el bucle más
+  entrado: 12 instrucciones, 99 palabras, razón 27) pesan mucho más de lo
+  que dicen sus palabras: latencia, no tamaño.
+- **Pesados por muestras**, los bloques que se llevan el tiempo tienen 21,3
+  palabras de PPC por instrucción (contra 15,6 pesados por entradas): son
+  los grandes con mucha FPU en línea (7F057F28: 41 instrucciones, 1172
+  palabras, 838 calientes; en Perfect Dark 70018000: 64, 1860, 1237). Los
+  primeros de GoldenEye: 7F0B05C0 3,1 % (13 instr., 3 de COP1), 7F057F28
+  2,4, 80000000 2,1, 7001F7E0 1,9, 7F0B0688 1,8, 7F0B1794 1,4, 7F0581B0
+  1,3, 7F0B0064 1,3. De Perfect Dark: 7F16CCA0 2,1, 7001A454 1,8,
+  70048510 1,8 (3 instrucciones), 70017E30 1,5, 70018000 1,4.
+- Lo que señala para compactar después: la FPU en línea (~40 palabras por
+  operación), el refill de la TLB, y el 3 % de intérprete de GoldenEye
+  (bloques que no caben antes del evento).
+
 ### Perfil persistente y zona caliente (2026-10-12, rama fervent-noyce)
 
 Diseño en docs/rec-ppe.md, «Perfil persistente y bloques calientes». Lo que
