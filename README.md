@@ -67,9 +67,16 @@ Full guide (in Spanish): [docs/uso-ps3.md](docs/uso-ps3.md).
 | L / R | L1 / R1 |
 | Start | START |
 
-- **START + SELECT** pauses and asks before closing the game: × closes it
-  (saving first) and returns to the menu, ○ keeps playing. The question can
-  be turned off in Options («Confirmar al salir»).
+- **START + SELECT** opens the pause menu: resume, save or load a state,
+  cheats, FPS counter and quit. Quitting asks first; the question can be
+  turned off in Options («Confirmar al salir»).
+- In the game list, **□** opens the cheats of the selected ROM (Project64 or
+  RetroArch `.cht` files in `/dev_hdd0/salsa64/cheats`) and **SELECT** its
+  own settings (aspect, filter, overscan). PNG box art in
+  `/dev_hdd0/salsa64/covers` shows next to the game info.
+- Options also set the aspect (4:3 or 16:9), a simple image filter (smooth,
+  sharp, scanlines) and the menu language (Spanish, English, French, German,
+  Italian, Portuguese).
 - The **PS button** pauses emulation and sound while the system menu is open;
   the game resumes where it was when the menu closes.
 - Saves go to `/dev_hdd0/salsa64/saves`, one file per game.
@@ -109,6 +116,7 @@ tools/build.sh -C src/frontend pkg     # build/salsa64/salsa64.pkg
 tools/build.sh test-host               # core unit tests with the native gcc (ASan/UBSan)
 tools/build.sh host                    # build/host/salsa64-run: run a ROM on the host
 tools/test-roms.sh                     # homebrew ROM suites on the host, against the baseline
+tools/build.sh -C tests/fuzz run       # short fuzzing of the PNG and .cht readers
 ```
 
 Outputs go to `build/<program>/`: `.elf` (RPCS3, ps3load), `.self`,
@@ -127,12 +135,18 @@ src/frontend/  PS3 application: menu, input, audio output, saves
 src/host/      salsa64-run, the host-side runner used for tests
 lib/rsxkit/    generic RSX graphics layer, no N64 code (MIT)
 lib/spukit/    batched SPE jobs: queue + mailbox doorbell (MIT)
-tests/         unit tests, PS3 test programs, homebrew test ROMs
+tests/         unit tests, fuzzing, PS3 test programs, homebrew test ROMs
 tools/         build, test and deploy scripts
 docs/          design notes, measurements, third-party sources (Spanish)
 ```
 
 Goals, architecture and roadmap: [docs/proyecto.md](docs/proyecto.md).
+
+## Credits
+
+- **VIDEOGAMES SCZ** contributed the pause menu, cheats, box art, the 16:9
+  aspect option, the simple image filters (Smooth, Sharp, Scanlines),
+  per-game settings, the six menu languages and the experimental downloader.
 
 ## License
 
