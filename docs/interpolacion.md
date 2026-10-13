@@ -1,8 +1,8 @@
 # Interpolación de cuadros (diseño y prototipo)
 
-Estado: **diseño con prototipo en el host** (2026-10-13). Nada de esto
-corre todavía en la PS3; el plan para la consola está al final y espera la
-decisión del autor.
+Estado: **diseño con prototipo en el host** (2026-10-13). El **tope de
+cuadros** (paso 1) se midió en la PS3 y quedó en pausa (abajo). Siguiente
+paso: Zelda OoT por geometría, sin tope (plan al final).
 
 Objetivo: que los juegos cuya lógica va a 20–30 cuadros por segundo se vean
 a 60, sin cargar más el CPU emulado (el cuello de botella), con el trabajo
@@ -399,22 +399,149 @@ empareje.
   dibujó el framebuffer anterior». Solo por juego y medido: un juego que
   no mida el tiempo (ritmo fijo) iría más lento.
 
+## Tope de cuadros (paso 1, hecho)
+
+Opción «Tope de cuadros: Libre / 30 / 20» en Opciones (`menu.cfg`, `tope =
+libre|30|20`), por juego (`juegos/<ROM>.cfg`, con «global») y en «Imagen»
+del menú de pausa (vale al seguir jugando, con la emulación quieta en el
+límite de un campo). En el núcleo, `salsa64_rsp_set_frame_cap`: la
+interrupción del DP de cada tarea gráfica no llega antes de k − 0,1 campos
+del VI (1,9 o 2,9; el campo en curso, NTSC o PAL) desde la anterior. Un
+espaciado y no un retraso fijo por tarea: si el juego llega tarde a un
+cuadro no paga el retraso encima, y el ritmo queda parejo. Las
+interrupciones del RDP a bajo nivel (DPC) no se tocan; la retenida por
+FREEZE (Banjo) respeta el tope al descongelarse. Si el tiempo retrocede
+(estado cargado), la anterior no cuenta. Con «Libre» el código no hace
+nada distinto.
+
+Medido en el host (respaldos propios), 300 campos de la presa girando y
+caminando:
+
+| | Cuadros del juego | CPU en espera | CPU activo | Host |
+|---|---|---|---|---|
+| GoldenEye libre | 297 (59,4/s) | 60,5 % | 39,5 % | 4,5 s |
+| GoldenEye tope 30 | 159 (31,8/s) | 77,2 % | 22,8 % (−42 %) | 2,8 s |
+| GoldenEye tope 20 | 105 (21,0/s) | 83,3 % | 16,7 % (−58 %) | 2,2 s |
+| Perfect Dark libre (30 s de la intro) | 1290 (43/s) | 84,0 % | 16,0 % | 6,1 s |
+| Perfect Dark tope 30 | 749 (25/s) | 88,2 % | 11,8 % (−26 %) | 4,5 s |
+| Perfect Dark tope 20 | 493 (16/s) | 89,7 % | 10,3 % (−36 %) | 4,0 s |
+
+Con el tope de 30 el DP espera de media 22,5 ms desde el fin de la tarea
+(un RDP de la consola tarda del orden de eso en la presa). Zelda (20), SM64
+y Mario Kart (30) con tope 30: las mismas tareas, la misma espera y el
+mismo audio que libre. Banjo y Conker con 30: imágenes idénticas a libre
+(sus DP ya llegan espaciados); con 20, Banjo pasa por el FREEZE con el tope
+activo (388 esperas) y llega al título, Conker a la taberna: ninguno se
+cuelga. Audio: las mismas muestras del AI con y sin tope, sin huecos (los
+de Conker son previos y no cambian). Regresión con «Libre»: 248 volcados de
+GoldenEye, Perfect Dark, Zelda, SM64, Mario Kart, Banjo y Conker idénticos
+byte por byte a main.
+
+**¿Un modelo de tiempo del RDP en vez de un tope?** Contar ciclos por
+comando o por píxel (lo que tardaría el RDP de verdad) sería más fiel y
+serviría para todos los juegos a la vez, pero el ritmo dependería de la
+escena como en la consola (GoldenEye bajaría a 15–30 en la presa), la
+estimación de la HLE (área de cada triángulo a 1×, modo de ciclo, lecturas
+de la z) costaría en el SPE 0 y cambiaría el comportamiento de juegos que
+hoy van bien. Para liberar el PPE en juegos concretos y con un ritmo parejo
+(lo que la interpolación necesita), el tope por juego es más simple y
+predecible; el modelo puede volver como opción si algún juego necesita los
+tiempos del RDP.
+
+### En la PS3 real (2026-10-13): en pausa
+
+Medido por el autor con «Salsa64 tope» (SLSA00115), GoldenEye en la presa
+y Perfect Dark, Libre contra 30:
+
+- **GoldenEye**: el tope se aplica (30–31,6 cuadros del juego estables,
+  MIPS −34 %, espera 45 → 64 %), pero la emulación por campo no bajó
+  (14,2 → 15,2 ms). Causa: con el tope, cada cuadro hacía una **copia del
+  framebuffer a la RDRAM esperada** («158 copias… la emulación esperó 158
+  tareas, 15,35 ms c/u»: ~8 ms por campo). Era un fallo previo de
+  `readbacks_wanted` (src/rdp/rdp.c): tomaba como ancho del VI el del
+  último origen *agregado* al anillo, y un origen ya visto no se vuelve a
+  agregar; tras las pantallas de la misión (440 de ancho), la presa (320)
+  quedaba «de otro ancho» y cada cuadro parecía una imagen auxiliar. Con
+  Libre el orden de los orígenes lo tapaba por casualidad. Arreglado
+  (`rdp_vi_ring.cur_width`, el ancho del último campo); en el host, la
+  regla de la PS3 (`SALSA64_PS3_RB=1`) pasa de 1083 copias a 4 con el tope
+  y **Perfect Dark sin tope, en la intro, de 1167 a 3**: ya pagaba ese costo.
+  Falta volver a medir con «Salsa64 tope 2».
+- **Perfect Dark**: los DP van a 31,6 por segundo y las tareas gráficas
+  también (31,4–31,6/s); el «55–60 cuadros del juego» de algunas ventanas
+  es del contador, que cuenta cambios de origen del VI: en las pantallas de
+  576 × 480 (entrelazadas) el origen cambia en cada campo (líneas pares e
+  impares) aunque no haya cuadro nuevo. En juego (320 de ancho) cuadros y
+  tareas coinciden (20,8–31,5). El contador de «cuadros del juego» del
+  contador de FPS tiene el mismo problema con los modos entrelazados: para
+  contar cuadros habría que contar destinos nuevos presentados (targets.c
+  sabe qué tarea dibujó el que se muestra), no cambios de origen.
+- **Errores gráficos con 30** («los polígonos de los bordes desaparecían o
+  se pintaban más cerca del centro» uno o dos cuadros; sin decir en qué
+  juego): sin causa todavía. En el host la geometría de la HLE sale igual
+  con y sin tope (grietas en el plano cercano, `SALSA64_GFX_CUTCHECK`:
+  separación máxima 0,36 px libre y 0,30 con 30, en la presa). GoldenEye y
+  Perfect Dark mandan una tarea gráfica por cuadro (tareas = cuadros en el
+  log), así que no hay cuadros armados a medias por una segunda tarea
+  retrasada. Candidatos: las copias a la RDRAM de cada cuadro del primer
+  paquete (escribían la imagen del RSX reducida en la RDRAM cada cuadro;
+  con el arreglo desaparecen) y que a 30 un cuadro con un defecto que ya
+  existía se ve dos campos en vez de uno. Para separarlos: «tope 2», y el
+  juego y el lugar si se repite.
+
+Por eso el tope queda en pausa; el siguiente paso es la interpolación por
+geometría en Zelda OoT, que va a 20 fijos y no necesita tope.
+
 ## Plan para la PS3 (después de que se decida)
 
-1. Tope de cuadros por juego con `dp_cycles` y el interruptor (sin
-   interpolación todavía): medir en la consola el ahorro de CPU en la presa
-   y en Perfect Dark en juego.
-2. Geometría en el host completo: identidad por grupo (no por vértice),
-   registros por grupo y el flujo de posiciones anteriores, igual que en la
-   PS3; pruebas unitarias del emparejamiento.
-3. Vertex program interpolado en rsxkit (genérico: «dos posiciones y t») y
-   la superficie de presentación; redibujar la última tarea en los campos
-   repetidos, primero en RPCS3 (que no sirve para medir tiempos).
-4. SPE de interpolación (emparejamiento después de la tarea) y medición en
-   la PS3 real: Zelda OoT en el bosque, SM64, Mario Kart, GoldenEye y
-   Perfect Dark con tope; ms del RSX y del hilo 1, campos presentados.
-5. Por imagen: búsqueda en el SPE con SIMD y deformación en el RSX, con el
+1. Tope de cuadros por juego (en la rama, en pausa: arriba).
+2. **Zelda OoT por geometría, sin tope** (abajo, «Paso 2»), y después SM64
+   y Mario Kart (30 fijos).
+3. GoldenEye y Perfect Dark, con el tope si se retoma.
+4. Por imagen: búsqueda en el SPE con SIMD y deformación en el RSX, con el
    HUD aparte.
+
+### Paso 2: Zelda OoT por geometría (plan)
+
+Opción «Interpolación: Apagada / Por geometría» (y «sin retraso» después),
+como el filtro: Opciones, juegos/<ROM>.cfg e «Imagen». Zelda va a 20
+cuadros fijos (3 campos por cuadro), una tarea gráfica por cuadro, sin
+recorte cercano (NoN: no hay vértices inventados por el recorte) y con
+99 % de los vértices de triángulos emparejados en el host.
+
+1. **La HLE da la identidad, sin local store nuevo** (SPE 0). Con la
+   bandera del trabajo `GFX_JOB_INTERP`:
+   - por cada G_VTX, un registro en el flujo de comandos que ya existe
+     (`GFX_OP_VGROUP`: dirección y paso de la lista del juego, hash del
+     contenido, v0, n, el viewport y las n coordenadas de recorte que ya
+     calculó; ≤ 1 KB), así no hace falta otro búfer de DMA;
+   - en el `pad` libre de cada vértice de salida, de qué grupo y lugar
+     sale (el RSX no lo lee).
+   Sin la bandera no se emite nada: el SPE 0 hace lo de hoy. ~1 KB de
+   código.
+2. **Emparejamiento en el PPE, al traducir** (hilo 1; código portable,
+   probado en el host): índice de los grupos del cuadro anterior (dirección
+   + repeticiones, contenido de respaldo), reglas de corte por grupo y por
+   cuadro, y por cada vértice de salida su posición en el cuadro anterior,
+   en un flujo paralelo dentro del mismo juego de búferes (el área de
+   vértices de 2 MB tiene lugar de sobra: Zelda usa ~100 KB). Zelda: ~360
+   grupos y ~2900 vértices por cuadro, ~0,1–0,2 ms del hilo 1 por cuadro
+   (≈ 0,03 ms de emulación por campo). Si pesara, pasa a un SPE libre.
+3. **rsxkit, genérico**: una variante del vertex program con un segundo
+   atributo de posición y `pos = lerp(prev, pos, t)`; el cuadro verdadero
+   usa el programa de siempre.
+4. **Presentación**: en cada campo en que el VI repite el origen, se vuelve
+   a traducir la tarea que dibujó el destino presentado con t = j/3, en
+   una superficie de presentación propia (sin copias a la RDRAM ni cambios
+   en la tabla de destinos), y se presenta con el filtro de siempre. Con 3
+   juegos de búferes y una tarea cada 3 campos, el de la tarea sigue vivo
+   (no hace falta memoria nueva); si ya se reusó, ese campo se presenta
+   como hoy. Interpolar: el cuadro N se completa 2 campos después (33 ms).
+5. **Pruebas**: en el host, el camino del PPE contra el prototipo
+   (mismas posiciones) y apagado idéntico a main; en RPCS3, que arranque y
+   se vea; en la PS3, Zelda en el bosque Kokiri y en el campo de Hyrule:
+   ms del RSX (la escena ×3), hilo 1, campos/s de la emulación (no deben
+   bajar) y a simple vista.
 
 ## Reproducir en la Mac
 
