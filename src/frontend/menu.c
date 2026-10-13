@@ -353,6 +353,14 @@ int menu_settings_format(const struct menu_settings *s, char *buf, size_t size)
 			lang_key[s->lang >= 0 && s->lang < MENU_LANGS ? s->lang : 0]);
 }
 
+bool menu_settings_cfg_differs(const struct menu_settings *a, const struct menu_settings *b)
+{
+	char ta[512], tb[512];
+	menu_settings_format(a, ta, sizeof ta);
+	menu_settings_format(b, tb, sizeof tb);
+	return strcmp(ta, tb) != 0;
+}
+
 void menu_init(struct menu *m, const struct romlist *list, int sel, const struct menu_settings *set)
 {
 	memset(m, 0, sizeof *m);

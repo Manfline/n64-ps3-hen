@@ -74,7 +74,12 @@ en docs/filtros.md.
   de 3, radio 1,2 (elegido por el autor entre 4, 3, 2,5, 2 y 1 px comparados
   con `tools/crt-ref.c`: 2,5 no cae en píxeles enteros y da franjas; 2
   pierde los puntos redondos; 1 pierde los puntos). El brillo se conserva.
-  Falta verla en la PS3.
+  En la PS3 (primer paquete) la «Fina» de Opciones no llegaba al juego: el
+  menú reescribía menu.cfg solo si cambiaba una de las claves de antes, y la
+  densidad no estaba en la lista. Ahora se compara el texto entero de
+  menu.cfg (`menu_settings_cfg_differs`, con prueba en el host) y el log
+  dice el filtro y la densidad al guardar Opciones y la densidad al guardar
+  los ajustes de un juego.
   **Medido en la PS3** (GoldenEye en la presa a 1080p): máscara 7,4, RGB
   9,4, S-Video 10,6, compuesto 13,2 y Trinitron 10,1 ms por cuadro, todos
   los campos presentados (antes, a 5×, 30–51 por segundo); reducir 3,12 →

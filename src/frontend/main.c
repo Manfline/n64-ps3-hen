@@ -4060,8 +4060,10 @@ static void menu_settings_load(void)
 static void menu_settings_save(void)
 {
 	bool ok = settings_write(&mn.settings);
-	salsa64_log("menú: fondo animado %s, FPS %s, confirmar al salir %s%s", mn.settings.waves ? "sí" : "no",
-		    mn.settings.fps ? "sí" : "no", mn.settings.confirm ? "sí" : "no", ok ? "" : " (no se pudo guardar)");
+	salsa64_log("menú: fondo animado %s, FPS %s, confirmar al salir %s, filtro %s%s%s", mn.settings.waves ? "sí" : "no",
+		    mn.settings.fps ? "sí" : "no", mn.settings.confirm ? "sí" : "no", menu_filter_name(mn.settings.filter),
+		    menu_filter_has_density(mn.settings.filter) ? (mn.settings.density == MENU_DENSITY_FINE ? ", densidad fina" : ", densidad normal") : "",
+		    ok ? "" : " (no se pudo guardar)");
 }
 
 /* El contador de velocidad se recuerda en menu.cfg («fps = si|no»), también
@@ -4257,19 +4259,14 @@ static int menu_loop(void)
 				overscan_save(menu.set.overscan);
 			if (menu.set.resolution != mn.settings.resolution || menu.set.scale != mn.settings.scale)
 				video_save(&menu.set);
-			if (menu.set.waves != mn.settings.waves || menu.set.fps != mn.settings.fps ||
-			    menu.set.confirm != mn.settings.confirm || menu.set.aspect != mn.settings.aspect ||
-			    menu.set.filter != mn.settings.filter || menu.set.lang != mn.settings.lang) {
-				mn.settings.waves = menu.set.waves;
-				mn.settings.fps = menu.set.fps;
-				mn.settings.confirm = menu.set.confirm;
-				mn.settings.aspect = menu.set.aspect;
-				mn.settings.filter = menu.set.filter;
-				mn.settings.lang = menu.set.lang;
+			/* Todo lo de menu.cfg (antes, la densidad no estaba en la
+			 * lista y se perdía al abrir el juego). */
+			bool cfg = menu_settings_cfg_differs(&menu.set, &mn.settings);
+			mn.settings = menu.set;
+			if (cfg) {
 				i18n_set(mn.settings.lang);
 				menu_settings_save();
 			}
-			mn.settings = menu.set;
 		}
 		if (a == MENU_APPLY)
 			menu_apply_video();
@@ -4294,8 +4291,8 @@ static int menu_loop(void)
 		if (a == MENU_GAME_CHANGED) {
 			const struct rom_entry *e = &roms.e[menu.game_rom];
 			bool ok = game_cfg_write(romlist_name(e), &menu.game);
-			salsa64_log("ajustes de %s: aspecto %d, filtro %d, recorte %d, escala %d%s", romlist_name(e),
-				    menu.game.aspect, menu.game.filter, menu.game.overscan, menu.game.scale,
+			salsa64_log("ajustes de %s: aspecto %d, filtro %d, densidad %d, recorte %d, escala %d%s", romlist_name(e),
+				    menu.game.aspect, menu.game.filter, menu.game.density, menu.game.overscan, menu.game.scale,
 				    ok ? "" : " (no se pudo guardar)");
 			if (!ok)
 				menu_set_status(&menu, "No se pudieron guardar los ajustes");

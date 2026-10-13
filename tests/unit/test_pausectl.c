@@ -239,6 +239,14 @@ static void menu_image_page(void)
 	CHECK_EQ(pc.image_do, IM_DENSITY);
 	CHECK_EQ(pc.image_arg, 1);
 	pc.image_do = -1;
+	tap(B(CROSS));  /* × como → */
+	CHECK_EQ(pc.image_do, IM_DENSITY);
+	CHECK_EQ(pc.image_arg, 1);
+	pc.image_do = -1;
+	tap(B(LEFT));
+	CHECK_EQ(pc.image_do, IM_DENSITY);
+	CHECK_EQ(pc.image_arg, -1);
+	pc.image_do = -1;
 	tap(B(UP));
 	CHECK_EQ(pc.image_sel, IM_FILTER);
 	/* Sin ella se salta. */

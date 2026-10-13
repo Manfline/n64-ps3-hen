@@ -250,6 +250,10 @@ void menu_frame(struct menu *m, float lw, float lh, uint64_t now_us);
 void menu_settings_default(struct menu_settings *s);
 void menu_settings_parse(struct menu_settings *s, const char *text, size_t len);
 int menu_settings_format(const struct menu_settings *s, char *buf, size_t size);
+/* Si algo de lo que va en menu.cfg difiere entre a y b (lo de overscan.cfg y
+ * video.cfg no cuenta): compara los textos de menu_settings_format, así una
+ * clave nueva de menu.cfg no se queda sin guardar. */
+bool menu_settings_cfg_differs(const struct menu_settings *a, const struct menu_settings *b);
 
 /* video.cfg: «salida = 1080|720» y «escala = auto|1..5». También acepta el
  * formato viejo, una sola línea «1080» o «720». Solo toca resolution y

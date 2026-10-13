@@ -373,6 +373,13 @@ static void menu_density(void)
 	menu_input(&m, 0, 30);
 	CHECK_EQ(menu_input(&m, RIGHT, 40), MENU_SETTINGS);
 	CHECK_EQ(m.set.density, MENU_DENSITY_FINE);
+	/* ×, ← y → la cambian igual (y cada una pide guardar). */
+	menu_input(&m, 0, 41);
+	CHECK_EQ(menu_input(&m, CROSS, 42), MENU_SETTINGS);
+	CHECK_EQ(m.set.density, MENU_DENSITY_NORMAL);
+	menu_input(&m, 0, 43);
+	CHECK_EQ(menu_input(&m, LEFT, 44), MENU_SETTINGS);
+	CHECK_EQ(m.set.density, MENU_DENSITY_FINE);
 	menu_input(&m, 0, 50);
 	menu_input(&m, DOWN, 60);
 	CHECK_EQ(m.opt, MENU_OPT_RESOLUTION);
@@ -408,6 +415,13 @@ static void menu_density(void)
 	CHECK_EQ(menu_input(&m, RIGHT, 140), MENU_GAME_CHANGED);
 	CHECK_EQ(m.game.density, MENU_DENSITY_NORMAL);
 	CHECK_EQ(menu_game_density(&m.set, &m.game), MENU_DENSITY_NORMAL);
+	/* Global → Normal → Fina → Global con × o →; ← al revés. */
+	menu_input(&m, 0, 141);
+	CHECK_EQ(menu_input(&m, CROSS, 142), MENU_GAME_CHANGED);
+	CHECK_EQ(m.game.density, MENU_DENSITY_FINE);
+	menu_input(&m, 0, 143);
+	CHECK_EQ(menu_input(&m, LEFT, 144), MENU_GAME_CHANGED);
+	CHECK_EQ(m.game.density, MENU_DENSITY_NORMAL);
 	n = menu_game_format(&m.game, buf, sizeof buf);
 	struct menu_game gb;
 	menu_game_default(&gb);
@@ -1112,6 +1126,34 @@ static void menu_frame_geometry(void)
 	rsxkit_ui_batch(NULL, 0, 0, 0);
 }
 
+/* Qué cambios de Opciones reescriben menu.cfg: todo lo que va en él (la
+ * densidad no se guardaba: el juego abría con la normal), nada de lo de
+ * overscan.cfg y video.cfg. */
+static void menu_cfg_differs(void)
+{
+	struct menu_settings a, b;
+	menu_settings_default(&a);
+	b = a;
+	CHECK(!menu_settings_cfg_differs(&a, &b));
+	b.overscan = MENU_OVERSCAN_WIDE;
+	b.resolution = MENU_RES_1080P;
+	b.scale = 5;
+	CHECK(!menu_settings_cfg_differs(&a, &b));
+	for (int k = 0; k < 7; k++) {
+		b = a;
+		switch (k) {
+		case 0: b.waves = !a.waves; break;
+		case 1: b.fps = !a.fps; break;
+		case 2: b.confirm = !a.confirm; break;
+		case 3: b.aspect = MENU_ASPECT_16_9; break;
+		case 4: b.filter = MENU_FILTER_CRT_TRINITRON; break;
+		case 5: b.density = MENU_DENSITY_FINE; break;
+		default: b.lang = 1; break;
+		}
+		CHECK(menu_settings_cfg_differs(&a, &b));
+	}
+}
+
 /* El menú quieto `ms` milisegundos desde `t`, dibujando cada cuadro. */
 static uint64_t settle_draw(struct menu *m, uint64_t t, uint32_t ms)
 {
@@ -1532,6 +1574,7 @@ void t_suite_menu(void)
 	RUN(ui_geometry);
 	RUN(menu_frame_geometry);
 	RUN(menu_options_help);
+	RUN(menu_cfg_differs);
 	RUN(menu_cheats_page);
 	RUN(menu_cover_state);
 	RUN(menu_preview);
