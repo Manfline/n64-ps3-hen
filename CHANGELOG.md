@@ -4,6 +4,27 @@ All notable changes to Salsa64. Speeds are measured on a real PS3 (HEN,
 NTSC backups); `docs/perf-log.md` has the detailed numbers and
 `docs/estado.md` the work log (both in Spanish).
 
+## [0.2.2] — 2026-10-12
+
+### Performance
+- **Smaller recompiled code.** The dynamic recompiler now emits about 23 %
+  less PowerPC code per N64 instruction (one shared slow path per block
+  instead of one per memory access, a 4-instruction KSEG0 check, 3-word block
+  links). On a real PS3 the GoldenEye Dam runs 6–12 % more fields per second
+  in its heaviest parts; Perfect Dark 3–7 % faster per instruction.
+
+### Controls
+- An N64 button can take one or two DualShock 3 buttons in `controles.cfg`:
+  `Z = L2 R2` puts Z on both triggers.
+
+### Diagnostics
+- Time sampling of the recompiled code from the second PPE thread
+  (`muestreo` file): logs where the emulation time goes, per category and per
+  block.
+- Optional per-game recompiler profile (`perfil-activo` file; off by
+  default): block counts, successors and branch statistics saved in
+  `perfiles/`, with no game code in the file.
+
 ## [0.2.1] — 2026-10-12
 
 ### Fixed
@@ -87,6 +108,7 @@ First public preview.
 - Full speed: Zelda: Ocarina of Time, Super Mario 64, Mario Kart 64.
   Playable: GoldenEye, Perfect Dark, Banjo-Kazooie, Conker.
 
+[0.2.2]: https://github.com/ricowp81/Salsa64/releases/tag/v0.2.2
 [0.2.1]: https://github.com/ricowp81/Salsa64/releases/tag/v0.2.1
 [0.2.0]: https://github.com/ricowp81/Salsa64/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ricowp81/Salsa64/releases/tag/v0.1.0
