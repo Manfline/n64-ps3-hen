@@ -778,8 +778,9 @@ que se compilan. Ahora:
   cuenta a medias es solo un número un poco menor). Primero `.tmp` y
   `rename`, como las partidas.
 - **Entre sesiones.** El puntaje guardado mezcla el del archivo con lo
-  contado: en una sesión larga (2²⁸ entradas a bloques o más, un minuto de
-  juego) lo que no se ejecutó decae a la mitad, `max(hits, (score + hits) /
+  contado: en una sesión larga (2²⁶ entradas a bloques o más: entre medio
+  minuto y un minuto de juego, Perfect Dark cuenta 1,2 M por segundo de
+  consola) lo que no se ejecutó decae a la mitad, `max(hits, (score + hits) /
   2)`; en una corta solo puede subir, `max(score, hits)`, para que diez
   arranques de prueba no borren lo aprendido en una partida larga. Los
   puntajes saturan en 2³² − 1.

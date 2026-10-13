@@ -29,8 +29,10 @@
 #define SALSA64_RPF_SLOTS   65536u   /* índice abierto por dirección: el doble de las entradas */
 #define SALSA64_RPF_PATH_MAX 256
 /* Entradas a bloques de una sesión a partir de las cuales su cuenta pesa como
- * una sesión larga al mezclarla con la del archivo (ver salsa64_rec_profile_merge). */
-#define SALSA64_RPF_LONG_SESSION (1ull << 28)
+ * una sesión larga al mezclarla con la del archivo (salsa64_rec_profile_merge):
+ * 2^26 son entre medio minuto y un minuto de juego (Perfect Dark cuenta 1,2 M
+ * por segundo de consola; GoldenEye más). */
+#define SALSA64_RPF_LONG_SESSION (1ull << 26)
 
 struct salsa64_rec_profile_entry {
 	uint64_t hash;       /* huella de las instrucciones MIPS (salsa64_rec_profile_hash) */
