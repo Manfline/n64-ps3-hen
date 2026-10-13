@@ -10,7 +10,7 @@ COMMON  := src/platform/ps3/log.c src/platform/ps3/rec_cache.c \
                                           $(R)/src/rsp/lle/*.c)) src/frontend/padmap.c src/frontend/pacer.c src/frontend/audio_sync.c src/rdp/targets.c \
            src/host/raster.c \
            src/frontend/romlist.c src/frontend/menu.c src/frontend/osd_fps.c src/frontend/pausectl.c lib/rsxkit/src/text.c lib/rsxkit/src/ui_geom.c \
-           src/frontend/filters/catalog.c src/frontend/filters/crt_params.c \
+           src/frontend/filters/crt_params.c \
            $(filter-out tests/unit/main_host.c,$(patsubst $(R)/%,%,$(wildcard $(R)/tests/unit/*.c))) \
            lib/rsxkit/src/fpgen.c
 # lib/rsxkit/src/fpgen.c (codificador de fragment programs, sin PSL1GHT) se

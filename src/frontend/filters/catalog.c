@@ -8,22 +8,12 @@
 
 static const struct {
 	const char *name, *key;
-	const char *help[3];
 } filters[SALSA64_FILTERS] = {
-	[SALSA64_FILTER_NONE] = { "Ninguno", "ninguno",
-				  { "La imagen tal cual, escalada", "con filtro lineal.", NULL } },
-	[SALSA64_FILTER_CRT_MASK] = { "CRT máscara de sombra", "crt-mascara",
-				      { "Monitor con puntos de fósforo", "redondos en triángulo.",
-					"Filtro original del autor." } },
-	[SALSA64_FILTER_CRT_RGB] = { "CRT cable RGB", "crt-rgb",
-				     { "Tele Trinitron por euroconector", "RGB: imagen limpia.",
-				       "Filtro original del autor." } },
-	[SALSA64_FILTER_CRT_SVIDEO] = { "CRT cable S-Video", "crt-svideo",
-					{ "Tele Trinitron por S-Video: el", "color se corre un poco.",
-					  "Filtro original del autor." } },
-	[SALSA64_FILTER_CRT_COMPOSITE] = { "CRT cable compuesto", "crt-compuesto",
-					   { "Tele Trinitron por compuesto:", "sangrado de color y dot crawl.",
-					     "Filtro original del autor." } },
+	[SALSA64_FILTER_NONE] = { "Ninguno", "ninguno" },
+	[SALSA64_FILTER_CRT_MASK] = { "CRT máscara de sombra", "crt-mascara" },
+	[SALSA64_FILTER_CRT_RGB] = { "CRT cable RGB", "crt-rgb" },
+	[SALSA64_FILTER_CRT_SVIDEO] = { "CRT cable S-Video", "crt-svideo" },
+	[SALSA64_FILTER_CRT_COMPOSITE] = { "CRT cable compuesto", "crt-compuesto" },
 };
 
 const char *salsa64_filter_name(int f)
@@ -42,9 +32,4 @@ int salsa64_filter_from_key(const char *key, unsigned len)
 		if (strlen(filters[f].key) == len && !memcmp(filters[f].key, key, len))
 			return f;
 	return -1;
-}
-
-const char *const *salsa64_filter_help(int f)
-{
-	return filters[f >= 0 && f < SALSA64_FILTERS ? f : 0].help;
 }

@@ -886,7 +886,6 @@ static struct {
 } state_test;
 
 static void fps_setting_save(bool on);
-static int filter_setting_load(void);
 static bool fps_setting_load(void);
 static bool confirm_setting_load(void);
 
@@ -1770,7 +1769,8 @@ static void filter_finish(rsxkit_rect *r)
 	flt.pending = false;
 }
 
-/* Al abrir un juego: el filtro de menu.cfg, o el del archivo `filtro`. */
+/* Al abrir un juego: el filtro elegido (enum salsa64_filter; es el punto
+ * donde el menú lo pasa), o el del archivo `filtro`, que manda. */
 static void filter_setup(int menu_filter)
 {
 	memset(&flt, 0, sizeof flt);
@@ -3149,7 +3149,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	fps.on = fps_setting_load();
 	osd_fps_reset(&fps);
 	pause_ctl.confirm = confirm_setting_load();
-	filter_setup(filter_setting_load());
+	filter_setup(SALSA64_FILTER_NONE);
 	sys_no_pause = file_exists(NO_PAUSE_PATH);
 	if (sys_no_pause)
 		salsa64_log("pausa: %s presente, el menú del sistema no pausa la emulación (diagnóstico)", NO_PAUSE_PATH);
@@ -3439,14 +3439,6 @@ static bool confirm_setting_load(void)
 	struct menu_settings s;
 	settings_read(&s);
 	return s.confirm;
-}
-
-/* El filtro de la presentación (menu.cfg, «filtro = …»). */
-static int filter_setting_load(void)
-{
-	struct menu_settings s;
-	settings_read(&s);
-	return s.filter;
 }
 
 static void fps_setting_save(bool on)

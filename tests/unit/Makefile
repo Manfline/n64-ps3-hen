@@ -18,7 +18,7 @@ LDLIBS  := -lm
 CORE_SRCS := $(wildcard $(ROOT)/src/core/*.c $(ROOT)/src/cpu/*.c $(ROOT)/src/rsp/gfx/*.c $(ROOT)/src/rsp/audio/*.c $(ROOT)/src/rsp/jpeg/*.c $(ROOT)/src/rsp/lle/*.c) $(ROOT)/src/frontend/padmap.c $(ROOT)/src/frontend/pacer.c \
              $(ROOT)/src/frontend/audio_sync.c $(ROOT)/src/frontend/romlist.c $(ROOT)/src/frontend/menu.c \
              $(ROOT)/src/frontend/osd_fps.c $(ROOT)/src/frontend/pausectl.c \
-             $(ROOT)/src/frontend/filters/catalog.c $(ROOT)/src/frontend/filters/crt_params.c \
+             $(ROOT)/src/frontend/filters/crt_params.c \
              $(ROOT)/src/rdp/targets.c $(ROOT)/src/host/raster.c $(ROOT)/lib/rsxkit/src/fpgen.c $(ROOT)/lib/rsxkit/src/text.c \
              $(ROOT)/lib/rsxkit/src/ui_geom.c
 TEST_SRCS := $(wildcard $(CURDIR)/*.c)

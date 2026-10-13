@@ -89,23 +89,6 @@ Opciones:
   anterior y el panel dice «No se pudo: sigue …»; si sale bien, «Aplicado:
   1920x1080, escala 4×». El log dice «video: 1920x1080, escala 4×, aplicado
   sin reiniciar». Cambiar solo la escala no toca el video.
-- **Filtro**: cómo se ve la imagen en la tele. «Ninguno» (por omisión) la
-  escala tal cual; los demás son **filtros CRT originales del autor,
-  portados de sus versiones de RetroMac** (sus apps para Mac y Apple TV):
-  - «CRT máscara de sombra»: un monitor con puntos de fósforo redondos en
-    triángulo, con el haz más grueso en lo brillante y el resplandor sobre
-    los huecos.
-  - «CRT cable RGB», «CRT cable S-Video» y «CRT cable compuesto»: una tele
-    Trinitron chica conectada con ese cable. RGB: imagen limpia; S-Video:
-    el color se corre un poco; compuesto: sangrado de color, dot crawl y
-    arcoíris en los detalles finos.
-
-  Los filtros trabajan sobre la imagen a la resolución original de la N64
-  (la escala interna se reduce primero con un filtro de caja, como un
-  supermuestreo) y ocupan el rectángulo 4:3 de la pantalla. Las capturas,
-  las miniaturas de los estados y los volcados siguen sin filtro. Costo en
-  el RSX: abajo, en «Costo de los filtros». Se guarda en `menu.cfg`
-  (`filtro = …`).
 - **Mostrar FPS**: el contador de velocidad dentro del juego (abajo, en
   «Contador de velocidad»). También se cambia en el juego con SELECT + △.
 - **Confirmar al salir**: con «Sí» (por omisión), START + SELECT en el juego
@@ -245,7 +228,28 @@ VI 59,9 (100 %) · juego 30 · pantalla 60
 
 Es un promedio de medio segundo. Se recuerda en `menu.cfg` (`fps = si`).
 
-## Costo de los filtros
+## Filtros CRT
+
+Salsa64 trae los **filtros CRT originales del autor, portados de sus
+versiones de RetroMac** (sus apps para Mac y Apple TV):
+
+- «CRT máscara de sombra» (`crt-mascara`): un monitor con puntos de
+  fósforo redondos en triángulo, con el haz más grueso en lo brillante y
+  el resplandor sobre los huecos.
+- «CRT cable RGB», «CRT cable S-Video» y «CRT cable compuesto»
+  (`crt-rgb`, `crt-svideo`, `crt-compuesto`): una tele Trinitron chica
+  conectada con ese cable. RGB: imagen limpia; S-Video: el color se corre
+  un poco; compuesto: sangrado de color, dot crawl y arcoíris en los
+  detalles finos.
+
+Se eligen con el archivo `filtro` en `/dev_hdd0/salsa64` (la clave en la
+primera línea); sin el archivo, la imagen va sin filtro. Trabajan sobre
+la imagen a la resolución original de la N64 (la escala interna se reduce
+primero con un filtro de caja, como un supermuestreo) y ocupan el
+rectángulo de la imagen en la pantalla. Las capturas, las miniaturas de
+los estados y los volcados siguen sin filtro.
+
+### Costo de los filtros
 
 Cada filtro se mide en el RSX con marcas de tiempo entre sus pasadas (el log
 lo escribe cada 5 s, «rsx: filtro …»). La tabla se llena con la medición
@@ -289,7 +293,7 @@ se crean por FTP.
 
 | Archivo | Formato | Qué hace |
 |---|---|---|
-| `menu.cfg` | Líneas `fondo = si\|no`, `fps = si\|no`, `confirmar = si\|no` y `filtro = ninguno\|crt-mascara\|crt-rgb\|crt-svideo\|crt-compuesto` | Fondo animado del menú, contador de velocidad en el juego, si START + SELECT pregunta antes de salir (sí sin la línea) y el filtro de la imagen. Lo escriben el menú (Opciones) y SELECT + △ |
+| `menu.cfg` | Líneas `fondo = si\|no`, `fps = si\|no` y `confirmar = si\|no` | Fondo animado del menú, contador de velocidad en el juego y si START + SELECT pregunta antes de salir (sí sin la línea). Lo escriben el menú (Opciones) y SELECT + △ |
 | `overscan.cfg` | Uno, dos o cuatro números: `8`, `8 6` o `izq der arr abajo` | Recorte de la imagen en píxeles de la N64 (a 320 × 240) por lado. Por omisión `8 6`; `0` lo apaga; máximo 64. Lo escribe el menú (`0`, `8 6` o `16 12`) |
 | `video.cfg` | `salida = 720` o `1080`; `escala = auto` o `1` a `5` | Salida de video y escala interna del render de la N64 (se leen al arrancar). Sin archivo: 720p y escala automática (3×, 960 × 720; a 1080p, 4×, 1280 × 960). Si la tele o el XMB no aceptan 1080, usa el siguiente modo. Acepta el formato viejo de una línea (`1080` o `720`). Lo escribe el menú con «Resolución» y «Escala interna» |
 | `controles.cfg` | Líneas `BOTON_N64 = BOTON_DS3`; `#` comenta | Mapeo del control (abajo) |
@@ -306,7 +310,7 @@ se crean por FTP.
 | `perfil.cfg` | `caliente = KB`, `saltos = si\|no` | Con `perfil-activo`: tamaño de la zona caliente de la caché de código (por omisión 1024 KB, en dos mitades; `0` cuenta y guarda el perfil sin zona caliente) y si los bloques calientes registran sus sitios de salida (sí por omisión) |
 | `embedded` | `file:nombre` | Abre una ROM sin menú (sección anterior) |
 | `jit-ancho` | Basta con que exista | El recompilador emite el código «ancho» de antes del 2026-10-13 (prueba de KSEG0 de 8 palabras, un camino lento por acceso), para medir el compacto contra él con el mismo paquete (docs/rec-ppe.md, «Código compacto») |
-| `filtro` | Una clave de filtro (`crt-mascara`…) | Usa ese filtro en vez del de `menu.cfg`, también en las pruebas automáticas (para comparar) |
+| `filtro` | Una clave: `crt-mascara`, `crt-rgb`, `crt-svideo` o `crt-compuesto` | El filtro CRT de la imagen (abajo, en «Filtros CRT»), también en las pruebas automáticas |
 | `filtros-ciclo` | Basta con que exista | En el juego pasa por todos los filtros, uno cada 20 s desde «Ninguno», con un aviso en pantalla; el log dice cada 5 s cuánto tarda cada uno en el RSX (para medirlos en una sola corrida) |
 | `capturas-pantalla` | Basta con que exista | Con `capturas`: además guarda la pantalla entera como se ve, con el filtro (`pantalla-N.ppm`) |
 | `filtro-ver` | El nombre de una tabla y una escala (`puntos 0.5`) | Diagnóstico de los filtros: dibuja esa tabla intermedia en la esquina de la pantalla (docs/filtros.md) |

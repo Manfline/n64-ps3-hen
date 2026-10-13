@@ -74,12 +74,11 @@ struct menu_settings {
 	int scale;      /* escala interna del render: 0 automática, 1 .. 5 */
 	bool fps;       /* contador de velocidad en el juego («fps = si|no»; SELECT + △) */
 	bool confirm;   /* START + SELECT pregunta antes de salir del juego («confirmar = si|no») */
-	int filter;     /* filtro de la presentación (frontend/filters/catalog.h; «filtro = clave») */
 };
 
 enum { MENU_PAGE_GAMES, MENU_PAGE_OPTIONS };
-enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_RESOLUTION, MENU_OPT_SCALE, MENU_OPT_APPLY, MENU_OPT_FILTER,
-       MENU_OPT_FPS, MENU_OPT_CONFIRM, MENU_OPT_BACK, MENU_OPTS };
+enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_RESOLUTION, MENU_OPT_SCALE, MENU_OPT_APPLY, MENU_OPT_FPS,
+       MENU_OPT_CONFIRM, MENU_OPT_BACK, MENU_OPTS };
 /* «Aplicar ahora» solo existe mientras lo elegido difiere de lo que corre. */
 
 struct menu {

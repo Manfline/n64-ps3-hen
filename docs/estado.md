@@ -8,9 +8,10 @@ RetroMac, en la parte GPL (`src/frontend/filters/`), sobre una maquinaria
 genérica de posprocesado nueva en `lib/rsxkit` (MIT, `rsxkit/post.h`:
 superficies intermedias RGBA8 y fp16, programas precompilados con sus
 constantes parcheadas, pasadas con constantes por dibujo, reducción con
-filtro de caja y marcas de tiempo del RSX). Fila «Filtro» en Opciones
-(`menu.cfg`, `filtro = …`); capturas, miniaturas y pruebas siguen sin
-filtro. Diseño y verificación en docs/filtros.md.
+filtro de caja y marcas de tiempo del RSX). Por ahora se eligen con el
+archivo `filtro`; la fila del menú se suma a la de «Filtro» cuando entre
+la contribución de VIDEOGAMES SCZ, que la trae. Capturas, miniaturas y
+pruebas siguen sin filtro. Diseño y verificación en docs/filtros.md.
 
 - **Verificado en RPCS3** contra el original píxel por píxel en doble
   precisión (`tools/crt-ref.c`): la máscara coincide a 1/255 en todo píxel
