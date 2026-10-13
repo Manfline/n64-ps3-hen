@@ -186,10 +186,6 @@ void gfx_modify_vertex(struct gfx_state *g, uint32_t v, uint32_t where, uint32_t
 	if (v >= GFX_MAX_VTX)
 		return;
 	struct gfx_vtx *p = &g->vtx[v];
-#ifdef SALSA64_GFX_INTERP
-	if (where == G_MWO_POINT_XYSCREEN || where == G_MWO_POINT_ZSCREEN)
-		p->matched = 0;  /* posición puesta a mano: no se sabe dónde estaba */
-#endif
 	switch (where) {
 	case G_MWO_POINT_RGBA:
 		p->c[0] = (uint8_t)(val >> 24);
@@ -329,10 +325,7 @@ void gfx_load_vertices(struct gfx_state *g, uint32_t addr, uint32_t v0, uint32_t
 		return;
 	}
 	gfx_vertices(g, src, v0, n);
-#ifdef SALSA64_GFX_INTERP
-	if (g->interp)
-		gfx_interp_vertices(g, addr, 16, v0, n);
-#endif
+	gfx_vgroup(g, addr, 16, v0, n);
 }
 
 void gfx_light_vectors(struct gfx_state *g)
@@ -388,9 +381,6 @@ void gfx_vertices(struct gfx_state *g, const uint8_t *src, uint32_t v0, uint32_t
 		v->z = x * m[2] + y * m[6] + z * m[10] + m[14];
 		v->w = x * m[3] + y * m[7] + z * m[11] + m[15];
 
-#ifdef SALSA64_GFX_INTERP
-		v->matched = 0;
-#endif
 		uint32_t clip = 0;
 		if (v->x < -v->w) clip |= GFX_CLIP_XN;
 		if (v->x > v->w) clip |= GFX_CLIP_XP;
@@ -463,5 +453,5 @@ void gfx_vtx_out(const struct gfx_state *g, const struct gfx_vtx *v, struct gfx_
 	o->g = v->c[1];
 	o->b = v->c[2];
 	o->a = v->c[3];
-	o->pad = 0;
+	o->pad = v->clip >> GFX_CLIP_ID_SHIFT;  /* GFX_VGID con GFX_JOB_INTERP; si no, 0 */
 }

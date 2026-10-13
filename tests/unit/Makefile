@@ -20,7 +20,7 @@ CORE_SRCS := $(wildcard $(ROOT)/src/core/*.c $(ROOT)/src/cpu/*.c $(ROOT)/src/rsp
              $(ROOT)/src/frontend/osd_fps.c $(ROOT)/src/frontend/pausectl.c $(ROOT)/src/frontend/cheats.c $(ROOT)/src/frontend/cover.c $(ROOT)/src/frontend/namematch.c $(ROOT)/src/frontend/dlutil.c $(ROOT)/src/frontend/i18n.c \
              $(ROOT)/src/frontend/version.c \
              $(ROOT)/src/frontend/filters/crt_params.c \
-             $(ROOT)/src/rdp/targets.c $(ROOT)/src/host/raster.c $(ROOT)/lib/rsxkit/src/fpgen.c $(ROOT)/lib/rsxkit/src/text.c \
+             $(ROOT)/src/rdp/targets.c $(ROOT)/src/rdp/vmatch.c $(ROOT)/src/host/raster.c $(ROOT)/lib/rsxkit/src/fpgen.c $(ROOT)/lib/rsxkit/src/text.c \
              $(ROOT)/lib/rsxkit/src/ui_geom.c
 TEST_SRCS := $(wildcard $(CURDIR)/*.c)
 OBJS      := $(patsubst $(ROOT)/%.c,$(OUT)/obj/%.o,$(CORE_SRCS) $(TEST_SRCS))

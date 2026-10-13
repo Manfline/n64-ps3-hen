@@ -39,6 +39,10 @@
 #define GFX_CLIP_YP 0x08u
 #define GFX_CLIP_ZF 0x10u
 #define GFX_CLIP_W  0x20u  /* detrás de la cámara (w < 0) */
+#define GFX_CLIP_MASK 0x3Fu
+/* Con GFX_JOB_INTERP los bits de arriba de gfx_vtx.clip guardan la
+ * identidad del vértice (GFX_VGID, gfx.h): gfx_vtx_out la pasa a pad. */
+#define GFX_CLIP_ID_SHIFT 8
 
 /* Vértice del búfer del RSP, ya transformado. */
 struct gfx_vtx {
@@ -47,13 +51,6 @@ struct gfx_vtx {
 	float s, t;           /* texels, con la escala de G_TEXTURE */
 	uint8_t c[4];         /* color final (luz y niebla aplicadas) */
 	uint32_t clip;
-#ifdef SALSA64_GFX_INTERP
-	/* Interpolación por geometría (docs/interpolacion.md): coordenadas de
-	 * recorte del mismo vértice en el cuadro anterior del juego, si se
-	 * encontró (gfx_interp_vertices). */
-	float prev[4];
-	uint32_t matched;
-#endif
 };
 
 struct gfx_light {
@@ -218,6 +215,7 @@ struct gfx_state {
 	uint32_t tex_gen;          /* cambia con cada carga a la TMEM o cambio de tile */
 	struct gfx_load loads[GFX_LOADS];  /* anillo; load_next es la próxima a escribir */
 	uint32_t load_next;
+	uint32_t vgroups;          /* registros GFX_OP_VGROUP de la tarea (GFX_JOB_INTERP; en el hueco antes de tmem) */
 	uint8_t tmem[4096] __attribute__((aligned(16)));
 	struct gfx_texcache tc;
 	/* Fuera del tramo de los estados guardados: al cargar uno se olvida
@@ -244,9 +242,6 @@ struct gfx_state {
 	struct gfx_tilememo tilememo[8];
 
 	void *io;                  /* estado de la plataforma (gfx_io.h) */
-#ifdef SALSA64_GFX_INTERP
-	struct gfx_interp *interp; /* NULL: interpolación apagada */
-#endif
 };
 
 /* ---- E/S: la implementa cada plataforma (io_mem.c, src/spu/gfx/io_spu.c) ----
@@ -277,24 +272,6 @@ int32_t gfx_io_tex_commit(struct gfx_state *g, uint32_t size);
 /* Entrega la textura (del área de gfx_io_tex_begin) a la región de la
  * caché, `off` bytes desde su inicio (múltiplo de 128). */
 void gfx_io_tex_cache(struct gfx_state *g, uint32_t off, uint32_t size);
-
-#ifdef SALSA64_GFX_INTERP
-/* ---- Interpolación de cuadros por geometría (docs/interpolacion.md) ----
- * Solo con -DSALSA64_GFX_INTERP (hoy, el prototipo del host): sin la
- * definición el estado y el código son los de siempre. Con g->interp, la
- * plataforma empareja cada vértice cargado con el mismo vértice del cuadro
- * anterior del juego y la HLE da, por cada vértice de salida, también su
- * posición en ese cuadro.
- *
- * gfx_interp_vertices: se cargaron n vértices en vtx[v0…] desde la RDRAM
- * `addr` (`stride` bytes por vértice en la lista del juego); la plataforma
- * llena prev y matched. gfx_interp_emit: los vértices de salida [first,
- * first + n) tienen esas posiciones en el cuadro anterior (pad = 1 si se
- * emparejó). */
-struct gfx_interp;
-void gfx_interp_vertices(struct gfx_state *g, uint32_t addr, uint32_t stride, uint32_t v0, uint32_t n);
-void gfx_interp_emit(struct gfx_state *g, uint32_t first, const struct gfx_vertex *prev, uint32_t n);
-#endif
 
 /* ---- Módulos ---- */
 
@@ -352,6 +329,13 @@ void gfx_mtx_mul(float out[16], const float a[16], const float b[16]);
 void gfx_load_vertices(struct gfx_state *g, uint32_t addr, uint32_t v0, uint32_t n);
 /* Lo mismo con los n vértices de 16 bytes ya leídos (o armados) en `src`. */
 void gfx_vertices(struct gfx_state *g, const uint8_t *src, uint32_t v0, uint32_t n);
+/* vgroup.c (con -Os en el SPE 0): lo de GFX_JOB_INTERP, sin local store
+ * aparte. gfx_vgroup_begin, al empezar la tarea. gfx_vgroup (sin la bandera
+ * no hace nada): el registro GFX_OP_VGROUP de los n vértices recién cargados
+ * en vtx[v0…] desde `addr` (`stride` bytes por vértice en la lista del
+ * juego) y su identidad en clip. */
+void gfx_vgroup_begin(struct gfx_state *g);
+void gfx_vgroup(struct gfx_state *g, uint32_t addr, uint32_t stride, uint32_t v0, uint32_t n);
 /* Luces y lookat en espacio del modelo (light_model, lookat_model), al día. */
 void gfx_light_vectors(struct gfx_state *g);
 /* G_TEXTURE_GEN: s, t del vértice según su normal (unitaria, espacio del

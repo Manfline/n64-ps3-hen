@@ -900,7 +900,7 @@ static void gfx_acquire(void *ctx, struct gfx_job *job)
 	}
 	job->task = gfx.tasks + 1;
 	job->done_task = gfx.tasks;
-	interp_task_begin(&gfx_state, n64.bus.vi.fields);
+	interp_task_begin(job, n64.bus.vi.fields);
 	/* Como la PS3: el rasterizador lee de sus imágenes lo que viene de un
 	 * destino reciente y decodifica él lo que al final no pueda leer. */
 	if (gfx.raster && raster_fbfx >= 1 && !getenv("SALSA64_NO_FBTEX"))

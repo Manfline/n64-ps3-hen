@@ -4,13 +4,12 @@
  * los dos caminos de docs/interpolacion.md con las mismas escenas (solo
  * host; nada de esto corre en la PS3):
  *
- *   por geometría  la HLE (con -DSALSA64_GFX_INTERP) avisa de cada vértice
- *                  cargado; aquí se le da una identidad (dirección en la
- *                  RDRAM y cuántas veces se cargó antes en el mismo cuadro)
- *                  y se busca el mismo vértice en el cuadro anterior del
- *                  juego. Un grupo de G_VTX que se movió más que max_disp
- *                  píxeles o cruzó w = 0 no se interpola (corte, objeto que
- *                  aparece). El cuadro intermedio es la lista del cuadro
+ *   por geometría  la tarea va con GFX_JOB_INTERP: la HLE deja un registro
+ *                  GFX_OP_VGROUP por cada G_VTX y la identidad de cada
+ *                  vértice de salida en su pad; src/rdp/vmatch.c (lo mismo
+ *                  que hará el PPE al traducir) empareja los grupos con los
+ *                  del cuadro anterior del juego y da la posición anterior de
+ *                  cada vértice. El cuadro intermedio es la lista del cuadro
  *                  nuevo dibujada otra vez con las posiciones interpoladas
  *                  (o extrapoladas); lo que no se emparejó (rectángulos,
  *                  HUD, vértices nuevos) queda donde está.
@@ -41,35 +40,23 @@
 #include <string.h>
 
 #include "raster.h"
+#include "rdp/vmatch.h"
 #include "rsp/gfx/hle.h"
 
 #define W RASTER_W
 #define H RASTER_H
-#define TBL_BITS 16
-#define TBL_SIZE (1u << TBL_BITS)
 #define NTABLES 8   /* tablas de cuadros guardadas (k ≤ 4) */
 #define NIMG 8      /* imágenes de tareas guardadas */
 #define MAX_K 6
 #define MAX_OUT (1u << 16)
+#define VM_GROUPS 8192
+#define VM_CLIP   (1u << 17)
 
-struct entry {
-	uint64_t key;  /* 0: libre */
-	float clip[4];
-};
-
-struct table {
+/* La tabla de grupos de un cuadro (vmatch.h). */
+struct frame_table {
 	uint32_t task;
 	bool valid;
-	struct entry *e;
-};
-
-struct occ {
-	uint32_t addr;  /* dirección + 1; 0: libre */
-	uint32_t n;
-};
-
-struct gfx_interp {
-	int unused;
+	struct vmatch_table t;
 };
 
 /* Una predicción guardada hasta que llegue su verdad (extrapolación). */
@@ -84,15 +71,13 @@ struct pending {
 static struct {
 	struct interp_opts o;
 	bool on;
-	struct gfx_interp ip;
 	uint32_t task;         /* número de la tarea en curso (desde 1) */
-	struct table tables[NTABLES];
-	struct table *cur, *prev;
-	struct occ *occ;
-	uint32_t prev_task;    /* tarea de prev (0: ninguna) */
-	/* Posiciones de cada vértice de salida en el cuadro anterior. */
-	struct gfx_vertex prev_out[MAX_OUT];
-	uint32_t stamp[MAX_OUT];
+	struct frame_table tables[NTABLES];
+	uint32_t prev_task;    /* tarea del cuadro anterior del juego (0: ninguna) */
+	bool key;              /* la tarea en curso es un cuadro del juego (con decimate, 1 de cada k) */
+	struct vmatch_stats vst;  /* emparejamiento de la tarea en curso */
+	/* Posiciones de cada vértice de salida en el cuadro anterior (vmatch_prev). */
+	float prev_v[MAX_OUT][4];
 	struct gfx_vertex mod[MAX_OUT];
 	uint8_t *rdram_copy;
 	void *before, *after;  /* estado del rasterizador antes y después de la tarea */
@@ -103,15 +88,12 @@ static struct {
 	} imgs[NIMG];
 	struct pending pend[16];
 	FILE *csv, *tcsv;
-	uint64_t t_loaded, t_found, t_matched;  /* de la tarea en curso */
-	uint64_t t_groups, t_groups_rejected;
 	uint64_t cuts_geo, cuts_img;
-	uint64_t by_content;   /* búsquedas por contenido (la dirección no estaba) */
 	double last_sad;       /* SAD medio por píxel de la última búsqueda (nivel 0) */
 	bool quiet;            /* sin imágenes (SALSA64_INTERP_SIN_IMAGENES) */
 	bool recording;        /* la tarea en curso está en la ventana */
 	/* Cuentas (desde from_field). */
-	uint64_t v_loaded, v_found, v_matched, v_rejected_disp, groups, groups_rejected;
+	uint64_t v_loaded, v_found, v_matched, groups, groups_found, groups_moved, by_content;
 	uint64_t out_vtx, out_matched, out_tasks;
 	uint64_t sad_evals, sad_blocks, searches;
 	double sum_psnr[8], sum_bad[8], sum_psnr_low[8], sum_bad_low[8];
@@ -122,49 +104,6 @@ static struct {
 enum { M_HOLD, M_BLEND, M_GEO_I, M_IMG_I, M_HOLD_E, M_GEO_E, M_IMG_E, M_COUNT };
 static const char *const mname[M_COUNT] = { "repetir", "fundido", "geometria-i", "imagen-i", "repetir-e",
 					    "geometria-e", "imagen-e" };
-
-static uint32_t hash64(uint64_t k)
-{
-	return (uint32_t)((k * 0x9E3779B97F4A7C15ull) >> (64 - TBL_BITS));
-}
-
-static void tbl_put(struct table *t, uint64_t key, const float clip[4])
-{
-	for (uint32_t i = hash64(key), n = 0; n < TBL_SIZE; i = (i + 1) & (TBL_SIZE - 1), n++) {
-		if (t->e[i].key == 0 || t->e[i].key == key) {
-			t->e[i].key = key;
-			memcpy(t->e[i].clip, clip, sizeof t->e[i].clip);
-			return;
-		}
-	}
-}
-
-static bool tbl_get(const struct table *t, uint64_t key, float clip[4])
-{
-	for (uint32_t i = hash64(key), n = 0; n < TBL_SIZE; i = (i + 1) & (TBL_SIZE - 1), n++) {
-		if (t->e[i].key == 0)
-			return false;
-		if (t->e[i].key == key) {
-			memcpy(clip, t->e[i].clip, sizeof t->e[i].clip);
-			return true;
-		}
-	}
-	return false;
-}
-
-static uint32_t occ_next(uint32_t addr)
-{
-	for (uint32_t i = hash64(addr + 1), n = 0; n < TBL_SIZE; i = (i + 1) & (TBL_SIZE - 1), n++) {
-		if (st.occ[i].addr == 0) {
-			st.occ[i].addr = addr + 1;
-			st.occ[i].n = 1;
-			return 0;
-		}
-		if (st.occ[i].addr == addr + 1)
-			return st.occ[i].n++;
-	}
-	return 0;
-}
 
 void interp_init(const struct interp_opts *o)
 {
@@ -180,8 +119,9 @@ void interp_init(const struct interp_opts *o)
 	if (!st.o.range)
 		st.o.range = 8;
 	for (int i = 0; i < NTABLES; i++)
-		st.tables[i].e = calloc(TBL_SIZE, sizeof(struct entry));
-	st.occ = calloc(TBL_SIZE, sizeof(struct occ));
+		vmatch_table_init(&st.tables[i].t, calloc(VM_GROUPS, sizeof(struct vmatch_group)), VM_GROUPS,
+				  calloc(VM_CLIP, sizeof(float[4])), VM_CLIP, calloc(4 * VM_GROUPS, sizeof(uint32_t)),
+				  4 * VM_GROUPS);
 	st.rdram_copy = malloc(8u << 20);
 	st.before = malloc(raster_state_size());
 	st.after = malloc(raster_state_size());
@@ -201,117 +141,21 @@ void interp_init(const struct interp_opts *o)
 	st.on = true;
 }
 
-/* ---- Por geometría: emparejamiento en la HLE ---------------------------- */
+/* ---- Por geometría: la tarea pide los registros de grupos a la HLE --------- */
 
-void interp_task_begin(struct gfx_state *g, uint32_t field)
+void interp_task_begin(struct gfx_job *job, uint32_t field)
 {
 	if (!st.on)
 		return;
 	st.task++;
 	st.recording = field >= st.o.from_field;
-	g->interp = &st.ip;
-	st.cur = &st.tables[st.task % NTABLES];
-	memset(st.cur->e, 0, TBL_SIZE * sizeof(struct entry));
-	st.cur->task = st.task;
-	st.cur->valid = true;
-	memset(st.occ, 0, TBL_SIZE * sizeof(struct occ));
+	job->flags |= GFX_JOB_INTERP;
 	/* El cuadro anterior del juego: la tarea anterior o, con decimate, la de
 	 * k tareas antes (solo las tareas que son cuadros del juego buscan). */
 	uint32_t back = st.o.decimate ? st.o.k : 1;
-	bool key = !st.o.decimate || st.task % st.o.k == 0;
-	struct table *p = &st.tables[(st.task - back) % NTABLES];
-	st.prev = key && st.task > back && p->valid && p->task == st.task - back ? p : NULL;
-	st.prev_task = st.prev ? st.prev->task : 0;
-	st.t_loaded = st.t_found = st.t_matched = 0;
-	st.t_groups = st.t_groups_rejected = 0;
-}
-
-static float screen_x(const struct gfx_state *g, const float c[4])
-{
-	return g->vtrans[0] + c[0] / c[3] * g->vscale[0];
-}
-
-static float screen_y(const struct gfx_state *g, const float c[4])
-{
-	return g->vtrans[1] - c[1] / c[3] * g->vscale[1];
-}
-
-static bool near_screen(const float c[4])
-{
-	return c[3] > 0.0f && fabsf(c[0]) <= 1.5f * c[3] && fabsf(c[1]) <= 1.5f * c[3];
-}
-
-void gfx_interp_vertices(struct gfx_state *g, uint32_t addr, uint32_t stride, uint32_t v0, uint32_t n)
-{
-	float pv[GFX_MAX_VTX][4];
-	unsigned found = 0, by_content = 0;
-	bool bad_disp = false;
-	const uint8_t *rdram = (const uint8_t *)(uintptr_t)g->job->rdram_ea;
-	for (uint32_t i = 0; i < n && v0 + i < GFX_MAX_VTX; i++) {
-		struct gfx_vtx *v = &g->vtx[v0 + i];
-		uint32_t a = addr + i * stride;
-		/* Dos identidades: la dirección (y cuántas veces se cargó antes en
-		 * el cuadro) y, de respaldo, el contenido del vértice en la lista
-		 * del juego (y sus repeticiones): Perfect Dark copia los vértices
-		 * a un búfer distinto en cada cuadro. */
-		uint64_t key = (uint64_t)(a + 1) << 32 | occ_next(a);
-		uint64_t ch = 0xCBF29CE484222325ull;
-		for (uint32_t b = 0; b < stride && a + b < g->job->rdram_size; b++)
-			ch = (ch ^ rdram[a + b]) * 0x100000001B3ull;
-		/* Con el bit 31 no se confunde con una dirección física (< 8 MB). */
-		uint32_t h32 = (uint32_t)(ch ^ (ch >> 32)) | 0x80000000u;
-		uint64_t ckey = (uint64_t)h32 << 32 | occ_next(h32);
-		float c[4] = { v->x, v->y, v->z, v->w };
-		tbl_put(st.cur, key, c);
-		tbl_put(st.cur, ckey, c);
-		if (st.prev && (tbl_get(st.prev, key, pv[i]) || (by_content++, tbl_get(st.prev, ckey, pv[i])))) {
-			found++;
-			/* Solo cuentan los vértices cerca de la pantalla en los dos
-			 * cuadros: uno muy fuera (w chica, pegado a la cámara) se
-			 * mueve cientos de píxeles sin que sea un corte, y cruzar w = 0
-			 * se resuelve recortando el intermedio. */
-			if (near_screen(pv[i]) && near_screen(c)) {
-				float dx = fabsf(screen_x(g, pv[i]) - screen_x(g, c));
-				float dy = fabsf(screen_y(g, pv[i]) - screen_y(g, c));
-				if (dx > st.o.max_disp || dy > st.o.max_disp)
-					bad_disp = true;
-			}
-		}
-	}
-	/* Todo el grupo o nada: así una malla no se rasga. */
-	bool ok = found == n && !bad_disp;
-	for (uint32_t i = 0; i < n && v0 + i < GFX_MAX_VTX; i++) {
-		struct gfx_vtx *v = &g->vtx[v0 + i];
-		v->matched = ok;
-		if (ok)
-			memcpy(v->prev, pv[i], sizeof v->prev);
-	}
-	st.t_loaded += n;
-	st.t_groups++;
-	st.t_groups_rejected += found == n && !ok;
-	st.t_found += found;
-	st.t_matched += ok ? n : 0;
-	if (st.recording && st.prev) {
-		st.by_content += by_content;
-		st.v_loaded += n;
-		st.v_found += found;
-		st.groups++;
-		if (ok)
-			st.v_matched += n;
-		else if (found == n) {
-			st.groups_rejected++;
-			st.v_rejected_disp += n;
-		}
-	}
-}
-
-void gfx_interp_emit(struct gfx_state *g, uint32_t first, const struct gfx_vertex *prev, uint32_t n)
-{
-	(void)g;
-	for (uint32_t i = 0; i < n && first + i < MAX_OUT; i++) {
-		st.prev_out[first + i] = prev[i];
-		st.stamp[first + i] = st.task;
-	}
+	st.key = !st.o.decimate || st.task % st.o.k == 0;
+	const struct frame_table *p = &st.tables[(st.task - back) % NTABLES];
+	st.prev_task = st.key && st.task > back && p->valid && p->task == st.task - back ? p->task : 0;
 }
 
 /* ---- Imágenes ------------------------------------------------------------ */
@@ -476,13 +320,10 @@ static void error_map(const char *name, const uint32_t *pred, const uint32_t *tr
 
 /* ---- Por geometría: el cuadro intermedio --------------------------------- */
 
-/* Corte por cuadro (cambio de plano: no se interpola nada del cuadro): más
- * de un tercio de los grupos con pareja se movieron más que max_disp, o
- * menos de la mitad de los vértices tiene pareja (otra escena con algún
- * modelo en común, como Link). */
+/* Corte por cuadro (vmatch_pair): no se interpola nada del cuadro. */
 static bool geo_cut(void)
 {
-	return st.t_groups && (st.t_groups_rejected * 3 > st.t_groups || st.t_found * 2 < st.t_loaded);
+	return st.vst.cut;
 }
 
 /* La búsqueda no encontró nada parecido: SAD medio de más de 10/255 por
@@ -496,23 +337,22 @@ static bool img_cut(void)
 static void draw_variant(const struct gfx_job *job, const struct gfx_result *res, uint32_t target, float t, bool extrap,
 			 uint32_t *out)
 {
-	bool cut = geo_cut();
 	uint32_t nv = res->vtx_bytes / sizeof(struct gfx_vertex);
 	if (nv > MAX_OUT)
 		nv = MAX_OUT;
 	const struct gfx_vertex *cur = (const struct gfx_vertex *)(uintptr_t)job->vtx_ea;
 	for (uint32_t i = 0; i < nv; i++) {
-		st.mod[i] = cur[i];
-		st.mod[i].pad = cur[i].w > 1e-3f;  /* para raster_clip_w */
-		if (cut || st.stamp[i] != st.task || !st.prev_out[i].pad)
-			continue;
-		const struct gfx_vertex *p = &st.prev_out[i];
+		/* m = c + (p − c)·k, con p la posición del cuadro anterior
+		 * (vmatch_prev: sin pareja, p = c). */
+		const float *p = st.prev_v[i];
 		struct gfx_vertex *m = &st.mod[i];
-		float k = extrap ? -t : 1.0f - t;  /* m = c + (p − c)·k */
-		m->x = cur[i].x + (p->x - cur[i].x) * k;
-		m->y = cur[i].y + (p->y - cur[i].y) * k;
-		m->z = cur[i].z + (p->z - cur[i].z) * k;
-		m->w = cur[i].w + (p->w - cur[i].w) * k;
+		float k = extrap ? -t : 1.0f - t;
+		*m = cur[i];
+		m->pad = cur[i].w > 1e-3f;  /* para raster_clip_w */
+		m->x = cur[i].x + (p[0] - cur[i].x) * k;
+		m->y = cur[i].y + (p[1] - cur[i].y) * k;
+		m->z = cur[i].z + (p[2] - cur[i].z) * k;
+		m->w = cur[i].w + (p[3] - cur[i].w) * k;
 	}
 	struct gfx_job j2 = *job;
 	j2.vtx_ea = (uint64_t)(uintptr_t)st.mod;
@@ -888,22 +728,40 @@ void interp_after_raster(const struct gfx_job *job, const struct gfx_result *res
 	 * se comparan aquí mismo; las extrapolaciones esperan a su tarea. */
 	settle_pending(st.task, now);
 
-	/* Cuentas de emparejamiento a la salida. */
-	if (st.prev) {
-		uint32_t nv = res->vtx_bytes / sizeof(struct gfx_vertex), om = 0, ot = 0;
+	/* La tabla de grupos de este cuadro, su emparejamiento con el anterior y
+	 * la posición anterior de cada vértice de salida: lo mismo que hará el
+	 * PPE al traducir (src/rdp/vmatch.c). */
+	struct frame_table *ft = &st.tables[st.task % NTABLES];
+	uint32_t nv = res->vtx_bytes / sizeof(struct gfx_vertex);
+	if (nv > MAX_OUT)
+		nv = MAX_OUT;
+	vmatch_build(&ft->t, (const uint8_t *)(uintptr_t)job->cmd_ea, res->cmd_bytes,
+		     (const uint8_t *)(uintptr_t)job->rdram_ea, job->rdram_size);
+	ft->task = st.task;
+	ft->valid = true;
+	const struct vmatch_table *pt = st.prev_task ? &st.tables[st.prev_task % NTABLES].t : NULL;
+	vmatch_pair(pt, &ft->t, st.o.max_disp, &st.vst);
+	uint32_t om = vmatch_prev(pt, &ft->t, &st.vst, (const struct gfx_vertex *)(uintptr_t)job->vtx_ea, nv, st.prev_v);
+	if (st.prev_task) {
+		uint32_t ot = 0;
+		const struct gfx_vertex *vv = (const struct gfx_vertex *)(uintptr_t)job->vtx_ea;
+		for (uint32_t i = 0; i < nv; i++)
+			ot += vv[i].pad != 0;
 		st.out_tasks++;
-		for (uint32_t i = 0; i < nv && i < MAX_OUT; i++) {
-			bool m = st.stamp[i] == st.task && st.prev_out[i].pad;
-			om += m;
-			ot += st.stamp[i] == st.task;
-		}
 		st.out_vtx += nv;
 		st.out_matched += om;
+		st.v_loaded += st.vst.vertices;
+		st.v_found += st.vst.found_vertices;
+		st.v_matched += st.vst.paired_vertices;
+		st.groups += st.vst.groups;
+		st.groups_found += st.vst.found;
+		st.groups_moved += st.vst.moved;
+		st.by_content += st.vst.by_content;
 		if (st.tcsv)
-			fprintf(st.tcsv, "%u,%u,%llu,%llu,%llu,%u,%u,%u\n", st.task, field, (unsigned long long)st.t_loaded,
-				(unsigned long long)st.t_found, (unsigned long long)st.t_matched, nv, om, ot);
+			fprintf(st.tcsv, "%u,%u,%u,%u,%u,%u,%u,%u\n", st.task, field, st.vst.vertices, st.vst.found_vertices,
+				st.vst.paired_vertices, nv, om, ot);
 	}
-	if (!st.prev)
+	if (!st.prev_task)
 		return;
 	const uint32_t *before = task_img(st.prev_task);
 	if (!before)
@@ -983,19 +841,19 @@ void interp_report(void)
 		if (st.v_loaded)
 			fprintf(o,
 				"interp: geometría: %llu vértices cargados en cuadros con anterior; con pareja %.1f %%, "
-				"interpolados %.1f %% (grupos rechazados por desplazamiento %llu de %llu: %.1f %% de los vértices)\n",
+				"interpolados %.1f %% (grupos con pareja %llu de %llu, rechazados por desplazamiento %llu)\n",
 				(unsigned long long)st.v_loaded, 100.0 * st.v_found / st.v_loaded,
-				100.0 * st.v_matched / st.v_loaded, (unsigned long long)st.groups_rejected,
-				(unsigned long long)st.groups, 100.0 * st.v_rejected_disp / st.v_loaded);
+				100.0 * st.v_matched / st.v_loaded, (unsigned long long)st.groups_found,
+				(unsigned long long)st.groups, (unsigned long long)st.groups_moved);
 		if (st.out_vtx)
 			fprintf(o, "interp: geometría: vértices de salida interpolados %.1f %% (%llu tareas, %.0f por tarea)\n",
 				100.0 * st.out_matched / st.out_vtx, (unsigned long long)st.out_tasks,
 				(double)st.out_vtx / st.out_tasks);
 		fprintf(o, "interp: cortes detectados: geometría %llu, imagen %llu (de %llu cuadros con anterior)\n",
 			(unsigned long long)st.cuts_geo, (unsigned long long)st.cuts_img, (unsigned long long)st.searches);
-		if (st.v_loaded)
-			fprintf(o, "interp: geometría: %.1f %% de los vértices se buscaron por contenido (la dirección no estaba)\n",
-				100.0 * st.by_content / st.v_loaded);
+		if (st.groups)
+			fprintf(o, "interp: geometría: %.1f %% de los grupos se encontraron por contenido (la dirección no estaba)\n",
+				100.0 * st.by_content / st.groups);
 		if (st.searches)
 			fprintf(o,
 				"interp: imagen: %llu búsquedas, %.0f bloques y %.0f SAD de %ux%u por búsqueda (%.1f por bloque)\n",

@@ -633,59 +633,13 @@ static void lerp_vertex(struct gfx_vertex *o, const struct gfx_vertex *a, const 
 	o->pad = 0;
 }
 
-#ifdef SALSA64_GFX_INTERP
-/* Las posiciones del triángulo en el cuadro anterior (donde el vértice no
- * se emparejó, la de ahora), con el mismo recorte cercano que gfx_triangle
- * (la t sale de las posiciones de ahora, así los dos cuadros cortan igual). */
-static __attribute__((noinline, cold)) void interp_triangle(struct gfx_state *g, const struct gfx_vtx *const v[3],
-							     uint32_t first)
-{
-	struct gfx_vertex p[4] = { { 0 } };
-	for (int i = 0; i < 3; i++) {
-		struct gfx_vtx q = *v[i];
-		if (q.matched) {
-			q.x = q.prev[0];
-			q.y = q.prev[1];
-			q.z = q.prev[2];
-			q.w = q.prev[3];
-		}
-		gfx_vtx_out(g, &q, &p[i]);
-		p[i].pad = q.matched;
-	}
-	unsigned n = 3;
-	if (g->near_clip) {
-		float d[3];
-		unsigned behind = 0;
-		for (int i = 0; i < 3; i++) {
-			d[i] = v[i]->z + v[i]->w;
-			behind += d[i] < 0.0f;
-		}
-		if (behind) {
-			struct gfx_vertex in[3] = { p[0], p[1], p[2] };
-			n = 0;
-			for (int i = 0; i < 3; i++) {
-				int j = i == 2 ? 0 : i + 1;
-				if (d[i] >= 0.0f)
-					p[n++] = in[i];
-				if ((d[i] < 0.0f) != (d[j] < 0.0f)) {
-					lerp_vertex(&p[n], &in[i], &in[j], d[i] / (d[i] - d[j]));
-					p[n++].pad = in[i].pad & in[j].pad;
-				}
-			}
-		}
-	}
-	struct gfx_vertex o[6] = { p[0], p[1], p[2], p[0], p[2], p[3] };
-	gfx_interp_emit(g, first, o, 3 * (n - 2));
-}
-#endif
-
 void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
 {
 	if (a >= GFX_MAX_VTX || b >= GFX_MAX_VTX || c >= GFX_MAX_VTX)
 		return;
 	const struct gfx_vtx *v[3] = { &g->vtx[a], &g->vtx[b], &g->vtx[c] };
 	/* Fuera del mismo plano los tres: no se ve. */
-	if (v[0]->clip & v[1]->clip & v[2]->clip)
+	if (v[0]->clip & v[1]->clip & v[2]->clip & GFX_CLIP_MASK)
 		return;
 	struct gfx_vertex p[4];
 	for (int i = 0; i < 3; i++)
@@ -719,8 +673,15 @@ void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
 				int j = i == 2 ? 0 : i + 1;
 				if (d[i] >= 0.0f)
 					p[n++] = in[i];
-				if ((d[i] < 0.0f) != (d[j] < 0.0f))
-					lerp_vertex(&p[n++], &in[i], &in[j], d[i] / (d[i] - d[j]));
+				if ((d[i] < 0.0f) != (d[j] < 0.0f)) {
+					lerp_vertex(&p[n], &in[i], &in[j], d[i] / (d[i] - d[j]));
+					/* GFX_JOB_INTERP: entre dos lugares del mismo grupo
+					 * (gfx.h); sin la bandera las identidades son 0. */
+					uint32_t a = in[i].pad, b = in[j].pad;
+					if (a && a < (1u << 25) && GFX_VGID_SERIAL(a) == GFX_VGID_SERIAL(b))
+						p[n].pad = GFX_VCLIP_ID(GFX_VGID_SERIAL(a), GFX_VGID_INDEX(a), GFX_VGID_INDEX(b));
+					n++;
+				}
 			}
 		}
 	}
@@ -736,10 +697,6 @@ void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
 		o[4] = p[2];
 		o[5] = p[3];
 	}
-#ifdef SALSA64_GFX_INTERP
-	if (g->interp)
-		interp_triangle(g, v, g->vtx_count - 3 * (n - 2));
-#endif
 }
 
 /* Rectángulo de pantalla en dos triángulos. x, y en píxeles; s, t en texels

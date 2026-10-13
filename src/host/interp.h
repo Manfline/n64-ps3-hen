@@ -25,9 +25,9 @@ struct interp_opts {
 };
 
 void interp_init(const struct interp_opts *o);
-/* Hilo del CPU, antes de cada tarea gráfica (acquire): prepara el
- * emparejamiento de la HLE. */
-void interp_task_begin(struct gfx_state *g, uint32_t field);
+/* Hilo del CPU, antes de cada tarea gráfica (acquire): pide a la HLE los
+ * registros de grupos (GFX_JOB_INTERP). */
+void interp_task_begin(struct gfx_job *job, uint32_t field);
 /* Alrededor del rasterizador en gfx_done: la tarea ya dibujada es un
  * cuadro del juego; si toca, se inventan los intermedios. */
 void interp_before_raster(void);

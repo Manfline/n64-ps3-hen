@@ -17,7 +17,7 @@ R       := ../..
 ICON0   := $(R)/assets/ps3/ICON0.PNG
 PIC1    := $(R)/assets/ps3/PIC1.PNG
 COMMON  := src/platform/ps3/log.c src/platform/ps3/rec_cache.c src/platform/ps3/gfx_spu.c \
-           src/platform/ps3/audio_spu.c src/platform/ps3/jpeg_spu.c src/platform/ps3/rsp_spu.c src/rdp/rdp.c src/rdp/targets.c \
+           src/platform/ps3/audio_spu.c src/platform/ps3/jpeg_spu.c src/platform/ps3/rsp_spu.c src/rdp/rdp.c src/rdp/targets.c src/rdp/vmatch.c \
            $(patsubst $(R)/%,%,$(wildcard $(R)/src/core/*.c $(R)/src/cpu/*.c $(R)/src/rsp/gfx/*.c $(R)/src/rsp/audio/*.c $(R)/src/rsp/jpeg/*.c \
                                           $(R)/src/rsp/lle/*.c))
 DATA    := vitest_rom gfxtest_rom audiotest_rom
@@ -99,5 +99,9 @@ $(OBJ)/spu/src/rsp/gfx/s2dex.c.o: SPU_CFLAGS += -Os
 # texturas van en geom.c y tmem.c), también: lo que ahorra paga el TEXRECT
 # dentro del tramo S2DEX (el cielo de Kirby 64).
 $(OBJ)/spu/src/rsp/gfx/f3dpd.c.o: SPU_CFLAGS += -Os
+# Lo de la interpolación de cuadros (vgroup.c), también: no le quita local
+# store ni pila a la HLE.
+$(OBJ)/spu/src/rsp/gfx/vgroup.c.o: SPU_CFLAGS += -Os
 # make no ve un cambio de banderas: que se recompilen si cambia este archivo.
-$(OBJ)/spu/src/rsp/gfx/combine.c.o $(OBJ)/spu/src/rsp/gfx/s2dex.c.o $(OBJ)/spu/src/rsp/gfx/f3dpd.c.o: Makefile
+$(OBJ)/spu/src/rsp/gfx/combine.c.o $(OBJ)/spu/src/rsp/gfx/s2dex.c.o $(OBJ)/spu/src/rsp/gfx/f3dpd.c.o \
+$(OBJ)/spu/src/rsp/gfx/vgroup.c.o: Makefile
