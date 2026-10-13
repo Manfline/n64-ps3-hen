@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Compatibility reports / Reportes de compatibilidad
+    url: https://github.com/ricowp81/Salsa64/discussions/1
+    about: Tell us which games work well (or not) on your PS3 / Cuéntanos qué juegos funcionan bien (o no) en tu PS3
+  - name: Questions and help / Preguntas y ayuda
+    url: https://github.com/ricowp81/Salsa64/discussions/categories/q-a
+    about: Installation, setup, where to put your backups / Instalación, ajustes, dónde poner tus respaldos

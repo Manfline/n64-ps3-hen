@@ -77,6 +77,18 @@ Full guide (in Spanish): [docs/uso-ps3.md](docs/uso-ps3.md).
   (`controles.cfg`), the save type per game (`guardado.cfg`), audio
   (`audio.cfg`) and overscan cropping (`overscan.cfg`); see the guide.
 
+## Reporting problems and compatibility
+
+- **A bug in a game** (black screen, freeze, wrong graphics): open an
+  [issue](https://github.com/ricowp81/Salsa64/issues/new/choose) with the
+  form; attach `/dev_hdd0/salsa64/salsa64.log` copied right after quitting
+  (it's rewritten every time Salsa64 starts).
+- **How a game runs on your PS3**: post it in the
+  [compatibility thread](https://github.com/ricowp81/Salsa64/discussions/1).
+- **Questions**: [Discussions → Q&A](https://github.com/ricowp81/Salsa64/discussions/categories/q-a).
+
+Please don't share ROMs or links to them.
+
 ## Building
 
 Everything builds inside a Docker image with

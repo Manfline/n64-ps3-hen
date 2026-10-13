@@ -1,0 +1,89 @@
+name: Bug report / Reporte de error
+description: Something doesn't work or looks wrong in a game / Algo no funciona o se ve mal en un juego
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing Salsa64! The more of these fields you fill in, the faster it can be fixed.
+        ¡Gracias por probar Salsa64! Mientras más campos llenes, más rápido se puede arreglar.
+
+        Please don't attach or link ROMs. / Por favor no adjuntes ni enlaces ROMs.
+        Before reporting, check the known issues / Antes de reportar, revisa los problemas conocidos: [docs/compatibilidad.md](https://github.com/ricowp81/Salsa64/blob/main/docs/compatibilidad.md)
+  - type: input
+    id: version
+    attributes:
+      label: Salsa64 version / Versión de Salsa64
+      description: From the release you installed (e.g. v0.2.2) / Del release que instalaste (p. ej. v0.2.2)
+      placeholder: v0.2.2
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: Game / Juego
+      placeholder: Conker's Bad Fur Day
+    validations:
+      required: true
+  - type: dropdown
+    id: region
+    attributes:
+      label: Game region / Región del juego
+      options:
+        - USA (NTSC)
+        - Europe / Europa (PAL)
+        - Japan / Japón (NTSC-J)
+        - Other / Otra
+    validations:
+      required: true
+  - type: dropdown
+    id: problem
+    attributes:
+      label: What happens / Qué pasa
+      options:
+        - Black screen / Pantalla negra
+        - Freezes / Se congela
+        - Slow / Lento
+        - Graphics look wrong / Gráficos raros
+        - Sound problem / Problema de sonido
+        - Saves don't work / No guarda
+        - Controls / Controles
+        - Other / Otro
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details / Detalles
+      description: When does it happen (boot, a menu, a level)? Does it happen every time? Screenshots or a video help a lot. / ¿Cuándo pasa (al arrancar, en un menú, en un nivel)? ¿Pasa siempre? Capturas o un video ayudan mucho.
+    validations:
+      required: true
+  - type: dropdown
+    id: firmware
+    attributes:
+      label: PS3 exploit / Exploit de la PS3
+      options:
+        - HEN
+        - CFW
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Firmware and console model / Firmware y modelo de consola
+      description: e.g. HEN 4.91, CFW Evilnat 4.92, slim CECH-2501 / p. ej. HEN 4.91, CFW Evilnat 4.92, slim CECH-2501
+  - type: dropdown
+    id: video
+    attributes:
+      label: Video settings / Ajustes de video
+      options:
+        - 720p, auto scale / escala automática
+        - 1080p, auto scale / escala automática
+        - Other (write it in Details) / Otro (escríbelo en Detalles)
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: |
+        Right after it happens, quit Salsa64 and copy `/dev_hdd0/salsa64/salsa64.log` (by FTP or the file manager) before opening Salsa64 again — it's rewritten every time Salsa64 starts. Drag the file here.
+        Justo después de que pase, sal de Salsa64 y copia `/dev_hdd0/salsa64/salsa64.log` (por FTP o el gestor de archivos) antes de volver a abrirlo: se reescribe cada vez que arranca. Arrastra el archivo aquí.
