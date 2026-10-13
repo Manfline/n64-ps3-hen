@@ -54,8 +54,10 @@ measurements on a real PS3 count; RPCS3 is used for functional tests.
 
 Full guide (in Spanish): [docs/uso-ps3.md](docs/uso-ps3.md).
 
-1. Install `salsa64.pkg` with the XMB Package Manager (HEN or CFW). It shows
-   up as "Salsa64" under Games.
+1. Download the latest `salsa64.pkg`
+   ([direct link](https://github.com/ricowp81/Salsa64/releases/latest/download/salsa64.pkg),
+   always the newest version) and install it with the XMB Package Manager
+   (HEN or CFW). It shows up as "Salsa64" under Games.
 2. Copy your own ROM dumps (`.z64`, `.v64` or `.n64`, any byte order, up to
    64 MB) to `/dev_hdd0/salsa64` (for example over webMAN MOD's FTP) or to a
    `salsa64` folder at the root of a FAT32 USB stick.
