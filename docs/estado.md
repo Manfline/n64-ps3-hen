@@ -75,6 +75,16 @@ texturas siguen en geom.c y tmem.c con -O2) pasa a -Os: holgura de 1600
 (en `b650d80`) a 1984 bytes. Medir en la PS3 que Perfect Dark no pierda
 velocidad en el SPE.
 
+Tercera vuelta (enemigos sin cuerpo en el nivel 1-1): con el RSP a bajo
+nivel (`--lle=all`, desde el estado de la PS3) los enemigos salían
+completos, así que la falla estaba en la HLE del RSP. Kirby orienta sus
+enemigos hacia la cámara cambiando la matriz combinada con
+`gSPInsertMatrix` (`G_MOVEWORD` `G_MW_MATRIX`), que la HLE de F3D ya hacía
+(`gfx_insert_matrix`) y la de F3DEX2 ignoraba: los modelos quedaban
+aplastados (el cuerpo dorado no se veía; el enemigo de fuego era una
+línea). Smash también lo usa: en su demo cambian detalles de menos de un
+píxel (Congo Jungle, Fox).
+
 **Pokémon Stadium 2: fondo del título como ruido.** El fondo es un JPEG
 que decodifica el microcódigo JPEG del RSP: el mismo código que el de
 Zelda OoT (0xAF0 bytes idénticos byte a byte; el de OoT está en su RDRAM

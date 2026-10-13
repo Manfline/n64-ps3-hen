@@ -53,6 +53,10 @@ static void do_moveword(struct gfx_state *g, uint32_t w0, uint32_t w1)
 		gfx_clip_ratio(g, offset, w1);
 		break;
 	case G_MW_MATRIX:
+		/* gSPInsertMatrix: Kirby 64 orienta así sus enemigos hacia la
+		 * cámara (sin esto quedaban aplastados: sin cuerpo). */
+		gfx_insert_matrix(g, offset, w1);
+		break;
 	case G_MW_FORCEMTX:
 	case G_MW_PERSPNORM:
 	default:
