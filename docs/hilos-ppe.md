@@ -350,18 +350,22 @@ emulación. Cada 5 s, al log:
   (unidades de ejecución, L1 y L2 de 512 KB). La correlación natural está
   sesgada (las escenas pesadas traen más tareas que traducir), por eso
   además:
-- **A/B en la misma corrida** con `SALSA64_DATA_DIR/carga-hilo1` («N [KB]»,
-  por omisión N = 2000 y 512 KB): presentación hace N µs de trabajo de
-  mentira por campo presentado, leyendo y escribiendo una línea de caché por
-  vuelta sobre KB de memoria (como la traducción, que recorre la salida de
-  la HLE y escribe comandos del RSX; 512 KB es toda la L2), medio segundo sí
-  y medio no. Línea `carga-hilo1 (N µs): sin carga …; con carga …` con lo
-  mismo por grupo y la carga media que cayó dentro de cada campo. La
-  pendiente (ms de emulación perdidos por ms de carga) por el trabajo real
-  del hilo 1 da lo que hoy le cuesta a la emulación. Los grupos por solape
-  cuentan solo los campos sin carga, así una corrida con la bandera da las
-  dos cosas. Es una bandera global (todas las apps la leen al abrir un
-  juego): renombrarla a `.off` al terminar.
+- **A/B en la misma corrida** con `SALSA64_DATA_DIR/carga-hilo1` («A B [KB]»,
+  por omisión 1000 3000 512): presentación hace trabajo de mentira por campo
+  presentado, leyendo y escribiendo una línea de caché por vuelta sobre KB
+  de memoria (como la traducción, que recorre la salida de la HLE y escribe
+  comandos del RSX; 512 KB es toda la L2), en fases de medio segundo de 0, A
+  y B µs. Línea `carga-hilo1 por fase: 0 µs …; A µs …; B µs …` con lo mismo
+  por grupo y la carga media que cayó dentro de cada campo (cada campo va a
+  la fase vigente al empezar y al terminar; los que cruzan un cambio se
+  descartan). Tres fases dicen si el costo crece en línea con la carga o
+  salta (la L2 compartida). La pendiente (ms de emulación perdidos por ms de
+  carga) por el trabajo real del hilo 1 da lo que hoy le cuesta a la
+  emulación. Los grupos por solape cuentan solo los campos de la fase 0, así
+  una corrida con la bandera da las dos cosas. Sin el archivo no hay carga:
+  solo los contadores. Es una bandera global (todas las apps la leen al
+  abrir cada juego, también desde el menú): renombrarla a `.off` al
+  terminar.
 
 ## Mediciones
 

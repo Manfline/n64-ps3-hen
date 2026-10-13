@@ -514,12 +514,13 @@ static struct {
  * trabajo; las ventanas de 5 s agrupan los campos por solape y dan, para
  * cada grupo, ms de emulación y ns por ciclo emulado fuera de los bucles de
  * espera (lo que no depende de cuánto trabajo traiga el campo). Con
- * SALSA64_DATA_DIR/carga-hilo1 («N [KB]»), además, N µs de trabajo de mentira
- * por campo presentado que recorre KB de memoria (por omisión 512: toda la
- * L2), medio segundo sí y medio no; el log compara los campos con y sin
- * ella. Solo lectura de contadores: nada cambia en la emulación. */
+ * SALSA64_DATA_DIR/carga-hilo1 («A B [KB]», por omisión 1000 3000 512),
+ * además, trabajo de mentira por campo presentado que recorre KB de memoria
+ * (512: toda la L2), en fases de medio segundo: 0, A y B µs; el log compara
+ * los campos de cada fase. Sin el archivo, solo los contadores. */
 #define LOAD_PATH SALSA64_DATA_DIR "/carga-hilo1"
 #define LOAD_KB_DEFAULT 512u
+#define LOAD_PHASES 3
 #define OVL_GROUPS 4
 
 static inline uint64_t tb_now(void)
@@ -568,20 +569,21 @@ struct ovl_group {
 };
 
 static struct {
-	struct busy_clock busy, load;  /* presentación despierta; carga de mentira */
-	uint32_t load_us, load_kb;     /* carga-hilo1 (0: sin carga) */
+	struct busy_clock busy, load_clock;  /* presentación despierta; carga de mentira */
+	bool load;                     /* carga-hilo1 presente */
+	uint32_t load_us[LOAD_PHASES], load_kb;  /* µs por campo de cada fase (la primera, 0) */
 	uint8_t *load_buf;
-	uint64_t load_phase;           /* timebase del próximo cambio de fase */
-	bool load_on;
+	uint64_t load_next;            /* timebase del próximo cambio de fase */
+	volatile uint32_t load_phase;  /* fase en curso (la lee emulación) */
 	/* Presentación, ventana en curso (ticks): flip anterior (dormida),
 	 * flush (traducción y lo que cae dentro), presentar el campo (sin el
 	 * flush ni el flip anterior) y la carga de mentira; lo de rdp.tb que
 	 * cayó dentro de los flush. */
 	uint64_t t_flip, t_flush, t_present, t_load;
 	struct salsa64_rdp_tb in_flush;
-	/* Emulación: por solape (< 0,1 ms, 0,1–1, 1–3, ≥ 3) y por carga de
-	 * mentira (sin, con: ≥ 1/4 de lo pedido en el campo). */
-	struct ovl_group by_ovl[OVL_GROUPS], by_load[2];
+	/* Emulación: por solape (< 0,1 ms, 0,1–1, 1–3, ≥ 3) y por fase de la
+	 * carga de mentira (la misma al empezar y al terminar el campo). */
+	struct ovl_group by_ovl[OVL_GROUPS], by_load[LOAD_PHASES];
 } h1;
 
 static uint8_t h1_load_mem[LOAD_KB_DEFAULT << 10] __attribute__((aligned(128)));
@@ -589,30 +591,37 @@ static uint8_t h1_load_mem[LOAD_KB_DEFAULT << 10] __attribute__((aligned(128)));
 static void load_config(void)
 {
 	FILE *f = fopen(LOAD_PATH, "r");
-	h1.load_us = 0;
-	h1.load_kb = LOAD_KB_DEFAULT;
+	h1.load = false;
+	h1.load_phase = 0;
+	h1.load_next = 0;
 	if (!f)
 		return;
-	if (fscanf(f, "%u %u", &h1.load_us, &h1.load_kb) < 1)
-		h1.load_us = 2000;
+	h1.load = true;
+	h1.load_us[0] = 0;
+	h1.load_kb = LOAD_KB_DEFAULT;
+	int n = fscanf(f, "%u %u %u", &h1.load_us[1], &h1.load_us[2], &h1.load_kb);
 	fclose(f);
-	if (!h1.load_kb || h1.load_kb > LOAD_KB_DEFAULT)
+	if (n < 1)
+		h1.load_us[1] = 1000;
+	if (n < 2)
+		h1.load_us[2] = 3 * h1.load_us[1];
+	if (n < 3 || !h1.load_kb || h1.load_kb > LOAD_KB_DEFAULT)
 		h1.load_kb = LOAD_KB_DEFAULT;
 	h1.load_buf = h1_load_mem;
-	salsa64_log("carga-hilo1: %u µs de trabajo de mentira por campo presentado sobre %u KB, medio segundo sí y "
-		    "medio no (diagnóstico, %s)", h1.load_us, h1.load_kb, LOAD_PATH);
+	salsa64_log("carga-hilo1: trabajo de mentira por campo presentado sobre %u KB, en fases de medio segundo de 0, %u "
+		    "y %u µs (diagnóstico, %s)", h1.load_kb, h1.load_us[1], h1.load_us[2], LOAD_PATH);
 }
 
 /* La carga de mentira: lee y escribe una línea de caché por vuelta sobre
  * load_kb, como la traducción que recorre la salida de la HLE y escribe
  * comandos del RSX, hasta gastar el tiempo pedido. */
-static void h1_load_run(uint32_t fields)
+static void h1_load_run(uint32_t us)
 {
 	static uint32_t pos;
-	uint64_t hz = spukit_tick_hz(), t0 = tb_now(), end = t0 + (uint64_t)h1.load_us * fields * hz / 1000000u;
+	uint64_t hz = spukit_tick_hz(), t0 = tb_now(), end = t0 + (uint64_t)us * hz / 1000000u;
 	uint32_t words = h1.load_kb << 7, acc = 0;  /* palabras de 8 bytes */
 	volatile uint64_t *p = (volatile uint64_t *)h1.load_buf;
-	busy_start(&h1.load, t0);
+	busy_start(&h1.load_clock, t0);
 	do {
 		for (int k = 0; k < 256; k++) {
 			acc += (uint32_t)p[pos];
@@ -621,21 +630,21 @@ static void h1_load_run(uint32_t fields)
 		}
 	} while (tb_now() < end);
 	uint64_t t1 = tb_now();
-	busy_stop(&h1.load, t1);
+	busy_stop(&h1.load_clock, t1);
 	h1.t_load += t1 - t0;
 }
 
-/* Al terminar cada campo (emulación). */
-static void ovl_note(uint64_t tb_emu, uint64_t tb_ovl, uint64_t tb_load, uint64_t cycles, uint64_t sleep_us)
+/* Al terminar cada campo (emulación). phase: la fase de la carga de
+ * mentira durante todo el campo (-1: cambió en medio o sin carga). */
+static void ovl_note(uint64_t tb_emu, uint64_t tb_ovl, uint64_t tb_load, uint64_t cycles, uint64_t sleep_us, int phase)
 {
 	uint64_t ms = spukit_tick_hz() / 1000u;
 	int g = tb_ovl < ms / 10 ? 0 : tb_ovl < ms ? 1 : tb_ovl < 3 * ms ? 2 : 3;
 	/* Por solape, solo los campos sin carga de mentira: así una corrida con
 	 * carga-hilo1 da las dos mediciones. */
-	struct ovl_group *o[2] = { tb_load ? NULL : &h1.by_ovl[g], NULL };
-	if (h1.load_us)
-		o[1] = !tb_load ? &h1.by_load[0]
-		     : tb_load * 4 >= (uint64_t)h1.load_us * spukit_tick_hz() / 1000000u ? &h1.by_load[1] : NULL;
+	struct ovl_group *o[2] = { tb_load || phase > 0 ? NULL : &h1.by_ovl[g], NULL };
+	if (phase >= 0)
+		o[1] = &h1.by_load[phase];
 	for (int i = 0; i < 2; i++) {
 		if (!o[i])
 			continue;
@@ -1498,11 +1507,13 @@ static void emu_thread(void *arg)
 		pads_apply();  /* después de la espera: lo más reciente de los mandos */
 		beat.emu_at = "campo";
 		uint64_t c0 = n64.cpu.cycles, i0 = n64.cpu.idle_cycles, s0 = gfx_spu.sleep_us + jpeg_spu.sleep_us;
-		uint64_t tb0 = tb_now(), o0 = busy_at(&h1.busy, tb0), l0 = busy_at(&h1.load, tb0);
+		uint64_t tb0 = tb_now(), o0 = busy_at(&h1.busy, tb0), l0 = busy_at(&h1.load_clock, tb0);
+		uint32_t ph0 = h1.load_phase;
 		uint64_t cycles = salsa64_n64_run_field(&n64);
 		uint64_t tb1 = tb_now();
-		ovl_note(tb1 - tb0, busy_at(&h1.busy, tb1) - o0, busy_at(&h1.load, tb1) - l0,
-			 (n64.cpu.cycles - c0) - (n64.cpu.idle_cycles - i0), gfx_spu.sleep_us + jpeg_spu.sleep_us - s0);
+		ovl_note(tb1 - tb0, busy_at(&h1.busy, tb1) - o0, busy_at(&h1.load_clock, tb1) - l0,
+			 (n64.cpu.cycles - c0) - (n64.cpu.idle_cycles - i0), gfx_spu.sleep_us + jpeg_spu.sleep_us - s0,
+			 h1.load && h1.load_phase == ph0 ? (int)ph0 : -1);
 		uint64_t t1 = sysGetSystemTime();
 		beat.emu_at = "fin del campo";
 		pif_edges_note();
@@ -1862,7 +1873,7 @@ static struct {
 	uint64_t lle_instr0, lle_ticks0, lle_wait0, lle_sleep0;
 	uint64_t h1_busy0;
 	struct salsa64_rdp_tb rdp_tb0;
-	struct ovl_group ovl0[OVL_GROUPS], load0[2];
+	struct ovl_group ovl0[OVL_GROUPS], load0[LOAD_PHASES];
 } sw;
 
 /* Las ventanas del hilo 1 empiezan aquí. */
@@ -1899,10 +1910,11 @@ static void h1_stats(uint32_t fields, uint64_t dt_us)
 		ovl_text(g[i], sizeof g[i], &h1.by_ovl[i], &sw.ovl0[i], false);
 	salsa64_log("hilo 1 sobre la emulación, campos por solape: < 0,1 ms %s; 0,1–1 ms %s; 1–3 ms %s; ≥ 3 ms %s", g[0],
 		    g[1], g[2], g[3]);
-	if (h1.load_us) {
-		ovl_text(g[0], sizeof g[0], &h1.by_load[0], &sw.load0[0], true);
-		ovl_text(g[1], sizeof g[1], &h1.by_load[1], &sw.load0[1], true);
-		salsa64_log("carga-hilo1 (%u µs): sin carga %s; con carga %s", h1.load_us, g[0], g[1]);
+	if (h1.load) {
+		for (int i = 0; i < LOAD_PHASES; i++)
+			ovl_text(g[i], sizeof g[i], &h1.by_load[i], &sw.load0[i], true);
+		salsa64_log("carga-hilo1 por fase: 0 µs %s; %u µs %s; %u µs %s", g[0], h1.load_us[1], g[1], h1.load_us[2],
+			    g[2]);
 	}
 	h1_window_reset();
 }
@@ -2629,14 +2641,15 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		if (!overlay) {
 			beat.pres_at = "cola";
 			drain(now, 1);
-			if (h1.load_us) {
+			if (h1.load) {
 				uint64_t t = tb_now();
-				if (t >= h1.load_phase) {
-					h1.load_on = !h1.load_on;
-					h1.load_phase = t + spukit_tick_hz() / 2;
+				if (t >= h1.load_next) {
+					h1.load_phase = (h1.load_phase + 1) % LOAD_PHASES;
+					h1.load_next = t + spukit_tick_hz() / 2;
 				}
-				if (h1.load_on && pres.frames_total != shown)
-					h1_load_run(pres.frames_total - shown);
+				uint32_t us = h1.load_us[h1.load_phase] * (pres.frames_total - shown);
+				if (us)
+					h1_load_run(us);
 			}
 			if (state_parked && state_req) {
 				beat.pres_at = "barrera";
