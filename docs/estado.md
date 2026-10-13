@@ -44,12 +44,28 @@ nemu64-test, vitest, Perfect Dark y GoldenEye sin diferencias
 (r0 como base vale 0 en el PPE) y la cadena entrando por el extremo
 equivocado.
 
-Pendiente: medir en la PS3 real (protocolo en docs/perf-log.md) con el
-A/B de `jit-ancho`; la ganancia esperada es por líneas de caché, no por
-instrucciones ejecutadas (el camino caliente ejecuta ~3 palabras menos por
-acceso). Lo que queda grande por instrucción: la entrada de bloque (ktlb +
-evento, 7–8 palabras), la salida (escritura + enlace), la ALU de 32 bits con
-su `extsw` y la FPU en línea (~35–40 palabras por operación).
+**PS3 real, primera corrida** (2026-10-13, misma noche; detalle en
+docs/perf-log.md, «Código compacto»): Perfect Dark en la segunda escena de
+la intro 15,4 → 16,0 ns por instrucción emulada del compacto al ancho
+(−4 %; −7 % en la primera escena pesada); GoldenEye compacto duró 30 s y no
+alcanza para concluir (una ventana pesada a 13,6 ns contra 16,7–17,7 del
+ancho): por repetir 2 min. SM64 y Zelda a 59,5–59,7 campos/s.
+
+**Muestreo por tiempo** (mismo día, a pedido de main; docs/rec-ppe.md,
+«Muestreo por tiempo»): `src/cpu/rec_sample.c`, archivo `muestreo` en la
+PS3 y `SALSA64_REC_SAMPLE=1` en el host. La entrada de cada bloque deja su
+id (2 palabras), el preámbulo y el despachador marcan lo que se hace en C,
+y un hilo de prioridad 1100 muestrea cada 200 µs; al cerrar el juego, los
+30 bloques con más tiempo con sus palabras de PPC. Probado en qemu
+(nemu64-test con muestreo: mismos 433 fallos; GoldenEye corto: informe
+coherente). Falta la primera corrida en la PS3 (paquete SLSA00106 del
+22:53 con el muestreo).
+
+Lo que queda grande por instrucción: la entrada de bloque (ktlb + evento,
+7–8 palabras), la salida (escritura + enlace), la ALU de 32 bits con su
+`extsw` y la FPU en línea (~35–40 palabras por operación). Ideas anotadas
+para después en docs/rec-ppe.md (datos por trabajo, precarga del sucesor,
+bench de huella).
 ## 2026-10-12 (noche) — Plan para la jerarquía de memoria del PPE (docs/cache-ppe.md)
 
 Documento de diseño, sin código: dónde se van los ~54 ciclos por
