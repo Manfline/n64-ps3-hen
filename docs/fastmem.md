@@ -255,7 +255,7 @@ Resultados en qemu (ppc64, `tools/qemu-ppc64.sh`):
 | vitest `--rec` | OK; 474 accesos sin prueba, 41 parchados tras fallar (la pantalla por KSEG1 y los registros del VI) |
 | nemu64-test `--rec` con registros fijos | **440 fallas = las 433 de la línea base + 7 esperadas**: «LW/SW with address not sign extended» (una dirección de 64 bits sin extensión de signo es error de dirección en la N64; fastmem la recorta a 32 bits) y «Unaligned LW/SW/LWC1 exception» (no se comprueba la alineación). Las dos son fallos de programa en la consola real y ningún juego del censo las produce. Fastmem se apagó solo a mitad de la suite (sus pruebas de la TLB mapean kuseg bajo) y el resto corrió con la prueba: 10 201 accesos sin prueba, 31 parchados |
 | nemu64-test `--lockstep` | diverge en la prueba de LW no alineado (badvaddr …a26: el intérprete lanza AdEL), como corresponde; no sirve de lockstep con fastmem |
-| GoldenEye hasta la presa `--lockstep`, Perfect Dark 3 G `--lockstep` | en curso |
+| GoldenEye hasta la presa `--lockstep` (7,5 G ciclos, 203 M entradas a bloques comparadas), Perfect Dark 3 G `--lockstep` | **sin diferencias**; 282 y 764 accesos parchados tras fallar |
 | Expansión (GoldenEye hasta la presa, `SALSA64_REC_DUMP=1 SALSA64_REC_PROF=12000 SALSA64_REC_PROF_TOP=4000 SALSA64_REC_PIN=1`, `tools/rec-expansion.py --counter 8`, pesado por ejecuciones) | **calientes 8,16 → 6,87 palabras por instrucción MIPS (−16 %)**, lo estimado en la sección 1; frías 7,40 → 10,06 (+36 %: la copia del acceso con su prueba, 7 palabras por carga y 11 por almacenamiento) y en total 15,57 → 16,93 (+9 %). 74 037 accesos sin prueba y **282 parchados** en 80 s de consola (los registros del VI, SP, AI y PI, la ROM y el PIF): el fallo es una rareza, no un costo. En los 25 bloques más ejecutados, 8,1 → 6,8 calientes |
 
 Lo que la expansión dice para la PS3: la ganancia está en las líneas
@@ -371,16 +371,54 @@ sin escribirlo en medio, tramo de `imm` ≤ 32 KB y alineación compatible):
 Sobre las 8,16 palabras calientes por instrucción de GoldenEye es −9 %
 (fastmem solo: −16 %; los dos juntos, más). Y no depende de nada de lv2.
 
-Lo que falta decidir para el emisor: (1) el registro de `Tb` (los
-temporales r3–r12 los pisan las instrucciones de en medio; candidatos:
-r7/T_HI, que solo usan MULT/DIV, LWL/LWR y compañía —el grupo se corta
-ahí—, o r26/R_TARGET en los bloques sin JR); (2) si la prueba del grupo
-falla, el camino frío del primer acceso prueba la `ktlb` con la página de
-va_lo (si el tramo cabe en la página, `Tb` sale de la física) y, si no,
-**sale al intérprete antes de ese acceso** (exit_before: el resto del bloque
-básico lo corre el intérprete), porque los accesos siguientes no llevan
-prueba propia; los grupos de E/S (los cuatro registros del PI) pagan eso
-unas pocas veces por campo; (3) un grupo no cruza un destino de salto
-interno (al volver por el lazo, `rs` pudo cambiar después del grupo); (4)
-`code_flags` de los almacenamientos indexado por la dirección del host
-(`addi` + `rlwinm` con máscara de 16 bits) exige la RDRAM alineada a 8 MB.
+### Hecho (2026-10-13; `group_pass`, `emit_group_head`, `emit_group_tb` en rec_emit.c)
+
+- **`Tb` es T_HI (r7).** Los temporales r3–r12 los pisan las instrucciones de
+  en medio; r7 solo lo usan MULT/DIV y compañía (`emit_hilo`), LWL/LWR y
+  compañía y la escritura de FCR31 de las operaciones de COP1: el grupo se
+  corta antes de cualquiera de esas. Eso le quita un quinto al ahorro
+  (GoldenEye 0,76 → 0,59 por instrucción); recuperarlo es cambiar r6/r7 por
+  otros temporales en la escritura de FCR31.
+- **Un grupo abierto bloquea a los demás**: con un solo `Tb`, un acceso con
+  otro base dentro del tramo de un grupo va con su prueba (no toca T_HI).
+  Fue el primer error que encontró el lockstep de nemu64-test (dos grupos
+  solapados, uno pisaba el `Tb` del otro). Costo: GoldenEye 0,59 → 0,50,
+  Perfect Dark 0,45, Zelda 0,84 palabras por instrucción (estimado).
+- **La C no pisa `Tb`**: toda llamada a C que vuelve al camino caliente
+  pasa por `emit_slow_call` (el trampolín del bloque deja el pc en r7); con
+  un grupo abierto guarda T_HI en `cpu->rec_tb` antes y lo repone después
+  (dos palabras, casi siempre frías). Recomponerlo con la doblada de KSEG0,
+  como estaba primero, daba un puntero fuera de la RDRAM cuando el base era
+  una dirección mapeada por la TLB: Perfect Dark moría al segundo bloque.
+- **Si la prueba del grupo falla**: el camino frío de la cabeza prueba la
+  `ktlb` con va_lo (la rutina del preámbulo, con D si el grupo almacena) y,
+  si el tramo cabe en la página de 4 KB, `Tb` sale de la física. Si no
+  (página sin anotar, E/S, excepción), **el acceso de la cabeza va por C**
+  como cualquier camino lento (anota la página si traduce, o lanza la
+  excepción) y se vuelve a probar la `ktlb` (`emit_group_reprobe`): si
+  ahora traduce, `Tb` y siguen los miembros; si no, el intérprete sigue
+  **después de la cabeza** (exit después de k, como las demás salidas).
+  Salir al intérprete *antes* de la cabeza, como estaba primero, dejaba la
+  página sin anotar para siempre: los grupos sobre datos mapeados (Perfect
+  Dark) se habrían interpretado en cada pasada. Los miembros no llevan
+  prueba propia; las cargas de un grupo no tienen camino frío y los
+  almacenamientos solo el de `code_flags` (índice: dirección del host menos
+  la RDRAM, sin exigir alineación de la RDRAM).
+- **Un grupo no cruza un destino de salto interno** (al volver por el lazo
+  el base pudo cambiar después del grupo) **ni empieza en el delay slot de
+  un branch-likely** (solo corre si se toma: los de después no verían
+  `Tb`).
+- Interruptor para el A/B: `SALSA64_REC_OPT_NO_GROUP` (`jit-sin-grupos` en
+  la PS3, `SALSA64_REC_NO_GROUP=1` en el host). Encendido por omisión: es
+  exacto (nemu64-test en `--lockstep` entero sin diferencias; las unitarias
+  en los cinco modos).
+
+Medido en el host (volcados con el perfil por bloque, `tools/rec-expansion.py`):
+
+| | Calientes por instrucción MIPS | Frías | Total |
+|---|---|---|---|
+| Perfect Dark, intro (3 G ciclos) | 6,84 → 6,45 (**−6 %**) | 6,50 → 6,09 (−6 %) | 13,34 → 12,54 (−6 %) |
+| GoldenEye hasta la presa | (en curso) | | |
+
+Las frías también bajan: los miembros de un grupo no tienen camino frío
+(las cargas) o solo el de `code_flags` (los almacenamientos).
