@@ -205,10 +205,11 @@ void osd_pause_menu_draw(const struct osd_pause_menu *m, float lw, float lh)
 
 void osd_image_menu_draw(const struct osd_image_menu *m, float lw, float lh)
 {
-	static const char *const labels[IM_ROWS] = { "Filtro", "Aspecto", "Recorte del borde", "Escala interna",
+	static const char *const labels[IM_ROWS] = { "Filtro", "Densidad", "Aspecto", "Recorte del borde", "Escala interna",
 						     "Guardar para este juego", "Volver" };
 	const float sc = 1.75f, row_h = 38.0f, pad = 20.0f, w = 560.0f;
-	float h = 46.0f + IM_ROWS * row_h + 26.0f + 34.0f + 2 * pad;
+	int rows = IM_ROWS - !m->density;  /* sin máscara no hay fila «Densidad» */
+	float h = 46.0f + rows * row_h + 26.0f + 34.0f + 2 * pad;
 	float x = 32.0f, y = lh - h - 32.0f;
 	char val[96];
 	/* Sin oscurecer la pantalla: la imagen del juego se ve al lado. */
@@ -216,8 +217,10 @@ void osd_image_menu_draw(const struct osd_image_menu *m, float lw, float lh)
 	rsxkit_ui_rect(x - 2.0f, y - 2.0f, w + 4.0f, h + 4.0f, 0xFFFFFF50);
 	rsxkit_ui_rect(x, y, w, h, 0x141414E0);
 	rsxkit_ui_text(x + pad, y + pad, tr("Imagen"), 2.25f, 0xFFFFFFFF, 0);
-	for (int i = 0; i < IM_ROWS; i++) {
-		float ry = y + pad + 46.0f + i * row_h;
+	for (int i = 0, row = 0; i < IM_ROWS; i++) {
+		if (i == IM_DENSITY && !m->density)
+			continue;
+		float ry = y + pad + 46.0f + row++ * row_h;
 		bool cur = i == m->sel, dim = i == IM_SAVE && !m->can_save;
 		if (cur)
 			rsxkit_ui_rect(x + 8.0f, ry - 5.0f, w - 16.0f, row_h - 2.0f, 0x3A5A9AE0);
@@ -228,7 +231,7 @@ void osd_image_menu_draw(const struct osd_image_menu *m, float lw, float lh)
 		rsxkit_ui_text(x + w - pad - cells(val) * RSXKIT_FONT_W * sc, ry, val, sc, cur ? 0x9CC8FFFF : 0xA8B4C4FF, 0);
 	}
 	/* Una nota: de quién es el filtro, o que la escala espera a seguir. */
-	float fy = y + pad + 46.0f + IM_ROWS * row_h;
+	float fy = y + pad + 46.0f + rows * row_h;
 	const char *note = m->sel == IM_FILTER && m->credit ? m->credit
 			   : m->scale_pending ? "La escala nueva se pone al seguir jugando." : NULL;
 	if (note)

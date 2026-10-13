@@ -88,7 +88,8 @@ void osd_pause_menu_draw(const struct osd_pause_menu *m, float lw, float lh);
  * textos van en español y se traducen aquí. */
 struct osd_image_menu {
 	int sel;                /* fila elegida (IM_*) */
-	const char *value[4];   /* filtro, aspecto, recorte y escala */
+	const char *value[5];   /* filtro, densidad, aspecto, recorte y escala (por IM_*) */
+	bool density;           /* hay fila «Densidad» (el filtro es la máscara) */
 	bool scale_pending;     /* la escala elegida se pone al seguir (lo dice una nota) */
 	bool can_save;          /* hay ROM a la que guardarle los ajustes */
 	const char *credit;     /* de quién es el filtro */

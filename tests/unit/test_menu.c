@@ -356,6 +356,77 @@ static void menu_pages(void)
 	CHECK_EQ(m.sel, menu_row_exit(&m));
 }
 
+/* «Densidad»: solo con el CRT de máscara (Opciones y la página del juego);
+ * se guarda en menu.cfg y en juegos/. */
+static void menu_density(void)
+{
+	struct menu m;
+	nav_setup(&m, 3, 0);
+	menu_input(&m, 0, 0);
+	m.page = MENU_PAGE_OPTIONS;
+	m.opt = MENU_OPT_FILTER;
+	m.set.filter = MENU_FILTER_CRT_MASK;
+	CHECK_EQ(m.set.density, MENU_DENSITY_NORMAL);
+	menu_input(&m, 0, 10);
+	menu_input(&m, DOWN, 20);
+	CHECK_EQ(m.opt, MENU_OPT_DENSITY);
+	menu_input(&m, 0, 30);
+	CHECK_EQ(menu_input(&m, RIGHT, 40), MENU_SETTINGS);
+	CHECK_EQ(m.set.density, MENU_DENSITY_FINE);
+	menu_input(&m, 0, 50);
+	menu_input(&m, DOWN, 60);
+	CHECK_EQ(m.opt, MENU_OPT_RESOLUTION);
+	/* Sin la máscara no hay fila: de Filtro a Resolución. */
+	m.set.filter = MENU_FILTER_SMOOTH;
+	m.opt = MENU_OPT_FILTER;
+	menu_input(&m, 0, 70);
+	menu_input(&m, DOWN, 80);
+	CHECK_EQ(m.opt, MENU_OPT_RESOLUTION);
+	/* menu.cfg: ida y vuelta. */
+	char buf[512];
+	struct menu_settings back;
+	int n = menu_settings_format(&m.set, buf, sizeof buf);
+	CHECK(n > 0 && n < (int)sizeof buf);
+	menu_settings_default(&back);
+	menu_settings_parse(&back, buf, (size_t)n);
+	CHECK_EQ(back.density, MENU_DENSITY_FINE);
+	CHECK_EQ(back.filter, MENU_FILTER_SMOOTH);
+	/* La página del juego: la fila sigue al filtro que vale para él. */
+	struct menu_game g;
+	menu_game_default(&g);
+	CHECK_EQ(g.density, -1);
+	m.set.filter = MENU_FILTER_CRT_MASK;
+	menu_game_open(&m, &g, "Juego");
+	menu_input(&m, 0, 90);
+	menu_input(&m, DOWN, 100);
+	CHECK_EQ(m.game_sel, MENU_GAME_FILTER);
+	menu_input(&m, 0, 110);
+	menu_input(&m, DOWN, 120);
+	CHECK_EQ(m.game_sel, MENU_GAME_DENSITY);
+	CHECK_EQ(menu_game_density(&m.set, &m.game), MENU_DENSITY_FINE);  /* global: la de Opciones */
+	menu_input(&m, 0, 130);
+	CHECK_EQ(menu_input(&m, RIGHT, 140), MENU_GAME_CHANGED);
+	CHECK_EQ(m.game.density, MENU_DENSITY_NORMAL);
+	CHECK_EQ(menu_game_density(&m.set, &m.game), MENU_DENSITY_NORMAL);
+	n = menu_game_format(&m.game, buf, sizeof buf);
+	struct menu_game gb;
+	menu_game_default(&gb);
+	menu_game_parse(&gb, buf, (size_t)n);
+	CHECK_EQ(gb.density, MENU_DENSITY_NORMAL);
+	const char *junk = "densidad = media\n";
+	menu_game_parse(&gb, junk, strlen(junk));
+	CHECK_EQ(gb.density, -1);
+	/* Con un filtro sin densidad, la fila desaparece. */
+	m.game.filter = MENU_FILTER_SHARP;
+	m.game_sel = MENU_GAME_FILTER;
+	menu_input(&m, 0, 150);
+	menu_input(&m, DOWN, 160);
+	CHECK_EQ(m.game_sel, MENU_GAME_OVERSCAN);
+	menu_input(&m, 0, 170);
+	menu_input(&m, UP, 180);
+	CHECK_EQ(m.game_sel, MENU_GAME_FILTER);
+}
+
 static void menu_game_page(void)
 {
 	struct menu m;
@@ -1156,7 +1227,7 @@ static void menu_preview(void)
 	write_ppm(path, rgb, 960, 720);
 	/* Ajustes por juego, filtro e idiomas. */
 	{
-		struct menu_game g = { MENU_ASPECT_16_9, -1, MENU_OVERSCAN_OFF, -1 };
+		struct menu_game g = { MENU_ASPECT_16_9, -1, MENU_OVERSCAN_OFF, -1, -1 };
 		for (int lang = 0; lang <= 5; lang += 1) {
 			if (lang == 2 || lang == 4)
 				continue;  /* en, de y pt bastan para el aspecto; fr e it se ven en las pruebas de ancho */
@@ -1390,6 +1461,7 @@ void t_suite_menu(void)
 	RUN(menu_pages);
 	RUN(menu_options_page);
 	RUN(menu_game_page);
+	RUN(menu_density);
 	RUN(menu_settings_file);
 	RUN(menu_autopilot_opens_target);
 	RUN(text_glyph_bytes);

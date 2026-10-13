@@ -59,9 +59,12 @@ static void crt_mask_tile_matches(void)
 {
 	static const uint32_t sizes[][4] = { { 1440, 1080, 320, 240 }, { 960, 720, 304, 228 }, { 1440, 1080, 640, 480 },
 					     { 3840, 2880, 160, 120 } };
-	for (unsigned s = 0; s < sizeof sizes / sizeof sizes[0]; s++) {
+	for (unsigned v = 0; v < 2 * sizeof sizes / sizeof sizes[0]; v++) {
+		/* La máscara de siempre y la fina (puntos cada 3 px en vez de 4). */
+		unsigned s = v % (sizeof sizes / sizeof sizes[0]);
+		const struct crt_mask_preset *p = v < sizeof sizes / sizeof sizes[0] ? &crt_mask_monitor : &crt_mask_monitor_fine;
 		struct crt_mask_layout l;
-		crt_mask_layout(&crt_mask_monitor, sizes[s][0], sizes[s][1], sizes[s][2], sizes[s][3], &l);
+		crt_mask_layout(p, sizes[s][0], sizes[s][1], sizes[s][2], sizes[s][3], &l);
 		CHECK_EQ(l.tile_w, (uint32_t)(3 * l.d));
 		CHECK_EQ(l.tile_h, (uint32_t)(2 * l.h));
 		uint32_t bad = 0, out = 0, wrong_color = 0;
@@ -106,6 +109,26 @@ static void crt_mask_tile_matches(void)
 				CHECK(fabs(sum[ch] / tiles_px - l.avg) < 1e-3);
 		}
 	}
+}
+
+/* La máscara fina: a 720p y 1080p con 320 de ancho, puntos cada 3 px con
+ * radio 1,2 en filas de 3 (la de siempre: cada 4, radio 1,6); nunca menos de
+ * 2 px. */
+static void crt_mask_fine(void)
+{
+	struct crt_mask_layout l;
+	crt_mask_layout(&crt_mask_monitor, 1440, 1080, 320, 240, &l);
+	CHECK(l.d == 4.0f && l.h == 3.0f);
+	crt_mask_layout(&crt_mask_monitor_fine, 1440, 1080, 320, 240, &l);
+	CHECK(l.d == 3.0f && l.h == 3.0f && fabsf(l.r - 1.2f) < 1e-6f);
+	CHECK_EQ(l.tile_w, 9);
+	CHECK_EQ(l.tile_h, 6);
+	crt_mask_layout(&crt_mask_monitor_fine, 960, 720, 320, 240, &l);
+	CHECK(l.d == 3.0f && l.h == 3.0f);
+	crt_mask_layout(&crt_mask_monitor_fine, 3840, 2880, 160, 120, &l);
+	struct crt_mask_layout n;
+	crt_mask_layout(&crt_mask_monitor, 3840, 2880, 160, 120, &n);
+	CHECK(l.d == floorf(n.d * 0.75f + 0.5f) && l.d >= 2.0f);
 }
 
 static void crt_mask_grid(void)
@@ -183,6 +206,7 @@ void t_suite_crt(void)
 	RUN(crt_fit);
 	RUN(crt_mask_grid);
 	RUN(crt_mask_tile_matches);
+	RUN(crt_mask_fine);
 	RUN(crt_cable_weights);
 	RUN(crt_grille_avg);
 	RUN(crt_trinitron_preset);

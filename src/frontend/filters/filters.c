@@ -69,6 +69,7 @@ static const struct {
 	[SALSA64_CRT_SVIDEO] = { "CRT cable S-Video (experimental)", "crt-svideo" },
 	[SALSA64_CRT_COMPOSITE] = { "CRT cable compuesto (experimental)", "crt-compuesto" },
 	[SALSA64_CRT_TRINITRON] = { "CRT Trinitron (experimental)", "crt-trinitron" },
+	[SALSA64_CRT_MASK_FINE] = { "CRT máscara de sombra fina (experimental)", "crt-mascara-fina" },
 };
 
 const char *salsa64_crt_name(int f)
@@ -239,6 +240,17 @@ static bool is_cable(int f)
 	return f == SALSA64_CRT_RGB || f == SALSA64_CRT_SVIDEO || f == SALSA64_CRT_COMPOSITE;
 }
 
+/* Las dos máscaras de sombra (la de siempre y la fina) y su preset. */
+static bool is_mask(int f)
+{
+	return f == SALSA64_CRT_MASK || f == SALSA64_CRT_MASK_FINE;
+}
+
+static const struct crt_mask_preset *mask_of(int f)
+{
+	return f == SALSA64_CRT_MASK_FINE ? &crt_mask_monitor_fine : &crt_mask_monitor;
+}
+
 /* El tubo de franjas de un filtro de franjas (los cables y el Trinitron). */
 static const struct crt_tube_preset *tube_of(int f)
 {
@@ -246,9 +258,9 @@ static const struct crt_tube_preset *tube_of(int f)
 }
 
 /* Las constantes de la máscara de sombra. */
-static void mask_constants(void)
+static void mask_constants(int f)
 {
-	const struct crt_mask_preset *p = &crt_mask_monitor;
+	const struct crt_mask_preset *p = mask_of(f);
 	const struct crt_mask_layout *l = &fl.ml;
 	float k = p->brightness * (1.0f - p->black_level);
 	set4(P_TILE_A, "grid", l->d, l->h, l->r, 0.0f);
@@ -394,8 +406,8 @@ static bool configure(int f, uint32_t sw, uint32_t sh, float aspect)
 	fl.g = crt_glow_scale(fl.rect[2], sw);
 	bool ok = make_surface(S_SRC, sw, sh, RSXKIT_POST_RGBA8) && make_surface(S_LIN, sw, sh, RSXKIT_POST_RGBA16F) &&
 		  make_surface(S_GLOW, sw * fl.g, sh * fl.g, RSXKIT_POST_RGBA16F);
-	if (ok && f == SALSA64_CRT_MASK) {
-		const struct crt_mask_preset *p = &crt_mask_monitor;
+	if (ok && is_mask(f)) {
+		const struct crt_mask_preset *p = mask_of(f);
 		crt_mask_layout(p, fl.rect[2], fl.rect[3], sw, sh, &fl.ml);
 		ok = make_surface(S_TILE_A, fl.ml.tile_w, fl.ml.tile_h, RSXKIT_POST_RGBA16F) &&
 		     make_surface(S_TILE_B, fl.ml.tile_w, fl.ml.tile_h, RSXKIT_POST_RGBA16F) &&
@@ -403,10 +415,12 @@ static bool configure(int f, uint32_t sw, uint32_t sh, float aspect)
 		     make_surface(S_DOTS, fl.ml.dots_w, fl.ml.dots_h, RSXKIT_POST_RGBA16F);
 		if (ok) {
 			glow_constants(p->gamma_in, p->glow, p->glow_radius, p->brightness * (1.0f - p->black_level));
-			mask_constants();
-			salsa64_log("filtros: «%s» en %ux%u (%u,%u) desde %ux%u: puntos cada %.0f px, filas de %.0f, radio "
-				    "%.1f, promedio %.3f, pico %.2f; tabla de puntos %ux%u, tesela %ux%u, resplandor ×%u",
-				    salsa64_crt_name(f), fl.rect[2], fl.rect[3], fl.rect[0], fl.rect[1], sw, sh, fl.ml.d,
+			mask_constants(f);
+			salsa64_log("filtros: «%s» en %ux%u (%u,%u) desde %ux%u: densidad %s, puntos cada %.0f px, filas de "
+				    "%.0f, radio %.1f, promedio %.3f, pico %.2f; tabla de puntos %ux%u, tesela %ux%u, resplandor "
+				    "×%u",
+				    salsa64_crt_name(f), fl.rect[2], fl.rect[3], fl.rect[0], fl.rect[1], sw, sh,
+				    f == SALSA64_CRT_MASK_FINE ? "fina" : "normal", fl.ml.d,
 				    fl.ml.h, fl.ml.r, fl.ml.avg, fl.ml.peak, fl.ml.dots_w, fl.ml.dots_h, fl.ml.tile_w,
 				    fl.ml.tile_h, fl.g);
 		}
@@ -504,9 +518,10 @@ static void check_tables(void)
 	rsxkit_finish();
 	uint32_t ps;
 	const volatile uint8_t *S = rsxkit_surface_data(fl.surf[S_SRC], &ps);
-	const bool mask = fl.filter == SALSA64_CRT_MASK;
+	const bool mask = is_mask(fl.filter);
 	const struct crt_tube_preset *tube = tube_of(fl.filter);
-	float gin = mask ? crt_mask_monitor.gamma_in : tube->gamma_in;
+	const struct crt_mask_preset *mp = mask_of(fl.filter);
+	float gin = mask ? mp->gamma_in : tube->gamma_in;
 	/* La luz lineal contra la fuente (uno de cada 3 × 3 texeles). */
 	float lin_err = 0.0f, lin_swap = 0.0f;
 	for (uint32_t y = 1; y < fl.sh; y += 3)
@@ -524,10 +539,8 @@ static void check_tables(void)
 	/* El resplandor contra 12 lecturas bilineales de la luz lineal hechas
 	 * aquí (0 fuera de la imagen), en 16 puntos de la rejilla. */
 	float glow_err = 0.0f, glow_point = 0.0f;
-	const float k = (mask ? crt_mask_monitor.glow * crt_mask_monitor.brightness * (1.0f - crt_mask_monitor.black_level)
-			      : tube->glow * tube->brightness) /
-			12.0f;
-	const float radius = mask ? crt_mask_monitor.glow_radius : tube->glow_radius;
+	const float k = (mask ? mp->glow * mp->brightness * (1.0f - mp->black_level) : tube->glow * tube->brightness) / 12.0f;
+	const float radius = mask ? mp->glow_radius : tube->glow_radius;
 	for (int i = 0; i < 16; i++) {
 		int gx = (int)((fl.sw * fl.g) * (i % 4 * 2 + 1) / 8), gy = (int)((fl.sh * fl.g) * (i / 4 * 2 + 1) / 8);
 		float px = (gx + 0.5f) / fl.g, py = (gy + 0.5f) / fl.g;
@@ -651,7 +664,7 @@ static void pass_init(rsxkit_post_pass *p, int prog, int out, uint32_t w, uint32
 static void final_pass(rsxkit_surface *out)
 {
 	rsxkit_post_pass p;
-	if (fl.filter == SALSA64_CRT_MASK) {
+	if (is_mask(fl.filter)) {
 		pass_init(&p, P_MASK_FINAL, -1, fl.rect[2], fl.rect[3]);
 		for (int i = 0; i < 3; i++)
 			p.in[i] = in_surface(S_TILE_A + i, RSXKIT_FILTER_NEAREST, RSXKIT_POST_CLAMP);
@@ -1359,7 +1372,7 @@ bool salsa64_filters_draw(int f, const struct salsa64_filter_src *src, rsxkit_re
 		run(&p);
 		stamp(slot, SEG_LINEAR + 1);
 
-		if (f == SALSA64_CRT_MASK)
+		if (is_mask(f))
 			draw_mask(slot);
 		else if (f == SALSA64_CRT_TRINITRON)
 			draw_trinitron(slot);
@@ -1407,7 +1420,7 @@ bool salsa64_filters_report(char *buf, size_t size)
 		fl.measured = fl.measured_reused = 0;
 		return false;
 	}
-	const char *const *names = fl.last_filter == SALSA64_CRT_MASK		? seg_mask
+	const char *const *names = is_mask(fl.last_filter)			? seg_mask
 				   : fl.last_filter == SALSA64_CRT_TRINITRON ? seg_trin
 										: seg_cable;
 	double k = fl.measured ? 1e-6 / fl.measured : 0.0, total = 0.0;

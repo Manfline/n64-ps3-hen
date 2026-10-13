@@ -53,6 +53,14 @@ en docs/filtros.md.
   pantalla (ahora se rehace del tamaño justo), y un fallo apagaba el filtro
   hasta salir del juego (ahora se reintenta al cambiar la imagen o el filtro).
   Reproducido y comprobado en RPCS3 forzando el cambio en vivo.
+- **Densidad de la máscara** (para la v0.2.5, decisión del autor): fila
+  «Densidad: Normal / Fina» en Opciones, en los ajustes por juego
+  (`densidad = normal|fina|global`) y en «Imagen», solo con «CRT máscara».
+  «Fina» = puntos cada 3 px (tríadas de 9 px) en lugar de cada 4, en filas
+  de 3, radio 1,2 (elegido por el autor entre 4, 3, 2,5, 2 y 1 px comparados
+  con `tools/crt-ref.c`: 2,5 no cae en píxeles enteros y da franjas; 2
+  pierde los puntos redondos; 1 pierde los puntos). El brillo se conserva.
+  Falta verla en la PS3.
   **Medido en la PS3** (GoldenEye en la presa a 1080p): máscara 7,4, RGB
   9,4, S-Video 10,6, compuesto 13,2 y Trinitron 10,1 ms por cuadro, todos
   los campos presentados (antes, a 5×, 30–51 por segundo); reducir 3,12 →

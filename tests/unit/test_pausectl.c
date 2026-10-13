@@ -231,7 +231,24 @@ static void menu_image_page(void)
 	CHECK_EQ(pc.image_do, IM_FILTER);
 	CHECK_EQ(pc.image_arg, 1);
 	pc.image_do = -1;
-	for (int i = IM_FILTER; i < IM_SCALE; i++)
+	/* Con la máscara hay fila «Densidad», con su valor. */
+	pc.image_density = true;
+	tap(B(DOWN));
+	CHECK_EQ(pc.image_sel, IM_DENSITY);
+	tap(B(RIGHT));
+	CHECK_EQ(pc.image_do, IM_DENSITY);
+	CHECK_EQ(pc.image_arg, 1);
+	pc.image_do = -1;
+	tap(B(UP));
+	CHECK_EQ(pc.image_sel, IM_FILTER);
+	/* Sin ella se salta. */
+	pc.image_density = false;
+	tap(B(DOWN));
+	CHECK_EQ(pc.image_sel, IM_ASPECT);
+	tap(B(UP));
+	CHECK_EQ(pc.image_sel, IM_FILTER);
+	tap(B(DOWN));
+	for (int i = IM_ASPECT; i < IM_SCALE; i++)
 		tap(B(DOWN));
 	CHECK_EQ(pc.image_sel, IM_SCALE);
 	tap(B(LEFT));

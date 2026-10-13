@@ -77,10 +77,13 @@ Opciones:
   Estos cuatro son de VIDEOGAMES SCZ. Después vienen los **filtros CRT
   originales del autor**, todavía experimentales: «CRT máscara (exp.)»,
   «CRT RGB (exp.)», «CRT S-Video (exp.)», «CRT compuesto (exp.)» y «CRT
-  Trinitron (exp.)» (abajo, en «Filtros CRT»). Vale al abrir el juego;
-  se guarda en `menu.cfg` (`filtro = suave|nitido|lineas|lineas+|
-  crt-mascara|crt-rgb|crt-svideo|crt-compuesto|crt-trinitron`). El panel dice de quién es
-  cada filtro.
+  Trinitron (exp.)» (abajo, en «Filtros CRT»). Vale al abrir el juego; se
+  guarda en `menu.cfg` (`filtro = suave|nitido|lineas|lineas+|crt-mascara|
+  crt-rgb|crt-svideo|crt-compuesto|crt-trinitron`). El panel dice de quién
+  es cada filtro.
+- **Densidad** (solo con «CRT máscara»): Normal, la del filtro original, o
+  Fina, con los puntos de fósforo más chicos y más juntos. Se
+  guarda en `menu.cfg` (`densidad = normal|fina`).
 - **Resolución**: 720p (por omisión, render a 3×) o 1080p (render a 4×).
   Se guarda en video.cfg (así arranca la próxima vez) y se pone con
   «Aplicar ahora», sin cerrar Salsa64; el panel muestra la salida actual y,
@@ -197,6 +200,7 @@ aspecto = 16:9      # 4:3 | 16:9 | global
 filtro = lineas     # suave | nitido | lineas | lineas+ | crt-mascara | crt-rgb | crt-svideo | crt-compuesto | crt-trinitron | global
 recorte = apagado   # apagado | normal | amplio | global
 escala = 2          # auto | 1 … 5 | global
+densidad = fina     # normal | fina | global (la de «CRT máscara»)
 ```
 
 Al abrir el juego, el log dice «imagen: … (con ajustes de este juego)» y, si
@@ -404,6 +408,10 @@ RSX todavía se está midiendo.
   conectada con ese cable. RGB: imagen limpia; S-Video: el color se corre
   un poco; compuesto: sangrado de color, dot crawl y arcoíris en los
   detalles finos.
+  Con la **densidad** «Fina» (en Opciones, por juego o en «Imagen», debajo
+  del filtro) los puntos son más chicos y más juntos: a 720p y 1080p, cada
+  3 px (tríadas de 9 px) en lugar de cada 4 (tríadas de 12), siempre
+  redondos y alineados a los píxeles: sin moaré, y con el mismo brillo.
 - «CRT Trinitron» (`crt-trinitron`): una Trinitron grande de la sala (el
   Sony KV-29), sin la señal de un cable: franjas de fósforo, el haz más
   grueso en lo brillante y un poco de desenfoque a lo ancho.
@@ -481,8 +489,8 @@ se crean por FTP.
 
 | Archivo | Formato | Qué hace |
 |---|---|---|
-| `menu.cfg` | Líneas `fondo = si\|no`, `fps = si\|no`, `confirmar = si\|no`, `aspecto = 4:3\|16:9`, `filtro = suave\|nitido\|lineas\|lineas+\|crt-mascara\|crt-rgb\|crt-svideo\|crt-compuesto` e `idioma = es\|en\|fr\|de\|it\|pt` | Fondo animado del menú, contador de velocidad en el juego, si «Salir» del menú de pausa pregunta antes (sí sin la línea), aspecto, filtro e idioma. Lo escriben el menú (Opciones) y SELECT + △ |
-| `juegos/<ROM>.cfg` | `aspecto`, `filtro`, `recorte`, `escala` = valor o `global` | Ajustes de un juego (sección «Ajustes por juego»). Lo escriben el menú (SELECT sobre una ROM) y «Imagen» del menú de pausa |
+| `menu.cfg` | Líneas `fondo = si\|no`, `fps = si\|no`, `confirmar = si\|no`, `aspecto = 4:3\|16:9`, `filtro = suave\|nitido\|lineas\|lineas+\|crt-mascara\|crt-rgb\|crt-svideo\|crt-compuesto` , `densidad = normal\|fina` e `idioma = es\|en\|fr\|de\|it\|pt` | Fondo animado del menú, contador de velocidad en el juego, si «Salir» del menú de pausa pregunta antes (sí sin la línea), aspecto, filtro e idioma. Lo escriben el menú (Opciones) y SELECT + △ |
+| `juegos/<ROM>.cfg` | `aspecto`, `filtro`, `recorte`, `escala`, `densidad` = valor o `global` | Ajustes de un juego (sección «Ajustes por juego»). Lo escriben el menú (SELECT sobre una ROM) y «Imagen» del menú de pausa |
 | `descargas.cfg` | `activar = si` y direcciones | Enciende las descargas experimentales (sección «Descargas») |
 | `overscan.cfg` | Uno, dos o cuatro números: `8`, `8 6` o `izq der arr abajo` | Recorte de la imagen en píxeles de la N64 (a 320 × 240) por lado. Por omisión `8 6`; `0` lo apaga; máximo 64. Lo escribe el menú (`0`, `8 6` o `16 12`) |
 | `video.cfg` | `salida = 720` o `1080`; `escala = auto` o `1` a `5` | Salida de video y escala interna del render de la N64 (se leen al arrancar). Sin archivo: 720p y escala automática (3×, 960 × 720; a 1080p, 4×, 1280 × 960). Si la tele o el XMB no aceptan 1080, usa el siguiente modo. Acepta el formato viejo de una línea (`1080` o `720`). Lo escribe el menú con «Resolución» y «Escala interna» |
@@ -500,7 +508,7 @@ se crean por FTP.
 | `perfil.cfg` | `caliente = KB`, `saltos = si\|no` | Con `perfil-activo`: tamaño de la zona caliente de la caché de código (por omisión 1024 KB, en dos mitades; `0` cuenta y guarda el perfil sin zona caliente) y si los bloques calientes registran sus sitios de salida (sí por omisión) |
 | `embedded` | `file:nombre` | Abre una ROM sin menú (sección anterior) |
 | `jit-ancho` | Basta con que exista | El recompilador emite el código «ancho» de antes del 2026-10-13 (prueba de KSEG0 de 8 palabras, un camino lento por acceso), para medir el compacto contra él con el mismo paquete (docs/rec-ppe.md, «Código compacto») |
-| `filtro` | Una clave: `crt-mascara`, `crt-rgb`, `crt-svideo`, `crt-compuesto` o `crt-trinitron` | Ese filtro CRT en lugar del elegido en el menú, también en las pruebas automáticas (para comparar) |
+| `filtro` | Una clave: `crt-mascara`, `crt-rgb`, `crt-svideo`, `crt-compuesto`, `crt-trinitron` o `crt-mascara-fina` (la máscara con densidad fina) | Ese filtro CRT en lugar del elegido en el menú, también en las pruebas automáticas (para comparar) |
 | `filtros-ciclo` | Vacío, o las claves de los filtros que se quieren (`crt-trinitron crt-compuesto`) | En el juego pasa por todos los filtros CRT (o por los de la lista), uno cada 20 s desde «Ninguno», con un aviso en pantalla; el log dice cada 5 s cuánto tarda cada uno en el RSX (para medirlos en una sola corrida). Cada vuelta cambia la reducción entre dos pasadas y una (si no la fija `filtros-reducir`), y la escala va con el tope de 3× de los CRT toda la corrida |
 | `filtros-capturas` | Basta con que exista | La primera vez de cada filtro CRT y alto de pantalla guarda la imagen que entra y la que dibuja (`filtro-<clave>-<alto>-fuente.ppm` y `-pantalla.ppm`), sin congelar la imagen (las escribe otro hilo); para compararlas con `tools/crt-ref.c` |
 | `filtros-reducir` | `1` o `2` | La reducción de la escala interna de los CRT en una pasada o en dos (por omisión, dos); para comparar su costo |

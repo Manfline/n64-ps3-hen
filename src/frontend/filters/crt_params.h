@@ -29,8 +29,10 @@ struct crt_mask_preset {
 	float brightness, saturation;
 	float black_level;       /* velo plano del vidrio */
 	float gamma_in, gamma_out;
+	float pitch;             /* separación de los puntos sobre la del preset (1; 0,75 la fina) */
 };
-extern const struct crt_mask_preset crt_mask_monitor;  /* v1.3 */
+extern const struct crt_mask_preset crt_mask_monitor;       /* v1.3 */
+extern const struct crt_mask_preset crt_mask_monitor_fine;  /* v1.3 con los puntos más chicos (densidad «Fina») */
 
 /* El tubo del CRT con cable: un Trinitron chico (franjas verticales). */
 struct crt_tube_preset {

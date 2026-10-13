@@ -51,6 +51,7 @@ void menu_settings_default(struct menu_settings *s)
 	s->confirm = true;
 	s->aspect = MENU_ASPECT_4_3;
 	s->filter = MENU_FILTER_SMOOTH;
+	s->density = MENU_DENSITY_NORMAL;
 	s->lang = MENU_LANG_ES;
 }
 
@@ -118,6 +119,7 @@ const char *menu_overscan_name(int o)
 	return overscan_name(o);
 }
 static const char *const lang_key[MENU_LANGS] = { "es", "en", "fr", "de", "it", "pt" };
+static const char *const density_key[MENU_DENSITIES] = { "normal", "fina" };
 static const char *const lang_label[MENU_LANGS] = { "Español", "English", "Français", "Deutsch", "Italiano", "Português" };
 
 static const char *resolution_name(int r)
@@ -187,6 +189,10 @@ void menu_settings_parse(struct menu_settings *s, const char *text, size_t len)
 			for (int l = 0; l < MENU_LANGS; l++)
 				if (!strcmp(val, lang_key[l]))
 					s->lang = l;
+		} else if (!strcmp(key, "densidad")) {
+			for (int d = 0; d < MENU_DENSITIES; d++)
+				if (!strcmp(val, density_key[d]))
+					s->density = d;
 		}
 	}
 }
@@ -195,7 +201,7 @@ void menu_settings_parse(struct menu_settings *s, const char *text, size_t len)
 
 void menu_game_default(struct menu_game *g)
 {
-	g->aspect = g->filter = g->overscan = g->scale = -1;
+	g->aspect = g->filter = g->overscan = g->scale = g->density = -1;
 }
 
 void menu_game_parse(struct menu_game *g, const char *text, size_t len)
@@ -231,6 +237,11 @@ void menu_game_parse(struct menu_game *g, const char *text, size_t len)
 		} else if (!strcmp(key, "escala")) {
 			g->scale = !strcmp(val, "auto") ? 0
 				   : val[0] >= '1' && val[0] <= '0' + MENU_SCALE_MAX && !val[1] ? val[0] - '0' : -1;
+		} else if (!strcmp(key, "densidad")) {
+			g->density = -1;
+			for (int d = 0; d < MENU_DENSITIES; d++)
+				if (!strcmp(val, density_key[d]))
+					g->density = d;
 		}
 	}
 }
@@ -241,11 +252,28 @@ int menu_game_format(const struct menu_game *g, char *buf, size_t size)
 	static const char *const scale[] = { "auto", "1", "2", "3", "4", "5" };
 	_Static_assert(sizeof scale / sizeof scale[0] == MENU_SCALE_MAX + 1, "una clave por escala");
 	return snprintf(buf, size,
-			"# Ajustes de este juego (global = los de Opciones)\naspecto = %s\nfiltro = %s\nrecorte = %s\nescala = %s\n",
+			"# Ajustes de este juego (global = los de Opciones)\naspecto = %s\nfiltro = %s\nrecorte = %s\nescala = %s\n"
+			"densidad = %s\n",
 			g->aspect == MENU_ASPECT_16_9 ? "16:9" : g->aspect == MENU_ASPECT_4_3 ? "4:3" : "global",
 			g->filter >= 0 && g->filter < MENU_FILTERS ? filter_key(g->filter) : "global",
 			g->overscan >= MENU_OVERSCAN_OFF && g->overscan <= MENU_OVERSCAN_WIDE ? crop[g->overscan] : "global",
-			g->scale >= 0 && g->scale <= MENU_SCALE_MAX ? scale[g->scale] : "global");
+			g->scale >= 0 && g->scale <= MENU_SCALE_MAX ? scale[g->scale] : "global",
+			g->density >= 0 && g->density < MENU_DENSITIES ? density_key[g->density] : "global");
+}
+
+int menu_game_density(const struct menu_settings *s, const struct menu_game *g)
+{
+	return g->density >= 0 && g->density < MENU_DENSITIES ? g->density : s->density;
+}
+
+bool menu_filter_has_density(int filter)
+{
+	return filter == MENU_FILTER_CRT_MASK;
+}
+
+const char *menu_density_name(int density)
+{
+	return density == MENU_DENSITY_FINE ? "Fina" : "Normal";
 }
 
 void menu_game_effective(const struct menu_settings *s, const struct menu_game *g, int *aspect, int *filter,
@@ -316,11 +344,12 @@ int menu_video_format(const struct menu_settings *s, char *buf, size_t size)
 int menu_settings_format(const struct menu_settings *s, char *buf, size_t size)
 {
 	return snprintf(buf, size,
-			"# Ajustes del menú de Salsa64\n# aspecto = 4:3|16:9; filtro = suave|nitido|lineas|lineas+; idioma = es|en|fr|de|it|pt\n"
-			"fondo = %s\nfps = %s\nconfirmar = %s\naspecto = %s\nfiltro = %s\nidioma = %s\n",
+			"# Ajustes del menú de Salsa64\n# aspecto = 4:3|16:9; filtro = suave|nitido|lineas|lineas+|crt-…; "
+			"densidad = normal|fina; idioma = es|en|fr|de|it|pt\n"
+			"fondo = %s\nfps = %s\nconfirmar = %s\naspecto = %s\nfiltro = %s\ndensidad = %s\nidioma = %s\n",
 			s->waves ? "si" : "no", s->fps ? "si" : "no", s->confirm ? "si" : "no",
 			s->aspect == MENU_ASPECT_16_9 ? "16:9" : "4:3",
-			filter_key(s->filter),
+			filter_key(s->filter), density_key[s->density == MENU_DENSITY_FINE],
 			lang_key[s->lang >= 0 && s->lang < MENU_LANGS ? s->lang : 0]);
 }
 
@@ -358,7 +387,27 @@ static bool opt_visible(const struct menu *m, int opt)
 		return menu_video_pending(m);
 	if (opt == MENU_OPT_DL_COVERS || opt == MENU_OPT_DL_CHEATS)
 		return m->dl_enabled;
+	if (opt == MENU_OPT_DENSITY)
+		return menu_filter_has_density(m->set.filter);
 	return true;
+}
+
+/* Filas de la página de un juego: «Densidad», solo si el filtro que vale
+ * para él es la máscara. */
+static bool game_visible(const struct menu *m, int row)
+{
+	if (row == MENU_GAME_DENSITY)
+		return menu_filter_has_density(m->game.filter >= 0 ? m->game.filter : m->set.filter);
+	return true;
+}
+
+/* Fila mostrada de un ajuste del juego (una oculta da la de la siguiente). */
+static int game_row(const struct menu *m, int row)
+{
+	int n = 0;
+	for (int r = 0; r < row; r++)
+		n += game_visible(m, r);
+	return n;
 }
 
 /* Fila mostrada de una opción (una oculta da la de la siguiente); con
@@ -396,11 +445,15 @@ static void move(struct menu *m, uint32_t dir, bool wrap)
 	}
 	if (m->page == MENU_PAGE_GAME) {
 		int v = m->game_sel;
-		if (dir == BIT(SALSA64_DS3_UP))
-			v = v > 0 ? v - 1 : wrap ? MENU_GAME_ROWS - 1 : 0;
-		else if (dir == BIT(SALSA64_DS3_DOWN))
-			v = v < MENU_GAME_ROWS - 1 ? v + 1 : wrap ? 0 : MENU_GAME_ROWS - 1;
-		m->game_sel = v;
+		for (int k = 0; k < MENU_GAME_ROWS; k++) {  /* las filas ocultas se saltan */
+			if (dir == BIT(SALSA64_DS3_UP))
+				v = v > 0 ? v - 1 : wrap ? MENU_GAME_ROWS - 1 : 0;
+			else if (dir == BIT(SALSA64_DS3_DOWN))
+				v = v < MENU_GAME_ROWS - 1 ? v + 1 : wrap ? 0 : MENU_GAME_ROWS - 1;
+			if (game_visible(m, v))
+				break;
+		}
+		m->game_sel = game_visible(m, v) ? v : m->game_sel;
 		return;
 	}
 	bool games = m->page == MENU_PAGE_GAMES;
@@ -454,6 +507,10 @@ static enum menu_action options_buttons(struct menu *m, uint32_t pressed)
 	}
 	if (m->opt == MENU_OPT_FILTER && (pressed & change)) {
 		m->set.filter = (m->set.filter + (pressed & BIT(SALSA64_DS3_LEFT) ? MENU_FILTERS - 1 : 1)) % MENU_FILTERS;
+		return MENU_SETTINGS;
+	}
+	if (m->opt == MENU_OPT_DENSITY && (pressed & change)) {
+		m->set.density = m->set.density == MENU_DENSITY_FINE ? MENU_DENSITY_NORMAL : MENU_DENSITY_FINE;
 		return MENU_SETTINGS;
 	}
 	if (m->opt == MENU_OPT_LANG && (pressed & change)) {
@@ -527,9 +584,11 @@ static enum menu_action game_buttons(struct menu *m, uint32_t pressed)
 	/* Global → valor 0 → ... → último → Global (izquierda, al revés). */
 	int *v = m->game_sel == MENU_GAME_ASPECT ? &m->game.aspect
 		 : m->game_sel == MENU_GAME_FILTER ? &m->game.filter
+		 : m->game_sel == MENU_GAME_DENSITY ? &m->game.density
 		 : m->game_sel == MENU_GAME_SCALE ? &m->game.scale : &m->game.overscan;
 	int count = m->game_sel == MENU_GAME_ASPECT ? 2
 		    : m->game_sel == MENU_GAME_FILTER ? MENU_FILTERS
+		    : m->game_sel == MENU_GAME_DENSITY ? MENU_DENSITIES
 		    : m->game_sel == MENU_GAME_SCALE ? MENU_SCALE_MAX + 1 : 3;
 	int slot = *v + 1;  /* 0 = global */
 	slot = (slot + (pressed & BIT(SALSA64_DS3_LEFT) ? count : 1)) % (count + 1);
@@ -949,6 +1008,7 @@ static const char *game_value(const struct menu *m, int row)
 	switch (row) {
 	case MENU_GAME_ASPECT:   return m->game.aspect < 0 ? "Global" : aspect_name(m->game.aspect);
 	case MENU_GAME_FILTER:   return m->game.filter < 0 ? "Global" : filter_name(m->game.filter);
+	case MENU_GAME_DENSITY:  return m->game.density < 0 ? "Global" : menu_density_name(m->game.density);
 	case MENU_GAME_OVERSCAN: return m->game.overscan < 0 ? "Global" : overscan_name(m->game.overscan);
 	case MENU_GAME_SCALE: {
 		static char buf[24];
@@ -973,12 +1033,15 @@ static void game_panel(const struct menu *m, float px, float py, float pw, float
 	y += 56.0f;
 	stext(x, y, "Ajustes de este juego", dscale, C_DIM, ca, lmax);
 	y += 44.0f;
-	static const char *const names[] = { "Aspecto", "Filtro", "Recorte del borde", "Escala interna" };
-	for (int i = 0; i < 4; i++) {
-		const char *v = i == 0   ? aspect_name(a)
-				: i == 1 ? filter_name(f)
-				: i == 2 ? overscan_name(o)
-					 : menu_scale_name(s, m->set.resolution, sbuf, sizeof sbuf);
+	static const char *const names[] = { "Aspecto", "Filtro", "Densidad", "Recorte del borde", "Escala interna" };
+	for (int i = 0; i < 5; i++) {
+		if (!game_visible(m, i))
+			continue;
+		const char *v = i == MENU_GAME_ASPECT	 ? aspect_name(a)
+				: i == MENU_GAME_FILTER	 ? filter_name(f)
+				: i == MENU_GAME_DENSITY  ? menu_density_name(menu_game_density(&m->set, &m->game))
+				: i == MENU_GAME_OVERSCAN ? overscan_name(o)
+							  : menu_scale_name(s, m->set.resolution, sbuf, sizeof sbuf);
 		stext(x, y, names[i], 1.3f, C_DIM, ca, 0);
 		stext(x, y + 16.0f, v, dscale, m->game_sel == i ? C_ACCENT : C_TEXT, ca, lmax);
 		y += 52.0f;
@@ -989,13 +1052,16 @@ static void game_panel(const struct menu *m, float px, float py, float pw, float
 
 static void game_column(const struct menu *m, float x, float W, float H, float a)
 {
-	static const char *const titles[] = { "Aspecto", "Filtro", "Recorte del borde", "Escala interna", "Volver" };
-	static const char *const subs[] = { "Forma de la imagen", "Suave, nítida o con líneas", "Overscan de este juego",
-					    "Dibujo interno", "A la lista de juegos" };
-	static const char *const glyphs[] = { "▶", "─", "□", "▲", "◀" };
+	static const char *const titles[] = { "Aspecto", "Filtro", "Densidad", "Recorte del borde", "Escala interna",
+					      "Volver" };
+	static const char *const subs[] = { "Forma de la imagen", "Suave, nítida o con líneas", "Puntos de la máscara CRT",
+					    "Overscan de este juego", "Dibujo interno", "A la lista de juegos" };
+	static const char *const glyphs[] = { "▶", "─", "●", "□", "▲", "◀" };
 	_Static_assert(sizeof titles / sizeof titles[0] == MENU_GAME_ROWS, "una fila por ajuste");
 	for (int i = 0; i < MENU_GAME_ROWS; i++) {
-		float d = i - m->game_pos;
+		if (!game_visible(m, i))
+			continue;
+		float d = (float)game_row(m, i) - m->game_pos;
 		struct row r = { titles[i], subs[i], 2, glyphs[i], 0, game_value(m, i) };
 		draw_row(&r, d, x, W, H, a);
 	}
@@ -1143,6 +1209,10 @@ static void panel(const struct menu *m, float W, float H, float a)
 			  "franjas de fósforo y", "líneas del haz.", NULL },
 		};
 		bool crt = m->set.filter >= MENU_FILTER_CRT_MASK && m->set.filter <= MENU_FILTER_CRT_TRINITRON;
+		static const char *const density_text[] = { "Los puntos de fósforo del", "CRT de máscara de sombra.",
+							    "Normal: como el filtro", "original. Fina: puntos más",
+							    "chicos y más juntos.", "Se guarda en menu.cfg.", NULL,
+							    NULL };
 		static const char *const lang_text[] = { "Idioma del menú y de los", "avisos del juego.", NULL, "Se guarda en menu.cfg.", NULL, NULL };
 		static const char *const dlc_text[] = { "Baja las carátulas de los", "juegos de la lista a", "covers/. Hace falta red", "y la dirección en",
 							"descargas.cfg.", NULL, "×: descargar.", NULL, NULL };
@@ -1173,6 +1243,7 @@ static void panel(const struct menu *m, float W, float H, float a)
 				    : m->opt == MENU_OPT_OVERSCAN ? "Recorte del borde"
 				    : m->opt == MENU_OPT_ASPECT ? "Aspecto"
 				    : m->opt == MENU_OPT_FILTER ? "Filtro de imagen"
+				    : m->opt == MENU_OPT_DENSITY ? "Densidad de la máscara"
 					    : m->opt == MENU_OPT_LANG ? "Idioma"
 					    : m->opt == MENU_OPT_DL_COVERS ? "Descargar carátulas"
 					    : m->opt == MENU_OPT_DL_CHEATS ? "Descargar trucos"
@@ -1186,6 +1257,7 @@ static void panel(const struct menu *m, float W, float H, float a)
 					  : m->opt == MENU_OPT_ASPECT ? aspect_text
 					  : m->opt == MENU_OPT_FILTER ? (crt ? crt_text[m->set.filter - MENU_FILTER_CRT_MASK]
 										  : filter_text)
+					  : m->opt == MENU_OPT_DENSITY ? density_text
 					  : m->opt == MENU_OPT_LANG ? lang_text
 					  : m->opt == MENU_OPT_DL_COVERS ? dlc_text
 					  : m->opt == MENU_OPT_DL_CHEATS ? dlt_text
@@ -1198,6 +1270,7 @@ static void panel(const struct menu *m, float W, float H, float a)
 				    : m->opt == MENU_OPT_OVERSCAN ? overscan_name(m->set.overscan)
 				    : m->opt == MENU_OPT_ASPECT ? aspect_name(m->set.aspect)
 				    : m->opt == MENU_OPT_FILTER ? filter_name(m->set.filter)
+				    : m->opt == MENU_OPT_DENSITY ? menu_density_name(m->set.density)
 				    : m->opt == MENU_OPT_LANG ? lang_label[m->set.lang]
 				    : m->opt == MENU_OPT_RESOLUTION ? resolution_name(m->set.resolution)
 				    : m->opt == MENU_OPT_SCALE ? scale_name(&m->set, scale_buf, sizeof scale_buf)
@@ -1294,6 +1367,7 @@ static void options_column(const struct menu *m, float x, float W, float H, floa
 	struct row aspect = { "Aspecto", "Forma de la imagen del juego (al abrir uno)", 2, "▶", 0,
 			      aspect_name(m->set.aspect) };
 	struct row filter = { "Filtro", "Suave, nítida, líneas o CRT", 2, "─", 0, filter_name(m->set.filter) };
+	struct row density = { "Densidad", "Puntos de la máscara CRT", 2, "●", 0, menu_density_name(m->set.density) };
 	struct row lang = { "Idioma", "Idioma del menú y de los avisos", 2, "A", 0, lang_label[m->set.lang] };
 	struct row dlc = { "Descargar carátulas", "De internet a la carpeta covers", 2, "↓", 0, NULL };
 	struct row dlt = { "Descargar trucos", "De internet a la carpeta cheats", 2, "↓", 0, NULL };
@@ -1310,10 +1384,12 @@ static void options_column(const struct menu *m, float x, float W, float H, floa
 	draw_row(&crop, MENU_OPT_OVERSCAN - m->opt_pos, x, W, H, a);
 	draw_row(&aspect, MENU_OPT_ASPECT - m->opt_pos, x, W, H, a);
 	draw_row(&filter, MENU_OPT_FILTER - m->opt_pos, x, W, H, a);
-	draw_row(&res, MENU_OPT_RESOLUTION - m->opt_pos, x, W, H, a);
-	draw_row(&scale, MENU_OPT_SCALE - m->opt_pos, x, W, H, a);
+	if (opt_visible(m, MENU_OPT_DENSITY))
+		draw_row(&density, (float)opt_row(m, MENU_OPT_DENSITY) - m->opt_pos, x, W, H, a);
+	draw_row(&res, (float)opt_row(m, MENU_OPT_RESOLUTION) - m->opt_pos, x, W, H, a);
+	draw_row(&scale, (float)opt_row(m, MENU_OPT_SCALE) - m->opt_pos, x, W, H, a);
 	if (menu_video_pending(m))
-		draw_row(&apply, MENU_OPT_APPLY - m->opt_pos, x, W, H, a);
+		draw_row(&apply, (float)opt_row(m, MENU_OPT_APPLY) - m->opt_pos, x, W, H, a);
 	draw_row(&fps, (float)opt_row(m, MENU_OPT_FPS) - m->opt_pos, x, W, H, a);
 	draw_row(&confirm, (float)opt_row(m, MENU_OPT_CONFIRM) - m->opt_pos, x, W, H, a);
 	draw_row(&lang, (float)opt_row(m, MENU_OPT_LANG) - m->opt_pos, x, W, H, a);
@@ -1338,7 +1414,7 @@ void menu_frame(struct menu *m, float lw, float lh, uint64_t now_us)
 	ease(&m->page_t, m->page == MENU_PAGE_OPTIONS ? 1.0f : 0.0f, dt, 10.0f);
 	ease(&m->cht_pos, (float)m->cht_sel, dt, 14.0f);
 	ease(&m->cht_t, m->page == MENU_PAGE_CHEATS ? 1.0f : 0.0f, dt, 10.0f);
-	ease(&m->game_pos, (float)m->game_sel, dt, 14.0f);
+	ease(&m->game_pos, (float)game_row(m, m->game_sel), dt, 14.0f);
 	ease(&m->game_t, m->page == MENU_PAGE_GAME ? 1.0f : 0.0f, dt, 10.0f);
 	ease(&m->cover_t, m->cover_rom >= 0 && m->cover_rom == menu_selected(m) && m->cover_w ? 1.0f : 0.0f, dt, 10.0f);
 	m->intro = clampf(m->intro + dt / 0.45f, 0.0f, 1.0f);

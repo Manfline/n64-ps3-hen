@@ -2092,8 +2092,8 @@ static struct salsa64_vi_frame still_f;  /* lo último presentado, para su recor
  * global de cada uno (Opciones) y los ajustes del juego como están en
  * juegos/<ROM>.cfg. Sin `source` (las pruebas) no se guardan. */
 static struct {
-	int aspect, filter, crop, scale;
-	int g_aspect, g_filter, g_crop, g_scale;
+	int aspect, filter, crop, scale, density;
+	int g_aspect, g_filter, g_crop, g_scale, g_density;
 	struct menu_game game;
 	const char *source;
 } img;
@@ -2123,8 +2123,9 @@ static void present_overlay(uint64_t now)
 		char sbuf[24];
 		struct osd_image_menu im = {
 			pause_ctl.image_sel,
-			{ menu_filter_name(img.filter), menu_aspect_name(img.aspect), menu_overscan_name(img.crop),
-			  scale_label(sbuf, sizeof sbuf) },
+			{ menu_filter_name(img.filter), menu_density_name(img.density), menu_aspect_name(img.aspect),
+			  menu_overscan_name(img.crop), scale_label(sbuf, sizeof sbuf) },
+			menu_filter_has_density(img.filter),
 			scale_wanted() != rdp_scale_req, img.source != NULL, menu_filter_credit(img.filter),
 		};
 		osd_image_menu_draw(&im, ui_lw, ui_lh);
@@ -2896,10 +2897,13 @@ static bool game_cfg_write(const char *rom, const struct menu_game *g)
 /* El CRT de view_apply (filter_setup lo pone al abrir el juego). */
 static int view_crt;
 
-/* El filtro CRT (enum salsa64_crt) de un filtro del menú; SALSA64_CRT_NONE
- * para los demás. Para cambiarlo en vivo: filter_select(menu_filter_crt(f)). */
-static int menu_filter_crt(int filter)
+/* El filtro CRT (enum salsa64_crt) de un filtro del menú y su densidad (la
+ * máscara fina es otro filtro para frontend/filters); SALSA64_CRT_NONE para
+ * los demás. Para cambiarlo en vivo: filter_select(menu_filter_crt(…)). */
+static int menu_filter_crt(int filter, int density)
 {
+	if (filter == MENU_FILTER_CRT_MASK && density == MENU_DENSITY_FINE)
+		return SALSA64_CRT_MASK_FINE;
 	return filter >= MENU_FILTER_CRT_MASK && filter <= MENU_FILTER_CRT_TRINITRON
 		       ? SALSA64_CRT_MASK + (filter - MENU_FILTER_CRT_MASK)
 		       : SALSA64_CRT_NONE;
@@ -2949,7 +2953,8 @@ static void view_apply(void)
 	pres.view.aspect = img.aspect == MENU_ASPECT_16_9 ? 16.0f / 9.0f : 4.0f / 3.0f;
 	pres.view.filter = img.filter == MENU_FILTER_SHARP ? RSXKIT_FILTER_NEAREST : RSXKIT_FILTER_LINEAR;
 	scan_level = img.filter == MENU_FILTER_SCAN_SOFT ? 1 : img.filter == MENU_FILTER_SCAN_STRONG ? 2 : 0;
-	view_crt = menu_filter_crt(img.filter);
+	view_crt = menu_filter_crt(img.filter, img.density);
+	pause_ctl.image_density = menu_filter_has_density(img.filter);
 	filter_select(view_crt);
 	if (img.crop >= MENU_OVERSCAN_OFF && img.crop <= MENU_OVERSCAN_WIDE) {
 		uint32_t h = img.crop == MENU_OVERSCAN_WIDE ? 16 : img.crop == MENU_OVERSCAN_NORMAL ? 8 : 0;
@@ -2963,9 +2968,12 @@ static void view_log(const char *what)
 	char sc[16] = "automática";
 	if (img.scale)
 		snprintf(sc, sizeof sc, "%d×", img.scale);
-	salsa64_log("imagen: %s, filtro %s, recorte %u %u %u %u, escala %s%s%s",
-		    img.aspect == MENU_ASPECT_16_9 ? "16:9 estirada" : "4:3", menu_filter_name(img.filter), overscan.left,
-		    overscan.right, overscan.top, overscan.bottom, sc, scale_capped() ? " (con el CRT, 3×)" : "", what);
+	salsa64_log("imagen: %s, filtro %s%s%s, recorte %u %u %u %u, escala %s%s%s",
+		    img.aspect == MENU_ASPECT_16_9 ? "16:9 estirada" : "4:3", menu_filter_name(img.filter),
+		    menu_filter_has_density(img.filter) ? ", densidad " : "",
+		    menu_filter_has_density(img.filter) ? (img.density == MENU_DENSITY_FINE ? "fina" : "normal") : "",
+		    overscan.left, overscan.right, overscan.top, overscan.bottom, sc,
+		    scale_capped() ? " (con el CRT, 3×)" : "", what);
 }
 
 /* Aspecto, filtro, recorte y escala del juego: lo suyo (juegos/) o, si no,
@@ -2999,7 +3007,9 @@ static void load_view(const char *source)
 	img.g_filter = s.filter;
 	img.g_crop = s.overscan;
 	img.g_scale = s.scale;
+	img.g_density = s.density;
 	menu_game_effective(&s, &g, &img.aspect, &img.filter, &img.crop, &img.scale);
+	img.density = menu_game_density(&s, &g);
 	view_apply();
 	scan_r.w = 0;
 	scan_lines = 0;
@@ -3021,11 +3031,12 @@ static void image_save(void)
 	g.filter = img.filter == img.g_filter && img.game.filter < 0 ? -1 : img.filter;
 	g.overscan = img.crop > MENU_OVERSCAN_WIDE || (img.crop == img.g_crop && img.game.overscan < 0) ? -1 : img.crop;
 	g.scale = img.scale == img.g_scale && img.game.scale < 0 ? -1 : img.scale;
+	g.density = img.density == img.g_density && img.game.density < 0 ? -1 : img.density;
 	bool ok = game_cfg_write(img.source, &g);
 	if (ok)
 		img.game = g;
-	salsa64_log("imagen: ajustes de este juego %s (aspecto %d, filtro %d, recorte %d, escala %d)",
-		    ok ? "guardados" : "NO guardados", g.aspect, g.filter, g.overscan, g.scale);
+	salsa64_log("imagen: ajustes de este juego %s (aspecto %d, filtro %d, densidad %d, recorte %d, escala %d)",
+		    ok ? "guardados" : "NO guardados", g.aspect, g.filter, g.density, g.overscan, g.scale);
 	osd_notice(now, ok ? "Ajustes guardados para este juego" : "No se pudieron guardar los ajustes");
 }
 
@@ -3042,6 +3053,9 @@ static void image_events(void)
 	switch (d) {
 	case IM_FILTER:
 		img.filter = (img.filter + k + MENU_FILTERS) % MENU_FILTERS;
+		break;
+	case IM_DENSITY:
+		img.density = (img.density + k + MENU_DENSITIES) % MENU_DENSITIES;
 		break;
 	case IM_ASPECT:
 		img.aspect = img.aspect == MENU_ASPECT_16_9 ? MENU_ASPECT_4_3 : MENU_ASPECT_16_9;

@@ -24,6 +24,30 @@ const struct crt_mask_preset crt_mask_monitor = {
 	.black_level = 0.00f,
 	.gamma_in = 2.4f,
 	.gamma_out = 2.2f,
+	.pitch = 1.0f,
+};
+
+/* La misma máscara con los puntos más chicos y más juntos (densidad «Fina»,
+ * pedido del autor): a 720p y 1080p con imágenes de 320 de ancho, puntos
+ * cada 3 px (radio 1,2) en lugar de cada 4 (radio 1,6), en filas de 3. Se
+ * eligió 3 y no 2 porque a 2 px los puntos dejan de ser redondos y se
+ * pierden las tríadas. */
+const struct crt_mask_preset crt_mask_monitor_fine = {
+	.triads_per_pixel = 1.50f,
+	.dot_size = 0.80f,
+	.mask_strength = 1.00f,
+	.keep_bright = 0.65f,
+	.beam_min = 0.22f,
+	.beam_max = 0.62f,
+	.h_blur = 0.40f,
+	.glow = 0.12f,
+	.glow_radius = 2.0f,
+	.brightness = 1.15f,
+	.saturation = 1.05f,
+	.black_level = 0.00f,
+	.gamma_in = 2.4f,
+	.gamma_out = 2.2f,
+	.pitch = 0.75f,
 };
 
 /* Preset v1.1 (Shadertoy/crt_cable_v1.1.glsl; «tv13» en RetroMac): consola
@@ -128,16 +152,23 @@ static float mixf(float a, float b, float t)
 	return a + (b - a) * t;
 }
 
-float crt_dot_cover_sum(float r)
+/* La suma con el centro corrido `ox` en x desde una esquina (0: en la
+ * esquina; 0,5: en el borde, entre dos centros de píxel). */
+static float dot_cover_sum_at(float r, float ox)
 {
 	int n = (int)ceilf(r + 1.0f);
 	float s = 0.0f;
 	for (int b = 0; b < 2 * n && b < 32; b++)
-		for (int a = 0; a < 2 * n && a < 32; a++) {
-			float qx = (float)(a - n) + 0.5f, qy = (float)(b - n) + 0.5f;
+		for (int a = 0; a < 2 * n + 1 && a < 33; a++) {
+			float qx = (float)(a - n) + 0.5f - ox, qy = (float)(b - n) + 0.5f;
 			s += clampf(r - sqrtf(qx * qx + qy * qy) + 0.5f, 0.0f, 1.0f);
 		}
 	return s > 1e-3f ? s : 1e-3f;
+}
+
+float crt_dot_cover_sum(float r)
+{
+	return dot_cover_sum_at(r, 0.0f);
 }
 
 void crt_mask_tile_cell(const struct crt_mask_layout *l, float tx, float ty, int ch, float *col, float *row,
@@ -164,14 +195,29 @@ void crt_mask_layout(const struct crt_mask_preset *p, uint32_t img_w, uint32_t i
 	float px_per_src = (float)img_w / (float)src_w;
 	/* Red de puntos en píxeles enteros: D par (media fila = píxel entero) y
 	 * H entero. Mínimo 4 px: con 2 px no cabe un punto redondo con hueco
-	 * negro alrededor. */
+	 * negro alrededor. Con `pitch` < 1 (la máscara fina), esa separación por
+	 * pitch, en píxeles enteros y desde 2 px: la red sigue alineada a los
+	 * píxeles, sin moaré; una separación que no es entera (2,5 px) daría
+	 * franjas, y la tesela necesita 3D entero. */
 	float d = floorf(px_per_src / (3.0f * p->triads_per_pixel) * 0.5f + 0.5f);
 	l->d = 2.0f * (d > 2.0f ? d : 2.0f);
+	if (p->pitch > 0.0f && p->pitch < 1.0f) {
+		float dp = floorf(l->d * p->pitch + 0.5f);
+		l->d = dp > 2.0f ? dp : 2.0f;
+	}
 	float h = floorf(l->d * 0.8660254f + 0.5f);
 	l->h = h > 1.0f ? h : 1.0f;
 	l->r = 0.5f * p->dot_size * l->d;
-	l->avg = crt_dot_cover_sum(l->r) / (3.0f * l->d * l->h);
-	float cover_max = clampf(l->r + 0.5f - 0.7071068f, 0.0f, 1.0f);
+	/* Con D impar (la densidad fina: 3 px), las filas impares van corridas
+	 * D/2 = 1,5 px: sus puntos quedan con el centro en el borde entre dos
+	 * píxeles, no en la esquina, y cubren otra cosa. El promedio es el de
+	 * las dos clases y el pico, el mayor (con D par, solo esquinas). */
+	bool odd = fmodf(l->d, 2.0f) != 0.0f;
+	float sum = crt_dot_cover_sum(l->r);
+	if (odd)
+		sum = 0.5f * (sum + dot_cover_sum_at(l->r, 0.5f));
+	l->avg = sum / (3.0f * l->d * l->h);
+	float cover_max = clampf(l->r + 0.5f - (odd ? 0.5f : 0.7071068f), 0.0f, 1.0f);
 	l->peak = mixf(1.0f, cover_max / l->avg, p->mask_strength);
 	l->to_src[0] = (float)src_w / (float)img_w;
 	l->to_src[1] = (float)src_h / (float)img_h;

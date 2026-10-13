@@ -15,7 +15,8 @@
  *     Ranura (←→), Trucos, Imagen, Mostrar FPS y Salir. ↑↓ elige, × acepta, ○,
  *     START o START + SELECT otra vez lo cierran. «Salir» pide confirmación
  *     en el cuadro de abajo si `confirm`, y si no sale.
- *   - «Imagen» abre su página (IM_*): Filtro, Aspecto, Recorte y Escala
+ *   - «Imagen» abre su página (IM_*): Filtro, Densidad (solo con
+ *     `image_density`: el CRT de máscara), Aspecto, Recorte y Escala
  *     interna (←→ o × cambian el valor: image_do con image_arg ±1),
  *     «Guardar para este juego» (×) y Volver. ○ o «Volver» regresan al menú
  *     de pausa; START o START + SELECT cierran todo y el juego sigue.
@@ -48,7 +49,7 @@
 
 /* Filas del menú de pausa y de su página «Imagen». */
 enum { PM_RESUME, PM_SAVE, PM_LOAD, PM_SLOT, PM_CHEATS, PM_IMAGE, PM_FPS, PM_EXIT, PM_ROWS };
-enum { IM_FILTER, IM_ASPECT, IM_CROP, IM_SCALE, IM_SAVE, IM_BACK, IM_ROWS };
+enum { IM_FILTER, IM_DENSITY, IM_ASPECT, IM_CROP, IM_SCALE, IM_SAVE, IM_BACK, IM_ROWS };
 
 enum pausectl_action {
 	PAUSECTL_NONE,
@@ -71,6 +72,7 @@ struct pausectl {
 	 * llama lo lee y lo baja). */
 	bool image;
 	int image_sel, image_do, image_arg;
+	bool image_density;  /* hay fila «Densidad» (la pone quien llama: el filtro es la máscara) */
 	/* Lista de trucos. `panel_avail` y `panel_rows` los pone quien llama (hay
 	 * trucos y cuántos); panel_sel es el elegido; toggle, el que se pidió
 	 * cambiar (-1 ninguno: quien llama lo lee y lo baja); denied, se pidió

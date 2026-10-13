@@ -75,10 +75,11 @@ enum pausectl_action pausectl_pads(struct pausectl *p, const uint32_t raw[PAUSEC
 				   (p->image_sel == IM_BACK && (rise & BIT(SALSA64_DS3_CROSS)))) {
 				p->image = false;
 				p->menu = true;
-			} else if (rise & up) {
-				p->image_sel = (p->image_sel + IM_ROWS - 1) % IM_ROWS;
-			} else if (rise & down) {
-				p->image_sel = (p->image_sel + 1) % IM_ROWS;
+			} else if (rise & (up | down)) {
+				int step = (rise & up) ? IM_ROWS - 1 : 1;
+				do  /* sin máscara, la fila «Densidad» no está */
+					p->image_sel = (p->image_sel + step) % IM_ROWS;
+				while (p->image_sel == IM_DENSITY && !p->image_density);
 			} else if (p->image_sel <= IM_SCALE && (left || right || (rise & BIT(SALSA64_DS3_CROSS)))) {
 				p->image_do = p->image_sel;
 				p->image_arg = left ? -1 : 1;

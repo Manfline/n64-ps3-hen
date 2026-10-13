@@ -96,14 +96,21 @@ enum menu_filter {
 /* Idioma del menú (menu.cfg, «idioma = es|en|fr|de|it|pt»), ver i18n.h. */
 enum menu_lang { MENU_LANG_ES, MENU_LANG_EN, MENU_LANG_FR, MENU_LANG_DE, MENU_LANG_IT, MENU_LANG_PT, MENU_LANGS };
 
+/* Densidad de los puntos del CRT de máscara de sombra: la del filtro
+ * original o la fina (puntos más chicos y más juntos). */
+enum menu_density { MENU_DENSITY_NORMAL, MENU_DENSITY_FINE, MENU_DENSITIES };
+
 /* Ajustes de un solo juego (juegos/<ROM>.cfg): -1 es «lo global». */
 struct menu_game {
 	int aspect;    /* -1 o enum menu_aspect */
 	int filter;    /* -1 o enum menu_filter */
 	int overscan;  /* -1 o MENU_OVERSCAN_OFF / NORMAL / WIDE */
 	int scale;     /* -1, 0 (automática) o 1 .. MENU_SCALE_MAX: escala interna */
+	int density;   /* -1 o enum menu_density (solo con la máscara) */
 };
-enum { MENU_GAME_ASPECT, MENU_GAME_FILTER, MENU_GAME_OVERSCAN, MENU_GAME_SCALE, MENU_GAME_BACK, MENU_GAME_ROWS };
+/* MENU_GAME_DENSITY solo es una fila si el filtro que vale es la máscara. */
+enum { MENU_GAME_ASPECT, MENU_GAME_FILTER, MENU_GAME_DENSITY, MENU_GAME_OVERSCAN, MENU_GAME_SCALE, MENU_GAME_BACK,
+       MENU_GAME_ROWS };
 #define MENU_SCALE_MAX 5
 
 /* Ajustes del menú: el fondo, el contador y la confirmación al salir van en
@@ -119,15 +126,17 @@ struct menu_settings {
 	bool confirm;   /* START + SELECT pregunta antes de salir del juego («confirmar = si|no») */
 	int aspect;     /* enum menu_aspect («aspecto = 4:3|16:9») */
 	int filter;     /* enum menu_filter («filtro = suave|nitido|lineas|lineas+|crt-mascara|crt-rgb|
-	                   crt-svideo|crt-compuesto») */
+	                   crt-svideo|crt-compuesto|crt-trinitron») */
+	int density;    /* enum menu_density («densidad = normal|fina»), la de la máscara */
 	int lang;       /* enum menu_lang */
 };
 
 enum { MENU_PAGE_GAMES, MENU_PAGE_OPTIONS, MENU_PAGE_CHEATS, MENU_PAGE_GAME };
-enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_ASPECT, MENU_OPT_FILTER, MENU_OPT_RESOLUTION, MENU_OPT_SCALE,
-       MENU_OPT_APPLY, MENU_OPT_FPS, MENU_OPT_CONFIRM, MENU_OPT_LANG, MENU_OPT_DL_COVERS, MENU_OPT_DL_CHEATS,
-       MENU_OPT_BACK, MENU_OPTS };
-/* «Aplicar ahora» solo existe mientras lo elegido difiere de lo que corre. */
+enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_ASPECT, MENU_OPT_FILTER, MENU_OPT_DENSITY, MENU_OPT_RESOLUTION,
+       MENU_OPT_SCALE, MENU_OPT_APPLY, MENU_OPT_FPS, MENU_OPT_CONFIRM, MENU_OPT_LANG, MENU_OPT_DL_COVERS,
+       MENU_OPT_DL_CHEATS, MENU_OPT_BACK, MENU_OPTS };
+/* «Aplicar ahora» solo existe mientras lo elegido difiere de lo que corre;
+ * «Densidad», solo con el CRT de máscara de sombra. */
 
 struct menu {
 	const struct romlist *list;
@@ -217,6 +226,12 @@ int menu_game_format(const struct menu_game *g, char *buf, size_t size);
  * global es s->scale, la de video.cfg). Cualquiera puede ser NULL. */
 void menu_game_effective(const struct menu_settings *s, const struct menu_game *g, int *aspect, int *filter,
 			 int *overscan, int *scale);
+/* La densidad que vale para el juego (la suya o la de Opciones). */
+int menu_game_density(const struct menu_settings *s, const struct menu_game *g);
+/* Si el filtro tiene densidad (el CRT de máscara de sombra) y el nombre de
+ * una densidad (en español: se traduce con tr() al dibujar). */
+bool menu_filter_has_density(int filter);
+const char *menu_density_name(int density);
 
 /* Nombres de los valores (en español: se traducen con tr() al dibujar),
  * para el menú de pausa. La escala automática dice cuál es según la

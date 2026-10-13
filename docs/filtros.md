@@ -6,14 +6,16 @@ máscara de sombra (v1.3), el CRT con cable (v1.1: euroconector RGB,
 S-Video o compuesto NTSC hacia una Trinitron chica) y el CRT Trinitron (un
 Sony KV-29 de la sala, sin la señal de un cable: el preset `kv29` de
 RetroMac, la v6 de su Trinitron de Shadertoy sin los alambres
-amortiguadores). Van en la parte GPL
+amortiguadores); la máscara tiene además una densidad «Fina», con los
+puntos más chicos y más juntos (pedido del autor). Van en la parte GPL
 (`src/frontend/filters/`), sobre la maquinaria genérica de posprocesado de
 `lib/rsxkit` (MIT, `rsxkit/post.h`), que no sabe nada de estos filtros.
 
 Se eligen en la fila «Filtro» de Opciones (y en los ajustes por juego),
 después de los filtros sencillos de VIDEOGAMES SCZ, con el crédito
 «Filtro original del autor» (`MENU_FILTER_CRT_*` en menu.h; claves
-`crt-mascara|crt-rgb|crt-svideo|crt-compuesto|crt-trinitron`), y en vivo en
+`crt-mascara|crt-rgb|crt-svideo|crt-compuesto|crt-trinitron`; la densidad de la
+máscara, en su fila «Densidad», que solo aparece con ella), y en vivo en
 «Imagen» del menú de pausa. Son experimentales: la fila dice «(exp.)» y la
 ayuda «(experimental)». Con un CRT la escala interna no pasa de 3× (lo
 elegido menor se respeta; ver «Costo en el RSX»). `load_view` de main.c
@@ -54,6 +56,22 @@ CRT con cable:
 | decodifica | igual | los filtros de la tele (9 muestras con RGB, 27 con S-Video y compuesto), a RGB, a luz lineal | 49 / 103 |
 | líneas A y B | columnas de la imagen × líneas | la scanline en esa columna, interpolada, ya como la usa el haz (amplitud con la apertura de la máscara de franjas; k = 1/2σ²) | 51 + 26 (58 + 31 con dos tablas) |
 | final | la imagen en pantalla | el haz de las dos scanlines más cercanas, el resplandor y la gamma | 42 (5) |
+
+Densidad «Fina» de la máscara (`SALSA64_CRT_MASK_FINE`, preset
+`crt_mask_monitor_fine`, `pitch` 0,75; clave `crt-mascara-fina` para el
+archivo `filtro` y `filtros-ciclo`): la misma cuenta con la separación de los
+puntos por 0,75 en píxeles enteros, desde 2 px (a 720p y 1080p con 320 de
+ancho: D = 3, filas de 3, radio 1,2, en lugar de 4, 3 y 1,6; tríadas de 9 px
+en vez de 12). Se compararon 4, 3, 2,5, 2 y 1 px con `tools/crt-ref.c`
+(`CRT_REF_D`): a 2,5 px la red no cae en píxeles enteros y se ven franjas (y
+la tesela necesita 3D entero); a 2 px los puntos son bloques de ~2 × 2 px y
+se pierden las tríadas redondas; a 1 px, con las filas corridas medio
+píxel, ni siquiera se ven puntos. El autor eligió 3 px. La tesela da el
+punto más cercano exacto también con D = 2 y 3 (prueba en el host). Con D
+impar las filas impares van corridas 1,5 px y sus puntos quedan con el
+centro en un borde de píxel, no en una esquina: el promedio de la máscara
+(lo que conserva el brillo) es el de las dos clases de punto y el pico, el
+mayor; sin eso la fina salía un 2 % más oscura.
 
 CRT Trinitron: el mismo tubo, sin señal ni decodificación. Las líneas A y B
 leen la luz lineal del juego: en cada columna, 5 texeles de la scanline con

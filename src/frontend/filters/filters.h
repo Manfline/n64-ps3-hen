@@ -28,6 +28,7 @@ enum salsa64_crt {
 	SALSA64_CRT_SVIDEO,     /* ... S-Video */
 	SALSA64_CRT_COMPOSITE,  /* ... compuesto */
 	SALSA64_CRT_TRINITRON,  /* Trinitron de la sala (Sony KV-29), sin cable */
+	SALSA64_CRT_MASK_FINE,  /* máscara de sombra con densidad «Fina» (puntos más chicos) */
 	SALSA64_CRTS
 };
 

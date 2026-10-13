@@ -7,12 +7,14 @@
  * comparar contra lo que dibujan las pasadas del RSX (src/frontend/filters,
  * docs/filtros.md).
  *
- *   crt-ref mascara|rgb|svideo|compuesto|trinitron ENTRADA.ppm ANCHO ALTO SALIDA.ppm
+ *   crt-ref mascara|mascara-fina|rgb|svideo|compuesto|trinitron ENTRADA.ppm ANCHO ALTO SALIDA.ppm
  *       la imagen del juego (a su resolución) filtrada a una pantalla de
  *       ANCHO × ALTO, con la forma 4:3 centrada; con el sufijo «-rsx»
  *       (mascara-rsx…), el resplandor como lo hace el RSX: en una rejilla
  *       (1 o 2 puntos por píxel del juego) que promedia la luz ya lineal con
  *       filtro bilineal, interpolada en cada píxel
+ *       con CRT_REF_D=<píxeles> en el entorno, la máscara con esa
+ *       separación de los puntos en vez de la del preset
  *   crt-ref compara A.ppm B.ppm [DIFERENCIA.ppm]
  *       diferencia por canal (promedio, percentil 99, máximo) en el
  *       rectángulo 4:3 de la pantalla; la imagen de diferencia va ×8
@@ -207,16 +209,22 @@ static void nearest_dot(double qx, double qy, double ch, double D, double H, dou
 	}
 }
 
-static double cover_sum(double R)
+/* Con el centro corrido ox en x desde una esquina (0,5: en un borde). */
+static double cover_sum_at(double R, double ox)
 {
 	int n = (int)ceil(R + 1.0);
 	double s = 0;
 	for (int b = 0; b < 2 * n && b < 32; b++)
-		for (int a = 0; a < 2 * n && a < 32; a++) {
-			double qx = a - n + 0.5, qy = b - n + 0.5;
+		for (int a = 0; a < 2 * n + 1 && a < 33; a++) {
+			double qx = a - n + 0.5 - ox, qy = b - n + 0.5;
 			s += clampd(R - sqrt(qx * qx + qy * qy) + 0.5, 0, 1);
 		}
 	return fmax(s, 1e-3);
+}
+
+static double cover_sum(double R)
+{
+	return cover_sum_at(R, 0.0);
 }
 
 /* El resplandor como en el RSX (src/frontend/filters): rejilla de g
@@ -279,15 +287,28 @@ static v3 glow_at(double px, double py)
 		    fy);
 }
 
+static int mask_fine;
+
 static v3 mask_pixel(double fx, double fy, double W, double H)
 {
 	double tsx = src_w / W, tsy = src_h / H;
 	double pxps = W / src_w;
 	double D = 2.0 * fmax(2.0, floor(pxps / (3.0 * M_TPP) * 0.5 + 0.5));
+	if (mask_fine) {  /* la densidad «Fina»: × 0,75 en píxeles enteros, desde 2 */
+		D = floor(D * 0.75 + 0.5);
+		D = D > 2.0 ? D : 2.0;
+	}
+	/* CRT_REF_D: otra separación de los puntos (para comparar densidades). */
+	const char *dv = getenv("CRT_REF_D");
+	if (dv && atof(dv) > 0.0)
+		D = atof(dv);
 	double Hr = fmax(1.0, floor(D * 0.8660254 + 0.5));
 	double R = 0.5 * M_DOT * D;
-	double avg = cover_sum(R) / (3.0 * D * Hr);
-	double cmax = clampd(R + 0.5 - 0.7071068, 0, 1);
+	/* D impar: las filas impares, con el centro en un borde de píxel. */
+	int odd = fmod(D, 2.0) != 0.0;
+	double sum = odd ? 0.5 * (cover_sum(R) + cover_sum_at(R, 0.5)) : cover_sum(R);
+	double avg = sum / (3.0 * D * Hr);
+	double cmax = clampd(R + 0.5 - (odd ? 0.5 : 0.7071068), 0, 1);
 	double peak = mixd(1.0, cmax / avg, M_MS);
 	double out[3];
 	for (int ch = 0; ch < 3; ch++) {
@@ -545,7 +566,7 @@ int main(int argc, char **argv)
 	if (argc >= 4 && !strcmp(argv[1], "compara"))
 		return compare(argv[2], argv[3], argc > 4 ? argv[4] : NULL);
 	if (argc != 6) {
-		fprintf(stderr, "uso: crt-ref mascara|rgb|svideo|compuesto|trinitron ENTRADA.ppm ANCHO ALTO SALIDA.ppm\n"
+		fprintf(stderr, "uso: crt-ref mascara|mascara-fina|rgb|svideo|compuesto|trinitron ENTRADA.ppm ANCHO ALTO SALIDA.ppm\n"
 				"     crt-ref compara A.ppm B.ppm [DIFERENCIA.ppm]\n");
 		return 2;
 	}
@@ -556,7 +577,8 @@ int main(int argc, char **argv)
 		rsx_glow = 1;
 		*suffix = '\0';
 	}
-	int mask = !strcmp(mode, "mascara");
+	mask_fine = !strcmp(mode, "mascara-fina");
+	int mask = !strcmp(mode, "mascara") || mask_fine;
 	cable = !strcmp(mode, "svideo") ? 1 : !strcmp(mode, "compuesto") ? 2 : 0;
 	trin = !strcmp(mode, "trinitron");
 	if (trin) {
