@@ -50,6 +50,34 @@
 #include "crt_tube_lines_b4_fpo.h"
 #include "crt_tube_lines_b8_fpo.h"
 
+static const struct {
+	const char *name, *key;
+} crt_names[SALSA64_CRTS] = {
+	[SALSA64_CRT_NONE] = { "Ninguno", "ninguno" },
+	[SALSA64_CRT_MASK] = { "CRT máscara de sombra", "crt-mascara" },
+	[SALSA64_CRT_RGB] = { "CRT cable RGB", "crt-rgb" },
+	[SALSA64_CRT_SVIDEO] = { "CRT cable S-Video", "crt-svideo" },
+	[SALSA64_CRT_COMPOSITE] = { "CRT cable compuesto", "crt-compuesto" },
+};
+
+const char *salsa64_crt_name(int f)
+{
+	return f >= 0 && f < SALSA64_CRTS ? crt_names[f].name : "?";
+}
+
+const char *salsa64_crt_key(int f)
+{
+	return f >= 0 && f < SALSA64_CRTS ? crt_names[f].key : "ninguno";
+}
+
+int salsa64_crt_from_key(const char *key)
+{
+	for (int f = 0; f < SALSA64_CRTS; f++)
+		if (!strcmp(key, crt_names[f].key))
+			return f;
+	return -1;
+}
+
 /* Tramos medidos de cada cuadro (marcas de tiempo del RSX entre pasadas). */
 enum { SEG_REDUCE, SEG_LINEAR, SEG_TABLES, SEG_LINES, SEG_FINAL, SEGS };
 static const char *const seg_mask[SEGS] = { "reducir", "lineal y resplandor", "teselas y puntos", NULL, "final" };
@@ -157,7 +185,7 @@ static bool make_surface(int s, uint32_t w, uint32_t h, rsxkit_post_format f)
 
 static bool is_cable(int f)
 {
-	return f == SALSA64_FILTER_CRT_RGB || f == SALSA64_FILTER_CRT_SVIDEO || f == SALSA64_FILTER_CRT_COMPOSITE;
+	return f == SALSA64_CRT_RGB || f == SALSA64_CRT_SVIDEO || f == SALSA64_CRT_COMPOSITE;
 }
 
 /* Las constantes de la máscara de sombra. */
@@ -286,7 +314,7 @@ static bool configure(int f, uint32_t sw, uint32_t sh, float aspect)
 	fl.g = crt_glow_scale(fl.rect[2], sw);
 	bool ok = make_surface(S_SRC, sw, sh, RSXKIT_POST_RGBA8) && make_surface(S_LIN, sw, sh, RSXKIT_POST_RGBA16F) &&
 		  make_surface(S_GLOW, sw * fl.g, sh * fl.g, RSXKIT_POST_RGBA16F);
-	if (ok && f == SALSA64_FILTER_CRT_MASK) {
+	if (ok && f == SALSA64_CRT_MASK) {
 		const struct crt_mask_preset *p = &crt_mask_monitor;
 		crt_mask_layout(p, fl.rect[2], fl.rect[3], sw, sh, &fl.ml);
 		ok = make_surface(S_TILE_A, fl.ml.tile_w, fl.ml.tile_h, RSXKIT_POST_RGBA16F) &&
@@ -298,14 +326,14 @@ static bool configure(int f, uint32_t sw, uint32_t sh, float aspect)
 			mask_constants();
 			salsa64_log("filtros: «%s» en %ux%u (%u,%u) desde %ux%u: puntos cada %.0f px, filas de %.0f, radio "
 				    "%.1f, promedio %.3f, pico %.2f; tabla de puntos %ux%u, tesela %ux%u, resplandor ×%u",
-				    salsa64_filter_name(f), fl.rect[2], fl.rect[3], fl.rect[0], fl.rect[1], sw, sh, fl.ml.d,
+				    salsa64_crt_name(f), fl.rect[2], fl.rect[3], fl.rect[0], fl.rect[1], sw, sh, fl.ml.d,
 				    fl.ml.h, fl.ml.r, fl.ml.avg, fl.ml.peak, fl.ml.dots_w, fl.ml.dots_h, fl.ml.tile_w,
 				    fl.ml.tile_h, fl.g);
 		}
 	} else if (ok && is_cable(f)) {
 		const struct crt_cable_preset *p = &crt_cable_tv13;
-		enum crt_cable cable = f == SALSA64_FILTER_CRT_RGB      ? CRT_CABLE_RGB
-				       : f == SALSA64_FILTER_CRT_SVIDEO ? CRT_CABLE_SVIDEO
+		enum crt_cable cable = f == SALSA64_CRT_RGB      ? CRT_CABLE_RGB
+				       : f == SALSA64_CRT_SVIDEO ? CRT_CABLE_SVIDEO
 									: CRT_CABLE_COMPOSITE;
 		crt_cable_taps(p, cable, sw, &fl.ct);
 		crt_grille(&p->tube, (float)fl.rect[2] / sw, &fl.gr);
@@ -320,7 +348,7 @@ static bool configure(int f, uint32_t sw, uint32_t sh, float aspect)
 			cable_constants(f);
 			salsa64_log("filtros: «%s» en %ux%u (%u,%u) desde %ux%u: %d muestras desde %d cada %.3f px (%u "
 				    "columnas%s), franjas cada %.0f px, resplandor ×%u",
-				    salsa64_filter_name(f), fl.rect[2], fl.rect[3], fl.rect[0], fl.rect[1], sw, sh,
+				    salsa64_crt_name(f), fl.rect[2], fl.rect[3], fl.rect[0], fl.rect[1], sw, sh,
 				    fl.ct.count, fl.ct.jlo, fl.ct.dt, fl.ct.cols, fl.ct.grid8 ? ", dos tablas" : "",
 				    fl.gr.pitch, fl.g);
 		}
@@ -380,7 +408,7 @@ static void texel16(int s, int x, int y, float out[4])
  * SALSA64_DATA_DIR/filtro-<clave>-<alto>-fuente.ppm y -pantalla.ppm. */
 static void dump_once(void)
 {
-	static uint32_t done[SALSA64_FILTERS][2];
+	static uint32_t done[SALSA64_CRTS][2];
 	uint32_t *d = &done[fl.filter][fl.oh >= 1000];
 	if (*d)
 		return;
@@ -388,7 +416,7 @@ static void dump_once(void)
 	char path[96];
 	uint32_t ps, pitch;
 	const volatile uint8_t *S = rsxkit_surface_data(fl.surf[S_SRC], &ps);
-	snprintf(path, sizeof path, SALSA64_DATA_DIR "/filtro-%s-%u-fuente.ppm", salsa64_filter_key(fl.filter), fl.oh);
+	snprintf(path, sizeof path, SALSA64_DATA_DIR "/filtro-%s-%u-fuente.ppm", salsa64_crt_key(fl.filter), fl.oh);
 	FILE *f = fopen(path, "wb");
 	if (f && S) {
 		static uint8_t line[3 * 640];
@@ -403,7 +431,7 @@ static void dump_once(void)
 	if (f)
 		fclose(f);
 	const uint32_t *px = rsxkit_back_buffer(&pitch);
-	snprintf(path, sizeof path, SALSA64_DATA_DIR "/filtro-%s-%u-pantalla.ppm", salsa64_filter_key(fl.filter), fl.oh);
+	snprintf(path, sizeof path, SALSA64_DATA_DIR "/filtro-%s-%u-pantalla.ppm", salsa64_crt_key(fl.filter), fl.oh);
 	f = fopen(path, "wb");
 	if (f && px) {
 		static uint8_t line[3 * 1920];
@@ -422,7 +450,7 @@ static void dump_once(void)
 	if (f)
 		fclose(f);
 	salsa64_log("filtros: entrada y pantalla de «%s» en filtro-%s-%u-fuente.ppm y -pantalla.ppm",
-		    salsa64_filter_name(fl.filter), salsa64_filter_key(fl.filter), fl.oh);
+		    salsa64_crt_name(fl.filter), salsa64_crt_key(fl.filter), fl.oh);
 }
 
 static void check_tables(void)
@@ -431,7 +459,7 @@ static void check_tables(void)
 	rsxkit_finish();
 	uint32_t ps;
 	const volatile uint8_t *S = rsxkit_surface_data(fl.surf[S_SRC], &ps);
-	float gin = fl.filter == SALSA64_FILTER_CRT_MASK ? crt_mask_monitor.gamma_in : crt_cable_tv13.tube.gamma_in;
+	float gin = fl.filter == SALSA64_CRT_MASK ? crt_mask_monitor.gamma_in : crt_cable_tv13.tube.gamma_in;
 	/* La luz lineal contra la fuente (uno de cada 3 × 3 texeles). */
 	float lin_err = 0.0f, lin_swap = 0.0f;
 	for (uint32_t y = 1; y < fl.sh; y += 3)
@@ -449,10 +477,10 @@ static void check_tables(void)
 	/* El resplandor contra 12 lecturas bilineales de la luz lineal hechas
 	 * aquí (0 fuera de la imagen), en 16 puntos de la rejilla. */
 	float glow_err = 0.0f, glow_point = 0.0f;
-	const float k = (fl.filter == SALSA64_FILTER_CRT_MASK
+	const float k = (fl.filter == SALSA64_CRT_MASK
 				 ? crt_mask_monitor.glow * crt_mask_monitor.brightness * (1.0f - crt_mask_monitor.black_level)
 				 : crt_cable_tv13.tube.glow * crt_cable_tv13.tube.brightness) / 12.0f;
-	const float radius = fl.filter == SALSA64_FILTER_CRT_MASK ? crt_mask_monitor.glow_radius
+	const float radius = fl.filter == SALSA64_CRT_MASK ? crt_mask_monitor.glow_radius
 								  : crt_cable_tv13.tube.glow_radius;
 	for (int i = 0; i < 16; i++) {
 		int gx = (int)((fl.sw * fl.g) * (i % 4 * 2 + 1) / 8), gy = (int)((fl.sh * fl.g) * (i / 4 * 2 + 1) / 8);
@@ -480,7 +508,7 @@ static void check_tables(void)
 		}
 	}
 	char extra[160] = "";
-	if (fl.filter == SALSA64_FILTER_CRT_MASK) {
+	if (fl.filter == SALSA64_CRT_MASK) {
 		/* Las teselas contra la misma cuenta en la CPU. */
 		uint32_t bad = 0;
 		for (uint32_t ty = 0; ty < fl.ml.tile_h; ty++)
@@ -509,7 +537,7 @@ static void check_tables(void)
 	}
 	salsa64_log("filtros: comprobación en el RSX («%s»): luz lineal error máx. %.4f (%.4f con R y B cambiados); "
 		    "resplandor error máx. %.5f contra bilineal (%.5f contra el texel más cercano)%s",
-		    salsa64_filter_name(fl.filter), lin_err, lin_swap, glow_err, glow_point, extra);
+		    salsa64_crt_name(fl.filter), lin_err, lin_swap, glow_err, glow_point, extra);
 	dump_once();
 }
 
@@ -662,7 +690,7 @@ static void draw_debug(void)
 
 bool salsa64_filters_draw(int f, const struct salsa64_filter_src *src, rsxkit_rect *out)
 {
-	if (f <= SALSA64_FILTER_NONE || f >= SALSA64_FILTERS || fl.failed || !src || src->factor < 1 ||
+	if (f <= SALSA64_CRT_NONE || f >= SALSA64_CRTS || fl.failed || !src || src->factor < 1 ||
 	    src->factor > 6)
 		return false;
 	uint32_t sw = src->region.w / src->factor, sh = src->region.h / src->factor;
@@ -705,7 +733,7 @@ bool salsa64_filters_draw(int f, const struct salsa64_filter_src *src, rsxkit_re
 	run(&p);
 	stamp(slot, SEG_LINEAR + 1);
 
-	if (f == SALSA64_FILTER_CRT_MASK)
+	if (f == SALSA64_CRT_MASK)
 		draw_mask(slot);
 	else
 		draw_cable(slot);
@@ -730,12 +758,12 @@ bool salsa64_filters_report(char *buf, size_t size)
 		fl.measured = 0;
 		return false;
 	}
-	const char *const *names = fl.last_filter == SALSA64_FILTER_CRT_MASK ? seg_mask : seg_cable;
+	const char *const *names = fl.last_filter == SALSA64_CRT_MASK ? seg_mask : seg_cable;
 	double k = fl.measured ? 1e-6 / fl.measured : 0.0, total = 0.0;
 	for (int i = 0; i < SEGS; i++)
 		total += fl.ns[i] * k;
 	int n = snprintf(buf, size, "filtro «%s» %ux%u desde %ux%u: %.2f ms del RSX por cuadro (",
-			 salsa64_filter_name(fl.last_filter), fl.rect[2], fl.rect[3], fl.sw, fl.sh, total);
+			 salsa64_crt_name(fl.last_filter), fl.rect[2], fl.rect[3], fl.sw, fl.sh, total);
 	for (int i = 0, first = 1; i < SEGS && n > 0 && (size_t)n < size; i++) {
 		if (!names[i])
 			continue;

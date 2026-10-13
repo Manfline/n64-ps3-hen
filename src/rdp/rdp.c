@@ -1673,7 +1673,10 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 	rdp.again.surf = rdp.surf[p.slot];
 	rdp.again.src = src;
 	rdp.again.scale = rdp.surf_scale[p.slot];
-	if (view && view->scale == RSXKIT_SCALE_FIT && rdp_present_integer(sw, sh, sc->width, sc->height)) {
+	/* Con una proporción panorámica pedida (aspecto 16:9 del menú) no vale la
+	 * presentación a 1:1: esa dibuja la región en su proporción de 4:3 y el
+	 * aspecto no se aplicaría. Se ajusta a la pantalla con esa proporción. */
+	if (view && view->scale == RSXKIT_SCALE_FIT && view->aspect <= 1.5f && rdp_present_integer(sw, sh, sc->width, sc->height)) {
 		rsxkit_view one = { RSXKIT_SCALE_INTEGER, view->filter, 0.0f };
 		rdp.again.w = sw;
 		rdp.again.h = sh;

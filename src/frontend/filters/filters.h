@@ -18,7 +18,23 @@
 
 #include <rsxkit/rsxkit.h>
 
-#include "frontend/filters/catalog.h"
+
+/* Los filtros CRT, originales del autor portados de sus versiones de
+ * RetroMac (en el menú, los MENU_FILTER_CRT_* en este orden). */
+enum salsa64_crt {
+	SALSA64_CRT_NONE,
+	SALSA64_CRT_MASK,       /* máscara de sombra (v1.3) */
+	SALSA64_CRT_RGB,        /* CRT con cable (v1.1): euroconector RGB */
+	SALSA64_CRT_SVIDEO,     /* ... S-Video */
+	SALSA64_CRT_COMPOSITE,  /* ... compuesto */
+	SALSA64_CRTS
+};
+
+/* Nombre (log y avisos) y clave (la de menu.cfg y del archivo `filtro`). */
+const char *salsa64_crt_name(int f);
+const char *salsa64_crt_key(int f);
+/* El filtro de una clave («crt-mascara»…), o -1. */
+int salsa64_crt_from_key(const char *key);
 
 struct salsa64_filter_src {
 	rsxkit_texture tex;  /* la imagen: un destino a escala interna o el framebuffer 2D */
@@ -27,7 +43,7 @@ struct salsa64_filter_src {
 	float aspect;        /* forma de la imagen en la tele (4/3) */
 };
 
-/* Dibuja la imagen con el filtro `f` en la pantalla del cuadro en curso y
+/* Dibuja la imagen con el filtro CRT `f` en la pantalla del cuadro en curso y
  * deja en `out` el rectángulo que ocupa. false si no se pudo (sin memoria
  * del RSX o un tamaño que no cabe): entonces hay que presentarla sin
  * filtro. La primera vez con cada tamaño espera al RSX para reservar sus

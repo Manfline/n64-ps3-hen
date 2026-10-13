@@ -7,11 +7,15 @@ S-Video o compuesto NTSC hacia una Trinitron chica). Van en la parte GPL
 (`src/frontend/filters/`), sobre la maquinaria genérica de posprocesado de
 `lib/rsxkit` (MIT, `rsxkit/post.h`), que no sabe nada de estos filtros.
 
-Se eligen con el archivo `filtro` de `/dev_hdd0/salsa64`
-(`crt-mascara|crt-rgb|crt-svideo|crt-compuesto`; docs/uso-ps3.md); en
-el frontend, `filter_setup` de main.c es el punto por donde el menú pasa
-el filtro elegido. Las capturas de pantalla, las miniaturas de los
-estados y las pruebas automáticas siguen sin filtro.
+Se eligen en la fila «Filtro» de Opciones (y en los ajustes por juego),
+después de los filtros sencillos de VIDEOGAMES SCZ, con el crédito
+«Filtro original del autor» (`MENU_FILTER_CRT_*` en menu.h; claves
+`crt-mascara|crt-rgb|crt-svideo|crt-compuesto`). `load_view` de main.c
+pasa el elegido a `filter_setup` al abrir el juego, y `filter_select`
+lo cambia en vivo (las tablas se rehacen solas en el cuadro siguiente).
+El archivo `filtro` de `/dev_hdd0/salsa64` manda sobre el menú, para
+pruebas. Las capturas de pantalla, las miniaturas de los estados y las
+pruebas automáticas siguen sin filtro.
 
 ## Cómo se dibujan en el RSX
 

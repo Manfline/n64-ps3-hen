@@ -70,6 +70,8 @@ void romlist_parse_header(const uint8_t raw[0x40], const char *save_cfg, size_t 
 		any |= c != 0 && c != ' ';
 	}
 	e->code[any ? 4 : 0] = '\0';
+	e->crc1 = (uint32_t)h[0x10] << 24 | (uint32_t)h[0x11] << 16 | (uint32_t)h[0x12] << 8 | h[0x13];
+	e->crc2 = (uint32_t)h[0x14] << 24 | (uint32_t)h[0x15] << 16 | (uint32_t)h[0x16] << 8 | h[0x17];
 	e->region = h[HDR_REGION];
 	e->version = h[HDR_VERSION];
 	e->tv = (uint8_t)salsa64_rom_tv_type(h);
