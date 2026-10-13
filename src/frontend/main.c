@@ -630,7 +630,9 @@ static void ovl_note(uint64_t tb_emu, uint64_t tb_ovl, uint64_t tb_load, uint64_
 {
 	uint64_t ms = spukit_tick_hz() / 1000u;
 	int g = tb_ovl < ms / 10 ? 0 : tb_ovl < ms ? 1 : tb_ovl < 3 * ms ? 2 : 3;
-	struct ovl_group *o[2] = { &h1.by_ovl[g], NULL };
+	/* Por solape, solo los campos sin carga de mentira: así una corrida con
+	 * carga-hilo1 da las dos mediciones. */
+	struct ovl_group *o[2] = { tb_load ? NULL : &h1.by_ovl[g], NULL };
 	if (h1.load_us)
 		o[1] = !tb_load ? &h1.by_load[0]
 		     : tb_load * 4 >= (uint64_t)h1.load_us * spukit_tick_hz() / 1000000u ? &h1.by_load[1] : NULL;
