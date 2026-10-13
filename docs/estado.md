@@ -87,6 +87,21 @@ píxel (Congo Jungle, Fox). Candidato a la misma causa, sin probar (no
 hay respaldo en la Mac): Earthworm Jim 3D, donde el modelo de Jim no se ve
 (issue #3).
 
+La secuencia de Kirby (y la del letrero del castillo de Peach en Smash) es
+`G_MTX` del objeto, `G_SPECIAL_1` (0xD5) y doce `G_MW_MATRIX` con las
+partes enteras y las fracciones de las filas 0–2; la HLE calcula la MVP
+pendiente al insertar, así que el 0xD5 no hace falta. Prueba en el host:
+`gfx_insert_matrix_billboard`. Medido desde el estado de la PS3 (campo
+7852): en la zona del enemigo del bloque, de 17,7 % a 3,7 % de píxeles
+distintos del LLE; el enemigo del tronco pasa de los pies azules a la bola
+de fuego entera. Contra `dd6a7b0`, con capturas cada 200–250 campos
+(intros y guiones de `docs/pads`), quedan idénticos Zelda OoT (casa de
+Link con partida nueva), Majora, SM64, MK64, DK64, Banjo, Perfect Dark,
+GoldenEye, Conker, Paper Mario, Snap y Stadium 2; en Kirby cambian además
+94 píxeles de destellos en la selección de nivel, y en Smash 134 píxeles
+del letrero en un escalón de 5 bits (desde un mismo estado, un poco más
+cerca del LLE).
+
 **Pokémon Stadium 2: fondo del título como ruido.** El fondo es un JPEG
 que decodifica el microcódigo JPEG del RSP: el mismo código que el de
 Zelda OoT (0xAF0 bytes idénticos byte a byte; el de OoT está en su RDRAM

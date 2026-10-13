@@ -574,6 +574,37 @@ static void gfx_matrix_stack(void)
 	CHECK_EQ(gs.mv_top, 1);
 }
 
+/* Billboard de Kirby 64 (y del letrero de Smash): tras el G_MTX del objeto
+ * y un G_SPECIAL_1, los G_MW_MATRIX (gSPInsertMatrix) cambian la parte 3×3
+ * de la MVP por una escala que mira a la cámara; la traslación queda. La
+ * HLE calcula la MVP pendiente al insertar y el siguiente G_MTX la vuelve a
+ * calcular, como el RSP. */
+static void gfx_insert_matrix_billboard(void)
+{
+	start();
+	viewport_320x240();
+	load_mtx(ident, true);
+	/* Giro de 90° en z y traslación (0.5, 0, 0). */
+	const float rot[16] = { 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0.5f, 0, 0, 1 };
+	load_mtx(rot, false);
+	dl(0xD5000001, 0);           /* G_SPECIAL_1 */
+	dl(0xDB000000, 0x00020000);  /* enteras de los elementos 0 y 1: 2, 0 */
+	dl(0xDB000008, 0x00000003);  /* 4 y 5: 0, 3 */
+	dl(0xDB000014, 0x00010000);  /* 10 y 11: 1, 0 */
+	const struct vtx v[1] = { { 1, 1, 0, 0, 0, { 0, 0, 0, 0 } } };
+	uint32_t va = put_vertices(v, 1);
+	dl(0x01000000 | 1 << 12 | 1 << 1, va);
+	dl(0xDA380000 | 0x01, put_matrix(ident));  /* NOPUSH y MUL: la MVP de nuevo */
+	dl(0x01000000 | 1 << 12 | 2 << 1, va);     /* en el índice 1 */
+	run();
+	/* (1,1,0) con la escala (2,3,1) más la traslación; después, girado. */
+	CHECK(fabsf(gs.vtx[0].x - 2.5f) < 1e-4f);
+	CHECK(fabsf(gs.vtx[0].y - 3.0f) < 1e-4f);
+	CHECK(fabsf(gs.vtx[1].x + 0.5f) < 1e-4f);
+	CHECK(fabsf(gs.vtx[1].y - 1.0f) < 1e-4f);
+	CHECK_EQ(res.unknown_cmds, 0);
+}
+
 static void gfx_lighting(void)
 {
 	start();
@@ -2275,6 +2306,7 @@ void t_suite_gfx(void)
 	RUN(gfx_triangle_transform);
 	RUN(gfx_clip_ratio_f3dex2);
 	RUN(gfx_matrix_stack);
+	RUN(gfx_insert_matrix_billboard);
 	RUN(gfx_lighting);
 	RUN(gfx_texgen);
 	RUN(gfx_tmem_rgba16_block);
