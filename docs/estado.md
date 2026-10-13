@@ -18,7 +18,13 @@ zona caliente de 256 KB y frío de verdad → trazas por el sucesor dominante
 → pistas de salto y precarga → `code_flags` chica → copia del VI por SPE →
 compilar a la segunda. Descartadas: páginas de 1 MB para la caché (el ERAT
 no las aprovecha y el texto lo mapea lv2), la RMT de la L2 (privilegiada),
-precarga de datos del juego.
+precarga de datos del juego. Evaluadas además, con ganancia ~0 hoy: un SPE
+«acomodador» de datos para el PPE (no hay recorrido previsible y disperso en
+el hilo 0; lo lineal va entero al SPE), la caché por software en el local
+store de un SPE (nada irregular que llevar a un SPE) y el hilo 1 como
+ayudante de precarga (solo puede precargar código, llega un bloque tarde y
+cuesta ~13 % por SMT: su carga útil la hace el hilo 0 en línea con `dcbt`
+del sucesor y listas de precarga por transición).
 
 ## 2026-10-12 (noche) — Donkey Kong 64: la cámara que se acerca y se aleja leía una z image vacía (rama `focused-hermann-680a6f`, paquete SLSA00105 «Salsa64 cámara»)
 
