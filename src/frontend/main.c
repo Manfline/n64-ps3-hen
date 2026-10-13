@@ -225,7 +225,9 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define PROFILE_HOT_KB   1024u            /* zona caliente por omisión */
 #define PROFILE_SAVE_US  120000000ull     /* escritura periódica, además de la del cierre */
 #define PROFILE_FOLD_FIELDS 60            /* campos entre sumas de rec->hits[] al perfil */
-#define PROFILE_STEP_ENTRIES 512          /* entradas escritas por vuelta del hilo de presentación */
+#define PROFILE_STEP_ENTRIES 512          /* entradas escritas por vuelta, si escribe el hilo de presentación */
+#define PROFILE_IO_PRIO  1500             /* el hilo que escribe el perfil: por debajo de todos */
+#define PROFILE_IO_STACK (64u << 10)
 #define ROM_MAX      (64u << 20)
 #define FB_MAX_W     640
 #define FB_MAX_H     576
@@ -256,14 +258,23 @@ static struct salsa64_rec rec;
 static struct salsa64_rec_prof rec_prof, rec_prof_prev;  /* perfil del recompilador (SALSA64_RECPROF_FLAG) */
 static bool use_rec;  /* el CPU corre con el recompilador */
 static struct salsa64_rec_profile *rec_profile;         /* perfil persistente por juego (1,4 MB; solo con perfil-activo) */
-static struct salsa64_rec_profile_writer rec_profile_w; /* su escritura por trozos (hilo de presentación) */
+static struct salsa64_rec_profile_writer rec_profile_w; /* su escritura por trozos, si la hace el hilo de presentación */
 static struct {
 	bool on;                  /* hay perfil para este juego (rec.profile) */
 	char path[SALSA64_RPF_PATH_MAX];
 	uint64_t t_saved;         /* cuándo empezó la última escritura periódica */
 	uint64_t session_saved;   /* rec_profile->session en esa escritura */
 	uint32_t fold_fields;     /* campos desde la última suma al perfil */
-	uint32_t saves, save_errors;
+	volatile uint32_t saves, save_errors;
+	/* Hilo propio de baja prioridad para escribir el archivo (el disco
+	 * bloquea; la presentación no debe esperarlo): la presentación solo le
+	 * avisa por el semáforo. Si no se pudo crear, escribe la presentación por
+	 * trozos. */
+	bool thread_ok;
+	volatile int stop;        /* al cerrar: que termine */
+	volatile int due;         /* hay una escritura pedida */
+	sys_ppu_thread_t tid;
+	sys_sem_t sem;
 } rprof;
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
 static struct salsa64_save save;
@@ -2114,6 +2125,8 @@ static uint32_t profile_hot_kb(bool *sites)
 	return kb;
 }
 
+static void profile_io_thread(void *arg);
+
 /* Al abrir un juego, con el recompilador ya iniciado: carga su perfil (o
  * empieza uno), marca los calientes y lo conecta. */
 static void profile_open(const uint8_t *rom)
@@ -2146,22 +2159,67 @@ static void profile_open(const uint8_t *rom)
 	rec.profile = rec_profile;
 	rprof.on = true;
 	rprof.t_saved = sysGetSystemTime();
+	{
+		sys_sem_attr_t attr;
+		memset(&attr, 0, sizeof attr);
+		attr.attr_protocol = SYS_SEM_ATTR_PROTOCOL;
+		attr.attr_pshared = SYS_SEM_ATTR_PSHARED;
+		rprof.thread_ok = sysSemCreate(&rprof.sem, &attr, 0, 1) == 0;
+		if (rprof.thread_ok && sysThreadCreate(&rprof.tid, profile_io_thread, NULL, PROFILE_IO_PRIO, PROFILE_IO_STACK,
+						       THREAD_JOINABLE, (char *)"salsa64_perfil") != 0) {
+			sysSemDestroy(rprof.sem);
+			rprof.thread_ok = false;
+		}
+	}
 	salsa64_log("perfil del recompilador: %s %s (%u entradas y %u sitios de salida; %u calientes con %u KB, "
 		    "umbral %u); zona caliente de %u KB en dos mitades, sitios de salida %s, se guarda cada %llu s y "
-		    "al cerrar",
+		    "al cerrar (%s)",
 		    loaded ? "cargado" : "nuevo", rprof.path, rec_profile->count, rec_profile->nsites,
 		    rec_profile->hot_entries, rec_profile->hot_words / 256, rec_profile->hot_threshold,
 		    salsa64_rec_hot_capacity(&rec) / 256, sites ? "sí" : "no (saltos = no)",
-		    (unsigned long long)(PROFILE_SAVE_US / 1000000));
+		    (unsigned long long)(PROFILE_SAVE_US / 1000000),
+		    rprof.thread_ok ? "hilo propio de baja prioridad" : "por trozos desde la presentación");
 }
 
-/* Hilo de presentación, cada vuelta: sigue la escritura en curso (unas
- * entradas por vuelta, para no detener la presentación) o empieza una si
- * pasó el plazo y hubo cuentas nuevas. */
+/* El hilo que escribe el perfil: duerme en el semáforo y, cuando la
+ * presentación le pide una escritura, escribe el archivo entero (la tabla
+ * sigue recibiendo cuentas mientras tanto: lee count y nsites una vez). */
+static void profile_io_thread(void *arg)
+{
+	(void)arg;
+	while (!rprof.stop) {
+		sysSemWait(rprof.sem, 1000000);
+		if (rprof.stop)
+			break;
+		if (!rprof.due)
+			continue;
+		rprof.due = 0;
+		if (salsa64_rec_profile_save(rec_profile, rprof.path)) {
+			rprof.saves++;
+		} else {
+			rprof.save_errors++;
+			salsa64_log("perfil del recompilador: FALLO al escribir %s", rprof.path);
+		}
+	}
+	sysThreadExit(0);
+}
+
+/* Hilo de presentación, cada vuelta: si pasó el plazo y hubo cuentas
+ * nuevas, pide una escritura al hilo del perfil (o, sin él, la sigue por
+ * trozos: unas entradas por vuelta, para no detener la presentación). */
 static void profile_write_step(uint64_t now)
 {
 	if (!rprof.on)
 		return;
+	if (rprof.thread_ok) {
+		if (now - rprof.t_saved < PROFILE_SAVE_US || rec_profile->session == rprof.session_saved || rprof.due)
+			return;
+		rprof.t_saved = now;
+		rprof.session_saved = rec_profile->session;
+		rprof.due = 1;
+		sysSemPost(rprof.sem, 1);  /* si ya está en 1, da error: no importa */
+		return;
+	}
 	if (rec_profile_w.f) {
 		int r = salsa64_rec_profile_save_step(rec_profile, &rec_profile_w, PROFILE_STEP_ENTRIES);
 		if (r < 0) {
@@ -2187,6 +2245,14 @@ static void profile_write_step(uint64_t now)
 static void profile_close(void)
 {
 	const struct salsa64_rec_stats *st = &rec.stats;
+	if (rprof.thread_ok) {
+		u64 rv;
+		rprof.stop = 1;
+		sysSemPost(rprof.sem, 1);
+		sysThreadJoin(rprof.tid, &rv);
+		sysSemDestroy(rprof.sem);
+		rprof.thread_ok = false;
+	}
 	salsa64_rec_profile_save_abort(&rec_profile_w);
 	salsa64_rec_profile_fold(&rec);
 	bool ok = salsa64_rec_profile_save(rec_profile, rprof.path);
