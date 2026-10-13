@@ -58,9 +58,12 @@ Verificado:
       estados); `test-roms` (nemu64-test 433 / 136 con LLE, vitest,
       savetest, gfxtest ×3, estados, audiotest); `tools/build.sh` sin
       avisos.
-- [ ] `--lockstep` de DK64 desde el estado con el arreglo.
-- [ ] PS3 real: DK64 en el túnel y en un espacio abierto; Zelda (Navi,
-      antorchas).
+- [x] `--lockstep` de DK64 desde el estado con el arreglo (qemu, 186
+      campos, también la RDRAM): sin diferencias.
+- [x] **PS3 real** (paquete «Salsa64 cámara», SLSA00105, 54798d9; el
+      autor, 2026-10-12): la cámara de DK64 resuelta (estado de la ranura 0
+      y un espacio abierto), a 59,8 campos/s con 7,0 ms de emulación por
+      campo, como antes; en Zelda, Navi se ve completo.
 
 ## 2026-10-12 (noche) — Quitarle trabajo al PPE: medición del hilo 1 y tarea JPEG en un SPE, sin tirón (rama `determined-grothendieck`, paquete SLSA00103 «Salsa64 PPE»)
 
