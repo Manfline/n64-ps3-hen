@@ -201,6 +201,7 @@ static struct {
 	struct mirror {
 		bool used;
 		uint32_t addr, width, lw, rows, fence, bpp;
+		struct rdp_box box;  /* lo que se escribe en la RDRAM (rows = box.y1) */
 		uint32_t task;  /* la tarea que dibujó lo copiado (rdp_dma_since) */
 	} mirrors[MIRRORS];
 	/* DMA a la RDRAM desde el hilo de emulación (targets.h): una copia de
@@ -600,27 +601,32 @@ static void fence_wait(uint32_t fence)
 	rdp.tb.fence += tb_now() - t0;
 }
 
-/* Escribe en la RDRAM, como RGBA5551, `rows` filas de una copia RGB565 de
- * `lw` píxeles por fila con paso `pitch`. */
-static void to_rdram(const uint8_t *src, uint32_t pitch, uint32_t addr, uint32_t width, uint32_t lw, uint32_t rows,
-		     uint32_t bpp)
+/* Escribe en la RDRAM, como RGBA5551, la caja `b` (rdp_box: lo que el RDP
+ * pudo escribir, nunca filas enteras) de una copia RGB565 de `lw` píxeles
+ * por fila con paso `pitch` que empieza en la fila 0 del destino. */
+static void to_rdram(const uint8_t *src, uint32_t pitch, uint32_t addr, uint32_t width, uint32_t lw,
+		     const struct rdp_box *b, uint32_t bpp)
 {
 	uint64_t t0 = tb_now();
+	uint32_t x1 = b->x1 < lw ? b->x1 : lw;
+	if (rdp_box_empty(b) || x1 <= b->x0)
+		return;
 	/* El RSX escribió el búfer a espaldas de la caché del PPE: soltar las
 	 * líneas que pudieran quedar de la lectura anterior. */
-	for (uint32_t off = 0; off < rows * pitch; off += 128)
+	for (uint32_t off = b->y0 * pitch & ~127u; off < b->y1 * pitch; off += 128)
 		__asm__ volatile("dcbf 0,%0" ::"r"(src + off) : "memory");
 	__asm__ volatile("sync" ::: "memory");
-	for (uint32_t y = 0; y < rows; y++) {
+	for (uint32_t y = b->y0; y < b->y1; y++) {
 		const uint16_t *row = (const uint16_t *)(src + y * pitch);
 		if (bpp == 1) {
 			/* Color image de 8 bits (la cobertura que Zelda copia para el
 			 * filtro de Link): la intensidad es el rojo del RGB565. */
 			uint8_t *dst = rdp.rdram + addr + y * width;
-			for (uint32_t x = 0; x < lw; x++)
+			for (uint32_t x = b->x0; x < x1; x++)
 				dst[x] = (uint8_t)((row[x] >> 8 & 0xF8) | (row[x] >> 13));
 		} else {
-			rsxkit_pixels_565_to_5551((uint16_t *)(rdp.rdram + addr + y * width * 2), row, lw);
+			rsxkit_pixels_565_to_5551((uint16_t *)(rdp.rdram + addr + y * width * 2) + b->x0, row + b->x0,
+						  x1 - b->x0);
 		}
 	}
 	rdp.tb.copy += tb_now() - t0;
@@ -632,7 +638,7 @@ static void readbacks_finish(bool wait)
 	struct mirror *f = &rdp.frame;
 	if (f->used && (wait ? (fence_wait(f->fence), true) : rsxkit_fence_done(f->fence))) {
 		if (!dma_newer(f->addr, f->width * 2 * f->rows, f->task)) {
-			to_rdram(rdp.rb + FRAME_SLOT * RB_SLOT, RB_PITCH, f->addr, f->width, f->lw, f->rows, 2);
+			to_rdram(rdp.rb + FRAME_SLOT * RB_SLOT, RB_PITCH, f->addr, f->width, f->lw, &f->box, 2);
 			rdp.stats.frames_mirrored++;
 		}
 		f->used = false;
@@ -642,7 +648,7 @@ static void readbacks_finish(bool wait)
 		if (m->used && (wait ? (fence_wait(m->fence), true) : rsxkit_fence_done(m->fence))) {
 			uint32_t bpp = m->bpp ? m->bpp : 2;
 			if (!dma_newer(m->addr, m->width * bpp * m->rows, m->task)) {
-				to_rdram(rdp.rb + k * RB_SLOT, RB_PITCH, m->addr, m->width, m->lw, m->rows, bpp);
+				to_rdram(rdp.rb + k * RB_SLOT, RB_PITCH, m->addr, m->width, m->lw, &m->box, bpp);
 				rdp.stats.mirrors++;
 			}
 			m->used = false;
@@ -658,7 +664,7 @@ static void readbacks_finish(bool wait)
 			continue;
 		uint32_t pitch = (m->lw * 2 + 63) & ~63u, bpp = m->bpp ? m->bpp : 2;
 		if (!dma_newer(m->addr, m->width * bpp * m->rows, m->task)) {
-			to_rdram(rdp.rb + (RB_SLOTS + 2) * RB_SLOT + k * MIRROR_BYTES, pitch, m->addr, m->width, m->lw, m->rows,
+			to_rdram(rdp.rb + (RB_SLOTS + 2) * RB_SLOT + k * MIRROR_BYTES, pitch, m->addr, m->width, m->lw, &m->box,
 				 bpp);
 			rdp.stats.mirrors++;
 		}
@@ -1238,7 +1244,8 @@ static void translate(uint32_t n)
 	readbacks_finish(false);
 	int cur = -1;
 	bool drawn[RDP_TARGETS_MAX] = { false };
-	uint32_t drawn_rows[RDP_TARGETS_MAX] = { 0 };  /* hasta dónde llegaron las tijeras */
+	struct rdp_box drawn_box[RDP_TARGETS_MAX];  /* lo que tocaron los dibujos de la tarea */
+	memset(drawn_box, 0, sizeof drawn_box);
 
 	uint32_t off = 0;
 	rsxkit_draw rd;
@@ -1304,8 +1311,11 @@ static void translate(uint32_t n)
 					drawn[i] = true;
 					rdp.surf_gen[i] = ++rdp.gen_seq;
 					rdp.surf_dirty[i] = true;
-					if ((uint32_t)(yb + 0.999f) > drawn_rows[i])
-						drawn_rows[i] = (uint32_t)(yb + 0.999f);
+					struct rdp_box r = { 0, 0, 0, 0 };
+					const uint16_t all[4] = { 0, 0, (uint16_t)(t->lw * 4), (uint16_t)(t->lh * 4) };
+					rdp_box_add(&r, xa, ya, xb, yb, true, all, t->lw, t->lh);
+					rdp_box_union(&drawn_box[i], &r);
+					rdp_box_union(&rdp.tg.t[i].box, &r);
 					rdp.stats.tall_fills++;
 				}
 				break;
@@ -1346,21 +1356,30 @@ static void translate(uint32_t n)
 			drawn[cur] = true;
 			rdp.surf_gen[cur] = ++rdp.gen_seq;
 			rdp.surf_dirty[cur] = true;
-			/* Hasta qué fila llega el dibujo: lo más bajo de sus vértices,
-			 * limitado por las tijeras (las copias a la RDRAM escriben solo
-			 * eso: el alto del destino es una conjetura y pasarse pisaría el
-			 * heap del juego, como detrás del búfer de Link en Zelda). */
+			/* Qué puede tocar el dibujo: la caja de sus vértices dentro de
+			 * las tijeras (las copias a la RDRAM escriben solo eso: el alto
+			 * del destino es una conjetura y pasarse pisaría el heap del
+			 * juego, como detrás del búfer de Link en Zelda; y fuera de las
+			 * tijeras hay datos, como en los márgenes del z-buffer de
+			 * Smash; targets.h). */
 			{
 				const struct gfx_vertex *v = (const struct gfx_vertex *)(s->vtx) + g->h.a;
-				float ymax = 0.0f;
-				for (uint32_t k = 0; k < g->h.b; k++)
-					if (v[k].w > 0.0f && v[k].y / v[k].w > ymax)
-						ymax = v[k].y / v[k].w;
-				uint32_t rows = (uint32_t)(ymax + 0.999f), bottom = (g->scissor[3] + 3) / 4;
-				if (rows > bottom)
-					rows = bottom;
-				if (rows > drawn_rows[cur])
-					drawn_rows[cur] = rows;
+				float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+				bool front = true;
+				for (uint32_t k = 0; k < g->h.b; k++) {
+					if (!(v[k].w > 0.0f)) {
+						front = false;
+						continue;
+					}
+					float x = v[k].x / v[k].w, y = v[k].y / v[k].w;
+					x0 = x < x0 ? x : x0, x1 = x > x1 ? x : x1;
+					y0 = y < y0 ? y : y0, y1 = y > y1 ? y : y1;
+				}
+				const struct rdp_target *t = &rdp.tg.t[cur];
+				struct rdp_box r = { 0, 0, 0, 0 };
+				rdp_box_add(&r, x0, y0, x1, y1, front, g->scissor, t->lw, t->lh);
+				rdp_box_union(&drawn_box[cur], &r);
+				rdp_box_union(&rdp.tg.t[cur].box, &r);
 			}
 			rsxkit_draw_triangles(&rd, g->h.a, g->h.b);
 			rdp.stats.draws++;
@@ -1376,7 +1395,7 @@ static void translate(uint32_t n)
 	}
 	/* Copias a la RDRAM que pidió done: el RSX reduce cada destino a su
 	 * búfer y, pasada la barrera, el PPE lo convierte y lo escribe. */
-	struct { int slot; uint32_t buf, rows; } rb[RB_SLOTS];
+	struct { int slot; uint32_t buf, rows; struct rdp_box box; } rb[RB_SLOTS];
 	uint32_t nrb = 0;
 	bool sync_rb[RDP_TARGETS_MAX] = { false };
 	uint32_t big_used = 0;  /* búferes grandes tomados en esta tarea */
@@ -1386,7 +1405,7 @@ static void translate(uint32_t n)
 		bool handled = false;
 		for (int i = 0; i < RDP_TARGETS_MAX; i++) {
 			const struct rdp_target *t = &rdp.tg.t[i];
-			uint32_t rows = drawn_rows[i] < t->lh ? drawn_rows[i] : t->lh;
+			uint32_t rows = drawn_box[i].y1 < t->lh ? drawn_box[i].y1 : t->lh;
 			/* La misma dirección puede ser dos color images de anchos
 			 * distintos (Link de Zelda en los primeros bytes del framebuffer):
 			 * la pedida es la de ese ancho. */
@@ -1421,7 +1440,7 @@ static void translate(uint32_t n)
 						const struct rdp_target *tj = &rdp.tg.t[rb[j].slot];
 						if (dma_newer(tj->addr, tj->width * tj->bpp * rb[j].rows, n + 1))
 							continue;
-						to_rdram(rdp.rb + rb[j].buf * RB_SLOT, RB_PITCH, tj->addr, tj->width, tj->lw, rb[j].rows,
+						to_rdram(rdp.rb + rb[j].buf * RB_SLOT, RB_PITCH, tj->addr, tj->width, tj->lw, &rb[j].box,
 							 tj->bpp);
 						rdp.stats.readbacks++;
 					}
@@ -1449,12 +1468,15 @@ static void translate(uint32_t n)
 			rdp.rb_task[i] = rdp.tg.task;
 			handled = true;
 			if (s->trace && rdp_log)
-				rdp_log("gfx: fb tarea %u: copia %06x/%u ranura %d %s, %u filas, búfer %d", n, t->addr, t->width,
-					i, s->rb_sync[k] ? "esperada" : "sin esperar", rows, buf);
+				rdp_log("gfx: fb tarea %u: copia %06x/%u ranura %d %s, %u..%u × %u..%u, búfer %d", n, t->addr,
+					t->width, i, s->rb_sync[k] ? "esperada" : "sin esperar", drawn_box[i].x0, drawn_box[i].x1,
+					drawn_box[i].y0, rows, buf);
 			if (s->rb_sync[k]) {
 				rb[nrb].slot = i;
 				rb[nrb].buf = buf;
 				rb[nrb].rows = rows;
+				rb[nrb].box = drawn_box[i];
+				rb[nrb].box.y1 = (uint16_t)rows;
 				nrb++;
 			} else {
 				struct mirror *m = &rdp.big[buf];
@@ -1463,6 +1485,8 @@ static void translate(uint32_t n)
 				m->width = t->width;
 				m->lw = t->lw;
 				m->rows = rows;
+				m->box = drawn_box[i];
+				m->box.y1 = (uint16_t)rows;
 				m->bpp = t->bpp;
 				m->task = n + 1;
 				m->fence = 0;  /* se pone con la barrera de la tarea */
@@ -1485,7 +1509,7 @@ static void translate(uint32_t n)
 	uint32_t nmirror = 0;
 	for (int i = 0; rdp.rdram && rdp.fbfx >= 2 && i < RDP_TARGETS_MAX; i++) {
 		const struct rdp_target *t = &rdp.tg.t[i];
-		uint32_t rows = drawn_rows[i] < t->lh ? drawn_rows[i] : t->lh;
+		uint32_t rows = drawn_box[i].y1 < t->lh ? drawn_box[i].y1 : t->lh;
 		uint32_t pitch = (t->lw * 2 + 63) & ~63u;
 		if (!drawn[i] || sync_rb[i] || !rows || t->presented || (t->bpp != 2 && (t->bpp != 1 || t->fmt != 4)) ||
 		    t->width == rdp.tg.vi_width || pitch * rows > MIRROR_BYTES ||
@@ -1510,6 +1534,8 @@ static void translate(uint32_t n)
 		m->width = t->width;
 		m->lw = t->lw;
 		m->rows = rows;
+		m->box = drawn_box[i];
+		m->box.y1 = (uint16_t)rows;
 		m->bpp = t->bpp;
 		m->task = n + 1;
 		mirror_k[nmirror++] = k;
@@ -1541,7 +1567,7 @@ static void translate(uint32_t n)
 			const struct rdp_target *t = &rdp.tg.t[rb[k].slot];
 			if (dma_newer(t->addr, t->width * t->bpp * rb[k].rows, n + 1))
 				continue;
-			to_rdram(rdp.rb + rb[k].buf * RB_SLOT, RB_PITCH, t->addr, t->width, t->lw, rb[k].rows, t->bpp);
+			to_rdram(rdp.rb + rb[k].buf * RB_SLOT, RB_PITCH, t->addr, t->width, t->lw, &rb[k].box, t->bpp);
 			rdp.stats.readbacks++;
 		}
 		readbacks_finish(false);  /* pasó la barrera: los espejos también */
@@ -1552,7 +1578,7 @@ static void translate(uint32_t n)
 	 * poner las barreras de las copias de arriba (readbacks_finish no debe
 	 * ver una sin barrera). */
 	for (int i = 0; rdp.rdram && rdp.fbfx >= 2 && i < RDP_TARGETS_MAX; i++) {
-		uint32_t rows = drawn_rows[i] < rdp.tg.t[i].lh ? drawn_rows[i] : rdp.tg.t[i].lh;
+		uint32_t rows = drawn_box[i].y1 < rdp.tg.t[i].lh ? drawn_box[i].y1 : rdp.tg.t[i].lh;
 		if (drawn[i] && !sync_rb[i] && rdp_targets_mirror_at_task_end(&rdp.tg, i))
 			frame_mirror(i, rows, true);
 	}
@@ -1616,6 +1642,13 @@ static void frame_mirror(int slot, uint32_t rows, bool wait)
 		return;
 	if (rows > t->lh)
 		rows = t->lh;
+	/* Lo dibujado desde el último espejo (targets.h), hasta `rows`. */
+	struct rdp_box box = t->box;
+	if (rows > box.y1)
+		rows = box.y1;
+	box.y1 = (uint16_t)rows;
+	if (rdp_box_empty(&box))
+		return;
 	/* No pisar lo que una copia reciente dejó en esa misma memoria (Link
 	 * en los primeros bytes del framebuffer; la cobertura de VISCVG). */
 	uint32_t lo = t->addr, hi = t->addr + t->width * 2 * rows;
@@ -1638,6 +1671,7 @@ static void frame_mirror(int slot, uint32_t rows, bool wait)
 	rdp.frame.width = t->width;
 	rdp.frame.lw = t->lw;
 	rdp.frame.rows = rows;
+	rdp.frame.box = box;
 	rdp.frame.task = t->last_task;
 	rdp.frame.fence = rsxkit_fence();
 }

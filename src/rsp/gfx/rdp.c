@@ -345,6 +345,12 @@ static bool texture_state(struct gfx_state *g, struct gfx_draw *d, int tile, int
 		ws = GFX_WRAP_MIRROR_ONCE;
 	if (t->flags & GFX_TEX_ONCE_T)
 		wt = GFX_WRAP_MIRROR_ONCE;
+	/* Un eje con clamp decodificado en un periodo de su máscara (tmem.c):
+	 * repite o se refleja. */
+	if (ws == GFX_WRAP_CLAMP && GFX_TEX_WRAP_S(t->flags))
+		ws = GFX_TEX_WRAP_S(t->flags);
+	if (wt == GFX_WRAP_CLAMP && GFX_TEX_WRAP_T(t->flags))
+		wt = GFX_TEX_WRAP_T(t->flags);
 	bool bilinear = !copy && ((g->oh >> G_MDSFT_TEXTFILT) & 3) != G_TF_POINT;
 	float half = bilinear ? 0.5f : 0.0f;
 	t->flags = (uint8_t)(ws | wt << 2 | (bilinear ? GFX_TEX_BILINEAR : 0) | (premul ? GFX_TEX_PREMUL : 0));

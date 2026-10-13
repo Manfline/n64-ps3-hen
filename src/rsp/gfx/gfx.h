@@ -222,6 +222,9 @@ struct gfx_tex {
 	uint8_t src_siz, src_fmt;
 };
 
+/* GFX_WRAP_* por eje. Al salir de gfx_tile_texture (antes de que rdp.c
+ * ponga los de la tile), un eje con clamp decodificado en un periodo de su
+ * máscara (tmem.c, tex_size) trae el que debe usar. */
 #define GFX_TEX_WRAP_S(f)   ((f) & 3u)         /* GFX_WRAP_* */
 #define GFX_TEX_WRAP_T(f)   (((f) >> 2) & 3u)
 #define GFX_TEX_BILINEAR    0x10u

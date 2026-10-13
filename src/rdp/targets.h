@@ -55,6 +55,34 @@
  * los framebuffers alternos (Zelda copia el suyo dos tareas después). */
 #define RDP_TARGETS_FRESH 3
 
+/* Lo que el RDP pudo escribir en un destino, en píxeles lógicos
+ * [x0, x1) × [y0, y1): la unión de la caja de los vértices de cada dibujo
+ * recortada por sus tijeras. Vacía si x1 ≤ x0 o y1 ≤ y0. Las copias a la
+ * RDRAM escriben solo eso, porque el RDP nunca escribe fuera de las
+ * tijeras ni de lo que dibuja, y lo que hay alrededor puede ser del juego:
+ * Super Smash Bros. guarda datos y punteros en los márgenes de su z-buffer
+ * (las 10 primeras filas y 10 columnas a cada lado, fuera de las tijeras
+ * 10..310 × 10..230); en el KO dibuja una máscara en ese z-buffer como
+ * color image y la copia de filas enteras le ponía a 1 el bit bajo de
+ * cada media palabra (el alfa del RGBA5551): el juego se colgaba. */
+struct rdp_box {
+	uint16_t x0, y0, x1, y1;
+};
+
+static inline bool rdp_box_empty(const struct rdp_box *b)
+{
+	return b->x1 <= b->x0 || b->y1 <= b->y0;
+}
+
+/* Agrega a `b` un dibujo cuyos vértices caen en [x0, x1] × [y0, y1]
+ * (píxeles, ya divididos por w; `all_front`: ninguno con w ≤ 0, si no se
+ * toma toda la región de las tijeras) con tijeras `scissor` (x0, y0, x1, y1
+ * en 10.2, gfx_draw.scissor), recortado a lw × lh. */
+void rdp_box_add(struct rdp_box *b, float x0, float y0, float x1, float y1, bool all_front,
+		 const uint16_t scissor[4], uint32_t lw, uint32_t lh);
+/* Agrega un rectángulo entero ya recortado. */
+void rdp_box_union(struct rdp_box *b, const struct rdp_box *r);
+
 struct rdp_target {
 	bool used;
 	bool drawn;           /* dibujado desde la última presentación */
@@ -74,6 +102,9 @@ struct rdp_target {
 	uint32_t lw, lh;      /* tamaño lógico (píxeles de la N64) de la superficie */
 	uint32_t last_field;  /* último campo en que se dibujó (o se creó) */
 	uint32_t last_task;   /* última tarea que lo dibujó */
+	/* Lo dibujado desde el último espejo (rdp_targets_mirrored): lo que
+	 * escribe el espejo del framebuffer (rdp_box). */
+	struct rdp_box box;
 };
 
 struct rdp_targets {
@@ -263,7 +294,8 @@ bool rdp_targets_readback(struct rdp_targets *s, int slot, bool force, bool cpu_
  * juego se colgaba (dejaba de mandar tareas gráficas). */
 bool rdp_targets_mirror_wanted(const struct rdp_targets *s, int slot);
 bool rdp_targets_mirror_at_task_end(const struct rdp_targets *s, int slot);
-/* La copia del espejo de la ranura se hizo (o quedó encolada). */
+/* La copia del espejo de la ranura se hizo (o quedó encolada): vacía su
+ * caja. Quien dibuja agrega a `box` lo de cada dibujo (rdp_box_union). */
 void rdp_targets_mirrored(struct rdp_targets *s, int slot);
 
 /* Escrituras a la RDRAM que no pasan por el CPU (DMA del PI, del SP, del SI,

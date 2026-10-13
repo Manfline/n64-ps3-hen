@@ -226,9 +226,20 @@ una traducción posterior, cuando el RSX pasó su barrera, sin marcar el
 destino como del CPU. Así, mientras son recientes se leen del RSX a 3× y,
 cuando un dibujo las lee ya viejas (Link en la pantalla de equipo de Zelda
 se dibuja en `289600/64` al abrir la pausa y se lee 395 tareas después), la
-RDRAM tiene lo que el RDP dejó. Las copias a la RDRAM escriben solo las
-filas dibujadas: el alto de un destino es una conjetura y pasarse
-pisaría datos del juego.
+RDRAM tiene lo que el RDP dejó.
+
+**Solo lo que el RDP pudo escribir.** Toda copia a la RDRAM (esperada, sin
+esperar, espejo chico, espejo del framebuffer) escribe la unión de la caja
+de los vértices de cada dibujo recortada por sus tijeras (`struct rdp_box`
+en targets.h), no filas enteras: el alto de un destino es una conjetura y
+pasarse pisaría datos del juego, y fuera de las tijeras también puede haber
+datos. Super Smash Bros. guarda punteros y código en los márgenes de su
+z-buffer (las 10 primeras filas y 10 columnas a cada lado, fuera de las
+tijeras 10..310 × 10..230); en el KO dibuja una máscara de profundidad en
+ese z-buffer como color image, y la copia de filas enteras, al pasar por
+RGBA5551 con alfa 1, les ponía a 1 el bit bajo de cada media palabra: el
+juego se colgaba ~4 s después. El espejo del framebuffer usa la caja
+acumulada desde el último espejo (`rdp_target.box`).
 
 **Lo que rompía a Link en la PS3** (y que el host no reproducía porque
 copiaba todos los destinos de cada tarea sin llamar a

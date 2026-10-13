@@ -4,6 +4,7 @@
  */
 #include "rdp/targets.h"
 
+#include <math.h>
 #include <string.h>
 
 /* G_IM_SIZ_* de G_SETCIMG (gbi): 4, 8, 16 y 32 bits. */
@@ -185,6 +186,7 @@ int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32
 			t->lh = lh;
 			t->drawn = false;
 			t->mirrored = true;
+			memset(&t->box, 0, sizeof t->box);
 			s->created++;
 			*fresh = true;
 			return i;
@@ -209,6 +211,7 @@ int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32
 	t->presented = false;
 	t->cpu_owned = false;
 	t->mirrored = true;  /* nada dibujado aún que copiar a la RDRAM */
+	memset(&t->box, 0, sizeof t->box);
 	t->addr = addr;
 	t->width = width;
 	t->bpp = bpp;
@@ -288,8 +291,48 @@ bool rdp_targets_mirror_at_task_end(const struct rdp_targets *s, int slot)
 
 void rdp_targets_mirrored(struct rdp_targets *s, int slot)
 {
-	if (slot >= 0 && slot < RDP_TARGETS_MAX)
+	if (slot >= 0 && slot < RDP_TARGETS_MAX) {
 		s->t[slot].mirrored = true;
+		memset(&s->t[slot].box, 0, sizeof s->t[slot].box);
+	}
+}
+
+void rdp_box_union(struct rdp_box *b, const struct rdp_box *r)
+{
+	if (rdp_box_empty(r))
+		return;
+	if (rdp_box_empty(b)) {
+		*b = *r;
+		return;
+	}
+	b->x0 = r->x0 < b->x0 ? r->x0 : b->x0;
+	b->y0 = r->y0 < b->y0 ? r->y0 : b->y0;
+	b->x1 = r->x1 > b->x1 ? r->x1 : b->x1;
+	b->y1 = r->y1 > b->y1 ? r->y1 : b->y1;
+}
+
+void rdp_box_add(struct rdp_box *b, float x0, float y0, float x1, float y1, bool all_front,
+		 const uint16_t scissor[4], uint32_t lw, uint32_t lh)
+{
+	/* Tijeras en 10.2: la primera columna o fila que tocan y la que ya no. */
+	float sx0 = (float)(scissor[0] / 4), sy0 = (float)(scissor[1] / 4);
+	float sx1 = (float)((scissor[2] + 3) / 4), sy1 = (float)((scissor[3] + 3) / 4);
+	if (all_front) {
+		sx0 = x0 > sx0 ? x0 : sx0;
+		sy0 = y0 > sy0 ? y0 : sy0;
+		sx1 = x1 < sx1 ? x1 : sx1;
+		sy1 = y1 < sy1 ? y1 : sy1;
+	}
+	if (!(sx1 > sx0 && sy1 > sy0))
+		return;
+	/* Enteros que cubren la caja, recortados al destino. */
+	float fx0 = floorf(sx0), fy0 = floorf(sy0), fx1 = ceilf(sx1), fy1 = ceilf(sy1);
+	struct rdp_box r;
+	r.x0 = (uint16_t)(fx0 < 0.0f ? 0.0f : fx0 > (float)lw ? (float)lw : fx0);
+	r.y0 = (uint16_t)(fy0 < 0.0f ? 0.0f : fy0 > (float)lh ? (float)lh : fy0);
+	r.x1 = (uint16_t)(fx1 < 0.0f ? 0.0f : fx1 > (float)lw ? (float)lw : fx1);
+	r.y1 = (uint16_t)(fy1 < 0.0f ? 0.0f : fy1 > (float)lh ? (float)lh : fy1);
+	rdp_box_union(b, &r);
 }
 
 void rdp_vi_ring_push(struct rdp_vi_ring *r, uint32_t origin, uint32_t width)

@@ -1858,6 +1858,49 @@ static void gfx_tile_mirror_once(void)
 		t_fail(__FILE__, __LINE__, "%u texels distintos del reflejo", bad);
 }
 
+/* Clamp con una máscara más chica que la tile, sin caber en GFX_TEX_MAX
+ * (el Castillo de Hyrule de Super Smash Bros.: CI4 de 32 × 32 en una tile
+ * de 160 × 160 con clamp y máscara 5): t se decodifica en un periodo de su
+ * máscara y repite, en vez de cortar filas y estirar la última; s, que
+ * cabe, se decodifica entera con su máscara y sigue con clamp. */
+static void gfx_tile_clamp_mask_period(void)
+{
+	start();
+	for (int i = 0; i < 2048; i++)
+		t_n64.bus.rdram[TEX_PA + i] = (uint8_t)(29 * i + 3);
+	dl(0xFD100000, TEX_PA);
+	dl(0xF5100000, 0x07000000);
+	dl(0xF3000000, 0x07000000 | 1023 << 12);                /* LOADBLOCK 2 KB */
+	dl(0xF5000000 | (uint32_t)G_IM_FMT_I << 21 | (uint32_t)G_IM_SIZ_4b << 19 | 2u << 9,
+	   2u << 18 | 5u << 14 | 2u << 8 | 5u << 4);              /* tile 0: I4, línea 16, clamp, máscara 32 */
+	dl(0xF2000000, (uint32_t)(159 << 2) << 12 | (159 << 2)); /* 160 × 160 */
+	dl(0xE3000000 | (32 - 12 - 2) << 8 | 1, 0);             /* filtro puntual */
+	set_cycle(G_CYC_1CYCLE);
+	set_combine(CC_T0, CC_ZERO, CC_SHADE, CC_ZERO, CC_T0, CC_ZERO, CC_SHADE, CC_ZERO);
+	dl(0xE4000000 | (uint32_t)(160 << 2) << 12 | (160 << 2), 0);
+	dl(0xE1000000, 0);
+	dl(0xF1000000, 0x04000400);
+	run();
+	const struct gfx_draw *d = draw_n(0);
+	CHECK(d && d->ntex == 1);
+	if (!d || d->ntex != 1)
+		return;
+	CHECK_EQ(d->tex[0].width, 160);
+	CHECK_EQ(d->tex[0].height, 32);
+	CHECK_EQ(GFX_TEX_WRAP_S(d->tex[0].flags), GFX_WRAP_CLAMP);
+	CHECK_EQ(GFX_TEX_WRAP_T(d->tex[0].flags), GFX_WRAP_REPEAT);
+	CHECK(d->tex[0].xf[1] > 1.0f / 32.0f - 1e-6f && d->tex[0].xf[1] < 1.0f / 32.0f + 1e-6f);
+	const uint8_t *p = tex_of(&d->tex[0]);
+	unsigned bad = 0;
+	for (uint32_t y = 0; y < 32; y++)
+		for (uint32_t x = 0; x < 160; x++)
+			bad += salsa64_rd32(p + y * d->tex[0].pitch + 4 * x) !=
+			       ref_texel(gs.tmem, G_IM_FMT_I, G_IM_SIZ_4b, 0, 0, 0, 16, x & 31, y);
+	t_checks++;
+	if (bad)
+		t_fail(__FILE__, __LINE__, "%u texels distintos del periodo", bad);
+}
+
 /* Sin corrección de perspectiva (G_TP_NONE) la textura de un triángulo
  * se muestrea a la mitad de la coordenada del vértice (el RDP usa S·(1/W)
  * tal cual y F3DEX2 normaliza 1/W a la mitad; el sol del telescopio de
@@ -2263,5 +2306,6 @@ void t_suite_gfx(void)
 	RUN(gfx_tile_clamp_mirror_mask);
 	RUN(gfx_blender_fog_color);
 	RUN(gfx_tile_mirror_once);
+	RUN(gfx_tile_clamp_mask_period);
 	RUN(gfx_tri_no_persp_half);
 }
