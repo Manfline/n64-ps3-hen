@@ -311,3 +311,50 @@ Para fastmem: la ventana de 512 MB existe (en 0x80000000 o 0xA0000000: el
 índice `va & 0x1FFFFFFF` sumado a la base queda dentro de los 32 bits), la
 RDRAM va como un objeto de 8 MB en páginas de 1 MB sin costo de acceso
 distinto al heap, y los fallos son lo único por confirmar.
+
+## 8. Base en caché: la misma ganancia sin fallos (diseño, 2026-10-13)
+
+Lo que fastmem quita por acceso es la prueba (5 palabras). Hay otra forma
+de amortizarla que **no necesita fallos, ventana ni ayudante** y conserva
+la semántica exacta del segmento y del tamaño: hacer la prueba **una vez
+por registro base** y que cada acceso del grupo sea una carga con
+desplazamiento. Lo normal en código de libultra es
+`lw t0, 0(s0); lw t1, 4(s0); sw t2, 8(s0)`: tres pruebas hoy, una con esto.
+
+Un **grupo** son los accesos seguidos de un bloque con el mismo registro
+base `rs`, sin una escritura de `rs` en medio, con `imm` en un tramo
+`[min_imm, max_imm]` de a lo más 32 KB y cada `imm − min_imm` múltiplo del
+tamaño de su acceso. Al primer acceso del grupo:
+
+```
+addi  T, rs, min_imm          ; va_lo (se omite si min_imm = 0)
+oris  T, T, 0x2000            ; la prueba compacta de hoy sobre va_lo…
+addis T, T, 0x6000
+addi  T, T, span              ; …con margen: x_lo + span, span = max_imm − min_imm
+rldicl X, T, 64 − s, s − abits ; cero si x_lo + span < RDRAM y alineado
+cmpdi X, 0 ; bne frío
+add   Tb, R_RDRAM, T          ; Tb = RDRAM + x_lo + span
+```
+
+Siete u ocho palabras una vez. Después cada acceso es `lwz d, (imm −
+min_imm − span)(Tb)` + `extsw` (el desplazamiento queda en [−32768, 0]) y
+los almacenamientos agregan su prueba de `code_flags` sobre `x_lo + (imm −
+min_imm)` (`addi` + las 4 de hoy). Por qué es exacto: el doblado lleva solo
+KSEG0/KSEG1 a [0, 512 MB) (kuseg y kseg2/3 quedan ≥ 512 MB o negativos y
+fallan la prueba), x_lo ≥ 0 para toda dirección de KSEG, y `x_lo + span <
+RDRAM` cubre todos los `imm` del grupo; la alineación se prueba sobre x_lo
+con la del acceso más grande, y la condición sobre `imm − min_imm` da la de
+cada uno. Lo que falla va al camino frío **del acceso que lo pidió**, que es
+el de hoy (prueba suelta, `ktlb`, C), y al volver recompone `Tb` (cinco
+palabras frías) para los que siguen.
+
+Costo por grupo de n cargas: 8 + 2n palabras calientes contra 7–8n hoy
+(n = 1: 10 contra 7–8, no se agrupa; n = 2: 12 contra 15; n = 4: 16 contra
+30). Hace falta un registro para `Tb` que sobreviva al grupo: los
+temporales r3–r12 se pierden en las llamadas a C de los caminos lentos, por
+eso el camino frío lo recompone; entre accesos sin camino lento basta con
+reservar uno de los temporales (r10, T_S2) mientras el grupo esté abierto.
+Con fastmem encima, la prueba del grupo se reduce a `addi` + `rlwinm` +
+`add` (3 palabras) y lo demás es igual. Medición: la expansión en el host
+(cuántos accesos caen en grupos de ≥ 2 en GoldenEye y Perfect Dark) antes
+de escribir el emisor; se anota aquí.
