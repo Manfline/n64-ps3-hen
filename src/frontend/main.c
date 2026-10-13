@@ -506,6 +506,162 @@ static struct {
 	volatile uint32_t fields, dropped, no_slot;
 } emu_stats;
 
+/* ---- Cuánto le quita el hilo de presentación a la emulación ------------------
+ * (docs/hilos-ppe.md). Los dos hilos comparten el núcleo del PPE: lo que
+ * hace presentación le quita ciclos a emulación. Presentación publica cuánto
+ * lleva despierta (ticks del timebase; dormida = el semáforo y la espera del
+ * flip anterior) y emulación mide, en cada campo, cuánto se solapó con su
+ * trabajo; las ventanas de 5 s agrupan los campos por solape y dan, para
+ * cada grupo, ms de emulación y ns por ciclo emulado fuera de los bucles de
+ * espera (lo que no depende de cuánto trabajo traiga el campo). Con
+ * SALSA64_DATA_DIR/carga-hilo1 («N [KB]»), además, N µs de trabajo de mentira
+ * por campo presentado que recorre KB de memoria (por omisión 512: toda la
+ * L2), medio segundo sí y medio no; el log compara los campos con y sin
+ * ella. Solo lectura de contadores: nada cambia en la emulación. */
+#define LOAD_PATH SALSA64_DATA_DIR "/carga-hilo1"
+#define LOAD_KB_DEFAULT 512u
+#define OVL_GROUPS 4
+
+static inline uint64_t tb_now(void)
+{
+	uint64_t t;
+	__asm__ volatile("mftb %0" : "=r"(t));
+	return t;
+}
+
+/* Un contador de ticks que escribe presentación y lee emulación: lo hecho
+ * hasta `since` y desde cuándo corre (0: parado). */
+struct busy_clock {
+	volatile uint64_t done, since;
+};
+
+static void busy_start(struct busy_clock *c, uint64_t t)
+{
+	c->since = t;
+}
+
+static void busy_stop(struct busy_clock *c, uint64_t t)
+{
+	if (!c->since)
+		return;
+	c->done += t - c->since;
+	lwsync();
+	c->since = 0;
+}
+
+/* Desde el otro hilo: lo hecho hasta `t`. */
+static uint64_t busy_at(const struct busy_clock *c, uint64_t t)
+{
+	for (;;) {
+		uint64_t since = c->since;
+		lwsync();
+		uint64_t done = c->done;
+		lwsync();
+		if (since == c->since)
+			return done + (since && t > since ? t - since : 0);
+	}
+}
+
+/* Campos agrupados por solape (emulación; presentación los lee cada 5 s). */
+struct ovl_group {
+	uint64_t fields, tb_emu, tb_ovl, tb_load, cycles, sleep_us;
+};
+
+static struct {
+	struct busy_clock busy, load;  /* presentación despierta; carga de mentira */
+	uint32_t load_us, load_kb;     /* carga-hilo1 (0: sin carga) */
+	uint8_t *load_buf;
+	uint64_t load_phase;           /* timebase del próximo cambio de fase */
+	bool load_on;
+	/* Presentación, ventana en curso (ticks): flip anterior (dormida),
+	 * flush (traducción y lo que cae dentro), presentar el campo (sin el
+	 * flush ni el flip anterior) y la carga de mentira; lo de rdp.tb que
+	 * cayó dentro de los flush. */
+	uint64_t t_flip, t_flush, t_present, t_load;
+	struct salsa64_rdp_tb in_flush;
+	/* Emulación: por solape (< 0,1 ms, 0,1–1, 1–3, ≥ 3) y por carga de
+	 * mentira (sin, con: ≥ 1/4 de lo pedido en el campo). */
+	struct ovl_group by_ovl[OVL_GROUPS], by_load[2];
+} h1;
+
+static uint8_t h1_load_mem[LOAD_KB_DEFAULT << 10] __attribute__((aligned(128)));
+
+static void load_config(void)
+{
+	FILE *f = fopen(LOAD_PATH, "r");
+	h1.load_us = 0;
+	h1.load_kb = LOAD_KB_DEFAULT;
+	if (!f)
+		return;
+	if (fscanf(f, "%u %u", &h1.load_us, &h1.load_kb) < 1)
+		h1.load_us = 2000;
+	fclose(f);
+	if (!h1.load_kb || h1.load_kb > LOAD_KB_DEFAULT)
+		h1.load_kb = LOAD_KB_DEFAULT;
+	h1.load_buf = h1_load_mem;
+	salsa64_log("carga-hilo1: %u µs de trabajo de mentira por campo presentado sobre %u KB, medio segundo sí y "
+		    "medio no (diagnóstico, %s)", h1.load_us, h1.load_kb, LOAD_PATH);
+}
+
+/* La carga de mentira: lee y escribe una línea de caché por vuelta sobre
+ * load_kb, como la traducción que recorre la salida de la HLE y escribe
+ * comandos del RSX, hasta gastar el tiempo pedido. */
+static void h1_load_run(uint32_t fields)
+{
+	static uint32_t pos;
+	uint64_t hz = spukit_tick_hz(), t0 = tb_now(), end = t0 + (uint64_t)h1.load_us * fields * hz / 1000000u;
+	uint32_t words = h1.load_kb << 7, acc = 0;  /* palabras de 8 bytes */
+	volatile uint64_t *p = (volatile uint64_t *)h1.load_buf;
+	busy_start(&h1.load, t0);
+	do {
+		for (int k = 0; k < 256; k++) {
+			acc += (uint32_t)p[pos];
+			p[(pos + 8) % words] = acc;
+			pos = (pos + 16) % words;  /* 128 bytes: la línea siguiente */
+		}
+	} while (tb_now() < end);
+	uint64_t t1 = tb_now();
+	busy_stop(&h1.load, t1);
+	h1.t_load += t1 - t0;
+}
+
+/* Al terminar cada campo (emulación). */
+static void ovl_note(uint64_t tb_emu, uint64_t tb_ovl, uint64_t tb_load, uint64_t cycles, uint64_t sleep_us)
+{
+	uint64_t ms = spukit_tick_hz() / 1000u;
+	int g = tb_ovl < ms / 10 ? 0 : tb_ovl < ms ? 1 : tb_ovl < 3 * ms ? 2 : 3;
+	struct ovl_group *o[2] = { &h1.by_ovl[g], NULL };
+	if (h1.load_us)
+		o[1] = !tb_load ? &h1.by_load[0]
+		     : tb_load * 4 >= (uint64_t)h1.load_us * spukit_tick_hz() / 1000000u ? &h1.by_load[1] : NULL;
+	for (int i = 0; i < 2; i++) {
+		if (!o[i])
+			continue;
+		o[i]->fields++;
+		o[i]->tb_emu += tb_emu;
+		o[i]->tb_ovl += tb_ovl;
+		o[i]->tb_load += tb_load;
+		o[i]->cycles += cycles;
+		o[i]->sleep_us += sleep_us;
+	}
+}
+
+/* «n campos: x ms de emulación, y ns por ciclo, solape z ms» de un grupo
+ * (diferencia con la ventana anterior). */
+static int ovl_text(char *out, size_t n, const struct ovl_group *a, const struct ovl_group *b, bool load)
+{
+	uint64_t f = a->fields - b->fields, cyc = a->cycles - b->cycles;
+	double k = 1e3 / spukit_tick_hz();  /* ticks → ms */
+	if (!f)
+		return snprintf(out, n, "0");
+	double emu = (a->tb_emu - b->tb_emu) * k, sleep = (a->sleep_us - b->sleep_us) / 1e3;
+	int w = snprintf(out, n, "%llu (%.2f ms, %.2f ns/ciclo, solape %.2f ms", (unsigned long long)f, emu / f,
+			 cyc ? (emu - sleep) * 1e6 / cyc : 0.0, (a->tb_ovl - b->tb_ovl) * k / f);
+	if (w > 0 && (size_t)w < n)
+		w += snprintf(out + w, n - w, load ? ", carga %.2f ms)" : ")", (a->tb_load - b->tb_load) * k / f);
+	return w;
+}
+
 /* Petición de presentación a emulación: empezar la medición A/B de vitest. */
 static volatile int bench_request;
 
@@ -1339,7 +1495,12 @@ static void emu_thread(void *arg)
 		beat.emu_at = "mandos";
 		pads_apply();  /* después de la espera: lo más reciente de los mandos */
 		beat.emu_at = "campo";
+		uint64_t c0 = n64.cpu.cycles, i0 = n64.cpu.idle_cycles, s0 = gfx_spu.sleep_us + jpeg_spu.sleep_us;
+		uint64_t tb0 = tb_now(), o0 = busy_at(&h1.busy, tb0), l0 = busy_at(&h1.load, tb0);
 		uint64_t cycles = salsa64_n64_run_field(&n64);
+		uint64_t tb1 = tb_now();
+		ovl_note(tb1 - tb0, busy_at(&h1.busy, tb1) - o0, busy_at(&h1.load, tb1) - l0,
+			 (n64.cpu.cycles - c0) - (n64.cpu.idle_cycles - i0), gfx_spu.sleep_us + jpeg_spu.sleep_us - s0);
 		uint64_t t1 = sysGetSystemTime();
 		beat.emu_at = "fin del campo";
 		pif_edges_note();
@@ -1423,10 +1584,30 @@ static void flip_wait_note(uint64_t t0, const char *where)
 
 static void frame_begin(const char *where)
 {
-	uint64_t t0 = sysGetSystemTime();
+	uint64_t t0 = sysGetSystemTime(), tb0 = tb_now();
 	beat.pres_at = where;
+	busy_stop(&h1.busy, tb0);
 	rsxkit_frame_begin(0x000000);
+	uint64_t tb1 = tb_now();
+	busy_start(&h1.busy, tb1);
+	h1.t_flip += tb1 - tb0;
 	flip_wait_note(t0, where);
+}
+
+/* salsa64_rdp_flush con su tiempo y lo de rdp.tb que cae dentro. */
+static uint32_t h1_flush(uint32_t upto)
+{
+	struct salsa64_rdp_tb a, b;
+	salsa64_rdp_get_tb(&a);
+	uint64_t t0 = tb_now();
+	uint32_t n = salsa64_rdp_flush(upto);
+	h1.t_flush += tb_now() - t0;
+	salsa64_rdp_get_tb(&b);
+	h1.in_flush.translate += b.translate - a.translate;
+	h1.in_flush.copy += b.copy - a.copy;
+	h1.in_flush.tex += b.tex - a.tex;
+	h1.in_flush.fence += b.fence - a.fence;
+	return n;
 }
 
 static void frame_end(const char *where)
@@ -1463,7 +1644,7 @@ static void present_overlay(uint64_t now)
 /* Presenta (o salta) un campo encolado. */
 static void present_field(const struct field_msg *m, uint64_t now)
 {
-	salsa64_rdp_flush(m->tasks);  /* las tareas de este campo, no las del siguiente */
+	h1_flush(m->tasks);  /* las tareas de este campo, no las del siguiente */
 	if (m->f.width && m->f.origin != pres.last_origin) {
 		pres.last_origin = m->f.origin;
 		pres.game_frames++;
@@ -1653,7 +1834,9 @@ static void drain(uint64_t now, int present)
 		lwsync();  /* el mensaje, después de ver head */
 		struct field_msg m = field_q[field_tail % FIELD_QUEUE];
 		if (present) {
+			uint64_t t0 = tb_now(), flush0 = h1.t_flush, flip0 = h1.t_flip;
 			present_field(&m, now);
+			h1.t_present += tb_now() - t0 - (h1.t_flush - flush0) - (h1.t_flip - flip0);
 		} else if (m.snap >= 0) {
 			snap_cas(m.snap, SNAP_QUEUED, SNAP_FREE);
 		}
@@ -1661,7 +1844,7 @@ static void drain(uint64_t now, int present)
 		field_tail++;
 	}
 	/* Al cerrar (sin presentar) se traduce todo: no queda nada en vuelo. */
-	salsa64_rdp_flush(present ? tasks_visible : ~0u);
+	h1_flush(present ? tasks_visible : ~0u);
 }
 
 /* Estadísticas de los dos hilos, cada STATS_US: lo visto en la ventana
@@ -1675,7 +1858,52 @@ static struct {
 	uint64_t gfx_ticks0, gfx_wait0, gfx_sleep0, gfx_vtx0, gfx_state0, gfx_tex0, gfx_load0;
 	uint32_t lle_tasks0, lle_jobs0, lle_polls0;
 	uint64_t lle_instr0, lle_ticks0, lle_wait0, lle_sleep0;
+	uint64_t h1_busy0;
+	struct salsa64_rdp_tb rdp_tb0;
+	struct ovl_group ovl0[OVL_GROUPS], load0[2];
 } sw;
+
+/* Las ventanas del hilo 1 empiezan aquí. */
+static void h1_window_reset(void)
+{
+	sw.h1_busy0 = busy_at(&h1.busy, tb_now());
+	salsa64_rdp_get_tb(&sw.rdp_tb0);
+	memcpy(sw.ovl0, h1.by_ovl, sizeof sw.ovl0);
+	memcpy(sw.load0, h1.by_load, sizeof sw.load0);
+	h1.t_flip = h1.t_flush = h1.t_present = h1.t_load = 0;
+	memset(&h1.in_flush, 0, sizeof h1.in_flush);
+}
+
+/* Lo que trabajó presentación en la ventana y cómo se solapó con la
+ * emulación (ver «Cuánto le quita el hilo de presentación»). */
+static void h1_stats(uint32_t fields, uint64_t dt_us)
+{
+	double k = 1e3 / spukit_tick_hz() / (fields ? fields : 1);  /* ticks → ms por campo emulado */
+	uint64_t busy = busy_at(&h1.busy, tb_now()) - sw.h1_busy0;
+	struct salsa64_rdp_tb tb;
+	salsa64_rdp_get_tb(&tb);
+	uint64_t copy = tb.copy - sw.rdp_tb0.copy, tex = tb.tex - sw.rdp_tb0.tex, fence = tb.fence - sw.rdp_tb0.fence;
+	int64_t translate = (int64_t)(h1.t_flush - h1.in_flush.copy - h1.in_flush.tex - h1.in_flush.fence);
+	int64_t present = (int64_t)(h1.t_present - (copy - h1.in_flush.copy) - (tex - h1.in_flush.tex) -
+				    (fence - h1.in_flush.fence));
+	int64_t other = (int64_t)(busy - h1.t_flush - h1.t_present - h1.t_load);
+	salsa64_log("hilo 1: despierto %.2f ms por campo emulado (%.1f %% del tiempo): traducción %.2f, copias a la "
+		    "RDRAM %.2f, texturas en el PPE %.2f, presentar %.2f, carga de mentira %.2f, otros %.2f; dentro, "
+		    "dormido esperando barreras del RSX %.2f; flip anterior %.2f (dormido)",
+		    busy * k, dt_us ? busy * 1e8 / spukit_tick_hz() / dt_us : 0.0, translate * k, copy * k, tex * k,
+		    present * k, h1.t_load * k, other * k, fence * k, h1.t_flip * k);
+	char g[OVL_GROUPS][128];
+	for (int i = 0; i < OVL_GROUPS; i++)
+		ovl_text(g[i], sizeof g[i], &h1.by_ovl[i], &sw.ovl0[i], false);
+	salsa64_log("hilo 1 sobre la emulación, campos por solape: < 0,1 ms %s; 0,1–1 ms %s; 1–3 ms %s; ≥ 3 ms %s", g[0],
+		    g[1], g[2], g[3]);
+	if (h1.load_us) {
+		ovl_text(g[0], sizeof g[0], &h1.by_load[0], &sw.load0[0], true);
+		ovl_text(g[1], sizeof g[1], &h1.by_load[1], &sw.load0[1], true);
+		salsa64_log("carga-hilo1 (%u µs): sin carga %s; con carga %s", h1.load_us, g[0], g[1]);
+	}
+	h1_window_reset();
+}
 
 static void stats(uint64_t now)
 {
@@ -1683,6 +1911,7 @@ static void stats(uint64_t now)
 
 	if (!sw.t_stats) {
 		sw.t_stats = now;
+		h1_window_reset();
 		salsa64_rdp_get_stats(&sw.rdp0);
 		pad_poll.polls = 0;
 		pad_poll.max_gap_us = 0;
@@ -1708,6 +1937,7 @@ static void stats(uint64_t now)
 		    pres.presented ? pres.us_present / 1000.0 / pres.presented : 0.0,
 		    pres.presented ? pres.us_flip / 1000.0 / pres.presented : 0.0, pres.skipped,
 		    emu_stats.dropped, pres.blank, pres.rsx_frames);
+	h1_stats(fields, dt);
 	/* Tareas gráficas: tiempo de la HLE (en el SPE), espera del PPE,
 	 * traducción a comandos del RSX y esperas por un juego de búferes. */
 	struct salsa64_rdp_stats rs;
@@ -2050,6 +2280,9 @@ static void game_reset(void)
 	memset(&bench, 0, sizeof bench);
 	memset(&gwin, 0, sizeof gwin);
 	memset(&sw, 0, sizeof sw);
+	memset(h1.by_ovl, 0, sizeof h1.by_ovl);
+	memset(h1.by_load, 0, sizeof h1.by_load);
+	load_config();
 	cap_every = exit_field = 0;
 	isv_len = 0;
 	unknown_gbi_next = 1;
@@ -2370,7 +2603,9 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	while (running) {
 		beat.pres++;
 		beat.pres_at = "espera";
+		busy_stop(&h1.busy, tb_now());
 		sysSemWait(wake_sem, WAKE_US);
+		busy_start(&h1.busy, tb_now());
 		beat.pres_at = "sysutil";
 		sysUtilCheckCallback();
 		beat.pres_at = "mandos";
@@ -2392,6 +2627,15 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		if (!overlay) {
 			beat.pres_at = "cola";
 			drain(now, 1);
+			if (h1.load_us) {
+				uint64_t t = tb_now();
+				if (t >= h1.load_phase) {
+					h1.load_on = !h1.load_on;
+					h1.load_phase = t + spukit_tick_hz() / 2;
+				}
+				if (h1.load_on && pres.frames_total != shown)
+					h1_load_run(pres.frames_total - shown);
+			}
 			if (state_parked && state_req) {
 				beat.pres_at = "barrera";
 				state_barrier();

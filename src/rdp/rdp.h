@@ -212,6 +212,16 @@ bool salsa64_rdp_present_again(rsxkit_rect *out);
 
 void salsa64_rdp_get_stats(struct salsa64_rdp_stats *out);
 
+/* Tiempo del hilo que traduce (presentación), en ticks del timebase: la
+ * traducción entera (con lo que sigue cuando cae dentro de ella), las copias
+ * que convierte el PPE hacia la RDRAM (copias, espejos, cebado, VISCVG), las
+ * texturas decodificadas en el PPE y las esperas a una barrera del RSX
+ * (dormido). Lo mide docs/hilos-ppe.md, «Cuánto le quita el hilo 1». */
+struct salsa64_rdp_tb {
+	uint64_t translate, copy, tex, fence;
+};
+void salsa64_rdp_get_tb(struct salsa64_rdp_tb *out);
+
 /* Escribe la salida de la última tarea (gfx.h: gfx_dump_header) en `path`,
  * con las texturas de la caché copiadas al arena (el volcado no depende de
  * la caché). Espera al RSX. Para depurar. */
