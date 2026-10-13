@@ -21,27 +21,34 @@
  *                       (336), atributos de página (351) y cuántos objetos;
  *   datos               ns por lectura recorriendo 8 MB en el heap y en
  *                       páginas mapeadas de 64 KB y de 1 MB (paso 128 y 4224);
- *   fallo_lectura       con la notificación de fallos (327) y una cola de
+ *   fallo_evento        con la notificación de fallos (327) y una cola de
  *                       eventos: un hilo lee una página sin mapear, otro
- *                       recibe el evento, pide el contexto (58), mapea la
- *                       página, escribe un valor y reanuda al primero (57):
+ *                       recibe el evento, mapea la página, escribe un valor
+ *                       y reanuda al primero (57), sin pedir el contexto:
  *                       ¿repite la carga y lee ese valor? ¿cuánto tarda?
- *   fallo_escritura     lo mismo con un almacenamiento;
+ *   fallo_contexto      lo mismo pidiendo antes el contexto (58), que se
+ *                       vuelca tal cual (no hay documentación pública de su
+ *                       formato; se busca en él la dirección del fallo);
+ *   fallo_escritura     como fallo_evento con un almacenamiento;
+ *   fallo_parche        la carga está en código generado (cola NOBITS, como
+ *                       la caché del recompilador): el otro hilo pide el
+ *                       contexto (busca el pc de la carga y un valor marcado
+ *                       que la víctima deja en r5), reemplaza la carga por
+ *                       `li r3, marca`, limpia la caché de instrucciones y
+ *                       reanuda: ¿el hilo sigue por la instrucción nueva?
+ *   fallo_main          lo mismo con el hilo principal como víctima;
+ *   fallo_tiempo        diez fallos parchados seguidos: µs por fallo;
  *   fallo_solo_lectura  página de solo lectura (336): ¿el almacenamiento avisa
  *                       con causa «solo lectura» y sigue al dar permiso?
- *   fallo_parche        la carga está en código generado (cola NOBITS, como
- *                       la caché del recompilador): el otro hilo la reemplaza
- *                       por `li r3, marca`, limpia la caché de instrucciones
- *                       y reanuda: ¿el hilo sigue por la instrucción nueva?
- *   fallo_main          lo mismo con el hilo principal como víctima;
- *   fallo_tiempo        diez fallos parchados seguidos: µs por fallo.
  *
- * El contexto del fallo (58) se vuelca tal cual: no hay documentación
- * pública de su formato; el programa busca en él la dirección del fallo, el
- * pc de la carga y un valor marcado que la víctima deja en r5.
+ * Cada arranque escribe su propio log (fastmem-N.log: el de la consola se
+ * pisaba y se perdió la primera corrida), el archivo de estado se escribe
+ * sin búfer, y el ayudante anota en él cada paso de un fallo («PASO»), para
+ * saber dónde murió el proceso si muere.
  */
 #include <lv2/memory.h>
 #include <lv2/thread.h>
+#include <fcntl.h>
 #include <malloc.h>
 #include <ppu-asm.h>
 #include <ppu-lv2.h>
@@ -57,12 +64,14 @@
 #include <sys/stat.h>
 #include <sys/systime.h>
 #include <sys/thread.h>
+#include <unistd.h>
 
 #include "platform/ps3/log.h"
 #include "platform/ps3/paths.h"
 
 #define FM_STATE  SALSA64_DATA_DIR "/fastmem_state.txt"
 #define FM_RESULT SALSA64_DATA_DIR "/fastmem_result.txt"
+#define FM_LAUNCH SALSA64_DATA_DIR "/fastmem_launch.txt"
 #define MB        (1024u * 1024u)
 #define CACHE_LINE 128
 #define FM_PATTERN 0x5A5AC0DEu
@@ -199,13 +208,14 @@ enum { ST_PENDING, ST_TRYING, ST_DONE };
 typedef struct {
 	const char *name;
 	void (*run)(int i);
-	bool fault; /* usa la notificación de fallos: se omite si fallo_lectura mató el proceso */
+	bool fault; /* usa la notificación de fallos: se omite si fallo_evento mató el proceso */
 } phase_t;
 
 static void phase_reservas(int i);
 static void phase_mapeo(int i);
 static void phase_datos(int i);
-static void phase_fallo_lectura(int i);
+static void phase_fallo_evento(int i);
+static void phase_fallo_contexto(int i);
 static void phase_fallo_escritura(int i);
 static void phase_fallo_solo_lectura(int i);
 static void phase_fallo_parche(int i);
@@ -216,12 +226,13 @@ static const phase_t phases[] = {
 	{ "reservas",           phase_reservas,           false },
 	{ "mapeo",              phase_mapeo,              false },
 	{ "datos",              phase_datos,              false },
-	{ "fallo_lectura",      phase_fallo_lectura,      true },
+	{ "fallo_evento",       phase_fallo_evento,       true },
+	{ "fallo_contexto",     phase_fallo_contexto,     true },
 	{ "fallo_escritura",    phase_fallo_escritura,    true },
-	{ "fallo_solo_lectura", phase_fallo_solo_lectura, true },
 	{ "fallo_parche",       phase_fallo_parche,       true },
 	{ "fallo_main",         phase_fallo_main,         true },
 	{ "fallo_tiempo",       phase_fallo_tiempo,       true },
+	{ "fallo_solo_lectura", phase_fallo_solo_lectura, true },
 };
 #define NUM_PHASES ((int)(sizeof phases / sizeof phases[0]))
 
@@ -239,20 +250,33 @@ static int phase_index(const char *name)
 	return -1;
 }
 
+/* Sin búfer (open/write/close): el proceso puede morir enseguida. */
 static void state_append(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void state_append(const char *fmt, ...)
 {
-	FILE *f = fopen(FM_STATE, "a");
-	if (!f) {
+	char line[400];
+	va_list ap;
+	va_start(ap, fmt);
+	int n = vsnprintf(line, sizeof line - 1, fmt, ap);
+	va_end(ap);
+	if (n < 0)
+		return;
+	if (n > (int)sizeof line - 2)
+		n = (int)sizeof line - 2;
+	line[n++] = '\n';
+	int fd = open(FM_STATE, O_WRONLY | O_APPEND | O_CREAT, 0666);
+	if (fd < 0) {
 		salsa64_log("no se pudo abrir %s: el progreso no se guardará", FM_STATE);
 		return;
 	}
-	va_list ap;
-	va_start(ap, fmt);
-	vfprintf(f, fmt, ap);
-	va_end(ap);
-	fputc('\n', f);
-	fclose(f);
+	write(fd, line, (size_t)n);
+	close(fd);
+}
+
+/* Un paso dentro de una fase (lo anota también el ayudante). */
+static void step(const char *phase, const char *what)
+{
+	state_append("%s PASO %s", phase, what);
 }
 
 static void state_load(void)
@@ -270,7 +294,10 @@ static void state_load(void)
 		int i = phase_index(name);
 		if (i < 0)
 			continue;
-		if (strcmp(status, "PROBANDO") == 0) {
+		if (strcmp(status, "PASO") == 0) {
+			if (states[i].st == ST_TRYING)  /* hasta dónde llegó */
+				snprintf(states[i].phase, sizeof states[i].phase, "%s", line + off);
+		} else if (strcmp(status, "PROBANDO") == 0) {
 			states[i].st = ST_TRYING;
 			snprintf(states[i].phase, sizeof states[i].phase, "%s", line + off);
 		} else {
@@ -315,8 +342,12 @@ static sys_ppu_thread_t main_tid;
 
 enum { FM_NONE, FM_MAP_READ, FM_MAP_WRITE, FM_RIGHTS, FM_PATCH };
 
+static sys_mem_addr_t fault_region;  /* donde está la notificación (la región de la prueba u otra) */
+
 static struct {
 	bool enabled;             /* 327 aceptó la región */
+	bool want_ctx;            /* pedir el contexto (58) al atender el fallo */
+	const char *phase;        /* fase en curso, para los PASO del ayudante */
 	bool broken;              /* una prueba no volvió: no insistir */
 	sys_event_queue_t queue;
 	sys_ppu_thread_t helper;
@@ -336,7 +367,7 @@ static struct {
 
 static u32 fault_page(unsigned k)
 {
-	return region + OFF_FAULT + k * 0x10000u;
+	return fault_region + OFF_FAULT + k * 0x10000u;
 }
 
 static void helper_thread(void *arg)
@@ -353,10 +384,17 @@ static void helper_thread(void *arg)
 		u32 tid = (u32)ev.data_2;
 		u32 addr = (u32)ev.data_1;
 		fault.ev_tid = tid;
+		const char *ph = fault.phase ? fault.phase : "?";
+		step(ph, "evento recibido");
 		memset((void *)fault.ctx, 0, sizeof fault.ctx);
-		fault.ctx_rc = sc_page_fault_context(tid, (void *)fault.ctx);
-		if (fault.ctx_rc != 0 && tid != fault.victim_tid)
-			fault.ctx_rc = sc_page_fault_context(fault.victim_tid, (void *)fault.ctx);
+		fault.ctx_rc = -1;
+		if (fault.want_ctx) {
+			step(ph, "pidiendo contexto");
+			fault.ctx_rc = sc_page_fault_context(tid, (void *)fault.ctx);
+			if (fault.ctx_rc != 0 && tid != fault.victim_tid)
+				fault.ctx_rc = sc_page_fault_context(fault.victim_tid, (void *)fault.ctx);
+			step(ph, "contexto pedido");
+		}
 		switch (fault.mode) {
 		case FM_MAP_READ:
 			fault.act_rc = sysMMapperMapMemory(addr & ~0xFFFFu, fault.spare, SYS_MEMORY_PROT_READ_WRITE);
@@ -378,11 +416,13 @@ static void helper_thread(void *arg)
 			fault.act_rc = -1;
 			break;
 		}
+		step(ph, "acción hecha, reanudando");
 		fault.recover_rc = sysThreadRecoverPageFault(tid);
 		if (fault.recover_rc != 0 && tid != fault.victim_tid)
 			fault.recover_rc = sysThreadRecoverPageFault(fault.victim_tid);
 		fault.t_done = __gettime();
 		fault.events++;
+		step(ph, "reanudado");
 	}
 	sysThreadExit(0);
 }
@@ -466,6 +506,7 @@ static bool victim_run(victim_t *v, int mode)
 {
 	fault.events = 0;
 	fault.mode = mode;
+	fault.t_event = fault.t_done = 0;
 	fault.ev_tid = 0;
 	fault.ctx_rc = fault.act_rc = fault.recover_rc = -1;
 	memset(&fault.ev, 0, sizeof fault.ev);
@@ -501,8 +542,21 @@ static bool fault_setup(void)
 		salsa64_log("sysEventQueueCreate: 0x%08x", (unsigned)rc);
 		return false;
 	}
+	fault_region = region;
 	rc = sc_enable_page_fault_notification(region, (u32)fault.queue);
 	salsa64_log("sys_mmapper_enable_page_fault_notification(0x%08x, cola 0x%x): 0x%08x", region, (unsigned)fault.queue, (unsigned)rc);
+	if (rc != 0) {
+		/* En la primera corrida (2026-10-13) la tercera vez dio 0x80010002
+		 * con el mismo rango de siempre: ¿se quedó registrado el de un
+		 * proceso muerto? Probar con otra región. */
+		sys_mem_addr_t other = 0;
+		if (sysMMapperAllocateAddress(0x10000000, SYS_MEMORY_PAGE_SIZE_64K, 0x10000000, &other) == 0) {
+			rc = sc_enable_page_fault_notification(other, (u32)fault.queue);
+			salsa64_log("sys_mmapper_enable_page_fault_notification(0x%08x, otra región): 0x%08x", other, (unsigned)rc);
+			if (rc == 0)
+				fault_region = other;
+		}
+	}
 	if (rc != 0)
 		return false;
 	rc = sysMMapperAllocateMemory(64 * 1024, SYS_MEMORY_PAGE_SIZE_64K, &fault.spare);
@@ -858,16 +912,19 @@ static void phase_datos(int i)
 	finish(i, "datos OK ns por lectura (8 MB, paso 128 / paso 4224):%s", out);
 }
 
-static void phase_fallo_lectura(int i)
+static void fallo_read(int i, bool ctx, unsigned page)
 {
-	victim_t v = { .addr = fault_page(0) + 0x100, .kind = 0 };
-	trying(i, "leer sin mapear");
+	victim_t v = { .addr = fault_page(page) + 0x100, .kind = 0 };
+	fault.phase = phases[i].name;
+	fault.want_ctx = ctx;
+	trying(i, ctx ? "leer sin mapear, con contexto" : "leer sin mapear");
 	if (!victim_run(&v, FM_MAP_READ)) {
-		finish(i, "fallo_lectura FALLO la víctima no volvió (eventos %d)", fault.events);
+		finish(i, "%s FALLO la víctima no volvió (eventos %d)", phases[i].name, fault.events);
 		return;
 	}
 	log_event();
-	dump_context(v.addr, NULL);
+	if (ctx)
+		dump_context(v.addr, NULL);
 	char extra[80];
 	snprintf(extra, sizeof extra, "leyó %08llx (%s)", (unsigned long long)v.result,
 		 v.result == FM_PATTERN ? "el valor que puso el ayudante: la carga se repitió" : "OTRO valor");
@@ -876,16 +933,27 @@ static void phase_fallo_lectura(int i)
 	sysMMapperAllocateMemory(64 * 1024, SYS_MEMORY_PAGE_SIZE_64K, &fault.spare);
 }
 
+static void phase_fallo_evento(int i)
+{
+	fallo_read(i, false, 0);
+}
+
+static void phase_fallo_contexto(int i)
+{
+	fallo_read(i, true, 1);
+}
+
 static void phase_fallo_escritura(int i)
 {
-	victim_t v = { .addr = fault_page(1) + 0x200, .value = 0xC0FFEE00u, .kind = 1 };
+	victim_t v = { .addr = fault_page(2) + 0x200, .value = 0xC0FFEE00u, .kind = 1 };
+	fault.phase = phases[i].name;
+	fault.want_ctx = false;
 	trying(i, "escribir sin mapear");
 	if (!victim_run(&v, FM_MAP_WRITE)) {
 		finish(i, "fallo_escritura FALLO la víctima no volvió (eventos %d)", fault.events);
 		return;
 	}
 	log_event();
-	dump_context(v.addr, NULL);
 	char extra[80];
 	snprintf(extra, sizeof extra, "releyó %08llx (%s)", (unsigned long long)v.result,
 		 v.result == v.value ? "lo escrito: el almacenamiento se repitió" : "OTRO valor");
@@ -895,7 +963,9 @@ static void phase_fallo_escritura(int i)
 
 static void phase_fallo_solo_lectura(int i)
 {
-	u32 page = fault_page(2);
+	u32 page = fault_page(15);
+	fault.phase = phases[i].name;
+	fault.want_ctx = false;
 	trying(i, "preparar solo lectura");
 	s32 rc = sysMMapperMapMemory(page, fault.spare, SYS_MEMORY_PROT_READ_WRITE);
 	if (rc != 0) {
@@ -915,7 +985,6 @@ static void phase_fallo_solo_lectura(int i)
 		return;
 	}
 	log_event();
-	dump_context(v.addr, NULL);
 	char extra[80];
 	snprintf(extra, sizeof extra, "releyó %08llx (%s)", (unsigned long long)v.result,
 		 v.result == v.value ? "lo escrito tras dar permiso" : "OTRO valor");
@@ -927,6 +996,8 @@ static void fallo_patch(int i, bool from_main, unsigned fn, u32 page)
 {
 	/* Escribir la cola ya es un paso arriesgado (en RPCS3 el segmento de
 	 * texto es de solo lectura): anotarlo antes. */
+	fault.phase = phases[i].name;
+	fault.want_ctx = true;
 	trying(i, from_main ? "código generado en el hilo principal" : "código generado");
 	victim_t v = { .addr = page + 0x400, .value = 0, .kind = 2, .code = cave_fn(fn, false) };
 	fault.patch_at = v.code;
@@ -935,6 +1006,7 @@ static void fallo_patch(int i, bool from_main, unsigned fn, u32 page)
 	if (from_main) {
 		fault.events = 0;
 		fault.mode = FM_PATCH;
+		fault.t_event = fault.t_done = 0;
 		fault.ev_tid = 0;
 		fault.ctx_rc = fault.act_rc = fault.recover_rc = -1;
 		memset(&fault.ev, 0, sizeof fault.ev);
@@ -969,6 +1041,8 @@ static void phase_fallo_main(int i)
 
 static void phase_fallo_tiempo(int i)
 {
+	fault.phase = phases[i].name;
+	fault.want_ctx = true;
 	trying(i, "diez fallos parchados");
 	double total = 0, to_event = 0, to_done = 0;
 	int ok = 0;
@@ -993,10 +1067,33 @@ static void phase_fallo_tiempo(int i)
 
 /* --- Principal ---------------------------------------------------------------------- */
 
+/* Número de arranque (FM_LAUNCH): cada uno con su propio log. */
+static unsigned launch_number(void)
+{
+	unsigned n = 0;
+	FILE *f = fopen(FM_LAUNCH, "r");
+	if (f) {
+		if (fscanf(f, "%u", &n) != 1)
+			n = 0;
+		fclose(f);
+	}
+	n++;
+	f = fopen(FM_LAUNCH, "w");
+	if (f) {
+		fprintf(f, "%u\n", n);
+		fclose(f);
+	}
+	return n;
+}
+
 int main(void)
 {
-	salsa64_log_init("fastmem");
 	mkdir(SALSA64_DATA_DIR, 0777);
+	unsigned launch = launch_number();
+	char tag[32];
+	snprintf(tag, sizeof tag, "fastmem-%u", launch);
+	salsa64_log_init(tag);
+	salsa64_log("arranque %u (log en %s/%s.log; el estado en %s)", launch, SALSA64_DATA_DIR, tag, FM_STATE);
 	tb_freq = sysGetTimebaseFrequency();
 	sysThreadGetId(&main_tid);
 	salsa64_log("timebase %llu Hz; hilo principal 0x%llx; cola NOBITS en %p", (unsigned long long)tb_freq,
@@ -1022,12 +1119,12 @@ int main(void)
 		}
 	}
 
-	/* Las fases de fallo solo si hace falta alguna y fallo_lectura no mató el proceso. */
+	/* Las fases de fallo solo si hace falta alguna y fallo_evento no mató el proceso. */
 	bool want_fault = false;
 	for (int i = 0; i < NUM_PHASES; i++)
 		if (phases[i].fault && states[i].st == ST_PENDING)
 			want_fault = true;
-	int fl = phase_index("fallo_lectura");
+	int fl = phase_index("fallo_evento");
 	bool skip_fault = states[fl].st == ST_DONE && strstr(states[fl].line, " CRASH ") != NULL;
 	if (want_fault && !skip_fault)
 		fault.enabled = fault_setup();
@@ -1036,7 +1133,7 @@ int main(void)
 		if (states[i].st != ST_PENDING)
 			continue;
 		if (phases[i].fault && skip_fault) {
-			finish(i, "%s OMITIDO fallo_lectura mató el proceso", phases[i].name);
+			finish(i, "%s OMITIDO fallo_evento mató el proceso", phases[i].name);
 			continue;
 		}
 		if (phases[i].fault && !fault.enabled) {

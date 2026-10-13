@@ -283,10 +283,31 @@ los SPE (HLE gráfica, audio, JPEG) puedan hacer DMA sobre la ventana.
 
 ## 7. Resultados en la PS3
 
-Pendiente (2026-10-13): la prueba de viabilidad está en la cola de la
-consola. En RPCS3 (no concluyente) `reservas`, `mapeo` y `datos` pasan:
-regiones de hasta 1 GB (en 0x80000000, con cualquier alineación admitida),
-espejo del mismo objeto en dos direcciones, 256 objetos de 64 KB, mapear
-64 KB 18 µs y 1 MB 58 µs, desmapear 3–4 µs; las fases de fallo no fallan
-ahí (RPCS3 deja leer las páginas reservadas sin mapear) y la de parche no
-corre (RPCS3 no ejecuta código generado).
+**Primera corrida (2026-10-13, Slim CECH-3011A, HFW 4.91 + HEN, paquete
+SLSA00111 f1d53f6d).** Tres arranques. En el primero y el segundo
+`sys_mmapper_enable_page_fault_notification(0x60000000)` devolvió 0 (lv2
+aceptó la notificación), corrieron las fases de fallo de lectura, escritura
+y solo lectura, y en `fallo_parche` **la aplicación murió sola** (volvió al
+XMB). En el tercero, 327 devolvió 0x80010002 (EINVAL) con el mismo rango y
+las fases de fallo quedaron NO_DISPONIBLE: lo más probable es que lv2 se
+quedara con el registro de los procesos muertos; antes de la siguiente
+corrida hay que reiniciar la consola. **Lo que decía el primer arranque se
+perdió**: el log de la consola se pisa en cada arranque y el archivo de
+estado no sobrevivió a la muerte del proceso (el de jit-ppe sí; por qué,
+no se sabe). Lección: log por arranque y estado sin búfer (la segunda
+versión de la prueba).
+
+Lo que sí quedó (tercer arranque), todo con lv2 real:
+
+| | PS3 |
+|---|---|
+| Regiones | 256 MB, 512 MB y 1 GB en 0x80000000 (con alineación de 256 MB también); **2 GB no** (ENOMEM); 4 regiones de 256 MB a la vez más la de la prueba (0x60000000): 0x80000000–0xBFFFFFFF; `sys_mmapper_allocate_fixed_address` devuelve 0 y 0xB0000000 se libera; las direcciones reservadas no se descuentan de la memoria de usuario |
+| Objetos y mapeo | 256 objetos de 64 KB (tope de la prueba); mapear 64 KB 8,2 µs, desmapear 15,9; 1 MB mapear 50,6, desmapear 47,7; el contenido sobrevive al desmapeo; **espejo** del mismo objeto en dos direcciones sí; 1 MB en una región de 64 KB sí, 64 KB en una de 1 MB no; `search_and_map` sí; primer toque de una página de 4 KB recién mapeada 93 ns (no hay poblado perezoso); 128 objetos mapeados seguidos en 1,1 ms |
+| Permisos | `sys_mmapper_change_address_access_right` (336) devuelve EINVAL: no hay solo lectura por página |
+| Atributos (351) | solo de páginas mapeadas: tamaño, derechos (0xF; el código 0x8), un tercer campo 0x0001000000000000 |
+| Datos | 8 MB a paso 128: **~70 ns por lectura** (560 ciclos, fuera de la L2) igual en el heap, en 64 KB y en 1 MB; a paso 4224, 17,5 ns (los fallos de ERAT no se notan sobre el de L2); 256 KB en la L2: 14,3 ns a paso 128 y 2,0 a paso 4224 |
+
+Para fastmem: la ventana de 512 MB existe (en 0x80000000 o 0xA0000000: el
+índice `va & 0x1FFFFFFF` sumado a la base queda dentro de los 32 bits), la
+RDRAM va como un objeto de 8 MB en páginas de 1 MB sin costo de acceso
+distinto al heap, y los fallos son lo único por confirmar.
