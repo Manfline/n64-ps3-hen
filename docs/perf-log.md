@@ -28,6 +28,7 @@ antes, después, notas.
 | 2026-10-11 | 3b95776 | **HLE de la tarea JPEG de Zelda OoT** en la PS3, dos salas (tienda Kokiri y casa de Link) | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00091 «Salsa64 Kokiri», respaldo del usuario | antes: fondo sin dibujar (malla en colores planos) | **67,8 y 67,3 ms del PPE por sala**; ventana de la carga 57,3–57,6 campos/s, peor campo 37–39 ms de emulación | ~110 veces lo de la Mac: flotantes y conversiones a entero por memoria en el PPE. Se queda en el PPE (una vez por sala, durante la transición); pendiente pasarlo a punto fijo |
 | 2026-10-11 | (rama fervent-hodgkin) | **HLE de la tarea JPEG de Zelda OoT** (fondos prerrenderizados), una sala: 75 tareas, 300 macrobloques | Mac (salsa64-run nativo, Apple Silicon) | antes: las tareas terminaban sin hacer nada (fondo basura) | **0,61 ms por sala** en el hilo del CPU, una vez al cargarla | Corre en el PPE (`core/rsp.c`); IDCT separable en flotante sin optimizar. El frontend escribe «JPEG: N tareas, M macrobloques en X ms del PPE» al terminar cada tanda: con esa medida se decide si se queda en el PPE o va a un SPE. El fondo se copia en el SPE 0 (40 tiras por cuadro, reutilizadas por la caché de texturas) |
 
+| 2026-10-12 | 4ca4c2a → aacdcc4 | **Tarea JPEG en el SPE en 4 carriles** (IDCT y color vectorizados, mismo resultado byte a byte), cuatro cargas de sala prerrenderizada | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00103 «Salsa64 PPE», respaldo del autor | SPE escalar: 41,9 ms por sala (0,56 ms la tarea más larga); la emulación dormía 36 ms por sala sondeando; peor campo de la tanda 32–36 ms | **SPE 2,86 ms por sala (×14,7; 0,039 ms la tarea más larga)**; hilo de emulación 0,32–0,35 ms; dormido 7,2–7,5 ms; ventanas de 100 campos 59,6–60,9 | El autor: «no hay tirones, solo la animación de transición, pero es muy rápida». El peor campo de la tanda (30–34 ms) ya no es el JPEG: las cargas de escena sin JPEG del mismo log llegan a 30–45 ms. Contra los flotantes en el PPE de la v0.2.0: el hilo de emulación pasa de 67,8 a 0,34 ms por sala |
 | 2026-10-12 | 479c0e7 → 4ca4c2a | **Tarea JPEG de Zelda OoT en un SPE** (HLE en enteros), tres cargas de sala prerrenderizada | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00103 «Salsa64 PPE», respaldo del autor, escala 5× | flotantes en el PPE (SLSA00091, 3b95776): **67,3–67,8 ms del hilo de emulación por sala**; peor campo 37–39 ms; ventana de 100 campos 57,3–57,6 campos/s | **SPE: 0,34–0,38 ms del hilo de emulación** (el SPE tarda 41,9 ms, 0,56 ms la tarea más larga); peor campo 31,9–36,4 ms; ventanas 59,3–59,9. Enteros en el PPE (`jpeg-ppe`): 29,0–30,2 ms del hilo 0, peor campo 30,2–30,8 (43,5 la primera), ventanas 59,7–60,0 | El tirón casi no cambia (el autor no nota diferencia): el juego espera cada tarea del RSP, así que mientras el SPE decodifica la emulación duerme en los sondeos (~36 ms por sala). Lo que queda es la velocidad del SPE (140 µs por macrobloque, escalar). Prueba del arranque en la PS3: SPE = PPE = host (CRC EEC26FE1). Ver «Quitarle trabajo al PPE» abajo |
 | 2026-10-12 | 2241c32 → 4ca4c2a | **Cuánto le quita el hilo de presentación a la emulación** (medición, sin cambio de rendimiento) | PS3 real (mismo equipo y app), respaldos del autor, escala 5× | — | GoldenEye en la presa: hilo 1 despierto **2,88 ms por campo emulado (15,8 %)**, de ellos traducción 1,81. A/B con carga de mentira en la misma corrida: **~0,13 ms de emulación perdidos por ms del hilo 1** (0,80 ms → +0,10 ms; 2,63 ms → +0,37 ms). Costo actual ≈ 0,4 de 15,5 ms por campo (2,5 %) | Pasar la traducción al RSX a un SPE ganaría ~0,25 ms por campo (~+0,7 campos/s en lo peor de la presa): no vale la pena por CPU. Ver «Quitarle trabajo al PPE» abajo |
 | 2026-10-12 | 8c876ac → ad18cce | **Donkey Kong 64**: la caché del recompilador ya no se vacía al cambiar Status.FR (gemelos por FR) | Mac, qemu-ppc64 (`salsa64-run --rec`, 16 s de consola, respaldo del autor) | 236 s de reloj, 1,2 MIPS; 1 284 166 bloques, 4 173 vaciados (1 340 bloques compilados por campo) | **7,5 s (×31), 38 MIPS; 8 867 bloques, 0 vaciados, 9 bloques por campo** | DK64 cambia FR en cada cambio de hilo (~260/s). 256 bloques dependen de FR, 0 gemelos |
@@ -104,7 +105,8 @@ misma ruta: la tienda Kokiri y la casa de Link). Cada carga son 75 tareas y
 |---|---|---|---|---|
 | Flotantes en el PPE (2026-10-11, SLSA00091) | 67,3–67,8 ms | — | 37–39 ms | 57,3–57,6 campos/s |
 | Enteros en el PPE (`jpeg-ppe`) | **29,0–30,2 ms** | — | 30,2–30,8 ms (43,5 la primera) | 59,7–60,0 |
-| Enteros en el SPE | **0,34–0,38 ms** (0 esperas, ~360 sondeos) | SPE 41,9 ms (0,56 ms la tarea más larga) | 31,9–36,4 ms | 59,3–59,9 |
+| Enteros en el SPE, escalar (4ca4c2a) | **0,34–0,38 ms** (0 esperas, ~360 sondeos) | SPE 41,9 ms (0,56 ms la tarea más larga) | 31,9–36,4 ms | 59,3–59,9 |
+| Enteros en el SPE, 4 carriles (aacdcc4) | **0,32–0,35 ms** (0 esperas, ~74 sondeos) | **SPE 2,86 ms** (0,039 ms la tarea más larga) | 30,4–34,2 ms (lo de la carga de la sala, no del JPEG) | 59,6–60,9 |
 
 - El hilo 0 queda libre (×180 contra los flotantes), pero **el tirón casi
   no cambia** (el autor no nota diferencia; la primera salida de la casa,
@@ -112,13 +114,20 @@ misma ruta: la tienda Kokiri y la casa de Link). Cada carga son 75 tareas y
   antes de mandar la siguiente, así que mientras el SPE decodifica la
   emulación duerme en los sondeos (36 ms por sala). Lo que pesa es la
   duración de la decodificación, en el procesador que sea.
-- El SPE escalar va a 140 µs por macrobloque (más lento que el PPE en
+- El SPE escalar iba a 140 µs por macrobloque (más lento que el PPE en
   enteros, 100 µs): cargas de 16 bits desde bytes, productos de 16 × 16
-  uno por uno. La IDCT vectorizada (multiplicar y sumar de 16 bits en 4
-  carriles, el mismo resultado byte a byte que valida la prueba del
-  arranque) debería bajarlo a 3–5 ms por sala.
+  uno por uno. **Vectorizado** (`src/rsp/jpeg/jpeg_v.c`, aacdcc4: la IDCT y
+  el color en 4 carriles con `mpya` y `shufb`, el mismo resultado byte a
+  byte), **9,5 µs por macrobloque: 2,86 ms por sala** (×14,7). La
+  emulación ya casi no espera (un sondeo por tarea, 100 µs dormido cada uno:
+  7,2–7,5 ms por sala, repartidos en 6 campos) y **el autor ya no nota el
+  tirón** («solo la animación de transición, pero es muy rápida»). El peor
+  campo de la tanda (30–34 ms) es la carga de la sala en el CPU emulado: en
+  el mismo log, cargas de escena sin JPEG llegan a 30–45 ms. Log
+  `build/ps3-logs/ppe-jpeg-vector-2026-10-12.log`.
 - Prueba del arranque en la PS3 real: SPE, PPE y host dan el mismo CRC
-  (EEC26FE1) en los seis arranques, 3,5 ms.
+  (EEC26FE1) en los seis arranques con el SPE escalar (3,5 ms) y con el
+  vectorizado (2,0 ms).
 
 ## Pila del SPE 0 (2026-10-12)
 

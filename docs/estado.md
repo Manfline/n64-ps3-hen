@@ -1,6 +1,6 @@
 # Estado
 
-## 2026-10-12 (noche) — Quitarle trabajo al PPE: medición del hilo 1 y tarea JPEG en un SPE (rama `determined-grothendieck`, paquete SLSA00103 «Salsa64 PPE»)
+## 2026-10-12 (noche) — Quitarle trabajo al PPE: medición del hilo 1 y tarea JPEG en un SPE, sin tirón (rama `determined-grothendieck`, paquete SLSA00103 «Salsa64 PPE»)
 
 Pasos 1 y 2 de «Quitarle trabajo al PPE» (entrada del 2026-10-11). Medido en
 la PS3 real (4ca4c2a, escala 5×; detalle en docs/perf-log.md, «Quitarle
@@ -25,13 +25,18 @@ Hecho:
   precisión hacia cero: con flotantes el SPE y el PPE no podían dar lo
   mismo. Contra el microcódigo real (casa de Link con partida nueva, 150
   tareas): 99,06 % de los píxeles iguales (con flotantes, 99,03 %).
-- **La tarea en un SPE libre** (`src/spu/jpeg`, 8,7 KB de código; backend
+- **La tarea en un SPE libre** (`src/spu/jpeg`, 11,9 KB de código; backend
   `src/platform/ps3/jpeg_spu.c` sobre lib/spukit): termina por sondeo, como
   una gráfica (`salsa64_jpeg_backend` en `core/rcp.h`). Prueba del arranque:
   dos tareas sintéticas (`rsp/jpeg/selftest.c`, con coeficientes que
   saturan y desbordan) en el SPE y en el PPE, comparadas entre sí y con el
   CRC que fija la prueba del host. Con `SALSA64_DATA_DIR/jpeg-ppe`, la tarea
   en el PPE (diagnóstico).
+- **En el SPE, en 4 carriles** (`src/rsp/jpeg/jpeg_v.c` sobre `v4.h`:
+  intrínsecos del SPU o, en el host, los carriles uno por uno con la misma
+  semántica): descuantizar, IDCT y color con las mismas operaciones enteras
+  que la escalar; la prueba del host compara 6000 macrobloques
+  seudoaleatorios byte a byte.
 - `salsa64-run`: `SALSA64_JCHECK_DUMP=archivo` (con `--lle-check-jpeg`)
   vuelca la entrada y la salida del microcódigo para probar otra IDCT sin
   correr el juego. El pad de partida nueva (`docs/pads/zelda-pausa-nueva.pad`)
@@ -49,13 +54,16 @@ Medido (PS3 real):
   de 15,5 ms por campo en la presa (2,5 %).
 - **Tarea JPEG**, por sala (75 tareas, 300 macrobloques): hilo de emulación
   67,8 ms (flotantes) → 29–30 ms (enteros en el PPE) → **0,34–0,38 ms (SPE)**.
-  El SPE tarda 41,9 ms y el juego espera cada tarea: la emulación duerme en
-  los sondeos y el **tirón casi no cambia** (peor campo 37–39 → 32–36 ms con
-  el SPE, 30–31 con el PPE en enteros; ventanas de 100 campos 57,3 → 59,3–60,0).
-  El autor no nota diferencia. Prueba del arranque: SPE = PPE = host
+  El SPE escalar tardaba 41,9 ms y el juego espera cada tarea: la emulación
+  dormía en los sondeos y el tirón casi no cambiaba (peor campo 37–39 → 32–36
+  ms; el autor no notaba diferencia). **Vectorizado (aacdcc4): SPE 2,86 ms
+  por sala (×14,7), y el autor: «no hay tirones, solo la animación de
+  transición, pero es muy rápida».** El peor campo que queda en la tanda
+  (30–34 ms) es la carga de la sala en el CPU emulado (cargas de escena sin
+  JPEG del mismo log: 30–45 ms). Prueba del arranque: SPE = PPE = host
   (EEC26FE1).
 
-Verificado: `test-host` 436/436 (Docker, ASan/UBSan) y nativo; `test-roms`;
+Verificado: `test-host` 437/437 (Docker, ASan/UBSan) y nativo; `test-roms`;
 `test-phase2` en RPCS3 (menú con cierre limpio y el SPE de la tarea JPEG
 detenido); `tools/build.sh` sin avisos; `--lle-check-jpeg` en el host.
 
@@ -67,11 +75,11 @@ Decisión y pendiente:
   recompilador (79 % del hilo 0). Se revisa si la traducción crece mucho (a
   5× ya va a 2,3–3,6 ms por tarea en la presa) o si el hilo 1 llega a
   limitar la presentación.
-- [ ] **JPEG en el SPE, vectorizado**: la IDCT con multiplicar y sumar de 16
-      bits en 4 carriles (mismo resultado, lo valida la prueba del arranque)
-      debería bajar de 41,9 a 3–5 ms por sala, y con eso el tirón (la
-      espera del juego). Mientras tanto, el SPE escalar deja libre el hilo 0
-      pero no acorta la carga.
+- [x] JPEG en el SPE vectorizado (aacdcc4): 41,9 → 2,86 ms por sala, sin
+      tirón para el autor.
+- [ ] Opcional: los sondeos de la tarea JPEG duermen 100 µs cada uno (7,4
+      ms por sala); con la tarea de ~40 µs, un sondeo más corto le quitaría
+      unos ms a la carga. No se nota hoy.
 - Receta de la casa de Link en el host: `docs/pads/zelda-casa-nueva.pad`
   (partida nueva, `--save-dir` a una carpeta vacía; Link despierta en la
   casa hacia el campo 14 300, 150 tareas JPEG hasta el 15 500).
