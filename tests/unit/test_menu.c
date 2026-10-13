@@ -530,7 +530,7 @@ static void menu_options_page(void)
 	CHECK_EQ(m.set.filter, MENU_FILTER_SMOOTH);
 	menu_input(&m, 0, 69);
 	CHECK_EQ(menu_input(&m, LEFT, 69), MENU_SETTINGS);
-	CHECK_EQ(m.set.filter, MENU_FILTER_CRT_COMPOSITE);
+	CHECK_EQ(m.set.filter, MENU_FILTER_CRT_TRINITRON);
 	m.set.filter = MENU_FILTER_SMOOTH;
 	/* Resolución: X o los lados alternan 720p / 1080p y piden guardar. */
 	menu_input(&m, 0, 69);

@@ -36,8 +36,21 @@ en docs/filtros.md.
   Lo dibujado en la consola coincide con la referencia como en RPCS3
   (cables: a 1/255 o menos en el 99,0–99,7 % contra el modelo del RSX), y
   la comprobación de las tablas fp16 en la consola da error 0,0010.
-- **Propuestas para bajar el costo** (sin implementar, con estimados en
-  docs/perf-log.md): escala 2× cuando hay un CRT (~5–6 ms menos por campo;
+- **Segunda ronda** (paquete SLSA00109 en `build/ps3-4`): quinto CRT, «CRT
+  Trinitron (exp.)» (el KV-29 de RetroMac: el tubo de franjas sin cable,
+  con el desenfoque del haz a lo ancho; referencia en `tools/crt-ref.c`);
+  con un CRT la escala interna no pasa de 3× (lo menor se respeta; en
+  «Imagen», «3× (tope con CRT)»); la reducción en dos pasadas (a lo ancho
+  y a lo alto; `filtros-reducir` 1 para comparar, y el ciclo alterna una
+  vuelta y otra); si la imagen no cambió, solo la pasada final (el RDP
+  numera lo escrito en cada destino); capturas solo con `filtros-capturas`,
+  copiadas por el RSX a la memoria principal y escritas por otro hilo (la
+  imagen ya no se congela ~2 s); «Aplicando filtro…» si preparar un filtro
+  tarda más de un par de cuadros; la comprobación fp16, una vez por filtro.
+  Falta medirlo en la PS3.
+- **Propuestas para bajar el costo** (con estimados en docs/perf-log.md;
+  la segunda ronda ya trae el tope de escala, las dos pasadas y el reuso, y
+  el SPE va en un paquete aparte): escala 2× cuando hay un CRT (~5–6 ms menos por campo;
   reducir mide 3,12 ms a 5×, 1,73 a 3× y 0,13 a 1×; en una escena
   sintética 2× casi no se nota, 1× sí), reducir en dos pasadas o con las
   regiones con tiles del RSX, no rehacer el filtro en los campos que

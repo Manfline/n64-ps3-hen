@@ -1,0 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* Salsa64 — CRT Trinitron: pasada «líneas» B (k verde y azul) (ver crt_tube_lines.cgh). */
+#define CRT_TRIN 1
+#define CRT_GRID8 0
+#define CRT_LINES_A 0
+#include "crt_tube_lines.cgh"

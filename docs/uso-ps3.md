@@ -76,10 +76,10 @@ Opciones:
   encima de la imagen, como una tele de tubo; las capturas salen sin ellas).
   Estos cuatro son de VIDEOGAMES SCZ. Después vienen los **filtros CRT
   originales del autor**, todavía experimentales: «CRT máscara (exp.)»,
-  «CRT RGB (exp.)», «CRT S-Video (exp.)» y «CRT compuesto (exp.)» (abajo, en
-  «Filtros CRT»). Vale al abrir el juego;
+  «CRT RGB (exp.)», «CRT S-Video (exp.)», «CRT compuesto (exp.)» y «CRT
+  Trinitron (exp.)» (abajo, en «Filtros CRT»). Vale al abrir el juego;
   se guarda en `menu.cfg` (`filtro = suave|nitido|lineas|lineas+|
-  crt-mascara|crt-rgb|crt-svideo|crt-compuesto`). El panel dice de quién es
+  crt-mascara|crt-rgb|crt-svideo|crt-compuesto|crt-trinitron`). El panel dice de quién es
   cada filtro.
 - **Resolución**: 720p (por omisión, render a 3×) o 1080p (render a 4×).
   Se guarda en video.cfg (así arranca la próxima vez) y se pone con
@@ -194,7 +194,7 @@ extensión>.cfg`:
 
 ```
 aspecto = 16:9      # 4:3 | 16:9 | global
-filtro = lineas     # suave | nitido | lineas | lineas+ | crt-mascara | crt-rgb | crt-svideo | crt-compuesto | global
+filtro = lineas     # suave | nitido | lineas | lineas+ | crt-mascara | crt-rgb | crt-svideo | crt-compuesto | crt-trinitron | global
 recorte = apagado   # apagado | normal | amplio | global
 escala = 2          # auto | 1 … 5 | global
 ```
@@ -404,14 +404,27 @@ RSX todavía se está midiendo.
   conectada con ese cable. RGB: imagen limpia; S-Video: el color se corre
   un poco; compuesto: sangrado de color, dot crawl y arcoíris en los
   detalles finos.
+- «CRT Trinitron» (`crt-trinitron`): una Trinitron grande de la sala (el
+  Sony KV-29), sin la señal de un cable: franjas de fósforo, el haz más
+  grueso en lo brillante y un poco de desenfoque a lo ancho.
 
 Se eligen en Opciones → **Filtro** (o por juego, con SELECT sobre la
-ROM); el archivo `filtro` en `/dev_hdd0/salsa64` (la clave en la primera
-línea) manda sobre lo elegido, para pruebas. Trabajan sobre
-la imagen a la resolución original de la N64 (la escala interna se reduce
-primero con un filtro de caja, como un supermuestreo) y ocupan el
+ROM), o en vivo en «Imagen» del menú de pausa; el archivo `filtro` en
+`/dev_hdd0/salsa64` (la clave en la primera línea) manda sobre lo
+elegido, para pruebas. Al cambiar de filtro, si preparar sus tablas tarda
+más de un par de cuadros, se ve «Aplicando filtro…» (la primera vez de
+cada filtro, con la comprobación en el RSX, unas decenas de ms). Trabajan
+sobre la imagen a la resolución original de la N64 (la escala interna se
+reduce primero con un filtro de caja, como un supermuestreo) y ocupan el
 rectángulo de la imagen en la pantalla. Las capturas, las miniaturas de
 los estados y los volcados siguen sin filtro.
+
+**Con un CRT la escala interna no pasa de 3×**: si en Opciones, por juego
+o en «Imagen» está en 4×, 5× o Auto a 1080p (4×), mientras haya un CRT se
+usa 3× y al quitarlo vuelve la elegida (en «Imagen» se lee «3× (tope con
+CRT)»; el log lo dice). Lo elegido menor (1× o 2×) se respeta. A 3× el
+supermuestreo ya no se nota detrás del CRT y el RSX se ahorra el render y
+la reducción de la imagen grande.
 
 ### Costo de los filtros
 
@@ -428,10 +441,10 @@ presentados por segundo, de 60. Sin filtro, el RSX va al 39–44 %.
 | CRT cable compuesto | 11,9 ms (40) | 15,4 ms (30) |
 
 La emulación no se frena: si el RSX no alcanza, se saltan cuadros de la
-pantalla. Para que no se salten, bajar la escala interna a 2× o 3× con un
-CRT: el filtro trabaja a la resolución de la N64 y la escala solo le llega
-como supermuestreo; a 2× casi no se nota y el RSX se ahorra ~5–6 ms por
-cuadro (estimado; docs/perf-log.md).
+pantalla. Esa medición fue a 5×; con el tope de 3× (arriba), la reducción
+de dos pasadas y el reuso de las tablas cuando el juego repite imagen
+(GoldenEye y Perfect Dark dibujan 20–30 por segundo) el costo baja: está
+por medirse (docs/perf-log.md).
 
 ## Notas por juego
 
@@ -484,8 +497,10 @@ se crean por FTP.
 | `perfil.cfg` | `caliente = KB`, `saltos = si\|no` | Con `perfil-activo`: tamaño de la zona caliente de la caché de código (por omisión 1024 KB, en dos mitades; `0` cuenta y guarda el perfil sin zona caliente) y si los bloques calientes registran sus sitios de salida (sí por omisión) |
 | `embedded` | `file:nombre` | Abre una ROM sin menú (sección anterior) |
 | `jit-ancho` | Basta con que exista | El recompilador emite el código «ancho» de antes del 2026-10-13 (prueba de KSEG0 de 8 palabras, un camino lento por acceso), para medir el compacto contra él con el mismo paquete (docs/rec-ppe.md, «Código compacto») |
-| `filtro` | Una clave: `crt-mascara`, `crt-rgb`, `crt-svideo` o `crt-compuesto` | Ese filtro CRT en lugar del elegido en el menú, también en las pruebas automáticas (para comparar) |
-| `filtros-ciclo` | Basta con que exista | En el juego pasa por todos los filtros, uno cada 20 s desde «Ninguno», con un aviso en pantalla; el log dice cada 5 s cuánto tarda cada uno en el RSX (para medirlos en una sola corrida) |
+| `filtro` | Una clave: `crt-mascara`, `crt-rgb`, `crt-svideo`, `crt-compuesto` o `crt-trinitron` | Ese filtro CRT en lugar del elegido en el menú, también en las pruebas automáticas (para comparar) |
+| `filtros-ciclo` | Vacío, o las claves de los filtros que se quieren (`crt-trinitron crt-compuesto`) | En el juego pasa por todos los filtros CRT (o por los de la lista), uno cada 20 s desde «Ninguno», con un aviso en pantalla; el log dice cada 5 s cuánto tarda cada uno en el RSX (para medirlos en una sola corrida). Cada vuelta cambia la reducción entre dos pasadas y una (si no la fija `filtros-reducir`), y la escala va con el tope de 3× de los CRT toda la corrida |
+| `filtros-capturas` | Basta con que exista | La primera vez de cada filtro CRT y alto de pantalla guarda la imagen que entra y la que dibuja (`filtro-<clave>-<alto>-fuente.ppm` y `-pantalla.ppm`), sin congelar la imagen (las escribe otro hilo); para compararlas con `tools/crt-ref.c` |
+| `filtros-reducir` | `1` o `2` | La reducción de la escala interna de los CRT en una pasada o en dos (por omisión, dos); para comparar su costo |
 | `capturas-pantalla` | Basta con que exista | Con `capturas`: además guarda la pantalla entera como se ve, con el filtro (`pantalla-N.ppm`) |
 | `filtro-ver` | El nombre de una tabla y una escala (`puntos 0.5`) | Diagnóstico de los filtros: dibuja esa tabla intermedia en la esquina de la pantalla (docs/filtros.md) |
 | `muestreo` | Basta con que exista | Muestreo por tiempo del recompilador: un hilo de baja prioridad mira cada 200 µs qué bloque corre el hilo de emulación (o si está en C: camino lento, intérprete, eventos…); cada 5 s el reparto al log y, al salir del juego, los 30 bloques con más tiempo con sus palabras de PPC (docs/rec-ppe.md, «Muestreo por tiempo»). Costo: dos palabras por entrada a bloque |

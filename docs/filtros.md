@@ -2,17 +2,25 @@
 
 Los filtros CRT de Salsa64 son **filtros originales del autor, portados de
 sus versiones de RetroMac** (sus apps para Mac y Apple TV): el CRT de
-máscara de sombra (v1.3) y el CRT con cable (v1.1: euroconector RGB,
-S-Video o compuesto NTSC hacia una Trinitron chica). Van en la parte GPL
+máscara de sombra (v1.3), el CRT con cable (v1.1: euroconector RGB,
+S-Video o compuesto NTSC hacia una Trinitron chica) y el CRT Trinitron (un
+Sony KV-29 de la sala, sin la señal de un cable: el preset `kv29` de
+RetroMac, la v6 de su Trinitron de Shadertoy sin los alambres
+amortiguadores). Van en la parte GPL
 (`src/frontend/filters/`), sobre la maquinaria genérica de posprocesado de
 `lib/rsxkit` (MIT, `rsxkit/post.h`), que no sabe nada de estos filtros.
 
 Se eligen en la fila «Filtro» de Opciones (y en los ajustes por juego),
 después de los filtros sencillos de VIDEOGAMES SCZ, con el crédito
 «Filtro original del autor» (`MENU_FILTER_CRT_*` en menu.h; claves
-`crt-mascara|crt-rgb|crt-svideo|crt-compuesto`). `load_view` de main.c
+`crt-mascara|crt-rgb|crt-svideo|crt-compuesto|crt-trinitron`), y en vivo en
+«Imagen» del menú de pausa. Son experimentales: la fila dice «(exp.)» y la
+ayuda «(experimental)». Con un CRT la escala interna no pasa de 3× (lo
+elegido menor se respeta; ver «Costo en el RSX»). `load_view` de main.c
 pasa el elegido a `filter_setup` al abrir el juego, y `filter_select`
-lo cambia en vivo (las tablas se rehacen solas en el cuadro siguiente).
+lo cambia en vivo (las tablas se rehacen solas en el cuadro siguiente; si
+eso va a tardar más de un par de cuadros, ese cuadro sale sin filtro con el
+aviso «Aplicando filtro…» y la preparación va en el siguiente).
 El archivo `filtro` de `/dev_hdd0/salsa64` manda sobre el menú, para
 pruebas. Las capturas de pantalla, las miniaturas de los estados y las
 pruebas automáticas siguen sin filtro.
@@ -26,7 +34,7 @@ número de instrucciones por píxel, así que se llevó más lejos:
 
 | Pasada | Tamaño | Qué hace | Instrucciones |
 |---|---|---|---|
-| reducir (rsxkit) | imagen del juego | la imagen a escala interna, de vuelta a la resolución del juego con un filtro de caja (3 × 3 lecturas bilineales) | 27 (9 lecturas) |
+| reducir (rsxkit) | imagen del juego | la imagen a escala interna, de vuelta a la resolución del juego con un filtro de caja: en dos pasadas, a lo ancho (3 lecturas bilineales, sobre una tabla fp16 de una fila por fila de la imagen grande) y a lo alto; con `filtros-reducir` en 1, en una (3 × 3 lecturas) | 27 (9 lecturas) en una pasada |
 | lineal | imagen del juego | gamma 2,4 → luz lineal, una vez por píxel del juego | 12 |
 | resplandor | imagen × 1 o × 2 | las 12 lecturas en espiral, en una rejilla que la pasada final interpola | 31 (12) |
 
@@ -47,6 +55,21 @@ CRT con cable:
 | líneas A y B | columnas de la imagen × líneas | la scanline en esa columna, interpolada, ya como la usa el haz (amplitud con la apertura de la máscara de franjas; k = 1/2σ²) | 51 + 26 (58 + 31 con dos tablas) |
 | final | la imagen en pantalla | el haz de las dos scanlines más cercanas, el resplandor y la gamma | 42 (5) |
 
+CRT Trinitron: el mismo tubo, sin señal ni decodificación. Las líneas A y B
+leen la luz lineal del juego: en cada columna, 5 texeles de la scanline con
+peso gaussiano (el desenfoque del haz a lo ancho, `h_blur` 0,40) y la
+saturación (1,05), sin bucle en el programa (Cg dejaba el de 5 vueltas con
+un salto condicional, que cgcomp no ensambla). La pasada final es la del
+cable, con las constantes del KV-29 (haz 0,22–0,62, resplandor 0,15, brillo
+1,10).
+
+Cuando la imagen no cambió (el juego dibuja 20 o 30 cuadros por segundo y
+el mismo se presenta en dos o tres campos), solo se hace la pasada final:
+las tablas siguen valiendo. Lo sabe por un número de cada destino del RDP
+que cambia con cada dibujo, carga desde la RDRAM o creación
+(`salsa64_rdp_present_source`); el framebuffer 2D (la CPU) se filtra
+siempre entero. Los cuatro filtros son fijos para una imagen fija (el
+compuesto va con `frame_phase` 0).
 Lo que queda distinto del original:
 
 - **La fuente es la imagen reducida a la resolución del juego** (filtro de
@@ -96,7 +119,28 @@ Lo que queda en los cables viene de interpolar las muestras de la señal
 entre columnas (bordes nítidos); en la máscara, nada más que el
 resplandor. RPCS3 traduce el microcódigo del RSX a GLSL: la PS3 real puede
 diferir en el filtrado de fp16 y el modo BORDER; la app lo comprueba sola la
-primera vez que dibuja cada filtro (el log dice «comprobación en el RSX»).
+primera vez que dibuja cada filtro en cada corrida (el log dice
+«comprobación en el RSX»; unas decenas de ms, bajo el aviso «Aplicando
+filtro…»).
+
+Con el archivo `filtros-capturas` en `/dev_hdd0/salsa64`, la primera vez
+de cada filtro y alto de pantalla la app guarda la imagen que entró
+(`filtro-<clave>-<alto>-fuente.ppm`) y la que dibujó, con la pantalla
+entera en negro alrededor (`-pantalla.ppm`). El RSX vuelve a dibujar la
+pasada final en una superficie de la memoria principal y copia ahí la
+fuente; un hilo aparte espera su barrera y escribe los archivos. Antes se
+leían desde el PPE la pantalla y la fuente en la memoria del RSX, y la
+imagen se quedaba quieta ~2 s. En RPCS3 la pantalla de la primera captura
+de cada corrida sale negra (la fuente no, y las siguientes salen bien,
+también dibujando antes una vez en esa memoria): para verificar ahí un
+filtro, ponerlo segundo en la lista de `filtros-ciclo`
+(`crt-rgb crt-trinitron`).
+
+En RPCS3 (2026-10-13, la ROM de prueba como juego, 720p, escala 5× con el
+tope de 3×, reducción en dos pasadas), contra el original con el
+resplandor del RSX: máscara y Trinitron a 1/255 o menos en todo píxel
+(promedio 0,02); RGB 0,12 (máximo 36), S-Video 0,27 (64) y compuesto 0,24
+(45), como antes.
 
 ## Errores de cgcomp que se cruzaron
 

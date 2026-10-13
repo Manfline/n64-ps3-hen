@@ -85,6 +85,7 @@ static const struct {
 	[MENU_FILTER_CRT_RGB] = { "crt-rgb", "CRT RGB (exp.)", "Filtro original del autor" },
 	[MENU_FILTER_CRT_SVIDEO] = { "crt-svideo", "CRT S-Video (exp.)", "Filtro original del autor" },
 	[MENU_FILTER_CRT_COMPOSITE] = { "crt-compuesto", "CRT compuesto (exp.)", "Filtro original del autor" },
+	[MENU_FILTER_CRT_TRINITRON] = { "crt-trinitron", "CRT Trinitron (exp.)", "Filtro original del autor" },
 };
 
 static const char *filter_name(int f)
@@ -1129,17 +1130,19 @@ static void panel(const struct menu *m, float W, float H, float a)
 							   "sin difuminar.", "Líneas: oscurece filas como", "una tele de tubo (suaves o", "fuertes).", NULL,
 							   NULL };
 		/* Los CRT, cada uno con lo suyo. */
-		static const char *const crt_text[4][7] = {
+		static const char *const crt_text[5][7] = {
 			{ "CRT de máscara de sombra", "(experimental).", "Puntos de fósforo", "redondos en triángulo.", NULL, NULL,
 			  NULL },
-			{ "CRT con cable RGB", "(experimental).", "Tele Trinitron por", "euroconector RGB: imagen", "limpia.", NULL,
-			  NULL },
-			{ "CRT con cable S-Video", "(experimental).", "Tele Trinitron por", "S-Video: el color se", "corre un poco.",
+			{ "CRT con cable RGB", "(experimental).", "Tele Trinitron chica por", "euroconector RGB: imagen", "limpia.",
 			  NULL, NULL },
-			{ "CRT con cable compuesto", "(experimental).", "Tele Trinitron por", "compuesto: sangrado de",
+			{ "CRT con cable S-Video", "(experimental).", "Tele Trinitron chica por", "S-Video: el color se",
+			  "corre un poco.", NULL, NULL },
+			{ "CRT con cable compuesto", "(experimental).", "Tele Trinitron chica por", "compuesto: sangrado de",
 			  "color y dot crawl.", NULL, NULL },
+			{ "CRT Trinitron", "(experimental).", "Sony KV-29 de la sala,", "sin la señal del cable:",
+			  "franjas de fósforo y", "líneas del haz.", NULL },
 		};
-		bool crt = m->set.filter >= MENU_FILTER_CRT_MASK && m->set.filter <= MENU_FILTER_CRT_COMPOSITE;
+		bool crt = m->set.filter >= MENU_FILTER_CRT_MASK && m->set.filter <= MENU_FILTER_CRT_TRINITRON;
 		static const char *const lang_text[] = { "Idioma del menú y de los", "avisos del juego.", NULL, "Se guarda en menu.cfg.", NULL, NULL };
 		static const char *const dlc_text[] = { "Baja las carátulas de los", "juegos de la lista a", "covers/. Hace falta red", "y la dirección en",
 							"descargas.cfg.", NULL, "×: descargar.", NULL, NULL };

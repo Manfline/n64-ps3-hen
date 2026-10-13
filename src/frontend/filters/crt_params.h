@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — filtros CRT originales del autor, portados de sus versiones de
- * RetroMac (máscara de sombra v1.3 y CRT con cable v1.1). Lo que se
+ * RetroMac (máscara de sombra v1.3, CRT con cable v1.1 y el Trinitron
+ * KV-29). Lo que se
  * calcula una vez en la CPU (al cambiar de resolución o de filtro) y los
  * presets: la geometría de la red de puntos y su promedio, la rejilla de
  * franjas del tubo y los pesos del filtro de la señal del cable. La cuenta
@@ -50,6 +51,14 @@ struct crt_cable_preset {
 	float chroma_tau;       /* filtro de color RC, en píxeles de una línea de 256 */
 };
 extern const struct crt_cable_preset crt_cable_tv13;  /* v1.1 */
+
+/* Un Trinitron de la sala (Sony KV-29): el mismo tubo de franjas, sin la
+ * señal de un cable; el haz desenfoca la imagen a lo ancho. */
+struct crt_trinitron_preset {
+	struct crt_tube_preset tube;
+	float h_blur;  /* desenfoque horizontal del haz (píxeles del juego) */
+};
+extern const struct crt_trinitron_preset crt_trinitron_kv29;
 
 enum crt_cable { CRT_CABLE_RGB, CRT_CABLE_SVIDEO, CRT_CABLE_COMPOSITE };
 

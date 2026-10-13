@@ -51,6 +51,28 @@ const struct crt_cable_preset crt_cable_tv13 = {
 	.chroma_tau = 1.20f,
 };
 
+/* «kv29» en RetroMac (FilterPresets.swift): un Sony KV-29 de consumo, el
+ * preset final (v6) del Trinitron de Shadertoy sin los alambres
+ * amortiguadores. */
+const struct crt_trinitron_preset crt_trinitron_kv29 = {
+	.tube = {
+		.triads_per_pixel = 2.0f,
+		.stripe_width = 0.75f,
+		.stripe_soft = 0.45f,
+		.mask_strength = 1.00f,
+		.keep_bright = 0.65f,
+		.beam_min = 0.22f,
+		.beam_max = 0.62f,
+		.glow = 0.15f,
+		.glow_radius = 2.0f,
+		.brightness = 1.10f,
+		.saturation = 1.05f,
+		.gamma_in = 2.4f,
+		.gamma_out = 2.2f,
+	},
+	.h_blur = 0.40f,
+};
+
 const float crt_glow_spiral[12][2] = {
 	{ 0.20412414523193154f, 0.0f },
 	{ -0.2606984956313073f, 0.23882272583565667f },

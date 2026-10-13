@@ -58,7 +58,8 @@ include $(R)/mk/ps3.mk
 $(OBJ)/crt_mask_dots.fpo: filters/crt.cgh
 $(OBJ)/crt_cable_decode9.fpo $(OBJ)/crt_cable_decode27.fpo: filters/crt_cable_decode.cgh
 $(OBJ)/crt_tube_lines_a4.fpo $(OBJ)/crt_tube_lines_a8.fpo $(OBJ)/crt_tube_lines_b4.fpo \
-$(OBJ)/crt_tube_lines_b8.fpo: filters/crt_tube_lines.cgh
+$(OBJ)/crt_tube_lines_b8.fpo $(OBJ)/crt_trinitron_lines_a.fpo \
+$(OBJ)/crt_trinitron_lines_b.fpo: filters/crt_tube_lines.cgh
 
 # El combiner, con -Os en el SPE 0: 5,6 KB menos de código (de 16,8 a 11,2
 # KB) que quedan para la pila. Corre una vez por estado de dibujo, no por

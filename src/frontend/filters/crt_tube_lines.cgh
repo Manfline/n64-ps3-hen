@@ -1,24 +1,32 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * Salsa64 — CRT con cable, filtro original del autor portado de su versión
- * de RetroMac (v1.1); el tubo es un Trinitron chico. Pasada «líneas»: una
- * columna por columna de la imagen en pantalla y una fila por scanline del
- * juego. La scanline vista en esa columna (interpolada de las muestras
- * decodificadas), ya como la usa el haz: amplitud = color / (σ√2π) por la
+ * Salsa64 — CRT con cable (v1.1) y CRT Trinitron (el KV-29), filtros
+ * originales del autor portados de sus versiones de RetroMac; los dos son un
+ * tubo Trinitron. Pasada «líneas»: una columna por columna de la imagen en
+ * pantalla y una fila por scanline del juego. La scanline vista en esa
+ * columna (en el cable, interpolada de las muestras decodificadas; en el
+ * Trinitron, la luz lineal del juego con el desenfoque del haz a lo ancho),
+ * ya como la usa el haz: amplitud = color / (σ√2π) por la
  * apertura de la máscara de franjas en esa columna (cada punto la abre
  * según su brillo) y k = log2(e) / (2σ²), para que la pasada final no saque
  * raíces ni divida. El RSX no escribe dos salidas desde un programa
  * compilado con cgcomp: CRT_LINES_A deja (amplitud RGB, k rojo) y la otra
  * pasada (k verde, k azul).
- *   q1 = (píxeles del juego por píxel de pantalla en x, x0, 1/dt)
+ *   q1 = (píxeles del juego por píxel de pantalla en x, x0, 1/dt); en el
+ *        Trinitron, (píxeles del juego por píxel de pantalla en x,
+ *        −log2(e)/(2·h_blur²), saturación)
  *   q2 = (beam_min, beam_max, keep_bright, brillo)
  *   q3 = (1/tríada, fuerza de la máscara, hw·(1 − suave), 1/(hw·suave))
  *   q4 = 1/promedio de la franja por canal
  *   q5 = pico por canal
  *   q6 = 1/max(pico − 1, 1e-4) por canal
  * Con CRT_GRID8 (compuesto) las muestras están en dos tablas, la segunda
- * corrida medio paso.
+ * corrida medio paso. Con CRT_TRIN, `e` es la luz lineal del juego (0 fuera
+ * de la imagen).
  */
+#ifndef CRT_TRIN
+#define CRT_TRIN 0
+#endif
 void main(float4 pos : TEXCOORD0, uniform sampler2D e : TEXUNIT0,
 #if CRT_GRID8
 	  uniform sampler2D o : TEXUNIT1,
@@ -28,6 +36,23 @@ void main(float4 pos : TEXCOORD0, uniform sampler2D e : TEXUNIT0,
 {
 	float fx = pos.x;
 	float y = pos.y;
+#if CRT_TRIN
+	/* 5 texeles de la scanline alrededor de x con peso gaussiano (el
+	 * desenfoque del haz), normalizados, y la saturación. Escrito sin bucle:
+	 * Cg dejaba este con un salto condicional, que cgcomp no ensambla. */
+	float x = fx * q1.x;
+	float cx = floor(x) + 0.5;
+	float d0 = cx - x;
+	float4 dm = float4(d0 - 2.0, d0 - 1.0, d0 + 1.0, d0 + 2.0);
+	float4 wm = exp2(dm * dm * q1.yyyy);
+	float w0 = exp2(d0 * d0 * q1.y);
+	float3 sum = tex2D(e, float2(cx - 2.0, y)).rgb * wm.x + tex2D(e, float2(cx - 1.0, y)).rgb * wm.y +
+		     tex2D(e, float2(cx, y)).rgb * w0 + tex2D(e, float2(cx + 1.0, y)).rgb * wm.z +
+		     tex2D(e, float2(cx + 2.0, y)).rgb * wm.w;
+	float3 c0 = sum / (wm.x + wm.y + w0 + wm.z + wm.w);
+	float lum = dot(c0, float3(0.2126, 0.7152, 0.0722));
+	float3 c = max(lerp(float3(lum, lum, lum), c0, q1.zzz), float3(0.0, 0.0, 0.0));
+#else
 	float u = (fx * q1.x - q1.y) * q1.z;
 	float m = floor(u);
 	float f = u - m;
@@ -39,6 +64,7 @@ void main(float4 pos : TEXCOORD0, uniform sampler2D e : TEXUNIT0,
 	float3 c = e0 * saturate(1.0 - h) + o0 * (1.0 - abs(h - 1.0)) + e1 * saturate(h - 1.0);
 #else
 	float3 c = lerp(e0, e1, f);
+#endif
 #endif
 	float3 s = lerp(q2.xxx, q2.yyy, sqrt(saturate(c))) * 0.5;
 	float3 rs = 1.0 / s;

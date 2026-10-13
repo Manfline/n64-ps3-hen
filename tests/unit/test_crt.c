@@ -161,6 +161,23 @@ static void crt_grille_avg(void)
 	}
 }
 
+/* El Trinitron KV-29: los valores de RetroMac (FilterPresets.swift, kv29) y
+ * franjas de 3 píxeles a 1080p, como el tubo del cable. */
+static void crt_trinitron_preset(void)
+{
+	const struct crt_trinitron_preset *p = &crt_trinitron_kv29;
+	CHECK(fabsf(p->h_blur - 0.40f) < 1e-6f);
+	CHECK(fabsf(p->tube.beam_min - 0.22f) < 1e-6f && fabsf(p->tube.beam_max - 0.62f) < 1e-6f);
+	CHECK(fabsf(p->tube.glow - 0.15f) < 1e-6f && fabsf(p->tube.glow_radius - 2.0f) < 1e-6f);
+	CHECK(fabsf(p->tube.brightness - 1.10f) < 1e-6f && fabsf(p->tube.saturation - 1.05f) < 1e-6f);
+	CHECK(fabsf(p->tube.gamma_in - 2.4f) < 1e-6f && fabsf(p->tube.gamma_out - 2.2f) < 1e-6f);
+	struct crt_grille g;
+	crt_grille(&p->tube, 1440.0f / 320.0f, &g);
+	CHECK_EQ((uint32_t)g.pitch, 3);
+	crt_grille(&p->tube, 960.0f / 320.0f, &g);
+	CHECK_EQ((uint32_t)g.pitch, 3);
+}
+
 void t_suite_crt(void)
 {
 	RUN(crt_fit);
@@ -168,4 +185,5 @@ void t_suite_crt(void)
 	RUN(crt_mask_tile_matches);
 	RUN(crt_cable_weights);
 	RUN(crt_grille_avg);
+	RUN(crt_trinitron_preset);
 }

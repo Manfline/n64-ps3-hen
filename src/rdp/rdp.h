@@ -211,9 +211,12 @@ void salsa64_rdp_present_draw(bool draw);
 /* Lo último que eligió salsa64_rdp_present como textura (el destino
  * entero), la región que se ve (en píxeles del destino, sin el overscan) y
  * la escala de ese destino; con `view` o `crop`, antes los aplica como
- * salsa64_rdp_present_again (en la pausa). false si no hay. */
+ * salsa64_rdp_present_again (en la pausa). En `gen` (si no es NULL), un
+ * número que cambia cada vez que algo escribe en ese destino: si es el
+ * mismo de antes con el mismo destino, la imagen no cambió. false si no
+ * hay. */
 bool salsa64_rdp_present_source(const rsxkit_view *view, const struct salsa64_overscan *crop, rsxkit_texture *tex,
-				rsxkit_rect *region, uint32_t *scale);
+				rsxkit_rect *region, uint32_t *scale, uint32_t *gen);
 /* Vuelve a dibujar lo último que presentó salsa64_rdp_present (mismo
  * destino, región y escala), sin tocar la tabla de destinos ni las copias a
  * la RDRAM: para seguir mostrando el último cuadro con la emulación en

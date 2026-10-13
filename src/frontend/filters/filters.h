@@ -27,6 +27,7 @@ enum salsa64_crt {
 	SALSA64_CRT_RGB,        /* CRT con cable (v1.1): euroconector RGB */
 	SALSA64_CRT_SVIDEO,     /* ... S-Video */
 	SALSA64_CRT_COMPOSITE,  /* ... compuesto */
+	SALSA64_CRT_TRINITRON,  /* Trinitron de la sala (Sony KV-29), sin cable */
 	SALSA64_CRTS
 };
 
@@ -41,6 +42,12 @@ struct salsa64_filter_src {
 	rsxkit_rect region;  /* lo que se ve, en texeles */
 	uint32_t factor;     /* texeles por píxel del juego (1 a 6) */
 	float aspect;        /* forma de la imagen en la tele (4/3) */
+	/* Con has_gen, un número que cambia cada vez que algo escribe en la
+	 * imagen (salsa64_rdp_present_source): con el mismo, la misma textura y
+	 * la misma región, el filtro no rehace sus tablas y solo dibuja su
+	 * pasada final. */
+	bool has_gen;
+	uint32_t gen;
 };
 
 /* Dibuja la imagen con el filtro CRT `f` en la pantalla del cuadro en curso y
@@ -49,6 +56,19 @@ struct salsa64_filter_src {
  * filtro. La primera vez con cada tamaño espera al RSX para reservar sus
  * tablas. */
 bool salsa64_filters_draw(int f, const struct salsa64_filter_src *src, rsxkit_rect *out);
+
+/* Lo que tardaría (estimado, en ms) en preparar el filtro f para esta
+ * imagen antes de dibujarla: tablas, programas y, la primera vez de cada
+ * filtro, la comprobación en el RSX. 0 si ya está listo. Para avisar en
+ * pantalla antes de un trabajo largo. */
+uint32_t salsa64_filters_setup_ms(int f, const struct salsa64_filter_src *src);
+
+/* Opciones de medición y diagnóstico. `captures`: la primera vez de cada
+ * filtro y alto de pantalla, guarda la imagen que entra al filtro y la que
+ * dibuja en SALSA64_DATA_DIR/filtro-<clave>-<alto>-fuente.ppm y
+ * -pantalla.ppm (el RSX las copia a la memoria principal y otro hilo las
+ * escribe). `reduce_passes`: rsxkit_post_reduce_passes (1 o 2). */
+void salsa64_filters_options(bool captures, int reduce_passes);
 
 /* Línea para el log con lo que tardó en el RSX cada pasada, en promedio
  * por cuadro, desde el llamado anterior (vacía las cuentas). false si en

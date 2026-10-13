@@ -1,11 +1,13 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — referencia de los filtros CRT originales del autor (sus shaders
- * de Shadertoy, v1.3 de máscara de sombra y v1.1 de CRT con cable), píxel
- * por píxel y en doble precisión, para comparar contra lo que dibujan las
- * pasadas del RSX (src/frontend/filters, docs/filtros.md).
+ * de Shadertoy, v1.3 de máscara de sombra y v1.1 de CRT con cable, y el
+ * Trinitron KV-29 de RetroMac: trinitron_fragment, la cuenta de su v6 de
+ * Shadertoy en una pasada), píxel por píxel y en doble precisión, para
+ * comparar contra lo que dibujan las pasadas del RSX (src/frontend/filters,
+ * docs/filtros.md).
  *
- *   crt-ref mascara|rgb|svideo|compuesto ENTRADA.ppm ANCHO ALTO SALIDA.ppm
+ *   crt-ref mascara|rgb|svideo|compuesto|trinitron ENTRADA.ppm ANCHO ALTO SALIDA.ppm
  *       la imagen del juego (a su resolución) filtrada a una pantalla de
  *       ANCHO × ALTO, con la forma 4:3 centrada; con el sufijo «-rsx»
  *       (mascara-rsx…), el resplandor como lo hace el RSX: en una rejilla
@@ -327,14 +329,12 @@ static v3 mask_pixel(double fx, double fy, double W, double H)
 #define T_SOFT 0.45
 #define T_MS 1.00
 #define T_KB 0.65
-#define T_BMIN 0.20
-#define T_BMAX 0.55
-#define T_GLOW 0.12
 #define T_GLOWR 2.0
-#define T_BRIGHT 1.15
-#define T_SAT 1.00
+/* Lo que cambia entre el tubo del cable (tv13) y el Trinitron (kv29). */
+static double t_bmin = 0.20, t_bmax = 0.55, t_glow = 0.12, t_bright = 1.15, t_sat = 1.00;
+#define K_HBLUR 0.40
 
-static int cable;
+static int cable, trin;
 
 static v3 hold(double x, double y, double w)
 {
@@ -402,8 +402,8 @@ static v3 cable_line(double y, double x)
 
 static v3 beam_sigma(v3 c)
 {
-	return V(mixd(T_BMIN, T_BMAX, sqrt(clampd(c.x, 0, 1))) * 0.5, mixd(T_BMIN, T_BMAX, sqrt(clampd(c.y, 0, 1))) * 0.5,
-		 mixd(T_BMIN, T_BMAX, sqrt(clampd(c.z, 0, 1))) * 0.5);
+	return V(mixd(t_bmin, t_bmax, sqrt(clampd(c.x, 0, 1))) * 0.5, mixd(t_bmin, t_bmax, sqrt(clampd(c.y, 0, 1))) * 0.5,
+		 mixd(t_bmin, t_bmax, sqrt(clampd(c.z, 0, 1))) * 0.5);
 }
 
 static v3 beam_profile(v3 c, double d)
@@ -446,6 +446,20 @@ static v3 c_fetch(double x, double y)
 	return powv(mixv(a0, a1, fy), GIN);
 }
 
+/* Trinitron: la scanline y vista en x, ya lineal, con el desenfoque del haz
+ * a lo ancho (crtScanline: 5 texeles con peso gaussiano, normalizados). */
+static v3 trin_line(double y, double x)
+{
+	double cx = floor(x) + 0.5, ws = 0.0;
+	v3 sum = V(0, 0, 0);
+	for (int i = -2; i <= 2; i++) {
+		double px = cx + i, d = px - x, w = exp(-0.5 * d * d / (K_HBLUR * K_HBLUR));
+		sum = add(sum, mul(c_fetch(px, y), w));
+		ws += w;
+	}
+	return mul(sum, 1.0 / ws);
+}
+
 static v3 cable_pixel(double fx, double fy, double W, double H)
 {
 	double px = fx / W * src_w, py = fy / H * src_h;
@@ -459,8 +473,8 @@ static v3 cable_pixel(double fx, double fy, double W, double H)
 	v3 mn = V(mixd(1, g.x / avg.x, T_MS), mixd(1, g.y / avg.y, T_MS), mixd(1, g.z / avg.z, T_MS));
 	v3 peak = V(mixd(1, 1 / avg.x, T_MS), mixd(1, 1 / avg.y, T_MS), mixd(1, 1 / avg.z, T_MS));
 	double y0 = floor(py - 0.5) + 0.5, y1 = y0 + 1.0;
-	v3 c0 = sat_adjust(powv(cable_line(y0, px), GIN), T_SAT);
-	v3 c1 = sat_adjust(powv(cable_line(y1, px), GIN), T_SAT);
+	v3 c0 = sat_adjust(trin ? trin_line(y0, px) : powv(cable_line(y0, px), GIN), t_sat);
+	v3 c1 = sat_adjust(trin ? trin_line(y1, px) : powv(cable_line(y1, px), GIN), t_sat);
 	v3 s0 = beam_sigma(c0), s1 = beam_sigma(c1);
 	v3 m0 = V(dmask1(c0.x, s0.x, mn.x, peak.x), dmask1(c0.y, s0.y, mn.y, peak.y), dmask1(c0.z, s0.z, mn.z, peak.z));
 	v3 m1 = V(dmask1(c1.x, s1.x, mn.x, peak.x), dmask1(c1.y, s1.y, mn.y, peak.y), dmask1(c1.z, s1.z, mn.z, peak.z));
@@ -474,8 +488,8 @@ static v3 cable_pixel(double fx, double fy, double W, double H)
 			glow = add(glow, c_fetch(px + cos(a) * rad, py + sin(a) * rad));
 		}
 	}
-	col = add(col, mul(glow, T_GLOW / 12.0));
-	col = mul(col, T_BRIGHT);
+	col = add(col, mul(glow, t_glow / 12.0));
+	col = mul(col, t_bright);
 	col = V(clampd(col.x, 0, 1), clampd(col.y, 0, 1), clampd(col.z, 0, 1));
 	return powv(col, 1.0 / GOUT);
 }
@@ -531,7 +545,7 @@ int main(int argc, char **argv)
 	if (argc >= 4 && !strcmp(argv[1], "compara"))
 		return compare(argv[2], argv[3], argc > 4 ? argv[4] : NULL);
 	if (argc != 6) {
-		fprintf(stderr, "uso: crt-ref mascara|rgb|svideo|compuesto ENTRADA.ppm ANCHO ALTO SALIDA.ppm\n"
+		fprintf(stderr, "uso: crt-ref mascara|rgb|svideo|compuesto|trinitron ENTRADA.ppm ANCHO ALTO SALIDA.ppm\n"
 				"     crt-ref compara A.ppm B.ppm [DIFERENCIA.ppm]\n");
 		return 2;
 	}
@@ -544,6 +558,14 @@ int main(int argc, char **argv)
 	}
 	int mask = !strcmp(mode, "mascara");
 	cable = !strcmp(mode, "svideo") ? 1 : !strcmp(mode, "compuesto") ? 2 : 0;
+	trin = !strcmp(mode, "trinitron");
+	if (trin) {
+		t_bmin = 0.22;
+		t_bmax = 0.62;
+		t_glow = 0.15;
+		t_bright = 1.10;
+		t_sat = 1.05;
+	}
 	src_px = read_ppm(argv[2], &src_w, &src_h);
 	if (!src_px) {
 		fprintf(stderr, "crt-ref: no se puede leer %s\n", argv[2]);

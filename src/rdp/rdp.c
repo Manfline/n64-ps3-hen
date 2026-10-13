@@ -142,6 +142,11 @@ static struct {
 	uint32_t zeta_bytes;         /* profundidad de la pantalla agrandada (apply_scale), en el tope */
 	uint32_t surf_bytes[RDP_TARGETS_MAX];
 	uint32_t surf_scale[RDP_TARGETS_MAX];  /* escala de la superficie de cada ranura */
+	/* Cambia cada vez que algo escribe en la superficie de la ranura (un
+	 * dibujo, la carga desde la RDRAM, crearla): para no rehacer lo que
+	 * se calcula de una imagen que no cambió (salsa64_rdp_present_source). */
+	uint32_t surf_gen[RDP_TARGETS_MAX];
+	uint32_t gen_seq;
 	uint8_t *pool;
 	uint32_t pool_off;
 	uint8_t *cache;              /* región de la caché de texturas */
@@ -682,6 +687,7 @@ static void prime(int i)
 	    RSXKIT_OK) {
 		rdp.bound_t = -1;  /* rsxkit_target_fill ligó la superficie sin profundidad */
 		rdp.stats.primes++;
+		rdp.surf_gen[i] = ++rdp.gen_seq;
 	}
 }
 
@@ -802,6 +808,7 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
 	}
 	rdp.surf_bytes[i] = bytes;
 	rdp.surf_scale[i] = sc;
+	rdp.surf_gen[i] = ++rdp.gen_seq;
 	rdp.vram += bytes;
 	LOGN(40, "gfx: destino %06x/%u: %u × %u a %u× (%s; alto pedido %u; %u KB vivos)", addr, width, t->lw, t->lh, sc,
 	     rdp.last_get.how, min_lh, rdp.vram >> 10);
@@ -1295,6 +1302,7 @@ static void translate(uint32_t n)
 					rsxkit_clear(RSXKIT_CLEAR_COLOR, color, 0.0f, rect);
 					rdp_targets_drawn(&rdp.tg, i);
 					drawn[i] = true;
+					rdp.surf_gen[i] = ++rdp.gen_seq;
 					rdp.surf_dirty[i] = true;
 					if ((uint32_t)(yb + 0.999f) > drawn_rows[i])
 						drawn_rows[i] = (uint32_t)(yb + 0.999f);
@@ -1336,6 +1344,7 @@ static void translate(uint32_t n)
 				break;
 			rdp_targets_drawn(&rdp.tg, cur);
 			drawn[cur] = true;
+			rdp.surf_gen[cur] = ++rdp.gen_seq;
 			rdp.surf_dirty[cur] = true;
 			/* Hasta qué fila llega el dibujo: lo más bajo de sus vértices,
 			 * limitado por las tijeras (las copias a la RDRAM escriben solo
@@ -1718,7 +1727,7 @@ void salsa64_rdp_present_draw(bool draw)
 }
 
 bool salsa64_rdp_present_source(const rsxkit_view *view, const struct salsa64_overscan *crop, rsxkit_texture *tex,
-				rsxkit_rect *region, uint32_t *scale)
+				rsxkit_rect *region, uint32_t *scale, uint32_t *gen)
 {
 	if (!rdp.ready || !rdp.again.surf || rdp.surf[rdp.again.slot] != rdp.again.surf)
 		return false;
@@ -1727,6 +1736,8 @@ bool salsa64_rdp_present_source(const rsxkit_view *view, const struct salsa64_ov
 	rsxkit_target_texture(rdp.again.surf, 0, 0, tex);
 	*region = rdp.again.src;
 	*scale = rdp.again.scale ? rdp.again.scale : 1;
+	if (gen)
+		*gen = rdp.surf_gen[rdp.again.slot];
 	return true;
 }
 

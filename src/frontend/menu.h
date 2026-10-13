@@ -89,6 +89,7 @@ enum menu_filter {
 	MENU_FILTER_CRT_RGB,        /* CRT con cable RGB */
 	MENU_FILTER_CRT_SVIDEO,     /* CRT con cable S-Video */
 	MENU_FILTER_CRT_COMPOSITE,  /* CRT con cable compuesto */
+	MENU_FILTER_CRT_TRINITRON,  /* CRT Trinitron de la sala (Sony KV-29), sin cable */
 	MENU_FILTERS,
 };
 

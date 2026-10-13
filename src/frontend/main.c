@@ -224,11 +224,25 @@ SYS_PROCESS_PARAM(1001, 0x100000);
  * …»). Con el archivo `filtro` (una clave, p. ej. «crt-mascara»), ese,
  * también en las pruebas automáticas; con `filtros-ciclo`, todos por turnos
  * cada FILTER_CYCLE_US, para medirlos (el log dice cuánto tarda cada uno en
- * el RSX); con `capturas-pantalla`, las capturas periódicas guardan además
- * la pantalla entera como se ve (con el filtro) en pantalla-N.ppm. */
-#define FILTER_PATH       SALSA64_DATA_DIR "/filtro"
-#define FILTER_CYCLE_PATH SALSA64_DATA_DIR "/filtros-ciclo"
-#define FILTER_CYCLE_US   20000000u
+ * el RSX; cada vuelta cambia la reducción entre dos pasadas y una, si no
+ * la fija `filtros-reducir`); con `filtros-capturas`, la primera vez de cada
+ * filtro guarda la imagen que entra y la que sale (filtro-<clave>-<alto>-
+ * fuente.ppm y -pantalla.ppm); con `filtros-reducir` («1» o «2»), la
+ * reducción en esas pasadas; con `capturas-pantalla`, las capturas
+ * periódicas guardan además la pantalla entera como se ve (con el filtro)
+ * en pantalla-N.ppm. */
+#define FILTER_PATH        SALSA64_DATA_DIR "/filtro"
+#define FILTER_CYCLE_PATH  SALSA64_DATA_DIR "/filtros-ciclo"
+#define FILTER_SHOTS_PATH  SALSA64_DATA_DIR "/filtros-capturas"
+#define FILTER_REDUCE_PATH SALSA64_DATA_DIR "/filtros-reducir"
+#define FILTER_CYCLE_US    20000000u
+/* Preparar un filtro que tarde más que esto (ms) se avisa en pantalla. */
+#define FILTER_NOTICE_MS   33u
+/* Con un CRT la escala interna no pasa de esta (lo elegido menor se
+ * respeta): el filtro ve la imagen a la resolución de la consola y más
+ * escala solo le llega como supermuestreo; a 3× ya no se nota y a 5× el
+ * RSX no alcanza a 1080p (docs/perf-log.md, «Filtros CRT en el RSX»). */
+#define CRT_SCALE_MAX      3
 #define SHOTS_FULL_PATH   SALSA64_DATA_DIR "/capturas-pantalla"
 #define FILTER_VIEW_PATH  SALSA64_DATA_DIR "/filtro-ver"
 /* Con este archivo, la RDRAM emulada sale de sysMemoryAllocate con páginas
@@ -1739,7 +1753,11 @@ static struct {
 	int sel;        /* el elegido (menu.cfg o el archivo `filtro`) */
 	int cur;        /* el que se usa: sel, o el del ciclo de medición */
 	bool cycle;     /* filtros-ciclo */
+	int cycle_reduce;  /* el ciclo alterna la reducción (1 o 2 pasadas) en cada vuelta; 0: no */
+	int cycle_list[SALSA64_CRTS];  /* los del ciclo, desde «Ninguno» */
+	int cycle_n, cycle_i;
 	bool full_shots;
+	bool announced; /* se avisó «Aplicando filtro…»: la preparación va en este cuadro */
 	uint64_t t_cycle;
 	bool pending;   /* este cuadro va con filtro: falta dibujarlo */
 	bool plain;     /* ... y ya tiene la imagen sin filtro */
@@ -1830,7 +1848,7 @@ static bool filter_source(bool rsx, const struct salsa64_vi_frame *shown)
 	memset(s, 0, sizeof *s);
 	s->aspect = pres.view.aspect;
 	if (rsx)
-		return salsa64_rdp_present_source(NULL, NULL, &s->tex, &s->region, &s->factor);
+		return (s->has_gen = salsa64_rdp_present_source(NULL, NULL, &s->tex, &s->region, &s->factor, &s->gen));
 	if (!rsxkit_fb_texture(pres.fb, &s->tex))
 		return false;
 	s->region = (rsxkit_rect){ 0, 0, shown->width, shown->height };
@@ -1845,7 +1863,33 @@ static bool filter_source_again(const struct salsa64_overscan *crop)
 	struct salsa64_filter_src *s = &flt.src;
 	memset(s, 0, sizeof *s);
 	s->aspect = pres.view.aspect;
-	return salsa64_rdp_present_source(&pres.view, crop, &s->tex, &s->region, &s->factor);
+	return (s->has_gen = salsa64_rdp_present_source(&pres.view, crop, &s->tex, &s->region, &s->factor, &s->gen));
+}
+
+/* Si preparar el filtro va a tardar más de un par de cuadros (tablas
+ * nuevas, la comprobación de la primera vez), este cuadro va sin filtro
+ * con el aviso «Aplicando filtro…» y la preparación va en el siguiente:
+ * mientras, se ve el aviso y no una imagen quieta que parece colgada.
+ * true: este cuadro va sin filtro. */
+static bool filter_announce(uint64_t now)
+{
+	if (flt.announced || salsa64_filters_setup_ms(flt.cur, &flt.src) <= FILTER_NOTICE_MS)
+		return false;
+	flt.announced = true;
+	osd_notice(now, "Aplicando filtro…");
+	return true;
+}
+
+/* salsa64_filters_draw del filtro en curso; si se avisó «Aplicando
+ * filtro…», ya está: se quita el aviso. */
+static bool filter_draw(rsxkit_rect *r)
+{
+	bool ok = salsa64_filters_draw(flt.cur, &flt.src, r);
+	if (flt.announced) {
+		flt.announced = false;
+		osd_notice_clear();
+	}
+	return ok;
 }
 
 /* Dibuja el filtro del cuadro (o, si no se pudo, la imagen sin filtro). */
@@ -1853,7 +1897,7 @@ static void filter_finish(rsxkit_rect *r)
 {
 	if (!flt.pending)
 		return;
-	if (!salsa64_filters_draw(flt.cur, &flt.src, NULL))
+	if (!filter_draw(NULL))
 		filter_plain(r);
 	flt.pending = false;
 }
@@ -1890,12 +1934,40 @@ static void filter_setup(int menu_filter)
 		salsa64_filters_debug(NULL, 1.0f);
 	}
 	flt.cycle = file_exists(FILTER_CYCLE_PATH);
+	/* El ciclo: todos, o los de la lista que tenga el archivo (claves). */
+	flt.cycle_n = 0;
+	flt.cycle_list[flt.cycle_n++] = SALSA64_CRT_NONE;
+	f = flt.cycle ? fopen(FILTER_CYCLE_PATH, "r") : NULL;
+	if (f) {
+		char key[32];
+		while (flt.cycle_n < SALSA64_CRTS && fscanf(f, "%31s", key) == 1) {
+			int k = salsa64_crt_from_key(key);
+			if (k > SALSA64_CRT_NONE)
+				flt.cycle_list[flt.cycle_n++] = k;
+		}
+		fclose(f);
+	}
+	if (flt.cycle_n == 1)
+		for (int k = SALSA64_CRT_NONE + 1; k < SALSA64_CRTS; k++)
+			flt.cycle_list[flt.cycle_n++] = k;
+	flt.cycle_i = 0;
 	flt.full_shots = file_exists(SHOTS_FULL_PATH);
 	if (flt.cycle)
 		flt.cur = SALSA64_CRT_NONE;
 	flt.t_cycle = sysGetSystemTime();
+	int passes = 2;
+	f = fopen(FILTER_REDUCE_PATH, "r");
+	if (f) {
+		if (fscanf(f, "%d", &passes) != 1 || (passes != 1 && passes != 2))
+			passes = 2;
+		fclose(f);
+	} else if (flt.cycle) {
+		flt.cycle_reduce = 2;
+	}
+	salsa64_filters_options(file_exists(FILTER_SHOTS_PATH), passes);
 	salsa64_log("filtros: %s%s%s", flt.cycle ? "ciclo de medición (todos cada 20 s, desde «Ninguno»)" : "",
-		    flt.cycle ? "" : salsa64_crt_name(flt.cur),
+		    flt.cycle ? (flt.cycle_reduce ? "; cada vuelta cambia la reducción (dos pasadas, una, …)" : "")
+			      : salsa64_crt_name(flt.cur),
 		    flt.full_shots ? "; capturas de la pantalla entera (pantalla-N.ppm)" : "");
 }
 
@@ -1906,6 +1978,7 @@ static void filter_select(int crt)
 	if (flt.cycle || crt < SALSA64_CRT_NONE || crt >= SALSA64_CRTS || crt == flt.cur)
 		return;
 	flt.sel = flt.cur = crt;
+	flt.announced = false;
 	salsa64_log("filtros: «%s»", salsa64_crt_name(crt));
 }
 
@@ -1915,7 +1988,14 @@ static void filter_cycle(uint64_t now)
 	if (!flt.cycle || now - flt.t_cycle < FILTER_CYCLE_US)
 		return;
 	flt.t_cycle = now;
-	flt.cur = (flt.cur + 1) % SALSA64_CRTS;
+	flt.cycle_i = (flt.cycle_i + 1) % flt.cycle_n;
+	flt.cur = flt.cycle_list[flt.cycle_i];
+	if (flt.cur == SALSA64_CRT_NONE && flt.cycle_reduce) {
+		flt.cycle_reduce = 3 - flt.cycle_reduce;
+		rsxkit_post_reduce_passes(flt.cycle_reduce);
+		salsa64_log("filtros: ciclo, otra vuelta: reducir en %d pasada%s", flt.cycle_reduce,
+			    flt.cycle_reduce == 1 ? "" : "s");
+	}
 	salsa64_log("filtros: ciclo → «%s»", salsa64_crt_name(flt.cur));
 	osd_notice(now, "Filtro: %s", salsa64_crt_name(flt.cur));
 }
@@ -2005,6 +2085,8 @@ static struct {
 } img;
 static int rdp_scale_req;  /* escala interna pedida al RDP ahora (0: automática) */
 static struct menu_settings video_cfg;  /* video y escala que corren (video.cfg al arrancar o lo último aplicado) */
+static int scale_wanted(void);
+static const char *scale_label(char *buf, size_t n);
 
 static void present_overlay(uint64_t now)
 {
@@ -2028,8 +2110,8 @@ static void present_overlay(uint64_t now)
 		struct osd_image_menu im = {
 			pause_ctl.image_sel,
 			{ menu_filter_name(img.filter), menu_aspect_name(img.aspect), menu_overscan_name(img.crop),
-			  menu_scale_name(img.scale, video_cfg.resolution, sbuf, sizeof sbuf) },
-			img.scale != rdp_scale_req, img.source != NULL, menu_filter_credit(img.filter),
+			  scale_label(sbuf, sizeof sbuf) },
+			scale_wanted() != rdp_scale_req, img.source != NULL, menu_filter_credit(img.filter),
 		};
 		osd_image_menu_draw(&im, ui_lw, ui_lh);
 	} else if (pause_ctl.dialog)
@@ -2085,7 +2167,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		if (salsa64_rdp_present(&m->f, m->field, &pres.view, &crop, &r)) {
 			pres.rsx_frames++;
 			pres.still = STILL_RSX;
-			flt.pending = filt && filter_source(true, &shown);
+			flt.pending = filt && filter_source(true, &shown) && !filter_announce(now);
 			if (filt && !flt.pending)
 				salsa64_rdp_present_again(NULL, NULL, &r);
 			if (gfxtest_on && pres.result == SELFTEST_RUNNING)
@@ -2096,7 +2178,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 			rsxkit_fb_upload(pres.fb, snap_buf[slot] + crop.top * line + crop.left * m->f.bpp, shown.width,
 					 shown.height, line, m->f.bpp == 4 ? RSXKIT_RGBA8888 : RSXKIT_RGBA5551);
 			pres.still = STILL_FB;
-			flt.pending = filt && filter_source(false, &shown);
+			flt.pending = filt && filter_source(false, &shown) && !filter_announce(now);
 			if (!flt.pending)
 				rsxkit_fb_draw(pres.fb, &pres.view, &r);
 		} else {
@@ -2242,13 +2324,14 @@ static void present_still(void)
 	r.w = 0;
 	bool filt = flt.cur != SALSA64_CRT_NONE && !filter_tests();
 	if (pres.still == STILL_RSX) {
-		if (!(filt && filter_source_again(&crop) && salsa64_filters_draw(flt.cur, &flt.src, &r)) &&
+		if (!(filt && filter_source_again(&crop) && !filter_announce(now) && filter_draw(&r)) &&
 		    !salsa64_rdp_present_again(&pres.view, &crop, &r))
 			pres.still = STILL_NONE;  /* el destino se soltó: negro */
 	} else if (pres.still == STILL_FB) {
 		rsxkit_texture t;
 		if (!(filt && rsxkit_fb_texture(pres.fb, &t) &&
-		      (flt.src.tex = t, flt.src.factor = 1, salsa64_filters_draw(flt.cur, &flt.src, &r))))
+		      (flt.src.tex = t, flt.src.factor = 1, flt.src.has_gen = false, !filter_announce(now)) &&
+		      filter_draw(&r)))
 			rsxkit_fb_draw(pres.fb, &pres.view, &r);
 	}
 	if (r.w)
@@ -2719,7 +2802,7 @@ static void pause_update(void)
 			    (want & PAUSECTL_SYSTEM) && (want & ~PAUSECTL_SYSTEM) ? " y " : "",
 			    want & PAUSECTL_CONFIRM ? "cuadro de salir" : "", want & PAUSECTL_PANEL ? "lista de trucos" : want & PAUSECTL_MENU ? "menú de pausa" : "");
 	} else if (!want) {
-		if (img.scale != rdp_scale_req)
+		if (scale_wanted() != rdp_scale_req)
 			image_scale_apply();  /* con la emulación todavía quieta */
 		audio_out_pause(false);
 		salsa64_log("pausa: la emulación sigue tras %.1f s (%u cuadros repetidos, emulación %s)",
@@ -2798,7 +2881,7 @@ static int view_crt;
  * para los demás. Para cambiarlo en vivo: filter_select(menu_filter_crt(f)). */
 static int menu_filter_crt(int filter)
 {
-	return filter >= MENU_FILTER_CRT_MASK && filter <= MENU_FILTER_CRT_COMPOSITE
+	return filter >= MENU_FILTER_CRT_MASK && filter <= MENU_FILTER_CRT_TRINITRON
 		       ? SALSA64_CRT_MASK + (filter - MENU_FILTER_CRT_MASK)
 		       : SALSA64_CRT_NONE;
 }
@@ -2817,6 +2900,27 @@ static void rdp_scale_set(int scale, const char *why)
 	uint32_t es = salsa64_rdp_scale(&cut);
 	salsa64_log("escala interna: %u× (%s%s), %s", es, scale ? "pedida" : "automática",
 		    cut ? ", reducida por memoria del RSX" : "", why);
+}
+
+/* Si la escala elegida (img.scale; 0 automática) pasa de CRT_SCALE_MAX con
+ * un CRT en pantalla (o con el ciclo de medición, que los pasa todos). */
+static bool scale_capped(void)
+{
+	bool crt = !filter_tests() && (flt.cycle || flt.cur != SALSA64_CRT_NONE);
+	int chosen = img.scale ? img.scale : video_cfg.resolution == MENU_RES_1080P ? 4 : 3;  /* menu_scale_name */
+	return crt && chosen > CRT_SCALE_MAX;
+}
+
+/* La escala que se le pide al RDP: la elegida o, con un CRT, el tope. */
+static int scale_wanted(void)
+{
+	return scale_capped() ? CRT_SCALE_MAX : img.scale;
+}
+
+/* La escala para mostrar: la elegida o «3× (tope con CRT)». */
+static const char *scale_label(char *buf, size_t n)
+{
+	return scale_capped() ? "3× (tope con CRT)" : menu_scale_name(img.scale, video_cfg.resolution, buf, n);
 }
 
 /* Lo de img a la presentación: vista (aspecto y filtro), líneas de barrido
@@ -2840,9 +2944,9 @@ static void view_log(const char *what)
 	char sc[16] = "automática";
 	if (img.scale)
 		snprintf(sc, sizeof sc, "%d×", img.scale);
-	salsa64_log("imagen: %s, filtro %s, recorte %u %u %u %u, escala %s%s",
+	salsa64_log("imagen: %s, filtro %s, recorte %u %u %u %u, escala %s%s%s",
 		    img.aspect == MENU_ASPECT_16_9 ? "16:9 estirada" : "4:3", menu_filter_name(img.filter), overscan.left,
-		    overscan.right, overscan.top, overscan.bottom, sc, what);
+		    overscan.right, overscan.top, overscan.bottom, sc, scale_capped() ? " (con el CRT, 3×)" : "", what);
 }
 
 /* Aspecto, filtro, recorte y escala del juego: lo suyo (juegos/) o, si no,
@@ -2880,7 +2984,6 @@ static void load_view(const char *source)
 	view_apply();
 	scan_r.w = 0;
 	scan_lines = 0;
-	rdp_scale_set(img.scale, "al abrir el juego");
 	view_log(g.aspect >= 0 || g.filter >= 0 || g.overscan >= 0 || g.scale >= 0 ? " (con ajustes de este juego)" : "");
 }
 
@@ -2950,12 +3053,13 @@ static void image_scale_apply(void)
 		sysUsleep(2000);  /* una pausa cortísima: que termine su campo */
 	if (!emu_paused) {
 		salsa64_log("escala interna: la emulación no se detuvo; queda %d", rdp_scale_req);
-		img.scale = rdp_scale_req;
+		if (!scale_capped())
+			img.scale = rdp_scale_req;
 		return;
 	}
-	rdp_scale_set(img.scale, "menú de pausa");
+	rdp_scale_set(scale_wanted(), scale_capped() ? "menú de pausa, tope de 3× con un CRT" : "menú de pausa");
 	char sbuf[24];
-	osd_notice(sysGetSystemTime(), "Escala interna: %s", tr(menu_scale_name(img.scale, video_cfg.resolution, sbuf, sizeof sbuf)));
+	osd_notice(sysGetSystemTime(), "Escala interna: %s", tr(scale_label(sbuf, sizeof sbuf)));
 }
 
 /* Lo que es de un juego vuelve a como al arrancar el programa: colas entre
@@ -3447,6 +3551,8 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	/* overscan.cfg: en cada juego (se cambia desde las Opciones del menú). */
 	load_overscan();
 	load_view(source);
+	filter_setup(view_crt);  /* antes de la escala: el CRT la limita */
+	rdp_scale_set(scale_wanted(), scale_capped() ? "al abrir el juego, tope de 3× con un CRT" : "al abrir el juego");
 	load_cheats(source);
 	if (selftest_on)
 		selftest_start();
@@ -3536,7 +3642,6 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	fps.on = fps_setting_load();
 	osd_fps_reset(&fps);
 	pause_ctl.confirm = confirm_setting_load();
-	filter_setup(view_crt);
 	sys_no_pause = file_exists(NO_PAUSE_PATH);
 	if (sys_no_pause)
 		salsa64_log("pausa: %s presente, el menú del sistema no pausa la emulación (diagnóstico)", NO_PAUSE_PATH);
