@@ -111,9 +111,9 @@ gfxtest); los trucos igual hay que activarlos a mano.
 **Licencias.** Los archivos nuevos son GPLv2+. `cover.c` sigue a puff.c
 función por función: se trata como versión modificada y lleva el aviso de
 zlib (`GPL-2.0-or-later AND Zlib`; docs/THIRD_PARTY.md). Sus cambios en
-`lib/rsxkit` (ranura de imagen del 2D) deben quedar **MIT** como el resto de
-la biblioteca: se le pidió su conformidad y **la publicación espera esa
-respuesta** (hasta entonces, no subir la rama al repo público).
+`lib/rsxkit` (ranura de imagen del 2D: `ui.h`, `ui.c`, `ui_geom.c`) quedan
+bajo **MIT** como el resto de la biblioteca, con su conformidad (dada por
+correo el 2026-10-13); nada impide publicarlos.
 
 Falta en la PS3 real (paquete SLSA00110 «Salsa64 extras», al lado del
 oficial): menú con carátulas, un truco simple, aspecto 16:9, filtros
