@@ -1,5 +1,43 @@
 # Estado
 
+## 2026-10-12 (cierre del día) — Para retomar
+
+Publicadas hoy: **v0.2.0** (DK64 al 100 %, Majora con FlashRAM y efectos,
+desenfoque de Perfect Dark, Star Fox, botón PS), **v0.2.1** (cámara de DK64
+por el borrado de la Z en la RDRAM, Navi y antorchas de Zelda, tarea JPEG en
+un SPE vectorizada) y **v0.2.2** (código compacto del recompilador: presa de
+GoldenEye +6…+12 % de campos/s; Z en los dos gatillos con `Z = L2 R2`;
+muestreo por tiempo con el archivo `muestreo`). Notas en `CHANGELOG.md`.
+
+En la PS3 del autor quedan: `controles.cfg` con `Z = L2 R2`; los perfiles de
+13 juegos en `perfiles/`; todas las banderas de prueba en `.off`.
+
+En curso:
+- **Recompilador RSP → SPU** (rama aparte, paquete SLSA00107 «Salsa64 RSP»):
+  Diddy Kong Racing ya dibuja en la PS3 con el microcódigo real traducido
+  (80 ns por instrucción del RSP, 2,4× el intérprete), pero va al ~13 %:
+  mandan las salidas al intérprete por COP0 (~10 000 por tarea), los cortes
+  con el registro de tramos lleno y el RDP en el PPE. Error abierto: al salir
+  del juego con el LLE activo la app se queda en el cierre (el paro del SPE
+  espera). Después: LLE a resolución alta, Indiana Jones (MusyX).
+- **Caché del PPE, ronda 2** (rama aparte, paquete SLSA00108 «Salsa64
+  caché»): medición fina de las esperas, sección fría fuera del cuerpo y
+  predicción guiada por los perfiles (trazas por el sucesor dominante, pistas
+  de salto, precarga del sucesor, pila de retorno). Plan en
+  `docs/cache-ppe.md`.
+
+Pendientes (censo del día y reportes): Super Smash Bros. se congela en el
+primer KO (z-buffer usado como color image, entrada de abajo); Banjo-Tooie
+y F-Zero X en negro (arranque 6105/6106); Kirby 64 y Pokémon Stadium 2 con
+texturas con ruido (estado de Stadium 2 en la ranura 0); Pokémon Snap con
+texturas estiradas; sombras cuadradas de Conker y su espera de ~25 s al
+arrancar (comparar con mupen64plus); luces puntuales de Majora (la luz salta
+entre fuentes al caminar: probable falta de luces puntuales en la HLE de
+F3DZEX); cadencia de la presentación (campos saltados cuando la emulación va
+sobrada); Doom 64 al ~40 % (instrucciones interpretadas); estados
+comprimidos; Rumble Pak y Controller Pak; Fase 5 (medir el margen del RSX a
+5×, multimuestreo para GoldenEye, filtros CRT).
+
 ## 2026-10-13 — Recompilador: código compacto, 20,2 → 15,6 palabras de PPC por instrucción MIPS (rama `sleepy-mestorf`, paquete SLSA00106 «Salsa64 compacto»)
 
 Sigue a la medición del perfil persistente (2026-10-12): juntar los bloques
