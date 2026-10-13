@@ -211,13 +211,16 @@ SYS_PROCESS_PARAM(1001, 0x100000);
  * fallos de TLB (docs/perf-log.md). El tamaño de página real de cada zona
  * se anota en el log al arrancar (sys_memory_get_page_attribute). */
 #define RDRAM_1M_PATH SALSA64_DATA_DIR "/rdram-1m"
-/* Perfil persistente del recompilador (cpu/rec_profile.h): un archivo por
+/* Perfil persistente del recompilador (cpu/rec_profile->h): un archivo por
  * juego en PROFILE_DIR con cuántas veces entra la ejecución a cada bloque;
- * en la sesión siguiente los bloques calientes se compilan juntos. El
- * archivo `sin-perfil` lo apaga; `perfil.cfg` (`caliente = KB`) dimensiona
- * la zona caliente (docs/uso-ps3.md, docs/rec-ppe.md). */
+ * en la sesión siguiente los bloques calientes se compilan juntos. Apagado
+ * por omisión (medido en la PS3 el 2026-10-12: contar cuesta ~5 % y juntar
+ * los calientes no gana nada; docs/perf-log.md): el archivo `perfil-activo`
+ * lo enciende, y entonces se reserva la tabla y el código generado cuenta;
+ * `perfil.cfg` (`caliente = KB`, `saltos = si|no`) dimensiona la zona
+ * caliente y el registro de sitios (docs/uso-ps3.md, docs/rec-ppe.md). */
 #define PROFILE_DIR      SALSA64_DATA_DIR "/perfiles"
-#define NO_PROFILE_PATH  SALSA64_DATA_DIR "/sin-perfil"
+#define PROFILE_ON_PATH  SALSA64_DATA_DIR "/perfil-activo"
 #define PROFILE_CFG_PATH SALSA64_DATA_DIR "/perfil.cfg"
 #define PROFILE_HOT_KB   1024u            /* zona caliente por omisión */
 #define PROFILE_SAVE_US  120000000ull     /* escritura periódica, además de la del cierre */
@@ -252,13 +255,13 @@ static struct salsa64_n64 n64;
 static struct salsa64_rec rec;
 static struct salsa64_rec_prof rec_prof, rec_prof_prev;  /* perfil del recompilador (SALSA64_RECPROF_FLAG) */
 static bool use_rec;  /* el CPU corre con el recompilador */
-static struct salsa64_rec_profile rec_profile;          /* perfil persistente por juego (1 MB) */
+static struct salsa64_rec_profile *rec_profile;         /* perfil persistente por juego (1,4 MB; solo con perfil-activo) */
 static struct salsa64_rec_profile_writer rec_profile_w; /* su escritura por trozos (hilo de presentación) */
 static struct {
 	bool on;                  /* hay perfil para este juego (rec.profile) */
 	char path[SALSA64_RPF_PATH_MAX];
 	uint64_t t_saved;         /* cuándo empezó la última escritura periódica */
-	uint64_t session_saved;   /* rec_profile.session en esa escritura */
+	uint64_t session_saved;   /* rec_profile->session en esa escritura */
 	uint32_t fold_fields;     /* campos desde la última suma al perfil */
 	uint32_t saves, save_errors;
 } rprof;
@@ -1830,10 +1833,10 @@ static void stats(uint64_t now)
 				    "(%u sin lugar), %llu bloques en la zona caliente (%u de %u KB en la mitad %u, %llu no "
 				    "cupieron, %llu desalojos de mitad), %llu entradas a bloques contadas, %u escrituras (%u "
 				    "fallidas)",
-				    rec_profile.count, rec_profile.hot_entries, rec_profile.full, rec_profile.nsites,
-				    rec_profile.sites_full, (unsigned long long)st->hot_placed, salsa64_rec_hot_used(&rec) / 256,
+				    rec_profile->count, rec_profile->hot_entries, rec_profile->full, rec_profile->nsites,
+				    rec_profile->sites_full, (unsigned long long)st->hot_placed, salsa64_rec_hot_used(&rec) / 256,
 				    rec.hot_words / 256, rec.cur_hot, (unsigned long long)st->hot_full,
-				    (unsigned long long)st->hot_evictions, (unsigned long long)rec_profile.session, rprof.saves,
+				    (unsigned long long)st->hot_evictions, (unsigned long long)rec_profile->session, rprof.saves,
 				    rprof.save_errors);
 		if (rec.prof) {
 			char text[2048];
@@ -2088,7 +2091,7 @@ static void game_reset(void)
  * HLE gráfica (espera la tarea en vuelo) y el LLE con sus SPEs, el
  * recompilador, las colas entre hilos y los destinos del RSX. Termina con
  * una línea que dice si quedó algo en vuelo. */
-/* ---- Perfil persistente del recompilador (cpu/rec_profile.h) ----------------- */
+/* ---- Perfil persistente del recompilador (cpu/rec_profile->h) ----------------- */
 
 /* perfil.cfg: `caliente = KB` (0: contar sin zona caliente) y `saltos =
  * si|no` (registrar los sitios de salida de los bloques calientes). */
@@ -2120,8 +2123,14 @@ static void profile_open(const uint8_t *rom)
 	memset(&rec_profile_w, 0, sizeof rec_profile_w);
 	if (!use_rec)
 		return;
-	if (file_exists(NO_PROFILE_PATH)) {
-		salsa64_log("perfil del recompilador: apagado (%s)", NO_PROFILE_PATH);
+	if (!file_exists(PROFILE_ON_PATH)) {
+		salsa64_log("perfil del recompilador: apagado (sin %s)", PROFILE_ON_PATH);
+		return;
+	}
+	/* La tabla, la primera vez que se enciende (fuera del bucle de
+	 * emulación); queda para los juegos siguientes. */
+	if (!rec_profile && !(rec_profile = memalign(128, sizeof *rec_profile))) {
+		salsa64_log("perfil del recompilador: sin memoria para la tabla (%zu bytes): apagado", sizeof *rec_profile);
 		return;
 	}
 	mkdir(PROFILE_DIR, 0777);
@@ -2129,19 +2138,19 @@ static void profile_open(const uint8_t *rom)
 	snprintf(rprof.path, sizeof rprof.path, "%s/%s.prf", PROFILE_DIR, base);
 	struct salsa64_rec_profile_game game;
 	salsa64_rec_profile_game_of(&game, rom);
-	bool loaded = salsa64_rec_profile_load(&rec_profile, rprof.path, &game);
-	salsa64_rec_profile_mark_hot(&rec_profile, salsa64_rec_hot_capacity(&rec) * 3 / 4);
+	bool loaded = salsa64_rec_profile_load(rec_profile, rprof.path, &game);
+	salsa64_rec_profile_mark_hot(rec_profile, salsa64_rec_hot_capacity(&rec) * 3 / 4);
 	bool sites;
 	profile_hot_kb(&sites);
 	rec.profile_sites = sites;
-	rec.profile = &rec_profile;
+	rec.profile = rec_profile;
 	rprof.on = true;
 	rprof.t_saved = sysGetSystemTime();
 	salsa64_log("perfil del recompilador: %s %s (%u entradas y %u sitios de salida; %u calientes con %u KB, "
 		    "umbral %u); zona caliente de %u KB en dos mitades, sitios de salida %s, se guarda cada %llu s y "
 		    "al cerrar",
-		    loaded ? "cargado" : "nuevo", rprof.path, rec_profile.count, rec_profile.nsites,
-		    rec_profile.hot_entries, rec_profile.hot_words / 256, rec_profile.hot_threshold,
+		    loaded ? "cargado" : "nuevo", rprof.path, rec_profile->count, rec_profile->nsites,
+		    rec_profile->hot_entries, rec_profile->hot_words / 256, rec_profile->hot_threshold,
 		    salsa64_rec_hot_capacity(&rec) / 256, sites ? "sí" : "no (saltos = no)",
 		    (unsigned long long)(PROFILE_SAVE_US / 1000000));
 }
@@ -2154,7 +2163,7 @@ static void profile_write_step(uint64_t now)
 	if (!rprof.on)
 		return;
 	if (rec_profile_w.f) {
-		int r = salsa64_rec_profile_save_step(&rec_profile, &rec_profile_w, PROFILE_STEP_ENTRIES);
+		int r = salsa64_rec_profile_save_step(rec_profile, &rec_profile_w, PROFILE_STEP_ENTRIES);
 		if (r < 0) {
 			rprof.save_errors++;
 			salsa64_log("perfil del recompilador: FALLO al escribir %s", rprof.path);
@@ -2163,11 +2172,11 @@ static void profile_write_step(uint64_t now)
 		}
 		return;
 	}
-	if (now - rprof.t_saved < PROFILE_SAVE_US || rec_profile.session == rprof.session_saved)
+	if (now - rprof.t_saved < PROFILE_SAVE_US || rec_profile->session == rprof.session_saved)
 		return;
 	rprof.t_saved = now;
-	rprof.session_saved = rec_profile.session;
-	if (!salsa64_rec_profile_save_begin(&rec_profile, &rec_profile_w, rprof.path)) {
+	rprof.session_saved = rec_profile->session;
+	if (!salsa64_rec_profile_save_begin(rec_profile, &rec_profile_w, rprof.path)) {
 		rprof.save_errors++;
 		salsa64_log("perfil del recompilador: FALLO al abrir %s.tmp", rprof.path);
 	}
@@ -2180,13 +2189,13 @@ static void profile_close(void)
 	const struct salsa64_rec_stats *st = &rec.stats;
 	salsa64_rec_profile_save_abort(&rec_profile_w);
 	salsa64_rec_profile_fold(&rec);
-	bool ok = salsa64_rec_profile_save(&rec_profile, rprof.path);
+	bool ok = salsa64_rec_profile_save(rec_profile, rprof.path);
 	salsa64_log("cierre: perfil del recompilador %s %s: %u entradas (%u cargadas, %u sin lugar) y %u sitios de "
 		    "salida (%u sin lugar), %llu entradas a bloques contadas (sesión %s), %llu bloques en la zona "
 		    "caliente (%llu no cupieron, %llu desalojos de mitad), %u escrituras periódicas (%u fallidas)",
-		    ok ? "guardado en" : "NO se pudo guardar en", rprof.path, rec_profile.count, rec_profile.loaded,
-		    rec_profile.full, rec_profile.nsites, rec_profile.sites_full, (unsigned long long)rec_profile.session,
-		    rec_profile.session >= SALSA64_RPF_LONG_SESSION ? "larga" : "corta",
+		    ok ? "guardado en" : "NO se pudo guardar en", rprof.path, rec_profile->count, rec_profile->loaded,
+		    rec_profile->full, rec_profile->nsites, rec_profile->sites_full, (unsigned long long)rec_profile->session,
+		    rec_profile->session >= SALSA64_RPF_LONG_SESSION ? "larga" : "corta",
 		    (unsigned long long)st->hot_placed, (unsigned long long)st->hot_full,
 		    (unsigned long long)st->hot_evictions, rprof.saves, rprof.save_errors);
 	salsa64_rec_profile_detach(&rec);
@@ -2338,7 +2347,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	rec.prof = salsa64_ps3_rec_prof_wanted() ? &rec_prof : NULL;
 	{
 		bool sites;
-		rec.hot_bytes = file_exists(NO_PROFILE_PATH) ? 0 : profile_hot_kb(&sites) << 10;
+		rec.hot_bytes = file_exists(PROFILE_ON_PATH) ? profile_hot_kb(&sites) << 10 : 0;
 	}
 	if (!salsa64_ps3_rec_wanted())
 		salsa64_log("recompilador apagado (%s): intérprete", SALSA64_NOREC_FLAG);

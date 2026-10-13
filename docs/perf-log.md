@@ -991,7 +991,9 @@ instrucción del nativo) va abajo, medido en la PS3.
 SLSA00104 «Salsa64 perfil», 4d75242 + main 1be3ce5; una sola ejecución de la
 app, `perfil` presente, volviendo al menú entre juegos). Costo por
 instrucción ejecutada en las ventanas pesadas (MIPS > 40, espera ≤ 35 %),
-`emulación × campos/s / MIPS`; «base» es el mismo binario con `sin-perfil`:
+`emulación × campos/s / MIPS`; «base» es el mismo binario con el perfil
+apagado (en ese paquete venía encendido y `sin-perfil` lo apagaba; desde el
+mismo día va apagado por omisión y lo enciende `perfil-activo`):
 
 | GoldenEye, presa, 1–2 min cada una | base (`sin-perfil`) | 1.ª sesión (perfil vacío: solo cuenta) | 2.ª sesión (perfil cargado: 715 calientes marcados, 762 colocados, 1592 sitios) |
 |---|---|---|---|

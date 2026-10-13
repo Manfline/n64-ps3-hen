@@ -808,8 +808,8 @@ que se compilan. Ahora:
   hilo de presentación (nada de búferes de un megabyte ni de parar la
   presentación; el que escribe lee `count` y `nsites` una vez y lo nuevo
   entra en el archivo siguiente; una cuenta a medias es solo un número un
-  poco menor). Primero `.tmp` y `rename`, como las partidas. `sin-perfil` y
-  `perfil.cfg` se leen al abrir cada juego.
+  poco menor). Primero `.tmp` y `rename`, como las partidas. `perfil-activo`
+  y `perfil.cfg` se leen al abrir cada juego.
 - **Entre sesiones.** El puntaje guardado mezcla el del archivo con lo
   contado: en una sesión larga (2²⁶ entradas a bloques o más: entre medio
   minuto y un minuto de juego, Perfect Dark cuenta 1,2 M por segundo de
@@ -818,11 +818,21 @@ que se compilan. Ahora:
   arranques de prueba no borren lo aprendido en una partida larga. Los
   puntajes saturan en 2³² − 1. Las cuentas de los sitios solo se suman entre
   sesiones (sin decaimiento), saturando igual.
-- **Apagarlo:** el archivo `sin-perfil` en `/dev_hdd0/salsa64` (no cuenta,
-  no lee ni escribe, sin zona caliente); `perfil.cfg` con `caliente = 0`
-  cuenta y guarda pero no coloca. En el host, `salsa64-run --profile
-  archivo` y `SALSA64_REC_HOT_KB`; las unitarias con recompilador tienen
-  zona caliente de un dieciseisavo de la caché.
+- **Apagado por omisión** (decidido el 2026-10-12 con la medición de
+  abajo): sin el archivo `perfil-activo` en `/dev_hdd0/salsa64` no hay
+  tabla (se reserva con `memalign` la primera vez que se enciende, fuera del
+  bucle), no se emite el contador y no hay zona caliente: costo cero en el
+  hilo 0. Con el archivo, cuenta, guarda y coloca; `perfil.cfg` con
+  `caliente = 0` cuenta y guarda pero no coloca. En el host, `salsa64-run
+  --profile archivo` y `SALSA64_REC_HOT_KB`; las unitarias con recompilador
+  tienen zona caliente de un dieciseisavo de la caché.
+- **Resultado en la PS3** (docs/perf-log.md): juntar los 762 bloques más
+  calientes de GoldenEye en 1 MB no cambia el costo del nativo (15,5 →
+  15,8 ns por instrucción; Perfect Dark 12,7 → 12,4), y contar cuesta ~5 %.
+  Lo que manda no es dónde está cada bloque sino cuántas líneas de caché
+  toca por instrucción: ~21 palabras de PPC por instrucción MIPS en los
+  calientes (punto 2 de «Siguientes pasos»). Lo que queda del trabajo es
+  el perfil mismo: cobertura, sucesores y cuentas de los condicionales.
 
 Memoria: `hits[]` 256 KB y `pent[]` 128 KB en `struct salsa64_rec`; la
 tabla, 1 MB de entradas, 256 KB de sitios y 128 KB de índice, estática en el
@@ -858,6 +868,16 @@ archivo (truncado, un byte cambiado, bytes de más, otro juego).
      nada: el enlace es un `b` y lo que importa es que las dos piezas
      queden en líneas y páginas vecinas. Con la huella se comprueba que el
      sucesor que hay hoy en el destino es el del perfil.
+   - *Contar gratis, por muestreo desde el hilo 1.* El contador de cuatro
+     palabras por entrada cuesta ~5 %. Alternativa: el hilo 1, que duerme
+     el 85 % y le cuesta al hilo 0 ~0,13 ms por ms de trabajo, lee cada
+     N µs qué bloque está corriendo el hilo 0 (el código generado deja el
+     id en una palabra de `struct salsa64_cpu` solo al entrar, un `stw`:
+     o nada, si el despachador lo anota al entrar desde C y las vueltas por
+     enlace se atribuyen al último conocido) y suma una muestra a su
+     entrada: puntajes proporcionales al tiempo, no a las entradas, que es
+     lo que importa para «caliente», sin tocar el camino caliente. La
+     instrumentación de sitios y sucesores queda solo para cuando se use.
    - *Traducción fuera del hilo de emulación.* La traducción es cálculo
      puro (palabras MIPS de entrada, palabras PPC de salida, más el estado
      que fija la forma del bloque: FR, segmento, palabra de la ktlb que

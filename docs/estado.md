@@ -28,8 +28,10 @@ bloques calientes» y «Siguientes pasos»), números en docs/perf-log.md.
   pasa; de ahí salen tomado/no tomado de cada condicional y los dos
   sucesores más frecuentes de cada bloque, con la huella del bloque del
   destino. Solo se registra.
-- Interruptores: `sin-perfil` (todo apagado) y `perfil.cfg` (`caliente =
-  KB`, `saltos = si|no`), documentados en docs/uso-ps3.md; en el host,
+- Interruptores: `perfil-activo` (apagado por omisión; en la medición de
+  abajo el paquete lo traía encendido y `sin-perfil` lo apagaba) y
+  `perfil.cfg` (`caliente = KB`, `saltos = si|no`), documentados en
+  docs/uso-ps3.md; en el host,
   `salsa64-run --profile` y `SALSA64_REC_HOT_KB`/`SALSA64_REC_SITES`.
 
 Validado: unitarias host 440/440 y ppc64 con recompilador 440/440 (plain,
@@ -61,11 +63,17 @@ condicionales se toman más del 80 % de las veces y 184 menos del 20 %;
 sucesor contiguo; traducción por adelantado y JIT por niveles en el hilo 1
 del PPE, que duerme el 85 %) están en docs/rec-ppe.md, «Siguientes pasos».
 
-Pendiente / decisión para main: con esta medición el perfil debería
-quedar **apagado por omisión** hasta que algo lo use (hoy cuesta 5 % y no
-devuelve nada), o encendido solo para recoger datos; `caliente = 256` (lo
-que cabría en la L2 con los datos) quedó sin medir. Los perfiles de la
-consola están en `build/ps3-logs/prf/` de la rama.
+Decidido con main: el perfil queda **apagado por omisión** (sin el archivo
+`perfil-activo` no hay tabla, contador ni zona caliente: costo cero en el
+hilo 0); se enciende para recoger datos o cuando los pasos siguientes lo
+usen. Anotada la idea de contar gratis por muestreo desde el hilo 1 (lee
+cada N µs el bloque en curso) y dejar la instrumentación solo para sitios y
+sucesores. `caliente = 256` (lo que cabría en la L2 con los datos) quedó sin
+medir. Los perfiles de la consola están en `build/ps3-logs/prf/` de la rama
+(y en main, `build/ps3-logs/perfil-2026-10-12/`); con las huellas main vio
+404 bloques idénticos en tres o más juegos (8–12 % del tiempo de cada uno;
+Zelda y Majora comparten 973, ~31 %; GoldenEye y Perfect Dark 807, ~13 %):
+libultra, base para las funciones nativas.
 
 ## 2026-10-12 (noche) — v0.2.0 publicada y censo de compatibilidad
 
