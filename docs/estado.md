@@ -104,13 +104,101 @@ Pendientes (censo del día y reportes): Super Smash Bros. se congela en el
 primer KO (z-buffer usado como color image, entrada de abajo); Banjo-Tooie
 y F-Zero X en negro (arranque 6105/6106); Kirby 64 y Pokémon Stadium 2 con
 texturas con ruido (estado de Stadium 2 en la ranura 0); Pokémon Snap con
-texturas estiradas; sombras cuadradas de Conker y su espera de ~25 s al
-arrancar (comparar con mupen64plus); luces puntuales de Majora (la luz salta
+texturas estiradas; sombras cuadradas de Conker (su espera de ~25 s al
+arrancar, en la entrada del 2026-10-13); luces puntuales de Majora (la luz salta
 entre fuentes al caminar: probable falta de luces puntuales en la HLE de
 F3DZEX); cadencia de la presentación (campos saltados cuando la emulación va
 sobrada); Doom 64 al ~40 % (instrucciones interpretadas); estados
 comprimidos; Rumble Pak y Controller Pak; Fase 5 (medir el margen del RSX a
 5×, multimuestreo para GoldenEye, filtros CRT).
+
+## 2026-10-13 — Conker en negro tras «For Mature» desde la v0.2.1, y sus 29 s de negro al arrancar (rama `objective-bun-2517c7`, paquete SLSA00112 «Salsa64 Conker»)
+
+Síntoma (PS3 real con v0.2.1, v0.2.2 y main; igual en la Mac): después de
+la pantalla roja «For Mature Audiences Only» el juego queda en negro a
+0 fps. En la v0.2.0 llegaba al juego, pero siempre con 25–30 s de negro al
+arrancar que la consola no tiene. Bisección con el intérprete del host:
+54798d9 (el borrado de la z image llega a la RDRAM). En la Mac,
+`--fields 3600`: 1 tarea gráfica en main, 902 en la v0.2.0.
+
+Diagnóstico:
+- **El cuelgue.** La primera tarea gráfica borra la z image (0x0E9D80,
+  292 de ancho) con un FILLRECT de 217 filas (0–216) y el scissor en
+  (2, 0)–(290, 216). El RDP recorta el relleno con el scissor (10.2, borde
+  inferior derecho exclusivo) y llena las filas 0–215; la HLE mandaba
+  `GFX_OP_ZCLEAR` con el rectángulo sin recortar y, desde 54798d9,
+  `salsa64_gfx_rdram_fills` escribía también la fila 216. Ahí (0x108A40) el
+  juego guarda nodos de una lista enlazada (cabeza en 0x800380B4): el hilo
+  principal la recorre, toma 0xFFFCFFFC como siguiente nodo, falla la TLB
+  en 0xFFFD0004 y libultra lo detiene; quedan el audio y el hilo ocioso.
+  Los datos con pinta de comprimidos que había en la región antes de la
+  tarea son restos de la carga (un DMA de 92 000 bytes en el campo 1, ya
+  descomprimido): el RDP también los pisa y el juego no los vuelve a leer.
+- **Los 29 s de negro.** El hilo principal duerme en `osContInit`, que
+  espera a que `osGetTime()` llegue a 0,5 s. Con el arranque HLE el juego
+  entraba con Count = 0 y llegaba ahí a los 0,097 s. Además, el
+  `osSetTimer` de su libultra, cuando un temporizador nuevo queda delante,
+  no descuenta lo que ya corrió del que iba primero, y el planificador de
+  Conker arma uno de 20 000 cuentas cada dos campos para lanzar la tarea de
+  audio (200 000 si el AI está lleno, cosa que en estado estable no pasa:
+  el juego acorta el cuadro de audio si al encolarlo quedan ≥ 249
+  muestras). El de `osContInit` avanzaba así 20 000 cuentas cada dos
+  campos: 0,4 s de espera se volvían ~29 s (con AI_STATUS forzado a lleno,
+  la espera bajaba a ~3 s, lo que confirmó el mecanismo). En la consola no
+  espera: el IPL3 de Nintendo pone Count en 0 al empezar (visto corriendo
+  el IPL3 del cartucho en el host) y tarda unos 500 ms en frío
+  (n64brew.dev: IPL3), así que al llegar a `osContInit` ya pasó el plazo.
+
+Arreglo:
+- `fillrect` (`src/rsp/gfx/rdp.c`): el `GFX_OP_ZCLEAR` sale recortado con
+  el scissor (X de `XH/4` a `⌈XL/4⌉`, igual en Y, la misma cuenta que usan
+  los dibujos) y, si queda vacío, no se manda. Vale para la RDRAM, el RSX y
+  el rasterizador del host. Prueba: `gfx_zclear_scissor` (el caso de
+  Conker, la fila 216 intacta, y un scissor vacío).
+- Arranque HLE (`src/core/boot.c`): con un IPL3 de Nintendo reconocido el
+  juego entra con Count = 23 437 500 (0,5 s a 46,875 MHz). El camino ELF
+  (IPL3 de libdragon) y las ROMs sin IPL3 reconocido siguen en 0
+  (`test_boot`).
+
+Efecto en otros juegos (host):
+- El recorte solo cambia los borrados de Conker (todos, de (2, 0)–(291,
+  217) a (2, 0)–(290, 216)). Con un aviso temporal en `fillrect`: ninguno
+  en DK64 (5000 campos), Zelda con `zelda-oot.pad` (19 400 campos) ni con
+  los guiones de MK64, SM64 y Banjo. Desde main, la RDRAM de DK64 y de
+  Zelda en el campo 1500 queda idéntica con el recorte.
+- El Count del IPL3: los juegos que dormían en `osContInit` arrancan
+  antes, como en la consola. Primera tarea gráfica (campo): Zelda OoT
+  30 → 10, Mario Kart 64 29 → 4, GoldenEye 57 → 45, Banjo-Kazooie 57 → 46,
+  Smash 41 → 12, Mario Party 128 → 100, DK64 178 → 176; Perfect Dark y
+  Paper Mario igual. **Los guiones por campo de docs/pads siguen sirviendo**
+  (la primera pulsación que el juego espera absorbe el adelanto), main
+  contra la rama: MK64 y SM64 terminan con la imagen idéntica; GoldenEye
+  juega en la presa en el campo 6990, Banjo sale de su casa (campo
+  17 500) y Zelda con `zelda-casa-nueva.pad` está en la casa de Link (campo
+  15 000), con el personaje apenas en otro lugar. (`zelda-pausa-nueva.pad`
+  se queda en la pantalla del nombre en las dos: ya no encajaba con los
+  tiempos de main.) Lo que se toma en un campo fijo contado desde el
+  arranque (`--state-save C:…`, anotaciones de perf-log) cae hasta 30
+  campos más adelante en el juego; cargar estados ya guardados no cambia.
+
+Verificado:
+- [x] Host: Conker con 1740 tareas en 3600 campos: «For Mature Audiences
+      Only» hacia el campo 120, la pantalla de Dolby hacia el 400, el logo
+      de Nintendo hacia el 600 y la taberna en el 3600.
+- [x] `test-host` 482/482 (Docker, ASan/UBSan); `test-roms` (nemu64-test
+      en su línea base de 433 / 136 con LLE, vitest, savetest, gfxtest ×3,
+      estados, audiotest); `test-rec` (unitarias en los cinco modos
+      482/482, nemu64-test en su línea base con --rec, vitest, estados).
+- [x] Paquete «Salsa64 Conker» (SLSA00112) compilado sin avisos.
+- [ ] **PS3 real** (paquete «Salsa64 Conker», SLSA00112): Conker hasta
+      jugar y sin el negro largo; DK64 con la cámara estable; Zelda con
+      Navi y las antorchas; que los demás arranquen como antes.
+**Confirmado en la PS3 real** (2026-10-13, paquete SLSA00112): Conker pasa
+«For Mature» al momento, sin el negro largo, y llega a la taberna; los
+estados guardados cargan. Sin cambios en DK64 (cámara estable), Zelda OoT
+(resplandor de Navi y de las antorchas), Mario Kart 64, Mario Party,
+GoldenEye y Banjo-Kazooie, que ahora arrancan antes. Smash sigue con su
+congelón conocido en el primer KO (aparte). Sale en v0.2.3.
 
 ## 2026-10-13 — «Imagen» en el menú de pausa: filtro, aspecto, recorte y escala interna en vivo, y escala por juego
 

@@ -4,7 +4,7 @@ All notable changes to Salsa64. Speeds are measured on a real PS3 (HEN,
 NTSC backups); `docs/perf-log.md` has the detailed numbers and
 `docs/estado.md` the work log (both in Spanish).
 
-## [Unreleased]
+## [0.2.3] — 2026-10-13
 
 ### Added — contributed by VIDEOGAMES SCZ
 - **Pause menu** (START + SELECT): resume, save/load state, state slot,
@@ -44,6 +44,16 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 ### Changed
 - `lib/rsxkit`: the 2D layer can draw an RGBA image slot
   (`rsxkit_ui_image_set` / `rsxkit_ui_image`); it maps 3 MB instead of 2.
+- Games with Nintendo's boot code start with the CPU timer where the real
+  boot code leaves it (about half a second), so those that waited in the
+  controller setup start up to half a second sooner, as on the console.
+
+### Fixed
+- **Conker's Bad Fur Day** stayed black after the «For Mature» screen since
+  0.2.1: the z-buffer clear written to RDRAM ignored the scissor and
+  overwrote game data just past the z-buffer. It is now clipped like the
+  RDP does.
+- Conker no longer shows 25–30 s of black at start-up.
 
 ## [0.2.2] — 2026-10-12
 

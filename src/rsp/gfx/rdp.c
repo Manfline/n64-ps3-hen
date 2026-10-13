@@ -1001,7 +1001,20 @@ static void fillrect(struct gfx_state *g, uint32_t w0, uint32_t w1)
 			lry += 1.0f;
 	}
 	if (cycle == G_CYC_FILL && g->cimg_addr == g->zimg_addr) {
-		/* Borrar el z-buffer: se dibuja en la color image que apunta a él. */
+		/* Borrar el z-buffer: se dibuja en la color image que apunta a él.
+		 * El RDP recorta el relleno con el scissor (10.2, borde inferior
+		 * derecho exclusivo) y este rectángulo también va a la RDRAM: Conker
+		 * manda 217 filas con un scissor de 216 y guarda una lista enlazada
+		 * en la fila 216, que el RDP no toca. */
+		uint32_t x0 = (uint32_t)ulx, y0 = (uint32_t)uly, x1 = (uint32_t)lrx, y1 = (uint32_t)lry;
+		uint32_t sx0 = g->scissor[0] >> 2, sy0 = g->scissor[1] >> 2;
+		uint32_t sx1 = (g->scissor[2] + 3u) >> 2, sy1 = (g->scissor[3] + 3u) >> 2;
+		x0 = x0 > sx0 ? x0 : sx0;
+		y0 = y0 > sy0 ? y0 : sy0;
+		x1 = x1 < sx1 ? x1 : sx1;
+		y1 = y1 < sy1 ? y1 : sy1;
+		if (x0 >= x1 || y0 >= y1)
+			return;
 		struct gfx_zclear z;
 		memset(&z, 0, sizeof z);
 		z.h.op = GFX_OP_ZCLEAR;
@@ -1009,10 +1022,10 @@ static void fillrect(struct gfx_state *g, uint32_t w0, uint32_t w1)
 		z.h.a = g->zimg_addr;
 		z.h.b = g->fill & 0xFFFF;
 		z.h.c = (uint32_t)g->cimg_siz << 16 | g->cimg_width;
-		z.rect[0] = (uint16_t)ulx;
-		z.rect[1] = (uint16_t)uly;
-		z.rect[2] = (uint16_t)lrx;
-		z.rect[3] = (uint16_t)lry;
+		z.rect[0] = (uint16_t)x0;
+		z.rect[1] = (uint16_t)y0;
+		z.rect[2] = (uint16_t)x1;
+		z.rect[3] = (uint16_t)y1;
 		z.fill = g->fill;
 		gfx_flush_draw(g);
 		gfx_io_cmd(g, &z, sizeof z);

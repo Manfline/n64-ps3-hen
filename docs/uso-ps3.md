@@ -449,8 +449,9 @@ ahora no ahorra: S-Video 0,45 ms menos, compuesto 0,5 ms más.
 
 ## Notas por juego
 
-- **Conker's Bad Fur Day**: al arrancar se queda en negro unos 25–30
-  segundos antes de los logos. No está colgado: hay que esperar.
+- **Conker's Bad Fur Day**: en v0.2.1 y v0.2.2 se queda en negro tras la
+  pantalla «For Mature»; está arreglado en v0.2.3, que además arranca sin los
+  25–30 s de negro de antes.
 - **Super Smash Bros.**: se congela en el primer KO. Mientras se arregla,
   crear `/dev_hdd0/salsa64/fbfx.cfg` con un `1` adentro (apaga las copias del
   framebuffer a la memoria de la N64; algunas texturas se ven estiradas) y

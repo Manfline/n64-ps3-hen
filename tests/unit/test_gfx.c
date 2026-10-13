@@ -877,6 +877,54 @@ static void gfx_zclear_fills_rdram(void)
 	zf_check(true);
 }
 
+/* El relleno se recorta con el scissor como en el RDP (10.2, borde inferior
+ * derecho exclusivo). Conker borra una z image de 292 de ancho con un
+ * rectángulo de 217 filas y un scissor de 216, y guarda una lista enlazada
+ * en la fila 216, que el RDP no toca: pisarla lo colgaba tras el logo. */
+static void gfx_zclear_scissor(void)
+{
+	const uint32_t pa = 0x200000, w = 292;
+	start();
+	for (uint32_t a = pa; a < pa + w * 218 * 2; a += 4)
+		t_wr32(a, 0x12345678);
+	dl(0xFE000000, pa);                                            /* z image */
+	dl(0xFF100000 | (w - 1), pa);                                  /* color image = z image */
+	dl(0xED000000 | (2 << 2) << 12, (290 << 2) << 12 | (216 << 2)); /* scissor (2, 0)–(290, 216) */
+	set_cycle(G_CYC_FILL);
+	dl(0xF7000000, 0xFFFCFFFC);
+	dl(0xF6000000 | (291 << 2) << 12 | (216 << 2), 0);             /* 0..291 × 0..216 */
+	run();
+	const struct gfx_zclear *z = (const struct gfx_zclear *)find_cmd(GFX_OP_ZCLEAR, 0);
+	CHECK(z != NULL);
+	if (!z)
+		return;
+	CHECK_EQ(z->rect[0], 2);
+	CHECK_EQ(z->rect[1], 0);
+	CHECK_EQ(z->rect[2], 290);
+	CHECK_EQ(z->rect[3], 216);
+	salsa64_gfx_rdram_fills(&t_n64.bus, &job, &res);
+	CHECK_EQ(zf_rd16(pa + 2 * 1), 0x5678);                    /* x = 1: fuera */
+	CHECK_EQ(zf_rd16(pa + 2 * 2), 0xFFFC);
+	CHECK_EQ(zf_rd16(pa + 2 * (215 * w + 289)), 0xFFFC);      /* última fila y columna */
+	CHECK_EQ(zf_rd16(pa + 2 * (215 * w + 290)), 0x1234);
+	for (uint32_t x = 0; x < w; x++)                           /* la fila 216, intacta */
+		if (zf_rd16(pa + 2 * (216 * w + x)) != (x & 1 ? 0x5678 : 0x1234)) {
+			CHECK_EQ(x, w);
+			break;
+		}
+
+	/* Si el scissor lo deja vacío no se borra nada. */
+	start();
+	dl(0xFE000000, pa);
+	dl(0xFF100000 | (w - 1), pa);
+	dl(0xED000000 | (10 << 2) << 12 | (10 << 2), (10 << 2) << 12 | (20 << 2));
+	set_cycle(G_CYC_FILL);
+	dl(0xF7000000, 0xFFFCFFFC);
+	dl(0xF6000000 | (291 << 2) << 12 | (216 << 2), 0);
+	run();
+	CHECK(find_cmd(GFX_OP_ZCLEAR, 0) == NULL);
+}
+
 /* En el backend síncrono el relleno llega al terminar la tarea (finish),
  * cuando el RDP la daría por hecha, no al arrancarla. */
 static struct gfx_state zf_state;
@@ -2194,6 +2242,7 @@ void t_suite_gfx(void)
 	RUN(gfx_tmem_premul);
 	RUN(gfx_fill_and_zclear);
 	RUN(gfx_zclear_fills_rdram);
+	RUN(gfx_zclear_scissor);
 	RUN(gfx_zclear_rdram_at_finish);
 	RUN(gfx_fill_1cycle_edge);
 	RUN(gfx_draw_batching);
