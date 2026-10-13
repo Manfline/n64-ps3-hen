@@ -80,6 +80,14 @@ en docs/filtros.md.
   señal y decodificación de los cables en un SPE (1–3,5 ms menos, solo
   S-Video y compuesto).
 
+**Candidato de la v0.2.4 en la PS3 real** (2026-10-13): el primero apagaba
+el CRT al bajar la escala en vivo (5× → 3× por el tope, desde «Imagen»):
+«no se pudo reducir la imagen … factor 3». La tabla intermedia de la
+reducción en dos pasadas se había quedado del alto de 5× y no cabía en la
+profundidad; además un fallo dejaba el filtro apagado hasta salir del
+juego. Arreglado (tabla del tamaño justo, reintento al cambiar algo) y
+confirmado con el segundo candidato, junto con Smash (KO y Hyrule Castle).
+
 ## 2026-10-12 (cierre del día) — Para retomar
 
 Publicadas hoy: **v0.2.0** (DK64 al 100 %, Majora con FlashRAM y efectos,
