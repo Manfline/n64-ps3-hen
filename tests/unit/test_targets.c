@@ -466,6 +466,18 @@ static void targets_readback_wanted(void)
 	rdp_vi_ring_push(&r, 0x200000, 440);
 	CHECK(!rdp_readback_wanted(&r, 0x12c700, 320, 2));
 	CHECK(rdp_readback_wanted(&r, 0x12c700, 440, 2));
+	/* Y al volver a un framebuffer que ya estaba (la presa de GoldenEye, a
+	 * 320 tras las pantallas de la misión a 440): no se vuelve a agregar,
+	 * pero el ancho del VI es el del campo de ahora. Con el del último
+	 * agregado (440), cada cuadro de 320 parecía una imagen auxiliar y la
+	 * PS3 lo copiaba a la RDRAM esperando. */
+	rdp_vi_ring_push(&r, 0x3da800 + 640, 320);
+	CHECK_EQ(r.n, 3);
+	CHECK_EQ(r.cur_width, 320);
+	CHECK(!rdp_readback_wanted(&r, 0x3da800, 320, 2));
+	CHECK(!rdp_readback_wanted(&r, 0x3b5000, 320, 2));
+	CHECK(rdp_readback_wanted(&r, 0x12c700, 320, 2));
+	CHECK(!rdp_readback_wanted(&r, 0x12c700, 440, 2));
 	/* El anillo da la vuelta sin perder los últimos. */
 	for (uint32_t k = 0; k < RDP_VI_RING + 2; k++)
 		rdp_vi_ring_push(&r, 0x100000 + 0x40000 * k, 440);

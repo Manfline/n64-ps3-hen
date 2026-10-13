@@ -1146,7 +1146,7 @@ static void readbacks_wanted(struct set *s, const struct gfx_result *res)
 		 * del framebuffer: Zelda dibuja a Link en sus primeros bytes con
 		 * ancho 64) o, del ancho del VI, fuera de los framebuffers
 		 * recientes. */
-		uint32_t vi_w = rdp.vi_ring.n ? rdp.vi_ring.width[(rdp.vi_ring.n - 1) % RDP_VI_RING] : 0;
+		uint32_t vi_w = rdp.vi_ring.n ? rdp.vi_ring.cur_width : 0;
 		uint32_t siz = c->c & 0xFF, fmt = (c->c >> 8) & 0xFF;
 		/* De 16 bits, o de 8 de intensidad (la cobertura que Zelda guarda
 		 * para su filtro; una CI8 no se puede reconstruir desde el RSX). */

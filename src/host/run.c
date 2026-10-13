@@ -67,6 +67,8 @@
  * sigue; con SALSA64_GFX_TEAR además la corre al arrancar y avisa si la
  * salida cambió entre las dos (el CPU tocó durante la tarea algo que la
  * lista lee); SALSA64_GFX_TEAR_V lista los vértices distintos.
+ * SALSA64_PS3_RB (con --gfx-frame) cuenta las color images que la regla de
+ * copias a la RDRAM de la PS3 (readbacks_wanted, src/rdp/rdp.c) pediría.
  * SALSA64_GFX_CUTCHECK mide, por tarea, cuánto se separan los vértices que
  * la HLE puso sobre el plano cercano entre triángulos vecinos (una grieta
  * en una arista compartida sería ≥ 1 px).
@@ -2560,6 +2562,11 @@ int main(int argc, char **argv)
 	if (wav_path && !audio_wav(wav_path)) {
 		free(rom);
 		return 3;
+	}
+	if (getenv("SALSA64_PS3_RB")) {
+		extern uint32_t ps3_rb, ps3_rb_old;
+		fprintf(stderr, "salsa64-run: ps3-rb: la regla de copias de la PS3 pediría %u (con el ancho del último origen "
+			"agregado al anillo, la de antes: %u)\n", ps3_rb, ps3_rb_old);
 	}
 	if ((frame_path && !dump_frame(frame_path)) || (gfx_path && !gfx_dump(gfx_path))) {
 		free(rom);
