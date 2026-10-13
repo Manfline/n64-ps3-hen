@@ -2747,6 +2747,15 @@ static bool game_cfg_write(const char *rom, const struct menu_game *g)
 /* El CRT que eligió load_view (filter_setup lo pone al abrir el juego). */
 static int view_crt;
 
+/* El filtro CRT (enum salsa64_crt) de un filtro del menú; SALSA64_CRT_NONE
+ * para los demás. Para cambiarlo en vivo: filter_select(menu_filter_crt(f)). */
+static int menu_filter_crt(int filter)
+{
+	return filter >= MENU_FILTER_CRT_MASK && filter <= MENU_FILTER_CRT_COMPOSITE
+		       ? SALSA64_CRT_MASK + (filter - MENU_FILTER_CRT_MASK)
+		       : SALSA64_CRT_NONE;
+}
+
 /* Aspecto, filtro y recorte del juego: lo suyo (juegos/) o, si no, lo de
  * menu.cfg y overscan.cfg. Antes de cada juego. */
 static void load_view(const char *source)
@@ -2767,9 +2776,7 @@ static void load_view(const char *source)
 	pres.view.aspect = aspect == MENU_ASPECT_16_9 ? 16.0f / 9.0f : 4.0f / 3.0f;
 	pres.view.filter = filter == MENU_FILTER_SHARP ? RSXKIT_FILTER_NEAREST : RSXKIT_FILTER_LINEAR;
 	scan_level = filter == MENU_FILTER_SCAN_SOFT ? 1 : filter == MENU_FILTER_SCAN_STRONG ? 2 : 0;
-	view_crt = filter >= MENU_FILTER_CRT_MASK && filter <= MENU_FILTER_CRT_COMPOSITE
-			   ? SALSA64_CRT_MASK + (filter - MENU_FILTER_CRT_MASK)
-			   : SALSA64_CRT_NONE;
+	view_crt = menu_filter_crt(filter);
 	scan_r.w = 0;
 	scan_lines = 0;
 	if (g.overscan >= 0 && g.overscan <= MENU_OVERSCAN_WIDE) {
