@@ -4,7 +4,7 @@ All notable changes to Salsa64. Speeds are measured on a real PS3 (HEN,
 NTSC backups); `docs/perf-log.md` has the detailed numbers and
 `docs/estado.md` the work log (both in Spanish).
 
-## [Unreleased]
+## [0.2.3] — 2026-10-13
 
 ### Added — contributed by VIDEOGAMES SCZ
 - **Pause menu** (START + SELECT): resume, save/load state, state slot,

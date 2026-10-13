@@ -18,12 +18,12 @@ maps naturally onto an SPE.
 
 Work in progress, but already playable on a real PS3:
 
-- **Playable on real hardware (v0.2.2):** Zelda: Ocarina of Time and
+- **Playable on real hardware (v0.2.3):** Zelda: Ocarina of Time and
   Majora's Mask, Super Mario 64, Mario Kart 64, Donkey Kong 64, Paper Mario
   and Mario Party at full speed; Perfect Dark, GoldenEye 007, Conker, Star
   Fox 64 and Banjo-Kazooie playable (GoldenEye 45–60 fps in the Dam). Note:
-  Conker shows a black screen for 25–30 s at boot before the logos (just
-  wait); Super Smash Bros. freezes on the first KO. Full list (Spanish):
+  Conker stays black after the «For Mature» screen in 0.2.1 and 0.2.2 (fixed
+  in 0.2.3); Super Smash Bros. freezes on the first KO. Full list (Spanish):
   [docs/compatibilidad.md](docs/compatibilidad.md); release notes:
   [CHANGELOG.md](CHANGELOG.md).
 - **CPU:** VR4300 interpreter and a MIPS → PPC64 dynamic recompiler on the
@@ -68,7 +68,8 @@ Full guide (in Spanish): [docs/uso-ps3.md](docs/uso-ps3.md).
 | Start | START |
 
 - **START + SELECT** opens the pause menu: resume, save or load a state,
-  cheats, FPS counter and quit. Quitting asks first; the question can be
+  cheats, «Imagen» (filter, aspect, overscan and internal scale of the
+  running game, saved per game if you want), FPS counter and quit. Quitting asks first; the question can be
   turned off in Options («Confirmar al salir»).
 - In the game list, **□** opens the cheats of the selected ROM (Project64 or
   RetroArch `.cht` files in `/dev_hdd0/salsa64/cheats`) and **SELECT** its

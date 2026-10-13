@@ -119,6 +119,13 @@ Verificado:
 - [ ] **PS3 real** (paquete «Salsa64 Conker», SLSA00112): Conker hasta
       jugar y sin el negro largo; DK64 con la cámara estable; Zelda con
       Navi y las antorchas; que los demás arranquen como antes.
+**Confirmado en la PS3 real** (2026-10-13, paquete SLSA00112): Conker pasa
+«For Mature» al momento, sin el negro largo, y llega a la taberna; los
+estados guardados cargan. Sin cambios en DK64 (cámara estable), Zelda OoT
+(resplandor de Navi y de las antorchas), Mario Kart 64, Mario Party,
+GoldenEye y Banjo-Kazooie, que ahora arrancan antes. Smash sigue con su
+congelón conocido en el primer KO (aparte). Sale en v0.2.3.
+
 ## 2026-10-13 — «Imagen» en el menú de pausa: filtro, aspecto, recorte y escala interna en vivo, y escala por juego
 
 Pedido del autor tras la primera prueba de los extras en la PS3 (carátulas y
