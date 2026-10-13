@@ -151,6 +151,7 @@ static int run_suites(void (*print)(const char *line), struct salsa64_rec *rec, 
 		{ "state", t_suite_state },
 		{ "osd", t_suite_osd },
 		{ "pausectl", t_suite_pausectl },
+		{ "perfil", t_suite_rec_profile },
 	};
 	char line[256];
 
@@ -158,6 +159,8 @@ static int run_suites(void (*print)(const char *line), struct salsa64_rec *rec, 
 	t_tests = t_failed_tests = t_checks = 0;
 	salsa64_n64_init(&t_n64, t_rdram, sizeof t_rdram);
 	if (rec) {
+		if (!rec->hot_bytes)
+			rec->hot_bytes = (uint32_t)(bytes / 16);  /* zona caliente para las pruebas del perfil */
 		if (!salsa64_rec_init(rec, CPU, code, bytes)) {
 			print("recompilador: no disponible en este host");
 			return -1;

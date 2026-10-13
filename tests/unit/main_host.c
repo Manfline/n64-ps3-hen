@@ -63,6 +63,8 @@ int main(int argc, char **argv)
 		if (getenv("SALSA64_REC_DUMP"))
 			rec.on_compile = dump_block;
 		rec.opts = salsa64_host_rec_opts();
+		if (getenv("SALSA64_REC_HOT_KB"))
+			rec.hot_bytes = salsa64_host_rec_hot_bytes();
 		int r = code ? salsa64_unit_run_rec(print_line, &rec, code, salsa64_host_rec_bytes()) : -1;
 		if (r < 0)
 			return 2;

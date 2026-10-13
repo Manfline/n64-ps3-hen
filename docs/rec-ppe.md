@@ -719,6 +719,140 @@ desprendidos (`x.copy[]`) no se recuperan hasta un vaciado completo, que
 sigue ocurriendo si se agotan los ids o los enlaces. `SALSA64_REC_OPT_NO_EVICT`
 (`jit-sin-tramos` en la PS3) y `jit-viejo` vuelven al vaciado completo.
 
+### Perfil persistente y bloques calientes (2026-10-12)
+
+Código: `src/cpu/rec_profile.c` (la tabla y el archivo), `rec.c` (zona
+caliente, sumas) y `rec_emit.c` (consulta y contador). Medido en la PS3 el
+2026-10-11: el código nativo cuesta ~47 ciclos por instrucción MIPS con
+cualquier combinación de banderas; no lo limitan las instrucciones emitidas
+sino el tamaño y la localidad del código (GoldenEye: ~7 MB de bloques vivos
+contra 512 KB de L2, con la caché en páginas de 64 KB y el ERAT de
+instrucciones del PPE cubriendo mucho menos). Lo que corre seguido está
+repartido por toda la caché porque los bloques se colocan en el orden en
+que se compilan. Ahora:
+
+- **Contador por bloque.** Con un perfil conectado (`rec->profile`), la
+  entrada de cada bloque incrementa `rec->hits[id]` (`addis`, `lwz`,
+  `addi`, `stw`: cuatro palabras, a desplazamiento fijo de `flags`, que
+  vive en r28) después de las comprobaciones de la entrada (evento, CU1,
+  FR, página) y antes de cargar registros: cuenta **entradas**, no vueltas
+  de un bucle dentro del bloque (la vuelta salta al cuerpo, después del
+  contador), que es lo que pesa en la caché de instrucciones. Los 256 KB de
+  `hits[]` se tocan a 4 bytes por entrada; los recortados (modo estricto)
+  no cuentan. Entre campos, el hilo que emula suma los contadores a la
+  tabla y los deja en 0 (`salsa64_rec_profile_fold`, cada 60 campos en el
+  frontend); también al morir un bloque y al vaciar.
+- **Identidad por contenido.** La entrada de la tabla es (dirección
+  virtual, huella FNV-1a de las instrucciones MIPS del bloque, cuántas
+  son). El código de la N64 llega por DMA en overlays y a veces se
+  reescribe: un bloque con la misma dirección y otra huella es otra entrada,
+  y nunca hereda el puntaje de la anterior. Los gemelos por Status.FR tienen
+  los mismos bytes y comparten la entrada (los dos van calientes). La
+  consulta se hace al compilar (`salsa64_rec_profile_lookup`, índice abierto
+  por dirección; se agrega si no está, hasta 32 768 entradas) y el bloque
+  guarda su entrada en `rec->pent[id]`.
+- **Zona caliente.** Después del preámbulo, dos mitades (`hot_words` cada
+  una; `rec->hot_bytes` las dimensiona, por omisión 1 MB entre las dos en la
+  PS3, `perfil.cfg`) y después los ocho tramos fríos. Al cargar el perfil
+  se marcan calientes las entradas de mayor puntaje cuyas palabras de PPC
+  (las que ocuparon la última vez que se compilaron) suman hasta tres
+  cuartos de la zona (`salsa64_rec_profile_mark_hot`: busca el umbral de
+  puntaje por bisección, sin ordenar). Un bloque marcado se emite en la
+  mitad caliente en uso; si no cabe se emite de nuevo para la zona fría
+  (`emit_block` otra vez: las llamadas a C con `bl` o `mtctr` dependen de
+  dónde cae) y `hot_full` hace que la próxima compilación pase a la otra
+  mitad, matando lo que había en ella (`evict_segment`, como un tramo
+  frío). Las mitades nunca se desalojan por llenarse los tramos fríos. El
+  resto es igual: enlaces, invalidación, gemelos y bloques desprendidos no
+  distinguen zonas (`seg_of` numera las mitades 0 y 1 y los tramos fríos
+  desde 2).
+- **Archivo.** `perfiles/<juego>.prf` (el nombre de las partidas:
+  título y CRC1), big-endian: magia `SPRF`, versión, cantidad, y por entrada
+  dirección, huella, puntaje, instrucciones y palabras; al final una suma
+  FNV-1a de todo. Lo que no cuadra (magia, versión, cantidad, longitud,
+  suma) se descarta entero y el perfil arranca vacío: el emulador funciona
+  igual. Se escribe al cerrar el juego y cada 2 min si hubo cuentas nuevas,
+  por trozos de 512 entradas por vuelta del hilo de presentación (nada de
+  búferes de un megabyte ni de parar la presentación; el que escribe lee
+  `count` una vez y las entradas nuevas entran en el archivo siguiente; una
+  cuenta a medias es solo un número un poco menor). Primero `.tmp` y
+  `rename`, como las partidas.
+- **Entre sesiones.** El puntaje guardado mezcla el del archivo con lo
+  contado: en una sesión larga (2²⁸ entradas a bloques o más, un minuto de
+  juego) lo que no se ejecutó decae a la mitad, `max(hits, (score + hits) /
+  2)`; en una corta solo puede subir, `max(score, hits)`, para que diez
+  arranques de prueba no borren lo aprendido en una partida larga. Los
+  puntajes saturan en 2³² − 1.
+- **Apagarlo:** el archivo `sin-perfil` en `/dev_hdd0/salsa64` (no cuenta,
+  no lee ni escribe, sin zona caliente); `perfil.cfg` con `caliente = 0`
+  cuenta y guarda pero no coloca. En el host, `salsa64-run --profile
+  archivo` y `SALSA64_REC_HOT_KB`; las unitarias con recompilador tienen
+  zona caliente de un dieciseisavo de la caché.
+
+Memoria: `hits[]` 256 KB y `pent[]` 128 KB en `struct salsa64_rec`; la
+tabla, 1 MB más 128 KB de índice, estática en el frontend
+(docs/memory-budget.md).
+
+La prueba `rec_counts_entries_and_places_hot_blocks` (test_rec_profile.c)
+comprueba con el recompilador que un bloque marcado cae en la zona
+caliente, que cuenta entradas y no vueltas, que el código reescrito en la
+misma dirección es otra entrada y va a la zona fría, que al morir suma su
+cuenta, y que con `hot_full` la siguiente compilación pasa a la otra mitad
+sin tocar la primera; las demás prueban la tabla, la mezcla, el marcado y
+el archivo (truncado, un byte cambiado, bytes de más).
+
+#### Siguientes pasos (diseño, sin implementar)
+
+1. **Traducir por adelantado los bloques calientes cuando su código llega a
+   la RDRAM.** Hoy un bloque se compila la primera vez que se ejecuta: al
+   entrar a una zona nueva (Zelda al cambiar de sala, DK64 al cargar un
+   nivel) se compilan cientos de bloques en los primeros campos, 7–10 µs
+   cada uno, y el campo se va a 30–50 ms (tirón). Con el perfil se sabe de
+   antemano qué bloques van a correr y cómo son: cuando un DMA del PI
+   escribe la RDRAM (`salsa64_bus_rdram_written` ya avisa al recompilador
+   para invalidar), se recorren las entradas del perfil cuya dirección cae
+   en páginas que ese DMA pudo traer (para KSEG0, la física es la virtual
+   sin el segmento; para código mapeado, solo cuando la TLB ya traduce esa
+   página: en el refill, `salsa64_rec_x_tlb_written` sabe qué páginas
+   entran) y, si la huella de lo que hay ahora en memoria coincide con la
+   de la entrada, se compila el bloque en ese momento, en la zona que le
+   toque. Para no cargar el DMA (que ocurre dentro del campo) con cientos
+   de compilaciones, se encolan las candidatas y se compilan de a pocas por
+   campo mientras el campo va sobrado (el frontend sabe cuánto duró el
+   anterior). La huella se recalcula al compilar, así que un bloque que
+   llegó distinto no se toca. Índice que hace falta: las entradas del
+   perfil ordenadas por página virtual (un `uint16_t` por entrada,
+   ordenado al cargar). Riesgo: compilar bloques que esta sesión no va a
+   ejecutar (gasto de caché y tiempo); se limita a las entradas calientes o
+   de puntaje mayor que un umbral.
+2. **Optimizar más fuerte lo caliente y más compacto lo frío.** Hoy cada
+   bloque se emite igual. Con la clase conocida al compilar:
+   - Frío: sin superbloques ni saltos internos (menos salidas duplicadas y
+     caminos fríos), sin FPU en línea (al intérprete con una llamada: ~55
+     palabras menos por operación), sin camino rápido de datos mapeados
+     (la rutina compartida de `ktlb` en vez del código en línea), y los
+     registros fijos sin préstamo. Meta: la mitad de las palabras (hoy
+     media 248 por bloque), que es la mitad de L2 y de páginas que un
+     bloque frío roba al caliente cuando se ejecuta una vez.
+   - Caliente: lo de hoy más lo que hoy no compensa en general porque
+     cuesta tamaño: desenrollar los pares LWL/LWR y las copias, más
+     registros fijos entre bloques (s0, at, t6: 26–31 % de las ejecuciones
+     en GoldenEye), y las rutinas de libultra por huella (HLE de funciones:
+     matrices, trigonometría, copias) solo donde el perfil diga que pesan.
+   - La clase se decide con el perfil cargado; un bloque sin entrada se
+     compila como ahora. Primero medir en la PS3 cuánto baja el tamaño de
+     los fríos y si el nativo por instrucción se mueve; si la ganancia de
+     esta rama es chica, el límite es otro (ERAT: una zona caliente que
+     quepa en 64 páginas de 4 KB, 256 KB, podría pesar más que una de 1 MB).
+3. **Separar las rutas frías de los bloques calientes** (opcional): las
+   secciones frías (caminos lentos, salidas pendientes) van hoy pegadas al
+   cuerpo, a `bc` de ±32 KB. Para ponerlas en otra zona hacen falta
+   trampolines (`bc` a un `b` lejano) o `bc` invertidos sobre un `b`:
+   una palabra y un salto más por camino frío, a cambio de que las líneas
+   de 128 bytes del cuerpo no arrastren código que casi nunca corre. Solo
+   si la medición de la zona caliente muestra que el tamaño del cuerpo
+   manda.
+
 ## Pruebas en el host
 
 RPCS3 no ejecuta código generado (docs/rpcs3.md). En la Mac se compila el

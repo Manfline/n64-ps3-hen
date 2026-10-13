@@ -32,6 +32,7 @@
 #include "core/bus.h"
 #include "core/types.h"
 #include "cpu/rec_prof.h"
+#include "cpu/rec_profile.h"
 #include "cpu/rec_tlb.h"
 
 struct salsa64_cpu;
@@ -46,6 +47,11 @@ struct salsa64_cpu;
 #define SALSA64_REC_MAX_LABELS  4096
 #define SALSA64_REC_MAX_FIXUPS  8192
 #define SALSA64_REC_SEGMENTS    8         /* tramos de la caché: llena, se desaloja el más viejo (docs/rec-ppe.md) */
+/* Zona caliente (docs/rec-ppe.md, «Perfil persistente y bloques calientes»):
+ * los bloques que el perfil del juego marca como calientes van juntos, al
+ * principio de la caché, en dos mitades que se turnan como los tramos. */
+#define SALSA64_REC_HOT_SEGMENTS 2
+#define SALSA64_REC_ALL_SEGMENTS (SALSA64_REC_HOT_SEGMENTS + SALSA64_REC_SEGMENTS)
 
 /* 16 bytes: la búsqueda de destinos de JR en el código generado indexa
  * blocks[] con un desplazamiento y lee `code` en +0. */
@@ -111,6 +117,10 @@ struct salsa64_rec_stats {
 	uint64_t fr_exits;       /* salidas en la entrada porque cambió Status.FR (exit_fr) */
 	uint64_t cu1_exits;      /* de las salidas por exit_fr, las que eran COP1 inusable (CU1 = 0) */
 	uint64_t flushes_by[SALSA64_REC_FLUSH_N];  /* de flushes, por causa */
+	uint64_t hot_placed;     /* de compiled, los compilados en la zona caliente */
+	uint64_t hot_full;       /* calientes que fueron a la zona fría porque la caliente estaba llena */
+	uint64_t hot_evictions;  /* mitades de la zona caliente desalojadas */
+	uint64_t prof_folded;    /* entradas a bloques sumadas al perfil (rec->hits[] → entries) */
 };
 
 /* Etiquetas y correcciones del ensamblador de rec_emit.c. */
@@ -170,6 +180,10 @@ struct salsa64_rec_fixup {
 
 struct salsa64_rec {
 	uint32_t opts;
+	/* Bytes de la zona caliente (las dos mitades juntas); 0 = sin zona. Se
+	 * pone antes de salsa64_rec_init, que lo conserva y lo recorta a lo que
+	 * cabe. Solo sirve con un perfil (rec->profile). */
+	uint32_t hot_bytes;
 	struct salsa64_cpu *cpu;
 	uint32_t *code;          /* caché de código */
 	uint32_t code_words;     /* capacidad, en palabras */
@@ -178,8 +192,14 @@ struct salsa64_rec {
 	uint32_t generation;     /* sube en cada vaciado completo y en cada desalojo */
 	uint32_t seg_words;      /* palabras por tramo */
 	uint32_t seg_end;        /* fin del tramo en uso */
-	uint32_t cur_seg;
-	uint32_t seg_gen[SALSA64_REC_SEGMENTS];  /* sube al desalojar el tramo (enlaces con sitio en él) */
+	uint32_t cur_seg;        /* tramo en uso: SALSA64_REC_HOT_SEGMENTS + k */
+	uint32_t hot_words;      /* palabras por mitad de la zona caliente (0 = sin zona) */
+	uint32_t used_hot;       /* palabras ocupadas de la mitad caliente en uso */
+	uint32_t hot_end;        /* fin de esa mitad */
+	uint32_t cur_hot;        /* mitad en uso: 0 o 1 */
+	bool hot_full;           /* un caliente no cupo: desalojar la otra mitad antes del próximo bloque */
+	bool placed_hot;         /* el último bloque compilado fue a la zona caliente (lo deja rec_emit.c) */
+	uint32_t seg_gen[SALSA64_REC_ALL_SEGMENTS];  /* sube al desalojar el tramo (enlaces con sitio en él) */
 	uint64_t enter_opd[3];   /* descriptor ELFv1 de la entrada al código generado */
 	uint32_t exit_link, exit_mid, exit_jump;  /* rutinas de salida (palabra en la caché) */
 	uint32_t exit_jr;        /* JR/JALR: busca el bloque destino y salta, o sale como exit_jump */
@@ -218,6 +238,11 @@ struct salsa64_rec {
 	/* Perfil por causa (rec_prof.h); NULL = apagado. Lo pone quien llama,
 	 * antes o después de salsa64_rec_init (que lo conserva). */
 	struct salsa64_rec_prof *prof;
+	/* Perfil persistente por juego (rec_profile.h); NULL = apagado. Lo pone
+	 * quien llama después de salsa64_rec_init y con la tabla ya cargada y
+	 * marcada; con él, cada bloque cuenta sus entradas en hits[] y los
+	 * marcados van a la zona caliente. */
+	struct salsa64_rec_profile *profile;
 
 	struct salsa64_rec_stats stats;
 
@@ -232,6 +257,11 @@ struct salsa64_rec {
 	uint16_t map[SALSA64_REC_MAP_WORDS];          /* bloque que empieza en cada palabra */
 	struct salsa64_rec_x x;                       /* fuera de KSEG0 (rec_tlb.h): justo antes de flags */
 	uint8_t flags[SALSA64_REC_FLAG_BYTES];        /* bloques que tocan cada 128 bytes (satura en 255) */
+	/* Entradas a cada bloque desde que se sumaron al perfil (rec_profile.h):
+	 * el código generado incrementa hits[id] al entrar (a desplazamiento fijo
+	 * de flags, que vive en r28). pent[id] es la entrada del perfil + 1. */
+	uint32_t hits[SALSA64_REC_MAX_BLOCKS + 1];
+	uint16_t pent[SALSA64_REC_MAX_BLOCKS + 1];
 	struct salsa64_rec_block blocks[SALSA64_REC_MAX_BLOCKS + 1];
 	uint16_t twin[SALSA64_REC_MAX_BLOCKS + 1];    /* gemelo de un bloque de KSEG0 que depende de FR, para el otro FR */
 	struct salsa64_rec_link links[SALSA64_REC_MAX_LINKS];
@@ -255,8 +285,19 @@ void salsa64_rec_invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t len);
 /* Descarta todo el código generado (y cuenta por qué). */
 void salsa64_rec_flush_why(struct salsa64_rec *rec, enum salsa64_rec_flush_cause why);
 static inline void salsa64_rec_flush(struct salsa64_rec *rec) { salsa64_rec_flush_why(rec, SALSA64_REC_FLUSH_OTHER); }
-/* Palabras de la caché ocupadas. */
-static inline uint32_t salsa64_rec_used(const struct salsa64_rec *rec) { return rec->used; }
+/* Palabras de la caché ocupadas (preámbulo, la zona caliente hasta donde va y
+ * la fría hasta donde va). */
+uint32_t salsa64_rec_used(const struct salsa64_rec *rec);
+/* Palabras de la zona caliente (las dos mitades) y las ocupadas en la mitad
+ * en uso. */
+uint32_t salsa64_rec_hot_capacity(const struct salsa64_rec *rec);
+uint32_t salsa64_rec_hot_used(const struct salsa64_rec *rec);
+/* Suma al perfil (rec->profile) las entradas contadas en hits[] de todos los
+ * bloques vivos y las deja en 0. Fuera del bucle de emulación (entre campos),
+ * desde el hilo que emula. Sin perfil no hace nada. */
+void salsa64_rec_profile_fold(struct salsa64_rec *rec);
+/* Suma lo pendiente y suelta el perfil (rec->profile = NULL). */
+void salsa64_rec_profile_detach(struct salsa64_rec *rec);
 
 /* ---- Interno: compartido por rec.c y rec_emit.c ---------------------------- */
 
