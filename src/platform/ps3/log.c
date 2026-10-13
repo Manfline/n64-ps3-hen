@@ -54,6 +54,11 @@ static void log_load_dest(void)
 
 void salsa64_log_init(const char *program)
 {
+	salsa64_log_init_banner(program, NULL);
+}
+
+void salsa64_log_init_banner(const char *program, const char *banner)
+{
 	snprintf(log_tag, sizeof log_tag, "%s", program);
 	log_t0 = sysGetSystemTime();
 	sys_lwmutex_attr_t attr = { SYS_LWMUTEX_PROTOCOL_FIFO, SYS_LWMUTEX_ATTR_NOT_RECURSIVE, "log" };
@@ -64,22 +69,25 @@ void salsa64_log_init(const char *program)
 	snprintf(path, sizeof path, SALSA64_DATA_DIR "/%s.log", log_tag);
 	log_file = fopen(path, "w");
 
-	int ret = netInitialize();
-	if (ret < 0) {
+	int ret = netInitialize(), sock = -1;
+	if (ret >= 0) {
+		sock = netSocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+		if (sock >= 0) {
+			int on = 1;
+			netSetSockOpt(sock, SOL_SOCKET, SO_BROADCAST, &on, sizeof on);
+			log_load_dest();
+			log_sock = sock;
+		}
+	}
+
+	if (banner)
+		salsa64_log("%s", banner);
+	if (ret < 0)
 		salsa64_log("red no disponible (netInitialize = %d): solo TTY y archivo", ret);
-		return;
-	}
-
-	log_sock = netSocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	if (log_sock < 0) {
-		salsa64_log("netSocket falló (%d): solo TTY", log_sock);
-		return;
-	}
-
-	int on = 1;
-	netSetSockOpt(log_sock, SOL_SOCKET, SO_BROADCAST, &on, sizeof on);
-	log_load_dest();
-	salsa64_log("log UDP hacia %s:%u", inet_ntoa(log_dest.sin_addr), ntohs(log_dest.sin_port));
+	else if (sock < 0)
+		salsa64_log("netSocket falló (%d): solo TTY", sock);
+	else
+		salsa64_log("log UDP hacia %s:%u", inet_ntoa(log_dest.sin_addr), ntohs(log_dest.sin_port));
 }
 
 void salsa64_log(const char *fmt, ...)

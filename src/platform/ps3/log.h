@@ -28,6 +28,9 @@
 #define SALSA64_LOG_CFG      SALSA64_DATA_DIR "/log.cfg"
 
 void salsa64_log_init(const char *program);
+/* Igual, con `banner` (si no es NULL) como primera línea, también por UDP:
+ * la red se prepara antes de escribir nada. */
+void salsa64_log_init_banner(const char *program, const char *banner);
 void salsa64_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void salsa64_log_shutdown(void);
 

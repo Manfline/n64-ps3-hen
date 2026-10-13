@@ -445,6 +445,8 @@ static const struct entry table[] = {
 	  { "speed, game frames and", "vitesse, images du jeu et", "Tempo, Spiel- und Bildschirm-", "velocità, fotogrammi di gioco", "velocidade, quadros do jogo" } },
 	{ "ver (ahí algunos juegos dejan",
 	  { "(some games leave junk", "pas (certains jeux y laissent", "(manche Spiele lassen dort", "(alcuni giochi vi lasciano", "(alguns jogos deixam lixo" } },
+	{ "versión desconocida",
+	  { "unknown version", "version inconnue", "unbekannte Version", "versione sconosciuta", "versão desconhecida" } },
 	{ "y bordes suaves, pero más",
 	  { "smoother edges, but more", "bords lisses, mais plus de", "Kanten, aber mehr Arbeit", "e bordi lisci, ma più lavoro", "e bordas suaves, mas mais" } },
 	{ "y de la pantalla, en una",

@@ -59,6 +59,17 @@ detectado y, si la hay, la carátula del juego (abajo, «Carátulas»). La
 
 Al final de la lista están «Opciones» y «Salir al XMB».
 
+**Versión.** Arriba a la derecha, chica, bajo el número de juegos, va la
+versión de Salsa64: la etiqueta y el commit, como «v0.2.5 · fb12aeb»
+(«v0.2.5+3 · abc1234» si es tres commits posterior a v0.2.5; «-dirty» al
+final si se compiló con cambios sin commit). Un paquete de prueba, armado
+con otro título o APPID, muestra debajo también los suyos: «Salsa64 gráficos
+3 · SLSA00114». La misma versión sale a la derecha de «Pausa» en el menú de
+pausa y en la primera línea del log (`salsa64.log` y UDP):
+«Salsa64 v0.2.5-3-gabc1234 (Salsa64 gráficos 3, SLSA00114)». Conviene
+mirarla antes de probar algo: dos apps instaladas pueden llevar el mismo
+título en el XMB. Al reportar un problema, incluirla.
+
 Opciones:
 
 - **Fondo animado**: enciende o apaga las ondas del fondo.

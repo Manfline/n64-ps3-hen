@@ -192,6 +192,7 @@
 #include "selftest_audio.h"
 #include "selftest_gfx.h"
 #include "states.h"
+#include "version.h"
 #include "vitest_rom_bin.h"
 
 SYS_PROCESS_PARAM(1001, 0x100000);
@@ -783,6 +784,9 @@ static unsigned state_slot;        /* ranura actual, 0 … SALSA64_STATE_SLOTS �
 static struct osd_fps fps;         /* contador de velocidad (SELECT + △, menu.cfg) */
 static bool ui_ok;                 /* rsxkit_ui listo: aviso y contador sobre el juego */
 static float ui_lw, ui_lh;         /* su espacio lógico */
+/* Versión corta (menú y pausa) y, en un paquete de prueba, «título · APPID»
+ * (version.h); las arma main() al arrancar. */
+static char version_text[64], build_text[160];
 
 /* Sink gráfico del frontend: el del RDP más el timbre a presentación. */
 static const struct salsa64_gfx_sink *rdp_sink;
@@ -2117,7 +2121,7 @@ static void present_overlay(uint64_t now)
 	osd_draw(&fps, now, ui_lw, ui_lh);
 	if (pause_ctl.menu) {
 		struct osd_pause_menu pm = { pause_ctl.menu_sel, state_slot, pm_slot_have, fps.on, in_menu,
-					     game_cheats.n, cheats_active(&game_cheats) };
+					     game_cheats.n, cheats_active(&game_cheats), version_text };
 		osd_pause_menu_draw(&pm, ui_lw, ui_lh);
 	} else if (pause_ctl.image) {
 		char sbuf[24];
@@ -3850,6 +3854,8 @@ static void menu_scan(const char *keep)
 	menu.dl_enabled = dl_enabled();  /* experimental: solo con descargas.cfg «activar = si» */
 	menu.dirs[menu.ndirs++] = SALSA64_DATA_DIR;
 	menu.dirs[menu.ndirs++] = "/dev_usb000/salsa64 … /dev_usb007/salsa64";
+	menu.version = version_text;
+	menu.build = build_text[0] ? build_text : NULL;
 }
 
 static const rsxkit_config *video_config_for(int resolution, rsxkit_config *cfg);
@@ -4429,7 +4435,12 @@ static void watch_thread(void *arg)
 
 int main(void)
 {
-	salsa64_log_init("salsa64");
+	char banner[192];
+	version_banner(banner, sizeof banner);
+	salsa64_log_init_banner("salsa64", banner);
+	version_label(salsa64_version, salsa64_commit, version_text, sizeof version_text);
+	if (!version_build(salsa64_title, salsa64_appid, build_text, sizeof build_text))
+		build_text[0] = '\0';
 	pres.autotest = salsa64_autotest();
 	sys_ppu_thread_t watch_tid;
 	bool watching = sysThreadCreate(&watch_tid, watch_thread, NULL, WATCH_PRIO, 0x10000, THREAD_JOINABLE,

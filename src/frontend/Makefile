@@ -5,7 +5,7 @@ TITLE   := Salsa64
 APPID   := SLSA00064
 SRCS    := main.c audio_out.c audio_sync.c menu.c osd.c osd_fps.c pacer.c padmap.c pausectl.c replay.c romlist.c savefile.c \
            cheats.c cover.c download.c dlutil.c i18n.c namematch.c screenshot.c selftest.c selftest_audio.c selftest_gfx.c states.c \
-           filters/crt_params.c filters/filters.c
+           version.c filters/crt_params.c filters/filters.c
 # Filtros de la presentación (filters/): fragment programs en Cg compilados
 # con cgcomp. Van en fp32: cgcomp pide -fastprecision a Cg, que baja a fp16
 # cuentas en píxeles que no lo aguantan.
@@ -55,6 +55,30 @@ LIBS    := -lrsx -lgcm_sys -laudio -lio -lsysutil -lhttp -lhttputil -lssl -lnetc
 LDFLAGS := -T $(abspath $(R))/mk/rec-cache.ld -T lv2.ld
 
 include $(R)/mk/ps3.mk
+
+# Versión, título y APPID para version.c (menú, pausa y primera línea del
+# log). tools/build.sh calcula SALSA64_VERSION y SALSA64_COMMIT fuera del
+# contenedor: ahí dentro el .git de un worktree apunta a una ruta del host.
+ifndef SALSA64_VERSION
+SALSA64_VERSION := $(shell git -C $(R) describe --tags --always --dirty 2>/dev/null)
+endif
+ifndef SALSA64_COMMIT
+SALSA64_COMMIT := $(shell git -C $(R) rev-parse --short HEAD 2>/dev/null)
+endif
+# Una cadena de C protegida para el shell (\, " y ' adentro).
+c_str = '"$(subst ','\'',$(subst ",\",$(subst \,\\,$(1))))"'
+VERSION_DEFS := -DSALSA64_VERSION=$(call c_str,$(or $(SALSA64_VERSION),desconocida)) \
+                -DSALSA64_COMMIT=$(call c_str,$(SALSA64_COMMIT)) \
+                -DSALSA64_TITLE=$(call c_str,$(TITLE)) -DSALSA64_APPID=$(call c_str,$(APPID))
+$(OBJ)/src/frontend/version.c.o: PPU_CFLAGS += $(VERSION_DEFS)
+# version.txt cambia solo si cambia algo de eso: así version.c se recompila
+# (y el programa se vuelve a enlazar) solo entonces, y un `make pkg` con
+# otro TITLE o APPID no se queda con los del build anterior.
+$(OBJ)/src/frontend/version.c.o: $(OBJ)/version.txt
+.PHONY: FORCE
+$(OBJ)/version.txt: FORCE
+	@mkdir -p $(@D)
+	@printf '%s\n' $(VERSION_DEFS) >$@.tmp; if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
 
 # Lo que incluyen los fragment programs de los filtros.
 $(OBJ)/crt_mask_dots.fpo: filters/crt.cgh

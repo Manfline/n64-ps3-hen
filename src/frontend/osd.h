@@ -80,6 +80,7 @@ struct osd_pause_menu {
 	unsigned slot;             /* ranura actual */
 	bool slot_has, fps_on, in_menu;
 	unsigned cheats_total, cheats_on;
+	const char *version;       /* versión corta (version.h), chica a la derecha del título; o NULL */
 };
 void osd_pause_menu_draw(const struct osd_pause_menu *m, float lw, float lh);
 

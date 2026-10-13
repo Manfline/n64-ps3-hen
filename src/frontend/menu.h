@@ -179,6 +179,10 @@ struct menu {
 	const char *dirs[MENU_DIRS_MAX];  /* dónde se buscó (para la lista vacía) */
 	unsigned ndirs;
 	const char *loading;   /* título que se está cargando, o NULL */
+	/* Arriba a la derecha, chico, bajo el contador (los pone main.c): la
+	 * versión corta (version.h) y, en un paquete de prueba, «título ·
+	 * APPID»; NULL, nada. */
+	const char *version, *build;
 	/* Animación (menu_frame). */
 	float pos, opt_pos;    /* fila mostrada: sigue a sel/opt con suavizado */
 	float page_t;          /* 0 = juegos, 1 = opciones */

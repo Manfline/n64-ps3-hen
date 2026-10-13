@@ -100,6 +100,22 @@ PS3_IP=x.x.x.x tools/deploy-ps3.sh ftp build/salsa64/salsa64.pkg   # via webMAN 
 `PS3_IP` can also live in `tools/ps3.conf`, which git ignores. The app also
 writes its log to `/dev_hdd0/salsa64/salsa64.log`.
 
+**Test packages:** give every test build of the emulator its own title (and,
+to keep it from replacing the installed release, its own `PROGRAM` and
+`APPID`). The Package Manager and the XMB list apps by the `PARAM.SFO` title,
+so two packages called «Salsa64» are easy to mix up:
+
+```sh
+tools/build.sh -C src/frontend PROGRAM=salsa64-gfx TITLE="Salsa64 gráficos 3" APPID=SLSA00114 pkg
+```
+
+The build stamps the version (`git describe --tags --always --dirty`, worked
+out by `tools/build.sh` outside the container), the title and the APPID into
+the program: the menu shows them in its top-right corner, the pause menu next
+to its title, and the first log line reads «Salsa64 v0.2.5-3-gabc1234
+(Salsa64 gráficos 3, SLSA00114)». Check it before trusting a test run, and
+include it in bug reports. Without git the version reads «desconocida».
+
 ## Code style
 
 - C99/C11 as supported by ps3toolchain's GCC; C++ only if a dependency

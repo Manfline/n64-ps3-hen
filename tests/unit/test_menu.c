@@ -32,6 +32,7 @@
 #include "frontend/menu.h"
 #include "frontend/padmap.h"
 #include "frontend/romlist.h"
+#include "frontend/version.h"
 
 #define BIT(b) (1u << (b))
 #define UP     BIT(SALSA64_DS3_UP)
@@ -1253,6 +1254,98 @@ static void menu_video_file(void)
 	CHECK_EQ(t.resolution, MENU_RES_720P);
 }
 
+static void check_label(const char *describe, const char *commit, const char *want)
+{
+	char buf[96];
+	version_label(describe, commit, buf, sizeof buf);
+	t_checks++;
+	if (strcmp(buf, want))
+		t_fail(__FILE__, __LINE__, "version_label(«%s», «%s») = «%s», se esperaba «%s»", describe, commit, buf,
+		       want);
+}
+
+/* La versión corta de cada forma de git describe, el paquete de prueba y la
+ * primera línea del log (aquí sin los -D del Makefile: la del publicado y
+ * «desconocida»). */
+static void version_texts(void)
+{
+	check_label("v0.2.5", "fb12aeb", "v0.2.5 · fb12aeb");
+	check_label("v0.2.5", "", "v0.2.5");
+	check_label("v0.2.5-dirty", "fb12aeb", "v0.2.5 · fb12aeb-dirty");
+	check_label("v0.2.5-3-gabc1234", "abc1234", "v0.2.5+3 · abc1234");
+	check_label("v0.2.5-12-gabc1234-dirty", "abc1234", "v0.2.5+12 · abc1234-dirty");
+	check_label("v0.3.0-rc1-2-g0123abcd", "0123abcd", "v0.3.0-rc1+2 · 0123abcd");
+	check_label("abc1234", "abc1234", "abc1234");
+	check_label("abc1234-dirty", "abc1234", "abc1234-dirty");
+	check_label("desconocida", "", "versión desconocida");
+	check_label("", "", "versión desconocida");
+	char buf[160];
+	CHECK(!version_build(VERSION_TITLE_RELEASE, VERSION_APPID_RELEASE, buf, sizeof buf));
+	CHECK(version_build("Salsa64 gráficos 3", "SLSA00114", buf, sizeof buf));
+	CHECK(!strcmp(buf, "Salsa64 gráficos 3 · SLSA00114"));
+	CHECK(version_build(VERSION_TITLE_RELEASE, "SLSA00099", buf, sizeof buf));
+	CHECK(!strcmp(buf, "Salsa64 · SLSA00099"));
+	version_banner(buf, sizeof buf);
+	CHECK(!strcmp(buf, "Salsa64 versión desconocida (Salsa64, SLSA00064)"));
+	char small[12];  /* se corta sin pasarse */
+	version_label("v0.2.5-3-gabc1234", "abc1234", small, sizeof small);
+	CHECK_EQ(strlen(small), sizeof small - 1);
+}
+
+/* La versión y el paquete van arriba a la derecha, entre el contador y el
+ * panel y sin pasar sobre la columna, lejos del pie: en los 6 idiomas, con
+ * tele 16:9 y 4:3 (el espacio lógico es el mismo a 720p y a 1080p) y con un
+ * título que no cabe (se recorta). Se dibuja el mismo cuadro sin ellos y con
+ * ellos, y se mira dónde cambió. */
+static void menu_version_place(void)
+{
+	static uint8_t without[720 * 1280 * 3], with[720 * 1280 * 3];
+	static const char *const builds[] = {
+		NULL, "Salsa64 gráficos 3 · SLSA00114",
+		"Salsa64 prueba con un título larguísimo que no cabe en la esquina · SLSA00999",
+	};
+	rsxkit_ui_atlas(&atlas[0][0], RSXKIT_UI_ATLAS_W * 4);
+	frame_list_setup();
+	uint32_t dropped0 = rsxkit_ui_dropped();
+	for (int lang = 0; lang < MENU_LANGS; lang++)
+		for (int wide = 0; wide < 2; wide++)
+			for (int b = 0; b < 3; b++) {
+				float lw = wide ? 1280.0f : 960.0f;
+				int w = (int)lw;
+				i18n_set(lang);
+				struct menu m;
+				menu_init(&m, &frame_list, 4, NULL);
+				m.set.lang = lang;
+				m.set.waves = false;  /* fondo quieto: los dos cuadros, iguales salvo la versión */
+				frames(&m, 1000000, 2500000, lw);
+				memset(without, 0, sizeof without);
+				raster(without, w, 720, lw, 720, frames(&m, 2600000, 2600000, lw));
+				m.version = b == 2 ? "versión desconocida" : "v0.2.5+12 · abc1234-dirty";
+				m.build = builds[b];
+				memset(with, 0, sizeof with);
+				raster(with, w, 720, lw, 720, frames(&m, 2616683, 2616683, lw));
+				int x0 = w, y0 = 720, x1 = -1, y1 = -1;
+				for (int y = 0; y < 720; y++)
+					for (int x = 0; x < w; x++)
+						if (memcmp(with + 3 * (y * w + x), without + 3 * (y * w + x), 3)) {
+							x0 = x < x0 ? x : x0, x1 = x > x1 ? x : x1;
+							y0 = y < y0 ? y : y0, y1 = y > y1 ? y : y1;
+						}
+				/* El contador termina a 0,055 × 720 + 10 + 1,75 × 13 ≈ 72
+				 * (más la sombra); el panel empieza a 0,17 × 720 ≈ 122 y en
+				 * 0,555 del ancho (la columna queda a la izquierda); el pie,
+				 * a 0,815 × 720 ≈ 587. */
+				CHECK(x1 >= 0);
+				CHECK(y0 >= 75);
+				CHECK(y1 < (b ? 120 : 101));
+				CHECK(x0 >= (int)(lw * 0.555f));
+				CHECK(x1 <= (int)(lw * 0.94f) + 3);
+				CHECK_EQ(rsxkit_ui_dropped(), dropped0);
+			}
+	i18n_set(MENU_LANG_ES);
+	rsxkit_ui_batch(NULL, 0, 0, 0);
+}
+
 /* SALSA64_MENU_PPM=<prefijo>: el menú como lo dibujaría el RSX en
  * <prefijo>-juegos.ppm, -opciones.ppm y -43.ppm, para verlo a ojo. */
 static void menu_preview(void)
@@ -1268,6 +1361,8 @@ static void menu_preview(void)
 	menu_init(&m, &frame_list, 4, NULL);
 	m.out_w = 1280, m.out_h = 720;
 	m.res_run = MENU_RES_1080P;  /* pidió 1080p y quedó 720p: sale la pista */
+	m.version = "v0.2.5+3 · abc1234";
+	m.build = "Salsa64 gráficos 3 · SLSA00114";
 	snprintf(m.last, sizeof m.last, "%s", frame_list.e[4].path);
 	uint32_t n = frames(&m, 1000000, 13000000, 1280);
 	raster(rgb, 1280, 720, 1280, 720, n);
@@ -1339,6 +1434,8 @@ static void menu_preview(void)
 			menu_init(&m, &frame_list, 4, NULL);
 			m.set.lang = lang;
 			m.set.filter = MENU_FILTER_SCAN_SOFT;
+			m.version = "v0.2.5+3 · abc1234";
+			m.build = "Salsa64 gráficos 3 · SLSA00114";
 			snprintf(m.last, sizeof m.last, "%s", frame_list.e[4].path);
 			n = frames(&m, 1000000, 13000000, 960);
 			raster(rgb, 960, 720, 960, 720, n);
@@ -1577,5 +1674,7 @@ void t_suite_menu(void)
 	RUN(menu_cfg_differs);
 	RUN(menu_cheats_page);
 	RUN(menu_cover_state);
+	RUN(version_texts);
+	RUN(menu_version_place);
 	RUN(menu_preview);
 }

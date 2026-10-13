@@ -160,6 +160,14 @@ void osd_pause_menu_draw(const struct osd_pause_menu *m, float lw, float lh)
 	rsxkit_ui_rect(x - 2.0f, y - 2.0f, w + 4.0f, h + 4.0f, 0xFFFFFF60);
 	rsxkit_ui_rect(x, y, w, h, 0x141414F4);
 	rsxkit_ui_text(x + pad, y + pad, tr("Pausa"), 2.5f, 0xFFFFFFFF, 0);
+	if (m->version) {
+		/* Al ras de abajo del título: de qué paquete es lo que corre. */
+		const char *v = tr(m->version);
+		float vs = 1.25f, room = w - 2 * pad - cells(tr("Pausa")) * RSXKIT_FONT_W * 2.5f - 24.0f;
+		uint32_t max = room > 0.0f ? (uint32_t)(room / (RSXKIT_FONT_W * vs)) : 1, n = cells(v);
+		float vw = (float)(n < max ? n : max) * RSXKIT_FONT_W * vs;
+		rsxkit_ui_text(x + w - pad - vw, y + pad + RSXKIT_FONT_H * (2.5f - vs), v, vs, 0x8C96A4FF, max);
+	}
 	for (int i = 0; i < PM_ROWS; i++) {
 		float ry = y + pad + 60.0f + i * row_h;
 		bool cur = i == m->sel, dim = false;

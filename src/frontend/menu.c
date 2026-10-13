@@ -39,6 +39,11 @@
 #define GAP     0.135f
 #define SPACING 0.074f
 
+/* Versión y paquete arriba a la derecha: letra chica y a lo sumo el ancho
+ * del panel (fracción del ancho), para no pasar sobre la columna. */
+#define VER_SCALE 1.25f
+#define VER_ROOM  0.38f
+
 /* ---- Lógica ---------------------------------------------------------------- */
 
 void menu_settings_default(struct menu_settings *s)
@@ -1440,6 +1445,15 @@ void menu_frame(struct menu *m, float lw, float lh, uint64_t now_us)
 	char count[24];
 	snprintf(count, sizeof count, tr(m->list->count == 1 ? "%u juego" : "%u juegos"), m->list->count);
 	stext(W * 0.94f - cells_w(count, 1.75f), H * 0.055f + 10.0f, count, 1.75f, C_DIM, a, 0);
+	/* Versión y paquete, chicos, entre el contador y el panel. */
+	const char *ver[2] = { m->version, m->build };
+	for (int i = 0; i < 2; i++) {
+		if (!ver[i])
+			continue;
+		uint32_t max = (uint32_t)(W * VER_ROOM / (RSXKIT_FONT_W * VER_SCALE)), n = rsxkit_text_cells(tr(ver[i]));
+		float w = (float)(n < max ? n : max) * RSXKIT_FONT_W * VER_SCALE;
+		stext(W * 0.94f - w, H * 0.055f + 38.0f + 18.0f * i, ver[i], VER_SCALE, C_DIM, a * 0.85f, max);
+	}
 
 	/* Columna (se desliza al cambiar de página) y panel. */
 	float x = W * 0.07f, p = smooth(m->page_t), ch = smooth(m->cht_t), gm = smooth(m->game_t);
