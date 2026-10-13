@@ -228,13 +228,16 @@ SYS_PROCESS_PARAM(1001, 0x100000);
  * la fija `filtros-reducir`); con `filtros-capturas`, la primera vez de cada
  * filtro guarda la imagen que entra y la que sale (filtro-<clave>-<alto>-
  * fuente.ppm y -pantalla.ppm); con `filtros-reducir` («1» o «2»), la
- * reducción en esas pasadas; con `capturas-pantalla`, las capturas
+ * reducción en esas pasadas; con `filtros-spe`, la señal y la
+ * decodificación de S-Video y compuesto en dos SPEs (con el ciclo, cada
+ * vuelta las alterna entre los SPEs y el RSX); con `capturas-pantalla`, las capturas
  * periódicas guardan además la pantalla entera como se ve (con el filtro)
  * en pantalla-N.ppm. */
 #define FILTER_PATH        SALSA64_DATA_DIR "/filtro"
 #define FILTER_CYCLE_PATH  SALSA64_DATA_DIR "/filtros-ciclo"
 #define FILTER_SHOTS_PATH  SALSA64_DATA_DIR "/filtros-capturas"
 #define FILTER_REDUCE_PATH SALSA64_DATA_DIR "/filtros-reducir"
+#define FILTER_SPE_PATH    SALSA64_DATA_DIR "/filtros-spe"
 #define FILTER_CYCLE_US    20000000u
 /* Preparar un filtro que tarde más que esto (ms) se avisa en pantalla. */
 #define FILTER_NOTICE_MS   33u
@@ -1754,6 +1757,8 @@ static struct {
 	int cur;        /* el que se usa: sel, o el del ciclo de medición */
 	bool cycle;     /* filtros-ciclo */
 	int cycle_reduce;  /* el ciclo alterna la reducción (1 o 2 pasadas) en cada vuelta; 0: no */
+	bool cycle_spe;    /* el ciclo alterna el SPE en cada vuelta */
+	bool spe;          /* la señal del cable va en el SPE ahora */
 	int cycle_list[SALSA64_CRTS];  /* los del ciclo, desde «Ninguno» */
 	int cycle_n, cycle_i;
 	bool full_shots;
@@ -1961,12 +1966,16 @@ static void filter_setup(int menu_filter)
 		if (fscanf(f, "%d", &passes) != 1 || (passes != 1 && passes != 2))
 			passes = 2;
 		fclose(f);
-	} else if (flt.cycle) {
+	} else if (flt.cycle && !file_exists(FILTER_SPE_PATH)) {
 		flt.cycle_reduce = 2;
 	}
 	salsa64_filters_options(file_exists(FILTER_SHOTS_PATH), passes);
+	flt.spe = file_exists(FILTER_SPE_PATH);
+	flt.cycle_spe = flt.cycle && flt.spe;
+	salsa64_filters_spe(flt.spe);
 	salsa64_log("filtros: %s%s%s", flt.cycle ? "ciclo de medición (todos cada 20 s, desde «Ninguno»)" : "",
-		    flt.cycle ? (flt.cycle_reduce ? "; cada vuelta cambia la reducción (dos pasadas, una, …)" : "")
+		    flt.cycle ? (flt.cycle_reduce ? "; cada vuelta cambia la reducción (dos pasadas, una, …)"
+				 : flt.cycle_spe ? "; cada vuelta cambia la señal del cable (SPE, RSX, …)" : "")
 			      : salsa64_crt_name(flt.cur),
 		    flt.full_shots ? "; capturas de la pantalla entera (pantalla-N.ppm)" : "");
 }
@@ -1995,6 +2004,11 @@ static void filter_cycle(uint64_t now)
 		rsxkit_post_reduce_passes(flt.cycle_reduce);
 		salsa64_log("filtros: ciclo, otra vuelta: reducir en %d pasada%s", flt.cycle_reduce,
 			    flt.cycle_reduce == 1 ? "" : "s");
+	}
+	if (flt.cur == SALSA64_CRT_NONE && flt.cycle_spe) {
+		flt.spe = !flt.spe;
+		salsa64_filters_spe(flt.spe);
+		salsa64_log("filtros: ciclo, otra vuelta: la señal del cable en %s", flt.spe ? "el SPE" : "el RSX");
 	}
 	salsa64_log("filtros: ciclo → «%s»", salsa64_crt_name(flt.cur));
 	osd_notice(now, "Filtro: %s", salsa64_crt_name(flt.cur));

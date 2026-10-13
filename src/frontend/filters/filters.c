@@ -34,14 +34,18 @@
 #include <sys/thread.h>
 
 #include <rsxkit/post.h>
+#include <spukit/spukit.h>
 
 #include "frontend/filters/crt_params.h"
+#include "frontend/filters/crt_spe.h"
 #include "platform/ps3/log.h"
 #include "platform/ps3/paths.h"
 
 #include "crt_cable_decode27_fpo.h"
 #include "crt_cable_decode9_fpo.h"
 #include "crt_cable_signal_fpo.h"
+#include "crt_cable_spe_lin_fpo.h"
+#include "spu_crt_bin.h"
 #include "crt_debug_fpo.h"
 #include "crt_glow_fpo.h"
 #include "crt_lineal_fpo.h"
@@ -91,13 +95,18 @@ static const char *const seg_mask[SEGS] = { "reducir", "lineal y resplandor", "t
 static const char *const seg_cable[SEGS] = { "reducir", "lineal y resplandor", "señal y decodificación", "líneas",
 					     "final" };
 static const char *const seg_trin[SEGS] = { "reducir", "lineal y resplandor", NULL, "líneas", "final" };
-/* Cuadros en vuelo cuyas marcas se leen cuando su barrera pasó. */
+/* Cuadros en vuelo cuyas marcas se leen cuando su barrera pasó; cada uno
+ * con STAMPS_SLOT marcas: 0 .. SEGS por tramo y, con el SPE, cuando el RSX
+ * dejó la imagen y cuando terminó de esperar al SPE. */
 #define SLOTS 4
+#define STAMPS_SLOT  8
+#define STAMP_SPE_IN (SEGS + 1)
+#define STAMP_SPE_GO (SEGS + 2)
 
 enum {
 	P_LINEAR, P_GLOW, P_TILE_A, P_TILE_B, P_TILE_C, P_DOTS, P_MASK_FINAL,
 	P_SIGNAL_E, P_SIGNAL_O, P_DECODE9, P_DECODE27, P_LINES_A4, P_LINES_B4, P_LINES_A8, P_LINES_B8, P_TUBE_FINAL,
-	P_TRIN_A, P_TRIN_B, P_DEBUG, PROGRAMS
+	P_TRIN_A, P_TRIN_B, P_SPE_LIN, P_DEBUG, PROGRAMS
 };
 
 static const u8 *const program_fpo[PROGRAMS] = {
@@ -119,11 +128,13 @@ static const u8 *const program_fpo[PROGRAMS] = {
 	[P_TUBE_FINAL] = crt_tube_final_fpo,
 	[P_TRIN_A] = crt_trinitron_lines_a_fpo,
 	[P_TRIN_B] = crt_trinitron_lines_b_fpo,
+	[P_SPE_LIN] = crt_cable_spe_lin_fpo,
 	[P_DEBUG] = crt_debug_fpo,
 };
 
+/* S_SPE_*: en la memoria principal (spe.mem), con `filtros-spe`. */
 enum { S_SRC, S_LIN, S_GLOW, S_TILE_A, S_TILE_B, S_TILE_C, S_DOTS, S_SIG_E, S_SIG_O, S_DEC_E, S_DEC_O, S_LINES_A,
-       S_LINES_B, SURFACES };
+       S_LINES_B, S_SPE_IN, S_SPE_E, S_SPE_O, SURFACES };
 
 static struct {
 	bool failed;            /* no hay memoria o programas: sin filtro hasta liberar */
@@ -145,10 +156,12 @@ static struct {
 		int filter;
 		bool pending;
 		bool reused;    /* solo la pasada final (marcas 0 y SEGS) */
+		bool spe;       /* señal y decodificación en el SPE */
 	} slot[SLOTS];
 	uint32_t frame;
-	uint64_t ns[SEGS], ns_reused;
-	uint32_t measured, measured_reused, drawn, reused;
+	uint64_t ns[SEGS], ns_reused, ns_spe_wait, ns_spe_trip;
+	uint32_t measured, measured_reused, measured_spe, drawn, reused;
+	bool spe_frame;         /* este cuadro va con el SPE (spe_kick) */
 	int last_filter;
 	bool check;             /* falta la comprobación de este filtro */
 	bool checked[SALSA64_CRTS];
@@ -163,6 +176,9 @@ static struct {
 		rsxkit_rect region;
 	} last;
 } fl = { .filter = -1, .last_filter = -1 };
+
+static bool spe_prepare(int f);
+static void spe_release(void);
 
 static rsxkit_post_input in_surface(int s, rsxkit_filter filter, uint8_t wrap)
 {
@@ -187,6 +203,7 @@ static void cap_release(void);
 
 void salsa64_filters_release(void)
 {
+	spe_release();
 	rsxkit_finish();
 	cap_release();
 	free_surfaces();
@@ -401,6 +418,7 @@ static bool configure(int f, uint32_t sw, uint32_t sh, float aspect)
 		if (ok) {
 			glow_constants(p->tube.gamma_in, p->tube.glow, p->tube.glow_radius, p->tube.brightness);
 			cable_constants(f);
+			ok = spe_prepare(f);
 			salsa64_log("filtros: «%s» en %ux%u (%u,%u) desde %ux%u: %d muestras desde %d cada %.3f px (%u "
 				    "columnas%s), franjas cada %.0f px, resplandor ×%u",
 				    salsa64_crt_name(f), fl.rect[2], fl.rect[3], fl.rect[0], fl.rect[1], sw, sh,
@@ -569,9 +587,9 @@ static void collect(void)
 		fl.slot[s].pending = false;
 		if (fl.slot[s].filter != fl.last_filter)
 			continue;
-		uint64_t t[SEGS + 1];
-		for (int i = 0; i <= SEGS; i++)
-			t[i] = rsxkit_stamp_ns((uint32_t)(s * (SEGS + 1) + i));
+		uint64_t t[STAMPS_SLOT];
+		for (int i = 0; i < STAMPS_SLOT; i++)
+			t[i] = rsxkit_stamp_ns((uint32_t)(s * STAMPS_SLOT + i));
 		if (fl.slot[s].reused) {
 			if (t[SEGS] >= t[0] && t[SEGS] - t[0] <= 100000000u) {
 				fl.ns_reused += t[SEGS] - t[0];
@@ -588,12 +606,18 @@ static void collect(void)
 		for (int i = 0; i < SEGS; i++)
 			fl.ns[i] += t[i + 1] - t[i];
 		fl.measured++;
+		if (fl.slot[s].spe && t[STAMP_SPE_GO] >= t[STAMP_SPE_IN] && t[STAMP_SPE_GO] >= t[SEG_LINEAR + 1] &&
+		    t[STAMP_SPE_GO] - t[STAMP_SPE_IN] < 100000000u) {
+			fl.ns_spe_trip += t[STAMP_SPE_GO] - t[STAMP_SPE_IN];
+			fl.ns_spe_wait += t[STAMP_SPE_GO] - t[SEG_LINEAR + 1];
+			fl.measured_spe++;
+		}
 	}
 }
 
 static void stamp(int slot, int i)
 {
-	rsxkit_stamp((uint32_t)(slot * (SEGS + 1) + i));
+	rsxkit_stamp((uint32_t)(slot * STAMPS_SLOT + i));
 }
 
 static void run(rsxkit_post_pass *p)
@@ -677,12 +701,14 @@ static void tube_lines(int pa, int pb, int e, int o)
 	}
 }
 
+static void spe_wait_rsx(int slot);
+
 static void draw_cable(int slot)
 {
 	const struct crt_cable_taps *c = &fl.ct;
 	rsxkit_post_pass p;
 	int dec = c->count > 9 ? P_DECODE27 : P_DECODE9;
-	for (int s = 0; s < (c->grid8 ? 2 : 1); s++) {
+	for (int s = 0; !fl.spe_frame && s < (c->grid8 ? 2 : 1); s++) {
 		pass_init(&p, s ? P_SIGNAL_O : P_SIGNAL_E, s ? S_SIG_O : S_SIG_E, c->cols, fl.sh);
 		p.in[0] = in_surface(S_SRC, RSXKIT_FILTER_LINEAR, RSXKIT_POST_BORDER);
 		p.inputs = 1;
@@ -692,6 +718,8 @@ static void draw_cable(int slot)
 		p.inputs = 1;
 		run(&p);
 	}
+	if (fl.spe_frame)
+		spe_wait_rsx(slot);
 	stamp(slot, SEG_TABLES + 1);
 	if (c->grid8)
 		tube_lines(P_LINES_A8, P_LINES_B8, S_DEC_E, S_DEC_O);
@@ -716,7 +744,7 @@ static float debug_scale = 1.0f;
 
 static const char *const surface_names[SURFACES] = { "fuente", "lineal", "resplandor", "teselaA", "teselaB", "teselaC",
 						     "puntos", "senal", "senalO", "decodificada", "decodificadaO",
-						     "lineasA", "lineasB" };
+						     "lineasA", "lineasB", "spe", "speE", "speO" };
 
 void salsa64_filters_debug(const char *name, float scale)
 {
@@ -906,6 +934,314 @@ void salsa64_filters_options(bool captures, int reduce_passes)
 		    rsxkit_post_reduce_passes(0) == 1 ? "" : "s", captures ? "sí (filtro-<clave>-<alto>-*.ppm)" : "no");
 }
 
+/* ---- Señal y decodificación en el SPE (filtros-spe; crt_spe.h) -----------------
+ * S-Video y compuesto: el RSX copia la imagen reducida a la memoria
+ * principal y escribe L_SPE_IN; dos SPEs (la mitad de las líneas cada uno)
+ * hacen la señal y la decodificación y escriben L_SPE_OUT(i); mientras, el
+ * RSX hace lineal y resplandor, y antes de linealizar la tabla del SPE
+ * espera las dos etiquetas. Si un SPE no termina (el RSX ya le dejó la
+ * imagen y pasaron SPE_TIMEOUT_US), el PPE escribe su etiqueta para soltar
+ * al RSX y desde ahí todo va en el RSX. */
+
+#define SPE_BYTES      (8u << 20)  /* configuración, imagen reducida y tablas E y O (≤ 7,1 MB) */
+#define SPE_IN_OFF     (32u << 10)
+#define L_SPE_IN       236
+#define L_SPE_OUT(i)   (237 + (i))
+#define SPE_TIMEOUT_US 300000u
+#define SPE_INFLIGHT   4
+
+_Static_assert(L_SPE_OUT(CRT_SPE_WORKERS - 1) <= RSXKIT_LABEL_USER_MAX && L_SPE_IN >= RSXKIT_LABEL_USER_MIN,
+	       "etiquetas del SPE fuera de las de quien usa rsxkit");
+_Static_assert(sizeof(struct crt_spe_config) <= SPE_IN_OFF, "la configuración del SPE no cabe");
+
+static struct {
+	bool want, on, failed;
+	spukit_worker *w[CRT_SPE_WORKERS];
+	uint8_t *mem;
+	uint32_t offset;
+	uint32_t cfg_id, seq;
+	uint32_t in_pitch, out_pitch, e_off, o_off;
+	/* Cuadros en vuelo (en orden). */
+	struct {
+		uint32_t seq, id[CRT_SPE_WORKERS];
+		bool done[CRT_SPE_WORKERS];
+		uint64_t t_in;  /* cuando se vio que el RSX dejó la imagen (0: aún no) */
+		uint32_t wait, work;
+	} job[SPE_INFLIGHT];
+	unsigned head, n;
+	uint64_t wait_ticks, work_ticks;
+	uint32_t frames;
+} spe;
+
+void salsa64_filters_spe(bool on)
+{
+	if (spe.want == on)
+		return;
+	spe.want = on;
+	fl.filter = -1;  /* la configuración se rehace en el próximo cuadro */
+	salsa64_log("filtros: la señal y la decodificación de S-Video y compuesto, en %s",
+		    on ? (spe.failed ? "el RSX (el SPE falló antes)" : "dos SPE") : "el RSX");
+}
+
+static volatile uint32_t *spe_label(uint32_t i)
+{
+	return rsxkit_label_address(i);
+}
+
+static uint64_t ea_of(const void *p)
+{
+	return (uint64_t)(uintptr_t)p;
+}
+
+/* Los resultados de los cuadros en vuelo, en orden; con `all`, espera
+ * a todos. El que no llega: ver arriba. */
+static void spe_collect(bool all)
+{
+	static bool told;
+	while (spe.n) {
+		__typeof__(spe.job[0]) *e = &spe.job[spe.head];
+		bool pending = false;
+		for (int i = 0; i < CRT_SPE_WORKERS; i++) {
+			while (!e->done[i]) {
+				uint64_t now = sysGetSystemTime();
+				if (!e->t_in && (int32_t)(*spe_label(L_SPE_IN) - e->seq) >= 0)
+					e->t_in = now;
+				if (spukit_done(spe.w[i], e->id[i])) {
+					const spukit_result *r = spukit_wait(spe.w[i], e->id[i]);
+					struct crt_spe_result res;
+					memcpy(&res, r->data, sizeof res);
+					e->done[i] = true;
+					if (res.err) {
+						/* No escribió su etiqueta: la escribe el PPE. Sin la
+						 * imagen en 2 s (el RSX retenido) no es falla del SPE. */
+						*spe_label(L_SPE_OUT(i)) = e->seq;
+						if (res.err != -3) {
+							spe.failed = true;
+							spe.on = false;
+						}
+						if (!told) {
+							salsa64_log("filtros: el SPE %d devolvió %d en el cuadro %u%s", i, res.err, e->seq,
+								    spe.failed ? ": la señal va en el RSX" : "");
+							told = true;
+						}
+					}
+					e->wait = res.wait_ticks > e->wait ? res.wait_ticks : e->wait;
+					e->work = res.work_ticks > e->work ? res.work_ticks : e->work;
+				} else if (e->t_in && now - e->t_in > SPE_TIMEOUT_US) {
+					*spe_label(L_SPE_OUT(i)) = e->seq;
+					e->done[i] = true;
+					spe.failed = true;
+					spe.on = false;
+					salsa64_log("filtros: el SPE %d no terminó el cuadro %u en %u ms: la señal va en el RSX", i,
+						    e->seq, SPE_TIMEOUT_US / 1000);
+				} else if (all) {
+					sysUsleep(100);
+				} else {
+					pending = true;
+					break;
+				}
+			}
+			if (pending)
+				break;
+		}
+		if (pending)
+			break;
+		spe.wait_ticks += e->wait;
+		spe.work_ticks += e->work;
+		spe.frames++;
+		spe.head = (spe.head + 1) % SPE_INFLIGHT;
+		spe.n--;
+	}
+}
+
+static bool spe_start(void)
+{
+	if (!spe.mem) {
+		spe.mem = memalign(1u << 20, SPE_BYTES);
+		if (!spe.mem || rsxkit_map_main(spe.mem, SPE_BYTES, &spe.offset) != RSXKIT_OK) {
+			salsa64_log("filtros: sin memoria principal mapeada para el SPE: la señal va en el RSX");
+			free(spe.mem);
+			spe.mem = NULL;
+			spe.failed = true;
+			return false;
+		}
+	}
+	for (int i = 0; i < CRT_SPE_WORKERS; i++)
+		if (!spe.w[i] && !(spe.w[i] = spukit_worker_start(spu_crt_bin, "salsa64_crt", 0))) {
+			salsa64_log("filtros: no arrancó el SPE %d (%d): la señal va en el RSX", i, spukit_last_error());
+			spe.failed = true;
+			return false;
+		}
+	return true;
+}
+
+/* Lo que no cambia de un cuadro a otro, para el SPE (la cuenta de
+ * crt_cable_signal.fcg con las constantes de cable_constants). */
+static void spe_config(void)
+{
+	const struct crt_cable_preset *p = &crt_cable_tv13;
+	const struct crt_cable_taps *c = &fl.ct;
+	struct crt_spe_config *k = (struct crt_spe_config *)spe.mem;
+	static const float yiq[3][3] = { { 0.299f, 0.587f, 0.114f }, { 0.596f, -0.274f, -0.322f }, { 0.211f, -0.523f, 0.312f } };
+	static const float rgb[3][3] = { { 1.0f, 0.956f, 0.621f }, { 1.0f, -0.272f, -0.647f }, { 1.0f, -1.106f, 1.703f } };
+	memset(k, 0, sizeof *k);
+	k->id = ++spe.cfg_id;
+	k->sw = fl.sw;
+	k->sh = fl.sh;
+	k->cols = c->cols;
+	k->grids = c->grid8 ? 2 : 1;
+	k->jlo = c->jlo;
+	k->kc = c->kc;
+	for (int j = 0; j < CRT_SPE_TAPS; j++) {
+		k->wl[j] = c->w[j][0];
+		k->wc[j] = c->w[j][1];
+	}
+	for (int i = 0; i < 3; i++)
+		for (int x = 0; x < 3; x++) {
+			k->yiq[i][x] = yiq[i][x];
+			k->rgb[i][x] = rgb[i][x];
+		}
+	for (uint32_t y = 0; y < fl.sh; y++) {
+		double ph = 6.283185307179586 * fmod(y * (double)p->line_phase + p->frame_phase, 1.0);
+		k->line[y][0] = (float)cos(ph);
+		k->line[y][1] = (float)sin(ph);
+	}
+	for (uint32_t g = 0; g < k->grids; g++)
+		for (uint32_t m = 0; m < c->cols; m++) {
+			double x = c->x0 + (g ? 0.5 * c->dt : 0.0) + m * (double)c->dt, a = x + 0.5 * c->hold, n = floor(a);
+			double t = (a - n) / c->hold, th = 6.283185307179586 * (c->f * x - floor(c->f * x));
+			k->col[g][m].n = (int32_t)n;
+			k->col[g][m].t = (float)(t < 0.0 ? 0.0 : t > 1.0 ? 1.0 : t);
+			k->col[g][m].c = (float)cos(th);
+			k->col[g][m].s = (float)sin(th);
+		}
+}
+
+/* Desde configure, con las tablas del cable listas: si este filtro va con
+ * el SPE, su memoria, sus superficies y su configuración. false solo si
+ * falta memoria del RSX (como las demás tablas). */
+static bool spe_prepare(int f)
+{
+	spe.on = false;
+	if (!spe.want || spe.failed || (f != SALSA64_CRT_SVIDEO && f != SALSA64_CRT_COMPOSITE))
+		return true;
+	const struct crt_cable_taps *c = &fl.ct;
+	bool fits = c->count == CRT_SPE_TAPS && c->cols <= CRT_SPE_MAX_COLS && fl.sw <= CRT_SPE_MAX_SW &&
+		    fl.sh <= CRT_SPE_MAX_LINES && c->jlo >= -(int)CRT_SPE_PAD && c->jlo + CRT_SPE_TAPS + 1 <= (int)CRT_SPE_PAD;
+	for (int j = 0; fits && j < c->count; j++)
+		fits = c->w[j][1] == c->w[j][2];
+	if (!fits) {
+		salsa64_log("filtros: «%s» no cabe en el SPE (%u columnas, %d muestras desde %d): va en el RSX",
+			    salsa64_crt_name(f), c->cols, c->count, c->jlo);
+		return true;
+	}
+	spe_collect(true);
+	if (!spe_start())
+		return true;
+	spe.in_pitch = (fl.sw * 4 + 63) & ~63u;
+	spe.out_pitch = (c->cols * 8 + 63) & ~63u;
+	spe.e_off = (SPE_IN_OFF + spe.in_pitch * fl.sh + 127) & ~127u;
+	spe.o_off = (spe.e_off + spe.out_pitch * fl.sh + 127) & ~127u;
+	if (spe.o_off + spe.out_pitch * fl.sh > SPE_BYTES)
+		return true;
+	fl.surf[S_SPE_IN] = rsxkit_surface_wrap_main(fl.sw, fl.sh, RSXKIT_POST_RGBA8, spe.mem + SPE_IN_OFF,
+						     spe.offset + SPE_IN_OFF, spe.in_pitch);
+	fl.surf[S_SPE_E] = rsxkit_surface_wrap_main(c->cols, fl.sh, RSXKIT_POST_RGBA16F, spe.mem + spe.e_off,
+						    spe.offset + spe.e_off, spe.out_pitch);
+	if (c->grid8)
+		fl.surf[S_SPE_O] = rsxkit_surface_wrap_main(c->cols, fl.sh, RSXKIT_POST_RGBA16F, spe.mem + spe.o_off,
+							    spe.offset + spe.o_off, spe.out_pitch);
+	if (!fl.surf[S_SPE_IN] || !fl.surf[S_SPE_E] || (c->grid8 && !fl.surf[S_SPE_O]))
+		return false;
+	spe_config();
+	set4(P_SPE_LIN, "k0", crt_cable_tv13.tube.gamma_in, crt_cable_tv13.tube.saturation, 0.0f, 0.0f);
+	/* Las etiquetas desde 0 (configure esperó al RSX y spe_collect a los SPEs). */
+	*spe_label(L_SPE_IN) = 0;
+	for (int i = 0; i < CRT_SPE_WORKERS; i++)
+		*spe_label(L_SPE_OUT(i)) = 0;
+	spe.seq = 0;
+	spe.on = true;
+	salsa64_log("filtros: señal y decodificación de «%s» en %d SPE (%u columnas × %u líneas%s; configuración %u)",
+		    salsa64_crt_name(f), CRT_SPE_WORKERS, c->cols, fl.sh, c->grid8 ? ", dos tablas" : "", spe.cfg_id);
+	return true;
+}
+
+/* Después de reducir: el RSX copia la imagen a la memoria principal y
+ * escribe L_SPE_IN; los SPEs reciben su trabajo. */
+static void spe_kick(int slot)
+{
+	fl.spe_frame = false;
+	spe_collect(false);
+	if (!spe.on || !is_cable(fl.filter))
+		return;
+	if (spe.n == SPE_INFLIGHT)
+		spe_collect(true);
+	uint32_t seq = ++spe.seq;
+	copy_surface(S_SRC, 1.0f, fl.surf[S_SPE_IN]);
+	rsxkit_post_label_write(L_SPE_IN, seq);
+	stamp(slot, STAMP_SPE_IN);
+	struct crt_spe_job j;
+	memset(&j, 0, sizeof j);
+	j.config_ea = ea_of(spe.mem);
+	j.config_id = spe.cfg_id;
+	j.config_bytes = sizeof(struct crt_spe_config);
+	j.seq = seq;
+	j.src_ea = ea_of(spe.mem + SPE_IN_OFF);
+	j.src_pitch = spe.in_pitch;
+	j.out_ea[0] = ea_of(spe.mem + spe.e_off);
+	j.out_ea[1] = ea_of(spe.mem + spe.o_off);
+	j.out_pitch = spe.out_pitch;
+	j.label_in_ea = ea_of((const void *)spe_label(L_SPE_IN));
+	uint32_t mid = ((fl.sh / 2) + 3) & ~3u;
+	if (mid > fl.sh)
+		mid = fl.sh;
+	__typeof__(spe.job[0]) *e = &spe.job[(spe.head + spe.n) % SPE_INFLIGHT];
+	memset(e, 0, sizeof *e);
+	e->seq = seq;
+	for (int i = 0; i < CRT_SPE_WORKERS; i++) {
+		j.label_out_ea = ea_of((const void *)spe_label(L_SPE_OUT(i)));
+		j.y0 = i ? mid : 0;
+		j.y1 = i ? fl.sh : mid;
+		e->id[i] = spukit_post(spe.w[i], CRT_SPE_JOB, &j, sizeof j);
+		if (!e->id[i]) {
+			/* Sin trabajo: el RSX no se queda esperando. */
+			*spe_label(L_SPE_OUT(i)) = seq;
+			e->done[i] = true;
+		}
+	}
+	spe.n++;
+	fl.spe_frame = true;
+}
+
+/* En draw_cable, en lugar de señal y decodifica: el RSX espera a los dos
+ * SPEs y pasa su tabla a luz lineal, a la memoria local. */
+static void spe_wait_rsx(int slot)
+{
+	const struct crt_cable_taps *c = &fl.ct;
+	for (int i = 0; i < CRT_SPE_WORKERS; i++)
+		rsxkit_post_label_wait(L_SPE_OUT(i), spe.seq);
+	stamp(slot, STAMP_SPE_GO);
+	rsxkit_post_pass p;
+	for (int s = 0; s < (c->grid8 ? 2 : 1); s++) {
+		pass_init(&p, P_SPE_LIN, s ? S_DEC_O : S_DEC_E, c->cols, fl.sh);
+		p.in[0] = in_surface(s ? S_SPE_O : S_SPE_E, RSXKIT_FILTER_NEAREST, RSXKIT_POST_CLAMP);
+		p.inputs = 1;
+		run(&p);
+	}
+}
+
+/* Espera lo que esté en vuelo y suelta los SPEs (la memoria mapeada queda). */
+static void spe_release(void)
+{
+	spe_collect(true);
+	for (int i = 0; i < CRT_SPE_WORKERS; i++)
+		if (spe.w[i]) {
+			spukit_worker_stop(spe.w[i]);
+			spe.w[i] = NULL;
+		}
+	spe.on = false;
+}
+
 /* El tamaño de la imagen del juego que ve el filtro; false si no se puede
  * filtrar. */
 static bool wanted(int f, const struct salsa64_filter_src *src, uint32_t *sw, uint32_t *sh)
@@ -948,8 +1284,8 @@ bool salsa64_filters_draw(int f, const struct salsa64_filter_src *src, rsxkit_re
 	if (fl.last_filter != f) {
 		fl.last_filter = f;
 		memset(fl.ns, 0, sizeof fl.ns);
-		fl.ns_reused = 0;
-		fl.measured = fl.measured_reused = fl.drawn = fl.reused = 0;
+		fl.ns_reused = fl.ns_spe_wait = fl.ns_spe_trip = 0;
+		fl.measured = fl.measured_reused = fl.measured_spe = fl.drawn = fl.reused = 0;
 	}
 	/* Una ranura de marcas libre (con más de SLOTS cuadros en vuelo, la
 	 * más vieja se pierde para la medición). */
@@ -971,6 +1307,7 @@ bool salsa64_filters_draw(int f, const struct salsa64_filter_src *src, rsxkit_re
 			return false;
 		}
 		stamp(slot, SEG_REDUCE + 1);
+		spe_kick(slot);
 
 		rsxkit_post_pass p;
 		pass_init(&p, P_LINEAR, S_LIN, sw, sh);
@@ -1003,6 +1340,8 @@ bool salsa64_filters_draw(int f, const struct salsa64_filter_src *src, rsxkit_re
 	fl.slot[slot].fence = rsxkit_fence();
 	fl.slot[slot].filter = f;
 	fl.slot[slot].reused = reuse;
+	fl.slot[slot].spe = !reuse && fl.spe_frame;
+	fl.spe_frame = false;
 	fl.slot[slot].pending = true;
 	fl.drawn++;
 	fl.since_setup++;
@@ -1046,6 +1385,16 @@ bool salsa64_filters_report(char *buf, size_t size)
 	}
 	if (n > 0 && (size_t)n < size)
 		n += snprintf(buf + n, size - (size_t)n, "; %u cuadros, %u medidos)", fl.drawn - fl.reused, fl.measured);
+	spe_collect(false);
+	if (fl.measured_spe && n > 0 && (size_t)n < size) {
+		double hz = (double)spukit_tick_hz();
+		n += snprintf(buf + n, size - (size_t)n,
+			      "; señal y decodificación en %d SPE: el RSX esperó %.2f ms, ida y vuelta %.2f ms (%u medidos); "
+			      "el SPE más lento, %.2f ms de trabajo y %.2f ms esperando la imagen (%u cuadros)",
+			      CRT_SPE_WORKERS, fl.ns_spe_wait * 1e-6 / fl.measured_spe, fl.ns_spe_trip * 1e-6 / fl.measured_spe,
+			      fl.measured_spe, spe.frames ? spe.work_ticks * 1e3 / hz / spe.frames : 0.0,
+			      spe.frames ? spe.wait_ticks * 1e3 / hz / spe.frames : 0.0, spe.frames);
+	}
 	if (fl.reused && n > 0 && (size_t)n < size) {
 		double fin = fl.measured_reused ? fl.ns_reused * 1e-6 / fl.measured_reused : 0.0;
 		uint32_t m = fl.measured + fl.measured_reused;
@@ -1055,8 +1404,10 @@ bool salsa64_filters_report(char *buf, size_t size)
 			 fl.reused, fin, fl.measured_reused, avg);
 	}
 	memset(fl.ns, 0, sizeof fl.ns);
-	fl.ns_reused = 0;
-	fl.measured = fl.measured_reused = 0;
+	fl.ns_reused = fl.ns_spe_wait = fl.ns_spe_trip = 0;
+	fl.measured = fl.measured_reused = fl.measured_spe = 0;
 	fl.drawn = fl.reused = 0;
+	spe.wait_ticks = spe.work_ticks = 0;
+	spe.frames = 0;
 	return true;
 }

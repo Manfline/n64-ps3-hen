@@ -30,8 +30,9 @@ SPUKIT  := 1
 # src/rsp/audio con la E/S por DMA. RSP a bajo nivel (otro SPE): el
 # intérprete de src/rsp/lle con la E/S por DMA de src/spu/rsp. Tarea JPEG
 # (otro SPE): src/rsp/jpeg en 4 carriles (jpeg_v.c) con el bucle de DMA de
-# src/spu/jpeg.
-SPU_PROGS := gfx audio rsp jpeg
+# src/spu/jpeg. CRT con cable (dos SPEs, con `filtros-spe`): la señal y la
+# decodificación de S-Video y compuesto (src/spu/crt).
+SPU_PROGS := gfx audio rsp jpeg crt
 gfx_SRCS  := $(R)/src/spu/gfx/main.c $(R)/src/spu/gfx/io_spu.c \
              $(filter-out %/io_mem.c %/sync.c %/state.c,$(wildcard $(R)/src/rsp/gfx/*.c))
 audio_SRCS := $(R)/src/spu/audio/main.c $(R)/src/spu/audio/io_spu.c \
@@ -39,6 +40,7 @@ audio_SRCS := $(R)/src/spu/audio/main.c $(R)/src/spu/audio/io_spu.c \
 rsp_SRCS   := $(R)/src/spu/rsp/main.c $(R)/src/spu/rsp/io_spu.c \
               $(filter-out %/core.c,$(wildcard $(R)/src/rsp/lle/*.c))
 jpeg_SRCS  := $(R)/src/spu/jpeg/main.c $(R)/src/rsp/jpeg/jpeg.c $(R)/src/rsp/jpeg/jpeg_v.c
+crt_SRCS   := $(R)/src/spu/crt/main.c
 # Pila del SPE 0 (src/spu/gfx/main.c): el enlace falla si entre la cadena de
 # llamadas más honda y el final del programa quedan menos de 1,5 KB. Las
 # variantes de Rare se llaman por puntero desde su familia; lo demás que

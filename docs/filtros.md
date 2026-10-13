@@ -63,6 +63,24 @@ un salto condicional, que cgcomp no ensambla). La pasada final es la del
 cable, con las constantes del KV-29 (haz 0,22–0,62, resplandor 0,15, brillo
 1,10).
 
+Con el archivo `filtros-spe`, **la señal y la decodificación de S-Video y
+compuesto van en dos SPEs** (src/spu/crt/main.c, protocolo en
+`src/frontend/filters/crt_spe.h`). El RSX copia la imagen reducida a la
+memoria principal y escribe una etiqueta; cada SPE la espera, hace la mitad
+de las líneas y escribe la suya; mientras, el RSX hace lineal y resplandor,
+y antes de las líneas espera las dos etiquetas y pasa la tabla del SPE (R,
+G, B antes de la gamma, fp16) a luz lineal con la saturación, a su memoria
+local («linealizar», 12 instrucciones). En el SPE van 4 líneas en los 4
+carriles de cada vector: las 27 muestras del filtro de la tele son una FMA
+por toma y canal, con los pesos en registros (~27 ciclos por muestra).
+Resplandor y líneas se quedan en el RSX (en el SPE costarían más de lo que
+ahorran: docs/perf-log.md). Si un SPE devuelve error o no termina en 300 ms
+después de recibir la imagen, el PPE escribe su etiqueta para soltar al RSX
+y la señal vuelve al RSX por el resto de la corrida. El log dice cuánto
+esperó el RSX, la ida y vuelta (de la copia a pasar la espera) y el trabajo
+del SPE más lento. En RPCS3, contra el original con el resplandor del RSX:
+S-Video 0,23/255 de promedio y compuesto 0,24 (como en el RSX).
+
 Cuando la imagen no cambió (el juego dibuja 20 o 30 cuadros por segundo y
 el mismo se presenta en dos o tres campos), solo se hace la pasada final:
 las tablas siguen valiendo. Lo sabe por un número de cada destino del RDP

@@ -70,6 +70,11 @@ uint32_t salsa64_filters_setup_ms(int f, const struct salsa64_filter_src *src);
  * escribe). `reduce_passes`: rsxkit_post_reduce_passes (1 o 2). */
 void salsa64_filters_options(bool captures, int reduce_passes);
 
+/* La señal y la decodificación de S-Video y compuesto en dos SPEs en lugar
+ * del RSX (crt_spe.h); vale desde el próximo cuadro. Si un SPE falla o no
+ * termina a tiempo, vuelven al RSX por el resto de la corrida. */
+void salsa64_filters_spe(bool on);
+
 /* Línea para el log con lo que tardó en el RSX cada pasada, en promedio
  * por cuadro, desde el llamado anterior (vacía las cuentas). false si en
  * ese tiempo no se dibujó con filtro. */

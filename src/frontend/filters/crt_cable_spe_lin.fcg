@@ -1,0 +1,17 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/*
+ * Salsa64 — CRT con cable, filtro original del autor portado de su versión
+ * de RetroMac (v1.1). Con la señal y la decodificación en el SPE
+ * (crt_spe.h): lo que falta de la pasada «decodifica» sobre la tabla que
+ * dejó el SPE (R, G, B antes de la gamma, en fp16 en la memoria principal):
+ * a luz lineal (gamma de entrada) y la saturación del tubo, a la tabla de la
+ * memoria local que leen las líneas.
+ *   k0 = (gamma de entrada, saturación)
+ */
+void main(float4 pos : TEXCOORD0, uniform sampler2D t : TEXUNIT0, uniform float4 k0, out float4 color : COLOR)
+{
+	float3 rgb = tex2D(t, pos.xy).rgb;
+	float3 lin = pow(max(rgb, 0.0), k0.xxx);
+	float lum = dot(lin, float3(0.2126, 0.7152, 0.0722));
+	color = float4(max(lerp(lum.xxx, lin, k0.y), 0.0), 0.0);
+}
