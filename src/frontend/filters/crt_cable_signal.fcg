@@ -1,0 +1,32 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/*
+ * Salsa64 — CRT con cable (RGB, S-Video o compuesto NTSC), filtro original
+ * del autor portado de su versión de RetroMac (v1.1). Pasada «señal»: cada
+ * texel es una muestra de una línea (columna m en x = x0 + m·dt, 4 por
+ * ciclo de subportadora): la señal de la consola sostenida en cada píxel y
+ * promediada sobre el tramo de la muestra (una lectura bilineal entre los
+ * dos píxeles que toca), con valores codificados como los manda la
+ * consola. Con S-Video y compuesto va ya en luma y color sobre la
+ * subportadora (YIQ de la FCC) como entra a los filtros de la tele:
+ *   luma = Y + kc·C,   color = 2 (C + kc·Y) (cos θ, sin θ)
+ * (kc = 1 en compuesto: un solo cable, de ahí el dot crawl y el arcoíris).
+ *   s1 = (x0, dt, tramo = min(dt, 1), 1/tramo)
+ *   s2 = (ciclos por píxel, fase por línea, fase del cuadro, kc)
+ *   s3.x = 1: luma y color; 0: RGB
+ */
+void main(float4 pos : TEXCOORD0, uniform sampler2D src : TEXUNIT0, uniform float4 s1, uniform float4 s2,
+	  uniform float4 s3, out float4 color : COLOR)
+{
+	float x = s1.x + floor(pos.x) * s1.y;
+	float y = floor(pos.y) + 0.5;
+	float a = x + 0.5 * s1.z;
+	float n = floor(a);
+	float3 p = tex2D(src, float2(n - 0.5 + saturate((a - n) * s1.w), y)).rgb;
+
+	float th = 6.2831853 * frac(s2.x * x + frac(floor(y) * s2.y + s2.z));
+	float2 cs = float2(cos(th), sin(th));
+	float Y = dot(p, float3(0.299, 0.587, 0.114));
+	float C = dot(p, float3(0.596, -0.274, -0.322)) * cs.x + dot(p, float3(0.211, -0.523, 0.312)) * cs.y;
+	float3 yc = float3(Y + s2.w * C, 2.0 * (C + s2.w * Y) * cs);
+	color = float4(lerp(p, yc, s3.x), 0.0);
+}

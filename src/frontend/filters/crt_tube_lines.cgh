@@ -1,0 +1,58 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/*
+ * Salsa64 — CRT con cable, filtro original del autor portado de su versión
+ * de RetroMac (v1.1); el tubo es un Trinitron chico. Pasada «líneas»: una
+ * columna por columna de la imagen en pantalla y una fila por scanline del
+ * juego. La scanline vista en esa columna (interpolada de las muestras
+ * decodificadas), ya como la usa el haz: amplitud = color / (σ√2π) por la
+ * apertura de la máscara de franjas en esa columna (cada punto la abre
+ * según su brillo) y k = log2(e) / (2σ²), para que la pasada final no saque
+ * raíces ni divida. El RSX no escribe dos salidas desde un programa
+ * compilado con cgcomp: CRT_LINES_A deja (amplitud RGB, k rojo) y la otra
+ * pasada (k verde, k azul).
+ *   q1 = (píxeles del juego por píxel de pantalla en x, x0, 1/dt)
+ *   q2 = (beam_min, beam_max, keep_bright, brillo)
+ *   q3 = (1/tríada, fuerza de la máscara, hw·(1 − suave), 1/(hw·suave))
+ *   q4 = 1/promedio de la franja por canal
+ *   q5 = pico por canal
+ *   q6 = 1/max(pico − 1, 1e-4) por canal
+ * Con CRT_GRID8 (compuesto) las muestras están en dos tablas, la segunda
+ * corrida medio paso.
+ */
+void main(float4 pos : TEXCOORD0, uniform sampler2D e : TEXUNIT0,
+#if CRT_GRID8
+	  uniform sampler2D o : TEXUNIT1,
+#endif
+	  uniform float4 q1, uniform float4 q2, uniform float4 q3, uniform float4 q4, uniform float4 q5,
+	  uniform float4 q6, out float4 color : COLOR)
+{
+	float fx = pos.x;
+	float y = pos.y;
+	float u = (fx * q1.x - q1.y) * q1.z;
+	float m = floor(u);
+	float f = u - m;
+	float3 e0 = tex2D(e, float2(m + 0.5, y)).rgb;
+	float3 e1 = tex2D(e, float2(m + 1.5, y)).rgb;
+#if CRT_GRID8
+	float3 o0 = tex2D(o, float2(m + 0.5, y)).rgb;
+	float h = 2.0 * f;
+	float3 c = e0 * saturate(1.0 - h) + o0 * (1.0 - abs(h - 1.0)) + e1 * saturate(h - 1.0);
+#else
+	float3 c = lerp(e0, e1, f);
+#endif
+	float3 s = lerp(q2.xxx, q2.yyy, sqrt(saturate(c))) * 0.5;
+	float3 rs = 1.0 / s;
+#if CRT_LINES_A
+	float3 core = c * rs * 0.39894228;
+	float ph = frac(fx * q3.x);
+	float3 d = abs(ph - float3(1.0, 3.0, 5.0) / 6.0);
+	d = min(d, 1.0 - d);
+	float3 t = saturate((d - q3.z) * q3.w);
+	float3 mn = lerp(1.0, (1.0 - t * t * (3.0 - 2.0 * t)) * q4.xyz, q3.y);
+	float3 op = saturate((q5.xyz - 1.0 / max(core, 1e-4)) * q6.xyz);
+	float3 amp = core * lerp(mn, 1.0, op * q2.z) * q2.w;
+	color = float4(amp, 0.72134752 * rs.x * rs.x);
+#else
+	color = float4(0.72134752 * rs.y * rs.y, 0.72134752 * rs.z * rs.z, 0.0, 0.0);
+#endif
+}

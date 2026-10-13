@@ -1,0 +1,31 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/*
+ * Salsa64 — CRT de máscara de sombra, filtro original del autor portado de
+ * su versión de RetroMac (v1.3). Pasada final, en cada píxel de la imagen
+ * en pantalla: para cada canal, el punto más cercano de su color (de la
+ * tesela) y su energía y apertura (de la tabla de puntos), más el
+ * resplandor; luego el velo plano y la gamma de salida (2,2). Sin tonemap.
+ *   ta, tb, tc = teselas (celdas de R y G; celda de B; cobertura RGB)
+ *   t1 = (1/(3D), 1/(2H), 3D, 2H)
+ *   t2 = (mx + 0,5, my + 0,5, rejilla del resplandor por píxel de pantalla)
+ *   t3 = (velo, 1/gamma de salida)
+ */
+void main(float4 pos : TEXCOORD0, uniform sampler2D ta : TEXUNIT0, uniform sampler2D tb : TEXUNIT1,
+	  uniform sampler2D tc : TEXUNIT2, uniform sampler2D dots : TEXUNIT3, uniform sampler2D glow : TEXUNIT4,
+	  uniform float4 t1, uniform float4 t2, uniform float4 t3, out float4 color : COLOR)
+{
+	float2 frag = pos.xy;
+	float2 tile = floor(frag * t1.xy);
+	float2 ql = frag - tile * t1.zw;
+	float4 a = tex2D(ta, ql);
+	float2 b = tex2D(tb, ql).xy;
+	float3 cov = tex2D(tc, ql).rgb;
+	float2 base = tile * float2(3.0, 2.0) + t2.xy;
+	float2 pr = tex2D(dots, a.xy + base).xy;
+	float2 pg = tex2D(dots, a.zw + base).xy;
+	float2 pb = tex2D(dots, b + base).xy;
+	float3 col = float3(pr.x, pg.x, pb.x) * cov + float3(pr.y, pg.y, pb.y);
+	col += tex2D(glow, frag * t2.zw).rgb;
+	col = saturate(col + t3.x);
+	color = float4(pow(col, t3.yyy), 1.0);
+}

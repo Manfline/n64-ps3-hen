@@ -225,7 +225,10 @@ static struct {
 		rsxkit_rect src;
 		uint32_t w, h;
 		rsxkit_view view;
+		uint32_t scale;  /* píxeles de la superficie por píxel de la N64 */
 	} again;
+	/* salsa64_rdp_present dibuja (sin filtro) o solo elige la fuente. */
+	bool no_draw;
 } rdp;
 
 static void acquire(void *ctx, struct gfx_job *job);
@@ -1669,6 +1672,7 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 	uint32_t sw = w * rdp.scale, sh = h * rdp.scale;
 	rdp.again.surf = rdp.surf[p.slot];
 	rdp.again.src = src;
+	rdp.again.scale = rdp.surf_scale[p.slot];
 	if (view && view->scale == RSXKIT_SCALE_FIT && rdp_present_integer(sw, sh, sc->width, sc->height)) {
 		rsxkit_view one = { RSXKIT_SCALE_INTEGER, view->filter, 0.0f };
 		rdp.again.w = sw;
@@ -1679,8 +1683,26 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 		rdp.again.h = h;
 		rdp.again.view = view ? *view : (rsxkit_view){ RSXKIT_SCALE_FIT, RSXKIT_FILTER_LINEAR, 0.0f };
 	}
-	rsxkit_target_present(rdp.again.surf, &rdp.again.src, rdp.again.w, rdp.again.h, &rdp.again.view, out);
+	if (!rdp.no_draw)
+		rsxkit_target_present(rdp.again.surf, &rdp.again.src, rdp.again.w, rdp.again.h, &rdp.again.view, out);
+	else if (out)
+		*out = rsxkit_layout(rdp.again.w, rdp.again.h, &rdp.again.view);
 	frame_mirror(p.slot, p.y0 + p.h, false);
+	return true;
+}
+
+void salsa64_rdp_present_draw(bool draw)
+{
+	rdp.no_draw = !draw;
+}
+
+bool salsa64_rdp_present_source(rsxkit_texture *tex, rsxkit_rect *region, uint32_t *scale)
+{
+	if (!rdp.ready || !rdp.again.surf)
+		return false;
+	rsxkit_target_texture(rdp.again.surf, 0, 0, tex);
+	*region = rdp.again.src;
+	*scale = rdp.again.scale ? rdp.again.scale : 1;
 	return true;
 }
 

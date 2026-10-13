@@ -1,0 +1,49 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/*
+ * Salsa64 — CRT de máscara de sombra, filtro original del autor portado de
+ * su versión de RetroMac (v1.3). Pasada «tesela»: la red delta se repite
+ * cada 3D × 2H píxeles; para cada píxel de una tesela, el punto más cercano
+ * de cada color (su celda en la tabla de puntos, relativa a la tesela) y
+ * cuánto lo cubre (antialiasing analítico de 1 px). Es lo que el original
+ * calcula en cada píxel de pantalla y no depende de la imagen.
+ *   grid  = (D, H, R)
+ *   which = elige la salida: x → (columna R, fila R, columna G, fila G),
+ *           y → (columna B, fila B), z → cobertura RGB
+ */
+void main(float4 pos : TEXCOORD0, uniform float4 grid, uniform float4 which, out float4 color : COLOR)
+{
+	float D = grid.x, H = grid.y, R = grid.z;
+	/* El centro exacto del píxel: el RSX interpola TEXCOORD0 con un error de
+	 * ~1e-6 y en los empates (dos puntos del mismo color a la misma
+	 * distancia) el original se queda con el primero. */
+	float2 q = floor(pos.xy) + 0.5;
+	float3 ch = float3(0.0, 1.0, 2.0);
+	float row = floor(q.y / H);
+
+	/* Red delta: punto (i, r) con centro ((i + r/2)·D, r·H) y color
+	 * (i + 2r) mod 3. Basta la fila de q y la de abajo: la fila r + 2 tiene
+	 * los puntos de cada color en las mismas columnas que la r, así que la
+	 * r − 1 siempre queda más lejos que la r + 1. */
+	float r0 = row;
+	float3 b0 = ch - 2.0 * r0;
+	float3 i0 = b0 + 3.0 * floor((q.x / D - 0.5 * r0 - b0) / 3.0 + 0.5);
+	float3 x0 = q.x - (i0 + 0.5 * r0) * D;
+	float y0 = q.y - r0 * H;
+	float3 e0 = x0 * x0 + y0 * y0;
+
+	float r1 = row + 1.0;
+	float3 b1 = ch - 2.0 * r1;
+	float3 i1 = b1 + 3.0 * floor((q.x / D - 0.5 * r1 - b1) / 3.0 + 0.5);
+	float3 x1 = q.x - (i1 + 0.5 * r1) * D;
+	float y1 = q.y - r1 * H;
+	float3 e1 = x1 * x1 + y1 * y1;
+
+	float3 take = (e1 < e0) ? 1.0 : 0.0;
+	float3 i = lerp(i0, i1, take);
+	float3 r = lerp(r0.xxx, r1.xxx, take);
+	float3 cell = i + floor(r * 0.5);
+	float3 cover = saturate(R - sqrt(min(e0, e1)) + 0.5);
+
+	color = float4(cell.x, r.x, cell.y, r.y) * which.x + float4(cell.z, r.z, 0.0, 0.0) * which.y +
+		float4(cover, 0.0) * which.z;
+}

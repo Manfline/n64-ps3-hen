@@ -1,0 +1,5 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* Salsa64 — CRT con cable: pasada «líneas» A (amplitud y k rojo), una tabla (ver crt_tube_lines.cgh). */
+#define CRT_GRID8 0
+#define CRT_LINES_A 1
+#include "crt_tube_lines.cgh"

@@ -1,0 +1,75 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/*
+ * Salsa64 — CRT de máscara de sombra, filtro original del autor portado de
+ * su versión de RetroMac (v1.3). Pasada «puntos»: un texel por punto de
+ * fósforo (columna c, fila r de la red). La energía del haz que le llega en
+ * su canal (las dos scanlines más cercanas con su desenfoque horizontal, el
+ * haz gaussiano integrado sobre la franja de su fila) y su apertura (si su
+ * pico no cabe en 100 %, se abre hacia plano) decididas por el punto
+ * completo, como en el original. Guarda lo que la pasada final necesita
+ * para el color de un píxel que el punto cubre en `cover`:
+ *   color = A · cover + B   (A y B ya con el brillo y el velo)
+ *
+ *   g1 = (D, H, mx, my)        red y margen de la tabla
+ *   g2 = (toSrc.x, toSrc.y, a, −log2(e)/(2·hblur²))   a = media franja de fila (líneas)
+ *   g3 = (beam_min, beam_max, saturación)
+ *   o1 = (pico, 1/max(pico − 1, 1e-4), keep_bright, fuerza/promedio · brillo·(1 − velo))
+ *   o2 = ((1 − fuerza) · brillo·(1 − velo), brillo·(1 − velo))
+ */
+#include "crt.cgh"
+
+void main(float4 pos : TEXCOORD0, uniform sampler2D lin : TEXUNIT0, uniform float4 g1, uniform float4 g2,
+	  uniform float4 g3, uniform float4 o1, uniform float4 o2, out float4 color : COLOR)
+{
+	float2 cr = floor(pos.xy) - g1.zw;
+	float c = cr.x, r = cr.y;
+	float rh = floor(r * 0.5);
+	float odd = r - 2.0 * rh;
+	float m = c - rh + 2.0 * r;                     /* (i + 2r), i = c − floor(r/2) */
+	float ch = m - 3.0 * floor((m + 0.5) / 3.0);    /* su color: (i + 2r) mod 3 */
+	float3 sel = saturate(1.0 - abs(ch - float3(0.0, 1.0, 2.0)));
+	float2 pc = float2((c + 0.5 * odd) * g1.x, r * g1.y) * g2.xy;  /* centro, en píxeles del juego */
+
+	/* Las dos scanlines más cercanas, con el desenfoque horizontal del haz
+	 * (5 píxeles del juego alrededor de x; fuera de la imagen, 0). */
+	float y0 = floor(pc.y - 0.5) + 0.5;
+	float y1 = y0 + 1.0;
+	float cx = floor(pc.x) + 0.5;
+	float4 d = cx + float4(-2.0, -1.0, 0.0, 1.0) - pc.x;
+	float d4 = cx + 2.0 - pc.x;
+	float4 w = exp2(d * d * g2.w);
+	float w4 = exp2(d4 * d4 * g2.w);
+	float iw = 1.0 / (dot(w, 1.0) + w4);
+	float4 b = float4(cx, y0, cx, y1);
+	float4 q = b + float4(-2.0, 0.0, -2.0, 0.0);
+	float3 s0 = tex2D(lin, q.xy).rgb * w.x;
+	float3 s1 = tex2D(lin, q.zw).rgb * w.x;
+	q = b + float4(-1.0, 0.0, -1.0, 0.0);
+	s0 += tex2D(lin, q.xy).rgb * w.y;
+	s1 += tex2D(lin, q.zw).rgb * w.y;
+	s0 += tex2D(lin, b.xy).rgb * w.z;
+	s1 += tex2D(lin, b.zw).rgb * w.z;
+	q = b + float4(1.0, 0.0, 1.0, 0.0);
+	s0 += tex2D(lin, q.xy).rgb * w.w;
+	s1 += tex2D(lin, q.zw).rgb * w.w;
+	q = b + float4(2.0, 0.0, 2.0, 0.0);
+	s0 += tex2D(lin, q.xy).rgb * w4;
+	s1 += tex2D(lin, q.zw).rgb * w4;
+	float2 cc = float2(dot(crt_saturation(s0 * iw, g3.z), sel), dot(crt_saturation(s1 * iw, g3.z), sel));
+
+	/* Haz gaussiano (conserva la energía, más brillo = más grueso)
+	 * promediado sobre la franja de la fila del punto: [d − a, d + a]. */
+	float a = g2.z;
+	float2 sg = lerp(g3.xx, g3.yy, sqrt(saturate(cc))) * 0.5;
+	float2 k = 0.70710678 / sg;
+	float2 dd = float2(pc.y - y0, y1 - pc.y);
+	float4 e4 = crt_erf4(float4((dd.x + a) * k.x, (dd.x - a) * k.x, (dd.y + a) * k.y, (dd.y - a) * k.y));
+	float e = (cc.x * (e4.x - e4.y) + cc.y * (e4.z - e4.w)) / (4.0 * a);
+
+	/* Apertura del punto completo. La salida en una sola instrucción: cgcomp
+	 * escribe el color en R0, que Cg usa de temporal (tools/cg-salida.py). */
+	float t = saturate((o1.x - 1.0 / max(e, 1e-4)) * o1.y);
+	float kb = t * o1.z;
+	float4 f = float4((1.0 - kb) * o1.w, (1.0 - kb) * o2.x + kb * o2.y, 1.0, 1.0);
+	color = float4(e, e, e, t) * f;
+}

@@ -4,7 +4,14 @@ PROGRAM := salsa64
 TITLE   := Salsa64
 APPID   := SLSA00064
 SRCS    := main.c audio_out.c audio_sync.c menu.c osd.c osd_fps.c pacer.c padmap.c pausectl.c replay.c romlist.c savefile.c \
-           screenshot.c selftest.c selftest_audio.c selftest_gfx.c states.c
+           screenshot.c selftest.c selftest_audio.c selftest_gfx.c states.c \
+           filters/catalog.c filters/crt_params.c filters/filters.c
+# Filtros de la presentación (filters/): fragment programs en Cg compilados
+# con cgcomp. Van en fp32: cgcomp pide -fastprecision a Cg, que baja a fp16
+# cuentas en píxeles que no lo aguantan.
+SHADERS := $(sort $(wildcard filters/*.fcg))
+CGCFLAGS := -Wcg,-nofastprecision
+FPO_CHECK := 1
 
 R       := ../..
 ICON0   := $(R)/assets/ps3/ICON0.PNG
@@ -46,6 +53,12 @@ LIBS    := -lrsx -lgcm_sys -laudio -lio -lsysutil -lnet -lsysmodule -lrt -llv2 -
 LDFLAGS := -T $(abspath $(R))/mk/rec-cache.ld -T lv2.ld
 
 include $(R)/mk/ps3.mk
+
+# Lo que incluyen los fragment programs de los filtros.
+$(OBJ)/crt_mask_dots.fpo: filters/crt.cgh
+$(OBJ)/crt_cable_decode9.fpo $(OBJ)/crt_cable_decode27.fpo: filters/crt_cable_decode.cgh
+$(OBJ)/crt_tube_lines_a4.fpo $(OBJ)/crt_tube_lines_a8.fpo $(OBJ)/crt_tube_lines_b4.fpo \
+$(OBJ)/crt_tube_lines_b8.fpo: filters/crt_tube_lines.cgh
 
 # El combiner, con -Os en el SPE 0: 5,6 KB menos de código (de 16,8 a 11,2
 # KB) que quedan para la pila. Corre una vez por estado de dibujo, no por

@@ -1,0 +1,13 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/*
+ * Salsa64 — diagnóstico de los filtros: dibuja una tabla intermedia en la
+ * pantalla, un texel por píxel, con sus cuatro canales elegidos y escalados
+ * (k0: escala de cada canal de la salida; m0..m2: qué canal de la tabla va
+ * a R, G y B).
+ */
+void main(float4 pos : TEXCOORD0, uniform sampler2D t : TEXUNIT0, uniform float4 k0, uniform float4 m0,
+	  uniform float4 m1, uniform float4 m2, out float4 color : COLOR)
+{
+	float4 v = tex2D(t, pos.xy);
+	color = float4(saturate(float3(dot(v, m0), dot(v, m1), dot(v, m2)) * k0.xyz), 1.0);
+}

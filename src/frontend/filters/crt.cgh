@@ -1,0 +1,31 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/*
+ * Salsa64 — filtros CRT originales del autor, portados de sus versiones de
+ * RetroMac (Shaders.metal): lo común a los fragment programs. Todo en
+ * coordenadas de texel (las superficies se leen sin normalizar) y en fp32
+ * (se compilan con -nofastprecision). Ver docs/filtros.md.
+ */
+#ifndef SALSA64_CRT_CGH
+#define SALSA64_CRT_CGH
+
+/* Saturación sobre la luz lineal (luma de Rec. 709), sin negativos. */
+float3 crt_saturation(float3 c, float sat)
+{
+	float lum = dot(c, float3(0.2126, 0.7152, 0.0722));
+	return max(lerp(lum.xxx, c, sat), 0.0);
+}
+
+/* erf de cuatro valores a la vez (Abramowitz y Stegun 7.1.26, error < 2e-7).
+ * El signo va con step (SGE), no con `?:`: Cg lo compila con códigos de
+ * condición (MOVRC y un MOV condicional) que el ensamblador de cgcomp no
+ * codifica bien (docs/rsx-notes.md). */
+float4 crt_erf4(float4 x)
+{
+	float4 a = abs(x);
+	float4 t = 1.0 / (1.0 + 0.3275911 * a);
+	float4 y = 1.0 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t +
+			  0.254829592) * t * exp2(-1.442695 * a * a);
+	return y * (2.0 * step(0.0, x) - 1.0);
+}
+
+#endif

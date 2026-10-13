@@ -178,3 +178,77 @@ SELECT + R2 en el túnel de Dam traía la marca en 100 de 109 dibujos y la
 captura del RSX seguía con las grietas). RPCS3 también lo ignora. La
 cobertura se emula en la HLE, ensanchando los triángulos (`aa_grow` en
 src/rsp/gfx/rdp.c), que además sirve a cualquier escala interna.
+
+## Fragment programs de posprocesado con cgcomp (2026-10-13, filtros CRT)
+
+Lo que hizo falta saber para escribir fragment programs largos en Cg
+(rsxkit/post.h y src/frontend/filters):
+
+- **cgcomp llama a Cg con `-O3 -fastmath -fastprecision -unroll count=8
+  -ifcvt all`** (se ve con `cgcomp -d`, que deja el ensamblador NV40 en
+  `<salida>.dump`). Con `-fastprecision`, Cg baja a fp16 (registros H) lo
+  que cree que lo aguanta, también un `floor` de coordenadas en píxeles:
+  con 11 bits de mantisa, 359,67 queda en 359,75. Para cuentas en texeles o
+  píxeles de pantalla se compila con **`-Wcg,-nofastprecision`**: todo
+  `float` va en fp32 y lo que se quiera en fp16 se declara `half`. Solo
+  cabe un `-Wcg,…` (dos opciones separadas por coma dentro de él tiran a
+  cgcomp con una violación de segmento). Los shaders de la combinación
+  lineal del 3D siguen sin la opción (sus cuentas son colores).
+- Los bucles de largo fijo se desenrollan aunque pasen de 8 vueltas (12
+  lecturas del resplandor, 27 muestras del cable). Un arreglo de uniforms
+  solo se puede indexar con la variable del bucle: `w[j + 1]` no compila
+  («Only arrays of texcoords may be indexed»); se usan dos arreglos.
+- `#include "x.cgh"` funciona, relativo al archivo que incluye: variantes
+  de un mismo programa con `#define` y un include.
+- **cgcomp no sabe de varias salidas** (MRT): un `out float4 c1 : COLOR1`
+  compila, pero el ensamblador de cgcomp escribe `result.color[1]` en R0,
+  encima del color 0. Una tabla que necesita 6 valores por texel va en dos
+  pasadas (o dos superficies de fp16).
+- **Nada de `?:`, `sign()` ni comparaciones que elijan un valor**: Cg
+  las compila con códigos de condición (`MOVRC RC`, un `MOVR R1(LT)`
+  condicional) y el ensamblador de cgcomp no los codifica bien: en la
+  pasada de puntos del CRT, el signo del erf salía mal y la energía de
+  cada punto 1,8× a 5× más alta (RPCS3, 2026-10-13). `step()` (SGE) y
+  `lerp` con un 0/1 dan lo mismo sin condiciones. `tools/fpo-info.py
+  --sin-condiciones` las detecta en el .fpo (bit 8 de la palabra 0, o una
+  condición distinta de «siempre» en los bits 18–20 de la palabra 1), y el
+  build de los filtros falla si aparecen (`FPO_CHECK` en mk/ps3.mk).
+- **La salida choca con R0.** En el ensamblador que Cg le da a cgcomp,
+  `oCol` (result.color) es un registro aparte, pero cgcomp lo escribe en
+  R0, que Cg también usa como temporal. Cuando Cg escribe el color por
+  componentes y después lee R0 creyendo que tiene otra cosa, el programa
+  hace otra cuenta: en la pasada de puntos del CRT, `oCol.x = A` pisaba la
+  energía que leían las instrucciones siguientes (B y la energía salían
+  ×4,6 en RPCS3). No hay forma de evitarlo desde el Cg (lo reordena igual):
+  `tools/cg-salida.py` lo detecta componente por componente en el volcado
+  (`cgcomp -d`) y lo corrige mandando las escrituras de oCol a un temporal
+  nuevo y copiándolo con un `MOVR oCol` al final; `cgcomp -a` ensambla ese
+  texto (con los nombres de las constantes: sin cambios, sale el mismo
+  .fpo). Los shaders de rsxkit no tienen el choque (revisados).
+- Cg traduce `exp(x)` como `pow(e, x)`, que cgcomp expande a LG2 + MUL +
+  EX2 por componente: usar `exp2(x · log2 e)`. `sqrt` sale como RSQ + RCP
+  (sqrt(0) = 0). LG2, EX2, RCP y RSQ son escalares: `pow` de un `float3`
+  son 9 instrucciones.
+- Cada lectura de textura necesita su coordenada en un registro: con la
+  coordenada armada a mano (`float2(x + j, y)`) Cg agrega dos MOV por
+  lectura. Juntar dos coordenadas en un `float4` (`b + float4(j, 0, j, 0)`
+  y leer `.xy` y `.zw`) deja una suma por cada dos lecturas.
+- Las constantes (uniforms) del fragment program van dentro del
+  microcódigo, una copia en cada instrucción que las lee; el .fpo trae la
+  tabla de lugares (`rsxConstOffsetTable`) y rsxkit las parchea en su copia
+  del programa (`rsxkit_program_set`). Un programa ya parcheado se vuelve a
+  leer al ligarlo de nuevo (`rsxLoadFragmentProgramLocation`).
+- `tools/fpo-info.py` resume un .fpo: instrucciones, lecturas, precisión de
+  cada operación y cuántas copias tiene cada constante.
+
+Superficies y texturas de posprocesado: render a superficies lineales
+`GCM_SURFACE_F_W16Z16Y16X16` (4 × fp16, 8 bytes por píxel) y
+`A8R8G8B8`, leídas como textura (`W16_Z16_Y16_X16_FLOAT` y `A8R8G8B8`) con
+coordenadas en texeles (`GCM_TEXTURE_FORMAT_UNRM`, centro del texel i en
+i + 0,5) y `GCM_TEXTURE_BORDER` con color 0 para leer negro fuera de la
+imagen. La profundidad ligada es la de la pantalla (prueba y escritura
+apagadas): ninguna superficie puede ser más grande que ella. Marcas de
+tiempo del RSX: `rsxSetTimeStamp(ctx, i)` y `gcmGetTimeStamp(i)` (reportes
+2048 − 64 a 2047 en rsxkit). Pendiente de confirmar en la PS3 real:
+filtrado bilineal de las texturas fp16, el modo BORDER y el orden de los
+canales de fp16 (RPCS3 los acepta).

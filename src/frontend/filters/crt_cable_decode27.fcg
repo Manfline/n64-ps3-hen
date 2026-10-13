@@ -1,0 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* Salsa64 — CRT con cable S-Video o compuesto: 27 muestras (ver crt_cable_decode.cgh). */
+#define CRT_TAPS 27
+#include "crt_cable_decode.cgh"

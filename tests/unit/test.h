@@ -120,6 +120,7 @@ void t_suite_targets(void);
 void t_suite_raster(void);
 void t_suite_fpgen(void);
 void t_suite_menu(void);
+void t_suite_crt(void);
 void t_suite_state(void);
 void t_suite_osd(void);
 void t_suite_pausectl(void);

@@ -1,0 +1,30 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/*
+ * Salsa64 — CRT con cable, filtro original del autor portado de su versión
+ * de RetroMac (v1.1). Pasada final del tubo, en cada píxel de la imagen en
+ * pantalla: el haz de las dos scanlines más cercanas (de las tablas de
+ * líneas: amplitud por exp(−d² k)), el resplandor y la gamma de salida
+ * (2,2). Una scanline fuera de la imagen es negra (las tablas se leen con 0
+ * fuera).
+ *   f1 = (píxeles del juego por píxel de pantalla, x e y)
+ *   f2 = (rejilla del resplandor por píxel de pantalla, x e y; 1/gamma de salida)
+ */
+void main(float4 pos : TEXCOORD0, uniform sampler2D la : TEXUNIT0, uniform sampler2D lb : TEXUNIT1,
+	  uniform sampler2D glow : TEXUNIT2, uniform float4 f1, uniform float4 f2, out float4 color : COLOR)
+{
+	/* El centro exacto del píxel (TEXCOORD0 llega con un error de ~1e-6): con
+	 * 240 líneas en 720, un píxel cae justo en el centro de una scanline. */
+	float2 frag = floor(pos.xy) + 0.5;
+	float py = frag.y * f1.y;
+	float l0 = floor(py - 0.5) + 0.5;
+	float d0 = py - l0;
+	float d1 = 1.0 - d0;
+	float4 a0 = tex2D(la, float2(frag.x, l0));
+	float2 b0 = tex2D(lb, float2(frag.x, l0)).xy;
+	float4 a1 = tex2D(la, float2(frag.x, l0 + 1.0));
+	float2 b1 = tex2D(lb, float2(frag.x, l0 + 1.0)).xy;
+	float3 col = a0.rgb * exp2(-d0 * d0 * float3(a0.a, b0)) + a1.rgb * exp2(-d1 * d1 * float3(a1.a, b1));
+	col += tex2D(glow, frag * f2.xy).rgb;
+	col = saturate(col);
+	color = float4(pow(col, f2.zzz), 1.0);
+}

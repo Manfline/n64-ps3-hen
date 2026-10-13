@@ -204,6 +204,14 @@ struct salsa64_overscan {
  * `crop` (NULL: entera), y devuelve true. */
 bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const rsxkit_view *view,
 			 const struct salsa64_overscan *crop, rsxkit_rect *out);
+/* Con `draw` en false, salsa64_rdp_present elige qué se ve (y hace todo lo
+ * demás) pero no lo dibuja: lo dibuja quien llama, con un filtro (desde
+ * salsa64_rdp_present_source) o sin él (salsa64_rdp_present_again). */
+void salsa64_rdp_present_draw(bool draw);
+/* Lo último que eligió salsa64_rdp_present como textura (el destino
+ * entero), la región que se ve (en píxeles del destino, sin el overscan) y
+ * la escala de ese destino. false si no hay. */
+bool salsa64_rdp_present_source(rsxkit_texture *tex, rsxkit_rect *region, uint32_t *scale);
 /* Vuelve a dibujar lo último que presentó salsa64_rdp_present (mismo
  * destino, región y escala), sin tocar la tabla de destinos ni las copias a
  * la RDRAM: para seguir mostrando el último cuadro con la emulación en

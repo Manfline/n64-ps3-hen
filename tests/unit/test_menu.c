@@ -27,6 +27,7 @@
 
 #include "core/rom.h"
 #include "core/save.h"
+#include "frontend/filters/catalog.h"
 #include "frontend/menu.h"
 #include "frontend/padmap.h"
 #include "frontend/romlist.h"
@@ -442,17 +443,37 @@ static void menu_options_page(void)
 	menu_input(&m, 0, 79);
 	CHECK_EQ(menu_input(&m, 0, 79), MENU_NONE);
 	CHECK_EQ(m.opt, MENU_OPT_BACK);  /* la fila desapareció: el cursor pasa a «Volver» */
-	menu_input(&m, UP, 79);          /* arriba, «Confirmar al salir», «Mostrar FPS» y «Escala interna» */
+	menu_input(&m, UP, 79);          /* arriba, «Confirmar al salir», «Mostrar FPS», «Filtro» y «Escala interna» */
 	CHECK_EQ(m.opt, MENU_OPT_CONFIRM);
 	menu_input(&m, 0, 79);
 	menu_input(&m, UP, 79);
 	CHECK_EQ(m.opt, MENU_OPT_FPS);
 	menu_input(&m, 0, 79);
 	menu_input(&m, UP, 79);
+	CHECK_EQ(m.opt, MENU_OPT_FILTER);
+	menu_input(&m, 0, 79);
+	menu_input(&m, UP, 79);
 	CHECK_EQ(m.opt, MENU_OPT_SCALE);
 	menu_input(&m, 0, 79);
 	menu_input(&m, DOWN, 79);
-	CHECK_EQ(m.opt, MENU_OPT_FPS);   /* sin cambios pendientes se salta «Aplicar ahora» */
+	CHECK_EQ(m.opt, MENU_OPT_FILTER);  /* sin cambios pendientes se salta «Aplicar ahora» */
+	/* Filtro: × y derecha avanzan, izquierda retrocede, con vuelta. */
+	CHECK_EQ(m.set.filter, SALSA64_FILTER_NONE);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, CROSS, 79), MENU_SETTINGS);
+	CHECK_EQ(m.set.filter, SALSA64_FILTER_CRT_MASK);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, LEFT, 79), MENU_SETTINGS);
+	CHECK_EQ(m.set.filter, SALSA64_FILTER_NONE);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, LEFT, 79), MENU_SETTINGS);
+	CHECK_EQ(m.set.filter, SALSA64_FILTERS - 1);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, RIGHT, 79), MENU_SETTINGS);
+	CHECK_EQ(m.set.filter, SALSA64_FILTER_NONE);
+	menu_input(&m, 0, 79);
+	menu_input(&m, DOWN, 79);
+	CHECK_EQ(m.opt, MENU_OPT_FPS);
 	/* Mostrar FPS: alterna sí / no y pide guardar. */
 	CHECK(!m.set.fps);
 	menu_input(&m, 0, 79);
@@ -514,7 +535,14 @@ static void menu_settings_file(void)
 	static const char direct[] = "confirmar = no\n";
 	menu_settings_parse(&s, direct, sizeof direct - 1);
 	CHECK(!s.confirm);
-	char text[128];
+	CHECK_EQ(s.filter, SALSA64_FILTER_NONE);
+	static const char filt[] = "filtro = CRT-Compuesto\n";
+	menu_settings_parse(&s, filt, sizeof filt - 1);
+	CHECK_EQ(s.filter, SALSA64_FILTER_CRT_COMPOSITE);
+	static const char unknown[] = "filtro = otro\n";
+	menu_settings_parse(&s, unknown, sizeof unknown - 1);
+	CHECK_EQ(s.filter, SALSA64_FILTER_CRT_COMPOSITE);
+	char text[160];
 	s.waves = false;
 	int n = menu_settings_format(&s, text, sizeof text);
 	CHECK(n > 0 && (size_t)n < sizeof text);
@@ -524,6 +552,9 @@ static void menu_settings_file(void)
 	CHECK(!t.waves);
 	CHECK(t.fps);
 	CHECK(!t.confirm);
+	CHECK_EQ(t.filter, SALSA64_FILTER_CRT_COMPOSITE);
+	for (int f = 0; f < SALSA64_FILTERS; f++)
+		CHECK_EQ(salsa64_filter_from_key(salsa64_filter_key(f), (unsigned)strlen(salsa64_filter_key(f))), f);
 }
 
 static void menu_autopilot_opens_target(void)

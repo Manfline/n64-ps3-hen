@@ -19,6 +19,7 @@
 
 #include "core/rom.h"
 #include "core/save.h"
+#include "frontend/filters/catalog.h"
 #include "padmap.h"
 
 #define BIT(b) (1u << (b))
@@ -47,6 +48,7 @@ void menu_settings_default(struct menu_settings *s)
 	s->scale = 0;
 	s->fps = false;
 	s->confirm = true;
+	s->filter = SALSA64_FILTER_NONE;
 }
 
 static const char *overscan_name(int o)
@@ -108,6 +110,8 @@ void menu_settings_parse(struct menu_settings *s, const char *text, size_t len)
 			s->fps = yes;
 		else if (!strcmp(key, "confirmar") && (yes || no))
 			s->confirm = yes;
+		else if (!strcmp(key, "filtro") && salsa64_filter_from_key(val, (unsigned)strlen(val)) >= 0)
+			s->filter = salsa64_filter_from_key(val, (unsigned)strlen(val));
 	}
 }
 
@@ -165,8 +169,9 @@ int menu_video_format(const struct menu_settings *s, char *buf, size_t size)
 
 int menu_settings_format(const struct menu_settings *s, char *buf, size_t size)
 {
-	return snprintf(buf, size, "# Ajustes del menú de Salsa64\nfondo = %s\nfps = %s\nconfirmar = %s\n",
-			s->waves ? "si" : "no", s->fps ? "si" : "no", s->confirm ? "si" : "no");
+	return snprintf(buf, size, "# Ajustes del menú de Salsa64\nfondo = %s\nfps = %s\nconfirmar = %s\nfiltro = %s\n",
+			s->waves ? "si" : "no", s->fps ? "si" : "no", s->confirm ? "si" : "no",
+			salsa64_filter_key(s->filter));
 }
 
 void menu_init(struct menu *m, const struct romlist *list, int sel, const struct menu_settings *set)
@@ -263,6 +268,12 @@ static enum menu_action options_buttons(struct menu *m, uint32_t pressed)
 		/* Auto → 1× → ... → 5× → Auto (izquierda, al revés). */
 		int v = m->set.scale + (pressed & BIT(SALSA64_DS3_LEFT) ? 5 : 1);
 		m->set.scale = v % 6;
+		return MENU_SETTINGS;
+	}
+	if (m->opt == MENU_OPT_FILTER && (pressed & change)) {
+		/* Ninguno → los filtros en orden → Ninguno (izquierda, al revés). */
+		int f = m->set.filter + (pressed & BIT(SALSA64_DS3_LEFT) ? SALSA64_FILTERS - 1 : 1);
+		m->set.filter = f % SALSA64_FILTERS;
 		return MENU_SETTINGS;
 	}
 	if (m->opt == MENU_OPT_FPS && (pressed & change)) {
@@ -609,11 +620,25 @@ static void panel(const struct menu *m, float W, float H, float a)
 		const char *const apply_text[] = { "Pone la salida y la escala", "elegidas sin cerrar Salsa64:", want_buf, NULL,
 						   "Si la tele no acepta el", "modo, queda el anterior.", NULL, NULL };
 		static const char *const back_text[] = { "A la lista de juegos.", NULL, NULL };
+		/* Filtro: su ayuda y dónde se guarda. */
+		const char *filter_text[8];
+		{
+			const char *const *h = salsa64_filter_help(m->set.filter);
+			int k = 0;
+			for (int i = 0; i < 3; i++)
+				if (h[i])
+					filter_text[k++] = h[i];
+			filter_text[k++] = NULL;
+			filter_text[k++] = "Se guarda en menu.cfg.";
+			filter_text[k++] = NULL;
+			filter_text[k] = NULL;
+		}
 		const char *title = m->opt == MENU_OPT_WAVES ? "Fondo animado"
 				    : m->opt == MENU_OPT_OVERSCAN ? "Recorte del borde"
 				    : m->opt == MENU_OPT_RESOLUTION ? "Resolución"
 				    : m->opt == MENU_OPT_SCALE ? "Escala interna"
 				    : m->opt == MENU_OPT_APPLY ? "Aplicar ahora"
+				    : m->opt == MENU_OPT_FILTER ? "Filtro"
 				    : m->opt == MENU_OPT_FPS ? "Mostrar FPS"
 				    : m->opt == MENU_OPT_CONFIRM ? "Confirmar al salir" : "Volver";
 		const char *const *text = m->opt == MENU_OPT_WAVES ? waves_text
@@ -621,12 +646,14 @@ static void panel(const struct menu *m, float W, float H, float a)
 					  : m->opt == MENU_OPT_RESOLUTION ? res_text
 					  : m->opt == MENU_OPT_SCALE ? scale_text
 					  : m->opt == MENU_OPT_APPLY ? apply_text
+					  : m->opt == MENU_OPT_FILTER ? filter_text
 					  : m->opt == MENU_OPT_FPS ? fps_text
 					  : m->opt == MENU_OPT_CONFIRM ? confirm_text : back_text;
 		const char *value = m->opt == MENU_OPT_WAVES ? (m->set.waves ? "Sí" : "No")
 				    : m->opt == MENU_OPT_OVERSCAN ? overscan_name(m->set.overscan)
 				    : m->opt == MENU_OPT_RESOLUTION ? resolution_name(m->set.resolution)
 				    : m->opt == MENU_OPT_SCALE ? scale_name(&m->set, scale_buf, sizeof scale_buf)
+				    : m->opt == MENU_OPT_FILTER ? salsa64_filter_name(m->set.filter)
 				    : m->opt == MENU_OPT_FPS ? (m->set.fps ? "Sí" : "No")
 				    : m->opt == MENU_OPT_CONFIRM ? (m->set.confirm ? "Sí" : "No") : NULL;
 		stext(x, y, title, tscale, 0xFFFFFFu, ca, tmax);
@@ -736,6 +763,8 @@ static void options_column(const struct menu *m, float x, float W, float H, floa
 	struct row scale = { "Escala interna", "Dibujo interno", 2, "▲", 0,
 			     scale_name(&m->set, sbuf, sizeof sbuf) };
 	struct row apply = { "Aplicar ahora", "Salida y escala elegidas", 2, "●", 0, NULL };
+	struct row filter = { "Filtro", "CRT y otros filtros de la imagen", 2, "○", 0,
+			      salsa64_filter_name(m->set.filter) };
 	struct row fps = { "Mostrar FPS", "Velocidad en una esquina del juego", 2, "#", 0, m->set.fps ? "Sí" : "No" };
 	struct row confirm = { "Confirmar al salir", "START + SELECT pregunta antes", 2, "?", 0,
 			       m->set.confirm ? "Sí" : "No" };
@@ -746,6 +775,7 @@ static void options_column(const struct menu *m, float x, float W, float H, floa
 	draw_row(&scale, MENU_OPT_SCALE - m->opt_pos, x, W, H, a);
 	if (menu_video_pending(m))
 		draw_row(&apply, MENU_OPT_APPLY - m->opt_pos, x, W, H, a);
+	draw_row(&filter, (float)opt_row(m, MENU_OPT_FILTER) - m->opt_pos, x, W, H, a);
 	draw_row(&fps, (float)opt_row(m, MENU_OPT_FPS) - m->opt_pos, x, W, H, a);
 	draw_row(&confirm, (float)opt_row(m, MENU_OPT_CONFIRM) - m->opt_pos, x, W, H, a);
 	draw_row(&back, (float)opt_row(m, MENU_OPT_BACK) - m->opt_pos, x, W, H, a);

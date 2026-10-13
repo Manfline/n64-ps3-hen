@@ -29,3 +29,27 @@ void salsa64_screenshot(const char *path, const struct salsa64_vi_frame *f, cons
 	}
 	fclose(out);
 }
+
+void salsa64_screenshot_full(const char *path)
+{
+	uint32_t pitch;
+	const rsxkit_screen *sc = rsxkit_screen_info();
+	const uint32_t *px = rsxkit_back_buffer(&pitch);
+	FILE *out = fopen(path, "wb");
+	if (!out)
+		return;
+	fprintf(out, "P6\n%u %u\n255\n", sc->width, sc->height);
+	static uint8_t line[3 * 1920];
+	uint32_t w = sc->width < 1920 ? sc->width : 1920;
+	for (uint32_t y = 0; y < sc->height; y++) {
+		const uint32_t *row = px + y * (pitch / 4);
+		for (uint32_t x = 0; x < w; x++) {
+			uint32_t c = row[x];
+			line[3 * x] = (uint8_t)(c >> 16);
+			line[3 * x + 1] = (uint8_t)(c >> 8);
+			line[3 * x + 2] = (uint8_t)c;
+		}
+		fwrite(line, 3, w, out);
+	}
+	fclose(out);
+}

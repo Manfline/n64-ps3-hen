@@ -12,6 +12,10 @@
 #               bytes: si no alcanza, falla el enlace; tools/spu-stack.py) y
 #               <nombre>_STACK_ARGS (sus --edge y --ignore)
 #   SHADERS     shaders Cg (.vcg/.fcg), relativos al directorio del programa
+#   CGCFLAGS    opciones de cgcomp (p. ej. -Wcg,-nofastprecision)
+#   FPO_CHECK   1: revisa los fragment programs: corrige el choque del color
+#               de salida con R0 (tools/cg-salida.py) y falla si usan
+#               códigos de condición (tools/fpo-info.py); ver docs/rsx-notes.md
 #   CFLAGS      opcional, se agrega a los flags de compilación PPU
 #   LDFLAGS     opcional, se agrega a los flags de enlace PPU
 #   DATA        archivos a embeber; para cada uno, <nombre>_FILE (relativo a
@@ -176,10 +180,21 @@ $(OBJ)/%.vpo: %.vcg
 	@mkdir -p $(@D)
 	$(VERB)cgcomp -v $(CGCFLAGS) $< $@
 
+# Con FPO_CHECK, el ensamblador que Cg le da a cgcomp se revisa y se vuelve
+# a ensamblar: el color de salida que choca con R0 va a un temporal
+# (tools/cg-salida.py) y los códigos de condición hacen fallar el build
+# (tools/fpo-info.py). Sin nada que corregir, el .fpo sale idéntico.
 $(OBJ)/%.fpo: %.fcg
 	@echo "  CGCOMP  $(notdir $<)"
 	@mkdir -p $(@D)
+ifeq ($(FPO_CHECK),1)
+	$(VERB)cgcomp -f -d $(CGCFLAGS) $< $@ >/dev/null && \
+		python3 $(ROOT)/tools/cg-salida.py $@.dump --corrige $@.asm && \
+		cgcomp -f -a $@.asm $@ >/dev/null && \
+		python3 $(ROOT)/tools/fpo-info.py $@ --sin-condiciones >/dev/null || { rm -f $@; exit 1; }
+else
 	$(VERB)cgcomp -f $(CGCFLAGS) $< $@
+endif
 
 # bin2s exporta el símbolo <archivo>_<ext>; el header declara los tres.
 define EMBED

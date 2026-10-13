@@ -153,6 +153,7 @@
 #include <sysutil/sysutil.h>
 #include <sysutil/video.h>
 
+#include <rsxkit/post.h>
 #include <rsxkit/rsxkit.h>
 #include <rsxkit/ui.h>
 #include <spukit/spukit.h>
@@ -173,6 +174,7 @@
 #include "platform/ps3/rsp_spu.h"
 #include "platform/ps3/log.h"
 #include "platform/ps3/rec_cache.h"
+#include "frontend/filters/filters.h"
 #include "rdp/rdp.h"
 #include "rsp/gfx/hle.h"
 #include "replay.h"
@@ -208,6 +210,17 @@ SYS_PROCESS_PARAM(1001, 0x100000);
  * (como hasta v0.1.0); los mandos siguen sueltos y el latido mira. */
 #define NO_PAUSE_PATH SALSA64_DATA_DIR "/sin-pausa"
 #define JPEG_PPE_PATH SALSA64_DATA_DIR "/jpeg-ppe"  /* diagnóstico: la tarea JPEG en el PPE */
+/* Filtro de la presentación (frontend/filters): el de menu.cfg («filtro =
+ * …»). Con el archivo `filtro` (una clave, p. ej. «crt-mascara»), ese,
+ * también en las pruebas automáticas; con `filtros-ciclo`, todos por turnos
+ * cada FILTER_CYCLE_US, para medirlos (el log dice cuánto tarda cada uno en
+ * el RSX); con `capturas-pantalla`, las capturas periódicas guardan además
+ * la pantalla entera como se ve (con el filtro) en pantalla-N.ppm. */
+#define FILTER_PATH       SALSA64_DATA_DIR "/filtro"
+#define FILTER_CYCLE_PATH SALSA64_DATA_DIR "/filtros-ciclo"
+#define FILTER_CYCLE_US   20000000u
+#define SHOTS_FULL_PATH   SALSA64_DATA_DIR "/capturas-pantalla"
+#define FILTER_VIEW_PATH  SALSA64_DATA_DIR "/filtro-ver"
 /* Con este archivo, la RDRAM emulada sale de sysMemoryAllocate con páginas
  * de 1 MB en vez del heap (memalign): para medir si el PPE pierde tiempo en
  * fallos de TLB (docs/perf-log.md). El tamaño de página real de cada zona
@@ -873,6 +886,7 @@ static struct {
 } state_test;
 
 static void fps_setting_save(bool on);
+static int filter_setting_load(void);
 static bool fps_setting_load(void);
 static bool confirm_setting_load(void);
 
@@ -1638,6 +1652,175 @@ static struct {
 	uint32_t still_frames;
 } pres = { .view = { RSXKIT_SCALE_FIT, RSXKIT_FILTER_LINEAR, 4.0f / 3.0f } };
 
+/* Filtro de la presentación. Con filtro, salsa64_rdp_present (o el
+ * framebuffer 2D) solo elige qué se ve y el filtro lo dibuja al final del
+ * cuadro; las capturas, las miniaturas de los estados y las pruebas
+ * automáticas leen la imagen sin filtro, que entonces se dibuja antes
+ * (filter_plain) y el filtro la tapa. */
+static struct {
+	int sel;        /* el elegido (menu.cfg o el archivo `filtro`) */
+	int cur;        /* el que se usa: sel, o el del ciclo de medición */
+	bool cycle;     /* filtros-ciclo */
+	bool full_shots;
+	uint64_t t_cycle;
+	bool pending;   /* este cuadro va con filtro: falta dibujarlo */
+	bool plain;     /* ... y ya tiene la imagen sin filtro */
+	struct salsa64_filter_src src;
+	uint32_t full_shot;
+} flt;
+
+/* Tiempo del RSX en lo que manda la presentación, con marcas de tiempo
+ * (rsxkit/post.h; las de 0 a 23 son de frontend/filters): cada tramo de
+ * órdenes (traducir las tareas gráficas de la emulación; presentar un campo
+ * con su filtro y lo de encima) entre una marca al empezar y otra al
+ * terminar, y una barrera; se suma cuando el RSX pasó la barrera. Es una
+ * cota superior: incluye lo que el RSX esperó órdenes del PPE dentro del
+ * tramo. */
+#define RT_STAMP0 24
+#define RT_PAIRS  16
+enum { RT_EMU, RT_PRES, RT_KINDS };
+static struct {
+	uint32_t next;
+	uint8_t kind[RT_PAIRS];
+	bool pending[RT_PAIRS];
+	uint32_t fence[RT_PAIRS];
+	uint64_t ns[RT_KINDS];
+	uint32_t n[RT_KINDS];
+	int open;  /* par abierto, o -1 */
+} rt = { .open = -1 };
+
+static void rt_collect(void)
+{
+	for (uint32_t i = 0; i < RT_PAIRS; i++) {
+		if (!rt.pending[i] || !rsxkit_fence_done(rt.fence[i]))
+			continue;
+		rt.pending[i] = false;
+		uint64_t a = rsxkit_stamp_ns(RT_STAMP0 + 2 * i), b = rsxkit_stamp_ns(RT_STAMP0 + 2 * i + 1);
+		if (b < a || b - a > 200000000u)
+			continue;
+		rt.ns[rt.kind[i]] += b - a;
+		rt.n[rt.kind[i]]++;
+	}
+}
+
+static void rt_begin(int kind)
+{
+	if (rt.open >= 0)
+		return;
+	rt_collect();
+	uint32_t i = rt.next++ % RT_PAIRS;
+	rt.pending[i] = false;  /* si seguía en vuelo, se pierde esa medición */
+	rt.kind[i] = (uint8_t)kind;
+	rt.open = (int)i;
+	rsxkit_stamp(RT_STAMP0 + 2 * i);
+}
+
+static void rt_end(void)
+{
+	if (rt.open < 0)
+		return;
+	uint32_t i = (uint32_t)rt.open;
+	rsxkit_stamp(RT_STAMP0 + 2 * i + 1);
+	rt.fence[i] = rsxkit_fence();
+	rt.pending[i] = true;
+	rt.open = -1;
+}
+
+static bool filter_tests(void)
+{
+	return selftest_on || gfxtest_on || audiotest_on;
+}
+
+/* La imagen del cuadro sin filtro, si va con filtro y aún no está (antes
+ * de una captura). */
+static void filter_plain(rsxkit_rect *r)
+{
+	if (!flt.pending || flt.plain)
+		return;
+	if (pres.still == STILL_RSX)
+		salsa64_rdp_present_again(r);
+	else if (pres.still == STILL_FB)
+		rsxkit_fb_draw(pres.fb, &pres.view, r);
+	flt.plain = true;
+}
+
+/* La fuente del filtro: lo que eligió salsa64_rdp_present o el framebuffer
+ * 2D (`shown`: su tamaño sin el overscan). */
+static bool filter_source(bool rsx, const struct salsa64_vi_frame *shown)
+{
+	struct salsa64_filter_src *s = &flt.src;
+	memset(s, 0, sizeof *s);
+	s->aspect = pres.view.aspect;
+	if (rsx)
+		return salsa64_rdp_present_source(&s->tex, &s->region, &s->factor);
+	if (!rsxkit_fb_texture(pres.fb, &s->tex))
+		return false;
+	s->region = (rsxkit_rect){ 0, 0, shown->width, shown->height };
+	s->factor = 1;
+	return true;
+}
+
+/* Dibuja el filtro del cuadro (o, si no se pudo, la imagen sin filtro). */
+static void filter_finish(rsxkit_rect *r)
+{
+	if (!flt.pending)
+		return;
+	if (!salsa64_filters_draw(flt.cur, &flt.src, NULL))
+		filter_plain(r);
+	flt.pending = false;
+}
+
+/* Al abrir un juego: el filtro de menu.cfg, o el del archivo `filtro`. */
+static void filter_setup(int menu_filter)
+{
+	memset(&flt, 0, sizeof flt);
+	flt.sel = menu_filter;
+	FILE *f = fopen(FILTER_PATH, "r");
+	if (f) {
+		char key[32] = "";
+		if (fscanf(f, "%31s", key) == 1) {
+			int k = salsa64_filter_from_key(key, (unsigned)strlen(key));
+			if (k >= 0)
+				flt.sel = k;
+			else
+				salsa64_log("filtros: «%s» en %s no es un filtro", key, FILTER_PATH);
+		}
+		fclose(f);
+	}
+	flt.cur = flt.sel;
+	/* Diagnóstico: `filtro-ver` con «tabla [escala]» dibuja esa tabla del
+	 * filtro en la esquina de la pantalla (frontend/filters/filters.h). */
+	f = fopen(FILTER_VIEW_PATH, "r");
+	if (f) {
+		char name[32] = "";
+		float scale = 1.0f;
+		if (fscanf(f, "%31s %f", name, &scale) >= 1)
+			salsa64_filters_debug(name, scale);
+		fclose(f);
+	} else {
+		salsa64_filters_debug(NULL, 1.0f);
+	}
+	flt.cycle = file_exists(FILTER_CYCLE_PATH);
+	flt.full_shots = file_exists(SHOTS_FULL_PATH);
+	if (flt.cycle)
+		flt.cur = SALSA64_FILTER_NONE;
+	flt.t_cycle = sysGetSystemTime();
+	salsa64_log("filtros: %s%s%s", flt.cycle ? "ciclo de medición (todos cada 20 s, desde «Ninguno»)" : "",
+		    flt.cycle ? "" : salsa64_filter_name(flt.cur),
+		    flt.full_shots ? "; capturas de la pantalla entera (pantalla-N.ppm)" : "");
+}
+
+/* Ciclo de medición: el siguiente filtro cada FILTER_CYCLE_US. */
+static void filter_cycle(uint64_t now)
+{
+	if (!flt.cycle || now - flt.t_cycle < FILTER_CYCLE_US)
+		return;
+	flt.t_cycle = now;
+	flt.cur = (flt.cur + 1) % SALSA64_FILTERS;
+	salsa64_log("filtros: ciclo → «%s»", salsa64_filter_name(flt.cur));
+	osd_notice(now, "Filtro: %s", salsa64_filter_name(flt.cur));
+}
+
 /* rsxkit_frame_begin y _end con el tiempo que se esperó el flip anterior:
  * si pasa de SLOW_FLIP_US, al log con los vblanks que pasaron desde que se
  * pidió (con el sistema encima, la PS3 retenía los flips segundos: por eso
@@ -1671,7 +1854,9 @@ static uint32_t h1_flush(uint32_t upto)
 	struct salsa64_rdp_tb a, b;
 	salsa64_rdp_get_tb(&a);
 	uint64_t t0 = tb_now();
+	rt_begin(RT_EMU);
 	uint32_t n = salsa64_rdp_flush(upto);
+	rt_end();
 	h1.t_flush += tb_now() - t0;
 	salsa64_rdp_get_tb(&b);
 	h1.in_flush.translate += b.translate - a.translate;
@@ -1744,6 +1929,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	if (behind > pres.behind_max)
 		pres.behind_max = behind;
 	frame_begin("flip anterior");
+	rt_begin(RT_PRES);
 	/* Lo que se ve: la imagen del VI sin el overscan (las capturas van de
 	 * ese tamaño). */
 	struct salsa64_overscan crop = overscan_for(&m->f);
@@ -1751,10 +1937,16 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	shown.width -= crop.left + crop.right;
 	shown.height -= crop.top + crop.bottom;
 	pres.still = STILL_NONE;
+	bool filt = flt.cur != SALSA64_FILTER_NONE && !filter_tests();
+	flt.pending = flt.plain = false;
+	salsa64_rdp_present_draw(!filt);
 	if (m->f.width) {
 		if (salsa64_rdp_present(&m->f, m->field, &pres.view, &crop, &r)) {
 			pres.rsx_frames++;
 			pres.still = STILL_RSX;
+			flt.pending = filt && filter_source(true, &shown);
+			if (filt && !flt.pending)
+				salsa64_rdp_present_again(&r);
 			if (gfxtest_on && pres.result == SELFTEST_RUNNING)
 				check_gfx = gfxtest_want_screen();
 		} else if (have) {
@@ -1762,8 +1954,10 @@ static void present_field(const struct field_msg *m, uint64_t now)
 			uint32_t line = m->f.width * m->f.bpp;
 			rsxkit_fb_upload(pres.fb, snap_buf[slot] + crop.top * line + crop.left * m->f.bpp, shown.width,
 					 shown.height, line, m->f.bpp == 4 ? RSXKIT_RGBA8888 : RSXKIT_RGBA5551);
-			rsxkit_fb_draw(pres.fb, &pres.view, &r);
 			pres.still = STILL_FB;
+			flt.pending = filt && filter_source(false, &shown);
+			if (!flt.pending)
+				rsxkit_fb_draw(pres.fb, &pres.view, &r);
 		} else {
 			pres.blank++;
 		}
@@ -1784,6 +1978,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	if (have)
 		snap_state[slot] = SNAP_FREE;  /* ya está en la memoria del RSX */
 	if (check || check_gfx) {
+		filter_plain(&r);
 		rsxkit_finish();
 		if (check)
 			selftest_screen(&m->f, &r);
@@ -1792,6 +1987,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	} else if ((m->flags & FIELD_SHOT) && m->f.width) {
 		char path[64];
 		snprintf(path, sizeof path, SALSA64_DATA_DIR "/campo-%u.ppm", m->field);
+		filter_plain(&r);
 		rsxkit_finish();
 		salsa64_screenshot(path, &shown, &r);
 		salsa64_log("captura %s", path);
@@ -1799,18 +1995,30 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		   (pres.autotest ? m->field / AUTO_SHOT_FIELDS != pres.shots : now - pres.t_shot >= SHOT_US)) {
 		char path[64];
 		snprintf(path, sizeof path, SALSA64_DATA_DIR "/screen-%u.ppm", pres.shots % SHOT_MAX + 1);
+		bool with_filter = flt.pending;
+		filter_plain(&r);
 		rsxkit_finish();
 		salsa64_screenshot(path, &shown, &r);
 		salsa64_log("captura %s (campo %u)", path, m->field);
+		if (with_filter && flt.full_shots) {
+			/* La pantalla entera con el filtro (diagnóstico). */
+			filter_finish(&r);
+			rsxkit_finish();
+			snprintf(path, sizeof path, SALSA64_DATA_DIR "/pantalla-%u.ppm", pres.shots % SHOT_MAX + 1);
+			salsa64_screenshot_full(path);
+			salsa64_log("captura %s (con «%s»)", path, salsa64_filter_name(flt.cur));
+		}
 		pres.shots = pres.autotest ? m->field / AUTO_SHOT_FIELDS : pres.shots + 1;
 		pres.t_shot = now;
 	}
 	if ((m->flags & FIELD_STATE) && state_req == STATE_SAVE) {
 		/* La miniatura del estado: la imagen sin el aviso encima. */
+		filter_plain(&r);
 		rsxkit_finish();
 		states_thumb_capture(&r);
 	}
 	if (pres.dump_field && m->field >= pres.dump_field) {
+		filter_plain(&r);
 		rsxkit_finish();
 		salsa64_log("volcado de la HLE en el campo %u: %s", m->field,
 			    salsa64_rdp_dump(SALSA64_DATA_DIR "/gfxdump.bin") ? "bien" : "FALLO");
@@ -1821,6 +2029,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		dump_now = false;
 		snprintf(path, sizeof path, SALSA64_DATA_DIR "/gfxdump-%u.bin", m->field);
 		snprintf(shot, sizeof shot, SALSA64_DATA_DIR "/gfxdump-%u.ppm", m->field);
+		filter_plain(&r);
 		rsxkit_finish();
 		bool ok = salsa64_rdp_dump(path);
 		salsa64_screenshot(shot, &shown, &r);
@@ -1828,10 +2037,12 @@ static void present_field(const struct field_msg *m, uint64_t now)
 			    ok ? "bien" : "FALLO");
 		osd_notice(sysGetSystemTime(), ok ? "Volcado del campo %u" : "Volcado: falló", m->field);
 	}
+	filter_finish(&r);
 	present_overlay(sysGetSystemTime());
 	/* audio_out: una vez por campo presentado (estadísticas y volcado). */
 	uint64_t t1 = sysGetSystemTime();
 	audio_out_field(t1);
+	rt_end();
 	frame_end("flip");
 	beat.pres_at = "cola";
 	pres.frames_total++;
@@ -1879,10 +2090,18 @@ static void present_still(void)
 	rsxkit_rect r;
 	frame_begin("flip anterior (pausa)");
 	beat.pres_at = "cuadro repetido";
-	if (pres.still == STILL_RSX && !salsa64_rdp_present_again(&r))
-		pres.still = STILL_NONE;  /* el destino se soltó: negro */
-	else if (pres.still == STILL_FB)
-		rsxkit_fb_draw(pres.fb, &pres.view, &r);
+	bool filt = flt.cur != SALSA64_FILTER_NONE && !filter_tests();
+	if (pres.still == STILL_RSX) {
+		struct salsa64_vi_frame none = { 0 };
+		if (!(filt && filter_source(true, &none) && salsa64_filters_draw(flt.cur, &flt.src, &r)) &&
+		    !salsa64_rdp_present_again(&r))
+			pres.still = STILL_NONE;  /* el destino se soltó: negro */
+	} else if (pres.still == STILL_FB) {
+		rsxkit_texture t;
+		if (!(filt && rsxkit_fb_texture(pres.fb, &t) &&
+		      (flt.src.tex = t, flt.src.factor = 1, salsa64_filters_draw(flt.cur, &flt.src, &r))))
+			rsxkit_fb_draw(pres.fb, &pres.view, &r);
+	}
 	present_overlay(now);
 	frame_end("flip (pausa)");
 	beat.pres_at = "pausa";
@@ -2010,6 +2229,23 @@ static void stats(uint64_t now)
 		    pres.presented ? pres.us_flip / 1000.0 / pres.presented : 0.0, pres.skipped,
 		    emu_stats.dropped, pres.blank, pres.rsx_frames);
 	h1_stats(fields, dt);
+	/* El RSX: lo de la emulación por campo emulado y lo de presentar
+	 * (imagen, filtro, avisos) por campo presentado, y el filtro por
+	 * pasada. */
+	rt_collect();
+	if (rt.n[RT_EMU] || rt.n[RT_PRES])
+		salsa64_log("rsx: emulación %.2f ms por campo emulado, presentación %.2f ms por campo presentado (%.0f %% "
+			    "del tiempo ocupado en total; cota superior)",
+			    fields ? rt.ns[RT_EMU] / 1e6 / fields : 0.0,
+			    pres.presented ? rt.ns[RT_PRES] / 1e6 / pres.presented : 0.0,
+			    dt ? (rt.ns[RT_EMU] + rt.ns[RT_PRES]) / 10.0 / dt : 0.0);
+	memset(rt.ns, 0, sizeof rt.ns);
+	memset(rt.n, 0, sizeof rt.n);
+	{
+		char line[320];
+		if (salsa64_filters_report(line, sizeof line))
+			salsa64_log("rsx: %s", line);
+	}
 	/* Tareas gráficas: tiempo de la HLE (en el SPE), espera del PPE,
 	 * traducción a comandos del RSX y esperas por un juego de búferes. */
 	struct salsa64_rdp_stats rs;
@@ -2632,6 +2868,7 @@ static void profile_close(void)
 
 static void game_close(void)
 {
+	salsa64_filters_release();
 	salsa64_log("cierre: emulación detenida tras %u campos (%u emulados, %u descartados por la cola, %u sin ranura)",
 		    n64.bus.vi.fields, emu_stats.fields, emu_stats.dropped, emu_stats.no_slot);
 	savefile_close(&save_file);
@@ -2912,6 +3149,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	fps.on = fps_setting_load();
 	osd_fps_reset(&fps);
 	pause_ctl.confirm = confirm_setting_load();
+	filter_setup(filter_setting_load());
 	sys_no_pause = file_exists(NO_PAUSE_PATH);
 	if (sys_no_pause)
 		salsa64_log("pausa: %s presente, el menú del sistema no pausa la emulación (diagnóstico)", NO_PAUSE_PATH);
@@ -2939,6 +3177,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		}
 		pause_update();
 		now = sysGetSystemTime();
+		filter_cycle(now);
 		beat.pres_at = "guardado";
 		savefile_write_staged(&save_file, now);
 		profile_write_step(now);
@@ -3200,6 +3439,14 @@ static bool confirm_setting_load(void)
 	struct menu_settings s;
 	settings_read(&s);
 	return s.confirm;
+}
+
+/* El filtro de la presentación (menu.cfg, «filtro = …»). */
+static int filter_setting_load(void)
+{
+	struct menu_settings s;
+	settings_read(&s);
+	return s.filter;
 }
 
 static void fps_setting_save(bool on)

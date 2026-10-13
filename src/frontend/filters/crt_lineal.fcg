@@ -1,0 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/*
+ * Salsa64 — filtros CRT originales del autor, portados de sus versiones de
+ * RetroMac. Pasada «lineal»: cada píxel del juego (ya a su resolución)
+ * decodificado de su gamma a luz lineal, una vez, para el haz y el
+ * resplandor. k.x = gamma de entrada (2,4).
+ */
+void main(float4 pos : TEXCOORD0, uniform sampler2D src : TEXUNIT0, uniform float4 k, out float4 color : COLOR)
+{
+	float3 c = tex2D(src, pos.xy).rgb;
+	color = float4(pow(max(c, 0.0), k.xxx), 1.0);
+}

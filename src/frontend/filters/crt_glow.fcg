@@ -1,0 +1,23 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/*
+ * Salsa64 — filtros CRT originales del autor, portados de sus versiones de
+ * RetroMac. Pasada «resplandor»: la luz que se derrama sobre los huecos de
+ * la máscara, el promedio de 12 lecturas en espiral alrededor de cada
+ * punto, en una rejilla de g puntos por píxel del juego (TEXCOORD0.xy ya
+ * en píxeles del juego) que la pasada final interpola, como la rejilla del
+ * resplandor de RetroMac. Lee la luz lineal con filtro bilineal y 0 fuera
+ * de la imagen.
+ *   sp[i] = dos puntos de la espiral (xy, zw) por el radio (píxeles del juego)
+ *   k.x   = resplandor · brillo · (1 − velo) / 12
+ */
+void main(float4 pos : TEXCOORD0, uniform sampler2D lin : TEXUNIT0, uniform float4 sp[6], uniform float4 k,
+	  out float4 color : COLOR)
+{
+	float4 p = pos.xyxy;
+	float3 g = 0.0;
+	for (int i = 0; i < 6; i++) {
+		float4 c = p + sp[i];
+		g += tex2D(lin, c.xy).rgb + tex2D(lin, c.zw).rgb;
+	}
+	color = float4(g * k.x, 1.0);
+}
