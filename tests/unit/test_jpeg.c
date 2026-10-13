@@ -11,6 +11,7 @@
 #include "core/endian.h"
 #include "core/rom.h"
 #include "rsp/jpeg/jpeg.h"
+#include "rsp/jpeg/jpeg_v.h"
 #include "rsp/jpeg/selftest.h"
 
 #define TASK_PA 0x40000u  /* estructura de la tarea */
@@ -375,6 +376,45 @@ static void jpeg_rsp_backend(void)
 	salsa64_rsp_set_jpeg(bus, NULL);
 }
 
+/* La versión en 4 carriles (jpeg_v.c, la del SPE) da lo mismo byte a byte
+ * que la escalar, en macrobloques seudoaleatorios de tres tipos (como un
+ * JPEG real, coeficientes anchos y valores extremos que saturan y
+ * desbordan) con tablas de cuantización de 1 a 255. */
+static void jpeg_simd_matches(void)
+{
+	static uint8_t mb[768] __attribute__((aligned(16)));
+	static uint8_t a[512] __attribute__((aligned(16))), b[512] __attribute__((aligned(16)));
+	static const int16_t big[4] = { 32767, -32768, 2047, -2048 };
+	int16_t q[3][64];
+	struct salsa64_jpeg_qv qv;
+	uint32_t s = 4242, diff = 0;
+	salsa64_jpeg_v_init();
+	for (int n = 0; n < 6000; n++) {
+		uint32_t mode = n & 1 ? 0 : 2, kind = n % 3;
+		if (n % 50 == 0) {
+			for (int t = 0; t < 3; t++)
+				for (int i = 0; i < 64; i++) {
+					s = s * 1103515245u + 12345u;
+					q[t][i] = (int16_t)(n % 200 == 0 ? (int)(s >> 8) % 32768 : 1 + (int)(s >> 8) % 255);
+				}
+			salsa64_jpeg_qv_init(&qv, q);
+		}
+		for (uint32_t i = 0; i < SALSA64_JPEG_MB_IN(mode) / 2; i++) {
+			s = s * 1103515245u + 12345u;
+			uint32_t r = s >> 8;
+			int amp = i % 64 == 0 ? 120 : 60 / (1 + (int)(i % 64) / 4);
+			int16_t v = kind == 0 ? (int16_t)((int)(r % (2u * amp + 1)) - amp)
+				  : kind == 1 ? (int16_t)((int)(r % 4001) - 2000)
+					      : (r % 3 ? big[r >> 4 & 3] : (int16_t)r);
+			salsa64_wr16(mb + 2 * i, (uint16_t)v);
+		}
+		salsa64_jpeg_mb(mode, q, mb, a);
+		salsa64_jpeg_mb_v(mode, &qv, mb, b);
+		diff += memcmp(a, b, SALSA64_JPEG_MB_OUT(mode)) != 0;
+	}
+	CHECK_EQ(diff, 0);
+}
+
 void t_suite_jpeg(void)
 {
 	RUN(jpeg_dc_quadrants);
@@ -385,4 +425,5 @@ void t_suite_jpeg(void)
 	RUN(jpeg_dc_exact);
 	RUN(jpeg_selftest_crc);
 	RUN(jpeg_rsp_backend);
+	RUN(jpeg_simd_matches);
 }

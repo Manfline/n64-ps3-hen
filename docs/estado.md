@@ -60,9 +60,13 @@ Verificado: `test-host` 436/436 (Docker, ASan/UBSan) y nativo; `test-roms`;
 detenido); `tools/build.sh` sin avisos; `--lle-check-jpeg` en el host.
 
 Decisión y pendiente:
-- **Paso 4 (traducción al RSX en un SPE): no por CPU.** Ganaría ~0,25 ms por
-  campo en la presa (~+0,7 campos/s en lo peor) con un rediseño grande; lo
-  que limita es el código nativo del recompilador (79 % del hilo 0).
+- **Paso 4 (traducción al RSX en un SPE): descartado por ahora** (decidido
+  el 2026-10-12 con estas mediciones). Ganaría ~0,25 ms por campo en la presa
+  (1,8 ms de traducción × 0,13), ~+0,7 campos/s en lo peor, con un rediseño
+  grande (rsxkit es de un hilo); lo que limita es el código nativo del
+  recompilador (79 % del hilo 0). Se revisa si la traducción crece mucho (a
+  5× ya va a 2,3–3,6 ms por tarea en la presa) o si el hilo 1 llega a
+  limitar la presentación.
 - [ ] **JPEG en el SPE, vectorizado**: la IDCT con multiplicar y sumar de 16
       bits en 4 carriles (mismo resultado, lo valida la prueba del arranque)
       debería bajar de 41,9 a 3–5 ms por sala, y con eso el tirón (la

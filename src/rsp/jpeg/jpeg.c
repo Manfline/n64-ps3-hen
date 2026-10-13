@@ -70,7 +70,7 @@
 #define SB 64  /* coeficientes por bloque */
 
 /* Posición en el orden zigzag de cada coeficiente en orden natural. */
-static const uint8_t zigzag[SB] = {
+const uint8_t salsa64_jpeg_zigzag[SB] = {
 	0,  1,  5,  6,  14, 15, 27, 28,
 	2,  4,  7,  13, 16, 26, 29, 42,
 	3,  8,  12, 17, 25, 30, 41, 43,
@@ -83,7 +83,7 @@ static const uint8_t zigzag[SB] = {
 
 /* idct[n][k] = α(k)·cos((2n + 1)·k·π/16) · 2^15, α(0) = √(1/8), α(k) = 1/2,
  * redondeado. */
-static const int16_t idct[8][8] = {
+const int16_t salsa64_jpeg_idct[8][8] = {
 	{ 11585,  16069,  15137,  13623,  11585,   9102,   6270,   3196 },
 	{ 11585,  13623,   6270,  -3196, -11585, -16069, -15137,  -9102 },
 	{ 11585,   9102,  -6270, -16069, -11585,   3196,  15137,  13623 },
@@ -94,14 +94,14 @@ static const int16_t idct[8][8] = {
 	{ 11585, -16069,  15137, -13623,  11585,  -9102,   6270,  -3196 },
 };
 
-#define ROW_SHIFT 13  /* Q15 → 2 bits de fracción */
-#define COL_SHIFT 17  /* Q15 + 2 bits → dieciseisavos */
-
-/* YCbCr → RGB en Q14: 1,4025, 0,3443, 0,7144, 1,7729. */
-#define CR_R 22979
-#define CB_G 5641
-#define CR_G 11705
-#define CB_B 29047
+#define zigzag    salsa64_jpeg_zigzag
+#define idct      salsa64_jpeg_idct
+#define ROW_SHIFT SALSA64_JPEG_ROW_SHIFT
+#define COL_SHIFT SALSA64_JPEG_COL_SHIFT
+#define CR_R      SALSA64_JPEG_CR_R
+#define CB_G      SALSA64_JPEG_CB_G
+#define CR_G      SALSA64_JPEG_CR_G
+#define CB_B      SALSA64_JPEG_CB_B
 
 static int16_t sat16(int32_t v)
 {
