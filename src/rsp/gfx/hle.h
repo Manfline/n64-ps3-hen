@@ -228,6 +228,7 @@ struct gfx_state {
 	bool target_sent;          /* GFX_OP_TARGET de la color image actual */
 	int32_t fbimg_cur;         /* su entrada en fbimg (send_target), o -1 */
 	bool have_draw;            /* `draw` está abierto */
+	uint16_t draw_prim_z;      /* prim_z con que se abrió (con GFX_DEPTH_PRIM, una por dibujo) */
 	struct gfx_draw draw __attribute__((aligned(16)));
 	uint32_t vtx_count;        /* vértices escritos en la tarea */
 	bool tc_on;                /* la tarea usa la caché de texturas */

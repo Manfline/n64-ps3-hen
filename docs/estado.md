@@ -1,5 +1,106 @@
 # Estado
 
+## 2026-10-13 — Pokémon Snap, Kirby 64 y Pokémon Stadium 2: z del primitivo exacta en el RSX, paletas de S2DEX y JPEG de Stadium (rama `modest-yonath-bc13d3`, paquete SLSA00114 «Salsa64 gráficos»)
+
+Tres causas distintas detrás de lo que se veía en la PS3 real desde la
+v0.2.4.
+
+**Pokémon Snap: orden de dibujo al azar.** Snap dibuja todo el escenario
+con `G_ZS_PRIM` (la profundidad del primitivo, `G_SETPRIMDEPTH`, en vez de
+la de cada píxel): todas las capas tienen la misma z y el orden lo da la
+lista; la prueba del RDP (≤) deja pasar al último. En el volcado de la PS3
+(campo 3638) los 4566 vértices traen z/w = 0,97690. La HLE los daba como
+z = prim · w y el RSX hacía `2z − w` en el vertex program y luego la
+división entre w: cada vértice redondea distinto y quedan pendientes de un
+bit en la Z24, así que entre capas coplanares la prueba LEQUAL pasaba o no
+al azar (troncos negros encima del follaje, suelo encimado). Arreglo:
+- La HLE marca esos dibujos con `GFX_DEPTH_PRIM` y abre otro dibujo cuando
+  cambia la z del primitivo (antes un dibujo podía mezclar varias: el humo
+  de Conker, los destellos de Snap). La z del primitivo es de 15 bits, como
+  en el RDP (Smash pone 0x9000 en su fondo y se leía como 1,125, detrás
+  del plano lejano). Los triángulos crudos del RDP también la usan.
+- `lib/rsxkit`: `RSXKIT_DEPTH_CONST` con `rsxkit_draw.z`: el viewport pone
+  esa z en todo el dibujo (escala 0, desplazamiento z), sin pasar por la
+  división entre w. Dos dibujos con la misma z dan exactamente la misma
+  profundidad en cada píxel. `src/rdp` la saca del primer vértice,
+  redondeada a la rejilla de 15 bits (`gfx_prim_z`).
+- El rasterizador del host hace lo mismo (también tenía el empate al azar
+  por un ulp).
+
+RPCS3 no reproduce el error (dibuja bien Snap con y sin el arreglo): hay
+que confirmarlo en la PS3. Con el arreglo, la intro de Snap en RPCS3 sale
+como la de mupen64plus.
+
+Segunda vuelta, tras probarlo en la PS3 (orden bien, pero cajas
+translúcidas de seto y neblina sobre las colinas y una franja verde
+vertical detrás del logo de HAL; volcados de los campos 207 y 664): en la
+intro Snap nunca fija la z del primitivo (no hay G_SETPRIMDEPTH en los
+primeros 1300 campos; en el juego la fija por objeto, entre 0x7C90 y
+0x7D44), así que todo empata. Los opacos (ZMODE_OPA) pasan con el empate y
+quedan en el orden de la lista; las capas translúcidas (ZMODE_XLU: setos,
+neblina, pasto) en el RDP solo pasan si quedan estrictamente delante o
+donde el z-buffer sigue borrado (`sz < oz || oz == máx`, la comparación de
+angrylion y ParaLLEl-RDP). Con ≤ se veían enteras, con sus cajas. Ahora
+esos dibujos llevan `GFX_DEPTH_LESS` (`RSXKIT_DEPTH_LESS`: GCM_LESS; el
+rasterizador del host igual), solo con la z del primitivo: con la de cada
+píxel, la z en coma flotante no es la del RDP y un empate de más o de
+menos sería al azar (con la regla para todo XLU se perdían luces de los
+edificios de Perfect Dark). En el juego, con una z por objeto, el seto
+con z mayor que el terreno solo se ve sobre lo más lejano, como quiere el
+juego. mupen64plus (GLide64) dibuja la intro con la z de cada píxel y
+ahí sí muestra el seto detrás de las colinas y el pasto delante de Todd;
+con la regla del RDP, en «JACK and BEANS» se ve a Todd con su cámara en
+primer plano. Pendiente de confirmar en la PS3.
+
+**Kirby 64: fondos y logotipos con ruido y en ajedrez.** Kirby cambia a
+S2DEX dentro de la tarea para sus fondos CI8 (`G_BG_1CYC`) y carga la
+paleta con `G_OBJ_LOADTXTR` (uObjTxtr de tipo paleta, 256 colores en la
+mitad alta de la TMEM). La HLE saltaba todos los `G_OBJ_*`: el fondo salía
+con la paleta que hubiera quedado en la TMEM (el marco de la intro verde y
+negro en vez del ajedrez beige, el logotipo en arcoíris, la selección de
+archivo ilegible). Ahora `G_OBJ_LOADTXTR` hace la carga de sus tres tipos
+(bloque, tile y paleta) con la tile 7, siempre (el microcódigo se la salta
+si su palabra de estado ya trae la misma; es solo un ahorro). Intro,
+título y «Select File» como en mupen64plus. Segunda vuelta, tras probarlo
+en la PS3 (cielo negro con unas esferas grises en el nivel 1-1): el cielo
+se dibuja con TEXRECT dentro del tramo S2DEX (`G_RDPHALF_0`, 0xE4, seguido
+de `G_RDPHALF_1` y `G_RDPHALF_2`, como el TEXRECT de F3DEX2), y la HLE lo
+saltaba. Ahora sale el cielo azul con nubes y colinas, y en la tarea ya no
+se salta ningún comando de S2DEX. El TEXRECT pendiente queda en `raw[]`
+del estado (libre en ese tramo) y se dibuja al llegar `G_RDPHALF_2`, sin
+locales ni otra llamada: `gfx_dl_s2dex2` está en la cadena más honda de la
+pila del SPE 0 y la holgura quedaba en 1344 < 1536 bytes. Para pagar el
+código, `f3dpd.c` (el despacho de comandos de Perfect Dark; vértices y
+texturas siguen en geom.c y tmem.c con -O2) pasa a -Os: holgura de 1600
+(en `b650d80`) a 1984 bytes. Medir en la PS3 que Perfect Dark no pierda
+velocidad en el SPE.
+
+**Pokémon Stadium 2: fondo del título como ruido.** El fondo es un JPEG
+que decodifica el microcódigo JPEG del RSP: el mismo código que el de
+Zelda OoT (0xAF0 bytes idénticos byte a byte; el de OoT está en su RDRAM
+desde el arranque), pero la tarea pide 4 KB y lo que va detrás del código
+es otra cosa en cada juego. Se reconocía por el CRC de los 4 KB, así que
+la tarea de Stadium 2 se terminaba sin hacer nada y quedaban los
+coeficientes en la RDRAM. Ahora se reconoce por el CRC del código. Contra
+el microcódigo real (`--lle-check-jpeg`): 98,7 % de los píxeles idénticos
+y el resto a ±1 en un canal de 5 bits, como con OoT.
+
+Verificación en el host (con la segunda vuelta), píxel por píxel contra `main` con las mismas
+capturas cada 150–250 campos (intros y guiones de `docs/pads`): idénticos
+Zelda OoT (con sus 75 tareas JPEG), Kokiri, Majora, SM64, MK64, DK64,
+Banjo, Perfect Dark, GoldenEye, Conker y Paper Mario. Cambian Kirby, Snap y
+Stadium 2 (lo arreglado) y Smash en el castillo de Peach: antes faltaba el
+cielo detrás del escenario y quedaba el fondo rojo de la pantalla
+anterior, ahora sale como en mupen64plus. El Castillo de Hyrule no se
+alcanza en el host, pero su volcado de la PS3 no tiene ningún dibujo con
+z constante y prueba de profundidad (y Smash no usa S2DEX ni JPEG): no le
+toca nada de esto.
+`make test-host` sin fallas (prueba nueva del detector JPEG) y
+`tools/test-roms.sh`.
+
+Por confirmar en la PS3: Snap (orden de las capas), Kirby (intro y
+selección de archivo), Stadium 2 (pantalla de título) y que no cambie
+nada en el resto.
 ## 2026-10-13 — Copias a la RDRAM: el ancho del VI es el del último campo (rama `arreglo-ancho-vi`)
 
 `readbacks_wanted` (src/rdp/rdp.c, hilo de emulación) copia a la RDRAM, y

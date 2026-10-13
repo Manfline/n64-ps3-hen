@@ -21,13 +21,23 @@
  *   u5.10: texels por píxel); con G_OBJRM_BILERP cada tira lleva una fila
  *   más para el filtro.
  * - G_OBJ_RENDERMODE: se guarda (bilineal del fondo escalado).
- * Lo demás de S2DEX (sprites, G_OBJ_*) se cuenta como saltado.
+ * - G_OBJ_LOADTXTR (uObjTxtr): carga a la TMEM un bloque, una tile o una
+ *   paleta, como LOADBLOCK, LOADTILE o LOADTLUT con la tile 7. Kirby 64
+ *   carga así la paleta de sus fondos CI8 (G_BG_1CYC); sin ella el fondo
+ *   salía con la paleta que hubiera quedado en la TMEM. El microcódigo se
+ *   salta la carga si la palabra de estado `sid` ya trae `flag` (bajo
+ *   `mask`): es solo un ahorro, aquí se carga siempre.
+ * - G_RDPHALF_0 (0xE4) seguido de G_RDPHALF_1 y G_RDPHALF_2: un TEXRECT,
+ *   como en F3DEX2.
+ * Lo demás de S2DEX (sprites, el resto de G_OBJ_*) se cuenta como saltado.
  *
  * Campos de uObjBg/uObjScaleBg y su punto fijo (u10.5, u10.2, s10.2;
  * escala u5.10 = texels por píxel): GLideN64 `src/uCodes/S2DEX.cpp`
  * (consultado el 2026-10-11, solo el formato; docs/THIRD_PARTY.md). Opcodes
  * de S2DEX2 (los de la familia F3DEX2): G_BG_COPY = 0x0A como en la lista
- * de Zelda OoT. Código propio.
+ * de Zelda OoT, G_OBJ_LOADTXTR = 0x05 como en la de Kirby 64. uObjTxtr y
+ * sus unidades (palabras de 64 bits de la TMEM, tamaños menos uno): la
+ * misma fuente, solo el formato. Código propio.
  */
 #include <string.h>
 
@@ -35,9 +45,9 @@
 #include "rsp/gfx/hle.h"
 
 enum {
-	S2_BG_1CYC = 0x09, S2_BG_COPY = 0x0A, S2_OBJ_RENDERMODE = 0x0B,
+	S2_OBJ_LOADTXTR = 0x05, S2_BG_1CYC = 0x09, S2_BG_COPY = 0x0A, S2_OBJ_RENDERMODE = 0x0B,
 	S2_MOVEWORD = 0xDB, S2_LOAD_UCODE = 0xDD, S2_DL = 0xDE, S2_ENDDL = 0xDF,
-	S2_RDPHALF_1 = 0xE1, S2_SETOTHERMODE_L = 0xE2, S2_SETOTHERMODE_H = 0xE3,
+	S2_RDPHALF_1 = 0xE1, S2_SETOTHERMODE_L = 0xE2, S2_SETOTHERMODE_H = 0xE3, S2_RDPHALF_0 = 0xE4,
 	S2_RDPHALF_2 = 0xF1,
 };
 
@@ -45,6 +55,11 @@ enum {
 #define G_MW_SEGMENT 0x06u
 #define BG_TILE      0       /* tile con que se dibuja */
 #define BG_LOAD_TILE 7       /* G_TX_LOADTILE */
+
+/* uObjTxtr.type */
+#define OBJLT_TXTRBLOCK 0x00001033u
+#define OBJLT_TXTRTILE  0x00FC1034u
+#define OBJLT_TLUT      0x00000030u
 
 static bool has(const uint8_t *p, uint32_t n, const char *s, uint32_t *at)
 {
@@ -223,11 +238,57 @@ static void bg_draw(struct gfx_state *g, uint32_t seg, bool scaled)
 	}
 }
 
+/* uObjTxtr (24 bytes): type, image (segmentada), cuatro campos de 16 bits
+ * que dependen del tipo, flag y mask. Todo con 8 bits por texel salvo la
+ * paleta: la TMEM no sabe del formato, solo de bytes. */
+static void obj_load_txtr(struct gfx_state *g, uint32_t seg)
+{
+	const uint8_t *p = gfx_io_read(g, GFX_IO_SMALL, gfx_addr(g, seg), 24);
+	if (!p) {
+		g->res->dl_errors++;
+		return;
+	}
+	uint32_t type = salsa64_rd32(p), image = salsa64_rd32(p + 4);
+	uint32_t a = salsa64_rd16(p + 8), b = salsa64_rd16(p + 10), c = salsa64_rd16(p + 12);
+	const uint32_t load_tile = (uint32_t)BG_LOAD_TILE << 24;
+	switch (type) {
+	case OBJLT_TXTRBLOCK: {
+		/* a = tmem, b = tsize (palabras − 1), c = tline (dxt). */
+		uint32_t lrs = ((b + 1) << 3) - 1;
+		gfx_rdp_command(g, 0xFDu << 24 | G_IM_SIZ_8b << 19, image);
+		gfx_rdp_command(g, 0xF5u << 24 | G_IM_SIZ_8b << 19 | (a & 0x1FF), load_tile);
+		gfx_rdp_command(g, 0xF3u << 24, load_tile | (lrs > 0xFFF ? 0xFFF : lrs) << 12 | (c & 0xFFF));
+		break;
+	}
+	case OBJLT_TXTRTILE: {
+		/* a = tmem, b = twidth (unidades de 16 bits por fila − 1), c =
+		 * theight (cuartos de fila − 1). */
+		uint32_t w = (b + 1) << 1, rows = (c + 1) >> 2;
+		if (!rows || w > 0x400)
+			break;
+		gfx_rdp_command(g, 0xFDu << 24 | G_IM_SIZ_8b << 19 | (w - 1), image);
+		gfx_rdp_command(g, 0xF5u << 24 | G_IM_SIZ_8b << 19 | ((b + 1) >> 2) << 9 | (a & 0x1FF), load_tile);
+		gfx_rdp_command(g, 0xF4u << 24, load_tile | ((w - 1) << 2) << 12 | ((rows - 1) << 2));
+		break;
+	}
+	case OBJLT_TLUT:
+		/* a = phead (palabra de la TMEM, desde 256), b = pnum (entradas − 1). */
+		gfx_rdp_command(g, 0xFDu << 24 | G_IM_SIZ_16b << 19, image);
+		gfx_rdp_command(g, 0xF5u << 24 | G_IM_SIZ_16b << 19 | (a & 0x1FF), load_tile);
+		gfx_rdp_command(g, 0xF0u << 24, load_tile | ((b & 0xFF) << 2) << 12);
+		break;
+	default:
+		g->res->skipped++;
+		break;
+	}
+}
+
 bool gfx_dl_s2dex2(struct gfx_state *g)
 {
 	struct gfx_result *res = g->res;
 	uint32_t w0, w1;
 	res->flags |= GFX_RES_LOAD_UCODE;
+	g->raw[0] = 0;
 	while (gfx_dl_next(g, &w0, &w1)) {
 		uint32_t op = w0 >> 24;
 		switch (op) {
@@ -257,6 +318,10 @@ bool gfx_dl_s2dex2(struct gfx_state *g)
 			break;
 		case S2_RDPHALF_2:
 			g->rdphalf2 = w1;
+			if (g->raw[0] >> 24 == S2_RDPHALF_0) {
+				gfx_texrect(g, g->raw[0], g->raw[1], g->rdphalf1, w1, false);
+				g->raw[0] = 0;
+			}
 			break;
 		case S2_SETOTHERMODE_L:
 		case S2_SETOTHERMODE_H: {
@@ -272,8 +337,20 @@ bool gfx_dl_s2dex2(struct gfx_state *g)
 		case S2_OBJ_RENDERMODE:
 			g->obj_rendermode = w1;
 			break;
+		case S2_OBJ_LOADTXTR:
+			obj_load_txtr(g, w1);
+			break;
+		case S2_RDPHALF_0:
+			/* Seguido de G_RDPHALF_1 y G_RDPHALF_2 es un TEXRECT (el
+			 * cielo de Kirby 64): se dibuja con G_RDPHALF_2. Queda en
+			 * raw[], libre en este tramo, y no en locales ni pasando por
+			 * gfx_dl_texrect: este marco está en la cadena más honda de la
+			 * pila del SPE. */
+			g->raw[0] = w0;
+			g->raw[1] = w1;
+			break;
 		default:
-			/* Comandos del RDP (0xE4 es G_RDPHALF_0 de S2DEX2). */
+			/* Comandos del RDP. */
 			if (op >= 0xE6)
 				gfx_rdp_command(g, w0, w1);
 			else

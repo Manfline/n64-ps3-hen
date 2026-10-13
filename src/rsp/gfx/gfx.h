@@ -272,6 +272,32 @@ enum gfx_blend {
 #define GFX_DEPTH_TEST   0x01u
 #define GFX_DEPTH_WRITE  0x02u
 #define GFX_DEPTH_DECAL  0x04u  /* ZMODE_DEC: desplazamiento de polígono */
+/* G_ZS_PRIM: el RDP prueba y escribe la misma z (la de G_SETPRIMDEPTH) en
+ * todos los píxeles del dibujo; los vértices la traen como z = prim · w.
+ * Pokémon Snap dibuja así todo el escenario: el orden lo da la lista y la
+ * prueba (≤) deja pasar al último. El consumidor no debe sacarla de los
+ * vértices dividiendo entre w (cada uno redondea distinto y dos dibujos
+ * con la misma z se pisan al azar): usa gfx_prim_z. */
+#define GFX_DEPTH_PRIM   0x08u
+/* ZMODE_XLU con la z del primitivo: el RDP solo deja pasar lo que queda
+ * estrictamente delante (o lo que cae donde el z-buffer sigue borrado); con
+ * la misma z, no. Snap dibuja sus capas translúcidas (setos, neblina) con
+ * la misma z del primitivo que el escenario ya escrito: el RDP las
+ * descarta, con ≤ se veían como cajas. */
+#define GFX_DEPTH_LESS   0x10u
+
+/* La z de un dibujo con GFX_DEPTH_PRIM, exacta: la de su primer vértice
+ * delante de la cámara, en la rejilla de G_SETPRIMDEPTH (15 bits). */
+static inline float gfx_prim_z(const struct gfx_vertex *v, uint32_t n)
+{
+	for (uint32_t i = 0; i < n; i++)
+		if (v[i].w > 0.0f) {
+			float z = v[i].z / v[i].w * 32767.0f;
+			z = z < 0.0f ? 0.0f : z > 32767.0f ? 32767.0f : z;
+			return (float)(int32_t)(z + 0.5f) / 32767.0f;
+		}
+	return 0.0f;
+}
 
 enum { GFX_CULL_NONE = 0, GFX_CULL_FRONT = 1, GFX_CULL_BACK = 2 };
 enum { GFX_ATEST_NONE = 0, GFX_ATEST_GEQUAL = 1 };

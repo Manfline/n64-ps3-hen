@@ -95,5 +95,9 @@ $(OBJ)/spu/src/rsp/gfx/combine.c.o: SPU_CFLAGS += -Os
 # menos de código y 112 bytes menos de marco en la cadena más honda de la
 # pila; se dibujan en unas decenas de tiras por cuadro.
 $(OBJ)/spu/src/rsp/gfx/s2dex.c.o: SPU_CFLAGS += -Os
+# El despacho de comandos de Perfect Dark (f3dpd.c; los vértices y las
+# texturas van en geom.c y tmem.c), también: lo que ahorra paga el TEXRECT
+# dentro del tramo S2DEX (el cielo de Kirby 64).
+$(OBJ)/spu/src/rsp/gfx/f3dpd.c.o: SPU_CFLAGS += -Os
 # make no ve un cambio de banderas: que se recompilen si cambia este archivo.
-$(OBJ)/spu/src/rsp/gfx/combine.c.o $(OBJ)/spu/src/rsp/gfx/s2dex.c.o: Makefile
+$(OBJ)/spu/src/rsp/gfx/combine.c.o $(OBJ)/spu/src/rsp/gfx/s2dex.c.o $(OBJ)/spu/src/rsp/gfx/f3dpd.c.o: Makefile
