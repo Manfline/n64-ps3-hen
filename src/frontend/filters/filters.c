@@ -137,7 +137,15 @@ enum { S_SRC, S_LIN, S_GLOW, S_TILE_A, S_TILE_B, S_TILE_C, S_DOTS, S_SIG_E, S_SI
        S_LINES_B, S_SPE_IN, S_SPE_E, S_SPE_O, SURFACES };
 
 static struct {
-	bool failed;            /* no hay memoria o programas: sin filtro hasta liberar */
+	/* Algo falló (sin memoria, una pasada que el RSX no aceptó): sin filtro
+	 * mientras la imagen y el filtro sean los de `fail`; con otros (otra
+	 * escala, otro tamaño, otro filtro) se vuelve a intentar. */
+	bool failed;
+	struct {
+		int f;
+		uint32_t sw, sh, factor, ow, oh;
+		float aspect;
+	} fail;
 	rsxkit_program *prog[PROGRAMS];
 	rsxkit_surface *surf[SURFACES];
 	/* Configuración de las tablas y constantes. */
@@ -1246,17 +1254,39 @@ static void spe_release(void)
  * filtrar. */
 static bool wanted(int f, const struct salsa64_filter_src *src, uint32_t *sw, uint32_t *sh)
 {
-	if (f <= SALSA64_CRT_NONE || f >= SALSA64_CRTS || fl.failed || !src || src->factor < 1 || src->factor > 6)
+	if (f <= SALSA64_CRT_NONE || f >= SALSA64_CRTS || !src || src->factor < 1 || src->factor > 6)
 		return false;
 	*sw = src->region.w / src->factor;
 	*sh = src->region.h / src->factor;
 	return *sw >= 16 && *sh >= 16 && *sw <= 640 && *sh <= 480;
 }
 
+/* Si lo que falló fue con este filtro y esta imagen. */
+static bool fail_same(int f, const struct salsa64_filter_src *src, uint32_t sw, uint32_t sh)
+{
+	const rsxkit_screen *sc = rsxkit_screen_info();
+	return fl.fail.f == f && fl.fail.sw == sw && fl.fail.sh == sh && fl.fail.factor == src->factor &&
+	       fl.fail.ow == sc->width && fl.fail.oh == sc->height && fl.fail.aspect == src->aspect;
+}
+
+static void fail_note(int f, const struct salsa64_filter_src *src, uint32_t sw, uint32_t sh)
+{
+	const rsxkit_screen *sc = rsxkit_screen_info();
+	fl.failed = true;
+	fl.fail.f = f;
+	fl.fail.sw = sw;
+	fl.fail.sh = sh;
+	fl.fail.factor = src->factor;
+	fl.fail.ow = sc->width;
+	fl.fail.oh = sc->height;
+	fl.fail.aspect = src->aspect;
+}
+
 uint32_t salsa64_filters_setup_ms(int f, const struct salsa64_filter_src *src)
 {
 	uint32_t sw, sh;
-	if (!wanted(f, src, &sw, &sh) || (configured(f, sw, sh, src->aspect) && !fl.check))
+	if (!wanted(f, src, &sw, &sh) || (fl.failed && fail_same(f, src, sw, sh)) ||
+	    (configured(f, sw, sh, src->aspect) && !fl.check))
 		return 0;
 	return fl.setup_ms[f] ? fl.setup_ms[f] : 100;
 }
@@ -1274,11 +1304,18 @@ bool salsa64_filters_draw(int f, const struct salsa64_filter_src *src, rsxkit_re
 	uint32_t sw, sh;
 	if (!wanted(f, src, &sw, &sh))
 		return false;
+	if (fl.failed) {
+		if (fail_same(f, src, sw, sh))
+			return false;
+		fl.failed = false;
+		salsa64_log("filtros: se vuelve a intentar «%s» (%ux%u, factor %u)", salsa64_crt_name(f), sw, sh,
+			    src->factor);
+	}
 	collect();
 	uint64_t t0 = sysGetSystemTime();
 	bool fresh = !configured(f, sw, sh, src->aspect) || fl.check;
 	if (!configure(f, sw, sh, src->aspect)) {
-		fl.failed = true;
+		fail_note(f, src, sw, sh);
 		return false;
 	}
 	if (fl.last_filter != f) {
@@ -1299,11 +1336,12 @@ bool salsa64_filters_draw(int f, const struct salsa64_filter_src *src, rsxkit_re
 		stamp(slot, SEGS);
 		fl.reused++;
 	} else {
-		if (rsxkit_post_reduce(&src->tex, &src->region, src->factor, fl.surf[S_SRC]) != RSXKIT_OK) {
-			if (!fl.failed)
-				salsa64_log("filtros: no se pudo reducir la imagen (%ux%u desde %ux%u, factor %u)", sw, sh,
-					    src->region.w, src->region.h, src->factor);
-			fl.failed = true;
+		int rc = rsxkit_post_reduce(&src->tex, &src->region, src->factor, fl.surf[S_SRC]);
+		if (rc != RSXKIT_OK) {
+			salsa64_log("filtros: no se pudo reducir la imagen (%ux%u desde %ux%u, factor %u; %d): sin filtro "
+				    "hasta que cambie la imagen o el filtro",
+				    sw, sh, src->region.w, src->region.h, src->factor, rc);
+			fail_note(f, src, sw, sh);
 			return false;
 		}
 		stamp(slot, SEG_REDUCE + 1);
@@ -1355,6 +1393,8 @@ bool salsa64_filters_draw(int f, const struct salsa64_filter_src *src, rsxkit_re
 		fl.setup_ms[f] = ms ? ms : 1;
 		salsa64_log("filtros: «%s» listo en %u ms%s", salsa64_crt_name(f), ms, checked ? " (con la comprobación)" : "");
 	}
+	if (fl.failed)
+		fail_note(f, src, sw, sh);  /* una pasada falló (run) */
 	if (out)
 		*out = (rsxkit_rect){ (int32_t)fl.rect[0], (int32_t)fl.rect[1], fl.rect[2], fl.rect[3] };
 	return !fl.failed;

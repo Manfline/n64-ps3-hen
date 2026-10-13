@@ -47,6 +47,12 @@ en docs/filtros.md.
   copiadas por el RSX a la memoria principal y escritas por otro hilo (la
   imagen ya no se congela ~2 s); «Aplicando filtro…» si preparar un filtro
   tarda más de un par de cuadros; la comprobación fp16, una vez por filtro.
+  Arreglado para la v0.2.4: al bajar la escala en vivo con un CRT (5× → 3×
+  desde «Imagen») el filtro dejaba de dibujarse: la tabla intermedia de la
+  reducción quedaba con el alto de 5× y ya no cabía en la profundidad de la
+  pantalla (ahora se rehace del tamaño justo), y un fallo apagaba el filtro
+  hasta salir del juego (ahora se reintenta al cambiar la imagen o el filtro).
+  Reproducido y comprobado en RPCS3 forzando el cambio en vivo.
   **Medido en la PS3** (GoldenEye en la presa a 1080p): máscara 7,4, RGB
   9,4, S-Video 10,6, compuesto 13,2 y Trinitron 10,1 ms por cuadro, todos
   los campos presentados (antes, a 5×, 30–51 por segundo); reducir 3,12 →
