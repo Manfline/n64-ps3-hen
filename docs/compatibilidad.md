@@ -29,7 +29,7 @@ lista vigente; las secciones de abajo son censos anteriores en la Mac.
 | Star Fox 64, Banjo-Kazooie | velocidad completa | Banjo: las pantallas del rompecabezas salen en negro |
 | Kirby 64, Pokémon Stadium 2 | ~97–100 % | algunas texturas con ruido o en ajedrez |
 | Pokémon Snap | jugable | texturas estiradas en algunos polígonos |
-| Super Smash Bros. | velocidad completa | **se congela en el primer KO**; mientras se arregla, crear `/dev_hdd0/salsa64/fbfx.cfg` con un `1` (algunas texturas se ven estiradas) y quitarlo para los demás juegos |
+| Super Smash Bros. | velocidad completa | **se congela en el primer KO** en v0.2.3 (arreglado en el código en curso, por confirmar en la PS3; con v0.2.3, crear `/dev_hdd0/salsa64/fbfx.cfg` con un `1` y quitarlo para los demás juegos); algunas texturas se ven estiradas, con o sin ese archivo (pendiente) |
 | Doom 64 | ~40 % | limitado por el CPU |
 | Banjo-Tooie, F-Zero X | pantalla negra | arranque (CIC 6105 / 6106) |
 | Diddy Kong Racing | pantalla negra | microcódigo propio de Rare; en desarrollo con el RSP a bajo nivel |

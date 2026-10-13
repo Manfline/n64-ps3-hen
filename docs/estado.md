@@ -27,7 +27,8 @@ En curso:
   `docs/cache-ppe.md`.
 
 Pendientes (censo del día y reportes): Super Smash Bros. se congela en el
-primer KO (z-buffer usado como color image, entrada de abajo); Banjo-Tooie
+primer KO (arreglado en el host el 2026-10-13, por confirmar en la PS3;
+entrada de abajo); Banjo-Tooie
 y F-Zero X en negro (arranque 6105/6106); Kirby 64 y Pokémon Stadium 2 con
 texturas con ruido (estado de Stadium 2 en la ranura 0); Pokémon Snap con
 texturas estiradas; sombras cuadradas de Conker (su espera de ~25 s al
@@ -37,6 +38,57 @@ F3DZEX); cadencia de la presentación (campos saltados cuando la emulación va
 sobrada); Doom 64 al ~40 % (instrucciones interpretadas); estados
 comprimidos; Rumble Pak y Controller Pak; Fase 5 (medir el margen del RSX a
 5×, multimuestreo para GoldenEye, filtros CRT).
+
+## 2026-10-13 — Smash: el KO se colgaba porque la copia a la RDRAM pisaba los márgenes del z-buffer (rama `nifty-knuth-a7c921`, paquete SLSA00113 «Salsa64 Smash»)
+
+La hipótesis de la entrada del 2026-10-12 (el CPU lee la silueta como
+profundidades) era falsa: las «273 lecturas por campo desde `800c7840`» son
+búsquedas de instrucciones (pa `0c7840` = `0a3940` + `23f00`, justo después
+de las 230 filas del z-buffer, dentro del alto conjeturado de 240). El CPU
+nunca lee el z-buffer.
+
+Lo que pasa en el KO (tareas 1094–1133 de la demo, campos 1116–1155): con
+el z-buffer `0a3940/320` como color image, el juego dibuja un rectángulo
+negro de toda la pantalla (1 ciclo, PRIM 0x000000ff, blender IN·A + MEM·(1−A))
+y una malla blanca encima: una máscara de profundidad (negro = cerca,
+blanco = lejos) para que la escena solo se vea dentro de la malla. Las
+tijeras son 10..310 × 10..230 y **en los márgenes del z-buffer el juego
+guarda datos**: punteros y código en tramos de 40 bytes (los 20 del final
+de una fila y los 20 del principio de la siguiente), más las 10 primeras
+filas. El RDP nunca escribe ahí. La copia esperada escribía filas enteras
+desde la superficie (cebada con la RDRAM) y, al pasar por RGBA5551 con alfa
+1, ponía a 1 el bit bajo de cada media palabra: `03e00008` (jr ra) →
+`03e10009`. Comparando la RDRAM con y sin la copia (`--ram-dump` con
+`--gfx-frame`, que es lo que activa el rasterizador del host), las únicas
+diferencias en todo el campo 1395 son esos márgenes; unos 240 campos
+después del KO el juego deja de mandar tareas gráficas.
+
+Arreglo (criterio general, no por juego): toda copia a la RDRAM (copia
+esperada o sin esperar, espejo chico, espejo del framebuffer; host y PS3)
+escribe solo lo que el RDP pudo escribir: la unión de la caja de los
+vértices de cada dibujo recortada por sus tijeras (`struct rdp_box`,
+`rdp_box_add` en targets.c; si algún vértice tiene w ≤ 0, todas las
+tijeras). Antes se copiaban filas enteras hasta la más baja dibujada. El
+espejo del framebuffer usa la caja acumulada desde el último espejo
+(`rdp_target.box`, se vacía en `rdp_targets_mirrored`), así también vale
+para el que se copia al presentarlo. `rsxkit_pixels_565_to_5551` convierte
+uno a uno hasta alinear el destino, para seguir de a cuatro píxeles cuando
+la caja empieza en una columna cualquiera.
+
+Medido en el host: la demo de Smash (sin control) corre entera, 13 015
+tareas en 14 000 campos con 315 copias a la RDRAM (antes se paraba en 1373
+tareas, campo ~1395); prueba nueva en test_raster
+(`raster_copy_inside_scissor`). Sin cambios píxel por píxel contra main en
+DK64 (4000 campos), Perfect Dark (intro con el desenfoque, 2800), Mario
+Kart 64 (`mk64-luigi.pad`), Banjo (`banjo-casa.pad`), Conker (5000 campos,
+417 copias), GoldenEye (`goldeneye-dam.pad`) y la pausa de Zelda OoT
+(`zelda-casa-nueva.pad` con START en los campos 17100, 17500 y 17800:
+la copia de `fbufSave` y los búferes de Link, 404 copias, 14 cuadros
+iguales; `zelda-pausa-nueva.pad` ya no llega con los tiempos de hoy: se
+queda en el nombre). test-host y
+tools/test-roms.sh pasan. Por confirmar en la PS3 real: Smash y Smash Remix
+hasta varios KO sin `fbfx.cfg`, y la pausa de Zelda, la cámara de DK64, Navi
+y las antorchas de OoT, el túnel de MK64, Majora, Perfect Dark y Conker.
 
 ## 2026-10-13 — Conker en negro tras «For Mature» desde la v0.2.1, y sus 29 s de negro al arrancar (rama `objective-bun-2517c7`, paquete SLSA00112 «Salsa64 Conker»)
 
@@ -605,6 +657,9 @@ la emulación va sobrada; 5,8 % saltados en la intro de Perfect Dark a 5×),
 las uniones azules de GoldenEye y el rompecabezas de Banjo.
 
 ## 2026-10-12 (noche) — Smash: el KO se cae con las copias a la RDRAM (acotado, pendiente; rama `infallible-wozniak-aa210c`)
+
+**Resuelto el 2026-10-13** (entrada de ese día): no era la silueta sino los
+márgenes del z-buffer, fuera de las tijeras, que la copia pisaba.
 
 Se acotó en la PS3 (con fbfx.cfg = 1 no se cae; en v0.1.0 ya pasaba
 con Smash Remix). En el host nativo se reproduce con `--gfx-frame` (demo,

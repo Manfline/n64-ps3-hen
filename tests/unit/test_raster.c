@@ -319,8 +319,108 @@ static void raster_tall_fill(void)
 	raster_reset();
 }
 
+/* Un dibujo de 1 ciclo de (x0, y0)–(x1, y1) sobre la color image `fb`
+ * (320 de ancho) con tijeras sc (píxeles enteros). */
+static void task_scissor(uint32_t fb, float x0, float y0, float x1, float y1, const uint16_t sc[4], uint32_t r,
+			 uint32_t g, uint32_t b)
+{
+	set_vtx(&vtx[0], x0, y0);
+	set_vtx(&vtx[1], x1, y0);
+	set_vtx(&vtx[2], x0, y1);
+	set_vtx(&vtx[3], x1, y0);
+	set_vtx(&vtx[4], x1, y1);
+	set_vtx(&vtx[5], x0, y1);
+	memset(cmd, 0, sizeof cmd);
+	struct gfx_cmd *t = (struct gfx_cmd *)cmd;
+	t->op = GFX_OP_TARGET;
+	t->size = sizeof *t;
+	t->a = fb;
+	t->b = W;
+	t->c = 2;
+	struct gfx_draw *d = (struct gfx_draw *)(cmd + sizeof *t);
+	d->h.op = GFX_OP_DRAW;
+	d->h.size = sizeof *d;
+	d->h.a = 0;
+	d->h.b = 6;
+	for (int k = 0; k < 4; k++)
+		d->scissor[k] = (uint16_t)(sc[k] * 4);
+	d->k[GFX_K_ONE][0][0] = r / 255.0f;
+	d->k[GFX_K_ONE][0][1] = g / 255.0f;
+	d->k[GFX_K_ONE][0][2] = b / 255.0f;
+	d->k[GFX_K_ONE][0][3] = 1.0f;
+	struct gfx_job job;
+	struct gfx_result res;
+	memset(&job, 0, sizeof job);
+	memset(&res, 0, sizeof res);
+	job.rdram_ea = (uint64_t)(uintptr_t)ram;
+	job.rdram_size = sizeof ram;
+	job.vtx_ea = (uint64_t)(uintptr_t)vtx;
+	job.cmd_ea = (uint64_t)(uintptr_t)cmd;
+	res.cmd_bytes = sizeof cmd;
+	raster_task(&job, &res);
+}
+
+/* Datos del juego (medias palabras pares: el bit del alfa en 0). */
+static uint16_t game_word(uint32_t x, uint32_t y)
+{
+	return (uint16_t)(0x8000 | ((x * 7 + y * 13) & 0x3FFF) << 1);
+}
+
+/* ¿Quedó intacto todo lo que está fuera de [x0, x1) × [y0, y1) en las
+ * primeras `rows` filas de `fb`? */
+static int outside_intact(uint32_t fb, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, uint32_t rows)
+{
+	for (uint32_t y = 0; y < rows; y++)
+		for (uint32_t x = 0; x < W; x++)
+			if ((x < x0 || x >= x1 || y < y0 || y >= y1) && px(fb, x, y) != game_word(x, y))
+				return 0;
+	return 1;
+}
+
+/* Super Smash Bros., en el KO: con su z-buffer como color image (320 de
+ * ancho, tijeras 10..310 × 10..230) dibuja un rectángulo de toda la
+ * pantalla y una malla encima. El juego guarda datos en los márgenes del
+ * z-buffer, fuera de las tijeras: la copia a la RDRAM de filas enteras les
+ * ponía a 1 el bit del alfa y el juego se colgaba. Solo se copia lo que el
+ * RDP pudo escribir. Lo mismo para el espejo de un framebuffer. */
+static void raster_copy_inside_scissor(void)
+{
+	static const uint16_t sc[4] = { 10, 10, 310, 230 };
+	int fbfx = raster_fbfx;
+	raster_reset();
+	raster_fbfx = 2;
+	memset(ram, 0, sizeof ram);
+	for (int k = 0; k < 40; k++)
+		task_fill_w(0x1000, 64, 0, 0, 0);
+	task_fill(FB_A, 255, 0, 0);
+	field(FB_A);
+	field(FB_A);
+	for (uint32_t y = 0; y < H; y++)
+		for (uint32_t x = 0; x < W; x++) {
+			salsa64_wr16(ram + FB_C + (y * W + x) * 2, game_word(x, y));
+			salsa64_wr16(ram + FB_A + (y * W + x) * 2, game_word(x, y));
+		}
+	/* FB_C no es un framebuffer del VI: copia esperada a la RDRAM. */
+	task_scissor(FB_C, 0, 0, (float)W, (float)H, sc, 0, 0, 0);
+	CHECK_EQ(px(FB_C, 10, 10), rgba5551(0, 0, 0));
+	CHECK_EQ(px(FB_C, 309, 229), rgba5551(0, 0, 0));
+	CHECK(outside_intact(FB_C, 10, 10, 310, 230, H));
+	/* Una malla chica: solo su caja (y lo de antes sigue en la RDRAM). */
+	task_scissor(FB_C, 100.0f, 50.0f, 120.5f, 60.0f, sc, 255, 255, 255);
+	CHECK_EQ(px(FB_C, 110, 55), rgba5551(255, 255, 255));
+	CHECK_EQ(px(FB_C, 20, 20), rgba5551(0, 0, 0));
+	CHECK(outside_intact(FB_C, 10, 10, 310, 230, H));
+	/* El framebuffer (ya mostrado: espejo al terminar la tarea). */
+	task_scissor(FB_A, 0, 0, (float)W, (float)H, sc, 0, 255, 0);
+	CHECK_EQ(px(FB_A, 10, 10), rgba5551(0, 255, 0));
+	CHECK(outside_intact(FB_A, 10, 10, 310, 230, H));
+	raster_reset();
+	raster_fbfx = fbfx;
+}
+
 void t_suite_raster(void)
 {
+	RUN(raster_copy_inside_scissor);
 	RUN(raster_tall_fill);
 	RUN(raster_mirror_after_dma);
 	RUN(raster_frame_mirror_sm64);

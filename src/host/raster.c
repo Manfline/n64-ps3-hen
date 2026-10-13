@@ -506,20 +506,21 @@ static int locate_any(uint32_t addr)
 	return -1;
 }
 
-/* Copia a la RDRAM como RGBA5551 (sin cobertura: alfa 1) las `rows`
- * primeras filas del destino. */
-static void readback(const struct gfx_job *job, int slot, uint32_t rows)
+/* Copia a la RDRAM como RGBA5551 (sin cobertura: alfa 1) lo que el RDP
+ * pudo escribir del destino: la caja `b` (rdp_box), nunca filas enteras. */
+static void readback(const struct gfx_job *job, int slot, const struct rdp_box *b)
 {
 	const struct rdp_target *t = &tg.t[slot];
-	if ((t->bpp != 2 && t->bpp != 1) || !job->rdram_ea)
+	if ((t->bpp != 2 && t->bpp != 1) || !job->rdram_ea || rdp_box_empty(b))
 		return;
-	uint32_t w = t->width < RASTER_W ? t->width : RASTER_W, h = rows < RASTER_H ? rows : RASTER_H;
+	uint32_t w = t->width < RASTER_W ? t->width : RASTER_W, h = b->y1 < RASTER_H ? b->y1 : RASTER_H;
+	uint32_t x1 = b->x1 < w ? b->x1 : w;
 	uint8_t *rdram = (uint8_t *)(uintptr_t)job->rdram_ea;
-	for (uint32_t y = 0; y < h; y++) {
+	for (uint32_t y = b->y0; y < h; y++) {
 		uint32_t a = t->addr + y * t->width * t->bpp;
-		if (a + w * t->bpp > job->rdram_size)
+		if (a + x1 * t->bpp > job->rdram_size)
 			break;
-		for (uint32_t x = 0; x < w; x++) {
+		for (uint32_t x = b->x0; x < x1; x++) {
 			uint32_t c = rgb[slot][y * RASTER_W + x];
 			if (t->bpp == 1) {
 				/* Imagen de 8 bits: la intensidad es el rojo (como rdp.c). */
@@ -532,14 +533,21 @@ static void readback(const struct gfx_job *job, int slot, uint32_t rows)
 	}
 }
 
-/* Espejo del framebuffer (como frame_mirror en rdp.c): las `rows` primeras
- * filas de la ranura a la RDRAM, una vez por dibujo, sin pisar lo que una
- * copia reciente de una imagen que se solape dejó en esa memoria. */
+/* Espejo del framebuffer (como frame_mirror en rdp.c): lo dibujado desde
+ * el último espejo (su caja), hasta la fila `rows`, a la RDRAM, una vez por
+ * dibujo, sin pisar lo que una copia reciente de una imagen que se solape
+ * dejó en esa memoria. */
 static void frame_mirror(const struct gfx_job *job, int slot, uint32_t rows, const char *when)
 {
 	const struct rdp_target *t = &tg.t[slot];
+	struct rdp_box box = t->box;
 	if (rows > t->lh)
 		rows = t->lh;
+	if (rows > box.y1)
+		rows = box.y1;
+	box.y1 = (uint16_t)rows;
+	if (rdp_box_empty(&box))
+		return;
 	if (t->bpp != 2 || !rows || t->addr + t->width * 2 * rows > job->rdram_size ||
 	    !rdp_targets_mirror_wanted(&tg, slot))
 		return;
@@ -554,12 +562,12 @@ static void frame_mirror(const struct gfx_job *job, int slot, uint32_t rows, con
 	}
 	if (dma_newer(t->addr, t->width * 2 * rows, t->last_task))
 		return;
-	readback(job, slot, rows);
+	readback(job, slot, &box);
 	rdp_targets_mirrored(&tg, slot);
 	frames++;
 	if (raster_trace_fb)
-		fprintf(stderr, "fb: campo %u tarea %u: espejo del framebuffer %06x/%u %s: %u filas\n", raster_field,
-			task_no, t->addr, t->width, when, rows);
+		fprintf(stderr, "fb: campo %u tarea %u: espejo del framebuffer %06x/%u %s: %u..%u × %u..%u\n", raster_field,
+			task_no, t->addr, t->width, when, box.x0, box.x1, box.y0, box.y1);
 }
 
 void raster_task(const struct gfx_job *job, const struct gfx_result *res)
@@ -570,7 +578,8 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 	int cur = -1;
 	uint32_t off = 0;
 	bool drawn[RDP_TARGETS_MAX] = { false };
-	uint32_t drawn_rows[RDP_TARGETS_MAX] = { 0 };  /* hasta dónde llegaron las tijeras */
+	struct rdp_box drawn_box[RDP_TARGETS_MAX];  /* lo que tocaron los dibujos de la tarea */
+	memset(drawn_box, 0, sizeof drawn_box);
 	/* Dibujos que leen cada destino en esta tarea, por destino escrito (traza). */
 	uint32_t reads[RDP_TARGETS_MAX][RDP_TARGETS_MAX] = { { 0 } }, read_stale[RDP_TARGETS_MAX][RDP_TARGETS_MAX] = { { 0 } };
 	uint32_t read_age[RDP_TARGETS_MAX] = { 0 };
@@ -659,8 +668,9 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 							rgb[i][y * RASTER_W + x] = color;
 					rdp_targets_drawn(&tg, i);
 					drawn[i] = true;
-					if ((uint32_t)yb > drawn_rows[i])
-						drawn_rows[i] = (uint32_t)yb;
+					struct rdp_box r = { (uint16_t)xa, (uint16_t)ya, (uint16_t)xb, (uint16_t)yb };
+					rdp_box_union(&drawn_box[i], &r);
+					rdp_box_union(&tg.t[i].box, &r);
 				}
 				break;
 			}
@@ -710,18 +720,23 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 				rdp_targets_drawn(&tg, cur);
 			drawn[cur] = true;
 			{
-				/* Como rdp.c: hasta la fila más baja de los vértices. */
-				float ymax = 0.0f;
+				/* Como rdp.c: la caja de los vértices dentro de las tijeras. */
+				struct rdp_box r = { 0, 0, 0, 0 };
+				float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+				bool front = true;
 				for (uint32_t k = 0; k < d->h.b; k++) {
 					const struct gfx_vertex *v = vtx + d->h.a + k;
-					if (v->w > 0.0f && v->y / v->w > ymax)
-						ymax = v->y / v->w;
+					if (!(v->w > 0.0f)) {
+						front = false;
+						continue;
+					}
+					float x = v->x / v->w, y = v->y / v->w;
+					x0 = x < x0 ? x : x0, x1 = x > x1 ? x : x1;
+					y0 = y < y0 ? y : y0, y1 = y > y1 ? y : y1;
 				}
-				uint32_t rows = (uint32_t)(ymax + 0.999f), bottom = (d->scissor[3] + 3) / 4;
-				if (rows > bottom)
-					rows = bottom;
-				if (rows > drawn_rows[cur])
-					drawn_rows[cur] = rows;
+				rdp_box_add(&r, x0, y0, x1, y1, front, d->scissor, tg.t[cur].lw, tg.t[cur].lh);
+				rdp_box_union(&drawn_box[cur], &r);
+				rdp_box_union(&tg.t[cur].box, &r);
 			}
 			break;
 		}
@@ -741,7 +756,8 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 			continue;
 		/* Como en la PS3: lo decide el ancho del VI y sus orígenes. */
 		const struct rdp_target *t = &tg.t[i];
-		uint32_t rows = drawn_rows[i] < t->lh ? drawn_rows[i] : t->lh;
+		const struct rdp_box *box = &drawn_box[i];
+		uint32_t rows = box->y1 < t->lh ? box->y1 : t->lh;
 		/* Como la PS3: la copia pedida también en la tarea anterior va sin
 		 * esperar y la imagen sigue siendo del RDP (targets.h). */
 		bool wanted = raster_fbfx >= 2 && rdp_readback_wanted(&vi_ring, t->addr, t->width, t->bpp == 2 ? 2 : 0);
@@ -751,23 +767,25 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 		if (wanted && rdp_targets_readback(&tg, i, true, !again)) {
 			if (dma_newer(t->addr, t->width * t->bpp * rows, task_no))
 				continue;
-			readback(job, i, rows);
+			readback(job, i, box);
 			rb_task[i] = tg.task;
 			readbacks++;
 			if (raster_trace_fb)
-				fprintf(stderr, "fb: campo %u tarea %u: copia a la RDRAM del destino %06x/%u: %u filas (alto conjeturado %u)\n",
-					raster_field, task_no, t->addr, t->width, rows, t->lh);
+				fprintf(stderr, "fb: campo %u tarea %u: copia a la RDRAM del destino %06x/%u: %u..%u × %u..%u (alto "
+					"conjeturado %u)\n", raster_field, task_no, t->addr, t->width, box->x0, box->x1, box->y0, rows,
+					t->lh);
 		} else if (raster_fbfx >= 2 && rows && !t->presented && (t->bpp == 2 || (t->bpp == 1 && t->fmt == 4)) &&
 			   t->width != tg.vi_width && t->width * t->bpp * rows <= MIRROR_BYTES) {
 			/* Espejo de una imagen auxiliar chica (en la PS3, sin esperar). */
 			if (dma_newer(t->addr, t->width * t->bpp * rows, task_no))
 				continue;
-			readback(job, i, rows);
+			readback(job, i, box);
 			rb_task[i] = tg.task;
 			mirrors++;
 			if (raster_trace_fb)
-				fprintf(stderr, "fb: campo %u tarea %u: copia espejo del destino %06x/%u: %u filas (alto conjeturado %u)\n",
-					raster_field, task_no, t->addr, t->width, rows, t->lh);
+				fprintf(stderr, "fb: campo %u tarea %u: copia espejo del destino %06x/%u: %u..%u × %u..%u (alto "
+					"conjeturado %u)\n", raster_field, task_no, t->addr, t->width, box->x0, box->x1, box->y0, rows,
+					t->lh);
 		} else if (raster_fbfx >= 2 && rdp_targets_mirror_at_task_end(&tg, i)) {
 			/* Framebuffer: a la RDRAM al terminar la tarea que lo dibujó,
 			 * como el RDP (en la PS3, sin esperar). */
