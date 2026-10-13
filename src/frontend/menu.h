@@ -95,8 +95,10 @@ struct menu_game {
 	int aspect;    /* -1 o enum menu_aspect */
 	int filter;    /* -1 o enum menu_filter */
 	int overscan;  /* -1 o MENU_OVERSCAN_OFF / NORMAL / WIDE */
+	int scale;     /* -1, 0 (automática) o 1 .. MENU_SCALE_MAX: escala interna */
 };
-enum { MENU_GAME_ASPECT, MENU_GAME_FILTER, MENU_GAME_OVERSCAN, MENU_GAME_BACK, MENU_GAME_ROWS };
+enum { MENU_GAME_ASPECT, MENU_GAME_FILTER, MENU_GAME_OVERSCAN, MENU_GAME_SCALE, MENU_GAME_BACK, MENU_GAME_ROWS };
+#define MENU_SCALE_MAX 5
 
 /* Ajustes del menú: el fondo, el contador y la confirmación al salir van en
  * SALSA64_DATA_DIR/menu.cfg; el recorte
@@ -201,12 +203,22 @@ static inline int menu_cheat_rows(const struct menu *m) { return (m->cheats ? (i
 /* Abre la página de ajustes de `title` con `g` (se copia). */
 void menu_game_open(struct menu *m, const struct menu_game *g, const char *title);
 void menu_game_default(struct menu_game *g);
-/* juegos/<ROM>.cfg: «aspecto|filtro|recorte = global|...». */
+/* juegos/<ROM>.cfg: «aspecto|filtro|recorte|escala = global|...». */
 void menu_game_parse(struct menu_game *g, const char *text, size_t len);
 int menu_game_format(const struct menu_game *g, char *buf, size_t size);
-/* Lo que vale para un juego: lo suyo, o si es -1 lo global. */
+/* Lo que vale para un juego: lo suyo, o si es -1 lo global (la escala
+ * global es s->scale, la de video.cfg). Cualquiera puede ser NULL. */
 void menu_game_effective(const struct menu_settings *s, const struct menu_game *g, int *aspect, int *filter,
-			 int *overscan);
+			 int *overscan, int *scale);
+
+/* Nombres de los valores (en español: se traducen con tr() al dibujar),
+ * para el menú de pausa. La escala automática dice cuál es según la
+ * resolución (enum menu_resolution). */
+const char *menu_aspect_name(int aspect);
+const char *menu_filter_name(int filter);
+const char *menu_filter_credit(int filter);
+const char *menu_overscan_name(int overscan);
+const char *menu_scale_name(int scale, int resolution, char *buf, size_t size);
 
 /* Avanza la animación a now_us y dibuja el menú entero con rsxkit_ui_* en
  * un espacio lógico de lw × lh (alto 720; ancho según la tele). */

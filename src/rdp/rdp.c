@@ -218,10 +218,14 @@ static struct {
 	 * hasta 3 veces por corrida. */
 	uint32_t quiet_tasks, trace_left, trace_events;
 	struct { int slot; char how[48]; } last_get;  /* qué hizo get_target (traza) */
-	/* Lo último presentado, para repetirlo tal cual en una pausa
-	 * (salsa64_rdp_present_again); surf NULL: nada que repetir. */
+	/* Lo último presentado, para repetirlo en una pausa
+	 * (salsa64_rdp_present_again); surf NULL: nada que repetir. slot, y0,
+	 * pw y ph son la región sin recortar, para repetirla con otra vista o
+	 * con otro recorte (el menú de pausa). */
 	struct {
 		rsxkit_target *surf;
+		int slot;
+		uint32_t y0, pw, ph;
 		rsxkit_rect src;
 		uint32_t w, h;
 		rsxkit_view view;
@@ -1206,6 +1210,8 @@ static void done(void *ctx, const struct gfx_job *job, const struct gfx_result *
 }
 
 static void frame_mirror(int slot, uint32_t rows, bool wait);
+static void again_set(int slot, uint32_t y0, uint32_t pw, uint32_t ph, const rsxkit_view *view,
+		      const struct salsa64_overscan *crop);
 
 /* Traduce la salida de la tarea n a comandos del RSX. */
 static void translate(uint32_t n)
@@ -1637,18 +1643,29 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 	rdp.stats.age_sum += p.age;
 	if (p.age > rdp.stats.age_max)
 		rdp.stats.age_max = p.age;
+	again_set(p.slot, p.y0, p.w, p.h, view, crop);
+	rsxkit_target_present(rdp.again.surf, &rdp.again.src, rdp.again.w, rdp.again.h, &rdp.again.view, out);
+	frame_mirror(p.slot, p.y0 + p.h, false);
+	return true;
+}
+
+/* Lo que se presenta de la región (slot, y0, pw × ph): recorte, tamaño y
+ * vista, en rdp.again (salsa64_rdp_present y su repetición). */
+static void again_set(int slot, uint32_t y0, uint32_t pw, uint32_t ph, const rsxkit_view *view,
+		      const struct salsa64_overscan *crop)
+{
 	/* Recorte del overscan: la región se achica por los cuatro lados y se
 	 * presenta como una imagen más chica (misma proporción de pantalla). */
 	uint32_t cl = 0, cr = 0, ct = 0, cb = 0;
 	if (crop) {
 		cl = crop->left, cr = crop->right, ct = crop->top, cb = crop->bottom;
-		if (cl + cr >= p.w)
+		if (cl + cr >= pw)
 			cl = cr = 0;
-		if (ct + cb >= p.h)
+		if (ct + cb >= ph)
 			ct = cb = 0;
 	}
-	uint32_t w = p.w - cl - cr, h = p.h - ct - cb;
-	rsxkit_rect src = surface_rect(p.slot, cl, p.y0 + ct, w, h);
+	uint32_t w = pw - cl - cr, h = ph - ct - cb;
+	rsxkit_rect src = surface_rect(slot, cl, y0 + ct, w, h);
 	/* Si la región cabe en la pantalla, a 1:1 (modo entero con su tamaño
 	 * en píxeles de la superficie: factor 1, píxeles cuadrados, centrada;
 	 * en 480/576 el píxel no es cuadrado y el ancho se estira igual que
@@ -1667,7 +1684,11 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 	 * superficie cada uno salía de un tamaño: un «zoom» cada 2 campos. */
 	const rsxkit_screen *sc = rsxkit_screen_info();
 	uint32_t sw = w * rdp.scale, sh = h * rdp.scale;
-	rdp.again.surf = rdp.surf[p.slot];
+	rdp.again.surf = rdp.surf[slot];
+	rdp.again.slot = slot;
+	rdp.again.y0 = y0;
+	rdp.again.pw = pw;
+	rdp.again.ph = ph;
 	rdp.again.src = src;
 	/* Con una proporción panorámica pedida (aspecto 16:9 del menú) no vale la
 	 * presentación a 1:1: esa dibuja la región en su proporción de 4:3 y el
@@ -1682,15 +1703,14 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 		rdp.again.h = h;
 		rdp.again.view = view ? *view : (rsxkit_view){ RSXKIT_SCALE_FIT, RSXKIT_FILTER_LINEAR, 0.0f };
 	}
-	rsxkit_target_present(rdp.again.surf, &rdp.again.src, rdp.again.w, rdp.again.h, &rdp.again.view, out);
-	frame_mirror(p.slot, p.y0 + p.h, false);
-	return true;
 }
 
-bool salsa64_rdp_present_again(rsxkit_rect *out)
+bool salsa64_rdp_present_again(const rsxkit_view *view, const struct salsa64_overscan *crop, rsxkit_rect *out)
 {
-	if (!rdp.ready || !rdp.again.surf)
+	if (!rdp.ready || !rdp.again.surf || rdp.surf[rdp.again.slot] != rdp.again.surf)
 		return false;
+	if (view || crop)
+		again_set(rdp.again.slot, rdp.again.y0, rdp.again.pw, rdp.again.ph, view, crop);
 	rsxkit_target_present(rdp.again.surf, &rdp.again.src, rdp.again.w, rdp.again.h, &rdp.again.view, out);
 	return true;
 }

@@ -12,9 +12,13 @@
  *     cuenta como pulsación.
  *   - START + SELECT dentro del juego (los dos apretados y uno recién):
  *     abre el menú de pausa (PM_*): Continuar, Guardar estado, Cargar estado,
- *     Ranura (←→), Trucos, Mostrar FPS y Salir. ↑↓ elige, × acepta, ○, START
- *     o START + SELECT otra vez lo cierran. «Salir» pide confirmación en el
- *     cuadro de abajo si `confirm`, y si no sale.
+ *     Ranura (←→), Trucos, Imagen, Mostrar FPS y Salir. ↑↓ elige, × acepta, ○,
+ *     START o START + SELECT otra vez lo cierran. «Salir» pide confirmación
+ *     en el cuadro de abajo si `confirm`, y si no sale.
+ *   - «Imagen» abre su página (IM_*): Filtro, Aspecto, Recorte y Escala
+ *     interna (←→ o × cambian el valor: image_do con image_arg ±1),
+ *     «Guardar para este juego» (×) y Volver. ○ o «Volver» regresan al menú
+ *     de pausa; START o START + SELECT cierran todo y el juego sigue.
  *   - Con el cuadro a la vista: × sale; ○ o START + SELECT otra vez lo
  *     cierran y el juego sigue.
  *   - SELECT + □ dentro del juego abre la lista de trucos (si hay: panel_avail)
@@ -42,8 +46,9 @@
 #define PAUSECTL_PANEL   0x4u  /* lista de trucos (SELECT + □) */
 #define PAUSECTL_MENU    0x8u  /* menú de pausa (START + SELECT) */
 
-/* Filas del menú de pausa. */
-enum { PM_RESUME, PM_SAVE, PM_LOAD, PM_SLOT, PM_CHEATS, PM_FPS, PM_EXIT, PM_ROWS };
+/* Filas del menú de pausa y de su página «Imagen». */
+enum { PM_RESUME, PM_SAVE, PM_LOAD, PM_SLOT, PM_CHEATS, PM_IMAGE, PM_FPS, PM_EXIT, PM_ROWS };
+enum { IM_FILTER, IM_ASPECT, IM_CROP, IM_SCALE, IM_SAVE, IM_BACK, IM_ROWS };
 
 enum pausectl_action {
 	PAUSECTL_NONE,
@@ -61,6 +66,11 @@ struct pausectl {
 	 * PM_CHEATS sin trucos; -1 nada: quien llama lo lee y lo baja). */
 	bool menu;
 	int menu_sel, menu_do, menu_arg;
+	/* Página «Imagen»: image_sel es la fila (IM_*); image_do, lo que se pidió
+	 * (IM_FILTER … IM_SCALE con image_arg ±1, o IM_SAVE; -1 nada: quien
+	 * llama lo lee y lo baja). */
+	bool image;
+	int image_sel, image_do, image_arg;
 	/* Lista de trucos. `panel_avail` y `panel_rows` los pone quien llama (hay
 	 * trucos y cuántos); panel_sel es el elegido; toggle, el que se pidió
 	 * cambiar (-1 ninguno: quien llama lo lee y lo baja); denied, se pidió

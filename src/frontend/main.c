@@ -921,6 +921,8 @@ static void state_slot_step(int d)
  * el elegido y avisar de que no hay trucos. */
 static bool pm_slot_have;  /* la ranura actual tiene estado (para el menú de pausa) */
 
+static void image_events(void);
+
 /* Lo que pidió el menú de pausa (pausectl): estados, ranura, FPS. */
 static void pause_menu_events(void)
 {
@@ -1073,6 +1075,7 @@ static int update_pads(uint32_t *buttons)
 	enum pausectl_action act = pausectl_pads(&pause_ctl, raw, intercepted, combos_on != 0, game);
 	cheat_panel_events();
 	pause_menu_events();
+	image_events();
 	for (unsigned i = 0; i < SALSA64_PIF_PORTS; i++) {
 		struct salsa64_pad p = { 0, 0, 0, i == 0 };
 		if (info.status[i]) {
@@ -1782,6 +1785,21 @@ static void frame_end(const char *where)
 static int scan_level;       /* 0 sin líneas, 1 suaves, 2 fuertes (filtro del juego) */
 static rsxkit_rect scan_r;   /* dónde quedó la imagen, en puntos de la pantalla */
 static uint32_t scan_lines;  /* líneas de la imagen del juego */
+static struct salsa64_vi_frame still_f;  /* lo último presentado, para su recorte en la pausa */
+
+/* La imagen del juego que corre (load_view; la página «Imagen» del menú de
+ * pausa la cambia en vivo, image_events): aspecto, filtro, recorte
+ * (MENU_OVERSCAN_*; CUSTOM es el de overscan.cfg) y escala interna, lo
+ * global de cada uno (Opciones) y los ajustes del juego como están en
+ * juegos/<ROM>.cfg. Sin `source` (las pruebas) no se guardan. */
+static struct {
+	int aspect, filter, crop, scale;
+	int g_aspect, g_filter, g_crop, g_scale;
+	struct menu_game game;
+	const char *source;
+} img;
+static int rdp_scale_req;  /* escala interna pedida al RDP ahora (0: automática) */
+static struct menu_settings video_cfg;  /* video y escala que corren (video.cfg al arrancar o lo último aplicado) */
 
 static void present_overlay(uint64_t now)
 {
@@ -1800,6 +1818,15 @@ static void present_overlay(uint64_t now)
 		struct osd_pause_menu pm = { pause_ctl.menu_sel, state_slot, pm_slot_have, fps.on, in_menu,
 					     game_cheats.n, cheats_active(&game_cheats) };
 		osd_pause_menu_draw(&pm, ui_lw, ui_lh);
+	} else if (pause_ctl.image) {
+		char sbuf[24];
+		struct osd_image_menu im = {
+			pause_ctl.image_sel,
+			{ menu_filter_name(img.filter), menu_aspect_name(img.aspect), menu_overscan_name(img.crop),
+			  menu_scale_name(img.scale, video_cfg.resolution, sbuf, sizeof sbuf) },
+			img.scale != rdp_scale_req, img.source != NULL, menu_filter_credit(img.filter),
+		};
+		osd_image_menu_draw(&im, ui_lw, ui_lh);
 	} else if (pause_ctl.dialog)
 		osd_confirm_draw(in_menu ? "¿Volver al menú?" : "¿Salir al XMB?", "×: Sí     ○: No", ui_lw, ui_lh);
 	else if (pause_ctl.panel)
@@ -1925,6 +1952,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	if (r.w) {
 		scan_r = r;
 		scan_lines = shown.height;
+		still_f = m->f;
 	}
 	present_overlay(sysGetSystemTime());
 	/* audio_out: una vez por campo presentado (estadísticas y volcado). */
@@ -1977,10 +2005,16 @@ static void present_still(void)
 	rsxkit_rect r;
 	frame_begin("flip anterior (pausa)");
 	beat.pres_at = "cuadro repetido";
-	if (pres.still == STILL_RSX && !salsa64_rdp_present_again(&r))
+	/* Con la vista y el recorte de ahora: la página «Imagen» los cambia en
+	 * la pausa (el recorte de una imagen de la RDRAM, al seguir). */
+	struct salsa64_overscan crop = overscan_for(&still_f);
+	r.w = 0;
+	if (pres.still == STILL_RSX && !salsa64_rdp_present_again(&pres.view, &crop, &r))
 		pres.still = STILL_NONE;  /* el destino se soltó: negro */
 	else if (pres.still == STILL_FB)
 		rsxkit_fb_draw(pres.fb, &pres.view, &r);
+	if (r.w)
+		scan_r = r;
 	present_overlay(now);
 	frame_end("flip (pausa)");
 	beat.pres_at = "pausa";
@@ -2407,6 +2441,8 @@ static struct {
 	uint32_t still0;  /* cuadros repetidos al empezarla */
 } pause_log;
 
+static void image_scale_apply(void);
+
 static void pause_update(void)
 {
 	uint32_t want = pausectl_reasons(&pause_ctl), was = pause_req;
@@ -2428,6 +2464,8 @@ static void pause_update(void)
 			    (want & PAUSECTL_SYSTEM) && (want & ~PAUSECTL_SYSTEM) ? " y " : "",
 			    want & PAUSECTL_CONFIRM ? "cuadro de salir" : "", want & PAUSECTL_PANEL ? "lista de trucos" : want & PAUSECTL_MENU ? "menú de pausa" : "");
 	} else if (!want) {
+		if (img.scale != rdp_scale_req)
+			image_scale_apply();  /* con la emulación todavía quieta */
 		audio_out_pause(false);
 		salsa64_log("pausa: la emulación sigue tras %.1f s (%u cuadros repetidos, emulación %s)",
 			    (now - pause_log.t0) / 1e6, pres.still_frames - pause_log.still0,
@@ -2498,37 +2536,157 @@ static bool game_cfg_write(const char *rom, const struct menu_game *g)
 	return ok;
 }
 
-/* Aspecto, filtro y recorte del juego: lo suyo (juegos/) o, si no, lo de
- * menu.cfg y overscan.cfg. Antes de cada juego. */
+/* Pide al RDP la escala interna `scale` (0: automática) si no es la que
+ * tiene: sin juego corriendo o con la emulación quieta en el límite de un
+ * campo (salsa64_rdp_set_scale suelta los destinos; el juego los vuelve a
+ * crear a la escala nueva en su cuadro siguiente). */
+static void rdp_scale_set(int scale, const char *why)
+{
+	if (scale == rdp_scale_req)
+		return;
+	bool cut = false;
+	salsa64_rdp_set_scale((uint32_t)scale);
+	rdp_scale_req = scale;
+	uint32_t es = salsa64_rdp_scale(&cut);
+	salsa64_log("escala interna: %u× (%s%s), %s", es, scale ? "pedida" : "automática",
+		    cut ? ", reducida por memoria del RSX" : "", why);
+}
+
+/* Lo de img a la presentación: vista (aspecto y filtro), líneas de barrido
+ * y recorte. La escala va aparte (rdp_scale_set). */
+static void view_apply(void)
+{
+	pres.view.aspect = img.aspect == MENU_ASPECT_16_9 ? 16.0f / 9.0f : 4.0f / 3.0f;
+	pres.view.filter = img.filter == MENU_FILTER_SHARP ? RSXKIT_FILTER_NEAREST : RSXKIT_FILTER_LINEAR;
+	scan_level = img.filter == MENU_FILTER_SCAN_SOFT ? 1 : img.filter == MENU_FILTER_SCAN_STRONG ? 2 : 0;
+	if (img.crop >= MENU_OVERSCAN_OFF && img.crop <= MENU_OVERSCAN_WIDE) {
+		uint32_t h = img.crop == MENU_OVERSCAN_WIDE ? 16 : img.crop == MENU_OVERSCAN_NORMAL ? 8 : 0;
+		overscan.left = overscan.right = h;
+		overscan.top = overscan.bottom = h * 3 / 4;
+	}
+}
+
+static void view_log(const char *what)
+{
+	char sc[16] = "automática";
+	if (img.scale)
+		snprintf(sc, sizeof sc, "%d×", img.scale);
+	salsa64_log("imagen: %s, filtro %s, recorte %u %u %u %u, escala %s%s",
+		    img.aspect == MENU_ASPECT_16_9 ? "16:9 estirada" : "4:3", menu_filter_name(img.filter), overscan.left,
+		    overscan.right, overscan.top, overscan.bottom, sc, what);
+}
+
+/* Aspecto, filtro, recorte y escala del juego: lo suyo (juegos/) o, si no,
+ * lo de menu.cfg, overscan.cfg y video.cfg. Antes de cada juego, después de
+ * load_overscan. */
 static void load_view(const char *source)
 {
 	struct menu_settings s;
 	struct menu_game g;
-	int aspect, filter, crop;
 	settings_read(&s);
+	s.overscan = overscan_preset();  /* el de overscan.cfg */
+	s.scale = video_cfg.scale;
+	img.source = source;
 	if (source)
-		game_cfg_read(source, &g);
+		game_cfg_read(source, &img.game);
 	else
-		menu_game_default(&g);
-	menu_game_effective(&s, &g, &aspect, &filter, &crop);
+		menu_game_default(&img.game);
+	g = img.game;
 	if (selftest_on || gfxtest_on || audiotest_on) {
-		aspect = MENU_ASPECT_4_3;  /* sus verificaciones leen la pantalla */
-		filter = MENU_FILTER_SMOOTH;
+		/* Sus verificaciones leen la pantalla: aspecto, filtro y recorte de
+		 * siempre, sin guardar. La escala del juego sí vale (verifican a
+		 * cualquier escala): así se prueba el cambio al abrir y al cerrar. */
+		int scale = g.scale;
+		menu_game_default(&g);
+		g.scale = scale;
+		s.aspect = MENU_ASPECT_4_3;
+		s.filter = MENU_FILTER_SMOOTH;
+		img.source = NULL;
 	}
-	pres.view.aspect = aspect == MENU_ASPECT_16_9 ? 16.0f / 9.0f : 4.0f / 3.0f;
-	pres.view.filter = filter == MENU_FILTER_SHARP ? RSXKIT_FILTER_NEAREST : RSXKIT_FILTER_LINEAR;
-	scan_level = filter == MENU_FILTER_SCAN_SOFT ? 1 : filter == MENU_FILTER_SCAN_STRONG ? 2 : 0;
+	img.g_aspect = s.aspect;
+	img.g_filter = s.filter;
+	img.g_crop = s.overscan;
+	img.g_scale = s.scale;
+	menu_game_effective(&s, &g, &img.aspect, &img.filter, &img.crop, &img.scale);
+	view_apply();
 	scan_r.w = 0;
 	scan_lines = 0;
-	if (g.overscan >= 0 && g.overscan <= MENU_OVERSCAN_WIDE) {
-		uint32_t h = g.overscan == MENU_OVERSCAN_WIDE ? 16 : g.overscan == MENU_OVERSCAN_NORMAL ? 8 : 0;
-		overscan.left = overscan.right = h;
-		overscan.top = overscan.bottom = h * 3 / 4;
+	rdp_scale_set(img.scale, "al abrir el juego");
+	view_log(g.aspect >= 0 || g.filter >= 0 || g.overscan >= 0 || g.scale >= 0 ? " (con ajustes de este juego)" : "");
+}
+
+/* «Guardar para este juego»: en juegos/<ROM>.cfg lo que se ve. Lo que
+ * coincide con lo global y el juego no tenía propio queda «global» (sigue
+ * a Opciones); un recorte personalizado de overscan.cfg, también. */
+static void image_save(void)
+{
+	uint64_t now = sysGetSystemTime();
+	if (!img.source) {
+		osd_notice(now, "No se pudieron guardar los ajustes");
+		return;
 	}
-	salsa64_log("imagen: %s, filtro %s, recorte %u %u %u %u%s", aspect == MENU_ASPECT_16_9 ? "16:9 estirada" : "4:3",
-		    filter == MENU_FILTER_SHARP ? "nítido" : scan_level == 1 ? "líneas suaves" : scan_level == 2 ? "líneas fuertes" : "suave",
-		    overscan.left, overscan.right, overscan.top, overscan.bottom,
-		    g.aspect >= 0 || g.filter >= 0 || g.overscan >= 0 ? " (con ajustes de este juego)" : "");
+	struct menu_game g = img.game;
+	g.aspect = img.aspect == img.g_aspect && img.game.aspect < 0 ? -1 : img.aspect;
+	g.filter = img.filter == img.g_filter && img.game.filter < 0 ? -1 : img.filter;
+	g.overscan = img.crop > MENU_OVERSCAN_WIDE || (img.crop == img.g_crop && img.game.overscan < 0) ? -1 : img.crop;
+	g.scale = img.scale == img.g_scale && img.game.scale < 0 ? -1 : img.scale;
+	bool ok = game_cfg_write(img.source, &g);
+	if (ok)
+		img.game = g;
+	salsa64_log("imagen: ajustes de este juego %s (aspecto %d, filtro %d, recorte %d, escala %d)",
+		    ok ? "guardados" : "NO guardados", g.aspect, g.filter, g.overscan, g.scale);
+	osd_notice(now, ok ? "Ajustes guardados para este juego" : "No se pudieron guardar los ajustes");
+}
+
+/* La página «Imagen» del menú de pausa (pausectl): filtro, aspecto y
+ * recorte se ven al momento, también en el cuadro en pausa; la escala se
+ * pone al seguir jugando (image_scale_apply), porque soltar los destinos
+ * con el juego quieto dejaría la pantalla en negro. */
+static void image_events(void)
+{
+	int d = pause_ctl.image_do, k = pause_ctl.image_arg;
+	if (d < 0)
+		return;
+	pause_ctl.image_do = -1;
+	switch (d) {
+	case IM_FILTER:
+		img.filter = (img.filter + k + MENU_FILTERS) % MENU_FILTERS;
+		break;
+	case IM_ASPECT:
+		img.aspect = img.aspect == MENU_ASPECT_16_9 ? MENU_ASPECT_4_3 : MENU_ASPECT_16_9;
+		break;
+	case IM_CROP:
+		/* Apagado → normal → amplio; uno personalizado pasa al primero o al último. */
+		img.crop = img.crop > MENU_OVERSCAN_WIDE ? (k > 0 ? MENU_OVERSCAN_OFF : MENU_OVERSCAN_WIDE)
+							  : (img.crop + k + 3) % 3;
+		break;
+	case IM_SCALE:
+		img.scale = (img.scale + k + MENU_SCALE_MAX + 1) % (MENU_SCALE_MAX + 1);
+		return;  /* al seguir */
+	case IM_SAVE:
+		image_save();
+		return;
+	default:
+		return;
+	}
+	view_apply();
+	view_log(" (menú de pausa)");
+}
+
+/* Al seguir jugando con otra escala elegida en «Imagen»: con la emulación
+ * quieta en el límite del campo (antes de soltar pause_req). */
+static void image_scale_apply(void)
+{
+	for (int i = 0; i < 100 && !emu_paused && running; i++)
+		sysUsleep(2000);  /* una pausa cortísima: que termine su campo */
+	if (!emu_paused) {
+		salsa64_log("escala interna: la emulación no se detuvo; queda %d", rdp_scale_req);
+		img.scale = rdp_scale_req;
+		return;
+	}
+	rdp_scale_set(img.scale, "menú de pausa");
+	char sbuf[24];
+	osd_notice(sysGetSystemTime(), "Escala interna: %s", tr(menu_scale_name(img.scale, video_cfg.resolution, sbuf, sizeof sbuf)));
 }
 
 /* Lo que es de un juego vuelve a como al arrancar el programa: colas entre
@@ -3098,6 +3256,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		snprintf(err, err_size, "No se pudo crear el hilo de emulación");
 		emu_done = 1;
 		game_close();
+		rdp_scale_set(video_cfg.scale, "vuelve la global");
 		return GAME_FAILED;
 	}
 	emu_live = 1;
@@ -3194,6 +3353,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	emu_live = 0;
 	drain(sysGetSystemTime(), 0);
 	game_close();
+	rdp_scale_set(video_cfg.scale, "vuelve la global");  /* la de un juego o la del menú de pausa */
 	return app_quit || !in_menu ? GAME_QUIT : GAME_TO_MENU;
 }
 
@@ -3207,7 +3367,6 @@ static const char *const rom_dirs[] = {
 
 static void video_load(struct menu_settings *set);
 static void video_save(const struct menu_settings *set);
-static struct menu_settings video_cfg;  /* video y escala que corren (video.cfg al arrancar o lo último aplicado) */
 
 static struct romlist roms;
 
@@ -3318,6 +3477,7 @@ static void menu_apply_video(void)
 		return;
 	}
 	salsa64_rdp_set_scale((uint32_t)want.scale);
+	rdp_scale_req = want.scale;
 	bool cut;
 	uint32_t es = salsa64_rdp_scale(&cut);
 	video_cfg.resolution = want.resolution;
@@ -3724,8 +3884,9 @@ static int menu_loop(void)
 		if (a == MENU_GAME_CHANGED) {
 			const struct rom_entry *e = &roms.e[menu.game_rom];
 			bool ok = game_cfg_write(romlist_name(e), &menu.game);
-			salsa64_log("ajustes de %s: aspecto %d, filtro %d, recorte %d%s", romlist_name(e), menu.game.aspect,
-				    menu.game.filter, menu.game.overscan, ok ? "" : " (no se pudo guardar)");
+			salsa64_log("ajustes de %s: aspecto %d, filtro %d, recorte %d, escala %d%s", romlist_name(e),
+				    menu.game.aspect, menu.game.filter, menu.game.overscan, menu.game.scale,
+				    ok ? "" : " (no se pudo guardar)");
 			if (!ok)
 				menu_set_status(&menu, "No se pudieron guardar los ajustes");
 		}
@@ -3884,6 +4045,7 @@ int main(void)
 	const rsxkit_screen *sc = rsxkit_screen_info();
 	salsa64_log("RSX listo: %ux%u, tele %s%s", sc->width, sc->height, sc->aspect > 1.5f ? "16:9" : "4:3",
 		    vc ? " (video.cfg: 1080)" : "");
+	rdp_scale_req = video_cfg.scale;
 	if ((rc = salsa64_rdp_init((uint32_t)video_cfg.scale)) != RSXKIT_OK) {
 		salsa64_log("RESULTADO frontend: FALLO al preparar el RDP (%d)", rc);
 		rsxkit_shutdown();

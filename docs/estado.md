@@ -38,6 +38,31 @@ sobrada); Doom 64 al ~40 % (instrucciones interpretadas); estados
 comprimidos; Rumble Pak y Controller Pak; Fase 5 (medir el margen del RSX a
 5×, multimuestreo para GoldenEye, filtros CRT).
 
+## 2026-10-13 — «Imagen» en el menú de pausa: filtro, aspecto, recorte y escala interna en vivo, y escala por juego
+
+Pedido del autor tras la primera prueba de los extras en la PS3 (carátulas y
+vidas infinitas de SM64 bien). En el menú de pausa, una fila «Imagen» abre
+un cuadro abajo a la izquierda, sin oscurecer el juego (pausectl, IM_*):
+
+- **Filtro, aspecto y recorte** se aplican al momento (`view_apply`) y se ven
+  en el cuadro en pausa: `salsa64_rdp_present_again` acepta ahora la vista y
+  el recorte (`again_set` guarda la región sin recortar y recalcula el 1:1),
+  y las líneas de barrido siguen el rectángulo nuevo. Con una imagen de la
+  RDRAM, el recorte se ve al seguir.
+- **Escala interna**: se pone al seguir jugando, con la emulación quieta en
+  el límite del campo (`image_scale_apply`, antes de soltar `pause_req`):
+  `salsa64_rdp_set_scale` suelta los destinos y el juego los rehace a la
+  escala nueva en su cuadro siguiente. Hacerlo con la imagen en pausa la
+  dejaba en negro. Riesgo: un cuadro raro en los juegos que leen el anterior
+  (copias descartadas); sin probar en la PS3.
+- **Guardar para este juego**: `juegos/<ROM>.cfg` con lo que se ve; lo que
+  coincide con lo global y el juego no tenía propio queda «global».
+- **Escala por juego** (`escala = auto|1…5|global`, también en la página de
+  SELECT del menú): `rdp_scale_set` la pide al abrir el juego (sin juego
+  corriendo, como «Aplicar ahora») y al cerrarlo vuelve la de Opciones. Las
+  ROMs de prueba respetan la escala del juego (verifican a cualquier escala)
+  y siguen forzando aspecto, filtro y recorte.
+
 ## 2026-10-13 — Contribución de VIDEOGAMES SCZ: menú de pausa, trucos, carátulas, aspecto, filtros sencillos, ajustes por juego e idiomas (paquete SLSA00110 «Salsa64 extras»)
 
 VIDEOGAMES SCZ (creador de contenido de PS3) mandó sus extras hechos sobre

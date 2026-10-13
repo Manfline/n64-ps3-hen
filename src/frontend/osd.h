@@ -83,4 +83,16 @@ struct osd_pause_menu {
 };
 void osd_pause_menu_draw(const struct osd_pause_menu *m, float lw, float lh);
 
+/* Página «Imagen» del menú de pausa (pausectl.h, IM_*): un cuadro abajo a la
+ * izquierda, sin oscurecer la pantalla, para ver el cambio en el juego. Los
+ * textos van en español y se traducen aquí. */
+struct osd_image_menu {
+	int sel;                /* fila elegida (IM_*) */
+	const char *value[4];   /* filtro, aspecto, recorte y escala */
+	bool scale_pending;     /* la escala elegida se pone al seguir (lo dice una nota) */
+	bool can_save;          /* hay ROM a la que guardarle los ajustes */
+	const char *credit;     /* de quién es el filtro */
+};
+void osd_image_menu_draw(const struct osd_image_menu *m, float lw, float lh);
+
 #endif

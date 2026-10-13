@@ -174,6 +174,10 @@ void osd_pause_menu_draw(const struct osd_pause_menu *m, float lw, float lh)
 			snprintf(val, sizeof val, "◀  %s  ▶", line);
 			label = "";
 			break;
+		case PM_IMAGE:
+			label = tr("Imagen");
+			snprintf(val, sizeof val, "▶");
+			break;
 		case PM_CHEATS:
 			label = tr("Trucos");
 			dim = !m->cheats_total;
@@ -196,5 +200,40 @@ void osd_pause_menu_draw(const struct osd_pause_menu *m, float lw, float lh)
 		}
 	}
 	rsxkit_ui_text(x + pad, y + h - pad - RSXKIT_FONT_H * 1.5f, tr("×  Aceptar     ↑↓  Elegir     ○  Continuar"), 1.5f, 0xC8C8C8FF, 0);
+	rsxkit_ui_end();
+}
+
+void osd_image_menu_draw(const struct osd_image_menu *m, float lw, float lh)
+{
+	static const char *const labels[IM_ROWS] = { "Filtro", "Aspecto", "Recorte del borde", "Escala interna",
+						     "Guardar para este juego", "Volver" };
+	const float sc = 1.75f, row_h = 38.0f, pad = 20.0f, w = 560.0f;
+	float h = 46.0f + IM_ROWS * row_h + 26.0f + 34.0f + 2 * pad;
+	float x = 32.0f, y = lh - h - 32.0f;
+	char val[96];
+	/* Sin oscurecer la pantalla: la imagen del juego se ve al lado. */
+	rsxkit_ui_begin(lw, lh);
+	rsxkit_ui_rect(x - 2.0f, y - 2.0f, w + 4.0f, h + 4.0f, 0xFFFFFF50);
+	rsxkit_ui_rect(x, y, w, h, 0x141414E0);
+	rsxkit_ui_text(x + pad, y + pad, tr("Imagen"), 2.25f, 0xFFFFFFFF, 0);
+	for (int i = 0; i < IM_ROWS; i++) {
+		float ry = y + pad + 46.0f + i * row_h;
+		bool cur = i == m->sel, dim = i == IM_SAVE && !m->can_save;
+		if (cur)
+			rsxkit_ui_rect(x + 8.0f, ry - 5.0f, w - 16.0f, row_h - 2.0f, 0x3A5A9AE0);
+		rsxkit_ui_text(x + pad, ry, tr(labels[i]), sc, cur ? 0xFFFFFFFF : dim ? 0x808080FF : 0xD8D8D8FF, 0);
+		if (i > IM_SCALE)
+			continue;
+		snprintf(val, sizeof val, cur ? "◀ %s ▶" : "%s", tr(m->value[i]));
+		rsxkit_ui_text(x + w - pad - cells(val) * RSXKIT_FONT_W * sc, ry, val, sc, cur ? 0x9CC8FFFF : 0xA8B4C4FF, 0);
+	}
+	/* Una nota: de quién es el filtro, o que la escala espera a seguir. */
+	float fy = y + pad + 46.0f + IM_ROWS * row_h;
+	const char *note = m->sel == IM_FILTER && m->credit ? m->credit
+			   : m->scale_pending ? "La escala nueva se pone al seguir jugando." : NULL;
+	if (note)
+		rsxkit_ui_text(x + pad, fy, tr(note), 1.35f, m->sel == IM_FILTER ? 0xA0A0A0FF : 0x9CC8FFFF, 0);
+	rsxkit_ui_text(x + pad, y + h - pad - RSXKIT_FONT_H * 1.4f, tr("×  Cambiar      ↑↓  Elegir      ○  Volver"), 1.4f, 0xC8C8C8FF,
+		       0);
 	rsxkit_ui_end();
 }
