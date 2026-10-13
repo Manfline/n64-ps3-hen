@@ -505,7 +505,7 @@ static bool resolve_content(struct gfx_state *g, const struct gfx_tile *t, unsig
  * dice `once` con su GFX_WRAP_* en los bits de GFX_TEX_WRAP_S / _T. Antes
  * se cortaban filas y la última se estiraba: el Castillo de Hyrule de
  * Super Smash Bros. tiene CI4 de 32 × 32 en tiles de 160 × 160 con clamp y
- * máscara 5 (y 64 de periodo en tiles de 128 × 256); de 51 o 64 filas, la
+ * máscara 5 (y 64 de periodo en tiles de 128 × 256); de 51 o 64 filas,
  * los ladrillos de las torres y del muro salían alargados.
  * Primero t (las filas), después s. false si no queda nada. */
 static bool tex_size(const struct gfx_tile *t, const uint16_t lim[2], uint32_t *wp, uint32_t *hp, uint32_t *x0p,
