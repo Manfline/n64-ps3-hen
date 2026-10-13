@@ -530,6 +530,11 @@ static void fault_teardown(void)
 /* Lo común de las fases de fallo: la línea de resultado. */
 static void fault_report(int i, const victim_t *v, bool ok, const char *extra)
 {
+	if (fault.events == 0) {
+		finish(i, "%s FALLO %s; %.1f µs en la víctima y ningún evento: el acceso no falló o lv2 no avisó",
+		       phases[i].name, extra, tb_us(v->t1 - v->t0));
+		return;
+	}
 	finish(i, "%s %s %s; %.1f µs en la víctima (evento a los %.1f, reanudado a los %.1f); evento %d, contexto 0x%08x, acción 0x%08x, reanudar 0x%08x; data1=%08llx data2=%016llx data3=%llx",
 	       phases[i].name, ok ? "OK" : "FALLO", extra, tb_us(v->t1 - v->t0), tb_us(fault.t_event - v->t0),
 	       tb_us(fault.t_done - v->t0), fault.events, (unsigned)fault.ctx_rc, (unsigned)fault.act_rc,
@@ -920,10 +925,12 @@ static void phase_fallo_solo_lectura(int i)
 
 static void fallo_patch(int i, bool from_main, unsigned fn, u32 page)
 {
+	/* Escribir la cola ya es un paso arriesgado (en RPCS3 el segmento de
+	 * texto es de solo lectura): anotarlo antes. */
+	trying(i, from_main ? "código generado en el hilo principal" : "código generado");
 	victim_t v = { .addr = page + 0x400, .value = 0, .kind = 2, .code = cave_fn(fn, false) };
 	fault.patch_at = v.code;
 	fault.patch_word = PPC_LI_R3(FM_MARK);
-	trying(i, from_main ? "código generado en el hilo principal" : "código generado");
 	bool back;
 	if (from_main) {
 		fault.events = 0;
@@ -966,7 +973,8 @@ static void phase_fallo_tiempo(int i)
 	double total = 0, to_event = 0, to_done = 0;
 	int ok = 0;
 	for (unsigned k = 0; k < 10; k++) {
-		victim_t v = { .addr = fault_page(5 + k) + 0x500, .value = 0, .kind = 2, .code = cave_fn(2 + k, false) };
+		victim_t v = { .addr = fault_page(5 + k) + 0x500, .value = 0, .kind = 2, .code = NULL };
+		v.code = cave_fn(2 + k, false);
 		fault.patch_at = v.code;
 		fault.patch_word = PPC_LI_R3(FM_MARK);
 		if (!victim_run(&v, FM_PATCH)) {
