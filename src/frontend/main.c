@@ -169,6 +169,7 @@
 #include "pausectl.h"
 #include "platform/ps3/autotest.h"
 #include "platform/ps3/gfx_spu.h"
+#include "platform/ps3/jpeg_spu.h"
 #include "platform/ps3/rsp_spu.h"
 #include "platform/ps3/log.h"
 #include "platform/ps3/rec_cache.h"
@@ -206,6 +207,7 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 /* Diagnóstico: con este archivo, el menú del sistema no pausa la emulación
  * (como hasta v0.1.0); los mandos siguen sueltos y el latido mira. */
 #define NO_PAUSE_PATH SALSA64_DATA_DIR "/sin-pausa"
+#define JPEG_PPE_PATH SALSA64_DATA_DIR "/jpeg-ppe"  /* diagnóstico: la tarea JPEG en el PPE */
 /* Con este archivo, la RDRAM emulada sale de sysMemoryAllocate con páginas
  * de 1 MB en vez del heap (memalign): para medir si el PPE pierde tiempo en
  * fallos de TLB (docs/perf-log.md). El tamaño de página real de cada zona
@@ -280,6 +282,8 @@ static struct gfx_state gfx_ppe_state;
  * microcódigo real corre en un SPE para lo que no tiene HLE ("auto") o
  * para todo ("all"); el RDP lo consume gfx_ppe en el PPE. */
 static struct salsa64_rsp_spu rsp_spu;
+static struct salsa64_jpeg_spu jpeg_spu;
+static int jpeg_on_spu;  /* las tareas JPEG van al SPE (jpeg_spu) */
 static enum salsa64_lle_mode lle_mode;
 static sys_sem_t wake_sem;  /* la emulación despierta a la presentación */
 static struct pacer pacer;  /* ritmo de la tele emulada (hilo de emulación) */
@@ -501,6 +505,173 @@ static struct {
 	volatile uint64_t us_emu, us_copy, us_pace;
 	volatile uint32_t fields, dropped, no_slot;
 } emu_stats;
+
+/* ---- Cuánto le quita el hilo de presentación a la emulación ------------------
+ * (docs/hilos-ppe.md). Los dos hilos comparten el núcleo del PPE: lo que
+ * hace presentación le quita ciclos a emulación. Presentación publica cuánto
+ * lleva despierta (ticks del timebase; dormida = el semáforo y la espera del
+ * flip anterior) y emulación mide, en cada campo, cuánto se solapó con su
+ * trabajo; las ventanas de 5 s agrupan los campos por solape y dan, para
+ * cada grupo, ms de emulación y ns por ciclo emulado fuera de los bucles de
+ * espera (lo que no depende de cuánto trabajo traiga el campo). Con
+ * SALSA64_DATA_DIR/carga-hilo1 («A B [KB]», por omisión 1000 3000 512),
+ * además, trabajo de mentira por campo presentado que recorre KB de memoria
+ * (512: toda la L2), en fases de medio segundo: 0, A y B µs; el log compara
+ * los campos de cada fase. Sin el archivo, solo los contadores. */
+#define LOAD_PATH SALSA64_DATA_DIR "/carga-hilo1"
+#define LOAD_KB_DEFAULT 512u
+#define LOAD_PHASES 3
+#define OVL_GROUPS 4
+
+static inline uint64_t tb_now(void)
+{
+	uint64_t t;
+	__asm__ volatile("mftb %0" : "=r"(t));
+	return t;
+}
+
+/* Un contador de ticks que escribe presentación y lee emulación: lo hecho
+ * hasta `since` y desde cuándo corre (0: parado). */
+struct busy_clock {
+	volatile uint64_t done, since;
+};
+
+static void busy_start(struct busy_clock *c, uint64_t t)
+{
+	c->since = t;
+}
+
+static void busy_stop(struct busy_clock *c, uint64_t t)
+{
+	if (!c->since)
+		return;
+	c->done += t - c->since;
+	lwsync();
+	c->since = 0;
+}
+
+/* Desde el otro hilo: lo hecho hasta `t`. */
+static uint64_t busy_at(const struct busy_clock *c, uint64_t t)
+{
+	for (;;) {
+		uint64_t since = c->since;
+		lwsync();
+		uint64_t done = c->done;
+		lwsync();
+		if (since == c->since)
+			return done + (since && t > since ? t - since : 0);
+	}
+}
+
+/* Campos agrupados por solape (emulación; presentación los lee cada 5 s). */
+struct ovl_group {
+	uint64_t fields, tb_emu, tb_ovl, tb_load, cycles, sleep_us;
+};
+
+static struct {
+	struct busy_clock busy, load_clock;  /* presentación despierta; carga de mentira */
+	bool load;                     /* carga-hilo1 presente */
+	uint32_t load_us[LOAD_PHASES], load_kb;  /* µs por campo de cada fase (la primera, 0) */
+	uint8_t *load_buf;
+	uint64_t load_next;            /* timebase del próximo cambio de fase */
+	volatile uint32_t load_phase;  /* fase en curso (la lee emulación) */
+	/* Presentación, ventana en curso (ticks): flip anterior (dormida),
+	 * flush (traducción y lo que cae dentro), presentar el campo (sin el
+	 * flush ni el flip anterior) y la carga de mentira; lo de rdp.tb que
+	 * cayó dentro de los flush. */
+	uint64_t t_flip, t_flush, t_present, t_load;
+	struct salsa64_rdp_tb in_flush;
+	/* Emulación: por solape (< 0,1 ms, 0,1–1, 1–3, ≥ 3) y por fase de la
+	 * carga de mentira (la misma al empezar y al terminar el campo). */
+	struct ovl_group by_ovl[OVL_GROUPS], by_load[LOAD_PHASES];
+} h1;
+
+static uint8_t h1_load_mem[LOAD_KB_DEFAULT << 10] __attribute__((aligned(128)));
+
+static void load_config(void)
+{
+	FILE *f = fopen(LOAD_PATH, "r");
+	h1.load = false;
+	h1.load_phase = 0;
+	h1.load_next = 0;
+	if (!f)
+		return;
+	h1.load = true;
+	h1.load_us[0] = 0;
+	h1.load_kb = LOAD_KB_DEFAULT;
+	int n = fscanf(f, "%u %u %u", &h1.load_us[1], &h1.load_us[2], &h1.load_kb);
+	fclose(f);
+	if (n < 1)
+		h1.load_us[1] = 1000;
+	if (n < 2)
+		h1.load_us[2] = 3 * h1.load_us[1];
+	if (n < 3 || !h1.load_kb || h1.load_kb > LOAD_KB_DEFAULT)
+		h1.load_kb = LOAD_KB_DEFAULT;
+	h1.load_buf = h1_load_mem;
+	salsa64_log("carga-hilo1: trabajo de mentira por campo presentado sobre %u KB, en fases de medio segundo de 0, %u "
+		    "y %u µs (diagnóstico, %s)", h1.load_kb, h1.load_us[1], h1.load_us[2], LOAD_PATH);
+}
+
+/* La carga de mentira: lee y escribe una línea de caché por vuelta sobre
+ * load_kb, como la traducción que recorre la salida de la HLE y escribe
+ * comandos del RSX, hasta gastar el tiempo pedido. */
+static void h1_load_run(uint32_t us)
+{
+	static uint32_t pos;
+	uint64_t hz = spukit_tick_hz(), t0 = tb_now(), end = t0 + (uint64_t)us * hz / 1000000u;
+	uint32_t words = h1.load_kb << 7, acc = 0;  /* palabras de 8 bytes */
+	volatile uint64_t *p = (volatile uint64_t *)h1.load_buf;
+	busy_start(&h1.load_clock, t0);
+	do {
+		for (int k = 0; k < 256; k++) {
+			acc += (uint32_t)p[pos];
+			p[(pos + 8) % words] = acc;
+			pos = (pos + 16) % words;  /* 128 bytes: la línea siguiente */
+		}
+	} while (tb_now() < end);
+	uint64_t t1 = tb_now();
+	busy_stop(&h1.load_clock, t1);
+	h1.t_load += t1 - t0;
+}
+
+/* Al terminar cada campo (emulación). phase: la fase de la carga de
+ * mentira durante todo el campo (-1: cambió en medio o sin carga). */
+static void ovl_note(uint64_t tb_emu, uint64_t tb_ovl, uint64_t tb_load, uint64_t cycles, uint64_t sleep_us, int phase)
+{
+	uint64_t ms = spukit_tick_hz() / 1000u;
+	int g = tb_ovl < ms / 10 ? 0 : tb_ovl < ms ? 1 : tb_ovl < 3 * ms ? 2 : 3;
+	/* Por solape, solo los campos sin carga de mentira: así una corrida con
+	 * carga-hilo1 da las dos mediciones. */
+	struct ovl_group *o[2] = { tb_load || phase > 0 ? NULL : &h1.by_ovl[g], NULL };
+	if (phase >= 0)
+		o[1] = &h1.by_load[phase];
+	for (int i = 0; i < 2; i++) {
+		if (!o[i])
+			continue;
+		o[i]->fields++;
+		o[i]->tb_emu += tb_emu;
+		o[i]->tb_ovl += tb_ovl;
+		o[i]->tb_load += tb_load;
+		o[i]->cycles += cycles;
+		o[i]->sleep_us += sleep_us;
+	}
+}
+
+/* «n campos: x ms de emulación, y ns por ciclo, solape z ms» de un grupo
+ * (diferencia con la ventana anterior). */
+static int ovl_text(char *out, size_t n, const struct ovl_group *a, const struct ovl_group *b, bool load)
+{
+	uint64_t f = a->fields - b->fields, cyc = a->cycles - b->cycles;
+	double k = 1e3 / spukit_tick_hz();  /* ticks → ms */
+	if (!f)
+		return snprintf(out, n, "0");
+	double emu = (a->tb_emu - b->tb_emu) * k, sleep = (a->sleep_us - b->sleep_us) / 1e3;
+	int w = snprintf(out, n, "%llu (%.2f ms, %.2f ns/ciclo, solape %.2f ms", (unsigned long long)f, emu / f,
+			 cyc ? (emu - sleep) * 1e6 / cyc : 0.0, (a->tb_ovl - b->tb_ovl) * k / f);
+	if (w > 0 && (size_t)w < n)
+		w += snprintf(out + w, n - w, load ? ", carga %.2f ms)" : ")", (a->tb_load - b->tb_load) * k / f);
+	return w;
+}
 
 /* Petición de presentación a emulación: empezar la medición A/B de vitest. */
 static volatile int bench_request;
@@ -1219,12 +1390,14 @@ static void log_unknown_gbi(void)
 }
 
 /* Fondos prerrenderizados (Zelda OoT): las tareas JPEG de una sala llegan
- * en tanda al cargarla (la HLE corre en el PPE, en el hilo del CPU); al
- * terminar la tanda (un campo sin tareas nuevas), al log cuántas y cuánto
- * tardaron. */
+ * en tanda al cargarla (la HLE corre en un SPE o, con JPEG_PPE_PATH, en el
+ * hilo de emulación); al terminar la tanda (un campo sin tareas nuevas), al
+ * log cuántas, cuánto tardaron y el tirón: los campos de la tanda y el más
+ * lento de emulación (sin la espera del ritmo). */
 static struct {
-	uint32_t seen, tasks, mb;
-	uint64_t us;
+	uint32_t seen, tasks, mb, field0, fields;
+	uint64_t us, us_max, spu_ticks, sleep_us, wait_us;
+	uint32_t polls, waits, on_ppe;
 } jpeg_log;
 
 static uint64_t clock_us(void)
@@ -1232,18 +1405,46 @@ static uint64_t clock_us(void)
 	return (uint64_t)sysGetSystemTime();
 }
 
-static void log_jpeg(void)
+static void log_jpeg(uint64_t us_field)
 {
 	const struct salsa64_rsp_stats *st = &n64.bus.rsp.stats;
+	const struct salsa64_jpeg_spu *js = &jpeg_spu;
 	if (st->jpeg < jpeg_log.tasks)
 		memset(&jpeg_log, 0, sizeof jpeg_log);  /* otro juego */
-	if (st->jpeg == jpeg_log.seen && st->jpeg != jpeg_log.tasks) {
-		salsa64_log("JPEG: %u tareas, %u macrobloques en %.2f ms del PPE (fondo prerrenderizado); %u con "
-			    "parámetros malos en total", st->jpeg - jpeg_log.tasks, st->jpeg_mb - jpeg_log.mb,
-			    (st->jpeg_us - jpeg_log.us) / 1e3, st->jpeg_bad);
+	if (st->jpeg != jpeg_log.seen) {
+		/* Un campo de la tanda. */
+		if (!jpeg_log.fields++)
+			jpeg_log.field0 = n64.bus.vi.fields;
+		if (us_field > jpeg_log.us_max)
+			jpeg_log.us_max = us_field;
+	} else if (st->jpeg != jpeg_log.tasks) {
+		uint32_t tasks = st->jpeg - jpeg_log.tasks;
+		if (jpeg_on_spu)
+			salsa64_log("JPEG: %u tareas, %u macrobloques en el SPE: %.2f ms (la más larga %.3f ms), %u devueltas al "
+				    "PPE; hilo de emulación %.2f ms (%u esperas de %.2f ms, %u sondeos, %.1f ms dormido); "
+				    "campos %u–%u, el más lento %.1f ms de emulación; %u con parámetros malos en total",
+				    tasks, st->jpeg_mb - jpeg_log.mb, (js->spu_ticks - jpeg_log.spu_ticks) * 1e3 / spukit_tick_hz(),
+				    js->spu_max * 1e3 / spukit_tick_hz(), js->on_ppe - jpeg_log.on_ppe,
+				    (st->jpeg_us - jpeg_log.us) / 1e3, js->waits - jpeg_log.waits,
+				    (js->wait_us - jpeg_log.wait_us) / 1e3, js->polls - jpeg_log.polls,
+				    (js->sleep_us - jpeg_log.sleep_us) / 1e3, jpeg_log.field0,
+				    jpeg_log.field0 + jpeg_log.fields - 1, jpeg_log.us_max / 1e3, st->jpeg_bad);
+		else
+			salsa64_log("JPEG: %u tareas, %u macrobloques en %.2f ms del PPE (hilo de emulación); campos %u–%u, el "
+				    "más lento %.1f ms de emulación; %u con parámetros malos en total",
+				    tasks, st->jpeg_mb - jpeg_log.mb, (st->jpeg_us - jpeg_log.us) / 1e3, jpeg_log.field0,
+				    jpeg_log.field0 + jpeg_log.fields - 1, jpeg_log.us_max / 1e3, st->jpeg_bad);
 		jpeg_log.tasks = st->jpeg;
 		jpeg_log.mb = st->jpeg_mb;
 		jpeg_log.us = st->jpeg_us;
+		jpeg_log.spu_ticks = js->spu_ticks;
+		jpeg_log.sleep_us = js->sleep_us;
+		jpeg_log.wait_us = js->wait_us;
+		jpeg_log.polls = js->polls;
+		jpeg_log.waits = js->waits;
+		jpeg_log.on_ppe = js->on_ppe;
+		jpeg_log.fields = 0;
+		jpeg_log.us_max = 0;
 	}
 	jpeg_log.seen = st->jpeg;
 }
@@ -1305,12 +1506,19 @@ static void emu_thread(void *arg)
 		beat.emu_at = "mandos";
 		pads_apply();  /* después de la espera: lo más reciente de los mandos */
 		beat.emu_at = "campo";
+		uint64_t c0 = n64.cpu.cycles, i0 = n64.cpu.idle_cycles, s0 = gfx_spu.sleep_us + jpeg_spu.sleep_us;
+		uint64_t tb0 = tb_now(), o0 = busy_at(&h1.busy, tb0), l0 = busy_at(&h1.load_clock, tb0);
+		uint32_t ph0 = h1.load_phase;
 		uint64_t cycles = salsa64_n64_run_field(&n64);
+		uint64_t tb1 = tb_now();
+		ovl_note(tb1 - tb0, busy_at(&h1.busy, tb1) - o0, busy_at(&h1.load_clock, tb1) - l0,
+			 (n64.cpu.cycles - c0) - (n64.cpu.idle_cycles - i0), gfx_spu.sleep_us + jpeg_spu.sleep_us - s0,
+			 h1.load && h1.load_phase == ph0 ? (int)ph0 : -1);
 		uint64_t t1 = sysGetSystemTime();
 		beat.emu_at = "fin del campo";
 		pif_edges_note();
 		log_unknown_gbi();
-		log_jpeg();
+		log_jpeg(t1 - t0);
 		if (paced)
 			pacer_advance(&pacer, cycles);
 		savefile_stage(&save_file, t1);
@@ -1389,10 +1597,30 @@ static void flip_wait_note(uint64_t t0, const char *where)
 
 static void frame_begin(const char *where)
 {
-	uint64_t t0 = sysGetSystemTime();
+	uint64_t t0 = sysGetSystemTime(), tb0 = tb_now();
 	beat.pres_at = where;
+	busy_stop(&h1.busy, tb0);
 	rsxkit_frame_begin(0x000000);
+	uint64_t tb1 = tb_now();
+	busy_start(&h1.busy, tb1);
+	h1.t_flip += tb1 - tb0;
 	flip_wait_note(t0, where);
+}
+
+/* salsa64_rdp_flush con su tiempo y lo de rdp.tb que cae dentro. */
+static uint32_t h1_flush(uint32_t upto)
+{
+	struct salsa64_rdp_tb a, b;
+	salsa64_rdp_get_tb(&a);
+	uint64_t t0 = tb_now();
+	uint32_t n = salsa64_rdp_flush(upto);
+	h1.t_flush += tb_now() - t0;
+	salsa64_rdp_get_tb(&b);
+	h1.in_flush.translate += b.translate - a.translate;
+	h1.in_flush.copy += b.copy - a.copy;
+	h1.in_flush.tex += b.tex - a.tex;
+	h1.in_flush.fence += b.fence - a.fence;
+	return n;
 }
 
 static void frame_end(const char *where)
@@ -1429,7 +1657,7 @@ static void present_overlay(uint64_t now)
 /* Presenta (o salta) un campo encolado. */
 static void present_field(const struct field_msg *m, uint64_t now)
 {
-	salsa64_rdp_flush(m->tasks);  /* las tareas de este campo, no las del siguiente */
+	h1_flush(m->tasks);  /* las tareas de este campo, no las del siguiente */
 	if (m->f.width && m->f.origin != pres.last_origin) {
 		pres.last_origin = m->f.origin;
 		pres.game_frames++;
@@ -1619,7 +1847,9 @@ static void drain(uint64_t now, int present)
 		lwsync();  /* el mensaje, después de ver head */
 		struct field_msg m = field_q[field_tail % FIELD_QUEUE];
 		if (present) {
+			uint64_t t0 = tb_now(), flush0 = h1.t_flush, flip0 = h1.t_flip;
 			present_field(&m, now);
+			h1.t_present += tb_now() - t0 - (h1.t_flush - flush0) - (h1.t_flip - flip0);
 		} else if (m.snap >= 0) {
 			snap_cas(m.snap, SNAP_QUEUED, SNAP_FREE);
 		}
@@ -1627,7 +1857,7 @@ static void drain(uint64_t now, int present)
 		field_tail++;
 	}
 	/* Al cerrar (sin presentar) se traduce todo: no queda nada en vuelo. */
-	salsa64_rdp_flush(present ? tasks_visible : ~0u);
+	h1_flush(present ? tasks_visible : ~0u);
 }
 
 /* Estadísticas de los dos hilos, cada STATS_US: lo visto en la ventana
@@ -1641,7 +1871,53 @@ static struct {
 	uint64_t gfx_ticks0, gfx_wait0, gfx_sleep0, gfx_vtx0, gfx_state0, gfx_tex0, gfx_load0;
 	uint32_t lle_tasks0, lle_jobs0, lle_polls0;
 	uint64_t lle_instr0, lle_ticks0, lle_wait0, lle_sleep0;
+	uint64_t h1_busy0;
+	struct salsa64_rdp_tb rdp_tb0;
+	struct ovl_group ovl0[OVL_GROUPS], load0[LOAD_PHASES];
 } sw;
+
+/* Las ventanas del hilo 1 empiezan aquí. */
+static void h1_window_reset(void)
+{
+	sw.h1_busy0 = busy_at(&h1.busy, tb_now());
+	salsa64_rdp_get_tb(&sw.rdp_tb0);
+	memcpy(sw.ovl0, h1.by_ovl, sizeof sw.ovl0);
+	memcpy(sw.load0, h1.by_load, sizeof sw.load0);
+	h1.t_flip = h1.t_flush = h1.t_present = h1.t_load = 0;
+	memset(&h1.in_flush, 0, sizeof h1.in_flush);
+}
+
+/* Lo que trabajó presentación en la ventana y cómo se solapó con la
+ * emulación (ver «Cuánto le quita el hilo de presentación»). */
+static void h1_stats(uint32_t fields, uint64_t dt_us)
+{
+	double k = 1e3 / spukit_tick_hz() / (fields ? fields : 1);  /* ticks → ms por campo emulado */
+	uint64_t busy = busy_at(&h1.busy, tb_now()) - sw.h1_busy0;
+	struct salsa64_rdp_tb tb;
+	salsa64_rdp_get_tb(&tb);
+	uint64_t copy = tb.copy - sw.rdp_tb0.copy, tex = tb.tex - sw.rdp_tb0.tex, fence = tb.fence - sw.rdp_tb0.fence;
+	int64_t translate = (int64_t)(h1.t_flush - h1.in_flush.copy - h1.in_flush.tex - h1.in_flush.fence);
+	int64_t present = (int64_t)(h1.t_present - (copy - h1.in_flush.copy) - (tex - h1.in_flush.tex) -
+				    (fence - h1.in_flush.fence));
+	int64_t other = (int64_t)(busy - h1.t_flush - h1.t_present - h1.t_load);
+	salsa64_log("hilo 1: despierto %.2f ms por campo emulado (%.1f %% del tiempo): traducción %.2f, copias a la "
+		    "RDRAM %.2f, texturas en el PPE %.2f, presentar %.2f, carga de mentira %.2f, otros %.2f; dentro, "
+		    "dormido esperando barreras del RSX %.2f; flip anterior %.2f (dormido)",
+		    busy * k, dt_us ? busy * 1e8 / spukit_tick_hz() / dt_us : 0.0, translate * k, copy * k, tex * k,
+		    present * k, h1.t_load * k, other * k, fence * k, h1.t_flip * k);
+	char g[OVL_GROUPS][128];
+	for (int i = 0; i < OVL_GROUPS; i++)
+		ovl_text(g[i], sizeof g[i], &h1.by_ovl[i], &sw.ovl0[i], false);
+	salsa64_log("hilo 1 sobre la emulación, campos por solape: < 0,1 ms %s; 0,1–1 ms %s; 1–3 ms %s; ≥ 3 ms %s", g[0],
+		    g[1], g[2], g[3]);
+	if (h1.load) {
+		for (int i = 0; i < LOAD_PHASES; i++)
+			ovl_text(g[i], sizeof g[i], &h1.by_load[i], &sw.load0[i], true);
+		salsa64_log("carga-hilo1 por fase: 0 µs %s; %u µs %s; %u µs %s", g[0], h1.load_us[1], g[1], h1.load_us[2],
+			    g[2]);
+	}
+	h1_window_reset();
+}
 
 static void stats(uint64_t now)
 {
@@ -1649,6 +1925,7 @@ static void stats(uint64_t now)
 
 	if (!sw.t_stats) {
 		sw.t_stats = now;
+		h1_window_reset();
 		salsa64_rdp_get_stats(&sw.rdp0);
 		pad_poll.polls = 0;
 		pad_poll.max_gap_us = 0;
@@ -1674,6 +1951,7 @@ static void stats(uint64_t now)
 		    pres.presented ? pres.us_present / 1000.0 / pres.presented : 0.0,
 		    pres.presented ? pres.us_flip / 1000.0 / pres.presented : 0.0, pres.skipped,
 		    emu_stats.dropped, pres.blank, pres.rsx_frames);
+	h1_stats(fields, dt);
 	/* Tareas gráficas: tiempo de la HLE (en el SPE), espera del PPE,
 	 * traducción a comandos del RSX y esperas por un juego de búferes. */
 	struct salsa64_rdp_stats rs;
@@ -2016,6 +2294,9 @@ static void game_reset(void)
 	memset(&bench, 0, sizeof bench);
 	memset(&gwin, 0, sizeof gwin);
 	memset(&sw, 0, sizeof sw);
+	memset(h1.by_ovl, 0, sizeof h1.by_ovl);
+	memset(h1.by_load, 0, sizeof h1.by_load);
+	load_config();
 	cap_every = exit_field = 0;
 	isv_len = 0;
 	unknown_gbi_next = 1;
@@ -2063,6 +2344,12 @@ static void game_close(void)
 	salsa64_log("cierre: audio cerrado (%u tareas de audio)", n64.bus.rsp.stats.audio);
 	salsa64_rsp_set_gfx(&n64.bus, NULL);  /* espera la tarea en vuelo */
 	salsa64_log("cierre: HLE gráfica suelta (%u tareas gráficas)", n64.bus.rsp.stats.gfx);
+	if (jpeg_on_spu) {
+		salsa64_rsp_set_jpeg(&n64.bus, NULL);
+		salsa64_log("cierre: SPE de la tarea JPEG detenido (%u tareas, %u macrobloques, %u en el PPE; salida %d)",
+			    jpeg_spu.tasks, jpeg_spu.macroblocks, jpeg_spu.on_ppe, salsa64_jpeg_spu_shutdown(&jpeg_spu));
+		jpeg_on_spu = 0;
+	}
 	if (lle_mode != SALSA64_LLE_OFF) {
 		salsa64_rsp_set_lle(&n64.bus, NULL, SALSA64_LLE_OFF);
 		salsa64_rsp_set_dpc(&n64.bus, NULL);
@@ -2089,8 +2376,8 @@ static void game_close(void)
 	for (int i = 0; i < SNAP_SLOTS; i++)
 		snaps += snap_state[i] != SNAP_FREE;
 	uint32_t queued = field_head - field_tail;
-	bool spes = gfx_spu.worker || rsp_spu.worker;
-	bool hooks = n64.bus.rsp.gfx || n64.bus.rsp.audio || n64.bus.rsp.lle || n64.bus.rsp.busy;
+	bool spes = gfx_spu.worker || rsp_spu.worker || jpeg_spu.worker;
+	bool hooks = n64.bus.rsp.gfx || n64.bus.rsp.audio || n64.bus.rsp.lle || n64.bus.rsp.jpeg_be || n64.bus.rsp.busy;
 	bool clean = emu_done && !queued && !snaps && !untranslated && !spes && !hooks;
 	salsa64_log("cierre: %s (hilo de emulación %s, %u campos en cola, %d ranuras del VI ocupadas, %u tareas "
 		    "sin traducir, destinos del RSX liberados, SPEs de la HLE %s, RSP %s)",
@@ -2150,6 +2437,23 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	n64.bus.rsp.clock_us = clock_us;
 	/* audio_out: inicio (HLE en el SPE 1, sumidero del AI, puerto de audio). */
 	audio_out_init(&n64);
+	/* Tarea JPEG (fondos prerrenderizados de Zelda OoT) en otro SPE, salvo
+	 * que se pida el PPE o que el SPE no dé lo mismo que el PPE. */
+	jpeg_on_spu = 0;
+	if (!file_exists(JPEG_PPE_PATH)) {
+		bool same;
+		spukit_init(6);
+		if ((rc = salsa64_jpeg_spu_init(&jpeg_spu, &n64.bus, &same)) != 0) {
+			salsa64_log("JPEG: no arrancó el SPE (%d)", rc);
+		} else if (!same) {
+			salsa64_jpeg_spu_shutdown(&jpeg_spu);
+		} else {
+			salsa64_rsp_set_jpeg(&n64.bus, &jpeg_spu.backend);
+			jpeg_on_spu = 1;
+		}
+	}
+	salsa64_log("JPEG: tareas en %s", jpeg_on_spu ? "un SPE"
+						      : file_exists(JPEG_PPE_PATH) ? "el PPE (" JPEG_PPE_PATH ")" : "el PPE");
 	/* RSP a bajo nivel en otro SPE. */
 	lle_mode = lle_config();
 	if (lle_mode != SALSA64_LLE_OFF) {
@@ -2313,7 +2617,9 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	while (running) {
 		beat.pres++;
 		beat.pres_at = "espera";
+		busy_stop(&h1.busy, tb_now());
 		sysSemWait(wake_sem, WAKE_US);
+		busy_start(&h1.busy, tb_now());
 		beat.pres_at = "sysutil";
 		sysUtilCheckCallback();
 		beat.pres_at = "mandos";
@@ -2335,6 +2641,16 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		if (!overlay) {
 			beat.pres_at = "cola";
 			drain(now, 1);
+			if (h1.load) {
+				uint64_t t = tb_now();
+				if (t >= h1.load_next) {
+					h1.load_phase = (h1.load_phase + 1) % LOAD_PHASES;
+					h1.load_next = t + spukit_tick_hz() / 2;
+				}
+				uint32_t us = h1.load_us[h1.load_phase] * (pres.frames_total - shown);
+				if (us)
+					h1_load_run(us);
+			}
 			if (state_parked && state_req) {
 				beat.pres_at = "barrera";
 				state_barrier();

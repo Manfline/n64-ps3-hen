@@ -31,6 +31,7 @@
 
 #define GFX_CYCLES_DEFAULT   30000u  /* ~0,32 ms de la N64 */
 #define AUDIO_CYCLES_DEFAULT 8000u
+#define JPEG_CYCLES_DEFAULT  8000u   /* con backend: primer sondeo (~85 µs de la N64) */
 #define DP_CYCLES_DEFAULT    10000u
 #define POLL_CYCLES_DEFAULT  10000u  /* ~0,11 ms de la N64 entre sondeos */
 
@@ -58,7 +59,22 @@ static bool task_done(struct salsa64_bus *bus, bool idle)
 		return rsp->audio->done(rsp->audio->ctx, idle);
 	if (rsp->busy == SALSA64_TASK_LLE && rsp->lle && rsp->lle->done)
 		return rsp->lle->done(rsp->lle->ctx, idle);
+	if (rsp->busy == SALSA64_TASK_JPEG && rsp->jpeg_be)
+		return rsp->jpeg_be->done(rsp->jpeg_be->ctx, idle);
 	return true;
+}
+
+/* Recoge la tarea JPEG del backend (espera si hace falta) con sus
+ * estadísticas; el tiempo es el del hilo del CPU, no el del backend. */
+static void jpeg_collect(struct salsa64_rsp *rsp)
+{
+	struct salsa64_jpeg_result r;
+	uint64_t t0 = rsp->clock_us ? rsp->clock_us() : 0;
+	rsp->jpeg_be->finish(rsp->jpeg_be->ctx, &r);
+	if (rsp->clock_us)
+		rsp->stats.jpeg_us += rsp->clock_us() - t0;
+	rsp->stats.jpeg_mb += r.macroblocks;
+	rsp->stats.jpeg_bad += r.bad;
 }
 
 static void dp_sync_at(struct salsa64_bus *bus, uint64_t now);
@@ -97,6 +113,8 @@ static void task_event(void *ctx, uint64_t when)
 		flags = rsp->gfx->finish(rsp->gfx->ctx);
 	else if (rsp->busy == SALSA64_TASK_AUDIO && rsp->audio)
 		rsp->audio->finish(rsp->audio->ctx, bus);
+	else if (rsp->busy == SALSA64_TASK_JPEG && rsp->jpeg_be)
+		jpeg_collect(rsp);
 finished:
 	rsp->busy = 0;
 	rsp_break(bus, SALSA64_SP_STATUS_TASKDONE);
@@ -167,6 +185,8 @@ bool salsa64_rsp_quiesce(struct salsa64_bus *bus)
 		flags = rsp->gfx->finish(rsp->gfx->ctx);
 	else if (rsp->busy == SALSA64_TASK_AUDIO && rsp->audio)
 		rsp->audio->finish(rsp->audio->ctx, bus);
+	else if (rsp->busy == SALSA64_TASK_JPEG && rsp->jpeg_be)
+		jpeg_collect(rsp);
 	rsp->collected = true;
 	rsp->collected_flags = flags;
 	return true;
@@ -192,12 +212,19 @@ void salsa64_rsp_set_dpc(struct salsa64_bus *bus, const struct salsa64_dpc_backe
 	bus->rsp.dpc = dpc;
 }
 
+void salsa64_rsp_set_jpeg(struct salsa64_bus *bus, const struct salsa64_jpeg_backend *jpeg)
+{
+	salsa64_rsp_reset(bus);
+	bus->rsp.jpeg_be = jpeg;
+}
+
 void salsa64_rsp_init(struct salsa64_bus *bus, struct salsa64_sched *sched)
 {
 	struct salsa64_rsp *rsp = &bus->rsp;
 	rsp->sched = sched;
 	rsp->gfx_cycles = GFX_CYCLES_DEFAULT;
 	rsp->audio_cycles = AUDIO_CYCLES_DEFAULT;
+	rsp->jpeg_cycles = JPEG_CYCLES_DEFAULT;
 	rsp->dp_cycles = DP_CYCLES_DEFAULT;
 	rsp->poll_cycles = POLL_CYCLES_DEFAULT;
 	salsa64_sched_handler(sched, SALSA64_EV_SP_TASK, task_event, bus);
@@ -217,6 +244,8 @@ void salsa64_rsp_reset(struct salsa64_bus *bus)
 		rsp->audio->finish(rsp->audio->ctx, bus);
 	else if (rsp->busy == SALSA64_TASK_LLE && rsp->lle)
 		rsp->lle->finish(rsp->lle->ctx);
+	else if (rsp->busy == SALSA64_TASK_JPEG && rsp->jpeg_be)
+		jpeg_collect(rsp);
 	rsp->busy = 0;
 	rsp->collected = false;
 	rsp->collected_flags = 0;
@@ -455,9 +484,21 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 			rsp->audio->start(rsp->audio->ctx, &task, rsp->abi);
 		salsa64_sched_set(rsp->sched, SALSA64_EV_SP_TASK, now + rsp->audio_cycles);
 		return;
+	} else if (jpeg != SALSA64_JPEG_NONE && rsp->jpeg_be && rsp->sched) {
+		/* JPEG en otro procesador (en la PS3, un SPE): termina por sondeo,
+		 * como una gráfica, y el CPU sigue mientras tanto. */
+		rsp->stats.jpeg++;
+		rsp->busy = SALSA64_TASK_JPEG;
+		uint64_t t0 = rsp->clock_us ? rsp->clock_us() : 0;
+		rsp->jpeg_be->start(rsp->jpeg_be->ctx, &task, jpeg);
+		if (rsp->clock_us)
+			rsp->stats.jpeg_us += rsp->clock_us() - t0;
+		salsa64_sched_set(rsp->sched, SALSA64_EV_SP_TASK, now + rsp->jpeg_cycles);
+		return;
 	} else if (jpeg != SALSA64_JPEG_NONE) {
-		/* JPEG (fondos prerrenderizados de Zelda OoT): pocas y una vez por
-		 * sala; se hace aquí mismo y la tarea termina abajo. */
+		/* JPEG (fondos prerrenderizados de Zelda OoT) en el hilo del CPU:
+		 * pocas y una vez por sala; se hace aquí mismo y la tarea termina
+		 * abajo. */
 		struct salsa64_jpeg_result r;
 		uint64_t t0 = rsp->clock_us ? rsp->clock_us() : 0;
 		salsa64_jpeg_run(jpeg, bus->rdram, bus->rdram_size, task.data_ptr, &r);

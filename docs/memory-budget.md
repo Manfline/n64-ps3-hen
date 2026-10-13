@@ -28,6 +28,8 @@ en PS3 real.
 | Estados guardados | 0,4 | | `src/frontend/states.c`: búfer de paso de 256 KB (cabecera y secciones chicas, que con la FlashRAM de 128 KB y la miniatura llegan a ~200 KB; antes del 2026-10-11, 128 KB; la RDRAM va directo de y hacia su búfer, sin copia) y miniatura de 160 × 120 × 2 (37,5 KB), estáticos; imagen de gfx_state del SPE para el estado de la HLE gráfica (48 KB, `gfx_spu.c`: el SPE copia ahí el tramo del RDP) y búfer de paso del de audio (11,75 KB, `audio_spu.c`). docs/estados.md |
 | Código, pila, heap de newlib | 16 | | |
 | Bloques de control de spukit | 0,01 | 0,01 | ~2,3 KB por trabajador |
+| Tarea JPEG en el SPE | 0,03 | 0,03 | `src/platform/ps3/jpeg_spu.c`: prueba del arranque (SPE contra PPE) 2 × 12 KB, estáticos. La RDRAM la lee y escribe el SPE por DMA, sin copia |
+| Carga de mentira del hilo 1 (diagnóstico) | 0,5 | 0,5 | `main.c`: 512 KB estáticos que recorre `carga-hilo1` (docs/hilos-ppe.md); sin la bandera no se tocan |
 | **Total previsto** | **162,5** | | con una ROM de 64 MB (150 de la Fase 2 con la caché de texturas de 8 MB + 6,8 del estado del recompilador + 4,7 de los dos hilos + 0,4 de los estados guardados + 0,3 que agregó la FlashRAM al guardado del cartucho) |
 
 ## Memoria local del RSX (GDDR3)
@@ -65,6 +67,7 @@ La escala elegida (`salsa64_rdp_init`, 0 = automática, 1–5) es un **objetivo 
 | `spu-compute/spu/mix.c` | 2,6 KB | 0,8 KB + 64 KB | ~69 KB | `spu-size` en el build |
 | `spu-jobs/spu/scale.c` | 3,6 KB | 0,8 KB + 65 KB | ~70 KB | `spu-size` |
 | `src/spu/audio` (HLE de las listas de audio, SPE 1) | 45 KB | 0,8 KB + 33,6 KB | ~80 KB (+ pila ~176 KB) | `spu-size` (2026-10-11): aud_state 11,7 KB (DMEM 4 KB + margen 4 KB, estado de ABI1, nead y naudio, MP3 2 KB), lecturas y escrituras 2 × 4 KB, bloque de la lista 1 KB, paso del estado guardado 11,75 KB |
+| `src/spu/jpeg` (tarea JPEG de Zelda OoT, un SPE libre) | 11,7 KB | 0,8 KB + 6 KB | ~18,5 KB (+ pila ~237 KB) | `spu-size` (2026-10-12, en 4 carriles): macrobloques 2 × 768 + 2 × 512 (doble búfer), estructura de la tarea y 3 tablas de cuantización (< 1 KB), tablas preparadas 0,75 KB, constantes de la IDCT 1,3 KB; un macrobloque usa ~2 KB de pila |
 | `src/spu/gfx` (HLE de F3DEX2 + RDP, SPE 0) | 100,2 KB | 0,8 KB + 143,3 KB | ~244 KB (+ pila ~11,7 KB) | `spu-size` (2026-10-11, con la decodificación de 4 en 4 texels y el recorte de los TEXRECT de Perfect Dark, +1,3 KB de código): gfx_state 46,4 KB medido con `sizeof` en el SPE (de ellos el directorio de la caché de texturas 32 KB y 64 texturas del arena de la tarea, 3 KB; eran 128 y 49,4 KB), texturas 2 × 32 KB, vértices 2 × 8 KB, comandos 2 × 4 KB, display list 2 × 1 KB, lecturas 5,8 KB. Los estados guardados agregan 0,2 KB de código: el SPE copia tal cual el tramo del estado del RDP y el PPE arma el formato. La cadena más honda de la pila (fondo S2DEX → TEXRECT → estado → combiner) usa 8,4 KB según `-fstack-usage` y el grafo de llamadas del binario: quedan ~3,3 KB (antes de achicar el arena, ~1,4 KB) |
 
 ## Disco (HDD de la PS3)

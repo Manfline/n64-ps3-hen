@@ -322,6 +322,51 @@ después de `salsa64_n64_run_field`.
 
 Registrado en docs/memory-budget.md.
 
+## Cuánto le quita el hilo de presentación a la emulación
+
+Medición siempre encendida (2026-10-12; solo lee contadores, con `mftb`,
+79,8 MHz). Presentación lleva un reloj de cuánto está **despierta**: deja de
+contar en el semáforo (`sysSemWait`) y mientras espera el flip anterior
+(`frame_begin`); todo lo demás es trabajo que comparte el núcleo con la
+emulación. Cada 5 s, al log:
+
+- `hilo 1: despierto X ms por campo emulado (Y % del tiempo): traducción,
+  copias a la RDRAM, texturas en el PPE, presentar, carga de mentira, otros;
+  dentro, dormido esperando barreras del RSX; flip anterior (dormido)`.
+  Traducción es `salsa64_rdp_flush` sin lo que cae dentro de las otras
+  columnas; copias son las conversiones del PPE hacia la RDRAM (copias que
+  la emulación espera, espejos, cebado de destinos, VISCVG; `rdp.tb` en
+  `src/rdp/rdp.c`); presentar es dibujar el destino o la copia del VI, el
+  texto encima y las capturas; otros, mandos, sysutil, guardado y log. Las
+  esperas a una barrera del RSX dentro de la traducción duermen
+  (`sysUsleep`) pero para el reloj cuentan como despierto.
+- `hilo 1 sobre la emulación, campos por solape`: la emulación lee el reloj
+  de presentación al empezar y al terminar `salsa64_n64_run_field` y agrupa
+  cada campo por cuánto se solaparon (< 0,1 ms, 0,1–1, 1–3, ≥ 3 ms). Por
+  grupo: campos, ms de emulación por campo, **ns por ciclo emulado fuera de
+  los bucles de espera** (descontado lo dormido en los sondeos del SPE) y
+  el solape medio. Los ns por ciclo no dependen de cuánto trabajo trae el
+  campo; si suben con el solape, es lo que cuesta compartir el núcleo
+  (unidades de ejecución, L1 y L2 de 512 KB). La correlación natural está
+  sesgada (las escenas pesadas traen más tareas que traducir), por eso
+  además:
+- **A/B en la misma corrida** con `SALSA64_DATA_DIR/carga-hilo1` («A B [KB]»,
+  por omisión 1000 3000 512): presentación hace trabajo de mentira por campo
+  presentado, leyendo y escribiendo una línea de caché por vuelta sobre KB
+  de memoria (como la traducción, que recorre la salida de la HLE y escribe
+  comandos del RSX; 512 KB es toda la L2), en fases de medio segundo de 0, A
+  y B µs. Línea `carga-hilo1 por fase: 0 µs …; A µs …; B µs …` con lo mismo
+  por grupo y la carga media que cayó dentro de cada campo (cada campo va a
+  la fase vigente al empezar y al terminar; los que cruzan un cambio se
+  descartan). Tres fases dicen si el costo crece en línea con la carga o
+  salta (la L2 compartida). La pendiente (ms de emulación perdidos por ms de
+  carga) por el trabajo real del hilo 1 da lo que hoy le cuesta a la
+  emulación. Los grupos por solape cuentan solo los campos de la fase 0, así
+  una corrida con la bandera da las dos cosas. Sin el archivo no hay carga:
+  solo los contadores. Es una bandera global (todas las apps la leen al
+  abrir cada juego, también desde el menú): renombrarla a `.off` al
+  terminar.
+
 ## Mediciones
 
 En docs/perf-log.md, «Dos hilos en el PPE»: vitest y Zelda en las mismas

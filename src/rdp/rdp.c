@@ -166,6 +166,7 @@ static struct {
 	unsigned last_set;           /* juego de búferes de la última tarea dibujada */
 	struct gfx_result last_res;
 	struct salsa64_rdp_stats stats;
+	struct salsa64_rdp_tb tb;
 	/* Efectos de framebuffer (docs/framebuffer.md). */
 	int fbfx;                    /* 0 apagado, 1 render a textura, 2 también copias */
 	uint8_t *rdram;              /* la RDRAM emulada (NULL: sin copias ni cebado) */
@@ -424,6 +425,7 @@ uint32_t salsa64_rdp_reset(void)
 	rdp.last_set = 0;
 	memset(&rdp.last_res, 0, sizeof rdp.last_res);
 	memset(&rdp.stats, 0, sizeof rdp.stats);
+	memset(&rdp.tb, 0, sizeof rdp.tb);
 	return pending;
 }
 
@@ -570,11 +572,28 @@ static rsxkit_rect surface_rect(int slot, uint32_t x, uint32_t y, uint32_t w, ui
 	return (rsxkit_rect){ (int32_t)r.x, (int32_t)r.y, r.w, r.h };
 }
 
+/* Reloj del hilo que traduce (timebase, 79,8 MHz): rdp.tb. */
+static inline uint64_t tb_now(void)
+{
+	uint64_t t;
+	__asm__ volatile("mftb %0" : "=r"(t));
+	return t;
+}
+
+/* Espera una barrera del RSX (duerme, rsxkit_fence_wait) y lo anota. */
+static void fence_wait(uint32_t fence)
+{
+	uint64_t t0 = tb_now();
+	rsxkit_fence_wait(fence);
+	rdp.tb.fence += tb_now() - t0;
+}
+
 /* Escribe en la RDRAM, como RGBA5551, `rows` filas de una copia RGB565 de
  * `lw` píxeles por fila con paso `pitch`. */
 static void to_rdram(const uint8_t *src, uint32_t pitch, uint32_t addr, uint32_t width, uint32_t lw, uint32_t rows,
 		     uint32_t bpp)
 {
+	uint64_t t0 = tb_now();
 	/* El RSX escribió el búfer a espaldas de la caché del PPE: soltar las
 	 * líneas que pudieran quedar de la lectura anterior. */
 	for (uint32_t off = 0; off < rows * pitch; off += 128)
@@ -592,13 +611,14 @@ static void to_rdram(const uint8_t *src, uint32_t pitch, uint32_t addr, uint32_t
 			rsxkit_pixels_565_to_5551((uint16_t *)(rdp.rdram + addr + y * width * 2), row, lw);
 		}
 	}
+	rdp.tb.copy += tb_now() - t0;
 }
 
 /* Copias espejo cuya barrera ya pasó: a la RDRAM y el búfer queda libre. */
 static void readbacks_finish(bool wait)
 {
 	struct mirror *f = &rdp.frame;
-	if (f->used && (wait ? (rsxkit_fence_wait(f->fence), true) : rsxkit_fence_done(f->fence))) {
+	if (f->used && (wait ? (fence_wait(f->fence), true) : rsxkit_fence_done(f->fence))) {
 		if (!dma_newer(f->addr, f->width * 2 * f->rows, f->task)) {
 			to_rdram(rdp.rb + FRAME_SLOT * RB_SLOT, RB_PITCH, f->addr, f->width, f->lw, f->rows, 2);
 			rdp.stats.frames_mirrored++;
@@ -607,7 +627,7 @@ static void readbacks_finish(bool wait)
 	}
 	for (int k = 0; k < RB_SLOTS; k++) {
 		struct mirror *m = &rdp.big[k];
-		if (m->used && (wait ? (rsxkit_fence_wait(m->fence), true) : rsxkit_fence_done(m->fence))) {
+		if (m->used && (wait ? (fence_wait(m->fence), true) : rsxkit_fence_done(m->fence))) {
 			uint32_t bpp = m->bpp ? m->bpp : 2;
 			if (!dma_newer(m->addr, m->width * bpp * m->rows, m->task)) {
 				to_rdram(rdp.rb + k * RB_SLOT, RB_PITCH, m->addr, m->width, m->lw, m->rows, bpp);
@@ -621,7 +641,7 @@ static void readbacks_finish(bool wait)
 		if (!m->used)
 			continue;
 		if (wait)
-			rsxkit_fence_wait(m->fence);
+			fence_wait(m->fence);
 		else if (!rsxkit_fence_done(m->fence))
 			continue;
 		uint32_t pitch = (m->lw * 2 + 63) & ~63u, bpp = m->bpp ? m->bpp : 2;
@@ -647,8 +667,10 @@ static void prime(int i)
 		return;
 	uint8_t *dst = rdp.rb + RB_SLOTS * RB_SLOT;
 	uint32_t pitch = (t->lw * 2 + 63) & ~63u;
+	uint64_t t0 = tb_now();
 	for (uint32_t y = 0; y < t->lh; y++)
 		memcpy(dst + y * pitch, rdp.rdram + t->addr + y * line, t->lw * 2);
+	rdp.tb.copy += tb_now() - t0;
 	if (rsxkit_target_fill(rdp.surf[i], rdp.rb_off + RB_SLOTS * RB_SLOT, pitch, t->lw, t->lh, RSXKIT_RGBA5551) ==
 	    RSXKIT_OK) {
 		rdp.bound_t = -1;  /* rsxkit_target_fill ligó la superficie sin profundidad */
@@ -974,12 +996,14 @@ static void viscvg(int cur, const struct gfx_draw *g)
 		y1 = t->lh;
 	if (x1 > t->width)
 		x1 = t->width;
+	uint64_t t0 = tb_now();
 	for (uint32_t y = y0; y < y1 && x1 > x0; y++) {
 		uint32_t a = t->addr + (y * t->width + x0) * 2;
 		if (a + (x1 - x0) * 2 > rdp.rdram_size)
 			break;
 		memset(rdp.rdram + a, 0xFF, (x1 - x0) * 2);
 	}
+	rdp.tb.copy += tb_now() - t0;
 }
 
 /* Una textura que la HLE dejó para leer de un destino (GFX_TEX_TARGET) y
@@ -996,8 +1020,10 @@ static bool texture_from_rdram(const struct gfx_tex *gt, struct set *s, rsxkit_t
 		     gt->height, gt->src_addr, gt->src_pitch);
 		return false;
 	}
+	uint64_t t0 = tb_now();
 	rdp_decode_rgba16(rdp.rdram, rdp.rdram_size, gt->src_addr, gt->src_pitch, gt->width, gt->height, s->tex + off,
 			  gt->pitch);
+	rdp.tb.tex += tb_now() - t0;
 	rdp.ppe_tex_off = off + size;
 	t->offset = s->tex_off + off;
 	rdp.stats.tex_ppe++;
@@ -1184,7 +1210,7 @@ static void frame_mirror(int slot, uint32_t rows, bool wait);
 /* Traduce la salida de la tarea n a comandos del RSX. */
 static void translate(uint32_t n)
 {
-	uint64_t t0 = sysGetSystemTime();
+	uint64_t t0 = sysGetSystemTime(), tb0 = tb_now();
 	struct set *s = &rdp.sets[n % SETS];
 	const struct gfx_result *res = &s->res;
 	rsxkit_vertices(s->vtx_off, RSXKIT_MEM_MAIN);
@@ -1372,7 +1398,7 @@ static void translate(uint32_t n)
 					buf = b;
 			if (buf < 0) {
 				if (nrb) {
-					rsxkit_fence_wait(rsxkit_fence());
+					fence_wait(rsxkit_fence());
 					for (uint32_t j = 0; j < nrb; j++) {
 						const struct rdp_target *tj = &rdp.tg.t[rb[j].slot];
 						if (dma_newer(tj->addr, tj->width * tj->bpp * rb[j].rows, n + 1))
@@ -1492,7 +1518,7 @@ static void translate(uint32_t n)
 			rdp.big[k].fence = s->fence;
 	if (nrb) {
 		uint64_t t1 = sysGetSystemTime();
-		rsxkit_fence_wait(s->fence);
+		fence_wait(s->fence);
 		for (uint32_t k = 0; k < nrb; k++) {
 			const struct rdp_target *t = &rdp.tg.t[rb[k].slot];
 			if (dma_newer(t->addr, t->width * t->bpp * rb[k].rows, n + 1))
@@ -1518,6 +1544,7 @@ static void translate(uint32_t n)
 	rdp.last_set = (unsigned)(s - rdp.sets);
 	rdp.stats.tasks++;
 	rdp.stats.us_translate += sysGetSystemTime() - t0;
+	rdp.tb.translate += tb_now() - tb0;
 }
 
 uint32_t salsa64_rdp_flush(uint32_t upto)
@@ -1562,7 +1589,7 @@ static void frame_mirror(int slot, uint32_t rows, bool wait)
 	const struct rdp_target *t = &rdp.tg.t[slot];
 	readbacks_finish(false);
 	if (wait && rdp.frame.used) {
-		rsxkit_fence_wait(rdp.frame.fence);
+		fence_wait(rdp.frame.fence);
 		readbacks_finish(false);
 	}
 	if (rdp.frame.used || !rdp.rdram || rdp.fbfx < 2 || !rdp.surf[slot] || t->bpp != 2 || t->lw > RB_MAX_W ||
@@ -1738,6 +1765,11 @@ bool salsa64_rdp_dump(const char *path)
 	free(tgt);
 	free(here);
 	return ok;
+}
+
+void salsa64_rdp_get_tb(struct salsa64_rdp_tb *out)
+{
+	*out = rdp.tb;
 }
 
 void salsa64_rdp_get_stats(struct salsa64_rdp_stats *out)
