@@ -95,6 +95,17 @@ Opciones:
 - **Densidad** (solo con «CRT máscara»): Normal, la del filtro original, o
   Fina, con los puntos de fósforo más chicos y más juntos. Se
   guarda en `menu.cfg` (`densidad = normal|fina`).
+- **Interpolación** (experimental): Apagado (por omisión) o Por geometría.
+  En un juego que dibuja 20 o 30 cuadros por segundo (Zelda OoT, 20), los
+  campos en que la tele repetiría el cuadro se dibujan con los objetos
+  entre ese cuadro y el anterior: se ve a 60, con 33 ms de retraso (el
+  cuadro de verdad llega dos campos después). Los vértices de cada cuadro se
+  emparejan con los del anterior (docs/interpolacion.md); lo que no se
+  empareja (un cambio de plano, algo que aparece) se queda donde está. Vale
+  al abrir el juego, por juego y en vivo desde «Imagen» del menú de pausa;
+  se guarda en `menu.cfg` (`interpolacion = no|geometria`). Cuesta más
+  trabajo del RSX (la escena se dibuja hasta tres veces por cuadro del
+  juego) y ~1,3 MB de memoria y una superficie más mientras está encendida.
 - **Resolución**: 720p (por omisión, render a 3×) o 1080p (render a 4×).
   Se guarda en video.cfg (así arranca la próxima vez) y se pone con
   «Aplicar ahora», sin cerrar Salsa64; el panel muestra la salida actual y,
@@ -201,7 +212,7 @@ trucos, un aviso lo dice.
 ### Ajustes por juego
 
 SELECT sobre una ROM abre sus ajustes: **Aspecto**, **Filtro**, **Recorte
-del borde** y **Escala interna**, cada uno «Global» (lo de Opciones) o un
+del borde**, **Escala interna** e **Interpolación**, cada uno «Global» (lo de Opciones) o un
 valor propio para ese juego (también se guardan desde «Imagen» en el menú de
 pausa). Se guardan en `/dev_hdd0/salsa64/juegos/<nombre de la ROM sin
 extensión>.cfg`:
@@ -212,6 +223,7 @@ filtro = lineas     # suave | nitido | lineas | lineas+ | crt-mascara | crt-rgb 
 recorte = apagado   # apagado | normal | amplio | global
 escala = 2          # auto | 1 … 5 | global
 densidad = fina     # normal | fina | global (la de «CRT máscara»)
+interpolacion = geometria  # no | geometria | global
 ```
 
 Al abrir el juego, el log dice «imagen: … (con ajustes de este juego)» y, si
@@ -300,7 +312,7 @@ usan):
 | Guardar estado / Cargar estado | En la ranura actual, como SELECT + R1 / L1 |
 | Ranura ◀ n ▶ | Cambia la ranura (cruceta izquierda/derecha o ×) |
 | Trucos | La lista de trucos del juego (si tiene) |
-| Imagen | Filtro, aspecto, recorte del borde y escala interna del juego en curso (abajo) |
+| Imagen | Filtro, aspecto, recorte del borde, escala interna e interpolación del juego en curso (abajo) |
 | Mostrar FPS | Enciende o apaga el contador de velocidad |
 | Volver al menú (con `embedded`, Salir al XMB) | Cierra el juego como siempre (guarda la partida, apaga el audio y los SPEs). Con «Confirmar al salir: Sí» pregunta antes: × sí, ○ sigue jugando |
 
@@ -311,8 +323,9 @@ juego, y el botón con que se cierran tampoco (el ○ no cuenta como B al
 volver; hay que soltarlo). Los atajos de SELECT siguen funcionando igual.
 
 **Imagen** abre un cuadro abajo a la izquierda, sin oscurecer el juego,
-con **Filtro**, **Aspecto**, **Recorte del borde** y **Escala interna**:
-cruceta izquierda/derecha (o ×) cambia el valor. El filtro, el aspecto y el
+con **Filtro**, **Aspecto**, **Recorte del borde**, **Escala interna** e
+**Interpolación**: cruceta izquierda/derecha (o ×) cambia el valor. La
+interpolación se nota al seguir jugando. El filtro, el aspecto y el
 recorte se ven al momento sobre el cuadro en pausa (el recorte de una imagen
 que el juego dibujó con el CPU, al seguir). La escala interna se pone al
 seguir jugando: cambiarla suelta las imágenes del juego en el RSX, que se
@@ -500,8 +513,8 @@ se crean por FTP.
 
 | Archivo | Formato | Qué hace |
 |---|---|---|
-| `menu.cfg` | Líneas `fondo = si\|no`, `fps = si\|no`, `confirmar = si\|no`, `aspecto = 4:3\|16:9`, `filtro = suave\|nitido\|lineas\|lineas+\|crt-mascara\|crt-rgb\|crt-svideo\|crt-compuesto` , `densidad = normal\|fina` e `idioma = es\|en\|fr\|de\|it\|pt` | Fondo animado del menú, contador de velocidad en el juego, si «Salir» del menú de pausa pregunta antes (sí sin la línea), aspecto, filtro e idioma. Lo escriben el menú (Opciones) y SELECT + △ |
-| `juegos/<ROM>.cfg` | `aspecto`, `filtro`, `recorte`, `escala`, `densidad` = valor o `global` | Ajustes de un juego (sección «Ajustes por juego»). Lo escriben el menú (SELECT sobre una ROM) y «Imagen» del menú de pausa |
+| `menu.cfg` | Líneas `fondo = si\|no`, `fps = si\|no`, `confirmar = si\|no`, `aspecto = 4:3\|16:9`, `filtro = suave\|nitido\|lineas\|lineas+\|crt-mascara\|crt-rgb\|crt-svideo\|crt-compuesto` , `densidad = normal\|fina`, `idioma = es\|en\|fr\|de\|it\|pt` e `interpolacion = no\|geometria` | Fondo animado del menú, contador de velocidad en el juego, si «Salir» del menú de pausa pregunta antes (sí sin la línea), aspecto, filtro, idioma e interpolación. Lo escriben el menú (Opciones) y SELECT + △ |
+| `juegos/<ROM>.cfg` | `aspecto`, `filtro`, `recorte`, `escala`, `densidad`, `interpolacion` = valor o `global` | Ajustes de un juego (sección «Ajustes por juego»). Lo escriben el menú (SELECT sobre una ROM) y «Imagen» del menú de pausa |
 | `descargas.cfg` | `activar = si` y direcciones | Enciende las descargas experimentales (sección «Descargas») |
 | `overscan.cfg` | Uno, dos o cuatro números: `8`, `8 6` o `izq der arr abajo` | Recorte de la imagen en píxeles de la N64 (a 320 × 240) por lado. Por omisión `8 6`; `0` lo apaga; máximo 64. Lo escribe el menú (`0`, `8 6` o `16 12`) |
 | `video.cfg` | `salida = 720` o `1080`; `escala = auto` o `1` a `5` | Salida de video y escala interna del render de la N64 (se leen al arrancar). Sin archivo: 720p y escala automática (3×, 960 × 720; a 1080p, 4×, 1280 × 960). Si la tele o el XMB no aceptan 1080, usa el siguiente modo. Acepta el formato viejo de una línea (`1080` o `720`). Lo escribe el menú con «Resolución» y «Escala interna» |
@@ -525,6 +538,7 @@ se crean por FTP.
 | `filtros-reducir` | `1` o `2` | La reducción de la escala interna de los CRT en una pasada o en dos (por omisión, dos); para comparar su costo |
 | `filtros-spe` | Basta con que exista | La señal y la decodificación de «CRT S-Video» y «CRT compuesto» en dos SPEs en lugar del RSX (experimental); con `filtros-ciclo`, cada vuelta las alterna entre los SPEs y el RSX (y la reducción queda en dos pasadas), para comparar en la misma corrida. Si un SPE falla, vuelven al RSX y el log lo dice |
 | `capturas-pantalla` | Basta con que exista | Con `capturas`: además guarda la pantalla entera como se ve, con el filtro (`pantalla-N.ppm`) |
+| `interp-prueba` | Vacío o un número entre 0 y 1 (por omisión 1) | Prueba de la interpolación: cada tarea gráfica se empareja con la anterior y se dibuja en esa fracción entre las dos (0: un cuadro atrás; 1: como siempre), sin campos intermedios y pase lo que pase con la opción; para aislar el emparejamiento de la presentación. El log de cada 5 s trae «gfx: interpolación» |
 | `filtro-ver` | El nombre de una tabla y una escala (`puntos 0.5`) | Diagnóstico de los filtros: dibuja esa tabla intermedia en la esquina de la pantalla (docs/filtros.md) |
 | `muestreo` | Basta con que exista | Muestreo por tiempo del recompilador: un hilo de baja prioridad mira cada 200 µs qué bloque corre el hilo de emulación (o si está en C: camino lento, intérprete, eventos…); cada 5 s el reparto al log y, al salir del juego, los 30 bloques con más tiempo con sus palabras de PPC (docs/rec-ppe.md, «Muestreo por tiempo»). Costo: dos palabras por entrada a bloque |
 

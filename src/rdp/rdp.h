@@ -81,6 +81,11 @@ struct salsa64_rdp_stats {
 	uint32_t interp_tasks, interp_cuts, interp_full;
 	uint32_t interp_vertices, interp_paired, interp_content;
 	uint64_t us_interp;
+	/* Campos intermedios dibujados y los que tocaban pero no se pudieron
+	 * (sin posiciones de antes, sin superficie o su juego ya en uso), y el
+	 * tiempo del PPE redibujando (presentación). */
+	uint32_t interp_fields, interp_skipped;
+	uint64_t us_interp_draw;
 };
 
 /* Después de rsxkit_init. scale = 0 (automática): la mayor escala entera
@@ -175,15 +180,21 @@ void salsa64_rdp_vi(uint32_t origin, uint32_t width);
  * vienen de un destino se leen de la RDRAM como antes y nada se copia), 1
  * solo render a textura, 2 también las copias a la RDRAM (por omisión). */
 void salsa64_rdp_fbfx(int level);
-/* Interpolación de cuadros por geometría (docs/interpolacion.md), en
- * preparación: con `on`, las tareas que se envían piden a la HLE la
+/* Interpolación de cuadros por geometría (docs/interpolacion.md). Con un
+ * modo distinto de OFF, las tareas que se envían piden a la HLE la
  * identidad de sus vértices (GFX_JOB_INTERP) y al traducir cada una el PPE
  * empareja sus vértices con los de la anterior (vmatch.c) y deja sus
- * posiciones de allá junto a los vértices; t < 1 (para probar) dibuja cada
- * tarea en prev + (pos − prev)·t. Apagada no cambia nada ni reserva memoria;
- * la primera vez que se enciende reserva las tablas (~1,3 MB). Fuera del
- * bucle; devuelve 0 o RSXKIT_ENOMEM. */
-int salsa64_rdp_interp(bool on, float t);
+ * posiciones de allá junto a los vértices. FIELDS: en los campos en que el
+ * VI repite un cuadro de 2 a 4 campos, se presenta esa tarea redibujada con
+ * las posiciones entre el cuadro anterior y ese (salsa64_rdp_present).
+ * FIXED (para probar): cada tarea se dibuja en prev + (pos − prev)·t, sin
+ * campos intermedios. Apagada no cambia nada ni reserva memoria; la primera
+ * vez que se enciende reserva las tablas (~1,3 MB) y, con FIELDS, la
+ * superficie de los intermedios se crea al primero (cuenta en el tope de
+ * memoria del RSX). Fuera del bucle o con la emulación en pausa; devuelve 0
+ * o RSXKIT_ENOMEM. */
+enum salsa64_interp { SALSA64_INTERP_OFF, SALSA64_INTERP_FIELDS, SALSA64_INTERP_FIXED };
+int salsa64_rdp_interp(int mode, float t);
 /* Hilo de emulación: un DMA escribió la RDRAM [pa, pa + len); con
  * `gfx_in_flight`, mientras corría una tarea gráfica. Las copias de esa
  * tarea y de las anteriores no pisan ese tramo (targets.h, rdp_dma_ring). */

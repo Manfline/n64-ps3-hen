@@ -221,10 +221,10 @@ SYS_PROCESS_PARAM(1001, 0x100000);
  * (como hasta v0.1.0); los mandos siguen sueltos y el latido mira. */
 #define NO_PAUSE_PATH SALSA64_DATA_DIR "/sin-pausa"
 #define JPEG_PPE_PATH SALSA64_DATA_DIR "/jpeg-ppe"  /* diagnóstico: la tarea JPEG en el PPE */
-/* Prueba de la interpolación por geometría en preparación (salsa64_rdp_interp):
- * con el archivo, cada tarea se empareja con la anterior; su contenido («t»,
- * por omisión 1) es la fracción en que se dibuja cada tarea desde la
- * anterior (1: igual que sin el archivo; 0: un cuadro atrás). */
+/* Prueba de la interpolación por geometría (SALSA64_INTERP_FIXED): con el
+ * archivo, cada tarea se empareja con la anterior y se dibuja en la fracción
+ * «t» de su contenido (por omisión 1: igual que sin interpolar; 0: un cuadro
+ * atrás), sin los campos intermedios, pase lo que pase con la opción. */
 #define INTERP_TEST_PATH SALSA64_DATA_DIR "/interp-prueba"
 /* Filtro de la presentación (frontend/filters): el de menu.cfg («filtro =
  * …»). Con el archivo `filtro` (una clave, p. ej. «crt-mascara»), ese,
@@ -2101,11 +2101,13 @@ static struct salsa64_vi_frame still_f;  /* lo último presentado, para su recor
  * global de cada uno (Opciones) y los ajustes del juego como están en
  * juegos/<ROM>.cfg. Sin `source` (las pruebas) no se guardan. */
 static struct {
-	int aspect, filter, crop, scale, density;
-	int g_aspect, g_filter, g_crop, g_scale, g_density;
+	int aspect, filter, crop, scale, density, interp;
+	int g_aspect, g_filter, g_crop, g_scale, g_density, g_interp;
 	struct menu_game game;
 	const char *source;
 } img;
+/* La «t» de INTERP_TEST_PATH (al abrir el juego), o < 0 sin el archivo. */
+static float interp_test_t = -1.0f;
 static int rdp_scale_req;  /* escala interna pedida al RDP ahora (0: automática) */
 static struct menu_settings video_cfg;  /* video y escala que corren (video.cfg al arrancar o lo último aplicado) */
 static int scale_wanted(void);
@@ -2133,7 +2135,7 @@ static void present_overlay(uint64_t now)
 		struct osd_image_menu im = {
 			pause_ctl.image_sel,
 			{ menu_filter_name(img.filter), menu_density_name(img.density), menu_aspect_name(img.aspect),
-			  menu_overscan_name(img.crop), scale_label(sbuf, sizeof sbuf) },
+			  menu_overscan_name(img.crop), scale_label(sbuf, sizeof sbuf), menu_interp_name(img.interp) },
 			menu_filter_has_density(img.filter),
 			scale_wanted() != rdp_scale_req, img.source != NULL, menu_filter_credit(img.filter),
 		};
@@ -2570,12 +2572,16 @@ static void stats(uint64_t now)
 		if (itasks) {
 			uint32_t iv = rs.interp_vertices - sw.rdp0.interp_vertices;
 			uint32_t ip = rs.interp_paired - sw.rdp0.interp_paired;
+			uint32_t ifl = rs.interp_fields - sw.rdp0.interp_fields;
 			salsa64_log("gfx: interpolación: %u tareas con anterior (%u cortes, %u sin lugar en las tablas), "
 				    "vértices de salida con pareja %.1f %% (%.0f por tarea), %u grupos por el contenido, "
-				    "%.3f ms del PPE por tarea", itasks, rs.interp_cuts - sw.rdp0.interp_cuts,
-				    rs.interp_full - sw.rdp0.interp_full, iv ? 100.0 * ip / iv : 0.0, (double)iv / itasks,
-				    rs.interp_content - sw.rdp0.interp_content,
-				    (rs.us_interp - sw.rdp0.us_interp) / 1e3 / tasks);
+				    "emparejar %.3f ms del PPE por tarea; %u campos intermedios (%.1f/s, %u saltados), "
+				    "redibujar %.3f ms del PPE por campo intermedio",
+				    itasks, rs.interp_cuts - sw.rdp0.interp_cuts, rs.interp_full - sw.rdp0.interp_full,
+				    iv ? 100.0 * ip / iv : 0.0, (double)iv / itasks, rs.interp_content - sw.rdp0.interp_content,
+				    (rs.us_interp - sw.rdp0.us_interp) / 1e3 / tasks, ifl, ifl * 1e6 / dt,
+				    rs.interp_skipped - sw.rdp0.interp_skipped,
+				    ifl ? (rs.us_interp_draw - sw.rdp0.us_interp_draw) / 1e3 / ifl : 0.0);
 		}
 		uint32_t rb = rs.readbacks - sw.rdp0.readbacks, rbw = rs.readback_waits - sw.rdp0.readback_waits;
 		uint32_t trsx = rs.tex_rsx - sw.rdp0.tex_rsx, trd = rs.tex_rdram - sw.rdp0.tex_rdram;
@@ -2966,8 +2972,24 @@ static const char *scale_label(char *buf, size_t n)
 	return scale_capped() ? "3× (tope con CRT)" : menu_scale_name(img.scale, video_cfg.resolution, buf, n);
 }
 
-/* Lo de img a la presentación: vista (aspecto y filtro), líneas de barrido
- * y recorte. La escala va aparte (rdp_scale_set). */
+/* La interpolación de img (o la de la prueba, INTERP_TEST_PATH) al RDP. La
+ * primera vez que se enciende reserva sus tablas: al abrir el juego o con
+ * la emulación en pausa. */
+static void interp_apply(void)
+{
+	int mode = img.interp == MENU_INTERP_GEOMETRY ? SALSA64_INTERP_FIELDS : SALSA64_INTERP_OFF;
+	float t = 1.0f;
+	if (interp_test_t >= 0.0f)
+		mode = SALSA64_INTERP_FIXED, t = interp_test_t;
+	if (salsa64_rdp_interp(mode, t) != 0) {
+		salsa64_log("interpolación: sin memoria para sus tablas, apagada");
+		img.interp = MENU_INTERP_OFF;
+		salsa64_rdp_interp(SALSA64_INTERP_OFF, 1.0f);
+	}
+}
+
+/* Lo de img a la presentación: vista (aspecto y filtro), líneas de barrido,
+ * recorte e interpolación. La escala va aparte (rdp_scale_set). */
 static void view_apply(void)
 {
 	pres.view.aspect = img.aspect == MENU_ASPECT_16_9 ? 16.0f / 9.0f : 4.0f / 3.0f;
@@ -2981,6 +3003,7 @@ static void view_apply(void)
 		overscan.left = overscan.right = h;
 		overscan.top = overscan.bottom = h * 3 / 4;
 	}
+	interp_apply();
 }
 
 static void view_log(const char *what)
@@ -2988,12 +3011,13 @@ static void view_log(const char *what)
 	char sc[16] = "automática";
 	if (img.scale)
 		snprintf(sc, sizeof sc, "%d×", img.scale);
-	salsa64_log("imagen: %s, filtro %s%s%s, recorte %u %u %u %u, escala %s%s%s",
+	salsa64_log("imagen: %s, filtro %s%s%s, recorte %u %u %u %u, escala %s%s%s%s",
 		    img.aspect == MENU_ASPECT_16_9 ? "16:9 estirada" : "4:3", menu_filter_name(img.filter),
 		    menu_filter_has_density(img.filter) ? ", densidad " : "",
 		    menu_filter_has_density(img.filter) ? (img.density == MENU_DENSITY_FINE ? "fina" : "normal") : "",
 		    overscan.left, overscan.right, overscan.top, overscan.bottom, sc,
-		    scale_capped() ? " (con el CRT, 3×)" : "", what);
+		    scale_capped() ? " (con el CRT, 3×)" : "",
+		    img.interp == MENU_INTERP_GEOMETRY ? ", interpolación por geometría" : "", what);
 }
 
 /* Aspecto, filtro, recorte y escala del juego: lo suyo (juegos/) o, si no,
@@ -3021,6 +3045,7 @@ static void load_view(const char *source)
 		g.scale = scale;
 		s.aspect = MENU_ASPECT_4_3;
 		s.filter = MENU_FILTER_SMOOTH;
+		s.interp = MENU_INTERP_OFF;
 		img.source = NULL;
 	}
 	img.g_aspect = s.aspect;
@@ -3028,12 +3053,16 @@ static void load_view(const char *source)
 	img.g_crop = s.overscan;
 	img.g_scale = s.scale;
 	img.g_density = s.density;
+	img.g_interp = s.interp;
 	menu_game_effective(&s, &g, &img.aspect, &img.filter, &img.crop, &img.scale);
 	img.density = menu_game_density(&s, &g);
+	img.interp = menu_game_interp(&s, &g);
 	view_apply();
 	scan_r.w = 0;
 	scan_lines = 0;
-	view_log(g.aspect >= 0 || g.filter >= 0 || g.overscan >= 0 || g.scale >= 0 ? " (con ajustes de este juego)" : "");
+	view_log(g.aspect >= 0 || g.filter >= 0 || g.overscan >= 0 || g.scale >= 0 || g.interp >= 0
+			 ? " (con ajustes de este juego)"
+			 : "");
 }
 
 /* «Guardar para este juego»: en juegos/<ROM>.cfg lo que se ve. Lo que
@@ -3052,11 +3081,13 @@ static void image_save(void)
 	g.overscan = img.crop > MENU_OVERSCAN_WIDE || (img.crop == img.g_crop && img.game.overscan < 0) ? -1 : img.crop;
 	g.scale = img.scale == img.g_scale && img.game.scale < 0 ? -1 : img.scale;
 	g.density = img.density == img.g_density && img.game.density < 0 ? -1 : img.density;
+	g.interp = img.interp == img.g_interp && img.game.interp < 0 ? -1 : img.interp;
 	bool ok = game_cfg_write(img.source, &g);
 	if (ok)
 		img.game = g;
-	salsa64_log("imagen: ajustes de este juego %s (aspecto %d, filtro %d, densidad %d, recorte %d, escala %d)",
-		    ok ? "guardados" : "NO guardados", g.aspect, g.filter, g.density, g.overscan, g.scale);
+	salsa64_log("imagen: ajustes de este juego %s (aspecto %d, filtro %d, densidad %d, recorte %d, escala %d, "
+		    "interpolación %d)", ok ? "guardados" : "NO guardados", g.aspect, g.filter, g.density, g.overscan,
+		    g.scale, g.interp);
 	osd_notice(now, ok ? "Ajustes guardados para este juego" : "No se pudieron guardar los ajustes");
 }
 
@@ -3088,6 +3119,9 @@ static void image_events(void)
 	case IM_SCALE:
 		img.scale = (img.scale + k + MENU_SCALE_MAX + 1) % (MENU_SCALE_MAX + 1);
 		return;  /* al seguir */
+	case IM_INTERP:
+		img.interp = (img.interp + k + MENU_INTERPS) % MENU_INTERPS;
+		break;
 	case IM_SAVE:
 		image_save();
 		return;
@@ -3629,19 +3663,16 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	}
 	{
 		FILE *fi = fopen(INTERP_TEST_PATH, "r");
-		float t = 1.0f;
+		interp_test_t = -1.0f;
 		if (fi) {
-			if (fscanf(fi, "%f", &t) != 1)
-				t = 1.0f;
+			interp_test_t = 1.0f;
+			if (fscanf(fi, "%f", &interp_test_t) != 1)
+				interp_test_t = 1.0f;
 			fclose(fi);
-			if (salsa64_rdp_interp(true, t) == 0)
-				salsa64_log("interpolación (prueba, " INTERP_TEST_PATH "): emparejar cada tarea con la "
-					    "anterior y dibujarla en t = %.2f", (double)t);
-			else
-				salsa64_log("interpolación (prueba): sin memoria para las tablas");
-		} else {
-			salsa64_rdp_interp(false, 1.0f);
+			salsa64_log("interpolación (prueba, " INTERP_TEST_PATH "): emparejar cada tarea con la anterior y "
+				    "dibujarla en t = %.2f, sin campos intermedios", (double)interp_test_t);
 		}
+		interp_apply();
 	}
 	{
 		/* SALSA64_DATA_DIR/trace-vi: registrar qué se presenta en cada uno

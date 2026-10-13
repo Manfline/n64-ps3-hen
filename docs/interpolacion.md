@@ -401,6 +401,11 @@ empareje.
 
 ## Tope de cuadros (paso 1, hecho)
 
+> En pausa y fuera de la rama de la interpolación: su código es el commit
+> dfc788a (rama `interp-respaldo-2eaef15`, sobre v0.2.4); el paquete de la
+> interpolación no lo trae. Lo que sigue describe ese commit y lo medido con
+> él.
+
 Opción «Tope de cuadros: Libre / 30 / 20» en Opciones (`menu.cfg`, `tope =
 libre|30|20`), por juego (`juegos/<ROM>.cfg`, con «global») y en «Imagen»
 del menú de pausa (vale al seguir jugando, con la emulación quieta en el
@@ -591,7 +596,53 @@ recorte cercano (NoN: no hay vértices inventados por el recorte) y con
   test_cover en macOS, como en main). En RPCS3, la imagen de gfxtest de
   la rama sin el archivo es la misma (byte a byte) que la de main.
 
-Falta el paso 4 (presentar los campos intermedios) y medir en la PS3.
+### Paso 4: campos intermedios (hecho; por medir en la PS3)
+
+Opción «Interpolación: Apagado / Por geometría» en Opciones (`menu.cfg`,
+`interpolacion = no|geometria`), por juego (`juegos/<ROM>.cfg`, con
+«global») y en «Imagen» del menú de pausa (vale al seguir), en los 6
+idiomas. Con «Por geometría» (`SALSA64_INTERP_FIELDS`, src/rdp/rdp.c):
+
+- **Cuándo.** En cada campo, el destino que presenta el VI y la tarea que
+  lo dibujó (`last_task` de la tabla de destinos). Cuando cambia, empieza un
+  cuadro del juego; k es lo que duró el anterior (2 a 4 campos: 30 a 15
+  cuadros; si no, nada). En el campo j desde que apareció, con j + 1 < k, se
+  presenta un intermedio con t = (j + 1)/k; en el último, el cuadro de
+  verdad. A 20 cuadros: 1/3, 2/3 y el cuadro: llega dos campos después
+  (33 ms). Un juego de 60 nunca entra.
+- **Qué se dibuja.** La tarea de ese cuadro otra vez, en una superficie
+  aparte del tamaño del destino (y su profundidad; cuentan en el tope de
+  memoria del RSX): primero una copia del destino (lo que la tarea no
+  redibuja queda igual) y después solo sus dibujos a ese destino, con el
+  vertex program interpolado; los `GFX_OP_ZCLEAR` borran la profundidad
+  aparte. Nada de la tabla de destinos, copias a la RDRAM ni espejos: lo
+  presentado es lo único que cambia, y el filtro y la pausa lo leen de ahí
+  (`salsa64_rdp_present_source`, con su propio contador de cambios).
+- **Solo si se puede.** Que el juego de búferes de esa tarea siga con ella
+  y sus posiciones de antes valgan (hubo anterior, sin corte). Mientras se
+  redibuja, `acquire` no reusa ese juego, y hasta que el RSX pasa la
+  barrera del redibujo la HLE no suelta de la caché de texturas lo que la
+  tarea usa (un apretón de manos con `sync`: `interp_hold` contra
+  `acquire`); si ya es tarde, ese campo va como siempre y cuenta como
+  «saltado».
+- **Apagada** no cambia nada: ni banderas a la HLE, ni tablas, ni
+  superficie, ni comandos de más; `acquire` ni mira.
+- **Log** cada 5 s: «gfx: interpolación: … vértices de salida con pareja X %
+  …, emparejar Y ms del PPE por tarea; N campos intermedios (n/s, m
+  saltados), redibujar Z ms del PPE por campo intermedio».
+
+En RPCS3 (Zelda, la intro, 1800 campos, «Por geometría» en `menu.cfg`): 40
+campos intermedios por segundo en las ventanas del juego a 20 (dos por
+cuadro), 0–3 saltados por ventana, 72–85 % de los vértices de salida con
+pareja, emparejar 0,17–0,26 ms y redibujar 0,07–0,22 ms del PPE por campo
+(tiempos de RPCS3, no concluyentes); la prueba termina bien. gfxtest (las
+pruebas apagan la interpolación) idéntico byte a byte a main.
+
+**Para medir en la PS3** (paquete «Salsa64 interp 1», SLSA00116): Zelda en
+el bosque Kokiri y en el campo de Hyrule, con la interpolación encendida y
+apagada desde «Imagen». A la vista: más fluido y sin objetos que tiemblen.
+En el log: el % de pareja, los ms del PPE (emparejar y redibujar) y los
+campos/s de la emulación, que no deben bajar.
 
 ## Reproducir en la Mac
 
