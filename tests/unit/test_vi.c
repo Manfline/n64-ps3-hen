@@ -172,6 +172,18 @@ static void frame_description(void)
 	CHECK_EQ(f.bpp, 2);
 	CHECK_EQ(f.stride, 640);
 
+	/* osViBlack: libultra deja VI_H_VIDEO en 0 y el VI no muestra nada, aunque
+	 * VI_CONTROL y VI_ORIGIN sigan como estaban (Star Fox 64 arranca así con
+	 * el origen en la RAM baja, 0x280: la consola da negro). */
+	set_mode(0x300E, 0x280, 320);
+	vi_wr(SALSA64_VI_H_VIDEO, 0);
+	CHECK(!salsa64_vi_frame(bus(), &f));
+	CHECK_EQ(f.width, 0);
+	vi_wr(SALSA64_VI_H_VIDEO, 0x006C02EC);
+	vi_wr(SALSA64_VI_ORIGIN, 0x38FA80);
+	CHECK(salsa64_vi_frame(bus(), &f));
+	CHECK_EQ(f.origin, 0x38FA80);
+
 	set_mode(0x3203, 0xA0200000u, 320);  /* los bits altos de ORIGIN no cuentan */
 	CHECK(salsa64_vi_frame(bus(), &f));
 	CHECK_EQ(f.type, SALSA64_VI_RGBA8888);

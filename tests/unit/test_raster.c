@@ -418,10 +418,79 @@ static void raster_copy_inside_scissor(void)
 	raster_fbfx = fbfx;
 }
 
+/* Star Fox 64 al arrancar (el ruido de colores del logo de «Nintendo
+ * presents»): el FILLRECT de 320 × 720 que limpia los tres framebuffers
+ * (y su borde de 8 px, que el juego no vuelve a tocar) llega en la primera
+ * tarea, cuando aún no existe ninguno; los destinos nacen después, uno por
+ * tarea, con un rectángulo de 8..312 × 8..232, y se ceban con la RDRAM,
+ * donde quedan los datos que el juego cargó antes por DMA en el primero. El
+ * borde tiene que salir con el color del relleno; si un DMA tocó el destino
+ * después del relleno, manda lo que el juego dejó. */
+static void raster_tall_fill_first(void)
+{
+	static const uint16_t inner[4] = { 0, 0, (uint16_t)W, (uint16_t)H };
+	int fbfx = raster_fbfx;
+	raster_fbfx = 2;
+	raster_reset();
+	memset(ram, 0, sizeof ram);
+	/* Los datos del DMA de arranque: filas 0–31 del primer framebuffer. */
+	for (uint32_t y = 0; y < 32; y++)
+		for (uint32_t x = 0; x < W; x++)
+			salsa64_wr16(ram + FB_A + (y * W + x) * 2, game_word(x, y));
+	raster_rdram_written(FB_A, 32 * LINE, 0);
+	task_tall_fill(FB_A, W, 3 * H, 0, 0, (float)W, 3.0f * H, 40, 50, 60);
+	task_scissor(FB_B, 8, 8, 312, 232, inner, 255, 0, 0);
+	task_scissor(FB_C, 8, 8, 312, 232, inner, 0, 255, 0);
+	task_scissor(FB_A, 8, 8, 312, 232, inner, 0, 0, 255);
+	uint32_t w = 0;
+	const uint32_t *a = raster_image(FB_A, &w), *b = raster_image(FB_B, &w), *c = raster_image(FB_C, &w);
+	CHECK(a && b && c);
+	if (a && b && c) {
+		CHECK_EQ(a[0], 0x28323cu);
+		CHECK_EQ(a[5 * W + 3], 0x28323cu);
+		CHECK_EQ(a[20 * W + 315], 0x28323cu);
+		CHECK_EQ(a[100 * W + 100], 0x0000ffu);
+		CHECK_EQ(b[0], 0x28323cu);
+		CHECK_EQ(b[(H - 1) * W + 4], 0x28323cu);
+		CHECK_EQ(b[100 * W + 100], 0xff0000u);
+		CHECK_EQ(c[3 * W + 3], 0x28323cu);
+		CHECK_EQ(c[100 * W + 100], 0x00ff00u);
+	}
+	/* Un destino que nace mucho después no recibe el relleno viejo. */
+	raster_reset();
+	memset(ram, 0, sizeof ram);
+	task_tall_fill(FB_A, W, 3 * H, 0, 0, (float)W, 3.0f * H, 40, 50, 60);
+	for (int k = 0; k < 40; k++)
+		task_fill_w(0x1000, 64, 0, 0, 0);
+	task_scissor(FB_B, 8, 8, 312, 232, inner, 255, 0, 0);
+	b = raster_image(FB_B, &w);
+	CHECK(b && b[0] == 0u);
+	/* Con un DMA posterior al relleno en la memoria del destino, manda el DMA. */
+	raster_reset();
+	memset(ram, 0, sizeof ram);
+	for (uint32_t y = 0; y < 4; y++)
+		for (uint32_t x = 0; x < W; x++)
+			salsa64_wr16(ram + FB_B + (y * W + x) * 2, rgba5551(200, 100, 50));
+	task_tall_fill(FB_A, W, 3 * H, 0, 0, (float)W, 3.0f * H, 40, 50, 60);
+	raster_rdram_written(FB_B, 4 * LINE, 1);
+	task_scissor(FB_B, 8, 8, 312, 232, inner, 255, 0, 0);
+	task_scissor(FB_C, 8, 8, 312, 232, inner, 0, 255, 0);
+	b = raster_image(FB_B, &w);
+	c = raster_image(FB_C, &w);
+	CHECK(b && c);
+	if (b && c) {
+		CHECK_EQ(b[3 * W + 3], 0xce6331u);  /* (200, 100, 50) de la RDRAM, a 8 bits */
+		CHECK_EQ(c[3 * W + 3], 0x28323cu);  /* sin DMA: el relleno */
+	}
+	raster_reset();
+	raster_fbfx = fbfx;
+}
+
 void t_suite_raster(void)
 {
 	RUN(raster_copy_inside_scissor);
 	RUN(raster_tall_fill);
+	RUN(raster_tall_fill_first);
 	RUN(raster_mirror_after_dma);
 	RUN(raster_frame_mirror_sm64);
 }

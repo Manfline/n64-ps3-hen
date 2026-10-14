@@ -45,6 +45,86 @@
   drenar el segundo o cada respuesta llega desfasada una petición (los volcados
   de memoria salen corridos un bloque).
 
+## 2026-10-13 — Star Fox 64: el ruido del logo inicial era el relleno de 320 × 720 que llegó antes de que hubiera framebuffers (rama `elastic-elbakyan-3dd3f0`)
+
+El censo de v0.2.0 anotaba «falla breve en el logo inicial» y el autor la
+describió como ruido en la primera pantalla. Un volcado de ares (GDB-Server,
+cada ~0,3 s desde el arranque) muestra en la primera imagen ruido exacto: es
+la RAM baja (`VI_ORIGIN` 0x280) dibujada como imagen, pero **no es lo que
+sale**: con `VI_H_VIDEO` en 0 (libultra lo pone con `osViBlack`) el VI no
+muestra nada y la consola da negro; el volcado dibuja el origen sin mirar el
+área activa. Salsa64 hace lo mismo que la consola: en el host los campos 2–7
+traen `VI_CONTROL` 0x1300e, `VI_ORIGIN` 0x280 y `VI_H_VIDEO` 0, y
+`salsa64_vi_frame` devuelve «sin imagen» (el frontend presenta negro: la
+rama `m->f.width == 0` de `present_field` no copia nada de la RDRAM; prueba
+nueva en `test_vi.c`). `--trace-vi` del host ahora también anota esos campos
+(«sin imagen», con los registros).
+
+**Lo que sí sale mal** empieza en el campo 8, cuando el juego enciende el VI
+(`VI_H_VIDEO` 0x006C02EC, origen 0x38fa80) y dura hasta el cambio de escena
+(campo ~158), todo el logo de «Nintendo presents»: ruido de colores en el
+borde de 8 px (arriba y a los lados de las primeras ~32 filas) de la imagen
+del RSX. En el host se ve con `--gfx-frame` (8358 bytes distintos de cero en
+la HLE a partir del campo 8; en la consola esa memoria es `0x0001` en toda
+la pantalla); en RPCS3 no se reproduce (las superficies salen limpias), en
+la PS3 real es el «ruido tipo estática en la parte superior» que ya había
+reportado el autor tras 8c8e3cd.
+
+Causa (traza de tareas con `--trace-gfx` y `SALSA64_GFX_VERBOSE`):
+
+1. Entre los campos 1 y 2 el juego carga por DMA 20 KB de datos de la ROM
+   en `38fa80` (filas 1–32 del primer framebuffer).
+2. Campo 3, primera tarea gráfica: un FILLRECT de 320 × 720 sobre una color
+   image en `38f800` limpia los tres framebuffers seguidos (`38f800`,
+   `3b5000`, `3da800`), borde incluido. Todavía no existe ningún destino
+   (se crean en las tres tareas siguientes), y el reparto de rellenos de
+   imagen alta (`rdp_targets_inside`, sección «Star Fox 64 colgado a los 5 s»)
+   solo alcanza a los destinos existentes: el relleno se pierde.
+3. Campos 4, 5 y 6: nacen `3b5000`, `3da800` y `38f800`, cebados con la
+   RDRAM (`prime`), donde el RDP de la HLE nunca escribió el relleno y siguen
+   los datos del DMA. Cada cuadro solo limpia 8..312 × 8..232: el borde queda
+   con el ruido. En la consola el borde es negro porque el relleno sí está en
+   la RDRAM. El cambio de escena repite el relleno con los destinos ya
+   vivos: ahí sí se limpia (por eso el ruido era «breve»).
+
+Arreglo (`src/rdp/targets.[ch]`, `rdp.c`, `host/raster.c`): cada relleno de
+imagen alta se **anota** (`rdp_targets_tall_note`: imagen, rectángulo, color,
+tarea y los destinos que ya lo recibieron) y un destino que nace después y
+cae dentro (misma regla que `rdp_targets_inside`) lo recibe una sola vez al
+crearse (`rdp_targets_tall_pending`; antes de los dibujos de su tarea, y
+cuenta como dibujado, como cualquier dibujo de la tarea).
+Solo vale mientras no hayan pasado `RDP_TALL_FILL_TASKS` (32) tareas, no lo
+haya recibido ya ese destino y ningún DMA haya tocado su memoria desde el
+relleno (anillo de DMA; en la consola el DMA pasa por encima del relleno:
+manda el dato del DMA). Lo que no cambia: los destinos que ya existían (se
+reparte como antes), el cebado con la RDRAM de los destinos que nacen sin un
+relleno pendiente y la rama de copia de la RDRAM al presentar un origen sin
+destino (la usan los juegos que dibujan el framebuffer con el CPU; no se
+tocó: sin evidencia de un caso real, un criterio de «datos del juego»
+rompería esos).
+
+Pruebas: unitarias `targets_tall_pending` (entrega única, DMA posterior,
+DMA anterior, vigencia, otro ancho o dirección, rectángulo parcial),
+`raster_tall_fill_first` (el escenario de Star Fox con ruido de DMA en el
+primer framebuffer: el borde sale con el color del relleno; falla sin el
+arreglo) y `vi_frame` con `H_VIDEO` 0 (negro). Host: Star Fox 64 con la HLE
+(`--gfx-frame` cada campo del 8 al 14, y cada 20 hasta el 200): borde
+limpio en todos (antes 8358 bytes de ruido). Siete escenas de otros juegos
+comparadas con el árbol anterior (`--gfx-frame`, sin controles: SM64 en el
+campo 700; Banjo-Kazooie, Zelda OoT, Donkey Kong 64, Perfect Dark, GoldenEye
+y Mario Kart 64 en el 900), y Star Fox en el 400, salen idénticas byte a byte. RPCS3: el frontend entrega el
+relleno a los tres destinos al crearse (`gfx: destino nuevo …: relleno de
+imagen alta anterior`), la intro hasta el campo 400 se ve igual que la de
+ares (logo, «STARFOX» con las estrellas azules) y gfxtest pasa (42 de 42
+puntos). No se armó paquete: falta confirmarlo en la PS3 real.
+
+Observado y sin tocar: `prime` usa un solo búfer de cebado (`rdp.rb +
+RB_SLOTS * RB_SLOT`) y el RSX lo lee después (`rsxkit_target_fill` solo
+encola el blit); tres cebados seguidos (como estos) podrían ver, en la
+consola real, los datos del último. Con el relleno entregado la pantalla
+entera de cada uno se vuelve a borrar y no importa en este caso; en otro
+juego con relleno parcial sí podría.
+
 ## 2026-10-13 — CFW (issue #2): respaldo automático al intérprete y prueba del JIT para usuarios (rama `nifty-knuth-a7c921`, paquetes SLSA00119 «Salsa64 CFW 1» y SLSA00118 «Salsa64 JIT test»)
 
 Con CFW Evilnat 4.91 (CECH-2501A) ningún juego arrancaba: el hilo

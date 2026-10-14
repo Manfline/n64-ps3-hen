@@ -224,7 +224,7 @@ static struct {
 	 * 6 primeras tareas con copias tras 10 sin ellas (abrir una pausa),
 	 * hasta 3 veces por corrida. */
 	uint32_t quiet_tasks, trace_left, trace_events;
-	struct { int slot; char how[48]; } last_get;  /* qué hizo get_target (traza) */
+	struct { int slot; bool fresh; char how[48]; } last_get;  /* qué hizo get_target (traza); fresh: superficie nueva */
 	/* Lo último presentado, para repetirlo en una pausa
 	 * (salsa64_rdp_present_again); surf NULL: nada que repetir. slot, y0,
 	 * pw y ph son la región sin recortar, para repetirla con otra vista o
@@ -765,6 +765,7 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
 {
 	bool fresh;
 	rdp.last_get.slot = -1;
+	rdp.last_get.fresh = false;
 	/* Una color image imposible (la HLE la sacó de un comando mal
 	 * interpretado: Zelda al abrir la pausa manda anchos de 1495 y 3770) no
 	 * toca la tabla: reciclaría una ranura buena para nada. */
@@ -783,6 +784,7 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
 	}
 	int i = rdp_targets_get(&rdp.tg, addr, width, siz, min_lh, &fresh);
 	rdp.last_get.slot = i;
+	rdp.last_get.fresh = fresh;
 	if (!fresh) {
 		/* Sin dibujar desde hace tareas: lo que vale está en la RDRAM. */
 		bool stale = rdp.tg.task - rdp.tg.t[i].last_task > RDP_TARGETS_FRESH;
@@ -1233,6 +1235,30 @@ static void again_set(int slot, uint32_t y0, uint32_t pw, uint32_t ph, const rsx
 		      const struct salsa64_overscan *crop);
 
 /* Traduce la salida de la tarea n a comandos del RSX. */
+/* Borra con `color` el rectángulo (xa, ya)–(xb, yb) (píxeles lógicos) del
+ * destino `i`, como un FILLRECT del RDP, y lo cuenta como dibujado en la
+ * tarea. false si no hay nada que borrar o no se pudo ligar. */
+static bool tall_fill_target(int i, float xa, float ya, float xb, float yb, uint32_t color, bool drawn[RDP_TARGETS_MAX],
+			     struct rdp_box drawn_box[RDP_TARGETS_MAX])
+{
+	const struct rdp_target *t = &rdp.tg.t[i];
+	if (yb <= ya || xb <= xa || !rdp.surf[i] || !bind(i, NULL))
+		return false;
+	float rect[4] = { xa, ya, xb, yb };
+	rsxkit_clear(RSXKIT_CLEAR_COLOR, color, 0.0f, rect);
+	rdp_targets_drawn(&rdp.tg, i);
+	drawn[i] = true;
+	rdp.surf_gen[i] = ++rdp.gen_seq;
+	rdp.surf_dirty[i] = true;
+	struct rdp_box r = { 0, 0, 0, 0 };
+	const uint16_t all[4] = { 0, 0, (uint16_t)(t->lw * 4), (uint16_t)(t->lh * 4) };
+	rdp_box_add(&r, xa, ya, xb, yb, true, all, t->lw, t->lh);
+	rdp_box_union(&drawn_box[i], &r);
+	rdp_box_union(&rdp.tg.t[i].box, &r);
+	rdp.stats.tall_fills++;
+	return true;
+}
+
 static void translate(uint32_t n)
 {
 	uint64_t t0 = sysGetSystemTime(), tb0 = tb_now();
@@ -1263,6 +1289,17 @@ static void translate(uint32_t n)
 			bool is_tall = c->b && c->b <= 640 && rdp_targets_tall(c->b, lh) &&
 				       fills_only(s, off + c->size, res->cmd_bytes);
 			cur = is_tall ? -1 : get_target(c->a, c->b, (c->c >> 8) & 0xFF, siz, lh);
+			if (cur >= 0 && rdp.last_get.fresh) {
+				/* Un relleno de imagen alta anterior (rdp_targets_tall_note) que
+				 * este destino no vio: se cebó con la RDRAM, que no lo tiene. */
+				struct rdp_tall_rect pend[RDP_TALL_FILLS];
+				int np = rdp_targets_tall_pending(&rdp.tg, cur, &rdp.dma, pend);
+				for (int k = 0; k < np; k++)
+					if (tall_fill_target(cur, pend[k].x0, pend[k].y0, pend[k].x1, pend[k].y1, pend[k].color, drawn,
+							     drawn_box))
+						LOGN(20, "gfx: destino nuevo %06x/%u: relleno de imagen alta anterior (%.0f,%.0f)–(%.0f,%.0f)",
+						     c->a, c->b, pend[k].x0, pend[k].y0, pend[k].x1, pend[k].y1);
+			}
 			if (is_tall)
 				snprintf(rdp.last_get.how, sizeof rdp.last_get.how, "alta, rellenos repartidos");
 			tall.rows = is_tall ? lh : 0;
@@ -1304,23 +1341,11 @@ static void translate(uint32_t n)
 					ya = ya < 0.0f ? 0.0f : ya;
 					yb = yb > (float)t->lh ? (float)t->lh : yb;
 					float xa = x0 < 0.0f ? 0.0f : x0, xb = x1 > (float)t->lw ? (float)t->lw : x1;
-					if (yb <= ya || xb <= xa || !rdp.surf[i])
-						continue;
-					if (!bind(i, NULL))
-						continue;
-					float rect[4] = { xa, ya, xb, yb };
-					rsxkit_clear(RSXKIT_CLEAR_COLOR, color, 0.0f, rect);
-					rdp_targets_drawn(&rdp.tg, i);
-					drawn[i] = true;
-					rdp.surf_gen[i] = ++rdp.gen_seq;
-					rdp.surf_dirty[i] = true;
-					struct rdp_box r = { 0, 0, 0, 0 };
-					const uint16_t all[4] = { 0, 0, (uint16_t)(t->lw * 4), (uint16_t)(t->lh * 4) };
-					rdp_box_add(&r, xa, ya, xb, yb, true, all, t->lw, t->lh);
-					rdp_box_union(&drawn_box[i], &r);
-					rdp_box_union(&rdp.tg.t[i].box, &r);
-					rdp.stats.tall_fills++;
+					tall_fill_target(i, xa, ya, xb, yb, color, drawn, drawn_box);
 				}
+				/* Y para los destinos que se creen después. */
+				rdp_targets_tall_note(&rdp.tg, tall.addr, tall.width, tall.bpp, tall.rows, x0, y0, x1, y1, color, slots,
+						      nin);
 				break;
 			}
 			if (cur < 0 || !g->h.b)
