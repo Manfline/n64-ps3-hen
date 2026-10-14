@@ -27,7 +27,7 @@ tools/ares-comparar.sh build/ares/<juego>-rdram-<fecha>.bin
 El script compila `salsa64-run` nativo (sin sanitizadores) y corre
 `salsa64-run --ares` con las opciones que se le pasen (`--help`): `--task`
 (una lista), `--fb` (un búfer), `--tol`, `--q5`, `--out DIR`, `--no-png`,
-`--gfxdump`.
+`--gfxdump`, `--pasadas N`.
 Acepta varios volcados.
 
 Por cada volcado:
@@ -61,6 +61,12 @@ Por cada volcado:
   `--q5` dibuja la HLE a 5 bits truncados, como la copia a la RDRAM.
 - **Lo que la lista no cubre** sale negro en la HLE; en la consola queda
   el cuadro de hace dos campos.
+- **Render a textura.** Con una pasada, lo que la HLE lee de una imagen
+  auxiliar por la RDRAM es lo que dejó la consola, y eso tapa los fallos
+  de ese camino. `--pasadas 2` (o más) borra antes todas las color images
+  que dibuja la lista y la corre dos veces seguidas, como dos cuadros: lo
+  que se lee por la RDRAM es lo que el rasterizador copió ahí, como en la
+  PS3 (así salió la sombra de Conker, docs/estado.md).
 - **Límites del rasterizador del host:** muestrea en el centro del píxel,
   filtra bilineal (la N64, de tres puntos), no tiene la cobertura del AA
   (la consola escribe los píxeles cubiertos en parte: objetos ~½ px más
