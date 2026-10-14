@@ -287,6 +287,34 @@ no pausa la emulación (como hasta v0.1.0; los mandos siguen sueltos y el
 cuadro de salir pausa igual): con el latido, dice dónde se quedaba quieto lo
 que colgaba antes.
 
+### Esperas al RSX con tope (2026-10-14)
+
+Ninguna espera del PPE al RSX es infinita (F-Zero X a 5× colgó la PS3:
+la presentación esperaba al RSX sin tope, sin flips, y ni el botón PS
+respondía). rsxkit anota cada espera que no se cumple de entrada (una
+barrera o etiqueta, `rsxkit_finish`, el flip, lugar en el búfer de
+comandos) y llama al gancho del frontend (`rsx_wait_hook`) desde el hilo
+que espera a los 0,5 s y luego cada 100 ms:
+
+- a los 2 s, una línea «RSX: el PPE espera hace …» con qué espera (etiqueta,
+  valor esperado y actual), GET y PUT del búfer de comandos y si el RSX
+  avanzó desde que empezó la espera, la tarea que se traduce y su etapa, la
+  última traducida, el campo y la pausa;
+- mientras tanto atiende `sysUtilCheckCallback` (lo que manda órdenes al
+  RSX al cerrarse el menú del sistema, `system_overlay_off`, queda para
+  después de la espera);
+- con «Salir del juego» pedido, o a los 12 s (45 s con el sistema encima),
+  escribe el guardado diferido (y el vivo si la emulación está quieta),
+  cierra la sesión del perfilado (`salida=rsx`) y sale con `forced_exit`.
+
+La espera de lugar en el búfer de comandos corre dentro del callback del
+sistema (su código no está en PSL1GHT) y no puede llamar al gancho: queda
+anotada y la ve el latido (`rsxkit_wait_now`), que deja el mismo
+diagnóstico y sale por ella. El latido también dice, cuando la
+presentación se queda quieta, la tarea en traducción con su etapa y la
+espera al RSX en curso. `colgar-rsx` (docs/uso-ps3.md) prueba los tres
+casos; en RPCS3 los tres salen a los 12 s.
+
 Además, la espera del seqlock de los controles en emulación (`pads_apply`)
 ya no gira para siempre: emulación tiene más prioridad que presentación y,
 si el sistema desaloja a presentación a mitad de la escritura, después de

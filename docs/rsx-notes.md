@@ -91,6 +91,19 @@ compila; `lib/rsxkit/src/fpgen.c`):
   Buffers"** (configuración de GPU); si no, la memoria emulada no recibe el
   render y la verificación de `rsx-triangle` falla aunque se vea bien.
 
+## Tijeras fuera del destino (F-Zero X a 5×, 2026-10-14)
+
+El RDP acepta tijeras con la esquina izquierda más allá del borde (x0 >
+x1: no dibuja nada); F-Zero X las manda en «SELECT COURSE» para las copas
+fuera de la pantalla (x0 = 1023,75 con x1 = 308). rsxkit solo recortaba x1
+e y1 al destino, así que a 5× mandaba `rsxSetScissor` con x = 5119, por
+encima del máximo de 4095 de las superficies del RSX. La PS3 real se colgó
+en esa pantalla (el PPE esperando al RSX); RPCS3 lo acepta sin decir nada.
+Desde entonces rsxkit recorta las cuatro coordenadas y no manda los
+dibujos con tijeras vacías. Que esa fuera la causa está por confirmar en la
+consola (con el seguro de las esperas, docs/hilos-ppe.md, un cuelgue así
+deja GET y PUT en el log).
+
 ## Flags de segmentos del ELF (lv2.ld)
 
 Además de R/W/X, `lv2.ld` usa bits altos en `p_flags` para acceso del SPU y
