@@ -894,6 +894,37 @@ tres cuadros; caminando, los grupos movidos no pasan del 3 % y la mediana
 de los desplazamientos de 28 px (percentil 99). GoldenEye contra la verdad
 igual (29,76 dB).
 
+### Destellos que no van en la dirección correcta
+
+En la escena del Gran Árbol Deku que cuenta el origen (estado del autor en
+la ranura 3, campo 66299; es una escena de historia y se repite igual en el
+host) caen unas 150 chispas alargadas que salen en todas direcciones. En
+algunos intermedios una chispa deja una raya larga que no está en ningún
+cuadro: en el cuadro anterior estaba casi pegada a la cámara (más cerca
+que el plano cercano, z + w < 0 con w > 0), y la interpolación desde ahí
+dispara su proyección. Ahora una instancia chica de un modelo repetido (las
+partículas) con un vértice que cruza el plano cercano entre los dos
+cuadros no se interpola (`VMATCH_NEAR`, «cruzan el plano cercano»): 7,6
+por tarea en esa escena, 1,3 caminando por el bosque. Para paredes, piso y
+grupos únicos no: se interpolan bien (GoldenEye contra la verdad 29,76 →
+29,07 dB si también se rechazan los grupos chicos únicos; así, igual).
+Se probó también elegir la instancia más cercana (con la velocidad de cada
+una del cuadro anterior) en vez de la del mismo lugar en el orden: en esta
+escena no mejora (las chispas que se mueven fuera de su eje, 3,6 % con las
+dos reglas y 4,5 % con «la más cercana» sin velocidad), así que quedó la de
+antes.
+
+### El piso sin fluidez en el árbol Deku
+
+«A veces cuando camino, el suelo no tiene la fluidez» (dentro del árbol
+Deku). Con las entradas del autor en el host la geometría se interpola
+igual de bien que en el resto (la regla de malla no se dispara: 0,0 grupos
+por tarea), pero en el log de la PS3 de esa caminata hay ventanas con
+13–81 campos saltados de 300 (la presentación, 8–12 ms por campo a 5×,
+más el redibujo de los intermedios no alcanza): el piso va a tirones
+cuando la consola salta campos, no por el emparejamiento. A probar a 3× o
+4× en la misma caminata.
+
 ### Modo híbrido con matrices (estimación, sin hacer)
 
 Lo que hoy se rechaza por aplastarse (giros de más de un cuarto de vuelta

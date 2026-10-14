@@ -311,10 +311,26 @@ static void vmatch_identity_rules(void)
 	CHECK_EQ(fb.t.g[0].pair, 0);
 
 	/* Un vértice que pasa de detrás a delante de la cámara no se interpola
-	 * (en algún intermedio se proyectaría al infinito); los demás del grupo,
-	 * sí. */
-	static const float c0[3][4] = { { 0, 0, 1, 2 }, { 0.2f, 0, 1, 2 }, { 0.1f, 0.1f, -0.5f, -0.3f } };
-	static const float c1[3][4] = { { 0.02f, 0, 1, 2 }, { 0.22f, 0, 1, 2 }, { 0.1f, 0.1f, 0.4f, 0.6f } };
+	 * (en algún intermedio se proyectaría al infinito); los demás del grupo
+	 * (grande: 80 px), sí. En una instancia chica de un modelo repetido,
+	 * ninguno (una chispa). */
+	static const float s0[3][4] = { { 0, 0, 1, 2 }, { 0.2f, 0, 1, 2 }, { 0.1f, 0.1f, -0.5f, -0.3f } };
+	static const float s1[3][4] = { { 0.02f, 0, 1, 2 }, { 0.22f, 0, 1, 2 }, { 0.1f, 0.1f, 0.4f, 0.6f } };
+	static const float sq[3][4] = { { 0.5f, 0.5f, 1, 2 }, { 0.55f, 0.5f, 1, 2 }, { 0.5f, 0.55f, 1, 2 } };
+	frame_init(&fa);
+	add_group(&fa, 0x7500, 0, 3, s0);
+	add_group(&fa, 0x7500, 0, 3, sq);  /* otra instancia (partículas) */
+	finish(&fa);
+	frame_init(&fb);
+	add_group(&fb, 0x7500, 0, 3, s1);
+	add_group(&fb, 0x7500, 0, 3, sq);
+	finish(&fb);
+	vmatch_pair(&fa.t, &fb.t, 120.0f, &st);
+	CHECK_EQ(fb.t.g[0].why, VMATCH_NEAR);
+	CHECK_EQ(fb.t.g[1].pair, 1);
+	CHECK_EQ(st.near, 1);
+	static const float c0[3][4] = { { 0, 0, 1, 2 }, { 1.0f, 0, 1, 2 }, { 0.1f, 0.1f, -0.5f, -0.3f } };
+	static const float c1[3][4] = { { 0.02f, 0, 1, 2 }, { 1.02f, 0, 1, 2 }, { 0.1f, 0.1f, 0.4f, 0.6f } };
 	frame_init(&fa);
 	add_group(&fa, 0x7400, 0, 3, c0);
 	finish(&fa);

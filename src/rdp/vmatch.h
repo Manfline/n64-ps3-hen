@@ -70,6 +70,7 @@ enum vmatch_why {
 	VMATCH_SCALE,      /* por el contenido, pero de otro tamaño en pantalla */
 	VMATCH_FLAT,       /* proyección ortográfica (HUD 3D) */
 	VMATCH_COLLAPSE,   /* a media interpolación se aplastaría: giró más de un cuarto de vuelta */
+	VMATCH_NEAR,       /* grupo chico con un vértice que cruza el plano cercano (una chispa pegada a la cámara) */
 	VMATCH_OBJECT,     /* tenía pareja, pero se rechazó la mayor parte de su objeto (vmatch_atomic) */
 	VMATCH_COMPONENT,  /* tenía pareja, pero otro grupo de su malla no (vmatch_atomic) */
 	VMATCH_WHY_COUNT
@@ -124,6 +125,7 @@ struct vmatch_stats {
 	uint32_t moved;                  /* con pareja pero rechazados por el desplazamiento */
 	uint32_t jumped, deformed;       /* rechazados: grupo chico que saltó, grupo que se deformó */
 	uint32_t collapsed;              /* rechazados: se aplastarían a media interpolación (giros grandes) */
+	uint32_t near;                   /* rechazados: grupo chico que cruza el plano cercano */
 	uint32_t reordered;              /* emparejados con otra instancia que la de su orden (más cerca) */
 	uint32_t flat;                   /* grupos con proyección ortográfica (HUD 3D): sin interpolar */
 	uint32_t atomic;                 /* grupos con pareja que salen sin interpolar por su objeto o su malla (vmatch_atomic) */

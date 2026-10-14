@@ -354,6 +354,26 @@ static bool collapses(const float (*a)[2], const struct vmatch_group *h, const f
 	return lo > 4.0f * (float)nv && rm < COLLAPSE * COLLAPSE * lo;
 }
 
+/* Un vértice que en un cuadro está delante del plano cercano (z + w > 0) y
+ * en el otro detrás: entre los dos pasa pegado a la cámara y su proyección
+ * se dispara en los intermedios (una chispa que vuela hacia la cámara deja
+ * una raya larga). Solo para instancias chicas de un modelo repetido (las
+ * partículas): las paredes y el piso que cruzan el plano cercano se
+ * interpolan bien (GoldenEye contra la verdad 29,76 → 29,07 dB si se
+ * rechazan también los grupos chicos únicos). */
+static bool near_side(const float c[4])
+{
+	return c[2] + c[3] > 0.0f;
+}
+
+static bool crosses_near(const float (*a)[4], const float (*b)[4], uint32_t n)
+{
+	for (uint32_t k = 0; k < n; k++)
+		if (near_side(a[k]) != near_side(b[k]))
+			return true;
+	return false;
+}
+
 void vmatch_pair(const struct vmatch_table *prev, struct vmatch_table *cur, float max_disp, struct vmatch_stats *st)
 {
 	memset(st, 0, sizeof *st);
@@ -443,6 +463,11 @@ void vmatch_pair(const struct vmatch_table *prev, struct vmatch_table *cur, floa
 				continue;
 			}
 		}
+		if (ext < SMALL && cur->keys[g->akey].count > 1 && crosses_near(prev->clip + h->clip, cur->clip + g->clip, g->n)) {
+			g->why = VMATCH_NEAR;
+			st->near++;
+			continue;
+		}
 		if (dx1 >= dx0 && spread > 0.25f * ext && collapses(ps + h->clip, h, cs + g->clip, g)) {
 			g->why = VMATCH_COLLAPSE;
 			g->cand = p;
@@ -480,7 +505,7 @@ static uint32_t group_of(uint32_t pad)
 static bool rejected(uint32_t why)
 {
 	return why == VMATCH_MOVED || why == VMATCH_JUMPED || why == VMATCH_DEFORMED || why == VMATCH_SCALE ||
-	       why == VMATCH_COLLAPSE;
+	       why == VMATCH_COLLAPSE || why == VMATCH_NEAR;
 }
 
 static void unpair(struct vmatch_group *g, uint32_t why, struct vmatch_stats *st)

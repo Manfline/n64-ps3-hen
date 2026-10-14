@@ -1413,7 +1413,7 @@ static void interp_task(struct set *s, const struct gfx_result *res)
 		rdp.stats.interp_vertices += nv;
 		rdp.stats.interp_paired += paired;
 		rdp.stats.interp_content += st.by_content;
-		rdp.stats.interp_rejected += st.jumped + st.deformed + st.collapsed;
+		rdp.stats.interp_rejected += st.jumped + st.deformed + st.collapsed + st.near;
 		rdp.stats.interp_reordered += st.reordered;
 		rdp.stats.interp_atomic += st.atomic;
 		rdp.stats.interp_kept += st.kept;

@@ -821,7 +821,7 @@ void interp_after_raster(const struct gfx_job *job, const struct gfx_result *res
 			}
 			static const char *const why[VMATCH_WHY_COUNT] = { "ok",     "nuevo",     "movido",  "saltó",
 									  "deformado", "tamaño", "HUD", "aplastado",
-									  "objeto", "malla" };
+									  "cercano", "objeto", "malla" };
 			fprintf(gf, "%3u addr %06x n %2u v0 %2u occ %3u/%d hash %08x hocc %u pair %4d %-9s dir %4d cont %4d vis %2d obj %3u w %g..%g",
 				i, g->addr, g->n, g->v0, g->occ, addrn, g->hash, g->hocc, g->pair, g->why < VMATCH_WHY_COUNT ? why[g->why] : "?",
 				byaddr, byhash, nvis, g->obj, w0, w1);
@@ -1021,7 +1021,7 @@ void interp_report(void)
 		if (st.vm_tasks) {
 			static const char *const why[VMATCH_WHY_COUNT] = {
 				"con pareja", "nuevos", "se movieron (corte)", "saltaron", "se deformaron", "otro tamaño",
-				"HUD", "se aplastarían", "por su objeto", "por su malla"
+				"HUD", "se aplastarían", "cruzan el plano cercano", "por su objeto", "por su malla"
 			};
 			fprintf(o, "interp: grupos delante de la cámara por tarea:");
 			for (int q = 0; q < VMATCH_WHY_COUNT; q++)
