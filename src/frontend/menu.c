@@ -301,7 +301,7 @@ int menu_game_interp(const struct menu_settings *s, const struct menu_game *g)
 
 const char *menu_interp_name(int interp)
 {
-	return interp == MENU_INTERP_GEOMETRY ? "Por geometría" : "Apagado";
+	return interp == MENU_INTERP_GEOMETRY ? "Por geometría (exp.)" : "Apagado";
 }
 
 void menu_game_effective(const struct menu_settings *s, const struct menu_game *g, int *aspect, int *filter,

@@ -305,6 +305,8 @@ static const struct entry table[] = {
 	  { "Sets the chosen output and", "Applique la sortie et l'échelle", "Setzt Ausgabe und Skalierung", "Imposta uscita e scala scelte", "Aplica a saída e a escala" } },
 	{ "Por geometría",
 	  { "By geometry", "Par géométrie", "Nach Geometrie", "Per geometria", "Por geometria" } },
+	{ "Por geometría (exp.)",
+	  { "By geometry (exp.)", "Par géométrie (exp.)", "Nach Geometrie (exp.)", "Per geometria (sper.)", "Por geometria (exp.)" } },
 	{ "Puntos de fósforo",
 	  { "Round phosphor dots", "Points de phosphore", "Runde Phosphorpunkte", "Punti di fosforo", "Pontos de fósforo" } },
 	{ "Puntos de la máscara CRT",
