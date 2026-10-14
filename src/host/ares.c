@@ -733,7 +733,7 @@ static int one_dump(const char *path, const struct opts *o)
 		raster_edge_stats(&dr, &de, &dt);
 		if (de)
 			printf("  aristas de los dibujos con AA: %u de %u dibujos (%u triángulos)%s\n", de, dr, dt,
-			       raster_aa_edges ? "" : ", apagadas");
+			       raster_aa_edges ? ", encendidas" : ", apagadas");
 		for (unsigned k = 0; k < ntg; k++) {
 			compare(prefix, dl, &tg[k], o->tol, o->png);
 			compared++;

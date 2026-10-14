@@ -29,7 +29,9 @@ en el rasterizador del host (docs/framebuffer.md).
   Racing (microcódigo sin HLE) no se pudieron medir.
 - RPCS3: gfxtest igual que main. La repetición del cuadro de Conker sale
   con el piso negro cuando hay dos copias del scratch en la misma tarea
-  (con una, bien; en el host, bien). Falta la PS3 real.
+  (con una, bien; en el host, bien).
+- **PS3 real («Salsa64 aristas 2»): las sombras de Conker funcionan.** El
+  piso negro era cosa de RPCS3.
 
 ## 2026-10-13 — Líneas azules de GoldenEye: aristas de los dibujos con AA como líneas (rama `suspicious-saha-fe2758`)
 
@@ -60,8 +62,12 @@ eligieron ancho y desplazamiento contra la consola (docs/rsx-notes.md):
   polígono (el replay del túnel sale igual con y sin aristas). gfxtest en
   RPCS3 da la misma imagen que main. **Falta la PS3 real**: el ancho va en
   el método 0x3B8 del NV40 (punto fijo 6.3, como lo decodifica RPCS3), que
-  PSL1GHT no expone. `sin-aristas-aa` en `dev_hdd0/salsa64` las apaga para
-  comparar.
+  PSL1GHT no expone.
+- **PS3 real («Salsa64 aristas 2»): regresión.** En los modelos los
+  polígonos se superponen y salen picos en las uniones, como con
+  `aa_grow`: a 5× el ancho es ~7,5 px de la superficie y las líneas
+  engordan las siluetas. Quedan apagadas por omisión; `aristas-aa` en
+  `dev_hdd0/salsa64` las enciende para seguir probando.
 - `--ares --gfxdump` guarda la salida de la HLE de cada lista como el
   volcado de la PS3 (big-endian): `tools/gfxdump.py`, `--raster-dump` y
   `embedded` = `dump:<nombre>` en el RSX la leen. Así un cuadro de ares se

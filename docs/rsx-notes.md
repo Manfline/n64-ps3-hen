@@ -205,8 +205,15 @@ la consola no las tiene).
   en píxeles de la N64 (1,5 × la escala de la superficie, en el método
   0x3B8 del NV40, punto fijo 6.3, que PSL1GHT no expone), así que tapa lo
   mismo a cualquier escala interna. GoldenEye lleva aristas en 54 de sus
-  72 dibujos por cuadro. `sin-aristas-aa` en `dev_hdd0/salsa64` las
-  apaga, y `SALSA64_AA_EDGES=0` en el host. Falta verlo en la PS3 real.
+  72 dibujos por cuadro.
+- **En la PS3 real (paquete «Salsa64 aristas 2», 2026-10-13): regresión.**
+  En los modelos «los polígonos superan su límite y se superponen,
+  generando picos en todas las uniones», lo mismo que con `aa_grow`. A
+  escala interna alta 1,5 px de la N64 son ~7,5 px de la superficie a 5×,
+  y las líneas sobresalen de los vértices y engordan las siluetas de los
+  modelos con AA; el host a 1× no lo mostraba. Queda apagada por omisión
+  (`aristas-aa` en `dev_hdd0/salsa64` la enciende; `SALSA64_AA_EDGES=1` en
+  el host) para seguir probando alternativas que no toquen las siluetas.
 
 ## Fragment programs de posprocesado con cgcomp (2026-10-13, filtros CRT)
 

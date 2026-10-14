@@ -173,7 +173,8 @@ void salsa64_rdp_vi(uint32_t origin, uint32_t width);
 void salsa64_rdp_fbfx(int level);
 /* Interruptor: en los dibujos opacos con AA_EN, las aristas como líneas
  * antes de los triángulos (rsxkit_draw.edges): tapan las grietas de las
- * uniones en T que el RDP tapa con la cobertura (por omisión, encendido). */
+ * uniones en T que el RDP tapa con la cobertura. Apagado por omisión: en
+ * la PS3 a escala alta engordaba los modelos (docs/rsx-notes.md). */
 void salsa64_rdp_aa_edges(bool on);
 /* Hilo de emulación: un DMA escribió la RDRAM [pa, pa + len); con
  * `gfx_in_flight`, mientras corría una tarea gráfica. Las copias de esa

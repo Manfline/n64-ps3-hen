@@ -3665,12 +3665,13 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 								"render a textura y copias a la RDRAM");
 	}
 	{
-		/* SALSA64_DATA_DIR/sin-aristas-aa: sin la pasada de aristas de los
-		 * dibujos con AA_EN (salsa64_rdp_aa_edges), para compararla. */
-		bool aa_edges = !file_exists(SALSA64_DATA_DIR "/sin-aristas-aa");
+		/* SALSA64_DATA_DIR/aristas-aa: la pasada de aristas de los dibujos
+		 * con AA_EN (salsa64_rdp_aa_edges), experimental y apagada por
+		 * omisión: en la PS3 engordaba los modelos (docs/rsx-notes.md). */
+		bool aa_edges = file_exists(SALSA64_DATA_DIR "/aristas-aa");
 		salsa64_rdp_aa_edges(aa_edges);
-		if (!aa_edges)
-			salsa64_log("aristas de los dibujos con AA: apagadas (sin-aristas-aa)");
+		if (aa_edges)
+			salsa64_log("aristas de los dibujos con AA: encendidas (aristas-aa, experimental)");
 	}
 	{
 		/* SALSA64_DATA_DIR/trace-vi: registrar qué se presenta en cada uno
@@ -4562,9 +4563,9 @@ int main(void)
 		snprintf(path, sizeof path, SALSA64_DATA_DIR "/%s", name + 5);
 		/* Como al abrir un juego: para comparar la pasada de aristas con el
 		 * mismo volcado. */
-		if (file_exists(SALSA64_DATA_DIR "/sin-aristas-aa")) {
-			salsa64_rdp_aa_edges(false);
-			salsa64_log("aristas de los dibujos con AA: apagadas (sin-aristas-aa)");
+		if (file_exists(SALSA64_DATA_DIR "/aristas-aa")) {
+			salsa64_rdp_aa_edges(true);
+			salsa64_log("aristas de los dibujos con AA: encendidas (aristas-aa, experimental)");
 		}
 		salsa64_rdp_set_log(salsa64_log);  /* los avisos del RDP también en la repetición */
 		int rr = salsa64_replay(path);

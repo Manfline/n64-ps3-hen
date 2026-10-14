@@ -79,9 +79,9 @@ Por cada volcado:
   `--trace-gfx`.
 - **Alta resolución:** el rasterizador es de 320×240; para búferes de 640
   de ancho, compilar con `-DRASTER_W=640 -DRASTER_H=480`.
-- **Grietas y aristas:** el rasterizador hace, como la PS3, la pasada de
-  aristas de los dibujos opacos con AA (docs/rsx-notes.md);
-  `SALSA64_AA_EDGES=0` la quita, y `SALSA64_AA_EDGE_WIDTH=n` (1,5 px) y
+- **Grietas y aristas:** la pasada de aristas de los dibujos opacos con AA
+  (docs/rsx-notes.md) es experimental y va apagada, como en la PS3;
+  `SALSA64_AA_EDGES=1` la pone, y `SALSA64_AA_EDGE_WIDTH=n` (1,5 px) y
   `SALSA64_AA_EDGE_OFFSET=factor,unidades` (8,64) cambian su ancho y su
   desplazamiento hacia atrás, para medir contra la consola.
 - **En el RSX:** `--gfxdump` guarda la salida de la HLE de cada lista como

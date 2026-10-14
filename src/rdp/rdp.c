@@ -303,7 +303,7 @@ int salsa64_rdp_init(uint32_t scale)
 	rdp.rb = rdp.cache + CACHE_BYTES;
 	rdp.rb_off = rdp.cache_off + CACHE_BYTES;
 	rdp.fbfx = 2;
-	rdp.aa_edges = true;
+	rdp.aa_edges = false;  /* experimental: engordaba los modelos en la PS3 */
 	rdp.ready = true;
 	return RSXKIT_OK;
 }

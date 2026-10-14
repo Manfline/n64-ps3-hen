@@ -58,7 +58,7 @@ bool raster_trace_fb;
 uint32_t raster_field;
 int raster_fbfx = 2;
 bool raster_q5 = true;
-bool raster_aa_edges = true;
+bool raster_aa_edges = false;
 float raster_edge_width = 1.5f;  /* como rdp.c: 1,5 píxeles de la N64 */
 float raster_edge_factor = 8.0f, raster_edge_units = 64.0f;  /* su desplazamiento de polígono (rsxkit) */
 static struct rdp_vi_ring vi_ring;
@@ -876,8 +876,8 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 			float prim_z = (d->depth & GFX_DEPTH_PRIM) ? gfx_prim_z(vtx + d->h.a, d->h.b) : 0.0f;
 			bool q5 = tg.t[cur].bpp == 2 && raster_q5;
 			/* Como rdp.c: las aristas antes, en los dibujos opacos con AA_EN. */
-			if (raster_aa_edges && d->aa && !(d->depth & GFX_DEPTH_DECAL)) {
-				for (uint32_t i = 0; i + 3 <= d->h.b; i += 3)
+			if (d->aa && !(d->depth & GFX_DEPTH_DECAL)) {
+				for (uint32_t i = 0; raster_aa_edges && i + 3 <= d->h.b; i += 3)
 					draw_clipped(d, vtx + d->h.a + i, src, rgb[cur], q5, zb, prim_z, true);
 				edge_draws++;
 				edge_tris += d->h.b / 3;

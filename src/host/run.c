@@ -1505,7 +1505,7 @@ static void gfx_summary(void)
 		uint32_t dr, de, dt;
 		raster_edge_stats(&dr, &de, &dt);
 		fprintf(stderr, "salsa64-run: gfx: aristas de los dibujos con AA: %.1f de %.1f dibujos por tarea (%.0f "
-			"triángulos)%s\n", de / n, dr / n, dt / n, raster_aa_edges ? "" : ", apagadas");
+			"triángulos)%s\n", de / n, dr / n, dt / n, raster_aa_edges ? ", encendidas" : ", apagadas");
 		uint32_t d8, t8r, t8m;
 		raster_8bit_stats(&d8, &t8r, &t8m);
 		fprintf(stderr, "salsa64-run: gfx: imágenes de 8 bits: %u dibujos; texturas I8 de ellas: %u de su imagen, %u "
