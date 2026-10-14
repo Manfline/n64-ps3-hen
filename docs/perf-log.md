@@ -622,6 +622,24 @@ más carga de CPU (49 MIPS, 43 % en espera).
   `salsa64-texturas-c17e790-3x.log` (fuera de git) y el de antes,
   `salsa64-v010-pd-majora.log`.
 
+## Estados guardados en segundo plano y comprimidos (2026-10-13)
+
+**Pendiente de PS3 real**: el paquete lo pide la sesión principal. Lo
+medido hasta ahora (RPCS3 no sirve para tiempos; el host sí para el
+tamaño):
+
+| Medida | Antes | Después | Dónde |
+|---|---|---|---|
+| Tamaño del archivo (RDRAM de 8 MB) | 8,1 MB siempre | OoT (intro, campo 1500) 1,98 MB; GoldenEye 1,22 MB; Mario Kart 64 1,46 MB; gfxtest 80 KB | host, `salsa64-run --state-zip`, respaldos del autor |
+| Emulación detenida al guardar | ~430 ms (417–1064; 520 de disco) | la foto: `memcpy` de 8 MB + secciones, 2 ms en RPCS3 (en la PS3, por medir) | log: «emulación detenida … (la foto)» |
+| Cargar | ~171 ms (161 leyendo) | por medir (menos disco, más descompresión en el PPE) | log: «cargado de la ranura» |
+
+Lo que escribe el log de la PS3 en cada guardado: «emulación detenida X ms
+(la foto)» y, cuando termina el hilo, «escrita en segundo plano: … ms de punta
+a punta, … ms en el disco, … ms del SPE comprimiendo … KB de … KB (r:1)». El
+costo para el PPE (hilo de baja prioridad, ~1 syscall por 64 KB) se mide con
+las líneas «hilo 1» de docs/hilos-ppe.md.
+
 ## Estados guardados (2026-10-11)
 
 PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), paquete SLSA00094 «Salsa64

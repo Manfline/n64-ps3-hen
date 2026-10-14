@@ -2718,9 +2718,14 @@ static void state_barrier(void)
 		ok = states_save(&n64, slot, &t, err, sizeof err);
 		if (ok) {
 			osd_notice(sysGetSystemTime(), "Estado guardado en ranura %u", slot);
-			salsa64_log("estado: guardado en la ranura %u (campo %u): %.1f ms, de ellos %.1f ms escribiendo; %u KB; "
-				    "miniatura %.1f ms", slot, field0, t.us_total / 1e3, t.us_io / 1e3, t.bytes >> 10,
-				    states_thumb_us() / 1e3);
+			if (t.async)
+				salsa64_log("estado: ranura %u (campo %u): emulación detenida %.1f ms (la foto), miniatura %.1f ms; "
+					    "el archivo se escribe en segundo plano", slot, field0, t.us_total / 1e3,
+					    states_thumb_us() / 1e3);
+			else
+				salsa64_log("estado: guardado en la ranura %u (campo %u): %.1f ms, de ellos %.1f ms escribiendo; %u KB; "
+					    "miniatura %.1f ms", slot, field0, t.us_total / 1e3, t.us_io / 1e3, t.bytes >> 10,
+					    states_thumb_us() / 1e3);
 		} else {
 			osd_notice(sysGetSystemTime(), "No se pudo guardar: %s", err);
 			salsa64_log("estado: FALLO al guardar en la ranura %u: %s", slot, err);
@@ -2759,6 +2764,24 @@ static void state_barrier(void)
 	state_done++;
 	lwsync();
 	state_req = STATE_NONE;
+}
+
+/* Una escritura de estado en segundo plano terminó: al log y, si falló, al
+ * aviso en pantalla (el de «Estado guardado» salió al tomar la foto). */
+static void state_bg_poll(void)
+{
+	struct states_done d;
+	if (!states_poll(&d))
+		return;
+	if (d.ok) {
+		salsa64_log("estado: ranura %u escrita en segundo plano: %.1f ms de punta a punta, %.1f ms en el disco, "
+			    "%.1f ms del SPE comprimiendo (%s); %u KB de %u KB (%.1f:1), %u bloques (%u sin comprimir, %u en el SPE)",
+			    d.slot, d.us_total / 1e3, d.us_io / 1e3, d.us_spu / 1e3, d.spu ? "SPE" : "PPE", d.bytes >> 10,
+			    d.raw_bytes >> 10, d.bytes ? (double)d.raw_bytes / d.bytes : 0.0, d.blocks, d.stored, d.spu_blocks);
+	} else {
+		osd_notice(sysGetSystemTime(), "No se pudo guardar: %s", d.err);
+		salsa64_log("estado: FALLO al escribir la ranura %u en segundo plano: %s", d.slot, d.err);
+	}
 }
 
 static void state_test_step(void)
@@ -3403,6 +3426,7 @@ static void forced_exit(const char *why)
 		    why, QUIT_WAIT_US / 1000000, (unsigned long long)n64.cpu.cur_pc, (unsigned long long)n64.cpu.cycles,
 		    n64.cpu.rec_mark, n64.cpu.rec_cur);
 	audio_out_shutdown();
+	states_shutdown(3000000);
 	if (jpeg_on_spu)
 		salsa64_jpeg_spu_shutdown(&jpeg_spu);
 	if (lle_mode != SALSA64_LLE_OFF)
@@ -3416,6 +3440,7 @@ static void forced_exit(const char *why)
 
 static void game_close(void)
 {
+	states_shutdown(10000000);  /* un estado a medio escribir se termina antes de soltar nada */
 	salsa64_filters_release();
 	salsa64_log("cierre: emulación detenida tras %u campos (%u emulados, %u descartados por la cola, %u sin ranura)",
 		    n64.bus.vi.fields, emu_stats.fields, emu_stats.dropped, emu_stats.no_slot);
@@ -3501,6 +3526,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	salsa64_rom_normalize(rom, rom_size);
 	memset(rdram, 0, SALSA64_RDRAM_MAX);  /* cada juego arranca igual, venga después del que venga */
 	salsa64_n64_init(&n64, rdram, SALSA64_RDRAM_MAX);
+	states_init(SALSA64_RDRAM_MAX);  /* la foto de los estados y su hilo de escritura (docs/estados.md) */
 	n64.bus.rdram_written = front_rdram_written;
 	salsa64_bus_set_isviewer(&n64.bus, isv_buf, isv_out, NULL);
 
@@ -3794,6 +3820,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 			present_still();
 		if (state_test.stage)
 			state_test_step();
+		state_bg_poll();
 		if (fps.on)
 			osd_fps_sample(&fps, now, n64.bus.vi.fields, n64.cpu.cycles, pres.game_frames, pres.frames_total);
 		stats(now);

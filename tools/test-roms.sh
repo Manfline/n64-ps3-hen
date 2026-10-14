@@ -167,13 +167,14 @@ done
 # guardar en N, cargar en otra corrida y seguir hasta M. Los dos estados en M
 # tienen que ser iguales byte por byte (CPU, RDRAM, RCP, planificador, HLE)
 # y las imágenes del VI y de la HLE, también.
-estados() {  # nombre rom N M [gfx: también la imagen de la HLE gráfica]
+estados() {  # nombre rom N M [gfx: también la imagen de la HLE gráfica] [zip: el estado en N con la RDRAM comprimida]
 	d=build/states/$1
 	ELOG=build/logs/estados-$1.run.log
 	rm -rf "$d"
 	mkdir -p "$d"
 	R="ASAN_OPTIONS=detect_leaks=0 build/host/salsa64-run -q"
-	g1="" gn="" g2=""
+	g1="" gn="" g2="" zf=""
+	[ "${6:-}" = zip ] && zf="--state-zip"
 	if [ "${5:-}" = gfx ]; then
 		# El rasterizador en las tres corridas: con él la HLE copia destinos
 		# a la RDRAM (efectos de framebuffer) y eso es parte del estado.
@@ -182,7 +183,7 @@ estados() {  # nombre rom N M [gfx: también la imagen de la HLE gráfica]
 		: >"$d/m-gfx.ppm"; : >"$d/m2-gfx.ppm"
 	fi
 	tools/build.sh --sh "$R --fields $4 --state-save $4:$d/m.st --frame $d/m.ppm $g1 $2 && \
-		$R --fields $3 --state-save $3:$d/n.st $gn $2 && \
+		$R --fields $3 $zf --state-save $3:$d/n.st $gn $2 && \
 		$R --state-load $d/n.st --fields $4 --state-save $4:$d/m2.st --frame $d/m2.ppm $g2 $2" \
 		>"$ELOG" 2>&1
 	erc=$?
@@ -202,6 +203,10 @@ estados() {  # nombre rom N M [gfx: también la imagen de la HLE gráfica]
 estados gfxtest tests/roms/homebrew/salsa64-gfxtest.z64 150 300 gfx
 estados vitest tests/roms/homebrew/salsa64-vitest.z64 120 240
 estados audiotest tests/roms/homebrew/salsa64-audiotest.z64 100 200
+# Lo mismo con el estado de N guardado comprimido (formato 2, como la PS3):
+# cargarlo deja la máquina idéntica y el estado sin comprimir en M sale igual.
+estados gfxtest-zip tests/roms/homebrew/salsa64-gfxtest.z64 150 300 gfx zip
+estados vitest-zip tests/roms/homebrew/salsa64-vitest.z64 120 240 - zip
 
 ALOG=build/logs/audiotest.run.log
 tools/build.sh --sh "ASAN_OPTIONS=detect_leaks=0 build/host/salsa64-run -c 600000000 \

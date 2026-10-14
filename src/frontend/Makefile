@@ -17,7 +17,7 @@ R       := ../..
 ICON0   := $(R)/assets/ps3/ICON0.PNG
 PIC1    := $(R)/assets/ps3/PIC1.PNG
 COMMON  := src/platform/ps3/log.c src/platform/ps3/rec_cache.c src/platform/ps3/fastmem.c src/platform/ps3/gfx_spu.c \
-           src/platform/ps3/audio_spu.c src/platform/ps3/jpeg_spu.c src/platform/ps3/rsp_spu.c src/rdp/rdp.c src/rdp/targets.c \
+           src/platform/ps3/audio_spu.c src/platform/ps3/jpeg_spu.c src/platform/ps3/rsp_spu.c src/platform/ps3/bgjob.c src/rdp/rdp.c src/rdp/targets.c \
            $(patsubst $(R)/%,%,$(wildcard $(R)/src/core/*.c $(R)/src/cpu/*.c $(R)/src/rsp/gfx/*.c $(R)/src/rsp/audio/*.c $(R)/src/rsp/jpeg/*.c \
                                           $(R)/src/rsp/lle/*.c))
 DATA    := vitest_rom gfxtest_rom audiotest_rom
@@ -32,7 +32,7 @@ SPUKIT  := 1
 # (otro SPE): src/rsp/jpeg en 4 carriles (jpeg_v.c) con el bucle de DMA de
 # src/spu/jpeg. CRT con cable (dos SPEs, con `filtros-spe`): la señal y la
 # decodificación de S-Video y compuesto (src/spu/crt).
-SPU_PROGS := gfx audio rsp jpeg crt
+SPU_PROGS := gfx audio rsp jpeg crt lz
 gfx_SRCS  := $(R)/src/spu/gfx/main.c $(R)/src/spu/gfx/io_spu.c \
              $(filter-out %/io_mem.c %/sync.c %/state.c,$(wildcard $(R)/src/rsp/gfx/*.c))
 audio_SRCS := $(R)/src/spu/audio/main.c $(R)/src/spu/audio/io_spu.c \
@@ -41,6 +41,8 @@ rsp_SRCS   := $(R)/src/spu/rsp/main.c $(R)/src/spu/rsp/io_spu.c \
               $(filter-out %/core.c,$(wildcard $(R)/src/rsp/lle/*.c))
 jpeg_SRCS  := $(R)/src/spu/jpeg/main.c $(R)/src/rsp/jpeg/jpeg.c $(R)/src/rsp/jpeg/jpeg_v.c
 crt_SRCS   := $(R)/src/spu/crt/main.c
+# Compresor LZ de lib/spukit (estados guardados, docs/estados.md): bloques de 64 KB.
+lz_SRCS    := $(R)/lib/spukit/spu/lz.c
 # Pila del SPE 0 (src/spu/gfx/main.c): el enlace falla si entre la cadena de
 # llamadas más honda y el final del programa quedan menos de 1,5 KB. Las
 # variantes de Rare se llaman por puntero desde su familia; lo demás que

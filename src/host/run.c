@@ -2006,7 +2006,7 @@ static bool dump_frame(const char *path)
 /* Opciones largas sin letra (códigos fuera de ASCII). */
 enum { OPT_REC = 0x100, OPT_LOCKSTEP, OPT_PAD, OPT_TRACE_FROM, OPT_TRACE_FAULTS, OPT_RAM_DUMP, OPT_TRACE_AUDIO,
        OPT_FRAME_EVERY, OPT_LLE, OPT_LLE_SPEED, OPT_LLE_CHECK, OPT_LLE_CHECK_JPEG, OPT_POKE, OPT_TRACE_FB, OPT_STATE_SAVE,
-       OPT_STATE_LOAD, OPT_FIELDS, OPT_PROFILE };
+       OPT_STATE_LOAD, OPT_FIELDS, OPT_PROFILE, OPT_STATE_ZIP };
 
 /* ---- Estados guardados (--state-save, --state-load) ------------------------- */
 
@@ -2019,6 +2019,10 @@ static struct {
 static const char *state_load_path;
 static uint32_t stop_field;
 static uint8_t state_scratch[SALSA64_STATE_SCRATCH] __attribute__((aligned(16)));
+static bool state_zip;  /* --state-zip: la RDRAM comprimida (formato 2) */
+static uint8_t zip_small[SALSA64_STATE_SECTIONS] __attribute__((aligned(16)));
+static uint8_t zip_ram[SALSA64_RDRAM_MAX] __attribute__((aligned(16)));
+static struct salsa64_state_lz zip_lz;
 
 static bool state_fwrite(void *ctx, const void *data, uint32_t len)
 {
@@ -2030,6 +2034,19 @@ static bool state_fread(void *ctx, void *data, uint32_t len)
 	return fread(data, 1, len, ctx) == len;
 }
 
+static bool state_fpatch(void *ctx, uint32_t offset, const uint8_t *data, uint32_t len)
+{
+	return fseek(ctx, offset, SEEK_SET) == 0 && fwrite(data, 1, len, ctx) == len;
+}
+
+static bool state_save_zip(FILE *f, char *err, size_t err_size)
+{
+	struct salsa64_state_snap snap = { zip_small, zip_ram, 0, 0 };
+	return salsa64_state_capture(&n64, NULL, &snap, sizeof zip_small, sizeof zip_ram, err, err_size) &&
+	       salsa64_state_write(&snap, salsa64_state_compress_host, &zip_lz, state_fwrite, state_fpatch, f, err,
+				   err_size);
+}
+
 static bool state_save_file(const char *path)
 {
 	char err[160];
@@ -2038,15 +2055,25 @@ static bool state_save_file(const char *path)
 		return false;
 	}
 	FILE *f = fopen(path, "wb");
-	bool ok = f && salsa64_state_save(&n64, NULL, state_fwrite, f, state_scratch, err, sizeof err);
+	bool ok = f && (state_zip ? state_save_zip(f, err, sizeof err) :
+			salsa64_state_save(&n64, NULL, state_fwrite, f, state_scratch, err, sizeof err));
 	if (f && fclose(f) != 0)
 		ok = false;
 	if (!ok) {
 		fprintf(stderr, "salsa64-run: no se pudo guardar el estado en %s: %s\n", path, f ? err : "no se abre");
 		return false;
 	}
-	fprintf(stderr, "salsa64-run: estado del campo %u en %s (%u bytes)\n", n64.bus.vi.fields, path,
-		salsa64_state_size(&n64, false));
+	if (state_zip) {
+		FILE *g = fopen(path, "rb");
+		long sz = g && fseek(g, 0, SEEK_END) == 0 ? ftell(g) : -1;
+		if (g)
+			fclose(g);
+		fprintf(stderr, "salsa64-run: estado del campo %u en %s (%ld bytes comprimido, de %u)\n", n64.bus.vi.fields,
+			path, sz, salsa64_state_size(&n64, false));
+	} else {
+		fprintf(stderr, "salsa64-run: estado del campo %u en %s (%u bytes)\n", n64.bus.vi.fields, path,
+			salsa64_state_size(&n64, false));
+	}
 	return true;
 }
 
@@ -2134,6 +2161,7 @@ static void usage(FILE *out)
 	      "                        compararlas con la HLE (rsp/jpeg)\n"
 	      "      --state-save C:ARCHIVO  guardar un estado al terminar el campo C (hasta 8)\n"
 	      "      --state-load ARCHIVO    cargar un estado después del arranque y seguir desde ahí\n"
+	      "      --state-zip             los --state-save con la RDRAM comprimida (formato 2, como la PS3)\n"
 	      "      --fields N        terminar (código 0) al acabar el campo N del VI\n", out);
 }
 
@@ -2172,6 +2200,7 @@ int main(int argc, char **argv)
 		{ "lle-check-jpeg", no_argument, NULL, OPT_LLE_CHECK_JPEG },
 		{ "state-save", required_argument, NULL, OPT_STATE_SAVE },
 		{ "state-load", required_argument, NULL, OPT_STATE_LOAD },
+		{ "state-zip", no_argument, NULL, OPT_STATE_ZIP },
 		{ "fields", required_argument, NULL, OPT_FIELDS },
 		{ "profile", required_argument, NULL, OPT_PROFILE },
 		{ "trace-gfx", required_argument, NULL, 'Q' },
@@ -2272,6 +2301,7 @@ int main(int argc, char **argv)
 			break;
 		}
 		case OPT_STATE_LOAD: state_load_path = optarg; break;
+		case OPT_STATE_ZIP: state_zip = true; break;
 		case OPT_FIELDS: stop_field = (uint32_t)strtoul(optarg, NULL, 0); break;
 		case OPT_PROFILE: profile_path = optarg; break;
 		case 'D': dump_path = optarg; break;
