@@ -6,6 +6,7 @@
 #include "test.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "core/endian.h"
@@ -1382,6 +1383,70 @@ static void gfx_load_ucode_same_generation(void)
 	CHECK_EQ(res.skipped, 2);
 }
 
+/* Clase de los datos de microcódigo con ese texto (gfx_ucode_kind): los de
+ * Nintendo traen "RSP Gfx ucode <nombre> fifo N.xx", y el S2DEX de Zelda OoT
+ * "RSP Gfx[Safe] S2DEX fifo 2.05" (el prefijo entre "RSP Gfx" y el nombre
+ * cambia). Textos inventados con las mismas formas. */
+static int ucode_kind_of(const char *text, bool *nonear)
+{
+	memset(&job, 0, sizeof job);
+	job.rdram_ea = (uint64_t)(uintptr_t)t_n64.bus.rdram;
+	job.rdram_size = t_n64.bus.rdram_size;
+	gs.job = &job;
+	uint32_t at = 0x31000;
+	memset(t_n64.bus.rdram + at, 0, 128);
+	memcpy(t_n64.bus.rdram + at + 8, text, strlen(text));
+	return gfx_ucode_kind(&gs, at, 64, nonear);
+}
+
+static void gfx_ucode_kind_texts(void)
+{
+	static const struct {
+		const char *text;
+		int kind;
+		bool nonear;
+	} c[] = {
+		/* Segunda generación (se interpreta con el RSP arrancado de nuevo). */
+		{ "RSP Gfx ucode F3DFLX.Rej  fifo 2.03F Yoshitaka Yasumoto 1998 Nintendo.", 2, false },
+		{ "RSP Gfx ucode F3DEX       fifo 2.08  Yoshitaka Yasumoto 1998 Nintendo.", 2, false },
+		{ "RSP Gfx ucode F3DEX.NoN   fifo 2.04H Yoshitaka Yasumoto 1998 Nintendo.", 2, true },
+		{ "RSP Gfx ucode F3DZEX.NoN  fifo 2.06H Yoshitaka Yasumoto 1998 Nintendo.", 2, true },
+		{ "RSP Gfx ucode F3DZEX      xbus 2.06H Yoshitaka Yasumoto 1998 Nintendo.", 2, false },
+		/* Primera generación. */
+		{ "RSP Gfx ucode F3DEX       fifo 1.23  Yoshitaka Yasumoto 1998 Nintendo.", 1, false },
+		{ "RSP Gfx ucode F3DEX.NoN   fifo 1.23  Yoshitaka Yasumoto 1998 Nintendo.", 1, true },
+		{ "RSP Gfx ucode F3DEX         0.95     Yoshitaka Yasumoto 1998 Nintendo.", 1, false },
+		/* Ajenos: Conker, L3DEX, S2DEX 1.x. */
+		{ "RSP Gfx ucode F3DEXBG.NoN fifo 2.08  Yoshitaka Yasumoto 1998 Nintendo.", 0, false },
+		{ "RSP Gfx ucode L3DEX       fifo 2.03  Yoshitaka Yasumoto 1998 Nintendo.", 0, false },
+		{ "RSP Gfx ucode S2DEX       fifo 1.06  Yoshitaka Yasumoto 1998 Nintendo.", 0, false },
+		{ "RSP Gfx[Safe] S2DEX       fifo 1.06  Yoshitaka Yasumoto 1998 Nintendo.", 0, false },
+		{ "RSP Gfx[Safe] L3DEX       fifo 2.03  Yoshitaka Yasumoto 1998 Nintendo.", 0, false },
+		/* S2DEX 2.x, con el prefijo de siempre y con el de Zelda OoT. */
+		{ "RSP Gfx ucode S2DEX       fifo 2.05  Yoshitaka Yasumoto 1998 Nintendo.", GFX_UCODE_S2DEX2, false },
+		{ "RSP Gfx[Safe] S2DEX       fifo 2.05  Yoshitaka Yasumoto 1998 Nintendo.", GFX_UCODE_S2DEX2, false },
+		{ "RSP Gfx ucode [Safe] S2DEX fifo 2.05 Yoshitaka Yasumoto 1998 Nintendo.", GFX_UCODE_S2DEX2, false },
+		{ "RSP Gfx[Safe]S2DEX        fifo 2.05  Yoshitaka Yasumoto 1998 Nintendo.", GFX_UCODE_S2DEX2, false },
+		/* Con el mismo prefijo, el resto sigue igual. */
+		{ "RSP Gfx[Safe] F3DZEX.NoN  fifo 2.06H Yoshitaka Yasumoto 1998 Nintendo.", 2, true },
+		{ "RSP Gfx[Safe] F3DEXBG.NoN fifo 2.08  Yoshitaka Yasumoto 1998 Nintendo.", 0, false },
+		/* Sin texto de Nintendo, o cortado. */
+		{ "Salsa64 GBI F3DEX2 sin el texto de Nintendo para nada de nada de nada", 0, false },
+		{ "RSP Gfx ucode", 0, false },
+		{ "RSP Gfx[Safe] S2DEX", 0, false },
+	};
+	start();
+	for (unsigned i = 0; i < sizeof c / sizeof c[0]; i++) {
+		bool nonear = true;
+		int kind = ucode_kind_of(c[i].text, &nonear);
+		if (kind != c[i].kind || nonear != c[i].nonear)
+			fprintf(stderr, "gfx_ucode_kind(\"%s\") = %d/%d, esperado %d/%d\n", c[i].text, kind, nonear, c[i].kind,
+				c[i].nonear);
+		CHECK_EQ(kind, c[i].kind);
+		CHECK_EQ(nonear, c[i].nonear);
+	}
+}
+
 /* ---- S2DEX2: fondos prerrenderizados (G_BG_COPY, G_BG_1CYC) ---- */
 
 /* G_LOAD_UCODE a un S2DEX2: los datos del microcódigo llevan el texto que
@@ -2486,6 +2551,7 @@ void t_suite_gfx(void)
 	RUN(gfx_dl_flow);
 	RUN(gfx_load_ucode_skips_foreign);
 	RUN(gfx_load_ucode_same_generation);
+	RUN(gfx_ucode_kind_texts);
 	RUN(gfx_s2dex_bg_copy);
 	RUN(gfx_s2dex_bg_wrap);
 	RUN(gfx_s2dex_bg_scaled);

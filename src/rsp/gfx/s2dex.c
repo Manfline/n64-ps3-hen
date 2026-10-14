@@ -6,8 +6,8 @@
  * 320 × 240) y vuelve a F3DZEX. Antes el tramo se saltaba entero (dl.c) y se
  * veía la malla de profundidad de la sala en colores planos.
  *
- * Se reconoce por el texto de los datos del microcódigo ("... S2DEX ... 2.0x"
- * en los bytes que carga el G_LOAD_UCODE). Del tramo se hace lo que comparte
+ * Se reconoce por el texto de los datos del microcódigo ("RSP Gfx[Safe] S2DEX
+ * fifo 2.05" en los bytes que carga el G_LOAD_UCODE). Del tramo se hace lo que comparte
  * con F3DEX2 (G_DL, G_ENDDL, G_MOVEWORD de segmentos, G_SETOTHERMODE_*,
  * G_RDPHALF_*, comandos del RDP) y los fondos:
  *
@@ -61,6 +61,30 @@ enum {
 #define OBJLT_TXTRTILE  0x00FC1034u
 #define OBJLT_TLUT      0x00000030u
 
+/* Después de "RSP Gfx" viene el nombre, precedido de "ucode " en la mayoría
+ * ("RSP Gfx ucode F3DEX.NoN fifo 1.22") o de una marca entre corchetes pegada
+ * a "Gfx" (el S2DEX de Zelda OoT: "RSP Gfx[Safe] S2DEX fifo 2.05"): se saltan
+ * los espacios, las marcas "[…]" y "ucode". Devuelve dónde empieza el nombre. */
+static uint32_t ucode_name_at(const uint8_t *p, uint32_t size, uint32_t i)
+{
+	for (;;) {
+		while (i < size && p[i] == ' ')
+			i++;
+		if (i < size && p[i] == '[') {
+			uint32_t j = i + 1;
+			while (j < size && p[j] > ' ' && p[j] < 0x7F && p[j] != ']')
+				j++;
+			if (j >= size || p[j] != ']')
+				return i;
+			i = j + 1;
+		} else if (i + 6 <= size && memcmp(p + i, "ucode ", 6) == 0) {
+			i += 5;
+		} else {
+			return i;
+		}
+	}
+}
+
 int gfx_ucode_kind(struct gfx_state *g, uint32_t data, uint32_t size, bool *nonear)
 {
 	*nonear = false;
@@ -71,10 +95,12 @@ int gfx_ucode_kind(struct gfx_state *g, uint32_t data, uint32_t size, bool *none
 	/* Como salsa64_rsp_detect_gbi: "RSP Gfx ucode <nombre> fifo|xbus N.xx". */
 	if (!p)
 		return 0;
-	while (i + 24 < size && memcmp(p + i, "RSP Gfx ucode ", 14))
+	while (i + 24 < size && memcmp(p + i, "RSP Gfx", 7))
 		i++;
-	i += 14;
-	bool s2dex = memcmp(p + i, "S2DEX", 5) == 0;
+	if (i + 24 >= size)
+		return 0;
+	i = ucode_name_at(p, size, i + 7);
+	bool s2dex = i + 5 <= size && memcmp(p + i, "S2DEX", 5) == 0;
 	if (i + 24 >= size || !(s2dex || memcmp(p + i, "F3D", 3) == 0) || memcmp(p + i, "F3DEXBG", 7) == 0)
 		return 0;
 	for (; i + 4 < size && p[i] > ' ' && p[i] < 0x7F; i++)
