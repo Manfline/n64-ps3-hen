@@ -1,0 +1,98 @@
+diff --git a/src/cpu/interp.c b/src/cpu/interp.c
+index 5c3e583..d609cab 100644
+--- a/src/cpu/interp.c
++++ b/src/cpu/interp.c
+@@ -612,6 +612,13 @@ HOT void execute(struct salsa64_cpu *cpu, struct flow *f, uint32_t i)
+ #define SALSA64_CPI 1
+ #endif
+ 
++#ifdef SALSA64_LAB_TRACE
++/* Laboratorio del recompilador (tools/lab/lab-trace.c): se llama antes de cada
++ * instrucción que va a ejecutarse, con su pc virtual y su física. Solo existe
++ * con -DSALSA64_LAB_TRACE. */
++void (*salsa64_lab_hook)(struct salsa64_cpu *cpu, uint64_t vpc, uint32_t pa);
++#endif
++
+ /* Ejecuta hasta que cycles alcance sched->next, o una sola instrucción con
+  * `once`. */
+ HOT void cpu_loop(struct salsa64_cpu *cpu, bool once)
+@@ -634,6 +641,10 @@ HOT void cpu_loop(struct salsa64_cpu *cpu, bool once)
+ 		if (SALSA64_UNLIKELY(cpu->irq_pending)) {
+ 			salsa64_vr4300_exception(cpu, SALSA64_EXC_INT, 0);
+ 		} else if (SALSA64_LIKELY(vr4300_vaddr(cpu, f.pc, 3, SALSA64_ACC_FETCH, &pa))) {
++#ifdef SALSA64_LAB_TRACE
++			if (SALSA64_UNLIKELY(salsa64_lab_hook))
++				salsa64_lab_hook(cpu, f.cur, pa);
++#endif
+ 			uint32_t instr = vr4300_read32(cpu, pa);
+ 			f.pc = f.next_pc;
+ 			f.next_pc += 4;
+diff --git a/src/cpu/rec.h b/src/cpu/rec.h
+index f053086..ae37d5b 100644
+--- a/src/cpu/rec.h
++++ b/src/cpu/rec.h
+@@ -334,6 +334,18 @@ struct salsa64_rec {
+ 
+ 	struct salsa64_rec_stats stats;
+ 
++#ifdef SALSA64_REC_LAB
++	/* Laboratorio (tools/lab, docs/lab-recompilador.md): dónde empieza en cada
++	 * sección el código de la instrucción MIPS k del último bloque compilado
++	 * (0xFFFF: no empieza ninguna ahí; k = n: el final del cuerpo, antes del
++	 * código frío fijo de entrada y salidas) y cómo se traduce (nativa, por el intérprete…). */
++	struct {
++		uint16_t hot[SALSA64_REC_MAX_INSNS + 1], cold[SALSA64_REC_MAX_INSNS + 1];
++		uint8_t how[SALSA64_REC_MAX_INSNS + 1];  /* cómo se traduce la instrucción (enum how de rec_emit.c), 0xFF en k = n */
++		bool loop;                               /* el salto final vuelve al inicio del propio bloque (bucle) */
++	} lab;
++#endif
++
+ 	/* fastmem (SALSA64_REC_OPT_FASTMEM, docs/fastmem.md). */
+ 	bool fastmem;            /* activo: la RDRAM está en fm_window y los accesos se compilan sin prueba */
+ 	void *fm_window;         /* la ventana de 512 MB (quien llama, antes de salsa64_rec_init) */
+diff --git a/src/cpu/rec_emit.c b/src/cpu/rec_emit.c
+index 7613643..b3e09a5 100644
+--- a/src/cpu/rec_emit.c
++++ b/src/cpu/rec_emit.c
+@@ -2876,6 +2876,14 @@ static void reset_emission(struct ctx *c)
+ 	memcpy(c->ds_of, ds_of, sizeof ds_of);
+ }
+ 
++#ifdef SALSA64_REC_LAB
++/* Laboratorio (tools/lab): anota dónde empieza el código de la instrucción k. */
++#define LAB_MARK(c, k) ((c)->rec->lab.hot[k] = (uint16_t)(c)->rec->nbuf[SEC_HOT], (c)->rec->lab.cold[k] = (uint16_t)(c)->rec->nbuf[SEC_COLD], \
++			(c)->rec->lab.how[k] = (k) < (c)->n ? (c)->d[k].how : 0xFF)
++#else
++#define LAB_MARK(c, k) ((void)0)
++#endif
++
+ /* Emite el bloque decodificado en `c` a partir de la palabra `base` de la
+  * caché, sin pasar de `limit`. Devuelve las palabras usadas, o 0 si no
+  * cupo. */
+@@ -2924,6 +2932,10 @@ static uint32_t emit_block(struct ctx *c, uint32_t base, uint32_t limit)
+ 	rec->nlabels = rec->nfixups = 0;
+ 	rec->fm_npend = 0;
+ 	rec->overflow = false;
++#ifdef SALSA64_REC_LAB
++	memset(&rec->lab, 0xFF, sizeof rec->lab);
++	rec->lab.loop = loop;
++#endif
+ 	if (!c->wide)
+ 		chain_build(c);
+ 	c->sec = SEC_HOT;
+@@ -3002,6 +3014,7 @@ static uint32_t emit_block(struct ctx *c, uint32_t base, uint32_t limit)
+ 	}
+ 
+ 	for (unsigned k = 0; k < n; k++) {
++		LAB_MARK(c, k);
+ 		emit_ijumps_to(c, k);
+ 		if (c->has_branch && k == n - 2) {
+ 			emit_branch(c, k);
+@@ -3029,6 +3042,7 @@ static uint32_t emit_block(struct ctx *c, uint32_t base, uint32_t limit)
+ 		emit_site(c, n, SALSA64_RPF_SITE_END, pc + 4ull * n);
+ 		emit_exit_to(c, pc + 4ull * n);
+ 	}
++	LAB_MARK(c, n);
+ 
+ 	c->sec = SEC_COLD;
+ 	bind(c, start_exit);

@@ -612,6 +612,13 @@ HOT void execute(struct salsa64_cpu *cpu, struct flow *f, uint32_t i)
 #define SALSA64_CPI 1
 #endif
 
+#ifdef SALSA64_LAB_TRACE
+/* Laboratorio del recompilador (tools/lab/lab-trace.c): se llama antes de cada
+ * instrucción que va a ejecutarse, con su pc virtual y su física. Solo existe
+ * con -DSALSA64_LAB_TRACE. */
+void (*salsa64_lab_hook)(struct salsa64_cpu *cpu, uint64_t vpc, uint32_t pa);
+#endif
+
 /* Ejecuta hasta que cycles alcance sched->next, o una sola instrucción con
  * `once`. */
 HOT void cpu_loop(struct salsa64_cpu *cpu, bool once)
@@ -634,6 +641,10 @@ HOT void cpu_loop(struct salsa64_cpu *cpu, bool once)
 		if (SALSA64_UNLIKELY(cpu->irq_pending)) {
 			salsa64_vr4300_exception(cpu, SALSA64_EXC_INT, 0);
 		} else if (SALSA64_LIKELY(vr4300_vaddr(cpu, f.pc, 3, SALSA64_ACC_FETCH, &pa))) {
+#ifdef SALSA64_LAB_TRACE
+			if (SALSA64_UNLIKELY(salsa64_lab_hook))
+				salsa64_lab_hook(cpu, f.cur, pa);
+#endif
 			uint32_t instr = vr4300_read32(cpu, pa);
 			f.pc = f.next_pc;
 			f.next_pc += 4;

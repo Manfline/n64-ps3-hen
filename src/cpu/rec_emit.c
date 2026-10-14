@@ -2876,6 +2876,14 @@ static void reset_emission(struct ctx *c)
 	memcpy(c->ds_of, ds_of, sizeof ds_of);
 }
 
+#ifdef SALSA64_REC_LAB
+/* Laboratorio (tools/lab): anota dónde empieza el código de la instrucción k. */
+#define LAB_MARK(c, k) ((c)->rec->lab.hot[k] = (uint16_t)(c)->rec->nbuf[SEC_HOT], (c)->rec->lab.cold[k] = (uint16_t)(c)->rec->nbuf[SEC_COLD], \
+			(c)->rec->lab.how[k] = (k) < (c)->n ? (c)->d[k].how : 0xFF)
+#else
+#define LAB_MARK(c, k) ((void)0)
+#endif
+
 /* Emite el bloque decodificado en `c` a partir de la palabra `base` de la
  * caché, sin pasar de `limit`. Devuelve las palabras usadas, o 0 si no
  * cupo. */
@@ -2924,6 +2932,10 @@ static uint32_t emit_block(struct ctx *c, uint32_t base, uint32_t limit)
 	rec->nlabels = rec->nfixups = 0;
 	rec->fm_npend = 0;
 	rec->overflow = false;
+#ifdef SALSA64_REC_LAB
+	memset(&rec->lab, 0xFF, sizeof rec->lab);
+	rec->lab.loop = loop;
+#endif
 	if (!c->wide)
 		chain_build(c);
 	c->sec = SEC_HOT;
@@ -3002,6 +3014,7 @@ static uint32_t emit_block(struct ctx *c, uint32_t base, uint32_t limit)
 	}
 
 	for (unsigned k = 0; k < n; k++) {
+		LAB_MARK(c, k);
 		emit_ijumps_to(c, k);
 		if (c->has_branch && k == n - 2) {
 			emit_branch(c, k);
@@ -3029,6 +3042,7 @@ static uint32_t emit_block(struct ctx *c, uint32_t base, uint32_t limit)
 		emit_site(c, n, SALSA64_RPF_SITE_END, pc + 4ull * n);
 		emit_exit_to(c, pc + 4ull * n);
 	}
+	LAB_MARK(c, n);
 
 	c->sec = SEC_COLD;
 	bind(c, start_exit);
