@@ -2573,14 +2573,21 @@ static void stats(uint64_t now)
 			uint32_t iv = rs.interp_vertices - sw.rdp0.interp_vertices;
 			uint32_t ip = rs.interp_paired - sw.rdp0.interp_paired;
 			uint32_t ifl = rs.interp_fields - sw.rdp0.interp_fields;
-			salsa64_log("gfx: interpolación: %u tareas con anterior (%u cortes, %u sin lugar en las tablas), "
-				    "vértices de salida con pareja %.1f %% (%.0f por tarea), %u grupos por el contenido, "
-				    "emparejar %.3f ms del PPE por tarea; %u campos intermedios (%.1f/s, %u saltados), "
-				    "redibujar %.3f ms del PPE por campo intermedio",
+			salsa64_log("gfx: interpolación: %u tareas con anterior (%u cortes, %u sin lugar en las tablas, %u con "
+				    "texturas de un destino), vértices de salida con pareja %.1f %% (%.0f por tarea), %u grupos "
+				    "por el contenido, %u rechazados (saltaron o se deformaron), %u reordenados; emparejar %.3f "
+				    "ms del PPE por tarea (armar %.3f, emparejar %.3f, posiciones %.3f)",
 				    itasks, rs.interp_cuts - sw.rdp0.interp_cuts, rs.interp_full - sw.rdp0.interp_full,
-				    iv ? 100.0 * ip / iv : 0.0, (double)iv / itasks, rs.interp_content - sw.rdp0.interp_content,
-				    (rs.us_interp - sw.rdp0.us_interp) / 1e3 / tasks, ifl, ifl * 1e6 / dt,
-				    rs.interp_skipped - sw.rdp0.interp_skipped,
+				    rs.interp_fbtex - sw.rdp0.interp_fbtex, iv ? 100.0 * ip / iv : 0.0, (double)iv / itasks,
+				    rs.interp_content - sw.rdp0.interp_content, rs.interp_rejected - sw.rdp0.interp_rejected,
+				    rs.interp_reordered - sw.rdp0.interp_reordered, (rs.us_interp - sw.rdp0.us_interp) / 1e3 / tasks,
+				    (rs.us_interp_build - sw.rdp0.us_interp_build) / 1e3 / tasks,
+				    (rs.us_interp_pair - sw.rdp0.us_interp_pair) / 1e3 / tasks,
+				    (rs.us_interp_prev - sw.rdp0.us_interp_prev) / 1e3 / tasks);
+			salsa64_log("gfx: interpolación: %u campos intermedios (%.1f/s), %u enteros (cuadro sin interpolar), %u "
+				    "repetidos (no llegaron a tiempo); redibujar %.3f ms del PPE por campo intermedio",
+				    ifl, ifl * 1e6 / dt, rs.interp_plain - sw.rdp0.interp_plain,
+				    rs.interp_repeated - sw.rdp0.interp_repeated,
 				    ifl ? (rs.us_interp_draw - sw.rdp0.us_interp_draw) / 1e3 / ifl : 0.0);
 		}
 		uint32_t rb = rs.readbacks - sw.rdp0.readbacks, rbw = rs.readback_waits - sw.rdp0.readback_waits;

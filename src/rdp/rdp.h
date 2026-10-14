@@ -80,11 +80,14 @@ struct salsa64_rdp_stats {
 	 * contenido y el tiempo del PPE (presentación). */
 	uint32_t interp_tasks, interp_cuts, interp_full;
 	uint32_t interp_vertices, interp_paired, interp_content;
-	uint64_t us_interp;
-	/* Campos intermedios dibujados y los que tocaban pero no se pudieron
-	 * (sin posiciones de antes, sin superficie o su juego ya en uso), y el
-	 * tiempo del PPE redibujando (presentación). */
-	uint32_t interp_fields, interp_skipped;
+	uint32_t interp_rejected, interp_reordered;  /* grupos rechazados (saltaron, se deformaron) y reordenados */
+	uint32_t interp_fbtex;                       /* tareas sin interpolar por leer texturas de un destino */
+	uint64_t us_interp, us_interp_build, us_interp_pair, us_interp_prev;
+	/* Campos intermedios dibujados, los que tocaban pero el cuadro no se
+	 * interpola (corte, sin anterior, texturas de un destino: va entero) y
+	 * los que no llegaron a tiempo (su juego ya en uso o sin superficie: se
+	 * repite el campo anterior), y el tiempo del PPE redibujando. */
+	uint32_t interp_fields, interp_plain, interp_repeated;
 	uint64_t us_interp_draw;
 };
 
@@ -189,7 +192,7 @@ void salsa64_rdp_fbfx(int level);
  * las posiciones entre el cuadro anterior y ese (salsa64_rdp_present).
  * FIXED (para probar): cada tarea se dibuja en prev + (pos − prev)·t, sin
  * campos intermedios. Apagada no cambia nada ni reserva memoria; la primera
- * vez que se enciende reserva las tablas (~1,3 MB) y, con FIELDS, la
+ * vez que se enciende reserva las tablas (~2,4 MB) y, con FIELDS, la
  * superficie de los intermedios se crea al primero (cuenta en el tope de
  * memoria del RSX). Fuera del bucle o con la emulación en pausa; devuelve 0
  * o RSXKIT_ENOMEM. */

@@ -148,9 +148,6 @@ void salsa64_rdp_set_log(void (*fn)(const char *fmt, ...))
 /* Tablas del emparejamiento: memalign la primera vez que se enciende la
  * interpolación (fuera del bucle) y quedan; apagada no se reservan. */
 struct vm_frame {
-	struct vmatch_group g[VM_GROUPS];
-	float clip[VM_CLIP][4];
-	uint32_t index[4 * VM_GROUPS];
 	struct vmatch_table t;
 };
 static struct vm_frame *vm;
@@ -262,7 +259,7 @@ static struct {
 	 * (salsa64_rdp_present_again); surf NULL: nada que repetir. slot, y0,
 	 * pw y ph son la región sin recortar, para repetirla con otra vista o
 	 * con otro recorte (el menú de pausa). */
-	struct {
+	struct again {
 		rsxkit_target *surf;
 		int slot;
 		uint32_t y0, pw, ph;
@@ -271,7 +268,7 @@ static struct {
 		rsxkit_view view;
 		uint32_t scale;  /* píxeles de la superficie por píxel de la N64 */
 		bool interp;     /* lo presentado es un campo intermedio (rdp.interp.surf) */
-	} again;
+	} again, again_last; /* again_last: lo del campo anterior (un intermedio que no se pudo lo repite) */
 	/* salsa64_rdp_present dibuja (sin filtro) o solo elige la fuente. */
 	bool no_draw;
 	/* Interpolación por geometría (salsa64_rdp_interp). */
@@ -286,6 +283,7 @@ static struct {
 		 * superficie y profundidad de los intermedios (del tamaño del
 		 * destino presentado; cuentan en rdp.vram). */
 		uint32_t shown_task, frame_field, k;
+		uint32_t last_gap;  /* campos que duró el último cuadro (1: el juego va a 60; no se empareja) */
 		rsxkit_target *surf;
 		rsxkit_depth *depth;
 		uint32_t w, h, bytes;
@@ -297,6 +295,10 @@ static struct {
 		 * caché de texturas lo que usa) y el done_task más alto que recibió
 		 * la HLE. */
 		volatile uint32_t acq, busy, keep_task, keep_fence, done_given;
+		/* La tarea del cuadro que se muestra: la HLE no suelta de la caché
+		 * nada de ella ni de las siguientes (sus intermedios aún se
+		 * dibujan); 0 nada. */
+		volatile uint32_t protect;
 	} interp;
 } rdp;
 
@@ -384,14 +386,20 @@ int salsa64_rdp_interp(int mode, float t)
 {
 	bool on = mode == SALSA64_INTERP_FIELDS || mode == SALSA64_INTERP_FIXED;
 	if (on && !vm) {
-		vm = memalign(128, 2 * sizeof *vm);
-		if (!vm)
+		size_t bytes = vmatch_table_bytes(VM_GROUPS, VM_CLIP);
+		uint8_t *mem = memalign(128, 2 * bytes);
+		vm = mem ? malloc(2 * sizeof *vm) : NULL;
+		if (!vm) {
+			free(mem);
 			return RSXKIT_ENOMEM;
+		}
 		for (int i = 0; i < 2; i++)
-			vmatch_table_init(&vm[i].t, vm[i].g, VM_GROUPS, vm[i].clip, VM_CLIP, vm[i].index, 4 * VM_GROUPS);
+			vmatch_table_init(&vm[i].t, mem + i * bytes, VM_GROUPS, VM_CLIP);
 	}
 	rdp.interp.t = t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t;
 	rdp.interp.mode = on ? mode : SALSA64_INTERP_OFF;
+	if (rdp.interp.mode != SALSA64_INTERP_FIELDS)
+		rdp.interp.protect = 0;
 	return RSXKIT_OK;
 }
 
@@ -425,6 +433,12 @@ static void release_targets(void)
 	rdp.again.surf = NULL;
 	rdp.again.interp = false;
 	interp_release();
+	/* La tabla de destinos vuelve a contar desde 0: nada de lo anterior se
+	 * redibuja. */
+	rdp.interp.shown_task = rdp.interp.k = rdp.interp.last_gap = 0;
+	for (unsigned i = 0; i < SETS; i++)
+		rdp.sets[i].tg_task = 0;
+	memset(&rdp.again_last, 0, sizeof rdp.again_last);
 	for (int i = 0; i < RDP_TARGETS_MAX; i++)
 		if (rdp.surf[i])
 			rsxkit_target_destroy(rdp.surf[i]);
@@ -517,6 +531,8 @@ uint32_t salsa64_rdp_reset(void)
 	memset(&rdp.last_res, 0, sizeof rdp.last_res);
 	rdp.interp.have_prev = false;
 	rdp.interp.acq = rdp.interp.busy = rdp.interp.keep_task = rdp.interp.keep_fence = rdp.interp.done_given = 0;
+	rdp.interp.protect = 0;
+	memset(&rdp.again_last, 0, sizeof rdp.again_last);
 	memset(&rdp.stats, 0, sizeof rdp.stats);
 	memset(&rdp.tb, 0, sizeof rdp.tb);
 	return pending;
@@ -619,6 +635,11 @@ static void acquire(void *ctx, struct gfx_job *job)
 		uint32_t kf = rdp.interp.keep_fence;
 		if (kt && (!kf || !rsxkit_fence_done(kf)) && (int32_t)(done - kt) >= 0)
 			done = kt - 1;
+		/* Solo mientras se pueda redibujar: hasta que su juego de búferes se
+		 * reuse (la tarea pr + SETS). */
+		uint32_t pr = rdp.interp.protect;
+		if (pr && (int32_t)(done - pr) >= 0 && (int32_t)(n + 1 - pr) < SETS)
+			done = pr - 1;
 	}
 	job->task = n + 1;
 	job->done_task = done;
@@ -1154,6 +1175,11 @@ static bool texture_from_rdram(const struct gfx_tex *gt, struct set *s, rsxkit_t
 	return true;
 }
 
+/* Algún dibujo traducido leyó una textura de un destino (o de la RDRAM por
+ * venir de uno): esa tarea no se interpola (redibujada más tarde, leería lo
+ * que el destino tenga entonces). Lo baja translate. */
+static bool to_rsxkit_fb;
+
 /* false: el dibujo no se puede hacer (una textura que no hubo dónde
  * decodificar). */
 static bool to_rsxkit(const struct gfx_draw *g, struct set *s, int cur, rsxkit_draw *d, bool *sync)
@@ -1198,6 +1224,8 @@ static bool to_rsxkit(const struct gfx_draw *g, struct set *s, int cur, rsxkit_d
 		bool from_target = false;
 		if (texture_from_target(gt, cur, t, &from_target))
 			*sync = true;
+		if (from_target || gt->where == GFX_TEX_TARGET)
+			to_rsxkit_fb = true;
 		if (gt->where == GFX_TEX_TARGET && !from_target && !texture_from_rdram(gt, s, t))
 			return false;
 	}
@@ -1343,12 +1371,18 @@ static void interp_task(struct set *s, const struct gfx_result *res)
 	uint64_t t0 = sysGetSystemTime();
 	uint32_t c = rdp.interp.cur ^ 1;
 	struct vmatch_table *cur = &vm[c].t, *prev = rdp.interp.have_prev ? &vm[c ^ 1].t : NULL;
-	vmatch_build(cur, s->cmd, res->cmd_bytes, rdp.rdram, rdp.rdram_size);
+	vmatch_build(cur, prev, s->cmd, res->cmd_bytes, rdp.rdram, rdp.rdram_size);
+	uint64_t t1 = sysGetSystemTime();
 	struct vmatch_stats st;
 	vmatch_pair(prev, cur, INTERP_DISP, &st);
+	uint64_t t2 = sysGetSystemTime();
 	uint32_t nv = res->vtx_bytes / sizeof(struct gfx_vertex);
 	uint32_t paired = vmatch_prev(prev, cur, &st, (const struct gfx_vertex *)s->vtx, nv,
 				      (float(*)[4])(s->vtx + VTX_INTERP));
+	uint64_t t3 = sysGetSystemTime();
+	rdp.stats.us_interp_build += t1 - t0;
+	rdp.stats.us_interp_pair += t2 - t1;
+	rdp.stats.us_interp_prev += t3 - t2;
 	rdp.interp.cur = c;
 	rdp.interp.have_prev = true;
 	s->interp_ok = prev && !st.cut && !cur->full && paired;
@@ -1359,6 +1393,8 @@ static void interp_task(struct set *s, const struct gfx_result *res)
 		rdp.stats.interp_vertices += nv;
 		rdp.stats.interp_paired += paired;
 		rdp.stats.interp_content += st.by_content;
+		rdp.stats.interp_rejected += st.jumped + st.deformed;
+		rdp.stats.interp_reordered += st.reordered;
 	}
 	if (rdp.interp.mode == SALSA64_INTERP_FIXED && rdp.interp.t < 1.0f)
 		rsxkit_vertices_prev(s->vtx_off + VTX_INTERP, RSXKIT_MEM_MAIN, rdp.interp.t);
@@ -1373,7 +1409,9 @@ static void translate(uint32_t n)
 	const struct gfx_result *res = &s->res;
 	rsxkit_vertices(s->vtx_off, RSXKIT_MEM_MAIN);
 	s->interp_ok = false;
-	if (s->interp)
+	to_rsxkit_fb = false;
+	/* Un juego a 60 cuadros no tiene campos intermedios: no se empareja. */
+	if (s->interp && !(rdp.interp.mode == SALSA64_INTERP_FIELDS && rdp.interp.last_gap == 1))
 		interp_task(s, res);
 	else
 		rdp.interp.have_prev = false;
@@ -1534,6 +1572,10 @@ static void translate(uint32_t n)
 			break;
 		}
 		off += c->size;
+	}
+	if (to_rsxkit_fb && s->interp_ok) {
+		s->interp_ok = false;
+		rdp.stats.interp_fbtex++;
 	}
 	/* Copias a la RDRAM que pidió done: el RSX reduce cada destino a su
 	 * búfer y, pasada la barrera, el PPE lo convierte y lo escribe. */
@@ -1838,9 +1880,6 @@ static void interp_release(void)
 	rdp.interp.depth = NULL;
 	rdp.vram -= rdp.interp.bytes < rdp.vram ? rdp.interp.bytes : rdp.vram;
 	rdp.interp.w = rdp.interp.h = rdp.interp.bytes = 0;
-	rdp.interp.shown_task = rdp.interp.k = 0;
-	for (unsigned i = 0; i < SETS; i++)
-		rdp.sets[i].tg_task = 0;
 }
 
 /* Superficie y profundidad de los intermedios del tamaño de la del destino
@@ -1851,9 +1890,7 @@ static bool interp_surface(int slot)
 	rsxkit_target_size(rdp.surf[slot], &w, &h);
 	if (rdp.interp.surf && rdp.interp.w == w && rdp.interp.h == h)
 		return true;
-	uint32_t shown = rdp.interp.shown_task, k = rdp.interp.k;
 	interp_release();
-	rdp.interp.shown_task = shown, rdp.interp.k = k;
 	uint32_t bytes = 2 * rdp_surface_bytes(w, h);
 	if (!make_room(bytes, slot))
 		return false;
@@ -1861,7 +1898,6 @@ static bool interp_surface(int slot)
 	rdp.interp.depth = rdp.interp.surf ? rsxkit_depth_create(w, h) : NULL;
 	if (!rdp.interp.depth) {
 		interp_release();
-		rdp.interp.shown_task = shown, rdp.interp.k = k;
 		LOGN(5, "gfx: interpolación: sin memoria del RSX para la superficie de %ux%u", w, h);
 		return false;
 	}
@@ -1960,21 +1996,34 @@ static void interp_draw(struct set *s, int slot, float t)
 static void interp_field(const struct rdp_present *p, uint32_t field)
 {
 	uint32_t task = rdp.tg.t[p->slot].last_task;
-	if (task != rdp.interp.shown_task) {
-		uint32_t gap = field - rdp.interp.frame_field;
-		rdp.interp.k = rdp.interp.shown_task && gap >= 2 && gap <= 4 ? gap : 0;
-		rdp.interp.shown_task = task;
-		rdp.interp.frame_field = field;
-	}
-	uint32_t j = field - rdp.interp.frame_field;
-	if (rdp.interp.k < 2 || j + 1 >= rdp.interp.k)
-		return;  /* el cuadro de verdad */
 	struct set *s = NULL;
 	for (unsigned i = 0; i < SETS; i++)
 		if (rdp.sets[i].tg_task == task && rdp.sets[i].fence_task)
 			s = &rdp.sets[i];
-	if (!s || !s->interp || !s->interp_ok || !interp_surface(p->slot) || !interp_hold(s->fence_task)) {
-		rdp.stats.interp_skipped++;
+	if (task != rdp.interp.shown_task) {
+		uint32_t gap = field - rdp.interp.frame_field;
+		rdp.interp.k = rdp.interp.shown_task && gap >= 2 && gap <= 4 ? gap : 0;
+		rdp.interp.last_gap = rdp.interp.shown_task ? gap : 0;
+		rdp.interp.shown_task = task;
+		rdp.interp.frame_field = field;
+		/* Desde ahora la HLE no suelta lo que usa esta tarea (acquire). */
+		rdp.interp.protect = s ? s->fence_task : 0;
+	}
+	uint32_t j = field - rdp.interp.frame_field;
+	if (rdp.interp.k < 2 || j + 1 >= rdp.interp.k)
+		return;  /* el cuadro de verdad */
+	if (!s || !s->interp || !s->interp_ok) {
+		rdp.stats.interp_plain++;  /* este cuadro no se interpola: va entero */
+		return;
+	}
+	if (!interp_surface(p->slot) || !interp_hold(s->fence_task)) {
+		/* Ya es tarde para redibujarlo: se repite lo del campo anterior (el
+		 * cuadro final adelantaría y el intermedio siguiente volvería atrás:
+		 * eso se ve como un parpadeo). */
+		const struct again *l = &rdp.again_last;
+		if (l->surf && (l->interp ? l->surf == rdp.interp.surf : rdp.surf[l->slot] == l->surf))
+			rdp.again = *l;
+		rdp.stats.interp_repeated++;
 		return;
 	}
 	uint64_t t0 = sysGetSystemTime();
@@ -2010,6 +2059,9 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 		interp_field(&p, field);
 	else if (rdp.interp.surf)
 		interp_release();
+	if (rdp.interp.mode != SALSA64_INTERP_FIELDS)
+		rdp.interp.protect = 0;
+	rdp.again_last = rdp.again;
 	if (!rdp.no_draw)
 		rsxkit_target_present(rdp.again.surf, &rdp.again.src, rdp.again.w, rdp.again.h, &rdp.again.view, out);
 	else if (out)

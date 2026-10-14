@@ -9,6 +9,9 @@
  *   ppmtool crop ENTRADA.ppm SALIDA.png X Y ANCHO ALTO ESCALA
  *   ppmtool strip SALIDA.png COLUMNAS ESCALA A.ppm B.ppm …   mosaico (filas × COLUMNAS)
  *   ppmtool apng SALIDA.png MS ESCALA A.ppm B.ppm …          animación (APNG), MS por cuadro
+ *   ppmtool flicker A.ppm M.ppm B.ppm [SALIDA.png]   intermedio M entre los cuadros A y B: píxeles
+ *       que no cambian de A a B (diferencia ≤ 12) pero en M sí (> 48 contra los dos), o sea lo que
+ *       aparece o desaparece solo en el intermedio; SALIDA, M con esos píxeles en rojo
  *
  * Compilar: cc -O2 -o build/ppmtool tools/ppmtool.c -lz
  */
@@ -181,6 +184,37 @@ int main(int argc, char **argv)
 			sum += d / 3.0;
 		}
 		printf("%.2f %% de píxeles distintos, diferencia media %.3f/255\n", 100.0 * changed / n, sum / n);
+		return 0;
+	}
+	if ((argc == 5 || argc == 6) && !strcmp(argv[1], "flicker")) {
+		struct img a, m, b;
+		if (read_ppm(argv[2], &a) || read_ppm(argv[3], &m) || read_ppm(argv[4], &b))
+			return 1;
+		if (a.w != b.w || a.h != b.h || m.w != a.w || m.h != a.h) {
+			printf("tamaños distintos\n");
+			return 2;
+		}
+		long n = (long)a.w * a.h, still = 0, bad = 0;
+		for (long i = 0; i < n; i++) {
+			const uint8_t *pa = a.p + i * 3, *pb = b.p + i * 3;
+			uint8_t *pm = m.p + i * 3;
+			int ab = 0, ma = 0, mb = 0;
+			for (int c = 0; c < 3; c++) {
+				int d = abs(pa[c] - pb[c]), e = abs(pm[c] - pa[c]), f = abs(pm[c] - pb[c]);
+				ab = d > ab ? d : ab, ma = e > ma ? e : ma, mb = f > mb ? f : mb;
+			}
+			if (ab > 12)
+				continue;
+			still++;
+			if (ma > 48 && mb > 48) {
+				bad++;
+				pm[0] = 255, pm[1] = 0, pm[2] = 0;
+			}
+		}
+		printf("%ld de %ld píxeles quietos cambian en el intermedio (%.3f %%)\n", bad, still,
+		       still ? 100.0 * bad / still : 0.0);
+		if (argc == 6)
+			return write_png(argv[5], &m) ? 1 : 0;
 		return 0;
 	}
 	if (argc >= 6 && (!strcmp(argv[1], "strip") || !strcmp(argv[1], "apng"))) {

@@ -650,6 +650,55 @@ apagada desde «Imagen». A la vista: más fluido y sin objetos que tiemblen.
 En el log: el % de pareja, los ms del PPE (emparejar y redibujar) y los
 campos/s de la emulación, que no deben bajar.
 
+### Primera prueba en la PS3 («Salsa64 interp 1») y arreglos («interp 2»)
+
+El autor, con Zelda OoT y Majora a escala 5×: «se ve fantástica», pero hay
+texturas que parpadean, y en Majora el hada deja una estela como de
+píxeles fantasma (no siempre). El log:
+
+- La emulación se mantuvo en 60 campos/s. Emparejar costó 0,8–3,5 ms del
+  PPE por tarea (en RPCS3, 0,2): 3,5 ms en el campo de Hyrule con 7195
+  vértices; en Majora, 1,5–3,4. En esas ventanas se saltaron hasta 96 de
+  200 intermedios.
+- La presentación pasó de ~2 a 7–8 ms de RSX por campo (la escena hasta
+  tres veces a 5×) y se saltaron 10–23 campos presentados cada 5 s.
+
+Lo que se cambió:
+
+- **Parpadeo.** Un intermedio que no llegaba a tiempo mostraba el cuadro
+  final y el campo siguiente volvía a 2/3: lo que se mueve iba adelante y
+  atrás. Ahora ese campo repite lo del campo anterior (el movimiento nunca
+  retrocede), y desde que un cuadro aparece la HLE no suelta de la caché de
+  texturas lo que usa su tarea (antes, solo mientras se redibujaba), así
+  fallan muchos menos. El log separa los campos «enteros» (el cuadro no se
+  interpola: corte, texturas de un destino) de los «repetidos» (no llegaron
+  a tiempo).
+- **Estela del hada.** Las instancias de un modelo repetido (partículas,
+  destellos) se emparejaban por orden: una partícula que renace en otro
+  lugar se dibujaba a medio camino entre los dos, y en una estela en anillo
+  un vértice salta del final al principio. Ahora, entre instancias, la del
+  mismo orden si se movió como sus hermanas (la mediana de las demás) y si
+  no, la más cercana que sí; sin pareja (quieta en su lugar de ahora) la que
+  se movió mucho más que sus hermanas o el grupo chico (menos de 64 px) que
+  se deforma de golpe. Los modelos de una sola instancia no pasan por esto
+  (la cámara mueve igual todo): GoldenEye contra la verdad sigue en 30,05
+  dB; en el bosque Kokiri caen 3–4 grupos por tarea, en Majora 0–1.
+- **Efectos de framebuffer.** Una tarea que lee texturas de un destino no
+  se interpola (redibujada más tarde leería lo que el destino tenga
+  entonces).
+- **Costo.** vmatch arma las tablas sin pasadas cuadráticas, solo lee la
+  RDRAM (hash del contenido) de los grupos que cambiaron de dirección, pide
+  la memoria antes (prefetch), no divide por vértice (la profundidad z/w la
+  toma el vertex program del vértice de ahora) y no empareja nada si el
+  juego va a 60 cuadros. En el host (tools/vmatch-bench.c con dos tareas de
+  Majora, 6921 vértices de salida): armar 31 → 21 µs, posiciones 23 → 17
+  µs; el costo real en el PPE no se puede medir aquí: el log ahora lo
+  separa en armar, emparejar y posiciones.
+
+No encontré la escena exacta de la estela en los estados de la consola
+(el hada no está a la vista en ninguno); conviene que el autor diga el
+lugar, o guarde un estado ahí, si sigue con «interp 2».
+
 ## Reproducir en la Mac
 
 ```
@@ -680,6 +729,13 @@ cp tools/interp-index.html build/interp/index.html
   `SALSA64_INTERP_SIN_IMAGENES=1` solo cuenta.
 - `--interp-k K` (campos por cuadro), `--interp-decimate` (1 de cada K
   tareas es el cuadro del juego), `--interp-disp PX` (umbral de corte, 120).
+- `SALSA64_INTERP_BASE_FINAL=1` dibuja los intermedios del host sobre el
+  cuadro final (como la PS3), `SALSA64_INTERP_T0=1` agrega `g0-T.ppm` (todo
+  en las posiciones de antes: debería dar el cuadro anterior),
+  `SALSA64_INTERP_GRUPOS=1` vuelca cada grupo y su pareja
+  (`grupos-T.txt`) y `SALSA64_INTERP_VOLCAR=1` las tareas 20 y 21 para
+  `tools/vmatch-bench.c`; `ppmtool flicker A M B` cuenta lo que cambia solo
+  en un intermedio.
 - En RPCS3 (pasos 1–3, sin presentación nueva): `tools/rpcs3-run.py
   build/salsa64/salsa64.elf --embedded gfxtest --bandera interp-prueba=0`
   dibuja cada tarea un cuadro atrás (el cubo); con `=1`, igual que sin el

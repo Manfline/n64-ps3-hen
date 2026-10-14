@@ -105,7 +105,7 @@ Opciones:
   al abrir el juego, por juego y en vivo desde «Imagen» del menú de pausa;
   se guarda en `menu.cfg` (`interpolacion = no|geometria`). Cuesta más
   trabajo del RSX (la escena se dibuja hasta tres veces por cuadro del
-  juego) y ~1,3 MB de memoria y una superficie más mientras está encendida.
+  juego) y ~2,4 MB de memoria y una superficie más mientras está encendida.
 - **Resolución**: 720p (por omisión, render a 3×) o 1080p (render a 4×).
   Se guarda en video.cfg (así arranca la próxima vez) y se pone con
   «Aplicar ahora», sin cerrar Salsa64; el panel muestra la salida actual y,

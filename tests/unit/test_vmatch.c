@@ -14,9 +14,7 @@
 #define CCAP 1024
 
 struct frame {
-	struct vmatch_group g[GCAP];
-	float clip[CCAP][4];
-	uint32_t index[4 * GCAP];
+	_Alignas(16) uint8_t mem[64 << 10];
 	struct vmatch_table t;
 	uint8_t cmd[16384];
 	uint32_t len;
@@ -27,7 +25,8 @@ static uint8_t ram[0x10000];  /* RDRAM de prueba (direcciones bajas) */
 static void frame_init(struct frame *f)
 {
 	memset(f, 0, sizeof *f);
-	vmatch_table_init(&f->t, f->g, GCAP, f->clip, CCAP, f->index, 4 * GCAP);
+	CHECK(vmatch_table_bytes(GCAP, CCAP) <= sizeof f->mem);
+	vmatch_table_init(&f->t, f->mem, GCAP, CCAP);
 }
 
 /* Un G_VTX de n vértices desde `addr` con viewport 160 × 120 (el de la HLE
@@ -51,7 +50,7 @@ static void finish(struct frame *f)
 	struct gfx_cmd c = { GFX_OP_END, sizeof c, 0, 0, 0 };
 	memcpy(f->cmd + f->len, &c, sizeof c);
 	f->len += sizeof c;
-	vmatch_build(&f->t, f->cmd, f->len, ram, sizeof ram);
+	vmatch_build(&f->t, NULL, f->cmd, f->len, ram, sizeof ram);
 }
 
 /* El vértice de salida de la coordenada de recorte c (viewport 160 × 120,
@@ -81,6 +80,7 @@ static struct frame fa, fb;
 static void vmatch_pairs_and_positions(void)
 {
 	memset(ram, 0, sizeof ram);
+	ram[0x3000] = 1;  /* el grupo nuevo no tiene el contenido de otro */
 	static const float m0[2][4] = { { 0.0f, 0.0f, 1.0f, 2.0f }, { 0.5f, 0.0f, 1.0f, 2.0f } };
 	static const float m1[2][4] = { { -1.0f, 0.5f, 1.0f, 2.0f }, { -0.5f, 0.5f, 1.0f, 2.0f } };
 	static const float far0[1][4] = { { 0.0f, 0.0f, 1.0f, 1.0f } };
@@ -90,8 +90,8 @@ static void vmatch_pairs_and_positions(void)
 	add_group(&fa, 0x2000, 4, 1, far0);
 	finish(&fa);
 	CHECK_EQ(fa.t.ngroups, 3);
-	CHECK_EQ(fa.g[0].occ, 0);
-	CHECK_EQ(fa.g[1].occ, 1);
+	CHECK_EQ(fa.t.g[0].occ, 0);
+	CHECK_EQ(fa.t.g[1].occ, 1);
 
 	static const float n0[2][4] = { { 0.1f, 0.0f, 1.0f, 2.0f }, { 0.6f, 0.0f, 1.0f, 2.0f } };
 	static const float n1[2][4] = { { -0.9f, 0.5f, 1.0f, 2.0f }, { -0.4f, 0.5f, 1.0f, 2.0f } };
@@ -106,10 +106,10 @@ static void vmatch_pairs_and_positions(void)
 	CHECK_EQ(fb.t.ngroups, 4);
 	struct vmatch_stats st;
 	vmatch_pair(&fa.t, &fb.t, 120.0f, &st);
-	CHECK_EQ(fb.g[0].pair, 0);
-	CHECK_EQ(fb.g[1].pair, 1);  /* el segundo árbol con el segundo */
-	CHECK_EQ(fb.g[2].pair, -1); /* se movió 144 px: corte */
-	CHECK_EQ(fb.g[3].pair, -1); /* nuevo */
+	CHECK_EQ(fb.t.g[0].pair, 0);
+	CHECK_EQ(fb.t.g[1].pair, 1);  /* el segundo árbol con el segundo */
+	CHECK_EQ(fb.t.g[2].pair, -1); /* se movió 144 px: corte */
+	CHECK_EQ(fb.t.g[3].pair, -1); /* nuevo */
 	CHECK_EQ(st.found, 3);
 	CHECK_EQ(st.moved, 1);
 	CHECK_EQ(st.paired, 2);
@@ -123,7 +123,7 @@ static void vmatch_pairs_and_positions(void)
 	CHECK_EQ(vmatch_prev(&fa.t, &fb.t, &st, v, 5, prev), 2);
 	struct gfx_vertex want = out_of(m0[1], 0);
 	CHECK(near(prev[0][0], want.x) && near(prev[0][1], want.y) && near(prev[0][3], want.w));
-	CHECK(near(prev[0][2], 0.5f * want.w));  /* z/w de ahora */
+	CHECK(near(prev[0][2], v[0].z));  /* z, la de ahora (la profundidad la pone quien dibuja) */
 	want = out_of(m1[0], 0);
 	CHECK(near(prev[1][0], want.x) && near(prev[1][1], want.y));
 	CHECK(near(prev[2][0], v[2].x) && near(prev[3][0], v[3].x));  /* sin pareja: donde está */
@@ -131,7 +131,7 @@ static void vmatch_pairs_and_positions(void)
 	 * ahora (n0: 3 y 3 → iguales: sin t). Con otro grupo de prueba abajo. */
 	CHECK(near(prev[4][0], v[4].x));
 	static const float q0[2][4] = { { 0, 0, -1.5f, 1.0f }, { 1, 0, 1.0f, 3.0f } };  /* z + w: −0,5 y 4 */
-	static const float q1[2][4] = { { 0.2f, 0, -1.5f, 1.0f }, { 0.8f, 0, 1.0f, 3.0f } };
+	static const float q1[2][4] = { { 0.1f, 0, -1.5f, 1.0f }, { 1.1f, 0, 1.0f, 3.0f } };
 	frame_init(&fa);
 	add_group(&fa, 0x6000, 0, 2, q0);
 	finish(&fa);
@@ -167,7 +167,7 @@ static void vmatch_content_and_cut(void)
 	finish(&fb);
 	struct vmatch_stats st;
 	vmatch_pair(&fa.t, &fb.t, 120.0f, &st);
-	CHECK_EQ(fb.g[0].pair, 0);
+	CHECK_EQ(fb.t.g[0].pair, 0);
 	CHECK_EQ(st.by_content, 1);
 	CHECK(!st.cut);
 
@@ -182,14 +182,113 @@ static void vmatch_content_and_cut(void)
 	float prev[1][4];
 	CHECK_EQ(vmatch_prev(&fa.t, &fb.t, &st, &v, 1, prev), 0);
 
+	/* Con el anterior a mano solo se mira el contenido de lo que cambió de
+	 * dirección: el grupo en 0x4000, que ya estaba, queda sin hash. */
+	vmatch_build(&fb.t, &fa.t, fb.cmd, fb.len, ram, sizeof ram);
+	CHECK_EQ(fb.t.g[0].hash, 0);
+	CHECK(fb.t.g[1].hash != 0);
 	vmatch_pair(NULL, &fb.t, 120.0f, &st);
 	CHECK_EQ(st.found, 0);
 	CHECK_EQ(vmatch_prev(NULL, &fb.t, &st, &v, 1, prev), 0);
 	CHECK(near(prev[0][0], v.x));
 }
 
+/* Un cuadrilátero chico (8 px) centrado en (px, py) píxeles, con w = 1. */
+static void quad_at(float c[4][4], float px, float py)
+{
+	static const float off[4][2] = { { -4, -4 }, { 4, -4 }, { -4, 4 }, { 4, 4 } };
+	for (int k = 0; k < 4; k++) {
+		c[k][0] = (px + off[k][0]) / 160.0f;
+		c[k][1] = (py + off[k][1]) / 120.0f;
+		c[k][2] = 0.5f;
+		c[k][3] = 1.0f;
+	}
+}
+
+/* Instancias del mismo modelo que cambian de orden: cada una con la más
+ * cercana de antes. Una partícula que renace lejos y una estela en anillo
+ * (un vértice salta del final al principio) quedan sin pareja. */
+static void vmatch_identity_rules(void)
+{
+	memset(ram, 0, sizeof ram);
+	float q[4][4];
+	/* Cinco instancias que avanzan 2 px; la segunda y la cuarta cambian de
+	 * lugar en el orden. */
+	static const float xa[5] = { -200, -100, 0, 100, 200 }, xb[5] = { -198, 102, 2, -98, 202 };
+	frame_init(&fa);
+	for (int i = 0; i < 5; i++) {
+		quad_at(q, xa[i], 0);
+		add_group(&fa, 0x7000, 0, 4, (const float(*)[4])q);
+	}
+	finish(&fa);
+	frame_init(&fb);
+	for (int i = 0; i < 5; i++) {
+		quad_at(q, xb[i], 0);
+		add_group(&fb, 0x7000, 0, 4, (const float(*)[4])q);
+	}
+	finish(&fb);
+	struct vmatch_stats st;
+	vmatch_pair(&fa.t, &fb.t, 120.0f, &st);
+	CHECK_EQ(fb.t.g[0].pair, 0);
+	CHECK_EQ(fb.t.g[1].pair, 3);
+	CHECK_EQ(fb.t.g[2].pair, 2);
+	CHECK_EQ(fb.t.g[3].pair, 1);
+	CHECK_EQ(fb.t.g[4].pair, 4);
+	CHECK_EQ(st.reordered, 2);
+	CHECK_EQ(st.paired, 5);
+
+	/* Una partícula de cuatro que renace 200 px más allá (sus hermanas
+	 * quietas): sin pareja. Un modelo de una sola instancia puede moverse
+	 * eso (la cámara). */
+	static const float pa[4] = { -100, -50, 0, 50 }, pb[4] = { 100, -50, 0, 50 };
+	frame_init(&fa);
+	for (int i = 0; i < 4; i++) {
+		quad_at(q, pa[i], 0);
+		add_group(&fa, 0x7100, 0, 4, (const float(*)[4])q);
+	}
+	quad_at(q, -60, 30);
+	add_group(&fa, 0x7180, 0, 4, (const float(*)[4])q);
+	finish(&fa);
+	frame_init(&fb);
+	for (int i = 0; i < 4; i++) {
+		quad_at(q, pb[i], 0);
+		add_group(&fb, 0x7100, 0, 4, (const float(*)[4])q);
+	}
+	quad_at(q, 40, 30);
+	add_group(&fb, 0x7180, 0, 4, (const float(*)[4])q);
+	finish(&fb);
+	vmatch_pair(&fa.t, &fb.t, 120.0f, &st);
+	CHECK_EQ(fb.t.g[0].pair, -1);
+	CHECK_EQ(fb.t.g[1].pair, 1);
+	CHECK_EQ(fb.t.g[4].pair, 4);
+	CHECK_EQ(st.jumped, 1);
+
+	static const float ta[4][4] = { { 0, 0, 0.5f, 1 }, { 20 / 160.0f, 0, 0.5f, 1 }, { 40 / 160.0f, 0, 0.5f, 1 },
+					{ 60 / 160.0f, 0, 0.5f, 1 } };
+	static const float tb[4][4] = { { 80 / 160.0f, 0, 0.5f, 1 }, { 20 / 160.0f, 0, 0.5f, 1 },
+					{ 40 / 160.0f, 0, 0.5f, 1 }, { 60 / 160.0f, 0, 0.5f, 1 } };
+	frame_init(&fa);
+	add_group(&fa, 0x7200, 0, 4, ta);
+	finish(&fa);
+	frame_init(&fb);
+	add_group(&fb, 0x7200, 0, 4, tb);
+	finish(&fb);
+	vmatch_pair(&fa.t, &fb.t, 120.0f, &st);
+	CHECK_EQ(fb.t.g[0].pair, -1);
+	CHECK_EQ(st.deformed, 1);
+	/* La misma estela que solo avanza (todos 20 px): con pareja. */
+	static const float tc[4][4] = { { 20 / 160.0f, 0, 0.5f, 1 }, { 40 / 160.0f, 0, 0.5f, 1 },
+					{ 60 / 160.0f, 0, 0.5f, 1 }, { 80 / 160.0f, 0, 0.5f, 1 } };
+	frame_init(&fb);
+	add_group(&fb, 0x7200, 0, 4, tc);
+	finish(&fb);
+	vmatch_pair(&fa.t, &fb.t, 120.0f, &st);
+	CHECK_EQ(fb.t.g[0].pair, 0);
+}
+
 void t_suite_vmatch(void)
 {
 	RUN(vmatch_pairs_and_positions);
 	RUN(vmatch_content_and_cut);
+	RUN(vmatch_identity_rules);
 }

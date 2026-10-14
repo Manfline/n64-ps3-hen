@@ -38,6 +38,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "raster.h"
 #include "rdp/vmatch.h"
@@ -49,8 +50,8 @@
 #define NIMG 8      /* imágenes de tareas guardadas */
 #define MAX_K 6
 #define MAX_OUT (1u << 16)
-#define VM_GROUPS 8192
-#define VM_CLIP   (1u << 17)
+#define VM_GROUPS 2048  /* como la PS3 (src/rdp/rdp.c) */
+#define VM_CLIP   32768
 
 /* La tabla de grupos de un cuadro (vmatch.h). */
 struct frame_table {
@@ -94,6 +95,9 @@ static struct {
 	bool recording;        /* la tarea en curso está en la ventana */
 	/* Cuentas (desde from_field). */
 	uint64_t v_loaded, v_found, v_matched, groups, groups_found, groups_moved, by_content;
+	uint64_t ns_build, ns_pair, ns_prev, vm_tasks;  /* tiempo de vmatch (host) */
+	uint64_t jumped, deformed, reordered;
+	bool base_final;
 	uint64_t out_vtx, out_matched, out_tasks;
 	uint64_t sad_evals, sad_blocks, searches;
 	double sum_psnr[8], sum_bad[8], sum_psnr_low[8], sum_bad_low[8];
@@ -119,9 +123,8 @@ void interp_init(const struct interp_opts *o)
 	if (!st.o.range)
 		st.o.range = 8;
 	for (int i = 0; i < NTABLES; i++)
-		vmatch_table_init(&st.tables[i].t, calloc(VM_GROUPS, sizeof(struct vmatch_group)), VM_GROUPS,
-				  calloc(VM_CLIP, sizeof(float[4])), VM_CLIP, calloc(4 * VM_GROUPS, sizeof(uint32_t)),
-				  4 * VM_GROUPS);
+		vmatch_table_init(&st.tables[i].t, aligned_alloc(16, vmatch_table_bytes(VM_GROUPS, VM_CLIP)), VM_GROUPS,
+				  VM_CLIP);
 	st.rdram_copy = malloc(8u << 20);
 	st.before = malloc(raster_state_size());
 	st.after = malloc(raster_state_size());
@@ -138,6 +141,9 @@ void interp_init(const struct interp_opts *o)
 	if (st.tcsv)
 		fprintf(st.tcsv, "tarea,campo,cargados,con_pareja,interpolados,salida,salida_interpolada,salida_tri\n");
 	st.quiet = getenv("SALSA64_INTERP_SIN_IMAGENES") != NULL;
+	/* Como la PS3 (src/rdp/rdp.c, interp_draw): el intermedio se dibuja
+	 * sobre el cuadro final, no sobre lo que había antes de la tarea. */
+	st.base_final = getenv("SALSA64_INTERP_BASE_FINAL") != NULL;
 	st.on = true;
 }
 
@@ -351,8 +357,10 @@ static void draw_variant(const struct gfx_job *job, const struct gfx_result *res
 		m->pad = cur[i].w > 1e-3f;  /* para raster_clip_w */
 		m->x = cur[i].x + (p[0] - cur[i].x) * k;
 		m->y = cur[i].y + (p[1] - cur[i].y) * k;
-		m->z = cur[i].z + (p[2] - cur[i].z) * k;
 		m->w = cur[i].w + (p[3] - cur[i].w) * k;
+		/* Como el vertex program de la PS3 (rsxkit_lincomb_lerp.vcg): la
+		 * profundidad z/w, la de ahora. */
+		m->z = cur[i].w != 0.0f ? cur[i].z / cur[i].w * m->w : cur[i].z;
 	}
 	struct gfx_job j2 = *job;
 	j2.vtx_ea = (uint64_t)(uintptr_t)st.mod;
@@ -360,7 +368,7 @@ static void draw_variant(const struct gfx_job *job, const struct gfx_result *res
 		memcpy(st.rdram_copy, (const void *)(uintptr_t)job->rdram_ea, job->rdram_size);
 		j2.rdram_ea = (uint64_t)(uintptr_t)st.rdram_copy;
 	}
-	raster_state_restore(st.before);
+	raster_state_restore(st.base_final ? st.after : st.before);
 	bool tr = raster_trace_fb;
 	raster_trace_fb = false;
 	raster_clip_w = true;
@@ -735,13 +743,82 @@ void interp_after_raster(const struct gfx_job *job, const struct gfx_result *res
 	uint32_t nv = res->vtx_bytes / sizeof(struct gfx_vertex);
 	if (nv > MAX_OUT)
 		nv = MAX_OUT;
-	vmatch_build(&ft->t, (const uint8_t *)(uintptr_t)job->cmd_ea, res->cmd_bytes,
+	if (getenv("SALSA64_INTERP_VOLCAR") && (st.task == 20 || st.task == 21)) {
+		/* Para tools/vmatch-bench.c: comandos, vértices y RDRAM de la tarea. */
+		char vp[700];
+		const void *parts[3] = { (const void *)(uintptr_t)job->cmd_ea, (const void *)(uintptr_t)job->vtx_ea,
+					 (const void *)(uintptr_t)job->rdram_ea };
+		const size_t lens[3] = { res->cmd_bytes, res->vtx_bytes, job->rdram_size };
+		static const char *const ext[3] = { "cmd", "vtx", "ram" };
+		for (int q = 0; q < 3; q++) {
+			snprintf(vp, sizeof vp, "%s/vm-%u.%s", st.o.dir, st.task, ext[q]);
+			FILE *vf = fopen(vp, "wb");
+			if (vf) {
+				fwrite(parts[q], 1, lens[q], vf);
+				fclose(vf);
+			}
+		}
+	}
+	struct timespec t0, t1, t2, t3;
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+	const struct vmatch_table *pt = st.prev_task ? &st.tables[st.prev_task % NTABLES].t : NULL;
+	vmatch_build(&ft->t, pt, (const uint8_t *)(uintptr_t)job->cmd_ea, res->cmd_bytes,
 		     (const uint8_t *)(uintptr_t)job->rdram_ea, job->rdram_size);
 	ft->task = st.task;
 	ft->valid = true;
-	const struct vmatch_table *pt = st.prev_task ? &st.tables[st.prev_task % NTABLES].t : NULL;
+	clock_gettime(CLOCK_MONOTONIC, &t1);
 	vmatch_pair(pt, &ft->t, st.o.max_disp, &st.vst);
+	clock_gettime(CLOCK_MONOTONIC, &t2);
 	uint32_t om = vmatch_prev(pt, &ft->t, &st.vst, (const struct gfx_vertex *)(uintptr_t)job->vtx_ea, nv, st.prev_v);
+	clock_gettime(CLOCK_MONOTONIC, &t3);
+#define NS(a, b) ((uint64_t)((b).tv_sec - (a).tv_sec) * 1000000000u + (uint64_t)((b).tv_nsec - (a).tv_nsec))
+	st.ns_build += NS(t0, t1);
+	st.ns_pair += NS(t1, t2);
+	st.ns_prev += NS(t2, t3);
+	st.vm_tasks++;
+#undef NS
+	if (pt && getenv("SALSA64_INTERP_GRUPOS")) {
+		/* Diagnóstico: cada grupo de la tarea, su pareja y por qué no. */
+		char gp[700];
+		snprintf(gp, sizeof gp, "%s/grupos-%u.txt", st.o.dir, st.task);
+		FILE *gf = fopen(gp, "w");
+		for (uint32_t i = 0; gf && i < ft->t.ngroups; i++) {
+			const struct vmatch_group *g = &ft->t.g[i];
+			int byaddr = -1, byhash = -1, addrn = 0;
+			for (uint32_t q = 0; q < pt->ngroups; q++) {
+				const struct vmatch_group *h = &pt->g[q];
+				if (h->addr == g->addr && h->occ == g->occ)
+					byaddr = (int)q;
+				if (h->addr == g->addr)
+					addrn++;
+				if (g->hash && h->hash == g->hash && h->hocc == g->hocc)
+					byhash = (int)q;
+			}
+			float cx = 0, cy = 0, px = 0, py = 0;
+			int nvis = 0;
+			for (uint32_t k = 0; k < g->n; k++) {
+				const float *c = ft->t.clip[g->clip + k];
+				if (c[3] <= 0.05f || fabsf(c[0]) > 1.5f * c[3] || fabsf(c[1]) > 1.5f * c[3])
+					continue;
+				cx += c[0] / c[3] * g->vp[0], cy += c[1] / c[3] * g->vp[1];
+				if (g->pair >= 0) {
+					const float *d = pt->clip[pt->g[g->pair].clip + k];
+					if (d[3] > 0.0f)
+						px += d[0] / d[3] * g->vp[0], py += d[1] / d[3] * g->vp[1];
+				}
+				nvis++;
+			}
+			fprintf(gf, "%3u addr %06x n %2u v0 %2u occ %3u/%d hash %08x hocc %u pair %4d dir %4d cont %4d vis %2d",
+				i, g->addr, g->n, g->v0, g->occ, addrn, g->hash, g->hocc, g->pair, byaddr, byhash, nvis);
+			if (nvis)
+				fprintf(gf, " c (%.0f, %.0f)", cx / nvis, -cy / nvis);
+			if (g->pair >= 0 && nvis)
+				fprintf(gf, " d %.1f", sqrtf((cx - px) * (cx - px) + (cy - py) * (cy - py)) / nvis);
+			fputc('\n', gf);
+		}
+		if (gf)
+			fclose(gf);
+	}
 	if (st.prev_task) {
 		uint32_t ot = 0;
 		const struct gfx_vertex *vv = (const struct gfx_vertex *)(uintptr_t)job->vtx_ea;
@@ -757,6 +834,9 @@ void interp_after_raster(const struct gfx_job *job, const struct gfx_result *res
 		st.groups_found += st.vst.found;
 		st.groups_moved += st.vst.moved;
 		st.by_content += st.vst.by_content;
+		st.jumped += st.vst.jumped;
+		st.deformed += st.vst.deformed;
+		st.reordered += st.vst.reordered;
 		if (st.tcsv)
 			fprintf(st.tcsv, "%u,%u,%u,%u,%u,%u,%u,%u\n", st.task, field, st.vst.vertices, st.vst.found_vertices,
 				st.vst.paired_vertices, nv, om, ot);
@@ -774,6 +854,14 @@ void interp_after_raster(const struct gfx_job *job, const struct gfx_result *res
 	if (st.tcsv)
 		fprintf(st.tcsv, "# tarea %u: corte geometría %d, imagen %d (SAD medio %.1f)\n", st.task, geo_cut(), img_cut(),
 			st.last_sad);
+	if (getenv("SALSA64_INTERP_T0")) {
+		/* Prueba del emparejamiento: todo en las posiciones de antes (t = 0)
+		 * debería dar el cuadro anterior; lo que no, son grupos sin pareja
+		 * o mal emparejados. */
+		draw_variant(job, res, target, 0.0f, false, pred);
+		snprintf(name, sizeof name, "g0-%u", st.task);
+		write_ppm(name, pred);
+	}
 	for (unsigned j = 1; j < k; j++) {
 		float t = (float)j / (float)k;
 		const uint32_t *truth = st.o.decimate ? task_img(st.task - k + j) : NULL;
@@ -854,6 +942,12 @@ void interp_report(void)
 		if (st.groups)
 			fprintf(o, "interp: geometría: %.1f %% de los grupos se encontraron por contenido (la dirección no estaba)\n",
 				100.0 * st.by_content / st.groups);
+		if (st.vm_tasks)
+			fprintf(o, "interp: vmatch por tarea (host): armar %.1f µs, emparejar %.1f µs, posiciones %.1f µs; %.0f grupos; "
+				"%.2f saltaron, %.2f se deformaron, %.2f con otra instancia más cerca\n",
+				st.ns_build / 1e3 / st.vm_tasks, st.ns_pair / 1e3 / st.vm_tasks, st.ns_prev / 1e3 / st.vm_tasks,
+				(double)st.groups / st.vm_tasks, (double)st.jumped / st.vm_tasks, (double)st.deformed / st.vm_tasks,
+				(double)st.reordered / st.vm_tasks);
 		if (st.searches)
 			fprintf(o,
 				"interp: imagen: %llu búsquedas, %.0f bloques y %.0f SAD de %ux%u por búsqueda (%.1f por bloque)\n",
