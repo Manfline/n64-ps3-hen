@@ -4560,6 +4560,12 @@ int main(void)
 	if (!strncmp(name, "dump:", 5)) {
 		char path[96];
 		snprintf(path, sizeof path, SALSA64_DATA_DIR "/%s", name + 5);
+		/* Como al abrir un juego: para comparar la pasada de aristas con el
+		 * mismo volcado. */
+		if (file_exists(SALSA64_DATA_DIR "/sin-aristas-aa")) {
+			salsa64_rdp_aa_edges(false);
+			salsa64_log("aristas de los dibujos con AA: apagadas (sin-aristas-aa)");
+		}
 		int rr = salsa64_replay(path);
 		salsa64_log("RESULTADO frontend: %s (repetición)", rr == 0 ? "OK" : "FALLO");
 		salsa64_rdp_shutdown();
