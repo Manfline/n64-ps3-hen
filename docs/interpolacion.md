@@ -828,6 +828,46 @@ ni grupos sin pareja `vmatch_atomic` no hace nada. El volcado
 `SALSA64_INTERP_GRUPOS` da el motivo de cada grupo y su aplastamiento
 (`col`), y `SALSA64_INTERP_SIN_MALLA=1` apaga `vmatch_atomic` en el host.
 
+### Modo híbrido con matrices (estimación, sin hacer)
+
+Lo que hoy se rechaza por aplastarse (giros de más de un cuarto de vuelta
+en un cuadro: Link que se da vuelta, un enemigo que gira, una rueda) sale
+en el cuadro de ahora, o sea a los cuadros del juego en ese momento. Un
+modo híbrido lo interpolaría bien: solo para esos grupos, en vez de la
+recta entre las dos posiciones, la matriz del grupo interpolada (giro por
+slerp del cuaternión, traslación y escala en línea recta) aplicada a las
+coordenadas de recorte de ahora: C_t = (P M)_t · (P M)_ahora⁻¹, una 4 × 4
+por grupo y por campo intermedio, lineal en el vértice (los del recorte
+cercano siguen en su recta). Los demás grupos, como ahora.
+
+- SPE 0: la HLE ya tiene la matriz del modelo y la proyección en cada G_VTX
+  (`mv`, `proj` de gfx_state); el registro GFX_OP_VGROUP llevaría la
+  modelview (64 bytes más por grupo: ~19 KB por tarea en Zelda) y la
+  proyección cuando cambia. Unos 300–500 bytes de código (holgura hoy 3648)
+  y casi nada de tiempo.
+- PPE: descomponer las dos matrices de cada grupo con giro grande (polar
+  3 × 3 → cuaternión, unas pocas iteraciones: ~2–4 µs por grupo en el PPE)
+  solo en los grupos que hoy se aplastan (0–60 por tarea, casi siempre 0):
+  0–0,2 ms por tarea cuando pasa. Por campo intermedio, las posiciones de
+  esos vértices en la t del campo (0,01–0,05 ms): como la t sale de la
+  duración del cuadro, se escribirían por campo en el búfer de «antes»
+  (prev' = (p_t − t · ahora) / (1 − t)), con un búfer por campo para no
+  pisar lo que el RSX lee. El vertex program no cambia.
+- Riesgos: cada juego pone la cámara en otro lado (Zelda la mete en la
+  proyección con lookAt; Mario 64 en la modelview), así que hay que
+  interpolar P · M entero o separar la proyección en perspectiva y giro;
+  slerp toma el camino corto (una media vuelta exacta puede girar por el
+  otro lado, y más de media vuelta por cuadro sale al revés); matrices con
+  cizalla o reflexión (escala negativa) no se descomponen bien y quedarían
+  en el cuadro de ahora; los microcódigos de Rare (gSPInsertMatrix, la
+  modelview de Perfect Dark) y los vértices que el CPU escribe ya
+  transformados (sin matriz útil) siguen como hoy. No arregla la
+  identidad: un grupo mal emparejado gira igual de mal.
+- Lo que arregla: los personajes que se dan vuelta, lo que gira rápido y
+  la perspectiva en giros de cámara cerca de la pantalla, sin aplastarse
+  ni saltar al cuadro de ahora. Antes de la PS3, en el host: el giro de
+  Link de la tarea 107 del estanque como prueba. Unos 3–5 días.
+
 ## Reproducir en la Mac
 
 ```
