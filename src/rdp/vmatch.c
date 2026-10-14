@@ -122,10 +122,12 @@ static float fabs_(float v)
 }
 
 /* Cerca de la pantalla: un vértice pegado a la cámara o muy fuera se mueve
- * cientos de píxeles sin que sea un corte. */
+ * cientos de píxeles sin que sea un corte. El umbral de w deja fuera además
+ * los desnormales (en la FPU escalar del PPE uno cuesta más de 100 ciclos:
+ * Cell Handbook, A.6.3) y el 1/w de un w diminuto. */
 static bool near_screen(const float c[4])
 {
-	return c[3] > 0.0f && fabs_(c[0]) <= 1.5f * c[3] && fabs_(c[1]) <= 1.5f * c[3];
+	return c[3] > 1e-6f && fabs_(c[0]) <= 1.5f * c[3] && fabs_(c[1]) <= 1.5f * c[3];
 }
 
 void vmatch_build(struct vmatch_table *t, const uint8_t *cmd, uint32_t cmd_bytes)
@@ -354,6 +356,16 @@ void vmatch_pair(const struct vmatch_table *prev, struct vmatch_table *cur, floa
 			st->jumped++;
 			continue;
 		}
+		/* Por el contenido (otra dirección: un búfer dinámico), además el
+		 * mismo tamaño en pantalla, a menos del doble: un grupo del HUD que
+		 * se empareje con otro crecería de golpe en los intermedios. */
+		if (content && g->ext >= 0.0f && h->ext >= 0.0f) {
+			float big = g->ext > h->ext ? g->ext : h->ext, small = g->ext > h->ext ? h->ext : g->ext;
+			if (big > 2.0f * small + 8.0f) {
+				st->deformed++;
+				continue;
+			}
+		}
 		/* Desplazamiento de cada vértice visible en los dos cuadros: ninguno
 		 * más que max_disp, y todos parecidos (sin deformarse de golpe). */
 		float dx0 = FAR_AWAY, dy0 = FAR_AWAY, dx1 = -FAR_AWAY, dy1 = -FAR_AWAY;
@@ -433,7 +445,7 @@ uint32_t vmatch_prev(const struct vmatch_table *prev, const struct vmatch_table 
 				continue;
 			const float *ca = cur->clip[cur->g[serial - 1].clip + ia], *cb = cur->clip[cur->g[serial - 1].clip + ib];
 			float da = ca[2] + ca[3], db = cb[2] + cb[3];
-			if (da == db || !prev_clip(prev, cur, GFX_VGID(serial, ia), a, &vp) ||
+			if (fabs_(da - db) < 1e-6f || !prev_clip(prev, cur, GFX_VGID(serial, ia), a, &vp) ||
 			    !prev_clip(prev, cur, GFX_VGID(serial, ib), b, &vpb))
 				continue;
 			float t = da / (da - db);

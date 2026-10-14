@@ -183,6 +183,15 @@ static void vmatch_content_and_cut(void)
 	float prev[1][4];
 	CHECK_EQ(vmatch_prev(&fa.t, &fb.t, &st, &v, 1, prev), 0);
 
+	/* Por el contenido pero cinco veces más grande: no es el mismo. */
+	static const float big[3][4] = { { 0, 0, 1, 2 }, { 1.0f, 0, 1, 2 }, { 0, 1.0f, 1, 2 } };
+	frame_init(&fb);
+	add_group_h(&fb, 0x4900, 0, 3, big, 0x12345679u);
+	finish(&fb);
+	vmatch_pair(&fa.t, &fb.t, 120.0f, &st);
+	CHECK_EQ(fb.t.g[0].pair, -1);
+	CHECK_EQ(st.deformed, 1);
+
 	vmatch_pair(NULL, &fb.t, 120.0f, &st);
 	CHECK_EQ(st.found, 0);
 	CHECK_EQ(vmatch_prev(NULL, &fb.t, &st, &v, 1, prev), 0);

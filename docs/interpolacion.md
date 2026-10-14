@@ -720,6 +720,26 @@ mismo vale para partículas en búferes dinámicos. «interp 3»:
   cuadro verdadero que se va a presentar, no de la copia: el redibujo pinta
   todos los dibujos de la tarea sobre ella.
 
+Con «interp 2», en el bosque Kokiri moviendo a Link, el corazón que late
+del HUD salía en algunos intermedios enorme o fuera de lugar (hasta ~40 %
+de la pantalla). Con el estado que guardó el autor no se reproduce en el
+host con ninguna de las dos versiones: el corazón va en un búfer dinámico
+(su dirección alterna entre dos) y se emparejaba por el hash que el PPE leía
+de la RDRAM al traducir; en la consola, si el juego ya había escrito ahí otra
+cosa, la pareja era otro grupo y el corazón se estiraba hacia él. En
+«interp 3» el hash viene de la HLE, el corazón es ortográfico (w = 1: no se
+interpola) y, por si acaso, una pareja por el contenido que cambia de tamaño
+en pantalla más del doble se descarta.
+
+Desnormales (Cell Handbook A.6.3: en la FPU escalar del PPE un operando o
+resultado desnormal vacía el pipeline, ≥ 100 ciclos; el SPU y el vertex
+program los aplanan): en vmatch las coordenadas de pantalla salen de
+vértices con w > 1e-6 (nada de 1/w de un w diminuto) y la fracción del
+recorte cercano exige una diferencia de al menos 1e-6; las diferencias de
+pantalla son 0 o mayores que ~1e-5, así que sus cuadrados no llegan a
+desnormales. Si hubiera tirones, se verían como picos en «armar» o
+«emparejar» del log.
+
 ## Reproducir en la Mac
 
 ```
