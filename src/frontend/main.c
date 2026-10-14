@@ -236,6 +236,13 @@ SYS_PROCESS_PARAM(1001, 0x100000);
  * «t» de su contenido (por omisión 1: igual que sin interpolar; 0: un cuadro
  * atrás), sin los campos intermedios, pase lo que pase con la opción. */
 #define INTERP_TEST_PATH SALSA64_DATA_DIR "/interp-prueba"
+/* Prueba de la interpolación cambiada en vivo: «N [E1 E2]» en el archivo,
+ * cada N campos se pausa la emulación como desde el menú de pausa, se
+ * enciende o apaga la interpolación por geometría (y, con E1 y E2, la escala
+ * interna pasa de una a otra, aplicada al seguir) y sigue medio segundo
+ * después (tools/rpcs3-run.py --bandera). */
+#define INTERP_ALT_PATH SALSA64_DATA_DIR "/interp-alternar"
+#define INTERP_ALT_HOLD_US 500000u
 /* Filtro de la presentación (frontend/filters): el de menu.cfg («filtro =
  * …»). Con el archivo `filtro` (una clave, p. ej. «crt-mascara»), ese,
  * también en las pruebas automáticas; con `filtros-ciclo`, todos por turnos
@@ -2299,6 +2306,15 @@ static struct {
 } img;
 /* La «t» de INTERP_TEST_PATH (al abrir el juego), o < 0 sin el archivo. */
 static float interp_test_t = -1.0f;
+/* Prueba de la interpolación cambiada en vivo (INTERP_ALT_PATH, al abrir el
+ * juego): cada `every` campos, una pausa como la del menú en la que se
+ * cambia (interp_alt_step). */
+static struct {
+	uint32_t every, next, toggles;
+	int scale[2];      /* con dos escalas, también se alterna entre ellas */
+	int stage;         /* 0 apagada; 1 esperando el campo; 2 pidiendo la pausa; 3 en pausa hasta t */
+	uint64_t t;
+} interp_alt;
 static int rdp_scale_req;  /* escala interna pedida al RDP ahora (0: automática) */
 static struct menu_settings video_cfg;  /* video y escala que corren (video.cfg al arrancar o lo último aplicado) */
 static int scale_wanted(void);
@@ -2534,9 +2550,12 @@ static void present_field(const struct field_msg *m, uint64_t now)
 
 	if (exit_field && m->field >= exit_field) {
 		salsa64_log("salida en el campo %u (capturas)", m->field);
+		/* En la prueba automática, con una ROM del disco, la salida pedida
+		 * reemplaza a AUTO_FIELDS (un estado cargado salta los campos). */
+		game_auto_ok = pres.autotest && !selftest_on && !gfxtest_on && !audiotest_on;
 		running = 0;
 	}
-	if (pres.autotest && !selftest_on && !gfxtest_on && !audiotest_on && m->field >= AUTO_FIELDS) {
+	if (pres.autotest && !selftest_on && !gfxtest_on && !audiotest_on && !exit_field && m->field >= AUTO_FIELDS) {
 		salsa64_log("%s: OK (ROM del disco, %u campos)", res_tag, m->field);
 		game_auto_ok = 1;
 		running = 0;
@@ -3230,6 +3249,8 @@ static void image_scale_apply(void);
 static void pause_update(void)
 {
 	uint32_t want = pausectl_reasons(&pause_ctl), was = pause_req;
+	if (interp_alt.stage >= 2)
+		want |= PAUSECTL_MENU;  /* la pausa de la prueba (interp_alt_step) */
 	if (sys_no_pause)
 		want &= ~PAUSECTL_SYSTEM;
 	if (want == was)
@@ -3547,6 +3568,42 @@ static void image_scale_apply(void)
 	rdp_scale_set(scale_wanted(), scale_capped() ? "menú de pausa, tope de 3× con un CRT" : "menú de pausa");
 	char sbuf[24];
 	osd_notice(sysGetSystemTime(), "Escala interna: %s", tr(scale_label(sbuf, sizeof sbuf)));
+}
+
+/* INTERP_ALT_PATH: lo mismo que hace el autor desde «Imagen» en el menú de
+ * pausa, cada interp_alt.every campos. Con la emulación quieta en el
+ * límite del campo (pause_update la pide en la etapa 2) se cambia la
+ * interpolación y, si hay dos escalas, la escala; pause_update la suelta
+ * INTERP_ALT_HOLD_US después y aplica la escala al seguir. */
+static void interp_alt_step(void)
+{
+	uint64_t now = sysGetSystemTime();
+	switch (interp_alt.stage) {
+	case 1:
+		if (n64.bus.vi.fields >= interp_alt.next && !pause_req && !state_req && !state_parked)
+			interp_alt.stage = 2;
+		return;
+	case 2:
+		if (!emu_paused)
+			return;
+		img.interp = img.interp == MENU_INTERP_GEOMETRY ? MENU_INTERP_OFF : MENU_INTERP_GEOMETRY;
+		if (interp_alt.scale[0] > 0)
+			img.scale = img.scale == interp_alt.scale[0] ? interp_alt.scale[1] : interp_alt.scale[0];
+		view_apply();
+		view_log(" (prueba, interp-alternar)");
+		interp_alt.toggles++;
+		interp_alt.t = now + INTERP_ALT_HOLD_US;
+		interp_alt.stage = 3;
+		return;
+	case 3:
+		if (now < interp_alt.t)
+			return;
+		interp_alt.next = n64.bus.vi.fields + interp_alt.every;
+		interp_alt.stage = 1;
+		return;
+	default:
+		return;
+	}
 }
 
 /* Lo que es de un juego vuelve a como al arrancar el programa: colas entre
@@ -4307,6 +4364,20 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 				    "dibujarla en t = %.2f, sin campos intermedios", (double)interp_test_t);
 		}
 		interp_apply();
+		memset(&interp_alt, 0, sizeof interp_alt);
+		fi = fopen(INTERP_ALT_PATH, "r");
+		if (fi) {
+			int n = fscanf(fi, "%u %d %d", &interp_alt.every, &interp_alt.scale[0], &interp_alt.scale[1]);
+			fclose(fi);
+			if (n < 3 || interp_alt.scale[0] < 0 || interp_alt.scale[1] < 0)
+				interp_alt.scale[0] = interp_alt.scale[1] = 0;
+			if (n >= 1 && interp_alt.every) {
+				interp_alt.next = interp_alt.every;
+				interp_alt.stage = 1;
+				salsa64_log("interpolación (prueba, " INTERP_ALT_PATH "): se cambia en una pausa cada %u campos%s",
+					    interp_alt.every, interp_alt.scale[0] ? ", con la escala" : "");
+			}
+		}
 		/* SALSA64_DATA_DIR/aristas-aa: la pasada de aristas de los dibujos
 		 * con AA_EN (salsa64_rdp_aa_edges), experimental y apagada por
 		 * omisión: en la PS3 engordaba los modelos (docs/rsx-notes.md). */
@@ -4391,9 +4462,16 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		if (tf) {
 			if (fscanf(tf, "%u %u", &state_test.save_at, &state_test.load_at) == 2 &&
 			    state_test.save_at < state_test.load_at) {
-				state_test.stage = ST_SAVE;
-				salsa64_log("estados, prueba automática: guardar en el campo %u y cargar en el %u (ranura 9)",
-					    state_test.save_at, state_test.load_at);
+				/* «0 B»: solo cargar en el campo B lo que ya tenga la
+				 * ranura 9 (un estado hecho en el host, para llegar a
+				 * una escena de un juego sin manos). */
+				state_test.stage = state_test.save_at ? ST_SAVE : ST_LOAD;
+				if (state_test.save_at)
+					salsa64_log("estados, prueba automática: guardar en el campo %u y cargar en el %u (ranura 9)",
+						    state_test.save_at, state_test.load_at);
+				else
+					salsa64_log("estados, prueba automática: cargar la ranura 9 en el campo %u",
+						    state_test.load_at);
 			}
 			fclose(tf);
 		}
@@ -4481,6 +4559,8 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 			present_still();
 		if (state_test.stage)
 			state_test_step();
+		if (interp_alt.stage)
+			interp_alt_step();
 		state_bg_poll();
 		cajanegra_pump(now);
 		if (fps.on)

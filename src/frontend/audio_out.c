@@ -69,7 +69,7 @@ static volatile uint32_t ai_peak;
 /* Para las estadísticas cada STATS_US. */
 static struct {
 	uint64_t t;
-	uint32_t tasks, unknown_abi, spu_done;
+	uint32_t tasks, unknown_abi, spu_done, commands, hle_tasks;
 	uint64_t spu_ticks, wait_us, blocks, late, busy_us;
 	struct audio_sync_stats out;
 } prev;
@@ -356,10 +356,16 @@ void audio_out_field(uint64_t now_us)
 			prev.wait_us = hle_spu.wait_us;
 		}
 		const struct salsa64_audio_stats *as = hle == HLE_SPE ? &hle_spu.stats : &hle_ppe.stats;
-		salsa64_log("audio: %u tareas (%.1f/s), ABI %s, %u con ABI desconocido; %u comandos sin "
+		/* Comandos por tarea: si un juego deja de mandar las voces de su
+		 * música (Mario Kart sin música de fondo, con los efectos), baja. */
+		uint32_t hn = as->tasks - prev.hle_tasks;
+		salsa64_log("audio: %u tareas (%.1f/s), ABI %s, %u con ABI desconocido; %.0f comandos por tarea, %u sin "
 			    "implementar (último 0x%08X), %u errores%s", tasks, tasks * 1e6 / dt,
-			    salsa64_abi_name(machine->bus.rsp.abi), rs->unknown_abi - prev.unknown_abi, as->unknown,
-			    as->last_unknown, as->errors, where);
+			    salsa64_abi_name(machine->bus.rsp.abi), rs->unknown_abi - prev.unknown_abi,
+			    hn ? (double)(as->commands - prev.commands) / hn : 0.0, as->unknown, as->last_unknown, as->errors,
+			    where);
+		prev.commands = as->commands;
+		prev.hle_tasks = as->tasks;
 	}
 	prev.tasks = rs->audio;
 	prev.unknown_abi = rs->unknown_abi;
