@@ -1,5 +1,44 @@
 # Estado
 
+## 2026-10-14 — Zelda OoT sin fondos prerrenderizados: el S2DEX ya no se reconocía (paquete «Salsa64 perfil 6»)
+
+En la PS3 («perfil 3», interpolación por geometría encendida) las salas
+prerrenderizadas de OoT (del puente de la muralla al Mercado) salían con las
+mallas en colores planos y sin fondo: las 96 ventanas del log dicen «0 fondos
+de S2DEX» aunque se decodificaron 75 tareas JPEG.
+
+- **Causa:** `gfx_ucode_kind` (2cdd521, F-Zero X) buscaba el texto «RSP Gfx
+  ucode » antes del nombre, pero el S2DEX de OoT se identifica como «RSP
+  Gfx[Safe] S2DEX fifo 2.05». Devolvía 0, el `G_LOAD_UCODE` se trataba como
+  microcódigo ajeno y `gfx_dl_skip_foreign` se saltaba el tramo con el
+  `G_BG_COPY`. La función anterior buscaba «S2DEX» en cualquier parte. Las 7
+  escenas del host no lo vieron: la de Zelda es el título (campo 900), sin
+  salas prerrenderizadas.
+- **Arreglo** (`s2dex.c`): se busca «RSP Gfx» y se saltan espacios, marcas
+  entre corchetes y «ucode» hasta el nombre. Sigue igual: F3DFLX.Rej, F3DEX2,
+  F3DZEX y `.NoN` → 2; F3DEXBG, L3DEX y S2DEX 1.x → 0. Prueba
+  `gfx_ucode_kind_texts` (23 textos, con y sin el prefijo de OoT; falla sin el
+  arreglo en los de «[Safe]»).
+- **Escena nueva** `tools/escenas-host.sh`: las 7 escenas, Kirby 64 y la
+  **casa de Link** (`zelda-casa-nueva.pad`, partida nueva, campo 14500, sala
+  prerrenderizada); falla si «casa» o Kirby dan 0 fondos de S2DEX. Con perfil 5
+  la casa falla (0 fondos); con el arreglo da 624 y las demás salen igual.
+- **Verificado** (host nativo, respaldos propios): casa de Link hasta el campo
+  14800 con partida nueva: 724 fondos de S2DEX, y las 6 imágenes (campos 14300
+  a 14800) **idénticas byte a byte** a la compilación de antes de 2cdd521
+  (d217638); con perfil 5, 0 fondos y la sala en verde plano. Las 7 escenas y
+  Kirby 64 (308 fondos) idénticas a perfil 5; F-Zero X en carrera (estado de
+  la PS3, 1200 campos): 409 triángulos, 49 rectángulos y 52 dibujos por tarea,
+  imágenes idénticas a perfil 5. `test-host` 531/531 en Docker; gfxtest 42/42
+  en RPCS3 (app de perfilado); **holgura de la pila del SPE 0 2368** (perfil 5:
+  2624; mínimo 1536).
+- **Paquete:** «Salsa64 perfil 6» (SLSA00120, v0.2.5-102-g172235f),
+  `salsa64-perfil-6.pkg`, sha256 718c7793…a81bf5.
+- **Falta validar en la PS3 real:** el Mercado y la tienda Kokiri con el
+  paquete (el log debe volver a traer «fondos de S2DEX» por ventana). La tienda
+  Kokiri no se reprodujo en el host: su receta (`zelda-kokiri.pad` + `--poke`)
+  necesita la partida del autor.
+
 ## 2026-10-14 — Las ROMs de 64 MB no cargaban después de varios juegos en la misma corrida (paquete «Salsa64 perfil 5»)
 
 En la regresión de la v0.2.6 en la PS3 real (app de perfilado «perfil 3»),
