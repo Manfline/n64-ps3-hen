@@ -24,10 +24,14 @@ el CPU arma y dibuja en 000000):
   (src/rsp/gfx/rdp.c) toma el umbral del color de mezcla (1/255) e ignora
   CVG_X_ALPHA, y la consola no escribe los píxeles con α·cobertura = 0
   (α < 32 con el píxel cubierto entero): la HLE deja las hojas medio texel
-  más gruesas y tapa huecos de cielo. Con el umbral forzado a 24–32 (solo
-  en el host, para medir) los dos cuadros mejoran 0,3–0,4 dB en 4×4; con
-  128 (lo que usa la rama sin G_AC_THRESHOLD) empeoran 2 dB. No se cambió
-  la HLE en esta rama.
+  más gruesas y tapa huecos de cielo. Barrido del umbral contra la
+  consola: 24–32 es lo mejor en los dos cuadros; 128 (lo que usa la rama
+  sin G_AC_THRESHOLD) empeora 2 dB. **Arreglado:** con CVG_X_ALPHA y sin
+  FORCE_BL el umbral es al menos 32; los dos cuadros pasan de 33,91 a
+  34,28 dB y de 33,80 a 34,09. Las 105 imágenes de las 7 escenas del host,
+  iguales (ninguna usa ese modo); la pila del SPE 0, igual (holgura 1984).
+  La rama sin umbral (128) no se pudo medir: los volcados de Snap no la
+  usan.
 - El resto son bordes de un píxel (la cobertura del AA, unos ½ px), el
   filtro de tres puntos contra el bilineal y el blender con 5 bits de alfa
   (un paso en los textos de los créditos): del rasterizador, no de la HLE.
