@@ -1,5 +1,21 @@
 # Estado
 
+## 2026-10-13 — Comparación con ares: lo que queda (rama `suspicious-saha-fe2758`)
+
+Cerrado en esta rama: la herramienta `salsa64-run --ares`, el umbral de
+alfa de TEX_EDGE con umbral (hojas de Snap), las sombras de Conker (render
+a textura de 8 bits; funcionan en la PS3) y las aristas de los dibujos con
+AA, apagadas por omisión tras la regresión en la PS3 (`aristas-aa` las
+enciende). Las grietas de GoldenEye quedan como están (ares también deja
+ver algunas); el experimento de líneas solo en las rendijas queda en la
+rama (`src/host/cracks.c`, docs/rsx-notes.md) sin integrar. Pendiente,
+con volcados de ares (docs/referencia-ares.md):
+
+- el muaré de las franjas de GoldenEye en el túnel de Dam (LOD);
+- TEX_EDGE sin umbral (la HLE corta en 128), con un volcado de follaje de
+  Zelda o de Banjo;
+- la sombra de Todd desde arriba en Snap, con un volcado de esa toma.
+
 ## 2026-10-13 — Sombras de Conker: render a textura de 8 bits (rama `suspicious-saha-fe2758`)
 
 En Salsa64 fallaban todas las sombras de Conker. Con ocho volcados de ares
