@@ -91,3 +91,19 @@ Por cada volcado:
   lo dibuja en el RSX (RPCS3 o la consola) y deja `replay.ppm`.
 
 Lo medido con cada juego va en docs/estado.md.
+
+## Pendiente (2026-10-13)
+
+- **El muaré de las franjas de GoldenEye** (la orilla amarilla y negra del
+  túnel de Dam, volcado ge-tunel): en la consola salen suavizadas, como de
+  otro nivel de mipmap; en la HLE, el nivel base con muaré. Mirar el LOD
+  (G_TL_LOD, PRIM_LOD, las tiles de los niveles) contra la consola.
+- **TEX_EDGE sin umbral** (CVG_X_ALPHA sin FORCE_BL ni G_AC_THRESHOLD, que
+  la HLE corta con α ≥ 128): con umbral resultó ser 32 (las hojas de
+  Pokémon Snap); los volcados de Snap no usan la variante sin umbral.
+  Hace falta un volcado con follaje de Zelda o de Banjo y el mismo barrido.
+- **La sombra de Todd vista desde arriba** en la intro de Pokémon Snap
+  (gfxdump-3260 de la PS3, dibujo #71): todo el cuadro va con la misma z
+  del primitivo y la regla «A» (LESS en los translúcidos con G_ZS_PRIM)
+  la descarta; según el modelo del RDP la consola también. Con un volcado
+  de ares de esa toma se ve si la dibuja.
