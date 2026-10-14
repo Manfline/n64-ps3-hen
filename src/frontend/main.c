@@ -194,6 +194,8 @@
 #include "selftest_audio.h"
 #include "selftest_gfx.h"
 #include "states.h"
+#include "cajanegra.h"
+#include "rdp/blackbox.h"
 #include "version.h"
 #include "vitest_rom_bin.h"
 
@@ -489,6 +491,7 @@ struct field_msg {
 	int32_t snap;               /* ranura con la copia del VI, o -1 */
 	uint32_t flags;
 	volatile uint32_t skip;     /* emulación lo pone si encoló uno más nuevo */
+	uint32_t vi[SALSA64_VI_NREGS];  /* registros del VI al terminar el campo (caja negra) */
 };
 static struct field_msg field_q[FIELD_QUEUE];
 static volatile uint32_t field_head, field_tail;  /* head la mueve emulación; tail, presentación */
@@ -1014,11 +1017,12 @@ static void cheat_panel_events(void)
 /* Atajos dentro del juego, con SELECT (la N64 no lo tiene; START + SELECT
  * vuelve al menú): + R1 guarda el estado en la ranura actual, + L1 lo
  * carga, + izquierda o derecha de la cruceta cambia de ranura, + △
- * muestra u oculta el contador de velocidad y + R2 vuelca la salida de la
- * HLE gráfica con la captura del cuadro. Mientras SELECT está apretado
+ * muestra u oculta el contador de velocidad, + R2 vuelca la salida de la
+ * HLE gráfica con la captura del cuadro y + L2 escribe la caja negra (el
+ * anillo de las últimas tareas y campos; cajanegra.h). Mientras SELECT está apretado
  * esos botones no llegan al juego. Devuelve los botones para el mapeo. */
 #define COMBO_MASK (1u << SALSA64_DS3_R1 | 1u << SALSA64_DS3_L1 | 1u << SALSA64_DS3_LEFT | \
-		    1u << SALSA64_DS3_RIGHT | 1u << SALSA64_DS3_TRIANGLE | 1u << SALSA64_DS3_R2)
+		    1u << SALSA64_DS3_RIGHT | 1u << SALSA64_DS3_TRIANGLE | 1u << SALSA64_DS3_R2 | 1u << SALSA64_DS3_L2)
 
 static uint32_t pad_combos(unsigned port, uint32_t b)
 {
@@ -1043,6 +1047,8 @@ static uint32_t pad_combos(unsigned port, uint32_t b)
 	}
 	if (rise & 1u << SALSA64_DS3_R2)
 		dump_now = true;
+	if (rise & 1u << SALSA64_DS3_L2)
+		cajanegra_request();
 	return b & ~COMBO_MASK;
 }
 
@@ -1419,6 +1425,7 @@ static void post_field(uint32_t flags)
 	tasks_visible = m.tasks;
 	m.snap = -1;
 	m.flags = flags;
+	memcpy(m.vi, n64.bus.vi.regs, sizeof m.vi);
 
 	if (salsa64_vi_frame(&n64.bus, &m.f) && m.f.width <= FB_MAX_W && m.f.height <= FB_MAX_H) {
 		salsa64_rdp_vi(m.f.origin, m.f.width);  /* qué color images son framebuffers */
@@ -2129,10 +2136,21 @@ static void present_overlay(uint64_t now)
 		osd_cheats_draw(&game_cheats, pause_ctl.panel_sel, ui_lw, ui_lh);
 }
 
+/* Caja negra: lo que pasó con este campo (docs/cajanegra.md). */
+static void cj_note_field(const struct field_msg *m, uint32_t flags)
+{
+	if (!cajanegra_enabled())
+		return;
+	struct cajanegra_field f = { m->field, m->tasks, flags, (uint32_t)m->f.type, m->f.origin, m->f.width,
+				     m->f.height, m->f.stride, m->f.bpp, m->vi, n64.bus.vi.fields - m->field };
+	cajanegra_field(&f);
+}
+
 /* Presenta (o salta) un campo encolado. */
 static void present_field(const struct field_msg *m, uint64_t now)
 {
 	h1_flush(m->tasks);  /* las tareas de este campo, no las del siguiente */
+	cajanegra_set_field(m->field);
 	if (m->f.width && m->f.origin != pres.last_origin) {
 		pres.last_origin = m->f.origin;
 		pres.game_frames++;
@@ -2141,6 +2159,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		if (m->snap >= 0)
 			snap_cas(m->snap, SNAP_QUEUED, SNAP_FREE);
 		pres.skipped++;
+		cj_note_field(m, BB_FLD_SKIPPED);
 		return;
 	}
 	int slot = m->snap;
@@ -2150,6 +2169,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		if (!have) {
 			/* Emulación la soltó al encolar un campo más nuevo. */
 			pres.skipped++;
+			cj_note_field(m, BB_FLD_SKIPPED);
 			return;
 		}
 	}
@@ -2288,6 +2308,8 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	pres.us_present += t1 - t0;
 	pres.us_flip += t2 - t1;
 	pres.presented++;
+	cj_note_field(m, BB_FLD_SHOWN | (pres.still == STILL_RSX ? BB_FLD_RSX : pres.still == STILL_FB ? BB_FLD_RDRAM : 0) |
+				 (m->f.width ? 0 : BB_FLD_BLANK));
 
 	if (exit_field && m->field >= exit_field) {
 		salsa64_log("salida en el campo %u (capturas)", m->field);
@@ -3426,6 +3448,7 @@ static void forced_exit(const char *why)
 		    why, QUIT_WAIT_US / 1000000, (unsigned long long)n64.cpu.cur_pc, (unsigned long long)n64.cpu.cycles,
 		    n64.cpu.rec_mark, n64.cpu.rec_cur);
 	audio_out_shutdown();
+	cajanegra_shutdown(3000000);
 	states_shutdown(3000000);
 	if (jpeg_on_spu)
 		salsa64_jpeg_spu_shutdown(&jpeg_spu);
@@ -3440,6 +3463,7 @@ static void forced_exit(const char *why)
 
 static void game_close(void)
 {
+	cajanegra_shutdown(10000000);
 	states_shutdown(10000000);  /* un estado a medio escribir se termina antes de soltar nada */
 	salsa64_filters_release();
 	salsa64_log("cierre: emulación detenida tras %u campos (%u emulados, %u descartados por la cola, %u sin ranura)",
@@ -3527,6 +3551,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	memset(rdram, 0, SALSA64_RDRAM_MAX);  /* cada juego arranca igual, venga después del que venga */
 	salsa64_n64_init(&n64, rdram, SALSA64_RDRAM_MAX);
 	states_init(SALSA64_RDRAM_MAX);  /* la foto de los estados y su hilo de escritura (docs/estados.md) */
+	cajanegra_init(&n64.bus);        /* el anillo de la caja negra, si hay archivo cajanegra (docs/cajanegra.md) */
 	n64.bus.rdram_written = front_rdram_written;
 	salsa64_bus_set_isviewer(&n64.bus, isv_buf, isv_out, NULL);
 
@@ -3821,6 +3846,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		if (state_test.stage)
 			state_test_step();
 		state_bg_poll();
+		cajanegra_pump(now);
 		if (fps.on)
 			osd_fps_sample(&fps, now, n64.bus.vi.fields, n64.cpu.cycles, pres.game_frames, pres.frames_total);
 		stats(now);

@@ -279,8 +279,9 @@ los atajos de Salsa64:
 | SELECT + derecha / izquierda (cruceta) | Cambia de ranura (0 a 9, en ronda) |
 | SELECT + △ | Muestra u oculta el contador de velocidad |
 | SELECT + R2 | Depuración gráfica: guarda en `/dev_hdd0/salsa64/` la salida de la HLE del cuadro en pantalla (`gfxdump-<campo>.bin`) y su captura (`gfxdump-<campo>.ppm`) |
+| SELECT + L2 | Caja negra (solo con el archivo `cajanegra`, abajo): escribe en `/dev_hdd0/salsa64/cajanegra-<campo>/caja.s4bb` las últimas tareas gráficas y campos presentados, para repetirlos en la Mac |
 
-Mientras SELECT está apretado, R1, L1, R2, △ y la cruceta izquierda/derecha no
+Mientras SELECT está apretado, R1, L1, R2, L2, △ y la cruceta izquierda/derecha no
 llegan al juego (□ tampoco, cuando abre la lista de trucos) (no se mueve el personaje al cambiar de ranura). Si
 `controles.cfg` asigna SELECT a un botón de la N64, ese botón se pulsa
 también con los atajos.
@@ -493,6 +494,29 @@ sale al XMB en lugar de volver al menú (con el cuadro «¿Salir al XMB?» si
 «Confirmar al salir» está en sí).
 Para recuperar el menú, borrar `embedded`.
 
+## Caja negra (depuración)
+
+Para ver en la Mac lo que solo pasa en la PS3 (la interpolación de cuadros,
+por ejemplo): la consola guarda en memoria lo último que hizo la HLE gráfica y
+lo que se presentó en cada campo, y con un atajo lo escribe a disco.
+
+1. Crear por FTP el archivo vacío `/dev_hdd0/salsa64/cajanegra` (o con un
+   número: el tamaño del anillo en MB). Abrir el juego: el log dice «caja
+   negra: encendida».
+2. Cuando pase lo que se quiere estudiar, **SELECT + L2**. Sale el aviso «Caja
+   negra: escribiendo cajanegra-N» y el juego sigue (la escritura es en
+   segundo plano; mientras dura, el anillo no recibe nada nuevo).
+3. Bajar `/dev_hdd0/salsa64/cajanegra-<campo>/caja.s4bb` por FTP.
+4. En la Mac, `tools/cajanegra.py info|list|campos|extract caja.s4bb`
+   (extract deja cada tarea como un `gfxdump` que lee `tools/gfxdump.py`) y
+   `salsa64-run --raster-dump caja.s4bb[:TAREA] --gfx-frame imagen.ppm` dibuja
+   una tarea con el rasterizador del host.
+
+Qué guarda, el formato y cómo coordinarlo con la interpolación:
+`docs/cajanegra.md`. Con el archivo apagado no hay costo alguno; encendido,
+el log al cerrar el juego dice cuánto tardó el registro por tarea y por
+campo.
+
 ## Archivos de configuración
 
 Todos están en `/dev_hdd0/salsa64` y son opcionales. Son archivos de texto;
@@ -509,6 +533,7 @@ se crean por FTP.
 | `guardado.cfg` | Líneas `CLAVE = tipo`; `#` comenta | Tipo de guardado por juego (abajo) |
 | `audio.cfg` | Líneas `clave = valor` | Audio (abajo) |
 | `ultima-rom` | Ruta de la última ROM abierta | Lo escribe el menú; no hace falta tocarlo |
+| `cajanegra` | Vacío, o `MB` (tamaño del anillo, 2 a 48; 12 por omisión) | Enciende la caja negra (sección «Caja negra»). Sin el archivo no cuesta nada ni reserva memoria |
 | `log.cfg` | `ip` o `ip:puerto` | Destino del log por UDP, para quien depura (por omisión, difusión al puerto 18194) |
 | `turbo` | Basta con que exista | Sin límite de velocidad (para medir; no es un modo de juego) |
 | `capturas` | Basta con que exista | Guarda capturas de pantalla (`screen-N.ppm`) cada pocos segundos; frena la imagen un instante en cada una |

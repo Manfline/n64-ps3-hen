@@ -123,6 +123,8 @@ void t_suite_menu(void);
 void t_suite_crt(void);
 void t_suite_state(void);
 void t_suite_lz(void);
+void t_suite_gfxdump(void);
+void t_suite_blackbox(void);
 void t_suite_osd(void);
 void t_suite_pausectl(void);
 void t_suite_rec_profile(void);

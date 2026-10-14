@@ -30,6 +30,7 @@ en PS3 real.
 | Código, pila, heap de newlib | 16 | | |
 | Bloques de control de spukit | 0,01 | 0,01 | ~2,3 KB por trabajador |
 | Tarea JPEG en el SPE | 0,03 | 0,03 | `src/platform/ps3/jpeg_spu.c`: prueba del arranque (SPE contra PPE) 2 × 12 KB, estáticos. La RDRAM la lee y escribe el SPE por DMA, sin copia |
+| Caja negra (opcional) | 0 / 12 | | `src/frontend/cajanegra.c`: solo con el archivo `cajanegra` (docs/cajanegra.md): anillo de 12 MB por omisión (2–48), `memalign` al abrir cada juego y suelto al cerrarlo, y el espacio de trabajo del armado de volcados (3277 entradas de 12 bytes, ~40 KB). Sin el archivo no se reserva nada |
 | Carga de mentira del hilo 1 (diagnóstico) | 0,5 | 0,5 | `main.c`: 512 KB estáticos que recorre `carga-hilo1` (docs/hilos-ppe.md); sin la bandera no se tocan |
 | **Total previsto** | **171,8** | | con una ROM de 64 MB (150 de la Fase 2 con la caché de texturas de 8 MB + 6,8 del estado del recompilador + 4,7 de los dos hilos + 9,7 de los estados guardados (la foto de 8,25 MB, el compresor y los búferes de paso) + 0,3 que agregó la FlashRAM al guardado del cartucho) |
 

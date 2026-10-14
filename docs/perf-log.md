@@ -640,6 +640,17 @@ a punta, … ms en el disco, … ms del SPE comprimiendo … KB de … KB (r:1)�
 costo para el PPE (hilo de baja prioridad, ~1 syscall por 64 KB) se mide con
 las líneas «hilo 1» de docs/hilos-ppe.md.
 
+**Caja negra (2026-10-13), RPCS3 (sin tiempos del Cell):** Mario Kart 64
+(respaldo del autor), anillo de 12 MB: 82 tareas y 165 campos caben (150 KB
+por tarea con sus texturas), 12,15 MB → 3,15 MB (3,9:1), el SPE comprime en
+72 ms y todo se escribe en 76 ms de punta a punta; registrar una tarea
+138 µs de media en RPCS3 (30 µs en gfxtest) y un campo 1,7 µs. En la PS3
+real, por medir con las líneas «caja negra: al cerrar…» y «escrita en segundo
+plano…» del log. El estado de ese juego: 8,25 MB → 1,14 MB (7,2:1).
+**Ojo al medir la foto en RPCS3:** la primera foto tras recompilar el
+programa tarda ~275 ms porque RPCS3 recompila los trabajos del SPE de
+guardar el estado de las HLE; copiar la RDRAM son 1,2 ms.
+
 ## Estados guardados (2026-10-11)
 
 PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), paquete SLSA00094 «Salsa64

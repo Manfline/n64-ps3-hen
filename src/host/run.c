@@ -110,6 +110,7 @@
 #include "core/boot.h"
 #include "core/endian.h"
 #include "core/state.h"
+#include "rdp/blackbox.h"
 #include "cpu/rec.h"
 #include "host/rec_host.h"
 #include "frontend/savefile.h"
@@ -1632,10 +1633,76 @@ _Static_assert(offsetof(struct gfx_draw, nterms) % 4 == 0 &&
 	       (offsetof(struct gfx_draw, tex) - offsetof(struct gfx_draw, nterms)) % 4 == 0,
 	       "bytes del combiner en palabras enteras");
 
+static int raster_dump_buf(uint8_t *buf, size_t size, const char *path, const char *out);
+
+/* Una tarea de la caja negra (docs/cajanegra.md): «ARCHIVO.s4bb[:TAREA]»,
+ * por omisión la más nueva. Deja en *buf el volcado de la tarea (que se
+ * suelta con free) y su tamaño. */
+static bool caja_task(const char *spec, uint8_t **buf, size_t *size)
+{
+	char file[512];
+	long want = -1;
+	snprintf(file, sizeof file, "%s", spec);
+	char *colon = strrchr(file, ':');
+	if (colon && colon[1] && strspn(colon + 1, "0123456789") == strlen(colon + 1)) {
+		want = strtol(colon + 1, NULL, 10);
+		*colon = '\0';
+	}
+	size_t fsize;
+	uint8_t *f = read_file(file, &fsize);
+	struct bb_file_info info;
+	if (!f || fsize > UINT32_MAX || !bb_file_info(f, (uint32_t)fsize, &info)) {
+		fprintf(stderr, "salsa64-run: %s no es un archivo de la caja negra\n", file);
+		free(f);
+		return false;
+	}
+	uint32_t pos = 0;
+	struct bb_file_rec rec, pick;
+	bool found = false;
+	while (bb_file_next(f, (uint32_t)fsize, &pos, &rec)) {
+		if (rec.kind != BB_TASK || (want >= 0 && rec.id != (uint32_t)want))
+			continue;
+		pick = rec;
+		found = true;  /* sin TAREA, la última (la más nueva) */
+		if (want >= 0)
+			break;
+	}
+	if (!found) {
+		fprintf(stderr, "salsa64-run: %s no tiene la tarea %ld\n", file, want);
+		free(f);
+		return false;
+	}
+	uint8_t *content = malloc(pick.len);
+	if (!content || pick.len <= 4 * BB_TASK_WORDS || !bb_file_content(&pick, content)) {
+		fprintf(stderr, "salsa64-run: la tarea %u de %s está dañada\n", pick.id, file);
+		free(content);
+		free(f);
+		return false;
+	}
+	fprintf(stderr, "salsa64-run: caja negra %s: tarea %u (campo %u, %u dibujos)\n", file, pick.id,
+		salsa64_rd32(content + 4 * BB_TASK_FIELD), salsa64_rd32(content + 4 * BB_TASK_DRAWS));
+	memmove(content, content + 4 * BB_TASK_WORDS, pick.len - 4 * BB_TASK_WORDS);
+	*buf = content;
+	*size = pick.len - 4 * BB_TASK_WORDS;
+	free(f);
+	return true;
+}
+
 static int raster_dump(const char *path, const char *out)
 {
 	size_t size;
-	uint8_t *buf = read_file(path, &size);
+	uint8_t *buf;
+	if (strstr(path, ".s4bb")) {
+		if (!caja_task(path, &buf, &size))
+			return 3;
+	} else {
+		buf = read_file(path, &size);
+	}
+	return raster_dump_buf(buf, size, path, out);
+}
+
+static int raster_dump_buf(uint8_t *buf, size_t size, const char *path, const char *out)
+{
 	if (!buf || size < sizeof(struct gfx_dump_header)) {
 		fprintf(stderr, "salsa64-run: no se pudo leer %s\n", path);
 		return 3;
@@ -2151,7 +2218,8 @@ static void usage(FILE *out)
 	      "                        build -DSALSA64_WATCH_MEM, accesos del CPU a los destinos (con --gfx-frame)\n"
 	      "      --audio-wav ARCHIVO  al terminar, guardar en WAV lo que salió por el AI\n"
 	      "      --audiotest-check comparar lo que salió por el AI con el tono de audiotest\n"
-	      "      --raster-dump F   dibujar un volcado de la HLE de la PS3 (gfxdump.bin) en\n"
+	      "      --raster-dump F   dibujar un volcado de la HLE de la PS3 (gfxdump.bin; o una tarea\n"
+	      "                        de la caja negra: caja.s4bb[:TAREA], por omisión la más nueva) en\n"
 	      "                        --gfx-frame y salir (sin ROM)\n"
 	      "      --lle[=auto|all]  RSP a bajo nivel: el microcódigo real para lo que no tiene\n"
 	      "                        HLE (auto) o para todo (all); el RDP consume sus comandos\n"

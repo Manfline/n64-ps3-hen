@@ -5,16 +5,14 @@
 #include "states.h"
 
 #include <malloc.h>
-#include <spukit/lzstream.h>
-#include <spukit/spukit.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/file.h>
 #include <sys/systime.h>
 
+#include "platform/ps3/bgio.h"
 #include "platform/ps3/bgjob.h"
 #include "platform/ps3/log.h"
-#include "spu_lz_bin.h"
 
 static uint8_t scratch[SALSA64_STATE_SCRATCH] __attribute__((aligned(128)));
 static uint16_t thumb_px[SALSA64_STATE_THUMB_W * SALSA64_STATE_THUMB_H];
@@ -23,71 +21,9 @@ static uint64_t thumb_us;
 
 static inline void lwsync(void) { __asm__ volatile("lwsync" ::: "memory"); }
 
-/* ---- E/S del archivo ------------------------------------------------------------ */
-
-/* Las escrituras se juntan en un búfer: el flujo comprimido llega en
- * pedazos de 4 bytes (encabezados) y de hasta 64 KB. */
-#define WBUF_BYTES (128u << 10)
-static uint8_t wbuf[WBUF_BYTES] __attribute__((aligned(128)));
-
-struct fsio {
-	s32 fd;
-	uint64_t us;    /* tiempo en el sistema de archivos */
-	uint32_t bytes;
-	uint32_t fill;  /* bytes en wbuf (solo al escribir) */
-};
-
-static bool fs_flush(struct fsio *io)
-{
-	if (!io->fill)
-		return true;
-	uint64_t t0 = sysGetSystemTime(), done = 0;
-	bool ok = sysLv2FsWrite(io->fd, wbuf, io->fill, &done) == 0 && done == io->fill;
-	io->us += sysGetSystemTime() - t0;
-	io->fill = 0;
-	return ok;
-}
-
-static bool fs_write(void *ctx, const void *data, uint32_t len)
-{
-	struct fsio *io = ctx;
-	const uint8_t *p = data;
-	io->bytes += len;
-	while (len) {
-		if (!io->fill && len >= WBUF_BYTES / 2) {
-			/* Grande: directo, sin pasar por el búfer. */
-			uint64_t t0 = sysGetSystemTime(), done = 0;
-			bool ok = sysLv2FsWrite(io->fd, p, len, &done) == 0 && done == len;
-			io->us += sysGetSystemTime() - t0;
-			return ok;
-		}
-		uint32_t n = WBUF_BYTES - io->fill < len ? WBUF_BYTES - io->fill : len;
-		memcpy(wbuf + io->fill, p, n);
-		io->fill += n;
-		p += n;
-		len -= n;
-		if (io->fill == WBUF_BYTES && !fs_flush(io))
-			return false;
-	}
-	return true;
-}
-
-/* Escribe `len` bytes en la posición absoluta `offset` y deja el archivo ahí. */
-static bool fs_patch(void *ctx, uint32_t offset, const uint8_t *data, uint32_t len)
-{
-	struct fsio *io = ctx;
-	if (!fs_flush(io))
-		return false;
-	uint64_t t0 = sysGetSystemTime(), pos = 0, done = 0;
-	bool ok = sysLv2FsLSeek64(io->fd, offset, 0, &pos) == 0 && pos == offset &&
-		  sysLv2FsWrite(io->fd, data, len, &done) == 0 && done == len;
-	io->us += sysGetSystemTime() - t0;
-	return ok;
-}
-
 static bool fs_read(void *ctx, void *data, uint32_t len)
 {
-	struct fsio *io = ctx;
+	struct bgio_out *io = ctx;  /* se usa solo su contador de tiempo y bytes */
 	uint64_t t0 = sysGetSystemTime(), done = 0;
 	bool ok = sysLv2FsRead(io->fd, data, len, &done) == 0 && done == len;
 	io->us += sysGetSystemTime() - t0;
@@ -115,101 +51,7 @@ static struct {
 	volatile int pending;            /* hay una escritura pedida y no recogida por states_poll */
 	volatile int finished;           /* el trabajo terminó: res vale */
 	struct states_done res;
-	spukit_lzs *lzs;                 /* el compresor (un SPE, o el PPE si no se pudo) */
-	bool lz_tried;
 } bg;
-
-/* Un sumidero que junta lo que llega en un búfer. */
-struct col {
-	uint8_t *at;
-	uint32_t n, cap;
-};
-
-static int col_sink(void *ctx, const void *d, uint32_t len)
-{
-	struct col *c = ctx;
-	if (len > c->cap - c->n)
-		return -1;
-	memcpy(c->at + c->n, d, len);
-	c->n += len;
-	return 0;
-}
-
-/* Bloques de prueba del compresor: lo que da el SPE tiene que ser, byte a
- * byte, lo que da el PPE, o se comprime en el PPE. */
-static bool lz_selftest(spukit_lzs *z)
-{
-	enum { LEN = SPUKIT_LZ_BLOCK + 30000, OUT = 2 * (SPUKIT_LZ_BOUND(SPUKIT_LZ_BLOCK) + 64) };
-	uint8_t *buf = memalign(128, ((LEN + 127) & ~127u) + 2 * OUT);
-	if (!buf)
-		return false;
-	uint8_t *got = buf + ((LEN + 127) & ~127u), *ref = got + OUT;
-	uint32_t x = 12345;
-	for (uint32_t i = 0; i < LEN; i++) {
-		x = x * 1664525u + 1013904223u;
-		buf[i] = (i / 4096) % 3 == 0 ? (uint8_t)(x >> 16) : (i / 4096) % 3 == 1 ? 0 : (uint8_t)("salsa64"[i % 7] + (x >> 29));
-	}
-	struct col col = { got, 0, OUT };
-	bool ok = spukit_lzs_run(z, buf, LEN, col_sink, &col, NULL) == 0;
-	/* Referencia: los mismos bloques en el PPE. */
-	uint32_t rn = 0;
-	for (uint32_t off = 0; ok && off < LEN; off += SPUKIT_LZ_BLOCK) {
-		uint32_t n = LEN - off < SPUKIT_LZ_BLOCK ? LEN - off : SPUKIT_LZ_BLOCK;
-		uint32_t c = spukit_lzs_ppe_block(z, buf + off, n, ref + rn + 4);
-		spukit_lz_frame(ref + rn, c ? c : n, c == 0);
-		if (!c)
-			memcpy(ref + rn + 4, buf + off, n);
-		rn += 4 + (c ? c : n);
-	}
-	ok = ok && rn == col.n && memcmp(got, ref, rn) == 0;
-	free(buf);
-	return ok;
-}
-
-static void lz_open(void)
-{
-	if (bg.lz_tried)
-		return;
-	bg.lz_tried = true;
-	uint64_t t0 = sysGetSystemTime();
-	spukit_init(6);
-	spukit_lzs *z = spukit_lzs_open(spu_lz_bin);
-	const char *how = "en un SPE";
-	if (z && spukit_lzs_has_spu(z) && !lz_selftest(z)) {
-		salsa64_log("estados: el compresor del SPE no da lo mismo que el del PPE: se comprime en el PPE");
-		spukit_lzs_close(z);
-		z = NULL;
-	}
-	if (z && !spukit_lzs_has_spu(z))
-		how = "en el PPE (el SPE no arrancó)";
-	if (!z) {
-		z = spukit_lzs_open(NULL);
-		how = "en el PPE";
-	}
-	bg.lzs = z;
-	salsa64_log("estados: compresor LZ %s (%.1f ms con la prueba)", how, (sysGetSystemTime() - t0) / 1e3);
-}
-
-struct lz_cb {
-	spukit_lzs *z;
-	spukit_lzs_stats st;
-	salsa64_state_write_fn write;
-	void *wctx;
-};
-
-static int lz_sink(void *ctx, const void *d, uint32_t len)
-{
-	struct lz_cb *c = ctx;
-	return c->write(c->wctx, d, len) ? 0 : -1;
-}
-
-static bool lz_compress_cb(void *cctx, const uint8_t *src, uint32_t len, salsa64_state_write_fn write, void *wctx)
-{
-	struct lz_cb *c = cctx;
-	c->write = write;
-	c->wctx = wctx;
-	return spukit_lzs_run(c->z, src, len, lz_sink, c, &c->st) == 0;
-}
 
 /* El trabajo del hilo de escritura: comprime la RDRAM de la foto y escribe
  * el archivo (a un .tmp que se renombra al final: un corte a mitad no pisa
@@ -218,58 +60,34 @@ static void bg_write(void *arg)
 {
 	(void)arg;
 	struct states_done *r = &bg.res;
-	uint64_t t0 = sysGetSystemTime();
 	memset(r, 0, sizeof *r);
 	r->slot = bg.slot;
-	lz_open();
 	sysLv2FsMkdir(STATES_DIR, 0777);  /* si ya existe, da error y no pasa nada */
 
-	struct fsio io = { -1, 0, 0, 0 };
-	struct lz_cb c;
-	memset(&c, 0, sizeof c);
-	c.z = bg.lzs;
-	bool ok = sysLv2FsOpen(bg.tmp, SYS_O_WRONLY | SYS_O_CREAT | SYS_O_TRUNC, &io.fd, 0666, NULL, 0) == 0;
-	if (!ok) {
+	struct bgio_out io;
+	bgio_lz_reset();
+	bool ok = bgio_out_open(&io, bg.tmp);
+	if (!ok)
 		snprintf(r->err, sizeof r->err, "no se pudo crear %s", bg.tmp);
-	} else {
-		ok = salsa64_state_write(&bg.snap, lz_compress_cb, &c, fs_write, fs_patch, &io, r->err, sizeof r->err);
-		if (ok && !fs_flush(&io)) {
-			snprintf(r->err, sizeof r->err, "no se pudo escribir el archivo");
-			ok = false;
-		}
-		uint64_t tc = sysGetSystemTime();
-		if (sysLv2FsClose(io.fd) != 0 && ok) {
-			snprintf(r->err, sizeof r->err, "no se pudo cerrar el archivo");
-			ok = false;
-		}
-		io.us += sysGetSystemTime() - tc;
-	}
-	if (ok) {
-		uint64_t tr = sysGetSystemTime();
-		sysLv2FsChmod(bg.tmp, 0666);
-		if (sysLv2FsRename(bg.tmp, bg.path) != 0) {
-			/* Sin reemplazo atómico: quitar el viejo y volver a intentar. */
-			sysLv2FsUnlink(bg.path);
-			if (sysLv2FsRename(bg.tmp, bg.path) != 0) {
-				snprintf(r->err, sizeof r->err, "no se pudo renombrar %s", bg.tmp);
-				ok = false;
-			}
-		}
-		io.us += sysGetSystemTime() - tr;
-	}
-	if (!ok && io.fd >= 0)
-		sysLv2FsUnlink(bg.tmp);
+	else
+		ok = salsa64_state_write(&bg.snap, bgio_compress, NULL, bgio_out_write, bgio_out_patch, &io, r->err,
+					 sizeof r->err);
+	char ferr[160] = "";
+	ok = bgio_out_finish(&io, ok, bg.tmp, bg.path, ferr, sizeof ferr);
+	if (!ok && !r->err[0])
+		snprintf(r->err, sizeof r->err, "%s", ferr);
+	struct bgio_lz_stats st;
+	bgio_lz_get(&st);
 	r->ok = ok;
 	r->us_io = io.us;
-	r->us_spu = spukit_tick_hz() ? c.st.spu_ticks * 1000000ull / spukit_tick_hz() : 0;
+	r->us_spu = st.spu_us;
 	r->bytes = io.bytes;
 	r->raw_bytes = bg.snap.small_len + bg.snap.ram_len;
-	r->blocks = c.st.blocks;
-	r->stored = c.st.stored;
-	r->spu_blocks = c.st.spu_blocks;
-	r->spu = spukit_lzs_has_spu(bg.lzs);
+	r->blocks = st.blocks;
+	r->stored = st.stored;
+	r->spu_blocks = st.spu_blocks;
+	r->spu = st.spu;
 	r->us_total = sysGetSystemTime() - bg.t_submit;
-	(void)t0;
 	lwsync();
 	bg.finished = 1;
 }
@@ -289,6 +107,9 @@ bool states_init(uint32_t rdram_size)
 			    (bg.ram_cap + SALSA64_STATE_SECTIONS) >> 10);
 		return false;
 	}
+	/* Tocada ya: que la primera foto no pague la primera escritura de cada página. */
+	memset(bg.small, 0, SALSA64_STATE_SECTIONS);
+	memset(bg.ram, 0, bg.ram_cap);
 	if (!bgjob_init())
 		salsa64_log("estados: sin hilo de escritura: se guarda todo seguido (comprimido)");
 	bg.ready = true;
@@ -313,11 +134,7 @@ void states_shutdown(uint64_t wait_us)
 		}
 		bgjob_shutdown();
 	}
-	if (bg.lzs) {
-		spukit_lzs_close(bg.lzs);
-		bg.lzs = NULL;
-	}
-	bg.lz_tried = false;
+	bgio_shutdown();
 }
 
 bool states_busy(void)
@@ -368,30 +185,20 @@ static bool save_sync(struct salsa64_n64 *n64, const char *path, const char *tmp
 		      char *err, size_t err_size, uint64_t t0)
 {
 	sysLv2FsMkdir(STATES_DIR, 0777);
-	struct fsio io = { -1, 0, 0, 0 };
-	if (sysLv2FsOpen(tmp, SYS_O_WRONLY | SYS_O_CREAT | SYS_O_TRUNC, &io.fd, 0666, NULL, 0) != 0) {
+	struct bgio_out io;
+	if (!bgio_out_open(&io, tmp)) {
 		snprintf(err, err_size, "no se pudo crear %s", tmp);
 		return false;
 	}
 	const struct salsa64_state_thumb th = { SALSA64_STATE_THUMB_W, SALSA64_STATE_THUMB_H, thumb_px };
-	bool ok = salsa64_state_save(n64, thumb_ok ? &th : NULL, fs_write, &io, scratch, err, err_size) && fs_flush(&io);
-	uint64_t tc = sysGetSystemTime();
-	if (sysLv2FsClose(io.fd) != 0 && ok) {
-		snprintf(err, err_size, "no se pudo cerrar el archivo");
-		ok = false;
-	}
-	io.us += sysGetSystemTime() - tc;
+	err[0] = '\0';
+	bool ok = salsa64_state_save(n64, thumb_ok ? &th : NULL, bgio_out_write, &io, scratch, err, err_size);
+	char ferr[160] = "";
+	ok = bgio_out_finish(&io, ok, tmp, path, ferr, sizeof ferr);
 	if (!ok) {
-		sysLv2FsUnlink(tmp);
+		if (!err[0])
+			snprintf(err, err_size, "%s", ferr);
 		return false;
-	}
-	sysLv2FsChmod(tmp, 0666);
-	if (sysLv2FsRename(tmp, path) != 0) {
-		sysLv2FsUnlink(path);
-		if (sysLv2FsRename(tmp, path) != 0) {
-			snprintf(err, err_size, "no se pudo renombrar %s", tmp);
-			return false;
-		}
 	}
 	t->us_io = io.us;
 	t->bytes = io.bytes;
@@ -425,6 +232,18 @@ bool states_save(struct salsa64_n64 *n64, unsigned slot, struct states_timing *t
 	if (!salsa64_state_capture(n64, thumb_ok ? &th : NULL, &bg.snap, SALSA64_STATE_SECTIONS, bg.ram_cap, err,
 				   err_size))
 		return false;
+	{
+		/* Una vez por juego: cuánto de la foto es la copia de la RDRAM (para
+		 * distinguirlo de las secciones en el log). */
+		static bool measured;
+		if (!measured) {
+			measured = true;
+			uint64_t tm = sysGetSystemTime();
+			memcpy(bg.ram, n64->bus.rdram, n64->bus.rdram_size);
+			salsa64_log("estados: copiar la RDRAM (%u KB) a la foto: %.1f ms; la foto entera %.1f ms",
+				    n64->bus.rdram_size >> 10, (sysGetSystemTime() - tm) / 1e3, (tm - t0) / 1e3);
+		}
+	}
 	memcpy(bg.path, path, sizeof bg.path);
 	memcpy(bg.tmp, tmp, sizeof bg.tmp);
 	bg.slot = slot;
@@ -455,13 +274,16 @@ bool states_load(struct salsa64_n64 *n64, unsigned slot, struct states_timing *t
 	}
 	uint64_t t0 = sysGetSystemTime();
 	slot_path(&n64->bus, slot, path, sizeof path);
-	struct fsio io = { -1, 0, 0, 0 };
-	if (sysLv2FsOpen(path, SYS_O_RDONLY, &io.fd, 0, NULL, 0) != 0) {
+	struct bgio_out io;
+	memset(&io, 0, sizeof io);
+	s32 fd = -1;
+	if (sysLv2FsOpen(path, SYS_O_RDONLY, &fd, 0, NULL, 0) != 0) {
 		snprintf(err, err_size, "no hay estado");
 		return false;
 	}
+	io.fd = fd;
 	bool ok = salsa64_state_load(n64, fs_read, &io, scratch, err, err_size, broken);
-	sysLv2FsClose(io.fd);
+	sysLv2FsClose(fd);
 	t->us_io = io.us;
 	t->bytes = io.bytes;
 	t->us_total = sysGetSystemTime() - t0;
