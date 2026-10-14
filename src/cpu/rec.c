@@ -609,7 +609,7 @@ static uint64_t rec_enter(struct salsa64_rec *rec, uint32_t entry)
 
 static uint32_t preamble_words(void)
 {
-	return 1024;  /* emit_preamble usa menos; los bloques empiezan alineados */
+	return 4096;  /* emit_preamble y las rutinas de la FPU usan menos; los bloques empiezan alineados */
 }
 
 /* ---- Tramos de la caché (docs/rec-ppe.md, «Desalojo por tramos») ------------- */
@@ -765,7 +765,119 @@ void salsa64_rec_flush_why(struct salsa64_rec *rec, enum salsa64_rec_flush_cause
 	rec->next_link = 0;
 	seg_reset(rec);
 	rec->generation++;
+	for (unsigned s = 0; s < SALSA64_REC_ALL_SEGMENTS; s++)  /* los sitios de fastmem de la caché vieja */
+		rec->seg_gen[s]++;
+	rec->scratch_gen++;
 	rec->cpu->rec_abort = 1;
+}
+
+/* ---- fastmem (docs/fastmem.md) --------------------------------------------------- */
+
+/* Tabla abierta sitio → camino frío. Una entrada vale si su generación es
+ * la del tramo del sitio (seg_gen[], o scratch_gen en la zona temporal);
+ * las viejas se reutilizan al insertar y nunca se vacían, así que una
+ * búsqueda recorre a lo más SALSA64_REC_FM_PROBES lugares. */
+static uint32_t fm_gen(const struct salsa64_rec *rec, uint32_t site)
+{
+	return site >= rec->scratch ? rec->scratch_gen : rec->seg_gen[seg_of(rec, site)];
+}
+
+static unsigned fm_slot(uint32_t site)
+{
+	return (site * 2654435761u) >> (32 - SALSA64_REC_FM_SITES_LOG);
+}
+
+static bool fm_insert(struct salsa64_rec *rec, uint32_t site, uint32_t cold)
+{
+	uint32_t gen = fm_gen(rec, site);
+	unsigned h = fm_slot(site);
+	for (unsigned k = 0; k < SALSA64_REC_FM_PROBES; k++) {
+		struct salsa64_rec_fmsite *e = &rec->fm_sites[(h + k) & (SALSA64_REC_FM_SITES - 1)];
+		if (e->site == 0 || e->site == site || e->gen != fm_gen(rec, e->site)) {
+			e->site = site;
+			e->cold = cold;
+			e->gen = gen;
+			return true;
+		}
+	}
+	return false;
+}
+
+static const struct salsa64_rec_fmsite *fm_find(const struct salsa64_rec *rec, uint32_t site)
+{
+	unsigned h = fm_slot(site);
+	for (unsigned k = 0; k < SALSA64_REC_FM_PROBES; k++) {
+		const struct salsa64_rec_fmsite *e = &rec->fm_sites[(h + k) & (SALSA64_REC_FM_SITES - 1)];
+		if (e->site == 0)
+			return NULL;
+		if (e->site == site)
+			return e->gen == fm_gen(rec, site) ? e : NULL;
+	}
+	return NULL;
+}
+
+/* Los sitios del bloque recién instalado (rec_emit.c, finalize). Si la
+ * tabla no los admite, fastmem se apaga: un sitio sin entrada que fallara
+ * mataría el proceso. */
+static void fm_register(struct salsa64_rec *rec)
+{
+	for (unsigned k = 0; k < rec->fm_nnew; k++) {
+		if (!fm_insert(rec, rec->fm_new_site[k], rec->fm_new_cold[k])) {
+			rec->fm_nnew = 0;
+			salsa64_rec_fastmem_off(rec);
+			return;
+		}
+	}
+	rec->fm_nnew = 0;
+}
+
+bool salsa64_rec_fastmem_fault(struct salsa64_rec *rec, uintptr_t nip)
+{
+	if (!rec->fastmem || nip < (uintptr_t)rec->code || nip >= (uintptr_t)(rec->code + rec->code_words) || (nip & 3))
+		return false;
+	uint32_t site = (uint32_t)((nip - (uintptr_t)rec->code) / 4);
+	const struct salsa64_rec_fmsite *e = fm_find(rec, site);
+	if (!e)
+		return false;
+	int64_t disp = ((int64_t)e->cold - (int64_t)site) * 4;
+	if (!ppc_fits_b(disp) || (rec->code[site] >> 26) == 18)  /* ya parchado: el fallo es de otra cosa */
+		return false;
+	rec->code[site] = ppc_b((int32_t)disp);
+	salsa64_rec_sync(&rec->code[site], 4);
+	rec->stats.fm_faults++;
+	return true;
+}
+
+bool salsa64_rec_fastmem_collides(const struct salsa64_rec *rec, const struct salsa64_tlb_entry *e)
+{
+	/* Solo las direcciones de 32 bits que la TLB traduce: kuseg (R = 0, bits
+	 * 39–32 en 0) y kseg2/kseg3 (R = 3, extensión de signo). Una pareja
+	 * cubre dos páginas desde VPN2; choca si algún punto del tramo, con los
+	 * bits 31–29 quitados, cae dentro de la RDRAM (también si cruza un
+	 * múltiplo de 512 MB: ahí empieza una imagen). V no importa: una
+	 * entrada inválida lanza excepción en la N64 y con fastmem no. */
+	uint64_t hi = e->entry_hi;
+	unsigned r = (unsigned)(hi >> 62);
+	uint32_t va;
+	if (r == 0 && (hi >> 32) == 0)
+		va = (uint32_t)hi;
+	else if (r == 3 && (hi >> 32) == 0xFFFFFFFFu && (uint32_t)hi >= 0xC0000000u)
+		va = (uint32_t)hi;
+	else
+		return false;
+	uint32_t size = e->odd_bit * 2, base = va & ~(size - 1), end = base + size - 1;
+	if (end < base)
+		end = 0xFFFFFFFFu;
+	return (base & 0x1FFFFFFFu) < rec->rdram_size || (end & 0x1FFFFFFFu) < rec->rdram_size || (base >> 29) != (end >> 29);
+}
+
+void salsa64_rec_fastmem_off(struct salsa64_rec *rec)
+{
+	if (!rec->fastmem)
+		return;
+	rec->fastmem = false;
+	rec->stats.fm_off++;
+	salsa64_rec_flush_why(rec, SALSA64_REC_FLUSH_OTHER);
 }
 
 static void flags_add(struct salsa64_rec *rec, uint32_t pa, uint32_t end, int delta)
@@ -985,6 +1097,8 @@ static unsigned new_block(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, uns
 	rec->pent[id] = 0;
 	uint32_t code = salsa64_rec_compile(rec, pc, pa, seg, SALSA64_REC_MAX_INSNS, false, &n, &bytes);
 	rec->cur_id = 0;
+	if (code)
+		fm_register(rec);
 	struct salsa64_rec_block *b = &rec->blocks[id];
 	b->pa = pa;
 	b->code = code;
@@ -1225,8 +1339,11 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 					t0 = salsa64_rec_prof_now();
 				rec->fr = cpu->status & SALSA64_ST_FR;
 				cpu->rec_mark = SALSA64_SMP_COMPILE;
+				rec->scratch_gen++;  /* los sitios de fastmem del temporal anterior ya no valen */
 				entry = salsa64_rec_compile(rec, pc, pa, seg, (unsigned)(s->next - cpu->cycles), true, &n,
 							    &bytes);
+				if (entry)
+					fm_register(rec);
 				cpu->rec_mark = SALSA64_SMP_DISPATCH;
 				if (prof) {
 					prof->t[SALSA64_PROF_COMPILE] += salsa64_rec_prof_now() - t0;
@@ -1330,12 +1447,14 @@ bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *co
 
 	/* Los ganchos de depuración y el perfil los pone quien llama antes de iniciar. */
 	uint32_t opts = rec->opts, hot_bytes = rec->hot_bytes;
+	void *fm_window = rec->fm_window;
 	void (*after_exit)(struct salsa64_rec *, uint64_t, void *) = rec->after_exit;
 	void (*on_compile)(struct salsa64_rec *, uint64_t, uint32_t, uint32_t, bool) = rec->on_compile;
 	void *after_exit_ctx = rec->after_exit_ctx;
 	struct salsa64_rec_prof *prof = rec->prof;
 	memset(rec, 0, sizeof *rec);
 	rec->opts = opts;
+	rec->fm_window = fm_window;
 	rec->profile_sites = true;
 	rec->after_exit = after_exit;
 	rec->after_exit_ctx = after_exit_ctx;
@@ -1387,6 +1506,8 @@ bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *co
 	if (n > preamble_words())
 		return false;
 	salsa64_rec_sync(rec->code, n * 4);
+	/* La FPU compacta: sus rutinas después del preámbulo (rec_emit_fpurtn.h). */
+	rec->fpu_rtn_ok = !(opts & SALSA64_REC_OPT_FPU_INLINE) && salsa64_rec_emit_fpu_rtns(rec, n, preamble_words());
 	rec->enter_opd[0] = (uintptr_t)code;
 	rec->enter_opd[1] = my_toc;
 	rec->enter_opd[2] = 0;
@@ -1395,6 +1516,16 @@ bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *co
 	rec->next_block = 1;
 	rec->fr = cpu->status & SALSA64_ST_FR;
 	salsa64_rec_x_init(rec);
+	/* fastmem: solo si la RDRAM es el principio de la ventana y ninguna
+	 * entrada de la TLB (un estado cargado) choca con ella. */
+	if ((opts & SALSA64_REC_OPT_FASTMEM) && fm_window && cpu->rdram == fm_window) {
+		rec->fastmem = true;
+		for (unsigned n = 0; n < SALSA64_TLB_ENTRIES; n++)
+			if (salsa64_rec_fastmem_collides(rec, &cpu->tlb[n]))
+				rec->fastmem = false;
+		if (!rec->fastmem)
+			rec->stats.fm_off++;
+	}
 	cpu->rec = rec;
 	cpu->code_flags = rec->flags;
 	return true;

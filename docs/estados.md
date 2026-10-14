@@ -11,7 +11,8 @@ ranuras por juego en la PS3; en el host, `salsa64-run --state-save` y
 | Estado de la HLE gráfica entre tareas | `src/rsp/gfx/state.c` (registros del RDP) y `sync.c` (con la TMEM) |
 | Estado de la HLE de audio entre tareas | `src/rsp/audio/state.c` |
 | En los SPE | trabajos `GFX_JOB_STATE_*` (el SPE copia tal cual el tramo del RDP; el PPE arma el formato, `src/platform/ps3/gfx_spu.c`) y `AUD_JOB_STATE_*` (`src/spu/gfx/main.c`, `src/spu/audio/main.c`) |
-| Archivos de las ranuras y miniatura (PS3) | `src/frontend/states.c` |
+| Archivos de las ranuras y miniatura (PS3), foto y escritura en segundo plano | `src/frontend/states.c`, `src/platform/ps3/bgjob.c` |
+| Compresor LZ (formato de bloque de LZ4), portable y en el SPE | `lib/spukit/include/spukit/lz.h`, `lzstream.h`, `lib/spukit/spu/lz.c` |
 | Barrera entre los dos hilos, atajos, aviso | `src/frontend/main.c` (`emu_park`, `state_barrier`, `pad_combos`), `src/frontend/osd.c` |
 | Host | `src/host/run.c` (`--state-save CAMPO:ARCHIVO`, `--state-load ARCHIVO`, `--fields N`) |
 | Pruebas | `tests/unit/test_state.c`, `tools/test-roms.sh` (`estados`), `tools/test-rec.sh` |
@@ -51,6 +52,11 @@ Lo que hace falta para continuar ciclo a ciclo:
 - **THMB** — miniatura de 160 × 120 (RGBA5551) de la imagen presentada, para
   un futuro menú de estados; va primero, el menú no tiene que leer el resto.
 - **RDRM** — la RDRAM entera (4 u 8 MB), sin comprimir, al final.
+- **RDRZ** — (formato 2) en lugar de RDRM: la RDRAM comprimida. Tres palabras
+  (tamaño de la RDRAM, tamaño de bloque —64 KB— y número de bloques) y los
+  bloques uno detrás de otro, cada uno con un encabezado de 4 bytes (el bit 31
+  dice que ese bloque va tal cual porque comprimirlo no ganó, el resto es su
+  largo). Los bloques son del formato de bloque de LZ4 y no dependen entre sí.
 
 No se guarda lo que no cambia el resultado o se recalcula: punteros y
 backends, configuración (duraciones de las tareas del RSP), estadísticas,
@@ -63,7 +69,8 @@ cargar).
 Big-endian y campo por campo, igual en la PS3 y en el host: un estado de la
 consola se reproduce en `salsa64-run` y al revés.
 
-- Cabecera de 64 bytes: magia `SLS64ST\0`, versión del formato, tamaño de la
+- Cabecera de 64 bytes: magia `SLS64ST\0`, versión del formato (1: RDRM sin
+  comprimir; 2: RDRZ, lo que escribe la PS3; se leen las dos), tamaño de la
   cabecera y del archivo, CRC1 y CRC2 de la cabecera de la ROM, tamaño de la
   ROM, título (20 bytes), tamaño de la RDRAM, campo del VI y banderas.
 - Secciones «etiqueta (4 bytes) + largo (4 bytes) + datos».
@@ -85,9 +92,14 @@ consola se reproduce en `salsa64-run` y al revés.
   tenía (casi siempre da igual: los juegos ponen el estado del RDP en cada
   cuadro).
 
-Sin compresión: 8 MB de RDRAM se escriben de y hacia su búfer sin copias,
-y comprimir costaría tiempo del PPE. En la PS3 real guardar tarda ~0,6 s
-(casi todo el disco) y cargar ~0,17 s (docs/perf-log.md).
+En la PS3, guardar es en dos tiempos (más abajo) y la RDRAM va comprimida
+(formato 2): 8 MB pasan a 1–2 MB en los juegos medidos en el host (OoT en la
+intro 4:1, GoldenEye 7:1, Mario Kart 6:1; gfxtest 100:1). En el host,
+`salsa64-run --state-save` sigue escribiendo el formato 1 (los archivos
+iguales byte por byte de las pruebas de determinismo) y `--state-zip` el 2;
+las dos clases se cargan en los dos lados. Antes de agregar la compresión
+(2026-10-13) guardar tardaba ~0,43 s con la emulación detenida (casi todo el
+disco) y cargar ~0,17 s (docs/perf-log.md).
 
 La E/S en la PS3 va con las llamadas al kernel (`sysLv2Fs*` de
 `<sys/file.h>`), no con `sysFs*` de libsysfs: esas son puentes al módulo
@@ -95,6 +107,40 @@ cellFs del sistema, que hay que cargar antes; sin cargarlo, en RPCS3 andan
 y en la consola real colgaban todo al primer `mkdir`. Tamaño en disco: ~8,1 MB por ranura
 (RDRAM de 8 MB más ~70 KB de secciones y miniatura), ~81 MB por juego con
 las diez ranuras llenas (docs/memory-budget.md).
+
+## Guardar en dos tiempos y en segundo plano (2026-10-13)
+
+Lo único que necesita la emulación quieta es **tomar una foto**; escribirla
+no. `salsa64_state_capture` arma la cabecera y las secciones chicas en un
+búfer de 256 KB y copia la RDRAM (8 MB, un `memcpy`) a otro búfer, los dos
+reservados al abrir el juego (`states_init`; docs/memory-budget.md). La
+emulación sigue ahí mismo. Después, un hilo del PPE de baja prioridad
+(`bgjob`, prioridad 1500: por debajo de la emulación y la presentación)
+escribe el archivo con `salsa64_state_write`:
+
+1. Las secciones chicas tal cual y el encabezado de RDRZ.
+2. La RDRAM, bloque por bloque: el SPE libre (`spukit_lzs`, programa
+   `lib/spukit/spu/lz.c`) comprime hasta ocho bloques por delante de lo que
+   el hilo escribe; el SPE solo hace DMA, así que la E/S es del hilo
+   (`sysLv2Fs*`, nunca `sysFs*`). Sin SPE, o si su resultado no coincide con
+   el del PPE en la prueba que corre la primera vez (`lz_selftest`), comprime
+   el hilo.
+3. Los dos tamaños que solo se saben al final (el del archivo y el de RDRZ)
+   se escriben al empezar con `sysLv2FsLSeek64`; el archivo era un `.tmp` y
+   se renombra, igual que antes.
+
+Reglas: una sola foto, así que un segundo guardado espera a que termine el
+anterior (hasta 5 s; el aviso sale igual); cargar y consultar las ranuras
+esperan la escritura en curso; al cerrar el juego se termina de escribir
+antes de soltar el SPE. Si la escritura falla (disco lleno…), el aviso
+«No se pudo guardar» sale cuando el hilo lo sabe (`states_poll`), y el estado
+anterior de esa ranura sigue intacto. Sin memoria para la foto o sin hilo, se
+guarda como antes, todo seguido.
+
+El log de la PS3 trae dos líneas por estado: `estado: ranura N (campo C):
+emulación detenida X ms (la foto)…` y, al terminar la escritura, `estado: ranura N
+escrita en segundo plano: … ms de punta a punta, … ms en el disco, … ms del SPE
+comprimiendo; K KB de M KB (r:1)…`.
 
 ## Cuándo es seguro: la barrera
 
@@ -110,7 +156,7 @@ Solo en el límite de un campo y con la emulación quieta:
    gráficas, espera al RSX (`rsxkit_finish`), espera las copias RSX → RDRAM
    de los efectos de framebuffer que quedaran en vuelo y las escribe
    (`salsa64_rdp_settle`: ninguna llega tarde sobre una RDRAM cargada) y
-   guarda o carga.
+   toma la foto (el archivo se escribe después, en segundo plano) o carga.
 4. Al cargar: la caché del recompilador se vacía (`salsa64_rec_flush`, dentro
    de `salsa64_state_load`), los destinos del RSX se sueltan
    (`salsa64_rdp_drop_targets`: lo dibujado ya no es de esta máquina y el

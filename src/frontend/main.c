@@ -141,6 +141,7 @@
  * Lo que la ROM imprime por el ISViewer va al log.
  */
 #include <io/pad.h>
+#include <lv2/process.h>
 #include <malloc.h>
 #include <ppu-lv2.h>
 #include <ppu-types.h>
@@ -176,6 +177,7 @@
 #include "padmap.h"
 #include "pausectl.h"
 #include "platform/ps3/autotest.h"
+#include "platform/ps3/fastmem.h"
 #include "platform/ps3/gfx_spu.h"
 #include "platform/ps3/jpeg_spu.h"
 #include "platform/ps3/rsp_spu.h"
@@ -192,6 +194,8 @@
 #include "selftest_audio.h"
 #include "selftest_gfx.h"
 #include "states.h"
+#include "cajanegra.h"
+#include "rdp/blackbox.h"
 #include "version.h"
 #include "vitest_rom_bin.h"
 
@@ -492,6 +496,7 @@ struct field_msg {
 	int32_t snap;               /* ranura con la copia del VI, o -1 */
 	uint32_t flags;
 	volatile uint32_t skip;     /* emulación lo pone si encoló uno más nuevo */
+	uint32_t vi[SALSA64_VI_NREGS];  /* registros del VI al terminar el campo (caja negra) */
 };
 static struct field_msg field_q[FIELD_QUEUE];
 static volatile uint32_t field_head, field_tail;  /* head la mueve emulación; tail, presentación */
@@ -1017,11 +1022,12 @@ static void cheat_panel_events(void)
 /* Atajos dentro del juego, con SELECT (la N64 no lo tiene; START + SELECT
  * vuelve al menú): + R1 guarda el estado en la ranura actual, + L1 lo
  * carga, + izquierda o derecha de la cruceta cambia de ranura, + △
- * muestra u oculta el contador de velocidad y + R2 vuelca la salida de la
- * HLE gráfica con la captura del cuadro. Mientras SELECT está apretado
+ * muestra u oculta el contador de velocidad, + R2 vuelca la salida de la
+ * HLE gráfica con la captura del cuadro y + L2 escribe la caja negra (el
+ * anillo de las últimas tareas y campos; cajanegra.h). Mientras SELECT está apretado
  * esos botones no llegan al juego. Devuelve los botones para el mapeo. */
 #define COMBO_MASK (1u << SALSA64_DS3_R1 | 1u << SALSA64_DS3_L1 | 1u << SALSA64_DS3_LEFT | \
-		    1u << SALSA64_DS3_RIGHT | 1u << SALSA64_DS3_TRIANGLE | 1u << SALSA64_DS3_R2)
+		    1u << SALSA64_DS3_RIGHT | 1u << SALSA64_DS3_TRIANGLE | 1u << SALSA64_DS3_R2 | 1u << SALSA64_DS3_L2)
 
 static uint32_t pad_combos(unsigned port, uint32_t b)
 {
@@ -1046,6 +1052,8 @@ static uint32_t pad_combos(unsigned port, uint32_t b)
 	}
 	if (rise & 1u << SALSA64_DS3_R2)
 		dump_now = true;
+	if (rise & 1u << SALSA64_DS3_L2)
+		cajanegra_request();
 	return b & ~COMBO_MASK;
 }
 
@@ -1167,23 +1175,11 @@ static int file_exists(const char *path)
 }
 
 /* Tamaño de página (KB) de la memoria donde cae `p`, por la syscall 351
- * (sys_memory_get_page_attribute, sin envoltura en PSL1GHT; disposición de
- * sys_page_attr_t como la documenta RPCS3); 0 si falla. */
-static struct {
-	u64 attribute, access_right;
-	u32 page_size, pad;
-	u64 reserve[4];
-} page_attr;
-
-static s32 page_attr_query(const void *p)
-{
-	lv2syscall2(351, (u64)(uintptr_t)p, (u64)(uintptr_t)&page_attr);
-	return_to_user_prog(s32);
-}
-
+ * (platform/ps3/rec_cache.h); 0 si falla. */
 static unsigned page_kb(const void *p)
 {
-	return page_attr_query(p) == 0 ? page_attr.page_size / 1024 : 0;
+	struct salsa64_ps3_page_attr a;
+	return salsa64_ps3_page_attr(p, &a) == 0 ? a.page_size / 1024 : 0;
 }
 
 /* Texto del ISViewer: al log línea por línea (hilo de emulación). */
@@ -1434,6 +1430,7 @@ static void post_field(uint32_t flags)
 	tasks_visible = m.tasks;
 	m.snap = -1;
 	m.flags = flags;
+	memcpy(m.vi, n64.bus.vi.regs, sizeof m.vi);
 
 	if (salsa64_vi_frame(&n64.bus, &m.f) && m.f.width <= FB_MAX_W && m.f.height <= FB_MAX_H) {
 		salsa64_rdp_vi(m.f.origin, m.f.width);  /* qué color images son framebuffers */
@@ -2146,10 +2143,21 @@ static void present_overlay(uint64_t now)
 		osd_cheats_draw(&game_cheats, pause_ctl.panel_sel, ui_lw, ui_lh);
 }
 
+/* Caja negra: lo que pasó con este campo (docs/cajanegra.md). */
+static void cj_note_field(const struct field_msg *m, uint32_t flags)
+{
+	if (!cajanegra_enabled())
+		return;
+	struct cajanegra_field f = { m->field, m->tasks, flags, (uint32_t)m->f.type, m->f.origin, m->f.width,
+				     m->f.height, m->f.stride, m->f.bpp, m->vi, n64.bus.vi.fields - m->field };
+	cajanegra_field(&f);
+}
+
 /* Presenta (o salta) un campo encolado. */
 static void present_field(const struct field_msg *m, uint64_t now)
 {
 	h1_flush(m->tasks);  /* las tareas de este campo, no las del siguiente */
+	cajanegra_set_field(m->field);
 	if (m->f.width && m->f.origin != pres.last_origin) {
 		pres.last_origin = m->f.origin;
 		pres.game_frames++;
@@ -2158,6 +2166,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		if (m->snap >= 0)
 			snap_cas(m->snap, SNAP_QUEUED, SNAP_FREE);
 		pres.skipped++;
+		cj_note_field(m, BB_FLD_SKIPPED);
 		return;
 	}
 	int slot = m->snap;
@@ -2167,6 +2176,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		if (!have) {
 			/* Emulación la soltó al encolar un campo más nuevo. */
 			pres.skipped++;
+			cj_note_field(m, BB_FLD_SKIPPED);
 			return;
 		}
 	}
@@ -2193,6 +2203,15 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		if (salsa64_rdp_present(&m->f, m->field, &pres.view, &crop, &r)) {
 			pres.rsx_frames++;
 			pres.still = STILL_RSX;
+			if (cajanegra_enabled()) {
+				/* Intermedio o repetido: la caja negra lo anota con su t, su k y
+				 * las dos tareas (para repetirlo en el host). */
+				struct salsa64_rdp_field_info fi;
+				salsa64_rdp_field_info(&fi);
+				if (fi.kind != SALSA64_FIELD_TRUE)
+					cajanegra_field_interp(fi.kind == SALSA64_FIELD_INTERP ? BB_KIND_INTERP : BB_KIND_REPEAT, fi.t,
+							       fi.k, fi.task, fi.prev_task);
+			}
 			flt.pending = filt && filter_source(true, &shown) && !filter_announce(now);
 			if (filt && !flt.pending)
 				salsa64_rdp_present_again(NULL, NULL, &r);
@@ -2305,6 +2324,8 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	pres.us_present += t1 - t0;
 	pres.us_flip += t2 - t1;
 	pres.presented++;
+	cj_note_field(m, BB_FLD_SHOWN | (pres.still == STILL_RSX ? BB_FLD_RSX : pres.still == STILL_FB ? BB_FLD_RDRAM : 0) |
+				 (m->f.width ? 0 : BB_FLD_BLANK));
 
 	if (exit_field && m->field >= exit_field) {
 		salsa64_log("salida en el campo %u (capturas)", m->field);
@@ -2665,6 +2686,14 @@ static void stats(uint64_t now)
 			    (unsigned long long)st->vt_probes, (unsigned long long)st->fr_dep,
 			    (unsigned long long)st->fr_twins, (unsigned long long)st->fr_exits,
 			    (unsigned long long)st->cu1_exits, (unsigned long long)st->interp_steps);
+		if (rec.fastmem || st->fm_off) {
+			uint32_t fa, fu, fs;
+			salsa64_ps3_fastmem_counts(&fa, &fu, &fs);
+			salsa64_log("fastmem: %s; %llu accesos sin prueba, %llu parchados tras fallar; ayudante: %u fallos atendidos, "
+				    "%u desconocidos, %u de SPE",
+				    rec.fastmem ? "activo" : "apagado", (unsigned long long)st->fm_sites,
+				    (unsigned long long)st->fm_faults, fa, fu, fs);
+		}
 		if (rsmp.on) {
 			char text[320];
 			salsa64_rec_sample_split(rec_sample, &rsmp.prev, text, sizeof text);
@@ -2756,9 +2785,14 @@ static void state_barrier(void)
 		ok = states_save(&n64, slot, &t, err, sizeof err);
 		if (ok) {
 			osd_notice(sysGetSystemTime(), "Estado guardado en ranura %u", slot);
-			salsa64_log("estado: guardado en la ranura %u (campo %u): %.1f ms, de ellos %.1f ms escribiendo; %u KB; "
-				    "miniatura %.1f ms", slot, field0, t.us_total / 1e3, t.us_io / 1e3, t.bytes >> 10,
-				    states_thumb_us() / 1e3);
+			if (t.async)
+				salsa64_log("estado: ranura %u (campo %u): emulación detenida %.1f ms (la foto), miniatura %.1f ms; "
+					    "el archivo se escribe en segundo plano", slot, field0, t.us_total / 1e3,
+					    states_thumb_us() / 1e3);
+			else
+				salsa64_log("estado: guardado en la ranura %u (campo %u): %.1f ms, de ellos %.1f ms escribiendo; %u KB; "
+					    "miniatura %.1f ms", slot, field0, t.us_total / 1e3, t.us_io / 1e3, t.bytes >> 10,
+					    states_thumb_us() / 1e3);
 		} else {
 			osd_notice(sysGetSystemTime(), "No se pudo guardar: %s", err);
 			salsa64_log("estado: FALLO al guardar en la ranura %u: %s", slot, err);
@@ -2797,6 +2831,24 @@ static void state_barrier(void)
 	state_done++;
 	lwsync();
 	state_req = STATE_NONE;
+}
+
+/* Una escritura de estado en segundo plano terminó: al log y, si falló, al
+ * aviso en pantalla (el de «Estado guardado» salió al tomar la foto). */
+static void state_bg_poll(void)
+{
+	struct states_done d;
+	if (!states_poll(&d))
+		return;
+	if (d.ok) {
+		salsa64_log("estado: ranura %u escrita en segundo plano: %.1f ms de punta a punta, %.1f ms en el disco, "
+			    "%.1f ms del SPE comprimiendo (%s); %u KB de %u KB (%.1f:1), %u bloques (%u sin comprimir, %u en el SPE)",
+			    d.slot, d.us_total / 1e3, d.us_io / 1e3, d.us_spu / 1e3, d.spu ? "SPE" : "PPE", d.bytes >> 10,
+			    d.raw_bytes >> 10, d.bytes ? (double)d.raw_bytes / d.bytes : 0.0, d.blocks, d.stored, d.spu_blocks);
+	} else {
+		osd_notice(sysGetSystemTime(), "No se pudo guardar: %s", d.err);
+		salsa64_log("estado: FALLO al escribir la ranura %u en segundo plano: %s", d.slot, d.err);
+	}
 }
 
 static void state_test_step(void)
@@ -3455,8 +3507,37 @@ static void profile_close(void)
 	rprof.on = false;
 }
 
+/* Cuánto se espera al hilo de emulación al cerrar antes de rendirse. */
+#define QUIT_WAIT_US 5000000
+
+/* El hilo de emulación no responde (girando en código generado o en C):
+ * no hay cómo detenerlo desde fuera. Salir del juego por el XMB con los
+ * grupos de SPU vivos colgó la consola entera (2026-10-13): se paran los
+ * SPE que se pueden parar sin el hilo de emulación y se termina el
+ * proceso con sys_process_exit, con lo que haya quedado en el log. */
+static void forced_exit(const char *why)
+{
+	salsa64_log("cierre forzado: %s tras %u s (pc 0x%08llx, ciclos %llu, marca %u, bloque %u); se paran los SPE y se sale",
+		    why, QUIT_WAIT_US / 1000000, (unsigned long long)n64.cpu.cur_pc, (unsigned long long)n64.cpu.cycles,
+		    n64.cpu.rec_mark, n64.cpu.rec_cur);
+	audio_out_shutdown();
+	cajanegra_shutdown(3000000);
+	states_shutdown(3000000);
+	if (jpeg_on_spu)
+		salsa64_jpeg_spu_shutdown(&jpeg_spu);
+	if (lle_mode != SALSA64_LLE_OFF)
+		salsa64_rsp_spu_shutdown(&rsp_spu);
+	if (gfx_on_spu)
+		salsa64_gfx_spu_shutdown(&gfx_spu);
+	salsa64_log("cierre forzado: SPE detenidos; saliendo");
+	salsa64_log_shutdown();
+	sysProcessExit(1);
+}
+
 static void game_close(void)
 {
+	cajanegra_shutdown(10000000);
+	states_shutdown(10000000);  /* un estado a medio escribir se termina antes de soltar nada */
 	salsa64_filters_release();
 	salsa64_log("cierre: emulación detenida tras %u campos (%u emulados, %u descartados por la cola, %u sin ranura)",
 		    n64.bus.vi.fields, emu_stats.fields, emu_stats.dropped, emu_stats.no_slot);
@@ -3542,6 +3623,8 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	salsa64_rom_normalize(rom, rom_size);
 	memset(rdram, 0, SALSA64_RDRAM_MAX);  /* cada juego arranca igual, venga después del que venga */
 	salsa64_n64_init(&n64, rdram, SALSA64_RDRAM_MAX);
+	states_init(SALSA64_RDRAM_MAX);  /* la foto de los estados y su hilo de escritura (docs/estados.md) */
+	cajanegra_init(&n64.bus);        /* el anillo de la caja negra, si hay archivo cajanegra (docs/cajanegra.md) */
 	n64.bus.rdram_written = front_rdram_written;
 	salsa64_bus_set_isviewer(&n64.bus, isv_buf, isv_out, NULL);
 
@@ -3615,6 +3698,11 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	savefile_open(&save_file, &save, &n64.bus, rom, SAVES_DIR, SAVE_CFG, SALSA64_SAVE_AUTO, salsa64_log);
 
 	rec.opts = SALSA64_REC_OPT_PIN;  /* +7 % en nemu64-test (docs/perf-log.md) */
+	rec.fm_window = NULL;
+	if (salsa64_ps3_fastmem_ptr() && rdram == salsa64_ps3_fastmem_ptr()) {
+		rec.opts |= SALSA64_REC_OPT_FASTMEM;
+		rec.fm_window = rdram;
+	}
 	if (salsa64_ps3_rec_legacy_wanted())
 		rec.opts |= SALSA64_REC_OPT_LEGACY;
 	if (salsa64_ps3_rec_fpu_res_wanted())
@@ -3625,27 +3713,50 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		rec.opts |= SALSA64_REC_OPT_NO_EVICT;
 	if (salsa64_ps3_rec_wide_wanted())
 		rec.opts |= SALSA64_REC_OPT_WIDE;
+	if (salsa64_ps3_rec_no_group_wanted())
+		rec.opts |= SALSA64_REC_OPT_NO_GROUP;
+	if (salsa64_ps3_rec_fpu_inline_wanted())
+		rec.opts |= SALSA64_REC_OPT_FPU_INLINE;
 	rec.prof = salsa64_ps3_rec_prof_wanted() ? &rec_prof : NULL;
 	{
 		bool sites;
 		rec.hot_bytes = file_exists(PROFILE_ON_PATH) ? profile_hot_kb(&sites) << 10 : 0;
 	}
-	if (!salsa64_ps3_rec_wanted())
+	char probe_why[160];
+	bool rec_wanted = salsa64_ps3_rec_wanted(), probe_ok = false, probe_first = false;
+	if (rec_wanted) {
+		/* Antes de tocar la caché: con CFW el hilo podía quedarse trabado
+		 * en salsa64_rec_init (issue #2; rec_cache.h). */
+		probe_ok = salsa64_ps3_rec_probe_wait(probe_why, sizeof probe_why, &probe_first);
+		if (!probe_ok)
+			salsa64_log("recompilador no disponible en esta consola (%s): intérprete", probe_why);
+		else if (probe_first)
+			salsa64_log("recompilador: caché de código probada (%s)", probe_why);
+	}
+	if (!rec_wanted)
 		salsa64_log("recompilador apagado (%s): intérprete", SALSA64_NOREC_FLAG);
+	else if (!probe_ok)
+		;
 	else if (!(use_rec = salsa64_rec_init(&rec, &n64.cpu, salsa64_ps3_rec_cache(), SALSA64_REC_CACHE_BYTES)))
 		salsa64_log("recompilador no disponible: intérprete");
-	else
+	else {
+		if (rec.fastmem && !salsa64_ps3_fastmem_start(&rec))
+			salsa64_rec_fastmem_off(&rec);
 		salsa64_log("páginas: RDRAM %u KB, rec %u KB, n64 %u KB, caché de código %u KB, pila %u KB (0 = sin dato)",
 			    page_kb(rdram), page_kb(&rec), page_kb(&n64), page_kb(salsa64_ps3_rec_cache()),
-			    page_kb(__builtin_frame_address(0))),
-		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x%s%s%s%s%s%s",
+			    page_kb(__builtin_frame_address(0)));
+		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x%s%s%s%s%s%s%s%s%s",
 			    SALSA64_REC_CACHE_BYTES >> 20, salsa64_ps3_rec_cache(), rec.calls_near ? "con bl" : "por mtctr",
 			    rec.opts, rec.prof ? ", con perfil" : "",
 			    rec.opts & SALSA64_REC_OPT_LEGACY ? ", camino viejo (jit-viejo)" : "",
 			    rec.opts & SALSA64_REC_OPT_FPU_RES ? ", FPU residente (jit-fpu-residente)" : "",
 			    rec.opts & SALSA64_REC_OPT_COP0_EXEC ? ", COP0 por el intérprete (jit-cop0-viejo)" : "",
 			    rec.opts & SALSA64_REC_OPT_NO_EVICT ? ", sin tramos (jit-sin-tramos)" : "",
-			    rec.opts & SALSA64_REC_OPT_WIDE ? ", código ancho (jit-ancho)" : "");
+			    rec.opts & SALSA64_REC_OPT_WIDE ? ", código ancho (jit-ancho)" : "",
+			    rec.fastmem ? ", fastmem (jit-fastmem)" : rec.opts & SALSA64_REC_OPT_FASTMEM ? ", fastmem APAGADO" : "",
+			    rec.opts & SALSA64_REC_OPT_NO_GROUP ? ", sin base en caché (jit-sin-grupos)" : "",
+			    rec.opts & SALSA64_REC_OPT_FPU_INLINE ? ", FPU en línea (jit-fpu-en-linea)" : rec.fpu_rtn_ok ? "" : ", FPU en línea (las rutinas no cupieron)");
+	}
 	profile_open(rom);
 	sample_open();
 
@@ -3820,6 +3931,8 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 			present_still();
 		if (state_test.stage)
 			state_test_step();
+		state_bg_poll();
+		cajanegra_pump(now);
 		if (fps.on)
 			osd_fps_sample(&fps, now, n64.bus.vi.fields, n64.cpu.cycles, pres.game_frames, pres.frames_total);
 		stats(now);
@@ -3835,9 +3948,12 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	/* Parar la emulación sin dejarla esperando un juego de búferes (si
 	 * estaba en pausa, running = 0 la suelta). */
 	running = 0;
+	u64 stop_t0 = sysGetSystemTime();
 	while (!emu_done) {
 		drain(sysGetSystemTime(), 0);
 		sysUsleep(500);
+		if (sysGetSystemTime() - stop_t0 > QUIT_WAIT_US)
+			forced_exit("la emulación no respondió al cierre");
 	}
 	u64 ret;
 	sysThreadJoin(emu_tid, &ret);
@@ -4501,10 +4617,12 @@ static void watch_thread(void *arg)
 		} else if (now - emu_t >= STALL_US && (!emu_said || now - emu_said >= STALL_LOG_US)) {
 			emu_said = now;
 			salsa64_log("latido: emulación quieta hace %.1f s en «%s» (campo %u, %u emulados, %u en cola, RSP "
-				    "%s, %u tareas gráficas terminadas, %u esperas al SPE; presentación en «%s»; pausa 0x%x)",
+				    "%s, %u tareas gráficas terminadas, %u esperas al SPE; presentación en «%s»; pausa 0x%x; "
+				    "cpu: pc 0x%08llx, ciclos %llu, marca %u, bloque %u)",
 				    (now - emu_t) / 1e6, beat.emu_at, n64.bus.vi.fields, emu_stats.fields,
 				    field_head - field_tail, n64.bus.rsp.busy ? "ocupado" : "libre", salsa64_rdp_tasks_done(),
-				    gfx_spu.waits, beat.pres_at, pause_req);
+				    gfx_spu.waits, beat.pres_at, pause_req, (unsigned long long)n64.cpu.cur_pc,
+				    (unsigned long long)n64.cpu.cycles, n64.cpu.rec_mark, n64.cpu.rec_cur);
 		}
 	}
 	sysThreadExit(0);
@@ -4519,6 +4637,10 @@ int main(void)
 	if (!version_build(salsa64_title, salsa64_appid, build_text, sizeof build_text))
 		build_text[0] = '\0';
 	pres.autotest = salsa64_autotest();
+	/* La caché del recompilador se prueba en otro hilo mientras arranca el
+	 * menú (rec_cache.h); run_game espera el resultado. */
+	if (salsa64_ps3_rec_wanted())
+		salsa64_ps3_rec_probe_start(SALSA64_REC_PROBE_FILE, salsa64_version);
 	sys_ppu_thread_t watch_tid;
 	bool watching = sysThreadCreate(&watch_tid, watch_thread, NULL, WATCH_PRIO, 0x10000, THREAD_JOINABLE,
 					(char *)"salsa64_latido") == 0;
@@ -4576,7 +4698,15 @@ int main(void)
 	}
 
 	rdram = NULL;
-	if (file_exists(RDRAM_1M_PATH)) {
+	if (salsa64_ps3_fastmem_wanted() && salsa64_ps3_rec_wanted()) {
+		/* fastmem (docs/fastmem.md): la RDRAM al principio de una ventana de
+		 * 512 MB sin mapear; el recompilador la aprovecha si la autoprueba
+		 * pasa (más abajo, al abrir el juego). */
+		rdram = salsa64_ps3_fastmem_window(SALSA64_RDRAM_MAX);
+		if (!rdram)
+			salsa64_log("fastmem (jit-fastmem): sin ventana, la RDRAM va como siempre");
+	}
+	if (!rdram && file_exists(RDRAM_1M_PATH)) {
 		sys_mem_addr_t addr = 0;
 		if (sysMemoryAllocate(SALSA64_RDRAM_MAX, SYS_MEMORY_PAGE_SIZE_1M, &addr) == 0)
 			rdram = (uint8_t *)(uintptr_t)addr;
@@ -4634,6 +4764,7 @@ int main(void)
 		sysThreadJoin(watch_tid, &rv);
 	}
 	salsa64_log("salida normal%s", app_quit ? " («Salir del juego» del sistema)" : "");
+	salsa64_ps3_fastmem_stop();
 	salsa64_log_shutdown();
 	return status;
 }

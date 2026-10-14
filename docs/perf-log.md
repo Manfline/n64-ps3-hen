@@ -277,6 +277,44 @@ con imagen repetida no llegaron completos (ahora van en líneas aparte).
   en una sola cadena de FMA (6 ciclos cada una). Con varias sumas parciales
   independientes y dos columnas entrelazadas debería acercarse a 25–30
   ciclos por muestra (S-Video ~0,8 ms y compuesto ~1,6 ms por SPE): a medir.
+## Fastmem y base en caché en el host (2026-10-13)
+
+Diseño y detalle en docs/fastmem.md. Medición en el host con los volcados
+(`SALSA64_REC_DUMP=1 SALSA64_REC_PROF=12000 SALSA64_REC_PROF_TOP=4000
+SALSA64_REC_PIN=1`, `tools/rec-expansion.py --counter 8`, pesado por
+ejecuciones): palabras de PPC por instrucción MIPS, calientes (las que se
+ejecutan) y frías. La PS3 está pendiente (fastmem depende de que lv2 avise
+de los fallos de página, que hoy con HEN no hace; la base en caché no
+depende de nada y va en el mismo paquete con `jit-sin-grupos` para el A/B).
+
+| | GoldenEye hasta la presa (7,5 G ciclos) | Perfect Dark intro (3 G) |
+|---|---|---|
+| v0.2.2 (código compacto) | 8,16 calientes + 7,40 frías = 15,57 | 6,84 + 6,50 = 13,34 |
+| fastmem (`SALSA64_REC_FASTMEM=1`; ventana con SIGSEGV) | **6,87** + 10,06 = 16,93 (calientes −16 %) | — |
+| base en caché (por omisión; con el arreglo del delay slot likely y FCR31 en T_V) | **7,65** + 7,20 = 14,85 (calientes −6 %) | **6,39** + 6,10 = 12,49 (−7 %) |
+| base en caché + FPU compacta (por omisión; docs/fastmem.md §9) | **5,54** + 7,27 = 12,81 (calientes **−32 %**) | **5,22** + 6,05 = 11,27 (**−24 %**) |
+
+En la PS3 (2026-10-13, paquete con la base en caché antes del arreglo):
+GoldenEye en la presa 16,63 ns por instrucción (12 ventanas pesadas) contra
+16,03/16,30 de v0.2.2: sin ganancia; Perfect Dark, primera ventana pesada,
+10,07 contra 10,51 sin grupos (−4 %). Con la FPU compacta (paquete
+`build/ps3-4`, sin banderas): GoldenEye en la presa **15,66 / 15,54**
+(media / mediana de 13 ventanas pesadas; −2…−4 % contra v0.2.2, −6 % contra
+la corrida A) y Perfect Dark en la segunda escena **14,1–14,7** contra ~15,4
+(−5…−8 %). La ganancia de huella del host no se traslada entera: el
+`bl`/`blr` por operación y lo que no es el PPE (docs/fastmem.md §9).
+
+Todos son exactos en `--lockstep` (GoldenEye hasta la presa y Perfect
+Dark sin diferencias; nemu64-test entero con la base en caché; con fastmem
+nemu64 diverge solo en las pruebas de accesos no alineados y de direcciones
+sin extensión de signo, que son excepciones que fastmem no lanza:
+`tests/roms/nemu64-test.fastmem.fallas`). Fastmem parchea 282 (GoldenEye)
+y 764 (Perfect Dark) sitios en toda la corrida: el fallo no es un costo.
+
+Censo de accesos a datos (intérprete, `-DSALSA64_MEM_CENSUS`, 11 juegos):
+KSEG0 97,9–99,97 %, KSEG1 ≤ 0,6 %, por la TLB 2 % en Perfect Dark y 0,1 %
+en GoldenEye, 0 no alineados; y el 70–77 % de los accesos comparten base
+con otro del mismo bloque (docs/fastmem.md, secciones 2 y 8).
 
 ## Quitarle trabajo al PPE: el hilo 1 y la tarea JPEG (2026-10-12)
 
@@ -585,6 +623,35 @@ más carga de CPU (49 MIPS, 43 % en espera).
 - Logs: `build/ps3-logs/salsa64-texturas-c17e790.log` y
   `salsa64-texturas-c17e790-3x.log` (fuera de git) y el de antes,
   `salsa64-v010-pd-majora.log`.
+
+## Estados guardados en segundo plano y comprimidos (2026-10-13)
+
+**Pendiente de PS3 real**: el paquete lo pide la sesión principal. Lo
+medido hasta ahora (RPCS3 no sirve para tiempos; el host sí para el
+tamaño):
+
+| Medida | Antes | Después | Dónde |
+|---|---|---|---|
+| Tamaño del archivo (RDRAM de 8 MB) | 8,1 MB siempre | OoT (intro, campo 1500) 1,98 MB; GoldenEye 1,22 MB; Mario Kart 64 1,46 MB; gfxtest 80 KB | host, `salsa64-run --state-zip`, respaldos del autor |
+| Emulación detenida al guardar | ~430 ms (417–1064; 520 de disco) | la foto: `memcpy` de 8 MB + secciones, 2 ms en RPCS3 (en la PS3, por medir) | log: «emulación detenida … (la foto)» |
+| Cargar | ~171 ms (161 leyendo) | por medir (menos disco, más descompresión en el PPE) | log: «cargado de la ranura» |
+
+Lo que escribe el log de la PS3 en cada guardado: «emulación detenida X ms
+(la foto)» y, cuando termina el hilo, «escrita en segundo plano: … ms de punta
+a punta, … ms en el disco, … ms del SPE comprimiendo … KB de … KB (r:1)». El
+costo para el PPE (hilo de baja prioridad, ~1 syscall por 64 KB) se mide con
+las líneas «hilo 1» de docs/hilos-ppe.md.
+
+**Caja negra (2026-10-13), RPCS3 (sin tiempos del Cell):** Mario Kart 64
+(respaldo del autor), anillo de 12 MB: 82 tareas y 165 campos caben (150 KB
+por tarea con sus texturas), 12,15 MB → 3,15 MB (3,9:1), el SPE comprime en
+72 ms y todo se escribe en 76 ms de punta a punta; registrar una tarea
+138 µs de media en RPCS3 (30 µs en gfxtest) y un campo 1,7 µs. En la PS3
+real, por medir con las líneas «caja negra: al cerrar…» y «escrita en segundo
+plano…» del log. El estado de ese juego: 8,25 MB → 1,14 MB (7,2:1).
+**Ojo al medir la foto en RPCS3:** la primera foto tras recompilar el
+programa tarda ~275 ms porque RPCS3 recompila los trabajos del SPE de
+guardar el estado de las HLE; copiar la RDRAM son 1,2 ms.
 
 ## Estados guardados (2026-10-11)
 

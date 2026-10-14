@@ -54,7 +54,7 @@ SPU_MACHDEP := -mdual-nops -fmodulo-sched -ffunction-sections -fdata-sections
 
 PPU_CFLAGS  := -std=gnu11 -O2 -Wall -Wextra -mcpu=cell -mno-relative-jumptables $(PPU_MACHDEP) \
                -I$(PSL1GHT)/ppu/include -I$(PSL1GHT)/ppu/include/simdmath \
-               -I$(ROOT)/src -I$(HERE) -I$(OBJ) $(CFLAGS)
+               -I$(ROOT)/src -I$(ROOT)/lib/spukit/include -I$(HERE) -I$(OBJ) $(CFLAGS)
 PPU_LDFLAGS := $(PPU_MACHDEP) -L$(PSL1GHT)/ppu/lib -Wl,-Map,$(OUT)/$(PROGRAM).map $(LDFLAGS)
 # -fstack-usage: el marco de cada función en un .su junto al objeto, para
 # medir la pila de los programas SPU (tools/spu-stack.py).

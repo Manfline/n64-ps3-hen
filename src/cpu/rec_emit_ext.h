@@ -144,7 +144,7 @@ static void emit_unaligned(struct ctx *c, unsigned k)
 	int slow = new_label(c), resume = new_label(c);
 	unsigned v = store ? get(c, rt, T_S1) : 0;
 
-	emit_addr(c, I_RS(i), (int16_t)i, 0, slow, store);
+	emit_addr(c, I_RS(i), (int16_t)i, 0, slow, store, false);
 	if (store)
 		emit_code_check(c, 1, slow);
 	/* T_X = desplazamiento en bits; T_HI = palabra (o doble palabra) alineada. */
@@ -242,7 +242,7 @@ static bool emit_unaligned_pair(struct ctx *c, unsigned k, unsigned end)
 	c->k = k;
 	c->written_start = c->written;
 	unsigned v = store ? get(c, rt, T_S1) : 0;
-	unsigned va = emit_addr(c, I_RS(a), imm, 0, slow, store);
+	unsigned va = emit_addr(c, I_RS(a), imm, 0, slow, store, false);
 	/* Los 4 bytes en la misma página (mapeada, la traducción es de la del
 	 * primero) y dentro de la RDRAM. */
 	E(c, ppc_rlwinm(0, va, 0, 20, 31));
@@ -467,6 +467,8 @@ static void emit_ctc1(struct ctx *c, unsigned k)
 	emit_slow_exec(c, k, k, slow, resume);
 }
 
+static unsigned fr_toint_kind(bool is_s, unsigned funct);  /* rec_emit_fpurtn.h */
+
 /* ---- FPU: raíz y conversiones ------------------------------------------------------ */
 
 /*
@@ -690,14 +692,29 @@ static void emit_fpu_ext(struct ctx *c, unsigned k)
 	int32_t od = OFF(fpr) + 8 * (int32_t)I_FD(i);
 	int slow = new_label(c), resume = new_label(c);
 
-	if (fmt == FMT_W)
+	if (c->rec->fpu_rtn_ok) {  /* la FPU compacta (rec_emit_fpurtn.h) */
+		unsigned kind;
+		if (fmt == FMT_W)
+			kind = funct == 0x20 ? SALSA64_FPR_CVT_S_W : SALSA64_FPR_CVT_D_W;
+		else if (funct == 0x04)
+			kind = is_s ? SALSA64_FPR_SQRT_S : SALSA64_FPR_SQRT_D;
+		else if (funct == 0x20 || funct == 0x21)
+			kind = is_s ? SALSA64_FPR_CVT_D_S : SALSA64_FPR_CVT_S_D;
+		else
+			kind = fr_toint_kind(is_s, funct);
+		E(c, ppc_li(3, oa));
+		E(c, ppc_li(T_V, od));
+		emit_b(c, abs_label(c, c->rec->fpu_rtn[kind]), true);
+		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(1, PPC_EQ), slow);
+	} else if (fmt == FMT_W) {
 		emit_fpu_from_w(c, funct == 0x20, oa, od, slow);
-	else if (funct == 0x04)
+	} else if (funct == 0x04) {
 		emit_fpu_sqrt(c, is_s, oa, od, slow);
-	else if (funct == 0x20 || funct == 0x21)
+	} else if (funct == 0x20 || funct == 0x21) {
 		emit_fpu_cvt(c, is_s, oa, od, slow);
-	else
+	} else {
 		emit_fpu_to_int(c, is_s, funct, oa, od, slow);
+	}
 	bind(c, resume);
 	emit_slow_exec(c, k, k, slow, resume);  /* no toca registros generales */
 }

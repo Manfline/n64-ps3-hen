@@ -183,6 +183,12 @@ void salsa64_rec_x_sync(struct salsa64_rec *rec)
 	struct salsa64_rec_prof *prof = rec->prof;
 	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0;
 	bool full = asid != x->asid || erl != x->erl || SALSA64_REC_OLD(rec, SALSA64_REC_DBG_NO_TSYNC);
+	if (cpu->tlb_writes != x->tlb_writes && rec->fastmem)  /* fastmem: ¿alguna entrada nueva choca con la ventana? */
+		for (unsigned n = 0; n < SALSA64_TLB_ENTRIES; n++)
+			if (!snap_same(&x->snap[n], &cpu->tlb[n]) && salsa64_rec_fastmem_collides(rec, &cpu->tlb[n])) {
+				salsa64_rec_fastmem_off(rec);
+				break;
+			}
 	x->tlb_writes = cpu->tlb_writes;
 	x->asid = asid;
 	x->erl = erl;
@@ -240,6 +246,8 @@ void salsa64_rec_x_tlb_written(struct salsa64_rec *rec, unsigned n)
 		vt_clear_entry(x, e->entry_hi, e->page_mask);
 		snap_take(&x->snap[n & 31], e);
 		vt_prefill_entry(rec, e);
+		if (rec->fastmem && salsa64_rec_fastmem_collides(rec, e))
+			salsa64_rec_fastmem_off(rec);
 	}
 	x->tlb_writes = rec->cpu->tlb_writes;
 	if (prof) {

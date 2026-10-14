@@ -25,6 +25,7 @@
 #include <string.h>
 #include <sys/systime.h>
 
+#include "rdp/gfxdump.h"
 #include "rdp/targets.h"
 #include "rdp/vmatch.h"
 #include "rsp/gfx/gfx.h"
@@ -301,6 +302,10 @@ static struct {
 		 * dibujan); 0 nada. */
 		volatile uint32_t protect;
 	} interp;
+	/* Caja negra: se avisa de cada tarea al empezar a traducirla. */
+	salsa64_rdp_task_hook task_hook;
+	void *task_ctx;
+	struct salsa64_rdp_field_info finfo;  /* el último campo presentado (salsa64_rdp_field_info) */
 } rdp;
 
 static void acquire(void *ctx, struct gfx_job *job);
@@ -1429,6 +1434,11 @@ static void translate(uint32_t n)
 	uint64_t t0 = sysGetSystemTime(), tb0 = tb_now();
 	struct set *s = &rdp.sets[n % SETS];
 	const struct gfx_result *res = &s->res;
+	if (rdp.task_hook) {
+		struct gfx_dump_src src = { s->cmd, res->cmd_bytes, s->vtx, res->vtx_bytes, s->tex, res->tex_bytes,
+					    rdp.cache, CACHE_BYTES, rdp.rdram, rdp.rdram_size };
+		rdp.task_hook(rdp.task_ctx, n, &src, res);
+	}
 	rsxkit_vertices(s->vtx_off, RSXKIT_MEM_MAIN);
 	s->interp_ok = false;
 	to_rsxkit_fb = false;
@@ -2054,10 +2064,14 @@ static void interp_field(const struct rdp_present *p, uint32_t field)
 		if (l->surf && (l->interp ? l->surf == rdp.interp.surf : rdp.surf[l->slot] == l->surf))
 			rdp.again = *l;
 		rdp.stats.interp_repeated++;
+		rdp.finfo = (struct salsa64_rdp_field_info){ SALSA64_FIELD_REPEAT, (float)(j + 1) / (float)rdp.interp.k,
+							     rdp.interp.k, s->fence_task - 1, s->fence_task - 2 };
 		return;
 	}
 	uint64_t t0 = sysGetSystemTime();
 	interp_draw(s, p->slot, (float)(j + 1) / (float)rdp.interp.k);
+	rdp.finfo = (struct salsa64_rdp_field_info){ SALSA64_FIELD_INTERP, (float)(j + 1) / (float)rdp.interp.k,
+						     rdp.interp.k, s->fence_task - 1, s->fence_task - 2 };
 	uint32_t f = rsxkit_fence();
 	s->fence = f;
 	rdp.interp.keep_fence = f;
@@ -2084,6 +2098,7 @@ bool salsa64_rdp_present(const struct salsa64_vi_frame *f, uint32_t field, const
 	if (p.age > rdp.stats.age_max)
 		rdp.stats.age_max = p.age;
 	rdp.again.interp = false;
+	rdp.finfo.kind = SALSA64_FIELD_TRUE;
 	again_set(p.slot, p.y0, p.w, p.h, view, crop);
 	if (rdp.interp.mode == SALSA64_INTERP_FIELDS)
 		interp_field(&p, field);
@@ -2195,78 +2210,50 @@ bool salsa64_rdp_present_again(const rsxkit_view *view, const struct salsa64_ove
 	return true;
 }
 
+void salsa64_rdp_field_info(struct salsa64_rdp_field_info *out)
+{
+	*out = rdp.finfo;
+}
+
+void salsa64_rdp_set_task_hook(salsa64_rdp_task_hook fn, void *ctx)
+{
+	rdp.task_ctx = ctx;
+	rdp.task_hook = fn;
+}
+
+uint32_t salsa64_rdp_translated(void)
+{
+	return rdp.translated;
+}
+
 bool salsa64_rdp_dump(const char *path)
 {
 	if (!rdp.ready || !rdp.last_res.cmd_bytes)
 		return false;
 	const struct set *s = &rdp.sets[rdp.last_set];
 	const struct gfx_result *r = &rdp.last_res;
-	uint32_t max = 2 * (r->cmd_bytes / sizeof(struct gfx_draw)) + 1;
-	uint8_t *cmd = malloc(r->cmd_bytes);
-	uint32_t *src = malloc(max * 2 * sizeof *src), *len = src + max;
-	const struct gfx_tex **tgt = malloc(max * sizeof *tgt);
-	uint8_t *here = malloc(GFX_TEX_MAX);
-	if (!cmd || !src || !tgt || !here) {
-		free(cmd);
-		free(src);
-		free(tgt);
-		free(here);
-		return false;
-	}
-	memcpy(cmd, s->cmd, r->cmd_bytes);
-	/* Las texturas de la caché se copian detrás del arena (una vez cada
-	 * una) y los dibujos pasan a apuntar ahí; las que se leían de un destino
-	 * (GFX_TEX_TARGET), decodificadas de la RDRAM de ahora. */
-	uint32_t arena = (r->tex_bytes + 127) & ~127u, tex_bytes = arena, n = 0;
-	for (uint32_t off = 0; off + sizeof(struct gfx_cmd) <= r->cmd_bytes;) {
-		struct gfx_cmd *c = (struct gfx_cmd *)(cmd + off);
-		if (c->op == GFX_OP_END || c->size < sizeof *c)
-			break;
-		struct gfx_draw *d = (struct gfx_draw *)c;
-		for (int i = 0; c->op == GFX_OP_DRAW && i < d->ntex && i < 2; i++) {
-			struct gfx_tex *t = &d->tex[i];
-			if (t->where == GFX_TEX_ARENA)
-				continue;
-			bool target = t->where == GFX_TEX_TARGET;
-			uint32_t k = 0, dst = arena;
-			while (k < n && (target || tgt[k] || src[k] != t->offset))
-				dst += (len[k++] + 127) & ~127u;
-			if (k == n && n < max) {
-				src[n] = t->offset;
-				tgt[n] = target ? t : NULL;
-				len[n++] = (uint32_t)t->pitch * t->height;
-				tex_bytes += (len[k] + 127) & ~127u;
-			}
-			t->where = GFX_TEX_ARENA;
-			t->offset = dst;
+	struct gfx_dump_src src = { s->cmd, r->cmd_bytes, s->vtx, r->vtx_bytes, s->tex, r->tex_bytes,
+				    rdp.cache, CACHE_BYTES, rdp.rdram, rdp.rdram_size };
+	/* El armado (gfxdump.c) es el mismo de la caja negra; aquí, con
+	 * memoria de la que se pide y se suelta (es una orden de depuración). */
+	uint32_t max = GFX_DUMP_MAX_TEX(r->cmd_bytes);
+	uint32_t *wsrc = malloc(max * 2 * sizeof *wsrc);
+	const struct gfx_tex **wtgt = malloc(max * sizeof *wtgt);
+	bool ok = false;
+	if (wsrc && wtgt) {
+		struct gfx_dump_work w = { wsrc, wsrc + max, wtgt, max };
+		uint32_t need = gfx_dump_measure(&src, &w);
+		uint8_t *buf = need ? malloc(need) : NULL;
+		if (buf && gfx_dump_build(&src, &w, buf, need) == need) {
+			FILE *f = fopen(path, "wb");
+			ok = f && fwrite(buf, 1, need, f) == need;
+			if (f)
+				fclose(f);
 		}
-		off += c->size;
+		free(buf);
 	}
-	FILE *f = fopen(path, "wb");
-	static const uint8_t zero[128];
-	struct gfx_dump_header h = { GFX_DUMP_MAGIC, r->cmd_bytes, r->vtx_bytes, tex_bytes };
-	bool ok = f && fwrite(&h, sizeof h, 1, f) == 1 && fwrite(cmd, 1, h.cmd_bytes, f) == h.cmd_bytes &&
-		  fwrite(s->vtx, 1, h.vtx_bytes, f) == h.vtx_bytes && fwrite(s->tex, 1, r->tex_bytes, f) == r->tex_bytes &&
-		  fwrite(zero, 1, arena - r->tex_bytes, f) == arena - r->tex_bytes;
-	for (uint32_t k = 0; ok && k < n; k++) {
-		uint32_t pad = ((len[k] + 127) & ~127u) - len[k];
-		const uint8_t *p = rdp.cache + src[k];
-		if (tgt[k]) {
-			memset(here, 0, GFX_TEX_MAX);
-			if (rdp.rdram && len[k] <= GFX_TEX_MAX)
-				rdp_decode_rgba16(rdp.rdram, rdp.rdram_size, tgt[k]->src_addr, tgt[k]->src_pitch, tgt[k]->width,
-						  tgt[k]->height, here, tgt[k]->pitch);
-			p = here;
-		}
-		ok = len[k] <= (tgt[k] ? GFX_TEX_MAX : CACHE_BYTES) && fwrite(p, 1, len[k], f) == len[k] &&
-		     fwrite(zero, 1, pad, f) == pad;
-	}
-	if (f)
-		fclose(f);
-	free(cmd);
-	free(src);
-	free(tgt);
-	free(here);
+	free(wsrc);
+	free(wtgt);
 	return ok;
 }
 

@@ -30,6 +30,7 @@
 #include <rsxkit/rsxkit.h>
 
 #include "core/rcp.h"
+#include "rdp/gfxdump.h"
 #include "rsp/gfx/backend.h"
 
 struct salsa64_rdp_stats {
@@ -271,6 +272,29 @@ struct salsa64_rdp_tb {
 	uint64_t translate, copy, tex, fence;
 };
 void salsa64_rdp_get_tb(struct salsa64_rdp_tb *out);
+
+/* Gancho de la caja negra (rdp/blackbox.h): se llama desde el hilo de
+ * presentación al empezar a traducir cada tarea, con su salida tal como la
+ * dejó la HLE (el volcado se arma con gfx_dump_build; las texturas de la
+ * caché siguen en su lugar hasta que el RSX termine la tarea). Con NULL, no
+ * cuesta nada. */
+typedef void (*salsa64_rdp_task_hook)(void *ctx, uint32_t task, const struct gfx_dump_src *src,
+				      const struct gfx_result *res);
+void salsa64_rdp_set_task_hook(salsa64_rdp_task_hook fn, void *ctx);
+/* Lo que fue el último campo de salsa64_rdp_present con la interpolación
+ * por geometría, para la caja negra: kind SALSA64_FIELD_* (el cuadro de
+ * verdad, un intermedio dibujado o uno repetido porque no llegó), la t y la
+ * k del intermedio, la tarea redibujada y la anterior con que se emparejó
+ * (numeración del gancho). */
+enum { SALSA64_FIELD_TRUE, SALSA64_FIELD_INTERP, SALSA64_FIELD_REPEAT };
+struct salsa64_rdp_field_info {
+	uint32_t kind;
+	float t;
+	uint32_t k, task, prev_task;
+};
+void salsa64_rdp_field_info(struct salsa64_rdp_field_info *out);
+/* Tareas traducidas hasta ahora (la numeración de las tareas del gancho). */
+uint32_t salsa64_rdp_translated(void);
 
 /* Escribe la salida de la última tarea (gfx.h: gfx_dump_header) en `path`,
  * con las texturas de la caché copiadas al arena (el volcado no depende de

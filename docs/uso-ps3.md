@@ -291,8 +291,9 @@ los atajos de Salsa64:
 | SELECT + derecha / izquierda (cruceta) | Cambia de ranura (0 a 9, en ronda) |
 | SELECT + △ | Muestra u oculta el contador de velocidad |
 | SELECT + R2 | Depuración gráfica: guarda en `/dev_hdd0/salsa64/` la salida de la HLE del cuadro en pantalla (`gfxdump-<campo>.bin`) y su captura (`gfxdump-<campo>.ppm`) |
+| SELECT + L2 | Caja negra (solo con el archivo `cajanegra`, abajo): escribe en `/dev_hdd0/salsa64/cajanegra-<campo>/caja.s4bb` las últimas tareas gráficas y campos presentados, para repetirlos en la Mac |
 
-Mientras SELECT está apretado, R1, L1, R2, △ y la cruceta izquierda/derecha no
+Mientras SELECT está apretado, R1, L1, R2, L2, △ y la cruceta izquierda/derecha no
 llegan al juego (□ tampoco, cuando abre la lista de trucos) (no se mueve el personaje al cambiar de ranura). Si
 `controles.cfg` asigna SELECT a un botón de la N64, ese botón se pulsa
 también con los atajos.
@@ -506,6 +507,29 @@ sale al XMB en lugar de volver al menú (con el cuadro «¿Salir al XMB?» si
 «Confirmar al salir» está en sí).
 Para recuperar el menú, borrar `embedded`.
 
+## Caja negra (depuración)
+
+Para ver en la Mac lo que solo pasa en la PS3 (la interpolación de cuadros,
+por ejemplo): la consola guarda en memoria lo último que hizo la HLE gráfica y
+lo que se presentó en cada campo, y con un atajo lo escribe a disco.
+
+1. Crear por FTP el archivo vacío `/dev_hdd0/salsa64/cajanegra` (o con un
+   número: el tamaño del anillo en MB). Abrir el juego: el log dice «caja
+   negra: encendida».
+2. Cuando pase lo que se quiere estudiar, **SELECT + L2**. Sale el aviso «Caja
+   negra: escribiendo cajanegra-N» y el juego sigue (la escritura es en
+   segundo plano; mientras dura, el anillo no recibe nada nuevo).
+3. Bajar `/dev_hdd0/salsa64/cajanegra-<campo>/caja.s4bb` por FTP.
+4. En la Mac, `tools/cajanegra.py info|list|campos|extract caja.s4bb`
+   (extract deja cada tarea como un `gfxdump` que lee `tools/gfxdump.py`) y
+   `salsa64-run --raster-dump caja.s4bb[:TAREA] --gfx-frame imagen.ppm` dibuja
+   una tarea con el rasterizador del host.
+
+Qué guarda, el formato y cómo coordinarlo con la interpolación:
+`docs/cajanegra.md`. Con el archivo apagado no hay costo alguno; encendido,
+el log al cerrar el juego dice cuánto tardó el registro por tarea y por
+campo.
+
 ## Archivos de configuración
 
 Todos están en `/dev_hdd0/salsa64` y son opcionales. Son archivos de texto;
@@ -522,11 +546,14 @@ se crean por FTP.
 | `guardado.cfg` | Líneas `CLAVE = tipo`; `#` comenta | Tipo de guardado por juego (abajo) |
 | `audio.cfg` | Líneas `clave = valor` | Audio (abajo) |
 | `ultima-rom` | Ruta de la última ROM abierta | Lo escribe el menú; no hace falta tocarlo |
+| `cajanegra` | Vacío, o `MB` (tamaño del anillo, 2 a 48; 12 por omisión) | Enciende la caja negra (sección «Caja negra»). Sin el archivo no cuesta nada ni reserva memoria |
 | `log.cfg` | `ip` o `ip:puerto` | Destino del log por UDP, para quien depura (por omisión, difusión al puerto 18194) |
 | `turbo` | Basta con que exista | Sin límite de velocidad (para medir; no es un modo de juego) |
 | `capturas` | Basta con que exista | Guarda capturas de pantalla (`screen-N.ppm`) cada pocos segundos; frena la imagen un instante en cada una |
 | `lle` | Vacío o `all` | Prueba el RSP de bajo nivel (experimental, lento). Vacío: solo microcódigo sin HLE; `all`: todo |
 | `gfx_ppe` | Basta con que exista | Corre la HLE gráfica en el PPE en lugar del SPE (para comparar tiempos) |
+| `sin-recompilador` | Basta con que exista | Apaga el recompilador dinámico: todo corre en el intérprete (más lento). No hace falta con CFW: si el recompilador no puede usar su memoria en la consola, Salsa64 pasa solo al intérprete y lo dice en el log (docs/jit-cfw.md) |
+| `jit-prueba.txt` | Lo escribe Salsa64 | Marca de la prueba del recompilador al arrancar; solo queda si una prueba cerró la aplicación, y entonces esa versión usa el intérprete. Borrarlo para que vuelva a probar |
 | `sin-pausa` | Basta con que exista | El menú del sistema (botón PS) no pausa la emulación, como hasta v0.1.0 (para diagnosticar; docs/hilos-ppe.md) |
 | `perfil-activo` | Basta con que exista | Enciende el perfil persistente del recompilador (apagado por omisión): cuenta las entradas a cada bloque, las guarda en `perfiles/<juego>.prf` y compila los calientes juntos. Medido en la PS3: contar cuesta ~5 % y juntarlos no gana nada (el costo lo pone cuántas líneas toca cada instrucción); sirve para recoger datos para lo que sigue (docs/rec-ppe.md) |
 | `perfil.cfg` | `caliente = KB`, `saltos = si\|no` | Con `perfil-activo`: tamaño de la zona caliente de la caché de código (por omisión 1024 KB, en dos mitades; `0` cuenta y guarda el perfil sin zona caliente) y si los bloques calientes registran sus sitios de salida (sí por omisión) |
@@ -540,6 +567,9 @@ se crean por FTP.
 | `capturas-pantalla` | Basta con que exista | Con `capturas`: además guarda la pantalla entera como se ve, con el filtro (`pantalla-N.ppm`) |
 | `interp-prueba` | Vacío o un número entre 0 y 1 (por omisión 1) | Prueba de la interpolación: cada tarea gráfica se empareja con la anterior y se dibuja en esa fracción entre las dos (0: un cuadro atrás; 1: como siempre), sin campos intermedios y pase lo que pase con la opción; para aislar el emparejamiento de la presentación. El log de cada 5 s trae «gfx: interpolación» |
 | `filtro-ver` | El nombre de una tabla y una escala (`puntos 0.5`) | Diagnóstico de los filtros: dibuja esa tabla intermedia en la esquina de la pantalla (docs/filtros.md) |
+| `jit-sin-grupos` | Basta con que exista | El recompilador no agrupa los accesos a memoria por registro base (la «base en caché», docs/fastmem.md §8, encendida por omisión): cada acceso con su prueba, como hasta el 2026-10-13, para medir con el mismo paquete |
+| `jit-fpu-en-linea` | Basta con que exista | El recompilador emite las operaciones de la FPU en línea en cada sitio, como hasta el 2026-10-13, en vez de llamar a las rutinas compartidas del preámbulo (la «FPU compacta», docs/fastmem.md §9, encendida por omisión), para medir con el mismo paquete |
+| `jit-fastmem` | Basta con que exista | Experimental: la RDRAM en una ventana de 512 MB de sys_mmapper y los accesos de KSEG0/KSEG1 sin prueba; solo se enciende si lv2 avisa de los fallos de página (docs/fastmem.md); hoy en la PS3 con HEN no lo hace y queda apagado con el motivo en el log |
 | `muestreo` | Basta con que exista | Muestreo por tiempo del recompilador: un hilo de baja prioridad mira cada 200 µs qué bloque corre el hilo de emulación (o si está en C: camino lento, intérprete, eventos…); cada 5 s el reparto al log y, al salir del juego, los 30 bloques con más tiempo con sus palabras de PPC (docs/rec-ppe.md, «Muestreo por tiempo»). Costo: dos palabras por entrada a bloque |
 
 La carpeta también puede tener `covers/` (carátulas), `cheats/` (trucos y

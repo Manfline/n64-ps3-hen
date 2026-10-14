@@ -191,22 +191,67 @@ static uint32_t tlb_pa(const struct salsa64_tlb_entry *e, uint32_t lo, uint64_t 
 	return ((lo >> 6) << 12 & ~offset_mask) | ((uint32_t)va & offset_mask);
 }
 
+#ifdef SALSA64_MEM_CENSUS
+struct salsa64_mem_census salsa64_mem_census;
+
+static unsigned census_ps(uint32_t odd_bit)
+{
+	unsigned k = 0;
+	while (odd_bit > 0x1000u && k < 12) {
+		odd_bit >>= 1;
+		k++;
+	}
+	return k;
+}
+
+/* Un acceso a datos que pasa por la TLB (acc != FETCH): tamaño de página y
+ * si su dirección doblada a una ventana de 1 o 2 GB cae donde estaría una
+ * imagen de la RDRAM (docs/fastmem.md). */
+static void census_tlb(uint64_t va, const struct salsa64_tlb_entry *e, enum salsa64_access acc)
+{
+	if (acc == SALSA64_ACC_FETCH)
+		return;
+	uint32_t a = (uint32_t)va;
+	salsa64_mem_census.tlb_ps[census_ps(e->odd_bit)]++;
+	salsa64_mem_census.slots[(a >> 28) & 7] |= 1u << ((a >> 23) & 31);
+	uint32_t i1 = a & 0x3FFFFFFFu, i2 = a & 0x7FFFFFFFu;
+	if (i1 < 0x800000u || (i1 >= 0x20000000u && i1 < 0x20800000u))
+		salsa64_mem_census.collide_1g++;
+	if (i2 < 0x800000u || (i2 >= 0x20000000u && i2 < 0x20800000u))
+		salsa64_mem_census.collide_2g++;
+}
+#endif
+
 static bool tlb_lookup(struct salsa64_cpu *cpu, uint64_t va, uint32_t *pa, enum salsa64_access acc)
 {
 	const struct salsa64_tlb_entry *e = tlb_find(cpu, va);
 	if (!e) {
+#ifdef SALSA64_MEM_CENSUS
+		if (acc != SALSA64_ACC_FETCH)
+			salsa64_mem_census.miss++;
+#endif
 		tlb_exception(cpu, va, acc, TLB_MISS);
 		return false;
 	}
 	uint32_t lo = e->entry_lo[((uint32_t)va & e->odd_bit) ? 1 : 0];
 	if (!(lo & 0x2)) {
+#ifdef SALSA64_MEM_CENSUS
+		if (acc != SALSA64_ACC_FETCH)
+			salsa64_mem_census.invalid++;
+#endif
 		tlb_exception(cpu, va, acc, TLB_INVALID);
 		return false;
 	}
 	if (acc == SALSA64_ACC_STORE && !(lo & 0x4)) {
+#ifdef SALSA64_MEM_CENSUS
+		salsa64_mem_census.modified++;
+#endif
 		tlb_exception(cpu, va, acc, TLB_MODIFIED);
 		return false;
 	}
+#ifdef SALSA64_MEM_CENSUS
+	census_tlb(va, e, acc);
+#endif
 	*pa = tlb_pa(e, lo, va);
 	return true;
 }
@@ -254,6 +299,10 @@ bool salsa64_vr4300_fetch_probe(const struct salsa64_cpu *cpu, uint64_t va, uint
 static bool translate64(struct salsa64_cpu *cpu, uint64_t va, uint32_t *pa, enum salsa64_access acc)
 {
 	unsigned mode = cpu->mode;
+#ifdef SALSA64_MEM_CENSUS
+	if (acc != SALSA64_ACC_FETCH)
+		salsa64_mem_census.x64++;
+#endif
 	if (va < 0x0000010000000000ull) {
 		if (mode == SALSA64_MODE_KERNEL && (cpu->status & SALSA64_ST_ERL) && va < 0x80000000u) {
 			*pa = (uint32_t)va;  /* con ERL, los primeros 2 GB quedan sin mapear */
@@ -308,6 +357,10 @@ static bool translate32(struct salsa64_cpu *cpu, uint64_t va, uint32_t *pa, enum
 
 	if (a < 0x80000000u) {
 		if (cpu->status & SALSA64_ST_ERL) {  /* kuseg sin mapear con ERL */
+#ifdef SALSA64_MEM_CENSUS
+			if (acc != SALSA64_ACC_FETCH)
+				salsa64_mem_census.erl++;
+#endif
 			*pa = a;
 			return true;
 		}
@@ -317,6 +370,10 @@ static bool translate32(struct salsa64_cpu *cpu, uint64_t va, uint32_t *pa, enum
 		*pa = a & 0x1FFFFFFF;
 		return true;
 	}
+#ifdef SALSA64_MEM_CENSUS
+	if (acc != SALSA64_ACC_FETCH)
+		salsa64_mem_census.kseg23++;
+#endif
 	return tlb_lookup(cpu, va, pa, acc);
 }
 
@@ -346,6 +403,9 @@ static void tlb_write(struct salsa64_cpu *cpu, unsigned n)
 	e->vpn_mask = TLB_VPN_BITS & ~(uint64_t)e->page_mask;
 	e->odd_bit = ((e->page_mask | 0x1FFFu) + 1) >> 1;
 	cpu->tlb_writes++;
+#ifdef SALSA64_MEM_CENSUS
+	salsa64_mem_census.tlbw_ps[census_ps(e->odd_bit)]++;
+#endif
 }
 
 static void tlb_read(struct salsa64_cpu *cpu, unsigned n)

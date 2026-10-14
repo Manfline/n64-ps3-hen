@@ -60,6 +60,33 @@ static bool load_from(struct memfile *f, char *err, size_t n)
 	return salsa64_state_load(&t_n64, mem_read, f, scratch, err, n, &broken);
 }
 
+static bool mem_patch(void *ctx, uint32_t off, const uint8_t *d, uint32_t n)
+{
+	struct memfile *f = ctx;
+	if (off > f->len || n > f->len - off)
+		return false;
+	memcpy(f->data + off, d, n);
+	return true;
+}
+
+/* Foto y archivo comprimido (formato 2), con el compresor del hilo. */
+static uint8_t snap_small[SALSA64_STATE_SECTIONS] __attribute__((aligned(16)));
+static uint8_t snap_ram[SALSA64_RDRAM_MAX] __attribute__((aligned(16)));
+static struct salsa64_state_lz zlz;
+
+static bool zip_to(struct memfile *f)
+{
+	char err[128];
+	struct salsa64_state_snap snap = { snap_small, snap_ram, 0, 0 };
+	f->len = f->pos = 0;
+	bool ok = salsa64_state_capture(&t_n64, NULL, &snap, sizeof snap_small, sizeof snap_ram, err, sizeof err) &&
+		  salsa64_state_write(&snap, salsa64_state_compress_host, &zlz, mem_write, mem_patch, f, err,
+				      sizeof err);
+	if (!ok)
+		t_fail(__FILE__, __LINE__, "guardar comprimido: %s", err);
+	return ok;
+}
+
 /* ROM falsa: solo la cabecera (CRC y título). */
 static uint8_t rom[0x1000];
 
@@ -135,6 +162,86 @@ static void state_round_trip(void)
 	CHECK(save_to(&fb));
 	CHECK_EQ(fb.len, fa.len);
 	CHECK(memcmp(fa.data, fb.data, fa.len) == 0);
+	rom_off();
+}
+
+/* Estado comprimido (formato 2): se carga igual que uno sin comprimir y
+ * deja la máquina idéntica (guardar de nuevo, sin comprimir, da el mismo
+ * archivo), ocupa menos y sus bloques incompresibles van tal cual. */
+static void state_zip_round_trip(void)
+{
+	rom_on(0x11223344);
+	scribble(0);
+	/* Un tramo de RDRAM sin patrón (bloques "stored") y el resto casi cero. */
+	uint32_t x = 0x12345678;
+	for (uint32_t pa = 0x200000; pa < 0x240000; pa += 4) {
+		x = x * 1664525u + 1013904223u;
+		t_wr32(pa, x);
+	}
+	CHECK(save_to(&fa));
+	CHECK(zip_to(&fb));
+	CHECK(fb.len < fa.len / 4);
+	CHECK(fb.len > 0x40000);  /* los bloques sin patrón no se achican */
+	CHECK_EQ(salsa64_rd32(fb.data + 8), SALSA64_STATE_VERSION);
+	CHECK_EQ(salsa64_rd32(fb.data + 16), fb.len);
+	CHECK(salsa64_rd32(fb.data + 60) & SALSA64_STATE_FLAG_ZIP);
+
+	salsa64_n64_reset(&t_n64);
+	scribble(99);
+	char err[128] = "";
+	CHECK(load_from(&fb, err, sizeof err));
+	CHECK(save_to(&fc));
+	CHECK_EQ(fc.len, fa.len);
+	CHECK(memcmp(fa.data, fc.data, fa.len) == 0);
+
+	/* Y los viejos, sin comprimir, siguen cargando. */
+	salsa64_n64_reset(&t_n64);
+	CHECK(load_from(&fa, err, sizeof err));
+	CHECK(save_to(&fc));
+	CHECK(memcmp(fa.data, fc.data, fa.len) == 0);
+	rom_off();
+}
+
+/* Un estado comprimido dañado no desborda nada: falla, y si ya empezó a
+ * escribir la RDRAM lo dice (broken). Cortado antes de RDRZ no toca nada. */
+static void state_zip_corrupt(void)
+{
+	rom_on(0x11223344);
+	scribble(0);
+	CHECK(zip_to(&fa));
+	char err[160];
+	bool broken;
+	uint32_t at = SALSA64_STATE_HEADER;
+	while (at + 8 <= fa.len && memcmp(fa.data + at, "RDRZ", 4) != 0)
+		at += 8 + salsa64_rd32(fa.data + at + 4);
+	CHECK(at + 8 < fa.len);
+	uint32_t first = at + 8 + 12;   /* encabezado del primer bloque */
+
+	/* Largo de bloque absurdo: falla antes de tocar nada. */
+	memcpy(fb.data, fa.data, fa.len);
+	fb.len = fa.len;
+	salsa64_wr32(fb.data + first, 0x7FFFFFFFu);
+	fb.pos = 0;
+	R[9] = 42;
+	CHECK(!salsa64_state_load(&t_n64, mem_read, &fb, scratch, err, sizeof err, &broken));
+	CHECK(!broken);
+	CHECK_EQ(R[9], 42);
+
+	/* Un byte roto dentro de un bloque comprimido: o falla o da otra RDRAM,
+	 * pero sin salirse de ningún búfer (ASan lo vigila). */
+	for (uint32_t k = 0; k < 64; k++) {
+		memcpy(fb.data, fa.data, fa.len);
+		fb.len = fa.len;
+		fb.data[first + 4 + (k * 7) % 40] ^= (uint8_t)(1u << (k & 7));
+		fb.pos = 0;
+		salsa64_state_load(&t_n64, mem_read, &fb, scratch, err, sizeof err, &broken);
+	}
+
+	/* Cortado a mitad de los bloques. */
+	memcpy(fb.data, fa.data, fa.len);
+	fb.len = fa.len - 1000;
+	fb.pos = 0;
+	CHECK(!salsa64_state_load(&t_n64, mem_read, &fb, scratch, err, sizeof err, &broken));
 	rom_off();
 }
 
@@ -472,6 +579,8 @@ static void state_filename(void)
 void t_suite_state(void)
 {
 	RUN(state_round_trip);
+	RUN(state_zip_round_trip);
+	RUN(state_zip_corrupt);
 	RUN(state_determinism);
 	RUN(state_rejects);
 	RUN(state_short_section);

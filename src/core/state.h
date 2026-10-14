@@ -25,6 +25,10 @@
  *           backend
  *     HLEA  estado de la HLE de audio entre tareas, formato del backend
  *     RDRM  la RDRAM entera, sin comprimir, al final
+ *     RDRZ  (formato 2) en lugar de RDRM: la RDRAM en bloques de 64 KB
+ *           comprimidos con LZ (spukit/lz.h, formato de bloque de LZ4);
+ *           tres palabras (tamaño de la RDRAM, tamaño de bloque y número
+ *           de bloques) y los bloques con su encabezado de 4 bytes
  * Cada sección se lee campo por campo: una sección más corta que lo que
  * espera esta versión deja el resto en cero (para agregar campos al final
  * sin romper los estados viejos) y las etiquetas desconocidas se saltan.
@@ -40,18 +44,35 @@
  * La E/S es de quien llama, por tramos (write/read): la RDRAM va directo
  * de y hacia su búfer, sin copia; lo demás pasa por `scratch`
  * (SALSA64_STATE_SCRATCH bytes). Nada de esto asigna memoria.
+ *
+ * Dos maneras de guardar:
+ *   - salsa64_state_save: todo ahora, con la emulación quieta, RDRAM sin
+ *     comprimir (formato 1); la cabecera de 64 bytes dice versión 1, así que
+ *     también la leen los programas anteriores.
+ *   - salsa64_state_capture + salsa64_state_write: la foto (secciones chicas
+ *     y una copia de la RDRAM, a búferes que pone quien llama) se toma con
+ *     la emulación quieta y es rápida (una copia de memoria); el archivo,
+ *     con la RDRAM comprimida (formato 2), se escribe después, desde otro
+ *     hilo, mientras la emulación sigue (docs/estados.md).
+ * Al cargar valen los dos y los estados viejos.
  */
 #ifndef SALSA64_CORE_STATE_H
 #define SALSA64_CORE_STATE_H
 
+#include <spukit/lz.h>
+
 #include "core/n64.h"
 
-#define SALSA64_STATE_VERSION     1u
+#define SALSA64_STATE_VERSION     2u  /* la más nueva que se lee; el 2 trae RDRZ */
 #define SALSA64_STATE_MIN_VERSION 1u
 #define SALSA64_STATE_HEADER      64u
-#define SALSA64_STATE_SCRATCH     (256u << 10)  /* FlashRAM 128 KB + miniatura y lo demás */
+/* Lugar para las secciones chicas (FlashRAM 128 KB + miniatura y lo demás)... */
+#define SALSA64_STATE_SECTIONS    (256u << 10)
+/* ...y para un bloque comprimido al cargar un formato 2. */
+#define SALSA64_STATE_SCRATCH     (SALSA64_STATE_SECTIONS + SPUKIT_LZ_BLOCK)
 #define SALSA64_STATE_SLOTS       10
 #define SALSA64_STATE_FLAG_THUMB  0x1u
+#define SALSA64_STATE_FLAG_ZIP    0x2u  /* RDRAM comprimida (RDRZ) */
 
 /* Miniatura: RGBA5551 en el orden de bytes del host, fila por fila. */
 #define SALSA64_STATE_THUMB_W 160
@@ -94,6 +115,53 @@ bool salsa64_state_load(struct salsa64_n64 *n64, salsa64_state_read_fn read, voi
  * estado de Salsa64 o es de una versión que no se puede cargar. */
 bool salsa64_state_peek(const uint8_t header[SALSA64_STATE_HEADER], struct salsa64_state_info *info, char *err,
 			size_t err_size);
+
+/* ---- Guardar en dos tiempos ---------------------------------------------------- */
+
+/* La foto: `small` (SALSA64_STATE_SECTIONS bytes, alineado a 16) lleva la
+ * cabecera y las secciones chicas, `ram` (rdram_size bytes, alineado a 16) la
+ * copia de la RDRAM. Los pone quien llama; salsa64_state_capture los llena y
+ * ya no toca la máquina. */
+struct salsa64_state_snap {
+	uint8_t *small;
+	uint8_t *ram;
+	uint32_t small_len;
+	uint32_t ram_len;
+};
+
+/* Toma la foto (con la ROM en el bus y salsa64_rsp_quiesce hecho): arma la
+ * cabecera y las secciones en snap->small y copia la RDRAM a snap->ram.
+ * `ram_bytes` es el tamaño de ese búfer: tiene que alcanzar para la RDRAM. */
+bool salsa64_state_capture(struct salsa64_n64 *n64, const struct salsa64_state_thumb *thumb,
+			   struct salsa64_state_snap *snap, uint32_t small_cap, uint32_t ram_bytes, char *err,
+			   size_t err_size);
+
+/* Escribe un trozo del archivo en la posición absoluta `offset` (para los
+ * dos tamaños que solo se conocen al final). */
+typedef bool (*salsa64_state_patch_fn)(void *ctx, uint32_t offset, const uint8_t *data, uint32_t len);
+
+/* Comprime `len` bytes de `src` en bloques (spukit/lz.h) y los entrega a
+ * `write` ya con sus encabezados, en orden. Lo ponen las plataformas: la PS3
+ * usa un SPE (spukit/lzstream.h); salsa64_state_compress_host lo hace en el
+ * mismo hilo. Datos de `cctx` a gusto de quien lo da. */
+typedef bool (*salsa64_state_compress_fn)(void *cctx, const uint8_t *src, uint32_t len,
+					  salsa64_state_write_fn write, void *wctx);
+
+/* Compresor en el hilo que llama (host y pruebas): `cctx` es un
+ * struct salsa64_state_lz. */
+struct salsa64_state_lz {
+	uint16_t table[SPUKIT_LZ_TABLE_ENTRIES];
+	uint8_t out[SPUKIT_LZ_BOUND(SPUKIT_LZ_BLOCK) + 16];
+};
+bool salsa64_state_compress_host(void *cctx, const uint8_t *src, uint32_t len, salsa64_state_write_fn write,
+				 void *wctx);
+
+/* Escribe el archivo de la foto con la RDRAM comprimida (formato 2): la
+ * cabecera y las secciones, la sección RDRZ, y al final, con `patch`, el
+ * tamaño del archivo y el de RDRZ. */
+bool salsa64_state_write(const struct salsa64_state_snap *snap, salsa64_state_compress_fn compress, void *cctx,
+			 salsa64_state_write_fn write, salsa64_state_patch_fn patch, void *ctx, char *err,
+			 size_t err_size);
 
 /* Tamaño del archivo que escribiría salsa64_state_save ahora. */
 uint32_t salsa64_state_size(const struct salsa64_n64 *n64, bool thumb);
