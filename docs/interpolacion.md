@@ -850,7 +850,7 @@ verdad (píxeles que cambian solo en el intermedio: 358 → 57 y 1114 →
 225); lo que queda es el tramado del agua translúcida del rasterizador del
 host, que cambia en cada cuadro. GoldenEye contra la verdad 29,73 →
 29,76 dB. 16 bytes más por registro; el vertex program, una división
-menos.
+menos. Con «interp 6» en la PS3, el autor: «el agua ya está quieta».
 
 ### Modo híbrido con matrices (estimación, sin hacer)
 
