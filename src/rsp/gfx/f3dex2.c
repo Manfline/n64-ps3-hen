@@ -85,7 +85,9 @@ static void do_movemem(struct gfx_state *g, uint32_t w0, uint32_t w1)
 			break;
 		for (int i = 0; i < n; i++) {
 			int slot = (int)(offset / 24) + i;
-			if (slot < 2)
+			if (slot == 1 && (g->ucode_var & GFX_UCODE_FLX))
+				gfx_set_alpha_light(g, src + 24 * i);
+			else if (slot < 2)
 				gfx_set_lookat(g, slot, src + 24 * i);
 			else if (slot - 2 <= GFX_MAX_LIGHTS)
 				gfx_set_light(g, slot - 2, src + 24 * i);
@@ -191,7 +193,8 @@ void gfx_dl_f3dex2(struct gfx_state *g, gfx_cmd_hook hook)
 				break;
 			kind = gfx_ucode_kind(g, gfx_addr(g, g->rdphalf1), (w0 & 0xFFFF) + 1, &nonear);
 			if (kind == 2)
-				gfx_ucode_reload(g, text, 2, nonear);
+				gfx_ucode_reload(g, text, 2, nonear,
+						 gfx_ucode_variant(g, gfx_addr(g, g->rdphalf1), (w0 & 0xFFFF) + 1));
 			else if (kind == GFX_UCODE_S2DEX2 ? !gfx_dl_s2dex2(g)
 							  : !gfx_dl_skip_foreign(g, G_LOAD_UCODE, G_DL, G_ENDDL))
 				return;
@@ -210,7 +213,19 @@ void gfx_dl_f3dex2(struct gfx_state *g, gfx_cmd_hook hook)
 		case G_SPECIAL_1:
 		case G_SPECIAL_2:
 		case G_SPECIAL_3:
+			break;
 		case G_DMA_IO:
+			/* gSPDma_io (bit 23: escribir a la RDRAM; DMEM en 22:13 × 8;
+			 * bytes − 1 en 11:0). Solo cuenta la tabla del alfa de F3DFLX:
+			 * los 256 bytes que F-Zero X sube detrás de los vértices. */
+			if ((g->ucode_var & GFX_UCODE_FLX) && !(w0 & 0x800000u)) {
+				const uint8_t *t = gfx_io_read(g, GFX_IO_SMALL, gfx_addr(g, w1), sizeof g->flx_alpha);
+				if (t && (w0 & 0xFFF) + 1 >= sizeof g->flx_alpha) {
+#pragma GCC unroll 1
+					for (unsigned i = 0; i < sizeof g->flx_alpha; i++)
+						g->flx_alpha[i] = t[i];
+				}
+			}
 			break;
 		case G_RDPHALF_1:
 			g->rdphalf1 = w1;

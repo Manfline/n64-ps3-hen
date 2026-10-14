@@ -1382,6 +1382,114 @@ static void gfx_load_ucode_same_generation(void)
 	CHECK_EQ(res.skipped, 2);
 }
 
+/* F3DFLX (F-Zero X): con G_TEXTURE_GEN no genera s y t (el auto lleva la
+ * escala 0xFFFF y con la texgen de F3DEX2 sus texturas quedaban fuera, en la
+ * orilla: lisas) sino el alfa, de la tabla que la lista sube con G_DMA_IO,
+ * por el coseno entre la normal y la luz del alfa (G_MV_LIGHT en 24, tres
+ * s16). Medido con el microcódigo real (salsa64-run --lle=all). */
+static void flx_scene(const char *ucode)
+{
+	uint8_t *p = t_n64.bus.rdram;
+	start();
+	if (ucode)
+		ucode_load(ucode, 0x31000);
+	viewport_320x240();
+	load_mtx(ident, true);
+	load_mtx(ident, false);
+	dl(0xD9000000, G_LIGHTING | G_TEXTURE_GEN);
+	dl(0xD7000002, 0xFFFFFFFF);  /* G_TEXTURE on, escala 0xFFFF */
+	dl(0xDB020000, 1 * 24);      /* G_MW_NUMLIGHT: una luz */
+	uint32_t l0 = data_alloc(16), l1 = data_alloc(16), la = data_alloc(16), tab = data_alloc(256);
+	memset(p + l0, 0, 16);
+	memset(p + l1, 0, 16);
+	memset(p + la, 0, 16);
+	p[l0 + 0] = p[l0 + 1] = p[l0 + 2] = 100;
+	p[l0 + 10] = 127;
+	p[l1 + 0] = p[l1 + 1] = p[l1 + 2] = 20;
+	salsa64_wr16(p + la + 12, 0x7F00);  /* luz del alfa: +z */
+	for (int i = 0; i < 256; i++)
+		p[tab + i] = (uint8_t)i;
+	dl(0xDC08000A | (2 * 24 / 8) << 8, l0);
+	dl(0xDC08000A | (3 * 24 / 8) << 8, l1);
+	dl(0xD6000000 | (0x8B0 / 8) << 13 | (256 - 1), 0x80000000 | tab);  /* G_DMA_IO a la DMEM */
+	dl(0xDC08000A | (24 / 8) << 8, la);
+	const struct vtx v[4] = {
+		{ 0, 0, 0, 64, 96, { 0, 0, 127, 0x40 } },            /* normal +z: al final de la tabla */
+		{ 0, 0, 0, 64, 96, { 0, 0, (uint8_t)-127, 0x40 } },  /* −z: al principio */
+		{ 0, 0, 0, 64, 96, { 127, 0, 0, 0x40 } },            /* +x: al centro */
+		{ 0, 0, 0, 64, 96, { 0, 0, 60, 0x40 } },             /* +z corta: 60 · 1,0055, sin normalizar */
+	};
+	dl(0x01000000 | 4 << 12 | 4 << 1, put_vertices(v, 4));
+	/* Niebla con el alfa del sombreado en el primer ciclo (G_RM_FOG_SHADE_A)
+	 * y el color de niebla casi blanco, como el auto de F-Zero X. */
+	dl(0xEF000000 | G_CYC_2CYCLE << 20, 0xC8000230);
+	dl(0xF8000000, 0xFAFFFFFF);
+	dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);
+	job_ucode = 0x30000;
+	run();
+	job_ucode = 0;
+}
+
+static void gfx_f3dflx_alpha(void)
+{
+	flx_scene("RSP Gfx ucode F3DFLX.Rej  fifo 2.03F Yoshitaka Yasumoto 1998 Nintendo.");
+	CHECK_EQ(gs.ucode_var, GFX_UCODE_FLX | GFX_UCODE_REJ);
+	CHECK_EQ(gs.vtx[0].c[3], 255);
+	CHECK_EQ(gs.vtx[1].c[3], 0);  /* −127 · 1,0055 hacia abajo: −128 */
+	CHECK_EQ(gs.vtx[2].c[3], 128);
+	CHECK_EQ(gs.vtx[3].c[3], 128 + 60);
+	/* s y t del vértice (2 y 3 texels) por la escala de G_TEXTURE. */
+	CHECK(fabsf(gs.vtx[0].s - 2.0f) < 0.01f && fabsf(gs.vtx[0].t - 3.0f) < 0.01f);
+	CHECK(gs.vtx[0].c[0] == 120 && gs.vtx[1].c[0] == 20);  /* la luz, como siempre */
+	CHECK_EQ(res.unknown_cmds, 0);
+	/* Ese alfa mezcla con el color de niebla aunque no haya G_FOG. */
+	CHECK(draw_n(0) && draw_n(0)->fog == 1 && draw_n(0)->fog_color == 0xFAFFFFFF);
+
+	/* Con F3DEX2 (y con el de la tarea): la texgen de siempre y el alfa del
+	 * vértice; G_DMA_IO no cambia nada. */
+	flx_scene("RSP Gfx ucode F3DEX       fifo 2.04H Yoshitaka Yasumoto 1998 Nintendo.");
+	CHECK_EQ(gs.ucode_var, 0);
+	CHECK_EQ(gs.vtx[0].c[3], 0x40);
+	CHECK(fabsf(gs.vtx[0].s - 512.0f) < 1.0f);  /* (0 + 1)·512 */
+	CHECK(draw_n(0) && draw_n(0)->fog == 0);    /* sin G_FOG, sin niebla */
+	flx_scene(NULL);
+	CHECK_EQ(gs.vtx[2].c[3], 0x40);
+	CHECK(fabsf(gs.vtx[2].s - 1023.0f) < 1.0f);  /* (1 + 1)·512 */
+}
+
+/* ".Rej" (F3DFLX.Rej de F-Zero X): no recorta. Un triángulo con un vértice
+ * fuera de la caja del clip ratio o detrás de la cámara no se dibuja (manual
+ * de Nintendo, gspF3DLX.Rej); con F3DEX2 el primero sale entero (lo recortan
+ * las tijeras) y el segundo, recortado contra el plano cercano. */
+static void gfx_rej_rejects(void)
+{
+	/* w = −z y z' = −z − 0,5: z = −1 queda delante (w = 1), z = 1 detrás. */
+	static const float proj[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, -1, 0, 0, -0.5f, 0 };
+	const struct vtx v[5] = {
+		{ 0, 0, -1, 0, 0, { 0 } }, { 1, 0, -1, 0, 0, { 0 } }, { 0, 1, -1, 0, 0, { 0 } },
+		{ 3, 0, -1, 0, 0, { 0 } },  /* x = 3w: fuera de la caja (clip ratio 2) */
+		{ 0, 0, 1, 0, 0, { 0 } },   /* detrás de la cámara */
+	};
+	for (int rej = 0; rej < 2; rej++) {
+		start();
+		ucode_load(rej ? "RSP Gfx ucode F3DFLX.Rej  fifo 2.03F Yoshitaka Yasumoto 1998 Nintendo."
+			       : "RSP Gfx ucode F3DEX       fifo 2.04H Yoshitaka Yasumoto 1998 Nintendo.",
+			   0x31000);
+		viewport_320x240();
+		load_mtx(proj, true);
+		load_mtx(ident, false);
+		dl(0x01000000 | 5 << 12 | 5 << 1, put_vertices(v, 5));
+		dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);  /* dentro */
+		dl(0x05000000 | 0 << 16 | 3 << 9 | 2 << 1, 0);  /* hasta x = 3w */
+		dl(0x05000000 | 0 << 16 | 1 << 9 | 4 << 1, 0);  /* cruza el plano cercano */
+		job_ucode = 0x30000;
+		run();
+		job_ucode = 0;
+		CHECK_EQ(res.triangles, rej ? 1 : 3);
+		CHECK_EQ(res.dl_errors, 0);
+	}
+}
+
 /* ---- S2DEX2: fondos prerrenderizados (G_BG_COPY, G_BG_1CYC) ---- */
 
 /* G_LOAD_UCODE a un S2DEX2: los datos del microcódigo llevan el texto que
@@ -2486,6 +2594,8 @@ void t_suite_gfx(void)
 	RUN(gfx_dl_flow);
 	RUN(gfx_load_ucode_skips_foreign);
 	RUN(gfx_load_ucode_same_generation);
+	RUN(gfx_f3dflx_alpha);
+	RUN(gfx_rej_rejects);
 	RUN(gfx_s2dex_bg_copy);
 	RUN(gfx_s2dex_bg_wrap);
 	RUN(gfx_s2dex_bg_scaled);

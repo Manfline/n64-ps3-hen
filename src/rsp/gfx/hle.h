@@ -176,7 +176,8 @@ struct gfx_state {
 	uint32_t geom;
 	struct gfx_light lights[GFX_MAX_LIGHTS + 1];
 	int num_lights;
-	float lookat[2][3];        /* X e Y, normalizados, espacio de la cámara */
+	float lookat[2][3];        /* X e Y, normalizados, espacio de la cámara
+	                            * (con F3DFLX, Y es la luz del alfa) */
 	float light_model[GFX_MAX_LIGHTS + 1][3];  /* en espacio del modelo */
 	float lookat_model[2][3];
 	float vscale[3], vtrans[3];
@@ -193,6 +194,10 @@ struct gfx_state {
 	uint32_t dl_stack[GFX_DL_STACK];
 	int dl_sp;
 	uint32_t dl_pc;            /* siguiente comando de la display list */
+	uint8_t ucode_var;         /* GFX_UCODE_REJ, GFX_UCODE_FLX: el microcódigo en curso */
+	/* F3DFLX: alfa del vértice por el coseno entre su normal y la luz del
+	 * alfa (los 256 bytes que la lista sube con G_DMA_IO). */
+	uint8_t flx_alpha[256] __attribute__((aligned(16)));
 	struct gfx_vtx vtx[GFX_MAX_VTX];
 	struct gfx_rare rare;
 
@@ -304,8 +309,20 @@ bool gfx_dl_skip_foreign(struct gfx_state *g, uint32_t op_ucode, uint32_t op_dl,
  * (gfx_ucode_kind): el RSP arranca de nuevo con los datos de su DMEM
  * (segmentos, luces, matrices, vértices, modo geométrico, clip ratio), pero
  * la lista y la pila de G_DL siguen. También es el arranque de cada tarea.
- * `text`: su dirección en la RDRAM. */
-void gfx_ucode_reload(struct gfx_state *g, uint32_t text, int gen, bool nonear);
+ * `text`: su dirección en la RDRAM; `var`: GFX_UCODE_REJ, GFX_UCODE_FLX
+ * (gfx_ucode_variant). */
+void gfx_ucode_reload(struct gfx_state *g, uint32_t text, int gen, bool nonear, unsigned var);
+/* Variantes de la familia F3D que cambian lo que se dibuja, por el nombre de
+ * los datos que carga un G_LOAD_UCODE ("RSP Gfx ucode F3DFLX.Rej …"):
+ * - GFX_UCODE_REJ (".Rej"): no recorta; un triángulo con algún vértice fuera
+ *   de la caja del clip ratio o más allá del plano lejano no se dibuja.
+ * - GFX_UCODE_FLX (F3DFLX, el de F-Zero X): con G_TEXTURE_GEN no genera s y
+ *   t (quedan las del vértice) sino el alfa, de la tabla de G_DMA_IO
+ *   (flx_alpha) por el coseno con la luz del alfa (G_MV_LIGHT en 24, tres
+ *   s16 en los bytes 8 a 13). */
+#define GFX_UCODE_REJ 0x1u
+#define GFX_UCODE_FLX 0x2u
+unsigned gfx_ucode_variant(struct gfx_state *g, uint32_t data, uint32_t size);
 /* s2dex.c: clase del microcódigo cuyos datos (data, size bytes) carga un
  * G_LOAD_UCODE: 1 o 2 (F3D, F3DEX, F3DLX…: primera o segunda generación, por
  * la versión), GFX_UCODE_S2DEX2, o 0 si es otro (L3DEX, S2DEX 1.x, el de
@@ -359,6 +376,8 @@ void gfx_set_viewport(struct gfx_state *g, const uint8_t *vp);
 void gfx_clip_ratio(struct gfx_state *g, uint32_t offset, uint32_t value);
 void gfx_set_light(struct gfx_state *g, int index, const uint8_t *src);
 void gfx_set_lookat(struct gfx_state *g, int axis, const uint8_t *src);
+/* F3DFLX: la luz del alfa (G_MV_LIGHT en 24), en lookat[1]. */
+void gfx_set_alpha_light(struct gfx_state *g, const uint8_t *src);
 /* G_MTX: carga o multiplica (y apila) la modelview o la proyección. */
 #define GFX_MTX_PUSH       0x01u
 #define GFX_MTX_LOAD       0x02u

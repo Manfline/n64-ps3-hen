@@ -278,6 +278,17 @@ void gfx_set_lookat(struct gfx_state *g, int axis, const uint8_t *src)
 	g->lights_dirty = true;
 }
 
+/* F3DFLX: tres s16 en los bytes 8 a 13, no los s8 de una luz; como el
+ * lookat, va al espacio del modelo con la modelview (medido con la LLE: el
+ * microcódigo deja ese mismo vector en la DMEM). */
+void gfx_set_alpha_light(struct gfx_state *g, const uint8_t *src)
+{
+	for (int i = 0; i < 3; i++)
+		g->lookat[1][i] = (float)(int16_t)salsa64_rd16(src + 8 + 2 * i);
+	normalize3(g->lookat[1]);
+	g->lights_dirty = true;
+}
+
 /* Dirección en espacio de la cámara → espacio del modelo: d_m = M3 · d (la
  * transpuesta de cómo se transforma una normal con vectores fila). */
 static void to_model(const float m[16], const float d[3], float out[3])
@@ -419,7 +430,20 @@ void gfx_vertices(struct gfx_state *g, const uint8_t *src, uint32_t v0, uint32_t
 				v->c[k] = (uint8_t)clampf(rgb[k] + 0.5f, 0.0f, 255.0f);
 			v->c[3] = c[3];
 
-			if (g->geom & G_TEXTURE_GEN)
+			if ((g->geom & G_TEXTURE_GEN) && (g->ucode_var & GFX_UCODE_FLX)) {
+				/* El alfa por el coseno con la luz del alfa, en 1/128 desde
+				 * el centro de la tabla y hacia abajo; como el microcódigo,
+				 * con la normal tal cual (s8, sin normalizar: las del auto
+				 * miden ~120) y la luz con el módulo que le deja su
+				 * normalización (1,0055, medido en la DMEM con la LLE). s y
+				 * t quedan las del vértice. */
+				const float *d = g->lookat_model[1];
+				float dot = ((float)(int8_t)c[0] * d[0] + (float)(int8_t)c[1] * d[1] + (float)(int8_t)c[2] * d[2]) *
+					    1.0055f;
+				int k = (int)dot;
+				k -= (float)k > dot;
+				v->c[3] = g->flx_alpha[128 + (k < -128 ? -128 : k > 127 ? 127 : k)];
+			} else if (g->geom & G_TEXTURE_GEN)
 				gfx_texgen_vertex(g, nrm, v);
 		} else {
 			v->c[0] = c[0];
