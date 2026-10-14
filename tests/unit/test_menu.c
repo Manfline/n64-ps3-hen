@@ -305,6 +305,27 @@ static void menu_move_and_wrap(void)
 	menu_input(&m, 0, 80);
 	menu_input(&m, DOWN, 90);  /* vuelta al principio */
 	CHECK_EQ(m.sel, 0);
+	/* ○ en la lista pregunta antes de salir: ○ sigue donde estaba (nada se
+	 * mueve ni se abre mientras pregunta), × sale. */
+	menu_input(&m, 0, 100);
+	menu_input(&m, DOWN, 110);
+	menu_input(&m, 0, 120);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_CIRCLE), 130), MENU_NONE);
+	CHECK(m.quit_ask);
+	menu_input(&m, 0, 140);
+	menu_input(&m, DOWN, 150);
+	CHECK_EQ(m.sel, 1);
+	CHECK(m.quit_ask);
+	menu_input(&m, 0, 160);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_CIRCLE), 170), MENU_NONE);
+	CHECK(!m.quit_ask);
+	CHECK_EQ(m.sel, 1);
+	CHECK_EQ(m.page, MENU_PAGE_GAMES);
+	menu_input(&m, 0, 180);
+	menu_input(&m, BIT(SALSA64_DS3_CIRCLE), 190);
+	menu_input(&m, 0, 200);
+	CHECK_EQ(menu_input(&m, CROSS, 210), MENU_QUIT);
+	CHECK(!m.quit_ask);
 }
 
 static void menu_repeat(void)

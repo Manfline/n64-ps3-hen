@@ -678,6 +678,16 @@ enum menu_action menu_input(struct menu *m, uint32_t buttons, uint64_t now_us)
 	}
 	if (m->loading)
 		return MENU_NONE;
+	if (m->quit_ask) {
+		/* «¿Salir al XMB?»: × sale, ○ vuelve a la lista donde estaba. */
+		if (pressed & (BIT(SALSA64_DS3_CROSS) | BIT(SALSA64_DS3_CIRCLE))) {
+			m->quit_ask = false;
+			if (pressed & BIT(SALSA64_DS3_CROSS))
+				return MENU_QUIT;
+		}
+		m->rep_button = 0;
+		return MENU_NONE;
+	}
 	if (m->page == MENU_PAGE_OPTIONS) {
 		/* Arriba y abajo mueven; lo demás cambia el valor o vuelve. */
 		enum menu_action a = options_buttons(m, pressed & ~updown);
@@ -725,6 +735,12 @@ enum menu_action menu_input(struct menu *m, uint32_t buttons, uint64_t now_us)
 		return MENU_NONE;
 	} else if (pressed & BIT(SALSA64_DS3_TRIANGLE)) {
 		open_options(m);
+		return MENU_NONE;
+	} else if (pressed & BIT(SALSA64_DS3_CIRCLE)) {
+		/* Salir sin bajar hasta la última fila (con muchas ROMs). */
+		m->status[0] = '\0';
+		m->quit_ask = true;
+		m->rep_button = 0;
 		return MENU_NONE;
 	}
 

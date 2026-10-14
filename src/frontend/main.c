@@ -4763,6 +4763,8 @@ static void menu_show(const char *shot)
 	rsxkit_ui_begin(mn.lw, mn.lh);
 	menu_frame(&menu, mn.lw, mn.lh, sysGetSystemTime());
 	rsxkit_ui_end();
+	if (menu.quit_ask)
+		osd_confirm_draw("¿Salir al XMB?", "×: Sí     ○: No", mn.lw, mn.lh);
 	if (shot) {
 		const rsxkit_screen *sc = rsxkit_screen_info();
 		struct salsa64_vi_frame f;

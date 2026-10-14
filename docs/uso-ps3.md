@@ -55,7 +55,7 @@ detectado y, si la hay, la carátula del juego (abajo, «Carátulas»). La
 | □ | Trucos de la ROM elegida (abajo, «Trucos») |
 | SELECT | Ajustes de la ROM elegida (abajo, «Ajustes por juego») |
 | △ | Ir a Opciones |
-| ○ | Volver de Opciones, de los trucos o de los ajustes |
+| ○ | Volver de Opciones, de los trucos o de los ajustes; en la lista, salir al XMB (pregunta antes: × sale, ○ sigue donde estaba) |
 
 Al final de la lista están «Opciones» y «Salir al XMB».
 

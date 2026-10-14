@@ -184,6 +184,7 @@ struct menu {
 	uint64_t rep_since, rep_next;
 	char status[MENU_STATUS_MAX];     /* mensaje (p. ej. un error al abrir) */
 	char last[ROMLIST_PATH_MAX];      /* última ROM abierta (se marca en el panel) */
+	bool quit_ask;         /* ○ en la lista: «¿Salir al XMB?» a la vista (× sale, ○ sigue) */
 	const char *dirs[MENU_DIRS_MAX];  /* dónde se buscó (para la lista vacía) */
 	unsigned ndirs;
 	const char *loading;   /* título que se está cargando, o NULL */
