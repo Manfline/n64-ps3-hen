@@ -1029,18 +1029,12 @@ Lo que falta, en orden:
    mirar con el volcado de grupos: instancias emparejadas con la hermana
    equivocada o que renacen sin que la regla de saltos las vea.
 
-Para entrar a main (v0.2.6), en este orden y rebasados sobre el main de
-ese momento: 23820f6 (`--gc-sections`, primero: sin él no alcanza la pila
-del SPE 0), c7b1fba, 56bdb38, 87120ce, 213af9f, a220f22, 9622655,
-52df1f2, 4037b29, d7a8eba, 6d918ca, 8edf1cc, 1e8c813, 0c7b7ad, 2c9a73c,
-4f60c71, 85a8877, b7f2c82, c94c0db, ec7abb7 y 0f8bb79. El merge 4c568a7
-no: la caja negra entra por su rama, y de ese merge solo hay que llevar la
-anotación de los campos intermedios (salsa64_rdp_field_info en rdp.h y
-rdp.c, `rdp.finfo` en interp_field y en salsa64_rdp_present, y la llamada
-a cajanegra_field_interp en main.c justo después de salsa64_rdp_present)
-y la resolución de las listas de fuentes (vmatch.c junto a gfxdump.c y
-blackbox.c en los Makefiles del frontend, el host y las pruebas) y de las
-opciones de salsa64-run (--state-zip junto a --interp).
+Para entrar a main (v0.2.6): la rama ya trae main 5cde630 y la caja negra
+unidos (468803c y 6dfeb71), con las verificaciones del commit de la unión
+(holgura del SPE 0 3136 con `--gc-sections`, las 7 escenas del host
+idénticas a main con la interpolación apagada, gfxtest en RPCS3 igual al
+de main, Zelda con 40 intermedios por segundo): main avanza rápido hasta
+la punta de la rama, sin conflictos.
 
 ## Reproducir en la Mac
 
