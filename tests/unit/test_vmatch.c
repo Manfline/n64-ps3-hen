@@ -88,6 +88,16 @@ static bool near(float a, float b)
 
 static struct frame fa, fb;
 
+/* Grupos quietos de un vértice (el resto del escenario): con muchos, uno
+ * que se mueve de más no es un giro de la cámara. */
+static void add_still(struct frame *f, int count)
+{
+	for (int i = 0; i < count; i++) {
+		const float c[1][4] = { { -0.8f + 0.05f * (float)i, -0.6f, 1.0f, 2.0f } };
+		add_group(f, 0x40000 + 0x100u * (uint32_t)i, 0, 1, c);
+	}
+}
+
 /* El mismo modelo dos veces (se distinguen por orden), uno que aparece, uno
  * que se movió de más y la posición anterior de cada vértice de salida,
  * también la de uno del recorte cercano. */
@@ -100,8 +110,9 @@ static void vmatch_pairs_and_positions(void)
 	add_group(&fa, 0x1000, 0, 2, m0);  /* árbol 1 */
 	add_group(&fa, 0x1000, 0, 2, m1);  /* árbol 2: misma lista */
 	add_group(&fa, 0x2000, 4, 1, far0);
+	add_still(&fa, 20);
 	finish(&fa);
-	CHECK_EQ(fa.t.ngroups, 3);
+	CHECK_EQ(fa.t.ngroups, 23);
 	CHECK_EQ(fa.t.g[0].occ, 0);
 	CHECK_EQ(fa.t.g[1].occ, 1);
 
@@ -114,17 +125,18 @@ static void vmatch_pairs_and_positions(void)
 	add_group(&fb, 0x1000, 0, 2, n1);
 	add_group(&fb, 0x2000, 4, 1, far1);
 	add_group(&fb, 0x3000, 8, 1, new0);
+	add_still(&fb, 20);
 	finish(&fb);
-	CHECK_EQ(fb.t.ngroups, 4);
+	CHECK_EQ(fb.t.ngroups, 24);
 	struct vmatch_stats st;
 	vmatch_pair(&fa.t, &fb.t, 120.0f, &st);
 	CHECK_EQ(fb.t.g[0].pair, 0);
 	CHECK_EQ(fb.t.g[1].pair, 1);  /* el segundo árbol con el segundo */
 	CHECK_EQ(fb.t.g[2].pair, -1); /* se movió 144 px: corte */
 	CHECK_EQ(fb.t.g[3].pair, -1); /* nuevo */
-	CHECK_EQ(st.found, 3);
+	CHECK_EQ(st.found, 23);
 	CHECK_EQ(st.moved, 1);
-	CHECK_EQ(st.paired, 2);
+	CHECK_EQ(st.paired, 22);
 	CHECK(!st.cut);
 
 	struct gfx_vertex v[5] = {
@@ -135,7 +147,7 @@ static void vmatch_pairs_and_positions(void)
 	CHECK_EQ(vmatch_prev(&fa.t, &fb.t, &st, v, 5, prev), 2);
 	struct gfx_vertex want = out_of(m0[1], 0);
 	CHECK(near(prev[0][0], want.x) && near(prev[0][1], want.y) && near(prev[0][3], want.w));
-	CHECK(near(prev[0][2], v[0].z));  /* z, la de ahora (la profundidad la pone quien dibuja) */
+	CHECK(near(prev[0][2], v[0].z));  /* sin la vista en z (vz = 0), la misma z/w que ahora: w igual */
 	want = out_of(m1[0], 0);
 	CHECK(near(prev[1][0], want.x) && near(prev[1][1], want.y));
 	CHECK(near(prev[2][0], v[2].x) && near(prev[3][0], v[3].x));  /* sin pareja: donde está */
@@ -499,6 +511,29 @@ static void vmatch_depth(void)
 	}
 }
 
+/* Un giro de golpe de la cámara (Z en Zelda): si más del 5 % de lo que se
+ * ve se movió más que max_disp, el cuadro entero es un corte. */
+static void vmatch_camera_cut(void)
+{
+	static const float far0[1][4] = { { 0.0f, 0.0f, 1.0f, 1.5f } }, far1[1][4] = { { 1.35f, 0.0f, 1.0f, 1.5f } };
+	for (int many = 0; many < 2; many++) {
+		frame_init(&fa);
+		frame_init(&fb);
+		for (int i = 0; i < (many ? 3 : 1); i++) {
+			add_group(&fa, 0x2000 + 0x100u * (uint32_t)i, 0, 1, far0);
+			add_group(&fb, 0x2000 + 0x100u * (uint32_t)i, 0, 1, far1);
+		}
+		add_still(&fa, 30);
+		add_still(&fb, 30);
+		finish(&fa);
+		finish(&fb);
+		struct vmatch_stats st;
+		vmatch_pair(&fa.t, &fb.t, 120.0f, &st);
+		CHECK_EQ(st.cut, many != 0);
+		CHECK_EQ(st.camera, many != 0);
+	}
+}
+
 void t_suite_vmatch(void)
 {
 	RUN(vmatch_pairs_and_positions);
@@ -506,4 +541,5 @@ void t_suite_vmatch(void)
 	RUN(vmatch_identity_rules);
 	RUN(vmatch_atomic_mesh);
 	RUN(vmatch_depth);
+	RUN(vmatch_camera_cut);
 }

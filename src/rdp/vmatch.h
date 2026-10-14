@@ -32,9 +32,12 @@
  *                 ortográfica (w = 1 en todos sus vértices: el HUD 3D, como
  *                 el botón A que gira en Zelda), que sale como en el cuadro de
  *                 ahora, igual que los rectángulos. Y el cuadro
- *                 entero sin interpolar si más de un tercio de los grupos con
- *                 pareja se movió así o si menos de la mitad de los vértices
- *                 tiene pareja (cambio de plano)
+ *                 entero sin interpolar si menos de la mitad de los vértices
+ *                 tiene pareja (cambio de plano) o si la cámara giró de golpe
+ *                 (Z en Zelda la pone detrás de Link en uno o dos cuadros):
+ *                 más del 5 % de los grupos que se ven se movió más que
+ *                 max_disp, o la mitad de los emparejados más de max_disp / 2.
+ *                 Interpolar eso a medias rompe el escenario en pedazos
  *   vmatch_atomic nunca un objeto a medias (ver abajo)
  *   vmatch_prev   por cada vértice de salida, su posición en el cuadro
  *                 anterior (x, y, z, w desde las coordenadas de recorte de
@@ -127,6 +130,7 @@ struct vmatch_stats {
 	uint32_t kept;                   /* deformados o aplastados que se interpolan con su objeto (vmatch_atomic) */
 	uint32_t by_content;             /* encontrados por el contenido (no por la dirección) */
 	bool cut;                        /* el cuadro no se interpola */
+	bool camera;                     /* … porque la cámara giró de golpe (Z en Zelda: un corte aparte en el log) */
 };
 
 /* Bytes de la memoria de una tabla de gcap grupos y ccap vértices. */

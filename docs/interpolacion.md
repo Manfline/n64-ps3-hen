@@ -878,6 +878,22 @@ tarea: 0,4 grupos por su objeto y 0,17 piezas deformadas o aplastadas que
 se interpolan con su objeto; GoldenEye contra la verdad igual (29,76 dB).
 El volcado de grupos da el objeto de cada uno (`obj`).
 
+### El entorno que se despedaza al centrar la cámara con Z
+
+Con «interp 6», «si volteo y presiono Z, el entorno se despedaza»: Z pone
+la cámara detrás de Link en dos o tres cuadros. Con las entradas del autor
+en el host, esos cuadros tienen de 40 a 140 grupos que se movieron más de
+120 px; solo algunos llegaban al corte de antes (un tercio de los
+encontrados) y en los demás lo movido salía en el cuadro de ahora y el
+resto interpolado: el escenario en pedazos. Ahora el cuadro entero no se
+interpola (corte «por un giro de la cámara», aparte en el log) si más del
+5 % de los grupos que se ven se movió más que max_disp, o si la mitad de
+los emparejados se desplazó más de max_disp / 2. En el recorrido del autor
+(1141 tareas) son 33 cortes, los 11 recentrados de cámara con sus dos o
+tres cuadros; caminando, los grupos movidos no pasan del 3 % y la mediana
+de los desplazamientos de 28 px (percentil 99). GoldenEye contra la verdad
+igual (29,76 dB).
+
 ### Modo híbrido con matrices (estimación, sin hacer)
 
 Lo que hoy se rechaza por aplastarse (giros de más de un cuarto de vuelta

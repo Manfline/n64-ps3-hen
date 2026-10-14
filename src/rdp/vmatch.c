@@ -365,6 +365,7 @@ void vmatch_pair(const struct vmatch_table *prev, struct vmatch_table *cur, floa
 	}
 	const float(*ps)[2] = can ? screen_of(prev) : NULL;
 	const float(*cs)[2] = screen_of(cur);
+	uint32_t seen = 0, fast = 0;  /* encontrados que se ven; emparejados que se desplazaron más de max_disp / 2 */
 	for (uint32_t i = 0; i < cur->ngroups; i++) {
 		struct vmatch_group *g = &cur->g[i];
 		g->pair = -1;
@@ -393,6 +394,7 @@ void vmatch_pair(const struct vmatch_table *prev, struct vmatch_table *cur, floa
 		if (p < 0)
 			continue;
 		st->found++;
+		seen += g->ext >= 0.0f && prev->g[p].ext >= 0.0f;
 		st->found_vertices += g->n;
 		st->by_content += content;
 		const struct vmatch_group *h = &prev->g[p];
@@ -450,11 +452,14 @@ void vmatch_pair(const struct vmatch_table *prev, struct vmatch_table *cur, floa
 		g->pair = p;
 		g->why = VMATCH_OK;
 		cur->taken[p] = 1;
+		if (g->ext >= 0.0f && h->ext >= 0.0f)
+			fast += fabs_(g->cx - h->cx) > 0.5f * max_disp || fabs_(g->cy - h->cy) > 0.5f * max_disp;
 		st->paired++;
 		st->paired_vertices += g->n;
 		st->reordered += reord;
 	}
-	st->cut = st->found && (st->moved * 3 > st->found || st->found_vertices * 2 < st->vertices);
+	st->camera = st->found && (st->moved * 20 > seen || fast * 2 > st->paired);
+	st->cut = st->found && (st->camera || st->found_vertices * 2 < st->vertices);
 }
 
 static uint32_t uf_find(uint32_t *parent, uint32_t i)

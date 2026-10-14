@@ -1408,6 +1408,7 @@ static void interp_task(struct set *s, const struct gfx_result *res)
 	if (prev) {
 		rdp.stats.interp_tasks++;
 		rdp.stats.interp_cuts += st.cut;
+		rdp.stats.interp_cuts_camera += st.camera;
 		rdp.stats.interp_full += cur->full;
 		rdp.stats.interp_vertices += nv;
 		rdp.stats.interp_paired += paired;

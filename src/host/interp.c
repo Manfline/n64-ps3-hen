@@ -89,7 +89,7 @@ static struct {
 	} imgs[NIMG];
 	struct pending pend[16];
 	FILE *csv, *tcsv;
-	uint64_t cuts_geo, cuts_img;
+	uint64_t cuts_geo, cuts_img, cuts_camera;
 	double last_sad;       /* SAD medio por píxel de la última búsqueda (nivel 0) */
 	bool quiet;            /* sin imágenes (SALSA64_INTERP_SIN_IMAGENES) */
 	bool recording;        /* la tarea en curso está en la ventana */
@@ -819,15 +819,31 @@ void interp_after_raster(const struct gfx_job *job, const struct gfx_result *res
 				float w = ft->t.clip[g->clip + k][3];
 				w0 = w < w0 ? w : w0, w1 = w > w1 ? w : w1;
 			}
-			static const char *const why[VMATCH_WHY_COUNT] = { "ok",  "nuevo",    "movido", "saltó", "deformado",
-									  "tamaño", "HUD", "aplastado", "objeto", "malla" };
+			static const char *const why[VMATCH_WHY_COUNT] = { "ok",     "nuevo",     "movido",  "saltó",
+									  "deformado", "tamaño", "HUD", "aplastado",
+									  "objeto", "malla" };
 			fprintf(gf, "%3u addr %06x n %2u v0 %2u occ %3u/%d hash %08x hocc %u pair %4d %-9s dir %4d cont %4d vis %2d obj %3u w %g..%g",
 				i, g->addr, g->n, g->v0, g->occ, addrn, g->hash, g->hocc, g->pair, g->why < VMATCH_WHY_COUNT ? why[g->why] : "?",
 				byaddr, byhash, nvis, g->obj, w0, w1);
 			if (nvis)
 				fprintf(gf, " c (%.0f, %.0f)", cx / nvis, -cy / nvis);
 			if (g->pair >= 0 && nvis)
-				fprintf(gf, " d %.1f", sqrtf((cx - px) * (cx - px) + (cy - py) * (cy - py)) / nvis);
+				fprintf(gf, " d %.1f dv %.1f,%.1f", sqrtf((cx - px) * (cx - px) + (cy - py) * (cy - py)) / nvis,
+					(cx - px) / nvis, -(cy - py) / nvis);
+			if (g->n <= 8 && nvis == (int)g->n) {
+				/* El eje del grupo (los dos vértices más lejanos): una chispa
+				 * alargada se mueve a lo largo de él. */
+				float best = 0, axx = 0, axy = 0;
+				for (uint32_t a = 0; a < g->n; a++)
+					for (uint32_t b = a + 1; b < g->n; b++) {
+						const float *ca = ft->t.clip[g->clip + a], *cb = ft->t.clip[g->clip + b];
+						float dx = (cb[0] / cb[3] - ca[0] / ca[3]) * g->vp[0], dy = -(cb[1] / cb[3] - ca[1] / ca[3]) * g->vp[1];
+						if (dx * dx + dy * dy > best)
+							best = dx * dx + dy * dy, axx = dx, axy = dy;
+					}
+				if (best > 0)
+					fprintf(gf, " ax %.2f,%.2f len %.1f", axx / sqrtf(best), axy / sqrtf(best), sqrtf(best));
+			}
 			/* Cuánto se aplasta a media interpolación (con la pareja o la
 			 * candidata por dirección): radio del grupo en t = 0,5 entre el
 			 * menor de los dos cuadros. */
@@ -902,6 +918,7 @@ void interp_after_raster(const struct gfx_job *job, const struct gfx_result *res
 	static uint32_t pred[W * H];
 	motion(before, now);
 	st.cuts_geo += geo_cut();
+	st.cuts_camera += st.vst.camera;
 	st.cuts_img += img_cut();
 	if (st.tcsv)
 		fprintf(st.tcsv, "# tarea %u: corte geometría %d, imagen %d (SAD medio %.1f)\n", st.task, geo_cut(), img_cut(),
@@ -989,8 +1006,9 @@ void interp_report(void)
 			fprintf(o, "interp: geometría: vértices de salida interpolados %.1f %% (%llu tareas, %.0f por tarea)\n",
 				100.0 * st.out_matched / st.out_vtx, (unsigned long long)st.out_tasks,
 				(double)st.out_vtx / st.out_tasks);
-		fprintf(o, "interp: cortes detectados: geometría %llu, imagen %llu (de %llu cuadros con anterior)\n",
-			(unsigned long long)st.cuts_geo, (unsigned long long)st.cuts_img, (unsigned long long)st.searches);
+		fprintf(o, "interp: cortes detectados: geometría %llu (%llu por un giro de la cámara), imagen %llu (de %llu cuadros con anterior)\n",
+			(unsigned long long)st.cuts_geo, (unsigned long long)st.cuts_camera, (unsigned long long)st.cuts_img,
+			(unsigned long long)st.searches);
 		if (st.groups)
 			fprintf(o, "interp: geometría: %.1f %% de los grupos se encontraron por contenido (la dirección no estaba)\n",
 				100.0 * st.by_content / st.groups);

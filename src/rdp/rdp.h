@@ -79,6 +79,7 @@ struct salsa64_rdp_stats {
 	 * sus vértices de salida y los que tienen pareja, grupos hallados por el
 	 * contenido y el tiempo del PPE (presentación). */
 	uint32_t interp_tasks, interp_cuts, interp_full;
+	uint32_t interp_cuts_camera;                 /* de ellos, por un giro de golpe de la cámara */
 	uint32_t interp_vertices, interp_paired, interp_content;
 	uint32_t interp_rejected, interp_reordered;  /* grupos rechazados (saltaron, se deformaron, se aplastarían) y reordenados */
 	uint32_t interp_atomic;                      /* grupos con pareja sin interpolar por su objeto o su malla (vmatch_atomic) */

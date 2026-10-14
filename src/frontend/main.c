@@ -2573,13 +2573,15 @@ static void stats(uint64_t now)
 			uint32_t iv = rs.interp_vertices - sw.rdp0.interp_vertices;
 			uint32_t ip = rs.interp_paired - sw.rdp0.interp_paired;
 			uint32_t ifl = rs.interp_fields - sw.rdp0.interp_fields;
-			salsa64_log("gfx: interpolación: %u tareas con anterior (%u cortes, %u sin lugar en las tablas, %u con "
+			salsa64_log("gfx: interpolación: %u tareas con anterior (%u cortes, %u de ellos por un giro de la "
+				    "cámara, %u sin lugar en las tablas, %u con "
 				    "texturas de un destino), vértices de salida con pareja %.1f %% (%.0f por tarea), %u grupos "
 				    "por el contenido, %u rechazados (saltaron, se deformaron o se aplastarían), %u sin "
 				    "interpolar por su objeto o su malla, %u interpolados con su objeto, %u reordenados; "
 				    "emparejar %.3f "
 				    "ms del PPE por tarea (armar %.3f, emparejar %.3f, posiciones %.3f)",
-				    itasks, rs.interp_cuts - sw.rdp0.interp_cuts, rs.interp_full - sw.rdp0.interp_full,
+				    itasks, rs.interp_cuts - sw.rdp0.interp_cuts,
+				    rs.interp_cuts_camera - sw.rdp0.interp_cuts_camera, rs.interp_full - sw.rdp0.interp_full,
 				    rs.interp_fbtex - sw.rdp0.interp_fbtex, iv ? 100.0 * ip / iv : 0.0, (double)iv / itasks,
 				    rs.interp_content - sw.rdp0.interp_content, rs.interp_rejected - sw.rdp0.interp_rejected,
 				    rs.interp_atomic - sw.rdp0.interp_atomic, rs.interp_kept - sw.rdp0.interp_kept,
