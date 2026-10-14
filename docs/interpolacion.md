@@ -1036,6 +1036,64 @@ idénticas a main con la interpolación apagada, gfxtest en RPCS3 igual al
 de main, Zelda con 40 intermedios por segundo): main avanza rápido hasta
 la punta de la rama, sin conflictos.
 
+## Lo que la interpolación le cuesta a la emulación (2026-10-14)
+
+La interpolación es de la presentación, pero la identidad de los vértices
+la calcula la HLE en el SPE 0 y el fin emulado de cada tarea gráfica espera
+al SPE (`src/core/rsp.c`): lo que tarda de más lo ve el juego como un RSP
+más lento. Con la interpolación encendida desde la pausa en la PS3 real,
+Super Odyssey 64 (hack de SM64 de 64 MB, miles de vértices por tarea) pasó
+de 7,2 a 12 ms por tarea en los vértices del SPE (+65 %; la tarea entera de
+14 a 19–23 ms); en la escena de su pausa (7400 triángulos) las tareas de
+audio bajaron de 60 a 28 por segundo, la emulación a 55 campos/s, el
+muestreo a «eventos» 94 % (la emulación durmiendo mientras espera al SPE:
+19 ms por tarea) y el audio se estiraba. Desde el campo ~2700 esa escena
+además no cabía en las tablas del emparejamiento («sin lugar en las
+tablas» en todas las tareas): ese trabajo del SPE era en vano.
+
+- **El costo:** `gfx_vgroup` (con `-Os` en el SPE 0) llamaba a `memcpy` por
+  cada palabra del hash del contenido (`salsa64_rd32`) y por cada vértice
+  (las coordenadas de recorte), como se ve en el desensamblado del objeto
+  SPU. Ahora lee por bytes y asigna los cuatro flotantes: el SPU lo compila
+  sin llamadas (`lqd`/`rotqby`/`selb`), ~500 bytes más de código (holgura
+  de la pila del SPE 0 2112).
+- **Pedirla solo cuando sirve** (`interp_wanted`, `src/rdp/rdp.c`): sin
+  `GFX_JOB_INTERP` con el juego a 60 cuadros (no hay campos intermedios) ni
+  en las 90 tareas que siguen a una que no cupo (tablas, vértices más allá
+  de `VTX_INTERP` o registros que faltan); después se vuelve a probar. El
+  log de cada 5 s dice cuántas tareas se pidieron sin la bandera. En RPCS3,
+  la pausa de Super Odyssey 64: 109 de 110 tareas sin la bandera.
+- **Nunca un corte por la interpolación:** los registros `GFX_OP_VGROUP`
+  compartían los 768 KB del búfer de comandos con los dibujos, y con la
+  bandera la HLE tenía 1,33 MB de vértices en vez de 2 MB. Una tarea pesada
+  se podía cortar (`GFX_RES_CMD_FULL`, `GFX_RES_VTX_FULL`), y un corte
+  adelanta la interrupción del DP y pierde el final de la lista (en el
+  host, con 512 KB, Super Odyssey 64 cortaba 771 tareas y perdía el texto
+  de la pausa). Ahora los registros van en un tercio del búfer
+  (`GFX_VGROUP_SHARE`), que el consumidor da de más (384 KB sacados del
+  arena de texturas; en el host, 256 KB); la HLE tiene siempre los 2 MB de
+  vértices y una tarea con más que `VTX_INTERP` no se interpola. Lo que no
+  cabe queda sin registro ni identidad (`GFX_RES_VGROUP_FULL`): la tarea se
+  dibuja entera y no se interpola, pero no se corta.
+
+La caída de Super Odyssey 64 en esa misma sesión (el código del juego y el
+vector de excepciones reescritos en un campo, `docs/estado.md`) no se
+reproduce ni en el host ni en RPCS3 con la interpolación; y la música de
+fondo de Mario Kart 64 que se fue después de cambiarla desde la pausa era
+el botón L del juego (enciende y apaga la música), no la interpolación.
+
+Para cambiarla en vivo sin manos: `interp-alternar` («N [E1 E2]») pausa la
+emulación cada N campos como el menú de pausa, la enciende o apaga (y
+alterna la escala entre E1 y E2) y sigue; con `estados-prueba` «0 B» se
+carga en el campo B la ranura 9, que puede ser un estado del host
+(`salsa64-run --state-save C:ARCHIVO --state-zip`), y `capturas` «N M» sale
+en el campo M:
+
+```
+tools/rpcs3-run.py build/salsa64/salsa64.elf --rom mk64.z64 --estados 0,2 \
+  --bandera "capturas=300 4300" --bandera "interp-alternar=200 3 5"
+```
+
 ## Reproducir en la Mac
 
 ```
