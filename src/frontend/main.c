@@ -2547,10 +2547,12 @@ static void stats(uint64_t now)
 				    (gfx_spu.t_load - sw.gfx_load0) * k);
 		}
 		salsa64_log("gfx: fragment programs: %.1f cambios por tarea, %u dibujos con programa generado "
-			    "(%.1f por tarea), %u programas en la caché (%u generados, %u vaciados)",
+			    "(%.1f por tarea), %u programas en la caché (%u generados, %u vaciados); %.1f dibujos con "
+			    "aristas AA por tarea",
 			    (double)(rs.fp_loads - sw.rdp0.fp_loads) / tasks, rs.draws_generated - sw.rdp0.draws_generated,
 			    (double)(rs.draws_generated - sw.rdp0.draws_generated) / tasks, rs.fp_programs,
-			    rs.fp_generated - sw.rdp0.fp_generated, rs.fp_evictions - sw.rdp0.fp_evictions);
+			    rs.fp_generated - sw.rdp0.fp_generated, rs.fp_evictions - sw.rdp0.fp_evictions,
+			    (double)(rs.draws_edges - sw.rdp0.draws_edges) / tasks);
 		uint32_t rb = rs.readbacks - sw.rdp0.readbacks, rbw = rs.readback_waits - sw.rdp0.readback_waits;
 		uint32_t trsx = rs.tex_rsx - sw.rdp0.tex_rsx, trd = rs.tex_rdram - sw.rdp0.tex_rdram;
 		uint32_t tself = rs.tex_self - sw.rdp0.tex_self, primes = rs.primes - sw.rdp0.primes;
@@ -3661,6 +3663,14 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		salsa64_rdp_fbfx(fbfx);
 		salsa64_log("efectos de framebuffer: %s", fbfx <= 0 ? "apagados" : fbfx == 1 ? "render a textura" :
 								"render a textura y copias a la RDRAM");
+	}
+	{
+		/* SALSA64_DATA_DIR/sin-aristas-aa: sin la pasada de aristas de los
+		 * dibujos con AA_EN (salsa64_rdp_aa_edges), para compararla. */
+		bool aa_edges = !file_exists(SALSA64_DATA_DIR "/sin-aristas-aa");
+		salsa64_rdp_aa_edges(aa_edges);
+		if (!aa_edges)
+			salsa64_log("aristas de los dibujos con AA: apagadas (sin-aristas-aa)");
 	}
 	{
 		/* SALSA64_DATA_DIR/trace-vi: registrar qué se presenta en cada uno

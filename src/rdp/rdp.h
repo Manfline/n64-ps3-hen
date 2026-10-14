@@ -51,6 +51,9 @@ struct salsa64_rdp_stats {
 	 * precompilados). */
 	uint32_t draws_generated;
 	uint32_t fp_programs, fp_generated, fp_evictions, fp_loads;
+	/* Dibujos con AA_EN que llevaron la pasada de aristas
+	 * (salsa64_rdp_aa_edges). */
+	uint32_t draws_edges;
 	/* Efectos de framebuffer (docs/framebuffer.md): copias RSX → RDRAM y
 	 * su tiempo en el hilo de presentación (esperar al RSX y convertir),
 	 * tareas que la emulación esperó por una copia y cuánto, texturas con
@@ -168,6 +171,10 @@ void salsa64_rdp_vi(uint32_t origin, uint32_t width);
  * vienen de un destino se leen de la RDRAM como antes y nada se copia), 1
  * solo render a textura, 2 también las copias a la RDRAM (por omisión). */
 void salsa64_rdp_fbfx(int level);
+/* Interruptor: en los dibujos opacos con AA_EN, las aristas como líneas
+ * antes de los triángulos (rsxkit_draw.edges): tapan las grietas de las
+ * uniones en T que el RDP tapa con la cobertura (por omisión, encendido). */
+void salsa64_rdp_aa_edges(bool on);
 /* Hilo de emulación: un DMA escribió la RDRAM [pa, pa + len); con
  * `gfx_in_flight`, mientras corría una tarea gráfica. Las copias de esa
  * tarea y de las anteriores no pisan ese tramo (targets.h, rdp_dma_ring). */

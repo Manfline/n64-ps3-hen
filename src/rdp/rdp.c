@@ -175,6 +175,7 @@ static struct {
 	struct salsa64_rdp_tb tb;
 	/* Efectos de framebuffer (docs/framebuffer.md). */
 	int fbfx;                    /* 0 apagado, 1 render a textura, 2 también copias */
+	bool aa_edges;               /* salsa64_rdp_aa_edges */
 	uint8_t *rdram;              /* la RDRAM emulada (NULL: sin copias ni cebado) */
 	uint32_t rdram_size;
 	void (*wake)(void);          /* despierta al hilo de presentación */
@@ -301,6 +302,7 @@ int salsa64_rdp_init(uint32_t scale)
 	rdp.rb = rdp.cache + CACHE_BYTES;
 	rdp.rb_off = rdp.cache_off + CACHE_BYTES;
 	rdp.fbfx = 2;
+	rdp.aa_edges = true;
 	rdp.ready = true;
 	return RSXKIT_OK;
 }
@@ -320,6 +322,11 @@ void salsa64_rdp_vi(uint32_t origin, uint32_t width)
 void salsa64_rdp_fbfx(int level)
 {
 	rdp.fbfx = level < 0 ? 0 : level > 2 ? 2 : level;
+}
+
+void salsa64_rdp_aa_edges(bool on)
+{
+	rdp.aa_edges = on;
 }
 
 void salsa64_rdp_last_present(int *slot, uint32_t *age, uint32_t *addr)
@@ -1073,6 +1080,20 @@ static bool to_rsxkit(const struct gfx_draw *g, struct set *s, int cur, rsxkit_d
 	d->alpha_ref = g->atest ? (g->aref ? g->aref : 1) : 0;
 	d->ntex = g->ntex > 2 ? 2 : g->ntex;
 	d->fog = g->fog;
+	/* Con AA_EN el RDP escribe los píxeles que el triángulo cubre en parte
+	 * y así tapa las grietas de las uniones en T (el piso del túnel de Dam
+	 * en GoldenEye: el borrado azul se veía por ellas); el RSX solo mira el
+	 * centro. Las aristas como líneas antes de los triángulos las tapan a
+	 * cualquier escala (docs/rsx-notes.md). Sin calcomanías: sus líneas no
+	 * llevarían el desplazamiento de polígono de la calcomanía. */
+	if (rdp.aa_edges && g->aa && !(g->depth & GFX_DEPTH_DECAL)) {
+		/* 1,5 píxeles de la N64 a la escala de la superficie, en octavos:
+		 * las grietas de los dos volcados de ares del túnel de Dam se tapan
+		 * desde 1,5 (con 1 quedaban tiras de ~1 px entre aristas casi
+		 * paralelas); medido con el rasterizador del host, raster.c. */
+		uint32_t sc = cur >= 0 && rdp.surf_scale[cur] ? rdp.surf_scale[cur] : 1;
+		d->edges = (uint8_t)(12u * sc > 255u ? 255u : 12u * sc);
+	}
 	d->nterms = g->nterms;
 	memcpy(d->factors, g->factors, sizeof d->factors);
 	for (int i = 0; i < 4; i++) {
@@ -1386,6 +1407,8 @@ static void translate(uint32_t n)
 			}
 			rsxkit_draw_triangles(&rd, g->h.a, g->h.b);
 			rdp.stats.draws++;
+			if (rd.edges)
+				rdp.stats.draws_edges++;
 			if (g->nterms)
 				rdp.stats.draws_generated++;
 			rdp.stats.triangles += g->h.b / 3;

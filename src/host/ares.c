@@ -34,6 +34,7 @@
 
 #include <getopt.h>
 #include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -413,7 +414,100 @@ struct opts {
 	uint32_t only_dl, only_fb;
 	unsigned tol;
 	bool png;
+	bool gfxdump;       /* también la salida de la HLE como gfxdump (tools/gfxdump.py) */
 };
+
+/* La salida de la tarea como el volcado de la PS3 (gfx_dump_header y los
+ * registros en big-endian, como lo escribe src/rdp), para listar los
+ * dibujos con tools/gfxdump.py, dibujarlos con --raster-dump o repetirlos
+ * en el RSX ("dump:<nombre>" en embedded, en RPCS3 o en la consola). */
+static uint8_t dump_buf[(512u << 10) + (sizeof out_vtx)];
+
+static void swap16(uint8_t *p, size_t n)
+{
+	for (size_t i = 0; i < n; i++, p += 2) {
+		uint8_t t = p[0];
+		p[0] = p[1], p[1] = t;
+	}
+}
+
+static void swap32(uint8_t *p, size_t n)
+{
+	for (size_t i = 0; i < n; i++, p += 4) {
+		uint8_t t0 = p[0], t1 = p[1];
+		p[0] = p[3], p[1] = p[2], p[2] = t1, p[3] = t0;
+	}
+}
+
+#define SW16(base, type, field, n) swap16((base) + offsetof(type, field), (n))
+#define SW32(base, type, field, n) swap32((base) + offsetof(type, field), (n))
+
+/* Los registros de comandos del orden del host al de la PS3, campo por campo. */
+static void cmds_to_be(uint8_t *cmd, uint32_t bytes)
+{
+	for (uint32_t off = 0; off + sizeof(struct gfx_cmd) <= bytes;) {
+		uint8_t *r = cmd + off;
+		const struct gfx_cmd *c = (const struct gfx_cmd *)r;
+		uint16_t op = c->op, size = c->size;
+		if (op == GFX_OP_ZCLEAR && size >= sizeof(struct gfx_zclear)) {
+			SW16(r, struct gfx_zclear, rect, 4);
+			SW32(r, struct gfx_zclear, fill, 2);  /* fill y pad */
+		} else if (op == GFX_OP_DRAW && size >= sizeof(struct gfx_draw)) {
+			SW32(r, struct gfx_draw, zimg, 1);
+			SW16(r, struct gfx_draw, scissor, 4);
+			SW32(r, struct gfx_draw, fog_color, 3);  /* fog_color, prim_kind, prim_tile */
+			for (int t = 0; t < 2; t++) {
+				uint8_t *x = r + offsetof(struct gfx_draw, tex) + t * sizeof(struct gfx_tex);
+				SW32(x, struct gfx_tex, offset, 1);
+				SW16(x, struct gfx_tex, width, 3);  /* width, height, pitch */
+				SW32(x, struct gfx_tex, key, 1);
+				SW32(x, struct gfx_tex, xf, 4);
+				SW32(x, struct gfx_tex, src_addr, 1);
+				SW16(x, struct gfx_tex, src_pitch, 1);
+			}
+			SW32(r, struct gfx_draw, k, sizeof(((struct gfx_draw *)0)->k) / 4);
+		}
+		SW16(r, struct gfx_cmd, op, 2);  /* op y size */
+		SW32(r, struct gfx_cmd, a, 3);
+		if (op == GFX_OP_END || size < sizeof(struct gfx_cmd))
+			break;
+		off += size;
+	}
+}
+
+_Static_assert(offsetof(struct gfx_vertex, r) == 24 && sizeof(struct gfx_vertex) == 32, "vértice de 6 floats, RGBA y relleno");
+
+static void write_gfxdump(const char *prefix, uint32_t dl, const struct gfx_result *res)
+{
+	char path[4096 + 64];
+	snprintf(path, sizeof path, "%s-%06x.gfxdump.bin", prefix, dl);
+	if ((size_t)res->cmd_bytes + res->vtx_bytes > sizeof dump_buf)
+		return;
+	uint8_t *cmd = dump_buf, *vtx = dump_buf + res->cmd_bytes;
+	memcpy(cmd, out_cmd, res->cmd_bytes);
+	memcpy(vtx, out_vtx, res->vtx_bytes);
+	struct gfx_dump_header h = { GFX_DUMP_MAGIC, res->cmd_bytes, res->vtx_bytes, res->tex_bytes };
+	const uint16_t one = 1;
+	if (*(const uint8_t *)&one) {  /* host little-endian */
+		cmds_to_be(cmd, res->cmd_bytes);
+		for (uint32_t i = 0; i + sizeof(struct gfx_vertex) <= res->vtx_bytes; i += sizeof(struct gfx_vertex)) {
+			swap32(vtx + i, 6);
+			SW32(vtx + i, struct gfx_vertex, pad, 1);
+		}
+		swap32((uint8_t *)&h, 4);
+	}
+	FILE *f = fopen(path, "wb");
+	if (!f || fwrite(&h, sizeof h, 1, f) != 1 || fwrite(dump_buf, 1, res->cmd_bytes + res->vtx_bytes, f) !=
+							       res->cmd_bytes + res->vtx_bytes ||
+	    fwrite(out_tex, 1, res->tex_bytes, f) != res->tex_bytes) {
+		fprintf(stderr, "salsa64-run: no se pudo escribir %s\n", path);
+		if (f)
+			fclose(f);
+		return;
+	}
+	fclose(f);
+	printf("  salida de la HLE en %s\n", path);
+}
 
 /* Triángulos de la salida con algún vértice detrás de la cámara. */
 static uint32_t behind_camera(const struct gfx_result *res)
@@ -573,8 +667,15 @@ static int one_dump(const char *path, const struct opts *o)
 		salsa64_gfx_trace_now = getenv("SALSA64_GFX_VERBOSE") != NULL;
 #endif
 		run_task(t, gbis[i], &job, &res);
+		if (o->gfxdump)
+			write_gfxdump(prefix, dl, &res);
 		raster_task(&job, &res);
 		bus.rdram = rdram_orig;
+		uint32_t dr, de, dt;
+		raster_edge_stats(&dr, &de, &dt);
+		if (de)
+			printf("  aristas de los dibujos con AA: %u de %u dibujos (%u triángulos)%s\n", de, dr, dt,
+			       raster_aa_edges ? "" : ", apagadas");
 		for (unsigned k = 0; k < ntg; k++) {
 			compare(prefix, dl, &tg[k], o->tol, o->png);
 			compared++;
@@ -598,7 +699,10 @@ static void usage(FILE *out)
 	      "      --q5            la HLE a 5 bits por canal (por omisión, a 8 como el RSX)\n"
 	      "      --out DIR       PNG en DIR/<volcado>-<lista>-<búfer>-{hle,consola,dif}.png\n"
 	      "                      (por omisión, junto al volcado)\n"
-	      "      --no-png        solo las cifras\n",
+	      "      --no-png        solo las cifras\n"
+	      "      --gfxdump       también la salida de la HLE de cada lista, como el gfxdump de\n"
+	      "                      la PS3 (big-endian): <volcado>-<lista>.gfxdump.bin, para\n"
+	      "                      tools/gfxdump.py, --raster-dump o \"dump:\" en el RSX\n",
 	      out);
 }
 
@@ -612,6 +716,7 @@ int ares_main(int argc, char **argv)
 		{ "out", required_argument, NULL, 'o' },
 		{ "no-png", no_argument, NULL, 'n' },
 		{ "q5", no_argument, NULL, 'q' },
+		{ "gfxdump", no_argument, NULL, 'g' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 },
 	};
@@ -628,6 +733,7 @@ int ares_main(int argc, char **argv)
 		case 'o': o.out = optarg; break;
 		case 'n': o.png = false; break;
 		case 'q': q5 = true; break;
+		case 'g': o.gfxdump = true; break;
 		case 'h': usage(stdout); return 0;
 		default: usage(stderr); return 3;
 		}
@@ -636,10 +742,16 @@ int ares_main(int argc, char **argv)
 		usage(stderr);
 		return 3;
 	}
-	if (o.out && o.png)
+	if (o.out && (o.png || o.gfxdump))
 		mkdir(o.out, 0777);  /* si ya existe, nada */
 	if (getenv("SALSA64_FBFX"))
 		raster_fbfx = atoi(getenv("SALSA64_FBFX"));
+	if (getenv("SALSA64_AA_EDGES"))
+		raster_aa_edges = atoi(getenv("SALSA64_AA_EDGES")) != 0;
+	if (getenv("SALSA64_AA_EDGE_OFFSET"))
+		sscanf(getenv("SALSA64_AA_EDGE_OFFSET"), "%f,%f", &raster_edge_factor, &raster_edge_units);
+	if (getenv("SALSA64_AA_EDGE_WIDTH"))
+		raster_edge_width = (float)atof(getenv("SALSA64_AA_EDGE_WIDTH"));
 	raster_q5 = q5;
 	int total = 0;
 	for (int i = optind; i < argc; i++) {

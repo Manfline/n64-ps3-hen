@@ -1,5 +1,41 @@
 # Estado
 
+## 2026-10-13 — Líneas azules de GoldenEye: aristas de los dibujos con AA como líneas (rama `suspicious-saha-fe2758`)
+
+Con dos volcados de ares del túnel de Dam (`salsa64-run --ares`): las
+líneas azules son el borrado azul que asoma por grietas de uniones en T
+entre triángulos del piso y de la orilla (0,26 a ~1,1 px, todos
+G_RM_AA_ZB_OPA_SURF). La consola las tapa porque con AA_EN escribe los
+píxeles cubiertos en parte; el RSX y el rasterizador del host solo miran el
+centro. Arreglo en el RSX (`rsxkit_draw.edges`, `src/rdp/rdp.c`): en los
+dibujos opacos con AA_EN (sin calcomanías), antes de los triángulos, sus
+aristas como líneas (modo de polígono LINE) de 1,5 píxeles de la N64 a la
+escala de la superficie, con desplazamiento de polígono hacia atrás
+(factor 8, 64 unidades). El rasterizador del host hace lo mismo y con él se
+eligieron ancho y desplazamiento contra la consola (docs/rsx-notes.md):
+
+- Grietas: el túnel, 20 de 20 píxeles tapados; la orilla, 170 de 170 (con
+  1 px quedaban 32). PSNR en 4×4: 29,97 → 29,66 dB y 33,04 → 33,32.
+- Las líneas engordan las siluetas contra el fondo hasta ¾ de píxel; con
+  menos desplazamiento se comían piezas casi coplanares (el ojo de Banjo).
+  En las 7 escenas del host cambian 82 de 105 imágenes, en los bordes
+  (360–1350 píxeles por imagen); Zelda casi no usa el modo (0,3 dibujos
+  por tarea).
+- Dibujos con aristas por tarea: GoldenEye 64 de 154, Conker 82 de 171,
+  Perfect Dark 39 de 108, Banjo 32 de 77, Mario Kart 64 29 de 113, Super
+  Mario 64 16,5 de 52. En el RSX es una llamada más por dibujo AA con el
+  mismo arreglo de vértices.
+- RPCS3 no sirve para verlo: su backend Vulkan no aplica el modo de
+  polígono (el replay del túnel sale igual con y sin aristas). gfxtest en
+  RPCS3 da la misma imagen que main. **Falta la PS3 real**: el ancho va en
+  el método 0x3B8 del NV40 (punto fijo 6.3, como lo decodifica RPCS3), que
+  PSL1GHT no expone. `sin-aristas-aa` en `dev_hdd0/salsa64` las apaga para
+  comparar.
+- `--ares --gfxdump` guarda la salida de la HLE de cada lista como el
+  volcado de la PS3 (big-endian): `tools/gfxdump.py`, `--raster-dump` y
+  `embedded` = `dump:<nombre>` en el RSX la leen. Así un cuadro de ares se
+  puede repetir en la consola.
+
 ## 2026-10-13 — Comparar un cuadro con ares: `salsa64-run --ares` (rama `suspicious-saha-fe2758`)
 
 `salsa64-run --ares volcado-rdram.bin` (y `tools/ares-comparar.sh`) dibuja

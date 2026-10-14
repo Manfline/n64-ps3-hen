@@ -26,7 +26,8 @@ tools/ares-comparar.sh build/ares/<juego>-rdram-<fecha>.bin
 
 El script compila `salsa64-run` nativo (sin sanitizadores) y corre
 `salsa64-run --ares` con las opciones que se le pasen (`--help`): `--task`
-(una lista), `--fb` (un búfer), `--tol`, `--q5`, `--out DIR`, `--no-png`.
+(una lista), `--fb` (un búfer), `--tol`, `--q5`, `--out DIR`, `--no-png`,
+`--gfxdump`.
 Acepta varios volcados.
 
 Por cada volcado:
@@ -72,5 +73,15 @@ Por cada volcado:
   `--trace-gfx`.
 - **Alta resolución:** el rasterizador es de 320×240; para búferes de 640
   de ancho, compilar con `-DRASTER_W=640 -DRASTER_H=480`.
+- **Grietas y aristas:** el rasterizador hace, como la PS3, la pasada de
+  aristas de los dibujos opacos con AA (docs/rsx-notes.md);
+  `SALSA64_AA_EDGES=0` la quita, y `SALSA64_AA_EDGE_WIDTH=n` (1,5 px) y
+  `SALSA64_AA_EDGE_OFFSET=factor,unidades` (8,64) cambian su ancho y su
+  desplazamiento hacia atrás, para medir contra la consola.
+- **En el RSX:** `--gfxdump` guarda la salida de la HLE de cada lista como
+  el volcado de la PS3 (`<volcado>-<lista>.gfxdump.bin`, big-endian):
+  `tools/gfxdump.py` lista sus dibujos (`pixel X Y`: cuáles cubren un
+  píxel) y, copiado a `dev_hdd0/salsa64`, `embedded` = `dump:<nombre>`
+  lo dibuja en el RSX (RPCS3 o la consola) y deja `replay.ppm`.
 
 Lo medido con cada juego va en docs/estado.md.
