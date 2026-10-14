@@ -925,6 +925,35 @@ más el redibujo de los intermedios no alcanza): el piso va a tirones
 cuando la consola salta campos, no por el emparejamiento. A probar a 3× o
 4× en la misma caminata.
 
+### Estimar la cámara entre los dos cuadros (plan, sin hacer)
+
+Para el mundo quieto, las coordenadas de recorte de un vértice en los dos
+cuadros cumplen antes = T · ahora con una sola 4 × 4 T = P V_antes V_ahora⁻¹
+P⁻¹ (P la proyección, V la vista). T se puede estimar en el PPE por mínimos
+cuadrados con una muestra de vértices emparejados (C = Σ ahora·ahoraᵀ,
+D = Σ antes·ahoraᵀ, T = D C⁻¹: dos 4 × 4 acumuladas y una inversa; con 256
+vértices, unos 16 000 flops), y una o dos pasadas sacando los que se
+apartan (Link, enemigos, partículas). Con T:
+
+- Grupos nuevos (el piso que entra por el borde, lo que aparece): su
+  posición de antes es T · ahora, así se mueven con el mundo y la regla de
+  malla ya no necesita tumbar a sus vecinos.
+- Giros de golpe de la cámara (Z en Zelda): en vez del corte, girar el
+  mundo quieto con una potencia fraccionaria de T (T es semejante a una
+  rotación más traslación: T^t = P R^t P⁻¹, R^t por slerp) en cada campo
+  intermedio. Necesita separar P (en Zelda la vista va dentro de la
+  proyección con lookAt) o sacar T^t por descomposición propia de la 4 × 4
+  (autovalores e^{±iθ}, 1, 1). El corte queda de respaldo si la estimación
+  no cuadra (residuo grande, pocos vértices quietos).
+- Costo: la estimación por tarea cabe en unos 0,05 ms del PPE con la
+  muestra; T^t por campo intermedio es una 4 × 4 por campo, pero aplicarla
+  a todos los vértices del mundo quieto en vez de la recta del vertex
+  program pide otro vertex program (matriz por dibujo, no por vértice) o
+  posiciones por campo desde el PPE.
+- Riesgos: escenas casi sin mundo quieto (todo se mueve), cámaras con FOV
+  que cambia (P no constante: T deja de ser semejante a una rotación),
+  vértices del mundo que el juego escribe ya transformados.
+
 ### Modo híbrido con matrices (estimación, sin hacer)
 
 Lo que hoy se rechaza por aplastarse (giros de más de un cuarto de vuelta
