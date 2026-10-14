@@ -167,17 +167,53 @@ pocas palabras del búfer de comandos. Quien junte en un solo lote
 geometría translúcida que se superpone debería hacer lo mismo si quiere
 verla bien en RPCS3.
 
-## Cobertura con AA_EN: POLYGON_SMOOTH no sirve (2026-10-12, PS3 real)
+## Cobertura con AA_EN: grietas de las uniones en T
 
 Con AA_EN el RDP escribe un píxel si cualquiera de sus 8 muestras de
-cobertura cae dentro del triángulo; el RSX solo mira el centro. Se probó
-`POLYGON_SMOOTH_ENABLE` (método 0x1838 del NV40,
-`rsxSetPolygonSmoothEnable`) para que el RSX generara fragmentos también en
-los píxeles cubiertos en parte: en la PS3 real no cambia nada (el volcado de
-SELECT + R2 en el túnel de Dam traía la marca en 100 de 109 dibujos y la
-captura del RSX seguía con las grietas). RPCS3 también lo ignora. La
-cobertura se emula en la HLE, ensanchando los triángulos (`aa_grow` en
-src/rsp/gfx/rdp.c), que además sirve a cualquier escala interna.
+cobertura cae dentro del triángulo; el RSX solo mira el centro. En las
+uniones en T (un vértice que queda una fracción de píxel fuera de la arista
+del vecino) se abren grietas por las que se ve lo de atrás: las «líneas
+azules» del túnel de Dam en GoldenEye son el borrado azul que asoma por
+ellas (medido con `salsa64-run --ares` en dos volcados de ares: grietas de
+0,26 a ~1,1 px entre dibujos del piso y de la orilla, G_RM_AA_ZB_OPA_SURF;
+la consola no las tiene).
+
+- `POLYGON_SMOOTH_ENABLE` (método 0x1838 del NV40,
+  `rsxSetPolygonSmoothEnable`), 2026-10-12: en la PS3 real no cambia nada;
+  RPCS3 también lo ignora.
+- Ensanchar los triángulos en la HLE (`aa_grow`, 9c2ee06): tapaba las
+  grietas en la PS3 real, pero a escala interna alta engordaba todos los
+  bordes y los polígonos se encimaban (Zelda, los modelos de GoldenEye); se
+  quitó en 4e35681.
+- **Aristas como líneas** (2026-10-13, `rsxkit_draw.edges`): en los dibujos
+  opacos con AA_EN (sin calcomanías), antes de los triángulos se dibujan
+  sus aristas con el modo de polígono LINE y el mismo estado; los
+  triángulos pintan encima de lo que cubren y las líneas quedan solo en
+  las grietas. Dos detalles medidos en el rasterizador del host, que hace
+  lo mismo (`raster.c`, `draw_edges`): la z de un píxel de línea es la del
+  punto de la arista, no la del centro del píxel, y con LEQUAL le ganaba
+  al relleno en las tiras finas (las lámparas del túnel salían oscuras):
+  las líneas van con desplazamiento de polígono hacia atrás
+  (`rsxSetPolygonOffsetLineEnable`). Con factor 1 y 2 unidades todavía le
+  ganaban a piezas vecinas casi coplanares ya dibujadas (se comían el
+  blanco del ojo de Banjo); con factor 8 y 64 unidades no, y las grietas
+  se siguen tapando porque lo que hay detrás está lejos (en una escena de
+  Banjo los píxeles que cambian bajan de 2263 a 1269). Y el ancho: con 1 px
+  quedaban tiras de ~1 px entre aristas casi paralelas (32 de 170 píxeles
+  en el segundo volcado); con 1,5 px de la N64 no queda ninguna en los dos
+  volcados, a costa de 0,1–0,2 dB por bordes algo más gruesos. El ancho va
+  en píxeles de la N64 (1,5 × la escala de la superficie, en el método
+  0x3B8 del NV40, punto fijo 6.3, que PSL1GHT no expone), así que tapa lo
+  mismo a cualquier escala interna. GoldenEye lleva aristas en 54 de sus
+  72 dibujos por cuadro.
+- **En la PS3 real (paquete «Salsa64 aristas 2», 2026-10-13): regresión.**
+  En los modelos «los polígonos superan su límite y se superponen,
+  generando picos en todas las uniones», lo mismo que con `aa_grow`. A
+  escala interna alta 1,5 px de la N64 son ~7,5 px de la superficie a 5×,
+  y las líneas sobresalen de los vértices y engordan las siluetas de los
+  modelos con AA; el host a 1× no lo mostraba. Queda apagada por omisión
+  (`aristas-aa` en `dev_hdd0/salsa64` la enciende; `SALSA64_AA_EDGES=1` en
+  el host) para seguir probando alternativas que no toquen las siluetas.
 
 ## Fragment programs de posprocesado con cgcomp (2026-10-13, filtros CRT)
 

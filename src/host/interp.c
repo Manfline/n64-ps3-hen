@@ -97,7 +97,7 @@ static struct {
 	uint64_t v_loaded, v_found, v_matched, groups, groups_found, groups_moved, by_content;
 	uint64_t ns_build, ns_pair, ns_prev, vm_tasks;  /* tiempo de vmatch (host) */
 	uint64_t jumped, deformed, reordered, flat, atomic, kept, why[VMATCH_WHY_COUNT];
-	bool base_final, like_rsx;
+	bool base_final;
 	uint64_t out_vtx, out_matched, out_tasks;
 	uint64_t sad_evals, sad_blocks, searches;
 	double sum_psnr[8], sum_bad[8], sum_psnr_low[8], sum_bad_low[8];
@@ -144,8 +144,6 @@ void interp_init(const struct interp_opts *o)
 	/* Como la PS3 (src/rdp/rdp.c, interp_draw): el intermedio se dibuja
 	 * sobre el cuadro final, no sobre lo que había antes de la tarea. */
 	st.base_final = getenv("SALSA64_INTERP_BASE_FINAL") != NULL;
-	st.like_rsx = getenv("SALSA64_INTERP_COMO_RSX") != NULL;
-	raster_clip_all = st.like_rsx;
 	st.on = true;
 }
 
@@ -356,10 +354,8 @@ static void draw_variant(const struct gfx_job *job, const struct gfx_result *res
 		struct gfx_vertex *m = &st.mod[i];
 		float k = extrap ? -t : 1.0f - t;
 		*m = cur[i];
-		/* Para raster_clip_w: se recortan los triángulos que en el cuadro de
-		 * verdad estaban enteros delante; con SALSA64_INTERP_COMO_RSX todos,
-		 * como el RSX en la PS3 (src/host/raster.c, draw_triangle_clip). */
-		m->pad = st.like_rsx || cur[i].w > 1e-3f;
+		/* El rasterizador recorta en w > 0 como el RSX (raster.c,
+		 * draw_clipped), en los cuadros de verdad y en los intermedios. */
 		m->x = cur[i].x + (p[0] - cur[i].x) * k;
 		m->y = cur[i].y + (p[1] - cur[i].y) * k;
 		m->w = cur[i].w + (p[3] - cur[i].w) * k;
@@ -376,9 +372,7 @@ static void draw_variant(const struct gfx_job *job, const struct gfx_result *res
 	raster_state_restore(st.base_final ? st.after : st.before);
 	bool tr = raster_trace_fb;
 	raster_trace_fb = false;
-	raster_clip_w = true;
 	raster_task(&j2, res);
-	raster_clip_w = false;
 	raster_trace_fb = tr;
 	grab(target, out);
 	raster_state_restore(st.after);

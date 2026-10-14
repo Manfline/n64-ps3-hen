@@ -68,6 +68,7 @@ struct salsa64_pif {
 	struct salsa64_pad pads[SALSA64_PIF_PORTS];
 	int8_t handshake[SALSA64_PIF_CHANNELS];  /* posición del byte TX de cada canal, -1 si no hay */
 	uint8_t parsed;                          /* hay intercambios listos para ejecutar */
+	bool challenge6105;                      /* el CIC del cartucho es el 6105: la PIF contesta su desafío */
 	uint16_t held[SALSA64_PIF_PORTS];        /* recién pulsados sin entregar todavía */
 	/* Lo entregado al juego (para el log del frontend): la última
 	 * respuesta de estado de cada puerto y cuántas van. */

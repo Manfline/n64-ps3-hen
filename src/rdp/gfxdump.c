@@ -100,9 +100,10 @@ uint32_t gfx_dump_build(const struct gfx_dump_src *s, const struct gfx_dump_work
 		if (w->tgt[k]) {
 			const struct gfx_tex *t = w->tgt[k];
 			memset(tex + at, 0, pad);
-			if (s->rdram)
-				rdp_decode_rgba16(s->rdram, s->rdram_size, t->src_addr, t->src_pitch, t->width, t->height,
-						  tex + at, t->pitch);
+			if (s->rdram)  /* con src_siz 1, las I8 de un destino de 8 bits (las sombras de Conker) */
+				(t->src_siz == 1u ? rdp_decode_i8 : rdp_decode_rgba16)(s->rdram, s->rdram_size, t->src_addr,
+										      t->src_pitch, t->width, t->height,
+										      tex + at, t->pitch);
 		} else {
 			memcpy(tex + at, s->cache + w->src[k], w->len[k]);
 			memset(tex + at + w->len[k], 0, pad - w->len[k]);

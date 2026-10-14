@@ -1075,7 +1075,8 @@ cp tools/interp-index.html build/interp/index.html
 - `SALSA64_INTERP_BASE_FINAL=1` dibuja los intermedios del host sobre el
   cuadro final (como la PS3), `SALSA64_INTERP_T0=1` agrega `g0-T.ppm` (todo
   en las posiciones de antes: debería dar el cuadro anterior),
-  `SALSA64_INTERP_COMO_RSX=1` recorta todo en w > 0 como el RSX,
+  el rasterizador del host recorta siempre en w > 0 como el RSX (desde
+  main cd58563; antes, `SALSA64_INTERP_COMO_RSX=1`),
   `SALSA64_INTERP_GRUPOS=1` vuelca cada grupo, su pareja y el motivo
   (`grupos-T.txt`), `SALSA64_INTERP_SIN_MALLA=1` apaga `vmatch_atomic` y
   `SALSA64_INTERP_VOLCAR=1` las tareas 20 y 21 para

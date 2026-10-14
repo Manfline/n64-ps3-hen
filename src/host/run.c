@@ -107,6 +107,7 @@
 
 #include "../../tests/roms/src/audiotest/tone.h"
 #include "../../tests/roms/src/gfxtest/expect.h"
+#include "ares.h"
 #include "core/boot.h"
 #include "core/endian.h"
 #include "core/state.h"
@@ -1506,6 +1507,14 @@ static void gfx_summary(void)
 		fprintf(stderr, "salsa64-run: gfx: framebuffer: %u copias a la RDRAM, %u destinos cebados; texturas desde un "
 			"destino: %u de su imagen, %u de la RDRAM; %u sin decodificar en la HLE (%.1f por tarea), %u de ellas "
 			"decodificadas por el rasterizador\n", rb, pr, trsx, trd, s->tex_target, s->tex_target / n, tdec);
+		uint32_t dr, de, dt;
+		raster_edge_stats(&dr, &de, &dt);
+		fprintf(stderr, "salsa64-run: gfx: aristas de los dibujos con AA: %.1f de %.1f dibujos por tarea (%.0f "
+			"triángulos)%s\n", de / n, dr / n, dt / n, raster_aa_edges ? ", encendidas" : ", apagadas");
+		uint32_t d8, t8r, t8m;
+		raster_8bit_stats(&d8, &t8r, &t8m);
+		fprintf(stderr, "salsa64-run: gfx: imágenes de 8 bits: %u dibujos; texturas I8 de ellas: %u de su imagen, %u "
+			"de la RDRAM\n", d8, t8r, t8m);
 	}
 	if (gfx_late.tear)
 		fprintf(stderr, "salsa64-run: gfx: %u tareas comparadas entre el arranque y el fin, %u cambiaron\n",
@@ -2218,7 +2227,8 @@ static void usage(FILE *out)
 	      "      --gfxtest-check   verificar la imagen de la HLE con los puntos de gfxtest\n"
 	      "      --trace-rsp N     mostrar las primeras N tareas del RSP\n"
 	      "      --trace-audio N   opcodes de la lista de audio de las primeras N tareas de audio\n"
-	      "      --trace-vi N      mostrar la imagen del VI en los últimos N campos\n"
+	      "      --trace-vi N      mostrar la imagen del VI en los últimos N campos (o «sin imagen» con\n"
+	      "                        los registros que la apagan)\n"
 	      "      --trace-fb        efectos de framebuffer: dibujos que leen un destino y, con el\n"
 	      "                        build -DSALSA64_WATCH_MEM, accesos del CPU a los destinos (con --gfx-frame)\n"
 	      "      --audio-wav ARCHIVO  al terminar, guardar en WAV lo que salió por el AI\n"
@@ -2226,6 +2236,8 @@ static void usage(FILE *out)
 	      "      --raster-dump F   dibujar un volcado de la HLE de la PS3 (gfxdump.bin; o una tarea\n"
 	      "                        de la caja negra: caja.s4bb[:TAREA], por omisión la más nueva) en\n"
 	      "                        --gfx-frame y salir (sin ROM)\n"
+	      "      --ares [...] RDRAM  (primera opción) comparar la HLE con un volcado de la RDRAM\n"
+	      "                        de ares, sin ROM (salsa64-run --ares --help)\n"
 	      "      --lle[=auto|all]  RSP a bajo nivel: el microcódigo real para lo que no tiene\n"
 	      "                        HLE (auto) o para todo (all); el RDP consume sus comandos\n"
 	      "      --lle-speed F     instrucciones del RSP por ciclo del CPU (nominal 0,667)\n"
@@ -2305,6 +2317,8 @@ int main(int argc, char **argv)
 	uint32_t frame_every = 0;
 	struct interp_opts iopt = { .k = 3, .max_disp = 120.0f, .block = 8, .range = 8 };
 
+	if (argc > 1 && !strcmp(argv[1], "--ares"))
+		return ares_main(argc - 1, argv + 1);
 	while ((c = getopt_long(argc, argv, "c:u:f:qrh", opts, NULL)) != -1) {
 		switch (c) {
 		case 'c': max_cycles = strtoull(optarg, NULL, 0); cycles_set = true; break;
@@ -2456,6 +2470,10 @@ int main(int argc, char **argv)
 	 * SALSA64_FBFX=0 los apaga, 1 solo render a textura, 2 todo. */
 	if (getenv("SALSA64_FBFX"))
 		raster_fbfx = atoi(getenv("SALSA64_FBFX"));
+	if (getenv("SALSA64_AA_EDGES"))
+		raster_aa_edges = atoi(getenv("SALSA64_AA_EDGES")) != 0;
+	if (getenv("SALSA64_AA_EDGE_OFFSET"))
+		sscanf(getenv("SALSA64_AA_EDGE_OFFSET"), "%f,%f", &raster_edge_factor, &raster_edge_units);
 	const struct salsa64_gfx_sink sink = { NULL, gfx_acquire, gfx_done };
 	n64.bus.rdram_written = rdram_written;
 	salsa64_gfx_sync_init(&gfx_sync, &gfx_state, &n64.bus, &sink);
@@ -2623,6 +2641,11 @@ int main(int argc, char **argv)
 				fprintf(stderr, "campo %u: origen %06x %ux%u stride %u bpp %u (V_VIDEO %08x Y_SCALE %08x)\n",
 					n64.bus.vi.fields, f.origin, f.width, f.height, f.stride, f.bpp,
 					n64.bus.vi.regs[SALSA64_VI_V_VIDEO], n64.bus.vi.regs[SALSA64_VI_Y_SCALE]);
+			else if (trace_vi)
+				fprintf(stderr, "campo %u: sin imagen (CONTROL %08x ORIGIN %06x WIDTH %u H_VIDEO %08x V_VIDEO %08x)\n",
+					n64.bus.vi.fields, n64.bus.vi.regs[SALSA64_VI_CONTROL],
+					n64.bus.vi.regs[SALSA64_VI_ORIGIN] & 0xFFFFFF, n64.bus.vi.regs[SALSA64_VI_WIDTH],
+					n64.bus.vi.regs[SALSA64_VI_H_VIDEO], n64.bus.vi.regs[SALSA64_VI_V_VIDEO]);
 		} else if (pads.n || pokes.n || gfx.raster || state_saves.n || stop_field) {
 			/* Con controles programados, campo por campo: el control cambia
 			 * justo al empezar uno. Con el rasterizador también, para darle

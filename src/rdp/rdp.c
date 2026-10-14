@@ -196,6 +196,7 @@ static struct {
 	uint32_t scratch_w, scratch_h, scratch_bytes;
 	uint32_t scratch_scale;      /* escala de la superficie copiada (la del scratch) */
 	int scratch_slot;            /* ranura copiada en esta tarea, o -1 */
+	struct rdp_box scratch_dirty;  /* lo dibujado en esa ranura después de copiarla */
 	uint32_t ppe_tex_off;        /* arena de la tarea en traducción: hasta dónde está ocupado */
 	struct depth depths[MAX_DEPTHS];
 	int bound_t;                 /* ranura ligada, o -1 */
@@ -206,6 +207,7 @@ static struct {
 	struct salsa64_rdp_tb tb;
 	/* Efectos de framebuffer (docs/framebuffer.md). */
 	int fbfx;                    /* 0 apagado, 1 render a textura, 2 también copias */
+	bool aa_edges;               /* salsa64_rdp_aa_edges */
 	uint8_t *rdram;              /* la RDRAM emulada (NULL: sin copias ni cebado) */
 	uint32_t rdram_size;
 	void (*wake)(void);          /* despierta al hilo de presentación */
@@ -255,7 +257,7 @@ static struct {
 	 * 6 primeras tareas con copias tras 10 sin ellas (abrir una pausa),
 	 * hasta 3 veces por corrida. */
 	uint32_t quiet_tasks, trace_left, trace_events;
-	struct { int slot; char how[48]; } last_get;  /* qué hizo get_target (traza) */
+	struct { int slot; bool fresh; char how[48]; } last_get;  /* qué hizo get_target (traza); fresh: superficie nueva */
 	/* Lo último presentado, para repetirlo en una pausa
 	 * (salsa64_rdp_present_again); surf NULL: nada que repetir. slot, y0,
 	 * pw y ph son la región sin recortar, para repetirla con otra vista o
@@ -367,6 +369,7 @@ int salsa64_rdp_init(uint32_t scale)
 	rdp.rb = rdp.cache + CACHE_BYTES;
 	rdp.rb_off = rdp.cache_off + CACHE_BYTES;
 	rdp.fbfx = 2;
+	rdp.aa_edges = false;  /* experimental: engordaba los modelos en la PS3 */
 	rdp.ready = true;
 	return RSXKIT_OK;
 }
@@ -407,6 +410,11 @@ int salsa64_rdp_interp(int mode, float t)
 	if (rdp.interp.mode != SALSA64_INTERP_FIELDS)
 		rdp.interp.protect = 0;
 	return RSXKIT_OK;
+}
+
+void salsa64_rdp_aa_edges(bool on)
+{
+	rdp.aa_edges = on;
 }
 
 void salsa64_rdp_last_present(int *slot, uint32_t *age, uint32_t *addr)
@@ -912,6 +920,7 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
 {
 	bool fresh;
 	rdp.last_get.slot = -1;
+	rdp.last_get.fresh = false;
 	/* Una color image imposible (la HLE la sacó de un comando mal
 	 * interpretado: Zelda al abrir la pausa manda anchos de 1495 y 3770) no
 	 * toca la tabla: reciclaría una ranura buena para nada. */
@@ -930,6 +939,7 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
 	}
 	int i = rdp_targets_get(&rdp.tg, addr, width, siz, min_lh, &fresh);
 	rdp.last_get.slot = i;
+	rdp.last_get.fresh = fresh;
 	if (!fresh) {
 		/* Sin dibujar desde hace tareas: lo que vale está en la RDRAM. */
 		bool stale = rdp.tg.task - rdp.tg.t[i].last_task > RDP_TARGETS_FRESH;
@@ -1082,11 +1092,14 @@ static void zclear(const struct gfx_zclear *z)
 static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_texture *t, bool *bound)
 {
 	*bound = false;
-	if (rdp.fbfx < 1 || !gt->src_addr || gt->src_siz != 2u)
+	/* De 16 bits, o una I8 de una color image de 8 bits que la HLE dejó
+	 * para leer de ahí (las otras de 8 bits no se leen igual del RSX). */
+	uint32_t bpp = gt->src_siz == 2u ? 2 : gt->src_siz == 1u && gt->where == GFX_TEX_TARGET ? 1 : 0;
+	if (rdp.fbfx < 1 || !gt->src_addr || !bpp)
 		return false;
 	int slot;
 	uint32_t x0, y0;
-	enum rdp_texsrc src = rdp_targets_texture(&rdp.tg, gt->src_addr, gt->src_pitch, 2, cur, &slot, &x0, &y0);
+	enum rdp_texsrc src = rdp_targets_texture(&rdp.tg, gt->src_addr, gt->src_pitch, bpp, cur, &slot, &x0, &y0);
 	if ((src != RDP_TEXSRC_RSX && src != RDP_TEXSRC_SELF) || !rdp.surf[slot])
 		return false;
 	const struct rdp_target *tg = &rdp.tg.t[slot];
@@ -1101,7 +1114,11 @@ static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_textur
 		 * está ahora (una por tarea; las franjas de Zelda leen cada una
 		 * filas que aún no reescribió). El scratch toma el tamaño, y con él
 		 * la escala, de la superficie copiada. */
-		if (rdp.scratch_slot != slot) {
+		/* Otra vez si desde la copia se dibujó donde lee la textura: Conker
+		 * usa la misma imagen de 8 bits para la sombra de cada personaje y
+		 * desenfoca cada silueta leyendo lo que acaba de dibujar. Las
+		 * franjas de Zelda leen filas que aún no reescribieron: una copia. */
+		if (rdp.scratch_slot != slot || rdp_box_overlaps(&rdp.scratch_dirty, x0, y0, x0 + gt->width, y0 + gt->height)) {
 			uint32_t w, h;
 			rsxkit_target_size(rdp.surf[slot], &w, &h);
 			if (rdp.scratch && (rdp.scratch_w != w || rdp.scratch_h != h))
@@ -1121,6 +1138,7 @@ static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_textur
 				return false;
 			rdp.bound_t = -1;  /* rsxkit_target_copy dejó ligado el scratch */
 			rdp.scratch_slot = slot;
+			memset(&rdp.scratch_dirty, 0, sizeof rdp.scratch_dirty);
 			rdp.scratch_scale = sc;
 			copied = true;
 		}
@@ -1139,6 +1157,8 @@ static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_textur
 	t->height = nt.height;
 	t->location = nt.location;
 	t->format = nt.format;
+	/* Una I8: la intensidad que el RDP escribió en la imagen es el rojo. */
+	t->remap = bpp == 1 ? RSXKIT_REMAP_RRRR : RSXKIT_REMAP_NONE;
 	t->wrap_s = RSXKIT_WRAP_CLAMP;
 	/* u recorre la fila entera del destino: la textura empieza en x0. */
 	t->xf[0] = map.xf0;
@@ -1189,8 +1209,12 @@ static bool texture_from_rdram(const struct gfx_tex *gt, struct set *s, rsxkit_t
 		return false;
 	}
 	uint64_t t0 = tb_now();
-	rdp_decode_rgba16(rdp.rdram, rdp.rdram_size, gt->src_addr, gt->src_pitch, gt->width, gt->height, s->tex + off,
-			  gt->pitch);
+	if (gt->src_siz == 1u)
+		rdp_decode_i8(rdp.rdram, rdp.rdram_size, gt->src_addr, gt->src_pitch, gt->width, gt->height, s->tex + off,
+			      gt->pitch);
+	else
+		rdp_decode_rgba16(rdp.rdram, rdp.rdram_size, gt->src_addr, gt->src_pitch, gt->width, gt->height,
+				  s->tex + off, gt->pitch);
 	rdp.tb.tex += tb_now() - t0;
 	rdp.ppe_tex_off = off + size;
 	t->offset = s->tex_off + off;
@@ -1225,6 +1249,20 @@ static bool to_rsxkit(const struct gfx_draw *g, struct set *s, int cur, rsxkit_d
 	d->alpha_ref = g->atest ? (g->aref ? g->aref : 1) : 0;
 	d->ntex = g->ntex > 2 ? 2 : g->ntex;
 	d->fog = g->fog;
+	/* Con AA_EN el RDP escribe los píxeles que el triángulo cubre en parte
+	 * y así tapa las grietas de las uniones en T (el piso del túnel de Dam
+	 * en GoldenEye: el borrado azul se veía por ellas); el RSX solo mira el
+	 * centro. Las aristas como líneas antes de los triángulos las tapan a
+	 * cualquier escala (docs/rsx-notes.md). Sin calcomanías: sus líneas no
+	 * llevarían el desplazamiento de polígono de la calcomanía. */
+	if (rdp.aa_edges && g->aa && !(g->depth & GFX_DEPTH_DECAL)) {
+		/* 1,5 píxeles de la N64 a la escala de la superficie, en octavos:
+		 * las grietas de los dos volcados de ares del túnel de Dam se tapan
+		 * desde 1,5 (con 1 quedaban tiras de ~1 px entre aristas casi
+		 * paralelas); medido con el rasterizador del host, raster.c. */
+		uint32_t sc = cur >= 0 && rdp.surf_scale[cur] ? rdp.surf_scale[cur] : 1;
+		d->edges = (uint8_t)(12u * sc > 255u ? 255u : 12u * sc);
+	}
 	d->nterms = g->nterms;
 	memcpy(d->factors, g->factors, sizeof d->factors);
 	for (int i = 0; i < 4; i++) {
@@ -1304,10 +1342,12 @@ static void readbacks_wanted(struct set *s, const struct gfx_result *res)
 		 * ancho 64) o, del ancho del VI, fuera de los framebuffers
 		 * recientes. */
 		uint32_t vi_w = rdp.vi_ring.n ? rdp.vi_ring.cur_width : 0;
-		uint32_t siz = c->c & 0xFF, fmt = (c->c >> 8) & 0xFF;
-		/* De 16 bits, o de 8 de intensidad (la cobertura que Zelda guarda
-		 * para su filtro; una CI8 no se puede reconstruir desde el RSX). */
-		if (c->op == GFX_OP_TARGET && (siz == 2u || (siz == 1u && fmt == 4u)) && c->b && c->b <= 640 &&
+		uint32_t siz = c->c & 0xFF;
+		/* De 16 bits, o de 8 (la cobertura que Zelda guarda para su filtro,
+		 * las máscaras de sombra de Conker): en una de 8 bits el RDP escribe
+		 * el rojo, sea cual sea el formato; Conker la declara CI y la lee
+		 * como I8. */
+		if (c->op == GFX_OP_TARGET && (siz == 2u || siz == 1u) && c->b && c->b <= 640 &&
 		    rdp.vi_ring.n && (c->b != vi_w || !rdp_vi_ring_covers(&rdp.vi_ring, c->a, c->b))) {
 			uint32_t k = 0;
 			while (k < s->rb_n && s->rb_addr[k] != c->a)
@@ -1429,6 +1469,30 @@ static void interp_task(struct set *s, const struct gfx_result *res)
 }
 
 /* Traduce la salida de la tarea n a comandos del RSX. */
+/* Borra con `color` el rectángulo (xa, ya)–(xb, yb) (píxeles lógicos) del
+ * destino `i`, como un FILLRECT del RDP, y lo cuenta como dibujado en la
+ * tarea. false si no hay nada que borrar o no se pudo ligar. */
+static bool tall_fill_target(int i, float xa, float ya, float xb, float yb, uint32_t color, bool drawn[RDP_TARGETS_MAX],
+			     struct rdp_box drawn_box[RDP_TARGETS_MAX])
+{
+	const struct rdp_target *t = &rdp.tg.t[i];
+	if (yb <= ya || xb <= xa || !rdp.surf[i] || !bind(i, NULL))
+		return false;
+	float rect[4] = { xa, ya, xb, yb };
+	rsxkit_clear(RSXKIT_CLEAR_COLOR, color, 0.0f, rect);
+	rdp_targets_drawn(&rdp.tg, i);
+	drawn[i] = true;
+	rdp.surf_gen[i] = ++rdp.gen_seq;
+	rdp.surf_dirty[i] = true;
+	struct rdp_box r = { 0, 0, 0, 0 };
+	const uint16_t all[4] = { 0, 0, (uint16_t)(t->lw * 4), (uint16_t)(t->lh * 4) };
+	rdp_box_add(&r, xa, ya, xb, yb, true, all, t->lw, t->lh);
+	rdp_box_union(&drawn_box[i], &r);
+	rdp_box_union(&rdp.tg.t[i].box, &r);
+	rdp.stats.tall_fills++;
+	return true;
+}
+
 static void translate(uint32_t n)
 {
 	uint64_t t0 = sysGetSystemTime(), tb0 = tb_now();
@@ -1472,6 +1536,17 @@ static void translate(uint32_t n)
 			bool is_tall = c->b && c->b <= 640 && rdp_targets_tall(c->b, lh) &&
 				       fills_only(s, off + c->size, res->cmd_bytes);
 			cur = is_tall ? -1 : get_target(c->a, c->b, (c->c >> 8) & 0xFF, siz, lh);
+			if (cur >= 0 && rdp.last_get.fresh) {
+				/* Un relleno de imagen alta anterior (rdp_targets_tall_note) que
+				 * este destino no vio: se cebó con la RDRAM, que no lo tiene. */
+				struct rdp_tall_rect pend[RDP_TALL_FILLS];
+				int np = rdp_targets_tall_pending(&rdp.tg, cur, &rdp.dma, pend);
+				for (int k = 0; k < np; k++)
+					if (tall_fill_target(cur, pend[k].x0, pend[k].y0, pend[k].x1, pend[k].y1, pend[k].color, drawn,
+							     drawn_box))
+						LOGN(20, "gfx: destino nuevo %06x/%u: relleno de imagen alta anterior (%.0f,%.0f)–(%.0f,%.0f)",
+						     c->a, c->b, pend[k].x0, pend[k].y0, pend[k].x1, pend[k].y1);
+			}
 			if (is_tall)
 				snprintf(rdp.last_get.how, sizeof rdp.last_get.how, "alta, rellenos repartidos");
 			tall.rows = is_tall ? lh : 0;
@@ -1513,23 +1588,11 @@ static void translate(uint32_t n)
 					ya = ya < 0.0f ? 0.0f : ya;
 					yb = yb > (float)t->lh ? (float)t->lh : yb;
 					float xa = x0 < 0.0f ? 0.0f : x0, xb = x1 > (float)t->lw ? (float)t->lw : x1;
-					if (yb <= ya || xb <= xa || !rdp.surf[i])
-						continue;
-					if (!bind(i, NULL))
-						continue;
-					float rect[4] = { xa, ya, xb, yb };
-					rsxkit_clear(RSXKIT_CLEAR_COLOR, color, 0.0f, rect);
-					rdp_targets_drawn(&rdp.tg, i);
-					drawn[i] = true;
-					rdp.surf_gen[i] = ++rdp.gen_seq;
-					rdp.surf_dirty[i] = true;
-					struct rdp_box r = { 0, 0, 0, 0 };
-					const uint16_t all[4] = { 0, 0, (uint16_t)(t->lw * 4), (uint16_t)(t->lh * 4) };
-					rdp_box_add(&r, xa, ya, xb, yb, true, all, t->lw, t->lh);
-					rdp_box_union(&drawn_box[i], &r);
-					rdp_box_union(&rdp.tg.t[i].box, &r);
-					rdp.stats.tall_fills++;
+					tall_fill_target(i, xa, ya, xb, yb, color, drawn, drawn_box);
 				}
+				/* Y para los destinos que se creen después. */
+				rdp_targets_tall_note(&rdp.tg, tall.addr, tall.width, tall.bpp, tall.rows, x0, y0, x1, y1, color, slots,
+						      nin);
 				break;
 			}
 			if (cur < 0 || !g->h.b)
@@ -1592,9 +1655,13 @@ static void translate(uint32_t n)
 				rdp_box_add(&r, x0, y0, x1, y1, front, g->scissor, t->lw, t->lh);
 				rdp_box_union(&drawn_box[cur], &r);
 				rdp_box_union(&rdp.tg.t[cur].box, &r);
+				if (cur == rdp.scratch_slot)
+					rdp_box_union(&rdp.scratch_dirty, &r);
 			}
 			rsxkit_draw_triangles(&rd, g->h.a, g->h.b);
 			rdp.stats.draws++;
+			if (rd.edges)
+				rdp.stats.draws_edges++;
 			if (g->nterms)
 				rdp.stats.draws_generated++;
 			rdp.stats.triangles += g->h.b / 3;
@@ -1727,7 +1794,7 @@ static void translate(uint32_t n)
 		const struct rdp_target *t = &rdp.tg.t[i];
 		uint32_t rows = drawn_box[i].y1 < t->lh ? drawn_box[i].y1 : t->lh;
 		uint32_t pitch = (t->lw * 2 + 63) & ~63u;
-		if (!drawn[i] || sync_rb[i] || !rows || t->presented || (t->bpp != 2 && (t->bpp != 1 || t->fmt != 4)) ||
+		if (!drawn[i] || sync_rb[i] || !rows || t->presented || (t->bpp != 2 && t->bpp != 1) ||
 		    t->width == rdp.tg.vi_width || pitch * rows > MIRROR_BYTES ||
 		    t->addr + t->width * t->bpp * rows > rdp.rdram_size)
 			continue;

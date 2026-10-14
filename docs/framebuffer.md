@@ -219,6 +219,18 @@ un tramo que un DMA tocó desde que T empezó**: el dato del DMA es más nuevo.
 Un DMA anterior a la tarea sí se pisa, como en la N64. Las escrituras del
 propio CPU no se siguen (solo con el build `SALSA64_WATCH_MEM`).
 
+**Rellenos de imagen alta antes de que existan los destinos.** Star Fox 64
+limpia sus tres framebuffers con un solo FILLRECT de 320 × 720 en la primera
+tarea gráfica (campo 3); los destinos nacen en las tres siguientes. El
+reparto a los destinos existentes (`rdp_targets_inside`) no los alcanza, y
+al cebarse con la RDRAM —donde el RDP de la HLE no escribió el relleno y
+quedan los datos del DMA de arranque— el borde de 8 px que el juego nunca
+vuelve a tocar salía con ruido durante todo el logo. Cada relleno se anota
+(`rdp_targets_tall_note`) y un destino que nace después y cae dentro lo recibe
+una vez (`rdp_targets_tall_pending`), salvo que hayan pasado 32 tareas o que
+un DMA haya tocado su memoria desde el relleno (el anillo de arriba): el dato
+del DMA es más nuevo.
+
 Las imágenes chicas (iconos, pantallas) no se esperan: al terminar la tarea
 que las dibujó se encola una **copia espejo** (solo las filas que llegaron
 las tijeras, hasta 64 KB, cuatro en vuelo) y se convierte a la RDRAM en
@@ -314,6 +326,34 @@ del CPU), 1920 texels cada una; y ninguna en
 gfxtest (1 textura por tarea, siempre de su destino; en RPCS3 con el
 frontend, 45 del RSX y 0 en el PPE). En las escenas medidas de Banjo, SM64,
 Mario Kart, GoldenEye y Conker no hay texturas desde un destino.
+
+**Imágenes de 8 bits (2026-10-13, sombras de Conker).** Conker dibuja la
+silueta de cada personaje en una color image de 64 × 64 de 8 bits
+(declarada CI), la desenfoca con dos texrects que la releen como I8 y la
+usa en el piso como alfa de la sombra (α = shadeα · (1 − T0a)). En una
+imagen de 8 bits el RDP escribe el rojo, sea cual sea su formato. La HLE
+lleva también esas imágenes en `fbimg` (con `bpp`) y una I8 sin paleta que
+cae en una de ellas sale como `GFX_TEX_TARGET` con `src_siz` 1; el
+consumidor la lee de su destino con el rojo en los cuatro canales
+(`rsxkit_texture.remap` = `RSXKIT_REMAP_RRRR`) o, si no puede, la decodifica
+de la RDRAM con `rdp_decode_i8`. Las imágenes de 8 bits de cualquier
+formato vuelven a la RDRAM como las de intensidad (antes solo con
+`G_IM_FMT_I`; la CI8 de Conker nunca volvía). Antes, la HLE decodificaba
+esas I8 de la RDRAM al procesar la lista, antes de que el RSX dibujara la
+silueta: el desenfoque copiaba la máscara vieja encima y la sombra salía
+como un cuadro oscuro (o nada, según lo que hubiera en la RDRAM). Y como
+la misma imagen sirve para la sombra de cada personaje de la tarea, la
+copia del destino que se está dibujando (`RDP_TEXSRC_SELF`, el scratch) ya
+no es una por tarea: se rehace si desde la copia se dibujó donde lee la
+textura (`scratch_dirty`); las franjas de Zelda, que leen filas que aún no
+reescribieron, siguen con una. Medido contra la consola con `salsa64-run
+--ares --pasadas 2` en ocho volcados de ares: de 20,8–25,8 dB en 4 × 4 a
+23,5–30,4, igual o mejor que con la máscara que dejó la consola en la
+RDRAM. Justo después de la imagen (64 filas) Conker guarda el viewport del
+cuadro: las copias a la RDRAM van acotadas a lo que dibujaron los
+vértices, no a las tijeras (65). En RPCS3 la repetición del cuadro sale
+con el piso negro cuando hay dos copias del scratch en la misma tarea (con
+una sola, bien; el rasterizador del host, bien): falta verlo en la PS3.
 
 **Costo en el SPE 0.** Texto +2,1 KB y la tabla 128 bytes. Para no
 comerse la pila, los fondos de S2DEX se compilan con `-Os` (−0,9 KB de

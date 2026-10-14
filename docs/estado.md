@@ -23,6 +23,243 @@ destellos. Detalle, pendientes y la lista de commits para la v0.2.6
 (`--gc-sections` primero) en docs/interpolacion.md, «Estado al
 2026-10-13 y lo que falta».
 
+## 2026-10-13 — F-Zero X arranca (bus abierto del PI) y estado de arranque medido en ares (rama `pensive-germain-4c2e2b`)
+
+- **F-Zero X** ya llega al título («PUSH START»), con 342 tareas gráficas y 569
+  de audio en 10 s. No era el arranque 6106: el juego sondea el 64DD leyendo
+  `0x05000508` (ASIC_STATUS) y, con 0, creía que había uno y se quedaba
+  esperando al hilo del manejador del disco (Leo) para siempre. En ares, el
+  espacio del PI sin dispositivo (0x05000000–0x07FFFFFF y desde 0x1FD00000)
+  lee la mitad baja de la dirección repetida (`0x05080508`). Implementado en
+  `salsa64_bus_read32`. Las lecturas de 0x04900000–0x04FFFFFF siguen dando 0.
+- Arranque medido en ares (IPL2 e IPL3 reales) en el punto de entrada, con
+  SM64 (6102), Banjo-Kazooie (6103), Perfect Dark y Banjo-Tooie (6105) y
+  F-Zero X (6106): `s7 = 1` y `osVersion = 1` con todos (antes 0); 6106 deja
+  DMEM/IMEM en 0xFF con 0x17D8 en IMEM 0x000 y `osCicId` = 0x17D8; 6105 deja
+  DMEM e IMEM enteras en 0xA4002000. (No reproducido: s6 = 0xA0000200 con el
+  6105, SP_MEM_ADDR/DRAM_ADDR/RD_LEN/WR_LEN/semáforo del SP con el 6105, los
+  registros temporales, y la copia de la imagen del IPL3 6106 en RDRAM
+  0x000–0x2BC, que no está tal cual en la ROM.) Nueve escenas del host
+  (PD, Majora, SM64, MK64, GE, BK, Conker, DKR, DK64) idénticas antes y después.
+- **Banjo-Tooie** (y su protección): la RDRAM de entrada ya coincidía con ares
+  byte a byte, no era el arranque. Su cargador de datos los descifra con una
+  clave de 14 bytes que sale del **desafío del CIC 6105 por la PIF** (al
+  escribir la PIF RAM con el bit 0x02 en el byte 63, los 30 nibbles de los
+  bytes 48–62 se reemplazan por la respuesta). Nuestra PIF no contestaba:
+  descifraba basura, un tamaño salía negativo (`0xFFFB…`), la reserva de memoria
+  devolvía NULL y el hilo principal caía por TLBL. Implementado en
+  `src/core/pif.c` (`cic6105_challenge`, solo con CIC 6105): autómata de dos
+  tablas con clave inicial 0xB, validado nibble por nibble (150) con 5 pares
+  desafío/respuesta capturados en ares (prueba `pif_cic6105_challenge`). Una
+  entrada de la segunda tabla (0xE → 0xC) no coincidía con lo que se
+  recordaba de otras fuentes; se fijó con los datos medidos. Ahora Banjo-Tooie
+  dibuja la intro (296 tareas gráficas, 470 de audio en 16 s; Dolby). PD, Conker, DK64, Majora, SM64 y
+  F-Zero X dan el mismo cuadro antes y después.
+- **Falta probar:** F-Zero X y Banjo-Tooie en la PS3 (regresión v0.2.6); Banjo-Tooie
+  jugando más allá de la intro (otras protecciones de Rare, ANTI_TAMPER) y con
+  guardado EEPROM 16K; el desafío en Perfect Dark y Conker (no lo pidieron en
+  las pruebas del host); s6 = 0xA0000200 y los registros del SP con el 6105
+  (no reproducidos, sin efecto visto).
+- Método útil: contar las reservas del asignador del juego (ares con punto de
+  parada en 0x8001ACCC y el host con paso de 1 ciclo) y seguir el primer
+  argumento distinto hasta el dato mal descifrado. Ojo: los puntos de parada
+  de ares solo saltan en entradas de función, no en mitad de un bloque.
+- Trampa del GDB de ares: tras `\x03` llegan dos paquetes de parada; hay que
+  drenar el segundo o cada respuesta llega desfasada una petición (los volcados
+  de memoria salen corridos un bloque).
+
+## 2026-10-13 — Star Fox 64: el ruido del logo inicial era el relleno de 320 × 720 que llegó antes de que hubiera framebuffers (rama `elastic-elbakyan-3dd3f0`)
+
+El censo de v0.2.0 anotaba «falla breve en el logo inicial» y el autor la
+describió como ruido en la primera pantalla. Un volcado de ares (GDB-Server,
+cada ~0,3 s desde el arranque) muestra en la primera imagen ruido exacto: es
+la RAM baja (`VI_ORIGIN` 0x280) dibujada como imagen, pero **no es lo que
+sale**: con `VI_H_VIDEO` en 0 (libultra lo pone con `osViBlack`) el VI no
+muestra nada y la consola da negro; el volcado dibuja el origen sin mirar el
+área activa. Salsa64 hace lo mismo que la consola: en el host los campos 2–7
+traen `VI_CONTROL` 0x1300e, `VI_ORIGIN` 0x280 y `VI_H_VIDEO` 0, y
+`salsa64_vi_frame` devuelve «sin imagen» (el frontend presenta negro: la
+rama `m->f.width == 0` de `present_field` no copia nada de la RDRAM; prueba
+nueva en `test_vi.c`). `--trace-vi` del host ahora también anota esos campos
+(«sin imagen», con los registros).
+
+**Lo que sí sale mal** empieza en el campo 8, cuando el juego enciende el VI
+(`VI_H_VIDEO` 0x006C02EC, origen 0x38fa80) y dura hasta el cambio de escena
+(campo ~158), todo el logo de «Nintendo presents»: ruido de colores en el
+borde de 8 px (arriba y a los lados de las primeras ~32 filas) de la imagen
+del RSX. En el host se ve con `--gfx-frame` (8358 bytes distintos de cero en
+la HLE a partir del campo 8; en la consola esa memoria es `0x0001` en toda
+la pantalla); en RPCS3 no se reproduce (las superficies salen limpias), en
+la PS3 real es el «ruido tipo estática en la parte superior» que ya había
+reportado el autor tras 8c8e3cd.
+
+Causa (traza de tareas con `--trace-gfx` y `SALSA64_GFX_VERBOSE`):
+
+1. Entre los campos 1 y 2 el juego carga por DMA 20 KB de datos de la ROM
+   en `38fa80` (filas 1–32 del primer framebuffer).
+2. Campo 3, primera tarea gráfica: un FILLRECT de 320 × 720 sobre una color
+   image en `38f800` limpia los tres framebuffers seguidos (`38f800`,
+   `3b5000`, `3da800`), borde incluido. Todavía no existe ningún destino
+   (se crean en las tres tareas siguientes), y el reparto de rellenos de
+   imagen alta (`rdp_targets_inside`, sección «Star Fox 64 colgado a los 5 s»)
+   solo alcanza a los destinos existentes: el relleno se pierde.
+3. Campos 4, 5 y 6: nacen `3b5000`, `3da800` y `38f800`, cebados con la
+   RDRAM (`prime`), donde el RDP de la HLE nunca escribió el relleno y siguen
+   los datos del DMA. Cada cuadro solo limpia 8..312 × 8..232: el borde queda
+   con el ruido. En la consola el borde es negro porque el relleno sí está en
+   la RDRAM. El cambio de escena repite el relleno con los destinos ya
+   vivos: ahí sí se limpia (por eso el ruido era «breve»).
+
+Arreglo (`src/rdp/targets.[ch]`, `rdp.c`, `host/raster.c`): cada relleno de
+imagen alta se **anota** (`rdp_targets_tall_note`: imagen, rectángulo, color,
+tarea y los destinos que ya lo recibieron) y un destino que nace después y
+cae dentro (misma regla que `rdp_targets_inside`) lo recibe una sola vez al
+crearse (`rdp_targets_tall_pending`; antes de los dibujos de su tarea, y
+cuenta como dibujado, como cualquier dibujo de la tarea).
+Solo vale mientras no hayan pasado `RDP_TALL_FILL_TASKS` (32) tareas, no lo
+haya recibido ya ese destino y ningún DMA haya tocado su memoria desde el
+relleno (anillo de DMA; en la consola el DMA pasa por encima del relleno:
+manda el dato del DMA). Lo que no cambia: los destinos que ya existían (se
+reparte como antes), el cebado con la RDRAM de los destinos que nacen sin un
+relleno pendiente y la rama de copia de la RDRAM al presentar un origen sin
+destino (la usan los juegos que dibujan el framebuffer con el CPU; no se
+tocó: sin evidencia de un caso real, un criterio de «datos del juego»
+rompería esos).
+
+Pruebas: unitarias `targets_tall_pending` (entrega única, DMA posterior,
+DMA anterior, vigencia, otro ancho o dirección, rectángulo parcial),
+`raster_tall_fill_first` (el escenario de Star Fox con ruido de DMA en el
+primer framebuffer: el borde sale con el color del relleno; falla sin el
+arreglo) y `vi_frame` con `H_VIDEO` 0 (negro). Host: Star Fox 64 con la HLE
+(`--gfx-frame` cada campo del 8 al 14, y cada 20 hasta el 200): borde
+limpio en todos (antes 8358 bytes de ruido). Siete escenas de otros juegos
+comparadas con el árbol anterior (`--gfx-frame`, sin controles: SM64 en el
+campo 700; Banjo-Kazooie, Zelda OoT, Donkey Kong 64, Perfect Dark, GoldenEye
+y Mario Kart 64 en el 900), y Star Fox en el 400, salen idénticas byte a byte. RPCS3: el frontend entrega el
+relleno a los tres destinos al crearse (`gfx: destino nuevo …: relleno de
+imagen alta anterior`), la intro hasta el campo 400 se ve igual que la de
+ares (logo, «STARFOX» con las estrellas azules) y gfxtest pasa (42 de 42
+puntos). No se armó paquete: falta confirmarlo en la PS3 real.
+
+Observado y sin tocar: `prime` usa un solo búfer de cebado (`rdp.rb +
+RB_SLOTS * RB_SLOT`) y el RSX lo lee después (`rsxkit_target_fill` solo
+encola el blit); tres cebados seguidos (como estos) podrían ver, en la
+consola real, los datos del último. Con el relleno entregado la pantalla
+entera de cada uno se vuelve a borrar y no importa en este caso; en otro
+juego con relleno parcial sí podría.
+
+## 2026-10-13 — Sombras de Conker: render a textura de 8 bits (rama `suspicious-saha-fe2758`)
+
+En Salsa64 fallaban todas las sombras de Conker. Con ocho volcados de ares
+(`salsa64-run --ares --pasadas 2`, que corre la lista como dos cuadros
+seguidos para que lo que se lee por la RDRAM sea lo que copió el
+consumidor, como en la PS3) salió el mecanismo: la silueta de cada
+personaje se dibuja en una imagen de 64 × 64 de 8 bits declarada CI, se
+desenfoca releyéndola como I8 con dos texrects y el piso la usa como alfa
+de la sombra. Dos fallas: la HLE decodificaba esas I8 de la RDRAM antes de
+que el RSX dibujara la silueta (solo las RGBA16 se leían del destino), y
+`src/rdp` solo copiaba a la RDRAM las imágenes de 8 bits de intensidad. Y
+una tercera al arreglarlas: la copia del destino que se lee mientras se
+dibuja era una por tarea, y Conker reutiliza la imagen para cada
+personaje. Arreglo en la HLE (`fbimg` lleva las de 8 bits; una I8 que cae
+en una sale como `GFX_TEX_TARGET`), en `src/rdp` (la lee del destino con
+`RSXKIT_REMAP_RRRR`, o la decodifica con `rdp_decode_i8`; copia las de 8
+bits de cualquier formato; recopia el scratch si se dibujó donde se lee) y
+en el rasterizador del host (docs/framebuffer.md).
+
+- Contra la consola, 4 × 4: de 20,8–25,8 dB (como en la PS3) a 23,5–30,4,
+  igual o mejor que con la máscara que la propia consola dejó en la RDRAM.
+- Pila del SPE 0: holgura 1856 (main 1984; −128 bytes de texto).
+- De los juegos de Rare medidos en el host, solo Conker dibuja en
+  imágenes de 8 bits (3544 texturas I8 leídas de su imagen en 4000 campos
+  de la intro, ninguna de la RDRAM); DK64, Perfect Dark, Banjo-Kazooie y
+  GoldenEye no. Banjo-Tooie (no llega a dibujar en el host) y Diddy Kong
+  Racing (microcódigo sin HLE) no se pudieron medir.
+- RPCS3: gfxtest igual que main. La repetición del cuadro de Conker sale
+  con el piso negro cuando hay dos copias del scratch en la misma tarea
+  (con una, bien; en el host, bien).
+- **PS3 real («Salsa64 aristas 2»): las sombras de Conker funcionan.** El
+  piso negro era cosa de RPCS3.
+
+## 2026-10-13 — Líneas azules de GoldenEye: aristas de los dibujos con AA como líneas (rama `suspicious-saha-fe2758`)
+
+Con dos volcados de ares del túnel de Dam (`salsa64-run --ares`): las
+líneas azules son el borrado azul que asoma por grietas de uniones en T
+entre triángulos del piso y de la orilla (0,26 a ~1,1 px, todos
+G_RM_AA_ZB_OPA_SURF). La consola las tapa porque con AA_EN escribe los
+píxeles cubiertos en parte; el RSX y el rasterizador del host solo miran el
+centro. Arreglo en el RSX (`rsxkit_draw.edges`, `src/rdp/rdp.c`): en los
+dibujos opacos con AA_EN (sin calcomanías), antes de los triángulos, sus
+aristas como líneas (modo de polígono LINE) de 1,5 píxeles de la N64 a la
+escala de la superficie, con desplazamiento de polígono hacia atrás
+(factor 8, 64 unidades). El rasterizador del host hace lo mismo y con él se
+eligieron ancho y desplazamiento contra la consola (docs/rsx-notes.md):
+
+- Grietas: el túnel, 20 de 20 píxeles tapados; la orilla, 170 de 170 (con
+  1 px quedaban 32). PSNR en 4×4: 29,97 → 29,66 dB y 33,04 → 33,32.
+- Las líneas engordan las siluetas contra el fondo hasta ¾ de píxel; con
+  menos desplazamiento se comían piezas casi coplanares (el ojo de Banjo).
+  En las 7 escenas del host cambian 82 de 105 imágenes, en los bordes
+  (360–1350 píxeles por imagen); Zelda casi no usa el modo (0,3 dibujos
+  por tarea).
+- Dibujos con aristas por tarea: GoldenEye 64 de 154, Conker 82 de 171,
+  Perfect Dark 39 de 108, Banjo 32 de 77, Mario Kart 64 29 de 113, Super
+  Mario 64 16,5 de 52. En el RSX es una llamada más por dibujo AA con el
+  mismo arreglo de vértices.
+- RPCS3 no sirve para verlo: su backend Vulkan no aplica el modo de
+  polígono (el replay del túnel sale igual con y sin aristas). gfxtest en
+  RPCS3 da la misma imagen que main. **Falta la PS3 real**: el ancho va en
+  el método 0x3B8 del NV40 (punto fijo 6.3, como lo decodifica RPCS3), que
+  PSL1GHT no expone.
+- **PS3 real («Salsa64 aristas 2»): regresión.** En los modelos los
+  polígonos se superponen y salen picos en las uniones, como con
+  `aa_grow`: a 5× el ancho es ~7,5 px de la superficie y las líneas
+  engordan las siluetas. Quedan apagadas por omisión; `aristas-aa` en
+  `dev_hdd0/salsa64` las enciende para seguir probando.
+- `--ares --gfxdump` guarda la salida de la HLE de cada lista como el
+  volcado de la PS3 (big-endian): `tools/gfxdump.py`, `--raster-dump` y
+  `embedded` = `dump:<nombre>` en el RSX la leen. Así un cuadro de ares se
+  puede repetir en la consola.
+
+## 2026-10-13 — Comparar un cuadro con ares: `salsa64-run --ares` (rama `suspicious-saha-fe2758`)
+
+`salsa64-run --ares volcado-rdram.bin` (y `tools/ares-comparar.sh`) dibuja
+con la HLE y el rasterizador del host las tareas gráficas que quedaron en
+un volcado de la RDRAM exportado por ares y compara cada búfer de imagen
+que dibujan con el que dibujó ares: el mismo cuadro con los mismos datos,
+sin llegar a la misma escena en los dos emuladores (docs/referencia-ares.md).
+Para eso el rasterizador del host dibuja a 8 bits en ese modo
+(`raster_q5`) y ahora recorta contra w > 0 como el RSX: antes descartaba
+entero el triángulo con un vértice detrás de la cámara. En las 105 imágenes
+de las 7 escenas del host solo cambian 4 cuadros de la intro de Perfect
+Dark (2500–2600): aparecen los muros pegados a la cámara, como en el RSX y
+en GLide64.
+
+Primer uso, intro de Pokémon Snap (F3DEX2 .NoN; seis volcados, tres
+cuadros distintos; en cada uno, una de las dos listas es la del cuadro que
+el CPU arma y dibuja en 000000):
+
+- La HLE dibuja la escena entera como la consola: PSNR 33,8–35,4 dB en
+  promedios de 4×4 (24–31 por píxel, por el tramado de la consola) y
+  diferencia media de +0,1 a +2,2/255 por canal. Ninguna geometría falta ni
+  sobra.
+- **Umbral de alfa de las hojas.** Usan G_RM_AA_ZB_TEX_EDGE con
+  G_AC_THRESHOLD y el color de mezcla con alfa 0. `blend_state`
+  (src/rsp/gfx/rdp.c) toma el umbral del color de mezcla (1/255) e ignora
+  CVG_X_ALPHA, y la consola no escribe los píxeles con α·cobertura = 0
+  (α < 32 con el píxel cubierto entero): la HLE deja las hojas medio texel
+  más gruesas y tapa huecos de cielo. Barrido del umbral contra la
+  consola: 24–32 es lo mejor en los dos cuadros; 128 (lo que usa la rama
+  sin G_AC_THRESHOLD) empeora 2 dB. **Arreglado:** con CVG_X_ALPHA y sin
+  FORCE_BL el umbral es al menos 32; los dos cuadros pasan de 33,91 a
+  34,28 dB y de 33,80 a 34,09. Las 105 imágenes de las 7 escenas del host,
+  iguales (ninguna usa ese modo); la pila del SPE 0, igual (holgura 1984).
+  La rama sin umbral (128) no se pudo medir: los volcados de Snap no la
+  usan.
+- El resto son bordes de un píxel (la cobertura del AA, unos ½ px), el
+  filtro de tres puntos contra el bilineal y el blender con 5 bits de alfa
+  (un paso en los textos de los créditos): del rasterizador, no de la HLE.
+
 ## 2026-10-13 — CFW (issue #2): respaldo automático al intérprete y prueba del JIT para usuarios (rama `nifty-knuth-a7c921`, paquetes SLSA00119 «Salsa64 CFW 1» y SLSA00118 «Salsa64 JIT test»)
 
 Con CFW Evilnat 4.91 (CECH-2501A) ningún juego arrancaba: el hilo
@@ -362,7 +599,7 @@ En curso:
 Pendientes (censo del día y reportes): Super Smash Bros. se congela en el
 primer KO (arreglado en el host el 2026-10-13, por confirmar en la PS3;
 entrada de abajo); Banjo-Tooie
-y F-Zero X en negro (arranque 6105/6106); Kirby 64 y Pokémon Stadium 2 con
+en la intro (host; desafío del CIC 6105 de la PIF ya implementado); F-Zero X ya arranca; Kirby 64 y Pokémon Stadium 2 con
 texturas con ruido (estado de Stadium 2 en la ranura 0); Pokémon Snap con
 texturas estiradas; sombras cuadradas de Conker (su espera de ~25 s al
 arrancar, en la entrada del 2026-10-13); luces puntuales de Majora (la luz salta
@@ -1095,8 +1332,8 @@ v0.2.0:
 | Kirby 64, Pokémon Stadium 2 | ~97–100 %, texturas con ruido o ajedrez | estado de Stadium 2 en la ranura 0 |
 | Pokémon Snap | jugable, texturas estiradas | ¿recorte del RSP, como MK64? |
 | Doom 64 | ~40 % | ~4,5 M instrucciones interpretadas por segundo: algo que el recompilador no traduce |
-| Banjo-Tooie | negro, sin tareas gráficas | arranque (CIC 6105) o protección de Rare |
-| F-Zero X | negro, CPU quieto desde el arranque | CIC 6106, entrada en 0x80067000 |
+| Banjo-Tooie | intro (host) | arreglado con el desafío del CIC 6105 de la PIF; falta jugar más allá de la intro y confirmar en la PS3 |
+| F-Zero X | título (host) | arreglado con el bus abierto del PI; por confirmar en la PS3 |
 | Diddy Kong Racing | negro | microcódigo propio de Rare sin HLE |
 | Indiana Jones | negro, 18 % | microcódigo de Factor 5 (LLE del RSP) |
 | Resident Evil 2 | parpadeo y texturas rotas desde el inicio | estado en la ranura 0 |

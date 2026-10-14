@@ -133,7 +133,7 @@ struct gfx_tilememo {
 	struct gfx_tex tex;
 };
 
-/* Color images de 16 bits que la HLE vio dibujar, para no decodificar con
+/* Color images de 16 y 8 bits que la HLE vio dibujar, para no decodificar con
  * GFX_JOB_FBTEX las texturas que el consumidor va a leer de su destino
  * (tmem.c). Imitan los destinos del consumidor (src/rdp/targets.c): las
  * mismas color images de 1 a 640 de ancho, con el alto conjeturado igual
@@ -144,7 +144,7 @@ struct gfx_tilememo {
  * el SPE, los de 8 y 16 cuestan varias instrucciones por acceso. */
 #define GFX_FB_IMAGES 8
 struct gfx_fbimg {
-	uint32_t addr;
+	uint32_t addr;          /* con el bit 0 en 1 si es de 8 bits (va alineada a 64) */
 	uint32_t task;          /* última tarea que la dibujó (job->task) */
 	uint32_t width;         /* en píxeles; 0: libre */
 	uint32_t lh;            /* alto conjeturado, en píxeles */

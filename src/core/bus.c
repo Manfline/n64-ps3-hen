@@ -162,6 +162,13 @@ uint32_t salsa64_bus_read32(struct salsa64_bus *bus, uint32_t paddr)
 		return salsa64_rd32(bus->pif_ram + (paddr - SALSA64_PIF_RAM_ADDR));
 	if (paddr - SALSA64_SRAM_ADDR < SALSA64_SRAM_SPAN)
 		return salsa64_save_dom2_read32(bus, paddr);
+	/* Bus del PI sin dispositivo (el 64DD en 0x05000000–0x07FFFFFF, lo que
+	 * está después de la PIF): nadie maneja el bus y la lectura trae la mitad
+	 * baja de la dirección, repetida (medido en ares: 0x05000508 lee
+	 * 0x05080508). F-Zero X sondea el estado del 64DD (0x05000508) y, con 0,
+	 * cree que hay uno y se queda esperando al manejador del disco. */
+	if (paddr - 0x05000000u < 0x03000000u || paddr >= 0x1FD00000u)
+		return (paddr & 0xFFFFu) * 0x10001u;
 	return 0;
 }
 

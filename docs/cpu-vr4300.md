@@ -102,14 +102,15 @@ Solo camino ELF (libdragon `boot/README.md`, `loader.c`, `cleanup.c`):
 Solo camino plano:
 
 - Variables de libultra en la RDRAM: 0x300 osTvType, 0x304 osRomType (0),
-  0x308 osRomBase (0xB0000000), 0x30C osResetType (0), 0x314 osVersion (0),
+  0x308 osRomBase (0xB0000000), 0x30C osResetType (0), 0x314 osVersion (1),
   0x318 osMemSize. Son las que escribe el IPL3 "compat" de libdragon, que
   reproduce el comportamiento histórico (libdragon `boot/ipl3.c` y README).
 - s3 = tipo de ROM (0), s4 = TV, s5 = reset (0), s6 = semilla del IPL3 del
   CIC (0x3F en 6101/6102/7101/7102, 0x78 en 6103, 0x91 en 6105, 0x85 en
-  6106; n64brew.dev: PIF-NUS), s7 = versión (0). Son los valores que el IPL2
-  pasa al IPL3 (libdragon `boot/ipl3.c` los nombra así); no está verificado
-  qué queda exactamente en ellos tras el IPL3 de Nintendo.
+  6106; n64brew.dev: PIF-NUS), s7 = versión (1, medido en ares con 6102,
+  6103, 6105 y 6106). Son los valores que el IPL2 pasa al IPL3 (libdragon
+  `boot/ipl3.c` los nombra así). Con el 6105, ares deja s6 = 0xA0000200 al
+  entrar al juego (no reproducido).
 - $sp = 0xA4001FF0 (lo deja el IPL1).
 
 Solo CIC 6103 (lo que su IPL3 deja al saltar al juego y Banjo-Kazooie
@@ -118,7 +119,7 @@ comprueba; fuentes en docs/THIRD_PARTY.md):
 | Qué | Efecto | Quién lo comprueba |
 |---|---|---|
 | Copia de su propia imagen | DMEM 0x4C0–0x764 → RDRAM 0x000–0x2A4 (de la ROM del usuario, como con el 6105). Los vectores de excepción que pone después el juego pisan parte | Banjo-Kazooie, antes de cada proyección: si 0x1D8 no tiene la palabra que viene de la ROM 0x698, cambia los planos cercano y lejano de 30 y 4000 por 750 y 1250 (faltan personajes, el cielo y el fondo; la profundidad tiembla) |
-| DMEM e IMEM | Todo en 0xFF salvo 6103 en IMEM 0x000 | Banjo-Kazooie al iniciar: solo con DMEM[0] = 0xFFFFFFFF e IMEM[0] = 6103 trae de la ROM (0xB70) el arranque del RSP; sin él, el microcódigo real no arranca |
+| DMEM e IMEM | Todo en 0xFF salvo 6103 en IMEM 0x000 (con el 6106: 0x17D8, y `osCicId` = 0x17D8) | Banjo-Kazooie al iniciar: solo con DMEM[0] = 0xFFFFFFFF e IMEM[0] = 6103 trae de la ROM (0xB70) el arranque del RSP; sin él, el microcódigo real no arranca |
 
 Solo CIC 6105/7105 (lo que su IPL3 deja además y los juegos comprueban;
 fuentes en docs/THIRD_PARTY.md):

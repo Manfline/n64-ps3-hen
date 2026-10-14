@@ -50,6 +50,37 @@ static void unplug(unsigned port)
 
 /* ---- PIF ----------------------------------------------------------------- */
 
+/* Desafío del CIC 6105: pares medidos en ares con Banjo-Tooie (bytes 48–62 de
+ * la PIF RAM, byte de comandos 0x02). Solo contesta con el CIC 6105. */
+static void pif_cic6105_challenge(void)
+{
+	static const uint8_t chl[2][15] = {
+		{ 0x8B, 0x00, 0x62, 0x00, 0x18, 0x00, 0x06, 0x00, 0x01, 0x00, 0xC0, 0x00, 0xB0, 0x00, 0x00 },
+		{ 0x4F, 0x00, 0x53, 0x00, 0x14, 0x00, 0x05, 0x00, 0x01, 0x00, 0xC0, 0x00, 0xF0, 0x00, 0x00 },
+	};
+	static const uint8_t rsp[2][15] = {
+		{ 0x3E, 0xC6, 0xC0, 0x4E, 0xBD, 0x37, 0x15, 0x55, 0x5A, 0x8C, 0x2A, 0x8C, 0xD3, 0x71, 0x71 },
+		{ 0xF4, 0xE6, 0x70, 0x4E, 0xB9, 0xF9, 0xF2, 0xA8, 0xCB, 0xF9, 0xBF, 0x9F, 0x4E, 0x6E, 0xC6 },
+	};
+	for (int k = 0; k < 2; k++) {
+		uint8_t buf[64];
+		memset(buf, 0xFF, sizeof buf);
+		memcpy(buf + 48, chl[k], 15);
+		bus()->pif.challenge6105 = false;
+		memcpy(ram(), buf, sizeof buf);
+		ram()[CMD] = 0x02;
+		salsa64_pif_written(bus());
+		CHECK(!memcmp(ram() + 48, chl[k], 15));  /* sin CIC 6105, no contesta */
+		bus()->pif.challenge6105 = true;
+		salsa64_pif_written(bus());
+		CHECK(!memcmp(ram() + 48, rsp[k], 15));
+		CHECK_EQ(ram()[CMD], 0x02);
+	}
+	bus()->pif.challenge6105 = false;
+
+}
+
+
 /* Formato de libultra: 0xFF de relleno, un intercambio por canal y 0xFE. */
 static void pif_info_and_state(void)
 {
@@ -489,6 +520,7 @@ void t_suite_pif(void)
 	RUN(pif_rx_length);
 	RUN(pif_reset_keeps_pads);
 	RUN(padmap_buttons);
+	RUN(pif_cic6105_challenge);
 	RUN(padmap_sticks);
 	RUN(padmap_config);
 	RUN(padmap_describe);
