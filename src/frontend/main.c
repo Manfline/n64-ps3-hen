@@ -148,6 +148,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <sys/memory.h>
 #include <sys/process.h>
 #include <sys/sem.h>
@@ -1234,9 +1235,86 @@ static void isv_out(void *ctx, const uint8_t *text, uint32_t len)
 	isv_len = n;
 }
 
+/* La ROM va fuera del heap de newlib, en páginas de 1 MB que se piden al
+ * sistema al abrir el juego y se devuelven al cerrarlo. En el heap, lo que el
+ * primer juego reserva «para siempre» (la foto de los estados, el perfilado,
+ * las tablas de la interpolación…) queda por encima de su ROM: al soltarla,
+ * el heap no puede devolver el hueco (el tope está ocupado) ni juntarlo con el
+ * resto, y la ROM de 64 MB siguiente ya no cabe aunque sobre memoria. Las
+ * páginas del sistema no dependen de eso (docs/memory-budget.md). */
+static void *rom_pages;  /* la ROM en curso, si salió de las páginas del sistema */
+
+static void *rom_alloc(size_t len)
+{
+	size_t bytes = (len + (1u << 20) - 1) & ~((size_t)(1u << 20) - 1);
+	sys_mem_addr_t addr = 0;
+	if (!rom_pages && sysMemoryAllocate(bytes, SYS_MEMORY_PAGE_SIZE_1M, &addr) == 0) {
+		rom_pages = (void *)(uintptr_t)addr;
+		return rom_pages;
+	}
+	salsa64_log("ROM de %zu MB: sin páginas de 1 MB del sistema, va en el heap", bytes >> 20);
+	return memalign(128, len);
+}
+
+static void rom_free(void *p)
+{
+	if (p && p == rom_pages) {
+		sysMemoryFree((sys_mem_addr_t)(uintptr_t)p);
+		rom_pages = NULL;
+	} else {
+		free(p);
+	}
+}
+
+/* Memoria para el log: el heap de newlib (mallinfo), hasta dónde llegó
+ * (sbrk), lo que queda de la memoria de usuario del sistema (syscall 352, sin
+ * envoltura en PSL1GHT) y la mayor reserva que cabe hoy: en el heap (un
+ * bloque contiguo) y en páginas del sistema, que es de donde sale la ROM.
+ * Se prueba reservando y soltando. */
+static unsigned fit_mb(bool pages)
+{
+	unsigned lo = 0, hi = ROM_MAX >> 20;  /* más de una ROM no hace falta */
+	while (lo < hi) {
+		unsigned mid = (lo + hi + 1) / 2;
+		bool ok;
+		if (pages) {
+			sys_mem_addr_t a = 0;
+			ok = sysMemoryAllocate((size_t)mid << 20, SYS_MEMORY_PAGE_SIZE_1M, &a) == 0;
+			if (ok)
+				sysMemoryFree(a);
+		} else {
+			void *q = memalign(128, (size_t)mid << 20);
+			ok = q != NULL;
+			free(q);
+		}
+		if (ok)
+			lo = mid;
+		else
+			hi = mid - 1;
+	}
+	return lo;
+}
+
+static void heap_report(const char *when)
+{
+	static struct {
+		u32 total;
+		u32 available;
+	} um __attribute__((aligned(16)));
+	struct mallinfo mi = mallinfo();
+	lv2syscall1(352, (u64)(uintptr_t)&um);
+	bool um_ok = (s32)p1 == 0;
+	void *top = sbrk(0);
+	unsigned heap_fit = fit_mb(false), pages_fit = fit_mb(true);
+	salsa64_log("memoria %s: heap %d KB (%d en uso, %d libres en %d bloques, tope %p), usuario %u de %u KB libres, "
+		    "cabe en el heap una reserva de %u MB y en páginas del sistema, %u MB",
+		    when, mi.arena >> 10, mi.uordblks >> 10, mi.fordblks >> 10, mi.ordblks, top,
+		    um_ok ? um.available >> 10 : 0, um_ok ? um.total >> 10 : 0, heap_fit, pages_fit);
+}
+
 /* Lee una ROM entera: en `buf` (de `cap` bytes) o, con buf NULL, en
- * memoria reservada a su medida. NULL si no se pudo o no mide entre
- * 0x1000 bytes y ROM_MAX (o cap). */
+ * memoria reservada a su medida (rom_alloc; se suelta con rom_free). NULL si
+ * no se pudo o no mide entre 0x1000 bytes y ROM_MAX (o cap). */
 static uint8_t *read_rom_file(const char *path, uint8_t *buf, uint32_t cap, uint32_t *size)
 {
 	FILE *f = fopen(path, "rb");
@@ -1247,10 +1325,10 @@ static uint8_t *read_rom_file(const char *path, uint8_t *buf, uint32_t cap, uint
 		len = ftell(f);
 	uint8_t *dst = NULL;
 	if (len >= 0x1000 && (uint32_t)len <= (buf ? cap : ROM_MAX) && fseek(f, 0, SEEK_SET) == 0) {
-		dst = buf ? buf : memalign(128, (size_t)len);
+		dst = buf ? buf : rom_alloc((size_t)len);
 		if (dst && fread(dst, 1, (size_t)len, f) != (size_t)len) {
 			if (!buf)
-				free(dst);
+				rom_free(dst);
 			dst = NULL;
 		}
 	}
@@ -4001,6 +4079,7 @@ static void game_close(void)
 		    "sin traducir, destinos del RSX liberados, SPEs de la HLE %s, RSP %s)",
 		    clean ? "estado limpio" : "ATENCIÓN, quedó algo en vuelo", emu_done ? "terminado" : "VIVO", queued,
 		    snaps, untranslated, spes ? "VIVOS" : "detenidos", hooks ? "CON BACKENDS" : "sin backends");
+	heap_report("al cerrar el juego");
 	if (perf.on) {
 		char end[384];
 		snprintf(end, sizeof end,
@@ -4815,6 +4894,7 @@ static enum game_end menu_open(const struct rom_entry *e)
 	char path[ROMLIST_PATH_MAX], err[160];
 	memcpy(path, e->path, sizeof path);
 	salsa64_log("menú: abro %s (\"%s\")", path, romlist_display_title(e));
+	heap_report("al abrir");
 	menu.loading = romlist_display_title(e);
 	menu_show(NULL);
 	menu.loading = NULL;
@@ -4825,17 +4905,20 @@ static enum game_end menu_open(const struct rom_entry *e)
 	beat.pres_at = "arranque del juego";
 	if (!rom) {
 		salsa64_log("menú: no se pudo leer %s", path);
+		heap_report("tras fallar la lectura");
 		menu_set_status(&menu, "No se pudo leer %s", path);
 		mn.games++;
 		mn.failures++;
 		return GAME_TO_MENU;
 	}
+	heap_report("con la ROM leída");
 	if (!romlist_save_last(LAST_ROM_PATH, path))
 		salsa64_log("menú: no se pudo escribir %s", LAST_ROM_PATH);
 	game_reset();
 	test_flags_from_name(romlist_name(e));
 	enum game_end end = run_game(rom, size, path, err, sizeof err);
-	free(rom);  /* run_game ya cerró el juego: nada apunta a la ROM */
+	rom_free(rom);  /* run_game ya cerró el juego: nada apunta a la ROM */
+	heap_report("tras soltar la ROM");
 	bool test = selftest_on || gfxtest_on || audiotest_on;
 	bool ok = end != GAME_FAILED && (test ? pres.result == SELFTEST_OK : !pres.autotest || game_auto_ok);
 	mn.games++;
@@ -4879,6 +4962,7 @@ static int menu_loop(void)
 	menu_scan(have_last ? last : NULL);
 	if (have_last)
 		salsa64_log("menú: última ROM %s (%s)", last, romlist_find(&roms, last) >= 0 ? "elegida" : "ya no está");
+	heap_report("al abrir el menú");
 	if (pres.autotest)
 		menu_test_load();
 
