@@ -295,6 +295,7 @@ static struct {
 		 * caché de texturas lo que usa) y el done_task más alto que recibió
 		 * la HLE. */
 		volatile uint32_t acq, busy, keep_task, keep_fence, done_given;
+		volatile uint32_t done_pending;  /* el done_task que acquire está por recortar (0: ninguno) */
 		/* La tarea del cuadro que se muestra: la HLE no suelta de la caché
 		 * nada de ella ni de las siguientes (sus intermedios aún se
 		 * dibujan); 0 nada. */
@@ -531,6 +532,7 @@ uint32_t salsa64_rdp_reset(void)
 	memset(&rdp.last_res, 0, sizeof rdp.last_res);
 	rdp.interp.have_prev = false;
 	rdp.interp.acq = rdp.interp.busy = rdp.interp.keep_task = rdp.interp.keep_fence = rdp.interp.done_given = 0;
+	rdp.interp.done_pending = 0;
 	rdp.interp.protect = 0;
 	memset(&rdp.again_last, 0, sizeof rdp.again_last);
 	memset(&rdp.stats, 0, sizeof rdp.stats);
@@ -626,20 +628,36 @@ static void acquire(void *ctx, struct gfx_job *job)
 		done = last - 1;
 	if (fields) {
 		/* Lo que usa una tarea que se redibuja (o cuyo redibujo el RSX no
-		 * terminó) no sale de la caché de texturas. */
-		if ((int32_t)(done - rdp.interp.done_given) > 0)
-			rdp.interp.done_given = done;
+		 * terminó) no sale de la caché de texturas. Mientras se recorta, el
+		 * valor sin recortar queda a la vista de interp_hold (si llega justo
+		 * ahora, desiste); después, done_given es lo que de verdad recibe la
+		 * HLE. Guardar ahí el valor sin recortar hacía que, con la
+		 * traducción un cuadro por delante de lo que se ve, ningún
+		 * intermedio llegara a tiempo (Mario 64: todos «repetidos»). */
+		rdp.interp.done_pending = done;
 		hwsync();
 		uint32_t kt = rdp.interp.keep_task;
 		lwsync();
 		uint32_t kf = rdp.interp.keep_fence;
 		if (kt && (!kf || !rsxkit_fence_done(kf)) && (int32_t)(done - kt) >= 0)
 			done = kt - 1;
-		/* Solo mientras se pueda redibujar: hasta que su juego de búferes se
-		 * reuse (la tarea pr + SETS). */
+		/* La del cuadro en pantalla y las siguientes (se van a mostrar), salvo
+		 * las que ya no se pueden redibujar: si la emulación va más adelante
+		 * que eso (Mario 64 dibuja cuadros antes de mostrarlos), desde la más
+		 * vieja cuyo juego de búferes sigue vivo (este acquire reusa el de la
+		 * tarea n + 1 − SETS). Apagarla entera en ese caso dejaba sin
+		 * proteger también las siguientes: ningún intermedio a tiempo. */
 		uint32_t pr = rdp.interp.protect;
-		if (pr && (int32_t)(done - pr) >= 0 && (int32_t)(n + 1 - pr) < SETS)
-			done = pr - 1;
+		if (pr) {
+			uint32_t alive = n + 2 - SETS;  /* la más vieja con su juego vivo tras este acquire */
+			uint32_t lo = (int32_t)(alive - pr) > 0 ? alive : pr;
+			if ((int32_t)(done - lo) >= 0)
+				done = lo - 1;
+		}
+		if ((int32_t)(done - rdp.interp.done_given) > 0)
+			rdp.interp.done_given = done;
+		lwsync();
+		rdp.interp.done_pending = 0;
 	}
 	job->task = n + 1;
 	job->done_task = done;
@@ -1917,7 +1935,12 @@ static bool interp_hold(uint32_t task)
 		rdp.interp.keep_task = task;
 	rdp.interp.keep_fence = 0;
 	hwsync();
-	if ((int32_t)(rdp.interp.acq - (task + SETS)) >= 0 || (int32_t)(rdp.interp.done_given - task) >= 0) {
+	uint32_t pend = rdp.interp.done_pending;
+	bool reused = (int32_t)(rdp.interp.acq - (task + SETS)) >= 0;
+	bool cache = (int32_t)(rdp.interp.done_given - task) >= 0 || (pend && (int32_t)(pend - task) >= 0);
+	if (reused || cache) {
+		rdp.stats.interp_rep_set += reused;
+		rdp.stats.interp_rep_cache += !reused;
 		rdp.interp.keep_fence = rsxkit_fence();
 		lwsync();
 		rdp.interp.busy = 0;
@@ -2016,7 +2039,10 @@ static void interp_field(const struct rdp_present *p, uint32_t field)
 		rdp.stats.interp_plain++;  /* este cuadro no se interpola: va entero */
 		return;
 	}
-	if (!interp_surface(p->slot) || !interp_hold(s->fence_task)) {
+	bool surf = interp_surface(p->slot);
+	if (!surf)
+		rdp.stats.interp_rep_surf++;
+	if (!surf || !interp_hold(s->fence_task)) {
 		/* Ya es tarde para redibujarlo: se repite lo del campo anterior (el
 		 * cuadro final adelantaría y el intermedio siguiente volvería atrás:
 		 * eso se ve como un parpadeo). */

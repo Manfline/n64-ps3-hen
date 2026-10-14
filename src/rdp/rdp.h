@@ -88,6 +88,7 @@ struct salsa64_rdp_stats {
 	 * los que no llegaron a tiempo (su juego ya en uso o sin superficie: se
 	 * repite el campo anterior), y el tiempo del PPE redibujando. */
 	uint32_t interp_fields, interp_plain, interp_repeated;
+	uint32_t interp_rep_set, interp_rep_cache, interp_rep_surf;  /* repetidos: su juego ya en uso, la caché, sin superficie */
 	uint64_t us_interp_draw;
 };
 

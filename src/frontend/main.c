@@ -2585,9 +2585,11 @@ static void stats(uint64_t now)
 				    (rs.us_interp_pair - sw.rdp0.us_interp_pair) / 1e3 / tasks,
 				    (rs.us_interp_prev - sw.rdp0.us_interp_prev) / 1e3 / tasks);
 			salsa64_log("gfx: interpolación: %u campos intermedios (%.1f/s), %u enteros (cuadro sin interpolar), %u "
-				    "repetidos (no llegaron a tiempo); redibujar %.3f ms del PPE por campo intermedio",
+				    "repetidos (no llegaron a tiempo: %u su juego de búferes ya en uso, %u la caché, %u sin "
+				    "superficie); redibujar %.3f ms del PPE por campo intermedio",
 				    ifl, ifl * 1e6 / dt, rs.interp_plain - sw.rdp0.interp_plain,
-				    rs.interp_repeated - sw.rdp0.interp_repeated,
+				    rs.interp_repeated - sw.rdp0.interp_repeated, rs.interp_rep_set - sw.rdp0.interp_rep_set,
+				    rs.interp_rep_cache - sw.rdp0.interp_rep_cache, rs.interp_rep_surf - sw.rdp0.interp_rep_surf,
 				    ifl ? (rs.us_interp_draw - sw.rdp0.us_interp_draw) / 1e3 / ifl : 0.0);
 		}
 		uint32_t rb = rs.readbacks - sw.rdp0.readbacks, rbw = rs.readback_waits - sw.rdp0.readback_waits;

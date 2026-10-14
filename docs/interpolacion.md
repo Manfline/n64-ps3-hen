@@ -763,6 +763,30 @@ Los «repetidos» que suben a 60–100 por ventana en esa zona (con 21–26
 intermedios por segundo) son intermedios que no llegaron a tiempo; a 5× el
 RSX va justo y el estanque translúcido pesa: a probar a 3×.
 
+### Mario 64: ningún intermedio a tiempo («interp 5»)
+
+Con «interp 3», Mario 64 (30 cuadros, k = 2) daba en la PS3, incluso a 1×,
+0 campos intermedios y ~150 repetidos cada 5 s, y Zelda a 5× la mitad. Se
+reproduce en RPCS3 con la intro de Mario. Con los motivos separados en el
+log, todos eran «la caché»: el redibujo desistía porque la HLE ya podía
+haber soltado texturas de esa tarea. Dos errores en `acquire`:
+
+- `done_given` guardaba el done_task sin recortar por la protección: con
+  la traducción un cuadro por delante de lo que se muestra parecía que la
+  HLE ya había soltado la tarea en pantalla, aunque había recibido una
+  anterior. Ahora guarda lo que la HLE recibe de verdad (y, mientras
+  acquire recorta, el valor provisional queda a la vista del redibujo).
+- La protección de la tarea en pantalla se apagaba entera si la emulación
+  iba más adelante que un juego de búferes (Mario dibuja cuadros antes de
+  mostrarlos), y con ella las tareas siguientes, que sí se van a mostrar.
+  Ahora protege desde la tarea en pantalla o, si su juego ya se reusó,
+  desde la más vieja cuyo juego sigue vivo.
+
+En RPCS3, Mario: 0 → 28 intermedios por segundo (de 30), 0–1 repetidos;
+Zelda igual (40/s); gfxtest igual byte a byte a main. El log separa los
+repetidos en «su juego de búferes ya en uso», «la caché» y «sin
+superficie».
+
 ## Reproducir en la Mac
 
 ```
