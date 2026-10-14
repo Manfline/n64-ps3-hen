@@ -922,8 +922,10 @@ igual de bien que en el resto (la regla de malla no se dispara: 0,0 grupos
 por tarea), pero en el log de la PS3 de esa caminata hay ventanas con
 13–81 campos saltados de 300 (la presentación, 8–12 ms por campo a 5×,
 más el redibujo de los intermedios no alcanza): el piso va a tirones
-cuando la consola salta campos, no por el emparejamiento. A probar a 3× o
-4× en la misma caminata.
+cuando la consola salta campos, no por el emparejamiento. Con «interp 7»
+a 720p y 3×, el autor: «la interpolación en Zelda mejora mucho»: a 5× el
+RSX no alcanza. Idea para después: con la interpolación encendida, avisar
+en «Imagen» que a 5× el RSX no alcanza, o sugerir una escala menor.
 
 ### Estimar la cámara entre los dos cuadros (plan, sin hacer)
 
