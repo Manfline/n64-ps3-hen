@@ -354,6 +354,7 @@ struct gfx_draw {
 struct gfx_vgroup {
 	struct gfx_cmd h;   /* a = dirección, b = n | v0 << 8 | paso << 16, c = hash del contenido (no 0) */
 	float vp[4];        /* vscale x, y y vtrans x, y */
+	float vz[4];        /* la z de salida es vz[1]·w + vz[0]·z (gfx_vtx_out; con G_ZS_PRIM, vz[0] = 0); vz[2], vz[3]: 0 */
 };
 #define GFX_VGID(serial, i) ((serial) << 6 | (i))
 #define GFX_VCLIP_FLAG 0x80000000u

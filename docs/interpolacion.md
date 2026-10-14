@@ -828,6 +828,30 @@ ni grupos sin pareja `vmatch_atomic` no hace nada. El volcado
 `SALSA64_INTERP_GRUPOS` da el motivo de cada grupo y su aplastamiento
 (`col`), y `SALSA64_INTERP_SIN_MALLA=1` apaga `vmatch_atomic` en el host.
 
+### El agua que tapa la orilla («interp 5» en la PS3)
+
+Con «interp 5», en el estanque del bosque Kokiri (ranura 1, campo 16772,
+caminando), el autor: «el agua se sigue saliendo de su cauce», a cualquier
+escala interna. Con sus entradas exactas sacadas del log (las líneas
+«control 1: …» como guion de `--pad`) se ve en el host: en un intermedio
+el agua tapa un borde de tierra y en otro la tierra tapa el agua junto a
+Link. La causa: el vertex program interpolaba x, y y w pero tomaba la
+profundidad z/w del vértice de ahora. Los triángulos grandes del agua y
+los chicos de la orilla se desplazan distinto, y con la z/w de ahora en
+otra posición dos superficies casi a la misma profundidad se cruzan. Ahora
+el registro GFX_OP_VGROUP lleva la vista en z del grupo (z de salida =
+vz[1]·w + vz[0]·z, como gfx_vtx_out; con la z de primitiva, vz[0] = 0),
+vmatch_prev da también la z de allá (si la z de ahora no sale con esa
+vista, la de allá con la misma z/w que ahora) y el vertex program
+interpola las cuatro coordenadas: el mundo quieto se dibuja como con una
+sola matriz intermedia y las profundidades no se cruzan. En el host, con
+las entradas del autor, los dos intermedios salen como los cuadros de
+verdad (píxeles que cambian solo en el intermedio: 358 → 57 y 1114 →
+225); lo que queda es el tramado del agua translúcida del rasterizador del
+host, que cambia en cada cuadro. GoldenEye contra la verdad 29,73 →
+29,76 dB. 16 bytes más por registro; el vertex program, una división
+menos.
+
 ### Modo híbrido con matrices (estimación, sin hacer)
 
 Lo que hoy se rechaza por aplastarse (giros de más de un cuarto de vuelta

@@ -37,11 +37,13 @@
  *                 tiene pareja (cambio de plano)
  *   vmatch_atomic nunca un objeto a medias (ver abajo)
  *   vmatch_prev   por cada vértice de salida, su posición en el cuadro
- *                 anterior (x, y, w desde las coordenadas de recorte de allá
- *                 con el viewport del grupo; z, la de ahora: quien dibuja
- *                 toma la profundidad z/w del vértice de ahora; los del
- *                 recorte cercano, entre las de sus dos extremos con la misma
- *                 t); sin pareja, la de ahora
+ *                 anterior (x, y, z, w desde las coordenadas de recorte de
+ *                 allá con la vista del grupo; los del recorte cercano, entre
+ *                 las de sus dos extremos con la misma t); sin pareja, la de
+ *                 ahora. Quien dibuja interpola las cuatro: el mundo quieto
+ *                 sale como con una sola matriz intermedia, y dos superficies
+ *                 casi a la misma profundidad (el agua y la orilla) no se
+ *                 cruzan
  *
  * Memoria: la pone quien llama (vmatch_table_bytes, vmatch_table_init);
  * nada se reserva en el bucle. Todo es lineal en los grupos y vértices.
@@ -77,6 +79,7 @@ struct vmatch_group {
 	uint32_t n, v0, stride;
 	uint32_t clip;         /* primer vértice en vmatch_table.clip */
 	float vp[4];           /* vscale x, y y vtrans x, y */
+	float vz[2];           /* z de salida = vz[1]·w + vz[0]·z (gfx_vgroup.vz) */
 	float cx, cy, ext;     /* centro y tamaño en pantalla (píxeles) de sus vértices visibles; ext < 0: ninguno */
 	uint32_t flat;         /* proyección ortográfica (w = 1 en todos): el HUD 3D; no se interpola */
 	uint32_t front;        /* algún vértice delante de la cámara (w > 0) */

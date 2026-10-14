@@ -175,6 +175,7 @@ void vmatch_build(struct vmatch_table *t, const uint8_t *cmd, uint32_t cmd_bytes
 		g->hocc = g->hash ? t->keys[g->hkey].count++ : 0;
 		g->clip = t->nclip;
 		memcpy(g->vp, r->vp, sizeof g->vp);
+		g->vz[0] = r->vz[0], g->vz[1] = r->vz[1];
 		g->pair = -1;
 		const float(*src)[4] = (const float(*)[4])((const uint8_t *)r + sizeof *r);
 		__builtin_prefetch((const uint8_t *)r + c->size);  /* el registro que sigue */
@@ -592,7 +593,8 @@ uint32_t vmatch_prev(const struct vmatch_table *prev, const struct vmatch_table 
 {
 	uint32_t paired = 0, last_serial = 0;
 	const float(*last_clip)[4] = NULL;  /* coordenadas de allá del último grupo (los vértices vienen seguidos) */
-	const float *last_vp = NULL;
+	const float(*last_cclip)[4] = NULL; /* y las de ahora */
+	const float *last_vp = NULL, *last_vz = NULL;
 	uint32_t last_n = 0;
 	for (uint32_t i = 0; i < nvtx; i++) {
 		const struct gfx_vertex *v = &vtx[i];
@@ -601,8 +603,8 @@ uint32_t vmatch_prev(const struct vmatch_table *prev, const struct vmatch_table 
 		out[i][0] = v->x, out[i][1] = v->y, out[i][2] = v->z, out[i][3] = v->w;
 		if (!prev || st->cut || !v->pad)
 			continue;
-		float c[4];
-		const float *vp;
+		float c[4], cc[4];  /* coordenadas de recorte de allá y de ahora */
+		const float *vp, *vz;
 		if (v->pad & GFX_VCLIP_FLAG) {
 			/* Del recorte cercano entre los lugares a y b de un grupo: la
 			 * misma t que usó la HLE (con las coordenadas de ahora) entre
@@ -619,8 +621,11 @@ uint32_t vmatch_prev(const struct vmatch_table *prev, const struct vmatch_table 
 			    !prev_clip(prev, cur, GFX_VGID(serial, ib), b, &vpb))
 				continue;
 			float t = da / (da - db);
-			for (int q = 0; q < 4; q++)
+			for (int q = 0; q < 4; q++) {
 				c[q] = a[q] + (b[q] - a[q]) * t;
+				cc[q] = ca[q] + (cb[q] - ca[q]) * t;
+			}
+			vz = cur->g[serial - 1].vz;
 		} else {
 			uint32_t serial = GFX_VGID_SERIAL(v->pad), k = GFX_VGID_INDEX(v->pad);
 			if (serial != last_serial) {
@@ -629,14 +634,18 @@ uint32_t vmatch_prev(const struct vmatch_table *prev, const struct vmatch_table 
 				if (serial && serial <= cur->ngroups && cur->g[serial - 1].pair >= 0) {
 					const struct vmatch_group *g = &cur->g[serial - 1];
 					last_clip = prev->clip + prev->g[g->pair].clip;
+					last_cclip = cur->clip + g->clip;
 					last_vp = g->vp;
+					last_vz = g->vz;
 					last_n = g->n;
 				}
 			}
 			if (!last_clip || k >= last_n)
 				continue;
 			memcpy(c, last_clip[k], sizeof c);
+			memcpy(cc, last_cclip[k], sizeof cc);
 			vp = last_vp;
+			vz = last_vz;
 		}
 		/* Un vértice que cambia de lado de la cámara (w pasa por 0 entre los
 		 * dos cuadros) se proyectaría al infinito en algún intermedio: sus
@@ -647,11 +656,16 @@ uint32_t vmatch_prev(const struct vmatch_table *prev, const struct vmatch_table 
 		if ((c[3] > 1e-6f) != (v->w > 1e-6f))
 			continue;
 		/* Como gfx_vtx_out (geom.c): x = vtrans·w + vscale·x, y = vtrans·w −
-		 * vscale·y; z queda la de ahora (la profundidad la pone quien dibuja,
-		 * con la z/w de ahora: también la del Z de primitiva). */
+		 * vscale·y, z = vz[1]·w + vz[0]·z. Si la z de ahora no sale así (la
+		 * z de primitiva cambió entre el G_VTX y el triángulo), la de allá
+		 * con la misma z/w que ahora. */
 		out[i][0] = vp[2] * c[3] + vp[0] * c[0];
 		out[i][1] = vp[3] * c[3] - vp[1] * c[1];
+		out[i][2] = vz[1] * c[3] + vz[0] * c[2];
 		out[i][3] = c[3];
+		float zc = vz[1] * cc[3] + vz[0] * cc[2];
+		if (fabs_(zc - v->z) > 1e-4f * (fabs_(v->z) + fabs_(v->w)) + 1e-6f)
+			out[i][2] = fabs_(v->w) > 1e-6f ? v->z / v->w * c[3] : v->z;
 		paired++;
 	}
 	return paired;

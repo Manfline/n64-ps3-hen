@@ -46,6 +46,14 @@ static void add_group_h(struct frame *f, uint32_t addr, uint32_t v0, uint32_t n,
 	f->len += r.h.size;
 }
 
+/* Con la vista en z del registro: z de salida = vz1·w + vz0·z. */
+static void add_group_vz(struct frame *f, uint32_t addr, uint32_t n, const float (*clip)[4], float vz0, float vz1)
+{
+	add_group_h(f, addr, 0, n, clip, addr * 2654435761u | 1u);
+	struct gfx_vgroup *r = (struct gfx_vgroup *)(f->cmd + f->len - sizeof *r - 16u * n);
+	r->vz[0] = vz0, r->vz[1] = vz1;
+}
+
 static void add_group(struct frame *f, uint32_t addr, uint32_t v0, uint32_t n, const float (*clip)[4])
 {
 	add_group_h(f, addr, v0, n, clip, addr * 2654435761u | 1u);
@@ -430,10 +438,42 @@ static void vmatch_atomic_mesh(void)
 	CHECK_EQ(st.collapsed, 1);
 }
 
+/* La z de allá con la vista del grupo; si la de ahora no sale con esa vista
+ * (la z de primitiva), la de allá con la misma z/w que ahora. */
+static void vmatch_depth(void)
+{
+	static const float a0[3][4] = { { 0, 0, 0.2f, 2 }, { 0.2f, 0, 0.4f, 2 }, { 0, 0.2f, 0.6f, 3 } };
+	static const float a1[3][4] = { { 0.02f, 0, 0.3f, 2.5f }, { 0.22f, 0, 0.5f, 2.5f }, { 0.02f, 0.2f, 0.7f, 3.5f } };
+	for (int prim = 0; prim < 2; prim++) {
+		frame_init(&fa);
+		add_group_vz(&fa, 0x9000, 3, a0, 0.5f, 0.5f);
+		finish(&fa);
+		frame_init(&fb);
+		add_group_vz(&fb, 0x9000, 3, a1, 0.5f, 0.5f);
+		finish(&fb);
+		struct gfx_vertex v[3];
+		for (int k = 0; k < 3; k++) {
+			v[k] = out_of(a1[k], GFX_VGID(1u, (uint32_t)k));
+			/* como gfx_vtx_out con la vista; con la z de primitiva, 0,25·w */
+			v[k].z = prim ? 0.25f * a1[k][3] : 0.5f * a1[k][3] + 0.5f * a1[k][2];
+		}
+		struct vmatch_stats st;
+		vmatch_pair(&fa.t, &fb.t, 120.0f, &st);
+		float prev[3][4];
+		CHECK_EQ(vmatch_prev(&fa.t, &fb.t, &st, v, 3, prev), 3);
+		for (int k = 0; k < 3; k++) {
+			float want = prim ? 0.25f * a0[k][3] : 0.5f * a0[k][3] + 0.5f * a0[k][2];
+			CHECK(near(prev[k][2], want));
+			CHECK(near(prev[k][3], a0[k][3]));
+		}
+	}
+}
+
 void t_suite_vmatch(void)
 {
 	RUN(vmatch_pairs_and_positions);
 	RUN(vmatch_content_and_cut);
 	RUN(vmatch_identity_rules);
 	RUN(vmatch_atomic_mesh);
+	RUN(vmatch_depth);
 }

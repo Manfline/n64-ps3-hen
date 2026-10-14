@@ -44,6 +44,14 @@ void gfx_vgroup(struct gfx_state *g, uint32_t addr, uint32_t stride, uint32_t v0
 	rec.r.h.c = h ? h : 1;
 	rec.r.vp[0] = g->vscale[0], rec.r.vp[1] = g->vscale[1];
 	rec.r.vp[2] = g->vtrans[0], rec.r.vp[3] = g->vtrans[1];
+	/* La z de salida, como gfx_vtx_out: para que el consumidor saque la del
+	 * cuadro anterior (con la de ahora, el agua y la orilla, casi a la misma
+	 * profundidad, se cruzaban en los intermedios). */
+	if (g->ol & G_ZS_PRIM)
+		rec.r.vz[0] = 0.0f, rec.r.vz[1] = (float)g->prim_z / 32767.0f;
+	else
+		rec.r.vz[0] = g->vscale[2] * (1.0f / 1023.0f), rec.r.vz[1] = g->vtrans[2] * (1.0f / 1023.0f);
+	rec.r.vz[2] = rec.r.vz[3] = 0.0f;
 	uint32_t id = GFX_VGID(g->vgroups + 1, 0u) << GFX_CLIP_ID_SHIFT;
 	for (uint32_t i = 0; i < n; i++, id += 1u << GFX_CLIP_ID_SHIFT) {
 		struct gfx_vtx *v = &g->vtx[v0 + i];

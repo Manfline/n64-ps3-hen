@@ -363,9 +363,9 @@ static void draw_variant(const struct gfx_job *job, const struct gfx_result *res
 		m->x = cur[i].x + (p[0] - cur[i].x) * k;
 		m->y = cur[i].y + (p[1] - cur[i].y) * k;
 		m->w = cur[i].w + (p[3] - cur[i].w) * k;
-		/* Como el vertex program de la PS3 (rsxkit_lincomb_lerp.vcg): la
-		 * profundidad z/w, la de ahora. */
-		m->z = cur[i].w != 0.0f ? cur[i].z / cur[i].w * m->w : cur[i].z;
+		/* Como el vertex program de la PS3 (rsxkit_lincomb_lerp.vcg): las
+		 * cuatro, también la z. */
+		m->z = cur[i].z + (p[2] - cur[i].z) * k;
 	}
 	struct gfx_job j2 = *job;
 	j2.vtx_ea = (uint64_t)(uintptr_t)st.mod;
