@@ -100,6 +100,12 @@ enum menu_lang { MENU_LANG_ES, MENU_LANG_EN, MENU_LANG_FR, MENU_LANG_DE, MENU_LA
  * original o la fina (puntos más chicos y más juntos). */
 enum menu_density { MENU_DENSITY_NORMAL, MENU_DENSITY_FINE, MENU_DENSITIES };
 
+/* Interpolación de cuadros (menu.cfg y juegos/<ROM>.cfg, «interpolacion =
+ * no|geometria»; docs/interpolacion.md): un juego de 20 o 30 cuadros se ve
+ * a 60 dibujando en el RSX los campos de en medio con las posiciones de los
+ * vértices entre un cuadro y el siguiente (salsa64_rdp_interp). */
+enum menu_interp { MENU_INTERP_OFF, MENU_INTERP_GEOMETRY, MENU_INTERPS };
+
 /* Ajustes de un solo juego (juegos/<ROM>.cfg): -1 es «lo global». */
 struct menu_game {
 	int aspect;    /* -1 o enum menu_aspect */
@@ -107,10 +113,11 @@ struct menu_game {
 	int overscan;  /* -1 o MENU_OVERSCAN_OFF / NORMAL / WIDE */
 	int scale;     /* -1, 0 (automática) o 1 .. MENU_SCALE_MAX: escala interna */
 	int density;   /* -1 o enum menu_density (solo con la máscara) */
+	int interp;    /* -1 o enum menu_interp */
 };
 /* MENU_GAME_DENSITY solo es una fila si el filtro que vale es la máscara. */
-enum { MENU_GAME_ASPECT, MENU_GAME_FILTER, MENU_GAME_DENSITY, MENU_GAME_OVERSCAN, MENU_GAME_SCALE, MENU_GAME_BACK,
-       MENU_GAME_ROWS };
+enum { MENU_GAME_ASPECT, MENU_GAME_FILTER, MENU_GAME_DENSITY, MENU_GAME_OVERSCAN, MENU_GAME_SCALE, MENU_GAME_INTERP,
+       MENU_GAME_BACK, MENU_GAME_ROWS };
 #define MENU_SCALE_MAX 5
 
 /* Ajustes del menú: el fondo, el contador y la confirmación al salir van en
@@ -129,12 +136,13 @@ struct menu_settings {
 	                   crt-svideo|crt-compuesto|crt-trinitron») */
 	int density;    /* enum menu_density («densidad = normal|fina»), la de la máscara */
 	int lang;       /* enum menu_lang */
+	int interp;     /* enum menu_interp («interpolacion = no|geometria») */
 };
 
 enum { MENU_PAGE_GAMES, MENU_PAGE_OPTIONS, MENU_PAGE_CHEATS, MENU_PAGE_GAME };
 enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_ASPECT, MENU_OPT_FILTER, MENU_OPT_DENSITY, MENU_OPT_RESOLUTION,
-       MENU_OPT_SCALE, MENU_OPT_APPLY, MENU_OPT_FPS, MENU_OPT_CONFIRM, MENU_OPT_LANG, MENU_OPT_DL_COVERS,
-       MENU_OPT_DL_CHEATS, MENU_OPT_BACK, MENU_OPTS };
+       MENU_OPT_SCALE, MENU_OPT_APPLY, MENU_OPT_INTERP, MENU_OPT_FPS, MENU_OPT_CONFIRM, MENU_OPT_LANG,
+       MENU_OPT_DL_COVERS, MENU_OPT_DL_CHEATS, MENU_OPT_BACK, MENU_OPTS };
 /* «Aplicar ahora» solo existe mientras lo elegido difiere de lo que corre;
  * «Densidad», solo con el CRT de máscara de sombra. */
 
@@ -236,6 +244,10 @@ int menu_game_density(const struct menu_settings *s, const struct menu_game *g);
  * una densidad (en español: se traduce con tr() al dibujar). */
 bool menu_filter_has_density(int filter);
 const char *menu_density_name(int density);
+/* La interpolación que vale para el juego (la suya o la de Opciones) y el
+ * nombre de un valor (en español: se traduce con tr() al dibujar). */
+int menu_game_interp(const struct menu_settings *s, const struct menu_game *g);
+const char *menu_interp_name(int interp);
 
 /* Nombres de los valores (en español: se traducen con tr() al dibujar),
  * para el menú de pausa. La escala automática dice cuál es según la

@@ -30,6 +30,7 @@
 #include <rsxkit/rsxkit.h>
 
 #include "core/rcp.h"
+#include "rdp/gfxdump.h"
 #include "rsp/gfx/backend.h"
 
 struct salsa64_rdp_stats {
@@ -51,6 +52,9 @@ struct salsa64_rdp_stats {
 	 * precompilados). */
 	uint32_t draws_generated;
 	uint32_t fp_programs, fp_generated, fp_evictions, fp_loads;
+	/* Dibujos con AA_EN que llevaron la pasada de aristas
+	 * (salsa64_rdp_aa_edges). */
+	uint32_t draws_edges;
 	/* Efectos de framebuffer (docs/framebuffer.md): copias RSX → RDRAM y
 	 * su tiempo en el hilo de presentación (esperar al RSX y convertir),
 	 * tareas que la emulación esperó por una copia y cuánto, texturas con
@@ -74,6 +78,25 @@ struct salsa64_rdp_stats {
 	 * profundidad cubría la superficie; no debería pasar, ver
 	 * salsa64_rdp_init). */
 	uint32_t binds_failed;
+	/* Interpolación por geometría (salsa64_rdp_interp): tareas emparejadas
+	 * con la anterior, las que fueron un corte o no cupieron en las tablas,
+	 * sus vértices de salida y los que tienen pareja, grupos hallados por el
+	 * contenido y el tiempo del PPE (presentación). */
+	uint32_t interp_tasks, interp_cuts, interp_full;
+	uint32_t interp_cuts_camera;                 /* de ellos, por un giro de golpe de la cámara */
+	uint32_t interp_vertices, interp_paired, interp_content;
+	uint32_t interp_rejected, interp_reordered;  /* grupos rechazados (saltaron, se deformaron, se aplastarían) y reordenados */
+	uint32_t interp_atomic;                      /* grupos con pareja sin interpolar por su objeto o su malla (vmatch_atomic) */
+	uint32_t interp_kept;                        /* deformados o aplastados que se interpolan con su objeto */
+	uint32_t interp_fbtex;                       /* tareas sin interpolar por leer texturas de un destino */
+	uint64_t us_interp, us_interp_build, us_interp_pair, us_interp_prev;
+	/* Campos intermedios dibujados, los que tocaban pero el cuadro no se
+	 * interpola (corte, sin anterior, texturas de un destino: va entero) y
+	 * los que no llegaron a tiempo (su juego ya en uso o sin superficie: se
+	 * repite el campo anterior), y el tiempo del PPE redibujando. */
+	uint32_t interp_fields, interp_plain, interp_repeated;
+	uint32_t interp_rep_set, interp_rep_cache, interp_rep_surf;  /* repetidos: su juego ya en uso, la caché, sin superficie */
+	uint64_t us_interp_draw;
 };
 
 /* Después de rsxkit_init. scale = 0 (automática): la mayor escala entera
@@ -168,6 +191,26 @@ void salsa64_rdp_vi(uint32_t origin, uint32_t width);
  * vienen de un destino se leen de la RDRAM como antes y nada se copia), 1
  * solo render a textura, 2 también las copias a la RDRAM (por omisión). */
 void salsa64_rdp_fbfx(int level);
+/* Interpolación de cuadros por geometría (docs/interpolacion.md). Con un
+ * modo distinto de OFF, las tareas que se envían piden a la HLE la
+ * identidad de sus vértices (GFX_JOB_INTERP) y al traducir cada una el PPE
+ * empareja sus vértices con los de la anterior (vmatch.c) y deja sus
+ * posiciones de allá junto a los vértices. FIELDS: en los campos en que el
+ * VI repite un cuadro de 2 a 4 campos, se presenta esa tarea redibujada con
+ * las posiciones entre el cuadro anterior y ese (salsa64_rdp_present).
+ * FIXED (para probar): cada tarea se dibuja en prev + (pos − prev)·t, sin
+ * campos intermedios. Apagada no cambia nada ni reserva memoria; la primera
+ * vez que se enciende reserva las tablas (~2,4 MB) y, con FIELDS, la
+ * superficie de los intermedios se crea al primero (cuenta en el tope de
+ * memoria del RSX). Fuera del bucle o con la emulación en pausa; devuelve 0
+ * o RSXKIT_ENOMEM. */
+enum salsa64_interp { SALSA64_INTERP_OFF, SALSA64_INTERP_FIELDS, SALSA64_INTERP_FIXED };
+int salsa64_rdp_interp(int mode, float t);
+/* Interruptor: en los dibujos opacos con AA_EN, las aristas como líneas
+ * antes de los triángulos (rsxkit_draw.edges): tapan las grietas de las
+ * uniones en T que el RDP tapa con la cobertura. Apagado por omisión: en
+ * la PS3 a escala alta engordaba los modelos (docs/rsx-notes.md). */
+void salsa64_rdp_aa_edges(bool on);
 /* Hilo de emulación: un DMA escribió la RDRAM [pa, pa + len); con
  * `gfx_in_flight`, mientras corría una tarea gráfica. Las copias de esa
  * tarea y de las anteriores no pisan ese tramo (targets.h, rdp_dma_ring). */
@@ -241,7 +284,7 @@ struct salsa64_rdp_tb {
 };
 void salsa64_rdp_get_tb(struct salsa64_rdp_tb *out);
 
-/* Perfilado (docs/perfilado.md): después de traducir cada tarea, en el hilo
+/* Perfilado (docs/perfilado.md): después de traducir cada tarea (otro gancho que el de la caja negra), en el hilo
  * que traduce (presentación). El volcado de esa tarea se puede pedir desde
  * el gancho (salsa64_rdp_dump: es la última). */
 #define SALSA64_RDP_TASK_SIGS 4
@@ -256,7 +299,29 @@ struct salsa64_rdp_task_info {
 	uint32_t fp_loads;             /* cambios de fragment program */
 	uint32_t readbacks;            /* copias a la RDRAM hechas al traducirla */
 };
-void salsa64_rdp_set_task_hook(void (*hook)(const struct salsa64_rdp_task_info *info));
+void salsa64_rdp_set_perf_hook(void (*hook)(const struct salsa64_rdp_task_info *info));
+/* Gancho de la caja negra (rdp/blackbox.h): se llama desde el hilo de
+ * presentación al empezar a traducir cada tarea, con su salida tal como la
+ * dejó la HLE (el volcado se arma con gfx_dump_build; las texturas de la
+ * caché siguen en su lugar hasta que el RSX termine la tarea). Con NULL, no
+ * cuesta nada. */
+typedef void (*salsa64_rdp_task_hook)(void *ctx, uint32_t task, const struct gfx_dump_src *src,
+				      const struct gfx_result *res);
+void salsa64_rdp_set_task_hook(salsa64_rdp_task_hook fn, void *ctx);
+/* Lo que fue el último campo de salsa64_rdp_present con la interpolación
+ * por geometría, para la caja negra: kind SALSA64_FIELD_* (el cuadro de
+ * verdad, un intermedio dibujado o uno repetido porque no llegó), la t y la
+ * k del intermedio, la tarea redibujada y la anterior con que se emparejó
+ * (numeración del gancho). */
+enum { SALSA64_FIELD_TRUE, SALSA64_FIELD_INTERP, SALSA64_FIELD_REPEAT };
+struct salsa64_rdp_field_info {
+	uint32_t kind;
+	float t;
+	uint32_t k, task, prev_task;
+};
+void salsa64_rdp_field_info(struct salsa64_rdp_field_info *out);
+/* Tareas traducidas hasta ahora (la numeración de las tareas del gancho). */
+uint32_t salsa64_rdp_translated(void);
 
 /* Escribe la salida de la última tarea (gfx.h: gfx_dump_header) en `path`,
  * con las texturas de la caché copiadas al arena (el volcado no depende de

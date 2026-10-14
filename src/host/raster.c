@@ -16,9 +16,10 @@
  * tarea cuando la política de rdp_targets lo pide: así el host modela la
  * misma conducta antes de medirla en la consola.
  *
- * Simplificaciones: sin recorte contra los planos (se descartan triángulos
- * con algún w ≤ 0), muestreo en el centro del píxel, regla de cobertura
- * por arriba a la izquierda aproximada.
+ * Simplificaciones: solo se recorta contra w > 0 (lo que está detrás de la
+ * cámara, como el RSX; sin los planos de los lados ni el cercano: las
+ * tijeras y el z-buffer hacen el resto), muestreo en el centro del píxel,
+ * regla de cobertura por arriba a la izquierda aproximada.
  */
 #include "raster.h"
 
@@ -47,6 +48,7 @@ static struct rdp_targets tg;
 static uint32_t rgb[RDP_TARGETS_MAX][RASTER_W * RASTER_H];
 static uint32_t scratch[RASTER_W * RASTER_H];  /* copia del ligado cuando un dibujo lo lee */
 static int scratch_slot;
+static struct rdp_box scratch_dirty;  /* lo dibujado en esa ranura después de copiarla (como rdp.c) */
 static struct depth depths[MAX_DEPTHS];
 static unsigned next_depth;
 static uint32_t task_no;
@@ -55,8 +57,14 @@ static uint32_t vi_field;  /* campos del VI con imagen (rdp_targets_present) */
 bool raster_trace_fb;
 uint32_t raster_field;
 int raster_fbfx = 2;
+bool raster_q5 = true;
+bool raster_aa_edges = false;
+float raster_edge_width = 1.5f;  /* como rdp.c: 1,5 píxeles de la N64 */
+float raster_edge_factor = 8.0f, raster_edge_units = 64.0f;  /* su desplazamiento de polígono (rsxkit) */
 static struct rdp_vi_ring vi_ring;
 static uint32_t primes, readbacks, mirrors, frames, dma_skipped;
+static uint32_t all_draws, edge_draws, edge_tris;  /* dibujos, y los que llevaron aristas */
+static uint32_t draws8, tex8_rsx, tex8_rdram;    /* dibujos en imágenes de 8 bits; I8 leídas de ellas */
 uint32_t ps3_rb, ps3_rb_old;  /* diagnóstico (SALSA64_PS3_RB) */
 static struct rdp_dma_ring dma_ring;
 
@@ -87,9 +95,10 @@ static struct gfx_job last_job;  /* la RDRAM, para el espejo de cada campo */
 static void prime(const struct gfx_job *job, int slot);
 
 static int get_target(const struct gfx_job *job, uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
-		      uint32_t min_lh)
+		      uint32_t min_lh, bool *created)
 {
 	bool fresh;
+	*created = false;
 	/* Como rdp.c: una color image imposible no toca la tabla. */
 	if (!width || width > 640 || min_lh > 480) {
 		if (raster_trace_fb)
@@ -98,6 +107,7 @@ static int get_target(const struct gfx_job *job, uint32_t addr, uint32_t width, 
 		return -1;
 	}
 	int i = rdp_targets_get(&tg, addr, width, siz, min_lh, &fresh);
+	*created = fresh;
 	if (fresh) {
 		memset(rgb[i], 0, sizeof rgb[i]);
 		tg.t[i].fmt = (uint8_t)fmt;
@@ -164,6 +174,7 @@ struct texmem {
  * no se puede, decodificados aquí desde la RDRAM). */
 struct texsrc {
 	int slot;            /* ranura del destino, o -1 */
+	bool intensity;      /* una I8 de una imagen de 8 bits: el rojo en los cuatro canales */
 	const uint32_t *pix; /* su imagen, o la copia (scratch) si es el ligado */
 	uint32_t x0, y0;     /* texel (0, 0) de la textura dentro del destino */
 	const uint8_t *data; /* con slot = -1: los texels RGBA8888 */
@@ -184,6 +195,8 @@ static void fetch(const struct gfx_tex *t, const struct texsrc *s, int x, int y,
 		out[1] = (c >> 8 & 0xFF) / 255.0f;
 		out[2] = (c & 0xFF) / 255.0f;
 		out[3] = 1.0f;
+		if (s->intensity)
+			out[1] = out[2] = out[3] = out[0];
 		return;
 	}
 	const uint8_t *p = s->data + (uint32_t)y * t->pitch + 4u * (uint32_t)x;
@@ -234,28 +247,143 @@ static uint32_t channel(float v, bool q5)
 	return c << 3 | c >> 2;
 }
 
+/* Un triángulo en pantalla: posiciones, z e 1/w de sus vértices y su área. */
+struct tri {
+	float sx[3], sy[3], sz[3], iw[3];
+	float area;
+};
+
+/* false si no se dibuja: detrás de la cámara, degenerado o eliminado por
+ * su cara (como el RSX, también en la pasada de aristas). */
+static bool tri_setup(const struct gfx_draw *d, const struct gfx_vertex *v, float prim_z, struct tri *t3)
+{
+	for (int i = 0; i < 3; i++) {
+		if (v[i].w <= 0.0f)
+			return false;
+		t3->iw[i] = 1.0f / v[i].w;
+		t3->sx[i] = v[i].x * t3->iw[i];
+		t3->sy[i] = v[i].y * t3->iw[i];
+		t3->sz[i] = v[i].z * t3->iw[i];
+	}
+	if (d->depth & GFX_DEPTH_PRIM)
+		t3->sz[0] = t3->sz[1] = t3->sz[2] = prim_z;
+	t3->area = edge(t3->sx[0], t3->sy[0], t3->sx[1], t3->sy[1], t3->sx[2], t3->sy[2]);
+	if (t3->area == 0.0f)
+		return false;
+	/* Antihorario visto con y hacia arriba (convención de OpenGL y de
+	 * libultra) es el frente; con la y de pantalla hacia abajo, área < 0. */
+	return !((d->cull == GFX_CULL_BACK && t3->area > 0.0f) || (d->cull == GFX_CULL_FRONT && t3->area < 0.0f));
+}
+
+/* El píxel (x, y) del triángulo, con coordenadas baricéntricas de pantalla
+ * b0, b1, b2: prueba de z, combiner, prueba de alfa y mezcla. */
+static void shade(const struct gfx_draw *d, const struct gfx_vertex *v, const struct tri *t3, const struct texsrc src[2],
+		  uint32_t *tg_rgb, bool q5, struct depth *zb, int x, int y, float b0, float b1, float b2, float zoff)
+{
+	float z = b0 * t3->sz[0] + b1 * t3->sz[1] + b2 * t3->sz[2] + zoff;
+	int idx = y * RASTER_W + x;
+	if ((d->depth & GFX_DEPTH_TEST) && zb && z > zb->z[idx] + ((d->depth & GFX_DEPTH_DECAL) ? 1e-3f : 0.0f))
+		return;
+	/* ZMODE_XLU: estrictamente delante, o el z-buffer aún borrado. */
+	if ((d->depth & GFX_DEPTH_LESS) && zb && z >= zb->z[idx] && zb->z[idx] < 1.0f)
+		return;
+	/* Interpolación con perspectiva. */
+	float p0 = b0 * t3->iw[0], p1 = b1 * t3->iw[1], p2 = b2 * t3->iw[2], pw = p0 + p1 + p2;
+	p0 /= pw, p1 /= pw, p2 /= pw;
+	float c[4], s = p0 * v[0].s + p1 * v[1].s + p2 * v[2].s, t = p0 * v[0].t + p1 * v[1].t + p2 * v[2].t;
+	const uint8_t *c0 = &v[0].r, *c1 = &v[1].r, *c2 = &v[2].r;
+	for (int k = 0; k < 4; k++)
+		c[k] = (p0 * c0[k] + p1 * c1[k] + p2 * c2[k]) / 255.0f;
+
+	float tx[2][4] = { { 1, 1, 1, 1 }, { 1, 1, 1, 1 } };
+	for (int i = 0; i < d->ntex && i < 2; i++) {
+		const struct gfx_tex *te = &d->tex[i];
+		sample(te, &src[i], s * te->xf[0] + te->xf[2], t * te->xf[1] + te->xf[3], tx[i]);
+	}
+	float X[GFX_K_TERMS][4];
+	for (int k = 0; k < GFX_K_TERMS; k++)
+		for (int l = 0; l < 4; l++)
+			X[k][l] = d->k[k][0][l] + d->k[k][1][l] * c[l] + d->k[k][2][l] * c[3];
+	if (d->fog) {
+		/* Como el vertex program de rsxkit: todo por (1 − f) y el
+		 * color de niebla al término constante (el primero sin
+		 * factores, que combine.c garantiza). */
+		float f = c[3];
+		int fog_term = GFX_K_ONE;
+		if (d->nterms) {
+			fog_term = -1;
+			for (int k = 0; k < d->nterms && fog_term < 0; k++)
+				if (!d->factors[k][0])
+					fog_term = k;
+		}
+		for (int k = 0; k < GFX_K_TERMS; k++)
+			for (int l = 0; l < 3; l++)
+				X[k][l] *= 1.0f - f;
+		for (int l = 0; fog_term >= 0 && l < 3; l++)
+			X[fog_term][l] += f * ((d->fog_color >> (24 - 8 * l)) & 0xFF) / 255.0f;
+	}
+	float out[4];
+	if (d->nterms) {
+		/* Términos del generador de fragment programs. */
+		for (int l = 0; l < 4; l++) {
+			float sum = 0.0f;
+			for (int k = 0; k < d->nterms; k++) {
+				float p = X[k][l];
+				for (int f = 0; f < GFX_K_FACTORS && d->factors[k][f]; f++)
+					switch (d->factors[k][f]) {
+					case GFX_F_T0: p *= tx[0][l]; break;
+					case GFX_F_T0A: p *= tx[0][3]; break;
+					case GFX_F_T1: p *= tx[1][l]; break;
+					case GFX_F_T1A: p *= tx[1][3]; break;
+					case GFX_F_C: p *= c[l]; break;
+					default: p *= c[3]; break;
+					}
+				sum += p;
+			}
+			out[l] = clamp01(sum);
+		}
+	} else {
+		for (int l = 0; l < 4; l++)
+			out[l] = clamp01(tx[0][l] * X[GFX_K_T0][l] + tx[0][3] * X[GFX_K_T0A][l] +
+					 tx[1][l] * X[GFX_K_T1][l] + tx[1][3] * X[GFX_K_T1A][l] +
+					 X[GFX_K_ONE][l]);
+	}
+	if (d->atest == GFX_ATEST_GEQUAL && out[3] * 255.0f + 0.5f < d->aref)
+		return;
+#ifdef SALSA64_GFX_TRACE
+	if (raster_mark)
+		out[0] = 1.0f, out[1] = 0.0f, out[2] = 1.0f, out[3] = 1.0f;
+#endif
+#ifdef SALSA64_GFX_TRACE
+	if (pix_x == x && pix_y == y)
+		fprintf(stderr, "    PIX draw %u ntex %u blend %u atest %u c %.2f %.2f %.2f %.2f tx0 %.2f %.2f %.2f %.2f "
+			"X0 %.2f %.2f %.2f X4 %.2f %.2f %.2f out %.2f %.2f %.2f %.2f s %.1f t %.1f z %.3f\n",
+			ndraw, d->ntex, d->blend, d->atest, c[0], c[1], c[2], c[3], tx[0][0], tx[0][1], tx[0][2], tx[0][3],
+			X[GFX_K_T0][0], X[GFX_K_T0][1], X[GFX_K_T0][2], X[GFX_K_ONE][0], X[GFX_K_ONE][1], X[GFX_K_ONE][2],
+			out[0], out[1], out[2], out[3], s, t, z);
+#endif
+	uint32_t old = tg_rgb[idx];
+	float dst[3] = { (old >> 16 & 0xFF) / 255.0f, (old >> 8 & 0xFF) / 255.0f, (old & 0xFF) / 255.0f };
+	if (d->blend == GFX_BLEND_KEEP)
+		return;
+	for (int l = 0; l < 3; l++) {
+		if (d->blend == GFX_BLEND_ALPHA)
+			out[l] = out[l] * out[3] + dst[l] * (1.0f - out[3]);
+		else if (d->blend == GFX_BLEND_ADD)
+			out[l] = clamp01(out[l] * out[3] + dst[l]);
+	}
+	tg_rgb[idx] = channel(out[0], q5) << 16 | channel(out[1], q5) << 8 | channel(out[2], q5);
+	if ((d->depth & GFX_DEPTH_WRITE) && zb)
+		zb->z[idx] = z;
+}
+
 static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, const struct texsrc src[2],
 			  uint32_t *tg_rgb, bool q5, struct depth *zb, float prim_z)
 {
-	float sx[3], sy[3], sz[3], iw[3];
-	for (int i = 0; i < 3; i++) {
-		if (v[i].w <= 0.0f)
-			return;
-		iw[i] = 1.0f / v[i].w;
-		sx[i] = v[i].x * iw[i];
-		sy[i] = v[i].y * iw[i];
-		sz[i] = v[i].z * iw[i];
-	}
-	if (d->depth & GFX_DEPTH_PRIM)
-		sz[0] = sz[1] = sz[2] = prim_z;
-	float area = edge(sx[0], sy[0], sx[1], sy[1], sx[2], sy[2]);
-	if (area == 0.0f)
+	struct tri t3;
+	if (!tri_setup(d, v, prim_z, &t3))
 		return;
-	/* Antihorario visto con y hacia arriba (convención de OpenGL y de
-	 * libultra) es el frente; con la y de pantalla hacia abajo, área < 0. */
-	if ((d->cull == GFX_CULL_BACK && area > 0.0f) || (d->cull == GFX_CULL_FRONT && area < 0.0f))
-		return;
-
+	const float *sx = t3.sx, *sy = t3.sy;
 	float x0 = d->scissor[0] / 4.0f, y0 = d->scissor[1] / 4.0f;
 	float x1 = d->scissor[2] / 4.0f, y1 = d->scissor[3] / 4.0f;
 	float minx = fminf(fminf(sx[0], sx[1]), sx[2]), maxx = fmaxf(fmaxf(sx[0], sx[1]), sx[2]);
@@ -272,107 +400,111 @@ static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, 
 			float cx = x + 0.5f, cy = y + 0.5f;
 			if (cx < x0 || cx >= x1 || cy < y0 || cy >= y1)
 				continue;
-			float b0 = edge(sx[1], sy[1], sx[2], sy[2], cx, cy) / area;
-			float b1 = edge(sx[2], sy[2], sx[0], sy[0], cx, cy) / area;
+			float b0 = edge(sx[1], sy[1], sx[2], sy[2], cx, cy) / t3.area;
+			float b1 = edge(sx[2], sy[2], sx[0], sy[0], cx, cy) / t3.area;
 			float b2 = 1.0f - b0 - b1;
 			if (b0 < 0.0f || b1 < 0.0f || b2 < 0.0f)
 				continue;
-			float z = b0 * sz[0] + b1 * sz[1] + b2 * sz[2];
-			int idx = y * RASTER_W + x;
-			if ((d->depth & GFX_DEPTH_TEST) && zb && z > zb->z[idx] + ((d->depth & GFX_DEPTH_DECAL) ? 1e-3f : 0.0f))
-				continue;
-			/* ZMODE_XLU: estrictamente delante, o el z-buffer aún borrado. */
-			if ((d->depth & GFX_DEPTH_LESS) && zb && z >= zb->z[idx] && zb->z[idx] < 1.0f)
-				continue;
-			/* Interpolación con perspectiva. */
-			float p0 = b0 * iw[0], p1 = b1 * iw[1], p2 = b2 * iw[2], pw = p0 + p1 + p2;
-			p0 /= pw, p1 /= pw, p2 /= pw;
-			float c[4], s = p0 * v[0].s + p1 * v[1].s + p2 * v[2].s, t = p0 * v[0].t + p1 * v[1].t + p2 * v[2].t;
-			const uint8_t *c0 = &v[0].r, *c1 = &v[1].r, *c2 = &v[2].r;
-			for (int k = 0; k < 4; k++)
-				c[k] = (p0 * c0[k] + p1 * c1[k] + p2 * c2[k]) / 255.0f;
-
-			float tx[2][4] = { { 1, 1, 1, 1 }, { 1, 1, 1, 1 } };
-			for (int i = 0; i < d->ntex && i < 2; i++) {
-				const struct gfx_tex *te = &d->tex[i];
-				sample(te, &src[i], s * te->xf[0] + te->xf[2], t * te->xf[1] + te->xf[3], tx[i]);
-			}
-			float X[GFX_K_TERMS][4];
-			for (int k = 0; k < GFX_K_TERMS; k++)
-				for (int l = 0; l < 4; l++)
-					X[k][l] = d->k[k][0][l] + d->k[k][1][l] * c[l] + d->k[k][2][l] * c[3];
-			if (d->fog) {
-				/* Como el vertex program de rsxkit: todo por (1 − f) y el
-				 * color de niebla al término constante (el primero sin
-				 * factores, que combine.c garantiza). */
-				float f = c[3];
-				int fog_term = GFX_K_ONE;
-				if (d->nterms) {
-					fog_term = -1;
-					for (int k = 0; k < d->nterms && fog_term < 0; k++)
-						if (!d->factors[k][0])
-							fog_term = k;
-				}
-				for (int k = 0; k < GFX_K_TERMS; k++)
-					for (int l = 0; l < 3; l++)
-						X[k][l] *= 1.0f - f;
-				for (int l = 0; fog_term >= 0 && l < 3; l++)
-					X[fog_term][l] += f * ((d->fog_color >> (24 - 8 * l)) & 0xFF) / 255.0f;
-			}
-			float out[4];
-			if (d->nterms) {
-				/* Términos del generador de fragment programs. */
-				for (int l = 0; l < 4; l++) {
-					float sum = 0.0f;
-					for (int k = 0; k < d->nterms; k++) {
-						float p = X[k][l];
-						for (int f = 0; f < GFX_K_FACTORS && d->factors[k][f]; f++)
-							switch (d->factors[k][f]) {
-							case GFX_F_T0: p *= tx[0][l]; break;
-							case GFX_F_T0A: p *= tx[0][3]; break;
-							case GFX_F_T1: p *= tx[1][l]; break;
-							case GFX_F_T1A: p *= tx[1][3]; break;
-							case GFX_F_C: p *= c[l]; break;
-							default: p *= c[3]; break;
-							}
-						sum += p;
-					}
-					out[l] = clamp01(sum);
-				}
-			} else {
-				for (int l = 0; l < 4; l++)
-					out[l] = clamp01(tx[0][l] * X[GFX_K_T0][l] + tx[0][3] * X[GFX_K_T0A][l] +
-							 tx[1][l] * X[GFX_K_T1][l] + tx[1][3] * X[GFX_K_T1A][l] +
-							 X[GFX_K_ONE][l]);
-			}
-			if (d->atest == GFX_ATEST_GEQUAL && out[3] * 255.0f + 0.5f < d->aref)
-				continue;
-#ifdef SALSA64_GFX_TRACE
-			if (raster_mark)
-				out[0] = 1.0f, out[1] = 0.0f, out[2] = 1.0f, out[3] = 1.0f;
-#endif
-#ifdef SALSA64_GFX_TRACE
-			if (pix_x == x && pix_y == y)
-				fprintf(stderr, "    PIX draw %u ntex %u blend %u atest %u c %.2f %.2f %.2f %.2f tx0 %.2f %.2f %.2f %.2f "
-					"X0 %.2f %.2f %.2f X4 %.2f %.2f %.2f out %.2f %.2f %.2f %.2f s %.1f t %.1f z %.3f\n",
-					ndraw, d->ntex, d->blend, d->atest, c[0], c[1], c[2], c[3], tx[0][0], tx[0][1], tx[0][2], tx[0][3],
-					X[GFX_K_T0][0], X[GFX_K_T0][1], X[GFX_K_T0][2], X[GFX_K_ONE][0], X[GFX_K_ONE][1], X[GFX_K_ONE][2],
-					out[0], out[1], out[2], out[3], s, t, z);
-#endif
-			uint32_t old = tg_rgb[idx];
-			float dst[3] = { (old >> 16 & 0xFF) / 255.0f, (old >> 8 & 0xFF) / 255.0f, (old & 0xFF) / 255.0f };
-			if (d->blend == GFX_BLEND_KEEP)
-				continue;
-			for (int l = 0; l < 3; l++) {
-				if (d->blend == GFX_BLEND_ALPHA)
-					out[l] = out[l] * out[3] + dst[l] * (1.0f - out[3]);
-				else if (d->blend == GFX_BLEND_ADD)
-					out[l] = clamp01(out[l] * out[3] + dst[l]);
-			}
-			tg_rgb[idx] = channel(out[0], q5) << 16 | channel(out[1], q5) << 8 | channel(out[2], q5);
-			if ((d->depth & GFX_DEPTH_WRITE) && zb)
-				zb->z[idx] = z;
+			shade(d, v, &t3, src, tg_rgb, q5, zb, x, y, b0, b1, b2, 0.0f);
 		}
+}
+
+/* Las aristas del triángulo como líneas de raster_edge_width píxeles, como
+ * el RSX en modo de polígono LINE (rsxkit_draw.edges): por cada columna (o
+ * fila, si la línea es más alta que ancha) cuyo centro cae en [inicio,
+ * fin), los píxeles de esa columna a menos de medio ancho de la línea. */
+static void draw_edges(const struct gfx_draw *d, const struct gfx_vertex *v, const struct texsrc src[2],
+		       uint32_t *tg_rgb, bool q5, struct depth *zb, float prim_z)
+{
+	struct tri t3;
+	if (!tri_setup(d, v, prim_z, &t3))
+		return;
+	float x0 = d->scissor[0] / 4.0f, y0 = d->scissor[1] / 4.0f;
+	float x1 = d->scissor[2] / 4.0f, y1 = d->scissor[3] / 4.0f;
+	/* Como rsxkit: desplazamiento de polígono hacia atrás (por omisión,
+	 * factor 8 y 64 unidades de un z-buffer de 24 bits), para que el relleno
+	 * gane donde cubre (la z de la línea es la del punto de la arista) y
+	 * las piezas vecinas casi coplanares también. */
+	float dzdx = ((t3.sz[1] - t3.sz[0]) * (t3.sy[2] - t3.sy[0]) - (t3.sz[2] - t3.sz[0]) * (t3.sy[1] - t3.sy[0])) / t3.area;
+	float dzdy = ((t3.sz[2] - t3.sz[0]) * (t3.sx[1] - t3.sx[0]) - (t3.sz[1] - t3.sz[0]) * (t3.sx[2] - t3.sx[0])) / t3.area;
+	float zoff = raster_edge_factor * fmaxf(fabsf(dzdx), fabsf(dzdy)) + raster_edge_units / 16777216.0f;
+	for (int e = 0; e < 3; e++) {
+		int i = e, j = (e + 1) % 3;
+		float ax = t3.sx[i], ay = t3.sy[i], bx = t3.sx[j], by = t3.sy[j];
+		bool xmajor = fabsf(bx - ax) >= fabsf(by - ay);
+		float a0 = xmajor ? ax : ay, a1 = xmajor ? bx : by;
+		if (a0 == a1)
+			continue;
+		float lo = fminf(a0, a1), hi = fmaxf(a0, a1);
+		int p0 = (int)ceilf(lo - 0.5f), p1 = (int)ceilf(hi - 0.5f);  /* centros en [lo, hi) */
+		int lim = xmajor ? RASTER_W : RASTER_H;
+		p0 = p0 < 0 ? 0 : p0;
+		p1 = p1 > lim ? lim : p1;
+		for (int p = p0; p < p1; p++) {
+			float t = (p + 0.5f - a0) / (a1 - a0);
+			float m = xmajor ? ay + (by - ay) * t : ax + (bx - ax) * t;
+			/* Línea ancha: los centros a menos de la mitad del ancho en la
+			 * dirección menor (con 1, el píxel donde pasa la línea). */
+			int q0 = (int)ceilf(m - raster_edge_width * 0.5f - 0.5f), q1 = (int)ceilf(m + raster_edge_width * 0.5f - 0.5f);
+			for (int q = q0; q < q1; q++) {
+				int x = xmajor ? p : q, y = xmajor ? q : p;
+				float cx = x + 0.5f, cy = y + 0.5f;
+				if (x < 0 || y < 0 || x >= RASTER_W || y >= RASTER_H || cx < x0 || cx >= x1 || cy < y0 || cy >= y1)
+					continue;
+				float b[3] = { 0.0f, 0.0f, 0.0f };
+				b[i] = 1.0f - t, b[j] = t;
+				shade(d, v, &t3, src, tg_rgb, q5, zb, x, y, b[0], b[1], b[2], zoff);
+			}
+		}
+	}
+}
+
+/* Recorte contra w = W_MIN: el triángulo con vértices detrás de la cámara
+ * queda en un polígono de 3 o 4 vértices delante (el suelo bajo la cámara
+ * en Pokémon Snap); sin esto se descartaba entero y dejaba ver lo de atrás.
+ * Todo es lineal en coordenadas de recorte (x, y, z y s, t sin dividir). */
+#define W_MIN 1e-3f
+
+static void lerp_vertex(const struct gfx_vertex *a, const struct gfx_vertex *b, float t, struct gfx_vertex *o)
+{
+	o->x = a->x + (b->x - a->x) * t;
+	o->y = a->y + (b->y - a->y) * t;
+	o->z = a->z + (b->z - a->z) * t;
+	o->w = W_MIN;
+	o->s = a->s + (b->s - a->s) * t;
+	o->t = a->t + (b->t - a->t) * t;
+	o->r = (uint8_t)(a->r + (b->r - a->r) * t + 0.5f);
+	o->g = (uint8_t)(a->g + (b->g - a->g) * t + 0.5f);
+	o->b = (uint8_t)(a->b + (b->b - a->b) * t + 0.5f);
+	o->a = (uint8_t)(a->a + (b->a - a->a) * t + 0.5f);
+	o->pad = 0;
+}
+
+static void draw_clipped(const struct gfx_draw *d, const struct gfx_vertex *v, const struct texsrc src[2],
+			 uint32_t *tg_rgb, bool q5, struct depth *zb, float prim_z, bool edges)
+{
+	void (*draw)(const struct gfx_draw *, const struct gfx_vertex *, const struct texsrc[2], uint32_t *, bool,
+		     struct depth *, float) = edges ? draw_edges : draw_triangle;
+	if (v[0].w > W_MIN && v[1].w > W_MIN && v[2].w > W_MIN) {
+		draw(d, v, src, tg_rgb, q5, zb, prim_z);
+		return;
+	}
+	struct gfx_vertex poly[4];
+	int n = 0;
+	for (int i = 0; i < 3; i++) {
+		const struct gfx_vertex *a = &v[i], *b = &v[(i + 1) % 3];
+		if (isnan(a->w))
+			return;
+		bool ina = a->w > W_MIN, inb = b->w > W_MIN;
+		if (ina)
+			poly[n++] = *a;
+		if (ina != inb)
+			lerp_vertex(a, b, (W_MIN - a->w) / (b->w - a->w), &poly[n++]);
+	}
+	for (int i = 1; i + 1 < n; i++) {
+		const struct gfx_vertex tri[3] = { poly[0], poly[i], poly[i + 1] };
+		draw(d, tri, src, tg_rgb, q5, zb, prim_z);
+	}
 }
 
 /* Como rdp.c: ¿los dibujos hasta el próximo TARGET son todos rellenos? */
@@ -420,18 +552,24 @@ static int texture_source(const struct gfx_job *job, const struct texmem *m, con
 			  struct texsrc *s)
 {
 	s->slot = -1;
+	s->intensity = false;
 	s->data = m->base[t->where & 1] + t->offset;
 	int i = -1;
 	uint32_t x0 = 0, y0 = 0;
 	enum rdp_texsrc src = RDP_TEXSRC_NONE;
-	if (t->src_addr && t->src_siz == IM_SIZ_16b)
-		src = rdp_targets_texture(&tg, t->src_addr, t->src_pitch, 2, cur, &i, &x0, &y0);
+	/* Como rdp.c: de 16 bits, o la I8 de una imagen de 8 bits que la HLE
+	 * dejó para leer del destino. */
+	uint32_t bpp = t->src_siz == IM_SIZ_16b ? 2 : t->src_siz == 1u && t->where == GFX_TEX_TARGET ? 1 : 0;
+	if (t->src_addr && bpp)
+		src = rdp_targets_texture(&tg, t->src_addr, t->src_pitch, bpp, cur, &i, &x0, &y0);
 	if ((src != RDP_TEXSRC_RSX && src != RDP_TEXSRC_SELF) || !raster_fbfx) {
 		if (t->where == GFX_TEX_TARGET) {
+			tex8_rdram += bpp == 1;
 			memset(tex_here[k], 0, sizeof tex_here[k]);
 			if (job->rdram_ea && (uint32_t)t->pitch * t->height <= sizeof tex_here[k])
-				rdp_decode_rgba16((const uint8_t *)(uintptr_t)job->rdram_ea, job->rdram_size, t->src_addr,
-						  t->src_pitch, t->width, t->height, tex_here[k], t->pitch);
+				(bpp == 1 ? rdp_decode_i8 : rdp_decode_rgba16)((const uint8_t *)(uintptr_t)job->rdram_ea,
+									      job->rdram_size, t->src_addr, t->src_pitch,
+									      t->width, t->height, tex_here[k], t->pitch);
 			s->data = tex_here[k];
 			tex_decoded_here++;
 			if (raster_trace_fb)
@@ -442,15 +580,19 @@ static int texture_source(const struct gfx_job *job, const struct texmem *m, con
 		return i;
 	}
 	if (src == RDP_TEXSRC_SELF) {
-		if (scratch_slot != i) {
+		/* Como rdp.c: otra vez si desde la copia se dibujó donde lee. */
+		if (scratch_slot != i || rdp_box_overlaps(&scratch_dirty, x0, y0, x0 + t->width, y0 + t->height)) {
 			memcpy(scratch, rgb[i], sizeof scratch);
 			scratch_slot = i;
+			memset(&scratch_dirty, 0, sizeof scratch_dirty);
 		}
 		s->pix = scratch;
 	} else {
 		s->pix = rgb[i];
 	}
 	s->slot = i;
+	s->intensity = bpp == 1;
+	tex8_rsx += bpp == 1;
 	s->x0 = x0;
 	s->y0 = y0;
 	return i;
@@ -576,6 +718,29 @@ static void frame_mirror(const struct gfx_job *job, int slot, uint32_t rows, con
 			task_no, t->addr, t->width, when, box.x0, box.x1, box.y0, box.y1);
 }
 
+/* Borra con r->color el rectángulo r (píxeles lógicos) del destino `i` y lo
+ * cuenta como dibujado en la tarea: un FILLRECT repartido de una imagen alta
+ * (o entregado a un destino nuevo). Como rdp.c (tall_fill_target). */
+static void tall_fill_target(int i, const struct rdp_tall_rect *r, bool drawn[RDP_TARGETS_MAX],
+			     struct rdp_box drawn_box[RDP_TARGETS_MAX])
+{
+	const struct rdp_target *t = &tg.t[i];
+	int ya = (int)r->y0, yb = (int)(r->y1 + 0.999f);
+	int xa = (int)r->x0, xb = (int)(r->x1 + 0.999f);
+	ya = ya < 0 ? 0 : ya, yb = yb > (int)t->lh ? (int)t->lh : yb;
+	xa = xa < 0 ? 0 : xa, xb = xb > (int)t->lw ? (int)t->lw : xb;
+	if (yb <= ya || xb <= xa)
+		return;
+	for (int y = ya; y < yb && y < RASTER_H; y++)
+		for (int x = xa; x < xb && x < RASTER_W; x++)
+			rgb[i][y * RASTER_W + x] = r->color;
+	rdp_targets_drawn(&tg, i);
+	drawn[i] = true;
+	struct rdp_box b = { (uint16_t)xa, (uint16_t)ya, (uint16_t)xb, (uint16_t)yb };
+	rdp_box_union(&drawn_box[i], &b);
+	rdp_box_union(&tg.t[i].box, &b);
+}
+
 void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 {
 	const uint8_t *cmd = (const uint8_t *)(uintptr_t)job->cmd_ea;
@@ -613,15 +778,24 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 				 * de readbacks_wanted de la PS3 (src/rdp/rdp.c), con el ancho
 				 * del VI de ahora y con el del último origen agregado al
 				 * anillo (la regla de antes del 2026-10-13). */
-				uint32_t fmt = (c->c >> 8) & 0xFF, old_w = vi_ring.width[(vi_ring.n + RDP_VI_RING - 1) % RDP_VI_RING];
-				bool img = (siz == 2u || (siz == 1u && fmt == 4u)) && c->b && c->b <= 640 && vi_ring.n;
+				uint32_t old_w = vi_ring.width[(vi_ring.n + RDP_VI_RING - 1) % RDP_VI_RING];
+				bool img = (siz == 2u || siz == 1u) && c->b && c->b <= 640 && vi_ring.n;
 				bool cov = img && rdp_vi_ring_covers(&vi_ring, c->a, c->b);
 				ps3_rb += img && (c->b != vi_ring.cur_width || !cov);
 				ps3_rb_old += img && (c->b != old_w || !cov);
 			}
 			bool is_tall = c->b && c->b <= 640 && rdp_targets_tall(c->b, lh) &&
 				       fills_only(cmd, off + c->size, res->cmd_bytes);
-			cur = is_tall ? -1 : get_target(job, c->a, c->b, (c->c >> 8) & 0xFF, siz, lh);
+			bool created;
+			cur = is_tall ? -1 : get_target(job, c->a, c->b, (c->c >> 8) & 0xFF, siz, lh, &created);
+			if (cur >= 0 && created) {
+				/* Un relleno de imagen alta anterior (rdp_targets_tall_note) que
+				 * este destino no vio: se cebó con la RDRAM, que no lo tiene. */
+				struct rdp_tall_rect pend[RDP_TALL_FILLS];
+				int np = rdp_targets_tall_pending(&tg, cur, &dma_ring, pend);
+				for (int k = 0; k < np; k++)
+					tall_fill_target(cur, &pend[k], drawn, drawn_box);
+			}
 			tall.rows = is_tall ? lh : 0;
 			tall.addr = c->a;
 			tall.width = c->b;
@@ -672,23 +846,16 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 						 (uint32_t)(d->k[GFX_K_ONE][0][2] * 255.0f + 0.5f);
 				int n = rdp_targets_inside(&tg, tall.addr, tall.width, tall.bpp, tall.rows, slots, first);
 				for (int k = 0; k < n && x1 > x0 && y1 > y0; k++) {
-					int i = slots[k];
-					const struct rdp_target *t = &tg.t[i];
-					int ya = (int)(y0 - (float)first[k]), yb = (int)(y1 - (float)first[k] + 0.999f);
-					int xa = (int)x0, xb = (int)(x1 + 0.999f);
-					ya = ya < 0 ? 0 : ya, yb = yb > (int)t->lh ? (int)t->lh : yb;
-					xa = xa < 0 ? 0 : xa, xb = xb > (int)t->lw ? (int)t->lw : xb;
-					if (yb <= ya || xb <= xa)
-						continue;
-					for (int y = ya; y < yb && y < RASTER_H; y++)
-						for (int x = xa; x < xb && x < RASTER_W; x++)
-							rgb[i][y * RASTER_W + x] = color;
-					rdp_targets_drawn(&tg, i);
-					drawn[i] = true;
-					struct rdp_box r = { (uint16_t)xa, (uint16_t)ya, (uint16_t)xb, (uint16_t)yb };
-					rdp_box_union(&drawn_box[i], &r);
-					rdp_box_union(&tg.t[i].box, &r);
+					const struct rdp_target *t = &tg.t[slots[k]];
+					struct rdp_tall_rect r = { x0 < 0.0f ? 0.0f : x0, y0 - (float)first[k],
+								   x1 > (float)t->lw ? (float)t->lw : x1, y1 - (float)first[k],
+								   color };
+					r.y0 = r.y0 < 0.0f ? 0.0f : r.y0;
+					r.y1 = r.y1 > (float)t->lh ? (float)t->lh : r.y1;
+					tall_fill_target(slots[k], &r, drawn, drawn_box);
 				}
+				/* Y para los destinos que se creen después. */
+				rdp_targets_tall_note(&tg, tall.addr, tall.width, tall.bpp, tall.rows, x0, y0, x1, y1, color, slots, n);
 				break;
 			}
 			if (cur < 0)
@@ -734,8 +901,18 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 			/* Como el RSX (rsxkit, RSXKIT_DEPTH_CONST): la z del primitivo
 			 * exacta en todo el dibujo, no la de cada vértice entre su w. */
 			float prim_z = (d->depth & GFX_DEPTH_PRIM) ? gfx_prim_z(vtx + d->h.a, d->h.b) : 0.0f;
+			bool q5 = tg.t[cur].bpp == 2 && raster_q5;
+			/* Como rdp.c: las aristas antes, en los dibujos opacos con AA_EN. */
+			if (d->aa && !(d->depth & GFX_DEPTH_DECAL)) {
+				for (uint32_t i = 0; raster_aa_edges && i + 3 <= d->h.b; i += 3)
+					draw_clipped(d, vtx + d->h.a + i, src, rgb[cur], q5, zb, prim_z, true);
+				edge_draws++;
+				edge_tris += d->h.b / 3;
+			}
+			all_draws++;
+			draws8 += tg.t[cur].bpp == 1;
 			for (uint32_t i = 0; i + 3 <= d->h.b; i += 3)
-				draw_triangle(d, vtx + d->h.a + i, src, rgb[cur], tg.t[cur].bpp == 2, zb, prim_z);
+				draw_clipped(d, vtx + d->h.a + i, src, rgb[cur], q5, zb, prim_z, false);
 			if (!drawn[cur])
 				rdp_targets_drawn(&tg, cur);
 			drawn[cur] = true;
@@ -757,6 +934,8 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 				rdp_box_add(&r, x0, y0, x1, y1, front, d->scissor, tg.t[cur].lw, tg.t[cur].lh);
 				rdp_box_union(&drawn_box[cur], &r);
 				rdp_box_union(&tg.t[cur].box, &r);
+				if (cur == scratch_slot)
+					rdp_box_union(&scratch_dirty, &r);
 			}
 			break;
 		}
@@ -794,7 +973,7 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 				fprintf(stderr, "fb: campo %u tarea %u: copia a la RDRAM del destino %06x/%u: %u..%u × %u..%u (alto "
 					"conjeturado %u)\n", raster_field, task_no, t->addr, t->width, box->x0, box->x1, box->y0, rows,
 					t->lh);
-		} else if (raster_fbfx >= 2 && rows && !t->presented && (t->bpp == 2 || (t->bpp == 1 && t->fmt == 4)) &&
+		} else if (raster_fbfx >= 2 && rows && !t->presented && (t->bpp == 2 || t->bpp == 1) &&
 			   t->width != tg.vi_width && t->width * t->bpp * rows <= MIRROR_BYTES) {
 			/* Espejo de una imagen auxiliar chica (en la PS3, sin esperar). */
 			if (dma_newer(t->addr, t->width * t->bpp * rows, task_no))
@@ -840,6 +1019,8 @@ void raster_reset(void)
 	task_no = vi_field = 0;
 	memset(&vi_ring, 0, sizeof vi_ring);
 	primes = readbacks = mirrors = frames = dma_skipped = tex_decoded_here = 0;
+	all_draws = edge_draws = edge_tris = 0;
+	draws8 = tex8_rsx = tex8_rdram = 0;
 	memset(&dma_ring, 0, sizeof dma_ring);
 	memset(rb_task, 0, sizeof rb_task);
 	memset(&last_job, 0, sizeof last_job);
@@ -853,6 +1034,20 @@ void raster_fb_stats(uint32_t *n_readbacks, uint32_t *n_primes, uint32_t *tex_rs
 	*tex_rsx = tg.tex_rsx;
 	*tex_rdram = tg.tex_rdram;
 	*tex_decoded = tex_decoded_here;
+}
+
+void raster_8bit_stats(uint32_t *draws, uint32_t *tex_rsx, uint32_t *tex_rdram)
+{
+	*draws = draws8;
+	*tex_rsx = tex8_rsx;
+	*tex_rdram = tex8_rdram;
+}
+
+void raster_edge_stats(uint32_t *draws, uint32_t *with_edges, uint32_t *tris)
+{
+	*draws = all_draws;
+	*with_edges = edge_draws;
+	*tris = edge_tris;
 }
 
 const uint32_t *raster_image(uint32_t addr, uint32_t *width)
@@ -876,4 +1071,32 @@ bool raster_target_info(int slot, uint32_t *addr, uint32_t *width, uint32_t *bpp
 	*bpp = tg.t[slot].bpp;
 	*lh = tg.t[slot].lh;
 	return true;
+}
+
+/* Todo el estado del rasterizador, para dibujar cuadros inventados
+ * (interp.c) sin tocar los destinos del juego. */
+#define RASTER_STATE(X)                                                                              \
+	X(tg) X(rgb) X(scratch) X(scratch_slot) X(depths) X(next_depth) X(task_no) X(vi_field) X(vi_ring) \
+	X(primes) X(readbacks) X(mirrors) X(frames) X(dma_skipped) X(dma_ring) X(rb_task) X(rb_wanted_task) \
+	X(last_job) X(tex_decoded_here)
+#define RASTER_SIZE(v) + sizeof(v)
+size_t raster_state_size(void)
+{
+	return 0 RASTER_STATE(RASTER_SIZE);
+}
+
+void raster_state_save(void *buf)
+{
+	uint8_t *p = buf;
+#define RASTER_SAVE(v) memcpy(p, &(v), sizeof(v)), p += sizeof(v);
+	RASTER_STATE(RASTER_SAVE)
+#undef RASTER_SAVE
+}
+
+void raster_state_restore(const void *buf)
+{
+	const uint8_t *p = buf;
+#define RASTER_LOAD(v) memcpy(&(v), p, sizeof(v)), p += sizeof(v);
+	RASTER_STATE(RASTER_LOAD)
+#undef RASTER_LOAD
 }

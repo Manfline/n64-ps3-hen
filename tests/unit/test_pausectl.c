@@ -268,6 +268,12 @@ static void menu_image_page(void)
 	CHECK_EQ(pc.image_arg, 1);
 	pc.image_do = -1;
 	tap(B(DOWN));
+	CHECK_EQ(pc.image_sel, IM_INTERP);
+	tap(B(RIGHT));
+	CHECK_EQ(pc.image_do, IM_INTERP);
+	CHECK_EQ(pc.image_arg, 1);
+	pc.image_do = -1;
+	tap(B(DOWN));
 	CHECK_EQ(pc.image_sel, IM_SAVE);
 	tap(B(RIGHT));
 	CHECK_EQ(pc.image_do, -1);  /* «Guardar» no tiene valor */

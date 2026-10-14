@@ -92,6 +92,19 @@ void rdp_decode_rgba16(const uint8_t *rdram, uint32_t rdram_size, uint32_t addr,
 	}
 }
 
+void rdp_decode_i8(const uint8_t *rdram, uint32_t rdram_size, uint32_t addr, uint32_t pitch, uint32_t w, uint32_t h,
+		   uint8_t *out, uint32_t out_pitch)
+{
+	for (uint32_t y = 0; y < h; y++) {
+		uint8_t *o = out + y * out_pitch;
+		uint32_t a = addr + y * pitch;
+		for (uint32_t x = 0; x < w; x++, a++, o += 4) {
+			uint8_t i = a < rdram_size && a >= addr ? rdram[a] : 0;
+			o[0] = o[1] = o[2] = o[3] = i;
+		}
+	}
+}
+
 bool rdp_present_integer(uint32_t src_w, uint32_t src_h, uint32_t screen_w, uint32_t screen_h)
 {
 	if (!src_w || !src_h || src_w > screen_w || src_h > screen_h)
@@ -474,6 +487,78 @@ void rdp_targets_present(struct rdp_targets *s, const struct salsa64_vi_frame *f
 	if (k > 1)
 		out->y0 = best_y0 - best_y0 % k;
 	out->h = rows < t->lh - out->y0 ? rows : t->lh - out->y0;
+}
+
+static bool tall_applied(const struct rdp_tall_fill *e, uint32_t addr)
+{
+	for (uint32_t k = 0; k < e->napplied && k < RDP_TALL_APPLIED; k++)
+		if (e->applied[k] == addr)
+			return true;
+	return false;
+}
+
+static void tall_mark(struct rdp_tall_fill *e, uint32_t addr)
+{
+	if (e->napplied < RDP_TALL_APPLIED && !tall_applied(e, addr))
+		e->applied[e->napplied++] = addr;
+}
+
+void rdp_targets_tall_note(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32_t bpp, uint32_t rows,
+			   float x0, float y0, float x1, float y1, uint32_t color, const int *done, int ndone)
+{
+	if (!width || !bpp || !rows || !(x1 > x0) || !(y1 > y0))
+		return;
+	struct rdp_tall_fill *e = &s->tall[s->tall_next++ % RDP_TALL_FILLS];
+	memset(e, 0, sizeof *e);
+	e->used = true;
+	e->addr = addr;
+	e->width = width;
+	e->bpp = bpp;
+	e->rows = rows;
+	e->x0 = x0;
+	e->y0 = y0;
+	e->x1 = x1;
+	e->y1 = y1;
+	e->color = color;
+	e->task = s->task;
+	for (int k = 0; k < ndone; k++)
+		if (done[k] >= 0 && done[k] < RDP_TARGETS_MAX)
+			tall_mark(e, s->t[done[k]].addr);
+}
+
+int rdp_targets_tall_pending(struct rdp_targets *s, int slot, const struct rdp_dma_ring *dma,
+			     struct rdp_tall_rect out[RDP_TALL_FILLS])
+{
+	if (slot < 0 || slot >= RDP_TARGETS_MAX || !s->t[slot].used)
+		return 0;
+	const struct rdp_target *t = &s->t[slot];
+	int n = 0;
+	/* Del más viejo al más nuevo: el último gana donde se solapan. */
+	for (uint32_t k = 0; k < RDP_TALL_FILLS; k++) {
+		struct rdp_tall_fill *e = &s->tall[(s->tall_next + k) % RDP_TALL_FILLS];
+		uint32_t line = e->width * e->bpp;
+		if (!e->used || !line || s->task - e->task > RDP_TALL_FILL_TASKS || t->width != e->width ||
+		    t->bpp != e->bpp || t->addr < e->addr || (t->addr - e->addr) % line ||
+		    t->addr >= e->addr + line * e->rows || tall_applied(e, t->addr))
+			continue;
+		tall_mark(e, t->addr);
+		if (dma && rdp_dma_since(dma, t->addr, t->addr + line * t->lh, e->task))
+			continue;
+		float first = (float)((t->addr - e->addr) / line);
+		float ya = e->y0 - first, yb = e->y1 - first;
+		float xa = e->x0 < 0.0f ? 0.0f : e->x0, xb = e->x1 > (float)t->lw ? (float)t->lw : e->x1;
+		ya = ya < 0.0f ? 0.0f : ya;
+		yb = yb > (float)t->lh ? (float)t->lh : yb;
+		if (yb <= ya || xb <= xa)
+			continue;
+		out[n].x0 = xa;
+		out[n].y0 = ya;
+		out[n].x1 = xb;
+		out[n].y1 = yb;
+		out[n].color = e->color;
+		n++;
+	}
+	return n;
 }
 
 void rdp_dma_note(struct rdp_dma_ring *r, uint32_t pa, uint32_t len, uint32_t task)

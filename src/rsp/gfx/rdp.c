@@ -86,16 +86,18 @@ void gfx_fb_forget(struct gfx_state *g)
 }
 
 /* La color image actual recibe un dibujo en esta tarea: su entrada en
- * fbimg (la misma dirección y ancho, una libre o la dibujada hace más
- * tareas), como el consumidor elige la ranura de un destino. Solo las de 16
- * bits (las únicas que lee como textura desde su destino) y no las
- * imposibles (ancho 0 o de más de 640): el consumidor las ignora. */
+ * fbimg (la misma dirección, ancho y tamaño de píxel, una libre o la
+ * dibujada hace más tareas), como el consumidor elige la ranura de un
+ * destino. Solo las de 16 y 8 bits (las que lee como textura desde su
+ * destino: RGBA16, e I8 de una de 8 bits) y no las imposibles (ancho 0 o de
+ * más de 640): el consumidor las ignora. */
 static __attribute__((noinline, cold)) void fb_drawn(struct gfx_state *g)
 {
 	g->fbimg_cur = -1;
 	uint32_t w = g->cimg_width, addr = g->cimg_addr, task = g->job->task;
-	if (w - 1 >= 640 || g->cimg_siz != G_IM_SIZ_16b)
+	if (w - 1 >= 640 || (g->cimg_siz != G_IM_SIZ_16b && g->cimg_siz != G_IM_SIZ_8b))
 		return;
+	addr |= g->cimg_siz == G_IM_SIZ_8b;  /* struct gfx_fbimg */
 	/* La misma imagen o, si no está, la libre o la dibujada hace más. */
 	int best = 0;
 	uint32_t oldest = 0;
@@ -232,6 +234,14 @@ static void blend_state(const struct gfx_state *g, struct gfx_draw *d)
 	if ((ol & G_AC_MASK) == G_AC_THRESHOLD) {
 		d->atest = GFX_ATEST_GEQUAL;
 		d->aref = (uint8_t)(g->blend & 0xFF) ? (uint8_t)(g->blend & 0xFF) : 1;
+		/* Con CVG_X_ALPHA y sin FORCE_BL (G_RM_AA_*_TEX_EDGE con umbral: las
+		 * hojas de Pokémon Snap, con el alfa del color de mezcla en 0) la
+		 * cobertura es cvg·α y el RDP tampoco escribe donde da 0: α < 32 con
+		 * el píxel cubierto. Medido contra la consola (salsa64-run --ares,
+		 * docs/referencia-ares.md): 24–32 es lo mejor; con 1, las hojas
+		 * salían medio texel más gruesas. */
+		if ((ol & CVG_X_ALPHA) && !(ol & FORCE_BL) && d->aref < 32)
+			d->aref = 32;
 	} else if ((ol & CVG_X_ALPHA) && !(ol & FORCE_BL)) {
 		/* Bordes recortados por el alfa de la textura (G_RM_AA_*_TEX_EDGE). */
 		d->atest = GFX_ATEST_GEQUAL;
@@ -640,7 +650,7 @@ void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
 		return;
 	const struct gfx_vtx *v[3] = { &g->vtx[a], &g->vtx[b], &g->vtx[c] };
 	/* Fuera del mismo plano los tres: no se ve. */
-	if (v[0]->clip & v[1]->clip & v[2]->clip)
+	if (v[0]->clip & v[1]->clip & v[2]->clip & GFX_CLIP_MASK)
 		return;
 	struct gfx_vertex p[4];
 	for (int i = 0; i < 3; i++)
@@ -674,8 +684,15 @@ void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
 				int j = i == 2 ? 0 : i + 1;
 				if (d[i] >= 0.0f)
 					p[n++] = in[i];
-				if ((d[i] < 0.0f) != (d[j] < 0.0f))
-					lerp_vertex(&p[n++], &in[i], &in[j], d[i] / (d[i] - d[j]));
+				if ((d[i] < 0.0f) != (d[j] < 0.0f)) {
+					lerp_vertex(&p[n], &in[i], &in[j], d[i] / (d[i] - d[j]));
+					/* GFX_JOB_INTERP: entre dos lugares del mismo grupo
+					 * (gfx.h); sin la bandera las identidades son 0. */
+					uint32_t a = in[i].pad, b = in[j].pad;
+					if (a && a < (1u << 25) && GFX_VGID_SERIAL(a) == GFX_VGID_SERIAL(b))
+						p[n].pad = GFX_VCLIP_ID(GFX_VGID_SERIAL(a), GFX_VGID_INDEX(a), GFX_VGID_INDEX(b));
+					n++;
+				}
 			}
 		}
 	}

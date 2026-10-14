@@ -263,7 +263,7 @@ bool perf_app_open(const uint8_t *rom, struct salsa64_rec *rec, const volatile u
 	perf.thread_ok = sysThreadCreate(&tid, io_thread, NULL, PERF_IO_PRIO, PERF_IO_STACK, THREAD_JOINABLE,
 					 (char *)"salsa64_perfilado") == 0;
 	perf.tid = tid;
-	salsa64_rdp_set_task_hook(task_hook);
+	salsa64_rdp_set_perf_hook(task_hook);
 	char names[2048];
 	perf_names_text(names, sizeof names);
 	perf_put_text(&perf.pres, PERF_R_NAMES, 0, names);
@@ -304,7 +304,7 @@ void perf_app_close_rec(struct salsa64_rec *rec, struct salsa64_rec_sample *samp
 
 void perf_app_close(const char *end_text)
 {
-	salsa64_rdp_set_task_hook(NULL);
+	salsa64_rdp_set_perf_hook(NULL);
 	if (!perf.on)
 		return;
 	char text[1024];

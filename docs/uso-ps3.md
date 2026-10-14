@@ -95,6 +95,17 @@ Opciones:
 - **Densidad** (solo con «CRT máscara»): Normal, la del filtro original, o
   Fina, con los puntos de fósforo más chicos y más juntos. Se
   guarda en `menu.cfg` (`densidad = normal|fina`).
+- **Interpolación** (experimental): Apagado (por omisión) o Por geometría.
+  En un juego que dibuja 20 o 30 cuadros por segundo (Zelda OoT, 20), los
+  campos en que la tele repetiría el cuadro se dibujan con los objetos
+  entre ese cuadro y el anterior: se ve a 60, con 33 ms de retraso (el
+  cuadro de verdad llega dos campos después). Los vértices de cada cuadro se
+  emparejan con los del anterior (docs/interpolacion.md); lo que no se
+  empareja (un cambio de plano, algo que aparece) se queda donde está. Vale
+  al abrir el juego, por juego y en vivo desde «Imagen» del menú de pausa;
+  se guarda en `menu.cfg` (`interpolacion = no|geometria`). Cuesta más
+  trabajo del RSX (la escena se dibuja hasta tres veces por cuadro del
+  juego) y ~2,4 MB de memoria y una superficie más mientras está encendida.
 - **Resolución**: 720p (por omisión, render a 3×) o 1080p (render a 4×).
   Se guarda en video.cfg (así arranca la próxima vez) y se pone con
   «Aplicar ahora», sin cerrar Salsa64; el panel muestra la salida actual y,
@@ -201,7 +212,7 @@ trucos, un aviso lo dice.
 ### Ajustes por juego
 
 SELECT sobre una ROM abre sus ajustes: **Aspecto**, **Filtro**, **Recorte
-del borde** y **Escala interna**, cada uno «Global» (lo de Opciones) o un
+del borde**, **Escala interna** e **Interpolación**, cada uno «Global» (lo de Opciones) o un
 valor propio para ese juego (también se guardan desde «Imagen» en el menú de
 pausa). Se guardan en `/dev_hdd0/salsa64/juegos/<nombre de la ROM sin
 extensión>.cfg`:
@@ -212,6 +223,7 @@ filtro = lineas     # suave | nitido | lineas | lineas+ | crt-mascara | crt-rgb 
 recorte = apagado   # apagado | normal | amplio | global
 escala = 2          # auto | 1 … 5 | global
 densidad = fina     # normal | fina | global (la de «CRT máscara»)
+interpolacion = geometria  # no | geometria | global
 ```
 
 Al abrir el juego, el log dice «imagen: … (con ajustes de este juego)» y, si
@@ -279,8 +291,9 @@ los atajos de Salsa64:
 | SELECT + derecha / izquierda (cruceta) | Cambia de ranura (0 a 9, en ronda) |
 | SELECT + △ | Muestra u oculta el contador de velocidad |
 | SELECT + R2 | Depuración gráfica: guarda en `/dev_hdd0/salsa64/` la salida de la HLE del cuadro en pantalla (`gfxdump-<campo>.bin`) y su captura (`gfxdump-<campo>.ppm`) |
+| SELECT + L2 | Caja negra (solo con el archivo `cajanegra`, abajo): escribe en `/dev_hdd0/salsa64/cajanegra-<campo>/caja.s4bb` las últimas tareas gráficas y campos presentados, para repetirlos en la Mac |
 
-Mientras SELECT está apretado, R1, L1, R2, △ y la cruceta izquierda/derecha no
+Mientras SELECT está apretado, R1, L1, R2, L2, △ y la cruceta izquierda/derecha no
 llegan al juego (□ tampoco, cuando abre la lista de trucos) (no se mueve el personaje al cambiar de ranura). Si
 `controles.cfg` asigna SELECT a un botón de la N64, ese botón se pulsa
 también con los atajos.
@@ -300,7 +313,7 @@ usan):
 | Guardar estado / Cargar estado | En la ranura actual, como SELECT + R1 / L1 |
 | Ranura ◀ n ▶ | Cambia la ranura (cruceta izquierda/derecha o ×) |
 | Trucos | La lista de trucos del juego (si tiene) |
-| Imagen | Filtro, aspecto, recorte del borde y escala interna del juego en curso (abajo) |
+| Imagen | Filtro, aspecto, recorte del borde, escala interna e interpolación del juego en curso (abajo) |
 | Mostrar FPS | Enciende o apaga el contador de velocidad |
 | Volver al menú (con `embedded`, Salir al XMB) | Cierra el juego como siempre (guarda la partida, apaga el audio y los SPEs). Con «Confirmar al salir: Sí» pregunta antes: × sí, ○ sigue jugando |
 
@@ -311,8 +324,9 @@ juego, y el botón con que se cierran tampoco (el ○ no cuenta como B al
 volver; hay que soltarlo). Los atajos de SELECT siguen funcionando igual.
 
 **Imagen** abre un cuadro abajo a la izquierda, sin oscurecer el juego,
-con **Filtro**, **Aspecto**, **Recorte del borde** y **Escala interna**:
-cruceta izquierda/derecha (o ×) cambia el valor. El filtro, el aspecto y el
+con **Filtro**, **Aspecto**, **Recorte del borde**, **Escala interna** e
+**Interpolación**: cruceta izquierda/derecha (o ×) cambia el valor. La
+interpolación se nota al seguir jugando. El filtro, el aspecto y el
 recorte se ven al momento sobre el cuadro en pausa (el recorte de una imagen
 que el juego dibujó con el CPU, al seguir). La escala interna se pone al
 seguir jugando: cambiarla suelta las imágenes del juego en el RSX, que se
@@ -493,6 +507,29 @@ sale al XMB en lugar de volver al menú (con el cuadro «¿Salir al XMB?» si
 «Confirmar al salir» está en sí).
 Para recuperar el menú, borrar `embedded`.
 
+## Caja negra (depuración)
+
+Para ver en la Mac lo que solo pasa en la PS3 (la interpolación de cuadros,
+por ejemplo): la consola guarda en memoria lo último que hizo la HLE gráfica y
+lo que se presentó en cada campo, y con un atajo lo escribe a disco.
+
+1. Crear por FTP el archivo vacío `/dev_hdd0/salsa64/cajanegra` (o con un
+   número: el tamaño del anillo en MB). Abrir el juego: el log dice «caja
+   negra: encendida».
+2. Cuando pase lo que se quiere estudiar, **SELECT + L2**. Sale el aviso «Caja
+   negra: escribiendo cajanegra-N» y el juego sigue (la escritura es en
+   segundo plano; mientras dura, el anillo no recibe nada nuevo).
+3. Bajar `/dev_hdd0/salsa64/cajanegra-<campo>/caja.s4bb` por FTP.
+4. En la Mac, `tools/cajanegra.py info|list|campos|extract caja.s4bb`
+   (extract deja cada tarea como un `gfxdump` que lee `tools/gfxdump.py`) y
+   `salsa64-run --raster-dump caja.s4bb[:TAREA] --gfx-frame imagen.ppm` dibuja
+   una tarea con el rasterizador del host.
+
+Qué guarda, el formato y cómo coordinarlo con la interpolación:
+`docs/cajanegra.md`. Con el archivo apagado no hay costo alguno; encendido,
+el log al cerrar el juego dice cuánto tardó el registro por tarea y por
+campo.
+
 ## Archivos de configuración
 
 Todos están en `/dev_hdd0/salsa64` y son opcionales. Son archivos de texto;
@@ -500,8 +537,8 @@ se crean por FTP.
 
 | Archivo | Formato | Qué hace |
 |---|---|---|
-| `menu.cfg` | Líneas `fondo = si\|no`, `fps = si\|no`, `confirmar = si\|no`, `aspecto = 4:3\|16:9`, `filtro = suave\|nitido\|lineas\|lineas+\|crt-mascara\|crt-rgb\|crt-svideo\|crt-compuesto` , `densidad = normal\|fina` e `idioma = es\|en\|fr\|de\|it\|pt` | Fondo animado del menú, contador de velocidad en el juego, si «Salir» del menú de pausa pregunta antes (sí sin la línea), aspecto, filtro e idioma. Lo escriben el menú (Opciones) y SELECT + △ |
-| `juegos/<ROM>.cfg` | `aspecto`, `filtro`, `recorte`, `escala`, `densidad` = valor o `global` | Ajustes de un juego (sección «Ajustes por juego»). Lo escriben el menú (SELECT sobre una ROM) y «Imagen» del menú de pausa |
+| `menu.cfg` | Líneas `fondo = si\|no`, `fps = si\|no`, `confirmar = si\|no`, `aspecto = 4:3\|16:9`, `filtro = suave\|nitido\|lineas\|lineas+\|crt-mascara\|crt-rgb\|crt-svideo\|crt-compuesto` , `densidad = normal\|fina`, `idioma = es\|en\|fr\|de\|it\|pt` e `interpolacion = no\|geometria` | Fondo animado del menú, contador de velocidad en el juego, si «Salir» del menú de pausa pregunta antes (sí sin la línea), aspecto, filtro, idioma e interpolación. Lo escriben el menú (Opciones) y SELECT + △ |
+| `juegos/<ROM>.cfg` | `aspecto`, `filtro`, `recorte`, `escala`, `densidad`, `interpolacion` = valor o `global` | Ajustes de un juego (sección «Ajustes por juego»). Lo escriben el menú (SELECT sobre una ROM) y «Imagen» del menú de pausa |
 | `descargas.cfg` | `activar = si` y direcciones | Enciende las descargas experimentales (sección «Descargas») |
 | `overscan.cfg` | Uno, dos o cuatro números: `8`, `8 6` o `izq der arr abajo` | Recorte de la imagen en píxeles de la N64 (a 320 × 240) por lado. Por omisión `8 6`; `0` lo apaga; máximo 64. Lo escribe el menú (`0`, `8 6` o `16 12`) |
 | `video.cfg` | `salida = 720` o `1080`; `escala = auto` o `1` a `5` | Salida de video y escala interna del render de la N64 (se leen al arrancar). Sin archivo: 720p y escala automática (3×, 960 × 720; a 1080p, 4×, 1280 × 960). Si la tele o el XMB no aceptan 1080, usa el siguiente modo. Acepta el formato viejo de una línea (`1080` o `720`). Lo escribe el menú con «Resolución» y «Escala interna» |
@@ -509,6 +546,7 @@ se crean por FTP.
 | `guardado.cfg` | Líneas `CLAVE = tipo`; `#` comenta | Tipo de guardado por juego (abajo) |
 | `audio.cfg` | Líneas `clave = valor` | Audio (abajo) |
 | `ultima-rom` | Ruta de la última ROM abierta | Lo escribe el menú; no hace falta tocarlo |
+| `cajanegra` | Vacío, o `MB` (tamaño del anillo, 2 a 48; 12 por omisión) | Enciende la caja negra (sección «Caja negra»). Sin el archivo no cuesta nada ni reserva memoria |
 | `log.cfg` | `ip` o `ip:puerto` | Destino del log por UDP, para quien depura (por omisión, difusión al puerto 18194) |
 | `turbo` | Basta con que exista | Sin límite de velocidad (para medir; no es un modo de juego) |
 | `capturas` | Basta con que exista | Guarda capturas de pantalla (`screen-N.ppm`) cada pocos segundos; frena la imagen un instante en cada una |
@@ -527,12 +565,14 @@ se crean por FTP.
 | `filtros-reducir` | `1` o `2` | La reducción de la escala interna de los CRT en una pasada o en dos (por omisión, dos); para comparar su costo |
 | `filtros-spe` | Basta con que exista | La señal y la decodificación de «CRT S-Video» y «CRT compuesto» en dos SPEs en lugar del RSX (experimental); con `filtros-ciclo`, cada vuelta las alterna entre los SPEs y el RSX (y la reducción queda en dos pasadas), para comparar en la misma corrida. Si un SPE falla, vuelven al RSX y el log lo dice |
 | `capturas-pantalla` | Basta con que exista | Con `capturas`: además guarda la pantalla entera como se ve, con el filtro (`pantalla-N.ppm`) |
+| `interp-prueba` | Vacío o un número entre 0 y 1 (por omisión 1) | Prueba de la interpolación: cada tarea gráfica se empareja con la anterior y se dibuja en esa fracción entre las dos (0: un cuadro atrás; 1: como siempre), sin campos intermedios y pase lo que pase con la opción; para aislar el emparejamiento de la presentación. El log de cada 5 s trae «gfx: interpolación» |
 | `filtro-ver` | El nombre de una tabla y una escala (`puntos 0.5`) | Diagnóstico de los filtros: dibuja esa tabla intermedia en la esquina de la pantalla (docs/filtros.md) |
 | `jit-sin-grupos` | Basta con que exista | El recompilador no agrupa los accesos a memoria por registro base (la «base en caché», docs/fastmem.md §8, encendida por omisión): cada acceso con su prueba, como hasta el 2026-10-13, para medir con el mismo paquete |
 | `jit-fpu-en-linea` | Basta con que exista | El recompilador emite las operaciones de la FPU en línea en cada sitio, como hasta el 2026-10-13, en vez de llamar a las rutinas compartidas del preámbulo (la «FPU compacta», docs/fastmem.md §9, encendida por omisión), para medir con el mismo paquete |
 | `jit-fastmem` | Basta con que exista | Experimental: la RDRAM en una ventana de 512 MB de sys_mmapper y los accesos de KSEG0/KSEG1 sin prueba; solo se enciende si lv2 avisa de los fallos de página (docs/fastmem.md); hoy en la PS3 con HEN no lo hace y queda apagado con el motivo en el log |
 | `perfilado.cfg` | Líneas `clave = valor` | Solo la app «Salsa64 perfil»: qué registra cada sesión de juego en `perfilado/` y con qué tope (docs/perfilado.md). Sin archivo, todo encendido y 200 MB |
 | `muestreo` | Basta con que exista | Muestreo por tiempo del recompilador: un hilo de baja prioridad mira cada 200 µs qué bloque corre el hilo de emulación (o si está en C: camino lento, intérprete, eventos…); cada 5 s el reparto al log y, al salir del juego, los 30 bloques con más tiempo con sus palabras de PPC (docs/rec-ppe.md, «Muestreo por tiempo»). Costo: dos palabras por entrada a bloque |
+| `aristas-aa` | Basta con que exista | Experimental: la pasada de aristas de los dibujos con antialiasing, líneas que tapan las grietas de las uniones en T (las líneas azules del piso del túnel de Dam en GoldenEye). Apagada por omisión: a escala alta hace que los polígonos de los modelos se superpongan en las uniones (docs/rsx-notes.md) |
 
 La carpeta también puede tener `covers/` (carátulas), `cheats/` (trucos y
 sus `.on`), `juegos/` (ajustes por juego), `states/` (estados guardados), `perfiles/` (el

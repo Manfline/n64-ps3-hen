@@ -96,6 +96,11 @@ struct gfx_job {
  * al final no pueda leer de ahí: la HLE no decodifica esas (GFX_TEX_TARGET;
  * ver «Texturas desde un destino»). */
 #define GFX_JOB_FBTEX 0x20u
+/* Interpolación de cuadros por geometría (docs/interpolacion.md): cada
+ * G_VTX deja un registro GFX_OP_VGROUP y cada vértice de salida dice de qué
+ * grupo y lugar salió (gfx_vertex.pad, GFX_VGID). Sin la bandera no se
+ * escribe nada de eso (pad = 0). */
+#define GFX_JOB_INTERP 0x40u
 
 /* ---- Caché de texturas -------------------------------------------------------
  * Las texturas decodificadas viven en una región de memoria que pone el
@@ -173,6 +178,7 @@ enum gfx_op {
 	                   N64), c = tamaño de píxel de la color image
 	                   (G_IM_SIZ_*) << 16 | su ancho; gfx_zclear */
 	GFX_OP_DRAW,    /* gfx_draw */
+	GFX_OP_VGROUP,  /* gfx_vgroup (solo con GFX_JOB_INTERP) */
 };
 
 struct gfx_cmd {
@@ -194,13 +200,15 @@ struct gfx_zclear {
  * la tarea o en la región de la caché.
  *
  * Texturas desde un destino (GFX_TEX_TARGET, solo con GFX_JOB_FBTEX): una
- * RGBA16 cuyo origen cae en una color image de 16 bits que la HLE vio
- * dibujar hace GFX_FB_FRESH tareas o menos no se decodifica: no hay texels
- * (offset y key valen 0) y el consumidor la lee de su destino (render a
- * textura). Si no puede (para él el destino es viejo, es del CPU o no tiene
- * superficie), la decodifica él: width × height texels RGBA16 de la RDRAM
- * desde src_addr con src_pitch texels por fila, a RGBA8888 con `pitch`
- * bytes por fila, lo mismo que habría dado la HLE con la RDRAM de ahora. */
+ * RGBA16 cuyo origen cae en una color image de 16 bits, o una I8 que cae en
+ * una de 8 bits (src_siz 1), que la HLE vio dibujar hace GFX_FB_FRESH
+ * tareas o menos no se decodifica: no hay texels (offset y key valen 0) y
+ * el consumidor la lee de su destino (render a textura; la I8, con el rojo
+ * en los cuatro canales). Si no puede (para él el destino es viejo, es del
+ * CPU o no tiene superficie), la decodifica él: width × height texels
+ * RGBA16 (o I8) de la RDRAM desde src_addr con src_pitch texels por fila, a
+ * RGBA8888 con `pitch` bytes por fila, lo mismo que habría dado la HLE con
+ * la RDRAM de ahora. */
 struct gfx_tex {
 	uint32_t offset;    /* desde el inicio del arena o de la región */
 	uint16_t width, height;
@@ -336,6 +344,30 @@ struct gfx_draw {
 	struct gfx_tex tex[2];
 	float k[GFX_K_TERMS][3][4];
 };
+
+/* Un G_VTX con GFX_JOB_INTERP: la entrada de la lista del juego (dirección
+ * física, n, v0 y paso en bytes, para emparejarla con la misma en el cuadro
+ * anterior), el viewport con que se cargó y, detrás, las n coordenadas de
+ * recorte de sus vértices (x, y, z, w; h.size = 32 + 16 n). Los grupos de
+ * una tarea se numeran desde 1 en el orden de sus registros; el vértice i
+ * (desde v0) sale con pad = GFX_VGID(número, i). Los que agrega el recorte
+ * cercano entre los lugares a y b de un mismo grupo (siempre en los juegos
+ * medidos), GFX_VCLIP_ID(número, a, b): la fracción sale de las coordenadas
+ * de recorte del grupo, t = (z + w)_a / ((z + w)_a − (z + w)_b). Los demás
+ * (rectángulos, recortes entre grupos) llevan pad = 0. */
+struct gfx_vgroup {
+	struct gfx_cmd h;   /* a = dirección, b = n | v0 << 8 | paso << 16, c = hash del contenido (no 0) */
+	float vp[4];        /* vscale x, y y vtrans x, y */
+	float vz[4];        /* la z de salida es vz[1]·w + vz[0]·z (gfx_vtx_out; con G_ZS_PRIM, vz[0] = 0); vz[2], vz[3]: 0 */
+};
+#define GFX_VGID(serial, i) ((serial) << 6 | (i))
+#define GFX_VCLIP_FLAG 0x80000000u
+#define GFX_VCLIP_ID(serial, a, b) (GFX_VCLIP_FLAG | (serial) << 12 | (a) << 6 | (b))
+#define GFX_VCLIP_SERIAL(id) (((id) & ~GFX_VCLIP_FLAG) >> 12)
+#define GFX_VCLIP_A(id) (((id) >> 6) & 63u)
+#define GFX_VCLIP_B(id) ((id) & 63u)
+#define GFX_VGID_SERIAL(id) ((id) >> 6)
+#define GFX_VGID_INDEX(id)  ((id) & 63u)
 
 #define GFX_ALIGN16(x) (((x) + 15u) & ~15u)
 

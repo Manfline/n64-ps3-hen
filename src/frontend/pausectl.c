@@ -80,7 +80,7 @@ enum pausectl_action pausectl_pads(struct pausectl *p, const uint32_t raw[PAUSEC
 				do  /* sin máscara, la fila «Densidad» no está */
 					p->image_sel = (p->image_sel + step) % IM_ROWS;
 				while (p->image_sel == IM_DENSITY && !p->image_density);
-			} else if (p->image_sel <= IM_SCALE && (left || right || (rise & BIT(SALSA64_DS3_CROSS)))) {
+			} else if (p->image_sel <= IM_INTERP && (left || right || (rise & BIT(SALSA64_DS3_CROSS)))) {
 				p->image_do = p->image_sel;
 				p->image_arg = left ? -1 : 1;
 			} else if (p->image_sel == IM_SAVE && (rise & BIT(SALSA64_DS3_CROSS))) {

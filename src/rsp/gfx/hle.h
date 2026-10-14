@@ -39,6 +39,10 @@
 #define GFX_CLIP_YP 0x08u
 #define GFX_CLIP_ZF 0x10u
 #define GFX_CLIP_W  0x20u  /* detrás de la cámara (w < 0) */
+#define GFX_CLIP_MASK 0x3Fu
+/* Con GFX_JOB_INTERP los bits de arriba de gfx_vtx.clip guardan la
+ * identidad del vértice (GFX_VGID, gfx.h): gfx_vtx_out la pasa a pad. */
+#define GFX_CLIP_ID_SHIFT 8
 
 /* Vértice del búfer del RSP, ya transformado. */
 struct gfx_vtx {
@@ -129,7 +133,7 @@ struct gfx_tilememo {
 	struct gfx_tex tex;
 };
 
-/* Color images de 16 bits que la HLE vio dibujar, para no decodificar con
+/* Color images de 16 y 8 bits que la HLE vio dibujar, para no decodificar con
  * GFX_JOB_FBTEX las texturas que el consumidor va a leer de su destino
  * (tmem.c). Imitan los destinos del consumidor (src/rdp/targets.c): las
  * mismas color images de 1 a 640 de ancho, con el alto conjeturado igual
@@ -140,7 +144,7 @@ struct gfx_tilememo {
  * el SPE, los de 8 y 16 cuestan varias instrucciones por acceso. */
 #define GFX_FB_IMAGES 8
 struct gfx_fbimg {
-	uint32_t addr;
+	uint32_t addr;          /* con el bit 0 en 1 si es de 8 bits (va alineada a 64) */
 	uint32_t task;          /* última tarea que la dibujó (job->task) */
 	uint32_t width;         /* en píxeles; 0: libre */
 	uint32_t lh;            /* alto conjeturado, en píxeles */
@@ -211,6 +215,7 @@ struct gfx_state {
 	uint32_t tex_gen;          /* cambia con cada carga a la TMEM o cambio de tile */
 	struct gfx_load loads[GFX_LOADS];  /* anillo; load_next es la próxima a escribir */
 	uint32_t load_next;
+	uint32_t vgroups;          /* registros GFX_OP_VGROUP de la tarea (GFX_JOB_INTERP; en el hueco antes de tmem) */
 	uint8_t tmem[4096] __attribute__((aligned(16)));
 	struct gfx_texcache tc;
 	/* Fuera del tramo de los estados guardados: al cargar uno se olvida
@@ -324,6 +329,14 @@ void gfx_mtx_mul(float out[16], const float a[16], const float b[16]);
 void gfx_load_vertices(struct gfx_state *g, uint32_t addr, uint32_t v0, uint32_t n);
 /* Lo mismo con los n vértices de 16 bytes ya leídos (o armados) en `src`. */
 void gfx_vertices(struct gfx_state *g, const uint8_t *src, uint32_t v0, uint32_t n);
+/* vgroup.c (con -Os en el SPE 0): lo de GFX_JOB_INTERP, sin local store
+ * aparte. gfx_vgroup_begin, al empezar la tarea. gfx_vgroup (sin la bandera
+ * no hace nada): el registro GFX_OP_VGROUP de los n vértices recién cargados
+ * en vtx[v0…] desde `addr` (`stride` bytes por vértice en la lista del
+ * juego; `src`, sus n vértices de 16 bytes como los leyó la HLE, de los que
+ * va el hash del contenido) y su identidad en clip. */
+void gfx_vgroup_begin(struct gfx_state *g);
+void gfx_vgroup(struct gfx_state *g, uint32_t addr, uint32_t stride, uint32_t v0, uint32_t n, const uint8_t *src);
 /* Luces y lookat en espacio del modelo (light_model, lookat_model), al día. */
 void gfx_light_vectors(struct gfx_state *g);
 /* G_TEXTURE_GEN: s, t del vértice según su normal (unitaria, espacio del

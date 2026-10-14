@@ -107,14 +107,17 @@
 
 #include "../../tests/roms/src/audiotest/tone.h"
 #include "../../tests/roms/src/gfxtest/expect.h"
+#include "ares.h"
 #include "core/boot.h"
 #include "core/endian.h"
 #include "core/state.h"
+#include "rdp/blackbox.h"
 #include "cpu/rec.h"
 #include "host/rec_host.h"
 #include "frontend/perfilado.h"
 #include "frontend/savefile.h"
 #include "frontend/version.h"
+#include "interp.h"
 #include "raster.h"
 #include "rdp/targets.h"
 #include "rsp/gfx/backend.h"
@@ -1236,6 +1239,7 @@ static void gfx_acquire(void *ctx, struct gfx_job *job)
 	}
 	job->task = gfx.tasks + 1;
 	job->done_task = gfx.tasks;
+	interp_task_begin(job, n64.bus.vi.fields);
 	/* Como la PS3: el rasterizador lee de sus imágenes lo que viene de un
 	 * destino reciente y decodifica él lo que al final no pueda leer. */
 	if (gfx.raster && raster_fbfx >= 1 && !getenv("SALSA64_NO_FBTEX"))
@@ -1334,7 +1338,9 @@ static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_resu
 	if (gfx.raster) {
 		raster_field = n64.bus.vi.fields;
 		raster_trace_fb = trace_fb && tracing();
+		interp_before_raster();
 		raster_task(job, res);
+		interp_after_raster(job, res, n64.bus.vi.fields);
 	}
 	if (trace_gfx_left && n64.bus.vi.fields > (trace_from ? trace_from : 500)) {
 		trace_gfx_left--;
@@ -1763,6 +1769,14 @@ static void gfx_summary(void)
 		fprintf(stderr, "salsa64-run: gfx: framebuffer: %u copias a la RDRAM, %u destinos cebados; texturas desde un "
 			"destino: %u de su imagen, %u de la RDRAM; %u sin decodificar en la HLE (%.1f por tarea), %u de ellas "
 			"decodificadas por el rasterizador\n", rb, pr, trsx, trd, s->tex_target, s->tex_target / n, tdec);
+		uint32_t dr, de, dt;
+		raster_edge_stats(&dr, &de, &dt);
+		fprintf(stderr, "salsa64-run: gfx: aristas de los dibujos con AA: %.1f de %.1f dibujos por tarea (%.0f "
+			"triángulos)%s\n", de / n, dr / n, dt / n, raster_aa_edges ? ", encendidas" : ", apagadas");
+		uint32_t d8, t8r, t8m;
+		raster_8bit_stats(&d8, &t8r, &t8m);
+		fprintf(stderr, "salsa64-run: gfx: imágenes de 8 bits: %u dibujos; texturas I8 de ellas: %u de su imagen, %u "
+			"de la RDRAM\n", d8, t8r, t8m);
 	}
 	if (gfx_late.tear)
 		fprintf(stderr, "salsa64-run: gfx: %u tareas comparadas entre el arranque y el fin, %u cambiaron\n",
@@ -1894,10 +1908,76 @@ _Static_assert(offsetof(struct gfx_draw, nterms) % 4 == 0 &&
 	       (offsetof(struct gfx_draw, tex) - offsetof(struct gfx_draw, nterms)) % 4 == 0,
 	       "bytes del combiner en palabras enteras");
 
+static int raster_dump_buf(uint8_t *buf, size_t size, const char *path, const char *out);
+
+/* Una tarea de la caja negra (docs/cajanegra.md): «ARCHIVO.s4bb[:TAREA]»,
+ * por omisión la más nueva. Deja en *buf el volcado de la tarea (que se
+ * suelta con free) y su tamaño. */
+static bool caja_task(const char *spec, uint8_t **buf, size_t *size)
+{
+	char file[512];
+	long want = -1;
+	snprintf(file, sizeof file, "%s", spec);
+	char *colon = strrchr(file, ':');
+	if (colon && colon[1] && strspn(colon + 1, "0123456789") == strlen(colon + 1)) {
+		want = strtol(colon + 1, NULL, 10);
+		*colon = '\0';
+	}
+	size_t fsize;
+	uint8_t *f = read_file(file, &fsize);
+	struct bb_file_info info;
+	if (!f || fsize > UINT32_MAX || !bb_file_info(f, (uint32_t)fsize, &info)) {
+		fprintf(stderr, "salsa64-run: %s no es un archivo de la caja negra\n", file);
+		free(f);
+		return false;
+	}
+	uint32_t pos = 0;
+	struct bb_file_rec rec, pick;
+	bool found = false;
+	while (bb_file_next(f, (uint32_t)fsize, &pos, &rec)) {
+		if (rec.kind != BB_TASK || (want >= 0 && rec.id != (uint32_t)want))
+			continue;
+		pick = rec;
+		found = true;  /* sin TAREA, la última (la más nueva) */
+		if (want >= 0)
+			break;
+	}
+	if (!found) {
+		fprintf(stderr, "salsa64-run: %s no tiene la tarea %ld\n", file, want);
+		free(f);
+		return false;
+	}
+	uint8_t *content = malloc(pick.len);
+	if (!content || pick.len <= 4 * BB_TASK_WORDS || !bb_file_content(&pick, content)) {
+		fprintf(stderr, "salsa64-run: la tarea %u de %s está dañada\n", pick.id, file);
+		free(content);
+		free(f);
+		return false;
+	}
+	fprintf(stderr, "salsa64-run: caja negra %s: tarea %u (campo %u, %u dibujos)\n", file, pick.id,
+		salsa64_rd32(content + 4 * BB_TASK_FIELD), salsa64_rd32(content + 4 * BB_TASK_DRAWS));
+	memmove(content, content + 4 * BB_TASK_WORDS, pick.len - 4 * BB_TASK_WORDS);
+	*buf = content;
+	*size = pick.len - 4 * BB_TASK_WORDS;
+	free(f);
+	return true;
+}
+
 static int raster_dump(const char *path, const char *out)
 {
 	size_t size;
-	uint8_t *buf = read_file(path, &size);
+	uint8_t *buf;
+	if (strstr(path, ".s4bb")) {
+		if (!caja_task(path, &buf, &size))
+			return 3;
+	} else {
+		buf = read_file(path, &size);
+	}
+	return raster_dump_buf(buf, size, path, out);
+}
+
+static int raster_dump_buf(uint8_t *buf, size_t size, const char *path, const char *out)
+{
 	if (!buf || size < sizeof(struct gfx_dump_header)) {
 		fprintf(stderr, "salsa64-run: no se pudo leer %s\n", path);
 		return 3;
@@ -2268,7 +2348,8 @@ static bool dump_frame(const char *path)
 /* Opciones largas sin letra (códigos fuera de ASCII). */
 enum { OPT_REC = 0x100, OPT_LOCKSTEP, OPT_PAD, OPT_TRACE_FROM, OPT_TRACE_FAULTS, OPT_RAM_DUMP, OPT_TRACE_AUDIO,
        OPT_FRAME_EVERY, OPT_LLE, OPT_LLE_SPEED, OPT_LLE_CHECK, OPT_LLE_CHECK_JPEG, OPT_POKE, OPT_TRACE_FB, OPT_STATE_SAVE,
-       OPT_STATE_LOAD, OPT_FIELDS, OPT_PROFILE, OPT_PERFILADO };
+       OPT_STATE_LOAD, OPT_FIELDS, OPT_PROFILE, OPT_STATE_ZIP, OPT_INTERP, OPT_INTERP_K, OPT_INTERP_DECIMATE,
+       OPT_INTERP_DISP, OPT_PERFILADO };
 
 /* ---- Estados guardados (--state-save, --state-load) ------------------------- */
 
@@ -2281,6 +2362,10 @@ static struct {
 static const char *state_load_path;
 static uint32_t stop_field;
 static uint8_t state_scratch[SALSA64_STATE_SCRATCH] __attribute__((aligned(16)));
+static bool state_zip;  /* --state-zip: la RDRAM comprimida (formato 2) */
+static uint8_t zip_small[SALSA64_STATE_SECTIONS] __attribute__((aligned(16)));
+static uint8_t zip_ram[SALSA64_RDRAM_MAX] __attribute__((aligned(16)));
+static struct salsa64_state_lz zip_lz;
 
 static bool state_fwrite(void *ctx, const void *data, uint32_t len)
 {
@@ -2292,6 +2377,19 @@ static bool state_fread(void *ctx, void *data, uint32_t len)
 	return fread(data, 1, len, ctx) == len;
 }
 
+static bool state_fpatch(void *ctx, uint32_t offset, const uint8_t *data, uint32_t len)
+{
+	return fseek(ctx, offset, SEEK_SET) == 0 && fwrite(data, 1, len, ctx) == len;
+}
+
+static bool state_save_zip(FILE *f, char *err, size_t err_size)
+{
+	struct salsa64_state_snap snap = { zip_small, zip_ram, 0, 0 };
+	return salsa64_state_capture(&n64, NULL, &snap, sizeof zip_small, sizeof zip_ram, err, err_size) &&
+	       salsa64_state_write(&snap, salsa64_state_compress_host, &zip_lz, state_fwrite, state_fpatch, f, err,
+				   err_size);
+}
+
 static bool state_save_file(const char *path)
 {
 	char err[160];
@@ -2300,15 +2398,25 @@ static bool state_save_file(const char *path)
 		return false;
 	}
 	FILE *f = fopen(path, "wb");
-	bool ok = f && salsa64_state_save(&n64, NULL, state_fwrite, f, state_scratch, err, sizeof err);
+	bool ok = f && (state_zip ? state_save_zip(f, err, sizeof err) :
+			salsa64_state_save(&n64, NULL, state_fwrite, f, state_scratch, err, sizeof err));
 	if (f && fclose(f) != 0)
 		ok = false;
 	if (!ok) {
 		fprintf(stderr, "salsa64-run: no se pudo guardar el estado en %s: %s\n", path, f ? err : "no se abre");
 		return false;
 	}
-	fprintf(stderr, "salsa64-run: estado del campo %u en %s (%u bytes)\n", n64.bus.vi.fields, path,
-		salsa64_state_size(&n64, false));
+	if (state_zip) {
+		FILE *g = fopen(path, "rb");
+		long sz = g && fseek(g, 0, SEEK_END) == 0 ? ftell(g) : -1;
+		if (g)
+			fclose(g);
+		fprintf(stderr, "salsa64-run: estado del campo %u en %s (%ld bytes comprimido, de %u)\n", n64.bus.vi.fields,
+			path, sz, salsa64_state_size(&n64, false));
+	} else {
+		fprintf(stderr, "salsa64-run: estado del campo %u en %s (%u bytes)\n", n64.bus.vi.fields, path,
+			salsa64_state_size(&n64, false));
+	}
 	return true;
 }
 
@@ -2384,13 +2492,17 @@ static void usage(FILE *out)
 	      "      --gfxtest-check   verificar la imagen de la HLE con los puntos de gfxtest\n"
 	      "      --trace-rsp N     mostrar las primeras N tareas del RSP\n"
 	      "      --trace-audio N   opcodes de la lista de audio de las primeras N tareas de audio\n"
-	      "      --trace-vi N      mostrar la imagen del VI en los últimos N campos\n"
+	      "      --trace-vi N      mostrar la imagen del VI en los últimos N campos (o «sin imagen» con\n"
+	      "                        los registros que la apagan)\n"
 	      "      --trace-fb        efectos de framebuffer: dibujos que leen un destino y, con el\n"
 	      "                        build -DSALSA64_WATCH_MEM, accesos del CPU a los destinos (con --gfx-frame)\n"
 	      "      --audio-wav ARCHIVO  al terminar, guardar en WAV lo que salió por el AI\n"
 	      "      --audiotest-check comparar lo que salió por el AI con el tono de audiotest\n"
-	      "      --raster-dump F   dibujar un volcado de la HLE de la PS3 (gfxdump.bin) en\n"
+	      "      --raster-dump F   dibujar un volcado de la HLE de la PS3 (gfxdump.bin; o una tarea\n"
+	      "                        de la caja negra: caja.s4bb[:TAREA], por omisión la más nueva) en\n"
 	      "                        --gfx-frame y salir (sin ROM)\n"
+	      "      --ares [...] RDRAM  (primera opción) comparar la HLE con un volcado de la RDRAM\n"
+	      "                        de ares, sin ROM (salsa64-run --ares --help)\n"
 	      "      --lle[=auto|all]  RSP a bajo nivel: el microcódigo real para lo que no tiene\n"
 	      "                        HLE (auto) o para todo (all); el RDP consume sus comandos\n"
 	      "      --lle-speed F     instrucciones del RSP por ciclo del CPU (nominal 0,667)\n"
@@ -2399,7 +2511,13 @@ static void usage(FILE *out)
 	      "                        compararlas con la HLE (rsp/jpeg)\n"
 	      "      --state-save C:ARCHIVO  guardar un estado al terminar el campo C (hasta 8)\n"
 	      "      --state-load ARCHIVO    cargar un estado después del arranque y seguir desde ahí\n"
-	      "      --fields N        terminar (código 0) al acabar el campo N del VI\n", out);
+	      "      --state-zip             los --state-save con la RDRAM comprimida (formato 2, como la PS3)\n"
+	      "      --fields N        terminar (código 0) al acabar el campo N del VI\n"
+	      "      --interp DIR      prototipo de interpolación de cuadros (docs/interpolacion.md): desde\n"
+	      "                        --trace-from, cuadros intermedios por geometría y por imagen en DIR\n"
+	      "      --interp-k K      campos por cuadro del juego (3: intermedios en 1/3 y 2/3)\n"
+	      "      --interp-decimate 1 de cada K tareas es el cuadro del juego; las demás, la verdad\n"
+	      "      --interp-disp PX  desplazamiento por cuadro (píxeles de la N64) que ya es un corte (120)\n", out);
 }
 
 int main(int argc, char **argv)
@@ -2437,7 +2555,12 @@ int main(int argc, char **argv)
 		{ "lle-check-jpeg", no_argument, NULL, OPT_LLE_CHECK_JPEG },
 		{ "state-save", required_argument, NULL, OPT_STATE_SAVE },
 		{ "state-load", required_argument, NULL, OPT_STATE_LOAD },
+		{ "state-zip", no_argument, NULL, OPT_STATE_ZIP },
 		{ "fields", required_argument, NULL, OPT_FIELDS },
+		{ "interp", required_argument, NULL, OPT_INTERP },
+		{ "interp-k", required_argument, NULL, OPT_INTERP_K },
+		{ "interp-decimate", no_argument, NULL, OPT_INTERP_DECIMATE },
+		{ "interp-disp", required_argument, NULL, OPT_INTERP_DISP },
 		{ "profile", required_argument, NULL, OPT_PROFILE },
 		{ "perfilado", required_argument, NULL, OPT_PERFILADO },
 		{ "trace-gfx", required_argument, NULL, 'Q' },
@@ -2458,7 +2581,10 @@ int main(int argc, char **argv)
 	const char *wav_path = NULL;
 	const char *dump_path = NULL, *ram_path = NULL;
 	uint32_t frame_every = 0;
+	struct interp_opts iopt = { .k = 3, .max_disp = 120.0f, .block = 8, .range = 8 };
 
+	if (argc > 1 && !strcmp(argv[1], "--ares"))
+		return ares_main(argc - 1, argv + 1);
 	while ((c = getopt_long(argc, argv, "c:u:f:qrh", opts, NULL)) != -1) {
 		switch (c) {
 		case 'c': max_cycles = strtoull(optarg, NULL, 0); cycles_set = true; break;
@@ -2538,7 +2664,12 @@ int main(int argc, char **argv)
 			break;
 		}
 		case OPT_STATE_LOAD: state_load_path = optarg; break;
+		case OPT_STATE_ZIP: state_zip = true; break;
 		case OPT_FIELDS: stop_field = (uint32_t)strtoul(optarg, NULL, 0); break;
+		case OPT_INTERP: iopt.dir = optarg; gfx.raster = true; break;
+		case OPT_INTERP_K: iopt.k = (unsigned)strtoul(optarg, NULL, 0); break;
+		case OPT_INTERP_DECIMATE: iopt.decimate = true; break;
+		case OPT_INTERP_DISP: iopt.max_disp = strtof(optarg, NULL); break;
 		case OPT_PROFILE: profile_path = optarg; break;
 		case OPT_PERFILADO: hp.root = optarg; break;
 		case 'D': dump_path = optarg; break;
@@ -2606,9 +2737,15 @@ int main(int argc, char **argv)
 	 * SALSA64_FBFX=0 los apaga, 1 solo render a textura, 2 todo. */
 	if (getenv("SALSA64_FBFX"))
 		raster_fbfx = atoi(getenv("SALSA64_FBFX"));
+	if (getenv("SALSA64_AA_EDGES"))
+		raster_aa_edges = atoi(getenv("SALSA64_AA_EDGES")) != 0;
+	if (getenv("SALSA64_AA_EDGE_OFFSET"))
+		sscanf(getenv("SALSA64_AA_EDGE_OFFSET"), "%f,%f", &raster_edge_factor, &raster_edge_units);
 	const struct salsa64_gfx_sink sink = { NULL, gfx_acquire, gfx_done };
 	n64.bus.rdram_written = rdram_written;
 	salsa64_gfx_sync_init(&gfx_sync, &gfx_state, &n64.bus, &sink);
+	iopt.from_field = trace_from;
+	interp_init(&iopt);
 	salsa64_rsp_set_gfx(&n64.bus, &gfx_sync.backend);
 	if (getenv("SALSA64_GFX_LATE")) {
 		gfx_late.polls = (unsigned)strtoul(getenv("SALSA64_GFX_LATE"), NULL, 0);
@@ -2777,6 +2914,11 @@ int main(int argc, char **argv)
 				fprintf(stderr, "campo %u: origen %06x %ux%u stride %u bpp %u (V_VIDEO %08x Y_SCALE %08x)\n",
 					n64.bus.vi.fields, f.origin, f.width, f.height, f.stride, f.bpp,
 					n64.bus.vi.regs[SALSA64_VI_V_VIDEO], n64.bus.vi.regs[SALSA64_VI_Y_SCALE]);
+			else if (trace_vi)
+				fprintf(stderr, "campo %u: sin imagen (CONTROL %08x ORIGIN %06x WIDTH %u H_VIDEO %08x V_VIDEO %08x)\n",
+					n64.bus.vi.fields, n64.bus.vi.regs[SALSA64_VI_CONTROL],
+					n64.bus.vi.regs[SALSA64_VI_ORIGIN] & 0xFFFFFF, n64.bus.vi.regs[SALSA64_VI_WIDTH],
+					n64.bus.vi.regs[SALSA64_VI_H_VIDEO], n64.bus.vi.regs[SALSA64_VI_V_VIDEO]);
 		} else if (pads.n || pokes.n || gfx.raster || state_saves.n || stop_field || hp.on) {
 			/* Con controles programados, campo por campo: el control cambia
 			 * justo al empezar uno. Con el rasterizador también, para darle
@@ -2966,6 +3108,7 @@ int main(int argc, char **argv)
 		free(rom);
 		return 3;
 	}
+	interp_report();
 	if (getenv("SALSA64_PS3_RB")) {
 		extern uint32_t ps3_rb, ps3_rb_old;
 		fprintf(stderr, "salsa64-run: ps3-rb: la regla de copias de la PS3 pediría %u (con el ancho del último origen "

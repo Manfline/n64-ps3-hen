@@ -258,9 +258,17 @@ typedef struct rsxkit_texture {
 	uint8_t format;     /* rsxkit_format */
 	uint8_t wrap_s, wrap_t;
 	uint8_t filter;     /* rsxkit_filter */
-	uint8_t pad[3];
+	uint8_t remap;      /* rsxkit_remap: canales que se leen */
+	uint8_t pad[2];
 	float xf[4];
 } rsxkit_texture;
+
+/* Canales que lee una textura: los de su formato, o el rojo en los cuatro
+ * (una imagen de intensidad dibujada en un destino: R = G = B = A). */
+typedef enum rsxkit_remap {
+	RSXKIT_REMAP_NONE,
+	RSXKIT_REMAP_RRRR,
+} rsxkit_remap;
 
 typedef enum rsxkit_blend {
 	RSXKIT_BLEND_OFF,    /* reemplaza */
@@ -311,7 +319,14 @@ typedef struct rsxkit_draw {
 	uint8_t ntex;       /* texturas: 0, 1 o 2 */
 	uint8_t fog;
 	uint8_t nterms;     /* 0: combinación lineal fija; si no, términos con `factors` */
-	uint8_t pad;
+	/* Distinto de 0: antes de los triángulos, sus aristas como líneas de
+	 * edges/8 píxeles de ancho de la superficie (modo de polígono LINE, un
+	 * poco más atrás en z) con el mismo estado. Los triángulos pintan
+	 * encima de lo que cubren y las líneas quedan solo en las grietas
+	 * finas entre triángulos vecinos (uniones en T), que el muestreo en el
+	 * centro del píxel deja ver. Para dibujos opacos: con mezcla, la arista
+	 * se mezclaría dos veces. */
+	uint8_t edges;
 	float scissor[4];   /* x0, y0, x1, y1 lógicos */
 	float fog_color[4];
 	rsxkit_texture tex[2];
@@ -334,6 +349,11 @@ void rsxkit_fp_get_stats(rsxkit_fp_stats *out);
 
 /* Arreglo de rsxkit_vertex que usan los dibujos siguientes. */
 void rsxkit_vertices(uint32_t offset, uint8_t location);
+/* Cuadros intermedios: un arreglo de posiciones de antes (un float[4] por
+ * vértice, en el mismo orden que el de rsxkit_vertices) y la fracción t; los
+ * dibujos siguientes ponen cada vértice en prev + (pos − prev)·t (t = 1: donde
+ * está). Hasta el próximo rsxkit_vertices, que lo apaga. */
+void rsxkit_vertices_prev(uint32_t offset, uint8_t location, float t);
 /* Triángulos sueltos: vértices first .. first + count − 1 del arreglo. */
 void rsxkit_draw_triangles(const rsxkit_draw *d, uint32_t first, uint32_t count);
 

@@ -561,28 +561,33 @@ static bool tex_size(const struct gfx_tile *t, const uint16_t lim[2], uint32_t *
 
 /* Con GFX_JOB_FBTEX: ¿el consumidor va a leer la textura de su destino? Sí
  * si es una RGBA16 (sin paleta ni RGB·A) que cae en una color image de 16
- * bits dibujada hace GFX_FB_FRESH tareas o menos, buscada como la busca él
- * (rdp_targets_locate: del ancho del paso, dentro de su alto conjeturado) y,
- * si repite en s, del ancho de la imagen (texture_from_target la liga en
- * filas enteras), y sin una máscara dentro del clamp. Lo que él sabe y la
- * HLE no lo arregla decodificándola. */
+ * bits, o una I8 que cae en una de 8 bits (el RDP escribe ahí el rojo, sea
+ * cual sea su formato: las máscaras de sombra de Conker, declaradas CI y
+ * leídas como I8, a veces en el mismo cuadro), dibujada hace GFX_FB_FRESH
+ * tareas o menos, buscada como la busca él (rdp_targets_locate: del ancho
+ * del paso y el mismo tamaño de píxel, dentro de su alto conjeturado) y, si
+ * repite en s, del ancho de la imagen (texture_from_target la liga en filas
+ * enteras), y sin una máscara dentro del clamp. Lo que él sabe y la HLE no
+ * lo arregla decodificándola. */
 static __attribute__((noinline)) bool from_target(const struct gfx_state *g, const struct gfx_tile *t, unsigned tt,
 						 bool premul, bool clamp_s, uint32_t w, uint32_t h,
 						 const struct tex_src *src)
 {
 	/* Con una máscara dentro del clamp la textura repite sus primeros texels
 	 * (decode), y ni el destino ni el consumidor lo hacen. */
-	if (!(g->job->flags & GFX_JOB_FBTEX) || !src->src_addr || src->src_siz != G_IM_SIZ_16b ||
-	    t->siz != G_IM_SIZ_16b || t->fmt != G_IM_FMT_RGBA || tt != G_TT_NONE || premul ||
+	uint32_t i8 = src->src_siz == G_IM_SIZ_8b && t->fmt == G_IM_FMT_I;
+	if (!(g->job->flags & GFX_JOB_FBTEX) || !src->src_addr || t->siz != src->src_siz || tt != G_TT_NONE ||
+	    premul || (!i8 && (t->siz != G_IM_SIZ_16b || t->fmt != G_IM_FMT_RGBA)) ||
 	    clamp_mask(t->masks, t->cms, w) || clamp_mask(t->maskt, t->cmt, h))
 		return false;
-	uint32_t addr = src->src_addr, pitch = src->src_pitch, task = g->job->task;
+	/* Las de 8 bits llevan el bit 0 de la dirección en fbimg (alineadas a 64). */
+	uint32_t addr = src->src_addr | i8, pitch = src->src_pitch, task = g->job->task;
 	/* Sin desenrollar: en el SPE, el código cuesta pila (local store). */
 #pragma GCC unroll 1
 	for (int i = 0; i < GFX_FB_IMAGES; i++) {
 		const struct gfx_fbimg *e = &g->fbimg[i];
-		if (e->width == pitch && addr - e->addr < e->width * 2 * e->lh && task - e->task <= GFX_FB_FRESH &&
-		    (clamp_s || w == e->width))
+		if (e->width == pitch && addr - e->addr < (e->width * e->lh << (1 - i8)) && !((addr ^ e->addr) & 1) &&
+		    task - e->task <= GFX_FB_FRESH && (clamp_s || w == e->width))
 			return true;
 	}
 	return false;

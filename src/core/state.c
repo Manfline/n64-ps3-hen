@@ -31,6 +31,8 @@ static const uint8_t magic[8] = { 'S', 'L', 'S', '6', '4', 'S', 'T', 0 };
 #define TAG_HLEG TAG('H', 'L', 'E', 'G')
 #define TAG_HLEA TAG('H', 'L', 'E', 'A')
 #define TAG_RDRM TAG('R', 'D', 'R', 'M')
+#define TAG_RDRZ TAG('R', 'D', 'R', 'Z')
+#define RDRZ_PREFIX 12u  /* tamaño de la RDRAM, tamaño de bloque, número de bloques */
 
 #define SECTION_HDR 8u
 #define MAX_SECTIONS 32
@@ -472,22 +474,12 @@ uint32_t salsa64_state_size(const struct salsa64_n64 *n64, bool thumb)
 	return s.pos + n64->bus.rdram_size;
 }
 
-bool salsa64_state_save(struct salsa64_n64 *n64, const struct salsa64_state_thumb *thumb,
-			salsa64_state_write_fn write, void *ctx, uint8_t *scratch, char *err, size_t err_size)
+static void fill_header(uint8_t *hd, const struct salsa64_bus *b, uint32_t version, uint32_t total,
+			bool thumb, bool zip)
 {
-	struct salsa64_bus *b = &n64->bus;
-	if (!state_ready(b, err, err_size))
-		return false;
-	struct st s = { scratch, SALSA64_STATE_HEADER, SALSA64_STATE_SCRATCH, false, false };
-	if (!save_sections(n64, thumb, &s, err, err_size))
-		return false;
-
-	uint32_t small = s.pos;
-	uint32_t total = small + b->rdram_size;
-	uint8_t *hd = scratch;
 	memset(hd, 0, SALSA64_STATE_HEADER);
 	memcpy(hd, magic, sizeof magic);
-	salsa64_wr32(hd + 8, SALSA64_STATE_VERSION);
+	salsa64_wr32(hd + 8, version);
 	salsa64_wr32(hd + 12, SALSA64_STATE_HEADER);
 	salsa64_wr32(hd + 16, total);
 	salsa64_wr32(hd + 20, salsa64_rd32(b->rom + ROM_CRC1));
@@ -496,10 +488,113 @@ bool salsa64_state_save(struct salsa64_n64 *n64, const struct salsa64_state_thum
 	memcpy(hd + 32, b->rom + ROM_TITLE, 20);
 	salsa64_wr32(hd + 52, b->rdram_size);
 	salsa64_wr32(hd + 56, b->vi.fields);
-	salsa64_wr32(hd + 60, thumb && thumb->pixels ? SALSA64_STATE_FLAG_THUMB : 0);
+	salsa64_wr32(hd + 60, (thumb ? SALSA64_STATE_FLAG_THUMB : 0) | (zip ? SALSA64_STATE_FLAG_ZIP : 0));
+}
+
+bool salsa64_state_save(struct salsa64_n64 *n64, const struct salsa64_state_thumb *thumb,
+			salsa64_state_write_fn write, void *ctx, uint8_t *scratch, char *err, size_t err_size)
+{
+	struct salsa64_bus *b = &n64->bus;
+	if (!state_ready(b, err, err_size))
+		return false;
+	struct st s = { scratch, SALSA64_STATE_HEADER, SALSA64_STATE_SECTIONS, false, false };
+	if (!save_sections(n64, thumb, &s, err, err_size))
+		return false;
+
+	uint32_t small = s.pos;
+	uint32_t total = small + b->rdram_size;
+	fill_header(scratch, b, 1, total, thumb && thumb->pixels, false);
 
 	if (!write(ctx, scratch, small) || !write(ctx, b->rdram, b->rdram_size)) {
 		fail(err, err_size, "no se pudo escribir el archivo");
+		return false;
+	}
+	return true;
+}
+
+/* ---- Guardar en dos tiempos ------------------------------------------------------ */
+
+bool salsa64_state_capture(struct salsa64_n64 *n64, const struct salsa64_state_thumb *thumb,
+			   struct salsa64_state_snap *snap, uint32_t small_cap, uint32_t ram_bytes, char *err,
+			   size_t err_size)
+{
+	struct salsa64_bus *b = &n64->bus;
+	if (!state_ready(b, err, err_size))
+		return false;
+	if (!snap->small || !snap->ram || ram_bytes < b->rdram_size) {
+		fail(err, err_size, "la foto del estado no tiene dónde guardarse");
+		return false;
+	}
+	struct st s = { snap->small, SALSA64_STATE_HEADER, small_cap, false, false };
+	if (!save_sections(n64, thumb, &s, err, err_size))
+		return false;
+	/* El tamaño del archivo y de RDRZ se conocen al final: salsa64_state_write
+	 * los parcha. */
+	fill_header(snap->small, b, SALSA64_STATE_VERSION, 0, thumb && thumb->pixels, true);
+	/* save_sections cierra con el encabezado de RDRM: en esta foto la RDRAM va en RDRZ. */
+	snap->small_len = s.pos - SECTION_HDR;
+	memcpy(snap->ram, b->rdram, b->rdram_size);
+	snap->ram_len = b->rdram_size;
+	return true;
+}
+
+bool salsa64_state_compress_host(void *cctx, const uint8_t *src, uint32_t len, salsa64_state_write_fn write,
+				 void *wctx)
+{
+	struct salsa64_state_lz *z = cctx;
+	for (uint32_t off = 0; off < len; off += SPUKIT_LZ_BLOCK) {
+		uint32_t n = len - off < SPUKIT_LZ_BLOCK ? len - off : SPUKIT_LZ_BLOCK;
+		size_t c = spukit_lz_compress(src + off, n, z->out, sizeof z->out, z->table);
+		bool stored = c == 0 || c >= n;
+		uint8_t hdr[4];
+		spukit_lz_frame(hdr, stored ? n : (uint32_t)c, stored);
+		if (!write(wctx, hdr, 4) || !write(wctx, stored ? src + off : z->out, stored ? n : (uint32_t)c))
+			return false;
+	}
+	return true;
+}
+
+struct counting {
+	salsa64_state_write_fn write;
+	void *ctx;
+	uint32_t bytes;
+};
+
+static bool counting_write(void *ctx, const void *data, uint32_t len)
+{
+	struct counting *c = ctx;
+	c->bytes += len;
+	return c->write(c->ctx, data, len);
+}
+
+bool salsa64_state_write(const struct salsa64_state_snap *snap, salsa64_state_compress_fn compress, void *cctx,
+			 salsa64_state_write_fn write, salsa64_state_patch_fn patch, void *ctx, char *err,
+			 size_t err_size)
+{
+	struct counting c = { write, ctx, 0 };
+	uint32_t nblocks = (snap->ram_len + SPUKIT_LZ_BLOCK - 1) / SPUKIT_LZ_BLOCK;
+	uint8_t prefix[SECTION_HDR + RDRZ_PREFIX];
+	salsa64_wr32(prefix, TAG_RDRZ);
+	salsa64_wr32(prefix + 4, 0);  /* se parcha */
+	salsa64_wr32(prefix + 8, snap->ram_len);
+	salsa64_wr32(prefix + 12, SPUKIT_LZ_BLOCK);
+	salsa64_wr32(prefix + 16, nblocks);
+	if (!counting_write(&c, snap->small, snap->small_len) || !counting_write(&c, prefix, sizeof prefix)) {
+		fail(err, err_size, "no se pudo escribir el archivo");
+		return false;
+	}
+	uint32_t blocks_at = c.bytes;
+	if (!compress(cctx, snap->ram, snap->ram_len, counting_write, &c)) {
+		fail(err, err_size, "no se pudo comprimir o escribir la RDRAM");
+		return false;
+	}
+	uint8_t v[4];
+	salsa64_wr32(v, c.bytes);
+	bool ok = patch(ctx, 16, v, 4);
+	salsa64_wr32(v, RDRZ_PREFIX + (c.bytes - blocks_at));
+	ok = ok && patch(ctx, snap->small_len + 4, v, 4);
+	if (!ok) {
+		fail(err, err_size, "no se pudo completar el archivo");
 		return false;
 	}
 	return true;
@@ -568,6 +663,61 @@ static void load_hle(const struct section *sec, uint32_t size, bool (*load)(void
 		load(ctx, sec->data);
 }
 
+/* La sección RDRZ: lee los bloques comprimidos de la RDRAM y los descomprime
+ * directo a su lugar. 0 = bien; 1 = no era válida y todavía no se tocó la
+ * RDRAM; 2 = falló con la RDRAM a medias. `len` es el largo de la sección. */
+static int load_rdram_zip(salsa64_state_read_fn read, void *ctx, struct salsa64_bus *b, uint32_t len,
+			  uint8_t *blockbuf, char *err, size_t err_size)
+{
+	uint8_t pre[RDRZ_PREFIX];
+	if (len < RDRZ_PREFIX || !read(ctx, pre, sizeof pre)) {
+		fail(err, err_size, "archivo cortado (RDRAM comprimida)");
+		return 1;
+	}
+	uint32_t raw = salsa64_rd32(pre), bsize = salsa64_rd32(pre + 4), nblocks = salsa64_rd32(pre + 8);
+	if (raw != b->rdram_size || bsize != SPUKIT_LZ_BLOCK || nblocks != (raw + bsize - 1) / bsize) {
+		fail(err, err_size, "la RDRAM comprimida del estado no tiene el formato esperado");
+		return 1;
+	}
+	uint32_t left = len - RDRZ_PREFIX;
+	for (uint32_t k = 0, off = 0; k < nblocks; k++, off += bsize) {
+		uint8_t hdr[4];
+		uint32_t n = raw - off < bsize ? raw - off : bsize;
+		if (left < 4 || !read(ctx, hdr, 4)) {
+			fail(err, err_size, "archivo cortado (bloque de la RDRAM)");
+			return k ? 2 : 1;
+		}
+		uint32_t clen = spukit_lz_frame_len(hdr);
+		bool stored = spukit_lz_frame_stored(hdr);
+		left -= 4;
+		if (clen > left || clen > SPUKIT_LZ_BLOCK || (stored && clen != n)) {
+			fail(err, err_size, "bloque de la RDRAM con un tamaño inválido");
+			return k ? 2 : 1;
+		}
+		if (stored) {
+			if (!read(ctx, b->rdram + off, n)) {
+				fail(err, err_size, "no se pudo leer la RDRAM del estado: la emulación quedó a medias");
+				return 2;
+			}
+		} else {
+			if (!read(ctx, blockbuf, clen)) {
+				fail(err, err_size, "no se pudo leer la RDRAM del estado: la emulación quedó a medias");
+				return 2;
+			}
+			if (!spukit_lz_decompress(blockbuf, clen, b->rdram + off, n)) {
+				fail(err, err_size, "bloque de la RDRAM corrupto: la emulación quedó a medias");
+				return 2;
+			}
+		}
+		left -= clen;
+	}
+	if (left) {
+		fail(err, err_size, "sobran bytes tras la RDRAM comprimida");
+		return 2;
+	}
+	return 0;
+}
+
 bool salsa64_state_load(struct salsa64_n64 *n64, salsa64_state_read_fn read, void *ctx, uint8_t *scratch,
 			char *err, size_t err_size, bool *broken)
 {
@@ -600,7 +750,7 @@ bool salsa64_state_load(struct salsa64_n64 *n64, salsa64_state_read_fn read, voi
 	 * se aplica hasta tenerlo todo). */
 	struct section sec[MAX_SECTIONS];
 	unsigned nsec = 0;
-	uint8_t *p = scratch, *end = scratch + SALSA64_STATE_SCRATCH;
+	uint8_t *p = scratch, *end = scratch + SALSA64_STATE_SECTIONS;
 	uint32_t pos = SALSA64_STATE_HEADER;
 	bool rdram_done = false;
 	while (pos < info.file_size) {
@@ -617,8 +767,8 @@ bool salsa64_state_load(struct salsa64_n64 *n64, salsa64_state_read_fn read, voi
 			*broken = rdram_done;
 			return false;
 		}
-		if (tag == TAG_RDRM) {
-			if (len != b->rdram_size) {
+		if (tag == TAG_RDRM || tag == TAG_RDRZ) {
+			if (tag == TAG_RDRM && len != b->rdram_size) {
 				fail(err, err_size, "la RDRAM del estado no tiene el tamaño de la cabecera");
 				return false;
 			}
@@ -627,7 +777,13 @@ bool salsa64_state_load(struct salsa64_n64 *n64, salsa64_state_read_fn read, voi
 				fail(err, err_size, "faltan secciones en el estado");
 				return false;
 			}
-			if (!read(ctx, b->rdram, len)) {
+			if (tag == TAG_RDRZ) {
+				int rc = load_rdram_zip(read, ctx, b, len, scratch + SALSA64_STATE_SECTIONS, err, err_size);
+				if (rc) {
+					*broken = rc == 2;
+					return false;
+				}
+			} else if (!read(ctx, b->rdram, len)) {
 				fail(err, err_size, "no se pudo leer la RDRAM del estado: la emulación quedó a medias");
 				*broken = true;
 				return false;

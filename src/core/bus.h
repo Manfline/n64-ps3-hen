@@ -17,7 +17,10 @@
  *   0x13FF0000–0x13FFFFFF  ISViewer, solo si se activa (tapa la ROM ahí)
  *   0x1FC00000–0x1FC007BF  PIF ROM: no se incluye (arranque por HLE), lee 0
  *   0x1FC007C0–0x1FC007FF  PIF RAM (64 bytes)
- * Todo lo demás lee 0 e ignora escrituras por ahora.
+ *   0x05000000–0x07FFFFFF  64DD (registros e IPL ROM): ausente, bus abierto
+ *   0x1FD00000 en adelante   bus abierto del PI
+ * El bus abierto lee la mitad baja de la dirección repetida (0x05000508 →
+ * 0x05080508). Todo lo demás lee 0 e ignora escrituras por ahora.
  *
  * El CPU accede directo a la RDRAM por su camino rápido; el bus atiende el
  * resto y también la RDRAM cuando lo llama otro componente.
