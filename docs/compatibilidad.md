@@ -32,7 +32,7 @@ lista vigente; las secciones de abajo son censos anteriores en la Mac.
 | Super Smash Bros. (y Smash Remix) | velocidad completa | desde v0.2.4 pasa los KO y el Castillo de Hyrule se ve bien (confirmado en la PS3 real); en v0.2.3 y anteriores se congelaba en el primer KO (`/dev_hdd0/salsa64/fbfx.cfg` con un `1` lo evitaba) |
 | Doom 64 | ~40 % | limitado por el CPU |
 | Banjo-Tooie | intro en el host | desafío del CIC 6105 de la PIF implementado; falta jugar y confirmar en la PS3 |
-| F-Zero X | título en el host | bus abierto del PI (sondeo del 64DD); por confirmar en la PS3 |
+| F-Zero X | carrera completa en el host (auto, pista y HUD) | bus abierto del PI (sondeo del 64DD) y el microcódigo que recarga a mitad de lista (F3DEX → F3DFLX.Rej, ya interpretado); por confirmar en la PS3 |
 | Diddy Kong Racing | pantalla negra | microcódigo propio de Rare; en desarrollo con el RSP a bajo nivel |
 | Indiana Jones, Resident Evil 2 | no jugables | microcódigos de Factor 5 / Capcom |
 

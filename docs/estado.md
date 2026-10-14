@@ -1,5 +1,73 @@
 # Estado
 
+## 2026-10-13 — F-Zero X en carrera: el microcódigo se recarga a mitad de la lista (rama `suspicious-saha-fe2758`)
+
+En la PS3 (main cd58563) F-Zero X corría a 60 campos/s pero en carrera no
+salía el auto, ni el HUD, y el fondo se veía mal. Causa: **el juego cambia de
+microcódigo a mitad de cada lista** (gSPLoadUcodeEx: `G_RDPHALF_1` con la
+dirección de los datos y `G_LOAD_UCODE`) del «F3DEX 2.03» de la tarea al
+«F3DFLX.Rej 2.03F» (datos en 0xD7500, texto en 0xC9F00; mismos opcodes que
+F3DEX2), y la HLE tomaba cualquier `G_LOAD_UCODE` a otra dirección por un
+microcódigo ajeno (S2DEX…) y se saltaba el resto de la lista: ~875 comandos
+por tarea (el auto, el HUD con sus TEXRECT y el fondo de después), con la
+lista terminando dentro del tramo saltado (tarea «cortada»). En el log de la
+PS3: «299 tareas cortadas, 270 778 comandos de otro microcódigo saltados» por
+cada ~300 tareas, de 9 dibujos por tarea.
+
+- **Arreglo** (`f3dex2.c`, `s2dex.c`, `dl.c`): `gfx_ucode_kind` lee el texto
+  de los datos que carga el `G_LOAD_UCODE` («RSP Gfx ucode <nombre> fifo N.xx»:
+  generación por la versión, `.NoN`, S2DEX 2.x) y, si es otro microcódigo de la
+  misma generación (2.x), `gfx_ucode_reload` lo toma como el de la tarea: el
+  RSP arranca de nuevo (segmentos, modo geométrico, matrices, luces, vértices,
+  clip ratio 2, textura; la lista y la pila de G_DL siguen) y se sigue
+  interpretando. S2DEX2, el de la primera generación y los que no se
+  reconocen (L3DEX, S2DEX 1.x, el de Conker) siguen como antes. `gfx_run` usa
+  el mismo `gfx_ucode_reload` al empezar la tarea y `g->ucode` lleva el
+  microcódigo en curso (la vuelta desde un tramo ajeno compara con él).
+  También `G_NOOP` (0x00) de F3DEX2, que se contaba como sin implementar.
+- **Medido en el host** (estado del autor, `F_ZERO_X-B30ED978.st0`, 1200
+  campos de carrera): de 9 dibujos, 263 triángulos y 1 rectángulo por tarea a
+  51 dibujos, 409 triángulos y 48 rectángulos; 0 comandos saltados, 0 tareas
+  cortadas, 0 errores. Con ares (modo demo de F-Zero X, ráfaga de volcados por
+  GDB, una instancia propia): en las tomas de un jugador la HLE dibuja el
+  auto, la pista, el HUD (posiciones, vuelta, energía, tiempo, velocímetro,
+  mapa) y las chispas; PSNR en 4 × 4 de 31,5 y 29,2 dB en dos tomas con el
+  mismo cuadro (el HUD marca el mismo tiempo en la consola y en la HLE) y de
+  23,3 dB en una donde la lista de la RDRAM era 5 centésimas más nueva que el
+  búfer (el cielo con nubes y el reflejo del auto salen distintos por eso, no
+  se pudo separar). Lo que difiere con el mismo cuadro: el degradado del cielo
+  y las orillas de los edificios, y las chispas y los bordes del auto por la
+  cobertura del AA (límite del rasterizador, docs/referencia-ares.md). Falta
+  una toma sincronizada del auto de cerca.
+- **RSX**: el volcado de la HLE de esa carrera (`--ares --gfxdump`) repetido
+  en RPCS3 (`--replay`) sale como el rasterizador del host: auto, chispas y
+  HUD. (La primera repetición de un volcado nuevo en RPCS3 dibujó las chispas
+  como un rombo naranja opaco que tapaba el auto; con los mismos bytes no
+  volvió a pasar en 5 corridas, ni aislando el dibujo: se atribuye al
+  compilador asíncrono de shaders de RPCS3 la primera vez. Si en la consola
+  aparece, mirar el dibujo con `gfxdump.py list --draw 38`.)
+- **Verificado**: `test-host` 502/502 en Docker (ASan/UBSan; prueba nueva
+  `gfx_load_ucode_same_generation`: sigue con 2.x, reinicia el modo
+  geométrico, salta 1.x y L3DEX); las 7 escenas del host (SM64 en el campo
+  700; Banjo-Kazooie, Zelda OoT, DK64, Perfect Dark, GoldenEye y MK64 en el
+  900) idénticas byte a byte; Kirby 64 (S2DEX, 308 fondos) igual; gfxtest en
+  RPCS3 42/42. **Pila del SPE 0: holgura 1584** (main 1856; el mínimo es
+  1536): el código nuevo cuesta ~500 bytes, `dl.c` pasa a `-Os` (−370; solo
+  `gfx_dl_next` corre por comando y es corta) y el enlace redondea el espacio
+  libre a 128 bytes, así que con `f3dex2.c` en `-Os` (−72 bytes) la holgura
+  sería 1712; no se hizo por ser el despachador por comando. Otra palanca sin
+  tocar: `texcache.c` con `-Os` ahorra 1,2 KB (identificar texturas cuesta
+  0,01–0,02 ms por tarea).
+- **No medido**: el «desorden» del fondo que se veía en la PS3 no se
+  reproduce en el host ni en RPCS3 con el arreglo (antes el host tampoco
+  dibujaba auto ni HUD; el fondo de la primera mitad salía normal en el
+  host); lo más probable es que fuera la lista cortada (el juego esperaba al
+  RDP), pero falta verlo en la consola. El microcódigo «.Rej» rechaza los
+  triángulos que habría que recortar contra el plano cercano; la HLE sigue
+  recortándolos como siempre (sin diferencias visibles contra ares en las
+  tomas medidas, pero no se buscaron a propósito).
+- **Falta**: probar el paquete en la PS3 (no se armó: lo pide main).
+
 ## 2026-10-13 — Comparación con ares: lo que queda (rama `suspicious-saha-fe2758`)
 
 Cerrado en esta rama: la herramienta `salsa64-run --ares`, el umbral de
@@ -1326,7 +1394,7 @@ v0.2.0:
 | Pokémon Snap | jugable, texturas estiradas | ¿recorte del RSP, como MK64? |
 | Doom 64 | ~40 % | ~4,5 M instrucciones interpretadas por segundo: algo que el recompilador no traduce |
 | Banjo-Tooie | intro (host) | arreglado con el desafío del CIC 6105 de la PIF; falta jugar más allá de la intro y confirmar en la PS3 |
-| F-Zero X | título (host) | arreglado con el bus abierto del PI; por confirmar en la PS3 |
+| F-Zero X | carrera (host) | arreglado con el bus abierto del PI y la recarga del microcódigo a mitad de lista; por confirmar en la PS3 |
 | Diddy Kong Racing | negro | microcódigo propio de Rare sin HLE |
 | Indiana Jones | negro, 18 % | microcódigo de Factor 5 (LLE del RSP) |
 | Resident Evil 2 | parpadeo y texturas rotas desde el inicio | estado en la ranura 0 |

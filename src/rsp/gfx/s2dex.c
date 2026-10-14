@@ -61,30 +61,32 @@ enum {
 #define OBJLT_TXTRTILE  0x00FC1034u
 #define OBJLT_TLUT      0x00000030u
 
-static bool has(const uint8_t *p, uint32_t n, const char *s, uint32_t *at)
+int gfx_ucode_kind(struct gfx_state *g, uint32_t data, uint32_t size, bool *nonear)
 {
-	size_t k = strlen(s);
-	for (uint32_t i = 0; i + k <= n; i++)
-		if (memcmp(p + i, s, k) == 0) {
-			*at = i;
-			return true;
-		}
-	return false;
-}
-
-bool gfx_ucode_is_s2dex2(struct gfx_state *g, uint32_t data, uint32_t size)
-{
+	*nonear = false;
 	if (size == 0 || size > GFX_IO_MAX)
 		size = GFX_IO_MAX;
 	const uint8_t *p = gfx_io_read(g, GFX_IO_TEX, data, size);
-	uint32_t at;
-	if (!p || !has(p, size, "S2DEX", &at))
-		return false;
+	uint32_t i = 0;
+	/* Como salsa64_rsp_detect_gbi: "RSP Gfx ucode <nombre> fifo|xbus N.xx". */
+	if (!p)
+		return 0;
+	while (i + 24 < size && memcmp(p + i, "RSP Gfx ucode ", 14))
+		i++;
+	i += 14;
+	bool s2dex = memcmp(p + i, "S2DEX", 5) == 0;
+	if (i + 24 >= size || !(s2dex || memcmp(p + i, "F3D", 3) == 0) || memcmp(p + i, "F3DEXBG", 7) == 0)
+		return 0;
+	for (; i + 4 < size && p[i] > ' ' && p[i] < 0x7F; i++)
+		if (memcmp(p + i, ".NoN", 4) == 0)
+			*nonear = true;
 	/* La versión: el primer "N." después del nombre. */
-	for (uint32_t i = at + 5; i + 1 < size && p[i] >= 0x20 && p[i] < 0x7F; i++)
-		if (p[i] >= '0' && p[i] <= '9' && p[i + 1] == '.')
-			return p[i] == '2';
-	return false;
+	for (; i + 1 < size && p[i] >= 0x20 && p[i] < 0x7F; i++)
+		if (p[i] >= '0' && p[i] <= '9' && p[i + 1] == '.') {
+			int gen = p[i] == '2' ? 2 : p[i] <= '1' ? 1 : 0;
+			return s2dex ? (gen == 2 ? GFX_UCODE_S2DEX2 : 0) : gen;
+		}
+	return 0;
 }
 
 struct bg {
@@ -287,16 +289,17 @@ bool gfx_dl_s2dex2(struct gfx_state *g)
 {
 	struct gfx_result *res = g->res;
 	uint32_t w0, w1;
+	bool nonear;
 	res->flags |= GFX_RES_LOAD_UCODE;
 	g->raw[0] = 0;
 	while (gfx_dl_next(g, &w0, &w1)) {
 		uint32_t op = w0 >> 24;
 		switch (op) {
 		case S2_LOAD_UCODE:
-			if (g->job->ucode && gfx_addr(g, w1) == g->job->ucode)
+			if (g->ucode && gfx_addr(g, w1) == g->ucode)
 				return true;
 			/* Otro más: S2DEX otra vez sigue aquí; si no, se salta. */
-			if (!gfx_ucode_is_s2dex2(g, gfx_addr(g, g->rdphalf1), (w0 & 0xFFFF) + 1))
+			if (gfx_ucode_kind(g, gfx_addr(g, g->rdphalf1), (w0 & 0xFFFF) + 1, &nonear) != GFX_UCODE_S2DEX2)
 				return gfx_dl_skip_foreign(g, S2_LOAD_UCODE, S2_DL, S2_ENDDL);
 			break;
 		case S2_DL:

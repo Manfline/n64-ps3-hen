@@ -299,7 +299,7 @@ void gfx_dl_f3d(struct gfx_state *g, gfx_cmd_hook hook)
 		case G_LOAD_UCODE:
 			if (ex) {
 				/* Otro microcódigo: se salta su tramo (dl.c). */
-				if (!(g->job->ucode && gfx_addr(g, w1) == g->job->ucode) &&
+				if (!(g->ucode && gfx_addr(g, w1) == g->ucode) &&
 				    !gfx_dl_skip_foreign(g, G_LOAD_UCODE, G_DL, G_ENDDL))
 					return;
 				break;

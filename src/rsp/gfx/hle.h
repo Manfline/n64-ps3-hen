@@ -226,9 +226,10 @@ struct gfx_state {
 	uint8_t rect_clamp;        /* TEXRECT en curso: 1 limitar s, 2 limitar t; tile + 1 en 4 y 8 */
 	uint16_t rect_lim[2];      /* TEXRECT en curso: texels de s y t que muestrea (0: todos) */
 	bool target_sent;          /* GFX_OP_TARGET de la color image actual */
-	int32_t fbimg_cur;         /* su entrada en fbimg (send_target), o -1 */
 	bool have_draw;            /* `draw` está abierto */
 	uint16_t draw_prim_z;      /* prim_z con que se abrió (con GFX_DEPTH_PRIM, una por dibujo) */
+	int32_t fbimg_cur;         /* su entrada en fbimg (send_target), o -1 */
+	uint32_t ucode;            /* texto del microcódigo en curso: el de la tarea o el último G_LOAD_UCODE de su familia */
 	struct gfx_draw draw __attribute__((aligned(16)));
 	uint32_t vtx_count;        /* vértices escritos en la tarea */
 	bool tc_on;                /* la tarea usa la caché de texturas */
@@ -294,10 +295,20 @@ bool gfx_dl_call(struct gfx_state *g, uint32_t seg, bool branch);
 bool gfx_dl_end(struct gfx_state *g);
 /* Salta un tramo de otro microcódigo hasta volver al de la tarea (dl.c). */
 bool gfx_dl_skip_foreign(struct gfx_state *g, uint32_t op_ucode, uint32_t op_dl, uint32_t op_enddl);
-/* s2dex.c: ¿los datos del microcódigo que carga un G_LOAD_UCODE son de
- * S2DEX2? Y el tramo S2DEX2 hasta el G_LOAD_UCODE que vuelve al de la
- * tarea (true: la lista sigue; false como gfx_dl_skip_foreign). */
-bool gfx_ucode_is_s2dex2(struct gfx_state *g, uint32_t data, uint32_t size);
+/* G_LOAD_UCODE a otro microcódigo de la familia F3D de la misma generación
+ * (gfx_ucode_kind): el RSP arranca de nuevo con los datos de su DMEM
+ * (segmentos, luces, matrices, vértices, modo geométrico, clip ratio), pero
+ * la lista y la pila de G_DL siguen. También es el arranque de cada tarea.
+ * `text`: su dirección en la RDRAM. */
+void gfx_ucode_reload(struct gfx_state *g, uint32_t text, int gen, bool nonear);
+/* s2dex.c: clase del microcódigo cuyos datos (data, size bytes) carga un
+ * G_LOAD_UCODE: 1 o 2 (F3D, F3DEX, F3DLX…: primera o segunda generación, por
+ * la versión), GFX_UCODE_S2DEX2, o 0 si es otro (L3DEX, S2DEX 1.x, el de
+ * Conker…) o no se reconoce. nonear: es un ".NoN". */
+#define GFX_UCODE_S2DEX2 3
+int gfx_ucode_kind(struct gfx_state *g, uint32_t data, uint32_t size, bool *nonear);
+/* El tramo S2DEX2 hasta el G_LOAD_UCODE que vuelve al de la tarea (true: la
+ * lista sigue; false como gfx_dl_skip_foreign). */
 bool gfx_dl_s2dex2(struct gfx_state *g);
 /* G_TEXRECT y G_TEXRECTFLIP: s, t y dsdx, dtdy llegan en los dos comandos
  * siguientes si sus opcodes están en ops_st y ops_d (hasta 4 opcodes, uno

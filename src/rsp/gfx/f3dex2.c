@@ -178,16 +178,25 @@ void gfx_dl_f3dex2(struct gfx_state *g, gfx_cmd_hook hook)
 		case G_MOVEMEM:
 			do_movemem(g, w0, w1);
 			break;
-		case G_LOAD_UCODE:
-			/* Otro microcódigo: S2DEX2 (el fondo prerrenderizado de Zelda
-			 * OoT) se interpreta (s2dex.c); los demás se saltan (dl.c). El
+		case G_LOAD_UCODE: {
+			/* Otro microcódigo: uno de la misma generación (F-Zero X pasa a
+			 * mitad de cuadro de F3DEX 2.03 a F3DFLX.Rej 2.03F, con el auto y
+			 * el HUD) se sigue interpretando; S2DEX2 (el fondo prerrenderizado
+			 * de Zelda OoT), aparte (s2dex.c); los demás se saltan (dl.c). El
 			 * mismo, nada. */
-			if (g->job->ucode && gfx_addr(g, w1) == g->job->ucode)
+			uint32_t text = gfx_addr(g, w1);
+			bool nonear;
+			int kind;
+			if (g->ucode && text == g->ucode)
 				break;
-			if (gfx_ucode_is_s2dex2(g, gfx_addr(g, g->rdphalf1), (w0 & 0xFFFF) + 1) ? !gfx_dl_s2dex2(g)
-												   : !gfx_dl_skip_foreign(g, G_LOAD_UCODE, G_DL, G_ENDDL))
+			kind = gfx_ucode_kind(g, gfx_addr(g, g->rdphalf1), (w0 & 0xFFFF) + 1, &nonear);
+			if (kind == 2)
+				gfx_ucode_reload(g, text, 2, nonear);
+			else if (kind == GFX_UCODE_S2DEX2 ? !gfx_dl_s2dex2(g)
+							  : !gfx_dl_skip_foreign(g, G_LOAD_UCODE, G_DL, G_ENDDL))
 				return;
 			break;
+		}
 		case G_DL:
 			if (!gfx_dl_call(g, w1, (w0 >> 16) & 1))
 				return;
@@ -196,6 +205,7 @@ void gfx_dl_f3dex2(struct gfx_state *g, gfx_cmd_hook hook)
 			if (!gfx_dl_end(g))
 				return;
 			break;
+		case 0x00:  /* G_NOOP */
 		case G_SPNOOP:
 		case G_SPECIAL_1:
 		case G_SPECIAL_2:

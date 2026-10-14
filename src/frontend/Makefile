@@ -99,5 +99,9 @@ $(OBJ)/spu/src/rsp/gfx/s2dex.c.o: SPU_CFLAGS += -Os
 # texturas van en geom.c y tmem.c), también: lo que ahorra paga el TEXRECT
 # dentro del tramo S2DEX (el cielo de Kirby 64).
 $(OBJ)/spu/src/rsp/gfx/f3dpd.c.o: SPU_CFLAGS += -Os
+# El recorrido de la lista (dl.c), también: 370 bytes menos de código; paga el
+# cambio de microcódigo a mitad de lista (F-Zero X). Lo que corre por comando
+# es una función corta (gfx_dl_next).
+$(OBJ)/spu/src/rsp/gfx/dl.c.o: SPU_CFLAGS += -Os
 # make no ve un cambio de banderas: que se recompilen si cambia este archivo.
-$(OBJ)/spu/src/rsp/gfx/combine.c.o $(OBJ)/spu/src/rsp/gfx/s2dex.c.o $(OBJ)/spu/src/rsp/gfx/f3dpd.c.o: Makefile
+$(OBJ)/spu/src/rsp/gfx/combine.c.o $(OBJ)/spu/src/rsp/gfx/s2dex.c.o $(OBJ)/spu/src/rsp/gfx/f3dpd.c.o $(OBJ)/spu/src/rsp/gfx/dl.c.o: Makefile
