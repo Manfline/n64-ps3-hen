@@ -86,16 +86,18 @@ void gfx_fb_forget(struct gfx_state *g)
 }
 
 /* La color image actual recibe un dibujo en esta tarea: su entrada en
- * fbimg (la misma dirección y ancho, una libre o la dibujada hace más
- * tareas), como el consumidor elige la ranura de un destino. Solo las de 16
- * bits (las únicas que lee como textura desde su destino) y no las
- * imposibles (ancho 0 o de más de 640): el consumidor las ignora. */
+ * fbimg (la misma dirección, ancho y tamaño de píxel, una libre o la
+ * dibujada hace más tareas), como el consumidor elige la ranura de un
+ * destino. Solo las de 16 y 8 bits (las que lee como textura desde su
+ * destino: RGBA16, e I8 de una de 8 bits) y no las imposibles (ancho 0 o de
+ * más de 640): el consumidor las ignora. */
 static __attribute__((noinline, cold)) void fb_drawn(struct gfx_state *g)
 {
 	g->fbimg_cur = -1;
 	uint32_t w = g->cimg_width, addr = g->cimg_addr, task = g->job->task;
-	if (w - 1 >= 640 || g->cimg_siz != G_IM_SIZ_16b)
+	if (w - 1 >= 640 || (g->cimg_siz != G_IM_SIZ_16b && g->cimg_siz != G_IM_SIZ_8b))
 		return;
+	addr |= g->cimg_siz == G_IM_SIZ_8b;  /* struct gfx_fbimg */
 	/* La misma imagen o, si no está, la libre o la dibujada hace más. */
 	int best = 0;
 	uint32_t oldest = 0;

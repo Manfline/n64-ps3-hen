@@ -1,5 +1,36 @@
 # Estado
 
+## 2026-10-13 — Sombras de Conker: render a textura de 8 bits (rama `suspicious-saha-fe2758`)
+
+En Salsa64 fallaban todas las sombras de Conker. Con ocho volcados de ares
+(`salsa64-run --ares --pasadas 2`, que corre la lista como dos cuadros
+seguidos para que lo que se lee por la RDRAM sea lo que copió el
+consumidor, como en la PS3) salió el mecanismo: la silueta de cada
+personaje se dibuja en una imagen de 64 × 64 de 8 bits declarada CI, se
+desenfoca releyéndola como I8 con dos texrects y el piso la usa como alfa
+de la sombra. Dos fallas: la HLE decodificaba esas I8 de la RDRAM antes de
+que el RSX dibujara la silueta (solo las RGBA16 se leían del destino), y
+`src/rdp` solo copiaba a la RDRAM las imágenes de 8 bits de intensidad. Y
+una tercera al arreglarlas: la copia del destino que se lee mientras se
+dibuja era una por tarea, y Conker reutiliza la imagen para cada
+personaje. Arreglo en la HLE (`fbimg` lleva las de 8 bits; una I8 que cae
+en una sale como `GFX_TEX_TARGET`), en `src/rdp` (la lee del destino con
+`RSXKIT_REMAP_RRRR`, o la decodifica con `rdp_decode_i8`; copia las de 8
+bits de cualquier formato; recopia el scratch si se dibujó donde se lee) y
+en el rasterizador del host (docs/framebuffer.md).
+
+- Contra la consola, 4 × 4: de 20,8–25,8 dB (como en la PS3) a 23,5–30,4,
+  igual o mejor que con la máscara que la propia consola dejó en la RDRAM.
+- Pila del SPE 0: holgura 1856 (main 1984; −128 bytes de texto).
+- De los juegos de Rare medidos en el host, solo Conker dibuja en
+  imágenes de 8 bits (3544 texturas I8 leídas de su imagen en 4000 campos
+  de la intro, ninguna de la RDRAM); DK64, Perfect Dark, Banjo-Kazooie y
+  GoldenEye no. Banjo-Tooie (no llega a dibujar en el host) y Diddy Kong
+  Racing (microcódigo sin HLE) no se pudieron medir.
+- RPCS3: gfxtest igual que main. La repetición del cuadro de Conker sale
+  con el piso negro cuando hay dos copias del scratch en la misma tarea
+  (con una, bien; en el host, bien). Falta la PS3 real.
+
 ## 2026-10-13 — Líneas azules de GoldenEye: aristas de los dibujos con AA como líneas (rama `suspicious-saha-fe2758`)
 
 Con dos volcados de ares del túnel de Dam (`salsa64-run --ares`): las

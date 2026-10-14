@@ -82,6 +82,11 @@ void rdp_box_add(struct rdp_box *b, float x0, float y0, float x1, float y1, bool
 		 const uint16_t scissor[4], uint32_t lw, uint32_t lh);
 /* Agrega un rectángulo entero ya recortado. */
 void rdp_box_union(struct rdp_box *b, const struct rdp_box *r);
+/* ¿Se tocan la caja y el rectángulo [x0, x1) × [y0, y1)? */
+static inline bool rdp_box_overlaps(const struct rdp_box *b, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1)
+{
+	return !rdp_box_empty(b) && b->x0 < x1 && x0 < b->x1 && b->y0 < y1 && y0 < b->y1;
+}
 
 struct rdp_target {
 	bool used;
@@ -208,6 +213,9 @@ void rdp_target_tex_map(uint32_t scale, uint32_t lw, uint32_t x0, uint32_t y0, u
  * decodifica la HLE. Lo que cae fuera de la RDRAM queda en cero. */
 void rdp_decode_rgba16(const uint8_t *rdram, uint32_t rdram_size, uint32_t addr, uint32_t pitch, uint32_t w,
 		       uint32_t h, uint8_t *out, uint32_t out_pitch);
+/* Lo mismo para una I8 (de una color image de 8 bits): RGBA = (I, I, I, I). */
+void rdp_decode_i8(const uint8_t *rdram, uint32_t rdram_size, uint32_t addr, uint32_t pitch, uint32_t w, uint32_t h,
+		   uint8_t *out, uint32_t out_pitch);
 
 /* ¿La región de src_w × src_h píxeles de superficie se presenta a un
  * múltiplo entero (sin el estiramiento fraccionario que repetía filas con

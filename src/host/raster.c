@@ -48,6 +48,7 @@ static struct rdp_targets tg;
 static uint32_t rgb[RDP_TARGETS_MAX][RASTER_W * RASTER_H];
 static uint32_t scratch[RASTER_W * RASTER_H];  /* copia del ligado cuando un dibujo lo lee */
 static int scratch_slot;
+static struct rdp_box scratch_dirty;  /* lo dibujado en esa ranura después de copiarla (como rdp.c) */
 static struct depth depths[MAX_DEPTHS];
 static unsigned next_depth;
 static uint32_t task_no;
@@ -63,6 +64,7 @@ float raster_edge_factor = 8.0f, raster_edge_units = 64.0f;  /* su desplazamient
 static struct rdp_vi_ring vi_ring;
 static uint32_t primes, readbacks, mirrors, frames, dma_skipped;
 static uint32_t all_draws, edge_draws, edge_tris;  /* dibujos, y los que llevaron aristas */
+static uint32_t draws8, tex8_rsx, tex8_rdram;    /* dibujos en imágenes de 8 bits; I8 leídas de ellas */
 uint32_t ps3_rb, ps3_rb_old;  /* diagnóstico (SALSA64_PS3_RB) */
 static struct rdp_dma_ring dma_ring;
 
@@ -170,6 +172,7 @@ struct texmem {
  * no se puede, decodificados aquí desde la RDRAM). */
 struct texsrc {
 	int slot;            /* ranura del destino, o -1 */
+	bool intensity;      /* una I8 de una imagen de 8 bits: el rojo en los cuatro canales */
 	const uint32_t *pix; /* su imagen, o la copia (scratch) si es el ligado */
 	uint32_t x0, y0;     /* texel (0, 0) de la textura dentro del destino */
 	const uint8_t *data; /* con slot = -1: los texels RGBA8888 */
@@ -190,6 +193,8 @@ static void fetch(const struct gfx_tex *t, const struct texsrc *s, int x, int y,
 		out[1] = (c >> 8 & 0xFF) / 255.0f;
 		out[2] = (c & 0xFF) / 255.0f;
 		out[3] = 1.0f;
+		if (s->intensity)
+			out[1] = out[2] = out[3] = out[0];
 		return;
 	}
 	const uint8_t *p = s->data + (uint32_t)y * t->pitch + 4u * (uint32_t)x;
@@ -545,18 +550,24 @@ static int texture_source(const struct gfx_job *job, const struct texmem *m, con
 			  struct texsrc *s)
 {
 	s->slot = -1;
+	s->intensity = false;
 	s->data = m->base[t->where & 1] + t->offset;
 	int i = -1;
 	uint32_t x0 = 0, y0 = 0;
 	enum rdp_texsrc src = RDP_TEXSRC_NONE;
-	if (t->src_addr && t->src_siz == IM_SIZ_16b)
-		src = rdp_targets_texture(&tg, t->src_addr, t->src_pitch, 2, cur, &i, &x0, &y0);
+	/* Como rdp.c: de 16 bits, o la I8 de una imagen de 8 bits que la HLE
+	 * dejó para leer del destino. */
+	uint32_t bpp = t->src_siz == IM_SIZ_16b ? 2 : t->src_siz == 1u && t->where == GFX_TEX_TARGET ? 1 : 0;
+	if (t->src_addr && bpp)
+		src = rdp_targets_texture(&tg, t->src_addr, t->src_pitch, bpp, cur, &i, &x0, &y0);
 	if ((src != RDP_TEXSRC_RSX && src != RDP_TEXSRC_SELF) || !raster_fbfx) {
 		if (t->where == GFX_TEX_TARGET) {
+			tex8_rdram += bpp == 1;
 			memset(tex_here[k], 0, sizeof tex_here[k]);
 			if (job->rdram_ea && (uint32_t)t->pitch * t->height <= sizeof tex_here[k])
-				rdp_decode_rgba16((const uint8_t *)(uintptr_t)job->rdram_ea, job->rdram_size, t->src_addr,
-						  t->src_pitch, t->width, t->height, tex_here[k], t->pitch);
+				(bpp == 1 ? rdp_decode_i8 : rdp_decode_rgba16)((const uint8_t *)(uintptr_t)job->rdram_ea,
+									      job->rdram_size, t->src_addr, t->src_pitch,
+									      t->width, t->height, tex_here[k], t->pitch);
 			s->data = tex_here[k];
 			tex_decoded_here++;
 			if (raster_trace_fb)
@@ -567,15 +578,19 @@ static int texture_source(const struct gfx_job *job, const struct texmem *m, con
 		return i;
 	}
 	if (src == RDP_TEXSRC_SELF) {
-		if (scratch_slot != i) {
+		/* Como rdp.c: otra vez si desde la copia se dibujó donde lee. */
+		if (scratch_slot != i || rdp_box_overlaps(&scratch_dirty, x0, y0, x0 + t->width, y0 + t->height)) {
 			memcpy(scratch, rgb[i], sizeof scratch);
 			scratch_slot = i;
+			memset(&scratch_dirty, 0, sizeof scratch_dirty);
 		}
 		s->pix = scratch;
 	} else {
 		s->pix = rgb[i];
 	}
 	s->slot = i;
+	s->intensity = bpp == 1;
+	tex8_rsx += bpp == 1;
 	s->x0 = x0;
 	s->y0 = y0;
 	return i;
@@ -738,8 +753,8 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 				 * de readbacks_wanted de la PS3 (src/rdp/rdp.c), con el ancho
 				 * del VI de ahora y con el del último origen agregado al
 				 * anillo (la regla de antes del 2026-10-13). */
-				uint32_t fmt = (c->c >> 8) & 0xFF, old_w = vi_ring.width[(vi_ring.n + RDP_VI_RING - 1) % RDP_VI_RING];
-				bool img = (siz == 2u || (siz == 1u && fmt == 4u)) && c->b && c->b <= 640 && vi_ring.n;
+				uint32_t old_w = vi_ring.width[(vi_ring.n + RDP_VI_RING - 1) % RDP_VI_RING];
+				bool img = (siz == 2u || siz == 1u) && c->b && c->b <= 640 && vi_ring.n;
 				bool cov = img && rdp_vi_ring_covers(&vi_ring, c->a, c->b);
 				ps3_rb += img && (c->b != vi_ring.cur_width || !cov);
 				ps3_rb_old += img && (c->b != old_w || !cov);
@@ -868,6 +883,7 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 				edge_tris += d->h.b / 3;
 			}
 			all_draws++;
+			draws8 += tg.t[cur].bpp == 1;
 			for (uint32_t i = 0; i + 3 <= d->h.b; i += 3)
 				draw_clipped(d, vtx + d->h.a + i, src, rgb[cur], q5, zb, prim_z, false);
 			if (!drawn[cur])
@@ -891,6 +907,8 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 				rdp_box_add(&r, x0, y0, x1, y1, front, d->scissor, tg.t[cur].lw, tg.t[cur].lh);
 				rdp_box_union(&drawn_box[cur], &r);
 				rdp_box_union(&tg.t[cur].box, &r);
+				if (cur == scratch_slot)
+					rdp_box_union(&scratch_dirty, &r);
 			}
 			break;
 		}
@@ -928,7 +946,7 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 				fprintf(stderr, "fb: campo %u tarea %u: copia a la RDRAM del destino %06x/%u: %u..%u × %u..%u (alto "
 					"conjeturado %u)\n", raster_field, task_no, t->addr, t->width, box->x0, box->x1, box->y0, rows,
 					t->lh);
-		} else if (raster_fbfx >= 2 && rows && !t->presented && (t->bpp == 2 || (t->bpp == 1 && t->fmt == 4)) &&
+		} else if (raster_fbfx >= 2 && rows && !t->presented && (t->bpp == 2 || t->bpp == 1) &&
 			   t->width != tg.vi_width && t->width * t->bpp * rows <= MIRROR_BYTES) {
 			/* Espejo de una imagen auxiliar chica (en la PS3, sin esperar). */
 			if (dma_newer(t->addr, t->width * t->bpp * rows, task_no))
@@ -975,6 +993,7 @@ void raster_reset(void)
 	memset(&vi_ring, 0, sizeof vi_ring);
 	primes = readbacks = mirrors = frames = dma_skipped = tex_decoded_here = 0;
 	all_draws = edge_draws = edge_tris = 0;
+	draws8 = tex8_rsx = tex8_rdram = 0;
 	memset(&dma_ring, 0, sizeof dma_ring);
 	memset(rb_task, 0, sizeof rb_task);
 	memset(&last_job, 0, sizeof last_job);
@@ -988,6 +1007,13 @@ void raster_fb_stats(uint32_t *n_readbacks, uint32_t *n_primes, uint32_t *tex_rs
 	*tex_rsx = tg.tex_rsx;
 	*tex_rdram = tg.tex_rdram;
 	*tex_decoded = tex_decoded_here;
+}
+
+void raster_8bit_stats(uint32_t *draws, uint32_t *tex_rsx, uint32_t *tex_rdram)
+{
+	*draws = draws8;
+	*tex_rsx = tex8_rsx;
+	*tex_rdram = tex8_rdram;
 }
 
 void raster_edge_stats(uint32_t *draws, uint32_t *with_edges, uint32_t *tris)

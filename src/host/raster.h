@@ -30,6 +30,9 @@ void raster_rdram_written(uint32_t pa, uint32_t len, uint32_t task);
 /* Dibujos con triángulos dibujados, cuántos llevaron la pasada de aristas
  * (raster_aa_edges) y sus triángulos. */
 void raster_edge_stats(uint32_t *draws, uint32_t *with_edges, uint32_t *tris);
+/* Dibujos en color images de 8 bits y texturas I8 leídas de ellas: de su
+ * imagen (render a textura) o, si no se pudo, de la RDRAM. */
+void raster_8bit_stats(uint32_t *draws, uint32_t *tex_rsx, uint32_t *tex_rdram);
 const uint32_t *raster_image(uint32_t addr, uint32_t *width);
 /* Qué hay en la ranura `slot` de la tabla de destinos (para la vigilancia
  * de accesos del CPU); false si está vacía. */

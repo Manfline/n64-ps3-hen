@@ -165,6 +165,7 @@ static struct {
 	uint32_t scratch_w, scratch_h, scratch_bytes;
 	uint32_t scratch_scale;      /* escala de la superficie copiada (la del scratch) */
 	int scratch_slot;            /* ranura copiada en esta tarea, o -1 */
+	struct rdp_box scratch_dirty;  /* lo dibujado en esa ranura después de copiarla */
 	uint32_t ppe_tex_off;        /* arena de la tarea en traducción: hasta dónde está ocupado */
 	struct depth depths[MAX_DEPTHS];
 	int bound_t;                 /* ranura ligada, o -1 */
@@ -942,11 +943,14 @@ static void zclear(const struct gfx_zclear *z)
 static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_texture *t, bool *bound)
 {
 	*bound = false;
-	if (rdp.fbfx < 1 || !gt->src_addr || gt->src_siz != 2u)
+	/* De 16 bits, o una I8 de una color image de 8 bits que la HLE dejó
+	 * para leer de ahí (las otras de 8 bits no se leen igual del RSX). */
+	uint32_t bpp = gt->src_siz == 2u ? 2 : gt->src_siz == 1u && gt->where == GFX_TEX_TARGET ? 1 : 0;
+	if (rdp.fbfx < 1 || !gt->src_addr || !bpp)
 		return false;
 	int slot;
 	uint32_t x0, y0;
-	enum rdp_texsrc src = rdp_targets_texture(&rdp.tg, gt->src_addr, gt->src_pitch, 2, cur, &slot, &x0, &y0);
+	enum rdp_texsrc src = rdp_targets_texture(&rdp.tg, gt->src_addr, gt->src_pitch, bpp, cur, &slot, &x0, &y0);
 	if ((src != RDP_TEXSRC_RSX && src != RDP_TEXSRC_SELF) || !rdp.surf[slot])
 		return false;
 	const struct rdp_target *tg = &rdp.tg.t[slot];
@@ -961,7 +965,11 @@ static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_textur
 		 * está ahora (una por tarea; las franjas de Zelda leen cada una
 		 * filas que aún no reescribió). El scratch toma el tamaño, y con él
 		 * la escala, de la superficie copiada. */
-		if (rdp.scratch_slot != slot) {
+		/* Otra vez si desde la copia se dibujó donde lee la textura: Conker
+		 * usa la misma imagen de 8 bits para la sombra de cada personaje y
+		 * desenfoca cada silueta leyendo lo que acaba de dibujar. Las
+		 * franjas de Zelda leen filas que aún no reescribieron: una copia. */
+		if (rdp.scratch_slot != slot || rdp_box_overlaps(&rdp.scratch_dirty, x0, y0, x0 + gt->width, y0 + gt->height)) {
 			uint32_t w, h;
 			rsxkit_target_size(rdp.surf[slot], &w, &h);
 			if (rdp.scratch && (rdp.scratch_w != w || rdp.scratch_h != h))
@@ -981,6 +989,7 @@ static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_textur
 				return false;
 			rdp.bound_t = -1;  /* rsxkit_target_copy dejó ligado el scratch */
 			rdp.scratch_slot = slot;
+			memset(&rdp.scratch_dirty, 0, sizeof rdp.scratch_dirty);
 			rdp.scratch_scale = sc;
 			copied = true;
 		}
@@ -999,6 +1008,8 @@ static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_textur
 	t->height = nt.height;
 	t->location = nt.location;
 	t->format = nt.format;
+	/* Una I8: la intensidad que el RDP escribió en la imagen es el rojo. */
+	t->remap = bpp == 1 ? RSXKIT_REMAP_RRRR : RSXKIT_REMAP_NONE;
 	t->wrap_s = RSXKIT_WRAP_CLAMP;
 	/* u recorre la fila entera del destino: la textura empieza en x0. */
 	t->xf[0] = map.xf0;
@@ -1049,8 +1060,12 @@ static bool texture_from_rdram(const struct gfx_tex *gt, struct set *s, rsxkit_t
 		return false;
 	}
 	uint64_t t0 = tb_now();
-	rdp_decode_rgba16(rdp.rdram, rdp.rdram_size, gt->src_addr, gt->src_pitch, gt->width, gt->height, s->tex + off,
-			  gt->pitch);
+	if (gt->src_siz == 1u)
+		rdp_decode_i8(rdp.rdram, rdp.rdram_size, gt->src_addr, gt->src_pitch, gt->width, gt->height, s->tex + off,
+			      gt->pitch);
+	else
+		rdp_decode_rgba16(rdp.rdram, rdp.rdram_size, gt->src_addr, gt->src_pitch, gt->width, gt->height,
+				  s->tex + off, gt->pitch);
 	rdp.tb.tex += tb_now() - t0;
 	rdp.ppe_tex_off = off + size;
 	t->offset = s->tex_off + off;
@@ -1171,10 +1186,12 @@ static void readbacks_wanted(struct set *s, const struct gfx_result *res)
 		 * ancho 64) o, del ancho del VI, fuera de los framebuffers
 		 * recientes. */
 		uint32_t vi_w = rdp.vi_ring.n ? rdp.vi_ring.cur_width : 0;
-		uint32_t siz = c->c & 0xFF, fmt = (c->c >> 8) & 0xFF;
-		/* De 16 bits, o de 8 de intensidad (la cobertura que Zelda guarda
-		 * para su filtro; una CI8 no se puede reconstruir desde el RSX). */
-		if (c->op == GFX_OP_TARGET && (siz == 2u || (siz == 1u && fmt == 4u)) && c->b && c->b <= 640 &&
+		uint32_t siz = c->c & 0xFF;
+		/* De 16 bits, o de 8 (la cobertura que Zelda guarda para su filtro,
+		 * las máscaras de sombra de Conker): en una de 8 bits el RDP escribe
+		 * el rojo, sea cual sea el formato; Conker la declara CI y la lee
+		 * como I8. */
+		if (c->op == GFX_OP_TARGET && (siz == 2u || siz == 1u) && c->b && c->b <= 640 &&
 		    rdp.vi_ring.n && (c->b != vi_w || !rdp_vi_ring_covers(&rdp.vi_ring, c->a, c->b))) {
 			uint32_t k = 0;
 			while (k < s->rb_n && s->rb_addr[k] != c->a)
@@ -1404,6 +1421,8 @@ static void translate(uint32_t n)
 				rdp_box_add(&r, x0, y0, x1, y1, front, g->scissor, t->lw, t->lh);
 				rdp_box_union(&drawn_box[cur], &r);
 				rdp_box_union(&rdp.tg.t[cur].box, &r);
+				if (cur == rdp.scratch_slot)
+					rdp_box_union(&rdp.scratch_dirty, &r);
 			}
 			rsxkit_draw_triangles(&rd, g->h.a, g->h.b);
 			rdp.stats.draws++;
@@ -1537,7 +1556,7 @@ static void translate(uint32_t n)
 		const struct rdp_target *t = &rdp.tg.t[i];
 		uint32_t rows = drawn_box[i].y1 < t->lh ? drawn_box[i].y1 : t->lh;
 		uint32_t pitch = (t->lw * 2 + 63) & ~63u;
-		if (!drawn[i] || sync_rb[i] || !rows || t->presented || (t->bpp != 2 && (t->bpp != 1 || t->fmt != 4)) ||
+		if (!drawn[i] || sync_rb[i] || !rows || t->presented || (t->bpp != 2 && t->bpp != 1) ||
 		    t->width == rdp.tg.vi_width || pitch * rows > MIRROR_BYTES ||
 		    t->addr + t->width * t->bpp * rows > rdp.rdram_size)
 			continue;
@@ -1870,8 +1889,9 @@ bool salsa64_rdp_dump(const char *path)
 		if (tgt[k]) {
 			memset(here, 0, GFX_TEX_MAX);
 			if (rdp.rdram && len[k] <= GFX_TEX_MAX)
-				rdp_decode_rgba16(rdp.rdram, rdp.rdram_size, tgt[k]->src_addr, tgt[k]->src_pitch, tgt[k]->width,
-						  tgt[k]->height, here, tgt[k]->pitch);
+				(tgt[k]->src_siz == 1u ? rdp_decode_i8 : rdp_decode_rgba16)(
+					rdp.rdram, rdp.rdram_size, tgt[k]->src_addr, tgt[k]->src_pitch, tgt[k]->width,
+					tgt[k]->height, here, tgt[k]->pitch);
 			p = here;
 		}
 		ok = len[k] <= (tgt[k] ? GFX_TEX_MAX : CACHE_BYTES) && fwrite(p, 1, len[k], f) == len[k] &&

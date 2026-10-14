@@ -4566,6 +4566,7 @@ int main(void)
 			salsa64_rdp_aa_edges(false);
 			salsa64_log("aristas de los dibujos con AA: apagadas (sin-aristas-aa)");
 		}
+		salsa64_rdp_set_log(salsa64_log);  /* los avisos del RDP también en la repetición */
 		int rr = salsa64_replay(path);
 		salsa64_log("RESULTADO frontend: %s (repetición)", rr == 0 ? "OK" : "FALLO");
 		salsa64_rdp_shutdown();
