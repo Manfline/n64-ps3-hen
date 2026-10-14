@@ -66,6 +66,11 @@ cada ~300 tareas, de 9 dibujos por tarea.
   triángulos que habría que recortar contra el plano cercano; la HLE sigue
   recortándolos como siempre (sin diferencias visibles contra ares en las
   tomas medidas, pero no se buscaron a propósito).
+- **Con main a338653 integrado** (interpolación, `--gc-sections`): holgura del SPE 0
+  2624 sin el `-Os` de `dl.c` (se quitó; main 3136); `test-host` 521/521; las 7
+  escenas idénticas a main; gfxtest 42/42 en RPCS3; Zelda en RPCS3 con
+  `interp-prueba=1`: 71–83 % de vértices con pareja, como en la documentación
+  de la interpolación (la recarga de microcódigo no toca los registros de grupos).
 - **Falta**: probar el paquete en la PS3 (no se armó: lo pide main).
 
 ## 2026-10-13 — Interpolación de cuadros por geometría: 60 campos por segundo en juegos a 20 o 30 (rama `kind-dijkstra-c790f9`, paquetes SLSA00116 «Salsa64 interp 1» a «interp 8»)
