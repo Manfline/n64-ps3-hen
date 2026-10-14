@@ -119,6 +119,11 @@ $(OBJ)/spu/src/rsp/gfx/vgroup.c.o: SPU_CFLAGS += -Os
 # pagarlo (−370 bytes, docs/estado.md 2026-10-13): de lo suyo solo
 # gfx_dl_next corre por comando, y es corta.
 $(OBJ)/spu/src/rsp/gfx/flx.c.o $(OBJ)/spu/src/rsp/gfx/dl.c.o: SPU_CFLAGS += -Os
+# La caché de texturas (texcache.c), también: ~1,2 KB de código para la pila
+# al juntar F3DFLX con el S2DEX de las salas de Zelda (la holgura bajaba a
+# 1328); identificar texturas cuesta 0,01–0,02 ms más por tarea.
+$(OBJ)/spu/src/rsp/gfx/texcache.c.o: SPU_CFLAGS += -Os
 # make no ve un cambio de banderas: que se recompilen si cambia este archivo.
 $(OBJ)/spu/src/rsp/gfx/combine.c.o $(OBJ)/spu/src/rsp/gfx/s2dex.c.o $(OBJ)/spu/src/rsp/gfx/f3dpd.c.o \
-$(OBJ)/spu/src/rsp/gfx/vgroup.c.o $(OBJ)/spu/src/rsp/gfx/flx.c.o $(OBJ)/spu/src/rsp/gfx/dl.c.o: Makefile
+$(OBJ)/spu/src/rsp/gfx/vgroup.c.o $(OBJ)/spu/src/rsp/gfx/flx.c.o $(OBJ)/spu/src/rsp/gfx/dl.c.o \
+$(OBJ)/spu/src/rsp/gfx/texcache.c.o: Makefile
