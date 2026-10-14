@@ -107,8 +107,26 @@ struct rdp_target {
 	struct rdp_box box;
 };
 
+/* Un relleno sobre una color image alta (rdp_targets_tall) que se anotó para
+ * los destinos que se creen después: ver rdp_targets_tall_note. */
+#define RDP_TALL_FILLS 4
+#define RDP_TALL_APPLIED 8
+/* Tareas que vale un relleno anotado: pasadas, lo que hay en la RDRAM manda. */
+#define RDP_TALL_FILL_TASKS 32
+struct rdp_tall_fill {
+	bool used;
+	uint32_t addr, width, bpp, rows;  /* la color image alta */
+	float x0, y0, x1, y1;             /* el rectángulo, en píxeles de esa imagen */
+	uint32_t color;                   /* 0xRRGGBB */
+	uint32_t task;                    /* rdp_targets.task al rellenar */
+	uint32_t applied[RDP_TALL_APPLIED];  /* direcciones de los destinos que ya lo recibieron */
+	uint32_t napplied;
+};
+
 struct rdp_targets {
 	struct rdp_target t[RDP_TARGETS_MAX];
+	struct rdp_tall_fill tall[RDP_TALL_FILLS];
+	uint32_t tall_next;     /* próxima entrada de tall[] a reemplazar */
 	uint32_t field;         /* campo en curso: el último presentado */
 	uint32_t task;          /* tarea gráfica en curso (rdp_targets_task) */
 	int shown;              /* ranura presentada en el último campo, o -1 */
@@ -343,6 +361,32 @@ struct rdp_dma_ring {
 void rdp_dma_note(struct rdp_dma_ring *r, uint32_t pa, uint32_t len, uint32_t task);
 /* ¿Algún DMA desde la tarea `task` (inclusive) tocó [lo, hi)? */
 bool rdp_dma_since(const struct rdp_dma_ring *r, uint32_t lo, uint32_t hi, uint32_t task);
+
+/* Un relleno sobre una color image alta que se reparte entre los destinos
+ * existentes (rdp_targets_inside) no llega a los que se creen después:
+ * Star Fox 64 limpia sus tres framebuffers con un solo FILLRECT de 320 × 720
+ * en la primera tarea gráfica (campo 3), cuando aún no hay ninguno; los
+ * destinos nacen en las tres siguientes y se cebaban con la RDRAM, donde el
+ * RDP de la HLE nunca escribió el relleno y siguen los datos que el juego
+ * cargó antes por DMA (ruido de colores en el borde de 8 px y arriba, hasta
+ * el relleno del cambio de escena, campo 158: el logo de «Nintendo
+ * presents»). En la consola ese relleno sí está en la RDRAM. Se anota el
+ * relleno (`done`, las ranuras que ya lo recibieron) y rdp_targets_tall_pending
+ * lo da, una sola vez, a cada destino nuevo que cae dentro de la imagen alta
+ * (misma regla que rdp_targets_inside) mientras no hayan pasado
+ * RDP_TALL_FILL_TASKS tareas ni un DMA haya tocado la memoria del destino
+ * desde el relleno (esos datos son más nuevos: en la consola el DMA pasa
+ * por encima del relleno). */
+struct rdp_tall_rect {
+	float x0, y0, x1, y1;  /* en píxeles lógicos del destino */
+	uint32_t color;        /* 0xRRGGBB */
+};
+void rdp_targets_tall_note(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32_t bpp, uint32_t rows,
+			   float x0, float y0, float x1, float y1, uint32_t color, const int *done, int ndone);
+/* Los rellenos pendientes del destino recién creado `slot`, del más viejo al
+ * más nuevo; los marca como entregados. */
+int rdp_targets_tall_pending(struct rdp_targets *s, int slot, const struct rdp_dma_ring *dma,
+			     struct rdp_tall_rect out[RDP_TALL_FILLS]);
 
 void rdp_vi_ring_push(struct rdp_vi_ring *r, uint32_t origin, uint32_t width);
 /* ¿Hay que copiar a la RDRAM la color image (addr, width, siz) cuando el

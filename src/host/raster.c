@@ -87,9 +87,10 @@ static struct gfx_job last_job;  /* la RDRAM, para el espejo de cada campo */
 static void prime(const struct gfx_job *job, int slot);
 
 static int get_target(const struct gfx_job *job, uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
-		      uint32_t min_lh)
+		      uint32_t min_lh, bool *created)
 {
 	bool fresh;
+	*created = false;
 	/* Como rdp.c: una color image imposible no toca la tabla. */
 	if (!width || width > 640 || min_lh > 480) {
 		if (raster_trace_fb)
@@ -98,6 +99,7 @@ static int get_target(const struct gfx_job *job, uint32_t addr, uint32_t width, 
 		return -1;
 	}
 	int i = rdp_targets_get(&tg, addr, width, siz, min_lh, &fresh);
+	*created = fresh;
 	if (fresh) {
 		memset(rgb[i], 0, sizeof rgb[i]);
 		tg.t[i].fmt = (uint8_t)fmt;
@@ -576,6 +578,29 @@ static void frame_mirror(const struct gfx_job *job, int slot, uint32_t rows, con
 			task_no, t->addr, t->width, when, box.x0, box.x1, box.y0, box.y1);
 }
 
+/* Borra con r->color el rectángulo r (píxeles lógicos) del destino `i` y lo
+ * cuenta como dibujado en la tarea: un FILLRECT repartido de una imagen alta
+ * (o entregado a un destino nuevo). Como rdp.c (tall_fill_target). */
+static void tall_fill_target(int i, const struct rdp_tall_rect *r, bool drawn[RDP_TARGETS_MAX],
+			     struct rdp_box drawn_box[RDP_TARGETS_MAX])
+{
+	const struct rdp_target *t = &tg.t[i];
+	int ya = (int)r->y0, yb = (int)(r->y1 + 0.999f);
+	int xa = (int)r->x0, xb = (int)(r->x1 + 0.999f);
+	ya = ya < 0 ? 0 : ya, yb = yb > (int)t->lh ? (int)t->lh : yb;
+	xa = xa < 0 ? 0 : xa, xb = xb > (int)t->lw ? (int)t->lw : xb;
+	if (yb <= ya || xb <= xa)
+		return;
+	for (int y = ya; y < yb && y < RASTER_H; y++)
+		for (int x = xa; x < xb && x < RASTER_W; x++)
+			rgb[i][y * RASTER_W + x] = r->color;
+	rdp_targets_drawn(&tg, i);
+	drawn[i] = true;
+	struct rdp_box b = { (uint16_t)xa, (uint16_t)ya, (uint16_t)xb, (uint16_t)yb };
+	rdp_box_union(&drawn_box[i], &b);
+	rdp_box_union(&tg.t[i].box, &b);
+}
+
 void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 {
 	const uint8_t *cmd = (const uint8_t *)(uintptr_t)job->cmd_ea;
@@ -621,7 +646,16 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 			}
 			bool is_tall = c->b && c->b <= 640 && rdp_targets_tall(c->b, lh) &&
 				       fills_only(cmd, off + c->size, res->cmd_bytes);
-			cur = is_tall ? -1 : get_target(job, c->a, c->b, (c->c >> 8) & 0xFF, siz, lh);
+			bool created;
+			cur = is_tall ? -1 : get_target(job, c->a, c->b, (c->c >> 8) & 0xFF, siz, lh, &created);
+			if (cur >= 0 && created) {
+				/* Un relleno de imagen alta anterior (rdp_targets_tall_note) que
+				 * este destino no vio: se cebó con la RDRAM, que no lo tiene. */
+				struct rdp_tall_rect pend[RDP_TALL_FILLS];
+				int np = rdp_targets_tall_pending(&tg, cur, &dma_ring, pend);
+				for (int k = 0; k < np; k++)
+					tall_fill_target(cur, &pend[k], drawn, drawn_box);
+			}
 			tall.rows = is_tall ? lh : 0;
 			tall.addr = c->a;
 			tall.width = c->b;
@@ -672,23 +706,16 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 						 (uint32_t)(d->k[GFX_K_ONE][0][2] * 255.0f + 0.5f);
 				int n = rdp_targets_inside(&tg, tall.addr, tall.width, tall.bpp, tall.rows, slots, first);
 				for (int k = 0; k < n && x1 > x0 && y1 > y0; k++) {
-					int i = slots[k];
-					const struct rdp_target *t = &tg.t[i];
-					int ya = (int)(y0 - (float)first[k]), yb = (int)(y1 - (float)first[k] + 0.999f);
-					int xa = (int)x0, xb = (int)(x1 + 0.999f);
-					ya = ya < 0 ? 0 : ya, yb = yb > (int)t->lh ? (int)t->lh : yb;
-					xa = xa < 0 ? 0 : xa, xb = xb > (int)t->lw ? (int)t->lw : xb;
-					if (yb <= ya || xb <= xa)
-						continue;
-					for (int y = ya; y < yb && y < RASTER_H; y++)
-						for (int x = xa; x < xb && x < RASTER_W; x++)
-							rgb[i][y * RASTER_W + x] = color;
-					rdp_targets_drawn(&tg, i);
-					drawn[i] = true;
-					struct rdp_box r = { (uint16_t)xa, (uint16_t)ya, (uint16_t)xb, (uint16_t)yb };
-					rdp_box_union(&drawn_box[i], &r);
-					rdp_box_union(&tg.t[i].box, &r);
+					const struct rdp_target *t = &tg.t[slots[k]];
+					struct rdp_tall_rect r = { x0 < 0.0f ? 0.0f : x0, y0 - (float)first[k],
+								   x1 > (float)t->lw ? (float)t->lw : x1, y1 - (float)first[k],
+								   color };
+					r.y0 = r.y0 < 0.0f ? 0.0f : r.y0;
+					r.y1 = r.y1 > (float)t->lh ? (float)t->lh : r.y1;
+					tall_fill_target(slots[k], &r, drawn, drawn_box);
 				}
+				/* Y para los destinos que se creen después. */
+				rdp_targets_tall_note(&tg, tall.addr, tall.width, tall.bpp, tall.rows, x0, y0, x1, y1, color, slots, n);
 				break;
 			}
 			if (cur < 0)

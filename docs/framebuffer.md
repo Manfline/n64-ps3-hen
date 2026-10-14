@@ -219,6 +219,18 @@ un tramo que un DMA tocó desde que T empezó**: el dato del DMA es más nuevo.
 Un DMA anterior a la tarea sí se pisa, como en la N64. Las escrituras del
 propio CPU no se siguen (solo con el build `SALSA64_WATCH_MEM`).
 
+**Rellenos de imagen alta antes de que existan los destinos.** Star Fox 64
+limpia sus tres framebuffers con un solo FILLRECT de 320 × 720 en la primera
+tarea gráfica (campo 3); los destinos nacen en las tres siguientes. El
+reparto a los destinos existentes (`rdp_targets_inside`) no los alcanza, y
+al cebarse con la RDRAM —donde el RDP de la HLE no escribió el relleno y
+quedan los datos del DMA de arranque— el borde de 8 px que el juego nunca
+vuelve a tocar salía con ruido durante todo el logo. Cada relleno se anota
+(`rdp_targets_tall_note`) y un destino que nace después y cae dentro lo recibe
+una vez (`rdp_targets_tall_pending`), salvo que hayan pasado 32 tareas o que
+un DMA haya tocado su memoria desde el relleno (el anillo de arriba): el dato
+del DMA es más nuevo.
+
 Las imágenes chicas (iconos, pantallas) no se esperan: al terminar la tarea
 que las dibujó se encola una **copia espejo** (solo las filas que llegaron
 las tijeras, hasta 64 KB, cuatro en vuelo) y se convierte a la RDRAM en

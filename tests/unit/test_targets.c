@@ -832,6 +832,81 @@ static void targets_inside(void)
 	CHECK(rdp_targets_tall(640, 720));
 }
 
+/* Star Fox 64: el FILLRECT de 320 × 720 llega en la primera tarea gráfica,
+ * antes de que exista ningún framebuffer; los que nacen después lo reciben
+ * una vez, salvo que un DMA haya tocado su memoria desde el relleno, que
+ * hayan pasado RDP_TALL_FILL_TASKS tareas o que ya lo hayan recibido. */
+static void targets_tall_pending(void)
+{
+	const uint32_t A = 0x38f800, B = 0x3b5000, C = 0x3da800;
+	bool fresh;
+	struct rdp_dma_ring dma;
+	struct rdp_tall_rect r[RDP_TALL_FILLS];
+	memset(&dma, 0, sizeof dma);
+	rdp_targets_init(&s);
+	rdp_targets_task(&s);  /* tarea 1: el relleno de 320 × 720, sin destinos */
+	rdp_targets_tall_note(&s, A, 320, 2, 720, 0, 0, 320, 720, 0x28323c, NULL, 0);
+	/* Las tres tareas siguientes crean un destino cada una. */
+	rdp_targets_task(&s);
+	int b = rdp_targets_get(&s, B, 320, SIZ_16b, 240, &fresh);
+	CHECK(fresh);
+	CHECK_EQ(rdp_targets_tall_pending(&s, b, &dma, r), 1);
+	CHECK_EQ(r[0].x0, 0.0f);
+	CHECK_EQ(r[0].y0, 0.0f);  /* B empieza en la fila 240 de la imagen alta: el relleno lo cubre entero */
+	CHECK_EQ(r[0].x1, 320.0f);
+	CHECK_EQ(r[0].y1, 240.0f);
+	CHECK_EQ(r[0].color, 0x28323cu);
+	CHECK_EQ(rdp_targets_tall_pending(&s, b, &dma, r), 0);  /* una sola vez por destino */
+	rdp_targets_task(&s);
+	int c = rdp_targets_get(&s, C, 320, SIZ_16b, 240, &fresh);
+	CHECK_EQ(rdp_targets_tall_pending(&s, c, &dma, r), 1);
+	/* Un DMA tocó la memoria de A después del relleno (tarea 1): no se pisa. */
+	rdp_dma_note(&dma, A + 0x2800, 0x100, 1);
+	rdp_targets_task(&s);
+	int a = rdp_targets_get(&s, A, 320, SIZ_16b, 240, &fresh);
+	CHECK_EQ(rdp_targets_tall_pending(&s, a, &dma, r), 0);
+	/* Un DMA anterior al relleno no cuenta (lo hace la consola antes de que el RDP lo borre). */
+	rdp_targets_init(&s);
+	memset(&dma, 0, sizeof dma);
+	rdp_dma_note(&dma, A + 0x2800, 0x100, 0);
+	rdp_targets_task(&s);
+	rdp_targets_tall_note(&s, A, 320, 2, 720, 0, 0, 320, 720, 0x010203, NULL, 0);
+	rdp_targets_task(&s);
+	a = rdp_targets_get(&s, A, 320, SIZ_16b, 240, &fresh);
+	CHECK_EQ(rdp_targets_tall_pending(&s, a, &dma, r), 1);
+	/* Un destino que ya existía y lo recibió al repartirse no lo recibe otra vez. */
+	rdp_targets_init(&s);
+	memset(&dma, 0, sizeof dma);
+	a = rdp_targets_get(&s, A, 320, SIZ_16b, 240, &fresh);
+	int done[1] = { a };
+	rdp_targets_task(&s);
+	rdp_targets_tall_note(&s, A, 320, 2, 720, 0, 0, 320, 720, 0x010203, done, 1);
+	CHECK_EQ(rdp_targets_tall_pending(&s, a, &dma, r), 0);
+	/* Pasadas RDP_TALL_FILL_TASKS tareas vale lo que haya en la RDRAM. */
+	for (int k = 0; k <= RDP_TALL_FILL_TASKS; k++)
+		rdp_targets_task(&s);
+	b = rdp_targets_get(&s, B, 320, SIZ_16b, 240, &fresh);
+	CHECK_EQ(rdp_targets_tall_pending(&s, b, &dma, r), 0);
+	/* Otro ancho u otra dirección fuera de la imagen: nada. */
+	rdp_targets_init(&s);
+	rdp_targets_task(&s);
+	rdp_targets_tall_note(&s, A, 320, 2, 720, 0, 0, 320, 720, 0x010203, NULL, 0);
+	int w = rdp_targets_get(&s, B, 640, SIZ_16b, 480, &fresh);
+	CHECK_EQ(rdp_targets_tall_pending(&s, w, &dma, r), 0);
+	int o = rdp_targets_get(&s, A + 0x4000 * 12, 320, SIZ_16b, 240, &fresh);  /* más allá de las 720 filas */
+	CHECK_EQ(rdp_targets_tall_pending(&s, o, &dma, r), 0);
+	/* Un rectángulo parcial (8..312 × 8..232 de la fila 240): se recorta al destino. */
+	rdp_targets_init(&s);
+	rdp_targets_task(&s);
+	rdp_targets_tall_note(&s, A, 320, 2, 720, 8, 248, 312, 472, 0x111111, NULL, 0);
+	b = rdp_targets_get(&s, B, 320, SIZ_16b, 240, &fresh);
+	CHECK_EQ(rdp_targets_tall_pending(&s, b, &dma, r), 1);
+	CHECK_EQ(r[0].x0, 8.0f);
+	CHECK_EQ(r[0].y0, 8.0f);
+	CHECK_EQ(r[0].x1, 312.0f);
+	CHECK_EQ(r[0].y1, 232.0f);
+}
+
 /* Anillo de DMA: los trozos seguidos de la misma tarea se funden; una
  * copia de la tarea T solo se detiene por DMA desde T. */
 static void targets_dma_ring(void)
@@ -922,6 +997,7 @@ void t_suite_targets(void)
 {
 	RUN(targets_dma_ring);
 	RUN(targets_inside);
+	RUN(targets_tall_pending);
 	RUN(targets_present_interlaced);
 	RUN(targets_locate);
 	RUN(targets_decode_rgba16);

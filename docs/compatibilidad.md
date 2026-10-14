@@ -26,7 +26,7 @@ lista vigente; las secciones de abajo son censos anteriores en la Mac.
 | Perfect Dark | velocidad completa en la intro y menús | 43–55 cuadros/s en las escenas más pesadas (CPU) |
 | GoldenEye 007 | 45–60 cuadros/s | la presa es la zona más pesada; líneas azules finas en algunas uniones |
 | Conker's Bad Fur Day | ~60 en juego | **v0.2.1 y v0.2.2: se queda en negro tras «For Mature»** (usar v0.2.0 o v0.2.3); desde v0.2.3 arranca sin los 25–30 s de negro; sombras cuadradas |
-| Star Fox 64, Banjo-Kazooie | velocidad completa | Banjo: las pantallas del rompecabezas salen en negro |
+| Star Fox 64, Banjo-Kazooie | velocidad completa | Star Fox: ruido de colores arriba durante el logo «Nintendo presents» hasta v0.2.5 (el relleno de arranque llegaba antes que los framebuffers); corregido en el árbol, por confirmar en la PS3. Banjo: las pantallas del rompecabezas salen en negro |
 | Kirby 64, Pokémon Stadium 2 | ~97–100 % | algunas texturas con ruido o en ajedrez |
 | Pokémon Snap | jugable | texturas estiradas en algunos polígonos |
 | Super Smash Bros. (y Smash Remix) | velocidad completa | desde v0.2.4 pasa los KO y el Castillo de Hyrule se ve bien (confirmado en la PS3 real); en v0.2.3 y anteriores se congelaba en el primer KO (`/dev_hdd0/salsa64/fbfx.cfg` con un `1` lo evitaba) |
