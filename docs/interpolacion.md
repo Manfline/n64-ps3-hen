@@ -1021,6 +1021,13 @@ Lo que falta, en orden:
 4. Notas «VMAT» de vmatch en la caja negra (las decisiones de cada grupo),
    para repetir en el host lo que decidió la consola.
 5. Modo híbrido con matrices (estimación arriba), después de 1.
+6. Hojas del árbol Deku duplicadas (partículas): en la escena en que el
+   Gran Árbol Deku deja caer hojas, con «interp 7», «parecido a los
+   destellos: se duplican», aunque menos visible. Estado del autor en la
+   ranura 4 (campo 81335; build/ps3-interp8/states/…-hojas.st4, guardado en
+   la línea 4441 de build/ps3-interp8/salsa64.log y cargado en la 4482). A
+   mirar con el volcado de grupos: instancias emparejadas con la hermana
+   equivocada o que renacen sin que la regla de saltos las vea.
 
 Para entrar a main (v0.2.6), en este orden y rebasados sobre el main de
 ese momento: 23820f6 (`--gc-sections`, primero: sin él no alcanza la pila
