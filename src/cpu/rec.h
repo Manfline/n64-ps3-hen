@@ -342,6 +342,18 @@ struct salsa64_rec {
 
 	struct salsa64_rec_stats stats;
 
+#ifdef SALSA64_REC_LAB
+	/* Laboratorio (tools/lab, docs/lab-recompilador.md): dónde empieza en cada
+	 * sección el código de la instrucción MIPS k del último bloque compilado
+	 * (0xFFFF: no empieza ninguna ahí; k = n: el final del cuerpo, antes del
+	 * código frío fijo de entrada y salidas) y cómo se traduce (nativa, por el intérprete…). */
+	struct {
+		uint16_t hot[SALSA64_REC_MAX_INSNS + 1], cold[SALSA64_REC_MAX_INSNS + 1];
+		uint8_t how[SALSA64_REC_MAX_INSNS + 1];  /* cómo se traduce la instrucción (enum how de rec_emit.c), 0xFF en k = n */
+		bool loop;                               /* el salto final vuelve al inicio del propio bloque (bucle) */
+	} lab;
+#endif
+
 	/* fastmem (SALSA64_REC_OPT_FASTMEM, docs/fastmem.md). */
 	bool fastmem;            /* activo: la RDRAM está en fm_window y los accesos se compilan sin prueba */
 	void *fm_window;         /* la ventana de 512 MB (quien llama, antes de salsa64_rec_init) */

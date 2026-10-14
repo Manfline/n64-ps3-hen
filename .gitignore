@@ -18,3 +18,4 @@ tools/ps3.conf
 core
 !src/core/
 qemu_*.core
+__pycache__/

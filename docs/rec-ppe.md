@@ -7,6 +7,10 @@ compañía, MFC0, CACHE; lo incluye rec_emit.c), `src/cpu/rec_tlb.c` (código
 y datos fuera de KSEG0: KSEG1 y TLB), `src/cpu/rec_prof.c` (perfil por
 causa), `src/cpu/ppc.h` (codificación de instrucciones PowerPC).
 
+Las herramientas para medir el código que emite sin la PS3 (perfil exacto,
+análisis de palabras, load-hit-store y caché de instrucciones, antes/después de
+un cambio) están en `tools/lab/`; ver docs/lab-recompilador.md.
+
 ## Decisión: recompilador propio (2026-10-10)
 
 Se revisaron las dos bases candidatas (informe verificado el 2026-10-10,

@@ -1,5 +1,17 @@
 # Estado
 
+## 2026-10-14 — v0.2.6 lista para la regresión en la PS3
+
+Todo lo de la v0.2.6 está en main (73bc213): F-Zero X (auto y HUD, recarga de
+microcódigo a mitad de lista) y Banjo-Tooie (desafío del CIC 6105) jugables en
+la PS3; ruido del logo de Star Fox; hojas de Pokémon Snap (umbral de alfa);
+sombras de Conker (render a textura de 8 bits); interpolación por geometría
+(mejor a 3×/720p); caja negra y estados comprimidos en un SPE; VI_V_SYNC
+imposible (Super Odyssey 64); caché de destinos de JR encendida; laboratorio del
+recompilador. Falta la regresión con la app de perfilado (sesiones en
+/dev_hdd0/salsa64/perfilado/, `tools/perfilado/perfilado.py juegos`), integrar
+el perfilado a main y publicar.
+
 ## 2026-10-13 — F-Zero X en carrera: el microcódigo se recarga a mitad de la lista (rama `suspicious-saha-fe2758`)
 
 En la PS3 (main cd58563) F-Zero X corría a 60 campos/s pero en carrera no
