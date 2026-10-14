@@ -32,6 +32,11 @@
   recordaba de otras fuentes; se fijó con los datos medidos. Ahora Banjo-Tooie
   dibuja la intro (296 tareas gráficas, 470 de audio en 16 s; Dolby). PD, Conker, DK64, Majora, SM64 y
   F-Zero X dan el mismo cuadro antes y después.
+- **Falta probar:** F-Zero X y Banjo-Tooie en la PS3 (regresión v0.2.6); Banjo-Tooie
+  jugando más allá de la intro (otras protecciones de Rare, ANTI_TAMPER) y con
+  guardado EEPROM 16K; el desafío en Perfect Dark y Conker (no lo pidieron en
+  las pruebas del host); s6 = 0xA0000200 y los registros del SP con el 6105
+  (no reproducidos, sin efecto visto).
 - Método útil: contar las reservas del asignador del juego (ares con punto de
   parada en 0x8001ACCC y el host con paso de 1 ciclo) y seguir el primer
   argumento distinto hasta el dato mal descifrado. Ojo: los puntos de parada
