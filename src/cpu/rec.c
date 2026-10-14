@@ -360,6 +360,12 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 			w[n++] = ppc_ld(SALSA64_REC_PIN_PPC + k, OFF(gpr) + 8 * salsa64_rec_pin[k], 31);
 	w[n++] = ppc_li(0, SALSA64_SMP_NATIVE);  /* muestreo (rec_sample.h): en código generado */
 	w[n++] = ppc_stb(0, OFF(rec_mark), 31);
+	if (rec->trace) {
+		/* Perfilado (rec_trace.h): cr3 eq = sin ventana abierta. Después de
+		 * guardar el CR de quien llama (cr3 es no volátil). */
+		w[n++] = ppc_lwz(0, OFF(rec_tron), 31);
+		w[n++] = ppc_cmpwi(3, 0, 0);
+	}
 	w[n++] = ppc_mtctr(4);
 	w[n++] = PPC_BCTR;
 
@@ -420,9 +426,51 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	w[n++] = ppc_mtocrf(0x08, 12);
 	w[n++] = PPC_BLR;
 
+	/* Perfilado (rec_trace.h), solo con rec->trace al iniciar.
+	 * trace_rtn: r0 = id del bloque (con el signo extendido de li) a la
+	 * ventana; al llenarse la cierra (rec_tron = 0) y deja cr3 eq para que
+	 * los bloques siguientes no vuelvan. Usa r0, r11, r12 y cr0.
+	 * exit_jr_count: r3 = destino, r4 = id (con signo extendido): cuenta el
+	 * JR del bloque y si fue al mismo destino que la vez anterior, y sigue
+	 * en exit_jr (justo debajo). Usa r4, r10, r11, r12 y cr0. */
+	const unsigned ne = PPC_BO_FALSE_UNLIKELY, eq = PPC_BO_TRUE_UNLIKELY, EQ = PPC_BI(0, PPC_EQ);
+	if (rec->trace) {
+		rec->trace_rtn = n;
+		w[n++] = ppc_rlwinm(0, 0, 0, 16, 31);
+		w[n++] = ppc_ld(11, OFF(rec_tpos), 31);
+		w[n++] = ppc_ld(12, OFF(rec_tend), 31);
+		w[n++] = ppc_stw(0, 0, 11);
+		w[n++] = ppc_addi(11, 11, 4);
+		w[n++] = ppc_std(11, OFF(rec_tpos), 31);
+		w[n++] = ppc_cmpld(0, 11, 12);
+		w[n++] = ppc_bclr(PPC_BO_TRUE, PPC_BI(0, PPC_LT));
+		w[n++] = ppc_li(12, 0);
+		w[n++] = ppc_stw(12, OFF(rec_tron), 31);
+		w[n++] = ppc_cmpw(3, 12, 12);
+		w[n++] = PPC_BLR;
+
+		rec->exit_jr_count = n;
+		w[n++] = ppc_rlwinm(4, 4, 4, 12, 27);       /* (id & 0xFFFF) * 16 */
+		w[n++] = ppc_ld(12, OFF(rec_jrtab), 31);
+		w[n++] = ppc_add(12, 12, 4);
+		w[n++] = ppc_lwz(11, 0, 12);                /* último destino */
+		w[n++] = ppc_lwz(10, 4, 12);
+		w[n++] = ppc_addi(10, 10, 1);
+		w[n++] = ppc_stw(10, 4, 12);
+		w[n++] = ppc_stw(3, 0, 12);
+		w[n++] = ppc_ld(10, OFF(rec_jr_count), 31);
+		w[n++] = ppc_addi(10, 10, 1);
+		w[n++] = ppc_std(10, OFF(rec_jr_count), 31);
+		w[n++] = ppc_cmplw(0, 11, 3);
+		w[n] = ppc_bc(PPC_BO_FALSE, EQ, 4 * 4);
+		n++;
+		w[n++] = ppc_lwz(10, 8, 12);
+		w[n++] = ppc_addi(10, 10, 1);
+		w[n++] = ppc_stw(10, 8, 12);
+	}
+
 	/* exit_jr: KSEG0, alineada y dentro de la RDRAM → map → blocks → código.
 	 * Fuera de KSEG0, xjr (abajo). */
-	const unsigned ne = PPC_BO_FALSE_UNLIKELY, eq = PPC_BO_TRUE_UNLIKELY, EQ = PPC_BI(0, PPC_EQ);
 	rec->exit_jr = n;
 	w[n++] = ppc_sradi(11, 3, 29);
 	w[n++] = ppc_cmpdi(0, 11, -4);
@@ -750,6 +798,15 @@ void salsa64_rec_flush_why(struct salsa64_rec *rec, enum salsa64_rec_flush_cause
 		fold_block(rec, id);
 		rec->pent[id] = 0;
 	}
+	if (rec->trace) {
+		salsa64_rec_trace_fold_all(rec);
+		if (rec->map_dirty) {
+			unsigned live = 0;
+			for (unsigned id = 1; id < rec->next_block; id++)
+				live += rec->blocks[id].code != 0;
+			salsa64_rec_trace_evicted(rec, 2, why, live);
+		}
+	}
 	if (rec->map_dirty) {
 		memset(rec->map, 0, (rec->rdram_size >> 2) * sizeof rec->map[0]);
 		memset(rec->flags, 0, rec->rdram_size >> SALSA64_REC_FLAG_SHIFT);
@@ -913,6 +970,8 @@ static void kill_block(struct salsa64_rec *rec, unsigned id)
 	bool detached = rec->x.state[id] == SALSA64_REC_X_DETACHED;  /* ya sin banderas, enlaces ni código */
 	if (rec->sample)
 		salsa64_rec_sample_fold(rec, id);
+	if (rec->trace)
+		salsa64_rec_trace_fold(rec, id);
 	if (rec->prof && rec->prof->blocks)
 		salsa64_rec_prof_fold(rec->prof, id, false);
 	fold_block(rec, id);
@@ -1035,12 +1094,17 @@ static bool rec_space(const struct salsa64_rec *rec)
 static void evict_segment(struct salsa64_rec *rec, unsigned s)
 {
 	uint32_t lo = seg_start(rec, s), hi = seg_limit(rec, s);
+	unsigned killed = 0;
 	for (unsigned id = 1; id < rec->next_block; id++) {
 		const struct salsa64_rec_block *b = &rec->blocks[id];
 		uint32_t code = b->code ? b->code : rec->x.state[id] == SALSA64_REC_X_DETACHED ? rec->x.saved_code[id] : 0;
-		if (code >= lo && code < hi)
+		if (code >= lo && code < hi) {
 			kill_block(rec, id);
+			killed++;
+		}
 	}
+	if (rec->trace)
+		salsa64_rec_trace_evicted(rec, s < SALSA64_REC_HOT_SEGMENTS ? 1 : 0, s, killed);
 	rec->seg_gen[s]++;
 	rec->generation++;
 	if (s < SALSA64_REC_HOT_SEGMENTS) {
@@ -1095,7 +1159,9 @@ static unsigned new_block(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, uns
 	rec->placed_hot = false;
 	rec->hits[id] = 0;
 	rec->pent[id] = 0;
+	uint64_t t0 = rec->trace ? salsa64_rec_trace_now() : 0;
 	uint32_t code = salsa64_rec_compile(rec, pc, pa, seg, SALSA64_REC_MAX_INSNS, false, &n, &bytes);
+	uint64_t ticks = rec->trace ? salsa64_rec_trace_now() - t0 : 0;
 	rec->cur_id = 0;
 	if (code)
 		fm_register(rec);
@@ -1119,6 +1185,12 @@ static unsigned new_block(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, uns
 		rec->stats.hot_placed += rec->placed_hot;
 	} else {
 		rec->stats.interp_only++;
+	}
+	if (rec->trace) {
+		struct salsa64_rec_trace_block *tb = &rec->trace->cur;
+		tb->flags |= (rec->placed_hot ? SALSA64_RT_F_HOT : 0) | (b->fr & SALSA64_REC_FR_DEP ? SALSA64_RT_F_FRDEP : 0);
+		salsa64_rec_trace_compiled(rec, id, pc, pa, seg, code, n, ticks);
+		salsa64_rec_trace_mark(rec->cpu, SALSA64_RT_M_COMPILE | id);
 	}
 	return id;
 }
@@ -1201,6 +1273,7 @@ static void rec_dispatch(struct salsa64_rec *rec)
 	struct salsa64_rec_prof *prof = rec->prof;
 	uint8_t mark = cpu->rec_mark;
 	cpu->rec_mark = SALSA64_SMP_EVENTS;  /* muestreo (rec_sample.h) */
+	salsa64_rec_trace_mark(cpu, SALSA64_RT_M_EVENT);
 	if (!prof) {
 		salsa64_sched_dispatch(s, cpu->cycles);
 		cpu->rec_mark = mark;
@@ -1242,6 +1315,7 @@ static void rec_interp(struct salsa64_rec *rec, bool to_boundary, unsigned why)
 	} while (k < 4096 && cpu->running);
 	rec->stats.interp_steps += k;
 	cpu->rec_mark = SALSA64_SMP_DISPATCH;
+	salsa64_rec_trace_mark(cpu, SALSA64_RT_M_INTERP | (k < 0xFFFFFF ? k : 0xFFFFFF));
 	if (prof) {
 		prof->t[why] += salsa64_rec_prof_now() - t0 - t_ev;
 		prof->n[why] += k;
@@ -1278,6 +1352,7 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 	struct salsa64_cpu *cpu = rec->cpu;
 	struct salsa64_sched *s = cpu->sched;
 	struct salsa64_rec_prof *prof = rec->prof;
+	struct salsa64_rec_trace *tr = rec->trace;
 	bool to_boundary = false, from_start = false;
 	uint32_t site = 0, site_gen = 0;
 	uint64_t t_run = prof ? salsa64_rec_prof_now() : 0, t0 = 0;
@@ -1373,7 +1448,10 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 			nested = prof->nested;
 			t0 = salsa64_rec_prof_now();
 		}
+		if (tr && tr->arm_at && cpu->cycles >= tr->arm_at)
+			salsa64_rec_trace_arm(rec);  /* perfilado: la ventana empieza en esta entrada */
 		uint64_t next = rec_enter(rec, entry);
+		salsa64_rec_trace_mark(cpu, SALSA64_RT_M_EXIT | (cpu->redirect ? 8u : cpu->rec_kind));
 		if (prof) {
 			/* Lo que tardó el código generado sin sus llamadas a C. */
 			prof->t[SALSA64_PROF_NATIVE] += salsa64_rec_prof_now() - t0 - (prof->nested - nested);
@@ -1393,6 +1471,7 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 			if (prof)
 				t0 = salsa64_rec_prof_now();
 			cpu->rec_mark = SALSA64_SMP_IDLE;
+			salsa64_rec_trace_mark(cpu, SALSA64_RT_M_IDLE);
 			rec_idle_exit(rec, next);
 			cpu->rec_mark = SALSA64_SMP_DISPATCH;
 			if (prof) {
@@ -1452,7 +1531,9 @@ bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *co
 	void (*on_compile)(struct salsa64_rec *, uint64_t, uint32_t, uint32_t, bool) = rec->on_compile;
 	void *after_exit_ctx = rec->after_exit_ctx;
 	struct salsa64_rec_prof *prof = rec->prof;
+	struct salsa64_rec_trace *trace = rec->trace;
 	memset(rec, 0, sizeof *rec);
+	rec->trace = trace;
 	rec->opts = opts;
 	rec->fm_window = fm_window;
 	rec->profile_sites = true;
@@ -1528,6 +1609,8 @@ bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *co
 	}
 	cpu->rec = rec;
 	cpu->code_flags = rec->flags;
+	cpu->rec_tron = 0;
+	cpu->rec_jrtab = trace ? trace->jr_id : NULL;
 	return true;
 #endif
 }
@@ -1537,5 +1620,6 @@ void salsa64_rec_detach(struct salsa64_rec *rec)
 	if (rec->cpu && rec->cpu->rec == rec) {
 		rec->cpu->rec = NULL;
 		rec->cpu->code_flags = NULL;
+		rec->cpu->rec_tron = 0;
 	}
 }

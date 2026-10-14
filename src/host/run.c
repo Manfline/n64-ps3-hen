@@ -112,7 +112,9 @@
 #include "core/state.h"
 #include "cpu/rec.h"
 #include "host/rec_host.h"
+#include "frontend/perfilado.h"
 #include "frontend/savefile.h"
+#include "frontend/version.h"
 #include "raster.h"
 #include "rdp/targets.h"
 #include "rsp/gfx/backend.h"
@@ -249,6 +251,265 @@ static void *sample_thread(void *arg)
 		salsa64_rec_sample_tick(&host_sample, &n64.cpu);
 	}
 	return NULL;
+}
+
+/* --perfilado DIR: la sesión de la app de perfilado de la PS3 (docs/perfilado.md,
+ * frontend/perfilado.h), escrita sin hilos: un anillo que se vacía cada 60
+ * campos. Los tiempos son los del host (en qemu no dicen nada del Cell):
+ * sirve para probar el formato, el lector (tools/perfilado) y el registro
+ * del recompilador de punta a punta. */
+static struct {
+	const char *root;
+	struct perf_cfg cfg;
+	struct perf_session ses;
+	struct perf_ring ring;
+	struct salsa64_rec_trace *trace;
+	bool on;
+	uint64_t t0, t_field, t_win;
+	uint32_t field_win, next_trace, trace_field0, rng, tasks, traces;
+	uint64_t cyc_win, idle_win, compiled, retrans, words, evictions, flushes, killed, jr, interp, smp_ticks;
+	uint32_t marks[SALSA64_SMP_N], gfx_tasks, draws, tris;
+} hp;
+
+static uint64_t now_us(void);
+
+static uint32_t hp_ms(void)
+{
+	return (uint32_t)((now_us() - hp.t0) / 1000);
+}
+
+static void hp_block(void *ctx, const struct salsa64_rec_trace_block *b)
+{
+	(void)ctx;
+	if (hp.cfg.blocks && perf_room(&hp.ses))
+		perf_put_block(&hp.ring, hp_ms(), n64.bus.vi.fields, b);
+}
+
+static void hp_evict(void *ctx, unsigned kind, unsigned seg, unsigned killed)
+{
+	(void)ctx;
+	perf_put_evict(&hp.ring, hp_ms(), n64.bus.vi.fields, kind, seg, killed);
+}
+
+static void hp_task(const struct gfx_result *r)
+{
+	if (!hp.on)
+		return;
+	hp.tasks++;
+	hp.draws += r->draws;
+	hp.tris += r->triangles;
+	if (!hp.cfg.tasks)
+		return;
+	struct perf_task t;
+	memset(&t, 0, sizeof t);
+	t.ms = hp_ms();
+	t.field = n64.bus.vi.fields;
+	t.task = hp.tasks;
+	t.commands = r->commands;
+	t.triangles = r->triangles;
+	t.draws = (uint16_t)perf_sat16(r->draws);
+	t.textures = (uint16_t)perf_sat16(r->textures);
+	t.unknown = (uint16_t)perf_sat16(r->unknown_cmds);
+	t.last_unknown = (uint8_t)r->last_unknown;
+	t.flags = (uint8_t)r->flags;
+	t.approx_cc = (uint16_t)perf_sat16(r->approx_cc);
+	t.skipped = (uint16_t)perf_sat16(r->skipped);
+	t.dl_errors = (uint16_t)perf_sat16(r->dl_errors);
+	perf_put_task(&hp.ring, &t);
+}
+
+/* Antes de salsa64_rec_init: la configuración y rec.trace. */
+static void hp_prepare(void)
+{
+	if (!hp.root)
+		return;
+	perf_cfg_defaults(&hp.cfg);
+	const char *env = getenv("SALSA64_PERFILADO_CFG");
+	if (env) {
+		char text[512];
+		snprintf(text, sizeof text, "%s", env);
+		for (char *p = text; *p; p++)
+			if (*p == ',')
+				*p = '\n';
+		perf_cfg_parse(&hp.cfg, text);
+	}
+	if (!hp.cfg.on)
+		return;
+	hp.trace = calloc(1, sizeof *hp.trace);
+	if (!hp.trace)
+		return;
+	hp.trace->seq = hp.cfg.trace;
+	hp.trace->jr = hp.cfg.jr;
+	hp.trace->win_len = hp.cfg.trace_len;
+	hp.trace->on_block = hp_block;
+	hp.trace->on_evict = hp_evict;
+	salsa64_rec_trace_init(hp.trace);
+}
+
+static bool hp_open(const uint8_t *rom, const char *path)
+{
+	static uint8_t mem[8u << 20];
+	if (!hp.root || !hp.cfg.on)
+		return true;
+	char game[48];
+	salsa64_save_basename(rom, game, sizeof game);
+	perf_ring_init(&hp.ring, mem, sizeof mem);
+	hp.ses.rings[0] = &hp.ring;
+	uint64_t cap = (uint64_t)hp.cfg.cap_mb << 20;
+	if (!perf_session_open(&hp.ses, hp.root, game, cap, cap / 10)) {
+		fprintf(stderr, "salsa64-run: --perfilado: no se pudo crear la sesión en %s/%s\n", hp.root, game);
+		return false;
+	}
+	hp.on = true;
+	hp.t0 = hp.t_field = hp.t_win = now_us();
+	hp.field_win = n64.bus.vi.fields;
+	hp.cyc_win = n64.cpu.cycles;
+	hp.idle_win = n64.cpu.idle_cycles;
+	hp.next_trace = n64.bus.vi.fields + 30;
+	char names[2048], cfg[320], ctx[1024];
+	perf_names_text(names, sizeof names);
+	perf_put_text(&hp.ring, PERF_R_NAMES, 0, names);
+	perf_cfg_text(&hp.cfg, cfg, sizeof cfg);
+	char name[21];
+	memcpy(name, rom + 0x20, 20);
+	name[20] = '\0';
+	for (int k = 19; k >= 0 && name[k] == ' '; k--)
+		name[k] = '\0';
+	snprintf(ctx, sizeof ctx,
+		 "version=%s\ncommit=%s\napp=salsa64-run\nappid=host\njuego=%s\ncarpeta=%s\ncodigo=%.4s\ncrc1=%08X\n"
+		 "crc2=%08X\nregion=%c\nrom=%s\nrecompilador=%s\nrec_opciones=0x%x\ntraza=%s\nperfilado=%s\n",
+		 salsa64_version, salsa64_commit, name, game, (const char *)rom + 0x3B, (unsigned)salsa64_rd32(rom + 0x10),
+		 (unsigned)salsa64_rd32(rom + 0x14), rom[0x3E] >= 0x20 && rom[0x3E] < 0x7F ? rom[0x3E] : '?', path,
+		 rec.trace ? "si" : "no", rec.opts, rec.trace && rec.trace->seq ? "si" : "no", cfg);
+	perf_put_text(&hp.ring, PERF_R_CONTEXT, hp_ms(), ctx);
+	fprintf(stderr, "salsa64-run: --perfilado: %s\n", hp.ses.path);
+	return true;
+}
+
+/* Después de cada campo. */
+static void hp_field(void)
+{
+	if (!hp.on)
+		return;
+	uint64_t t = now_us(), us = t - hp.t_field;
+	hp.t_field = t;
+	uint32_t field = n64.bus.vi.fields;
+	struct salsa64_rec_trace *tr = rec.trace;
+	if (tr) {
+		if (us >= (uint64_t)hp.cfg.stall_ms * 1000u) {
+			uint32_t v[PERF_S_N];
+			memset(v, 0, sizeof v);
+			v[PERF_S_campo] = field;
+			v[PERF_S_emu_us] = (uint32_t)us;
+			v[PERF_S_compilados] = tr->field.compiled;
+			v[PERF_S_palabras] = tr->field.words;
+			v[PERF_S_retrad] = tr->field.retrans;
+			v[PERF_S_desalojos] = tr->field.evictions;
+			v[PERF_S_vaciados] = tr->field.flushes;
+			v[PERF_S_muertos] = tr->field.killed;
+			perf_put_values(&hp.ring, PERF_R_STALL, hp_ms(), v, PERF_S_N);
+		}
+		memset(&tr->field, 0, sizeof tr->field);
+		if (tr->seq) {
+			unsigned len = salsa64_rec_trace_take(&rec, tr->armed && field - hp.trace_field0 > 4);
+			if (len) {
+				perf_put_trace(&hp.ring, hp_ms(), hp.trace_field0, tr->win_cycles, tr, len);
+				hp.traces++;
+			}
+			if (!tr->armed && !tr->arm_at && field >= hp.next_trace) {
+				hp.rng = hp.rng * 1103515245u + 12345u;
+				tr->arm_at = n64.cpu.cycles + 1 + (hp.rng >> 8) % (n64.bus.vi.field_cycles ? n64.bus.vi.field_cycles : 1);
+				hp.trace_field0 = field;
+				hp.next_trace = field + 60u * hp.cfg.trace_s;
+			}
+		}
+	}
+	if (field - hp.field_win >= 300) {
+		uint32_t v[PERF_W_N];
+		memset(v, 0, sizeof v);
+		uint64_t dt = t - hp.t_win, fields = field - hp.field_win;
+		uint64_t cyc = n64.cpu.cycles - hp.cyc_win, idle = n64.cpu.idle_cycles - hp.idle_win;
+		v[PERF_W_campo] = field;
+		v[PERF_W_dur_ms] = (uint32_t)(dt / 1000);
+		v[PERF_W_campos] = (uint32_t)fields;
+		v[PERF_W_cps_x100] = (uint32_t)(dt ? fields * 100000000ull / dt : 0);
+		v[PERF_W_mips_x10] = (uint32_t)(dt ? (cyc - idle) * 10 / dt : 0);
+		v[PERF_W_espera_pm] = (uint32_t)(cyc ? idle * 1000 / cyc : 0);
+		v[PERF_W_emu_us_campo] = (uint32_t)(fields ? dt / fields : 0);
+		v[PERF_W_tareas] = hp.tasks - hp.gfx_tasks;
+		v[PERF_W_dibujos] = hp.draws;
+		v[PERF_W_triangulos] = hp.tris;
+		hp.gfx_tasks = hp.tasks;
+		hp.draws = hp.tris = 0;
+		if (tr) {
+			v[PERF_W_rec_bloques] = (uint32_t)(tr->compiled - hp.compiled);
+			v[PERF_W_rec_retrad] = (uint32_t)(tr->retrans - hp.retrans);
+			v[PERF_W_rec_palabras] = (uint32_t)(tr->words - hp.words);
+			v[PERF_W_rec_desalojos] = (uint32_t)(tr->evictions - hp.evictions);
+			v[PERF_W_rec_vaciados] = (uint32_t)(tr->flushes - hp.flushes);
+			v[PERF_W_rec_muertos] = (uint32_t)(tr->killed - hp.killed);
+			v[PERF_W_rec_interp] = (uint32_t)(rec.stats.interp_steps - hp.interp);
+			v[PERF_W_rec_jr] = (uint32_t)(n64.cpu.rec_jr_count - hp.jr);
+			hp.compiled = tr->compiled;
+			hp.retrans = tr->retrans;
+			hp.words = tr->words;
+			hp.evictions = tr->evictions;
+			hp.flushes = tr->flushes;
+			hp.killed = tr->killed;
+			hp.interp = rec.stats.interp_steps;
+			hp.jr = n64.cpu.rec_jr_count;
+		}
+		if (rec.sample) {
+			uint32_t other = 0;
+			for (unsigned m = 1; m < SALSA64_SMP_N; m++) {
+				v[PERF_W_m_nativo + m] = host_sample.marks[m] - hp.marks[m];
+				other += v[PERF_W_m_nativo + m];
+				hp.marks[m] = host_sample.marks[m];
+			}
+			v[PERF_W_m_total] = (uint32_t)(host_sample.ticks - hp.smp_ticks);
+			v[PERF_W_m_nativo] = v[PERF_W_m_total] > other ? v[PERF_W_m_total] - other : 0;
+			hp.smp_ticks = host_sample.ticks;
+		}
+		v[PERF_W_perdidos] = hp.ring.lost;
+		perf_put_values(&hp.ring, PERF_R_WINDOW, hp_ms(), v, PERF_W_N);
+		hp.t_win = t;
+		hp.field_win = field;
+		hp.cyc_win = n64.cpu.cycles;
+		hp.idle_win = n64.cpu.idle_cycles;
+	}
+	if (field % 60 == 0)
+		perf_drain(&hp.ses);
+}
+
+/* Al terminar, antes del informe del muestreo (que agota su tabla). */
+static void hp_close(const char *reason)
+{
+	if (!hp.on)
+		return;
+	uint32_t ms = hp_ms();
+	if (rec.trace) {
+		unsigned len = salsa64_rec_trace_take(&rec, true);
+		if (len)
+			perf_put_trace(&hp.ring, ms, hp.trace_field0, rec.trace->win_cycles, rec.trace, len);
+		salsa64_rec_trace_fold_all(&rec);
+		if (rec.trace->jr)
+			perf_put_jr(&hp.ring, ms, rec.trace);
+	}
+	if (rec.sample) {
+		salsa64_rec_sample_fold_all(&rec);
+		perf_put_samples(&hp.ring, ms, &host_sample);
+	}
+	char end[512];
+	snprintf(end, sizeof end, "duracion_ms=%u\ncampos=%u\nciclos=%llu\nciclos_espera=%llu\nrec_bloques=%llu\n"
+		 "rec_jr=%llu\nsalida=%s\ntareas=%u\ntrazas=%u\nperdidos_emu=%u\n", ms, n64.bus.vi.fields,
+		 (unsigned long long)n64.cpu.cycles, (unsigned long long)n64.cpu.idle_cycles,
+		 (unsigned long long)rec.stats.compiled, (unsigned long long)n64.cpu.rec_jr_count, reason, hp.tasks,
+		 hp.traces, hp.ring.lost);
+	perf_put_text(&hp.ring, PERF_R_END, ms, end);
+	perf_session_close(&hp.ses);
+	fprintf(stderr, "salsa64-run: --perfilado: %s, %llu bytes, %u ventanas de la traza, %u bytes perdidos\n",
+		hp.ses.path, (unsigned long long)hp.ses.written, hp.traces, hp.ring.lost);
+	hp.on = false;
 }
 
 /* SALSA64_REC_DUMP=1: cada bloque compilado en hexadecimal (como en las
@@ -1046,6 +1307,7 @@ static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_resu
 	struct gfx_result *s = &gfx.sum;
 	if (getenv("SALSA64_GFX_CUTCHECK") && n64.bus.vi.fields >= trace_from)
 		cut_check(res);
+	hp_task(res);
 	gfx.tasks++;
 #ifdef SALSA64_GFX_TRACE
 	ts_window();
@@ -2006,7 +2268,7 @@ static bool dump_frame(const char *path)
 /* Opciones largas sin letra (códigos fuera de ASCII). */
 enum { OPT_REC = 0x100, OPT_LOCKSTEP, OPT_PAD, OPT_TRACE_FROM, OPT_TRACE_FAULTS, OPT_RAM_DUMP, OPT_TRACE_AUDIO,
        OPT_FRAME_EVERY, OPT_LLE, OPT_LLE_SPEED, OPT_LLE_CHECK, OPT_LLE_CHECK_JPEG, OPT_POKE, OPT_TRACE_FB, OPT_STATE_SAVE,
-       OPT_STATE_LOAD, OPT_FIELDS, OPT_PROFILE };
+       OPT_STATE_LOAD, OPT_FIELDS, OPT_PROFILE, OPT_PERFILADO };
 
 /* ---- Estados guardados (--state-save, --state-load) ------------------------- */
 
@@ -2109,6 +2371,9 @@ static void usage(FILE *out)
 	      "                        bloque, y la RDRAM en cada campo del VI y cada N bloques\n"
 	      "                        (por omisión 4096)\n"
 	      "      --no-idle         no saltar los bucles de espera\n"
+	      "      --perfilado DIR   la sesión de la app de perfilado (docs/perfilado.md) en\n"
+	      "                        DIR/<juego>-<CRC>/<n>.sesion; SALSA64_PERFILADO_CFG con las\n"
+	      "                        claves de perfilado.cfg separadas por comas\n"
 	      "      --profile ARCHIVO con --rec, perfil persistente por juego (rec_profile.h): se carga al\n"
 	      "                        empezar (si existe) y se guarda al terminar; SALSA64_REC_HOT_KB fija la\n"
 	      "                        zona caliente (1024) y SALSA64_REC_SITES=0 no registra sitios de salida\n"
@@ -2174,6 +2439,7 @@ int main(int argc, char **argv)
 		{ "state-load", required_argument, NULL, OPT_STATE_LOAD },
 		{ "fields", required_argument, NULL, OPT_FIELDS },
 		{ "profile", required_argument, NULL, OPT_PROFILE },
+		{ "perfilado", required_argument, NULL, OPT_PERFILADO },
 		{ "trace-gfx", required_argument, NULL, 'Q' },
 		{ "trace-fb", no_argument, NULL, OPT_TRACE_FB },
 		{ "raster-dump", required_argument, NULL, 'D' },
@@ -2274,6 +2540,7 @@ int main(int argc, char **argv)
 		case OPT_STATE_LOAD: state_load_path = optarg; break;
 		case OPT_FIELDS: stop_field = (uint32_t)strtoul(optarg, NULL, 0); break;
 		case OPT_PROFILE: profile_path = optarg; break;
+		case OPT_PERFILADO: hp.root = optarg; break;
 		case 'D': dump_path = optarg; break;
 		case 'A': wav_path = optarg; break;
 		case 'Z': audio_check = true; break;
@@ -2400,6 +2667,8 @@ int main(int argc, char **argv)
 		}
 		rec.hot_bytes = salsa64_host_rec_hot_bytes();
 		rec.fm_window = fm_window;
+		hp_prepare();
+		rec.trace = hp.trace;
 		if (!code || !salsa64_rec_init(&rec, &n64.cpu, code, salsa64_host_rec_bytes())) {
 			fprintf(stderr, "salsa64-run: el recompilador no corre en este host\n");
 			return 3;
@@ -2483,6 +2752,10 @@ int main(int argc, char **argv)
 	 * el último hasta el campo del estado (el PIF ya lo tiene: no cambia
 	 * nada). */
 	pad_field();
+	if (!hp_open(rom, path)) {
+		free(rom);
+		return 3;
+	}
 
 	/* Bucle principal: bloques de `slice` ciclos y verificación entre ellos. */
 	enum stop_reason reason = STOP_NONE;
@@ -2504,7 +2777,7 @@ int main(int argc, char **argv)
 				fprintf(stderr, "campo %u: origen %06x %ux%u stride %u bpp %u (V_VIDEO %08x Y_SCALE %08x)\n",
 					n64.bus.vi.fields, f.origin, f.width, f.height, f.stride, f.bpp,
 					n64.bus.vi.regs[SALSA64_VI_V_VIDEO], n64.bus.vi.regs[SALSA64_VI_Y_SCALE]);
-		} else if (pads.n || pokes.n || gfx.raster || state_saves.n || stop_field) {
+		} else if (pads.n || pokes.n || gfx.raster || state_saves.n || stop_field || hp.on) {
 			/* Con controles programados, campo por campo: el control cambia
 			 * justo al empezar uno. Con el rasterizador también, para darle
 			 * el origen del VI de cada campo (raster_vi). Los estados se
@@ -2517,6 +2790,7 @@ int main(int argc, char **argv)
 			}
 			if (stop_field && n64.bus.vi.fields >= stop_field && watch.hit == STOP_NONE)
 				watch.hit = STOP_FIELDS;
+			hp_field();
 		} else {
 			salsa64_n64_run(&n64, max_cycles - done < slice ? max_cycles - done : slice);
 		}
@@ -2549,6 +2823,7 @@ int main(int argc, char **argv)
 		[STOP_STUCK] = "bucle infinito sin interrupciones posibles",
 		[STOP_FIELDS] = "se llegó al campo pedido",
 	};
+	hp_close(reason_names[reason]);
 	uint64_t samples = pc_samples[SEG_KSEG0] + pc_samples[SEG_KSEG1] + pc_samples[SEG_TLB];
 	if (samples)
 		fprintf(stderr, "salsa64-run: pc al final de cada bloque (%llu muestras): KSEG0 %.1f %%, KSEG1 %.1f %%, "

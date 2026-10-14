@@ -213,6 +213,13 @@ struct salsa64_cpu {
 	uint64_t rec_lr, rec_tmp;  /* las rutinas compartidas del camino lento (rec.c) guardan LR y el fin del bloque */
 	uint64_t rec_tb;           /* la base en caché de un grupo (T_HI) mientras el código generado llama a C (rec_emit.c) */
 	uint64_t rec_fw[32];       /* la palabra W de fpr[p] con signo extendido, para CVT.S.W/CVT.D.W con fcfid (rec_emit_fpu.h) */
+	/* Perfilado (rec_trace.h): ventana abierta (la lee el preámbulo al
+	 * entrar desde C), su siguiente lugar y su fin; la tabla de JR por id
+	 * y cuántos JR van (exit_jr_count). */
+	uint32_t rec_tron;
+	uint32_t *rec_tpos, *rec_tend;
+	void *rec_jrtab;
+	uint64_t rec_jr_count;
 
 	/* Depuración: si no es NULL, se llama al tomar cada excepción (con
 	 * Cause, EPC y el vector ya escritos). */

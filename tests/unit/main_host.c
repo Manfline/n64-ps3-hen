@@ -19,6 +19,9 @@
 #include "test.h"
 
 static struct salsa64_rec rec;
+/* El registro del perfilado (rec_trace.h), presente en todas las pruebas con
+ * el recompilador (el preámbulo pone cr3); la suite «traza» lo enciende. */
+static struct salsa64_rec_trace unit_trace;
 
 /* SALSA64_REC_DUMP=1: cada bloque compilado en hexadecimal, para
  * desensamblarlo (tools/rec-disasm.sh). */
@@ -63,6 +66,8 @@ int main(int argc, char **argv)
 		if (getenv("SALSA64_REC_DUMP"))
 			rec.on_compile = dump_block;
 		rec.opts = salsa64_host_rec_opts();
+		salsa64_rec_trace_init(&unit_trace);
+		rec.trace = &unit_trace;
 		if (getenv("SALSA64_REC_HOT_KB"))
 			rec.hot_bytes = salsa64_host_rec_hot_bytes();
 		int r = code ? salsa64_unit_run_rec(print_line, &rec, code, salsa64_host_rec_bytes()) : -1;

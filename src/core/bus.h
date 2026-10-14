@@ -75,6 +75,7 @@ struct salsa64_bus {
 	struct salsa64_vi vi;
 	struct salsa64_ai ai;
 	uint32_t pi[SALSA64_PI_NREGS];
+	uint64_t pi_dma_bytes;   /* bytes copiados por DMA del cartucho a la RDRAM (estadística) */
 	uint32_t ri[SALSA64_RI_NREGS];
 	uint32_t si[SALSA64_SI_NREGS];
 	uint32_t rdram_regs[SALSA64_RDRAM_NREGS];

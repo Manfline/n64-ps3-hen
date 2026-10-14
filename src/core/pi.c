@@ -18,6 +18,7 @@ void salsa64_debug_pi(uint32_t cart, uint32_t dram, uint32_t len);
 
 static void pi_dma_to_rdram(struct salsa64_bus *bus, uint32_t len)
 {
+	bus->pi_dma_bytes += len;
 	uint32_t dram = bus->pi[SALSA64_PI_DRAM_ADDR] & 0x00FFFFFE;
 	uint32_t cart = bus->pi[SALSA64_PI_CART_ADDR] & 0xFFFFFFFE;
 #ifdef SALSA64_DEBUG_PI

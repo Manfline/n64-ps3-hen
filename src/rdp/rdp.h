@@ -227,6 +227,9 @@ bool salsa64_rdp_present_source(const rsxkit_view *view, const struct salsa64_ov
 bool salsa64_rdp_present_again(const rsxkit_view *view, const struct salsa64_overscan *crop, rsxkit_rect *out);
 
 void salsa64_rdp_get_stats(struct salsa64_rdp_stats *out);
+/* Solo lo que esperó la emulación (por un juego de búferes y por copias a la
+ * RDRAM), en µs desde el arranque: barato, para cada campo. */
+void salsa64_rdp_get_waits(uint64_t *set_wait_us, uint64_t *readback_wait_us);
 
 /* Tiempo del hilo que traduce (presentación), en ticks del timebase: la
  * traducción entera (con lo que sigue cuando cae dentro de ella), las copias
@@ -237,6 +240,23 @@ struct salsa64_rdp_tb {
 	uint64_t translate, copy, tex, fence;
 };
 void salsa64_rdp_get_tb(struct salsa64_rdp_tb *out);
+
+/* Perfilado (docs/perfilado.md): después de traducir cada tarea, en el hilo
+ * que traduce (presentación). El volcado de esa tarea se puede pedir desde
+ * el gancho (salsa64_rdp_dump: es la última). */
+#define SALSA64_RDP_TASK_SIGS 4
+struct salsa64_rdp_task_info {
+	uint32_t task;                 /* número de tarea (job->task) */
+	const struct gfx_result *res;  /* lo que dio la HLE */
+	uint32_t us_translate;         /* traducirla al RSX */
+	uint32_t us_set_wait;          /* lo que esperó la emulación su juego de búferes */
+	uint32_t approx_draws;         /* dibujos con el combiner aproximado (gfx_draw.approx) */
+	uint32_t nsig;                 /* huellas distintas de esos dibujos (términos y factores), hasta SALSA64_RDP_TASK_SIGS */
+	uint32_t sig[SALSA64_RDP_TASK_SIGS];
+	uint32_t fp_loads;             /* cambios de fragment program */
+	uint32_t readbacks;            /* copias a la RDRAM hechas al traducirla */
+};
+void salsa64_rdp_set_task_hook(void (*hook)(const struct salsa64_rdp_task_info *info));
 
 /* Escribe la salida de la última tarea (gfx.h: gfx_dump_header) en `path`,
  * con las texturas de la caché copiadas al arena (el volcado no depende de

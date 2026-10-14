@@ -3,9 +3,18 @@
 PROGRAM := salsa64
 TITLE   := Salsa64
 APPID   := SLSA00064
+# App de perfilado (docs/perfilado.md): `make PERFILADO=1 pkg` enciende el
+# registro por omisión y la arma como otra app («Salsa64 perfil»,
+# SLSA00120), en build/salsa64-perfil. La app normal lo lleva apagado.
+PERFILADO ?= 0
+ifeq ($(PERFILADO),1)
+PROGRAM := salsa64-perfil
+TITLE   := Salsa64 perfil
+APPID   := SLSA00120
+endif
 SRCS    := main.c audio_out.c audio_sync.c menu.c osd.c osd_fps.c pacer.c padmap.c pausectl.c replay.c romlist.c savefile.c \
            cheats.c cover.c download.c dlutil.c i18n.c namematch.c screenshot.c selftest.c selftest_audio.c selftest_gfx.c states.c \
-           version.c filters/crt_params.c filters/filters.c
+           version.c perfilado.c perfilado_ps3.c filters/crt_params.c filters/filters.c
 # Filtros de la presentación (filters/): fragment programs en Cg compilados
 # con cgcomp. Van en fp32: cgcomp pide -fastprecision a Cg, que baja a fp16
 # cuentas en píxeles que no lo aguantan.
@@ -69,12 +78,13 @@ endif
 c_str = '"$(subst ','\'',$(subst ",\",$(subst \,\\,$(1))))"'
 VERSION_DEFS := -DSALSA64_VERSION=$(call c_str,$(or $(SALSA64_VERSION),desconocida)) \
                 -DSALSA64_COMMIT=$(call c_str,$(SALSA64_COMMIT)) \
-                -DSALSA64_TITLE=$(call c_str,$(TITLE)) -DSALSA64_APPID=$(call c_str,$(APPID))
-$(OBJ)/src/frontend/version.c.o: PPU_CFLAGS += $(VERSION_DEFS)
+                -DSALSA64_TITLE=$(call c_str,$(TITLE)) -DSALSA64_APPID=$(call c_str,$(APPID)) \
+                -DSALSA64_PERFILADO=$(PERFILADO)
+$(OBJ)/src/frontend/version.c.o $(OBJ)/src/frontend/perfilado_ps3.c.o: PPU_CFLAGS += $(VERSION_DEFS)
 # version.txt cambia solo si cambia algo de eso: así version.c se recompila
 # (y el programa se vuelve a enlazar) solo entonces, y un `make pkg` con
 # otro TITLE o APPID no se queda con los del build anterior.
-$(OBJ)/src/frontend/version.c.o: $(OBJ)/version.txt
+$(OBJ)/src/frontend/version.c.o $(OBJ)/src/frontend/perfilado_ps3.c.o: $(OBJ)/version.txt
 .PHONY: FORCE
 $(OBJ)/version.txt: FORCE
 	@mkdir -p $(@D)

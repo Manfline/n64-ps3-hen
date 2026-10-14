@@ -330,7 +330,9 @@ struct gfx_draw {
 	 * de Dam en GoldenEye). Informativo: ni POLYGON_SMOOTH del RSX ni
 	 * ensanchar los triángulos lo reproducen bien (docs/rsx-notes.md). */
 	uint8_t aa;
-	uint8_t pad;
+	/* El combiner se aproximó (combine.c): informativo, para el perfilado
+	 * (docs/perfilado.md: dibujos aproximados por tarea y los nuevos). */
+	uint8_t approx;
 	struct gfx_tex tex[2];
 	float k[GFX_K_TERMS][3][4];
 };

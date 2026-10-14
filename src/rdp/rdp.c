@@ -102,7 +102,38 @@ struct set {
 	bool rb_sync[RB_PER_TASK];
 	uint32_t rb_n, rb_nsync;
 	bool trace;  /* tarea con traza detallada en el log (ver readbacks_wanted) */
+	uint32_t set_wait_us;  /* perfilado: lo que esperó acquire este juego para la tarea */
 };
+
+/* Perfilado (salsa64_rdp_set_task_hook): lo de la tarea que se traduce. */
+static void (*task_hook)(const struct salsa64_rdp_task_info *info);
+static struct salsa64_rdp_task_info task_info;
+
+void salsa64_rdp_set_task_hook(void (*hook)(const struct salsa64_rdp_task_info *info))
+{
+	task_hook = hook;
+}
+
+/* Huella de lo que hace un combiner aproximado: ciclo, texturas, niebla,
+ * términos y factores (FNV-1a). */
+static void task_approx(const struct gfx_draw *d)
+{
+	uint32_t h = 2166136261u;
+	const uint8_t head[4] = { d->cycle, d->ntex, d->fog, d->nterms };
+	for (unsigned k = 0; k < 4; k++)
+		h = (h ^ head[k]) * 16777619u;
+	const uint8_t *f = &d->factors[0][0];
+	for (unsigned k = 0; k < sizeof d->factors; k++)
+		h = (h ^ f[k]) * 16777619u;
+	if (!h)
+		h = 1;
+	task_info.approx_draws++;
+	for (uint32_t k = 0; k < task_info.nsig; k++)
+		if (task_info.sig[k] == h)
+			return;
+	if (task_info.nsig < SALSA64_RDP_TASK_SIGS)
+		task_info.sig[task_info.nsig++] = h;
+}
 
 static inline void lwsync(void) { __asm__ volatile("lwsync" ::: "memory"); }
 
@@ -505,9 +536,12 @@ static void acquire(void *ctx, struct gfx_job *job)
 			}
 			sysUsleep(50);
 		}
+		s->set_wait_us = 0;
 		if (t0) {
 			rdp.set_waiting = 0;
-			rdp.stats.us_set_wait += sysGetSystemTime() - t0;
+			uint64_t dt = sysGetSystemTime() - t0;
+			rdp.stats.us_set_wait += dt;
+			s->set_wait_us = (uint32_t)(dt > 0xFFFFFFFFu ? 0xFFFFFFFFu : dt);
 		}
 	}
 	/* Tareas que el RSX ya terminó: la de cada juego cuya barrera pasó (las
@@ -1245,6 +1279,11 @@ static void translate(uint32_t n)
 	rdp.scratch_slot = -1;
 	rdp.ppe_tex_off = res->tex_bytes;
 	readbacks_finish(false);
+	rsxkit_fp_stats fp0 = { 0 };
+	if (task_hook) {
+		memset(&task_info, 0, sizeof task_info);
+		rsxkit_fp_get_stats(&fp0);
+	}
 	int cur = -1;
 	bool drawn[RDP_TARGETS_MAX] = { false };
 	struct rdp_box drawn_box[RDP_TARGETS_MAX];  /* lo que tocaron los dibujos de la tarea */
@@ -1279,6 +1318,8 @@ static void translate(uint32_t n)
 			break;
 		case GFX_OP_DRAW: {
 			const struct gfx_draw *g = (const struct gfx_draw *)c;
+			if (g->approx && task_hook)
+				task_approx(g);
 			if (cur < 0 && tall.rows && g->cycle == G_CYC_FILL && g->h.b >= 3) {
 				/* Relleno de la imagen alta (rdp_targets_inside): se borra el
 				 * rectángulo en cada destino que cae dentro. */
@@ -1590,8 +1631,20 @@ static void translate(uint32_t n)
 	rdp.last_res = *res;
 	rdp.last_set = (unsigned)(s - rdp.sets);
 	rdp.stats.tasks++;
-	rdp.stats.us_translate += sysGetSystemTime() - t0;
+	uint64_t us = sysGetSystemTime() - t0;
+	rdp.stats.us_translate += us;
 	rdp.tb.translate += tb_now() - tb0;
+	if (task_hook) {
+		rsxkit_fp_stats fp1;
+		rsxkit_fp_get_stats(&fp1);
+		task_info.task = n + 1;
+		task_info.res = res;
+		task_info.us_translate = (uint32_t)us;
+		task_info.us_set_wait = s->set_wait_us;
+		task_info.fp_loads = fp1.loads - fp0.loads;
+		task_info.readbacks = nrb;
+		task_hook(&task_info);
+	}
 }
 
 uint32_t salsa64_rdp_flush(uint32_t upto)
@@ -1861,6 +1914,12 @@ bool salsa64_rdp_dump(const char *path)
 	free(tgt);
 	free(here);
 	return ok;
+}
+
+void salsa64_rdp_get_waits(uint64_t *set_wait_us, uint64_t *readback_wait_us)
+{
+	*set_wait_us = rdp.stats.us_set_wait;
+	*readback_wait_us = rdp.stats.us_readback_wait;
 }
 
 void salsa64_rdp_get_tb(struct salsa64_rdp_tb *out)

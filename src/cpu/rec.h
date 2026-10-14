@@ -35,6 +35,7 @@
 #include "cpu/rec_sample.h"
 #include "cpu/rec_profile.h"
 #include "cpu/rec_tlb.h"
+#include "cpu/rec_trace.h"
 
 struct salsa64_cpu;
 
@@ -266,6 +267,8 @@ struct salsa64_rec {
 	uint32_t exit_end;       /* el bloque terminó en una instrucción que vuelve a C (COP0, SYSCALL…) */
 	uint32_t ktlb_rtn[2][4]; /* traducción de datos por ktlb[] (rec_tlb.h): [almacena][alineación 0, 1, 3, 7];
 				  * r3 = va; vuelve con cr1 eq y r12 = desplazamiento en la RDRAM, o cr1 ne */
+	uint32_t trace_rtn;      /* perfilado (rec_trace.h): r0 = id del bloque a la ventana; solo con rec->trace al iniciar */
+	uint32_t exit_jr_count;  /* perfilado: r3 = destino, r4 = id; cuenta el JR y sigue en exit_jr */
 	uint32_t slow_rtn;       /* camino lento compartido: cargas, almacenamientos, una instrucción al intérprete y
 				  * excepciones, según r6 (rec_emit.c, emit_slow_call) */
 	uint32_t fpu_rtn[SALSA64_FPR_N];  /* la FPU compacta (rec_emit_fpurtn.h): palabra de cada rutina */
@@ -312,6 +315,11 @@ struct salsa64_rec {
 	 * llama después de salsa64_rec_init; con él, la entrada de cada bloque
 	 * deja su id en cpu->rec_cur. */
 	struct salsa64_rec_sample *sample;
+	/* Registro para el perfilado (rec_trace.h); NULL = apagado. Lo pone quien
+	 * llama antes de salsa64_rec_init (que lo conserva y emite en el
+	 * preámbulo lo que hace falta); sus opciones valen para los bloques que
+	 * se compilen después. */
+	struct salsa64_rec_trace *trace;
 
 	struct salsa64_rec_stats stats;
 

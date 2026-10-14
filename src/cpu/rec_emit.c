@@ -345,6 +345,13 @@ struct ctx {
 	unsigned nchain;
 	int chain_label[N_CACHE + 2];      /* entrada i: desde chain_reg[i]; nchain: solo el blr */
 	bool chain_used;
+	/* Perfilado (rec_trace.h): palabras por clase. cls es la clase a la que
+	 * van las palabras desde cmark[] (posiciones en cada sección). */
+	bool loop;
+	uint8_t cls;
+	uint32_t cmark[2];
+	uint8_t cls_n[SALSA64_RT_CLASSES];
+	uint32_t cls_w[SALSA64_RT_CLASSES][2];
 };
 
 #define GRP_NONE 0xFF
@@ -459,6 +466,21 @@ static void li32s(struct ctx *c, unsigned rt, uint32_t v)
 	E(c, ppc_lis(rt, (int16_t)(v >> 16)));
 	if (v & 0xFFFF)
 		E(c, ppc_ori(rt, rt, v & 0xFFFF));
+}
+
+/* Perfilado (rec_trace.h): lo emitido desde la última marca va a la clase
+ * en curso y pasa a contar `cls`. Devuelve la anterior. */
+static unsigned cls_set(struct ctx *c, unsigned cls)
+{
+	unsigned old = c->cls;
+	if (!c->rec->trace)
+		return old;
+	for (unsigned s = 0; s < 2; s++) {
+		c->cls_w[old][s] += c->rec->nbuf[s] - c->cmark[s];
+		c->cmark[s] = c->rec->nbuf[s];
+	}
+	c->cls = (uint8_t)cls;
+	return old;
 }
 
 /* ---- Camino lento compartido (código compacto) -------------------------------------- */
@@ -2313,7 +2335,20 @@ static uint32_t finalize(struct salsa64_rec *rec, uint32_t base, uint32_t limit)
  * COP1 de rec_emit_ext.h solo con SALSA64_REC_OPT_FPU_RES, experimental). */
 #include "cpu/rec_emit_fpu.h"
 
+static void emit_insn_body(struct ctx *c, unsigned k);
+
+/* Una instrucción, con sus palabras a su clase (perfilado). */
 static void emit_insn(struct ctx *c, unsigned k)
+{
+	const struct dec *d = &c->d[k];
+	unsigned cls = d->how != H_NATIVE || d->kind == K_END ? SALSA64_RT_C_OTHER : salsa64_rec_trace_class(d->w);
+	unsigned old = cls_set(c, cls);
+	c->cls_n[cls]++;
+	emit_insn_body(c, k);
+	cls_set(c, old);
+}
+
+static void emit_insn_body(struct ctx *c, unsigned k)
 {
 	const struct dec *d = &c->d[k];
 	uint32_t i = d->w;
@@ -2681,7 +2716,14 @@ static void emit_branch(struct ctx *c, unsigned b)
 		fpu_flush(c);
 		E(c, ppc_mr(3, R_TARGET));
 		restore_borrowed(c);
-		emit_b(c, abs_label(c, c->temp || c->rec->no_link ? c->rec->exit_jump : c->rec->exit_jr), false);
+		if (c->temp || c->rec->no_link) {
+			emit_b(c, abs_label(c, c->rec->exit_jump), false);
+		} else if (c->rec->trace && c->rec->trace->jr && c->rec->cur_id) {
+			E(c, ppc_li(4, (int16_t)c->rec->cur_id));  /* perfilado: el JR cuenta por su bloque */
+			emit_b(c, abs_label(c, c->rec->exit_jr_count), false);
+		} else {
+			emit_b(c, abs_label(c, c->rec->exit_jr), false);
+		}
 		return;
 	case K_BRANCH: {
 		if (idle) {  /* el tomado ya salió antes del delay slot */
@@ -2905,6 +2947,7 @@ static uint32_t emit_block(struct ctx *c, uint32_t base, uint32_t limit)
 			target = bpc + 4 + ((uint64_t)(int64_t)(int16_t)i << 2);
 		loop = target == pc;
 	}
+	c->loop = loop;
 	allocate(c, loop);
 	fpu_allocate(c);
 
@@ -2924,6 +2967,10 @@ static uint32_t emit_block(struct ctx *c, uint32_t base, uint32_t limit)
 	rec->nlabels = rec->nfixups = 0;
 	rec->fm_npend = 0;
 	rec->overflow = false;
+	c->cls = SALSA64_RT_C_ENTRY;
+	c->cmark[0] = c->cmark[1] = 0;
+	memset(c->cls_n, 0, sizeof c->cls_n);
+	memset(c->cls_w, 0, sizeof c->cls_w);
 	if (!c->wide)
 		chain_build(c);
 	c->sec = SEC_HOT;
@@ -2986,6 +3033,19 @@ static uint32_t emit_block(struct ctx *c, uint32_t base, uint32_t limit)
 		E(c, ppc_li(0, (int16_t)rec->cur_id));
 		E(c, ppc_sth(0, OFF(rec_cur), R_CPU));
 	}
+	if (rec->trace && rec->trace->seq && rec->cur_id && !temp && !(rec->opts & SALSA64_REC_OPT_FPU_RES)) {
+		/* Perfilado (rec_trace.h): con ventana abierta (cr3 ne), el id a la
+		 * ventana por un tramo frío; cerrada, una palabra. */
+		int stub = new_label(c), back = new_label(c);
+		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(3, PPC_EQ), stub);
+		bind(c, back);
+		c->sec = SEC_COLD;
+		bind(c, stub);
+		E(c, ppc_li(0, (int16_t)rec->cur_id));
+		emit_b(c, abs_label(c, rec->trace_rtn), true);
+		emit_b(c, back, false);
+		c->sec = SEC_HOT;
+	}
 	for (unsigned r = 1; c->borrowed && r < 32; r++)  /* fijos prestados: a cpu->gpr */
 		if (c->borrowed & BIT(r))
 			E(c, ppc_std(pin_ppc(r), off_reg(r), R_CPU));
@@ -3001,28 +3061,39 @@ static uint32_t emit_block(struct ctx *c, uint32_t base, uint32_t limit)
 		E(c, ppc_std(T_Y, 0, T_X));
 	}
 
+	cls_set(c, SALSA64_RT_C_ALU);
 	for (unsigned k = 0; k < n; k++) {
+		unsigned cls = cls_set(c, SALSA64_RT_C_BRANCH);
 		emit_ijumps_to(c, k);
 		if (c->has_branch && k == n - 2) {
+			c->cls_n[SALSA64_RT_C_BRANCH]++;
 			emit_branch(c, k);
 			break;
 		}
 		if (is_branch(&c->d[k])) {
+			c->cls_n[SALSA64_RT_C_BRANCH]++;
 			emit_internal_branch(c, k);
+			cls_set(c, cls);
 			k++;
 			continue;
 		}
+		cls_set(c, cls);
 		unsigned seg_end = k;  /* un par LWL/LWR no cruza un salto */
 		while (seg_end < n && !is_branch(&c->d[seg_end]))
 			seg_end++;
+		cls_set(c, SALSA64_RT_C_MEM);
 		if (emit_unaligned_pair(c, k, seg_end)) {
+			c->cls_n[SALSA64_RT_C_MEM] += 2;
+			cls_set(c, cls);
 			k++;
 			continue;
 		}
+		cls_set(c, cls);
 		emit_insn(c, k);
 		if (c->d[k].kind == K_END)
 			break;
 	}
+	cls_set(c, SALSA64_RT_C_EXIT);
 	if (!c->has_branch && c->d[n - 1].kind != K_END) {
 		writeback(c, c->written);
 		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)n));
@@ -3049,8 +3120,56 @@ static uint32_t emit_block(struct ctx *c, uint32_t base, uint32_t limit)
 		emit_chain(c);
 		emit_trampolines(c);
 	}
+	cls_set(c, SALSA64_RT_C_EXIT);
 
 	return finalize(rec, base, limit);
+}
+
+/* Perfilado (rec_trace.h): cómo termina el bloque recién emitido, su huella
+ * y sus palabras por clase, para salsa64_rec_trace_compiled (rec.c). */
+static void trace_describe(struct ctx *c, uint32_t words)
+{
+	struct salsa64_rec *rec = c->rec;
+	struct salsa64_rec_trace_block *tb = &rec->trace->cur;
+	unsigned n = c->n, end = SALSA64_RT_END_LIMIT;
+	uint32_t w[SALSA64_REC_MAX_INSNS];
+	for (unsigned k = 0; k < n; k++)
+		w[k] = c->d[k].w;
+	if (c->has_branch) {
+		uint32_t i = c->d[n - 2].w;
+		uint64_t bpc = c->pc + 4ull * (n - 2);
+		if (c->d[n - 2].kind == K_JUMP)
+			tb->target = (uint32_t)(((bpc + 4) & ~0x0FFFFFFFull) | (uint64_t)I_TARGET(i) << 2);
+		else if (c->d[n - 2].kind != K_JUMP_REG)
+			tb->target = (uint32_t)(bpc + 4 + ((uint64_t)(int64_t)(int16_t)i << 2));
+		switch (c->d[n - 2].kind) {
+		case K_JUMP_REG:
+			end = I_FUNCT(i) == 0x09 ? SALSA64_RT_END_JALR : I_RS(i) == 31 ? SALSA64_RT_END_JR_RA : SALSA64_RT_END_JR;
+			break;
+		case K_JUMP:
+			end = I_OP(i) == 0x03 ? SALSA64_RT_END_JAL : SALSA64_RT_END_J;
+			break;
+		case K_BRANCH_L:
+			end = SALSA64_RT_END_LIKELY;
+			break;
+		default:
+			end = SALSA64_RT_END_BRANCH;
+			break;
+		}
+	} else if (c->d[n - 1].kind == K_END) {
+		end = SALSA64_RT_END_C;
+	}
+	tb->hash = c->pent ? rec->profile->entries[c->pent - 1].hash : salsa64_rec_profile_hash(w, n);
+	tb->end = (uint8_t)(end | (c->loop ? SALSA64_RT_END_LOOP : 0));
+	tb->nbr = c->cls_n[SALSA64_RT_C_BRANCH];
+	uint32_t hot = rec->nbuf[SEC_HOT];
+	tb->hot = (uint16_t)(hot > 0xFFFF ? 0xFFFF : hot);
+	tb->cold = (uint16_t)(words - hot > 0xFFFF ? 0xFFFF : words - hot);
+	for (unsigned k = 0; k < SALSA64_RT_CLASSES; k++) {
+		tb->ins[k] = c->cls_n[k];
+		tb->whot[k] = (uint16_t)(c->cls_w[k][SEC_HOT] > 0xFFFF ? 0xFFFF : c->cls_w[k][SEC_HOT]);
+		tb->wcold[k] = (uint16_t)(c->cls_w[k][SEC_COLD] > 0xFFFF ? 0xFFFF : c->cls_w[k][SEC_COLD]);
+	}
 }
 
 uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, unsigned seg, unsigned max,
@@ -3156,6 +3275,8 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 		if (rec->sample && rec->cur_id)
 			salsa64_rec_sample_compiled(rec->sample, rec->cur_id, words, rec->nbuf[SEC_HOT]);
 	}
+	if (rec->trace && rec->cur_id && !temp)
+		trace_describe(c, words);
 	if (rec->prof && rec->prof->blocks && rec->cur_id && !temp) {
 		struct salsa64_rec_prof_block *pb = &rec->prof->blocks->info[rec->cur_id];
 		unsigned fpu = 0, mem = 0;

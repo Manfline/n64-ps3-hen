@@ -513,6 +513,7 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 	}
 	if (approx)
 		g->res->approx_cc++;
+	d->approx = approx;
 	bool textured = kind == PRIM_RECT || (kind < PRIM_RAW ? g->tex_on != 0 : (kind & 1) != 0);
 	if (!textured && d->ntex) {
 		d->ntex = 0;

@@ -531,13 +531,17 @@ se crean por FTP.
 | `jit-sin-grupos` | Basta con que exista | El recompilador no agrupa los accesos a memoria por registro base (la «base en caché», docs/fastmem.md §8, encendida por omisión): cada acceso con su prueba, como hasta el 2026-10-13, para medir con el mismo paquete |
 | `jit-fpu-en-linea` | Basta con que exista | El recompilador emite las operaciones de la FPU en línea en cada sitio, como hasta el 2026-10-13, en vez de llamar a las rutinas compartidas del preámbulo (la «FPU compacta», docs/fastmem.md §9, encendida por omisión), para medir con el mismo paquete |
 | `jit-fastmem` | Basta con que exista | Experimental: la RDRAM en una ventana de 512 MB de sys_mmapper y los accesos de KSEG0/KSEG1 sin prueba; solo se enciende si lv2 avisa de los fallos de página (docs/fastmem.md); hoy en la PS3 con HEN no lo hace y queda apagado con el motivo en el log |
+| `perfilado.cfg` | Líneas `clave = valor` | Solo la app «Salsa64 perfil»: qué registra cada sesión de juego en `perfilado/` y con qué tope (docs/perfilado.md). Sin archivo, todo encendido y 200 MB |
 | `muestreo` | Basta con que exista | Muestreo por tiempo del recompilador: un hilo de baja prioridad mira cada 200 µs qué bloque corre el hilo de emulación (o si está en C: camino lento, intérprete, eventos…); cada 5 s el reparto al log y, al salir del juego, los 30 bloques con más tiempo con sus palabras de PPC (docs/rec-ppe.md, «Muestreo por tiempo»). Costo: dos palabras por entrada a bloque |
 
 La carpeta también puede tener `covers/` (carátulas), `cheats/` (trucos y
 sus `.on`), `juegos/` (ajustes por juego), `states/` (estados guardados), `perfiles/` (el
 perfil del recompilador de cada juego, `<juego>.prf`, solo con
 `perfil-activo`; no contiene nada del juego, solo direcciones, huellas y
-cuentas, y se puede borrar), el log (`salsa64.log`) y archivos de diagnóstico
+cuentas, y se puede borrar), `perfilado/` (las sesiones de la app «Salsa64
+perfil», docs/perfilado.md: una carpeta por juego con un archivo por
+partida, sin nada del juego salvo los volcados de `volcados/`; se rota sola
+con un tope de 200 MB), el log (`salsa64.log`) y archivos de diagnóstico
 que escribe la aplicación (`gfxdump.bin`, `screen-N.ppm`, `menu.ppm`);
 no hace falta tocarlos.
 

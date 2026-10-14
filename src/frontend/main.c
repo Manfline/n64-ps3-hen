@@ -163,6 +163,7 @@
 #include <spukit/spukit.h>
 
 #include "core/boot.h"
+#include "core/endian.h"
 #include "cpu/rec.h"
 #include "audio_out.h"
 #include "audiotest_rom_bin.h"
@@ -174,6 +175,7 @@
 #include "menu.h"
 #include "osd.h"
 #include "pacer.h"
+#include "perfilado_ps3.h"
 #include "padmap.h"
 #include "pausectl.h"
 #include "platform/ps3/autotest.h"
@@ -1602,6 +1604,89 @@ static void log_jpeg(uint64_t us_field)
 	jpeg_log.seen = st->jpeg;
 }
 
+/* ---- Perfilado por campo (perfilado_ps3.h; hilo de emulación) ----------------------
+ * Lo que costó cada campo y por qué: si la emulación del campo pasa del
+ * umbral (tiron_ms), un registro TIRON con la traducción, las esperas al SPE
+ * y al RSX, la copia del VI, JPEG y el muestreo de ese campo. */
+struct perf_snap {
+	uint64_t cycles, idle, spe_wait, spe_sleep, set_wait, rb_wait, copy, jpeg, interp, smp_ticks, invalidated, pi;
+	uint32_t gfx, audio, marks[SALSA64_SMP_N];
+};
+static uint64_t perf_compile_ticks;  /* total compilando (para las ventanas de stats) */
+static volatile uint32_t perf_worst_us; /* el campo más largo de la ventana (la reinicia perf_window) */
+
+static void perf_snap_take(struct perf_snap *s)
+{
+	s->cycles = n64.cpu.cycles;
+	s->idle = n64.cpu.idle_cycles;
+	s->spe_wait = gfx_spu.wait_us + jpeg_spu.wait_us;
+	s->spe_sleep = gfx_spu.sleep_us + jpeg_spu.sleep_us;
+	salsa64_rdp_get_waits(&s->set_wait, &s->rb_wait);
+	s->copy = emu_stats.us_copy;
+	s->jpeg = n64.bus.rsp.stats.jpeg_us;
+	s->interp = use_rec ? rec.stats.interp_steps : 0;
+	s->invalidated = use_rec ? rec.stats.invalidated : 0;
+	s->pi = n64.bus.pi_dma_bytes;
+	s->gfx = n64.bus.rsp.stats.gfx;
+	s->audio = n64.bus.rsp.stats.audio;
+	s->smp_ticks = rsmp.on ? rec_sample->ticks : 0;
+	for (unsigned m = 0; m < SALSA64_SMP_N; m++)
+		s->marks[m] = rsmp.on ? rec_sample->marks[m] : 0;
+	if (use_rec && rec.trace)
+		memset(&rec.trace->field, 0, sizeof rec.trace->field);
+}
+
+static void perf_field_end(const struct perf_snap *a, uint64_t us_emu, uint64_t tb_ovl)
+{
+	struct salsa64_rec_trace_field tf;
+	memset(&tf, 0, sizeof tf);
+	if (use_rec && rec.trace) {
+		tf = rec.trace->field;
+		perf_compile_ticks += tf.compile_ticks;
+		perf_app_field(&rec, n64.bus.vi.field_cycles);
+	}
+	if (us_emu > perf_worst_us)
+		perf_worst_us = (uint32_t)us_emu;
+	if (us_emu < (uint64_t)perf.cfg.stall_ms * 1000u)
+		return;
+	struct perf_snap b;
+	perf_snap_take(&b);
+	uint64_t hz = spukit_tick_hz();
+	uint32_t v[PERF_S_N];
+	memset(v, 0, sizeof v);
+	v[PERF_S_campo] = n64.bus.vi.fields;
+	v[PERF_S_emu_us] = (uint32_t)us_emu;
+	v[PERF_S_ciclos] = (uint32_t)(b.cycles - a->cycles);
+	v[PERF_S_ciclos_espera] = (uint32_t)(b.idle - a->idle);
+	v[PERF_S_compilados] = tf.compiled;
+	v[PERF_S_compilar_us] = (uint32_t)(hz ? tf.compile_ticks * 1000000u / hz : 0);
+	v[PERF_S_palabras] = tf.words;
+	v[PERF_S_retrad] = tf.retrans;
+	v[PERF_S_desalojos] = tf.evictions;
+	v[PERF_S_vaciados] = tf.flushes;
+	v[PERF_S_muertos] = tf.killed;
+	v[PERF_S_interp] = (uint32_t)(b.interp - a->interp);
+	v[PERF_S_espera_spe_us] = (uint32_t)(b.spe_wait - a->spe_wait);
+	v[PERF_S_dormido_us] = (uint32_t)(b.spe_sleep - a->spe_sleep);
+	v[PERF_S_espera_juego_us] = (uint32_t)(b.set_wait - a->set_wait);
+	v[PERF_S_copias_espera_us] = (uint32_t)(b.rb_wait - a->rb_wait);
+	v[PERF_S_copia_vi_us] = (uint32_t)(b.copy - a->copy);
+	v[PERF_S_jpeg_us] = (uint32_t)(b.jpeg - a->jpeg);
+	v[PERF_S_tareas] = b.gfx - a->gfx;
+	v[PERF_S_audio_tareas] = b.audio - a->audio;
+	v[PERF_S_solape_hilo1_us] = (uint32_t)(hz ? tb_ovl * 1000000u / hz : 0);
+	uint32_t other = 0;
+	for (unsigned m = 1; m < SALSA64_SMP_N; m++) {
+		v[PERF_S_m_nativo + m] = b.marks[m] - a->marks[m];
+		other += v[PERF_S_m_nativo + m];
+	}
+	v[PERF_S_m_total] = (uint32_t)(b.smp_ticks - a->smp_ticks);
+	v[PERF_S_m_nativo] = v[PERF_S_m_total] > other ? v[PERF_S_m_total] - other : 0;
+	v[PERF_S_invalidados] = (uint32_t)(b.invalidated - a->invalidated);
+	v[PERF_S_pi_dma_kb] = (uint32_t)((b.pi - a->pi) >> 10);
+	perf_put_values(&perf.emu, PERF_R_STALL, perf_ms(), v, PERF_S_N);
+}
+
 /* Estado guardado pedido: emulación queda quieta en el límite del campo
  * hasta que presentación termina (state_barrier). */
 static void emu_park(void)
@@ -1661,12 +1746,15 @@ static void emu_thread(void *arg)
 		beat.emu_at = "mandos";
 		pads_apply();  /* después de la espera: lo más reciente de los mandos */
 		beat.emu_at = "campo";
+		struct perf_snap ps0;
+		if (perf.on)
+			perf_snap_take(&ps0);
 		uint64_t c0 = n64.cpu.cycles, i0 = n64.cpu.idle_cycles, s0 = gfx_spu.sleep_us + jpeg_spu.sleep_us;
 		uint64_t tb0 = tb_now(), o0 = busy_at(&h1.busy, tb0), l0 = busy_at(&h1.load_clock, tb0);
 		uint32_t ph0 = h1.load_phase;
 		uint64_t cycles = salsa64_n64_run_field(&n64);
-		uint64_t tb1 = tb_now();
-		ovl_note(tb1 - tb0, busy_at(&h1.busy, tb1) - o0, busy_at(&h1.load_clock, tb1) - l0,
+		uint64_t tb1 = tb_now(), ovl = busy_at(&h1.busy, tb1) - o0;
+		ovl_note(tb1 - tb0, ovl, busy_at(&h1.load_clock, tb1) - l0,
 			 (n64.cpu.cycles - c0) - (n64.cpu.idle_cycles - i0), gfx_spu.sleep_us + jpeg_spu.sleep_us - s0,
 			 h1.load && h1.load_phase == ph0 ? (int)ph0 : -1);
 		cheats_apply(&game_cheats, &n64.bus);  /* los activos del juego (vacío si no hay) */
@@ -1700,6 +1788,8 @@ static void emu_thread(void *arg)
 		emu_stats.us_emu += t1 - t0;
 		if (gwin.on)
 			gfx_window(t1, t1 - t0);
+		if (perf.on)
+			perf_field_end(&ps0, t1 - t0, ovl);
 		lwsync();
 		emu_stats.fields++;
 		if (req)
@@ -2439,6 +2529,124 @@ static void h1_stats(uint32_t fields, uint64_t dt_us)
 	h1_window_reset();
 }
 
+/* Perfilado: la ventana de estadísticas como registro VENTANA (perfilado.h),
+ * con lo mismo que va al log y lo del recompilador, el audio y el muestreo.
+ * Antes de que stats() reinicie la ventana. */
+static struct {
+	uint64_t compile_ticks, rec_compiled, rec_retrans, rec_words, rec_evictions, rec_flushes, rec_killed, interp, jr;
+	uint64_t smp_ticks;
+	uint32_t marks[SALSA64_SMP_N];
+	struct audio_sync_stats audio;
+	uint64_t audio_in;
+	uint32_t worst_us;
+} pwin;
+
+static void perf_window(uint64_t dt, uint32_t fields, uint64_t us_emu, uint64_t us_copy, uint64_t us_pace, uint64_t cyc,
+			uint64_t idle, uint64_t h1_busy, uint64_t rt_emu_ns, uint64_t rt_pres_ns,
+			const struct salsa64_rdp_stats *rs)
+{
+	const struct salsa64_rdp_stats *r0 = &sw.rdp0;
+	uint64_t hz = spukit_tick_hz();
+	uint32_t tasks = rs->tasks - r0->tasks;
+	uint32_t v[PERF_W_N];
+	memset(v, 0, sizeof v);
+#define W(name, value) v[PERF_W_##name] = (uint32_t)(value)
+	W(campo, n64.bus.vi.fields);
+	W(dur_ms, dt / 1000);
+	W(campos, fields);
+	W(cps_x100, dt ? fields * 100000000ull / dt : 0);
+	W(velocidad_pm, dt ? fields * 1e9 / dt * n64.bus.vi.field_cycles / 93750000.0 : 0);
+	W(mips_x10, dt ? (cyc - idle) * 10 / dt : 0);
+	W(espera_pm, cyc ? idle * 1000 / cyc : 0);
+	W(emu_us_campo, fields ? us_emu / fields : 0);
+	W(copia_vi_us_campo, fields ? us_copy / fields : 0);
+	W(ritmo_us_campo, fields ? us_pace / fields : 0);
+	W(emu_peor_us, perf_worst_us);
+	perf_worst_us = 0;
+	W(presentados, pres.presented);
+	W(saltados, pres.skipped);
+	W(descartados, emu_stats.dropped);
+	W(sin_imagen, pres.blank);
+	W(del_rsx, pres.rsx_frames);
+	W(cola_x100, pres.presented ? pres.behind_sum * 100 / pres.presented : 0);
+	W(cola_max, pres.behind_max);
+	W(edad_x100, pres.rsx_frames ? (rs->age_sum - r0->age_sum) * 100 / pres.rsx_frames : 0);
+	W(edad_max, rs->age_max);
+	W(hilo1_pm, dt && hz ? h1_busy * 1000000000ull / hz / dt : 0);
+	W(rsx_emu_us_campo, fields ? rt_emu_ns / 1000 / fields : 0);
+	W(rsx_pres_us_cuadro, pres.presented ? rt_pres_ns / 1000 / pres.presented : 0);
+	W(tareas, tasks);
+	W(dibujos, rs->draws - r0->draws);
+	W(triangulos, rs->triangles - r0->triangles);
+	W(spe_us, gfx_on_spu && hz ? (gfx_spu.spu_ticks - sw.gfx_ticks0) * 1000000 / hz : 0);
+	W(espera_spe_us, gfx_on_spu ? gfx_spu.wait_us - sw.gfx_wait0 : 0);
+	W(traduccion_us, rs->us_translate - r0->us_translate);
+	W(esperas_juego, rs->set_waits - r0->set_waits);
+	W(espera_juego_us, rs->us_set_wait - r0->us_set_wait);
+	W(copias_rdram, rs->readbacks - r0->readbacks);
+	W(copias_rdram_us, rs->us_readback - r0->us_readback);
+	W(copias_esperadas, rs->readback_waits - r0->readback_waits);
+	W(copias_espera_us, rs->us_readback_wait - r0->us_readback_wait);
+	W(copias_tarde, rs->readback_late - r0->readback_late);
+	W(copias_perdidas, rs->readbacks_lost - r0->readbacks_lost);
+	W(tareas_cortadas, n64.bus.rsp.stats.cut - sw.gfx_cut0);
+	W(comandos_saltados, gfx_spu.skipped - sw.gfx_skipped0);
+	W(fp_cambios, rs->fp_loads - r0->fp_loads);
+	W(fp_generados, rs->fp_generated - r0->fp_generated);
+	W(destinos_creados, rs->targets_created - r0->targets_created);
+	W(destinos_reciclados, rs->targets_evicted - r0->targets_evicted);
+	const struct audio_sync_stats *a = audio_out_stats();
+	if (a) {
+		uint64_t out = a->out_frames - pwin.audio.out_frames;
+		W(audio_salida_ms, out * 1000 / AUDIO_OUT_RATE);
+		W(audio_silencio_pm, out ? (a->silent_frames - pwin.audio.silent_frames) * 1000 / out : 0);
+		W(audio_estirado_pm, out ? (a->stretch_frames - pwin.audio.stretch_frames) * 1000 / out : 0);
+		W(audio_faltas, a->underruns - pwin.audio.underruns);
+		W(audio_silencios, a->silences - pwin.audio.silences);
+		W(audio_saltos, a->skips - pwin.audio.skips);
+		W(audio_descartadas, a->dropped - pwin.audio.dropped);
+		pwin.audio = *a;
+	}
+	if (use_rec && rec.trace) {
+		const struct salsa64_rec_trace *t = rec.trace;
+		W(rec_bloques, t->compiled - pwin.rec_compiled);
+		W(rec_retrad, t->retrans - pwin.rec_retrans);
+		W(rec_palabras, t->words - pwin.rec_words);
+		W(rec_desalojos, t->evictions - pwin.rec_evictions);
+		W(rec_vaciados, t->flushes - pwin.rec_flushes);
+		W(rec_muertos, t->killed - pwin.rec_killed);
+		pwin.rec_compiled = t->compiled;
+		pwin.rec_retrans = t->retrans;
+		pwin.rec_words = t->words;
+		pwin.rec_evictions = t->evictions;
+		pwin.rec_flushes = t->flushes;
+		pwin.rec_killed = t->killed;
+	}
+	if (use_rec) {
+		W(rec_interp, rec.stats.interp_steps - pwin.interp);
+		W(rec_jr, n64.cpu.rec_jr_count - pwin.jr);
+		W(rec_compilar_us, hz ? (perf_compile_ticks - pwin.compile_ticks) * 1000000 / hz : 0);
+		pwin.interp = rec.stats.interp_steps;
+		pwin.jr = n64.cpu.rec_jr_count;
+		pwin.compile_ticks = perf_compile_ticks;
+	}
+	if (rsmp.on) {
+		uint32_t other = 0;
+		for (unsigned m = 1; m < SALSA64_SMP_N; m++) {
+			v[PERF_W_m_nativo + m] = rec_sample->marks[m] - pwin.marks[m];
+			other += v[PERF_W_m_nativo + m];
+			pwin.marks[m] = rec_sample->marks[m];
+		}
+		W(m_total, rec_sample->ticks - pwin.smp_ticks);
+		W(m_nativo, v[PERF_W_m_total] > other ? v[PERF_W_m_total] - other : 0);
+		pwin.smp_ticks = rec_sample->ticks;
+	}
+	W(mandos_hueco_us, pad_poll.max_gap_us);
+	W(perdidos, perf.emu.lost + perf.pres.lost);
+#undef W
+	perf_put_values(&perf.pres, PERF_R_WINDOW, perf_ms(), v, PERF_W_N);
+}
+
 static void stats(uint64_t now)
 {
 	const struct salsa64_boot_info *info = &boot_info;
@@ -2471,6 +2679,7 @@ static void stats(uint64_t now)
 		    pres.presented ? pres.us_present / 1000.0 / pres.presented : 0.0,
 		    pres.presented ? pres.us_flip / 1000.0 / pres.presented : 0.0, pres.skipped,
 		    emu_stats.dropped, pres.blank, pres.rsx_frames);
+	uint64_t h1_busy = busy_at(&h1.busy, tb_now()) - sw.h1_busy0;  /* para el perfilado (h1_stats lo reinicia) */
 	h1_stats(fields, dt);
 	/* El RSX: lo de la emulación por campo emulado y lo de presentar
 	 * (imagen, filtro, avisos) por campo presentado, y el filtro por
@@ -2482,6 +2691,7 @@ static void stats(uint64_t now)
 			    fields ? rt.ns[RT_EMU] / 1e6 / fields : 0.0,
 			    pres.presented ? rt.ns[RT_PRES] / 1e6 / pres.presented : 0.0,
 			    dt ? (rt.ns[RT_EMU] + rt.ns[RT_PRES]) / 10.0 / dt : 0.0);
+	uint64_t rt_emu_ns = rt.ns[RT_EMU], rt_pres_ns = rt.ns[RT_PRES];
 	memset(rt.ns, 0, sizeof rt.ns);
 	memset(rt.n, 0, sizeof rt.n);
 	{
@@ -2652,6 +2862,8 @@ static void stats(uint64_t now)
 			}
 		}
 	}
+	if (perf.on)
+		perf_window(dt, fields, us_emu, us_copy, us_pace, cyc, idle, h1_busy, rt_emu_ns, rt_pres_ns, &rs);
 	sw.gfx_vtx0 = gfx_spu.t_vtx;
 	sw.gfx_state0 = gfx_spu.t_state;
 	sw.gfx_tex0 = gfx_spu.t_tex;
@@ -3126,6 +3338,9 @@ static void game_reset(void)
 	memset(&bench, 0, sizeof bench);
 	memset(&gwin, 0, sizeof gwin);
 	memset(&sw, 0, sizeof sw);
+	memset(&pwin, 0, sizeof pwin);
+	perf_compile_ticks = 0;
+	perf_worst_us = 0;
 	memset(h1.by_ovl, 0, sizeof h1.by_ovl);
 	memset(h1.by_load, 0, sizeof h1.by_load);
 	load_config();
@@ -3212,7 +3427,7 @@ static void sample_line(void *ctx, const char *text)
  * rec.sample (desde entonces cada bloque compilado deja su id al entrar). */
 static void sample_open(void)
 {
-	if (!use_rec || !salsa64_ps3_rec_sample_wanted())
+	if (!use_rec || !(salsa64_ps3_rec_sample_wanted() || (perf.on && perf.cfg.samples)))
 		return;
 	if (!rec_sample && !(rec_sample = memalign(128, sizeof *rec_sample))) {
 		salsa64_log("muestreo del recompilador: sin memoria para la tabla (%u KB)", (unsigned)(sizeof *rec_sample >> 10));
@@ -3257,7 +3472,8 @@ static void profile_open(const uint8_t *rom)
 	memset(&rec_profile_w, 0, sizeof rec_profile_w);
 	if (!use_rec)
 		return;
-	if (!file_exists(PROFILE_ON_PATH)) {
+	bool perf_profile = perf.on && perf.cfg.profile;
+	if (!file_exists(PROFILE_ON_PATH) && !perf_profile) {
 		salsa64_log("perfil del recompilador: apagado (sin %s)", PROFILE_ON_PATH);
 		return;
 	}
@@ -3269,7 +3485,10 @@ static void profile_open(const uint8_t *rom)
 	}
 	mkdir(PROFILE_DIR, 0777);
 	salsa64_save_basename(rom, base, sizeof base);
-	snprintf(rprof.path, sizeof rprof.path, "%s/%s.prf", PROFILE_DIR, base);
+	if (perf_profile)  /* con el perfilado, junto a sus sesiones (sin zona caliente salvo perfil-activo) */
+		snprintf(rprof.path, sizeof rprof.path, "%s/juego.prf", perf.ses.dir);
+	else
+		snprintf(rprof.path, sizeof rprof.path, "%s/%s.prf", PROFILE_DIR, base);
 	struct salsa64_rec_profile_game game;
 	salsa64_rec_profile_game_of(&game, rom);
 	bool loaded = salsa64_rec_profile_load(rec_profile, rprof.path, &game);
@@ -3445,10 +3664,12 @@ static void game_close(void)
 		salsa64_gfx_spu_shutdown(&gfx_spu);
 		salsa64_log("cierre: SPE de la HLE gráfica detenido (%u tareas)", gfx_spu.tasks);
 	}
+	perf_app_close_rec(use_rec ? &rec : NULL, rsmp.on ? rec_sample : NULL);  /* antes de que el muestreo agote su tabla */
 	if (rsmp.on)
 		sample_close();
 	if (rprof.on)
 		profile_close();
+	rec.trace = NULL;
 	if (use_rec) {
 		salsa64_rec_detach(&rec);
 		salsa64_log("cierre: recompilador suelto (%u KB de caché usados; el próximo juego empieza vacío)",
@@ -3469,6 +3690,18 @@ static void game_close(void)
 		    "sin traducir, destinos del RSX liberados, SPEs de la HLE %s, RSP %s)",
 		    clean ? "estado limpio" : "ATENCIÓN, quedó algo en vuelo", emu_done ? "terminado" : "VIVO", queued,
 		    snaps, untranslated, spes ? "VIVOS" : "detenidos", hooks ? "CON BACKENDS" : "sin backends");
+	if (perf.on) {
+		char end[384];
+		snprintf(end, sizeof end,
+			 "duracion_ms=%u\ncampos=%u\nemulados=%u\ndescartados=%u\nciclos=%llu\nciclos_espera=%llu\n"
+			 "rec_bloques=%llu\nrec_vaciados=%llu\nrec_desalojos=%llu\nrec_jr=%llu\nlimpio=%s\nsalida=%s\n",
+			 perf_ms(), n64.bus.vi.fields, emu_stats.fields, emu_stats.dropped,
+			 (unsigned long long)n64.cpu.cycles, (unsigned long long)n64.cpu.idle_cycles,
+			 (unsigned long long)rec.stats.compiled, (unsigned long long)rec.stats.flushes,
+			 (unsigned long long)rec.stats.evictions, (unsigned long long)n64.cpu.rec_jr_count, clean ? "si" : "no",
+			 app_quit ? "xmb" : in_menu ? "menu" : "fin");
+		perf_app_close(end);
+	}
 }
 
 /* rsxkit_ui: el menú y lo que se dibuja sobre el juego (aviso, contador);
@@ -3594,6 +3827,9 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	if (salsa64_ps3_rec_fpu_inline_wanted())
 		rec.opts |= SALSA64_REC_OPT_FPU_INLINE;
 	rec.prof = salsa64_ps3_rec_prof_wanted() ? &rec_prof : NULL;
+	/* Perfilado (perfilado_ps3.h): la sesión y rec.trace, antes de iniciar
+	 * el recompilador (su preámbulo depende de rec.trace). */
+	perf_app_open(rom, &rec, &n64.bus.vi.fields);
 	{
 		bool sites;
 		rec.hot_bytes = file_exists(PROFILE_ON_PATH) ? profile_hot_kb(&sites) << 10 : 0;
@@ -3699,6 +3935,37 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	else if (pres.shots_on && !pres.autotest)
 		salsa64_log("capturas: screen-N.ppm cada %u s (%s)", SHOT_US / 1000000u, SHOTS_PATH);
 	gwin.on = gfx_on_spu;
+	if (perf.on) {
+		/* Contexto de la sesión (docs/perfilado.md): qué app, qué juego y
+		 * con qué ajustes corre. Sin bytes del juego: su nombre interno y
+		 * sus CRC, como el nombre de las partidas. */
+		char ctx[2048], cfg[320], name[21];
+		uint64_t sec = 0, nsec = 0;
+		sysGetCurrentTime(&sec, &nsec);
+		memcpy(name, rom + 0x20, 20);
+		name[20] = '\0';
+		for (int k = 19; k >= 0 && name[k] == ' '; k--)
+			name[k] = '\0';
+		perf_cfg_text(&perf.cfg, cfg, sizeof cfg);
+		snprintf(ctx, sizeof ctx,
+			 "version=%s\ncommit=%s\napp=%s\nappid=%s\njuego=%s\ncarpeta=%s\ncodigo=%.4s\ncrc1=%08X\ncrc2=%08X\n"
+			 "region=%c\ntv=%s\nrom_bytes=%u\narranque=%s\nrecompilador=%s\nrec_opciones=0x%x\ntraza=%s\n"
+			 "hle_grafica=%s\njpeg=%s\nlle=%s\nescala=%d\nescala_rdp=%u\nfiltro=%s\noverscan=%u,%u,%u,%u\n"
+			 "aspecto=%.3f\nresolucion=%d\ninterpolacion=no existe en este build\nritmo=%s\nperfil_persistente=%s\n"
+			 "muestreo=%s\nfecha_unix=%llu\nperfilado=%s\n",
+			 salsa64_version, salsa64_commit, salsa64_title, salsa64_appid, name, perf.game, (const char *)rom + 0x3B,
+			 (unsigned)salsa64_rd32(rom + 0x10), (unsigned)salsa64_rd32(rom + 0x14),
+			 rom[0x3E] >= 0x20 && rom[0x3E] < 0x7F ? rom[0x3E] : '?',
+			 boot_info.tv == SALSA64_TV_PAL ? "PAL" : boot_info.tv == SALSA64_TV_MPAL ? "MPAL" : "NTSC", rom_size,
+			 boot_info.kind == SALSA64_BOOT_ELF ? "elf" : "plana", use_rec ? "si" : "no (intérprete)", rec.opts,
+			 use_rec && rec.trace && rec.trace->seq && !(rec.opts & SALSA64_REC_OPT_FPU_RES) ? "si" : "no",
+			 gfx_on_spu ? "spe" : "ppe", jpeg_on_spu ? "spe" : "ppe",
+			 lle_mode == SALSA64_LLE_OFF ? "no" : lle_mode == SALSA64_LLE_ALL ? "todo" : "auto", scale_wanted(),
+			 salsa64_rdp_scale(NULL), salsa64_crt_name(flt.cur), overscan.left, overscan.right, overscan.top,
+			 overscan.bottom, (double)pres.view.aspect, video_cfg.resolution, pacer.enabled ? "tele" : "turbo",
+			 rprof.on ? rprof.path : "no", rsmp.on ? "si" : "no", (unsigned long long)sec, cfg);
+		perf_app_context(ctx);
+	}
 	{
 		FILE *tf = fopen(STATE_TEST_PATH, "r");
 		if (tf) {

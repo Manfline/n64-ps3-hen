@@ -7,7 +7,9 @@
 #   3. vitest con --rec;
 #   4. estados guardados con --rec (gfxtest): guardar, cargar y seguir da lo
 #      mismo que de corrido y que el intérprete;
-#   5. con --lockstep (lento, ~10 min): nemu64-test y vitest comparados
+#   5. el perfilado (--perfilado): mismo estado que sin él y una sesión que
+#      el lector (tools/perfilado) entiende;
+#   6. con --lockstep (lento, ~10 min): nemu64-test y vitest comparados
 #      bloque a bloque contra el intérprete.
 #   tools/test-rec.sh [--lockstep]
 # Imágenes: tools/docker-image-ppc64.sh. Rendimiento: solo en la PS3 real.
@@ -118,6 +120,30 @@ if run build/logs/rec-estados-a.log $R --rec --fields 300 --state-save 300:$SD/m
 	fi
 else
 	printf '%-14s %s\n' estados "FALLO (build/logs/rec-estados-*.log)"
+	fail=1
+fi
+
+# Perfilado (docs/perfilado.md): con todo encendido (una ventana de la traza
+# por segundo) el estado al campo 300 es el mismo que sin perfilar, y el
+# lector entiende la sesión.
+PD=build/perfilado-test
+rm -rf $PD
+if SALSA64_PERFILADO_CFG="traza_cada_s=1" run build/logs/rec-perfilado.log $R --rec --fields 300 \
+	--state-save 300:$SD/mp.st --perfilado $PD $G &&
+   python3 tools/perfilado/perfilado.py resumen $PD >build/logs/rec-perfilado-resumen.log 2>&1 &&
+   grep -q -- '-- traza: [1-9]' build/logs/rec-perfilado-resumen.log &&
+   grep -q -- '-- recompilador: [1-9]' build/logs/rec-perfilado-resumen.log; then
+	if cmp -s $SD/m.st $SD/mp.st; then
+		printf '%-14s %s
+' perfilado "gfxtest con --perfilado: mismo estado en el campo 300; $(grep -- '-- traza:' build/logs/rec-perfilado-resumen.log | cut -c4-90)"
+	else
+		printf '%-14s %s
+' perfilado "FALLO: el estado cambia con el perfilado ($(cmp $SD/m.st $SD/mp.st | head -1))"
+		fail=1
+	fi
+else
+	printf '%-14s %s
+' perfilado "FALLO (build/logs/rec-perfilado*.log)"
 	fail=1
 fi
 
