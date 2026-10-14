@@ -52,8 +52,9 @@ static void ring_records_round_trip(void)
 {
 	if (!t_tmp_dir)
 		return;
+	static unsigned runs;  /* la suite corre dos veces (intérprete y recompilador): otra carpeta */
 	char root[256];
-	snprintf(root, sizeof root, "%s/perf1", t_tmp_dir);
+	snprintf(root, sizeof root, "%s/perf1-%u", t_tmp_dir, runs++);
 	struct perf_ring ring;
 	perf_ring_init(&ring, ring_mem, sizeof ring_mem);
 	struct perf_session s;
@@ -122,8 +123,9 @@ static void rotation_keeps_newest(void)
 {
 	if (!t_tmp_dir)
 		return;
+	static unsigned runs;
 	char root[256], dir[300], path[400];
-	snprintf(root, sizeof root, "%s/perf2", t_tmp_dir);
+	snprintf(root, sizeof root, "%s/perf2-%u", t_tmp_dir, runs++);
 	mkdir(root, 0777);
 	snprintf(dir, sizeof dir, "%s/A-00000001", root);
 	mkdir(dir, 0777);
