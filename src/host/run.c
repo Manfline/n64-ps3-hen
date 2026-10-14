@@ -799,7 +799,11 @@ static struct salsa64_lle_host lle_host;
 static enum salsa64_lle_mode lle_mode;
 static double lle_speed;
 static struct gfx_vertex gfx_vtx[1u << 16] __attribute__((aligned(128)));
-static uint8_t gfx_cmd[512u << 10] __attribute__((aligned(128)));
+/* 512 KB para los dibujos y, con GFX_JOB_INTERP (--interp), la mitad de eso
+ * más para los registros GFX_OP_VGROUP (un tercio del total, gfx.h), como
+ * en la PS3 (src/rdp/rdp.c, CMD_INTERP). */
+#define GFX_CMD_DRAWS (512u << 10)
+static uint8_t gfx_cmd[GFX_CMD_DRAWS + GFX_CMD_DRAWS / (GFX_VGROUP_SHARE - 1)] __attribute__((aligned(128)));
 static uint8_t gfx_tex[4u << 20] __attribute__((aligned(128)));
 static uint8_t gfx_cache[8u << 20] __attribute__((aligned(128)));
 
@@ -1228,7 +1232,7 @@ static void gfx_acquire(void *ctx, struct gfx_job *job)
 	job->vtx_ea = (uint64_t)(uintptr_t)gfx_vtx;
 	job->vtx_cap = sizeof gfx_vtx;
 	job->cmd_ea = (uint64_t)(uintptr_t)gfx_cmd;
-	job->cmd_cap = sizeof gfx_cmd;
+	job->cmd_cap = GFX_CMD_DRAWS;
 	job->tex_ea = (uint64_t)(uintptr_t)gfx_tex;
 	job->tex_cap = sizeof gfx_tex;
 	/* Caché de texturas: el rasterizador termina cada tarea en gfx_done, así
@@ -1240,6 +1244,8 @@ static void gfx_acquire(void *ctx, struct gfx_job *job)
 	job->task = gfx.tasks + 1;
 	job->done_task = gfx.tasks;
 	interp_task_begin(job, n64.bus.vi.fields);
+	if (job->flags & GFX_JOB_INTERP)
+		job->cmd_cap = sizeof gfx_cmd;
 	/* Como la PS3: el rasterizador lee de sus imágenes lo que viene de un
 	 * destino reciente y decodifica él lo que al final no pueda leer. */
 	if (gfx.raster && raster_fbfx >= 1 && !getenv("SALSA64_NO_FBTEX"))

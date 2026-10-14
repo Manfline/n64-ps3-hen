@@ -99,8 +99,13 @@ struct gfx_job {
 /* Interpolación de cuadros por geometría (docs/interpolacion.md): cada
  * G_VTX deja un registro GFX_OP_VGROUP y cada vértice de salida dice de qué
  * grupo y lugar salió (gfx_vertex.pad, GFX_VGID). Sin la bandera no se
- * escribe nada de eso (pad = 0). */
+ * escribe nada de eso (pad = 0). Los registros ocupan a lo más un tercio
+ * de cmd_cap (GFX_VGROUP_SHARE): el consumidor da ese tercio de más, así los
+ * dibujos tienen el mismo lugar que sin la bandera y la tarea nunca se
+ * corta por ella; lo que no cabe no lleva registro ni identidad
+ * (GFX_RES_VGROUP_FULL) y esa tarea no se interpola. */
 #define GFX_JOB_INTERP 0x40u
+#define GFX_VGROUP_SHARE 3u
 
 /* ---- Caché de texturas -------------------------------------------------------
  * Las texturas decodificadas viven en una región de memoria que pone el
@@ -151,6 +156,7 @@ struct gfx_result {
 #define GFX_RES_LOOP         0x10u  /* demasiados comandos: se cortó */
 #define GFX_RES_LOAD_UCODE   0x20u  /* G_LOAD_UCODE a otro microcódigo: se saltó su tramo */
 #define GFX_RES_FOREIGN_END  0x40u  /* la lista terminó dentro de ese tramo (sin volver) */
+#define GFX_RES_VGROUP_FULL  0x80u  /* GFX_JOB_INTERP: faltan registros GFX_OP_VGROUP (no se corta) */
 /* La lista no llegó a su fin (o acabó donde no se sabe qué hizo): el juego
  * sigue esperando al RDP. */
 #define GFX_RES_CUT (GFX_RES_VTX_FULL | GFX_RES_CMD_FULL | GFX_RES_TEX_FULL | GFX_RES_LOOP | GFX_RES_FOREIGN_END)

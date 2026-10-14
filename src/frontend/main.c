@@ -2964,7 +2964,8 @@ static void stats(uint64_t now)
 			    rs.fp_generated - sw.rdp0.fp_generated, rs.fp_evictions - sw.rdp0.fp_evictions,
 			    (double)(rs.draws_edges - sw.rdp0.draws_edges) / tasks);
 		uint32_t itasks = rs.interp_tasks - sw.rdp0.interp_tasks;
-		if (itasks) {
+		uint32_t iskip = rs.interp_skipped - sw.rdp0.interp_skipped;
+		if (itasks || iskip) {
 			uint32_t iv = rs.interp_vertices - sw.rdp0.interp_vertices;
 			uint32_t ip = rs.interp_paired - sw.rdp0.interp_paired;
 			uint32_t ifl = rs.interp_fields - sw.rdp0.interp_fields;
@@ -2977,7 +2978,8 @@ static void stats(uint64_t now)
 				    "ms del PPE por tarea (armar %.3f, emparejar %.3f, posiciones %.3f)",
 				    itasks, rs.interp_cuts - sw.rdp0.interp_cuts,
 				    rs.interp_cuts_camera - sw.rdp0.interp_cuts_camera, rs.interp_full - sw.rdp0.interp_full,
-				    rs.interp_fbtex - sw.rdp0.interp_fbtex, iv ? 100.0 * ip / iv : 0.0, (double)iv / itasks,
+				    rs.interp_fbtex - sw.rdp0.interp_fbtex, iv ? 100.0 * ip / iv : 0.0,
+				    itasks ? (double)iv / itasks : 0.0,
 				    rs.interp_content - sw.rdp0.interp_content, rs.interp_rejected - sw.rdp0.interp_rejected,
 				    rs.interp_atomic - sw.rdp0.interp_atomic, rs.interp_kept - sw.rdp0.interp_kept,
 				    rs.interp_reordered - sw.rdp0.interp_reordered, (rs.us_interp - sw.rdp0.us_interp) / 1e3 / tasks,
@@ -2986,11 +2988,12 @@ static void stats(uint64_t now)
 				    (rs.us_interp_prev - sw.rdp0.us_interp_prev) / 1e3 / tasks);
 			salsa64_log("gfx: interpolación: %u campos intermedios (%.1f/s), %u enteros (cuadro sin interpolar), %u "
 				    "repetidos (no llegaron a tiempo: %u su juego de búferes ya en uso, %u la caché, %u sin "
-				    "superficie); redibujar %.3f ms del PPE por campo intermedio",
+				    "superficie); redibujar %.3f ms del PPE por campo intermedio; %u tareas sin pedir la "
+				    "identidad de los vértices al SPE (el juego a 60 cuadros, o tras una que no cupo)",
 				    ifl, ifl * 1e6 / dt, rs.interp_plain - sw.rdp0.interp_plain,
 				    rs.interp_repeated - sw.rdp0.interp_repeated, rs.interp_rep_set - sw.rdp0.interp_rep_set,
 				    rs.interp_rep_cache - sw.rdp0.interp_rep_cache, rs.interp_rep_surf - sw.rdp0.interp_rep_surf,
-				    ifl ? (rs.us_interp_draw - sw.rdp0.us_interp_draw) / 1e3 / ifl : 0.0);
+				    ifl ? (rs.us_interp_draw - sw.rdp0.us_interp_draw) / 1e3 / ifl : 0.0, iskip);
 		}
 		uint32_t rb = rs.readbacks - sw.rdp0.readbacks, rbw = rs.readback_waits - sw.rdp0.readback_waits;
 		uint32_t trsx = rs.tex_rsx - sw.rdp0.tex_rsx, trd = rs.tex_rdram - sw.rdp0.tex_rdram;

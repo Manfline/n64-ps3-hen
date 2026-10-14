@@ -181,7 +181,7 @@ bool gfx_io_cmd(struct gfx_state *g, const void *rec, uint32_t size)
 {
 	uint32_t reserve = ((const struct gfx_cmd *)rec)->op == GFX_OP_END ? 0 : sizeof(struct gfx_cmd);
 	if (size + reserve > g->job->cmd_cap - io.cmd_flushed - io.cmd_fill || size > CMD_BUF) {
-		g->res->flags |= GFX_RES_CMD_FULL;
+		g->res->flags |= ((const struct gfx_cmd *)rec)->op == GFX_OP_VGROUP ? GFX_RES_VGROUP_FULL : GFX_RES_CMD_FULL;
 		return false;
 	}
 	if (io.cmd_fill + size > CMD_BUF)

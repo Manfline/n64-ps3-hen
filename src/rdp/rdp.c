@@ -34,10 +34,17 @@
 #define SETS        3
 #define VTX_BYTES   (2u << 20)
 /* gfx_draw son 480 bytes: 1600 dibujos por tarea. El arena de texturas
- * casi no se usa con la caché (docs/memory-budget.md): le cede 256 KB. */
+ * casi no se usa con la caché (docs/memory-budget.md): le cede 256 KB y
+ * CMD_INTERP. */
 #define CMD_BYTES   (768u << 10)
-#define TEX_BYTES   ((4u << 20) - (256u << 10))
-#define SET_BYTES   (VTX_BYTES + CMD_BYTES + TEX_BYTES)
+/* Con la interpolación la HLE pone también sus registros GFX_OP_VGROUP, en
+ * hasta un tercio del búfer (gfx.h): ese tercio va de más (384 KB), y los
+ * dibujos tienen el mismo lugar que sin ella (con 768 KB para los dos, una
+ * tarea pesada se cortaba y el juego recibía antes la interrupción del DP). */
+#define CMD_INTERP  (CMD_BYTES / (GFX_VGROUP_SHARE - 1))
+#define CMD_SET     (CMD_BYTES + CMD_INTERP)
+#define TEX_BYTES   ((4u << 20) - (256u << 10) - CMD_INTERP)
+#define SET_BYTES   (VTX_BYTES + CMD_SET + TEX_BYTES)
 #define SETS_BYTES  (((SETS * SET_BYTES) + 0xFFFFFu) & ~0xFFFFFu)
 #define CACHE_BYTES (8u << 20)  /* caché de texturas (docs/memory-budget.md) */
 /* Efectos de framebuffer (docs/framebuffer.md): dos búferes para las copias
@@ -72,9 +79,11 @@
 #define RB_KEEP_TASKS 32
 #define RB_WAIT_US  200000  /* la emulación no espera una copia más que esto */
 /* Interpolación por geometría (salsa64_rdp_interp, docs/interpolacion.md):
- * los vértices de una tarea con GFX_JOB_INTERP ocupan hasta VTX_INTERP de su
- * juego de búferes y detrás van sus posiciones en la tarea anterior (un
- * float[4] por vértice, en el mismo orden). Las tablas del emparejamiento
+ * detrás de los vértices de una tarea con GFX_JOB_INTERP, desde VTX_INTERP
+ * de su juego de búferes, van sus posiciones en la tarea anterior (un
+ * float[4] por vértice, en el mismo orden). La HLE tiene todo el búfer, como
+ * sin la interpolación: una tarea con más vértices que VTX_INTERP no se
+ * interpola (antes se cortaba). Las tablas del emparejamiento
  * (vmatch.c) son dos, de VM_GROUPS grupos y VM_CLIP vértices (Zelda OoT usa
  * ~360 y ~2900 por cuadro; GoldenEye ~250 y ~3400); un cuadro que no cabe no
  * se interpola. */
@@ -118,7 +127,7 @@ struct set {
 	uint32_t rb_n, rb_nsync;
 	bool trace;  /* tarea con traza detallada en el log (ver readbacks_wanted) */
 	uint32_t set_wait_us;  /* perfilado: lo que esperó acquire este juego para la tarea */
-	bool interp; /* se envió con GFX_JOB_INTERP (vértices hasta VTX_INTERP) */
+	bool interp; /* se envió con GFX_JOB_INTERP */
 	/* Interpolación, al traducirla: sus posiciones de antes valen (hubo
 	 * anterior y no fue un corte), su número en la tabla de destinos
 	 * (rdp_targets.task: el last_task de lo que dibujó) y hasta dónde usó
@@ -334,6 +343,10 @@ static struct {
 		 * nada de ella ni de las siguientes (sus intermedios aún se
 		 * dibujan); 0 nada. */
 		volatile uint32_t protect;
+		/* La última tarea con GFX_JOB_INTERP que no cupo (tablas, vértices
+		 * o registros: interp_task); 0 ninguna. acquire no pide la bandera
+		 * en las INTERP_BACKOFF tareas que siguen (interp_wanted). */
+		volatile uint32_t full_task;
 	} interp;
 	/* Lo que se traduce ahora (salsa64_rdp_translating; lo lee el latido
 	 * desde otro hilo): la tarea (n + 1, 0 fuera de translate) y la etapa. */
@@ -395,9 +408,9 @@ int salsa64_rdp_init(uint32_t scale)
 		uint32_t base = i * SET_BYTES;
 		s->vtx = rdp.pool + base;
 		s->cmd = s->vtx + VTX_BYTES;
-		s->tex = s->cmd + CMD_BYTES;
+		s->tex = s->cmd + CMD_SET;
 		s->vtx_off = rdp.pool_off + base;
-		s->tex_off = rdp.pool_off + base + VTX_BYTES + CMD_BYTES;
+		s->tex_off = rdp.pool_off + base + VTX_BYTES + CMD_SET;
 	}
 	rdp.cache = rdp.pool + SETS_BYTES;
 	rdp.cache_off = rdp.pool_off + SETS_BYTES;
@@ -582,6 +595,7 @@ uint32_t salsa64_rdp_reset(void)
 	rdp.interp.acq = rdp.interp.busy = rdp.interp.keep_task = rdp.interp.keep_fence = rdp.interp.done_given = 0;
 	rdp.interp.done_pending = 0;
 	rdp.interp.protect = 0;
+	rdp.interp.full_task = 0;
 	memset(&rdp.again_last, 0, sizeof rdp.again_last);
 	memset(&rdp.stats, 0, sizeof rdp.stats);
 	memset(&rdp.tb, 0, sizeof rdp.tb);
@@ -622,6 +636,27 @@ void salsa64_rdp_drop_targets(void)
 const struct salsa64_gfx_sink *salsa64_rdp_sink(void)
 {
 	return &sink;
+}
+
+/* ¿Pedir a la HLE la identidad de los vértices (GFX_JOB_INTERP) para la
+ * tarea n + 1? Le cuesta al SPE 0 y la emulación lo espera (en Super Odyssey
+ * 64, que no cabía en las tablas, el SPE tardaba en cada tarea un 60 % más y
+ * la emulación pasó de 60 a 55 campos por segundo, con el audio estirado), así
+ * que solo cuando puede servir: no con el juego a 60 cuadros (no hay campos
+ * intermedios) ni en las INTERP_BACKOFF tareas que siguen a una que no cupo;
+ * después se vuelve a probar (la primera con la bandera es la anterior de la
+ * que sigue). La prueba fija (SALSA64_INTERP_FIXED) la pide siempre. */
+#define INTERP_BACKOFF 90u
+static bool interp_wanted(uint32_t n)
+{
+	if (rdp.interp.mode == SALSA64_INTERP_OFF || !vm)
+		return false;
+	if (rdp.interp.mode != SALSA64_INTERP_FIELDS)
+		return true;
+	if (rdp.interp.last_gap == 1)
+		return false;
+	uint32_t f = rdp.interp.full_task;
+	return !f || (int32_t)(n + 1 - f) >= (int32_t)INTERP_BACKOFF;
 }
 
 static void acquire(void *ctx, struct gfx_job *job)
@@ -725,10 +760,12 @@ static void acquire(void *ctx, struct gfx_job *job)
 	 * decodificación en el PPE). */
 	if (rdp.fbfx >= 1)
 		job->flags |= GFX_JOB_FBTEX;
-	s->interp = rdp.interp.mode != SALSA64_INTERP_OFF && vm;
+	s->interp = interp_wanted(n);
 	if (s->interp) {
 		job->flags |= GFX_JOB_INTERP;
-		job->vtx_cap = VTX_INTERP;
+		job->cmd_cap = CMD_SET;
+	} else if (rdp.interp.mode != SALSA64_INTERP_OFF) {
+		rdp.stats.interp_skipped++;
 	}
 	rdp.acquired = n + 1;
 }
@@ -1464,23 +1501,31 @@ static void frame_mirror(int slot, uint32_t rows, bool wait);
 static void again_set(int slot, uint32_t y0, uint32_t pw, uint32_t ph, const rsxkit_view *view,
 		      const struct salsa64_overscan *crop);
 
-/* Interpolación: empareja los vértices de la tarea con los de la anterior
- * (vmatch.c) y deja sus posiciones de allá detrás de los vértices. Sin
- * pareja (o en un corte), la de ahora. */
-static void interp_task(struct set *s, const struct gfx_result *res)
+/* Interpolación: empareja los vértices de la tarea `task` con los de la
+ * anterior (vmatch.c) y deja sus posiciones de allá detrás de los vértices.
+ * Sin pareja (o en un corte), la de ahora. Si la tarea no cupo (tablas,
+ * vértices más allá de VTX_INTERP o registros que faltan) no se interpola,
+ * no sirve de anterior y acquire deja de pedir la bandera un rato. */
+static void interp_task(struct set *s, const struct gfx_result *res, uint32_t task)
 {
 	uint64_t t0 = sysGetSystemTime();
 	uint32_t c = rdp.interp.cur ^ 1;
 	struct vmatch_table *cur = &vm[c].t, *prev = rdp.interp.have_prev ? &vm[c ^ 1].t : NULL;
+	bool room = res->vtx_bytes <= VTX_INTERP && !(res->flags & GFX_RES_VGROUP_FULL);
 	vmatch_build(cur, s->cmd, res->cmd_bytes);
+	if (!room)
+		cur->full = true;
+	if (cur->full)
+		rdp.interp.full_task = task;
 	uint64_t t1 = sysGetSystemTime();
 	struct vmatch_stats st;
 	uint32_t nv = res->vtx_bytes / sizeof(struct gfx_vertex);
 	vmatch_pair(prev, cur, INTERP_DISP, &st);
 	vmatch_atomic(cur, (const struct gfx_vertex *)s->vtx, nv, &st);
 	uint64_t t2 = sysGetSystemTime();
-	uint32_t paired = vmatch_prev(prev, cur, &st, (const struct gfx_vertex *)s->vtx, nv,
-				      (float(*)[4])(s->vtx + VTX_INTERP));
+	uint32_t paired = room ? vmatch_prev(prev, cur, &st, (const struct gfx_vertex *)s->vtx, nv,
+					     (float(*)[4])(s->vtx + VTX_INTERP))
+			       : 0;
 	uint64_t t3 = sysGetSystemTime();
 	rdp.stats.us_interp_build += t1 - t0;
 	rdp.stats.us_interp_pair += t2 - t1;
@@ -1501,7 +1546,7 @@ static void interp_task(struct set *s, const struct gfx_result *res)
 		rdp.stats.interp_atomic += st.atomic;
 		rdp.stats.interp_kept += st.kept;
 	}
-	if (rdp.interp.mode == SALSA64_INTERP_FIXED && rdp.interp.t < 1.0f)
+	if (rdp.interp.mode == SALSA64_INTERP_FIXED && rdp.interp.t < 1.0f && room)
 		rsxkit_vertices_prev(s->vtx_off + VTX_INTERP, RSXKIT_MEM_MAIN, rdp.interp.t);
 	rdp.stats.us_interp += sysGetSystemTime() - t0;
 }
@@ -1548,7 +1593,7 @@ static void translate(uint32_t n)
 	to_rsxkit_fb = false;
 	/* Un juego a 60 cuadros no tiene campos intermedios: no se empareja. */
 	if (s->interp && !(rdp.interp.mode == SALSA64_INTERP_FIELDS && rdp.interp.last_gap == 1))
-		interp_task(s, res);
+		interp_task(s, res, n + 1);
 	else
 		rdp.interp.have_prev = false;
 	rdp.bound_t = -1;

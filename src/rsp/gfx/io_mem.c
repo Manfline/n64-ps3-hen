@@ -85,7 +85,7 @@ bool gfx_io_cmd(struct gfx_state *g, const void *rec, uint32_t size)
 	/* Siempre queda lugar para el GFX_OP_END final. */
 	uint32_t reserve = ((const struct gfx_cmd *)rec)->op == GFX_OP_END ? 0 : sizeof(struct gfx_cmd);
 	if (size + reserve > g->job->cmd_cap - io->cmd_used) {
-		g->res->flags |= GFX_RES_CMD_FULL;
+		g->res->flags |= ((const struct gfx_cmd *)rec)->op == GFX_OP_VGROUP ? GFX_RES_VGROUP_FULL : GFX_RES_CMD_FULL;
 		return false;
 	}
 	memcpy(PTR(g->job->cmd_ea) + io->cmd_used, rec, size);
