@@ -604,6 +604,14 @@ HOT void execute(struct salsa64_cpu *cpu, struct flow *f, uint32_t i)
 
 /* ---- Bucle --------------------------------------------------------------- */
 
+/* Ciclos que se cobran por instrucción. 1 es lo de siempre; más (solo para
+ * medir en el host, -DSALSA64_CPI=2) se acerca al VR4300 real, que pierde
+ * ciclos en las cachés y la RDRAM: los juegos sin tope de cuadros (GoldenEye)
+ * dan entonces menos cuadros por segundo, como en la consola. */
+#ifndef SALSA64_CPI
+#define SALSA64_CPI 1
+#endif
+
 /* Ejecuta hasta que cycles alcance sched->next, o una sola instrucción con
  * `once`. */
 HOT void cpu_loop(struct salsa64_cpu *cpu, bool once)
@@ -619,7 +627,7 @@ HOT void cpu_loop(struct salsa64_cpu *cpu, bool once)
 		f.cur = f.pc;
 		cpu->cur_pc = f.cur;
 		cpu->delay_slot = (uint8_t)f.branch;
-		cpu->cycles = ++cycles;
+		cpu->cycles = (cycles += SALSA64_CPI);
 		f.branch = 0;
 
 		uint32_t pa;

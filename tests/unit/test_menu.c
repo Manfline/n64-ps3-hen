@@ -516,7 +516,7 @@ static void menu_game_page(void)
 	CHECK(!strcmp(menu_scale_name(3, MENU_RES_720P, sbuf, sizeof sbuf), "3×"));
 	CHECK(!strcmp(menu_filter_credit(MENU_FILTER_SCAN_SOFT), "Filtro de VIDEOGAMES SCZ"));
 	/* Texto del archivo: ida y vuelta, y global ante lo que no entiende. */
-	char buf[256];
+	char buf[512];
 	int n = menu_game_format(&m.game, buf, sizeof buf);
 	CHECK(n > 0 && n < (int)sizeof buf);
 	struct menu_game back;
@@ -526,10 +526,16 @@ static void menu_game_page(void)
 	CHECK_EQ(back.filter, -1);
 	CHECK_EQ(back.overscan, MENU_OVERSCAN_OFF);
 	CHECK_EQ(back.scale, 2);
+	CHECK_EQ(back.interp, -1);
 	m.game.scale = 0;
+	m.game.interp = MENU_INTERP_GEOMETRY;
 	n = menu_game_format(&m.game, buf, sizeof buf);
 	menu_game_parse(&back, buf, (size_t)n);
 	CHECK_EQ(back.scale, 0);
+	CHECK_EQ(back.interp, MENU_INTERP_GEOMETRY);
+	CHECK_EQ(menu_game_interp(&m.set, &back), MENU_INTERP_GEOMETRY);
+	back.interp = -1;
+	CHECK_EQ(menu_game_interp(&m.set, &back), MENU_INTERP_OFF);  /* la de Opciones */
 	const char *junk = "aspecto = 5:4\nfiltro = raro\nrecorte = x\nescala = 9\n";
 	menu_game_parse(&back, junk, strlen(junk));
 	CHECK_EQ(back.aspect, -1);
@@ -545,12 +551,16 @@ static void menu_game_page(void)
 	menu_settings_default(&st);
 	st.filter = MENU_FILTER_SCAN_SOFT;
 	st.lang = MENU_LANG_DE;
+	st.interp = MENU_INTERP_GEOMETRY;
 	n = menu_settings_format(&st, buf, sizeof buf);
+	CHECK(n > 0 && n < (int)sizeof buf);
 	struct menu_settings st2;
 	menu_settings_default(&st2);
+	CHECK_EQ(st2.interp, MENU_INTERP_OFF);
 	menu_settings_parse(&st2, buf, (size_t)n);
 	CHECK_EQ(st2.filter, MENU_FILTER_SCAN_SOFT);
 	CHECK_EQ(st2.lang, MENU_LANG_DE);
+	CHECK_EQ(st2.interp, MENU_INTERP_GEOMETRY);
 }
 
 static void menu_options_page(void)
@@ -696,10 +706,24 @@ static void menu_options_page(void)
 	CHECK_EQ(m.opt, MENU_OPT_FPS);
 	menu_input(&m, 0, 79);
 	menu_input(&m, UP, 79);
+	CHECK_EQ(m.opt, MENU_OPT_INTERP);
+	menu_input(&m, 0, 79);
+	menu_input(&m, UP, 79);
 	CHECK_EQ(m.opt, MENU_OPT_SCALE);
 	menu_input(&m, 0, 79);
 	menu_input(&m, DOWN, 79);
-	CHECK_EQ(m.opt, MENU_OPT_FPS);   /* sin cambios pendientes se salta «Aplicar ahora» */
+	CHECK_EQ(m.opt, MENU_OPT_INTERP);   /* sin cambios pendientes se salta «Aplicar ahora» */
+	/* Interpolación: apagada por omisión; alterna y pide guardar. */
+	CHECK_EQ(m.set.interp, MENU_INTERP_OFF);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, CROSS, 79), MENU_SETTINGS);
+	CHECK_EQ(m.set.interp, MENU_INTERP_GEOMETRY);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, LEFT, 79), MENU_SETTINGS);
+	CHECK_EQ(m.set.interp, MENU_INTERP_OFF);
+	menu_input(&m, 0, 79);
+	menu_input(&m, DOWN, 79);
+	CHECK_EQ(m.opt, MENU_OPT_FPS);
 	/* Mostrar FPS: alterna sí / no y pide guardar. */
 	CHECK(!m.set.fps);
 	menu_input(&m, 0, 79);
@@ -1426,7 +1450,7 @@ static void menu_preview(void)
 	write_ppm(path, rgb, 960, 720);
 	/* Ajustes por juego, filtro e idiomas. */
 	{
-		struct menu_game g = { MENU_ASPECT_16_9, -1, MENU_OVERSCAN_OFF, -1, -1 };
+		struct menu_game g = { MENU_ASPECT_16_9, -1, MENU_OVERSCAN_OFF, -1, -1, -1 };
 		for (int lang = 0; lang <= 5; lang += 1) {
 			if (lang == 2 || lang == 4)
 				continue;  /* en, de y pt bastan para el aspecto; fr e it se ven en las pruebas de ancho */

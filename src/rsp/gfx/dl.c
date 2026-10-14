@@ -72,6 +72,7 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 	g->fbimg_cur = -1;
 	g->dirty = true;
 	g->vtx_count = 0;
+	gfx_vgroup_begin(g);
 	g->narena_tex = 0;
 	memset(g->tilememo, 0, sizeof g->tilememo);
 	gfx_tc_begin(g);

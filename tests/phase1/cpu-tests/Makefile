@@ -8,6 +8,7 @@ R       := ../../..
 COMMON  := src/platform/ps3/log.c src/platform/ps3/rec_cache.c \
            $(patsubst $(R)/%,%,$(wildcard $(R)/src/core/*.c $(R)/src/cpu/*.c $(R)/src/rsp/gfx/*.c $(R)/src/rsp/audio/*.c $(R)/src/rsp/jpeg/*.c \
                                           $(R)/src/rsp/lle/*.c)) src/frontend/padmap.c src/frontend/pacer.c src/frontend/audio_sync.c src/rdp/targets.c \
+           src/rdp/vmatch.c src/rdp/gfxdump.c src/rdp/blackbox.c \
            src/host/raster.c \
            src/frontend/romlist.c src/frontend/menu.c src/frontend/osd_fps.c src/frontend/pausectl.c src/frontend/cheats.c src/frontend/cover.c src/frontend/namematch.c src/frontend/dlutil.c src/frontend/i18n.c lib/rsxkit/src/text.c lib/rsxkit/src/ui_geom.c \
            src/frontend/filters/crt_params.c src/frontend/version.c \

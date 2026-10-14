@@ -548,6 +548,83 @@ static void gfx_triangle_transform(void)
 	CHECK_EQ(out_vtx[2].b, 255);
 }
 
+/* GFX_JOB_INTERP: el G_VTX deja su registro GFX_OP_VGROUP y cada vértice de
+ * salida su identidad en pad; los que agrega el recorte cercano, la de su
+ * grupo y sus dos extremos. Sin la bandera, la salida es la de siempre (pad
+ * = 0, sin registros nuevos) y con ella los vértices no cambian. */
+static void interp_scene(uint32_t flags, int16_t z2)
+{
+	start();
+	job_flags = flags;
+	viewport_320x240();
+	load_mtx(ident, true);
+	load_mtx(ident, false);
+	set_combine(CC_A_ZERO, CC_ZERO, CC_C_ZERO, CC_SHADE, CC_ZERO, CC_ZERO, CC_ZERO, CC_SHADE);
+	dl(0xD9000000, G_SHADING_SMOOTH);
+	dl(0xFF100000 | 319, 0x00100000);
+	const struct vtx v[3] = {
+		{ 0, 0, 0, 0, 0, { 255, 0, 0, 255 } },
+		{ 1, 0, 0, 0, 0, { 0, 255, 0, 255 } },
+		{ 0, 1, z2, 0, 0, { 0, 0, 255, 255 } },
+	};
+	uint32_t va = put_vertices(v, 3);
+	dl(0x01000000 | 3 << 12 | (0 + 3) << 1, va);
+	dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);
+	dl(0xE9000000, 0);
+	run();
+}
+
+static void gfx_interp_groups(void)
+{
+	static struct gfx_vertex plain[8];
+	interp_scene(0, 0);
+	CHECK_EQ(res.triangles, 1);
+	CHECK(find_cmd(GFX_OP_VGROUP, 0) == NULL);
+	for (int i = 0; i < 3; i++)
+		CHECK_EQ(out_vtx[i].pad, 0);
+	memcpy(plain, out_vtx, sizeof plain);
+	uint32_t va = DATA_PA + 16 + 64 + 64;  /* tras el viewport y las dos matrices */
+	interp_scene(GFX_JOB_INTERP, 0);
+	const struct gfx_vgroup *r = (const struct gfx_vgroup *)find_cmd(GFX_OP_VGROUP, 0);
+	CHECK(r != NULL);
+	if (!r)
+		return;
+	CHECK_EQ(r->h.a, va);
+	CHECK_EQ(r->h.b & 0xFF, 3);
+	CHECK_EQ((r->h.b >> 8) & 0xFF, 0);
+	CHECK_EQ(r->h.b >> 16, 16);
+	CHECK_EQ(r->h.size, sizeof *r + 3 * 16);
+	CHECK(r->vp[0] == 160.0f && r->vp[2] == 160.0f);
+	const float *c = (const float *)(r + 1);
+	CHECK(c[4] == 1.0f && c[7] == 1.0f);  /* el segundo vértice: x = 1, w = 1 */
+	CHECK_EQ(gs.vgroups, 1);
+	for (int i = 0; i < 3; i++) {
+		CHECK_EQ(out_vtx[i].pad, GFX_VGID(1u, (uint32_t)i));
+		CHECK(out_vtx[i].x == plain[i].x && out_vtx[i].y == plain[i].y && out_vtx[i].z == plain[i].z &&
+		      out_vtx[i].w == plain[i].w);
+	}
+	/* El tercer vértice detrás del plano cercano (z < −w): dos triángulos,
+	 * con dos vértices nuevos entre extremos con identidad. */
+	interp_scene(GFX_JOB_INTERP, -2);
+	CHECK_EQ(res.triangles, 1);
+	const struct gfx_draw *d = draw_n(0);
+	CHECK(d != NULL && d->h.b == 6);
+	/* Los dos nuevos: entre los lugares 1 y 2, y 2 y 0, del grupo 1. */
+	unsigned clipped = 0;
+	for (int i = 0; i < 6; i++) {
+		uint32_t id = out_vtx[i].pad;
+		if (!(id & GFX_VCLIP_FLAG))
+			continue;
+		clipped++;
+		CHECK_EQ(GFX_VCLIP_SERIAL(id), 1);
+		CHECK((GFX_VCLIP_A(id) == 1 && GFX_VCLIP_B(id) == 2) || (GFX_VCLIP_A(id) == 2 && GFX_VCLIP_B(id) == 0));
+	}
+	CHECK_EQ(clipped, 3);  /* el segundo triángulo repite uno de los nuevos */
+	interp_scene(0, -2);
+	for (int i = 0; i < 6; i++)
+		CHECK_EQ(out_vtx[i].pad, 0);
+}
+
 static void gfx_matrix_stack(void)
 {
 	start();
@@ -2387,6 +2464,7 @@ void t_suite_gfx(void)
 	RUN(gfx_untextured_texel);
 	RUN(gfx_combiner_shade_squared);
 	RUN(gfx_triangle_transform);
+	RUN(gfx_interp_groups);
 	RUN(gfx_clip_ratio_f3dex2);
 	RUN(gfx_matrix_stack);
 	RUN(gfx_insert_matrix_billboard);

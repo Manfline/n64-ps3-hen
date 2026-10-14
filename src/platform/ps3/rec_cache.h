@@ -156,4 +156,23 @@ static inline int salsa64_ps3_rec_fpu_inline_wanted(void)
 	return stat(SALSA64_RECFPUINLINE_FLAG, &st) == 0;
 }
 
+/* La caché de destinos de JR/JALR en exit_jr (SALSA64_REC_OPT_JTC) va
+ * encendida por omisión; con el archivo jit-sin-destinos se apaga (para el
+ * A/B) y con jit-destinos-cuentas además cuenta aciertos y fallos para el log
+ * (suma unas palabras en cada JR). */
+#define SALSA64_RECNOJTC_FLAG SALSA64_DATA_DIR "/jit-sin-destinos"
+#define SALSA64_RECJTCSTATS_FLAG SALSA64_DATA_DIR "/jit-destinos-cuentas"
+
+static inline int salsa64_ps3_rec_jtc_wanted(void)
+{
+	struct stat st;
+	return stat(SALSA64_RECNOJTC_FLAG, &st) != 0;
+}
+
+static inline int salsa64_ps3_rec_jtc_stats_wanted(void)
+{
+	struct stat st;
+	return stat(SALSA64_RECJTCSTATS_FLAG, &st) == 0;
+}
+
 #endif

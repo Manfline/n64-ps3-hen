@@ -6,6 +6,9 @@ antes, después, notas.
 
 | Fecha | Commit | Prueba | Entorno | Antes | Después | Notas |
 |---|---|---|---|---|---|---|
+| 2026-10-14 | 32eec08 → (caché de destinos de JR) | **Caché de destinos de JR/JALR** en `exit_jr`: tabla directa de 1024 entradas vpc → entrada del bloque que se consulta antes de recorrer map/xhash/blocks (16 palabras en el acierto, ~36 en el camino largo) | PS3 real (paquete «Salsa64 rec 1», SLSA00123), GoldenEye en la presa, ranura 0, quieto ~30 s, 8 ventanas estables de 5 s; lab en la Mac (qemu para la exactitud) | 13,82 ns por ciclo del hilo de emulación (13,73–14,00), 70,5–71,9 MIPS | **13,67 (13,58–13,88), 71,1–72,7 MIPS: −1,05 %** de todo el hilo (≈ −1,3 % del código traducido); acierto 92,4 % (82,7 M aciertos, 6,8 M fallos; 89 % en el lab) | Mitad de lo estimado con el modelo del lab (−2…−3,5 %): la elasticidad medida a las palabras que corren es ~0,4, no 0,58, y el hilo tiene un ~21 % que no es código traducido. Exacta: lockstep sin diferencias en GoldenEye (desde el arranque hasta la presa, 7,5 G ciclos, con 93,1 % de acierto en toda la corrida) y desde el estado de la presa, y en la intro de Perfect Dark; pruebas unitarias del recompilador (501) con y sin `FAR`. Encendida por omisión; `jit-sin-destinos` la apaga |
+| 2026-10-13 | (rama del tope de cuadros, paquete «Salsa64 tope») | **Tope de cuadros en la PS3**: GoldenEye en la presa (Libre 37–202 s, 30 de 253–423 s, ajuste del juego) y Perfect Dark | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), SLSA00115, respaldos del autor, escala 5× | GoldenEye libre: 55,9 campos/s, 47 MIPS, 45 % en espera, emulación 14,2 ms por campo, 23–60 cuadros del juego | **tope 30: 56,1 campos/s, 31 MIPS (−34 %), 64 % en espera, emulación 15,2 ms**, 30–31,6 cuadros estables; Perfect Dark: 31,6 tareas gráficas por segundo | La emulación no bajó por una copia del framebuffer a la RDRAM esperada en cada cuadro (15 ms c/u): fallo previo de readbacks_wanted con el ancho del VI del anillo, arreglado después (también en Perfect Dark sin tope). Los «55–60 cuadros» de PD son el contador en modos entrelazados. Errores gráficos con 30 sin explicar. Tope en pausa; ver docs/interpolacion.md |
+| 2026-10-13 | (rama del tope de cuadros) | **Tope de cuadros** (`salsa64_rsp_set_frame_cap`): el DP de cada tarea gráfica no llega antes de 1,9 o 2,9 campos desde el anterior; GoldenEye en la presa girando y caminando (300 campos) y Perfect Dark (30 s de la intro) | Mac, `salsa64-run --tope`, respaldos del autor | libre: GoldenEye 297 cuadros en 300 campos, CPU 39,5 % activo; Perfect Dark 43 cuadros/s, 16,0 % | **tope 30: GoldenEye 159 cuadros, 22,8 % (−42 %); Perfect Dark 25/s, 11,8 % (−26 %). Tope 20: 105 cuadros, 16,7 % (−58 %); 16/s, 10,3 %** | En la PS3 GoldenEye en la presa está limitado por el CPU (52–57 campos/s): falta medirlo en la consola con Libre contra 30. Zelda, SM64 y Mario Kart con 30, sin cambios; audio igual. Ver docs/interpolacion.md, «Tope de cuadros» |
 | 2026-10-13 | fd1891c → (rama del código compacto) | **Código compacto del recompilador**: palabras de PPC por instrucción MIPS, GoldenEye hasta la presa (`goldeneye-dam.pad`, 7,5 G ciclos), pesado por ejecuciones de bloque | Mac, qemu-ppc64 (`salsa64-run --rec` con `SALSA64_REC_DUMP=1`, `tools/rec-expansion.py --counter 8`), respaldo del autor | 20,2 por instrucción (9,3 calientes, 11,0 frías); 17,2 MB de PPC, 305 palabras por bloque | **15,6 (8,2 calientes, 7,4 frías): −23 %**; 13,2 MB, 234 por bloque; mismo recorrido (mismas cuentas del perfil), 4 desalojos en vez de 6 | Prueba de KSEG0 en 4 palabras, un camino lento por bloque (rutina única + trampolín), cadena de escritura, enlaces de 3 palabras. **PS3 real** (mismo paquete, A/B con `jit-ancho`): GoldenEye en la presa 17,26 → 16,30 / 16,03 ns por instrucción emulada (−6…−7 %, 47,5 → 50–53 campos/s), Perfect Dark 14,85 → 14,45 (−3 %), SM64 y Zelda sin regresión. Ver «Código compacto» abajo |
 | 2026-10-13 | 6f2a888 → 674ab5a | **Filtros CRT: tope de 3×, reducción en dos pasadas, reuso, Trinitron y SPE**, GoldenEye en la presa a 1080p (5× elegida) | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00109, respaldos del autor | 5×, una pasada: máscara 9,6, RGB 11,9, S-Video 13,0, compuesto 15,4 ms; 30–51 cuadros presentados por segundo | **3×, dos pasadas: máscara 7,4, RGB 9,4, S-Video 10,6, compuesto 13,2, Trinitron 10,1 ms; todos los campos presentados**; render del juego 5,6 → 2,1 ms | Reducir 3,12 → 1,2 ms. El SPE (señal del cable): S-Video −0,45 ms, compuesto +0,5 ms (tarda ~3 veces lo estimado). Ver «Filtros CRT en el RSX» abajo |
 | 2026-10-13 | 6f2a888 | **Filtros CRT del autor en el RSX** (máscara de sombra y CRT con cable RGB, S-Video y compuesto), ciclo de 20 s por filtro, GoldenEye a 720p y 1080p, Perfect Dark y Conker a 1080p | PS3 real (Slim CECH-3011A, HFW 4.91 + HEN), app SLSA00109 «Salsa64 filtros», respaldos del autor, escala 5× | sin filtro: RSX ocupado 39–44 %, 59–60 cuadros presentados por segundo | GoldenEye, ms del RSX por cuadro a 720p / 1080p: **máscara 6,7 / 9,6, RGB 8,4 / 11,9, S-Video 9,6 / 13,0, compuesto 11,9 / 15,4**; a 1080p se presentan 51, 40, 36 y 30 cuadros por segundo | Reducir la superficie de 5× cuesta 3,1 ms en todos (la lectura, no las cuentas). Medido con Zelda en pausa: reducir 3,12 ms a 5×, 1,73 a 3×, 0,13 a 1×. Propuestas: escala 2× con un CRT (~5–6 ms menos), reducir en dos pasadas o con tiles, no rehacer el filtro en campos repetidos, señal del cable en un SPE (1–3,5 ms). Ver «Filtros CRT en el RSX» abajo |
@@ -621,6 +624,35 @@ más carga de CPU (49 MIPS, 43 % en espera).
 - Logs: `build/ps3-logs/salsa64-texturas-c17e790.log` y
   `salsa64-texturas-c17e790-3x.log` (fuera de git) y el de antes,
   `salsa64-v010-pd-majora.log`.
+
+## Estados guardados en segundo plano y comprimidos (2026-10-13)
+
+**Pendiente de PS3 real**: el paquete lo pide la sesión principal. Lo
+medido hasta ahora (RPCS3 no sirve para tiempos; el host sí para el
+tamaño):
+
+| Medida | Antes | Después | Dónde |
+|---|---|---|---|
+| Tamaño del archivo (RDRAM de 8 MB) | 8,1 MB siempre | OoT (intro, campo 1500) 1,98 MB; GoldenEye 1,22 MB; Mario Kart 64 1,46 MB; gfxtest 80 KB | host, `salsa64-run --state-zip`, respaldos del autor |
+| Emulación detenida al guardar | ~430 ms (417–1064; 520 de disco) | la foto: `memcpy` de 8 MB + secciones, 2 ms en RPCS3 (en la PS3, por medir) | log: «emulación detenida … (la foto)» |
+| Cargar | ~171 ms (161 leyendo) | por medir (menos disco, más descompresión en el PPE) | log: «cargado de la ranura» |
+
+Lo que escribe el log de la PS3 en cada guardado: «emulación detenida X ms
+(la foto)» y, cuando termina el hilo, «escrita en segundo plano: … ms de punta
+a punta, … ms en el disco, … ms del SPE comprimiendo … KB de … KB (r:1)». El
+costo para el PPE (hilo de baja prioridad, ~1 syscall por 64 KB) se mide con
+las líneas «hilo 1» de docs/hilos-ppe.md.
+
+**Caja negra (2026-10-13), RPCS3 (sin tiempos del Cell):** Mario Kart 64
+(respaldo del autor), anillo de 12 MB: 82 tareas y 165 campos caben (150 KB
+por tarea con sus texturas), 12,15 MB → 3,15 MB (3,9:1), el SPE comprime en
+72 ms y todo se escribe en 76 ms de punta a punta; registrar una tarea
+138 µs de media en RPCS3 (30 µs en gfxtest) y un campo 1,7 µs. En la PS3
+real, por medir con las líneas «caja negra: al cerrar…» y «escrita en segundo
+plano…» del log. El estado de ese juego: 8,25 MB → 1,14 MB (7,2:1).
+**Ojo al medir la foto en RPCS3:** la primera foto tras recompilar el
+programa tarda ~275 ms porque RPCS3 recompila los trabajos del SPE de
+guardar el estado de las HLE; copiar la RDRAM son 1,2 ms.
 
 ## Estados guardados (2026-10-11)
 

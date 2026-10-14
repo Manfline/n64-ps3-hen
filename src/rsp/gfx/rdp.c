@@ -649,7 +649,7 @@ void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
 		return;
 	const struct gfx_vtx *v[3] = { &g->vtx[a], &g->vtx[b], &g->vtx[c] };
 	/* Fuera del mismo plano los tres: no se ve. */
-	if (v[0]->clip & v[1]->clip & v[2]->clip)
+	if (v[0]->clip & v[1]->clip & v[2]->clip & GFX_CLIP_MASK)
 		return;
 	struct gfx_vertex p[4];
 	for (int i = 0; i < 3; i++)
@@ -683,8 +683,15 @@ void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
 				int j = i == 2 ? 0 : i + 1;
 				if (d[i] >= 0.0f)
 					p[n++] = in[i];
-				if ((d[i] < 0.0f) != (d[j] < 0.0f))
-					lerp_vertex(&p[n++], &in[i], &in[j], d[i] / (d[i] - d[j]));
+				if ((d[i] < 0.0f) != (d[j] < 0.0f)) {
+					lerp_vertex(&p[n], &in[i], &in[j], d[i] / (d[i] - d[j]));
+					/* GFX_JOB_INTERP: entre dos lugares del mismo grupo
+					 * (gfx.h); sin la bandera las identidades son 0. */
+					uint32_t a = in[i].pad, b = in[j].pad;
+					if (a && a < (1u << 25) && GFX_VGID_SERIAL(a) == GFX_VGID_SERIAL(b))
+						p[n].pad = GFX_VCLIP_ID(GFX_VGID_SERIAL(a), GFX_VGID_INDEX(a), GFX_VGID_INDEX(b));
+					n++;
+				}
 			}
 		}
 	}

@@ -69,7 +69,7 @@ static void same_formats(void)
 static void glyphs(void)
 {
 	/* Los íconos de filas que el menú dibuja con la fuente. */
-	const char *icons = "~□▶─A↓■▲●#?◀";
+	const char *icons = "~□▶─A↓■▲●#?◀►";
 	for (const char *p = icons; *p;) {
 		uint32_t cp = rsxkit_utf8_next(&p);
 		if (!rsxkit_font_has(cp)) {

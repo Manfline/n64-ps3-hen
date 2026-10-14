@@ -14,6 +14,15 @@
  * Todo con la emulación quieta (main.c: el hilo de emulación espera en el
  * límite del campo con la tarea del RSP recogida) y desde el hilo de
  * presentación.
+ *
+ * Guardar es en dos tiempos (docs/estados.md): con la emulación quieta se
+ * toma una foto (las secciones chicas y una copia de la RDRAM a búferes
+ * preasignados: unos milisegundos) y la emulación sigue; la RDRAM se
+ * comprime en un SPE libre (lib/spukit) y el archivo se escribe desde un
+ * hilo del PPE de baja prioridad (platform/ps3/bgjob.h). El resultado se
+ * recoge con states_poll. Cargar y mirar las ranuras esperan a que termine
+ * la escritura en curso. Sin búferes o sin hilo, todo ocurre ahí mismo
+ * (como antes, pero con la RDRAM comprimida si hay con qué).
  */
 #ifndef SALSA64_FRONTEND_STATES_H
 #define SALSA64_FRONTEND_STATES_H
@@ -27,10 +36,38 @@
 
 /* Tiempos de la última operación (µs) y su tamaño. */
 struct states_timing {
-	uint64_t us_total;  /* todo, desde la orden hasta el archivo cerrado */
+	uint64_t us_total;  /* lo que detuvo la emulación: la foto al guardar, todo al cargar */
 	uint64_t us_io;     /* de eso, leyendo o escribiendo el disco */
 	uint32_t bytes;
+	bool async;         /* guardar: el archivo se escribe en segundo plano (states_poll) */
 };
+
+/* Cómo terminó una escritura en segundo plano. */
+struct states_done {
+	bool ok;
+	unsigned slot;
+	char err[160];
+	uint64_t us_total;       /* del pedido al archivo renombrado */
+	uint64_t us_io;          /* de eso, en el disco (escribir, cerrar, renombrar) */
+	uint64_t us_spu;         /* comprimiendo en el SPE (suma de sus trabajos) */
+	uint32_t bytes;          /* tamaño del archivo */
+	uint32_t raw_bytes;      /* lo que habría pesado sin comprimir */
+	uint32_t blocks, stored; /* bloques de la RDRAM y los que fueron sin comprimir */
+	uint32_t spu_blocks;     /* los comprimidos por el SPE */
+	bool spu;                /* hay un SPE comprimiendo */
+};
+
+/* Reserva la foto (RDRAM + secciones) y arranca el hilo de escritura.
+ * Una vez por juego, fuera del bucle de emulación. false si no hubo memoria:
+ * guardar sigue funcionando, todo seguido y sin comprimir. */
+bool states_init(uint32_t rdram_size);
+/* Espera la escritura en curso (hasta wait_us) y suelta el hilo y el SPE. */
+void states_shutdown(uint64_t wait_us);
+/* ¿Hay una escritura en segundo plano en marcha? */
+bool states_busy(void);
+/* Si una escritura terminó desde la última llamada, la describe y devuelve
+ * true (una vez por escritura). Del hilo de presentación. */
+bool states_poll(struct states_done *d);
 
 /* ¿Hay un estado en la ranura para la ROM del bus? */
 bool states_slot_exists(const struct salsa64_bus *bus, unsigned slot);

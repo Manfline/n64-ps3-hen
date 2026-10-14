@@ -214,7 +214,7 @@ void osd_pause_menu_draw(const struct osd_pause_menu *m, float lw, float lh)
 void osd_image_menu_draw(const struct osd_image_menu *m, float lw, float lh)
 {
 	static const char *const labels[IM_ROWS] = { "Filtro", "Densidad", "Aspecto", "Recorte del borde", "Escala interna",
-						     "Guardar para este juego", "Volver" };
+						     "Interpolación", "Guardar para este juego", "Volver" };
 	const float sc = 1.75f, row_h = 38.0f, pad = 20.0f, w = 560.0f;
 	int rows = IM_ROWS - !m->density;  /* sin máscara no hay fila «Densidad» */
 	float h = 46.0f + rows * row_h + 26.0f + 34.0f + 2 * pad;
@@ -233,7 +233,7 @@ void osd_image_menu_draw(const struct osd_image_menu *m, float lw, float lh)
 		if (cur)
 			rsxkit_ui_rect(x + 8.0f, ry - 5.0f, w - 16.0f, row_h - 2.0f, 0x3A5A9AE0);
 		rsxkit_ui_text(x + pad, ry, tr(labels[i]), sc, cur ? 0xFFFFFFFF : dim ? 0x808080FF : 0xD8D8D8FF, 0);
-		if (i > IM_SCALE)
+		if (i > IM_INTERP)
 			continue;
 		snprintf(val, sizeof val, cur ? "◀ %s ▶" : "%s", tr(m->value[i]));
 		rsxkit_ui_text(x + w - pad - cells(val) * RSXKIT_FONT_W * sc, ry, val, sc, cur ? 0x9CC8FFFF : 0xA8B4C4FF, 0);

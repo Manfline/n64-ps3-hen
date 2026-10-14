@@ -67,4 +67,11 @@ void raster_reset(void);
 void raster_fb_stats(uint32_t *readbacks, uint32_t *primes, uint32_t *tex_rsx, uint32_t *tex_rdram,
 		     uint32_t *tex_decoded);
 
+/* Todo el estado (destinos, imágenes, profundidades, cuentas), para dibujar
+ * un cuadro inventado y volver (interp.c). */
+#include <stddef.h>
+size_t raster_state_size(void);
+void raster_state_save(void *buf);
+void raster_state_restore(const void *buf);
+
 #endif

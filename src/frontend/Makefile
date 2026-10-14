@@ -4,7 +4,7 @@ PROGRAM := salsa64
 TITLE   := Salsa64
 APPID   := SLSA00064
 SRCS    := main.c audio_out.c audio_sync.c menu.c osd.c osd_fps.c pacer.c padmap.c pausectl.c replay.c romlist.c savefile.c \
-           cheats.c cover.c download.c dlutil.c i18n.c namematch.c screenshot.c selftest.c selftest_audio.c selftest_gfx.c states.c \
+           cheats.c cover.c download.c dlutil.c i18n.c namematch.c screenshot.c selftest.c selftest_audio.c selftest_gfx.c states.c cajanegra.c \
            version.c filters/crt_params.c filters/filters.c
 # Filtros de la presentación (filters/): fragment programs en Cg compilados
 # con cgcomp. Van en fp32: cgcomp pide -fastprecision a Cg, que baja a fp16
@@ -17,7 +17,7 @@ R       := ../..
 ICON0   := $(R)/assets/ps3/ICON0.PNG
 PIC1    := $(R)/assets/ps3/PIC1.PNG
 COMMON  := src/platform/ps3/log.c src/platform/ps3/rec_cache.c src/platform/ps3/fastmem.c src/platform/ps3/gfx_spu.c \
-           src/platform/ps3/audio_spu.c src/platform/ps3/jpeg_spu.c src/platform/ps3/rsp_spu.c src/rdp/rdp.c src/rdp/targets.c \
+           src/platform/ps3/audio_spu.c src/platform/ps3/jpeg_spu.c src/platform/ps3/rsp_spu.c src/platform/ps3/bgjob.c src/platform/ps3/bgio.c src/rdp/rdp.c src/rdp/targets.c src/rdp/vmatch.c src/rdp/gfxdump.c src/rdp/blackbox.c \
            $(patsubst $(R)/%,%,$(wildcard $(R)/src/core/*.c $(R)/src/cpu/*.c $(R)/src/rsp/gfx/*.c $(R)/src/rsp/audio/*.c $(R)/src/rsp/jpeg/*.c \
                                           $(R)/src/rsp/lle/*.c))
 DATA    := vitest_rom gfxtest_rom audiotest_rom
@@ -32,7 +32,7 @@ SPUKIT  := 1
 # (otro SPE): src/rsp/jpeg en 4 carriles (jpeg_v.c) con el bucle de DMA de
 # src/spu/jpeg. CRT con cable (dos SPEs, con `filtros-spe`): la señal y la
 # decodificación de S-Video y compuesto (src/spu/crt).
-SPU_PROGS := gfx audio rsp jpeg crt
+SPU_PROGS := gfx audio rsp jpeg crt lz
 gfx_SRCS  := $(R)/src/spu/gfx/main.c $(R)/src/spu/gfx/io_spu.c \
              $(filter-out %/io_mem.c %/sync.c %/state.c,$(wildcard $(R)/src/rsp/gfx/*.c))
 audio_SRCS := $(R)/src/spu/audio/main.c $(R)/src/spu/audio/io_spu.c \
@@ -41,6 +41,8 @@ rsp_SRCS   := $(R)/src/spu/rsp/main.c $(R)/src/spu/rsp/io_spu.c \
               $(filter-out %/core.c,$(wildcard $(R)/src/rsp/lle/*.c))
 jpeg_SRCS  := $(R)/src/spu/jpeg/main.c $(R)/src/rsp/jpeg/jpeg.c $(R)/src/rsp/jpeg/jpeg_v.c
 crt_SRCS   := $(R)/src/spu/crt/main.c
+# Compresor LZ de lib/spukit (estados guardados, docs/estados.md): bloques de 64 KB.
+lz_SRCS    := $(R)/lib/spukit/spu/lz.c
 # Pila del SPE 0 (src/spu/gfx/main.c): el enlace falla si entre la cadena de
 # llamadas más honda y el final del programa quedan menos de 1,5 KB. Las
 # variantes de Rare se llaman por puntero desde su familia; lo demás que
@@ -99,9 +101,9 @@ $(OBJ)/spu/src/rsp/gfx/s2dex.c.o: SPU_CFLAGS += -Os
 # texturas van en geom.c y tmem.c), también: lo que ahorra paga el TEXRECT
 # dentro del tramo S2DEX (el cielo de Kirby 64).
 $(OBJ)/spu/src/rsp/gfx/f3dpd.c.o: SPU_CFLAGS += -Os
-# El recorrido de la lista (dl.c), también: 370 bytes menos de código; paga el
-# cambio de microcódigo a mitad de lista (F-Zero X). Lo que corre por comando
-# es una función corta (gfx_dl_next).
-$(OBJ)/spu/src/rsp/gfx/dl.c.o: SPU_CFLAGS += -Os
+# Lo de la interpolación de cuadros (vgroup.c), también: no le quita local
+# store ni pila a la HLE.
+$(OBJ)/spu/src/rsp/gfx/vgroup.c.o: SPU_CFLAGS += -Os
 # make no ve un cambio de banderas: que se recompilen si cambia este archivo.
-$(OBJ)/spu/src/rsp/gfx/combine.c.o $(OBJ)/spu/src/rsp/gfx/s2dex.c.o $(OBJ)/spu/src/rsp/gfx/f3dpd.c.o $(OBJ)/spu/src/rsp/gfx/dl.c.o: Makefile
+$(OBJ)/spu/src/rsp/gfx/combine.c.o $(OBJ)/spu/src/rsp/gfx/s2dex.c.o $(OBJ)/spu/src/rsp/gfx/f3dpd.c.o \
+$(OBJ)/spu/src/rsp/gfx/vgroup.c.o: Makefile

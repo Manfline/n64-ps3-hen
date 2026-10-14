@@ -68,6 +68,29 @@ cada ~300 tareas, de 9 dibujos por tarea.
   tomas medidas, pero no se buscaron a propósito).
 - **Falta**: probar el paquete en la PS3 (no se armó: lo pide main).
 
+## 2026-10-13 — Interpolación de cuadros por geometría: 60 campos por segundo en juegos a 20 o 30 (rama `kind-dijkstra-c790f9`, paquetes SLSA00116 «Salsa64 interp 1» a «interp 8»)
+
+La HLE deja la identidad de cada grupo de vértices (G_VTX) y sus
+coordenadas de recorte; el PPE empareja los grupos de un cuadro con los del
+anterior (src/rdp/vmatch.c) y en los campos entre dos cuadros redibuja la
+tarea con un vertex program que interpola las cuatro coordenadas. Opción
+«Interpolación» en Opciones, por juego y en la pausa («Imagen»), apagada
+por omisión (apagada, gfxtest igual byte a byte a main). En la PS3, a 720p
+y 3×, Zelda «mejora mucho»; a 5× el RSX no alcanza. Cada problema que vio
+el autor se reprodujo en el host con sus estados y sus entradas sacadas del
+log: el HUD (hash del contenido en el SPE, ortográficos sin interpolar), el
+agua (vértices que cruzan la cámara; profundidad interpolada), Mario sin
+intermedios (la caché de texturas), Link al darse vuelta (objetos todo o
+nada, giros que aplastan), el entorno con Z (corte por giro de cámara) y
+los destellos (partículas que cruzan el plano cercano).
+
+Falta: estimar la cámara entre cuadros (slerp en vez del corte con Z),
+bajar los ~2 ms del PPE por tarea, avisar en «Imagen» a 5×, notas de
+vmatch en la caja negra. Por confirmar con interp 7/8: el giro con Z y los
+destellos. Detalle, pendientes y la lista de commits para la v0.2.6
+(`--gc-sections` primero) en docs/interpolacion.md, «Estado al
+2026-10-13 y lo que falta».
+
 ## 2026-10-13 — Comparación con ares: lo que queda (rama `suspicious-saha-fe2758`)
 
 Cerrado en esta rama: la herramienta `salsa64-run --ares`, el umbral de

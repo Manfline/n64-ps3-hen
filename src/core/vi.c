@@ -16,8 +16,8 @@
  * con el reloj del VI de cada tipo de TV (n64brew.dev: Video Interface):
  * NTSC 48,681812 MHz, PAL 49,656530 MHz, MPAL 48,628322 MHz. NTSC
  * progresivo da 1 567 041 ciclos por campo (59,83 Hz). Mientras el programa
- * no programa VI_V_SYNC ni VI_H_SYNC se usan los valores estándar del tipo
- * de TV. Un cambio de esos registros vale desde el campo siguiente; uno de
+ * no programa VI_V_SYNC ni VI_H_SYNC (o si VI_V_SYNC no llega a 256 medias
+ * líneas) se usan los valores estándar del tipo de TV. Un cambio de esos registros vale desde el campo siguiente; uno de
  * VI_V_INTR, desde el campo en curso si la línea aún no pasó.
  *
  * Todo en enteros para que el host y la PS3 den los mismos ciclos.
@@ -59,7 +59,10 @@ static void field_timing(struct salsa64_vi *vi)
 	enum salsa64_tv_type tv = tv_of(vi);
 	uint32_t v_sync = vi->regs[SALSA64_VI_V_SYNC] & 0x3FF;
 	uint32_t h_sync = vi->regs[SALSA64_VI_H_SYNC] & 0xFFF;
-	if (v_sync < 2)
+	/* Menos de 256 medias líneas no es un modo de TV: hacks hechos para
+	 * emuladores (Super Mario Odyssey 64 deja 0x34) programan valores así
+	 * y cuentan con campos de 60 Hz, como en Project64 o ares. */
+	if (v_sync < 0x100)
 		v_sync = tv_timing[tv].v_sync;
 	if (h_sync == 0)
 		h_sync = tv_timing[tv].h_sync;

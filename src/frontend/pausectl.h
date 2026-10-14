@@ -16,8 +16,9 @@
  *     START o START + SELECT otra vez lo cierran. «Salir» pide confirmación
  *     en el cuadro de abajo si `confirm`, y si no sale.
  *   - «Imagen» abre su página (IM_*): Filtro, Densidad (solo con
- *     `image_density`: el CRT de máscara), Aspecto, Recorte y Escala
- *     interna (←→ o × cambian el valor: image_do con image_arg ±1),
+ *     `image_density`: el CRT de máscara), Aspecto, Recorte, Escala
+ *     interna e Interpolación (←→ o × cambian el valor: image_do con
+ *     image_arg ±1),
  *     «Guardar para este juego» (×) y Volver. ○ o «Volver» regresan al menú
  *     de pausa; START o START + SELECT cierran todo y el juego sigue.
  *   - Con el cuadro a la vista: × sale; ○ o START + SELECT otra vez lo
@@ -49,7 +50,7 @@
 
 /* Filas del menú de pausa y de su página «Imagen». */
 enum { PM_RESUME, PM_SAVE, PM_LOAD, PM_SLOT, PM_CHEATS, PM_IMAGE, PM_FPS, PM_EXIT, PM_ROWS };
-enum { IM_FILTER, IM_DENSITY, IM_ASPECT, IM_CROP, IM_SCALE, IM_SAVE, IM_BACK, IM_ROWS };
+enum { IM_FILTER, IM_DENSITY, IM_ASPECT, IM_CROP, IM_SCALE, IM_INTERP, IM_SAVE, IM_BACK, IM_ROWS };
 
 enum pausectl_action {
 	PAUSECTL_NONE,
@@ -68,7 +69,7 @@ struct pausectl {
 	bool menu;
 	int menu_sel, menu_do, menu_arg;
 	/* Página «Imagen»: image_sel es la fila (IM_*); image_do, lo que se pidió
-	 * (IM_FILTER … IM_SCALE con image_arg ±1, o IM_SAVE; -1 nada: quien
+	 * (IM_FILTER … IM_INTERP con image_arg ±1, o IM_SAVE; -1 nada: quien
 	 * llama lo lee y lo baja). */
 	bool image;
 	int image_sel, image_do, image_arg;

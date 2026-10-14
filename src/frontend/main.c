@@ -194,6 +194,8 @@
 #include "selftest_audio.h"
 #include "selftest_gfx.h"
 #include "states.h"
+#include "cajanegra.h"
+#include "rdp/blackbox.h"
 #include "version.h"
 #include "vitest_rom_bin.h"
 
@@ -223,6 +225,11 @@ SYS_PROCESS_PARAM(1001, 0x100000);
  * (como hasta v0.1.0); los mandos siguen sueltos y el latido mira. */
 #define NO_PAUSE_PATH SALSA64_DATA_DIR "/sin-pausa"
 #define JPEG_PPE_PATH SALSA64_DATA_DIR "/jpeg-ppe"  /* diagnóstico: la tarea JPEG en el PPE */
+/* Prueba de la interpolación por geometría (SALSA64_INTERP_FIXED): con el
+ * archivo, cada tarea se empareja con la anterior y se dibuja en la fracción
+ * «t» de su contenido (por omisión 1: igual que sin interpolar; 0: un cuadro
+ * atrás), sin los campos intermedios, pase lo que pase con la opción. */
+#define INTERP_TEST_PATH SALSA64_DATA_DIR "/interp-prueba"
 /* Filtro de la presentación (frontend/filters): el de menu.cfg («filtro =
  * …»). Con el archivo `filtro` (una clave, p. ej. «crt-mascara»), ese,
  * también en las pruebas automáticas; con `filtros-ciclo`, todos por turnos
@@ -489,6 +496,7 @@ struct field_msg {
 	int32_t snap;               /* ranura con la copia del VI, o -1 */
 	uint32_t flags;
 	volatile uint32_t skip;     /* emulación lo pone si encoló uno más nuevo */
+	uint32_t vi[SALSA64_VI_NREGS];  /* registros del VI al terminar el campo (caja negra) */
 };
 static struct field_msg field_q[FIELD_QUEUE];
 static volatile uint32_t field_head, field_tail;  /* head la mueve emulación; tail, presentación */
@@ -1014,11 +1022,12 @@ static void cheat_panel_events(void)
 /* Atajos dentro del juego, con SELECT (la N64 no lo tiene; START + SELECT
  * vuelve al menú): + R1 guarda el estado en la ranura actual, + L1 lo
  * carga, + izquierda o derecha de la cruceta cambia de ranura, + △
- * muestra u oculta el contador de velocidad y + R2 vuelca la salida de la
- * HLE gráfica con la captura del cuadro. Mientras SELECT está apretado
+ * muestra u oculta el contador de velocidad, + R2 vuelca la salida de la
+ * HLE gráfica con la captura del cuadro y + L2 escribe la caja negra (el
+ * anillo de las últimas tareas y campos; cajanegra.h). Mientras SELECT está apretado
  * esos botones no llegan al juego. Devuelve los botones para el mapeo. */
 #define COMBO_MASK (1u << SALSA64_DS3_R1 | 1u << SALSA64_DS3_L1 | 1u << SALSA64_DS3_LEFT | \
-		    1u << SALSA64_DS3_RIGHT | 1u << SALSA64_DS3_TRIANGLE | 1u << SALSA64_DS3_R2)
+		    1u << SALSA64_DS3_RIGHT | 1u << SALSA64_DS3_TRIANGLE | 1u << SALSA64_DS3_R2 | 1u << SALSA64_DS3_L2)
 
 static uint32_t pad_combos(unsigned port, uint32_t b)
 {
@@ -1043,6 +1052,8 @@ static uint32_t pad_combos(unsigned port, uint32_t b)
 	}
 	if (rise & 1u << SALSA64_DS3_R2)
 		dump_now = true;
+	if (rise & 1u << SALSA64_DS3_L2)
+		cajanegra_request();
 	return b & ~COMBO_MASK;
 }
 
@@ -1419,6 +1430,7 @@ static void post_field(uint32_t flags)
 	tasks_visible = m.tasks;
 	m.snap = -1;
 	m.flags = flags;
+	memcpy(m.vi, n64.bus.vi.regs, sizeof m.vi);
 
 	if (salsa64_vi_frame(&n64.bus, &m.f) && m.f.width <= FB_MAX_W && m.f.height <= FB_MAX_H) {
 		salsa64_rdp_vi(m.f.origin, m.f.width);  /* qué color images son framebuffers */
@@ -2086,11 +2098,13 @@ static struct salsa64_vi_frame still_f;  /* lo último presentado, para su recor
  * global de cada uno (Opciones) y los ajustes del juego como están en
  * juegos/<ROM>.cfg. Sin `source` (las pruebas) no se guardan. */
 static struct {
-	int aspect, filter, crop, scale, density;
-	int g_aspect, g_filter, g_crop, g_scale, g_density;
+	int aspect, filter, crop, scale, density, interp;
+	int g_aspect, g_filter, g_crop, g_scale, g_density, g_interp;
 	struct menu_game game;
 	const char *source;
 } img;
+/* La «t» de INTERP_TEST_PATH (al abrir el juego), o < 0 sin el archivo. */
+static float interp_test_t = -1.0f;
 static int rdp_scale_req;  /* escala interna pedida al RDP ahora (0: automática) */
 static struct menu_settings video_cfg;  /* video y escala que corren (video.cfg al arrancar o lo último aplicado) */
 static int scale_wanted(void);
@@ -2118,7 +2132,7 @@ static void present_overlay(uint64_t now)
 		struct osd_image_menu im = {
 			pause_ctl.image_sel,
 			{ menu_filter_name(img.filter), menu_density_name(img.density), menu_aspect_name(img.aspect),
-			  menu_overscan_name(img.crop), scale_label(sbuf, sizeof sbuf) },
+			  menu_overscan_name(img.crop), scale_label(sbuf, sizeof sbuf), menu_interp_name(img.interp) },
 			menu_filter_has_density(img.filter),
 			scale_wanted() != rdp_scale_req, img.source != NULL, menu_filter_credit(img.filter),
 		};
@@ -2129,10 +2143,21 @@ static void present_overlay(uint64_t now)
 		osd_cheats_draw(&game_cheats, pause_ctl.panel_sel, ui_lw, ui_lh);
 }
 
+/* Caja negra: lo que pasó con este campo (docs/cajanegra.md). */
+static void cj_note_field(const struct field_msg *m, uint32_t flags)
+{
+	if (!cajanegra_enabled())
+		return;
+	struct cajanegra_field f = { m->field, m->tasks, flags, (uint32_t)m->f.type, m->f.origin, m->f.width,
+				     m->f.height, m->f.stride, m->f.bpp, m->vi, n64.bus.vi.fields - m->field };
+	cajanegra_field(&f);
+}
+
 /* Presenta (o salta) un campo encolado. */
 static void present_field(const struct field_msg *m, uint64_t now)
 {
 	h1_flush(m->tasks);  /* las tareas de este campo, no las del siguiente */
+	cajanegra_set_field(m->field);
 	if (m->f.width && m->f.origin != pres.last_origin) {
 		pres.last_origin = m->f.origin;
 		pres.game_frames++;
@@ -2141,6 +2166,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		if (m->snap >= 0)
 			snap_cas(m->snap, SNAP_QUEUED, SNAP_FREE);
 		pres.skipped++;
+		cj_note_field(m, BB_FLD_SKIPPED);
 		return;
 	}
 	int slot = m->snap;
@@ -2150,6 +2176,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		if (!have) {
 			/* Emulación la soltó al encolar un campo más nuevo. */
 			pres.skipped++;
+			cj_note_field(m, BB_FLD_SKIPPED);
 			return;
 		}
 	}
@@ -2176,6 +2203,15 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		if (salsa64_rdp_present(&m->f, m->field, &pres.view, &crop, &r)) {
 			pres.rsx_frames++;
 			pres.still = STILL_RSX;
+			if (cajanegra_enabled()) {
+				/* Intermedio o repetido: la caja negra lo anota con su t, su k y
+				 * las dos tareas (para repetirlo en el host). */
+				struct salsa64_rdp_field_info fi;
+				salsa64_rdp_field_info(&fi);
+				if (fi.kind != SALSA64_FIELD_TRUE)
+					cajanegra_field_interp(fi.kind == SALSA64_FIELD_INTERP ? BB_KIND_INTERP : BB_KIND_REPEAT, fi.t,
+							       fi.k, fi.task, fi.prev_task);
+			}
 			flt.pending = filt && filter_source(true, &shown) && !filter_announce(now);
 			if (filt && !flt.pending)
 				salsa64_rdp_present_again(NULL, NULL, &r);
@@ -2288,6 +2324,8 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	pres.us_present += t1 - t0;
 	pres.us_flip += t2 - t1;
 	pres.presented++;
+	cj_note_field(m, BB_FLD_SHOWN | (pres.still == STILL_RSX ? BB_FLD_RSX : pres.still == STILL_FB ? BB_FLD_RDRAM : 0) |
+				 (m->f.width ? 0 : BB_FLD_BLANK));
 
 	if (exit_field && m->field >= exit_field) {
 		salsa64_log("salida en el campo %u (capturas)", m->field);
@@ -2553,6 +2591,35 @@ static void stats(uint64_t now)
 			    (double)(rs.draws_generated - sw.rdp0.draws_generated) / tasks, rs.fp_programs,
 			    rs.fp_generated - sw.rdp0.fp_generated, rs.fp_evictions - sw.rdp0.fp_evictions,
 			    (double)(rs.draws_edges - sw.rdp0.draws_edges) / tasks);
+		uint32_t itasks = rs.interp_tasks - sw.rdp0.interp_tasks;
+		if (itasks) {
+			uint32_t iv = rs.interp_vertices - sw.rdp0.interp_vertices;
+			uint32_t ip = rs.interp_paired - sw.rdp0.interp_paired;
+			uint32_t ifl = rs.interp_fields - sw.rdp0.interp_fields;
+			salsa64_log("gfx: interpolación: %u tareas con anterior (%u cortes, %u de ellos por un giro de la "
+				    "cámara, %u sin lugar en las tablas, %u con "
+				    "texturas de un destino), vértices de salida con pareja %.1f %% (%.0f por tarea), %u grupos "
+				    "por el contenido, %u rechazados (saltaron, se deformaron o se aplastarían), %u sin "
+				    "interpolar por su objeto o su malla, %u interpolados con su objeto, %u reordenados; "
+				    "emparejar %.3f "
+				    "ms del PPE por tarea (armar %.3f, emparejar %.3f, posiciones %.3f)",
+				    itasks, rs.interp_cuts - sw.rdp0.interp_cuts,
+				    rs.interp_cuts_camera - sw.rdp0.interp_cuts_camera, rs.interp_full - sw.rdp0.interp_full,
+				    rs.interp_fbtex - sw.rdp0.interp_fbtex, iv ? 100.0 * ip / iv : 0.0, (double)iv / itasks,
+				    rs.interp_content - sw.rdp0.interp_content, rs.interp_rejected - sw.rdp0.interp_rejected,
+				    rs.interp_atomic - sw.rdp0.interp_atomic, rs.interp_kept - sw.rdp0.interp_kept,
+				    rs.interp_reordered - sw.rdp0.interp_reordered, (rs.us_interp - sw.rdp0.us_interp) / 1e3 / tasks,
+				    (rs.us_interp_build - sw.rdp0.us_interp_build) / 1e3 / tasks,
+				    (rs.us_interp_pair - sw.rdp0.us_interp_pair) / 1e3 / tasks,
+				    (rs.us_interp_prev - sw.rdp0.us_interp_prev) / 1e3 / tasks);
+			salsa64_log("gfx: interpolación: %u campos intermedios (%.1f/s), %u enteros (cuadro sin interpolar), %u "
+				    "repetidos (no llegaron a tiempo: %u su juego de búferes ya en uso, %u la caché, %u sin "
+				    "superficie); redibujar %.3f ms del PPE por campo intermedio",
+				    ifl, ifl * 1e6 / dt, rs.interp_plain - sw.rdp0.interp_plain,
+				    rs.interp_repeated - sw.rdp0.interp_repeated, rs.interp_rep_set - sw.rdp0.interp_rep_set,
+				    rs.interp_rep_cache - sw.rdp0.interp_rep_cache, rs.interp_rep_surf - sw.rdp0.interp_rep_surf,
+				    ifl ? (rs.us_interp_draw - sw.rdp0.us_interp_draw) / 1e3 / ifl : 0.0);
+		}
 		uint32_t rb = rs.readbacks - sw.rdp0.readbacks, rbw = rs.readback_waits - sw.rdp0.readback_waits;
 		uint32_t trsx = rs.tex_rsx - sw.rdp0.tex_rsx, trd = rs.tex_rdram - sw.rdp0.tex_rdram;
 		uint32_t tself = rs.tex_self - sw.rdp0.tex_self, primes = rs.primes - sw.rdp0.primes;
@@ -2621,6 +2688,11 @@ static void stats(uint64_t now)
 			    (unsigned long long)st->vt_probes, (unsigned long long)st->fr_dep,
 			    (unsigned long long)st->fr_twins, (unsigned long long)st->fr_exits,
 			    (unsigned long long)st->cu1_exits, (unsigned long long)st->interp_steps);
+		if (rec.opts & SALSA64_REC_OPT_JTC_STATS) {
+			uint64_t h = rec.jtc_ctr[0], m = rec.jtc_ctr[1];  /* uint32_t: dan la vuelta a los 4 G */
+			salsa64_log("caché de destinos de JR: %llu aciertos, %llu fallos (%.1f %% de acierto)",
+				    (unsigned long long)h, (unsigned long long)m, h + m ? 100.0 * (double)h / (double)(h + m) : 0.0);
+		}
 		if (rec.fastmem || st->fm_off) {
 			uint32_t fa, fu, fs;
 			salsa64_ps3_fastmem_counts(&fa, &fu, &fs);
@@ -2720,9 +2792,14 @@ static void state_barrier(void)
 		ok = states_save(&n64, slot, &t, err, sizeof err);
 		if (ok) {
 			osd_notice(sysGetSystemTime(), "Estado guardado en ranura %u", slot);
-			salsa64_log("estado: guardado en la ranura %u (campo %u): %.1f ms, de ellos %.1f ms escribiendo; %u KB; "
-				    "miniatura %.1f ms", slot, field0, t.us_total / 1e3, t.us_io / 1e3, t.bytes >> 10,
-				    states_thumb_us() / 1e3);
+			if (t.async)
+				salsa64_log("estado: ranura %u (campo %u): emulación detenida %.1f ms (la foto), miniatura %.1f ms; "
+					    "el archivo se escribe en segundo plano", slot, field0, t.us_total / 1e3,
+					    states_thumb_us() / 1e3);
+			else
+				salsa64_log("estado: guardado en la ranura %u (campo %u): %.1f ms, de ellos %.1f ms escribiendo; %u KB; "
+					    "miniatura %.1f ms", slot, field0, t.us_total / 1e3, t.us_io / 1e3, t.bytes >> 10,
+					    states_thumb_us() / 1e3);
 		} else {
 			osd_notice(sysGetSystemTime(), "No se pudo guardar: %s", err);
 			salsa64_log("estado: FALLO al guardar en la ranura %u: %s", slot, err);
@@ -2761,6 +2838,24 @@ static void state_barrier(void)
 	state_done++;
 	lwsync();
 	state_req = STATE_NONE;
+}
+
+/* Una escritura de estado en segundo plano terminó: al log y, si falló, al
+ * aviso en pantalla (el de «Estado guardado» salió al tomar la foto). */
+static void state_bg_poll(void)
+{
+	struct states_done d;
+	if (!states_poll(&d))
+		return;
+	if (d.ok) {
+		salsa64_log("estado: ranura %u escrita en segundo plano: %.1f ms de punta a punta, %.1f ms en el disco, "
+			    "%.1f ms del SPE comprimiendo (%s); %u KB de %u KB (%.1f:1), %u bloques (%u sin comprimir, %u en el SPE)",
+			    d.slot, d.us_total / 1e3, d.us_io / 1e3, d.us_spu / 1e3, d.spu ? "SPE" : "PPE", d.bytes >> 10,
+			    d.raw_bytes >> 10, d.bytes ? (double)d.raw_bytes / d.bytes : 0.0, d.blocks, d.stored, d.spu_blocks);
+	} else {
+		osd_notice(sysGetSystemTime(), "No se pudo guardar: %s", d.err);
+		salsa64_log("estado: FALLO al escribir la ranura %u en segundo plano: %s", d.slot, d.err);
+	}
 }
 
 static void state_test_step(void)
@@ -2950,8 +3045,24 @@ static const char *scale_label(char *buf, size_t n)
 	return scale_capped() ? "3× (tope con CRT)" : menu_scale_name(img.scale, video_cfg.resolution, buf, n);
 }
 
-/* Lo de img a la presentación: vista (aspecto y filtro), líneas de barrido
- * y recorte. La escala va aparte (rdp_scale_set). */
+/* La interpolación de img (o la de la prueba, INTERP_TEST_PATH) al RDP. La
+ * primera vez que se enciende reserva sus tablas: al abrir el juego o con
+ * la emulación en pausa. */
+static void interp_apply(void)
+{
+	int mode = img.interp == MENU_INTERP_GEOMETRY ? SALSA64_INTERP_FIELDS : SALSA64_INTERP_OFF;
+	float t = 1.0f;
+	if (interp_test_t >= 0.0f)
+		mode = SALSA64_INTERP_FIXED, t = interp_test_t;
+	if (salsa64_rdp_interp(mode, t) != 0) {
+		salsa64_log("interpolación: sin memoria para sus tablas, apagada");
+		img.interp = MENU_INTERP_OFF;
+		salsa64_rdp_interp(SALSA64_INTERP_OFF, 1.0f);
+	}
+}
+
+/* Lo de img a la presentación: vista (aspecto y filtro), líneas de barrido,
+ * recorte e interpolación. La escala va aparte (rdp_scale_set). */
 static void view_apply(void)
 {
 	pres.view.aspect = img.aspect == MENU_ASPECT_16_9 ? 16.0f / 9.0f : 4.0f / 3.0f;
@@ -2965,6 +3076,7 @@ static void view_apply(void)
 		overscan.left = overscan.right = h;
 		overscan.top = overscan.bottom = h * 3 / 4;
 	}
+	interp_apply();
 }
 
 static void view_log(const char *what)
@@ -2972,12 +3084,13 @@ static void view_log(const char *what)
 	char sc[16] = "automática";
 	if (img.scale)
 		snprintf(sc, sizeof sc, "%d×", img.scale);
-	salsa64_log("imagen: %s, filtro %s%s%s, recorte %u %u %u %u, escala %s%s%s",
+	salsa64_log("imagen: %s, filtro %s%s%s, recorte %u %u %u %u, escala %s%s%s%s",
 		    img.aspect == MENU_ASPECT_16_9 ? "16:9 estirada" : "4:3", menu_filter_name(img.filter),
 		    menu_filter_has_density(img.filter) ? ", densidad " : "",
 		    menu_filter_has_density(img.filter) ? (img.density == MENU_DENSITY_FINE ? "fina" : "normal") : "",
 		    overscan.left, overscan.right, overscan.top, overscan.bottom, sc,
-		    scale_capped() ? " (con el CRT, 3×)" : "", what);
+		    scale_capped() ? " (con el CRT, 3×)" : "",
+		    img.interp == MENU_INTERP_GEOMETRY ? ", interpolación por geometría" : "", what);
 }
 
 /* Aspecto, filtro, recorte y escala del juego: lo suyo (juegos/) o, si no,
@@ -3005,6 +3118,7 @@ static void load_view(const char *source)
 		g.scale = scale;
 		s.aspect = MENU_ASPECT_4_3;
 		s.filter = MENU_FILTER_SMOOTH;
+		s.interp = MENU_INTERP_OFF;
 		img.source = NULL;
 	}
 	img.g_aspect = s.aspect;
@@ -3012,12 +3126,16 @@ static void load_view(const char *source)
 	img.g_crop = s.overscan;
 	img.g_scale = s.scale;
 	img.g_density = s.density;
+	img.g_interp = s.interp;
 	menu_game_effective(&s, &g, &img.aspect, &img.filter, &img.crop, &img.scale);
 	img.density = menu_game_density(&s, &g);
+	img.interp = menu_game_interp(&s, &g);
 	view_apply();
 	scan_r.w = 0;
 	scan_lines = 0;
-	view_log(g.aspect >= 0 || g.filter >= 0 || g.overscan >= 0 || g.scale >= 0 ? " (con ajustes de este juego)" : "");
+	view_log(g.aspect >= 0 || g.filter >= 0 || g.overscan >= 0 || g.scale >= 0 || g.interp >= 0
+			 ? " (con ajustes de este juego)"
+			 : "");
 }
 
 /* «Guardar para este juego»: en juegos/<ROM>.cfg lo que se ve. Lo que
@@ -3036,11 +3154,13 @@ static void image_save(void)
 	g.overscan = img.crop > MENU_OVERSCAN_WIDE || (img.crop == img.g_crop && img.game.overscan < 0) ? -1 : img.crop;
 	g.scale = img.scale == img.g_scale && img.game.scale < 0 ? -1 : img.scale;
 	g.density = img.density == img.g_density && img.game.density < 0 ? -1 : img.density;
+	g.interp = img.interp == img.g_interp && img.game.interp < 0 ? -1 : img.interp;
 	bool ok = game_cfg_write(img.source, &g);
 	if (ok)
 		img.game = g;
-	salsa64_log("imagen: ajustes de este juego %s (aspecto %d, filtro %d, densidad %d, recorte %d, escala %d)",
-		    ok ? "guardados" : "NO guardados", g.aspect, g.filter, g.density, g.overscan, g.scale);
+	salsa64_log("imagen: ajustes de este juego %s (aspecto %d, filtro %d, densidad %d, recorte %d, escala %d, "
+		    "interpolación %d)", ok ? "guardados" : "NO guardados", g.aspect, g.filter, g.density, g.overscan,
+		    g.scale, g.interp);
 	osd_notice(now, ok ? "Ajustes guardados para este juego" : "No se pudieron guardar los ajustes");
 }
 
@@ -3072,6 +3192,9 @@ static void image_events(void)
 	case IM_SCALE:
 		img.scale = (img.scale + k + MENU_SCALE_MAX + 1) % (MENU_SCALE_MAX + 1);
 		return;  /* al seguir */
+	case IM_INTERP:
+		img.interp = (img.interp + k + MENU_INTERPS) % MENU_INTERPS;
+		break;
 	case IM_SAVE:
 		image_save();
 		return;
@@ -3405,6 +3528,8 @@ static void forced_exit(const char *why)
 		    why, QUIT_WAIT_US / 1000000, (unsigned long long)n64.cpu.cur_pc, (unsigned long long)n64.cpu.cycles,
 		    n64.cpu.rec_mark, n64.cpu.rec_cur);
 	audio_out_shutdown();
+	cajanegra_shutdown(3000000);
+	states_shutdown(3000000);
 	if (jpeg_on_spu)
 		salsa64_jpeg_spu_shutdown(&jpeg_spu);
 	if (lle_mode != SALSA64_LLE_OFF)
@@ -3418,6 +3543,8 @@ static void forced_exit(const char *why)
 
 static void game_close(void)
 {
+	cajanegra_shutdown(10000000);
+	states_shutdown(10000000);  /* un estado a medio escribir se termina antes de soltar nada */
 	salsa64_filters_release();
 	salsa64_log("cierre: emulación detenida tras %u campos (%u emulados, %u descartados por la cola, %u sin ranura)",
 		    n64.bus.vi.fields, emu_stats.fields, emu_stats.dropped, emu_stats.no_slot);
@@ -3503,6 +3630,8 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	salsa64_rom_normalize(rom, rom_size);
 	memset(rdram, 0, SALSA64_RDRAM_MAX);  /* cada juego arranca igual, venga después del que venga */
 	salsa64_n64_init(&n64, rdram, SALSA64_RDRAM_MAX);
+	states_init(SALSA64_RDRAM_MAX);  /* la foto de los estados y su hilo de escritura (docs/estados.md) */
+	cajanegra_init(&n64.bus);        /* el anillo de la caja negra, si hay archivo cajanegra (docs/cajanegra.md) */
 	n64.bus.rdram_written = front_rdram_written;
 	salsa64_bus_set_isviewer(&n64.bus, isv_buf, isv_out, NULL);
 
@@ -3595,6 +3724,10 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		rec.opts |= SALSA64_REC_OPT_NO_GROUP;
 	if (salsa64_ps3_rec_fpu_inline_wanted())
 		rec.opts |= SALSA64_REC_OPT_FPU_INLINE;
+	if (salsa64_ps3_rec_jtc_wanted())
+		rec.opts |= SALSA64_REC_OPT_JTC;
+	if (salsa64_ps3_rec_jtc_stats_wanted())
+		rec.opts |= SALSA64_REC_OPT_JTC_STATS;
 	rec.prof = salsa64_ps3_rec_prof_wanted() ? &rec_prof : NULL;
 	{
 		bool sites;
@@ -3623,7 +3756,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		salsa64_log("páginas: RDRAM %u KB, rec %u KB, n64 %u KB, caché de código %u KB, pila %u KB (0 = sin dato)",
 			    page_kb(rdram), page_kb(&rec), page_kb(&n64), page_kb(salsa64_ps3_rec_cache()),
 			    page_kb(__builtin_frame_address(0)));
-		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x%s%s%s%s%s%s%s%s%s",
+		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x%s%s%s%s%s%s%s%s%s%s",
 			    SALSA64_REC_CACHE_BYTES >> 20, salsa64_ps3_rec_cache(), rec.calls_near ? "con bl" : "por mtctr",
 			    rec.opts, rec.prof ? ", con perfil" : "",
 			    rec.opts & SALSA64_REC_OPT_LEGACY ? ", camino viejo (jit-viejo)" : "",
@@ -3633,6 +3766,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 			    rec.opts & SALSA64_REC_OPT_WIDE ? ", código ancho (jit-ancho)" : "",
 			    rec.fastmem ? ", fastmem (jit-fastmem)" : rec.opts & SALSA64_REC_OPT_FASTMEM ? ", fastmem APAGADO" : "",
 			    rec.opts & SALSA64_REC_OPT_NO_GROUP ? ", sin base en caché (jit-sin-grupos)" : "",
+			    rec.opts & SALSA64_REC_OPT_JTC ? (rec.opts & SALSA64_REC_OPT_JTC_STATS ? ", caché de destinos con cuentas (jit-destinos-cuentas)" : ", caché de destinos") : ", sin caché de destinos (jit-sin-destinos)",
 			    rec.opts & SALSA64_REC_OPT_FPU_INLINE ? ", FPU en línea (jit-fpu-en-linea)" : rec.fpu_rtn_ok ? "" : ", FPU en línea (las rutinas no cupieron)");
 	}
 	profile_open(rom);
@@ -3665,6 +3799,17 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 								"render a textura y copias a la RDRAM");
 	}
 	{
+		FILE *fi = fopen(INTERP_TEST_PATH, "r");
+		interp_test_t = -1.0f;
+		if (fi) {
+			interp_test_t = 1.0f;
+			if (fscanf(fi, "%f", &interp_test_t) != 1)
+				interp_test_t = 1.0f;
+			fclose(fi);
+			salsa64_log("interpolación (prueba, " INTERP_TEST_PATH "): emparejar cada tarea con la anterior y "
+				    "dibujarla en t = %.2f, sin campos intermedios", (double)interp_test_t);
+		}
+		interp_apply();
 		/* SALSA64_DATA_DIR/aristas-aa: la pasada de aristas de los dibujos
 		 * con AA_EN (salsa64_rdp_aa_edges), experimental y apagada por
 		 * omisión: en la PS3 engordaba los modelos (docs/rsx-notes.md). */
@@ -3805,6 +3950,8 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 			present_still();
 		if (state_test.stage)
 			state_test_step();
+		state_bg_poll();
+		cajanegra_pump(now);
 		if (fps.on)
 			osd_fps_sample(&fps, now, n64.bus.vi.fields, n64.cpu.cycles, pres.game_frames, pres.frames_total);
 		stats(now);

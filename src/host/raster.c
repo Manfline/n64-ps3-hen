@@ -1072,3 +1072,31 @@ bool raster_target_info(int slot, uint32_t *addr, uint32_t *width, uint32_t *bpp
 	*lh = tg.t[slot].lh;
 	return true;
 }
+
+/* Todo el estado del rasterizador, para dibujar cuadros inventados
+ * (interp.c) sin tocar los destinos del juego. */
+#define RASTER_STATE(X)                                                                              \
+	X(tg) X(rgb) X(scratch) X(scratch_slot) X(depths) X(next_depth) X(task_no) X(vi_field) X(vi_ring) \
+	X(primes) X(readbacks) X(mirrors) X(frames) X(dma_skipped) X(dma_ring) X(rb_task) X(rb_wanted_task) \
+	X(last_job) X(tex_decoded_here)
+#define RASTER_SIZE(v) + sizeof(v)
+size_t raster_state_size(void)
+{
+	return 0 RASTER_STATE(RASTER_SIZE);
+}
+
+void raster_state_save(void *buf)
+{
+	uint8_t *p = buf;
+#define RASTER_SAVE(v) memcpy(p, &(v), sizeof(v)), p += sizeof(v);
+	RASTER_STATE(RASTER_SAVE)
+#undef RASTER_SAVE
+}
+
+void raster_state_restore(const void *buf)
+{
+	const uint8_t *p = buf;
+#define RASTER_LOAD(v) memcpy(&(v), p, sizeof(v)), p += sizeof(v);
+	RASTER_STATE(RASTER_LOAD)
+#undef RASTER_LOAD
+}

@@ -235,6 +235,7 @@ static void vertices(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	uint32_t geom = g->geom;
 	g->geom = geom & ~G_LIGHTING;
 	gfx_vertices(g, src, v0, n);
+	gfx_vgroup(g, gfx_addr(g, w1), 16, v0, n, src);
 	g->geom = geom;
 	if (geom & G_LIGHTING)
 		light_vertices(g, src, v0, n);

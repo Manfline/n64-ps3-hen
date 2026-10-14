@@ -82,6 +82,18 @@ static void field_length_pal_and_registers(void)
 	CHECK_EQ(bus()->vi.field, 0);
 }
 
+/* Un VI_V_SYNC imposible (Super Mario Odyssey 64 deja 0x34) no acorta el
+ * campo: se usa el estándar del tipo de TV, como en los emuladores para los
+ * que se hizo el hack. */
+static void v_sync_too_small_keeps_standard_field(void)
+{
+	spin();
+	vi_wr(SALSA64_VI_V_SYNC, 0x34);
+	CHECK_EQ(salsa64_n64_run_field(&t_n64), NTSC_FIELD);
+	CHECK_EQ(salsa64_n64_run_field(&t_n64), NTSC_FIELD);
+	CHECK_EQ(bus()->vi.lines, NTSC_LINES);
+}
+
 static void v_current_counts_half_lines(void)
 {
 	spin();
@@ -212,6 +224,7 @@ void t_suite_vi(void)
 {
 	RUN(field_length_ntsc);
 	RUN(field_length_pal_and_registers);
+	RUN(v_sync_too_small_keeps_standard_field);
 	RUN(v_current_counts_half_lines);
 	RUN(v_intr_raises_mi_and_v_current_clears);
 	RUN(v_intr_reset_never_fires);

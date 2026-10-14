@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interpolación de cuadros</title>
+<!-- SPDX-License-Identifier: GPL-2.0-or-later
+     Salsa64 — página para ver lado a lado las salidas del prototipo de
+     interpolación (docs/interpolacion.md). Se copia a build/interp/index.html
+     y se abre ahí: las imágenes de juegos comerciales se quedan en build/. -->
+<style>
+:root { --bg: #f6f5f2; --fg: #1d1d1b; --muted: #6b6a66; --card: #ffffff; --line: #dedbd4; --accent: #b4461f; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #161615; --fg: #ecebe7; --muted: #a09e98; --card: #20201e; --line: #34332f; --accent: #e07a4f; }
+}
+body { background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; margin: 0; padding: 0 16px 48px; }
+main { max-width: 1320px; margin: 0 auto; }
+h1 { font-size: 1.5rem; margin: 24px 0 4px; }
+h2 { font-size: 1.15rem; margin: 0 0 6px; }
+p, li { color: var(--muted); max-width: 72ch; }
+section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 18px 0; }
+.labels { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; font-size: 0.85rem; color: var(--muted); margin: 8px 0 4px; }
+.labels span { text-align: center; }
+img { width: 100%; height: auto; image-rendering: pixelated; border-radius: 4px; display: block; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+button { background: transparent; border: 1px solid var(--line); color: var(--fg); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+pre { white-space: pre-wrap; font-size: 0.8rem; color: var(--muted); background: transparent; border-top: 1px solid var(--line); padding-top: 8px; overflow-x: auto; }
+</style>
+</head>
+<body>
+<main>
+<h1>Interpolación de cuadros: por geometría y por imagen</h1>
+<p>Salidas del prototipo del host (<code>salsa64-run --interp</code>). Cada animación pone los mismos campos lado a lado. «Verdad» es lo que el juego dibujó de verdad en ese campo (GoldenEye da un cuadro por campo en nuestro emulador: se toma 1 de cada <i>k</i> como cuadro del juego). Diseño y cifras en <code>docs/interpolacion.md</code>.</p>
+<div id="scenes"></div>
+</main>
+<script>
+const scenes = [
+  { dir: "ge/final3", title: "GoldenEye, presa — como a 20 cuadros (1 de cada 3)", labels: ["Repetir (hoy)", "Verdad", "Por geometría", "Por imagen"],
+    extra: [["errores.png", "Arriba: verdad, geometría, imagen. Abajo: cuadro viejo y, en rojo, dónde cada método se aleja más de 24/255 de la verdad."]] },
+  { dir: "ge/final2", title: "GoldenEye, presa — como a 30 cuadros (1 de cada 2)", labels: ["Repetir (hoy)", "Verdad", "Por geometría", "Por imagen"] },
+  { dir: "ge/cap30", title: "GoldenEye con tope de 30 (interrupción del DP retrasada) y la interpolación encima", labels: ["Original a 30", "Por geometría", "Por imagen", "Geometría extrapolada"] },
+  { dir: "oot/final", title: "Zelda OoT, vuelo de Navi por el bosque Kokiri (20 cuadros)", labels: ["Original (20)", "Por geometría", "Por imagen", "Geometría extrapolada"],
+    extra: [["tira.png", "Por geometría: cuadro viejo, 1/3, 2/3, cuadro nuevo."], ["tira-imagen.png", "Por imagen: lo mismo."]] },
+  { dir: "sm64/final", title: "Super Mario 64, camino al castillo (30 cuadros)", labels: ["Original (30)", "Por geometría", "Por imagen", "Geometría extrapolada"] },
+  { dir: "mk64/final", title: "Mario Kart 64, Luigi Raceway (30 cuadros)", labels: ["Original (30)", "Por geometría", "Por imagen", "Geometría extrapolada"] },
+];
+const root = document.getElementById("scenes");
+for (const s of scenes) {
+  const sec = document.createElement("section");
+  sec.innerHTML = `<h2>${s.title}</h2>
+    <div class="row"><button data-v="video-60.png" aria-pressed="true">60 cuadros por segundo</button><button data-v="video-lento.png" aria-pressed="false">Cámara lenta (10)</button></div>
+    <div class="labels">${s.labels.map(l => `<span>${l}</span>`).join("")}</div>
+    <img alt="${s.title}" src="${s.dir}/video-60.png" loading="lazy">
+    ${(s.extra || []).map(([f, c]) => `<p>${c}</p><img alt="" src="${s.dir}/${f}" loading="lazy">`).join("")}
+    <pre data-sum="${s.dir}/resumen.txt"></pre>`;
+  const img = sec.querySelector("img");
+  sec.querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
+    sec.querySelectorAll("button").forEach(o => o.setAttribute("aria-pressed", o === b));
+    img.src = `${s.dir}/${b.dataset.v}?${Date.now()}`;
+  }));
+  root.appendChild(sec);
+}
+document.querySelectorAll("pre[data-sum]").forEach(p => {
+  fetch(p.dataset.sum).then(r => r.ok ? r.text() : "").then(t => { p.textContent = t; }).catch(() => { p.remove(); });
+});
+</script>
+</body>
+</html>

@@ -54,14 +54,17 @@ SPU_MACHDEP := -mdual-nops -fmodulo-sched -ffunction-sections -fdata-sections
 
 PPU_CFLAGS  := -std=gnu11 -O2 -Wall -Wextra -mcpu=cell -mno-relative-jumptables $(PPU_MACHDEP) \
                -I$(PSL1GHT)/ppu/include -I$(PSL1GHT)/ppu/include/simdmath \
-               -I$(ROOT)/src -I$(HERE) -I$(OBJ) $(CFLAGS)
+               -I$(ROOT)/src -I$(ROOT)/lib/spukit/include -I$(HERE) -I$(OBJ) $(CFLAGS)
 PPU_LDFLAGS := $(PPU_MACHDEP) -L$(PSL1GHT)/ppu/lib -Wl,-Map,$(OUT)/$(PROGRAM).map $(LDFLAGS)
 # -fstack-usage: el marco de cada función en un .su junto al objeto, para
 # medir la pila de los programas SPU (tools/spu-stack.py).
 SPU_CFLAGS  := -std=gnu11 -O2 -Wall -Wextra $(SPU_MACHDEP) -fstack-usage \
                -I$(PSL1GHT)/spu/include -I$(PSL1GHT)/spu/include/simdmath \
                -I$(ROOT)/src -I$(HERE) $(SPU_EXTRA_CFLAGS)
-SPU_LDFLAGS := $(SPU_MACHDEP) -L$(PSL1GHT)/spu/lib
+# Con -ffunction-sections, --gc-sections deja fuera del local store lo que
+# nadie llama (de la biblioteca de C y de las fuentes compartidas con el
+# host): 2,4–2,7 KB menos en los SPEs de la HLE gráfica, del RSP y del JPEG.
+SPU_LDFLAGS := $(SPU_MACHDEP) -Wl,--gc-sections -L$(PSL1GHT)/spu/lib
 SPU_LIBS    ?= -lsputhread
 
 CONTENTID ?= UP0001-$(APPID)_00-0000000000000000
