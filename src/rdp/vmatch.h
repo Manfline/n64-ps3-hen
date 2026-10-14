@@ -85,6 +85,8 @@ struct vmatch_group {
 	uint32_t front;        /* algún vértice delante de la cámara (w > 0) */
 	uint32_t why;          /* enum vmatch_why */
 	int32_t pair;          /* grupo del cuadro anterior (vmatch_pair), o -1 */
+	int32_t cand;          /* rechazado por deformarse o aplastarse: la pareja que tenía (vmatch_atomic puede devolvérsela), o -1 */
+	uint32_t obj;          /* primer grupo de su objeto (vmatch_atomic, si hubo rechazados) */
 };
 
 /* Una clave (dirección o contenido) y los grupos que la tienen: order[start
@@ -121,7 +123,8 @@ struct vmatch_stats {
 	uint32_t collapsed;              /* rechazados: se aplastarían a media interpolación (giros grandes) */
 	uint32_t reordered;              /* emparejados con otra instancia que la de su orden (más cerca) */
 	uint32_t flat;                   /* grupos con proyección ortográfica (HUD 3D): sin interpolar */
-	uint32_t atomic;                 /* grupos con pareja que salen sin interpolar por su malla (vmatch_atomic) */
+	uint32_t atomic;                 /* grupos con pareja que salen sin interpolar por su objeto o su malla (vmatch_atomic) */
+	uint32_t kept;                   /* deformados o aplastados que se interpolan con su objeto (vmatch_atomic) */
 	uint32_t by_content;             /* encontrados por el contenido (no por la dirección) */
 	bool cut;                        /* el cuadro no se interpola */
 };
@@ -139,13 +142,16 @@ void vmatch_build(struct vmatch_table *t, const uint8_t *cmd, uint32_t cmd_bytes
  * resultado. max_disp en píxeles de la N64 por cuadro del juego. */
 void vmatch_pair(const struct vmatch_table *prev, struct vmatch_table *cur, float max_disp, struct vmatch_stats *st);
 /* Nunca un objeto a medias: en vez de mezclar partes interpoladas con
- * partes en el cuadro nuevo, salen enteras como en el cuadro de ahora (sin
- * interpolar)
+ * partes en el cuadro nuevo
  *   - un objeto: grupos seguidos en el orden de dibujo que se tocan en
  *     pantalla (los miembros de un personaje, cada uno con su malla y su
- *     dibujo), si la mayor parte de sus vértices visibles quedó rechazada
+ *     dibujo). Si la mayor parte de sus vértices visibles quedó rechazada
  *     (Link que se da vuelta en un cuadro: casi todos sus miembros se
- *     aplastarían y los demás no deben interpolarse solos)
+ *     aplastarían), sale entero como en el cuadro de ahora; si es una parte
+ *     menor (el brazo y la espada en un tajo), las piezas que se deformaban
+ *     o aplastaban se interpolan con las demás: interpoladas, dos piezas
+ *     unidas por una articulación siguen unidas, y en el cuadro de ahora se
+ *     despegarían
  *   - una malla: los grupos que comparten triángulos (los nvtx vértices de
  *     salida, de a tres), si uno delante de la cámara quedó sin pareja
  *     (también si es nuevo: sus triángulos con los demás se estirarían)

@@ -96,7 +96,7 @@ static struct {
 	/* Cuentas (desde from_field). */
 	uint64_t v_loaded, v_found, v_matched, groups, groups_found, groups_moved, by_content;
 	uint64_t ns_build, ns_pair, ns_prev, vm_tasks;  /* tiempo de vmatch (host) */
-	uint64_t jumped, deformed, reordered, flat, atomic, why[VMATCH_WHY_COUNT];
+	uint64_t jumped, deformed, reordered, flat, atomic, kept, why[VMATCH_WHY_COUNT];
 	bool base_final, like_rsx;
 	uint64_t out_vtx, out_matched, out_tasks;
 	uint64_t sad_evals, sad_blocks, searches;
@@ -821,9 +821,9 @@ void interp_after_raster(const struct gfx_job *job, const struct gfx_result *res
 			}
 			static const char *const why[VMATCH_WHY_COUNT] = { "ok",  "nuevo",    "movido", "saltó", "deformado",
 									  "tamaño", "HUD", "aplastado", "objeto", "malla" };
-			fprintf(gf, "%3u addr %06x n %2u v0 %2u occ %3u/%d hash %08x hocc %u pair %4d %-9s dir %4d cont %4d vis %2d w %g..%g",
+			fprintf(gf, "%3u addr %06x n %2u v0 %2u occ %3u/%d hash %08x hocc %u pair %4d %-9s dir %4d cont %4d vis %2d obj %3u w %g..%g",
 				i, g->addr, g->n, g->v0, g->occ, addrn, g->hash, g->hocc, g->pair, g->why < VMATCH_WHY_COUNT ? why[g->why] : "?",
-				byaddr, byhash, nvis, w0, w1);
+				byaddr, byhash, nvis, g->obj, w0, w1);
 			if (nvis)
 				fprintf(gf, " c (%.0f, %.0f)", cx / nvis, -cy / nvis);
 			if (g->pair >= 0 && nvis)
@@ -883,6 +883,7 @@ void interp_after_raster(const struct gfx_job *job, const struct gfx_result *res
 		st.reordered += st.vst.reordered;
 		st.flat += st.vst.flat;
 		st.atomic += st.vst.atomic;
+		st.kept += st.vst.kept;
 		for (uint32_t i = 0; i < ft->t.ngroups; i++) {
 			const struct vmatch_group *g = &ft->t.g[i];
 			if (g->front && g->why < VMATCH_WHY_COUNT)
@@ -1007,7 +1008,7 @@ void interp_report(void)
 			fprintf(o, "interp: grupos delante de la cámara por tarea:");
 			for (int q = 0; q < VMATCH_WHY_COUNT; q++)
 				fprintf(o, "%s %.1f %s", q ? "," : "", (double)st.why[q] / st.vm_tasks, why[q]);
-			fputc('\n', o);
+			fprintf(o, "; %.2f deformados o aplastados interpolados con su objeto\n", (double)st.kept / st.vm_tasks);
 		}
 		if (st.searches)
 			fprintf(o,

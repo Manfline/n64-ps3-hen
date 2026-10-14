@@ -852,6 +852,32 @@ host, que cambia en cada cuadro. GoldenEye contra la verdad 29,73 →
 29,76 dB. 16 bytes más por registro; el vertex program, una división
 menos. Con «interp 6» en la PS3, el autor: «el agua ya está quieta».
 
+### Piezas de Link al darse vuelta («interp 6» en la PS3)
+
+Con «interp 6» (el agua ya quieta), en la media vuelta de Link «salen
+pedazos de gráficos por unos instantes». Con las entradas del autor en el
+host (otra vez del log, ranura 1) salen dos casos de objeto a medias:
+
+- Un tajo con la espada (tarea 211): se aplastan el brazo y la espada
+  (9 de unos 60 grupos), menos de la mitad del objeto, así que esas piezas
+  salían en el cuadro de ahora y el cuerpo interpolado: el brazo se
+  despega. Ahora el objeto es todo o nada: si la parte rechazada es menor,
+  las piezas que se deformaban o aplastaban recuperan su pareja y se
+  interpolan con las demás (interpoladas, dos piezas unidas por una
+  articulación siguen unidas: el punto que comparten va por la misma
+  recta). Un grupo solo (una partícula, una estela) sigue rechazado.
+- Media vuelta con Link partido en dos objetos (3 de 15 medias vueltas):
+  las piernas y el torso quedaban a más de 4 px en el orden de dibujo, y
+  uno salía en el cuadro de ahora y el otro interpolado. Ahora dos grupos
+  seguidos cuyos vértices vienen del mismo modelo (direcciones a menos de
+  128 KB) se juntan hasta a 24 px; con eso, 0 de 15.
+
+Los cortes de cámara del recorrido (Z para centrar la cámara) se detectan
+como corte y los intermedios salen como el cuadro final. En el resto, por
+tarea: 0,4 grupos por su objeto y 0,17 piezas deformadas o aplastadas que
+se interpolan con su objeto; GoldenEye contra la verdad igual (29,76 dB).
+El volcado de grupos da el objeto de cada uno (`obj`).
+
 ### Modo híbrido con matrices (estimación, sin hacer)
 
 Lo que hoy se rechaza por aplastarse (giros de más de un cuarto de vuelta

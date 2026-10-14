@@ -1415,6 +1415,7 @@ static void interp_task(struct set *s, const struct gfx_result *res)
 		rdp.stats.interp_rejected += st.jumped + st.deformed + st.collapsed;
 		rdp.stats.interp_reordered += st.reordered;
 		rdp.stats.interp_atomic += st.atomic;
+		rdp.stats.interp_kept += st.kept;
 	}
 	if (rdp.interp.mode == SALSA64_INTERP_FIXED && rdp.interp.t < 1.0f)
 		rsxkit_vertices_prev(s->vtx_off + VTX_INTERP, RSXKIT_MEM_MAIN, rdp.interp.t);

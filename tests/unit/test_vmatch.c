@@ -406,15 +406,45 @@ static void vmatch_atomic_mesh(void)
 	CHECK_EQ(fb.t.g[0].why, VMATCH_DEFORMED);
 	CHECK_EQ(fb.t.g[1].why, VMATCH_OBJECT);
 	CHECK_EQ(fb.t.g[2].pair, 2);
-	/* Con el 3 pegado el rechazado es un tercio del objeto: solo su malla
-	 * (el 2) sin interpolar. */
+	/* Con el 3 pegado el deformado es un tercio del objeto: se interpola
+	 * con los demás (todos con pareja; una pieza en el cuadro de ahora se
+	 * despegaría de las otras). */
 	atomic_case(true, false, true, 20, &st, &paired);
-	CHECK_EQ(fb.t.g[1].why, VMATCH_COMPONENT);
+	CHECK_EQ(fb.t.g[0].pair, 0);
+	CHECK_EQ(fb.t.g[0].why, VMATCH_OK);
+	CHECK_EQ(fb.t.g[1].pair, 1);
 	CHECK_EQ(fb.t.g[2].pair, 2);
+	CHECK_EQ(st.kept, 1);
+	CHECK_EQ(st.deformed, 0);
+	CHECK_EQ(paired, 6);
 	/* Con el 2 detrás de la cámara (no cuenta), la mitad: el objeto entero. */
 	atomic_case(true, true, true, 20, &st, &paired);
 	CHECK_EQ(fb.t.g[2].why, VMATCH_OBJECT);
 	CHECK_EQ(paired, 0);
+
+	/* Dos piezas a 20 px: del mismo modelo (direcciones cercanas), un solo
+	 * objeto (la mitad rechazada: entero en el cuadro de ahora); de modelos
+	 * lejanos, dos (la deformada sola, la otra interpolada). */
+	for (int far_model = 0; far_model < 2; far_model++) {
+		float d0[4][4], d1[4][4], e0[4][4], e1[4][4];
+		quad_at(d0, 0, 0), quad_at(d1, 2, 0), quad_at(e0, 0, 28), quad_at(e1, 2, 28);
+		d1[3][0] += 2.0f * 40.0f / 160.0f;  /* se deforma */
+		uint32_t ea = far_model ? 0x90000 : 0x8800;
+		frame_init(&fa);
+		add_group(&fa, 0x8600, 0, 4, (const float(*)[4])d0);
+		add_group(&fa, ea, 0, 4, (const float(*)[4])e0);
+		finish(&fa);
+		frame_init(&fb);
+		add_group(&fb, 0x8600, 0, 4, (const float(*)[4])d1);
+		add_group(&fb, ea, 0, 4, (const float(*)[4])e1);
+		finish(&fb);
+		struct gfx_vertex dv[3] = { out_of(d1[0], GFX_VGID(1u, 0u)), out_of(d1[1], GFX_VGID(1u, 1u)),
+					    out_of(d1[2], GFX_VGID(1u, 2u)) };
+		vmatch_pair(&fa.t, &fb.t, 120.0f, &st);
+		vmatch_atomic(&fb.t, dv, 3, &st);
+		CHECK_EQ(fb.t.g[0].why, VMATCH_DEFORMED);
+		CHECK_EQ(fb.t.g[1].why, far_model ? VMATCH_OK : VMATCH_OBJECT);
+	}
 
 	/* Un cuadrilátero que gira media vuelta (se aplastaría a media
 	 * interpolación) y uno que gira un poco. */

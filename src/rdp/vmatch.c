@@ -16,6 +16,8 @@
 #define COLLAPSE  0.7f    /* radio a media interpolación / el menor de los dos cuadros: menos, se aplasta (giro > ~90°) */
 #define OBJ_MAX   128.0f  /* tamaño máximo en pantalla (píxeles) de un objeto de vmatch_atomic */
 #define OBJ_GAP   4.0f    /* píxeles entre grupos seguidos del mismo objeto */
+#define MODEL_GAP 24.0f   /* … si sus vértices vienen del mismo modelo (MODEL_NEAR) */
+#define MODEL_NEAR 0x20000u /* bytes entre las direcciones de dos grupos del mismo modelo */
 
 static uint32_t mix(uint32_t a, uint32_t b)
 {
@@ -366,6 +368,8 @@ void vmatch_pair(const struct vmatch_table *prev, struct vmatch_table *cur, floa
 	for (uint32_t i = 0; i < cur->ngroups; i++) {
 		struct vmatch_group *g = &cur->g[i];
 		g->pair = -1;
+		g->cand = -1;
+		g->obj = i;
 		g->why = VMATCH_NEW;
 		if (g->flat) {  /* ni cuenta para decidir un corte */
 			g->why = VMATCH_FLAT;
@@ -432,12 +436,14 @@ void vmatch_pair(const struct vmatch_table *prev, struct vmatch_table *cur, floa
 			float lim = 0.75f * ext > 24.0f ? 0.75f * ext : 24.0f;
 			if (spread > lim) {
 				g->why = VMATCH_DEFORMED;
+				g->cand = p;
 				st->deformed++;
 				continue;
 			}
 		}
 		if (dx1 >= dx0 && spread > 0.25f * ext && collapses(ps + h->clip, h, cs + g->clip, g)) {
 			g->why = VMATCH_COLLAPSE;
+			g->cand = p;
 			st->collapsed++;
 			continue;
 		}
@@ -499,7 +505,7 @@ void vmatch_atomic(struct vmatch_table *cur, const struct gfx_vertex *vtx, uint3
 	const float(*scr)[2] = screen_of(cur);
 	for (uint32_t i = 0; any_rejected && i < ng;) {
 		float b[4] = { FAR_AWAY, FAR_AWAY, -FAR_AWAY, -FAR_AWAY };
-		uint32_t total = 0, bad = 0, j = i;
+		uint32_t total = 0, bad = 0, parts = 0, j = i, last_addr = 0;
 		for (; j < ng; j++) {
 			const struct vmatch_group *g = &cur->g[j];
 			if (g->flat || g->ext < 0.0f)
@@ -515,13 +521,20 @@ void vmatch_atomic(struct vmatch_table *cur, const struct gfx_vertex *vtx, uint3
 			if (b[0] != FAR_AWAY) {
 				float x0 = gb[0] < b[0] ? gb[0] : b[0], y0 = gb[1] < b[1] ? gb[1] : b[1];
 				float x1 = gb[2] > b[2] ? gb[2] : b[2], y1 = gb[3] > b[3] ? gb[3] : b[3];
-				if (gb[0] > b[2] + OBJ_GAP || gb[2] < b[0] - OBJ_GAP || gb[1] > b[3] + OBJ_GAP ||
-				    gb[3] < b[1] - OBJ_GAP || x1 - x0 > OBJ_MAX || y1 - y0 > OBJ_MAX)
+				/* Las piernas y el torso de Link pueden quedar a más de
+				 * OBJ_GAP: con los vértices del mismo modelo, más hueco. */
+				uint32_t da = g->addr > last_addr ? g->addr - last_addr : last_addr - g->addr;
+				float gap = da < MODEL_NEAR ? MODEL_GAP : OBJ_GAP;
+				if (gb[0] > b[2] + gap || gb[2] < b[0] - gap || gb[1] > b[3] + gap || gb[3] < b[1] - gap ||
+				    x1 - x0 > OBJ_MAX || y1 - y0 > OBJ_MAX)
 					break;
 				b[0] = x0, b[1] = y0, b[2] = x1, b[3] = y1;
 			} else {
 				memcpy(b, gb, sizeof b);
 			}
+			parts++;
+			last_addr = g->addr;
+			cur->g[j].obj = i;
 			if (g->why == VMATCH_NEW)
 				continue;
 			total += g->n;
@@ -529,10 +542,28 @@ void vmatch_atomic(struct vmatch_table *cur, const struct gfx_vertex *vtx, uint3
 		}
 		if (j == i)
 			j++;
-		if (bad && 2 * bad >= total)
+		if (bad && 2 * bad >= total) {
 			for (uint32_t k = i; k < j; k++)
 				if (cur->g[k].pair >= 0 && !cur->g[k].flat && cur->g[k].ext >= 0.0f)
 					unpair(&cur->g[k], VMATCH_OBJECT, st);
+		} else if (bad && parts > 1) {
+			/* Una parte menor de un objeto de varias piezas: las que se
+			 * deformaban o aplastaban, con su pareja de nuevo. */
+			for (uint32_t k = i; k < j; k++) {
+				struct vmatch_group *g = &cur->g[k];
+				if ((g->why != VMATCH_DEFORMED && g->why != VMATCH_COLLAPSE) || g->cand < 0 ||
+				    cur->taken[g->cand])
+					continue;
+				st->deformed -= g->why == VMATCH_DEFORMED;
+				st->collapsed -= g->why == VMATCH_COLLAPSE;
+				g->pair = g->cand;
+				g->why = VMATCH_OK;
+				cur->taken[g->cand] = 1;
+				st->paired++;
+				st->paired_vertices += g->n;
+				st->kept++;
+			}
+		}
 		i = j;
 	}
 	if (!any_rejected && !any_lone)
