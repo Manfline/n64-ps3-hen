@@ -32,7 +32,7 @@ static bool debug_dl_task(void)
 
 #define G_TEXRECTFLIP 0xE5u
 
-void gfx_ucode_reload(struct gfx_state *g, uint32_t text, int gen, bool nonear)
+void gfx_ucode_reload(struct gfx_state *g, uint32_t text, int gen, bool nonear, uint32_t data, uint32_t size)
 {
 	memset(g->segments, 0, sizeof g->segments);
 	g->geom = 0;
@@ -49,6 +49,8 @@ void gfx_ucode_reload(struct gfx_state *g, uint32_t text, int gen, bool nonear)
 	 * 1 en cada cuadro). */
 	g->clip_ratio[0] = g->clip_ratio[1] = gen == 1 ? 1.0f : 2.0f;
 	g->ucode = text;
+	g->ucode_var = data ? (uint8_t)gfx_ucode_variant(g, data, size) : 0;
+	g->flx_table = 0;
 	g->near_clip = !nonear;
 	g->dirty = true;
 }
@@ -66,7 +68,7 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 	g->obj_rendermode = 0;
 	gfx_ucode_reload(g, job->ucode, job->gbi == SALSA64_GBI_F3D || job->gbi == SALSA64_GBI_F3DEX ||
 					 job->gbi == SALSA64_GBI_F3DPD ? 1 : 2,
-			 job->flags & GFX_JOB_NONEAR);
+			 job->flags & GFX_JOB_NONEAR, 0, 0);
 	g->have_draw = false;
 	g->target_sent = false;
 	g->fbimg_cur = -1;

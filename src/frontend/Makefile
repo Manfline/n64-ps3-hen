@@ -114,6 +114,11 @@ $(OBJ)/spu/src/rsp/gfx/f3dpd.c.o: SPU_CFLAGS += -Os
 # Lo de la interpolación de cuadros (vgroup.c), también: no le quita local
 # store ni pila a la HLE.
 $(OBJ)/spu/src/rsp/gfx/vgroup.c.o: SPU_CFLAGS += -Os
+# Lo de F3DFLX, el microcódigo de F-Zero X (flx.c), también: solo corre con
+# ese juego. Y el recorrido de la display list (dl.c) vuelve a -Os para
+# pagarlo (−370 bytes, docs/estado.md 2026-10-13): de lo suyo solo
+# gfx_dl_next corre por comando, y es corta.
+$(OBJ)/spu/src/rsp/gfx/flx.c.o $(OBJ)/spu/src/rsp/gfx/dl.c.o: SPU_CFLAGS += -Os
 # make no ve un cambio de banderas: que se recompilen si cambia este archivo.
 $(OBJ)/spu/src/rsp/gfx/combine.c.o $(OBJ)/spu/src/rsp/gfx/s2dex.c.o $(OBJ)/spu/src/rsp/gfx/f3dpd.c.o \
-$(OBJ)/spu/src/rsp/gfx/vgroup.c.o: Makefile
+$(OBJ)/spu/src/rsp/gfx/vgroup.c.o $(OBJ)/spu/src/rsp/gfx/flx.c.o $(OBJ)/spu/src/rsp/gfx/dl.c.o: Makefile

@@ -189,9 +189,10 @@ void gfx_dl_f3dex2(struct gfx_state *g, gfx_cmd_hook hook)
 			int kind;
 			if (g->ucode && text == g->ucode)
 				break;
-			kind = gfx_ucode_kind(g, gfx_addr(g, g->rdphalf1), (w0 & 0xFFFF) + 1, &nonear);
+			uint32_t data = gfx_addr(g, g->rdphalf1), size = (w0 & 0xFFFF) + 1;
+			kind = gfx_ucode_kind(g, data, size, &nonear);
 			if (kind == 2)
-				gfx_ucode_reload(g, text, 2, nonear);
+				gfx_ucode_reload(g, text, 2, nonear, data, size);
 			else if (kind == GFX_UCODE_S2DEX2 ? !gfx_dl_s2dex2(g)
 							  : !gfx_dl_skip_foreign(g, G_LOAD_UCODE, G_DL, G_ENDDL))
 				return;
@@ -210,7 +211,9 @@ void gfx_dl_f3dex2(struct gfx_state *g, gfx_cmd_hook hook)
 		case G_SPECIAL_1:
 		case G_SPECIAL_2:
 		case G_SPECIAL_3:
+			break;
 		case G_DMA_IO:
+			gfx_flx_dma_io(g, w0, w1);
 			break;
 		case G_RDPHALF_1:
 			g->rdphalf1 = w1;

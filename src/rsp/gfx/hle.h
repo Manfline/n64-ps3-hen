@@ -176,7 +176,8 @@ struct gfx_state {
 	uint32_t geom;
 	struct gfx_light lights[GFX_MAX_LIGHTS + 1];
 	int num_lights;
-	float lookat[2][3];        /* X e Y, normalizados, espacio de la cámara */
+	float lookat[2][3];        /* X e Y, normalizados, espacio de la cámara
+	                            * (con F3DFLX, Y es la luz del alfa) */
 	float light_model[GFX_MAX_LIGHTS + 1][3];  /* en espacio del modelo */
 	float lookat_model[2][3];
 	float vscale[3], vtrans[3];
@@ -243,6 +244,10 @@ struct gfx_state {
 	struct gfx_tilememo tilememo[8];
 
 	void *io;                  /* estado de la plataforma (gfx_io.h) */
+	/* Al final, en el relleno: en otro lugar desplazan los demás campos y
+	 * el código del SPE 0 crece (y la pila con él). */
+	uint32_t flx_table;        /* F3DFLX: la tabla del alfa (G_DMA_IO, segmentada), o 0 */
+	uint8_t ucode_var;         /* GFX_UCODE_FLX: el microcódigo en curso */
 };
 
 /* ---- E/S: la implementa cada plataforma (io_mem.c, src/spu/gfx/io_spu.c) ----
@@ -304,8 +309,24 @@ bool gfx_dl_skip_foreign(struct gfx_state *g, uint32_t op_ucode, uint32_t op_dl,
  * (gfx_ucode_kind): el RSP arranca de nuevo con los datos de su DMEM
  * (segmentos, luces, matrices, vértices, modo geométrico, clip ratio), pero
  * la lista y la pila de G_DL siguen. También es el arranque de cada tarea.
- * `text`: su dirección en la RDRAM. */
-void gfx_ucode_reload(struct gfx_state *g, uint32_t text, int gen, bool nonear);
+ * `text`: su dirección en la RDRAM; `data`, `size`: los datos que carga el
+ * G_LOAD_UCODE, de donde sale la variante (gfx_ucode_variant; 0 al empezar
+ * la tarea). */
+void gfx_ucode_reload(struct gfx_state *g, uint32_t text, int gen, bool nonear, uint32_t data, uint32_t size);
+/* F3DFLX (F-Zero X, por el nombre de sus datos): con G_TEXTURE_GEN no genera
+ * s y t (quedan las del vértice) sino el alfa, de la tabla de G_DMA_IO
+ * (flx_table) por el coseno con la luz del alfa (G_MV_LIGHT en 24, tres s16
+ * en los bytes 8 a 13). En flx.c. */
+#define GFX_UCODE_FLX 0x1u
+unsigned gfx_ucode_variant(struct gfx_state *g, uint32_t data, uint32_t size);
+/* G_DMA_IO: con F3DFLX, la dirección de la tabla del alfa. */
+void gfx_flx_dma_io(struct gfx_state *g, uint32_t w0, uint32_t w1);
+/* Con F3DFLX y G_TEXTURE_GEN, la tabla del alfa (256 bytes en GFX_IO_SMALL;
+ * si no, NULL) y el alfa de un vértice por su normal (los 3 bytes s8). */
+const uint8_t *gfx_flx_table(struct gfx_state *g);
+uint8_t gfx_flx_alpha(const struct gfx_state *g, const uint8_t *table, const uint8_t *nrm);
+/* El alfa del sombreado lleva el de la tabla (para la niebla del blender). */
+bool gfx_flx_shade_alpha(const struct gfx_state *g);
 /* s2dex.c: clase del microcódigo cuyos datos (data, size bytes) carga un
  * G_LOAD_UCODE: 1 o 2 (F3D, F3DEX, F3DLX…: primera o segunda generación, por
  * la versión), GFX_UCODE_S2DEX2, o 0 si es otro (L3DEX, S2DEX 1.x, el de

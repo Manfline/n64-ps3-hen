@@ -509,7 +509,9 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 			d->cull = GFX_CULL_FRONT;
 	}
 	blend_state(g, d);
-	if (kind != PRIM_TRI || !(g->geom & G_FOG))
+	/* El alfa del sombreado es el de la niebla con G_FOG, o el de la tabla
+	 * de F3DFLX (flx.c). */
+	if (kind != PRIM_TRI || !((g->geom & G_FOG) || gfx_flx_shade_alpha(g)))
 		d->fog = 0;
 	d->aa = kind == PRIM_TRI && (g->ol & AA_EN) && d->blend == GFX_BLEND_OFF && d->atest == GFX_ATEST_NONE &&
 		!d->viscvg;
