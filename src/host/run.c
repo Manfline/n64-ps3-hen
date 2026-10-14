@@ -2997,6 +2997,9 @@ int main(int argc, char **argv)
 			(unsigned long long)st->cu1_exits,
 			(unsigned long long)st->interp_steps, cycles ? 100.0 * (double)st->interp_steps / (double)cycles : 0.0,
 			(unsigned long long)st->exec_calls, lockstep ? "; --lockstep sin diferencias" : "");
+		if (rec.opts & SALSA64_REC_OPT_JTC_STATS)
+			fprintf(stderr, "salsa64-run: caché de destinos de JR: %u aciertos, %u fallos (%.1f %%)\n", rec.jtc_ctr[0], rec.jtc_ctr[1],
+				rec.jtc_ctr[0] + rec.jtc_ctr[1] ? 100.0 * rec.jtc_ctr[0] / ((double)rec.jtc_ctr[0] + rec.jtc_ctr[1]) : 0.0);
 		if (st->fm_sites || st->fm_off)
 			fprintf(stderr, "salsa64-run: fastmem: %llu accesos sin prueba, %llu parchados tras fallar, %s\n",
 				(unsigned long long)st->fm_sites, (unsigned long long)st->fm_faults,

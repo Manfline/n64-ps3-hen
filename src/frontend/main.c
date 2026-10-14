@@ -2898,6 +2898,11 @@ static void stats(uint64_t now)
 			    (unsigned long long)st->vt_probes, (unsigned long long)st->fr_dep,
 			    (unsigned long long)st->fr_twins, (unsigned long long)st->fr_exits,
 			    (unsigned long long)st->cu1_exits, (unsigned long long)st->interp_steps);
+		if (rec.opts & SALSA64_REC_OPT_JTC_STATS) {
+			uint64_t h = rec.jtc_ctr[0], m = rec.jtc_ctr[1];  /* uint32_t: dan la vuelta a los 4 G */
+			salsa64_log("caché de destinos de JR: %llu aciertos, %llu fallos (%.1f %% de acierto)",
+				    (unsigned long long)h, (unsigned long long)m, h + m ? 100.0 * (double)h / (double)(h + m) : 0.0);
+		}
 		if (rec.fastmem || st->fm_off) {
 			uint32_t fa, fu, fs;
 			salsa64_ps3_fastmem_counts(&fa, &fu, &fs);
@@ -3952,6 +3957,10 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		rec.opts |= SALSA64_REC_OPT_NO_GROUP;
 	if (salsa64_ps3_rec_fpu_inline_wanted())
 		rec.opts |= SALSA64_REC_OPT_FPU_INLINE;
+	if (salsa64_ps3_rec_jtc_wanted())
+		rec.opts |= SALSA64_REC_OPT_JTC;
+	if (salsa64_ps3_rec_jtc_stats_wanted())
+		rec.opts |= SALSA64_REC_OPT_JTC_STATS;
 	rec.prof = salsa64_ps3_rec_prof_wanted() ? &rec_prof : NULL;
 	/* Perfilado (perfilado_ps3.h): la sesión y rec.trace, antes de iniciar
 	 * el recompilador (su preámbulo depende de rec.trace). */
@@ -3983,7 +3992,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		salsa64_log("páginas: RDRAM %u KB, rec %u KB, n64 %u KB, caché de código %u KB, pila %u KB (0 = sin dato)",
 			    page_kb(rdram), page_kb(&rec), page_kb(&n64), page_kb(salsa64_ps3_rec_cache()),
 			    page_kb(__builtin_frame_address(0)));
-		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x%s%s%s%s%s%s%s%s%s",
+		salsa64_log("recompilador activo: caché de %u MB en %p, llamadas a C %s, opciones 0x%x%s%s%s%s%s%s%s%s%s%s",
 			    SALSA64_REC_CACHE_BYTES >> 20, salsa64_ps3_rec_cache(), rec.calls_near ? "con bl" : "por mtctr",
 			    rec.opts, rec.prof ? ", con perfil" : "",
 			    rec.opts & SALSA64_REC_OPT_LEGACY ? ", camino viejo (jit-viejo)" : "",
@@ -3993,6 +4002,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 			    rec.opts & SALSA64_REC_OPT_WIDE ? ", código ancho (jit-ancho)" : "",
 			    rec.fastmem ? ", fastmem (jit-fastmem)" : rec.opts & SALSA64_REC_OPT_FASTMEM ? ", fastmem APAGADO" : "",
 			    rec.opts & SALSA64_REC_OPT_NO_GROUP ? ", sin base en caché (jit-sin-grupos)" : "",
+			    rec.opts & SALSA64_REC_OPT_JTC ? (rec.opts & SALSA64_REC_OPT_JTC_STATS ? ", caché de destinos con cuentas (jit-destinos-cuentas)" : ", caché de destinos") : ", sin caché de destinos (jit-sin-destinos)",
 			    rec.opts & SALSA64_REC_OPT_FPU_INLINE ? ", FPU en línea (jit-fpu-en-linea)" : rec.fpu_rtn_ok ? "" : ", FPU en línea (las rutinas no cupieron)");
 	}
 	profile_open(rom);

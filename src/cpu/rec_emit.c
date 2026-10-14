@@ -2716,7 +2716,7 @@ static void emit_branch(struct ctx *c, unsigned b)
 		fpu_flush(c);
 		E(c, ppc_mr(3, R_TARGET));
 		restore_borrowed(c);
-		if (c->temp || c->rec->no_link) {
+		if (c->temp || (c->rec->no_link && !(c->rec->opts & SALSA64_REC_OPT_JTC))) {
 			emit_b(c, abs_label(c, c->rec->exit_jump), false);
 		} else if (c->rec->trace && c->rec->trace->jr && c->rec->cur_id) {
 			E(c, ppc_li(4, (int16_t)c->rec->cur_id));  /* perfilado: el JR cuenta por su bloque */

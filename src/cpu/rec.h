@@ -223,6 +223,19 @@ struct salsa64_rec_fmsite {
  * en vez de las rutinas compartidas del preámbulo (rec_emit_fpurtn.h). Se
  * aplica al iniciar (las rutinas no se emiten) y al compilar. */
 #define SALSA64_REC_OPT_FPU_INLINE 1024u
+/* Caché de destinos de JR/JALR (docs/perf-log.md, «Caché de destinos de JR»): una
+ * tabla directa de 1024 entradas, vpc → palabra de entrada del bloque, que
+ * exit_jr consulta antes de recorrer map/xhash/blocks (16 palabras en vez de
+ * ~36 y tres cargas dependientes menos). La llena exit_jr al encontrar el
+ * bloque por el camino largo; se vacía la entrada al matar o desprender el
+ * bloque y cuando el despachador resuelve ese pc a otro código. Se aplica al
+ * compilar (exit_jr se emite en el preámbulo). En la PS3 y en el host va
+ * encendida por omisión; el frontend la apaga con el archivo jit-sin-destinos y
+ * el host con SALSA64_REC_NO_JTC=1. */
+#define SALSA64_REC_OPT_JTC 2048u
+/* Con la caché de destinos: cuenta aciertos y fallos en jtc_ctr[] (suma unas
+ * pocas palabras al camino del acierto). */
+#define SALSA64_REC_OPT_JTC_STATS 4096u
 /* Depuración (host, SALSA64_REC_OPTS): apagan una pieza nueva a la vez para
  * acotar una diferencia en --lockstep. LEGACY las apaga todas. */
 #define SALSA64_REC_DBG_NO_ENDLINK 0x100u   /* COP0 vuelve al despachador e interpreta el resto del bloque básico */
@@ -235,6 +248,12 @@ struct salsa64_rec_fmsite {
 #define SALSA64_REC_DBG_NO_SUPER   0x8000u  /* un salto condicional hacia adelante termina el bloque */
 #define SALSA64_REC_DBG_NO_IJUMP   0x10000u /* un salto interno con destino dentro del bloque sale enlazado */
 #define SALSA64_REC_OLD(rec, bit)  ((rec)->opts & (SALSA64_REC_OPT_LEGACY | (bit)))
+
+#define SALSA64_REC_JTC_SLOTS 1024
+struct salsa64_rec_jtc {
+	uint32_t vpc;        /* 32 bits bajos del destino (alineado); 1 = vacía */
+	uint32_t code;       /* palabra de entrada del bloque en la caché */
+};
 
 struct salsa64_rec {
 	uint32_t opts;
@@ -347,6 +366,12 @@ struct salsa64_rec {
 	 * de flags, que vive en r28). pent[id] es la entrada del perfil + 1. */
 	uint32_t hits[SALSA64_REC_MAX_BLOCKS + 1];
 	uint16_t pent[SALSA64_REC_MAX_BLOCKS + 1];
+	/* Caché de destinos de JR (SALSA64_REC_OPT_JTC): el código generado la lee desde flags (r28)
+	 * con un desplazamiento fijo. jtc_slot[id] es la entrada que apunta al bloque id (para
+	 * vaciarla al matarlo); jtc_ctr: aciertos y fallos (JTC_STATS). */
+	struct salsa64_rec_jtc jtc[SALSA64_REC_JTC_SLOTS];
+	uint16_t jtc_slot[SALSA64_REC_MAX_BLOCKS + 1];
+	uint32_t jtc_ctr[2];
 	struct salsa64_rec_block blocks[SALSA64_REC_MAX_BLOCKS + 1];
 	uint16_t twin[SALSA64_REC_MAX_BLOCKS + 1];    /* gemelo de un bloque de KSEG0 que depende de FR, para el otro FR */
 	struct salsa64_rec_link links[SALSA64_REC_MAX_LINKS];
