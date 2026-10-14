@@ -1305,10 +1305,50 @@ static void cut_check(const struct gfx_result *res)
 		"separación máx. %.6f px\n", n64.bus.vi.fields, n, groups, orphans, worst);
 }
 
+/* SALSA64_GFX_DUMP_TASKS=N o N-M: el volcado de la HLE (gfx_dump_header, el
+ * de salsa64_rdp_dump en la PS3) de esas tareas, numeradas desde 1 como en
+ * rdp.c y en el perfilado de la PS3, en SALSA64_GFX_DUMP_DIR (o .) como
+ * tarea-N.bin, en el orden de bytes de la PS3; se ven con tools/gfxdump.py y se repiten en RPCS3 con
+ * --replay. */
+static void task_dump(uint32_t task, const struct gfx_result *res)
+{
+	static int parsed;
+	static uint32_t lo, hi;
+	if (!parsed) {
+		parsed = 1;
+		const char *e = getenv("SALSA64_GFX_DUMP_TASKS");
+		if (e && sscanf(e, "%u-%u", &lo, &hi) < 2)
+			hi = lo;
+	}
+	if (!lo || task < lo || task > hi)
+		return;
+	static uint32_t wsrc[2 * GFX_DUMP_MAX_TEX(sizeof gfx_cmd)];
+	static const struct gfx_tex *wtgt[GFX_DUMP_MAX_TEX(sizeof gfx_cmd)];
+	struct gfx_dump_work w = { wsrc, wsrc + GFX_DUMP_MAX_TEX(sizeof gfx_cmd), wtgt, GFX_DUMP_MAX_TEX(sizeof gfx_cmd) };
+	struct gfx_dump_src src = { gfx_cmd, res->cmd_bytes, (const uint8_t *)gfx_vtx, res->vtx_bytes, gfx_tex,
+				    res->tex_bytes, gfx_cache, sizeof gfx_cache, rdram, SALSA64_RDRAM_MAX };
+	uint32_t size = gfx_dump_measure(&src, &w);
+	uint8_t *buf = size ? malloc(size) : NULL;
+	uint32_t got = buf ? gfx_dump_build(&src, &w, buf, size) : 0;
+	if (got)
+		ares_dump_to_be(buf, got);
+	const char *dir = getenv("SALSA64_GFX_DUMP_DIR");
+	char path[512];
+	snprintf(path, sizeof path, "%s/tarea-%u.bin", dir ? dir : ".", task);
+	FILE *f = got ? fopen(path, "wb") : NULL;
+	bool ok = f && fwrite(buf, 1, got, f) == got;
+	if (f && fclose(f) != 0)
+		ok = false;
+	fprintf(stderr, "salsa64-run: volcado de la tarea %u (campo %u, %u comandos, %u triángulos): %s %s\n", task,
+		n64.bus.vi.fields, res->commands, res->triangles, ok ? "escrito en" : "FALLÓ", path);
+	free(buf);
+}
+
 static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_result *res)
 {
 	(void)ctx;
 	struct gfx_result *s = &gfx.sum;
+	task_dump(gfx.tasks + 1, res);
 	if (getenv("SALSA64_GFX_CUTCHECK") && n64.bus.vi.fields >= trace_from)
 		cut_check(res);
 	hp_task(res);

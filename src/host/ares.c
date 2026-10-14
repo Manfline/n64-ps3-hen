@@ -518,6 +518,21 @@ static void cmds_to_be(uint8_t *cmd, uint32_t bytes)
 
 _Static_assert(offsetof(struct gfx_vertex, r) == 24 && sizeof(struct gfx_vertex) == 32, "vértice de 6 floats, RGBA y relleno");
 
+void ares_dump_to_be(uint8_t *dump, uint32_t size)
+{
+	const uint16_t one = 1;
+	struct gfx_dump_header *h = (struct gfx_dump_header *)dump;
+	if (!*(const uint8_t *)&one || size < sizeof *h || sizeof *h + (uint64_t)h->cmd_bytes + h->vtx_bytes > size)
+		return;
+	uint8_t *cmd = dump + sizeof *h, *vtx = cmd + h->cmd_bytes;
+	cmds_to_be(cmd, h->cmd_bytes);
+	for (uint32_t i = 0; i + sizeof(struct gfx_vertex) <= h->vtx_bytes; i += sizeof(struct gfx_vertex)) {
+		swap32(vtx + i, 6);
+		SW32(vtx + i, struct gfx_vertex, pad, 1);
+	}
+	swap32(dump, 4);
+}
+
 static void write_gfxdump(const char *prefix, uint32_t dl, const struct gfx_result *res)
 {
 	char path[4096 + 64];
