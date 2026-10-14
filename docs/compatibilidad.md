@@ -31,7 +31,7 @@ lista vigente; las secciones de abajo son censos anteriores en la Mac.
 | Pokémon Snap | jugable | texturas estiradas en algunos polígonos |
 | Super Smash Bros. (y Smash Remix) | velocidad completa | desde v0.2.4 pasa los KO y el Castillo de Hyrule se ve bien (confirmado en la PS3 real); en v0.2.3 y anteriores se congelaba en el primer KO (`/dev_hdd0/salsa64/fbfx.cfg` con un `1` lo evitaba) |
 | Doom 64 | ~40 % | limitado por el CPU |
-| Banjo-Tooie | pantalla negra | su hilo principal cae por una reserva de memoria nula (no es el arranque) |
+| Banjo-Tooie | intro en el host | desafío del CIC 6105 de la PIF implementado; falta jugar y confirmar en la PS3 |
 | F-Zero X | título en el host | bus abierto del PI (sondeo del 64DD); por confirmar en la PS3 |
 | Diddy Kong Racing | pantalla negra | microcódigo propio de Rare; en desarrollo con el RSP a bajo nivel |
 | Indiana Jones, Resident Evil 2 | no jugables | microcódigos de Factor 5 / Capcom |
@@ -180,7 +180,7 @@ tienen partes que el microcódigo escribe; las cuatro palabras son estables.
 | 2 | ~~HLE del microcódigo de Perfect Dark~~ hecho: F3DPD (sección 3) | Perfect Dark | trabajo de Rare |
 | 3 | ~~F3DEXBG 2.08 de Conker~~ hecho: G_TRI4 en 0x10–0x1F y G_LOAD_UCODE que no corta la lista (sección 3) | Conker | trabajo de Rare |
 | 4 | Probar con el control (pasar los títulos; `--pad` de la rama de F3D) y medir en la PS3 las escenas de docs/proyecto.md | Mediciones de la tabla de juegos | tras 1–3 |
-| 5 | Desafío del CIC 6105 por la PIF durante el juego (no apareció en 3 minutos) | Perfect Dark, Conker, Banjo-Tooie a largo plazo | PIF (`src/core/pif.c`), cuando aparezca |
+| 5 | ~~Desafío del CIC 6105 por la PIF~~ hecho 2026-10-13 (`cic6105_challenge`); Banjo-Tooie lo pide al cargar datos | Banjo-Tooie (arreglado), Perfect Dark y Conker si lo piden | — |
 | 6 | Zelda: en una captura de la demo el cielo aparece en la parte de abajo; revisar si es el encuadre o geometría que falta | Zelda | trabajo de F3D |
 
 ## 2026-10-10 (1) — primera pasada, sin F3D ni audio

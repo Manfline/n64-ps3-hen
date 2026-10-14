@@ -282,6 +282,7 @@ static bool boot_flat(struct salsa64_n64 *n64, struct salsa64_boot_info *info)
 	cpu->gpr[REG_S7] = 1;
 	cpu->gpr[REG_SP] = FLAT_SP;
 
+	bus->pif.challenge6105 = info->cic == SALSA64_CIC_6105;
 	info->kind = SALSA64_BOOT_FLAT;
 	info->entry = entry;
 	info->loaded = len;
