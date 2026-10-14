@@ -1392,9 +1392,10 @@ static void interp_task(struct set *s, const struct gfx_result *res)
 	vmatch_build(cur, s->cmd, res->cmd_bytes);
 	uint64_t t1 = sysGetSystemTime();
 	struct vmatch_stats st;
-	vmatch_pair(prev, cur, INTERP_DISP, &st);
-	uint64_t t2 = sysGetSystemTime();
 	uint32_t nv = res->vtx_bytes / sizeof(struct gfx_vertex);
+	vmatch_pair(prev, cur, INTERP_DISP, &st);
+	vmatch_atomic(cur, (const struct gfx_vertex *)s->vtx, nv, &st);
+	uint64_t t2 = sysGetSystemTime();
 	uint32_t paired = vmatch_prev(prev, cur, &st, (const struct gfx_vertex *)s->vtx, nv,
 				      (float(*)[4])(s->vtx + VTX_INTERP));
 	uint64_t t3 = sysGetSystemTime();
@@ -1411,8 +1412,9 @@ static void interp_task(struct set *s, const struct gfx_result *res)
 		rdp.stats.interp_vertices += nv;
 		rdp.stats.interp_paired += paired;
 		rdp.stats.interp_content += st.by_content;
-		rdp.stats.interp_rejected += st.jumped + st.deformed;
+		rdp.stats.interp_rejected += st.jumped + st.deformed + st.collapsed;
 		rdp.stats.interp_reordered += st.reordered;
+		rdp.stats.interp_atomic += st.atomic;
 	}
 	if (rdp.interp.mode == SALSA64_INTERP_FIXED && rdp.interp.t < 1.0f)
 		rsxkit_vertices_prev(s->vtx_off + VTX_INTERP, RSXKIT_MEM_MAIN, rdp.interp.t);

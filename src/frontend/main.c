@@ -2575,12 +2575,13 @@ static void stats(uint64_t now)
 			uint32_t ifl = rs.interp_fields - sw.rdp0.interp_fields;
 			salsa64_log("gfx: interpolación: %u tareas con anterior (%u cortes, %u sin lugar en las tablas, %u con "
 				    "texturas de un destino), vértices de salida con pareja %.1f %% (%.0f por tarea), %u grupos "
-				    "por el contenido, %u rechazados (saltaron o se deformaron), %u reordenados; emparejar %.3f "
+				    "por el contenido, %u rechazados (saltaron, se deformaron o se aplastarían), %u sin "
+				    "interpolar por su objeto o su malla, %u reordenados; emparejar %.3f "
 				    "ms del PPE por tarea (armar %.3f, emparejar %.3f, posiciones %.3f)",
 				    itasks, rs.interp_cuts - sw.rdp0.interp_cuts, rs.interp_full - sw.rdp0.interp_full,
 				    rs.interp_fbtex - sw.rdp0.interp_fbtex, iv ? 100.0 * ip / iv : 0.0, (double)iv / itasks,
 				    rs.interp_content - sw.rdp0.interp_content, rs.interp_rejected - sw.rdp0.interp_rejected,
-				    rs.interp_reordered - sw.rdp0.interp_reordered, (rs.us_interp - sw.rdp0.us_interp) / 1e3 / tasks,
+				    rs.interp_atomic - sw.rdp0.interp_atomic, rs.interp_reordered - sw.rdp0.interp_reordered, (rs.us_interp - sw.rdp0.us_interp) / 1e3 / tasks,
 				    (rs.us_interp_build - sw.rdp0.us_interp_build) / 1e3 / tasks,
 				    (rs.us_interp_pair - sw.rdp0.us_interp_pair) / 1e3 / tasks,
 				    (rs.us_interp_prev - sw.rdp0.us_interp_prev) / 1e3 / tasks);

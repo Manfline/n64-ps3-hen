@@ -327,9 +327,113 @@ static void vmatch_identity_rules(void)
 	CHECK(!st.cut);
 }
 
+/* Grupos 1 y 2 en una malla (un triángulo con vértices de los dos), el 3
+ * aparte (otro triángulo) a dx_c píxeles del 1. have_b: el 2 estaba en el
+ * cuadro anterior; b_behind: el 2 está detrás de la cámara; a_deform: un
+ * vértice del 1 salta 40 px (se deforma). */
+static void atomic_case(bool have_b, bool b_behind, bool a_deform, float dx_c, struct vmatch_stats *st,
+			uint32_t *paired)
+{
+	float a0[4][4], a1[4][4], b0[4][4], b1[4][4], c0[4][4], c1[4][4];
+	quad_at(a0, 0, 0), quad_at(a1, 2, 0);
+	quad_at(b0, 10, 0), quad_at(b1, 12, 0);
+	quad_at(c0, dx_c, 0), quad_at(c1, dx_c + 2, 0);
+	if (a_deform)
+		a1[3][0] += 2.0f * 40.0f / 160.0f;
+	if (b_behind)
+		for (int k = 0; k < 4; k++)
+			b1[k][3] = -1.0f;
+	frame_init(&fa);
+	add_group(&fa, 0x8000, 0, 4, (const float(*)[4])a0);
+	if (have_b)
+		add_group(&fa, 0x8100, 4, 4, (const float(*)[4])b0);
+	add_group(&fa, 0x8200, 0, 4, (const float(*)[4])c0);
+	finish(&fa);
+	frame_init(&fb);
+	add_group(&fb, 0x8000, 0, 4, (const float(*)[4])a1);
+	add_group(&fb, 0x8100, 4, 4, (const float(*)[4])b1);
+	add_group(&fb, 0x8200, 0, 4, (const float(*)[4])c1);
+	finish(&fb);
+	struct gfx_vertex v[6] = {
+		out_of(a1[0], GFX_VGID(1u, 0u)), out_of(a1[1], GFX_VGID(1u, 1u)), out_of(b1[0], GFX_VGID(2u, 0u)),
+		out_of(c1[0], GFX_VGID(3u, 0u)), out_of(c1[1], GFX_VGID(3u, 1u)), out_of(c1[2], GFX_VGID(3u, 2u)),
+	};
+	vmatch_pair(&fa.t, &fb.t, 120.0f, st);
+	vmatch_atomic(&fb.t, v, 6, st);
+	float prev[6][4];
+	*paired = vmatch_prev(&fa.t, &fb.t, st, v, 6, prev);
+	if (fb.t.g[0].pair < 0)
+		CHECK(near(prev[0][0], v[0].x));
+}
+
+/* Nunca un objeto a medias (vmatch_atomic), y un giro grande no se
+ * interpola. */
+static void vmatch_atomic_mesh(void)
+{
+	struct vmatch_stats st;
+	uint32_t paired;
+	atomic_case(true, false, false, 80, &st, &paired);  /* todos con pareja */
+	CHECK_EQ(st.atomic, 0);
+	CHECK_EQ(paired, 6);
+	/* El grupo 2 es nuevo: su malla entera sin interpolar; el 3, sí. */
+	atomic_case(false, false, false, 80, &st, &paired);
+	CHECK_EQ(fb.t.g[1].why, VMATCH_NEW);
+	CHECK_EQ(fb.t.g[0].pair, -1);
+	CHECK_EQ(fb.t.g[0].why, VMATCH_COMPONENT);
+	CHECK_EQ(fb.t.g[2].pair, 1);
+	CHECK_EQ(st.atomic, 1);
+	CHECK_EQ(st.paired, 1);
+	CHECK_EQ(paired, 3);
+	/* Nuevo pero detrás de la cámara: no cuenta. */
+	atomic_case(false, true, false, 80, &st, &paired);
+	CHECK_EQ(fb.t.g[0].pair, 0);
+	CHECK_EQ(st.atomic, 0);
+	/* Nuevo y el 3 pegado: un grupo nuevo no arrastra su objeto. */
+	atomic_case(false, false, false, 20, &st, &paired);
+	CHECK_EQ(fb.t.g[0].why, VMATCH_COMPONENT);
+	CHECK_EQ(fb.t.g[2].pair, 1);
+	/* El 1 se deforma: con el 2 (pegado) es un objeto con la mitad de sus
+	 * vértices rechazados, entero sin interpolar; el 3, lejos, sí. */
+	atomic_case(true, false, true, 80, &st, &paired);
+	CHECK_EQ(fb.t.g[0].why, VMATCH_DEFORMED);
+	CHECK_EQ(fb.t.g[1].why, VMATCH_OBJECT);
+	CHECK_EQ(fb.t.g[2].pair, 2);
+	/* Con el 3 pegado el rechazado es un tercio del objeto: solo su malla
+	 * (el 2) sin interpolar. */
+	atomic_case(true, false, true, 20, &st, &paired);
+	CHECK_EQ(fb.t.g[1].why, VMATCH_COMPONENT);
+	CHECK_EQ(fb.t.g[2].pair, 2);
+	/* Con el 2 detrás de la cámara (no cuenta), la mitad: el objeto entero. */
+	atomic_case(true, true, true, 20, &st, &paired);
+	CHECK_EQ(fb.t.g[2].why, VMATCH_OBJECT);
+	CHECK_EQ(paired, 0);
+
+	/* Un cuadrilátero que gira media vuelta (se aplastaría a media
+	 * interpolación) y uno que gira un poco. */
+	float r0[4][4], r1[4][4], s0[4][4], s1[4][4];
+	quad_at(r0, -60, 0), quad_at(s0, 60, 0), quad_at(s1, 60, 0);
+	quad_at(r1, -60, 0);
+	for (int k = 0; k < 4; k++)  /* media vuelta: cada vértice, al lado opuesto del centro */
+		r1[k][0] = 2.0f * (2.0f * -60.0f / 160.0f) - r0[k][0], r1[k][1] = -r0[k][1];
+	s1[3][0] += 2.0f * 2.0f / 160.0f;  /* un vértice 2 px */
+	frame_init(&fa);
+	add_group(&fa, 0x8300, 0, 4, (const float(*)[4])r0);
+	add_group(&fa, 0x8400, 0, 4, (const float(*)[4])s0);
+	finish(&fa);
+	frame_init(&fb);
+	add_group(&fb, 0x8300, 0, 4, (const float(*)[4])r1);
+	add_group(&fb, 0x8400, 0, 4, (const float(*)[4])s1);
+	finish(&fb);
+	vmatch_pair(&fa.t, &fb.t, 120.0f, &st);
+	CHECK_EQ(fb.t.g[0].why, VMATCH_COLLAPSE);
+	CHECK_EQ(fb.t.g[1].pair, 1);
+	CHECK_EQ(st.collapsed, 1);
+}
+
 void t_suite_vmatch(void)
 {
 	RUN(vmatch_pairs_and_positions);
 	RUN(vmatch_content_and_cut);
 	RUN(vmatch_identity_rules);
+	RUN(vmatch_atomic_mesh);
 }

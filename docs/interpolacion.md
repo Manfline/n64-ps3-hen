@@ -787,6 +787,47 @@ Zelda igual (40/s); gfxtest igual byte a byte a main. El log separa los
 repetidos en «su juego de búferes ya en uso», «la caché» y «sin
 superficie».
 
+### Nunca un objeto a medias: giros, mallas y objetos
+
+Con el estado del estanque (ranura 1, campo 16772) caminando y girando,
+casi nada se rechaza (0,4 grupos nuevos y 0,2 rechazados por tarea, de
+~235 delante de la cámara), pero cuando Link se da vuelta en un cuadro
+(tarea 107: de correr a la derecha a correr a la izquierda) los
+intermedios lo mostraban despedazado: 9 de sus ~60 grupos se rechazaban
+por deformarse y salían en la pose nueva, y los demás se interpolaban
+aplastados (media vuelta interpolada en línea recta pasa por el centro).
+Cada miembro de Link es una malla aparte (comparte vértices solo con uno o
+dos vecinos) y va en su propio dibujo, así que ni la malla ni el dibujo
+juntan al personaje. Ahora, en `vmatch_atomic` (entre emparejar y las
+posiciones):
+
+- Aplastamiento (`VMATCH_COLLAPSE`): el radio del grupo (desde su centro,
+  en pantalla) en el punto medio de la interpolación, contra el menor de
+  los dos cuadros; menos de 0,7 (un giro de más de un cuarto de vuelta) y
+  no se interpola. Solo se mide en los grupos cuyos vértices se movieron
+  distinto (dispersión de más de un cuarto de su tamaño), así no cuesta.
+  En la tarea 107 se aplastarían 43 de los 59 grupos de Link; en las otras
+  133 tareas, de 0 a 2.
+- Objeto (`VMATCH_OBJECT`): grupos seguidos en el orden de dibujo que se
+  tocan en pantalla (a 4 px o menos, hasta 128 px en total); si la mitad o
+  más de sus vértices quedó rechazada (movida, saltó, deformada, de otro
+  tamaño o aplastada), el objeto entero sale en el cuadro de ahora. Los
+  grupos nuevos no votan ni arrastran a su objeto.
+- Malla (`VMATCH_COMPONENT`): los grupos que comparten triángulos; si uno
+  delante de la cámara quedó sin pareja (también si es nuevo), la malla
+  entera sin interpolar, para que sus triángulos con los demás no se
+  estiren.
+
+Con esto Link sale entero en la pose nueva en los dos intermedios del giro
+(en el resto de la corrida, 0,3 grupos por tarea por su objeto y 0,1
+aplastados). Se probó también juntar por dibujo (el mismo estado de
+render): no alcanza para Link y arrastra partículas que comparten
+textura. GoldenEye contra la verdad igual (29,73 dB: no se rechaza nada).
+En el banco (tarea de Majora) emparejar pasa de 13 a 14 µs; sin rechazos
+ni grupos sin pareja `vmatch_atomic` no hace nada. El volcado
+`SALSA64_INTERP_GRUPOS` da el motivo de cada grupo y su aplastamiento
+(`col`), y `SALSA64_INTERP_SIN_MALLA=1` apaga `vmatch_atomic` en el host.
+
 ## Reproducir en la Mac
 
 ```
@@ -821,8 +862,9 @@ cp tools/interp-index.html build/interp/index.html
   cuadro final (como la PS3), `SALSA64_INTERP_T0=1` agrega `g0-T.ppm` (todo
   en las posiciones de antes: debería dar el cuadro anterior),
   `SALSA64_INTERP_COMO_RSX=1` recorta todo en w > 0 como el RSX,
-  `SALSA64_INTERP_GRUPOS=1` vuelca cada grupo y su pareja
-  (`grupos-T.txt`) y `SALSA64_INTERP_VOLCAR=1` las tareas 20 y 21 para
+  `SALSA64_INTERP_GRUPOS=1` vuelca cada grupo, su pareja y el motivo
+  (`grupos-T.txt`), `SALSA64_INTERP_SIN_MALLA=1` apaga `vmatch_atomic` y
+  `SALSA64_INTERP_VOLCAR=1` las tareas 20 y 21 para
   `tools/vmatch-bench.c`; `ppmtool flicker A M B` cuenta lo que cambia solo
   en un intermedio.
 - En RPCS3 (pasos 1–3, sin presentación nueva): `tools/rpcs3-run.py

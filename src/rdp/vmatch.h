@@ -25,14 +25,17 @@
  *                 pantalla se movieron más que max_disp píxeles (corte,
  *                 teletransporte), si una instancia de un modelo repetido se
  *                 movió mucho más que sus hermanas (una partícula que renace
- *                 en otro lugar) o si un grupo chico en pantalla se deformó de
- *                 golpe (estelas en anillo); y nunca lo que va con proyección
+ *                 en otro lugar), si un grupo chico en pantalla se deformó de
+ *                 golpe (estelas en anillo) o si a media interpolación se
+ *                 aplastaría (un giro de más de un cuarto de vuelta en un
+ *                 cuadro); y nunca lo que va con proyección
  *                 ortográfica (w = 1 en todos sus vértices: el HUD 3D, como
  *                 el botón A que gira en Zelda), que sale como en el cuadro de
  *                 ahora, igual que los rectángulos. Y el cuadro
  *                 entero sin interpolar si más de un tercio de los grupos con
  *                 pareja se movió así o si menos de la mitad de los vértices
  *                 tiene pareja (cambio de plano)
+ *   vmatch_atomic nunca un objeto a medias (ver abajo)
  *   vmatch_prev   por cada vértice de salida, su posición en el cuadro
  *                 anterior (x, y, w desde las coordenadas de recorte de allá
  *                 con el viewport del grupo; z, la de ahora: quien dibuja
@@ -52,6 +55,21 @@
 
 #include "rsp/gfx/gfx.h"
 
+/* Por qué un grupo quedó sin pareja (vmatch_group.why). */
+enum vmatch_why {
+	VMATCH_OK,         /* con pareja */
+	VMATCH_NEW,        /* no estaba en el cuadro anterior (ni su dirección ni su contenido) */
+	VMATCH_MOVED,      /* se movió más que max_disp (corte, teletransporte) */
+	VMATCH_JUMPED,     /* instancia que se movió mucho más que sus hermanas */
+	VMATCH_DEFORMED,   /* grupo chico que se deformó de golpe */
+	VMATCH_SCALE,      /* por el contenido, pero de otro tamaño en pantalla */
+	VMATCH_FLAT,       /* proyección ortográfica (HUD 3D) */
+	VMATCH_COLLAPSE,   /* a media interpolación se aplastaría: giró más de un cuarto de vuelta */
+	VMATCH_OBJECT,     /* tenía pareja, pero se rechazó la mayor parte de su objeto (vmatch_atomic) */
+	VMATCH_COMPONENT,  /* tenía pareja, pero otro grupo de su malla no (vmatch_atomic) */
+	VMATCH_WHY_COUNT
+};
+
 struct vmatch_group {
 	uint32_t addr, hash;   /* dirección en la lista del juego y hash del contenido (0: sin) */
 	uint32_t occ, hocc;    /* repeticiones antes en el cuadro: por dirección y por contenido */
@@ -61,6 +79,8 @@ struct vmatch_group {
 	float vp[4];           /* vscale x, y y vtrans x, y */
 	float cx, cy, ext;     /* centro y tamaño en pantalla (píxeles) de sus vértices visibles; ext < 0: ninguno */
 	uint32_t flat;         /* proyección ortográfica (w = 1 en todos): el HUD 3D; no se interpola */
+	uint32_t front;        /* algún vértice delante de la cámara (w > 0) */
+	uint32_t why;          /* enum vmatch_why */
 	int32_t pair;          /* grupo del cuadro anterior (vmatch_pair), o -1 */
 };
 
@@ -82,6 +102,7 @@ struct vmatch_table {
 	uint32_t *live;           /* 2 × gcap: las claves de esta generación (lugares en keys) */
 	uint32_t nlive;
 	uint8_t *taken;           /* gcap: grupos del anterior ya emparejados (vmatch_pair) */
+	uint32_t *parent;         /* gcap: mallas (vmatch_atomic) */
 	uint32_t gcap, ccap, kcap;
 	uint32_t gen;             /* generación de las claves (vmatch_build): no hace falta borrar la tabla */
 	uint32_t ngroups, nclip;
@@ -94,8 +115,10 @@ struct vmatch_stats {
 	uint32_t paired, paired_vertices;
 	uint32_t moved;                  /* con pareja pero rechazados por el desplazamiento */
 	uint32_t jumped, deformed;       /* rechazados: grupo chico que saltó, grupo que se deformó */
+	uint32_t collapsed;              /* rechazados: se aplastarían a media interpolación (giros grandes) */
 	uint32_t reordered;              /* emparejados con otra instancia que la de su orden (más cerca) */
 	uint32_t flat;                   /* grupos con proyección ortográfica (HUD 3D): sin interpolar */
+	uint32_t atomic;                 /* grupos con pareja que salen sin interpolar por su malla (vmatch_atomic) */
 	uint32_t by_content;             /* encontrados por el contenido (no por la dirección) */
 	bool cut;                        /* el cuadro no se interpola */
 };
@@ -112,6 +135,19 @@ void vmatch_build(struct vmatch_table *t, const uint8_t *cmd, uint32_t cmd_bytes
 /* Empareja `cur` con `prev` (NULL: ninguno) y deja en cur->g[].pair el
  * resultado. max_disp en píxeles de la N64 por cuadro del juego. */
 void vmatch_pair(const struct vmatch_table *prev, struct vmatch_table *cur, float max_disp, struct vmatch_stats *st);
+/* Nunca un objeto a medias: en vez de mezclar partes interpoladas con
+ * partes en el cuadro nuevo, salen enteras como en el cuadro de ahora (sin
+ * interpolar)
+ *   - un objeto: grupos seguidos en el orden de dibujo que se tocan en
+ *     pantalla (los miembros de un personaje, cada uno con su malla y su
+ *     dibujo), si la mayor parte de sus vértices visibles quedó rechazada
+ *     (Link que se da vuelta en un cuadro: casi todos sus miembros se
+ *     aplastarían y los demás no deben interpolarse solos)
+ *   - una malla: los grupos que comparten triángulos (los nvtx vértices de
+ *     salida, de a tres), si uno delante de la cámara quedó sin pareja
+ *     (también si es nuevo: sus triángulos con los demás se estirarían)
+ * Entre vmatch_pair y vmatch_prev. */
+void vmatch_atomic(struct vmatch_table *cur, const struct gfx_vertex *vtx, uint32_t nvtx, struct vmatch_stats *st);
 /* Las posiciones en el cuadro anterior de los nvtx vértices de salida de la
  * tarea (mismo formato que gfx_vertex: x, y, z, w de salida), en `out`
  * (nvtx × 4 floats); devuelve cuántos tienen pareja. */

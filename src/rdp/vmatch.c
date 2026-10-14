@@ -13,6 +13,9 @@
 #define SMALL     64.0f   /* un grupo de menos píxeles que esto es «chico» (partículas, destellos, estelas) */
 #define SAMPLES   32      /* instancias de una clave con que se saca su desplazamiento típico */
 #define FAR_AWAY  1e30f   /* coordenada de pantalla de un vértice que no se ve */
+#define COLLAPSE  0.7f    /* radio a media interpolación / el menor de los dos cuadros: menos, se aplasta (giro > ~90°) */
+#define OBJ_MAX   128.0f  /* tamaño máximo en pantalla (píxeles) de un objeto de vmatch_atomic */
+#define OBJ_GAP   4.0f    /* píxeles entre grupos seguidos del mismo objeto */
 
 static uint32_t mix(uint32_t a, uint32_t b)
 {
@@ -47,6 +50,7 @@ size_t vmatch_table_bytes(uint32_t gcap, uint32_t ccap)
 	b += up16((size_t)2 * gcap * sizeof(uint32_t));
 	b += up16((size_t)2 * gcap * sizeof(uint32_t));
 	b += up16(gcap);
+	b += up16((size_t)gcap * sizeof(uint32_t));
 	return b;
 }
 
@@ -75,6 +79,8 @@ void vmatch_table_init(struct vmatch_table *t, void *mem, uint32_t gcap, uint32_
 	t->live = (uint32_t *)p;
 	p += up16((size_t)2 * gcap * sizeof(uint32_t));
 	t->taken = p;
+	p += up16(gcap);
+	t->parent = (uint32_t *)p;
 }
 
 /* Una entrada de otra generación está libre (vmatch_build no borra la tabla). */
@@ -176,23 +182,26 @@ void vmatch_build(struct vmatch_table *t, const uint8_t *cmd, uint32_t cmd_bytes
 		/* En pantalla: cada vértice visible y el centro y el tamaño del grupo. */
 		float x0 = FAR_AWAY, y0 = FAR_AWAY, x1 = -FAR_AWAY, y1 = -FAR_AWAY, sx = 0.0f, sy = 0.0f;
 		uint32_t vis = 0;
-		g->flat = n > 0;
+		const float vx = g->vp[0], vy = g->vp[1];
+		uint32_t flat = n > 0, front = 0;
 		for (uint32_t k = 0; k < n; k++) {
 			float *s = scr[t->nclip + k];
-			if (fabs_(src[k][3] - 1.0f) > 1e-3f)
-				g->flat = 0;
+			flat &= fabs_(src[k][3] - 1.0f) <= 1e-3f;
+			front |= src[k][3] > 1e-6f;
 			if (!near_screen(src[k])) {
 				s[0] = s[1] = FAR_AWAY;
 				continue;
 			}
 			float iw = 1.0f / src[k][3];
-			s[0] = src[k][0] * iw * g->vp[0];
-			s[1] = src[k][1] * iw * g->vp[1];
+			s[0] = src[k][0] * iw * vx;
+			s[1] = src[k][1] * iw * vy;
 			x0 = s[0] < x0 ? s[0] : x0, x1 = s[0] > x1 ? s[0] : x1;
 			y0 = s[1] < y0 ? s[1] : y0, y1 = s[1] > y1 ? s[1] : y1;
 			sx += s[0], sy += s[1];
 			vis++;
 		}
+		g->flat = flat, g->front = front;
+		g->why = VMATCH_NEW;
 		if (vis) {
 			g->cx = sx / (float)vis, g->cy = sy / (float)vis;
 			g->ext = x1 - x0 > y1 - y0 ? x1 - x0 : y1 - y0;
@@ -314,6 +323,34 @@ static int32_t choose(const struct vmatch_table *prev, const struct vmatch_table
 	return ok0 ? (int32_t)q0 : -1;
 }
 
+/* Un giro grande en un cuadro (Link que se da vuelta) aplasta el grupo a
+ * media interpolación: su radio (desde el centro, con los vértices que se
+ * ven en los dos cuadros, a y b en pantalla) en el punto medio es menos de
+ * COLLAPSE veces el menor de los dos cuadros. Solo con radio de más de 2 px. */
+static bool collapses(const float (*a)[2], const struct vmatch_group *h, const float (*b)[2],
+		      const struct vmatch_group *g)
+{
+	float sx0 = 0, sy0 = 0, sx1 = 0, sy1 = 0, q0 = 0, q1 = 0, q01 = 0;
+	uint32_t nv = 0;
+	for (uint32_t k = 0; k < g->n; k++) {
+		if (a[k][0] == FAR_AWAY || b[k][0] == FAR_AWAY)
+			continue;
+		float ax = a[k][0] - h->cx, ay = a[k][1] - h->cy, bx = b[k][0] - g->cx, by = b[k][1] - g->cy;
+		sx0 += ax, sy0 += ay, sx1 += bx, sy1 += by;
+		q0 += ax * ax + ay * ay, q1 += bx * bx + by * by, q01 += ax * bx + ay * by;
+		nv++;
+	}
+	if (nv < 3)
+		return false;
+	/* n · radio² = suma de |u|² − |suma de u|² / n; el punto medio es
+	 * (u0 + u1) / 2. */
+	float in = 1.0f / (float)nv, smx = sx0 + sx1, smy = sy0 + sy1;
+	float r0 = q0 - (sx0 * sx0 + sy0 * sy0) * in, r1 = q1 - (sx1 * sx1 + sy1 * sy1) * in;
+	float rm = 0.25f * (q0 + q1 + 2.0f * q01 - (smx * smx + smy * smy) * in);
+	float lo = r0 < r1 ? r0 : r1;
+	return lo > 4.0f * (float)nv && rm < COLLAPSE * COLLAPSE * lo;
+}
+
 void vmatch_pair(const struct vmatch_table *prev, struct vmatch_table *cur, float max_disp, struct vmatch_stats *st)
 {
 	memset(st, 0, sizeof *st);
@@ -328,7 +365,9 @@ void vmatch_pair(const struct vmatch_table *prev, struct vmatch_table *cur, floa
 	for (uint32_t i = 0; i < cur->ngroups; i++) {
 		struct vmatch_group *g = &cur->g[i];
 		g->pair = -1;
+		g->why = VMATCH_NEW;
 		if (g->flat) {  /* ni cuenta para decidir un corte */
+			g->why = VMATCH_FLAT;
 			st->flat++;
 			continue;
 		}
@@ -353,6 +392,7 @@ void vmatch_pair(const struct vmatch_table *prev, struct vmatch_table *cur, floa
 		st->by_content += content;
 		const struct vmatch_group *h = &prev->g[p];
 		if (jumped(g, h, ckey)) {
+			g->why = VMATCH_JUMPED;
 			st->jumped++;
 			continue;
 		}
@@ -362,6 +402,7 @@ void vmatch_pair(const struct vmatch_table *prev, struct vmatch_table *cur, floa
 		if (content && g->ext >= 0.0f && h->ext >= 0.0f) {
 			float big = g->ext > h->ext ? g->ext : h->ext, small = g->ext > h->ext ? h->ext : g->ext;
 			if (big > 2.0f * small + 8.0f) {
+				g->why = VMATCH_SCALE;
 				st->deformed++;
 				continue;
 			}
@@ -380,25 +421,154 @@ void vmatch_pair(const struct vmatch_table *prev, struct vmatch_table *cur, floa
 			dy0 = dy < dy0 ? dy : dy0, dy1 = dy > dy1 ? dy : dy1;
 		}
 		if (moved) {
+			g->why = VMATCH_MOVED;
 			st->moved++;
 			continue;
 		}
 		float ext = g->ext > h->ext ? g->ext : h->ext;
+		float spread = dx1 - dx0 > dy1 - dy0 ? dx1 - dx0 : dy1 - dy0;
 		if (dx1 >= dx0 && ext < SMALL) {
-			float spread = dx1 - dx0 > dy1 - dy0 ? dx1 - dx0 : dy1 - dy0;
 			float lim = 0.75f * ext > 24.0f ? 0.75f * ext : 24.0f;
 			if (spread > lim) {
+				g->why = VMATCH_DEFORMED;
 				st->deformed++;
 				continue;
 			}
 		}
+		if (dx1 >= dx0 && spread > 0.25f * ext && collapses(ps + h->clip, h, cs + g->clip, g)) {
+			g->why = VMATCH_COLLAPSE;
+			st->collapsed++;
+			continue;
+		}
 		g->pair = p;
+		g->why = VMATCH_OK;
 		cur->taken[p] = 1;
 		st->paired++;
 		st->paired_vertices += g->n;
 		st->reordered += reord;
 	}
 	st->cut = st->found && (st->moved * 3 > st->found || st->found_vertices * 2 < st->vertices);
+}
+
+static uint32_t uf_find(uint32_t *parent, uint32_t i)
+{
+	while (parent[i] != i)
+		i = parent[i] = parent[parent[i]];
+	return i;
+}
+
+/* El grupo (desde 1) de un vértice de salida, o 0. */
+static uint32_t group_of(uint32_t pad)
+{
+	if (!pad)
+		return 0;
+	return (pad & GFX_VCLIP_FLAG) ? GFX_VCLIP_SERIAL(pad) : GFX_VGID_SERIAL(pad);
+}
+
+static bool rejected(uint32_t why)
+{
+	return why == VMATCH_MOVED || why == VMATCH_JUMPED || why == VMATCH_DEFORMED || why == VMATCH_SCALE ||
+	       why == VMATCH_COLLAPSE;
+}
+
+static void unpair(struct vmatch_group *g, uint32_t why, struct vmatch_stats *st)
+{
+	g->pair = -1;
+	g->why = why;
+	st->atomic++;
+	st->paired--;
+	st->paired_vertices -= g->n;
+}
+
+void vmatch_atomic(struct vmatch_table *cur, const struct gfx_vertex *vtx, uint32_t nvtx, struct vmatch_stats *st)
+{
+	uint32_t ng = cur->ngroups, *parent = cur->parent;
+	if (st->cut || !ng)
+		return;
+	/* Casi siempre no hay nada que hacer: sin rechazados ni grupos sin
+	 * pareja delante de la cámara. */
+	bool any_rejected = false, any_lone = false;
+	for (uint32_t i = 0; i < ng; i++) {
+		const struct vmatch_group *g = &cur->g[i];
+		any_rejected |= g->ext >= 0.0f && rejected(g->why);
+		any_lone |= g->pair < 0 && !g->flat && g->front;
+	}
+	/* Objetos: grupos seguidos que se tocan en pantalla (los del HUD y los
+	 * que no se ven no cortan uno). */
+	const float(*scr)[2] = screen_of(cur);
+	for (uint32_t i = 0; any_rejected && i < ng;) {
+		float b[4] = { FAR_AWAY, FAR_AWAY, -FAR_AWAY, -FAR_AWAY };
+		uint32_t total = 0, bad = 0, j = i;
+		for (; j < ng; j++) {
+			const struct vmatch_group *g = &cur->g[j];
+			if (g->flat || g->ext < 0.0f)
+				continue;
+			float gb[4] = { FAR_AWAY, FAR_AWAY, -FAR_AWAY, -FAR_AWAY };
+			for (uint32_t k = 0; k < g->n; k++) {
+				const float *p = scr[g->clip + k];
+				if (p[0] == FAR_AWAY)
+					continue;
+				gb[0] = p[0] < gb[0] ? p[0] : gb[0], gb[2] = p[0] > gb[2] ? p[0] : gb[2];
+				gb[1] = p[1] < gb[1] ? p[1] : gb[1], gb[3] = p[1] > gb[3] ? p[1] : gb[3];
+			}
+			if (b[0] != FAR_AWAY) {
+				float x0 = gb[0] < b[0] ? gb[0] : b[0], y0 = gb[1] < b[1] ? gb[1] : b[1];
+				float x1 = gb[2] > b[2] ? gb[2] : b[2], y1 = gb[3] > b[3] ? gb[3] : b[3];
+				if (gb[0] > b[2] + OBJ_GAP || gb[2] < b[0] - OBJ_GAP || gb[1] > b[3] + OBJ_GAP ||
+				    gb[3] < b[1] - OBJ_GAP || x1 - x0 > OBJ_MAX || y1 - y0 > OBJ_MAX)
+					break;
+				b[0] = x0, b[1] = y0, b[2] = x1, b[3] = y1;
+			} else {
+				memcpy(b, gb, sizeof b);
+			}
+			if (g->why == VMATCH_NEW)
+				continue;
+			total += g->n;
+			bad += rejected(g->why) ? g->n : 0;
+		}
+		if (j == i)
+			j++;
+		if (bad && 2 * bad >= total)
+			for (uint32_t k = i; k < j; k++)
+				if (cur->g[k].pair >= 0 && !cur->g[k].flat && cur->g[k].ext >= 0.0f)
+					unpair(&cur->g[k], VMATCH_OBJECT, st);
+		i = j;
+	}
+	if (!any_rejected && !any_lone)
+		return;
+	/* Mallas: los grupos de cada triángulo. */
+	for (uint32_t i = 0; i < ng; i++)
+		parent[i] = i;
+	for (uint32_t i = 0; i + 3 <= nvtx; i += 3) {
+		__builtin_prefetch(&vtx[i + 12].pad);
+		uint32_t a = group_of(vtx[i].pad) - 1, b = group_of(vtx[i + 1].pad) - 1, c = group_of(vtx[i + 2].pad) - 1;
+		if (a == b && b == c)
+			continue;
+		uint32_t q[3] = { a, b, c }, root = ~0u;
+		for (int k = 0; k < 3; k++) {
+			if (q[k] >= ng)  /* sin grupo: ~0u */
+				continue;
+			uint32_t r = uf_find(parent, q[k]);
+			if (root == ~0u)
+				root = r;
+			else if (r != root)
+				parent[r] = root;
+		}
+	}
+	/* Una malla con un grupo delante de la cámara sin pareja (que no sea
+	 * del HUD) sale entera como en el cuadro de ahora; taken marca aquí
+	 * las mallas así. */
+	uint8_t *bad = cur->taken;
+	for (uint32_t i = 0; i < ng; i++)
+		bad[i] = 0;
+	for (uint32_t i = 0; i < ng; i++) {
+		const struct vmatch_group *g = &cur->g[i];
+		if (g->pair < 0 && !g->flat && g->front)
+			bad[uf_find(parent, i)] = 1;
+	}
+	for (uint32_t i = 0; i < ng; i++)
+		if (cur->g[i].pair >= 0 && bad[uf_find(parent, i)])
+			unpair(&cur->g[i], VMATCH_COMPONENT, st);
 }
 
 /* Las coordenadas de recorte en el cuadro anterior del vértice con

@@ -96,7 +96,7 @@ static struct {
 	/* Cuentas (desde from_field). */
 	uint64_t v_loaded, v_found, v_matched, groups, groups_found, groups_moved, by_content;
 	uint64_t ns_build, ns_pair, ns_prev, vm_tasks;  /* tiempo de vmatch (host) */
-	uint64_t jumped, deformed, reordered, flat;
+	uint64_t jumped, deformed, reordered, flat, atomic, why[VMATCH_WHY_COUNT];
 	bool base_final, like_rsx;
 	uint64_t out_vtx, out_matched, out_tasks;
 	uint64_t sad_evals, sad_blocks, searches;
@@ -772,6 +772,8 @@ void interp_after_raster(const struct gfx_job *job, const struct gfx_result *res
 	ft->valid = true;
 	clock_gettime(CLOCK_MONOTONIC, &t1);
 	vmatch_pair(pt, &ft->t, st.o.max_disp, &st.vst);
+	if (!getenv("SALSA64_INTERP_SIN_MALLA"))
+		vmatch_atomic(&ft->t, (const struct gfx_vertex *)(uintptr_t)job->vtx_ea, nv, &st.vst);
 	clock_gettime(CLOCK_MONOTONIC, &t2);
 	uint32_t om = vmatch_prev(pt, &ft->t, &st.vst, (const struct gfx_vertex *)(uintptr_t)job->vtx_ea, nv, st.prev_v);
 	clock_gettime(CLOCK_MONOTONIC, &t3);
@@ -817,13 +819,45 @@ void interp_after_raster(const struct gfx_job *job, const struct gfx_result *res
 				float w = ft->t.clip[g->clip + k][3];
 				w0 = w < w0 ? w : w0, w1 = w > w1 ? w : w1;
 			}
-			fprintf(gf, "%3u addr %06x n %2u v0 %2u occ %3u/%d hash %08x hocc %u pair %4d dir %4d cont %4d vis %2d w %g..%g%s",
-				i, g->addr, g->n, g->v0, g->occ, addrn, g->hash, g->hocc, g->pair, byaddr, byhash, nvis, w0, w1,
-				g->flat ? " HUD" : "");
+			static const char *const why[VMATCH_WHY_COUNT] = { "ok",  "nuevo",    "movido", "saltó", "deformado",
+									  "tamaño", "HUD", "aplastado", "objeto", "malla" };
+			fprintf(gf, "%3u addr %06x n %2u v0 %2u occ %3u/%d hash %08x hocc %u pair %4d %-9s dir %4d cont %4d vis %2d w %g..%g",
+				i, g->addr, g->n, g->v0, g->occ, addrn, g->hash, g->hocc, g->pair, g->why < VMATCH_WHY_COUNT ? why[g->why] : "?",
+				byaddr, byhash, nvis, w0, w1);
 			if (nvis)
 				fprintf(gf, " c (%.0f, %.0f)", cx / nvis, -cy / nvis);
 			if (g->pair >= 0 && nvis)
 				fprintf(gf, " d %.1f", sqrtf((cx - px) * (cx - px) + (cy - py) * (cy - py)) / nvis);
+			/* Cuánto se aplasta a media interpolación (con la pareja o la
+			 * candidata por dirección): radio del grupo en t = 0,5 entre el
+			 * menor de los dos cuadros. */
+			int cand = g->pair >= 0 ? g->pair : byaddr;
+			if (cand >= 0 && pt->g[cand].n == g->n) {
+				float m[3][2] = { { 0 } }, r[3] = { 0 };
+				int nk = 0;
+				for (int pass = 0; pass < 2; pass++)
+					for (uint32_t k = 0; k < g->n; k++) {
+						const float *c = ft->t.clip[g->clip + k], *d = pt->clip[pt->g[cand].clip + k];
+						if (c[3] <= 0.05f || d[3] <= 0.05f)
+							continue;
+						float p1[2] = { c[0] / c[3] * g->vp[0], c[1] / c[3] * g->vp[1] };
+						float p0[2] = { d[0] / d[3] * g->vp[0], d[1] / d[3] * g->vp[1] };
+						float q[3][2] = { { p0[0], p0[1] }, { (p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2 }, { p1[0], p1[1] } };
+						for (int j = 0; j < 3; j++) {
+							if (!pass) {
+								m[j][0] += q[j][0], m[j][1] += q[j][1];
+							} else {
+								float dx = q[j][0] - m[j][0] / nk, dy = q[j][1] - m[j][1] / nk;
+								r[j] += dx * dx + dy * dy;
+							}
+						}
+						if (!pass)
+							nk++;
+					}
+				float lo = r[0] < r[2] ? r[0] : r[2];
+				if (nk > 1 && lo > 0.0f)
+					fprintf(gf, " col %.2f r %.1f", sqrtf(r[1] / lo), sqrtf(lo / nk));
+			}
 			fputc('\n', gf);
 		}
 		if (gf)
@@ -848,6 +882,12 @@ void interp_after_raster(const struct gfx_job *job, const struct gfx_result *res
 		st.deformed += st.vst.deformed;
 		st.reordered += st.vst.reordered;
 		st.flat += st.vst.flat;
+		st.atomic += st.vst.atomic;
+		for (uint32_t i = 0; i < ft->t.ngroups; i++) {
+			const struct vmatch_group *g = &ft->t.g[i];
+			if (g->front && g->why < VMATCH_WHY_COUNT)
+				st.why[g->why]++;
+		}
 		if (st.tcsv)
 			fprintf(st.tcsv, "%u,%u,%u,%u,%u,%u,%u,%u\n", st.task, field, st.vst.vertices, st.vst.found_vertices,
 				st.vst.paired_vertices, nv, om, ot);
@@ -959,6 +999,16 @@ void interp_report(void)
 				st.ns_build / 1e3 / st.vm_tasks, st.ns_pair / 1e3 / st.vm_tasks, st.ns_prev / 1e3 / st.vm_tasks,
 				(double)st.groups / st.vm_tasks, (double)st.jumped / st.vm_tasks, (double)st.deformed / st.vm_tasks,
 				(double)st.reordered / st.vm_tasks, (double)st.flat / st.vm_tasks);
+		if (st.vm_tasks) {
+			static const char *const why[VMATCH_WHY_COUNT] = {
+				"con pareja", "nuevos", "se movieron (corte)", "saltaron", "se deformaron", "otro tamaño",
+				"HUD", "se aplastarían", "por su objeto", "por su malla"
+			};
+			fprintf(o, "interp: grupos delante de la cámara por tarea:");
+			for (int q = 0; q < VMATCH_WHY_COUNT; q++)
+				fprintf(o, "%s %.1f %s", q ? "," : "", (double)st.why[q] / st.vm_tasks, why[q]);
+			fputc('\n', o);
+		}
 		if (st.searches)
 			fprintf(o,
 				"interp: imagen: %llu búsquedas, %.0f bloques y %.0f SAD de %ux%u por búsqueda (%.1f por bloque)\n",

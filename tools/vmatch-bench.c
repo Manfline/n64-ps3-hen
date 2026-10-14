@@ -71,6 +71,7 @@ int main(int argc, char **argv)
 		vmatch_build(&t[1], cmd[1], (uint32_t)cl[1]);
 		double b = now();
 		vmatch_pair(&t[0], &t[1], 120.0f, &st);
+		vmatch_atomic(&t[1], (const struct gfx_vertex *)vtx[1], nv, &st);
 		double c = now();
 		paired = vmatch_prev(&t[0], &t[1], &st, (const struct gfx_vertex *)vtx[1], nv, out);
 		double d = now();
