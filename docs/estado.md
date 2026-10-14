@@ -1,5 +1,54 @@
 # Estado
 
+## 2026-10-14 — Cuelgue de F-Zero X a 5× en «SELECT COURSE»: tijeras fuera del destino y esperas al RSX con tope (paquete «Salsa64 perfil 4»)
+
+En la regresión de la v0.2.6 en la PS3 real (app de perfilado «perfil 3»,
+1080p, escala 5×, efectos de framebuffer completos), F-Zero X se colgó al
+pulsar START en el menú: el latido marcaba «presentación quieta en
+«cola»… sin dibujar», ni el botón PS sacaba el menú y hubo que apagar la
+consola a la fuerza. La última tarea registrada por el perfilado era la
+792 (2862 comandos, 3510 triángulos), la primera de la escena con las
+copas en 3D.
+
+- **Reproducido en el host:** con las entradas del log UDP (`--pad`, las
+  lecturas del PIF salen iguales que en la consola: 142, 351, 790…) y el
+  volcado nuevo por número de tarea (`SALSA64_GFX_DUMP_TASKS=792`), la 792
+  sale con los mismos 2862 comandos y 3510 triángulos: es «SELECT COURSE».
+  Las copas fuera de la pantalla traen tijeras con x0 más allá del borde
+  (74,75, 394,75, 714,75 y 1023,75 con x1 = 308; en las tareas siguientes,
+  327, 647 y 967): vacías, el RDP no dibuja nada. Ninguna tarea de menú
+  anterior las tenía; todo lo demás de la tarea está en rango (vértices,
+  texturas).
+- **Causa probable:** rsxkit recortaba al destino solo x1 e y1, así que a
+  5× mandaba `rsxSetScissor` con x = 5119 (y 4835), por encima del máximo
+  de 4095 de las superficies del RSX; a 4× o menos nunca pasa de 4095.
+  RPCS3 lo acepta sin decir nada (la repetición del volcado a 5× no se
+  cuelga). **Arreglo:** rsxkit recorta las cuatro coordenadas y no manda
+  los dibujos con tijeras vacías; la repetición en RPCS3 da la misma imagen
+  byte a byte con y sin el cambio. Falta confirmarlo en la consola.
+- **Seguro (pase lo que pase):** ninguna espera del PPE al RSX es infinita
+  (docs/hilos-ppe.md, «Esperas al RSX con tope»): a los 2 s una línea
+  «RSX: el PPE espera hace …» con qué espera, GET y PUT, si el RSX avanzó,
+  la tarea en traducción y su etapa; mientras, se atiende al sistema; a los
+  12 s (o con «Salir del juego») se escribe el guardado, se cierra la sesión
+  del perfilado (`salida=rsx`) y se sale. La espera de lugar en el búfer de
+  comandos la vigila el latido. Probado en RPCS3 con `colgar-rsx`
+  (`etiqueta`, `rsx`, `fifo`): diagnóstico a los 2 s y salida a los 12 s en
+  los tres.
+- **Verificado:** `test-host` 530/530 en Docker; las 7 escenas del host
+  idénticas byte a byte a main c1ca4a0; gfxtest 42/42 en RPCS3 (la app
+  normal y la de perfilado); holgura de la pila del SPE 0 2624 (sin
+  cambio).
+- **Paquete:** «Salsa64 perfil 4» (SLSA00120, v0.2.5-98-g160effd),
+  `salsa64-perfil-4.pkg`, sha256 7140e49d…22b1e.
+- **Qué mirar en la PS3:** F-Zero X a 5× y 1080p hasta «SELECT COURSE»
+  (y de ahí a la carrera) no debería colgarse. Si se cuelga igual, ya no
+  hace falta apagar a la fuerza: a los 12 s sale solo, y el log UDP trae
+  la línea «RSX: …» (qué espera, GET/PUT, tarea y etapa) y la sesión del
+  perfilado termina con `salida=rsx`: con eso se sigue. No se pudo saber
+  si la pausa (START + SELECT en el campo 1030, junto al START del juego)
+  influyó; con la causa de arriba no hace falta.
+
 ## 2026-10-14 — v0.2.6 lista para la regresión en la PS3
 
 Todo lo de la v0.2.6 está en main (73bc213): F-Zero X (auto y HUD, recarga de
