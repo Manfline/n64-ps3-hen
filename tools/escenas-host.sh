@@ -55,11 +55,12 @@ mkdir -p "$OUT"
 # escena NOMBRE ROM CAMPOS [opciones de salsa64-run…]
 escena() {
 	nombre="$1"
+	archivo="$2"
 	rom="$ROMS/$2"
 	campos="$3"
 	shift 3
 	if [ ! -f "$rom" ]; then
-		echo "$nombre: sin $2, se omite"
+		echo "$nombre: sin $archivo, se omite"
 		return
 	fi
 	"$BIN" -q --fields "$campos" --gfx-frame "$OUT/$nombre.ppm" "$@" "$rom" >"$OUT/$nombre.log" 2>&1 &
