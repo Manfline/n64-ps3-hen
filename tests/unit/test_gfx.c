@@ -1299,6 +1299,89 @@ static void gfx_load_ucode_skips_foreign(void)
 	CHECK_EQ(salsa64_gfx_task_flags(&res), SALSA64_GFX_CUT);
 }
 
+static void ucode_load(const char *text, uint32_t text_pa)
+{
+	uint32_t data = data_alloc(128);
+	memset(t_n64.bus.rdram + data, 0, 128);
+	memcpy(t_n64.bus.rdram + data + 8, text, strlen(text));
+	dl(0xE1000000, 0x80000000 | data);
+	dl(0xDD0007FF, 0x80000000 | text_pa);
+}
+
+/* G_LOAD_UCODE a otro microcódigo de la misma generación (F-Zero X pasa a
+ * mitad de cuadro de F3DEX 2.03 a F3DFLX.Rej 2.03F, con el auto y el HUD): se
+ * sigue interpretando, con el RSP arrancado de nuevo (segmentos, modo
+ * geométrico, vértices y matrices vuelven a cero); uno de la primera
+ * generación o de otra familia (L3DEX) se salta. */
+static void gfx_load_ucode_same_generation(void)
+{
+	const struct vtx v[3] = { { 0, 0, 0, 0, 0, { 0 } }, { 1, 0, 0, 0, 0, { 0 } }, { 0, 1, 0, 0, 0, { 0 } } };
+	/* Dos microcódigos 2.x: el segundo sigue, sus triángulos se dibujan. */
+	start();
+	viewport_320x240();
+	load_mtx(ident, true);
+	load_mtx(ident, false);
+	uint32_t va = put_vertices(v, 3);
+	dl(0x01000000 | 3 << 12 | 3 << 1, va);
+	dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);  /* triángulo 1 */
+	dl(0xDB060004, 0x00123456);                       /* segmento 1 */
+	ucode_load("RSP Gfx ucode F3DFLX.Rej  fifo 2.03F Yoshitaka Yasumoto 1998 Nintendo.", 0x31000);
+	load_mtx(ident, true);
+	load_mtx(ident, false);
+	dl(0x01000000 | 3 << 12 | 3 << 1, va);
+	dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);  /* triángulo 2 */
+	dl(0xE9000000, 0);                                /* G_RDPFULLSYNC */
+	job_ucode = 0x30000;
+	run();
+	job_ucode = 0;
+	CHECK_EQ(res.triangles, 2);
+	CHECK_EQ(res.skipped, 0);
+	CHECK_EQ(res.dl_errors, 0);
+	CHECK_EQ(res.flags & (GFX_RES_FULLSYNC | GFX_RES_LOAD_UCODE | GFX_RES_FOREIGN_END), GFX_RES_FULLSYNC);
+	CHECK_EQ(salsa64_gfx_task_flags(&res), SALSA64_GFX_FULLSYNC);
+
+	/* El modo geométrico vuelve a cero con el microcódigo: el dibujo de antes
+	 * lleva G_CULL_BACK y el de después ya no. */
+	next_task();
+	viewport_320x240();
+	load_mtx(ident, true);
+	load_mtx(ident, false);
+	dl(0xD9000000, G_CULL_BACK);
+	dl(0x01000000 | 3 << 12 | 3 << 1, va);
+	dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);
+	ucode_load("RSP Gfx ucode F3DEX.NoN   fifo 2.04H Yoshitaka Yasumoto 1998 Nintendo.", 0x31000);
+	load_mtx(ident, true);
+	load_mtx(ident, false);
+	dl(0x01000000 | 3 << 12 | 3 << 1, va);
+	dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);
+	job_ucode = 0x30000;
+	run();
+	job_ucode = 0;
+	CHECK_EQ(res.triangles, 2);
+	CHECK_EQ(res.draws, 2);
+	CHECK_EQ(res.skipped, 0);
+	CHECK(draw_n(0) && draw_n(0)->cull == GFX_CULL_BACK);
+	CHECK(draw_n(1) && draw_n(1)->cull == GFX_CULL_NONE);
+
+	/* Primera generación (1.x) o L3DEX (líneas): se saltan. */
+	next_task();
+	ucode_load("RSP Gfx ucode F3DEX       fifo 1.23  Yoshitaka Yasumoto 1998 Nintendo.", 0x31000);
+	dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);  /* no se ejecuta */
+	job_ucode = 0x30000;
+	run();
+	job_ucode = 0;
+	CHECK_EQ(res.triangles, 0);
+	CHECK_EQ(res.skipped, 2);  /* el triángulo y el G_ENDDL del final */
+	next_task();
+	ucode_load("RSP Gfx ucode L3DEX       fifo 2.03  Yoshitaka Yasumoto 1998 Nintendo.", 0x31000);
+	dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);  /* no se ejecuta */
+	job_ucode = 0x30000;
+	run();
+	job_ucode = 0;
+	CHECK_EQ(res.triangles, 0);
+	CHECK_EQ(res.skipped, 2);
+}
+
 /* ---- S2DEX2: fondos prerrenderizados (G_BG_COPY, G_BG_1CYC) ---- */
 
 /* G_LOAD_UCODE a un S2DEX2: los datos del microcódigo llevan el texto que
@@ -2402,6 +2485,7 @@ void t_suite_gfx(void)
 	RUN(gfx_cvg_x_alpha);
 	RUN(gfx_dl_flow);
 	RUN(gfx_load_ucode_skips_foreign);
+	RUN(gfx_load_ucode_same_generation);
 	RUN(gfx_s2dex_bg_copy);
 	RUN(gfx_s2dex_bg_wrap);
 	RUN(gfx_s2dex_bg_scaled);

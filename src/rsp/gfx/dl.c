@@ -32,18 +32,25 @@ static bool debug_dl_task(void)
 
 #define G_TEXRECTFLIP 0xE5u
 
-/* El microcódigo se carga con cada tarea: su estado empieza de cero. */
-static void reset_rsp(struct gfx_state *g)
+void gfx_ucode_reload(struct gfx_state *g, uint32_t text, int gen, bool nonear)
 {
 	memset(g->segments, 0, sizeof g->segments);
 	g->geom = 0;
-	g->dl_sp = 0;
 	g->rdphalf1 = g->rdphalf2 = 0;
-	g->obj_rendermode = 0;
 	g->raw_n = 0;
 	g->tex_s = g->tex_t = 0;
 	g->tex_tile = g->tex_level = g->tex_on = 0;
 	gfx_geom_reset(g);
+	/* Clip ratio con que arranca el microcódigo (sus datos vuelven a la
+	 * DMEM): 1 en la primera generación (F3D, F3DEX 1.x y el de Perfect
+	 * Dark) y 2 en la segunda (F3DEX2, F3DZEX, el de Conker); visto en los
+	 * datos de los microcódigos de los juegos objetivo (docs/estado.md,
+	 * 2026-10-10). La lista la cambia con gSPClipRatio (Mario Kart 64 pone
+	 * 1 en cada cuadro). */
+	g->clip_ratio[0] = g->clip_ratio[1] = gen == 1 ? 1.0f : 2.0f;
+	g->ucode = text;
+	g->near_clip = !nonear;
+	g->dirty = true;
 }
 
 void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *res)
@@ -52,18 +59,14 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 	uint32_t t_start = gfx_io_clock();
 	g->job = job;
 	g->res = res;
-	g->near_clip = !(job->flags & GFX_JOB_NONEAR);
 	if (job->flags & GFX_JOB_RESET)
 		gfx_rdp_reset(g);
-	reset_rsp(g);
-	/* Clip ratio con que arranca cada tarea (los datos del microcódigo
-	 * vuelven a la DMEM): 1 en la primera generación (F3D, F3DEX 1.x y el de
-	 * Perfect Dark) y 2 en la segunda (F3DEX2, F3DZEX, el de Conker); visto
-	 * en los datos de los microcódigos de los juegos objetivo (docs/estado.md,
-	 * 2026-10-10). La lista la cambia con gSPClipRatio (Mario Kart 64 pone
-	 * 1 en cada cuadro). */
-	bool gen1 = job->gbi == SALSA64_GBI_F3D || job->gbi == SALSA64_GBI_F3DEX || job->gbi == SALSA64_GBI_F3DPD;
-	g->clip_ratio[0] = g->clip_ratio[1] = gen1 ? 1.0f : 2.0f;
+	/* El microcódigo se carga con cada tarea: su estado empieza de cero. */
+	g->dl_sp = 0;
+	g->obj_rendermode = 0;
+	gfx_ucode_reload(g, job->ucode, job->gbi == SALSA64_GBI_F3D || job->gbi == SALSA64_GBI_F3DEX ||
+					 job->gbi == SALSA64_GBI_F3DPD ? 1 : 2,
+			 job->flags & GFX_JOB_NONEAR);
 	g->have_draw = false;
 	g->target_sent = false;
 	g->fbimg_cur = -1;
@@ -168,7 +171,7 @@ bool gfx_dl_skip_foreign(struct gfx_state *g, uint32_t op_ucode, uint32_t op_dl,
 	while (gfx_dl_next(g, &w0, &w1)) {
 		uint32_t op = w0 >> 24;
 		res->skipped++;
-		if (op == op_ucode && g->job->ucode && gfx_addr(g, w1) == g->job->ucode)
+		if (op == op_ucode && g->ucode && gfx_addr(g, w1) == g->ucode)
 			return true;
 		if (op == op_dl) {
 			if (!gfx_dl_call(g, w1, (w0 >> 16) & 1))
