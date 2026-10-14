@@ -1,5 +1,102 @@
 # Estado
 
+## 2026-10-14 — F-Zero X en carrera: el microcódigo F3DFLX (autos sin textura) y el fondo blanco junto a la pista (paquete «Salsa64 perfil 6b»)
+
+En la PS3 («perfil 5», interpolación por geometría, Trinitron a 3×, render a
+textura) el autor vio en carrera los autos lisos, sin textura, y un fondo
+blanco que tapaba la pista. Dos volcados (SELECT + R2), la largada y en
+carrera, dibujados en el rasterizador del host salen igual: las dos cosas
+vienen de la HLE, no del RSX.
+
+**Autos (arreglado).** F-Zero X pasa a mitad de cada lista de «F3DEX 2.03» a
+«F3DFLX.Rej 2.03F», un microcódigo propio que la HLE trataba como F3DEX2.
+Medido contra el microcódigo real corriendo en la LLE del host (desde un
+estado de la carrera; el vector que deja en la DMEM y el índice de cada
+vértice) y contra ares:
+
+- Con G_TEXTURE_GEN, F3DFLX **no genera s y t**: quedan las del vértice. El
+  auto lleva la escala 0xFFFF y con la texgen de F3DEX2 sus coordenadas
+  iban a 0–1024 texels, fuera de la tile (limitada): textura lisa.
+- En cambio el **alfa del vértice** sale de una tabla de 256 bytes que la
+  lista sube con G_DMA_IO detrás de los vértices (DMEM 0x8B0; los datos de
+  F3DFLX traen 64 vértices de 20 bytes de 0x3B0 a 0x8B0), indexada desde
+  0x930 por el producto de la normal con la «luz del alfa»: G_MV_LIGHT en el
+  desplazamiento 24 (donde F3DEX2 tiene el lookat Y), tres s16 en los bytes
+  8 a 13, llevados al espacio del modelo. La normal va tal cual (s8 sin
+  normalizar; las del auto miden ~120), × 128 hacia abajo, y la luz con el
+  módulo que le deja su normalización en el RSP (1,0055): así los índices
+  coinciden con los del microcódigo salvo ±1. La tabla son bandas
+  especulares (cerca de los productos 0,2 y 0,9).
+- El blender mezcla ese alfa con el color de niebla (FAFFFF, casi blanco) en
+  el primer ciclo (`c8000230`, G_RM_FOG_SHADE_A) sin G_FOG: los brillos del
+  auto. La HLE solo hacía esa mezcla con G_FOG; con F3DFLX y G_TEXTURE_GEN
+  también.
+- Código: `flx.c` (fuera de línea, `-Os` en el SPE 0), `gfx_ucode_variant`
+  aparte de `gfx_ucode_kind` (por el nombre de los datos que carga el
+  G_LOAD_UCODE; la calcula `gfx_ucode_reload`). Los dibujos en dos ciclos
+  sin textura (`ntex 0`) de los volcados son piezas con G_TEXTURE apagada:
+  no eran la causa.
+- **Medido contra ares** (4 volcados de la demo de antes y 90 nuevos de una
+  instancia propia, carreras de uno y dos jugadores): de 156 comparaciones
+  con la base de ≥ 20 dB en 4×4, 102 suben y ninguna baja, +1,26 dB de media
+  (s-08, el auto rojo de cerca, 24,2 → 26,7 dB; s-41/42 31 → 38 dB). En la
+  LLE desde el estado de carrera, el auto con los reflejos: HLE contra LLE
+  31,3 → 35,6 dB en 4×4 (sin la mezcla de niebla daba 38,2: la LLE pasa
+  por el rasterizador sin esa mezcla en los triángulos crudos, así que los
+  brillos no cuentan ahí; para ellos vale ares).
+- `.Rej`: según el manual de Nintendo (gspF3DLX.Rej) no recorta y no dibuja
+  un triángulo con un vértice fuera de la caja del clip ratio. Se probó y se
+  quitó: no se dispara en ninguno de los 94 volcados ni en la carrera, no hay
+  cómo comprobarlo y la pila del SPE 0 no tenía lugar.
+
+**Fondo blanco junto a la pista (diagnosticado, sin arreglar).** Es un
+fondo enorme dibujado antes de la pista (sin z), en la parte de «F3DEX
+2.03»: triángulos con un vértice lejos (w ≈ 4400, sombra 255) y dos cerca
+de la cámara (w ≈ 90–400, sombra 0) muy fuera de la pantalla. El combiner
+da textura·(1 − sombra) + sombra·k: donde la sombra baja, sale la textura
+clara. Reproducido con ares (volcado s-15 de la demo de dos jugadores: la
+consola, pared de roca oscura; la HLE, blanca; 15,9 dB en 4×4):
+
+- La consola **interpola el sombreado lineal en pantalla** (Gouraud del
+  RDP) y el RSP **recorta contra la caja del clip ratio** (2×) antes: lo vi
+  en los comandos del RDP que quedaron en el búfer FIFO del volcado (los
+  microcódigos «fifo» los dejan en la RDRAM; el de F-Zero mide 0x54000
+  bytes). La HLE y el RSX interpolan la sombra con corrección de
+  perspectiva, así que los vértices cercanos (w chico) dominan y la sombra
+  cae a 0 casi en todo el triángulo.
+- Probado en el rasterizador del host: solo afín, s-15 16 → 22,5 dB pero
+  otras bajan; recorte contra la caja + afín, s-15 16 → 29,6 dB, s-11
+  23,7 → 29,8, s-14 21,9 → 32,7, pero s-13 29,9 → 25,6 y s-16 33,4 → 26,2:
+  el polígono recortado se triangula distinto (con sombra afín el abanico
+  importa: en un píxel de s-16 la consola da 62,7 y mi abanico 194; en otro
+  coincide, 227).
+- **Para arreglarlo** hacen falta las dos cosas: el recorte del RSP contra
+  la caja del clip ratio con el mismo orden de vértices y de abanico que
+  F3DEX2 (leerlo de los triángulos del FIFO de los volcados o del
+  microcódigo), y la sombra afín en el rasterizador y en el RSX (rsxkit:
+  pasar el color multiplicado por w en un texcoord y dividir en el fragment
+  program; cuesta una división por píxel). Toca a todos los juegos: va
+  aparte, con su medición en la PS3.
+
+**Verificado:** `test-host` 531/531 en Docker (pruebas nuevas
+`gfx_f3dflx_alpha`: alfa por la tabla, s y t del vértice, normal sin
+normalizar, niebla con el alfa sin G_FOG; con F3DEX2 la texgen de siempre);
+las 7 escenas del host y además Snap, Kirby 64, Smash y Conker idénticas
+byte a byte; gfxtest 42/42 en RPCS3; los volcados de ares del auto de cerca
+repetidos en RPCS3 antes y después (el auto con los brillos en el RSX).
+**Pila del SPE 0: holgura 1584** (mínimo 1536; era 2624): `dl.c` vuelve a
+`-Os` (−370 bytes, como el 2026-10-13) y `flx.c` va con `-Os`; los dos
+campos nuevos de `gfx_state` van al final (en otro lugar desplazan los demás
+y el código crece). Queda la palanca de `texcache.c` con `-Os` (1,2 KB).
+
+**Paquete:** «Salsa64 perfil 6b» (SLSA00120, v0.2.5-103-g1c48818),
+`salsa64-perfil-fzero.pkg`, sha256 db9ca72f…99140.
+
+**Falta validar en la PS3 real:** F-Zero X en carrera, el auto propio y los
+rivales de cerca: deben verse las franjas y brillos claros que se mueven con
+la luz (antes lisos). El fondo blanco de la pista espacial sigue (ver
+arriba).
+
 ## 2026-10-14 — Las ROMs de 64 MB no cargaban después de varios juegos en la misma corrida (paquete «Salsa64 perfil 5»)
 
 En la regresión de la v0.2.6 en la PS3 real (app de perfilado «perfil 3»),
