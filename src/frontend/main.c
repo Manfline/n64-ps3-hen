@@ -1823,6 +1823,32 @@ static void emu_park(void)
 	pacer_init(&pacer, pacer.enabled, pacer_sleep, NULL);
 }
 
+/* Una invalidación masiva del recompilador (el código del juego pisado
+ * entero, como Super Odyssey 64 al caerse en la PS3 con la interpolación
+ * encendida: 6758 bloques en un campo) va al log con quién escribió: el CPU
+ * o lo demás (DMA, el RDP, los trucos), y en qué zona de la RDRAM. */
+#define INVAL_MASS 1000u
+static struct {
+	uint64_t all, cpu;
+} inval_seen;
+
+static void inval_check(void)
+{
+	struct salsa64_rec_stats *st = &rec.stats;
+	if (st->invalidated < inval_seen.all || st->inval_cpu < inval_seen.cpu)
+		inval_seen.all = inval_seen.cpu = 0;  /* el recompilador volvió a empezar (otro juego) */
+	uint64_t all = st->invalidated - inval_seen.all, cpu = st->inval_cpu - inval_seen.cpu;
+	if (all >= INVAL_MASS)
+		salsa64_log("recompilador: %llu bloques invalidados en el campo %u: %llu por escrituras del CPU "
+			    "(%06x–%06x), %llu por DMA u otros (%06x–%06x)", (unsigned long long)all, n64.bus.vi.fields,
+			    (unsigned long long)cpu, cpu ? st->inval_cpu_lo : 0, cpu ? st->inval_cpu_hi : 0,
+			    (unsigned long long)(all - cpu), all > cpu ? st->inval_other_lo : 0,
+			    all > cpu ? st->inval_other_hi : 0);
+	inval_seen.all = st->invalidated;
+	inval_seen.cpu = st->inval_cpu;
+	salsa64_rec_inval_reset(&rec);
+}
+
 /* Pausa (menú del sistema, cuadro de salir): quieta en el límite del campo
  * hasta que presentación baje pause_req. Las tareas del RSP en vuelo
  * terminan solas en su SPE y su fin emulado llega en el campo siguiente;
@@ -1878,6 +1904,8 @@ static void emu_thread(void *arg)
 			 (n64.cpu.cycles - c0) - (n64.cpu.idle_cycles - i0), gfx_spu.sleep_us + jpeg_spu.sleep_us - s0,
 			 h1.load && h1.load_phase == ph0 ? (int)ph0 : -1);
 		cheats_apply(&game_cheats, &n64.bus);  /* los activos del juego (vacío si no hay) */
+		if (use_rec)
+			inval_check();
 		uint64_t t1 = sysGetSystemTime();
 		n64.cpu.rec_mark = SALSA64_SMP_OTHER;
 		beat.emu_at = "fin del campo";
