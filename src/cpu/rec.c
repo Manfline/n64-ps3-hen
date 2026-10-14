@@ -1121,7 +1121,32 @@ void salsa64_rec_block_detach(struct salsa64_rec *rec, unsigned id)
 	rec->cpu->rec_abort = 1;
 }
 
+/* Anota en [*lo, *hi) lo que mató bloques. */
+static void inval_note(uint32_t *lo, uint32_t *hi, uint32_t pa, uint32_t len)
+{
+	if (pa < *lo)
+		*lo = pa;
+	if (pa + len > *hi)
+		*hi = pa + len;
+}
+
+void salsa64_rec_inval_reset(struct salsa64_rec *rec)
+{
+	rec->stats.inval_cpu_lo = rec->stats.inval_other_lo = ~0u;
+	rec->stats.inval_cpu_hi = rec->stats.inval_other_hi = 0;
+}
+
+static void invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t len);
+
 void salsa64_rec_invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t len)
+{
+	uint64_t before = rec->stats.invalidated;
+	invalidate(rec, pa, len);
+	if (rec->stats.invalidated != before)
+		inval_note(&rec->stats.inval_other_lo, &rec->stats.inval_other_hi, pa, len);
+}
+
+static void invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t len)
 {
 	if (!len || pa >= rec->rdram_size || !rec->map_dirty)
 		return;
@@ -1154,7 +1179,12 @@ void salsa64_rec_invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t len)
 
 void salsa64_rec_code_written(struct salsa64_rec *rec, uint32_t pa, uint32_t len)
 {
-	salsa64_rec_invalidate(rec, pa, len);
+	uint64_t before = rec->stats.invalidated;
+	invalidate(rec, pa, len);
+	if (rec->stats.invalidated != before) {
+		rec->stats.inval_cpu += rec->stats.invalidated - before;
+		inval_note(&rec->stats.inval_cpu_lo, &rec->stats.inval_cpu_hi, pa, len);
+	}
 }
 
 static bool rec_ids_ok(const struct salsa64_rec *rec)
@@ -1625,6 +1655,7 @@ bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *co
 	struct salsa64_rec_prof *prof = rec->prof;
 	struct salsa64_rec_trace *trace = rec->trace;
 	memset(rec, 0, sizeof *rec);
+	salsa64_rec_inval_reset(rec);
 	rec->trace = trace;
 	rec->opts = opts;
 	rec->fm_window = fm_window;

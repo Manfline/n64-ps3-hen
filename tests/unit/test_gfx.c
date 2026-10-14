@@ -29,6 +29,7 @@ static struct gfx_result res;
 static uint32_t dl_pc, data_pc;
 static uint32_t job_ucode;   /* dirección física del microcódigo de la tarea */
 static uint32_t job_flags;   /* GFX_JOB_* de las tareas */
+static uint32_t job_cmd_cap; /* búfer de comandos de las tareas (0: todo out_cmd) */
 
 /* ---- Armado de la display list ---- */
 
@@ -52,6 +53,7 @@ static void start(void)
 	data_pc = DATA_PA;
 	cache_task = 0;
 	job_flags = 0;
+	job_cmd_cap = 0;
 	gfx_init(&gs);
 }
 
@@ -72,7 +74,7 @@ static void run(void)
 	job.vtx_ea = (uint64_t)(uintptr_t)out_vtx;
 	job.vtx_cap = sizeof out_vtx;
 	job.cmd_ea = (uint64_t)(uintptr_t)out_cmd;
-	job.cmd_cap = sizeof out_cmd;
+	job.cmd_cap = job_cmd_cap ? job_cmd_cap : sizeof out_cmd;
 	job.tex_ea = (uint64_t)(uintptr_t)out_tex;
 	job.tex_cap = sizeof out_tex;
 	if (cache_task) {
@@ -624,6 +626,52 @@ static void gfx_interp_groups(void)
 	interp_scene(0, -2);
 	for (int i = 0; i < 6; i++)
 		CHECK_EQ(out_vtx[i].pad, 0);
+}
+
+/* Los registros GFX_OP_VGROUP no pasan de un tercio del búfer de comandos
+ * (GFX_VGROUP_SHARE): los que no caben faltan (GFX_RES_VGROUP_FULL) y sus
+ * vértices quedan sin identidad, pero la tarea no se corta y dibuja lo
+ * suyo. El hash del contenido es FNV-1 de las palabras big-endian de los 16
+ * bytes de cada vértice. */
+static void gfx_interp_budget(void)
+{
+	start();
+	job_flags = GFX_JOB_INTERP;
+	job_cmd_cap = 2048;  /* 682 bytes para los registros: 7 de 96 */
+	viewport_320x240();
+	load_mtx(ident, true);
+	load_mtx(ident, false);
+	set_combine(CC_A_ZERO, CC_ZERO, CC_C_ZERO, CC_SHADE, CC_ZERO, CC_ZERO, CC_ZERO, CC_SHADE);
+	dl(0xD9000000, G_SHADING_SMOOTH);
+	dl(0xFF100000 | 319, 0x00100000);
+	const struct vtx v[3] = {
+		{ 0, 0, 0, 0, 0, { 255, 0, 0, 255 } },
+		{ 1, 0, 0, 0, 0, { 0, 255, 0, 255 } },
+		{ 0, 1, 0, 0, 0, { 0, 0, 255, 255 } },
+	};
+	uint32_t va = put_vertices(v, 3);
+	for (int i = 0; i < 10; i++)
+		dl(0x01000000 | 3 << 12 | (0 + 3) << 1, va);
+	dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);
+	dl(0xE9000000, 0);
+	run();
+	CHECK_EQ(res.triangles, 1);
+	CHECK(res.flags & GFX_RES_VGROUP_FULL);
+	CHECK(!(res.flags & GFX_RES_CUT));
+	CHECK(res.flags & GFX_RES_FULLSYNC);
+	CHECK_EQ(gs.vgroups, 7);
+	CHECK(find_cmd(GFX_OP_VGROUP, 6) != NULL && find_cmd(GFX_OP_VGROUP, 7) == NULL);
+	CHECK(draw_n(0) != NULL);
+	for (int i = 0; i < 3; i++)
+		CHECK_EQ(out_vtx[i].pad, 0);
+	const struct gfx_vgroup *r = (const struct gfx_vgroup *)find_cmd(GFX_OP_VGROUP, 0);
+	CHECK(r != NULL);
+	if (r) {
+		uint32_t h = 0x811C9DC5u;
+		for (uint32_t k = 0; k < 12; k++)
+			h = (h ^ salsa64_rd32(t_n64.bus.rdram + va + 4 * k)) * 0x01000193u;
+		CHECK_EQ(r->h.c, h ? h : 1u);
+	}
 }
 
 static void gfx_matrix_stack(void)
@@ -2605,6 +2653,7 @@ void t_suite_gfx(void)
 	RUN(gfx_combiner_shade_squared);
 	RUN(gfx_triangle_transform);
 	RUN(gfx_interp_groups);
+	RUN(gfx_interp_budget);
 	RUN(gfx_clip_ratio_f3dex2);
 	RUN(gfx_matrix_stack);
 	RUN(gfx_insert_matrix_billboard);

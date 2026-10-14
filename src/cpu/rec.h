@@ -128,6 +128,13 @@ struct salsa64_rec_stats {
 	uint64_t fm_off;         /* fastmem apagado (TLB que choca con la ventana, tabla de sitios llena) */
 	uint64_t grp_heads;      /* base en caché: grupos compilados */
 	uint64_t grp_members;    /* base en caché: accesos de esos grupos (cabezas incluidas) */
+	/* De invalidated, los que mató una escritura del CPU (vr4300_code_check);
+	 * el resto son de DMA, el RDP, los trucos o el frontend. La zona escrita
+	 * que mató bloques, por clase (lo > hi: ninguna), desde que quien lee
+	 * las estadísticas la vuelve a vaciar (salsa64_rec_inval_reset): para
+	 * avisar quién pisó el código en una invalidación masiva. */
+	uint64_t inval_cpu;
+	uint32_t inval_cpu_lo, inval_cpu_hi, inval_other_lo, inval_other_hi;
 };
 
 /* Etiquetas y correcciones del ensamblador de rec_emit.c. */
@@ -417,6 +424,8 @@ void salsa64_rec_run(struct salsa64_rec *rec);
 /* La RDRAM [pa, pa + len) cambió fuera del CPU (DMA, carga de la ROM,
  * pruebas): descarta el código que dependa de ella. */
 void salsa64_rec_invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t len);
+/* Vacía las zonas de inval_cpu_lo/hi e inval_other_lo/hi. */
+void salsa64_rec_inval_reset(struct salsa64_rec *rec);
 /* Descarta todo el código generado (y cuenta por qué). */
 void salsa64_rec_flush_why(struct salsa64_rec *rec, enum salsa64_rec_flush_cause why);
 static inline void salsa64_rec_flush(struct salsa64_rec *rec) { salsa64_rec_flush_why(rec, SALSA64_REC_FLUSH_OTHER); }

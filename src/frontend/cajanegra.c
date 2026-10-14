@@ -21,7 +21,8 @@
 
 static inline void lwsync(void) { __asm__ volatile("lwsync" ::: "memory"); }
 
-/* Las tareas más grandes que la HLE puede producir (rdp.c: CMD_BYTES). */
+/* Los dibujos de la tarea más grande que la HLE puede producir (rdp.c:
+ * CMD_BYTES; los registros de la interpolación van en el lugar de más). */
 #define CMD_MAX (768u << 10)
 /* Cabecera de la ROM (como core/state.c). */
 #define ROM_CRC1 0x10

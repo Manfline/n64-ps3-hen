@@ -1,5 +1,103 @@
 # Estado
 
+## 2026-10-14 — La interpolación cambiada en vivo: Mario Kart 64 sin música y Super Odyssey 64 caído (paquete «Salsa64 perfil», interp)
+
+En la regresión de la v0.2.6 en la PS3 real («perfil 3» y «perfil 5») el
+autor cambió la interpolación por geometría desde «Imagen» en el menú de
+pausa. En Mario Kart 64 la encendió (con la escala a 3×) y después la apagó,
+la encendió y la volvió a apagar (y 5×): al rato se quitó la música de fondo
+y los efectos siguieron. En Super Odyssey 64 (hack de SM64 de 64 MB) la
+encendió en el campo 2208: el muestreo pasó a «eventos» 69, 91 y 94,5 %
+(antes 38 %), el audio se estiró 65–100 % con la emulación al 93 % y se oía
+mal; en el campo 3269 se invalidaron 6758 de 6902 bloques y la emulación
+quedó a 1,2 MIPS hasta salir con el botón PS.
+
+- **Mario Kart 64: no es la interpolación, es el botón L del juego**, que
+  enciende y apaga la música. El log dice que el juego leyó L cinco veces
+  (campos 4134, 4256, 4302, 4338 y 4352, entre 5 y 9 s después de la segunda
+  pausa): apagada. En el host, con las entradas del log como guion de
+  `--pad` (`tools/pad-del-log.py`, nuevo) y sin interpolación ni pausas, el
+  volumen de las voces de la música (los instrumentos con su libro ADPCM en
+  0x3FFxxx) cae a 0 en el campo ~4250 y no vuelve hasta el 10 000; sin las L
+  sigue en ~13 000. La L de la N64 es L1 del DualShock 3 (`padmap.c`).
+- **Super Odyssey 64: lo que sí era de la interpolación, el costo en el SPE
+  0.** Con la interpolación la HLE deja por cada G_VTX un registro
+  `GFX_OP_VGROUP` (hash del contenido y coordenadas de recorte); en el SPE 0,
+  con `-Os`, `gfx_vgroup` llamaba a `memcpy` por cada palabra del hash y por
+  cada vértice (desensamblado del objeto SPU). Los vértices pasaron de 7,2 a
+  12 ms por tarea y la tarea de 14 a 19–23 ms; el fin emulado de la tarea
+  gráfica espera al SPE (`rsp.c`), así que el juego vio un RSP más lento: en
+  la escena de su pausa (7400 triángulos) las tareas de audio bajaron de 60 a
+  28 por segundo, la emulación a 55 campos/s y el audio se estiró. Los
+  «eventos» del muestreo son la emulación durmiendo mientras espera al SPE
+  (19 ms por tarea). Además esa escena no cabía en las tablas del
+  emparejamiento («sin lugar en las tablas» en todas las tareas): todo ese
+  trabajo era en vano.
+- **Riesgo de cortes por la interpolación:** los registros compartían los
+  768 KB del búfer de comandos con los dibujos y con la bandera la HLE tenía
+  1,33 MB de vértices en vez de 2 MB. Una tarea pesada se podía cortar, y un
+  corte adelanta la interrupción del DP y pierde el final de la lista. En la
+  PS3 no pasó con Super Odyssey 64 («0 tareas cortadas»); en el host (512 KB)
+  sí: 771 tareas cortadas y sin el texto de su pausa.
+- **La caída de Super Odyssey 64 no se reproduce.** Firma (sesión del
+  perfilado): el juego en su propia pausa (START en el campo 2655, sin más
+  entradas); en el campo 3268–3269, 6758 bloques invalidados con 2 KB de DMA
+  del cartucho y ninguna tarea del RSP terminada; el bloque del vector de
+  excepciones (0x80000180) se recompiló con 11 instrucciones (antes 4, el
+  salto a `__osException`; las 11 encajan con el comienzo de
+  `__osException` copiado ahí) y desde entonces el CPU entra a ese bloque y
+  sale por una excepción una y otra vez (camino lento 55 %, despachador
+  33 %). Alguien reescribió el código del juego y el vector. No pasa en el
+  host (intérprete) con las entradas del log hasta el campo 4500, ni con
+  tareas gráficas de 1,4 a 12 millones de ciclos y de audio de 0,15 a 1,5
+  millones (lo que tardan en la PS3, o mucho más), ni en RPCS3 (intérprete
+  del CPU) con la interpolación encendida 1900 campos en la misma escena
+  (estado del host en el campo 2700). Lo que queda distinto en la PS3 son el
+  recompilador y los tiempos reales: queda separado de la interpolación,
+  sin causa.
+- **Arreglos:**
+  - `gfx_vgroup` sin `memcpy`: lee el hash por bytes y asigna las cuatro
+    coordenadas; el SPU lo compila sin llamadas.
+  - `GFX_JOB_INTERP` solo cuando sirve (`interp_wanted`, `rdp.c`): no con el
+    juego a 60 cuadros ni en las 90 tareas que siguen a una que no cupo
+    (tablas, vértices o registros); después se vuelve a probar. El log de
+    cada 5 s cuenta las tareas sin la bandera.
+  - Los registros van en un tercio del búfer de comandos
+    (`GFX_VGROUP_SHARE`), que el consumidor da de más: 384 KB sacados del
+    arena de texturas (de 3,75 a 3,375 MB por juego de búferes); la HLE
+    tiene siempre los 2 MB de vértices. Lo que no cabe deja la tarea sin
+    interpolar (`GFX_RES_VGROUP_FULL`) y nunca la corta.
+  - Diagnóstico: una invalidación de 1000 bloques o más en un campo va al
+    log («recompilador: N bloques invalidados en el campo C: X por
+    escrituras del CPU (zona), Y por DMA u otros (zona)»), para saber quién
+    escribió si Super Odyssey 64 se vuelve a caer.
+  - Pruebas: `interp-alternar` («N [E1 E2]»: cada N campos, una pausa como
+    la del menú en la que se cambia la interpolación y la escala),
+    `estados-prueba` «0 B» (solo cargar la ranura 9, p. ej. un estado del
+    host), la salida de `capturas` reemplaza a `AUTO_FIELDS`, y el log de
+    audio da los comandos por tarea. Ver `docs/interpolacion.md`, «Lo que la
+    interpolación le cuesta a la emulación».
+- **Verificado:** `test-host` 531/531 en Docker (prueba nueva
+  `gfx_interp_budget`: tope de los registros, sin corte, el hash); las 7
+  escenas del host idénticas byte a byte a 7fda50a (112 imágenes); gfxtest
+  42/42 en RPCS3 (app normal y de perfilado); holgura de la pila del SPE 0
+  2112 (era 2624: el código sin llamadas ocupa ~500 bytes más; mínimo 1536).
+  En RPCS3, Mario Kart 64 desde un estado del host (campo 2100) con
+  `interp-alternar` «200 3 5»: 11 cambios en vivo, las tareas de audio
+  parejas y 333–383 comandos por tarea (como en el host), la música sigue;
+  Super Odyssey 64 en su pausa con la interpolación: 109 de 110 tareas sin
+  la bandera y sin caída. En el host, Super Odyssey 64 con `--interp`: 0
+  tareas cortadas y el texto de la pausa.
+- **Paquete:** «Salsa64 perfil» (SLSA00120, v0.2.5-104-g908e0c8),
+  `salsa64-perfil-interp.pkg`, sha256 abbc101d…80583.
+- **Falta validar en la PS3 real:** Super Odyssey 64 con la misma secuencia
+  (la interpolación encendida desde la pausa y la pausa del juego con
+  START): «gfx en el SPE por tarea: vértices …» con la interpolación cerca
+  de sin ella, muchas «tareas sin pedir la identidad» en su pausa, 60
+  campos/s y el audio sin estirar. Si se cae otra vez, mirar la línea
+  «recompilador: … bloques invalidados …». En Zelda OoT y Mario 64, los
+  intermedios como antes (Zelda ~40/s) y el SPE 0 con la interpolación
+  encendida contra apagada. Mario Kart 64: nada que arreglar.
 ## 2026-10-14 — Zelda OoT sin fondos prerrenderizados: el S2DEX ya no se reconocía (paquete «Salsa64 perfil 6»)
 
 En la PS3 («perfil 3», interpolación por geometría encendida) las salas

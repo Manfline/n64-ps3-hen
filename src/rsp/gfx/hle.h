@@ -217,6 +217,7 @@ struct gfx_state {
 	struct gfx_load loads[GFX_LOADS];  /* anillo; load_next es la próxima a escribir */
 	uint32_t load_next;
 	uint32_t vgroups;          /* registros GFX_OP_VGROUP de la tarea (GFX_JOB_INTERP; en el hueco antes de tmem) */
+	uint32_t vgroup_bytes;     /* y sus bytes (el otro lugar del hueco) */
 	uint8_t tmem[4096] __attribute__((aligned(16)));
 	struct gfx_texcache tc;
 	/* Fuera del tramo de los estados guardados: al cargar uno se olvida
@@ -269,7 +270,9 @@ const uint8_t *gfx_io_read(struct gfx_state *g, enum gfx_io_slot slot, uint32_t 
 bool gfx_io_dl(struct gfx_state *g, uint32_t addr, uint32_t *w0, uint32_t *w1);
 /* Lugar para n vértices de salida (≤ 6), o NULL si no caben. */
 struct gfx_vertex *gfx_io_vtx(struct gfx_state *g, uint32_t n);
-/* Escribe un registro de comando (size múltiplo de 16). false si no cabe. */
+/* Escribe un registro de comando (size múltiplo de 16). false si no cabe:
+ * la tarea se corta (GFX_RES_CMD_FULL), salvo un GFX_OP_VGROUP, que solo
+ * falta (GFX_RES_VGROUP_FULL). */
 bool gfx_io_cmd(struct gfx_state *g, const void *rec, uint32_t size);
 /* Área para decodificar una textura de `size` bytes (≤ GFX_TEX_MAX, gfx.h)
  * y su entrega al arena: devuelve el offset o -1 si no cabe. */

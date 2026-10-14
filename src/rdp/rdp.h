@@ -89,6 +89,7 @@ struct salsa64_rdp_stats {
 	uint32_t interp_atomic;                      /* grupos con pareja sin interpolar por su objeto o su malla (vmatch_atomic) */
 	uint32_t interp_kept;                        /* deformados o aplastados que se interpolan con su objeto */
 	uint32_t interp_fbtex;                       /* tareas sin interpolar por leer texturas de un destino */
+	uint32_t interp_skipped;                     /* tareas sin GFX_JOB_INTERP con la interpolación encendida (interp_wanted) */
 	uint64_t us_interp, us_interp_build, us_interp_pair, us_interp_prev;
 	/* Campos intermedios dibujados, los que tocaban pero el cuadro no se
 	 * interpola (corte, sin anterior, texturas de un destino: va entero) y
