@@ -125,6 +125,79 @@ consola real, los datos del último. Con el relleno entregado la pantalla
 entera de cada uno se vuelve a borrar y no importa en este caso; en otro
 juego con relleno parcial sí podría.
 
+## 2026-10-13 — Sombras de Conker: render a textura de 8 bits (rama `suspicious-saha-fe2758`)
+
+En Salsa64 fallaban todas las sombras de Conker. Con ocho volcados de ares
+(`salsa64-run --ares --pasadas 2`, que corre la lista como dos cuadros
+seguidos para que lo que se lee por la RDRAM sea lo que copió el
+consumidor, como en la PS3) salió el mecanismo: la silueta de cada
+personaje se dibuja en una imagen de 64 × 64 de 8 bits declarada CI, se
+desenfoca releyéndola como I8 con dos texrects y el piso la usa como alfa
+de la sombra. Dos fallas: la HLE decodificaba esas I8 de la RDRAM antes de
+que el RSX dibujara la silueta (solo las RGBA16 se leían del destino), y
+`src/rdp` solo copiaba a la RDRAM las imágenes de 8 bits de intensidad. Y
+una tercera al arreglarlas: la copia del destino que se lee mientras se
+dibuja era una por tarea, y Conker reutiliza la imagen para cada
+personaje. Arreglo en la HLE (`fbimg` lleva las de 8 bits; una I8 que cae
+en una sale como `GFX_TEX_TARGET`), en `src/rdp` (la lee del destino con
+`RSXKIT_REMAP_RRRR`, o la decodifica con `rdp_decode_i8`; copia las de 8
+bits de cualquier formato; recopia el scratch si se dibujó donde se lee) y
+en el rasterizador del host (docs/framebuffer.md).
+
+- Contra la consola, 4 × 4: de 20,8–25,8 dB (como en la PS3) a 23,5–30,4,
+  igual o mejor que con la máscara que la propia consola dejó en la RDRAM.
+- Pila del SPE 0: holgura 1856 (main 1984; −128 bytes de texto).
+- De los juegos de Rare medidos en el host, solo Conker dibuja en
+  imágenes de 8 bits (3544 texturas I8 leídas de su imagen en 4000 campos
+  de la intro, ninguna de la RDRAM); DK64, Perfect Dark, Banjo-Kazooie y
+  GoldenEye no. Banjo-Tooie (no llega a dibujar en el host) y Diddy Kong
+  Racing (microcódigo sin HLE) no se pudieron medir.
+- RPCS3: gfxtest igual que main. La repetición del cuadro de Conker sale
+  con el piso negro cuando hay dos copias del scratch en la misma tarea
+  (con una, bien; en el host, bien).
+- **PS3 real («Salsa64 aristas 2»): las sombras de Conker funcionan.** El
+  piso negro era cosa de RPCS3.
+
+## 2026-10-13 — Líneas azules de GoldenEye: aristas de los dibujos con AA como líneas (rama `suspicious-saha-fe2758`)
+
+Con dos volcados de ares del túnel de Dam (`salsa64-run --ares`): las
+líneas azules son el borrado azul que asoma por grietas de uniones en T
+entre triángulos del piso y de la orilla (0,26 a ~1,1 px, todos
+G_RM_AA_ZB_OPA_SURF). La consola las tapa porque con AA_EN escribe los
+píxeles cubiertos en parte; el RSX y el rasterizador del host solo miran el
+centro. Arreglo en el RSX (`rsxkit_draw.edges`, `src/rdp/rdp.c`): en los
+dibujos opacos con AA_EN (sin calcomanías), antes de los triángulos, sus
+aristas como líneas (modo de polígono LINE) de 1,5 píxeles de la N64 a la
+escala de la superficie, con desplazamiento de polígono hacia atrás
+(factor 8, 64 unidades). El rasterizador del host hace lo mismo y con él se
+eligieron ancho y desplazamiento contra la consola (docs/rsx-notes.md):
+
+- Grietas: el túnel, 20 de 20 píxeles tapados; la orilla, 170 de 170 (con
+  1 px quedaban 32). PSNR en 4×4: 29,97 → 29,66 dB y 33,04 → 33,32.
+- Las líneas engordan las siluetas contra el fondo hasta ¾ de píxel; con
+  menos desplazamiento se comían piezas casi coplanares (el ojo de Banjo).
+  En las 7 escenas del host cambian 82 de 105 imágenes, en los bordes
+  (360–1350 píxeles por imagen); Zelda casi no usa el modo (0,3 dibujos
+  por tarea).
+- Dibujos con aristas por tarea: GoldenEye 64 de 154, Conker 82 de 171,
+  Perfect Dark 39 de 108, Banjo 32 de 77, Mario Kart 64 29 de 113, Super
+  Mario 64 16,5 de 52. En el RSX es una llamada más por dibujo AA con el
+  mismo arreglo de vértices.
+- RPCS3 no sirve para verlo: su backend Vulkan no aplica el modo de
+  polígono (el replay del túnel sale igual con y sin aristas). gfxtest en
+  RPCS3 da la misma imagen que main. **Falta la PS3 real**: el ancho va en
+  el método 0x3B8 del NV40 (punto fijo 6.3, como lo decodifica RPCS3), que
+  PSL1GHT no expone.
+- **PS3 real («Salsa64 aristas 2»): regresión.** En los modelos los
+  polígonos se superponen y salen picos en las uniones, como con
+  `aa_grow`: a 5× el ancho es ~7,5 px de la superficie y las líneas
+  engordan las siluetas. Quedan apagadas por omisión; `aristas-aa` en
+  `dev_hdd0/salsa64` las enciende para seguir probando.
+- `--ares --gfxdump` guarda la salida de la HLE de cada lista como el
+  volcado de la PS3 (big-endian): `tools/gfxdump.py`, `--raster-dump` y
+  `embedded` = `dump:<nombre>` en el RSX la leen. Así un cuadro de ares se
+  puede repetir en la consola.
+
 ## 2026-10-13 — Comparar un cuadro con ares: `salsa64-run --ares` (rama `suspicious-saha-fe2758`)
 
 `salsa64-run --ares volcado-rdram.bin` (y `tools/ares-comparar.sh`) dibuja

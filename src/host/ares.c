@@ -34,6 +34,7 @@
 
 #include <getopt.h>
 #include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -66,6 +67,13 @@ extern int salsa64_gfx_trace_now;
 
 struct target {
 	uint32_t addr, width;
+};
+
+/* Color image que dibuja la lista, de cualquier tamaño de píxel: la
+ * dirección, el ancho, los bytes por píxel y el alto que alcanzan sus
+ * dibujos (para borrarla sin pisar lo de al lado). */
+struct image {
+	uint32_t addr, width, bpp, rows;
 };
 
 /* ---- PNG sin comprimir (bloques «stored» de deflate) --------------------- */
@@ -177,8 +185,9 @@ static void task_read(const uint8_t *p, struct salsa64_task *t)
 /* Una OSTask gráfica plausible con un microcódigo que la HLE reconoce. */
 static bool task_ok(const struct salsa64_task *t, enum salsa64_gbi *gbi)
 {
+	/* ucode_size puede ser 0 (Conker): el núcleo tampoco lo mira. */
 	if (t->type != SALSA64_TASK_GFX || !task_ptr(t->ucode) || !task_ptr(t->ucode_data) ||
-	    !task_ptr(t->data_ptr) || !t->ucode_size || t->ucode_size > 0x2000 || t->ucode_data_size > 0x2000)
+	    !task_ptr(t->data_ptr) || t->ucode_size > 0x2000 || t->ucode_data_size > 0x2000)
 		return false;
 	*gbi = salsa64_rsp_detect_gbi(&bus, t);
 	return *gbi != SALSA64_GBI_UNKNOWN;
@@ -227,17 +236,30 @@ static bool listed(const uint32_t *v, unsigned n, uint32_t x)
 }
 
 /* Color images de 16 bits que dibuja la salida, sin las z images. */
-static unsigned find_targets(const struct gfx_result *res, struct target *out, uint32_t *zero_cimg)
+static unsigned find_targets(const struct gfx_result *res, struct target *out, uint32_t *zero_cimg,
+			     struct image *imgs, unsigned *nimgs)
 {
 	uint32_t z[16];
 	unsigned nz = 0, n = 0;
 	struct target all[32];
 	unsigned nall = 0;
+	int cur = -1;
 	*zero_cimg = 0;
+	*nimgs = 0;
 	for (uint32_t off = 0; off + sizeof(struct gfx_cmd) <= res->cmd_bytes;) {
 		const struct gfx_cmd *c = (const struct gfx_cmd *)(out_cmd + off);
 		if (c->op == GFX_OP_END || c->size < sizeof *c)
 			break;
+		if (c->op == GFX_OP_TARGET) {
+			static const uint32_t bpp[4] = { 0, 1, 2, 4 };
+			cur = -1;
+			for (unsigned i = 0; i < *nimgs; i++)
+				cur = imgs[i].addr == c->a ? (int)i : cur;
+			if (cur < 0 && *nimgs < 32 && c->a && c->b && c->b <= 640 && bpp[c->c & 3]) {
+				cur = (int)(*nimgs)++;
+				imgs[cur] = (struct image){ c->a, c->b, bpp[c->c & 3], 0 };
+			}
+		}
 		if (c->op == GFX_OP_TARGET && (c->c & 0xFF) == 2 && c->b && c->b <= 640 && nall < 32) {
 			bool dup = false;
 			for (unsigned i = 0; i < nall; i++)
@@ -250,9 +272,28 @@ static unsigned find_targets(const struct gfx_result *res, struct target *out, u
 			const struct gfx_draw *d = (const struct gfx_draw *)c;
 			if (d->depth && nz < 16 && !listed(z, nz, d->zimg))
 				z[nz++] = d->zimg;
+			/* Lo que alcanzan sus vértices dentro de las tijeras: las tijeras
+			 * solas pueden pasarse (Conker: 65 filas en una imagen de 64,
+			 * con su viewport justo después). */
+			float ymax = 0.0f;
+			for (uint32_t v = 0; v < d->h.b; v++) {
+				const struct gfx_vertex *x = &out_vtx[d->h.a + v];
+				if (x->w > 0.0f && x->y / x->w > ymax)
+					ymax = x->y / x->w;
+			}
+			uint32_t y1 = (d->scissor[3] + 3u) / 4u, yv = (uint32_t)ceilf(ymax);
+			y1 = yv < y1 ? yv : y1;
+			if (cur >= 0 && y1 > imgs[cur].rows)
+				imgs[cur].rows = y1;
 		}
 		off += c->size;
 	}
+	/* Sin las z images (se borran como color image antes de usarlas). */
+	unsigned k = 0;
+	for (unsigned i = 0; i < *nimgs; i++)
+		if (!listed(z, nz, imgs[i].addr))
+			imgs[k++] = imgs[i];
+	*nimgs = k;
 	for (unsigned i = 0; i < nall && n < MAX_TARGETS; i++) {
 		if (listed(z, nz, all[i].addr))
 			continue;
@@ -413,7 +454,101 @@ struct opts {
 	uint32_t only_dl, only_fb;
 	unsigned tol;
 	bool png;
+	bool gfxdump;       /* también la salida de la HLE como gfxdump (tools/gfxdump.py) */
+	unsigned passes;    /* veces que se corre la lista (--pasadas) */
 };
+
+/* La salida de la tarea como el volcado de la PS3 (gfx_dump_header y los
+ * registros en big-endian, como lo escribe src/rdp), para listar los
+ * dibujos con tools/gfxdump.py, dibujarlos con --raster-dump o repetirlos
+ * en el RSX ("dump:<nombre>" en embedded, en RPCS3 o en la consola). */
+static uint8_t dump_buf[(512u << 10) + (sizeof out_vtx)];
+
+static void swap16(uint8_t *p, size_t n)
+{
+	for (size_t i = 0; i < n; i++, p += 2) {
+		uint8_t t = p[0];
+		p[0] = p[1], p[1] = t;
+	}
+}
+
+static void swap32(uint8_t *p, size_t n)
+{
+	for (size_t i = 0; i < n; i++, p += 4) {
+		uint8_t t0 = p[0], t1 = p[1];
+		p[0] = p[3], p[1] = p[2], p[2] = t1, p[3] = t0;
+	}
+}
+
+#define SW16(base, type, field, n) swap16((base) + offsetof(type, field), (n))
+#define SW32(base, type, field, n) swap32((base) + offsetof(type, field), (n))
+
+/* Los registros de comandos del orden del host al de la PS3, campo por campo. */
+static void cmds_to_be(uint8_t *cmd, uint32_t bytes)
+{
+	for (uint32_t off = 0; off + sizeof(struct gfx_cmd) <= bytes;) {
+		uint8_t *r = cmd + off;
+		const struct gfx_cmd *c = (const struct gfx_cmd *)r;
+		uint16_t op = c->op, size = c->size;
+		if (op == GFX_OP_ZCLEAR && size >= sizeof(struct gfx_zclear)) {
+			SW16(r, struct gfx_zclear, rect, 4);
+			SW32(r, struct gfx_zclear, fill, 2);  /* fill y pad */
+		} else if (op == GFX_OP_DRAW && size >= sizeof(struct gfx_draw)) {
+			SW32(r, struct gfx_draw, zimg, 1);
+			SW16(r, struct gfx_draw, scissor, 4);
+			SW32(r, struct gfx_draw, fog_color, 3);  /* fog_color, prim_kind, prim_tile */
+			for (int t = 0; t < 2; t++) {
+				uint8_t *x = r + offsetof(struct gfx_draw, tex) + t * sizeof(struct gfx_tex);
+				SW32(x, struct gfx_tex, offset, 1);
+				SW16(x, struct gfx_tex, width, 3);  /* width, height, pitch */
+				SW32(x, struct gfx_tex, key, 1);
+				SW32(x, struct gfx_tex, xf, 4);
+				SW32(x, struct gfx_tex, src_addr, 1);
+				SW16(x, struct gfx_tex, src_pitch, 1);
+			}
+			SW32(r, struct gfx_draw, k, sizeof(((struct gfx_draw *)0)->k) / 4);
+		}
+		SW16(r, struct gfx_cmd, op, 2);  /* op y size */
+		SW32(r, struct gfx_cmd, a, 3);
+		if (op == GFX_OP_END || size < sizeof(struct gfx_cmd))
+			break;
+		off += size;
+	}
+}
+
+_Static_assert(offsetof(struct gfx_vertex, r) == 24 && sizeof(struct gfx_vertex) == 32, "vértice de 6 floats, RGBA y relleno");
+
+static void write_gfxdump(const char *prefix, uint32_t dl, const struct gfx_result *res)
+{
+	char path[4096 + 64];
+	snprintf(path, sizeof path, "%s-%06x.gfxdump.bin", prefix, dl);
+	if ((size_t)res->cmd_bytes + res->vtx_bytes > sizeof dump_buf)
+		return;
+	uint8_t *cmd = dump_buf, *vtx = dump_buf + res->cmd_bytes;
+	memcpy(cmd, out_cmd, res->cmd_bytes);
+	memcpy(vtx, out_vtx, res->vtx_bytes);
+	struct gfx_dump_header h = { GFX_DUMP_MAGIC, res->cmd_bytes, res->vtx_bytes, res->tex_bytes };
+	const uint16_t one = 1;
+	if (*(const uint8_t *)&one) {  /* host little-endian */
+		cmds_to_be(cmd, res->cmd_bytes);
+		for (uint32_t i = 0; i + sizeof(struct gfx_vertex) <= res->vtx_bytes; i += sizeof(struct gfx_vertex)) {
+			swap32(vtx + i, 6);
+			SW32(vtx + i, struct gfx_vertex, pad, 1);
+		}
+		swap32((uint8_t *)&h, 4);
+	}
+	FILE *f = fopen(path, "wb");
+	if (!f || fwrite(&h, sizeof h, 1, f) != 1 || fwrite(dump_buf, 1, res->cmd_bytes + res->vtx_bytes, f) !=
+							       res->cmd_bytes + res->vtx_bytes ||
+	    fwrite(out_tex, 1, res->tex_bytes, f) != res->tex_bytes) {
+		fprintf(stderr, "salsa64-run: no se pudo escribir %s\n", path);
+		if (f)
+			fclose(f);
+		return;
+	}
+	fclose(f);
+	printf("  salida de la HLE en %s\n", path);
+}
 
 /* Triángulos de la salida con algún vértice detrás de la cámara. */
 static uint32_t behind_camera(const struct gfx_result *res)
@@ -468,15 +603,16 @@ static int one_dump(const char *path, const struct opts *o)
 
 	/* Tareas: la de la DMEM (la última que arrancó) y las de la RDRAM. Sin
 	 * --dmem se busca el volcado de la DMEM del mismo momento, como lo
-	 * nombra ares (…-rsp-dmem-<fecha>.bin junto a …-rdram-<fecha>.bin). */
+	 * nombra ares (…-rsp-dmem-<fecha>.bin junto a …-rdram-<fecha>.bin) o
+	 * …-rsp-dmem.bin junto a …-rdram.bin. */
 	struct salsa64_task tasks[MAX_TASKS];
 	enum salsa64_gbi gbis[MAX_TASKS];
 	uint32_t where[MAX_TASKS];
 	unsigned nt = 0;
 	char dmem_path[4096];
-	const char *dm = o->dmem, *r = strstr(base, "-rdram-");
+	const char *dm = o->dmem, *r = strstr(base, "-rdram");
 	if (!dm && r) {
-		snprintf(dmem_path, sizeof dmem_path, "%.*s-rsp-dmem-%s", (int)(r - path), path, r + 7);
+		snprintf(dmem_path, sizeof dmem_path, "%.*s-rsp-dmem%s", (int)(r - path), path, r + 6);
 		FILE *f = fopen(dmem_path, "rb");
 		if (f) {
 			fclose(f);
@@ -533,8 +669,10 @@ static int one_dump(const char *path, const struct opts *o)
 		bus.rdram = rdram_orig;
 		run_task(t, gbis[i], &job, &res);
 		struct target tg[MAX_TARGETS];
+		struct image imgs[32];
 		uint32_t zero;
-		unsigned ntg = find_targets(&res, tg, &zero);
+		unsigned nimgs;
+		unsigned ntg = find_targets(&res, tg, &zero, imgs, &nimgs);
 		printf("  %u comandos, %u triángulos, %u rectángulos, %u dibujos%s%s", res.commands, res.triangles,
 		       res.rects, res.draws, res.flags & GFX_RES_FULLSYNC ? ", llega a G_RDPFULLSYNC" : ", SIN G_RDPFULLSYNC",
 		       res.flags & GFX_RES_CUT ? ", CORTADA" : "");
@@ -560,21 +698,42 @@ static int one_dump(const char *path, const struct opts *o)
 			continue;
 		}
 
-		/* Segunda pasada sobre la copia, con los búferes comparados en negro. */
+		/* Segunda pasada sobre la copia, con los búferes comparados en negro.
+		 * Con --pasadas N > 1, también las demás color images que dibuja la
+		 * lista (las auxiliares, de render a textura) y la lista N veces
+		 * seguidas, como N cuadros: lo que la HLE lee de ellas por la RDRAM
+		 * es lo que el consumidor copió ahí en la pasada anterior, como en
+		 * la PS3, y no lo que dibujó la consola. */
 		memcpy(rdram_work, rdram_orig, bus.rdram_size);
 		for (unsigned k = 0; k < ntg; k++) {
 			uint32_t a = tg[k].addr, len = tg[k].width * 2 * RASTER_H;
 			if (a < bus.rdram_size)
 				memset(rdram_work + a, 0, len < bus.rdram_size - a ? len : bus.rdram_size - a);
 		}
+		for (unsigned k = 0; o->passes > 1 && k < nimgs; k++) {
+			uint32_t a = imgs[k].addr, len = imgs[k].width * imgs[k].bpp * imgs[k].rows;
+			if (a < bus.rdram_size)
+				memset(rdram_work + a, 0, len < bus.rdram_size - a ? len : bus.rdram_size - a);
+		}
+		if (o->passes > 1)
+			printf("  %u pasadas, con las %u color images de la lista borradas antes\n", o->passes, nimgs);
 		bus.rdram = rdram_work;
 		raster_reset();
+		for (unsigned p = 0; p < o->passes; p++) {
 #ifdef SALSA64_GFX_TRACE
-		salsa64_gfx_trace_now = getenv("SALSA64_GFX_VERBOSE") != NULL;
+			salsa64_gfx_trace_now = getenv("SALSA64_GFX_VERBOSE") != NULL && p + 1 == o->passes;
 #endif
-		run_task(t, gbis[i], &job, &res);
-		raster_task(&job, &res);
+			run_task(t, gbis[i], &job, &res);
+			if (o->gfxdump && p + 1 == o->passes)
+				write_gfxdump(prefix, dl, &res);
+			raster_task(&job, &res);
+		}
 		bus.rdram = rdram_orig;
+		uint32_t dr, de, dt;
+		raster_edge_stats(&dr, &de, &dt);
+		if (de)
+			printf("  aristas de los dibujos con AA: %u de %u dibujos (%u triángulos)%s\n", de, dr, dt,
+			       raster_aa_edges ? ", encendidas" : ", apagadas");
 		for (unsigned k = 0; k < ntg; k++) {
 			compare(prefix, dl, &tg[k], o->tol, o->png);
 			compared++;
@@ -598,7 +757,13 @@ static void usage(FILE *out)
 	      "      --q5            la HLE a 5 bits por canal (por omisión, a 8 como el RSX)\n"
 	      "      --out DIR       PNG en DIR/<volcado>-<lista>-<búfer>-{hle,consola,dif}.png\n"
 	      "                      (por omisión, junto al volcado)\n"
-	      "      --no-png        solo las cifras\n",
+	      "      --no-png        solo las cifras\n"
+	      "      --pasadas N     la lista N veces seguidas (2 a 8) con todas sus color images\n"
+	      "                      borradas antes: el render a textura sale de lo que el\n"
+	      "                      rasterizador copió a la RDRAM, como en la PS3, no de la consola\n"
+	      "      --gfxdump       también la salida de la HLE de cada lista, como el gfxdump de\n"
+	      "                      la PS3 (big-endian): <volcado>-<lista>.gfxdump.bin, para\n"
+	      "                      tools/gfxdump.py, --raster-dump o \"dump:\" en el RSX\n",
 	      out);
 }
 
@@ -612,10 +777,12 @@ int ares_main(int argc, char **argv)
 		{ "out", required_argument, NULL, 'o' },
 		{ "no-png", no_argument, NULL, 'n' },
 		{ "q5", no_argument, NULL, 'q' },
+		{ "gfxdump", no_argument, NULL, 'g' },
+		{ "pasadas", required_argument, NULL, 'p' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 },
 	};
-	struct opts o = { .tol = 1, .png = true };
+	struct opts o = { .tol = 1, .png = true, .passes = 1 };
 	bool q5 = false;
 	int c;
 	optind = 1;
@@ -628,18 +795,26 @@ int ares_main(int argc, char **argv)
 		case 'o': o.out = optarg; break;
 		case 'n': o.png = false; break;
 		case 'q': q5 = true; break;
+		case 'g': o.gfxdump = true; break;
+		case 'p': o.passes = (unsigned)strtoul(optarg, NULL, 0); break;
 		case 'h': usage(stdout); return 0;
 		default: usage(stderr); return 3;
 		}
 	}
-	if (optind >= argc || (o.dmem && argc - optind > 1)) {
+	if (optind >= argc || (o.dmem && argc - optind > 1) || !o.passes || o.passes > 8) {
 		usage(stderr);
 		return 3;
 	}
-	if (o.out && o.png)
+	if (o.out && (o.png || o.gfxdump))
 		mkdir(o.out, 0777);  /* si ya existe, nada */
 	if (getenv("SALSA64_FBFX"))
 		raster_fbfx = atoi(getenv("SALSA64_FBFX"));
+	if (getenv("SALSA64_AA_EDGES"))
+		raster_aa_edges = atoi(getenv("SALSA64_AA_EDGES")) != 0;
+	if (getenv("SALSA64_AA_EDGE_OFFSET"))
+		sscanf(getenv("SALSA64_AA_EDGE_OFFSET"), "%f,%f", &raster_edge_factor, &raster_edge_units);
+	if (getenv("SALSA64_AA_EDGE_WIDTH"))
+		raster_edge_width = (float)atof(getenv("SALSA64_AA_EDGE_WIDTH"));
 	raster_q5 = q5;
 	int total = 0;
 	for (int i = optind; i < argc; i++) {

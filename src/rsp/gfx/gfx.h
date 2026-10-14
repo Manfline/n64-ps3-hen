@@ -194,13 +194,15 @@ struct gfx_zclear {
  * la tarea o en la región de la caché.
  *
  * Texturas desde un destino (GFX_TEX_TARGET, solo con GFX_JOB_FBTEX): una
- * RGBA16 cuyo origen cae en una color image de 16 bits que la HLE vio
- * dibujar hace GFX_FB_FRESH tareas o menos no se decodifica: no hay texels
- * (offset y key valen 0) y el consumidor la lee de su destino (render a
- * textura). Si no puede (para él el destino es viejo, es del CPU o no tiene
- * superficie), la decodifica él: width × height texels RGBA16 de la RDRAM
- * desde src_addr con src_pitch texels por fila, a RGBA8888 con `pitch`
- * bytes por fila, lo mismo que habría dado la HLE con la RDRAM de ahora. */
+ * RGBA16 cuyo origen cae en una color image de 16 bits, o una I8 que cae en
+ * una de 8 bits (src_siz 1), que la HLE vio dibujar hace GFX_FB_FRESH
+ * tareas o menos no se decodifica: no hay texels (offset y key valen 0) y
+ * el consumidor la lee de su destino (render a textura; la I8, con el rojo
+ * en los cuatro canales). Si no puede (para él el destino es viejo, es del
+ * CPU o no tiene superficie), la decodifica él: width × height texels
+ * RGBA16 (o I8) de la RDRAM desde src_addr con src_pitch texels por fila, a
+ * RGBA8888 con `pitch` bytes por fila, lo mismo que habría dado la HLE con
+ * la RDRAM de ahora. */
 struct gfx_tex {
 	uint32_t offset;    /* desde el inicio del arena o de la región */
 	uint16_t width, height;

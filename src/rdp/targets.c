@@ -92,6 +92,19 @@ void rdp_decode_rgba16(const uint8_t *rdram, uint32_t rdram_size, uint32_t addr,
 	}
 }
 
+void rdp_decode_i8(const uint8_t *rdram, uint32_t rdram_size, uint32_t addr, uint32_t pitch, uint32_t w, uint32_t h,
+		   uint8_t *out, uint32_t out_pitch)
+{
+	for (uint32_t y = 0; y < h; y++) {
+		uint8_t *o = out + y * out_pitch;
+		uint32_t a = addr + y * pitch;
+		for (uint32_t x = 0; x < w; x++, a++, o += 4) {
+			uint8_t i = a < rdram_size && a >= addr ? rdram[a] : 0;
+			o[0] = o[1] = o[2] = o[3] = i;
+		}
+	}
+}
+
 bool rdp_present_integer(uint32_t src_w, uint32_t src_h, uint32_t screen_w, uint32_t screen_h)
 {
 	if (!src_w || !src_h || src_w > screen_w || src_h > screen_h)

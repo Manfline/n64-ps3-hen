@@ -26,7 +26,8 @@ tools/ares-comparar.sh build/ares/<juego>-rdram-<fecha>.bin
 
 El script compila `salsa64-run` nativo (sin sanitizadores) y corre
 `salsa64-run --ares` con las opciones que se le pasen (`--help`): `--task`
-(una lista), `--fb` (un búfer), `--tol`, `--q5`, `--out DIR`, `--no-png`.
+(una lista), `--fb` (un búfer), `--tol`, `--q5`, `--out DIR`, `--no-png`,
+`--gfxdump`, `--pasadas N`.
 Acepta varios volcados.
 
 Por cada volcado:
@@ -60,6 +61,12 @@ Por cada volcado:
   `--q5` dibuja la HLE a 5 bits truncados, como la copia a la RDRAM.
 - **Lo que la lista no cubre** sale negro en la HLE; en la consola queda
   el cuadro de hace dos campos.
+- **Render a textura.** Con una pasada, lo que la HLE lee de una imagen
+  auxiliar por la RDRAM es lo que dejó la consola, y eso tapa los fallos
+  de ese camino. `--pasadas 2` (o más) borra antes todas las color images
+  que dibuja la lista y la corre dos veces seguidas, como dos cuadros: lo
+  que se lee por la RDRAM es lo que el rasterizador copió ahí, como en la
+  PS3 (así salió la sombra de Conker, docs/estado.md).
 - **Límites del rasterizador del host:** muestrea en el centro del píxel,
   filtra bilineal (la N64, de tres puntos), no tiene la cobertura del AA
   (la consola escribe los píxeles cubiertos en parte: objetos ~½ px más
@@ -72,5 +79,15 @@ Por cada volcado:
   `--trace-gfx`.
 - **Alta resolución:** el rasterizador es de 320×240; para búferes de 640
   de ancho, compilar con `-DRASTER_W=640 -DRASTER_H=480`.
+- **Grietas y aristas:** la pasada de aristas de los dibujos opacos con AA
+  (docs/rsx-notes.md) es experimental y va apagada, como en la PS3;
+  `SALSA64_AA_EDGES=1` la pone, y `SALSA64_AA_EDGE_WIDTH=n` (1,5 px) y
+  `SALSA64_AA_EDGE_OFFSET=factor,unidades` (8,64) cambian su ancho y su
+  desplazamiento hacia atrás, para medir contra la consola.
+- **En el RSX:** `--gfxdump` guarda la salida de la HLE de cada lista como
+  el volcado de la PS3 (`<volcado>-<lista>.gfxdump.bin`, big-endian):
+  `tools/gfxdump.py` lista sus dibujos (`pixel X Y`: cuáles cubren un
+  píxel) y, copiado a `dev_hdd0/salsa64`, `embedded` = `dump:<nombre>`
+  lo dibuja en el RSX (RPCS3 o la consola) y deja `replay.ppm`.
 
 Lo medido con cada juego va en docs/estado.md.

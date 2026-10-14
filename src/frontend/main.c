@@ -2547,10 +2547,12 @@ static void stats(uint64_t now)
 				    (gfx_spu.t_load - sw.gfx_load0) * k);
 		}
 		salsa64_log("gfx: fragment programs: %.1f cambios por tarea, %u dibujos con programa generado "
-			    "(%.1f por tarea), %u programas en la caché (%u generados, %u vaciados)",
+			    "(%.1f por tarea), %u programas en la caché (%u generados, %u vaciados); %.1f dibujos con "
+			    "aristas AA por tarea",
 			    (double)(rs.fp_loads - sw.rdp0.fp_loads) / tasks, rs.draws_generated - sw.rdp0.draws_generated,
 			    (double)(rs.draws_generated - sw.rdp0.draws_generated) / tasks, rs.fp_programs,
-			    rs.fp_generated - sw.rdp0.fp_generated, rs.fp_evictions - sw.rdp0.fp_evictions);
+			    rs.fp_generated - sw.rdp0.fp_generated, rs.fp_evictions - sw.rdp0.fp_evictions,
+			    (double)(rs.draws_edges - sw.rdp0.draws_edges) / tasks);
 		uint32_t rb = rs.readbacks - sw.rdp0.readbacks, rbw = rs.readback_waits - sw.rdp0.readback_waits;
 		uint32_t trsx = rs.tex_rsx - sw.rdp0.tex_rsx, trd = rs.tex_rdram - sw.rdp0.tex_rdram;
 		uint32_t tself = rs.tex_self - sw.rdp0.tex_self, primes = rs.primes - sw.rdp0.primes;
@@ -3663,6 +3665,15 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 								"render a textura y copias a la RDRAM");
 	}
 	{
+		/* SALSA64_DATA_DIR/aristas-aa: la pasada de aristas de los dibujos
+		 * con AA_EN (salsa64_rdp_aa_edges), experimental y apagada por
+		 * omisión: en la PS3 engordaba los modelos (docs/rsx-notes.md). */
+		bool aa_edges = file_exists(SALSA64_DATA_DIR "/aristas-aa");
+		salsa64_rdp_aa_edges(aa_edges);
+		if (aa_edges)
+			salsa64_log("aristas de los dibujos con AA: encendidas (aristas-aa, experimental)");
+	}
+	{
 		/* SALSA64_DATA_DIR/trace-vi: registrar qué se presenta en cada uno
 		 * de los primeros N campos (por omisión 300). */
 		FILE *tf = fopen(SALSA64_DATA_DIR "/trace-vi", "r");
@@ -4550,6 +4561,13 @@ int main(void)
 	if (!strncmp(name, "dump:", 5)) {
 		char path[96];
 		snprintf(path, sizeof path, SALSA64_DATA_DIR "/%s", name + 5);
+		/* Como al abrir un juego: para comparar la pasada de aristas con el
+		 * mismo volcado. */
+		if (file_exists(SALSA64_DATA_DIR "/aristas-aa")) {
+			salsa64_rdp_aa_edges(true);
+			salsa64_log("aristas de los dibujos con AA: encendidas (aristas-aa, experimental)");
+		}
+		salsa64_rdp_set_log(salsa64_log);  /* los avisos del RDP también en la repetición */
 		int rr = salsa64_replay(path);
 		salsa64_log("RESULTADO frontend: %s (repetición)", rr == 0 ? "OK" : "FALLO");
 		salsa64_rdp_shutdown();

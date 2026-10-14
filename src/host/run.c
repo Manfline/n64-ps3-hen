@@ -1502,6 +1502,14 @@ static void gfx_summary(void)
 		fprintf(stderr, "salsa64-run: gfx: framebuffer: %u copias a la RDRAM, %u destinos cebados; texturas desde un "
 			"destino: %u de su imagen, %u de la RDRAM; %u sin decodificar en la HLE (%.1f por tarea), %u de ellas "
 			"decodificadas por el rasterizador\n", rb, pr, trsx, trd, s->tex_target, s->tex_target / n, tdec);
+		uint32_t dr, de, dt;
+		raster_edge_stats(&dr, &de, &dt);
+		fprintf(stderr, "salsa64-run: gfx: aristas de los dibujos con AA: %.1f de %.1f dibujos por tarea (%.0f "
+			"triángulos)%s\n", de / n, dr / n, dt / n, raster_aa_edges ? ", encendidas" : ", apagadas");
+		uint32_t d8, t8r, t8m;
+		raster_8bit_stats(&d8, &t8r, &t8m);
+		fprintf(stderr, "salsa64-run: gfx: imágenes de 8 bits: %u dibujos; texturas I8 de ellas: %u de su imagen, %u "
+			"de la RDRAM\n", d8, t8r, t8m);
 	}
 	if (gfx_late.tear)
 		fprintf(stderr, "salsa64-run: gfx: %u tareas comparadas entre el arranque y el fin, %u cambiaron\n",
@@ -2345,6 +2353,10 @@ int main(int argc, char **argv)
 	 * SALSA64_FBFX=0 los apaga, 1 solo render a textura, 2 todo. */
 	if (getenv("SALSA64_FBFX"))
 		raster_fbfx = atoi(getenv("SALSA64_FBFX"));
+	if (getenv("SALSA64_AA_EDGES"))
+		raster_aa_edges = atoi(getenv("SALSA64_AA_EDGES")) != 0;
+	if (getenv("SALSA64_AA_EDGE_OFFSET"))
+		sscanf(getenv("SALSA64_AA_EDGE_OFFSET"), "%f,%f", &raster_edge_factor, &raster_edge_units);
 	const struct salsa64_gfx_sink sink = { NULL, gfx_acquire, gfx_done };
 	n64.bus.rdram_written = rdram_written;
 	salsa64_gfx_sync_init(&gfx_sync, &gfx_state, &n64.bus, &sink);

@@ -27,6 +27,12 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res);
 void raster_rdram_written(uint32_t pa, uint32_t len, uint32_t task);
 /* Imagen (0xRRGGBB, RASTER_W de paso) que contiene la dirección `addr`, o
  * NULL si ninguna tarea dibujó ahí. */
+/* Dibujos con triángulos dibujados, cuántos son para la pasada de aristas
+ * (opacos con AA_EN; la llevan si raster_aa_edges) y sus triángulos. */
+void raster_edge_stats(uint32_t *draws, uint32_t *with_edges, uint32_t *tris);
+/* Dibujos en color images de 8 bits y texturas I8 leídas de ellas: de su
+ * imagen (render a textura) o, si no se pudo, de la RDRAM. */
+void raster_8bit_stats(uint32_t *draws, uint32_t *tex_rsx, uint32_t *tex_rdram);
 const uint32_t *raster_image(uint32_t addr, uint32_t *width);
 /* Qué hay en la ranura `slot` de la tabla de destinos (para la vigilancia
  * de accesos del CPU); false si está vacía. */
@@ -43,6 +49,12 @@ extern int raster_fbfx;
  * por canal, truncado como la copia a la RDRAM); false: a 8 bits, como lo
  * muestra el RSX (salsa64-run --ares, para comparar con el tramado del RDP). */
 extern bool raster_q5;
+/* Como la PS3 (salsa64_rdp_aa_edges): en los dibujos opacos con AA_EN, las
+ * aristas como líneas antes de los triángulos (experimental, apagadas por
+ * omisión; SALSA64_AA_EDGES=1 las pone). */
+extern bool raster_aa_edges;
+extern float raster_edge_width;  /* ancho de esas líneas, en píxeles */
+extern float raster_edge_factor, raster_edge_units;  /* su desplazamiento hacia atrás */
 /* Cada campo con imagen: el origen y ancho del VI (como salsa64_rdp_vi). */
 struct salsa64_vi_frame;
 void raster_vi(const struct salsa64_vi_frame *f);
