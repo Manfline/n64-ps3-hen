@@ -107,6 +107,7 @@
 
 #include "../../tests/roms/src/audiotest/tone.h"
 #include "../../tests/roms/src/gfxtest/expect.h"
+#include "ares.h"
 #include "core/boot.h"
 #include "core/endian.h"
 #include "core/state.h"
@@ -2126,6 +2127,8 @@ static void usage(FILE *out)
 	      "      --audiotest-check comparar lo que salió por el AI con el tono de audiotest\n"
 	      "      --raster-dump F   dibujar un volcado de la HLE de la PS3 (gfxdump.bin) en\n"
 	      "                        --gfx-frame y salir (sin ROM)\n"
+	      "      --ares [...] RDRAM  (primera opción) comparar la HLE con un volcado de la RDRAM\n"
+	      "                        de ares, sin ROM (salsa64-run --ares --help)\n"
 	      "      --lle[=auto|all]  RSP a bajo nivel: el microcódigo real para lo que no tiene\n"
 	      "                        HLE (auto) o para todo (all); el RDP consume sus comandos\n"
 	      "      --lle-speed F     instrucciones del RSP por ciclo del CPU (nominal 0,667)\n"
@@ -2193,6 +2196,8 @@ int main(int argc, char **argv)
 	const char *dump_path = NULL, *ram_path = NULL;
 	uint32_t frame_every = 0;
 
+	if (argc > 1 && !strcmp(argv[1], "--ares"))
+		return ares_main(argc - 1, argv + 1);
 	while ((c = getopt_long(argc, argv, "c:u:f:qrh", opts, NULL)) != -1) {
 		switch (c) {
 		case 'c': max_cycles = strtoull(optarg, NULL, 0); cycles_set = true; break;
