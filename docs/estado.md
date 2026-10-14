@@ -9,7 +9,10 @@ que dibujan con el que dibujó ares: el mismo cuadro con los mismos datos,
 sin llegar a la misma escena en los dos emuladores (docs/referencia-ares.md).
 Para eso el rasterizador del host dibuja a 8 bits en ese modo
 (`raster_q5`) y ahora recorta contra w > 0 como el RSX: antes descartaba
-entero el triángulo con un vértice detrás de la cámara.
+entero el triángulo con un vértice detrás de la cámara. En las 105 imágenes
+de las 7 escenas del host solo cambian 4 cuadros de la intro de Perfect
+Dark (2500–2600): aparecen los muros pegados a la cámara, como en el RSX y
+en GLide64.
 
 Primer uso, intro de Pokémon Snap (F3DEX2 .NoN; seis volcados, tres
 cuadros distintos; en cada uno, una de las dos listas es la del cuadro que
