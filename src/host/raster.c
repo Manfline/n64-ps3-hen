@@ -16,9 +16,10 @@
  * tarea cuando la política de rdp_targets lo pide: así el host modela la
  * misma conducta antes de medirla en la consola.
  *
- * Simplificaciones: sin recorte contra los planos (se descartan triángulos
- * con algún w ≤ 0), muestreo en el centro del píxel, regla de cobertura
- * por arriba a la izquierda aproximada.
+ * Simplificaciones: solo se recorta contra w > 0 (lo que está detrás de la
+ * cámara, como el RSX; sin los planos de los lados ni el cercano: las
+ * tijeras y el z-buffer hacen el resto), muestreo en el centro del píxel,
+ * regla de cobertura por arriba a la izquierda aproximada.
  */
 #include "raster.h"
 
@@ -55,6 +56,7 @@ static uint32_t vi_field;  /* campos del VI con imagen (rdp_targets_present) */
 bool raster_trace_fb;
 uint32_t raster_field;
 int raster_fbfx = 2;
+bool raster_q5 = true;
 static struct rdp_vi_ring vi_ring;
 static uint32_t primes, readbacks, mirrors, frames, dma_skipped;
 uint32_t ps3_rb, ps3_rb_old;  /* diagnóstico (SALSA64_PS3_RB) */
@@ -375,6 +377,52 @@ static void draw_triangle(const struct gfx_draw *d, const struct gfx_vertex *v, 
 			if ((d->depth & GFX_DEPTH_WRITE) && zb)
 				zb->z[idx] = z;
 		}
+}
+
+/* Recorte contra w = W_MIN: el triángulo con vértices detrás de la cámara
+ * queda en un polígono de 3 o 4 vértices delante (el suelo bajo la cámara
+ * en Pokémon Snap); sin esto se descartaba entero y dejaba ver lo de atrás.
+ * Todo es lineal en coordenadas de recorte (x, y, z y s, t sin dividir). */
+#define W_MIN 1e-3f
+
+static void lerp_vertex(const struct gfx_vertex *a, const struct gfx_vertex *b, float t, struct gfx_vertex *o)
+{
+	o->x = a->x + (b->x - a->x) * t;
+	o->y = a->y + (b->y - a->y) * t;
+	o->z = a->z + (b->z - a->z) * t;
+	o->w = W_MIN;
+	o->s = a->s + (b->s - a->s) * t;
+	o->t = a->t + (b->t - a->t) * t;
+	o->r = (uint8_t)(a->r + (b->r - a->r) * t + 0.5f);
+	o->g = (uint8_t)(a->g + (b->g - a->g) * t + 0.5f);
+	o->b = (uint8_t)(a->b + (b->b - a->b) * t + 0.5f);
+	o->a = (uint8_t)(a->a + (b->a - a->a) * t + 0.5f);
+	o->pad = 0;
+}
+
+static void draw_clipped(const struct gfx_draw *d, const struct gfx_vertex *v, const struct texsrc src[2],
+			 uint32_t *tg_rgb, bool q5, struct depth *zb, float prim_z)
+{
+	if (v[0].w > W_MIN && v[1].w > W_MIN && v[2].w > W_MIN) {
+		draw_triangle(d, v, src, tg_rgb, q5, zb, prim_z);
+		return;
+	}
+	struct gfx_vertex poly[4];
+	int n = 0;
+	for (int i = 0; i < 3; i++) {
+		const struct gfx_vertex *a = &v[i], *b = &v[(i + 1) % 3];
+		if (isnan(a->w))
+			return;
+		bool ina = a->w > W_MIN, inb = b->w > W_MIN;
+		if (ina)
+			poly[n++] = *a;
+		if (ina != inb)
+			lerp_vertex(a, b, (W_MIN - a->w) / (b->w - a->w), &poly[n++]);
+	}
+	for (int i = 1; i + 1 < n; i++) {
+		const struct gfx_vertex tri[3] = { poly[0], poly[i], poly[i + 1] };
+		draw_triangle(d, tri, src, tg_rgb, q5, zb, prim_z);
+	}
 }
 
 /* Como rdp.c: ¿los dibujos hasta el próximo TARGET son todos rellenos? */
@@ -762,7 +810,7 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 			 * exacta en todo el dibujo, no la de cada vértice entre su w. */
 			float prim_z = (d->depth & GFX_DEPTH_PRIM) ? gfx_prim_z(vtx + d->h.a, d->h.b) : 0.0f;
 			for (uint32_t i = 0; i + 3 <= d->h.b; i += 3)
-				draw_triangle(d, vtx + d->h.a + i, src, rgb[cur], tg.t[cur].bpp == 2, zb, prim_z);
+				draw_clipped(d, vtx + d->h.a + i, src, rgb[cur], tg.t[cur].bpp == 2 && raster_q5, zb, prim_z);
 			if (!drawn[cur])
 				rdp_targets_drawn(&tg, cur);
 			drawn[cur] = true;

@@ -125,6 +125,45 @@ consola real, los datos del último. Con el relleno entregado la pantalla
 entera de cada uno se vuelve a borrar y no importa en este caso; en otro
 juego con relleno parcial sí podría.
 
+## 2026-10-13 — Comparar un cuadro con ares: `salsa64-run --ares` (rama `suspicious-saha-fe2758`)
+
+`salsa64-run --ares volcado-rdram.bin` (y `tools/ares-comparar.sh`) dibuja
+con la HLE y el rasterizador del host las tareas gráficas que quedaron en
+un volcado de la RDRAM exportado por ares y compara cada búfer de imagen
+que dibujan con el que dibujó ares: el mismo cuadro con los mismos datos,
+sin llegar a la misma escena en los dos emuladores (docs/referencia-ares.md).
+Para eso el rasterizador del host dibuja a 8 bits en ese modo
+(`raster_q5`) y ahora recorta contra w > 0 como el RSX: antes descartaba
+entero el triángulo con un vértice detrás de la cámara. En las 105 imágenes
+de las 7 escenas del host solo cambian 4 cuadros de la intro de Perfect
+Dark (2500–2600): aparecen los muros pegados a la cámara, como en el RSX y
+en GLide64.
+
+Primer uso, intro de Pokémon Snap (F3DEX2 .NoN; seis volcados, tres
+cuadros distintos; en cada uno, una de las dos listas es la del cuadro que
+el CPU arma y dibuja en 000000):
+
+- La HLE dibuja la escena entera como la consola: PSNR 33,8–35,4 dB en
+  promedios de 4×4 (24–31 por píxel, por el tramado de la consola) y
+  diferencia media de +0,1 a +2,2/255 por canal. Ninguna geometría falta ni
+  sobra.
+- **Umbral de alfa de las hojas.** Usan G_RM_AA_ZB_TEX_EDGE con
+  G_AC_THRESHOLD y el color de mezcla con alfa 0. `blend_state`
+  (src/rsp/gfx/rdp.c) toma el umbral del color de mezcla (1/255) e ignora
+  CVG_X_ALPHA, y la consola no escribe los píxeles con α·cobertura = 0
+  (α < 32 con el píxel cubierto entero): la HLE deja las hojas medio texel
+  más gruesas y tapa huecos de cielo. Barrido del umbral contra la
+  consola: 24–32 es lo mejor en los dos cuadros; 128 (lo que usa la rama
+  sin G_AC_THRESHOLD) empeora 2 dB. **Arreglado:** con CVG_X_ALPHA y sin
+  FORCE_BL el umbral es al menos 32; los dos cuadros pasan de 33,91 a
+  34,28 dB y de 33,80 a 34,09. Las 105 imágenes de las 7 escenas del host,
+  iguales (ninguna usa ese modo); la pila del SPE 0, igual (holgura 1984).
+  La rama sin umbral (128) no se pudo medir: los volcados de Snap no la
+  usan.
+- El resto son bordes de un píxel (la cobertura del AA, unos ½ px), el
+  filtro de tres puntos contra el bilineal y el blender con 5 bits de alfa
+  (un paso en los textos de los créditos): del rasterizador, no de la HLE.
+
 ## 2026-10-13 — CFW (issue #2): respaldo automático al intérprete y prueba del JIT para usuarios (rama `nifty-knuth-a7c921`, paquetes SLSA00119 «Salsa64 CFW 1» y SLSA00118 «Salsa64 JIT test»)
 
 Con CFW Evilnat 4.91 (CECH-2501A) ningún juego arrancaba: el hilo

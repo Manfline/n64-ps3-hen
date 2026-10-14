@@ -39,6 +39,10 @@ bool raster_target_info(int slot, uint32_t *addr, uint32_t *width, uint32_t *bpp
 extern bool raster_trace_fb;
 extern uint32_t raster_field;
 extern int raster_fbfx;
+/* En las imágenes de 16 bits, el color con la precisión de la N64 (5 bits
+ * por canal, truncado como la copia a la RDRAM); false: a 8 bits, como lo
+ * muestra el RSX (salsa64-run --ares, para comparar con el tramado del RDP). */
+extern bool raster_q5;
 /* Cada campo con imagen: el origen y ancho del VI (como salsa64_rdp_vi). */
 struct salsa64_vi_frame;
 void raster_vi(const struct salsa64_vi_frame *f);
