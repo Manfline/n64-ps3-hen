@@ -509,12 +509,9 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 			d->cull = GFX_CULL_FRONT;
 	}
 	blend_state(g, d);
-	/* El alfa del sombreado es el de la niebla con G_FOG; con F3DFLX y
-	 * G_TEXTURE_GEN es el de su tabla, y F-Zero X lo mezcla con el color de
-	 * niebla (casi blanco) en el mismo primer ciclo: los brillos del auto. */
-	bool shade_a = (g->geom & G_FOG) ||
-		       ((g->ucode_var & GFX_UCODE_FLX) && (g->geom & (G_LIGHTING | G_TEXTURE_GEN)) == (G_LIGHTING | G_TEXTURE_GEN));
-	if (kind != PRIM_TRI || !shade_a)
+	/* El alfa del sombreado es el de la niebla con G_FOG, o el de la tabla
+	 * de F3DFLX (flx.c). */
+	if (kind != PRIM_TRI || !((g->geom & G_FOG) || gfx_flx_shade_alpha(g)))
 		d->fog = 0;
 	d->aa = kind == PRIM_TRI && (g->ol & AA_EN) && d->blend == GFX_BLEND_OFF && d->atest == GFX_ATEST_NONE &&
 		!d->viscvg;
@@ -657,18 +654,6 @@ void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
 	/* Fuera del mismo plano los tres: no se ve. */
 	if (v[0]->clip & v[1]->clip & v[2]->clip & GFX_CLIP_MASK)
 		return;
-	/* ".Rej" (F3DFLX.Rej de F-Zero X): no recorta. Con un solo vértice fuera
-	 * de la caja del clip ratio (o detrás de la cámara, que queda fuera) o
-	 * más allá del plano lejano el triángulo no se dibuja; contra el plano
-	 * cercano no hay rechazo ni recorte (manual de Nintendo, gspF3DLX.Rej). */
-	bool rej = (g->ucode_var & GFX_UCODE_REJ) != 0;
-	if (rej)
-		for (int i = 0; i < 3; i++) {
-			float rx = g->clip_ratio[0] * v[i]->w, ry = g->clip_ratio[1] * v[i]->w;
-			if (v[i]->w <= 0.0f || v[i]->x < -rx || v[i]->x > rx || v[i]->y < -ry || v[i]->y > ry ||
-			    v[i]->z > v[i]->w)
-				return;
-		}
 	struct gfx_vertex p[4];
 	for (int i = 0; i < 3; i++)
 		gfx_vtx_out(g, v[i], &p[i]);
@@ -685,7 +670,7 @@ void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
 	 * dibuja y un triángulo que lo cruza sale como uno o dos. Sin esto, los
 	 * vértices con w ≈ 0 o negativa se proyectan lejísimos. */
 	unsigned n = 3;
-	if (g->near_clip && !rej) {
+	if (g->near_clip) {
 		float d[3];
 		unsigned behind = 0;
 		for (int i = 0; i < 3; i++) {

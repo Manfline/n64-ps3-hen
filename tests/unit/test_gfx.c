@@ -1433,7 +1433,7 @@ static void flx_scene(const char *ucode)
 static void gfx_f3dflx_alpha(void)
 {
 	flx_scene("RSP Gfx ucode F3DFLX.Rej  fifo 2.03F Yoshitaka Yasumoto 1998 Nintendo.");
-	CHECK_EQ(gs.ucode_var, GFX_UCODE_FLX | GFX_UCODE_REJ);
+	CHECK_EQ(gs.ucode_var, GFX_UCODE_FLX);
 	CHECK_EQ(gs.vtx[0].c[3], 255);
 	CHECK_EQ(gs.vtx[1].c[3], 0);  /* −127 · 1,0055 hacia abajo: −128 */
 	CHECK_EQ(gs.vtx[2].c[3], 128);
@@ -1455,39 +1455,6 @@ static void gfx_f3dflx_alpha(void)
 	flx_scene(NULL);
 	CHECK_EQ(gs.vtx[2].c[3], 0x40);
 	CHECK(fabsf(gs.vtx[2].s - 1023.0f) < 1.0f);  /* (1 + 1)·512 */
-}
-
-/* ".Rej" (F3DFLX.Rej de F-Zero X): no recorta. Un triángulo con un vértice
- * fuera de la caja del clip ratio o detrás de la cámara no se dibuja (manual
- * de Nintendo, gspF3DLX.Rej); con F3DEX2 el primero sale entero (lo recortan
- * las tijeras) y el segundo, recortado contra el plano cercano. */
-static void gfx_rej_rejects(void)
-{
-	/* w = −z y z' = −z − 0,5: z = −1 queda delante (w = 1), z = 1 detrás. */
-	static const float proj[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, -1, 0, 0, -0.5f, 0 };
-	const struct vtx v[5] = {
-		{ 0, 0, -1, 0, 0, { 0 } }, { 1, 0, -1, 0, 0, { 0 } }, { 0, 1, -1, 0, 0, { 0 } },
-		{ 3, 0, -1, 0, 0, { 0 } },  /* x = 3w: fuera de la caja (clip ratio 2) */
-		{ 0, 0, 1, 0, 0, { 0 } },   /* detrás de la cámara */
-	};
-	for (int rej = 0; rej < 2; rej++) {
-		start();
-		ucode_load(rej ? "RSP Gfx ucode F3DFLX.Rej  fifo 2.03F Yoshitaka Yasumoto 1998 Nintendo."
-			       : "RSP Gfx ucode F3DEX       fifo 2.04H Yoshitaka Yasumoto 1998 Nintendo.",
-			   0x31000);
-		viewport_320x240();
-		load_mtx(proj, true);
-		load_mtx(ident, false);
-		dl(0x01000000 | 5 << 12 | 5 << 1, put_vertices(v, 5));
-		dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);  /* dentro */
-		dl(0x05000000 | 0 << 16 | 3 << 9 | 2 << 1, 0);  /* hasta x = 3w */
-		dl(0x05000000 | 0 << 16 | 1 << 9 | 4 << 1, 0);  /* cruza el plano cercano */
-		job_ucode = 0x30000;
-		run();
-		job_ucode = 0;
-		CHECK_EQ(res.triangles, rej ? 1 : 3);
-		CHECK_EQ(res.dl_errors, 0);
-	}
 }
 
 /* ---- S2DEX2: fondos prerrenderizados (G_BG_COPY, G_BG_1CYC) ---- */
@@ -2595,7 +2562,6 @@ void t_suite_gfx(void)
 	RUN(gfx_load_ucode_skips_foreign);
 	RUN(gfx_load_ucode_same_generation);
 	RUN(gfx_f3dflx_alpha);
-	RUN(gfx_rej_rejects);
 	RUN(gfx_s2dex_bg_copy);
 	RUN(gfx_s2dex_bg_wrap);
 	RUN(gfx_s2dex_bg_scaled);

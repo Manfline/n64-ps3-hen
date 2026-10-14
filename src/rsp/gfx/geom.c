@@ -272,20 +272,13 @@ void gfx_set_light(struct gfx_state *g, int index, const uint8_t *src)
 
 void gfx_set_lookat(struct gfx_state *g, int axis, const uint8_t *src)
 {
+	/* F3DFLX: en el lugar del lookat Y va la luz del alfa, tres s16 en los
+	 * bytes 8 a 13 (medido con la LLE: el microcódigo deja este mismo
+	 * vector, en el espacio del modelo, en la DMEM). */
+	bool flx = axis == 1 && (g->ucode_var & GFX_UCODE_FLX);
 	for (int i = 0; i < 3; i++)
-		g->lookat[axis][i] = (float)(int8_t)src[8 + i];
+		g->lookat[axis][i] = flx ? (float)(int16_t)salsa64_rd16(src + 8 + 2 * i) : (float)(int8_t)src[8 + i];
 	normalize3(g->lookat[axis]);
-	g->lights_dirty = true;
-}
-
-/* F3DFLX: tres s16 en los bytes 8 a 13, no los s8 de una luz; como el
- * lookat, va al espacio del modelo con la modelview (medido con la LLE: el
- * microcódigo deja ese mismo vector en la DMEM). */
-void gfx_set_alpha_light(struct gfx_state *g, const uint8_t *src)
-{
-	for (int i = 0; i < 3; i++)
-		g->lookat[1][i] = (float)(int16_t)salsa64_rd16(src + 8 + 2 * i);
-	normalize3(g->lookat[1]);
 	g->lights_dirty = true;
 }
 
@@ -378,6 +371,7 @@ void gfx_vertices(struct gfx_state *g, const uint8_t *src, uint32_t v0, uint32_t
 	bool lighting = (g->geom & G_LIGHTING) != 0;
 	if (lighting && g->lights_dirty)
 		update_lights(g);
+	const uint8_t *flx_tab = lighting ? gfx_flx_table(g) : NULL;
 	const float *m = g->mvp;
 	/* s, t del vértice (s10.5) × escala de G_TEXTURE (0.16) → texels. */
 	float ks = (float)g->tex_s / (65536.0f * 32.0f), kt = (float)g->tex_t / (65536.0f * 32.0f);
@@ -430,20 +424,11 @@ void gfx_vertices(struct gfx_state *g, const uint8_t *src, uint32_t v0, uint32_t
 				v->c[k] = (uint8_t)clampf(rgb[k] + 0.5f, 0.0f, 255.0f);
 			v->c[3] = c[3];
 
-			if ((g->geom & G_TEXTURE_GEN) && (g->ucode_var & GFX_UCODE_FLX)) {
-				/* El alfa por el coseno con la luz del alfa, en 1/128 desde
-				 * el centro de la tabla y hacia abajo; como el microcódigo,
-				 * con la normal tal cual (s8, sin normalizar: las del auto
-				 * miden ~120) y la luz con el módulo que le deja su
-				 * normalización (1,0055, medido en la DMEM con la LLE). s y
-				 * t quedan las del vértice. */
-				const float *d = g->lookat_model[1];
-				float dot = ((float)(int8_t)c[0] * d[0] + (float)(int8_t)c[1] * d[1] + (float)(int8_t)c[2] * d[2]) *
-					    1.0055f;
-				int k = (int)dot;
-				k -= (float)k > dot;
-				v->c[3] = g->flx_alpha[128 + (k < -128 ? -128 : k > 127 ? 127 : k)];
-			} else if (g->geom & G_TEXTURE_GEN)
+			/* F3DFLX: s y t quedan las del vértice y el alfa sale de su
+			 * tabla (flx.c). */
+			if (flx_tab)
+				v->c[3] = gfx_flx_alpha(g, flx_tab, c);
+			else if (g->geom & G_TEXTURE_GEN)
 				gfx_texgen_vertex(g, nrm, v);
 		} else {
 			v->c[0] = c[0];
