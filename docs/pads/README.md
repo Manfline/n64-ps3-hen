@@ -60,3 +60,6 @@ estado vale hasta el siguiente, por eso cada pulsación lleva su suelta `-`):
   por dentro hacia el ~11000). Banjo sale de su casa a Spiral Mountain
   desde el campo ~17000. Con el arranque del 6103 completo (2026-10-12):
   con el de antes el juego cambia por otro camino y los campos no coinciden.
+
+Las escenas del host (7 juegos, Kirby 64 y la casa de Link de
+`zelda-casa-nueva.pad`) se corren y comparan con `tools/escenas-host.sh`.
