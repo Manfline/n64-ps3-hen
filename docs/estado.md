@@ -1,5 +1,62 @@
 # Estado
 
+## 2026-10-14 — Las ROMs de 64 MB no cargaban después de varios juegos en la misma corrida (paquete «Salsa64 perfil 5»)
+
+En la regresión de la v0.2.6 en la PS3 real (app de perfilado «perfil 3»),
+sin salir al XMB, se abrieron Banjo-Tooie (32 MB), Star Fox 64, Pokémon Snap,
+Conker (64 MB), Super Odyssey 64 (64 MB) y Zelda OoT (32 MB). Conker y Super
+Odyssey 64 daban «menú: no se pudo leer …» a los 15 ms de «menú: abro»; Zelda
+cargaba. Con la ROM grande como primer juego, Conker cargaba bien. 15 ms es lo
+que tarda `memalign` en devolver NULL, no una lectura de 64 MB.
+
+- **Medición:** el log trae ahora las líneas «memoria …» (`heap_report`,
+  `main.c`) al abrir el menú, al abrir cada juego, con la ROM leída, al
+  cerrar el juego (junto a «cierre: estado limpio») y tras soltar la ROM:
+  `mallinfo`, `sbrk(0)`, la memoria de usuario libre del sistema (syscall 352)
+  y la mayor reserva que cabe, en el heap y en páginas del sistema.
+- **Reproducido en RPCS3** con ROMs de gfxtest rellenas con ceros a 8, 12, 16,
+  32 y 64 MB y `--menu` (32, 12, 16, 64, 64, 32 MB seguidas): las dos de
+  64 MB fallaban igual que en la consola. Tras el primer juego el heap se
+  quedaba en 107 524 KB con 35 228 KB libres en huecos, la memoria de usuario
+  libre en 50 024 KB y «cabe 48 MB».
+- **Causa:** no es una fuga. El primer juego reserva, con su ROM de 32 MB ya
+  en el heap, cosas que no suelta (medido: la foto de los estados guardados,
+  8448 KB, una sola vez; por lectura del código, en la app de perfilado los
+  anillos y el registro del recompilador, las tablas de la interpolación por
+  geometría y los búferes de los filtros). Quedan por encima de la ROM; al
+  soltarla el heap no puede devolver el hueco ni juntarlo, y el siguiente
+  juego de 64 MB no cabe. Cada juego además deja ~2 KB sueltos en medio del
+  hueco, que lo parten (la ROM de 32 MB siguiente ya no entraba en el hueco de
+  35 MB y el heap crecía a 140 MB).
+- **Arreglo:** la ROM sale de páginas de 1 MB del sistema (`rom_alloc` /
+  `rom_free`, `sysMemoryAllocate` / `sysMemoryFree`), no del heap de newlib; si
+  el sistema no las da, cae al heap y lo dice en el log. Al cerrar el juego las
+  páginas vuelven enteras: tras cada juego la memoria libre vuelve a su valor
+  (82 792 KB en la app normal, 77 672 KB en la de perfilado) y caben 64 MB. La
+  RDRAM, las copias del VI y el pool del RSX no se tocaron. `docs/memory-budget.md`
+  («Fragmentación del heap y la ROM de 64 MB») trae las cifras y la regla:
+  no reservar con `memalign` bloques grandes de vida larga con una ROM viva
+  en el heap.
+- **Verificado:** `test-host` 530/530 en Docker (no se tocó código del host: el
+  cambio es solo del frontend de la PS3, así que las 7 escenas del host salen
+  idénticas por construcción); gfxtest OK en RPCS3 en la app normal y en la de
+  perfilado; la secuencia 32, 12, 16, 64, 64, 32 MB en la app normal y 32, 8,
+  16, 64 MB en la de perfilado: 0 fallas, la ROM de 64 MB carga y el heap se
+  queda estable (74 756 KB y 80 268 KB); holgura de la pila del SPE 0 2624
+  (sin cambio, mínimo 1536).
+- **Paquete:** «Salsa64 perfil 5» (SLSA00120, v0.2.5-100-g0632d30), incluye los
+  arreglos de «perfil 4» (tijeras de F-Zero X a 5× y seguro de las esperas al
+  RSX), `salsa64-perfil-5.pkg`, sha256 30ded011…45631.
+- **Falta validar en la PS3 real** (RPCS3 no reproduce el reparto de páginas
+  de lv2): repetir la secuencia que falló (Banjo-Tooie, Star Fox 64, Snap,
+  Conker, Super Odyssey 64, Zelda) sin salir al XMB y mirar las líneas
+  «memoria …» del log: con el arreglo, «tras soltar la ROM» debe volver a la
+  misma memoria libre y «cabe … 64 MB» en páginas del sistema; si apareciera
+  «sin páginas de 1 MB del sistema, va en el heap», el sistema no dio las
+  páginas y habría que pensar en otra salida (reservar al arrancar). Queda la
+  duda de si lv2 comparte el rango de direcciones del heap con esas páginas;
+  en RPCS3 no estorba.
+
 ## 2026-10-14 — Cuelgue de F-Zero X a 5× en «SELECT COURSE»: tijeras fuera del destino y esperas al RSX con tope (paquete «Salsa64 perfil 4»)
 
 En la regresión de la v0.2.6 en la PS3 real (app de perfilado «perfil 3»,
