@@ -424,6 +424,46 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	 * Fuera de KSEG0, xjr (abajo). */
 	const unsigned ne = PPC_BO_FALSE_UNLIKELY, eq = PPC_BO_TRUE_UNLIKELY, EQ = PPC_BI(0, PPC_EQ);
 	rec->exit_jr = n;
+	if (rec->opts & SALSA64_REC_OPT_JTC) {
+		/* Caché de destinos: r3 = destino. Acierto = misma vpc (de 32 bits) y extensión de signo
+		 * correcta; entonces la palabra de entrada va en la entrada y se salta (16 palabras).
+		 * r28 = flags: la tabla está a un desplazamiento fijo. Usa r0, r9–r12. */
+		int32_t off = (int32_t)(offsetof(struct salsa64_rec, jtc) - offsetof(struct salsa64_rec, flags));
+		int32_t hi = (off + 0x8000) >> 16, lo = off - (hi << 16);
+		w[n++] = ppc_rlwinm(12, 3, 1, 19, 28);        /* ((vpc >> 2) & 1023) * 8 */
+		w[n++] = ppc_extsw(10, 3);
+		w[n++] = ppc_addis(11, 28, hi);
+		w[n++] = ppc_add(11, 11, 12);
+		w[n++] = ppc_lwz(0, lo, 11);
+		w[n++] = ppc_lwz(12, lo + 4, 11);
+		w[n++] = ppc_cmplw(0, 0, 3);
+		uint32_t to_miss1 = n++;
+		w[n++] = ppc_cmpd(0, 10, 3);
+		uint32_t to_miss2 = n++;
+		if (rec->opts & SALSA64_REC_OPT_JTC_STATS) {
+			int32_t co = (int32_t)(offsetof(struct salsa64_rec, jtc_ctr) - offsetof(struct salsa64_rec, flags));
+			int32_t chi = (co + 0x8000) >> 16, clo = co - (chi << 16);
+			w[n++] = ppc_addis(9, 28, chi);
+			w[n++] = ppc_lwz(10, clo, 9);
+			w[n++] = ppc_addi(10, 10, 1);
+			w[n++] = ppc_stw(10, clo, 9);
+		}
+		w[n++] = ppc_sldi(12, 12, 2);
+		n = pre_li64(w, n, 11, (uintptr_t)rec->code);
+		w[n++] = ppc_add(12, 11, 12);
+		w[n++] = ppc_mtctr(12);
+		w[n++] = PPC_BCTR;
+		w[to_miss1] = ppc_bc(PPC_BO_FALSE, PPC_BI(0, PPC_EQ), (int32_t)(n - to_miss1) * 4);
+		w[to_miss2] = ppc_bc(PPC_BO_FALSE, PPC_BI(0, PPC_EQ), (int32_t)(n - to_miss2) * 4);
+		if (rec->opts & SALSA64_REC_OPT_JTC_STATS) {
+			int32_t co = (int32_t)(offsetof(struct salsa64_rec, jtc_ctr) - offsetof(struct salsa64_rec, flags)) + 4;
+			int32_t chi = (co + 0x8000) >> 16, clo = co - (chi << 16);
+			w[n++] = ppc_addis(9, 28, chi);
+			w[n++] = ppc_lwz(10, clo, 9);
+			w[n++] = ppc_addi(10, 10, 1);
+			w[n++] = ppc_stw(10, clo, 9);
+		}
+	}
 	w[n++] = ppc_sradi(11, 3, 29);
 	w[n++] = ppc_cmpdi(0, 11, -4);
 	uint32_t to_xjr = n++;
@@ -439,11 +479,30 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	w[n++] = ppc_cmpwi(0, 12, 0);
 	n = pre_bc(w, n, eq, EQ, rec->exit_jump);
 	uint32_t id_ok = n;  /* r12 = id */
+	if (rec->opts & SALSA64_REC_OPT_JTC)
+		w[n++] = ppc_mr(9, 12);
 	w[n++] = ppc_sldi(12, 12, 4);
 	n = pre_li64(w, n, 11, (uintptr_t)rec->blocks);
 	w[n++] = ppc_lwzx(12, 11, 12);
 	w[n++] = ppc_cmpwi(0, 12, 0);
 	n = pre_bc(w, n, eq, EQ, rec->exit_jump);
+	if (rec->opts & SALSA64_REC_OPT_JTC) {
+		/* Llena la caché de destinos: jtc[slot] = {vpc, entrada} y jtc_slot[id] = slot (r9 = id). */
+		int32_t off = (int32_t)(offsetof(struct salsa64_rec, jtc) - offsetof(struct salsa64_rec, flags));
+		int32_t hi = (off + 0x8000) >> 16, lo = off - (hi << 16);
+		int32_t so = (int32_t)(offsetof(struct salsa64_rec, jtc_slot) - offsetof(struct salsa64_rec, flags));
+		int32_t shi = (so + 0x8000) >> 16, slo = so - (shi << 16);
+		w[n++] = ppc_rlwinm(10, 3, 30, 22, 31);       /* slot */
+		w[n++] = ppc_rlwinm(11, 3, 1, 19, 28);        /* slot * 8 */
+		w[n++] = ppc_addis(0, 28, hi);                /* r0 es destino aquí; como ra de addis/lwz valdría 0 */
+		w[n++] = ppc_add(11, 0, 11);
+		w[n++] = ppc_stw(3, lo, 11);
+		w[n++] = ppc_stw(12, lo + 4, 11);
+		w[n++] = ppc_addis(11, 28, shi);
+		w[n++] = ppc_rlwinm(9, 9, 1, 14, 30);         /* id * 2 */
+		w[n++] = ppc_add(11, 11, 9);
+		w[n++] = ppc_sth(10, slo, 11);
+	}
 	w[n++] = ppc_sldi(12, 12, 2);
 	n = pre_li64(w, n, 11, (uintptr_t)rec->code);
 	w[n++] = ppc_add(12, 11, 12);
@@ -596,6 +655,8 @@ REC_UNUSED static uint32_t emit_preamble(struct salsa64_rec *rec)
 	w[n++] = PPC_BLR;
 	return n;
 }
+
+static void jtc_clear(struct salsa64_rec *rec);
 
 typedef uint64_t (*rec_enter_fn)(struct salsa64_cpu *cpu, const uint32_t *code);
 
@@ -763,6 +824,7 @@ void salsa64_rec_flush_why(struct salsa64_rec *rec, enum salsa64_rec_flush_cause
 	rec->next_block = 1;
 	rec->free_link = 0;
 	rec->next_link = 0;
+	jtc_clear(rec);
 	seg_reset(rec);
 	rec->generation++;
 	for (unsigned s = 0; s < SALSA64_REC_ALL_SEGMENTS; s++)  /* los sitios de fastmem de la caché vieja */
@@ -907,6 +969,25 @@ static void unlink_all(struct salsa64_rec *rec, struct salsa64_rec_block *b)
 	b->links = 0;
 }
 
+/* Caché de destinos de JR (SALSA64_REC_OPT_JTC): vaciar la entrada que apunta al bloque `id`. */
+static void jtc_drop(struct salsa64_rec *rec, unsigned id)
+{
+	if (!(rec->opts & SALSA64_REC_OPT_JTC))
+		return;
+	struct salsa64_rec_jtc *e = &rec->jtc[rec->jtc_slot[id] & (SALSA64_REC_JTC_SLOTS - 1)];
+	if (e->vpc != 1 && e->code == rec->blocks[id].code) {
+		e->vpc = 1;
+		e->code = 0;
+	}
+}
+
+static void jtc_clear(struct salsa64_rec *rec)
+{
+	for (unsigned i = 0; i < SALSA64_REC_JTC_SLOTS; i++)
+		rec->jtc[i] = (struct salsa64_rec_jtc){ 1, 0 };
+	memset(rec->jtc_slot, 0, sizeof rec->jtc_slot);
+}
+
 static void kill_block(struct salsa64_rec *rec, unsigned id)
 {
 	struct salsa64_rec_block *b = &rec->blocks[id];
@@ -930,6 +1011,7 @@ static void kill_block(struct salsa64_rec *rec, unsigned id)
 	if (b->pa < rec->rdram_size && !detached)  /* no en la ROM */
 		flags_add(rec, b->pa, b->pa + b->bytes, -1);
 	unlink_all(rec, b);
+	jtc_drop(rec, id);
 	b->code = 0;
 	b->links = rec->free_block;
 	rec->free_block = (uint16_t)id;
@@ -974,6 +1056,7 @@ void salsa64_rec_block_detach(struct salsa64_rec *rec, unsigned id)
 	unlink_all(rec, b);
 	flags_add(rec, b->pa, b->pa + b->bytes, -1);
 	rec->x.saved_code[id] = b->code;
+	jtc_drop(rec, id);
 	b->code = 0;
 	rec->stats.invalidated++;
 	rec->cpu->rec_abort = 1;
@@ -1324,6 +1407,15 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 		}
 		const struct salsa64_rec_block *b = &rec->blocks[id];
 		uint32_t entry = b->code;
+		if (rec->opts & SALSA64_REC_OPT_JTC) {
+			/* El destino se resolvió aquí: si la caché de destinos lo tenía en otro código (otro FR,
+			 * otra física), que no siga mandando a él. */
+			struct salsa64_rec_jtc *e = &rec->jtc[((uint32_t)pc >> 2) & (SALSA64_REC_JTC_SLOTS - 1)];
+			if (e->vpc == (uint32_t)pc && e->code != entry) {
+				e->vpc = 1;
+				e->code = 0;
+			}
+		}
 		if (!entry) {
 			rec_interp(rec, !rec->strict, SALSA64_PROF_INTERP_NOCODE);
 			site = 0;
@@ -1513,6 +1605,7 @@ bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *co
 	rec->enter_opd[2] = 0;
 
 	seg_reset(rec);
+	jtc_clear(rec);
 	rec->next_block = 1;
 	rec->fr = cpu->status & SALSA64_ST_FR;
 	salsa64_rec_x_init(rec);

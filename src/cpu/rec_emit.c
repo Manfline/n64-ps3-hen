@@ -2681,7 +2681,7 @@ static void emit_branch(struct ctx *c, unsigned b)
 		fpu_flush(c);
 		E(c, ppc_mr(3, R_TARGET));
 		restore_borrowed(c);
-		emit_b(c, abs_label(c, c->temp || c->rec->no_link ? c->rec->exit_jump : c->rec->exit_jr), false);
+		emit_b(c, abs_label(c, c->temp || (c->rec->no_link && !(c->rec->opts & SALSA64_REC_OPT_JTC)) ? c->rec->exit_jump : c->rec->exit_jr), false);
 		return;
 	case K_BRANCH: {
 		if (idle) {  /* el tomado ya salió antes del delay slot */
