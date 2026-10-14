@@ -996,6 +996,45 @@ cercano siguen en su recta). Los demás grupos, como ahora.
   ni saltar al cuadro de ahora. Antes de la PS3, en el host: el giro de
   Link de la tarea 107 del estanque como prueba. Unos 3–5 días.
 
+## Estado al 2026-10-13 y lo que falta
+
+En la PS3, con «interp 8» (v0.2.5-54-g4c568a7): la interpolación por
+geometría se enciende en Opciones, por juego o en la pausa («Imagen»);
+apagada no cuesta nada ni cambia un píxel (gfxtest igual byte a byte a
+main en cada paquete). Confirmado por el autor en la consola: Zelda a
+720p y 3× «mejora mucho», el HUD quieto (interp 3), el agua quieta
+(interp 6), Mario 64 con sus intermedios (interp 5); a 5× el RSX no
+alcanza (campos saltados). Por confirmar con interp 7/8: el giro con Z y
+los destellos de la escena del Gran Árbol Deku.
+
+Lo que falta, en orden:
+
+1. Estimar la cámara entre los dos cuadros (plan arriba): posición de antes
+   para los grupos nuevos y giro por slerp en vez del corte con Z.
+2. Bajar el costo del PPE: emparejar va en 1,8–2,4 ms por tarea en la
+   consola (armar ~1,0, emparejar ~0,8, posiciones ~0,4), unas 50 veces
+   el banco del host: tablas que caben mal en los 512 KB de la L2 (claves,
+   grupos y coordenadas de dos cuadros) y bucles sin VMX. RPCS3 no sirve
+   para medirlo; la app de perfilado o paquetes de prueba.
+3. Avisar en «Imagen» que con la interpolación a 5× el RSX no alcanza, o
+   sugerir una escala menor.
+4. Notas «VMAT» de vmatch en la caja negra (las decisiones de cada grupo),
+   para repetir en el host lo que decidió la consola.
+5. Modo híbrido con matrices (estimación arriba), después de 1.
+
+Para entrar a main (v0.2.6), en este orden y rebasados sobre el main de
+ese momento: 23820f6 (`--gc-sections`, primero: sin él no alcanza la pila
+del SPE 0), c7b1fba, 56bdb38, 87120ce, 213af9f, a220f22, 9622655,
+52df1f2, 4037b29, d7a8eba, 6d918ca, 8edf1cc, 1e8c813, 0c7b7ad, 2c9a73c,
+4f60c71, 85a8877, b7f2c82, c94c0db, ec7abb7 y 0f8bb79. El merge 4c568a7
+no: la caja negra entra por su rama, y de ese merge solo hay que llevar la
+anotación de los campos intermedios (salsa64_rdp_field_info en rdp.h y
+rdp.c, `rdp.finfo` en interp_field y en salsa64_rdp_present, y la llamada
+a cajanegra_field_interp en main.c justo después de salsa64_rdp_present)
+y la resolución de las listas de fuentes (vmatch.c junto a gfxdump.c y
+blackbox.c en los Makefiles del frontend, el host y las pruebas) y de las
+opciones de salsa64-run (--state-zip junto a --interp).
+
 ## Reproducir en la Mac
 
 ```
