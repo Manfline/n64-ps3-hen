@@ -189,7 +189,7 @@ static void boot_by_cic(void)
 		{ SALSA64_CIC_7102, 0x80000400, 0x80000480, 0x3F, 0 },     /* fija */
 		{ SALSA64_CIC_6103, 0x80100400, 0x80000400, 0x78, 6103 },  /* −1 MB */
 		{ SALSA64_CIC_6105, 0x80000400, 0x80000400, 0x91, 6105 },
-		{ SALSA64_CIC_6106, 0x80200400, 0x80000400, 0x85, 0 },     /* −2 MB */
+		{ SALSA64_CIC_6106, 0x80200400, 0x80000400, 0x85, 0x17D8 }, /* −2 MB */
 	};
 	for (size_t i = 0; i < sizeof v / sizeof v[0]; i++) {
 		struct salsa64_boot_info info;
@@ -216,9 +216,12 @@ static void boot_by_cic(void)
 			CHECK_EQ(t_rd32(0x3F0), 0);
 			CHECK_EQ(t_rd32(0x2FB1F0), 0);
 		}
-		if (v[i].cic != SALSA64_CIC_6103) {
-			CHECK_EQ(salsa64_rd32(t_n64.bus.sp_mem), 0);
-			CHECK_EQ(salsa64_rd32(t_n64.bus.sp_mem + 0x1000), 0);
+		CHECK_EQ(R[S7], 1);
+		CHECK_EQ(t_rd32(0x314), 1);  /* osVersion */
+		if (v[i].cic != SALSA64_CIC_6103 && v[i].cic != SALSA64_CIC_6106) {
+			uint32_t fill = v[i].cic == SALSA64_CIC_6105 ? 0xA4002000 : 0;
+			CHECK_EQ(salsa64_rd32(t_n64.bus.sp_mem), fill);
+			CHECK_EQ(salsa64_rd32(t_n64.bus.sp_mem + 0x1000), fill);
 		}
 	}
 	done();
@@ -278,10 +281,10 @@ static void boot_cic6105_leftovers(void)
 	CHECK_EQ(t_rd32(0x3F0), 0x800000);
 
 	const uint8_t *imem = t_n64.bus.sp_mem + 0x1000;
-	CHECK_EQ(salsa64_rd32(imem + 0x120), salsa64_rd32(rom + 0x738));
-	CHECK_EQ(salsa64_rd32(imem + 0x220), salsa64_rd32(rom + 0x838));  /* RDRAM 0x2E8 */
-	CHECK_EQ(salsa64_rd32(imem + 0x270), 0);                           /* RDRAM 0x338 */
-	CHECK_EQ(salsa64_rd32(imem + 0x310), 0);                           /* fin de la lectura */
+	/* Al saltar al juego, DMEM e IMEM enteras valen 0xA4002000 (medido en ares). */
+	CHECK_EQ(salsa64_rd32(t_n64.bus.sp_mem), 0xA4002000);
+	CHECK_EQ(salsa64_rd32(imem + 0x120), 0xA4002000);
+	CHECK_EQ(salsa64_rd32(imem + 0xFFC), 0xA4002000);
 	for (uint32_t i = 0; i < 24; i++) {
 		CHECK_EQ(t_rd64(0x2FB1F0 + i * 0xFF0), salsa64_rd64(rom + 0x738 + i * 8));
 		CHECK_EQ(t_rd32(0x2FB1F8 + i * 0xFF0), 0);

@@ -1,5 +1,50 @@
 # Estado
 
+## 2026-10-13 — F-Zero X arranca (bus abierto del PI) y estado de arranque medido en ares (rama `pensive-germain-4c2e2b`)
+
+- **F-Zero X** ya llega al título («PUSH START»), con 342 tareas gráficas y 569
+  de audio en 10 s. No era el arranque 6106: el juego sondea el 64DD leyendo
+  `0x05000508` (ASIC_STATUS) y, con 0, creía que había uno y se quedaba
+  esperando al hilo del manejador del disco (Leo) para siempre. En ares, el
+  espacio del PI sin dispositivo (0x05000000–0x07FFFFFF y desde 0x1FD00000)
+  lee la mitad baja de la dirección repetida (`0x05080508`). Implementado en
+  `salsa64_bus_read32`. Las lecturas de 0x04900000–0x04FFFFFF siguen dando 0.
+- Arranque medido en ares (IPL2 e IPL3 reales) en el punto de entrada, con
+  SM64 (6102), Banjo-Kazooie (6103), Perfect Dark y Banjo-Tooie (6105) y
+  F-Zero X (6106): `s7 = 1` y `osVersion = 1` con todos (antes 0); 6106 deja
+  DMEM/IMEM en 0xFF con 0x17D8 en IMEM 0x000 y `osCicId` = 0x17D8; 6105 deja
+  DMEM e IMEM enteras en 0xA4002000. (No reproducido: s6 = 0xA0000200 con el
+  6105, SP_MEM_ADDR/DRAM_ADDR/RD_LEN/WR_LEN/semáforo del SP con el 6105, los
+  registros temporales, y la copia de la imagen del IPL3 6106 en RDRAM
+  0x000–0x2BC, que no está tal cual en la ROM.) Nueve escenas del host
+  (PD, Majora, SM64, MK64, GE, BK, Conker, DKR, DK64) idénticas antes y después.
+- **Banjo-Tooie** (y su protección): la RDRAM de entrada ya coincidía con ares
+  byte a byte, no era el arranque. Su cargador de datos los descifra con una
+  clave de 14 bytes que sale del **desafío del CIC 6105 por la PIF** (al
+  escribir la PIF RAM con el bit 0x02 en el byte 63, los 30 nibbles de los
+  bytes 48–62 se reemplazan por la respuesta). Nuestra PIF no contestaba:
+  descifraba basura, un tamaño salía negativo (`0xFFFB…`), la reserva de memoria
+  devolvía NULL y el hilo principal caía por TLBL. Implementado en
+  `src/core/pif.c` (`cic6105_challenge`, solo con CIC 6105): autómata de dos
+  tablas con clave inicial 0xB, validado nibble por nibble (150) con 5 pares
+  desafío/respuesta capturados en ares (prueba `pif_cic6105_challenge`). Una
+  entrada de la segunda tabla (0xE → 0xC) no coincidía con lo que se
+  recordaba de otras fuentes; se fijó con los datos medidos. Ahora Banjo-Tooie
+  dibuja la intro (296 tareas gráficas, 470 de audio en 16 s; Dolby). PD, Conker, DK64, Majora, SM64 y
+  F-Zero X dan el mismo cuadro antes y después.
+- **Falta probar:** F-Zero X y Banjo-Tooie en la PS3 (regresión v0.2.6); Banjo-Tooie
+  jugando más allá de la intro (otras protecciones de Rare, ANTI_TAMPER) y con
+  guardado EEPROM 16K; el desafío en Perfect Dark y Conker (no lo pidieron en
+  las pruebas del host); s6 = 0xA0000200 y los registros del SP con el 6105
+  (no reproducidos, sin efecto visto).
+- Método útil: contar las reservas del asignador del juego (ares con punto de
+  parada en 0x8001ACCC y el host con paso de 1 ciclo) y seguir el primer
+  argumento distinto hasta el dato mal descifrado. Ojo: los puntos de parada
+  de ares solo saltan en entradas de función, no en mitad de un bloque.
+- Trampa del GDB de ares: tras `\x03` llegan dos paquetes de parada; hay que
+  drenar el segundo o cada respuesta llega desfasada una petición (los volcados
+  de memoria salen corridos un bloque).
+
 ## 2026-10-13 — CFW (issue #2): respaldo automático al intérprete y prueba del JIT para usuarios (rama `nifty-knuth-a7c921`, paquetes SLSA00119 «Salsa64 CFW 1» y SLSA00118 «Salsa64 JIT test»)
 
 Con CFW Evilnat 4.91 (CECH-2501A) ningún juego arrancaba: el hilo
@@ -339,7 +384,7 @@ En curso:
 Pendientes (censo del día y reportes): Super Smash Bros. se congela en el
 primer KO (arreglado en el host el 2026-10-13, por confirmar en la PS3;
 entrada de abajo); Banjo-Tooie
-y F-Zero X en negro (arranque 6105/6106); Kirby 64 y Pokémon Stadium 2 con
+en la intro (host; desafío del CIC 6105 de la PIF ya implementado); F-Zero X ya arranca; Kirby 64 y Pokémon Stadium 2 con
 texturas con ruido (estado de Stadium 2 en la ranura 0); Pokémon Snap con
 texturas estiradas; sombras cuadradas de Conker (su espera de ~25 s al
 arrancar, en la entrada del 2026-10-13); luces puntuales de Majora (la luz salta
@@ -1072,8 +1117,8 @@ v0.2.0:
 | Kirby 64, Pokémon Stadium 2 | ~97–100 %, texturas con ruido o ajedrez | estado de Stadium 2 en la ranura 0 |
 | Pokémon Snap | jugable, texturas estiradas | ¿recorte del RSP, como MK64? |
 | Doom 64 | ~40 % | ~4,5 M instrucciones interpretadas por segundo: algo que el recompilador no traduce |
-| Banjo-Tooie | negro, sin tareas gráficas | arranque (CIC 6105) o protección de Rare |
-| F-Zero X | negro, CPU quieto desde el arranque | CIC 6106, entrada en 0x80067000 |
+| Banjo-Tooie | intro (host) | arreglado con el desafío del CIC 6105 de la PIF; falta jugar más allá de la intro y confirmar en la PS3 |
+| F-Zero X | título (host) | arreglado con el bus abierto del PI; por confirmar en la PS3 |
 | Diddy Kong Racing | negro | microcódigo propio de Rare sin HLE |
 | Indiana Jones | negro, 18 % | microcódigo de Factor 5 (LLE del RSP) |
 | Resident Evil 2 | parpadeo y texturas rotas desde el inicio | estado en la ranura 0 |

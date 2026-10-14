@@ -13,6 +13,36 @@
 
 #define CMD_BYTE       63            /* byte de comandos del PIF */
 #define CMD_JOYBUS     0x01          /* preparar los intercambios joybus */
+#define CMD_CHALLENGE  0x02          /* desafío y respuesta del CIC */
+
+/* Desafío del CIC 6105 (juegos de Rare como Banjo-Tooie descifran sus datos
+ * con la respuesta): 30 nibbles (alto primero) en los bytes 48–62 de la PIF
+ * RAM, que la PIF reemplaza por otros 30. Autómata con dos tablas, la clave
+ * empieza en 0xB; verificado nibble por nibble con 5 desafíos medidos en
+ * ares (150 nibbles) corriendo Banjo-Tooie. */
+#define CHL_FIRST      48
+#define CHL_BYTES      15
+static void cic6105_challenge(uint8_t *ram)
+{
+	static const uint8_t lut0[16] = { 4, 7, 0xA, 7, 0xE, 5, 0xE, 1, 0xC, 0xF, 8, 0xF, 6, 3, 6, 9 };
+	static const uint8_t lut1[16] = { 4, 1, 0xA, 7, 0xE, 5, 0xE, 1, 0xC, 9, 8, 5, 6, 3, 0xC, 9 };
+	const uint8_t *lut = lut0;
+	unsigned key = 0xB;
+	for (unsigned i = 0; i < CHL_BYTES * 2; i++) {
+		uint8_t *b = &ram[CHL_FIRST + i / 2];
+		unsigned in = (i & 1) ? (*b & 0xF) : (*b >> 4);
+		unsigned out = (key + 5 * in) & 0xF;
+		*b = (uint8_t)((i & 1) ? (*b & 0xF0) | out : (*b & 0x0F) | (out << 4));
+		key = lut[out];
+		unsigned sgn = (out >> 3) & 1, mag = (sgn ? ~out : out) & 7;
+		unsigned mod = (mag % 3 == 1) ? sgn : 1 - sgn;
+		if (lut == lut1 && (out == 0x1 || out == 0x9))
+			mod = 1;
+		if (lut == lut1 && (out == 0xB || out == 0xE))
+			mod = 0;
+		lut = mod ? lut1 : lut0;
+	}
+}
 
 #define ESC_SKIP       0x00          /* saltar al canal siguiente */
 #define ESC_RESET      0xFD          /* señal de reset en la línea */
@@ -103,6 +133,8 @@ static void parse(struct salsa64_pif *pif, const uint8_t *ram)
 void salsa64_pif_written(struct salsa64_bus *bus)
 {
 	uint8_t *ram = bus->pif_ram;
+	if ((ram[CMD_BYTE] & CMD_CHALLENGE) && bus->pif.challenge6105)
+		cic6105_challenge(ram);
 	if (!(ram[CMD_BYTE] & CMD_JOYBUS))
 		return;
 	parse(&bus->pif, ram);

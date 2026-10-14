@@ -59,6 +59,7 @@
 #define X105_RSP_ROW     8u
 #define X105_RSP_STRIDE  0xFF0u
 #define X105_MEMSIZE     0x3F0u
+#define X105_SPMEM_FILL  0xA4002000u /* DMEM e IMEM enteras al terminar */
 
 enum { REG_S3 = 19, REG_S4, REG_S5, REG_S6, REG_S7, REG_SP = 29 };
 
@@ -195,6 +196,8 @@ static void boot_x105(struct salsa64_bus *bus)
 		memcpy(ram + X105_RSP_DST + i * X105_RSP_STRIDE, imem + X105_RSP_IMEM + i * X105_RSP_ROW,
 		       X105_RSP_ROW);
 	salsa64_wr32(ram + X105_MEMSIZE, bus->rdram_size);
+	for (uint32_t i = 0; i < SALSA64_SP_MEM_SIZE; i += 4)
+		salsa64_wr32(bus->sp_mem + i, X105_SPMEM_FILL);
 }
 
 /*
@@ -216,6 +219,12 @@ static void boot_x103(struct salsa64_bus *bus)
 	memset(bus->sp_mem, 0xFF, SALSA64_SP_MEM_SIZE);
 	salsa64_wr32(bus->sp_mem + 0x1000, X103_IMEM_CIC);
 }
+
+/* CIC 6106 (F-Zero X): como el 6103 en DMEM e IMEM (0xFF salvo el número en
+ * IMEM 0x000), con su número 6104 (0x17D8), medido corriendo el IPL3 del
+ * cartucho. Su copia de la imagen a la RDRAM baja no se reproduce (no está
+ * en la ROM tal cual) y ningún juego conocido la comprueba. */
+#define X106_CIC_ID      0x17D8u
 
 static bool boot_flat(struct salsa64_n64 *n64, struct salsa64_boot_info *info)
 {
@@ -240,11 +249,17 @@ static bool boot_flat(struct salsa64_n64 *n64, struct salsa64_boot_info *info)
 		boot_x103(bus);
 	else if (info->cic == SALSA64_CIC_6105)
 		boot_x105(bus);
+	else if (info->cic == SALSA64_CIC_6106) {
+		memset(bus->sp_mem, 0xFF, SALSA64_SP_MEM_SIZE);
+		salsa64_wr32(bus->sp_mem + 0x1000, X106_CIC_ID);
+	}
 	if (info->cic != SALSA64_CIC_UNKNOWN)
 		salsa64_cpu_cop0_write(cpu, SALSA64_CP0_COUNT, FLAT_IPL3_COUNT);
 
 	/* Variables de arranque de libultra (osTvType, osRomType, osRomBase,
-	 * osResetType, osVersion, osMemSize), como las deja el IPL3. */
+	 * osResetType, osVersion, osMemSize), como las deja el IPL3. osVersion y
+	 * s7 valen 1 con todos los IPL3 (medido en ares con 6102, 6103, 6105 y
+	 * 6106, ejecutando el IPL2 y el IPL3 reales). */
 	salsa64_wr32(bus->rdram + 0x300, info->tv);
 	salsa64_wr32(bus->rdram + 0x304, 0);
 	salsa64_wr32(bus->rdram + 0x308, 0xB0000000u);
@@ -253,9 +268,10 @@ static bool boot_flat(struct salsa64_n64 *n64, struct salsa64_boot_info *info)
 	 * Rare lo comprueban (6103: Banjo-Kazooie, Diddy Kong Racing; 6105:
 	 * Conker no arranca su hilo principal sin él, Perfect Dark, DK64). De
 	 * las demás variantes no hay dato: queda como estaba. */
-	if (info->cic == SALSA64_CIC_6103 || info->cic == SALSA64_CIC_6105)
-		salsa64_wr32(bus->rdram + 0x310, info->cic == SALSA64_CIC_6103 ? 6103 : 6105);
-	salsa64_wr32(bus->rdram + 0x314, 0);
+	if (info->cic == SALSA64_CIC_6103 || info->cic == SALSA64_CIC_6105 || info->cic == SALSA64_CIC_6106)
+		salsa64_wr32(bus->rdram + 0x310, info->cic == SALSA64_CIC_6103 ? 6103 :
+					       info->cic == SALSA64_CIC_6105 ? 6105 : X106_CIC_ID);
+	salsa64_wr32(bus->rdram + 0x314, 1);
 	salsa64_wr32(bus->rdram + 0x318, bus->rdram_size);
 
 	/* Lo que el IPL2 pasa al IPL3: tipo de ROM, TV, reset, semilla, versión. */
@@ -263,9 +279,10 @@ static bool boot_flat(struct salsa64_n64 *n64, struct salsa64_boot_info *info)
 	cpu->gpr[REG_S4] = info->tv;
 	cpu->gpr[REG_S5] = 0;
 	cpu->gpr[REG_S6] = salsa64_cic_seed(info->cic);
-	cpu->gpr[REG_S7] = 0;
+	cpu->gpr[REG_S7] = 1;
 	cpu->gpr[REG_SP] = FLAT_SP;
 
+	bus->pif.challenge6105 = info->cic == SALSA64_CIC_6105;
 	info->kind = SALSA64_BOOT_FLAT;
 	info->entry = entry;
 	info->loaded = len;
