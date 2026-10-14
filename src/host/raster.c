@@ -53,7 +53,7 @@ static uint32_t task_no;
 static uint32_t vi_field;  /* campos del VI con imagen (rdp_targets_present) */
 
 bool raster_trace_fb;
-bool raster_clip_w;
+bool raster_clip_w, raster_clip_all;
 uint32_t raster_field;
 int raster_fbfx = 2;
 static struct rdp_vi_ring vi_ring;
@@ -399,14 +399,14 @@ static void draw_triangle_clip(const struct gfx_draw *d, const struct gfx_vertex
 			       uint32_t *tg_rgb, bool q5, struct depth *zb, float prim_z)
 {
 	const float eps = 1e-3f;
-	if (!raster_clip_w || (v[0].w > eps && v[1].w > eps && v[2].w > eps)) {
+	if ((!raster_clip_w && !raster_clip_all) || (v[0].w > eps && v[1].w > eps && v[2].w > eps)) {
 		draw_triangle(d, v, src, tg_rgb, q5, zb, prim_z);
 		return;
 	}
 	/* Solo si el triángulo del cuadro original estaba entero delante
 	 * (interp.c lo marca en pad): lo que el original descartaba (los
 	 * microcódigos sin recorte cercano) se sigue descartando. */
-	if (!(v[0].pad & v[1].pad & v[2].pad))
+	if (!raster_clip_all && !(v[0].pad & v[1].pad & v[2].pad))
 		return;
 	struct gfx_vertex p[4];
 	unsigned n = 0;

@@ -290,6 +290,26 @@ static void vmatch_identity_rules(void)
 	vmatch_pair(&fa.t, &fb.t, 120.0f, &st);
 	CHECK_EQ(fb.t.g[0].pair, 0);
 
+	/* Un vértice que pasa de detrás a delante de la cámara no se interpola
+	 * (en algún intermedio se proyectaría al infinito); los demás del grupo,
+	 * sí. */
+	static const float c0[3][4] = { { 0, 0, 1, 2 }, { 0.2f, 0, 1, 2 }, { 0.1f, 0.1f, -0.5f, -0.3f } };
+	static const float c1[3][4] = { { 0.02f, 0, 1, 2 }, { 0.22f, 0, 1, 2 }, { 0.1f, 0.1f, 0.4f, 0.6f } };
+	frame_init(&fa);
+	add_group(&fa, 0x7400, 0, 3, c0);
+	finish(&fa);
+	frame_init(&fb);
+	add_group(&fb, 0x7400, 0, 3, c1);
+	finish(&fb);
+	vmatch_pair(&fa.t, &fb.t, 120.0f, &st);
+	CHECK_EQ(fb.t.g[0].pair, 0);
+	struct gfx_vertex cv[3] = { out_of(c1[0], GFX_VGID(1u, 0u)), out_of(c1[1], GFX_VGID(1u, 1u)),
+				    out_of(c1[2], GFX_VGID(1u, 2u)) };
+	float cp[3][4];
+	CHECK_EQ(vmatch_prev(&fa.t, &fb.t, &st, cv, 3, cp), 2);
+	CHECK(near(cp[2][0], cv[2].x) && near(cp[2][3], cv[2].w));  /* el que cruza, donde está */
+	CHECK(near(cp[0][3], 2.0f) && !near(cp[0][0], cv[0].x));
+
 	/* El HUD 3D (proyección ortográfica: w = 1 en todos) no se interpola ni
 	 * cuenta para decidir un corte. */
 	static const float h0[3][4] = { { 0.5f, 0.5f, 0, 1 }, { 0.6f, 0.5f, 0, 1 }, { 0.5f, 0.6f, 0, 1 } };

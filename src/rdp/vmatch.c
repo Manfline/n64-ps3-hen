@@ -468,6 +468,14 @@ uint32_t vmatch_prev(const struct vmatch_table *prev, const struct vmatch_table 
 			memcpy(c, last_clip[k], sizeof c);
 			vp = last_vp;
 		}
+		/* Un vértice que cambia de lado de la cámara (w pasa por 0 entre los
+		 * dos cuadros) se proyectaría al infinito en algún intermedio: sus
+		 * triángulos taparían media pantalla o dejarían un hueco (el agua que
+		 * asoma en Zelda al caminar junto al estanque). Queda donde está;
+		 * la regla es del vértice, así sus copias en otros grupos hacen lo
+		 * mismo y no se abren grietas. */
+		if ((c[3] > 1e-6f) != (v->w > 1e-6f))
+			continue;
 		/* Como gfx_vtx_out (geom.c): x = vtrans·w + vscale·x, y = vtrans·w −
 		 * vscale·y; z queda la de ahora (la profundidad la pone quien dibuja,
 		 * con la z/w de ahora: también la del Z de primitiva). */

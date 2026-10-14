@@ -740,6 +740,29 @@ pantalla son 0 o mayores que ~1e-5, así que sus cuadrados no llegan a
 desnormales. Si hubiera tirones, se verían como picos en «armar» o
 «emparejar» del log.
 
+### «interp 3» en la PS3 y el agua («interp 4»)
+
+El autor: el HUD ya quedó bien; al caminar junto al estanque del bosque
+Kokiri «el agua rebasa un lugar donde no debería estar por unos instantes».
+Con su estado (ranura 1, campo 16772) y caminando, el emparejamiento en el
+host es casi perfecto (4 grupos rechazados en toda la corrida). La causa es
+otra: un vértice que en un cuadro está detrás de la cámara (w < 0) y en el
+otro delante pasa por w = 0 en algún intermedio, se proyecta al infinito y
+sus triángulos tapan media pantalla o dejan un hueco por el que asoma el
+agua. El rasterizador del host descartaba esos triángulos y no se veía:
+con `SALSA64_INTERP_COMO_RSX=1` el host recorta como el RSX (también en los
+cuadros de verdad) y aparece (en el intermedio 75-1 desaparece casi todo el
+piso cercano). Ahora un vértice que cambia de lado de la cámara entre los
+dos cuadros no se interpola: queda donde está. La regla es del vértice, así
+sus copias en otros grupos hacen lo mismo y no se abren grietas; con ella
+ese intermedio sale bien. Cuesta un poco en GoldenEye, que recorta en el
+plano cercano y antes los interpolaba bien: 30,05 → 29,73 dB contra la
+verdad (3,30 → 3,64 % de píxeles malos).
+
+Los «repetidos» que suben a 60–100 por ventana en esa zona (con 21–26
+intermedios por segundo) son intermedios que no llegaron a tiempo; a 5× el
+RSX va justo y el estanque translúcido pesa: a probar a 3×.
+
 ## Reproducir en la Mac
 
 ```
@@ -773,6 +796,7 @@ cp tools/interp-index.html build/interp/index.html
 - `SALSA64_INTERP_BASE_FINAL=1` dibuja los intermedios del host sobre el
   cuadro final (como la PS3), `SALSA64_INTERP_T0=1` agrega `g0-T.ppm` (todo
   en las posiciones de antes: debería dar el cuadro anterior),
+  `SALSA64_INTERP_COMO_RSX=1` recorta todo en w > 0 como el RSX,
   `SALSA64_INTERP_GRUPOS=1` vuelca cada grupo y su pareja
   (`grupos-T.txt`) y `SALSA64_INTERP_VOLCAR=1` las tareas 20 y 21 para
   `tools/vmatch-bench.c`; `ppmtool flicker A M B` cuenta lo que cambia solo

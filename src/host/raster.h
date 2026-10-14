@@ -40,6 +40,9 @@ extern bool raster_trace_fb;
 /* Recortar contra w = ε en vez de descartar los triángulos con un vértice
  * detrás (solo los cuadros inventados de interp.c; apagado por omisión). */
 extern bool raster_clip_w;
+/* Recortar en w > 0 todos los triángulos, también los de los cuadros de
+ * verdad, como el RSX (diagnóstico de la interpolación: SALSA64_INTERP_COMO_RSX). */
+extern bool raster_clip_all;
 extern uint32_t raster_field;
 extern int raster_fbfx;
 /* Cada campo con imagen: el origen y ancho del VI (como salsa64_rdp_vi). */
