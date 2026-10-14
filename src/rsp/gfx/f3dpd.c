@@ -65,7 +65,7 @@ static void vertices(struct gfx_state *g, uint32_t w0, uint32_t w1)
 			memset(q + 12, 0, 4);
 	}
 	gfx_vertices(g, vtx, v0, n);
-	gfx_vgroup(g, gfx_addr(g, w1), PD_VTX_BYTES, v0, n);
+	gfx_vgroup(g, gfx_addr(g, w1), PD_VTX_BYTES, v0, n, vtx);
 	g->res->t_vtx += gfx_io_clock() - t0;
 }
 

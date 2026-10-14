@@ -20,7 +20,6 @@ struct frame {
 	uint32_t len;
 };
 
-static uint8_t ram[0x10000];  /* RDRAM de prueba (direcciones bajas) */
 
 static void frame_init(struct frame *f)
 {
@@ -30,8 +29,9 @@ static void frame_init(struct frame *f)
 }
 
 /* Un G_VTX de n vértices desde `addr` con viewport 160 × 120 (el de la HLE
- * por omisión) y las coordenadas de recorte de `clip`. */
-static void add_group(struct frame *f, uint32_t addr, uint32_t v0, uint32_t n, const float (*clip)[4])
+ * por omisión), las coordenadas de recorte de `clip` y el hash de contenido
+ * `hash` (add_group: uno por dirección, como una lista que no cambia). */
+static void add_group_h(struct frame *f, uint32_t addr, uint32_t v0, uint32_t n, const float (*clip)[4], uint32_t hash)
 {
 	struct gfx_vgroup r;
 	memset(&r, 0, sizeof r);
@@ -39,10 +39,16 @@ static void add_group(struct frame *f, uint32_t addr, uint32_t v0, uint32_t n, c
 	r.h.size = (uint16_t)(sizeof r + 16u * n);
 	r.h.a = addr;
 	r.h.b = n | v0 << 8 | 16u << 16;
+	r.h.c = hash;
 	r.vp[0] = 160.0f, r.vp[1] = 120.0f, r.vp[2] = 160.0f, r.vp[3] = 120.0f;
 	memcpy(f->cmd + f->len, &r, sizeof r);
 	memcpy(f->cmd + f->len + sizeof r, clip, 16u * n);
 	f->len += r.h.size;
+}
+
+static void add_group(struct frame *f, uint32_t addr, uint32_t v0, uint32_t n, const float (*clip)[4])
+{
+	add_group_h(f, addr, v0, n, clip, addr * 2654435761u | 1u);
 }
 
 static void finish(struct frame *f)
@@ -50,7 +56,7 @@ static void finish(struct frame *f)
 	struct gfx_cmd c = { GFX_OP_END, sizeof c, 0, 0, 0 };
 	memcpy(f->cmd + f->len, &c, sizeof c);
 	f->len += sizeof c;
-	vmatch_build(&f->t, NULL, f->cmd, f->len, ram, sizeof ram);
+	vmatch_build(&f->t, f->cmd, f->len);
 }
 
 /* El vértice de salida de la coordenada de recorte c (viewport 160 × 120,
@@ -79,11 +85,9 @@ static struct frame fa, fb;
  * también la de uno del recorte cercano. */
 static void vmatch_pairs_and_positions(void)
 {
-	memset(ram, 0, sizeof ram);
-	ram[0x3000] = 1;  /* el grupo nuevo no tiene el contenido de otro */
 	static const float m0[2][4] = { { 0.0f, 0.0f, 1.0f, 2.0f }, { 0.5f, 0.0f, 1.0f, 2.0f } };
 	static const float m1[2][4] = { { -1.0f, 0.5f, 1.0f, 2.0f }, { -0.5f, 0.5f, 1.0f, 2.0f } };
-	static const float far0[1][4] = { { 0.0f, 0.0f, 1.0f, 1.0f } };
+	static const float far0[1][4] = { { 0.0f, 0.0f, 1.0f, 1.5f } };
 	frame_init(&fa);
 	add_group(&fa, 0x1000, 0, 2, m0);  /* árbol 1 */
 	add_group(&fa, 0x1000, 0, 2, m1);  /* árbol 2: misma lista */
@@ -95,8 +99,8 @@ static void vmatch_pairs_and_positions(void)
 
 	static const float n0[2][4] = { { 0.1f, 0.0f, 1.0f, 2.0f }, { 0.6f, 0.0f, 1.0f, 2.0f } };
 	static const float n1[2][4] = { { -0.9f, 0.5f, 1.0f, 2.0f }, { -0.4f, 0.5f, 1.0f, 2.0f } };
-	static const float far1[1][4] = { { 0.9f, 0.0f, 1.0f, 1.0f } };  /* 144 px en x */
-	static const float new0[1][4] = { { 0.0f, 0.0f, 1.0f, 1.0f } };
+	static const float far1[1][4] = { { 1.35f, 0.0f, 1.0f, 1.5f } };  /* 144 px en x */
+	static const float new0[1][4] = { { 0.0f, 0.0f, 1.0f, 1.5f } };
 	frame_init(&fb);
 	add_group(&fb, 0x1000, 0, 2, n0);
 	add_group(&fb, 0x1000, 0, 2, n1);
@@ -130,8 +134,8 @@ static void vmatch_pairs_and_positions(void)
 	/* Recorte cercano entre los lugares 0 y 1 del grupo 1: t sale de z + w de
 	 * ahora (n0: 3 y 3 → iguales: sin t). Con otro grupo de prueba abajo. */
 	CHECK(near(prev[4][0], v[4].x));
-	static const float q0[2][4] = { { 0, 0, -1.5f, 1.0f }, { 1, 0, 1.0f, 3.0f } };  /* z + w: −0,5 y 4 */
-	static const float q1[2][4] = { { 0.1f, 0, -1.5f, 1.0f }, { 1.1f, 0, 1.0f, 3.0f } };
+	static const float q0[2][4] = { { 0, 0, -1.5f, 1.1f }, { 1, 0, 1.0f, 3.0f } };  /* z + w: −0,4 y 4 */
+	static const float q1[2][4] = { { 0.1f, 0, -1.5f, 1.1f }, { 1.1f, 0, 1.0f, 3.0f } };
 	frame_init(&fa);
 	add_group(&fa, 0x6000, 0, 2, q0);
 	finish(&fa);
@@ -139,7 +143,7 @@ static void vmatch_pairs_and_positions(void)
 	add_group(&fb, 0x6000, 0, 2, q1);
 	finish(&fb);
 	vmatch_pair(&fa.t, &fb.t, 120.0f, &st);
-	float t = -0.5f / (-0.5f - 4.0f), cq[4];
+	float t = -0.4f / (-0.4f - 4.0f), cq[4];
 	for (int q = 0; q < 4; q++)
 		cq[q] = q1[0][q] + (q1[1][q] - q1[0][q]) * t;
 	struct gfx_vertex g = out_of(cq, GFX_VCLIP_ID(1u, 0u, 1u));
@@ -151,19 +155,16 @@ static void vmatch_pairs_and_positions(void)
 }
 
 /* Perfect Dark copia los vértices a otra dirección en cada cuadro: se
- * encuentran por el contenido en la RDRAM. Y un cuadro con casi todo nuevo
- * es un corte. */
+ * encuentran por el contenido (el hash que deja la HLE). Y un cuadro con
+ * casi todo nuevo es un corte. */
 static void vmatch_content_and_cut(void)
 {
 	static const float a[3][4] = { { 0, 0, 1, 2 }, { 0.2f, 0, 1, 2 }, { 0, 0.2f, 1, 2 } };
-	memset(ram, 0, sizeof ram);
-	for (int i = 0; i < 48; i++)
-		ram[0x4000 + i] = ram[0x4800 + i] = (uint8_t)(i * 7 + 1);  /* la misma lista en los dos búferes */
 	frame_init(&fa);
-	add_group(&fa, 0x4000, 0, 3, a);
+	add_group_h(&fa, 0x4000, 0, 3, a, 0x12345679u);  /* la misma lista en los dos búferes */
 	finish(&fa);
 	frame_init(&fb);
-	add_group(&fb, 0x4800, 0, 3, a);
+	add_group_h(&fb, 0x4800, 0, 3, a, 0x12345679u);
 	finish(&fb);
 	struct vmatch_stats st;
 	vmatch_pair(&fa.t, &fb.t, 120.0f, &st);
@@ -182,26 +183,22 @@ static void vmatch_content_and_cut(void)
 	float prev[1][4];
 	CHECK_EQ(vmatch_prev(&fa.t, &fb.t, &st, &v, 1, prev), 0);
 
-	/* Con el anterior a mano solo se mira el contenido de lo que cambió de
-	 * dirección: el grupo en 0x4000, que ya estaba, queda sin hash. */
-	vmatch_build(&fb.t, &fa.t, fb.cmd, fb.len, ram, sizeof ram);
-	CHECK_EQ(fb.t.g[0].hash, 0);
-	CHECK(fb.t.g[1].hash != 0);
 	vmatch_pair(NULL, &fb.t, 120.0f, &st);
 	CHECK_EQ(st.found, 0);
 	CHECK_EQ(vmatch_prev(NULL, &fb.t, &st, &v, 1, prev), 0);
 	CHECK(near(prev[0][0], v.x));
 }
 
-/* Un cuadrilátero chico (8 px) centrado en (px, py) píxeles, con w = 1. */
+/* Un cuadrilátero chico (8 px) centrado en (px, py) píxeles, con w = 2
+ * (perspectiva: w = 1 en todos es el HUD, que no se interpola). */
 static void quad_at(float c[4][4], float px, float py)
 {
 	static const float off[4][2] = { { -4, -4 }, { 4, -4 }, { -4, 4 }, { 4, 4 } };
 	for (int k = 0; k < 4; k++) {
-		c[k][0] = (px + off[k][0]) / 160.0f;
-		c[k][1] = (py + off[k][1]) / 120.0f;
-		c[k][2] = 0.5f;
-		c[k][3] = 1.0f;
+		c[k][0] = 2.0f * (px + off[k][0]) / 160.0f;
+		c[k][1] = 2.0f * (py + off[k][1]) / 120.0f;
+		c[k][2] = 1.0f;
+		c[k][3] = 2.0f;
 	}
 }
 
@@ -210,7 +207,6 @@ static void quad_at(float c[4][4], float px, float py)
  * (un vértice salta del final al principio) quedan sin pareja. */
 static void vmatch_identity_rules(void)
 {
-	memset(ram, 0, sizeof ram);
 	float q[4][4];
 	/* Cinco instancias que avanzan 2 px; la segunda y la cuarta cambian de
 	 * lugar en el orden. */
@@ -263,10 +259,10 @@ static void vmatch_identity_rules(void)
 	CHECK_EQ(fb.t.g[4].pair, 4);
 	CHECK_EQ(st.jumped, 1);
 
-	static const float ta[4][4] = { { 0, 0, 0.5f, 1 }, { 20 / 160.0f, 0, 0.5f, 1 }, { 40 / 160.0f, 0, 0.5f, 1 },
-					{ 60 / 160.0f, 0, 0.5f, 1 } };
-	static const float tb[4][4] = { { 80 / 160.0f, 0, 0.5f, 1 }, { 20 / 160.0f, 0, 0.5f, 1 },
-					{ 40 / 160.0f, 0, 0.5f, 1 }, { 60 / 160.0f, 0, 0.5f, 1 } };
+	static const float ta[4][4] = { { 0, 0, 1, 2 }, { 40 / 160.0f, 0, 1, 2 }, { 80 / 160.0f, 0, 1, 2 },
+					{ 120 / 160.0f, 0, 1, 2 } };
+	static const float tb[4][4] = { { 160 / 160.0f, 0, 1, 2 }, { 40 / 160.0f, 0, 1, 2 },
+					{ 80 / 160.0f, 0, 1, 2 }, { 120 / 160.0f, 0, 1, 2 } };
 	frame_init(&fa);
 	add_group(&fa, 0x7200, 0, 4, ta);
 	finish(&fa);
@@ -277,13 +273,29 @@ static void vmatch_identity_rules(void)
 	CHECK_EQ(fb.t.g[0].pair, -1);
 	CHECK_EQ(st.deformed, 1);
 	/* La misma estela que solo avanza (todos 20 px): con pareja. */
-	static const float tc[4][4] = { { 20 / 160.0f, 0, 0.5f, 1 }, { 40 / 160.0f, 0, 0.5f, 1 },
-					{ 60 / 160.0f, 0, 0.5f, 1 }, { 80 / 160.0f, 0, 0.5f, 1 } };
+	static const float tc[4][4] = { { 40 / 160.0f, 0, 1, 2 }, { 80 / 160.0f, 0, 1, 2 },
+					{ 120 / 160.0f, 0, 1, 2 }, { 160 / 160.0f, 0, 1, 2 } };
 	frame_init(&fb);
 	add_group(&fb, 0x7200, 0, 4, tc);
 	finish(&fb);
 	vmatch_pair(&fa.t, &fb.t, 120.0f, &st);
 	CHECK_EQ(fb.t.g[0].pair, 0);
+
+	/* El HUD 3D (proyección ortográfica: w = 1 en todos) no se interpola ni
+	 * cuenta para decidir un corte. */
+	static const float h0[3][4] = { { 0.5f, 0.5f, 0, 1 }, { 0.6f, 0.5f, 0, 1 }, { 0.5f, 0.6f, 0, 1 } };
+	static const float h1[3][4] = { { 0.5f, 0.5f, 0, 1 }, { 0.6f, 0.55f, 0, 1 }, { 0.5f, 0.65f, 0, 1 } };
+	frame_init(&fa);
+	add_group(&fa, 0x7300, 0, 3, h0);
+	finish(&fa);
+	frame_init(&fb);
+	add_group(&fb, 0x7300, 0, 3, h1);
+	finish(&fb);
+	vmatch_pair(&fa.t, &fb.t, 120.0f, &st);
+	CHECK_EQ(fb.t.g[0].pair, -1);
+	CHECK_EQ(st.flat, 1);
+	CHECK_EQ(st.vertices, 0);
+	CHECK(!st.cut);
 }
 
 void t_suite_vmatch(void)

@@ -1371,7 +1371,7 @@ static void interp_task(struct set *s, const struct gfx_result *res)
 	uint64_t t0 = sysGetSystemTime();
 	uint32_t c = rdp.interp.cur ^ 1;
 	struct vmatch_table *cur = &vm[c].t, *prev = rdp.interp.have_prev ? &vm[c ^ 1].t : NULL;
-	vmatch_build(cur, prev, s->cmd, res->cmd_bytes, rdp.rdram, rdp.rdram_size);
+	vmatch_build(cur, s->cmd, res->cmd_bytes);
 	uint64_t t1 = sysGetSystemTime();
 	struct vmatch_stats st;
 	vmatch_pair(prev, cur, INTERP_DISP, &st);

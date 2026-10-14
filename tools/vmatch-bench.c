@@ -67,8 +67,8 @@ int main(int argc, char **argv)
 	uint32_t paired = 0;
 	for (int r = 0; r < reps; r++) {
 		double a = now();
-		vmatch_build(&t[0], NULL, cmd[0], (uint32_t)cl[0], ram[0], (uint32_t)rl[0]);
-		vmatch_build(&t[1], &t[0], cmd[1], (uint32_t)cl[1], ram[1], (uint32_t)rl[1]);
+		vmatch_build(&t[0], cmd[0], (uint32_t)cl[0]);
+		vmatch_build(&t[1], cmd[1], (uint32_t)cl[1]);
 		double b = now();
 		vmatch_pair(&t[0], &t[1], 120.0f, &st);
 		double c = now();

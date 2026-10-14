@@ -325,7 +325,7 @@ void gfx_load_vertices(struct gfx_state *g, uint32_t addr, uint32_t v0, uint32_t
 		return;
 	}
 	gfx_vertices(g, src, v0, n);
-	gfx_vgroup(g, addr, 16, v0, n);
+	gfx_vgroup(g, addr, 16, v0, n, src);
 }
 
 void gfx_light_vectors(struct gfx_state *g)

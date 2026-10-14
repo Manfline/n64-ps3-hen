@@ -699,6 +699,27 @@ No encontré la escena exacta de la estela en los estados de la consola
 (el hada no está a la vista en ninguno); conviene que el autor diga el
 lugar, o guarde un estado ahí, si sigue con «interp 2».
 
+Después el autor agregó: el polvo de Epona va «con retraso» y el HUD
+tiembla (al guardar la espada en Zelda, el botón A gira). En el host, con el
+estado del árbol Deku de la consola y A al guardar la espada, el giro se ve
+bien. El botón es 3D con perspectiva, en un búfer dinámico (cambia de
+dirección en cada cuadro), así que se empareja por el contenido: el hash lo
+leía el PPE de la RDRAM al traducir, y en la consola eso llega más tarde que
+en el host; si el juego ya reescribió ese búfer, la pareja sale mal. Lo
+mismo vale para partículas en búferes dinámicos. «interp 3»:
+
+- **El hash del contenido lo calcula el SPE** en `gfx_vgroup`, con los 16
+  bytes de cada vértice que acaba de leer, y va en el registro: el PPE ya no
+  lee la RDRAM (menos memoria: armar 21 → 15 µs en el banco del host). En
+  el SPE 0, 184 bytes de código (holgura 3648).
+- **Lo que va con proyección ortográfica** (w = 1 en todos sus vértices: el
+  HUD 3D) no se interpola ni cuenta para decidir un corte; sale como en el
+  cuadro verdadero, igual que los rectángulos y TEXRECT, que ya salían así
+  (sin pareja: su posición de ahora).
+- Lo que queda sin pareja (partículas que renacen, etc.) sale como en el
+  cuadro verdadero que se va a presentar, no de la copia: el redibujo pinta
+  todos los dibujos de la tarea sobre ella.
+
 ## Reproducir en la Mac
 
 ```

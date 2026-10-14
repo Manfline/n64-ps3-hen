@@ -333,9 +333,10 @@ void gfx_vertices(struct gfx_state *g, const uint8_t *src, uint32_t v0, uint32_t
  * aparte. gfx_vgroup_begin, al empezar la tarea. gfx_vgroup (sin la bandera
  * no hace nada): el registro GFX_OP_VGROUP de los n vértices recién cargados
  * en vtx[v0…] desde `addr` (`stride` bytes por vértice en la lista del
- * juego) y su identidad en clip. */
+ * juego; `src`, sus n vértices de 16 bytes como los leyó la HLE, de los que
+ * va el hash del contenido) y su identidad en clip. */
 void gfx_vgroup_begin(struct gfx_state *g);
-void gfx_vgroup(struct gfx_state *g, uint32_t addr, uint32_t stride, uint32_t v0, uint32_t n);
+void gfx_vgroup(struct gfx_state *g, uint32_t addr, uint32_t stride, uint32_t v0, uint32_t n, const uint8_t *src);
 /* Luces y lookat en espacio del modelo (light_model, lookat_model), al día. */
 void gfx_light_vectors(struct gfx_state *g);
 /* G_TEXTURE_GEN: s, t del vértice según su normal (unitaria, espacio del

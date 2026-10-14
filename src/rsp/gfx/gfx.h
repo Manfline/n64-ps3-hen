@@ -352,7 +352,7 @@ struct gfx_draw {
  * de recorte del grupo, t = (z + w)_a / ((z + w)_a − (z + w)_b). Los demás
  * (rectángulos, recortes entre grupos) llevan pad = 0. */
 struct gfx_vgroup {
-	struct gfx_cmd h;   /* a = dirección, b = n | v0 << 8 | paso << 16 */
+	struct gfx_cmd h;   /* a = dirección, b = n | v0 << 8 | paso << 16, c = hash del contenido (no 0) */
 	float vp[4];        /* vscale x, y y vtrans x, y */
 };
 #define GFX_VGID(serial, i) ((serial) << 6 | (i))

@@ -11,9 +11,10 @@
  * dos extremos, GFX_VCLIP_ID). Aquí:
  *
  *   vmatch_build  arma la tabla de un cuadro desde sus registros: la clave de
- *                 cada grupo es su dirección y, de respaldo, el contenido de la
- *                 lista en la RDRAM (Perfect Dark copia los vértices a un búfer
- *                 distinto en cada cuadro); los grupos de una misma clave
+ *                 cada grupo es su dirección y, de respaldo, el hash de su
+ *                 contenido que deja la HLE (Perfect Dark copia los vértices a
+ *                 un búfer distinto en cada cuadro, y el HUD de Zelda va en un
+ *                 búfer dinámico); los grupos de una misma clave
  *                 quedan juntos y en orden (el mismo modelo dibujado varias
  *                 veces), con su centro y su tamaño en pantalla
  *   vmatch_pair   busca cada grupo entre los del cuadro anterior con su clave:
@@ -25,7 +26,10 @@
  *                 teletransporte), si una instancia de un modelo repetido se
  *                 movió mucho más que sus hermanas (una partícula que renace
  *                 en otro lugar) o si un grupo chico en pantalla se deformó de
- *                 golpe (estelas en anillo). Y el cuadro
+ *                 golpe (estelas en anillo); y nunca lo que va con proyección
+ *                 ortográfica (w = 1 en todos sus vértices: el HUD 3D, como
+ *                 el botón A que gira en Zelda), que sale como en el cuadro de
+ *                 ahora, igual que los rectángulos. Y el cuadro
  *                 entero sin interpolar si más de un tercio de los grupos con
  *                 pareja se movió así o si menos de la mitad de los vértices
  *                 tiene pareja (cambio de plano)
@@ -56,6 +60,7 @@ struct vmatch_group {
 	uint32_t clip;         /* primer vértice en vmatch_table.clip */
 	float vp[4];           /* vscale x, y y vtrans x, y */
 	float cx, cy, ext;     /* centro y tamaño en pantalla (píxeles) de sus vértices visibles; ext < 0: ninguno */
+	uint32_t flat;         /* proyección ortográfica (w = 1 en todos): el HUD 3D; no se interpola */
 	int32_t pair;          /* grupo del cuadro anterior (vmatch_pair), o -1 */
 };
 
@@ -90,6 +95,7 @@ struct vmatch_stats {
 	uint32_t moved;                  /* con pareja pero rechazados por el desplazamiento */
 	uint32_t jumped, deformed;       /* rechazados: grupo chico que saltó, grupo que se deformó */
 	uint32_t reordered;              /* emparejados con otra instancia que la de su orden (más cerca) */
+	uint32_t flat;                   /* grupos con proyección ortográfica (HUD 3D): sin interpolar */
 	uint32_t by_content;             /* encontrados por el contenido (no por la dirección) */
 	bool cut;                        /* el cuadro no se interpola */
 };
@@ -99,14 +105,10 @@ size_t vmatch_table_bytes(uint32_t gcap, uint32_t ccap);
 /* La tabla sobre `mem` (vmatch_table_bytes, alineada a 16). */
 void vmatch_table_init(struct vmatch_table *t, void *mem, uint32_t gcap, uint32_t ccap);
 /* La tabla del cuadro desde los comandos de su tarea (cmd_bytes bytes). El
- * hash del contenido sale de la RDRAM (dirección, n y paso del registro),
- * mirada poco después de la tarea: la lista del cuadro sigue ahí (los juegos
- * alternan sus búferes); solo de los grupos cuya dirección no estaba en
- * `prev`, la tabla del cuadro anterior (NULL: de todos): los de dirección
- * fija se encuentran por ella y así no se lee la RDRAM. Sin `rdram`, todos
- * los hash valen 0. */
-void vmatch_build(struct vmatch_table *t, const struct vmatch_table *prev, const uint8_t *cmd, uint32_t cmd_bytes,
-		  const uint8_t *rdram, uint32_t rdram_size);
+ * hash del contenido de cada grupo es el de su registro (lo calcula la HLE
+ * con los vértices que acaba de leer): no hace falta mirar la RDRAM, que
+ * cuando se traduce el juego ya puede haber cambiado. */
+void vmatch_build(struct vmatch_table *t, const uint8_t *cmd, uint32_t cmd_bytes);
 /* Empareja `cur` con `prev` (NULL: ninguno) y deja en cur->g[].pair el
  * resultado. max_disp en píxeles de la N64 por cuadro del juego. */
 void vmatch_pair(const struct vmatch_table *prev, struct vmatch_table *cur, float max_disp, struct vmatch_stats *st);

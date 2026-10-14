@@ -116,17 +116,6 @@ static uint32_t key_get(struct vmatch_table *t, uint32_t kind, uint32_t v)
 	return ~0u;
 }
 
-/* FNV-1a por palabras (big-endian, como la RDRAM) de [addr, addr + len). */
-static uint32_t content_hash(const uint8_t *rdram, uint32_t size, uint32_t addr, uint32_t len)
-{
-	uint32_t h = 0x811C9DC5u;
-	if (!rdram || addr >= size || len > size - addr)
-		return 0;
-	for (const uint8_t *p = rdram + addr, *e = p + (len & ~3u); p < e; p += 4)
-		h = (h ^ ((uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3])) * 0x01000193u;
-	return h ? h : 1;
-}
-
 static float fabs_(float v)
 {
 	return v < 0.0f ? -v : v;
@@ -139,8 +128,7 @@ static bool near_screen(const float c[4])
 	return c[3] > 0.0f && fabs_(c[0]) <= 1.5f * c[3] && fabs_(c[1]) <= 1.5f * c[3];
 }
 
-void vmatch_build(struct vmatch_table *t, const struct vmatch_table *prev, const uint8_t *cmd, uint32_t cmd_bytes,
-		  const uint8_t *rdram, uint32_t rdram_size)
+void vmatch_build(struct vmatch_table *t, const uint8_t *cmd, uint32_t cmd_bytes)
 {
 	float(*scr)[2] = screen_of(t);
 	t->ngroups = t->nclip = t->nlive = 0;
@@ -168,8 +156,7 @@ void vmatch_build(struct vmatch_table *t, const struct vmatch_table *prev, const
 		g->n = n;
 		g->v0 = (c->b >> 8) & 0xFF;
 		g->stride = c->b >> 16;
-		bool known = prev && !prev->full && key_find(prev, KIND_ADDR, g->addr) != ~0u;
-		g->hash = known ? 0 : content_hash(rdram, rdram_size, g->addr, n * g->stride);
+		g->hash = c->c;
 		g->akey = key_get(t, KIND_ADDR, g->addr);
 		g->hkey = g->hash ? key_get(t, KIND_HASH, g->hash) : ~0u;
 		if (g->akey == ~0u || (g->hash && g->hkey == ~0u)) {
@@ -187,8 +174,11 @@ void vmatch_build(struct vmatch_table *t, const struct vmatch_table *prev, const
 		/* En pantalla: cada vértice visible y el centro y el tamaño del grupo. */
 		float x0 = FAR_AWAY, y0 = FAR_AWAY, x1 = -FAR_AWAY, y1 = -FAR_AWAY, sx = 0.0f, sy = 0.0f;
 		uint32_t vis = 0;
+		g->flat = n > 0;
 		for (uint32_t k = 0; k < n; k++) {
 			float *s = scr[t->nclip + k];
+			if (fabs_(src[k][3] - 1.0f) > 1e-3f)
+				g->flat = 0;
 			if (!near_screen(src[k])) {
 				s[0] = s[1] = FAR_AWAY;
 				continue;
@@ -336,6 +326,10 @@ void vmatch_pair(const struct vmatch_table *prev, struct vmatch_table *cur, floa
 	for (uint32_t i = 0; i < cur->ngroups; i++) {
 		struct vmatch_group *g = &cur->g[i];
 		g->pair = -1;
+		if (g->flat) {  /* ni cuenta para decidir un corte */
+			st->flat++;
+			continue;
+		}
 		st->vertices += g->n;
 		if (!can)
 			continue;

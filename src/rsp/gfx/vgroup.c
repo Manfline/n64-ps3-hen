@@ -11,6 +11,7 @@
  */
 #include <string.h>
 
+#include "core/endian.h"
 #include "rsp/gfx/hle.h"
 
 _Static_assert(offsetof(struct gfx_vtx, w) == offsetof(struct gfx_vtx, x) + 12, "x, y, z, w seguidos en gfx_vtx");
@@ -20,7 +21,7 @@ void gfx_vgroup_begin(struct gfx_state *g)
 	g->vgroups = 0;
 }
 
-void gfx_vgroup(struct gfx_state *g, uint32_t addr, uint32_t stride, uint32_t v0, uint32_t n)
+void gfx_vgroup(struct gfx_state *g, uint32_t addr, uint32_t stride, uint32_t v0, uint32_t n, const uint8_t *src)
 {
 	if (!(g->job->flags & GFX_JOB_INTERP) || v0 >= GFX_MAX_VTX)
 		return;
@@ -34,7 +35,13 @@ void gfx_vgroup(struct gfx_state *g, uint32_t addr, uint32_t stride, uint32_t v0
 	rec.r.h.size = (uint16_t)(sizeof rec.r + 16u * n);
 	rec.r.h.a = addr;
 	rec.r.h.b = n | v0 << 8 | stride << 16;
-	rec.r.h.c = 0;
+	/* El contenido (los 16 bytes de cada vértice que se acaban de leer): de
+	 * respaldo de la dirección para el consumidor, sin que tenga que volver a
+	 * leer la RDRAM (cuando traduce, el juego ya puede haberla cambiado). */
+	uint32_t h = 0x811C9DC5u;
+	for (uint32_t i = 0; i < 4 * n; i++)
+		h = (h ^ salsa64_rd32(src + 4 * i)) * 0x01000193u;
+	rec.r.h.c = h ? h : 1;
 	rec.r.vp[0] = g->vscale[0], rec.r.vp[1] = g->vscale[1];
 	rec.r.vp[2] = g->vtrans[0], rec.r.vp[3] = g->vtrans[1];
 	uint32_t id = GFX_VGID(g->vgroups + 1, 0u) << GFX_CLIP_ID_SHIFT;

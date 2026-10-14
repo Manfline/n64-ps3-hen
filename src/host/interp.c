@@ -96,7 +96,7 @@ static struct {
 	/* Cuentas (desde from_field). */
 	uint64_t v_loaded, v_found, v_matched, groups, groups_found, groups_moved, by_content;
 	uint64_t ns_build, ns_pair, ns_prev, vm_tasks;  /* tiempo de vmatch (host) */
-	uint64_t jumped, deformed, reordered;
+	uint64_t jumped, deformed, reordered, flat;
 	bool base_final;
 	uint64_t out_vtx, out_matched, out_tasks;
 	uint64_t sad_evals, sad_blocks, searches;
@@ -762,8 +762,7 @@ void interp_after_raster(const struct gfx_job *job, const struct gfx_result *res
 	struct timespec t0, t1, t2, t3;
 	clock_gettime(CLOCK_MONOTONIC, &t0);
 	const struct vmatch_table *pt = st.prev_task ? &st.tables[st.prev_task % NTABLES].t : NULL;
-	vmatch_build(&ft->t, pt, (const uint8_t *)(uintptr_t)job->cmd_ea, res->cmd_bytes,
-		     (const uint8_t *)(uintptr_t)job->rdram_ea, job->rdram_size);
+	vmatch_build(&ft->t, (const uint8_t *)(uintptr_t)job->cmd_ea, res->cmd_bytes);
 	ft->task = st.task;
 	ft->valid = true;
 	clock_gettime(CLOCK_MONOTONIC, &t1);
@@ -808,8 +807,14 @@ void interp_after_raster(const struct gfx_job *job, const struct gfx_result *res
 				}
 				nvis++;
 			}
-			fprintf(gf, "%3u addr %06x n %2u v0 %2u occ %3u/%d hash %08x hocc %u pair %4d dir %4d cont %4d vis %2d",
-				i, g->addr, g->n, g->v0, g->occ, addrn, g->hash, g->hocc, g->pair, byaddr, byhash, nvis);
+			float w0 = 1e30f, w1 = -1e30f;
+			for (uint32_t k = 0; k < g->n; k++) {
+				float w = ft->t.clip[g->clip + k][3];
+				w0 = w < w0 ? w : w0, w1 = w > w1 ? w : w1;
+			}
+			fprintf(gf, "%3u addr %06x n %2u v0 %2u occ %3u/%d hash %08x hocc %u pair %4d dir %4d cont %4d vis %2d w %g..%g%s",
+				i, g->addr, g->n, g->v0, g->occ, addrn, g->hash, g->hocc, g->pair, byaddr, byhash, nvis, w0, w1,
+				g->flat ? " HUD" : "");
 			if (nvis)
 				fprintf(gf, " c (%.0f, %.0f)", cx / nvis, -cy / nvis);
 			if (g->pair >= 0 && nvis)
@@ -837,6 +842,7 @@ void interp_after_raster(const struct gfx_job *job, const struct gfx_result *res
 		st.jumped += st.vst.jumped;
 		st.deformed += st.vst.deformed;
 		st.reordered += st.vst.reordered;
+		st.flat += st.vst.flat;
 		if (st.tcsv)
 			fprintf(st.tcsv, "%u,%u,%u,%u,%u,%u,%u,%u\n", st.task, field, st.vst.vertices, st.vst.found_vertices,
 				st.vst.paired_vertices, nv, om, ot);
@@ -944,10 +950,10 @@ void interp_report(void)
 				100.0 * st.by_content / st.groups);
 		if (st.vm_tasks)
 			fprintf(o, "interp: vmatch por tarea (host): armar %.1f µs, emparejar %.1f µs, posiciones %.1f µs; %.0f grupos; "
-				"%.2f saltaron, %.2f se deformaron, %.2f con otra instancia más cerca\n",
+				"%.2f saltaron, %.2f se deformaron, %.2f con otra instancia más cerca, %.1f del HUD (ortográficos)\n",
 				st.ns_build / 1e3 / st.vm_tasks, st.ns_pair / 1e3 / st.vm_tasks, st.ns_prev / 1e3 / st.vm_tasks,
 				(double)st.groups / st.vm_tasks, (double)st.jumped / st.vm_tasks, (double)st.deformed / st.vm_tasks,
-				(double)st.reordered / st.vm_tasks);
+				(double)st.reordered / st.vm_tasks, (double)st.flat / st.vm_tasks);
 		if (st.searches)
 			fprintf(o,
 				"interp: imagen: %llu búsquedas, %.0f bloques y %.0f SAD de %ux%u por búsqueda (%.1f por bloque)\n",
