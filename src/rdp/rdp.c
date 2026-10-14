@@ -335,6 +335,10 @@ static struct {
 		 * dibujan); 0 nada. */
 		volatile uint32_t protect;
 	} interp;
+	/* Lo que se traduce ahora (salsa64_rdp_translating; lo lee el latido
+	 * desde otro hilo): la tarea (n + 1, 0 fuera de translate) y la etapa. */
+	volatile uint32_t in_task;
+	const char *volatile at;
 	/* Caja negra: se avisa de cada tarea al empezar a traducirla. */
 	salsa64_rdp_task_hook task_hook;
 	void *task_ctx;
@@ -1532,6 +1536,8 @@ static void translate(uint32_t n)
 	uint64_t t0 = sysGetSystemTime(), tb0 = tb_now();
 	struct set *s = &rdp.sets[n % SETS];
 	const struct gfx_result *res = &s->res;
+	rdp.at = "inicio";
+	rdp.in_task = n + 1;
 	if (rdp.task_hook) {
 		struct gfx_dump_src src = { s->cmd, res->cmd_bytes, s->vtx, res->vtx_bytes, s->tex, res->tex_bytes,
 					    rdp.cache, CACHE_BYTES, rdp.rdram, rdp.rdram_size };
@@ -1559,6 +1565,7 @@ static void translate(uint32_t n)
 	}
 	int cur = -1;
 	bool drawn[RDP_TARGETS_MAX] = { false };
+	rdp.at = "dibujos";
 	struct rdp_box drawn_box[RDP_TARGETS_MAX];  /* lo que tocaron los dibujos de la tarea */
 	memset(drawn_box, 0, sizeof drawn_box);
 
@@ -1574,7 +1581,9 @@ static void translate(uint32_t n)
 			uint32_t lh = scissor_bottom(s, off + c->size, res->cmd_bytes), siz = c->c & 0xFF;
 			bool is_tall = c->b && c->b <= 640 && rdp_targets_tall(c->b, lh) &&
 				       fills_only(s, off + c->size, res->cmd_bytes);
+			rdp.at = "destinos";
 			cur = is_tall ? -1 : get_target(c->a, c->b, (c->c >> 8) & 0xFF, siz, lh);
+			rdp.at = "dibujos";
 			if (cur >= 0 && rdp.last_get.fresh) {
 				/* Un relleno de imagen alta anterior (rdp_targets_tall_note) que
 				 * este destino no vio: se cebó con la RDRAM, que no lo tiene. */
@@ -1664,8 +1673,11 @@ static void translate(uint32_t n)
 				memset(rdp.surf_dirty, 0, sizeof rdp.surf_dirty);
 			}
 			struct depth *d = rdp.bound_t == cur ? rdp.bound_d : NULL;
-			if (g->depth)
+			if (g->depth) {
+				rdp.at = "profundidad";
 				d = get_depth(g->zimg, cur);
+				rdp.at = "dibujos";
+			}
 			if (!bind(cur, d))
 				break;
 			rdp_targets_drawn(&rdp.tg, cur);
@@ -1717,6 +1729,7 @@ static void translate(uint32_t n)
 		s->interp_ok = false;
 		rdp.stats.interp_fbtex++;
 	}
+	rdp.at = "copias a la RDRAM";
 	/* Copias a la RDRAM que pidió done: el RSX reduce cada destino a su
 	 * búfer y, pasada la barrera, el PPE lo convierte y lo escribe. */
 	struct { int slot; uint32_t buf, rows; struct rdp_box box; } rb[RB_SLOTS];
@@ -1885,6 +1898,7 @@ static void translate(uint32_t n)
 		if (rdp.big[k].used && !rdp.big[k].fence)
 			rdp.big[k].fence = s->fence;
 	if (nrb) {
+		rdp.at = "barrera de las copias";
 		uint64_t t1 = sysGetSystemTime();
 		fence_wait(s->fence);
 		for (uint32_t k = 0; k < nrb; k++) {
@@ -1897,6 +1911,7 @@ static void translate(uint32_t n)
 		readbacks_finish(false);  /* pasó la barrera: los espejos también */
 		rdp.stats.us_readback += sysGetSystemTime() - t1;
 	}
+	rdp.at = "espejo del framebuffer";
 	/* Espejo de los framebuffers que dibujó la tarea (el VI ya los mostró
 	 * alguna vez): ahora, como el RDP, y no al presentarlos. Va después de
 	 * poner las barreras de las copias de arriba (readbacks_finish no debe
@@ -1908,6 +1923,7 @@ static void translate(uint32_t n)
 	}
 	lwsync();  /* la RDRAM, antes de decir que está */
 	rdp.readback_done = n + 1;
+	rdp.at = "fin";
 	s->ppe_tex_end = rdp.ppe_tex_off;
 	rdp.last_res = *res;
 	rdp.last_set = (unsigned)(s - rdp.sets);
@@ -1926,6 +1942,8 @@ static void translate(uint32_t n)
 		perf_info.readbacks = nrb;
 		perf_hook(&perf_info);
 	}
+	rdp.in_task = 0;
+	rdp.at = NULL;
 }
 
 uint32_t salsa64_rdp_flush(uint32_t upto)
@@ -2344,6 +2362,16 @@ void salsa64_rdp_set_task_hook(salsa64_rdp_task_hook fn, void *ctx)
 uint32_t salsa64_rdp_translated(void)
 {
 	return rdp.translated;
+}
+
+uint32_t salsa64_rdp_translating(const char **stage)
+{
+	uint32_t t = rdp.in_task;
+	if (stage) {
+		const char *at = rdp.at;
+		*stage = t && at ? at : "";
+	}
+	return t;
 }
 
 bool salsa64_rdp_dump(const char *path)

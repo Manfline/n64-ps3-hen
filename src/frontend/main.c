@@ -227,6 +227,9 @@ SYS_PROCESS_PARAM(1001, 0x100000);
  * (como hasta v0.1.0); los mandos siguen sueltos y el latido mira. */
 #define NO_PAUSE_PATH SALSA64_DATA_DIR "/sin-pausa"
 #define JPEG_PPE_PATH SALSA64_DATA_DIR "/jpeg-ppe"  /* diagnóstico: la tarea JPEG en el PPE */
+/* Prueba del seguro del RSX (rsx_hang_test): «etiqueta N», «rsx N» o
+ * «fifo N» cuelga a propósito al presentar el campo N. */
+#define HANG_TEST_PATH SALSA64_DATA_DIR "/colgar-rsx"
 /* Prueba de la interpolación por geometría (SALSA64_INTERP_FIXED): con el
  * archivo, cada tarea se empareja con la anterior y se dibuja en la fracción
  * «t» de su contenido (por omisión 1: igual que sin interpolar; 0: un cuadro
@@ -422,6 +425,12 @@ static void system_overlay_off(void)
 	screen_probe = 30;  /* medio segundo después: lo que quedó en pantalla */
 }
 
+/* Dentro de una espera larga al RSX (rsx_wait_hook) los eventos se atienden
+ * igual, pero lo que manda órdenes al RSX (system_overlay_off) queda para
+ * después: rsxkit está a mitad de una llamada. */
+static volatile int rsx_in_wait;
+static bool overlay_off_pending;
+
 /* Eventos del sistema. Corre dentro de sysUtilCheckCallback, en el hilo
  * de presentación (o el del menú): puede tocar pause_ctl y escribir al log. */
 static void sysutil_cb(u64 status, u64 param, void *user)
@@ -460,8 +469,22 @@ static void sysutil_cb(u64 status, u64 param, void *user)
 			    (unsigned long long)param);
 		break;
 	}
-	if (was_over && !pausectl_overlay(&pause_ctl))
+	if (was_over && !pausectl_overlay(&pause_ctl)) {
+		if (rsx_in_wait)
+			overlay_off_pending = true;
+		else
+			system_overlay_off();
+	}
+}
+
+/* sysUtilCheckCallback y lo que haya quedado de una espera al RSX. */
+static void sysutil_check(void)
+{
+	sysUtilCheckCallback();
+	if (overlay_off_pending) {
+		overlay_off_pending = false;
 		system_overlay_off();
+	}
 }
 
 static struct salsa64_padmap padmap;
@@ -2143,9 +2166,12 @@ static uint32_t h1_flush(uint32_t upto)
 	struct salsa64_rdp_tb a, b;
 	salsa64_rdp_get_tb(&a);
 	uint64_t t0 = tb_now();
+	const char *at = beat.pres_at;
+	beat.pres_at = "traducción";  /* la tarea y la etapa: salsa64_rdp_translating */
 	rt_begin(RT_EMU);
 	uint32_t n = salsa64_rdp_flush(upto);
 	rt_end();
+	beat.pres_at = at;
 	h1.t_flush += tb_now() - t0;
 	salsa64_rdp_get_tb(&b);
 	h1.in_flush.translate += b.translate - a.translate;
@@ -2233,6 +2259,14 @@ static void present_overlay(uint64_t now)
 		osd_cheats_draw(&game_cheats, pause_ctl.panel_sel, ui_lw, ui_lh);
 }
 
+/* Prueba del seguro del RSX (HANG_TEST_PATH, rsx_hang_test). */
+enum { HANG_NONE, HANG_LABEL, HANG_RSX, HANG_FIFO };
+static struct {
+	int mode;
+	uint32_t field;
+} hang_test;
+static void rsx_hang_test(void);
+
 /* Caja negra: lo que pasó con este campo (docs/cajanegra.md). */
 static void cj_note_field(const struct field_msg *m, uint32_t flags)
 {
@@ -2247,6 +2281,8 @@ static void cj_note_field(const struct field_msg *m, uint32_t flags)
 static void present_field(const struct field_msg *m, uint64_t now)
 {
 	h1_flush(m->tasks);  /* las tareas de este campo, no las del siguiente */
+	if (hang_test.mode && m->field >= hang_test.field)
+		rsx_hang_test();
 	cajanegra_set_field(m->field);
 	if (m->f.width && m->f.origin != pres.last_origin) {
 		pres.last_origin = m->f.origin;
@@ -2278,6 +2314,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	if (behind > pres.behind_max)
 		pres.behind_max = behind;
 	frame_begin("flip anterior");
+	beat.pres_at = "presentar";
 	rt_begin(RT_PRES);
 	/* Lo que se ve: la imagen del VI sin el overscan (las capturas van de
 	 * ese tamaño). */
@@ -3741,10 +3778,10 @@ static void profile_close(void)
  * grupos de SPU vivos colgó la consola entera (2026-10-13): se paran los
  * SPE que se pueden parar sin el hilo de emulación y se termina el
  * proceso con sys_process_exit, con lo que haya quedado en el log. */
-static void forced_exit(const char *why)
+static void forced_exit(const char *why, unsigned secs)
 {
 	salsa64_log("cierre forzado: %s tras %u s (pc 0x%08llx, ciclos %llu, marca %u, bloque %u); se paran los SPE y se sale",
-		    why, QUIT_WAIT_US / 1000000, (unsigned long long)n64.cpu.cur_pc, (unsigned long long)n64.cpu.cycles,
+		    why, secs, (unsigned long long)n64.cpu.cur_pc, (unsigned long long)n64.cpu.cycles,
 		    n64.cpu.rec_mark, n64.cpu.rec_cur);
 	audio_out_shutdown();
 	cajanegra_shutdown(3000000);
@@ -3758,6 +3795,151 @@ static void forced_exit(const char *why)
 	salsa64_log("cierre forzado: SPE detenidos; saliendo");
 	salsa64_log_shutdown();
 	sysProcessExit(1);
+}
+
+/* ---- El RSX no avanza --------------------------------------------------------------- */
+
+/* Toda espera del PPE al RSX (barrera o etiqueta, rsxkit_finish, flip, lugar
+ * en el búfer de comandos) tiene tope. rsxkit llama a rsx_wait_hook desde
+ * el hilo que espera pasado RSX_HOOK_US y luego cada RSX_HOOK_PERIOD_US:
+ * desde RSX_DIAG_US deja un diagnóstico en el log (una vez por espera), y
+ * atiende al sistema (sysUtilCheckCallback) mientras tanto; con «Salir del
+ * juego» pedido, o pasado RSX_EXIT_US (RSX_EXIT_OVERLAY_US con el sistema
+ * encima, que puede retener flips), sale con forced_exit. La espera de lugar
+ * en el búfer de comandos corre dentro del callback del sistema y no llama
+ * al gancho: la ve el latido (watch_thread), que sale por ella. Antes, un
+ * RSX que dejó de avanzar (F-Zero X en la PS3, 2026-10-14) dejaba la
+ * presentación esperando para siempre, sin flips: ni el botón PS
+ * respondía y la consola había que apagarla a la fuerza. */
+#define RSX_HOOK_US          500000u
+#define RSX_HOOK_PERIOD_US   100000u
+#define RSX_DIAG_US         2000000u
+#define RSX_EXIT_US        12000000u
+#define RSX_EXIT_OVERLAY_US 45000000u
+#define RSX_WATCH_EXTRA_US  3000000u  /* el latido, por si el gancho no sale */
+static volatile int rsx_exiting;
+static bool rsx_said;  /* hilo que espera: ya dio el diagnóstico de esta espera */
+
+static uint64_t rsx_exit_limit(void)
+{
+	return pausectl_overlay(&pause_ctl) ? RSX_EXIT_OVERLAY_US : RSX_EXIT_US;
+}
+
+/* Dónde está el PPE, qué espera del RSX y por dónde va el RSX; `why`,
+ * entre paréntesis después de «RSX» (o NULL). */
+static void rsx_diag(const char *why, const rsxkit_wait_info *wi)
+{
+	char what[112], tr[96] = "";
+	if (wi->kind == RSXKIT_WAIT_LABEL)
+		snprintf(what, sizeof what, "«%s» (etiqueta %u: espera %u y va en %u)", wi->what, wi->label, wi->expected,
+			 wi->current);
+	else if (wi->kind == RSXKIT_WAIT_FLIP)
+		snprintf(what, sizeof what, "el flip (estado %u)", wi->current);
+	else
+		snprintf(what, sizeof what, "lugar en el búfer de comandos (%u palabras; dentro del callback del sistema)",
+			 wi->expected);
+	const char *stage;
+	uint32_t task = salsa64_rdp_translating(&stage);
+	if (task)
+		snprintf(tr, sizeof tr, ", traduciendo la tarea %u («%s»)", task, stage);
+	salsa64_log("RSX%s%s%s: el PPE espera hace %.1f s %s; GET 0x%08x PUT 0x%08x, GET al empezar 0x%08x (%s); "
+		    "presentación en «%s»%s; última tarea traducida %u, %u terminadas por la HLE; campo %u, pausa 0x%x, "
+		    "sistema %s",
+		    why ? " (" : "", why ? why : "", why ? ")" : "", wi->elapsed_us / 1e6, what, wi->get, wi->put, wi->get0,
+		    wi->get != wi->get0 ? "el RSX avanzó" : wi->get == wi->put ? "el RSX está al día" : "el RSX no avanzó",
+		    beat.pres_at, tr, salsa64_rdp_translated(), salsa64_rdp_tasks_done(), n64.bus.vi.fields, pause_req,
+		    pausectl_overlay(&pause_ctl) ? "encima" : "sin dibujar");
+}
+
+/* Salida con el RSX sin avanzar: lo que se pueda guardar sin él (la
+ * partida, la sesión del perfilado) y forced_exit. Desde el hilo que
+ * espera o desde el latido; solo uno sale. */
+static void rsx_stuck_exit(const char *why, const rsxkit_wait_info *wi)
+{
+	if (!__sync_bool_compare_and_swap(&rsx_exiting, 0, 1))
+		for (;;)
+			sysUsleep(100000);  /* el otro hilo termina el proceso */
+	rsx_diag(why, wi);
+	if (emu_live) {
+		savefile_write_staged(&save_file, ~0ull);  /* lo diferido que no llegó al disco */
+		if (emu_paused || emu_done)
+			savefile_flush(&save_file);
+		else
+			salsa64_log("RSX: la emulación sigue: solo se escribió el guardado diferido");
+	}
+	if (perf.on) {
+		char end[160];
+		snprintf(end, sizeof end, "duracion_ms=%u\ncampos=%u\nemulados=%u\nlimpio=no\nsalida=rsx\n", perf_ms(),
+			 n64.bus.vi.fields, emu_stats.fields);
+		perf_app_close(end);
+	}
+	forced_exit("el RSX no avanzó", (unsigned)(wi->elapsed_us / 1000000u));
+}
+
+static bool rsx_wait_hook(void *ctx, const rsxkit_wait_info *wi)
+{
+	(void)ctx;
+	if (wi->done) {
+		if (rsx_said)
+			salsa64_log("RSX: la espera de «%s» terminó tras %.1f s", wi->what, wi->elapsed_us / 1e6);
+		rsx_said = false;
+		return true;
+	}
+	if (wi->calls == 1)
+		rsx_said = false;
+	if (!rsx_said && wi->elapsed_us >= RSX_DIAG_US) {
+		rsx_diag(NULL, wi);
+		rsx_said = true;
+	}
+	rsx_in_wait = 1;
+	sysUtilCheckCallback();
+	rsx_in_wait = 0;
+	if (app_quit && wi->elapsed_us >= RSX_DIAG_US)
+		rsx_stuck_exit("«Salir del juego» del sistema", wi);
+	if (wi->elapsed_us >= rsx_exit_limit())
+		rsx_stuck_exit("tope de la espera: se sale", wi);
+	return true;
+}
+
+/* Prueba del seguro (HANG_TEST_PATH): «etiqueta», el PPE espera una
+ * barrera que nunca se pone (el RSX está al día); «rsx», el RSX se queda
+ * girando (rsxkit_debug_stall) y el PPE espera que termine; «fifo», lo
+ * mismo pero el PPE sigue mandando órdenes hasta que no caben y queda
+ * dentro del callback del sistema (lo ve el latido). */
+static void hang_test_load(void)
+{
+	char word[16] = "";
+	hang_test.mode = HANG_NONE;
+	FILE *f = fopen(HANG_TEST_PATH, "r");
+	if (!f)
+		return;
+	if (fscanf(f, "%15s %u", word, &hang_test.field) == 2)
+		hang_test.mode = !strcmp(word, "etiqueta") ? HANG_LABEL
+			       : !strcmp(word, "rsx")	   ? HANG_RSX
+			       : !strcmp(word, "fifo")	   ? HANG_FIFO
+							   : HANG_NONE;
+	fclose(f);
+	if (hang_test.mode)
+		salsa64_log("prueba del seguro del RSX: «%s» en el campo %u (%s)", word, hang_test.field, HANG_TEST_PATH);
+}
+
+static void rsx_hang_test(void)
+{
+	int mode = hang_test.mode;
+	hang_test.mode = HANG_NONE;
+	salsa64_log("prueba del seguro del RSX: se cuelga ahora (campo %u)", n64.bus.vi.fields);
+	beat.pres_at = "prueba del seguro";
+	if (mode == HANG_LABEL) {
+		rsxkit_fence_wait(rsxkit_fence() + 1000000u);
+		return;
+	}
+	rsxkit_debug_stall();
+	if (mode == HANG_RSX) {
+		rsxkit_finish();
+		return;
+	}
+	for (uint32_t i = 0; i < 1000000u; i++)
+		rsxkit_fence();
 }
 
 static void game_close(void)
@@ -4078,6 +4260,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	pacer_init(&pacer, !file_exists(TURBO_PATH), pacer_sleep, NULL);
 	salsa64_log("ritmo: %s", pacer.enabled ? "el de la tele emulada (cada campo a su hora)" : "sin límite (turbo)");
 	pres.shots_on = pres.autotest || file_exists(SHOTS_PATH);
+	hang_test_load();
 	{
 		FILE *cf = fopen(SHOTS_PATH, "r");
 		if (cf) {
@@ -4174,7 +4357,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		sysSemWait(wake_sem, WAKE_US);
 		busy_start(&h1.busy, tb_now());
 		beat.pres_at = "sysutil";
-		sysUtilCheckCallback();
+		sysutil_check();
 		beat.pres_at = "mandos";
 		if (update_pads(NULL)) {
 			salsa64_log("menú de pausa%s: %s", pause_ctl.confirm ? " y confirmación" : "", in_menu ? "vuelta al menú" : "salida");
@@ -4241,7 +4424,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		drain(sysGetSystemTime(), 0);
 		sysUsleep(500);
 		if (sysGetSystemTime() - stop_t0 > QUIT_WAIT_US)
-			forced_exit("la emulación no respondió al cierre");
+			forced_exit("la emulación no respondió al cierre", QUIT_WAIT_US / 1000000);
 	}
 	u64 ret;
 	sysThreadJoin(emu_tid, &ret);
@@ -4707,7 +4890,7 @@ static int menu_loop(void)
 	while (!app_quit) {
 		beat.pres++;
 		beat.pres_at = "menú: sysutil";
-		sysUtilCheckCallback();
+		sysutil_check();
 		beat.pres_at = "menú: mandos";
 		uint32_t buttons;
 		update_pads(&buttons);
@@ -4877,7 +5060,7 @@ static void watch_thread(void *arg)
 {
 	(void)arg;
 	uint32_t pres0 = beat.pres, emu0 = beat.emu;
-	uint64_t now = sysGetSystemTime(), pres_t = now, emu_t = now, pres_said = 0, emu_said = 0;
+	uint64_t now = sysGetSystemTime(), pres_t = now, emu_t = now, pres_said = 0, emu_said = 0, fifo_said = 0;
 	while (!beat.quit) {
 		sysUsleep(WATCH_US);
 		now = sysGetSystemTime();
@@ -4889,11 +5072,33 @@ static void watch_thread(void *arg)
 			pres_said = 0;
 		} else if (now - pres_t >= STALL_US && (!pres_said || now - pres_said >= STALL_LOG_US)) {
 			pres_said = now;
-			salsa64_log("latido: presentación quieta hace %.1f s en «%s» (emulación en «%s»; campo %u, %u en "
+			char at[160] = "";
+			const char *stage;
+			uint32_t task = salsa64_rdp_translating(&stage);
+			rsxkit_wait_info wi;
+			int len = 0;
+			if (task)
+				len = snprintf(at, sizeof at, ", tarea %u en «%s»", task, stage);
+			if (rsxkit_wait_now(&wi) && len >= 0 && len < (int)sizeof at)
+				snprintf(at + len, sizeof at - len, ", esperando al RSX «%s» hace %.1f s (GET 0x%08x PUT 0x%08x)",
+					 wi.what, wi.elapsed_us / 1e6, wi.get, wi.put);
+			salsa64_log("latido: presentación quieta hace %.1f s en «%s»%s (emulación en «%s»; campo %u, %u en "
 				    "cola; sistema %s, pausa 0x%x, emulación %s; audio %llu bloques)",
-				    (now - pres_t) / 1e6, beat.pres_at, emu_live ? beat.emu_at : "sin juego", n64.bus.vi.fields,
+				    (now - pres_t) / 1e6, beat.pres_at, at, emu_live ? beat.emu_at : "sin juego", n64.bus.vi.fields,
 				    field_head - field_tail, pausectl_overlay(&pause_ctl) ? "encima" : "sin dibujar", pause_req,
 				    emu_paused ? "quieta" : "andando", (unsigned long long)audio_out_blocks());
+		}
+		/* Vigía del RSX: la espera de lugar en el búfer de comandos (dentro
+		 * del callback del sistema, sin gancho) y, por si acaso, las otras. */
+		rsxkit_wait_info rw;
+		if (!rsx_exiting && rsxkit_wait_now(&rw)) {
+			bool fifo = rw.kind == RSXKIT_WAIT_FIFO;
+			if (fifo && rw.elapsed_us >= RSX_DIAG_US && rw.since_us != fifo_said) {
+				fifo_said = rw.since_us;
+				rsx_diag("visto por el latido", &rw);
+			}
+			if (rw.elapsed_us >= rsx_exit_limit() + (fifo ? 0 : RSX_WATCH_EXTRA_US))
+				rsx_stuck_exit("tope de la espera, visto por el latido: se sale", &rw);
 		}
 		bool expect = emu_live && running && !emu_done && !emu_paused && !state_parked && !pause_req;
 		if (!expect || beat.emu != emu0) {
@@ -4941,6 +5146,8 @@ int main(void)
 	rsxkit_config vcfg;
 	const rsxkit_config *vc = video_config_for(video_cfg.resolution, &vcfg);
 	int rc = rsxkit_init(vc);
+	if (rc == RSXKIT_OK)
+		rsxkit_set_wait_hook(rsx_wait_hook, NULL, RSX_HOOK_US, RSX_HOOK_PERIOD_US);
 	pres.fb = rc == RSXKIT_OK ? rsxkit_fb_create(FB_MAX_W, FB_MAX_H) : NULL;
 	if (!pres.fb) {
 		salsa64_log("RESULTADO frontend: FALLO al iniciar el RSX (%d)", rc);

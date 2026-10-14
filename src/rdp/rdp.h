@@ -322,6 +322,10 @@ struct salsa64_rdp_field_info {
 void salsa64_rdp_field_info(struct salsa64_rdp_field_info *out);
 /* Tareas traducidas hasta ahora (la numeración de las tareas del gancho). */
 uint32_t salsa64_rdp_translated(void);
+/* La tarea que se está traduciendo (n + 1; 0 si ninguna) y en `stage` la
+ * etapa («dibujos», «destinos», «copias a la RDRAM»…). Para el latido:
+ * se puede leer desde otro hilo (lectura suelta, solo diagnóstico). */
+uint32_t salsa64_rdp_translating(const char **stage);
 
 /* Escribe la salida de la última tarea (gfx.h: gfx_dump_header) en `path`,
  * con las texturas de la caché copiadas al arena (el volcado no depende de
