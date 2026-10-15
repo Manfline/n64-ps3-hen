@@ -445,6 +445,21 @@ static void menu_directory_navigation(void)
 	menu_input(&m, 0, 2);
 	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_CIRCLE), 3), MENU_DIRECTORY);
 	CHECK_EQ(m.sel, 0);
+	/* Al regresar de «sin-hle», el cursor queda en esa carpeta aunque la
+	 * última ROM abierta siga en la lista y aparezca después. */
+	strcpy(l->directory, "");
+	memset(l->e, 0, 2 * sizeof l->e[0]);
+	l->count = 2;
+	l->e[0].kind = ROMLIST_DIRECTORY;
+	l->e[0].name = "sin-hle";
+	l->e[1].kind = ROMLIST_ROM;
+	l->e[1].name = "ultima.z64";
+	int at = menu_find_directory(l, "sin-hle");
+	CHECK_EQ(at, 0);
+	menu_init(&m, l, at, NULL);
+	CHECK_EQ(m.sel, 0);
+	CHECK_EQ(menu_selected(&m), -1);
+	CHECK_EQ(l->e[m.sel].kind, ROMLIST_DIRECTORY);
 	romlist_free(l);
 }
 

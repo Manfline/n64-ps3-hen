@@ -5293,14 +5293,27 @@ static int menu_loop(void)
 		if (a == MENU_DIRECTORY) {
 			const struct rom_entry *e = menu.sel >= 0 && menu.sel < (int)roms->count ? &roms->e[menu.sel] : NULL;
 			if (e && (e->kind == ROMLIST_DIRECTORY || e->kind == ROMLIST_PARENT)) {
+				bool going_up = e->kind == ROMLIST_PARENT;
+				char returning[ROMLIST_NAME_MAX + 1] = "";
+				if (going_up) {
+					const char *slash = strrchr(rom_dir, '/');
+					snprintf(returning, sizeof returning, "%s", slash ? slash + 1 : rom_dir);
+				}
 				bool ok;
-				if (e->kind == ROMLIST_PARENT)
+				if (going_up)
 					ok = rom_parent_directory(rom_dir, rom_dir, sizeof rom_dir);
 				else
 					ok = rom_child_directory(rom_dir, sizeof rom_dir, romlist_name(e));
-				if (ok)
-					menu_scan(have_last ? last : NULL);
-				else
+				if (ok) {
+					/* La última ROM es solo una preferencia al entrar al menú;
+					 * al recorrer carpetas se conserva la posición del explorador. */
+					menu_scan(NULL);
+					if (going_up) {
+						int at = menu_find_directory(roms, returning);
+						if (at >= 0)
+							menu.sel = at, menu.pos = (float)at;
+					}
+				} else
 					menu_set_status(&menu, "La ruta de la carpeta es demasiado larga");
 			}
 		}

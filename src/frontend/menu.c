@@ -419,6 +419,16 @@ int menu_selected(const struct menu *m)
 	       : -1;
 }
 
+int menu_find_directory(const struct romlist *list, const char *name)
+{
+	if (!list || !name)
+		return -1;
+	for (uint32_t i = 0; i < list->count; i++)
+		if (list->e[i].kind == ROMLIST_DIRECTORY && !strcmp(romlist_name(&list->e[i]), name))
+			return (int)i;
+	return -1;
+}
+
 void menu_set_status(struct menu *m, const char *fmt, ...)
 {
 	va_list ap;

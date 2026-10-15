@@ -211,6 +211,8 @@ void menu_init(struct menu *m, const struct romlist *list, int sel, const struct
 enum menu_action menu_input(struct menu *m, uint32_t buttons, uint64_t now_us);
 /* Índice de la ROM elegida en la lista, o -1 si es otra fila. */
 int menu_selected(const struct menu *m);
+/* Fila de una carpeta por nombre en la lista reconstruida, o -1. */
+int menu_find_directory(const struct romlist *list, const char *name);
 /* Filas de la página de juegos: ROMs + Opciones + Salir. */
 static inline int menu_rows(const struct menu *m) { return (int)m->list->count + 2; }
 static inline int menu_row_exit(const struct menu *m) { return (int)m->list->count + 1; }
