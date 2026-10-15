@@ -468,10 +468,10 @@ def metrics(ses):
     slow = slow_totals(ses)
     for cause, (calls, ticks) in slow.items():
         m[f"camino lento: {cause} llamadas"] = calls
-        m[f"camino lento: {cause} ms"] = ticks / 79.8
+        m[f"camino lento: {cause} ms"] = ticks / 79800
     for reason, (calls, ticks, words) in compile_totals(ses).items():
         m[f"compilaciones: {reason}"] = calls
-        m[f"compilar ms: {reason}"] = ticks / 79.8
+        m[f"compilar ms: {reason}"] = ticks / 79800
         m[f"palabras generadas: {reason}"] = words
     m["desalojos de tramos"] = sum(1 for e in ses.evicts if e["tipo"] != 2)
     m["bytes perdidos"] = ses.lost
@@ -562,7 +562,7 @@ def summary(ses, out, top=15):
         p("-- Camino lento por causa (timebase PPE, 79,8 MHz)")
         p("   causa                                  llamadas       ms")
         for cause, (calls, ticks) in sorted(total.items(), key=lambda kv: -kv[1][1]):
-            p(f"   {cause:38s} {calls:9d} {ticks / 79.8:9.2f}")
+            p(f"   {cause:38s} {calls:9d} {ticks / 79800:9.2f}")
         pcs = {}
         for record in ses.slow:
             for e in record["pcs"]:
@@ -571,13 +571,13 @@ def summary(ses, out, top=15):
         if pcs:
             p("   PC lento más costoso:")
             for pc, (calls, ticks) in sorted(pcs.items(), key=lambda kv: -kv[1][1])[:top]:
-                p(f"      {pc:08x}  {calls:9d} llamadas  {ticks / 79.8:9.2f} ms")
+                p(f"      {pc:08x}  {calls:9d} llamadas  {ticks / 79800:9.2f} ms")
 
     if ses.compiles:
         p("-- Compilaciones por motivo (ventanas de 5 s y total de sesión)")
         p("   motivo                                  bloques    palabras       ms")
         for reason, (calls, ticks, words) in sorted(compile_totals(ses).items(), key=lambda kv: -kv[1][1]):
-            p(f"   {reason:38s} {calls:8d} {words:11d} {ticks / 79.8:9.2f}")
+            p(f"   {reason:38s} {calls:8d} {words:11d} {ticks / 79800:9.2f}")
         mx = max(ses.compiles, key=lambda e: e["max_campo"])
         if mx["max_campo"]:
             p(f"   máximo por campo: {mx['max_campo']} compilaciones, campo {mx['campo_max']}")
