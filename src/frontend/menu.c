@@ -58,6 +58,7 @@ void menu_settings_default(struct menu_settings *s)
 	s->filter = MENU_FILTER_SMOOTH;
 	s->density = MENU_DENSITY_NORMAL;
 	s->interp = MENU_INTERP_OFF;
+	s->rom_order = MENU_ROM_ORDER_TITLE;
 	s->lang = MENU_LANG_ES;
 }
 
@@ -204,6 +205,11 @@ void menu_settings_parse(struct menu_settings *s, const char *text, size_t len)
 			for (int v = 0; v < MENU_INTERPS; v++)
 				if (!strcmp(val, interp_key[v]))
 					s->interp = v;
+		} else if (!strcmp(key, "orden")) {
+			if (!strcmp(val, "titulo"))
+				s->rom_order = MENU_ROM_ORDER_TITLE;
+			else if (!strcmp(val, "archivo"))
+				s->rom_order = MENU_ROM_ORDER_FILENAME;
 		}
 	}
 }
@@ -373,14 +379,15 @@ int menu_settings_format(const struct menu_settings *s, char *buf, size_t size)
 {
 	return snprintf(buf, size,
 			"# Ajustes del menú de Salsa64\n# aspecto = 4:3|16:9; filtro = suave|nitido|lineas|lineas+|crt-…; "
-			"densidad = normal|fina; idioma = es|en|fr|de|it|pt; interpolacion = no|geometria\n"
+			"densidad = normal|fina; idioma = es|en|fr|de|it|pt; interpolacion = no|geometria; orden = titulo|archivo\n"
 			"fondo = %s\nfps = %s\nconfirmar = %s\naspecto = %s\nfiltro = %s\ndensidad = %s\nidioma = %s\n"
-			"interpolacion = %s\n",
+			"interpolacion = %s\norden = %s\n",
 			s->waves ? "si" : "no", s->fps ? "si" : "no", s->confirm ? "si" : "no",
 			s->aspect == MENU_ASPECT_16_9 ? "16:9" : "4:3",
 			filter_key(s->filter), density_key[s->density == MENU_DENSITY_FINE],
 			lang_key[s->lang >= 0 && s->lang < MENU_LANGS ? s->lang : 0],
-			interp_key[s->interp == MENU_INTERP_GEOMETRY]);
+			interp_key[s->interp == MENU_INTERP_GEOMETRY],
+			s->rom_order == MENU_ROM_ORDER_FILENAME ? "archivo" : "titulo");
 }
 
 bool menu_settings_cfg_differs(const struct menu_settings *a, const struct menu_settings *b)
@@ -406,7 +413,20 @@ void menu_init(struct menu *m, const struct romlist *list, int sel, const struct
 
 int menu_selected(const struct menu *m)
 {
-	return m->page == MENU_PAGE_GAMES && m->sel < (int)m->list->count ? m->sel : -1;
+	return m->page == MENU_PAGE_GAMES && m->sel >= 0 && m->sel < (int)m->list->count &&
+		       m->list->e[m->sel].kind == ROMLIST_ROM
+	       ? m->sel
+	       : -1;
+}
+
+int menu_find_directory(const struct romlist *list, const char *name)
+{
+	if (!list || !name)
+		return -1;
+	for (uint32_t i = 0; i < list->count; i++)
+		if (list->e[i].kind == ROMLIST_DIRECTORY && !strcmp(romlist_name(&list->e[i]), name))
+			return (int)i;
+	return -1;
 }
 
 void menu_set_status(struct menu *m, const char *fmt, ...)
@@ -563,6 +583,8 @@ static enum menu_action options_buttons(struct menu *m, uint32_t pressed)
 		m->dl_what = m->opt == MENU_OPT_DL_CHEATS;
 		return MENU_DOWNLOAD;
 	}
+	if (m->opt == MENU_OPT_REFRESH && (pressed & BIT(SALSA64_DS3_CROSS)))
+		return MENU_REFRESH;
 	if (m->opt == MENU_OPT_RESOLUTION && (pressed & change)) {
 		m->set.resolution = m->set.resolution == MENU_RES_1080P ? MENU_RES_720P : MENU_RES_1080P;
 		return MENU_SETTINGS;
@@ -581,6 +603,10 @@ static enum menu_action options_buttons(struct menu *m, uint32_t pressed)
 	}
 	if (m->opt == MENU_OPT_CONFIRM && (pressed & change)) {
 		m->set.confirm = !m->set.confirm;
+		return MENU_SETTINGS;
+	}
+	if (m->opt == MENU_OPT_ROM_ORDER && (pressed & change)) {
+		m->set.rom_order = m->set.rom_order == MENU_ROM_ORDER_TITLE ? MENU_ROM_ORDER_FILENAME : MENU_ROM_ORDER_TITLE;
 		return MENU_SETTINGS;
 	}
 	return MENU_NONE;
@@ -688,6 +714,8 @@ enum menu_action menu_input(struct menu *m, uint32_t buttons, uint64_t now_us)
 		m->rep_button = 0;
 		return MENU_NONE;
 	}
+	if (m->page == MENU_PAGE_GAMES && (pressed & BIT(SALSA64_DS3_L3)))
+		return MENU_REFRESH;
 	if (m->page == MENU_PAGE_OPTIONS) {
 		/* Arriba y abajo mueven; lo demás cambia el valor o vuelve. */
 		enum menu_action a = options_buttons(m, pressed & ~updown);
@@ -729,6 +757,8 @@ enum menu_action menu_input(struct menu *m, uint32_t buttons, uint64_t now_us)
 		m->status[0] = '\0';
 		if (menu_selected(m) >= 0)
 			return MENU_OPEN;
+		if (m->sel < (int)m->list->count)
+			return MENU_DIRECTORY;
 		if (m->sel == menu_row_exit(m))
 			return MENU_QUIT;
 		open_options(m);
@@ -737,7 +767,15 @@ enum menu_action menu_input(struct menu *m, uint32_t buttons, uint64_t now_us)
 		open_options(m);
 		return MENU_NONE;
 	} else if (pressed & BIT(SALSA64_DS3_CIRCLE)) {
-		/* Salir sin bajar hasta la última fila (con muchas ROMs). */
+		if (m->list->directory[0]) {
+			for (uint32_t i = 0; i < m->list->count; i++)
+				if (m->list->e[i].kind == ROMLIST_PARENT) {
+					m->sel = (int)i;
+					m->pos = (float)m->sel;
+					return MENU_DIRECTORY;
+				}
+		}
+		/* En la raíz, salir sin bajar hasta la última fila. */
 		m->status[0] = '\0';
 		m->quit_ask = true;
 		m->rep_button = 0;
@@ -968,6 +1006,8 @@ static void draw_row(const struct row *r, float d, float x, float W, float H, fl
 
 static const char *location(const char *path, char *buf, size_t n)
 {
+	if (!path[0])
+		return "Todas las unidades";
 	if (!strncmp(path, "/dev_hdd0/", 10))
 		return "Disco duro";
 	if (!strncmp(path, "/dev_usb", 8) && strlen(path) > 10) {
@@ -1187,14 +1227,14 @@ static void rom_info(const struct menu *m, const struct rom_entry *e, float px, 
 		snprintf(buf, sizeof buf, "%s%s", romlist_save_label(e->save), emulated ? "" : tr(" (sin emular)"));
 		COVER_LINE("Guardado", buf, emulated ? C_TEXT : C_WARN);
 		#undef COVER_LINE
-		if (m->last[0] && !strcmp(m->last, e->path))
+		if (m->last[0] && !strcmp(m->last, romlist_name(e)))
 			stext(x, py + ph - 30.0f, "● Último abierto", 1.2f, C_ACCENT, ca, 0);
 		return;
 	}
 	stext(x, y, romlist_display_title(e), tscale, 0xFFFFFFu, ca, tmax);
 	y += 60.0f;
 	info_line(x, &y, vx, vscale, "Archivo", romlist_name(e), C_TEXT, ca, vmax);
-	info_line(x, &y, vx, vscale, "Ubicación", location(e->path, loc, sizeof loc), C_TEXT, ca, vmax);
+	info_line(x, &y, vx, vscale, "Ubicación", location(m->list->directory, loc, sizeof loc), C_TEXT, ca, vmax);
 	if (e->code[0])
 		snprintf(buf, sizeof buf, tr("%s, versión %u"), e->code, e->version);
 	else
@@ -1212,7 +1252,7 @@ static void rom_info(const struct menu *m, const struct rom_entry *e, float px, 
 	bool emulated = e->save == SALSA64_SAVE_NONE || salsa64_save_emulated((enum salsa64_save_type)e->save);
 	snprintf(buf, sizeof buf, "%s%s", romlist_save_label(e->save), emulated ? "" : tr(" (sin emular)"));
 	info_line(x, &y, vx, vscale, "Guardado", buf, emulated ? C_TEXT : C_WARN, ca, vmax);
-	if (m->last[0] && !strcmp(m->last, e->path))
+	if (m->last[0] && !strcmp(m->last, romlist_name(e)))
 		stext(x, py + ph - 44.0f, "● Último juego abierto", 1.5f, C_ACCENT, ca, 0);
 }
 
@@ -1298,6 +1338,8 @@ static void panel(const struct menu *m, float W, float H, float a)
 		static const char *const confirm_text[] = { "START + SELECT en el juego", "pregunta antes de salir:",
 							    "× sí, ○ sigue jugando.", "Con «No», sale directo.",
 							    "Se guarda en menu.cfg.", NULL, NULL };
+		const char *const order_text[] = { tr("Orden de los juegos de la lista."), NULL,
+						   tr("Se guarda en menu.cfg."), NULL, NULL };
 		/* Escala interna: tamaño y texto dependen del valor. */
 		char scale_buf[24], size_buf[32];
 		int eff = m->set.scale ? m->set.scale : (m->set.resolution == MENU_RES_1080P ? 4 : 3);
@@ -1324,7 +1366,9 @@ static void panel(const struct menu *m, float W, float H, float a)
 				    : m->opt == MENU_OPT_APPLY ? "Aplicar ahora"
 				    : m->opt == MENU_OPT_INTERP ? "Interpolación"
 				    : m->opt == MENU_OPT_FPS ? "Mostrar FPS"
-				    : m->opt == MENU_OPT_CONFIRM ? "Confirmar al salir" : "Volver";
+					    : m->opt == MENU_OPT_CONFIRM ? "Confirmar al salir"
+					    : m->opt == MENU_OPT_ROM_ORDER ? "Orden de la lista"
+					    : m->opt == MENU_OPT_REFRESH ? "Actualizar lista" : "Volver";
 		const char *const *text = m->opt == MENU_OPT_WAVES ? waves_text
 					  : m->opt == MENU_OPT_OVERSCAN ? crop_text
 					  : m->opt == MENU_OPT_ASPECT ? aspect_text
@@ -1339,7 +1383,8 @@ static void panel(const struct menu *m, float W, float H, float a)
 					  : m->opt == MENU_OPT_APPLY ? apply_text
 					  : m->opt == MENU_OPT_INTERP ? interp_text
 					  : m->opt == MENU_OPT_FPS ? fps_text
-					  : m->opt == MENU_OPT_CONFIRM ? confirm_text : back_text;
+					  : m->opt == MENU_OPT_CONFIRM ? confirm_text
+					  : m->opt == MENU_OPT_ROM_ORDER ? order_text : back_text;
 		const char *value = m->opt == MENU_OPT_WAVES ? (m->set.waves ? "Sí" : "No")
 				    : m->opt == MENU_OPT_OVERSCAN ? overscan_name(m->set.overscan)
 				    : m->opt == MENU_OPT_ASPECT ? aspect_name(m->set.aspect)
@@ -1350,7 +1395,8 @@ static void panel(const struct menu *m, float W, float H, float a)
 				    : m->opt == MENU_OPT_SCALE ? scale_name(&m->set, scale_buf, sizeof scale_buf)
 				    : m->opt == MENU_OPT_INTERP ? menu_interp_name(m->set.interp)
 				    : m->opt == MENU_OPT_FPS ? (m->set.fps ? "Sí" : "No")
-				    : m->opt == MENU_OPT_CONFIRM ? (m->set.confirm ? "Sí" : "No") : NULL;
+				    : m->opt == MENU_OPT_CONFIRM ? (m->set.confirm ? "Sí" : "No")
+				    : m->opt == MENU_OPT_ROM_ORDER ? (m->set.rom_order == MENU_ROM_ORDER_FILENAME ? tr("Nombre de archivo") : tr("Título de cabecera")) : NULL;
 		stext(x, y, title, tscale, 0xFFFFFFu, ca, tmax);
 		y += 56.0f;
 		/* Líneas cortas (caben en 4:3); NULL es un renglón en blanco, dos
@@ -1404,16 +1450,24 @@ static void panel(const struct menu *m, float W, float H, float a)
 static void games_column(const struct menu *m, float x, float W, float H, float a)
 {
 	int n = menu_rows(m);
-	for (int i = 0; i < n; i++) {
+	int first = (int)floorf(m->pos - 7.0f), last = (int)ceilf(m->pos + 7.0f);
+	if (first < 0)
+		first = 0;
+	if (last >= n)
+		last = n - 1;
+	for (int i = first; i <= last; i++) {
 		float d = i - m->pos;
-		if (fabsf(d) > 7.0f)
-			continue;
 		struct row r = { 0 };
 		if (i < (int)m->list->count) {
 			const struct rom_entry *e = &m->list->e[i];
 			r.title = romlist_display_title(e);
 			r.label = label_color(r.title);
-			r.sub = romlist_name(e);
+			r.sub = e->kind == ROMLIST_DIRECTORY ? tr("Carpeta")
+				: e->kind == ROMLIST_PARENT ? tr("Subir un nivel") : romlist_name(e);
+			if (e->kind == ROMLIST_DIRECTORY || e->kind == ROMLIST_PARENT) {
+				r.icon = 2;
+				r.glyph = e->kind == ROMLIST_DIRECTORY ? "▶" : "◀";
+			}
 		} else if (i == (int)m->list->count) {
 			r.title = "Opciones";
 			r.sub = "Fondo, imagen, idioma y descargas";
@@ -1456,6 +1510,9 @@ static void options_column(const struct menu *m, float x, float W, float H, floa
 	struct row fps = { "Mostrar FPS", "Velocidad en una esquina del juego", 2, "#", 0, m->set.fps ? "Sí" : "No" };
 	struct row confirm = { "Confirmar al salir", "START + SELECT pregunta antes", 2, "?", 0,
 			       m->set.confirm ? "Sí" : "No" };
+	struct row order = { "Orden de la lista", "Título de cabecera o nombre de archivo", 2, "↕", 0,
+			     m->set.rom_order == MENU_ROM_ORDER_FILENAME ? tr("Nombre de archivo") : tr("Título de cabecera") };
+	struct row refresh = { "Actualizar lista", "Volver a leer las carpetas de ROMs", 2, "↻", 0, NULL };
 	struct row back = { "Volver", "A la lista de juegos", 2, "◀", 0, NULL };
 	draw_row(&waves, MENU_OPT_WAVES - m->opt_pos, x, W, H, a);
 	draw_row(&crop, MENU_OPT_OVERSCAN - m->opt_pos, x, W, H, a);
@@ -1471,6 +1528,8 @@ static void options_column(const struct menu *m, float x, float W, float H, floa
 	draw_row(&fps, (float)opt_row(m, MENU_OPT_FPS) - m->opt_pos, x, W, H, a);
 	draw_row(&confirm, (float)opt_row(m, MENU_OPT_CONFIRM) - m->opt_pos, x, W, H, a);
 	draw_row(&lang, (float)opt_row(m, MENU_OPT_LANG) - m->opt_pos, x, W, H, a);
+	draw_row(&order, (float)opt_row(m, MENU_OPT_ROM_ORDER) - m->opt_pos, x, W, H, a);
+	draw_row(&refresh, (float)opt_row(m, MENU_OPT_REFRESH) - m->opt_pos, x, W, H, a);
 	if (m->dl_enabled) {
 		draw_row(&dlc, (float)opt_row(m, MENU_OPT_DL_COVERS) - m->opt_pos, x, W, H, a);
 		draw_row(&dlt, (float)opt_row(m, MENU_OPT_DL_CHEATS) - m->opt_pos, x, W, H, a);
@@ -1506,7 +1565,7 @@ void menu_frame(struct menu *m, float lw, float lh, uint64_t now_us)
 	      m->page == MENU_PAGE_GAMES ? "Juegos" : m->page == MENU_PAGE_CHEATS ? "Trucos"
 				    : m->page == MENU_PAGE_GAME ? "Ajustes" : "Opciones", 2.0f, C_DIM, a, 0);
 	char count[24];
-	snprintf(count, sizeof count, tr(m->list->count == 1 ? "%u juego" : "%u juegos"), m->list->count);
+	snprintf(count, sizeof count, tr(m->list->rom_count == 1 ? "%u juego" : "%u juegos"), m->list->rom_count);
 	stext(W * 0.94f - cells_w(count, 1.75f), H * 0.055f + 10.0f, count, 1.75f, C_DIM, a, 0);
 	/* Versión y paquete, chicos, entre el contador y el panel. */
 	const char *ver[2] = { m->version, m->build };

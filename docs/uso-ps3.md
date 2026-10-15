@@ -31,13 +31,20 @@ Reglas de la búsqueda:
 - Extensiones: `.z64`, `.v64` y `.n64` (mayúsculas o minúsculas). Se aceptan
   los tres órdenes de bytes (big-endian, byte-swapped y little-endian); el
   formato se reconoce por la cabecera, no por la extensión.
-- No entra en subcarpetas: las ROMs van directamente en `salsa64`.
+- Las carpetas aparecen primero. × entra en una carpeta y la fila `..`
+  vuelve al nivel anterior. Se recorren también las subcarpetas de cada
+  carpeta `salsa64`.
 - Se ignoran los archivos que empiezan con `.`, los que no tienen una de
-  esas extensiones, los que miden menos de 4 KB y los ilegibles. También
-  se ignoran las ROMs que no caben en la lista (máximo 256).
+  esas extensiones, los que miden menos de 4 KB y los ilegibles. En cada
+  carpeta relativa se juntan las entradas de todas las unidades y se admiten
+  hasta 4096 filas en total, contando ROMs, carpetas y `..`.
 - La ROM más grande que se puede abrir es de 64 MB.
-- La lista se ordena por el título de la cabecera de la ROM (o por el nombre
-  del archivo si la cabecera no trae título).
+- **Opciones → Orden de la lista** elige el título de la cabecera o el nombre
+  del archivo (`orden = titulo|archivo` en `menu.cfg`). Si la fuente no puede
+  mostrar algún carácter del título de la cabecera, se usa el nombre del
+  archivo.
+- La última ROM abierta recuerda también su carpeta y al iniciar vuelve a
+  mostrarla.
 - Si la lista está vacía, el menú muestra las carpetas donde buscó.
 
 ## Menú
@@ -54,10 +61,17 @@ detectado y, si la hay, la carátula del juego (abajo, «Carátulas»). La
 | × | Abrir la ROM elegida (o la opción) |
 | □ | Trucos de la ROM elegida (abajo, «Trucos») |
 | SELECT | Ajustes de la ROM elegida (abajo, «Ajustes por juego») |
+| L3 | Actualizar la lista de ROMs de la carpeta actual |
 | △ | Ir a Opciones |
-| ○ | Volver de Opciones, de los trucos o de los ajustes; en la lista, salir al XMB (pregunta antes: × sale, ○ sigue donde estaba) |
+| ○ | Volver de Opciones, de los trucos o de los ajustes; en una subcarpeta, subir un nivel; en la raíz, salir al XMB (pregunta antes: × sale, ○ sigue donde estaba) |
 
 Al final de la lista están «Opciones» y «Salir al XMB».
+
+«Actualizar lista» también está en Opciones. Vuelve a leer las carpetas de
+las unidades conectadas sin salir de Salsa64, conserva la carpeta abierta y
+la ROM elegida si todavía está disponible, y muestra cuántas ROMs encontró.
+Sirve para detectar archivos copiados por FTP o una memoria USB conectada
+después de abrir el menú.
 
 **Versión.** Arriba a la derecha, chica, bajo el número de juegos, va la
 versión de Salsa64: la etiqueta y el commit, como «v0.2.5 · fb12aeb»

@@ -1,5 +1,40 @@
 # Estado
 
+## 2026-10-15 — Lista compacta de ROMs
+
+La lista solo contiene la carpeta relativa visible, combinada entre el disco
+interno y las ubicaciones USB, con un tope total de 4096 filas que incluye
+ROMs, carpetas y `..`. Cada fila guarda metadatos, el índice de unidad y un
+puntero al nombre en un pool compacto; la ruta completa se arma al abrir la
+ROM. La reserva completa es de 1 261 844 bytes en la PS3 (cabecera de 276
+bytes, 4096 filas de 52 bytes y pool de nombres de 1 048 576 bytes; véase
+`docs/memory-budget.md`). Se libera antes de cargar el juego y se reconstruye
+al volver al menú, conservando carpeta y selección.
+
+La cifra corresponde a la reserva máxima, no a una medición de uso real del
+pool. La lectura de directorios grandes se mide con las pruebas del host; no
+se obtuvo una medición nueva de tiempo en la PS3 real.
+
+## 2026-10-15 — Navegación de carpetas y lista ampliada
+
+La descripción de capacidad que sigue corresponde al diseño inicial de esa
+implementación y fue reemplazada por la lista compacta documentada arriba.
+
+El menú puede entrar en subcarpetas de los directorios `salsa64`; muestra
+primero las carpetas y `..` sube un nivel. ○ conserva la pregunta para salir
+al XMB en la raíz. La lista fija admite 4096 ROMs y hasta 256 carpetas por
+cada una de las nueve ubicaciones, además de la fila para subir. Opciones guarda en
+`menu.cfg` el orden por título de cabecera o nombre de archivo. Si la fuente
+no representa algún byte del título, se muestra el nombre del archivo. La
+última ROM abierta conserva su ruta completa y al iniciar se abre su carpeta.
+
+La lista reserva hasta aproximadamente 11,5 MiB de memoria estática; el
+preparador estático de descargas agrega 6,1 MiB y la descarga copia otros
+6,1 MiB temporalmente al heap. Se arma al abrir el menú o cambiar de carpeta
+y no asigna memoria en el bucle de emulación. El log registra la duración de
+cada lectura y el tamaño de la lista. Falta obtener una medición de tiempo
+en una carpeta grande en la PS3 real.
+
 ## 2026-10-15 — v0.2.6 publicada
 
 La rc1 (v0.2.5-117-g183a275, app normal SLSA00064) se probó en la PS3 real:
