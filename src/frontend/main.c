@@ -38,8 +38,10 @@
  *
  * Sin embedded, el menú (menu.c, romlist.c), con una disposición inspirada
  * en el XMB y dibujado entero por el RSX (rsxkit/ui.h): los .z64/.v64/.n64
- * de SALSA64_DATA_DIR y de /dev_usbNNN/salsa64 en una columna, ordenados
- * por título, con un panel de información (archivo, código, región, tipo de
+ * de SALSA64_DATA_DIR y de /dev_usbNNN/salsa64 en una columna, con carpetas
+ * primero y navegación por subcarpetas; las ROMs se ordenan por título o
+ * nombre de archivo (menu.cfg). Admite 4096 ROMs por carpeta. Un panel de
+ * información muestra archivo, código, región, tipo de
  * guardado) y ondas de fondo; en Opciones se apagan las ondas (se guarda
  * en SALSA64_DATA_DIR/menu.cfg) y se elige el recorte del overscan (se
  * escribe overscan.cfg, que run_game relee en cada juego) y la resolución de
@@ -4632,11 +4634,14 @@ static const char *const rom_dirs[] = {
 	"/dev_usb000/salsa64", "/dev_usb001/salsa64", "/dev_usb002/salsa64", "/dev_usb003/salsa64",
 	"/dev_usb004/salsa64", "/dev_usb005/salsa64", "/dev_usb006/salsa64", "/dev_usb007/salsa64",
 };
+_Static_assert(sizeof rom_dirs / sizeof rom_dirs[0] == ROMLIST_SOURCES_MAX, "capacidad por cada ubicación de ROMs");
 
 static void video_load(struct menu_settings *set);
 static void video_save(const struct menu_settings *set);
 
 static struct romlist roms;
+static char rom_dir[ROMLIST_PATH_MAX];
+static char rom_root[ROMLIST_PATH_MAX];
 
 /* Título y código de una ROM de la lista (NULL si no está: p. ej. sin menú). */
 static void rom_names(const char *path, const char **title, const char **code, uint32_t *crc1, uint32_t *crc2)
@@ -4677,27 +4682,42 @@ static void test_flags_from_name(const char *name)
 /* Arma la lista (con la fila de `keep` elegida, si sigue ahí). */
 static void menu_scan(const char *keep)
 {
+	uint64_t scan_start = sysGetSystemTime();
 	memset(&roms, 0, sizeof roms);
 	FILE *f = fopen(SAVE_CFG, "rb");
 	mn.save_cfg_len = f ? fread(mn.save_cfg, 1, sizeof mn.save_cfg - 1, f) : 0;
 	if (f)
 		fclose(f);
-	for (unsigned i = 0; i < sizeof rom_dirs / sizeof rom_dirs[0]; i++) {
-		int n = romlist_scan_dir(&roms, rom_dirs[i], mn.save_cfg, mn.save_cfg_len);
+	if (rom_dir[0]) {
+		int n = romlist_scan_dir(&roms, rom_dir, rom_root, mn.save_cfg, mn.save_cfg_len);
 		if (n >= 0)
-			salsa64_log("menú: %d ROMs en %s", n, rom_dirs[i]);
+			salsa64_log("menú: %d ROMs en el directorio actual (%u carpetas)", n, roms.dir_count);
+		else {
+			rom_dir[0] = rom_root[0] = '\0';
+			memset(&roms, 0, sizeof roms);
+			for (unsigned i = 0; i < sizeof rom_dirs / sizeof rom_dirs[0]; i++)
+				romlist_scan_dir(&roms, rom_dirs[i], rom_dirs[i], mn.save_cfg, mn.save_cfg_len);
+			roms.directory[0] = roms.root[0] = '\0';
+		}
+	} else {
+		for (unsigned i = 0; i < sizeof rom_dirs / sizeof rom_dirs[0]; i++) {
+			int n = romlist_scan_dir(&roms, rom_dirs[i], rom_dirs[i], mn.save_cfg, mn.save_cfg_len);
+			if (n >= 0)
+				salsa64_log("menú: %d ROMs y carpetas en el directorio principal", n);
+		}
+		roms.directory[0] = roms.root[0] = '\0';
 	}
-	romlist_sort(&roms);
-	for (uint32_t i = 0; i < roms.count; i++) {
-		const struct rom_entry *e = &roms.e[i];
-		salsa64_log("menú: %2u. \"%s\" %s (%s v%u, guardado %s, %s, %u bytes)", i + 1, romlist_display_title(e),
-			    e->path, e->code[0] ? e->code : "sin código", e->version, romlist_save_label(e->save),
-			    romlist_region_name(e->region), e->size);
-	}
+	romlist_sort(&roms, mn.settings.rom_order == MENU_ROM_ORDER_FILENAME ? ROMLIST_ORDER_FILENAME : ROMLIST_ORDER_TITLE);
+	salsa64_log("menú: lectura del directorio en %llu us; lista estática %u bytes (%u filas)",
+		    (unsigned long long)(sysGetSystemTime() - scan_start), (unsigned)sizeof roms, roms.count);
+	salsa64_log("menú: %u ROMs en %u carpetas, %u no legibles o fuera de capacidad", roms.rom_count,
+		    roms.dir_count, roms.skipped);
 	if (roms.skipped)
 		salsa64_log("menú: %u archivos con extensión de ROM que no se pudieron leer, muy chicos o sin lugar",
 			    roms.skipped);
 	menu_init(&menu, &roms, keep ? romlist_find(&roms, keep) : -1, &mn.settings);
+	if (roms.directory[0] && menu.sel == 0 && roms.count > 1 && roms.e[0].kind == ROMLIST_PARENT)
+		menu.sel = 1, menu.pos = 1.0f;
 	if (keep)
 		snprintf(menu.last, sizeof menu.last, "%s", keep);
 	const rsxkit_screen *osc = rsxkit_screen_info();
@@ -4710,6 +4730,33 @@ static void menu_scan(const char *keep)
 	menu.dirs[menu.ndirs++] = "/dev_usb000/salsa64 … /dev_usb007/salsa64";
 	menu.version = version_text;
 	menu.build = build_text[0] ? build_text : NULL;
+}
+
+static bool rom_root_for_path(const char *path, char *root, size_t size)
+{
+	for (unsigned i = 0; i < sizeof rom_dirs / sizeof rom_dirs[0]; i++) {
+		size_t n = strlen(rom_dirs[i]);
+		if (!strcmp(path, rom_dirs[i]) || (!strncmp(path, rom_dirs[i], n) && path[n] == '/')) {
+			if (n >= size)
+				return false;
+			memcpy(root, rom_dirs[i], n + 1);
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool rom_parent_directory(const char *path, char *parent, size_t size)
+{
+	size_t n = strlen(path);
+	if (!n || n >= size)
+		return false;
+	memcpy(parent, path, n + 1);
+	char *slash = strrchr(parent, '/');
+	if (!slash)
+		return false;
+	*slash = '\0';
+	return true;
 }
 
 static const rsxkit_config *video_config_for(int resolution, rsxkit_config *cfg);
@@ -4818,14 +4865,16 @@ static bool dl_shown;
 
 static void download_begin(int what)
 {
-	static struct dl_rom list[ROMLIST_MAX];
-	if (!roms.count) {
+	static struct dl_rom list[ROMLIST_TOTAL_MAX];
+	if (!roms.rom_count) {
 		menu_set_status(&menu, "No encontré ROMs (.z64, .v64, .n64) en:");
 		return;
 	}
 	unsigned n = 0;
 	for (uint32_t i = 0; i < roms.count; i++) {
 		const struct rom_entry *e = &roms.e[i];
+		if (e->kind != ROMLIST_ROM)
+			continue;
 		snprintf(list[n].name, sizeof list[n].name, "%s", romlist_name(e));
 		snprintf(list[n].title, sizeof list[n].title, "%s", romlist_display_title(e));
 		snprintf(list[n].code, sizeof list[n].code, "%s", e->code);
@@ -5072,6 +5121,10 @@ static int menu_loop(void)
 
 	char last[ROMLIST_PATH_MAX];
 	bool have_last = romlist_load_last(LAST_ROM_PATH, last, sizeof last);
+	if (have_last && rom_root_for_path(last, rom_root, sizeof rom_root) &&
+	    rom_parent_directory(last, rom_dir, sizeof rom_dir)) {
+		/* Abrir directamente la carpeta que contiene la última ROM. */
+	}
 	menu_scan(have_last ? last : NULL);
 	if (have_last)
 		salsa64_log("menú: última ROM %s (%s)", last, romlist_find(&roms, last) >= 0 ? "elegida" : "ya no está");
@@ -5122,6 +5175,10 @@ static int menu_loop(void)
 		}
 		enum menu_action a = menu_input(&menu, buttons, sysGetSystemTime());
 		if (a == MENU_SETTINGS) {
+			char selected[ROMLIST_PATH_MAX] = "";
+			bool reorder = menu.set.rom_order != mn.settings.rom_order;
+			if (reorder && menu.sel >= 0 && menu.sel < (int)roms.count && roms.e[menu.sel].kind == ROMLIST_ROM)
+				snprintf(selected, sizeof selected, "%s", roms.e[menu.sel].path);
 			if (menu.set.overscan != mn.settings.overscan)
 				overscan_save(menu.set.overscan);
 			if (menu.set.resolution != mn.settings.resolution || menu.set.scale != mn.settings.scale)
@@ -5130,6 +5187,13 @@ static int menu_loop(void)
 			 * lista y se perdía al abrir el juego). */
 			bool cfg = menu_settings_cfg_differs(&menu.set, &mn.settings);
 			mn.settings = menu.set;
+			if (reorder) {
+				romlist_sort(&roms, mn.settings.rom_order == MENU_ROM_ORDER_FILENAME ? ROMLIST_ORDER_FILENAME
+										 : ROMLIST_ORDER_TITLE);
+				int at = selected[0] ? romlist_find(&roms, selected) : -1;
+				if (at >= 0)
+					menu.sel = at, menu.pos = (float)at;
+			}
 			if (cfg) {
 				i18n_set(mn.settings.lang);
 				menu_settings_save();
@@ -5173,6 +5237,17 @@ static int menu_loop(void)
 		}
 		if (a == MENU_DOWNLOAD)
 			download_begin(menu.dl_what);
+		if (a == MENU_DIRECTORY) {
+			const struct rom_entry *e = menu.sel >= 0 && menu.sel < (int)roms.count ? &roms.e[menu.sel] : NULL;
+			if (e && (e->kind == ROMLIST_DIRECTORY || e->kind == ROMLIST_PARENT)) {
+				char root[ROMLIST_PATH_MAX];
+				snprintf(rom_dir, sizeof rom_dir, "%s", e->path);
+				if (rom_root_for_path(rom_dir, root, sizeof root)) {
+					snprintf(rom_root, sizeof rom_root, "%s", root);
+					menu_scan(have_last ? last : NULL);
+				}
+			}
+		}
 		download_poll(buttons);
 		if (a == MENU_QUIT) {
 			salsa64_log("menú: «Salir al XMB»");

@@ -3,7 +3,7 @@
  * Salsa64 — menú para elegir ROM, con una disposición inspirada en el XMB
  * (sin ningún recurso de Sony: todo se dibuja con rsxkit/ui.h).
  *
- * Página de juegos: una columna vertical con las ROMs de la lista
+ * Página de juegos: una columna vertical con las carpetas y ROMs de la lista
  * (romlist.h), «Opciones» y «Salir al XMB» al final. La fila elegida va
  * más grande y más brillante, con el nombre de archivo debajo; la columna
  * se desliza con suavizado al cambiar. A la derecha, un panel con lo que se
@@ -44,6 +44,7 @@
 enum menu_action {
 	MENU_NONE,
 	MENU_OPEN,      /* abrir menu_selected() */
+	MENU_DIRECTORY, /* entrar en una carpeta o volver al directorio padre */
 	MENU_QUIT,      /* «Salir al XMB» */
 	MENU_SETTINGS,  /* cambió un ajuste: guardarlo */
 	MENU_APPLY,     /* «Aplicar ahora»: poner la salida y la escala elegidas */
@@ -95,6 +96,7 @@ enum menu_filter {
 
 /* Idioma del menú (menu.cfg, «idioma = es|en|fr|de|it|pt»), ver i18n.h. */
 enum menu_lang { MENU_LANG_ES, MENU_LANG_EN, MENU_LANG_FR, MENU_LANG_DE, MENU_LANG_IT, MENU_LANG_PT, MENU_LANGS };
+enum menu_rom_order { MENU_ROM_ORDER_TITLE, MENU_ROM_ORDER_FILENAME };
 
 /* Densidad de los puntos del CRT de máscara de sombra: la del filtro
  * original o la fina (puntos más chicos y más juntos). */
@@ -137,12 +139,13 @@ struct menu_settings {
 	int density;    /* enum menu_density («densidad = normal|fina»), la de la máscara */
 	int lang;       /* enum menu_lang */
 	int interp;     /* enum menu_interp («interpolacion = no|geometria») */
+	int rom_order;  /* enum menu_rom_order («orden = titulo|archivo») */
 };
 
 enum { MENU_PAGE_GAMES, MENU_PAGE_OPTIONS, MENU_PAGE_CHEATS, MENU_PAGE_GAME };
 enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_ASPECT, MENU_OPT_FILTER, MENU_OPT_DENSITY, MENU_OPT_RESOLUTION,
        MENU_OPT_SCALE, MENU_OPT_APPLY, MENU_OPT_INTERP, MENU_OPT_FPS, MENU_OPT_CONFIRM, MENU_OPT_LANG,
-       MENU_OPT_DL_COVERS, MENU_OPT_DL_CHEATS, MENU_OPT_BACK, MENU_OPTS };
+       MENU_OPT_ROM_ORDER, MENU_OPT_DL_COVERS, MENU_OPT_DL_CHEATS, MENU_OPT_BACK, MENU_OPTS };
 /* «Aplicar ahora» solo existe mientras lo elegido difiere de lo que corre;
  * «Densidad», solo con el CRT de máscara de sombra. */
 
@@ -150,7 +153,7 @@ struct menu {
 	const struct romlist *list;
 	struct menu_settings set;
 	int page;              /* MENU_PAGE_* */
-	int sel;               /* juegos: 0 .. count + 1 (count: Opciones; count + 1: Salir) */
+	int sel;               /* juegos: entradas, Opciones y Salir al XMB */
 	int opt;               /* opciones: MENU_OPT_* */
 	/* Trucos de la ROM elegida (los carga main.c): una fila por truco y «Volver». */
 	struct cheat_set *cheats;

@@ -1,5 +1,22 @@
 # Estado
 
+## 2026-10-15 — Navegación de carpetas y lista ampliada
+
+El menú puede entrar en subcarpetas de los directorios `salsa64`; muestra
+primero las carpetas y `..` sube un nivel. ○ conserva la pregunta para salir
+al XMB en la raíz. La lista fija admite 4096 ROMs y hasta 256 carpetas por
+cada una de las nueve ubicaciones, además de la fila para subir. Opciones guarda en
+`menu.cfg` el orden por título de cabecera o nombre de archivo. Si la fuente
+no representa algún byte del título, se muestra el nombre del archivo. La
+última ROM abierta conserva su ruta completa y al iniciar se abre su carpeta.
+
+La lista reserva hasta aproximadamente 11,5 MiB de memoria estática; el
+preparador estático de descargas agrega 6,1 MiB y la descarga copia otros
+6,1 MiB temporalmente al heap. Se arma al abrir el menú o cambiar de carpeta
+y no asigna memoria en el bucle de emulación. El log registra la duración de
+cada lectura y el tamaño de la lista. Falta obtener una medición de tiempo
+en una carpeta grande en la PS3 real.
+
 ## 2026-10-15 — v0.2.6 publicada
 
 La rc1 (v0.2.5-117-g183a275, app normal SLSA00064) se probó en la PS3 real:
