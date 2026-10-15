@@ -100,6 +100,7 @@ enum salsa64_gbi {
 	SALSA64_GBI_S2DEX,    /* sprites 2D (pendiente) */
 	SALSA64_GBI_F3DPD,    /* Perfect Dark: Fast3D de Rare, vértices con color por índice */
 	SALSA64_GBI_F3DEXBG,  /* Conker: F3DEX2 con G_TRI4, normales aparte y luces puntuales */
+	SALSA64_GBI_F3DWR,    /* Wave Race 64: Fast3D 2.0D con índices de vértice ×5 y G_QUAD en 0xB5 */
 };
 
 /* Campos de OSTask (16 palabras en DMEM 0xFC0). */
