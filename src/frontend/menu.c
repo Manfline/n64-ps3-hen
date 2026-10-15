@@ -753,7 +753,7 @@ enum menu_action menu_input(struct menu *m, uint32_t buttons, uint64_t now_us)
 		open_options(m);
 		return MENU_NONE;
 	} else if (pressed & BIT(SALSA64_DS3_CIRCLE)) {
-		if (m->list->directory[0] && strcmp(m->list->directory, m->list->root)) {
+		if (m->list->directory[0]) {
 			for (uint32_t i = 0; i < m->list->count; i++)
 				if (m->list->e[i].kind == ROMLIST_PARENT) {
 					m->sel = (int)i;
@@ -992,6 +992,8 @@ static void draw_row(const struct row *r, float d, float x, float W, float H, fl
 
 static const char *location(const char *path, char *buf, size_t n)
 {
+	if (!path[0])
+		return "Todas las unidades";
 	if (!strncmp(path, "/dev_hdd0/", 10))
 		return "Disco duro";
 	if (!strncmp(path, "/dev_usb", 8) && strlen(path) > 10) {
@@ -1211,14 +1213,14 @@ static void rom_info(const struct menu *m, const struct rom_entry *e, float px, 
 		snprintf(buf, sizeof buf, "%s%s", romlist_save_label(e->save), emulated ? "" : tr(" (sin emular)"));
 		COVER_LINE("Guardado", buf, emulated ? C_TEXT : C_WARN);
 		#undef COVER_LINE
-		if (m->last[0] && !strcmp(m->last, e->path))
+		if (m->last[0] && !strcmp(m->last, romlist_name(e)))
 			stext(x, py + ph - 30.0f, "● Último abierto", 1.2f, C_ACCENT, ca, 0);
 		return;
 	}
 	stext(x, y, romlist_display_title(e), tscale, 0xFFFFFFu, ca, tmax);
 	y += 60.0f;
 	info_line(x, &y, vx, vscale, "Archivo", romlist_name(e), C_TEXT, ca, vmax);
-	info_line(x, &y, vx, vscale, "Ubicación", location(e->path, loc, sizeof loc), C_TEXT, ca, vmax);
+	info_line(x, &y, vx, vscale, "Ubicación", location(m->list->directory, loc, sizeof loc), C_TEXT, ca, vmax);
 	if (e->code[0])
 		snprintf(buf, sizeof buf, tr("%s, versión %u"), e->code, e->version);
 	else
@@ -1236,7 +1238,7 @@ static void rom_info(const struct menu *m, const struct rom_entry *e, float px, 
 	bool emulated = e->save == SALSA64_SAVE_NONE || salsa64_save_emulated((enum salsa64_save_type)e->save);
 	snprintf(buf, sizeof buf, "%s%s", romlist_save_label(e->save), emulated ? "" : tr(" (sin emular)"));
 	info_line(x, &y, vx, vscale, "Guardado", buf, emulated ? C_TEXT : C_WARN, ca, vmax);
-	if (m->last[0] && !strcmp(m->last, e->path))
+	if (m->last[0] && !strcmp(m->last, romlist_name(e)))
 		stext(x, py + ph - 44.0f, "● Último juego abierto", 1.5f, C_ACCENT, ca, 0);
 }
 

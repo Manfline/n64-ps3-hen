@@ -35,8 +35,9 @@ Reglas de la búsqueda:
   vuelve al nivel anterior. Se recorren también las subcarpetas de cada
   carpeta `salsa64`.
 - Se ignoran los archivos que empiezan con `.`, los que no tienen una de
-  esas extensiones, los que miden menos de 4 KB y los ilegibles. La lista
-  admite hasta 4096 ROMs por carpeta.
+  esas extensiones, los que miden menos de 4 KB y los ilegibles. En cada
+  carpeta relativa se juntan las entradas de todas las unidades y se admiten
+  hasta 4096 filas en total, contando ROMs, carpetas y `..`.
 - La ROM más grande que se puede abrir es de 64 MB.
 - **Opciones → Orden de la lista** elige el título de la cabecera o el nombre
   del archivo (`orden = titulo|archivo` en `menu.cfg`). Si la fuente no puede

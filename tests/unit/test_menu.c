@@ -104,8 +104,7 @@ static void menu_header_title_cleanup(void)
 	h[0x28] = '6';
 	romlist_parse_header(h, NULL, 0, &e);
 	CHECK(!strcmp(e.title, "MARIO?6"));
-	strcpy(e.path, "/x/juego-japones.z64");
-	e.name = 3;
+	e.name = "juego-japones.z64";
 	CHECK(!e.title_supported);
 	CHECK(!strcmp(romlist_display_title(&e), "juego-japones.z64"));
 	CHECK_EQ(e.tv, SALSA64_TV_PAL);
@@ -116,8 +115,7 @@ static void menu_header_title_cleanup(void)
 	/* Sin título: se muestra el nombre del archivo. */
 	memset(h + 0x20, ' ', 20);
 	memset(&e, 0, sizeof e);
-	strcpy(e.path, "/x/homebrew.z64");
-	e.name = 3;
+	e.name = "homebrew.z64";
 	romlist_parse_header(h, NULL, 0, &e);
 	CHECK(!strcmp(e.title, ""));
 	CHECK(!strcmp(romlist_display_title(&e), "homebrew.z64"));
@@ -150,8 +148,12 @@ static void add(struct romlist *l, const char *path, const char *title)
 {
 	struct rom_entry *e = &l->e[l->count++];
 	memset(e, 0, sizeof *e);
-	strcpy(e->path, path);
-	e->name = (uint16_t)(strrchr(path, '/') + 1 - path);
+	const char *base = strrchr(path, '/') + 1;
+	char *pool = (char *)(l->e + ROMLIST_MAX);
+	e->name = pool + l->strings_used;
+	strcpy((char *)e->name, base);
+	l->strings_used += (uint32_t)strlen(base) + 1;
+	e->source = !strncmp(path, "/usb/", 5) ? 1 : 0;
 	strcpy(e->title, title);
 	e->kind = ROMLIST_ROM;
 	e->title_supported = 1;
@@ -160,31 +162,32 @@ static void add(struct romlist *l, const char *path, const char *title)
 
 static void menu_sort_by_title(void)
 {
-	static struct romlist l;
-	memset(&l, 0, sizeof l);
-	add(&l, "/d/zz.z64", "super mario 64");
-	add(&l, "/d/b.z64", "MARIO KART 64");
-	add(&l, "/d/a.z64", "");                  /* se ordena como "a.z64" */
-	add(&l, "/usb/oot.z64", "ZELDA");
-	add(&l, "/d/oot.z64", "ZELDA");           /* mismo título y nombre: por ruta */
-	add(&l, "/d/A2.z64", "Mario Kart 64");    /* mismo título: por nombre */
-	romlist_sort(&l, ROMLIST_ORDER_TITLE);
-	static const char *order[] = { "/d/a.z64", "/d/A2.z64", "/d/b.z64", "/d/zz.z64", "/d/oot.z64", "/usb/oot.z64" };
+	struct romlist *l = romlist_create();
+	add(l, "/d/zz.z64", "super mario 64");
+	add(l, "/d/b.z64", "MARIO KART 64");
+	add(l, "/d/a.z64", "");                  /* se ordena como "a.z64" */
+	add(l, "/usb/oot.z64", "ZELDA");
+	add(l, "/d/oot.z64", "ZELDA");           /* mismo título y nombre: por ruta */
+	add(l, "/d/A2.z64", "Mario Kart 64");    /* mismo título: por nombre */
+	romlist_sort(l, ROMLIST_ORDER_TITLE);
+	static const char *roots[] = { "/d", "/usb" };
+	static const char *names[] = { "a.z64", "A2.z64", "b.z64", "zz.z64", "oot.z64", "oot.z64" };
 	for (unsigned i = 0; i < 6; i++)
-		CHECK(!strcmp(l.e[i].path, order[i]));
-	CHECK_EQ(romlist_find(&l, "/usb/oot.z64"), 5);
-	CHECK_EQ(romlist_find(&l, "/nada.z64"), -1);
+		CHECK(!strcmp(romlist_name(&l->e[i]), names[i]));
+	CHECK_EQ(romlist_find(l, "/usb/oot.z64", roots, 2), 5);
+	CHECK_EQ(romlist_find(l, "/nada.z64", roots, 2), -1);
+	romlist_free(l);
 }
 
 static void menu_sort_by_filename(void)
 {
-	static struct romlist l;
-	memset(&l, 0, sizeof l);
-	add(&l, "/d/z.z64", "AAA");
-	add(&l, "/d/a.z64", "ZZZ");
-	romlist_sort(&l, ROMLIST_ORDER_FILENAME);
-	CHECK(!strcmp(romlist_name(&l.e[0]), "a.z64"));
-	CHECK(!strcmp(romlist_name(&l.e[1]), "z.z64"));
+	struct romlist *l = romlist_create();
+	add(l, "/d/z.z64", "AAA");
+	add(l, "/d/a.z64", "ZZZ");
+	romlist_sort(l, ROMLIST_ORDER_FILENAME);
+	CHECK(!strcmp(romlist_name(&l->e[0]), "a.z64"));
+	CHECK(!strcmp(romlist_name(&l->e[1]), "z.z64"));
+	romlist_free(l);
 }
 
 static bool write_file(const char *path, const uint8_t *data, size_t n)
@@ -222,37 +225,51 @@ static void menu_scan_dir(void)
 	snprintf(path, sizeof path, "%s/carpeta.z64", dir);
 	mkdir(path, 0777);
 
-	static struct romlist l;
-	memset(&l, 0, sizeof l);
-	CHECK_EQ(romlist_scan_dir(&l, dir, dir, NULL, 0), 3);
-	CHECK_EQ(l.skipped, 1);  /* solo corta.z64; la carpeta es una fila propia */
-	romlist_sort(&l, ROMLIST_ORDER_TITLE);
-	CHECK_EQ(l.count, 4);
-	CHECK_EQ(l.e[0].kind, ROMLIST_DIRECTORY);
-	CHECK(!strcmp(romlist_name(&l.e[0]), "carpeta.z64"));
-	CHECK(!strcmp(l.e[1].title, "MARIO KART 64"));
-	CHECK(!strcmp(romlist_name(&l.e[1]), "kart.n64"));
-	CHECK_EQ(l.e[1].format, SALSA64_ROM_N64);
-	CHECK(!strcmp(l.e[2].title, "SUPER MARIO 64"));
-	CHECK_EQ(l.e[2].format, SALSA64_ROM_V64);
-	CHECK_EQ(l.e[2].size, sizeof rom);
-	CHECK(!strcmp(l.e[3].title, "ZELDA"));
+	struct romlist *l = romlist_create();
+	CHECK(romlist_memory_bytes() <= 1572864u);
+	CHECK_EQ(romlist_scan_dir(l, dir, dir, NULL, 0), 3);
+	CHECK_EQ(l->skipped, 1);  /* solo corta.z64; la carpeta es una fila propia */
+	romlist_sort(l, ROMLIST_ORDER_TITLE);
+	CHECK_EQ(l->count, 4);
+	CHECK_EQ(l->e[0].kind, ROMLIST_DIRECTORY);
+	CHECK(!strcmp(romlist_name(&l->e[0]), "carpeta.z64"));
+	CHECK(!strcmp(l->e[1].title, "MARIO KART 64"));
+	CHECK(!strcmp(romlist_name(&l->e[1]), "kart.n64"));
+	CHECK_EQ(l->e[1].format, SALSA64_ROM_N64);
+	CHECK(!strcmp(l->e[2].title, "SUPER MARIO 64"));
+	CHECK_EQ(l->e[2].format, SALSA64_ROM_V64);
+	CHECK_EQ(l->e[2].size, sizeof rom);
+	CHECK(!strcmp(l->e[3].title, "ZELDA"));
 	snprintf(path, sizeof path, "%s/zelda.z64", dir);
-	CHECK(!strcmp(l.e[3].path, path));
-	CHECK_EQ(l.rom_count, 3);
-	CHECK_EQ(l.dir_count, 1);
+	CHECK(!strcmp(romlist_name(&l->e[3]), "zelda.z64"));
+	CHECK_EQ(l->rom_count, 3);
+	CHECK_EQ(l->dir_count, 1);
+	char usb[256], usbrom[300];
+	snprintf(usb, sizeof usb, "%s/usb", t_tmp_dir);
+	mkdir(usb, 0777);
+	snprintf(usbrom, sizeof usbrom, "%s/zelda.z64", usb);
+	snprintf(path, sizeof path, "%s/zelda.z64", dir);
+	CHECK_EQ(link(path, usbrom), 0);
+	const char *roots[] = { dir, usb };
+	CHECK_EQ(romlist_scan_sources(l, roots, 2, "", NULL, 0), 4);
+	CHECK_EQ(l->count, 5);
+	char rebuilt[ROMLIST_PATH_MAX];
+	int usb_at = romlist_find(l, usbrom, roots, 2);
+	CHECK(usb_at >= 0);
+	CHECK(romlist_build_path(l, &l->e[usb_at], roots, 2, rebuilt, sizeof rebuilt));
+	CHECK(!strcmp(rebuilt, usbrom));
 	char sub[300];
 	snprintf(sub, sizeof sub, "%s/sub", dir);
 	mkdir(sub, 0777);
-	memset(&l, 0, sizeof l);
-	CHECK_EQ(romlist_scan_dir(&l, dir, dir, NULL, 0), 0);
-	CHECK_EQ(l.count, 2); /* carpeta y subcarpeta */
-	CHECK_EQ(l.e[0].kind, ROMLIST_DIRECTORY);
-	memset(&l, 0, sizeof l);
-	CHECK_EQ(romlist_scan_dir(&l, sub, dir, NULL, 0), 0);
-	CHECK_EQ(l.e[0].kind, ROMLIST_PARENT);
-	CHECK(!strcmp(romlist_display_title(&l.e[0]), ".."));
-	CHECK_EQ(romlist_scan_dir(&l, "/no/existe/salsa64", "/no/existe/salsa64", NULL, 0), -1);
+	memset(l, 0, romlist_memory_bytes());
+	CHECK_EQ(romlist_scan_dir(l, dir, dir, NULL, 0), 3);
+	CHECK_EQ(l->count, 5); /* ROMs, carpeta y subcarpeta */
+	CHECK_EQ(l->e[0].kind, ROMLIST_DIRECTORY);
+	memset(l, 0, romlist_memory_bytes());
+	CHECK_EQ(romlist_scan_dir(l, sub, dir, NULL, 0), 0);
+	CHECK_EQ(l->e[0].kind, ROMLIST_PARENT);
+	CHECK(!strcmp(romlist_display_title(&l->e[0]), ".."));
+	CHECK_EQ(romlist_scan_dir(l, "/no/existe/salsa64", "/no/existe/salsa64", NULL, 0), -1);
 
 	/* Carpeta grande: llena las 4096 entradas, mide la lectura y rechaza la siguiente. */
 	char many[300], source[300], target[300];
@@ -263,15 +280,21 @@ static void menu_scan_dir(void)
 		snprintf(target, sizeof target, "%s/rom-%04u.z64", many, i);
 		CHECK_EQ(link(source, target), 0);
 	}
-	memset(&l, 0, sizeof l);
+	memset(l, 0, romlist_memory_bytes());
 	clock_t start = clock();
-	CHECK_EQ(romlist_scan_dir(&l, many, many, NULL, 0), ROMLIST_MAX);
+	CHECK_EQ(romlist_scan_dir(l, many, t_tmp_dir, NULL, 0), ROMLIST_MAX - 1);
 	unsigned elapsed_ms = (unsigned)((clock() - start) * 1000 / CLOCKS_PER_SEC);
-	CHECK_EQ(l.rom_count, ROMLIST_MAX);
-	CHECK_EQ(l.count, ROMLIST_MAX);
-	CHECK_EQ(l.skipped, 1);
-	printf("lista ROM: lectura de %u archivos: %u ms; memoria fija: %zu bytes\n", ROMLIST_MAX + 1,
-	       elapsed_ms, sizeof l);
+	CHECK_EQ(l->rom_count, ROMLIST_MAX - 1);
+	CHECK_EQ(l->count, ROMLIST_MAX);
+	CHECK_EQ(l->skipped, 1);
+	memset(l, 0, romlist_memory_bytes());
+	const char *combined[] = { many, usb };
+	CHECK_EQ(romlist_scan_sources(l, combined, 2, "", NULL, 0), ROMLIST_MAX);
+	CHECK_EQ(l->count, ROMLIST_MAX);
+	CHECK_EQ(l->skipped, 2); /* el límite también es común a ambas unidades */
+	printf("lista ROM: lectura de %u archivos: %u ms; memoria reservada: %zu bytes\n", ROMLIST_MAX + 1,
+	       elapsed_ms, romlist_memory_bytes());
+	romlist_free(l);
 }
 
 static void menu_last_rom(void)
@@ -293,18 +316,19 @@ static void menu_last_rom(void)
 
 /* ---- Navegación ------------------------------------------------------------- */
 
-static struct romlist nav_list;
+static struct romlist *nav_list;
 
 static void nav_setup(struct menu *m, unsigned n, int sel)
 {
-	memset(&nav_list, 0, sizeof nav_list);
+	if (!nav_list) nav_list = romlist_create();
+	memset(nav_list, 0, sizeof *nav_list);
 	for (unsigned i = 0; i < n; i++) {
 		char p[32], t[16];
 		snprintf(p, sizeof p, "/d/r%02u.z64", i);
 		snprintf(t, sizeof t, "ROM %02u", i);
-		add(&nav_list, p, t);
+		add(nav_list, p, t);
 	}
-	menu_init(m, &nav_list, sel, NULL);
+	menu_init(m, nav_list, sel, NULL);
 }
 
 static void menu_needs_release_first(void)
@@ -376,28 +400,25 @@ static void menu_move_and_wrap(void)
 
 static void menu_directory_navigation(void)
 {
-	static struct romlist l;
+	struct romlist *l = romlist_create();
 	struct menu m;
-	memset(&l, 0, sizeof l);
-	strcpy(l.directory, "/roms");
-	strcpy(l.root, "/roms");
-	l.count = 1;
-	l.e[0].kind = ROMLIST_DIRECTORY;
-	strcpy(l.e[0].path, "/roms/juegos");
-	l.e[0].name = 6;
-	menu_init(&m, &l, 0, NULL);
+	strcpy(l->directory, "");
+	l->count = 1;
+	l->e[0].kind = ROMLIST_DIRECTORY;
+	l->e[0].name = "juegos";
+	menu_init(&m, l, 0, NULL);
 	menu_input(&m, 0, 0);
 	CHECK_EQ(menu_input(&m, CROSS, 1), MENU_DIRECTORY);
 	CHECK_EQ(menu_selected(&m), -1);
-	strcpy(l.directory, "/roms/juegos");
-	l.count = 1;
-	l.e[0].kind = ROMLIST_PARENT;
-	strcpy(l.e[0].path, "/roms");
-	l.e[0].name = 6;
-	menu_init(&m, &l, 0, NULL);
+	strcpy(l->directory, "juegos");
+	l->count = 1;
+	l->e[0].kind = ROMLIST_PARENT;
+	l->e[0].name = "..";
+	menu_init(&m, l, 0, NULL);
 	menu_input(&m, 0, 2);
 	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_CIRCLE), 3), MENU_DIRECTORY);
 	CHECK_EQ(m.sel, 0);
+	romlist_free(l);
 }
 
 static void menu_repeat(void)
@@ -1178,11 +1199,12 @@ static void write_ppm(const char *path, const uint8_t *rgb, int w, int h)
 	fclose(f);
 }
 
-static struct romlist frame_list;
+static struct romlist *frame_list;
 
 static void frame_list_setup(void)
 {
-	memset(&frame_list, 0, sizeof frame_list);
+	if (!frame_list) frame_list = romlist_create();
+	memset(frame_list, 0, sizeof *frame_list);
 	static const char *titles[] = { "THE LEGEND OF ZELDA", "SUPER MARIO 64", "GOLDENEYE", "MARIO KART 64",
 					"Perfect Dark", "CONKER BFD", "STARFOX64", "" };
 	static const char *codes[] = { "NZLE", "NSME", "NGEE", "NKTE", "NPDE", "NFUE", "NFXE", "NXXE" };
@@ -1190,15 +1212,15 @@ static void frame_list_setup(void)
 				       "conker.z64", "sf64.v64", "homebrew-sin-título.n64" };
 	for (unsigned i = 0; i < 8; i++) {
 		uint8_t h[0x40];
-		struct rom_entry *e = &frame_list.e[frame_list.count++];
+		struct rom_entry *e = frame_list->e[frame_list->count++];
 		memset(e, 0, sizeof *e);
-		snprintf(e->path, sizeof e->path, "%s/%s", i == 3 ? "/dev_usb000/salsa64" : "/dev_hdd0/salsa64", names[i]);
-		e->name = (uint16_t)(strrchr(e->path, '/') + 1 - e->path);
+		e->name = names[i];
+		e->source = i == 3 ? 1 : 0;
 		e->size = (i + 1) << 22;
 		make_header(h, titles[i], codes[i], 0);
 		romlist_parse_header(h, NULL, 0, e);
 	}
-	romlist_sort(&frame_list, ROMLIST_ORDER_TITLE);
+	romlist_sort(frame_list, ROMLIST_ORDER_TITLE);
 }
 
 /* Cuadros del menú en el lote del host; devuelve los vértices del último. */
@@ -1218,8 +1240,8 @@ static void menu_frame_geometry(void)
 	frame_list_setup();
 	uint32_t dropped0 = rsxkit_ui_dropped();
 	struct menu m;
-	menu_init(&m, &frame_list, 3, NULL);
-	snprintf(m.last, sizeof m.last, "%s", frame_list.e[3].path);
+	menu_init(&m, frame_list, 3, NULL);
+	snprintf(m.last, sizeof m.last, "%s", romlist_name(&frame_list->e[3]));
 	uint32_t n_on = frames(&m, 1000000, 2000000, 1280);
 	CHECK(m.intro == 1.0f);
 	CHECK(n_on > 2000 && n_on < sizeof verts / sizeof verts[0]);
@@ -1247,12 +1269,13 @@ static void menu_frame_geometry(void)
 	CHECK(m.page_t == 1.0f);
 	m.loading = "SUPER MARIO 64";
 	frames(&m, 4016000, 4016000, 960);
-	static struct romlist empty;
-	menu_init(&m, &empty, 0, NULL);
+	struct romlist *empty = romlist_create();
+	menu_init(&m, empty, 0, NULL);
 	m.dirs[m.ndirs++] = "/dev_hdd0/salsa64";
 	frames(&m, 0, 500000, 1280);
 	CHECK_EQ(rsxkit_ui_dropped(), dropped0);
 	rsxkit_ui_batch(NULL, 0, 0, 0);
+	romlist_free(empty);
 }
 
 /* Qué cambios de Opciones reescriben menu.cfg: todo lo que va en él (la
@@ -1305,7 +1328,7 @@ static void menu_options_help(void)
 	frame_list_setup();
 	uint32_t dropped0 = rsxkit_ui_dropped();
 	struct menu m;
-	menu_init(&m, &frame_list, 3, NULL);
+	menu_init(&m, frame_list, 3, NULL);
 	m.dl_enabled = true;
 	uint64_t t = settle_draw(&m, 0, 1500);
 	menu_input(&m, BIT(SALSA64_DS3_TRIANGLE), t);
@@ -1442,7 +1465,7 @@ static void menu_version_place(void)
 				int w = (int)lw;
 				i18n_set(lang);
 				struct menu m;
-				menu_init(&m, &frame_list, 4, NULL);
+				menu_init(&m, frame_list, 4, NULL);
 				m.set.lang = lang;
 				m.set.waves = false;  /* fondo quieto: los dos cuadros, iguales salvo la versión */
 				frames(&m, 1000000, 2500000, lw);
@@ -1486,12 +1509,12 @@ static void menu_preview(void)
 	rsxkit_ui_atlas(&atlas[0][0], RSXKIT_UI_ATLAS_W * 4);
 	frame_list_setup();
 	struct menu m;
-	menu_init(&m, &frame_list, 4, NULL);
+	menu_init(&m, frame_list, 4, NULL);
 	m.out_w = 1280, m.out_h = 720;
 	m.res_run = MENU_RES_1080P;  /* pidió 1080p y quedó 720p: sale la pista */
 	m.version = "v0.2.5+3 · abc1234";
 	m.build = "Salsa64 gráficos 3 · SLSA00114";
-	snprintf(m.last, sizeof m.last, "%s", frame_list.e[4].path);
+	snprintf(m.last, sizeof m.last, "%s", romlist_name(&frame_list->e[4]));
 	uint32_t n = frames(&m, 1000000, 13000000, 1280);
 	raster(rgb, 1280, 720, 1280, 720, n);
 	snprintf(path, sizeof path, "%s-juegos.ppm", out);
@@ -1545,7 +1568,7 @@ static void menu_preview(void)
 	raster(rgb, 960, 720, 960, 720, n);
 	snprintf(path, sizeof path, "%s-resolucion43.ppm", out);
 	write_ppm(path, rgb, 960, 720);
-	menu_init(&m, &frame_list, frame_list.count, NULL);
+	menu_init(&m, frame_list, frame_list->count, NULL);
 	m.set.waves = false;
 	menu_set_status(&m, "No se pudo leer /dev_usb000/salsa64/mk64.z64");
 	n = frames(&m, 1000000, 2000000, 960);
@@ -1559,12 +1582,12 @@ static void menu_preview(void)
 			if (lang == 2 || lang == 4)
 				continue;  /* en, de y pt bastan para el aspecto; fr e it se ven en las pruebas de ancho */
 			i18n_set(lang);
-			menu_init(&m, &frame_list, 4, NULL);
+			menu_init(&m, frame_list, 4, NULL);
 			m.set.lang = lang;
 			m.set.filter = MENU_FILTER_SCAN_SOFT;
 			m.version = "v0.2.5+3 · abc1234";
 			m.build = "Salsa64 gráficos 3 · SLSA00114";
-			snprintf(m.last, sizeof m.last, "%s", frame_list.e[4].path);
+			snprintf(m.last, sizeof m.last, "%s", romlist_name(&frame_list->e[4]));
 			n = frames(&m, 1000000, 13000000, 960);
 			raster(rgb, 960, 720, 960, 720, n);
 			snprintf(path, sizeof path, "%s-juegos43-l%d.ppm", out, lang);
@@ -1579,7 +1602,7 @@ static void menu_preview(void)
 			raster(rgb, 960, 720, 960, 720, n);
 			snprintf(path, sizeof path, "%s-ajustes43-l%d.ppm", out, lang);
 			write_ppm(path, rgb, 960, 720);
-			menu_init(&m, &frame_list, 4, NULL);
+			menu_init(&m, frame_list, 4, NULL);
 			m.set.lang = lang;
 			m.set.filter = MENU_FILTER_SCAN_STRONG;
 			m.page = MENU_PAGE_OPTIONS;
@@ -1611,8 +1634,8 @@ static void menu_preview(void)
 			"cheat2_desc = \"Saltar de nivel\"\ncheat2_code = \"89001000 0001\"\n"
 			"cheat3_desc = \"Tiempo infinito\"\ncheat3_code = \"81001000 0001\"\n";
 		cheats_parse(&cs, text, sizeof text - 1);
-		menu_init(&m, &frame_list, 4, NULL);
-		menu_cheats_open(&m, &cs, frame_list.e[4].path + 1);
+		menu_init(&m, frame_list, 4, NULL);
+		menu_cheats_open(&m, &cs, romlist_name(&frame_list->e[4]));
 		m.cht_title = "Perfect Dark";
 		m.cht_sel = 1;
 		n = frames(&m, 1000000, 2000000, 1280);
@@ -1638,9 +1661,9 @@ static void menu_preview(void)
 			}
 		img_px[0] = cov, img_w[0] = 320, img_h[0] = 448;
 		rsxkit_ui_image_size(0, 320, 448);
-		menu_init(&m, &frame_list, 4, NULL);
+		menu_init(&m, frame_list, 4, NULL);
 		m.cover_rom = 4, m.cover_w = 320, m.cover_h = 448;
-		snprintf(m.last, sizeof m.last, "%s", frame_list.e[4].path);
+		snprintf(m.last, sizeof m.last, "%s", romlist_name(&frame_list->e[4]));
 		n = frames(&m, 1000000, 13000000, 1280);
 		raster(rgb, 1280, 720, 1280, 720, n);
 		snprintf(path, sizeof path, "%s-caratula.ppm", out);
@@ -1676,7 +1699,7 @@ static void menu_cover_state(void)
 {
 	frame_list_setup();
 	struct menu m;
-	menu_init(&m, &frame_list, 2, NULL);
+	menu_init(&m, frame_list, 2, NULL);
 	CHECK_EQ(m.cover_rom, -1);
 	frames(&m, 1000000, 2000000, 1280);
 	CHECK(menu_settled(&m));
@@ -1807,4 +1830,6 @@ void t_suite_menu(void)
 	RUN(version_texts);
 	RUN(menu_version_place);
 	RUN(menu_preview);
+	romlist_free(nav_list);
+	romlist_free(frame_list);
 }

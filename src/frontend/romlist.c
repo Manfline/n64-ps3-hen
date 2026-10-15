@@ -19,6 +19,41 @@
 #define HDR_REGION  0x3E
 #define HDR_VERSION 0x3F
 
+struct romlist *romlist_create(void)
+{
+	struct romlist *l = calloc(1, ROMLIST_LIST_BYTES);
+	return l;
+}
+
+void romlist_free(struct romlist *l)
+{
+	free(l);
+}
+
+size_t romlist_memory_bytes(void)
+{
+	return ROMLIST_LIST_BYTES;
+}
+
+static char *string_pool(struct romlist *l)
+{
+	return (char *)(l->e + ROMLIST_MAX);
+}
+
+const char *romlist_name(const struct rom_entry *e)
+{
+	return e->name;
+}
+
+const char *romlist_display_title(const struct rom_entry *e)
+{
+	if (e->kind == ROMLIST_PARENT)
+		return "..";
+	if (e->kind == ROMLIST_DIRECTORY)
+		return romlist_name(e);
+	return e->title[0] && e->title_supported ? e->title : romlist_name(e);
+}
+
 static int lower(int c)
 {
 	return c >= 'A' && c <= 'Z' ? c + 'a' - 'A' : c;
@@ -91,11 +126,27 @@ void romlist_parse_header(const uint8_t raw[0x40], const char *save_cfg, size_t 
 	e->save = (uint8_t)salsa64_save_detect(h, manual, &src);
 }
 
-static bool add_file_size(struct romlist *l, const char *path, uint32_t size, const char *save_cfg, size_t save_cfg_len)
+static bool add_name(struct romlist *l, const char *name, struct rom_entry *e)
 {
-	size_t plen = strlen(path);
-	if (l->directory_rom_count >= ROMLIST_MAX || l->rom_count >= ROMLIST_TOTAL_MAX ||
-	    l->count >= ROMLIST_ENTRIES_MAX || plen >= ROMLIST_PATH_MAX) {
+	size_t n = strlen(name);
+	if (n > ROMLIST_NAME_MAX || l->count >= ROMLIST_MAX || l->strings_used + n + 1 > ROMLIST_STRING_POOL_MAX)
+		return false;
+	e->name = string_pool(l) + l->strings_used;
+	memcpy((char *)e->name, name, n + 1);
+	l->strings_used += (uint32_t)n + 1;
+	return true;
+}
+
+static const char *base_name(const char *path)
+{
+	const char *slash = strrchr(path, '/');
+	return slash ? slash + 1 : path;
+}
+
+static bool add_file_size(struct romlist *l, const char *path, unsigned source, uint32_t size,
+		  const char *save_cfg, size_t save_cfg_len)
+{
+	if (l->count >= ROMLIST_MAX) {
 		l->skipped++;
 		return false;
 	}
@@ -111,20 +162,22 @@ static bool add_file_size(struct romlist *l, const char *path, uint32_t size, co
 		l->skipped++;
 		return false;
 	}
-	struct rom_entry *e = &l->e[l->count++];
+	struct rom_entry *e = &l->e[l->count];
 	memset(e, 0, sizeof *e);
+	if (!add_name(l, base_name(path), e)) {
+		l->skipped++;
+		return false;
+	}
 	e->kind = ROMLIST_ROM;
-	memcpy(e->path, path, plen + 1);
-	const char *slash = strrchr(path, '/');
-	e->name = (uint16_t)(slash ? slash + 1 - path : 0);
+	e->source = (uint8_t)source;
 	e->size = size;
 	romlist_parse_header(raw, save_cfg, save_cfg_len, e);
+	l->count++;
 	l->rom_count++;
-	l->directory_rom_count++;
 	return true;
 }
 
-bool romlist_add_file(struct romlist *l, const char *path, const char *save_cfg, size_t save_cfg_len)
+bool romlist_add_file(struct romlist *l, const char *path, unsigned source, const char *save_cfg, size_t save_cfg_len)
 {
 	struct stat st;
 	if (stat(path, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < (off_t)ROMLIST_MIN_SIZE ||
@@ -132,61 +185,32 @@ bool romlist_add_file(struct romlist *l, const char *path, const char *save_cfg,
 		l->skipped++;
 		return false;
 	}
-	return add_file_size(l, path, (uint32_t)st.st_size, save_cfg, save_cfg_len);
+	return add_file_size(l, path, source, (uint32_t)st.st_size, save_cfg, save_cfg_len);
 }
 
-static bool add_directory(struct romlist *l, const char *path)
+static bool add_directory(struct romlist *l, const char *name, unsigned source)
 {
-	if (l->directory_dir_count >= ROMLIST_DIR_MAX || l->dir_count >= ROMLIST_DIR_TOTAL_MAX ||
-	    l->count >= ROMLIST_ENTRIES_MAX)
+	for (uint32_t i = 0; i < l->count; i++)
+		if (l->e[i].kind == ROMLIST_DIRECTORY && !strcmp(romlist_name(&l->e[i]), name))
+			return true;
+	if (l->count >= ROMLIST_MAX)
 		return false;
-	size_t n = strlen(path);
-	if (n >= ROMLIST_PATH_MAX)
-		return false;
-	struct rom_entry *e = &l->e[l->count++];
+	struct rom_entry *e = &l->e[l->count];
 	memset(e, 0, sizeof *e);
-	memcpy(e->path, path, n + 1);
-	const char *slash = strrchr(path, '/');
-	e->name = (uint16_t)(slash ? slash + 1 - path : 0);
+	if (!add_name(l, name, e))
+		return false;
 	e->kind = ROMLIST_DIRECTORY;
+	e->source = (uint8_t)source;
+	l->count++;
 	l->dir_count++;
-	l->directory_dir_count++;
 	return true;
 }
 
-int romlist_scan_dir(struct romlist *l, const char *dir, const char *root, const char *save_cfg, size_t save_cfg_len)
+static bool scan_one(struct romlist *l, const char *dir, unsigned source, const char *save_cfg, size_t save_cfg_len)
 {
-	size_t dn = strlen(dir), rn = strlen(root);
-	if (dn >= sizeof l->directory || rn >= sizeof l->root)
-		return -1;
-	strcpy(l->directory, dir);
-	strcpy(l->root, root);
-	l->directory_rom_count = 0;
-	l->directory_dir_count = 0;
 	DIR *d = opendir(dir);
 	if (!d)
-		return -1;
-	if (strcmp(dir, root)) {
-		char parent[ROMLIST_PATH_MAX];
-		strcpy(parent, dir);
-		char *slash = strrchr(parent, '/');
-		if (slash && (size_t)(slash - parent) >= rn && !strncmp(parent, root, rn)) {
-			if (slash == parent + 2 && parent[1] == ':')
-				slash[1] = '\0';
-			else if (slash == parent)
-				slash[1] = '\0';
-			else
-				*slash = '\0';
-			if (l->count < ROMLIST_ENTRIES_MAX) {
-				struct rom_entry *e = &l->e[l->count++];
-				memset(e, 0, sizeof *e);
-				snprintf(e->path, sizeof e->path, "%s", parent);
-				e->name = (uint16_t)(strrchr(e->path, '/') ? strrchr(e->path, '/') + 1 - e->path : 0);
-				e->kind = ROMLIST_PARENT;
-			}
-		}
-	}
-	int added = 0;
+		return false;
 	struct dirent *de;
 	while ((de = readdir(d)) != NULL) {
 		const char *name = de->d_name;
@@ -202,7 +226,7 @@ int romlist_scan_dir(struct romlist *l, const char *dir, const char *root, const
 		if (stat(path, &st) != 0)
 			continue;
 		if (S_ISDIR(st.st_mode)) {
-			if (!add_directory(l, path))
+			if (!add_directory(l, name, source))
 				l->skipped++;
 			continue;
 		}
@@ -212,20 +236,61 @@ int romlist_scan_dir(struct romlist *l, const char *dir, const char *root, const
 			l->skipped++;
 			continue;
 		}
-		if (add_file_size(l, path, (uint32_t)st.st_size, save_cfg, save_cfg_len))
-			added++;
+		add_file_size(l, path, source, (uint32_t)st.st_size, save_cfg, save_cfg_len);
 	}
 	closedir(d);
-	return added;
+	return true;
 }
 
-const char *romlist_display_title(const struct rom_entry *e)
+int romlist_scan_sources(struct romlist *l, const char *const *roots, unsigned root_count, const char *relative,
+		 const char *save_cfg, size_t save_cfg_len)
 {
-	if (e->kind == ROMLIST_PARENT)
-		return "..";
-	if (e->kind == ROMLIST_DIRECTORY)
-		return romlist_name(e);
-	return e->title[0] && e->title_supported ? e->title : romlist_name(e);
+	if (!l || !roots || root_count > ROMLIST_SOURCES_MAX || strlen(relative) >= sizeof l->directory)
+		return -1;
+	l->count = l->rom_count = l->dir_count = l->skipped = l->strings_used = 0;
+	strcpy(l->directory, relative);
+	if (relative[0] && l->count < ROMLIST_MAX) {
+		struct rom_entry *e = &l->e[l->count];
+		memset(e, 0, sizeof *e);
+		if (add_name(l, "..", e)) {
+			e->kind = ROMLIST_PARENT;
+			l->count++;
+		}
+	}
+	int opened = 0;
+	for (unsigned i = 0; i < root_count; i++) {
+		char dir[ROMLIST_PATH_MAX];
+		int n = relative[0] ? snprintf(dir, sizeof dir, "%s/%s", roots[i], relative)
+				    : snprintf(dir, sizeof dir, "%s", roots[i]);
+		if (n < 0 || (size_t)n >= sizeof dir)
+			continue;
+		if (scan_one(l, dir, i, save_cfg, save_cfg_len))
+			opened++;
+	}
+	return opened ? (int)l->rom_count : -1;
+}
+
+int romlist_scan_dir(struct romlist *l, const char *dir, const char *root, const char *save_cfg, size_t save_cfg_len)
+{
+	const char *roots[] = { root };
+	char relative[ROMLIST_PATH_MAX] = "";
+	size_t rn = strlen(root);
+	if (!strncmp(dir, root, rn) && dir[rn] == '/')
+		snprintf(relative, sizeof relative, "%s", dir + rn + 1);
+	else if (strcmp(dir, root))
+		return -1;
+	return romlist_scan_sources(l, roots, 1, relative, save_cfg, save_cfg_len);
+}
+
+bool romlist_build_path(const struct romlist *l, const struct rom_entry *e, const char *const *roots,
+		unsigned root_count, char *path, size_t path_size)
+{
+	if (!l || !e || !roots || e->source >= root_count || e->kind == ROMLIST_PARENT)
+		return false;
+	const char *name = romlist_name(e);
+	int n = l->directory[0] ? snprintf(path, path_size, "%s/%s/%s", roots[e->source], l->directory, name)
+				: snprintf(path, path_size, "%s/%s", roots[e->source], name);
+	return n >= 0 && (size_t)n < path_size;
 }
 
 static enum romlist_order sort_order;
@@ -237,16 +302,20 @@ static int entry_cmp(const void *pa, const void *pb)
 			return a->kind == ROMLIST_PARENT ? -1 : 1;
 		return a->kind == ROMLIST_DIRECTORY ? -1 : 1;
 	}
-	if (a->kind != ROMLIST_ROM)
-		return casecmp(romlist_name(a), romlist_name(b));
-	if (sort_order == ROMLIST_ORDER_FILENAME) {
-		int d = casecmp(romlist_name(a), romlist_name(b));
-		return d ? d : strcmp(a->path, b->path);
+	const char *an = romlist_name(a), *bn = romlist_name(b);
+	if (a->kind != ROMLIST_ROM) {
+		int d = casecmp(an, bn);
+		return d ? d : (int)a->source - (int)b->source;
 	}
-	int d = casecmp(romlist_display_title(a), romlist_display_title(b));
+	if (sort_order == ROMLIST_ORDER_FILENAME) {
+		int d = casecmp(an, bn);
+		return d ? d : (int)a->source - (int)b->source;
+	}
+	int d = casecmp(a->title[0] && a->title_supported ? a->title : an,
+			b->title[0] && b->title_supported ? b->title : bn);
 	if (!d)
-		d = casecmp(romlist_name(a), romlist_name(b));
-	return d ? d : strcmp(a->path, b->path);
+		d = casecmp(an, bn);
+	return d ? d : (int)a->source - (int)b->source;
 }
 
 void romlist_sort(struct romlist *l, enum romlist_order order)
@@ -255,10 +324,11 @@ void romlist_sort(struct romlist *l, enum romlist_order order)
 	qsort(l->e, l->count, sizeof l->e[0], entry_cmp);
 }
 
-int romlist_find(const struct romlist *l, const char *path)
+int romlist_find(const struct romlist *l, const char *path, const char *const *roots, unsigned root_count)
 {
+	char candidate[ROMLIST_PATH_MAX];
 	for (uint32_t i = 0; i < l->count; i++)
-		if (!strcmp(l->e[i].path, path))
+		if (romlist_build_path(l, &l->e[i], roots, root_count, candidate, sizeof candidate) && !strcmp(candidate, path))
 			return (int)i;
 	return -1;
 }
