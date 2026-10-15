@@ -49,7 +49,7 @@ medido en este proyecto; **[est]** = estimado a partir de otros datos.
 | Unidad | Qué corre | Asignación | SPE libres del grupo de seis |
 |---|---|---|---:|
 | **PPE hilo 0** (emulación, prioridad 1000) | CPU VR4300 con el recompilador a PowerPC (más intérprete para lo raro), planificador de eventos, MI/PI/SI/AI/VI, arranque y sondeo de tareas del RSP, controles al PIF, copia de imagen del VI y ritmo (`pacer`). | Hilo residente | — |
-| **PPE hilo 1** (presentación, prioridad 1001) | Traducción de la salida de la HLE a comandos del RSX, presentación y DualShock 3. La salida de audio también se mezcla aquí. | Hilo residente | — |
+| **PPE hilo 1** (presentación, prioridad 1001) | Traducción de la salida de la HLE a comandos del RSX, presentación y DualShock 3. La salida de audio va aparte, en su propio hilo del PPE (~2 % del tiempo). | Hilo residente | — |
 | **SPE 0** | HLE gráfica: microcódigos con HLE, transformación de vértices, estado RDP, TMEM y texturas. | Trabajador residente mientras el juego está abierto; atiende una tarea gráfica a la vez. | — |
 | **SPE 1** | HLE de audio: mezcla, remuestreo, ADPCM y efectos. | Trabajador residente mientras el juego está abierto; atiende tareas de audio. | — |
 | **SPE 2–5** (pool de cuatro) | JPEG de fondos prerrenderizados; compresión LZ de estados guardados y caja negra; microcódigo RSP a bajo nivel (LLE/JIT) cuando está activo. | JPEG y RSP usan trabajadores residentes bajo demanda y publican tareas; la compresión LZ usa un trabajador durante el trabajo en segundo plano. | 4 libres en la configuración base; 3 con JPEG, 2 al añadir LZ o LLE, 1 si coinciden JPEG, LZ y LLE |

@@ -82,15 +82,23 @@ tests, update the baseline with `tools/test-roms.sh --actualizar` and say so
 in the commit.
 
 **RPCS3:** `tools/rpcs3-run.py` drives RPCS3 headless and waits for the
-program's `RESULTADO` line. Set the `RPCS3` environment variable to select
-the binary. You must install the PS3 firmware in RPCS3 yourself; it never goes
-into the repository. RPCS3 does not
+program's `RESULTADO` line. It currently assumes the macOS install
+(`/Applications/RPCS3.app`, logs in `~/Library/Caches/rpcs3`); the `RPCS3`
+environment variable overrides the binary. You must install the PS3 firmware
+in RPCS3 yourself; it never goes into the repository. RPCS3 does not
 reproduce the Cell's timing: **never draw conclusions about performance, SPE
 synchronization or the JIT from RPCS3.**
 
-**PS3 real (HEN o CFW):** consulta la documentación de compilación y uso
-para preparar la aplicación y recoger sus registros. No agregues direcciones
-de red ni datos personales al repositorio.
+**Real PS3 (HEN or CFW):**
+
+```sh
+tools/udplog.py                                        # receive the log over UDP (port 18194)
+PS3_IP=x.x.x.x tools/deploy-ps3.sh ps3load build/salsa64/salsa64.self
+PS3_IP=x.x.x.x tools/deploy-ps3.sh ftp build/salsa64/salsa64.pkg   # via webMAN MOD's FTP
+```
+
+`PS3_IP` can also live in `tools/ps3.conf`, which git ignores. The app also
+writes its log to `/dev_hdd0/salsa64/salsa64.log`.
 
 **Test packages:** give every test build of the emulator its own title (and,
 to keep it from replacing the installed release, its own `PROGRAM` and
@@ -128,15 +136,17 @@ include it in bug reports. Without git the version reads «desconocida».
 
 Goals, architecture and roadmap: [docs/proyecto.md](docs/proyecto.md).
 
-## Documentación y herramientas de trabajo
+## Documentation and working tools
 
-- La app de perfilado y el formato de sus sesiones se describen en
-  [docs/perfilado.md](docs/perfilado.md); para resumir una sesión se usa
-  `python3 tools/perfilado/perfilado.py resumen <archivo>`.
-- `tools/escenas-host.sh` ejecuta escenas reproducibles en el host y ayuda a
-  comprobar regresiones gráficas.
-- [docs/bibliotecas.md](docs/bibliotecas.md) explica `rsxkit` y `spukit`,
-  mantenidas en el repositorio mediante `git subtree`.
+- The profiling app and its session format are described in
+  [docs/perfilado.md](docs/perfilado.md) (Spanish); summarize a session with
+  `python3 tools/perfilado/perfilado.py resumen <file>`.
+- `tools/escenas-host.sh` runs reproducible scenes on the host (from your own
+  backups) and compares two builds image by image: use it before and after
+  any change to the graphics HLE.
+- [docs/bibliotecas.md](docs/bibliotecas.md) (Spanish) explains how `rsxkit`
+  and `spukit` are kept in `lib/` with `git subtree` and synced with their own
+  repositories.
 
 ## Commits and pull requests
 
