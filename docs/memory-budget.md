@@ -6,6 +6,15 @@ XDR disponibles; el resto es del sistema. Medido con HEN (docs/jit-ppe.md):
 datos y colas NOBITS) se descuentan de ahí. Cifras en MB; "medido" se llena
 en PS3 real.
 
+### Pila y local store del SPE 0
+
+En v0.2.6, la holgura de la pila del SPE 0 es **1968 bytes**; el mínimo
+operativo documentado es **1536 bytes**. La holgura de pila mide cuánto puede
+crecer la pila de llamadas antes de alcanzar su límite. El local store libre
+es otro dato: espacio que queda en los **256 KB** del SPE para código, datos y
+búferes DMA. Tener espacio libre en el local store no aumenta la holgura de
+la pila, y viceversa.
+
 ## Memoria principal (XDR)
 
 | Uso | Previsto | Medido | Notas |

@@ -448,7 +448,7 @@ recompila el conjunto vivo (~7000 bloques) a medida que se ejecuta.
 
 ### Código compacto: palabras por instrucción MIPS (2026-10-13)
 
-Medido en la PS3 el 2026-10-12 (docs/perf-log.md, «Perfil persistente y
+Medición del 2026-10-12 en la PS3 (docs/perf-log.md, «Perfil persistente y
 zona caliente»): juntar los bloques calientes en una zona contigua no cambia
 el costo del nativo; lo que manda es cuántas líneas de caché toca cada
 instrucción emulada. El volcado de GoldenEye hasta la presa
@@ -460,6 +460,15 @@ acceso a memoria (`sradi`, `ori`, `addi`, `clrldi`, `or`, `cmpdi`, `bne`,
 `clrldi`: 8 palabras más la carga y su `extsw`) y en la fría las constantes
 y saltos de los caminos lentos (`lis`/`ori` 30 %, `b`/`bl`/`bne` 31 %) y la
 escritura de los registros sucios antes de cada llamada a C (`std` 10 %).
+
+### Estado actual: Banjo-Tooie (sesión de perfilado de la regresión)
+
+El resumen de la sesión de Banjo-Tooie informa **12,9 palabras de PPC por
+instrucción MIPS en total y 5,8 calientes**, calculadas sobre bloques vivos
+sin ponderar por ejecución. La sesión registró **297 141 compilaciones** y
+**29 088 retraducciones (9,8 %)**. Corresponde a v0.2.5-91-gac22527, escala
+5× y filtro Ninguno; no es una medición de la rc1.
+
 Tres cambios, con `SALSA64_REC_OPT_WIDE` (`jit-ancho` en la PS3,
 `SALSA64_REC_WIDE=1` en el host) para medir contra el código de antes con
 el mismo binario:

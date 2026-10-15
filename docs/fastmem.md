@@ -1,5 +1,8 @@
 # Fastmem en el PPE: viabilidad y diseño
 
+> **Bloqueado en la PS3:** lv2 devuelve EINVAL (327) al pedir la notificación
+> de fallos de página; queda como investigación histórica.
+
 Fastmem es que un acceso a memoria de la N64 se traduzca a una carga o un
 almacenamiento del PPE con base + desplazamiento, sin comprobar antes el
 segmento, el tamaño de la RDRAM ni la alineación: la RDRAM vive en una

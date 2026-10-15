@@ -46,14 +46,20 @@ medido en este proyecto; **[est]** = estimado a partir de otros datos.
 
 ## 2. Asignación de Salsa64
 
-| Unidad | Qué corre | Fuente |
-|---|---|---|
-| **PPE hilo 0** (emulación, prioridad 1000) | CPU VR4300 con el recompilador a PowerPC (más intérprete para lo raro), planificador de eventos, MI/PI/SI/AI/VI, arranque y sondeo de las tareas del RSP hacia los SPEs, controles aplicados al PIF, copia de la imagen del VI (0,20 ms por campo), ritmo (`pacer`). La tarea JPEG de Zelda corrió aquí hasta el 2026-10-12 (68 ms por sala); ahora va a un SPE | `src/frontend/main.c`, docs/hilos-ppe.md |
-| **PPE hilo 1** (presentación, prioridad 1001) | Traducción de la salida de la HLE a comandos del RSX (`salsa64_rdp_flush`, 0,2–1,0 ms por tarea), `rsxkit_frame_begin/end` (flip en vsync), DualShock 3, sysutil, escritura del guardado, log, capturas. El hilo de audio (salida al puerto de audio de la PS3, 16 bloques de 256 muestras a 48 kHz) también cuelga del PPE | idem |
-| **SPE 0** | HLE gráfica: F3DEX2 y demás microcódigos, transformación de vértices, estado del RDP, cargas a la TMEM, hash y decodificación de texturas | `src/spu/gfx` |
-| **SPE 1** | HLE de audio (nead, ABI1, naudio con MP3): mezcla, remuestreo, ADPCM, efectos | `src/spu/audio` |
-| **SPE 2 a 5** | Uno corre la tarea JPEG de Zelda (`src/spu/jpeg`, desde el 2026-10-12; duerme en su mailbox el resto del tiempo). El prototipo de LLE del RSP usa otro solo cuando se activa con `lle`. Los demás, libres: pensados para decodificación de texturas y posprocesado (MLAA, xBR) | docs/proyecto.md, `src/spu/jpeg` |
-| **RSX** | Rasteriza lo que traduce el hilo 1: render interno a 3× (720p) o 4× (1080p), fragment programs generados en tiempo de ejecución, mezcla, z-buffer, escalado a la salida | `src/rdp`, `lib/rsxkit` |
+| Unidad | Qué corre | Asignación | SPE libres del grupo de seis |
+|---|---|---|---:|
+| **PPE hilo 0** (emulación, prioridad 1000) | CPU VR4300 con el recompilador a PowerPC (más intérprete para lo raro), planificador de eventos, MI/PI/SI/AI/VI, arranque y sondeo de tareas del RSP, controles al PIF, copia de imagen del VI y ritmo (`pacer`). | Hilo residente | — |
+| **PPE hilo 1** (presentación, prioridad 1001) | Traducción de la salida de la HLE a comandos del RSX, presentación y DualShock 3. La salida de audio también se mezcla aquí. | Hilo residente | — |
+| **SPE 0** | HLE gráfica: microcódigos con HLE, transformación de vértices, estado RDP, TMEM y texturas. | Trabajador residente mientras el juego está abierto; atiende una tarea gráfica a la vez. | — |
+| **SPE 1** | HLE de audio: mezcla, remuestreo, ADPCM y efectos. | Trabajador residente mientras el juego está abierto; atiende tareas de audio. | — |
+| **SPE 2–5** (pool de cuatro) | JPEG de fondos prerrenderizados; compresión LZ de estados guardados y caja negra; microcódigo RSP a bajo nivel (LLE/JIT) cuando está activo. | JPEG y RSP usan trabajadores residentes bajo demanda y publican tareas; la compresión LZ usa un trabajador durante el trabajo en segundo plano. | 4 libres en la configuración base; 3 con JPEG, 2 al añadir LZ o LLE, 1 si coinciden JPEG, LZ y LLE |
+| **RSX** | Rasteriza lo que traduce el hilo 1: render interno, fragment programs, mezcla, z-buffer y escalado a la salida. | Procesador dedicado | — |
+
+El grupo se inicializa con seis SPE disponibles para Salsa64. Los trabajadores
+de gráficos y audio ocupan dos; los otros cuatro forman el pool para JPEG,
+compresión y RSP a bajo nivel. En el modo HLE habitual, sin compresión en
+segundo plano ni LLE activo, quedan tres libres cuando el trabajador JPEG
+está iniciado, o cuatro si JPEG usa el PPE.
 
 La N64 va a 60 campos/s en NTSC, así que el presupuesto por campo es
 16,7 ms (el PAL sería 20 ms; ningún log reciente es PAL). Los juegos no

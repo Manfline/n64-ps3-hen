@@ -1,20 +1,48 @@
 # Compatibilidad
 
-Censo de los juegos objetivo (tabla de docs/proyecto.md) y algunos extra con
-`salsa64-run` en la Mac: intérprete, 3 minutos de consola (1,69e10 ciclos)
-sin tocar el control, RDRAM de 8 MB. Los ROMs son respaldos propios, fuera
-del repositorio; aquí solo hay datos de compatibilidad (códigos,
-microcódigos, direcciones).
+Censo de los juegos objetivo (tabla de docs/proyecto.md) y algunos extra. Los
+juegos se prueban con respaldos propios, fuera del repositorio; aquí solo hay
+datos de compatibilidad.
 
-Se repite con `tools/censo.sh rom...`: compila `salsa64-run` con el
-compilador de la Mac (el Docker de desarrollo no ve las carpetas de fuera del
-proyecto) y deja log e imágenes en `build/censo/`. Los textos, CRC y palabras
-de identificación de los microcódigos salen de `--trace-rsp`.
+Las entradas antiguas conservan sus métodos de prueba como historia.
+
+## 2026-10-15 — Censo en la PS3 real (v0.2.6)
+
+Regresión de la versión candidata y comprobación de la rc1 en la PS3 real.
+La rc1 abrió más de 15 juegos en varias corridas; la tabla recoge los títulos
+con resultado o incidencia documentados. Sin una medición explícita no se
+asigna velocidad.
+
+| Juego | Estado | Velocidad | Notas |
+|---|---|---:|---|
+| Banjo-Tooie | Jugable | 59,7 campos/s de mediana en la sesión de perfilado | Prueba larga; escenas pesadas limitadas por el camino lento del recompilador. |
+| F-Zero X | Jugable; carrera y «SELECT COURSE» superados | — | A 5×. Quedan objetos del fondo dibujados sobre la pista. |
+| Pokémon Snap | Jugable | — | Orden de dibujo incorrecto: la correa de la mochila queda delante y la playa delante de las montañas. |
+| Zelda: Ocarina of Time | Jugable | — | Se probaron salas con fondos prerrenderizados; el registro de la sesión informa 149–150 fondos S2DEX por ventana. |
+| GoldenEye 007 | Jugable | — | Incluido en la regresión; sin medición de velocidad atribuible a esta prueba en el censo. |
+| Perfect Dark | Jugable | — | Incluido en la regresión; sin medición de velocidad atribuible a esta prueba en el censo. |
+| Kirby 64 | Jugable | — | Incluido en la regresión. |
+| Mario Kart 64 | Jugable | — | Se verificó la interpolación. |
+| Conker's Bad Fur Day | Abre después de otros juegos | — | Se comprobó la apertura de una ROM grande fuera del heap. |
+| Super Mario Odyssey 64 | Inestable | — | Se registró una caída durante una prueba anterior de interpolación; queda pendiente una causa. |
+| Star Fox 64 | Jugable, con fallo gráfico | — | Las opciones del menú se repiten. |
+| Wave Race 64 | Fallo gráfico | — | Las texturas aparecen «como rayos desde el centro». |
+| Yoshi's Story | No funciona | — | Fallo conocido. |
+| FIFA 99 | La intro funciona; el partido no arranca | — | Fallo conocido. |
+| Banjo-Kazooie | Jugable, con fallo gráfico | — | Las piezas del rompecabezas salen negras. |
+| Diddy Kong Racing | No jugable | — | Sin HLE de su microcódigo gráfico. |
+| Indiana Jones | No jugable | — | Sin HLE de su microcódigo gráfico. |
+| Star Wars: Rogue Squadron | No jugable | — | Sin HLE de su microcódigo gráfico. |
+| Resident Evil 2 | No jugable | — | Sin HLE de su microcódigo gráfico. |
+
+Las pruebas de rendimiento detalladas de Banjo-Tooie corresponden a la sesión
+de perfilado indicada en [docs/perf-log.md](perf-log.md); no representan una
+mediana de la rc1.
 
 ## 2026-10-12 — Censo en la PS3 real (v0.2.0 a v0.2.5)
 
-PS3 con HEN, respaldos NTSC (EE. UU.), salida a 1080p con escala 5×. Es la
-lista vigente; las secciones de abajo son censos anteriores en la Mac.
+PS3 con HEN, respaldos NTSC, salida a 1080p con escala 5×. Este censo queda
+como antecedente; el de 2026-10-15 es el más reciente.
 
 | Juego | Estado | Notas |
 |---|---|---|
