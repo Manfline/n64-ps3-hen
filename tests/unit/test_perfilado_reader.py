@@ -43,6 +43,39 @@ class SessionReaderTest(unittest.TestCase):
         self.assertIn("Camino lento por causa", out.getvalue())
         self.assertIn("Compilaciones por motivo", out.getvalue())
 
+    def test_fpu_record_and_old_session(self):
+        # ADD.S (índice 0): 4 llamadas, 2 por RM y 2 por resultado; MUL.D (64+2): 1 por inexacto.
+        body = struct.pack(">IHHI", 9000, 2, 4, 0)
+        body += struct.pack(">IQ", 5, 798000) + struct.pack(">IQ", 0, 0)
+        body += struct.pack(">I", 16)
+        for k in range(16):
+            body += struct.pack(">IQI", 0x80004000 if k == 0 else 0, 79800 if k == 0 else 0, 7 if k == 0 else 0)
+        body += struct.pack(">HHQ4I", 0, 0, 79800 * 4, 2, 0, 0, 2)
+        body += struct.pack(">HHQ4I", 66, 0, 79800, 0, 1, 0, 0)
+        with tempfile.NamedTemporaryFile() as f:
+            f.write(b"S64P" + struct.pack(">HHQ", 1, 16, 0) + record(17, body))
+            f.flush()
+            ses = PERFILADO.Session(f.name)
+        self.assertEqual(ses.fpu["entradas"][66]["razones"], [0, 1, 0, 0])
+        self.assertEqual(ses.fpu["pcs"][0]["pc"], 0x80004000)
+        out = io.StringIO()
+        PERFILADO.summary(ses, out)
+        text = out.getvalue()
+        self.assertIn("FPU al intérprete por instrucción", text)
+        self.assertIn("ADD.S", text)
+        self.assertIn("MUL.D", text)
+        self.assertIn("FPU al intérprete por razón", text)
+        self.assertEqual(PERFILADO.fpu_name(2 * 64 + 0x20), "CVT.S.W")
+        self.assertEqual(PERFILADO.fpu_name(13), "TRUNC.W.S")
+        # Una sesión sin el registro (formato viejo) no imprime la tabla.
+        with tempfile.NamedTemporaryFile() as f:
+            f.write(b"S64P" + struct.pack(">HHQ", 1, 16, 0))
+            f.flush()
+            old = PERFILADO.Session(f.name)
+        out = io.StringIO()
+        PERFILADO.summary(old, out)
+        self.assertNotIn("FPU al intérprete", out.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

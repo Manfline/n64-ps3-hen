@@ -292,6 +292,7 @@ void perf_app_close_rec(struct salsa64_rec *rec, struct salsa64_rec_sample *samp
 		unsigned len = salsa64_rec_trace_take(rec, true);
 		if (len && perf_room(&perf.ses))
 			perf_put_trace(&perf.emu, ms, perf.trace_field0, rec->trace->win_cycles, rec->trace, len);
+		perf_put_fpu(&perf.emu, ms, rec->trace);
 		salsa64_rec_trace_fold_all(rec);
 		if (rec->trace->jr)
 			perf_put_jr(&perf.emu, ms, rec->trace);

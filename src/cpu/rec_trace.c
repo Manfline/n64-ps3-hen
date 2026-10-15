@@ -89,6 +89,45 @@ unsigned salsa64_rec_trace_exception_class(unsigned e)
 	}
 }
 
+unsigned salsa64_rec_trace_fpu_index(uint32_t i)
+{
+	switch (I_FMT(i)) {
+	case 16: return 0 * 64 + I_FUNCT(i);
+	case 17: return 1 * 64 + I_FUNCT(i);
+	case 20: return 2 * 64 + I_FUNCT(i);
+	case 21: return 3 * 64 + I_FUNCT(i);
+	case 0: return SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_MFC1;
+	case 1: return SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_DMFC1;
+	case 2: return SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_CFC1;
+	case 4: return SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_MTC1;
+	case 5: return SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_DMTC1;
+	case 6: return SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_CTC1;
+	case 8: return SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_BC1;
+	default: return SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_OTHER;
+	}
+}
+
+unsigned salsa64_rec_trace_fpu_reason(uint32_t fcr31)
+{
+	if (fcr31 & 3u)
+		return SALSA64_RT_FPU_R_RM;
+	if (fcr31 & 0x80u)
+		return SALSA64_RT_FPU_R_INEXACT;
+	if (fcr31 & 0xF00u)
+		return SALSA64_RT_FPU_R_ENABLED;
+	return SALSA64_RT_FPU_R_RESULT;
+}
+
+void salsa64_rec_trace_fpu_add(struct salsa64_rec_trace *t, uint32_t instr, uint32_t fcr31, uint32_t status,
+			       uint64_t ticks)
+{
+	unsigned k = salsa64_rec_trace_fpu_index(instr), fr = (status & SALSA64_ST_FR) != 0;
+	t->fpu.ticks[k] += ticks;
+	t->fpu.calls[k][salsa64_rec_trace_fpu_reason(fcr31)]++;
+	t->fpu.fr_calls[fr]++;
+	t->fpu.fr_ticks[fr] += ticks;
+}
+
 void salsa64_rec_trace_slow_add(struct salsa64_rec_trace *t, unsigned cause, uint64_t ticks, uint32_t pc)
 {
 	if (!t || cause >= SALSA64_RT_SLOW_N)
@@ -99,19 +138,17 @@ void salsa64_rec_trace_slow_add(struct salsa64_rec_trace *t, unsigned cause, uin
 	t->slow_field.calls[cause]++;
 	if (!pc)
 		return;
-	unsigned slot = SALSA64_RT_TOP_PC;
+	/* Space-Saving: con la tabla llena, el PC nuevo ocupa la entrada con
+	 * menos ticks y hereda sus ticks y llamadas (cotas superiores). */
+	unsigned slot = SALSA64_RT_TOP_PC, min = 0;
 	for (unsigned k = 0; k < SALSA64_RT_TOP_PC; k++) {
-		if (t->slow.top[k].pc == pc) { slot = k; break; }
-		if (!t->slow.top[k].pc) { slot = k; break; }
-		if (slot == SALSA64_RT_TOP_PC && t->slow.top[k].ticks < t->slow.top[slot - 1].ticks)
-			slot = k;
+		if (t->slow.top[k].pc == pc || !t->slow.top[k].pc) { slot = k; break; }
+		if (t->slow.top[k].ticks < t->slow.top[min].ticks)
+			min = k;
 	}
 	if (slot == SALSA64_RT_TOP_PC)
-		return;
-	if (t->slow.top[slot].pc != pc && t->slow.top[slot].ticks > ticks)
-		return;
-	if (t->slow.top[slot].pc != pc)
-		t->slow.top[slot] = (struct salsa64_rec_trace_slow_pc){ .pc = pc };
+		slot = min;
+	t->slow.top[slot].pc = pc;
 	t->slow.top[slot].ticks += ticks;
 	t->slow.top[slot].calls++;
 }

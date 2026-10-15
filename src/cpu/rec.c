@@ -192,6 +192,7 @@ REC_UNUSED static void rec_h_exec(struct salsa64_cpu *cpu, uint32_t instr)
 	struct salsa64_rec_trace *trace = rec->trace;
 	uint64_t tt = trace ? salsa64_rec_trace_now() : 0;
 	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0;
+	uint32_t fcr0 = trace ? cpu->fcr31 : 0, st0 = trace ? (uint32_t)cpu->status : 0;
 	rec->stats.exec_calls++;
 	salsa64_vr4300_exec_one(cpu, instr);
 	if (I_OP(instr) == 0x10) {
@@ -205,9 +206,12 @@ REC_UNUSED static void rec_h_exec(struct salsa64_cpu *cpu, uint32_t instr)
 	}
 	if (prof)
 		salsa64_rec_prof_add(prof, exec_cause(instr), salsa64_rec_prof_now() - t0);
-	if (trace)
-		salsa64_rec_trace_slow_add(trace, salsa64_rec_trace_exec_class(instr),
-				  salsa64_rec_trace_now() - tt, (uint32_t)cpu->cur_pc);
+	if (trace) {
+		uint64_t dt = salsa64_rec_trace_now() - tt;
+		salsa64_rec_trace_slow_add(trace, salsa64_rec_trace_exec_class(instr), dt, (uint32_t)cpu->cur_pc);
+		if (I_OP(instr) == 0x11)
+			salsa64_rec_trace_fpu_add(trace, instr, fcr0, st0, dt);
+	}
 }
 
 /* TLBWI/TLBWR desde el código generado (rec_emit_ext.h, emit_tlbw): la
