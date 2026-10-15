@@ -671,7 +671,25 @@ void menu_controls_open(struct menu *m, bool for_game)
 static enum menu_action controls_buttons(struct menu *m, uint32_t pressed)
 {
 	if (m->control_capture) {
+		if (pressed & BIT(SALSA64_DS3_START)) {
+			m->control_capture = false;
+			m->status[0] = '\0';
+			return MENU_NONE;
+		}
+		if (pressed & BIT(SALSA64_DS3_SELECT)) {
+			m->controls.source[m->control_sel] = SALSA64_DS3_NONE;
+			m->controls.source2[m->control_sel] = SALSA64_DS3_NONE;
+			m->control_capture = false;
+			if (m->control_for_game) {
+				m->game.controls.source[m->control_sel] = SALSA64_DS3_NONE;
+				m->game.controls.source2[m->control_sel] = SALSA64_DS3_NONE;
+			} else m->global_controls = m->controls;
+			m->status[0] = '\0';
+			return MENU_CONTROLS_CHANGED;
+		}
 		for (unsigned b = 0; b < SALSA64_DS3_NBUTTONS; b++) {
+			if (b == SALSA64_DS3_START)
+				continue;
 			if (pressed & BIT(b)) {
 				m->controls.source[m->control_sel] = (uint8_t)b;
 				m->controls.source2[m->control_sel] = SALSA64_DS3_NONE;
@@ -822,7 +840,8 @@ enum menu_action menu_input(struct menu *m, uint32_t buttons, uint64_t now_us)
 		pressed &= updown;
 		buttons &= updown;
 	} else if (m->page == MENU_PAGE_CONTROLS) {
-		enum menu_action a = controls_buttons(m, pressed & ~updown);
+		uint32_t control_pressed = m->control_capture ? pressed : pressed & ~updown;
+		enum menu_action a = controls_buttons(m, control_pressed);
 		if (a != MENU_NONE || m->page != MENU_PAGE_CONTROLS || m->control_capture) {
 			m->rep_button = 0;
 			return a;
@@ -1397,10 +1416,12 @@ static void panel(const struct menu *m, float W, float H, float a)
 		y += 58.0f;
 		stext(x, y, tr(control_row_title(m->control_sel)), 1.6f, C_DIM, a, 0);
 		stext(x, y + 30.0f, control_button_value(m, m->control_sel), 2.0f, C_ACCENT, a, 0);
-		if (m->control_capture)
-			stext(x, py + ph - 52.0f, tr("Pulsa botón DS3"), 1.35f, C_WARN, a, 0);
-		else if (m->control_sel == MENU_CONTROL_STICK)
+		if (m->control_capture) {
+			stext(x, py + ph - 70.0f, tr("Pulsa botón DS3"), 1.35f, C_WARN, a, 0);
+			stext(x, py + ph - 42.0f, tr("START cancela · SELECT sin asignar"), 1.2f, C_DIM, a, 0);
+		} else if (m->control_sel == MENU_CONTROL_STICK) {
 			stext(x, py + ph - 52.0f, tr("× alterna el stick analógico"), 1.35f, C_DIM, a, 0);
+		}
 		return;
 	}
 

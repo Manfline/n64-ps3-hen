@@ -464,6 +464,15 @@ static void padmap_config(void)
 	CHECK_EQ(m.deadzone, 0);
 	CHECK_EQ(m.range, 127);
 	CHECK_EQ(m.c_threshold, 30);
+	char saved[512];
+	int saved_len = salsa64_padmap_format(&m, saved, sizeof saved, 0);
+	CHECK(saved_len > 0 && saved_len < (int)sizeof saved);
+	struct salsa64_padmap reloaded;
+	salsa64_padmap_default(&reloaded);
+	CHECK_EQ(salsa64_padmap_parse(&reloaded, saved, (size_t)saved_len, NULL, 0), 0);
+	CHECK_EQ(reloaded.deadzone, 0);
+	CHECK_EQ(reloaded.range, 127);
+	CHECK_EQ(reloaded.c_threshold, 30);
 
 	struct salsa64_ds3 in = ds3(DS3(R2) | DS3(CIRCLE) | DS3(SELECT) | DS3(SQUARE) | DS3(L2),
 				    128, 128, 128, 128);

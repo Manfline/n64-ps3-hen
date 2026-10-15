@@ -616,6 +616,39 @@ static void menu_controls(void)
 	m.control_sel = MENU_CONTROL_RESET;
 	CHECK_EQ(menu_input(&m, CROSS, 14), MENU_CONTROLS_CHANGED);
 	CHECK_EQ(m.global_controls.source[SALSA64_IN_A], SALSA64_DS3_CROSS);
+	menu_input(&m, 0, 15);
+	/* La cruceta arriba se captura para D↑ sin mover la selección. */
+	m.global_controls.source[SALSA64_IN_D_UP] = SALSA64_DS3_CROSS;
+	m.controls = m.global_controls;
+	m.control_sel = SALSA64_IN_D_UP;
+	menu_input(&m, CROSS, 16);
+	CHECK(m.control_capture);
+	menu_input(&m, 0, 17);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_UP), 18), MENU_CONTROLS_CHANGED);
+	CHECK_EQ(m.control_sel, SALSA64_IN_D_UP);
+	CHECK_EQ(m.global_controls.source[SALSA64_IN_D_UP], SALSA64_DS3_UP);
+
+	/* START cancela sin cambiar; SELECT limpia el destino y no se asigna. */
+	menu_input(&m, 0, 19);
+	m.global_controls.source[SALSA64_IN_A] = SALSA64_DS3_TRIANGLE;
+	m.controls = m.global_controls;
+	m.control_sel = SALSA64_IN_A;
+	menu_input(&m, CROSS, 20);
+	menu_input(&m, 0, 21);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_START), 22), MENU_NONE);
+	CHECK(!m.control_capture);
+	CHECK_EQ(m.global_controls.source[SALSA64_IN_A], SALSA64_DS3_TRIANGLE);
+	menu_input(&m, 0, 23);
+	menu_input(&m, CROSS, 24);
+	menu_input(&m, 0, 25);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_SELECT), 26), MENU_CONTROLS_CHANGED);
+	CHECK_EQ(m.global_controls.source[SALSA64_IN_A], SALSA64_DS3_NONE);
+	menu_input(&m, 0, 27);
+	m.control_sel = MENU_CONTROL_RESET;
+	CHECK_EQ(menu_input(&m, CROSS, 28), MENU_CONTROLS_CHANGED);
+	CHECK_EQ(m.global_controls.source[SALSA64_IN_A], SALSA64_DS3_CROSS);
+
+	menu_input(&m, 0, 29);
 
 	menu_game_default(&m.game);
 	m.game.controls.source[SALSA64_IN_A] = SALSA64_DS3_R2;

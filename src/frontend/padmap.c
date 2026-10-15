@@ -117,6 +117,14 @@ int salsa64_padmap_format(const struct salsa64_padmap *map, char *buf, size_t si
 			return -1;
 		used += (size_t)n;
 	}
+	if (!overrides_only) {
+		int n = snprintf(buf + used, size - used,
+				 "zona_muerta = %u\nrango = %u\numbral_c = %u\n",
+				 map->deadzone, map->range, map->c_threshold);
+		if (n < 0 || (size_t)n >= size - used)
+			return -1;
+		used += (size_t)n;
+	}
 	return (int)used;
 }
 
