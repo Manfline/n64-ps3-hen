@@ -4,6 +4,65 @@ All notable changes to Salsa64. Speeds are measured on a real PS3 (HEN,
 NTSC backups); `docs/perf-log.md` has the detailed numbers and
 `docs/estado.md` the work log (both in Spanish).
 
+## [0.2.6] — 2026-10-15
+
+### Added
+- **Banjo-Tooie is playable:** the PIF now answers the game's CIC-6105
+  challenge, which it uses to unlock its data.
+- **F-Zero X races:** the game probes the 64DD (open bus on the cartridge
+  port) and switches graphics microcode in the middle of every frame; both
+  are handled, so the cars, the HUD and the cars' highlights (F-Zero's own
+  F3DFLX microcode, alpha from a lookup table) are drawn.
+- **Frame interpolation (experimental, off by default):** games that run at
+  20 or 30 fps can show in-between frames rebuilt from the geometry, for
+  smoother motion. «Interpolación: Por geometría (exp.)» in Options, per
+  game, or live from «Imagen» in the pause menu. It looks best at 3× / 720p.
+- **○ in the game list exits to the XMB**, with a confirmation, so you no
+  longer need to scroll to the end of a long list.
+- **Version, title and APPID** shown in the menu, the pause menu and the
+  first line of the log (handy for bug reports).
+- **Conker's shadows** (render to an 8-bit texture), **Pokémon Snap** (exact
+  primitive depth, leaves with alpha threshold), **Kirby 64** (enemies were
+  missing their bodies; S2DEX palettes) and **Pokémon Stadium 2** (its JPEG
+  images).
+- **Black box** for bug reports (SELECT + L2 with the `cajanegra` file): the
+  last graphics tasks and frames, compressed in the background.
+- **CFW fallback:** if the CPU recompiler cannot run generated code on a
+  console (issue #2), Salsa64 falls back to the interpreter instead of
+  hanging.
+
+### Fixed
+- **Console freeze in F-Zero X** at 5× (course selection): an off-screen
+  scissor went past the RSX limit. Also, no wait on the GPU can be endless
+  any more: after 2 s the log says what is stuck, the PS button keeps
+  working, and after 12 s the game saves and closes on its own.
+- **Large ROMs (40–64 MB) failed to open** («No se pudo leer») after playing
+  other games in the same session: Conker, Paper Mario, Pokémon Stadium 2,
+  Smash Remix, Resident Evil 2. The ROM now goes outside the fragmented heap.
+- **Star Fox 64:** coloured noise at the top during the «Nintendo presents»
+  logo.
+- **Super Mario Odyssey 64 (hack)** ran far too fast (an unusual VI_V_SYNC).
+- **Interpolation turned on mid-game** no longer slows the graphics SPE down
+  (stretched audio in heavy scenes).
+
+### Faster
+- CPU recompiler: compact FPU code, a cached base register for memory
+  accesses and a JR/JALR target cache (GoldenEye and Perfect Dark 2–8 %
+  faster in the heaviest scenes).
+
+### Known issues
+- F-Zero X: some background objects are drawn over the track (shading
+  interpolation after clipping; to be fixed in a later version).
+- Diddy Kong Racing, Indiana Jones, Rogue Squadron and Resident Evil 2 do
+  not run yet (their graphics microcode has no HLE); low-level RSP emulation
+  is in progress.
+- Super Mario Odyssey 64 may crash after a while (under investigation; the
+  log now records what overwrote the code).
+- GoldenEye: thin blue lines at some seams. An experimental fix (drawing the
+  anti-aliased edges) is included but off by default, because on real
+  hardware it made some model polygons overlap; the `aristas-aa` file turns
+  it on.
+
 ## [0.2.5] — 2026-10-13
 
 ### Fixed

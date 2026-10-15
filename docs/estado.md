@@ -1,5 +1,23 @@
 # Estado
 
+## 2026-10-15 — v0.2.6 publicada
+
+La rc1 (v0.2.5-117-g183a275, app normal SLSA00064) se probó en la PS3 real:
+más de 15 juegos en varias corridas, entre ellos Conker y Super Mario Odyssey
+64 abiertos después de otros (ROM fuera del heap), F-Zero X a 5× pasando
+«SELECT COURSE» y en carrera, Zelda con los fondos de las salas
+prerrenderizadas (149–150 fondos de S2DEX por ventana), Perfect Dark,
+GoldenEye, Pokémon Snap, Kirby 64, Banjo-Tooie y Mario Kart 64 con la
+interpolación; ROMs desde `/dev_hdd0/salsa64` y desde una USB. Ninguna
+espera larga al RSX, ninguna ROM sin leer. Sale como v0.2.6 sin cambios de
+código respecto a la rc1 (solo CHANGELOG, README y compatibilidad).
+
+Queda para después: el fondo blanco de F-Zero X sobre la pista (sombra afín
+del RDP tras el recorte, rama aparte), la caída de Super Mario Odyssey 64
+(con su línea nueva del recompilador en el log), el camino lento de los
+juegos de Rare (35–60 % del tiempo en las escenas pesadas de Banjo-Tooie) y
+el JIT del RSP para los juegos sin HLE.
+
 ## 2026-10-14 — La interpolación cambiada en vivo: Mario Kart 64 sin música y Super Odyssey 64 caído (paquete «Salsa64 perfil», interp)
 
 En la regresión de la v0.2.6 en la PS3 real («perfil 3» y «perfil 5») el

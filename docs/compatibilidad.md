@@ -32,7 +32,7 @@ lista vigente; las secciones de abajo son censos anteriores en la Mac.
 | Super Smash Bros. (y Smash Remix) | velocidad completa | desde v0.2.4 pasa los KO y el Castillo de Hyrule se ve bien (confirmado en la PS3 real); en v0.2.3 y anteriores se congelaba en el primer KO (`/dev_hdd0/salsa64/fbfx.cfg` con un `1` lo evitaba) |
 | Doom 64 | ~40 % | limitado por el CPU |
 | Banjo-Tooie | jugable en la PS3 (primera prueba) | desafío del CIC 6105 de la PIF; confirmado en la PS3 real el 2026-10-13 |
-| F-Zero X | carrera completa en el host (auto, pista y HUD) | bus abierto del PI (sondeo del 64DD) y el microcódigo que recarga a mitad de lista (F3DEX → F3DFLX.Rej, ya interpretado); por confirmar en la PS3 |
+| F-Zero X | jugable en la PS3 (v0.2.6) | bus abierto del PI (sondeo del 64DD), el microcódigo que recarga a mitad de lista (F3DEX → F3DFLX) y los brillos de los autos por tabla; a 5× se colgaba en «SELECT COURSE» hasta la v0.2.6; quedan objetos del fondo pintados sobre la pista (sombra afín del RDP tras el recorte) |
 | Diddy Kong Racing | pantalla negra | microcódigo propio de Rare; en desarrollo con el RSP a bajo nivel |
 | Indiana Jones, Resident Evil 2 | no jugables | microcódigos de Factor 5 / Capcom |
 
