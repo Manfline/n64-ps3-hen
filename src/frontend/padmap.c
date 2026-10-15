@@ -58,6 +58,66 @@ void salsa64_padmap_default(struct salsa64_padmap *map)
 	map->deadzone = 12;
 	map->range = 80;      /* lo que da un control original a fondo */
 	map->c_threshold = 64;
+	map->stick_source = SALSA64_STICK_LEFT;
+}
+
+void salsa64_padmap_inherit(struct salsa64_padmap *map)
+{
+	memset(map->source, SALSA64_DS3_INHERIT, sizeof map->source);
+	memset(map->source2, SALSA64_DS3_INHERIT, sizeof map->source2);
+	map->deadzone = map->range = map->c_threshold = SALSA64_DS3_INHERIT;
+	map->stick_source = SALSA64_STICK_INHERIT;
+}
+
+void salsa64_padmap_overlay(struct salsa64_padmap *base, const struct salsa64_padmap *overrides)
+{
+	for (int i = 0; i < SALSA64_IN_COUNT; i++) {
+		if (overrides->source[i] != SALSA64_DS3_INHERIT) {
+			base->source[i] = overrides->source[i];
+			base->source2[i] = overrides->source2[i];
+		}
+	}
+	if (overrides->stick_source != SALSA64_STICK_INHERIT)
+		base->stick_source = overrides->stick_source;
+}
+
+const char *salsa64_padmap_button_name(unsigned button)
+{
+	return button < SALSA64_DS3_NBUTTONS ? ds3_names[button] : "NADA";
+}
+
+int salsa64_padmap_format(const struct salsa64_padmap *map, char *buf, size_t size, int overrides_only)
+{
+	size_t used = 0;
+	if (!size)
+		return 0;
+	buf[0] = '\0';
+	for (int k = 0; k < SALSA64_IN_COUNT; k++) {
+		if (overrides_only && map->source[k] == SALSA64_DS3_INHERIT)
+			continue;
+		const char *name = map->source[k] == SALSA64_DS3_NONE ? "NADA" : salsa64_padmap_button_name(map->source[k]);
+		int n = snprintf(buf + used, size - used, "%s = %s", n64_inputs[k].name, name);
+		if (n < 0 || (size_t)n >= size - used)
+			return -1;
+		used += (size_t)n;
+		if (map->source[k] < SALSA64_DS3_NBUTTONS && map->source2[k] < SALSA64_DS3_NBUTTONS) {
+			n = snprintf(buf + used, size - used, " %s", salsa64_padmap_button_name(map->source2[k]));
+			if (n < 0 || (size_t)n >= size - used)
+				return -1;
+			used += (size_t)n;
+		}
+		if (used + 2 >= size)
+			return -1;
+		buf[used++] = '\n'; buf[used] = '\0';
+	}
+	if (!overrides_only || map->stick_source != SALSA64_STICK_INHERIT) {
+		int n = snprintf(buf + used, size - used, "STICK = %s\n",
+				 map->stick_source == SALSA64_STICK_RIGHT ? "DERECHO" : "IZQUIERDO");
+		if (n < 0 || (size_t)n >= size - used)
+			return -1;
+		used += (size_t)n;
+	}
+	return (int)used;
 }
 
 /* Un eje del stick izquierdo: 0–255 del DS3 → ±range, con zona muerta. */
@@ -98,8 +158,10 @@ void salsa64_padmap_apply(const struct salsa64_padmap *map, const struct salsa64
 
 	unsigned dz = map->deadzone > DEADZONE_MAX ? DEADZONE_MAX : map->deadzone;
 	out->buttons = b;
-	out->x = stick_axis(in->lx, 0, dz, map->range);
-	out->y = stick_axis(in->ly, 1, dz, map->range);
+	uint8_t sx = map->stick_source == SALSA64_STICK_RIGHT ? in->rx : in->lx;
+	uint8_t sy = map->stick_source == SALSA64_STICK_RIGHT ? in->ry : in->ly;
+	out->x = stick_axis(sx, 0, dz, map->range);
+	out->y = stick_axis(sy, 1, dz, map->range);
 	out->connected = 1;
 }
 
@@ -200,6 +262,12 @@ static int parse_line(struct salsa64_padmap *map, const char *line, size_t n)
 		return parse_number(val, vlen, 1, 127, &map->range);
 	if (same_word(key, klen, "UMBRAL_C"))
 		return parse_number(val, vlen, 1, 127, &map->c_threshold);
+	if (same_word(key, klen, "STICK")) {
+		if (same_word(val, vlen, "IZQUIERDO")) map->stick_source = SALSA64_STICK_LEFT;
+		else if (same_word(val, vlen, "DERECHO")) map->stick_source = SALSA64_STICK_RIGHT;
+		else return 0;
+		return 1;
+	}
 
 	for (int k = 0; k < SALSA64_IN_COUNT; k++) {
 		if (!same_word(key, klen, n64_inputs[k].name))

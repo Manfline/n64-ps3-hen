@@ -32,6 +32,7 @@
 #include <stddef.h>
 
 #include "cheats.h"
+#include "padmap.h"
 #include "romlist.h"
 
 #define MENU_REPEAT_DELAY_US      400000u
@@ -54,6 +55,8 @@ enum menu_action {
 	MENU_GAME_CHANGED, /* cambió un ajuste de ese juego: guardarlo */
 	MENU_DOWNLOAD,  /* «Descargar»: carátulas o trucos (menu.dl_what) */
 	MENU_REFRESH,   /* volver a leer la carpeta visible */
+	MENU_CONTROLS,  /* abrir la página de remapeo */
+	MENU_CONTROLS_CHANGED, /* guardar el mapeo editado */
 };
 
 /* Recorte del overscan (SALSA64_DATA_DIR/overscan.cfg, ver main.c). */
@@ -117,9 +120,10 @@ struct menu_game {
 	int scale;     /* -1, 0 (automática) o 1 .. MENU_SCALE_MAX: escala interna */
 	int density;   /* -1 o enum menu_density (solo con la máscara) */
 	int interp;    /* -1 o enum menu_interp */
+	struct salsa64_padmap controls; /* asignaciones propias; INHERIT usa el global */
 };
 /* MENU_GAME_DENSITY solo es una fila si el filtro que vale es la máscara. */
-enum { MENU_GAME_ASPECT, MENU_GAME_FILTER, MENU_GAME_DENSITY, MENU_GAME_OVERSCAN, MENU_GAME_SCALE, MENU_GAME_INTERP,
+enum { MENU_GAME_ASPECT, MENU_GAME_FILTER, MENU_GAME_DENSITY, MENU_GAME_OVERSCAN, MENU_GAME_SCALE, MENU_GAME_INTERP, MENU_GAME_CONTROLS,
        MENU_GAME_BACK, MENU_GAME_ROWS };
 #define MENU_SCALE_MAX 5
 
@@ -143,10 +147,15 @@ struct menu_settings {
 	int rom_order;  /* enum menu_rom_order («orden = titulo|archivo») */
 };
 
-enum { MENU_PAGE_GAMES, MENU_PAGE_OPTIONS, MENU_PAGE_CHEATS, MENU_PAGE_GAME };
+enum { MENU_PAGE_GAMES, MENU_PAGE_OPTIONS, MENU_PAGE_CHEATS, MENU_PAGE_GAME, MENU_PAGE_CONTROLS };
 enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_ASPECT, MENU_OPT_FILTER, MENU_OPT_DENSITY, MENU_OPT_RESOLUTION,
        MENU_OPT_SCALE, MENU_OPT_APPLY, MENU_OPT_INTERP, MENU_OPT_FPS, MENU_OPT_CONFIRM, MENU_OPT_LANG,
-       MENU_OPT_ROM_ORDER, MENU_OPT_DL_COVERS, MENU_OPT_DL_CHEATS, MENU_OPT_REFRESH, MENU_OPT_BACK, MENU_OPTS };
+       MENU_OPT_ROM_ORDER, MENU_OPT_DL_COVERS, MENU_OPT_DL_CHEATS, MENU_OPT_REFRESH, MENU_OPT_CONTROLS, MENU_OPT_BACK, MENU_OPTS };
+#define MENU_CONTROL_SCOPE 14
+#define MENU_CONTROL_STICK 15
+#define MENU_CONTROL_RESET 16
+#define MENU_CONTROL_BACK 17
+#define MENU_CONTROL_ROWS 18
 /* «Aplicar ahora» solo existe mientras lo elegido difiere de lo que corre;
  * «Densidad», solo con el CRT de máscara de sombra. */
 
@@ -163,10 +172,14 @@ struct menu {
 	float cht_pos, cht_t;  /* fila mostrada y entrada de la página (0 .. 1) */
 	/* Ajustes de la ROM elegida (los carga main.c). */
 	struct menu_game game;
+	struct salsa64_padmap global_controls, controls;
+	int control_sel, controls_return_page;
+	bool control_for_game, control_capture;
 	const char *game_title;
 	int game_sel;
 	int game_rom;          /* la ROM de esa página (índice en la lista) */
 	float game_pos, game_t;
+	float control_t;
 	int dl_what;           /* con MENU_DOWNLOAD: 0 carátulas, 1 trucos */
 	bool dl_enabled;       /* filas «Descargar …» (experimental: download.h, dl_enabled) */
 	/* Carátula de la ROM cover_rom, ya subida a la ranura 0 de rsxkit_ui por
@@ -237,6 +250,7 @@ static inline int menu_cheat_rows(const struct menu *m) { return (m->cheats ? (i
 
 /* Abre la página de ajustes de `title` con `g` (se copia). */
 void menu_game_open(struct menu *m, const struct menu_game *g, const char *title);
+void menu_controls_open(struct menu *m, bool for_game);
 void menu_game_default(struct menu_game *g);
 /* juegos/<ROM>.cfg: «aspecto|filtro|recorte|escala = global|...». */
 void menu_game_parse(struct menu_game *g, const char *text, size_t len);

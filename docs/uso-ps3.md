@@ -67,6 +67,28 @@ detectado y, si la hay, la carátula del juego (abajo, «Carátulas»). La
 
 Al final de la lista están «Opciones» y «Salir al XMB».
 
+## Remapeo del control
+
+En **Opciones → Controles** se cambian las asignaciones para todos los juegos.
+En **Ajustes** de una ROM, la fila **Controles** abre el mismo editor para ese
+juego. La fila **Aplicar a** permite alternar entre todos los juegos y el juego
+actual; las asignaciones propias de un juego tienen prioridad sobre las
+globales. × en un botón de N64 espera la siguiente pulsación del DualShock 3.
+En la fila **Stick**, × alterna entre el stick analógico izquierdo y el
+derecho. **Restaurar predeterminado** repone las asignaciones globales o hace
+que el juego vuelva a heredar las globales.
+
+| Control de N64 | Predeterminado del DualShock 3 |
+|---|---|
+| A / B / Z | × / □ / L2 |
+| Start / L / R | Start / L1 / R1 |
+| Cruceta | Cruceta del DualShock 3 |
+| C arriba, abajo, izquierda y derecha | Stick analógico derecho |
+| Stick analógico | Stick analógico izquierdo |
+
+El menú guarda el mapeo global en `controles.cfg` y las excepciones por juego
+junto con sus ajustes en `juegos/<ROM>.cfg`.
+
 «Actualizar lista» también está en Opciones. Vuelve a leer las carpetas de
 las unidades conectadas sin salir de Salsa64, conserva la carpeta abierta y
 la ROM elegida si todavía está disponible, y muestra cuántas ROMs encontró.
