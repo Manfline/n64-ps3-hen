@@ -142,8 +142,8 @@ src/spu/       SPE programs (graphics HLE on SPE 0, audio on SPE 1, LLE)
 src/rdp/       N64 RDP and combiners on top of lib/rsxkit
 src/frontend/  PS3 application: menu, input, audio output, saves
 src/host/      salsa64-run, the host-side runner used for tests
-lib/rsxkit/    generic RSX graphics layer, no N64 code (MIT)
-lib/spukit/    batched SPE jobs: queue + mailbox doorbell (MIT)
+lib/rsxkit/    generic RSX graphics layer, no N64 code (MIT; also github.com/ricowp81/rsxkit)
+lib/spukit/    batched SPE jobs: queue + mailbox doorbell (MIT; also github.com/ricowp81/spukit)
 tests/         unit tests, fuzzing, PS3 test programs, homebrew test ROMs
 tools/         build, test and deploy scripts
 docs/          design notes, measurements, third-party sources (Spanish)
@@ -170,6 +170,22 @@ code from other projects keep their original copyright notices (see
 `LICENSE` files) so that other emulators and homebrew, including projects
 whose licenses cannot link GPL code, can reuse them. Third-party sources and
 references are listed in [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md).
+
+## Libraries for other projects
+
+The two MIT libraries also live in their own repositories, so that other PS3
+homebrew can use them without taking the emulator:
+
+- **[rsxkit](https://github.com/ricowp81/rsxkit):** RSX graphics layer
+  (video setup, double-buffered frames, 2D and 3D drawing, a run-time
+  fragment program generator, a post-processing chain).
+- **[spukit](https://github.com/ricowp81/spukit):** batch jobs on the SPEs
+  (work queue with a mailbox doorbell, persistent workers, LZ block
+  compression on the PPE, the host and an SPE).
+
+Salsa64 keeps them in `lib/` with `git subtree`, so building Salsa64 needs
+nothing extra. How changes go back and forth: [docs/bibliotecas.md](docs/bibliotecas.md)
+(Spanish).
 
 ## Legal notice
 
