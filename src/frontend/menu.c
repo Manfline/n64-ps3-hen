@@ -573,6 +573,8 @@ static enum menu_action options_buttons(struct menu *m, uint32_t pressed)
 		m->dl_what = m->opt == MENU_OPT_DL_CHEATS;
 		return MENU_DOWNLOAD;
 	}
+	if (m->opt == MENU_OPT_REFRESH && (pressed & BIT(SALSA64_DS3_CROSS)))
+		return MENU_REFRESH;
 	if (m->opt == MENU_OPT_RESOLUTION && (pressed & change)) {
 		m->set.resolution = m->set.resolution == MENU_RES_1080P ? MENU_RES_720P : MENU_RES_1080P;
 		return MENU_SETTINGS;
@@ -702,6 +704,8 @@ enum menu_action menu_input(struct menu *m, uint32_t buttons, uint64_t now_us)
 		m->rep_button = 0;
 		return MENU_NONE;
 	}
+	if (m->page == MENU_PAGE_GAMES && (pressed & BIT(SALSA64_DS3_L3)))
+		return MENU_REFRESH;
 	if (m->page == MENU_PAGE_OPTIONS) {
 		/* Arriba y abajo mueven; lo demás cambia el valor o vuelve. */
 		enum menu_action a = options_buttons(m, pressed & ~updown);
@@ -1353,7 +1357,8 @@ static void panel(const struct menu *m, float W, float H, float a)
 				    : m->opt == MENU_OPT_INTERP ? "Interpolación"
 				    : m->opt == MENU_OPT_FPS ? "Mostrar FPS"
 					    : m->opt == MENU_OPT_CONFIRM ? "Confirmar al salir"
-					    : m->opt == MENU_OPT_ROM_ORDER ? "Orden de la lista" : "Volver";
+					    : m->opt == MENU_OPT_ROM_ORDER ? "Orden de la lista"
+					    : m->opt == MENU_OPT_REFRESH ? "Actualizar lista" : "Volver";
 		const char *const *text = m->opt == MENU_OPT_WAVES ? waves_text
 					  : m->opt == MENU_OPT_OVERSCAN ? crop_text
 					  : m->opt == MENU_OPT_ASPECT ? aspect_text
@@ -1497,6 +1502,7 @@ static void options_column(const struct menu *m, float x, float W, float H, floa
 			       m->set.confirm ? "Sí" : "No" };
 	struct row order = { "Orden de la lista", "Título de cabecera o nombre de archivo", 2, "↕", 0,
 			     m->set.rom_order == MENU_ROM_ORDER_FILENAME ? tr("Nombre de archivo") : tr("Título de cabecera") };
+	struct row refresh = { "Actualizar lista", "Volver a leer las carpetas de ROMs", 2, "↻", 0, NULL };
 	struct row back = { "Volver", "A la lista de juegos", 2, "◀", 0, NULL };
 	draw_row(&waves, MENU_OPT_WAVES - m->opt_pos, x, W, H, a);
 	draw_row(&crop, MENU_OPT_OVERSCAN - m->opt_pos, x, W, H, a);
@@ -1513,6 +1519,7 @@ static void options_column(const struct menu *m, float x, float W, float H, floa
 	draw_row(&confirm, (float)opt_row(m, MENU_OPT_CONFIRM) - m->opt_pos, x, W, H, a);
 	draw_row(&lang, (float)opt_row(m, MENU_OPT_LANG) - m->opt_pos, x, W, H, a);
 	draw_row(&order, (float)opt_row(m, MENU_OPT_ROM_ORDER) - m->opt_pos, x, W, H, a);
+	draw_row(&refresh, (float)opt_row(m, MENU_OPT_REFRESH) - m->opt_pos, x, W, H, a);
 	if (m->dl_enabled) {
 		draw_row(&dlc, (float)opt_row(m, MENU_OPT_DL_COVERS) - m->opt_pos, x, W, H, a);
 		draw_row(&dlt, (float)opt_row(m, MENU_OPT_DL_CHEATS) - m->opt_pos, x, W, H, a);

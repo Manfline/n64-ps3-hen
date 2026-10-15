@@ -5217,6 +5217,16 @@ static int menu_loop(void)
 			buttons = frames < 50 ? 0 : menu_autopilot(&menu, target, mn.step++);
 		}
 		enum menu_action a = menu_input(&menu, buttons, sysGetSystemTime());
+		if (a == MENU_REFRESH) {
+			char selected[ROMLIST_PATH_MAX] = "";
+			int selected_rom = menu_selected(&menu);
+			if (selected_rom >= 0)
+				romlist_build_path(roms, &roms->e[selected_rom], rom_dirs, ROMLIST_SOURCES_MAX,
+						   selected, sizeof selected);
+			menu_scan(selected[0] ? selected : NULL);
+			if (roms)
+				menu_set_status(&menu, "%u ROMs encontradas", roms->rom_count);
+		}
 		if (a == MENU_SETTINGS) {
 			char selected[ROMLIST_PATH_MAX] = "";
 			bool reorder = menu.set.rom_order != mn.settings.rom_order;

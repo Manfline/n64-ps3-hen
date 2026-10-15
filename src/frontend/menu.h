@@ -16,9 +16,9 @@
  * MENU_REPEAT_DELAY_US, después cada MENU_REPEAT_US y, pasado
  * MENU_REPEAT_FAST_AFTER_US, cada MENU_REPEAT_FAST_US; la vuelta de un
  * extremo al otro solo con una pulsación nueva), izquierda/derecha una
- * página, X abre, triángulo va a Opciones (fondo animado y recorte del
- * borde). En Opciones, X o izquierda/derecha cambian el valor y círculo
- * vuelve. Hasta ver todos los botones
+ * página, X abre, L3 vuelve a leer la lista, triángulo va a Opciones (fondo
+ * animado y recorte del borde). En Opciones, X o izquierda/derecha cambian
+ * el valor y círculo vuelve. Hasta ver todos los botones
  * sueltos no acepta nada (el START + SELECT con que se volvió del juego o el
  * X con que se abrió no cuentan dos veces).
  *
@@ -53,6 +53,7 @@ enum menu_action {
 	MENU_GAME,      /* SELECT sobre una ROM: cargar sus ajustes y llamar a menu_game_open */
 	MENU_GAME_CHANGED, /* cambió un ajuste de ese juego: guardarlo */
 	MENU_DOWNLOAD,  /* «Descargar»: carátulas o trucos (menu.dl_what) */
+	MENU_REFRESH,   /* volver a leer la carpeta visible */
 };
 
 /* Recorte del overscan (SALSA64_DATA_DIR/overscan.cfg, ver main.c). */
@@ -145,7 +146,7 @@ struct menu_settings {
 enum { MENU_PAGE_GAMES, MENU_PAGE_OPTIONS, MENU_PAGE_CHEATS, MENU_PAGE_GAME };
 enum { MENU_OPT_WAVES, MENU_OPT_OVERSCAN, MENU_OPT_ASPECT, MENU_OPT_FILTER, MENU_OPT_DENSITY, MENU_OPT_RESOLUTION,
        MENU_OPT_SCALE, MENU_OPT_APPLY, MENU_OPT_INTERP, MENU_OPT_FPS, MENU_OPT_CONFIRM, MENU_OPT_LANG,
-       MENU_OPT_ROM_ORDER, MENU_OPT_DL_COVERS, MENU_OPT_DL_CHEATS, MENU_OPT_BACK, MENU_OPTS };
+       MENU_OPT_ROM_ORDER, MENU_OPT_DL_COVERS, MENU_OPT_DL_CHEATS, MENU_OPT_REFRESH, MENU_OPT_BACK, MENU_OPTS };
 /* «Aplicar ahora» solo existe mientras lo elegido difiere de lo que corre;
  * «Densidad», solo con el CRT de máscara de sombra. */
 

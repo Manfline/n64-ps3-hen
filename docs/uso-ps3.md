@@ -61,10 +61,17 @@ detectado y, si la hay, la carátula del juego (abajo, «Carátulas»). La
 | × | Abrir la ROM elegida (o la opción) |
 | □ | Trucos de la ROM elegida (abajo, «Trucos») |
 | SELECT | Ajustes de la ROM elegida (abajo, «Ajustes por juego») |
+| L3 | Actualizar la lista de ROMs de la carpeta actual |
 | △ | Ir a Opciones |
 | ○ | Volver de Opciones, de los trucos o de los ajustes; en una subcarpeta, subir un nivel; en la raíz, salir al XMB (pregunta antes: × sale, ○ sigue donde estaba) |
 
 Al final de la lista están «Opciones» y «Salir al XMB».
+
+«Actualizar lista» también está en Opciones. Vuelve a leer las carpetas de
+las unidades conectadas sin salir de Salsa64, conserva la carpeta abierta y
+la ROM elegida si todavía está disponible, y muestra cuántas ROMs encontró.
+Sirve para detectar archivos copiados por FTP o una memoria USB conectada
+después de abrir el menú.
 
 **Versión.** Arriba a la derecha, chica, bajo el número de juegos, va la
 versión de Salsa64: la etiqueta y el commit, como «v0.2.5 · fb12aeb»

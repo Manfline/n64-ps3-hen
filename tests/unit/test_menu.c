@@ -272,7 +272,7 @@ static void menu_scan_dir(void)
 	CHECK_EQ(romlist_scan_dir(l, "/no/existe/salsa64", "/no/existe/salsa64", NULL, 0), -1);
 
 	/* Carpeta grande: llena las 4096 entradas, mide la lectura y rechaza la siguiente. */
-	char many[300], source[300], target[300];
+	char many[300], source[300], target[320];
 	snprintf(many, sizeof many, "%s/many", t_tmp_dir);
 	mkdir(many, 0777);
 	snprintf(source, sizeof source, "%s/zelda.z64", dir);
@@ -286,7 +286,7 @@ static void menu_scan_dir(void)
 	unsigned elapsed_ms = (unsigned)((clock() - start) * 1000 / CLOCKS_PER_SEC);
 	CHECK_EQ(l->rom_count, ROMLIST_MAX - 1);
 	CHECK_EQ(l->count, ROMLIST_MAX);
-	CHECK_EQ(l->skipped, 1);
+	CHECK_EQ(l->skipped, 2); /* una fila «..» ocupa una entrada del tope */
 	memset(l, 0, romlist_memory_bytes());
 	const char *combined[] = { many, usb };
 	CHECK_EQ(romlist_scan_sources(l, combined, 2, "", NULL, 0), ROMLIST_MAX);
@@ -354,6 +354,33 @@ static void menu_needs_release_first(void)
 
 	nav_setup(&m, 4, 99);  /* fuera de rango: la primera */
 	CHECK_EQ(m.sel, 0);
+}
+
+static void menu_refresh_buttons(void)
+{
+	struct menu m;
+	nav_setup(&m, 2, 1);
+	menu_input(&m, 0, 0);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_L3), 1), MENU_REFRESH);
+	CHECK_EQ(m.page, MENU_PAGE_GAMES);
+
+	menu_input(&m, 0, 2);
+	m.page = MENU_PAGE_OPTIONS;
+	m.opt = MENU_OPT_REFRESH;
+	CHECK_EQ(menu_input(&m, 0, 3), MENU_NONE);
+	CHECK_EQ(menu_input(&m, CROSS, 4), MENU_REFRESH);
+	CHECK_EQ(m.page, MENU_PAGE_OPTIONS);
+	static const char *const labels[] = { "Actualizar lista", "Refresh list", "Actualiser la liste",
+					      "Liste aktualisieren", "Aggiorna elenco", "Atualizar lista" };
+	static const char *const notices[] = { "3 ROMs encontradas", "3 ROMs found", "3 ROM trouvées",
+					       "3 ROMs gefunden", "3 ROM trovate", "3 ROMs encontradas" };
+	for (int lang = 0; lang < MENU_LANGS; lang++) {
+		i18n_set(lang);
+		CHECK(!strcmp(tr("Actualizar lista"), labels[lang]));
+		menu_set_status(&m, "%u ROMs encontradas", 3u);
+		CHECK(!strcmp(m.status, notices[lang]));
+	}
+	i18n_set(MENU_LANG_ES);
 }
 
 static void menu_move_and_wrap(void)
@@ -794,9 +821,15 @@ static void menu_options_page(void)
 	menu_input(&m, 0, 79);
 	CHECK_EQ(menu_input(&m, 0, 79), MENU_NONE);
 	CHECK_EQ(m.opt, MENU_OPT_BACK);  /* la fila desapareció: el cursor pasa a «Volver» */
-	/* Sin descargas.cfg con «activar = si» las filas de descarga no están:
-	 * arriba de «Volver» va el idioma. */
+	/* Sin descargas.cfg no están las filas de descarga; «Actualizar lista»
+	 * queda justo encima de «Volver». */
 	CHECK(!m.dl_enabled);
+	menu_input(&m, UP, 79);
+	CHECK_EQ(m.opt, MENU_OPT_REFRESH);
+	menu_input(&m, 0, 79);
+	menu_input(&m, UP, 79);
+	CHECK_EQ(m.opt, MENU_OPT_ROM_ORDER);
+	menu_input(&m, 0, 79);
 	menu_input(&m, UP, 79);
 	CHECK_EQ(m.opt, MENU_OPT_LANG);
 	menu_input(&m, 0, 79);
@@ -804,14 +837,25 @@ static void menu_options_page(void)
 	CHECK_EQ(m.opt, MENU_OPT_ROM_ORDER);
 	menu_input(&m, 0, 79);
 	menu_input(&m, DOWN, 79);
+	CHECK_EQ(m.opt, MENU_OPT_REFRESH);
+	menu_input(&m, 0, 79);
+	CHECK_EQ(menu_input(&m, CROSS, 79), MENU_REFRESH);
+	menu_input(&m, 0, 79);
+	menu_input(&m, DOWN, 79);
 	CHECK_EQ(m.opt, MENU_OPT_BACK);
 	menu_input(&m, 0, 79);
 	m.dl_enabled = true;             /* encendidas (main.c, dl_enabled) */
-	menu_input(&m, UP, 79);          /* arriba: descargas, idioma, «Confirmar al salir», «Mostrar FPS» y «Escala interna» */
+	menu_input(&m, UP, 79);          /* encima de «Volver» está «Actualizar lista» */
+	CHECK_EQ(m.opt, MENU_OPT_REFRESH);
+	menu_input(&m, 0, 79);
+	menu_input(&m, UP, 79);
 	CHECK_EQ(m.opt, MENU_OPT_DL_CHEATS);
 	menu_input(&m, 0, 79);
 	menu_input(&m, UP, 79);
 	CHECK_EQ(m.opt, MENU_OPT_DL_COVERS);
+	menu_input(&m, 0, 79);
+	menu_input(&m, UP, 79);
+	CHECK_EQ(m.opt, MENU_OPT_ROM_ORDER);
 	menu_input(&m, 0, 79);
 	menu_input(&m, UP, 79);
 	CHECK_EQ(m.opt, MENU_OPT_LANG);
@@ -896,6 +940,9 @@ static void menu_options_page(void)
 	CHECK_EQ(m.dl_what, 1);
 	menu_input(&m, 0, 79);
 	menu_input(&m, DOWN, 79);
+	CHECK_EQ(m.opt, MENU_OPT_REFRESH);
+	menu_input(&m, 0, 79);
+	menu_input(&m, DOWN, 79);
 	CHECK_EQ(m.opt, MENU_OPT_BACK);
 	menu_input(&m, 0, 80);
 	CHECK_EQ(menu_input(&m, RIGHT, 90), MENU_NONE);  /* «Volver» no tiene valor */
@@ -946,7 +993,7 @@ static void menu_settings_file(void)
 	static const char direct[] = "confirmar = no\n";
 	menu_settings_parse(&s, direct, sizeof direct - 1);
 	CHECK(!s.confirm);
-	char text[320];
+	char text[512];
 	s.waves = false;
 	int n = menu_settings_format(&s, text, sizeof text);
 	CHECK(n > 0 && (size_t)n < sizeof text);
@@ -1212,7 +1259,7 @@ static void frame_list_setup(void)
 				       "conker.z64", "sf64.v64", "homebrew-sin-título.n64" };
 	for (unsigned i = 0; i < 8; i++) {
 		uint8_t h[0x40];
-		struct rom_entry *e = frame_list->e[frame_list->count++];
+		struct rom_entry *e = &frame_list->e[frame_list->count++];
 		memset(e, 0, sizeof *e);
 		e->name = names[i];
 		e->source = i == 3 ? 1 : 0;
@@ -1808,6 +1855,7 @@ void t_suite_menu(void)
 	RUN(menu_scan_dir);
 	RUN(menu_last_rom);
 	RUN(menu_needs_release_first);
+	RUN(menu_refresh_buttons);
 	RUN(menu_move_and_wrap);
 	RUN(menu_directory_navigation);
 	RUN(menu_repeat);
