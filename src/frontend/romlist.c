@@ -89,7 +89,7 @@ void romlist_parse_header(const uint8_t raw[0x40], const char *save_cfg, size_t 
 	 * espacios a los lados. */
 	char t[ROMLIST_TITLE_MAX + 1];
 	e->title_supported = 1;
-	for (int i = 0; i < ROMLIST_TITLE_MAX; i++) {
+	for (unsigned i = 0; i < ROMLIST_TITLE_MAX; i++) {
 		uint8_t c = h[HDR_TITLE + i];
 		if (c >= 0x80 || (c > 0 && c < 0x20))
 			e->title_supported = 0;
