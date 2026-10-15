@@ -123,6 +123,9 @@ static void compile_records_and_retranslations(void)
 	CHECK_EQ(tr.field.compiled, 4);
 	CHECK_EQ(tr.field.compile_ticks, 4 * 77);
 	CHECK_EQ(tr.field.words, 3 * 70 + 72);
+	CHECK_EQ(tr.compiles.calls[SALSA64_RT_COMPILE_NEW], 3);
+	CHECK_EQ(tr.compiles.calls[SALSA64_RT_COMPILE_RETRANS], 1);
+	CHECK_EQ(tr.compiles.words[SALSA64_RT_COMPILE_RETRANS], 72);
 	CHECK_EQ(tr.cur.hash, 0);  /* el emisor empieza de cero */
 	salsa64_rec_trace_evicted(&fake, 0, 3, 120);
 	salsa64_rec_trace_evicted(&fake, 2, SALSA64_REC_FLUSH_STATE, 40);
@@ -173,6 +176,38 @@ static void classes_of_instructions(void)
 	CHECK_EQ(salsa64_rec_trace_class(SDC1(2, 8, T1)), SALSA64_RT_C_MEM);
 	CHECK_EQ(salsa64_rec_trace_class(ADD_F(16, 0, 2, 4)), SALSA64_RT_C_FPU);
 	CHECK_EQ(salsa64_rec_trace_class(MTC0(T0, 12)), SALSA64_RT_C_OTHER);
+}
+
+static void slow_path_classification(void)
+{
+	CHECK_EQ(salsa64_rec_trace_mem_class(0xFFFFFFFF80001000ull, 0x1000, true, false, true, 8u << 20),
+		 SALSA64_RT_SLOW_KSEG0);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0xFFFFFFFFA0001000ull, 0x1000, true, false, true, 8u << 20),
+		 SALSA64_RT_SLOW_KSEG1);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0x1000, 0x1000, true, false, true, 8u << 20),
+		 SALSA64_RT_SLOW_TLB_RDRAM);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0x1000, 0, false, false, true, 8u << 20),
+		 SALSA64_RT_SLOW_TLB_EXCEPTION);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0xA4000000, 0x04000000, true, false, true, 8u << 20),
+		 SALSA64_RT_SLOW_MMIO_SP);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0xA4400000, 0x04400000, true, false, true, 8u << 20),
+		 SALSA64_RT_SLOW_MMIO_VI);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0xA4600000, 0x04600000, true, false, true, 8u << 20),
+		 SALSA64_RT_SLOW_MMIO_PI);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0xA4800000, 0x04800000, true, false, true, 8u << 20),
+		 SALSA64_RT_SLOW_MMIO_SI);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0xBFC007C0, 0x1FC007C0, true, false, true, 8u << 20),
+		 SALSA64_RT_SLOW_MMIO_PIF);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0x80001000, 0x1000, true, true, true, 8u << 20),
+		 SALSA64_RT_SLOW_CODE_STORE);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0x1001, 0, false, false, false, 8u << 20),
+		 SALSA64_RT_SLOW_MISALIGNED);
+	CHECK_EQ(salsa64_rec_trace_exec_class(MTC0(T0, 12)), SALSA64_RT_SLOW_EXEC_COP0);
+	CHECK_EQ(salsa64_rec_trace_exec_class(ADD_F(16, 0, 2, 4)), SALSA64_RT_SLOW_EXEC_FPU);
+	CHECK_EQ(salsa64_rec_trace_exec_class(0x0000000Cu), SALSA64_RT_SLOW_EXEC_OTHER);
+	CHECK_EQ(salsa64_rec_trace_exception_class(SALSA64_EXC_TLBL), SALSA64_RT_SLOW_EXC_TLBL);
+	CHECK_EQ(salsa64_rec_trace_exception_class(SALSA64_EXC_ADES), SALSA64_RT_SLOW_EXC_ADES);
+	CHECK_EQ(salsa64_rec_trace_exception_class(SALSA64_EXC_FPE), SALSA64_RT_SLOW_EXC_FPE);
 }
 
 /* ---- Con el recompilador ---------------------------------------------------- */
@@ -295,5 +330,6 @@ void t_suite_rec_trace(void)
 	RUN(compile_records_and_retranslations);
 	RUN(jr_fold_by_address);
 	RUN(classes_of_instructions);
+	RUN(slow_path_classification);
 	RUN(rec_window_jr_and_classes);
 }

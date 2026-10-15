@@ -30,9 +30,17 @@ import sys
 MAGIC = b"S64P"
 
 R_CONTEXT, R_NAMES, R_WINDOW, R_STALL, R_BLOCKS, R_EVICT, R_TRACE, R_JR, R_SAMPLES, R_TASKS, R_DUMP, R_END, \
-    R_LOST, R_EVENT = range(1, 15)
+    R_LOST, R_EVENT, R_SLOW, R_COMPILE = range(1, 17)
 
 CLASSES = ["entrada", "alu", "memoria", "fpu", "saltos", "salida", "otras"]
+SLOW_CAUSES = ["KSEG0", "KSEG1", "TLB hacia RDRAM", "TLB hacia E/S", "excepción TLB", "desalineado",
+               "registro SP", "registro DP", "registro MI", "registro VI", "registro AI", "registro PI",
+               "registro RI", "registro SI", "PIF", "cartucho", "escritura sobre código", "COP0", "FPU",
+               "CACHE", "LL/SC", "trampa", "otra instrucción interpretada", "excepción", "INT", "TLB modificada",
+               "TLB lectura", "TLB escritura", "dirección de carga", "dirección de almacenamiento", "bus de instrucciones",
+               "bus de datos", "SYSCALL", "BREAK", "instrucción reservada", "coprocesador inutilizable",
+               "desbordamiento", "trap", "FPU", "WATCH"]
+COMPILE_REASONS = ["primera compilación", "escritura de CPU", "DMA", "desalojo o vaciado", "retraducción idéntica"]
 ENDS = ["tope", "jr ra", "jr", "jalr", "jal", "j", "condicional", "likely", "a C"]
 END_LOOP = 0x80
 SMP_MARKS = ["nativo", "camino lento", "despachador", "intérprete", "eventos", "compilar", "espera", "ritmo", "otro"]
@@ -76,6 +84,8 @@ class Session:
         self.dumps = []
         self.end = {}
         self.events = []
+        self.slow = []
+        self.compiles = []
         self.lost = 0
         self.truncated = False
         self._read()
@@ -178,6 +188,31 @@ class Session:
         elif kind == R_EVENT:
             (ms,) = struct.unpack_from(">I", b, 0)
             self.events.append({"ms": ms, "texto": b[4:].decode("utf-8", "replace")})
+        elif kind == R_SLOW:
+            ms, nc, np = struct.unpack_from(">IHH", b, 0)
+            off = 8
+            causes = []
+            for k in range(nc):
+                calls, ticks = struct.unpack_from(">IQ", b, off)
+                off += 12
+                causes.append({"causa": SLOW_CAUSES[k] if k < len(SLOW_CAUSES) else f"causa{k}",
+                               "llamadas": calls, "ticks": ticks})
+            pcs = []
+            for _ in range(np):
+                pc, ticks, calls = struct.unpack_from(">IQI", b, off)
+                off += 16
+                if pc:
+                    pcs.append({"pc": pc, "ticks": ticks, "llamadas": calls})
+            self.slow.append({"ms": ms, "causas": causes, "pcs": pcs})
+        elif kind == R_COMPILE:
+            ms, n, _, max_field_compiles, max_field = struct.unpack_from(">IHHII", b, 0)
+            reasons = []
+            for k in range(n):
+                calls, ticks, words = struct.unpack_from(">IQI", b, 16 + 16 * k)
+                reasons.append({"motivo": COMPILE_REASONS[k] if k < len(COMPILE_REASONS) else f"motivo{k}",
+                                "llamadas": calls, "ticks": ticks, "palabras": words})
+            self.compiles.append({"ms": ms, "motivos": reasons, "max_campo": max_field_compiles,
+                                  "campo_max": max_field})
 
     @staticmethod
     def _block(b, o):
@@ -430,6 +465,14 @@ def metrics(ses):
     ins, hot, cold = class_totals(blocks.values())
     m["palabras por instrucción (todas)"] = (sum(hot) + sum(cold)) / max(1, sum(ins))
     m["retraducciones"] = sum(1 for b in ses.blocks if b["flags"] & 1)
+    slow = slow_totals(ses)
+    for cause, (calls, ticks) in slow.items():
+        m[f"camino lento: {cause} llamadas"] = calls
+        m[f"camino lento: {cause} ms"] = ticks / 79.8
+    for reason, (calls, ticks, words) in compile_totals(ses).items():
+        m[f"compilaciones: {reason}"] = calls
+        m[f"compilar ms: {reason}"] = ticks / 79.8
+        m[f"palabras generadas: {reason}"] = words
     m["desalojos de tramos"] = sum(1 for e in ses.evicts if e["tipo"] != 2)
     m["bytes perdidos"] = ses.lost
     return m
@@ -441,6 +484,24 @@ def fmt(v):
     if isinstance(v, float):
         return f"{v:.2f}"
     return str(v)
+
+
+def slow_totals(ses):
+    out = {}
+    for record in ses.slow:
+        for e in record["causas"]:
+            n, t = out.get(e["causa"], (0, 0))
+            out[e["causa"]] = (n + e["llamadas"], t + e["ticks"])
+    return out
+
+
+def compile_totals(ses):
+    out = {}
+    for record in ses.compiles:
+        for e in record["motivos"]:
+            n, t, w = out.get(e["motivo"], (0, 0, 0))
+            out[e["motivo"]] = (n + e["llamadas"], t + e["ticks"], w + e["palabras"])
+    return out
 
 
 def summary(ses, out, top=15):
@@ -495,6 +556,31 @@ def summary(ses, out, top=15):
         if s.get("invalidados", 0) >= 16:
             extra.append(f"{s['invalidados']} bloques invalidados")
         p(f"   campo {s.get('campo', 0):7d}  {s.get('emu_us', 0) / 1000:6.1f} ms  {cause}: " + "; ".join(extra))
+
+    if ses.slow:
+        total = slow_totals(ses)
+        p("-- Camino lento por causa (timebase PPE, 79,8 MHz)")
+        p("   causa                                  llamadas       ms")
+        for cause, (calls, ticks) in sorted(total.items(), key=lambda kv: -kv[1][1]):
+            p(f"   {cause:38s} {calls:9d} {ticks / 79.8:9.2f}")
+        pcs = {}
+        for record in ses.slow:
+            for e in record["pcs"]:
+                n, t = pcs.get(e["pc"], (0, 0))
+                pcs[e["pc"]] = (n + e["llamadas"], t + e["ticks"])
+        if pcs:
+            p("   PC lento más costoso:")
+            for pc, (calls, ticks) in sorted(pcs.items(), key=lambda kv: -kv[1][1])[:top]:
+                p(f"      {pc:08x}  {calls:9d} llamadas  {ticks / 79.8:9.2f} ms")
+
+    if ses.compiles:
+        p("-- Compilaciones por motivo (ventanas de 5 s y total de sesión)")
+        p("   motivo                                  bloques    palabras       ms")
+        for reason, (calls, ticks, words) in sorted(compile_totals(ses).items(), key=lambda kv: -kv[1][1]):
+            p(f"   {reason:38s} {calls:8d} {words:11d} {ticks / 79.8:9.2f}")
+        mx = max(ses.compiles, key=lambda e: e["max_campo"])
+        if mx["max_campo"]:
+            p(f"   máximo por campo: {mx['max_campo']} compilaciones, campo {mx['campo_max']}")
 
     if ses.blocks:
         blocks = latest_blocks(ses)

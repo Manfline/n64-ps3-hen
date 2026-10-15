@@ -1,5 +1,20 @@
 # Estado
 
+## 2026-10-15 — Contadores por causa del camino lento
+
+La app de perfilado registra tiempo y llamadas por clase del camino lento y
+compilaciones por motivo en ventanas de 5 s; el resumen incorpora ambos
+desgloses y compara sus totales. Los datos se guardan solo con `rec->trace`
+activo. La app normal no añade instrucciones al código generado. En el host
+se ejecutó GoldenEye durante 300 campos: 55,7 MIPS y 87,1 % en bucles de
+espera; el recompilador no está disponible en este host, por lo que esa
+corrida no produjo mediciones de las causas nuevas.
+
+Pendiente: ejecutar con la app de perfilado en la PS3 real y revisar
+Banjo-Tooie, GoldenEye y Perfect Dark. La medición no cuenta aciertos de
+`ktlb[]` porque requeriría instrumentar accesos generados; el total de aciertos
+no está disponible bajo el requisito de conservar intacto el código emitido.
+
 ## 2026-10-15 — v0.2.6 publicada
 
 La rc1 (v0.2.5-117-g183a275, app normal SLSA00064) se probó en la PS3 real:

@@ -1763,6 +1763,10 @@ static void perf_field_end(const struct perf_snap *a, uint64_t us_emu, uint64_t 
 	if (use_rec && rec.trace) {
 		tf = rec.trace->field;
 		perf_compile_ticks += tf.compile_ticks;
+		if (tf.compiled > rec.trace->compiles.max_field_compiles) {
+			rec.trace->compiles.max_field_compiles = tf.compiled;
+			rec.trace->compiles.max_field = n64.bus.vi.fields;
+		}
 		perf_app_field(&rec, n64.bus.vi.field_cycles);
 	}
 	if (us_emu > perf_worst_us)
@@ -2734,6 +2738,8 @@ static void h1_stats(uint32_t fields, uint64_t dt_us)
  * Antes de que stats() reinicie la ventana. */
 static struct {
 	uint64_t compile_ticks, rec_compiled, rec_retrans, rec_words, rec_evictions, rec_flushes, rec_killed, interp, jr;
+	struct salsa64_rec_trace_slow_stats slow;
+	struct salsa64_rec_trace_compile_stats compiles;
 	uint64_t smp_ticks;
 	uint32_t marks[SALSA64_SMP_N];
 	struct audio_sync_stats audio;
@@ -2821,6 +2827,54 @@ static void perf_window(uint64_t dt, uint32_t fields, uint64_t us_emu, uint64_t 
 		pwin.rec_evictions = t->evictions;
 		pwin.rec_flushes = t->flushes;
 		pwin.rec_killed = t->killed;
+		struct salsa64_rec_trace_slow_stats delta = {0};
+		for (unsigned k = 0; k < SALSA64_RT_SLOW_N; k++) {
+			delta.calls[k] = t->slow.calls[k] - pwin.slow.calls[k];
+			delta.ticks[k] = t->slow.ticks[k] - pwin.slow.ticks[k];
+			pwin.slow.calls[k] = t->slow.calls[k];
+			pwin.slow.ticks[k] = t->slow.ticks[k];
+		}
+		for (unsigned k = 0; k < SALSA64_RT_TOP_PC; k++) {
+			delta.top[k] = t->slow.top[k];
+			for (unsigned j = 0; j < SALSA64_RT_TOP_PC; j++)
+				if (pwin.slow.top[j].pc == t->slow.top[k].pc) {
+					delta.top[k].ticks = t->slow.top[k].ticks - pwin.slow.top[j].ticks;
+					delta.top[k].calls = t->slow.top[k].calls - pwin.slow.top[j].calls;
+					break;
+				}
+			pwin.slow.top[k] = t->slow.top[k];
+		}
+		perf_put_slow(&perf.emu, perf_ms(), &delta);
+		struct salsa64_rec_trace_compile_stats cdelta = {0};
+		for (unsigned k = 0; k < SALSA64_RT_COMPILE_N; k++) {
+			cdelta.calls[k] = t->compiles.calls[k] - pwin.compiles.calls[k];
+			cdelta.ticks[k] = t->compiles.ticks[k] - pwin.compiles.ticks[k];
+			cdelta.words[k] = t->compiles.words[k] - pwin.compiles.words[k];
+			pwin.compiles.calls[k] = t->compiles.calls[k];
+			pwin.compiles.ticks[k] = t->compiles.ticks[k];
+			pwin.compiles.words[k] = t->compiles.words[k];
+		}
+		cdelta.max_field_compiles = t->compiles.max_field_compiles;
+		cdelta.max_field = t->compiles.max_field;
+		perf_put_compile(&perf.emu, perf_ms(), &cdelta);
+		static const char *const slow_names[SALSA64_RT_SLOW_N] = {
+			"KSEG0", "KSEG1", "TLB RDRAM", "TLB E/S", "TLB excepción", "desalineado",
+			"SP", "DP", "MI", "VI", "AI", "PI", "RI", "SI", "PIF", "cartucho",
+			"escritura de código", "COP0", "FPU", "CACHE", "LL/SC", "trampa", "otra instrucción", "excepción",
+			"INT", "TLB modificada", "TLB lectura", "TLB escritura", "ADEL", "ADES", "IBE", "DBE", "SYSCALL",
+			"BREAK", "RI", "CPU", "OV", "TR", "FPE", "WATCH"
+		};
+		unsigned best[3] = { SALSA64_RT_SLOW_N, SALSA64_RT_SLOW_N, SALSA64_RT_SLOW_N };
+		for (unsigned k = 0; k < SALSA64_RT_SLOW_N; k++)
+			for (unsigned j = 0; j < 3; j++)
+				if (best[j] == SALSA64_RT_SLOW_N || delta.ticks[k] > delta.ticks[best[j]]) {
+					for (unsigned z = 2; z > j; z--) best[z] = best[z - 1];
+					best[j] = k; break;
+				}
+		salsa64_log("camino lento (5 s): %s %.2f ms/%u; %s %.2f ms/%u; %s %.2f ms/%u",
+			slow_names[best[0]], hz ? delta.ticks[best[0]] * 1000.0 / hz : 0.0, delta.calls[best[0]],
+			slow_names[best[1]], hz ? delta.ticks[best[1]] * 1000.0 / hz : 0.0, delta.calls[best[1]],
+			slow_names[best[2]], hz ? delta.ticks[best[2]] * 1000.0 / hz : 0.0, delta.calls[best[2]]);
 	}
 	if (use_rec) {
 		W(rec_interp, rec.stats.interp_steps - pwin.interp);

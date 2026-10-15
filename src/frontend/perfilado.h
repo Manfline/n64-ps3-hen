@@ -50,6 +50,8 @@ enum perf_rec {
 	PERF_R_END = 12,      /* fin de la sesión (texto) */
 	PERF_R_LOST = 13,     /* bytes que no cupieron en un anillo */
 	PERF_R_EVENT = 14,    /* texto: algo que pasó (estado cargado, pausa, opción) */
+	PERF_R_SLOW = 15,     /* contadores del camino lento desde la ventana anterior */
+	PERF_R_COMPILE = 16,  /* compilaciones por motivo desde la ventana anterior */
 };
 
 /* ---- Campos de VENTANA y TIRON ------------------------------------------------
@@ -230,6 +232,10 @@ void perf_names_text(char *buf, size_t size);
 struct salsa64_rec_trace;
 struct salsa64_rec_trace_block;
 struct salsa64_rec_sample;
+struct salsa64_rec_trace_slow_stats;
+struct salsa64_rec_trace_compile_stats;
+bool perf_put_slow(struct perf_ring *r, uint32_t ms, const struct salsa64_rec_trace_slow_stats *s);
+bool perf_put_compile(struct perf_ring *r, uint32_t ms, const struct salsa64_rec_trace_compile_stats *s);
 bool perf_put_block(struct perf_ring *r, uint32_t ms, uint32_t field, const struct salsa64_rec_trace_block *b);
 bool perf_put_evict(struct perf_ring *r, uint32_t ms, uint32_t field, unsigned kind, unsigned seg, unsigned killed);
 /* La ventana recién recogida (salsa64_rec_trace_take devolvió `len`). */

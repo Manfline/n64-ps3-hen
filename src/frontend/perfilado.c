@@ -263,6 +263,46 @@ bool perf_put_evict(struct perf_ring *r, uint32_t ms, uint32_t field, unsigned k
 	return true;
 }
 
+bool perf_put_slow(struct perf_ring *r, uint32_t ms, const struct salsa64_rec_trace_slow_stats *s)
+{
+	struct perf_rw w;
+	if (!perf_begin(&w, r, PERF_R_SLOW, 8 + 12 * SALSA64_RT_SLOW_N + 16 * SALSA64_RT_TOP_PC))
+		return false;
+	perf_w32(&w, ms);
+	perf_w16(&w, SALSA64_RT_SLOW_N);
+	perf_w16(&w, SALSA64_RT_TOP_PC);
+	for (unsigned k = 0; k < SALSA64_RT_SLOW_N; k++) {
+		perf_w32(&w, s->calls[k]);
+		perf_w64(&w, s->ticks[k]);
+	}
+	for (unsigned k = 0; k < SALSA64_RT_TOP_PC; k++) {
+		perf_w32(&w, s->top[k].pc);
+		perf_w64(&w, s->top[k].ticks);
+		perf_w32(&w, s->top[k].calls);
+	}
+	perf_end(&w);
+	return true;
+}
+
+bool perf_put_compile(struct perf_ring *r, uint32_t ms, const struct salsa64_rec_trace_compile_stats *s)
+{
+	struct perf_rw w;
+	if (!perf_begin(&w, r, PERF_R_COMPILE, 16 + 16 * SALSA64_RT_COMPILE_N))
+		return false;
+	perf_w32(&w, ms);
+	perf_w16(&w, SALSA64_RT_COMPILE_N);
+	perf_w16(&w, 0);
+	perf_w32(&w, s->max_field_compiles);
+	perf_w32(&w, s->max_field);
+	for (unsigned k = 0; k < SALSA64_RT_COMPILE_N; k++) {
+		perf_w32(&w, s->calls[k]);
+		perf_w64(&w, s->ticks[k]);
+		perf_w32(&w, s->words[k]);
+	}
+	perf_end(&w);
+	return true;
+}
+
 bool perf_put_trace(struct perf_ring *r, uint32_t ms, uint32_t field, uint64_t cycles, const struct salsa64_rec_trace *t,
 		    unsigned len)
 {
