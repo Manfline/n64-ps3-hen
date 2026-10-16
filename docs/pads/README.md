@@ -76,5 +76,7 @@ Las escenas del host (7 juegos, Kirby 64 y la casa de Link de
   Transfer Pak), A para entrar a VS mode y A para elegir; hasta ahí llega
   el campo ~1750. Con `--gfx-frame` (el rasterizador, que copia a la RDRAM
   como la PS3) servía para ver el cuelgue de la novena color image de una
-  tarea (nodos del juego pisados); ahora la escena sigue al estadio y el
-  control se lee 25 veces por 50 campos.
+  tarea (nodos del juego pisados); ahora la escena sigue al estadio, el
+  control se lee 25 veces por 50 campos y el panel «Game Pak None» y la vista
+  previa del estadio salen como textura (las nueve imágenes de la tarea del
+  campo 1438: la ranura que se recicla copia antes lo suyo a la RDRAM).

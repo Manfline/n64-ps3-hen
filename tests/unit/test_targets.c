@@ -993,8 +993,43 @@ static void targets_frame_mirror(void)
 	CHECK(!rdp_targets_mirror_at_task_end(&s, draw(0x279f00, 64)));
 }
 
+/* rdp_targets_recycled dice, sin tocar la tabla, qué ranura en uso cambiaría
+ * de imagen: la que recicla rdp_targets_get con la tabla llena, la que
+ * crece; nada si la imagen ya existe o hay ranura libre. */
+static void targets_recycled_slot(void)
+{
+	bool fresh;
+	memset(&s, 0, sizeof s);
+	s.shown = -1;
+	s.vi_width = 320;
+	for (uint32_t k = 0; k < RDP_TARGETS_MAX; k++) {
+		CHECK_EQ(rdp_targets_recycled(&s, 0x100000 + k * 0x10000, 172, SIZ_16b, 48), -1);  /* libre */
+		s.field++;
+		s.task++;
+		draw(0x100000 + k * 0x10000, 172);
+	}
+	CHECK_EQ(rdp_targets_recycled(&s, 0x100000, 172, SIZ_16b, 48), -1);  /* ya existe */
+	int v = rdp_targets_recycled(&s, 0x200000, 172, SIZ_16b, 48);
+	CHECK(v >= 0);
+	CHECK(s.t[v].used);
+	uint32_t old_addr = s.t[v].addr;
+	CHECK_EQ(s.t[v].addr, 0x100000);  /* la más vieja */
+	CHECK_EQ(s.t[v].addr, old_addr);  /* y preguntar no la cambió */
+	int i = rdp_targets_get(&s, 0x200000, 172, SIZ_16b, 48, &fresh);
+	CHECK(fresh);
+	CHECK_EQ(i, v);
+	/* Crecer: la misma dirección y ancho con más alto cambia la misma ranura. */
+	int g = rdp_targets_recycled(&s, 0x110000, 172, SIZ_16b, 400);
+	CHECK(g >= 0);
+	CHECK_EQ(s.t[g].addr, 0x110000);
+	i = rdp_targets_get(&s, 0x110000, 172, SIZ_16b, 400, &fresh);
+	CHECK(fresh);
+	CHECK_EQ(i, g);
+}
+
 void t_suite_targets(void)
 {
+	RUN(targets_recycled_slot);
 	RUN(targets_dma_ring);
 	RUN(targets_inside);
 	RUN(targets_tall_pending);

@@ -493,8 +493,8 @@ static void raster_tall_fill_first(void)
  * más filas: la caja de lo dibujado era la de la anterior y la copia a la
  * RDRAM pisaba las filas de más de la novena, que son datos del juego (los
  * nodos del planificador de eventos; el juego saltaba a un callback pisado y
- * se quedaba en su pantalla de error). La ranura reciclada empieza sin
- * lo dibujado ni la caja de antes. */
+ * se quedaba en su pantalla de error). La ranura reciclada copia antes lo
+ * dibujado de la imagen vieja a su dirección y empieza sin su caja. */
 static void raster_recycled_slot(void)
 {
 	enum { N = 9, SW = 172, FULL = 60, LAST = 20, GAP = SW * 2 * FULL };
@@ -552,6 +552,10 @@ static void raster_recycled_slot(void)
 	raster_task(&job, &res);
 	/* Lo dibujado de la novena sale en sus 20 filas... */
 	CHECK_EQ(salsa64_rd16(big + last + (5 * SW + 10) * 2), rgba5551(255, 0, 0));
+	/* La primera imagen (la ranura que se recicló) llegó a la RDRAM antes de
+	 * que la ranura cambiara de dueña, con su dirección y sus 60 filas. */
+	CHECK_EQ(salsa64_rd16(big + base + (30 * SW + 10) * 2), rgba5551(255, 0, 0));
+	CHECK_EQ(salsa64_rd16(big + base + (59 * SW + 171) * 2), rgba5551(255, 0, 0));
 	/* ...y el resto de su memoria sigue siendo del juego. */
 	unsigned bad = 0;
 	for (uint32_t y = LAST; y < FULL; y++)

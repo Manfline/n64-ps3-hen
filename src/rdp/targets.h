@@ -274,6 +274,11 @@ uint32_t rdp_scale_pick_budget(uint32_t requested, uint32_t screen_h, uint32_t b
  * las campanadas). */
 int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32_t siz, uint32_t min_lh,
 		    bool *fresh);
+/* La ranura en uso que rdp_targets_get con esos mismos argumentos
+ * reasignaría a otra imagen (la recicla o la hace crecer), o -1 si la
+ * imagen ya existe o la ranura estaba libre. Sirve para copiar a la RDRAM
+ * lo dibujado en ella ANTES de que cambie de dirección y de alto. */
+int rdp_targets_recycled(const struct rdp_targets *s, uint32_t addr, uint32_t width, uint32_t siz, uint32_t min_lh);
 
 /* Se dibujó en la ranura durante el campo en curso. */
 void rdp_targets_drawn(struct rdp_targets *s, int slot);
