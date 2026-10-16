@@ -1357,6 +1357,16 @@ static const char *control_button_value(const struct menu *m, int row)
 		unsigned b = m->controls.source[row];
 		static const char *const names[] = { "Cruz", "Círculo", "Cuadrado", "Triángulo", "L1", "R1", "L2", "R2",
 			"L3", "R3", "Start", "Select", "Arriba", "Abajo", "Izquierda", "Derecha" };
+		if (row >= SALSA64_IN_C_UP && row <= SALSA64_IN_C_RIGHT) {
+			/* Los C siempre salen del otro stick; un botón asignado se suma. */
+			static char buf[64];
+			const char *stick = tr(m->controls.stick_source == SALSA64_STICK_RIGHT ? "Stick izquierdo"
+												 : "Stick derecho");
+			if (b >= SALSA64_DS3_NBUTTONS)
+				return stick;
+			snprintf(buf, sizeof buf, "%s + %s", stick, tr(names[b]));
+			return buf;
+		}
 		return b < SALSA64_DS3_NBUTTONS ? tr(names[b]) : tr("Sin asignar");
 	}
 	if (row == MENU_CONTROL_STICK)

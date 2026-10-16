@@ -4,6 +4,7 @@
  */
 #include "padmap.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -154,7 +155,10 @@ void salsa64_padmap_apply(const struct salsa64_padmap *map, const struct salsa64
 		    (src2 < SALSA64_DS3_NBUTTONS && (in->buttons & (1u << src2))))
 			b |= n64_inputs[k].bit;
 	}
-	int t = map->c_threshold, cx = (int)in->rx - 128, cy = (int)in->ry - 128;
+	/* Los botones C salen del stick que no mueve el stick de la N64: el
+	 * derecho, o el izquierdo si se eligió el derecho para el stick. */
+	bool c_left = map->stick_source == SALSA64_STICK_RIGHT;
+	int t = map->c_threshold, cx = (int)(c_left ? in->lx : in->rx) - 128, cy = (int)(c_left ? in->ly : in->ry) - 128;
 	if (cx > t)
 		b |= SALSA64_PAD_C_RIGHT;
 	else if (cx < -t)
