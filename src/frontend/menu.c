@@ -669,41 +669,47 @@ void menu_controls_open(struct menu *m, bool for_game)
 	m->status[0] = '\0';
 }
 
-static enum menu_action controls_buttons(struct menu *m, uint32_t pressed)
+/* Asigna a la fila elegida los botones `a` y `b` del DS3 (b puede ser NONE). */
+static void control_assign(struct menu *m, uint8_t a, uint8_t b)
+{
+	m->controls.source[m->control_sel] = a;
+	m->controls.source2[m->control_sel] = b;
+	if (m->control_for_game) {
+		m->game.controls.source[m->control_sel] = a;
+		m->game.controls.source2[m->control_sel] = b;
+	} else m->global_controls = m->controls;
+	m->control_capture = false;
+	m->status[0] = '\0';
+}
+
+/* En la captura se juntan los botones que se pulsan y se asignan al soltar
+ * todos: así L2 + R2 juntos quedan los dos para un botón de la N64. START
+ * cancela y SELECT deja la fila sin asignar (antes de pulsar otro). */
+static enum menu_action controls_buttons(struct menu *m, uint32_t pressed, uint32_t held)
 {
 	if (m->control_capture) {
-		if (pressed & BIT(SALSA64_DS3_START)) {
+		if (!m->capture_mask && (pressed & BIT(SALSA64_DS3_START))) {
 			m->control_capture = false;
 			m->status[0] = '\0';
 			return MENU_NONE;
 		}
-		if (pressed & BIT(SALSA64_DS3_SELECT)) {
-			m->controls.source[m->control_sel] = SALSA64_DS3_NONE;
-			m->controls.source2[m->control_sel] = SALSA64_DS3_NONE;
-			m->control_capture = false;
-			if (m->control_for_game) {
-				m->game.controls.source[m->control_sel] = SALSA64_DS3_NONE;
-				m->game.controls.source2[m->control_sel] = SALSA64_DS3_NONE;
-			} else m->global_controls = m->controls;
-			m->status[0] = '\0';
+		if (!m->capture_mask && (pressed & BIT(SALSA64_DS3_SELECT))) {
+			control_assign(m, SALSA64_DS3_NONE, SALSA64_DS3_NONE);
 			return MENU_CONTROLS_CHANGED;
 		}
-		for (unsigned b = 0; b < SALSA64_DS3_NBUTTONS; b++) {
-			if (b == SALSA64_DS3_START)
-				continue;
-			if (pressed & BIT(b)) {
-				m->controls.source[m->control_sel] = (uint8_t)b;
-				m->controls.source2[m->control_sel] = SALSA64_DS3_NONE;
-				m->control_capture = false;
-				if (m->control_for_game) {
-					m->game.controls.source[m->control_sel] = (uint8_t)b;
-					m->game.controls.source2[m->control_sel] = SALSA64_DS3_NONE;
-				} else m->global_controls = m->controls;
-				m->status[0] = '\0';
-				return MENU_CONTROLS_CHANGED;
+		m->capture_mask |= pressed & ((1u << SALSA64_DS3_NBUTTONS) - 1) &
+				   ~(BIT(SALSA64_DS3_START) | BIT(SALSA64_DS3_SELECT));
+		if (!m->capture_mask || (held & m->capture_mask))
+			return MENU_NONE;
+		uint8_t a = SALSA64_DS3_NONE, b = SALSA64_DS3_NONE;
+		for (unsigned k = 0; k < SALSA64_DS3_NBUTTONS; k++)
+			if (m->capture_mask & BIT(k)) {
+				if (a == SALSA64_DS3_NONE) a = (uint8_t)k;
+				else if (b == SALSA64_DS3_NONE) b = (uint8_t)k;
 			}
-		}
-		return MENU_NONE;
+		m->capture_mask = 0;
+		control_assign(m, a, b);
+		return MENU_CONTROLS_CHANGED;
 	}
 	if (pressed & (BIT(SALSA64_DS3_CIRCLE) | BIT(SALSA64_DS3_TRIANGLE))) {
 		m->page = m->controls_return_page;
@@ -713,7 +719,8 @@ static enum menu_action controls_buttons(struct menu *m, uint32_t pressed)
 		return MENU_NONE;
 	if (m->control_sel < SALSA64_IN_COUNT) {
 		m->control_capture = true;
-		menu_set_status(m, "Pulsa botón DS3");
+		m->capture_mask = 0;
+		menu_set_status(m, "Pulsa uno o dos botones");
 	} else if (m->control_sel == MENU_CONTROL_STICK) {
 		m->controls.stick_source = m->controls.stick_source == SALSA64_STICK_RIGHT ? SALSA64_STICK_LEFT : SALSA64_STICK_RIGHT;
 		if (m->control_for_game) m->game.controls.stick_source = m->controls.stick_source;
@@ -839,7 +846,7 @@ enum menu_action menu_input(struct menu *m, uint32_t buttons, uint64_t now_us)
 		buttons &= updown;
 	} else if (m->page == MENU_PAGE_CONTROLS) {
 		uint32_t control_pressed = m->control_capture ? pressed : pressed & ~updown;
-		enum menu_action a = controls_buttons(m, control_pressed);
+		enum menu_action a = controls_buttons(m, control_pressed, buttons);
 		if (a != MENU_NONE || m->page != MENU_PAGE_CONTROLS || m->control_capture) {
 			m->rep_button = 0;
 			return a;
@@ -1367,6 +1374,12 @@ static const char *control_button_value(const struct menu *m, int row)
 			snprintf(buf, sizeof buf, "%s + %s", stick, tr(names[b]));
 			return buf;
 		}
+		unsigned b2 = m->controls.source2[row];
+		if (b < SALSA64_DS3_NBUTTONS && b2 < SALSA64_DS3_NBUTTONS) {
+			static char two[64];
+			snprintf(two, sizeof two, "%s + %s", tr(names[b]), tr(names[b2]));
+			return two;
+		}
 		return b < SALSA64_DS3_NBUTTONS ? tr(names[b]) : tr("Sin asignar");
 	}
 	if (row == MENU_CONTROL_STICK)
@@ -1486,7 +1499,7 @@ static void panel(const struct menu *m, float W, float H, float a)
 		stext(x, y, tr(control_row_title(m->control_sel)), 1.6f, C_DIM, a, PANEL_MAX(1.6f));
 		stext(x, y + 30.0f, control_button_value(m, m->control_sel), 2.0f, C_ACCENT, a, PANEL_MAX(2.0f));
 		if (m->control_capture) {
-			stext(x, py + ph - 70.0f, tr("Pulsa botón DS3"), 1.35f, C_WARN, a, PANEL_MAX(1.35f));
+			stext(x, py + ph - 70.0f, tr("Pulsa uno o dos botones"), 1.35f, C_WARN, a, PANEL_MAX(1.35f));
 			stext(x, py + ph - 42.0f, tr("START cancela · SELECT sin asignar"), 1.2f, C_DIM, a, PANEL_MAX(1.2f));
 		} else if (m->control_sel == MENU_CONTROL_STICK) {
 			stext(x, py + ph - 52.0f, tr("× alterna el stick analógico"), 1.35f, C_DIM, a, PANEL_MAX(1.35f));

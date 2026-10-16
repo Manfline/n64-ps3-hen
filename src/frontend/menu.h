@@ -174,6 +174,7 @@ struct menu {
 	struct salsa64_padmap global_controls, controls;
 	int control_sel, controls_return_page;
 	bool control_for_game, control_capture;
+	uint32_t capture_mask;  /* botones del DS3 pulsados durante la captura (se asignan al soltar) */
 	const char *game_title;
 	int game_sel;
 	int game_rom;          /* la ROM de esa página (índice en la lista) */

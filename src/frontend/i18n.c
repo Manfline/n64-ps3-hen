@@ -341,7 +341,7 @@ static const struct entry table[] = {
 	  { "By geometry", "Par géométrie", "Nach Geometrie", "Per geometria", "Por geometria" } },
 	{ "Por geometría (exp.)",
 	  { "By geometry (exp.)", "Par géométrie (exp.)", "Nach Geometrie (exp.)", "Per geometria (sper.)", "Por geometria (exp.)" } },
-	{ "Pulsa botón DS3", { "Press a DS3 button", "Appuyez sur une touche DS3", "Drücke eine DS3-Taste", "Premi un tasto DS3", "Pressione um botão DS3" } },
+	{ "Pulsa uno o dos botones", { "Press one or two buttons", "Appuyez sur une ou deux touches", "Drücke eine oder zwei Tasten", "Premi uno o due tasti", "Pressione um ou dois botões" } },
 	{ "Puntos de fósforo",
 	  { "Round phosphor dots", "Points de phosphore", "Runde Phosphorpunkte", "Punti di fosforo", "Pontos de fósforo" } },
 	{ "Puntos de la máscara CRT",

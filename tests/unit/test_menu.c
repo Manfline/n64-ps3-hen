@@ -608,9 +608,24 @@ static void menu_controls(void)
 	CHECK_EQ(menu_input(&m, CROSS, 10), MENU_NONE);
 	CHECK(m.control_capture);
 	menu_input(&m, 0, 11);
-	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_R2), 12), MENU_CONTROLS_CHANGED);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_R2), 12), MENU_NONE);  /* se asigna al soltar */
+	CHECK(m.control_capture);
+	CHECK_EQ(menu_input(&m, 0, 13), MENU_CONTROLS_CHANGED);
 	CHECK(!m.control_capture);
 	CHECK_EQ(m.global_controls.source[SALSA64_IN_A], SALSA64_DS3_R2);
+	CHECK_EQ(m.global_controls.source2[SALSA64_IN_A], SALSA64_DS3_NONE);
+
+	/* Dos botones juntos (L2 y luego R2 sin soltar L2): los dos. */
+	m.control_sel = SALSA64_IN_Z;
+	menu_input(&m, CROSS, 13);
+	menu_input(&m, 0, 13);
+	menu_input(&m, BIT(SALSA64_DS3_L2), 13);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_L2) | BIT(SALSA64_DS3_R2), 13), MENU_NONE);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_R2), 13), MENU_NONE);  /* falta soltar R2 */
+	CHECK_EQ(menu_input(&m, 0, 13), MENU_CONTROLS_CHANGED);
+	CHECK_EQ(m.global_controls.source[SALSA64_IN_Z], SALSA64_DS3_L2);
+	CHECK_EQ(m.global_controls.source2[SALSA64_IN_Z], SALSA64_DS3_R2);
+	m.control_sel = SALSA64_IN_A;
 
 	menu_input(&m, 0, 13);
 	m.control_sel = MENU_CONTROL_RESET;
@@ -624,7 +639,8 @@ static void menu_controls(void)
 	menu_input(&m, CROSS, 16);
 	CHECK(m.control_capture);
 	menu_input(&m, 0, 17);
-	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_UP), 18), MENU_CONTROLS_CHANGED);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_UP), 18), MENU_NONE);
+	CHECK_EQ(menu_input(&m, 0, 18), MENU_CONTROLS_CHANGED);
 	CHECK_EQ(m.control_sel, SALSA64_IN_D_UP);
 	CHECK_EQ(m.global_controls.source[SALSA64_IN_D_UP], SALSA64_DS3_UP);
 
