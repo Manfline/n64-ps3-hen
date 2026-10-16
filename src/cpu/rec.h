@@ -73,6 +73,11 @@ struct salsa64_rec_block {
  * los dos (docs/rec-ppe.md, «Status.FR»). */
 #define SALSA64_REC_FR_SET  1u  /* compilado con FR = 1 */
 #define SALSA64_REC_FR_DEP  2u  /* el código depende de FR */
+/* Compilado con Status.CU1 = 0: el bloque termina antes de su primera
+ * instrucción de COP1 (si no es la primera), así corre en nativo con los
+ * dos CU1. Un bloque compilado con CU1 = 1 que sale en la entrada por
+ * CU1 = 0 se mata y se recompila así (docs/rec-ppe.md, «CU1 = 0»). */
+#define SALSA64_REC_CU1_OFF 4u
 /* ¿El bloque vale con Status.FR = `fr`? */
 static inline bool salsa64_rec_block_fr_ok(const struct salsa64_rec_block *b, bool fr)
 {
@@ -118,6 +123,7 @@ struct salsa64_rec_stats {
 	uint64_t fr_twins;       /* de fr_dep, los compilados como gemelo de uno para el otro FR */
 	uint64_t fr_exits;       /* salidas en la entrada porque cambió Status.FR (exit_fr) */
 	uint64_t cu1_exits;      /* de las salidas por exit_fr, las que eran COP1 inusable (CU1 = 0) */
+	uint64_t cu1_cuts;       /* bloques con COP1 recompilados cortados porque se entró con CU1 = 0 */
 	uint64_t flushes_by[SALSA64_REC_FLUSH_N];  /* de flushes, por causa */
 	uint64_t hot_placed;     /* de compiled, los compilados en la zona caliente */
 	uint64_t hot_full;       /* calientes que fueron a la zona fría porque la caliente estaba llena */
@@ -254,6 +260,7 @@ struct salsa64_rec_fmsite {
 #define SALSA64_REC_DBG_NO_DETACH  0x4000u  /* invalidar mata el bloque (sin desprender ni enganchar) */
 #define SALSA64_REC_DBG_NO_SUPER   0x8000u  /* un salto condicional hacia adelante termina el bloque */
 #define SALSA64_REC_DBG_NO_IJUMP   0x10000u /* un salto interno con destino dentro del bloque sale enlazado */
+#define SALSA64_REC_DBG_NO_CU1_CUT 0x20000u /* con CU1 = 0, un bloque con COP1 no se corta: sale en la entrada */
 #define SALSA64_REC_OLD(rec, bit)  ((rec)->opts & (SALSA64_REC_OPT_LEGACY | (bit)))
 
 #define SALSA64_REC_JTC_SLOTS 1024

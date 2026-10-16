@@ -53,6 +53,7 @@ enum perf_rec {
 	PERF_R_SLOW = 15,     /* contadores del camino lento desde la ventana anterior */
 	PERF_R_COMPILE = 16,  /* compilaciones por motivo desde la ventana anterior */
 	PERF_R_FPU = 17,      /* COP1 al intérprete por instrucción y razón, y PCs lentos: total de sesión (al cerrar) */
+	PERF_R_COP0 = 18,     /* COP0 y registros del MI al camino lento, por instrucción y registro, desde la ventana anterior */
 };
 
 /* ---- Campos de VENTANA y TIRON ------------------------------------------------
@@ -236,6 +237,13 @@ struct salsa64_rec_sample;
 struct salsa64_rec_trace_slow_stats;
 struct salsa64_rec_trace_compile_stats;
 bool perf_put_slow(struct perf_ring *r, uint32_t ms, const struct salsa64_rec_trace_slow_stats *s);
+/* Lo de la ventana del camino lento (CAMINO LENTO y COP0): las cuentas por
+ * causa y del desglose de COP0 y el MI como resta contra `prev` (que se
+ * actualiza), y los PCs de la tabla de la ventana, que se pide vaciar. Deja
+ * en `delta` (si no es NULL) lo escrito en CAMINO LENTO. */
+struct salsa64_rec_trace_prev;
+bool perf_put_slow_window(struct perf_ring *r, uint32_t ms, struct salsa64_rec_trace *t,
+			  struct salsa64_rec_trace_prev *prev, struct salsa64_rec_trace_slow_stats *delta);
 bool perf_put_fpu(struct perf_ring *r, uint32_t ms, const struct salsa64_rec_trace *t);
 bool perf_put_compile(struct perf_ring *r, uint32_t ms, const struct salsa64_rec_trace_compile_stats *s);
 bool perf_put_block(struct perf_ring *r, uint32_t ms, uint32_t field, const struct salsa64_rec_trace_block *b);

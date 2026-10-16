@@ -206,7 +206,8 @@ Lo que se llama a C:
   fuera de la RDRAM, código en la zona escrita);
 - instrucciones raras o con mucho estado, que ejecuta el intérprete
   (`salsa64_vr4300_exec_one`): LL/SC, traps, COP0 salvo MFC0/DMFC0
-  (y MFC0 de Random), MTC0 a EntryLo/PageMask/Index, TLBWI/TLBWR y ERET
+  (y MFC0 de Random), MTC0 a EntryLo/PageMask/Index/EPC y a Status en su
+  camino rápido (ver «MTC0 de Status y EPC en línea»), TLBWI/TLBWR y ERET
   (estos tres últimos con rutina propia, ver «COP0 sin el intérprete»),
   CVT.S/D.L, y los caminos lentos de lo que se traduce
   (operandos fuera de la franja, redondeo dirigido en la aritmética,
@@ -400,8 +401,9 @@ antes para medir):
 - **MTC0 y DMTC0 a EntryLo0, EntryLo1, PageMask e Index** son nativos y no
   terminan el bloque: el latch (`cop0_latch`) y el campo con su máscara
   (`salsa64_cpu_cop0_write`). No cambian la traducción hasta la escritura
-  de la TLB. Status, Cause, Compare, Count, EntryHi (cambia el ASID) y lo
-  demás siguen por el intérprete y terminan el bloque.
+  de la TLB. Cause, Compare, Count, EntryHi (cambia el ASID) y lo demás
+  siguen por el intérprete y terminan el bloque (EPC y Status: ver «MTC0 de
+  Status y EPC en línea», 2026-10-16).
 - **TLBWI/TLBWR** llaman a `rec_h_tlbw` (rec.c): la escritura
   (`salsa64_vr4300_tlbw`, que devuelve la entrada) y `salsa64_rec_x_tlb_written`,
   que pone `ktlb[]` al día solo para esa entrada (borrar sus páginas de antes
@@ -414,6 +416,57 @@ antes para medir):
   mira la palabra de interrupción/modo y, si sigue en kernel sin
   interrupción, va al bloque destino por `exit_jr` como un JR; si no, al
   despachador con ese pc (`exit_mid`).
+
+### MTC0 de Status y EPC en línea (2026-10-16)
+
+`__osDisableInt` y `__osRestoreInt` de libultra (`mfc0 Status ; and/or ;
+mtc0 Status`) y `__osDispatchThread` (MTC0 de Status y de EPC en cada cambio
+de hilo) eran casi todo lo que llegaba a C por COP0: en la PS3, Doom 64 75 M
+llamadas y 13,9 s en 125 s, NFL Blitz 19,5 s en 99 s, Episode I Racer 136 M
+llamadas y 28 s en 296 s, ~185 ns cada una.
+
+- **MTC0/DMTC0 a EPC** se suma a EntryLo, PageMask e Index: el valor al
+  latch y al campo, sin terminar el bloque.
+- **MTC0 a Status** (`emit_mtc0_status`, `H_MTC0_ST`) hace en línea lo de
+  `salsa64_cpu_cop0_write` cuando, con KSU = 0, el valor nuevo solo cambia
+  IE, EXL o IM: modo, `allow64` y `re_xor` siguen iguales (kernel) y la TLB
+  del recompilador también (ERL igual). Queda la interrupción: si con el
+  Status nuevo hay una habilitada y pendiente (IE, sin EXL ni ERL, IP & IM),
+  o si cambia otra cosa (FR, CU1, ERL, KSU, BEV…), va al intérprete en la
+  sección fría con la revisión de siempre. Son 22 palabras sin formas con
+  punto (`rlwinm` + `cmpwi`). El bloque termina después del MTC0 como antes
+  y enlaza con el siguiente, así un cambio de FR o de CU1 lo nota la entrada
+  del bloque siguiente.
+
+`SALSA64_REC_OPT_COP0_EXEC` repite lo de antes. Las pruebas
+`status_write_enables_pending_irq`, `status_write_ie_without_irq` y
+`status_write_cu1_off_then_cop1` (test_cop0.c) corren con el intérprete y
+con el recompilador (`salsa64-unit rec`).
+
+### CU1 = 0: bloques cortados antes del COP1 (2026-10-16)
+
+La entrada de un bloque con alguna instrucción de COP1 revisa Status.CU1 y,
+con CU1 = 0, sale al despachador, que interpreta hasta el fin del bloque
+básico (la excepción de coprocesador inutilizable la lanza el intérprete).
+Eso pasaba aunque el COP1 estuviera en un camino que no se toma: el cambio
+de hilo de libultra guarda y repone la FPU (`cfc1`, `sdc1`, `ctc1`, `ldc1`)
+solo si el hilo la usa, y los hilos que no la usan (el ocioso, entre otros)
+corren con CU1 = 0. En Doom 64 eran ~14 000 salidas en la entrada y ~160 000
+instrucciones interpretadas por campo (el 30 % del muestreo en el intérprete
+y buena parte del 14 % del despachador); en Indiana Jones, el 51 % en el
+intérprete.
+
+Ahora, si al compilar Status.CU1 = 0, el bloque termina antes de su primera
+instrucción de COP1 (o antes del salto cuyo delay slot la tiene), salvo que
+sea la primera: así corre en nativo con los dos valores de CU1 y, con
+CU1 = 1, sigue enlazado al bloque que empieza en el COP1. El bloque queda
+marcado `SALSA64_REC_CU1_OFF`. Si uno compilado con CU1 = 1 sale en la
+entrada con CU1 = 0 cabiendo antes del evento (o sea, por CU1), el
+despachador lo mata (con su gemelo de FR) y lo recompila cortado
+(`cu1_recut`, `stats.cu1_cuts`); uno ya cortado empieza con COP1 y el
+intérprete lanza la excepción como siempre. `SALSA64_REC_DBG_NO_CU1_CUT`
+repite lo de antes. En Doom (qemu, 600 campos) las instrucciones
+interpretadas por campo bajan de 163 228 a 78.
 
 ### Cargas y almacenamientos no alineados
 
@@ -643,8 +696,9 @@ con el desplazamiento ya calculado; lo demás va a C.
 El intérprete salta vueltas enteras de los bucles de espera (`idle.c`,
 consultado en cada salto corto hacia atrás). El código generado hace la
 misma consulta: un salto que el intérprete consultaría (condicional, de
-enlace, BC1 o J, tomado hacia atrás a menos de 8 instrucciones) y que no
-esté en la tabla de descartados sale a C en el camino tomado, antes del
+enlace, BC1 o J, tomado hacia atrás a menos de 64 instrucciones; 8 hasta el
+2026-10-16) y que no esté en la tabla de descartados sale a C en el camino
+tomado, antes del
 delay slot y con el mismo estado (registros en memoria, cycles con el salto
 contado). El despachador llama a `salsa64_vr4300_idle` igual que el
 intérprete; si la tabla lo descarta, invalida el bloque y se recompila sin
@@ -652,6 +706,52 @@ la consulta. Así los ciclos saltados y las tablas quedan idénticos a los del
 intérprete (las pruebas de `test_idle.c` pasan en los dos), y un bucle de
 espera de verdad cuesta una salida a C por evento. Cambiar la detección
 (`salsa64_cpu_set_idle`) vacía la caché.
+
+**Esperas que pasan por el planificador de libultra (2026-10-16).** En la
+PS3, Doom 64 corría al 35 % con 0 % en bucles de espera: su hilo ocioso es
+`for (;;) osYieldThread();` (0x800056f0), y cada vuelta pasa por
+`__osDisableInt`, `__osEnqueueAndYield` (guarda el contexto, lee
+MI_INTR_MASK), `__osDispatchThread` (MTC0 Status, MTC0 EPC, escribe
+MI_INTR_MASK, ERET) y `__osRestoreInt`: ~140 instrucciones con cuatro MTC0,
+un ERET y dos accesos al MI, ~7 000 vueltas por campo, el 84 % de los ciclos
+emulados. Las 6 PCs del camino lento de la sesión son esas (0x80041ba0 lee
+la máscara, 0x80041c90 y 0x80041d1c son los MTC0 de Status y EPC,
+0x80041da8 escribe la máscara, 0x8004294c y 0x80042968 son los MTC0 de
+`__osDisableInt` y `__osRestoreInt`). Lo mismo, con otras formas: 1080
+(`while (x->y == s0) osYieldThread();` en un hilo que usa la FPU), NFL
+Blitz (cinco `osRecvMesg(..., OS_MESG_NOBLOCK)` y `osYieldThread`, con un J
+de 37 instrucciones hacia atrás), Indiana Jones (en código mapeado por la
+TLB) y Episode I Racer.
+
+`idle.c` simula ahora la vuelta entera siguiendo saltos, llamadas, regresos
+y ERET (hasta 1024 instrucciones) sobre copias: almacenamientos en la RDRAM
+en una tabla que leen las cargas de la vuelta (al final cada byte escrito
+tiene que valer lo que valía), MFC0/MTC0 de Status (solo IE, EXL, ERL e IM,
+sin salir de kernel) y EPC, MFC0 de Cause, MI_INTR_MASK leído y escrito y
+MI_MODE/MI_VERSION/MI_INTR leídos, MULT/DIV y HI/LO, y lo de la FPU de un
+cambio de contexto (CFC1/CTC1 de FCR31, LWC1/LDC1/SWC1/SDC1). Si en algún
+punto el CPU tomaría una interrupción, no es de espera. El punto fijo se
+exige en los 32 registros, HI, LO, Status, EPC, el latch de COP0, LLbit, la
+máscara del MI, FCR31 y los registros de la FPU. La vuelta dura lo que contó
+la simulación (un ciclo por instrucción ejecutada; un delay slot anulado no
+cuenta), así que el salto de tiempo es el de siempre: vueltas enteras hasta
+el próximo evento.
+
+Lo que no se simula descarta el salto para siempre si está en todos los
+caminos; si aparece después de un salto condicional (llegó un mensaje y el
+hilo lo atiende: Blitz lee SI_STATUS) es «esta vez no». Un salto que ya fue
+de espera aguanta 64 fallos seguidos antes de descartarse (los demás, 2 como
+antes). Las tablas son de 1024 entradas con un hash multiplicativo del pc
+(`SALSA64_IDLE_SLOT`; con los bits 2–11 solos, dos saltos de Blitz se
+pisaban el descarte en cada vuelta).
+
+Comprobado en el host con los 29 respaldos: 1800 campos con y sin
+`--no-idle` dan la misma RDRAM y los mismos registros. En % de bucles de
+espera (host, intérprete, 1800 campos): Doom 0 → 83 %, NFL Blitz 0 → 91 %,
+1080 0 → 86 %, Indiana Jones 1 → 86 %, Episode I Racer 21 → 37 %. Pruebas
+nuevas en test_idle.c: el `osYieldThread` en miniatura (con y sin FPU), el
+bucle de 40 instrucciones, el almacenamiento silencioso y la espera que tras
+cada interrupción pasa una vez por algo que no se simula.
 
 ### Invalidación
 

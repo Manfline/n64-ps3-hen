@@ -265,6 +265,45 @@ static void fpu_breakdown_and_space_saving(void)
 	CHECK(!cold0);  /* el de menos ticks fue el reemplazado */
 }
 
+/* Desglose de COP0 y el MI, y la tabla de PCs de la ventana: propia, se
+ * vacía cuando la pide quien escribe la ventana (antes se restaban dos
+ * tablas y una entrada que cambiaba de PC daba ~2³² llamadas). */
+static void cop0_breakdown_and_window_pcs(void)
+{
+	CHECK_EQ(salsa64_rec_trace_cop0_index(MTC0(T0, 12)), SALSA64_RT_COP0_MT + 12u);
+	CHECK_EQ(salsa64_rec_trace_cop0_index(MFC0(T0, 9)), SALSA64_RT_COP0_MF + 9u);
+	CHECK_EQ(salsa64_rec_trace_cop0_index(DMTC0(T0, 14)), SALSA64_RT_COP0_DMT + 14u);
+	CHECK_EQ(salsa64_rec_trace_cop0_index(DMFC0(T0, 30)), SALSA64_RT_COP0_DMF + 30u);
+	CHECK_EQ(salsa64_rec_trace_cop0_index(ERET), (unsigned)SALSA64_RT_COP0_ERET);
+	CHECK_EQ(salsa64_rec_trace_cop0_index(TLBWR), (unsigned)SALSA64_RT_COP0_TLBWR);
+	CHECK_EQ(salsa64_rec_trace_cop0_index(M_R(0x10, 0x10, 0, 0, 0, 0x20)), (unsigned)SALSA64_RT_COP0_OTHER);
+	CHECK_EQ(salsa64_rec_trace_mi_index(0x0430000Cu, false), SALSA64_RT_COP0_MI + 6u);
+	CHECK_EQ(salsa64_rec_trace_mi_index(0x0430000Cu, true), SALSA64_RT_COP0_MI + 7u);
+	CHECK_EQ(salsa64_rec_trace_mi_index(0x04300008u, false), SALSA64_RT_COP0_MI + 4u);
+	CHECK_EQ(SALSA64_RT_COP0_N, 142u);  /* el lector (tools/perfilado) usa estos índices */
+
+	struct salsa64_rec_trace *t = &ss_trace;
+	salsa64_rec_trace_init(t);
+	salsa64_rec_trace_cop0_add(t, SALSA64_RT_COP0_MT + 12, 30);
+	salsa64_rec_trace_cop0_add(t, SALSA64_RT_COP0_MT + 12, 20);
+	salsa64_rec_trace_cop0_add(t, SALSA64_RT_COP0_N, 20);  /* fuera de rango: nada */
+	CHECK_EQ(t->cop0.calls[SALSA64_RT_COP0_MT + 12], 2u);
+	CHECK_EQ(t->cop0.ticks[SALSA64_RT_COP0_MT + 12], 50u);
+
+	for (unsigned n = 0; n < 5; n++)
+		salsa64_rec_trace_slow_add(t, SALSA64_RT_SLOW_EXEC_COP0, 7, 0x80042968u);
+	CHECK_EQ(t->slow_field.top[0].pc, 0x80042968u);
+	CHECK_EQ(t->slow_field.top[0].calls, 5u);
+	t->top_reset = 1;  /* la ventana se escribió */
+	salsa64_rec_trace_slow_add(t, SALSA64_RT_SLOW_EXEC_COP0, 7, 0x8004294Cu);
+	CHECK_EQ(t->top_reset, 0u);
+	CHECK_EQ(t->slow_field.top[0].pc, 0x8004294Cu);
+	CHECK_EQ(t->slow_field.top[0].calls, 1u);
+	CHECK_EQ(t->slow_field.top[1].pc, 0u);
+	CHECK_EQ(t->slow.top[0].calls, 5u);  /* la de la sesión sigue */
+	CHECK_EQ(t->slow.top[1].pc, 0x8004294Cu);
+}
+
 /* ---- Con el recompilador ---------------------------------------------------- */
 
 #define F_OFF  0x40u
@@ -387,5 +426,6 @@ void t_suite_rec_trace(void)
 	RUN(classes_of_instructions);
 	RUN(slow_path_classification);
 	RUN(fpu_breakdown_and_space_saving);
+	RUN(cop0_breakdown_and_window_pcs);
 	RUN(rec_window_jr_and_classes);
 }

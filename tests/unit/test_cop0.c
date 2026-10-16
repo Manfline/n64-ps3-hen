@@ -262,6 +262,56 @@ static void mi_interrupt_on_ip2(void)
 	CHECK_EQ(CPU->cause & 0x400, 0);
 }
 
+/* MTC0 a Status como en __osDisableInt y __osRestoreInt (el recompilador lo
+ * hace en línea si solo cambian IE, EXL o IM y no queda una interrupción
+ * pendiente): con una pendiente, la toma después del MTC0; sin ella, sigue;
+ * y apagar CU1 hace que el COP1 siguiente lance la excepción. Muchos ciclos,
+ * para que los bloques corran en nativo con el recompilador. */
+static void status_write_enables_pending_irq(void)
+{
+	t_set_status(T_STATUS | 0x100);  /* IM0, sin IE */
+	salsa64_cpu_cop0_write(CPU, SALSA64_CP0_CAUSE, 0x100);
+	t_wr32(0x180, ADDIU(T2, 0, 9));
+	t_wr32(0x184, BEQ(0, 0, 0xFFFF));
+	t_wr32(0x188, NOP);
+	T_LOAD(MFC0(T0, SALSA64_CP0_STATUS), ORI(T0, T0, 1), MTC0(T0, SALSA64_CP0_STATUS),
+	       ADDIU(T1, 0, 5), BEQ(0, 0, 0xFFFF), NOP);
+	t_step(400);
+	CHECK_EQ(R[T2], 9);
+	CHECK_EQ(R[T1], 0);
+	CHECK_EQ(SALSA64_CAUSE_EXC(CPU->cause), SALSA64_EXC_INT);
+	CHECK_EQ(CPU->epc, T_CODE + 12);
+}
+
+static void status_write_ie_without_irq(void)
+{
+	uint32_t st = T_STATUS | SALSA64_ST_IE | 0x8400;
+	t_set_status(st);
+	T_LOAD(MFC0(T0, SALSA64_CP0_STATUS), ADDIU(1, 0, 0xFFFE), AND(T1, T0, 1), MTC0(T1, SALSA64_CP0_STATUS),
+	       MFC0(T2, SALSA64_CP0_STATUS), MTC0(T0, SALSA64_CP0_STATUS), ADDIU(T3, 0, 5),
+	       BEQ(0, 0, 0xFFFF), NOP);
+	t_step(400);
+	CHECK_EQ(R[T3], 5);
+	CHECK_EQ(CPU->status, st);
+	CHECK_EQ(R[T2], (uint64_t)(int32_t)(st & ~SALSA64_ST_IE));
+	CHECK_EQ(CPU->cop0_latch, R[T0]);
+	CHECK_EQ(CPU->status & SALSA64_ST_EXL, 0);
+}
+
+static void status_write_cu1_off_then_cop1(void)
+{
+	t_set_status(T_STATUS);
+	t_wr32(0x180, BEQ(0, 0, 0xFFFF));
+	t_wr32(0x184, NOP);
+	T_LOAD(MFC0(T0, SALSA64_CP0_STATUS), LUI(1, 0xDFFF), ORI(1, 1, 0xFFFF), AND(T1, T0, 1),
+	       MTC0(T1, SALSA64_CP0_STATUS), MFC1(T2, 0), ADDIU(T3, 0, 5), BEQ(0, 0, 0xFFFF), NOP);
+	t_step(400);
+	CHECK_EQ(R[T3], 0);
+	CHECK_EQ(SALSA64_CAUSE_EXC(CPU->cause), SALSA64_EXC_CPU);
+	CHECK_EQ((CPU->cause >> SALSA64_CAUSE_CE_SHIFT) & 3, 1);
+	CHECK_EQ(CPU->epc, T_CODE + 20);
+}
+
 static void eret_from_error_level(void)
 {
 	t_set_status(T_STATUS | SALSA64_ST_ERL);
@@ -715,6 +765,9 @@ void t_suite_cop0(void)
 	RUN(software_interrupt);
 	RUN(interrupt_blocked_by_exl_and_ie);
 	RUN(mi_interrupt_on_ip2);
+	RUN(status_write_enables_pending_irq);
+	RUN(status_write_ie_without_irq);
+	RUN(status_write_cu1_off_then_cop1);
 	RUN(eret_from_error_level);
 	RUN(kuseg_unmapped_with_erl);
 	RUN(tlb_mapped_access);

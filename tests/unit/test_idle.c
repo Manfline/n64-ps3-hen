@@ -89,7 +89,7 @@ static uint64_t same_both_ways(setup_fn setup, uint64_t cycles)
 static bool rejected(uint32_t pa)
 {
 	uint64_t pc = T_CODE + (pa - T_CODE_PA);
-	return CPU->idle_reject[(pc >> 2) & (SALSA64_IDLE_CACHE - 1)] == ((uint32_t)pc ^ t_rd32(pa));
+	return CPU->idle_reject[SALSA64_IDLE_SLOT(pc)] == ((uint32_t)pc ^ t_rd32(pa));
 }
 
 /* ---- Escenarios ---------------------------------------------------------- */
@@ -163,11 +163,80 @@ static void setup_delay_slot_write(void)
 	T_LOAD(LW(9, 0, 10), BEQ(9, 0, 0xFFFE), ADDIU(10, 16, 0x10));
 }
 
-/* Un almacenamiento en el cuerpo: se descarta al primer intento. */
+/* Un contador en la RDRAM: los registros vuelven a lo mismo (t0 = 0 al
+ * final de cada vuelta) pero la memoria no. */
 static void setup_store(void)
 {
 	R[16] = T_DATA;
-	T_LOAD(SW(0, 0x20, 16), BEQ(0, 0, 0xFFFE), NOP);
+	T_LOAD(LW(8, 0x20, 16), ADDIU(8, 8, 1), SW(8, 0x20, 16), BEQ(0, 0, 0xFFFC), ADDU(8, 0, 0));
+}
+
+/* Un almacenamiento que escribe siempre lo mismo: desde la segunda vuelta
+ * la RDRAM ya tiene ese valor y es punto fijo. */
+static void setup_silent_store(void)
+{
+	R[16] = T_DATA;
+	R[9] = 5;
+	T_LOAD(SW(9, 0x20, 16), BEQ(0, 0, 0xFFFE), NOP);
+}
+
+/* El hilo ocioso de `for (;;) osYieldThread();` en miniatura: deshabilita
+ * interrupciones, guarda contexto, lee y escribe MI_INTR_MASK, pone EPC y
+ * EXL y vuelve con ERET (que deja IE como estaba). Entre vuelta y vuelta
+ * entran las interrupciones del VI, con el manejador de vitest. */
+static void setup_yield_loop(void)
+{
+	load_vi_handler();
+	R[20] = T_DATA;
+	T_LOAD(JAL(T_CODE_PA + 0x20), NOP,       /* bucle: osYieldThread */
+	       BEQ(0, 0, 0xFFFD), NOP,
+	       NOP, NOP, NOP, NOP,
+	       MFC0(8, 12), ADDIU(1, 0, 0xFFFE), AND(9, 8, 1), MTC0(9, 12),
+	       SD(16, 0x30, 20), SD(31, 0x38, 20),
+	       LUI(27, 0xA430), LW(26, 0xC, 27), SW(26, 0x40, 20),
+	       ADDIU(26, 0, 0x80), SW(26, 0xC, 27),  /* poner la del VI: la misma máscara */
+	       MTC0(31, 14), ORI(8, 8, 2), MTC0(8, 12),
+	       ERET);
+}
+
+/* Lo mismo con un hilo que usa la FPU: guarda y repone FCR31 y un par de
+ * registros (CFC1, SDC1, LDC1, CTC1). */
+static void setup_yield_fpu_loop(void)
+{
+	load_vi_handler();
+	R[20] = T_DATA;
+	T_LOAD(JAL(T_CODE_PA + 0x20), NOP,
+	       BEQ(0, 0, 0xFFFD), NOP,
+	       NOP, NOP, NOP, NOP,
+	       MFC0(8, 12), ADDIU(1, 0, 0xFFFE), AND(9, 8, 1), MTC0(9, 12),
+	       CFC1(10, 31), SW(10, 0x48, 20), SDC1(20, 0x50, 20), SD(31, 0x38, 20),
+	       LDC1(20, 0x50, 20), LW(10, 0x48, 20), CTC1(10, 31),
+	       MTC0(31, 14), ORI(8, 8, 2), MTC0(8, 12),
+	       ERET);
+}
+
+/* Un bucle de 40 instrucciones que vuelve con J (más de las 8 de antes). */
+static void setup_long_loop(void)
+{
+	static uint32_t code[40];
+	for (unsigned k = 0; k < 38; k++)
+		code[k] = NOP;
+	code[38] = J(T_CODE_PA);
+	code[39] = NOP;
+	t_load(code, 40);
+}
+
+/* Una espera que, después de cada interrupción, pasa una vez por algo que
+ * no se simula (VI_V_CURRENT) y vuelve a esperar: no se descarta. */
+static void setup_poll_after_irq(void)
+{
+	load_vi_handler();
+	R[20] = T_DATA;
+	T_LOAD(LW(8, 0, 20),                 /* campos atendidos */
+	       BEQ(8, 17, 4), NOP,           /* nada nuevo: a esperar */
+	       LUI(9, 0xA440), LW(10, 0x10, 9),
+	       ADDU(17, 8, 0),               /* visto */
+	       BEQ(0, 0, 0xFFF9), NOP);
 }
 
 /* ---- Pruebas --------------------------------------------------------------- */
@@ -217,7 +286,25 @@ static void idle_store_not_skipped(void)
 {
 	uint64_t skipped = same_both_ways(setup_store, 1000);
 	CHECK_EQ(skipped, 0);
-	CHECK(rejected(CODE(1)));
+	CHECK(rejected(CODE(3)));
+	CHECK(t_rd32(T_DATA_PA + 0x20) > 100);
+}
+
+static void idle_silent_store(void)
+{
+	uint64_t skipped = same_both_ways(setup_silent_store, 100000);
+	CHECK(skipped > 99000);
+	CHECK_EQ(t_rd32(T_DATA_PA + 0x20), 5);
+	CHECK(!rejected(CODE(1)));
+}
+
+static void idle_yield_loop_exact(void)
+{
+	uint64_t skipped = same_both_ways(setup_yield_loop, 3 * NTSC_FIELD + 4321);
+	CHECK(skipped > 3 * NTSC_FIELD - 5000);
+	CHECK_EQ(t_rd32(T_DATA_PA), 3);  /* campos atendidos */
+	CHECK(!rejected(CODE(2)));
+	CHECK_EQ(t_rd32(T_DATA_PA + 0x3C), (uint32_t)(T_CODE + 8));  /* ra guardado */
 }
 
 /* `b .` en KSEG1: el intérprete lo analiza igual que en KSEG0. */
@@ -287,7 +374,7 @@ static void idle_mapped_remap(void)
 	uint64_t skipped = same_both_ways(setup_mapped_remap, 20000);
 	CHECK_EQ(skipped, 0);
 	CHECK(R[8] >= 9990 && R[8] <= 10000);  /* una vuelta (2 instrucciones) por cuenta */
-	CHECK_EQ(CPU->idle_reject[(V_LOOP >> 2) & (SALSA64_IDLE_CACHE - 1)], V_LOOP ^ BEQ(0, 0, 0xFFFF));
+	CHECK_EQ(CPU->idle_reject[SALSA64_IDLE_SLOT(V_LOOP)], V_LOOP ^ BEQ(0, 0, 0xFFFF));
 }
 
 /* Apagar y prender la detección vacía las tablas. */
@@ -305,6 +392,24 @@ static void idle_toggle(void)
 	CHECK(CPU->idle_cycles - idle0 > 99000);
 }
 
+static void idle_yield_fpu_and_long_loops(void)
+{
+	uint64_t skipped = same_both_ways(setup_yield_fpu_loop, 2 * NTSC_FIELD + 777);
+	CHECK(skipped > 2 * NTSC_FIELD - 5000);
+	CHECK_EQ(t_rd32(T_DATA_PA), 2);
+	skipped = same_both_ways(setup_long_loop, 100000);
+	CHECK(skipped > 99000);
+	CHECK(!rejected(CODE(38)));
+}
+
+static void idle_poll_after_irq(void)
+{
+	uint64_t skipped = same_both_ways(setup_poll_after_irq, 3 * NTSC_FIELD + 99);
+	CHECK(skipped > 3 * NTSC_FIELD - 5000);
+	CHECK_EQ(R[17], 3);
+	CHECK(!rejected(CODE(6)));
+}
+
 void t_suite_idle(void)
 {
 	RUN(idle_self_loop);
@@ -313,6 +418,10 @@ void t_suite_idle(void)
 	RUN(idle_mmio_poll_not_skipped);
 	RUN(idle_delay_slot_write);
 	RUN(idle_store_not_skipped);
+	RUN(idle_silent_store);
+	RUN(idle_yield_loop_exact);
+	RUN(idle_yield_fpu_and_long_loops);
+	RUN(idle_poll_after_irq);
 	RUN(idle_toggle);
 	RUN(idle_other_segments);
 	RUN(idle_mapped_remap);

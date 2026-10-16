@@ -91,7 +91,8 @@ enum how {
 	H_NATIVE,
 	H_EXEC,       /* la ejecuta el intérprete (salsa64_vr4300_exec_one) */
 	H_EXC,        /* SYSCALL/BREAK: excepción segura */
-	H_MTC0,       /* MTC0 a EntryLo0/1, PageMask o Index: el valor y su máscara (rec_emit_ext.h) */
+	H_MTC0,       /* MTC0 a EntryLo0/1, PageMask, Index o EPC: el valor y su máscara (rec_emit_ext.h) */
+	H_MTC0_ST,    /* MTC0 a Status: en línea si solo cambian IE, EXL o IM; termina el bloque */
 	H_TLBW,       /* TLBWI/TLBWR: rec_h_tlbw y el bloque termina enlazado */
 	H_ERET,       /* ERET: rec_h_eret y al destino por exit_jr */
 };
@@ -2400,6 +2401,10 @@ static void emit_insn_body(struct ctx *c, unsigned k)
 		emit_mtc0(c, k);
 		return;
 	}
+	if (d->how == H_MTC0_ST) {
+		emit_mtc0_status(c, k);
+		return;
+	}
 	if (d->how == H_TLBW) {
 		emit_tlbw(c, k);
 		return;
@@ -2456,7 +2461,7 @@ static bool idle_candidate(const struct ctx *c, const struct dec *d, uint64_t bp
 	if (bpc - target >= 4 * SALSA64_IDLE_BODY)
 		return false;
 	const struct salsa64_cpu *cpu = c->rec->cpu;
-	return cpu->idle_reject[(bpc >> 2) & (SALSA64_IDLE_CACHE - 1)] != ((uint32_t)bpc ^ i);
+	return cpu->idle_reject[SALSA64_IDLE_SLOT(bpc)] != ((uint32_t)bpc ^ i);
 }
 
 /* La condición del salto b en cr4 (y el registro de enlace, si lo escribe);
@@ -3240,15 +3245,23 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	/* Decodificación: hasta un salto con su delay slot, una instrucción que
 	 * termina el bloque, el máximo o el final de la RDRAM. Un salto cuyo
 	 * delay slot no se puede compilar (otro salto, COP0…) queda fuera. */
+	/* Con CU1 = 0 (un hilo que no usa la FPU), el bloque se corta antes de
+	 * su primera instrucción de COP1 si no es la primera: la entrada de un
+	 * bloque con COP1 revisa CU1 y saldría siempre, aunque el COP1 esté en
+	 * un camino que no se toma (el guardado y la reposición de la FPU en el
+	 * cambio de hilo de libultra, sobre el hilo ocioso). */
+	bool cu1_cut = !(rec->cpu->status & SALSA64_ST_CU1) && !SALSA64_REC_OLD(rec, SALSA64_REC_DBG_NO_CU1_CUT);
 	unsigned n = 0;
 	while (n < max && pa + 4 * n + 4 <= end) {
 		struct dec *d = &c->d[n];
 		decode_ext(rec, fetch(rec, pa + 4 * n), d);
+		if (cu1_cut && n && d->cop1)
+			break;
 		if (is_branch(d)) {
 			if (n + 1 >= max || pa + 4 * n + 8 > end)
 				break;
 			decode_ext(rec, fetch(rec, pa + 4 * n + 4), &c->d[n + 1]);
-			if (c->d[n + 1].kind != K_NORMAL)
+			if (c->d[n + 1].kind != K_NORMAL || (cu1_cut && n && c->d[n + 1].cop1))
 				break;
 			c->ds_of[n + 1] = (uint8_t)(n + 1);
 			/* Un condicional hacia adelante no corta el bloque: su camino

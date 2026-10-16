@@ -274,6 +274,7 @@ static struct {
 	uint32_t field_win, next_trace, trace_field0, rng, tasks, traces;
 	uint64_t cyc_win, idle_win, compiled, retrans, words, evictions, flushes, killed, jr, interp, smp_ticks;
 	uint32_t marks[SALSA64_SMP_N], gfx_tasks, draws, tris;
+	struct salsa64_rec_trace_prev slow_prev;
 } hp;
 
 static uint64_t now_us(void);
@@ -463,6 +464,7 @@ static void hp_field(void)
 			hp.killed = tr->killed;
 			hp.interp = rec.stats.interp_steps;
 			hp.jr = n64.cpu.rec_jr_count;
+			perf_put_slow_window(&hp.ring, hp_ms(), rec.trace, &hp.slow_prev, NULL);
 		}
 		if (rec.sample) {
 			uint32_t other = 0;
@@ -496,6 +498,7 @@ static void hp_close(const char *reason)
 		unsigned len = salsa64_rec_trace_take(&rec, true);
 		if (len)
 			perf_put_trace(&hp.ring, ms, hp.trace_field0, rec.trace->win_cycles, rec.trace, len);
+		perf_put_fpu(&hp.ring, ms, rec.trace);
 		salsa64_rec_trace_fold_all(&rec);
 		if (rec.trace->jr)
 			perf_put_jr(&hp.ring, ms, rec.trace);
@@ -541,7 +544,7 @@ static struct {
 
 static struct salsa64_save save, ref_save;
 static struct savefile save_file;
-static struct salsa64_mempak mempak;
+static struct salsa64_mempak mempak, ref_mempak;
 static struct mempakfile mempak_file;
 
 /* --pad: el control 1 por campo del VI. `applied` guarda en qué ciclo se
@@ -2920,6 +2923,12 @@ int main(int argc, char **argv)
 				ref_save = save;
 				salsa64_save_attach(&ref.bus, &ref_save);
 			}
+			/* Y el mismo Controller Pak: sin él el estado del control dice
+			 * «sin pak» (0x02) donde la principal ve uno (0x01). */
+			if (n64.bus.mempak) {
+				ref_mempak = *n64.bus.mempak;
+				ref.bus.mempak = &ref_mempak;
+			}
 			rec.no_link = true;
 			rec.after_exit = lockstep_check;
 		}
@@ -3038,7 +3047,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "salsa64-run: recompilador: %llu bloques (%llu fuera de KSEG0, %llu desprendidos y %llu "
 			"enganchados en otra física, %u KB de caché), %llu solo intérprete, %llu entradas, %llu enlaces, "
 			"%llu invalidados, %llu vaciados (ids %llu, enlaces %llu, RDRAM %llu, bucles %llu, ROM %llu, estado %llu, "
-			"otros %llu), %llu desalojos, %llu traducciones, %llu dependen de FR (%llu gemelos, %llu salidas por FR, %llu por CU1), "
+			"otros %llu), %llu desalojos, %llu traducciones, %llu dependen de FR (%llu gemelos, %llu salidas por FR, %llu por CU1, %llu cortados por CU1), "
 			"%llu instr. interpretadas (%.1f %%), %llu llamadas al intérprete%s\n",
 			(unsigned long long)st->compiled, (unsigned long long)st->compiled_x, (unsigned long long)st->detached,
 			(unsigned long long)st->rekeyed, salsa64_rec_used(&rec) / 256,
@@ -3050,7 +3059,7 @@ int main(int argc, char **argv)
 			(unsigned long long)st->flushes_by[SALSA64_REC_FLUSH_STATE], (unsigned long long)st->flushes_by[SALSA64_REC_FLUSH_OTHER],
 			(unsigned long long)st->evictions, (unsigned long long)st->vt_probes,
 			(unsigned long long)st->fr_dep, (unsigned long long)st->fr_twins, (unsigned long long)st->fr_exits,
-			(unsigned long long)st->cu1_exits,
+			(unsigned long long)st->cu1_exits, (unsigned long long)st->cu1_cuts,
 			(unsigned long long)st->interp_steps, cycles ? 100.0 * (double)st->interp_steps / (double)cycles : 0.0,
 			(unsigned long long)st->exec_calls, lockstep ? "; --lockstep sin diferencias" : "");
 		if (rec.opts & SALSA64_REC_OPT_JTC_STATS)

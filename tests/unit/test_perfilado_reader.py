@@ -76,6 +76,34 @@ class SessionReaderTest(unittest.TestCase):
         PERFILADO.summary(old, out)
         self.assertNotIn("FPU al intérprete", out.getvalue())
 
+    def test_cop0_record_and_wrapped_window_pcs(self):
+        # MTC0 Status (32+12) y MI_INTR_MASK escrito (134+7), en dos ventanas.
+        def cop0(ms, entries):
+            body = struct.pack(">IHH", ms, len(entries), 0)
+            for idx, calls, ticks in entries:
+                body += struct.pack(">HHIQ", idx, 0, calls, ticks)
+            return record(18, body)
+        # Una ventana de antes del arreglo: la resta de dos tablas dio -2 (2³² - 2).
+        slow = struct.pack(">IHH", 5000, 0, 2)
+        slow += struct.pack(">IQI", 0x80042968, 79800, 10) + struct.pack(">IQI", 0x8004294C, 0, (1 << 32) - 2)
+        with tempfile.NamedTemporaryFile() as f:
+            f.write(b"S64P" + struct.pack(">HHQ", 1, 16, 0) + record(15, slow) +
+                    cop0(5000, [(44, 3, 79800), (141, 2, 798)]) + cop0(10000, [(44, 1, 0)]))
+            f.flush()
+            ses = PERFILADO.Session(f.name)
+        self.assertEqual(ses.cop0[0]["entradas"][44], (3, 79800))
+        self.assertEqual(ses.slow[0]["pcs"][1]["llamadas"], -2)
+        self.assertEqual(PERFILADO.cop0_name(44), "MTC0 Status")
+        self.assertEqual(PERFILADO.cop0_name(9), "MFC0 Count")
+        self.assertEqual(PERFILADO.cop0_name(132), "ERET")
+        self.assertEqual(PERFILADO.cop0_name(141), "MI_INTR_MASK (escritura)")
+        out = io.StringIO()
+        PERFILADO.summary(ses, out)
+        text = out.getvalue()
+        self.assertIn("COP0 y MI en el camino lento", text)
+        self.assertRegex(text, r"MTC0 Status\s+4\s")
+        self.assertNotIn("4294967294", text)
+
 
 if __name__ == "__main__":
     unittest.main()

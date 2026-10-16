@@ -94,7 +94,7 @@ HOT void idle_hint(struct salsa64_cpu *cpu, const struct flow *f, uint32_t instr
 {
 	if (SALSA64_LIKELY(f->cur - f->next_pc >= 4 * SALSA64_IDLE_BODY))
 		return;
-	if (cpu->idle_reject[(f->cur >> 2) & (SALSA64_IDLE_CACHE - 1)] != ((uint32_t)f->cur ^ instr))
+	if (cpu->idle_reject[SALSA64_IDLE_SLOT(f->cur)] != ((uint32_t)f->cur ^ instr))
 		salsa64_vr4300_idle(cpu, f->cur, f->next_pc, instr);
 }
 

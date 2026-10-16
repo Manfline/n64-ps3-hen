@@ -1,5 +1,70 @@
 # Estado
 
+## 2026-10-16 — COP0 y MI fuera del camino lento: esperas por el planificador, CU1 = 0 y MTC0 Status en línea
+
+Sesiones de la app de perfilado en la PS3 real: Doom 64 al 35 % (21
+campos/s) con 0 % en bucles de espera, nativo 19 %, camino lento 35 %,
+intérprete 30 %, despachador 14 %; COP0 75 M llamadas (13,9 s) y registro MI
+37,5 M (9,3 s) en 125 s, casi todo desde 6 PCs. NFL Blitz, 1080, Episode I
+Racer e Indiana Jones con el mismo patrón.
+
+- **Qué era.** El hilo ocioso de Doom es `for (;;) osYieldThread();`: cada
+  vuelta pasa por `__osDisableInt`, `__osEnqueueAndYield`, `__osDispatchThread`
+  y `__osRestoreInt` (cuatro MTC0, un ERET, MI_INTR_MASK leído y escrito);
+  las 6 PCs son esas. 1080 espera con `while (x->y == s0) osYieldThread();`
+  en un hilo con FPU, Blitz con cinco `osRecvMesg(..., NOBLOCK)` y
+  `osYieldThread`, Racer con pares `__osDisableInt`/`__osRestoreInt` sin
+  cambio de hilo. El intérprete de Doom venía de otro lado: el hilo ocioso
+  corre con CU1 = 0 y los bloques del cambio de hilo tienen `cfc1`/`sdc1`/
+  `ldc1` en un camino que no se toma; la entrada revisaba CU1 y salía ~14 000
+  veces por campo a interpretar (~160 000 instrucciones por campo).
+- **Bucles de espera** (`idle.c`): la simulación de una vuelta sigue saltos,
+  llamadas y ERET, con almacenamientos que tienen que volver a su valor,
+  Status, EPC, el MI, MULT/DIV y la FPU de un cambio de contexto; el punto
+  fijo es exacto como antes. Saltos consultados hasta 64 instrucciones hacia
+  atrás (eran 8), tablas de 1024 con hash. En el host, con los 29 respaldos,
+  1800 campos con y sin `--no-idle` dan la misma RDRAM y registros. Espera:
+  Doom 0 → 83 %, Blitz 0 → 91 %, 1080 0 → 86 %, Indy 1 → 86 %, Racer
+  21 → 37 %.
+- **CU1 = 0**: con CU1 = 0 el bloque se compila cortado antes de su primer
+  COP1. Doom (qemu): 163 228 → 78 instrucciones interpretadas por campo.
+- **MTC0 Status en línea** cuando solo cambian IE, EXL o IM y no queda una
+  interrupción pendiente; **MTC0 EPC** nativo. Racer sin saltar esperas
+  (`--no-idle`, 600 campos): 25,5 M → 1 573 MTC0 Status en C.
+- **Perfilado**: desglose de COP0 por instrucción y registro y del MI por
+  registro (registro COP0, 18), y la tabla de PCs lentos de cada ventana
+  propia (los 4 295 094 843 de la sesión de Doom eran restas negativas de
+  dos tablas Space-Saving escritas como u32; el lector lee con signo las
+  sesiones viejas).
+- **`--lockstep`**: la referencia no recibía el Controller Pak (que va por
+  omisión desde 9d1a9f3) y se separaba al consultar los controles (Doom en
+  el ciclo 4,1 M, Blitz en el 3,1 M, también con main).
+
+Desglose en el host (qemu, 600 campos, COP0 y MI que llegan a C):
+
+| Juego | Antes (`--no-idle`, COP0 al intérprete) | Después |
+|---|---|---|
+| Doom 64 | MTC0 Status 12,9 M; MI_INTR_MASK 4,26 M escrito y 4,26 M leído; ERET 4,26 M; MTC0 EPC 4,26 M | MI_INTR_MASK 9 717 y 9 649; ERET 9 728; MTC0 Status 4 253 |
+| NFL Blitz | MTC0 Status 23,1 M; MI_INTR_MASK 1,78 M y 1,78 M; MTC0 EPC 1,78 M; ERET 1,78 M | MI_INTR_MASK 14 050 y 13 941; ERET 14 055; MTC0 Status 4 641 |
+| 1080 | MTC0 Status 11,2 M; MI_INTR_MASK 3,72 M y 3,72 M; ERET 3,67 M; MTC0 EPC 3,67 M | MI_INTR_MASK 89 721 y 89 723; ERET 41 843; MTC0 Status 24 919 |
+| Episode I Racer | MTC0 Status 25,5 M; lo demás < 8 000 | MI_INTR_MASK 7 641 y 7 640; ERET 5 893; MTC0 Status 1 573 |
+| Indiana Jones | MTC0 Status 12,6 M; MI_INTR_MASK 4,05 M y 4,05 M; ERET 4,05 M; MTC0 EPC 4,05 M | MI_INTR_MASK 21 074 y 21 066; ERET 21 203; MTC0 Status 18 246; MTC0 EntryHi 14 544 |
+
+Pruebas: `tools/build.sh test-host` 573/0; `test-rec` con las mismas fallas
+de nemu64-test (433, 440 con fastmem) y rc = 1 solo por `menu_scan_dir`;
+`--lockstep` de Doom y Blitz, 600 campos, sin diferencias.
+
+Lo que queda (MI_INTR_MASK y ERET, del cambio de hilo de verdad) son unas
+decenas a 300 llamadas por campo: no vale el riesgo de leer y escribir la
+máscara del MI en línea por ahora. Las escenas del host no son las de la
+PS3 (no hay pad para llegar a las carreras de Racer ni a las partidas): la
+medición de verdad es la PS3 con el paquete de perfilado nuevo.
+
+Pendiente: medir en la PS3 con `salsa64-perfil-cop0.pkg` (Doom 64, Blitz,
+1080, Racer, Indy) y comparar con las sesiones de build/perfil-fpu2 y
+build/perfil-varios. Racer tiene además 180 000 llamadas de la FPU al
+intérprete en 600 campos en el host (aparte).
+
 ## 2026-10-15 — Lista compacta de ROMs
 
 La lista solo contiene la carpeta relativa visible, combinada entre el disco

@@ -99,10 +99,26 @@ por motivo (bloques, ticks y palabras generadas). Las clases distinguen
 KSEG0/KSEG1, RDRAM y E/S por traducción, excepciones de traducción,
 desalineación, grupos MMIO, escrituras sobre código, instrucciones que pasan
 al intérprete y excepciones por tipo. Se guarda también el conjunto de PCs de más
-tiempo en la sesión. Los motivos de compilación son primera compilación,
+tiempo: cada ventana el de la ventana y, al cerrar, el de la sesión (con la
+FPU). Desde el 2026-10-16 la tabla de la ventana es propia (Space-Saving
+sobre lo de esa ventana, que se vacía al escribirla); antes se calculaba
+restando la tabla de la sesión de su copia anterior, y una entrada que
+cambiaba de PC y volvía con menos daba una resta negativa escrita como
+u32: los 4 295 094 843 y 17 180 007 677 «llamadas» de la sesión de Doom 64
+(vueltas de 2³²). El lector lee esos valores con signo, así las sesiones
+viejas suman bien. Los motivos de compilación son primera compilación,
 escritura de CPU, DMA, desalojo/vaciado y retraducción del mismo contenido
 MIPS. El lector ignora tipos nuevos que no reconoce, por lo que los archivos
 anteriores siguen siendo legibles; la cabecera permanece en versión 1.
+
+**COP0 y MI** (2026-10-16): cada ventana añade, de lo que llegó a C por
+COP0 (`rec_h_exec`, `rec_h_tlbw`, `rec_h_eret`) y por los registros del MI
+(`rec_h_load`, `rec_h_store`), llamadas y ticks por instrucción y registro:
+MFC0, MTC0, DMFC0 y DMTC0 × 32 registros, TLBR, TLBWI, TLBWR, TLBP, ERET,
+otra COP0, y MI_MODE, MI_VERSION, MI_INTR y MI_INTR_MASK leídos o escritos
+(`enum salsa64_rt_cop0`, rec_trace.h). El lector lo suma en «COP0 y MI en
+el camino lento por instrucción y registro». TLBWI/TLBWR y ERET (con rutina
+propia) cuentan desde ahora también en la clase COP0 del camino lento.
 
 La medición toma el timebase solo dentro de las rutinas C del camino lento y
 durante compilaciones, con `rec->trace` activo. No cambia palabras emitidas.
@@ -275,6 +291,8 @@ abrió la sesión (`ms`).
 | 14 | EVENTO | `ms` u32, texto |
 | 15 | CAMINO LENTO | `ms:u32`, `n:u16`, `pcs:u16`; `n` pares `llamadas:u32,ticks:u64`; `pcs` ternas `vpc:u32,ticks:u64,llamadas:u32` |
 | 16 | COMPILACIÓN | `ms:u32`, `n:u16`, reservado `u16`, máximo de compilaciones por campo `u32`, campo del máximo `u32`; `n` ternas `bloques:u32,ticks:u64,palabras:u32` |
+| 17 | FPU | al cerrar, total de la sesión: `ms:u32`, `n:u16`, razones `u16`, reservado `u32`; FR 0 y 1 (`llamadas:u32,ticks:u64` c/u); `pcs:u32` y los PCs lentos de la sesión (`vpc:u32,ticks:u64,llamadas:u32`); `n` entradas `índice:u16`, relleno `u16`, `ticks:u64`, llamadas por razón (`u32` c/u) |
+| 18 | COP0 | cada ventana: `ms:u32`, `n:u16`, relleno `u16`; `n` entradas no vacías `índice:u16` (`enum salsa64_rt_cop0`), relleno `u16`, `llamadas:u32`, `ticks:u64` |
 
 Los campos de VENTANA y TIRÓN están en `src/frontend/perfilado.h`
 (`PERF_WINDOW_FIELDS`, `PERF_STALL_FIELDS`); el registro NOMBRES los nombra
