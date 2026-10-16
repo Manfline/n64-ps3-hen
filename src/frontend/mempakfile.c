@@ -8,6 +8,8 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#define MEMPAK_QUIET_LOG_US 2000000u
+
 /* Lectura al abrir (un byte de más para ver si el archivo es más grande). */
 static uint8_t file_buf[SALSA64_MEMPAK_TOTAL + 1];
 
@@ -113,9 +115,35 @@ bool mempakfile_flush(struct mempakfile *f)
 	return true;
 }
 
+/* Una línea de log con lo que el juego pidió al accesorio, cuando se calma
+ * (2 s sin comandos nuevos) o al cerrar (`now_us` = ~0). Sirve para ver, en
+ * una consola real, si el juego llega a hablar con el pak y cómo le va. */
+static void log_traffic(struct mempakfile *f, uint64_t now_us)
+{
+	struct salsa64_mempak *mp = f->mp;
+	uint32_t total = mp->cmd_status + mp->cmd_reads + mp->cmd_writes + mp->cmd_absent + mp->cmd_bad_addr;
+	if (total == f->logged_total)
+		return;
+	if (total != f->seen_total) {
+		f->seen_total = total;
+		f->seen_us = now_us;
+		if (now_us != ~0ull)
+			return;
+	}
+	if (now_us != ~0ull && now_us - f->seen_us < MEMPAK_QUIET_LOG_US)
+		return;
+	f->log("accesorio: %u consultas de estado, %u lecturas, %u escrituras (%u bloques cambiados), "
+	       "%u a un control sin pak, %u con la dirección mal verificada (la última 0x%04X)",
+	       mp->cmd_status, mp->cmd_reads, mp->cmd_writes, mp->writes, mp->cmd_absent, mp->cmd_bad_addr,
+	       mp->last_bad_addr);
+	f->logged_total = total;
+}
+
 void mempakfile_stage(struct mempakfile *f, uint64_t now_us)
 {
 	struct salsa64_mempak *mp = f->mp;
+	if (f->bus)
+		log_traffic(f, now_us);
 	if (!f->path[0] || f->pending || !salsa64_mempak_due(mp, now_us))
 		return;
 	memcpy(f->stage, mp->data, SALSA64_MEMPAK_TOTAL);
@@ -153,6 +181,7 @@ void mempakfile_close(struct mempakfile *f)
 		f->retry_us = 0;
 		mempakfile_write_staged(f, ~0ull);
 	}
+	log_traffic(f, ~0ull);
 	mempakfile_flush(f);
 	f->bus->mempak = NULL;
 	f->path[0] = '\0';

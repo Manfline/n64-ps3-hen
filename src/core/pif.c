@@ -145,13 +145,33 @@ void salsa64_pif_written(struct salsa64_bus *bus)
 	ram[CMD_BYTE] &= (uint8_t)~CMD_JOYBUS;
 }
 
+/* Cuenta un comando del accesorio: contestado (`done`), a un control sin pak
+ * o con la dirección mal verificada. `mp` puede ser NULL (sin Controller Pak
+ * en el bus). */
+static void pak_count(struct salsa64_mempak *mp, bool pak, bool ok, uint16_t raw, bool is_write)
+{
+	if (!mp)
+		return;
+	if (ok) {
+		if (is_write)
+			mp->cmd_writes++;
+		else
+			mp->cmd_reads++;
+	} else if (!pak) {
+		mp->cmd_absent++;
+	} else {
+		mp->cmd_bad_addr++;
+		mp->last_bad_addr = raw;
+	}
+}
+
 /* Respuesta del control estándar en `reply`; devuelve su longitud, o -1 si
  * el control no contesta (comando desconocido o incompleto). */
 static int pad_command(struct salsa64_bus *bus, unsigned port, const uint8_t *tx, unsigned txlen,
 		       uint8_t *reply)
 {
 	struct salsa64_pif *pif = &bus->pif;
-	const struct salsa64_mempak *mp = bus->mempak;
+	struct salsa64_mempak *mp = bus->mempak;
 	bool pak = mp && mp->present[port];
 	const struct salsa64_pad *pad = &pif->pads[port];
 	switch (tx[0]) {
@@ -159,6 +179,8 @@ static int pad_command(struct salsa64_bus *bus, unsigned port, const uint8_t *tx
 	case JB_RESET:
 		reply[0] = PAD_ID_HI;
 		reply[1] = PAD_ID_LO;
+		if (mp)
+			mp->cmd_status++;
 		reply[2] = pak ? (uint8_t)(PAD_PAK | (pif->pak_err[port] ? PAD_PAK_CRC : 0)) : PAD_NO_PAK;
 		return 3;
 	case JB_STATE: {
@@ -183,9 +205,11 @@ static int pad_command(struct salsa64_bus *bus, unsigned port, const uint8_t *tx
 		 * complementado (0xFF). */
 		if (txlen < 3)
 			return -1;
-		bool ok = pak && salsa64_mempak_read(mp, port, (uint16_t)(tx[1] << 8 | tx[2]), reply);
+		uint16_t raw = (uint16_t)(tx[1] << 8 | tx[2]);
+		bool ok = pak && salsa64_mempak_read(mp, port, raw, reply);
 		if (!ok)
 			memset(reply, 0, PAK_BLOCK);
+		pak_count(mp, pak, ok, raw, false);
 		pif->pak_err[port] = pak && !ok;
 		reply[PAK_BLOCK] = ok ? salsa64_joybus_crc8(reply, PAK_BLOCK) : 0xFF;
 		return PAK_BLOCK + 1;
@@ -194,7 +218,9 @@ static int pad_command(struct salsa64_bus *bus, unsigned port, const uint8_t *tx
 		/* El CRC de los datos recibidos; complementado si no se escribió. */
 		if (txlen < 3 + PAK_BLOCK)
 			return -1;
-		bool ok = pak && salsa64_mempak_write(bus->mempak, port, (uint16_t)(tx[1] << 8 | tx[2]), tx + 3);
+		uint16_t raw = (uint16_t)(tx[1] << 8 | tx[2]);
+		bool ok = pak && salsa64_mempak_write(mp, port, raw, tx + 3);
+		pak_count(mp, pak, ok, raw, true);
 		pif->pak_err[port] = pak && !ok;
 		uint8_t crc = salsa64_joybus_crc8(tx + 3, PAK_BLOCK);
 		reply[0] = ok ? crc : (uint8_t)~crc;
