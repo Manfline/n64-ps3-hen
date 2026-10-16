@@ -486,8 +486,85 @@ static void raster_tall_fill_first(void)
 	raster_fbfx = fbfx;
 }
 
+
+/* Pokémon Stadium al elegir VS: una sola tarea con nueve color images chicas
+ * (de 172 de ancho; la tabla de destinos tiene ocho ranuras), pegadas una a
+ * otra en la RDRAM. La novena recicla la ranura de la más vieja, que dibujó
+ * más filas: la caja de lo dibujado era la de la anterior y la copia a la
+ * RDRAM pisaba las filas de más de la novena, que son datos del juego (los
+ * nodos del planificador de eventos; el juego saltaba a un callback pisado y
+ * se quedaba en su pantalla de error). La ranura reciclada empieza sin
+ * lo dibujado ni la caja de antes. */
+static void raster_recycled_slot(void)
+{
+	enum { N = 9, SW = 172, FULL = 60, LAST = 20, GAP = SW * 2 * FULL };
+	static struct gfx_vertex v9[N * 6] __attribute__((aligned(16)));
+	static uint8_t c9[N * (sizeof(struct gfx_cmd) + sizeof(struct gfx_draw)) + sizeof(struct gfx_cmd)]
+		__attribute__((aligned(16)));
+	static uint8_t big[0x60000] __attribute__((aligned(16)));
+	const uint32_t base = 0x20000;
+	int fbfx = raster_fbfx;
+	raster_reset();
+	raster_fbfx = 2;
+	memset(big, 0, sizeof big);
+	memset(c9, 0, sizeof c9);
+	uint32_t off = 0;
+	for (unsigned k = 0; k < N; k++) {
+		uint32_t rows = k == N - 1 ? LAST : FULL;
+		struct gfx_cmd *t = (struct gfx_cmd *)(c9 + off);
+		t->op = GFX_OP_TARGET;
+		t->size = sizeof *t;
+		t->a = base + k * GAP;
+		t->b = SW;
+		t->c = 2;
+		off += sizeof *t;
+		struct gfx_draw *d = (struct gfx_draw *)(c9 + off);
+		d->h.op = GFX_OP_DRAW;
+		d->h.size = sizeof *d;
+		d->h.a = k * 6;
+		d->h.b = 6;
+		d->scissor[2] = SW * 4;
+		d->scissor[3] = (uint16_t)(rows * 4);
+		d->k[GFX_K_ONE][0][0] = 1.0f;
+		d->k[GFX_K_ONE][0][3] = 1.0f;
+		set_vtx(&v9[k * 6 + 0], 0, 0);
+		set_vtx(&v9[k * 6 + 1], (float)SW, 0);
+		set_vtx(&v9[k * 6 + 2], 0, (float)rows);
+		set_vtx(&v9[k * 6 + 3], (float)SW, 0);
+		set_vtx(&v9[k * 6 + 4], (float)SW, (float)rows);
+		set_vtx(&v9[k * 6 + 5], 0, (float)rows);
+		off += sizeof *d;
+	}
+	/* Los datos del juego tras las primeras filas de la novena imagen. */
+	uint32_t last = base + (N - 1) * GAP;
+	for (uint32_t y = LAST; y < FULL; y++)
+		for (uint32_t x = 0; x < SW; x++)
+			salsa64_wr16(big + last + (y * SW + x) * 2, game_word(x, y));
+	struct gfx_job job;
+	struct gfx_result res;
+	memset(&job, 0, sizeof job);
+	memset(&res, 0, sizeof res);
+	job.rdram_ea = (uint64_t)(uintptr_t)big;
+	job.rdram_size = sizeof big;
+	job.vtx_ea = (uint64_t)(uintptr_t)v9;
+	job.cmd_ea = (uint64_t)(uintptr_t)c9;
+	res.cmd_bytes = off + sizeof(struct gfx_cmd);
+	raster_task(&job, &res);
+	/* Lo dibujado de la novena sale en sus 20 filas... */
+	CHECK_EQ(salsa64_rd16(big + last + (5 * SW + 10) * 2), rgba5551(255, 0, 0));
+	/* ...y el resto de su memoria sigue siendo del juego. */
+	unsigned bad = 0;
+	for (uint32_t y = LAST; y < FULL; y++)
+		for (uint32_t x = 0; x < SW; x++)
+			bad += salsa64_rd16(big + last + (y * SW + x) * 2) != game_word(x, y);
+	CHECK_EQ(bad, 0);
+	raster_reset();
+	raster_fbfx = fbfx;
+}
+
 void t_suite_raster(void)
 {
+	RUN(raster_recycled_slot);
 	RUN(raster_copy_inside_scissor);
 	RUN(raster_tall_fill);
 	RUN(raster_tall_fill_first);

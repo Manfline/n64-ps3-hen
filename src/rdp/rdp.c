@@ -1630,6 +1630,10 @@ static void translate(uint32_t n)
 			cur = is_tall ? -1 : get_target(c->a, c->b, (c->c >> 8) & 0xFF, siz, lh);
 			rdp.at = "dibujos";
 			if (cur >= 0 && rdp.last_get.fresh) {
+				/* Ranura de otra imagen: lo dibujado y su caja eran del destino
+				 * anterior (ver raster.c). */
+				drawn[cur] = false;
+				memset(&drawn_box[cur], 0, sizeof drawn_box[cur]);
 				/* Un relleno de imagen alta anterior (rdp_targets_tall_note) que
 				 * este destino no vio: se cebó con la RDRAM, que no lo tiene. */
 				struct rdp_tall_rect pend[RDP_TALL_FILLS];

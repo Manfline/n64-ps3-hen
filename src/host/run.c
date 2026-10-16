@@ -115,6 +115,7 @@
 #include "cpu/rec.h"
 #include "host/rec_host.h"
 #include "frontend/perfilado.h"
+#include "core/faultlog.h"
 #include "frontend/savefile.h"
 #include "frontend/mempakfile.h"
 #include "frontend/version.h"
@@ -2826,6 +2827,7 @@ int main(int argc, char **argv)
 	n64.bus.rsp.trace = trace_rsp;
 	if (trace_exc_left)
 		n64.cpu.exc_hook = trace_exc;
+	salsa64_faultlog_install(&n64.cpu, save_log);
 	salsa64_bus_set_isviewer(&n64.bus, isv_buf, isv_out, NULL);
 	salsa64_bus_set_rom(&n64.bus, rom, (uint32_t)(rom_size > UINT32_MAX ? UINT32_MAX : rom_size));
 	struct salsa64_boot_info info;

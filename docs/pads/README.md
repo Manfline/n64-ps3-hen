@@ -71,3 +71,10 @@ Las escenas del host (7 juegos, Kirby 64 y la casa de Link de
   de datos de 121 páginas en el pak y guarda el fantasma: `DIR/…mpk` sale
   con 43 bloques cambiados. Hace falta `--fields 28300`; el camino depende
   de que no haya otros controles conectados.
+- `stadium-vs.pad`: Pokémon Stadium (USA): START en los campos 600 y 900,
+  «Game Pak Check» (el juego sondea los cuatro puertos y no encuentra un
+  Transfer Pak), A para entrar a VS mode y A para elegir; hasta ahí llega
+  el campo ~1750. Con `--gfx-frame` (el rasterizador, que copia a la RDRAM
+  como la PS3) servía para ver el cuelgue de la novena color image de una
+  tarea (nodos del juego pisados); ahora la escena sigue al estadio y el
+  control se lee 25 veces por 50 campos.

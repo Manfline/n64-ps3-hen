@@ -789,6 +789,14 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 			bool created;
 			cur = is_tall ? -1 : get_target(job, c->a, c->b, (c->c >> 8) & 0xFF, siz, lh, &created);
 			if (cur >= 0 && created) {
+				/* La ranura es de otra imagen (se reciclaba la de un destino
+				 * dibujado antes en esta tarea, o creció): lo dibujado y su
+				 * caja eran de la anterior, y copiarlos a la RDRAM con la
+				 * dirección y el alto de esta pisaría memoria del juego
+				 * (Pokémon Stadium, 9 destinos en una tarea: nodos del
+				 * planificador bajo el ancho de la imagen). */
+				drawn[cur] = false;
+				memset(&drawn_box[cur], 0, sizeof drawn_box[cur]);
 				/* Un relleno de imagen alta anterior (rdp_targets_tall_note) que
 				 * este destino no vio: se cebó con la RDRAM, que no lo tiene. */
 				struct rdp_tall_rect pend[RDP_TALL_FILLS];
