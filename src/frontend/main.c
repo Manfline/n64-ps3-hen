@@ -195,6 +195,7 @@
 #include "replay.h"
 #include "romlist.h"
 #include "savefile.h"
+#include "mempakfile.h"
 #include "screenshot.h"
 #include "selftest.h"
 #include "selftest_audio.h"
@@ -365,6 +366,8 @@ static struct {
 static uint8_t isv_buf[SALSA64_ISV_SIZE] __attribute__((aligned(16)));
 static struct salsa64_save save;
 static struct savefile save_file;
+static struct salsa64_mempak mempak;
+static struct mempakfile mempak_file;
 static uint8_t *rdram;
 static volatile int running;    /* la sesión de juego sigue */
 static volatile int emu_done;   /* el hilo de emulación salió de su bucle */
@@ -1930,6 +1933,7 @@ static void emu_thread(void *arg)
 		if (paced)
 			pacer_advance(&pacer, cycles);
 		savefile_stage(&save_file, t1);
+		mempakfile_stage(&mempak_file, t1);
 		if (rprof.on && ++rprof.fold_fields >= PROFILE_FOLD_FIELDS) {
 			salsa64_rec_profile_fold(&rec);  /* entre campos, fuera del código generado */
 			rprof.fold_fields = 0;
@@ -3666,6 +3670,7 @@ static void game_reset(void)
 	gfx_on_spu = 0;
 	memset(&boot_info, 0, sizeof boot_info);
 	memset(&save_file, 0, sizeof save_file);
+	memset(&mempak_file, 0, sizeof mempak_file);
 	memset(field_q, 0, sizeof field_q);
 	field_head = field_tail = 0;
 	pif_edge_head = pif_edge_tail = pif_edge_lost = 0;
@@ -4043,8 +4048,11 @@ static void rsx_stuck_exit(const char *why, const rsxkit_wait_info *wi)
 	rsx_diag(why, wi);
 	if (emu_live) {
 		savefile_write_staged(&save_file, ~0ull);  /* lo diferido que no llegó al disco */
-		if (emu_paused || emu_done)
+		mempakfile_write_staged(&mempak_file, ~0ull);
+		if (emu_paused || emu_done) {
 			savefile_flush(&save_file);
+			mempakfile_flush(&mempak_file);
+		}
 		else
 			salsa64_log("RSX: la emulación sigue: solo se escribió el guardado diferido");
 	}
@@ -4131,6 +4139,7 @@ static void game_close(void)
 	salsa64_log("cierre: emulación detenida tras %u campos (%u emulados, %u descartados por la cola, %u sin ranura)",
 		    n64.bus.vi.fields, emu_stats.fields, emu_stats.dropped, emu_stats.no_slot);
 	savefile_close(&save_file);
+	mempakfile_close(&mempak_file);
 	salsa64_log("cierre: guardado escrito y desconectado");
 	/* audio_out: cierre (con el hilo de emulación ya terminado). */
 	audio_out_shutdown();
@@ -4300,6 +4309,16 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		    boot_info.kind == SALSA64_BOOT_ELF ? "ELF (IPL3 libre)" : "carga plana", boot_info.entry,
 		    boot_info.tv == SALSA64_TV_PAL ? "PAL" : boot_info.tv == SALSA64_TV_MPAL ? "MPAL" : "NTSC");
 	savefile_open(&save_file, &save, &n64.bus, rom, SAVES_DIR, SAVE_CFG, SALSA64_SAVE_AUTO, salsa64_log);
+	{
+		/* Un Controller Pak en cada control, salvo que el juego pida «Ninguno» (en las pruebas, ninguno). */
+		struct menu_game gc;
+		menu_game_default(&gc);
+		if (source && !(selftest_on || gfxtest_on || audiotest_on))
+			game_cfg_read(source, &gc);
+		mempakfile_open(&mempak_file, &mempak, &n64.bus, rom, SAVES_DIR,
+				gc.accessory == MENU_ACC_NONE || selftest_on || gfxtest_on || audiotest_on ? 0u : 0xFu,
+				salsa64_log);
+	}
 
 	rec.opts = SALSA64_REC_OPT_PIN;  /* +7 % en nemu64-test (docs/perf-log.md) */
 	rec.fm_window = NULL;
@@ -4571,6 +4590,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		filter_cycle(now);
 		beat.pres_at = "guardado";
 		savefile_write_staged(&save_file, now);
+		mempakfile_write_staged(&mempak_file, now);
 		profile_write_step(now);
 		/* Con el sistema encima (su menú, un aviso), el sistema dibuja lo
 		 * suyo en cada flip de la aplicación: el último cuadro se sigue

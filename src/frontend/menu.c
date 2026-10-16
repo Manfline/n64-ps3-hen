@@ -219,6 +219,7 @@ void menu_settings_parse(struct menu_settings *s, const char *text, size_t len)
 void menu_game_default(struct menu_game *g)
 {
 	g->aspect = g->filter = g->overscan = g->scale = g->density = g->interp = -1;
+	g->accessory = MENU_ACC_PAK;
 	salsa64_padmap_inherit(&g->controls);
 }
 
@@ -265,6 +266,8 @@ void menu_game_parse(struct menu_game *g, const char *text, size_t len)
 			for (int v = 0; v < MENU_INTERPS; v++)
 				if (!strcmp(val, interp_key[v]))
 					g->interp = v;
+		} else if (!strcmp(key, "accesorio")) {
+			g->accessory = !strcmp(val, "ninguno") ? MENU_ACC_NONE : MENU_ACC_PAK;
 		}
 	}
 	salsa64_padmap_parse(&g->controls, text, len, NULL, 0);
@@ -277,13 +280,14 @@ int menu_game_format(const struct menu_game *g, char *buf, size_t size)
 	_Static_assert(sizeof scale / sizeof scale[0] == MENU_SCALE_MAX + 1, "una clave por escala");
 	int n = snprintf(buf, size,
 			"# Ajustes de este juego (global = los de Opciones)\naspecto = %s\nfiltro = %s\nrecorte = %s\nescala = %s\n"
-			"densidad = %s\ninterpolacion = %s\n",
+			"densidad = %s\ninterpolacion = %s\naccesorio = %s\n",
 			g->aspect == MENU_ASPECT_16_9 ? "16:9" : g->aspect == MENU_ASPECT_4_3 ? "4:3" : "global",
 			g->filter >= 0 && g->filter < MENU_FILTERS ? filter_key(g->filter) : "global",
 			g->overscan >= MENU_OVERSCAN_OFF && g->overscan <= MENU_OVERSCAN_WIDE ? crop[g->overscan] : "global",
 			g->scale >= 0 && g->scale <= MENU_SCALE_MAX ? scale[g->scale] : "global",
 			g->density >= 0 && g->density < MENU_DENSITIES ? density_key[g->density] : "global",
-			g->interp >= 0 && g->interp < MENU_INTERPS ? interp_key[g->interp] : "global");
+			g->interp >= 0 && g->interp < MENU_INTERPS ? interp_key[g->interp] : "global",
+			g->accessory == MENU_ACC_NONE ? "ninguno" : "controller-pak");
 	if (n < 0 || (size_t)n >= size)
 		return -1;
 	int k = salsa64_padmap_format(&g->controls, buf + n, size - (size_t)n, 1);
@@ -309,6 +313,11 @@ int menu_game_interp(const struct menu_settings *s, const struct menu_game *g)
 {
 	int v = g->interp >= 0 ? g->interp : s->interp;
 	return v >= 0 && v < MENU_INTERPS ? v : MENU_INTERP_OFF;
+}
+
+const char *menu_accessory_name(int accessory)
+{
+	return accessory == MENU_ACC_NONE ? "Ninguno" : "Controller Pak";
 }
 
 const char *menu_interp_name(int interp)
@@ -756,8 +765,12 @@ static enum menu_action game_buttons(struct menu *m, uint32_t pressed)
 			m->page = MENU_PAGE_GAMES;
 		return MENU_NONE;
 	}
-	if (m->game_sel == MENU_GAME_CONTROLS && (pressed & BIT(SALSA64_DS3_CROSS)))
-		return MENU_CONTROLS;
+	if (m->game_sel == MENU_GAME_CONTROLS)
+		return pressed & BIT(SALSA64_DS3_CROSS) ? MENU_CONTROLS : MENU_NONE;
+	if (m->game_sel == MENU_GAME_ACCESSORY) {  /* dos valores, sin «Global» */
+		m->game.accessory = m->game.accessory == MENU_ACC_PAK ? MENU_ACC_NONE : MENU_ACC_PAK;
+		return MENU_GAME_CHANGED;
+	}
 	/* Global → valor 0 → ... → último → Global (izquierda, al revés). */
 	int *v = m->game_sel == MENU_GAME_ASPECT ? &m->game.aspect
 		 : m->game_sel == MENU_GAME_FILTER ? &m->game.filter
@@ -1291,6 +1304,7 @@ static const char *game_value(const struct menu *m, int row)
 		return m->game.scale < 0 ? "Global" : menu_scale_name(m->game.scale, m->set.resolution, buf, sizeof buf);
 	}
 	case MENU_GAME_INTERP:   return m->game.interp < 0 ? "Global" : menu_interp_name(m->game.interp);
+	case MENU_GAME_ACCESSORY: return menu_accessory_name(m->game.accessory);
 	case MENU_GAME_CONTROLS: return "Configurar";
 	}
 	return NULL;
@@ -1312,9 +1326,9 @@ static void game_panel(const struct menu *m, float px, float py, float pw, float
 	stext(x, y, "Ajustes de este juego", dscale, C_DIM, ca, lmax);
 	y += 30.0f;
 	static const char *const names[] = { "Aspecto", "Filtro", "Densidad", "Recorte del borde", "Escala interna",
-					     "Interpolación", "Controles" };
-	/* Con «Densidad» son seis: más juntos, en el mismo alto. */
-	float step = game_visible(m, MENU_GAME_DENSITY) ? 38.0f : 44.0f;
+					     "Interpolación", "Controles", "Accesorio" };
+	/* Con «Densidad» son ocho: más juntos, en el mismo alto. */
+	float step = game_visible(m, MENU_GAME_DENSITY) ? 30.0f : 34.0f;
 	for (int i = 0; i < MENU_GAME_BACK; i++) {
 		if (!game_visible(m, i))
 			continue;
@@ -1323,7 +1337,9 @@ static void game_panel(const struct menu *m, float px, float py, float pw, float
 				: i == MENU_GAME_DENSITY  ? menu_density_name(menu_game_density(&m->set, &m->game))
 				: i == MENU_GAME_OVERSCAN ? overscan_name(o)
 				: i == MENU_GAME_SCALE	 ? menu_scale_name(s, m->set.resolution, sbuf, sizeof sbuf)
-				: i == MENU_GAME_INTERP ? menu_interp_name(menu_game_interp(&m->set, &m->game)) : tr("Configurar");
+				: i == MENU_GAME_INTERP ? menu_interp_name(menu_game_interp(&m->set, &m->game))
+				: i == MENU_GAME_CONTROLS ? tr("Configurar")
+							  : menu_accessory_name(m->game.accessory);
 		stext(x, y, names[i], 1.3f, C_DIM, ca, 0);
 		stext(x, y + 16.0f, v, dscale, m->game_sel == i ? C_ACCENT : C_TEXT, ca, lmax);
 		y += step;
@@ -1335,11 +1351,11 @@ static void game_panel(const struct menu *m, float px, float py, float pw, float
 static void game_column(const struct menu *m, float x, float W, float H, float a)
 {
 	static const char *const titles[] = { "Aspecto", "Filtro", "Densidad", "Recorte del borde", "Escala interna",
-					      "Interpolación", "Controles", "Volver" };
+					      "Interpolación", "Controles", "Accesorio", "Volver" };
 	static const char *const subs[] = { "Forma de la imagen", "Suave, nítida o con líneas", "Puntos de la máscara CRT",
 					    "Overscan de este juego", "Dibujo interno", "60 cuadros en juegos de 20 o 30",
-					    "Ajustar botones de este juego", "A la lista de juegos" };
-	static const char *const glyphs[] = { "▶", "─", "●", "□", "▲", "►", "●", "◀" };
+					    "Ajustar botones de este juego", "Para guardar partidas", "A la lista de juegos" };
+	static const char *const glyphs[] = { "▶", "─", "●", "□", "▲", "►", "●", "○", "◀" };
 	_Static_assert(sizeof titles / sizeof titles[0] == MENU_GAME_ROWS, "una fila por ajuste");
 	for (int i = 0; i < MENU_GAME_ROWS; i++) {
 		if (!game_visible(m, i))

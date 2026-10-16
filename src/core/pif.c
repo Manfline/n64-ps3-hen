@@ -9,6 +9,7 @@
 
 #include <string.h>
 
+#include "core/mempak.h"
 #include "core/save.h"
 
 #define CMD_BYTE       63            /* byte de comandos del PIF */
@@ -64,7 +65,9 @@ static void cic6105_challenge(uint8_t *ram)
 #define PAK_BLOCK      32
 #define PAD_ID_HI      0x05          /* control estándar: 0x0500 */
 #define PAD_ID_LO      0x00
+#define PAD_PAK        0x01          /* estado: hay accesorio */
 #define PAD_NO_PAK     0x02          /* estado: no hay accesorio */
+#define PAD_PAK_CRC    0x04          /* estado: la dirección del último comando venía mal verificada */
 
 #define PAD_RESET_COMBO (SALSA64_PAD_L | SALSA64_PAD_R | SALSA64_PAD_START)
 
@@ -75,6 +78,7 @@ void salsa64_pif_reset(struct salsa64_bus *bus)
 		pif->handshake[ch] = -1;
 	pif->parsed = 0;
 	memset(pif->held, 0, sizeof pif->held);
+	memset(pif->pak_err, 0, sizeof pif->pak_err);
 }
 
 void salsa64_pif_set_pad(struct salsa64_bus *bus, unsigned port, const struct salsa64_pad *pad)
@@ -143,16 +147,19 @@ void salsa64_pif_written(struct salsa64_bus *bus)
 
 /* Respuesta del control estándar en `reply`; devuelve su longitud, o -1 si
  * el control no contesta (comando desconocido o incompleto). */
-static int pad_command(struct salsa64_pif *pif, unsigned port, const uint8_t *tx, unsigned txlen,
+static int pad_command(struct salsa64_bus *bus, unsigned port, const uint8_t *tx, unsigned txlen,
 		       uint8_t *reply)
 {
+	struct salsa64_pif *pif = &bus->pif;
+	const struct salsa64_mempak *mp = bus->mempak;
+	bool pak = mp && mp->present[port];
 	const struct salsa64_pad *pad = &pif->pads[port];
 	switch (tx[0]) {
 	case JB_INFO:
 	case JB_RESET:
 		reply[0] = PAD_ID_HI;
 		reply[1] = PAD_ID_LO;
-		reply[2] = PAD_NO_PAK;
+		reply[2] = pak ? (uint8_t)(PAD_PAK | (pif->pak_err[port] ? PAD_PAK_CRC : 0)) : PAD_NO_PAK;
 		return 3;
 	case JB_STATE: {
 		/* Lo pulsado ahora y lo que se soltó sin haberse entregado. */
@@ -171,19 +178,28 @@ static int pad_command(struct salsa64_pif *pif, unsigned port, const uint8_t *tx
 		reply[3] = (uint8_t)y;
 		return 4;
 	}
-	case JB_PAK_READ:
-		/* Sin pak: 32 ceros y el CRC complementado (0xFF). */
+	case JB_PAK_READ: {
+		/* Sin pak, o con la dirección mal verificada: 32 ceros y el CRC
+		 * complementado (0xFF). */
 		if (txlen < 3)
 			return -1;
-		memset(reply, 0, PAK_BLOCK);
-		reply[PAK_BLOCK] = 0xFF;
+		bool ok = pak && salsa64_mempak_read(mp, port, (uint16_t)(tx[1] << 8 | tx[2]), reply);
+		if (!ok)
+			memset(reply, 0, PAK_BLOCK);
+		pif->pak_err[port] = pak && !ok;
+		reply[PAK_BLOCK] = ok ? salsa64_joybus_crc8(reply, PAK_BLOCK) : 0xFF;
 		return PAK_BLOCK + 1;
-	case JB_PAK_WRITE:
-		/* Sin pak: solo el CRC de los datos, complementado. */
+	}
+	case JB_PAK_WRITE: {
+		/* El CRC de los datos recibidos; complementado si no se escribió. */
 		if (txlen < 3 + PAK_BLOCK)
 			return -1;
-		reply[0] = (uint8_t)~salsa64_joybus_crc8(tx + 3, PAK_BLOCK);
+		bool ok = pak && salsa64_mempak_write(bus->mempak, port, (uint16_t)(tx[1] << 8 | tx[2]), tx + 3);
+		pif->pak_err[port] = pak && !ok;
+		uint8_t crc = salsa64_joybus_crc8(tx + 3, PAK_BLOCK);
+		reply[0] = ok ? crc : (uint8_t)~crc;
 		return 1;
+	}
 	default:
 		return -1;
 	}
@@ -207,7 +223,7 @@ void salsa64_pif_execute(struct salsa64_bus *bus)
 		uint8_t reply[PAK_BLOCK + 1];
 		int n = -1;
 		if (txlen && ch < SALSA64_PIF_PORTS && pif->pads[ch].connected)
-			n = pad_command(pif, (unsigned)ch, tx, txlen, reply);
+			n = pad_command(bus, (unsigned)ch, tx, txlen, reply);
 		else if (ch == SALSA64_PIF_PORTS && bus->save)  /* EEPROM del cartucho */
 			n = salsa64_save_joybus(bus->save, tx, txlen, reply);
 		uint8_t err = 0;

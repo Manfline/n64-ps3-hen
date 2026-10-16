@@ -55,6 +55,7 @@ typedef void (*salsa64_isv_fn)(void *ctx, const uint8_t *text, uint32_t len);
 
 struct salsa64_cpu;
 struct salsa64_save;
+struct salsa64_mempak;
 
 struct salsa64_bus {
 	uint8_t *rdram;
@@ -66,6 +67,7 @@ struct salsa64_bus {
 	salsa64_isv_fn isv_out;
 	void *isv_ctx;
 	struct salsa64_save *save;  /* guardado del cartucho o NULL (save.c) */
+	struct salsa64_mempak *mempak;  /* Controller Pak de los controles o NULL (mempak.c) */
 	/* Aviso de salsa64_bus_rdram_written (efectos de framebuffer: una copia
 	 * del RDP no debe pisar lo que un DMA escribió después). */
 	void (*rdram_written)(void *ctx, uint32_t pa, uint32_t len);

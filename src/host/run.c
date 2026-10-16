@@ -116,6 +116,7 @@
 #include "host/rec_host.h"
 #include "frontend/perfilado.h"
 #include "frontend/savefile.h"
+#include "frontend/mempakfile.h"
 #include "frontend/version.h"
 #include "interp.h"
 #include "raster.h"
@@ -539,6 +540,8 @@ static struct {
 
 static struct salsa64_save save, ref_save;
 static struct savefile save_file;
+static struct salsa64_mempak mempak;
+static struct mempakfile mempak_file;
 
 /* --pad: el control 1 por campo del VI. `applied` guarda en qué ciclo se
  * aplicó cada cambio para que la referencia de --lockstep reciba lo mismo
@@ -2393,7 +2396,7 @@ static bool dump_frame(const char *path)
 
 /* Opciones largas sin letra (códigos fuera de ASCII). */
 enum { OPT_REC = 0x100, OPT_LOCKSTEP, OPT_PAD, OPT_TRACE_FROM, OPT_TRACE_FAULTS, OPT_RAM_DUMP, OPT_TRACE_AUDIO,
-       OPT_FRAME_EVERY, OPT_LLE, OPT_LLE_SPEED, OPT_LLE_CHECK, OPT_LLE_CHECK_JPEG, OPT_POKE, OPT_TRACE_FB, OPT_STATE_SAVE,
+       OPT_FRAME_EVERY, OPT_NO_PAK, OPT_LLE, OPT_LLE_SPEED, OPT_LLE_CHECK, OPT_LLE_CHECK_JPEG, OPT_POKE, OPT_TRACE_FB, OPT_STATE_SAVE,
        OPT_STATE_LOAD, OPT_FIELDS, OPT_PROFILE, OPT_STATE_ZIP, OPT_INTERP, OPT_INTERP_K, OPT_INTERP_DECIMATE,
        OPT_INTERP_DISP, OPT_PERFILADO };
 
@@ -2532,7 +2535,8 @@ static void usage(FILE *out)
 	      "                        empezar (si existe) y se guarda al terminar; SALSA64_REC_HOT_KB fija la\n"
 	      "                        zona caliente (1024) y SALSA64_REC_SITES=0 no registra sitios de salida\n"
 	      "      --save TIPO       tipo de guardado: ninguno, eeprom4k, eeprom16k, sram256k, flashram\n"
-	      "      --save-dir DIR    leer y escribir el guardado del cartucho en DIR\n"
+	      "      --save-dir DIR    leer y escribir el guardado del cartucho y el Controller Pak (.mpk) en DIR\n"
+	      "      --sin-pak         sin Controller Pak en los controles (por omisión hay uno en cada uno)\n"
 	      "      --gfx-frame ARCHIVO  al terminar, guardar en PPM lo que dibujó la HLE gráfica\n"
 	      "      --gfx-frame-every N  con --pad, además cada N campos desde --trace-from (ARCHIVO-<campo>.ppm)\n"
 	      "      --gfxtest-check   verificar la imagen de la HLE con los puntos de gfxtest\n"
@@ -2591,6 +2595,7 @@ int main(int argc, char **argv)
 		{ "no-idle", no_argument, NULL, 'I' },
 		{ "save", required_argument, NULL, 'E' },
 		{ "save-dir", required_argument, NULL, 'W' },
+		{ "sin-pak", no_argument, NULL, OPT_NO_PAK },
 		{ "gfx-frame", required_argument, NULL, 'G' },
 		{ "gfxtest-check", no_argument, NULL, 'K' },
 		{ "trace-rsp", required_argument, NULL, 'P' },
@@ -2621,6 +2626,7 @@ int main(int argc, char **argv)
 	bool cycles_set = false;
 	uint32_t ram = SALSA64_RDRAM_MAX;
 	int tv = SALSA64_BOOT_TV_AUTO, save_type = SALSA64_SAVE_AUTO, c;
+	bool no_pak = false;
 	bool regs = false, idle = true, use_rec = false, lockstep = false;
 	const char *frame_path = NULL, *gfx_path = NULL, *save_dir = NULL, *profile_path = NULL;
 	bool gfx_check = false, audio_check = false;
@@ -2673,6 +2679,7 @@ int main(int argc, char **argv)
 		case OPT_TRACE_AUDIO: trace_audio_left = (unsigned)strtoul(optarg, NULL, 0); break;
 		case OPT_FRAME_EVERY: frame_every = (uint32_t)strtoul(optarg, NULL, 0); break;
 		case 'W': save_dir = optarg; break;
+		case OPT_NO_PAK: no_pak = true; break;
 		case 'E':
 			for (int t = 0; t < SALSA64_SAVE_NTYPES; t++)
 				if (!strcmp(optarg, salsa64_save_name(t)))
@@ -2836,6 +2843,7 @@ int main(int argc, char **argv)
 			"entrada 0x%08X, TV %s, RDRAM %u MB\n", path, fmt_names[fmt], rom_size,
 			salsa64_cic_name(info.cic), info.loaded, info.entry, tv_names[info.tv], ram >> 20);
 	savefile_open(&save_file, &save, &n64.bus, rom, save_dir, NULL, save_type, save_log);
+	mempakfile_open(&mempak_file, &mempak, &n64.bus, rom, save_dir, no_pak ? 0u : 0xFu, save_log);
 
 	if (use_rec) {
 		void *code = salsa64_host_rec_buffer();
@@ -3109,6 +3117,7 @@ int main(int argc, char **argv)
 	}
 #endif
 	savefile_close(&save_file);
+	mempakfile_close(&mempak_file);
 	for (unsigned k = 0; k < state_saves.n; k++)
 		if (state_saves.field[k] > n64.bus.vi.fields) {
 			fprintf(stderr, "salsa64-run: --state-save: no se llegó al campo %u (terminó en el %u)\n",
