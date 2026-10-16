@@ -30,6 +30,10 @@ struct mempakfile {
 	char tmp[SAVEFILE_PATH_MAX + 4];
 	volatile uint32_t pending;
 	uint32_t stage_writes;
+	/* Resumen del tráfico del accesorio en el log (mempakfile_stage): cuántos
+	 * comandos llevaba la última vez, cuántos hay ahora y desde cuándo. */
+	uint32_t logged_total, seen_total;
+	uint64_t seen_us;
 	uint8_t stage[SALSA64_MEMPAK_TOTAL] __attribute__((aligned(16)));
 };
 

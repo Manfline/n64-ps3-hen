@@ -70,6 +70,14 @@ struct salsa64_mempak {
 	uint32_t seen;                          /* `writes` en la última consulta a _due */
 	uint64_t seen_us;
 	uint64_t dirty_us;
+	/* Tráfico del joybus al accesorio, para el log del frontend: lo que el
+	 * juego pidió y cómo se contestó. */
+	uint32_t cmd_status;                    /* consultas de estado (0x00 y 0xFF) */
+	uint32_t cmd_reads;                     /* lecturas contestadas */
+	uint32_t cmd_writes;                    /* escrituras contestadas */
+	uint32_t cmd_absent;                    /* lecturas y escrituras a un control sin pak */
+	uint32_t cmd_bad_addr;                  /* ... con la dirección mal verificada */
+	uint16_t last_bad_addr;                 /* la última de ellas, tal como llegó */
 	uint8_t data[SALSA64_MEMPAK_PORTS][SALSA64_MEMPAK_SIZE] __attribute__((aligned(128)));
 };
 

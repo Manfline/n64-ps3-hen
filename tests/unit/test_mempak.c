@@ -5,6 +5,7 @@
  */
 #include "test.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,9 +35,16 @@ static bool exists(const char *path)
 	return access(path, F_OK) == 0;
 }
 
+static unsigned log_lines;
+static char log_last[256];
+
 static void quiet_log(const char *fmt, ...)
 {
-	(void)fmt;
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(log_last, sizeof log_last, fmt, ap);
+	va_end(ap);
+	log_lines++;
 }
 
 static void connect(unsigned port, bool on)
@@ -433,6 +441,51 @@ static void persistence(void)
 	rmdir(dir);
 }
 
+static void counters_and_log(void)
+{
+	uint8_t a[32], got[32], tx[35] = { 0x03, 0x12, 0x40 };  /* dirección mal verificada */
+	memset(a, 0x77, 32);
+	log_lines = 0;
+	mempakfile_open(&mf, &mp, bus(), rom, NULL, 0x3, quiet_log);  /* controles 1 y 2 */
+	CHECK_EQ(log_lines, 1);  /* «solo en memoria» */
+	connect(0, true);
+	connect(2, true);  /* conectado, pero sin pak */
+	pad_status(0);
+	pak_read(0, 0x0020, got);
+	pak_write(0, 0x0040, a);
+	pak_write(0, 0x0060, a);
+	pak_read(2, 0x0020, got);  /* control sin pak */
+	memcpy(tx + 3, a, 32);
+	exchange(0, tx, 35, 1);
+	CHECK_EQ(mp.cmd_status, 1);
+	CHECK_EQ(mp.cmd_reads, 1);
+	CHECK_EQ(mp.cmd_writes, 2);
+	CHECK_EQ(mp.cmd_absent, 1);
+	CHECK_EQ(mp.cmd_bad_addr, 1);
+	CHECK_EQ(mp.last_bad_addr, 0x1240);
+	CHECK_EQ(mp.writes, 2);
+
+	/* El resumen sale cuando el tráfico se calma, una vez. */
+	log_lines = 0;
+	mempakfile_stage(&mf, 10000000);
+	CHECK_EQ(log_lines, 0);
+	mempakfile_stage(&mf, 11000000);
+	CHECK_EQ(log_lines, 0);
+	mempakfile_stage(&mf, 12500000);
+	CHECK_EQ(log_lines, 1);
+	CHECK(strstr(log_last, "1 consultas de estado, 1 lecturas, 2 escrituras (2 bloques cambiados)") != NULL);
+	CHECK(strstr(log_last, "1 a un control sin pak, 1 con la dirección mal verificada (la última 0x1240)") != NULL);
+	mempakfile_stage(&mf, 20000000);
+	CHECK_EQ(log_lines, 1);
+	pak_read(0, 0x0020, got);
+	mempakfile_stage(&mf, 21000000);
+	CHECK_EQ(log_lines, 1);
+	mempakfile_close(&mf);  /* al cerrar, lo que falte */
+	CHECK_EQ(log_lines, 2);
+	CHECK(strstr(log_last, "2 lecturas") != NULL);
+	unplug();
+}
+
 static void load_blank(void)
 {
 	static uint8_t file[SALSA64_MEMPAK_TOTAL];
@@ -482,6 +535,7 @@ void t_suite_mempak(void)
 	RUN(high_addresses);
 	RUN(absent);
 	RUN(persistence);
+	RUN(counters_and_log);
 	RUN(load_blank);
 	RUN(flush_policy);
 }

@@ -116,6 +116,8 @@ void salsa64_mempak_init(struct salsa64_mempak *mp)
 	memset(mp->present, 0, sizeof mp->present);
 	mp->writes = mp->flushed = mp->seen = 0;
 	mp->seen_us = mp->dirty_us = 0;
+	mp->cmd_status = mp->cmd_reads = mp->cmd_writes = mp->cmd_absent = mp->cmd_bad_addr = 0;
+	mp->last_bad_addr = 0;
 	for (unsigned p = 0; p < SALSA64_MEMPAK_PORTS; p++)
 		salsa64_mempak_format(mp->data[p], p + 1);
 }
