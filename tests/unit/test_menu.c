@@ -692,6 +692,18 @@ static void menu_game_page(void)
 	CHECK_EQ(menu_game_interp(&m.set, &back), MENU_INTERP_GEOMETRY);
 	back.interp = -1;
 	CHECK_EQ(menu_game_interp(&m.set, &back), MENU_INTERP_OFF);  /* la de Opciones */
+	/* Accesorio: Controller Pak por omisión, «ninguno» se guarda y se lee. */
+	CHECK_EQ(back.accessory, MENU_ACC_PAK);
+	m.game.accessory = MENU_ACC_NONE;
+	n = menu_game_format(&m.game, buf, sizeof buf);
+	CHECK(strstr(buf, "accesorio = ninguno") != NULL);
+	menu_game_parse(&back, buf, (size_t)n);
+	CHECK_EQ(back.accessory, MENU_ACC_NONE);
+	m.game.accessory = MENU_ACC_PAK;
+	n = menu_game_format(&m.game, buf, sizeof buf);
+	CHECK(strstr(buf, "accesorio = controller-pak") != NULL);
+	menu_game_parse(&back, buf, (size_t)n);
+	CHECK_EQ(back.accessory, MENU_ACC_PAK);
 	const char *junk = "aspecto = 5:4\nfiltro = raro\nrecorte = x\nescala = 9\n";
 	menu_game_parse(&back, junk, strlen(junk));
 	CHECK_EQ(back.aspect, -1);
@@ -1639,7 +1651,7 @@ static void menu_preview(void)
 	write_ppm(path, rgb, 960, 720);
 	/* Ajustes por juego, filtro e idiomas. */
 	{
-		struct menu_game g = { MENU_ASPECT_16_9, -1, MENU_OVERSCAN_OFF, -1, -1, -1 };
+		struct menu_game g = { MENU_ASPECT_16_9, -1, MENU_OVERSCAN_OFF, -1, -1, -1, MENU_ACC_PAK };
 		for (int lang = 0; lang <= 5; lang += 1) {
 			if (lang == 2 || lang == 4)
 				continue;  /* en, de y pt bastan para el aspecto; fr e it se ven en las pruebas de ancho */

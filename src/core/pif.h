@@ -17,8 +17,11 @@
  *   - Canales 0–3: puertos de control; 4: cartucho (EEPROM, save.c).
  *
  * Control estándar: identificación (0x00 y 0xFF: 05 00 + estado), estado
- * (0x01: botones, X, Y) y, sin Controller Pak ni Rumble, lectura y
- * escritura del accesorio respondidas como un control sin pak. L + R +
+ * (0x01: botones, X, Y) y lectura y escritura del accesorio (0x02 y 0x03).
+ * Con un Controller Pak enchufado (bus->mempak, mempak.h) el estado dice
+ * «pak presente» y esos comandos leen y escriben sus 32 KB; sin él, y
+ * siempre con un Rumble Pak (no se emula), contestan como un control sin
+ * pak. L + R +
  * Start reporta RST, Start apagado y el stick en (0, 0).
  *
  * Pulsaciones retenidas: un botón que el frontend da por recién pulsado
@@ -74,6 +77,7 @@ struct salsa64_pif {
 	 * respuesta de estado de cada puerto y cuántas van. */
 	struct salsa64_pad sent[SALSA64_PIF_PORTS];
 	uint32_t reads[SALSA64_PIF_PORTS];
+	uint8_t pak_err[SALSA64_PIF_PORTS];      /* el último comando del accesorio traía mal la dirección */
 };
 
 struct salsa64_bus;

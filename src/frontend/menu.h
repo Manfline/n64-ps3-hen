@@ -109,6 +109,11 @@ enum menu_density { MENU_DENSITY_NORMAL, MENU_DENSITY_FINE, MENU_DENSITIES };
  * vértices entre un cuadro y el siguiente (salsa64_rdp_interp). */
 enum menu_interp { MENU_INTERP_OFF, MENU_INTERP_GEOMETRY, MENU_INTERPS };
 
+/* Accesorio enchufado a los controles (juegos/<ROM>.cfg, «accesorio =
+ * controller-pak|ninguno»; mempak.h). Sin opción global: por omisión, un
+ * Controller Pak en cada control. */
+enum menu_accessory { MENU_ACC_PAK, MENU_ACC_NONE, MENU_ACCS };
+
 /* Ajustes de un solo juego (juegos/<ROM>.cfg): -1 es «lo global». */
 struct menu_game {
 	int aspect;    /* -1 o enum menu_aspect */
@@ -117,10 +122,11 @@ struct menu_game {
 	int scale;     /* -1, 0 (automática) o 1 .. MENU_SCALE_MAX: escala interna */
 	int density;   /* -1 o enum menu_density (solo con la máscara) */
 	int interp;    /* -1 o enum menu_interp */
+	int accessory; /* enum menu_accessory (nunca -1: sin valor global) */
 };
 /* MENU_GAME_DENSITY solo es una fila si el filtro que vale es la máscara. */
 enum { MENU_GAME_ASPECT, MENU_GAME_FILTER, MENU_GAME_DENSITY, MENU_GAME_OVERSCAN, MENU_GAME_SCALE, MENU_GAME_INTERP,
-       MENU_GAME_BACK, MENU_GAME_ROWS };
+       MENU_GAME_ACCESSORY, MENU_GAME_BACK, MENU_GAME_ROWS };
 #define MENU_SCALE_MAX 5
 
 /* Ajustes del menú: el fondo, el contador y la confirmación al salir van en
@@ -255,6 +261,8 @@ const char *menu_density_name(int density);
  * nombre de un valor (en español: se traduce con tr() al dibujar). */
 int menu_game_interp(const struct menu_settings *s, const struct menu_game *g);
 const char *menu_interp_name(int interp);
+/* Nombre de un accesorio (en español: se traduce con tr() al dibujar). */
+const char *menu_accessory_name(int accessory);
 
 /* Nombres de los valores (en español: se traducen con tr() al dibujar),
  * para el menú de pausa. La escala automática dice cuál es según la

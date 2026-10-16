@@ -228,7 +228,8 @@ trucos, un aviso lo dice.
 SELECT sobre una ROM abre sus ajustes: **Aspecto**, **Filtro**, **Recorte
 del borde**, **Escala interna** e **Interpolación**, cada uno «Global» (lo de Opciones) o un
 valor propio para ese juego (también se guardan desde «Imagen» en el menú de
-pausa). Se guardan en `/dev_hdd0/salsa64/juegos/<nombre de la ROM sin
+pausa), y **Accesorio** («Controller Pak» o «Ninguno», sin valor global; ver
+«Controller Pak»). Se guardan en `/dev_hdd0/salsa64/juegos/<nombre de la ROM sin
 extensión>.cfg`:
 
 ```
@@ -238,6 +239,7 @@ recorte = apagado   # apagado | normal | amplio | global
 escala = 2          # auto | 1 … 5 | global
 densidad = fina     # normal | fina | global (la de «CRT máscara»)
 interpolacion = geometria  # no | geometria | global
+accesorio = controller-pak # controller-pak | ninguno
 ```
 
 Al abrir el juego, el log dice «imagen: … (con ajustes de este juego)» y, si
@@ -378,6 +380,24 @@ Usan FlashRAM, entre otros, Zelda: Majora's Mask, Paper Mario, Pokémon Snap,
 Pokémon Puzzle League, Pokémon Stadium 1 y 2 y Jet Force Gemini. La SRAM de
 768 Kbit y la de 1 Mbit se reconocen pero todavía no se emulan (el panel
 dice «(sin emular)»).
+
+## Controller Pak
+
+Los juegos que guardan en la memoria que se enchufa al control (Ms. Pac-Man,
+por ejemplo) encuentran un Controller Pak de 32 KB en cada control conectado,
+ya formateado. Las partidas viven en `/dev_hdd0/salsa64/saves`, junto a las
+del cartucho, en un solo archivo por juego, `<título>-<CRC1>.mpk`, de 128 KB:
+el pak del control 1 en el byte 0x0000, el del 2 en 0x8000, el del 3 en 0x10000
+y el del 4 en 0x18000 (el mismo orden y los mismos bytes que el `.mpk` de
+mupen64plus, así que un `.mpk` de ahí se copia con ese nombre y sirve). Se
+escribe unos segundos después de la última escritura del juego, sin tocar
+el disco en cada comando, y al volver al menú o salir.
+
+Para quitarlo en un juego que se porta mal con un accesorio enchufado: SELECT
+sobre la ROM, **Accesorio**: «Controller Pak» (por omisión) o «Ninguno». Se
+guarda en el `.cfg` del juego (`accesorio = controller-pak | ninguno`) y vale
+desde la siguiente vez que se abre. El Rumble Pak y el Transfer Pak no se
+emulan.
 
 ## Estados guardados
 
@@ -552,7 +572,7 @@ se crean por FTP.
 | Archivo | Formato | Qué hace |
 |---|---|---|
 | `menu.cfg` | Líneas `fondo = si\|no`, `fps = si\|no`, `confirmar = si\|no`, `aspecto = 4:3\|16:9`, `filtro = suave\|nitido\|lineas\|lineas+\|crt-mascara\|crt-rgb\|crt-svideo\|crt-compuesto` , `densidad = normal\|fina`, `idioma = es\|en\|fr\|de\|it\|pt` e `interpolacion = no\|geometria` | Fondo animado del menú, contador de velocidad en el juego, si «Salir» del menú de pausa pregunta antes (sí sin la línea), aspecto, filtro, idioma e interpolación. Lo escriben el menú (Opciones) y SELECT + △ |
-| `juegos/<ROM>.cfg` | `aspecto`, `filtro`, `recorte`, `escala`, `densidad`, `interpolacion` = valor o `global` | Ajustes de un juego (sección «Ajustes por juego»). Lo escriben el menú (SELECT sobre una ROM) y «Imagen» del menú de pausa |
+| `juegos/<ROM>.cfg` | `aspecto`, `filtro`, `recorte`, `escala`, `densidad`, `interpolacion` = valor o `global`; `accesorio` = `controller-pak` o `ninguno` | Ajustes de un juego (sección «Ajustes por juego»). Lo escriben el menú (SELECT sobre una ROM) y «Imagen» del menú de pausa |
 | `descargas.cfg` | `activar = si` y direcciones | Enciende las descargas experimentales (sección «Descargas») |
 | `overscan.cfg` | Uno, dos o cuatro números: `8`, `8 6` o `izq der arr abajo` | Recorte de la imagen en píxeles de la N64 (a 320 × 240) por lado. Por omisión `8 6`; `0` lo apaga; máximo 64. Lo escribe el menú (`0`, `8 6` o `16 12`) |
 | `video.cfg` | `salida = 720` o `1080`; `escala = auto` o `1` a `5` | Salida de video y escala interna del render de la N64 (se leen al arrancar). Sin archivo: 720p y escala automática (3×, 960 × 720; a 1080p, 4×, 1280 × 960). Si la tele o el XMB no aceptan 1080, usa el siguiente modo. Acepta el formato viejo de una línea (`1080` o `720`). Lo escribe el menú con «Resolución» y «Escala interna» |
