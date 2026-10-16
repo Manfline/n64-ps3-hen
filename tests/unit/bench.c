@@ -89,6 +89,23 @@ static const uint32_t loop_cvt[] = {
 	LOOP_TAIL(NOP),
 };
 
+/* El molde de «(int)x» de los compiladores de N64: CVT.W con el redondeo a
+ * cero puesto en FCR31 (ctc1 antes y después), así que corre con RM = 1; el
+ * recompilador los mandaba al intérprete hasta el 2026-10-16. */
+static const uint32_t loop_cvtw_rm[] = {
+	CVT_W(F_S, 2, 0), CVT_W(F_S, 3, 0), CVT_W(F_S, 4, 0), CVT_W(F_S, 5, 0),
+	CVT_W(F_S, 6, 0), CVT_W(F_S, 7, 0), CVT_W(F_S, 8, 0),
+	LOOP_TAIL(NOP),
+};
+
+/* MUL.S con un operando minúsculo (1e-25, fuera de la franja de ±2^60 de
+ * antes) y un producto normal (3e-25). */
+static const uint32_t loop_fmul_tiny[] = {
+	MUL_F(F_S, 2, 0, 1), MUL_F(F_S, 3, 0, 1), MUL_F(F_S, 4, 0, 1), MUL_F(F_S, 5, 0, 1),
+	MUL_F(F_S, 6, 0, 1), MUL_F(F_S, 7, 0, 1), MUL_F(F_S, 8, 0, 1),
+	LOOP_TAIL(NOP),
+};
+
 /* Copia no alineada como la escribe el compilador: pares LWL/LWR y
  * SWL/SWR. */
 static const uint32_t loop_unaligned[] = {
@@ -117,9 +134,12 @@ struct bench_case {
 	unsigned n;
 	uint64_t instructions;
 	float f0, f1;
+	uint32_t fcr31;
 };
 
-#define CASE(name, loop, m, f0, f1) { name, loop, sizeof loop / sizeof loop[0], (m) * 1000000ull, f0, f1 }
+#define CASE(name, loop, m, f0, f1) { name, loop, sizeof loop / sizeof loop[0], (m) * 1000000ull, f0, f1, 0 }
+#define CASE_FCR(name, loop, m, f0, f1, fcr31) \
+	{ name, loop, sizeof loop / sizeof loop[0], (m) * 1000000ull, f0, f1, fcr31 }
 
 static const struct bench_case cases[] = {
 	CASE("mixto", loop_mixed, 20, 0, 1.0f),  /* igual que la línea base: comparable */
@@ -129,6 +149,9 @@ static const struct bench_case cases[] = {
 	CASE("mov.s", loop_fmov, 10, 1.5f, 0.1f),
 	CASE("add.s", loop_fadd, 10, 1.5f, 0.1f),
 	CASE("cvt", loop_cvt, 10, 1.5f, 0.1f),
+	CASE_FCR("cvt.w rm1", loop_cvtw_rm, 10, 1234.5f, 0, 1),
+	CASE_FCR("cvt.w rm2", loop_cvtw_rm, 10, 1234.5f, 0, 2),
+	CASE("mul.s mín", loop_fmul_tiny, 10, 1e-25f, 3.0f),
 	CASE("no alin.", loop_unaligned, 10, 0, 0),
 	CASE("mfc0", loop_mfc0, 10, 0, 0),
 	CASE("espera", loop_count_wait, 10, 0, 0),
@@ -153,6 +176,7 @@ void salsa64_unit_bench(void (*print)(const char *line), uint64_t (*now_us)(void
 		R[T5] = 0x7FFFFFFF;
 		CPU->fpr[0] = t_fbits(c->f0);
 		CPU->fpr[1] = t_fbits(c->f1);
+		CPU->fcr31 = c->fcr31;
 
 		uint64_t entries0 = rec ? rec->stats.entries : 0, calls0 = rec ? rec->stats.exec_calls : 0;
 		uint64_t t0 = now_us();
@@ -208,6 +232,7 @@ void salsa64_unit_bench_aligned(void (*print)(const char *line), uint64_t (*now_
 		n->cpu.gpr[T5] = 0x7FFFFFFF;
 		n->cpu.fpr[0] = t_fbits(c->f0);
 		n->cpu.fpr[1] = t_fbits(c->f1);
+		n->cpu.fcr31 = c->fcr31;
 
 		uint64_t t0 = now_us();
 		salsa64_n64_run(n, c->instructions);

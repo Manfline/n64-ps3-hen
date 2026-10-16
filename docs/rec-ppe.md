@@ -209,7 +209,8 @@ Lo que se llama a C:
   (y MFC0 de Random), MTC0 a EntryLo/PageMask/Index, TLBWI/TLBWR y ERET
   (estos tres últimos con rutina propia, ver «COP0 sin el intérprete»),
   CVT.S/D.L, y los caminos lentos de lo que se traduce
-  (operandos fuera de la franja, redondeo dirigido, causas habilitadas);
+  (operandos fuera de la franja, redondeo dirigido en la aritmética,
+  causas habilitadas);
 - excepciones (SYSCALL, BREAK, desbordamiento).
 
 En nativo: ALU de 32 y 64 bits (con desbordamiento), desplazamientos,
@@ -233,10 +234,35 @@ La FPU nativa repite el camino rápido del intérprete (`fpu.h`): las mismas
 operaciones de doble precisión en el mismo orden (suma, redondeo a simple
 con `frsp`, TwoSum o fma para el inexacto), así que da los mismos bits y
 las mismas causas y banderas de FCR31. Lo que ese camino no cubre (redondeo
-dirigido, I habilitada, operandos fuera de la franja segura, NaN,
-desnormales, sumas en S con exponentes a más de 28) salta a la sección fría
-y lo hace el intérprete. La prueba `executed_matches_full` ejecuta 6000
-instrucciones aleatorias por el CPU contra el camino completo.
+dirigido en ADD/SUB/MUL/DIV, I habilitada, operandos fuera de la franja
+segura, NaN, desnormales, sumas en S con exponentes a más de 28) salta a la
+sección fría y lo hace el intérprete. La prueba `executed_matches_full`
+ejecuta 6000 instrucciones aleatorias por el CPU contra el camino completo.
+
+Redondeo dirigido en las conversiones y MUL.S ancho (2026-10-16): el molde
+de «(int)x» de los compiladores de N64 pone RM = 1 en FCR31 con `ctc1`, corre
+`cvt.w.s` y restaura FCR31, así que `CVT.W`/`CVT.L` corrían con RM ≠ 0 y la
+compuerta (`RM ≠ 0 o I habilitada → intérprete`) los mandaba todos al
+intérprete (Banjo-Tooie: 17 M llamadas, 6,3 s en 176 s). Ahora `CVT.W` y
+`CVT.L` solo se compuertan por I habilitada y siguen el RM vigente
+(`emit_toint_core`, compartido por la rutina del preámbulo y el código en
+línea): RM 0 con `fctid` (el FPSCR del host nunca sale del más cercano), RM 1
+con `fctidz` y RM 2 y 3 con `fctidz` más el ajuste de ±1 de CEIL y FLOOR
+cuando el entero vuelto a double difiere de x (que es también la bandera I).
+Un RM cuesta un `rlwinm`, un `cmpwi` y un salto; el rango (|x| < 2³¹ en S,
+< 2³⁰ en D, < 2⁵³ a 64 bits, o ±0) es el mismo de siempre y NaN, infinito y
+desnormales siguen al intérprete, que da E con la excepción. MUL.S admite
+cualquier normal (exponente sesgado 1–254) o ±0 si, con `s = ea + eb − 127`,
+`1 ≤ s ≤ 252`: el producto de dos float es exacto en double, el exponente
+del resultado queda entre `s` y `s + 2` (producto de mantisas ≥ 2, subida
+por redondeo) y por tanto ni desborda ni queda diminuto; es un superconjunto
+de la franja anterior (operandos en [2⁻⁶⁰, 2⁶¹)). Las demás operaciones
+conservan la franja. Las pruebas `executed_rounding_edges_match_full` y
+`executed_mul_edges_match_full` ejecutan los cuatro modos con valores de
+borde y sumas de exponentes sesgados en 127/128 y 379/380 (los bordes de
+`s`) contra el camino
+completo. La FPU residente experimental (`rec_emit_fpu.h`) conserva su
+compuerta anterior.
 
 Conversiones y raíz (2026-10-10), con la misma regla: lo que el camino
 nativo no puede dar con los mismos bits y causas de `cop1.c` va al

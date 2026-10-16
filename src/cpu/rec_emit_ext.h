@@ -639,31 +639,60 @@ static void emit_fpu_from_w(struct ctx *c, bool to_s, int32_t oa, int32_t od, in
 static const double k_one = 1.0;
 
 /*
- * ROUND, TRUNC, CEIL y FLOOR a W y L, y CVT.W y CVT.L con redondeo al más
- * cercano (cop1.c, fpu_to_int), con I deshabilitada. Solo exponentes con los
- * que ningún modo se sale del rango (W: |x| < 2^31 en S, < 2^30 en D; L:
- * < 2^53), o ±0. fctid usa el modo del FPSCR, que nunca cambia (al más
- * cercano par, como fpu_round); fctidz trunca; CEIL y FLOOR corrigen el
- * truncado en 1 (exacto). Inexacto: el entero vuelto a double difiere de x.
+ * ROUND, TRUNC, CEIL y FLOOR a W y L, y CVT.W y CVT.L (cop1.c, fpu_to_int),
+ * con I deshabilitada. ROUND, TRUNC, CEIL y FLOOR tienen su modo fijo; CVT
+ * usa el RM de FCR31 que esté en vigor (r6, leído por la compuerta), así que
+ * el redondeo dirigido (el molde de «(int)x» de los compiladores de N64:
+ * ctc1 con RM = 1, cvt.w.s, ctc1) no sale del camino nativo. Solo
+ * exponentes con los que ningún modo se sale del rango (W: |x| < 2^31 en S,
+ * < 2^30 en D; L: < 2^53), o ±0. fctid usa el modo del FPSCR, que nunca
+ * cambia (al más cercano par, como fpu_round); fctidz trunca; CEIL y FLOOR
+ * corrigen el truncado en 1 (exacto). Inexacto: el entero vuelto a double
+ * difiere de x.
  */
-static void emit_fpu_to_int(struct ctx *c, bool is_s, unsigned funct, int32_t oa, int32_t od, int slow)
-{
-	bool cvt = funct >= 0x24, to64 = cvt ? funct == 0x25 : funct < 0x0C;
-	unsigned mode = cvt ? 0 : funct & 3;  /* 0 más cercano, 1 a cero, 2 a +inf, 3 a -inf */
-	uint32_t emax = (is_s ? 127 : 1023) + (to64 ? 52 : is_s ? 30 : 29);
-	int done = new_label(c);
+enum { TOINT_RM = 4 };  /* modo: el RM de FCR31 */
 
-	emit_fcr31_gate(c, cvt ? 0x83 : 0x80, slow);
-	E(c, is_s ? ppc_lwz(9, oa, R_CPU) : ppc_ld(9, oa, R_CPU));
-	emit_fpu_range(c, is_s, 9, 12, false, 1, emax - 1, slow);
-	E(c, is_s ? ppc_lfs(1, oa, R_CPU) : ppc_lfd(1, oa, R_CPU));
-	E(c, mode == 0 ? ppc_fctid(0, 1) : ppc_fctidz(0, 1));
+/* x en f1 y, con TOINT_RM, FCR31 en r6. Deja el entero de 64 bits en f0 y
+ * r5 = 1 si el resultado es inexacto. Pisa f2, f3, r11, r5, T_Y y cr0. */
+static void emit_toint_core(struct ctx *c, unsigned mode)
+{
+	int done = new_label(c), dir = new_label(c), join = new_label(c);
+	if (mode == TOINT_RM) {
+		E(c, ppc_rlwinm(11, 6, 0, 30, 31));  /* RM */
+		E(c, ppc_cmpwi(0, 11, 0));
+		emit_bc(c, PPC_BO_FALSE, PPC_BI(0, PPC_EQ), dir);
+		E(c, ppc_fctid(0, 1));
+		emit_b(c, join, false);
+		bind(c, dir);
+		E(c, ppc_fctidz(0, 1));
+		bind(c, join);
+	} else {
+		E(c, mode == 0 ? ppc_fctid(0, 1) : ppc_fctidz(0, 1));
+	}
 	E(c, ppc_fcfid(2, 0));
 	E(c, ppc_li(5, 0));
 	E(c, ppc_fcmpu(CR_T, 2, 1));
 	emit_bc(c, PPC_BO_TRUE, PPC_BI(CR_T, PPC_EQ), done);
 	E(c, ppc_li(5, 1));
-	if (mode >= 2) {
+	if (mode == TOINT_RM) {
+		/* RM 0 (más cercano) y 1 (a cero) ya están; 2 es CEIL, 3 es FLOOR. */
+		int rm3 = new_label(c), fix = new_label(c);
+		E(c, ppc_cmpwi(0, 11, 2));
+		emit_bc(c, PPC_BO_TRUE, PPC_BI(0, PPC_LT), done);
+		emit_bc(c, PPC_BO_FALSE, PPC_BI(0, PPC_EQ), rm3);
+		emit_bc(c, PPC_BO_FALSE, PPC_BI(CR_T, PPC_LT), done);
+		li64(c, T_Y, (uintptr_t)&k_one);
+		E(c, ppc_lfd(3, 0, T_Y));
+		E(c, ppc_fadd(2, 2, 3));
+		emit_b(c, fix, false);
+		bind(c, rm3);
+		emit_bc(c, PPC_BO_FALSE, PPC_BI(CR_T, PPC_GT), done);
+		li64(c, T_Y, (uintptr_t)&k_one);
+		E(c, ppc_lfd(3, 0, T_Y));
+		E(c, ppc_fsub(2, 2, 3));
+		bind(c, fix);
+		E(c, ppc_fctidz(0, 2));
+	} else if (mode >= 2) {
 		/* CEIL: truncado < x, +1; FLOOR: truncado > x, -1. */
 		emit_bc(c, PPC_BO_FALSE, PPC_BI(CR_T, mode == 2 ? PPC_LT : PPC_GT), done);
 		li64(c, T_Y, (uintptr_t)&k_one);
@@ -672,6 +701,19 @@ static void emit_fpu_to_int(struct ctx *c, bool is_s, unsigned funct, int32_t oa
 		E(c, ppc_fctidz(0, 2));
 	}
 	bind(c, done);
+}
+
+static void emit_fpu_to_int(struct ctx *c, bool is_s, unsigned funct, int32_t oa, int32_t od, int slow)
+{
+	bool cvt = funct >= 0x24, to64 = cvt ? funct == 0x25 : funct < 0x0C;
+	unsigned mode = cvt ? TOINT_RM : funct & 3;  /* 0 más cercano, 1 a cero, 2 a +inf, 3 a -inf */
+	uint32_t emax = (is_s ? 127 : 1023) + (to64 ? 52 : is_s ? 30 : 29);
+
+	emit_fcr31_gate(c, 0x80, slow);
+	E(c, is_s ? ppc_lwz(9, oa, R_CPU) : ppc_ld(9, oa, R_CPU));
+	emit_fpu_range(c, is_s, 9, 12, false, 1, emax - 1, slow);
+	E(c, is_s ? ppc_lfs(1, oa, R_CPU) : ppc_lfd(1, oa, R_CPU));
+	emit_toint_core(c, mode);
 	E(c, ppc_stfd(0, od, R_CPU));
 	if (!to64) {  /* W: los 32 bits altos en 0 */
 		E(c, ppc_li(0, 0));

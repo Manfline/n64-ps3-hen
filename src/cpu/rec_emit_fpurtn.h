@@ -60,8 +60,12 @@ static void fr_arith(struct ctx *c, bool is_s, unsigned funct, int slow)
 	emit_fcr31_gate(c, 0x83, slow);
 	fr_load(c, is_s, 9, 1, 3);
 	fr_load(c, is_s, 10, 2, 4);
-	emit_fpu_band(c, is_s, 9, 12, slow);
-	emit_fpu_band(c, is_s, 10, 4, slow);
+	if (is_s && funct == 0x02) {
+		emit_fpu_mul_s_range(c, slow);
+	} else {
+		emit_fpu_band(c, is_s, 9, 12, slow);
+		emit_fpu_band(c, is_s, 10, 4, slow);
+	}
 	if (funct == 0x03) {  /* entre cero: Z o V */
 		E(c, is_s ? ppc_rlwinm(0, 10, 0, 1, 31) : ppc_clrldi(0, 10, 1));
 		E(c, ppc_cmpdi(CR_T, 0, 0));
@@ -326,26 +330,12 @@ static void fr_from_w(struct ctx *c, bool to_s, int slow)
 static void fr_to_int(struct ctx *c, bool is_s, unsigned funct, int slow)
 {
 	bool cvt = funct >= 0x24, to64 = cvt ? funct == 0x25 : funct < 0x0C;
-	unsigned mode = cvt ? 0 : funct & 3;
+	unsigned mode = cvt ? TOINT_RM : funct & 3;
 	uint32_t emax = (is_s ? 127 : 1023) + (to64 ? 52 : is_s ? 30 : 29);
-	int done = new_label(c);
-	emit_fcr31_gate(c, cvt ? 0x83 : 0x80, slow);
+	emit_fcr31_gate(c, 0x80, slow);
 	fr_load(c, is_s, 9, 1, 3);
 	emit_fpu_range(c, is_s, 9, 12, false, 1, emax - 1, slow);
-	E(c, mode == 0 ? ppc_fctid(0, 1) : ppc_fctidz(0, 1));
-	E(c, ppc_fcfid(2, 0));
-	E(c, ppc_li(5, 0));
-	E(c, ppc_fcmpu(CR_T, 2, 1));
-	emit_bc(c, PPC_BO_TRUE, PPC_BI(CR_T, PPC_EQ), done);
-	E(c, ppc_li(5, 1));
-	if (mode >= 2) {
-		emit_bc(c, PPC_BO_FALSE, PPC_BI(CR_T, mode == 2 ? PPC_LT : PPC_GT), done);
-		li64(c, T_Y, (uintptr_t)&k_one);
-		E(c, ppc_lfd(3, 0, T_Y));
-		E(c, mode == 2 ? ppc_fadd(2, 2, 3) : ppc_fsub(2, 2, 3));
-		E(c, ppc_fctidz(0, 2));
-	}
-	bind(c, done);
+	emit_toint_core(c, mode);
 	E(c, ppc_stfdx(0, R_CPU, T_V));
 	if (!to64) {
 		E(c, ppc_li(0, 0));

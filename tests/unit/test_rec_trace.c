@@ -123,6 +123,9 @@ static void compile_records_and_retranslations(void)
 	CHECK_EQ(tr.field.compiled, 4);
 	CHECK_EQ(tr.field.compile_ticks, 4 * 77);
 	CHECK_EQ(tr.field.words, 3 * 70 + 72);
+	CHECK_EQ(tr.compiles.calls[SALSA64_RT_COMPILE_NEW], 3);
+	CHECK_EQ(tr.compiles.calls[SALSA64_RT_COMPILE_RETRANS], 1);
+	CHECK_EQ(tr.compiles.words[SALSA64_RT_COMPILE_RETRANS], 72);
 	CHECK_EQ(tr.cur.hash, 0);  /* el emisor empieza de cero */
 	salsa64_rec_trace_evicted(&fake, 0, 3, 120);
 	salsa64_rec_trace_evicted(&fake, 2, SALSA64_REC_FLUSH_STATE, 40);
@@ -173,6 +176,93 @@ static void classes_of_instructions(void)
 	CHECK_EQ(salsa64_rec_trace_class(SDC1(2, 8, T1)), SALSA64_RT_C_MEM);
 	CHECK_EQ(salsa64_rec_trace_class(ADD_F(16, 0, 2, 4)), SALSA64_RT_C_FPU);
 	CHECK_EQ(salsa64_rec_trace_class(MTC0(T0, 12)), SALSA64_RT_C_OTHER);
+}
+
+static void slow_path_classification(void)
+{
+	CHECK_EQ(salsa64_rec_trace_mem_class(0xFFFFFFFF80001000ull, 0x1000, true, false, true, 8u << 20),
+		 SALSA64_RT_SLOW_KSEG0);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0xFFFFFFFFA0001000ull, 0x1000, true, false, true, 8u << 20),
+		 SALSA64_RT_SLOW_KSEG1);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0x1000, 0x1000, true, false, true, 8u << 20),
+		 SALSA64_RT_SLOW_TLB_RDRAM);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0x1000, 0, false, false, true, 8u << 20),
+		 SALSA64_RT_SLOW_TLB_EXCEPTION);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0xA4000000, 0x04000000, true, false, true, 8u << 20),
+		 SALSA64_RT_SLOW_MMIO_SP);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0xA4400000, 0x04400000, true, false, true, 8u << 20),
+		 SALSA64_RT_SLOW_MMIO_VI);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0xA4600000, 0x04600000, true, false, true, 8u << 20),
+		 SALSA64_RT_SLOW_MMIO_PI);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0xA4800000, 0x04800000, true, false, true, 8u << 20),
+		 SALSA64_RT_SLOW_MMIO_SI);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0xBFC007C0, 0x1FC007C0, true, false, true, 8u << 20),
+		 SALSA64_RT_SLOW_MMIO_PIF);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0x80001000, 0x1000, true, true, true, 8u << 20),
+		 SALSA64_RT_SLOW_CODE_STORE);
+	CHECK_EQ(salsa64_rec_trace_mem_class(0x1001, 0, false, false, false, 8u << 20),
+		 SALSA64_RT_SLOW_MISALIGNED);
+	CHECK_EQ(salsa64_rec_trace_exec_class(MTC0(T0, 12)), SALSA64_RT_SLOW_EXEC_COP0);
+	CHECK_EQ(salsa64_rec_trace_exec_class(ADD_F(16, 0, 2, 4)), SALSA64_RT_SLOW_EXEC_FPU);
+	CHECK_EQ(salsa64_rec_trace_exec_class(0x0000000Cu), SALSA64_RT_SLOW_EXEC_OTHER);
+	CHECK_EQ(salsa64_rec_trace_exception_class(SALSA64_EXC_TLBL), SALSA64_RT_SLOW_EXC_TLBL);
+	CHECK_EQ(salsa64_rec_trace_exception_class(SALSA64_EXC_ADES), SALSA64_RT_SLOW_EXC_ADES);
+	CHECK_EQ(salsa64_rec_trace_exception_class(SALSA64_EXC_FPE), SALSA64_RT_SLOW_EXC_FPE);
+}
+
+static struct salsa64_rec_trace ss_trace;
+
+static void fpu_breakdown_and_space_saving(void)
+{
+	CHECK_EQ(salsa64_rec_trace_fpu_index(ADD_F(16, 0, 2, 4)), 0u);
+	CHECK_EQ(salsa64_rec_trace_fpu_index(ADD_F(17, 0, 2, 4)), 64u);
+	CHECK_EQ(salsa64_rec_trace_fpu_index(CVT_S(20, 0, 2)), 2u * 64 + 0x20);
+	CHECK_EQ(salsa64_rec_trace_fpu_index(CVT_L(17, 0, 2)), 1u * 64 + 0x25);
+	CHECK_EQ(salsa64_rec_trace_fpu_index(C_F(21, 2, 2, 4)), 3u * 64 + 0x32);
+	CHECK_EQ(salsa64_rec_trace_fpu_index(MFC1(T0, 2)), SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_MFC1);
+	CHECK_EQ(salsa64_rec_trace_fpu_index(CTC1(T0, 31)), SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_CTC1);
+	CHECK_EQ(salsa64_rec_trace_fpu_index(M_R(0x11, 0x08, 0, 0, 0, 0)), SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_BC1);
+	CHECK_EQ(salsa64_rec_trace_fpu_index(M_R(0x11, 0x03, 0, 0, 0, 0)), SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_OTHER);
+	CHECK_EQ(salsa64_rec_trace_fpu_reason(0), SALSA64_RT_FPU_R_RESULT);
+	CHECK_EQ(salsa64_rec_trace_fpu_reason(0x01000000u), SALSA64_RT_FPU_R_RESULT);  /* FS no cuenta */
+	CHECK_EQ(salsa64_rec_trace_fpu_reason(1), SALSA64_RT_FPU_R_RM);
+	CHECK_EQ(salsa64_rec_trace_fpu_reason(0x81), SALSA64_RT_FPU_R_RM);              /* RM manda sobre I */
+	CHECK_EQ(salsa64_rec_trace_fpu_reason(0x80), SALSA64_RT_FPU_R_INEXACT);
+	CHECK_EQ(salsa64_rec_trace_fpu_reason(0x400), SALSA64_RT_FPU_R_ENABLED);
+	CHECK_EQ(salsa64_rec_trace_fpu_reason(0x480), SALSA64_RT_FPU_R_INEXACT);
+
+	struct salsa64_rec_trace *t = &ss_trace;
+	salsa64_rec_trace_init(t);
+	salsa64_rec_trace_fpu_add(t, ADD_F(16, 0, 2, 4), 0, 0, 100);
+	salsa64_rec_trace_fpu_add(t, ADD_F(16, 0, 2, 4), 1, SALSA64_ST_FR, 50);
+	CHECK_EQ(t->fpu.ticks[0], 150u);
+	CHECK_EQ(t->fpu.calls[0][SALSA64_RT_FPU_R_RESULT], 1u);
+	CHECK_EQ(t->fpu.calls[0][SALSA64_RT_FPU_R_RM], 1u);
+	CHECK_EQ(t->fpu.fr_calls[0], 1u);
+	CHECK_EQ(t->fpu.fr_calls[1], 1u);
+	CHECK_EQ(t->fpu.fr_ticks[1], 50u);
+
+	/* Space-Saving: llena con PCs fríos, un PC caliente que llega después entra
+	 * (reemplaza al de menos ticks y hereda su cota) y acaba el primero. */
+	salsa64_rec_trace_init(t);
+	for (unsigned k = 0; k < SALSA64_RT_TOP_PC; k++)
+		salsa64_rec_trace_slow_add(t, SALSA64_RT_SLOW_EXEC_OTHER, 10 + k, 0x80000000u + 4 * k);
+	for (unsigned n = 0; n < 100; n++)
+		salsa64_rec_trace_slow_add(t, SALSA64_RT_SLOW_EXEC_FPU, 5, 0x80100000u);
+	unsigned hot = SALSA64_RT_TOP_PC, best = 0;
+	for (unsigned k = 0; k < SALSA64_RT_TOP_PC; k++) {
+		if (t->slow.top[k].pc == 0x80100000u) hot = k;
+		if (t->slow.top[k].ticks > t->slow.top[best].ticks) best = k;
+	}
+	CHECK(hot < SALSA64_RT_TOP_PC);
+	CHECK_EQ(best, hot);
+	CHECK(t->slow.top[hot].ticks >= 500u);        /* nunca menos de lo real */
+	CHECK(t->slow.top[hot].ticks <= 500u + 10u);  /* hereda al de menos ticks (10) */
+	CHECK_EQ(t->slow.top[hot].calls, 101u);
+	bool cold0 = false;
+	for (unsigned k = 0; k < SALSA64_RT_TOP_PC; k++)
+		cold0 |= t->slow.top[k].pc == 0x80000000u;
+	CHECK(!cold0);  /* el de menos ticks fue el reemplazado */
 }
 
 /* ---- Con el recompilador ---------------------------------------------------- */
@@ -295,5 +385,7 @@ void t_suite_rec_trace(void)
 	RUN(compile_records_and_retranslations);
 	RUN(jr_fold_by_address);
 	RUN(classes_of_instructions);
+	RUN(slow_path_classification);
+	RUN(fpu_breakdown_and_space_saving);
 	RUN(rec_window_jr_and_classes);
 }

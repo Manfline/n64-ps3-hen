@@ -93,6 +93,25 @@ bloques muertos, instrucciones interpretadas, JR, µs compilando); muestreo
 por categoría; el hueco más largo entre lecturas de los mandos; bytes
 perdidos.
 
+**Camino lento y compilaciones**: cada ventana de 5 s añade contadores del
+camino lento por clase (llamadas y ticks del timebase PPE) y compilaciones
+por motivo (bloques, ticks y palabras generadas). Las clases distinguen
+KSEG0/KSEG1, RDRAM y E/S por traducción, excepciones de traducción,
+desalineación, grupos MMIO, escrituras sobre código, instrucciones que pasan
+al intérprete y excepciones por tipo. Se guarda también el conjunto de PCs de más
+tiempo en la sesión. Los motivos de compilación son primera compilación,
+escritura de CPU, DMA, desalojo/vaciado y retraducción del mismo contenido
+MIPS. El lector ignora tipos nuevos que no reconoce, por lo que los archivos
+anteriores siguen siendo legibles; la cabecera permanece en versión 1.
+
+La medición toma el timebase solo dentro de las rutinas C del camino lento y
+durante compilaciones, con `rec->trace` activo. No cambia palabras emitidas.
+Por esa restricción no cuenta aciertos de `ktlb[]` que resuelve el código
+generado: registra los accesos que llegan a C, que son fallos del camino
+rápido. Tampoco atribuye cada excepción de traducción a un PC MIPS exacto.
+KSEG y MMIO se clasifican con la dirección recibida y el resultado de la
+traducción.
+
 **Tirón**: cada campo de emulación de más de `tiron_ms`, con lo que lo
 explica: bloques compilados y µs compilando (y cuántos eran
 retraducciones), desalojos, vaciados y bloques muertos, instrucciones
@@ -254,6 +273,8 @@ abrió la sesión (`ms`).
 | 12 | FIN | `ms` u32, texto `clave=valor` |
 | 13 | PERDIDO | anillo u32, bytes u32 |
 | 14 | EVENTO | `ms` u32, texto |
+| 15 | CAMINO LENTO | `ms:u32`, `n:u16`, `pcs:u16`; `n` pares `llamadas:u32,ticks:u64`; `pcs` ternas `vpc:u32,ticks:u64,llamadas:u32` |
+| 16 | COMPILACIÓN | `ms:u32`, `n:u16`, reservado `u16`, máximo de compilaciones por campo `u32`, campo del máximo `u32`; `n` ternas `bloques:u32,ticks:u64,palabras:u32` |
 
 Los campos de VENTANA y TIRÓN están en `src/frontend/perfilado.h`
 (`PERF_WINDOW_FIELDS`, `PERF_STALL_FIELDS`); el registro NOMBRES los nombra
