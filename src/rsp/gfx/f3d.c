@@ -83,22 +83,29 @@ static uint32_t geom_bits(uint32_t m)
 	return r;
 }
 
-/* Índice de vértice de un byte de comando: ×10 en F3D, ×2 en F3DEX.
- * x·205 >> 11 es x/10 exacto para x < 1029 (sin división en el SPE). */
-static uint32_t vtx_index(uint32_t byte, bool ex)
+/* Índice de vértice de un byte de comando: ×10 en F3D, ×2 en F3DEX y ×5 en
+ * la variante de Wave Race. x·205 >> 11 es x/10 exacto para x < 1029 y
+ * x·205 >> 10 es x/5 exacto para x < 1024 (sin división en el SPE). */
+enum { IDX_X10, IDX_X2, IDX_X5 };
+
+static uint32_t vtx_index(uint32_t byte, unsigned kind)
 {
-	return ex ? byte >> 1 : (byte * 205u) >> 11;
+	if (kind == IDX_X2)
+		return byte >> 1;
+	return kind == IDX_X5 ? (byte * 205u) >> 10 : (byte * 205u) >> 11;
 }
+
 
 /* Triángulo con los índices en los bytes 2, 1 y 0 de `w`. En F3D el byte 3
  * dice qué vértice da el color del sombreado plano; la HLE lo toma del
  * primero, así que se rota (la orientación no cambia). F3DEX ya los manda
  * rotados. */
-static void tri(struct gfx_state *g, uint32_t w, bool ex)
+static void tri(struct gfx_state *g, uint32_t w, unsigned kind)
 {
-	uint32_t a = vtx_index((w >> 16) & 0xFF, ex), b = vtx_index((w >> 8) & 0xFF, ex);
-	uint32_t c = vtx_index(w & 0xFF, ex);
-	switch (ex ? 0 : w >> 24) {
+	uint32_t a = vtx_index((w >> 16) & 0xFF, kind), b = vtx_index((w >> 8) & 0xFF, kind);
+	uint32_t c = vtx_index(w & 0xFF, kind);
+	/* Wave Race no usa el byte 3 (y manda 0). */
+	switch (kind == IDX_X10 ? w >> 24 : 0) {
 	case 1:
 		gfx_triangle(g, b, c, a);
 		break;
@@ -197,6 +204,8 @@ void gfx_dl_f3d(struct gfx_state *g, gfx_cmd_hook hook)
 {
 	struct gfx_result *res = g->res;
 	const bool ex = g->job->gbi == SALSA64_GBI_F3DEX;
+	const bool wr = g->job->gbi == SALSA64_GBI_F3DWR;
+	const unsigned kind = ex ? IDX_X2 : wr ? IDX_X5 : IDX_X10;
 	uint32_t w0, w1;
 
 	while (gfx_dl_next(g, &w0, &w1)) {
@@ -209,6 +218,10 @@ void gfx_dl_f3d(struct gfx_state *g, gfx_cmd_hook hook)
 			if (ex) {
 				v0 = (w0 >> 17) & 0x7F;
 				n = (w0 >> 10) & 0x3F;
+			} else if (wr) {
+				/* v0·5 en el byte 2; el conteo en 7 bits, hasta 32. */
+				v0 = vtx_index((w0 >> 16) & 0xFF, IDX_X5);
+				n = (w0 >> 9) & 0x7F;
 			} else {
 				v0 = (w0 >> 16) & 0xF;
 				n = ((w0 >> 20) & 0xF) + 1;
@@ -219,7 +232,7 @@ void gfx_dl_f3d(struct gfx_state *g, gfx_cmd_hook hook)
 			break;
 		}
 		case G_TRI1:
-			tri(g, w1, ex);
+			tri(g, w1, kind);
 			break;
 		case G_MTX: {
 			uint32_t p = (w0 >> 16) & 0xFF;
@@ -312,17 +325,23 @@ void gfx_dl_f3d(struct gfx_state *g, gfx_cmd_hook hook)
 		case G_BRANCH_Z:
 			if (!ex && op == G_TRI2) {
 				tri4(g, w0, w1);
+			} else if (wr && op == G_QUAD) {
+				/* 0xB5 aquí es un cuadrilátero con índices ×5. */
+				uint32_t a = vtx_index(w1 >> 24, IDX_X5), b = vtx_index((w1 >> 16) & 0xFF, IDX_X5);
+				uint32_t c = vtx_index((w1 >> 8) & 0xFF, IDX_X5), d = vtx_index(w1 & 0xFF, IDX_X5);
+				gfx_triangle(g, a, b, c);
+				gfx_triangle(g, a, c, d);
 			} else if (!ex) {
 				/* G_LINE3D y los opcodes que F3D no tiene. */
 				res->unknown_cmds++;
 				res->last_unknown = op;
 			} else if (op == G_TRI2) {
-				tri(g, w0, true);
-				tri(g, w1, true);
+				tri(g, w0, IDX_X2);
+				tri(g, w1, IDX_X2);
 			} else if (op == G_QUAD) {
 				/* gSP1Quadrangle: v0 v1 v2 v3 en los cuatro bytes. */
-				uint32_t a = vtx_index(w1 >> 24, true), b = vtx_index((w1 >> 16) & 0xFF, true);
-				uint32_t c = vtx_index((w1 >> 8) & 0xFF, true), d = vtx_index(w1 & 0xFF, true);
+				uint32_t a = vtx_index(w1 >> 24, IDX_X2), b = vtx_index((w1 >> 16) & 0xFF, IDX_X2);
+				uint32_t c = vtx_index((w1 >> 8) & 0xFF, IDX_X2), d = vtx_index(w1 & 0xFF, IDX_X2);
 				gfx_triangle(g, a, b, c);
 				gfx_triangle(g, a, c, d);
 			} else if (op == G_BRANCH_Z) {

@@ -23,6 +23,7 @@ static struct gfx_job job;
 static struct gfx_result res;
 static uint32_t dl_pc, data_pc;
 static bool ex;  /* F3DEX en vez de F3D */
+static bool wr;  /* la variante de Wave Race (índices ×5) */
 static uint32_t job_flags;  /* GFX_JOB_* del próximo run */
 
 /* ---- Codificación de la primera generación ---- */
@@ -44,6 +45,7 @@ static uint32_t data_alloc(uint32_t bytes)
 static void start(bool f3dex)
 {
 	ex = f3dex;
+	wr = false;
 	dl_pc = DL_PA;
 	data_pc = DATA_PA;
 	job_flags = 0;
@@ -62,7 +64,7 @@ static void run(void)
 	job.cmd_cap = sizeof out_cmd;
 	job.tex_ea = (uint64_t)(uintptr_t)out_tex;
 	job.tex_cap = sizeof out_tex;
-	job.gbi = ex ? SALSA64_GBI_F3DEX : SALSA64_GBI_F3D;
+	job.gbi = wr ? SALSA64_GBI_F3DWR : ex ? SALSA64_GBI_F3DEX : SALSA64_GBI_F3D;
 	job.dl = DL_PA;
 	job.flags = job_flags;
 	gfx_run(&gs, &job, &res);
@@ -696,6 +698,63 @@ static void f3d_near_clip(void)
 	CHECK(fabsf(out_vtx[2].x / out_vtx[2].w - 160) < 1e-3f && fabsf(out_vtx[2].y / out_vtx[2].w) < 1e-3f);
 }
 
+/* Variante de Wave Race: G_VTX con v0·5 en el byte 2 y el conteo en 7 bits,
+ * índices ×5 y G_QUAD (0xB5) con cuatro índices. */
+static void f3dwr_commands(void)
+{
+	/* x/5 por multiplicación y desplazamiento, exacto en 0–255. */
+	for (uint32_t b = 0; b < 256; b++)
+		CHECK_EQ((b * 205u) >> 10, b / 5);
+
+	start(false);
+	wr = true;
+	basic_setup();
+	const float quarter[16] = { 0.25f, 0, 0, 0, 0, 0.25f, 0, 0, 0, 0, 0.25f, 0, 0, 0, 0, 1 };
+	sp_matrix(quarter, MTX_LOAD);
+	sp_clear_geometry(0xFFFFFFFF);
+	sp_set_geometry(F3D_SMOOTH);
+	struct vtx v[32];
+	memset(v, 0, sizeof v);
+	for (int i = 0; i < 32; i++) {
+		v[i].x = (int16_t)(i & 3);
+		v[i].y = (int16_t)((i >> 2) & 3);
+		v[i].c[0] = (uint8_t)(i * 8);
+		v[i].c[3] = 255;
+	}
+	uint32_t a = put_vertices(v, 32);
+	dl(0x04000a4f, a);                /* 5 vértices desde el 0 */
+	dl(0x04501cdf, a + 16 * 16);      /* 14 vértices desde el 16 */
+	dl(0xBF000000, 0u << 16 | 5u << 8 | 10u);                 /* triángulo 0, 1, 2 */
+	dl(0xB5000000, 16u * 5 << 24 | 17u * 5 << 16 | 18u * 5 << 8 | 19u * 5);  /* quad 16–19 */
+	dl(0xB5000000, 29u * 5 << 24 | 28u * 5 << 16 | 27u * 5 << 8 | 26u * 5);  /* el último llega a 29 */
+	run();
+	CHECK_EQ(res.unknown_cmds, 0);
+	CHECK_EQ(res.triangles, 5);
+	/* Los vértices cargados en 0–4 y 16–29. */
+	CHECK(fabsf(gs.vtx[4].x - 0.0f) < 1e-6f);
+	CHECK(fabsf(gs.vtx[29].x - 0.25f) < 1e-6f);
+	CHECK(fabsf(gs.vtx[29].y - 0.75f) < 1e-6f);
+	/* Triángulo (0,1,2) y los dos del primer quad (16,17,18) y (16,18,19). */
+	CHECK_EQ(out_vtx[0].r, 0 * 8);
+	CHECK_EQ(out_vtx[1].r, 1 * 8);
+	CHECK_EQ(out_vtx[2].r, 2 * 8);
+	CHECK_EQ(out_vtx[3].r, 16 * 8);
+	CHECK_EQ(out_vtx[4].r, 17 * 8);
+	CHECK_EQ(out_vtx[5].r, 18 * 8);
+	CHECK_EQ(out_vtx[6].r, 16 * 8);
+	CHECK_EQ(out_vtx[7].r, 18 * 8);
+	CHECK_EQ(out_vtx[8].r, 19 * 8);
+	CHECK_EQ(out_vtx[9].r, 29 * 8);
+	CHECK_EQ(out_vtx[11].r, 27 * 8);
+	CHECK_EQ(out_vtx[14].r, 26 * 8);
+
+	/* Sin la variante, 0xB5 es G_LINE3D de F3D: no se dibuja nada. */
+	start(false);
+	dl(0xB5000000, 0);
+	run();
+	CHECK_EQ(res.triangles, 0);
+}
+
 void t_suite_gfx_f3d(void)
 {
 	RUN(f3d_triangle);
@@ -709,6 +768,7 @@ void t_suite_gfx_f3d(void)
 	RUN(f3d_points_and_matrix);
 	RUN(f3d_unknown);
 	RUN(f3d_tri4);
+	RUN(f3dwr_commands);
 	RUN(f3d_rdp_raw_triangle);
 	RUN(f3dex_commands);
 	RUN(f3dex_clip_ratio);

@@ -67,7 +67,7 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 	g->dl_sp = 0;
 	g->obj_rendermode = 0;
 	gfx_ucode_reload(g, job->ucode, job->gbi == SALSA64_GBI_F3D || job->gbi == SALSA64_GBI_F3DEX ||
-					 job->gbi == SALSA64_GBI_F3DPD ? 1 : 2,
+					 job->gbi == SALSA64_GBI_F3DPD || job->gbi == SALSA64_GBI_F3DWR ? 1 : 2,
 			 job->flags & GFX_JOB_NONEAR, 0, 0);
 	g->have_draw = false;
 	g->target_sent = false;
@@ -91,6 +91,7 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 		switch (job->gbi) {
 		case SALSA64_GBI_F3D:
 		case SALSA64_GBI_F3DEX:
+		case SALSA64_GBI_F3DWR:
 			gfx_dl_f3d(g, NULL);
 			break;
 		case SALSA64_GBI_F3DPD:

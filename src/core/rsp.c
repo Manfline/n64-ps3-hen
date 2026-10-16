@@ -299,6 +299,7 @@ static const struct {
 	enum salsa64_gbi gbi;
 } ucode_crcs[] = {
 	{ 0xC543D0A8u, 0x1000, SALSA64_GBI_F3DPD },  /* Perfect Dark (NTSC-U) */
+	{ 0x81FA4A32u, 0x1000, SALSA64_GBI_F3DWR },  /* Wave Race 64: "RSP SW Version: 2.0D" */
 };
 
 static enum salsa64_gbi gbi_by_crc(const struct salsa64_bus *bus, const struct salsa64_task *task)
@@ -376,10 +377,15 @@ static enum salsa64_gbi detect_gbi(const struct salsa64_bus *bus, const struct s
 			return SALSA64_GBI_F3DEX;
 		return SALSA64_GBI_UNKNOWN;
 	}
+	/* Los que se conocen por el CRC de su código van antes que el texto
+	 * genérico: la variante de Wave Race también dice "2.0". */
+	enum salsa64_gbi by_crc = gbi_by_crc(bus, task);
+	if (by_crc != SALSA64_GBI_UNKNOWN)
+		return by_crc;
 	/* Fast3D (Super Mario 64 y los primeros juegos) no trae ese texto. */
 	if (find(p, end, "RSP SW Version: 2.0"))
 		return SALSA64_GBI_F3D;
-	return gbi_by_crc(bus, task);
+	return SALSA64_GBI_UNKNOWN;
 }
 
 void salsa64_rsp_ucode_text(const struct salsa64_bus *bus, uint32_t ucode_data, char *out, size_t n)
@@ -442,7 +448,7 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 	if (rsp->lle && rsp->lle_mode != SALSA64_LLE_OFF && rsp->sched) {
 		bool hle_gfx = task.type == SALSA64_TASK_GFX && valid && rsp->gfx &&
 			       (gbi == SALSA64_GBI_F3DEX2 || gbi == SALSA64_GBI_F3DZEX2 || gbi == SALSA64_GBI_F3D ||
-				gbi == SALSA64_GBI_F3DEX);
+				gbi == SALSA64_GBI_F3DEX || gbi == SALSA64_GBI_F3DWR);
 		bool hle_audio = task.type == SALSA64_TASK_AUDIO && valid && rsp->audio && abi != SALSA64_ABI_UNKNOWN;
 		if (rsp->lle_mode == SALSA64_LLE_ALL || !(hle_gfx || hle_audio || jpeg != SALSA64_JPEG_NONE)) {
 			rsp->stats.lle++;
