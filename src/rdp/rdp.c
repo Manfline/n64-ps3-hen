@@ -1576,6 +1576,47 @@ static bool tall_fill_target(int i, float xa, float ya, float xb, float yb, uint
 	return true;
 }
 
+/* Copia espejo de una imagen auxiliar chica dibujada en la tarea `n` (nunca
+ * presentada, de otro ancho que el VI): el RSX reduce la ranura `i` a un
+ * búfer de espejos y la RDRAM la tendrá cuando un dibujo la lea ya vieja
+ * (Link en la pantalla de equipo de Zelda, 395 tareas después). No se
+ * espera: se convierte en una traducción posterior, cuando el RSX pasó la
+ * barrera. Devuelve el espejo usado, o -1 si la ranura no cumple o no hay
+ * espejo libre. `box` es lo dibujado en ella en la tarea. */
+static int mirror_small(int i, const struct rdp_box *box, uint32_t n)
+{
+	const struct rdp_target *t = &rdp.tg.t[i];
+	uint32_t rows = box->y1 < t->lh ? box->y1 : t->lh;
+	uint32_t pitch = (t->lw * 2 + 63) & ~63u;
+	if (!rdp.rdram || rdp.fbfx < 2 || !rows || t->presented || (t->bpp != 2 && t->bpp != 1) ||
+	    t->width == rdp.tg.vi_width || pitch * rows > MIRROR_BYTES || t->addr + t->width * t->bpp * rows > rdp.rdram_size)
+		return -1;
+	int k = 0;
+	while (k < MIRRORS && rdp.mirrors[k].used)
+		k++;
+	if (k == MIRRORS) {
+		rdp.stats.mirrors_skipped++;
+		return -1;
+	}
+	rsxkit_rect src = surface_rect(i, 0, 0, t->lw, rows);
+	if (rsxkit_target_read(rdp.surf[i], &src, rdp.rb_off + (RB_SLOTS + 2) * RB_SLOT + k * MIRROR_BYTES, pitch, t->lw,
+			       rows, RSXKIT_RGB565) != RSXKIT_OK)
+		return -1;
+	rdp.bound_t = -1;
+	rdp.rb_task[i] = rdp.tg.task;
+	struct mirror *m = &rdp.mirrors[k];
+	m->used = true;
+	m->addr = t->addr;
+	m->width = t->width;
+	m->lw = t->lw;
+	m->rows = rows;
+	m->box = *box;
+	m->box.y1 = (uint16_t)rows;
+	m->bpp = t->bpp;
+	m->task = n + 1;
+	return k;
+}
+
 static void translate(uint32_t n)
 {
 	uint64_t t0 = sysGetSystemTime(), tb0 = tb_now();
@@ -1613,6 +1654,8 @@ static void translate(uint32_t n)
 	rdp.at = "dibujos";
 	struct rdp_box drawn_box[RDP_TARGETS_MAX];  /* lo que tocaron los dibujos de la tarea */
 	memset(drawn_box, 0, sizeof drawn_box);
+	int mirror_k[RDP_TARGETS_MAX + MIRRORS];  /* espejos de la tarea (los de ranuras recicladas y los del final) */
+	uint32_t nmirror = 0;
 
 	uint32_t off = 0;
 	rsxkit_draw rd;
@@ -1627,9 +1670,28 @@ static void translate(uint32_t n)
 			bool is_tall = c->b && c->b <= 640 && rdp_targets_tall(c->b, lh) &&
 				       fills_only(s, off + c->size, res->cmd_bytes);
 			rdp.at = "destinos";
+			if (!is_tall && c->b && c->b <= 640 && lh <= 480) {
+				/* La ranura va a ser de otra imagen (la recicla este destino o
+				 * crece): lo que el RDP dibujó en ella hasta ahora, si es una
+				 * imagen auxiliar chica, se copia con SU dirección y SU alto
+				 * antes de que cambien; después el juego la usa de textura
+				 * (Pokémon Stadium: nueve destinos en una tarea). */
+				int v = rdp_targets_recycled(&rdp.tg, c->a, c->b, siz, lh);
+				if (v >= 0 && drawn[v] && rdp.surf[v]) {
+					int k = mirror_small(v, &drawn_box[v], n);
+					if (k >= 0)
+						mirror_k[nmirror++] = k;
+					LOGN(20, "gfx: la ranura %d (%06x/%u) se recicla con lo dibujado hasta la fila %u: %s", v,
+					     rdp.tg.t[v].addr, rdp.tg.t[v].width, drawn_box[v].y1, k >= 0 ? "copiada" : "perdida");
+				}
+			}
 			cur = is_tall ? -1 : get_target(c->a, c->b, (c->c >> 8) & 0xFF, siz, lh);
 			rdp.at = "dibujos";
 			if (cur >= 0 && rdp.last_get.fresh) {
+				/* Ranura de otra imagen: lo dibujado y su caja eran del destino
+				 * anterior (ver raster.c). */
+				drawn[cur] = false;
+				memset(&drawn_box[cur], 0, sizeof drawn_box[cur]);
 				/* Un relleno de imagen alta anterior (rdp_targets_tall_note) que
 				 * este destino no vio: se cebó con la RDRAM, que no lo tiene. */
 				struct rdp_tall_rect pend[RDP_TALL_FILLS];
@@ -1887,40 +1949,12 @@ static void translate(uint32_t n)
 	 * tendrá cuando un dibujo las lea ya viejas (Link en la pantalla de
 	 * equipo de Zelda, 395 tareas después). No se espera: se convierten en
 	 * una traducción posterior, cuando el RSX pasó la barrera. */
-	int mirror_k[MIRRORS];
-	uint32_t nmirror = 0;
 	for (int i = 0; rdp.rdram && rdp.fbfx >= 2 && i < RDP_TARGETS_MAX; i++) {
-		const struct rdp_target *t = &rdp.tg.t[i];
-		uint32_t rows = drawn_box[i].y1 < t->lh ? drawn_box[i].y1 : t->lh;
-		uint32_t pitch = (t->lw * 2 + 63) & ~63u;
-		if (!drawn[i] || sync_rb[i] || !rows || t->presented || (t->bpp != 2 && t->bpp != 1) ||
-		    t->width == rdp.tg.vi_width || pitch * rows > MIRROR_BYTES ||
-		    t->addr + t->width * t->bpp * rows > rdp.rdram_size)
+		if (!drawn[i] || sync_rb[i])
 			continue;
-		int k = 0;
-		while (k < MIRRORS && rdp.mirrors[k].used)
-			k++;
-		if (k == MIRRORS) {
-			rdp.stats.mirrors_skipped++;
-			continue;
-		}
-		rsxkit_rect src = surface_rect(i, 0, 0, t->lw, rows);
-		if (rsxkit_target_read(rdp.surf[i], &src, rdp.rb_off + (RB_SLOTS + 2) * RB_SLOT + k * MIRROR_BYTES, pitch,
-				       t->lw, rows, RSXKIT_RGB565) != RSXKIT_OK)
-			continue;
-		rdp.bound_t = -1;
-		rdp.rb_task[i] = rdp.tg.task;
-		struct mirror *m = &rdp.mirrors[k];
-		m->used = true;
-		m->addr = t->addr;
-		m->width = t->width;
-		m->lw = t->lw;
-		m->rows = rows;
-		m->box = drawn_box[i];
-		m->box.y1 = (uint16_t)rows;
-		m->bpp = t->bpp;
-		m->task = n + 1;
-		mirror_k[nmirror++] = k;
+		int k = mirror_small(i, &drawn_box[i], n);
+		if (k >= 0)
+			mirror_k[nmirror++] = k;
 	}
 	if (s->trace && rdp_log) {
 		char line[400];

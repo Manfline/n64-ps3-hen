@@ -741,6 +741,30 @@ static void tall_fill_target(int i, const struct rdp_tall_rect *r, bool drawn[RD
 	rdp_box_union(&tg.t[i].box, &b);
 }
 
+/* La ranura `i` va a cambiar de imagen (la recicla otro destino de la misma
+ * tarea, o crece): lo dibujado en ella hasta ahora, de una imagen auxiliar
+ * chica, se copia a la RDRAM con SU dirección y SU alto, como el espejo del
+ * final de la tarea, porque después la ranura es de otra y el juego usa
+ * esas imágenes como textura (Pokémon Stadium: el ícono animado del botón
+ * elegido y el panel del jugador 1). Lo que no es una imagen chica se
+ * pierde, como antes. Sigue siendo la única copia que se hace de ella. */
+static void flush_recycled(const struct gfx_job *job, int i, const struct rdp_box *box)
+{
+	const struct rdp_target *t = &tg.t[i];
+	uint32_t rows = box->y1 < t->lh ? box->y1 : t->lh;
+	if (raster_trace_fb)
+		fprintf(stderr, "fb: campo %u tarea %u: la ranura %d (%06x/%u) se recicla con lo dibujado hasta la fila %u\n",
+			raster_field, task_no, i, t->addr, t->width, rows);
+	if (raster_fbfx < 2 || !rows || t->presented || (t->bpp != 2 && t->bpp != 1) || t->width == tg.vi_width ||
+	    t->width * t->bpp * rows > MIRROR_BYTES)
+		return;
+	if (dma_newer(t->addr, t->width * t->bpp * rows, task_no))
+		return;
+	readback(job, i, box);
+	rb_task[i] = tg.task;
+	mirrors++;
+}
+
 void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 {
 	const uint8_t *cmd = (const uint8_t *)(uintptr_t)job->cmd_ea;
@@ -787,8 +811,21 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 			bool is_tall = c->b && c->b <= 640 && rdp_targets_tall(c->b, lh) &&
 				       fills_only(cmd, off + c->size, res->cmd_bytes);
 			bool created;
+			if (!is_tall && c->b && c->b <= 640 && lh <= 480) {
+				int v = rdp_targets_recycled(&tg, c->a, c->b, siz, lh);
+				if (v >= 0 && drawn[v])
+					flush_recycled(job, v, &drawn_box[v]);
+			}
 			cur = is_tall ? -1 : get_target(job, c->a, c->b, (c->c >> 8) & 0xFF, siz, lh, &created);
 			if (cur >= 0 && created) {
+				/* La ranura es de otra imagen (se reciclaba la de un destino
+				 * dibujado antes en esta tarea, o creció): lo dibujado y su
+				 * caja eran de la anterior, y copiarlos a la RDRAM con la
+				 * dirección y el alto de esta pisaría memoria del juego
+				 * (Pokémon Stadium, 9 destinos en una tarea: nodos del
+				 * planificador bajo el ancho de la imagen). */
+				drawn[cur] = false;
+				memset(&drawn_box[cur], 0, sizeof drawn_box[cur]);
 				/* Un relleno de imagen alta anterior (rdp_targets_tall_note) que
 				 * este destino no vio: se cebó con la RDRAM, que no lo tiene. */
 				struct rdp_tall_rect pend[RDP_TALL_FILLS];

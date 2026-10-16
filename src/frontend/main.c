@@ -168,6 +168,7 @@
 
 #include "core/boot.h"
 #include "core/endian.h"
+#include "core/faultlog.h"
 #include "cpu/rec.h"
 #include "audio_out.h"
 #include "audiotest_rom_bin.h"
@@ -4348,6 +4349,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		}
 	}
 
+	salsa64_faultlog_install(&n64.cpu, salsa64_log);
 	salsa64_bus_set_rom(&n64.bus, rom, rom_size);
 	if (!salsa64_boot_hle(&n64, SALSA64_BOOT_TV_AUTO, &boot_info)) {
 		salsa64_log("%s: FALLO al arrancar %s: %s", res_tag, source, boot_info.error);

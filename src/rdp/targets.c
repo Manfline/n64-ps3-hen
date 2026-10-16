@@ -160,8 +160,10 @@ static int evict_class(const struct rdp_targets *s, const struct rdp_target *t)
 	return 2;
 }
 
-int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32_t siz, uint32_t min_lh,
-		    bool *fresh)
+/* Qué hace rdp_targets_get con esta color image: 0 ya existe (sirve tal
+ * cual), 1 existe y crece, 2 es nueva en la ranura devuelta (libre, la de
+ * otro tamaño de texel o la que se recicla). Sin tocar nada. */
+static int choose(const struct rdp_targets *s, uint32_t addr, uint32_t width, uint32_t siz, uint32_t min_lh, int *kind)
 {
 	int free_i = -1, victim = -1, again = -1;
 	uint32_t lw = width ? width : 320;
@@ -169,8 +171,9 @@ int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32
 	uint32_t bpp = siz == IM_SIZ_32b ? 4 : siz == IM_SIZ_8b ? 1 : 2;
 	if (min_lh > lh)
 		lh = min_lh;
+	*kind = 2;
 	for (int i = 0; i < RDP_TARGETS_MAX; i++) {
-		struct rdp_target *t = &s->t[i];
+		const struct rdp_target *t = &s->t[i];
 		if (!t->used) {
 			if (free_i < 0)
 				free_i = i;
@@ -190,18 +193,7 @@ int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32
 			break;
 		}
 		if (t->addr == addr && t->width == width) {
-			if (t->lh >= lh) {
-				*fresh = false;
-				return i;
-			}
-			/* Crece: la superficie se vuelve a crear (lo dibujado hasta
-			 * ahora se pierde; pasa una vez). */
-			t->lh = lh;
-			t->drawn = false;
-			t->mirrored = true;
-			memset(&t->box, 0, sizeof t->box);
-			s->created++;
-			*fresh = true;
+			*kind = t->lh >= lh ? 0 : 1;
 			return i;
 		}
 		if (i == s->shown)
@@ -218,6 +210,42 @@ int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32
 	int i = again >= 0 ? again : free_i >= 0 ? free_i : victim;
 	if (i < 0)
 		i = s->shown >= 0 ? s->shown : 0;  /* no pasa: hay más de una ranura */
+	return i;
+}
+
+int rdp_targets_recycled(const struct rdp_targets *s, uint32_t addr, uint32_t width, uint32_t siz, uint32_t min_lh)
+{
+	int kind;
+	int i = choose(s, addr, width, siz, min_lh, &kind);
+	return kind != 0 && s->t[i].used ? i : -1;
+}
+
+int rdp_targets_get(struct rdp_targets *s, uint32_t addr, uint32_t width, uint32_t siz, uint32_t min_lh,
+		    bool *fresh)
+{
+	uint32_t lw = width ? width : 320;
+	uint32_t lh = lw * 3 / 4;
+	uint32_t bpp = siz == IM_SIZ_32b ? 4 : siz == IM_SIZ_8b ? 1 : 2;
+	if (min_lh > lh)
+		lh = min_lh;
+	int kind;
+	int i = choose(s, addr, width, siz, min_lh, &kind);
+	if (kind == 0) {
+		*fresh = false;
+		return i;
+	}
+	if (kind == 1) {
+		/* Crece: la superficie se vuelve a crear (lo dibujado hasta
+		 * ahora se pierde; pasa una vez). */
+		struct rdp_target *t = &s->t[i];
+		t->lh = lh;
+		t->drawn = false;
+		t->mirrored = true;
+		memset(&t->box, 0, sizeof t->box);
+		s->created++;
+		*fresh = true;
+		return i;
+	}
 	struct rdp_target *t = &s->t[i];
 	t->used = true;
 	t->drawn = false;

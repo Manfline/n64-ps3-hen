@@ -95,6 +95,7 @@ void t_run(const char *name, t_test_fn fn);
 /* Suites (una por archivo). */
 void t_suite_core(void);
 void t_suite_mempak(void);
+void t_suite_faultlog(void);
 void t_suite_alu(void);
 void t_suite_muldiv(void);
 void t_suite_branch(void);

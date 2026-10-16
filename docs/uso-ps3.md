@@ -593,6 +593,23 @@ Qué guarda, el formato y cómo coordinarlo con la interpolación:
 el log al cerrar el juego dice cuánto tardó el registro por tarea y por
 campo.
 
+## Si el juego parece colgado
+
+Muchos «cuelgues» son la pantalla de error del propio juego: un hilo salta a
+una dirección que no existe o lee de una desalineada, libultra lo marca como
+fallado y el hilo de fallos del juego se queda leyendo el control miles de
+veces por segundo (el log dice «el juego leyó el control 1 N veces» con N
+enorme, 0 % en espera y 0 campos del RSX). Para verlo, el log deja una línea
+cuando el CPU toma una excepción de dirección o de bus en el código del juego:
+
+```
+cpu: fallo AdEL (dirección inválida al leer o buscar una instrucción) en el campo 1440: pc 0x00010001, dirección 0x0000000000010001, ra 0x800028D4, sp 0x80081798
+```
+
+Una línea por tipo y pc. Con el pc y el ra se busca en el volcado de la
+RDRAM (`salsa64-run --ram-dump`, `tools/libultra-threads.py`) qué hilo
+cayó y desde dónde.
+
 ## Archivos de configuración
 
 Todos están en `/dev_hdd0/salsa64` y son opcionales. Son archivos de texto;
