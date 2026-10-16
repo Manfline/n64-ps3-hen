@@ -974,6 +974,139 @@ static void executed_conversions_match_full(void)
 		CHECK(native > 3000);
 }
 
+/*
+ * Casos de borde, uno por uno: la instrucción de COP1 en fd = 4 con fs = 2 y
+ * ft = 3 (FR = 1), ejecutada por el CPU contra el camino completo. Compara
+ * registros, FCR31 y el resultado de la excepción; cuenta las fallas y, con
+ * el recompilador, las que corrieron sin llamar al intérprete.
+ */
+static unsigned edge_failed, edge_native, edge_total;
+
+static void edge_case(uint32_t instr, bool is_s, uint64_t a, uint64_t b, uint32_t fcr31)
+{
+	t_set_status(T_STATUS);
+	for (unsigned k = 0; k < 32; k++) {
+		CPU->fpr[k] = fz_rand();
+		R[k] = k ? fz_rand() : 0;
+	}
+	CPU->fpr[2] = is_s ? (CPU->fpr[2] & 0xFFFFFFFF00000000ull) | (uint32_t)a : a;
+	CPU->fpr[3] = is_s ? (CPU->fpr[3] & 0xFFFFFFFF00000000ull) | (uint32_t)b : b;
+	CPU->fcr31 = fcr31;
+	t_wr32(T_CODE_PA, instr);
+	salsa64_cpu_set_pc(CPU, T_CODE);
+	CPU->cur_pc = T_CODE;
+	CPU->cause = 0;
+
+	memcpy(&fz_full, CPU, sizeof fz_full);
+	fz_full.redirect = 0;
+	salsa64_vr4300_cop1(&fz_full, instr);
+	bool exc = fz_full.redirect;
+	uint64_t calls = CPU->rec ? CPU->rec->stats.exec_calls : 0;
+	t_step(1);
+	edge_native += CPU->rec && CPU->rec->stats.exec_calls == calls;
+	edge_total++;
+
+	t_checks++;
+	if (memcmp(fz_full.fpr, CPU->fpr, sizeof fz_full.fpr) != 0 ||
+	    memcmp(fz_full.gpr, CPU->gpr, sizeof fz_full.gpr) != 0 ||
+	    fz_full.fcr31 != CPU->fcr31 || fz_full.cause != CPU->cause ||
+	    fz_full.status != CPU->status || CPU->pc != (exc ? fz_full.pc : T_CODE + 4)) {
+		if (edge_failed++ < 8)
+			t_fail(__FILE__, __LINE__,
+			       "instr 0x%08x, fs 0x%016llx, ft 0x%016llx, FCR31 0x%08x: fd 0x%016llx/0x%016llx, "
+			       "FCR31 0x%08x/0x%08x (completo/ejecutado)",
+			       instr, (unsigned long long)a, (unsigned long long)b, fcr31,
+			       (unsigned long long)fz_full.fpr[4], (unsigned long long)CPU->fpr[4],
+			       fz_full.fcr31, CPU->fcr31);
+	}
+}
+
+/* CVT.W, CVT.L, ROUND, TRUNC, CEIL y FLOOR con los cuatro modos de
+ * redondeo de FCR31 (CVT usa el vigente; los demás, el suyo), valores de
+ * borde de cada modo, y FCR31 con banderas, FS, I y V habilitadas. */
+static void executed_rounding_edges_match_full(void)
+{
+	static const double vals[] = {
+		0.0, -0.0, 0.25, -0.25, 0.5, -0.5, 0.75, -0.75, 1.0, -1.0, 1.5, -1.5, 2.5, -2.5, 3.5,
+		0.4999999, -0.4999999, 1.0000001, 1e-30, -1e-30, 0x1p-126, 0x1p-149, 8388607.5, -8388607.5,
+		8388608.5, 16777215.0, 16777216.0, 1073741823.5, 1073741824.0, -1073741824.0,
+		-1073741824.5, 2147483520.0, 2147483647.0, 2147483647.5, 2147483648.0, -2147483648.0,
+		-2147483648.5, -2147483649.0, 4294967296.0, 4503599627370495.5, -4503599627370495.5,
+		4503599627370496.0, 9007199254740991.0, 9007199254740992.0, -9007199254740992.0,
+		0x1.fffffep127, -0x1.fffffep127, 1e38,
+	};
+	static const uint64_t specials_s[] = { 0x7FC00000, 0x7FBFFFFF, 0x7F800000, 0xFF800000, 1, 0x80000001, 0x007FFFFF };
+	static const uint64_t specials_d[] = {
+		0x7FF8000000000000ull, 0x7FF7FFFFFFFFFFFFull, 0x7FF0000000000000ull,
+		0xFFF0000000000000ull, 1, 0x8000000000000001ull, 0x000FFFFFFFFFFFFFull,
+	};
+	static const uint32_t extra[] = {
+		0, SALSA64_FCR31_FS, SALSA64_FCR31_C | 0x7C, 0x80 | 0x7C, 0x800 | SALSA64_FCR31_FS, 0x3F000,
+	};
+	static const unsigned functs[] = { 0x24, 0x25, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F };
+
+	edge_failed = edge_native = edge_total = 0;
+	for (unsigned is_s = 0; is_s < 2; is_s++) {
+		unsigned nv = (unsigned)(sizeof vals / sizeof vals[0]);
+		unsigned ns = (unsigned)(sizeof specials_s / sizeof specials_s[0]);
+		for (unsigned v = 0; v < nv + ns; v++) {
+			for (unsigned sg = 0; sg < 2; sg++) {
+				uint64_t a;
+				if (v < nv) {
+					double d = sg ? -vals[v] : vals[v];
+					if (is_s && !(__builtin_fabs(d) <= 0x1.fffffep127))
+						continue;
+					a = is_s ? t_fbits((float)d) : t_dbits(d);
+				} else {
+					a = is_s ? specials_s[v - nv] : specials_d[v - nv];
+					if (sg)
+						a ^= is_s ? 0x80000000ull : 0x8000000000000000ull;
+				}
+				for (unsigned f = 0; f < sizeof functs / sizeof functs[0]; f++)
+					for (unsigned rm = 0; rm < 4; rm++)
+						for (unsigned e = 0; e < sizeof extra / sizeof extra[0]; e++)
+							edge_case(FOP(is_s ? F_S : F_D, functs[f], 4, 2, 0), is_s, a, 0,
+								  extra[e] | rm);
+			}
+		}
+	}
+	CHECK_EQ(edge_failed, 0);
+	/* Con el recompilador (y sin mandar a las raras al intérprete), el
+	 * redondeo dirigido de CVT ya no sale del camino nativo. */
+	if (CPU->rec && !(CPU->rec->opts & SALSA64_REC_OPT_RARE_EXEC))
+		CHECK(edge_native > edge_total / 4);
+}
+
+/* MUL.S (y MUL.D, ADD, SUB, DIV de control) con exponentes en los bordes de
+ * lo que el camino nativo admite: cero, mínimo normal, el borde del
+ * subdesbordamiento (suma de exponentes 127 y 128), el del desbordamiento
+ * (381 y 382), el máximo, infinito y NaN; mantisas que suben el exponente
+ * del producto o del redondeo. Con las habilitaciones V, Z, O y U. */
+static void executed_mul_edges_match_full(void)
+{
+	static const unsigned exps[] = { 0, 1, 2, 64, 126, 127, 128, 190, 191, 192, 253, 254, 255 };
+	static const uint32_t mants[] = { 0, 0x400000, 0x6A09E6, 0x7FFFFF };
+	static const uint32_t fcrs[] = {
+		0, 0x800 | 0x7C, 0x800 | 0x400 | 0x200 | 0x100 | SALSA64_FCR31_FS, 0x80 | 0x800,
+	};
+
+	edge_failed = edge_native = edge_total = 0;
+	for (unsigned ea = 0; ea < sizeof exps / sizeof exps[0]; ea++)
+		for (unsigned eb = 0; eb < sizeof exps / sizeof exps[0]; eb++)
+			for (unsigned ma = 0; ma < sizeof mants / sizeof mants[0]; ma++)
+				for (unsigned mb = 0; mb < sizeof mants / sizeof mants[0]; mb++)
+					for (unsigned sg = 0; sg < 4; sg++) {
+						uint64_t a = (uint64_t)(sg & 1) << 31 | (uint64_t)exps[ea] << 23 | mants[ma];
+						uint64_t b = (uint64_t)(sg >> 1) << 31 | (uint64_t)exps[eb] << 23 | mants[mb];
+						for (unsigned f = 0; f < sizeof fcrs / sizeof fcrs[0]; f++)
+							edge_case(MUL_F(F_S, 4, 2, 3), true, a, b, fcrs[f]);
+					}
+	CHECK_EQ(edge_failed, 0);
+	/* La FPU residente experimental tiene su propia franja (rec_emit_fpu.h). */
+	if (CPU->rec && !(CPU->rec->opts & (SALSA64_REC_OPT_RARE_EXEC | SALSA64_REC_OPT_FPU_RES)))
+		CHECK(edge_native > edge_total / 4);
+}
+
 /* Una instrucción al azar de COP1, o una carga, almacenamiento o movimiento
  * con enteros que la toca: operandos al azar, memoria en T_DATA (base T0,
  * desplazamientos alineados a 8) o, una de cada cuatro, en la DMEM del SP
@@ -1165,6 +1298,8 @@ void t_suite_cop1(void)
 	RUN(fast_path_matches_full);
 	RUN(executed_matches_full);
 	RUN(executed_conversions_match_full);
+	RUN(executed_rounding_edges_match_full);
+	RUN(executed_mul_edges_match_full);
 	RUN(executed_sequences_match_interp);
 	RUN(fr_switch_keeps_code_cache);
 }

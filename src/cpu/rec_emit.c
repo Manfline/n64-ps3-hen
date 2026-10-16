@@ -2054,10 +2054,12 @@ static void emit_cop1(struct ctx *c, uint32_t i)
  * Lo mismo que el camino rápido del intérprete (fpu.h: fpu_fast_arith,
  * fpu_fast_abs_neg, fpu_fast_compare, MOV), con las mismas operaciones de
  * doble precisión en el mismo orden, así que da los mismos bits y las mismas
- * causas en FCR31. Lo que ese camino no cubre (redondeo dirigido, I
- * habilitada, operandos fuera de la franja segura, NaN, desnormales, suma
- * con exponentes a más de 28 de distancia en S) salta a la sección fría,
- * donde lo hace el intérprete.
+ * causas en FCR31. Lo que ese camino no cubre (redondeo dirigido en la
+ * aritmética, I habilitada, operandos fuera de la franja segura, NaN,
+ * desnormales, suma con exponentes a más de 28 de distancia en S; MUL.S
+ * admite cualquier normal si el producto no desborda ni queda diminuto)
+ * salta a la sección fría, donde lo hace el intérprete. Las conversiones a
+ * entero sí siguen el RM de FCR31 (rec_emit_ext.h, emit_toint_core).
  *
  * Operandos como en cop1.c: fs con el bit bajo ignorado si FR = 0; ft y fd,
  * el registro tal cual. En S, el valor está en la mitad baja (+4).
@@ -2104,6 +2106,32 @@ static void emit_fpu_band(struct ctx *c, bool is_s, unsigned bits, unsigned e, i
 	}
 	E(c, ppc_cmpdi(CR_T, 0, 0));
 	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
+	bind(c, ok);
+}
+
+static void emit_fpu_range(struct ctx *c, bool is_s, unsigned bits, unsigned e, bool with_sign,
+			   int32_t lo, uint32_t width, int slow);  /* rec_emit_ext.h */
+
+/* MUL.S con los bits de los operandos en r9 y r10: cada uno normal o ±0
+ * (NaN, infinito y desnormal van al intérprete) y, si ninguno es cero, un
+ * producto que ni desborda ni queda diminuto. Con exponentes sesgados ea y
+ * eb, el del producto es s = ea + eb - 127 (+1 si el producto de las
+ * mantisas llega a 2, +1 si el redondeo a 24 bits sube a la potencia
+ * siguiente); con 1 <= s <= 252 queda entre 1 y 254. El producto de dos
+ * float es exacto en double. Deja los exponentes en r12 y r4. */
+static void emit_fpu_mul_s_range(struct ctx *c, int slow)
+{
+	int ok = new_label(c);
+	emit_fpu_range(c, true, 9, 12, false, 1, 253, slow);
+	emit_fpu_range(c, true, 10, 4, false, 1, 253, slow);
+	E(c, ppc_cmpwi(CR_T, 12, 0));
+	emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), ok);  /* ±0 · x = ±0 */
+	E(c, ppc_cmpwi(CR_T, 4, 0));
+	emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), ok);
+	E(c, ppc_add(11, 12, 4));
+	E(c, ppc_addi(11, 11, -128));  /* s - 1; no r0: en addi vale 0 */
+	E(c, ppc_cmplwi(CR_T, 11, 251));
+	emit_bc(c, PPC_BO_TRUE_UNLIKELY, PPC_BI(CR_T, PPC_GT), slow);
 	bind(c, ok);
 }
 
@@ -2244,8 +2272,12 @@ static void emit_fpu(struct ctx *c, unsigned k)
 		emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(0, PPC_EQ), slow);
 		E(c, is_s ? ppc_lwz(9, oa, R_CPU) : ppc_ld(9, oa, R_CPU));
 		E(c, is_s ? ppc_lwz(10, ob, R_CPU) : ppc_ld(10, ob, R_CPU));
-		emit_fpu_band(c, is_s, 9, 12, slow);
-		emit_fpu_band(c, is_s, 10, 4, slow);
+		if (is_s && funct == 0x02) {
+			emit_fpu_mul_s_range(c, slow);
+		} else {
+			emit_fpu_band(c, is_s, 9, 12, slow);
+			emit_fpu_band(c, is_s, 10, 4, slow);
+		}
 		if (funct == 0x03) {  /* entre cero: Z o V */
 			E(c, is_s ? ppc_rlwinm(0, 10, 0, 1, 31) : ppc_clrldi(0, 10, 1));
 			E(c, ppc_cmpdi(CR_T, 0, 0));
