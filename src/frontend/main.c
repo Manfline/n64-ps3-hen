@@ -928,6 +928,18 @@ static void load_padmap(void)
 		salsa64_log("controles: %s", PADS_PATH);
 }
 
+static bool save_padmap(const struct salsa64_padmap *map)
+{
+	char text[512];
+	int n = salsa64_padmap_format(map, text, sizeof text, 0);
+	if (n < 0)
+		return false;
+	FILE *f = fopen(PADS_PATH, "w");
+	bool ok = f && fwrite(text, 1, (size_t)n, f) == (size_t)n;
+	if (f && fclose(f) != 0) ok = false;
+	return ok;
+}
+
 static struct salsa64_ds3 ds3_from(const padData *d)
 {
 	struct salsa64_ds3 s;
@@ -3351,7 +3363,7 @@ static void game_cfg_path(const char *rom, char *out, size_t n)
 
 static void game_cfg_read(const char *rom, struct menu_game *g)
 {
-	char path[320], text[512];
+	char path[320], text[1024];
 	menu_game_default(g);
 	game_cfg_path(rom, path, sizeof path);
 	FILE *f = fopen(path, "r");
@@ -3364,7 +3376,7 @@ static void game_cfg_read(const char *rom, struct menu_game *g)
 
 static bool game_cfg_write(const char *rom, const struct menu_game *g)
 {
-	char path[320], text[512];
+	char path[320], text[1024];
 	game_cfg_path(rom, path, sizeof path);
 	mkdir(GAMES_DIR, 0777);
 	int n = menu_game_format(g, text, sizeof text);
@@ -4717,6 +4729,7 @@ static void menu_scan(const char *keep)
 		salsa64_log("menú: %u archivos con extensión de ROM que no se pudieron leer, muy chicos o sin lugar",
 			    roms->skipped);
 	menu_init(&menu, roms, keep ? romlist_find(roms, keep, rom_dirs, ROMLIST_SOURCES_MAX) : -1, &mn.settings);
+	menu.global_controls = padmap;
 	if (roms->directory[0] && menu.sel == 0 && roms->count > 1 && roms->e[0].kind == ROMLIST_PARENT)
 		menu.sel = 1, menu.pos = 1.0f;
 	if (keep) {
@@ -5112,9 +5125,15 @@ static enum game_end menu_open(const struct rom_entry *e)
 	heap_report("con la ROM leída");
 	if (!romlist_save_last(LAST_ROM_PATH, path))
 		salsa64_log("menú: no se pudo escribir %s", LAST_ROM_PATH);
+	struct salsa64_padmap global_map = padmap;
+	struct menu_game game_config;
+	game_cfg_read(filename, &game_config);
+	padmap = global_map;
+	salsa64_padmap_overlay(&padmap, &game_config.controls);
 	game_reset();
 	test_flags_from_name(filename);
 	enum game_end end = run_game(rom, size, path, err, sizeof err);
+	padmap = global_map;
 	rom_free(rom);  /* run_game ya cerró el juego: nada apunta a la ROM */
 	heap_report("tras soltar la ROM");
 	bool test = selftest_on || gfxtest_on || audiotest_on;
@@ -5254,6 +5273,25 @@ static int menu_loop(void)
 		}
 		if (a == MENU_APPLY)
 			menu_apply_video();
+		if (a == MENU_CONTROLS) {
+			bool for_game = menu.page == MENU_PAGE_GAME;
+			if (!for_game && menu.game_rom >= 0 && menu.game_rom < (int)roms->count) {
+				const struct rom_entry *e = &roms->e[menu.game_rom];
+				game_cfg_read(romlist_name(e), &menu.game);
+			}
+			menu_controls_open(&menu, for_game);
+		}
+		if (a == MENU_CONTROLS_CHANGED) {
+			bool ok;
+			if (menu.control_for_game) {
+				const struct rom_entry *e = menu.game_rom >= 0 && menu.game_rom < (int)roms->count ? &roms->e[menu.game_rom] : NULL;
+				ok = e && game_cfg_write(romlist_name(e), &menu.game);
+			} else {
+				padmap = menu.global_controls;
+				ok = save_padmap(&menu.global_controls);
+			}
+			if (!ok) menu_set_status(&menu, "No se pudieron guardar los controles");
+		}
 		if (a == MENU_CHEATS) {
 			const struct rom_entry *e = &roms->e[menu_selected(&menu)];
 			if (cheats_load(&menu_cheats, CHEATS_DIR, romlist_name(e), romlist_display_title(e), e->code, e->crc1, e->crc2)) {

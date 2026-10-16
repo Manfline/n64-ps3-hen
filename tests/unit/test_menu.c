@@ -598,6 +598,104 @@ static void menu_density(void)
 	CHECK_EQ(m.game_sel, MENU_GAME_FILTER);
 }
 
+static void menu_controls(void)
+{
+	struct menu m;
+	nav_setup(&m, 2, 0);
+	menu_input(&m, 0, 0);
+	menu_controls_open(&m, false);
+	CHECK_EQ(m.controls.source[SALSA64_IN_A], SALSA64_DS3_CROSS);
+	CHECK_EQ(menu_input(&m, CROSS, 10), MENU_NONE);
+	CHECK(m.control_capture);
+	menu_input(&m, 0, 11);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_R2), 12), MENU_NONE);  /* se asigna al soltar */
+	CHECK(m.control_capture);
+	CHECK_EQ(menu_input(&m, 0, 13), MENU_CONTROLS_CHANGED);
+	CHECK(!m.control_capture);
+	CHECK_EQ(m.global_controls.source[SALSA64_IN_A], SALSA64_DS3_R2);
+	CHECK_EQ(m.global_controls.source2[SALSA64_IN_A], SALSA64_DS3_NONE);
+
+	/* Dos botones juntos (L2 y luego R2 sin soltar L2): los dos. */
+	m.control_sel = SALSA64_IN_Z;
+	menu_input(&m, CROSS, 13);
+	menu_input(&m, 0, 13);
+	menu_input(&m, BIT(SALSA64_DS3_L2), 13);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_L2) | BIT(SALSA64_DS3_R2), 13), MENU_NONE);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_R2), 13), MENU_NONE);  /* falta soltar R2 */
+	CHECK_EQ(menu_input(&m, 0, 13), MENU_CONTROLS_CHANGED);
+	CHECK_EQ(m.global_controls.source[SALSA64_IN_Z], SALSA64_DS3_L2);
+	CHECK_EQ(m.global_controls.source2[SALSA64_IN_Z], SALSA64_DS3_R2);
+	m.control_sel = SALSA64_IN_A;
+
+	menu_input(&m, 0, 13);
+	m.control_sel = MENU_CONTROL_RESET;
+	CHECK_EQ(menu_input(&m, CROSS, 14), MENU_CONTROLS_CHANGED);
+	CHECK_EQ(m.global_controls.source[SALSA64_IN_A], SALSA64_DS3_CROSS);
+	menu_input(&m, 0, 15);
+	/* La cruceta arriba se captura para D↑ sin mover la selección. */
+	m.global_controls.source[SALSA64_IN_D_UP] = SALSA64_DS3_CROSS;
+	m.controls = m.global_controls;
+	m.control_sel = SALSA64_IN_D_UP;
+	menu_input(&m, CROSS, 16);
+	CHECK(m.control_capture);
+	menu_input(&m, 0, 17);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_UP), 18), MENU_NONE);
+	CHECK_EQ(menu_input(&m, 0, 18), MENU_CONTROLS_CHANGED);
+	CHECK_EQ(m.control_sel, SALSA64_IN_D_UP);
+	CHECK_EQ(m.global_controls.source[SALSA64_IN_D_UP], SALSA64_DS3_UP);
+
+	/* START cancela sin cambiar; SELECT limpia el destino y no se asigna. */
+	menu_input(&m, 0, 19);
+	m.global_controls.source[SALSA64_IN_A] = SALSA64_DS3_TRIANGLE;
+	m.controls = m.global_controls;
+	m.control_sel = SALSA64_IN_A;
+	menu_input(&m, CROSS, 20);
+	menu_input(&m, 0, 21);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_START), 22), MENU_NONE);
+	CHECK(!m.control_capture);
+	CHECK_EQ(m.global_controls.source[SALSA64_IN_A], SALSA64_DS3_TRIANGLE);
+	menu_input(&m, 0, 23);
+	menu_input(&m, CROSS, 24);
+	menu_input(&m, 0, 25);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_SELECT), 26), MENU_CONTROLS_CHANGED);
+	CHECK_EQ(m.global_controls.source[SALSA64_IN_A], SALSA64_DS3_NONE);
+	menu_input(&m, 0, 27);
+	m.control_sel = MENU_CONTROL_RESET;
+	CHECK_EQ(menu_input(&m, CROSS, 28), MENU_CONTROLS_CHANGED);
+	CHECK_EQ(m.global_controls.source[SALSA64_IN_A], SALSA64_DS3_CROSS);
+
+	menu_input(&m, 0, 29);
+
+	menu_game_default(&m.game);
+	m.game.controls.source[SALSA64_IN_A] = SALSA64_DS3_R2;
+	m.game.controls.source2[SALSA64_IN_A] = SALSA64_DS3_NONE;
+	menu_controls_open(&m, true);
+	CHECK_EQ(m.controls.source[SALSA64_IN_A], SALSA64_DS3_R2);
+	CHECK_EQ(m.controls.source[SALSA64_IN_B], m.global_controls.source[SALSA64_IN_B]);
+	CHECK_EQ(m.game.controls.source[SALSA64_IN_B], SALSA64_DS3_INHERIT);
+
+	char buf[1024];
+	int n = salsa64_padmap_format(&m.global_controls, buf, sizeof buf, 0);
+	CHECK(n > 0);
+	struct salsa64_padmap back;
+	salsa64_padmap_default(&back);
+	CHECK_EQ(salsa64_padmap_parse(&back, buf, (size_t)n, NULL, 0), 0);
+	CHECK_EQ(back.source[SALSA64_IN_A], SALSA64_DS3_CROSS);
+	n = menu_game_format(&m.game, buf, sizeof buf);
+	CHECK(n > 0 && n < (int)sizeof buf);
+	struct menu_game game_back;
+	menu_game_default(&game_back);
+	menu_game_parse(&game_back, buf, (size_t)n);
+	struct salsa64_padmap effective = back;
+	salsa64_padmap_overlay(&effective, &game_back.controls);
+	CHECK_EQ(effective.source[SALSA64_IN_A], SALSA64_DS3_R2);
+	m.page = MENU_PAGE_OPTIONS;
+	menu_controls_open(&m, false);
+	menu_input(&m, 0, 15);
+	CHECK_EQ(menu_input(&m, BIT(SALSA64_DS3_CIRCLE), 16), MENU_NONE);
+	CHECK_EQ(m.page, MENU_PAGE_OPTIONS);
+}
+
 static void menu_game_page(void)
 {
 	struct menu m;
@@ -836,9 +934,11 @@ static void menu_options_page(void)
 	menu_input(&m, 0, 79);
 	CHECK_EQ(menu_input(&m, 0, 79), MENU_NONE);
 	CHECK_EQ(m.opt, MENU_OPT_BACK);  /* la fila desapareció: el cursor pasa a «Volver» */
-	/* Sin descargas.cfg no están las filas de descarga; «Actualizar lista»
-	 * queda justo encima de «Volver». */
+	/* Sin descargas.cfg, la opción de controles queda entre la lista y volver. */
 	CHECK(!m.dl_enabled);
+	menu_input(&m, UP, 79);
+	CHECK_EQ(m.opt, MENU_OPT_CONTROLS);
+	menu_input(&m, 0, 79);
 	menu_input(&m, UP, 79);
 	CHECK_EQ(m.opt, MENU_OPT_REFRESH);
 	menu_input(&m, 0, 79);
@@ -857,10 +957,17 @@ static void menu_options_page(void)
 	CHECK_EQ(menu_input(&m, CROSS, 79), MENU_REFRESH);
 	menu_input(&m, 0, 79);
 	menu_input(&m, DOWN, 79);
+	CHECK_EQ(m.opt, MENU_OPT_CONTROLS);
+	CHECK_EQ(menu_input(&m, CROSS, 79), MENU_CONTROLS);
+	menu_input(&m, 0, 79);
+	menu_input(&m, DOWN, 79);
 	CHECK_EQ(m.opt, MENU_OPT_BACK);
 	menu_input(&m, 0, 79);
 	m.dl_enabled = true;             /* encendidas (main.c, dl_enabled) */
-	menu_input(&m, UP, 79);          /* encima de «Volver» está «Actualizar lista» */
+	menu_input(&m, UP, 79);          /* encima de «Volver» está «Controles» */
+	CHECK_EQ(m.opt, MENU_OPT_CONTROLS);
+	menu_input(&m, 0, 79);
+	menu_input(&m, UP, 79);
 	CHECK_EQ(m.opt, MENU_OPT_REFRESH);
 	menu_input(&m, 0, 79);
 	menu_input(&m, UP, 79);
@@ -956,6 +1063,9 @@ static void menu_options_page(void)
 	menu_input(&m, 0, 79);
 	menu_input(&m, DOWN, 79);
 	CHECK_EQ(m.opt, MENU_OPT_REFRESH);
+	menu_input(&m, 0, 79);
+	menu_input(&m, DOWN, 79);
+	CHECK_EQ(m.opt, MENU_OPT_CONTROLS);
 	menu_input(&m, 0, 79);
 	menu_input(&m, DOWN, 79);
 	CHECK_EQ(m.opt, MENU_OPT_BACK);
@@ -1639,7 +1749,10 @@ static void menu_preview(void)
 	write_ppm(path, rgb, 960, 720);
 	/* Ajustes por juego, filtro e idiomas. */
 	{
-		struct menu_game g = { MENU_ASPECT_16_9, -1, MENU_OVERSCAN_OFF, -1, -1, -1 };
+		struct menu_game g;
+		menu_game_default(&g);
+		g.aspect = MENU_ASPECT_16_9;
+		g.overscan = MENU_OVERSCAN_OFF;
 		for (int lang = 0; lang <= 5; lang += 1) {
 			if (lang == 2 || lang == 4)
 				continue;  /* en, de y pt bastan para el aspecto; fr e it se ven en las pruebas de ancho */
@@ -1879,6 +1992,7 @@ void t_suite_menu(void)
 	RUN(menu_options_page);
 	RUN(menu_game_page);
 	RUN(menu_density);
+	RUN(menu_controls);
 	RUN(menu_settings_file);
 	RUN(menu_autopilot_opens_target);
 	RUN(text_glyph_bytes);

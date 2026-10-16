@@ -43,7 +43,10 @@ enum salsa64_ds3_button {
 	SALSA64_DS3_UP, SALSA64_DS3_DOWN, SALSA64_DS3_LEFT, SALSA64_DS3_RIGHT,
 	SALSA64_DS3_NBUTTONS,
 	SALSA64_DS3_NONE = 0xFF,
+	SALSA64_DS3_INHERIT = 0xFE,
 };
+
+enum salsa64_stick_source { SALSA64_STICK_LEFT, SALSA64_STICK_RIGHT, SALSA64_STICK_INHERIT = 0xFE };
 
 /* Estado del DS3: botones en bits (1 << enum salsa64_ds3_button) y sticks
  * de 0 a 255 con centro en 128 (X crece a la derecha, Y hacia abajo). */
@@ -67,9 +70,14 @@ struct salsa64_padmap {
 	uint8_t deadzone;     /* stick izquierdo: desplazamiento del DS3 que se ignora */
 	uint8_t range;        /* valor de la N64 con el stick a fondo */
 	uint8_t c_threshold;  /* stick derecho: desplazamiento que activa un botón C */
+	uint8_t stick_source;  /* qué stick analógico controla el stick de N64 */
 };
 
 void salsa64_padmap_default(struct salsa64_padmap *map);
+void salsa64_padmap_inherit(struct salsa64_padmap *map);
+void salsa64_padmap_overlay(struct salsa64_padmap *base, const struct salsa64_padmap *overrides);
+int salsa64_padmap_format(const struct salsa64_padmap *map, char *buf, size_t size, int overrides_only);
+const char *salsa64_padmap_button_name(unsigned button);
 /* DS3 → control de N64 (conectado). */
 void salsa64_padmap_apply(const struct salsa64_padmap *map, const struct salsa64_ds3 *in,
 			  struct salsa64_pad *out);

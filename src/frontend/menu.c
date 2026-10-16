@@ -219,6 +219,7 @@ void menu_settings_parse(struct menu_settings *s, const char *text, size_t len)
 void menu_game_default(struct menu_game *g)
 {
 	g->aspect = g->filter = g->overscan = g->scale = g->density = g->interp = -1;
+	salsa64_padmap_inherit(&g->controls);
 }
 
 void menu_game_parse(struct menu_game *g, const char *text, size_t len)
@@ -266,6 +267,7 @@ void menu_game_parse(struct menu_game *g, const char *text, size_t len)
 					g->interp = v;
 		}
 	}
+	salsa64_padmap_parse(&g->controls, text, len, NULL, 0);
 }
 
 int menu_game_format(const struct menu_game *g, char *buf, size_t size)
@@ -273,7 +275,7 @@ int menu_game_format(const struct menu_game *g, char *buf, size_t size)
 	static const char *const crop[] = { "apagado", "normal", "amplio" };
 	static const char *const scale[] = { "auto", "1", "2", "3", "4", "5" };
 	_Static_assert(sizeof scale / sizeof scale[0] == MENU_SCALE_MAX + 1, "una clave por escala");
-	return snprintf(buf, size,
+	int n = snprintf(buf, size,
 			"# Ajustes de este juego (global = los de Opciones)\naspecto = %s\nfiltro = %s\nrecorte = %s\nescala = %s\n"
 			"densidad = %s\ninterpolacion = %s\n",
 			g->aspect == MENU_ASPECT_16_9 ? "16:9" : g->aspect == MENU_ASPECT_4_3 ? "4:3" : "global",
@@ -282,6 +284,10 @@ int menu_game_format(const struct menu_game *g, char *buf, size_t size)
 			g->scale >= 0 && g->scale <= MENU_SCALE_MAX ? scale[g->scale] : "global",
 			g->density >= 0 && g->density < MENU_DENSITIES ? density_key[g->density] : "global",
 			g->interp >= 0 && g->interp < MENU_INTERPS ? interp_key[g->interp] : "global");
+	if (n < 0 || (size_t)n >= size)
+		return -1;
+	int k = salsa64_padmap_format(&g->controls, buf + n, size - (size_t)n, 1);
+	return k < 0 ? -1 : n + k;
 }
 
 int menu_game_density(const struct menu_settings *s, const struct menu_game *g)
@@ -409,6 +415,8 @@ void menu_init(struct menu *m, const struct romlist *list, int sel, const struct
 	m->sel = sel >= 0 && sel < (int)list->count ? sel : 0;
 	m->pos = (float)m->sel;
 	m->cover_rom = -1;
+	salsa64_padmap_default(&m->global_controls);
+	m->controls = m->global_controls;
 }
 
 int menu_selected(const struct menu *m)
@@ -488,6 +496,15 @@ static int opt_from_row(const struct menu *m, int row)
 
 static void move(struct menu *m, uint32_t dir, bool wrap)
 {
+	if (m->page == MENU_PAGE_CONTROLS) {
+		int v = m->control_sel;
+		if (dir == BIT(SALSA64_DS3_UP)) v = v > 0 ? v - 1 : wrap ? MENU_CONTROL_ROWS - 1 : 0;
+		else if (dir == BIT(SALSA64_DS3_DOWN)) v = v < MENU_CONTROL_ROWS - 1 ? v + 1 : wrap ? 0 : MENU_CONTROL_ROWS - 1;
+		else if (dir == BIT(SALSA64_DS3_LEFT)) v = v - 6 < 0 ? 0 : v - 6;
+		else if (dir == BIT(SALSA64_DS3_RIGHT)) v = v + 6 > MENU_CONTROL_ROWS - 1 ? MENU_CONTROL_ROWS - 1 : v + 6;
+		m->control_sel = v;
+		return;
+	}
 	if (m->page == MENU_PAGE_CHEATS) {
 		int n = menu_cheat_rows(m), v = m->cht_sel;
 		if (dir == BIT(SALSA64_DS3_UP))
@@ -585,6 +602,8 @@ static enum menu_action options_buttons(struct menu *m, uint32_t pressed)
 	}
 	if (m->opt == MENU_OPT_REFRESH && (pressed & BIT(SALSA64_DS3_CROSS)))
 		return MENU_REFRESH;
+	if (m->opt == MENU_OPT_CONTROLS && (pressed & BIT(SALSA64_DS3_CROSS)))
+		return MENU_CONTROLS;
 	if (m->opt == MENU_OPT_RESOLUTION && (pressed & change)) {
 		m->set.resolution = m->set.resolution == MENU_RES_1080P ? MENU_RES_720P : MENU_RES_1080P;
 		return MENU_SETTINGS;
@@ -634,6 +653,94 @@ void menu_game_open(struct menu *m, const struct menu_game *g, const char *title
 	m->status[0] = '\0';
 }
 
+void menu_controls_open(struct menu *m, bool for_game)
+{
+	if (m->page != MENU_PAGE_CONTROLS)
+		m->controls_return_page = m->page;
+	m->control_for_game = for_game;
+	m->control_sel = 0;
+	m->control_pos = 0.0f;
+	m->control_capture = false;
+	m->controls = m->global_controls;
+	if (for_game)
+		salsa64_padmap_overlay(&m->controls, &m->game.controls);
+	m->page = MENU_PAGE_CONTROLS;
+	m->rep_button = 0;
+	m->status[0] = '\0';
+}
+
+/* Asigna a la fila elegida los botones `a` y `b` del DS3 (b puede ser NONE). */
+static void control_assign(struct menu *m, uint8_t a, uint8_t b)
+{
+	m->controls.source[m->control_sel] = a;
+	m->controls.source2[m->control_sel] = b;
+	if (m->control_for_game) {
+		m->game.controls.source[m->control_sel] = a;
+		m->game.controls.source2[m->control_sel] = b;
+	} else m->global_controls = m->controls;
+	m->control_capture = false;
+	m->status[0] = '\0';
+}
+
+/* En la captura se juntan los botones que se pulsan y se asignan al soltar
+ * todos: así L2 + R2 juntos quedan los dos para un botón de la N64. START
+ * cancela y SELECT deja la fila sin asignar (antes de pulsar otro). */
+static enum menu_action controls_buttons(struct menu *m, uint32_t pressed, uint32_t held)
+{
+	if (m->control_capture) {
+		if (!m->capture_mask && (pressed & BIT(SALSA64_DS3_START))) {
+			m->control_capture = false;
+			m->status[0] = '\0';
+			return MENU_NONE;
+		}
+		if (!m->capture_mask && (pressed & BIT(SALSA64_DS3_SELECT))) {
+			control_assign(m, SALSA64_DS3_NONE, SALSA64_DS3_NONE);
+			return MENU_CONTROLS_CHANGED;
+		}
+		m->capture_mask |= pressed & ((1u << SALSA64_DS3_NBUTTONS) - 1) &
+				   ~(BIT(SALSA64_DS3_START) | BIT(SALSA64_DS3_SELECT));
+		if (!m->capture_mask || (held & m->capture_mask))
+			return MENU_NONE;
+		uint8_t a = SALSA64_DS3_NONE, b = SALSA64_DS3_NONE;
+		for (unsigned k = 0; k < SALSA64_DS3_NBUTTONS; k++)
+			if (m->capture_mask & BIT(k)) {
+				if (a == SALSA64_DS3_NONE) a = (uint8_t)k;
+				else if (b == SALSA64_DS3_NONE) b = (uint8_t)k;
+			}
+		m->capture_mask = 0;
+		control_assign(m, a, b);
+		return MENU_CONTROLS_CHANGED;
+	}
+	if (pressed & (BIT(SALSA64_DS3_CIRCLE) | BIT(SALSA64_DS3_TRIANGLE))) {
+		m->page = m->controls_return_page;
+		return MENU_NONE;
+	}
+	if (!(pressed & BIT(SALSA64_DS3_CROSS)))
+		return MENU_NONE;
+	if (m->control_sel < SALSA64_IN_COUNT) {
+		m->control_capture = true;
+		m->capture_mask = 0;
+		menu_set_status(m, "Pulsa uno o dos botones");
+	} else if (m->control_sel == MENU_CONTROL_STICK) {
+		m->controls.stick_source = m->controls.stick_source == SALSA64_STICK_RIGHT ? SALSA64_STICK_LEFT : SALSA64_STICK_RIGHT;
+		if (m->control_for_game) m->game.controls.stick_source = m->controls.stick_source;
+		else m->global_controls = m->controls;
+		return MENU_CONTROLS_CHANGED;
+	} else if (m->control_sel == MENU_CONTROL_RESET) {
+		if (m->control_for_game) {
+			salsa64_padmap_inherit(&m->game.controls);
+			m->controls = m->global_controls;
+		} else {
+			salsa64_padmap_default(&m->global_controls);
+			m->controls = m->global_controls;
+		}
+		return MENU_CONTROLS_CHANGED;
+	} else if (m->control_sel == MENU_CONTROL_BACK) {
+		m->page = m->controls_return_page;
+	}
+	return MENU_NONE;
+}
+
 /* Botones de la página de ajustes del juego que no son mover la selección. */
 static enum menu_action game_buttons(struct menu *m, uint32_t pressed)
 {
@@ -649,6 +756,8 @@ static enum menu_action game_buttons(struct menu *m, uint32_t pressed)
 			m->page = MENU_PAGE_GAMES;
 		return MENU_NONE;
 	}
+	if (m->game_sel == MENU_GAME_CONTROLS && (pressed & BIT(SALSA64_DS3_CROSS)))
+		return MENU_CONTROLS;
 	/* Global → valor 0 → ... → último → Global (izquierda, al revés). */
 	int *v = m->game_sel == MENU_GAME_ASPECT ? &m->game.aspect
 		 : m->game_sel == MENU_GAME_FILTER ? &m->game.filter
@@ -689,6 +798,7 @@ static void open_options(struct menu *m)
 {
 	m->page = MENU_PAGE_OPTIONS;
 	m->opt = MENU_OPT_WAVES;
+	m->game_rom = menu_selected(m);
 	m->opt_pos = (float)opt_row(m, m->opt);
 	m->rep_button = 0;
 }
@@ -729,6 +839,15 @@ enum menu_action menu_input(struct menu *m, uint32_t buttons, uint64_t now_us)
 		/* Arriba y abajo mueven; × y ←→ cambian el ajuste, ○ vuelve. */
 		enum menu_action a = game_buttons(m, pressed & ~updown);
 		if (a != MENU_NONE || m->page != MENU_PAGE_GAME) {
+			m->rep_button = 0;
+			return a;
+		}
+		pressed &= updown;
+		buttons &= updown;
+	} else if (m->page == MENU_PAGE_CONTROLS) {
+		uint32_t control_pressed = m->control_capture ? pressed : pressed & ~updown;
+		enum menu_action a = controls_buttons(m, control_pressed, buttons);
+		if (a != MENU_NONE || m->page != MENU_PAGE_CONTROLS || m->control_capture) {
 			m->rep_button = 0;
 			return a;
 		}
@@ -954,6 +1073,54 @@ static void icon_glyph(float x, float y, float s, const char *g, float a)
 		       rgba(C_TEXT, a), 1);
 }
 
+/* Un disco de color con tiras horizontales (rsxkit_ui solo dibuja
+ * rectángulos). */
+static void ui_disc(float cx, float cy, float r, uint32_t rgb, float a)
+{
+	enum { STRIPS = 16 };
+	float h = 2.0f * r / STRIPS;
+	for (int i = 0; i < STRIPS; i++) {
+		float yy = -r + ((float)i + 0.5f) * h, hw = sqrtf(fmaxf(0.0f, r * r - yy * yy));
+		rsxkit_ui_rect(cx - hw, cy + yy - h * 0.5f, 2.0f * hw, h + 0.5f, rgba(rgb, a));
+	}
+}
+
+static void ui_letter(float cx, float cy, const char *g, float sc, uint32_t rgb, float a)
+{
+	rsxkit_ui_text(cx - RSXKIT_FONT_W * sc * 0.5f, cy - RSXKIT_FONT_H * sc * 0.5f, g, sc, rgba(rgb, a), 1);
+}
+
+/* El botón de N64 de la fila `i` de la página de controles (el orden de
+ * salsa64_padmap: A, B, Z, Start, L, R, cruceta ↑↓←→, C ↑↓←→; y el stick). */
+static void icon_n64(float x, float y, float s, int i, float a)
+{
+	icon_body(x, y, s, a);
+	float cx = x + s * 0.5f, cy = y + s * 0.5f, r = s * 0.32f, sc = s / 24.0f;
+	static const char *const arrows[] = { "↑", "↓", "←", "→" };
+	if (i == 0 || i == 1 || i == 3) {  /* A azul, B verde, Start rojo */
+		ui_disc(cx, cy, r, i == 0 ? 0x2E5BD8u : i == 1 ? 0x2FA84Fu : 0xD8332Eu, a);
+		ui_letter(cx, cy, i == 0 ? "A" : i == 1 ? "B" : "S", sc, 0xFFFFFFu, a);
+	} else if (i == 2 || i == 4 || i == 5) {  /* Z, L y R: gatillos grises */
+		float w = i == 2 ? s * 0.42f : s * 0.62f, h = i == 2 ? s * 0.58f : s * 0.40f;
+		rsxkit_ui_rect(cx - w * 0.5f, cy - h * 0.5f, w, h, rgba(0xA4AAB0u, a));
+		ui_letter(cx, cy, i == 2 ? "Z" : i == 4 ? "L" : "R", sc, 0x23272Bu, a);
+	} else if (i >= 6 && i <= 9) {  /* cruceta con el brazo de la dirección resaltado */
+		float w = s * 0.22f, l = s * 0.36f;
+		rsxkit_ui_rect(cx - w * 0.5f, cy - l, w, 2.0f * l, rgba(0x6F757Bu, a));
+		rsxkit_ui_rect(cx - l, cy - w * 0.5f, 2.0f * l, w, rgba(0x6F757Bu, a));
+		float ax = i == 8 ? cx - l : i == 9 ? cx + w * 0.5f : cx - w * 0.5f;
+		float ay = i == 6 ? cy - l : i == 7 ? cy + w * 0.5f : cy - w * 0.5f;
+		bool vert = i <= 7;
+		rsxkit_ui_rect(ax, ay, vert ? w : l - w * 0.5f, vert ? l - w * 0.5f : w, rgba(0xFFFFFFu, a));
+	} else if (i >= 10 && i <= 13) {  /* botones C amarillos */
+		ui_disc(cx, cy, r, 0xF2C230u, a);
+		ui_letter(cx, cy, arrows[i - 10], sc, 0x3A2A00u, a);
+	} else {  /* el stick */
+		ui_disc(cx, cy, r, 0xA4AAB0u, a);
+		ui_disc(cx, cy, r * 0.45f, 0x6F757Bu, a);
+	}
+}
+
 static float row_y(float d, float H)
 {
 	float ad = fabsf(d), y = ad <= 1.0f ? ad * GAP : GAP + (ad - 1.0f) * SPACING;
@@ -963,7 +1130,7 @@ static float row_y(float d, float H)
 /* Una fila de la columna: ícono, título y, si está elegida, una línea más. */
 struct row {
 	const char *title, *sub;
-	int icon;           /* 0 cartucho, 1 opciones, 2 glifo */
+	int icon;           /* 0 cartucho, 1 opciones, 2 glifo, 3 botón de N64 (label = fila) */
 	const char *glyph;
 	uint32_t label;
 	const char *value;  /* a la derecha del título (opciones) */
@@ -986,10 +1153,19 @@ static void draw_row(const struct row *r, float d, float x, float W, float H, fl
 		icon_cart(x, y - s * 0.5f, s, r->label, alpha);
 	else if (r->icon == 1)
 		icon_options(x, y - s * 0.5f, s, alpha);
+	else if (r->icon == 3)
+		icon_n64(x, y - s * 0.5f, s, (int)r->label, alpha);
 	else
 		icon_glyph(x, y - s * 0.5f, s, r->glyph, alpha);
-	float scale = 2.0f + 0.85f * k, tx = x + 90.0f, th = RSXKIT_FONT_H * scale;
-	float ty = y - th * 0.5f - 10.0f * k;
+	float scale = 2.0f + 0.85f * k, tx = x + 90.0f;
+	if (r->value) {
+		/* Título y valor caben en la columna: si no, se achica la letra
+		 * antes de cortar el título (hasta 1,4). */
+		float need = cells_w(r->title, 1.0f) + cells_w(r->value, 1.0f), avail = W * 0.53f - tx - 24.0f;
+		if (need > 0.0f && need * scale > avail)
+			scale = fmaxf(1.4f, avail / need);
+	}
+	float th = RSXKIT_FONT_H * scale, ty = y - th * 0.5f - 10.0f * k;
 	float room = W * 0.53f - tx;
 	if (r->value)
 		room -= cells_w(r->value, scale) + 24.0f;  /* el valor queda siempre dentro de la columna */
@@ -1115,6 +1291,7 @@ static const char *game_value(const struct menu *m, int row)
 		return m->game.scale < 0 ? "Global" : menu_scale_name(m->game.scale, m->set.resolution, buf, sizeof buf);
 	}
 	case MENU_GAME_INTERP:   return m->game.interp < 0 ? "Global" : menu_interp_name(m->game.interp);
+	case MENU_GAME_CONTROLS: return "Configurar";
 	}
 	return NULL;
 }
@@ -1135,7 +1312,7 @@ static void game_panel(const struct menu *m, float px, float py, float pw, float
 	stext(x, y, "Ajustes de este juego", dscale, C_DIM, ca, lmax);
 	y += 30.0f;
 	static const char *const names[] = { "Aspecto", "Filtro", "Densidad", "Recorte del borde", "Escala interna",
-					     "Interpolación" };
+					     "Interpolación", "Controles" };
 	/* Con «Densidad» son seis: más juntos, en el mismo alto. */
 	float step = game_visible(m, MENU_GAME_DENSITY) ? 38.0f : 44.0f;
 	for (int i = 0; i < MENU_GAME_BACK; i++) {
@@ -1146,7 +1323,7 @@ static void game_panel(const struct menu *m, float px, float py, float pw, float
 				: i == MENU_GAME_DENSITY  ? menu_density_name(menu_game_density(&m->set, &m->game))
 				: i == MENU_GAME_OVERSCAN ? overscan_name(o)
 				: i == MENU_GAME_SCALE	 ? menu_scale_name(s, m->set.resolution, sbuf, sizeof sbuf)
-							  : menu_interp_name(menu_game_interp(&m->set, &m->game));
+				: i == MENU_GAME_INTERP ? menu_interp_name(menu_game_interp(&m->set, &m->game)) : tr("Configurar");
 		stext(x, y, names[i], 1.3f, C_DIM, ca, 0);
 		stext(x, y + 16.0f, v, dscale, m->game_sel == i ? C_ACCENT : C_TEXT, ca, lmax);
 		y += step;
@@ -1158,11 +1335,11 @@ static void game_panel(const struct menu *m, float px, float py, float pw, float
 static void game_column(const struct menu *m, float x, float W, float H, float a)
 {
 	static const char *const titles[] = { "Aspecto", "Filtro", "Densidad", "Recorte del borde", "Escala interna",
-					      "Interpolación", "Volver" };
+					      "Interpolación", "Controles", "Volver" };
 	static const char *const subs[] = { "Forma de la imagen", "Suave, nítida o con líneas", "Puntos de la máscara CRT",
 					    "Overscan de este juego", "Dibujo interno", "60 cuadros en juegos de 20 o 30",
-					    "A la lista de juegos" };
-	static const char *const glyphs[] = { "▶", "─", "●", "□", "▲", "►", "◀" };
+					    "Ajustar botones de este juego", "A la lista de juegos" };
+	static const char *const glyphs[] = { "▶", "─", "●", "□", "▲", "►", "●", "◀" };
 	_Static_assert(sizeof titles / sizeof titles[0] == MENU_GAME_ROWS, "una fila por ajuste");
 	for (int i = 0; i < MENU_GAME_ROWS; i++) {
 		if (!game_visible(m, i))
@@ -1170,6 +1347,53 @@ static void game_column(const struct menu *m, float x, float W, float H, float a
 		float d = (float)game_row(m, i) - m->game_pos;
 		struct row r = { titles[i], subs[i], 2, glyphs[i], 0, game_value(m, i) };
 		draw_row(&r, d, x, W, H, a);
+	}
+}
+
+static const char *control_row_title(int row)
+{
+	static const char *const n[] = { "A", "B", "Z", "Start", "L", "R", "Cruceta arriba", "Cruceta abajo",
+		"Cruceta izquierda", "Cruceta derecha", "C arriba", "C abajo", "C izquierda", "C derecha",
+		"Stick", "Restaurar predeterminado", "Volver" };
+	return row >= 0 && row < MENU_CONTROL_ROWS ? n[row] : "";
+}
+
+static const char *control_button_value(const struct menu *m, int row)
+{
+	if (row < SALSA64_IN_COUNT) {
+		unsigned b = m->controls.source[row];
+		static const char *const names[] = { "Cruz", "Círculo", "Cuadrado", "Triángulo", "L1", "R1", "L2", "R2",
+			"L3", "R3", "Start", "Select", "Arriba", "Abajo", "Izquierda", "Derecha" };
+		if (row >= SALSA64_IN_C_UP && row <= SALSA64_IN_C_RIGHT) {
+			/* Los C siempre salen del otro stick; un botón asignado se suma. */
+			static char buf[64];
+			const char *stick = tr(m->controls.stick_source == SALSA64_STICK_RIGHT ? "Stick izquierdo"
+												 : "Stick derecho");
+			if (b >= SALSA64_DS3_NBUTTONS)
+				return stick;
+			snprintf(buf, sizeof buf, "%s / %s", stick, tr(names[b]));
+			return buf;
+		}
+		unsigned b2 = m->controls.source2[row];
+		if (b < SALSA64_DS3_NBUTTONS && b2 < SALSA64_DS3_NBUTTONS) {
+			static char two[64];
+			snprintf(two, sizeof two, "%s / %s", tr(names[b]), tr(names[b2]));
+			return two;
+		}
+		return b < SALSA64_DS3_NBUTTONS ? tr(names[b]) : tr("Sin asignar");
+	}
+	if (row == MENU_CONTROL_STICK)
+		return tr(m->controls.stick_source == SALSA64_STICK_RIGHT ? "Stick derecho" : "Stick izquierdo");
+	return NULL;
+}
+
+static void controls_column(const struct menu *m, float x, float W, float H, float a)
+{
+	for (int i = 0; i < MENU_CONTROL_ROWS; i++) {
+		bool n64 = i < SALSA64_IN_COUNT || i == MENU_CONTROL_STICK;
+		struct row r = { tr(control_row_title(i)), NULL, n64 ? 3 : 2, i == MENU_CONTROL_BACK ? "◀" : "●",
+				 n64 ? (uint32_t)i : 0, control_button_value(m, i) };
+		draw_row(&r, (float)i - m->control_pos, x, W, H, a);
 	}
 }
 
@@ -1262,6 +1486,27 @@ static void panel(const struct menu *m, float W, float H, float a)
 	rsxkit_ui_gradient(px, py, pw, ph, rgba(0x000000u, a * 0.40f), rgba(0x000000u, a * 0.28f),
 			   rgba(0x000000u, a * 0.24f), rgba(0x000000u, a * 0.14f));
 	rsxkit_ui_rect(px, py, pw, 2.0f, rgba(0xFFFFFFu, a * 0.32f));
+	if (m->page == MENU_PAGE_CONTROLS) {
+		float x = px + 26.0f, y = py + 24.0f;
+		uint32_t tmax = (uint32_t)((pw - 48.0f) / (RSXKIT_FONT_W * 2.0f));
+		stext(x, y, tr("Controles"), 2.0f, 0xFFFFFFu, a, tmax);
+		/* Desde Opciones se cambia el mapeo de todos los juegos; desde los
+		 * ajustes de una ROM (SELECT), solo el de ese juego. */
+		stext(x, y + 30.0f, tr(m->control_for_game ? "Este juego" : "Todos los juegos"), 1.35f, C_ACCENT, a,
+		      (uint32_t)((pw - 52.0f) / (RSXKIT_FONT_W * 1.35f)));
+		y += 78.0f;
+#define PANEL_MAX(sc) ((uint32_t)((pw - 52.0f) / (RSXKIT_FONT_W * (sc))))
+		stext(x, y, tr(control_row_title(m->control_sel)), 1.6f, C_DIM, a, PANEL_MAX(1.6f));
+		stext(x, y + 30.0f, control_button_value(m, m->control_sel), 2.0f, C_ACCENT, a, PANEL_MAX(2.0f));
+		if (m->control_capture) {
+			stext(x, py + ph - 70.0f, tr("Pulsa uno o dos botones"), 1.35f, C_WARN, a, PANEL_MAX(1.35f));
+			stext(x, py + ph - 42.0f, tr("START cancela · SELECT sin asignar"), 1.2f, C_DIM, a, PANEL_MAX(1.2f));
+		} else if (m->control_sel == MENU_CONTROL_STICK) {
+			stext(x, py + ph - 52.0f, tr("× alterna el stick analógico"), 1.35f, C_DIM, a, PANEL_MAX(1.35f));
+		}
+#undef PANEL_MAX
+		return;
+	}
 
 	/* Los trucos de la ROM, cuando la página está (o se está yendo). */
 	float ct = smooth(m->cht_t);
@@ -1510,9 +1755,10 @@ static void options_column(const struct menu *m, float x, float W, float H, floa
 	struct row fps = { "Mostrar FPS", "Velocidad en una esquina del juego", 2, "#", 0, m->set.fps ? "Sí" : "No" };
 	struct row confirm = { "Confirmar al salir", "START + SELECT pregunta antes", 2, "?", 0,
 			       m->set.confirm ? "Sí" : "No" };
-	struct row order = { "Orden de la lista", "Título de cabecera o nombre de archivo", 2, "↕", 0,
+	struct row order = { "Orden de la lista", "Título de cabecera o nombre de archivo", 2, "↑", 0,
 			     m->set.rom_order == MENU_ROM_ORDER_FILENAME ? tr("Nombre de archivo") : tr("Título de cabecera") };
-	struct row refresh = { "Actualizar lista", "Volver a leer las carpetas de ROMs", 2, "↻", 0, NULL };
+	struct row refresh = { "Actualizar lista", "Volver a leer las carpetas de ROMs", 2, "○", 0, NULL };
+	struct row controls = { "Controles", "Botones del control de N64", 2, "●", 0, NULL };
 	struct row back = { "Volver", "A la lista de juegos", 2, "◀", 0, NULL };
 	draw_row(&waves, MENU_OPT_WAVES - m->opt_pos, x, W, H, a);
 	draw_row(&crop, MENU_OPT_OVERSCAN - m->opt_pos, x, W, H, a);
@@ -1530,6 +1776,7 @@ static void options_column(const struct menu *m, float x, float W, float H, floa
 	draw_row(&lang, (float)opt_row(m, MENU_OPT_LANG) - m->opt_pos, x, W, H, a);
 	draw_row(&order, (float)opt_row(m, MENU_OPT_ROM_ORDER) - m->opt_pos, x, W, H, a);
 	draw_row(&refresh, (float)opt_row(m, MENU_OPT_REFRESH) - m->opt_pos, x, W, H, a);
+	draw_row(&controls, (float)opt_row(m, MENU_OPT_CONTROLS) - m->opt_pos, x, W, H, a);
 	if (m->dl_enabled) {
 		draw_row(&dlc, (float)opt_row(m, MENU_OPT_DL_COVERS) - m->opt_pos, x, W, H, a);
 		draw_row(&dlt, (float)opt_row(m, MENU_OPT_DL_CHEATS) - m->opt_pos, x, W, H, a);
@@ -1553,6 +1800,8 @@ void menu_frame(struct menu *m, float lw, float lh, uint64_t now_us)
 	ease(&m->cht_t, m->page == MENU_PAGE_CHEATS ? 1.0f : 0.0f, dt, 10.0f);
 	ease(&m->game_pos, (float)game_row(m, m->game_sel), dt, 14.0f);
 	ease(&m->game_t, m->page == MENU_PAGE_GAME ? 1.0f : 0.0f, dt, 10.0f);
+	ease(&m->control_pos, (float)m->control_sel, dt, 14.0f);
+	ease(&m->control_t, m->page == MENU_PAGE_CONTROLS ? 1.0f : 0.0f, dt, 10.0f);
 	ease(&m->cover_t, m->cover_rom >= 0 && m->cover_rom == menu_selected(m) && m->cover_w ? 1.0f : 0.0f, dt, 10.0f);
 	m->intro = clampf(m->intro + dt / 0.45f, 0.0f, 1.0f);
 
@@ -1563,7 +1812,7 @@ void menu_frame(struct menu *m, float lw, float lh, uint64_t now_us)
 	stext(W * 0.06f, H * 0.055f, "Salsa64", 2.5f, 0xFFFFFFu, a, 0);
 	stext(W * 0.06f + 7 * 20.0f + 22.0f, H * 0.055f + 8.0f,
 	      m->page == MENU_PAGE_GAMES ? "Juegos" : m->page == MENU_PAGE_CHEATS ? "Trucos"
-				    : m->page == MENU_PAGE_GAME ? "Ajustes" : "Opciones", 2.0f, C_DIM, a, 0);
+					    : m->page == MENU_PAGE_GAME ? "Ajustes" : m->page == MENU_PAGE_CONTROLS ? "Controles" : "Opciones", 2.0f, C_DIM, a, 0);
 	char count[24];
 	snprintf(count, sizeof count, tr(m->list->rom_count == 1 ? "%u juego" : "%u juegos"), m->list->rom_count);
 	stext(W * 0.94f - cells_w(count, 1.75f), H * 0.055f + 10.0f, count, 1.75f, C_DIM, a, 0);
@@ -1579,7 +1828,8 @@ void menu_frame(struct menu *m, float lw, float lh, uint64_t now_us)
 
 	/* Columna (se desliza al cambiar de página) y panel. */
 	float x = W * 0.07f, p = smooth(m->page_t), ch = smooth(m->cht_t), gm = smooth(m->game_t);
-	float g = (1.0f - p) * (1.0f - ch) * (1.0f - gm);
+	float ctls = smooth(m->control_t);
+	float g = (1.0f - p) * (1.0f - ch) * (1.0f - gm) * (1.0f - ctls);
 	if (g > 0.001f)
 		games_column(m, x - p * W * 0.06f - ch * W * 0.06f - gm * W * 0.06f, W, H, a * g);
 	if (gm > 0.001f)
@@ -1588,13 +1838,16 @@ void menu_frame(struct menu *m, float lw, float lh, uint64_t now_us)
 		options_column(m, x + (1.0f - p) * W * 0.06f, W, H, a * p);
 	if (ch > 0.001f && m->cheats)
 		cheats_column(m, x + (1.0f - ch) * W * 0.06f, W, H, a * ch);
+	if (ctls > 0.001f)
+		controls_column(m, x + (1.0f - ctls) * W * 0.06f, W, H, a * ctls);
 	panel(m, W, H, a);
 
 	/* Pie: mensaje, botones y cómo volver. */
 	if (m->status[0])
 		stext(W * 0.06f, H * 0.815f, m->status, 1.6f, C_WARN, a, (uint32_t)(W * 0.88f / 12.8f));
 	stext(W * 0.06f, H * 0.865f,
-	      m->page == MENU_PAGE_GAMES ? "×  Abrir   ↑↓  Elegir   □  Trucos   SELECT  Ajustes   △  Opciones"
+	      m->page == MENU_PAGE_CONTROLS ? tr("×  Asignar o elegir   ↑↓  Mover   ○  Volver")
+	      : m->page == MENU_PAGE_GAMES ? "×  Abrir   ↑↓  Elegir   □  Trucos   SELECT  Ajustes   △  Opciones"
 		      : m->page == MENU_PAGE_GAME ? "×  Cambiar      ↑↓  Elegir      ○  Volver"
 	      : m->page == MENU_PAGE_CHEATS ? "×  Activar o desactivar      ↑↓  Elegir      ○  Volver"
 					     : "×  Cambiar      ○  Volver",
