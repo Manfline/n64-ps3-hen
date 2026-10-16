@@ -387,6 +387,27 @@ static void padmap_buttons(void)
 	CHECK_EQ(p.buttons, 0);
 }
 
+/* Con el stick de la N64 en el derecho, los C pasan al izquierdo. */
+static void padmap_c_follow_stick(void)
+{
+	struct salsa64_padmap m;
+	struct salsa64_pad p;
+	struct salsa64_ds3 in;
+	salsa64_padmap_default(&m);
+	in = ds3(0, 128, 128, 255, 128);  /* derecho a la derecha: C → */
+	salsa64_padmap_apply(&m, &in, &p);
+	CHECK_EQ(p.buttons, SALSA64_PAD_C_RIGHT);
+	CHECK_EQ(p.x, 0);
+	m.stick_source = SALSA64_STICK_RIGHT;
+	salsa64_padmap_apply(&m, &in, &p);  /* ahora mueve el stick, sin C */
+	CHECK_EQ(p.buttons, 0);
+	CHECK_EQ(p.x, 80);
+	in = ds3(0, 128, 0, 128, 128);  /* izquierdo arriba: C ↑ */
+	salsa64_padmap_apply(&m, &in, &p);
+	CHECK_EQ(p.buttons, SALSA64_PAD_C_UP);
+	CHECK_EQ(p.y, 0);
+}
+
 static void padmap_sticks(void)
 {
 	struct salsa64_padmap m;
@@ -464,6 +485,15 @@ static void padmap_config(void)
 	CHECK_EQ(m.deadzone, 0);
 	CHECK_EQ(m.range, 127);
 	CHECK_EQ(m.c_threshold, 30);
+	char saved[512];
+	int saved_len = salsa64_padmap_format(&m, saved, sizeof saved, 0);
+	CHECK(saved_len > 0 && saved_len < (int)sizeof saved);
+	struct salsa64_padmap reloaded;
+	salsa64_padmap_default(&reloaded);
+	CHECK_EQ(salsa64_padmap_parse(&reloaded, saved, (size_t)saved_len, NULL, 0), 0);
+	CHECK_EQ(reloaded.deadzone, 0);
+	CHECK_EQ(reloaded.range, 127);
+	CHECK_EQ(reloaded.c_threshold, 30);
 
 	struct salsa64_ds3 in = ds3(DS3(R2) | DS3(CIRCLE) | DS3(SELECT) | DS3(SQUARE) | DS3(L2),
 				    128, 128, 128, 128);
@@ -522,6 +552,7 @@ void t_suite_pif(void)
 	RUN(padmap_buttons);
 	RUN(pif_cic6105_challenge);
 	RUN(padmap_sticks);
+	RUN(padmap_c_follow_stick);
 	RUN(padmap_config);
 	RUN(padmap_describe);
 }
