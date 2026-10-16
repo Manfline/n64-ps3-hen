@@ -2758,7 +2758,7 @@ static void h1_stats(uint32_t fields, uint64_t dt_us)
  * Antes de que stats() reinicie la ventana. */
 static struct {
 	uint64_t compile_ticks, rec_compiled, rec_retrans, rec_words, rec_evictions, rec_flushes, rec_killed, interp, jr;
-	struct salsa64_rec_trace_slow_stats slow;
+	struct salsa64_rec_trace_prev slow;
 	struct salsa64_rec_trace_compile_stats compiles;
 	uint64_t smp_ticks;
 	uint32_t marks[SALSA64_SMP_N];
@@ -2834,7 +2834,7 @@ static void perf_window(uint64_t dt, uint32_t fields, uint64_t us_emu, uint64_t 
 		pwin.audio = *a;
 	}
 	if (use_rec && rec.trace) {
-		const struct salsa64_rec_trace *t = rec.trace;
+		struct salsa64_rec_trace *t = rec.trace;
 		W(rec_bloques, t->compiled - pwin.rec_compiled);
 		W(rec_retrad, t->retrans - pwin.rec_retrans);
 		W(rec_palabras, t->words - pwin.rec_words);
@@ -2847,24 +2847,8 @@ static void perf_window(uint64_t dt, uint32_t fields, uint64_t us_emu, uint64_t 
 		pwin.rec_evictions = t->evictions;
 		pwin.rec_flushes = t->flushes;
 		pwin.rec_killed = t->killed;
-		struct salsa64_rec_trace_slow_stats delta = {0};
-		for (unsigned k = 0; k < SALSA64_RT_SLOW_N; k++) {
-			delta.calls[k] = t->slow.calls[k] - pwin.slow.calls[k];
-			delta.ticks[k] = t->slow.ticks[k] - pwin.slow.ticks[k];
-			pwin.slow.calls[k] = t->slow.calls[k];
-			pwin.slow.ticks[k] = t->slow.ticks[k];
-		}
-		for (unsigned k = 0; k < SALSA64_RT_TOP_PC; k++) {
-			delta.top[k] = t->slow.top[k];
-			for (unsigned j = 0; j < SALSA64_RT_TOP_PC; j++)
-				if (pwin.slow.top[j].pc == t->slow.top[k].pc) {
-					delta.top[k].ticks = t->slow.top[k].ticks - pwin.slow.top[j].ticks;
-					delta.top[k].calls = t->slow.top[k].calls - pwin.slow.top[j].calls;
-					break;
-				}
-			pwin.slow.top[k] = t->slow.top[k];
-		}
-		perf_put_slow(&perf.emu, perf_ms(), &delta);
+		struct salsa64_rec_trace_slow_stats delta;
+		perf_put_slow_window(&perf.emu, perf_ms(), t, &pwin.slow, &delta);
 		struct salsa64_rec_trace_compile_stats cdelta = {0};
 		for (unsigned k = 0; k < SALSA64_RT_COMPILE_N; k++) {
 			cdelta.calls[k] = t->compiles.calls[k] - pwin.compiles.calls[k];
@@ -3123,7 +3107,7 @@ static void stats(uint64_t now)
 		salsa64_log("recompilador: %llu bloques (%llu fuera de KSEG0), %u KB de caché, %llu entradas, "
 			    "%llu enlaces, %llu invalidados, %llu vaciados (ids %llu, enlaces %llu, RDRAM %llu, bucles %llu, "
 			    "ROM %llu, estado %llu, otros %llu), %llu desalojos, %llu traducciones, %llu dependen de FR "
-			    "(%llu gemelos, %llu salidas por FR, %llu por CU1), %llu instr. interpretadas",
+			    "(%llu gemelos, %llu salidas por FR, %llu por CU1, %llu cortados por CU1), %llu instr. interpretadas",
 			    (unsigned long long)st->compiled, (unsigned long long)st->compiled_x,
 			    salsa64_rec_used(&rec) / 256, (unsigned long long)st->entries,
 			    (unsigned long long)st->linked, (unsigned long long)st->invalidated,
@@ -3136,7 +3120,8 @@ static void stats(uint64_t now)
 			    (unsigned long long)st->flushes_by[SALSA64_REC_FLUSH_OTHER], (unsigned long long)st->evictions,
 			    (unsigned long long)st->vt_probes, (unsigned long long)st->fr_dep,
 			    (unsigned long long)st->fr_twins, (unsigned long long)st->fr_exits,
-			    (unsigned long long)st->cu1_exits, (unsigned long long)st->interp_steps);
+			    (unsigned long long)st->cu1_exits, (unsigned long long)st->cu1_cuts,
+			    (unsigned long long)st->interp_steps);
 		if (rec.opts & SALSA64_REC_OPT_JTC_STATS) {
 			uint64_t h = rec.jtc_ctr[0], m = rec.jtc_ctr[1];  /* uint32_t: dan la vuelta a los 4 G */
 			salsa64_log("caché de destinos de JR: %llu aciertos, %llu fallos (%.1f %% de acierto)",

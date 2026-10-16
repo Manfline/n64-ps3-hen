@@ -64,7 +64,12 @@ struct salsa64_sched;
 #define SALSA64_PRID_VALUE   0x00000B22u
 #define SALSA64_FCR0_VALUE   0x00000A00u
 #define SALSA64_TLB_ENTRIES  32
-#define SALSA64_IDLE_CACHE   64   /* saltos descartados como bucle de espera (potencia de 2) */
+#define SALSA64_IDLE_CACHE   1024 /* saltos descartados como bucle de espera (potencia de 2) */
+/* Ranura de un salto en las tablas de bucles de espera (hash multiplicativo
+ * de los 32 bits bajos): con los bits 2–11 solos, 0x80001510 y 0x80011510
+ * (el osInvalDCache de NFL Blitz y su bucle principal) se pisaban el
+ * descarte en cada vuelta y se volvían a analizar. */
+#define SALSA64_IDLE_SLOT(pc) ((unsigned)(((uint32_t)(pc) * 0x9E3779B1u) >> 22) & (SALSA64_IDLE_CACHE - 1))
 
 #ifdef SALSA64_MEM_CENSUS
 /* Censo de los accesos a datos del intérprete por segmento y tamaño de
@@ -226,11 +231,14 @@ struct salsa64_cpu {
 	void (*exc_hook)(struct salsa64_cpu *cpu);
 
 	/* Bucles de espera (idle.c). Las tablas guardan pc ^ instrucción del
-	 * salto: descartados para siempre y con un primer fallo. */
+	 * salto: descartados para siempre, con fallos seguidos (cuántos en
+	 * idle_fails) y que ya fueron de espera alguna vez. */
 	uint64_t idle_cycles;    /* ciclos saltados desde el arranque */
 	uint8_t idle_off;        /* salsa64_cpu_set_idle(cpu, false) */
 	uint32_t idle_reject[SALSA64_IDLE_CACHE];
 	uint32_t idle_strike[SALSA64_IDLE_CACHE];
+	uint32_t idle_proven[SALSA64_IDLE_CACHE];
+	uint8_t idle_fails[SALSA64_IDLE_CACHE];
 };
 
 void salsa64_cpu_init(struct salsa64_cpu *cpu, struct salsa64_bus *bus,

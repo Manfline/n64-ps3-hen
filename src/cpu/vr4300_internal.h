@@ -68,8 +68,10 @@ void salsa64_vr4300_cop1(struct salsa64_cpu *cpu, uint32_t instr);
 void salsa64_vr4300_cop2(struct salsa64_cpu *cpu, uint32_t instr);
 /* idle.c: el salto `instr` en `branch_pc` se acaba de tomar hacia `target`
  * (a menos de SALSA64_IDLE_BODY instrucciones). Si es un bucle de espera,
- * avanza el tiempo y pone cpu->redirect. */
-#define SALSA64_IDLE_BODY 8
+ * avanza el tiempo y pone cpu->redirect. Hasta el 2026-10-16 eran 8: la
+ * espera de NFL Blitz (cinco osRecvMesg sin bloquear y osYieldThread)
+ * vuelve con un J de 37. */
+#define SALSA64_IDLE_BODY 64
 void salsa64_vr4300_idle(struct salsa64_cpu *cpu, uint64_t branch_pc, uint64_t target, uint32_t instr);
 
 static inline void vr4300_reserved(struct salsa64_cpu *cpu)

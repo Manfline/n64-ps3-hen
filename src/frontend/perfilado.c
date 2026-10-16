@@ -284,6 +284,62 @@ bool perf_put_slow(struct perf_ring *r, uint32_t ms, const struct salsa64_rec_tr
 	return true;
 }
 
+/* COP0 y MI (desde la ventana anterior): ms, n entradas no vacías, relleno;
+ * por entrada: índice u16 (enum salsa64_rt_cop0), relleno u16, llamadas u32,
+ * ticks u64. */
+static bool put_cop0(struct perf_ring *r, uint32_t ms, const uint32_t *calls, const uint64_t *ticks)
+{
+	struct perf_rw w;
+	uint32_t n = 0;
+	for (unsigned k = 0; k < SALSA64_RT_COP0_N; k++)
+		n += calls[k] || ticks[k];
+	if (!n)
+		return true;
+	if (!perf_begin(&w, r, PERF_R_COP0, 8 + 16 * n))
+		return false;
+	perf_w32(&w, ms);
+	perf_w16(&w, n);
+	perf_w16(&w, 0);
+	for (unsigned k = 0; k < SALSA64_RT_COP0_N; k++) {
+		if (!(calls[k] || ticks[k]))
+			continue;
+		perf_w16(&w, k);
+		perf_w16(&w, 0);
+		perf_w32(&w, calls[k]);
+		perf_w64(&w, ticks[k]);
+	}
+	perf_end(&w);
+	return true;
+}
+
+bool perf_put_slow_window(struct perf_ring *r, uint32_t ms, struct salsa64_rec_trace *t,
+			  struct salsa64_rec_trace_prev *prev, struct salsa64_rec_trace_slow_stats *out)
+{
+	struct salsa64_rec_trace_slow_stats local, *delta = out ? out : &local;
+	memset(delta, 0, sizeof *delta);
+	for (unsigned k = 0; k < SALSA64_RT_SLOW_N; k++) {
+		delta->calls[k] = t->slow.calls[k] - prev->slow.calls[k];
+		delta->ticks[k] = t->slow.ticks[k] - prev->slow.ticks[k];
+		prev->slow.calls[k] = t->slow.calls[k];
+		prev->slow.ticks[k] = t->slow.ticks[k];
+	}
+	/* Si sigue pedido el vaciado de la ventana anterior, no hubo nada lento
+	 * desde entonces: la tabla es la vieja. */
+	if (!t->top_reset)
+		memcpy(delta->top, t->slow_field.top, sizeof delta->top);
+	t->top_reset = 1;
+	uint32_t calls[SALSA64_RT_COP0_N];
+	uint64_t ticks[SALSA64_RT_COP0_N];
+	for (unsigned k = 0; k < SALSA64_RT_COP0_N; k++) {
+		calls[k] = t->cop0.calls[k] - prev->cop0.calls[k];
+		ticks[k] = t->cop0.ticks[k] - prev->cop0.ticks[k];
+		prev->cop0.calls[k] = t->cop0.calls[k];
+		prev->cop0.ticks[k] = t->cop0.ticks[k];
+	}
+	bool ok = perf_put_slow(r, ms, delta);
+	return put_cop0(r, ms, calls, ticks) && ok;
+}
+
 /* Total de sesión: ms, n entradas, n razones, FR (2 × llamadas u32 + ticks u64),
  * PCs lentos acumulados (cuenta u32 y 16 × pc/ticks/llamadas) y por entrada
  * no vacía: índice u16, relleno u16, ticks u64, llamadas por razón u32. */

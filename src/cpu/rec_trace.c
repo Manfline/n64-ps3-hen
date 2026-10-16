@@ -128,6 +128,51 @@ void salsa64_rec_trace_fpu_add(struct salsa64_rec_trace *t, uint32_t instr, uint
 	t->fpu.fr_ticks[fr] += ticks;
 }
 
+unsigned salsa64_rec_trace_cop0_index(uint32_t i)
+{
+	if (I_OP(i) != 0x10)
+		return SALSA64_RT_COP0_OTHER;
+	switch (I_RS(i)) {
+	case 0x00: return SALSA64_RT_COP0_MF + I_RD(i);
+	case 0x01: return SALSA64_RT_COP0_DMF + I_RD(i);
+	case 0x04: return SALSA64_RT_COP0_MT + I_RD(i);
+	case 0x05: return SALSA64_RT_COP0_DMT + I_RD(i);
+	default: break;
+	}
+	if (!(I_RS(i) & 0x10))
+		return SALSA64_RT_COP0_OTHER;
+	switch (I_FUNCT(i)) {
+	case 0x01: return SALSA64_RT_COP0_TLBR;
+	case 0x02: return SALSA64_RT_COP0_TLBWI;
+	case 0x06: return SALSA64_RT_COP0_TLBWR;
+	case 0x08: return SALSA64_RT_COP0_TLBP;
+	case 0x18: return SALSA64_RT_COP0_ERET;
+	default: return SALSA64_RT_COP0_OTHER;
+	}
+}
+
+unsigned salsa64_rec_trace_mi_index(uint32_t pa, bool store)
+{
+	return SALSA64_RT_COP0_MI + 2 * ((pa >> 2) & 3) + (store ? 1 : 0);
+}
+
+/* Space-Saving: con la tabla llena, el PC nuevo ocupa la entrada con menos
+ * ticks y hereda sus ticks y llamadas (cotas superiores). */
+static void slow_top_add(struct salsa64_rec_trace_slow_pc *top, uint64_t ticks, uint32_t pc)
+{
+	unsigned slot = SALSA64_RT_TOP_PC, min = 0;
+	for (unsigned k = 0; k < SALSA64_RT_TOP_PC; k++) {
+		if (top[k].pc == pc || !top[k].pc) { slot = k; break; }
+		if (top[k].ticks < top[min].ticks)
+			min = k;
+	}
+	if (slot == SALSA64_RT_TOP_PC)
+		slot = min;
+	top[slot].pc = pc;
+	top[slot].ticks += ticks;
+	top[slot].calls++;
+}
+
 void salsa64_rec_trace_slow_add(struct salsa64_rec_trace *t, unsigned cause, uint64_t ticks, uint32_t pc)
 {
 	if (!t || cause >= SALSA64_RT_SLOW_N)
@@ -138,19 +183,12 @@ void salsa64_rec_trace_slow_add(struct salsa64_rec_trace *t, unsigned cause, uin
 	t->slow_field.calls[cause]++;
 	if (!pc)
 		return;
-	/* Space-Saving: con la tabla llena, el PC nuevo ocupa la entrada con
-	 * menos ticks y hereda sus ticks y llamadas (cotas superiores). */
-	unsigned slot = SALSA64_RT_TOP_PC, min = 0;
-	for (unsigned k = 0; k < SALSA64_RT_TOP_PC; k++) {
-		if (t->slow.top[k].pc == pc || !t->slow.top[k].pc) { slot = k; break; }
-		if (t->slow.top[k].ticks < t->slow.top[min].ticks)
-			min = k;
+	slow_top_add(t->slow.top, ticks, pc);
+	if (t->top_reset) {
+		memset(t->slow_field.top, 0, sizeof t->slow_field.top);
+		t->top_reset = 0;
 	}
-	if (slot == SALSA64_RT_TOP_PC)
-		slot = min;
-	t->slow.top[slot].pc = pc;
-	t->slow.top[slot].ticks += ticks;
-	t->slow.top[slot].calls++;
+	slow_top_add(t->slow_field.top, ticks, pc);
 }
 
 void salsa64_rec_trace_invalidate(struct salsa64_rec_trace *t, unsigned reason, uint32_t pa, uint32_t len,

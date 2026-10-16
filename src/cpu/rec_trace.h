@@ -68,10 +68,37 @@ enum salsa64_rt_slow {
 
 #define SALSA64_RT_TOP_PC 16u
 struct salsa64_rec_trace_slow_pc { uint32_t pc; uint64_t ticks; uint32_t calls; };
+/* Las cuentas por causa son totales de la sesión (la ventana es la resta).
+ * Los PCs no se pueden restar: una entrada de la tabla (Space-Saving) puede
+ * pasar a otro PC y volver con menos de lo que tenía. Por eso `slow.top` es
+ * de toda la sesión y `slow_field.top` de la ventana en curso: quien la
+ * escribe la copia y pide con `top_reset` que el hilo que emula la vacíe
+ * antes de la próxima cuenta. */
 struct salsa64_rec_trace_slow_stats {
 	uint64_t ticks[SALSA64_RT_SLOW_N];
 	uint32_t calls[SALSA64_RT_SLOW_N];
 	struct salsa64_rec_trace_slow_pc top[SALSA64_RT_TOP_PC];
+};
+
+/* Desglose de lo que llega a C por COP0 (rec_h_exec, rec_h_tlbw y
+ * rec_h_eret) y por los registros del MI (rec_h_load y rec_h_store): por
+ * instrucción y registro de COP0 (MFC0, MTC0, DMFC0 y DMTC0 × 32), las de
+ * la TLB, ERET y lo demás; y por registro del MI, lectura o escritura. */
+enum salsa64_rt_cop0 {
+	SALSA64_RT_COP0_MF = 0, SALSA64_RT_COP0_MT = 32, SALSA64_RT_COP0_DMF = 64, SALSA64_RT_COP0_DMT = 96,
+	SALSA64_RT_COP0_TLBR = 128, SALSA64_RT_COP0_TLBWI, SALSA64_RT_COP0_TLBWR, SALSA64_RT_COP0_TLBP,
+	SALSA64_RT_COP0_ERET, SALSA64_RT_COP0_OTHER,
+	SALSA64_RT_COP0_MI,                       /* + 2 × registro (0 MODE, 1 VERSION, 2 INTR, 3 INTR_MASK) + escritura */
+	SALSA64_RT_COP0_N = SALSA64_RT_COP0_MI + 8
+};
+struct salsa64_rec_trace_cop0 {
+	uint64_t ticks[SALSA64_RT_COP0_N];
+	uint32_t calls[SALSA64_RT_COP0_N];
+};
+/* Lo que escribió la ventana anterior, para restar (perfilado.c). */
+struct salsa64_rec_trace_prev {
+	struct salsa64_rec_trace_slow_stats slow;
+	struct salsa64_rec_trace_cop0 cop0;
 };
 
 /* Desglose de las instrucciones de COP1 que caen al intérprete: por (fmt,
@@ -118,6 +145,10 @@ unsigned salsa64_rec_trace_exception_class(unsigned exception);
  * L; después, 256 + salsa64_rt_fpu_extra) y razón según FCR31 previo. */
 unsigned salsa64_rec_trace_fpu_index(uint32_t instr);
 unsigned salsa64_rec_trace_fpu_reason(uint32_t fcr31);
+/* Índice en salsa64_rec_trace_cop0 de una instrucción de COP0, y de un
+ * acceso a un registro del MI (dirección física). */
+unsigned salsa64_rec_trace_cop0_index(uint32_t instr);
+unsigned salsa64_rec_trace_mi_index(uint32_t pa, bool store);
 
 /* Clases de palabras emitidas. */
 enum salsa64_rt_class {
@@ -220,6 +251,8 @@ struct salsa64_rec_trace {
 	struct salsa64_rec_trace_field field;
 	struct salsa64_rec_trace_slow_stats slow, slow_field;
 	struct salsa64_rec_trace_fpu fpu;  /* total de sesión */
+	struct salsa64_rec_trace_cop0 cop0;  /* total de sesión */
+	volatile uint8_t top_reset;          /* vaciar slow_field.top (lo pide quien escribe la ventana) */
 	struct salsa64_rec_trace_compile_stats compiles, compiles_field;
 	struct salsa64_rec_trace_inval inval[32];
 	uint8_t inval_next;
@@ -268,6 +301,14 @@ void salsa64_rec_trace_fpu_add(struct salsa64_rec_trace *t, uint32_t instr, uint
 			       uint64_t ticks);
 void salsa64_rec_trace_invalidate(struct salsa64_rec_trace *t, unsigned reason, uint32_t pa, uint32_t len,
 				  uint32_t killed);
+/* Una entrada del desglose de COP0 y el MI (índice de las dos de arriba). */
+static inline void salsa64_rec_trace_cop0_add(struct salsa64_rec_trace *t, unsigned k, uint64_t ticks)
+{
+	if (k < SALSA64_RT_COP0_N) {
+		t->cop0.ticks[k] += ticks;
+		t->cop0.calls[k]++;
+	}
+}
 
 /* Una marca de C en la ventana abierta (el despachador). */
 static inline void salsa64_rec_trace_mark(struct salsa64_cpu *cpu, uint32_t m)

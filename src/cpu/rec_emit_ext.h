@@ -31,14 +31,18 @@ static void decode_promote(const struct salsa64_rec *rec, uint32_t i, struct dec
 		if (rec->opts & SALSA64_REC_OPT_COP0_EXEC)
 			return;
 		/* MTC0/DMTC0 a un registro que solo guarda el valor: el bloque
-		 * sigue. TLBWI/TLBWR y ERET con rutina propia (rec.c), terminando el
-		 * bloque como antes. Lo demás de COP0 (Status, Cause, Compare,
-		 * EntryHi, Count…), el intérprete. */
+		 * sigue. MTC0 a Status en línea cuando se puede (emit_mtc0_status),
+		 * terminando el bloque como antes. TLBWI/TLBWR y ERET con rutina
+		 * propia (rec.c), terminando el bloque. Lo demás de COP0 (Cause,
+		 * Compare, EntryHi, Count…), el intérprete. */
 		if ((fmt == 0x04 || fmt == 0x05) &&
 		    (rd == SALSA64_CP0_ENTRYLO0 || rd == SALSA64_CP0_ENTRYLO1 || rd == SALSA64_CP0_PAGEMASK ||
-		     rd == SALSA64_CP0_INDEX)) {
+		     rd == SALSA64_CP0_INDEX || rd == SALSA64_CP0_EPC)) {
 			d->kind = K_NORMAL;
 			d->how = H_MTC0;
+			d->writes = 0;
+		} else if (fmt == 0x04 && rd == SALSA64_CP0_STATUS) {
+			d->how = H_MTC0_ST;
 			d->writes = 0;
 		} else if (fmt >= 0x10 && (f == 0x02 || f == 0x06)) {
 			d->how = H_TLBW;
@@ -360,13 +364,17 @@ static void emit_cop0(struct ctx *c, unsigned k)
 
 /* MTC0 (y DMTC0) a un registro que solo guarda el valor
  * (salsa64_cpu_cop0_write): el latch y el campo con su máscara. El refill de
- * la TLB de GoldenEye escribe EntryLo0 y EntryLo1 ~800 veces por campo. */
+ * la TLB de GoldenEye escribe EntryLo0 y EntryLo1 ~800 veces por campo; el
+ * cambio de hilo de libultra (__osDispatchThread), EPC en cada uno. */
 static void emit_mtc0(struct ctx *c, unsigned k)
 {
 	uint32_t i = c->d[k].w;
 	unsigned rd = I_RD(i), v = get(c, I_RT(i), T_S1);
 	E(c, ppc_std(v, OFF(cop0_latch), R_CPU));
 	switch (rd) {
+	case SALSA64_CP0_EPC:
+		E(c, ppc_std(v, OFF(epc), R_CPU));
+		return;
 	case SALSA64_CP0_ENTRYLO0:
 	case SALSA64_CP0_ENTRYLO1:
 		E(c, ppc_rlwinm(T_X, v, 0, 2, 31));  /* 0x3FFFFFFF */
@@ -383,6 +391,50 @@ static void emit_mtc0(struct ctx *c, unsigned k)
 		E(c, ppc_stw(T_X, OFF(index), R_CPU));
 		return;
 	}
+}
+
+/* MTC0 a Status (2026-10-16). __osDisableInt y __osRestoreInt solo tocan IE,
+ * y __osDispatchThread pone IM y EXL: en Doom 64, NFL Blitz o Episode I
+ * Racer eran el 80 % de lo que llegaba a C por COP0 (~185 ns cada uno en la
+ * PS3). En línea, como salsa64_cpu_cop0_write: si con KSU = 0 solo cambian
+ * IE, EXL e IM, el modo, allow64 y re_xor no cambian (kernel), la TLB del
+ * recompilador tampoco (ERL igual) y queda por ver la interrupción: si con
+ * el Status nuevo hay una habilitada y pendiente, o cambia otra cosa (FR,
+ * CU1, ERL, KSU…), el intérprete en la sección fría y la revisión de
+ * siempre. El bloque termina después como antes, así un cambio de FR o CU1
+ * lo nota la entrada del siguiente. Sin formas con punto (microcódigo). */
+static void emit_mtc0_status(struct ctx *c, unsigned k)
+{
+	int slow = new_label(c), resume = new_label(c), ok = new_label(c);
+	unsigned v = get(c, I_RT(c->d[k].w), T_S1);
+	E(c, ppc_lis(T_X, (int16_t)0xFF57));
+	E(c, ppc_ori(T_X, T_X, 0xFFFF));
+	E(c, ppc_and(T_X, v, T_X));                  /* el Status nuevo (STATUS_WMASK de cop0.c) */
+	E(c, ppc_lwz(T_Y, OFF(status), R_CPU));
+	E(c, ppc_xor(T_Y, T_Y, T_X));                /* lo que cambia */
+	E(c, ppc_rlwinm(0, T_X, 0, 27, 28));         /* KSU */
+	E(c, ppc_or(T_Y, T_Y, 0));
+	E(c, ppc_lis(0, (int16_t)0xFFFF));
+	E(c, ppc_ori(0, 0, 0x00FC));
+	E(c, ppc_and(T_Y, T_Y, 0));                  /* fuera de IE, EXL e IM, o KSU ≠ 0 */
+	E(c, ppc_cmpwi(CR_T, T_Y, 0));
+	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
+	E(c, ppc_rlwinm(0, T_X, 0, 29, 31));         /* IE, EXL, ERL */
+	E(c, ppc_cmpwi(CR_T, 0, 1));
+	emit_bc(c, PPC_BO_FALSE_LIKELY, PPC_BI(CR_T, PPC_EQ), ok);  /* sin IE, o con EXL: no hay interrupción */
+	E(c, ppc_lwz(T_Y, OFF(cause), R_CPU));
+	E(c, ppc_and(T_Y, T_Y, T_X));
+	E(c, ppc_rlwinm(T_Y, T_Y, 0, 16, 23));       /* IP & IM */
+	E(c, ppc_cmpwi(CR_T, T_Y, 0));
+	emit_bc(c, PPC_BO_FALSE_UNLIKELY, PPC_BI(CR_T, PPC_EQ), slow);
+	bind(c, ok);
+	E(c, ppc_stw(T_X, OFF(status), R_CPU));
+	E(c, ppc_std(v, OFF(cop0_latch), R_CPU));
+	bind(c, resume);
+	emit_slow_exec(c, k, k, slow, resume);
+	writeback(c, c->written);
+	E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)k + 1));
+	emit_exit_to(c, insn_pc(c, k + 1));
 }
 
 /* TLBWI/TLBWR: la escritura y la ktlb de esa entrada en C (rec_h_tlbw: sin

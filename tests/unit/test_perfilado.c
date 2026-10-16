@@ -104,6 +104,49 @@ static void ring_records_round_trip(void)
 	perf_session_close(&s);
 }
 
+static uint8_t ring_big[8192];
+static struct salsa64_rec_trace win_trace;
+static struct salsa64_rec_trace_prev win_prev;
+
+/* La ventana del camino lento: las cuentas como resta, los PCs de la tabla
+ * propia de la ventana y el desglose de COP0 y el MI; una ventana sin nada
+ * lento no repite los PCs de la anterior ni escribe COP0. */
+static void slow_window_records(void)
+{
+	struct salsa64_rec_trace *t = &win_trace;
+	salsa64_rec_trace_init(t);
+	memset(&win_prev, 0, sizeof win_prev);
+	struct perf_ring ring;
+	for (int w = 0; w < 2; w++) {
+		perf_ring_init(&ring, ring_big, sizeof ring_big);
+		if (w == 0) {
+			for (int k = 0; k < 3; k++)
+				salsa64_rec_trace_slow_add(t, SALSA64_RT_SLOW_EXEC_COP0, 10, 0x80042968u);
+			salsa64_rec_trace_cop0_add(t, SALSA64_RT_COP0_MT + 12, 30);
+		}
+		struct salsa64_rec_trace_slow_stats delta;
+		CHECK(perf_put_slow_window(&ring, 5000 * (w + 1), t, &win_prev, &delta));
+		CHECK_EQ(delta.calls[SALSA64_RT_SLOW_EXEC_COP0], w == 0 ? 3u : 0u);
+		const uint8_t *p = ring_big;
+		uint32_t len = 8 + 12 * SALSA64_RT_SLOW_N + 16 * SALSA64_RT_TOP_PC;
+		CHECK_EQ(rd32(p), (uint32_t)PERF_R_SLOW << 24 | len);
+		const uint8_t *cause = p + 12 + 12 * SALSA64_RT_SLOW_EXEC_COP0, *pcs = p + 12 + 12 * SALSA64_RT_SLOW_N;
+		CHECK_EQ(rd32(cause), w == 0 ? 3u : 0u);
+		CHECK_EQ(rd32(pcs), w == 0 ? 0x80042968u : 0u);
+		CHECK_EQ(rd32(pcs + 12), w == 0 ? 3u : 0u);
+		p += 4 + len;
+		if (w == 0) {
+			CHECK_EQ(rd32(p), (uint32_t)PERF_R_COP0 << 24 | 24);
+			CHECK_EQ(rd32(p + 8) >> 16, 1u);
+			CHECK_EQ(rd32(p + 12) >> 16, SALSA64_RT_COP0_MT + 12u);
+			CHECK_EQ(rd32(p + 16), 1u);
+			CHECK_EQ(rd32(p + 24), 30u);
+		} else {
+			CHECK_EQ(ring.head, 4 + len);  /* sin registro COP0 */
+		}
+	}
+}
+
 static void put_file(const char *path, size_t bytes)
 {
 	FILE *f = fopen(path, "wb");
@@ -172,6 +215,7 @@ void t_suite_perfilado(void)
 {
 	RUN(cfg_defaults_and_parse);
 	RUN(ring_records_round_trip);
+	RUN(slow_window_records);
 	RUN(rotation_keeps_newest);
 	RUN(names_cover_all_fields);
 }

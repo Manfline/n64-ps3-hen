@@ -30,7 +30,7 @@ import sys
 MAGIC = b"S64P"
 
 R_CONTEXT, R_NAMES, R_WINDOW, R_STALL, R_BLOCKS, R_EVICT, R_TRACE, R_JR, R_SAMPLES, R_TASKS, R_DUMP, R_END, \
-    R_LOST, R_EVENT, R_SLOW, R_COMPILE, R_FPU = range(1, 18)
+    R_LOST, R_EVENT, R_SLOW, R_COMPILE, R_FPU, R_COP0 = range(1, 19)
 
 CLASSES = ["entrada", "alu", "memoria", "fpu", "saltos", "salida", "otras"]
 SLOW_CAUSES = ["KSEG0", "KSEG1", "TLB hacia RDRAM", "TLB hacia E/S", "excepción TLB", "desalineado",
@@ -63,6 +63,26 @@ def fpu_name(idx):
     if base is None:
         return f"COP1 {fmt} funct {funct:#x}"
     return f"{base}.{fmt}"
+
+
+COP0_REGS = ["Index", "Random", "EntryLo0", "EntryLo1", "Context", "PageMask", "Wired", "7", "BadVAddr", "Count",
+             "EntryHi", "Compare", "Status", "Cause", "EPC", "PRId", "Config", "LLAddr", "WatchLo", "WatchHi",
+             "XContext", "21", "22", "23", "24", "25", "PErr", "CacheErr", "TagLo", "TagHi", "ErrorEPC", "31"]
+COP0_EXTRA = ["TLBR", "TLBWI", "TLBWR", "TLBP", "ERET", "otra COP0"]
+MI_REGS = ["MI_MODE", "MI_VERSION", "MI_INTR", "MI_INTR_MASK"]
+COP0_MI = 134
+
+
+def cop0_name(idx):
+    """Nombre de un índice del desglose de COP0 y el MI (enum salsa64_rt_cop0 de rec_trace.h)."""
+    if idx < 128:
+        return f"{['MFC0', 'MTC0', 'DMFC0', 'DMTC0'][idx >> 5]} {COP0_REGS[idx & 31]}"
+    if idx < COP0_MI:
+        return COP0_EXTRA[idx - 128]
+    k = idx - COP0_MI
+    if k < 8:
+        return f"{MI_REGS[k >> 1]} ({'escritura' if k & 1 else 'lectura'})"
+    return f"cop0 {idx}"
 
 
 COMPILE_REASONS = ["primera compilación", "escritura de CPU", "DMA", "desalojo o vaciado", "retraducción idéntica"]
@@ -111,6 +131,7 @@ class Session:
         self.events = []
         self.slow = []
         self.fpu = None
+        self.cop0 = []
         self.compiles = []
         self.lost = 0
         self.truncated = False
@@ -225,11 +246,23 @@ class Session:
                                "llamadas": calls, "ticks": ticks})
             pcs = []
             for _ in range(np):
-                pc, ticks, calls = struct.unpack_from(">IQI", b, off)
+                # Con signo: hasta que la tabla de la ventana fue propia (sin
+                # restar dos tablas), una entrada reusada daba una resta
+                # negativa que se escribía como un número cerca de 2³².
+                pc, ticks, calls = struct.unpack_from(">IqI", b, off)
                 off += 16
+                if calls >= 1 << 31:
+                    calls -= 1 << 32
                 if pc:
                     pcs.append({"pc": pc, "ticks": ticks, "llamadas": calls})
             self.slow.append({"ms": ms, "causas": causes, "pcs": pcs})
+        elif kind == R_COP0:
+            ms, n, _ = struct.unpack_from(">IHH", b, 0)
+            entries = {}
+            for k in range(n):
+                idx, _p, calls, ticks = struct.unpack_from(">HHIQ", b, 8 + 16 * k)
+                entries[idx] = (calls, ticks)
+            self.cop0.append({"ms": ms, "entradas": entries})
         elif kind == R_FPU:
             ms, n, nr, _ = struct.unpack_from(">IHHI", b, 0)
             fr = [struct.unpack_from(">IQ", b, 12 + 12 * k) for k in range(2)]
@@ -618,10 +651,22 @@ def summary(ses, out, top=15):
                 for e in record["pcs"]:
                     n, t = pcs.get(e["pc"], (0, 0))
                     pcs[e["pc"]] = (n + e["llamadas"], t + e["ticks"])
+            pcs = {pc: (max(n, 0), max(t, 0)) for pc, (n, t) in pcs.items()}
         if pcs:
             p("   PC lento más costoso:")
             for pc, (calls, ticks) in sorted(pcs.items(), key=lambda kv: -kv[1][1])[:top]:
                 p(f"      {pc:08x}  {calls:9d} llamadas  {ticks / 79800:9.2f} ms")
+
+    if ses.cop0:
+        tot = {}
+        for record in ses.cop0:
+            for idx, (n, t) in record["entradas"].items():
+                a, b = tot.get(idx, (0, 0))
+                tot[idx] = (a + n, b + t)
+        p("-- COP0 y MI en el camino lento por instrucción y registro")
+        p("   instrucción                            llamadas       ms")
+        for idx, (calls, ticks) in sorted(tot.items(), key=lambda kv: (-kv[1][1], -kv[1][0])):
+            p(f"   {cop0_name(idx):38s} {calls:9d} {ticks / 79800:9.2f}")
 
     if ses.fpu and ses.fpu["entradas"]:
         ent = ses.fpu["entradas"]

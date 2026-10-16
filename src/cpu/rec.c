@@ -151,10 +151,14 @@ REC_UNUSED static uint64_t rec_h_load(struct salsa64_cpu *cpu, uint64_t va, unsi
 	}
 	if (prof)
 		salsa64_rec_prof_add(prof, mem_cause(cpu, va, ok, pa, false), salsa64_rec_prof_now() - t0);
-	if (trace)
-		salsa64_rec_trace_slow_add(trace, salsa64_rec_trace_mem_class(va, pa, ok, false,
-							 (va & align[kind]) == 0, cpu->rdram_size),
-				  salsa64_rec_trace_now() - tt, (uint32_t)cpu->cur_pc);
+	if (trace) {
+		unsigned cls = salsa64_rec_trace_mem_class(va, pa, ok, false, (va & align[kind]) == 0,
+							   cpu->rdram_size);
+		uint64_t dt = salsa64_rec_trace_now() - tt;
+		salsa64_rec_trace_slow_add(trace, cls, dt, (uint32_t)cpu->cur_pc);
+		if (cls == SALSA64_RT_SLOW_MMIO_MI)
+			salsa64_rec_trace_cop0_add(trace, salsa64_rec_trace_mi_index(pa, false), dt);
+	}
 	return v;
 }
 
@@ -179,10 +183,14 @@ REC_UNUSED static void rec_h_store(struct salsa64_cpu *cpu, uint64_t va, uint64_
 	}
 	if (prof)
 		salsa64_rec_prof_add(prof, mem_cause(cpu, va, ok, pa, true), salsa64_rec_prof_now() - t0);
-	if (trace)
-		salsa64_rec_trace_slow_add(trace, salsa64_rec_trace_mem_class(va, pa, ok, true,
-							 (va & align[kind]) == 0, cpu->rdram_size),
-				  salsa64_rec_trace_now() - tt, (uint32_t)cpu->cur_pc);
+	if (trace) {
+		unsigned cls = salsa64_rec_trace_mem_class(va, pa, ok, true, (va & align[kind]) == 0,
+							   cpu->rdram_size);
+		uint64_t dt = salsa64_rec_trace_now() - tt;
+		salsa64_rec_trace_slow_add(trace, cls, dt, (uint32_t)cpu->cur_pc);
+		if (cls == SALSA64_RT_SLOW_MMIO_MI)
+			salsa64_rec_trace_cop0_add(trace, salsa64_rec_trace_mi_index(pa, true), dt);
+	}
 }
 
 REC_UNUSED static void rec_h_exec(struct salsa64_cpu *cpu, uint32_t instr)
@@ -211,7 +219,18 @@ REC_UNUSED static void rec_h_exec(struct salsa64_cpu *cpu, uint32_t instr)
 		salsa64_rec_trace_slow_add(trace, salsa64_rec_trace_exec_class(instr), dt, (uint32_t)cpu->cur_pc);
 		if (I_OP(instr) == 0x11)
 			salsa64_rec_trace_fpu_add(trace, instr, fcr0, st0, dt);
+		else if (I_OP(instr) == 0x10)
+			salsa64_rec_trace_cop0_add(trace, salsa64_rec_trace_cop0_index(instr), dt);
 	}
+}
+
+/* Perfilado: TLBWI/TLBWR y ERET con su rutina propia también cuentan como
+ * COP0 en el camino lento. */
+static void trace_cop0(struct salsa64_rec_trace *trace, unsigned k, uint64_t tt, uint64_t pc)
+{
+	uint64_t dt = salsa64_rec_trace_now() - tt;
+	salsa64_rec_trace_slow_add(trace, SALSA64_RT_SLOW_EXEC_COP0, dt, (uint32_t)pc);
+	salsa64_rec_trace_cop0_add(trace, k, dt);
 }
 
 /* TLBWI/TLBWR desde el código generado (rec_emit_ext.h, emit_tlbw): la
@@ -222,11 +241,14 @@ REC_UNUSED static void rec_h_tlbw(struct salsa64_cpu *cpu, uint32_t instr)
 {
 	struct salsa64_rec *rec = cpu->rec;
 	struct salsa64_rec_prof *prof = rec->prof;
+	uint64_t tt = rec->trace ? salsa64_rec_trace_now() : 0;
 	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0;
 	rec->stats.exec_calls++;
 	salsa64_rec_x_tlb_written(rec, salsa64_vr4300_tlbw(cpu, I_FUNCT(instr) == 0x06));
 	if (prof)
 		salsa64_rec_prof_add(prof, SALSA64_PROF_EXEC_COP0, salsa64_rec_prof_now() - t0);
+	if (rec->trace)
+		trace_cop0(rec->trace, salsa64_rec_trace_cop0_index(instr), tt, cpu->cur_pc);
 }
 
 /* ERET desde el código generado (emit_eret): lo que hace el intérprete sin
@@ -238,13 +260,16 @@ REC_UNUSED static uint64_t rec_h_eret(struct salsa64_cpu *cpu)
 {
 	struct salsa64_rec *rec = cpu->rec;
 	struct salsa64_rec_prof *prof = rec->prof;
-	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0;
+	uint64_t tt = rec->trace ? salsa64_rec_trace_now() : 0;
+	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0, pc = cpu->cur_pc;
 	rec->stats.exec_calls++;
 	salsa64_vr4300_eret(cpu);
 	cpu->redirect = 0;
 	salsa64_rec_x_sync(rec);
 	if (prof)
 		salsa64_rec_prof_add(prof, SALSA64_PROF_EXEC_COP0, salsa64_rec_prof_now() - t0);
+	if (rec->trace)
+		trace_cop0(rec->trace, SALSA64_RT_COP0_ERET, tt, pc);
 	return cpu->pc;
 }
 
@@ -1314,6 +1339,7 @@ static unsigned new_block(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, uns
 		rec->trace->cur.reason = (uint8_t)reason;
 	}
 	rec->fr = rec->cpu->status & SALSA64_ST_FR;
+	bool cu1_off = !(rec->cpu->status & SALSA64_ST_CU1);  /* salsa64_rec_compile corta antes de COP1 */
 	rec->compiled_fr_dep = false;
 	rec->placed_hot = false;
 	rec->hits[id] = 0;
@@ -1330,7 +1356,8 @@ static unsigned new_block(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, uns
 	b->n = (uint8_t)n;
 	b->bytes = (uint16_t)(code ? bytes : 4);
 	b->links = 0;
-	b->fr = (uint8_t)((rec->fr ? SALSA64_REC_FR_SET : 0) | (code && rec->compiled_fr_dep ? SALSA64_REC_FR_DEP : 0));
+	b->fr = (uint8_t)((rec->fr ? SALSA64_REC_FR_SET : 0) | (code && rec->compiled_fr_dep ? SALSA64_REC_FR_DEP : 0) |
+			  (cu1_off ? SALSA64_REC_CU1_OFF : 0));
 	rec->twin[id] = 0;
 	if (seg == SALSA64_REC_KSEG0)
 		rec->map[pa >> 2] = (uint16_t)id;
@@ -1482,6 +1509,32 @@ static void rec_interp(struct salsa64_rec *rec, bool to_boundary, unsigned why)
 	}
 }
 
+/* El bloque de `pc` salió en la entrada con CU1 = 0 (exit_start o exit_fr)
+ * cabiendo antes del evento, o sea por la revisión de CU1: si se compiló con
+ * CU1 = 1, se mata (con su gemelo de FR) para que el despachador lo compile
+ * cortado antes de su primer COP1 (SALSA64_REC_CU1_OFF). Uno ya cortado
+ * empieza con COP1: que el intérprete lance la excepción. */
+static bool cu1_recut(struct salsa64_rec *rec, uint64_t pc)
+{
+	struct salsa64_cpu *cpu = rec->cpu;
+	if ((cpu->status & SALSA64_ST_CU1) || SALSA64_REC_OLD(rec, SALSA64_REC_DBG_NO_CU1_CUT))
+		return false;
+	uint32_t pa = 0;
+	unsigned seg = salsa64_rec_seg(rec, pc, &pa);
+	if (seg == SALSA64_REC_SEG_NONE)
+		return false;
+	unsigned id = seg == SALSA64_REC_KSEG0 ? rec->map[pa >> 2] : salsa64_rec_x_find(rec, pc, pa);
+	const struct salsa64_rec_block *b = &rec->blocks[id];
+	if (!id || !b->code || (b->fr & SALSA64_REC_CU1_OFF) || cpu->cycles + b->n > cpu->sched->next)
+		return false;
+	unsigned twin = seg == SALSA64_REC_KSEG0 ? rec->twin[id] : 0;
+	kill_block(rec, id);
+	if (twin && !(rec->blocks[twin].fr & SALSA64_REC_CU1_OFF))
+		kill_block(rec, twin);
+	rec->stats.cu1_cuts++;
+	return true;
+}
+
 /* El código salió en un salto tomado hacia atrás y corto (EXIT_IDLE): lo
  * mismo que hace el intérprete en idle_hint, con el mismo estado (registros
  * en memoria, cycles con el salto contado, el delay slot por delante). */
@@ -1498,7 +1551,7 @@ static void rec_idle_exit(struct salsa64_rec *rec, uint64_t bpc)
 	cpu->cur_pc = bpc;
 	salsa64_vr4300_idle(cpu, bpc, target, i);
 	cpu->redirect = 0;  /* si saltó tiempo: pc, next_pc, branch y cycles ya están */
-	if (cpu->idle_reject[(bpc >> 2) & (SALSA64_IDLE_CACHE - 1)] != ((uint32_t)bpc ^ i))
+	if (cpu->idle_reject[SALSA64_IDLE_SLOT(bpc)] != ((uint32_t)bpc ^ i))
 		return;
 	/* Recompilar sin la consulta. */
 	if ((bpc >> 29) == 0x7FFFFFFFCull)
@@ -1659,6 +1712,8 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 				 * la entrada, p. ej. con COP1 inusable): una instrucción. */
 				to_boundary = !rec->strict || cpu->cycles == cycles;
 				from_start = cpu->rec_kind == SALSA64_REC_EXIT_START;
+				if (from_start && cu1_recut(rec, next))
+					to_boundary = from_start = false;
 			} else if (cpu->rec_kind == SALSA64_REC_EXIT_FR) {
 				/* Status.FR ya no es el de la compilación del bloque al que
 				 * se llegó: el despachador busca o compila su gemelo. Con
@@ -1668,8 +1723,10 @@ void salsa64_rec_run(struct salsa64_rec *rec)
 					rec->stats.fr_exits++;
 				} else {
 					rec->stats.cu1_exits++;
-					to_boundary = !rec->strict || cpu->cycles == cycles;
-					from_start = true;
+					if (!cu1_recut(rec, next)) {
+						to_boundary = !rec->strict || cpu->cycles == cycles;
+						from_start = true;
+					}
 				}
 			}
 		}
