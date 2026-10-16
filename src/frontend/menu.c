@@ -1155,10 +1155,10 @@ static void draw_row(const struct row *r, float d, float x, float W, float H, fl
 	float scale = 2.0f + 0.85f * k, tx = x + 90.0f;
 	if (r->value) {
 		/* Título y valor caben en la columna: si no, se achica la letra
-		 * antes de cortar el título (hasta 1,6). */
+		 * antes de cortar el título (hasta 1,4). */
 		float need = cells_w(r->title, 1.0f) + cells_w(r->value, 1.0f), avail = W * 0.53f - tx - 24.0f;
 		if (need > 0.0f && need * scale > avail)
-			scale = fmaxf(1.6f, avail / need);
+			scale = fmaxf(1.4f, avail / need);
 	}
 	float th = RSXKIT_FONT_H * scale, ty = y - th * 0.5f - 10.0f * k;
 	float room = W * 0.53f - tx;
@@ -1732,9 +1732,9 @@ static void options_column(const struct menu *m, float x, float W, float H, floa
 	struct row fps = { "Mostrar FPS", "Velocidad en una esquina del juego", 2, "#", 0, m->set.fps ? "Sí" : "No" };
 	struct row confirm = { "Confirmar al salir", "START + SELECT pregunta antes", 2, "?", 0,
 			       m->set.confirm ? "Sí" : "No" };
-	struct row order = { "Orden de la lista", "Título de cabecera o nombre de archivo", 2, "↕", 0,
+	struct row order = { "Orden de la lista", "Título de cabecera o nombre de archivo", 2, "↑", 0,
 			     m->set.rom_order == MENU_ROM_ORDER_FILENAME ? tr("Nombre de archivo") : tr("Título de cabecera") };
-	struct row refresh = { "Actualizar lista", "Volver a leer las carpetas de ROMs", 2, "↻", 0, NULL };
+	struct row refresh = { "Actualizar lista", "Volver a leer las carpetas de ROMs", 2, "○", 0, NULL };
 	struct row controls = { "Controles", "Botones del control de N64", 2, "●", 0, NULL };
 	struct row back = { "Volver", "A la lista de juegos", 2, "◀", 0, NULL };
 	draw_row(&waves, MENU_OPT_WAVES - m->opt_pos, x, W, H, a);
