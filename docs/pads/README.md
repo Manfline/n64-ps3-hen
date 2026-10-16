@@ -63,3 +63,11 @@ estado vale hasta el siguiente, por eso cada pulsación lleva su suelta `-`):
 
 Las escenas del host (7 juegos, Kirby 64 y la casa de Link de
 `zelda-casa-nueva.pad`) se corren y comparan con `tools/escenas-host.sh`.
+- `mk64-ghost.pad`: Mario Kart 64 en Time Trials (Mario, Luigi Raceway):
+  menús hasta la carrera, tres vueltas conducidas con el stick (5:32 en
+  total, buscadas campo a campo sobre estados guardados), y el menú de
+  resultados hasta «SAVE GHOST» y su primera ranura (campo ~28000). Con
+  `--save-dir DIR` (partida y Controller Pak nuevos) el juego crea su archivo
+  de datos de 121 páginas en el pak y guarda el fantasma: `DIR/…mpk` sale
+  con 43 bloques cambiados. Hace falta `--fields 28300`; el camino depende
+  de que no haya otros controles conectados.
