@@ -100,7 +100,8 @@ vrc=$?
 printf '%-12s %s\n' vitest "$(grep 'vitest: OK\|vitest: FALLO' "$VLOG" | tail -1)"
 grep '^salsa64-run:.*ciclos' "$VLOG" | tail -1 | sed 's/^/             /'
 [ $vrc -eq 0 ] || { echo "             falló (código $vrc, $VLOG)"; fail=1; }
-pads='vitest: controles: 1=0x0500/0x02 2=no 3=no 4=no'
+# 0x01: el control 1 lleva el Controller Pak (el accesorio por omisión).
+pads='vitest: controles: 1=0x0500/0x01 2=no 3=no 4=no'
 pad1='vitest: control 1: botones 0x0000 x 0 y 0'
 if grep -q "^$pads\$" "$VLOG" && grep -q "^$pad1\$" "$VLOG"; then
 	printf '%-12s %s\n' controles "$pads; $pad1"

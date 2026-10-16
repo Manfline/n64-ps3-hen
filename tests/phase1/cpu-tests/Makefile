@@ -11,7 +11,7 @@ COMMON  := src/platform/ps3/log.c src/platform/ps3/rec_cache.c \
            src/rdp/vmatch.c src/rdp/gfxdump.c src/rdp/blackbox.c \
            src/host/raster.c \
            src/frontend/romlist.c src/frontend/menu.c src/frontend/osd_fps.c src/frontend/pausectl.c src/frontend/cheats.c src/frontend/cover.c src/frontend/namematch.c src/frontend/dlutil.c src/frontend/i18n.c lib/rsxkit/src/text.c lib/rsxkit/src/ui_geom.c \
-           src/frontend/filters/crt_params.c src/frontend/version.c \
+           src/frontend/filters/crt_params.c src/frontend/version.c src/frontend/mempakfile.c src/frontend/perfilado.c \
            $(filter-out tests/unit/main_host.c,$(patsubst $(R)/%,%,$(wildcard $(R)/tests/unit/*.c))) \
            lib/rsxkit/src/fpgen.c
 # lib/rsxkit/src/fpgen.c (codificador de fragment programs, sin PSL1GHT) se
