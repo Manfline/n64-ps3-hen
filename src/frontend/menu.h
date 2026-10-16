@@ -178,7 +178,7 @@ struct menu {
 	int game_sel;
 	int game_rom;          /* la ROM de esa página (índice en la lista) */
 	float game_pos, game_t;
-	float control_t;
+	float control_t, control_pos;  /* control_pos sigue a control_sel con suavizado */
 	int dl_what;           /* con MENU_DOWNLOAD: 0 carátulas, 1 trucos */
 	bool dl_enabled;       /* filas «Descargar …» (experimental: download.h, dl_enabled) */
 	/* Carátula de la ROM cover_rom, ya subida a la ranura 0 de rsxkit_ui por

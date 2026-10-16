@@ -659,6 +659,7 @@ void menu_controls_open(struct menu *m, bool for_game)
 		m->controls_return_page = m->page;
 	m->control_for_game = for_game;
 	m->control_sel = 0;
+	m->control_pos = 0.0f;
 	m->control_capture = false;
 	m->controls = m->global_controls;
 	if (for_game)
@@ -1369,7 +1370,7 @@ static void controls_column(const struct menu *m, float x, float W, float H, flo
 		bool n64 = i < SALSA64_IN_COUNT || i == MENU_CONTROL_STICK;
 		struct row r = { tr(control_row_title(i)), NULL, n64 ? 3 : 2, i == MENU_CONTROL_BACK ? "◀" : "●",
 				 n64 ? (uint32_t)i : 0, control_button_value(m, i) };
-		draw_row(&r, (float)i - (float)m->control_sel, x, W, H, a);
+		draw_row(&r, (float)i - m->control_pos, x, W, H, a);
 	}
 }
 
@@ -1776,6 +1777,7 @@ void menu_frame(struct menu *m, float lw, float lh, uint64_t now_us)
 	ease(&m->cht_t, m->page == MENU_PAGE_CHEATS ? 1.0f : 0.0f, dt, 10.0f);
 	ease(&m->game_pos, (float)game_row(m, m->game_sel), dt, 14.0f);
 	ease(&m->game_t, m->page == MENU_PAGE_GAME ? 1.0f : 0.0f, dt, 10.0f);
+	ease(&m->control_pos, (float)m->control_sel, dt, 14.0f);
 	ease(&m->control_t, m->page == MENU_PAGE_CONTROLS ? 1.0f : 0.0f, dt, 10.0f);
 	ease(&m->cover_t, m->cover_rom >= 0 && m->cover_rom == menu_selected(m) && m->cover_w ? 1.0f : 0.0f, dt, 10.0f);
 	m->intro = clampf(m->intro + dt / 0.45f, 0.0f, 1.0f);
