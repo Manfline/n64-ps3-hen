@@ -1079,8 +1079,8 @@ static void executed_rounding_edges_match_full(void)
 
 /* MUL.S (y MUL.D, ADD, SUB, DIV de control) con exponentes en los bordes de
  * lo que el camino nativo admite: cero, mínimo normal, el borde del
- * subdesbordamiento (suma de exponentes 127 y 128), el del desbordamiento
- * (381 y 382), el máximo, infinito y NaN; mantisas que suben el exponente
+ * subdesbordamiento (suma de exponentes sesgados 127 y 128), el del desbordamiento
+ * (379 y 380), el máximo, infinito y NaN; mantisas que suben el exponente
  * del producto o del redondeo. Con las habilitaciones V, Z, O y U. */
 static void executed_mul_edges_match_full(void)
 {
