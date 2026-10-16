@@ -718,9 +718,6 @@ static enum menu_action controls_buttons(struct menu *m, uint32_t pressed)
 		if (m->control_for_game) m->game.controls.stick_source = m->controls.stick_source;
 		else m->global_controls = m->controls;
 		return MENU_CONTROLS_CHANGED;
-	} else if (m->control_sel == MENU_CONTROL_SCOPE) {
-		if (m->game_rom >= 0 && m->game_rom < (int)m->list->count)
-			menu_controls_open(m, !m->control_for_game);
 	} else if (m->control_sel == MENU_CONTROL_RESET) {
 		if (m->control_for_game) {
 			salsa64_padmap_inherit(&m->game.controls);
@@ -1349,7 +1346,7 @@ static const char *control_row_title(int row)
 {
 	static const char *const n[] = { "A", "B", "Z", "Start", "L", "R", "Cruceta arriba", "Cruceta abajo",
 		"Cruceta izquierda", "Cruceta derecha", "C arriba", "C abajo", "C izquierda", "C derecha",
-		"Aplicar a", "Stick", "Restaurar predeterminado", "Volver" };
+		"Stick", "Restaurar predeterminado", "Volver" };
 	return row >= 0 && row < MENU_CONTROL_ROWS ? n[row] : "";
 }
 
@@ -1363,8 +1360,6 @@ static const char *control_button_value(const struct menu *m, int row)
 	}
 	if (row == MENU_CONTROL_STICK)
 		return tr(m->controls.stick_source == SALSA64_STICK_RIGHT ? "Stick derecho" : "Stick izquierdo");
-	if (row == MENU_CONTROL_SCOPE)
-		return tr(m->control_for_game ? "Este juego" : "Todos los juegos");
 	return NULL;
 }
 
@@ -1471,7 +1466,11 @@ static void panel(const struct menu *m, float W, float H, float a)
 		float x = px + 26.0f, y = py + 24.0f;
 		uint32_t tmax = (uint32_t)((pw - 48.0f) / (RSXKIT_FONT_W * 2.0f));
 		stext(x, y, tr("Controles"), 2.0f, 0xFFFFFFu, a, tmax);
-		y += 58.0f;
+		/* Desde Opciones se cambia el mapeo de todos los juegos; desde los
+		 * ajustes de una ROM (SELECT), solo el de ese juego. */
+		stext(x, y + 30.0f, tr(m->control_for_game ? "Este juego" : "Todos los juegos"), 1.35f, C_ACCENT, a,
+		      (uint32_t)((pw - 52.0f) / (RSXKIT_FONT_W * 1.35f)));
+		y += 78.0f;
 #define PANEL_MAX(sc) ((uint32_t)((pw - 52.0f) / (RSXKIT_FONT_W * (sc))))
 		stext(x, y, tr(control_row_title(m->control_sel)), 1.6f, C_DIM, a, PANEL_MAX(1.6f));
 		stext(x, y + 30.0f, control_button_value(m, m->control_sel), 2.0f, C_ACCENT, a, PANEL_MAX(2.0f));

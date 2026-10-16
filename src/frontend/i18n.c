@@ -91,7 +91,6 @@ static const struct entry table[] = {
 	  { "Applied: %ux%u, scale %u×", "Appliqué : %ux%u, échelle %u×", "Angewendet: %ux%u, Skalierung %u×", "Applicato: %ux%u, scala %u×", "Aplicado: %ux%u, escala %u×" } },
 	{ "Aplicando filtro…",
 	  { "Applying filter…", "Application du filtre…", "Filter wird angewendet…", "Applicazione del filtro…", "Aplicando filtro…" } },
-	{ "Aplicar a", { "Apply to", "Appliquer à", "Anwenden auf", "Applica a", "Aplicar a" } },
 	{ "Aplicar ahora",
 	  { "Apply now", "Appliquer", "Jetzt anwenden", "Applica ora", "Aplicar agora" } },
 	{ "Apágalas para un fondo fijo.",
