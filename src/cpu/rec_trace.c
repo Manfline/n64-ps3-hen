@@ -23,6 +23,148 @@ void salsa64_rec_trace_init(struct salsa64_rec_trace *t)
 	t->ctx = ctx;
 }
 
+unsigned salsa64_rec_trace_mem_class(uint64_t va, uint32_t pa, bool ok, bool store, bool aligned,
+				     uint32_t rdram_size)
+{
+	if (!aligned)
+		return SALSA64_RT_SLOW_MISALIGNED;
+	if (!ok)
+		return SALSA64_RT_SLOW_TLB_EXCEPTION;
+	if (pa >= rdram_size) {
+		if (pa >= 0x04000000u && pa < 0x04002000u) return SALSA64_RT_SLOW_MMIO_SP;
+		if (pa >= 0x04100000u && pa < 0x04200000u) return SALSA64_RT_SLOW_MMIO_DP;
+		if (pa >= 0x04300000u && pa < 0x04400000u) return SALSA64_RT_SLOW_MMIO_MI;
+		if (pa >= 0x04400000u && pa < 0x04500000u) return SALSA64_RT_SLOW_MMIO_VI;
+		if (pa >= 0x04500000u && pa < 0x04600000u) return SALSA64_RT_SLOW_MMIO_AI;
+		if (pa >= 0x04600000u && pa < 0x04700000u) return SALSA64_RT_SLOW_MMIO_PI;
+		if (pa >= 0x04700000u && pa < 0x04800000u) return SALSA64_RT_SLOW_MMIO_RI;
+		if (pa >= 0x04800000u && pa < 0x04900000u) return SALSA64_RT_SLOW_MMIO_SI;
+		if (pa >= 0x1FC00000u && pa < 0x1FC00800u) return SALSA64_RT_SLOW_MMIO_PIF;
+		if (pa >= 0x10000000u) return SALSA64_RT_SLOW_MMIO_CART;
+		return SALSA64_RT_SLOW_TLB_IO;
+	}
+	uint32_t a = (uint32_t)va;
+	if ((int64_t)va == (int32_t)va && a >= 0x80000000u && a < 0xA0000000u)
+		return SALSA64_RT_SLOW_KSEG0;
+	if ((int64_t)va == (int32_t)va && a >= 0xA0000000u && a < 0xC0000000u)
+		return SALSA64_RT_SLOW_KSEG1;
+	if (store && pa < rdram_size)
+		return SALSA64_RT_SLOW_CODE_STORE;
+	return SALSA64_RT_SLOW_TLB_RDRAM;
+}
+
+unsigned salsa64_rec_trace_exec_class(uint32_t i)
+{
+	switch (I_OP(i)) {
+	case 0x00: return I_FUNCT(i) >= 0x30 && I_FUNCT(i) <= 0x36 ? SALSA64_RT_SLOW_EXEC_TRAP : SALSA64_RT_SLOW_EXEC_OTHER;
+	case 0x01: return I_RT(i) >= 0x08 && I_RT(i) <= 0x0E ? SALSA64_RT_SLOW_EXEC_TRAP : SALSA64_RT_SLOW_EXEC_OTHER;
+	case 0x10: return SALSA64_RT_SLOW_EXEC_COP0;
+	case 0x11: return SALSA64_RT_SLOW_EXEC_FPU;
+	case 0x2F: return SALSA64_RT_SLOW_EXEC_CACHE;
+	case 0x30: case 0x34: case 0x38: case 0x3C: return SALSA64_RT_SLOW_EXEC_LLSC;
+	default: return SALSA64_RT_SLOW_EXEC_OTHER;
+	}
+}
+
+unsigned salsa64_rec_trace_exception_class(unsigned e)
+{
+	switch (e) {
+	case 0: return SALSA64_RT_SLOW_EXC_INT;
+	case 1: return SALSA64_RT_SLOW_EXC_MOD;
+	case 2: return SALSA64_RT_SLOW_EXC_TLBL;
+	case 3: return SALSA64_RT_SLOW_EXC_TLBS;
+	case 4: return SALSA64_RT_SLOW_EXC_ADEL;
+	case 5: return SALSA64_RT_SLOW_EXC_ADES;
+	case 6: return SALSA64_RT_SLOW_EXC_IBE;
+	case 7: return SALSA64_RT_SLOW_EXC_DBE;
+	case 8: return SALSA64_RT_SLOW_EXC_SYS;
+	case 9: return SALSA64_RT_SLOW_EXC_BP;
+	case 10: return SALSA64_RT_SLOW_EXC_RI;
+	case 11: return SALSA64_RT_SLOW_EXC_CPU;
+	case 12: return SALSA64_RT_SLOW_EXC_OV;
+	case 13: return SALSA64_RT_SLOW_EXC_TR;
+	case 15: return SALSA64_RT_SLOW_EXC_FPE;
+	case 23: return SALSA64_RT_SLOW_EXC_WATCH;
+	default: return SALSA64_RT_SLOW_EXCEPTION;
+	}
+}
+
+unsigned salsa64_rec_trace_fpu_index(uint32_t i)
+{
+	switch (I_FMT(i)) {
+	case 16: return 0 * 64 + I_FUNCT(i);
+	case 17: return 1 * 64 + I_FUNCT(i);
+	case 20: return 2 * 64 + I_FUNCT(i);
+	case 21: return 3 * 64 + I_FUNCT(i);
+	case 0: return SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_MFC1;
+	case 1: return SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_DMFC1;
+	case 2: return SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_CFC1;
+	case 4: return SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_MTC1;
+	case 5: return SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_DMTC1;
+	case 6: return SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_CTC1;
+	case 8: return SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_BC1;
+	default: return SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_OTHER;
+	}
+}
+
+unsigned salsa64_rec_trace_fpu_reason(uint32_t fcr31)
+{
+	if (fcr31 & 3u)
+		return SALSA64_RT_FPU_R_RM;
+	if (fcr31 & 0x80u)
+		return SALSA64_RT_FPU_R_INEXACT;
+	if (fcr31 & 0xF00u)
+		return SALSA64_RT_FPU_R_ENABLED;
+	return SALSA64_RT_FPU_R_RESULT;
+}
+
+void salsa64_rec_trace_fpu_add(struct salsa64_rec_trace *t, uint32_t instr, uint32_t fcr31, uint32_t status,
+			       uint64_t ticks)
+{
+	unsigned k = salsa64_rec_trace_fpu_index(instr), fr = (status & SALSA64_ST_FR) != 0;
+	t->fpu.ticks[k] += ticks;
+	t->fpu.calls[k][salsa64_rec_trace_fpu_reason(fcr31)]++;
+	t->fpu.fr_calls[fr]++;
+	t->fpu.fr_ticks[fr] += ticks;
+}
+
+void salsa64_rec_trace_slow_add(struct salsa64_rec_trace *t, unsigned cause, uint64_t ticks, uint32_t pc)
+{
+	if (!t || cause >= SALSA64_RT_SLOW_N)
+		return;
+	t->slow.ticks[cause] += ticks;
+	t->slow.calls[cause]++;
+	t->slow_field.ticks[cause] += ticks;
+	t->slow_field.calls[cause]++;
+	if (!pc)
+		return;
+	/* Space-Saving: con la tabla llena, el PC nuevo ocupa la entrada con
+	 * menos ticks y hereda sus ticks y llamadas (cotas superiores). */
+	unsigned slot = SALSA64_RT_TOP_PC, min = 0;
+	for (unsigned k = 0; k < SALSA64_RT_TOP_PC; k++) {
+		if (t->slow.top[k].pc == pc || !t->slow.top[k].pc) { slot = k; break; }
+		if (t->slow.top[k].ticks < t->slow.top[min].ticks)
+			min = k;
+	}
+	if (slot == SALSA64_RT_TOP_PC)
+		slot = min;
+	t->slow.top[slot].pc = pc;
+	t->slow.top[slot].ticks += ticks;
+	t->slow.top[slot].calls++;
+}
+
+void salsa64_rec_trace_invalidate(struct salsa64_rec_trace *t, unsigned reason, uint32_t pa, uint32_t len,
+				  uint32_t killed)
+{
+	if (!t || reason > SALSA64_RT_COMPILE_DMA || !len || !killed)
+		return;
+	struct salsa64_rec_trace_inval *e = &t->inval[t->inval_next++ % 32];
+	e->lo = pa > 256u ? pa - 256u : 0;
+	e->hi = pa + len;
+	e->remaining = killed;
+	e->reason = (uint8_t)reason;
+}
+
 void salsa64_rec_trace_arm(struct salsa64_rec *rec)
 {
 	struct salsa64_rec_trace *t = rec->trace;
@@ -125,7 +267,15 @@ void salsa64_rec_trace_compiled(struct salsa64_rec *rec, unsigned id, uint64_t p
 		b->flags |= SALSA64_RT_F_RETRANS;
 		t->retrans++;
 		t->field.retrans++;
+		b->reason = SALSA64_RT_COMPILE_RETRANS;
 	}
+	unsigned reason = b->reason < SALSA64_RT_COMPILE_N ? b->reason : SALSA64_RT_COMPILE_NEW;
+	t->compiles.calls[reason]++;
+	t->compiles.words[reason] += (uint32_t)b->hot + b->cold;
+	t->compiles.ticks[reason] += ticks;
+	t->compiles_field.calls[reason]++;
+	t->compiles_field.words[reason] += (uint32_t)b->hot + b->cold;
+	t->compiles_field.ticks[reason] += ticks;
 	if (id < SALSA64_RT_IDS) {
 		t->end[id] = b->end;
 		t->nbr[id] = b->nbr;

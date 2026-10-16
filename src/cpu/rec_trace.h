@@ -46,6 +46,79 @@ struct salsa64_rec;
 #define SALSA64_RT_SEEN      131072u  /* huellas de bloques ya compilados (retraducciones) */
 #define SALSA64_RT_JR_SITES  16384u   /* JR por dirección (plegados) */
 
+/* Causas contadas solo cuando la sesión activa llama a una rutina lenta. */
+enum salsa64_rt_slow {
+	SALSA64_RT_SLOW_KSEG0, SALSA64_RT_SLOW_KSEG1,
+	SALSA64_RT_SLOW_TLB_RDRAM, SALSA64_RT_SLOW_TLB_IO,
+	SALSA64_RT_SLOW_TLB_EXCEPTION, SALSA64_RT_SLOW_MISALIGNED,
+	SALSA64_RT_SLOW_MMIO_SP, SALSA64_RT_SLOW_MMIO_DP, SALSA64_RT_SLOW_MMIO_MI,
+	SALSA64_RT_SLOW_MMIO_VI, SALSA64_RT_SLOW_MMIO_AI, SALSA64_RT_SLOW_MMIO_PI,
+	SALSA64_RT_SLOW_MMIO_RI, SALSA64_RT_SLOW_MMIO_SI, SALSA64_RT_SLOW_MMIO_PIF,
+	SALSA64_RT_SLOW_MMIO_CART, SALSA64_RT_SLOW_CODE_STORE,
+	SALSA64_RT_SLOW_EXEC_COP0, SALSA64_RT_SLOW_EXEC_FPU, SALSA64_RT_SLOW_EXEC_CACHE,
+	SALSA64_RT_SLOW_EXEC_LLSC, SALSA64_RT_SLOW_EXEC_TRAP, SALSA64_RT_SLOW_EXEC_OTHER,
+	SALSA64_RT_SLOW_EXCEPTION,
+	SALSA64_RT_SLOW_EXC_INT, SALSA64_RT_SLOW_EXC_MOD, SALSA64_RT_SLOW_EXC_TLBL,
+	SALSA64_RT_SLOW_EXC_TLBS, SALSA64_RT_SLOW_EXC_ADEL, SALSA64_RT_SLOW_EXC_ADES,
+	SALSA64_RT_SLOW_EXC_IBE, SALSA64_RT_SLOW_EXC_DBE, SALSA64_RT_SLOW_EXC_SYS,
+	SALSA64_RT_SLOW_EXC_BP, SALSA64_RT_SLOW_EXC_RI, SALSA64_RT_SLOW_EXC_CPU,
+	SALSA64_RT_SLOW_EXC_OV, SALSA64_RT_SLOW_EXC_TR, SALSA64_RT_SLOW_EXC_FPE,
+	SALSA64_RT_SLOW_EXC_WATCH, SALSA64_RT_SLOW_N
+};
+
+#define SALSA64_RT_TOP_PC 16u
+struct salsa64_rec_trace_slow_pc { uint32_t pc; uint64_t ticks; uint32_t calls; };
+struct salsa64_rec_trace_slow_stats {
+	uint64_t ticks[SALSA64_RT_SLOW_N];
+	uint32_t calls[SALSA64_RT_SLOW_N];
+	struct salsa64_rec_trace_slow_pc top[SALSA64_RT_TOP_PC];
+};
+
+/* Desglose de las instrucciones de COP1 que caen al intérprete: por (fmt,
+ * funct) para S, D, W y L, más las que no son aritméticas, y la razón según
+ * FCR31 antes de ejecutarla. Preasignado y acotado. */
+enum salsa64_rt_fpu_reason {
+	SALSA64_RT_FPU_R_RM,      /* modo de redondeo distinto de cero */
+	SALSA64_RT_FPU_R_INEXACT, /* causa I (inexacto) habilitada */
+	SALSA64_RT_FPU_R_ENABLED, /* otra excepción habilitada en FCR31 */
+	SALSA64_RT_FPU_R_RESULT,  /* el resto: resultado o instrucción que el nativo no cubre */
+	SALSA64_RT_FPU_R_N
+};
+enum salsa64_rt_fpu_extra {
+	SALSA64_RT_FPU_MFC1, SALSA64_RT_FPU_DMFC1, SALSA64_RT_FPU_CFC1, SALSA64_RT_FPU_MTC1,
+	SALSA64_RT_FPU_DMTC1, SALSA64_RT_FPU_CTC1, SALSA64_RT_FPU_BC1, SALSA64_RT_FPU_OTHER,
+	SALSA64_RT_FPU_EXTRA_N
+};
+#define SALSA64_RT_FPU_ARITH   256u   /* 4 formatos (S, D, W, L) × 64 funct */
+#define SALSA64_RT_FPU_N       (SALSA64_RT_FPU_ARITH + SALSA64_RT_FPU_EXTRA_N)
+struct salsa64_rec_trace_fpu {
+	uint64_t ticks[SALSA64_RT_FPU_N];
+	uint32_t calls[SALSA64_RT_FPU_N][SALSA64_RT_FPU_R_N];
+	uint32_t fr_calls[2];     /* con Status.FR = 0 y 1 */
+	uint64_t fr_ticks[2];
+};
+
+enum salsa64_rt_compile_reason {
+	SALSA64_RT_COMPILE_NEW, SALSA64_RT_COMPILE_CPU_WRITE, SALSA64_RT_COMPILE_DMA,
+	SALSA64_RT_COMPILE_EVICT, SALSA64_RT_COMPILE_RETRANS, SALSA64_RT_COMPILE_N
+};
+struct salsa64_rec_trace_compile_stats {
+	uint64_t ticks[SALSA64_RT_COMPILE_N];
+	uint32_t calls[SALSA64_RT_COMPILE_N], words[SALSA64_RT_COMPILE_N];
+	uint32_t max_field_compiles, max_field;
+};
+struct salsa64_rec_trace_inval { uint32_t lo, hi, remaining; uint8_t reason; };
+
+/* Dirección virtual y opcodes: funciones puras para el lector y las pruebas. */
+unsigned salsa64_rec_trace_mem_class(uint64_t va, uint32_t pa, bool ok, bool store, bool aligned,
+				     uint32_t rdram_size);
+unsigned salsa64_rec_trace_exec_class(uint32_t instr);
+unsigned salsa64_rec_trace_exception_class(unsigned exception);
+/* Índice en salsa64_rec_trace_fpu (arit.: fmt*64 + funct, fmt 0..3 = S, D, W,
+ * L; después, 256 + salsa64_rt_fpu_extra) y razón según FCR31 previo. */
+unsigned salsa64_rec_trace_fpu_index(uint32_t instr);
+unsigned salsa64_rec_trace_fpu_reason(uint32_t fcr31);
+
 /* Clases de palabras emitidas. */
 enum salsa64_rt_class {
 	SALSA64_RT_C_ENTRY,   /* entrada: ¿cabe?, COP1, recarga de registros */
@@ -89,6 +162,7 @@ struct salsa64_rec_trace_block {
 	uint8_t end;          /* enum salsa64_rt_end | SALSA64_RT_END_LOOP */
 	uint8_t seg;          /* SALSA64_REC_KSEG0, KSEG1 o MAPPED (rec_tlb.h) */
 	uint8_t flags;        /* SALSA64_RT_F_* */
+	uint8_t reason;       /* enum salsa64_rt_compile_reason */
 	uint8_t ins[SALSA64_RT_CLASSES];
 	uint16_t whot[SALSA64_RT_CLASSES], wcold[SALSA64_RT_CLASSES];
 	uint32_t target;      /* destino fijo del salto final (J, JAL, condicional), 0 si no lo tiene */
@@ -144,6 +218,11 @@ struct salsa64_rec_trace {
 	void *ctx;
 
 	struct salsa64_rec_trace_field field;
+	struct salsa64_rec_trace_slow_stats slow, slow_field;
+	struct salsa64_rec_trace_fpu fpu;  /* total de sesión */
+	struct salsa64_rec_trace_compile_stats compiles, compiles_field;
+	struct salsa64_rec_trace_inval inval[32];
+	uint8_t inval_next;
 	uint64_t compiled, retrans, words, evictions, flushes, killed;
 	uint32_t seen_count, seen_full;
 
@@ -182,6 +261,13 @@ static inline uint64_t salsa64_rec_trace_now(void)
 }
 
 void salsa64_rec_trace_init(struct salsa64_rec_trace *t);
+void salsa64_rec_trace_slow_add(struct salsa64_rec_trace *t, unsigned cause, uint64_t ticks, uint32_t pc);
+/* Una instrucción de COP1 que corrió el intérprete (fcr31 y status: el estado
+ * antes de ejecutarla). */
+void salsa64_rec_trace_fpu_add(struct salsa64_rec_trace *t, uint32_t instr, uint32_t fcr31, uint32_t status,
+			       uint64_t ticks);
+void salsa64_rec_trace_invalidate(struct salsa64_rec_trace *t, unsigned reason, uint32_t pa, uint32_t len,
+				  uint32_t killed);
 
 /* Una marca de C en la ventana abierta (el despachador). */
 static inline void salsa64_rec_trace_mark(struct salsa64_cpu *cpu, uint32_t m)

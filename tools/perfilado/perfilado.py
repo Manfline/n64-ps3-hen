@@ -30,9 +30,42 @@ import sys
 MAGIC = b"S64P"
 
 R_CONTEXT, R_NAMES, R_WINDOW, R_STALL, R_BLOCKS, R_EVICT, R_TRACE, R_JR, R_SAMPLES, R_TASKS, R_DUMP, R_END, \
-    R_LOST, R_EVENT = range(1, 15)
+    R_LOST, R_EVENT, R_SLOW, R_COMPILE, R_FPU = range(1, 18)
 
 CLASSES = ["entrada", "alu", "memoria", "fpu", "saltos", "salida", "otras"]
+SLOW_CAUSES = ["KSEG0", "KSEG1", "TLB hacia RDRAM", "TLB hacia E/S", "excepción TLB", "desalineado",
+               "registro SP", "registro DP", "registro MI", "registro VI", "registro AI", "registro PI",
+               "registro RI", "registro SI", "PIF", "cartucho", "escritura sobre código", "COP0", "FPU",
+               "CACHE", "LL/SC", "trampa", "otra instrucción interpretada", "excepción", "INT", "TLB modificada",
+               "TLB lectura", "TLB escritura", "dirección de carga", "dirección de almacenamiento", "bus de instrucciones",
+               "bus de datos", "SYSCALL", "BREAK", "instrucción reservada", "coprocesador inutilizable",
+               "desbordamiento", "trap", "FPU", "WATCH"]
+FPU_REASONS = ["modo de redondeo ≠ 0", "excepción I (inexacto) habilitada", "otra excepción habilitada",
+               "resultado o instrucción no nativa"]
+FPU_FMT = ["S", "D", "W", "L"]
+FPU_EXTRA = ["MFC1", "DMFC1", "CFC1", "MTC1", "DMTC1", "CTC1", "BC1", "otra COP1"]
+# Nombres de COP1 por funct (formato S/D; W y L solo tienen CVT).
+FPU_FUNCT = {0: "ADD", 1: "SUB", 2: "MUL", 3: "DIV", 4: "SQRT", 5: "ABS", 6: "MOV", 7: "NEG", 8: "ROUND.L",
+             9: "TRUNC.L", 10: "CEIL.L", 11: "FLOOR.L", 12: "ROUND.W", 13: "TRUNC.W", 14: "CEIL.W", 15: "FLOOR.W",
+             32: "CVT.S", 33: "CVT.D", 36: "CVT.W", 37: "CVT.L"}
+FPU_COND = ["F", "UN", "EQ", "UEQ", "OLT", "ULT", "OLE", "ULE", "SF", "NGLE", "SEQ", "NGL", "LT", "NGE", "LE", "NGT"]
+
+
+def fpu_name(idx):
+    """Nombre MIPS de un índice (fmt*64+funct, o 256+extra) del desglose de FPU."""
+    if idx >= 256:
+        k = idx - 256
+        return FPU_EXTRA[k] if k < len(FPU_EXTRA) else f"extra{k}"
+    fmt, funct = FPU_FMT[idx >> 6], idx & 63
+    if funct >= 48:
+        return f"C.{FPU_COND[funct - 48]}.{fmt}"
+    base = FPU_FUNCT.get(funct)
+    if base is None:
+        return f"COP1 {fmt} funct {funct:#x}"
+    return f"{base}.{fmt}"
+
+
+COMPILE_REASONS = ["primera compilación", "escritura de CPU", "DMA", "desalojo o vaciado", "retraducción idéntica"]
 ENDS = ["tope", "jr ra", "jr", "jalr", "jal", "j", "condicional", "likely", "a C"]
 END_LOOP = 0x80
 SMP_MARKS = ["nativo", "camino lento", "despachador", "intérprete", "eventos", "compilar", "espera", "ritmo", "otro"]
@@ -76,6 +109,9 @@ class Session:
         self.dumps = []
         self.end = {}
         self.events = []
+        self.slow = []
+        self.fpu = None
+        self.compiles = []
         self.lost = 0
         self.truncated = False
         self._read()
@@ -178,6 +214,50 @@ class Session:
         elif kind == R_EVENT:
             (ms,) = struct.unpack_from(">I", b, 0)
             self.events.append({"ms": ms, "texto": b[4:].decode("utf-8", "replace")})
+        elif kind == R_SLOW:
+            ms, nc, np = struct.unpack_from(">IHH", b, 0)
+            off = 8
+            causes = []
+            for k in range(nc):
+                calls, ticks = struct.unpack_from(">IQ", b, off)
+                off += 12
+                causes.append({"causa": SLOW_CAUSES[k] if k < len(SLOW_CAUSES) else f"causa{k}",
+                               "llamadas": calls, "ticks": ticks})
+            pcs = []
+            for _ in range(np):
+                pc, ticks, calls = struct.unpack_from(">IQI", b, off)
+                off += 16
+                if pc:
+                    pcs.append({"pc": pc, "ticks": ticks, "llamadas": calls})
+            self.slow.append({"ms": ms, "causas": causes, "pcs": pcs})
+        elif kind == R_FPU:
+            ms, n, nr, _ = struct.unpack_from(">IHHI", b, 0)
+            fr = [struct.unpack_from(">IQ", b, 12 + 12 * k) for k in range(2)]
+            off = 36
+            (nt,) = struct.unpack_from(">I", b, off)
+            off += 4
+            pcs = []
+            for _ in range(nt):
+                pc, ticks, calls = struct.unpack_from(">IQI", b, off)
+                off += 16
+                if pc:
+                    pcs.append({"pc": pc, "ticks": ticks, "llamadas": calls})
+            entries = {}
+            for _ in range(n):
+                idx, _p, ticks = struct.unpack_from(">HHQ", b, off)
+                calls = list(struct.unpack_from(f">{nr}I", b, off + 12))
+                off += 12 + 4 * nr
+                entries[idx] = {"ticks": ticks, "razones": calls}
+            self.fpu = {"ms": ms, "fr": [{"llamadas": c, "ticks": t} for c, t in fr], "pcs": pcs, "entradas": entries}
+        elif kind == R_COMPILE:
+            ms, n, _, max_field_compiles, max_field = struct.unpack_from(">IHHII", b, 0)
+            reasons = []
+            for k in range(n):
+                calls, ticks, words = struct.unpack_from(">IQI", b, 16 + 16 * k)
+                reasons.append({"motivo": COMPILE_REASONS[k] if k < len(COMPILE_REASONS) else f"motivo{k}",
+                                "llamadas": calls, "ticks": ticks, "palabras": words})
+            self.compiles.append({"ms": ms, "motivos": reasons, "max_campo": max_field_compiles,
+                                  "campo_max": max_field})
 
     @staticmethod
     def _block(b, o):
@@ -430,6 +510,14 @@ def metrics(ses):
     ins, hot, cold = class_totals(blocks.values())
     m["palabras por instrucción (todas)"] = (sum(hot) + sum(cold)) / max(1, sum(ins))
     m["retraducciones"] = sum(1 for b in ses.blocks if b["flags"] & 1)
+    slow = slow_totals(ses)
+    for cause, (calls, ticks) in slow.items():
+        m[f"camino lento: {cause} llamadas"] = calls
+        m[f"camino lento: {cause} ms"] = ticks / 79800
+    for reason, (calls, ticks, words) in compile_totals(ses).items():
+        m[f"compilaciones: {reason}"] = calls
+        m[f"compilar ms: {reason}"] = ticks / 79800
+        m[f"palabras generadas: {reason}"] = words
     m["desalojos de tramos"] = sum(1 for e in ses.evicts if e["tipo"] != 2)
     m["bytes perdidos"] = ses.lost
     return m
@@ -441,6 +529,24 @@ def fmt(v):
     if isinstance(v, float):
         return f"{v:.2f}"
     return str(v)
+
+
+def slow_totals(ses):
+    out = {}
+    for record in ses.slow:
+        for e in record["causas"]:
+            n, t = out.get(e["causa"], (0, 0))
+            out[e["causa"]] = (n + e["llamadas"], t + e["ticks"])
+    return out
+
+
+def compile_totals(ses):
+    out = {}
+    for record in ses.compiles:
+        for e in record["motivos"]:
+            n, t, w = out.get(e["motivo"], (0, 0, 0))
+            out[e["motivo"]] = (n + e["llamadas"], t + e["ticks"], w + e["palabras"])
+    return out
 
 
 def summary(ses, out, top=15):
@@ -495,6 +601,58 @@ def summary(ses, out, top=15):
         if s.get("invalidados", 0) >= 16:
             extra.append(f"{s['invalidados']} bloques invalidados")
         p(f"   campo {s.get('campo', 0):7d}  {s.get('emu_us', 0) / 1000:6.1f} ms  {cause}: " + "; ".join(extra))
+
+    if ses.slow:
+        total = slow_totals(ses)
+        p("-- Camino lento por causa (timebase PPE, 79,8 MHz)")
+        p("   causa                                  llamadas       ms")
+        for cause, (calls, ticks) in sorted(total.items(), key=lambda kv: -kv[1][1]):
+            p(f"   {cause:38s} {calls:9d} {ticks / 79800:9.2f}")
+        pcs = {}
+        if ses.fpu and ses.fpu["pcs"]:
+            # Total de sesión (Space-Saving): cotas superiores si el PC entró reemplazando a otro.
+            for e in ses.fpu["pcs"]:
+                pcs[e["pc"]] = (e["llamadas"], e["ticks"])
+        else:
+            for record in ses.slow:
+                for e in record["pcs"]:
+                    n, t = pcs.get(e["pc"], (0, 0))
+                    pcs[e["pc"]] = (n + e["llamadas"], t + e["ticks"])
+        if pcs:
+            p("   PC lento más costoso:")
+            for pc, (calls, ticks) in sorted(pcs.items(), key=lambda kv: -kv[1][1])[:top]:
+                p(f"      {pc:08x}  {calls:9d} llamadas  {ticks / 79800:9.2f} ms")
+
+    if ses.fpu and ses.fpu["entradas"]:
+        ent = ses.fpu["entradas"]
+        tot_ticks = sum(e["ticks"] for e in ent.values())
+        tot_calls = sum(sum(e["razones"]) for e in ent.values())
+        p(f"-- FPU al intérprete por instrucción (20 más costosas de {len(ent)}; {tot_calls} llamadas, "
+          f"{tot_ticks / 79800:.1f} ms)")
+        p("   instrucción          llamadas        ms   µs/llamada")
+        for idx, e in sorted(ent.items(), key=lambda kv: -kv[1]["ticks"])[:20]:
+            calls = sum(e["razones"])
+            p(f"   {fpu_name(idx):18s} {calls:10d} {e['ticks'] / 79800:9.2f} {e['ticks'] / 79.8 / max(1, calls):10.3f}")
+        p("-- FPU al intérprete por razón (estado de FCR31 antes de ejecutar)")
+        p("   razón                                   llamadas        ms")
+        for r, name in enumerate(FPU_REASONS):
+            calls = sum(e["razones"][r] for e in ent.values() if r < len(e["razones"]))
+            # Los ticks se guardan por instrucción: se reparten según las llamadas de cada razón.
+            ms = sum(e["ticks"] * e["razones"][r] / max(1, sum(e["razones"])) for e in ent.values()
+                     if r < len(e["razones"])) / 79800
+            p(f"   {name:38s} {calls:10d} {ms:9.2f}")
+        fr = ses.fpu["fr"]
+        p(f"   Status.FR = 0: {fr[0]['llamadas']} llamadas, {fr[0]['ticks'] / 79800:.1f} ms; "
+          f"FR = 1: {fr[1]['llamadas']} llamadas, {fr[1]['ticks'] / 79800:.1f} ms")
+
+    if ses.compiles:
+        p("-- Compilaciones por motivo (ventanas de 5 s y total de sesión)")
+        p("   motivo                                  bloques    palabras       ms")
+        for reason, (calls, ticks, words) in sorted(compile_totals(ses).items(), key=lambda kv: -kv[1][1]):
+            p(f"   {reason:38s} {calls:8d} {words:11d} {ticks / 79800:9.2f}")
+        mx = max(ses.compiles, key=lambda e: e["max_campo"])
+        if mx["max_campo"]:
+            p(f"   máximo por campo: {mx['max_campo']} compilaciones, campo {mx['campo_max']}")
 
     if ses.blocks:
         blocks = latest_blocks(ses)

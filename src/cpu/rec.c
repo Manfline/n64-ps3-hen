@@ -131,6 +131,8 @@ REC_UNUSED static uint64_t rec_h_load(struct salsa64_cpu *cpu, uint64_t va, unsi
 {
 	static const uint8_t align[] = { 0, 0, 1, 1, 3, 3, 7 };
 	struct salsa64_rec_prof *prof = cpu->rec->prof;
+	struct salsa64_rec_trace *trace = cpu->rec->trace;
+	uint64_t tt = trace ? salsa64_rec_trace_now() : 0;
 	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0, v = 0;
 	uint32_t pa = 0;
 	bool ok = vr4300_vaddr(cpu, va, align[kind], SALSA64_ACC_LOAD, &pa);
@@ -149,6 +151,10 @@ REC_UNUSED static uint64_t rec_h_load(struct salsa64_cpu *cpu, uint64_t va, unsi
 	}
 	if (prof)
 		salsa64_rec_prof_add(prof, mem_cause(cpu, va, ok, pa, false), salsa64_rec_prof_now() - t0);
+	if (trace)
+		salsa64_rec_trace_slow_add(trace, salsa64_rec_trace_mem_class(va, pa, ok, false,
+							 (va & align[kind]) == 0, cpu->rdram_size),
+				  salsa64_rec_trace_now() - tt, (uint32_t)cpu->cur_pc);
 	return v;
 }
 
@@ -156,6 +162,8 @@ REC_UNUSED static void rec_h_store(struct salsa64_cpu *cpu, uint64_t va, uint64_
 {
 	static const uint8_t align[] = { 0, 1, 3, 7 };
 	struct salsa64_rec_prof *prof = cpu->rec->prof;
+	struct salsa64_rec_trace *trace = cpu->rec->trace;
+	uint64_t tt = trace ? salsa64_rec_trace_now() : 0;
 	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0;
 	uint32_t pa = 0;
 	bool ok = vr4300_vaddr(cpu, va, align[kind], SALSA64_ACC_STORE, &pa);
@@ -171,13 +179,20 @@ REC_UNUSED static void rec_h_store(struct salsa64_cpu *cpu, uint64_t va, uint64_
 	}
 	if (prof)
 		salsa64_rec_prof_add(prof, mem_cause(cpu, va, ok, pa, true), salsa64_rec_prof_now() - t0);
+	if (trace)
+		salsa64_rec_trace_slow_add(trace, salsa64_rec_trace_mem_class(va, pa, ok, true,
+							 (va & align[kind]) == 0, cpu->rdram_size),
+				  salsa64_rec_trace_now() - tt, (uint32_t)cpu->cur_pc);
 }
 
 REC_UNUSED static void rec_h_exec(struct salsa64_cpu *cpu, uint32_t instr)
 {
 	struct salsa64_rec *rec = cpu->rec;
 	struct salsa64_rec_prof *prof = rec->prof;
+	struct salsa64_rec_trace *trace = rec->trace;
+	uint64_t tt = trace ? salsa64_rec_trace_now() : 0;
 	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0;
+	uint32_t fcr0 = trace ? cpu->fcr31 : 0, st0 = trace ? (uint32_t)cpu->status : 0;
 	rec->stats.exec_calls++;
 	salsa64_vr4300_exec_one(cpu, instr);
 	if (I_OP(instr) == 0x10) {
@@ -191,6 +206,12 @@ REC_UNUSED static void rec_h_exec(struct salsa64_cpu *cpu, uint32_t instr)
 	}
 	if (prof)
 		salsa64_rec_prof_add(prof, exec_cause(instr), salsa64_rec_prof_now() - t0);
+	if (trace) {
+		uint64_t dt = salsa64_rec_trace_now() - tt;
+		salsa64_rec_trace_slow_add(trace, salsa64_rec_trace_exec_class(instr), dt, (uint32_t)cpu->cur_pc);
+		if (I_OP(instr) == 0x11)
+			salsa64_rec_trace_fpu_add(trace, instr, fcr0, st0, dt);
+	}
 }
 
 /* TLBWI/TLBWR desde el código generado (rec_emit_ext.h, emit_tlbw): la
@@ -229,11 +250,17 @@ REC_UNUSED static uint64_t rec_h_eret(struct salsa64_cpu *cpu)
 
 REC_UNUSED static void rec_h_exception(struct salsa64_cpu *cpu, unsigned code)
 {
-	struct salsa64_rec_prof *prof = cpu->rec->prof;
+	struct salsa64_rec *rec = cpu->rec;
+	struct salsa64_rec_prof *prof = rec->prof;
+	struct salsa64_rec_trace *trace = rec->trace;
+	uint64_t tt = trace ? salsa64_rec_trace_now() : 0;
 	uint64_t t0 = prof ? salsa64_rec_prof_now() : 0;
 	salsa64_vr4300_exception(cpu, (enum salsa64_exc)code, 0);
 	if (prof)
 		salsa64_rec_prof_add(prof, SALSA64_PROF_EXCEPTION, salsa64_rec_prof_now() - t0);
+	if (trace)
+		salsa64_rec_trace_slow_add(trace, salsa64_rec_trace_exception_class(code), salsa64_rec_trace_now() - tt,
+				  (uint32_t)cpu->cur_pc);
 }
 
 /* Dirección de código de una función de C (descriptor ELFv1: entrada, TOC). */
@@ -1142,8 +1169,12 @@ void salsa64_rec_invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t len)
 {
 	uint64_t before = rec->stats.invalidated;
 	invalidate(rec, pa, len);
-	if (rec->stats.invalidated != before)
+	if (rec->stats.invalidated != before) {
 		inval_note(&rec->stats.inval_other_lo, &rec->stats.inval_other_hi, pa, len);
+		if (rec->trace)
+			salsa64_rec_trace_invalidate(rec->trace, SALSA64_RT_COMPILE_DMA, pa, len,
+					    (uint32_t)(rec->stats.invalidated - before));
+	}
 }
 
 static void invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t len)
@@ -1184,6 +1215,9 @@ void salsa64_rec_code_written(struct salsa64_rec *rec, uint32_t pa, uint32_t len
 	if (rec->stats.invalidated != before) {
 		rec->stats.inval_cpu += rec->stats.invalidated - before;
 		inval_note(&rec->stats.inval_cpu_lo, &rec->stats.inval_cpu_hi, pa, len);
+		if (rec->trace)
+			salsa64_rec_trace_invalidate(rec->trace, SALSA64_RT_COMPILE_CPU_WRITE, pa, len,
+					    (uint32_t)(rec->stats.invalidated - before));
 	}
 }
 
@@ -1255,7 +1289,7 @@ static void make_room(struct salsa64_rec *rec)
 
 /* Compila el bloque de (pc, pa) con el Status.FR actual y lo registra (en
  * KSEG0 pasa a ser el del mapa). Quien llama ya hizo lugar (make_room). */
-static unsigned new_block(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, unsigned seg)
+static unsigned new_block(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, unsigned seg, unsigned reason)
 {
 	unsigned id;
 	if (rec->free_block) {
@@ -1267,6 +1301,18 @@ static unsigned new_block(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, uns
 	unsigned n = 0;
 	uint32_t bytes = 4;
 	rec->cur_id = id;
+	if (rec->trace) {
+		for (unsigned k = 0; k < 32; k++) {
+			struct salsa64_rec_trace_inval *e = &rec->trace->inval[k];
+			if (e->lo < e->hi && pa >= e->lo && pa < e->hi) {
+				reason = e->reason;
+				if (--e->remaining == 0)
+					e->lo = e->hi = 0;
+				break;
+			}
+		}
+		rec->trace->cur.reason = (uint8_t)reason;
+	}
 	rec->fr = rec->cpu->status & SALSA64_ST_FR;
 	rec->compiled_fr_dep = false;
 	rec->placed_hot = false;
@@ -1338,7 +1384,8 @@ static unsigned block_for_fr(struct salsa64_rec *rec, unsigned id, uint64_t pc, 
 		if (id && !fr_mismatch(rec, id))
 			return id;
 	}
-	unsigned t = new_block(rec, pc, pa, seg);
+	unsigned reason = rec->generation != gen ? SALSA64_RT_COMPILE_EVICT : SALSA64_RT_COMPILE_NEW;
+	unsigned t = new_block(rec, pc, pa, seg, reason);
 	if (id && seg == SALSA64_REC_KSEG0) {
 		if (rec->blocks[t].code && (rec->blocks[t].fr & SALSA64_REC_FR_DEP)) {
 			rec->twin[id] = (uint16_t)t;
