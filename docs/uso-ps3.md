@@ -70,13 +70,20 @@ Al final de la lista están «Opciones» y «Salir al XMB».
 ## Remapeo del control
 
 En **Opciones → Controles** se cambian las asignaciones para todos los juegos.
-En **Ajustes** de una ROM, la fila **Controles** abre el mismo editor para ese
-juego. La fila **Aplicar a** permite alternar entre todos los juegos y el juego
-actual; las asignaciones propias de un juego tienen prioridad sobre las
-globales. × en un botón de N64 espera la siguiente pulsación del DualShock 3.
-En la fila **Stick**, × alterna entre el stick analógico izquierdo y el
-derecho. **Restaurar predeterminado** repone las asignaciones globales o hace
-que el juego vuelva a heredar las globales.
+En **Ajustes** de una ROM (SELECT), la fila **Controles** abre el mismo editor
+solo para ese juego; el panel de la derecha dice cuál se está editando, y las
+asignaciones propias de un juego tienen prioridad sobre las globales. Cada
+cambio se guarda en el momento.
+
+× en un botón de N64 espera la pulsación del DualShock 3 y la asigna al
+soltar: se pueden pulsar dos a la vez (por ejemplo L2 y R2 para Z) y la fila
+queda «L2 / R2», cualquiera de los dos. SELECT deja el botón sin asignar y
+START cancela sin cambiar nada.
+
+Los botones C salen siempre del stick que no mueve el de la N64 (el derecho;
+el izquierdo si en la fila **Stick** se elige el derecho); un botón asignado a
+una fila C se suma al stick. **Restaurar predeterminado** repone las
+asignaciones globales o hace que el juego vuelva a heredar las globales.
 
 | Control de N64 | Predeterminado del DualShock 3 |
 |---|---|

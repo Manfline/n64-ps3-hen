@@ -1371,13 +1371,13 @@ static const char *control_button_value(const struct menu *m, int row)
 												 : "Stick derecho");
 			if (b >= SALSA64_DS3_NBUTTONS)
 				return stick;
-			snprintf(buf, sizeof buf, "%s + %s", stick, tr(names[b]));
+			snprintf(buf, sizeof buf, "%s / %s", stick, tr(names[b]));
 			return buf;
 		}
 		unsigned b2 = m->controls.source2[row];
 		if (b < SALSA64_DS3_NBUTTONS && b2 < SALSA64_DS3_NBUTTONS) {
 			static char two[64];
-			snprintf(two, sizeof two, "%s + %s", tr(names[b]), tr(names[b2]));
+			snprintf(two, sizeof two, "%s / %s", tr(names[b]), tr(names[b2]));
 			return two;
 		}
 		return b < SALSA64_DS3_NBUTTONS ? tr(names[b]) : tr("Sin asignar");
