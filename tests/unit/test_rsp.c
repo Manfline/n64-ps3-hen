@@ -453,6 +453,61 @@ static void rsp_detect_gbi(void)
 	CHECK_EQ(text[0], 0);
 }
 
+/* Listas del RDP que el CPU escribe por DPC_START/DPC_END, sin RSP (Killer
+ * Instinct Gold las usa para sus rectángulos y espera la interrupción del DP
+ * de su SYNC_FULL antes de mandar la primera tarea gráfica): las consume el
+ * backend del RDP y su SYNC_FULL levanta la interrupción del DP. Sin backend
+ * la lista solo se descarta y la interrupción nunca llega; por eso el
+ * frontend de la PS3 lo conecta siempre, no solo con el RSP a bajo nivel. */
+static struct {
+	int runs;
+	uint32_t start, end;
+	const uint8_t *dmem;
+} dpc_fake;
+
+static uint32_t dpc_fake_run(void *ctx, uint32_t start, uint32_t end, const uint8_t *dmem)
+{
+	(void)ctx;
+	dpc_fake.runs++;
+	dpc_fake.start = start;
+	dpc_fake.end = end;
+	dpc_fake.dmem = dmem;
+	return SALSA64_GFX_FULLSYNC;
+}
+
+static void rsp_dpc_from_cpu(void)
+{
+	struct salsa64_bus *bus = &t_n64.bus;
+	static const struct salsa64_dpc_backend dpc = { NULL, dpc_fake_run };
+#define DP_REG(r) (0x04100000u + 4 * (r))
+	memset(&dpc_fake, 0, sizeof dpc_fake);
+	wr(0x04300000, 0x0800);  /* MI_MODE: bajar la interrupción DP */
+
+	/* Sin backend: el tramo se descarta y no llega ninguna interrupción. */
+	salsa64_rsp_set_dpc(bus, NULL);
+	wr(DP_REG(SALSA64_DP_START), 0x2000);
+	wr(DP_REG(SALSA64_DP_END), 0x2040);
+	CHECK_EQ(rd(DP_REG(SALSA64_DP_CURRENT)), 0x2040);
+	salsa64_sched_dispatch(&t_n64.sched, CPU->cycles + 10 * bus->rsp.dp_cycles);
+	CHECK_EQ(bus->mi.intr & (1u << SALSA64_IRQ_DP), 0);
+	CHECK_EQ(dpc_fake.runs, 0);
+
+	/* Con backend: lo consume (de la RDRAM, sin xbus) y su SYNC_FULL
+	 * levanta la interrupción dp_cycles después. */
+	salsa64_rsp_set_dpc(bus, &dpc);
+	wr(DP_REG(SALSA64_DP_START), 0x3000);
+	wr(DP_REG(SALSA64_DP_END), 0x3038);
+	CHECK_EQ(dpc_fake.runs, 1);
+	CHECK_EQ(dpc_fake.start, 0x3000);
+	CHECK_EQ(dpc_fake.end, 0x3038);
+	CHECK(dpc_fake.dmem == NULL);
+	CHECK_EQ(bus->mi.intr & (1u << SALSA64_IRQ_DP), 0);
+	salsa64_sched_dispatch(&t_n64.sched, CPU->cycles + bus->rsp.dp_cycles);
+	CHECK(bus->mi.intr & (1u << SALSA64_IRQ_DP));
+	salsa64_rsp_set_dpc(bus, NULL);
+#undef DP_REG
+}
+
 void t_suite_rsp(void)
 {
 	RUN(sp_dma_rows);
@@ -465,4 +520,5 @@ void t_suite_rsp(void)
 	RUN(rsp_gfx_nonear);
 	RUN(rsp_detect_gbi_crc);
 	RUN(rsp_detect_gbi_wr);
+	RUN(rsp_dpc_from_cpu);
 }

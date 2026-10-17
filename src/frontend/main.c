@@ -400,6 +400,9 @@ static int selftest_on;   /* vitest */
 static int gfxtest_on;    /* gfxtest */
 static int audiotest_on;  /* audiotest */
 static struct salsa64_gfx_spu gfx_spu;
+/* El RDP en el PPE: con la HLE en el PPE es la misma HLE; con la HLE en el
+ * SPE, solo consume las listas que el CPU le da por DPC_START/DPC_END (y,
+ * con el RSP a bajo nivel, las del microcódigo). */
 static struct salsa64_gfx_sync gfx_ppe;
 static struct gfx_state gfx_ppe_state;
 /* RSP a bajo nivel (Fase 6): con SALSA64_DATA_DIR/lle presente, el
@@ -4210,6 +4213,7 @@ static void game_close(void)
 	audio_out_shutdown();
 	salsa64_log("cierre: audio cerrado (%u tareas de audio)", n64.bus.rsp.stats.audio);
 	salsa64_rsp_set_gfx(&n64.bus, NULL);  /* espera la tarea en vuelo */
+	salsa64_rsp_set_dpc(&n64.bus, NULL);
 	salsa64_log("cierre: HLE gráfica suelta (%u tareas gráficas)", n64.bus.rsp.stats.gfx);
 	if (jpeg_on_spu) {
 		salsa64_rsp_set_jpeg(&n64.bus, NULL);
@@ -4219,7 +4223,6 @@ static void game_close(void)
 	}
 	if (lle_mode != SALSA64_LLE_OFF) {
 		salsa64_rsp_set_lle(&n64.bus, NULL, SALSA64_LLE_OFF);
-		salsa64_rsp_set_dpc(&n64.bus, NULL);
 		salsa64_log("rsp lle: %u tareas, %u trabajos, %llu instrucciones (la tarea más larga %u), %u fallidos, "
 			    "%u tramos del RDP (%u perdidos); SPE detenido (salida %d)", rsp_spu.tasks, rsp_spu.jobs,
 			    (unsigned long long)rsp_spu.instructions, rsp_spu.task_max, rsp_spu.failed,
@@ -4321,6 +4324,14 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		salsa64_gfx_sync_init(&gfx_ppe, &gfx_ppe_state, &n64.bus, &front_sink);
 		salsa64_rsp_set_gfx(&n64.bus, &gfx_ppe.backend);
 	}
+	/* Killer Instinct Gold (y otros) dibuja con listas del RDP que el CPU
+	 * escribe por DPC_START/DPC_END, sin RSP, y espera la interrupción del
+	 * DP de su SYNC_FULL antes de seguir: sin quien consuma esas listas el
+	 * juego no manda ninguna tarea gráfica. Con la HLE en el PPE las
+	 * consume la misma HLE; con la HLE en el SPE, un RDP aparte en el PPE. */
+	if (gfx_on_spu)
+		salsa64_gfx_sync_init(&gfx_ppe, &gfx_ppe_state, &n64.bus, &front_sink);
+	salsa64_rsp_set_dpc(&n64.bus, &gfx_ppe.dpc);
 	salsa64_log("HLE gráfica en %s", gfx_on_spu ? "el SPE" : "el PPE");
 	n64.bus.rsp.clock_us = clock_us;
 	/* audio_out: inicio (HLE en el SPE 1, sumidero del AI, puerto de audio). */
@@ -4350,9 +4361,6 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 			salsa64_log("rsp lle: no arrancó el SPE del microcódigo (%d): sin LLE", rc);
 			lle_mode = SALSA64_LLE_OFF;
 		} else {
-			if (gfx_on_spu)
-				salsa64_gfx_sync_init(&gfx_ppe, &gfx_ppe_state, &n64.bus, &front_sink);
-			salsa64_rsp_set_dpc(&n64.bus, &gfx_ppe.dpc);
 			salsa64_rsp_set_lle(&n64.bus, &rsp_spu.backend, lle_mode);
 			salsa64_log("rsp lle: microcódigo real en un SPE para %s; el RDP en el PPE",
 				    lle_mode == SALSA64_LLE_ALL ? "todas las tareas" : "lo que no tiene HLE");
