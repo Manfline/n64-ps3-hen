@@ -16,7 +16,10 @@ carga en el B; la ROM de prueba tiene que verificarse igual después
 (dev_hdd0/salsa64/estados-prueba, que se borra al terminar). Con --bandera
 NOMBRE[=CONTENIDO] (repetible) crea ese archivo en dev_hdd0/salsa64 durante
 la corrida (p. ej. `filtro=crt-mascara`, `capturas`, `video.cfg=escala = 1`)
-y al terminar lo borra o le devuelve su contenido de antes.
+y al terminar lo borra o le devuelve su contenido de antes. Con --quitar
+NOMBRE (repetible) ese archivo de dev_hdd0/salsa64 no existe durante la corrida
+(p. ej. `lle`, que otra corrida pudo dejar puesto y cambia lo que se prueba) y
+al terminar vuelve a estar como estaba.
 
 Lanza RPCS3 con --no-gui y tools/rpcs3/salsa64.yml, crea el archivo de modo
 autotest (src/platform/ps3/autotest.h) para que el programa salga solo, sigue
@@ -224,10 +227,19 @@ def main() -> int:
     ap.add_argument("--bandera", action="append", default=[], metavar="NOMBRE[=CONTENIDO]",
                     help="archivo de dev_hdd0/salsa64 solo durante esta corrida (\\n en el contenido: "
                     "salto de línea)")
+    ap.add_argument("--quitar", action="append", default=[], metavar="NOMBRE",
+                    help="archivo de dev_hdd0/salsa64 que no debe existir durante esta corrida")
     args = ap.parse_args()
 
     lock = lock_rpcs3()  # noqa: F841 (se mantiene hasta salir)
     flags = []
+    for name in args.quitar:
+        path = EMBED_FILE.parent / name
+        if path.parent != EMBED_FILE.parent:
+            ap.error(f"--quitar {name}: solo nombres de dev_hdd0/salsa64")
+        if path.is_file():
+            flags.append((path, path.read_bytes()))
+            path.unlink()
     for spec in args.bandera:
         name, _, content = spec.partition("=")
         path = EMBED_FILE.parent / name

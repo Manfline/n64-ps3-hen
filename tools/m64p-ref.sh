@@ -12,6 +12,8 @@
 #       bytes de cada palabra de 32 bits invertidos (su formato); el nombre
 #       lo pone mupen64plus la primera vez que corre la ROM (ver su save/).
 #   M64P_PAD_OFFSET=N      desplaza el guion N campos.
+#   M64P_PAD_PORT=N        puerto (1 a 4) al que va el guion; los anteriores
+#                          quedan conectados y quietos (como --pad-port).
 #
 # Requiere `brew install mupen64plus` (macOS). El teclado de su plugin de
 # entrada no funciona con sdl2-compat; por eso el plugin propio

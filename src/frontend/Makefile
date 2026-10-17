@@ -13,7 +13,7 @@ TITLE   := Salsa64 perfil
 APPID   := SLSA00120
 endif
 SRCS    := main.c audio_out.c audio_sync.c menu.c osd.c osd_fps.c pacer.c padmap.c pausectl.c replay.c romlist.c savefile.c mempakfile.c \
-           cheats.c cover.c download.c dlutil.c i18n.c namematch.c screenshot.c selftest.c selftest_audio.c selftest_gfx.c states.c cajanegra.c \
+           cheats.c cuelgue.c cover.c download.c dlutil.c i18n.c namematch.c screenshot.c selftest.c selftest_audio.c selftest_gfx.c states.c cajanegra.c \
            version.c perfilado.c perfilado_ps3.c filters/crt_params.c filters/filters.c
 # Filtros de la presentación (filters/): fragment programs en Cg compilados
 # con cgcomp. Van en fp32: cgcomp pide -fastprecision a Cg, que baja a fp16

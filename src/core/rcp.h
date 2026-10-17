@@ -272,6 +272,14 @@ struct salsa64_rsp_stats {
 	uint32_t jpeg_mb;      /* sus macrobloques */
 	uint32_t jpeg_bad;     /* con parámetros que no valían */
 	uint64_t jpeg_us;      /* tiempo del hilo del CPU en ellas (con clock_us) */
+	/* Interrupciones que siguen a una tarea, para saber en un cuelgue si una
+	 * quedó sin la suya (frontend/cuelgue.c). */
+	uint32_t sp_irq;       /* fines de tarea del RSP con su BREAK (interrupción del SP si está habilitada) */
+	uint32_t dp_sched;     /* interrupciones del DP programadas (SYNC_FULL de una tarea o de una lista del CPU) */
+	uint32_t dp_fired;     /* interrupciones del DP levantadas */
+	uint32_t dp_held;      /* retenidas por el RDP congelado (llegan al descongelarlo) */
+	uint32_t gfx_nosync;   /* tareas gráficas que terminaron sin SYNC_FULL ni corte: no traen interrupción del DP */
+	uint32_t gfx_last;     /* banderas SALSA64_GFX_* de la última tarea gráfica terminada */
 };
 
 struct salsa64_rsp {
@@ -297,6 +305,12 @@ struct salsa64_rsp {
 	/* Interrupción del DP retenida: el RDP terminó (SYNC_FULL) mientras
 	 * estaba congelado (DPC_STATUS FREEZE); llega al descongelarlo. */
 	bool dp_held;
+	/* Interrupciones del DP que llegaron antes de que se levantara la
+	 * anterior (el SYNC_FULL de una lista del CPU y el de una tarea
+	 * cercanos): la ranura del planificador es una sola, así que las demás
+	 * esperan aquí, en orden, y cada una se levanta a su hora. */
+	uint64_t dp_next[4];
+	uint8_t dp_nnext;
 	/* Cada cuántos ciclos se vuelve a preguntar al backend si terminó. */
 	uint32_t poll_cycles;
 	uint64_t poll_idle;     /* idle_cycles del CPU en el sondeo anterior */

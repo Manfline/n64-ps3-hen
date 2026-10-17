@@ -60,6 +60,16 @@ estado vale hasta el siguiente, por eso cada pulsación lleva su suelta `-`):
   por dentro hacia el ~11000). Banjo sale de su casa a Spiral Mountain
   desde el campo ~17000. Con el arranque del 6103 completo (2026-10-12):
   con el de antes el juego cambia por otro camino y los campos no coinciden.
+- `killerinstinct-pelea.pad` (Killer Instinct Gold, 2026-10-17): las
+  pulsaciones de un jugador en el **control 2** (el log de la PS3 las anotó
+  como «control 2»), sacadas de su log: START en el título (campo 792), A
+  por las pantallas hasta la selección de personaje (campo ~1000), la
+  confirmación (campo 1211) y, desde el 1300, A cada 60 campos. Se corre con
+  `--pads 2 --pad-port 2` (los dos controles conectados, como en la PS3 con
+  dos mandos, y el guion en el puerto 2). En el host, con la HLE, pasa por la
+  selección y llega a la pelea y a «CONTINUE?» hacia el campo 3300
+  (`--fields 3600`). Los tiempos del juego dependen de la máquina, así que
+  en la PS3 la pelea empieza antes o después de ese campo.
 
 Las escenas del host (7 juegos, Kirby 64 y la casa de Link de
 `zelda-casa-nueva.pad`) se corren y comparan con `tools/escenas-host.sh`.

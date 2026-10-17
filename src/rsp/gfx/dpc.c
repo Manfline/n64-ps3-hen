@@ -22,22 +22,27 @@ void gfx_dl_dpc(struct gfx_state *g)
 	uint32_t pc = g->job->dl, end = g->job->dl_end;
 	uint32_t w[44];
 	while (pc + 8 <= end) {
-		if (!gfx_io_dl(g, pc, &w[0], &w[1])) {
-			g->res->dl_errors++;
-			return;
-		}
-		uint32_t op = w[0] >> 24;
-		unsigned words = gfx_rdp_raw_words(op);
-		if (pc + 8 * words > end)
-			return;  /* el comando sigue en el próximo tramo */
-		for (unsigned k = 1; k < words; k++) {
+		/* El RDP reconoce el comando por sus 6 bits bajos: los dos de arriba
+		 * no cuentan, y los juegos que escriben sus propias listas los
+		 * ponen como quieran (Killer Instinct Gold: 0x2F y 0xBA en vez de
+		 * 0xEF y 0xFA, y 0x24 por 0xE4). La HLE los conoce con los dos en 1,
+		 * como los trae una lista de F3D. */
+		unsigned words = 1;
+		for (unsigned k = 0; k < words; k++) {
 			if (!gfx_io_dl(g, pc + 8 * k, &w[2 * k], &w[2 * k + 1])) {
 				g->res->dl_errors++;
 				return;
 			}
+			if (!k) {
+				w[0] |= 0xC0000000u;
+				words = gfx_rdp_raw_words(w[0] >> 24);
+				if (pc + 8 * words > end)
+					return;  /* el comando sigue en el próximo tramo */
+			}
 		}
 		pc += 8 * words;
 		g->res->commands++;
+		uint32_t op = w[0] >> 24;
 		if (op >= 0xC8 && op <= 0xCF)
 			gfx_rdp_triangle(g, w);
 		else if (op == G_TEXRECT || op == G_TEXRECTFLIP)

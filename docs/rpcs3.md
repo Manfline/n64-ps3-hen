@@ -20,6 +20,11 @@ rendimiento, sincronización entre SPEs ni JIT con RPCS3.**
 - `tools/rpcs3-run.py <programa>`: lanza `rpcs3 --no-gui --config <yml> <elf>`,
   sigue `TTY.log` hasta la línea `RESULTADO` y copia `RPCS3.log` a
   `build/logs/rpcs3-<programa>.rpcs3.log`.
+- El `dev_hdd0/salsa64` es uno solo para todas las corridas y guarda los
+  archivos de bandera de las anteriores (`lle`, `capturas`, `sin-recompilador`…),
+  que cambian lo que se prueba: una corrida «sin RSP a bajo nivel» con un `lle`
+  olvidado no lo es. `--quitar NOMBRE` (repetible) los quita durante la corrida
+  y los devuelve al terminar; `--bandera NOMBRE[=CONTENIDO]` pone uno.
 - `tools/rpcs3/salsa64.yml`: Write Color Buffers, red conectada, salir al
   terminar el proceso. `--config` aplica solo esas claves sobre la config
   global.

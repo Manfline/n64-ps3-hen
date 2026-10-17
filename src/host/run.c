@@ -67,6 +67,13 @@
  * sigue; con SALSA64_GFX_TEAR además la corre al arrancar y avisa si la
  * salida cambió entre las dos (el CPU tocó durante la tarea algo que la
  * lista lee); SALSA64_GFX_TEAR_V lista los vértices distintos.
+ * SALSA64_DPC_ESTADO_APARTE=1 hace que las listas del RDP que escribe el CPU
+ * (DPC_START/DPC_END) las consuma otra HLE con su propio estado y su propio
+ * directorio de texturas sobre la misma caché, como la PS3 hizo con la HLE en el
+ * SPE y el RDP en el PPE: Killer Instinct Gold sale con texturas rotas.
+ * SALSA64_SIN_DPC=1 las deja sin consumidor (el juego no manda ninguna tarea
+ * gráfica). SALSA64_JITTER=N hace al azar la duración de cada tarea del RSP
+ * (audio, gráficas y la interrupción del DP) para buscar esperas eternas.
  * SALSA64_PS3_RB (con --gfx-frame) cuenta las color images que la regla de
  * copias a la RDRAM de la PS3 (readbacks_wanted, src/rdp/rdp.c) pediría.
  * SALSA64_GFX_CUTCHECK mide, por tarea, cuánto se separan los vértices que
@@ -696,9 +703,11 @@ static void poke_field(void)
 	}
 }
 
+static unsigned pad_port;  /* --pad-port: el guion de --pad va a este puerto (0 a 3) */
+
 static void pad_apply(struct salsa64_n64 *m, const struct salsa64_pad *pad)
 {
-	salsa64_pif_set_pad(&m->bus, 0, pad);
+	salsa64_pif_set_pad(&m->bus, pad_port, pad);
 }
 
 /* Al empezar cada campo (la máquina parada justo en el fin del anterior). */
@@ -717,8 +726,8 @@ static void pad_field(void)
 		pads.napplied++;
 	}
 	if (tracing())
-		fprintf(stderr, "campo %u (ciclo %llu): control 1 botones 0x%04x x %d y %d\n", field,
-			(unsigned long long)n64.cpu.cycles, pad->buttons, pad->x, pad->y);
+		fprintf(stderr, "campo %u (ciclo %llu): control %u botones 0x%04x x %d y %d\n", field,
+			(unsigned long long)n64.cpu.cycles, pad_port + 1, pad->buttons, pad->x, pad->y);
 }
 
 /* Al terminar cada campo (modo campo por campo): controles programados y,
@@ -800,6 +809,11 @@ static void audio_push(void *ctx, const uint8_t *p, uint32_t bytes, uint32_t rat
 /* HLE gráfica: estado, búferes de salida y totales. */
 static struct gfx_state gfx_state;
 static struct salsa64_gfx_sync gfx_sync;
+/* SALSA64_DPC_ESTADO_APARTE=1: las listas del CPU las consume otra HLE con su propio estado del RDP y
+ * su propio directorio de texturas sobre la misma región de la caché, como la PS3 con la HLE gráfica
+ * en el SPE y un RDP en el PPE para esas listas (antes de que fueran al mismo SPE). */
+static struct gfx_state gfx_state_dpc;
+static struct salsa64_gfx_sync gfx_sync_dpc;
 
 /* --lle: el microcódigo real del RSP, en rebanadas del hilo del CPU. */
 static struct salsa64_lle_host lle_host;
@@ -1861,9 +1875,28 @@ static uint64_t host_clock_us(void)
 	return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
 }
 
+/* SALSA64_JITTER=semilla: la duración de cada tarea del RSP varía al azar
+ * (como el SPE de la PS3, cuyo fin llega a la hora de un sondeo): las de
+ * audio entre 8000 y 68000 ciclos y las gráficas entre 0 y 8 sondeos de
+ * retraso (con SALSA64_GFX_LATE puesto, en 0 si no). Para buscar esperas
+ * eternas que dependen de cuándo termina cada tarea. */
+static uint32_t jitter_state;
+
+static uint32_t jitter_rand(void)
+{
+	jitter_state = jitter_state * 1664525u + 1013904223u;
+	return jitter_state >> 8;
+}
+
 static void trace_rsp(void *ctx, const struct salsa64_task *t, enum salsa64_gbi gbi)
 {
 	(void)ctx;
+	if (jitter_state) {
+		n64.bus.rsp.audio_cycles = 8000 + 10000 * (jitter_rand() % 7);
+		n64.bus.rsp.gfx_cycles = 30000 + 10000 * (jitter_rand() % 5);
+		n64.bus.rsp.dp_cycles = 10000 + 5000 * (jitter_rand() % 5);
+		gfx_late.polls = jitter_rand() % 9;
+	}
 	/* Una tarea JPEG nueva (no la reanudación de una interrumpida, con
 	 * OS_TASK_YIELDED): la anterior ya terminó. */
 	if (jcheck.on && t->type == SALSA64_TASK_JPEG && !(t->flags & 1)) {
@@ -1957,6 +1990,12 @@ static void gfx_summary(void)
 	if (gfx_late.tear)
 		fprintf(stderr, "salsa64-run: gfx: %u tareas comparadas entre el arranque y el fin, %u cambiaron\n",
 			gfx_late.compared, gfx_late.torn_tasks);
+	/* Listas que el CPU le da al RDP por DPC_START/DPC_END, sin pasar por el RSP. */
+	if (n64.bus.rsp.stats.dpc_runs)
+		fprintf(stderr, "salsa64-run: gfx: RDP desde el CPU (DPC_END): %u tramos, %u comandos, %u triángulos, "
+			"%u rectángulos, %u dibujos, %u sin implementar\n", n64.bus.rsp.stats.dpc_runs,
+			gfx_sync.dpc_sum.commands, gfx_sync.dpc_sum.triangles, gfx_sync.dpc_sum.rects,
+			gfx_sync.dpc_sum.draws, gfx_sync.dpc_sum.unknown_cmds);
 }
 
 static void audio_summary(void)
@@ -2541,7 +2580,7 @@ static bool dump_frame(const char *path)
 enum { OPT_REC = 0x100, OPT_LOCKSTEP, OPT_PAD, OPT_TRACE_FROM, OPT_TRACE_FAULTS, OPT_RAM_DUMP, OPT_TRACE_AUDIO,
        OPT_FRAME_EVERY, OPT_NO_PAK, OPT_LLE, OPT_LLE_SPEED, OPT_LLE_CHECK, OPT_LLE_CHECK_JPEG, OPT_POKE, OPT_TRACE_FB, OPT_STATE_SAVE,
        OPT_STATE_LOAD, OPT_FIELDS, OPT_PROFILE, OPT_STATE_ZIP, OPT_INTERP, OPT_INTERP_K, OPT_INTERP_DECIMATE,
-       OPT_INTERP_DISP, OPT_PERFILADO, OPT_STOP_GFX };
+       OPT_INTERP_DISP, OPT_PERFILADO, OPT_STOP_GFX, OPT_PADS, OPT_PAD_PORT };
 
 /* ---- Estados guardados (--state-save, --state-load) ------------------------- */
 
@@ -2680,6 +2719,9 @@ static void usage(FILE *out)
 	      "      --save TIPO       tipo de guardado: ninguno, eeprom4k, eeprom16k, sram256k, flashram\n"
 	      "      --save-dir DIR    leer y escribir el guardado del cartucho y el Controller Pak (.mpk) en DIR\n"
 	      "      --sin-pak         sin Controller Pak en los controles (por omisión hay uno en cada uno)\n"
+	      "      --pad-port N      puerto (1 a 4) al que va el guion de --pad (por omisión 1)\n"
+	      "      --pads N          controles conectados (1 a 4; por omisión 1, como la consola recién\n"
+	      "                        encendida; la PS3 conecta un control por cada mando que ve)\n"
 	      "      --gfx-frame ARCHIVO  al terminar, guardar en PPM lo que dibujó la HLE gráfica\n"
 	      "      --gfx-frame-every N  con --pad, además cada N campos desde --trace-from (ARCHIVO-<campo>.ppm)\n"
 	      "      --stop-gfx N:ARCHIVO  al terminar la N-ésima lista gráfica (G_RDPFULLSYNC) guardar en PPM la\n"
@@ -2742,6 +2784,8 @@ int main(int argc, char **argv)
 		{ "save", required_argument, NULL, 'E' },
 		{ "save-dir", required_argument, NULL, 'W' },
 		{ "sin-pak", no_argument, NULL, OPT_NO_PAK },
+		{ "pads", required_argument, NULL, OPT_PADS },
+		{ "pad-port", required_argument, NULL, OPT_PAD_PORT },
 		{ "gfx-frame", required_argument, NULL, 'G' },
 		{ "gfxtest-check", no_argument, NULL, 'K' },
 		{ "trace-rsp", required_argument, NULL, 'P' },
@@ -2774,6 +2818,7 @@ int main(int argc, char **argv)
 	uint32_t ram = SALSA64_RDRAM_MAX;
 	int tv = SALSA64_BOOT_TV_AUTO, save_type = SALSA64_SAVE_AUTO, c;
 	bool no_pak = false;
+	unsigned n_pads = 1;
 	bool regs = false, idle = true, use_rec = false, lockstep = false;
 	const char *frame_path = NULL, *gfx_path = NULL, *save_dir = NULL, *profile_path = NULL;
 	bool gfx_check = false, audio_check = false;
@@ -2827,6 +2872,15 @@ int main(int argc, char **argv)
 		case OPT_FRAME_EVERY: frame_every = (uint32_t)strtoul(optarg, NULL, 0); break;
 		case 'W': save_dir = optarg; break;
 		case OPT_NO_PAK: no_pak = true; break;
+		case OPT_PADS: n_pads = (unsigned)strtoul(optarg, NULL, 0); break;
+		case OPT_PAD_PORT:
+			pad_port = (unsigned)strtoul(optarg, NULL, 0);
+			if (pad_port < 1 || pad_port > SALSA64_PIF_PORTS) {
+				fprintf(stderr, "salsa64-run: --pad-port va de 1 a %d\n", SALSA64_PIF_PORTS);
+				return 2;
+			}
+			pad_port--;
+			break;
 		case 'E':
 			for (int t = 0; t < SALSA64_SAVE_NTYPES; t++)
 				if (!strcmp(optarg, salsa64_save_name(t)))
@@ -2964,6 +3018,14 @@ int main(int argc, char **argv)
 		gfx_late.backend = (struct salsa64_gfx_backend){ .start = late_start, .finish = late_finish, .done = late_done };
 		salsa64_rsp_set_gfx(&n64.bus, &gfx_late.backend);
 	}
+	if (getenv("SALSA64_JITTER")) {
+		jitter_state = (uint32_t)strtoul(getenv("SALSA64_JITTER"), NULL, 0) * 2654435761u + 1u;
+		if (!getenv("SALSA64_GFX_LATE")) {
+			gfx_late.polls = 0;
+			gfx_late.backend = (struct salsa64_gfx_backend){ .start = late_start, .finish = late_finish, .done = late_done };
+			salsa64_rsp_set_gfx(&n64.bus, &gfx_late.backend);
+		}
+	}
 	salsa64_audio_sync_init(&aud_sync, &aud_state, &n64.bus);
 	salsa64_rsp_set_audio(&n64.bus, &aud_sync.backend);
 	salsa64_ai_set_sink(&n64.bus, audio_push, NULL);
@@ -2978,7 +3040,16 @@ int main(int argc, char **argv)
 			jcheck_lle.sync = jcheck_sync;
 		salsa64_rsp_set_lle(&n64.bus, &jcheck_lle, lle_mode);
 	}
-	salsa64_rsp_set_dpc(&n64.bus, &gfx_sync.dpc);
+	/* SALSA64_SIN_DPC=1: sin quien consuma las listas del RDP que escribe el
+	 * CPU (la PS3 antes de conectarlo siempre): Killer Instinct Gold no manda
+	 * ninguna tarea gráfica porque espera la interrupción del DP de su
+	 * SYNC_FULL. */
+	if (getenv("SALSA64_DPC_ESTADO_APARTE")) {
+		salsa64_gfx_sync_init(&gfx_sync_dpc, &gfx_state_dpc, &n64.bus, &sink);
+		salsa64_rsp_set_dpc(&n64.bus, &gfx_sync_dpc.dpc);
+	} else if (!getenv("SALSA64_SIN_DPC")) {
+		salsa64_rsp_set_dpc(&n64.bus, &gfx_sync.dpc);
+	}
 	n64.bus.rsp.jpeg_lle = jcheck.on;
 	n64.bus.rsp.clock_us = host_clock_us;
 	n64.bus.rsp.trace = trace_rsp;
@@ -3003,6 +3074,8 @@ int main(int argc, char **argv)
 			salsa64_cic_name(info.cic), info.loaded, info.entry, tv_names[info.tv], ram >> 20);
 	savefile_open(&save_file, &save, &n64.bus, rom, save_dir, NULL, save_type, save_log);
 	mempakfile_open(&mempak_file, &mempak, &n64.bus, rom, save_dir, no_pak ? 0u : 0xFu, save_log);
+	for (unsigned i = 0; i < SALSA64_PIF_PORTS; i++)
+		n64.bus.pif.pads[i].connected = i < n_pads;
 
 	if (use_rec) {
 		void *code = salsa64_host_rec_buffer();

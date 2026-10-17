@@ -194,6 +194,7 @@
 #include "rdp/rdp.h"
 #include "rsp/gfx/hle.h"
 #include "replay.h"
+#include "cuelgue.h"
 #include "romlist.h"
 #include "savefile.h"
 #include "mempakfile.h"
@@ -383,6 +384,7 @@ static volatile int emu_paused;
 static uint64_t sys_menu_t0;    /* cuándo se abrió el menú del sistema */
 static bool sys_no_pause;       /* NO_PAUSE_PATH: el menú del sistema no pausa */
 static volatile int emu_live;   /* el hilo de emulación existe (el latido lo espera) */
+static struct cuelgue cuelgue;  /* el juego se quedó esperando (cuelgue.c; lo mira el latido) */
 /* Dónde anda cada hilo, para el latido (watch_thread). */
 static struct {
 	volatile uint32_t pres, emu;  /* vueltas */
@@ -400,6 +402,8 @@ static int selftest_on;   /* vitest */
 static int gfxtest_on;    /* gfxtest */
 static int audiotest_on;  /* audiotest */
 static struct salsa64_gfx_spu gfx_spu;
+/* La HLE en el PPE (si se pide) y, con el RSP a bajo nivel, el RDP en el PPE
+ * (consume los tramos de comandos que entrega el microcódigo real). */
 static struct salsa64_gfx_sync gfx_ppe;
 static struct gfx_state gfx_ppe_state;
 /* RSP a bajo nivel (Fase 6): con SALSA64_DATA_DIR/lle presente, el
@@ -3038,6 +3042,9 @@ static void stats(uint64_t now)
 				    "cargas a la TMEM %.2f ms", (gfx_spu.t_vtx - sw.gfx_vtx0) * k,
 				    (gfx_spu.t_state - sw.gfx_state0) * k, (gfx_spu.t_tex - sw.gfx_tex0) * k,
 				    (gfx_spu.t_load - sw.gfx_load0) * k);
+			if (gfx_spu.dpc_jobs)
+				salsa64_log("gfx: %u listas del CPU al RDP hechas en el SPE desde el arranque, %.2f ms "
+					    "de espera cada una", gfx_spu.dpc_jobs, gfx_spu.dpc_us / 1e3 / gfx_spu.dpc_jobs);
 		}
 		salsa64_log("gfx: fragment programs: %.1f cambios por tarea, %u dibujos con programa generado "
 			    "(%.1f por tarea), %u programas en la caché (%u generados, %u vaciados); %.1f dibujos con "
@@ -4210,6 +4217,7 @@ static void game_close(void)
 	audio_out_shutdown();
 	salsa64_log("cierre: audio cerrado (%u tareas de audio)", n64.bus.rsp.stats.audio);
 	salsa64_rsp_set_gfx(&n64.bus, NULL);  /* espera la tarea en vuelo */
+	salsa64_rsp_set_dpc(&n64.bus, NULL);
 	salsa64_log("cierre: HLE gráfica suelta (%u tareas gráficas)", n64.bus.rsp.stats.gfx);
 	if (jpeg_on_spu) {
 		salsa64_rsp_set_jpeg(&n64.bus, NULL);
@@ -4219,7 +4227,6 @@ static void game_close(void)
 	}
 	if (lle_mode != SALSA64_LLE_OFF) {
 		salsa64_rsp_set_lle(&n64.bus, NULL, SALSA64_LLE_OFF);
-		salsa64_rsp_set_dpc(&n64.bus, NULL);
 		salsa64_log("rsp lle: %u tareas, %u trabajos, %llu instrucciones (la tarea más larga %u), %u fallidos, "
 			    "%u tramos del RDP (%u perdidos); SPE detenido (salida %d)", rsp_spu.tasks, rsp_spu.jobs,
 			    (unsigned long long)rsp_spu.instructions, rsp_spu.task_max, rsp_spu.failed,
@@ -4321,6 +4328,19 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		salsa64_gfx_sync_init(&gfx_ppe, &gfx_ppe_state, &n64.bus, &front_sink);
 		salsa64_rsp_set_gfx(&n64.bus, &gfx_ppe.backend);
 	}
+	/* Killer Instinct Gold (y otros) dibuja con listas del RDP que el CPU
+	 * escribe por DPC_START/DPC_END, sin RSP, y espera la interrupción del
+	 * DP de su SYNC_FULL antes de seguir: sin quien consuma esas listas el
+	 * juego no manda ninguna tarea gráfica. Las consume la misma HLE que las
+	 * tareas (en el PPE o en el SPE): con otro estado del RDP y otro
+	 * directorio de texturas sobre la misma región de la caché, cada uno
+	 * pisaba las texturas del otro. */
+	if (gfx_on_spu) {
+		/* Solo para las listas en la DMEM (xbus), que el SPE no lee. */
+		salsa64_gfx_sync_init(&gfx_ppe, &gfx_ppe_state, &n64.bus, &front_sink);
+		gfx_spu.xbus = &gfx_ppe.dpc;
+	}
+	salsa64_rsp_set_dpc(&n64.bus, gfx_on_spu ? &gfx_spu.dpc : &gfx_ppe.dpc);
 	salsa64_log("HLE gráfica en %s", gfx_on_spu ? "el SPE" : "el PPE");
 	n64.bus.rsp.clock_us = clock_us;
 	/* audio_out: inicio (HLE en el SPE 1, sumidero del AI, puerto de audio). */
@@ -4350,8 +4370,8 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 			salsa64_log("rsp lle: no arrancó el SPE del microcódigo (%d): sin LLE", rc);
 			lle_mode = SALSA64_LLE_OFF;
 		} else {
-			if (gfx_on_spu)
-				salsa64_gfx_sync_init(&gfx_ppe, &gfx_ppe_state, &n64.bus, &front_sink);
+			/* El microcódigo real entrega cientos de tramos por tarea: el RDP
+			 * en el PPE, no una espera al SPE por cada uno. */
 			salsa64_rsp_set_dpc(&n64.bus, &gfx_ppe.dpc);
 			salsa64_rsp_set_lle(&n64.bus, &rsp_spu.backend, lle_mode);
 			salsa64_log("rsp lle: microcódigo real en un SPE para %s; el RDP en el PPE",
@@ -4619,6 +4639,7 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		rdp_scale_set(video_cfg.scale, "vuelve la global");
 		return GAME_FAILED;
 	}
+	cuelgue_reset(&cuelgue);
 	emu_live = 1;
 	salsa64_log("hilos: emulación con prioridad %d, presentación con 1001", EMU_PRIO);
 	/* Avisos y atajos con SELECT (estados guardados, contador de FPS). */
@@ -5591,6 +5612,9 @@ static void watch_thread(void *arg)
 				    gfx_spu.waits, beat.pres_at, pause_req, (unsigned long long)n64.cpu.cur_pc,
 				    (unsigned long long)n64.cpu.cycles, n64.cpu.rec_mark, n64.cpu.rec_cur);
 		}
+		/* El juego mismo: dejó de leer los controles y de dibujar con el VI andando. */
+		cuelgue_watch(&cuelgue, &n64, now, expect && !selftest_on && !gfxtest_on && !audiotest_on,
+			      SALSA64_DATA_DIR, salsa64_log);
 	}
 	sysThreadExit(0);
 }

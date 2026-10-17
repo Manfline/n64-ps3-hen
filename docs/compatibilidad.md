@@ -29,6 +29,26 @@ mismos colores que la HLE, así que no viene del microcódigo.
 Variantes **no probadas** (sin respaldo): otras versiones de DKR (CRC de
 GLideN64 `6E6FC893`) y F3DJFG (Jet Force Gemini, Mickey's Speedway USA).
 
+## 2026-10-17 — Killer Instinct Gold: dibuja con la HLE; la segunda pelea se congela en la PS3
+
+| Juego | Antes | Ahora |
+|---|---|---|
+| Killer Instinct Gold (NKIE) | PS3: 0 tareas gráficas en todas las versiones (solo dibujaba con `lle` encendido); host: dibuja | RPCS3 sin `lle`: 1409 tareas gráficas en 1800 campos (logo y fichas de los personajes); host: la pelea completa, sin esperas |
+
+El juego da al RDP listas escritas por el CPU (`DPC_START`/`DPC_END`, sin RSP:
+el fondo del escenario y los marcos) y no manda tareas gráficas hasta recibir
+la interrupción del DP de su `SYNC_FULL`. Esas listas las corre ahora el mismo
+SPE que las tareas (con otro estado del RDP sobre la misma caché de texturas
+los fondos salían rotos); detalle en [docs/estado.md](estado.md).
+
+**Sin resolver (PS3 real):** con la primera versión del arreglo la primera
+pelea va bien y al empezar la segunda (hacia 50 campos después de «READY») el
+juego deja de leer los controles y de mandar tareas gráficas, con la música
+sonando; con el RSP a bajo nivel en todas las tareas (en una versión de
+prueba de su recompilador) pasa en la primera. No se reproduce en el host. La
+versión siguiente avisa y vuelca la RDRAM (`cuelgue-<campo>.rdram` en
+`/dev_hdd0/salsa64/`) para ver en qué espera cada hilo.
+
 ## 2026-10-16 — Audio de MusyX (Factor 5): HLE nueva, verificada en el host
 
 Los juegos de MusyX corrían mudos: su tarea de audio no es una lista de
