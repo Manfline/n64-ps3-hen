@@ -375,9 +375,11 @@ static void detect_table(void)
 		CHECK_EQ(detect(SALSA64_SAVE_AUTO, &src), cases[k].type);
 		CHECK_EQ(src, SALSA64_SAVE_FROM_TABLE);
 	}
-	/* Sin dato (o con fuentes en desacuerdo): ninguno. */
-	static const char *const unknown[] = { "NK4E", "ND3E", "NWTP", "NXXE" };
-	for (unsigned k = 0; k < 4; k++) {
+	/* Sin dato (o con fuentes en desacuerdo): ninguno. Donald Duck (NDQ),
+	 * Rush 2049 (NRU) y Hydro Thunder (NHT) guardan solo en el Controller
+	 * Pak: sin tipo de cartucho. */
+	static const char *const unknown[] = { "NK4E", "ND3E", "NWTP", "NXXE", "NDQE", "NDQP", "NRUE", "NHTE" };
+	for (unsigned k = 0; k < sizeof unknown / sizeof unknown[0]; k++) {
 		rom_code(unknown[k], 0);
 		CHECK_EQ(detect(SALSA64_SAVE_AUTO, &src), SALSA64_SAVE_NONE);
 		CHECK_EQ(src, SALSA64_SAVE_FROM_NONE);

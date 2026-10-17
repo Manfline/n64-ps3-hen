@@ -14,6 +14,10 @@
  * dicen lo mismo. No se copió código de ninguna. Quedan fuera los
  * desacuerdos (NK4 fuera de las versiones japonesas 1.0 y 1.1, NO2, NDD):
  * esos juegos se configuran a mano en guardado.cfg.
+ *
+ * Los juegos que guardan solo en el Controller Pak (Donald Duck Quack
+ * Attack/Goin' Quackers, NDQ; Rush 2049, NRU; Hydro Thunder, NHT) no llevan
+ * tipo de cartucho: no deben aparecer en ninguna lista.
  */
 #include "core/save.h"
 
@@ -38,7 +42,7 @@ static const struct {
 /* Códigos de 3 caracteres (todas las regiones), en orden alfabético. */
 static const char eeprom4k[] =
 	"CLB" "NAB" "NAD" "NAG" "NB6" "NBC" "NBD" "NBH" "NBK" "NBM" "NBN" "NBV"
-	"NCG" "NCH" "NCR" "NCT" "NCU" "NCX" "NDQ" "NDR" "NDU" "NDY" "NEA" "NER"
+	"NCG" "NCH" "NCR" "NCT" "NCU" "NCX" "NDR" "NDU" "NDY" "NEA" "NER"
 	"NF2" "NFG" "NFH" "NFW" "NFX" "NFY" "NGE" "NGL" "NGU" "NGV" "NHA" "NHF"
 	"NHP" "NIC" "NIJ" "NIR" "NJK" "NJM" "NK2" "NKA" "NKI" "NKT" "NLB" "NLL"
 	"NLR" "NMG" "NMI" "NML" "NMO" "NMR" "NMS" "NMU" "NMW" "NMZ" "NN6" "NNA"
