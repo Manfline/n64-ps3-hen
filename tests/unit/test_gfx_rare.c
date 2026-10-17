@@ -691,12 +691,91 @@ static void dkr_billboard(void)
 	CHECK_EQ(gs.rare.dkr.billboard, 1u);
 }
 
+/* G_DMA_TEX_OFFSET (0x02, Jet Force Gemini y Mickey's Speedway): una tabla
+ * de 32 desplazamientos en bytes que cada G_SETTIMG siguiente suma a su
+ * dirección, de cualquier formato, uno tras otro; G_DMA_OFFSETS apaga el
+ * interruptor y otro 0x02 vuelve a empezar la tabla. */
+static uint32_t dkr_put_texoffsets(const uint16_t *t, unsigned n)
+{
+	uint32_t a = data_alloc(64);
+	for (unsigned i = 0; i < 32; i++)
+		salsa64_wr16(t_n64.bus.rdram + a + 2 * i, i < n ? t[i] : 0);
+	return a;
+}
+
+/* n_set G_SETTIMG (el segundo en IA, los demás en RGBA) tras el 0x02; con
+ * `again`, además un G_DMA_OFFSETS y otro G_SETTIMG. Devuelve la dirección
+ * física que deja el último. */
+static uint32_t dkr_timg_after(unsigned n_set, bool again)
+{
+	start(SALSA64_GBI_F3DJFG);
+	const uint16_t t[3] = { 0x0B00, 0x1600, 0x2100 };
+	uint32_t tab = dkr_put_texoffsets(t, 3);
+	dl(0xBC000806, 0x00030000);                         /* segmento 2 = 0x30000 */
+	dl(0xBF000000, 0);
+	dl(0x02000050, tab);
+	for (unsigned i = 0; i < n_set; i++)
+		dl(0xFD000000 | (i == 1 ? 3u << 21 | 2u << 19 : 2u << 19) | 31, 0x02001000 + 0x100 * i);
+	if (again) {
+		dl(0xBF000000, 0);
+		dl(0xFD000000 | 2u << 19 | 31, 0x02002000);       /* sin desplazamiento */
+	}
+	run();
+	CHECK_EQ(res.unknown_cmds, 0);
+	CHECK_EQ(res.dl_errors, 0);
+	return gs.timg_addr;
+}
+
+static void dkr_tex_offsets(void)
+{
+	/* El primero suma la entrada 0, el segundo (IA) la 1 y el tercero la 2. */
+	CHECK_EQ(dkr_timg_after(1, false), 0x30000u + 0x1000 + 0x0B00);
+	CHECK_EQ(dkr_timg_after(2, false), 0x30000u + 0x1100 + 0x1600);
+	CHECK_EQ(dkr_timg_after(3, false), 0x30000u + 0x1200 + 0x2100);
+	/* Más allá de las entradas dadas no suma nada. */
+	CHECK_EQ(dkr_timg_after(4, false), 0x30000u + 0x1300);
+	/* G_DMA_OFFSETS apaga el interruptor. */
+	CHECK_EQ(dkr_timg_after(1, true), 0x30000u + 0x2000);
+
+	/* Otro 0x02 reinicia el índice: el primero de la segunda tabla suma su entrada 0. */
+	start(SALSA64_GBI_F3DJFG);
+	const uint16_t t1[2] = { 0x0010, 0x0020 }, t2[2] = { 0x0300, 0x0400 };
+	uint32_t a1 = dkr_put_texoffsets(t1, 2), a2 = dkr_put_texoffsets(t2, 2);
+	dl(0x02000050, a1);
+	dl(0xFD100000 | 31, 0x00005000);                     /* + 0x10 */
+	dl(0xFD100000 | 31, 0x00005000);                     /* + 0x20 */
+	dl(0x02000050, a2);
+	dl(0xFD100000 | 31, 0x00006000);                     /* + 0x300 */
+	run();
+	CHECK_EQ(gs.timg_addr, 0x6300u);
+
+	/* La tabla tiene 32 entradas: la 33.ª no existe (sin desplazamiento). */
+	start(SALSA64_GBI_F3DJFG);
+	uint16_t full[32];
+	for (unsigned i = 0; i < 32; i++)
+		full[i] = 0x10;
+	uint32_t af = dkr_put_texoffsets(full, 32);
+	dl(0x02000050, af);
+	for (unsigned i = 0; i < 33; i++)
+		dl(0xFD100000 | 31, 0x00008000);
+	run();
+	CHECK_EQ(gs.timg_addr, 0x8000u);
+	CHECK_EQ(gs.rare.dkr.tex_i, 33u);
+
+	/* Sin 0x02 no cambia nada. */
+	start(SALSA64_GBI_F3DJFG);
+	dl(0xFD100000 | 31, 0x00009000);
+	run();
+	CHECK_EQ(gs.timg_addr, 0x9000u);
+}
+
 void t_suite_gfx_rare(void)
 {
 	RUN(dkr_vertices_triangles);
 	RUN(dkr_offsets_slots);
 	RUN(dkr_counted_list);
 	RUN(dkr_billboard);
+	RUN(dkr_tex_offsets);
 	RUN(pd_vertex_colors);
 	RUN(pd_lighting);
 	RUN(pd_tri4_quad);

@@ -41,10 +41,10 @@
  *   pila                                    el resto (12,7 KB: de _end a
  *                                         __stack); la cadena más honda,
  *                                         fondo S2DEX → TEXRECT → estado →
- *                                         combiner, usa 9,3 KB según
+ *                                         combiner, usa 9,5 KB según
  *                                         -fstack-usage y el grafo de
  *                                         llamadas del binario: holgura
- *                                         3,4 KB. El enlace falla si baja de
+ *                                         1,8 KB. El enlace falla si baja de
  *                                         1,5 KB (gfx_STACK_MIN en
  *                                         src/frontend/Makefile): pasada la
  *                                         pila, el SPE pisa sin aviso las

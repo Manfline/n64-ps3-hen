@@ -100,3 +100,21 @@ Las escenas del host (7 juegos, Kirby 64 y la casa de Link de
   Con `--fields 10000` y `--gfx-frame-every 250` queda la carrera completa
   en imágenes. Para el modo Adventure (la isla de Timber), A en «Game Select»
   en 6850 y 6950 y START cada 200 campos desde el 7250 salta la intro.
+- `mickey-semaforo.pad` (Mickey's Speedway USA, 2026-10-17): sin partida
+  guardada, desde el arranque: START en «Press start» (campo 2600) y en el
+  aviso del Rumble Pak (3000), A en la tele del cuarto (3550), en el
+  personaje (Mickey, 3850) y en su «OK» (4150), el stick a la derecha en 4650
+  para el bloque «Motor Way Mania», A en él (4800) y en la dificultad
+  (5000), y A cada 150 campos por la historieta hasta la parrilla (aparece
+  hacia el campo ~9400; las luces del semáforo: rojo, rojo rojo, rojo rojo
+  rojo y verde entre los campos ~9500 y ~9760) y A sostenida desde el 9800. Con `--fields 9800` y `--gfx-frame-every 40
+  --trace-from 9560` quedan las luces en imágenes. Sin G_DMA_TEX_OFFSET las
+  luces se quedan apagadas.
+- `jfg-3d.pad` (Jet Force Gemini, 2026-10-17): sin partida guardada: START en
+  los campos 2450 y 2900, A en «Game 1 / New Game» (3200), el stick hasta la
+  tecla END del teclado del nombre y A (campo ~3528) y START cada 250
+  campos desde el 3800 por la intro. Pasa por escenas en 3D: el planeta y la
+  nave (campos ~3600 a 5000), el puente de mando, una aldea en la selva
+  (~7600) y la selección de Juno (~13 000); con `--fields 14000`,
+  `--trace-from 3600` y `--gfx-frame-every 100` quedan en imágenes. Las
+  escenas usan G_DMA_TEX_OFFSET.

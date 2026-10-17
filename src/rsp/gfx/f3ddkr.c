@@ -30,7 +30,19 @@
  *                     vértices se suman al 0, ya transformado) y el 0x0A
  *                     elige la matriz de los vértices siguientes
  *   G_DMA_OFFSETS (0xBF)  bases de las direcciones de matrices (w0) y
- *                     vértices (w1)
+ *                     vértices (w1); apaga además los desplazamientos de
+ *                     textura de G_DMA_TEX_OFFSET
+ *   G_DMA_TEX_OFFSET (0x02, Jet Force Gemini y Mickey's Speedway) la
+ *                     dirección (w1) de una tabla de 32 desplazamientos u16
+ *                     en bytes (el microcódigo copia 64 bytes a su DMEM):
+ *                     enciende el interruptor y pone el índice en 0. Cada
+ *                     G_SETTIMG que sigue, de cualquier formato, suma a su
+ *                     dirección la entrada del índice y lo avanza; con el
+ *                     interruptor apagado (antes del primero o tras un
+ *                     G_DMA_OFFSETS) no suma nada. El juego cambia la tabla
+ *                     de un cuadro a otro para animar texturas: la luz del
+ *                     semáforo de la salida de Mickey's Speedway (cuadros de
+ *                     0x0B00 bytes), por ejemplo
  *
  * El microcódigo no trae texto de identificación (su tarea tampoco declara
  * el tamaño del código): se reconoce por el CRC-32 de sus 4 KB
@@ -45,7 +57,11 @@
  * mupen64plus-video-rice (RSP_GBI_Others.h), GPLv2 o posterior, y GLideN64
  * (F3DDKR.cpp, GPLv2 solo: consulta, sin copiar código) para la codificación
  * de los comandos; la codificación se verificó con las listas del juego y
- * el microcódigo real (--lle) en el host.
+ * el microcódigo real (--lle) en el host. El comando 0x02 no lo implementan
+ * ni Glide64mk2 ni Rice y GLideN64 lo aproxima (solo formato RGBA, índice por
+ * carga a la TMEM): su semántica sale de seguir el microcódigo real en el
+ * host (qué guarda su DMEM y cómo cambia las direcciones de los G_SETTIMG que
+ * manda al RDP) y se comprobó contra él en miles de G_SETTIMG de ambos juegos.
  */
 #include <string.h>
 
@@ -54,15 +70,44 @@
 #include "rsp/gfx/hle.h"
 
 enum {
-	G_MTX = 0x01, G_VTX = 0x04, G_DMATRI = 0x05, G_DL_IN_MEM = 0x07,
-	G_MOVEWORD = 0xBC, G_DMA_OFFSETS = 0xBF,
+	G_MTX = 0x01, G_DMA_TEX_OFFSET = 0x02, G_VTX = 0x04, G_DMATRI = 0x05, G_DL_IN_MEM = 0x07,
+	G_MOVEWORD = 0xBC, G_DMA_OFFSETS = 0xBF, G_SETTIMG = 0xFD,
 };
 enum { MW_BILLBOARD = 0x02, MW_MATRIX_SELECT = 0x0A };
 
 #define DKR_VTX_BYTES 10u
 #define DKR_TRI_BYTES 16u
+#define DKR_TEXOFF_N 32u
 
 #define DKR(g) ((g)->rare.dkr)
+
+/* G_DMA_TEX_OFFSET: el microcódigo trae por DMA la tabla de desplazamientos
+ * (u16 en bytes, 32 entradas: los 64 bytes que copia a su DMEM, aquí tal cual
+ * y leídos al usarlos) y enciende el interruptor con el índice en cero. Cada G_SETTIMG siguiente, de
+ * cualquier formato, suma a su dirección la entrada que toca y avanza una;
+ * G_DMA_OFFSETS apaga el interruptor (verificado con el microcódigo real). */
+static void tex_offsets(struct gfx_state *g, uint32_t w1)
+{
+	DKR(g).tex_on = 0;
+	const uint8_t *t = gfx_io_read(g, GFX_IO_SMALL, gfx_addr(g, w1), sizeof DKR(g).tex_off);
+	if (!t) {
+		g->res->dl_errors++;
+		return;
+	}
+	memcpy(DKR(g).tex_off, t, sizeof DKR(g).tex_off);
+	DKR(g).tex_i = 0;
+	DKR(g).tex_on = 1;
+}
+
+static void set_timg(struct gfx_state *g, uint32_t w0, uint32_t w1)
+{
+	if (DKR(g).tex_on) {
+		uint32_t i = DKR(g).tex_i++;
+		if (i < DKR_TEXOFF_N)
+			w1 += salsa64_rd16(DKR(g).tex_off + 2 * i);
+	}
+	gfx_rdp_command(g, w0, w1);
+}
 
 static void matrix(struct gfx_state *g, uint32_t w0, uint32_t w1)
 {
@@ -92,8 +137,9 @@ static void matrix(struct gfx_state *g, uint32_t w0, uint32_t w1)
 
 static void vertices(struct gfx_state *g, uint32_t w0, uint32_t w1)
 {
-	/* Jet Force Gemini y Mickey (F3DJFG) no suman el 1 (sin respaldo para
-	 * comprobarlo: la codificación es la de GLideN64 y Glide64). */
+	/* Jet Force Gemini y Mickey (F3DJFG) no suman el 1 (la codificación es la
+	 * de GLideN64 y Glide64; con los respaldos de los dos juegos se comprobó
+	 * contra el búfer de vértices del microcódigo real). */
 	uint32_t n = ((w0 >> 19) & 0x1F) + (g->job->gbi == SALSA64_GBI_F3DJFG ? 0u : 1u);
 	if (w0 & 0x10000) {
 		if (DKR(g).billboard)
@@ -203,10 +249,17 @@ static bool dkr_command(struct gfx_state *g, uint32_t w0, uint32_t w1)
 			DKR(g).dl_depth = (uint32_t)g->dl_sp;
 		}
 		return true;
+	case G_DMA_TEX_OFFSET:
+		tex_offsets(g, w1);
+		return true;
+	case G_SETTIMG:
+		set_timg(g, w0, w1);
+		return true;
 	case G_DMA_OFFSETS:
 		DKR(g).dma_mtx = w0 & 0x00FFFFFF;
 		DKR(g).dma_vtx = w1 & 0x00FFFFFF;
 		DKR(g).vtx_last = 0;
+		DKR(g).tex_on = 0;
 		return true;
 	case G_MOVEWORD:
 		if ((w0 & 0xFF) == MW_BILLBOARD) {

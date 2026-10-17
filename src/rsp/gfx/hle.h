@@ -122,6 +122,8 @@ struct gfx_rare {
 			uint32_t cur_mtx;            /* matriz con que se transforman los vértices (0 a 3) */
 			uint32_t billboard;          /* vértices relativos al 0 (carteles) */
 			uint32_t dl_pop;             /* la lista contada terminó: volver con el siguiente comando */
+			uint32_t tex_on, tex_i;      /* G_DMA_TEX_OFFSET: encendido y entrada que sigue */
+			uint8_t tex_off[64];         /* 32 desplazamientos u16 (en el orden de la N64) que se suman a G_SETTIMG */
 		} dkr;
 	};
 };

@@ -26,8 +26,36 @@ texturas (el rasterizador del host; docs/referencia-ares.md), y en el título y
 algunas demos el suelo sale ~9 % más claro que en la consola (240 contra 219
 de media en una franja del título) sin que se sepa de dónde: la LLE da los
 mismos colores que la HLE, así que no viene del microcódigo.
-Variantes **no probadas** (sin respaldo): otras versiones de DKR (CRC de
-GLideN64 `6E6FC893`) y F3DJFG (Jet Force Gemini, Mickey's Speedway USA).
+Variante **no probada** (sin respaldo): otras versiones de DKR (CRC de
+GLideN64 `6E6FC893`). Jet Force Gemini y Mickey's Speedway USA (F3DJFG) tienen
+su sección debajo.
+
+## 2026-10-17 — Jet Force Gemini y Mickey's Speedway USA con HLE completa (en el host; falta la PS3)
+
+El microcódigo de los dos (F3DJFG, CRC-32 de GLideN64 `BDE9D1FB`) es el de
+Diddy Kong Racing con otro conteo de vértices y un comando más, G_DMA_TEX_OFFSET
+(0x02), que la HLE no tenía: sin él daban 746 y 2548 comandos sin implementar en
+los títulos y, en Mickey's Speedway, las luces del semáforo de la salida no
+cambiaban nunca. Ahora quedan en **0 comandos sin implementar** y en el host:
+
+| Juego | Hasta dónde llega (`salsa64-run`, respaldo propio) | Comandos sin implementar |
+|---|---|---|
+| Jet Force Gemini | título, «Select Game» con el teclado del nombre, intro de la partida nueva (el planeta, la nave, el puente de mando, una aldea en la selva: escenas en 3D) y selección de Juno (`docs/pads/jfg-3d.pad`, hasta el campo ~14 000) | 27 981 → 0 |
+| Mickey's Speedway USA | título, cuarto de Mickey, personaje, «Motor Way Mania», la historieta, la parrilla y el principio de la carrera (`docs/pads/mickey-semaforo.pad`, campos ~5 600 a 12 000) | 3 242 → 0 |
+
+Contra el microcódigo real (`--lle=all`, desde estados del juego, mismos
+campos): los G_SETTIMG que manda al RDP coinciden uno por uno (26 029 de
+Mickey's Speedway y 13 550 de Jet Force Gemini); los alfas de los vértices que
+carga coinciden salvo ±1 en los de niebla (la HLE redondea). La imagen del VI
+difiere 0,1–3 % en tres de las cuatro escenas probadas de Jet Force Gemini y
+3,7–8,9 % en las de Mickey's Speedway, casi todo el HUD y los textos que la
+LLE del host no dibuja; las luces del semáforo pasan de apagadas a iguales a
+las del microcódigo real. La LLE del host tampoco aplica la niebla del
+blender (`build_state` solo la pone en los triángulos de la HLE): en la
+escena de la selva de Jet Force Gemini, con mucha niebla, las dos imágenes se
+separan 45,6 % y con la niebla apagada en la HLE solo 1,0 %.
+Variantes sin respaldo: otras versiones de Mickey's Speedway y de Jet Force
+Gemini.
 
 ## 2026-10-17 — Killer Instinct Gold: dibuja con la HLE; la segunda pelea se congela en la PS3
 
@@ -114,6 +142,8 @@ asigna velocidad.
 | FIFA 99 | La intro funciona; el partido no arranca | — | Fallo conocido. |
 | Banjo-Kazooie | Jugable, con fallo gráfico | — | Las piezas del rompecabezas salen negras. |
 | Diddy Kong Racing | Jugable en el host | — | HLE de F3DDKR desde el 2026-10-17 (sección de arriba); sin probar en la PS3. |
+| Jet Force Gemini | Solo los títulos, con comandos sin implementar | Dibuja con todos sus comandos en el host | G_DMA_TEX_OFFSET (2026-10-17, sección de arriba); sin probar en la PS3. |
+| Mickey's Speedway USA | Solo los títulos; el semáforo de la salida no cambia | Dibuja con todos sus comandos en el host; el semáforo cambia de luz | G_DMA_TEX_OFFSET (2026-10-17, sección de arriba); sin probar en la PS3. |
 | Indiana Jones | No jugable | — | Sin HLE de su microcódigo gráfico. |
 | Star Wars: Rogue Squadron | No jugable | — | Sin HLE de su microcódigo gráfico. |
 | Resident Evil 2 | No jugable | — | Sin HLE de su microcódigo gráfico. |
