@@ -48,7 +48,9 @@ y la misma caché, síncrono (la lista es corta y el CPU espera su interrupción
 del DP), con la tarea en vuelo recogida antes (`salsa64_rsp_quiesce`) para que
 sus salidas lleguen al RSX en el orden en que se dieron. Con el RSP a bajo
 nivel (cientos de tramos por tarea) el RDP sigue en el PPE (`gfx_ppe`): con la
-HLE gráfica en el SPE y el modo `auto`, esas dos HLE siguen pisándose.
+HLE gráfica en el SPE y el modo `auto`, esas dos HLE siguen pisándose. Las
+listas que el CPU deja en la DMEM (xbus, que el SPE no lee) también van al
+PPE.
 
 ### 3. Otros hallazgos en el camino
 
