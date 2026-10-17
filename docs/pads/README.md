@@ -100,3 +100,18 @@ Las escenas del host (7 juegos, Kirby 64 y la casa de Link de
   Con `--fields 10000` y `--gfx-frame-every 250` queda la carrera completa
   en imágenes. Para el modo Adventure (la isla de Timber), A en «Game Select»
   en 6850 y 6950 y START cada 200 campos desde el 7250 salta la intro.
+- `re2-intro.pad` (Resident Evil 2, USA rev. 1, 2026-10-17): START cada 400
+  campos desde el 500 y A 200 campos después, hasta el 19 900 (8 campos
+  pulsada). **Para ver el video no hace falta ninguna pulsación:** la intro
+  trae sola los logos (RESIZE de franjas de 436 de ancho en los campos ~45 y
+  ~517, y de 320 de ancho hacia el 685), el video de la cinemática de entrada
+  (DECODE + FILL de 240 × 120 desde el campo ~698, un cuadro cada ~4 campos;
+  hacia el 4000 las franjas de RESIZE son de 596 de ancho, con difuminado) y
+  sigue más allá del campo 24 000. Con `--lle-check-jpeg` cada tarea de video
+  se compara con el microcódigo real (sin pulsaciones y hasta el campo 24 000:
+  3336 tareas, 389 MB, 0 bytes distintos); con este guion START y A saltan buena
+  parte de esa intro y salen menos tareas (24 de RESIZE, 11 de DECODE y 10 de
+  FILL hasta el campo 9000, también 0 distintos).
+  Sin `--lle`, las tareas S2DEX sueltas del juego (menús y fondos) no tienen
+  HLE y el VI enseña basura donde las espera; con `--lle` las hace el
+  microcódigo real.
