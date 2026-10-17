@@ -197,7 +197,9 @@ struct salsa64_audio_backend {
  * Opcional. Sin backend, la HLE JPEG corre en el hilo del CPU al arrancar la
  * tarea, que termina en el acto. Con backend (en la PS3, un SPE: la HLE con
  * E/S por DMA), la tarea dura jpeg_cycles y su fin se sondea como el de las
- * gráficas (done/finish); entre medias el CPU sigue emulando. */
+ * gráficas (done/finish); entre medias el CPU sigue emulando. Las tareas de
+ * video de Resident Evil 2 (rsp/jpeg/re2.c) entran por el mismo camino, con
+ * los parámetros de la tarea en data_ptr (rsp.c los toma de ucode_data). */
 struct salsa64_jpeg_result;
 
 struct salsa64_jpeg_backend {
@@ -272,6 +274,14 @@ struct salsa64_rsp_stats {
 	uint32_t jpeg_mb;      /* sus macrobloques */
 	uint32_t jpeg_bad;     /* con parámetros que no valían */
 	uint64_t jpeg_us;      /* tiempo del hilo del CPU en ellas (con clock_us) */
+	uint32_t video;        /* tareas de video de Resident Evil 2 hechas por la HLE (rsp/jpeg/re2) */
+	uint32_t video_rows;   /* sus filas escritas (unidades: pares de filas en DECODE) */
+	uint32_t video_bad;    /* con parámetros que no valían */
+	uint32_t video_unsup;  /* con el microcódigo de video, pero parámetros o constantes que la HLE no hace igual (al LLE o sin hacer) */
+	uint64_t video_us;     /* tiempo del hilo del CPU en ellas (con clock_us) */
+	/* Lo mismo por microcódigo (RESIZE, DECODE y FILL). */
+	uint32_t video_k[3], video_k_rows[3];
+	uint64_t video_k_us[3];
 	/* Interrupciones que siguen a una tarea, para saber en un cuelgue si una
 	 * quedó sin la suya (frontend/cuelgue.c). */
 	uint32_t sp_irq;       /* fines de tarea del RSP con su BREAK (interrupción del SP si está habilitada) */
@@ -292,6 +302,8 @@ struct salsa64_rsp {
 	/* Diagnóstico: las tareas JPEG van al microcódigo real (LLE) aunque
 	 * tengan HLE, para compararlas (salsa64-run --lle-check-jpeg). */
 	bool jpeg_lle;
+	bool jpeg_video;        /* la tarea JPEG en curso es de video (para las estadísticas) */
+	unsigned jpeg_vkind;    /* y cuál: 0 a 2 (RESIZE, DECODE, FILL) */
 	/* Opcional: reloj en µs para medir lo que se hace en el hilo del CPU
 	 * (la HLE JPEG). */
 	uint64_t (*clock_us)(void);

@@ -1772,6 +1772,76 @@ static void log_jpeg(uint64_t us_field)
 	jpeg_log.seen = st->jpeg;
 }
 
+/* Video de Resident Evil 2 (RESIZE, DECODE y FILL; rsp/jpeg/re2.c): llegan sin parar mientras
+ * suena una cinemática, así que se informa por ventanas de VIDEO_LOG_TASKS tareas: cuántas de
+ * cada tipo, cuánto tardaron en el SPE (o en el hilo de emulación, si van al PPE), la más
+ * larga, lo que esperó el PPE y el campo más lento de la ventana. */
+#define VIDEO_LOG_TASKS 150u
+static struct {
+	uint32_t seen, tasks, field0, fields, polls, waits;
+	uint32_t k[3], rows[3], on_ppe[3];
+	uint64_t ticks[3], us, us_max, k_us[3], wait_us, sleep_us;
+} video_log;
+
+static void log_video(uint64_t us_field)
+{
+	const struct salsa64_rsp_stats *st = &n64.bus.rsp.stats;
+	const struct salsa64_jpeg_spu *js = &jpeg_spu;
+	if (st->video < video_log.tasks)
+		memset(&video_log, 0, sizeof video_log);  /* otro juego */
+	if (st->video != video_log.seen) {
+		if (!video_log.fields++)
+			video_log.field0 = n64.bus.vi.fields;
+		if (us_field > video_log.us_max)
+			video_log.us_max = us_field;
+	}
+	video_log.seen = st->video;
+	if (st->video - video_log.tasks < VIDEO_LOG_TASKS)
+		return;
+	const double hz = jpeg_on_spu ? spukit_tick_hz() : 1.0;
+	uint32_t n[3];
+	double ms[3], max[3];
+	for (int k = 0; k < 3; k++) {
+		n[k] = st->video_k[k] - video_log.k[k];
+		ms[k] = jpeg_on_spu ? (js->v_ticks[k] - video_log.ticks[k]) * 1e3 / hz : (st->video_k_us[k] - video_log.k_us[k]) / 1e3;
+		max[k] = jpeg_on_spu ? js->v_max[k] * 1e3 / hz : 0.0;
+	}
+	if (jpeg_on_spu)
+		salsa64_log("video: %u tareas (RESIZE %u, DECODE %u, FILL %u; %u, %u y %u filas) en el SPE: %.2f, %.2f y %.2f ms "
+			    "(la más larga desde el arranque %.3f, %.3f y %.3f ms), %u devueltas al PPE; hilo de emulación %.2f ms "
+			    "(%u esperas de %.2f ms, %u sondeos, %.1f ms dormido); campos %u–%u, el más lento %.1f ms de emulación; "
+			    "%u con parámetros malos y %u sin HLE en total",
+			    st->video - video_log.tasks, n[0], n[1], n[2], st->video_k_rows[0] - video_log.rows[0],
+			    st->video_k_rows[1] - video_log.rows[1], st->video_k_rows[2] - video_log.rows[2], ms[0], ms[1], ms[2],
+			    max[0], max[1], max[2], js->v_on_ppe[0] + js->v_on_ppe[1] + js->v_on_ppe[2] -
+			    video_log.on_ppe[0] - video_log.on_ppe[1] - video_log.on_ppe[2], (st->video_us - video_log.us) / 1e3,
+			    js->waits - video_log.waits, (js->wait_us - video_log.wait_us) / 1e3, js->polls - video_log.polls,
+			    (js->sleep_us - video_log.sleep_us) / 1e3, video_log.field0, video_log.field0 + video_log.fields - 1,
+			    video_log.us_max / 1e3, st->video_bad, st->video_unsup);
+	else
+		salsa64_log("video: %u tareas (RESIZE %u, DECODE %u, FILL %u; %u, %u y %u filas) en el PPE (hilo de emulación): "
+			    "%.2f, %.2f y %.2f ms; campos %u–%u, el más lento %.1f ms de emulación; %u con parámetros malos y %u sin "
+			    "HLE en total", st->video - video_log.tasks, n[0], n[1], n[2], st->video_k_rows[0] - video_log.rows[0],
+			    st->video_k_rows[1] - video_log.rows[1], st->video_k_rows[2] - video_log.rows[2], ms[0], ms[1], ms[2],
+			    video_log.field0, video_log.field0 + video_log.fields - 1, video_log.us_max / 1e3, st->video_bad,
+			    st->video_unsup);
+	video_log.tasks = st->video;
+	video_log.us = st->video_us;
+	video_log.wait_us = js->wait_us;
+	video_log.sleep_us = js->sleep_us;
+	video_log.polls = js->polls;
+	video_log.waits = js->waits;
+	for (int k = 0; k < 3; k++) {
+		video_log.k[k] = st->video_k[k];
+		video_log.rows[k] = st->video_k_rows[k];
+		video_log.k_us[k] = st->video_k_us[k];
+		video_log.ticks[k] = js->v_ticks[k];
+		video_log.on_ppe[k] = js->v_on_ppe[k];
+	}
+	video_log.fields = 0;
+	video_log.us_max = 0;
+}
+
 /* ---- Perfilado por campo (perfilado_ps3.h; hilo de emulación) ----------------------
  * Lo que costó cada campo y por qué: si la emulación del campo pasa del
  * umbral (tiron_ms), un registro TIRON con la traducción, las esperas al SPE
@@ -1791,7 +1861,7 @@ static void perf_snap_take(struct perf_snap *s)
 	s->spe_sleep = gfx_spu.sleep_us + jpeg_spu.sleep_us;
 	salsa64_rdp_get_waits(&s->set_wait, &s->rb_wait);
 	s->copy = emu_stats.us_copy;
-	s->jpeg = n64.bus.rsp.stats.jpeg_us;
+	s->jpeg = n64.bus.rsp.stats.jpeg_us + n64.bus.rsp.stats.video_us;  /* JPEG y video de RE2 */
 	s->interp = use_rec ? rec.stats.interp_steps : 0;
 	s->invalidated = use_rec ? rec.stats.invalidated : 0;
 	s->pi = n64.bus.pi_dma_bytes;
@@ -1964,6 +2034,7 @@ static void emu_thread(void *arg)
 		pif_edges_note();
 		log_unknown_gbi();
 		log_jpeg(t1 - t0);
+		log_video(t1 - t0);
 		if (paced)
 			pacer_advance(&pacer, cycles);
 		savefile_stage(&save_file, t1);
@@ -4221,8 +4292,11 @@ static void game_close(void)
 	salsa64_log("cierre: HLE gráfica suelta (%u tareas gráficas)", n64.bus.rsp.stats.gfx);
 	if (jpeg_on_spu) {
 		salsa64_rsp_set_jpeg(&n64.bus, NULL);
-		salsa64_log("cierre: SPE de la tarea JPEG detenido (%u tareas, %u macrobloques, %u en el PPE; salida %d)",
-			    jpeg_spu.tasks, jpeg_spu.macroblocks, jpeg_spu.on_ppe, salsa64_jpeg_spu_shutdown(&jpeg_spu));
+		salsa64_log("cierre: SPE de la tarea JPEG detenido (%u tareas, %u macrobloques, %u en el PPE; video %u + %u + %u "
+			    "tareas, %u en el PPE; salida %d)", jpeg_spu.tasks, jpeg_spu.macroblocks, jpeg_spu.on_ppe,
+			    jpeg_spu.v_tasks[0], jpeg_spu.v_tasks[1], jpeg_spu.v_tasks[2],
+			    jpeg_spu.v_on_ppe[0] + jpeg_spu.v_on_ppe[1] + jpeg_spu.v_on_ppe[2],
+			    salsa64_jpeg_spu_shutdown(&jpeg_spu));
 		jpeg_on_spu = 0;
 	}
 	if (lle_mode != SALSA64_LLE_OFF) {

@@ -25,4 +25,22 @@ void jpeg_selftest_build(uint8_t *ram, uint32_t seed);
  * para salsa64_jpeg_run o el trabajo del SPE. */
 uint32_t jpeg_selftest_task(uint32_t which);
 
+/* ---- Video de Resident Evil 2 (re2.h) ----
+ * Cuatro tareas (RESIZE con difuminado, DECODE con la geometría del juego y dos
+ * FILL, una con origen y destino alineados a 16 bytes, como en el juego, y otra
+ * sin alinear) sobre una RDRAM de mentira, con los segmentos de datos que trae el
+ * juego y direcciones de salida alineadas a 8 y no a 16. El CRC-32 de la RDRAM
+ * después de las cuatro lo verifica también la prueba unitaria del host. */
+#define RE2_SELFTEST_TASKS 4u
+#define RE2_SELFTEST_RAM  0x9000u
+#define RE2_SELFTEST_SEED 20261017u
+#define RE2_SELFTEST_CRC  0xAE4B7E46u /* con RE2_SELFTEST_SEED */
+#define RE2_SELFTEST_DRAM_STACK      0x00001234u  /* dram_stack y su tamaño en la tarea de prueba */
+#define RE2_SELFTEST_DRAM_STACK_SIZE 0x04000000u
+
+void re2_selftest_build(uint8_t *ram, uint32_t seed);
+
+/* Dirección del segmento de datos de la tarea `which` (0: RESIZE, 1: DECODE, 2: FILL sin alinear, 3: FILL alineada). */
+uint32_t re2_selftest_task(uint32_t which);
+
 #endif
