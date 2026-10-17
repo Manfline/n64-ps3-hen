@@ -475,6 +475,7 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 		bool hle_audio = task.type == SALSA64_TASK_AUDIO && valid && rsp->audio && abi != SALSA64_ABI_UNKNOWN;
 		if (rsp->lle_mode == SALSA64_LLE_ALL || !(hle_gfx || hle_audio || jpeg != SALSA64_JPEG_NONE)) {
 			rsp->stats.lle++;
+			rsp->stats.lle_gfx += task.type == SALSA64_TASK_GFX;
 			rsp->lle->start(rsp->lle->ctx);
 			if (rsp->lle->done) {
 				rsp->busy = SALSA64_TASK_LLE;

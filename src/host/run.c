@@ -1357,6 +1357,43 @@ static void task_dump(uint32_t task, const struct gfx_result *res)
 	free(buf);
 }
 
+/* --stop-gfx N:ARCHIVO: al terminar la N-ésima tarea gráfica, guarda en PPM la
+ * última color image que dibujó y termina. Compara la HLE con la LLE sobre
+ * la misma tarea (el mismo estado guardado, --state-load): por campos, el
+ * VI muestra imágenes a medio dibujar con el RSP a bajo nivel. */
+static uint32_t stop_gfx_n, stop_gfx_seen, stop_gfx_target;
+static const char *stop_gfx_path;
+static bool stop_gfx_hit;
+static bool gfx_dump_target(const char *path, uint32_t addr);
+
+static void stop_gfx_task(const struct gfx_job *job, const struct gfx_result *res)
+{
+	(void)job;
+	if (stop_gfx_hit)
+		return;
+	/* Con la LLE cada tramo del RDP es un trabajo y la tarea N termina cuando
+	 * arranca la N + 1: el primer tramo de esta ya no dibuja en la imagen de
+	 * la anterior. Con la HLE, un trabajo por tarea. */
+	bool lle = n64.bus.rsp.lle_mode != SALSA64_LLE_OFF && n64.bus.rsp.stats.lle_gfx;
+	if (lle && n64.bus.rsp.stats.lle_gfx > stop_gfx_n) {
+		gfx_dump_target(stop_gfx_path, stop_gfx_target);
+		stop_gfx_hit = true;
+		return;
+	}
+	for (uint32_t off = 0; off + sizeof(struct gfx_cmd) <= res->cmd_bytes;) {
+		const struct gfx_cmd *c = (const struct gfx_cmd *)(gfx_cmd + off);
+		if (c->op == GFX_OP_END || c->size < sizeof *c)
+			break;
+		if (c->op == GFX_OP_TARGET)
+			stop_gfx_target = c->a;
+		off += c->size;
+	}
+	if (!lle && ++stop_gfx_seen == stop_gfx_n) {
+		gfx_dump_target(stop_gfx_path, stop_gfx_target);
+		stop_gfx_hit = true;
+	}
+}
+
 static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_result *res)
 {
 	(void)ctx;
@@ -1394,6 +1431,8 @@ static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_resu
 		interp_before_raster();
 		raster_task(job, res);
 		interp_after_raster(job, res, n64.bus.vi.fields);
+		if (stop_gfx_n)
+			stop_gfx_task(job, res);
 	}
 	if (trace_gfx_left && n64.bus.vi.fields > (trace_from ? trace_from : 500)) {
 		trace_gfx_left--;
@@ -2010,14 +2049,8 @@ static const uint32_t *gfx_image(uint32_t *width)
 	return raster_image(f.origin, width);
 }
 
-static bool gfx_dump(const char *path)
+static bool gfx_write_ppm(const char *path, const uint32_t *img)
 {
-	uint32_t w;
-	const uint32_t *img = gfx_image(&w);
-	if (!img) {
-		fprintf(stderr, "salsa64-run: ninguna tarea gráfica dibujó lo que muestra el VI\n");
-		return false;
-	}
 	FILE *out = fopen(path, "wb");
 	if (!out)
 		return false;
@@ -2028,6 +2061,28 @@ static bool gfx_dump(const char *path)
 	}
 	fprintf(stderr, "salsa64-run: imagen de la HLE gráfica en %s\n", path);
 	return fclose(out) == 0;
+}
+
+static bool gfx_dump(const char *path)
+{
+	uint32_t w;
+	const uint32_t *img = gfx_image(&w);
+	if (!img) {
+		fprintf(stderr, "salsa64-run: ninguna tarea gráfica dibujó lo que muestra el VI\n");
+		return false;
+	}
+	return gfx_write_ppm(path, img);
+}
+
+static bool gfx_dump_target(const char *path, uint32_t addr)
+{
+	uint32_t w;
+	const uint32_t *img = raster_image(addr, &w);
+	if (!img) {
+		fprintf(stderr, "salsa64-run: ninguna tarea gráfica dibujó en %06x\n", addr);
+		return false;
+	}
+	return gfx_write_ppm(path, img);
 }
 
 static uint8_t *read_file(const char *path, size_t *size);
@@ -2486,7 +2541,7 @@ static bool dump_frame(const char *path)
 enum { OPT_REC = 0x100, OPT_LOCKSTEP, OPT_PAD, OPT_TRACE_FROM, OPT_TRACE_FAULTS, OPT_RAM_DUMP, OPT_TRACE_AUDIO,
        OPT_FRAME_EVERY, OPT_NO_PAK, OPT_LLE, OPT_LLE_SPEED, OPT_LLE_CHECK, OPT_LLE_CHECK_JPEG, OPT_POKE, OPT_TRACE_FB, OPT_STATE_SAVE,
        OPT_STATE_LOAD, OPT_FIELDS, OPT_PROFILE, OPT_STATE_ZIP, OPT_INTERP, OPT_INTERP_K, OPT_INTERP_DECIMATE,
-       OPT_INTERP_DISP, OPT_PERFILADO };
+       OPT_INTERP_DISP, OPT_PERFILADO, OPT_STOP_GFX };
 
 /* ---- Estados guardados (--state-save, --state-load) ------------------------- */
 
@@ -2627,6 +2682,9 @@ static void usage(FILE *out)
 	      "      --sin-pak         sin Controller Pak en los controles (por omisión hay uno en cada uno)\n"
 	      "      --gfx-frame ARCHIVO  al terminar, guardar en PPM lo que dibujó la HLE gráfica\n"
 	      "      --gfx-frame-every N  con --pad, además cada N campos desde --trace-from (ARCHIVO-<campo>.ppm)\n"
+	      "      --stop-gfx N:ARCHIVO  al terminar la N-ésima lista gráfica (G_RDPFULLSYNC) guardar en PPM la\n"
+	      "                        última color image que dibujó y terminar: la misma tarea con la HLE y con\n"
+	      "                        --lle=all (desde un --state-load)\n"
 	      "      --gfxtest-check   verificar la imagen de la HLE con los puntos de gfxtest\n"
 	      "      --trace-rsp N     mostrar las primeras N tareas del RSP\n"
 	      "      --trace-audio N   opcodes de la lista de audio de las primeras N tareas de audio\n"
@@ -2696,6 +2754,7 @@ int main(int argc, char **argv)
 		{ "state-load", required_argument, NULL, OPT_STATE_LOAD },
 		{ "state-zip", no_argument, NULL, OPT_STATE_ZIP },
 		{ "fields", required_argument, NULL, OPT_FIELDS },
+		{ "stop-gfx", required_argument, NULL, OPT_STOP_GFX },
 		{ "interp", required_argument, NULL, OPT_INTERP },
 		{ "interp-k", required_argument, NULL, OPT_INTERP_K },
 		{ "interp-decimate", no_argument, NULL, OPT_INTERP_DECIMATE },
@@ -2807,6 +2866,17 @@ int main(int argc, char **argv)
 		case OPT_STATE_LOAD: state_load_path = optarg; break;
 		case OPT_STATE_ZIP: state_zip = true; break;
 		case OPT_FIELDS: stop_field = (uint32_t)strtoul(optarg, NULL, 0); break;
+		case OPT_STOP_GFX: {
+			const char *colon = strchr(optarg, ':');
+			if (!colon) {
+				usage(stderr);
+				return 3;
+			}
+			stop_gfx_n = (uint32_t)strtoul(optarg, NULL, 0);
+			stop_gfx_path = colon + 1;
+			gfx.raster = true;
+			break;
+		}
 		case OPT_INTERP: iopt.dir = optarg; gfx.raster = true; break;
 		case OPT_INTERP_K: iopt.k = (unsigned)strtoul(optarg, NULL, 0); break;
 		case OPT_INTERP_DECIMATE: iopt.decimate = true; break;
@@ -3080,6 +3150,8 @@ int main(int argc, char **argv)
 				return 3;
 			}
 			if (stop_field && n64.bus.vi.fields >= stop_field && watch.hit == STOP_NONE)
+				watch.hit = STOP_FIELDS;
+			if (stop_gfx_hit && watch.hit == STOP_NONE)
 				watch.hit = STOP_FIELDS;
 			hp_field();
 		} else {

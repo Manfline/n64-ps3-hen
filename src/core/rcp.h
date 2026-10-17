@@ -265,6 +265,7 @@ struct salsa64_rsp_stats {
 	uint32_t starts_busy;  /* arranques ignorados con una tarea en curso */
 	uint32_t unknown_data; /* ucode_data de la última con microcódigo desconocido */
 	uint32_t lle;          /* arranques que fueron al microcódigo real */
+	uint32_t lle_gfx;      /* de ellos, de tareas gráficas */
 	uint32_t dpc_runs;     /* tramos de comandos del RDP consumidos */
 	uint32_t cut;          /* tareas gráficas cortadas por la HLE (DP forzada) */
 	uint32_t jpeg;         /* tareas JPEG hechas por la HLE (rsp/jpeg) */
