@@ -6,6 +6,19 @@ datos de compatibilidad.
 
 Las entradas antiguas conservan sus métodos de prueba como historia.
 
+## 2026-10-17 — Killer Instinct Gold: ya dibuja con la HLE (falta la PS3 real)
+
+| Juego | Antes | Ahora |
+|---|---|---|
+| Killer Instinct Gold (NKIE) | PS3: 0 tareas gráficas en todas las versiones (solo dibujaba con `lle` encendido); host: dibuja | RPCS3 sin `lle`: 1396 tareas gráficas en 1800 campos (logo y fichas de los personajes); host: 274 tareas por 300 campos y 137 listas del RDP escritas por el CPU |
+
+El juego da al RDP listas escritas por el CPU (`DPC_START`/`DPC_END`, sin RSP)
+y no manda tareas gráficas hasta recibir la interrupción del DP de su
+`SYNC_FULL`; la PS3 solo tenía quien las consumiera con el RSP a bajo nivel
+(detalle en [docs/estado.md](estado.md)). Con el RSP a bajo nivel en todas las
+tareas (en una versión de prueba de su recompilador) se vio un congelamiento
+al empezar la pelea, que sigue sin explicarse.
+
 ## 2026-10-16 — Audio de MusyX (Factor 5): HLE nueva, verificada en el host
 
 Los juegos de MusyX corrían mudos: su tarea de audio no es una lista de

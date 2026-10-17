@@ -1,5 +1,58 @@
 # Estado
 
+## 2026-10-17 — Killer Instinct Gold no dibujaba en la PS3: el RDP del CPU sin quien lo consuma
+
+Killer Instinct Gold (NKIE) arrancaba en la PS3 con el audio bien, 60 campos/s y
+**ninguna tarea gráfica** («cierre: HLE gráfica suelta (0 tareas gráficas)»),
+en la v0.2.5, la v0.2.6 y la v0.2.7, con el intérprete y con el recompilador,
+con y sin Controller Pak. En el host dibujaba. Solo dibujó en la PS3 con el RSP
+a bajo nivel encendido en modo `auto`, aunque ninguna tarea llegara al
+microcódigo real (en RPCS3: «rsp lle: 0 tareas» y 1399 tareas gráficas por la
+HLE).
+
+- **Causa.** El juego no dibuja todo con el RSP: cada campo escribe él mismo
+  listas del RDP en la RDRAM y se las da por `DPC_START`/`DPC_END` (siete
+  comandos cada una: fijar imagen y tijera, color de relleno, rectángulo,
+  `SYNC_FULL`), sin tarea del RSP; y **no manda la primera tarea gráfica
+  hasta recibir la interrupción del DP de ese `SYNC_FULL`**. Esa interrupción
+  la levanta quien consume la lista (`bus->rsp.dpc`, `sp.c: dp_run`); sin
+  backend la lista solo se descarta y la interrupción no llega nunca. El
+  frontend de la PS3 conectaba el backend del RDP (`salsa64_rsp_set_dpc`)
+  solo cuando había RSP a bajo nivel; el host siempre. Con la HLE gráfica
+  en el SPE, además, no existía un RDP en el PPE para esas listas.
+- **Evidencia (host, `salsa64-run`).** En 300 campos KI manda 274 tareas
+  gráficas (Fast3D «RSP SW Version: 2.0D», `ucode_size` 0) y 292 de audio
+  (ABI1), y escribe 137 listas al RDP (959 comandos, 0 triángulos, 137
+  rectángulos); la primera tarea gráfica sale en el campo 27, 11 341 ciclos
+  después de arrancar una de audio. Con `SALSA64_SIN_DPC=1` (no conecta el
+  backend, como la PS3): 0 listas, **0 tareas gráficas**. Con el backend y
+  `SALSA64_DP_CYCLES=4000000000` (la interrupción del DP casi no llega): 1
+  lista y 1 tarea gráfica. O sea, el juego espera la interrupción del DP de
+  cada lista del CPU.
+- **Arreglo** (`src/frontend/main.c`). El backend del RDP se conecta siempre:
+  con la HLE en el PPE es la misma HLE (`gfx_ppe.dpc`); con la HLE en el SPE
+  se inicia `gfx_ppe` solo para consumir las listas del CPU, como ya hacía el
+  modo con RSP a bajo nivel (con el que ya dibujaba). Se suelta al cerrar el
+  juego aunque no haya LLE.
+- **Pruebas.** Pruebas unitarias: `rsp_dpc_from_cpu` (sin backend la lista
+  se descarta y no hay interrupción; con él la consume y la del DP llega
+  `dp_cycles` después). RPCS3 (interpretador, sin recompilador, sin archivo
+  `lle`): antes 0 tareas gráficas en 1800 campos; ahora 1396, con el logo de
+  «Killer Instinct Gold» y las fichas de los personajes bien dibujados.
+  `salsa64-run` imprime ahora cuántas listas del CPU consumió el RDP
+  («RDP desde el CPU»), `--pads N` conecta N controles y `--pad-port N`
+  manda el guion de `--pad` a otro puerto; `tools/rpcs3-run.py --quitar
+  NOMBRE` quita un archivo de `dev_hdd0/salsa64` (p. ej. `lle`) durante la
+  corrida y lo devuelve al terminar.
+- **Falta en la PS3 real**: que arranque con la HLE (sin `lle`) y que la
+  pelea pase de «READY». El congelamiento de la pelea que se vio con el RSP a
+  bajo nivel en todas las tareas (en una versión de prueba de su
+  recompilador) no es esta causa (ahí el backend del RDP ya estaba
+  conectado): en el host, con `--lle=all` y el guion
+  [docs/pads/killerinstinct-pelea.pad](pads/README.md) (control 2), las
+  tareas del RSP siguen llegando hasta el campo 3600 y los hilos de libultra
+  quedan en el mismo estado que con la HLE (campo 1500); no lo reproduje.
+
 ## 2026-10-16 — HLE de audio de MusyX (Factor 5)
 
 Hydro Thunder, Rush 2049, NBA Showtime, Gauntlet Legends, Tarzan, The World
