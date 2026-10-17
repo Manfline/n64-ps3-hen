@@ -67,6 +67,13 @@
  * sigue; con SALSA64_GFX_TEAR además la corre al arrancar y avisa si la
  * salida cambió entre las dos (el CPU tocó durante la tarea algo que la
  * lista lee); SALSA64_GFX_TEAR_V lista los vértices distintos.
+ * SALSA64_DPC_ESTADO_APARTE=1 hace que las listas del RDP que escribe el CPU
+ * (DPC_START/DPC_END) las consuma otra HLE con su propio estado y su propio
+ * directorio de texturas sobre la misma caché, como la PS3 hizo con la HLE en el
+ * SPE y el RDP en el PPE: Killer Instinct Gold sale con texturas rotas.
+ * SALSA64_SIN_DPC=1 las deja sin consumidor (el juego no manda ninguna tarea
+ * gráfica). SALSA64_JITTER=N hace al azar la duración de cada tarea del RSP
+ * (audio, gráficas y la interrupción del DP) para buscar esperas eternas.
  * SALSA64_PS3_RB (con --gfx-frame) cuenta las color images que la regla de
  * copias a la RDRAM de la PS3 (readbacks_wanted, src/rdp/rdp.c) pediría.
  * SALSA64_GFX_CUTCHECK mide, por tarea, cuánto se separan los vértices que
@@ -802,6 +809,11 @@ static void audio_push(void *ctx, const uint8_t *p, uint32_t bytes, uint32_t rat
 /* HLE gráfica: estado, búferes de salida y totales. */
 static struct gfx_state gfx_state;
 static struct salsa64_gfx_sync gfx_sync;
+/* SALSA64_DPC_ESTADO_APARTE=1: las listas del CPU las consume otra HLE con su propio estado del RDP y
+ * su propio directorio de texturas sobre la misma región de la caché, como la PS3 con la HLE gráfica
+ * en el SPE y un RDP en el PPE para esas listas (antes de que fueran al mismo SPE). */
+static struct gfx_state gfx_state_dpc;
+static struct salsa64_gfx_sync gfx_sync_dpc;
 
 /* --lle: el microcódigo real del RSP, en rebanadas del hilo del CPU. */
 static struct salsa64_lle_host lle_host;
@@ -1824,9 +1836,28 @@ static uint64_t host_clock_us(void)
 	return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
 }
 
+/* SALSA64_JITTER=semilla: la duración de cada tarea del RSP varía al azar
+ * (como el SPE de la PS3, cuyo fin llega a la hora de un sondeo): las de
+ * audio entre 8000 y 68000 ciclos y las gráficas entre 0 y 8 sondeos de
+ * retraso (con SALSA64_GFX_LATE puesto, en 0 si no). Para buscar esperas
+ * eternas que dependen de cuándo termina cada tarea. */
+static uint32_t jitter_state;
+
+static uint32_t jitter_rand(void)
+{
+	jitter_state = jitter_state * 1664525u + 1013904223u;
+	return jitter_state >> 8;
+}
+
 static void trace_rsp(void *ctx, const struct salsa64_task *t, enum salsa64_gbi gbi)
 {
 	(void)ctx;
+	if (jitter_state) {
+		n64.bus.rsp.audio_cycles = 8000 + 10000 * (jitter_rand() % 7);
+		n64.bus.rsp.gfx_cycles = 30000 + 10000 * (jitter_rand() % 5);
+		n64.bus.rsp.dp_cycles = 10000 + 5000 * (jitter_rand() % 5);
+		gfx_late.polls = jitter_rand() % 9;
+	}
 	/* Una tarea JPEG nueva (no la reanudación de una interrumpida, con
 	 * OS_TASK_YIELDED): la anterior ya terminó. */
 	if (jcheck.on && t->type == SALSA64_TASK_JPEG && !(t->flags & 1)) {
@@ -2917,6 +2948,14 @@ int main(int argc, char **argv)
 		gfx_late.backend = (struct salsa64_gfx_backend){ .start = late_start, .finish = late_finish, .done = late_done };
 		salsa64_rsp_set_gfx(&n64.bus, &gfx_late.backend);
 	}
+	if (getenv("SALSA64_JITTER")) {
+		jitter_state = (uint32_t)strtoul(getenv("SALSA64_JITTER"), NULL, 0) * 2654435761u + 1u;
+		if (!getenv("SALSA64_GFX_LATE")) {
+			gfx_late.polls = 0;
+			gfx_late.backend = (struct salsa64_gfx_backend){ .start = late_start, .finish = late_finish, .done = late_done };
+			salsa64_rsp_set_gfx(&n64.bus, &gfx_late.backend);
+		}
+	}
 	salsa64_audio_sync_init(&aud_sync, &aud_state, &n64.bus);
 	salsa64_rsp_set_audio(&n64.bus, &aud_sync.backend);
 	salsa64_ai_set_sink(&n64.bus, audio_push, NULL);
@@ -2935,8 +2974,12 @@ int main(int argc, char **argv)
 	 * CPU (la PS3 antes de conectarlo siempre): Killer Instinct Gold no manda
 	 * ninguna tarea gráfica porque espera la interrupción del DP de su
 	 * SYNC_FULL. */
-	if (!getenv("SALSA64_SIN_DPC"))
+	if (getenv("SALSA64_DPC_ESTADO_APARTE")) {
+		salsa64_gfx_sync_init(&gfx_sync_dpc, &gfx_state_dpc, &n64.bus, &sink);
+		salsa64_rsp_set_dpc(&n64.bus, &gfx_sync_dpc.dpc);
+	} else if (!getenv("SALSA64_SIN_DPC")) {
 		salsa64_rsp_set_dpc(&n64.bus, &gfx_sync.dpc);
+	}
 	n64.bus.rsp.jpeg_lle = jcheck.on;
 	n64.bus.rsp.clock_us = host_clock_us;
 	n64.bus.rsp.trace = trace_rsp;

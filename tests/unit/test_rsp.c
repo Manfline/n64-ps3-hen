@@ -508,6 +508,45 @@ static void rsp_dpc_from_cpu(void)
 #undef DP_REG
 }
 
+/* Dos SYNC_FULL cercanos (la lista del CPU y la tarea que le sigue) son dos
+ * interrupciones del DP, cada una a su hora: la ranura del planificador es
+ * una sola y la segunda borraba a la primera; el mismo SYNC_FULL pedido dos
+ * veces en el mismo ciclo sigue siendo una. */
+static void rsp_dp_interrupts_queue(void)
+{
+	struct salsa64_bus *bus = &t_n64.bus;
+	bus->mi.intr = 0;
+	uint64_t t0 = CPU->cycles;
+	uint32_t base = bus->rsp.stats.dp_fired;
+	uint32_t d = bus->rsp.dp_cycles;
+
+	salsa64_rsp_dp_done(bus);
+	salsa64_rsp_dp_done(bus);  /* el mismo: una sola */
+	CPU->cycles = t0 + 3000;
+	salsa64_rsp_dp_done(bus);  /* otro distinto, antes de que llegue el primero */
+	CPU->cycles = t0 + 5000;
+	salsa64_rsp_dp_done(bus);  /* y otro */
+
+	salsa64_sched_dispatch(&t_n64.sched, t0 + d - 1);
+	CHECK_EQ(bus->mi.intr & (1u << SALSA64_IRQ_DP), 0);
+	salsa64_sched_dispatch(&t_n64.sched, t0 + d);
+	CHECK(bus->mi.intr & (1u << SALSA64_IRQ_DP));
+	CHECK_EQ(bus->rsp.stats.dp_fired, base + 1);
+	salsa64_mi_clear(bus, SALSA64_IRQ_DP);  /* el juego la atiende */
+	salsa64_sched_dispatch(&t_n64.sched, t0 + d + 2999);
+	CHECK_EQ(bus->mi.intr & (1u << SALSA64_IRQ_DP), 0);
+	salsa64_sched_dispatch(&t_n64.sched, t0 + d + 3000);
+	CHECK(bus->mi.intr & (1u << SALSA64_IRQ_DP));
+	salsa64_mi_clear(bus, SALSA64_IRQ_DP);
+	salsa64_sched_dispatch(&t_n64.sched, t0 + d + 5000);
+	CHECK(bus->mi.intr & (1u << SALSA64_IRQ_DP));
+	salsa64_mi_clear(bus, SALSA64_IRQ_DP);
+	CHECK_EQ(bus->rsp.stats.dp_fired, base + 3);
+	salsa64_sched_dispatch(&t_n64.sched, t0 + 100 * d);
+	CHECK_EQ(bus->mi.intr & (1u << SALSA64_IRQ_DP), 0);  /* no sobra ninguna */
+	CPU->cycles = t0;
+}
+
 void t_suite_rsp(void)
 {
 	RUN(sp_dma_rows);
@@ -521,4 +560,5 @@ void t_suite_rsp(void)
 	RUN(rsp_detect_gbi_crc);
 	RUN(rsp_detect_gbi_wr);
 	RUN(rsp_dpc_from_cpu);
+	RUN(rsp_dp_interrupts_queue);
 }

@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/systime.h>
 
+#include "core/bus.h"
 #include "platform/ps3/log.h"
 #include "rsp/gfx/hle.h"
 #include "spu_gfx_bin.h"
@@ -39,6 +40,45 @@ static int check_hash(spukit_worker *w)
 		}
 	}
 	return bad;
+}
+
+/* Estadísticas de un trabajo que terminó (tarea o lista del CPU). */
+static void account_res(struct salsa64_gfx_spu *s, const struct gfx_result *res, uint64_t ticks)
+{
+	s->spu_ticks += ticks;
+	s->t_vtx += res->t_vtx;
+	s->t_state += res->t_state;
+	s->t_tex += res->t_tex;
+	s->t_load += res->t_load;
+	s->textures += res->textures;
+	s->tex_reused += res->tex_reused;
+	s->loads += res->loads;
+	s->load_reads += res->load_reads;
+	s->tex_old += res->tex_old;
+	s->tex_arena += res->tex_arena;
+	s->tex_evicted += res->tex_evicted;
+	s->t_hash += res->t_hash;
+	s->skipped += res->skipped;
+	s->bg += res->bg;
+	s->tex_target += res->tex_target;
+}
+
+/* Un trabajo que el SPE devolvió con error no dibujó (o no sabemos qué): termina
+ * como cortado, con su interrupción del DP; sin ella el juego se quedaría
+ * esperando al RDP para siempre. */
+static void job_error(struct salsa64_gfx_spu *s, const spukit_result *r, struct gfx_result *res, const char *what)
+{
+	memset(res, 0, sizeof *res);
+	res->flags |= GFX_RES_CUT;
+	if (s->errors++ < 4)
+		salsa64_log("gfx: el SPE devolvió el error %d en %s (van %u): termina como cortada", (int)r->error, what,
+			    s->errors);
+}
+
+static void account(struct salsa64_gfx_spu *s, uint64_t ticks)
+{
+	s->tasks++;
+	account_res(s, &s->res, ticks);
 }
 
 static void spu_start(void *ctx, const struct salsa64_task *task, enum salsa64_gbi gbi)
@@ -84,28 +124,49 @@ static uint32_t spu_finish(void *ctx)
 		s->wait_us += sysGetSystemTime() - t0;
 	memcpy(&s->res, r->data, sizeof s->res);
 	if (r->error)
-		memset(&s->res, 0, sizeof s->res);
-	s->tasks++;
-	s->spu_ticks += r->ticks;
-	s->t_vtx += s->res.t_vtx;
-	s->t_state += s->res.t_state;
-	s->t_tex += s->res.t_tex;
-	s->t_load += s->res.t_load;
-	s->textures += s->res.textures;
-	s->tex_reused += s->res.tex_reused;
-	s->loads += s->res.loads;
-	s->load_reads += s->res.load_reads;
-	s->tex_old += s->res.tex_old;
-	s->tex_arena += s->res.tex_arena;
-	s->tex_evicted += s->res.tex_evicted;
-	s->t_hash += s->res.t_hash;
-	s->skipped += s->res.skipped;
-	s->bg += s->res.bg;
-	s->tex_target += s->res.tex_target;
+		job_error(s, r, &s->res, "una tarea");
+	account(s, r->ticks);
 	salsa64_gfx_rdram_fills(s->bus, &s->job, &s->res);
 	s->sink.done(s->sink.ctx, &s->job, &s->res);
 	return salsa64_gfx_task_flags(&s->res);
 }
+
+/* Lista del RDP que escribe el CPU: el mismo SPE y el mismo estado que las
+ * tareas (el de las dos HLE separadas se pisaba la caché de texturas: los
+ * fondos de Killer Instinct Gold salían rotos). La tarea en vuelo, si la
+ * hay, se recoge antes para que su salida y la de la lista lleguen al
+ * consumidor en el orden en que se dieron. Síncrono: el CPU espera su
+ * SYNC_FULL (la interrupción del DP) y la lista es corta. */
+static uint32_t spu_dpc_run(void *ctx, uint32_t start, uint32_t end, const uint8_t *dmem)
+{
+	struct salsa64_gfx_spu *s = ctx;
+	if (s->pending)
+		salsa64_rsp_quiesce((struct salsa64_bus *)s->bus);
+	struct gfx_job job;
+	struct gfx_result res;
+	memset(&job, 0, sizeof job);
+	job.rdram_ea = (uint64_t)(uintptr_t)s->bus->rdram;
+	job.rdram_size = s->bus->rdram_size;
+	job.dmem_ea = (uint64_t)(uintptr_t)dmem;
+	job.dl = start;
+	job.dl_end = end;
+	job.flags = GFX_JOB_DPC | (dmem ? GFX_JOB_XBUS : 0);
+	s->sink.acquire(s->sink.ctx, &job);
+	if (s->nocache)
+		job.flags |= GFX_JOB_NOCACHE;
+	uint64_t t0 = sysGetSystemTime();
+	const spukit_result *r = spukit_wait(s->worker, spukit_post(s->worker, GFX_JOB_TASK, &job, sizeof job));
+	s->dpc_us += sysGetSystemTime() - t0;
+	memcpy(&res, r->data, sizeof res);
+	if (r->error)
+		job_error(s, r, &res, "una lista del CPU");
+	s->dpc_jobs++;
+	account_res(s, &res, r->ticks);
+	salsa64_gfx_rdram_fills(s->bus, &job, &res);
+	s->sink.done(s->sink.ctx, &job, &res);
+	return (res.flags & (GFX_RES_FULLSYNC | GFX_RES_CUT)) ? SALSA64_GFX_FULLSYNC : 0;
+}
+
 
 /* Estados guardados: el SPE copia el tramo crudo de su gfx_state (registros
  * del RDP, tiles y TMEM) al mismo lugar de esta imagen, o lo trae de ella; el
@@ -158,6 +219,8 @@ int salsa64_gfx_spu_init(struct salsa64_gfx_spu *s, const struct salsa64_bus *bu
 	s->backend.state_size = GFX_STATE_BYTES;
 	s->backend.save_state = spu_save_state;
 	s->backend.load_state = spu_load_state;
+	s->dpc.ctx = s;
+	s->dpc.run = spu_dpc_run;
 	s->bus = bus;
 	s->sink = *sink;
 	s->worker = spukit_worker_start(spu_gfx_bin, "salsa64_gfx", 0);

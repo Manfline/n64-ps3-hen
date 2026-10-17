@@ -138,6 +138,7 @@ void t_suite_cheats(void);
 void t_suite_cover(void);
 void t_suite_dlutil(void);
 void t_suite_i18n(void);
+void t_suite_cuelgue(void);
 
 /* Directorio donde las pruebas pueden escribir (lo pone quien llama; NULL:
  * las pruebas que tocan el disco no corren). */

@@ -18,6 +18,14 @@
 
 struct salsa64_gfx_spu {
 	struct salsa64_gfx_backend backend;
+	/* Las listas del RDP que escribe el CPU (DPC_START/DPC_END) las corre este
+	 * mismo SPE, con el mismo estado del RDP y la misma caché de texturas que
+	 * las tareas: un segundo estado sobre la región de la caché pisaba las
+	 * texturas del primero. */
+	struct salsa64_dpc_backend dpc;
+	uint32_t dpc_jobs;   /* listas del CPU hechas en el SPE */
+	uint32_t errors;     /* trabajos que el SPE devolvió con error (terminan como cortados) */
+	uint64_t dpc_us;     /* lo que esperó el PPE a cada una */
 	spukit_worker *worker;
 	const struct salsa64_bus *bus;
 	struct salsa64_gfx_sink sink;

@@ -44,8 +44,10 @@ static void rsp_break(struct salsa64_bus *bus, uint32_t signals)
 {
 	uint32_t s = __atomic_or_fetch(&bus->sp.regs[SALSA64_SP_STATUS],
 				       SALSA64_SP_STATUS_HALT | SALSA64_SP_STATUS_BROKE | signals, __ATOMIC_SEQ_CST);
-	if (s & SALSA64_SP_STATUS_INTR_BREAK)
+	if (s & SALSA64_SP_STATUS_INTR_BREAK) {
+		bus->rsp.stats.sp_irq++;
 		salsa64_mi_raise(bus, SALSA64_IRQ_SP);
+	}
 }
 
 /* ¿Terminó ya la tarea en curso? Los backends que lo saben decir sin
@@ -116,6 +118,11 @@ static void task_event(void *ctx, uint64_t when)
 	else if (rsp->busy == SALSA64_TASK_JPEG && rsp->jpeg_be)
 		jpeg_collect(rsp);
 finished:
+	if (rsp->busy == SALSA64_TASK_GFX) {
+		rsp->stats.gfx_last = flags;
+		if (!(flags & (SALSA64_GFX_FULLSYNC | SALSA64_GFX_CUT)))
+			rsp->stats.gfx_nosync++;
+	}
 	rsp->busy = 0;
 	rsp_break(bus, SALSA64_SP_STATUS_TASKDONE);
 	/* La interrupción del DP llega si la lista pidió G_RDPFULLSYNC y también
@@ -136,11 +143,63 @@ void salsa64_debug_dp(int kind, uint32_t reg, uint32_t v);
 
 static void dp_event(void *ctx, uint64_t when)
 {
+	struct salsa64_bus *bus = ctx;
+	struct salsa64_rsp *rsp = &bus->rsp;
+	rsp->stats.dp_fired++;
 	(void)when;
 #ifdef SALSA64_DEBUG_DP
 	salsa64_debug_dp(3, 0, 0);
 #endif
 	salsa64_mi_raise(ctx, SALSA64_IRQ_DP);
+	/* La siguiente de las que esperaban, a su hora. */
+	if (rsp->dp_nnext && rsp->sched) {
+		uint64_t t = rsp->dp_next[0];
+		memmove(rsp->dp_next, rsp->dp_next + 1, (unsigned)(rsp->dp_nnext - 1) * sizeof rsp->dp_next[0]);
+		rsp->dp_nnext--;
+		salsa64_sched_set(rsp->sched, SALSA64_EV_DP_SYNC, t);
+	}
+}
+
+#define DP_SAME_CYCLES 64u
+
+/* Programa una interrupción del DP para el ciclo `t`: si ya hay una
+ * programada, la más temprana va en la ranura y las demás esperan en orden
+ * (con la ranura sola, la segunda borraba a la primera y el juego esperaba
+ * una interrupción que no llegaba). */
+static void dp_schedule(struct salsa64_rsp *rsp, uint64_t t)
+{
+	uint64_t cur = rsp->sched->when[SALSA64_EV_DP_SYNC];
+	if (cur == SALSA64_SCHED_NEVER) {
+		salsa64_sched_set(rsp->sched, SALSA64_EV_DP_SYNC, t);
+		return;
+	}
+	/* El mismo SYNC_FULL pedido dos veces (el fin de una tarea y la lista
+	 * que traía, o el RSP a bajo nivel y su entrega) es una sola
+	 * interrupción: las que caen a menos de DP_SAME_CYCLES son la misma. */
+	if (t - cur + DP_SAME_CYCLES < 2 * DP_SAME_CYCLES)
+		return;
+	for (unsigned k = 0; k < rsp->dp_nnext; k++)
+		if (t - rsp->dp_next[k] + DP_SAME_CYCLES < 2 * DP_SAME_CYCLES)
+			return;
+	if (t < cur) {
+		uint64_t tmp = cur;
+		cur = t;
+		t = tmp;
+		salsa64_sched_set(rsp->sched, SALSA64_EV_DP_SYNC, cur);
+	}
+	/* t va en la cola, ordenada; llena, la última absorbe (se pierde una, como antes). */
+	unsigned i = rsp->dp_nnext;
+	if (i == sizeof rsp->dp_next / sizeof rsp->dp_next[0]) {
+		if (rsp->dp_next[i - 1] < t)
+			rsp->dp_next[i - 1] = t;
+		return;
+	}
+	while (i && rsp->dp_next[i - 1] > t) {
+		rsp->dp_next[i] = rsp->dp_next[i - 1];
+		i--;
+	}
+	rsp->dp_next[i] = t;
+	rsp->dp_nnext++;
 }
 
 /* Congelado (FREEZE), el RDP no ejecuta: la interrupción espera a que el CPU
@@ -153,10 +212,13 @@ static void dp_sync_at(struct salsa64_bus *bus, uint64_t now)
 	struct salsa64_rsp *rsp = &bus->rsp;
 	if (bus->dp[SALSA64_DP_STATUS] & SALSA64_DP_STATUS_FREEZE) {
 		rsp->dp_held = true;
+		rsp->stats.dp_held++;
 		return;
 	}
-	if (rsp->sched)
-		salsa64_sched_set(rsp->sched, SALSA64_EV_DP_SYNC, now + rsp->dp_cycles);
+	if (rsp->sched) {
+		rsp->stats.dp_sched++;
+		dp_schedule(rsp, now + rsp->dp_cycles);
+	}
 }
 
 void salsa64_rsp_dp_done(struct salsa64_bus *bus)
@@ -250,6 +312,7 @@ void salsa64_rsp_reset(struct salsa64_bus *bus)
 	rsp->collected = false;
 	rsp->collected_flags = 0;
 	rsp->dp_held = false;
+	rsp->dp_nnext = 0;
 	if (rsp->lle && rsp->lle->reset)
 		rsp->lle->reset(rsp->lle->ctx);
 	if (rsp->sched) {
