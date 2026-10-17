@@ -98,6 +98,9 @@ tengan HLE:
   sobre una RDRAM de mentira) incluyen ahora dos subtramas de MusyX v1 y v2
   con voces PCM16 y ADPCM, eco y direcciones sin alinear; el log dice
   «audio: listas de prueba en el SPE: iguales al PPE» o «DIFIEREN».
+- **Paquete de prueba** «Salsa64 MusyX» (SLSA00140, construido sobre
+  `7f95b8e`). En RPCS3 arranca con «audio: listas de prueba en el SPE:
+  iguales al PPE» (incluye las dos listas de MusyX) y audiotest en verde.
 - **Pruebas unitarias** (+5): reconocimiento de las tres compilaciones; una
   voz de PCM16 con el resultado calculado a mano (resampler, envolventes,
   volúmenes base y última muestra); el eco; la tabla tomada del segmento de
