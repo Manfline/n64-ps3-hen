@@ -90,6 +90,7 @@ static uint32_t rb_task[RDP_TARGETS_MAX];  /* última tarea con copia a la RDRAM
 static uint32_t rb_wanted_task[RDP_TARGETS_MAX];
 #define RB_KEEP_TASKS 32
 #define MIRROR_BYTES 65536  /* como rdp.c: tope de una copia espejo (imagen chica) */
+#define MIRROR_SLOT  131072 /* como rdp.c: tope de la copia de una ranura que se recicla */
 static struct gfx_job last_job;  /* la RDRAM, para el espejo de cada campo */
 
 static void prime(const struct gfx_job *job, int slot);
@@ -753,10 +754,10 @@ static void flush_recycled(const struct gfx_job *job, int i, const struct rdp_bo
 	const struct rdp_target *t = &tg.t[i];
 	uint32_t rows = box->y1 < t->lh ? box->y1 : t->lh;
 	if (raster_trace_fb)
-		fprintf(stderr, "fb: campo %u tarea %u: la ranura %d (%06x/%u) se recicla con lo dibujado hasta la fila %u\n",
-			raster_field, task_no, i, t->addr, t->width, rows);
+		fprintf(stderr, "fb: campo %u tarea %u: la ranura %d (%06x/%u) se recicla con lo dibujado hasta la fila %u (x %u..%u, lw %u lh %u)\n",
+			raster_field, task_no, i, t->addr, t->width, rows, box->x0, box->x1, t->lw, t->lh);
 	if (raster_fbfx < 2 || !rows || t->presented || (t->bpp != 2 && t->bpp != 1) || t->width == tg.vi_width ||
-	    t->width * t->bpp * rows > MIRROR_BYTES)
+	    t->width * t->bpp * rows > MIRROR_SLOT)
 		return;
 	if (dma_newer(t->addr, t->width * t->bpp * rows, task_no))
 		return;

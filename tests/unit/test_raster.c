@@ -495,13 +495,14 @@ static void raster_tall_fill_first(void)
  * nodos del planificador de eventos; el juego saltaba a un callback pisado y
  * se quedaba en su pantalla de error). La ranura reciclada copia antes lo
  * dibujado de la imagen vieja a su dirección y empieza sin su caja. */
-static void raster_recycled_slot(void)
+static void recycled_slot(const uint32_t SW, const uint32_t FULL, const uint32_t LAST)
 {
-	enum { N = 9, SW = 172, FULL = 60, LAST = 20, GAP = SW * 2 * FULL };
+	enum { N = 9 };
+	const uint32_t GAP = SW * 2 * FULL;
 	static struct gfx_vertex v9[N * 6] __attribute__((aligned(16)));
 	static uint8_t c9[N * (sizeof(struct gfx_cmd) + sizeof(struct gfx_draw)) + sizeof(struct gfx_cmd)]
 		__attribute__((aligned(16)));
-	static uint8_t big[0x60000] __attribute__((aligned(16)));
+	static uint8_t big[0x100000] __attribute__((aligned(16)));
 	const uint32_t base = 0x20000;
 	int fbfx = raster_fbfx;
 	raster_reset();
@@ -552,10 +553,11 @@ static void raster_recycled_slot(void)
 	raster_task(&job, &res);
 	/* Lo dibujado de la novena sale en sus 20 filas... */
 	CHECK_EQ(salsa64_rd16(big + last + (5 * SW + 10) * 2), rgba5551(255, 0, 0));
-	/* La primera imagen (la ranura que se recicló) llegó a la RDRAM antes de
-	 * que la ranura cambiara de dueña, con su dirección y sus 60 filas. */
-	CHECK_EQ(salsa64_rd16(big + base + (30 * SW + 10) * 2), rgba5551(255, 0, 0));
-	CHECK_EQ(salsa64_rd16(big + base + (59 * SW + 171) * 2), rgba5551(255, 0, 0));
+	/* La imagen de la ranura que se recicló (la segunda: la primera ya salió
+	 * de la tabla por otro lado) llegó a la RDRAM antes de que la ranura
+	 * cambiara de dueña, con su dirección y todas sus filas. */
+	CHECK_EQ(salsa64_rd16(big + base + GAP + ((FULL / 2) * SW + 10) * 2), rgba5551(255, 0, 0));
+	CHECK_EQ(salsa64_rd16(big + base + GAP + ((FULL - 1) * SW + SW - 1) * 2), rgba5551(255, 0, 0));
 	/* ...y el resto de su memoria sigue siendo del juego. */
 	unsigned bad = 0;
 	for (uint32_t y = LAST; y < FULL; y++)
@@ -566,9 +568,23 @@ static void raster_recycled_slot(void)
 	raster_fbfx = fbfx;
 }
 
+static void raster_recycled_slot(void)
+{
+	recycled_slot(172, 60, 20);
+}
+
+/* El aviso de «Game Pak Check» (538 × 100 en el juego): una imagen que no
+ * cabe en un espejo de 64 KB pero sí en el de una ranura que se recicla
+ * (128 KB) también llega a la RDRAM; aquí 300 × 110 = 66 000 bytes. */
+static void raster_recycled_slot_big(void)
+{
+	recycled_slot(300, 110, 20);
+}
+
 void t_suite_raster(void)
 {
 	RUN(raster_recycled_slot);
+	RUN(raster_recycled_slot_big);
 	RUN(raster_copy_inside_scissor);
 	RUN(raster_tall_fill);
 	RUN(raster_tall_fill_first);

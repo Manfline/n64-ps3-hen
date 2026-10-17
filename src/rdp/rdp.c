@@ -56,14 +56,18 @@
 #define RB_SLOT     (RB_PITCH * RB_MAX_H)
 #define RB_SLOTS    2
 /* Copias espejo de las imágenes auxiliares chicas (iconos, pantallas), sin
- * esperar: búferes de 64 KB (hasta 128 × 256 a 16 bits). */
+ * esperar: MIRROR_BYTES es lo que cuenta como imagen chica (hasta 128 × 256 a
+ * 16 bits) y MIRROR_SLOT el tamaño de cada búfer, que además guarda las
+ * imágenes de una ranura que se recicla (el aviso de 538 × 100 de «Game Pak
+ * Check» de Pokémon Stadium: 106 KB con el paso a 64 bytes). */
 #define MIRROR_BYTES 65536u
+#define MIRROR_SLOT  131072u
 #define MIRRORS      4
 /* Espejo del framebuffer presentado, cada campo, sin esperar (Mario Kart
  * reduce el cuadro con el CPU para la pantalla del túnel): un búfer grande
  * más, después de los RB_SLOTS y el de cebado. */
 #define FRAME_SLOT  (RB_SLOTS + 1)
-#define FB_BYTES    (((RB_SLOTS + 2) * RB_SLOT + MIRRORS * MIRROR_BYTES + 0xFFFFFu) & ~0xFFFFFu)
+#define FB_BYTES    (((RB_SLOTS + 2) * RB_SLOT + MIRRORS * MIRROR_SLOT + 0xFFFFFu) & ~0xFFFFFu)
 #define POOL_BYTES  (SETS_BYTES + CACHE_BYTES + FB_BYTES)
 #define MAX_DEPTHS  RDP_DEPTHS_MAX  /* targets.h: cuentan en rdp_vram_worst */
 #define RB_PER_TASK 8   /* color images que una tarea puede pedir copiar */
@@ -895,7 +899,7 @@ static void readbacks_finish(bool wait)
 			continue;
 		uint32_t pitch = (m->lw * 2 + 63) & ~63u, bpp = m->bpp ? m->bpp : 2;
 		if (!dma_newer(m->addr, m->width * bpp * m->rows, m->task)) {
-			to_rdram(rdp.rb + (RB_SLOTS + 2) * RB_SLOT + k * MIRROR_BYTES, pitch, m->addr, m->width, m->lw, &m->box,
+			to_rdram(rdp.rb + (RB_SLOTS + 2) * RB_SLOT + k * MIRROR_SLOT, pitch, m->addr, m->width, m->lw, &m->box,
 				 bpp);
 			rdp.stats.mirrors++;
 		}
@@ -1583,13 +1587,13 @@ static bool tall_fill_target(int i, float xa, float ya, float xb, float yb, uint
  * espera: se convierte en una traducción posterior, cuando el RSX pasó la
  * barrera. Devuelve el espejo usado, o -1 si la ranura no cumple o no hay
  * espejo libre. `box` es lo dibujado en ella en la tarea. */
-static int mirror_small(int i, const struct rdp_box *box, uint32_t n)
+static int mirror_small(int i, const struct rdp_box *box, uint32_t n, uint32_t limit)
 {
 	const struct rdp_target *t = &rdp.tg.t[i];
 	uint32_t rows = box->y1 < t->lh ? box->y1 : t->lh;
 	uint32_t pitch = (t->lw * 2 + 63) & ~63u;
 	if (!rdp.rdram || rdp.fbfx < 2 || !rows || t->presented || (t->bpp != 2 && t->bpp != 1) ||
-	    t->width == rdp.tg.vi_width || pitch * rows > MIRROR_BYTES || t->addr + t->width * t->bpp * rows > rdp.rdram_size)
+	    t->width == rdp.tg.vi_width || pitch * rows > limit || t->addr + t->width * t->bpp * rows > rdp.rdram_size)
 		return -1;
 	int k = 0;
 	while (k < MIRRORS && rdp.mirrors[k].used)
@@ -1599,7 +1603,7 @@ static int mirror_small(int i, const struct rdp_box *box, uint32_t n)
 		return -1;
 	}
 	rsxkit_rect src = surface_rect(i, 0, 0, t->lw, rows);
-	if (rsxkit_target_read(rdp.surf[i], &src, rdp.rb_off + (RB_SLOTS + 2) * RB_SLOT + k * MIRROR_BYTES, pitch, t->lw,
+	if (rsxkit_target_read(rdp.surf[i], &src, rdp.rb_off + (RB_SLOTS + 2) * RB_SLOT + k * MIRROR_SLOT, pitch, t->lw,
 			       rows, RSXKIT_RGB565) != RSXKIT_OK)
 		return -1;
 	rdp.bound_t = -1;
@@ -1678,7 +1682,7 @@ static void translate(uint32_t n)
 				 * (Pokémon Stadium: nueve destinos en una tarea). */
 				int v = rdp_targets_recycled(&rdp.tg, c->a, c->b, siz, lh);
 				if (v >= 0 && drawn[v] && rdp.surf[v]) {
-					int k = mirror_small(v, &drawn_box[v], n);
+					int k = mirror_small(v, &drawn_box[v], n, MIRROR_SLOT);
 					if (k >= 0)
 						mirror_k[nmirror++] = k;
 					LOGN(20, "gfx: la ranura %d (%06x/%u) se recicla con lo dibujado hasta la fila %u: %s", v,
@@ -1952,7 +1956,7 @@ static void translate(uint32_t n)
 	for (int i = 0; rdp.rdram && rdp.fbfx >= 2 && i < RDP_TARGETS_MAX; i++) {
 		if (!drawn[i] || sync_rb[i])
 			continue;
-		int k = mirror_small(i, &drawn_box[i], n);
+		int k = mirror_small(i, &drawn_box[i], n, MIRROR_BYTES);
 		if (k >= 0)
 			mirror_k[nmirror++] = k;
 	}
