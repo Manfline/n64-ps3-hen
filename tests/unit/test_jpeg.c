@@ -433,6 +433,29 @@ static void jpeg_simd_matches(void)
 	CHECK_EQ(diff, 0);
 }
 
+/* Un macrobloque armado a mano, con la salida que dio el microcódigo real de Zelda OoT (corrido en
+ * el LLE con las mismas entradas; docs/audio-censo.md): la IDCT y el color de la HLE son los suyos,
+ * píxel por píxel. */
+static void jpeg_matches_real_microcode(void)
+{
+	static const struct { int b, zz, v; } c[] = {
+		{ 0, 0, 100 }, { 0, 1, 300 }, { 0, 5, -200 }, { 0, 20, 50 }, { 1, 0, -300 }, { 1, 2, 120 }, { 2, 3, -400 },
+		{ 3, 0, 250 }, { 3, 10, 77 }, { 4, 0, 200 }, { 4, 1, -90 }, { 5, 0, -150 }, { 5, 2, 60 },
+	};
+	static const uint16_t diag[16] = { 0x9d2d, 0x952d, 0xadf3, 0xb635, 0x8cef, 0x6be5, 0x4321, 0x1997,
+					   0x8d77, 0x7cf1, 0x74f5, 0x8579, 0x857b, 0x6cf7, 0x6cf7, 0x857d };
+	setup(1);
+	for (unsigned i = 0; i < sizeof c / sizeof c[0]; i++)
+		coef(2, 0, c[i].b, c[i].zz, (int16_t)c[i].v);
+	run_task(2, 1, MB_PA);
+	uint32_t sum = 0;
+	for (int p = 0; p < 256; p++)
+		sum = sum * 31 + px(MB_PA, p % 16, p / 16);
+	CHECK_EQ(sum, 0x2fbfe9d4u);
+	for (int i = 0; i < 16; i++)
+		CHECK_EQ(px(MB_PA, i, i), diag[i]);
+}
+
 void t_suite_jpeg(void)
 {
 	RUN(jpeg_dc_quadrants);
@@ -444,4 +467,5 @@ void t_suite_jpeg(void)
 	RUN(jpeg_selftest_crc);
 	RUN(jpeg_rsp_backend);
 	RUN(jpeg_simd_matches);
+	RUN(jpeg_matches_real_microcode);
 }

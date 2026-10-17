@@ -47,16 +47,13 @@ struct salsa64_jpeg_task {
 };
 
 /* La aritmética (jpeg.c), compartida con la versión vectorial (jpeg_v.c):
- * tabla zigzag, IDCT en Q15, desplazamientos de las filas (Q15 → 2 bits de
- * fracción) y de las columnas (→ dieciseisavos), y YCbCr → RGB en Q14. */
+ * tabla zigzag y YCbCr → RGB con la parte fraccionaria de cada constante en
+ * Q16 (la parte entera se suma aparte). */
 extern const uint8_t salsa64_jpeg_zigzag[64];
-extern const int16_t salsa64_jpeg_idct[8][8];
-#define SALSA64_JPEG_ROW_SHIFT 13
-#define SALSA64_JPEG_COL_SHIFT 17
-#define SALSA64_JPEG_CR_R 22979  /* 1,4025 */
-#define SALSA64_JPEG_CB_G 5641   /* 0,3443 */
-#define SALSA64_JPEG_CR_G 11705  /* 0,7144 */
-#define SALSA64_JPEG_CB_B 29047  /* 1,7729 */
+#define SALSA64_JPEG_CR_R 26378  /* 0,4025 (V se suma aparte) */
+#define SALSA64_JPEG_CB_G 22564  /* 0,3443 */
+#define SALSA64_JPEG_CR_G 46819  /* 0,7144, sin signo (= 65536 − 18717) */
+#define SALSA64_JPEG_CB_B 50659  /* 0,7729 (U se suma aparte), sin signo (= 65536 − 14877) */
 
 /* Variante por el código del microcódigo (ucode, ucode_size bytes). */
 enum salsa64_jpeg_kind salsa64_jpeg_detect(const uint8_t *ucode, uint32_t size);

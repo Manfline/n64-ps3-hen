@@ -73,11 +73,11 @@
  *   - decaimiento de los volúmenes base en 64 bits y sumas sin
  *     desbordamiento con signo;
  *   - la tabla de RESAMPLE no es la del original: se toma del segmento de
- *     datos del microcódigo del propio juego (find_lut) o, si no está, es la
- *     de lut.c.
+ *     datos del microcódigo del propio juego (aud_find_lut, alist.c) o, si no
+ *     está, es la de lut.c.
  *
  * Presupuesto en el SPE: el estado propio son los 520 bytes de la tabla de
- * interpolación (aud_state.musyx_lut); la pila usa unos 5 KB (cuatro
+ * interpolación (aud_state.lut); la pila usa unos 5 KB (cuatro
  * subtramas, 520 muestras, libro y búfer de ADPCM, subtrama del eco, los
  * 2 KB del segmento de datos mientras se busca la tabla).
  */
@@ -292,58 +292,6 @@ static void init_subframes_v2(struct mx *m)
 	}
 }
 
-/* ---- Tabla de interpolación ------------------------------------------------------
- * El cambio de tono de MusyX usa 64 filas de 4 coeficientes que el
- * microcódigo trae en su segmento de datos (0x800 bytes en `ucode_data`; en
- * 0x20 o 0x28 según la compilación). Se busca ahí, en la RDRAM del juego, y
- * se reconoce por su estructura: cada fila es la anterior al revés
- * (fila i = fila 63−i invertida) y suma 1,0 en Q15. Si no aparece (otra
- * compilación, una RDRAM de prueba), se usa la de lut.c, que da lo mismo
- * salvo por la respuesta en frecuencia. Nada del microcódigo se copia al
- * repositorio ni sale de la RDRAM del emulador. */
-
-enum { LUT_ROWS = 64, LUT_BYTES = LUT_ROWS * 4 * 2, UCODE_DATA_SIZE = 0x800 };
-
-static bool lut_at(const uint8_t *d)
-{
-	for (unsigned r = 0; r < LUT_ROWS; r++) {
-		const uint8_t *a = d + 8 * r, *b = d + 8 * (LUT_ROWS - 1 - r);
-		int32_t sum = 0;
-		for (unsigned k = 0; k < 4; k++) {
-			if (salsa64_rd16(a + 2 * k) != salsa64_rd16(b + 2 * (3 - k)))
-				return false;
-			sum += (int16_t)salsa64_rd16(a + 2 * k);
-		}
-		if (sum < 32768 - 256 || sum > 32768 + 256)
-			return false;
-	}
-	return true;
-}
-
-static void find_lut(struct aud_state *st, uint32_t ucode_data)
-{
-	uint8_t d[UCODE_DATA_SIZE];
-
-	st->musyx_lut_src = ucode_data | 0x80000000u;
-	st->musyx_lut_ok = false;
-	if (ucode_data == 0 || ucode_data > st->job->rdram_size - UCODE_DATA_SIZE)
-		return;
-	if (!aud_load(st, d, ucode_data, sizeof d))
-		return;
-	for (unsigned o = 0; o + LUT_BYTES <= UCODE_DATA_SIZE; o += 2) {
-		/* Descarte rápido con la primera y la última fila. */
-		bool first = true;
-		for (unsigned k = 0; k < 4 && first; k++)
-			first = salsa64_rd16(d + o + 2 * k) == salsa64_rd16(d + o + 8 * (LUT_ROWS - 1) + 2 * (3 - k));
-		if (!first || !lut_at(d + o))
-			continue;
-		for (unsigned i = 0; i < LUT_ROWS * 4; i++)
-			st->musyx_lut[i] = (int16_t)salsa64_rd16(d + o + 2 * i);
-		st->musyx_lut_ok = true;
-		return;
-	}
-}
-
 /* ---- Voces ------------------------------------------------------------------- */
 
 static void voice_load(struct aud_state *st, struct voice *v, uint32_t addr)
@@ -547,7 +495,7 @@ static int32_t dot4(const int16_t *x, const int16_t *y)
 static void mix_voice_samples(struct aud_state *st, struct mx *m, const struct voice *v, const int16_t *samples,
 			      unsigned segbase, unsigned offset, uint32_t last_sample_ptr)
 {
-	const int16_t *const lut_base = st->musyx_lut_ok ? st->musyx_lut : aud_resample_lut;
+	const int16_t *const lut_base = aud_lut(st);
 	int32_t pos = (int32_t)(segbase + offset + v->u4e);
 	const int32_t end = (int32_t)(segbase + v->end_point);
 	const int32_t restart = (v->restart_point & 0x7fff) + ((v->restart_point & 0x8000) ? 0 : (int32_t)segbase);
@@ -923,8 +871,7 @@ void aud_musyx(struct aud_state *st, bool v2, bool early)
 		st->res->errors++;
 		return;
 	}
-	if (st->musyx_lut_src != ((st->job->ucode_data & 0xFFFFFF) | 0x80000000u))
-		find_lut(st, st->job->ucode_data & 0xFFFFFF);
+	aud_find_lut(st);
 	if (v2)
 		musyx_v2_task(st, sfd_ptr, sfd_count);
 	else

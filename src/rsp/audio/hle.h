@@ -88,6 +88,23 @@ bool aud_io_alist(struct aud_state *st, uint32_t index, uint32_t *w1, uint32_t *
 
 extern const int16_t aud_resample_lut[64 * 4];
 
+/* La tabla de interpolación del cambio de tono (RESAMPLE y el de MusyX):
+ * la del segmento de datos del microcódigo del propio juego (ucode_data de
+ * la tarea, en la RDRAM) si se encuentra, y si no la de lut.c. Se busca una
+ * vez por dirección de ucode_data (aud_find_lut, desde aud_run). */
+void aud_find_lut(struct aud_state *st);
+/* El arranque de libultra (rspboot) copia el segmento de datos del
+ * microcódigo (ucode_data, ucode_data_size bytes) a la DMEM antes de cada
+ * tarea. En los microcódigos con 2 KB de datos (GoldenEye, Diddy Kong Racing,
+ * naudio) eso pisa los búferes de 0x4F0/0x5C0 a 0x7FF con lo que tenga la
+ * RDRAM ahí, no con lo que dejó la tarea anterior. Lo hace aud_run. */
+void aud_boot_data(struct aud_state *st);
+
+static inline const int16_t *aud_lut(const struct aud_state *st)
+{
+	return st->lut_ok ? st->lut : aud_resample_lut;
+}
+
 void alist_clear(struct aud_state *st, uint16_t dmem, uint16_t count);
 void alist_load(struct aud_state *st, uint16_t dmem, uint32_t address, uint16_t count);
 void alist_save(struct aud_state *st, uint16_t dmem, uint32_t address, uint16_t count);
@@ -97,21 +114,24 @@ void alist_repeat64(struct aud_state *st, uint16_t dmemo, uint16_t dmemi, uint8_
 void alist_copy_blocks(struct aud_state *st, uint16_t dmemo, uint16_t dmemi, uint16_t block_size, uint8_t count);
 void alist_interleave(struct aud_state *st, uint16_t dmemo, uint16_t left, uint16_t right, uint16_t count);
 
-enum aud_envmix_kind { AUD_ENVMIX_EXP, AUD_ENVMIX_GE, AUD_ENVMIX_LIN };
+enum aud_envmix_kind { AUD_ENVMIX_EXP, AUD_ENVMIX_GE, AUD_ENVMIX_LIN, AUD_ENVMIX_LIN_PHASE, AUD_ENVMIX_LIN_CBFD };
 
 /* ENVMIXER de ABI1: exponencial (el de libultra), lineal de GoldenEye o
- * lineal con los cuatro búferes (naudio). */
+ * lineal con los cuatro búferes (naudio); LIN_PHASE es el de naudio de
+ * Donkey Kong 64, Perfect Dark, Banjo-Tooie y Conker, donde el bit bajo del
+ * volumen seco invierte la fase del canal izquierdo y el del húmedo, la del
+ * derecho. */
 void alist_envmix(struct aud_state *st, enum aud_envmix_kind kind, bool init, bool aux,
 		  uint16_t dmem_dl, uint16_t dmem_dr, uint16_t dmem_wl, uint16_t dmem_wr, uint16_t dmemi,
 		  uint16_t count, int16_t dry, int16_t wet, const int16_t *vol, const int16_t *target,
 		  const int32_t *rate, uint32_t address);
 void alist_envmix_nead(struct aud_state *st, bool swap_wet_lr, uint16_t dmem_dl, uint16_t dmem_dr,
-		       uint16_t dmem_wl, uint16_t dmem_wr, uint16_t dmemi, unsigned count,
+		       uint16_t dmem_wl, uint16_t dmem_wr, uint16_t dmemi, unsigned count, unsigned align,
 		       uint16_t *env_values, const uint16_t *env_steps, const int16_t *xors);
 
 void alist_mix(struct aud_state *st, uint16_t dmemo, uint16_t dmemi, uint16_t count, int16_t gain);
 void alist_multQ44(struct aud_state *st, uint16_t dmem, uint16_t count, int8_t gain);
-void alist_add(struct aud_state *st, uint16_t dmemo, uint16_t dmemi, uint16_t count);
+void alist_add(struct aud_state *st, uint16_t dmemo, uint16_t dmemi, uint16_t count, bool carry3);
 
 void alist_adpcm(struct aud_state *st, bool init, bool loop, bool two_bit_per_sample, uint16_t dmemo,
 		 uint16_t dmemi, uint16_t count, const int16_t *codebook, uint32_t loop_address,
@@ -120,8 +140,8 @@ void alist_resample(struct aud_state *st, bool init, uint16_t dmemo, uint16_t dm
 		    uint32_t pitch, uint32_t address);
 void alist_resample_zoh(struct aud_state *st, uint16_t dmemo, uint16_t dmemi, uint16_t count,
 			uint32_t pitch, uint32_t pitch_accu);
-void alist_filter(struct aud_state *st, uint16_t dmem, uint16_t count, uint32_t address,
-		  const uint32_t *lut_address);
+void alist_filter(struct aud_state *st, bool init, uint16_t dmem, uint16_t count, uint32_t address,
+		  const uint32_t *lut_address, bool average);
 void alist_polef(struct aud_state *st, bool init, uint16_t dmemo, uint16_t dmemi, uint16_t count,
 		 uint16_t gain, int16_t *table, uint32_t address);
 void alist_iirf(struct aud_state *st, bool init, uint16_t dmemo, uint16_t dmemi, uint16_t count,

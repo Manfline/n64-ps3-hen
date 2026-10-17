@@ -16,7 +16,7 @@
 #define JPEG_SELFTEST_RAM  0x3000u
 #define JPEG_SELFTEST_MBS  8u          /* macrobloques de cada tarea */
 #define JPEG_SELFTEST_SEED 20261012u
-#define JPEG_SELFTEST_CRC  0xEEC26FE1u /* con JPEG_SELFTEST_SEED */
+#define JPEG_SELFTEST_CRC  0xF5C74ACFu /* con JPEG_SELFTEST_SEED */
 
 /* Llena `ram` (JPEG_SELFTEST_RAM bytes). */
 void jpeg_selftest_build(uint8_t *ram, uint32_t seed);

@@ -50,10 +50,14 @@ static void cmd(uint32_t w1, uint32_t w2)
 	nlist++;
 }
 
+static uint32_t uc_data, uc_size;  /* ucode_data y su tamaño del trabajo (0: sin segmento de datos) */
+
 static void run_abi(enum salsa64_abi abi)
 {
 	struct aud_job job;
 	memset(&job, 0, sizeof job);
+	job.ucode_data = uc_data;
+	job.ucode_data_size = uc_size;
 	job.rdram_ea = (uint64_t)(uintptr_t)t_n64.bus.rdram;
 	job.rdram_size = t_n64.bus.rdram_size;
 	job.abi = abi;
@@ -152,7 +156,8 @@ static void nead_load_mix_save(void)
 	CHECK_EQ(res.commands, 4);
 	CHECK_EQ(res.errors, 0);
 	for (int i = 0; i < 16; i++) {
-		int32_t s = i * 1000 - 8000, want = 30000 + ((s * 0x4000) >> 15);
+		/* MIXER acumula como VMACF: lo que había × 0x7FFF más el producto, con un redondeo. */
+		int32_t s = i * 1000 - 8000, want = (30000 * 0x7FFF + s * 0x4000 + 0x4000) >> 15;
 		CHECK_EQ(get16(DST + 2 * i), want > 32767 ? 32767 : want);
 	}
 	CHECK_EQ(res.nranges, 1);
@@ -276,8 +281,9 @@ static void nead_resample(void)
 	 * k−4 … k−1 (cero antes del búfer) con la fila 0 de la tabla. */
 	int32_t c0 = aud_resample_lut[0], c1 = aud_resample_lut[1];
 	CHECK_EQ(get16(DST + 0), 0);
-	CHECK_EQ(get16(DST + 4), (1000 * c0) >> 15);
-	CHECK_EQ(get16(DST + 6), (1000 * (c0 + c1)) >> 15);
+	/* Cada producto se redondea por separado, como el microcódigo. */
+	CHECK_EQ(get16(DST + 4), (1000 * c0 + 0x4000) >> 15);
+	CHECK_EQ(get16(DST + 6), ((1000 * c0 + 0x4000) >> 15) + ((1000 * c1 + 0x4000) >> 15));
 	CHECK_EQ(get16(DST + 8), 1000);
 	CHECK_EQ(get16(DST + 30), 1000);
 	/* Estado: las 4 últimas entradas y el acumulador. */
@@ -686,8 +692,8 @@ static void naudio_adpcm_resample(void)
 	CHECK_EQ(res.errors, 0);
 	int32_t c0 = aud_resample_lut[0], c1 = aud_resample_lut[1];
 	CHECK_EQ(get16(NA_DST + 0), 0);
-	CHECK_EQ(get16(NA_DST + 4), (1000 * c0) >> 15);
-	CHECK_EQ(get16(NA_DST + 6), (1000 * (c0 + c1)) >> 15);
+	CHECK_EQ(get16(NA_DST + 4), (1000 * c0 + 0x4000) >> 15);
+	CHECK_EQ(get16(NA_DST + 6), ((1000 * c0 + 0x4000) >> 15) + ((1000 * c1 + 0x4000) >> 15));
 	CHECK_EQ(get16(NA_DST + 8), 1000);
 	CHECK_EQ(get16(NA_DST + 2 * (NA_N - 1)), 1000);
 	CHECK_EQ(get16(NA_STATE + 8), 0);
@@ -749,31 +755,42 @@ static void naudio_filter(void)
 		y[n] = (int16_t)(q15(c[0], x[n]) + q15(c[1], x[n - 1]) + q15(c[0], x[n - 2]) +
 				 2 * q15(c[2], y[n - 1]) + 2 * q15(c[3], y[n - 2]));
 
-	/* Dos bloques: el segundo sigue del estado (y[n−2], y[n−1], x[n−2], x[n−1]). */
+	/* Dos bloques: el segundo sigue del estado de la RDRAM (x[n−2], x[n−1],
+	 * y[n−2], y[n−1] en +0, +2, +4 y +6, como lo guarda el microcódigo). El IIR
+	 * ignora el byte alto de w2 y filtra siempre desde el búfer principal. */
 	cmd(0x0B000000u | 32, NA_BOOK);
-	na_loadbuff(NA_MAIN2, NA_SRC, 0x170);
-	cmd(0x0E000000u | 0x01u << 16, 0x01u << 24 | NA_STATE);  /* filtro sobre MAIN2, A_INIT */
-	na_savebuff(NA_MAIN2, NA_DST, 0x170);
+	na_loadbuff(0, NA_SRC, 0x170);
+	cmd(0x0E000000u | 0x01u << 16, 0x01u << 24 | NA_STATE);  /* A_INIT */
+	na_savebuff(0, NA_DST, 0x170);
 	na_loadbuff(0, NA_SRC + 0x170, 0x170);
-	cmd(0x0E000000u, NA_STATE);                               /* sobre MAIN */
+	cmd(0x0E000000u, NA_STATE);
 	na_savebuff(0, NA_DST + 0x170, 0x170);
 	run_abi(SALSA64_ABI_NAUDIO_MP3);
 	CHECK_EQ(res.errors, 0);
 	CHECK_EQ(res.unknown, 0);
 	for (int i = 0; i < 2 * NA_N; i++)
 		CHECK_EQ(get16(NA_DST + 2 * i), y[i + 2]);
+	CHECK_EQ(get16(NA_STATE + 0), x[2 * NA_N]);
+	CHECK_EQ(get16(NA_STATE + 2), x[2 * NA_N + 1]);
 	CHECK_EQ(get16(NA_STATE + 4), y[2 * NA_N]);
-	CHECK_EQ(get16(NA_STATE + 10), x[2 * NA_N + 1]);
+	CHECK_EQ(get16(NA_STATE + 6), y[2 * NA_N + 1]);
 
-	/* Con c0 = c1 = 0 es POLEF: sin coeficientes, salida = x · ganancia (Q14). */
+	/* Con c0 = c1 = 0 es POLEF: sin coeficientes, salida = x · ganancia (Q14),
+	 * en el segundo búfer si w2 trae 1 en el byte alto. */
 	memset(ram(NA_BOOK), 0, 32);
 	cmd(0x0B000000u | 32, NA_BOOK);
-	na_loadbuff(0, NA_SRC, 0x170);
-	cmd(0x0E000000u | 0x01u << 16 | 0x2000, NA_STATE);
-	na_savebuff(0, NA_DST, 0x170);
+	na_loadbuff(NA_MAIN2, NA_SRC, 0x170);
+	for (unsigned i = 0; i < 16; i++)
+		st.dmem[0x660 + i] = 0xAA;      /* lo que hay antes: los 16 bytes que guarda el POLEF */
+	cmd(0x0E000000u | 0x01u << 16 | 0x2000, 0x01u << 24 | NA_STATE);
+	na_savebuff(NA_MAIN2, NA_DST, 0x170);
 	run_abi(SALSA64_ABI_NAUDIO_MP3);
 	for (int i = 0; i < NA_N; i += 37)
 		CHECK_EQ(get16(NA_DST + 2 * i), (x[i + 2] * 0x2000) >> 14);
+	/* Primera vuelta del bucle: con A_INIT guarda un vector en cero antes del búfer, que son las
+	 * 8 últimas muestras del principal (ahí no hay nada de la lista: st.dmem lo dejó la HLE). */
+	for (unsigned i = 0; i < 16; i++)
+		CHECK_EQ(st.dmem[0x660 + i], 0);
 }
 
 /* OVERLOAD (Conker): ganancia saturada y luego × atenuación / 65536. */
@@ -1028,7 +1045,7 @@ static void musyx_lut_from_ucode(void)
 		mx_ucode_data = 0x307000;
 		mx_run(SALSA64_ABI_MUSYX1, 1);
 		CHECK_EQ(res.errors, 0);
-		CHECK(st.musyx_lut_ok);
+		CHECK(st.lut_ok);
 		/* Con baseline 0x4000 el producto es s/2; la salida es la de la tabla sintética. */
 		bool differs = false;
 		for (uint32_t j = 0; j < 150; j += 13) {
@@ -1046,7 +1063,7 @@ static void musyx_lut_from_ucode(void)
 	mx_voice_pcm(MX_SFD + 0x10, 0x40000000u, 0, MX_OUT);
 	mx_ucode_data = 0x307000;
 	mx_run(SALSA64_ABI_MUSYX1, 1);
-	CHECK(!st.musyx_lut_ok);
+	CHECK(!st.lut_ok);
 	for (uint32_t j = 0; j < 150; j += 13)
 		CHECK_EQ(get16(MX_OUT + 4 * j), mx_first_samples(j, true));
 	/* Una fila rota (no suma 1,0) no vale. */
@@ -1055,7 +1072,7 @@ static void musyx_lut_from_ucode(void)
 	put16(0x307000 + 0x28 + 8 * 43 + 4, 9000);
 	aud_init(&st);
 	mx_run(SALSA64_ABI_MUSYX1, 1);
-	CHECK(!st.musyx_lut_ok);
+	CHECK(!st.lut_ok);
 	mx_ucode_data = 0;
 }
 
@@ -1242,6 +1259,406 @@ static void selftest_lists_are_clean(void)
 	}
 }
 
+
+static int16_t get16_dmem(uint32_t a)
+{
+	return (int16_t)salsa64_rd16(st.dmem + a);
+}
+
+/* ---- Lo comprobado contra el microcódigo real (docs/audio-censo.md) -------------
+ * Los valores esperados salen de ejecutar el microcódigo de los respaldos del
+ * autor con listas sintéticas en el LLE (--lle-check-audio y el banco de
+ * pruebas del censo); aquí se fijan con datos propios, sin nada del juego. */
+
+/* ENVMIXER de ABI1 con el estado del microcódigo: volumen exponencial de 256
+ * con tasa 2,0 y destino 1280, entrada constante 0x7FFF y seco 0x7FFF: la
+ * salida es la parte entera del volumen de cada muestra. */
+static void abi1_envmixer_real_state(void)
+{
+	fresh();
+	put_const(SRC, 40, 0x7FFF);
+	cmd(0x08000000u | 0x000, 0x0100u << 16 | 80);   /* in 0x5C0, out 0x6C0, 80 bytes = 5 bloques */
+	cmd(0x04000000u, SRC);
+	cmd(0x08000000u | 0x08u << 16 | 0x200, 0x0300u << 16 | 0x400);
+	cmd(0x09000000u | 0x08u << 16 | 0x7FFF, 0);
+	cmd(0x09000000u | 0x06u << 16 | 0x0100, 0);
+	cmd(0x09000000u | 0x04u << 16 | 0x0100, 0);
+	cmd(0x09000000u | 0x02u << 16 | 0x0500, 0x20000);
+	cmd(0x09000000u | 0x00u << 16 | 0x0500, 0x20000);
+	cmd(0x03000000u | 0x01u << 16, STATE);
+	cmd(0x06000000u, DST);
+	run_abi(SALSA64_ABI_AUDIO);
+	CHECK_EQ(res.errors, 0);
+	static const int16_t want[24] = {
+		288, 320, 352, 384, 416, 448, 480, 511,           /* v + v·(tasa − 1)·c_j, con c_7 = 0xFFFF */
+		576, 640, 704, 768, 832, 896, 960, 1023,          /* ×2 en cada carril */
+		1152, 1280, 1280, 1280, 1280, 1280, 1280, 1280    /* ×2 y recortado al destino */
+	};
+	for (int i = 0; i < 24; i++)
+		CHECK_EQ(get16(DST + 2 * i), want[i]);
+	/* El estado es el de libultra: 8 carriles (parte entera y fracción) por
+	 * canal, destino, tasa (alta, baja), seco y húmedo. */
+	for (int j = 0; j < 8; j++) {
+		CHECK_EQ(get16(STATE + 2 * j), 0x0500);
+		CHECK_EQ(get16(STATE + 0x20 + 2 * j), 0x0500);
+	}
+	CHECK_EQ(get16(STATE + 0x40), 0x0500);
+	CHECK_EQ(get16(STATE + 0x42), 2);
+	CHECK_EQ(get16(STATE + 0x44), 0);
+	CHECK_EQ(get16(STATE + 0x4C), 0x7FFF);
+	CHECK_EQ(get16(STATE + 0x4E), 0);
+
+	/* Sin A_INIT sigue desde el estado: el volumen ya está en el destino. */
+	cmd(0x08000000u | 0x000, 0x0100u << 16 | 16);
+	cmd(0x04000000u, SRC);
+	cmd(0x08000000u | 0x08u << 16 | 0x200, 0x0300u << 16 | 0x400);
+	cmd(0x02000000u | 0x100, 16);
+	cmd(0x03000000u, STATE);
+	cmd(0x06000000u, DST);
+	run_abi(SALSA64_ABI_AUDIO);
+	for (int i = 0; i < 8; i++)
+		CHECK_EQ(get16(DST + 2 * i), 1280);
+}
+
+/* ENVMIXER lineal (GoldenEye): carril j del bloque inicial = v + tasa·c_j; cada
+ * bloque suma la tasa. La dirección sale de la tasa: una tasa ≥ 1,0 recorta
+ * hacia arriba; una menor da el destino de inmediato. */
+static void abi1_envmixer_linear(void)
+{
+	fresh();
+	put_const(SRC, 40, 0x7FFF);
+	cmd(0x08000000u | 0x000, 0x0100u << 16 | 48);   /* 3 bloques */
+	cmd(0x04000000u, SRC);
+	cmd(0x08000000u | 0x08u << 16 | 0x200, 0x0300u << 16 | 0x400);
+	cmd(0x09000000u | 0x08u << 16 | 0x7FFF, 0);
+	cmd(0x09000000u | 0x06u << 16 | 0x0100, 0);
+	cmd(0x09000000u | 0x04u << 16 | 0x0100, 0);
+	cmd(0x09000000u | 0x02u << 16 | 0x5000, 0x20000);
+	cmd(0x09000000u | 0x00u << 16 | 0x5000, 0x20000);
+	cmd(0x03000000u | 0x01u << 16, STATE);
+	run_abi(SALSA64_ABI_AUDIO_GE);
+	CHECK_EQ(res.errors, 0);
+	/* Estado tras 3 bloques: los del tercero (bloque 2): 256 + 4 + 2,0·(j + 1)/8. */
+	static const uint16_t hi[8] = { 0x0104, 0x0104, 0x0104, 0x0105, 0x0105, 0x0105, 0x0105, 0x0105 };
+	static const uint16_t lo[8] = { 0x4000, 0x8000, 0xC000, 0x0000, 0x4000, 0x8000, 0xC000, 0xFFFE };
+	for (int j = 0; j < 8; j++) {
+		CHECK_EQ((uint16_t)get16(STATE + 2 * j), hi[j]);
+		CHECK_EQ((uint16_t)get16(STATE + 0x10 + 2 * j), lo[j]);
+	}
+	/* Tasa pequeña (0x1000 < 1,0): el volumen salta al destino. */
+	cmd(0x08000000u | 0x000, 0x0100u << 16 | 32);
+	cmd(0x04000000u, SRC);
+	cmd(0x08000000u | 0x08u << 16 | 0x200, 0x0300u << 16 | 0x400);
+	cmd(0x09000000u | 0x06u << 16 | 0x0100, 0);
+	cmd(0x09000000u | 0x04u << 16 | 0x0100, 0);
+	cmd(0x09000000u | 0x02u << 16 | 0x0500, 0x1000);
+	cmd(0x09000000u | 0x00u << 16 | 0x0500, 0x1000);
+	cmd(0x03000000u | 0x01u << 16, STATE + 0x100);
+	run_abi(SALSA64_ABI_AUDIO_GE);
+	CHECK_EQ((uint16_t)get16(STATE + 0x100), 0x0500);
+	CHECK_EQ((uint16_t)get16(STATE + 0x110), 0x1200);   /* v + tasa·(1 + c_0) */
+	CHECK_EQ((uint16_t)get16(STATE + 0x11E), 0x1FFF);
+}
+
+/* naudio de Donkey Kong 64, Perfect Dark, Banjo-Tooie y Conker: el bit bajo del
+ * seco invierte (complemento a uno) la entrada del canal izquierdo y el del
+ * húmedo la del derecho. */
+static void naudio_phase_flags(void)
+{
+	static const int xs[4] = { 1000, 12345, -100, 0 };
+	for (int variant = 0; variant < 2; variant++) {
+		enum salsa64_abi abi = variant ? SALSA64_ABI_NAUDIO_MP3 : SALSA64_ABI_NAUDIO_DK;
+		for (int odd = 0; odd < 2; odd++) {
+			fresh();
+			for (int i = 0; i < NA_N; i++)
+				put16(NA_SRC + 2 * i, (int16_t)xs[i & 3]);
+			na_loadbuff(0, NA_SRC, 0x170);
+			/* seco y húmedo 0x7FFE o 0x7FFF */
+			na_setvol(0x06, 0x7FFF, (uint32_t)(0x7FFE + odd) << 16 | (uint32_t)(0x7FFE + odd));
+			na_setvol(0x04, 0x7FFF, 0);
+			na_setvol(0x00, 0x7FFF, 0);
+			cmd(0x03000000u | (0x01u << 16) | 0x7FFF, NA_STATE);
+			na_savebuff(NA_DL, NA_DST, 0x170);
+			na_savebuff(NA_DR, NA_DST + 0x200, 0x170);
+			run_abi(abi);
+			CHECK_EQ(res.errors, 0);
+			/* ganancia = vmulf(0x7FFF, 0x7FFE + odd); la entrada se invierte si odd */
+			int32_t g = (0x7FFF * (0x7FFE + odd) + 0x4000) >> 15;
+			for (int i = 0; i < 4; i++) {
+				int32_t x = odd ? ~xs[i] : xs[i];
+				int32_t want = (x * g + 0x4000) >> 15;
+				CHECK_EQ(get16(NA_DST + 2 * i), want);
+				CHECK_EQ(get16(NA_DST + 0x200 + 2 * i), want);
+			}
+		}
+	}
+	/* Banjo-Kazooie no invierte nada con el mismo bit. */
+	fresh();
+	put_const(NA_SRC, NA_N, 1000);
+	na_loadbuff(0, NA_SRC, 0x170);
+	na_setvol(0x06, 0x7FFF, 0x7FFFu << 16 | 0x7FFF);
+	na_setvol(0x04, 0x7FFF, 0);
+	na_setvol(0x00, 0x7FFF, 0);
+	cmd(0x03000000u | (0x01u << 16) | 0x7FFF, NA_STATE);
+	na_savebuff(NA_DL, NA_DST, 0x20);
+	run_abi(SALSA64_ABI_NAUDIO_BK);
+	CHECK(get16(NA_DST) > 0);
+}
+
+/* Los naudio con MP3 tienen todos los búferes 0x10 bytes más arriba (0x500). */
+static void naudio_mp3_buffers_base(void)
+{
+	fresh();
+	put_const(NA_SRC, NA_N, 777);
+	na_loadbuff(0, NA_SRC, 0x170);
+	run_abi(SALSA64_ABI_NAUDIO_MP3);
+	CHECK_EQ(get16_dmem(0x500), 777);
+	CHECK_EQ(get16_dmem(0x4F0), 0);
+	fresh();
+	put_const(NA_SRC, NA_N, 777);
+	na_loadbuff(0, NA_SRC, 0x170);
+	run_abi(SALSA64_ABI_NAUDIO_BK);
+	CHECK_EQ(get16_dmem(0x4F0), 777);
+}
+
+/* FILTER de Yoshi's Story y 1080°: la tabla de la nota va directa y no se
+ * escribe nada aparte de las muestras previas; en Zelda se promedia con la
+ * anterior y queda guardada. */
+static void nead_filter_direct(void)
+{
+	for (int variant = 0; variant < 2; variant++) {
+		fresh();
+		for (int i = 0; i < 8; i++) {
+			put16(STATE + 0x100 + 2 * i, 0);                           /* estado: 8 muestras previas */
+			put16(STATE + 0x110 + 2 * i, 0);                           /* la tabla anterior, a continuación */
+			put16(STATE + 0x200 + 2 * i, (int16_t)(i ? 0 : 16384));   /* tabla de la nota: un solo tap = 0,5 */
+			put16(SRC + 2 * i, (int16_t)(1000 * (i + 1)));
+		}
+		n_loadbuff(0x400, SRC, 16);
+		cmd(0x07020000u | 16, STATE + 0x200);                          /* tabla de la nota, 16 bytes */
+		cmd(0x07000000u | 0x400, STATE + 0x100);                       /* filtrar */
+		n_savebuff(0x400, DST, 16);
+		run_abi(variant ? SALSA64_ABI_NEAD_YS : SALSA64_ABI_NEAD_OOT);
+		CHECK_EQ(res.errors, 0);
+		/* Directa: muestra · 0,5. Promediada con cero: ·0,25 (y queda escrita). */
+		for (int i = 0; i < 8; i++)
+			CHECK_EQ(get16(DST + 2 * i), variant ? 500 * (i + 1) : 250 * (i + 1));
+	}
+}
+
+/* ENVMIXER de nead: la cuenta se redondea a múltiplos de 16 muestras. */
+static void nead_envmixer_count_rounds(void)
+{
+	fresh();
+	put_const(SRC, 16, 4000);
+	n_loadbuff(0x100, SRC, 32);
+	cmd(0x12000000u | 0x80u << 16, 0);
+	cmd(0x16000000u, 0x8000u << 16 | 0x8000);
+	cmd(0x13000000u | 0x10u << 16 | 8u << 8, 0x20u << 24 | 0x30u << 16 | 0x40u << 8 | 0x50);   /* 8 muestras */
+	n_savebuff(0x200, DST, 32);
+	run_abi(SALSA64_ABI_NEAD_OOT);
+	CHECK_EQ(res.errors, 0);
+	CHECK_EQ(get16(DST + 14), 2000);   /* la 8.ª */
+	CHECK_EQ(get16(DST + 30), 2000);   /* y la 16.ª, que no se había pedido */
+}
+
+/* ADDMIXER tras MIXER (nead): el acarreo que deja MIXER en VCO (carril 3) lo
+ * consume el primer vector del ADDMIXER; RESAMPLE lo borra. */
+static void nead_add_carry_after_mixer(void)
+{
+	for (int pass = 0; pass < 3; pass++) {
+		fresh();
+		put_const(SRC, 16, 100);
+		put_const(SRC2, 16, 200);
+		n_loadbuff(0x100, SRC, 32);
+		n_loadbuff(0x200, SRC2, 32);
+		if (pass < 2)
+			cmd(0x0C000000u | 32u << 12 | 0x4000, 0x0100u << 16 | 0x300);   /* MIXER (otro búfer) */
+		if (pass == 1) {
+			n_setbuff(0x100, 0x500, 32);                                    /* RESAMPLE borra el acarreo */
+			cmd(0x05000000u | 0x01u << 16 | 0x8000, STATE);
+		}
+		cmd(0x04000000u | 32u << 12, 0x0100u << 16 | 0x200);               /* ADDMIXER: 0x200 += 0x100 */
+		n_savebuff(0x200, DST, 32);
+		run_abi(SALSA64_ABI_NEAD_OOT);
+		CHECK_EQ(res.errors, 0);
+		for (int i = 0; i < 16; i++)
+			CHECK_EQ(get16(DST + 2 * i), 300 + (pass == 0 && i == 3));
+	}
+}
+
+/* El arranque de libultra copia el segmento de datos del microcódigo a la
+ * DMEM antes de cada tarea; en los de 2 KB eso pisa los búferes. */
+static void boot_data_copy(void)
+{
+	fresh();
+	uc_data = 0x230000;
+	uc_size = 0x800;
+	for (int i = 0; i < 0x400; i++)
+		put16(uc_data + 2 * i, (int16_t)(i + 1));
+	cmd(0x08000000u | 0x000, 0x0004u << 16 | 16);       /* out = 0x5C4 de la DMEM: muestra 0x2E2 del segmento */
+	cmd(0x06000000u, DST);
+	run_abi(SALSA64_ABI_AUDIO_GE);
+	CHECK_EQ(get16(DST + 0), 0x2E3);
+	CHECK_EQ(get16(DST + 2), 0x2E4);
+	/* Con ucode_data_size = 0 (pruebas, ROMs sin microcódigo) no toca la DMEM. */
+	fresh();
+	uc_size = 0;
+	st.dmem[0x5C4] = 0x12;
+	st.dmem[0x5C5] = 0x34;
+	cmd(0x08000000u | 0x000, 0x0004u << 16 | 16);
+	cmd(0x06000000u, DST);
+	run_abi(SALSA64_ABI_AUDIO_GE);
+	CHECK_EQ(get16(DST + 0), 0x1234);
+	uc_data = uc_size = 0;
+}
+
+/* La tabla de interpolación de RESAMPLE se toma del segmento de datos del
+ * microcódigo (como la de MusyX): fila r = fila 63 − r al revés, suma 1,0. */
+static void resample_table_from_ucode_data(void)
+{
+	fresh();
+	uc_data = 0x238000;
+	uc_size = 0x2C0;
+	memset(ram(uc_data), 0, 0x2C0);
+	run_abi(SALSA64_ABI_AUDIO);
+	CHECK(!st.lut_ok);   /* sin tabla reconocible vale la de lut.c */
+	for (int r = 0; r < 32; r++) {
+		int a = 3000 + 40 * r, b = 12000 - 40 * r;
+		int16_t row[4] = { (int16_t)a, (int16_t)b, (int16_t)(32768 - a - b - 16), 16 };
+		for (int k = 0; k < 4; k++) {
+			put16(uc_data + 0xC0 + 8 * r + 2 * k, row[k]);
+			put16(uc_data + 0xC0 + 8 * (63 - r) + 2 * (3 - k), row[k]);
+		}
+	}
+	aud_init(&st);
+	run_abi(SALSA64_ABI_AUDIO);
+	CHECK(st.lut_ok);
+	CHECK_EQ(st.lut[0], 3000);
+	CHECK_EQ(st.lut[63 * 4 + 3], 3000);
+	uc_data = uc_size = 0;
+}
+
+
+/* ---- Conker (CBFD) y MP3ADDY ------------------------------------------------------ */
+
+static int j_ramp(int j)
+{
+	return j * 1000 - 4000;
+}
+
+static int32_t vm(int a, int b)
+{
+	return (a * b * 2 + 0x8000) >> 16;
+}
+
+static void put_envstate(uint32_t pa, int vol, int tgt, int dry, int wet)
+{
+	memset(ram(pa), 0, 80);
+	for (int c = 0; c < 2; c++)
+		for (int j = 0; j < 8; j++)
+			put16(pa + 0x20 * c + 2 * j, (int16_t)vol);
+	put16(pa + 0x40, (int16_t)tgt);
+	put16(pa + 0x46, (int16_t)tgt);
+	put16(pa + 0x4C, (int16_t)dry);
+	put16(pa + 0x4E, (int16_t)wet);
+}
+
+/* ENVMIXER de Conker: la muestra se multiplica (VMULF) por la polaridad de cada canal, 0x7FFF
+ * o 0x8000 según el bit bajo de seco o húmedo; el primer bloque de 8 muestras pasa antes por
+ * 0x7FFF (0x7FFE o 0x8002 de escala) y, con el bit 1 en uno, por el vector de rampa de 0xA0
+ * del segmento de datos. Medido contra el microcódigo real (docs/audio-censo.md). */
+static void naudio_cbfd_envmixer(void)
+{
+	const int X = 20000, V = 0x4000, DRY = 0x7FFC, WET = 0x7FFD;
+	fresh();
+	put_const(NA_SRC, NA_N, (int16_t)X);
+	put_envstate(NA_STATE, V, V, DRY, WET);
+	na_loadbuff(0, NA_SRC, 0x170);
+	cmd(0x03000000u, NA_STATE);
+	na_savebuff(NA_DL, NA_DST, 0x170);
+	na_savebuff(NA_WR, NA_DST + 0x200, 0x170);
+	run_abi(SALSA64_ABI_NAUDIO_CBFD);
+	CHECK_EQ(res.errors, 0);
+	CHECK_EQ(res.unknown, 0);
+	int gd = vm(V, DRY), gw = vm(V, WET);
+	for (int lane = 0; lane < 12; lane += 5) {
+		int sd = lane < 8 ? vm(0x7FFF, 0x7FFF) : 0x7FFF;       /* seco par: polaridad positiva */
+		int sw = lane < 8 ? vm(0x7FFF, -0x8000) : -0x8000;      /* húmedo impar: polaridad negativa */
+		int xd = vm(X, sd), xw = vm(X, sw);
+		if (xw > 32767)
+			xw = 32767;
+		CHECK_EQ(get16(NA_DST + 2 * lane), (xd * gd + 0x4000) >> 15);               /* seco izquierdo */
+		CHECK_EQ(get16(NA_DST + 0x200 + 2 * lane), (xw * vm(V, WET) + 0x4000) >> 15);  /* húmedo derecho */
+	}
+	(void)gw;
+	/* Con el bit 1 del seco en uno, el primer bloque pasa por la rampa del segmento de datos. */
+	{
+		static uint8_t data[0x100];
+		memset(data, 0, sizeof data);
+		for (int j = 0; j < 8; j++)
+			salsa64_wr16(data + 0xA0 + 2 * j, (uint16_t)(j * 1000 - 4000));
+		memcpy(ram(NA_BOOK), data, sizeof data);
+		uc_data = NA_BOOK;
+		uc_size = sizeof data;
+		fresh();
+		put_const(NA_SRC, NA_N, (int16_t)X);
+		put_envstate(NA_STATE, V, V, 0x7FFE, WET);
+		na_loadbuff(0, NA_SRC, 0x170);
+		cmd(0x03000000u, NA_STATE);
+		na_savebuff(NA_DL, NA_DST, 0x170);
+		run_abi(SALSA64_ABI_NAUDIO_CBFD);
+		uc_data = uc_size = 0;
+		int g2 = vm(V, 0x7FFE);
+		for (int lane = 0; lane < 8; lane++) {
+			int x2 = vm(X, vm(j_ramp(lane), 0x7FFF));
+			CHECK_EQ(get16(NA_DST + 2 * lane), (x2 * g2 + 0x4000) >> 15);
+		}
+		CHECK_EQ(get16(NA_DST + 2 * 9), (vm(X, 0x7FFF) * g2 + 0x4000) >> 15);
+	}
+}
+
+/* MP3ADDY: cada MP3 trae de la RDRAM el anillo de la ventana y lo guarda al terminar; sin MP3ADDY
+ * el anillo queda en la memoria de trabajo de la HLE. */
+static void naudio_mp3addy_ring(void)
+{
+	enum { RING = 0x238000, BUF = 0x239000 };
+	uint8_t pat[0x440];
+	for (unsigned i = 0; i < sizeof pat; i++)
+		pat[i] = (uint8_t)(i * 7 + 3);
+	int16_t out[2][16];
+	for (int run = 0; run < 2; run++) {
+		fresh();
+		memcpy(ram(RING), pat, sizeof pat);
+		memset(ram(BUF), 0, 0x500);
+		t_wr32(BUF, 0x00010000u);
+		t_wr32(BUF + 4, 0x00010000u);
+		for (int i = 0; i < 0x240; i++)
+			put16(BUF + 8 + 2 * i, (int16_t)(i % 31 * 40 - 600));
+		if (run)
+			memset(st.mp3, 0x55, sizeof st.mp3);   /* basura en la memoria de trabajo: no debe importar */
+		cmd(0x08000000u, RING);                      /* MP3ADDY */
+		cmd(0x07000004u, BUF);                       /* MP3 */
+		run_abi(SALSA64_ABI_NAUDIO_MP3);
+		CHECK_EQ(res.errors, 0);
+		CHECK_EQ(res.unknown, 0);
+		for (int i = 0; i < 16; i++)
+			out[run][i] = get16(BUF + 2 * i);
+		unsigned same = 0;
+		for (unsigned i = 0; i < sizeof pat; i++)
+			same += ram(RING)[i] == pat[i];
+		CHECK(same < sizeof pat / 2);              /* el anillo se guardó de vuelta */
+	}
+	CHECK(memcmp(out[0], out[1], sizeof out[0]) == 0);
+
+	/* Sin MP3ADDY no se toca la RDRAM del anillo. */
+	fresh();
+	memcpy(ram(RING), pat, sizeof pat);
+	cmd(0x07000004u, BUF);
+	run_abi(SALSA64_ABI_NAUDIO_MP3);
+	CHECK(memcmp(ram(RING), pat, sizeof pat) == 0);
+}
+
 void t_suite_audio(void)
 {
 	RUN(detect_abi);
@@ -1272,4 +1689,15 @@ void t_suite_audio(void)
 	RUN(musyx_selftest_lists);
 	RUN(core_runs_audio_task);
 	RUN(selftest_lists_are_clean);
+	RUN(abi1_envmixer_real_state);
+	RUN(abi1_envmixer_linear);
+	RUN(naudio_phase_flags);
+	RUN(naudio_mp3_buffers_base);
+	RUN(nead_filter_direct);
+	RUN(nead_envmixer_count_rounds);
+	RUN(nead_add_carry_after_mixer);
+	RUN(boot_data_copy);
+	RUN(resample_table_from_ucode_data);
+	RUN(naudio_cbfd_envmixer);
+	RUN(naudio_mp3addy_ring);
 }

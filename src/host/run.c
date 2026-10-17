@@ -136,6 +136,7 @@
 #include "rsp/lle/core.h"
 
 #include <signal.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #if defined(__powerpc64__) && defined(__linux__)
 #include <ucontext.h>
@@ -1586,7 +1587,23 @@ static void pc_sample(uint64_t pc)
 /* --lle-check-audio: cada tarea de audio que corre en el microcódigo real
  * se corre también en la HLE sobre una copia de la RDRAM; cuando el RSP
  * termina (en el siguiente arranque, o al final) se comparan los tramos
- * que la HLE escribió. Encuentra la primera divergencia del LLE. */
+ * que la HLE escribió. Encuentra la primera divergencia del LLE.
+ *
+ * Hace falta compilar con -DAUD_MAX_RANGES=64 para tareas con muchos tramos
+ * (el resultado de spukit solo admite 10). */
+#define BIS_MAGIC 0x42495331u
+#define BIS_RANGES 1024
+
+struct bis_res {            /* lo que el hijo de SALSA64_LLE_BISECT cuenta al padre */
+	uint32_t magic, k;
+	uint32_t rd_ranges;     /* tramos de la RDRAM distintos */
+	uint32_t rd_addr, rd_off;  /* el primero: dirección del tramo y primer byte distinto */
+	uint32_t dm_bytes;      /* bytes de la DMEM distintos dentro de la ventana */
+	uint32_t dm_first, dm_last;
+	uint64_t dm_blocks;     /* bloques de 64 bytes de la DMEM con alguna diferencia */
+	uint8_t dm_lle[16], dm_hle[16];  /* desde dm_first */
+};
+
 static struct {
 	bool on, pending;
 	uint8_t *rdram;         /* copia de la RDRAM con la salida de la HLE */
@@ -1599,10 +1616,43 @@ static struct {
 	 *   SALSA64_LLE_VERBOSE=1       una línea por tarea: muestras distintas y diferencia máxima
 	 *   SALSA64_LLE_DIFFS=1         "T n" al empezar cada tarea y una línea "D" por palabra distinta
 	 *   SALSA64_LLE_DUMP_TASK=N     de esa tarea: lo que escribió (antes | lle | hle) y su lista
-	 *   SALSA64_LLE_DUMP_DMEM=ruta  con la anterior, la DMEM del RSP al terminar */
+	 *   SALSA64_LLE_DUMP_DMEM=ruta  con la anterior, la DMEM del RSP al terminar
+	 *   SALSA64_LLE_DUMP_RANGE=D:N  con DUMP_TASK, además N bytes de la RDRAM desde D (hex), antes y
+	 *                               después del microcódigo real (formato de su estado, por ejemplo)
+	 *   SALSA64_LLE_BISECT=A[-B][,…] las tareas A a B (o solo A; una lista separada por comas): para cada una, con k = 1, 2, …
+	 *                               comandos, un proceso hijo corre la tarea cortada a k comandos en
+	 *                               el microcódigo y en la HLE y compara la DMEM (ventana
+	 *                               SALSA64_LLE_DMWIN=lo-hi, hex; por omisión la de los búferes de
+	 *                               cada ABI) y los tramos de la RDRAM; el primer
+	 *                               k distinto es el comando donde se separan
+	 *   SALSA64_LLE_BISECT_STEP=n   k de n en n (por omisión 1)
+	 *   SALSA64_LLE_BISECT_NOP=1    en vez de cortar data_size, poner a cero los comandos que sobran
+	 *   SALSA64_LLE_BISECT_FROM=k   empezar en k comandos (el microcódigo de Zelda lee la lista por
+	 *                               bloques y con pocos comandos no se deja cortar)
+	 *   SALSA64_LLE_SNAP=P[:N]      al arrancar la tarea N (1): la RDRAM en P.ram y la DMEM/IMEM
+	 *                               (8 KB, con la cabecera de la tarea y el arranque de libultra,
+	 *                               y el SP_PC con el que arrancó) en P.mem: son del juego, fuera del repositorio */
 	bool env_read, verbose, diffs;
 	uint32_t dump_task;
 	const char *dump_dmem;
+	uint32_t dump_range_addr, dump_range_len;
+	const char *snap;
+	uint32_t snap_task;
+	uint32_t bis_n, bis_range[BIS_RANGES][2], bis_step, bis_from, dm_lo, dm_hi;
+	enum salsa64_abi cur_abi;   /* ABI de la tarea en curso (para lo que la HLE no emula en la DMEM) */
+	bool dm_env;
+	bool boot_pending;  /* una tarea de audio espera a que arranque el microcódigo (shadow_lle_start) */
+	struct salsa64_task boot_task;
+	/* Estados de ENVMIXER de la tarea (aud_dbg_env). */
+	uint32_t env_n, env_addr[AUD_DBG_ENV_MAX];
+	/* En el hijo de la bisección: cuántos comandos corre y el tubo de vuelta. */
+	uint32_t child_k;
+	int child_fd;
+	uint8_t lle_dm0[LLE_MEM_SIZE], hle_dm0[AUD_DMEM_SIZE + AUD_DMEM_SLACK];
+	/* Bisección: por ABI y opcode del comando donde se separan (128 = nada: solo difiere
+	 * al terminar o no se reprodujo). */
+	uint32_t bis_hist[SALSA64_ABI_COUNT][129], bis_tasks;
+	uint32_t abi_tasks[SALSA64_ABI_COUNT], abi_bad[SALSA64_ABI_COUNT];   /* tareas comparadas y distintas por ABI */
 } shadow;
 
 static void shadow_env(void)
@@ -1614,18 +1664,148 @@ static void shadow_env(void)
 	shadow.diffs = getenv("SALSA64_LLE_DIFFS") != NULL;
 	shadow.dump_task = getenv("SALSA64_LLE_DUMP_TASK") ? (uint32_t)atoi(getenv("SALSA64_LLE_DUMP_TASK")) : 0;
 	shadow.dump_dmem = getenv("SALSA64_LLE_DUMP_DMEM");
+	if (getenv("SALSA64_LLE_DUMP_RANGE"))
+		sscanf(getenv("SALSA64_LLE_DUMP_RANGE"), "%x:%x", &shadow.dump_range_addr, &shadow.dump_range_len);
+	shadow.bis_step = getenv("SALSA64_LLE_BISECT_STEP") ? (uint32_t)atoi(getenv("SALSA64_LLE_BISECT_STEP")) : 1;
+	if (shadow.bis_step == 0)
+		shadow.bis_step = 1;
+	shadow.bis_from = getenv("SALSA64_LLE_BISECT_FROM") ? (uint32_t)atoi(getenv("SALSA64_LLE_BISECT_FROM")) : 0;
+	if (getenv("SALSA64_LLE_BISECT")) {
+		/* "5", "5-9" o una lista "5,9-12,40". */
+		const char *p = getenv("SALSA64_LLE_BISECT");
+		while (*p && shadow.bis_n < BIS_RANGES) {
+			char *end;
+			unsigned a = (unsigned)strtoul(p, &end, 10), b = a;
+			if (end == p)
+				break;
+			if (*end == '-')
+				b = (unsigned)strtoul(end + 1, &end, 10);
+			shadow.bis_range[shadow.bis_n][0] = a;
+			shadow.bis_range[shadow.bis_n++][1] = b;
+			p = *end == ',' ? end + 1 : end;
+		}
+	}
+	shadow.snap = getenv("SALSA64_LLE_SNAP");
+	shadow.snap_task = 1;
+	if (shadow.snap && strchr(shadow.snap, ':'))
+		shadow.snap_task = (uint32_t)atoi(strchr(shadow.snap, ':') + 1);
+	shadow.dm_env = getenv("SALSA64_LLE_DMWIN") && sscanf(getenv("SALSA64_LLE_DMWIN"), "%x-%x", &shadow.dm_lo, &shadow.dm_hi) == 2;
+}
+
+/* El hijo de la bisección: compara la DMEM (en la ventana, los bytes que algún lado escribió) y
+ * los tramos de la RDRAM, se lo cuenta al padre y termina. */
+static void shadow_child_report(void)
+{
+	struct bis_res r;
+	memset(&r, 0, sizeof r);
+	r.magic = BIS_MAGIC;
+	r.k = shadow.child_k;
+	for (uint32_t i = 0; i < shadow.res.nranges && i < AUD_MAX_RANGES; i++) {
+		uint32_t a = shadow.res.range_addr[i] & 0x7FFFFF, n = shadow.res.range_len[i];
+		if (n > n64.bus.rdram_size - a)
+			n = n64.bus.rdram_size - a;
+		uint32_t k = 0;
+		while (k < n && n64.bus.rdram[a + k] == shadow.rdram[a + k])
+			k++;
+		if (k < n) {
+			if (!r.rd_ranges) {
+				r.rd_addr = a;
+				r.rd_off = k;
+			}
+			r.rd_ranges++;
+		}
+	}
+	const uint8_t *l = n64.bus.sp_mem, *h = aud_state.dmem;
+	uint32_t hi = shadow.dm_hi < LLE_MEM_SIZE ? shadow.dm_hi : LLE_MEM_SIZE;
+	for (uint32_t b = shadow.dm_lo; b < hi; b++) {
+		/* Un lado que no tocó el byte y otro que sí tampoco coinciden, pero un byte que ninguno
+		 * escribió no cuenta (la DMEM de partida es distinta: la del microcódigo tiene su
+		 * propio trabajo). */
+		if (l[b] == h[b] || (l[b] == shadow.lle_dm0[b] && h[b] == shadow.hle_dm0[b]))
+			continue;
+		/* El POLEF de los naudio con MP3 guarda, 16 bytes antes de su búfer, un registro vectorial tal
+		 * como lo dejó el comando anterior (ocho bytes de basura; abi.c NA_FILTER): no se compara. */
+		if ((shadow.cur_abi == SALSA64_ABI_NAUDIO_MP3 || shadow.cur_abi == SALSA64_ABI_NAUDIO_CBFD) &&
+		    ((b >= 0x4F0 && b < 0x4F8) || (b >= 0x660 && b < 0x668)))
+			continue;
+		if (!r.dm_bytes) {
+			r.dm_first = b;
+			for (unsigned j = 0; j < 16 && b + j < hi; j++) {
+				r.dm_lle[j] = l[b + j];
+				r.dm_hle[j] = h[b + j];
+			}
+		}
+		r.dm_last = b;
+		r.dm_blocks |= 1ull << (b >> 6);
+		r.dm_bytes++;
+	}
+	/* SALSA64_LLE_SHOWK=k:dirección:bytes — en el hijo de k comandos, la DMEM de los dos (hex),
+	 * y la de antes de la tarea. */
+	{
+		unsigned k = 0, a = 0, n = 0;
+		const char *e = getenv("SALSA64_LLE_SHOWK");
+		if (e && sscanf(e, "%u:%x:%x", &k, &a, &n) == 3 && k == shadow.child_k) {
+			for (unsigned j = 0; j < n && a + j + 2 <= LLE_MEM_SIZE; j += 2)
+				fprintf(stderr, "SHOWK %03x: antes lle %04x hle %04x | lle %04x hle %04x\n", a + j,
+					salsa64_rd16(shadow.lle_dm0 + a + j), salsa64_rd16(shadow.hle_dm0 + a + j),
+					salsa64_rd16(n64.bus.sp_mem + a + j),
+					/* 0x800–0xFFF de la HLE: la memoria de trabajo del MP3 */
+					a + j >= AUD_MP3_BASE ? salsa64_rd16(aud_state.mp3 + a + j - AUD_MP3_BASE) : salsa64_rd16(h + a + j));
+		}
+	}
+	/* SALSA64_LLE_SHOWR=k:dirección:bytes — lo mismo con la RDRAM (la del microcódigo y la de la HLE). */
+	{
+		unsigned k = 0, a = 0, n = 0;
+		const char *e = getenv("SALSA64_LLE_SHOWR");
+		if (e && sscanf(e, "%u:%x:%x", &k, &a, &n) == 3 && k == shadow.child_k) {
+			for (unsigned j = 0; j < n && a + j + 2 <= n64.bus.rdram_size; j += 2)
+				fprintf(stderr, "SHOWR %06x: lle %04x hle %04x\n", a + j, salsa64_rd16(n64.bus.rdram + a + j),
+					salsa64_rd16(shadow.rdram + a + j));
+		}
+	}
+	ssize_t w = write(shadow.child_fd, &r, sizeof r);
+	(void)w;
+	_exit(0);
+}
+
+/* Sin la parte fraccionaria de los volúmenes ya recortados al destino (audio.h): se copia del
+ * microcódigo a la copia de la HLE antes de comparar. */
+static void shadow_mask_env(void)
+{
+	for (uint32_t e = 0; e < shadow.env_n; e++) {
+		uint32_t s0 = shadow.env_addr[e];
+		for (unsigned c = 0; c < 2; c++)
+			for (unsigned l = 0; l < 8; l++) {
+				uint32_t lo = s0 + 0x20 * c + 0x10 + 2 * l;
+				if (lo + 2 <= n64.bus.rdram_size &&
+				    salsa64_rd16(n64.bus.rdram + s0 + 0x20 * c + 2 * l) == salsa64_rd16(n64.bus.rdram + s0 + 0x40 + 6 * c))
+					memcpy(shadow.rdram + lo, n64.bus.rdram + lo, 2);
+			}
+	}
 }
 
 static void shadow_compare(void)
 {
 	shadow.pending = false;
 	shadow_env();
+	shadow_mask_env();
+	if (shadow.child_k)
+		shadow_child_report();
 	if (shadow.dump_task == shadow.task && shadow.dump_dmem) {
 		FILE *f = fopen(shadow.dump_dmem, "wb");
 		if (f) {
 			fwrite(n64.bus.sp_mem, 1, 8192, f);
 			fclose(f);
 		}
+	}
+	if (shadow.dump_task == shadow.task && shadow.dump_range_len && shadow.pre) {
+		uint32_t a = shadow.dump_range_addr & 0x7FFFFF, n = shadow.dump_range_len;
+		if (n > n64.bus.rdram_size - a)
+			n = n64.bus.rdram_size - a;
+		fprintf(stderr, "lle-check: tarea %u, RDRAM [%06x, %u bytes] (antes | lle | hle):\n", shadow.task, a, n);
+		for (uint32_t j = 0; j + 4 <= n; j += 4)
+			fprintf(stderr, "  +%04x %08x %08x %08x\n", j, salsa64_rd32(shadow.pre + a + j),
+				salsa64_rd32(n64.bus.rdram + a + j), salsa64_rd32(shadow.rdram + a + j));
 	}
 	bool bad = false;
 	uint32_t nd = 0, dmax = 0;  /* muestras de 16 bits distintas y la mayor diferencia (SALSA64_LLE_VERBOSE) */
@@ -1680,11 +1860,102 @@ static void shadow_compare(void)
 		}
 	}
 	shadow.bad += bad;
+	shadow.abi_tasks[shadow.cur_abi]++;
+	shadow.abi_bad[shadow.cur_abi] += bad;
 	if (shadow.verbose)
-		fprintf(stderr, "lle-check: tarea %u: %u muestras distintas, diferencia máxima %u\n", shadow.task, nd, dmax);
+		fprintf(stderr, "lle-check: tarea %u: %u muestras distintas, diferencia máxima %u%s\n", shadow.task, nd, dmax,
+			bad ? " DISTINTA" : "");
 }
 
-static void shadow_start(const struct salsa64_task *t)
+/* SALSA64_LLE_BISECT: para la tarea en curso (aún sin arrancar en el microcódigo), un proceso
+ * hijo por k = 1, 2, … comandos la corre cortada a k comandos —el microcódigo lee data_size de
+ * la cabecera de la tarea en la DMEM— y compara con la HLE. En el hijo vuelve true (con
+ * `job` y la cabecera ya cortadas) y el hijo sigue emulando hasta que el microcódigo termina
+ * (shadow_compare → shadow_child_report); en el padre vuelve false cuando ya imprimió dónde se
+ * separan la HLE y el microcódigo: el primer k cuyo resultado difiere. */
+static bool shadow_bisect(struct aud_job *job, enum salsa64_abi abi)
+{
+	uint32_t ncmd = job->alist_size / 8, tasks = shadow.tasks + 1;
+	struct bis_res first;
+	bool have = false;
+	memset(&first, 0, sizeof first);
+	for (uint32_t k = shadow.bis_from ? shadow.bis_from : 1; k <= ncmd && !have; k += shadow.bis_step) {
+		int fd[2];
+		if (pipe(fd) != 0)
+			return false;
+		fflush(NULL);
+		pid_t pid = fork();
+		if (pid < 0) {
+			close(fd[0]);
+			close(fd[1]);
+			return false;
+		}
+		if (pid == 0) {
+			close(fd[0]);
+			alarm(120);
+			shadow.child_k = k;
+			shadow.child_fd = fd[1];
+			job->alist_size = 8 * k;
+			if (getenv("SALSA64_LLE_BISECT_NOP")) {
+				/* El microcódigo de Zelda lee la lista por bloques y no deja cortarla: se pisan con ceros
+				 * los comandos que sobran y se le dice que hay todos. */
+				uint32_t a = job->alist & 0x7FFFF8;
+				if (a < n64.bus.rdram_size && 8 * ncmd <= n64.bus.rdram_size - a)
+					memset(n64.bus.rdram + a + 8 * k, 0, 8 * (ncmd - k));
+			} else {
+				salsa64_wr32(n64.bus.sp_mem + SALSA64_TASK_DMEM + 0x34, 8 * k);
+			}
+			return true;
+		}
+		close(fd[1]);
+		struct bis_res r;
+		ssize_t n = read(fd[0], &r, sizeof r);
+		close(fd[0]);
+		int status = 0;
+		waitpid(pid, &status, 0);
+		if (n != (ssize_t)sizeof r || r.magic != BIS_MAGIC) {
+			fprintf(stderr, "bisect: tarea %u, k=%u: el hijo no contestó (estado %d)\n", tasks, k, status);
+			continue;
+		}
+		if (r.rd_ranges || r.dm_bytes) {
+			first = r;
+			have = true;
+		}
+	}
+	shadow.bis_tasks++;
+	if (!have) {
+		shadow.bis_hist[abi][128]++;
+		fprintf(stderr, "bisect: tarea %u (%s, %u comandos): sin diferencias en ningún k\n", tasks, salsa64_abi_name(abi),
+			ncmd);
+		return false;
+	}
+	uint32_t ca = (job->alist + 8 * (first.k - 1)) & 0x7FFFFF;
+	uint32_t w1 = salsa64_rd32(n64.bus.rdram + ca), w2 = salsa64_rd32(n64.bus.rdram + ca + 4);
+	shadow.bis_hist[abi][(w1 >> 24) & 0x7F]++;
+	fprintf(stderr, "bisect: tarea %u (%s, %u comandos): primer comando distinto %u de %u: %08x %08x (op %02x)", tasks,
+		salsa64_abi_name(abi), ncmd, first.k - 1, ncmd, w1, w2, (w1 >> 24) & 0x7F);
+	if (first.rd_ranges)
+		fprintf(stderr, "; RDRAM: %u tramos distintos (el primero %06x +%u)", first.rd_ranges, first.rd_addr, first.rd_off);
+	if (first.dm_bytes) {
+		fprintf(stderr, "; DMEM: %u bytes distintos en %03x–%03x, desde %03x lle", first.dm_bytes, first.dm_first,
+			first.dm_last, first.dm_first);
+		for (unsigned j = 0; j < 8; j++)
+			fprintf(stderr, " %02x", first.dm_lle[j]);
+		fprintf(stderr, " hle");
+		for (unsigned j = 0; j < 8; j++)
+			fprintf(stderr, " %02x", first.dm_hle[j]);
+		fprintf(stderr, "; bloques de 64:");
+		for (unsigned j = 0; j < 64; j++)
+			if (first.dm_blocks >> j & 1)
+				fprintf(stderr, " %03x", j * 64);
+	}
+	fputc('\n', stderr);
+	return false;
+}
+
+/* `dm_pre`: la DMEM del RSP antes de que el arranque del microcódigo (rspboot) copie su segmento
+ * de datos; ver shadow_lle_start. */
+static void shadow_start(const struct salsa64_task *t, const uint8_t *dm_pre)
 {
 	enum salsa64_abi abi = salsa64_rsp_detect_abi(&n64.bus, t);
 	if (abi == SALSA64_ABI_UNKNOWN)
@@ -1693,6 +1964,7 @@ static void shadow_start(const struct salsa64_task *t)
 		shadow.rdram = malloc(n64.bus.rdram_size);
 	memcpy(shadow.rdram, n64.bus.rdram, n64.bus.rdram_size);
 	shadow_env();
+	shadow.cur_abi = abi;
 	if (shadow.dump_task == shadow.tasks + 1) {
 		if (!shadow.pre)
 			shadow.pre = malloc(n64.bus.rdram_size);
@@ -1703,14 +1975,66 @@ static void shadow_start(const struct salsa64_task *t)
 	job.rdram_ea = (uint64_t)(uintptr_t)shadow.rdram;
 	if (shadow.diffs)
 		fprintf(stderr, "T %u\n", shadow.tasks + 1);
+	if (shadow.snap && shadow.snap_task == shadow.tasks + 1) {
+		char path[512];
+		size_t n = strcspn(shadow.snap, ":");
+		for (int w = 0; w < 2; w++) {
+			snprintf(path, sizeof path, "%.*s.%s", (int)n, shadow.snap, w ? "mem" : "ram");
+			FILE *f = fopen(path, "wb");
+			if (f) {
+				if (w) {
+					uint8_t pc[4];
+					fwrite(dm_pre, 1, LLE_MEM_SIZE, f);
+					fwrite(n64.bus.sp_mem + LLE_MEM_SIZE, 1, LLE_MEM_SIZE, f);
+					salsa64_wr32(pc, n64.bus.sp.pc);  /* SP_PC con el que arrancó la tarea */
+					fwrite(pc, 1, 4, f);
+				} else
+					fwrite(n64.bus.rdram, 1, n64.bus.rdram_size, f);
+				fclose(f);
+				fprintf(stderr, "lle-check: instantánea de la tarea %u en %s\n", shadow.snap_task, path);
+			}
+		}
+	}
+	/* La DMEM de la HLE parte de la del RSP real: entre dos tareas de audio puede haber corrido
+	 * otro microcódigo (gráficas) y lo que el audio lee de búferes que nadie escribió esta
+	 * tarea (RESAMPLE pasado el final de su entrada) es lo que dejó. SALSA64_LLE_NOSYNC=1 no
+	 * lo hace. */
+	if (!getenv("SALSA64_LLE_NOSYNC")) {
+		memcpy(aud_state.dmem, dm_pre, LLE_MEM_SIZE);
+		memcpy(aud_state.mp3, dm_pre + AUD_MP3_BASE, AUD_MP3_SIZE);  /* la memoria de trabajo del MP3 es la DMEM de 0x800 */
+	}
+	memcpy(shadow.lle_dm0, dm_pre, sizeof shadow.lle_dm0);
+	memcpy(shadow.hle_dm0, aud_state.dmem, sizeof shadow.hle_dm0);
+	if (!shadow.dm_env) {
+		/* Ventana de la DMEM con los búferes de audio: lo que hay debajo es el trabajo propio del
+		 * microcódigo (su segmento de datos, que la HLE no lleva) y arriba la cabecera y la lista. */
+		uint32_t lo;
+		if (abi == SALSA64_ABI_AUDIO || abi == SALSA64_ABI_AUDIO_GE || abi == SALSA64_ABI_AUDIO_BC)
+			lo = 0x5C0;
+		else if (abi >= SALSA64_ABI_NAUDIO && abi <= SALSA64_ABI_NAUDIO_CBFD)
+			lo = 0x4F0;
+		else
+			lo = ((t->ucode_data_size + 0x3F) & ~0x3Fu) + 0x100;  /* y el búfer de la lista, que el microcódigo copia a la DMEM */
+		shadow.dm_lo = lo;
+		shadow.dm_hi = 0xF80;
+	}
+	bool bisect = false;
+	for (uint32_t i = 0; i < shadow.bis_n; i++)
+		bisect |= shadow.tasks + 1 >= shadow.bis_range[i][0] && shadow.tasks + 1 <= shadow.bis_range[i][1];
+	if (bisect && job.alist_size >= 8)
+		shadow_bisect(&job, abi);
+	aud_dbg_env_n = 0;
 	aud_run(&aud_state, &job, &shadow.res);
+	shadow.env_n = aud_dbg_env_n;
+	memcpy(shadow.env_addr, aud_dbg_env, sizeof shadow.env_addr);
 	shadow.pending = true;
 	shadow.task = ++shadow.tasks;
 	/* SALSA64_LLE_DUMP_TASK=N: la lista de comandos de esa tarea y lo que
 	 * la HLE escribió, para seguir la divergencia a mano. */
 	if (shadow.dump_task == shadow.task) {
-		fprintf(stderr, "lle-check: tarea de audio %u, alist %06x (%u bytes), ABI %s:\n", shadow.task,
-			job.alist, job.alist_size, salsa64_abi_name(abi));
+		fprintf(stderr, "lle-check: tarea de audio %u, alist %06x (%u bytes), ABI %s, flags %x, yield %08x/%x:\n",
+			shadow.task, job.alist, job.alist_size, salsa64_abi_name(abi), t->flags, t->yield_data_ptr,
+			t->yield_data_size);
 		for (uint32_t i = 0; i + 8 <= job.alist_size; i += 8)
 			fprintf(stderr, "  %3u: %08x %08x\n", i / 8, salsa64_rd32(n64.bus.rdram + ((job.alist + i) & 0x7FFFFF)),
 				salsa64_rd32(n64.bus.rdram + ((job.alist + i + 4) & 0x7FFFFF)));
@@ -1838,6 +2162,33 @@ static void jcheck_start(const struct salsa64_task *t)
 				memcpy(jcheck.input + 3 * 128, n64.bus.rdram + addr, bytes);
 		}
 	}
+	/* SALSA64_JCHECK_SNAP=P[:N]: al arrancar la tarea JPEG N (1), la RDRAM en P.ram y la DMEM/IMEM
+	 * en P.mem (con el SP_PC en cero detrás), para repetirla con otra entrada en un banco de
+	 * pruebas sin volver a correr el juego. */
+	if (getenv("SALSA64_JCHECK_SNAP")) {
+		const char *sp = getenv("SALSA64_JCHECK_SNAP");
+		size_t pn = strcspn(sp, ":");
+		unsigned want = strchr(sp, ':') ? (unsigned)atoi(strchr(sp, ':') + 1) : 1;
+		if (jcheck.tasks + 1 == want) {
+			char path[512];
+			for (int w = 0; w < 2; w++) {
+				snprintf(path, sizeof path, "%.*s.%s", (int)pn, sp, w ? "mem" : "ram");
+				FILE *f = fopen(path, "wb");
+				if (!f)
+					continue;
+				if (w) {
+					uint8_t pc[4];
+					fwrite(n64.bus.sp_mem, 1, 2 * LLE_MEM_SIZE, f);
+					salsa64_wr32(pc, 0);
+					fwrite(pc, 1, 4, f);
+				} else {
+					fwrite(n64.bus.rdram, 1, n64.bus.rdram_size, f);
+				}
+				fclose(f);
+				fprintf(stderr, "lle-check: instantánea de la tarea JPEG %u en %s\n", want, path);
+			}
+		}
+	}
 	salsa64_jpeg_run(kind, jcheck.rdram, n64.bus.rdram_size, t->data_ptr, &jcheck.res);
 	jcheck.tasks++;
 	jcheck.macroblocks += jcheck.res.macroblocks;
@@ -1865,6 +2216,35 @@ static void jcheck_sync(void *ctx)
 	 * memoria, donde el juego los reutiliza). */
 	if (shadow.pending && done)
 		shadow_compare();
+}
+
+/* Arranque de una tarea de audio en el microcódigo real: libultra lo empieza copiando a la IMEM
+ * y a la DMEM el código y el segmento de datos con dos DMA. En la consola eso ocurre antes de que
+ * el CPU vuelva a tocar la RDRAM (el juego puede escribir en su segmento de datos justo después
+ * de lanzar la tarea), pero el LLE arranca en la siguiente rebanada, ya con el CPU adelantado.
+ * Para que la sombra de la HLE vea la misma RDRAM, se ejecuta a mano el arranque hasta el segundo
+ * DMA y entonces se arranca la sombra. Los registros vectoriales y sus banderas los deja la tarea
+ * anterior (de cualquier microcódigo) y el de audio no los inicializa: VADD suma el acarreo que
+ * encuentre y el primer VADD de la tarea puede dar +1 en un carril; la HLE no tiene de dónde
+ * saberlo, así que el microcódigo real parte de cero. */
+static void shadow_lle_start(void *ctx)
+{
+	uint8_t dm_pre[LLE_MEM_SIZE];
+	bool want = shadow.boot_pending;
+	shadow.boot_pending = false;
+	if (want) {
+		memset(lle_host.rsp.v, 0, sizeof lle_host.rsp.v);
+		memset(lle_host.rsp.acc, 0, sizeof lle_host.rsp.acc);
+		lle_host.rsp.vco = lle_host.rsp.vcc = lle_host.rsp.vce = 0;
+		memcpy(dm_pre, n64.bus.sp_mem, sizeof dm_pre);
+	}
+	lle_host.backend.start(ctx);
+	if (!want)
+		return;
+	uint32_t w0 = lle_host.rsp.c0_writes[LLE_C0_RD_LEN];
+	for (unsigned i = 0; i < 20000 && lle_host.rsp.c0_writes[LLE_C0_RD_LEN] < w0 + 2 && !lle_host.rsp.halt; i++)
+		lle_step(&lle_host.rsp);
+	shadow_start(&shadow.boot_task, dm_pre);
 }
 
 /* Reloj del host para lo que el RSP mide en el hilo del CPU (HLE JPEG). */
@@ -1907,8 +2287,10 @@ static void trace_rsp(void *ctx, const struct salsa64_task *t, enum salsa64_gbi 
 	if (shadow.on) {
 		if (shadow.pending)
 			shadow_compare();
-		if (t->type == SALSA64_TASK_AUDIO)
-			shadow_start(t);
+		if (t->type == SALSA64_TASK_AUDIO) {
+			shadow.boot_task = *t;
+			shadow.boot_pending = true;
+		}
 	}
 	if (trace_audio_left && t->type == SALSA64_TASK_AUDIO && tracing()) {
 		trace_audio_left--;
@@ -3038,6 +3420,8 @@ int main(int argc, char **argv)
 		jcheck_lle = lle_host.backend;
 		if (jcheck.on || shadow.on)
 			jcheck_lle.sync = jcheck_sync;
+		if (shadow.on)
+			jcheck_lle.start = shadow_lle_start;
 		salsa64_rsp_set_lle(&n64.bus, &jcheck_lle, lle_mode);
 	}
 	/* SALSA64_SIN_DPC=1: sin quien consuma las listas del RDP que escribe el
@@ -3403,6 +3787,21 @@ int main(int argc, char **argv)
 			"distintas\n", shadow.tasks, shadow.bytes, shadow.bad);
 		fprintf(stderr, "salsa64-run: lle-check: muestras de 16 bits distintas por diferencia: ±1 %u, ±2 %u, ±3–4 %u, "
 			"±5–16 %u, mayores %u\n", shadow.hist[0], shadow.hist[1], shadow.hist[2], shadow.hist[3], shadow.hist[4]);
+		if (aud_dbg_mp3)
+			fprintf(stderr, "salsa64-run: lle-check: %u comandos MP3 en %u tareas\n", aud_dbg_mp3, aud_dbg_mp3_tasks);
+		for (unsigned a = 0; a < SALSA64_ABI_COUNT; a++)
+			if (shadow.abi_tasks[a])
+				fprintf(stderr, "salsa64-run: lle-check: ABI %s: %u tareas, %u distintas\n",
+					salsa64_abi_name((enum salsa64_abi)a), shadow.abi_tasks[a], shadow.abi_bad[a]);
+		if (shadow.bis_tasks) {
+			fprintf(stderr, "salsa64-run: lle-check: bisección de %u tareas; primer comando distinto por ABI y opcode:\n",
+				shadow.bis_tasks);
+			for (unsigned a = 0; a < SALSA64_ABI_COUNT; a++)
+				for (unsigned o = 0; o < 129; o++)
+					if (shadow.bis_hist[a][o])
+						fprintf(stderr, "  %-28s %s %02x: %u tareas\n", salsa64_abi_name((enum salsa64_abi)a),
+							o == 128 ? "(sin diferencia en ningún k)" : "op", o == 128 ? 0 : o, shadow.bis_hist[a][o]);
+		}
 	}
 	if (wav_path && !audio_wav(wav_path)) {
 		free(rom);

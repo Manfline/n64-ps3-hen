@@ -244,6 +244,24 @@ el CPU» en el resumen, `--pads N`, `--pad-port N`, `SALSA64_SIN_DPC`,
 NOMBRE` quita un archivo de `dev_hdd0/salsa64` (p. ej. `lle`) durante la
 corrida; `tools/m64p-ref.sh` con `M64P_PAD_PORT`.
 
+## 2026-10-17 — Audio y JPEG contra el microcódigo real: 99,87 % de las tareas idénticas (antes 13,1 %)
+
+El oráculo `--lle=all --lle-check-audio` (docs/rsp-lle.md) se usó como censo de
+la HLE de audio: 51 136 tareas de 21 juegos, byte por byte. La HLE, que venía de
+mupen64plus-rsp-hle y truncaba donde el RSP redondea, quedó idéntica al
+microcódigo salvo en 65 tareas (carreras con el CPU del juego en los bucles
+de ADPCM de Perfect Dark, Smash y Stadium, y unas pocas sin explicar). Se
+corrigieron la mezcla, el cambio de tono, el ENVMIXER (estado de 80 bytes,
+rampas, fases y la variante de Conker), el FILTER, el IIR y el POLEF de naudio
+y el MP3 (el MP3ADDY: cada comando trae el anillo de la ventana de la RDRAM y lo
+devuelve; sin eso la música de Conker salía distinta). La tarea JPEG de Zelda OoT
+y Pokémon Stadium 1 y 2 usa ahora la IDCT y el color del microcódigo: 0 píxeles
+distintos de 1 075 200 (antes ~1 %). Detalle, método y lo que queda en
+**docs/audio-censo.md**. Falta en la PS3: escuchar (Conker, Perfect Dark,
+Banjo-Tooie, Majora's Mask, Yoshi's Story, 1080°) y medir el JPEG del SPE (la
+IDCT cambió de forma). En memoria, el SPE de audio crece 3 KB de código y el de
+JPEG baja 1 KB (docs/memory-budget.md).
+
 ## 2026-10-16 — HLE de audio de MusyX (Factor 5)
 
 Hydro Thunder, Rush 2049, NBA Showtime, Gauntlet Legends, Tarzan, The World

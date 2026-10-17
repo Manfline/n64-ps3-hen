@@ -37,26 +37,27 @@
  * src/jpeg.c de mupen64plus-rsp-hle (rama master consultada el 2026-10-11;
  * docs/THIRD_PARTY.md); código reescrito para Salsa64.
  *
- * Aritmética entera (2026-10-12), para que el host, el PPE y el SPE den lo
- * mismo byte a byte (el SPE redondea los flotantes de simple precisión
- * hacia cero) y sin las conversiones a entero que en el PPE pasan por
- * memoria:
- *   IDCT    constantes α(k)·cos((2n + 1)kπ/16) en Q15 (tabla fija); filas y
- *           luego columnas, productos de 16 × 16 bits sumados en 32. Las
- *           filas quedan con 2 bits de fracción, redondeadas y recortadas
- *           a 16 bits; las columnas, redondeadas al dieciseisavo. En los
- *           fondos de OoT las sumas no pasan de 2^28,2 (margen ×7 contra el
- *           desborde) ni las filas de 23 400 (recorte en 32 767).
- *   color   productos con constantes en Q14, cada uno truncado (como el
- *           punto fijo del RSP: con flotantes G quedaba una unidad por
- *           debajo en el 1 % de los píxeles).
- * Contra el microcódigo real (salsa64-run --lle-check-jpeg, casa de Link
- * con partida nueva, 150 tareas): 99,06 % de los píxeles iguales y el
- * resto a ±1 en un canal de 5 bits (la versión con flotantes, 99,03 %);
- * contra una IDCT exacta en doble precisión, 0,19 % de los píxeles a ±1.
+ * Aritmética (2026-10-17), la del microcódigo real: se midió con el LLE
+ * (salsa64-run --lle-check-jpeg y un banco de pruebas que corre el
+ * microcódigo con macrobloques sintéticos; docs/audio-censo.md) y no se
+ * copió nada de él.
+ *   IDCT    la mitad par y la impar con las constantes round(32768 ·
+ *           cos(kπ/16)), productos de dos en dos con un solo redondeo (como
+ *           VMULF + VMACF del RSP) y sumas saturadas a 16 bits; primero las
+ *           filas y luego las columnas, que salen (a ± b + 2) >> 2.
+ *   color   Y + 2048; la parte fraccionaria de cada constante (Q16) multiplica
+ *           con el piso del producto y la parte entera se suma aparte:
+ *           R = Y + V + ⌊V · 0,4025⌋, G = Y − ⌊U · 0,3443⌋ − ⌊V · 0,7144⌋,
+ *           B = Y + U + ⌊U · 0,7729⌋; todo saturado a 16 bits.
+ * Contra el microcódigo real: 0 píxeles distintos en 400 000 de macrobloques
+ * sintéticos (continuos, un coeficiente suelto, aleatorios y con saturación)
+ * y en los de OoT y Pokémon Stadium 1 y 2. Antes (IDCT separable propia con
+ * constantes Q15 y color en Q14): 99,0 % de los píxeles iguales y el resto a
+ * ±1 en un canal de 5 bits.
  * Los desplazamientos a la derecha de negativos son aritméticos (gcc y
- * clang en todas las arquitecturas) y las sumas van en uint32_t: un
- * desborde (solo con coeficientes absurdos) da la vuelta igual en todas.
+ * clang en todas las arquitecturas). Las sumas de dos productos caben en 32
+ * bits (|valor| ≤ 32768 y constantes ≤ 32138), así que la versión de 4
+ * carriles (jpeg_v.c) da lo mismo con enteros de 32 bits.
  *
  * Corre en el PPE dentro del arranque de la tarea (core/rsp.c) o, en la
  * PS3, en un SPE (src/spu/jpeg): 75 tareas de 4 macrobloques por sala, una
@@ -81,23 +82,7 @@ const uint8_t salsa64_jpeg_zigzag[SB] = {
 	35, 36, 48, 49, 57, 58, 62, 63,
 };
 
-/* idct[n][k] = α(k)·cos((2n + 1)·k·π/16) · 2^15, α(0) = √(1/8), α(k) = 1/2,
- * redondeado. */
-const int16_t salsa64_jpeg_idct[8][8] = {
-	{ 11585,  16069,  15137,  13623,  11585,   9102,   6270,   3196 },
-	{ 11585,  13623,   6270,  -3196, -11585, -16069, -15137,  -9102 },
-	{ 11585,   9102,  -6270, -16069, -11585,   3196,  15137,  13623 },
-	{ 11585,   3196, -15137,  -9102,  11585,  13623,  -6270, -16069 },
-	{ 11585,  -3196, -15137,   9102,  11585, -13623,  -6270,  16069 },
-	{ 11585,  -9102,  -6270,  16069, -11585,  -3196,  15137, -13623 },
-	{ 11585, -13623,   6270,   3196, -11585,  16069, -15137,   9102 },
-	{ 11585, -16069,  15137, -13623,  11585,  -9102,   6270,  -3196 },
-};
-
 #define zigzag    salsa64_jpeg_zigzag
-#define idct      salsa64_jpeg_idct
-#define ROW_SHIFT SALSA64_JPEG_ROW_SHIFT
-#define COL_SHIFT SALSA64_JPEG_COL_SHIFT
 #define CR_R      SALSA64_JPEG_CR_R
 #define CB_G      SALSA64_JPEG_CB_G
 #define CR_G      SALSA64_JPEG_CR_G
@@ -108,14 +93,61 @@ static int16_t sat16(int32_t v)
 	return (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
 }
 
-/* Suma de 8 productos de 16 × 16 bits más el redondeo de `shift`, con
- * vuelta en 32 bits, desplazada. */
-static int32_t dot8(const int16_t k[8], const int16_t *x, unsigned stride, unsigned shift)
+/* Las operaciones de 16 bits del RSP que usa la IDCT: VMULF + VMACF (dos
+ * productos de 16 × 16 acumulados en 48 bits con un solo redondeo, el
+ * resultado recortado a 16 bits) y VADD/VSUB con saturación. */
+static int16_t mac2(int a, int b, int c, int d)
 {
-	uint32_t s = 1u << (shift - 1);
-	for (int i = 0; i < 8; i++)
-		s += (uint32_t)((int32_t)k[i] * x[i * stride]);
-	return (int32_t)s >> shift;
+	int64_t acc = 2 * (int64_t)a * b + 2 * (int64_t)c * d + 0x8000;
+	return sat16((int32_t)(acc >> 16));
+}
+
+static int16_t sadd(int a, int b)
+{
+	return sat16(a + b);
+}
+
+static int16_t ssub(int a, int b)
+{
+	return sat16(a - b);
+}
+
+/* IDCT unidimensional del microcódigo de OoT, medida con el LLE (docs/
+ * audio-censo.md): mitades par e impar con las constantes round(32768 ·
+ * cos(kπ/16)) —6393, 27246, 32138 y 18205 en la impar, 23170, 12540 y 30274
+ * en la par—, productos de dos en dos con VMULF + VMACF (un redondeo) y
+ * sumas saturadas de 16 bits. `last` (la pasada de las columnas): las
+ * salidas salen (a ± b) / 4 con un redondeo, (a ± b + 2) >> 2. */
+static void idct1(const int16_t x[8], int16_t o[8], bool last)
+{
+	int16_t v10 = mac2(x[3], 27246, x[5], 18205);
+	int16_t v11 = mac2(x[7], 6393, x[1], 32138);
+	int16_t v8 = mac2(x[1], 6393, x[7], -32138);
+	int16_t v9 = mac2(x[5], 27246, x[3], -18205);
+	int16_t v6 = mac2(x[0], 23170, x[4], -23170);
+	int16_t v5 = ssub(v11, v10);
+	int16_t v4 = ssub(v8, v9);
+	int16_t v12 = sadd(v8, v9);
+	int16_t v15 = sadd(v11, v10);
+	int16_t v13 = mac2(v5, 23170, v4, -23170);
+	int16_t v14 = mac2(v5, 23170, v4, 23170);
+	int16_t w4 = mac2(x[0], 23170, x[4], 23170);
+	int16_t w5 = mac2(x[6], 12540, x[2], 30274);
+	int16_t v7 = mac2(x[2], 12540, x[6], -30274);
+	int16_t a0 = sadd(w4, w5), a3 = ssub(w4, w5), a1 = sadd(v6, v7), a2 = ssub(v6, v7);
+	if (!last) {
+		o[0] = sadd(a0, v15); o[7] = ssub(a0, v15);
+		o[3] = sadd(a3, v12); o[4] = ssub(a3, v12);
+		o[1] = sadd(a1, v14); o[6] = ssub(a1, v14);
+		o[2] = sadd(a2, v13); o[5] = ssub(a2, v13);
+	} else {
+		static const uint8_t lo[4] = { 0, 3, 1, 2 }, hi[4] = { 7, 4, 6, 5 };
+		const int16_t p[4] = { a0, a3, a1, a2 }, q[4] = { v15, v12, v14, v13 };
+		for (int j = 0; j < 4; j++) {
+			o[lo[j]] = (int16_t)((p[j] + q[j] + 2) >> 2);
+			o[hi[j]] = (int16_t)((p[j] - q[j] + 2) >> 2);
+		}
+	}
 }
 
 /* Un bloque: coeficientes en zigzag (orden de la N64) → valores ×16 en
@@ -129,14 +161,17 @@ static void decode_block(const uint8_t *src, const int16_t q[SB], int16_t out[SB
 		 * registro: no pasa con coeficientes de un JPEG real). */
 		c[i] = (int16_t)(uint16_t)((uint16_t)sat16((int16_t)salsa64_rd16(src + 2 * z) * q[z]) << 4);
 	}
-	/* Filas: r[y][x] = Σk idct[x][k]·c[y][k]. */
+	/* Filas, y luego columnas (cada una con la salida k = 0–7 en su lugar). */
 	for (int y = 0; y < 8; y++)
-		for (int x = 0; x < 8; x++)
-			r[y * 8 + x] = sat16(dot8(idct[x], &c[y * 8], 1, ROW_SHIFT));
-	/* Columnas: out[y][x] = Σk idct[y][k]·r[k][x]. */
-	for (int y = 0; y < 8; y++)
-		for (int x = 0; x < 8; x++)
-			out[y * 8 + x] = sat16(dot8(idct[y], &r[x], 8, COL_SHIFT));
+		idct1(&c[8 * y], &r[8 * y], false);
+	for (int x = 0; x < 8; x++) {
+		int16_t col[8], o[8];
+		for (int k = 0; k < 8; k++)
+			col[k] = r[8 * k + x];
+		idct1(col, o, true);
+		for (int k = 0; k < 8; k++)
+			out[8 * k + x] = o[k];
+	}
 }
 
 /* Canal en dieciseisavos → sus 5 bits altos (0xF80 del valor de 12 bits). */
@@ -146,12 +181,20 @@ static uint32_t chan(int32_t x)
 	return (uint32_t)x & 0xF80;
 }
 
+/* Como el microcódigo: la parte fraccionaria de cada constante (Q16, sin
+ * signo) multiplica con VMUDM (el piso del producto entre 65536) y se suma
+ * la parte entera aparte; todo en 16 bits saturados.
+ *   R = Y + V + ⌊V · 0,4025⌋        G = Y − ⌊U · 0,3443⌋ − ⌊V · 0,7144⌋
+ *   B = Y + U + ⌊U · 0,7729⌋ */
 static uint16_t rgba5551(int16_t y, int16_t u, int16_t v)
 {
-	int32_t yy = y + 2048;
-	uint32_t r = chan(yy + ((v * CR_R) >> 14));
-	uint32_t g = chan(yy - ((u * CB_G) >> 14) - ((v * CR_G) >> 14));
-	uint32_t b = chan(yy + ((u * CB_B) >> 14));
+	int32_t yy = sat16(y + 2048);
+	int32_t rt = sat16(v + sat16((v * CR_R) >> 16));
+	int32_t gt = sat16(sat16((u * CB_G) >> 16) + sat16((v * CR_G) >> 16));
+	int32_t bt = sat16(u + sat16((u * CB_B) >> 16));
+	uint32_t r = chan(sat16(rt + yy));
+	uint32_t g = chan(sat16(yy - gt));
+	uint32_t b = chan(sat16(bt + yy));
 	return (uint16_t)(r << 4 | g >> 1 | b >> 6 | 1);
 }
 

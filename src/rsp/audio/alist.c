@@ -35,33 +35,30 @@
  *     recompilador.
  *   - El formato del estado de ENVMIXER en la RDRAM es propio (solo lo lee
  *     la HLE); el de ADPCM, RESAMPLE, POLEF y FILTER es el de la N64.
- *   - La tabla de RESAMPLE es propia (lut.c), no la del microcódigo.
+ *   - La tabla de RESAMPLE no se incluye (lut.c es un diseño propio, solo
+ *     para cuando no hay otra): se toma del segmento de datos del
+ *     microcódigo del propio juego (aud_find_lut), que es la que usa el
+ *     microcódigo real.
  *   - Las direcciones de la DMEM se toman módulo 4 KB.
  */
 #include <string.h>
 
 #include "rsp/audio/hle.h"
 
-struct ramp {
-	int64_t value;
-	int64_t step;
-	int64_t target;
-};
-
-static int16_t ramp_step(struct ramp *r)
+static int32_t vmulf(int16_t x, int16_t y)
 {
-	r->value += r->step;
-	bool reached = r->step <= 0 ? r->value <= r->target : r->value >= r->target;
-	if (reached) {
-		r->value = r->target;
-		r->step = 0;
-	}
-	return (int16_t)(r->value >> 16);
+	return ((int32_t)x * y + 0x4000) >> 15;
 }
 
+/* El microcódigo acumula con VMACF: lo que ya había se multiplica por 0x7FFF
+ * (casi 1,0: un bit menos para los valores grandes) y se suma el producto,
+ * con un solo redondeo al final:
+ *   dst = sat((dst · 0x7FFF + src · gain + 0x4000) >> 15)
+ * Comprobado contra el microcódigo real sobre destinos con datos (2560 de
+ * 2560 muestras; sumar el producto redondeado a dst deja ±1). */
 static void sample_mix(uint8_t *dst, int16_t src, int16_t gain)
 {
-	aud_st16(dst, aud_clamp16(aud_ld16(dst) + ((src * gain) >> 15)));
+	aud_st16(dst, aud_clamp16((aud_ld16(dst) * 0x7FFF + src * gain + 0x4000) >> 15));
 }
 
 /* ---- RDRAM ------------------------------------------------------------------ */
@@ -226,20 +223,144 @@ void alist_interleave(struct aud_state *st, uint16_t dmemo, uint16_t left, uint1
 
 /* ---- Envolventes ------------------------------------------------------------
  *
- * Estado de ENVMIXER en la RDRAM (80 bytes reservados por el juego; se usan
- * 40), en el orden de la N64:
- *   0 wet  4 dry  8/12 target  16/20 rate o paso  24/28 seq  32/36 valor */
+ * ENVMIXER de ABI1 (Super Mario 64 y los demás con el microcódigo estándar de
+ * libultra, el de GoldenEye y el de Diddy Kong Racing) y de naudio (Rare). El
+ * estado en la RDRAM es el del microcódigo real, 80 bytes (ENVMIX_STATE de
+ * libultra, 5 vectores de 8 × 16 bits):
+ *   0x00  volumen izquierdo, parte entera de las 8 muestras del bloque
+ *   0x10  volumen izquierdo, parte fraccionaria (16 bits)
+ *   0x20  lo mismo para el derecho (entera) y 0x30 (fraccionaria)
+ *   0x40  destino izq, tasa izq (alta, baja), destino der, tasa der (alta,
+ *         baja), seco, húmedo
+ * El volumen de cada canal se lleva por bloques de 8 muestras, con un valor
+ * por muestra en 16.16. El bloque inicial vale
+ *   v + (d · c_j >> 16),  c_j = (j + 1)·0x2000 (c_7 = 0xFFFF)
+ * con d = v·(tasa − 1) en el exponencial (tasa 16.16 con signo, SM64) y d =
+ * tasa en el lineal (GoldenEye, naudio); cada bloque siguiente multiplica los ocho
+ * por la tasa (exponencial) o les suma la tasa (lineal), saturando a 32 bits
+ * y, si se pasan del destino (hacia arriba con tasa ≥ 1,0 —0x10000—, hacia
+ * abajo si no; en el lineal de naudio, hacia arriba con tasa ≥ 0), dejando
+ * el destino en la parte entera y la fracción que salió (el microcódigo
+ * decide la dirección por la tasa, no por el destino: en el de GoldenEye una
+ * tasa lineal pequeña da el destino de inmediato). Cada muestra se
+ * mezcla con ganancia vmulf(parte entera, seco o húmedo) al búfer de salida
+ * (sample_mix). La tarea guarda los valores del último bloque usado (con un
+ * solo bloque, los del siguiente). Hallado y comprobado contra el microcódigo
+ * real con el LLE: más de mil configuraciones aleatorias idénticas en el
+ * exponencial y 300 en el lineal, y las salidas de las tareas de Super Mario
+ * 64. */
 
-#define ENV_STATE 40
+#ifdef AUD_DEBUG
+uint32_t aud_dbg_env[AUD_DBG_ENV_MAX];
+uint32_t aud_dbg_mp3, aud_dbg_mp3_tasks;
+uint32_t aud_dbg_env_n;
+#endif
 
-static int32_t env_rd32(const uint8_t *s, unsigned off)
+static int64_t sat32(int64_t x)
 {
-	return (int32_t)salsa64_rd32(s + off);
+	return x > 0x7FFFFFFFll ? 0x7FFFFFFFll : x < -0x80000000ll ? -0x80000000ll : x;
 }
 
-static void env_wr32(uint8_t *s, unsigned off, int32_t v)
+/* Un valor de volumen contra el destino: pasado, la parte entera es el destino. */
+static int32_t env_clamp(int64_t lane, int32_t rate, int32_t target, int32_t up)
 {
-	salsa64_wr32(s + off, (uint32_t)v);
+	int64_t t = (int64_t)target << 16;
+	if (rate >= up ? lane > t : lane < t)
+		lane = t | (lane & 0xFFFF);
+	return (int32_t)lane;
+}
+
+static void envmix_lanes(struct aud_state *st, bool linear, int32_t up, bool phase, bool cbfd, bool init, bool aux, uint16_t dmem_dl, uint16_t dmem_dr,
+			 uint16_t dmem_wl, uint16_t dmem_wr, uint16_t dmemi, uint16_t count, int16_t dry, int16_t wet,
+			 const int16_t *vol, const int16_t *target, const int32_t *rate, uint32_t address)
+{
+	uint8_t s[80];
+	int32_t lanes[2][8], tgt[2], rt[2];
+
+	if (init) {
+		for (int c = 0; c < 2; c++) {
+			int64_t v = (int64_t)vol[c] * 65536;
+			int64_t diff = linear ? (int64_t)rate[c] : ((v * (uint32_t)rate[c]) >> 16) - v;
+			tgt[c] = target[c];
+			rt[c] = rate[c];
+			for (int j = 0; j < 8; j++) {
+				int64_t m = j < 7 ? (j + 1) * 0x2000 : 0xFFFF;
+				lanes[c][j] = env_clamp(sat32(v + ((diff * m) >> 16)), rt[c], tgt[c], up);
+			}
+		}
+	} else {
+		aud_load(st, s, address, sizeof s);
+		for (int c = 0; c < 2; c++)
+			for (int j = 0; j < 8; j++)
+				lanes[c][j] = (int32_t)((uint32_t)(uint16_t)salsa64_rd16(s + 0x20 * c + 2 * j) << 16 |
+						       salsa64_rd16(s + 0x20 * c + 0x10 + 2 * j));
+		tgt[0] = (int16_t)salsa64_rd16(s + 0x40);
+		rt[0] = (int32_t)((uint32_t)salsa64_rd16(s + 0x42) << 16 | salsa64_rd16(s + 0x44));
+		tgt[1] = (int16_t)salsa64_rd16(s + 0x46);
+		rt[1] = (int32_t)((uint32_t)salsa64_rd16(s + 0x48) << 16 | salsa64_rd16(s + 0x4A));
+		dry = (int16_t)salsa64_rd16(s + 0x4C);
+		wet = (int16_t)salsa64_rd16(s + 0x4E);
+	}
+
+	unsigned n = aux ? 4 : 2, blocks = ((unsigned)count + 15u) / 16u;
+	const uint8_t *in = aud_dm(st, dmemi);
+	uint8_t *buf[4] = { aud_dm(st, dmem_dl), aud_dm(st, dmem_dr), aud_dm(st, dmem_wl), aud_dm(st, dmem_wr) };
+	for (unsigned b = 0; b < blocks; b++) {
+		if (b > 0 || !init)
+			for (int c = 0; c < 2; c++)
+				for (int j = 0; j < 8; j++) {
+					int64_t l = lanes[c][j];
+					l = linear ? l + rt[c] : (l * (uint32_t)rt[c]) >> 16;
+					lanes[c][j] = env_clamp(sat32(l), rt[c], tgt[c], up);
+				}
+		for (unsigned j = 0; j < 8; j++) {
+			unsigned k = 8 * b + j;
+			int16_t l = (int16_t)(lanes[0][j] >> 16), r = (int16_t)(lanes[1][j] >> 16);
+			int16_t gains[4] = { aud_clamp16(vmulf(l, dry)), aud_clamp16(vmulf(r, dry)), aud_clamp16(vmulf(l, wet)),
+					     aud_clamp16(vmulf(r, wet)) };
+			int16_t x = aud_ld16(in + 2 * k);
+			/* Con fase, el bit bajo de seco (izquierda) o de húmedo (derecha) invierte la entrada
+			 * (complemento a uno) de ese canal. */
+			int16_t xs[2] = { phase && (dry & 1) ? (int16_t)~x : x, phase && (wet & 1) ? (int16_t)~x : x };
+			if (cbfd) {
+				/* Conker: la muestra se multiplica (VMULF) por la polaridad de cada canal, 0x7FFF o
+				 * 0x8000 según el bit bajo de seco o húmedo. Con el bit 1 en cero, el primer bloque
+				 * usa 0x7FFF por la polaridad (0x7FFE o 0x8002: se nota ±1 en las 8 primeras
+				 * muestras) y con el bit 1 en uno, el vector de rampa de entrada que el microcódigo
+				 * trae en 0xA0 de su segmento de datos; desde el segundo bloque, la polaridad sola. */
+				int16_t pol[2] = { (dry & 1) ? INT16_MIN : INT16_MAX, (wet & 1) ? INT16_MIN : INT16_MAX };
+				int16_t sc[2] = { pol[0], pol[1] };
+				if (b == 0) {
+					int16_t ramp = aud_ld16(aud_dm(st, 0xA0 + 2 * j));
+					sc[0] = (int16_t)aud_clamp16(vmulf((dry & 2) ? ramp : INT16_MAX, pol[0]));
+					sc[1] = (int16_t)aud_clamp16(vmulf((wet & 2) ? ramp : INT16_MAX, pol[1]));
+				}
+				xs[0] = (int16_t)aud_clamp16(vmulf(x, sc[0]));
+				xs[1] = (int16_t)aud_clamp16(vmulf(x, sc[1]));
+			}
+			for (unsigned o = 0; o < n; o++)
+				sample_mix(buf[o] + 2 * k, xs[o & 1], gains[o]);
+		}
+	}
+
+	for (int c = 0; c < 2; c++)
+		for (int j = 0; j < 8; j++) {
+			salsa64_wr16(s + 0x20 * c + 2 * j, (uint16_t)((uint32_t)lanes[c][j] >> 16));
+			salsa64_wr16(s + 0x20 * c + 0x10 + 2 * j, (uint16_t)lanes[c][j]);
+		}
+	salsa64_wr16(s + 0x40, (uint16_t)tgt[0]);
+	salsa64_wr16(s + 0x42, (uint16_t)((uint32_t)rt[0] >> 16));
+	salsa64_wr16(s + 0x44, (uint16_t)rt[0]);
+	salsa64_wr16(s + 0x46, (uint16_t)tgt[1]);
+	salsa64_wr16(s + 0x48, (uint16_t)((uint32_t)rt[1] >> 16));
+	salsa64_wr16(s + 0x4A, (uint16_t)rt[1]);
+	salsa64_wr16(s + 0x4C, (uint16_t)dry);
+	salsa64_wr16(s + 0x4E, (uint16_t)wet);
+	aud_store(st, address, s, sizeof s);
+#ifdef AUD_DEBUG
+	if (aud_dbg_env_n < AUD_DBG_ENV_MAX)
+		aud_dbg_env[aud_dbg_env_n++] = address & 0xFFFFFF;
+#endif
 }
 
 void alist_envmix(struct aud_state *st, enum aud_envmix_kind kind, bool init, bool aux,
@@ -248,86 +369,18 @@ void alist_envmix(struct aud_state *st, enum aud_envmix_kind kind, bool init, bo
 		  const int32_t *rate, uint32_t address)
 {
 	/* El lineal de naudio siempre mezcla en los cuatro búferes. */
-	unsigned n = kind == AUD_ENVMIX_LIN || aux ? 4 : 2;
-	const uint8_t *in = aud_dm(st, dmemi);
-	uint8_t *buf[4] = { aud_dm(st, dmem_dl), aud_dm(st, dmem_dr), aud_dm(st, dmem_wl), aud_dm(st, dmem_wr) };
-	struct ramp ramps[2];
-	int32_t exp_seq[2] = { 0, 0 }, exp_rates[2] = { 0, 0 };
-	uint8_t s[ENV_STATE];
-
-	if (init) {
-		for (int k = 0; k < 2; k++) {
-			ramps[k].value = (int64_t)vol[k] * 65536;
-			ramps[k].target = (int64_t)target[k] * 65536;
-			if (kind == AUD_ENVMIX_EXP) {
-				exp_rates[k] = rate[k];
-				exp_seq[k] = (int32_t)((int64_t)vol[k] * rate[k]);
-			} else {
-				ramps[k].step = rate[k] / 8;
-			}
-		}
-	} else {
-		aud_load(st, s, address, sizeof s);
-		wet = (int16_t)salsa64_rd16(s + 0);
-		dry = (int16_t)salsa64_rd16(s + 4);
-		for (int k = 0; k < 2; k++) {
-			ramps[k].target = env_rd32(s, 8 + 4 * k);
-			if (kind == AUD_ENVMIX_EXP) {
-				exp_rates[k] = env_rd32(s, 16 + 4 * k);
-				exp_seq[k] = env_rd32(s, 24 + 4 * k);
-			} else {
-				ramps[k].step = env_rd32(s, 16 + 4 * k);
-			}
-			ramps[k].value = env_rd32(s, 32 + 4 * k);
-		}
-	}
-
-	if (kind == AUD_ENVMIX_EXP) {
-		/* step != 0 si y solo si value != target */
-		ramps[0].step = ramps[0].target - ramps[0].value;
-		ramps[1].step = ramps[1].target - ramps[1].value;
-	}
-
-	unsigned total = kind == AUD_ENVMIX_EXP ? (count + 15u) / 16u * 8u : count >> 1;
-	for (unsigned k = 0; k < total; k++) {
-		if (kind == AUD_ENVMIX_EXP && (k & 7) == 0) {
-			for (int c = 0; c < 2; c++)
-				if (ramps[c].step != 0) {
-					exp_seq[c] = (int32_t)(((int64_t)exp_seq[c] * exp_rates[c]) >> 16);
-					ramps[c].step = (exp_seq[c] - ramps[c].value) >> 3;
-				}
-		}
-		int16_t l_vol = ramp_step(&ramps[0]);
-		int16_t r_vol = ramp_step(&ramps[1]);
-		int16_t gains[4] = {
-			aud_clamp16((l_vol * dry + 0x4000) >> 15),
-			aud_clamp16((r_vol * dry + 0x4000) >> 15),
-			aud_clamp16((l_vol * wet + 0x4000) >> 15),
-			aud_clamp16((r_vol * wet + 0x4000) >> 15),
-		};
-		int16_t x = aud_ld16(in + 2 * k);
-		for (unsigned b = 0; b < n; b++)
-			sample_mix(buf[b] + 2 * k, x, gains[b]);
-	}
-
-	memset(s, 0, sizeof s);
-	salsa64_wr16(s + 0, (uint16_t)wet);
-	salsa64_wr16(s + 4, (uint16_t)dry);
-	for (int k = 0; k < 2; k++) {
-		env_wr32(s, 8 + 4 * k, (int32_t)ramps[k].target);
-		if (kind == AUD_ENVMIX_EXP) {
-			env_wr32(s, 16 + 4 * k, exp_rates[k]);
-			env_wr32(s, 24 + 4 * k, exp_seq[k]);
-		} else {
-			env_wr32(s, 16 + 4 * k, (int32_t)ramps[k].step);
-		}
-		env_wr32(s, 32 + 4 * k, (int32_t)ramps[k].value);
-	}
-	aud_store(st, address, s, sizeof s);
+	bool naudio = kind == AUD_ENVMIX_LIN || kind == AUD_ENVMIX_LIN_PHASE || kind == AUD_ENVMIX_LIN_CBFD;
+	envmix_lanes(st, kind != AUD_ENVMIX_EXP, naudio ? 0 : 0x10000, kind == AUD_ENVMIX_LIN_PHASE || kind == AUD_ENVMIX_LIN_CBFD,
+		     kind == AUD_ENVMIX_LIN_CBFD, init, aux || naudio,
+		     dmem_dl, dmem_dr, dmem_wl, dmem_wr, dmemi, count, dry, wet, vol, target, rate, address);
 }
 
+/* `align`: la cuenta se redondea hacia arriba a múltiplos de 8 muestras en
+ * Mario Kart 64 y de 16 en los demás nead (el microcódigo procesa dos
+ * bloques por vuelta: con 184 muestras sale un bloque de más en cada búfer;
+ * medido con el LLE en Star Fox 64 y en Zelda). */
 void alist_envmix_nead(struct aud_state *st, bool swap_wet_lr, uint16_t dmem_dl, uint16_t dmem_dr,
-		       uint16_t dmem_wl, uint16_t dmem_wr, uint16_t dmemi, unsigned count,
+		       uint16_t dmem_wl, uint16_t dmem_wr, uint16_t dmemi, unsigned count, unsigned align,
 		       uint16_t *env_values, const uint16_t *env_steps, const int16_t *xors)
 {
 	const uint8_t *in = aud_dm(st, dmemi);
@@ -338,7 +391,7 @@ void alist_envmix_nead(struct aud_state *st, bool swap_wet_lr, uint16_t dmem_dl,
 		wl = wr;
 		wr = t;
 	}
-	for (count = aud_align(count, 8); count; count -= 8) {
+	for (count = aud_align(count, align); count; count -= 8) {
 		for (unsigned i = 0; i < 8; i++) {
 			int32_t x = aud_ld16(in + 2 * i);
 			int16_t l = (int16_t)((x * (int32_t)env_values[0]) >> 16) ^ xors[0];
@@ -363,15 +416,16 @@ void alist_envmix_nead(struct aud_state *st, bool swap_wet_lr, uint16_t dmem_dl,
 
 /* ---- Mezclas ---------------------------------------------------------------- */
 
-/* MIXER redondea el producto (+0x4000), como VMULF: el truncado de
- * mupen64plus-rsp-hle dejaba ±1 LSB de diferencia con el microcódigo real
- * (comparado en el LLE con Zelda OoT, Perfect Dark y Super Mario 64). */
+/* MIXER acumula como el ENVMIXER (sample_mix): lo que había × 0x7FFF más el
+ * producto, con un solo redondeo. El truncado de mupen64plus-rsp-hle y el
+ * redondeo del producto solo dejaban ±1 LSB de diferencia con el microcódigo
+ * real (comparado en el LLE con Zelda OoT, Perfect Dark y Super Mario 64). */
 void alist_mix(struct aud_state *st, uint16_t dmemo, uint16_t dmemi, uint16_t count, int16_t gain)
 {
 	uint8_t *dst = aud_dm(st, dmemo);
 	const uint8_t *src = aud_dm(st, dmemi);
 	for (count >>= 1; count; count--, dst += 2, src += 2)
-		aud_st16(dst, aud_clamp16(aud_ld16(dst) + ((aud_ld16(src) * gain + 0x4000) >> 15)));
+		sample_mix(dst, aud_ld16(src), gain);
 }
 
 void alist_multQ44(struct aud_state *st, uint16_t dmem, uint16_t count, int8_t gain)
@@ -381,12 +435,85 @@ void alist_multQ44(struct aud_state *st, uint16_t dmem, uint16_t count, int8_t g
 		aud_st16(dst, aud_clamp16(aud_ld16(dst) * gain >> 4));
 }
 
-void alist_add(struct aud_state *st, uint16_t dmemo, uint16_t dmemi, uint16_t count)
+/* ADDMIXER: suma saturada. El microcódigo suma con VADD, que añade el acarreo
+ * que haya en VCO; el MIXER anterior lo deja puesto en el carril 3 (en todos
+ * los nead: medido con el LLE, independiente de la ganancia y de los datos), y
+ * el primer vector de la suma, con el carril 3 en las muestras 3 (mod 8) de la
+ * dirección alineada, sale +1. VADD lo consume. */
+void alist_add(struct aud_state *st, uint16_t dmemo, uint16_t dmemi, uint16_t count, bool carry3)
 {
 	uint8_t *dst = aud_dm(st, dmemo);
 	const uint8_t *src = aud_dm(st, dmemi);
-	for (count >>= 1; count; count--, dst += 2, src += 2)
-		aud_st16(dst, aud_clamp16(aud_ld16(dst) + aud_ld16(src)));
+	unsigned carry_at = carry3 ? (3u - (dmemo >> 1)) & 7u : ~0u;
+	for (unsigned k = 0, n = count >> 1; k < n; k++, dst += 2, src += 2)
+		aud_st16(dst, aud_clamp16(aud_ld16(dst) + aud_ld16(src) + (k == carry_at ? 1 : 0)));
+}
+
+/* ---- Tabla de interpolación ------------------------------------------------------
+ * El cambio de tono usa 64 filas de 4 coeficientes (Q15) que el microcódigo
+ * trae en su segmento de datos (ucode_data: en 0xB0–0x138 según el ABI y la
+ * compilación). Se busca ahí, en la RDRAM del juego, y se reconoce por su
+ * estructura: cada fila es la 63−i al revés y suma 1,0 en Q15 (±256). Si no
+ * aparece (una RDRAM de prueba, otra compilación), vale la de lut.c, que da
+ * lo mismo salvo por la respuesta en frecuencia. Nada del microcódigo se
+ * copia al repositorio ni sale de la RDRAM del emulador. */
+
+enum { LUT_ROWS = 64, LUT_BYTES = LUT_ROWS * 4 * 2, UCODE_DATA_WINDOW = 0x800 };
+
+static bool lut_at(const uint8_t *d)
+{
+	for (unsigned r = 0; r < LUT_ROWS; r++) {
+		const uint8_t *a = d + 8 * r, *b = d + 8 * (LUT_ROWS - 1 - r);
+		int32_t sum = 0;
+		for (unsigned k = 0; k < 4; k++) {
+			if (salsa64_rd16(a + 2 * k) != salsa64_rd16(b + 2 * (3 - k)))
+				return false;
+			sum += (int16_t)salsa64_rd16(a + 2 * k);
+		}
+		if (sum < 32768 - 256 || sum > 32768 + 256)
+			return false;
+	}
+	return true;
+}
+
+/* Segmento de datos del microcódigo a la DMEM, como el arranque de libultra. */
+void aud_boot_data(struct aud_state *st)
+{
+	uint32_t ucode_data = st->job->ucode_data & 0xFFFFFF, size = st->job->ucode_data_size;
+
+	if (ucode_data == 0 || size == 0)
+		return;
+	size = aud_align(size > AUD_DMEM_SIZE ? AUD_DMEM_SIZE : size, 8);
+	if (ucode_data > st->job->rdram_size || size > st->job->rdram_size - ucode_data)
+		return;
+	aud_load(st, st->dmem, ucode_data, size);
+}
+
+void aud_find_lut(struct aud_state *st)
+{
+	uint32_t ucode_data = st->job->ucode_data & 0xFFFFFF;
+	uint8_t d[UCODE_DATA_WINDOW];
+
+	if (st->lut_src == (ucode_data | 0x80000000u))
+		return;
+	st->lut_src = ucode_data | 0x80000000u;
+	st->lut_ok = false;
+	if (ucode_data == 0 || ucode_data > st->job->rdram_size - UCODE_DATA_WINDOW)
+		return;
+	if (!aud_load(st, d, ucode_data, sizeof d))
+		return;
+	for (unsigned o = 0; o + LUT_BYTES <= UCODE_DATA_WINDOW; o += 2) {
+		/* Descarte rápido con la primera y la última fila. */
+		bool first = true;
+		for (unsigned k = 0; k < 4 && first; k++)
+			first = salsa64_rd16(d + o + 2 * k) == salsa64_rd16(d + o + 8 * (LUT_ROWS - 1) + 2 * (3 - k));
+		if (!first || !lut_at(d + o))
+			continue;
+		for (unsigned i = 0; i < LUT_ROWS * 4; i++)
+			st->lut[i] = (int16_t)salsa64_rd16(d + o + 2 * i);
+		st->lut_ok = true;
+		return;
+	}
 }
 
 /* ---- Cambio de tono --------------------------------------------------------- */
@@ -410,11 +537,12 @@ void alist_resample(struct aud_state *st, bool init, uint16_t dmemo, uint16_t dm
 		accu = (uint16_t)state[4];
 	}
 
+	const int16_t *const lut_base = aud_lut(st);
 	for (count >>= 1; count; count--) {
-		const int16_t *lut = aud_resample_lut + ((accu & 0xFC00) >> 8);
-		int32_t v = aud_sample(st, ipos) * lut[0] + aud_sample(st, ipos + 1) * lut[1] +
-			    aud_sample(st, ipos + 2) * lut[2] + aud_sample(st, ipos + 3) * lut[3];
-		aud_set_sample(st, opos++, aud_clamp16(v >> 15));
+		const int16_t *lut = lut_base + ((accu & 0xFC00) >> 8);
+		int32_t v = ((aud_sample(st, ipos) * lut[0] + 0x4000) >> 15) + ((aud_sample(st, ipos + 1) * lut[1] + 0x4000) >> 15) +
+			    ((aud_sample(st, ipos + 2) * lut[2] + 0x4000) >> 15) + ((aud_sample(st, ipos + 3) * lut[3] + 0x4000) >> 15);
+		aud_set_sample(st, opos++, aud_clamp16(v));
 		accu += pitch;
 		ipos += accu >> 16;
 		accu &= 0xFFFF;
@@ -525,12 +653,15 @@ void alist_adpcm(struct aud_state *st, bool init, bool loop, bool two_bit_per_sa
  * Coeficientes: la tabla de la nota (lut_address[0]) se acerca a la mitad
  * de camino a la de la llamada anterior, guardada detrás del estado
  * (lut_address[1]): L = (anterior + nota + 1) >> 1, que queda escrita ahí;
- * la de la nota no se toca. Así lo hace el microcódigo de Zelda OoT
+ * la de la nota no se toca. (Yoshi's Story y 1080°, con otra compilación del
+ * microcódigo, usan la tabla de la nota tal cual y no escriben nada: medido
+ * con el LLE, la salida del real es exactamente el doble de la promediada
+ * con una anterior en cero.) Así lo hace el microcódigo de Zelda OoT
  * ejecutado en el LLE (rama del LLE del RSP, --lle-check-audio): mupen64plus-
  * rsp-hle escribe el promedio redondeado hacia abajo en las dos tablas, y
  * con la anterior en cero el filtro sonaba a la mitad (−6 dB). */
-void alist_filter(struct aud_state *st, uint16_t dmem, uint16_t count, uint32_t address,
-		  const uint32_t *lut_address)
+void alist_filter(struct aud_state *st, bool init, uint16_t dmem, uint16_t count, uint32_t address,
+		  const uint32_t *lut_address, bool average)
 {
 	int16_t lut6[8], lut5[8], x[16];
 	uint8_t *io = aud_dm(st, dmem);
@@ -538,12 +669,24 @@ void alist_filter(struct aud_state *st, uint16_t dmem, uint16_t count, uint32_t 
 	if (count > 0x780)  /* lo que cabe en el búfer del original */
 		count = 0x780;
 	aud_load_s16(st, lut6, lut_address[0], 8);
-	aud_load_s16(st, lut5, lut_address[1], 8);
-	for (unsigned i = 0; i < 8; i++)
-		lut5[i] = (int16_t)((lut5[i] + lut6[i] + 1) >> 1);
-	aud_store_s16(st, lut_address[1], lut5, 8);
+	if (average) {
+		if (init)
+			memset(lut5, 0, sizeof lut5);   /* A_INIT: la tabla anterior vale cero */
+		else
+			aud_load_s16(st, lut5, lut_address[1], 8);
+		for (unsigned i = 0; i < 8; i++)
+			lut5[i] = (int16_t)((lut5[i] + lut6[i] + 1) >> 1);
+		aud_store_s16(st, lut_address[1], lut5, 8);
+	} else {
+		/* Yoshi's Story y 1080°: la tabla de la nota va directa, sin la anterior ni el guardado. */
+		memcpy(lut5, lut6, sizeof lut5);
+	}
 
-	aud_load_s16(st, x, address, 8);
+	if (init)
+		for (unsigned i = 0; i < 8; i++)
+			x[i] = 0;                    /* las muestras previas */
+	else
+		aud_load_s16(st, x, address, 8);
 	for (unsigned blk = 0; blk < count; blk += 16, io += 16) {
 		for (unsigned i = 0; i < 8; i++)
 			x[8 + i] = aud_ld16(io + 2 * i);
@@ -603,11 +746,6 @@ void alist_polef(struct aud_state *st, bool init, uint16_t dmemo, uint16_t dmemi
  * (c = table[i]; cada producto redondeado a Q15 como VMULF) y la salida
  * truncada a 16 bits sin saturar, como en el original. Estado en la RDRAM:
  * y[n−2], y[n−1] en +4/+6 y x[n−2], x[n−1] en +8/+10. */
-static int32_t vmulf(int16_t x, int16_t y)
-{
-	return ((int32_t)x * y + 0x4000) >> 15;
-}
-
 void alist_iirf(struct aud_state *st, bool init, uint16_t dmemo, uint16_t dmemi, uint16_t count,
 		const int16_t *table, uint32_t address)
 {
@@ -617,11 +755,11 @@ void alist_iirf(struct aud_state *st, bool init, uint16_t dmemo, uint16_t dmemi,
 
 	if (!init) {
 		int16_t s[4];
-		aud_load_s16(st, s, address + 4, 4);
-		y[6] = s[0];
-		y[7] = s[1];
-		x[1] = s[2];
-		x[2] = s[3];
+		aud_load_s16(st, s, address, 4);
+		x[1] = s[0];
+		x[2] = s[1];
+		y[6] = s[2];
+		y[7] = s[3];
 	}
 	int32_t prev = vmulf(table[9], y[6]) * 2;
 	for (count = (uint16_t)aud_align(count, 16); count; count -= 16, dst += 16) {
@@ -636,8 +774,8 @@ void alist_iirf(struct aud_state *st, bool init, uint16_t dmemo, uint16_t dmemi,
 			index = (index + 1) & 7;
 		}
 	}
-	int16_t s[4] = { y[6], y[7], x[(index - 2) & 3], x[(index - 1) & 3] };
-	aud_store_s16(st, address + 4, s, 4);
+	int16_t s[4] = { x[(index - 2) & 3], x[(index - 1) & 3], y[6], y[7] };
+	aud_store_s16(st, address, s, 4);
 }
 
 /* OVERLOAD (distorsión de Conker): ganancia saturada y luego atenuación
