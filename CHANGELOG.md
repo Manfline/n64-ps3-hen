@@ -4,6 +4,54 @@ All notable changes to Salsa64. Speeds are measured on a real PS3 (HEN,
 NTSC backups); `docs/perf-log.md` has the detailed numbers and
 `docs/estado.md` the work log (both in Spanish).
 
+## [0.2.7] — 2026-10-16
+
+### Added
+- **Controller Pak:** emulated, with one `.mpk` file per game (four paks, one
+  per controller) and a per-game «Accesorio» option; controller 1 carries a
+  Controller Pak by default. Games that save only to the Pak (Mario Kart 64
+  ghosts, Rush 2049, Hydro Thunder, Donald Duck…) can now save, and games
+  that kept polling for a missing Pak no longer slow down (1080 Snowboarding).
+- **Button remapping from the menu** (issue #6): Options → «Controles» edits
+  the mapping for every game, and each ROM's settings edit the mapping for
+  that game. Press the DualShock 3 button (or two at once, e.g. Z on L2 + R2)
+  for each N64 button, and choose which stick moves the N64 stick; the C
+  buttons come from the other one.
+- **ROM list with folders** (issue #10): subfolders, thousands of entries
+  instead of 256, sorting by header title or by file name, file names for
+  titles that are not Latin-1 (Japanese ROMs), L3 to refresh the list without
+  leaving, and going up returns to the folder you came from. Salsa64's own
+  data folders (saves, states, covers…) are no longer listed.
+- **The left stick moves the menu** like the d-pad, for controllers with a
+  worn-out d-pad.
+
+### Fixed
+- **Wave Race 64:** it uses its own variant of the graphics microcode, which
+  was read as the standard one (textures «like rays from the centre»).
+- **Pokémon Stadium:** the «Game Pak Check» screen (player 1 panel, «OK?» and
+  the WARNING notice, which turned into noise after going back to the title),
+  the ghost of «VS Event Battle» on «Please Select», and a crash in VS.
+- **Donald Duck: Quack Attack / Goin' Quackers** was given an EEPROM it does
+  not have (it saves only to the Controller Pak).
+- **FPU:** CVT.W / CVT.L follow the rounding mode and MUL.S stays in
+  recompiled code instead of falling back to the interpreter.
+
+### Faster
+- **CPU recompiler:** libultra's idle loop (waiting through the scheduler) is
+  now skipped like any other wait loop, and the COP0 writes most games repeat
+  stay in recompiled code. On a real PS3: **Doom 64 21 → 60 fields/s,
+  NFL Blitz 26 → 60, 1080 Snowboarding 31 → 60, Star Wars Episode I: Racer
+  32 → 46**.
+
+### Known issues
+- Frame interpolation (experimental) makes 2D sprites and UI layers flicker or
+  leave a trail (Mario Kart 64 items, Smash menus; issue #17). It can be turned
+  off per game.
+- Games with **MusyX** audio have no sound yet (Hydro Thunder, Rush 2049, NBA
+  Showtime, Gauntlet Legends…; issue #11). It is the next item.
+- Diddy Kong Racing, Indiana Jones, Rogue Squadron and Resident Evil 2 do not
+  run yet (no HLE for their microcodes). The Rumble Pak is not emulated.
+
 ## [0.2.6] — 2026-10-15
 
 ### Added

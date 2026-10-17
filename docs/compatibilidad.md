@@ -6,6 +6,24 @@ datos de compatibilidad.
 
 Las entradas antiguas conservan sus métodos de prueba como historia.
 
+## 2026-10-16 — Candidata de la v0.2.7 en la PS3 real
+
+PS3 con HEN, respaldos NTSC. La rc5 (v0.2.6-47-gd01e523, la que se publica
+como v0.2.7) abrió estos juegos en una sola corrida; la velocidad es el rango
+de las ventanas de 5 s del log (sin la primera y la última de cada juego) y
+cuántas bajaron de 58.
+
+| Juego | Estado | Velocidad | Notas |
+|---|---|---:|---|
+| Doom 64 | Jugable | ~60 campos/s; 2 de 98 ventanas bajo 58 (53,5 la menor) | Era ~40 % (las esperas de libultra por el planificador ahora se saltan). |
+| NFL Blitz | Jugable | 59,2–60,2 campos/s | Era ~26 campos/s. |
+| 1080 Snowboarding | Jugable | ~60 campos/s; 2 de 43 bajo 58 (51,8 la menor) | Con el Controller Pak; sin él se quedaba leyendo el control. |
+| Mario Kart 64 | Jugable | ~60 campos/s; 6 de 130 bajo 58 (53,7 la menor) | Lee y escribe su `.mpk` (fantasmas). |
+| Pokémon Stadium | Jugable | ~60 campos/s; 6 de 84 bajo 58 (54,6 la menor) | «Game Pak Check» completo (también al volver del título), «Please Select» sin fantasma, VS sin caerse. |
+| Pokémon Snap | Jugable | ~60 campos/s; 2 de 13 bajo 58 (55,6 la menor) | Queda el orden de dibujo de la v0.2.6. |
+| Wave Race 64 | Jugable | — | Variante F3DWR del microcódigo (probado con la rc4). |
+| Star Wars Episode I: Racer | Jugable, lento | 43–47 campos/s en carrera | Medido con la app de perfilado de la misma ronda del CPU (era ~32). |
+
 ## 2026-10-15 — Censo en la PS3 real (v0.2.6)
 
 Regresión de la versión candidata y comprobación de la rc1 en la PS3 real.
