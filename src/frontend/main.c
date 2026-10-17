@@ -1117,6 +1117,27 @@ static struct {
 	uint32_t polls;
 } pad_poll;
 
+/* El stick izquierdo como cruceta para el menú (mandos con la cruceta
+ * gastada): solo el eje dominante, apretado al pasar de PAD_STICK_ON del
+ * centro y suelto al volver a menos de PAD_STICK_OFF, para que no tiemble en
+ * el borde. update_pads deja aquí las direcciones de todos los mandos. */
+#define PAD_STICK_ON 80
+#define PAD_STICK_OFF 48
+static uint32_t pad_stick_dirs;
+
+static uint32_t stick_dirs(uint32_t prev, int x, int y)
+{
+	bool horiz = abs(x) >= abs(y);
+	int v = horiz ? x : y;
+	uint32_t neg = 1u << (horiz ? SALSA64_DS3_LEFT : SALSA64_DS3_UP);
+	uint32_t pos = 1u << (horiz ? SALSA64_DS3_RIGHT : SALSA64_DS3_DOWN);
+	if (v > ((prev & pos) ? PAD_STICK_OFF : PAD_STICK_ON))
+		return pos;
+	if (-v > ((prev & neg) ? PAD_STICK_OFF : PAD_STICK_ON))
+		return neg;
+	return 0;
+}
+
 /* DualShock 3 → controles de la N64, publicados para el hilo de emulación.
  * ioPadGetData da len = 0 cuando nada cambió: se conserva el último
  * estado. Con el menú del sistema abierto o los mandos tomados por el
@@ -1136,6 +1157,7 @@ static int update_pads(uint32_t *buttons)
 		[0 ... SALSA64_PIF_PORTS - 1] = { 0, 128, 128, 128, 128 },
 	};
 	static uint8_t present[SALSA64_PIF_PORTS];
+	static uint32_t stick[SALSA64_PIF_PORTS];
 	const struct salsa64_ds3 neutral = { 0, 128, 128, 128, 128 };
 	struct salsa64_pad pads[SALSA64_PIF_PORTS];
 	uint32_t raw[SALSA64_PIF_PORTS], game[SALSA64_PIF_PORTS];
@@ -1145,6 +1167,7 @@ static int update_pads(uint32_t *buttons)
 
 	if (buttons)
 		*buttons = 0;
+	pad_stick_dirs = 0;
 	uint64_t now = sysGetSystemTime();
 	if (pad_poll.last_us && now - pad_poll.last_us > pad_poll.max_gap_us)
 		pad_poll.max_gap_us = now - pad_poll.last_us;
@@ -1168,6 +1191,8 @@ static int update_pads(uint32_t *buttons)
 		if (sys)
 			last[i] = neutral;
 		raw[i] = info.status[i] ? last[i].buttons : 0;
+		stick[i] = info.status[i] ? stick_dirs(stick[i], last[i].lx - 128, last[i].ly - 128) : 0;
+		pad_stick_dirs |= stick[i];
 	}
 	pause_ctl.panel_avail = game_cheats.n > 0;
 	pause_ctl.panel_rows = game_cheats.n;
@@ -5267,6 +5292,10 @@ static int menu_loop(void)
 		beat.pres_at = "menú: mandos";
 		uint32_t buttons;
 		update_pads(&buttons);
+		/* El stick izquierdo también mueve el menú, salvo mientras se
+		 * captura un botón para el mapeo. */
+		if (!menu.control_capture)
+			buttons |= pad_stick_dirs;
 		beat.pres_at = "menú";
 		/* Con el sistema encima el menú sigue presentándose (el sistema
 		 * dibuja el suyo en cada flip de la aplicación: sin flips se queda
