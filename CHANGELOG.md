@@ -4,6 +4,51 @@ All notable changes to Salsa64. Speeds are measured on a real PS3 (HEN,
 NTSC backups); `docs/perf-log.md` has the detailed numbers and
 `docs/estado.md` the work log (both in Spanish).
 
+## [0.2.8] — unreleased
+
+### Added
+- **MusyX audio** (issue #11): the games that use Factor 5's MusyX engine
+  (v1 and v2) used to run mute because their audio task is not a command list.
+  They now have sound: Hydro Thunder, Rush 2049, NBA Showtime, Resident
+  Evil 2 and Star Wars: Rogue Squadron (the last two still have no graphics).
+  Gauntlet Legends and Tarzan use the same engine but have not been tried.
+  Checked on a computer against the real microcode, the mix matches byte for
+  byte (Indiana Jones differs by 1 in one channel in 49 of its tasks).
+- **Diddy Kong Racing is playable:** HLE for Rare's own graphics microcode
+  (F3DDKR): logos, intro, title, menus, track selection and the races
+  (Ancient Lake, the Timber's Island adventure) draw correctly in the test
+  build on a computer; the console run is still to be confirmed. Jet Force
+  Gemini and Mickey's Speedway USA use a variant of the same microcode that is
+  recognised too, but neither has been tried.
+- **Killer Instinct Gold draws:** the game writes part of every frame (the
+  stage background and the frames around the screen) as RDP lists from the CPU
+  and does not start its graphics until it gets the RDP interrupt of those
+  lists. They are now drawn by the graphics SPE, in the same state and with
+  the same texture cache as the rest of the frame, and the interrupts of the
+  RDP are queued so that two close ones are not lost.
+- **Audio identical to the real microcode in 99.87 % of the tasks** (51 136
+  tasks in 21 games, compared byte for byte; it was 13.1 %): pitch changes,
+  mixing, envelopes, the filters and the MP3 decoder follow the rounding of
+  the real RSP. The JPEG task of Ocarina of Time and Pokémon Stadium 1 and 2
+  (pre-rendered backgrounds and images) is now exact too: 0 pixels different
+  out of 1 075 200 (it was about 1 %). Listen for it in Conker, Perfect
+  Dark, Banjo-Tooie, Majora's Mask, Yoshi's Story and 1080° Snowboarding.
+- **Frozen-game detector:** if a game that was reading the controllers and
+  drawing stops doing both for 6 seconds while the video keeps running, the
+  log says what the hardware and the CPU were waiting for and
+  `/dev_hdd0/salsa64/` gets a RAM dump (`cuelgue-<field>.rdram`, up to three
+  per game) to attach to the bug report.
+
+### Known issues
+- Killer Instinct Gold: in the first version of the fix, the second fight
+  froze with the music still playing (the controllers stopped being read and
+  no more graphics tasks arrived). This build includes the detector above,
+  and it has not been shown on a console whether it is solved.
+- NBA Showtime runs sped up.
+- Perfect Dark slows down in scenes of more than about 2300 triangles.
+- Rogue Squadron, Resident Evil 2 and Indiana Jones still draw nothing (no
+  HLE for their graphics microcode); only their audio works.
+
 ## [0.2.7] — 2026-10-16
 
 ### Added
