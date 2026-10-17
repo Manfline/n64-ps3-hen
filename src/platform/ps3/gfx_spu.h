@@ -23,6 +23,9 @@ struct salsa64_gfx_spu {
 	 * las tareas: un segundo estado sobre la región de la caché pisaba las
 	 * texturas del primero. */
 	struct salsa64_dpc_backend dpc;
+	/* Las listas que están en la DMEM (xbus: el SPE no las lee) van a este RDP del
+	 * PPE, si el frontend lo da. */
+	const struct salsa64_dpc_backend *xbus;
 	uint32_t dpc_jobs;   /* listas del CPU hechas en el SPE */
 	uint32_t errors;     /* trabajos que el SPE devolvió con error (terminan como cortados) */
 	uint64_t dpc_us;     /* lo que esperó el PPE a cada una */

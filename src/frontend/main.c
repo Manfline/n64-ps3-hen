@@ -4335,6 +4335,11 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	 * tareas (en el PPE o en el SPE): con otro estado del RDP y otro
 	 * directorio de texturas sobre la misma región de la caché, cada uno
 	 * pisaba las texturas del otro. */
+	if (gfx_on_spu) {
+		/* Solo para las listas en la DMEM (xbus), que el SPE no lee. */
+		salsa64_gfx_sync_init(&gfx_ppe, &gfx_ppe_state, &n64.bus, &front_sink);
+		gfx_spu.xbus = &gfx_ppe.dpc;
+	}
 	salsa64_rsp_set_dpc(&n64.bus, gfx_on_spu ? &gfx_spu.dpc : &gfx_ppe.dpc);
 	salsa64_log("HLE gráfica en %s", gfx_on_spu ? "el SPE" : "el PPE");
 	n64.bus.rsp.clock_us = clock_us;
@@ -4367,8 +4372,6 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		} else {
 			/* El microcódigo real entrega cientos de tramos por tarea: el RDP
 			 * en el PPE, no una espera al SPE por cada uno. */
-			if (gfx_on_spu)
-				salsa64_gfx_sync_init(&gfx_ppe, &gfx_ppe_state, &n64.bus, &front_sink);
 			salsa64_rsp_set_dpc(&n64.bus, &gfx_ppe.dpc);
 			salsa64_rsp_set_lle(&n64.bus, &rsp_spu.backend, lle_mode);
 			salsa64_log("rsp lle: microcódigo real en un SPE para %s; el RDP en el PPE",
