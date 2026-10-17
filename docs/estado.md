@@ -1,5 +1,127 @@
 # Estado
 
+## 2026-10-16 — HLE de audio de MusyX (Factor 5)
+
+Hydro Thunder, Rush 2049, NBA Showtime, Gauntlet Legends, Tarzan, The World
+Is Not Enough, Rugrats in Paris, Polaris SnoCross, Resident Evil 2 y Rogue
+Squadron (issue #11) usan MusyX v1; Indiana Jones y Battle for Naboo, v2.
+Hasta hoy sus tareas de audio llegaban a la HLE, no reconocían el formato
+(no es una lista de comandos) y terminaban con un error sin escribir nada: los
+juegos corrían mudos.
+
+- **Qué hay.** `src/rsp/audio/musyx.c` (puerto de mupen64plus-rsp-hle,
+  commit `8a7a472a`, registrado en `docs/THIRD_PARTY.md`): v1 y v2, mismo
+  código en el host, el PPE y el SPE 1. Una tarea de MusyX trae en `data_ptr`
+  una lista de subtramas (SFD) y en `data_size` cuántas son; cada una mezcla
+  hasta 32 voces (PCM16 o ADPCM, cambio de tono, 4 envolventes) a L, R, cc0 y
+  e50, aplica el eco (hasta 8 tomas de un búfer circular y un FIR de 4
+  puntos) y escribe 192 pares L:R. El estado entre tareas vive en la RDRAM
+  del juego, así que la HLE no guarda nada propio salvo la tabla de
+  interpolación (520 bytes en `aud_state`). `src/core/rsp.c` no cambió: en
+  modo `auto` del LLE, MusyX ya iba a la HLE (la condición es «ABI
+  reconocido»); lo que faltaba era que la HLE hiciera algo.
+- **Compilaciones.** Cada juego trae su propia compilación del microcódigo
+  (CRC distinto). La de Rogue Squadron (primera palabra de su `ucode_data` =
+  `0xF0000F00`, las demás `0x00010010`) lleva la envolvente del canal 3 (el
+  envío al eco) en octavos; es el ABI `SALSA64_ABI_MUSYX1_RS` («MusyX v1
+  (Rogue Squadron)»).
+- **La tabla de interpolación** del cambio de tono (64 × 4 coeficientes) está
+  en el `ucode_data` del propio microcódigo (en 0x20 o 0x28 según la
+  compilación). La HLE la busca ahí, en la RDRAM del juego, y la reconoce por
+  su estructura (la fila i es la 63−i al revés y suma 1,0); si no la
+  encuentra, usa la propia de `lut.c`. Con la propia el sonido tiene otra
+  respuesta en frecuencia y casi todas las tareas con voces difieren del
+  microcódigo real (en 32 s: Hydro Thunder 1030 de 1911 tareas, Rush 2049
+  1706 de 1899 —la mitad de sus muestras a más de 4 LSB—, NBA Showtime 39 de
+  1911, RE2 609 de 2857, Rogue Squadron 431 de 942, Indiana Jones 1370 de
+  1903); con la del juego, ninguna. No se copia nada del microcódigo al
+  repositorio.
+
+**Validación con el microcódigo real** (`salsa64-run --lle=all
+--lle-check-audio`: cada tarea de audio corre también en el intérprete del
+RSP y se compara, byte a byte, lo que escribió con lo que escribe la HLE
+sobre una copia de la RDRAM; host, `-DAUD_MAX_RANGES=64`). 32 s de consola
+(`-c 3000000000`) y 96 s con pulsaciones de START y A cada ~1 s para pasar los
+menús (con solo START, 4198 subtramas de Rogue Squadron usaban el eco); el
+audio de Rogue Squadron, RE2 e Indiana Jones se mide aunque sus gráficos no
+tengan HLE:
+
+| Juego (compilación) | 32 s | con START y A (96 s) |
+|---|---:|---:|
+| Hydro Thunder | 1911 de 1911 idénticas | 5740 de 5740 |
+| Rush 2049 | 1899 de 1899 | 5728 de 5728 |
+| NBA Showtime | 1911 de 1911 | 5740 de 5740 |
+| Resident Evil 2 (v1) | 2857 de 2857 (9e9 ciclos) | 2856 de 2856 |
+| Star Wars: Rogue Squadron (v1, RS) | 942 de 942 | 5713 de 5713 |
+| Indiana Jones (v2) | 1903 de 1903 | 5675 de 5724; las otras 49, ±1 en L |
+
+- Las 49 de Indiana Jones empiezan en la tarea 5624, con 12–15 voces y
+  eco: la salida de L difiere en +1 en las muestras 0 y 1 de cada 8, sin
+  que R ni cc0 cambien. No lo expliqué (ninguna voz sola reproduce ese
+  patrón; no es `ptr_10`, `mask_14` ni `mask_15`, todos en cero); queda
+  como +1 LSB en 2 de cada 8 muestras de L en esas tareas.
+- **Redondeos** (lo que el original de mupen64plus trunca y el microcódigo
+  real redondea), todos hallados con el oráculo y confirmados con el 100 %
+  de las tareas: cada producto del cambio de tono se redondea por separado
+  (+0x4000 >> 15) y se suman los cuatro, saturando solo el resultado;
+  las envolventes `(s · env_hi + 0x4000) >> 15`; las tomas del eco igual;
+  los coeficientes del FIR `(hgain · c + 0x4000) >> 15` y cada producto
+  del FIR redondeado antes de sumar. La mezcla del eco en v2
+  (`(v · ganancia) >> 16`) sí trunca: redondearla da 4387 tareas
+  distintas de 5724. El decaimiento de los volúmenes base es
+  `(x · 0xF850) >> 16`.
+- **Rogue Squadron, canal 3.** La envolvente del eco avanza en octavos y de
+  ocho en ocho muestras: la base del bloque sube 8 × (paso >> 13) y la
+  muestra j del bloque suma (j × paso) >> 13. Hallado ajustando 188 rampas
+  (36 096 muestras): 100 % de coincidencias; con el paso entero en 32 bits,
+  31,6 %. Sin esto, Rogue Squadron daba 3833 de 5713 tareas distintas (1595
+  con el paso cortado a octavos pero sin la estructura de bloques).
+- **El oráculo** compara ahora cuando el RSP termina la tarea (antes, al
+  empezar la siguiente: MusyX deja su estado en la memoria del juego, que el
+  juego reutiliza entre medias, y salían diferencias falsas), cuenta las
+  muestras de 16 bits distintas por tamaño de la diferencia, y con variables
+  de entorno saca lo necesario para depurar: `SALSA64_LLE_VERBOSE=1` (una
+  línea por tarea), `SALSA64_LLE_DIFFS=1` (cada palabra distinta, con el
+  número de tarea), `SALSA64_LLE_DUMP_TASK=N` (lo escrito antes/LLE/HLE y las
+  cabeceras de las subtramas) y `SALSA64_LLE_DUMP_DMEM=archivo` (la DMEM del
+  RSP al terminar). Con más de 10 tramos escritos por tarea hay que compilar
+  el host con `EXTRA_CFLAGS=-DAUD_MAX_RANGES=64` (el resultado de spukit solo
+  admite 10).
+- **SPE 1.** Programa `spu_audio`: text 46 232 → 59 296 bytes, data 800, bss
+  34 448 → 34 960 (total 81 480 → 95 056 bytes de 262 144); la cadena de
+  llamadas más honda (`tools/spu-stack.py`) usa 8,4 KB de pila y quedan 167 KB
+  libres. Costo por tarea: la línea de cada 5 s del log, «audio: … en el SPE
+  %.3f ms por tarea (máx. …), PPE esperando …», ya lo da también para MusyX
+  (ABI «MusyX v1», «MusyX v1 (Rogue Squadron)» o «MusyX v2»; «comandos por
+  tarea» cuenta voces mezcladas más subtramas).
+- **Arranque en la PS3.** Las listas de prueba del arranque (SPE contra PPE
+  sobre una RDRAM de mentira) incluyen ahora dos subtramas de MusyX v1 y v2
+  con voces PCM16 y ADPCM, eco y direcciones sin alinear; el log dice
+  «audio: listas de prueba en el SPE: iguales al PPE» o «DIFIEREN».
+- **Pruebas unitarias** (+5): reconocimiento de las tres compilaciones; una
+  voz de PCM16 con el resultado calculado a mano (resampler, envolventes,
+  volúmenes base y última muestra); el eco; la tabla tomada del segmento de
+  datos del microcódigo (en 0x20, 0x28 y 0x138, y que una tabla rota no vale);
+  datos absurdos sin salirse de los búferes (con ASan y UBSan); y las listas
+  del arranque con un hash de la RDRAM como regresión.
+
+Falta:
+- [ ] En la PS3 real: oír Hydro Thunder, Rush 2049 y NBA Showtime; Rogue
+      Squadron solo el audio (sus gráficos no tienen HLE todavía). Mirar en
+      el log la línea «audio: …» (errores en 0, ms por tarea) y que las
+      listas de prueba digan «iguales al PPE».
+- [ ] Sin respaldo para probar: Gauntlet Legends, Tarzan, The World Is Not
+      Enough, Rugrats in Paris, Polaris SnoCross, Battle for Naboo. Si una
+      compilación trae su tabla de interpolación en otro lugar, usa la de
+      `lut.c` (suena casi igual); si trae `ptr_10` (v2), se cuenta como
+      comando sin implementar.
+- [ ] Las 49 tareas de Indiana Jones (±1) y la mezcla final de v2 con
+      `ptr_10`.
+- [ ] Lo mismo para los demás ABI: leer la tabla de interpolación del
+      `ucode_data` del juego en vez de la propia de `lut.c` (naudio y nead
+      siguen con la propia; sus diferencias están en docs/estado.md,
+      2026-10-10).
+
 ## 2026-10-16 — Candidato rc5: aviso de Stadium, carpetas de datos y Donald Duck
 
 - **Pokémon Stadium, «Game Pak Check» al volver del título.** El aviso

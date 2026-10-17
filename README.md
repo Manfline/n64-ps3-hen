@@ -33,7 +33,7 @@ Work in progress, but already playable on a real PS3:
 - **RSP:** high-level emulation of graphics microcodes (Fast3D, F3DEX 0.95/1.x,
   F3DEX2 and F3DZEX2, Rare's variants for Perfect Dark and Conker, S2DEX
   backgrounds, the JPEG task of Zelda) on SPE 0, and of audio microcodes (ABI1,
-  nead, naudio with MP3) on SPE 1. An experimental low-level RSP interpreter
+  nead, naudio with MP3, MusyX) on SPE 1. An experimental low-level RSP interpreter
   (real microcode on an SPE) exists for microcodes without HLE.
 - **RDP on the RSX:** combiners translated to RSX fragment programs generated
   at run time (there is no Cg compiler on the console).

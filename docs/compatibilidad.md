@@ -6,6 +6,28 @@ datos de compatibilidad.
 
 Las entradas antiguas conservan sus métodos de prueba como historia.
 
+## 2026-10-16 — Audio de MusyX (Factor 5): HLE nueva, verificada en el host
+
+Los juegos de MusyX corrían mudos: su tarea de audio no es una lista de
+comandos y la HLE la daba por mala. Ahora hay HLE de MusyX v1 y v2
+(`src/rsp/audio/musyx.c`, SPE 1 en la PS3). Cada tarea se comparó, byte a
+byte, con el microcódigo real corriendo en el intérprete del RSP
+(`salsa64-run --lle=all --lle-check-audio`); detalle y método en
+[docs/estado.md](estado.md). **Falta oírlos en la PS3 real**: aquí solo hay
+medición en el host.
+
+| Juego | MusyX | Tareas de audio idénticas al microcódigo real (96 s de consola, con START y A) | Observaciones |
+|---|---|---:|---|
+| Hydro Thunder | v1 | 5740 de 5740 | Sin eco en la prueba. |
+| Rush 2049 | v1 | 5728 de 5728 | Sin eco en la prueba. |
+| NBA Showtime | v1 | 5740 de 5740 | Sin eco en la prueba. |
+| Resident Evil 2 | v1 | 2856 de 2856 | Con eco (reverberación) en todas las subtramas. Solo el audio: sus gráficos no tienen HLE. |
+| Star Wars: Rogue Squadron | v1 (otra compilación) | 5713 de 5713 | Con eco, con la envolvente del envío en rampa. Solo el audio: sus gráficos no tienen HLE. |
+| Indiana Jones | v2 | 5675 de 5724 (las otras 49, +1 en 2 de cada 8 muestras del canal izquierdo) | Solo el audio: sus gráficos no tienen HLE. |
+
+Sin respaldo para probar: Gauntlet Legends, Tarzan, The World Is Not Enough,
+Rugrats in Paris, Polaris SnoCross y Battle for Naboo.
+
 ## 2026-10-16 — Candidata de la v0.2.7 en la PS3 real
 
 PS3 con HEN, respaldos NTSC. La rc5 (v0.2.6-47-gd01e523, la que se publica
