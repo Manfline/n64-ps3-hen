@@ -271,6 +271,35 @@ static void menu_scan_dir(void)
 	CHECK(!strcmp(romlist_display_title(&l->e[0]), ".."));
 	CHECK_EQ(romlist_scan_dir(l, "/no/existe/salsa64", "/no/existe/salsa64", NULL, 0), -1);
 
+	/* Las carpetas de datos propios no salen en la raíz; «juegos» solo si trae ROMs. */
+	char own[400];
+	static const char *const hidden[] = { "saves", "states", "covers", "cheats", "perfilado", "perfiles", "capturas",
+					      "cajanegra-3", "juegos" };
+	for (unsigned i = 0; i < sizeof hidden / sizeof hidden[0]; i++) {
+		snprintf(own, sizeof own, "%s/%s", sub, hidden[i]);
+		mkdir(own, 0777);
+	}
+	snprintf(own, sizeof own, "%s/juegos/zelda.cfg", sub);
+	CHECK(write_file(own, (const uint8_t *)"x", 1));
+	snprintf(own, sizeof own, "%s/juegos/zelda.z64", sub);
+	CHECK(write_file(own, rom, sizeof rom));
+	snprintf(own, sizeof own, "%s/otra", sub);
+	mkdir(own, 0777);
+	memset(l, 0, romlist_memory_bytes());
+	CHECK_EQ(romlist_scan_dir(l, sub, sub, NULL, 0), 0);
+	CHECK_EQ(l->dir_count, 2);  /* «otra» y «juegos» (que ahora tiene una ROM) */
+	snprintf(own, sizeof own, "%s/juegos/zelda.z64", sub);
+	unlink(own);
+	memset(l, 0, romlist_memory_bytes());
+	CHECK_EQ(romlist_scan_dir(l, sub, sub, NULL, 0), 0);
+	CHECK_EQ(l->dir_count, 1);  /* solo «otra» */
+	snprintf(own, sizeof own, "%s/otra/saves", sub);
+	mkdir(own, 0777);
+	memset(l, 0, romlist_memory_bytes());
+	snprintf(own, sizeof own, "%s/otra", sub);
+	CHECK_EQ(romlist_scan_dir(l, own, sub, NULL, 0), 0);
+	CHECK_EQ(l->dir_count, 1);  /* fuera de la raíz sí se ve */
+
 	/* Carpeta grande: llena las 4096 entradas, mide la lectura y rechaza la siguiente. */
 	char many[300], source[300], target[320];
 	snprintf(many, sizeof many, "%s/many", t_tmp_dir);

@@ -206,7 +206,36 @@ static bool add_directory(struct romlist *l, const char *name, unsigned source)
 	return true;
 }
 
-static bool scan_one(struct romlist *l, const char *dir, unsigned source, const char *save_cfg, size_t save_cfg_len)
+/* Carpetas de datos propios que Salsa64 crea en la raíz de cada ubicación
+ * (partidas, estados, carátulas, trucos, perfilado, perfiles, capturas, la
+ * caja negra): no son de ROMs y salían como filas vacías. Solo se ocultan en
+ * la raíz; si alguien entra a mano a una subcarpeta con ese nombre, se ve. */
+static bool internal_dir(const char *name)
+{
+	static const char *const own[] = { "saves", "states", "covers", "cheats", "perfilado", "perfiles", "capturas" };
+	for (unsigned i = 0; i < sizeof own / sizeof own[0]; i++)
+		if (!strcmp(name, own[i]))
+			return true;
+	return !strncmp(name, "cajanegra-", 10);
+}
+
+/* «juegos» guarda los .cfg de cada juego; se oculta salvo que alguien haya
+ * puesto ROMs ahí (una sola lectura de una carpeta pequeña, solo en la raíz). */
+static bool games_dir_without_roms(const char *path)
+{
+	DIR *d = opendir(path);
+	if (!d)
+		return true;
+	struct dirent *de;
+	bool roms = false;
+	while (!roms && (de = readdir(d)) != NULL)
+		roms = de->d_name[0] != '.' && romlist_has_rom_ext(de->d_name);
+	closedir(d);
+	return !roms;
+}
+
+static bool scan_one(struct romlist *l, const char *dir, unsigned source, bool at_root, const char *save_cfg,
+		     size_t save_cfg_len)
 {
 	DIR *d = opendir(dir);
 	if (!d)
@@ -215,6 +244,8 @@ static bool scan_one(struct romlist *l, const char *dir, unsigned source, const 
 	while ((de = readdir(d)) != NULL) {
 		const char *name = de->d_name;
 		if (name[0] == '.' || !strcmp(name, ".."))
+			continue;
+		if (at_root && internal_dir(name))
 			continue;
 		char path[ROMLIST_PATH_MAX];
 		int n = snprintf(path, sizeof path, "%s/%s", dir, name);
@@ -226,6 +257,8 @@ static bool scan_one(struct romlist *l, const char *dir, unsigned source, const 
 		if (stat(path, &st) != 0)
 			continue;
 		if (S_ISDIR(st.st_mode)) {
+			if (at_root && !strcmp(name, "juegos") && games_dir_without_roms(path))
+				continue;
 			if (!add_directory(l, name, source))
 				l->skipped++;
 			continue;
@@ -264,7 +297,7 @@ int romlist_scan_sources(struct romlist *l, const char *const *roots, unsigned r
 				    : snprintf(dir, sizeof dir, "%s", roots[i]);
 		if (n < 0 || (size_t)n >= sizeof dir)
 			continue;
-		if (scan_one(l, dir, i, save_cfg, save_cfg_len))
+		if (scan_one(l, dir, i, relative[0] == 0, save_cfg, save_cfg_len))
 			opened++;
 	}
 	return opened ? (int)l->rom_count : -1;
