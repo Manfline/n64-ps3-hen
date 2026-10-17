@@ -38,6 +38,13 @@ Reglas de la búsqueda:
   esas extensiones, los que miden menos de 4 KB y los ilegibles. En cada
   carpeta relativa se juntan las entradas de todas las unidades y se admiten
   hasta 4096 filas en total, contando ROMs, carpetas y `..`.
+- En la raíz de cada ubicación `salsa64` no salen las carpetas que Salsa64
+  crea para sus propios datos: `saves`, `states`, `covers`, `cheats`,
+  `perfilado`, `perfiles`, `capturas` y `cajanegra-*`. Tampoco `juegos`
+  (los `.cfg` de cada juego), salvo que tenga ROMs dentro. Dentro de una
+  carpeta de ROMs (o de una subcarpeta) esos nombres sí se muestran. No se
+  ocultan las demás carpetas vacías: saber si una carpeta tiene ROMs
+  obligaría a leer cada una al releer la lista.
 - La ROM más grande que se puede abrir es de 64 MB.
 - **Opciones → Orden de la lista** elige el título de la cabecera o el nombre
   del archivo (`orden = titulo|archivo` en `menu.cfg`). Si la fuente no puede
@@ -405,6 +412,9 @@ El tipo de guardado se detecta solo: primero lo que diga `guardado.cfg`, luego
 la cabecera de los homebrew y por último una tabla interna por código de
 juego. El panel del menú lo muestra («EEPROM 4K», «SRAM», «FlashRAM»…); si
 un juego no guarda y el panel dice «—», se fija a mano en `guardado.cfg`.
+Los que guardan solo en el Controller Pak (Donald Duck Quack Attack, Rush
+2049, Hydro Thunder) no llevan tipo de cartucho: el panel dice «—» y su
+partida va al pak.
 Usan FlashRAM, entre otros, Zelda: Majora's Mask, Paper Mario, Pokémon Snap,
 Pokémon Puzzle League, Pokémon Stadium 1 y 2 y Jet Force Gemini. La SRAM de
 768 Kbit y la de 1 Mbit se reconocen pero todavía no se emulan (el panel

@@ -1,5 +1,30 @@
 # Estado
 
+## 2026-10-16 — Candidato rc5: aviso de Stadium, carpetas de datos y Donald Duck
+
+- **Pokémon Stadium, «Game Pak Check» al volver del título.** El aviso
+  («Turn the N64 Control Deck OFF…», una imagen de 538 × 100) salía en
+  ruido. Es una imagen auxiliar que el juego dibuja en una color image y
+  usa de textura en los cuadros siguientes; con nueve destinos en una tarea
+  la ranura que la guarda se recicla enseguida y la copia a la RDRAM se
+  descartaba porque 538 × 2 con paso de 64 bytes por 100 filas son 108 800
+  bytes y el espejo era de 64 KB (`la ranura 1 (2863c0/538) se recicla con lo
+  dibujado hasta la fila 100: perdida`): los cuadros leían la RDRAM sin
+  escribir. La sospecha del alto reservado (538 × 403) no era: la copia ya
+  usaba las 100 filas dibujadas. Ahora cada búfer espejo es de 128 KB
+  (`MIRROR_SLOT`; el bloque sigue en 3 MB por el redondeo) y la copia de una
+  ranura que se recicla admite hasta eso; el espejo del final de la tarea y
+  lo que cuenta como imagen chica siguen en 64 KB. En el host, con las
+  pulsaciones del log de la PS3 y 1740 campos: 31 906 de las 32 000
+  muestras del aviso (el rasterizador del host es de 320 columnas) pasan de
+  ruido a la imagen y no cambia ni un byte de RDRAM fuera del aviso;
+  `stadium-vs.pad` da la misma RDRAM y las mismas imágenes que antes.
+- **Lista de ROMs:** la raíz ya no muestra las carpetas de datos propios
+  (ver `docs/uso-ps3.md`); `juegos` solo si trae ROMs.
+- **Guardado:** Donald Duck Quack Attack / Goin' Quackers (NDQ) sale de la
+  lista de EEPROM 4K (guarda solo en el Controller Pak; Rush 2049 y Hydro
+  Thunder ya no estaban en ninguna lista).
+
 ## 2026-10-16 — COP0 y MI fuera del camino lento: esperas por el planificador, CU1 = 0 y MTC0 Status en línea
 
 Sesiones de la app de perfilado en la PS3 real: Doom 64 al 35 % (21
