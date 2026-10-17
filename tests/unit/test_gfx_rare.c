@@ -1,7 +1,8 @@
 /*
  * Salsa64 — pruebas de las variantes de Rare de la HLE gráfica: el
- * microcódigo de Perfect Dark (src/rsp/gfx/f3dpd.c, sobre F3D) y el de
- * Conker (src/rsp/gfx/f3dexbg.c, sobre F3DEX2). Display lists sintéticas
+ * microcódigo de Perfect Dark (src/rsp/gfx/f3dpd.c, sobre F3D), el de
+ * Diddy Kong Racing (src/rsp/gfx/f3ddkr.c, sobre F3D) y el de Conker
+ * (src/rsp/gfx/f3dexbg.c, sobre F3DEX2). Display lists sintéticas
  * con su codificación, ejecutadas con gfx_run y revisadas en el estado y la
  * salida. Nada viene de los juegos: vértices, luces y tablas son inventados.
  */
@@ -50,7 +51,7 @@ static void start(enum salsa64_gbi g)
 /* Termina la lista (G_ENDDL de cada familia) y ejecuta la tarea. */
 static void run(void)
 {
-	dl(gbi == SALSA64_GBI_F3DPD ? 0xB8000000 : 0xDF000000, 0);
+	dl(gbi == SALSA64_GBI_F3DPD || gbi == SALSA64_GBI_F3DDKR || gbi == SALSA64_GBI_F3DJFG ? 0xB8000000 : 0xDF000000, 0);
 	memset(&job, 0, sizeof job);
 	job.rdram_ea = (uint64_t)(uintptr_t)t_n64.bus.rdram;
 	job.rdram_size = t_n64.bus.rdram_size;
@@ -504,8 +505,198 @@ static void cbfd_many_lights(void)
 	CHECK_EQ(gs.vtx[0].c[0], 70);  /* 40 + 30 */
 }
 
+/* ---- Diddy Kong Racing (F3D de Rare con matrices, vértices y triángulos por DMA) ---- */
+
+/* Vértice de 10 bytes: x, y, z (s16) y RGBA. */
+struct dkr_vtx { int16_t x, y, z; uint8_t c[4]; };
+
+static uint32_t dkr_put_vertices(const struct dkr_vtx *v, int n)
+{
+	uint32_t a = data_alloc(10 * (uint32_t)n);
+	for (int i = 0; i < n; i++) {
+		uint8_t *p = t_n64.bus.rdram + a + 10 * i;
+		salsa64_wr16(p + 0, (uint16_t)v[i].x);
+		salsa64_wr16(p + 2, (uint16_t)v[i].y);
+		salsa64_wr16(p + 4, (uint16_t)v[i].z);
+		memcpy(p + 6, v[i].c, 4);
+	}
+	return a;
+}
+
+/* Triángulo de 16 bytes: banderas, tres índices y (s, t) de cada esquina. */
+static uint32_t dkr_put_triangle(unsigned flag, unsigned v0, unsigned v1, unsigned v2, const int16_t st[6])
+{
+	uint32_t a = data_alloc(16);
+	uint8_t *p = t_n64.bus.rdram + a;
+	p[0] = (uint8_t)flag, p[1] = (uint8_t)v0, p[2] = (uint8_t)v1, p[3] = (uint8_t)v2;
+	for (int i = 0; i < 6; i++)
+		salsa64_wr16(p + 4 + 2 * i, (uint16_t)st[i]);
+	return a;
+}
+
+/* Matriz que lleva un vértice (x, y, z) a x/128, y/128, z/128 con w = 1. */
+static uint32_t dkr_matrix(float tx)
+{
+	float m[16] = { 0.0078125f, 0, 0, 0, 0, 0.0078125f, 0, 0, 0, 0, 0.0078125f, 0, tx, 0, 0, 1 };
+	return put_matrix(m);
+}
+
+static void dkr_setup(void)
+{
+	dl(0x03800010, put_viewport_320x240());              /* G_MOVEMEM viewport */
+	dl(0xFF100000 | 319, 0x00100000);                    /* color image */
+	dl(0xFC000000 | (15u << 20 | 31u << 15 | 7u << 12 | 7u << 9 | 15u << 5 | 31u),
+	   7u << 28 | 7u << 24 | 7u << 21 | 7u << 18 | 4u << 15 | 7u << 12 | 4u << 9 | 4u << 6 | 7u << 3 | 4u);
+	dl(0xB6000000, 0xFFFFFFFF);                          /* G_CLEARGEOMETRYMODE */
+	dl(0xB7000000, 0x00000004);                          /* SHADE */
+}
+
+/* Matriz por DMA a la ranura 0, vértices de 10 bytes y un triángulo con
+ * las coordenadas de textura en él: posición, color, s y t, y el recorte
+ * por caras que pide la bandera 0x40. */
+static void dkr_vertices_triangles(void)
+{
+	start(SALSA64_GBI_F3DDKR);
+	dkr_setup();
+	dl(0x01000040, dkr_matrix(0.0f));                    /* G_MTX: ranura 0 (bits 22 y 23 en 0) */
+	const struct dkr_vtx v[3] = {
+		{ 0, 0, 0, { 10, 20, 30, 40 } }, { 128, 0, 0, { 50, 60, 70, 80 } }, { 0, 128, 0, { 90, 100, 110, 120 } },
+	};
+	dl(0x04000000 | (3 - 1) << 19, dkr_put_vertices(v, 3));        /* G_VTX: 3 vértices desde el 0 */
+	const int16_t st[6] = { 32, 64, 0, 0, 64, 32 };
+	dl(0x05000010 | 1 << 16, dkr_put_triangle(0, 0, 1, 2, st));    /* G_DMATRI: 1, con textura */
+	dl(0xE9000000, 0);                                   /* G_RDPFULLSYNC */
+	run();
+	CHECK_EQ(res.unknown_cmds, 0);
+	CHECK_EQ(res.dl_errors, 0);
+	CHECK_EQ(res.triangles, 1);
+	CHECK(res.flags & GFX_RES_FULLSYNC);
+	CHECK(gs.tex_on);
+	CHECK(gs.geom & G_CULL_BACK);
+	CHECK(gs.geom & G_SHADING_SMOOTH);
+	CHECK_EQ(gs.vtx[0].c[0], 10);
+	CHECK_EQ(gs.vtx[2].c[3], 120);
+	/* Pantalla: x = 160 + 160·x, y = 120 − 120·y (w = 1). */
+	CHECK(out_vtx[0].x == 160.0f && out_vtx[1].x == 320.0f && out_vtx[2].x == 160.0f);
+	CHECK(out_vtx[0].y == 120.0f && out_vtx[2].y == 0.0f);
+	/* s y t en s10.5: 32 → 1 texel, tal cual (el G_TEXTURE de DKR no se usa). */
+	CHECK(out_vtx[0].s == 1.0f && out_vtx[0].t == 2.0f);
+	CHECK(out_vtx[1].s == 0.0f && out_vtx[1].t == 0.0f);
+	CHECK(out_vtx[2].s == 2.0f && out_vtx[2].t == 1.0f);
+	CHECK_EQ(out_vtx[1].r, 50);
+	CHECK_EQ(out_vtx[2].a, 120);
+
+	/* Con la bandera 0x40, sin recorte por caras, y la textura apagada. */
+	start(SALSA64_GBI_F3DDKR);
+	dkr_setup();
+	dl(0x01000040, dkr_matrix(0.0f));
+	dl(0x04000000 | (3 - 1) << 19, dkr_put_vertices(v, 3));
+	dl(0x05000010, dkr_put_triangle(0x40, 0, 1, 2, st));
+	run();
+	CHECK_EQ(res.triangles, 1);
+	CHECK(!gs.tex_on);
+	CHECK(!(gs.geom & (G_CULL_BACK | G_CULL_FRONT)));
+}
+
+/* Bases de G_DMA_OFFSETS (matrices y vértices), la ranura elegida por G_MTX
+ * (bits 22 y 23) y por G_MOVEWORD 0x0A, la multiplicación por la ranura 0
+ * (Jet Force Gemini) y los vértices que siguen a los anteriores (bit 16). */
+static void dkr_offsets_slots(void)
+{
+	start(SALSA64_GBI_F3DDKR);
+	dkr_setup();
+	uint32_t m0 = dkr_matrix(0.0f), m1 = dkr_matrix(0.5f);
+	const struct dkr_vtx v[4] = {
+		{ 0, 0, 0, { 1, 2, 3, 4 } }, { 128, 0, 0, { 5, 6, 7, 8 } }, { 0, 128, 0, { 9, 10, 11, 12 } },
+		{ 128, 128, 0, { 13, 14, 15, 16 } },
+	};
+	uint32_t va = dkr_put_vertices(v, 4);
+	/* Direcciones relativas a las bases (la matriz 1 y los vértices 2 y 3). */
+	dl(0xBF000000 | m0, va);                             /* G_DMA_OFFSETS */
+	dl(0x01000040, 0);                                   /* ranura 0 = m0 + 0 */
+	dl(0x01400040, m1 - m0);                             /* ranura 1 (bit 22) */
+	dl(0xBC00000A, 0 << 6);                              /* selecciona la ranura 0 */
+	dl(0x04000000 | (2 - 1) << 19, 0);                   /* v0, v1 desde el 0 */
+	dl(0xBC00000A, 1 << 6);                              /* la ranura 1 */
+	dl(0x04010000 | (2 - 1) << 19, 2 * 10);              /* v2, v3: siguen a los anteriores (bit 16) */
+	run();
+	CHECK_EQ(res.unknown_cmds, 0);
+	CHECK_EQ(res.dl_errors, 0);
+	CHECK(fabsf(gs.vtx[0].x) < 1e-6f && fabsf(gs.vtx[1].x - 1.0f) < 1e-6f);
+	CHECK_EQ(gs.vtx[1].c[0], 5);
+	/* La ranura 1 traslada en x 0,5: v2 en (0,5; 1), v3 en (1,5; 1). */
+	CHECK(fabsf(gs.vtx[2].x - 0.5f) < 1e-6f && fabsf(gs.vtx[2].y - 1.0f) < 1e-6f);
+	CHECK(fabsf(gs.vtx[3].x - 1.5f) < 1e-6f);
+	CHECK_EQ(gs.vtx[3].c[2], 15);
+	CHECK_EQ(gs.rare.dkr.dma_mtx, m0);
+	CHECK_EQ(gs.rare.dkr.dma_vtx, va);
+
+	/* Jet Force Gemini: el conteo no suma 1 y el bit 23 multiplica por la ranura 0. */
+	start(SALSA64_GBI_F3DJFG);
+	dkr_setup();
+	const float tr[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 64, 0, 0, 1 };
+	uint32_t m2 = put_matrix(tr);
+	dl(0x01000040, dkr_matrix(0.0f));
+	dl(0x01810040, m2);                                  /* ranura 1: (x + 64) · ranura 0 */
+	dl(0x04000000 | 2 << 19, dkr_put_vertices(v, 4));    /* 2 vértices (no 3) */
+	run();
+	CHECK_EQ(res.unknown_cmds, 0);
+	CHECK_EQ(gs.rare.dkr.cur_mtx, 1u);
+	CHECK(fabsf(gs.vtx[0].x - 0.5f) < 1e-6f && fabsf(gs.vtx[1].x - 1.5f) < 1e-6f);
+	CHECK(gs.vtx[2].x == 0.0f && gs.vtx[2].w == 0.0f);   /* el tercero no se cargó */
+}
+
+/* G_DL_IN_MEM: n comandos y de vuelta, sin G_ENDDL (el siguiente de la
+ * lista llamada no se ejecuta). */
+static void dkr_counted_list(void)
+{
+	start(SALSA64_GBI_F3DDKR);
+	dkr_setup();
+	uint32_t list = data_alloc(32);
+	t_wr32(list, 0xB7000000), t_wr32(list + 4, 0x00010000);       /* G_FOG */
+	t_wr32(list + 8, 0xB7000000), t_wr32(list + 12, 0x00020000);  /* G_LIGHTING */
+	t_wr32(list + 16, 0xB7000000), t_wr32(list + 20, 0x00040000); /* G_TEXTURE_GEN: no */
+	dl(0x07000000 | 2 << 16 | 2 * 8, list);
+	dl(0xB7000000, 0x00080000);                          /* el que sigue en la lista principal */
+	dl(0xE9000000, 0);
+	run();
+	CHECK_EQ(res.unknown_cmds, 0);
+	CHECK(gs.geom & G_FOG);
+	CHECK(gs.geom & G_LIGHTING);
+	CHECK(!(gs.geom & G_TEXTURE_GEN));
+	CHECK(gs.geom & G_TEXTURE_GEN_LINEAR);
+	CHECK(res.flags & GFX_RES_FULLSYNC);
+	CHECK_EQ(gs.dl_sp, 0);
+}
+
+/* Carteles: con G_MOVEWORD 0x02 los vértices que siguen (bit 16) van desde
+ * el lugar 1 y se suman al 0, ya transformado. */
+static void dkr_billboard(void)
+{
+	start(SALSA64_GBI_F3DDKR);
+	dkr_setup();
+	dl(0x01000040, dkr_matrix(0.0f));
+	const struct dkr_vtx c = { 256, 128, 0, { 1, 1, 1, 1 } };
+	dl(0x04000000, dkr_put_vertices(&c, 1));             /* el centro, en el lugar 0 */
+	dl(0xBC000002, 1);                                   /* carteles */
+	const struct dkr_vtx q[2] = { { 0, 0, 0, { 2, 2, 2, 2 } }, { 128, 0, 0, { 3, 3, 3, 3 } } };
+	dl(0x04010000 | (2 - 1) << 19, dkr_put_vertices(q, 2));   /* desde el lugar 1 */
+	run();
+	CHECK_EQ(res.unknown_cmds, 0);
+	CHECK(fabsf(gs.vtx[0].x - 2.0f) < 1e-6f && fabsf(gs.vtx[0].y - 1.0f) < 1e-6f);
+	CHECK(fabsf(gs.vtx[1].x - 2.0f) < 1e-6f && fabsf(gs.vtx[1].y - 1.0f) < 1e-6f);   /* 0 + el centro */
+	CHECK(fabsf(gs.vtx[2].x - 3.0f) < 1e-6f && fabsf(gs.vtx[2].y - 1.0f) < 1e-6f);
+	CHECK_EQ(gs.vtx[1].c[0], 2);
+	CHECK_EQ(gs.vtx[2].c[0], 3);
+	CHECK_EQ(gs.rare.dkr.billboard, 1u);
+}
+
 void t_suite_gfx_rare(void)
 {
+	RUN(dkr_vertices_triangles);
+	RUN(dkr_offsets_slots);
+	RUN(dkr_counted_list);
+	RUN(dkr_billboard);
 	RUN(pd_vertex_colors);
 	RUN(pd_lighting);
 	RUN(pd_tri4_quad);

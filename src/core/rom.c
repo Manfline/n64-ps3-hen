@@ -45,21 +45,32 @@ enum salsa64_rom_format salsa64_rom_normalize(uint8_t *rom, size_t size)
 	return fmt;
 }
 
-uint32_t salsa64_crc32(const uint8_t *data, size_t len)
+/* Por nibbles (tabla de 16): se usa al arrancar y para reconocer los
+ * microcódigos sin texto, sobre 4 KB. `flip` 0 o 3: el byte i se lee del
+ * lugar i ^ flip (3: cada palabra de 4 bytes al revés). */
+static uint32_t crc32_flip(const uint8_t *data, size_t len, size_t flip)
 {
-	/* Por nibbles (tabla de 16): se usa al arrancar y para reconocer los
-	 * microcódigos sin texto, sobre 4 KB. */
 	static const uint32_t t[16] = {
 		0x00000000u, 0x1DB71064u, 0x3B6E20C8u, 0x26D930ACu, 0x76DC4190u, 0x6B6B51F4u, 0x4DB26158u, 0x5005713Cu,
 		0xEDB88320u, 0xF00F9344u, 0xD6D6A3E8u, 0xCB61B38Cu, 0x9B64C2B0u, 0x86D3D2D4u, 0xA00AE278u, 0xBDBDF21Cu,
 	};
 	uint32_t crc = 0xFFFFFFFFu;
 	for (size_t i = 0; i < len; i++) {
-		crc ^= data[i];
+		crc ^= data[i ^ flip];
 		crc = (crc >> 4) ^ t[crc & 15];
 		crc = (crc >> 4) ^ t[crc & 15];
 	}
 	return ~crc;
+}
+
+uint32_t salsa64_crc32(const uint8_t *data, size_t len)
+{
+	return crc32_flip(data, len, 0);
+}
+
+uint32_t salsa64_crc32_words_swapped(const uint8_t *data, size_t len)
+{
+	return crc32_flip(data, len & ~(size_t)3, 3);
 }
 
 enum salsa64_cic salsa64_rom_cic(const uint8_t *rom)

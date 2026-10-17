@@ -12,9 +12,11 @@
  * build (spu-size y tools/spu-stack.py, 2026-10-12, con el combiner y
  * S2DEX en -Os, el resultado del combiner memorizado y las texturas que se
  * leen de un destino sin decodificar: texto 103,5 KB, datos 0,8 KB, bss
- * 138,8 KB):
+ * 138,8 KB; con Diddy Kong Racing y la caché de 768 entradas, 2026-10-17:
+ * texto 108,2 KB, datos 0,8 KB, bss 135,4 KB y 11,5 KB libres):
  *   código (HLE + runtime)              ~ 99 KB (F3D y F3DEX: 3,6 KB;
- *                                         Perfect Dark 1,9 KB y Conker
+ *                                         Perfect Dark 1,9 KB, Diddy Kong
+ *                                         Racing 2,9 KB y Conker
  *                                         4,4 KB; el combiner con sus
  *                                         términos para el generador de
  *                                         fragment programs, 11 KB con -Os
@@ -24,7 +26,8 @@
  *   gfx_state (RDP, TMEM 4 KB, matrices,
  *     búfer de vértices, 32 texturas del
  *     arena de la tarea 1,5 KB, directorio
- *     de la caché de texturas 28,5 KB, luces
+ *     de la caché de texturas 25 KB con
+ *     768 entradas (antes 28,5), luces
  *     de Conker, último resultado del
  *     combiner 0,4 KB, color images
  *     dibujadas 128 bytes)                 ~ 41 KB

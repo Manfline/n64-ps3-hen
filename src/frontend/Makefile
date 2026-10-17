@@ -57,7 +57,7 @@ lz_SRCS    := $(R)/lib/spukit/spu/lz.c
 # variantes de Rare se llaman por puntero desde su familia; lo demás que
 # llama por puntero es el arranque y la salida de la biblioteca de C.
 gfx_STACK_MIN  := 1536
-gfx_STACK_ARGS := --edge gfx_dl_f3d:pd_command --edge gfx_dl_f3dex2:cbfd_command \
+gfx_STACK_ARGS := --edge gfx_dl_f3d:pd_command --edge gfx_dl_f3d:dkr_command --edge gfx_dl_f3dex2:cbfd_command \
                   --ignore exit --ignore __call_exitprocs --ignore __do_global_ctors_aux \
                   --ignore __do_global_dtors_aux --ignore register_tm_clones --ignore deregister_tm_clones
 CFLAGS  := -ffp-contract=off -fno-math-errno
@@ -111,6 +111,9 @@ $(OBJ)/spu/src/rsp/gfx/s2dex.c.o: SPU_CFLAGS += -Os
 # texturas van en geom.c y tmem.c), también: lo que ahorra paga el TEXRECT
 # dentro del tramo S2DEX (el cielo de Kirby 64).
 $(OBJ)/spu/src/rsp/gfx/f3dpd.c.o: SPU_CFLAGS += -Os
+# Lo de Diddy Kong Racing (f3ddkr.c: matrices, vértices y triángulos por DMA),
+# también: solo corre con ese juego.
+$(OBJ)/spu/src/rsp/gfx/f3ddkr.c.o: SPU_CFLAGS += -Os
 # Lo de la interpolación de cuadros (vgroup.c), también: no le quita local
 # store ni pila a la HLE.
 $(OBJ)/spu/src/rsp/gfx/vgroup.c.o: SPU_CFLAGS += -Os
@@ -125,5 +128,5 @@ $(OBJ)/spu/src/rsp/gfx/flx.c.o $(OBJ)/spu/src/rsp/gfx/dl.c.o: SPU_CFLAGS += -Os
 $(OBJ)/spu/src/rsp/gfx/texcache.c.o: SPU_CFLAGS += -Os
 # make no ve un cambio de banderas: que se recompilen si cambia este archivo.
 $(OBJ)/spu/src/rsp/gfx/combine.c.o $(OBJ)/spu/src/rsp/gfx/s2dex.c.o $(OBJ)/spu/src/rsp/gfx/f3dpd.c.o \
-$(OBJ)/spu/src/rsp/gfx/vgroup.c.o $(OBJ)/spu/src/rsp/gfx/flx.c.o $(OBJ)/spu/src/rsp/gfx/dl.c.o \
+$(OBJ)/spu/src/rsp/gfx/f3ddkr.c.o $(OBJ)/spu/src/rsp/gfx/vgroup.c.o $(OBJ)/spu/src/rsp/gfx/flx.c.o $(OBJ)/spu/src/rsp/gfx/dl.c.o \
 $(OBJ)/spu/src/rsp/gfx/texcache.c.o: Makefile

@@ -50,6 +50,9 @@ enum salsa64_rom_format salsa64_rom_normalize(uint8_t *rom, size_t size);
 
 /* CRC-32 (ISO-HDLC, el de zlib). */
 uint32_t salsa64_crc32(const uint8_t *data, size_t len);
+/* Lo mismo con los bytes de cada palabra de 4 al revés (los de la memoria de
+ * un host little-endian que guarda la RDRAM por palabras); len múltiplo de 4. */
+uint32_t salsa64_crc32_words_swapped(const uint8_t *data, size_t len);
 
 /* Requieren una ROM .z64 de al menos SALSA64_ROM_IPL3_END bytes. */
 enum salsa64_cic salsa64_rom_cic(const uint8_t *rom);

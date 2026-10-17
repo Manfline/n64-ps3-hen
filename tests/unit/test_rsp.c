@@ -424,6 +424,65 @@ static void rsp_detect_gbi_wr(void)
 	memset(p, 0, size);
 }
 
+/* Diddy Kong Racing: sin texto y con ucode_size en 0 (el RSP carga 4 KB).
+ * Se reconoce por el CRC-32 de su código (3BFF208D) o, para las versiones
+ * que no se han medido aquí, por el de los 4 KB leídos en palabras de
+ * memoria del host (6E6FC893 y 8D91244F el del juego medido; BDE9D1FB, Jet
+ * Force Gemini y Mickey's Speedway USA). Datos sintéticos. */
+static void rsp_detect_gbi_dkr(void)
+{
+	const uint32_t code = 0x8000, size = 0x1000;
+	uint8_t *p = t_n64.bus.rdram + code;
+	struct salsa64_task task;
+	memset(&task, 0, sizeof task);
+	memset(t_n64.bus.rdram + 0x5000, 0, 0x800);
+	task.ucode = 0x80000000u | code;
+	task.ucode_data = 0x80005000;
+	task.ucode_data_size = 0x800;
+
+	/* El CRC normal. */
+	memset(p, 0, size);
+	uint32_t state = 0xFFFFFFFFu;
+	for (uint32_t i = 0; i < size - 4; i++) {
+		state ^= p[i];
+		for (int k = 0; k < 8; k++)
+			state = (state >> 1) ^ (0xEDB88320u & (0u - (state & 1)));
+	}
+	crc32_force(state, 0x3BFF208Du, p + size - 4);
+	CHECK_EQ(salsa64_crc32(p, size), 0x3BFF208Du);
+	task.ucode_size = 0;
+	CHECK_EQ(salsa64_rsp_detect_gbi(&t_n64.bus, &task), SALSA64_GBI_F3DDKR);
+	task.ucode_size = size;
+	CHECK_EQ(salsa64_rsp_detect_gbi(&t_n64.bus, &task), SALSA64_GBI_F3DDKR);
+	task.ucode_size = 0x800;  /* otro tamaño: no es él */
+	CHECK_EQ(salsa64_rsp_detect_gbi(&t_n64.bus, &task), SALSA64_GBI_UNKNOWN);
+	task.ucode_size = 0;
+	p[17] ^= 1;
+	CHECK_EQ(salsa64_rsp_detect_gbi(&t_n64.bus, &task), SALSA64_GBI_UNKNOWN);
+
+	/* El CRC con las palabras al revés: el flujo que lee el CRC es el de
+	 * los bytes (i ^ 3), así que los 4 últimos del flujo son los 4 últimos
+	 * bytes del código, al revés. */
+	static const struct { uint32_t crc; enum salsa64_gbi gbi; } cases[] = {
+		{ 0x8D91244Fu, SALSA64_GBI_F3DDKR }, { 0x6E6FC893u, SALSA64_GBI_F3DDKR },
+		{ 0xBDE9D1FBu, SALSA64_GBI_F3DJFG },
+	};
+	state = 0xFFFFFFFFu;  /* CRC de size − 4 ceros, sin la inversión final */
+	for (uint32_t i = 0; i < size - 4; i++)
+		for (int k = 0; k < 8; k++)
+			state = (state >> 1) ^ (0xEDB88320u & (0u - (state & 1)));
+	for (unsigned c = 0; c < sizeof cases / sizeof cases[0]; c++) {
+		uint8_t tail[4];
+		memset(p, 0, size);
+		crc32_force(state, cases[c].crc, tail);
+		for (int i = 0; i < 4; i++)
+			p[size - 4 + (3 - i)] = tail[i];
+		CHECK_EQ(salsa64_crc32_words_swapped(p, size), cases[c].crc);
+		CHECK_EQ(salsa64_rsp_detect_gbi(&t_n64.bus, &task), cases[c].gbi);
+	}
+	memset(p, 0, size);
+}
+
 static void rsp_detect_gbi(void)
 {
 	/* Solo el formato de los textos de identificación, sin copiarlos. */
@@ -465,4 +524,5 @@ void t_suite_rsp(void)
 	RUN(rsp_gfx_nonear);
 	RUN(rsp_detect_gbi_crc);
 	RUN(rsp_detect_gbi_wr);
+	RUN(rsp_detect_gbi_dkr);
 }

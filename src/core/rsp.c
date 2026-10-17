@@ -300,15 +300,37 @@ static const struct {
 } ucode_crcs[] = {
 	{ 0xC543D0A8u, 0x1000, SALSA64_GBI_F3DPD },  /* Perfect Dark (NTSC-U) */
 	{ 0x81FA4A32u, 0x1000, SALSA64_GBI_F3DWR },  /* Wave Race 64: "RSP SW Version: 2.0D" */
+	{ 0x3BFF208Du, 0x1000, SALSA64_GBI_F3DDKR }, /* Diddy Kong Racing (USA, rev. 1) */
+};
+
+/* Los mismos, con el CRC-32 de los 4 KB leídos en palabras de memoria del
+ * host (cada palabra de 4 bytes al revés), como lo calculan otros
+ * emuladores (la lista de GLideN64, solo los valores): sirve para reconocer
+ * versiones del juego que no se han podido medir aquí. */
+static const struct {
+	uint32_t crc;
+	enum salsa64_gbi gbi;
+} ucode_crcs_w[] = {
+	{ 0x8D91244Fu, SALSA64_GBI_F3DDKR },  /* Diddy Kong Racing (USA, rev. 1: el mismo de arriba) */
+	{ 0x6E6FC893u, SALSA64_GBI_F3DDKR },  /* Diddy Kong Racing (otra versión: sin respaldo para probarlo) */
+	{ 0xBDE9D1FBu, SALSA64_GBI_F3DJFG },  /* Jet Force Gemini y Mickey's Speedway USA: sin respaldo */
 };
 
 static enum salsa64_gbi gbi_by_crc(const struct salsa64_bus *bus, const struct salsa64_task *task)
 {
+	/* La tarea de Rare no declara el tamaño del código (0): el RSP carga 4 KB. */
+	uint32_t size = task->ucode_size ? task->ucode_size : 0x1000;
 	uint32_t addr = task->ucode & 0x1FFFFFFF;
+	if (size != 0x1000 || !in_rdram(bus, addr, size))
+		return SALSA64_GBI_UNKNOWN;
+	uint32_t crc = salsa64_crc32(bus->rdram + addr, size);
 	for (unsigned i = 0; i < sizeof ucode_crcs / sizeof ucode_crcs[0]; i++)
-		if (task->ucode_size == ucode_crcs[i].size && in_rdram(bus, addr, task->ucode_size) &&
-		    salsa64_crc32(bus->rdram + addr, task->ucode_size) == ucode_crcs[i].crc)
+		if (ucode_crcs[i].size == size && ucode_crcs[i].crc == crc)
 			return ucode_crcs[i].gbi;
+	crc = salsa64_crc32_words_swapped(bus->rdram + addr, size);
+	for (unsigned i = 0; i < sizeof ucode_crcs_w / sizeof ucode_crcs_w[0]; i++)
+		if (ucode_crcs_w[i].crc == crc)
+			return ucode_crcs_w[i].gbi;
 	return SALSA64_GBI_UNKNOWN;
 }
 
@@ -448,7 +470,8 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 	if (rsp->lle && rsp->lle_mode != SALSA64_LLE_OFF && rsp->sched) {
 		bool hle_gfx = task.type == SALSA64_TASK_GFX && valid && rsp->gfx &&
 			       (gbi == SALSA64_GBI_F3DEX2 || gbi == SALSA64_GBI_F3DZEX2 || gbi == SALSA64_GBI_F3D ||
-				gbi == SALSA64_GBI_F3DEX || gbi == SALSA64_GBI_F3DWR);
+				gbi == SALSA64_GBI_F3DEX || gbi == SALSA64_GBI_F3DWR || gbi == SALSA64_GBI_F3DDKR ||
+				gbi == SALSA64_GBI_F3DJFG);
 		bool hle_audio = task.type == SALSA64_TASK_AUDIO && valid && rsp->audio && abi != SALSA64_ABI_UNKNOWN;
 		if (rsp->lle_mode == SALSA64_LLE_ALL || !(hle_gfx || hle_audio || jpeg != SALSA64_JPEG_NONE)) {
 			rsp->stats.lle++;

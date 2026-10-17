@@ -25,10 +25,10 @@
  * veces la misma con la caché llena o apagada): 32 entradas, 1,5 KB del
  * local store del SPE 0. */
 #define GFX_ARENA_TEXTURES 32
-/* Texturas en la caché entre tareas: 896 (antes 1024) para la pila del SPE
- * 0; en el host, el máximo de texturas distintas en 100 campos es 428
+/* Texturas en la caché entre tareas: 768 (antes 896 y 1024) para la pila del
+ * SPE 0; en el host, el máximo de texturas distintas en 100 campos es 428
  * (GoldenEye en Dam). No hace falta potencia de 2 (texcache.c usa %). */
-#define GFX_TC_ENTRIES  896
+#define GFX_TC_ENTRIES  768
 #define GFX_TC_SLOTS    2048 /* índice por hash de la caché (potencia de 2) */
 #define GFX_MAX_COMMANDS (1u << 20)
 
@@ -105,9 +105,25 @@ struct gfx_rare {
 	/* Conker */
 	uint32_t normal_base;    /* normales: 2 bytes por lugar del búfer de vértices */
 	bool advanced;           /* iluminación avanzada (tras su G_LOAD_UCODE) */
-	float coord_mod[16];     /* G_MW_COORD_MOD: posición para las luces puntuales */
-	float light_pos[GFX_MAX_LIGHTS + 1][3];
-	float light_ca[GFX_MAX_LIGHTS + 1];  /* intensidad de la luz puntual */
+	/* Conker y Diddy Kong Racing nunca van juntos: comparten lugar (el
+	 * tamaño de la estructura fija dónde empieza el estado del RDP que
+	 * guardan los estados, GFX_RAW_START). */
+	union {
+		struct {
+			float coord_mod[16];     /* G_MW_COORD_MOD: posición para las luces puntuales */
+			float light_pos[GFX_MAX_LIGHTS + 1][3];
+			float light_ca[GFX_MAX_LIGHTS + 1];  /* intensidad de la luz puntual */
+		};
+		struct {                 /* Diddy Kong Racing (f3ddkr.c) */
+			uint32_t dma_mtx, dma_vtx;   /* G_DMA_OFFSETS: bases de las direcciones de G_MTX y G_VTX */
+			uint32_t vtx_last;           /* donde sigue un G_VTX que añade */
+			uint32_t dl_left;            /* comandos que le quedan a la lista contada en curso */
+			uint32_t dl_depth;           /* dl_sp dentro de ella */
+			uint32_t cur_mtx;            /* matriz con que se transforman los vértices (0 a 3) */
+			uint32_t billboard;          /* vértices relativos al 0 (carteles) */
+			uint32_t dl_pop;             /* la lista contada terminó: volver con el siguiente comando */
+		} dkr;
+	};
 };
 
 /* Una carga a la TMEM (LOADBLOCK o LOADTILE): qué tramo de la TMEM
@@ -292,9 +308,11 @@ void gfx_io_tex_cache(struct gfx_state *g, uint32_t off, uint32_t size);
 typedef bool (*gfx_cmd_hook)(struct gfx_state *g, uint32_t w0, uint32_t w1);
 void gfx_dl_f3dex2(struct gfx_state *g, gfx_cmd_hook hook);
 void gfx_dl_f3d(struct gfx_state *g, gfx_cmd_hook hook);
-/* Variantes de Rare: Perfect Dark (de F3D) y Conker (de F3DEX2). */
+/* Variantes de Rare: Perfect Dark y Diddy Kong Racing (de F3D) y Conker (de F3DEX2). */
 void gfx_dl_f3dpd(struct gfx_state *g);
 void gfx_dl_f3dexbg(struct gfx_state *g);
+/* Diddy Kong Racing (de F3D, con vértices y triángulos por DMA). */
+void gfx_dl_f3ddkr(struct gfx_state *g);
 /* dpc.c: comandos crudos del RDP [job->dl, job->dl_end) (GFX_JOB_DPC). */
 void gfx_dl_dpc(struct gfx_state *g);
 
