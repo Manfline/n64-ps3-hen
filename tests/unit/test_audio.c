@@ -117,6 +117,9 @@ static void detect_abi(void)
 	CHECK_EQ(detect_with(0, 0x1C58126C, 0, 0), SALSA64_ABI_NAUDIO_DK);
 	CHECK_EQ(detect_with(0, 0x1AB0140C, 0, 0), SALSA64_ABI_NAUDIO_CBFD);
 	CHECK_EQ(detect_with(0, 0x00000001, 0, 0), SALSA64_ABI_MUSYX1);
+	CHECK_EQ(detect_with(0x00010010, 0x00000001, 0, 0), SALSA64_ABI_MUSYX1);
+	CHECK_EQ(detect_with(0xF0000F00, 0x00000001, 0, 0), SALSA64_ABI_MUSYX1_RS);
+	CHECK_EQ(detect_with(1, 0x00010010, 0, 0), SALSA64_ABI_MUSYX2);
 	CHECK_EQ(detect_with(0, 0, 0, 0), SALSA64_ABI_UNKNOWN);
 	/* Las ROMs de prueba de Salsa64. */
 	struct salsa64_task task;
@@ -417,7 +420,7 @@ static void nead_errors_and_unknown(void)
 
 	/* Un ABI sin HLE no ejecuta nada. */
 	n_savebuff(0x100, DST, 16);
-	run_abi(SALSA64_ABI_MUSYX1);
+	run_abi(SALSA64_ABI_UNKNOWN);
 	CHECK_EQ(res.commands, 0);
 	CHECK_EQ(res.errors, 1);
 }
@@ -897,6 +900,267 @@ static void mp3_matches_reference(void)
 	CHECK(maxerr < 40);
 }
 
+/* ---- MusyX ---------------------------------------------------------------------- */
+
+#define MX_SFD    0x300000u
+#define MX_STATE  0x302000u
+#define MX_PCM    0x303000u
+#define MX_ECHO   0x304000u
+#define MX_SFX    0x305000u
+#define MX_OUT    0x306000u
+
+static void mx_clear(void)
+{
+	memset(ram(0x300000), 0, 0x8000);
+	aud_init(&st);
+}
+
+/* Una voz PCM16 de 0x50 bytes en `at`: 200 muestras sin cambio de tono. */
+static void mx_voice_pcm(uint32_t at, uint32_t env0, uint32_t env1, uint32_t out_ptr)
+{
+	t_wr32(at + 0x00, env0);
+	t_wr32(at + 0x04, env1);
+	put16(at + 0x22, 0x1000);        /* una muestra por salida */
+	t_wr32(at + 0x24, MX_PCM);       /* tramo 0 */
+	put16(at + 0x2C, 2 * 200);
+	put16(at + 0x40, 200);           /* muestras */
+	t_wr32(at + 0x44, out_ptr);
+	put16(at + 0x48, 0x7000);        /* sin bucle */
+}
+
+static uint32_t mx_ucode_data;  /* ucode_data del trabajo (0: sin segmento de datos) */
+
+static void mx_run(enum salsa64_abi abi, uint32_t sfd_count)
+{
+	struct aud_job job;
+	memset(&job, 0, sizeof job);
+	job.ucode_data = mx_ucode_data;
+	job.rdram_ea = (uint64_t)(uintptr_t)t_n64.bus.rdram;
+	job.rdram_size = t_n64.bus.rdram_size;
+	job.abi = abi;
+	job.alist = MX_SFD;
+	job.alist_size = sfd_count;
+	aud_run(&st, &job, &res);
+}
+
+static int16_t mx_rnd(int32_t x)
+{
+	return (int16_t)((x + 0x4000) >> 15);
+}
+
+/* Una voz de PCM16 constante con las dos envolventes en 0,5 y 0,25, sin eco:
+ * L y R salen del resampler (un producto redondeado por coeficiente), de la
+ * envolvente (redondeada) y de la suma con los volúmenes base. */
+static void musyx_v1_pcm_voice(void)
+{
+	mx_clear();
+	for (int i = 0; i < 200; i++)
+		put16(MX_PCM + 2 * i, 8192);
+	t_wr32(MX_SFD + 0x08, MX_STATE);
+	mx_voice_pcm(MX_SFD + 0x10, 0x40000000u, 0x20000000u, MX_OUT);
+	/* Volúmenes base de 32 bits (parte alta en +0x100, baja en +0x108): L = 100, R = −50. */
+	put16(MX_STATE + 0x108, 100);
+	put16(MX_STATE + 0x100 + 2, -1);
+	put16(MX_STATE + 0x108 + 2, -50);
+	mx_run(SALSA64_ABI_MUSYX1, 1);
+
+	int32_t s = 0;
+	for (int k = 0; k < 4; k++)
+		s += mx_rnd(8192 * aud_resample_lut[k]);
+	int16_t c0 = mx_rnd(s * 0x4000), c1 = mx_rnd(s * 0x2000);
+	/* Los volúmenes base decaen un 3 % antes de usarse: (x · 0xF850) >> 16. */
+	int32_t bl = (100 * 0xF850) >> 16;
+	int32_t br = (-50 * 0xF850) >> 16;
+	CHECK_EQ(res.errors, 0);
+	CHECK_EQ(res.commands, 2);  /* una voz y una subtrama */
+	for (int i = 0; i < 192; i += 17) {
+		CHECK_EQ(get16(MX_OUT + 4 * i), c0 + bl);
+		CHECK_EQ(get16(MX_OUT + 4 * i + 2), c1 + br);
+	}
+	/* Última muestra de la voz: los cuatro canales (cc0 y e50 sin envolvente). */
+	CHECK_EQ(get16(MX_STATE + 0), c0);
+	CHECK_EQ(get16(MX_STATE + 2), c1);
+	CHECK_EQ(get16(MX_STATE + 4), 0);
+	/* Lo escrito: la salida (768 bytes), las últimas muestras, los volúmenes
+	 * base, cc0 y las últimas 4 del eco. */
+	CHECK(res.nranges >= 1);
+	bool covers_out = false;
+	for (uint32_t i = 0; i < res.nranges; i++)
+		covers_out |= res.range_addr[i] <= MX_OUT && res.range_addr[i] + res.range_len[i] >= MX_OUT + 768;
+	CHECK(covers_out);
+}
+
+/* La tabla de interpolación sale del segmento de datos del microcódigo del
+ * juego (no hay una en el repositorio): se reconoce por su estructura, en el
+ * desplazamiento 0x20 o el 0x28 y en cualquiera, y se usa en lugar de la de
+ * lut.c. Aquí, una tabla sintética (no la de ningún juego). */
+static void mx_put_lut(uint32_t at)
+{
+	for (int r = 0; r < 64; r++) {
+		put16(at + 8 * r + 0, (int16_t)(8000 - 8 * r));
+		put16(at + 8 * r + 2, 8636);
+		put16(at + 8 * r + 4, 8636);
+		put16(at + 8 * r + 6, (int16_t)(7496 + 8 * r));
+	}
+}
+
+static int16_t mx_first_samples(uint32_t j, bool own)
+{
+	/* Rampa 100 × j: la salida j de una voz sin cambio de tono (fase 0). */
+	int32_t s = 0;
+	for (int k = 0; k < 4; k++) {
+		int32_t x = 100 * (int32_t)(j + k), c = own ? aud_resample_lut[k] : (k == 0 ? 8000 : k == 3 ? 7496 : 8636);
+		s += mx_rnd(x * c);
+	}
+	return mx_rnd(s * 0x4000);
+}
+
+static void musyx_lut_from_ucode(void)
+{
+	static const uint32_t offsets[] = { 0x20, 0x28, 0x138 };
+	for (unsigned t = 0; t < sizeof offsets / sizeof offsets[0]; t++) {
+		mx_clear();
+		for (int i = 0; i < 200; i++)
+			put16(MX_PCM + 2 * i, (int16_t)(100 * i));
+		t_wr32(MX_SFD + 0x08, MX_STATE);
+		mx_voice_pcm(MX_SFD + 0x10, 0x40000000u, 0, MX_OUT);
+		mx_put_lut(0x307000 + offsets[t]);
+		mx_ucode_data = 0x307000;
+		mx_run(SALSA64_ABI_MUSYX1, 1);
+		CHECK_EQ(res.errors, 0);
+		CHECK(st.musyx_lut_ok);
+		/* Con baseline 0x4000 el producto es s/2; la salida es la de la tabla sintética. */
+		bool differs = false;
+		for (uint32_t j = 0; j < 150; j += 13) {
+			CHECK_EQ(get16(MX_OUT + 4 * j), mx_first_samples(j, false));
+			differs |= mx_first_samples(j, false) != mx_first_samples(j, true);
+		}
+		CHECK(differs);
+	}
+	/* Sin tabla reconocible (otra compilación, datos en cero) vale la de lut.c; con
+	 * esa misma dirección se vuelve a buscar solo si cambia. */
+	mx_clear();
+	for (int i = 0; i < 200; i++)
+		put16(MX_PCM + 2 * i, (int16_t)(100 * i));
+	t_wr32(MX_SFD + 0x08, MX_STATE);
+	mx_voice_pcm(MX_SFD + 0x10, 0x40000000u, 0, MX_OUT);
+	mx_ucode_data = 0x307000;
+	mx_run(SALSA64_ABI_MUSYX1, 1);
+	CHECK(!st.musyx_lut_ok);
+	for (uint32_t j = 0; j < 150; j += 13)
+		CHECK_EQ(get16(MX_OUT + 4 * j), mx_first_samples(j, true));
+	/* Una fila rota (no suma 1,0) no vale. */
+	mx_put_lut(0x307000 + 0x28);
+	put16(0x307000 + 0x28 + 8 * 20 + 2, 9000);
+	put16(0x307000 + 0x28 + 8 * 43 + 4, 9000);
+	aud_init(&st);
+	mx_run(SALSA64_ABI_MUSYX1, 1);
+	CHECK(!st.musyx_lut_ok);
+	mx_ucode_data = 0;
+}
+
+/* El eco: una toma con retardo de 0 muestras lee de la posición actual del
+ * búfer circular, en medio del búfer de 576 muestras. La toma con ganancia
+ * 0,5 suma a L y a R; el filtro FIR (ganancia 0) deja el búfer en cero. */
+static void musyx_v1_echo(void)
+{
+	mx_clear();
+	for (int i = 0; i < 576; i++)
+		put16(MX_ECHO + 2 * i, 1000);
+	t_wr32(MX_SFD + 0x08, MX_STATE);
+	put16(MX_SFD + 0x02, 1);                  /* índice del eco: posición 192 */
+	t_wr32(MX_SFD + 0x0C, MX_SFX);
+	t_wr32(MX_SFX + 0x00, MX_ECHO);
+	t_wr32(MX_SFX + 0x04, 576);
+	put16(MX_SFX + 0x08, 1);                  /* una toma */
+	t_wr32(MX_SFX + 0x0C, 192);               /* retardo de una subtrama: lee la posición 0 */
+	put16(MX_SFX + 0x2C, 0x4000);             /* ganancia 0,5 */
+	/* Una voz sin muestras: la etapa de voces se salta y la salida es la de la primera. */
+	t_wr32(MX_SFD + 0x10 + 0x44, MX_OUT);
+	mx_run(SALSA64_ABI_MUSYX1, 1);
+	CHECK_EQ(res.errors, 0);
+	for (int i = 0; i < 192; i += 11) {
+		CHECK_EQ(get16(MX_OUT + 4 * i), 500);
+		CHECK_EQ(get16(MX_OUT + 4 * i + 2), 500);
+		CHECK_EQ(get16(MX_ECHO + 2 * (192 + i)), 0);  /* e50 tras el FIR */
+		CHECK_EQ(get16(MX_ECHO + 2 * i), 1000);        /* lo demás sigue igual */
+	}
+}
+
+/* Los dos tramos del ADPCM y el PCM se pegan, y un dato absurdo no se sale
+ * de los búferes locales: se cuenta como error. */
+static void musyx_garbage_stays_inside(void)
+{
+	uint32_t seed = 0x9E3779B9u;
+	for (int round = 0; round < 24; round++) {
+		mx_clear();
+		for (uint32_t a = 0x300000; a < 0x308000; a += 4) {
+			seed = seed * 1664525u + 1013904223u;
+			uint32_t v = seed;
+			/* Direcciones plausibles en las palabras de puntero, el resto ruido. */
+			if ((a & 0x1F) == 0x08 || (a & 0x1F) == 0x0C || (a & 0x3C) == 0x24)
+				v = 0x300000u + (v & 0x7FFC);
+			t_wr32(a, v);
+		}
+		enum salsa64_abi abi = round % 3 == 0 ? SALSA64_ABI_MUSYX2 : round % 3 == 1 ? SALSA64_ABI_MUSYX1 : SALSA64_ABI_MUSYX1_RS;
+		mx_run(abi, 1 + (uint32_t)(round % 3));
+		CHECK(res.nranges <= AUD_MAX_RANGES);
+	}
+	/* Sin subtramas o con demasiadas: error y nada escrito. */
+	mx_clear();
+	mx_run(SALSA64_ABI_MUSYX1, 0);
+	CHECK_EQ(res.errors, 1);
+	CHECK_EQ(res.nranges, 0);
+	mx_run(SALSA64_ABI_MUSYX2, AUD_MUSYX_MAX_SFD + 1);
+	CHECK_EQ(res.errors, 1);
+	CHECK_EQ(res.nranges, 0);
+}
+
+/* La lista de arranque de la PS3 (selftest.c): sin errores, con las 4 voces
+ * y subtramas que arma, y la misma salida en dos corridas desde el mismo
+ * estado. Los valores de `golden` son de la implementación actual: cualquier
+ * cambio en las cuentas de MusyX los mueve y hay que revisarlo contra el
+ * microcódigo real (docs/estado.md). */
+static uint32_t fnv32(const uint8_t *p, uint32_t n)
+{
+	uint32_t h = 2166136261u;
+	while (n--)
+		h = (h ^ *p++) * 16777619u;
+	return h;
+}
+
+static void musyx_selftest_lists(void)
+{
+	static uint8_t a[AUD_SELFTEST_RAM], b[AUD_SELFTEST_RAM];
+	static struct aud_state sa, sb;
+	static const struct { uint32_t abi, golden; } cases[] = {
+		{ SALSA64_ABI_MUSYX1, 0x5faf9a2cu },
+		{ SALSA64_ABI_MUSYX1_RS, 0xbbef1e66u },
+		{ SALSA64_ABI_MUSYX2, 0x676898efu },
+	};
+	for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+		struct aud_job job;
+		struct aud_result ra, rb;
+		aud_init(&sa);
+		aud_init(&sb);
+		memset(&job, 0, sizeof job);
+		job.rdram_size = AUD_SELFTEST_RAM;
+		job.abi = cases[i].abi;
+		job.alist_size = aud_selftest_build(a, cases[i].abi, 777u + i);
+		CHECK_EQ(job.alist_size, 2);
+		memcpy(b, a, sizeof b);
+		job.rdram_ea = (uint64_t)(uintptr_t)a;
+		aud_run(&sa, &job, &ra);
+		job.rdram_ea = (uint64_t)(uintptr_t)b;
+		aud_run(&sb, &job, &rb);
+		CHECK_EQ(ra.errors, 0);
+		CHECK_EQ(ra.unknown, 0);
+		CHECK_EQ(ra.commands, 8);  /* (3 voces + 1 subtrama) × 2 */
+		CHECK(memcmp(a, b, sizeof a) == 0);
+		CHECK_EQ(fnv32(a, sizeof a), cases[i].golden);
+	}
+}
+
 /* ---- Tarea completa por el núcleo ------------------------------------------- */
 
 static void core_runs_audio_task(void)
@@ -1001,6 +1265,11 @@ void t_suite_audio(void)
 	RUN(naudio_overload);
 	RUN(mp3_window_table);
 	RUN(mp3_matches_reference);
+	RUN(musyx_v1_pcm_voice);
+	RUN(musyx_lut_from_ucode);
+	RUN(musyx_v1_echo);
+	RUN(musyx_garbage_stays_inside);
+	RUN(musyx_selftest_lists);
 	RUN(core_runs_audio_task);
 	RUN(selftest_lists_are_clean);
 }

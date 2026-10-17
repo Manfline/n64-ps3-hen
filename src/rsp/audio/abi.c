@@ -35,8 +35,7 @@
  * de la DMEM y de la RDRAM directas; naudio cuenta desde 0x4F0 y casi
  * todos sus comandos trabajan sobre búferes fijos de 0x170 bytes.
  *
- * Falta: MusyX; esas tareas terminan con un error en el resultado y sin
- * tocar la RDRAM.
+ * MusyX (Factor 5) no tiene lista de comandos: lo hace musyx.c.
  */
 #include <string.h>
 
@@ -711,6 +710,12 @@ void aud_run(struct aud_state *st, const struct aud_job *job, struct aud_result 
 	memset(res, 0, sizeof *res);
 	st->job = job;
 	st->res = res;
+	if (job->abi == SALSA64_ABI_MUSYX1 || job->abi == SALSA64_ABI_MUSYX2 || job->abi == SALSA64_ABI_MUSYX1_RS) {
+		aud_io_begin(st);
+		aud_musyx(st, job->abi == SALSA64_ABI_MUSYX2, job->abi == SALSA64_ABI_MUSYX1_RS);
+		aud_io_end(st);
+		return;
+	}
 	if (!abi_table(job->abi, &t)) {
 		res->errors++;
 		return;

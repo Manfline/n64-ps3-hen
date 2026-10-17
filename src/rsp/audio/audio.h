@@ -39,14 +39,19 @@ struct aud_job {
 	uint32_t rdram_size;
 	uint32_t abi;        /* enum salsa64_abi */
 	uint32_t alist;      /* data_ptr del OSTask: dirección física de la lista */
-	uint32_t alist_size; /* data_size: bytes */
+	uint32_t alist_size; /* data_size: bytes (en MusyX, cuántas subtramas) */
 	uint32_t flags;
-	uint32_t reserved[9];
+	uint32_t ucode_data; /* ucode_data del OSTask: dirección física del segmento de datos del microcódigo */
+	uint32_t reserved[8];
 };
 
 /* Partes de la RDRAM que escribió la tarea (para el recompilador). Si son
- * más, las últimas se juntan en un solo tramo que las cubre. */
+ * más, las últimas se juntan en un solo tramo que las cubre. El resultado
+ * debe caber en el de spukit (112 bytes): solo las herramientas del host
+ * (--lle-check-audio) compilan con más. */
+#ifndef AUD_MAX_RANGES
 #define AUD_MAX_RANGES 10
+#endif
 
 struct aud_result {
 	uint32_t commands;      /* comandos ejecutados */
@@ -116,6 +121,11 @@ struct aud_state {
 	struct aud_nead nead;
 	struct aud_naudio naudio;
 	uint8_t mp3[AUD_MP3_SIZE] __attribute__((aligned(16)));
+	/* Tabla de interpolación que MusyX trae en su segmento de datos
+	 * (musyx.c); sin buscar (musyx_lut_src == 0), no encontrada o hallada. */
+	int16_t musyx_lut[64 * 4];
+	uint32_t musyx_lut_src;
+	bool musyx_lut_ok;
 	const struct aud_job *job;
 	struct aud_result *res;
 	void *io;               /* estado de la plataforma (io_mem.c, src/spu/audio) */

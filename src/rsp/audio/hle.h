@@ -128,6 +128,15 @@ void alist_iirf(struct aud_state *st, bool init, uint16_t dmemo, uint16_t dmemi,
 		const int16_t *table, uint32_t address);
 void alist_overload(struct aud_state *st, uint16_t dmem, uint16_t count, int16_t gain, uint16_t attenuation);
 
+/* ---- MusyX (musyx.c) ---------------------------------------------------------
+ * Una tarea de MusyX entera: job->alist es la dirección de la lista de
+ * subtramas y job->alist_size cuántas son (no es una lista de comandos).
+ * Sin estado propio: lo que persiste entre tareas vive en la RDRAM del
+ * juego. */
+#define AUD_MUSYX_MAX_SFD 32u
+/* `early`: la compilación de Rogue Squadron (SALSA64_ABI_MUSYX1_RS). */
+void aud_musyx(struct aud_state *st, bool v2, bool early);
+
 /* ---- MP3 (mp3.c) ------------------------------------------------------------
  * Síntesis de un gránulo (576 muestras) de MPEG-1 Layer III: lee de la
  * RDRAM 8 bytes de ganancias y 3 bloques de 32 × 6 muestras de subbanda y

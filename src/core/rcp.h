@@ -168,8 +168,9 @@ enum salsa64_abi {
 	SALSA64_ABI_NAUDIO_DK,  /* Donkey Kong 64 */
 	SALSA64_ABI_NAUDIO_MP3, /* Perfect Dark, Banjo-Tooie, Jet Force Gemini */
 	SALSA64_ABI_NAUDIO_CBFD,/* Conker */
-	SALSA64_ABI_MUSYX1,     /* MusyX (pendiente) */
-	SALSA64_ABI_MUSYX2,
+	SALSA64_ABI_MUSYX1,     /* MusyX v1 (Factor 5; musyx.c): Hydro Thunder, Rush 2049, NBA Showtime, RE2 */
+	SALSA64_ABI_MUSYX2,     /* MusyX v2: Indiana Jones */
+	SALSA64_ABI_MUSYX1_RS,  /* MusyX v1 de Rogue Squadron (otra compilación: envío al eco con paso de 1/8) */
 	SALSA64_ABI_COUNT
 };
 

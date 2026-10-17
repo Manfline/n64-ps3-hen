@@ -15,6 +15,7 @@ void salsa64_audio_job(struct aud_job *job, const struct salsa64_bus *bus, const
 	job->abi = abi;
 	job->alist = task->data_ptr & 0x00FFFFFF;
 	job->alist_size = task->data_size;
+	job->ucode_data = task->ucode_data & 0x00FFFFFF;
 }
 
 void salsa64_audio_written(struct salsa64_bus *bus, const struct aud_result *res)

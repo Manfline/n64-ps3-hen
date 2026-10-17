@@ -10,7 +10,7 @@
  *
  *   [0] == 1 y [0x30] == 0xF0000F00   ABI1, según [0x28]
  *   [0] == 1, si no                   nead (ABI2), según [0x10]
- *   [0] != 1                          naudio y MusyX, según [0x10]
+ *   [0] != 1                          naudio y MusyX, según [0x10] (MusyX v1: [0x10] == 1)
  *
  * Las ROMs de prueba de Salsa64 (sin microcódigo de Nintendo) llevan en
  * ucode_data el texto "Salsa64 ABI NEAD" o "Salsa64 ABI1".
@@ -44,6 +44,7 @@ static const char *const names[SALSA64_ABI_COUNT] = {
 	[SALSA64_ABI_NAUDIO_CBFD] = "naudio (Conker)",
 	[SALSA64_ABI_MUSYX1] = "MusyX v1",
 	[SALSA64_ABI_MUSYX2] = "MusyX v2",
+	[SALSA64_ABI_MUSYX1_RS] = "MusyX v1 (Rogue Squadron)",
 };
 
 const char *salsa64_abi_name(enum salsa64_abi abi)
@@ -103,7 +104,9 @@ enum salsa64_abi salsa64_rsp_detect_abi(const struct salsa64_bus *bus, const str
 		}
 	}
 	switch (salsa64_rd32(d + 0x10)) {
-	case 0x00000001u: return SALSA64_ABI_MUSYX1;
+	/* MusyX v1: la compilación de Rogue Squadron empieza su segmento de datos
+	 * con 0xF0000F00 (las demás, con 0x00010010). */
+	case 0x00000001u: return salsa64_rd32(d) == 0xF0000F00u ? SALSA64_ABI_MUSYX1_RS : SALSA64_ABI_MUSYX1;
 	case 0x0000127Cu: return SALSA64_ABI_NAUDIO;
 	case 0x00001280u: return SALSA64_ABI_NAUDIO_BK;
 	case 0x1C58126Cu: return SALSA64_ABI_NAUDIO_DK;

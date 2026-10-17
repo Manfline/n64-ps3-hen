@@ -9,19 +9,23 @@
  * persiste entre tareas, como en el host.
  *
  * Presupuesto de local store (256 KB); los números exactos los imprime el
- * build (spu-size; 2026-10-10, con naudio y MP3: text 43 456, data 832,
- * bss 22 416 bytes):
- *   código (HLE + runtime)               41 KB
+ * build (spu-size; 2026-10-16, con naudio, MP3 y MusyX: text 59 296, data
+ * 800, bss 34 960 bytes; sin MusyX eran 46 232, 800 y 34 448):
+ *   código y datos de solo lectura       ~58 KB (MusyX, 12,8 KB)
  *   ventana de síntesis del MP3            2 KB
  *   aud_state (DMEM 4 KB + margen 4 KB,
  *     estado de ABI1, nead y naudio,
- *     memoria de trabajo del MP3 2 KB)    11,7 KB
+ *     memoria de trabajo del MP3 2 KB,
+ *     tabla de interpolación de MusyX)    12,2 KB
  *   lecturas y escrituras 2 × (4 KB + 32)  8,1 KB
  *   bloque de la lista                     1 KB
  *   paso del estado guardado              11,8 KB
  *   spukit (descriptor, resultado…)      < 1 KB
- *   pila                                  el resto (~178 KB; la HLE usa
- *                                          < 2 KB)
+ *   pila                                  el resto (~167 KB libres; la
+ *                                          cadena de llamadas más honda,
+ *                                          tools/spu-stack.py, usa 8,4 KB:
+ *                                          main → aud_run → musyx_v2_task
+ *                                          → voice_stage → aud_load)
  */
 #include <spukit/spu.h>
 #include <sys/spu_thread.h>
