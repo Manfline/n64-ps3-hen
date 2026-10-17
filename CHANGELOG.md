@@ -19,7 +19,8 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
   (Ancient Lake, the Timber's Island adventure) draw correctly in the test
   build on a computer; the console run is still to be confirmed. Jet Force
   Gemini and Mickey's Speedway USA use a variant of the same microcode that is
-  recognised too, but neither has been tried.
+  recognised too: their title screens draw in the test build, but some of
+  their commands are still missing and neither has been tried on a console.
 - **Killer Instinct Gold draws:** the game writes part of every frame (the
   stage background and the frames around the screen) as RDP lists from the CPU
   and does not start its graphics until it gets the RDP interrupt of those

@@ -1,5 +1,44 @@
 # Estado
 
+## 2026-10-17 — Candidata 0.2.8-rc1: integración de Killer Instinct Gold, el censo de audio y Diddy Kong Racing
+
+Sobre la versión 0.2.7 con MusyX y Diddy Kong Racing se unieron las ramas de
+Killer Instinct Gold (listas del CPU al RDP en el SPE de gráficos, cola de
+interrupciones del DP, detector de cuelgues) y del censo de audio y JPEG contra
+el microcódigo real. Los choques fueron de texto (opciones de `run.c`, pruebas
+de `test_rsp.c`, estas notas y la compatibilidad); no hubo cambios de
+comportamiento que se pisaran: Killer Instinct solo tocó `rsp/gfx/dpc.c` del
+SPE 0 y el censo solo `rsp/audio` y `rsp/jpeg`.
+
+- **SPE 0 (`spu_gfx`)**: texto 110 776, datos 800, bss 138 640 bytes
+  (250 216 de 262 144); pila: la cadena más honda usa 9520 bytes y la holgura
+  queda en **2224** (mínimo 1536), igual que con Diddy Kong Racing solo: las
+  listas del CPU las corre `spu_dpc_run` con el código de siempre del SPE.
+- **SPE de audio (`spu_audio`)**: texto 62 288, datos 800, bss 35 088 bytes
+  (98 176 de 262 144); la cadena más honda que se puede seguir usa 8448 bytes
+  (`aud_run` llama por tabla a los comandos, que no se siguen).
+- **SPE de JPEG**: texto 10 880, datos 800, bss 5008 bytes.
+- **Pruebas:** 602 unitarias en el host (little-endian, 0 fallidas) y 602 en
+  ppc64 con qemu en cinco modos (plain, far, pin, eager y fpures; 0 fallidas
+  salvo `menu_scan_dir` bajo qemu, que no puede hacer enlaces duros en la
+  carpeta compartida; el modo pin tarda ~11,5 min y pasa del tiempo de 600 s
+  de `qemu-ppc64.sh` si hay otra carga); `tools/test-roms.sh` con nemu64-test
+  en 433 fallas (136 con `--lle`), vitest, savetest, gfxtest en sus tres
+  variantes, estados y audiotest en verde; `tools/test-rec.sh`: nemu64-test
+  con el recompilador en 433 (pin+eager también) y con fastmem en 440, vitest,
+  estados y perfilado en verde; `tools/build.sh` compila todo.
+- **En el host (`salsa64-run`):** el oráculo de audio (`--lle=all
+  --lle-check-audio`, 5000 millones de ciclos) da 0 tareas distintas de 3171 en
+  Super Mario 64 y de 3164 en Mario Kart 64, y 1 de 3190 en Kirby 64 (la tarea
+  2094, la misma con la rama del censo sola, sin la integración). Diddy Kong
+  Racing con `docs/pads/dkr-pista.pad` llega a la carrera con 0 comandos sin
+  implementar en 10 000 campos; Killer Instinct Gold con
+  `docs/pads/killerinstinct-pelea.pad` (`--pads 2 --pad-port 2`) llega a la
+  pelea y a «CONTINUE?» con 3171 listas del CPU y 0 comandos sin implementar.
+  Jet Force Gemini y Mickey's Speedway USA, con la variante de Rare, dibujan sus
+  títulos en 2500 campos pero con comandos sin implementar (746 y 2548, el
+  último con código 0x02).
+
 ## 2026-10-17 — Diddy Kong Racing: HLE del microcódigo de Rare (F3DDKR)
 
 Hasta hoy el juego daba pantalla negra («sin HLE de su microcódigo gráfico»).
