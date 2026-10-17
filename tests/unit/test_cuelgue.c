@@ -8,18 +8,21 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "frontend/cuelgue.h"
 
-static char said[16][400];
+static char said[256][400];
 static int nsaid;
 
 static void fake_log(const char *fmt, ...)
 {
 	va_list ap;
 	va_start(ap, fmt);
-	if (nsaid < 16)
+	if (nsaid < 256)
 		vsnprintf(said[nsaid++], sizeof said[0], fmt, ap);
 	va_end(ap);
 }
@@ -116,9 +119,63 @@ static void cuelgue_texto(void)
 	salsa64_sched_cancel(&t_n64.sched, SALSA64_EV_DP_SYNC);
 }
 
+/* El aviso escribe el volcado de la RDRAM y el de los registros, y no más de CUELGUE_DUMPS por juego. */
+static void cuelgue_volcado(void)
+{
+	char dir[] = "/tmp/salsa64-cuelgue-XXXXXX";
+	CHECK(mkdtemp(dir) != NULL);
+	nsaid = 0;
+	clock_us = 1000000;
+	cuelgue_reset(&cg);
+	t_wr32(0x1000, 0xCAFEBABE);
+	CPU->cur_pc = 0xFFFFFFFF80000400ull;
+	for (int i = 0; i < 12; i++)
+		tick(true, true, true);
+	for (int ep = 0; ep < CUELGUE_DUMPS + 2; ep++) {
+		/* Un episodio: sin actividad hasta el aviso, y un poco de vida para el siguiente. */
+		for (int i = 0; i < 40; i++)
+			cuelgue_watch(&cg, &t_n64, (clock_us += 500000, t_n64.bus.vi.fields += 30, clock_us), true, dir, fake_log);
+		for (int i = 0; i < 8; i++)
+			tick(true, true, true);
+	}
+	char path[160];
+	uint32_t field = 0;
+	int dumps = 0;
+	for (int i = 0; i < nsaid; i++)
+		if (sscanf(said[i], "latido: volcado de la RDRAM en %*[^ ] y de los registros en cuelgue-%u.txt: bien", &field) == 1)
+			dumps++;
+	CHECK_EQ(dumps, CUELGUE_DUMPS);
+	snprintf(path, sizeof path, "%s/cuelgue-%u.rdram", dir, field);
+	struct stat st;
+	CHECK(stat(path, &st) == 0);
+	CHECK_EQ((uint32_t)st.st_size, t_n64.bus.rdram_size);
+	FILE *f = fopen(path, "rb");
+	CHECK(f != NULL);
+	if (f) {
+		uint8_t w[4];
+		CHECK(fseek(f, 0x1000, SEEK_SET) == 0 && fread(w, 1, 4, f) == 4);
+		CHECK(w[0] == 0xCA && w[3] == 0xBE);  /* la RDRAM como la ve el juego (big-endian) */
+		fclose(f);
+	}
+	snprintf(path, sizeof path, "%s/cuelgue-%u.txt", dir, field);
+	f = fopen(path, "r");
+	CHECK(f != NULL);
+	if (f) {
+		char text[4096];
+		size_t n = fread(text, 1, sizeof text - 1, f);
+		text[n] = '\0';
+		CHECK(strstr(text, "MI: INTR") && strstr(text, "gpr:") && strstr(text, "r28"));
+		fclose(f);
+	}
+	char cmd[200];
+	snprintf(cmd, sizeof cmd, "rm -rf %s", dir);
+	CHECK(system(cmd) == 0);
+}
+
 void t_suite_cuelgue(void)
 {
 	RUN(cuelgue_avisa_una_vez);
 	RUN(cuelgue_no_avisa_sin_motivo);
 	RUN(cuelgue_texto);
+	RUN(cuelgue_volcado);
 }
