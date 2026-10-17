@@ -1537,27 +1537,84 @@ static void pc_sample(uint64_t pc)
 static struct {
 	bool on, pending;
 	uint8_t *rdram;         /* copia de la RDRAM con la salida de la HLE */
+	uint8_t *pre;           /* la RDRAM antes de la tarea (solo SALSA64_LLE_DUMP_TASK) */
 	struct aud_result res;
 	uint32_t task, tasks, bad, bytes;
+	uint32_t hist[5];       /* muestras de 16 bits distintas: ±1, ±2, ±3–4, ±5–16, más */
 	int reports;
+	/* Variables de entorno (se leen una vez):
+	 *   SALSA64_LLE_VERBOSE=1       una línea por tarea: muestras distintas y diferencia máxima
+	 *   SALSA64_LLE_DIFFS=1         "T n" al empezar cada tarea y una línea "D" por palabra distinta
+	 *   SALSA64_LLE_DUMP_TASK=N     de esa tarea: lo que escribió (antes | lle | hle) y su lista
+	 *   SALSA64_LLE_DUMP_DMEM=ruta  con la anterior, la DMEM del RSP al terminar */
+	bool env_read, verbose, diffs;
+	uint32_t dump_task;
+	const char *dump_dmem;
 } shadow;
+
+static void shadow_env(void)
+{
+	if (shadow.env_read)
+		return;
+	shadow.env_read = true;
+	shadow.verbose = getenv("SALSA64_LLE_VERBOSE") != NULL;
+	shadow.diffs = getenv("SALSA64_LLE_DIFFS") != NULL;
+	shadow.dump_task = getenv("SALSA64_LLE_DUMP_TASK") ? (uint32_t)atoi(getenv("SALSA64_LLE_DUMP_TASK")) : 0;
+	shadow.dump_dmem = getenv("SALSA64_LLE_DUMP_DMEM");
+}
 
 static void shadow_compare(void)
 {
 	shadow.pending = false;
+	shadow_env();
+	if (shadow.dump_task == shadow.task && shadow.dump_dmem) {
+		FILE *f = fopen(shadow.dump_dmem, "wb");
+		if (f) {
+			fwrite(n64.bus.sp_mem, 1, 8192, f);
+			fclose(f);
+		}
+	}
 	bool bad = false;
+	uint32_t nd = 0, dmax = 0;  /* muestras de 16 bits distintas y la mayor diferencia (SALSA64_LLE_VERBOSE) */
 	for (uint32_t i = 0; i < shadow.res.nranges && i < AUD_MAX_RANGES; i++) {
 		uint32_t a = shadow.res.range_addr[i] & 0x7FFFFF, n = shadow.res.range_len[i];
 		if (n > n64.bus.rdram_size - a)
 			n = n64.bus.rdram_size - a;
 		shadow.bytes += n;
 		const uint8_t *x = n64.bus.rdram + a, *y = shadow.rdram + a;
+		for (uint32_t j = 0; j + 2 <= n; j += 2) {
+			int d = (int16_t)salsa64_rd16(x + j) - (int16_t)salsa64_rd16(y + j);
+			d = d < 0 ? -d : d;
+			if (d) {
+				shadow.hist[d == 1 ? 0 : d == 2 ? 1 : d <= 4 ? 2 : d <= 16 ? 3 : 4]++;
+				nd++;
+				dmax = (uint32_t)d > dmax ? (uint32_t)d : dmax;
+			}
+		}
 		uint32_t k = 0;
 		while (k < n && x[k] == y[k])
 			k++;
 		if (k == n)
 			continue;
 		bad = true;
+		if (shadow.diffs) {
+			/* Una línea por palabra distinta: D tarea tramo dirección +desplazamiento lle hle. */
+			for (uint32_t j = 0; j + 4 <= n; j += 4) {
+				uint32_t xl = salsa64_rd32(x + j), yh = salsa64_rd32(y + j);
+				if (xl != yh)
+					fprintf(stderr, "D %u %u %06x +%04x %08x %08x\n", shadow.task, i, a, j, xl, yh);
+			}
+		}
+		/* Con SALSA64_LLE_DUMP_TASK, las palabras de 32 bits del tramo que difieren. */
+		if (shadow.dump_task == shadow.task) {
+			fprintf(stderr, "lle-check: tarea %u, tramo %u [%06x, %u bytes] (antes | lle | hle):\n", shadow.task, i, a, n);
+			for (uint32_t j = 0; j + 4 <= n; j += 4) {
+				uint32_t xl = salsa64_rd32(x + j), yh = salsa64_rd32(y + j);
+				if (xl != yh)
+					fprintf(stderr, "  +%04x %08x %08x %08x *\n", j, shadow.pre ? salsa64_rd32(shadow.pre + a + j) : 0, xl,
+						yh);
+			}
+		}
 		if (shadow.reports < 8) {
 			shadow.reports++;
 			uint32_t d = 0;
@@ -1570,6 +1627,8 @@ static void shadow_compare(void)
 		}
 	}
 	shadow.bad += bad;
+	if (shadow.verbose)
+		fprintf(stderr, "lle-check: tarea %u: %u muestras distintas, diferencia máxima %u\n", shadow.task, nd, dmax);
 }
 
 static void shadow_start(const struct salsa64_task *t)
@@ -1580,21 +1639,40 @@ static void shadow_start(const struct salsa64_task *t)
 	if (!shadow.rdram)
 		shadow.rdram = malloc(n64.bus.rdram_size);
 	memcpy(shadow.rdram, n64.bus.rdram, n64.bus.rdram_size);
+	shadow_env();
+	if (shadow.dump_task == shadow.tasks + 1) {
+		if (!shadow.pre)
+			shadow.pre = malloc(n64.bus.rdram_size);
+		memcpy(shadow.pre, n64.bus.rdram, n64.bus.rdram_size);
+	}
 	struct aud_job job;
 	salsa64_audio_job(&job, &n64.bus, t, abi);
 	job.rdram_ea = (uint64_t)(uintptr_t)shadow.rdram;
+	if (shadow.diffs)
+		fprintf(stderr, "T %u\n", shadow.tasks + 1);
 	aud_run(&aud_state, &job, &shadow.res);
 	shadow.pending = true;
 	shadow.task = ++shadow.tasks;
 	/* SALSA64_LLE_DUMP_TASK=N: la lista de comandos de esa tarea y lo que
 	 * la HLE escribió, para seguir la divergencia a mano. */
-	const char *dump = getenv("SALSA64_LLE_DUMP_TASK");
-	if (dump && (uint32_t)atoi(dump) == shadow.task) {
+	if (shadow.dump_task == shadow.task) {
 		fprintf(stderr, "lle-check: tarea de audio %u, alist %06x (%u bytes), ABI %s:\n", shadow.task,
 			job.alist, job.alist_size, salsa64_abi_name(abi));
 		for (uint32_t i = 0; i + 8 <= job.alist_size; i += 8)
 			fprintf(stderr, "  %3u: %08x %08x\n", i / 8, salsa64_rd32(n64.bus.rdram + ((job.alist + i) & 0x7FFFFF)),
 				salsa64_rd32(n64.bus.rdram + ((job.alist + i + 4) & 0x7FFFFF)));
+		if (abi == SALSA64_ABI_MUSYX1 || abi == SALSA64_ABI_MUSYX2 || abi == SALSA64_ABI_MUSYX1_RS) {
+			/* MusyX: data_size es el número de subtramas; la cabecera de cada
+			 * una (0x10 bytes en v1, 0x28 en v2) y su primera voz (0x50). */
+			uint32_t hdr = abi == SALSA64_ABI_MUSYX2 ? 0x28 : 0x10, stride = hdr + 32 * 0x50;
+			for (uint32_t k = 0; k < job.alist_size && k < 4; k++) {
+				uint32_t a = (job.alist + k * stride) & 0x7FFFFF;
+				fprintf(stderr, "  SFD %u en %06x:", k, a);
+				for (uint32_t j = 0; j < hdr + 0x50 && a + j + 4 <= n64.bus.rdram_size; j += 4)
+					fprintf(stderr, "%s%08x", j % 16 ? " " : "\n    ", salsa64_rd32(n64.bus.rdram + a + j));
+				fprintf(stderr, "\n");
+			}
+		}
 		for (uint32_t i = 0; i < shadow.res.nranges && i < AUD_MAX_RANGES; i++)
 			fprintf(stderr, "  tramo %u: %06x %u bytes\n", i, shadow.res.range_addr[i], shadow.res.range_len[i]);
 	}
@@ -1725,9 +1803,15 @@ static void jcheck_sync(void *ctx)
 	/* Solo al terminar: si el planificador del juego la interrumpió
 	 * (yield, SIG1) se reanuda más tarde con OS_TASK_YIELDED. */
 	uint32_t st = n64.bus.sp.regs[SALSA64_SP_STATUS];
-	if (jcheck.pending && (st & SALSA64_SP_STATUS_HALT) && (st & SALSA64_SP_STATUS_TASKDONE) &&
-	    !(st & SALSA64_SP_STATUS_SIG(1)))
+	bool done = (st & SALSA64_SP_STATUS_HALT) && (st & SALSA64_SP_STATUS_TASKDONE) && !(st & SALSA64_SP_STATUS_SIG(1));
+	if (jcheck.pending && done)
 		jcheck_compare();
+	/* Igual con --lle-check-audio: la salida del microcódigo se compara en
+	 * cuanto la tarea termina, antes de que el juego toque de nuevo los
+	 * búferes y el estado que la tarea escribió (MusyX los deja en su
+	 * memoria, donde el juego los reutiliza). */
+	if (shadow.pending && done)
+		shadow_compare();
 }
 
 /* Reloj del host para lo que el RSP mide en el hilo del CPU (HLE JPEG). */
@@ -2820,7 +2904,7 @@ int main(int argc, char **argv)
 		if (lle_speed > 0.0)
 			salsa64_lle_host_speed(&lle_host, lle_speed);
 		jcheck_lle = lle_host.backend;
-		if (jcheck.on)
+		if (jcheck.on || shadow.on)
 			jcheck_lle.sync = jcheck_sync;
 		salsa64_rsp_set_lle(&n64.bus, &jcheck_lle, lle_mode);
 	}
@@ -3172,6 +3256,8 @@ int main(int argc, char **argv)
 			shadow_compare();
 		fprintf(stderr, "salsa64-run: lle-check: %u tareas de audio comparadas con la HLE, %u bytes, %u tareas "
 			"distintas\n", shadow.tasks, shadow.bytes, shadow.bad);
+		fprintf(stderr, "salsa64-run: lle-check: muestras de 16 bits distintas por diferencia: ±1 %u, ±2 %u, ±3–4 %u, "
+			"±5–16 %u, mayores %u\n", shadow.hist[0], shadow.hist[1], shadow.hist[2], shadow.hist[3], shadow.hist[4]);
 	}
 	if (wav_path && !audio_wav(wav_path)) {
 		free(rom);

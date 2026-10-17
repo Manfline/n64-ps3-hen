@@ -314,6 +314,19 @@ build/host/salsa64-run --lle tests/roms/homebrew/nemu64-test.z64 -u 'success rat
 build/host/salsa64-run --lle=all --lle-check-audio <rom>
 ```
 
+`--lle-check-audio` compara lo que escribe cada tarea de audio en la HLE y
+en el microcódigo real **cuando el microcódigo termina la tarea** (MusyX
+deja su estado en la memoria del juego, que el juego reutiliza al terminar:
+comparar más tarde da diferencias falsas) y al final cuenta las muestras de
+16 bits distintas por tamaño de la diferencia. Variables de entorno:
+`SALSA64_LLE_VERBOSE=1` (una línea por tarea), `SALSA64_LLE_DIFFS=1` (una
+línea «D tarea tramo dirección +desplazamiento lle hle» por palabra
+distinta y «T n» al empezar cada tarea), `SALSA64_LLE_DUMP_TASK=N` (de esa
+tarea, lo escrito antes/LLE/HLE y su lista de comandos o las cabeceras de las
+subtramas de MusyX) y `SALSA64_LLE_DUMP_DMEM=archivo` (con la anterior, la DMEM
+del RSP al terminar). Una tarea que escribe más de 10 tramos (MusyX) pide
+compilar el host con `make -C src/host EXTRA_CFLAGS=-DAUD_MAX_RANGES=64`.
+
 PS3: paquete «Salsa64 LLE» (SLSA00082); en `SALSA64_DATA_DIR` un archivo
 `lle` con `all` (todo el microcódigo real) o `auto`; `embedded` con
 `file:<rom>` como siempre. Mirar las líneas «rsp lle:» del log.
