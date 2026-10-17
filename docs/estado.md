@@ -1,5 +1,120 @@
 # Estado
 
+## 2026-10-17 — Diddy Kong Racing: HLE del microcódigo de Rare (F3DDKR)
+
+Hasta hoy el juego daba pantalla negra («sin HLE de su microcódigo gráfico»).
+Ahora se ve y se juega en el host; falta probarlo en la PS3.
+
+- **El microcódigo.** Fast3D de Rare sin texto de identificación y con
+  `ucode_size` en 0 en su tarea (el RSP carga 4 KB): se reconoce por el CRC-32
+  del código (`3BFF208D`; `gbi_by_crc` toma el tamaño 0 como 4096) o, para
+  versiones que no se han podido medir (otra de DKR, Jet Force Gemini y
+  Mickey's Speedway USA), por el CRC con las palabras al revés que usa la
+  lista de GLideN64 (`salsa64_crc32_words_swapped`). La geometría va por DMA:
+  G_MTX de una matriz ya con la proyección a una de cuatro ranuras, G_VTX de
+  vértices de 10 bytes, G_DMATRI de triángulos de 16 bytes con las
+  coordenadas de textura en el triángulo, G_DL_IN_MEM con n comandos y
+  vuelta sola, carteles (billboards) y G_DMA_OFFSETS; el resto es Fast3D
+  (`src/rsp/gfx/f3ddkr.c`, ~2,9 KB en el SPE 0). Lo de cada comando en el
+  comentario del archivo y las fuentes en `docs/THIRD_PARTY.md` (Glide64mk2
+  y Rice, GPLv2 o posterior; GLideN64, solo consulta: el resultado es GPLv2
+  o posterior, sin cambiar la licencia del binario). El G_TEXTURE del juego
+  llega con escala 0: las coordenadas del triángulo van tal cual (/32). El
+  comando 0x02 (desplazamientos de textura, que Glide64 usa para animar el
+  agua) no aparece en los 30 000 campos recorridos (0 comandos sin
+  implementar) y no se implementó. F3DJFG, sin respaldo, solo cambia el
+  conteo de vértices (no suma 1) y la matriz con multiplicación (bit 23), como
+  en GLideN64.
+- **Pila del SPE 0** (`tools/spu-stack.py` en el build):
+
+  | | texto | datos | bss | libres | cadena más honda | holgura |
+  |---|---:|---:|---:|---:|---:|---:|
+  | main a104e00 | 107 864 | 800 | 142 224 | 11 104 | 9 520 | 1 584 |
+  | con F3DDKR sola | 110 896 | 800 | 142 224 | 8 032 | 9 520 | −1 488 (el enlace falla) |
+  | con F3DDKR y 768 entradas en la caché de texturas | 110 776 | 800 | 138 640 | 11 744 | 9 520 | **2 224** |
+
+  El código nuevo (+2,9 KB con `-Os`) se paga bajando `GFX_TC_ENTRIES` de 896
+  a 768 (−3 584 bytes del directorio de la caché de texturas; el máximo de
+  texturas distintas en 100 campos medido en el host es 428). La cadena más
+  honda sigue siendo la del fondo S2DEX; la de DKR (`gfx_dl_f3d` →
+  `dkr_command` → `gfx_triangle`) es más corta. El estado de DKR comparte
+  lugar con el de Conker en `gfx_rare` (una unión: el tamaño de la
+  estructura fija dónde empieza el estado del RDP de los estados guardados) y
+  las matrices usan las primeras ranuras de `gfx_state.mv`. En el host, con 768
+  y con 896 entradas: GoldenEye (Dam, 7000 campos) 0,2 texturas decodificadas
+  por tarea y 0,1 desalojadas en las dos; Perfect Dark (6000) 0,3 y 0,1 contra
+  0,0; Conker (6000) 0,1 y 0,0 en las dos; DKR (30 000 campos de carrera) 0,1
+  y 0,0. Pendiente en la PS3: tiempo del SPE 0 por tarea.
+- **Cómo llegar a una carrera** (nuevo `docs/pads/dkr-pista.pad`): desde el
+  arranque, la carrera de Ancient Lake: «Get ready» hacia el campo 7800 y la
+  pista desde el 8000.
+  `--state-save`, `--pad` y `--gfx-frame-every` bastan; las imágenes y los
+  estados quedan en `build/` (nada del juego va al repositorio).
+- **Herramienta nueva: `salsa64-run --stop-gfx N:ARCHIVO`.** Termina al acabar
+  la N-ésima tarea gráfica y guarda en PPM la última color image que dibujó,
+  con la HLE o con `--lle=all` (cuenta tareas que arrancan: `rsp.stats.lle_gfx`).
+  Por campos el VI enseña con la LLE imágenes a medio dibujar y el juego, al
+  tardar el RSP real más que la HLE, avanza distinto; con `--lle-speed 8` la
+  LLE termina antes que el campo y el juego va al mismo paso que con la HLE.
+- **Contra el microcódigo real** (`--lle=all --lle-speed 8`, mismo guion,
+  desde el arranque, imágenes cada 250 campos): 0,01 / 0,03 / 0,10 / 0,07 /
+  0,36 / 0,43 / 0,44 % de píxeles distintos tras tolerar 1 px (diferencia por
+  canal > 16/255) en los campos 250, 500, 750, 1000, 1250, 1500 y 1750; en la
+  isla de Timber (modo Adventure, campos 11 500 a 16 000 cada 250, jugando)
+  0,5–2,5 %; en lo demás va de 0,14 a 34 % porque la LLE del host no dibuja
+  los textos y el HUD de DKR (el logo y «START / OPTIONS» del título, «8th»,
+  la vuelta y el tiempo de la carrera: en la HLE y en la consola sí salen;
+  por qué no salen con el RSP real queda pendiente, no es de la HLE) y por el
+  movimiento. Los colores de una franja de suelo del título (media de 10 × 50
+  píxeles) coinciden dentro del 1–3 % entre la LLE y la HLE, y el alfa de
+  los vértices que da el microcódigo real es 0 en 1486 triángulos del título
+  y 255 en 43 (con niebla, la del juego casi no actúa; sin ella, el alfa del
+  vértice): lo mismo que hace la HLE, aunque no se contó triángulo a
+  triángulo.
+- **Contra ares** (v148; volcados de la RDRAM por GDB al primer escrito del
+  CPU a cada display list, que da la lista y su color image completas y
+  coherentes: `tools/ares-volcar-lista.py`, docs/referencia-ares.md; el volcado a un instante cualquiera sale con la lista de dos
+  cuadros después y no sirve). `salsa64-run --ares`, PSNR en promedios de 4×4 y
+  porcentaje de píxeles a más de 8/255:
+
+  | Escena | volcado | PSNR | píxeles distintos |
+  |---|---|---:|---:|
+  | Logo de N64 | x-09 | 31,0 dB | 5,6 % |
+  | «Copyright Rare 1997» (tarjeta de lado) | x-28 | 41,6 dB | 1,2 % |
+  | Intro: Diddy volando | x-22 | 33,9 dB | 9,9 % |
+  | Presentación de Pipsy (demo en pista) | y-10 | 27,2 dB | 12,3 % |
+  | Presentación de Wizpig (demo en pista) | y-25 | 27,2 dB | 19,2 % |
+  | Presentación de Tiptup (cueva) | y-00 | 26,9 dB | 39,7 % |
+  | Título (arco de la meta) | y-36 | 24,4 dB | 41,4 % |
+  | Título (árboles, karts) | y-39 | 25,2 dB | 33,0 % |
+
+  Todos los volcados coherentes de las dos ráfagas (sin los negros): `x`
+  (logos e intro de los primeros 30 s; 32 volcados) mediana de 35,6 dB
+  (31,0–41,6) y 3,0 % de los píxeles a más de 8/255 (0–9,9 %); `y`
+  (presentaciones de personajes, título y demos; 25 volcados) mediana de
+  27,4 dB (20,5–35,0) y 21,6 % (6,3–65 %). Parecido a lo que dan los demás
+  juegos con esta herramienta (31–38 dB) en la primera y por debajo en la
+  segunda. Lo que queda: bordes de los polígonos con AA (la consola
+  escribe los píxeles cubiertos en parte) y detalle de las texturas (el
+  rasterizador del host filtra bilineal y muestrea en el centro), y en
+  las escenas con suelo grande del título y de las demos (arena, pista) el
+  suelo sale más claro en la HLE que en la consola (~9 % en una franja
+  del título: 240 contra 219) sin explicación: la LLE del host da los mismos
+  colores que la HLE y la niebla no la explica (probar sin niebla baja el
+  PSNR medio de las 57 parejas de 32,2 a 30,8 dB). Es del RDP o del rasterizador, no del
+  microcódigo; con una carrera real en ares se podría acotar (el título y las
+  demos son lo único que ares alcanza sin entrada).
+- **Pruebas de esta rama**: `tools/build.sh test-host` 584 pruebas, 0 fallidas
+  (nuevas: las de `tests/unit/test_gfx_rare.c` para matrices, vértices,
+  triángulos, listas contadas, carteles y F3DJFG, y la detección por CRC en
+  `tests/unit/test_rsp.c`); `tools/test-roms.sh` rc 0; `tools/test-rec.sh` rc 1
+  solo por `menu_scan_dir` bajo qemu (como en main), con nemu64-test en 433
+  fallas, con fastmem en 440, vitest OK, estados y perfilado OK; `tools/build.sh`
+  (todo) compila. Sin cambios en los demás juegos: Perfect Dark, Conker,
+  GoldenEye, Mario Kart 64, OoT, Banjo-Kazooie, Smash y Kirby 64 dan la misma
+  imagen (md5 del `--gfx-frame` a 2500–3000 campos) con main a104e00 y con
+  esta rama.
+
 ## 2026-10-16 — HLE de audio de MusyX (Factor 5)
 
 Hydro Thunder, Rush 2049, NBA Showtime, Gauntlet Legends, Tarzan, The World

@@ -80,3 +80,13 @@ Las escenas del host (7 juegos, Kirby 64 y la casa de Link de
   control se lee 25 veces por 50 campos y el panel «Game Pak None» y la vista
   previa del estadio salen como textura (las nueve imágenes de la tarea del
   campo 1438: la ranura que se recicla copia antes lo suyo a la RDRAM).
+- `dkr-pista.pad`: Diddy Kong Racing (USA), sin partida guardada, desde el
+  arranque hasta una carrera: START en el título (campo 5520) y en «Player
+  Select» (5700), A en el aviso del Controller Pak (5900), A en «Game Select»
+  (6100), el stick hacia abajo en 6300 para «Tracks» y A (6400); A en Dino
+  Domain / Ancient Lake, en el vehículo y en el «Ok?» (6700 a 7500), «Get
+  ready» hacia el campo 7800 y A sostenida desde el 7900, con el stick a la
+  izquierda en 9100 y a la derecha en 9300 (el kart da tumbos por la pista).
+  Con `--fields 10000` y `--gfx-frame-every 250` queda la carrera completa
+  en imágenes. Para el modo Adventure (la isla de Timber), A en «Game Select»
+  en 6850 y 6950 y START cada 200 campos desde el 7250 salta la intro.

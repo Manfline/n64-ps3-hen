@@ -6,6 +6,29 @@ datos de compatibilidad.
 
 Las entradas antiguas conservan sus métodos de prueba como historia.
 
+## 2026-10-17 — Diddy Kong Racing con HLE (en el host; falta la PS3)
+
+Microcódigo de Rare sin texto (F3DDKR, `ucode_size` 0; CRC-32 de sus 4 KB
+`3BFF208D` en el respaldo NTSC-U rev. 1). Con la HLE de `src/rsp/gfx/f3ddkr.c`
+el juego se ve y se juega en el host (`salsa64-run`, respaldo propio): logos,
+intro con los personajes, título, selección de jugadores, «Game Select», elegir
+pista y vehículo, «Get ready» y una carrera en Ancient Lake, y la isla de
+Timber en el modo Adventure (`docs/pads/dkr-pista.pad` llega a la carrera
+desde el arranque). 0 comandos sin implementar y 0 errores en 16 000 campos.
+
+| Comparación | Resultado |
+|---|---|
+| ares (consola) contra la HLE, volcados de la RDRAM en cuadros coherentes | PSNR en 4×4 de 31 a 41 dB en los logos y la intro (0–10 % de píxeles a más de 8/255); 24 a 35 dB en el título y las demos de personajes en pista (6–48 %) |
+| Microcódigo real (`--lle=all --lle-speed 8`) contra la HLE, mismo guion desde el arranque | 0,01–0,44 % de píxeles distintos tras tolerar 1 px en los campos 250–1750 (logos, intro, demos de personajes) y 0,5–2,5 % jugando en la isla de Timber (el HUD, que la LLE no dibuja, cuenta ~1 %); en otros tramos (título, cinemáticas) se separan por el movimiento y por los textos, que la LLE del host tampoco dibuja (la consola sí) |
+
+Lo que queda: bordes de polígonos con antialiasing y detalle de las
+texturas (el rasterizador del host; docs/referencia-ares.md), y en el título y
+algunas demos el suelo sale ~9 % más claro que en la consola (240 contra 219
+de media en una franja del título) sin que se sepa de dónde: la LLE da los
+mismos colores que la HLE, así que no viene del microcódigo.
+Variantes **no probadas** (sin respaldo): otras versiones de DKR (CRC de
+GLideN64 `6E6FC893`) y F3DJFG (Jet Force Gemini, Mickey's Speedway USA).
+
 ## 2026-10-16 — Audio de MusyX (Factor 5): HLE nueva, verificada en el host
 
 Los juegos de MusyX corrían mudos: su tarea de audio no es una lista de
@@ -70,7 +93,7 @@ asigna velocidad.
 | Yoshi's Story | No funciona | — | Fallo conocido. |
 | FIFA 99 | La intro funciona; el partido no arranca | — | Fallo conocido. |
 | Banjo-Kazooie | Jugable, con fallo gráfico | — | Las piezas del rompecabezas salen negras. |
-| Diddy Kong Racing | No jugable | — | Sin HLE de su microcódigo gráfico. |
+| Diddy Kong Racing | Jugable en el host | — | HLE de F3DDKR desde el 2026-10-17 (sección de arriba); sin probar en la PS3. |
 | Indiana Jones | No jugable | — | Sin HLE de su microcódigo gráfico. |
 | Star Wars: Rogue Squadron | No jugable | — | Sin HLE de su microcódigo gráfico. |
 | Resident Evil 2 | No jugable | — | Sin HLE de su microcódigo gráfico. |
@@ -234,6 +257,7 @@ primera tarea gráfica (microcódigo «F3DEXBG.NoN fifo 2.08», ucode en
 | Perfect Dark | sin texto; c543d0a8 / 49fd74ec | 00000000 1ae8143c 1fb01358 f0000f00 (naudio de Banjo-Tooie/JFG/PD) |
 | Banjo-Kazooie | «RSP Gfx ucode F3DEX 1.21»; 9fc2ac6e / 85d611d3 | 10f013a0 00001280 00010010 00020004 (naudio de Banjo-Kazooie) |
 | Conker | «RSP Gfx ucode F3DEXBG.NoN fifo 2.08»; ucode_size 0 / 1c5c25dc | 00000000 1ab0140c 1fa41340 f0000f00 (naudio de Conker) |
+| Diddy Kong Racing | sin texto; ucode_size 0, 3bff208d (4 KB del código) / c432d0ea | 00000001 111814a4 1e3c1390 f0000f00 (ABI 1 de Blast Corps) |
 
 Los nombres de las variantes de audio siguen la identificación de
 mupen64plus-rsp-hle (por esas mismas palabras; solo consulta). Los CRC de

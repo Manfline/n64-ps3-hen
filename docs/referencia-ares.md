@@ -92,6 +92,22 @@ Por cada volcado:
 
 Lo medido con cada juego va en docs/estado.md.
 
+## Volcados coherentes (2026-10-17)
+
+Un volcado a un instante cualquiera suele traer la display list de dos
+cuadros después (los juegos arman el cuadro N + 2 en la lista que dibujó el
+N) y la color image del cuadro anterior: el PSNR sale de 20 dB aunque la HLE
+esté bien (con Diddy Kong Racing, por ejemplo, la mayoría de los volcados
+al azar). `tools/ares-volcar-lista.py PUERTO N PAUSA PREFIJO LISTA1 LISTA2`
+pone un punto de parada de escritura (Z2 del GDB de ares) en el primer
+comando de cada una de las dos listas del juego y vuelca la RDRAM, la DMEM y
+el VI en la primera escritura del CPU: la lista a la que escribe ya la
+dibujó el RSP y todavía está entera. `PREFIJO-NN.watch` dice cuál es; hay
+que comparar esa lista con su color image (`--task LISTA`) y no la otra.
+Con eso el mismo juego pasa de 20–25 dB a 31–41 dB en los logos y la intro
+(docs/estado.md, 2026-10-17). Las direcciones de las listas salen del
+`data_ptr` de `salsa64-run --trace-rsp`.
+
 ## Pendiente (2026-10-13)
 
 - **El muaré de las franjas de GoldenEye** (la orilla amarilla y negra del
