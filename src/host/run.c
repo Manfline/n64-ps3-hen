@@ -2306,6 +2306,66 @@ static void vdump_capture(const struct salsa64_task *t)
 	jcheck.vpre_n = n;
 }
 
+/* SALSA64_RE2_FUZZ=semilla: antes de cada tarea de video se cambian sus parámetros (y las palabras
+ * dram_stack y dram_stack_size de la tarea) a valores al azar dentro de lo que la HLE acepta y de las
+ * regiones que el juego ya usa, para comparar con el microcódigo real mucho más que las geometrías
+ * del juego (anchos, pasos, umbral del difuminado, constantes del color, largos de fila…). La
+ * partida sigue con el video cambiado: sirve solo para la comparación. */
+static uint32_t re2_fuzz_state;
+static uint32_t re2_fuzz_stack, re2_fuzz_stack_size;
+
+static uint32_t re2_fuzz_rand(void)
+{
+	re2_fuzz_state = re2_fuzz_state * 1664525u + 1013904223u;
+	return re2_fuzz_state >> 8;
+}
+
+static void re2_fuzz(enum salsa64_jpeg_kind kind, const struct salsa64_task *t)
+{
+	uint8_t *d = n64.bus.rdram + (t->ucode_data & 0x1FFFFFFF);
+	re2_fuzz_stack = re2_fuzz_rand() % 4 ? re2_fuzz_rand() * 4096u + re2_fuzz_rand() % 4096 : t->dram_stack;
+	re2_fuzz_stack_size = re2_fuzz_rand() % 4 ? re2_fuzz_rand() * 4096u + re2_fuzz_rand() % 4096 : t->dram_stack_size;
+	salsa64_wr32(n64.bus.sp_mem + SALSA64_TASK_DMEM + 0x20, re2_fuzz_stack);
+	salsa64_wr32(n64.bus.sp_mem + SALSA64_TASK_DMEM + 0x24, re2_fuzz_stack_size);
+	if (kind == SALSA64_JPEG_RE2_RESIZE) {
+		uint32_t w0 = salsa64_rd32(d + 8), r0 = salsa64_rd32(d + 12), y0 = salsa64_rd32(d + 0x24);
+		uint32_t xr = 8192 + re2_fuzz_rand() % 100000, yr = 16000 + re2_fuzz_rand() % 60000;
+		static const int16_t thr[] = { 0, 1, 3, 5, 5, 12, 40, 0x7FFF, -3 };
+		if (w0 < 4 || w0 > 1024 || r0 < 1)
+			return;
+		salsa64_wr32(d + 8, 4 * (1 + re2_fuzz_rand() % (w0 / 4)));
+		salsa64_wr32(d + 12, 1 + re2_fuzz_rand() % r0);
+		salsa64_wr32(d + 0x10, xr);
+		salsa64_wr32(d + 0x14, yr);
+		salsa64_wr32(d + 0x20, re2_fuzz_rand() % 3 ? re2_fuzz_rand() % 0x30000 : 0);
+		salsa64_wr32(d + 0x24, (y0 & ~0xFFFFu) | (re2_fuzz_rand() % 0x10000));
+		salsa64_wr16(d + 0x58, (8 * xr) >> 16);
+		salsa64_wr16(d + 0x5A, (8 * xr) & 0xFFFF);
+		salsa64_wr16(d + 0x5E, yr);
+		salsa64_wr16(d + 0x62, (uint16_t)thr[re2_fuzz_rand() % (sizeof thr / sizeof thr[0])]);
+	} else if (kind == SALSA64_JPEG_RE2_DECODE) {
+		static const uint16_t zero[] = { 0x4000, 0x4000, 0x3F80, 0x4100 };
+		uint32_t w = 16 * (1 + re2_fuzz_rand() % 15), pairs = 1 + re2_fuzz_rand() % 60;
+		salsa64_wr32(d + 0x10, w);
+		salsa64_wr32(d + 0x14, 2 * pairs);
+		salsa64_wr32(d + 0x1C, pairs);
+		salsa64_wr32(d + 0x20, (4 * w - 1) | (1u << 12) | ((1056 - 4 * w) << 20));
+		if (re2_fuzz_rand() % 2)
+			for (unsigned i = 0; i < 5; i++)
+				salsa64_wr16(d + 0x40 + 2 * i, (uint16_t)(salsa64_rd16(d + 0x40 + 2 * i) + re2_fuzz_rand() % 2001 - 1000));
+		salsa64_wr16(d + 0x50, zero[re2_fuzz_rand() % 4]);
+	} else {
+		static const uint32_t lens[] = { 8, 16, 24, 64, 120, 128, 480, 960 };
+		uint32_t len = lens[re2_fuzz_rand() % 8], skip = 8 * (re2_fuzz_rand() % 13), rows = 1 + re2_fuzz_rand() % 2;
+		uint32_t iters = 1 + re2_fuzz_rand() % 60;
+		salsa64_wr32(d + 0x08, rows * len);
+		salsa64_wr32(d + 0x0C, rows);
+		salsa64_wr32(d + 0x10, iters);
+		salsa64_wr32(d + 0x18, (len - 1) | (skip << 20));
+		salsa64_wr32(d + 0x1C, rows * (len + skip));
+	}
+}
+
 static void jcheck_start(const struct salsa64_task *t)
 {
 	uint32_t code = t->ucode & 0x7FFFFF;
@@ -2318,12 +2378,19 @@ static void jcheck_start(const struct salsa64_task *t)
 		return;
 	if (salsa64_jpeg_is_re2(kind)) {
 		/* Video: la HLE corre sobre la copia con la estructura en ucode_data. */
+		uint32_t stack = t->dram_stack, stack_size = t->dram_stack_size;
+		if (getenv("SALSA64_RE2_FUZZ")) {
+			if (!re2_fuzz_state)
+				re2_fuzz_state = (uint32_t)atoi(getenv("SALSA64_RE2_FUZZ")) * 2654435761u + 1;
+			re2_fuzz(kind, t);
+			stack = re2_fuzz_stack;
+			stack_size = re2_fuzz_stack_size;
+		}
 		if (!jcheck.rdram)
 			jcheck.rdram = malloc(n64.bus.rdram_size);
 		memcpy(jcheck.rdram, n64.bus.rdram, n64.bus.rdram_size);
 		jcheck.kind = kind;
-		salsa64_re2_run(kind, jcheck.rdram, n64.bus.rdram_size, t->ucode_data, t->dram_stack, t->dram_stack_size,
-				&jcheck.res);
+		salsa64_re2_run(kind, jcheck.rdram, n64.bus.rdram_size, t->ucode_data, stack, stack_size, &jcheck.res);
 		unsigned k = (unsigned)(kind - SALSA64_JPEG_RE2_RESIZE);
 		if (jcheck.res.bad) {
 			jcheck.video[k].skipped++;
