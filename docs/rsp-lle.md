@@ -327,6 +327,38 @@ subtramas de MusyX) y `SALSA64_LLE_DUMP_DMEM=archivo` (con la anterior, la DMEM
 del RSP al terminar). Una tarea que escribe más de 10 tramos (MusyX) pide
 compilar el host con `make -C src/host EXTRA_CFLAGS=-DAUD_MAX_RANGES=64`.
 
+Para el censo de docs/audio-censo.md el host se compila con
+`-DAUD_MAX_RANGES=1024` (el host lleva `-DAUD_DEBUG`: guarda las direcciones
+de los estados de ENVMIXER para no comparar la parte fraccionaria que el
+microcódigo deja sin limpiar) y el oráculo arranca el microcódigo antes de
+la HLE (sin concurrencia en el arranque), pone a cero los registros
+vectoriales, le da la DMEM de antes de la tarea a la HLE y no compara los 8
+bytes de basura que el POLEF de los naudio con MP3 guarda delante de su búfer.
+Además de las de arriba, la bisección y el banco de pruebas:
+
+- `SALSA64_LLE_BISECT=A[-B][,…]`: para cada una de esas tareas, un proceso
+  hijo por k = 1, 2, … comandos la corre cortada a k (el microcódigo lee
+  `data_size` de la cabecera) en el microcódigo y en la HLE y compara la DMEM
+  (ventana `SALSA64_LLE_DMWIN=lo-hi`, en hexadecimal) y los tramos de la
+  RDRAM: el primer k distinto señala el comando donde se separan («primer
+  comando distinto n» es el comando de índice n, desde 0). Al final cuenta, por
+  ABI, el primer opcode que difiere. `_STEP=n` (k de n en n), `_FROM=k`
+  (empezar en k) y `_NOP=1` (poner a cero los comandos que sobran en vez de
+  cortar la lista, para el microcódigo de Zelda, que lee la lista por bloques).
+- `SALSA64_LLE_SHOWK=k:dir:bytes` y `SALSA64_LLE_SHOWR=k:dir:bytes`: en el hijo
+  de k comandos, la DMEM (con la memoria de trabajo del MP3 en 0x800–0xFFF) o
+  la RDRAM de los dos lados; `SALSA64_LLE_DUMP_RANGE=dir:bytes` (con DUMP_TASK)
+  la RDRAM antes, del microcódigo y de la HLE.
+- `SALSA64_LLE_SNAP=prefijo[:N]` (la tarea de audio N) y
+  `SALSA64_JCHECK_SNAP=prefijo[:N]` (la tarea JPEG N): la RDRAM en
+  `prefijo.ram` y la DMEM/IMEM con el PC en `prefijo.mem`. Con eso, un banco de
+  pruebas (fuera del repositorio: lee el microcódigo del respaldo del autor)
+  corre el RSP real sobre listas o macrobloques sintéticos y los compara con
+  la HLE, que es como se midió cada comando de docs/audio-censo.md.
+- La línea «lle-check: ABI nombre: N tareas, M distintas» al final de cada
+  corrida. `SALSA64_JCHECK_DUMP=archivo` guarda la entrada y la salida real de
+  las tareas JPEG para probar otra IDCT sin volver a correr el juego.
+
 PS3: paquete «Salsa64 LLE» (SLSA00082); en `SALSA64_DATA_DIR` un archivo
 `lle` con `all` (todo el microcódigo real) o `auto`; `embedded` con
 `file:<rom>` como siempre. Mirar las líneas «rsp lle:» del log.

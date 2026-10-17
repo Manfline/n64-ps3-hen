@@ -42,7 +42,8 @@ struct aud_job {
 	uint32_t alist_size; /* data_size: bytes (en MusyX, cuántas subtramas) */
 	uint32_t flags;
 	uint32_t ucode_data; /* ucode_data del OSTask: dirección física del segmento de datos del microcódigo */
-	uint32_t reserved[8];
+	uint32_t ucode_data_size;  /* ucode_data_size: bytes que el arranque de libultra copia a la DMEM */
+	uint32_t reserved[7];
 };
 
 /* Partes de la RDRAM que escribió la tarea (para el recompilador). Si son
@@ -94,6 +95,7 @@ struct aud_nead {           /* nead (ABI2): Zelda OoT, Mario Kart 64, Star Fox 6
 	uint16_t filter_count;
 	uint32_t filter_lut[2];
 	int16_t table[16 * 16];  /* como en ABI1 */
+	bool vco3;               /* acarreo del carril 3 que dejó el último MIXER (ver N_MIXER); no se guarda */
 };
 
 struct aud_naudio {         /* naudio: Banjo-Kazooie, Conker, Perfect Dark, Donkey Kong 64… */
@@ -101,6 +103,10 @@ struct aud_naudio {         /* naudio: Banjo-Kazooie, Conker, Perfect Dark, Donk
 	int16_t vol[2], target[2];
 	int32_t rate[2];
 	uint32_t loop;
+	uint32_t mp3_addr;       /* MP3ADDY: búfer de estado de la corriente de MP3 en la RDRAM (0: sin fijar) */
+#ifdef AUD_DEBUG
+	bool mp3_seen;           /* el censo cuenta las tareas con MP3 */
+#endif
 	int16_t table[16 * 16];  /* libro de ADPCM y coeficientes de POLEF/IIR, como en ABI1 */
 };
 
@@ -111,6 +117,8 @@ struct aud_naudio {         /* naudio: Banjo-Kazooie, Conker, Perfect Dark, Donk
  * comando MP3 al siguiente. */
 #define AUD_MP3_BASE 0x800u
 #define AUD_MP3_SIZE 0x800u
+#define AUD_MP3_RING 0x8A0u        /* el anillo de la ventana (la salida de la DCT) */
+#define AUD_MP3_RING_SIZE 0x440u
 
 struct aud_job;
 struct aud_result;
@@ -121,15 +129,29 @@ struct aud_state {
 	struct aud_nead nead;
 	struct aud_naudio naudio;
 	uint8_t mp3[AUD_MP3_SIZE] __attribute__((aligned(16)));
-	/* Tabla de interpolación que MusyX trae en su segmento de datos
-	 * (musyx.c); sin buscar (musyx_lut_src == 0), no encontrada o hallada. */
-	int16_t musyx_lut[64 * 4];
-	uint32_t musyx_lut_src;
-	bool musyx_lut_ok;
+	/* Tabla de interpolación del cambio de tono que el microcódigo trae en
+	 * su segmento de datos (alist.c, aud_find_lut): sin buscar (lut_src ==
+	 * 0), no encontrada (lut_ok == false: vale la de lut.c) o hallada. */
+	int16_t lut[64 * 4];
+	uint32_t lut_src;
+	bool lut_ok;
 	const struct aud_job *job;
 	struct aud_result *res;
 	void *io;               /* estado de la plataforma (io_mem.c, src/spu/audio) */
 };
+
+/* Depuración del oráculo (--lle-check-audio; el host compila con -DAUD_DEBUG):
+ * direcciones de los estados de ENVMIXER que escribió la tarea. La parte
+ * fraccionaria del volumen de un carril ya recortado al destino sale de
+ * registros vectoriales que el microcódigo real no limpia (con una tasa
+ * saturada, como 0x7FFFFFFF, cambia de un arranque a otro), así que el
+ * oráculo no la compara. */
+#ifdef AUD_DEBUG
+#define AUD_DBG_ENV_MAX 512
+extern uint32_t aud_dbg_env[AUD_DBG_ENV_MAX];
+extern uint32_t aud_dbg_mp3, aud_dbg_mp3_tasks;   /* comandos MP3 y tareas que los tienen */
+extern uint32_t aud_dbg_env_n;
+#endif
 
 void aud_init(struct aud_state *st);
 /* El estado entre tareas en el formato de AUD_STATE_BYTES (state.c), y de

@@ -280,12 +280,14 @@ static void N_SAVEBUFF(struct aud_state *st, uint32_t w1, uint32_t w2)
 
 static void N_MIXER(struct aud_state *st, uint32_t w1, uint32_t w2)
 {
+	st->nead.vco3 = true;
 	alist_mix(st, (uint16_t)w2, (uint16_t)(w2 >> 16), (w1 >> 12) & 0xFF0, (int16_t)w1);
 }
 
 static void N_RESAMPLE(struct aud_state *st, uint32_t w1, uint32_t w2)
 {
 	const struct aud_nead *n = &st->nead;
+	st->nead.vco3 = false;  /* RESAMPLE deja VCO a cero (ver alist_add) */
 	uint8_t flags = (uint8_t)(w1 >> 16);
 	alist_resample(st, flags & 0x1, n->out, n->in, (uint16_t)aud_align(n->count, 16),
 		       (uint32_t)(uint16_t)w1 << 1, w2 & 0xFFFFFF);
@@ -338,7 +340,7 @@ static void n_envmixer(struct aud_state *st, uint32_t w1, uint32_t w2, bool mk)
 	xors[2] = mk ? 0 : (int16_t)(0 - (int16_t)((w1 & 0x8) >> 1));
 	xors[3] = mk ? 0 : (int16_t)(0 - (int16_t)((w1 & 0x4) >> 1));
 	alist_envmix_nead(st, mk ? false : (w1 >> 4) & 1, (w2 >> 20) & 0xFF0, (w2 >> 12) & 0xFF0,
-			  (w2 >> 4) & 0xFF0, (w2 << 4) & 0xFF0, (w1 >> 12) & 0xFF0, (w1 >> 8) & 0xFF,
+			  (w2 >> 4) & 0xFF0, (w2 << 4) & 0xFF0, (w1 >> 12) & 0xFF0, (w1 >> 8) & 0xFF, mk ? 8 : 16,
 			  n->env_values, n->env_steps, xors);
 }
 
@@ -376,7 +378,8 @@ static void N_INTERLEAVE(struct aud_state *st, uint32_t w1, uint32_t w2)
 
 static void N_ADDMIXER(struct aud_state *st, uint32_t w1, uint32_t w2)
 {
-	alist_add(st, (uint16_t)w2, (uint16_t)(w2 >> 16), (w1 >> 12) & 0xFF0);
+	alist_add(st, (uint16_t)w2, (uint16_t)(w2 >> 16), (w1 >> 12) & 0xFF0, st->nead.vco3);
+	st->nead.vco3 = false;
 }
 
 static void N_HILOGAIN(struct aud_state *st, uint32_t w1, uint32_t w2)
@@ -394,7 +397,8 @@ static void N_FILTER(struct aud_state *st, uint32_t w1, uint32_t w2)
 		n->filter_lut[0] = address;
 	} else {
 		n->filter_lut[1] = address + 0x10;
-		alist_filter(st, (uint16_t)w1, n->filter_count, address, n->filter_lut);
+		bool direct = st->job->abi == SALSA64_ABI_NEAD_YS || st->job->abi == SALSA64_ABI_NEAD_1080;
+		alist_filter(st, flags & A_INIT, (uint16_t)w1, n->filter_count, address, n->filter_lut, !direct);
 	}
 }
 
@@ -501,13 +505,27 @@ static const acmd_fn nead_mmb[0x18] = {
 
 enum {
 	NA_COUNT = 0x170,  /* 184 muestras */
-	NA_MAIN = 0x4F0,
-	NA_MAIN2 = 0x660,
-	NA_DRY_LEFT = 0x9D0,
-	NA_DRY_RIGHT = 0xB40,
-	NA_WET_LEFT = 0xCB0,
-	NA_WET_RIGHT = 0xE20,
+	NA_OFF_MAIN2 = 0x170,
+	NA_OFF_DRY_LEFT = 0x4E0,
+	NA_OFF_DRY_RIGHT = 0x650,
+	NA_OFF_WET_LEFT = 0x7C0,
+	NA_OFF_WET_RIGHT = 0x930,
 };
+
+/* Base de los búferes: 0x4F0, o 0x500 en los microcódigos con MP3 (Perfect
+ * Dark, Banjo-Tooie, Conker), donde todo está 0x10 bytes más arriba
+ * (medido con el LLE: LOADBUFF, CLEARBUFF, DMEMMOVE y ENVMIXER). */
+static uint16_t na_main(const struct aud_state *st)
+{
+	return st->job->abi == SALSA64_ABI_NAUDIO_MP3 || st->job->abi == SALSA64_ABI_NAUDIO_CBFD ? 0x500 : 0x4F0;
+}
+
+#define NA_MAIN        na_main(st)
+#define NA_MAIN2       (na_main(st) + NA_OFF_MAIN2)
+#define NA_DRY_LEFT    (na_main(st) + NA_OFF_DRY_LEFT)
+#define NA_DRY_RIGHT   (na_main(st) + NA_OFF_DRY_RIGHT)
+#define NA_WET_LEFT    (na_main(st) + NA_OFF_WET_LEFT)
+#define NA_WET_RIGHT   (na_main(st) + NA_OFF_WET_RIGHT)
 
 static void NA_SETVOL(struct aud_state *st, uint32_t w1, uint32_t w2)
 {
@@ -541,7 +559,11 @@ static void NA_ENVMIXER(struct aud_state *st, uint32_t w1, uint32_t w2)
 	struct aud_naudio *a = &st->naudio;
 	uint8_t flags = (uint8_t)(w1 >> 16);
 	a->vol[1] = (int16_t)w1;
-	alist_envmix(st, AUD_ENVMIX_LIN, flags & A_INIT, false, NA_DRY_LEFT, NA_DRY_RIGHT, NA_WET_LEFT,
+	/* Donkey Kong 64 y los de MP3 (Perfect Dark, Banjo-Tooie, Conker) invierten la fase. */
+	bool phase = st->job->abi == SALSA64_ABI_NAUDIO_DK || st->job->abi == SALSA64_ABI_NAUDIO_MP3;
+	enum aud_envmix_kind kind = st->job->abi == SALSA64_ABI_NAUDIO_CBFD ? AUD_ENVMIX_LIN_CBFD :
+				    phase ? AUD_ENVMIX_LIN_PHASE : AUD_ENVMIX_LIN;
+	alist_envmix(st, kind, flags & A_INIT, false, NA_DRY_LEFT, NA_DRY_RIGHT, NA_WET_LEFT,
 		     NA_WET_RIGHT, NA_MAIN, NA_COUNT, a->dry, a->wet, a->vol, a->target, a->rate, w2 & 0xFFFFFF);
 }
 
@@ -610,18 +632,36 @@ static void NA_INTERLEAVE(struct aud_state *st, uint32_t w1, uint32_t w2)
 	alist_interleave(st, NA_MAIN, NA_DRY_LEFT, NA_DRY_RIGHT, NA_COUNT);
 }
 
-/* Filtro de los naudio con MP3: POLEF si los dos primeros coeficientes
- * son cero, IIR si no. */
+/* Filtro de los naudio con MP3: POLEF si los dos primeros coeficientes de la
+ * tabla son cero, IIR si no (así lo decide el microcódigo, medido con el LLE).
+ *   - POLEF filtra el búfer principal o el segundo según el byte alto de w2.
+ *     Su bucle va un bloque atrasado y en la primera vuelta guarda en los 16
+ *     bytes anteriores al búfer el vector inicial: ceros con A_INIT; si no, 8
+ *     bytes del registro vectorial como lo dejó el comando anterior (no se
+ *     emulan: el oráculo no los compara) y los 8 bytes de estado de la RDRAM.
+ *     Con el segundo búfer pisa las 8 últimas muestras del principal.
+ *   - IIR ignora el byte alto de w2: filtra siempre desde 0x500 más los 12
+ *     bits bajos de w0. */
 static void NA_FILTER(struct aud_state *st, uint32_t w1, uint32_t w2)
 {
 	struct aud_naudio *a = &st->naudio;
 	uint8_t flags = (uint8_t)(w1 >> 16);
-	uint16_t dmem = (w2 >> 24) == 0 ? NA_MAIN : NA_MAIN2;
 	uint32_t address = w2 & 0xFFFFFF;
-	if (a->table[0] == 0 && a->table[1] == 0)
+	if (a->table[0] == 0 && a->table[1] == 0) {
+		uint16_t dmem = (w2 >> 24) == 0 ? NA_MAIN : NA_MAIN2;
+		int16_t s[4] = { 0, 0, 0, 0 };
+		uint8_t *pre = aud_dm(st, (uint16_t)(dmem - 8));
+		if (!(flags & A_INIT))
+			aud_load_s16(st, s, address, 4);
+		else
+			memset(aud_dm(st, (uint16_t)(dmem - 16)), 0, 8);
+		for (unsigned i = 0; i < 4; i++)
+			aud_st16(pre + 2 * i, s[i]);
 		alist_polef(st, flags & A_INIT, dmem, dmem, NA_COUNT, (uint16_t)w1, a->table, address);
-	else
+	} else {
+		uint16_t dmem = (uint16_t)((NA_MAIN + (w1 & 0xFFF)) & 0xFFF);
 		alist_iirf(st, flags & A_INIT, dmem, dmem, NA_COUNT, a->table, address);
+	}
 }
 
 /* Distorsión de Conker (comando 0 de los naudio con MP3). Como el original:
@@ -633,9 +673,31 @@ static void NA_OVERLOAD(struct aud_state *st, uint32_t w1, uint32_t w2)
 	alist_overload(st, (uint16_t)((w1 & 0xFFF) + NA_MAIN), 2 * NA_COUNT, (int16_t)w2, (uint16_t)(w2 >> 16));
 }
 
+/* MP3ADDY (comando 8 de los naudio con MP3): dirección del búfer de estado de la corriente. Cada
+ * comando MP3 trae de ahí los 0x440 bytes del anillo de la ventana (DMEM 0x8A0–0xCDF) y los
+ * guarda al terminar: es lo que permite varias corrientes y que otros comandos usen esa zona de
+ * la DMEM entre dos MP3 (el microcódigo real no los conserva). Dicha dirección se pierde entre
+ * tareas (vive en la cabecera de la tarea de la DMEM): cada una empieza con su MP3ADDY. Sin él
+ * el anillo se queda en la memoria de trabajo de la HLE. */
+static void NA_MP3ADDY(struct aud_state *st, uint32_t w1, uint32_t w2)
+{
+	(void)w1;
+	st->naudio.mp3_addr = w2 & 0xFFFFFF;
+}
+
 static void NA_MP3(struct aud_state *st, uint32_t w1, uint32_t w2)
 {
+	uint32_t ring = st->naudio.mp3_addr;
+#ifdef AUD_DEBUG
+	aud_dbg_mp3_tasks += st->naudio.mp3_seen ? 0 : 1;
+	st->naudio.mp3_seen = true;
+	aud_dbg_mp3++;
+#endif
+	if (ring)
+		aud_load(st, st->mp3 + (AUD_MP3_RING - AUD_MP3_BASE), ring, AUD_MP3_RING_SIZE);
 	aud_mp3(st, w1 & 0x1E, w2 & 0xFFFFFF);
+	if (ring)
+		aud_store(st, ring, st->mp3 + (AUD_MP3_RING - AUD_MP3_BASE), AUD_MP3_RING_SIZE);
 }
 
 static const acmd_fn naudio[0x10] = {
@@ -654,12 +716,12 @@ static const acmd_fn naudio_dk[0x10] = {
 	NA_MIXER,     NA_INTERLEAVE, NA_SETVOL_RATE_LO, NA_SETLOOP,
 };
 
-/* Perfect Dark, Banjo-Tooie, Jet Force Gemini y Conker: MP3, filtro y
- * distorsión; el 8 (MP3ADDY) no hace nada. */
+/* Perfect Dark, Banjo-Tooie, Jet Force Gemini y Conker: MP3 (con su MP3ADDY),
+ * filtro y distorsión. */
 static const acmd_fn naudio_mp3[0x10] = {
 	NA_OVERLOAD,  NA_ADPCM,     NA_CLEARBUFF, NA_ENVMIXER,
 	NA_LOADBUFF,  NA_RESAMPLE,  NA_SAVEBUFF,  NA_MP3,
-	SPNOOP,       NA_SETVOL,    NA_DMEMMOVE,  NA_LOADADPCM,
+	NA_MP3ADDY,   NA_SETVOL,    NA_DMEMMOVE,  NA_LOADADPCM,
 	NA_MIXER,     NA_INTERLEAVE, NA_FILTER,   NA_SETLOOP,
 };
 
@@ -722,8 +784,15 @@ void aud_run(struct aud_state *st, const struct aud_job *job, struct aud_result 
 	}
 	if (t.abi1)
 		memset(st->abi1.segments, 0, sizeof st->abi1.segments);
+	st->nead.vco3 = false;  /* el microcódigo real arranca con VCO a cero (ver alist_add) */
+	st->naudio.mp3_addr = 0;  /* MP3ADDY: se pierde con la cabecera de la tarea */
+#ifdef AUD_DEBUG
+	st->naudio.mp3_seen = false;
+#endif
 
 	aud_io_begin(st);
+	aud_boot_data(st);
+	aud_find_lut(st);
 	uint32_t n = job->alist_size / 8;
 	for (uint32_t i = 0; i < n; i++) {
 		uint32_t w1, w2;
