@@ -6,18 +6,25 @@ datos de compatibilidad.
 
 Las entradas antiguas conservan sus métodos de prueba como historia.
 
-## 2026-10-17 — Killer Instinct Gold: ya dibuja con la HLE (falta la PS3 real)
+## 2026-10-17 — Killer Instinct Gold: dibuja con la HLE; la segunda pelea se congela en la PS3
 
 | Juego | Antes | Ahora |
 |---|---|---|
-| Killer Instinct Gold (NKIE) | PS3: 0 tareas gráficas en todas las versiones (solo dibujaba con `lle` encendido); host: dibuja | RPCS3 sin `lle`: 1396 tareas gráficas en 1800 campos (logo y fichas de los personajes); host: 274 tareas por 300 campos y 137 listas del RDP escritas por el CPU |
+| Killer Instinct Gold (NKIE) | PS3: 0 tareas gráficas en todas las versiones (solo dibujaba con `lle` encendido); host: dibuja | RPCS3 sin `lle`: 1409 tareas gráficas en 1800 campos (logo y fichas de los personajes); host: la pelea completa, sin esperas |
 
-El juego da al RDP listas escritas por el CPU (`DPC_START`/`DPC_END`, sin RSP)
-y no manda tareas gráficas hasta recibir la interrupción del DP de su
-`SYNC_FULL`; la PS3 solo tenía quien las consumiera con el RSP a bajo nivel
-(detalle en [docs/estado.md](estado.md)). Con el RSP a bajo nivel en todas las
-tareas (en una versión de prueba de su recompilador) se vio un congelamiento
-al empezar la pelea, que sigue sin explicarse.
+El juego da al RDP listas escritas por el CPU (`DPC_START`/`DPC_END`, sin RSP:
+el fondo del escenario y los marcos) y no manda tareas gráficas hasta recibir
+la interrupción del DP de su `SYNC_FULL`. Esas listas las corre ahora el mismo
+SPE que las tareas (con otro estado del RDP sobre la misma caché de texturas
+los fondos salían rotos); detalle en [docs/estado.md](estado.md).
+
+**Sin resolver (PS3 real):** con la primera versión del arreglo la primera
+pelea va bien y al empezar la segunda (hacia 50 campos después de «READY») el
+juego deja de leer los controles y de mandar tareas gráficas, con la música
+sonando; con el RSP a bajo nivel en todas las tareas (en una versión de
+prueba de su recompilador) pasa en la primera. No se reproduce en el host. La
+versión siguiente avisa y vuelca la RDRAM (`cuelgue-<campo>.rdram` en
+`/dev_hdd0/salsa64/`) para ver en qué espera cada hilo.
 
 ## 2026-10-16 — Audio de MusyX (Factor 5): HLE nueva, verificada en el host
 

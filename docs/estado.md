@@ -1,6 +1,6 @@
 # Estado
 
-## 2026-10-17 — Killer Instinct Gold no dibujaba en la PS3: el RDP del CPU sin quien lo consuma
+## 2026-10-17 — Killer Instinct Gold en la PS3: el RDP del CPU, un solo estado y el aviso de cuelgue
 
 Killer Instinct Gold (NKIE) arrancaba en la PS3 con el audio bien, 60 campos/s y
 **ninguna tarea gráfica** («cierre: HLE gráfica suelta (0 tareas gráficas)»),
@@ -10,48 +10,122 @@ a bajo nivel encendido en modo `auto`, aunque ninguna tarea llegara al
 microcódigo real (en RPCS3: «rsp lle: 0 tareas» y 1399 tareas gráficas por la
 HLE).
 
+### 1. Las listas del RDP que escribe el CPU no tenían quien las consumiera
+
 - **Causa.** El juego no dibuja todo con el RSP: cada campo escribe él mismo
-  listas del RDP en la RDRAM y se las da por `DPC_START`/`DPC_END` (siete
-  comandos cada una: fijar imagen y tijera, color de relleno, rectángulo,
-  `SYNC_FULL`), sin tarea del RSP; y **no manda la primera tarea gráfica
-  hasta recibir la interrupción del DP de ese `SYNC_FULL`**. Esa interrupción
-  la levanta quien consume la lista (`bus->rsp.dpc`, `sp.c: dp_run`); sin
-  backend la lista solo se descarta y la interrupción no llega nunca. El
-  frontend de la PS3 conectaba el backend del RDP (`salsa64_rsp_set_dpc`)
-  solo cuando había RSP a bajo nivel; el host siempre. Con la HLE gráfica
-  en el SPE, además, no existía un RDP en el PPE para esas listas.
+  listas del RDP en la RDRAM y se las da por `DPC_START`/`DPC_END` (el fondo
+  del escenario y los marcos de la pantalla: de 7 a más de 60 comandos cada
+  una), sin tarea del RSP; y **no manda la primera tarea gráfica hasta recibir la
+  interrupción del DP de ese `SYNC_FULL`**. Esa interrupción la levanta quien
+  consume la lista (`bus->rsp.dpc`, `sp.c: dp_run`); sin backend la lista solo
+  se descarta y la interrupción no llega nunca. El frontend de la PS3
+  conectaba el backend del RDP (`salsa64_rsp_set_dpc`) solo cuando había RSP
+  a bajo nivel; el host siempre.
 - **Evidencia (host, `salsa64-run`).** En 300 campos KI manda 274 tareas
   gráficas (Fast3D «RSP SW Version: 2.0D», `ucode_size` 0) y 292 de audio
-  (ABI1), y escribe 137 listas al RDP (959 comandos, 0 triángulos, 137
-  rectángulos); la primera tarea gráfica sale en el campo 27, 11 341 ciclos
-  después de arrancar una de audio. Con `SALSA64_SIN_DPC=1` (no conecta el
-  backend, como la PS3): 0 listas, **0 tareas gráficas**. Con el backend y
-  `SALSA64_DP_CYCLES=4000000000` (la interrupción del DP casi no llega): 1
-  lista y 1 tarea gráfica. O sea, el juego espera la interrupción del DP de
-  cada lista del CPU.
-- **Arreglo** (`src/frontend/main.c`). El backend del RDP se conecta siempre:
-  con la HLE en el PPE es la misma HLE (`gfx_ppe.dpc`); con la HLE en el SPE
-  se inicia `gfx_ppe` solo para consumir las listas del CPU, como ya hacía el
-  modo con RSP a bajo nivel (con el que ya dibujaba). Se suelta al cerrar el
-  juego aunque no haya LLE.
-- **Pruebas.** Pruebas unitarias: `rsp_dpc_from_cpu` (sin backend la lista
-  se descarta y no hay interrupción; con él la consume y la del DP llega
-  `dp_cycles` después). RPCS3 (interpretador, sin recompilador, sin archivo
-  `lle`): antes 0 tareas gráficas en 1800 campos; ahora 1396, con el logo de
-  «Killer Instinct Gold» y las fichas de los personajes bien dibujados.
-  `salsa64-run` imprime ahora cuántas listas del CPU consumió el RDP
-  («RDP desde el CPU»), `--pads N` conecta N controles y `--pad-port N`
-  manda el guion de `--pad` a otro puerto; `tools/rpcs3-run.py --quitar
-  NOMBRE` quita un archivo de `dev_hdd0/salsa64` (p. ej. `lle`) durante la
-  corrida y lo devuelve al terminar.
-- **Falta en la PS3 real**: que arranque con la HLE (sin `lle`) y que la
-  pelea pase de «READY». El congelamiento de la pelea que se vio con el RSP a
-  bajo nivel en todas las tareas (en una versión de prueba de su
-  recompilador) no es esta causa (ahí el backend del RDP ya estaba
-  conectado): en el host, con `--lle=all` y el guion
-  [docs/pads/killerinstinct-pelea.pad](pads/README.md) (control 2), las
-  tareas del RSP siguen llegando hasta el campo 3600 y los hilos de libultra
-  quedan en el mismo estado que con la HLE (campo 1500); no lo reproduje.
+  (ABI1), y escribe 137 listas al RDP; la primera tarea gráfica sale en el
+  campo 27, 11 341 ciclos después de arrancar una de audio. Con
+  `SALSA64_SIN_DPC=1` (no conecta el backend, como la PS3): 0 listas, **0
+  tareas gráficas**. Con el backend y `SALSA64_DP_CYCLES=4000000000` (la
+  interrupción del DP casi no llega): 1 lista y 1 tarea gráfica. O sea, el
+  juego espera la interrupción del DP de cada lista del CPU.
+- **Arreglo.** El backend del RDP se conecta siempre (`src/frontend/main.c`).
+
+### 2. Las dos HLE se pisaban la caché de texturas
+
+La primera versión del arreglo daba las listas del CPU a un RDP en el PPE
+(`gfx_ppe`, otro `gfx_state`) mientras las tareas seguían en el SPE. Pero la
+caché de texturas decodificadas es **una región de memoria con un directorio
+por cada estado**: dos estados sobre la misma región reservan desde el mismo
+lugar y se pisan las texturas. Medido en el host con
+`SALSA64_DPC_ESTADO_APARTE=1` (otra HLE con su propio estado para las listas
+del CPU, como la PS3): la pelea de Killer Instinct Gold sale con el suelo, el
+helicóptero y el cielo rotos, y con un solo estado (lo normal en el host) sale
+bien; los fondos del escenario, que son de esas listas, eran lo que fallaba
+en la PS3 (el cielo negro del volcado). Ahora **las listas del CPU las corre el
+mismo SPE que las tareas** (`gfx_spu.c: spu_dpc_run`): el mismo estado del RDP
+y la misma caché, síncrono (la lista es corta y el CPU espera su interrupción
+del DP), con la tarea en vuelo recogida antes (`salsa64_rsp_quiesce`) para que
+sus salidas lleguen al RSX en el orden en que se dieron. Con el RSP a bajo
+nivel (cientos de tramos por tarea) el RDP sigue en el PPE (`gfx_ppe`): con la
+HLE gráfica en el SPE y el modo `auto`, esas dos HLE siguen pisándose.
+
+### 3. Otros hallazgos en el camino
+
+- **Los comandos crudos del RDP se reconocen por sus 6 bits bajos.** Las listas
+  de KI traen `0x2F` (en vez de `0xEF`: SET_OTHER_MODES, incluida la
+  conmutación FILL ↔ 1 ciclo), `0xBA` (SET_PRIM_COLOR, `0xFA`) y `0x24`
+  (TEXRECT): `gfx_dl_dpc` los comparaba con el byte entero y los descartaba en
+  silencio. Ahora `w0 |= 0xC0000000` antes de despachar (`src/rsp/gfx/dpc.c`,
+  sin crecer el SPE: la holgura de pila sigue en 1584 bytes, mínimo 1536).
+- **Interrupciones del DP en cola.** La ranura del planificador es una sola:
+  un segundo SYNC_FULL antes de que llegara el primero (la lista del CPU y la
+  tarea que le sigue) borraba al primero y el juego esperaba una interrupción
+  que no llegaba. Ahora se encolan en orden (hasta 4) y cada una se levanta a su
+  hora; el mismo SYNC_FULL pedido dos veces en el mismo ciclo sigue siendo
+  uno. En el host, con los tiempos de siempre, no ocurría nunca.
+- **Un trabajo del SPE con error ya no cuelga al juego.** Antes se ponían a 0
+  sus banderas: sin SYNC_FULL ni corte no hay interrupción del DP y el juego
+  espera al RDP para siempre. Ahora termina como cortado (con su interrupción)
+  y el log dice «el SPE devolvió el error N» (las primeras 4).
+
+### 4. El congelamiento de la pelea (sin resolver)
+
+Con el paquete de esta primera versión, KI dibuja y la **primera pelea va
+bien; al empezar la segunda (Orchid contra Fulgore, «READY») la imagen se
+congela con la música sonando**; con el RSP a bajo nivel en todas las tareas
+(en una versión de prueba de su recompilador) pasa en la primera pelea. En los
+dos logs el juego deja de leer los controles (0 lecturas por segundo) y de
+mandar tareas y listas, el CPU queda en el bucle de espera de libultra (`b .`),
+el audio y el VI siguen. Todos los hilos del juego esperan algo que no llega.
+
+- **No lo reproduje en el host** (el reloj de la consola, sin pulsaciones
+  humanas): la pelea completa con el guion
+  [docs/pads/killerinstinct-pelea.pad](pads/README.md) pasa sin esperas con la
+  HLE y con `--lle=all`; tampoco con la duración de las tareas barrida (tarea
+  gráfica 30 000 a 1 200 000 ciclos, de audio 8 000 a 600 000, 0 a 8 sondeos de
+  retraso, `SALSA64_JITTER` al azar, interrupción del DP más lenta o con
+  `SALSA64_GFX_LATE`), ni con la HLE leyendo la RDRAM al final de la tarea
+  (en la pelea, ninguna tarea cambia lo que lee mientras corre).
+- **Lo que sí sabemos de los dos logs:** ocurre unos 50 campos después de
+  «READY»; en los dos hubo antes esperas largas de la emulación por un juego de
+  búferes del RSX (196 ms; 239 a 1281 ms en el otro) y en el otro tuvo muchas
+  más sin congelarse, así que no es el disparador. En el log de la HLE faltaba
+  el latido «sin gráficos»: el latido de `main.c` vigila los hilos del emulador,
+  no al juego (el «sin gráficos» es de la rama del RSP a bajo nivel).
+- **Lo que se añadió para verlo la próxima vez** (`src/frontend/cuelgue.c`): el
+  latido avisa cuando un juego que leía los controles y dibujaba deja de
+  hacer las dos cosas 6 s con el VI andando. Escribe al log el estado del RCP y
+  del CPU (SP/DP/MI/VI, eventos pendientes, contadores de interrupciones del
+  SP y del DP programadas y levantadas, tareas sin SYNC_FULL, el código
+  alrededor del pc) y a `/dev_hdd0/salsa64/` un volcado de la RDRAM
+  (`cuelgue-<campo>.rdram`, que lee `tools/libultra-threads.py`: en qué espera
+  cada hilo de libultra) y otro de texto con los registros
+  (`cuelgue-<campo>.txt`). Hasta 3 por juego.
+
+### 5. El cielo de la pelea
+
+El volcado del cuadro congelado (Orchid contra Fulgore) no trae la ciudad en
+llamas que se espera detrás. Con el host y la HLE: el fondo es una lista del
+CPU (las 63 órdenes del dibujo del campo 2059, que sola dibuja las columnas y
+el cielo naranja de arriba) que la tarea gráfica del cuadro cubre en parte, y
+la ciudad se ve en unos cuadros del mismo escenario en el host (variando
+cuándo se elige al personaje) y en otros no, así que su ausencia en un
+cuadro suelto no prueba un fallo. Con la HLE y el estado aparte de arriba salía rota. No pude comparar el
+mismo cuadro con ares ni mupen64plus (el escenario es el del personaje que
+elige el jugador y no logré que mupen eligiera a Orchid).
+
+### Pruebas
+
+Pruebas unitarias (+9): `rsp_dpc_from_cpu`, `rsp_dp_interrupts_queue` y la
+suite `cuelgue`. RPCS3 (intérprete, sin recompilador, sin archivo `lle`): antes
+0 tareas gráficas en 1800 campos; ahora 1409 (y más de 1250 listas del CPU en el SPE), con el logo y las fichas de los
+personajes bien dibujados y las listas del CPU en el SPE
+(«gfx: N listas del CPU al RDP hechas en el SPE»). `salsa64-run`: «RDP desde
+el CPU» en el resumen, `--pads N`, `--pad-port N`, `SALSA64_SIN_DPC`,
+`SALSA64_DPC_ESTADO_APARTE` y `SALSA64_JITTER`; `tools/rpcs3-run.py --quitar
+NOMBRE` quita un archivo de `dev_hdd0/salsa64` (p. ej. `lle`) durante la
+corrida; `tools/m64p-ref.sh` con `M64P_PAD_PORT`.
 
 ## 2026-10-16 — HLE de audio de MusyX (Factor 5)
 
