@@ -38,6 +38,12 @@
   Gold (elegir personaje y pelear dos veces), Yoshi's Story (morir), y Mario Kart 64 (túnel) y la
   pausa de Zelda como regresión de las copias. Si alguno vuelve a fallar: la línea de la guarda y,
   con `vigilante.cfg`, quién escribió el 0x00010001.
+- **Paquete de prueba** «Salsa64 rc7a» (SLSA00161, v0.2.7-80-gf0ea694):
+  `build/salsa64-rc7a/salsa64-rc7a.pkg`, 3 293 136 bytes, sha256
+  `6db79e6b109e735277c8cffd48a83e72ec48787f10a55b3544d6ff172ee6598c`, armado con
+  `tools/build.sh -C src/frontend PROGRAM=salsa64-rc7a "TITLE=Salsa64 rc7a" APPID=SLSA00161 pkg` (el
+  directorio de build borrado antes). Pruebas del host: 656, 0 fallidas; `tools/test-roms.sh` bien; las
+  escenas del host no cambian por construcción (salsa64-run solo gana funciones nuevas de targets.c que no llama).
 
 ## 2026-10-18 — rc5b2: la nave en la misión de Rogue, la z de Resident Evil 2 y los puntos de Yoshi
 
