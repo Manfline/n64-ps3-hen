@@ -846,6 +846,13 @@ static void to_rdram(const uint8_t *src, uint32_t pitch, uint32_t addr, uint32_t
 	uint32_t x1 = b->x1 < lw ? b->x1 : lw;
 	if (rdp_box_empty(b) || x1 <= b->x0)
 		return;
+	/* La dirección 0 es la imagen de color que la HLE usa mientras ninguna tarea que corra
+	 * en ella haya fijado una (SETCIMG): Resident Evil 2 lo hace en tareas S2DEX sueltas, que
+	 * no tienen HLE, y sus tareas F3DEX.Rej dibujan antes un relleno de 436 × 383. Copiarlo
+	 * a la RDRAM pisaba las variables de libultra (el hilo en curso, en 0x12950, quedaba en
+	 * 0x00010001 y el juego se colgaba en su manejador de excepciones). */
+	if (addr == 0)
+		return;
 	/* El RSX escribió el búfer a espaldas de la caché del PPE: soltar las
 	 * líneas que pudieran quedar de la lectura anterior. */
 	for (uint32_t off = b->y0 * pitch & ~127u; off < b->y1 * pitch; off += 128)
