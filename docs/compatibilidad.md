@@ -6,6 +6,18 @@ datos de compatibilidad.
 
 Las entradas antiguas conservan sus métodos de prueba como historia.
 
+## 2026-10-17 — S2DEX suelto: Resident Evil 2 y Yoshi's Story (host y PPE)
+
+Las tareas con el texto «RSP Gfx ucode S2DEX» (Resident Evil 2, 2.06; Yoshi's
+Story, 1.06) no tenían HLE y terminaban sin dibujar. Ahora `src/rsp/gfx/s2dex.c`
+las interpreta en el host y en el PPE (`gfx_ppe`); el SPE 0 no tiene sitio
+todavía (detalle y opciones en [estado.md](estado.md)).
+
+| Juego | Antes (host, sin `--lle`) | Después | Contra el microcódigo real (`--lle=all`) |
+|---|---|---|---|
+| Resident Evil 2 | 1821 tareas S2DEX sin HLE en 3000 campos | 0 sin HLE, 0 comandos sin implementar, 2895 G_BG_COPY | 0 de 76 800 píxeles distintos en 4 listas; el host no llega a los menús |
+| Yoshi's Story | 3370 tareas S2DEX sin HLE, nada dibujado en 6000 campos | 0 sin HLE, 0 sin implementar, 105 756 objetos y fondos | 955 a 3849 de 76 800 píxeles distintos en 6 listas de la pantalla de resultados: los sprites idénticos, el resto es 3D |
+
 ## 2026-10-17 — Resident Evil 2: video de las cinemáticas con HLE (en el host; falta la PS3)
 
 Las cinemáticas del juego (los logos, la intro y el video de entrada) las
@@ -132,7 +144,7 @@ medición en el host.
 | Hydro Thunder | v1 | 5740 de 5740 | Sin eco en la prueba. |
 | Rush 2049 | v1 | 5728 de 5728 | Sin eco en la prueba. |
 | NBA Showtime | v1 | 5740 de 5740 | Sin eco en la prueba. |
-| Resident Evil 2 | v1 | 2856 de 2856 | Con eco (reverberación) en todas las subtramas. Además tiene HLE del video de las cinemáticas (arriba); los menús y el juego usan S2DEX sueltas, sin HLE. |
+| Resident Evil 2 | v1 | 2856 de 2856 | Con eco (reverberación) en todas las subtramas. Además tiene HLE del video de las cinemáticas (arriba); los menús y el juego usan S2DEX sueltas, que desde el 2026-10-17 tienen HLE en el host y en el PPE (sección de arriba; en el SPE 0 aún no). |
 | Star Wars: Rogue Squadron | v1 (otra compilación) | 5713 de 5713 | Con eco, con la envolvente del envío en rampa. Solo el audio: sus gráficos no tienen HLE. |
 | Indiana Jones | v2 | 5675 de 5724 (las otras 49, +1 en 2 de cada 8 muestras del canal izquierdo) | Solo el audio: sus gráficos no tienen HLE. |
 
@@ -178,7 +190,7 @@ asigna velocidad.
 | Super Mario Odyssey 64 | Inestable | — | Se registró una caída durante una prueba anterior de interpolación; queda pendiente una causa. |
 | Star Fox 64 | Jugable, con fallo gráfico | — | Las opciones del menú se repiten. |
 | Wave Race 64 | Fallo gráfico | — | Las texturas aparecen «como rayos desde el centro». |
-| Yoshi's Story | No funciona | — | Fallo conocido. |
+| Yoshi's Story | Dibuja en el host (antes, nada) | — | Sus tareas S2DEX 1.x sueltas tienen HLE en el host y en el PPE desde el 2026-10-17 (sección de arriba); en el SPE 0 aún no (hace falta `gfx_ppe`). Sin probar en la PS3. |
 | FIFA 99 | La intro funciona; el partido no arranca | — | Fallo conocido. |
 | Banjo-Kazooie | Jugable, con fallo gráfico | — | Las piezas del rompecabezas salen negras. |
 | Diddy Kong Racing | Jugable en el host | — | HLE de F3DDKR desde el 2026-10-17 (sección de arriba); sin probar en la PS3. |
@@ -186,7 +198,7 @@ asigna velocidad.
 | Mickey's Speedway USA | Solo los títulos; el semáforo de la salida no cambia | Dibuja con todos sus comandos en el host; el semáforo cambia de luz | G_DMA_TEX_OFFSET (2026-10-17, sección de arriba); sin probar en la PS3. |
 | Indiana Jones | No jugable | — | Sin HLE de su microcódigo gráfico. |
 | Star Wars: Rogue Squadron | No jugable | — | Sin HLE de su microcódigo gráfico. |
-| Resident Evil 2 | Cinemáticas en el host; el juego no | — | HLE del video (RESIZE, DECODE y FILL) idéntica al microcódigo real; las tareas S2DEX sueltas de los menús y el juego no tienen HLE. Sin probar en la PS3. |
+| Resident Evil 2 | Cinemáticas y sus copias a la pantalla en el host; los menús, sin ver | — | HLE del video (RESIZE, DECODE y FILL) idéntica al microcódigo real y, desde el 2026-10-17, las tareas S2DEX sueltas (G_BG_COPY de los cuadros de video: idéntico al microcódigo real; el host no llega a los menús). Sin probar en la PS3. |
 
 Las pruebas de rendimiento detalladas de Banjo-Tooie corresponden a la sesión
 de perfilado indicada en [docs/perf-log.md](perf-log.md); no representan una

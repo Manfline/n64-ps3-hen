@@ -1,5 +1,120 @@
 # Estado
 
+## 2026-10-17 — S2DEX suelto: Resident Evil 2 y Yoshi's Story (host y PPE; el SPE 0 no tiene sitio)
+
+Las tareas gráficas con el texto «RSP Gfx ucode S2DEX» (Resident Evil 2: «fifo
+2.06»; Yoshi's Story: «S2DEX  1.06», sin «fifo») no tenían HLE: el log las
+contaba como «microcódigo desconocido» y la tarea terminaba sin dibujar. Ahora
+`src/rsp/gfx/s2dex.c` las interpreta, **en el host y en el PPE**. El SPE 0 no las
+hace todavía: no cabe (más abajo, con números).
+
+- **Antes.** Resident Evil 2 (`docs/pads/re2-intro.pad`, 3000 campos): 1821
+  tareas con microcódigo desconocido y 608 gráficas; con 9000 campos, 14 281 tareas
+  S2DEX. Yoshi's Story (START y A cada 100 campos desde el 400, 6000 campos):
+  3370 tareas S2DEX con microcódigo desconocido, ninguna dibujada (0 tareas
+  gráficas en el resumen). **Después:** Resident Evil 2, 7042 tareas gráficas en
+  3000 campos con 2895 fondos y 0 comandos sin implementar; Yoshi's Story, 3370
+  tareas con 105 756 objetos y fondos y 0 comandos sin implementar.
+- **Dos microcódigos, una familia.** S2DEX 2.x usa los opcodes de F3DEX2 (los
+  mismos del tramo de Zelda OoT y Kirby 64) y S2DEX 1.x los de la primera
+  generación (BG_1CYC 0x01, BG_COPY 0x02, OBJ_RECTANGLE 0x03, OBJ_SPRITE 0x04,
+  OBJ_MOVEMEM 0x05, SELECT_DL 0xB0, OBJ_RENDERMODE 0xB1, OBJ_RECTANGLE_R 0xB2,
+  LOADTXTR 0xC1 y LDTX_* 0xC2–0xC4); `s2_canon` traduce los de 1.x y el resto del
+  código es el mismo. `SALSA64_GBI_S2DEX` (2.x, ya existía) y
+  `SALSA64_GBI_S2DEX1` (nuevo, al final del enum); la versión sale del primer
+  «N.» después del nombre (`core/rsp.c`). `salsa64_gfx_backend.s2dex` dice si el
+  backend las hace; si no, en el modo `auto` de la LLE van al microcódigo real
+  y si no terminan sin dibujar, como hasta hoy.
+- **Una tarea S2DEX carga el 3D a mitad de lista.** Las dos hacen un
+  `G_LOAD_UCODE` a F3DEX (RE2: F3DEX 2.06; Yoshi's Story: F3DEX 1.23) y siguen
+  con la misma lista; de ahí vuelven a S2DEX para los sprites y terminan dentro
+  de su tramo. `s2dex_run` recarga el microcódigo y devuelve el mando al
+  intérprete de F3DEX2 o de F3D (con la bandera `chain_ex`, que lo trata como
+  F3DEX 1.x); los intérpretes de F3D y F3DEX2 llaman de vuelta a `s2dex.c` para el
+  tramo. Antes de esto la tarea terminaba en el `G_LOAD_UCODE` sin
+  `G_RDPFULLSYNC` y el juego se quedaba sin la interrupción del DP.
+- **Comandos.** G_OBJ_LOADTXTR y G_BG_COPY/1CYC ya estaban; nuevos:
+  G_OBJ_MOVEMEM (uObjMtx de 24 bytes con `(w0 & 0xFFFF) = 0` y uObjSubMtx de 8
+  con `2`; la matriz vive en `g->raw[4..11]`, libre en el tramo),
+  G_OBJ_SPRITE, G_OBJ_LDTX_SPRITE/RECT/RECT_R, G_OBJ_RECTANGLE y
+  G_OBJ_RECTANGLE_R. G_SELECT_DL no se implementa (ningún juego de los
+  respaldos lo usa; cuenta como sin implementar).
+- **G_OBJ_SPRITE son dos triángulos, no un TEXRECT.** Con el RDP de la LLE a la
+  vista (seguimiento de los comandos que llegan por DPC_START/END, que no queda
+  en el árbol) se ve que el microcódigo lleva las cuatro esquinas por la matriz
+  (x' = A x + B y + X, y' = C x + D y + Y), con el segundo vértice **un píxel
+  antes** (esquinas inclusivas: un sprite de 16 × 16 va de x0 a x0 + 15), y lo
+  manda al RDP como dos triángulos con textura (0xCA) con s y t de 0 al mismo
+  tamaño en texels (volteados si los flags lo piden o si A o D son negativas;
+  Yoshi's Story usa D = −A). Un TEXRECT [x0, x0 + w) daba 1947 píxeles distintos
+  en una pantalla de sprites; armar el mismo cuadrilátero con
+  `gfx_rdp_tex_quad` (nuevo, en `rdp.c`, sale por el mismo camino que los
+  triángulos del RDP) da **los mismos píxeles que el microcódigo real** en todos
+  los sprites. Los de G_OBJ_RECTANGLE y G_OBJ_RECTANGLE_R van con TEXRECT y **no se
+  pudieron medir**: ni Resident Evil 2 (en lo que alcanza el host) ni Yoshi's Story
+  los usan.
+- **Fondos con imageX cerca del borde (sin resolver).** Un G_BG_1CYC de Yoshi's
+  Story trae imageX = 335,4 en una imagen de 336 de ancho y la LLE dibuja de un
+  tirón desde s = 7,4 (335,4 − 328: la carga empieza en el múltiplo de 8
+  texels anterior y lo que sobra del ancho sale de la fila siguiente, sin dar la
+  vuelta); `bg_draw` da la vuelta en la imagen, como manda el manual, y parte la tira
+  en dos. La imagen de esa escena es negra y no se nota; queda anotado.
+- **Resident Evil 2.** En los primeros 13 500 campos del host (con `re2-intro.pad`
+  y con START y A alternados) las 14 281 tareas S2DEX solo traen G_BG_COPY
+  (8895; el resto son limpiezas del fondo): copian a la pantalla los cuadros del
+  video, en tiras de 512 × 150 y 512 × 327 desde 0x806D4000, 0x8021FA00 y
+  0x802B5A00. De ahí no pasa: el host se queda en esa pantalla desde el campo
+  1500 (las imágenes cada 500 campos hasta el 13 500 son la misma), así que **no se llegó a los menús ni
+  a los objetos** de Resident Evil 2. Contra el microcódigo real
+  (`--state-save 1500:` y `--stop-gfx 3|6|9|12:` con y sin `--lle=all`) la
+  imagen de la HLE sale idéntica: **0 de 76 800 píxeles distintos**. Que esas
+  tiras salgan desordenadas (en la HLE y en la LLE por igual) sugiere que el
+  búfer de video se lee con otro ancho del que se escribió; sin resolver y sin
+  relación con S2DEX.
+- **Yoshi's Story.** Desde el estado del campo 2500 (la pantalla de resultados
+  «Beginning Treasure Hunt»), la imagen de la HLE contra `--lle=all` después de las
+  listas 3, 8, 20, 40, 520 y 600: 955, 1063, 1680, 1960, 3600 y 3849 píxeles
+  distintos de 76 800 (819, 520, 766, 745, 1442 y 1625 con diferencia de más de
+  16 en un canal). Los sprites (los puntos del borde, el pájaro, los números)
+  salen **idénticos**; lo que falta es el 3D de la misma lista: el modelo de
+  Yoshi, las monedas y la manzana, más una cuña de 30 × 15 píxeles que solo dibuja
+  la LLE. Es el camino de F3DEX 1.x, no el de S2DEX, y no se investigó si es de la
+  recarga a mitad de tarea o ya estaba.
+- **SPE 0: no cabe.** Con todo esto (tareas sueltas, objetos, el 3D que sigue
+  al `G_LOAD_UCODE`): texto 120 056 (antes 110 776, **+9280**), datos 800, bss
+  138 640 bytes; la pila tiene 2528 bytes libres y la cadena más honda usa 10 080
+  (`gfx_dl_f3d` 832 → `s2dex_run` 1264 → `obj_rectangle` 304 → `gfx_texrect` 464 →
+  `rect` 176 → `begin_prim` 736 → `gfx_combine` 2400 → …): holgura **−7552**
+  (mínimo 1536). Hay que quitar ~9,1 KB de texto, no 100 bytes: recortar el
+  código nuevo (`obj_rectangle` y `read_obj` usan divisiones de 64 bits, ~2 KB
+  entre las dos) no alcanza. `s2dex.c` solo ocupa 11 080 bytes (`s2dex_run` 5,1 KB con
+  `bg_draw` en línea). Por eso `GFX_S2DEX_FULL` (`rsp/gfx/hle.h`) solo existe en el
+  host y en el PPE y el SPE 0 compila el tramo S2DEX2 de siempre
+  (`SALSA64_SPU_S2DEX_FULL` lo incluye): su programa queda como antes
+  (texto 111 224, +448 por el reconocimiento de 1.x y el tramo genérico; datos 800 y bss 138 640 sin cambio; pila: 11 360 libres, cadena de 9584 bytes por `gfx_dl_f3dexbg` → `gfx_dl_f3dex2` → `gfx_dl_s2dex2` (marco de 1216) → `gfx_texrect` → …, holgura **1776**, mínimo 1536; al empezar eran 1840). Opciones, con números, para quien parta el SPE 0 por familias:
+  1. **Programa aparte para F3D + F3DEX + F3DEX2 + S2DEX** sin los de Rare y sin
+     F3DFLX (`f3ddkr` 3240 + `f3dexbg` 4416 + `f3dpd` 1344 + `flx` 864 = 9864
+     bytes de texto menos): con el resto igual, la pila tendría 12 392 bytes libres
+     contra 10 080 de cadena, **holgura +2312** (mínimo 1536). El programa de los
+     juegos de Rare y F-Zero X sale como el de hoy, con el tramo S2DEX2 chico (los
+     de Zelda y Kirby, que son F3DEX2, van en el primero).
+  2. **Todo en el PPE** (`gfx_ppe` en la carpeta de datos): ya funciona con este
+     código; más lento en 3D, y los dos juegos son sobre todo 2D.
+  3. **El tramo S2DEX en el PPE y el resto en el SPE:** el estado del RDP y la
+     TMEM no se comparten entre las dos instancias; no es fácil.
+- **Pruebas.** Unitarias (`tools/build.sh test-host`): gfx 50 (3 nuevas: tarea
+  S2DEX 2.x con LOADTXTR y OBJ_RECTANGLE, tarea S2DEX 1.x con la matriz y el
+  sprite en dos triángulos —con D negativa—, y la tarea S2DEX 2.x que carga
+  F3DEX2 a mitad de lista) y rsp 13 (detección de 1.x y 2.x), todas sin fallos;
+  el resto de las suites sigue en 0 fallidas. Regresión: Zelda OoT (campo 900 y la
+  casa nueva de `docs/pads/zelda-casa-nueva.pad`), Kirby 64, Banjo, DK64,
+  GoldenEye, Mario Kart 64 y Perfect Dark con `tools/escenas-host.sh --comparar`
+  contra el ejecutor anterior: **8 imágenes idénticas** (md5 de la casa
+  `5f67040f…` y de Kirby `4efd365c…`, iguales antes y después).
+- **Falta.** Probarlo en la PS3 con `gfx_ppe` (el SPE 0 aún no hace S2DEX
+  suelto), y llegar a los menús de Resident Evil 2 (el host no pasa de las
+  cinemáticas): ahí estarán los G_OBJ_RECTANGLE y los demás objetos.
+
 ## 2026-10-17 — Jet Force Gemini y Mickey's Speedway: G_DMA_TEX_OFFSET (0x02) y desplazamientos de textura
 
 La candidata 0.2.8-rc1 dejaba a los dos juegos con comandos sin implementar
