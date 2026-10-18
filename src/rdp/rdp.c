@@ -2166,11 +2166,21 @@ static bool to_rsxkit(const struct gfx_draw *g, struct set *s, int cur, rsxkit_d
 static bool rdp_reads_image(const struct set *s, const struct gfx_result *res, uint32_t addr, uint32_t width)
 {
 	uint32_t lo = addr, hi = addr + width * 2 * 240;
+	/* Una lectura DESPUÉS de dibujar la capa en la misma tarea (Banjo-Tooie:
+	 * la dibuja y la lee con desplazamientos de una fila, 20 dibujos más
+	 * adelante) no ve la copia de la tarea: esperar no cambia lo que lee. Solo
+	 * cuenta la lectura del contenido de la tarea anterior (Yoshi's Story). */
+	bool wrote[8] = { false };
 	uint32_t off = 0;
 	while (off + sizeof(struct gfx_cmd) <= res->cmd_bytes) {
 		const struct gfx_cmd *c = (const struct gfx_cmd *)(s->cmd + off);
 		if (c->op == GFX_OP_END || c->size < sizeof *c)
 			break;
+		if (c->op == GFX_OP_TARGET) {
+			for (int k = 0; k < 8; k++)
+				if (rdp.big8_seen[k].used && rdp.big8_seen[k].addr == c->a)
+					wrote[k] = true;
+		}
 		if (c->op == GFX_OP_DRAW && c->size >= sizeof(struct gfx_draw)) {
 			const struct gfx_draw *g = (const struct gfx_draw *)c;
 			for (int i = 0; i < g->ntex && i < 2; i++)
@@ -2186,16 +2196,25 @@ static bool rdp_reads_image(const struct set *s, const struct gfx_result *res, u
  * esas se esperan; las que nadie lee (Banjo-Tooie) van sin esperar. */
 static void big8_learn(const struct set *s, const struct gfx_result *res)
 {
+	/* Una lectura DESPUÉS de dibujar la capa en la misma tarea (Banjo-Tooie:
+	 * la dibuja y la lee con desplazamientos de una fila, decenas de dibujos
+	 * más adelante) no ve la copia de la tarea: esperar no cambia lo que lee.
+	 * Solo cuenta leer el contenido de la tarea anterior (Yoshi's Story). */
+	bool wrote[8] = { false };
 	uint32_t off = 0;
 	while (off + sizeof(struct gfx_cmd) <= res->cmd_bytes) {
 		const struct gfx_cmd *c = (const struct gfx_cmd *)(s->cmd + off);
 		if (c->op == GFX_OP_END || c->size < sizeof *c)
 			break;
+		if (c->op == GFX_OP_TARGET)
+			for (int k = 0; k < 8; k++)
+				if (rdp.big8_seen[k].used && rdp.big8_seen[k].addr == c->a)
+					wrote[k] = true;
 		if (c->op == GFX_OP_DRAW && c->size >= sizeof(struct gfx_draw)) {
 			const struct gfx_draw *g = (const struct gfx_draw *)c;
 			for (int i = 0; i < g->ntex && i < 2; i++)
 				for (int k = 0; k < 8; k++)
-					if (rdp.big8_seen[k].used && g->tex[i].src_addr >= rdp.big8_seen[k].addr &&
+					if (!wrote[k] && rdp.big8_seen[k].used && g->tex[i].src_addr >= rdp.big8_seen[k].addr &&
 					    g->tex[i].src_addr < rdp.big8_seen[k].addr + rdp.big8_seen[k].lw * 240)
 						rdp.big8_seen[k].read = true;
 		}
