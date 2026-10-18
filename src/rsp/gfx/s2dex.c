@@ -430,6 +430,7 @@ static void obj_movemem(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	unsigned kind = w0 & 0xFFFF;
 	if (kind != 0 && kind != 2) {
 		g->res->unknown_cmds++;
+		GFX_UNKNOWN(0xBFu);
 		return;
 	}
 	const uint8_t *p = gfx_io_read(g, GFX_IO_SMALL, gfx_addr(g, w1), kind ? 8 : 24);
@@ -718,6 +719,7 @@ static bool s2dex_run(struct gfx_state *g, bool gen1, bool foreign)
 			} else {
 				res->unknown_cmds++;
 				res->last_unknown = (uint8_t)(w0 >> 24);
+				GFX_UNKNOWN(w0 >> 24);
 			}
 			break;
 		}

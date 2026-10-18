@@ -8,7 +8,7 @@ OUT  ?= $(ROOT)/build/host
 
 CC      ?= gcc
 SAN     ?= -fsanitize=address,undefined -fno-sanitize-recover=undefined
-CFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffp-contract=off -fno-math-errno -DAUD_DEBUG \
+CFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffp-contract=off -fno-math-errno -DAUD_DEBUG -DGFX_CENSUS \
            -I$(ROOT)/src -I$(ROOT)/lib/spukit/include -I$(CURDIR) -I$(ROOT)/lib/rsxkit/include $(SAN) $(EXTRA_CFLAGS)
 LDFLAGS := $(SAN) $(EXTRA_LDFLAGS)
 LDLIBS  := -lm
@@ -20,7 +20,7 @@ CORE_SRCS := $(wildcard $(ROOT)/src/core/*.c $(ROOT)/src/cpu/*.c $(ROOT)/src/rsp
              $(ROOT)/src/frontend/osd_fps.c $(ROOT)/src/frontend/pausectl.c $(ROOT)/src/frontend/cheats.c $(ROOT)/src/frontend/cover.c $(ROOT)/src/frontend/namematch.c $(ROOT)/src/frontend/dlutil.c $(ROOT)/src/frontend/i18n.c \
              $(ROOT)/src/frontend/version.c $(ROOT)/src/frontend/perfilado.c $(ROOT)/src/frontend/savefile.c $(ROOT)/src/frontend/mempakfile.c \
              $(ROOT)/src/frontend/filters/crt_params.c $(ROOT)/src/frontend/cuelgue.c \
-             $(ROOT)/src/rdp/targets.c $(ROOT)/src/rdp/vmatch.c $(ROOT)/src/rdp/gfxdump.c $(ROOT)/src/rdp/blackbox.c $(ROOT)/src/host/raster.c $(ROOT)/lib/rsxkit/src/fpgen.c $(ROOT)/lib/rsxkit/src/text.c \
+             $(ROOT)/src/rdp/targets.c $(ROOT)/src/rdp/vmatch.c $(ROOT)/src/rdp/gfxdump.c $(ROOT)/src/rdp/blackbox.c $(ROOT)/src/host/raster.c $(ROOT)/src/host/gfxcheck.c $(ROOT)/lib/rsxkit/src/fpgen.c $(ROOT)/lib/rsxkit/src/text.c \
              $(ROOT)/lib/rsxkit/src/ui_geom.c
 TEST_SRCS := $(wildcard $(CURDIR)/*.c)
 OBJS      := $(patsubst $(ROOT)/%.c,$(OUT)/obj/%.o,$(CORE_SRCS) $(TEST_SRCS))

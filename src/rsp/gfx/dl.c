@@ -55,6 +55,10 @@ void gfx_ucode_reload(struct gfx_state *g, uint32_t text, int gen, bool nonear, 
 	g->dirty = true;
 }
 
+#ifdef GFX_CENSUS
+void (*gfx_unknown_hook)(uint32_t op);
+#endif
+
 void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *res)
 {
 	memset(res, 0, sizeof *res);

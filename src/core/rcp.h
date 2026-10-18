@@ -314,6 +314,11 @@ struct salsa64_rsp {
 	 * (la HLE JPEG). */
 	uint64_t (*clock_us)(void);
 	const struct salsa64_dpc_backend *dpc;
+	/* Comando del RDP a medias entre dos tramos (sp.c, dp_run): el RSP real
+	 * mueve DPC_END de a un comando (o de a media palabra: F3DEX escribe un
+	 * TEXRECT en dos tramos de 8 bytes), y el RDP espera el resto. */
+	uint8_t dp_carry[184];
+	uint32_t dp_carry_n, dp_carry_next;
 	uint32_t busy;          /* tipo de la tarea en curso; 0 = ninguna */
 	enum salsa64_gbi gbi;   /* de la tarea en curso */
 	bool gfx_nonear;        /* su microcódigo no recorta el plano cercano (".NoN") */
@@ -487,6 +492,7 @@ void salsa64_rsp_set_jpeg(struct salsa64_bus *bus, const struct salsa64_jpeg_bac
 /* Un tramo de comandos del RDP ya entregado (lo que un SPE anotó al correr
  * el microcódigo): deja DPC_START/END/CURRENT como si el RDP lo hubiera
  * consumido y lo pasa al consumidor. `dmem` como en salsa64_dpc_backend. */
+void salsa64_dp_drain(struct salsa64_bus *bus);
 void salsa64_dp_submit(struct salsa64_bus *bus, uint32_t start, uint32_t end, const uint8_t *dmem);
 /* Estados guardados: con la emulación quieta, espera a que el backend
  * termine la tarea en curso (gráfica, de audio o JPEG) y guarda su resultado; el

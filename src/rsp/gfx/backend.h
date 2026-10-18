@@ -53,6 +53,7 @@ struct salsa64_gfx_sync {
 	struct gfx_result res;
 	bool pending;
 	bool reset;
+	bool dpc_open;  /* el tramo anterior no cerró su lista (sin SYNC_FULL) */
 	uint32_t dpc_runs;
 	struct gfx_result dpc_sum;
 };

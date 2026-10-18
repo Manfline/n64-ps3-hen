@@ -569,6 +569,70 @@ static void rsp_dpc_from_cpu(void)
 #undef DP_REG
 }
 
+/* Un comando del RDP que llega partido entre dos DPC_END (F3DEX 1.x avanza
+ * DPC_END de a 8 bytes: un TEXRECT de 16 bytes son dos tramos) no se entrega
+ * a medias: espera al resto y el backend lo recibe entero, por una imagen
+ * propia (modo xbus) cuyo comando empieza en 0; lo que sigue se entrega por
+ * su lado. Un tramo con un comando completo y la mitad de otro entrega solo
+ * el primero. */
+static struct {
+	int runs;
+	uint32_t len;
+	uint8_t first[16];
+	bool xbus;
+} dpc_cut;
+
+static uint32_t dpc_cut_run(void *ctx, uint32_t start, uint32_t end, const uint8_t *dmem)
+{
+	(void)ctx;
+	dpc_cut.runs++;
+	dpc_cut.len = end - start;
+	dpc_cut.xbus = dmem != NULL;
+	for (unsigned i = 0; i < 16; i++)
+		dpc_cut.first[i] = dmem ? dmem[(start + i) & 0xFFF] : t_n64.bus.rdram[start + i];
+	return 0;
+}
+
+static void rsp_dpc_split_command(void)
+{
+	struct salsa64_bus *bus = &t_n64.bus;
+	static const struct salsa64_dpc_backend dpc = { NULL, dpc_cut_run };
+#define DP_REG(r) (0x04100000u + 4 * (r))
+	static const uint8_t texrect[16] = { 0xE4, 0x12, 0x34, 0x56, 0x00, 0x11, 0x22, 0x33,
+					     0xAA, 0xBB, 0xCC, 0xDD, 0x04, 0x00, 0x04, 0x00 };
+	memset(&dpc_cut, 0, sizeof dpc_cut);
+	memcpy(bus->rdram + 0x5000, texrect, 16);
+	memset(bus->rdram + 0x5010, 0, 16);  /* SYNC de 8 bytes: opcode 0x00 con los dos bits altos = 0xC0 → 1 palabra */
+	bus->rsp.dp_carry_n = 0;
+	salsa64_rsp_set_dpc(bus, &dpc);
+
+	wr(DP_REG(SALSA64_DP_START), 0x5000);
+	wr(DP_REG(SALSA64_DP_END), 0x5008);  /* la primera mitad del TEXRECT */
+	CHECK_EQ(dpc_cut.runs, 0);
+	wr(DP_REG(SALSA64_DP_END), 0x5010);  /* la segunda: ya está entero */
+	CHECK_EQ(dpc_cut.runs, 1);
+	CHECK_EQ(dpc_cut.len, 16);
+	CHECK(dpc_cut.xbus);
+	CHECK(!memcmp(dpc_cut.first, texrect, 16));
+
+	/* Un comando completo y la mitad de otro: el primero ya, el resto después. */
+	memcpy(bus->rdram + 0x5018, texrect, 16);
+	wr(DP_REG(SALSA64_DP_END), 0x5020);  /* [0x5010, 0x5020): 8 bytes de relleno + la mitad del TEXRECT */
+	CHECK_EQ(dpc_cut.runs, 2);
+	CHECK_EQ(dpc_cut.len, 8);
+	CHECK(!dpc_cut.xbus);
+	wr(DP_REG(SALSA64_DP_END), 0x5028);
+	CHECK_EQ(dpc_cut.runs, 3);
+	CHECK_EQ(dpc_cut.len, 16);
+	CHECK(!memcmp(dpc_cut.first, texrect, 16));
+	CHECK_EQ(bus->rsp.dp_carry_n, 0);
+
+	/* Un búfer nuevo (otro START) abandona lo que quedara a medias. */
+	wr(DP_REG(SALSA64_DP_END), 0x5030);
+	salsa64_rsp_set_dpc(bus, NULL);
+#undef DP_REG
+}
+
 /* Dos SYNC_FULL cercanos (la lista del CPU y la tarea que le sigue) son dos
  * interrupciones del DP, cada una a su hora: la ranura del planificador es
  * una sola y la segunda borraba a la primera; el mismo SYNC_FULL pedido dos
@@ -622,5 +686,6 @@ void t_suite_rsp(void)
 	RUN(rsp_detect_gbi_wr);
 	RUN(rsp_detect_gbi_dkr);
 	RUN(rsp_dpc_from_cpu);
+	RUN(rsp_dpc_split_command);
 	RUN(rsp_dp_interrupts_queue);
 }

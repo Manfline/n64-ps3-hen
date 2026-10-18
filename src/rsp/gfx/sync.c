@@ -150,6 +150,8 @@ static uint32_t sync_dpc_run(void *ctx, uint32_t start, uint32_t end, const uint
 		job.flags |= GFX_JOB_RESET;
 		s->reset = false;
 	}
+	if (s->dpc_open)
+		job.flags |= GFX_JOB_DPC_CONT;
 	s->sink.acquire(s->sink.ctx, &job);
 	gfx_run(s->state, &job, &res);
 	salsa64_gfx_rdram_fills(s->bus, &job, &res);
@@ -162,6 +164,7 @@ static uint32_t sync_dpc_run(void *ctx, uint32_t start, uint32_t end, const uint
 	s->dpc_sum.unknown_cmds += res.unknown_cmds;
 	s->dpc_sum.dl_errors += res.dl_errors;
 	s->dpc_sum.flags |= res.flags;
+	s->dpc_open = !(res.flags & GFX_RES_FULLSYNC);
 	return (res.flags & GFX_RES_FULLSYNC) ? SALSA64_GFX_FULLSYNC : 0;
 }
 

@@ -17,6 +17,11 @@
 #define G_TEXRECT     0xE4u
 #define G_TEXRECTFLIP 0xE5u
 
+#ifdef GFX_CENSUS
+/* Censo gráfico (src/host/gfxcheck.c): cuántos comandos de cada opcode del RDP llegaron. */
+uint32_t gfx_dpc_hist[64];
+#endif
+
 void gfx_dl_dpc(struct gfx_state *g)
 {
 	uint32_t pc = g->job->dl, end = g->job->dl_end;
@@ -43,6 +48,9 @@ void gfx_dl_dpc(struct gfx_state *g)
 		pc += 8 * words;
 		g->res->commands++;
 		uint32_t op = w[0] >> 24;
+#ifdef GFX_CENSUS
+		gfx_dpc_hist[op & 63]++;
+#endif
 		if (op >= 0xC8 && op <= 0xCF)
 			gfx_rdp_triangle(g, w);
 		else if (op == G_TEXRECT || op == G_TEXRECTFLIP)

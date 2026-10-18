@@ -18,6 +18,17 @@
 #include "rsp/gfx/gfx.h"
 #include "rsp/gfx/spe0.h"
 
+/* Censo gráfico del host (src/host/gfxcheck.c, -DGFX_CENSUS): cada comando
+ * que la HLE no implementa avisa al gancho con su opcode. En la PS3 y en el
+ * SPE la macro no genera nada. */
+#ifdef GFX_CENSUS
+extern void (*gfx_unknown_hook)(uint32_t op);
+extern uint32_t gfx_dpc_hist[64];  /* dpc.c: comandos del RDP por opcode (6 bits bajos) */
+#define GFX_UNKNOWN(op) do { if (gfx_unknown_hook) gfx_unknown_hook((uint32_t)(op)); } while (0)
+#else
+#define GFX_UNKNOWN(op) ((void)0)
+#endif
+
 #define GFX_MAX_VTX     64   /* F3D: 16; F3DEX y F3DEX2: 32 */
 #define GFX_MTX_STACK   32   /* F3D: 10, F3DEX2: 18 en la RDRAM */
 #define GFX_DL_STACK    32   /* F3D: 10, F3DEX2: 18 */

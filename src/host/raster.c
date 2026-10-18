@@ -782,7 +782,8 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 	uint32_t suspect[RDP_TARGETS_MAX] = { 0 };
 	struct { uint32_t addr, width, bpp, rows; } tall = { 0, 0, 0, 0 };  /* color image más alta que 480 */
 	++task_no;  /* tg.field lo lleva el VI (raster_vi), como en la PS3 */
-	rdp_targets_task(&tg);
+	if (!(job->flags & GFX_JOB_DPC_CONT))
+		rdp_targets_task(&tg);
 	scratch_slot = -1;
 	last_job = *job;
 #ifdef SALSA64_GFX_TRACE
@@ -1101,6 +1102,11 @@ const uint32_t *raster_image(uint32_t addr, uint32_t *width)
 		}
 	}
 	return NULL;
+}
+
+const uint32_t *raster_slot_image(int slot)
+{
+	return slot >= 0 && slot < RDP_TARGETS_MAX && tg.t[slot].used ? rgb[slot] : NULL;
 }
 
 bool raster_target_info(int slot, uint32_t *addr, uint32_t *width, uint32_t *bpp, uint32_t *lh)

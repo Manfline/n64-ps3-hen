@@ -168,13 +168,83 @@ uint32_t salsa64_dp_read(struct salsa64_bus *bus, uint32_t reg)
 	return v;
 }
 
-/* [start, end) ya está en manos del RDP: lo consume el backend. */
-static void dp_run(struct salsa64_bus *bus, uint32_t start, uint32_t end, const uint8_t *dmem)
+static void dp_deliver(struct salsa64_bus *bus, uint32_t start, uint32_t end, const uint8_t *dmem)
 {
 	const struct salsa64_dpc_backend *dpc = bus->rsp.dpc;
 	bus->rsp.stats.dpc_runs++;
 	if (dpc && dpc->run(dpc->ctx, start, end, dmem) & SALSA64_GFX_FULLSYNC)
 		salsa64_rsp_dp_done(bus);
+}
+
+/* Bytes de un comando del RDP (el RDP lo reconoce por sus 6 bits bajos, como
+ * gfx_rdp_raw_words): TEXRECT 16, triángulos 32 a 176, el resto 8. */
+static uint32_t dp_cmd_bytes(uint8_t b0)
+{
+	unsigned op = b0 | 0xC0u;
+	if (op == 0xE4 || op == 0xE5)
+		return 16;
+	if (op < 0xC8 || op > 0xCF)
+		return 8;
+	return 8u * (4 + ((op & 4) ? 8 : 0) + ((op & 2) ? 8 : 0) + ((op & 1) ? 2 : 0));
+}
+
+static uint8_t dp_byte(const struct salsa64_bus *bus, uint32_t a, const uint8_t *dmem)
+{
+	if (dmem)
+		return dmem[a & 0xFFFu];
+	return a < bus->rdram_size ? bus->rdram[a] : 0;
+}
+
+/* [start, end) ya está en manos del RDP: lo consume el backend, pero solo
+ * por comandos completos. Lo que queda de un comando al final del tramo se
+ * guarda y se completa con el tramo siguiente (si es contiguo), como el RDP
+ * de verdad, que no empieza un comando hasta tenerlo entero. */
+static void dp_run(struct salsa64_bus *bus, uint32_t start, uint32_t end, const uint8_t *dmem)
+{
+	struct salsa64_rsp *r = &bus->rsp;
+	if (r->dp_carry_n && start != r->dp_carry_next)
+		r->dp_carry_n = 0;  /* otro búfer: el comando a medias se abandona */
+	if (r->dp_carry_n) {
+		uint32_t need = dp_cmd_bytes(r->dp_carry[0]);
+		uint32_t have = r->dp_carry_n, avail = end - start;
+		if (need - have > avail) {
+			for (uint32_t k = 0; k < avail; k++)
+				r->dp_carry[have + k] = dp_byte(bus, start + k, dmem);
+			r->dp_carry_n += avail;
+			r->dp_carry_next = end;
+			return;
+		}
+		/* El comando completo, por un 4 KB propio (como xbus: los comandos
+		 * de ahí, lo demás de la RDRAM). */
+		static uint8_t img[4096] __attribute__((aligned(128)));
+		uint32_t take = need - have;
+		memcpy(img, r->dp_carry, have);
+		for (uint32_t k = 0; k < take; k++)
+			img[have + k] = dp_byte(bus, start + k, dmem);
+		r->dp_carry_n = 0;
+		start += take;
+		dp_deliver(bus, 0, need, img);
+		if (start >= end)
+			return;
+	}
+	/* Hasta dónde llegan comandos completos. */
+	uint32_t a = start;
+	while (a < end) {
+		uint32_t n = dp_cmd_bytes(dp_byte(bus, a, dmem));
+		if (a + n > end)
+			break;
+		a += n;
+	}
+	if (a < end) {
+		r->dp_carry_n = end - a;
+		if (r->dp_carry_n > sizeof r->dp_carry)
+			r->dp_carry_n = 0;
+		for (uint32_t k = 0; k < r->dp_carry_n; k++)
+			r->dp_carry[k] = dp_byte(bus, a + k, dmem);
+		r->dp_carry_next = end;
+	}
+	if (a > start)
+		dp_deliver(bus, start, a, dmem);
 }
 
 /* Entrega [DPC_CURRENT, DPC_END) al consumidor del RDP, si no está
@@ -187,6 +257,21 @@ static void dp_flush(struct salsa64_bus *bus)
 	uint32_t start = dp[SALSA64_DP_CURRENT], end = dp[SALSA64_DP_END];
 	dp[SALSA64_DP_STATUS] |= SALSA64_DP_STATUS_CBUF_READY;
 	if (end <= start)
+		return;
+	dp[SALSA64_DP_CURRENT] = end;
+	dp_run(bus, start, end, (dp[SALSA64_DP_STATUS] & SALSA64_DP_STATUS_XBUS) ? bus->sp_mem : NULL);
+}
+
+/* Diagnóstico (censo gráfico): entrega ya lo que el RDP tiene pendiente aunque
+ * esté congelado. F3DEX2 en FIFO congela el RDP al arrancar la tarea y es el CPU
+ * quien lo descongela después de la tarea; para comparar la salida de una tarea
+ * hay que dibujarla antes. DPC_STATUS no cambia: quien descongele ya no
+ * encuentra nada pendiente. */
+void salsa64_dp_drain(struct salsa64_bus *bus)
+{
+	uint32_t *dp = bus->dp;
+	uint32_t start = dp[SALSA64_DP_CURRENT], end = dp[SALSA64_DP_END];
+	if (!(dp[SALSA64_DP_STATUS] & SALSA64_DP_STATUS_FREEZE) || (dp[SALSA64_DP_STATUS] & SALSA64_DP_STATUS_START_VALID) || end <= start)
 		return;
 	dp[SALSA64_DP_CURRENT] = end;
 	dp_run(bus, start, end, (dp[SALSA64_DP_STATUS] & SALSA64_DP_STATUS_XBUS) ? bus->sp_mem : NULL);

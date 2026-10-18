@@ -10,7 +10,7 @@ OUT  ?= $(ROOT)/build/host
 
 CC      ?= gcc
 SAN     ?= -fsanitize=address,undefined -fno-sanitize-recover=undefined
-CFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffp-contract=off -fno-math-errno -DAUD_DEBUG \
+CFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffp-contract=off -fno-math-errno -DAUD_DEBUG -DGFX_CENSUS \
            -I$(ROOT)/src -I$(ROOT)/lib/spukit/include $(SAN) $(EXTRA_CFLAGS)
 LDFLAGS := $(SAN) $(EXTRA_LDFLAGS)
 LDLIBS  := -lm -pthread
