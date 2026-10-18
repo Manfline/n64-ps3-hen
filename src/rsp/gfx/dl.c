@@ -49,7 +49,7 @@ void gfx_ucode_reload(struct gfx_state *g, uint32_t text, int gen, bool nonear, 
 	 * 1 en cada cuadro). */
 	g->clip_ratio[0] = g->clip_ratio[1] = gen == 1 ? 1.0f : 2.0f;
 	g->ucode = text;
-	g->ucode_var = data ? (uint8_t)gfx_ucode_variant(g, data, size) : 0;
+	g->ucode_var = GFX_HAS(FLX) && data ? (uint8_t)gfx_ucode_variant(g, data, size) : 0;
 	g->flx_table = 0;
 	g->near_clip = !nonear;
 	g->dirty = true;
@@ -89,24 +89,31 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 	if (job->flags & GFX_JOB_DPC) {
 		gfx_dl_dpc(g);
 	} else {
+		/* En el SPE 0, cada imagen compila solo sus familias (spe0.h): el
+		 * PPE no le manda las de otra, y si llegara una, no dibuja nada. */
 		switch (job->gbi) {
 		case SALSA64_GBI_F3D:
 		case SALSA64_GBI_F3DEX:
 		case SALSA64_GBI_F3DWR:
-			gfx_dl_f3d(g, NULL);
+			if (GFX_HAS(F3D))
+				gfx_dl_f3d(g, NULL);
 			break;
 		case SALSA64_GBI_F3DPD:
-			gfx_dl_f3dpd(g);
+			if (GFX_HAS(F3DPD))
+				gfx_dl_f3dpd(g);
 			break;
 		case SALSA64_GBI_F3DDKR:
 		case SALSA64_GBI_F3DJFG:
-			gfx_dl_f3ddkr(g);
+			if (GFX_HAS(F3DDKR))
+				gfx_dl_f3ddkr(g);
 			break;
 		case SALSA64_GBI_F3DEXBG:
-			gfx_dl_f3dexbg(g);
+			if (GFX_HAS(F3DEXBG))
+				gfx_dl_f3dexbg(g);
 			break;
 		default:
-			gfx_dl_f3dex2(g, NULL);
+			if (GFX_HAS(F3DEX2))
+				gfx_dl_f3dex2(g, NULL);
 			break;
 		}
 	}

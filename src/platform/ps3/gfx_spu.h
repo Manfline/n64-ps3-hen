@@ -8,6 +8,11 @@
  * es SMT: una espera activa le quita ciclos al otro hilo) y para que el
  * reloj emulado no corra más rápido que el real. `finish` recoge el
  * resultado (ya casi nunca espera).
+ *
+ * El programa del SPE viene en varias imágenes, una por grupo de familias de
+ * microcódigos (rsp/gfx/spe0.h): se carga la de la familia de cada tarea y,
+ * si cambia, se pasa el estado del RDP a la nueva (gfx_spu.c,
+ * docs/spe0-familias.md).
  */
 #ifndef SALSA64_PLATFORM_PS3_GFX_SPU_H
 #define SALSA64_PLATFORM_PS3_GFX_SPU_H
@@ -37,6 +42,14 @@ struct salsa64_gfx_spu {
 	uint32_t seq;
 	bool pending;
 	bool nocache;        /* el hash del SPE no coincide: sin caché de texturas */
+	bool no_worker;      /* la tarea en curso no tuvo SPE: termina cortada */
+	/* Imagen del SPE 0 cargada (rsp/gfx/spe0.h; -1: ninguna) y sus cambios. */
+	int image;
+	uint32_t image_tasks0;   /* `tasks` al cargarla */
+	uint32_t last_task;      /* número (job->task) de la última tarea o lista mandada */
+	uint32_t switches;       /* cambios de imagen con el juego andando */
+	uint64_t switch_us;      /* lo que costaron, en el PPE */
+	uint32_t selftest_bad;   /* imágenes cuyas tareas de prueba difirieron del PPE (bit por imagen) */
 	/* Estadísticas desde el arranque. */
 	uint32_t tasks;
 	uint64_t spu_ticks;  /* tiempo de la HLE en el SPE (ticks del timebase) */

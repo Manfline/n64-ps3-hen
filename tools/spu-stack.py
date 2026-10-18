@@ -25,7 +25,10 @@ quién llama por puntero) o se ignora con --ignore; si no, es un error. Una
 recursión también (la cuenta no tendría tope).
 
 Escribe la cadena, los bytes libres y la holgura; sale con 1 si la holgura es
-menor que --min o si algo de lo anterior no se puede acotar.
+menor que --min o si algo de lo anterior no se puede acotar. Con --header
+ARCHIVO --name NOMBRE deja además, para el PPE, un .h con NOMBRE_END (bytes
+del local store hasta _end), NOMBRE_FREE, NOMBRE_STACK (la cadena más honda)
+y NOMBRE_SLACK (la holgura).
 """
 import argparse
 import re
@@ -50,6 +53,8 @@ def main():
     ap.add_argument("--root", default="_start")
     ap.add_argument("--edge", action="append", default=[], help="DE:A, llamada indirecta conocida")
     ap.add_argument("--ignore", action="append", default=[], help="función cuyas llamadas indirectas no cuentan")
+    ap.add_argument("--header", help="archivo .h con los números, para el PPE")
+    ap.add_argument("--name", default="SPU", help="prefijo de los #define de --header")
     ap.add_argument("objects", nargs="*")
     a = ap.parse_args()
     errors = []
@@ -138,6 +143,11 @@ def main():
     print(f"          pila: {free} bytes libres, la cadena más honda usa {total}, holgura {slack}"
           f" (mínimo {a.min})")
     print("            " + " → ".join(chain))
+    if a.header:
+        n = a.name
+        with open(a.header, "w") as h:
+            h.write(f"/* tools/spu-stack.py --bin {name} */\n#define {n}_END {syms.get('_end', 0)}u\n"
+                    f"#define {n}_FREE {free}u\n#define {n}_STACK {total}u\n#define {n}_SLACK {slack}\n")
     for e in errors:
         print(f"{name}: {e}", file=sys.stderr)
     if errors or slack < a.min:

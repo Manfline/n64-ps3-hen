@@ -213,24 +213,27 @@ static void bg_draw(struct gfx_state *g, uint32_t seg, bool scaled)
 
 	/* Marco recortado a la izquierda y arriba de la pantalla: se corre la
 	 * imagen lo que se recorta. Todo en texels ×1024 (u5.10) para la
-	 * escala. */
-	uint64_t sx0 = (uint64_t)b.image_x << 10, ty0 = (uint64_t)b.image_y << 10;
+	 * escala, en 32 bits: imageX < 2048, frameX ≥ −8192 y frameW < 16 384
+	 * píxeles, la escala < 65 536 y la imagen ≤ 1024 texels, así que nada
+	 * pasa de 2^31. En 64 bits, el SPE 0 traía 5,3 KB de libgcc (__muldi3,
+	 * __moddi3, __udivdi3, __umoddi3) solo para esto. */
+	uint32_t sx0 = b.image_x << 10, ty0 = b.image_y << 10;
 	uint32_t fx = 0, fy = 0;
 	if (b.frame_x < 0) {
 		fx = (uint32_t)-b.frame_x;
-		sx0 += (uint64_t)fx * b.scale_w;
+		sx0 += fx * b.scale_w;
 	}
 	if (b.frame_y < 0) {
 		fy = (uint32_t)-b.frame_y;
-		ty0 += (uint64_t)fy * b.scale_h;
+		ty0 += fy * b.scale_h;
 	}
 	if (fx >= b.frame_w || fy >= b.frame_h)
 		return;
 	uint32_t x_left = (uint32_t)(b.frame_x + (int32_t)fx), y = (uint32_t)(b.frame_y + (int32_t)fy);
 	uint32_t y_end = (uint32_t)(b.frame_y + (int32_t)b.frame_h);
 	uint32_t x_end = (uint32_t)(b.frame_x + (int32_t)b.frame_w);
-	uint64_t wrap_w = (uint64_t)b.image_w << 10, wrap_h = (uint64_t)b.image_h << 10;
-	uint64_t t = ty0 % wrap_h;
+	uint32_t wrap_w = b.image_w << 10, wrap_h = b.image_h << 10;
+	uint32_t t = ty0 % wrap_h;
 
 	while (y < y_end) {
 		/* Filas de imagen de esta tira: desde la de t, hasta per_load (una
@@ -240,7 +243,7 @@ static void bg_draw(struct gfx_state *g, uint32_t seg, bool scaled)
 		if (n > b.image_h - ty)
 			n = b.image_h - ty;
 		/* Píxeles de pantalla que caen en esas filas. */
-		uint64_t t_end = (uint64_t)(ty + n) << 10;
+		uint32_t t_end = (ty + n) << 10;
 		uint32_t rows = (uint32_t)((t_end - t + b.scale_h - 1) / b.scale_h);
 		if (rows == 0)
 			rows = 1;
@@ -250,7 +253,7 @@ static void bg_draw(struct gfx_state *g, uint32_t seg, bool scaled)
 		load_rows(g, &b, ty, load_n);
 
 		/* En x, tramos hasta la vuelta de la imagen. */
-		uint64_t s = sx0 % wrap_w;
+		uint32_t s = sx0 % wrap_w;
 		uint32_t x = x_left;
 		while (x < x_end) {
 			uint32_t cols = (uint32_t)((wrap_w - s + b.scale_w - 1) / b.scale_w);
@@ -259,10 +262,10 @@ static void bg_draw(struct gfx_state *g, uint32_t seg, bool scaled)
 			strip_rect(g, x << 2, y << 2, (x + cols) << 2, (y + rows) << 2, (uint32_t)(s >> 5),
 				   (uint32_t)(t >> 5), b.scale_w, b.scale_h, copy);
 			x += cols;
-			s = (s + (uint64_t)cols * b.scale_w) % wrap_w;
+			s = (s + cols * b.scale_w) % wrap_w;
 		}
 		y += rows;
-		t = (t + (uint64_t)rows * b.scale_h) % wrap_h;
+		t = (t + rows * b.scale_h) % wrap_h;
 	}
 }
 

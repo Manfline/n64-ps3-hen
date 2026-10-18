@@ -132,6 +132,7 @@
 #include "rsp/gfx/backend.h"
 #include "rsp/audio/backend.h"
 #include "rsp/gfx/hle.h"
+#include "rsp/gfx/spe0.h"
 #include "rsp/jpeg/jpeg.h"
 #include "rsp/jpeg/re2.h"
 #include "rsp/lle/core.h"
@@ -2543,9 +2544,33 @@ static uint32_t jitter_rand(void)
 	return jitter_state >> 8;
 }
 
+/* Tareas gráficas por microcódigo y cambios de imagen del SPE 0 que habría
+ * en la PS3 (rsp/gfx/spe0.h): al final, en el resumen de gfx. */
+static struct {
+	uint32_t tasks[SALSA64_GBI_F3DJFG + 1];
+	int img;          /* imagen de la última tarea con HLE, o -1 */
+	uint32_t switches;
+	uint32_t imgs;    /* imágenes usadas (bit por imagen) */
+} gbi_hist = { .img = -1 };
+
+static void count_gbi(enum salsa64_gbi gbi)
+{
+	if ((unsigned)gbi <= SALSA64_GBI_F3DJFG)
+		gbi_hist.tasks[gbi]++;
+	int img = gfx_spe0_image(gbi);
+	if (img < 0)
+		return;
+	if (gbi_hist.img >= 0 && img != gbi_hist.img)
+		gbi_hist.switches++;
+	gbi_hist.img = img;
+	gbi_hist.imgs |= 1u << img;
+}
+
 static void trace_rsp(void *ctx, const struct salsa64_task *t, enum salsa64_gbi gbi)
 {
 	(void)ctx;
+	if (t->type == SALSA64_TASK_GFX)
+		count_gbi(gbi);
 	if (jitter_state) {
 		n64.bus.rsp.audio_cycles = 8000 + 10000 * (jitter_rand() % 7);
 		n64.bus.rsp.gfx_cycles = 30000 + 10000 * (jitter_rand() % 5);
@@ -2630,6 +2655,24 @@ static void gfx_summary(void)
 		s->tex_reused / n, s->tex_old / n, s->tex_arena / n, s->tex_evicted / n,
 		s->unknown_cmds, s->last_unknown, s->skipped, s->bg, s->approx_cc, s->dl_errors, n64.bus.rsp.stats.cut,
 		s->flags);
+	static const char *const gbi_names[] = { "desconocido", "F3DEX2", "F3DZEX2", "F3D", "F3DEX", "S2DEX", "F3DPD",
+						 "F3DEXBG", "F3DWR", "F3DDKR", "F3DJFG" };
+	_Static_assert(sizeof gbi_names / sizeof gbi_names[0] == SALSA64_GBI_F3DJFG + 1, "gbi_names");
+	char hist[256];
+	size_t used = 0;
+	hist[0] = '\0';
+	for (unsigned i = 0; i <= SALSA64_GBI_F3DJFG; i++)
+		if (gbi_hist.tasks[i] && used < sizeof hist)
+			used += (size_t)snprintf(hist + used, sizeof hist - used, "%s%s %u", used ? ", " : "", gbi_names[i],
+						 gbi_hist.tasks[i]);
+	char imgs[96];
+	used = 0;
+	imgs[0] = '\0';
+	for (int i = 0; i < GFX_SPE0_IMAGES; i++)
+		if ((gbi_hist.imgs >> i & 1) && used < sizeof imgs)
+			used += (size_t)snprintf(imgs + used, sizeof imgs - used, "%s%s", used ? " + " : "", gfx_spe0_name(i));
+	fprintf(stderr, "salsa64-run: gfx por microcódigo: %s; imagen del SPE 0: %s (%u cambios de imagen)\n",
+		hist[0] ? hist : "ninguna tarea", imgs[0] ? imgs : "ninguna", gbi_hist.switches);
 	if (gfx.raster) {
 		uint32_t rb, pr, trsx, trd, tdec;
 		raster_fb_stats(&rb, &pr, &trsx, &trd, &tdec);

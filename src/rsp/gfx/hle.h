@@ -16,6 +16,7 @@
 #include <stdint.h>
 
 #include "rsp/gfx/gfx.h"
+#include "rsp/gfx/spe0.h"
 
 #define GFX_MAX_VTX     64   /* F3D: 16; F3DEX y F3DEX2: 32 */
 #define GFX_MTX_STACK   32   /* F3D: 10, F3DEX2: 18 en la RDRAM */
@@ -25,10 +26,15 @@
  * veces la misma con la caché llena o apagada): 32 entradas, 1,5 KB del
  * local store del SPE 0. */
 #define GFX_ARENA_TEXTURES 32
-/* Texturas en la caché entre tareas: 768 (antes 896 y 1024) para la pila del
- * SPE 0; en el host, el máximo de texturas distintas en 100 campos es 428
- * (GoldenEye en Dam). No hace falta potencia de 2 (texcache.c usa %). */
-#define GFX_TC_ENTRIES  768
+/* Texturas en la caché entre tareas: en el SPE 0, las de su imagen
+ * (spe0.h; la pila manda); en el host y el PPE, 1024. El máximo de texturas
+ * distintas en 100 campos es 428 (GoldenEye en Dam, en el host). No hace
+ * falta potencia de 2 (texcache.c usa %). */
+#ifdef GFX_SPE0_IMG
+#define GFX_TC_ENTRIES  GFX_SPE0_CAT(GFX_SPE0_TC_, GFX_SPE0_IMG)
+#else
+#define GFX_TC_ENTRIES  1024
+#endif
 #define GFX_TC_SLOTS    2048 /* índice por hash de la caché (potencia de 2) */
 #define GFX_MAX_COMMANDS (1u << 20)
 
@@ -94,6 +100,12 @@ struct gfx_texcache {
 	uint32_t head_off;       /* donde va la próxima textura */
 	uint32_t tail, count;    /* cola de entradas en e[] (circular) */
 	uint32_t task, done_task;
+	/* Tras cambiar de imagen del SPE 0 el directorio empieza vacío, pero la
+	 * región puede tener texturas que el consumidor aún lee: hasta que
+	 * termine la tarea `fence` (fence_on), nada nuevo entra a la región
+	 * (va al arena). Ver gfx_tc_fence. */
+	uint32_t fence;
+	uint32_t fence_on;
 	uint16_t index[GFX_TC_SLOTS];  /* posición en e[] + 1; 0 = libre */
 	struct gfx_tc_entry e[GFX_TC_ENTRIES];
 };
@@ -240,7 +252,7 @@ struct gfx_state {
 	struct gfx_texcache tc;
 	/* Fuera del tramo de los estados guardados: al cargar uno se olvida
 	 * (gfx_fb_forget), como el consumidor suelta sus destinos. */
-	struct gfx_fbimg fbimg[GFX_FB_IMAGES];
+	struct gfx_fbimg fbimg[GFX_FB_IMAGES] __attribute__((aligned(16)));  /* una DMA al cambiar de imagen */
 	struct gfx_ccmemo ccmemo;
 
 	/* --- Salida de la tarea en curso --- */
@@ -456,6 +468,11 @@ const struct gfx_tc_entry *gfx_tc_find(struct gfx_state *g, const uint32_t key[2
 /* Lugar para una textura nueva de `size` bytes, o NULL si no hay (todo lo
  * que habría que desalojar lo puede leer aún el consumidor). */
 struct gfx_tc_entry *gfx_tc_insert(struct gfx_state *g, const uint32_t key[2], uint32_t size);
+/* Directorio vacío sobre la región (ea, cap) con una barrera: mientras el
+ * consumidor no termine la tarea `task` (la última de la imagen anterior
+ * del SPE 0, que pudo dejar ahí texturas en uso), las texturas nuevas van
+ * al arena. */
+void gfx_tc_fence(struct gfx_state *g, uint64_t ea, uint32_t cap, uint32_t task);
 
 /* tmem.c: cargas a la TMEM y decodificación de una tile. */
 void gfx_load_block(struct gfx_state *g, uint32_t w0, uint32_t w1);
@@ -482,6 +499,9 @@ void gfx_tile_size(const struct gfx_tile *t, uint32_t *w, uint32_t *h);
 #define GFX_RAW_END   (offsetof(struct gfx_state, tmem) + sizeof(((struct gfx_state *)0)->tmem))
 _Static_assert(GFX_RAW_END % 16 == 0 && GFX_RAW_END - GFX_RAW_START <= 16384,
 	       "el tramo del estado del RDP no cabe en una DMA");
+_Static_assert(sizeof(((struct gfx_state *)0)->fbimg) == GFX_FB_BYTES &&
+		       offsetof(struct gfx_state, fbimg) % 16 == 0,
+	       "las color images dibujadas no van en una DMA de GFX_FB_BYTES");
 
 /* state.c: lo que persiste entre tareas, en el formato portable de
  * GFX_STATE_* (gfx.h): los registros solos (el SPE manda la TMEM por DMA)

@@ -44,8 +44,33 @@
 #define GFX_STATE_REGS  256u
 #define GFX_STATE_BYTES (GFX_STATE_REGS + 4096u)
 
+/* Al cambiar de imagen del SPE 0 (rsp/gfx/spe0.h) el PPE usa los mismos
+ * trabajos con fb_ea: además del tramo, las color images dibujadas (fbimg,
+ * GFX_FB_BYTES en fb_ea, alineado a 16) van y vuelven, y al cargar, con
+ * cache_ea, el directorio de la caché queda vacío con la barrera de
+ * fence_task (gfx_tc_fence en hle.h). Con fb_ea = 0, solo el tramo. */
 struct gfx_state_job {
 	uint64_t ea;
+	uint64_t fb_ea;
+	uint64_t cache_ea;
+	uint32_t cache_cap;
+	uint32_t fence_task;
+};
+#define GFX_FB_BYTES 128u
+
+/* Qué programa es (src/spu/gfx/main.c): imagen, entradas de la caché de
+ * texturas, dónde termina el programa (_end), el tope de la pila y los
+ * bytes de pila que nunca se tocaron desde que arrancó (con el patrón que
+ * pone al arrancar si se le pide; si no, los que siguen en cero). */
+#define GFX_JOB_INFO 5
+struct gfx_info {
+	uint32_t image;
+	uint32_t tc_entries;
+	uint32_t end;
+	uint32_t stack_top;
+	uint32_t untouched;
+	uint32_t raw_start, raw_end;
+	uint32_t filled;     /* 1: la pila se llenó con el patrón; 0: se cuentan ceros (aproximado) */
 };
 
 /* Hash de `len` bytes desde `start` de un anillo de `size` bytes (≤ 4096,
