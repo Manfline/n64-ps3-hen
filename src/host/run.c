@@ -1270,6 +1270,10 @@ static void gfx_acquire(void *ctx, struct gfx_job *job)
 	}
 	job->task = gfx.tasks + 1;
 	job->done_task = gfx.tasks;
+	if (job->flags & GFX_JOB_DPC_CONT) {  /* sigue la tarea del tramo anterior (gfx.h) */
+		job->task = gfx.tasks;
+		job->done_task = gfx.tasks - 1;
+	}
 	interp_task_begin(job, n64.bus.vi.fields);
 	if (job->flags & GFX_JOB_INTERP)
 		job->cmd_cap = sizeof gfx_cmd;
@@ -1422,7 +1426,8 @@ static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_resu
 	if (getenv("SALSA64_GFX_CUTCHECK") && n64.bus.vi.fields >= trace_from)
 		cut_check(res);
 	hp_task(res);
-	gfx.tasks++;
+	if (!(job->flags & GFX_JOB_DPC_CONT))
+		gfx.tasks++;
 #ifdef SALSA64_GFX_TRACE
 	ts_window();
 #endif

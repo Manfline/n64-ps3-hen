@@ -131,6 +131,13 @@ struct gfx_job {
  * (GFX_RES_VGROUP_FULL) y esa tarea no se interpola. */
 #define GFX_JOB_INTERP 0x40u
 #define GFX_VGROUP_SHARE 3u
+/* Con GFX_JOB_DPC: este tramo sigue una lista del RDP que aún no vio su
+ * SYNC_FULL (el microcódigo real entrega su salida por tramos, a veces de
+ * un comando). Es la misma tarea para el consumidor: no envejece a los
+ * destinos ni cambia el número de tarea (si no, 9 tramos sin dibujar en el
+ * destino bastaban para que volviera a cebarse desde la RDRAM y borrara lo
+ * dibujado). */
+#define GFX_JOB_DPC_CONT 0x80u
 
 /* ---- Caché de texturas -------------------------------------------------------
  * Las texturas decodificadas viven en una región de memoria que pone el
