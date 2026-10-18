@@ -37,6 +37,11 @@ opciones sale con letras revueltas.
   los objetos que sí están, el juego apaga el VI y deja de mandar tareas
   tras el Reset) apunta al núcleo. Prueba barata sugerida en la consola:
   repetir el recorrido con `sin-recompilador` en `/dev_hdd0/salsa64`.
+- **Pruebas y paquete.** `tools/build.sh test-host`: 656 pruebas, 0
+  fallidas; RPCS3: repetición de la tarea del fondo de 512 × 509 sin error.
+  Paquete «Salsa64 rc7b3» (SLSA00165, v0.2.7-90-gc29af9f):
+  `build/salsa64-rc7b3/salsa64-rc7b3.pkg`, 3 298 768 bytes, sha256
+  `08d0dc8b9dec0f9a38efb144c0ed073fa1c220209cb6d84262bb62849fb2c65e`.
 
 ## 2026-10-18 — rc7b2: Resident Evil 2, estela de Leon, menú de opciones y pantalla de muerte
 
