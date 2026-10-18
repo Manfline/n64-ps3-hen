@@ -30,6 +30,16 @@ Con las cajas negras de la rc7b (`build/rc7b-ps3/`):
   la posición de recorte en cero y el RSX los descartaba. **Arreglo**
   (`gfx_modify_vertex`, `src/rsp/gfx/geom.c`): un vértice con w = 0 pasa a
   w = 1 y su posición de pantalla se lleva a recorte.
+  Solo en el host y en las imágenes 1 a 4 del SPE: la imagen 0 (F3D) no
+  tiene pila de sobra, y RE2 usa F3DEX2.
+- **Pruebas.** `tools/build.sh test-host`: 656 pruebas, 0 fallidas;
+  `tools/escenas-host.sh --comparar` contra la rama antes de estos cambios:
+  8 idénticas (SM64 no estaba en la carpeta de respaldos). Nada de esto se
+  ha visto en la PS3.
+- **Paquete de prueba** «Salsa64 rc7b2» (SLSA00163, v0.2.7-88-g063a2dc, con la
+  guarda de `rc6-memoria` unida): `build/salsa64-rc7b2/salsa64-rc7b2.pkg`,
+  3 296 464 bytes, sha256
+  `f72a677903ce9b99b313a310840237bdaa6431481e9ce7d221556eb2e0161ee2`.
 
 ## 2026-10-18 — rc7b2: Yoshi tras regresar y tras el reinicio; la vibración de Rogue
 
