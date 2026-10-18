@@ -82,6 +82,12 @@ compila; `lib/rsxkit/src/fpgen.c`):
   el culling sale al revés (faltaban el cielo y la luna en Zelda).
 - Profundidad: `rsxSetZMinMaxControl(ctx, FALSE, TRUE, FALSE)` (sin recorte
   en z cercano/lejano por hardware; la HLE ya recortó) y z/w en [0, 1].
+- **Escribir la z sin probarla** (Z_UPD sin Z_CMP en la N64): en el RSX, como
+  en GL, la prueba apagada apaga también la escritura. Va con la prueba
+  encendida y `GCM_ALWAYS` (`set_depth` en `lib/rsxkit/src/draw3d.c`).
+  Comprobado en RPCS3 con un volcado editado de Rogue Squadron (la nave con
+  escritura sin prueba y el piso detrás con prueba: antes el piso la tapaba
+  entera, ahora queda encima); RPCS3 sigue al hardware en esto.
 
 ## Framebuffer
 
