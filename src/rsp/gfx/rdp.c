@@ -929,6 +929,31 @@ unsigned gfx_rdp_raw_words(uint32_t op)
 	return 4 + ((op & 4) ? 8 : 0) + ((op & 2) ? 8 : 0) + ((op & 1) ? 2 : 0);
 }
 
+#ifdef GFX_S2DEX_FULL
+/* Un cuadrilátero con textura (sin sombreado ni z), como los dos triángulos
+ * de un sprite rotado de S2DEX: esquinas en orden alrededor, x e y en
+ * píxeles y s, t en texels de la tile. */
+void gfx_rdp_tex_quad(struct gfx_state *g, int tile, const float *x, const float *y, const float *s, const float *t)
+{
+	static const int order[6] = { 0, 1, 2, 0, 2, 3 };
+	struct gfx_vertex v[4];
+	memset(v, 0, sizeof v);
+	for (int i = 0; i < 4; i++) {
+		v[i].x = x[i];
+		v[i].y = y[i];
+		v[i].w = 1.0f;
+		v[i].s = s[i];
+		v[i].t = t[i];
+	}
+	struct gfx_vertex *o = begin_prim(g, (enum prim_kind)(PRIM_RAW | 1), tile, 6);
+	if (!o)
+		return;
+	g->res->triangles += 2;
+	for (int i = 0; i < 6; i++)
+		o[i] = v[order[i]];
+}
+#endif
+
 void gfx_rdp_triangle(struct gfx_state *g, const uint32_t *w)
 {
 	uint32_t op = w[0] >> 24;

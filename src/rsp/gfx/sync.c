@@ -175,6 +175,7 @@ void salsa64_gfx_sync_init(struct salsa64_gfx_sync *s, struct gfx_state *state, 
 	s->backend.state_size = GFX_STATE_BYTES;
 	s->backend.save_state = sync_save_state;
 	s->backend.load_state = sync_load_state;
+	s->backend.s2dex = true;
 	s->dpc.ctx = s;
 	s->dpc.run = sync_dpc_run;
 	s->state = state;

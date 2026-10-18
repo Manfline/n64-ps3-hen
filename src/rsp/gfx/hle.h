@@ -207,6 +207,7 @@ struct gfx_state {
 	uint8_t tex_tile, tex_level, tex_on;
 	uint32_t rdphalf1, rdphalf2;
 	uint32_t obj_rendermode;   /* G_OBJ_RENDERMODE de S2DEX (s2dex.c) */
+	uint8_t chain_ex;          /* tarea S2DEX que siguió con F3DEX 1.x (G_LOAD_UCODE): f3d.c lo trata como F3DEX */
 	uint32_t raw[44];          /* comando del RDP armado con G_RDPHALF_* */
 	uint8_t raw_n, raw_len;    /* dobles palabras recibidas y esperadas */
 	uint32_t dl_stack[GFX_DL_STACK];
@@ -354,11 +355,31 @@ bool gfx_flx_shade_alpha(const struct gfx_state *g);
  * G_LOAD_UCODE: 1 o 2 (F3D, F3DEX, F3DLX…: primera o segunda generación, por
  * la versión), GFX_UCODE_S2DEX2, o 0 si es otro (L3DEX, S2DEX 1.x, el de
  * Conker…) o no se reconoce. nonear: es un ".NoN". */
+/* S2DEX completo: tareas S2DEX sueltas (2.x y 1.x), objetos (G_OBJ_*) y el 3D
+ * que sigue a un G_LOAD_UCODE a mitad de tarea. En el host y en el PPE; el
+ * SPE 0 no tiene sitio para ello en su local store (+9,3 KB de texto, la
+ * holgura de la pila pasa de 2224 a −7552 bytes) y compila solo el tramo S2DEX2
+ * de las tareas F3DEX2 (Zelda OoT, Kirby 64). SALSA64_SPU_S2DEX_FULL lo
+ * incluye en el SPE (para cuando un programa SPE aparte lo tenga). */
+#if !defined(__SPU__) || defined(SALSA64_SPU_S2DEX_FULL)
+#define GFX_S2DEX_FULL 1
+#endif
 #define GFX_UCODE_S2DEX2 3
+#define GFX_UCODE_S2DEX1 4
 int gfx_ucode_kind(struct gfx_state *g, uint32_t data, uint32_t size, bool *nonear);
 /* El tramo S2DEX2 hasta el G_LOAD_UCODE que vuelve al de la tarea (true: la
  * lista sigue; false como gfx_dl_skip_foreign). */
 bool gfx_dl_s2dex2(struct gfx_state *g);
+/* Una tarea S2DEX suelta (SALSA64_GBI_S2DEX y S2DEX1): la lista entera, con los
+ * opcodes de 2.x o, si gen1, de 1.x. GFX_S2_F3DEX2 o
+ * GFX_S2_F3DEX: la lista sigue en ese intérprete (un G_LOAD_UCODE a mitad de
+ * tarea, ya recargado). */
+#define GFX_S2_END 0
+#define GFX_S2_F3DEX2 1
+#define GFX_S2_F3DEX 2
+int gfx_dl_s2dex(struct gfx_state *g, bool gen1);
+/* Como gfx_dl_s2dex2, con los opcodes de S2DEX 1.x. */
+bool gfx_dl_s2dex1(struct gfx_state *g);
 /* G_TEXRECT y G_TEXRECTFLIP: s, t y dsdx, dtdy llegan en los dos comandos
  * siguientes si sus opcodes están en ops_st y ops_d (hasta 4 opcodes, uno
  * por byte). Si no, el rectángulo se descarta y ese comando sigue normal. */
@@ -429,6 +450,9 @@ void gfx_fb_forget(struct gfx_state *g);
 void gfx_rdp_command(struct gfx_state *g, uint32_t w0, uint32_t w1);
 void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c);
 void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uint32_t w3, bool flip);
+/* Cuadrilátero con textura de esquinas (x, y) en píxeles y (s, t) en texels
+ * (rdp.c, solo con GFX_S2DEX_FULL). */
+void gfx_rdp_tex_quad(struct gfx_state *g, int tile, const float *x, const float *y, const float *s, const float *t);
 void gfx_flush_draw(struct gfx_state *g);
 /* Triángulos crudos del RDP (0xC8–0xCF) que llegan por G_RDPHALF_*: dobles
  * palabras del comando según su opcode y el triángulo con ellas (`w`:

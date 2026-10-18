@@ -97,12 +97,13 @@ enum salsa64_gbi {
 	SALSA64_GBI_F3DZEX2,  /* F3DZEX (Zelda OoT/MM): F3DEX2 con G_BRANCH_W */
 	SALSA64_GBI_F3D,      /* Fast3D: Super Mario 64 */
 	SALSA64_GBI_F3DEX,    /* F3DEX 1.x (F3DLX, F3DLP…) */
-	SALSA64_GBI_S2DEX,    /* sprites 2D (pendiente) */
+	SALSA64_GBI_S2DEX,    /* S2DEX 2.x suelto (RE2…): objetos y fondos 2D, opcodes de la familia F3DEX2 */
 	SALSA64_GBI_F3DPD,    /* Perfect Dark: Fast3D de Rare, vértices con color por índice */
 	SALSA64_GBI_F3DEXBG,  /* Conker: F3DEX2 con G_TRI4, normales aparte y luces puntuales */
 	SALSA64_GBI_F3DWR,    /* Wave Race 64: Fast3D 2.0D con índices de vértice ×5 y G_QUAD en 0xB5 */
 	SALSA64_GBI_F3DDKR,   /* Diddy Kong Racing: Fast3D de Rare con matrices, vértices y triángulos por DMA */
 	SALSA64_GBI_F3DJFG,   /* Jet Force Gemini y Mickey's Speedway USA: el de DKR con otro conteo de vértices */
+	SALSA64_GBI_S2DEX1,   /* S2DEX 1.x suelto (Yoshi's Story): los mismos objetos con los opcodes de la primera generación */
 };
 
 /* Campos de OSTask (16 palabras en DMEM 0xFC0). */
@@ -141,6 +142,10 @@ struct salsa64_gfx_backend {
 	uint32_t state_size;
 	bool (*save_state)(void *ctx, uint8_t *buf);
 	bool (*load_state)(void *ctx, const uint8_t *buf);
+	/* Hace las tareas S2DEX sueltas (SALSA64_GBI_S2DEX y S2DEX1). Si no, van al
+	 * RSP a bajo nivel (modo auto) o terminan sin dibujar. El SPE 0 no las hace
+	 * (rsp/gfx/hle.h, GFX_S2DEX_FULL): el host y el PPE sí. */
+	bool s2dex;
 };
 
 /* ABI de las listas de audio (alist): cada microcódigo de audio numera y

@@ -28,6 +28,7 @@ static uint32_t cache_task;  /* tarea de la caché de texturas (0: sin caché) *
 static struct gfx_result res;
 static uint32_t dl_pc, data_pc;
 static uint32_t job_ucode;   /* dirección física del microcódigo de la tarea */
+static unsigned job_gbi;     /* SALSA64_GBI_* de las tareas (0: F3DEX2) */
 static uint32_t job_flags;   /* GFX_JOB_* de las tareas */
 static uint32_t job_cmd_cap; /* búfer de comandos de las tareas (0: todo out_cmd) */
 
@@ -54,6 +55,7 @@ static void start(void)
 	cache_task = 0;
 	job_flags = 0;
 	job_cmd_cap = 0;
+	job_gbi = 0;
 	gfx_init(&gs);
 }
 
@@ -83,7 +85,7 @@ static void run(void)
 		job.task = cache_task;
 		job.done_task = cache_task - 1;
 	}
-	job.gbi = SALSA64_GBI_F3DEX2;
+	job.gbi = job_gbi ? job_gbi : SALSA64_GBI_F3DEX2;
 	job.dl = DL_PA;
 	job.ucode = job_ucode;
 	job.flags = job_flags;
@@ -1464,11 +1466,12 @@ static void gfx_ucode_kind_texts(void)
 		{ "RSP Gfx ucode F3DEX       fifo 1.23  Yoshitaka Yasumoto 1998 Nintendo.", 1, false },
 		{ "RSP Gfx ucode F3DEX.NoN   fifo 1.23  Yoshitaka Yasumoto 1998 Nintendo.", 1, true },
 		{ "RSP Gfx ucode F3DEX         0.95     Yoshitaka Yasumoto 1998 Nintendo.", 1, false },
-		/* Ajenos: Conker, L3DEX, S2DEX 1.x. */
+		/* Ajenos: Conker, L3DEX; S2DEX 1.x, aparte. */
 		{ "RSP Gfx ucode F3DEXBG.NoN fifo 2.08  Yoshitaka Yasumoto 1998 Nintendo.", 0, false },
 		{ "RSP Gfx ucode L3DEX       fifo 2.03  Yoshitaka Yasumoto 1998 Nintendo.", 0, false },
-		{ "RSP Gfx ucode S2DEX       fifo 1.06  Yoshitaka Yasumoto 1998 Nintendo.", 0, false },
-		{ "RSP Gfx[Safe] S2DEX       fifo 1.06  Yoshitaka Yasumoto 1998 Nintendo.", 0, false },
+		{ "RSP Gfx ucode S2DEX       fifo 1.06  Yoshitaka Yasumoto 1998 Nintendo.", GFX_UCODE_S2DEX1, false },
+		{ "RSP Gfx ucode S2DEX  1.06 Yoshitaka Yasumoto Nintendo.", GFX_UCODE_S2DEX1, false },
+		{ "RSP Gfx[Safe] S2DEX       fifo 1.06  Yoshitaka Yasumoto 1998 Nintendo.", GFX_UCODE_S2DEX1, false },
 		{ "RSP Gfx[Safe] L3DEX       fifo 2.03  Yoshitaka Yasumoto 1998 Nintendo.", 0, false },
 		/* S2DEX 2.x, con el prefijo de siempre y con el de Zelda OoT. */
 		{ "RSP Gfx ucode S2DEX       fifo 2.05  Yoshitaka Yasumoto 1998 Nintendo.", GFX_UCODE_S2DEX2, false },
@@ -1756,6 +1759,174 @@ static void gfx_s2dex_bg_scaled(void)
 	CHECK_EQ(res.bg, 0);
 	CHECK_EQ(res.rects, 0);
 	CHECK_EQ(res.skipped, 4);
+}
+
+/* ---- S2DEX suelto (tareas SALSA64_GBI_S2DEX y S2DEX1): objetos ---- */
+
+/* uObjTxtr de bloque (G_OBJ_LOADTXTR): la imagen en TEX_PA a la TMEM en
+ * `tmem`, de `words` palabras de 64 bits, con la tline (dxt) dada. */
+static uint32_t put_txtr_block(uint32_t words, uint32_t tmem, uint32_t tline)
+{
+	uint32_t a = data_alloc(24);
+	uint8_t *p = t_n64.bus.rdram + a;
+	memset(p, 0, 24);
+	salsa64_wr32(p, 0x00001033);
+	salsa64_wr32(p + 4, 0x80000000 | TEX_PA);
+	salsa64_wr16(p + 8, (uint16_t)tmem);
+	salsa64_wr16(p + 10, (uint16_t)(words - 1));
+	salsa64_wr16(p + 12, (uint16_t)tline);
+	return a;
+}
+
+/* uObjSprite: posición s10.2, escala u5.10 (texels por píxel), tamaño u10.5,
+ * imagen RGBA16 con 4 palabras por fila en la TMEM 0. */
+static uint32_t put_sprite(int32_t x, int32_t y, uint16_t scale_w, uint16_t scale_h, uint32_t w, uint32_t h,
+			   uint32_t flags)
+{
+	uint32_t a = data_alloc(24);
+	uint8_t *p = t_n64.bus.rdram + a;
+	memset(p, 0, 24);
+	salsa64_wr16(p + 0, (uint16_t)(x * 4));
+	salsa64_wr16(p + 2, scale_w);
+	salsa64_wr16(p + 4, (uint16_t)(w << 5));
+	salsa64_wr16(p + 8, (uint16_t)(y * 4));
+	salsa64_wr16(p + 10, scale_h);
+	salsa64_wr16(p + 12, (uint16_t)(h << 5));
+	salsa64_wr16(p + 16, 4);                /* imageStride */
+	p[20] = G_IM_FMT_RGBA;
+	p[21] = G_IM_SIZ_16b;
+	p[23] = (uint8_t)flags;
+	return a;
+}
+
+/* uObjMtx: A, B, C, D en s15.16, X e Y en píxeles (s10.2) y la escala base. */
+static uint32_t put_objmtx(int32_t a, int32_t b, int32_t c, int32_t d, int32_t x, int32_t y, uint16_t bsx,
+			   uint16_t bsy)
+{
+	uint32_t m = data_alloc(24);
+	uint8_t *p = t_n64.bus.rdram + m;
+	salsa64_wr32(p, (uint32_t)a);
+	salsa64_wr32(p + 4, (uint32_t)b);
+	salsa64_wr32(p + 8, (uint32_t)c);
+	salsa64_wr32(p + 12, (uint32_t)d);
+	salsa64_wr16(p + 16, (uint16_t)(x * 4));
+	salsa64_wr16(p + 18, (uint16_t)(y * 4));
+	salsa64_wr16(p + 20, bsx);
+	salsa64_wr16(p + 22, bsy);
+	return m;
+}
+
+static void s2dex_task(unsigned gbi)
+{
+	job_gbi = gbi;
+	job_ucode = 0x30000;
+	run();
+	job_gbi = 0;
+	job_ucode = 0;
+}
+
+/* S2DEX 2.x suelto: G_OBJ_LOADTXTR y G_OBJ_RECTANGLE (un TEXRECT en la
+ * posición del sprite, a su tamaño y con la imagen de la TMEM). */
+static void gfx_s2dex_task_rectangle(void)
+{
+	start();
+	put_bg_image(16, 16);
+	dl(0xEF000000, 0x00000001);  /* 1 ciclo, filtro puntual */
+	set_combine(CC(CC_ZERO, CC_ZERO, CC_C_ZERO, CC_T0), CC(CC_A_ZERO, CC_A_ZERO, 7, 6));
+	dl(0x05000000, 0x80000000 | put_txtr_block(64, 0, 0x200));
+	dl(0x01000000, 0x80000000 | put_sprite(10, 5, 1024, 1024, 16, 16, 0));
+	dl(0xE9000000, 0);
+	s2dex_task(SALSA64_GBI_S2DEX);
+	CHECK_EQ(res.bg, 1);
+	CHECK_EQ(res.unknown_cmds, 0);
+	CHECK_EQ(res.dl_errors, 0);
+	CHECK_EQ(res.flags & (GFX_RES_FULLSYNC | GFX_RES_FOREIGN_END), GFX_RES_FULLSYNC);
+	CHECK_EQ(res.rects, 1);
+	const struct gfx_vertex *a = rect_v(0, 0, 0), *b = rect_v(0, 0, 1);
+	CHECK(a != NULL);
+	if (!a)
+		return;
+	CHECK(a->x == 10.0f && a->y == 5.0f && b->x == 26.0f && b->y == 21.0f);
+	CHECK(fabsf(a->s) < 1e-5f && fabsf(b->s - 16.0f) < 1e-4f && fabsf(b->t - 16.0f) < 1e-4f);
+	CHECK(bg_tex_is(0, 0, 0, 0, 0) && bg_tex_is(0, 15, 15, 15, 15) && bg_tex_is(0, 9, 3, 9, 3));
+	/* Con escala 2 (dos texels por píxel) mide la mitad. */
+	next_task();
+	dl(0x01000000, 0x80000000 | put_sprite(0, 0, 2048, 2048, 16, 16, 0));
+	dl(0xE9000000, 0);
+	s2dex_task(SALSA64_GBI_S2DEX);
+	a = rect_v(0, 0, 0), b = rect_v(0, 0, 1);
+	CHECK(a != NULL);
+	if (a)
+		CHECK(b->x - a->x == 8.0f && b->y - a->y == 8.0f);
+}
+
+/* S2DEX 1.x suelto (Yoshi's Story): los opcodes 0x03/0x04/0xC1…, G_OBJ_MOVEMEM
+ * con la matriz y G_OBJ_SPRITE como dos triángulos con las esquinas
+ * inclusivas (ancho − 1 píxel). Con D negativa la imagen sale volteada. */
+static void gfx_s2dex1_task_sprite(void)
+{
+	start();
+	put_bg_image(16, 16);
+	dl(0xEF000000, 0x00000001);
+	set_combine(CC(CC_ZERO, CC_ZERO, CC_C_ZERO, CC_T0), CC(CC_A_ZERO, CC_A_ZERO, 7, 6));
+	dl(0xC1000000, 0x80000000 | put_txtr_block(64, 0, 0x200));
+	dl(0x05170000, 0x80000000 | put_objmtx(0x10000, 0, 0, 0x10000, 50, 30, 1024, 1024));
+	dl(0x04000000, 0x80000000 | put_sprite(10, 5, 1024, 1024, 16, 16, 0));
+	dl(0xB8000000, 0);
+	s2dex_task(SALSA64_GBI_S2DEX1);
+	CHECK_EQ(res.bg, 1);
+	CHECK_EQ(res.unknown_cmds, 0);
+	CHECK_EQ(res.triangles, 2);
+	const struct gfx_draw *d = draw_n(0);
+	CHECK(d != NULL);
+	if (!d)
+		return;
+	const struct gfx_vertex *v = &out_vtx[d->h.a];
+	/* Esquinas (60, 35) a (75, 50); s, t de 0 a 15. */
+	CHECK(v[0].x == 60.0f && v[0].y == 35.0f && v[2].x == 75.0f && v[2].y == 50.0f);
+	CHECK(v[0].s == 0.0f && v[0].t == 0.0f && v[2].s == 15.0f && v[2].t == 15.0f);
+
+	/* D = −1: voltea en y y la esquina de arriba es la de abajo de la imagen. */
+	next_task();
+	dl(0x05170000, 0x80000000 | put_objmtx(0x10000, 0, 0, -0x10000, 50, 30, 1024, 1024));
+	dl(0x04000000, 0x80000000 | put_sprite(10, 5, 1024, 1024, 16, 16, 0));
+	dl(0xB8000000, 0);
+	s2dex_task(SALSA64_GBI_S2DEX1);
+	d = draw_n(0);
+	CHECK(d != NULL);
+	if (!d)
+		return;
+	v = &out_vtx[d->h.a];
+	CHECK(v[0].y == 25.0f && v[2].y == 10.0f);
+	CHECK(v[0].t == 0.0f && v[2].t == 15.0f);
+}
+
+/* Una tarea S2DEX 2.x que carga otro microcódigo (RE2: F3DEX 2.06) a mitad
+ * de la lista sigue con el intérprete de F3DEX2: aquí, un TEXRECT en sus tres
+ * comandos. */
+static void gfx_s2dex_task_chains_f3dex2(void)
+{
+	start();
+	put_bg_image(8, 8);
+	dl(0xEF000000, 0x00000001);
+	set_combine(CC(CC_ZERO, CC_ZERO, CC_C_ZERO, CC_T0), CC(CC_A_ZERO, CC_A_ZERO, 7, 6));
+	dl(0x05000000, 0x80000000 | put_txtr_block(16, 0, 0x400));
+	uint32_t data = data_alloc(64);
+	memset(t_n64.bus.rdram + data, 0, 64);
+	const char *text = "RSP Gfx ucode F3DEX       fifo 2.06  prueba de Salsa64";
+	memcpy(t_n64.bus.rdram + data + 8, text, strlen(text));
+	dl(0xE1000000, 0x80000000 | data);
+	dl(0xDD00003F, 0x80031000);
+	/* Ya en F3DEX2: G_TEXRECT con G_RDPHALF_1 y G_RDPHALF_2. */
+	dl(0xE4000000 | 40 << 14 | 40 << 2, 0x00000000 | 4 << 14 | 4 << 2);
+	dl(0xE1000000, 0);
+	dl(0xF1000000, 0x04000400);
+	dl(0xE9000000, 0);
+	s2dex_task(SALSA64_GBI_S2DEX);
+	CHECK_EQ(res.dl_errors, 0);
+	CHECK_EQ(res.unknown_cmds, 0);
+	CHECK_EQ(res.rects, 1);
+	CHECK_EQ(res.flags & (GFX_RES_FULLSYNC | GFX_RES_FOREIGN_END), GFX_RES_FULLSYNC);
 }
 
 /* ---- Caché de texturas ---- */
@@ -2647,6 +2818,9 @@ static void gfx_clip_ratio_f3dex2(void)
 void t_suite_gfx(void)
 {
 	RUN(gfx_combiner_forms);
+	RUN(gfx_s2dex_task_rectangle);
+	RUN(gfx_s2dex1_task_sprite);
+	RUN(gfx_s2dex_task_chains_f3dex2);
 	RUN(gfx_setconvert_k5);
 	RUN(gfx_texrect_two_tiles);
 	RUN(gfx_untextured_texel);

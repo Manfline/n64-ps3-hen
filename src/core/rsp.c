@@ -466,8 +466,13 @@ static enum salsa64_gbi detect_gbi(const struct salsa64_bus *bus, const struct s
 	if (q) {
 		q += 14;
 		*nonear = gfx_ucode_nonear(q, end);
-		if (starts_with(q, end, "S2DEX"))
-			return SALSA64_GBI_S2DEX;
+		if (starts_with(q, end, "S2DEX")) {
+			/* 1.x (Yoshi's Story: «S2DEX  1.06») o 2.x («S2DEX fifo 2.06»): por la primera versión «N.». */
+			const uint8_t *v = q + 5;
+			while (v + 1 < end && *v && !(v[0] >= '0' && v[0] <= '9' && v[1] == '.'))
+				v++;
+			return v + 1 < end && *v == '1' ? SALSA64_GBI_S2DEX1 : SALSA64_GBI_S2DEX;
+		}
 		/* El de Conker ("F3DEXBG.NoN fifo 2.08"): F3DEX2 con lo suyo. */
 		if (starts_with(q, end, "F3DEXBG"))
 			return SALSA64_GBI_F3DEXBG;
@@ -569,13 +574,17 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 	if (rsp->trace)
 		rsp->trace(rsp->trace_ctx, &task, gbi);
 
+	/* S2DEX suelto: solo si el backend gráfico lo hace (rcp.h). */
+	const bool s2dex_gbi = gbi == SALSA64_GBI_S2DEX || gbi == SALSA64_GBI_S2DEX1;
+	const bool s2dex_ok = s2dex_gbi && rsp->gfx && rsp->gfx->s2dex;
+
 	/* RSP a bajo nivel: lo que no tiene HLE (modo auto) o todo (all). Una
 	 * tarea con HLE "disponible" es la que sus backends saben hacer. */
 	if (rsp->lle && rsp->lle_mode != SALSA64_LLE_OFF && rsp->sched) {
 		bool hle_gfx = task.type == SALSA64_TASK_GFX && valid && rsp->gfx &&
 			       (gbi == SALSA64_GBI_F3DEX2 || gbi == SALSA64_GBI_F3DZEX2 || gbi == SALSA64_GBI_F3D ||
 				gbi == SALSA64_GBI_F3DEX || gbi == SALSA64_GBI_F3DWR || gbi == SALSA64_GBI_F3DDKR ||
-				gbi == SALSA64_GBI_F3DJFG);
+				gbi == SALSA64_GBI_F3DJFG || s2dex_ok);
 		bool hle_audio = task.type == SALSA64_TASK_AUDIO && valid && rsp->audio && abi != SALSA64_ABI_UNKNOWN;
 		if (rsp->lle_mode == SALSA64_LLE_ALL || !(hle_gfx || hle_audio || jpeg != SALSA64_JPEG_NONE)) {
 			rsp->stats.lle++;
@@ -590,7 +599,7 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 	}
 	/* Las de video de Resident Evil 2 llegan como tareas gráficas pero van por el camino de las JPEG. */
 	if (task.type == SALSA64_TASK_GFX && valid && rsp->sched && !rsp->jpeg_video) {
-		if (gbi != SALSA64_GBI_UNKNOWN && gbi != SALSA64_GBI_S2DEX) {
+		if (gbi != SALSA64_GBI_UNKNOWN && (!s2dex_gbi || s2dex_ok)) {
 			rsp->stats.gfx++;
 			rsp->busy = SALSA64_TASK_GFX;
 			rsp->gbi = gbi;

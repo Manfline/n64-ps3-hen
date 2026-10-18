@@ -221,6 +221,9 @@ int salsa64_gfx_spu_init(struct salsa64_gfx_spu *s, const struct salsa64_bus *bu
 	s->backend.state_size = GFX_STATE_BYTES;
 	s->backend.save_state = spu_save_state;
 	s->backend.load_state = spu_load_state;
+#ifdef SALSA64_SPU_S2DEX_FULL
+	s->backend.s2dex = true;
+#endif
 	s->dpc.ctx = s;
 	s->dpc.run = spu_dpc_run;
 	s->bus = bus;

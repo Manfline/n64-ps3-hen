@@ -66,6 +66,9 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 	/* El microcódigo se carga con cada tarea: su estado empieza de cero. */
 	g->dl_sp = 0;
 	g->obj_rendermode = 0;
+#ifdef GFX_S2DEX_FULL
+	g->chain_ex = 0;
+#endif
 	gfx_ucode_reload(g, job->ucode, job->gbi == SALSA64_GBI_F3D || job->gbi == SALSA64_GBI_F3DEX ||
 					 job->gbi == SALSA64_GBI_F3DPD || job->gbi == SALSA64_GBI_F3DWR ||
 					 job->gbi == SALSA64_GBI_F3DDKR || job->gbi == SALSA64_GBI_F3DJFG ? 1 : 2,
@@ -101,6 +104,25 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 		case SALSA64_GBI_F3DDKR:
 		case SALSA64_GBI_F3DJFG:
 			gfx_dl_f3ddkr(g);
+			break;
+		case SALSA64_GBI_S2DEX:
+		case SALSA64_GBI_S2DEX1:
+#ifdef GFX_S2DEX_FULL
+			switch (gfx_dl_s2dex(g, job->gbi == SALSA64_GBI_S2DEX1)) {
+			case GFX_S2_F3DEX2:
+				gfx_dl_f3dex2(g, NULL);
+				break;
+			case GFX_S2_F3DEX:
+				gfx_dl_f3d(g, NULL);
+				break;
+			default:
+				break;
+			}
+#else
+			/* Sin S2DEX suelto en este programa: termina sin dibujar y el DP
+			 * interrumpe igual (como cuando la HLE no lo conocía). */
+			res->flags |= GFX_RES_FOREIGN_END;
+#endif
 			break;
 		case SALSA64_GBI_F3DEXBG:
 			gfx_dl_f3dexbg(g);

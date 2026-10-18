@@ -29,11 +29,31 @@
  *   `mask`): es solo un ahorro, aquí se carga siempre.
  * - G_RDPHALF_0 (0xE4) seguido de G_RDPHALF_1 y G_RDPHALF_2: un TEXRECT,
  *   como en F3DEX2.
- * Lo demás de S2DEX (sprites, el resto de G_OBJ_*) se cuenta como saltado.
+ * - Objetos (G_OBJ_RECTANGLE, G_OBJ_SPRITE, G_OBJ_MOVEMEM con uObjMtx y
+ *   uObjSubMtx, G_OBJ_RECTANGLE_R, G_OBJ_LDTX_SPRITE/RECT/RECT_R): ver abajo.
+ *
+ * También las tareas S2DEX sueltas (gfx_dl_s2dex: «RSP Gfx ucode S2DEX fifo
+ * 2.06», Resident Evil 2, y «S2DEX 1.06», Yoshi's Story): la lista es la de
+ * S2DEX, con los opcodes de 2.x o, para 1.x, los de la primera generación
+ * (s2_canon los traduce y el resto es el mismo código). Una lista de esas
+ * tareas carga el microcódigo de 3D con G_LOAD_UCODE a mitad de tarea (RE2
+ * F3DEX 2.06, Yoshi's Story F3DEX 1.23) y sigue en él, y de él vuelve a S2DEX
+ * por el mismo camino: el tramo, como el de Zelda OoT, y los de F3DEX2 y F3D
+ * llaman aquí. Se midió contra el microcódigo real (--lle=all): BG_COPY de RE2
+ * y una pantalla entera de sprites de Yoshi's Story salen con los mismos
+ * píxeles; lo que difiere es el 3D (docs/estado.md).
+ *
+ * Los sprites de G_OBJ_SPRITE los dibuja el microcódigo con dos triángulos
+ * con textura, no con TEXRECT: aquí se arma el mismo cuadrilátero
+ * (gfx_rdp_tex_quad) y sale idéntico. Los de G_OBJ_RECTANGLE y
+ * G_OBJ_RECTANGLE_R, con un TEXRECT; esos no se pudieron medir (ningún juego
+ * de los respaldos los usa).
  *
  * Campos de uObjBg/uObjScaleBg y su punto fijo (u10.5, u10.2, s10.2;
  * escala u5.10 = texels por píxel): GLideN64 `src/uCodes/S2DEX.cpp`
- * (consultado el 2026-10-11, solo el formato; docs/THIRD_PARTY.md). Opcodes
+ * (consultado el 2026-10-11, solo el formato; docs/THIRD_PARTY.md); los
+ * objetos, de mupen64plus-video-rice y -glide64mk2 (GPLv2+, solo el formato
+ * y las fórmulas, mismo documento). Opcodes
  * de S2DEX2 (los de la familia F3DEX2): G_BG_COPY = 0x0A como en la lista
  * de Zelda OoT, G_OBJ_LOADTXTR = 0x05 como en la de Kirby 64. uObjTxtr y
  * sus unidades (palabras de 64 bits de la TMEM, tamaños menos uno): la
@@ -44,12 +64,54 @@
 #include "core/endian.h"
 #include "rsp/gfx/hle.h"
 
+/* Opcodes de S2DEX 2.x (los de la familia F3DEX2). Los de S2DEX 1.x se
+ * traducen a estos (s2_canon) y el resto del código es el mismo. */
 enum {
-	S2_OBJ_LOADTXTR = 0x05, S2_BG_1CYC = 0x09, S2_BG_COPY = 0x0A, S2_OBJ_RENDERMODE = 0x0B,
-	S2_MOVEWORD = 0xDB, S2_LOAD_UCODE = 0xDD, S2_DL = 0xDE, S2_ENDDL = 0xDF,
+	S2_OBJ_RECTANGLE = 0x01, S2_OBJ_SPRITE = 0x02, S2_SELECT_DL = 0x04, S2_OBJ_LOADTXTR = 0x05,
+	S2_OBJ_LDTX_SPRITE = 0x06, S2_OBJ_LDTX_RECT = 0x07, S2_OBJ_LDTX_RECT_R = 0x08, S2_BG_1CYC = 0x09,
+	S2_BG_COPY = 0x0A, S2_OBJ_RENDERMODE = 0x0B,
+	S2_OBJ_RECTANGLE_R = 0xDA, S2_MOVEWORD = 0xDB, S2_OBJ_MOVEMEM = 0xDC, S2_LOAD_UCODE = 0xDD, S2_DL = 0xDE,
+	S2_ENDDL = 0xDF,
 	S2_RDPHALF_1 = 0xE1, S2_SETOTHERMODE_L = 0xE2, S2_SETOTHERMODE_H = 0xE3, S2_RDPHALF_0 = 0xE4,
 	S2_RDPHALF_2 = 0xF1,
 };
+
+#ifdef GFX_S2DEX_FULL
+/* El opcode de S2DEX 1.x (Yoshi's Story: BG_1CYC 0x01, BG_COPY 0x02,
+ * OBJ_RECTANGLE 0x03, OBJ_SPRITE 0x04, OBJ_MOVEMEM 0x05, SELECT_DL 0xB0,
+ * OBJ_RENDERMODE 0xB1, OBJ_RECTANGLE_R 0xB2, LOADTXTR 0xC1 y LDTX_* 0xC2 a
+ * 0xC4, y los de F3D que comparte: G_DL 0x06, G_ENDDL 0xB8, G_RDPHALF_1
+ * 0xB4, G_RDPHALF_2 0xB3, G_SETOTHERMODE_L/H 0xB9/0xBA, G_MOVEWORD 0xBC,
+ * G_LOAD_UCODE 0xAF)
+ * como el de S2DEX 2.x. Los comandos del RDP (0xE4 y 0xE6 en adelante) no
+ * cambian. */
+static uint32_t s2_canon(uint32_t op)
+{
+	switch (op) {
+	case 0x01: return S2_BG_1CYC;
+	case 0x02: return S2_BG_COPY;
+	case 0x03: return S2_OBJ_RECTANGLE;
+	case 0x04: return S2_OBJ_SPRITE;
+	case 0x05: return S2_OBJ_MOVEMEM;
+	case 0x06: return S2_DL;
+	case 0xB0: return S2_SELECT_DL;
+	case 0xB1: return S2_OBJ_RENDERMODE;
+	case 0xB2: return S2_OBJ_RECTANGLE_R;
+	case 0xB3: return S2_RDPHALF_2;
+	case 0xB4: return S2_RDPHALF_1;
+	case 0xB8: return S2_ENDDL;
+	case 0xAF: return S2_LOAD_UCODE;
+	case 0xB9: return S2_SETOTHERMODE_L;
+	case 0xBA: return S2_SETOTHERMODE_H;
+	case 0xBC: return S2_MOVEWORD;
+	case 0xC1: return S2_OBJ_LOADTXTR;
+	case 0xC2: return S2_OBJ_LDTX_SPRITE;
+	case 0xC3: return S2_OBJ_LDTX_RECT;
+	case 0xC4: return S2_OBJ_LDTX_RECT_R;
+	default: return op;
+	}
+}
+#endif
 
 #define OBJRM_BILERP 0x08u
 #define G_MW_SEGMENT 0x06u
@@ -110,7 +172,7 @@ int gfx_ucode_kind(struct gfx_state *g, uint32_t data, uint32_t size, bool *none
 	for (; i + 1 < size && p[i] >= 0x20 && p[i] < 0x7F; i++)
 		if (p[i] >= '0' && p[i] <= '9' && p[i + 1] == '.') {
 			int gen = p[i] == '2' ? 2 : p[i] <= '1' ? 1 : 0;
-			return s2dex ? (gen == 2 ? GFX_UCODE_S2DEX2 : 0) : gen;
+			return s2dex ? (gen == 2 ? GFX_UCODE_S2DEX2 : gen == 1 ? GFX_UCODE_S2DEX1 : 0) : gen;
 		}
 	return 0;
 }
@@ -311,37 +373,284 @@ static void obj_load_txtr(struct gfx_state *g, uint32_t seg)
 	}
 }
 
-bool gfx_dl_s2dex2(struct gfx_state *g)
+#ifdef GFX_S2DEX_FULL
+/* --- Objetos (G_OBJ_*) --- */
+
+/* La matriz de objetos (uObjMtx / uObjSubMtx) vive en g->raw[4..11], libre
+ * en este tramo (G_RDPHALF_0 usa raw[0..1]): A, B, C, D en s15.16, X e Y en
+ * s10.2 y BaseScaleX/Y en u5.10. */
+#define MTX(g) ((g)->raw + 4)
+enum { M_A, M_B, M_C, M_D, M_X, M_Y, M_BSX, M_BSY };
+
+/* uObjSprite (24 bytes). */
+struct obj {
+	int32_t x, y;                 /* s10.2 */
+	uint32_t scale_w, scale_h;    /* u5.10: texels por píxel */
+	uint32_t w, h;                /* u10.5 */
+	unsigned stride, adrs, fmt, siz, pal, flags;
+};
+
+static bool read_obj(struct gfx_state *g, uint32_t ptr, struct obj *o)
+{
+	const uint8_t *p = gfx_io_read(g, GFX_IO_SMALL, gfx_addr(g, ptr), 24);
+	if (!p) {
+		g->res->dl_errors++;
+		return false;
+	}
+	o->x = (int16_t)salsa64_rd16(p + 0);
+	o->scale_w = salsa64_rd16(p + 2);
+	o->w = salsa64_rd16(p + 4);
+	o->y = (int16_t)salsa64_rd16(p + 8);
+	o->scale_h = salsa64_rd16(p + 10);
+	o->h = salsa64_rd16(p + 12);
+	o->stride = salsa64_rd16(p + 16);
+	o->adrs = salsa64_rd16(p + 18);
+	o->fmt = p[20] & 7;
+	o->siz = p[21] & 3;
+	o->pal = p[22] & 15;
+	o->flags = p[23];
+	return o->scale_w && o->scale_h && o->w && o->h && o->w < 0x8000 && o->h < 0x8000;
+}
+
+static void mtx_reset(struct gfx_state *g)
+{
+	uint32_t *m = MTX(g);
+	m[M_A] = m[M_D] = 0x10000;
+	m[M_B] = m[M_C] = m[M_X] = m[M_Y] = 0;
+	m[M_BSX] = m[M_BSY] = 1024;
+}
+
+/* G_OBJ_MOVEMEM: con (w0 & 0xFFFF) = 0 la matriz entera (24 bytes), con 2
+ * la submatriz (X, Y y escala base; 8 bytes). */
+static void obj_movemem(struct gfx_state *g, uint32_t w0, uint32_t w1)
+{
+	unsigned kind = w0 & 0xFFFF;
+	if (kind != 0 && kind != 2) {
+		g->res->unknown_cmds++;
+		return;
+	}
+	const uint8_t *p = gfx_io_read(g, GFX_IO_SMALL, gfx_addr(g, w1), kind ? 8 : 24);
+	if (!p) {
+		g->res->dl_errors++;
+		return;
+	}
+	uint32_t *m = MTX(g);
+	if (!kind) {
+		for (int i = 0; i < 4; i++)
+			m[M_A + i] = salsa64_rd32(p + 4 * i);
+		p += 16;
+	}
+	m[M_X] = (uint32_t)(int32_t)(int16_t)salsa64_rd16(p);
+	m[M_Y] = (uint32_t)(int32_t)(int16_t)salsa64_rd16(p + 2);
+	m[M_BSX] = salsa64_rd16(p + 4);
+	m[M_BSY] = salsa64_rd16(p + 6);
+}
+
+/* La tile 0 sobre la imagen del sprite en la TMEM (cargada con
+ * G_OBJ_LOADTXTR): sin repetir, de 0 a imageW − 1 por imageH − 1. */
+static void obj_tile(struct gfx_state *g, const struct obj *o)
+{
+	uint32_t w = (o->w >> 5) ? (o->w >> 5) : 1, h = (o->h >> 5) ? (o->h >> 5) : 1;
+	gfx_rdp_command(g, 0xF5u << 24 | o->fmt << 21 | o->siz << 19 | (o->stride & 0x1FF) << 9 | (o->adrs & 0x1FF),
+			(uint32_t)BG_TILE << 24 | o->pal << 20 | 2u << 18 | 2u << 8);
+	gfx_rdp_command(g, 0xF2u << 24, (uint32_t)BG_TILE << 24 | (w - 1) << 14 | (h - 1) << 2);
+}
+
+/* Un sprite sin rotar en el rectángulo de pantalla [x0, x1) × [y0, y1) en
+ * cuartos de píxel (pueden venir al revés, con la imagen volteada, y salirse
+ * de la pantalla por arriba o la izquierda); dsdx/dtdy en u5.10 (texels por
+ * píxel, positivos). Los flags de volteo del sprite (bit 0 = s, bit 4 = t)
+ * también invierten el recorrido. */
+static void obj_rect(struct gfx_state *g, const struct obj *o, int64_t x0, int64_t y0, int64_t x1, int64_t y1,
+		     int64_t dsdx, int64_t dtdy)
+{
+	bool fx = o->flags & 1, fy = o->flags & 0x10;
+	if (x1 < x0) {
+		int64_t t = x0;
+		x0 = x1;
+		x1 = t;
+		fx = !fx;
+	}
+	if (y1 < y0) {
+		int64_t t = y0;
+		y0 = y1;
+		y1 = t;
+		fy = !fy;
+	}
+	/* s y t del borde izquierdo y del superior, con el signo del recorrido. */
+	int64_t s = fx ? (int64_t)((o->w >> 5) - 1) << 5 : 0, t = fy ? (int64_t)((o->h >> 5) - 1) << 5 : 0;
+	if (fx)
+		dsdx = -dsdx;
+	if (fy)
+		dtdy = -dtdy;
+	/* TEXRECT no tiene coordenadas negativas: se recorta y se avanza s y t
+	 * (cuarto de píxel = dsdx / 4 texels, en u10.5 ×32: dsdx / 128). */
+	if (x0 < 0) {
+		s += -x0 * dsdx / 128;
+		x0 = 0;
+	}
+	if (y0 < 0) {
+		t += -y0 * dtdy / 128;
+		y0 = 0;
+	}
+	if (x1 <= x0 || y1 <= y0 || x0 >= 1024 * 4 || y0 >= 1024 * 4)
+		return;
+	bool copy = ((g->oh >> G_MDSFT_CYCLETYPE) & 3) == G_CYC_COPY;
+	strip_rect(g, (uint32_t)x0, (uint32_t)y0, (uint32_t)x1, (uint32_t)y1, (uint32_t)s, (uint32_t)t,
+		   (uint32_t)dsdx, (uint32_t)dtdy, copy);
+}
+
+/* G_OBJ_RECTANGLE (base = false) y G_OBJ_RECTANGLE_R (con la escala base y
+ * el desplazamiento X, Y de la matriz): un TEXRECT. El ancho en cuartos de
+ * píxel es imageW / 32 texels entre (scaleW / 1024 texels por píxel) × 4. */
+static void obj_rectangle(struct gfx_state *g, const struct obj *o, bool base)
+{
+	const uint32_t *m = MTX(g);
+	int64_t bsx = base ? m[M_BSX] : 1024, bsy = base ? m[M_BSY] : 1024;
+	if (!bsx || !bsy)
+		return;
+	int64_t qw = (int64_t)o->w * 128 * 1024 / ((int64_t)o->scale_w * bsx), qh = (int64_t)o->h * 128 * 1024 / ((int64_t)o->scale_h * bsy);
+	int64_t qx = base ? (int32_t)m[M_X] + (int64_t)o->x * 1024 / bsx : o->x;
+	int64_t qy = base ? (int32_t)m[M_Y] + (int64_t)o->y * 1024 / bsy : o->y;
+	int64_t dsdx = o->scale_w, dtdy = o->scale_h;
+	if (base) {
+		dsdx = dsdx * bsx / 1024;
+		dtdy = dtdy * bsy / 1024;
+	}
+	obj_tile(g, o);
+	obj_rect(g, o, qx, qy, qx + qw, qy + qh, dsdx, dtdy);
+}
+
+/* G_OBJ_SPRITE: el microcódigo lleva las cuatro esquinas del sprite por la
+ * matriz (x' = A x + B y + X, y' = C x + D y + Y) y lo dibuja con dos
+ * triángulos con textura, no con un TEXRECT: las esquinas son las inclusivas
+ * (el ancho y el alto menos un píxel, antes de la matriz) y s, t van de 0 a
+ * ese tamaño en texels (con G_OBJ_FLIP al revés). Aquí se arma el mismo
+ * cuadrilátero y sale por el mismo camino que los triángulos del RDP
+ * (gfx_rdp_tex_quad): con el LLE, los mismos píxeles (docs/estado.md). */
+static void obj_sprite(struct gfx_state *g, const struct obj *o)
+{
+	const uint32_t *m = MTX(g);
+	float x[4], y[4], s[4], t[4];
+	float fa = (float)(int32_t)m[M_A] / 65536.0f, fb = (float)(int32_t)m[M_B] / 65536.0f;
+	float fc = (float)(int32_t)m[M_C] / 65536.0f, fd = (float)(int32_t)m[M_D] / 65536.0f;
+	float w = (float)o->w * 32.0f / (float)o->scale_w - 1.0f, h = (float)o->h * 32.0f / (float)o->scale_h - 1.0f;
+	if (w < 0.0f)
+		w = 0.0f;
+	if (h < 0.0f)
+		h = 0.0f;
+	float tw = w * (float)o->scale_w / 1024.0f, th = h * (float)o->scale_h / 1024.0f;
+	for (int i = 0; i < 4; i++) {
+		float u = (i == 1 || i == 2) ? 1.0f : 0.0f, v = (i >= 2) ? 1.0f : 0.0f;
+		float px = (float)o->x / 4.0f + u * w, py = (float)o->y / 4.0f + v * h;
+		x[i] = fa * px + fb * py + (float)(int32_t)m[M_X] / 4.0f;
+		y[i] = fc * px + fd * py + (float)(int32_t)m[M_Y] / 4.0f;
+		s[i] = ((o->flags & 1) ? 1.0f - u : u) * tw;
+		t[i] = ((o->flags & 0x10) ? 1.0f - v : v) * th;
+	}
+	obj_tile(g, o);
+	gfx_rdp_tex_quad(g, BG_TILE, x, y, s, t);
+}
+
+/* G_OBJ_LDTX_*: uObjTxSprite = uObjTxtr (24 bytes) + uObjSprite (24). */
+static void obj_ldtx(struct gfx_state *g, uint32_t seg, uint32_t op)
+{
+	struct obj o;
+	obj_load_txtr(g, seg);
+	if (!read_obj(g, seg + 24, &o))
+		return;
+	if (op == S2_OBJ_LDTX_SPRITE)
+		obj_sprite(g, &o);
+	else
+		obj_rectangle(g, &o, op == S2_OBJ_LDTX_RECT_R);
+}
+
+static void obj_cmd(struct gfx_state *g, uint32_t op, uint32_t w1)
+{
+	struct obj o;
+	if (!read_obj(g, w1, &o))
+		return;
+	if (op == S2_OBJ_SPRITE)
+		obj_sprite(g, &o);
+	else
+		obj_rectangle(g, &o, op == S2_OBJ_RECTANGLE_R);
+}
+#endif /* GFX_S2DEX_FULL */
+
+/* Un tramo S2DEX: gen1 con los opcodes de S2DEX 1.x. `foreign`: está dentro
+ * de una tarea de otra familia (G_LOAD_UCODE) y termina en el G_LOAD_UCODE
+ * que vuelve; si no, es la tarea entera y termina con el G_ENDDL de la
+ * lista. */
+static bool s2dex_run(struct gfx_state *g, bool gen1, bool foreign)
 {
 	struct gfx_result *res = g->res;
 	uint32_t w0, w1;
 	bool nonear;
-	res->flags |= GFX_RES_LOAD_UCODE;
+	if (foreign)
+		res->flags |= GFX_RES_LOAD_UCODE;
 	g->raw[0] = 0;
+#ifdef GFX_S2DEX_FULL
+	mtx_reset(g);
+#endif
 	while (gfx_dl_next(g, &w0, &w1)) {
+#ifdef GFX_S2DEX_FULL
+		uint32_t op = gen1 ? s2_canon(w0 >> 24) : w0 >> 24;
+#else
 		uint32_t op = w0 >> 24;
+#endif
 		switch (op) {
-		case S2_LOAD_UCODE:
+		case S2_LOAD_UCODE: {
+#ifdef GFX_S2DEX_FULL
+			uint32_t text = gfx_addr(g, w1);
+			if (g->ucode && text == g->ucode) {
+				if (foreign)
+					return true;
+				break;
+			}
+			int kind = gfx_ucode_kind(g, gfx_addr(g, g->rdphalf1), (w0 & 0xFFFF) + 1, &nonear);
+			if (kind == GFX_UCODE_S2DEX2 || kind == GFX_UCODE_S2DEX1) {
+				if (!foreign)
+					g->ucode = text;
+				break;
+			}
+			if (!foreign && (kind == 1 || kind == 2)) {
+				/* RE2 (F3DEX2) y Yoshi's Story (F3DEX 1.x) cargan el de 3D a mitad
+				 * de la tarea y siguen con la lista: la sigue su intérprete. */
+				gfx_ucode_reload(g, text, kind, nonear, gfx_addr(g, g->rdphalf1), (w0 & 0xFFFF) + 1);
+				g->chain_ex = kind == 1;
+				return true;
+			}
+			return gfx_dl_skip_foreign(g, gen1 ? 0xAF : S2_LOAD_UCODE, gen1 ? 0x06 : S2_DL, gen1 ? 0xB8 : S2_ENDDL);
+#else
 			if (g->ucode && gfx_addr(g, w1) == g->ucode)
 				return true;
 			/* Otro más: S2DEX otra vez sigue aquí; si no, se salta. */
 			if (gfx_ucode_kind(g, gfx_addr(g, g->rdphalf1), (w0 & 0xFFFF) + 1, &nonear) != GFX_UCODE_S2DEX2)
 				return gfx_dl_skip_foreign(g, S2_LOAD_UCODE, S2_DL, S2_ENDDL);
 			break;
+#endif
+		}
 		case S2_DL:
 			if (!gfx_dl_call(g, w1, (w0 >> 16) & 1))
 				return false;
 			break;
 		case S2_ENDDL:
 			if (!gfx_dl_end(g)) {
-				res->flags |= GFX_RES_FOREIGN_END;
+				/* Con G_RDPFULLSYNC ya visto, acabar aquí es lo normal (Yoshi's
+				 * Story termina sus listas dentro del tramo S2DEX); sin él, la
+				 * tarea cuenta como cortada y el DP interrumpe igual. */
+				if (foreign && !(res->flags & GFX_RES_FULLSYNC))
+					res->flags |= GFX_RES_FOREIGN_END;
 				return false;
 			}
 			break;
-		case S2_MOVEWORD:
-			if (((w0 >> 16) & 0xFF) == G_MW_SEGMENT)
-				g->segments[((w0 & 0xFFFF) >> 2) & 15] = w1 & 0x00FFFFFF;
+		case S2_MOVEWORD: {
+			unsigned type = gen1 ? w0 & 0xFF : (w0 >> 16) & 0xFF;
+			unsigned off = gen1 ? (w0 >> 8) & 0xFFFF : w0 & 0xFFFF;
+			if (type == G_MW_SEGMENT)
+				g->segments[(off >> 2) & 15] = w1 & 0x00FFFFFF;
 			break;
+		}
 		case S2_RDPHALF_1:
 			g->rdphalf1 = w1;
 			break;
@@ -355,7 +664,8 @@ bool gfx_dl_s2dex2(struct gfx_state *g)
 		case S2_SETOTHERMODE_L:
 		case S2_SETOTHERMODE_H: {
 			int len = (int)(w0 & 0xFF) + 1;
-			gfx_sp_othermode(g, op == S2_SETOTHERMODE_H, 32 - (int)((w0 >> 8) & 0xFF) - len, len, w1);
+			int shift = gen1 ? (int)((w0 >> 8) & 0xFF) : 32 - (int)((w0 >> 8) & 0xFF) - len;
+			gfx_sp_othermode(g, op == S2_SETOTHERMODE_H, shift, len, w1);
 			break;
 		}
 		case S2_BG_COPY:
@@ -369,6 +679,23 @@ bool gfx_dl_s2dex2(struct gfx_state *g)
 		case S2_OBJ_LOADTXTR:
 			obj_load_txtr(g, w1);
 			break;
+#ifdef GFX_S2DEX_FULL
+		case S2_OBJ_RECTANGLE:
+		case S2_OBJ_SPRITE:
+		case S2_OBJ_RECTANGLE_R:
+			obj_cmd(g, op, w1);
+			res->bg++;
+			break;
+		case S2_OBJ_LDTX_SPRITE:
+		case S2_OBJ_LDTX_RECT:
+		case S2_OBJ_LDTX_RECT_R:
+			obj_ldtx(g, w1, op);
+			res->bg++;
+			break;
+		case S2_OBJ_MOVEMEM:
+			obj_movemem(g, w0, w1);
+			break;
+#endif
 		case S2_RDPHALF_0:
 			/* Seguido de G_RDPHALF_1 y G_RDPHALF_2 es un TEXRECT (el
 			 * cielo de Kirby 64): se dibuja con G_RDPHALF_2. Queda en
@@ -379,13 +706,35 @@ bool gfx_dl_s2dex2(struct gfx_state *g)
 			g->raw[1] = w1;
 			break;
 		default:
-			/* Comandos del RDP. */
-			if (op >= 0xE6)
+			/* Comandos del RDP; lo demás de S2DEX (G_SELECT_DL) no se
+			 * implementa. */
+			if (op >= 0xE6) {
 				gfx_rdp_command(g, w0, w1);
-			else
-				res->skipped++;
+			} else {
+				res->unknown_cmds++;
+				res->last_unknown = (uint8_t)(w0 >> 24);
+			}
 			break;
 		}
 	}
 	return false;
 }
+
+bool gfx_dl_s2dex2(struct gfx_state *g)
+{
+	return s2dex_run(g, false, true);
+}
+
+#ifdef GFX_S2DEX_FULL
+bool gfx_dl_s2dex1(struct gfx_state *g)
+{
+	return s2dex_run(g, true, true);
+}
+
+int gfx_dl_s2dex(struct gfx_state *g, bool gen1)
+{
+	if (!s2dex_run(g, gen1, false))
+		return GFX_S2_END;
+	return g->chain_ex ? GFX_S2_F3DEX : GFX_S2_F3DEX2;
+}
+#endif

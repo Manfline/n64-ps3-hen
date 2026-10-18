@@ -203,7 +203,11 @@ static void moveword(struct gfx_state *g, uint32_t w0, uint32_t w1)
 void gfx_dl_f3d(struct gfx_state *g, gfx_cmd_hook hook)
 {
 	struct gfx_result *res = g->res;
+#ifdef GFX_S2DEX_FULL
+	const bool ex = g->job->gbi == SALSA64_GBI_F3DEX || g->chain_ex;
+#else
 	const bool ex = g->job->gbi == SALSA64_GBI_F3DEX;
+#endif
 	const bool wr = g->job->gbi == SALSA64_GBI_F3DWR;
 	const unsigned kind = ex ? IDX_X2 : wr ? IDX_X5 : IDX_X10;
 	uint32_t w0, w1;
@@ -311,10 +315,24 @@ void gfx_dl_f3d(struct gfx_state *g, gfx_cmd_hook hook)
 			break;
 		case G_LOAD_UCODE:
 			if (ex) {
+#ifdef GFX_S2DEX_FULL
+				/* Otro microcódigo: S2DEX (los sprites de Yoshi's Story) aparte
+				 * (s2dex.c); los demás se saltan (dl.c). */
+				uint32_t data = gfx_addr(g, g->rdphalf1), size = (w0 & 0xFFFF) + 1;
+				bool nonear;
+				if (g->ucode && gfx_addr(g, w1) == g->ucode)
+					break;
+				int ukind = gfx_ucode_kind(g, data, size, &nonear);
+				if (ukind == GFX_UCODE_S2DEX1 ? !gfx_dl_s2dex1(g)
+							     : ukind == GFX_UCODE_S2DEX2 ? !gfx_dl_s2dex2(g)
+											: !gfx_dl_skip_foreign(g, G_LOAD_UCODE, G_DL, G_ENDDL))
+					return;
+#else
 				/* Otro microcódigo: se salta su tramo (dl.c). */
 				if (!(g->ucode && gfx_addr(g, w1) == g->ucode) &&
 				    !gfx_dl_skip_foreign(g, G_LOAD_UCODE, G_DL, G_ENDDL))
 					return;
+#endif
 				break;
 			}
 			res->unknown_cmds++;  /* F3D no lo tiene */

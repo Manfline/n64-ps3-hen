@@ -491,6 +491,8 @@ static void rsp_detect_gbi(void)
 	CHECK_EQ(detect("RSP Gfx ucode F3DEX       xbus 1.23 "), SALSA64_GBI_F3DEX);
 	CHECK_EQ(detect("RSP Gfx ucode F3DEX         0.95 "), SALSA64_GBI_F3DEX);
 	CHECK_EQ(detect("RSP Gfx ucode S2DEX  fifo 2.05 "), SALSA64_GBI_S2DEX);
+	CHECK_EQ(detect("RSP Gfx ucode S2DEX       fifo 2.06 "), SALSA64_GBI_S2DEX);
+	CHECK_EQ(detect("RSP Gfx ucode S2DEX  1.06 "), SALSA64_GBI_S2DEX1);
 	CHECK_EQ(detect("RSP Gfx ucode F3DEXBG.NoN fifo 2.08 "), SALSA64_GBI_F3DEXBG);
 	CHECK_EQ(detect("RSP SW Version: 2.0X"), SALSA64_GBI_F3D);
 	CHECK_EQ(detect("Salsa64 GBI F3DEX2"), SALSA64_GBI_F3DEX2);
