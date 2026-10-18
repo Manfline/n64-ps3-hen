@@ -53,4 +53,12 @@ bool salsa64_boot_hle(struct salsa64_n64 *n64, int tv, struct salsa64_boot_info 
 bool salsa64_boot_hle_as(struct salsa64_n64 *n64, int tv, enum salsa64_cic cic,
 			 struct salsa64_boot_info *info);
 
+/*
+ * Reset suave (botón Reset tras el PRE_NMI): como salsa64_boot_hle pero con
+ * la RDRAM intacta salvo el megabyte que el IPL3 vuelve a copiar de la ROM,
+ * osResetType = 1 y $s5 = 1. `tv` como en salsa64_boot_hle. Quien llama
+ * descarta antes el trabajo en vuelo de los SPE (ver main.c).
+ */
+bool salsa64_boot_nmi(struct salsa64_n64 *n64, int tv, struct salsa64_boot_info *info);
+
 #endif

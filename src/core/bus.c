@@ -39,6 +39,12 @@ void salsa64_bus_reset(struct salsa64_bus *bus)
 {
 	memset(bus->rdram, 0, bus->rdram_size);
 	salsa64_bus_rdram_written(bus, 0, bus->rdram_size);
+	salsa64_bus_reset_warm(bus);
+}
+
+/* Lo del reset sin tocar la RDRAM: la que dejan el botón Reset y el NMI. */
+void salsa64_bus_reset_warm(struct salsa64_bus *bus)
+{
 	memset(bus->sp_mem, 0, sizeof bus->sp_mem);
 	memset(bus->pif_ram, 0, sizeof bus->pif_ram);
 	salsa64_pif_reset(bus);

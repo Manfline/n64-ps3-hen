@@ -196,6 +196,8 @@ void osd_pause_menu_draw(const struct osd_pause_menu *m, float lw, float lh)
 			label = tr("Mostrar FPS");
 			snprintf(val, sizeof val, "%s", tr(m->fps_on ? "Sí" : "No"));
 			break;
+		case PM_RESET: label = tr("Reiniciar (botón Reset)"); break;
+		case PM_RESTART: label = tr("Reiniciar desde cero"); break;
 		case PM_EXIT: label = tr(m->in_menu ? "Volver al menú" : "Salir al XMB"); break;
 		}
 		if (cur)

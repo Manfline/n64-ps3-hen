@@ -93,6 +93,8 @@ struct salsa64_bus {
 /* rdram_size: 4 u 8 MB (Expansion Pak). */
 void salsa64_bus_init(struct salsa64_bus *bus, uint8_t *rdram, uint32_t rdram_size);
 void salsa64_bus_reset(struct salsa64_bus *bus);
+/* Igual, conservando la RDRAM (reset suave: botón Reset, NMI). */
+void salsa64_bus_reset_warm(struct salsa64_bus *bus);
 void salsa64_bus_set_rom(struct salsa64_bus *bus, const uint8_t *rom, uint32_t size);
 /* Activa el ISViewer con un búfer de SALSA64_ISV_SIZE bytes que pone quien
  * llama (NULL lo apaga). `out` recibe cada texto impreso. */

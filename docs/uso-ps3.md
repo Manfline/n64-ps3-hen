@@ -336,7 +336,7 @@ los atajos de Salsa64:
 
 | Atajo | Qué hace |
 |---|---|
-| START + SELECT | Menú de pausa: continuar, estados, trucos, FPS y salir. Ver «Salir del juego» |
+| START + SELECT | Menú de pausa: continuar, estados, trucos, FPS, reiniciar y salir. Ver «Salir del juego» |
 | SELECT + □ | Lista de trucos del juego, con el juego en pausa (ver «Trucos») |
 | SELECT + R1 | Guarda el estado en la ranura actual |
 | SELECT + L1 | Carga el estado de la ranura actual |
@@ -367,6 +367,8 @@ usan):
 | Trucos | La lista de trucos del juego (si tiene) |
 | Imagen | Filtro, aspecto, recorte del borde, escala interna e interpolación del juego en curso (abajo) |
 | Mostrar FPS | Enciende o apaga el contador de velocidad |
+| Reiniciar (botón Reset) | El reinicio en caliente de la consola. Pregunta siempre «¿Seguro?» (× sí, ○ no). El juego sigue ~0,5 s emulados: primero recibe la interrupción de PRE_NMI (es la que libultra usa para guardar y callar el audio) y después el NMI: el CPU y el RCP se reinician, la RDRAM se conserva salvo el primer megabyte, que se vuelve a copiar de la ROM, y el juego ve `osResetType` = 1 (reset suave). Vuelve al logo o al título con lo que el juego dejó en la RDRAM, como el botón Reset de una N64 |
+| Reiniciar desde cero | Arranque en frío del mismo juego sin pasar por la lista: cierra el juego entero (escribe la partida, el Controller Pak y la EEPROM/SRAM/Flash, suelta los SPEs y vacía la caché del recompilador) y lo abre otra vez con los mismos ajustes. Pregunta siempre «¿Seguro?»; lo que el juego no haya guardado se pierde |
 | Volver al menú (con `embedded`, Salir al XMB) | Cierra el juego como siempre (guarda la partida, apaga el audio y los SPEs). Con «Confirmar al salir: Sí» pregunta antes: × sí, ○ sigue jugando |
 
 Cruceta arriba/abajo elige (da la vuelta), × acepta; ○, START o START +

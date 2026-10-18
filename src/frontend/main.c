@@ -830,9 +830,11 @@ static volatile int bench_request;
  * tarea del RSP en vuelo, encola el campo con FIELD_STATE (de él sale la
  * miniatura) y espera quieta; presentación vacía las colas, espera al RSX,
  * hace el trabajo y la suelta (state_barrier). */
-enum { STATE_NONE, STATE_SAVE, STATE_LOAD };
+enum { STATE_NONE, STATE_SAVE, STATE_LOAD, STATE_RESET };  /* STATE_RESET: el NMI del botón Reset, pedido por la emulación */
 static volatile int state_req;     /* lo pone presentación; lo baja al terminar */
 static volatile int state_parked;  /* emulación espera en el límite del campo */
+static volatile int soft_reset_req;  /* 1: «Reiniciar (botón Reset)» pedido; 2: PRE_NMI dado, falta el NMI */
+static volatile int restart_cold;    /* «Reiniciar desde cero» pedido: el juego se cierra y se abre otra vez */
 static volatile int state_quiet;   /* la tarea del RSP quedó recogida (sin LLE) */
 static unsigned state_slot;        /* ranura actual, 0 … SALSA64_STATE_SLOTS − 1 */
 static struct osd_fps fps;         /* contador de velocidad (SELECT + △, menu.cfg) */
@@ -1242,7 +1244,15 @@ static int update_pads(uint32_t *buttons)
 	pads_publish(pads);
 	if (buttons)
 		*buttons = all;
-	return act == PAUSECTL_EXIT;
+	if (act == PAUSECTL_RESET) {
+		salsa64_log("reinicio: botón Reset pedido desde el menú de pausa (campo %u)", n64.bus.vi.fields);
+		lwsync();
+		soft_reset_req = 1;
+	} else if (act == PAUSECTL_RESTART) {
+		salsa64_log("reinicio: desde cero pedido desde el menú de pausa (campo %u)", n64.bus.vi.fields);
+		restart_cold = 1;
+	}
+	return act == PAUSECTL_EXIT || act == PAUSECTL_RESTART;
 }
 
 /* ---- ROM ------------------------------------------------------------------ */
@@ -2095,6 +2105,19 @@ static void emu_thread(void *arg)
 		/* Estado guardado: la tarea del RSP en vuelo se recoge (su fin
 		 * emulado no se adelanta) antes de encolar el campo, así su salida
 		 * va con él y las colas quedan vacías en la barrera. */
+		/* Botón Reset: primero PRE_NMI (libultra guarda y calla el audio) y,
+		 * ~0,5 s emulados después, el NMI, que se hace con la emulación quieta
+		 * como un estado cargado (state_barrier). */
+		if (soft_reset_req == 1 && !state_req && !n64.nmi_pending) {
+			soft_reset_req = 2;
+			salsa64_n64_prenmi(&n64);
+			salsa64_log("reinicio: PRE_NMI en el campo %u (NMI en %.2f s emulados)", n64.bus.vi.fields,
+				    SALSA64_NMI_DELAY_CYCLES / 93750000.0);
+		}
+		if (!state_req && salsa64_n64_nmi_due(&n64)) {
+			lwsync();
+			state_req = STATE_RESET;
+		}
 		int req = state_req;
 		if (req)
 			state_quiet = salsa64_rsp_quiesce(&n64.bus);
@@ -2549,7 +2572,9 @@ static void present_overlay(uint64_t now)
 		};
 		osd_image_menu_draw(&im, ui_lw, ui_lh);
 	} else if (pause_ctl.dialog)
-		osd_confirm_draw(in_menu ? "¿Volver al menú?" : "¿Salir al XMB?", "×: Sí     ○: No", ui_lw, ui_lh);
+		osd_confirm_draw(pause_ctl.dialog_for == PAUSECTL_RESET ? "¿Seguro? Reiniciar (botón Reset)" :
+				 pause_ctl.dialog_for == PAUSECTL_RESTART ? "¿Seguro? Reiniciar desde cero" :
+				 in_menu ? "¿Volver al menú?" : "¿Salir al XMB?", "×: Sí     ○: No", ui_lw, ui_lh);
 	else if (pause_ctl.panel)
 		osd_cheats_draw(&game_cheats, pause_ctl.panel_sel, ui_lw, ui_lh);
 }
@@ -3363,6 +3388,7 @@ enum game_end {
 	GAME_TO_MENU,  /* START + SELECT con menú, o fin de una prueba abierta desde el menú */
 	GAME_QUIT,     /* salir de la aplicación (sin menú, o «Salir del juego» del sistema) */
 	GAME_FAILED,   /* no arrancó */
+	GAME_RESTART,  /* «Reiniciar desde cero»: run_game lo atiende y abre el mismo juego otra vez */
 };
 
 /* Con la emulación quieta en el límite de un campo (state_parked): lo que
@@ -3389,7 +3415,35 @@ static void state_barrier(void)
 	struct states_timing t;
 	uint32_t field0 = n64.bus.vi.fields;
 	bool ok = false;
-	if (!state_quiet) {
+	if (req == STATE_RESET) {
+		/* NMI del botón Reset, con la emulación quieta en el límite del campo.
+		 * La tarea del RSP en vuelo (HLE, LLE o audio) la espera
+		 * salsa64_rsp_reset sin dejar el SPE a medias; lo que esa tarea
+		 * dejó en las colas se traduce y se suelta como al cargar un estado.
+		 * El SPE 0 conserva su imagen: si el juego vuelve a cargar otro
+		 * microcódigo, cada tarea elige la suya como siempre. */
+		struct salsa64_boot_info bi;
+		ok = salsa64_boot_nmi(&n64, (int)boot_info.tv, &bi);
+		if (ok) {
+			boot_info = bi;
+			salsa64_rdp_flush(~0u);
+			salsa64_rdp_drop_targets();
+			audio_out_flush();
+			post_last = ~0u;
+			for (unsigned i = 0; i < SALSA64_PIF_PORTS; i++)
+				pif_edge_seen[i] = n64.bus.pif.sent[i].buttons;
+			sw.cyc0 = n64.cpu.cycles;
+			sw.idle0 = n64.cpu.idle_cycles;
+			sw.pif_reads0 = n64.bus.pif.reads[0];
+			osd_fps_reset(&fps);
+			salsa64_log("reinicio: NMI en el campo %u: entrada %08x, osResetType %u, RDRAM conservada", field0,
+				    bi.entry, (unsigned)salsa64_rd32(n64.bus.rdram + 0x30C));
+		} else {
+			salsa64_log("reinicio: FALLO del NMI: %s (se cierra el juego)", bi.error ? bi.error : "?");
+			running = 0;
+		}
+		soft_reset_req = 0;
+	} else if (!state_quiet) {
 		osd_notice(sysGetSystemTime(), "Estados no disponibles con lle");
 	} else if (req == STATE_SAVE) {
 		ok = states_save(&n64, slot, &t, err, sizeof err);
@@ -3514,7 +3568,10 @@ static void pause_update(void)
 		return;
 	uint64_t now = sysGetSystemTime();
 	if (want & ~was & PAUSECTL_CONFIRM)
-		salsa64_log("salida: START + SELECT, cuadro «%s» (× sí, ○ no)", in_menu ? "¿Volver al menú?" : "¿Salir al XMB?");
+		salsa64_log("salida: START + SELECT, cuadro «%s» (× sí, ○ no)",
+			    pause_ctl.dialog_for == PAUSECTL_RESET ? "¿Seguro? Reiniciar (botón Reset)" :
+			    pause_ctl.dialog_for == PAUSECTL_RESTART ? "¿Seguro? Reiniciar desde cero" :
+			    in_menu ? "¿Volver al menú?" : "¿Salir al XMB?");
 	if (was & ~want & PAUSECTL_CONFIRM)
 		salsa64_log("salida: «No», el juego sigue");
 	if (!was) {
@@ -3920,6 +3977,8 @@ static void game_reset(void)
 	state_req = STATE_NONE;
 	state_parked = 0;
 	state_quiet = 0;
+	soft_reset_req = 0;
+	restart_cold = 0;
 	state_slot = 0;
 	combos_on = 0;
 	state_done = 0;
@@ -4439,7 +4498,7 @@ static int ui_init_once(void)
  * juego» o el fin de una prueba, y lo cierra todo (game_close). Llamar
  * después de game_reset y de poner las banderas de las ROMs de prueba. Si
  * no arranca, deja el motivo en `err`. */
-static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *source, char *err, size_t err_size)
+static enum game_end run_game_once(uint8_t *rom, uint32_t rom_size, const char *source, char *err, size_t err_size)
 {
 	int rc;
 	err[0] = '\0';
@@ -4809,7 +4868,8 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 		sysutil_check();
 		beat.pres_at = "mandos";
 		if (update_pads(NULL)) {
-			salsa64_log("menú de pausa%s: %s", pause_ctl.confirm ? " y confirmación" : "", in_menu ? "vuelta al menú" : "salida");
+			salsa64_log("menú de pausa%s: %s", pause_ctl.confirm ? " y confirmación" : "",
+				    restart_cold ? "reinicio desde cero" : in_menu ? "vuelta al menú" : "salida");
 			break;
 		}
 		pause_update();
@@ -4884,7 +4944,31 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	drain(sysGetSystemTime(), 0);
 	game_close();
 	rdp_scale_set(video_cfg.scale, "vuelve la global");  /* la de un juego o la del menú de pausa */
+	if (restart_cold && !app_quit)
+		return GAME_RESTART;
 	return app_quit || !in_menu ? GAME_QUIT : GAME_TO_MENU;
+}
+
+/* Un juego, con «Reiniciar desde cero»: se cierra del todo (game_close escribe
+ * las partidas, suelta los SPE y vacía la caché del recompilador) y se abre
+ * otra vez la misma ROM, con los mismos ajustes y sin pasar por la lista. */
+static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *source, char *err, size_t err_size)
+{
+	for (;;) {
+		enum game_end end = run_game_once(rom, rom_size, source, err, err_size);
+		if (end != GAME_RESTART)
+			return end;
+		/* game_reset lo deja todo como al arrancar el programa: las banderas
+		 * de las pruebas y la ranura de estados se conservan. */
+		int st = selftest_on, gt = gfxtest_on, at = audiotest_on;
+		unsigned slot = state_slot;
+		salsa64_log("reinicio desde cero: %s (el juego se cerró y se abre otra vez)", source ? source : "ROM");
+		game_reset();
+		selftest_on = st;
+		gfxtest_on = gt;
+		audiotest_on = at;
+		state_slot = slot;
+	}
 }
 
 /* ---- Menú ------------------------------------------------------------------------- */

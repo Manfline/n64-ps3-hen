@@ -3332,7 +3332,7 @@ static bool dump_frame(const char *path)
 enum { OPT_REC = 0x100, OPT_LOCKSTEP, OPT_PAD, OPT_TRACE_FROM, OPT_TRACE_FAULTS, OPT_RAM_DUMP, OPT_TRACE_AUDIO,
        OPT_FRAME_EVERY, OPT_NO_PAK, OPT_LLE, OPT_LLE_SPEED, OPT_LLE_CHECK, OPT_LLE_CHECK_JPEG, OPT_LLE_CHECK_GFX, OPT_POKE, OPT_TRACE_FB, OPT_STATE_SAVE,
        OPT_STATE_LOAD, OPT_FIELDS, OPT_PROFILE, OPT_STATE_ZIP, OPT_INTERP, OPT_INTERP_K, OPT_INTERP_DECIMATE,
-       OPT_INTERP_DISP, OPT_PERFILADO, OPT_STOP_GFX, OPT_PADS, OPT_PAD_PORT };
+       OPT_INTERP_DISP, OPT_PERFILADO, OPT_STOP_GFX, OPT_PADS, OPT_PAD_PORT, OPT_RESET_AT, OPT_NMI_AT };
 
 /* ---- Estados guardados (--state-save, --state-load) ------------------------- */
 
@@ -3428,6 +3428,31 @@ static bool state_load_file(struct salsa64_n64 *m, const char *path)
 	return true;
 }
 
+/* Botón Reset (--reset-at C: PRE_NMI al terminar el campo C y NMI medio
+ * segundo emulado después) y NMI directo (--nmi-at C), como en la consola. */
+static uint32_t reset_at, nmi_at_opt;
+static int host_tv;
+
+static bool reset_fields_done(void)
+{
+	uint32_t f = n64.bus.vi.fields;
+	if (reset_at && f == reset_at) {
+		salsa64_n64_prenmi(&n64);
+		fprintf(stderr, "salsa64-run: campo %u: PRE_NMI (cause %08x), NMI en %.2f s\n", f, n64.cpu.cause,
+			SALSA64_NMI_DELAY_CYCLES / 93750000.0);
+	}
+	if ((nmi_at_opt && f == nmi_at_opt) || salsa64_n64_nmi_due(&n64)) {
+		struct salsa64_boot_info info;
+		if (!salsa64_boot_nmi(&n64, host_tv, &info)) {
+			fprintf(stderr, "salsa64-run: el NMI no arrancó: %s\n", info.error);
+			return false;
+		}
+		fprintf(stderr, "salsa64-run: campo %u: NMI, osResetType %u, entrada %08x\n", f,
+			(unsigned)salsa64_rd32(n64.bus.rdram + 0x30C), info.entry);
+	}
+	return true;
+}
+
 /* Al terminar cada campo: los --state-save que tocan. */
 static bool state_fields_done(void)
 {
@@ -3506,6 +3531,8 @@ static void usage(FILE *out)
 	      "      --state-load ARCHIVO    cargar un estado después del arranque y seguir desde ahí\n"
 	      "      --state-zip             los --state-save con la RDRAM comprimida (formato 2, como la PS3)\n"
 	      "      --fields N        terminar (código 0) al acabar el campo N del VI\n"
+	      "      --reset-at C      botón Reset al acabar el campo C: PRE_NMI y, 0,5 s emulados después, NMI\n"
+	      "      --nmi-at C        NMI (reset suave, RDRAM intacta, osResetType = 1) al acabar el campo C\n"
 	      "      --interp DIR      prototipo de interpolación de cuadros (docs/interpolacion.md): desde\n"
 	      "                        --trace-from, cuadros intermedios por geometría y por imagen en DIR\n"
 	      "      --interp-k K      campos por cuadro del juego (3: intermedios en 1/3 y 2/3)\n"
@@ -3554,6 +3581,8 @@ int main(int argc, char **argv)
 		{ "state-load", required_argument, NULL, OPT_STATE_LOAD },
 		{ "state-zip", no_argument, NULL, OPT_STATE_ZIP },
 		{ "fields", required_argument, NULL, OPT_FIELDS },
+		{ "reset-at", required_argument, NULL, OPT_RESET_AT },
+		{ "nmi-at", required_argument, NULL, OPT_NMI_AT },
 		{ "stop-gfx", required_argument, NULL, OPT_STOP_GFX },
 		{ "interp", required_argument, NULL, OPT_INTERP },
 		{ "interp-k", required_argument, NULL, OPT_INTERP_K },
@@ -3683,6 +3712,8 @@ int main(int argc, char **argv)
 		case OPT_STATE_LOAD: state_load_path = optarg; break;
 		case OPT_STATE_ZIP: state_zip = true; break;
 		case OPT_FIELDS: stop_field = (uint32_t)strtoul(optarg, NULL, 0); break;
+		case OPT_RESET_AT: reset_at = (uint32_t)strtoul(optarg, NULL, 0); break;
+		case OPT_NMI_AT: nmi_at_opt = (uint32_t)strtoul(optarg, NULL, 0); break;
 		case OPT_STOP_GFX: {
 			const char *colon = strchr(optarg, ':');
 			if (!colon) {
@@ -3980,14 +4011,14 @@ int main(int argc, char **argv)
 					n64.bus.vi.fields, n64.bus.vi.regs[SALSA64_VI_CONTROL],
 					n64.bus.vi.regs[SALSA64_VI_ORIGIN] & 0xFFFFFF, n64.bus.vi.regs[SALSA64_VI_WIDTH],
 					n64.bus.vi.regs[SALSA64_VI_H_VIDEO], n64.bus.vi.regs[SALSA64_VI_V_VIDEO]);
-		} else if (pads.n || pokes.n || gfx.raster || state_saves.n || stop_field || hp.on) {
+		} else if (pads.n || pokes.n || gfx.raster || state_saves.n || stop_field || hp.on || reset_at || nmi_at_opt) {
 			/* Con controles programados, campo por campo: el control cambia
 			 * justo al empezar uno. Con el rasterizador también, para darle
 			 * el origen del VI de cada campo (raster_vi). Los estados se
 			 * guardan en el límite del campo, como en la PS3. */
 			salsa64_n64_run_field(&n64);
 			field_done(gfx_path, frame_every);
-			if (!state_fields_done()) {
+			if (!state_fields_done() || !reset_fields_done()) {
 				free(rom);
 				return 3;
 			}

@@ -7,6 +7,17 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 ## [0.2.8] — unreleased
 
 ### Added
+- **Restart from the pause menu:** two new rows, both with an "Are you sure?"
+  box. "Restart (Reset button)" does what the console's Reset button does: the
+  game first gets the pre-NMI interrupt (the one libultra uses to save and
+  mute the audio), half a second later the NMI resets the CPU and the RCP
+  with the RDRAM kept (the program is copied again from the ROM and the game
+  sees a soft reset). "Restart from scratch" closes the game completely
+  (saves are written first) and opens it again without going back to the list.
+  They work with the HLE, the RSP in low-level mode, interpolation and the
+  recompiler. On a computer, `salsa64-run --reset-at N` and `--nmi-at N` do
+  the same at a given field; Super Mario 64, Zelda: Ocarina of Time and
+  GoldenEye 007 go back to their logos after either.
 - **MusyX audio** (issue #11): the games that use Factor 5's MusyX engine
   (v1 and v2) used to run mute because their audio task is not a command list.
   They now have sound: Hydro Thunder, Rush 2049, NBA Showtime, Resident
