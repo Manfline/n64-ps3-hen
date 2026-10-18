@@ -23,6 +23,7 @@
  * SPE la macro no genera nada. */
 #ifdef GFX_CENSUS
 extern void (*gfx_unknown_hook)(uint32_t op);
+extern int gfx_dpc_trace;  /* dpc.c: volcado crudo de los comandos (censo, SALSA64_GCHK_DPC_TRACE) */
 extern uint32_t gfx_dpc_hist[64];  /* dpc.c: comandos del RDP por opcode (6 bits bajos) */
 #define GFX_UNKNOWN(op) do { if (gfx_unknown_hook) gfx_unknown_hook((uint32_t)(op)); } while (0)
 #else

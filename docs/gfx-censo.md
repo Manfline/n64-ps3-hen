@@ -11,7 +11,8 @@ mide y por dónde conviene seguir.
 de ~50 s de consola por juego) 104 924 tienen HLE; en 15 993 (15 %) el
 microcódigo real todavía entrega al RDP casi nada y la comparación no dice nada
 de la HLE (eran 28 032, el 27 %, antes de arreglar el camino LLE → RDP: ver
-«0. El oráculo»); de las 88 931 restantes, **47,5 % son idénticas píxel a píxel,
+«0. El oráculo»; en 12 de los juegos, 12 083 de ellas eran pantallas fijas y no tareas
+vacías, punto 4: queda Yoshi's Story); de las 88 931 restantes, **47,5 % son idénticas píxel a píxel,
 35,1 % tienen una diferencia menor y 17,4 % son distintas** (7947 de ellas, el
 8,9 %, grandes: más del 3 % de la pantalla). Antes: 74 005 válidas, 48,2 % /
 23,1 % / 28,7 % (20 % grandes). Con F3DEX2 y la rama Zelda, donde el LLE ya era
@@ -452,29 +453,68 @@ fallo sino tres, ninguno del intérprete del RSP:
    propio y bastaban 3 tramos sin dibujar en el destino (los de estado) para
    borrar lo dibujado (Mortal Kombat Mythologies: 3204 de 10 864 píxeles). Ahora
    los tramos de una misma lista (hasta su SYNC_FULL, `GFX_JOB_DPC_CONT`) cuentan
-   como una tarea (`sync.c`, `raster.c`, `run.c`). **Pendiente para la PS3**:
-   el consumidor de la consola (`src/rdp/rdp.c`, `translate`: `rdp_targets_task`
-   por trabajo) y `src/platform/ps3/gfx_spu.c` (`spu_dpc_run`) tienen el mismo
-   conteo por tramo y no se tocaron (no se pueden validar aquí): en modo LLE de
-   la PS3 los destinos se cebarán de más (probable causa de parte de lo que se
-   vio en Killer Instinct con JIT). El arreglo es poner `GFX_JOB_DPC_CONT` en
-   `spu_dpc_run` con el mismo criterio de `sync.c` y no llamar a
-   `rdp_targets_task` en esos trabajos.
+   como una tarea (`sync.c`, `raster.c`, `run.c`). **Trasladado a la PS3** (2026-10-18,
+   por validar en la consola): `src/rdp/rdp.c` (`translate`) ya no llama a
+   `rdp_targets_task` en los trabajos con `GFX_JOB_DPC_CONT` (la bandera llega por
+   `done`, que la guarda en la ranura) y `spu_dpc_run` (`src/platform/ps3/gfx_spu.c`) la
+   pone mientras la lista no haya visto SYNC_FULL (o un corte), con el mismo criterio de
+   `sync.c`. El log de la PS3 trae al final «gfx: listas del RDP: N trabajos continuaban
+   una lista abierta…, M destinos que el envejecimiento por tramo habría vuelto a cebar»:
+   N > 0 con LLE/JIT o con una lista del CPU (Killer Instinct) confirma que el camino se
+   usa; M es cuántas veces un destino dibujado habría pasado de fresco a cebarse de nuevo.
 
 Resultado: el LLE vacío bajó de 28 032 a 15 993 tareas. Mario Kart 64 (0.95),
 Killer Instinct, Mortal Kombat Trilogy, Banjo-Kazooie y Donkey Kong 64 quedaron
 sin casi ninguna; Mario Kart 64 pasó de 0,7 % a 22 % idénticas y 51 % menores.
 
-**Lo que sigue vacío** (15 993; heterogéneo, no se encontró otra causa común):
-Star Wars Racer (2145 de 5003), Ms. Pac-Man (2063 de 2923, F3DEX2 xbus),
-GoldenEye (1857 de 6526), Road Rash 64 (1608 de 2990), Yoshi's Story (1291 de
-2297, S2DEX 1.x), F-Zero X (835), Mortal Kombat Mythologies (820 de 1472),
-Earthworm Jim 3D (791 de 2943), Mortal Kombat 4 (598; su color image es de
-400 × 300 y el comparador recorta a 320 × 240: probablemente solo el recorte),
-Rush 2049 (522), Mace (504) y Doom 64 (154). Las tareas de estos juegos tienen
-triángulos y rectángulos en las dos listas y el LLE dibuja 0 píxeles: el
-siguiente paso es el mismo método (volcar los comandos y el estado en una tarea
-concreta, p. ej. GoldenEye campo 216 o Mace campo 530).
+4. **«Vacía» era «no cambió nada»: pantallas fijas** (2026-10-18, GoldenEye campo 216
+   y Mace campo 530, con volcado crudo de DPC_START/END/STATUS y de cada comando:
+   `SALSA64_GCHK_DPC_TRACE=campo_ini,campo_fin`, solo con `-DGFX_CENSUS`). Una tarea se
+   marcaba «LLE casi vacía» si la HLE cambiaba el 2 % de la pantalla respecto a lo que
+   había en el búfer y el LLE menos de una décima de eso. Pero el búfer es de un
+   triple búfer: cuando el juego repite el mismo cuadro (menú, título, logo), el LLE
+   lo dibuja entero y **deja exactamente lo que ya había** (0 píxeles cambiados) y la HLE,
+   que difiere unos píxeles del LLE, «cambia» 2 595 (GoldenEye, clase «menor», dither
+   y redondeo) o 7 643 (Mace, «distinta»). En GoldenEye 216 el LLE entrega 24
+   triángulos y 254 rectángulos (la HLE, 12 y 254) con el RDP configurado igual; en
+   Mace 530, 648 triángulos y 48 rectángulos (la HLE, 324 y 48), el mismo cociente 2 de
+   siempre por el recorte. Cuando la escena cambia el LLE también cambia (Ms. Pac-Man:
+   0 → 112 píxeles cuando los de la HLE pasan de 27 192 a 27 284). No es una causa del
+   camino LLE → RDP sino de la medición: **ahora una tarea solo es «vacía» si además
+   el LLE entregó menos triángulos y rectángulos que la HLE** (`gfxcheck.c`, el informe
+   añade «de ellas N con triángulos y rectángulos del LLE ≥ HLE» y
+   `tools/censo-gfx-tabla.py` aplica lo mismo). Es una inferencia por el recuento y
+   por esa coincidencia de cambios; no se probó con el búfer envenenado.
+
+Resultado: el LLE vacío bajó de 28 032 a 15 993 tareas con los puntos 1 a 3, y a
+**1 069 con el 4** (las 12 escenas de abajo; las otras 805 de las 15 993 son de juegos
+que no se volvieron a correr aquí). Las que dejaban de contar entran ahora en la
+clasificación: la HLE de esos juegos queda peor parada, no mejor (Mace pasa de
+«504 vacías» a 1 276 distintas de 1 445).
+
+| Juego | Tareas | Vacías antes | Vacías ahora | Idénticas | Menores | Distintas (grandes) |
+|---|---:|---:|---:|---:|---:|---:|
+| GoldenEye | 6526 | 1857 | 0 | 1602 | 4624 | 300 (269) |
+| Star Wars Racer | 5003 | 2145 | 0 | 1051 | 2366 | 1586 (220) |
+| Ms. Pac-Man | 2923 | 2063 | 0 | 577 | 2346 | 0 |
+| Road Rash 64 | 2990 | 1608 | 0 | 1065 | 110 | 1815 (1804) |
+| Yoshi's Story | 2297 | 1291 | 1069 | 17 | 1151 | 60 (5) |
+| F-Zero X | 2753 | 835 | 0 | 397 | 321 | 2035 (529) |
+| Mortal Kombat Mythologies | 1472 | 820 | 0 | 478 | 61 | 933 (28) |
+| Earthworm Jim 3D | 2943 | 791 | 0 | 851 | 152 | 1940 (1836) |
+| Mortal Kombat 4 | 2829 | 598 | 0 | 2167 | 498 | 164 (0) |
+| Rush 2049 | 1472 | 522 | 0 | 167 | 388 | 917 (331) |
+| Mace | 1445 | 504 | 0 | 113 | 56 | 1276 (1189) |
+| Doom 64 | 1437 | 154 | 0 | 287 | 1150 | 0 |
+
+(GoldenEye antes: 1 857 en la primera corrida; 1 821 en la segunda con la misma
+definición, la escena tiene un tope de tiempo.) **Lo que sigue vacío de verdad:
+Yoshi's Story** (S2DEX 1.06, 1 069 tareas desde el campo ~1900, campo 1904 volcado): la
+lista dibuja el fondo en 48 tiras de `TEXRECT` en modo copia (320 × 5, tile 0 tras un
+`LOAD_TILE` a la tile 7); el LLE entrega 150 rectángulos contra los 298 de la HLE y
+cambia 700–2 000 píxeles de los 43 000 de la HLE. Es el siguiente caso: volcar los
+pixeles de una tira (`SALSA64_GFX_PIX`) y mirar la carga a la TMEM y el `TEXRECT` en
+copia de `gfx_texrect`.
 
 ### 1. Diferencias de la HLE (el LLE dibuja y la HLE no, o el color difiere donde el LLE es fiable)
 
@@ -528,9 +568,10 @@ Killer Instinct pasó de 3345 a 848 distintas (100 grandes), todas «otro color�
 
 ## Pendiente
 
-- Cerrar las 15 993 tareas vacías que quedan (punto 0) con el mismo método de
-  volcado crudo, y trasladar a la PS3 los tres cambios del punto 0 (el 1 ya
-  está en código compartido; el 3 falta en `rdp.c` y `gfx_spu.c`).
+- Las tareas vacías que quedan de verdad (punto 4): Yoshi's Story, 1 069 (tiras de `TEXRECT`
+  en modo copia); volver a correr el censo de los otros 35 juegos con la medición nueva.
+  Validar en la PS3 los cambios del punto 0 (el 1 está en código compartido; el 3, ya en
+  `rdp.c` y `gfx_spu.c`, falta probarlo en la consola).
 - Escenas de juego (no menús) para los títulos donde la barra de vida, el HUD y
   los personajes importan: Mortal Kombat 4, Resident Evil 2, Mace, FIFA 99.
 - Comparar el LLE con una referencia externa (ares) en las escenas donde LLE y

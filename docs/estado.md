@@ -1,5 +1,21 @@
 # Estado
 
+## 2026-10-18 — rc3: DPC continuado en la PS3 y el «LLE vacío» del censo era pantalla fija
+
+- **PS3 (por validar en la consola).** `src/rdp/rdp.c` (`translate`) no llama a
+  `rdp_targets_task` en los trabajos con `GFX_JOB_DPC_CONT` (la ranura lo guarda en `done`);
+  `spu_dpc_run` (`gfx_spu.c`) pone la bandera mientras la lista no haya visto SYNC_FULL ni corte,
+  como `sync.c`. Contadores nuevos al final del log de la PS3: «gfx: listas del RDP: N trabajos
+  continuaban una lista abierta (… M del SPE); K destinos que el envejecimiento por tramo habría
+  vuelto a cebar desde la RDRAM». Para probar: Killer Instinct con JIT (dos peleas seguidas),
+  Mario Kart 64 y juegos con F3DEX viejo en modo LLE, y la HLE de siempre (N debe ser 0 sin LLE ni
+  listas del CPU).
+- **Censo.** En GoldenEye (campo 216) y Mace (530) el LLE no estaba vacío: la escena era fija y
+  dejaba en el búfer lo mismo que ya había; la medición lo contaba como vacío. Ahora «vacía» exige
+  además menos triángulos y rectángulos del LLE que de la HLE. En 12 juegos pasan de 13 152 a 1 069
+  tareas vacías (solo Yoshi's Story, S2DEX 1.06, tiras de `TEXRECT` en modo copia). Detalle en
+  `docs/gfx-censo.md`, punto 4. Volcado crudo: `SALSA64_GCHK_DPC_TRACE=campo_ini,campo_fin`.
+
 ## 2026-10-17 — Resident Evil 2: bloques blancos, ruido y rectángulos negros (cebado de superficies)
 
 Con el S2DEX suelto, Resident Evil 2 llegaba a los menús en la PS3 con

@@ -448,6 +448,10 @@ static uint32_t spu_dpc_run(void *ctx, uint32_t start, uint32_t end, const uint8
 	job.dl = start;
 	job.dl_end = end;
 	job.flags = GFX_JOB_DPC | (dmem ? GFX_JOB_XBUS : 0);
+	if (s->dpc_open) {  /* misma tarea que el tramo anterior (gfx.h) */
+		job.flags |= GFX_JOB_DPC_CONT;
+		s->dpc_conts++;
+	}
 	s->sink.acquire(s->sink.ctx, &job);
 	s->last_task = job.task;
 	if (s->nocache)
@@ -462,6 +466,7 @@ static uint32_t spu_dpc_run(void *ctx, uint32_t start, uint32_t end, const uint8
 	account_res(s, &res, r->ticks);
 	salsa64_gfx_rdram_fills(s->bus, &job, &res);
 	s->sink.done(s->sink.ctx, &job, &res);
+	s->dpc_open = !(res.flags & (GFX_RES_FULLSYNC | GFX_RES_CUT));
 	return (res.flags & (GFX_RES_FULLSYNC | GFX_RES_CUT)) ? SALSA64_GFX_FULLSYNC : 0;
 }
 

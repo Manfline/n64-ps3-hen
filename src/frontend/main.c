@@ -3116,6 +3116,11 @@ static void stats(uint64_t now)
 			if (gfx_spu.dpc_jobs)
 				salsa64_log("gfx: %u listas del CPU al RDP hechas en el SPE desde el arranque, %.2f ms "
 					    "de espera cada una", gfx_spu.dpc_jobs, gfx_spu.dpc_us / 1e3 / gfx_spu.dpc_jobs);
+			if (rs.dpc_cont)
+				salsa64_log("gfx: listas del RDP: %u trabajos continuaban una lista abierta (GFX_JOB_DPC_CONT, sin "
+				    "envejecer destinos; %u de ellos del SPE); %u destinos que el envejecimiento por tramo "
+				    "habría vuelto a cebar desde la RDRAM",
+				    rs.dpc_cont, (unsigned)gfx_spu.dpc_conts, rs.dpc_cont_saved);
 		}
 		salsa64_log("gfx: fragment programs: %.1f cambios por tarea, %u dibujos con programa generado "
 			    "(%.1f por tarea), %u programas en la caché (%u generados, %u vaciados); %.1f dibujos con "

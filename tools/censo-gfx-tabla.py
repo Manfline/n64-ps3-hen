@@ -72,8 +72,14 @@ for tsv in sorted(glob.glob(os.path.join(ruta, "*.tsv"))):
             drawn_l, drawn_h = int(c[6]), int(c[7])
             nbad = int(c[16]) if len(c) > 16 and c[16].isdigit() else 0
             if drawn_h * 50 > AREA and drawn_l * 10 < drawn_h:
-                t["vacia"] += 1
-                continue
+                # «Vacía» = no cambió el búfer. Si el LLE entregó tanto trabajo como la HLE es una pantalla
+                # fija (el mismo cuadro en un búfer triple): la comparación vale.
+                trabajo_l = int(c[8]) + int(c[10]) if len(c) > 10 else 0
+                trabajo_h = int(c[9]) + int(c[11]) if len(c) > 11 else 1
+                t["fija"] += 1
+                if trabajo_l < trabajo_h:
+                    t["vacia"] += 1
+                    continue
             t["validas"] += 1
             t[{"idéntica": "ident", "menor": "menor", "distinta": "dist"}[clase]] += 1
             if clase == "distinta":

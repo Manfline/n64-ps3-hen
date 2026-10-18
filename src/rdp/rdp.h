@@ -37,6 +37,8 @@ struct salsa64_rdp_stats {
 	uint32_t tasks;
 	uint32_t draws, triangles;
 	uint32_t targets_created;
+	uint32_t dpc_cont;         /* trabajos que siguen una lista del RDP abierta (GFX_JOB_DPC_CONT): sin envejecer los destinos */
+	uint32_t dpc_cont_saved;   /* destinos dibujados que con ese envejecimiento habrían pasado de frescos a cebarse de nuevo */
 	uint32_t targets_evicted;  /* destinos reciclados por el tope de memoria */
 	uint32_t set_waits;      /* veces que un juego de búferes seguía en uso (emulación) */
 	uint64_t us_translate;   /* PPE traduciendo a comandos del RSX (presentación) */

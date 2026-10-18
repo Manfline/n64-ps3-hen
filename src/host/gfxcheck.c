@@ -352,7 +352,7 @@ struct example {
 struct key {
 	char name[96];
 	enum salsa64_gbi gbi;
-	uint32_t tasks, cls[GCHK_NCLASS], kinds[GCHK_NKIND], cut, big, lle_poor;
+	uint32_t tasks, cls[GCHK_NCLASS], kinds[GCHK_NKIND], cut, big, lle_poor, lle_poor_work;
 	uint32_t tri_l, tri_h, rect_l, rect_h, draw_h;    /* de las tareas con HLE */
 	uint32_t unk_tasks_h;                              /* tareas donde la HLE no implementó algo */
 	uint32_t rdp_ops[64];                              /* comandos del RDP que llegaron del LLE, por opcode */
@@ -498,6 +498,21 @@ void gchk_task_start(const struct salsa64_task *t, enum salsa64_gbi gbi, const c
 	G.pending = true;
 	G.tasks++;
 	G.task_no++;
+	{
+		static int tlo = -2, thi;
+		if (tlo == -2) {
+			tlo = -1;
+			if (getenv("SALSA64_GCHK_DPC_TRACE"))
+				sscanf(getenv("SALSA64_GCHK_DPC_TRACE"), "%d,%d", &tlo, &thi);
+		}
+		uint32_t f = G.field ? *G.field : 0;
+		gfx_dpc_trace = tlo >= 0 && f >= (uint32_t)tlo && f <= (uint32_t)thi;
+		if (gfx_dpc_trace) {
+			const uint32_t *dp = G.bus->dp;
+			fprintf(stderr, "dpc: === tarea %u campo %u %s: START %06x END %06x CURRENT %06x STATUS %03x\n", G.task_no, f,
+				key ? key : "?", dp[SALSA64_DP_START], dp[SALSA64_DP_END], dp[SALSA64_DP_CURRENT], dp[SALSA64_DP_STATUS]);
+		}
+	}
 	G.task = *t;
 	G.key = find_key(gbi, key);
 	G.hle = gbi != SALSA64_GBI_UNKNOWN;
@@ -618,7 +633,12 @@ void gchk_task_end(void)
 	k->big += cls == GCHK_DIFF && gchk_is_big(&p);
 	/* El microcódigo real casi no dibuja donde la HLE dibuja de verdad (≥ 2 % del área): el camino LLE
 	 * → RDP falla en esa tarea y la comparación no dice nada de la HLE. */
-	k->lle_poor += (uint64_t)p.drawn_h * 50 > p.area && (uint64_t)p.drawn_l * 10 < p.drawn_h;
+	bool poor = (uint64_t)p.drawn_h * 50 > p.area && (uint64_t)p.drawn_l * 10 < p.drawn_h;
+	k->lle_poor += poor;
+	/* «Vacía» es «no cambió nada respecto a lo que había en el búfer»: una pantalla fija (el mismo cuadro
+	 * en un búfer triple, un menú) también da 0 píxeles nuevos aunque el LLE la dibuje entera. Si el LLE
+	 * entregó tantos triángulos y rectángulos como la HLE, la tarea es de ese tipo. */
+	k->lle_poor_work += poor && G.lle.triangles + G.lle.rects >= G.res.triangles + G.res.rects;
 	G.total_class[cls]++;
 	k->cut += (G.res.flags & GFX_RES_CUT) != 0 || G.res.dl_errors != 0;
 	k->tri_l += G.lle.triangles;
@@ -715,10 +735,10 @@ void gchk_report(FILE *f)
 		uint32_t n = k->cls[GCHK_SAME] + k->cls[GCHK_MINOR] + k->cls[GCHK_DIFF];
 		fprintf(f, "gchk: [%s] tareas %u, con HLE %u: idénticas %u, menores %u, distintas %u (grandes %u), sin HLE %u, cortadas %u; "
 			"triángulos LLE %u / HLE %u, rectángulos %u / %u, dibujos HLE %u; píxeles distintos %llu (de verdad %llu) de %llu "
-			"dibujados; tareas con comandos sin implementar en la HLE %u; estado final del RDP distinto en %u; LLE casi vacía en %u\n",
+			"dibujados; tareas con comandos sin implementar en la HLE %u; estado final del RDP distinto en %u; LLE casi vacía en %u (de ellas %u con triángulos y rectángulos del LLE ≥ HLE: pantalla fija, no vacía)\n",
 			k->name, k->tasks, n, k->cls[GCHK_SAME], k->cls[GCHK_MINOR], k->cls[GCHK_DIFF], k->big, k->cls[GCHK_NOHLE],
 			k->cut, k->tri_l, k->tri_h, k->rect_l, k->rect_h, k->draw_h, (unsigned long long)k->px_diff,
-			(unsigned long long)k->px_bad, (unsigned long long)k->px_drawn, k->unk_tasks_h, k->state_tasks, k->lle_poor);
+			(unsigned long long)k->px_bad, (unsigned long long)k->px_drawn, k->unk_tasks_h, k->state_tasks, k->lle_poor, k->lle_poor_work);
 		if (k->kinds[GCHK_KIND_MISSING] || k->kinds[GCHK_KIND_EXTRA] || k->kinds[GCHK_KIND_COLOR])
 			fprintf(f, "gchk:   tipo de las distintas: la HLE no dibuja %u, dibuja de más %u, otro color %u\n",
 				k->kinds[GCHK_KIND_MISSING], k->kinds[GCHK_KIND_EXTRA], k->kinds[GCHK_KIND_COLOR]);

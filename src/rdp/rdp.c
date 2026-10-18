@@ -142,6 +142,7 @@ struct set {
 	bool trace;  /* tarea con traza detallada en el log (ver readbacks_wanted) */
 	uint32_t set_wait_us;  /* perfilado: lo que esperó acquire este juego para la tarea */
 	bool interp; /* se envió con GFX_JOB_INTERP */
+	bool dpc_cont;  /* tramo de una lista del RDP ya abierta (GFX_JOB_DPC_CONT): no envejece los destinos */
 	/* Interpolación, al traducirla: sus posiciones de antes valen (hubo
 	 * anterior y no fue un corte), su número en la tabla de destinos
 	 * (rdp_targets.task: el last_task de lo que dibujó) y hasta dónde usó
@@ -1532,10 +1533,11 @@ static void readbacks_wanted(struct set *s, const struct gfx_result *res)
 
 static void done(void *ctx, const struct gfx_job *job, const struct gfx_result *res)
 {
-	(void)ctx, (void)job;
+	(void)ctx;
 	uint32_t n = rdp.finished;
 	struct set *s = &rdp.sets[n % SETS];
 	s->res = *res;
+	s->dpc_cont = (job->flags & GFX_JOB_DPC_CONT) != 0;
 	readbacks_wanted(s, res);
 	lwsync();
 	rdp.finished = n + 1;
@@ -1700,7 +1702,20 @@ static void translate(uint32_t n)
 		rdp.interp.have_prev = false;
 	rdp.bound_t = -1;
 	rdp.bound_d = NULL;
-	rdp_targets_task(&rdp.tg);
+	if (s->dpc_cont) {
+		/* Sigue una lista del RDP abierta (LLE, lista del CPU): es la misma tarea,
+		 * no envejece a los destinos (si no, tres tramos sin dibujar en uno
+		 * bastaban para cebarlo otra vez desde la RDRAM y borrar lo dibujado). */
+		rdp.stats.dpc_cont++;
+		for (int i = 0; i < RDP_TARGETS_MAX; i++) {
+			const struct rdp_target *t = &rdp.tg.t[i];
+			if (t->used && t->drawn && rdp.tg.task - t->last_task <= RDP_TARGETS_FRESH &&
+			    rdp.tg.task + 1 - t->last_task > RDP_TARGETS_FRESH)
+				rdp.stats.dpc_cont_saved++;
+		}
+	} else {
+		rdp_targets_task(&rdp.tg);
+	}
 	s->tg_task = rdp.tg.task;
 	rdp.scratch_slot = -1;
 	rdp.ppe_tex_off = res->tex_bytes;
