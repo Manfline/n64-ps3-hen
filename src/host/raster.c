@@ -1100,6 +1100,11 @@ const uint32_t *raster_image(uint32_t addr, uint32_t *width)
 	return NULL;
 }
 
+const uint32_t *raster_slot_image(int slot)
+{
+	return slot >= 0 && slot < RDP_TARGETS_MAX && tg.t[slot].used ? rgb[slot] : NULL;
+}
+
 bool raster_target_info(int slot, uint32_t *addr, uint32_t *width, uint32_t *bpp, uint32_t *lh)
 {
 	if (slot < 0 || slot >= RDP_TARGETS_MAX || !tg.t[slot].used)

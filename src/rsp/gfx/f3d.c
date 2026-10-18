@@ -337,6 +337,7 @@ void gfx_dl_f3d(struct gfx_state *g, gfx_cmd_hook hook)
 			}
 			res->unknown_cmds++;  /* F3D no lo tiene */
 			res->last_unknown = op;
+			GFX_UNKNOWN(op);
 			break;
 		case G_TRI2:
 		case G_QUAD:
@@ -353,6 +354,7 @@ void gfx_dl_f3d(struct gfx_state *g, gfx_cmd_hook hook)
 				/* G_LINE3D y los opcodes que F3D no tiene. */
 				res->unknown_cmds++;
 				res->last_unknown = op;
+				GFX_UNKNOWN(op);
 			} else if (op == G_TRI2) {
 				tri(g, w0, IDX_X2);
 				tri(g, w1, IDX_X2);
@@ -375,6 +377,7 @@ void gfx_dl_f3d(struct gfx_state *g, gfx_cmd_hook hook)
 			} else {
 				res->unknown_cmds++;
 				res->last_unknown = op;
+				GFX_UNKNOWN(op);
 			}
 			break;
 		}

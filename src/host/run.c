@@ -126,6 +126,7 @@
 #include "frontend/savefile.h"
 #include "frontend/mempakfile.h"
 #include "frontend/version.h"
+#include "gfxcheck.h"
 #include "interp.h"
 #include "raster.h"
 #include "rdp/targets.h"
@@ -812,6 +813,8 @@ static void audio_push(void *ctx, const uint8_t *p, uint32_t bytes, uint32_t rat
 /* HLE gráfica: estado, búferes de salida y totales. */
 static struct gfx_state gfx_state;
 static struct salsa64_gfx_sync gfx_sync;
+static bool gchk_on;  /* --lle-check-gfx */
+static bool gchk_self;  /* SALSA64_GCHK_SELF=1: la HLE contra sí misma (prueba del propio método) */
 /* SALSA64_DPC_ESTADO_APARTE=1: las listas del CPU las consume otra HLE con su propio estado del RDP y
  * su propio directorio de texturas sobre la misma región de la caché, como la PS3 con la HLE gráfica
  * en el SPE y un RDP en el PPE para esas listas (antes de que fueran al mismo SPE). */
@@ -1442,12 +1445,15 @@ static void gfx_done(void *ctx, const struct gfx_job *job, const struct gfx_resu
 	s->dl_errors += res->dl_errors;
 	s->skipped += res->skipped;
 	s->bg += res->bg;
+	gchk_lle_job(job, res);
 	if (gfx.raster) {
 		raster_field = n64.bus.vi.fields;
 		raster_trace_fb = trace_fb && tracing();
 		interp_before_raster();
 		raster_task(job, res);
 		interp_after_raster(job, res, n64.bus.vi.fields);
+		if (gchk_self)
+			gchk_task_end();
 		if (stop_gfx_n)
 			stop_gfx_task(job, res);
 	}
@@ -2492,6 +2498,8 @@ static void jcheck_sync(void *ctx)
 	 * memoria, donde el juego los reutiliza). */
 	if (shadow.pending && done)
 		shadow_compare();
+	if (gchk_pending() && done)
+		gchk_task_end();
 }
 
 /* Arranque de una tarea de audio en el microcódigo real: libultra lo empieza copiando a la IMEM
@@ -2584,6 +2592,18 @@ static void trace_rsp(void *ctx, const struct salsa64_task *t, enum salsa64_gbi 
 		if (jcheck.pending)
 			jcheck_compare();
 		jcheck_start(t);
+	}
+	if (gchk_on && t->type == SALSA64_TASK_GFX && !(t->flags & 1)) {
+		char key[96], text[80];
+		static const char *const names[] = { "desconocido", "F3DEX2", "F3DZEX2", "F3D", "F3DEX", "S2DEX", "F3DPD",
+						     "F3DEXBG", "F3DWR", "F3DDKR", "F3DJFG", "S2DEX1" };
+		_Static_assert(sizeof names / sizeof names[0] == SALSA64_GBI_S2DEX1 + 1, "names");
+		salsa64_rsp_ucode_text(&n64.bus, t->ucode_data, text, sizeof text);
+		uint32_t base = t->ucode_data & 0x7FFFFF, size = t->ucode_data_size;
+		if (!text[0] && base < n64.bus.rdram_size && size && size <= n64.bus.rdram_size - base)
+			snprintf(text, sizeof text, "sin texto, crc de ucode_data %08x", salsa64_crc32(n64.bus.rdram + base, size));
+		snprintf(key, sizeof key, "%s: %s", (unsigned)gbi <= SALSA64_GBI_S2DEX1 ? names[gbi] : "?", text);
+		gchk_task_start(t, gbi, key);
 	}
 	if (shadow.on) {
 		if (shadow.pending)
@@ -3279,7 +3299,7 @@ static bool dump_frame(const char *path)
 
 /* Opciones largas sin letra (códigos fuera de ASCII). */
 enum { OPT_REC = 0x100, OPT_LOCKSTEP, OPT_PAD, OPT_TRACE_FROM, OPT_TRACE_FAULTS, OPT_RAM_DUMP, OPT_TRACE_AUDIO,
-       OPT_FRAME_EVERY, OPT_NO_PAK, OPT_LLE, OPT_LLE_SPEED, OPT_LLE_CHECK, OPT_LLE_CHECK_JPEG, OPT_POKE, OPT_TRACE_FB, OPT_STATE_SAVE,
+       OPT_FRAME_EVERY, OPT_NO_PAK, OPT_LLE, OPT_LLE_SPEED, OPT_LLE_CHECK, OPT_LLE_CHECK_JPEG, OPT_LLE_CHECK_GFX, OPT_POKE, OPT_TRACE_FB, OPT_STATE_SAVE,
        OPT_STATE_LOAD, OPT_FIELDS, OPT_PROFILE, OPT_STATE_ZIP, OPT_INTERP, OPT_INTERP_K, OPT_INTERP_DECIMATE,
        OPT_INTERP_DISP, OPT_PERFILADO, OPT_STOP_GFX, OPT_PADS, OPT_PAD_PORT };
 
@@ -3446,6 +3466,8 @@ static void usage(FILE *out)
 	      "                        HLE (auto) o para todo (all); el RDP consume sus comandos\n"
 	      "      --lle-speed F     instrucciones del RSP por ciclo del CPU (nominal 0,667)\n"
 	      "      --lle-check-audio con --lle=all, comparar cada tarea de audio con la HLE\n"
+	      "      --lle-check-gfx   con --lle=all (lo pone), comparar cada tarea gráfica con la HLE: los\n"
+	      "                        píxeles que dejan los dos en el mismo rasterizador (docs/gfx-censo.md)\n"
 	      "      --lle-check-jpeg  las tareas JPEG y las de video de Resident Evil 2 al microcódigo\n"
 	      "                        real (implica --lle=auto) y compararlas con la HLE (rsp/jpeg);\n"
 	      "                        SALSA64_RE2_DUMP=archivo[:N] vuelca las primeras N de cada tipo de video\n"
@@ -3496,6 +3518,7 @@ int main(int argc, char **argv)
 		{ "lle-speed", required_argument, NULL, OPT_LLE_SPEED },
 		{ "lle-check-audio", no_argument, NULL, OPT_LLE_CHECK },
 		{ "lle-check-jpeg", no_argument, NULL, OPT_LLE_CHECK_JPEG },
+		{ "lle-check-gfx", no_argument, NULL, OPT_LLE_CHECK_GFX },
 		{ "state-save", required_argument, NULL, OPT_STATE_SAVE },
 		{ "state-load", required_argument, NULL, OPT_STATE_LOAD },
 		{ "state-zip", no_argument, NULL, OPT_STATE_ZIP },
@@ -3609,6 +3632,13 @@ int main(int argc, char **argv)
 		case OPT_LLE_SPEED: lle_speed = atof(optarg); break;
 		case OPT_LLE_CHECK: shadow.on = true; break;
 		case OPT_LLE_CHECK_JPEG: jcheck.on = true; break;
+		case OPT_LLE_CHECK_GFX:
+			gchk_on = true;
+			gchk_self = getenv("SALSA64_GCHK_SELF") != NULL;
+			if (!gchk_self)
+				lle_mode = SALSA64_LLE_ALL;
+			gfx.raster = true;
+			break;
 		case OPT_STATE_SAVE: {
 			char *colon = strchr(optarg, ':');
 			if (!colon || colon == optarg || !colon[1] || state_saves.n == MAX_STATE_SAVES) {
@@ -3711,6 +3741,8 @@ int main(int argc, char **argv)
 	const struct salsa64_gfx_sink sink = { NULL, gfx_acquire, gfx_done };
 	n64.bus.rdram_written = rdram_written;
 	salsa64_gfx_sync_init(&gfx_sync, &gfx_state, &n64.bus, &sink);
+	if (gchk_on)
+		gchk_init(&n64.bus, &gfx_state, &n64.bus.vi.fields, &gfx.tasks);
 	iopt.from_field = trace_from;
 	interp_init(&iopt);
 	salsa64_rsp_set_gfx(&n64.bus, &gfx_sync.backend);
@@ -3738,7 +3770,7 @@ int main(int argc, char **argv)
 		if (lle_speed > 0.0)
 			salsa64_lle_host_speed(&lle_host, lle_speed);
 		jcheck_lle = lle_host.backend;
-		if (jcheck.on || shadow.on)
+		if (jcheck.on || shadow.on || gchk_on)
 			jcheck_lle.sync = jcheck_sync;
 		if (shadow.on)
 			jcheck_lle.start = shadow_lle_start;
@@ -4122,6 +4154,8 @@ int main(int argc, char **argv)
 				jcheck.video[k].hist[2], jcheck.video[k].hist[3], jcheck.video[k].hist[4], jcheck.video[k].hist[5]);
 		}
 	}
+	if (gchk_on)
+		gchk_report(stderr);
 	if (shadow.on) {
 		if (shadow.pending)
 			shadow_compare();

@@ -36,6 +36,8 @@ void raster_8bit_stats(uint32_t *draws, uint32_t *tex_rsx, uint32_t *tex_rdram);
 const uint32_t *raster_image(uint32_t addr, uint32_t *width);
 /* Qué hay en la ranura `slot` de la tabla de destinos (para la vigilancia
  * de accesos del CPU); false si está vacía. */
+/* La imagen de la ranura `slot` (RASTER_W de paso), o NULL si está vacía. */
+const uint32_t *raster_slot_image(int slot);
 bool raster_target_info(int slot, uint32_t *addr, uint32_t *width, uint32_t *bpp, uint32_t *lh);
 
 /* Ajustes (los pone run.c): trazar a stderr los dibujos que leen un destino

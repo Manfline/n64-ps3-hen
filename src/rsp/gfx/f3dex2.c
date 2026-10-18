@@ -239,6 +239,7 @@ void gfx_dl_f3dex2(struct gfx_state *g, gfx_cmd_hook hook)
 			} else {
 				res->unknown_cmds++;
 				res->last_unknown = op;
+				GFX_UNKNOWN(op);
 			}
 			break;
 		}

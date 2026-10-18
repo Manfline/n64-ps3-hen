@@ -571,6 +571,8 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 		jtask.data_ptr = task.ucode_data;
 	rsp->jpeg_video = salsa64_jpeg_is_re2(jpeg);
 	rsp->jpeg_vkind = rsp->jpeg_video ? (unsigned)(jpeg - SALSA64_JPEG_RE2_RESIZE) : 0;
+	/* Quien traza (el censo gráfico del host) arma la HLE con el mismo recorte. */
+	rsp->gfx_nonear = nonear;
 	if (rsp->trace)
 		rsp->trace(rsp->trace_ctx, &task, gbi);
 

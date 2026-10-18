@@ -1241,6 +1241,7 @@ void gfx_rdp_command(struct gfx_state *g, uint32_t w0, uint32_t w1)
 			/* Triángulos crudos del RDP: no los genera F3DEX2. */
 			g->res->unknown_cmds++;
 			g->res->last_unknown = op;
+			GFX_UNKNOWN(op);
 		}
 		return;
 	}
