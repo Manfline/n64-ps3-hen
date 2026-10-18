@@ -113,8 +113,10 @@ struct salsa64_rdp_stats {
 	 * como color: el RSX no la ve en su profundidad). */
 	uint32_t z_write_only, zclears, zclears_pending, zclears_merged, z_as_color;
 	uint32_t z_uploads;  /* z images cargadas desde la RDRAM (la z del CPU: zfeed en rdp.c) */
+	uint32_t z_uploads_partial;  /* de ellas, solo las filas que los dibujos tocaron */
 	uint32_t primes_alias;
-	uint32_t ppe_copies;    /* rectángulos de copia escritos en la RDRAM por el PPE (imágenes de más de 480 filas) */  /* cebados porque la misma memoria se dibujó después con otro ancho */
+	uint32_t ppe_copies, ppe_copies_same;  /* de ellos, iguales a la última vez (no se reescriben) */
+    /* rectángulos de copia escritos en la RDRAM por el PPE (imágenes de más de 480 filas) */  /* cebados porque la misma memoria se dibujó después con otro ancho */
 	uint32_t z_auto;     /* borrados enteros puestos por rdp.c en z images que el RDP no borra enteras (zauto) */
 };
 

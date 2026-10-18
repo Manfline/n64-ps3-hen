@@ -214,6 +214,12 @@ struct vm_frame {
 static struct vm_frame *vm;
 
 #define ZCLEAR_PENDING 8
+/* Lo que ppe_copy escribió (para no repetirlo igual). */
+#define PPE_MEMO 512
+struct ppe_memo {
+	uint32_t lo, hi, key, sum;
+	uint16_t x0, x1;
+};
 struct depth {
 	bool used;
 	uint32_t addr, w, h;
@@ -232,6 +238,12 @@ struct depth {
 	uint32_t fed_task;   /* última tarea en que se cargó desde la RDRAM */
 	uint32_t fed_src;    /* última tarea que dibujó como color su dirección, ya cargada */
 	uint32_t auto_task;  /* última tarea con el borrado automático (zauto) */
+	/* Carga parcial (zfeed): la suma de la RDRAM en la última carga, si ya
+	 * hubo una entera desde el último borrado, y las filas que los dibujos
+	 * con escritura de z tocaron desde entonces. */
+	uint32_t up_sum;
+	bool full_ok;
+	struct rdp_box zdirty;
 	rsxkit_depth *d;
 };
 
@@ -293,6 +305,12 @@ static struct {
 	 * últimas, con la tarea, para cebar los destinos y cargar las z que
 	 * caen encima. */
 	struct { uint32_t lo, hi, task; } ppe_wr[4];
+	struct ppe_memo ppe_memo[PPE_MEMO];  /* el último rectángulo de ppe_copy por dirección */
+	/* Cebado por otro ancho (get_target): suma de la RDRAM en el último,
+	 * si ya hubo uno entero en esta superficie y lo dibujado desde entonces. */
+	uint32_t alias_sum[RDP_TARGETS_MAX];
+	bool alias_full[RDP_TARGETS_MAX];
+	struct rdp_box alias_dirty[RDP_TARGETS_MAX];
 	unsigned ppe_wr_next;
 	int bound_t;                 /* ranura ligada, o -1 */
 	struct depth *bound_d;
@@ -593,6 +611,7 @@ static void release_targets(void)
 	for (int k = 0; k < 4; k++)
 		rdp.zimg_seen[k] = 0;
 	memset(rdp.ppe_wr, 0, sizeof rdp.ppe_wr);
+	memset(rdp.ppe_memo, 0, sizeof rdp.ppe_memo);
 	rdp.ppe_wr_next = 0;
 	memset(rdp.zc_addr, 0, sizeof rdp.zc_addr);
 	memset(rdp.zc_task, 0, sizeof rdp.zc_task);
@@ -1208,13 +1227,38 @@ static void readbacks_finish(bool wait)
 /* Ceba la superficie de la ranura con lo que hay en la RDRAM (lo que el
  * CPU dibujó o dejó ahí): la N64 siempre dibuja encima de la memoria. Solo
  * color images de 16 bits que caben en el búfer de cebado. */
+static void prime_rows(int i, uint32_t y0, uint32_t y1);
 static void prime(int i)
+{
+	prime_rows(i, 0, ~0u);
+}
+
+/* Suma de muestras (32 bits cada 64 bytes) de la RDRAM [lo, hi). */
+static uint32_t rdram_sum(uint32_t lo, uint32_t hi)
+{
+	uint32_t sum = 0;
+	if (hi > rdp.rdram_size)
+		hi = rdp.rdram_size;
+	for (uint32_t o = lo & ~3u; o + 4 <= hi; o += 64) {
+		uint32_t v;
+		memcpy(&v, rdp.rdram + o, 4);
+		sum = (sum << 5 | sum >> 27) ^ v;
+	}
+	return sum;
+}
+
+/* El cebado de las filas [y0, y1) (y1 = ~0u: todas). */
+static void prime_rows(int i, uint32_t y0, uint32_t y1)
 {
 	const struct rdp_target *t = &rdp.tg.t[i];
 	if (!rdp.rdram || rdp.fbfx < 1 || t->bpp != 2 || t->lw > RB_MAX_W || t->lh > RB_MAX_H)
 		return;
 	uint32_t line = t->width * 2, bytes = line * t->lh;
 	if (t->addr + bytes > rdp.rdram_size)
+		return;
+	if (y1 > t->lh)
+		y1 = t->lh;
+	if (y0 >= y1)
 		return;
 	/* Búfer de la rotación: si el RSX aún no leyó el cebado que lo usó, se
 	 * espera su barrera (casi nunca: son PRIME_BUFS). */
@@ -1227,10 +1271,11 @@ static void prime(int i)
 	uint8_t *dst = rdp.rb + boff;
 	uint32_t pitch = (t->lw * 2 + 63) & ~63u;
 	uint64_t t0 = tb_now();
-	for (uint32_t y = 0; y < t->lh; y++)
+	for (uint32_t y = y0; y < y1; y++)
 		memcpy(dst + y * pitch, rdp.rdram + t->addr + y * line, t->lw * 2);
 	rdp.tb.copy += tb_now() - t0;
-	if (rsxkit_target_fill(rdp.surf[i], rdp.rb_off + boff, pitch, t->lw, t->lh, RSXKIT_RGBA5551) == RSXKIT_OK) {
+	if (rsxkit_target_fill_rows(rdp.surf[i], rdp.rb_off + boff, pitch, t->lw, t->lh, y0, y1, RSXKIT_RGBA5551) ==
+	    RSXKIT_OK) {
 		rdp.bound_t = -1;  /* rsxkit_target_fill ligó la superficie sin profundidad */
 		rdp.stats.primes++;
 		rdp.surf_gen[i] = ++rdp.gen_seq;
@@ -1349,9 +1394,27 @@ static void ppe_copy(const struct gfx_draw *g, const struct set *s, uint32_t add
 	if (xb <= xa || yb <= ya || addr + (uint32_t)yb * width * 2 > rdp.rdram_size)
 		return;
 	float dsdx = x1 > x0 ? (s1 - s0) / (x1 - x0) : 0.0f, dtdy = y1 > y0 ? (t1 - t0) / (y1 - y0) : 0.0f;
+	uint32_t lo = addr + (uint32_t)ya * width * 2, hi = addr + (uint32_t)yb * width * 2;
+	/* El mismo rectángulo con la misma textura que la última vez y la RDRAM
+	 * como quedó entonces (el fondo de RE2 se copia igual cada cuadro): no
+	 * hace falta volver a escribirlo. Suma de todas las palabras. */
+	uint32_t sum = 0;
+	for (uint32_t o = lo & ~3u; o + 4 <= hi; o += 4) {
+		uint32_t w;
+		memcpy(&w, rdp.rdram + o, 4);
+		sum = (sum << 3 | sum >> 29) ^ w;
+	}
+	unsigned slot = (lo >> 10) % PPE_MEMO;
+	struct ppe_memo *m = &rdp.ppe_memo[slot];
+	bool same = m->lo == lo && m->hi == hi && m->key == gt->key && m->x0 == (uint16_t)xa && m->x1 == (uint16_t)xb &&
+		    m->sum == sum;
 	struct late_note nt;
 	memset(&nt, 0, sizeof nt);
-	for (int y = ya; y < yb; y++) {
+	/* Copia 1:1 (lo normal en BG_COPY): el texel sale de la columna sin
+	 * cuentas de punto flotante por píxel. */
+	bool one = dsdx > 0.999f && dsdx < 1.001f;
+	int tx0 = (int)(((s0 + ((float)xa + 0.5f - x0) * dsdx) * gt->xf[0] + gt->xf[2]) * gt->width);
+	for (int y = ya; y < yb && !same; y++) {
 		float t = t0 + ((float)y + 0.5f - y0) * dtdy;
 		int ty = (int)((t * gt->xf[1] + gt->xf[3]) * gt->height);
 		if (ty < 0 || ty >= gt->height)
@@ -1363,8 +1426,13 @@ static void ppe_copy(const struct gfx_draw *g, const struct set *s, uint32_t add
 			late_skip_note(&nt, d0, ok, ((d1 - 1) >> RDP_GUARD_SHIFT) - (d0 >> RDP_GUARD_SHIFT) + 1);
 		const uint8_t *row = tex + (uint32_t)ty * gt->pitch;
 		for (int x = xa; x < xb; x++) {
-			float sx = s0 + ((float)x + 0.5f - x0) * dsdx;
-			int tx = (int)((sx * gt->xf[0] + gt->xf[2]) * gt->width);
+			int tx;
+			if (one) {
+				tx = tx0 + (x - xa);
+			} else {
+				float sx = s0 + ((float)x + 0.5f - x0) * dsdx;
+				tx = (int)((sx * gt->xf[0] + gt->xf[2]) * gt->width);
+			}
 			if (tx < 0 || tx >= gt->width)
 				continue;
 			const uint8_t *p = row + 4 * tx;
@@ -1380,7 +1448,22 @@ static void ppe_copy(const struct gfx_draw *g, const struct set *s, uint32_t add
 		guard_wrote(d0, d1, all ? NULL : ok);
 		nt.lines++;
 	}
-	uint32_t lo = addr + (uint32_t)ya * width * 2, hi = addr + (uint32_t)yb * width * 2;
+	if (!same) {
+		sum = 0;
+		for (uint32_t o = lo & ~3u; o + 4 <= hi; o += 4) {
+			uint32_t w;
+			memcpy(&w, rdp.rdram + o, 4);
+			sum = (sum << 3 | sum >> 29) ^ w;
+		}
+		m->lo = lo;
+		m->hi = hi;
+		m->key = gt->key;
+		m->x0 = (uint16_t)xa;
+		m->x1 = (uint16_t)xb;
+		m->sum = sum;
+	} else {
+		rdp.stats.ppe_copies_same++;
+	}
 	unsigned k = 0;
 	while (k < 4 && !(rdp.ppe_wr[k].task == rdp.tg.task && rdp.ppe_wr[k].hi >= lo && rdp.ppe_wr[k].lo <= hi))
 		k++;
@@ -1451,9 +1534,27 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
 				alias = true;
 		}
 		snprintf(rdp.last_get.how, sizeof rdp.last_get.how, stale ? "cebada" : alias ? "cebada (otro ancho)" : "viva");
-		if (stale || alias) {
+		if (stale) {
 			prime(i);
-			rdp.stats.primes_alias += alias;
+			rdp.alias_full[i] = false;
+		} else if (alias) {
+			/* Con la misma RDRAM que en el último cebado entero, solo las
+			 * filas dibujadas encima desde entonces (Leon). */
+			const struct rdp_target *t = &rdp.tg.t[i];
+			uint32_t sum = rdram_sum(t->addr, t->addr + t->width * 2 * t->lh);
+			if (rdp.alias_full[i] && sum == rdp.alias_sum[i]) {
+				const struct rdp_box *b = &rdp.alias_dirty[i];
+				if (b->y1 > b->y0) {
+					prime_rows(i, b->y0, b->y1);
+					rdp.stats.primes_alias++;
+				}
+			} else {
+				prime(i);
+				rdp.alias_full[i] = true;
+				rdp.alias_sum[i] = sum;
+				rdp.stats.primes_alias++;
+			}
+			memset(&rdp.alias_dirty[i], 0, sizeof rdp.alias_dirty[i]);
 		}
 		return i;
 	}
@@ -1481,6 +1582,8 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
 	}
 	rdp.surf_bytes[i] = bytes;
 	rdp.surf_scale[i] = sc;
+	rdp.alias_full[i] = false;
+	memset(&rdp.alias_dirty[i], 0, sizeof rdp.alias_dirty[i]);
 	rdp.surf_gen[i] = ++rdp.gen_seq;
 	rdp.vram += bytes;
 	LOGN(40, "gfx: destino %06x/%u: %u × %u a %u× (%s; alto pedido %u; %u KB vivos)", addr, width, t->lw, t->lh, sc,
@@ -1542,6 +1645,9 @@ static struct depth *get_depth(uint32_t addr, int slot)
 	d->clear_pending = 0;
 	d->rd_sum = d->rd_changed = d->rd_changes = d->rd_checked = 0;
 	d->fed_task = d->auto_task = d->fed_src = 0;
+	d->up_sum = 0;
+	d->full_ok = false;
+	memset(&d->zdirty, 0, sizeof d->zdirty);
 	for (int k = 0; k < 4; k++)
 		if (!rdp.zimg_seen[k] || rdp.zimg_seen[k] == addr || k == 3) {
 			rdp.zimg_seen[k] = addr;
@@ -1612,27 +1718,48 @@ static bool zfeed(struct depth *d, int slot)
 	uint32_t lw = t->lw < width ? t->lw : width;
 	if (lw * sc > d->w || rows * sc > d->h)
 		return false;
+	/* Solo las filas que hace falta: con la misma z en la RDRAM que en la
+	 * última carga entera (el fondo de RE2 se vuelve a copiar igual cada
+	 * cuadro), las que los personajes tocaron con su z desde entonces. */
+	uint32_t ry0 = 0, ry1 = rows;
+	bool partial = d->full_ok && sum == d->up_sum && !d->clear_pending;
+	if (partial) {
+		ry0 = d->zdirty.y0 < rows ? d->zdirty.y0 : rows;
+		ry1 = d->zdirty.y1 < rows ? d->zdirty.y1 : rows;
+		if (ry1 <= ry0) {
+			d->fed_task = task;  /* nada que restaurar */
+			if (src)
+				d->fed_src = src;
+			memset(&d->zdirty, 0, sizeof d->zdirty);
+			return true;
+		}
+	}
 	if (rdp.zup_fence)
 		fence_wait(rdp.zup_fence);
 	uint8_t *dst = rdp.rb + ZUP_OFF;
 	uint64_t t0 = tb_now();
-	for (uint32_t y = 0; y < rows; y++) {
+	for (uint32_t y = ry0; y < ry1; y++) {
 		const uint8_t *src = z + y * width * 2;
 		uint32_t *out = (uint32_t *)(dst + y * ZUP_PITCH);
 		for (uint32_t x = 0; x < lw; x++)
 			out[x] = rdp_z16_to_z24((uint16_t)(src[2 * x] << 8 | src[2 * x + 1])) << 8;
 	}
 	/* Que el RSX lea lo escrito y no líneas de la caché del PPE. */
-	for (uint32_t o = 0; o < rows * ZUP_PITCH; o += 128)
+	for (uint32_t o = ry0 * ZUP_PITCH; o < ry1 * ZUP_PITCH; o += 128)
 		__asm__ volatile("dcbst 0,%0" ::"r"(dst + o) : "memory");
 	__asm__ volatile("sync" ::: "memory");
 	rdp.tb.copy += tb_now() - t0;
-	if (rsxkit_depth_load(d->d, rdp.rb_off + ZUP_OFF, ZUP_PITCH, lw, rows, sc) == RSXKIT_OK) {
+	if (rsxkit_depth_load(d->d, rdp.rb_off + ZUP_OFF + ry0 * ZUP_PITCH, ZUP_PITCH, lw, ry1 - ry0, ry0, sc) == RSXKIT_OK) {
 		rdp.zup_fence = rsxkit_fence();
 		rdp.bound_t = -1;
 		rdp.bound_d = NULL;
-		/* Lo que estaba pendiente de borrar ya lo pisó la carga. */
+		/* Lo que estaba pendiente de borrar ya lo pisó la carga (entera). */
 		d->clear_pending = 0;
+		d->full_ok = true;
+		d->up_sum = sum;
+		memset(&d->zdirty, 0, sizeof d->zdirty);
+		if (partial)
+			rdp.stats.z_uploads_partial++;
 		rdp.stats.z_uploads++;
 		d->fed_task = task;
 		if (src)
@@ -1675,6 +1802,7 @@ static void zauto(struct depth *d)
 	d->clear_rect[0][2] = d->clear_rect[0][3] = 4096.0f;
 	d->clear_value[0] = 1.0f;
 	d->clear_pending = n + 1;
+	d->full_ok = false;
 	if (rdp.bound_d == d) {
 		rdp.bound_t = -1;  /* bind aplica los pendientes al volver a ligarla */
 		rdp.bound_d = NULL;
@@ -1721,6 +1849,9 @@ static void zclear(const struct gfx_zclear *z)
 	/* Z de 18 bits de la N64 en el valor de relleno (14 bits + dz). */
 	float value = (float)(z->h.b >> 2) / 16383.0f;
 	rdp.stats.zclears++;
+	for (int i = 0; i < MAX_DEPTHS; i++)
+		if (rdp.depths[i].used && rdp.depths[i].addr == z->h.a)
+			rdp.depths[i].full_ok = false;
 	{
 		int k = 0, old = 0;
 		while (k < 4 && rdp.zc_addr[k] != z->h.a)
@@ -2538,6 +2669,9 @@ static void translate(uint32_t n)
 				rdp_box_add(&r, x0, y0, x1, y1, front, g->scissor, t->lw, t->lh);
 				rdp_box_union(&drawn_box[cur], &r);
 				rdp_box_union(&rdp.tg.t[cur].box, &r);
+			if (d && (g->depth & GFX_DEPTH_WRITE))
+				rdp_box_union(&d->zdirty, &r);
+			rdp_box_union(&rdp.alias_dirty[cur], &r);
 				if (cur == rdp.scratch_slot)
 					rdp_box_union(&rdp.scratch_dirty, &r);
 			}

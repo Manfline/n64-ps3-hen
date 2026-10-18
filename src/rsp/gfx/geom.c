@@ -196,6 +196,15 @@ void gfx_modify_vertex(struct gfx_state *g, uint32_t v, uint32_t where, uint32_t
 	case G_MWO_POINT_ST:
 		p->s = (float)(int16_t)(val >> 16) / 32.0f;
 		p->t = (float)(int16_t)(val & 0xFFFF) / 32.0f;
+#if !defined(GFX_SPE0_IMG) || GFX_SPE0_IMG != 0
+		/* Con la escala de G_TEXTURE, como las de G_VTX: el texto del menú
+		 * de opciones de Resident Evil 2 (escala 1/2) salía con el doble de
+		 * texels por letra (letras revueltas). */
+		if (g->tex_s && g->tex_t) {
+			p->s *= (float)g->tex_s / 65536.0f;
+			p->t *= (float)g->tex_t / 65536.0f;
+		}
+#endif
 		break;
 	case G_MWO_POINT_XYSCREEN: {
 		/* Posición de pantalla nueva (10.2): se vuelve a llevar a recorte. */

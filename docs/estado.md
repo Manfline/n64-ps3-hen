@@ -1,5 +1,43 @@
 # Estado
 
+## 2026-10-18 — rc7b3: Resident Evil 2 lento en la sala de la estatua y las letras del menú de opciones
+
+Resultado de la rc7b2 en la PS3 (`build/rc7b2-ps3/`): «YOU DIED» y la sala de
+la estatua salen bien, pero la sala va a 15–17 campos/s (traducción ~50 ms
+por campo en el hilo 1, la emulación esperando cada tarea) y el menú de
+opciones sale con letras revueltas.
+
+- **Lentitud.** Cada cuadro hacía tres cosas enteras: `ppe_copy` del fondo
+  y de la z (512 × 509, con cuentas de punto flotante por píxel), el cebado
+  del destino de 596 × 437 desde la RDRAM y la carga de la z entera.
+  **Arreglos** (`src/rdp/rdp.c`, `lib/rsxkit`):
+  - `ppe_copy` no reescribe un rectángulo igual al de la vez anterior (misma
+    textura, misma caja y la RDRAM como quedó: suma de todas las palabras),
+    y la copia 1:1 va sin punto flotante por píxel.
+  - El cebado por otro ancho, con la misma RDRAM que en el último cebado
+    entero (suma de muestras), sube solo las filas dibujadas encima desde
+    entonces (Leon), con `rsxkit_target_fill_rows`.
+  - `zfeed` carga solo las filas que los dibujos con escritura de z tocaron
+    desde la última carga entera (`rsxkit_depth_load` con fila de inicio),
+    si la z de la RDRAM no cambió y no hay borrados pendientes.
+  - Línea nueva del log: rectángulos de `ppe_copy` iguales y z cargadas en
+    parte (contadores `ppe_copies_same`, `z_uploads_partial`).
+- **Letras del menú de opciones (caja 1289).** Las letras son cuadriláteros
+  armados con `G_MODIFYVTX` (posición y ST): 62 × 18 píxeles con s de 0 a 124
+  y t de 0 a 36 sobre una textura de 72 × 18, el doble de texels de lo que
+  cabe. Las ST de `G_VTX` llevan la escala de `G_TEXTURE`; las de
+  `G_MODIFYVTX` no la llevaban. **Arreglo a probar** (`gfx_modify_vertex`):
+  se les aplica la escala actual (fuera de la imagen 0 del SPE, como lo de
+  XYSCREEN). Si la escala del menú no es 1/2, no cambia nada y hay que
+  buscar en el ancho del tile (una CI8 cargada como 16 bits).
+- **Yoshi (7 cajas de la rc7b2).** La guarda contra el CPU no recortó
+  ninguna copia en toda la corrida de Yoshi («0 copias tardías»): lo que
+  desaparece, la muerte que se congela y el negro tras el Reset no vienen de
+  copias del RSX que pisen memoria. Con lo visto (la salida de la HLE trae
+  los objetos que sí están, el juego apaga el VI y deja de mandar tareas
+  tras el Reset) apunta al núcleo. Prueba barata sugerida en la consola:
+  repetir el recorrido con `sin-recompilador` en `/dev_hdd0/salsa64`.
+
 ## 2026-10-18 — rc7b2: Resident Evil 2, estela de Leon, menú de opciones y pantalla de muerte
 
 Con las cajas negras de la rc7b (`build/rc7b-ps3/`):
