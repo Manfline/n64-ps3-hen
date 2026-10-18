@@ -41,6 +41,11 @@ _Static_assert(GFX_FB_FRESH == RDP_TARGETS_FRESH, "la HLE y la tabla cuentan igu
 struct depth {
 	uint32_t addr;
 	bool used;
+	/* Como rdp.c (zauto): la tarea del último borrado de toda la imagen, la
+	 * caja de los borrados de la tarea box_task y la última tarea con el
+	 * borrado automático. */
+	uint32_t full_task, box_task, auto_task;
+	uint16_t box[4];
 	float z[RASTER_W * RASTER_H];
 };
 
@@ -52,6 +57,9 @@ static struct rdp_box scratch_dirty;  /* lo dibujado en esa ranura después de c
 static struct depth depths[MAX_DEPTHS];
 static unsigned next_depth;
 static uint32_t task_no;
+static uint32_t raster_zauto;  /* borrados enteros de zauto (como rdp.c) */
+static uint32_t first_cimg, cimg_task;  /* como rdp.c: la tarea empieza un cuadro si su primera color image es otra */
+static bool frame_start;
 static uint32_t vi_field;  /* campos del VI con imagen (rdp_targets_present) */
 
 bool raster_trace_fb;
@@ -127,6 +135,7 @@ static struct depth *get_depth(uint32_t addr)
 	struct depth *d = &depths[next_depth++ % MAX_DEPTHS];
 	d->used = true;
 	d->addr = addr;
+	d->full_task = d->box_task = d->auto_task = 0;
 	for (int i = 0; i < RASTER_W * RASTER_H; i++)
 		d->z[i] = 1.0f;
 	return d;
@@ -810,6 +819,11 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 				ps3_rb += img && (c->b != vi_ring.cur_width || !cov);
 				ps3_rb_old += img && (c->b != old_w || !cov);
 			}
+			if (cimg_task != tg.task) {
+				cimg_task = tg.task;
+				frame_start = c->a != first_cimg;
+				first_cimg = c->a;
+			}
 			bool is_tall = c->b && c->b <= 640 && rdp_targets_tall(c->b, lh) &&
 				       fills_only(cmd, off + c->size, res->cmd_bytes);
 			bool created;
@@ -844,6 +858,17 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 		case GFX_OP_ZCLEAR: {
 			const struct gfx_zclear *z = (const struct gfx_zclear *)c;
 			struct depth *zb = get_depth(c->a);
+			if (zb->box_task != tg.task) {
+				zb->box_task = tg.task;
+				memcpy(zb->box, z->rect, sizeof zb->box);
+			} else {
+				zb->box[0] = z->rect[0] < zb->box[0] ? z->rect[0] : zb->box[0];
+				zb->box[1] = z->rect[1] < zb->box[1] ? z->rect[1] : zb->box[1];
+				zb->box[2] = z->rect[2] > zb->box[2] ? z->rect[2] : zb->box[2];
+				zb->box[3] = z->rect[3] > zb->box[3] ? z->rect[3] : zb->box[3];
+			}
+			if (!zb->box[0] && !zb->box[1] && zb->box[2] >= (c->c & 0xFFFF) && zb->box[3] >= 200)
+				zb->full_task = tg.task;
 			for (int y = z->rect[1]; y < z->rect[3] && y < RASTER_H; y++)
 				for (int x = z->rect[0]; x < z->rect[2] && x < RASTER_W; x++)
 					zb->z[y * RASTER_W + x] = 1.0f;
@@ -937,6 +962,17 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 				}
 			}
 			struct depth *zb = d->depth ? get_depth(d->zimg) : NULL;
+			/* Como rdp.c (zauto): en una tarea que empieza un cuadro (otra
+			 * primera color image que la tarea anterior), la z image que no
+			 * se borró entera antes de su primer dibujo se borra entera. */
+			if (zb && zb->auto_task != tg.task && frame_start) {
+				zb->auto_task = tg.task;
+				if (zb->full_task != tg.task) {
+					for (int i = 0; i < RASTER_W * RASTER_H; i++)
+						zb->z[i] = 1.0f;
+					raster_zauto++;
+				}
+			}
 			/* Como el RSX (rsxkit, RSXKIT_DEPTH_CONST): la z del primitivo
 			 * exacta en todo el dibujo, no la de cada vértice entre su w. */
 			float prim_z = (d->depth & GFX_DEPTH_PRIM) ? gfx_prim_z(vtx + d->h.a, d->h.b) : 0.0f;
@@ -1063,6 +1099,9 @@ void raster_reset(void)
 	primes = readbacks = mirrors = frames = dma_skipped = tex_decoded_here = 0;
 	all_draws = edge_draws = edge_tris = 0;
 	draws8 = tex8_rsx = tex8_rdram = 0;
+	raster_zauto = 0;
+	first_cimg = cimg_task = 0;
+	frame_start = false;
 	memset(&dma_ring, 0, sizeof dma_ring);
 	memset(rb_task, 0, sizeof rb_task);
 	memset(&last_job, 0, sizeof last_job);
@@ -1076,6 +1115,11 @@ void raster_fb_stats(uint32_t *n_readbacks, uint32_t *n_primes, uint32_t *tex_rs
 	*tex_rsx = tg.tex_rsx;
 	*tex_rdram = tg.tex_rdram;
 	*tex_decoded = tex_decoded_here;
+}
+
+uint32_t raster_zauto_count(void)
+{
+	return raster_zauto;
 }
 
 void raster_8bit_stats(uint32_t *draws, uint32_t *tex_rsx, uint32_t *tex_rdram)

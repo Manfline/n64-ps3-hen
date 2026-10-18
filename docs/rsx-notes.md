@@ -88,6 +88,13 @@ compila; `lib/rsxkit/src/fpgen.c`):
   Comprobado en RPCS3 con un volcado editado de Rogue Squadron (la nave con
   escritura sin prueba y el piso detrás con prueba: antes el piso la tapaba
   entera, ahora queda encima); RPCS3 sigue al hardware en esto.
+- **Cargar una profundidad desde la memoria principal**: Z24S8 lineal es,
+  para el motor 2D, una superficie A8R8G8B8 (profundidad en los 24 bits
+  altos, como la ve la CPU). `rsxkit_depth_load` la llena con el motor de
+  imagen escalada (`rsxSetTransferScaleSurface`, `SRCCOPY`, sin filtro,
+  origen en el centro, razón redondeada hacia arriba para que 1/3 no caiga
+  en el texel anterior), en tramos de hasta 1024 píxeles de salida y entre
+  dos `rsxSetWaitForIdle`. Sin validar aún en la PS3 real.
 
 ## Framebuffer
 

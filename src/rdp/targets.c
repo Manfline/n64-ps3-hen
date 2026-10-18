@@ -105,6 +105,16 @@ void rdp_decode_i8(const uint8_t *rdram, uint32_t rdram_size, uint32_t addr, uin
 	}
 }
 
+uint32_t rdp_z16_to_z24(uint16_t v)
+{
+	/* La tabla de descompresión del RDP: corrimiento de la mantisa y base. */
+	static const uint8_t shift[8] = { 6, 5, 4, 3, 2, 1, 0, 0 };
+	static const uint32_t base[8] = { 0x00000, 0x20000, 0x30000, 0x38000, 0x3c000, 0x3e000, 0x3f000, 0x3f800 };
+	uint32_t c = v >> 2, e = c >> 11, m = c & 0x7FFu;
+	uint32_t z18 = (m << shift[e]) + base[e];
+	return z18 << 6 | z18 >> 12;
+}
+
 bool rdp_present_integer(uint32_t src_w, uint32_t src_h, uint32_t screen_w, uint32_t screen_h)
 {
 	if (!src_w || !src_h || src_w > screen_w || src_h > screen_h)

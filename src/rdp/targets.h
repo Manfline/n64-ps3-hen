@@ -235,6 +235,12 @@ void rdp_decode_rgba16(const uint8_t *rdram, uint32_t rdram_size, uint32_t addr,
 void rdp_decode_i8(const uint8_t *rdram, uint32_t rdram_size, uint32_t addr, uint32_t pitch, uint32_t w, uint32_t h,
 		   uint8_t *out, uint32_t out_pitch);
 
+/* Un píxel del z-buffer de la N64 (14 bits de z comprimida, exponente de
+ * 3 y mantisa de 11, y 2 de dz) a la profundidad de 24 bits del RSX: la z
+ * de 18 bits descomprimida, de 0 a 0x3FFFF, a escala de 0 a 0xFFFFFF (la
+ * misma de z/w en [0, 1] de los vértices de la HLE; 0xFFFC da 0xFFFFFF). */
+uint32_t rdp_z16_to_z24(uint16_t v);
+
 /* ¿La región de src_w × src_h píxeles de superficie se presenta a un
  * múltiplo entero (sin el estiramiento fraccionario que repetía filas con
  * el recorte del overscan) en vez de ajustarse a la pantalla? Sí si cabe y

@@ -106,6 +106,8 @@ struct salsa64_rdp_stats {
 	 * color images en la dirección de una z image (el juego escribe la z
 	 * como color: el RSX no la ve en su profundidad). */
 	uint32_t z_write_only, zclears, zclears_pending, zclears_merged, z_as_color;
+	uint32_t z_uploads;  /* z images cargadas desde la RDRAM (la z del CPU: zfeed en rdp.c) */
+	uint32_t z_auto;     /* borrados enteros puestos por rdp.c en z images que el RDP no borra enteras (zauto) */
 };
 
 /* Después de rsxkit_init. scale = 0 (automática): la mayor escala entera

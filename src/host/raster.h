@@ -33,6 +33,8 @@ void raster_edge_stats(uint32_t *draws, uint32_t *with_edges, uint32_t *tris);
 /* Dibujos en color images de 8 bits y texturas I8 leídas de ellas: de su
  * imagen (render a textura) o, si no se pudo, de la RDRAM. */
 void raster_8bit_stats(uint32_t *draws, uint32_t *tex_rsx, uint32_t *tex_rdram);
+/* Borrados enteros de las z images que el RDP no borra enteras (zauto de rdp.c). */
+uint32_t raster_zauto_count(void);
 const uint32_t *raster_image(uint32_t addr, uint32_t *width);
 /* Qué hay en la ranura `slot` de la tabla de destinos (para la vigilancia
  * de accesos del CPU); false si está vacía. */

@@ -77,7 +77,12 @@
  * es el de siempre (después de los RB_SLOTS); el resto, tras los espejos. */
 #define PRIME_BUFS  4
 #define PRIME_EXTRA ((PRIME_BUFS - 1) * RB_SLOT)
-#define FB_BYTES    (((RB_SLOTS + 2) * RB_SLOT + MIRRORS * MIRROR_SLOT + PRIME_EXTRA + 0xFFFFFu) & ~0xFFFFFu)
+/* La z image que el CPU deja en la RDRAM, convertida a Z24S8 para cargarla
+ * en la profundidad del RSX (zfeed): hasta 640 × 480, detrás de lo anterior. */
+#define ZUP_PITCH   (RB_MAX_W * 4)
+#define ZUP_BYTES   (ZUP_PITCH * RB_MAX_H)
+#define ZUP_OFF     ((RB_SLOTS + 2) * RB_SLOT + MIRRORS * MIRROR_SLOT + PRIME_EXTRA)
+#define FB_BYTES    ((ZUP_OFF + ZUP_BYTES + 0xFFFFFu) & ~0xFFFFFu)
 #define POOL_BYTES  (SETS_BYTES + CACHE_BYTES + FB_BYTES)
 #define MAX_DEPTHS  RDP_DEPTHS_MAX  /* targets.h: cuentan en rdp_vram_worst */
 #define RB_PER_TASK 8   /* color images que una tarea puede pedir copiar */
@@ -220,6 +225,12 @@ struct depth {
 	uint32_t clear_pending;
 	float clear_rect[ZCLEAR_PENDING][4];
 	float clear_value[ZCLEAR_PENDING];
+	/* La z que llega por la RDRAM (zfeed): suma de muestras de la z image
+	 * en la RDRAM, tarea en que cambió por última vez, cuántas veces cambió
+	 * y la última tarea revisada. */
+	uint32_t rd_sum, rd_changed, rd_changes, rd_checked;
+	uint32_t fed_task;   /* última tarea en que se cargó desde la RDRAM */
+	uint32_t auto_task;  /* última tarea con el borrado automático (zauto) */
 	rsxkit_depth *d;
 };
 
@@ -259,6 +270,20 @@ static struct {
 	struct rdp_box scratch_dirty;  /* lo dibujado en esa ranura después de copiarla */
 	uint32_t ppe_tex_off;        /* arena de la tarea en traducción: hasta dónde está ocupado */
 	struct depth depths[MAX_DEPTHS];
+	/* Últimos borrados de la z por dirección (tarea de rdp.tg), para saber
+	 * qué z images el RDP nunca borra (zfeed), y la barrera de la última
+	 * carga de una z desde la RDRAM (su búfer no se reescribe antes). */
+	uint32_t zc_addr[4], zc_task[4];
+	/* Por dirección: tarea del último borrado de toda la imagen (la caja
+	 * de los borrados de una tarea va de la fila y la columna 0 a todo el
+	 * ancho) y esa caja en la tarea zc_box_task. */
+	uint32_t zc_full[4], zc_box_task[4];
+	uint16_t zc_box[4][4];
+	/* La primera color image de la tarea anterior y si la de esta es otra
+	 * (la tarea empieza un cuadro: zauto). */
+	uint32_t first_cimg, cimg_task;
+	bool frame_start;
+	uint32_t zup_fence;
 	int bound_t;                 /* ranura ligada, o -1 */
 	struct depth *bound_d;
 	unsigned last_set;           /* juego de búferes de la última tarea dibujada */
@@ -540,6 +565,13 @@ static void release_targets(void)
 	memset(rdp.surf_scale, 0, sizeof rdp.surf_scale);
 	rdp.vram = 0;
 	memset(rdp.depths, 0, sizeof rdp.depths);
+	memset(rdp.zc_addr, 0, sizeof rdp.zc_addr);
+	memset(rdp.zc_task, 0, sizeof rdp.zc_task);
+	memset(rdp.zc_full, 0, sizeof rdp.zc_full);
+	memset(rdp.zc_box_task, 0, sizeof rdp.zc_box_task);
+	rdp.first_cimg = rdp.cimg_task = 0;
+	rdp.frame_start = false;
+	rdp.zup_fence = 0;
 	rdp.bound_t = -1;
 	rdp.bound_d = NULL;
 	/* La tabla de destinos, vacía. Sus contadores de texturas siguen: el
@@ -1176,7 +1208,121 @@ static struct depth *get_depth(uint32_t addr, int slot)
 	d->w = w;
 	d->h = h;
 	d->clear_pending = 0;
+	d->rd_sum = d->rd_changed = d->rd_changes = d->rd_checked = 0;
+	d->fed_task = d->auto_task = 0;
 	return d;
+}
+
+/* La z que el juego deja en la RDRAM con el CPU (o con un DMA) y que el RDP
+ * nunca borra: Resident Evil 2 pone ahí, cuadro a cuadro, la profundidad del
+ * fondo prerrenderizado, y sus personajes se prueban contra ella. El RSX
+ * solo ve su propia profundidad, así que se carga la de la RDRAM antes del
+ * primer dibujo con profundidad de cada tarea, si (1) la z image no se
+ * borró con el RDP en las últimas ZFEED_TASKS tareas y (2) su contenido en
+ * la RDRAM cambió al menos dos veces, la última hace menos de ZFEED_TASKS.
+ * Rogue Squadron (que borra con el RDP) y los juegos cuya z image nadie
+ * toca en la RDRAM no pasan por aquí. */
+#define ZFEED_TASKS 120u
+static bool zfeed(struct depth *d, int slot)
+{
+	const struct rdp_target *t = &rdp.tg.t[slot];
+	uint32_t task = rdp.tg.task;
+	if (!d || !d->d || !rdp.rdram)
+		return false;
+	if (d->rd_checked == task)
+		return d->fed_task == task;
+	d->rd_checked = task;
+	uint32_t width = t->width, rows = t->lh;
+	if (!width || width > RB_MAX_W || rows > RB_MAX_H || d->addr + width * rows * 2 > rdp.rdram_size)
+		return false;
+	/* Una muestra de 32 bits cada 64 bytes: barato y ve cualquier fondo nuevo. */
+	const uint8_t *z = rdp.rdram + d->addr;
+	uint32_t sum = 0, bytes = width * rows * 2;
+	for (uint32_t o = 0; o + 4 <= bytes; o += 64) {
+		uint32_t v;
+		memcpy(&v, z + o, 4);
+		sum = (sum << 5 | sum >> 27) ^ v;
+	}
+	if (sum != d->rd_sum) {
+		d->rd_sum = sum;
+		d->rd_changed = task;
+		d->rd_changes++;
+	}
+	for (int k = 0; k < 4; k++)
+		if (rdp.zc_addr[k] == d->addr && task - rdp.zc_task[k] < ZFEED_TASKS)
+			return false;
+	if (d->rd_changes < 2 || task - d->rd_changed >= ZFEED_TASKS)
+		return false;
+	uint32_t sc = rdp.surf_scale[slot] ? rdp.surf_scale[slot] : 1;
+	uint32_t lw = t->lw < width ? t->lw : width;
+	if (lw * sc > d->w || rows * sc > d->h)
+		return false;
+	if (rdp.zup_fence)
+		fence_wait(rdp.zup_fence);
+	uint8_t *dst = rdp.rb + ZUP_OFF;
+	uint64_t t0 = tb_now();
+	for (uint32_t y = 0; y < rows; y++) {
+		const uint8_t *src = z + y * width * 2;
+		uint32_t *out = (uint32_t *)(dst + y * ZUP_PITCH);
+		for (uint32_t x = 0; x < lw; x++)
+			out[x] = rdp_z16_to_z24((uint16_t)(src[2 * x] << 8 | src[2 * x + 1])) << 8;
+	}
+	/* Que el RSX lea lo escrito y no líneas de la caché del PPE. */
+	for (uint32_t o = 0; o < rows * ZUP_PITCH; o += 128)
+		__asm__ volatile("dcbst 0,%0" ::"r"(dst + o) : "memory");
+	__asm__ volatile("sync" ::: "memory");
+	rdp.tb.copy += tb_now() - t0;
+	if (rsxkit_depth_load(d->d, rdp.rb_off + ZUP_OFF, ZUP_PITCH, lw, rows, sc) == RSXKIT_OK) {
+		rdp.zup_fence = rsxkit_fence();
+		rdp.bound_t = -1;
+		rdp.bound_d = NULL;
+		/* Lo que estaba pendiente de borrar ya lo pisó la carga. */
+		d->clear_pending = 0;
+		rdp.stats.z_uploads++;
+		d->fed_task = task;
+		LOGN(5, "gfx: z image %06x/%u cargada desde la RDRAM (%u filas a %u×): el RDP no la borra y el CPU la cambia",
+		     d->addr, width, rows, sc);
+		return true;
+	}
+	return false;
+}
+
+/* Una z image que el RDP nunca borra entera: Rogue Squadron borra solo lo
+ * que queda debajo del horizonte (y nada si solo se ve el cielo), y lo de
+ * arriba guarda la z de la nave de cuadros anteriores. En la N64 la prueba
+ * de z tiene el margen del dz y la nave, siempre a la misma distancia,
+ * pasa contra su propia z vieja; con la prueba exacta del RSX se perdía a
+ * pedazos al girar (en el host igual: con la z borrada en cada tarea sale
+ * entera; y con la prueba de la N64, con el margen de dos veces la
+ * pendiente, también). En una tarea que empieza un cuadro (su primera color
+ * image no es la de la tarea anterior: Rogue dibuja cada cuadro en otro de
+ * sus tres framebuffers) y que antes de su primer dibujo con profundidad no
+ * borró la z image entera (ni la cargó desde la RDRAM), se borra entera.
+ * Las tareas que siguen un cuadro (la misma color image) conservan la z;
+ * los juegos que la borran entera cada cuadro no pasan por aquí, y los que
+ * la borran con el CPU quedan bien (borrada). */
+static void zauto(struct depth *d)
+{
+	uint32_t task = rdp.tg.task;
+	if (!d || !d->d || d->auto_task == task || !rdp.frame_start)
+		return;
+	d->auto_task = task;
+	for (int k = 0; k < 4; k++)
+		if (rdp.zc_addr[k] == d->addr && rdp.zc_full[k] == task)
+			return;
+	/* Primero, antes de los borrados que la tarea ya dejó pendientes. */
+	uint32_t n = d->clear_pending < ZCLEAR_PENDING ? d->clear_pending : ZCLEAR_PENDING - 1;
+	memmove(d->clear_rect[1], d->clear_rect[0], n * sizeof d->clear_rect[0]);
+	memmove(&d->clear_value[1], &d->clear_value[0], n * sizeof d->clear_value[0]);
+	d->clear_rect[0][0] = d->clear_rect[0][1] = 0.0f;
+	d->clear_rect[0][2] = d->clear_rect[0][3] = 4096.0f;
+	d->clear_value[0] = 1.0f;
+	d->clear_pending = n + 1;
+	if (rdp.bound_d == d) {
+		rdp.bound_t = -1;  /* bind aplica los pendientes al volver a ligarla */
+		rdp.bound_d = NULL;
+	}
+	rdp.stats.z_auto++;
 }
 
 /* Liga el destino de la ranura con la profundidad `d` (NULL: sin z image,
@@ -1218,6 +1364,35 @@ static void zclear(const struct gfx_zclear *z)
 	/* Z de 18 bits de la N64 en el valor de relleno (14 bits + dz). */
 	float value = (float)(z->h.b >> 2) / 16383.0f;
 	rdp.stats.zclears++;
+	{
+		int k = 0, old = 0;
+		while (k < 4 && rdp.zc_addr[k] != z->h.a)
+			k++;
+		if (k == 4) {
+			for (int j = 1; j < 4; j++)
+				if (rdp.zc_task[j] < rdp.zc_task[old])
+					old = j;
+			k = old;
+		}
+		if (rdp.zc_addr[k] != z->h.a)
+			rdp.zc_full[k] = 0;
+		rdp.zc_addr[k] = z->h.a;
+		rdp.zc_task[k] = rdp.tg.task;
+		uint16_t *b = rdp.zc_box[k];
+		if (rdp.zc_box_task[k] != rdp.tg.task) {
+			rdp.zc_box_task[k] = rdp.tg.task;
+			memcpy(b, z->rect, sizeof z->rect);
+		} else {
+			b[0] = z->rect[0] < b[0] ? z->rect[0] : b[0];
+			b[1] = z->rect[1] < b[1] ? z->rect[1] : b[1];
+			b[2] = z->rect[2] > b[2] ? z->rect[2] : b[2];
+			b[3] = z->rect[3] > b[3] ? z->rect[3] : b[3];
+		}
+		/* Toda la imagen: desde la fila y la columna 0, a todo el ancho y
+		 * hasta 200 filas o más (el alto no viene en el borrado). */
+		if (!b[0] && !b[1] && b[2] >= (z->h.c & 0xFFFF) && b[3] >= 200)
+			rdp.zc_full[k] = rdp.tg.task;
+	}
 	if (d && d == rdp.bound_d) {
 		rsxkit_clear(RSXKIT_CLEAR_DEPTH, 0, value, rect);
 		return;
@@ -1441,6 +1616,14 @@ static bool to_rsxkit(const struct gfx_draw *g, struct set *s, int cur, rsxkit_d
 		t->wrap_s = wrap[GFX_TEX_WRAP_S(gt->flags)];
 		t->wrap_t = wrap[GFX_TEX_WRAP_T(gt->flags)];
 		t->filter = (gt->flags & GFX_TEX_BILINEAR) ? RSXKIT_FILTER_LINEAR : RSXKIT_FILTER_NEAREST;
+		/* En una capa de 8 bits (big8) el color es un índice de paleta: el
+		 * RDP la dibuja 1:1 y su filtro cae en el centro del texel, pero el
+		 * del RSX mezcla una fracción de los vecinos (pocos bits de peso) y
+		 * un índice mezclado es otro color: los puntos sueltos en los
+		 * bordes de las capas de Yoshi's Story. Con el desplazamiento de
+		 * medio texel de la HLE, el más cercano da el mismo texel. */
+		if (cur >= 0 && big8(rdp.tg.t[cur].bpp, rdp.tg.t[cur].lw))
+			t->filter = RSXKIT_FILTER_NEAREST;
 		memcpy(t->xf, gt->xf, sizeof t->xf);
 		bool from_target = false;
 		if (texture_from_target(gt, cur, t, &from_target))
@@ -1776,6 +1959,11 @@ static void translate(uint32_t n)
 			bool is_tall = c->b && c->b <= 640 && rdp_targets_tall(c->b, lh) &&
 				       fills_only(s, off + c->size, res->cmd_bytes);
 			rdp.at = "destinos";
+			if (rdp.cimg_task != rdp.tg.task) {
+				rdp.cimg_task = rdp.tg.task;
+				rdp.frame_start = c->a != rdp.first_cimg;
+				rdp.first_cimg = c->a;
+			}
 			for (int k = 0; k < MAX_DEPTHS; k++)
 				if (rdp.depths[k].used && rdp.depths[k].addr == c->a) {
 					rdp.stats.z_as_color++;
@@ -1898,6 +2086,8 @@ static void translate(uint32_t n)
 			if (g->depth) {
 				rdp.at = "profundidad";
 				d = get_depth(g->zimg, cur);
+				if (!(rdp.fbfx >= 2 && zfeed(d, cur)))
+					zauto(d);
 				rdp.at = "dibujos";
 			}
 			if (!bind(cur, d))

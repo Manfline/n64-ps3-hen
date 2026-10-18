@@ -747,6 +747,25 @@ static void targets_zeta_covers(void)
 /* Presentar a un múltiplo entero o ajustar: entero si cabe y llena al
  * menos 3/4 del alto (lo de antes a la escala automática), ajustado si la
  * escala por destino deja la región chica. */
+/* La z de la N64 que el CPU deja en la RDRAM, a la profundidad del RSX. */
+static void targets_z16_to_z24(void)
+{
+	CHECK_EQ(rdp_z16_to_z24(0xFFFC), 0xFFFFFFu);  /* borrada: lo más lejos */
+	CHECK_EQ(rdp_z16_to_z24(0x0000), 0u);
+	/* Exponente 0: mantisa << 6; 0x400 de mantisa es 0x10000 de 0x3FFFF. */
+	CHECK_EQ(rdp_z16_to_z24(0x400 << 2), (0x10000u << 6) | (0x10000u >> 12));
+	/* Exponente 1 empieza en 0x20000 (la mitad de la escala). */
+	CHECK_EQ(rdp_z16_to_z24((1u << 11) << 2), (0x20000u << 6) | (0x20000u >> 12));
+	/* Creciente en todo el rango (el dz no cuenta). */
+	uint32_t prev = 0;
+	for (uint32_t v = 4; v < 0x10000; v += 4) {
+		uint32_t z = rdp_z16_to_z24((uint16_t)v);
+		CHECK(z >= prev);
+		CHECK_EQ(rdp_z16_to_z24((uint16_t)(v | 3)), z);
+		prev = z;
+	}
+}
+
 static void targets_present_integer(void)
 {
 	CHECK(rdp_present_integer(960, 720, 1280, 720));     /* 3× en 720p */
@@ -1052,5 +1071,6 @@ void t_suite_targets(void)
 	RUN(targets_readback_scaled);
 	RUN(targets_texture_cross_scale);
 	RUN(targets_present_integer);
+	RUN(targets_z16_to_z24);
 	RUN(targets_zeta_covers);
 }
