@@ -100,10 +100,9 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 - Mortal Kombat 4 has no health bars. Pokémon Snap: texture order, slow intro.
   Star Fox 64: the menu duplicates options. Majora's Mask: lighting.
 - NBA Showtime runs sped up. Road Rash 64 does not reach full speed.
-- Donkey Kong 64: the circular transition is checkered. Zelda torch glows
-  show through walls.
-- Resident Evil 2: the N64 logo runs at a quarter of the speed and the statue
-  room at 65-80 %.
+- Zelda: Ocarina of Time: torch glows show through walls.
+- Resident Evil 2: the letters of the OPTIONS menu are garbled, and the statue
+  room runs at 65-80 %.
 - ROMs larger than 64 MB are not supported.
 - Killer Instinct Gold: the second fight froze in an earlier version; the
   frozen-game detector is included and it is not confirmed fixed.
