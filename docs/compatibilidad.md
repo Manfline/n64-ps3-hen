@@ -6,6 +6,38 @@ datos de compatibilidad.
 
 Las entradas antiguas conservan sus métodos de prueba como historia.
 
+## 2026-10-18 — Indiana Jones and the Infernal Machine con HLE gráfica (en el host y en RPCS3; falta la PS3)
+
+Su microcódigo gráfico (Factor 5, CRC-32 de GLideN64 `6859BF8E`, 0x37AFC470 de
+los bytes tal cual; sin texto de identificación) solo corría con el RSP a bajo
+nivel (en el cañón de la primera misión, 1,7 M de instrucciones del RSP por tarea
+gráfica: del orden de 30 ms por tarea en la PS3 con el recompilador del RSP). Ahora
+`src/rsp/gfx/f5indy.c` (traducido de GLideN64; GPLv2) lo interpreta en el host, el PPE y
+la imagen 4 «Factor 5 Indy» del SPE 0 (docs/spe0-familias.md). La misma HLE trae
+la traducción de lo de Star Wars Episode I: Battle for Naboo (`23FEF05F`), que
+comparte el microcódigo: **sin respaldo para probarla**; si sale mal, el archivo
+`lle` con «all» (docs/rsp-lle.md) da el microcódigo real.
+
+| Escena (host, respaldo propio; los mismos estados con la HLE y con `--lle=all`) | Píxeles distintos |
+|---|---:|
+| «ENTER NAME»: el fondo de arena y la ventana de la foto (triángulos con textura y colores por vértice) | 0,7 a 0,8 % (> 24 por canal) |
+| el cañón de la primera misión: cielo, paredes, Indiana Jones, HUD y partículas | 4,5 a 9 % (> 24); 0,2 % (> 40): el tramado y el filtro de las texturas |
+| la cueva oscura (campos 12 000 a 24 000 del flujo de botones al azar) | 0,00 a 0,05 % |
+
+Por vértice (el cañón, 12 tareas, 78 945 vértices): posición a 0,25 píxeles de media
+(p95 0,6; la HLE no trunca a cuartos de píxel), s y t a 0,06 texels de mediana,
+colores iguales o +1 (el decodificador del RDP del host redondea el sombreado y
+el microcódigo lo trunca: la tabla de colores de la DMEM sale **idéntica** en las 38 tareas
+medidas del cañón y de la primera escena); rectángulos de textura: las
+mismas esquinas en 12 288 de 12 444 (la diferencia son dsdx y dtdy, 4111 contra 4096 en las partículas).
+
+La HLE corrió la primera misión del juego (de los logos a los niveles: 8859 tareas
+gráficas en 12 000 campos, y 27 020 en 30 000 con un flujo de botones al azar) sin
+comandos sin implementar ni errores. Cada tarea trae ~800 triángulos y, con partículas,
+hasta ~2000 rectángulos: en el host, con el búfer de dibujos de 512 KB, 20 de 20 tareas
+de una escena de partículas salían cortadas (el HUD, que va al final, faltaba); con 768
+KB (la PS3) hay que mirar en el log «tareas cortadas».
+
 ## 2026-10-18 — Star Wars: Rogue Squadron con HLE gráfica (en el host; falta la PS3)
 
 El microcódigo gráfico de Factor 5 (CRC-32 de GLideN64 `DA51CCDB`; no trae texto
@@ -13,8 +45,7 @@ de identificación) solo corría con el RSP a bajo nivel (10 a 13 campos/s en la
 misión de la PS3 con el recompilador del RSP). Ahora `src/rsp/gfx/f5rogue.c`
 (traducido de GLideN64; el binario pasa a ser GPLv2, README) lo interpreta en el
 host, el PPE y el SPE 0 (imagen 3 «Factor 5», docs/spe0-familias.md). Indiana
-Jones y Battle for Naboo usan otro microcódigo de Factor 5 (`F5Indi_Naboo`) y
-siguen con el RSP a bajo nivel.
+Jones y Battle for Naboo usan otro microcódigo de Factor 5 (`F5Indi_Naboo`; HLE en la entrada de arriba).
 
 | Escena (host, respaldo propio) | Contra el RSP real (`--lle=all`, mismos estados) |
 |---|---|
@@ -169,7 +200,7 @@ medición en el host.
 | NBA Showtime | v1 | 5740 de 5740 | Sin eco en la prueba. |
 | Resident Evil 2 | v1 | 2856 de 2856 | Con eco (reverberación) en todas las subtramas. Además tiene HLE del video de las cinemáticas (arriba); los menús y el juego usan S2DEX sueltas, que desde el 2026-10-17 tienen HLE (sección de arriba). |
 | Star Wars: Rogue Squadron | v1 (otra compilación) | 5713 de 5713 | Con eco, con la envolvente del envío en rampa. Los gráficos, con HLE desde el 2026-10-18. |
-| Indiana Jones | v2 | 5675 de 5724 (las otras 49, +1 en 2 de cada 8 muestras del canal izquierdo) | Solo el audio: sus gráficos no tienen HLE. |
+| Indiana Jones | v2 | 5675 de 5724 (las otras 49, +1 en 2 de cada 8 muestras del canal izquierdo) y, con el juego jugado (campos 8000 a 27 000 de un flujo de botones al azar: las tareas siguientes), 16 990 de 16 990 | `ptr_10` (la etapa de v2 que el HLE no hace) no apareció en ninguna; sus gráficos, con HLE desde el 2026-10-18. |
 
 Sin respaldo para probar: Gauntlet Legends, Tarzan, The World Is Not Enough,
 Rugrats in Paris, Polaris SnoCross y Battle for Naboo.
@@ -219,8 +250,9 @@ asigna velocidad.
 | Diddy Kong Racing | Jugable en el host | — | HLE de F3DDKR desde el 2026-10-17 (sección de arriba); sin probar en la PS3. |
 | Jet Force Gemini | Solo los títulos, con comandos sin implementar | Dibuja con todos sus comandos en el host | G_DMA_TEX_OFFSET (2026-10-17, sección de arriba); sin probar en la PS3. |
 | Mickey's Speedway USA | Solo los títulos; el semáforo de la salida no cambia | Dibuja con todos sus comandos en el host; el semáforo cambia de luz | G_DMA_TEX_OFFSET (2026-10-17, sección de arriba); sin probar en la PS3. |
-| Indiana Jones | No jugable | — | Sin HLE de su microcódigo gráfico. |
+| Indiana Jones | Jugable en el host y corre en RPCS3 (HLE gráfica del 2026-10-18; antes, solo con el RSP a bajo nivel) | — | `f5indy.c` (sección de arriba); sin probar en la PS3. |
 | Star Wars: Rogue Squadron | Jugable en el host (HLE gráfica del 2026-10-18; antes, solo con el RSP a bajo nivel) | — | `f5rogue.c` (sección de arriba); sin probar en la PS3. |
+| Animal Crossing (Dōbutsu no Mori, traducción «ANIMAL FOREST», issue #18) | Sin dibujar: sus dos microcódigos no traían texto de versión | — | Reconocidos por el CRC-32 de su código (`D39A0D4F`: F3DZEX2 como el de Majora's Mask, sin recorte contra el plano cercano; `02C399DD`: S2DEX2; los valores de la lista de GLideN64). **Sin respaldo para probarlo**; si sigue sin dibujar, el log de la PS3 trae ahora los CRC del código desconocido (docs/estado.md, 2026-10-18). |
 | Resident Evil 2 | Cinemáticas y sus copias a la pantalla en el host; los menús, sin ver | — | HLE del video (RESIZE, DECODE y FILL) idéntica al microcódigo real y, desde el 2026-10-17, las tareas S2DEX sueltas (G_BG_COPY de los cuadros de video: idéntico al microcódigo real; el host no llega a los menús). Sin probar en la PS3. |
 
 Las pruebas de rendimiento detalladas de Banjo-Tooie corresponden a la sesión
@@ -250,7 +282,7 @@ como antecedente; el de 2026-10-15 es el más reciente.
 | Banjo-Tooie | jugable en la PS3 (primera prueba) | desafío del CIC 6105 de la PIF; confirmado en la PS3 real el 2026-10-13 |
 | F-Zero X | jugable en la PS3 (v0.2.6) | bus abierto del PI (sondeo del 64DD), el microcódigo que recarga a mitad de lista (F3DEX → F3DFLX) y los brillos de los autos por tabla; a 5× se colgaba en «SELECT COURSE» hasta la v0.2.6; quedan objetos del fondo pintados sobre la pista (sombra afín del RDP tras el recorte) |
 | Diddy Kong Racing | pantalla negra | microcódigo propio de Rare; en desarrollo con el RSP a bajo nivel |
-| Indiana Jones, Resident Evil 2 | no jugables | microcódigos de Factor 5 / Capcom |
+| Resident Evil 2 | no jugable | microcódigo de Capcom |
 
 Las versiones europeas (PAL) y japonesas no se han probado.
 

@@ -105,6 +105,7 @@ enum salsa64_gbi {
 	SALSA64_GBI_F3DJFG,   /* Jet Force Gemini y Mickey's Speedway USA: el de DKR con otro conteo de vértices */
 	SALSA64_GBI_S2DEX1,   /* S2DEX 1.x suelto (Yoshi's Story): los mismos objetos con los opcodes de la primera generación */
 	SALSA64_GBI_F5ROGUE,  /* Star Wars: Rogue Squadron (Factor 5): vértices y triángulos con datos en la lista y tiras generadas (terreno) */
+	SALSA64_GBI_F5INDY,   /* Indiana Jones and the Infernal Machine y Battle for Naboo (Factor 5): una DMEM de 4 KB con DMA, luces y partículas */
 };
 
 /* Campos de OSTask (16 palabras en DMEM 0xFC0). */
@@ -296,6 +297,9 @@ struct salsa64_rsp_stats {
 	uint32_t dp_held;      /* retenidas por el RDP congelado (llegan al descongelarlo) */
 	uint32_t gfx_nosync;   /* tareas gráficas que terminaron sin SYNC_FULL ni corte: no traen interrupción del DP */
 	uint32_t gfx_last;     /* banderas SALSA64_GFX_* de la última tarea gráfica terminada */
+	/* De la última tarea gráfica con microcódigo desconocido: dónde está su código y datos
+	 * (para el log: salsa64_rsp_ucode_ident). */
+	uint32_t unknown_ucode, unknown_ucode_size, unknown_data_size;
 };
 
 struct salsa64_rsp {
@@ -477,6 +481,12 @@ enum salsa64_gbi salsa64_rsp_detect_gbi(const struct salsa64_bus *bus, const str
 /* El texto que identifica a un microcódigo ("RSP Gfx ucode …", "RSP SW
  * Version: …") en sus datos, en `out` (vacío si no hay). Para los logs. */
 void salsa64_rsp_ucode_text(const struct salsa64_bus *bus, uint32_t ucode_data, char *out, size_t n);
+/* Cómo se identifica un microcódigo sin texto: los CRC-32 de los 4 KB de su código (ucode; 0x1000
+ * bytes si ucode_size es 0), de los bytes tal cual (crc_bytes) y de las palabras del host (crc_words,
+ * el valor que usan las listas de otros emuladores y la tabla de rsp.c), y el de los
+ * `data_size` primeros bytes de sus datos (hasta 4 KB). false si no está en la RDRAM. */
+bool salsa64_rsp_ucode_ident(const struct salsa64_bus *bus, uint32_t ucode, uint32_t ucode_size, uint32_t ucode_data,
+			     uint32_t data_size, uint32_t *crc_bytes, uint32_t *crc_words, uint32_t *crc_data);
 /* Tareas de audio (rsp_audio.c): el backend de la HLE (NULL: terminan sin
  * producir nada) y el ABI de una tarea por las palabras de su ucode_data. */
 void salsa64_rsp_set_audio(struct salsa64_bus *bus, const struct salsa64_audio_backend *audio);

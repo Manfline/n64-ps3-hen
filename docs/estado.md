@@ -84,6 +84,194 @@ estela de revuelto de colores, igual con la HLE que con el JIT del RSP.
 - **Falta:** la PS3 real con el paquete «Salsa64 Yoshi cielo» (SLSA00147). La
   rama de la PS3 no se pudo medir aquí (RPCS3 no llega al nivel).
 
+## 2026-10-18 — Indiana Jones and the Infernal Machine y Battle for Naboo: HLE gráfica de Factor 5 (host verificada contra la LLE, imagen del SPE 0 y RPCS3; falta la PS3); MusyX v2 y el microcódigo de Animal Crossing
+
+Indiana Jones solo corría con el RSP a bajo nivel (en el cañón de la primera misión,
+1,7 M de instrucciones del RSP por tarea gráfica, 33,7 M en las 20 de 40 campos; la
+tarea más larga de todas, 1,5 M: con los ~49 MIPS del recompilador del RSP en la PS3, del
+orden de 30 ms por tarea, y 400 ms con el intérprete). Ahora `src/rsp/gfx/f5indy.c` interpreta su
+microcódigo (el de «F5Indi_Naboo» de GLideN64; sin texto de identificación, se
+reconoce por el CRC-32 de sus 4 KB leídos en palabras del host, `0x6859BF8E`) en
+el host, el PPE y una quinta imagen del SPE 0 («Factor 5 Indy»,
+[spe0-familias.md](spe0-familias.md)). Battle for Naboo trae el mismo microcódigo
+(`0x23FEF05F`, también reconocido): sus comandos propios están traducidos, pero
+**sin respaldo del juego no se probaron** (más abajo). El archivo `lle` con «all»
+(docs/rsp-lle.md) sigue dando el microcódigo real para cualquiera de los dos; sin el
+archivo, un juego sin HLE no dibuja.
+
+- **Licencia.** Traducción a C de `src/uCodes/F5Indi_Naboo.cpp` de GLideN64 (GPLv2
+  sola; commit `a04081a`), como f5rogue.c: el archivo lleva `GPL-2.0-only` y su
+  aviso de origen y el binario que lo enlaza se distribuye como GPLv2 (README,
+  docs/THIRD_PARTY.md, docs/proyecto.md).
+- **Qué es el microcódigo.** Una Fast3D cuya memoria es la DMEM del RSP: casi todo
+  comando es una DMA a ella (G_MOVEMEM 0x01: de la RDRAM a una dirección de la DMEM, o
+  de un flujo de bloques encadenados que arma G_SET_DLIST_ADDR) y lo que hace con lo traído
+  depende de a dónde va: el viewport (0x130), la matriz combinada (0x5C0), la matriz de
+  los vértices generados (0xE40), vértices de 8 bytes (0x170: con o sin el desplazamiento
+  de 0x128, o por índices a una tabla de la RDRAM con 0x154), las luces (0xB00) y la
+  iluminación misma sobre 0x480 con resultado en 0xD40 (tres variantes: la «básica», la
+  de «overlay 1», con luces ambientales o puntuales, y la de «overlay 2», con luces
+  ambientales o direccionales con normales). Los triángulos (0xBF, 0xB4) dicen sus
+  vértices por la dirección de su lugar (0x600 + 40 por vértice) y sus colores por un
+  desplazamiento en la tabla de 0xD40; con textura, sus coordenadas detrás o calculadas
+  con una matriz (mapeo de entorno). Una lista secundaria (la dirección de 0x58C) corre
+  antes de dibujar. De G_GEOMETRY_GEN (0x05): 0x18 (vértices con la matriz de 0xE40),
+  0x24 (rectángulos de textura a partir de los vértices de unas partículas), 0x27 (las
+  mueve y deja sus vértices en la RDRAM) y, de Naboo, 0x09 y 0x0C (mallas de terreno
+  con colores por vértice), 0x0F, 0x15 y 0x4F y el 0xBE. La traducción lleva una DMEM de
+  4 KB propia con la misma disposición (los accesos «por puntero» de GLideN64 corren en un
+  host little-endian con palabras invertidas: aquí van en el orden natural).
+- **Cómo se verificó.** Como Rogue: `salsa64-run --lle=all` (el microcódigo real) como verdad,
+  desde estados guardados con la HLE (`--state-save` / `--state-load`; el flujo del juego
+  se maneja con START y A cada 120 campos hasta la misión de Perú, y de ahí con botones al
+  azar). Con `SALSA64_GFX_CYCLES=1000` y `--lle-speed 200` las tareas duran lo mismo y el
+  juego no diverge. Se comparó la imagen del VI cada pocos campos, cada triángulo que los
+  dos mandan al rasterizador (posición, s, t y color de cada vértice, pareados por
+  cercanía), cada rectángulo de textura (las palabras que llegan a `gfx_texrect`) y la
+  DMEM al terminar cada tarea (la de la LLE es la verdadera; la de la HLE se vuelca al
+  final: 0xD40 a 0xDAF son los colores ya iluminados). Esas trazas y volcados son
+  temporales y no están en el árbol. El desensamblador del RSP (también local) leyó el
+  microcódigo y sus overlays de iluminación y de partículas cuando hizo falta.
+- **Lo que se midió** (y por eso el código no es el de GLideN64):
+  - Las **coordenadas de textura de los triángulos** van en 1/32 de texel con y sin
+    perspectiva (GLideN64 usa 1/16 sin ella: el fondo y los carteles salían al doble);
+    y la escala de G_TEXTURE no cuenta (el juego la manda en cero).
+  - La **y de pantalla va al revés** de Fast3D, como en Rogue.
+  - La **iluminación básica y la ambiental** usan el redondeo de los VMULF del
+    microcódigo, `(a·f + 1) >> 8` y `((((a·f + 1) >> 1) · l) + 128) >> 15` (sobre los
+    bytes en la mitad alta con LUV), no los truncamientos de GLideN64; en los datos medidos
+    dan lo mismo (la tabla de colores sale idéntica a la del RSP real en las 38 tareas
+    medidas de dos escenas del cañón y la cueva).
+  - La **iluminación direccional con normales (overlay 2, tipo 1)**, la que más corre en
+    los niveles (122 000 llamadas en 3000 campos del cañón), difiere en ±1 de un canal en
+    algunas palabras contra el RSP real (medido en «ENTER NAME»: 401 de 4256 bytes de la tabla
+    en 38 tareas): sale del redondeo de sus VMULF encadenados, que no se reprodujo (se
+    leyó el código del overlay: producto de la normal por la dirección con VMULF, suma de
+    las tres componentes, producto con el color de la luz, y otro con dato · factor).
+    El overlay 1 solo trae el tipo 0 y las luces puntuales; en las escenas medidas corren el
+    tipo 0 de overlay 1 y los tipos 0 y 1 de overlay 2 (las puntuales, en otro tramo del juego).
+  - Los **rectángulos de partículas (0x24)**: las esquinas son idénticas a las del RSP
+    real; dsdx y dtdy salen 0xF más altos (4111 contra 4096: GLideN64 toma una palabra
+    de la matriz de 0x5C8 que el microcódigo real parece no usar así). Sin efecto visible.
+  - Las **partículas (0x27)** escriben en la RDRAM sus vértices (256 bytes) y su
+    máscara: `gfx_io_write` (memcpy en el host y el PPE; en el SPE una DMA con lectura
+    previa de los bytes vecinos). El reloj aleatorio con que reaparecen lo da el
+    registro DPC_CLOCK del RDP: aquí es un contador, así que sus posiciones de
+    reaparición no coinciden con las de la LLE.
+  - La **lista secundaria** solo corre comandos de estado (el modo geométrico, othermode,
+    textura, MOVEWORD y el RDP), sin triángulos ni rectángulos ni más listas: así no hay
+    recursión (el SPE no la admite) y GLideN64 tampoco la usa.
+  - La **raíz cuadrada** del mapeo de entorno va entera (el piso exacto de la de doble
+    precisión), los productos y divisiones de 64 bits de las partículas con los enteros de
+    64 bits del compilador (2,7 KB de libgcc en el SPE: `__muldi3` y `__udivdi3`) y el
+    desbordamiento de enteros con signo con aritmética sin signo.
+- **Contra el RSP real** (mismo método; porcentaje de píxeles a más de 24 por canal; 320 × 240;
+  el tramado alfa y el filtro de las texturas del rasterizador hacen el resto):
+
+  | Escena | Campo | Píxeles distintos |
+  |---|---:|---:|
+  | «ENTER NAME»: arena y ventana de la foto (triángulos con textura) | 2950 a 2964 | 0,7 a 0,8 % |
+  | el cañón de Perú con Indiana Jones y el HUD | 5412, 5424 | 4,5 % (0,2 % a más de 40) |
+  | lo mismo, con partículas, 40 campos | 7208 a 7240 | 5,4 a 9,3 % |
+  | la cueva oscura | 12 012 a 20 016 | 0,00 a 0,05 % |
+
+  Por vértice (el cañón, 12 tareas, 78 945 vértices): posición a 0,25 píxeles de media
+  (p95 0,6; la HLE no trunca a cuartos de píxel), s y t a 0,06 texels de mediana, color
+  igual o +1 (el decodificador de triángulos del rasterizador del host redondea el
+  sombreado; el microcódigo lo trunca) y 3,5 % de vértices sin pareja a menos de 1,5
+  píxeles (las capas que se superponen). Rectángulos: 12 288 de 12 444 con las mismas
+  esquinas, 1037 menos que la LLE (las partículas que reaparecen).
+- **Sin comandos sin implementar** ni errores: 12 000 campos desde el arranque (8859
+  tareas, con el búfer de comandos de 3 MB: 0 cortadas) y 30 000 con botones al azar
+  (27 020 tareas; con el búfer de 512 KB del host, 904 cortadas, 3,3 %: las de las
+  partículas).
+  Por tarea (campo ~7200, el cañón): 11 136 comandos, 2125 triángulos, 1945 rectángulos y
+  1056 dibujos, con ~800 triángulos y ~250 dibujos en la cueva. **Con el búfer de comandos del
+  host (512 KB; 496 bytes por dibujo) 20 de 20 tareas de esa escena salían cortadas** y
+  el HUD, que va al final, faltaba. La PS3 tiene 768 KB (1548 dibujos): mirar en su log
+  «tareas cortadas» y, si salen, subir `CMD_BYTES` de `src/rdp/rdp.c`.
+- **Imagen del SPE 0.** `GFX_SPE0_F5INDY` = 4 con solo `f5indy.c` (-Os, sin F3D): texto
+  121 360, hasta `_end` 251 040, cadena más honda 9280 y holgura 1808 (mínimo 1536) con la
+  caché de texturas en 224 entradas (con 768 la holgura era −10 240: la estructura de los
+  pasos de Naboo pasó al bss, el recorrido de la malla sale de la función que genera los
+  vértices, y la caché bajó; en el host, 0,2 texturas decodificadas por tarea contra 0,1
+  con 1024). Las otras cuatro, con el mismo build: holgura 1616 (la 0: el `switch` de
+  `gfx_spe0_image` tiene un caso más y mueve 128 bytes el `_end`), 7056, 14 512 y 3344.
+  Autoprueba contra el PPE con una lista propia de Indiana Jones (viewport y matrices por
+  DMA, vértices, colores, triángulos con y sin textura, rectángulo, las dos iluminaciones
+  con una luz puntual, G_GEOMETRY_GEN 0x18 y partículas 0x24).
+- **RPCS3.** `spe0-todas`: las cinco imágenes arrancan, «hash igual al del PPE, tareas de
+  prueba iguales al PPE» en todas (la de Indiana Jones, 4,1 s en comprobar). El juego,
+  abierto desde el menú de pruebas: el SPE 0 cambia de F3D a «Factor 5 Indy» en la
+  tarea 1, 255 tareas en 500 campos a ~53 campos/s (RPCS3 no es concluyente en tiempos),
+  0 errores ni comandos sin implementar, 800 triángulos y ~210 dibujos por tarea en los
+  títulos y las primeras escenas.
+- **Pruebas.** 12 nuevas (`tests/unit/test_gfx_f5indy.c`: listas con cabecera y saltos,
+  MOVEWORD (niebla y recorte), othermode con la máscara contada desde arriba, vértices
+  por DMA y su transformación, triángulos con colores por índice y con textura,
+  la DMA del flujo encadenado entre dos bloques, la iluminación básica, la lista
+  secundaria, el rectángulo de 16 bytes, los vértices de 0x18 y las partículas 0x27) y
+  la detección por CRC en `test_rsp.c` (Indiana Jones y Naboo; Animal Crossing, abajo);
+  `tools/build.sh test-host` (con ASan y UBSan): 640 pruebas, 0 fallidas;
+  `tools/escenas-host.sh --comparar` contra el árbol anterior (Banjo-Kazooie, Zelda,
+  DK64, Perfect Dark, GoldenEye, Mario Kart 64, Kirby 64 y la casa de Link; sin SM64: no hay
+  respaldo en la carpeta de pruebas): 8 de 8 idénticas; `tools/test-roms.sh`: rc 0.
+- **Lo de Battle for Naboo.** Los comandos de su microcódigo (G_GEOMETRY_GEN 0x09 y 0x0C:
+  vértices con colores mezclados de dos mallas y el recorrido de los triángulos en pasos,
+  0x0F con 14 palabras de datos, 0x15: un rectángulo de textura desde un vértice, 0x4F y
+  el 0xBE: las coordenadas del cuadrilátero y el recorrido) están traducidos de GLideN64 con
+  los accesos de la DMEM al orden natural, **pero no hay respaldo del juego para
+  comprobarlos contra el RSP real**: lo que sí está probado es que compilan, caben en
+  la imagen del SPE (18 088 bytes de texto: sin ellos la imagen tendría 103 272 de
+  texto y 20 448 de holgura, o una caché de ~860 entradas) y que la autoprueba no los toca. Para probarlos, correr
+  Battle for Naboo con `--lle=all` y con la HLE desde un mismo estado y comparar como arriba
+  (la DMEM al terminar cada tarea dice primero si las mallas generadas coinciden).
+- **Paquete de prueba** «Salsa64 Indy Naboo» (SLSA00153, v0.2.7-51-g28896b0):
+  `build/salsa64-indy/salsa64-indy.pkg`, 3 280 656 bytes, sha256
+  `d184e4b7c7679fecd7e37a5d67f238e14c8533f92f987ab2d93c82a46572c6c5`, armado con `tools/build.sh -C src/frontend PROGRAM=salsa64-indy
+  "TITLE=Salsa64 Indy Naboo" APPID=SLSA00153 pkg` (el directorio de build borrado antes).
+  Para probar en la PS3: abrir Indiana Jones and the Infernal Machine (de los logos a la
+  misión de Perú: START y A) y mirar en el log que el SPE 0 cambie de F3D a «Factor 5
+  Indy» con las «tareas de prueba iguales al PPE», que las tareas gráficas den 0 «con
+  microcódigo desconocido», 0 comandos sin implementar y 0 «tareas cortadas», los campos
+  por segundo en el cañón (con la LLE, del orden de 30 ms de RSP por tarea), y, si se ve mal, el
+  HUD (el último de la tarea), las partículas, el cielo, y los personajes (la
+  iluminación). Si el SPE llega a leer ceros (líneas «16384 comandos» en el log), avisar.
+- **MusyX v2: `ptr_10`.** El audio de Indiana Jones ya iba idéntico en el censo del
+  2026-10-16 (5675 de 5724 tareas; las otras 49, ±1). Con el juego jugado (la misma misión y
+  la cueva, de los campos 8000 a 27 000 desde estados guardados), el oráculo
+  (`--lle=all --lle-check-audio`) comparó 16 990 tareas más: **0 distintas** (ni las ±1)
+  y **`ptr_10` no vino distinto de cero en ninguna** (un contador temporal en
+  `musyx_v2_task` no imprimió una sola línea). La etapa existe en el microcódigo real
+  (la tarea la procesa tras `lw a1,608(zero)`, con el código de 0x57C y 0x680 del
+  microcódigo de audio sobre una estructura aparte, que no se leyó con detalle) y el
+  HLE de mupen64plus tampoco la hace; sin un juego que la use no se puede medir y
+  reconstruirla del desensamblado sin datos reales sería adivinar. Sigue contada como
+  comando sin implementar (el log dice «N sin implementar (último 0x…)» con el valor de
+  `ptr_10`). Para hacerla: un juego que la use (Battle for Naboo, que usa v2) y
+  `--lle-check-audio` desde un estado con la tarea cerca, como arriba.
+- **Animal Crossing (issue #18, traducción de Dōbutsu no Mori, 32 MB, «ANIMAL FOREST»).** El
+  log de la PS3 decía «tareas gráficas con microcódigo sin HLE (datos en
+  0x0011b080: "")»: sus dos microcódigos gráficos no traen el texto de versión. No hay
+  respaldo aquí, así que no se pudo medir, pero la lista de microcódigos especiales de
+  GLideN64 (`src/GBI.cpp`) trae dos entradas de «Animal Forest» con los CRC-32 del código
+  (en palabras del host, el valor que usa también la tabla de `rsp.c`): `0xD39A0D4F`, un
+  **F3DZEX2 de la familia del de Majora's Mask** (sin recorte contra el plano cercano, el
+  «.NoN»), y `0x02C399DD`, un **S2DEX2**. Los dos ya están en la tabla de
+  `src/core/rsp.c` (`ucode_crcs_w`, ahora con la bandera del plano cercano) y
+  `test_rsp.c` los comprueba con un código fabricado para que dé ese CRC. Como ninguno es
+  una variante nueva (F3DZEX2 y S2DEX2 los tenemos, de Zelda y de Kirby) no hay HLE nueva
+  que escribir; si el juego sigue sin dibujar, el log de la PS3 imprime ahora, además
+  de la línea de siempre, «RSP: el microcódigo desconocido: código en 0x…. (N bytes),
+  CRC-32 0x… de los bytes y 0x… de las palabras del host; datos N bytes, CRC-32 0x…»
+  (`salsa64_rsp_ucode_ident`): con ese CRC se ve de inmediato si es otra
+  compilación (la versión japonesa de Dōbutsu no Mori, la traducción sobre otra
+  base o el «+») y se añade a la tabla.
+- **Falta.** Probarlo en la PS3 (el cañón, el HUD y las partículas; los campos por
+  segundo; «tareas cortadas»); los ±1 de la iluminación direccional y las puntuales
+  (overlay 1 y 2 con luces de tipos 2 en adelante, que corrieron poco: 13 000 y 10 000
+  llamadas en 12 000 campos sin comparar); Battle for Naboo (un respaldo); `ptr_10` de MusyX v2.
+
 ## 2026-10-18 — Rogue Squadron: HLE del microcódigo gráfico de Factor 5 (host verificada, imagen del SPE 0 en RPCS3; falta la PS3)
 
 Rogue Squadron solo corría con el RSP a bajo nivel (10 a 13 campos/s en la misión
@@ -91,7 +279,7 @@ de la PS3). Ahora `src/rsp/gfx/f5rogue.c` interpreta su microcódigo («F5Rogue�
 sin texto de identificación; se reconoce por el CRC-32 de sus 4 KB leídos en palabras
 del host, `0xDA51CCDB`, el valor de GLideN64) en el host, el PPE y una cuarta
 imagen del SPE 0 («Factor 5», [spe0-familias.md](spe0-familias.md)). Indiana Jones y
-Battle for Naboo usan otro microcódigo de Factor 5 y siguen con la LLE.
+Battle for Naboo usan otro microcódigo de Factor 5 (HLE en la entrada de arriba).
 
 - **Licencia.** Es una traducción a C de `src/uCodes/F5Rogue.cpp` de GLideN64
   (GPLv2 sola; commit `a04081ad`), la primera de ese proyecto que entra en el árbol: el
@@ -200,8 +388,9 @@ Battle for Naboo usan otro microcódigo de Factor 5 y siguen con la LLE.
   llega a leer ceros (líneas «16384 comandos» en el log), avisar.
 - **Falta.** Probarlo en la PS3; la niebla de la HLE para el RSP a bajo nivel; afinar el
   tamaño del rectángulo generado y cuantizar x e y a cuartos de píxel si la diferencia
-  se notara; Indiana Jones y Battle for Naboo (`F5Indi_Naboo.cpp`) y MusyX v2, como
-  siguientes.
+  se notara; Indiana Jones y Battle for Naboo (`F5Indi_Naboo.cpp`: HLE en la entrada de
+  arriba) y MusyX v2, como siguientes.
+
 ## 2026-10-18 — Censo gráfico: el microcódigo real contra la HLE (`--lle-check-gfx`)
 
 Herramienta de medición, no un arreglo: `salsa64-run --lle=all --lle-check-gfx`

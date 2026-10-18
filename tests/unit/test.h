@@ -115,6 +115,7 @@ void t_suite_gfx(void);
 void t_suite_gfx_f3d(void);
 void t_suite_gfx_rare(void);
 void t_suite_gfx_f5(void);
+void t_suite_gfx_f5indy(void);
 void t_suite_gfx_selftest(void);
 void t_suite_jpeg(void);
 void t_suite_re2(void);

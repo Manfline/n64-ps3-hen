@@ -167,12 +167,14 @@ code from other projects keep their original copyright notices (see
 [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md)).
 
 **The combined binary is distributed under GPLv2.** `src/rsp/gfx/f5rogue.c`
-(the graphics microcode HLE for Star Wars: Rogue Squadron) is translated
-from [GLideN64](https://github.com/gonetz/GLideN64), which is GPL version 2
-only (no "or later"), and keeps that license
+(the graphics microcode HLE for Star Wars: Rogue Squadron) and
+`src/rsp/gfx/f5indy.c` (the one for Indiana Jones and the Infernal Machine and
+Battle for Naboo) are translated from
+[GLideN64](https://github.com/gonetz/GLideN64), which is GPL version 2
+only (no "or later"), and keep that license
 (`SPDX-License-Identifier: GPL-2.0-only`). Everything else in the tree stays
 GPL-2.0-or-later, so you can still reuse those files under either version
-on their own, but a build that links `f5rogue.c` (the host runner, the PS3
+on their own, but a build that links either file (the host runner, the PS3
 program and its SPU images) is GPLv2. Code under GPLv3 (gopher64, simple64,
 RMG) can no longer be mixed in. `lib/rsxkit/` and `lib/spukit/` do not
 contain or link any of it.

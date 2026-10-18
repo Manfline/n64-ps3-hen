@@ -1709,6 +1709,18 @@ static void log_unknown_gbi(void)
 	salsa64_rsp_ucode_text(&n64.bus, st->unknown_data, text, sizeof text);
 	salsa64_log("RSP: %u tareas gráficas con microcódigo sin HLE (datos en 0x%08x: \"%s\"); terminan sin dibujar",
 		    st->unknown_gbi, (unsigned)st->unknown_data, text);
+	/* Para identificarlo cuando no trae texto (Animal Crossing, 2026-10): código y CRC-32. */
+	uint32_t crc_b, crc_w, crc_d;
+	if (salsa64_rsp_ucode_ident(&n64.bus, st->unknown_ucode, st->unknown_ucode_size, st->unknown_data,
+				    st->unknown_data_size, &crc_b, &crc_w, &crc_d))
+		salsa64_log("RSP: el microcódigo desconocido: código en 0x%08x (%u bytes), CRC-32 0x%08X de los bytes y 0x%08X de las "
+			    "palabras del host; datos %u bytes, CRC-32 0x%08X",
+			    (unsigned)st->unknown_ucode, (unsigned)st->unknown_ucode_size, (unsigned)crc_b, (unsigned)crc_w,
+			    (unsigned)st->unknown_data_size, (unsigned)crc_d);
+	else
+		salsa64_log("RSP: el microcódigo desconocido: código en 0x%08x (%u bytes) fuera de la RDRAM; datos en 0x%08x (%u bytes)",
+			    (unsigned)st->unknown_ucode, (unsigned)st->unknown_ucode_size, (unsigned)st->unknown_data,
+			    (unsigned)st->unknown_data_size);
 	unknown_gbi_next = st->unknown_gbi * 2;
 }
 

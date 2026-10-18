@@ -393,14 +393,22 @@ static const struct {
 static const struct {
 	uint32_t crc;
 	enum salsa64_gbi gbi;
+	bool nonear;  /* no recorta contra el plano cercano (el ".NoN" que el texto de otros no trae aquí) */
 } ucode_crcs_w[] = {
-	{ 0x8D91244Fu, SALSA64_GBI_F3DDKR },  /* Diddy Kong Racing (USA, rev. 1: el mismo de arriba) */
-	{ 0x6E6FC893u, SALSA64_GBI_F3DDKR },  /* Diddy Kong Racing (otra versión: sin respaldo para probarlo) */
-	{ 0xBDE9D1FBu, SALSA64_GBI_F3DJFG },  /* Jet Force Gemini y Mickey's Speedway USA: sin respaldo */
-	{ 0xDA51CCDBu, SALSA64_GBI_F5ROGUE }, /* Star Wars: Rogue Squadron (USA: el de su microcódigo, CRC-32 0x415EF7D5 de los bytes tal cual) */
+	{ 0x8D91244Fu, SALSA64_GBI_F3DDKR, false },  /* Diddy Kong Racing (USA, rev. 1: el mismo de arriba) */
+	{ 0x6E6FC893u, SALSA64_GBI_F3DDKR, false },  /* Diddy Kong Racing (otra versión: sin respaldo para probarlo) */
+	{ 0xBDE9D1FBu, SALSA64_GBI_F3DJFG, false },  /* Jet Force Gemini y Mickey's Speedway USA: sin respaldo */
+	{ 0xDA51CCDBu, SALSA64_GBI_F5ROGUE, false }, /* Star Wars: Rogue Squadron (USA: el de su microcódigo, CRC-32 0x415EF7D5 de los bytes tal cual) */
+	{ 0x6859BF8Eu, SALSA64_GBI_F5INDY, false },  /* Indiana Jones and the Infernal Machine (USA: CRC-32 0x37AFC470 de los bytes tal cual) */
+	{ 0x23FEF05Fu, SALSA64_GBI_F5INDY, false },  /* Star Wars Episode I: Battle for Naboo: sin respaldo para probarlo */
+	/* Animal Crossing (Dōbutsu no Mori, «ANIMAL FOREST»): sus dos microcódigos no traen el texto de versión (el
+	 * log de la PS3 decía «datos en 0x0011b080: ""»). Por la lista de otros emuladores: un F3DZEX2 de la familia
+	 * del de Majora's Mask («F3DZEX.NoN fifo 2.08I») y un S2DEX2; sin respaldo para probarlos. */
+	{ 0xD39A0D4Fu, SALSA64_GBI_F3DZEX2, true },
+	{ 0x02C399DDu, SALSA64_GBI_S2DEX, false },
 };
 
-static enum salsa64_gbi gbi_by_crc(const struct salsa64_bus *bus, const struct salsa64_task *task)
+static enum salsa64_gbi gbi_by_crc(const struct salsa64_bus *bus, const struct salsa64_task *task, bool *nonear)
 {
 	/* La tarea de Rare no declara el tamaño del código (0): el RSP carga 4 KB. */
 	uint32_t size = task->ucode_size ? task->ucode_size : 0x1000;
@@ -413,8 +421,10 @@ static enum salsa64_gbi gbi_by_crc(const struct salsa64_bus *bus, const struct s
 			return ucode_crcs[i].gbi;
 	crc = salsa64_crc32_words_swapped(bus->rdram + addr, size);
 	for (unsigned i = 0; i < sizeof ucode_crcs_w / sizeof ucode_crcs_w[0]; i++)
-		if (ucode_crcs_w[i].crc == crc)
+		if (ucode_crcs_w[i].crc == crc) {
+			*nonear = ucode_crcs_w[i].nonear;
 			return ucode_crcs_w[i].gbi;
+		}
 	return SALSA64_GBI_UNKNOWN;
 }
 
@@ -490,7 +500,7 @@ static enum salsa64_gbi detect_gbi(const struct salsa64_bus *bus, const struct s
 	}
 	/* Los que se conocen por el CRC de su código van antes que el texto
 	 * genérico: la variante de Wave Race también dice "2.0". */
-	enum salsa64_gbi by_crc = gbi_by_crc(bus, task);
+	enum salsa64_gbi by_crc = gbi_by_crc(bus, task, nonear);
 	if (by_crc != SALSA64_GBI_UNKNOWN)
 		return by_crc;
 	/* Fast3D (Super Mario 64 y los primeros juegos) no trae ese texto. */
@@ -518,6 +528,25 @@ void salsa64_rsp_ucode_text(const struct salsa64_bus *bus, uint32_t ucode_data, 
 		i++;
 	}
 	out[i] = '\0';
+}
+
+bool salsa64_rsp_ucode_ident(const struct salsa64_bus *bus, uint32_t ucode, uint32_t ucode_size, uint32_t ucode_data,
+			     uint32_t data_size, uint32_t *crc_bytes, uint32_t *crc_words, uint32_t *crc_data)
+{
+	uint32_t size = ucode_size ? ucode_size : 0x1000;
+	if (size > 0x1000)
+		size = 0x1000;
+	*crc_bytes = *crc_words = *crc_data = 0;
+	if (!in_rdram(bus, ucode, size))
+		return false;
+	const uint8_t *p = bus->rdram + (ucode & 0x1FFFFFFF);
+	*crc_bytes = salsa64_crc32(p, size);
+	*crc_words = salsa64_crc32_words_swapped(p, size);
+	if (data_size > 0x1000)
+		data_size = 0x1000;
+	if (in_rdram(bus, ucode_data, data_size))
+		*crc_data = salsa64_crc32(bus->rdram + (ucode_data & 0x1FFFFFFF), data_size);
+	return true;
 }
 
 void salsa64_rsp_start(struct salsa64_bus *bus)
@@ -587,7 +616,7 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 		bool hle_gfx = task.type == SALSA64_TASK_GFX && valid && rsp->gfx &&
 			       (gbi == SALSA64_GBI_F3DEX2 || gbi == SALSA64_GBI_F3DZEX2 || gbi == SALSA64_GBI_F3D ||
 				gbi == SALSA64_GBI_F3DEX || gbi == SALSA64_GBI_F3DWR || gbi == SALSA64_GBI_F3DDKR ||
-				gbi == SALSA64_GBI_F3DJFG || gbi == SALSA64_GBI_F5ROGUE || s2dex_ok);
+				gbi == SALSA64_GBI_F3DJFG || gbi == SALSA64_GBI_F5ROGUE || gbi == SALSA64_GBI_F5INDY || s2dex_ok);
 		bool hle_audio = task.type == SALSA64_TASK_AUDIO && valid && rsp->audio && abi != SALSA64_ABI_UNKNOWN;
 		if (rsp->lle_mode == SALSA64_LLE_ALL || !(hle_gfx || hle_audio || jpeg != SALSA64_JPEG_NONE)) {
 			rsp->stats.lle++;
@@ -618,6 +647,9 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 		 * (GoldenEye antes de reconocer su Fast3D 2.0G). */
 		rsp->stats.unknown_gbi++;
 		rsp->stats.unknown_data = task.ucode_data;
+		rsp->stats.unknown_ucode = task.ucode;
+		rsp->stats.unknown_ucode_size = task.ucode_size;
+		rsp->stats.unknown_data_size = task.ucode_data_size;
 		dp_sync_at(bus, now);
 	} else if (task.type == SALSA64_TASK_AUDIO && valid && rsp->sched) {
 		/* La HLE de audio (rsp_audio.c y src/rsp/audio; en la PS3, el SPE

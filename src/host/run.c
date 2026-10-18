@@ -829,7 +829,9 @@ static struct gfx_vertex gfx_vtx[1u << 16] __attribute__((aligned(128)));
 /* 512 KB para los dibujos y, con GFX_JOB_INTERP (--interp), la mitad de eso
  * más para los registros GFX_OP_VGROUP (un tercio del total, gfx.h), como
  * en la PS3 (src/rdp/rdp.c, CMD_INTERP). */
+#ifndef GFX_CMD_DRAWS
 #define GFX_CMD_DRAWS (512u << 10)
+#endif
 static uint8_t gfx_cmd[GFX_CMD_DRAWS + GFX_CMD_DRAWS / (GFX_VGROUP_SHARE - 1)] __attribute__((aligned(128)));
 static uint8_t gfx_tex[4u << 20] __attribute__((aligned(128)));
 static uint8_t gfx_cache[8u << 20] __attribute__((aligned(128)));
@@ -2582,7 +2584,7 @@ static uint32_t jitter_rand(void)
 /* Tareas gráficas por microcódigo y cambios de imagen del SPE 0 que habría
  * en la PS3 (rsp/gfx/spe0.h): al final, en el resumen de gfx. */
 static struct {
-	uint32_t tasks[SALSA64_GBI_F5ROGUE + 1];
+	uint32_t tasks[SALSA64_GBI_F5INDY + 1];
 	int img;          /* imagen de la última tarea con HLE, o -1 */
 	uint32_t switches;
 	uint32_t imgs;    /* imágenes usadas (bit por imagen) */
@@ -2590,7 +2592,7 @@ static struct {
 
 static void count_gbi(enum salsa64_gbi gbi)
 {
-	if ((unsigned)gbi <= SALSA64_GBI_F5ROGUE)
+	if ((unsigned)gbi <= SALSA64_GBI_F5INDY)
 		gbi_hist.tasks[gbi]++;
 	int img = gfx_spe0_image(gbi);
 	if (img < 0)
@@ -2703,12 +2705,12 @@ static void gfx_summary(void)
 		s->unknown_cmds, s->last_unknown, s->skipped, s->bg, s->approx_cc, s->dl_errors, n64.bus.rsp.stats.cut,
 		s->flags);
 	static const char *const gbi_names[] = { "desconocido", "F3DEX2", "F3DZEX2", "F3D", "F3DEX", "S2DEX", "F3DPD",
-						 "F3DEXBG", "F3DWR", "F3DDKR", "F3DJFG", "S2DEX1", "F5ROGUE" };
-	_Static_assert(sizeof gbi_names / sizeof gbi_names[0] == SALSA64_GBI_F5ROGUE + 1, "gbi_names");
+						 "F3DEXBG", "F3DWR", "F3DDKR", "F3DJFG", "S2DEX1", "F5ROGUE", "F5INDY" };
+	_Static_assert(sizeof gbi_names / sizeof gbi_names[0] == SALSA64_GBI_F5INDY + 1, "gbi_names");
 	char hist[256];
 	size_t used = 0;
 	hist[0] = '\0';
-	for (unsigned i = 0; i <= SALSA64_GBI_F5ROGUE; i++)
+	for (unsigned i = 0; i <= SALSA64_GBI_F5INDY; i++)
 		if (gbi_hist.tasks[i] && used < sizeof hist)
 			used += (size_t)snprintf(hist + used, sizeof hist - used, "%s%s %u", used ? ", " : "", gbi_names[i],
 						 gbi_hist.tasks[i]);

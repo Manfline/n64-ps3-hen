@@ -70,8 +70,8 @@ los 68 respaldos del autor (unos 50 juegos distintos; cada uno 4·10⁹ ciclos,
 - **Entre tareas**: Resident Evil 2 manda F3DEX2 y S2DEX sueltos (1217 y 3649
   tareas en 43 s) y Yoshi's Story solo S2DEX: el S2DEX suelto va en la imagen
   de F3DEX2. Rogue Squadron e Indiana Jones (Factor 5) mandan solo su
-  microcódigo: Rogue Squadron ya va en una imagen propia (la 3, abajo);
-  Indiana Jones y Naboo (otro microcódigo de Factor 5) siguen sin HLE.
+  microcódigo: Rogue Squadron va en una imagen propia (la 3, abajo) e
+  Indiana Jones y Naboo (otro microcódigo de Factor 5) en otra (la 4).
 
 ## Partición
 
@@ -81,6 +81,7 @@ los 68 respaldos del autor (unos 50 juegos distintos; cada uno 4·10⁹ ciclos,
 | 1 «F3DEX2» | `spu_gfx1` | F3DEX2, F3DZEX2, S2DEX2 y F3DFLX en la tarea | Zelda OoT y MM, Kirby 64, F-Zero X, Smash, Banjo-Tooie, DK64, Paper Mario, Pokémon Snap y Stadium, Mario Party, RE2 (sus tareas F3DEX2)… |
 | 2 «Conker» | `spu_gfx2` | F3DEXBG (sobre F3DEX2) | Conker's Bad Fur Day |
 | 3 «Factor 5» | `spu_gfx3` | F5Rogue (sobre lo común de F3D: `f3d.c` da G_TEXTURE, el modo geométrico, G_SETOTHERMODE y los comandos del RDP) | Star Wars: Rogue Squadron (desde el 2026-10-18) |
+| 4 «Factor 5 Indy» | `spu_gfx4` | F5Indy (`f5indy.c`, con su propia DMEM de 4 KB y su propio recorrido de la lista: no lleva F3D) | Indiana Jones and the Infernal Machine (desde el 2026-10-18); Battle for Naboo (sin respaldo para probarlo) |
 
 Conker va aparte porque su variante (4,5 KB) le quitaba a la imagen de
 F3DEX2 justo el lugar que necesita el S2DEX suelto; no comparte tareas con
@@ -103,6 +104,50 @@ G_RDPHALF (DKR) y en la de Conker un G_TRI4. En RPCS3, al cargar cada
 imagen después de sus tareas de prueba, la pila que el SPE nunca tocó es algo
 mayor que la holgura del build (14 736, 14 256 y 15 536 bytes, contando
 palabras en cero): el grafo de llamadas del build es una cota.
+
+### La imagen 4, de Indiana Jones y Battle for Naboo (2026-10-18)
+
+`f5indy.c` (traducción a C del microcódigo de Indiana Jones y de Battle for
+Naboo de GLideN64) lleva una DMEM de 4 KB propia (4,3 KB de bss con su
+estado), el recorrido de su lista (no usa `f3d.c`: ni el reparto de G_VTX ni el
+de los triángulos de F3D le sirven, y sus comandos de estado son pocos) y,
+del RDP, lo común. Con `-Os`: 40 KB de texto en el objeto (los frames de
+Naboo, las partículas y la iluminación van aparte con `noinline`), la imagen
+sin `f3d.c` ni `f5rogue.c`.
+
+| Imagen | Texto | Datos + bss | Hasta `_end` | Caché | Cadena más honda | Holgura |
+|---|---:|---:|---:|---:|---:|---:|
+| 4 Factor 5 Indy | 121 360 | 800 + 128 672 | 251 040 | 224 | 9 280 | 1 808 |
+| 4 sin los comandos de Naboo (medido, no es el build) | 103 272 | 800 + 128 352 | — | 224 | 9 136 | 20 448 |
+
+Lo de Naboo (`naboo_*`, G_GEOMETRY_GEN 0x09, 0x0C, 0x0F, 0x15 y 0xBE: traducido sin respaldo
+del juego para probarlo) pesa 18 088 bytes de texto, 2,7 KB de ellos de libgcc: sin eso la
+imagen tendría 20 448 bytes de holgura (una caché de unas 860 entradas); si algún día se
+quita o se parte en otra imagen, la caché de Indiana Jones puede subir.
+
+Con la caché en 768 la holgura era −10 240 (la cadena pasaba de 10 KB por
+la ruta de Naboo: G_GEOMETRY_GEN 0x0C → pasos finales → recorrido de la malla
+→ triángulo → lista secundaria → RDP); tres arreglos la dejaron en 1 808:
+la estructura de los pasos de Naboo es estática (en el bss, no en la pila), el
+recorrido de la malla corre fuera de la función que genera los vértices (no
+suma su marco al de ella), y la caché de texturas baja a 224 entradas
+(`GFX_SPE0_TC_4`). Medido en el host con la imagen 4 (`-DGFX_SPE0_IMG=4`),
+desde un estado de la primera misión, 1500 y 2800 tareas con la caché en 224 y
+en 1024: 0,2 y 0,1 texturas decodificadas por tarea y 0,1 desalojadas contra
+0 (el nivel usa ~60 texturas por tarea y las repite): la caché chica casi no
+se nota en Indiana Jones. La holgura de la imagen 0 bajó de 1 744 a 1 616: el
+`switch` de `gfx_spe0_image` (que comprueba la imagen al recibir una tarea)
+tiene un caso más, 16 bytes de texto que mueven 128 el `_end` por la alineación del
+bss.
+
+**Autoprueba.** `selftest.c` arma una lista de Indiana Jones (el viewport y
+las matrices por DMA a la DMEM, los vértices, la tabla de colores, triángulos
+con y sin textura, un rectángulo de 16 bytes, la iluminación de las dos clases
+con una luz puntual, G_GEOMETRY_GEN 0x18 y un bloque de partículas 0x24: los
+productos y divisiones de 64 bits que el SPE hace con la biblioteca del
+compilador) y la imagen la pasa igual que el PPE. En RPCS3, con `spe0-todas`:
+«imagen Factor 5 Indy … hash igual al del PPE, tareas de prueba iguales al
+PPE».
 
 ### La imagen 3, de Factor 5 (2026-10-18)
 
@@ -152,10 +197,10 @@ PS3 real (esperable: el código del SPE de las imágenes 0, 1 y 2 es el de siemp
   la caché en 1024; con 896 entradas, 3 584 más, y con 768, 7 168 más
   (`GFX_SPE0_TC_1` en `spe0.h`). Lo que comparte con S2DEX2 (`s2dex.c`: los
   fondos, `G_OBJ_LOADTXTR`) ya está en la imagen.
-- **Factor 5**: Rogue Squadron ya está en la imagen 3 (1 808 bytes sobre el
-  mínimo con la caché en 1024; unos 5 000 con 896). Indiana Jones y Naboo usan otro
-  microcódigo (`F5Indi_Naboo.cpp` de GLideN64, sin HLE todavía) y irían a la
-  misma imagen o a una propia, según lo que pese.
+- **Factor 5**: Rogue Squadron está en la imagen 3 (1 808 bytes sobre el
+  mínimo con la caché en 1024; unos 5 000 con 896) e Indiana Jones y Naboo, que
+  usan otro microcódigo (`F5Indi_Naboo.cpp` de GLideN64), en la 4: pesaban demasiado
+  para la 3.
 - **Acclaim, ZSortBOSS, Turbo3D, F3DAM**: en la imagen 0 si son de la
   primera generación (12,5 KB libres), o en imágenes propias.
 
