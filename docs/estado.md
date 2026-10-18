@@ -100,6 +100,7 @@ autor lo vio igual, con la carrera arrancando). Era el mismo comando.
   (el estado de DKR es el mismo; el comando nuevo es una DMA de 64 bytes y
   una suma por G_SETTIMG). Pendiente aparte, que no es del microcódigo: la
   niebla en la LLE del host.
+
 ## 2026-10-17 — Resident Evil 2: HLE del video de las cinemáticas (RESIZE, DECODE y FILL)
 
 Hasta hoy el juego corría en la PS3 a ~32 campos/s con audio de MusyX y el log
