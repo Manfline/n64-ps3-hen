@@ -105,8 +105,24 @@ por familias, [spe0-familias.md](spe0-familias.md)).
   casa nueva de `docs/pads/zelda-casa-nueva.pad`), Kirby 64, Banjo, DK64,
   GoldenEye, Mario Kart 64 y Perfect Dark con `tools/escenas-host.sh --comparar`
   contra el ejecutor anterior: **8 imágenes idénticas** (md5 de la casa
-  `5f67040f…` y de Kirby `4efd365c…`, iguales antes y después).
-@@PAQUETE@@- **Falta.** Probarlo en la PS3 y llegar a los menús de Resident Evil 2 (el host no pasa de las
+  `5f67040f…` y de Kirby `4efd365c…`, iguales antes y después); con la partición
+  también salen iguales Yoshi's Story con la imagen 0 sola y Resident Evil 2 con
+  la 1 sola (`-DGFX_SPE0_IMG=<n>`). `tools/test-roms.sh` rc 0 (nemu64-test 433
+  fallas, 136 con `--lle`).
+- **Paquete de prueba** «Salsa64 S2DEX» (SLSA00145, v0.2.7-40-g68444ad):
+  `build/salsa64-s2dex.pkg`, sha256
+  `58f82e100585bbdcb7bce359de1525fc984f3c7090633059f8fb4b1ad5414817`, armado con
+  `tools/build.sh -C src/frontend PROGRAM=salsa64-s2dex "TITLE=Salsa64 S2DEX"
+  APPID=SLSA00145 pkg` (el directorio de build borrado antes). Para probar en la PS3:
+  abrir Resident Evil 2 (los logos, la intro y el video, ahora con las copias a la
+  pantalla que hace S2DEX) y Yoshi's Story (la intro, el título, la selección de
+  archivo y un nivel; antes no dibujaba nada); mirar en el log las líneas de
+  tareas gráficas (0 «con microcódigo desconocido», 0 comandos sin implementar),
+  que el SPE 0 cargue la imagen F3D (Yoshi's Story) o F3DEX2 (Resident Evil 2) y
+  los campos por segundo. En RPCS3, con `spe0-todas`, las tres imágenes arrancan y
+  sus tareas de prueba salen iguales a las del PPE (gfxtest; RPCS3 no corre estos
+  juegos).
+- **Falta.** Probarlo en la PS3 y llegar a los menús de Resident Evil 2 (el host no pasa de las
   cinemáticas): ahí estarán los G_OBJ_RECTANGLE y los demás objetos.
 ## 2026-10-17 — El SPE 0 por familias de microcódigos: tres imágenes
 
