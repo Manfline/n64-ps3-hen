@@ -61,6 +61,7 @@ Paquete de prueba «Salsa64 rc7b» (SLSA00162, v0.2.7-80-gfa20b9f):
 `6b1016af37f32e99f3aa661c176069ff96a48c27a9366d1994193e3e1169efba` (directorios
 de build borrados antes). Falta la PS3: la carga con `rsxkit_depth_load` sigue
 sin probarse en el RSX real.
+
 ## 2026-10-18 — rc7a: las copias tardías del RSX pisaban lo que el CPU escribió (Indiana Jones y Killer Instinct Gold)
 
 - **Lo que dicen los datos de la PS3 (rc6).** La ROM en memoria está bien (CRC igual al de la Mac en
