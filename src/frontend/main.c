@@ -2988,8 +2988,6 @@ static void perf_window(uint64_t dt, uint32_t fields, uint64_t us_emu, uint64_t 
 	W(copias_esperadas, rs->readback_waits - r0->readback_waits);
 	W(copias_espera_us, rs->us_readback_wait - r0->us_readback_wait);
 	W(copias_tarde, rs->readback_late - r0->readback_late);
-	W(big8_esperadas, rs->big8_sync - r0->big8_sync);
-	W(big8_sin_espera, rs->big8_nosync - r0->big8_nosync);
 	W(copias_perdidas, rs->readbacks_lost - r0->readbacks_lost);
 	W(tareas_cortadas, n64.bus.rsp.stats.cut - sw.gfx_cut0);
 	W(comandos_saltados, gfx_spu.skipped - sw.gfx_skipped0);
