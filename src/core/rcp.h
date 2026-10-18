@@ -313,6 +313,11 @@ struct salsa64_rsp {
 	 * (la HLE JPEG). */
 	uint64_t (*clock_us)(void);
 	const struct salsa64_dpc_backend *dpc;
+	/* Comando del RDP a medias entre dos tramos (sp.c, dp_run): el RSP real
+	 * mueve DPC_END de a un comando (o de a media palabra: F3DEX escribe un
+	 * TEXRECT en dos tramos de 8 bytes), y el RDP espera el resto. */
+	uint8_t dp_carry[184];
+	uint32_t dp_carry_n, dp_carry_next;
 	uint32_t busy;          /* tipo de la tarea en curso; 0 = ninguna */
 	enum salsa64_gbi gbi;   /* de la tarea en curso */
 	bool gfx_nonear;        /* su microcódigo no recorta el plano cercano (".NoN") */
