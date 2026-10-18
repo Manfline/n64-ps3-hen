@@ -2498,8 +2498,10 @@ static void jcheck_sync(void *ctx)
 	 * memoria, donde el juego los reutiliza). */
 	if (shadow.pending && done)
 		shadow_compare();
-	if (gchk_pending() && done)
+	if (gchk_pending() && done) {
+		salsa64_dp_drain(&n64.bus);  /* el RDP congelado (F3DEX2 FIFO) dibuja antes de comparar */
 		gchk_task_end();
+	}
 }
 
 /* Arranque de una tarea de audio en el microcódigo real: libultra lo empieza copiando a la IMEM

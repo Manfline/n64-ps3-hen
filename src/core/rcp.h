@@ -491,6 +491,7 @@ void salsa64_rsp_set_jpeg(struct salsa64_bus *bus, const struct salsa64_jpeg_bac
 /* Un tramo de comandos del RDP ya entregado (lo que un SPE anotó al correr
  * el microcódigo): deja DPC_START/END/CURRENT como si el RDP lo hubiera
  * consumido y lo pasa al consumidor. `dmem` como en salsa64_dpc_backend. */
+void salsa64_dp_drain(struct salsa64_bus *bus);
 void salsa64_dp_submit(struct salsa64_bus *bus, uint32_t start, uint32_t end, const uint8_t *dmem);
 /* Estados guardados: con la emulación quieta, espera a que el backend
  * termine la tarea en curso (gráfica, de audio o JPEG) y guarda su resultado; el

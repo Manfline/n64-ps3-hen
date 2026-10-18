@@ -262,6 +262,21 @@ static void dp_flush(struct salsa64_bus *bus)
 	dp_run(bus, start, end, (dp[SALSA64_DP_STATUS] & SALSA64_DP_STATUS_XBUS) ? bus->sp_mem : NULL);
 }
 
+/* Diagnóstico (censo gráfico): entrega ya lo que el RDP tiene pendiente aunque
+ * esté congelado. F3DEX2 en FIFO congela el RDP al arrancar la tarea y es el CPU
+ * quien lo descongela después de la tarea; para comparar la salida de una tarea
+ * hay que dibujarla antes. DPC_STATUS no cambia: quien descongele ya no
+ * encuentra nada pendiente. */
+void salsa64_dp_drain(struct salsa64_bus *bus)
+{
+	uint32_t *dp = bus->dp;
+	uint32_t start = dp[SALSA64_DP_CURRENT], end = dp[SALSA64_DP_END];
+	if (!(dp[SALSA64_DP_STATUS] & SALSA64_DP_STATUS_FREEZE) || (dp[SALSA64_DP_STATUS] & SALSA64_DP_STATUS_START_VALID) || end <= start)
+		return;
+	dp[SALSA64_DP_CURRENT] = end;
+	dp_run(bus, start, end, (dp[SALSA64_DP_STATUS] & SALSA64_DP_STATUS_XBUS) ? bus->sp_mem : NULL);
+}
+
 void salsa64_dp_submit(struct salsa64_bus *bus, uint32_t start, uint32_t end, const uint8_t *dmem)
 {
 	uint32_t *dp = bus->dp;
