@@ -58,6 +58,13 @@ no se ven y el menú de opciones queda negro. Volcados y log en
   `tools/escenas-host.sh --comparar` contra la rc5b: 9 idénticas. Falta la
   PS3 (la carga de la z de RE2, `rsxkit_depth_load`, no se probó en ningún
   lado con el RSX).
+- **Paquete de prueba** «Salsa64 rc5b2» (SLSA00157, v0.2.7-72-g97cdfb1):
+  `build/salsa64-rc5b2/salsa64-rc5b2.pkg`, 3 285 072 bytes, sha256
+  `6269dd3de5791fc3bba4f35be898576ad2d28846bf94e7c1d678465d69c914ab`, armado con
+  `tools/build.sh -C src/frontend PROGRAM=salsa64-rc5b2 "TITLE=Salsa64 rc5b2"
+  APPID=SLSA00157 pkg` (los directorios de build borrados antes). En RPCS3 la
+  repetición del volcado 7298 corre sin error (una sola tarea: la z vieja no
+  se ve ahí).
 
 ## 2026-10-18 — rc5b: modelos a pedazos en Rogue Squadron (y quizá Resident Evil 2) y la estela de Yoshi
 
