@@ -205,6 +205,9 @@ void salsa64_rdp_drop_targets(void);
  * que el CPU dibujó, y cómo despertar al hilo de presentación cuando una
  * tarea necesita esa copia antes de terminar (`done` espera a que esté).
  * Antes de la primera tarea; NULL apaga las copias. */
+/* Las copias de las capas de 8 bits (big8) se esperan solo si el juego lo pide
+ * (Yoshi's Story: las lee como CI8 desde la RDRAM); por omisión no se esperan. */
+void salsa64_rdp_set_big8_wait(bool wait);
 void salsa64_rdp_set_memory(uint8_t *rdram, uint32_t rdram_size, void (*wake)(void));
 /* Hilo de emulación, al terminar cada campo con imagen: origen y ancho del
  * VI, para distinguir framebuffers de imágenes auxiliares desde ese hilo. */
