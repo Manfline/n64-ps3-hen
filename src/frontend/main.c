@@ -3159,6 +3159,7 @@ static void stats(uint64_t now)
 		uint32_t rb = rs.readbacks - sw.rdp0.readbacks, rbw = rs.readback_waits - sw.rdp0.readback_waits;
 		uint32_t trsx = rs.tex_rsx - sw.rdp0.tex_rsx, trd = rs.tex_rdram - sw.rdp0.tex_rdram;
 		uint32_t tself = rs.tex_self - sw.rdp0.tex_self, primes = rs.primes - sw.rdp0.primes;
+		uint32_t pwaits = rs.prime_waits - sw.rdp0.prime_waits;
 		uint32_t mir = rs.mirrors - sw.rdp0.mirrors, mirs = rs.mirrors_skipped - sw.rdp0.mirrors_skipped;
 		uint32_t fmir = rs.frames_mirrored - sw.rdp0.frames_mirrored, dmas = rs.dma_skipped - sw.rdp0.dma_skipped;
 		uint32_t lost = rs.readbacks_lost - sw.rdp0.readbacks_lost, tfail = rs.targets_failed - sw.rdp0.targets_failed;
@@ -3170,12 +3171,12 @@ static void stats(uint64_t now)
 				    "esperó %u tareas (%.2f ms c/u, %u tarde), %u copias espejo (%u sin búfer), %u cuadros "
 				    "copiados, %u copias descartadas por un DMA posterior; texturas desde un destino: %u del "
 				    "RSX, %u de la RDRAM, %u del ligado, %u decodificadas en el PPE (%u sin lugar); %u destinos "
-				    "cebados; %u copias perdidas, %u destinos sin superficie, %u color images imposibles, %u "
+				    "cebados (%u esperaron la barrera de su búfer de cebado); %u copias perdidas, %u destinos sin superficie, %u color images imposibles, %u "
 				    "dibujos sin ligar (ninguna profundidad cubría el destino)",
 				    rb, rb ? (rs.us_readback - sw.rdp0.us_readback) / 1e3 / rb : 0.0, rbw,
 				    rbw ? (rs.us_readback_wait - sw.rdp0.us_readback_wait) / 1e3 / rbw : 0.0,
 				    rs.readback_late - sw.rdp0.readback_late, mir, mirs, fmir, dmas, trsx, trd, tself, tppe,
-				    tppel, primes, lost, tfail, tabs, bfail);
+				    tppel, primes, pwaits, lost, tfail, tabs, bfail);
 	}
 	if (lle_mode != SALSA64_LLE_OFF) {
 		uint32_t t = rsp_spu.tasks - sw.lle_tasks0;

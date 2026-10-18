@@ -67,7 +67,17 @@
  * reduce el cuadro con el CPU para la pantalla del túnel): un búfer grande
  * más, después de los RB_SLOTS y el de cebado. */
 #define FRAME_SLOT  (RB_SLOTS + 1)
-#define FB_BYTES    (((RB_SLOTS + 2) * RB_SLOT + MIRRORS * MIRROR_SLOT + 0xFFFFFu) & ~0xFFFFFu)
+/* Búferes de cebado (prime): el RSX lee el cebado después, cuando llega a su
+ * blit (rsxkit_target_fill solo lo encola), así que cada cebado va a un búfer
+ * distinto y no se reescribe hasta que el RSX pasó la barrera del anterior.
+ * Con uno solo, el cebado siguiente (Resident Evil 2: el de la imagen de
+ * 189a00, con la limpieza de su z image, tres tareas después del de 63e000)
+ * pisaba el búfer mientras el RSX aún no leía el anterior y esos datos salían
+ * en el cuadro presentado, en triángulos y bloques de 128 bytes. El primero
+ * es el de siempre (después de los RB_SLOTS); el resto, tras los espejos. */
+#define PRIME_BUFS  4
+#define PRIME_EXTRA ((PRIME_BUFS - 1) * RB_SLOT)
+#define FB_BYTES    (((RB_SLOTS + 2) * RB_SLOT + MIRRORS * MIRROR_SLOT + PRIME_EXTRA + 0xFFFFFu) & ~0xFFFFFu)
 #define POOL_BYTES  (SETS_BYTES + CACHE_BYTES + FB_BYTES)
 #define MAX_DEPTHS  RDP_DEPTHS_MAX  /* targets.h: cuentan en rdp_vram_worst */
 #define RB_PER_TASK 8   /* color images que una tarea puede pedir copiar */
@@ -292,6 +302,8 @@ static struct {
 	uint32_t rb_task[RDP_TARGETS_MAX];
 	struct rdp_present last_p;   /* lo que eligió la última presentación (traza por campo) */
 	struct mirror big[RB_SLOTS]; /* copias grandes sin esperar, en los búferes de RB_SLOTS */
+	uint32_t prime_fence[PRIME_BUFS];  /* barrera del último cebado que leyó cada búfer (0: libre) */
+	unsigned prime_next;               /* búfer del próximo cebado */
 	/* Color images pedidas en las últimas RB_HISTORY tareas (hilo de
 	 * emulación): una que se repite ya no se espera. */
 	uint32_t rb_prev[RB_HISTORY][RB_PER_TASK], rb_prev_rep[RB_HISTORY][RB_PER_TASK];
@@ -589,6 +601,8 @@ uint32_t salsa64_rdp_reset(void)
 	memset(rdp.mirrors, 0, sizeof rdp.mirrors);
 	memset(&rdp.frame, 0, sizeof rdp.frame);
 	memset(rdp.big, 0, sizeof rdp.big);
+	memset(rdp.prime_fence, 0, sizeof rdp.prime_fence);
+	rdp.prime_next = 0;
 	memset(rdp.rb_prev_n, 0, sizeof rdp.rb_prev_n);
 	memset(rdp.rb_task, 0, sizeof rdp.rb_task);
 	memset(&rdp.vi_ring, 0, sizeof rdp.vi_ring);
@@ -925,17 +939,27 @@ static void prime(int i)
 	uint32_t line = t->width * 2, bytes = line * t->lh;
 	if (t->addr + bytes > rdp.rdram_size)
 		return;
-	uint8_t *dst = rdp.rb + RB_SLOTS * RB_SLOT;
+	/* Búfer de la rotación: si el RSX aún no leyó el cebado que lo usó, se
+	 * espera su barrera (casi nunca: son PRIME_BUFS). */
+	unsigned k = rdp.prime_next;
+	uint32_t boff = k ? (RB_SLOTS + 2) * RB_SLOT + MIRRORS * MIRROR_SLOT + (k - 1) * RB_SLOT : RB_SLOTS * RB_SLOT;
+	if (rdp.prime_fence[k] && !rsxkit_fence_done(rdp.prime_fence[k])) {
+		fence_wait(rdp.prime_fence[k]);
+		rdp.stats.prime_waits++;
+	}
+	uint8_t *dst = rdp.rb + boff;
 	uint32_t pitch = (t->lw * 2 + 63) & ~63u;
 	uint64_t t0 = tb_now();
 	for (uint32_t y = 0; y < t->lh; y++)
 		memcpy(dst + y * pitch, rdp.rdram + t->addr + y * line, t->lw * 2);
 	rdp.tb.copy += tb_now() - t0;
-	if (rsxkit_target_fill(rdp.surf[i], rdp.rb_off + RB_SLOTS * RB_SLOT, pitch, t->lw, t->lh, RSXKIT_RGBA5551) ==
-	    RSXKIT_OK) {
+	if (rsxkit_target_fill(rdp.surf[i], rdp.rb_off + boff, pitch, t->lw, t->lh, RSXKIT_RGBA5551) == RSXKIT_OK) {
 		rdp.bound_t = -1;  /* rsxkit_target_fill ligó la superficie sin profundidad */
 		rdp.stats.primes++;
 		rdp.surf_gen[i] = ++rdp.gen_seq;
+		/* La barrera va tras el blit: pasada, el RSX ya leyó el búfer. */
+		rdp.prime_fence[k] = rsxkit_fence();
+		rdp.prime_next = (k + 1) % PRIME_BUFS;
 	}
 }
 

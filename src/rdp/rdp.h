@@ -66,7 +66,7 @@ struct salsa64_rdp_stats {
 	uint32_t frames_mirrored;           /* campos cuyo framebuffer se copió a la RDRAM */
 	uint32_t dma_skipped;               /* copias descartadas porque un DMA escribió ahí después */
 	uint32_t tall_fills;                /* rellenos de una color image más alta que 480 repartidos a sus destinos */
-	uint32_t tex_rsx, tex_rdram, tex_self, primes;
+	uint32_t tex_rsx, tex_rdram, tex_self, primes, prime_waits;
 	/* Texturas que la HLE no decodificó por venir de un destino
 	 * (GFX_TEX_TARGET) y que no se pudieron leer de él: decodificadas en el
 	 * PPE desde la RDRAM, y las que no cupieron en el arena (dibujo saltado). */

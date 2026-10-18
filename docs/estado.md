@@ -1,5 +1,50 @@
 # Estado
 
+## 2026-10-17 — Resident Evil 2: bloques blancos, ruido y rectángulos negros (cebado de superficies)
+
+Con el S2DEX suelto, Resident Evil 2 llegaba a los menús en la PS3 con
+glitches fijos en pantalla: un rectángulo de ruido arriba a la derecha (x 256 a
+319, y 0 a 12), bloques y cuñas de color crema sobre el menú (la misma cuña en
+el título y en «Saved games»: un borde con pendiente 4:3 que pasa por
+(97, 167) y bloques alineados a 64 píxeles) y rectángulos negros sobre el
+logo.
+
+- **Qué se vio en los volcados.** Los dos `gfxdump` (SELECT + R2) son
+  idénticos: la tarea que el volcado guarda es la última de cada cuadro, la
+  limpieza de la z image de `0x189A00` (un G_BG_COPY de 512 × 150 desde
+  `0x6D4000`, que es una imagen crema con ruido en las primeras filas), no la
+  que dibuja el menú. Un cuadro de RE2 son cuatro tareas: la copia del fondo de
+  video a `63E000`/512 (512 × 150 = 320 × 240 píxeles: es una copia lineal), una
+  de ajustes con tres `SETCIMG` (`189A00`/512, `63E000`/512 y `63E000`/320), la
+  de F3DEX2 con los TEXRECT del logo y el menú sobre `63E000`/320 y la limpieza
+  de `189A00`. La captura del RSX trae, en los píxeles malos, exactamente los
+  datos de esa imagen crema colocados linealmente (147 de 256 píxeles iguales
+  en el rectángulo de ruido, con la pérdida de RGB565; 1 con cualquier otro
+  desplazamiento).
+- **Causa.** `prime` (`src/rdp/rdp.c`) ceba la superficie de un destino con lo
+  que hay en la RDRAM copiándolo a un búfer de memoria principal y encolando
+  un blit (`rsxkit_target_fill` solo encola; el RSX lee el búfer después). Era
+  un solo búfer para todos los cebados: el cebado de `189A00` (la z image
+  crema, 1024 bytes por fila) pisaba el búfer con la superficie de
+  `63E000`/320 todavía sin leer por el RSX, que va unas tareas atrás, y la
+  superficie presentada quedaba con pedazos de la z image (la forma depende de
+  cuánto había leído el RSX: líneas de 128 bytes y bordes de triángulos del
+  blit, siempre en el mismo lugar porque el ritmo es el mismo). Ya estaba
+  anotado como «observado y sin tocar» en la entrada de Star Fox 64
+  (2026-10-12), donde el relleno posterior lo escondía.
+- **Arreglo.** Cuatro búferes de cebado en rotación (`PRIME_BUFS`) con la
+  barrera del RSX de cada uno (`rdp.prime_fence`): un cebado espera solo si el
+  RSX no ha leído el que usó hace cuatro cebados. `docs/memory-budget.md`: el
+  pool de framebuffer pasa de 3 a 5 MB. El log cuenta las esperas («N esperaron
+  la barrera de su búfer de cebado»).
+- **Sin reproducir en el host.** El host no usa `src/rdp/rdp.c` y en él el
+  video de RE2 sale desordenado desde el campo ~1950 (los mismos 512 × 150 que
+  la PS3 ve bien: el host reproduce solo 39 tareas de video, la PS3 150), así
+  que la comprobación es la de la PS3. Las tareas de RE2 se pueden volcar en el
+  host con `SALSA64_GFX_DUMP_TASKS` y dibujar con `--raster-dump`: la tarea de
+  los TEXRECT sale limpia (logo y menú) también ahí, o sea que el dibujo de
+  la HLE no es el problema.
+
 ## 2026-10-17 — S2DEX suelto: Resident Evil 2 y Yoshi's Story
 
 Las tareas gráficas con el texto «RSP Gfx ucode S2DEX» (Resident Evil 2: «fifo
