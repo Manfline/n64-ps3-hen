@@ -70,9 +70,10 @@ estela de revuelto de colores, igual con la HLE que con el JIT del RSP.
 
 ## 2026-10-18 — Indiana Jones and the Infernal Machine y Battle for Naboo: HLE gráfica de Factor 5 (host verificada contra la LLE, imagen del SPE 0 y RPCS3; falta la PS3); MusyX v2 y el microcódigo de Animal Crossing
 
-Indiana Jones solo corría con el RSP a bajo nivel (562 550 instrucciones del
-RSP por tarea en promedio, 1,5 M la más larga: unas 7 tareas por segundo en el
-intérprete del SPE de la PS3). Ahora `src/rsp/gfx/f5indy.c` interpreta su
+Indiana Jones solo corría con el RSP a bajo nivel (en el cañón de la primera misión,
+1,7 M de instrucciones del RSP por tarea gráfica, 33,7 M en las 20 de 40 campos; la
+tarea más larga de todas, 1,5 M: con los ~49 MIPS del recompilador del RSP en la PS3, del
+orden de 30 ms por tarea, y 400 ms con el intérprete). Ahora `src/rsp/gfx/f5indy.c` interpreta su
 microcódigo (el de «F5Indi_Naboo» de GLideN64; sin texto de identificación, se
 reconoce por el CRC-32 de sus 4 KB leídos en palabras del host, `0x6859BF8E`) en
 el host, el PPE y una quinta imagen del SPE 0 («Factor 5 Indy»,
@@ -164,8 +165,10 @@ archivo, un juego sin HLE no dibuja.
   sombreado; el microcódigo lo trunca) y 3,5 % de vértices sin pareja a menos de 1,5
   píxeles (las capas que se superponen). Rectángulos: 12 288 de 12 444 con las mismas
   esquinas, 1037 menos que la LLE (las partículas que reaparecen).
-- **Sin comandos sin implementar** ni errores ni tareas cortadas con el búfer de 3 MB
-  en 12 000 campos desde el arranque (8859 tareas) ni en 28 000 con botones al azar.
+- **Sin comandos sin implementar** ni errores: 12 000 campos desde el arranque (8859
+  tareas, con el búfer de comandos de 3 MB: 0 cortadas) y 30 000 con botones al azar
+  (27 020 tareas; con el búfer de 512 KB del host, 904 cortadas, 3,3 %: las de las
+  partículas).
   Por tarea (campo ~7200, el cañón): 11 136 comandos, 2125 triángulos, 1945 rectángulos y
   1056 dibujos, con ~800 triángulos y ~250 dibujos en la cueva. **Con el búfer de comandos del
   host (512 KB; 496 bytes por dibujo) 20 de 20 tareas de esa escena salían cortadas** y
@@ -206,17 +209,16 @@ archivo, un juego sin HLE no dibuja.
   la imagen del SPE (18 088 bytes de texto: sin ellos la imagen tendría 103 272 de
   texto y 20 448 de holgura, o una caché de ~860 entradas) y que la autoprueba no los toca. Para probarlos, correr
   Battle for Naboo con `--lle=all` y con la HLE desde un mismo estado y comparar como arriba
-  (los volcados de DMEM de 0x170 a 0x380 y de 0xB78 a 0xC68 dicen primero si las dos
-  mallas generadas coinciden).
-- **Paquete de prueba** «Salsa64 Indy Naboo» (SLSA00153, PAQUETE_VERSION):
-  `build/salsa64-indy/salsa64-indy.pkg`, PAQUETE_BYTES bytes, sha256
-  `PAQUETE_SHA`, armado con `tools/build.sh -C src/frontend PROGRAM=salsa64-indy
+  (la DMEM al terminar cada tarea dice primero si las mallas generadas coinciden).
+- **Paquete de prueba** «Salsa64 Indy Naboo» (SLSA00153, v0.2.7-51-g28896b0):
+  `build/salsa64-indy/salsa64-indy.pkg`, 3 280 656 bytes, sha256
+  `d184e4b7c7679fecd7e37a5d67f238e14c8533f92f987ab2d93c82a46572c6c5`, armado con `tools/build.sh -C src/frontend PROGRAM=salsa64-indy
   "TITLE=Salsa64 Indy Naboo" APPID=SLSA00153 pkg` (el directorio de build borrado antes).
   Para probar en la PS3: abrir Indiana Jones and the Infernal Machine (de los logos a la
   misión de Perú: START y A) y mirar en el log que el SPE 0 cambie de F3D a «Factor 5
   Indy» con las «tareas de prueba iguales al PPE», que las tareas gráficas den 0 «con
   microcódigo desconocido», 0 comandos sin implementar y 0 «tareas cortadas», los campos
-  por segundo en el cañón (con la LLE, unas 7 tareas por segundo), y, si se ve mal, el
+  por segundo en el cañón (con la LLE, del orden de 30 ms de RSP por tarea), y, si se ve mal, el
   HUD (el último de la tarea), las partículas, el cielo, y los personajes (la
   iluminación). Si el SPE llega a leer ceros (líneas «16384 comandos» en el log), avisar.
 - **MusyX v2: `ptr_10`.** El audio de Indiana Jones ya iba idéntico en el censo del
@@ -225,8 +227,8 @@ archivo, un juego sin HLE no dibuja.
   (`--lle=all --lle-check-audio`) comparó 16 990 tareas más: **0 distintas** (ni las ±1)
   y **`ptr_10` no vino distinto de cero en ninguna** (un contador temporal en
   `musyx_v2_task` no imprimió una sola línea). La etapa existe en el microcódigo real
-  (la tarea la procesa tras `lw a1,608(zero)`: una estructura aparte con sus propios
-  desplazamientos de tono y volumen, a partir de 0x57C y 0x680 del código de audio) y el
+  (la tarea la procesa tras `lw a1,608(zero)`, con el código de 0x57C y 0x680 del
+  microcódigo de audio sobre una estructura aparte, que no se leyó con detalle) y el
   HLE de mupen64plus tampoco la hace; sin un juego que la use no se puede medir y
   reconstruirla del desensamblado sin datos reales sería adivinar. Sigue contada como
   comando sin implementar (el log dice «N sin implementar (último 0x…)» con el valor de

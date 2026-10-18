@@ -10,8 +10,8 @@ Las entradas antiguas conservan sus métodos de prueba como historia.
 
 Su microcódigo gráfico (Factor 5, CRC-32 de GLideN64 `6859BF8E`, 0x37AFC470 de
 los bytes tal cual; sin texto de identificación) solo corría con el RSP a bajo
-nivel (562 550 instrucciones del RSP por tarea en promedio, 1,5 M la más larga:
-en la PS3, unas 7 tareas por segundo con el intérprete del SPE). Ahora
+nivel (en el cañón de la primera misión, 1,7 M de instrucciones del RSP por tarea
+gráfica: del orden de 30 ms por tarea en la PS3 con el recompilador del RSP). Ahora
 `src/rsp/gfx/f5indy.c` (traducido de GLideN64; GPLv2) lo interpreta en el host, el PPE y
 la imagen 4 «Factor 5 Indy» del SPE 0 (docs/spe0-familias.md). La misma HLE trae
 la traducción de lo de Star Wars Episode I: Battle for Naboo (`23FEF05F`), que
@@ -22,7 +22,7 @@ comparte el microcódigo: **sin respaldo para probarla**; si sale mal, el archiv
 |---|---:|
 | «ENTER NAME»: el fondo de arena y la ventana de la foto (triángulos con textura y colores por vértice) | 0,7 a 0,8 % (> 24 por canal) |
 | el cañón de la primera misión: cielo, paredes, Indiana Jones, HUD y partículas | 4,5 a 9 % (> 24); 0,2 % (> 40): el tramado y el filtro de las texturas |
-| la cueva oscura (campos 12 000 a 24 000 del flujo de pruebas) | 0,00 a 0,05 % |
+| la cueva oscura (campos 12 000 a 24 000 del flujo de botones al azar) | 0,00 a 0,05 % |
 
 Por vértice (el cañón, 12 tareas, 78 945 vértices): posición a 0,25 píxeles de media
 (p95 0,6; la HLE no trunca a cuartos de píxel), s y t a 0,06 texels de mediana,
@@ -32,7 +32,7 @@ medidas del cañón y de la primera escena); rectángulos de textura: las
 mismas esquinas en 12 288 de 12 444 (la diferencia son dsdx y dtdy, 4111 contra 4096 en las partículas).
 
 La HLE corrió la primera misión del juego (de los logos a los niveles: 8859 tareas
-gráficas en 12 000 campos, y hasta el campo 28 000 con un flujo de botones al azar) sin
+gráficas en 12 000 campos, y 27 020 en 30 000 con un flujo de botones al azar) sin
 comandos sin implementar ni errores. Cada tarea trae ~800 triángulos y, con partículas,
 hasta ~2000 rectángulos: en el host, con el búfer de dibujos de 512 KB, 20 de 20 tareas
 de una escena de partículas salían cortadas (el HUD, que va al final, faltaba); con 768
