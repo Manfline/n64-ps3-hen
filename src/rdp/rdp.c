@@ -331,6 +331,10 @@ static struct {
 	/* DMA a la RDRAM desde el hilo de emulación (targets.h): una copia de
 	 * la tarea T no pisa lo que un DMA escribió desde que T empezó. */
 	struct rdp_dma_ring dma;
+	/* Guarda contra el CPU (salsa64_rdp_guard): apagada a pedido; el
+	 * vigilante del log, [watch_lo, watch_hi) de la RDRAM (vacío: apagado). */
+	bool guard_off;
+	uint32_t watch_lo, watch_hi;
 	struct mirror frame;         /* el espejo del framebuffer presentado */
 	/* Última tarea en que cada ranura se copió a la RDRAM (o se rellenó
 	 * su cobertura): el espejo del framebuffer no pisa esa zona mientras
@@ -524,9 +528,20 @@ void salsa64_rdp_last_present(int *slot, uint32_t *age, uint32_t *addr)
 	*addr = rdp.last_p.slot >= 0 ? rdp.tg.t[rdp.last_p.slot].addr : 0;
 }
 
+static uint32_t find_black(uint32_t lo, uint32_t hi);
+static struct rdp_guard guard;  /* huellas de la guarda contra el CPU (más abajo) */
+
 void salsa64_rdp_rdram_written(uint32_t pa, uint32_t len, bool gfx_in_flight)
 {
 	rdp_dma_note(&rdp.dma, pa, len, rdp.finished + (gfx_in_flight ? 1u : 0u));
+	if (rdp.watch_hi > rdp.watch_lo && len && pa < rdp.watch_hi && pa + len > rdp.watch_lo && rdp.rdram) {
+		uint32_t blk = find_black(pa, pa + len);
+		LOGN(400,
+		     "vigilante: DMA (PI, SI, SP o resultados de un SPE) 0x%06x–0x%06x con %u tareas terminadas%s: %s0x00010001 "
+		     "en lo vigilado (la primera en 0x%06x)",
+		     pa, pa + len, rdp.finished, gfx_in_flight ? ", una tarea gráfica en vuelo" : "",
+		     blk == 0xFFFFFFFFu ? "no queda " : "queda ", blk == 0xFFFFFFFFu ? 0u : blk);
+	}
 }
 
 /* Un DMA escribió desde la tarea `task` en lo que se iba a copiar: la
@@ -662,6 +677,7 @@ uint32_t salsa64_rdp_reset(void)
 	memset(&rdp.again_last, 0, sizeof rdp.again_last);
 	memset(&rdp.stats, 0, sizeof rdp.stats);
 	memset(&rdp.tb, 0, sizeof rdp.tb);
+	rdp_guard_clear(&guard);
 	return pending;
 }
 
@@ -694,6 +710,7 @@ void salsa64_rdp_drop_targets(void)
 	rdp.rb_prev_i = 0;
 	memset(&rdp.vi_ring, 0, sizeof rdp.vi_ring);
 	rdp.scratch_slot = -1;
+	rdp_guard_clear(&guard);  /* huellas de la RDRAM anterior */
 }
 
 const struct salsa64_gfx_sink *salsa64_rdp_sink(void)
@@ -913,11 +930,160 @@ static inline uint32_t rb_pitch(uint32_t bpp, uint32_t lw)
 	return big8(bpp, lw) ? (lw * 4 + 63) & ~63u : RB_PITCH;
 }
 
+/* ---- Guarda contra el CPU y vigilante (rdp_guard, targets.h) ---- */
+
+/* `guard`: 512 KB en el BSS (docs/memory-budget.md), declarada arriba. */
+
+void salsa64_rdp_guard(bool on, uint32_t watch_lo, uint32_t watch_hi)
+{
+	rdp.guard_off = !on;
+	rdp.watch_lo = watch_lo;
+	rdp.watch_hi = watch_hi;
+	rdp_guard_clear(&guard);
+}
+
+static inline bool watched(uint32_t lo, uint32_t hi)
+{
+	return rdp.watch_hi > rdp.watch_lo && lo < rdp.watch_hi && hi > rdp.watch_lo;
+}
+
+/* Primera palabra alineada 0x00010001 (un negro de RGBA5551 dos veces) en
+ * la RDRAM [lo, hi) dentro de lo vigilado, o 0xFFFFFFFF. */
+static uint32_t find_black(uint32_t lo, uint32_t hi)
+{
+	lo = lo < rdp.watch_lo ? rdp.watch_lo : lo;
+	hi = hi > rdp.watch_hi ? rdp.watch_hi : hi;
+	if (hi > rdp.rdram_size)
+		hi = rdp.rdram_size;
+	for (uint32_t a = (lo + 3) & ~3u; a + 4 <= hi; a += 4)
+		if (*(const uint32_t *)(rdp.rdram + a) == 0x00010001u)
+			return a;
+	return 0xFFFFFFFFu;
+}
+
+/* Hilo de emulación, al terminar cada tarea: huellas de las filas que sus
+ * dibujos pudieron tocar (las tijeras) en cada color image de 8 o 16 bits
+ * (las que pueden volver por una copia), antes de que llegue ninguna copia
+ * de la tarea. */
+static void guard_mark_task(const struct set *s, const struct gfx_result *res)
+{
+	if (!rdp.rdram || rdp.fbfx < 2 || rdp.guard_off)
+		return;
+	uint64_t t0 = tb_now();
+	uint32_t addr = 0, line = 0, y0 = ~0u, y1 = 0, off = 0;
+	for (;;) {
+		const struct gfx_cmd *c =
+			off + sizeof(struct gfx_cmd) <= res->cmd_bytes ? (const struct gfx_cmd *)(s->cmd + off) : NULL;
+		bool end = !c || c->op == GFX_OP_END || c->size < sizeof *c;
+		if (end || c->op == GFX_OP_TARGET) {
+			if (line && y1 > y0)
+				rdp_guard_mark(&guard, rdp.rdram, rdp.rdram_size, addr + y0 * line, addr + y1 * line);
+			if (end)
+				break;
+			uint32_t siz = c->c & 0xFF;
+			addr = c->a;
+			line = (siz == 1u || siz == 2u) && c->b && c->b <= RB_MAX_W ? c->b * siz : 0;
+			y0 = ~0u;
+			y1 = 0;
+		} else if (c->op == GFX_OP_DRAW && c->size >= sizeof(struct gfx_draw)) {
+			const struct gfx_draw *g = (const struct gfx_draw *)c;
+			uint32_t a = g->scissor[1] / 4u, b = (g->scissor[3] + 3u) / 4u;
+			y0 = a < y0 ? a : y0;
+			y1 = b > y1 ? b : y1;
+		}
+		off += c->size;
+	}
+	rdp.stats.tb_guard_mark += tb_now() - t0;
+}
+
+/* Líneas de 128 bytes que puede tocar una fila de una escritura tardía. */
+#define ROW_LINES ((RB_MAX_W * 2) / RDP_GUARD_LINE + 2)
+
+/* Una escritura tardía (hilo de presentación) de la fila [d0, d1) de la
+ * RDRAM: true si se pueden escribir todas sus líneas; si no, `ok` dice
+ * cuáles (una por línea desde d0 >> 7) y *skipped cuenta las otras. */
+static bool guard_row(uint32_t d0, uint32_t d1, bool ok[ROW_LINES], uint32_t *skipped)
+{
+	if (rdp.guard_off)
+		return true;
+	uint32_t l0 = d0 >> RDP_GUARD_SHIFT, l1 = (d1 - 1) >> RDP_GUARD_SHIFT;
+	bool all = true;
+	for (uint32_t l = l0; l <= l1 && l - l0 < ROW_LINES; l++) {
+		ok[l - l0] = rdp_guard_ok(&guard, rdp.rdram, l);
+		if (!ok[l - l0]) {
+			all = false;
+			(*skipped)++;
+		}
+	}
+	return all;
+}
+
+static void guard_wrote(uint32_t d0, uint32_t d1, const bool *ok)
+{
+	if (rdp.guard_off)
+		return;
+	uint32_t l0 = d0 >> RDP_GUARD_SHIFT, l1 = (d1 - 1) >> RDP_GUARD_SHIFT;
+	for (uint32_t l = l0; l <= l1 && l - l0 < ROW_LINES; l++)
+		if (!ok || ok[l - l0])
+			rdp_guard_wrote(&guard, rdp.rdram, l);
+}
+
+/* Lo que una escritura tardía cuenta al log: líneas, saltadas y la primera
+ * saltada con lo que tenía (lo que el CPU dejó). */
+struct late_note {
+	uint32_t lines, skipped, first_skip, first_word[2];
+	bool have_skip;
+};
+
+static void late_skip_note(struct late_note *nt, uint32_t d0, const bool *ok, uint32_t nlines)
+{
+	if (nt->have_skip)
+		return;
+	for (uint32_t i = 0; i < nlines && i < ROW_LINES; i++)
+		if (!ok[i]) {
+			uint32_t a = ((d0 >> RDP_GUARD_SHIFT) + i) << RDP_GUARD_SHIFT;
+			a = (a < d0 ? d0 : a) & ~3u;
+			nt->have_skip = true;
+			nt->first_skip = a;
+			nt->first_word[0] = *(const uint32_t *)(rdp.rdram + a);
+			nt->first_word[1] = a + 8 <= rdp.rdram_size ? *(const uint32_t *)(rdp.rdram + a + 4) : 0;
+			return;
+		}
+}
+
+static void late_log(const char *who, uint32_t addr, uint32_t width, uint32_t bpp, const struct rdp_box *b,
+		     uint32_t task, const struct late_note *nt)
+{
+	uint32_t lo = addr + b->y0 * width * bpp, hi = addr + b->y1 * width * bpp;
+	if (nt->skipped) {
+		rdp.stats.guard_copies++;
+		rdp.stats.guard_lines += nt->skipped;
+		LOGN(12,
+		     "gfx: %s a la RDRAM 0x%06x–0x%06x (ancho %u, %u bytes por píxel, filas %u–%u, columnas %u–%u) de la "
+		     "tarea %u (%u terminadas): %u de %u líneas de 128 bytes sin escribir porque algo que no es el RDP "
+		     "las cambió desde que terminó la tarea (la primera en 0x%06x: %08x %08x)",
+		     who, lo, hi, width, bpp, b->y0, b->y1, b->x0, b->x1, task, rdp.finished, nt->skipped, nt->lines,
+		     nt->first_skip, nt->first_word[0], nt->first_word[1]);
+	}
+	if (watched(lo, hi)) {
+		uint32_t blk = find_black(lo, hi);
+		LOGN(400,
+		     "vigilante: %s 0x%06x–0x%06x (ancho %u, filas %u–%u) de la tarea %u (%u terminadas): %u líneas, "
+		     "%u saltadas por la guarda%s; %s0x00010001 en lo vigilado (la primera en 0x%06x)",
+		     who, lo, hi, width, b->y0, b->y1, task, rdp.finished, nt->lines, nt->skipped,
+		     rdp.guard_off ? " (guarda apagada)" : "", blk == 0xFFFFFFFFu ? "no queda " : "queda ",
+		     blk == 0xFFFFFFFFu ? 0u : blk);
+	}
+}
+
 /* Escribe en la RDRAM, como RGBA5551, la caja `b` (rdp_box: lo que el RDP
  * pudo escribir, nunca filas enteras) de una copia RGB565 de `lw` píxeles
- * por fila con paso `pitch` que empieza en la fila 0 del destino. */
+ * por fila con paso `pitch` que empieza en la fila 0 del destino. Las líneas
+ * de 128 bytes que algo que no es el RDP cambió desde que terminó la tarea
+ * no se escriben (rdp_guard, targets.h). `who` y `task` (la tarea que lo
+ * dibujó) son para el log de la guarda y del vigilante. */
 static void to_rdram(const uint8_t *src, uint32_t pitch, uint32_t addr, uint32_t width, uint32_t lw,
-		     const struct rdp_box *b, uint32_t bpp)
+		     const struct rdp_box *b, uint32_t bpp, const char *who, uint32_t task)
 {
 	uint64_t t0 = tb_now();
 	uint32_t x1 = b->x1 < lw ? b->x1 : lw;
@@ -930,6 +1096,9 @@ static void to_rdram(const uint8_t *src, uint32_t pitch, uint32_t addr, uint32_t
 	 * 0x00010001 y el juego se colgaba en su manejador de excepciones). */
 	if (addr == 0)
 		return;
+	uint32_t dbpp = bpp == 1 ? 1 : 2;  /* bytes por píxel en la RDRAM */
+	if (addr + (b->y1 - 1) * width * dbpp + x1 * dbpp > rdp.rdram_size)
+		return;
 	/* El paso de las big8 (XRGB8888) antes de soltar las líneas: con el de
 	 * RGB565 (1280 contra 1344 bytes en las capas de 336 de Yoshi's Story)
 	 * las últimas filas de la caja se leían de líneas viejas de la caché. */
@@ -940,25 +1109,50 @@ static void to_rdram(const uint8_t *src, uint32_t pitch, uint32_t addr, uint32_t
 	for (uint32_t off = b->y0 * pitch & ~127u; off < b->y1 * pitch; off += 128)
 		__asm__ volatile("dcbf 0,%0" ::"r"(src + off) : "memory");
 	__asm__ volatile("sync" ::: "memory");
+	struct late_note nt = {0};
+	bool ok[ROW_LINES];
 	for (uint32_t y = b->y0; y < b->y1; y++) {
 		const uint16_t *row = (const uint16_t *)(src + y * pitch);
-		if (big8(bpp, lw)) {
-			/* XRGB8888 (bytes X, R, G, B): el índice entero es el rojo. */
-			const uint8_t *px = src + y * pitch;
-			uint8_t *dst = rdp.rdram + addr + y * width;
-			for (uint32_t x = b->x0; x < x1; x++)
-				dst[x] = px[4 * x + 1];
-		} else if (bpp == 1) {
-			/* Color image de 8 bits (la cobertura que Zelda copia para el
-			 * filtro de Link): la intensidad es el rojo del RGB565. */
-			uint8_t *dst = rdp.rdram + addr + y * width;
-			for (uint32_t x = b->x0; x < x1; x++)
-				dst[x] = (uint8_t)((row[x] >> 8 & 0xF8) | (row[x] >> 13));
-		} else {
-			rsxkit_pixels_565_to_5551((uint16_t *)(rdp.rdram + addr + y * width * 2) + b->x0, row + b->x0,
-						  x1 - b->x0);
+		uint32_t rowa = addr + y * width * dbpp, d0 = rowa + b->x0 * dbpp, d1 = rowa + x1 * dbpp;
+		uint32_t nl = ((d1 - 1) >> RDP_GUARD_SHIFT) - (d0 >> RDP_GUARD_SHIFT) + 1;
+		nt.lines += nl;
+		bool all = guard_row(d0, d1, ok, &nt.skipped);
+		if (!all)
+			late_skip_note(&nt, d0, ok, nl);
+		/* La fila entera si valen todas sus líneas; si no, línea por línea
+		 * (los píxeles de las saltadas se quedan como los dejó el CPU). */
+		for (uint32_t i = 0; i < (all ? 1u : nl); i++) {
+			uint32_t px0 = b->x0, px1 = x1;
+			if (!all) {
+				if (i >= ROW_LINES || !ok[i])
+					continue;
+				uint32_t la = ((d0 >> RDP_GUARD_SHIFT) + i) << RDP_GUARD_SHIFT;
+				uint32_t s0 = la > d0 ? la : d0, s1 = la + RDP_GUARD_LINE < d1 ? la + RDP_GUARD_LINE : d1;
+				px0 = (s0 - rowa) / dbpp;
+				px1 = (s1 - rowa + dbpp - 1) / dbpp;
+				px1 = px1 > x1 ? x1 : px1;
+				if (px1 <= px0)
+					continue;
+			}
+			if (big8(bpp, lw)) {
+				/* XRGB8888 (bytes X, R, G, B): el índice entero es el rojo. */
+				const uint8_t *px = src + y * pitch;
+				uint8_t *dst = rdp.rdram + rowa;
+				for (uint32_t x = px0; x < px1; x++)
+					dst[x] = px[4 * x + 1];
+			} else if (bpp == 1) {
+				/* Color image de 8 bits (la cobertura que Zelda copia para el
+				 * filtro de Link): la intensidad es el rojo del RGB565. */
+				uint8_t *dst = rdp.rdram + rowa;
+				for (uint32_t x = px0; x < px1; x++)
+					dst[x] = (uint8_t)((row[x] >> 8 & 0xF8) | (row[x] >> 13));
+			} else {
+				rsxkit_pixels_565_to_5551((uint16_t *)(rdp.rdram + rowa) + px0, row + px0, px1 - px0);
+			}
 		}
+		guard_wrote(d0, d1, all ? NULL : ok);
 	}
+	late_log(who, addr, width, dbpp, b, task, &nt);
 	rdp.tb.copy += tb_now() - t0;
 }
 
@@ -968,7 +1162,8 @@ static void readbacks_finish(bool wait)
 	struct mirror *f = &rdp.frame;
 	if (f->used && (wait ? (fence_wait(f->fence), true) : rsxkit_fence_done(f->fence))) {
 		if (!dma_newer(f->addr, f->width * 2 * f->rows, f->task)) {
-			to_rdram(rdp.rb + FRAME_SLOT * RB_SLOT, RB_PITCH, f->addr, f->width, f->lw, &f->box, 2);
+			to_rdram(rdp.rb + FRAME_SLOT * RB_SLOT, RB_PITCH, f->addr, f->width, f->lw, &f->box, 2,
+				 "espejo del framebuffer", f->task);
 			rdp.stats.frames_mirrored++;
 		}
 		f->used = false;
@@ -978,7 +1173,8 @@ static void readbacks_finish(bool wait)
 		if (m->used && (wait ? (fence_wait(m->fence), true) : rsxkit_fence_done(m->fence))) {
 			uint32_t bpp = m->bpp ? m->bpp : 2;
 			if (!dma_newer(m->addr, m->width * bpp * m->rows, m->task)) {
-				to_rdram(rdp.rb + k * RB_SLOT, RB_PITCH, m->addr, m->width, m->lw, &m->box, bpp);
+				to_rdram(rdp.rb + k * RB_SLOT, RB_PITCH, m->addr, m->width, m->lw, &m->box, bpp,
+					 "copia grande sin esperar", m->task);
 				rdp.stats.mirrors++;
 			}
 			m->used = false;
@@ -995,7 +1191,7 @@ static void readbacks_finish(bool wait)
 		uint32_t pitch = (m->lw * 2 + 63) & ~63u, bpp = m->bpp ? m->bpp : 2;
 		if (!dma_newer(m->addr, m->width * bpp * m->rows, m->task)) {
 			to_rdram(rdp.rb + (RB_SLOTS + 2) * RB_SLOT + k * MIRROR_SLOT, pitch, m->addr, m->width, m->lw, &m->box,
-				 bpp);
+				 bpp, "copia espejo", m->task);
 			rdp.stats.mirrors++;
 		}
 		m->used = false;
@@ -1547,11 +1743,32 @@ static void viscvg(int cur, const struct gfx_draw *g)
 	if (x1 > t->width)
 		x1 = t->width;
 	uint64_t t0 = tb_now();
+	struct late_note nt = {0};
+	bool ok[ROW_LINES];
 	for (uint32_t y = y0; y < y1 && x1 > x0; y++) {
-		uint32_t a = t->addr + (y * t->width + x0) * 2;
-		if (a + (x1 - x0) * 2 > rdp.rdram_size)
+		uint32_t a = t->addr + (y * t->width + x0) * 2, e = a + (x1 - x0) * 2;
+		if (e > rdp.rdram_size)
 			break;
-		memset(rdp.rdram + a, 0xFF, (x1 - x0) * 2);
+		uint32_t nl = ((e - 1) >> RDP_GUARD_SHIFT) - (a >> RDP_GUARD_SHIFT) + 1;
+		nt.lines += nl;
+		if (guard_row(a, e, ok, &nt.skipped)) {
+			memset(rdp.rdram + a, 0xFF, e - a);
+			guard_wrote(a, e, NULL);
+			continue;
+		}
+		/* Solo las líneas que el CPU no cambió desde que terminó la tarea. */
+		late_skip_note(&nt, a, ok, nl);
+		for (uint32_t i = 0; i < nl && i < ROW_LINES; i++) {
+			uint32_t la = ((a >> RDP_GUARD_SHIFT) + i) << RDP_GUARD_SHIFT;
+			uint32_t s0 = la > a ? la : a, s1 = la + RDP_GUARD_LINE < e ? la + RDP_GUARD_LINE : e;
+			if (ok[i])
+				memset(rdp.rdram + s0, 0xFF, s1 - s0);
+		}
+		guard_wrote(a, e, ok);
+	}
+	if (y1 > y0 && x1 > x0) {
+		struct rdp_box box = {.x0 = (uint16_t)x0, .y0 = (uint16_t)y0, .x1 = (uint16_t)x1, .y1 = (uint16_t)y1};
+		late_log("VISCVG", t->addr, t->width, 2, &box, rdp.translated + 1, &nt);
 	}
 	rdp.tb.copy += tb_now() - t0;
 }
@@ -1782,6 +1999,7 @@ static void done(void *ctx, const struct gfx_job *job, const struct gfx_result *
 	s->res = *res;
 	s->dpc_cont = (job->flags & GFX_JOB_DPC_CONT) != 0;
 	readbacks_wanted(s, res);
+	guard_mark_task(s, res);
 	lwsync();
 	rdp.finished = n + 1;
 	if (!s->rb_nsync)
@@ -2220,7 +2438,7 @@ static void translate(uint32_t n)
 						if (dma_newer(tj->addr, tj->width * tj->bpp * rb[j].rows, n + 1))
 							continue;
 						to_rdram(rdp.rb + rb[j].buf * RB_SLOT, RB_PITCH, tj->addr, tj->width, tj->lw, &rb[j].box,
-							 tj->bpp);
+							 tj->bpp, "copia de la tarea", n + 1);
 						rdp.stats.readbacks++;
 					}
 					nrb = 0;
@@ -2321,7 +2539,8 @@ static void translate(uint32_t n)
 			const struct rdp_target *t = &rdp.tg.t[rb[k].slot];
 			if (dma_newer(t->addr, t->width * t->bpp * rb[k].rows, n + 1))
 				continue;
-			to_rdram(rdp.rb + rb[k].buf * RB_SLOT, RB_PITCH, t->addr, t->width, t->lw, &rb[k].box, t->bpp);
+			to_rdram(rdp.rb + rb[k].buf * RB_SLOT, RB_PITCH, t->addr, t->width, t->lw, &rb[k].box, t->bpp,
+				 "copia de la tarea", n + 1);
 			rdp.stats.readbacks++;
 		}
 		readbacks_finish(false);  /* pasó la barrera: los espejos también */
