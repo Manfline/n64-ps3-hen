@@ -111,6 +111,20 @@ hace todavía: no cabe (más abajo, con números).
   GoldenEye, Mario Kart 64 y Perfect Dark con `tools/escenas-host.sh --comparar`
   contra el ejecutor anterior: **8 imágenes idénticas** (md5 de la casa
   `5f67040f…` y de Kirby `4efd365c…`, iguales antes y después).
+- **Paquete de prueba** «Salsa64 S2DEX» (SLSA00145, v0.2.7-34-g20f48f5):
+  `build/salsa64-s2dex.pkg`, sha256
+  `4e809a7a27d482620834e42e24fa8020d82fa9eab6075ad1e10d5e78e754bac6`, armado con
+  `tools/build.sh -C src/frontend PROGRAM=salsa64-s2dex "TITLE=Salsa64 S2DEX"
+  APPID=SLSA00145 GFX_PPE=1 pkg` (el directorio de build borrado antes).
+  `GFX_PPE=1` (nuevo, `src/frontend/Makefile`) lo arma con la HLE gráfica en el
+  PPE sin pedirla con el archivo `gfx_ppe`: el log dice «HLE gráfica en el PPE».
+  Para probar en la PS3: abrir Resident Evil 2 (los logos, la intro y el video:
+  deben verse como con el paquete anterior, ahora con las copias a la pantalla
+  que hace S2DEX) y Yoshi's Story (la intro, el título, la selección de
+  archivo y un nivel; antes no dibujaba nada); mirar en el log las líneas de
+  tareas gráficas (0 «con microcódigo desconocido», 0 comandos sin implementar)
+  y los campos por segundo, que en el PPE serán menos que en el SPE: si Yoshi's
+  Story va lento, es el 3D en el PPE, no S2DEX.
 - **Falta.** Probarlo en la PS3 con `gfx_ppe` (el SPE 0 aún no hace S2DEX
   suelto), y llegar a los menús de Resident Evil 2 (el host no pasa de las
   cinemáticas): ahí estarán los G_OBJ_RECTANGLE y los demás objetos.
