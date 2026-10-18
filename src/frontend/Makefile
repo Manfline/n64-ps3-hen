@@ -39,7 +39,8 @@ SPUKIT  := 1
 # src/rsp/audio con la E/S por DMA. RSP a bajo nivel (otro SPE): el
 # intérprete de src/rsp/lle con la E/S por DMA de src/spu/rsp. Tarea JPEG
 # (otro SPE): src/rsp/jpeg en 4 carriles (jpeg_v.c) con el bucle de DMA de
-# src/spu/jpeg. CRT con cable (dos SPEs, con `filtros-spe`): la señal y la
+# src/spu/jpeg, y en el mismo SPE las tres tareas de video de Resident Evil 2
+# (re2.c). CRT con cable (dos SPEs, con `filtros-spe`): la señal y la
 # decodificación de S-Video y compuesto (src/spu/crt).
 SPU_PROGS := gfx audio rsp jpeg crt lz
 gfx_SRCS  := $(R)/src/spu/gfx/main.c $(R)/src/spu/gfx/io_spu.c \
@@ -48,7 +49,7 @@ audio_SRCS := $(R)/src/spu/audio/main.c $(R)/src/spu/audio/io_spu.c \
               $(filter-out %/io_mem.c %/sync.c %/selftest.c,$(wildcard $(R)/src/rsp/audio/*.c))
 rsp_SRCS   := $(R)/src/spu/rsp/main.c $(R)/src/spu/rsp/io_spu.c \
               $(filter-out %/core.c,$(wildcard $(R)/src/rsp/lle/*.c))
-jpeg_SRCS  := $(R)/src/spu/jpeg/main.c $(R)/src/rsp/jpeg/jpeg.c $(R)/src/rsp/jpeg/jpeg_v.c
+jpeg_SRCS  := $(R)/src/spu/jpeg/main.c $(R)/src/rsp/jpeg/jpeg.c $(R)/src/rsp/jpeg/jpeg_v.c $(R)/src/rsp/jpeg/re2.c
 crt_SRCS   := $(R)/src/spu/crt/main.c
 # Compresor LZ de lib/spukit (estados guardados, docs/estados.md): bloques de 64 KB.
 lz_SRCS    := $(R)/lib/spukit/spu/lz.c

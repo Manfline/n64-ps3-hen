@@ -6,6 +6,46 @@ datos de compatibilidad.
 
 Las entradas antiguas conservan sus métodos de prueba como historia.
 
+## 2026-10-17 — Resident Evil 2: video de las cinemáticas con HLE (en el host; falta la PS3)
+
+Las cinemáticas del juego (los logos, la intro y el video de entrada) las
+decodifica el CPU hasta planos YCbCr y el RSP hace el resto con tres
+microcódigos pequeños, sin texto de identificación, en tareas de tipo gráfico
+(los parámetros van en `ucode_data`): **RESIZE** (cuadro RGB de 320 de ancho →
+RGBA5551 en bilineal, en franjas de 63–73 filas; con difuminado en las de 596
+de ancho), **DECODE** (planos Y, Cb y Cr de 240 × 120 → RGBA8888) y **FILL**
+(promedio de dos cuadros: el cruce entre dos escenas). Hasta hoy esas tareas
+terminaban sin hacer nada y el log las contaba como «tareas con microcódigo sin
+HLE». La HLE (`src/rsp/jpeg/re2.c`, en el SPE del JPEG en la PS3) se reconoce
+como lo hace mupen64plus-rsp-hle (suma de los 256 primeros bytes del código) y
+solo toma las tareas cuyos parámetros y constantes se midieron; el resto va al
+RSP a bajo nivel o termina sin hacer nada.
+
+Cada tarea se comparó, byte a byte, con el microcódigo real
+(`salsa64-run --lle-check-jpeg`), sin pulsaciones y hasta el campo 24 000
+(400 s de consola: los logos, la intro y el video de entrada completo):
+
+| Tarea | Tareas | Bytes comparados | Bytes distintos |
+|---|---:|---:|---:|
+| RESIZE (franjas de 436, 320 y 596 de ancho) | 210 | 11 374 128 | 0 |
+| DECODE (240 × 120) | 1566 | 189 423 360 | 0 |
+| FILL (promedio de dos cuadros de 240 × 120) | 1560 | 188 697 600 | 0 |
+
+Con las pulsaciones de `docs/pads/re2-intro.pad` (hasta el campo 9000) también
+0 bytes distintos en 45 tareas. La aritmética de mupen64plus daba el 46 %
+de los bytes distintos en RESIZE y el 1,6 % y el 1,5 % en DECODE y FILL: el
+color es entero con piso por producto, el RESIZE redondea con un difuminado
+entre vecinos y el cuarto byte de DECODE y FILL no es cero (detalle en
+[docs/estado.md](estado.md)).
+Pokémon Stadium y Ocarina of Time siguen en 0 píxeles distintos en sus tareas
+JPEG (Stadium 900 tareas, Stadium 2 1500, Ocarina of Time 150).
+
+**Lo que falta para jugarlo:** en el host, sin `--lle`, los menús y los fondos
+usan tareas S2DEX sueltas que no tienen HLE (14 062 en 8000 campos, contra
+1090 de video), así que solo las cinemáticas se ven; con `--lle` las hace el
+microcódigo real. Falta probar el video en la PS3 real (el SPE contra el PPE
+coincide en el arranque en RPCS3).
+
 ## 2026-10-17 — Diddy Kong Racing con HLE (en el host; falta la PS3)
 
 Microcódigo de Rare sin texto (F3DDKR, `ucode_size` 0; CRC-32 de sus 4 KB
@@ -92,7 +132,7 @@ medición en el host.
 | Hydro Thunder | v1 | 5740 de 5740 | Sin eco en la prueba. |
 | Rush 2049 | v1 | 5728 de 5728 | Sin eco en la prueba. |
 | NBA Showtime | v1 | 5740 de 5740 | Sin eco en la prueba. |
-| Resident Evil 2 | v1 | 2856 de 2856 | Con eco (reverberación) en todas las subtramas. Solo el audio: sus gráficos no tienen HLE. |
+| Resident Evil 2 | v1 | 2856 de 2856 | Con eco (reverberación) en todas las subtramas. Además tiene HLE del video de las cinemáticas (arriba); los menús y el juego usan S2DEX sueltas, sin HLE. |
 | Star Wars: Rogue Squadron | v1 (otra compilación) | 5713 de 5713 | Con eco, con la envolvente del envío en rampa. Solo el audio: sus gráficos no tienen HLE. |
 | Indiana Jones | v2 | 5675 de 5724 (las otras 49, +1 en 2 de cada 8 muestras del canal izquierdo) | Solo el audio: sus gráficos no tienen HLE. |
 
@@ -146,7 +186,7 @@ asigna velocidad.
 | Mickey's Speedway USA | Solo los títulos; el semáforo de la salida no cambia | Dibuja con todos sus comandos en el host; el semáforo cambia de luz | G_DMA_TEX_OFFSET (2026-10-17, sección de arriba); sin probar en la PS3. |
 | Indiana Jones | No jugable | — | Sin HLE de su microcódigo gráfico. |
 | Star Wars: Rogue Squadron | No jugable | — | Sin HLE de su microcódigo gráfico. |
-| Resident Evil 2 | No jugable | — | Sin HLE de su microcódigo gráfico. |
+| Resident Evil 2 | Cinemáticas en el host; el juego no | — | HLE del video (RESIZE, DECODE y FILL) idéntica al microcódigo real; las tareas S2DEX sueltas de los menús y el juego no tienen HLE. Sin probar en la PS3. |
 
 Las pruebas de rendimiento detalladas de Banjo-Tooie corresponden a la sesión
 de perfilado indicada en [docs/perf-log.md](perf-log.md); no representan una

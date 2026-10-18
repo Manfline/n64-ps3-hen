@@ -28,6 +28,7 @@
 #include "core/sched.h"
 #include "cpu/vr4300.h"
 #include "rsp/jpeg/jpeg.h"
+#include "rsp/jpeg/re2.h"
 
 #define GFX_CYCLES_DEFAULT   30000u  /* ~0,32 ms de la N64 */
 #define AUDIO_CYCLES_DEFAULT 8000u
@@ -66,6 +67,28 @@ static bool task_done(struct salsa64_bus *bus, bool idle)
 	return true;
 }
 
+static void video_time(struct salsa64_rsp *rsp, uint64_t us)
+{
+	rsp->stats.video_us += us;
+	rsp->stats.video_k_us[rsp->jpeg_vkind] += us;
+}
+
+/* Las estadísticas de una tarea JPEG o de video ya hecha (r: su resultado;
+ * us: lo que tardó el hilo del CPU en ella). */
+static void jpeg_account(struct salsa64_rsp *rsp, const struct salsa64_jpeg_result *r, uint64_t us)
+{
+	if (rsp->jpeg_video) {
+		video_time(rsp, us);
+		rsp->stats.video_rows += r->macroblocks;
+		rsp->stats.video_k_rows[rsp->jpeg_vkind] += r->macroblocks;
+		rsp->stats.video_bad += r->bad;
+	} else {
+		rsp->stats.jpeg_us += us;
+		rsp->stats.jpeg_mb += r->macroblocks;
+		rsp->stats.jpeg_bad += r->bad;
+	}
+}
+
 /* Recoge la tarea JPEG del backend (espera si hace falta) con sus
  * estadísticas; el tiempo es el del hilo del CPU, no el del backend. */
 static void jpeg_collect(struct salsa64_rsp *rsp)
@@ -73,10 +96,7 @@ static void jpeg_collect(struct salsa64_rsp *rsp)
 	struct salsa64_jpeg_result r;
 	uint64_t t0 = rsp->clock_us ? rsp->clock_us() : 0;
 	rsp->jpeg_be->finish(rsp->jpeg_be->ctx, &r);
-	if (rsp->clock_us)
-		rsp->stats.jpeg_us += rsp->clock_us() - t0;
-	rsp->stats.jpeg_mb += r.macroblocks;
-	rsp->stats.jpeg_bad += r.bad;
+	jpeg_account(rsp, &r, rsp->clock_us ? rsp->clock_us() - t0 : 0);
 }
 
 static void dp_sync_at(struct salsa64_bus *bus, uint64_t now);
@@ -523,8 +543,29 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 								       : SALSA64_ABI_UNKNOWN;
 	/* JPEG: el microcódigo se reconoce por su CRC (no trae texto). */
 	enum salsa64_jpeg_kind jpeg = SALSA64_JPEG_NONE;
-	if (task.type == SALSA64_TASK_JPEG && valid && !rsp->jpeg_lle && in_rdram(bus, task.ucode, task.ucode_size))
+	if (task.type == SALSA64_TASK_JPEG && valid && !rsp->jpeg_lle && in_rdram(bus, task.ucode, task.ucode_size)) {
 		jpeg = salsa64_jpeg_detect(bus->rdram + (task.ucode & 0x1FFFFFFF), task.ucode_size);
+	} else if (valid && !rsp->jpeg_lle && gbi == SALSA64_GBI_UNKNOWN && abi == SALSA64_ABI_UNKNOWN &&
+		   in_rdram(bus, task.ucode, 256)) {
+		/* Video de Resident Evil 2: tres microcódigos pequeños sin texto, de tareas
+		 * de tipo gráfico, que se reconocen (como en mupen64plus-rsp-hle) por la
+		 * suma de los 256 primeros bytes del código; solo si no es un microcódigo
+		 * gráfico o de audio conocido. Sus parámetros van en ucode_data. */
+		jpeg = salsa64_re2_detect(bus->rdram + (task.ucode & 0x1FFFFFFF), 256);
+		/* Solo las tareas con los parámetros y constantes que se midieron contra el
+		 * microcódigo real; el resto va a él (RSP a bajo nivel) o termina sin hacer nada. */
+		if (jpeg != SALSA64_JPEG_NONE && !salsa64_re2_supported(jpeg, bus->rdram, bus->rdram_size, task.ucode_data)) {
+			rsp->stats.video_unsup++;
+			jpeg = SALSA64_JPEG_NONE;
+		}
+	}
+	/* Lo que se le pasa al backend o a la HLE: para el video, la estructura
+	 * de la tarea es ucode_data. */
+	struct salsa64_task jtask = task;
+	if (salsa64_jpeg_is_re2(jpeg))
+		jtask.data_ptr = task.ucode_data;
+	rsp->jpeg_video = salsa64_jpeg_is_re2(jpeg);
+	rsp->jpeg_vkind = rsp->jpeg_video ? (unsigned)(jpeg - SALSA64_JPEG_RE2_RESIZE) : 0;
 	if (rsp->trace)
 		rsp->trace(rsp->trace_ctx, &task, gbi);
 
@@ -547,7 +588,8 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 			return;
 		}
 	}
-	if (task.type == SALSA64_TASK_GFX && valid && rsp->sched) {
+	/* Las de video de Resident Evil 2 llegan como tareas gráficas pero van por el camino de las JPEG. */
+	if (task.type == SALSA64_TASK_GFX && valid && rsp->sched && !rsp->jpeg_video) {
 		if (gbi != SALSA64_GBI_UNKNOWN && gbi != SALSA64_GBI_S2DEX) {
 			rsp->stats.gfx++;
 			rsp->busy = SALSA64_TASK_GFX;
@@ -580,12 +622,21 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 	} else if (jpeg != SALSA64_JPEG_NONE && rsp->jpeg_be && rsp->sched) {
 		/* JPEG en otro procesador (en la PS3, un SPE): termina por sondeo,
 		 * como una gráfica, y el CPU sigue mientras tanto. */
-		rsp->stats.jpeg++;
+		if (rsp->jpeg_video) {
+			rsp->stats.video++;
+			rsp->stats.video_k[rsp->jpeg_vkind]++;
+		} else {
+			rsp->stats.jpeg++;
+		}
 		rsp->busy = SALSA64_TASK_JPEG;
 		uint64_t t0 = rsp->clock_us ? rsp->clock_us() : 0;
-		rsp->jpeg_be->start(rsp->jpeg_be->ctx, &task, jpeg);
-		if (rsp->clock_us)
-			rsp->stats.jpeg_us += rsp->clock_us() - t0;
+		rsp->jpeg_be->start(rsp->jpeg_be->ctx, &jtask, jpeg);
+		if (rsp->clock_us) {
+			if (rsp->jpeg_video)
+				video_time(rsp, rsp->clock_us() - t0);
+			else
+				rsp->stats.jpeg_us += rsp->clock_us() - t0;
+		}
 		salsa64_sched_set(rsp->sched, SALSA64_EV_SP_TASK, now + rsp->jpeg_cycles);
 		return;
 	} else if (jpeg != SALSA64_JPEG_NONE) {
@@ -594,12 +645,18 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 		 * abajo. */
 		struct salsa64_jpeg_result r;
 		uint64_t t0 = rsp->clock_us ? rsp->clock_us() : 0;
-		salsa64_jpeg_run(jpeg, bus->rdram, bus->rdram_size, task.data_ptr, &r);
-		if (rsp->clock_us)
-			rsp->stats.jpeg_us += rsp->clock_us() - t0;
-		rsp->stats.jpeg++;
-		rsp->stats.jpeg_mb += r.macroblocks;
-		rsp->stats.jpeg_bad += r.bad;
+		if (rsp->jpeg_video)
+			salsa64_re2_run(jpeg, bus->rdram, bus->rdram_size, jtask.data_ptr, task.dram_stack,
+					task.dram_stack_size, &r);
+		else
+			salsa64_jpeg_run(jpeg, bus->rdram, bus->rdram_size, jtask.data_ptr, &r);
+		jpeg_account(rsp, &r, rsp->clock_us ? rsp->clock_us() - t0 : 0);
+		if (rsp->jpeg_video) {
+			rsp->stats.video++;
+			rsp->stats.video_k[rsp->jpeg_vkind]++;
+		} else {
+			rsp->stats.jpeg++;
+		}
 	} else {
 		rsp->stats.other++;
 	}

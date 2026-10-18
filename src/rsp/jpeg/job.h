@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * Salsa64 — una tarea JPEG como trabajo de lib/spukit para el SPE
- * (src/spu/jpeg), compartido con el backend del PPE
+ * Salsa64 — una tarea JPEG (o de video de Resident Evil 2) como trabajo de
+ * lib/spukit para el SPE (src/spu/jpeg), compartido con el backend del PPE
  * (src/platform/ps3/jpeg_spu.c).
  */
 #ifndef SALSA64_RSP_JPEG_JOB_H
@@ -20,9 +20,10 @@
 struct jpeg_job {
 	uint64_t rdram_ea;    /* la RDRAM emulada, alineada a 16 */
 	uint32_t rdram_size;
-	uint32_t data_ptr;    /* la estructura de la tarea (OSTask.data_ptr) */
+	uint32_t data_ptr;    /* la estructura de la tarea (OSTask.data_ptr; en las de video, ucode_data) */
 	uint32_t kind;        /* enum salsa64_jpeg_kind */
-	uint32_t pad[3];
+	uint32_t dram_stack, dram_stack_size;  /* de la tarea: el RESIZE de video arranca con ellos (re2.h) */
+	uint32_t pad;
 };
 
 /* Lo mismo que struct salsa64_jpeg_result, en palabras de 32 bits (el

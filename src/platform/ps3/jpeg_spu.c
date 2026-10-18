@@ -11,6 +11,7 @@
 #include "core/rom.h"
 #include "platform/ps3/log.h"
 #include "rsp/jpeg/jpeg.h"
+#include "rsp/jpeg/re2.h"
 #include "rsp/jpeg/selftest.h"
 #include "spu_jpeg_bin.h"
 
@@ -22,8 +23,10 @@ static void spu_start(void *ctx, const struct salsa64_task *task, unsigned kind)
 	memset(&s->job, 0, sizeof s->job);
 	s->job.rdram_ea = (uint64_t)(uintptr_t)s->bus->rdram;
 	s->job.rdram_size = s->bus->rdram_size;
-	s->job.data_ptr = task->data_ptr;
+	s->job.data_ptr = task->data_ptr;  /* en las de video, rsp.c ya puso ucode_data aquí */
 	s->job.kind = kind;
+	s->job.dram_stack = task->dram_stack;
+	s->job.dram_stack_size = task->dram_stack_size;
 	s->seq = spukit_post(s->worker, JPEG_JOB_TASK, &s->job, sizeof s->job);
 	s->pending = true;
 }
@@ -60,16 +63,31 @@ static void spu_finish(void *ctx, struct salsa64_jpeg_result *res)
 	const spukit_result *r = spukit_wait(s->worker, s->seq);
 	if (t0)
 		s->wait_us += sysGetSystemTime() - t0;
-	s->tasks++;
-	s->spu_ticks += r->ticks;
-	if (r->ticks > s->spu_max)
-		s->spu_max = r->ticks;
+	const enum salsa64_jpeg_kind kind = (enum salsa64_jpeg_kind)s->job.kind;
+	const bool video = salsa64_jpeg_is_re2(kind);
+	const unsigned vk = video ? (unsigned)(kind - SALSA64_JPEG_RE2_RESIZE) : 0;
+	if (video) {
+		s->v_tasks[vk]++;
+		s->v_ticks[vk] += r->ticks;
+		if (r->ticks > s->v_max[vk])
+			s->v_max[vk] = r->ticks;
+	} else {
+		s->tasks++;
+		s->spu_ticks += r->ticks;
+		if (r->ticks > s->spu_max)
+			s->spu_max = r->ticks;
+	}
 	if (r->error) {
 		/* Sin tocar la RDRAM: la hace el PPE (y marca los parámetros
 		 * malos, si lo eran). */
-		s->on_ppe++;
-		salsa64_jpeg_run((enum salsa64_jpeg_kind)s->job.kind, s->bus->rdram, s->bus->rdram_size, s->job.data_ptr,
-				 res);
+		if (video) {
+			s->v_on_ppe[vk]++;
+			salsa64_re2_run(kind, s->bus->rdram, s->bus->rdram_size, s->job.data_ptr, s->job.dram_stack,
+					s->job.dram_stack_size, res);
+		} else {
+			s->on_ppe++;
+			salsa64_jpeg_run(kind, s->bus->rdram, s->bus->rdram_size, s->job.data_ptr, res);
+		}
 	} else {
 		struct jpeg_job_result jr;
 		memcpy(&jr, r->data, sizeof jr);
@@ -80,7 +98,10 @@ static void spu_finish(void *ctx, struct salsa64_jpeg_result *res)
 		res->mb_out = jr.mb_out;
 		res->bad = jr.bad != 0;
 	}
-	s->macroblocks += res->macroblocks;
+	if (video)
+		s->v_rows[vk] += res->macroblocks;
+	else
+		s->macroblocks += res->macroblocks;
 }
 
 /* Al arrancar: las dos tareas de prueba en el SPE y en el PPE sobre copias
@@ -118,6 +139,44 @@ static bool check_tasks(spukit_worker *w, uint32_t *crc_spe, uint32_t *crc_ppe)
 	return ok && *crc_spe == *crc_ppe && *crc_ppe == JPEG_SELFTEST_CRC;
 }
 
+/* Lo mismo con las cuatro tareas de video (rsp/jpeg/selftest.c): una RDRAM de 64 KB para cada
+ * lado, el SPE y el PPE, y el CRC que fija la prueba del host. */
+static bool check_video(spukit_worker *w, uint32_t *crc_spe, uint32_t *crc_ppe)
+{
+	static uint8_t ram_spe[RE2_SELFTEST_RAM] __attribute__((aligned(128)));
+	static uint8_t ram_ppe[RE2_SELFTEST_RAM] __attribute__((aligned(128)));
+	static const enum salsa64_jpeg_kind kinds[RE2_SELFTEST_TASKS] = { SALSA64_JPEG_RE2_RESIZE, SALSA64_JPEG_RE2_DECODE,
+									  SALSA64_JPEG_RE2_FILL, SALSA64_JPEG_RE2_FILL };
+	bool ok = true;
+	re2_selftest_build(ram_spe, RE2_SELFTEST_SEED);
+	memcpy(ram_ppe, ram_spe, sizeof ram_ppe);
+	for (uint32_t t = 0; t < RE2_SELFTEST_TASKS; t++) {
+		struct jpeg_job job;
+		struct jpeg_job_result jr;
+		struct salsa64_jpeg_result res;
+		memset(&job, 0, sizeof job);
+		job.rdram_ea = (uint64_t)(uintptr_t)ram_spe;
+		job.rdram_size = RE2_SELFTEST_RAM;
+		job.data_ptr = re2_selftest_task(t);
+		job.kind = kinds[t];
+		job.dram_stack = RE2_SELFTEST_DRAM_STACK;
+		job.dram_stack_size = RE2_SELFTEST_DRAM_STACK_SIZE;
+		const spukit_result *r = spukit_wait(w, spukit_post(w, JPEG_JOB_TASK, &job, sizeof job));
+		memcpy(&jr, r->data, sizeof jr);
+		salsa64_re2_run(kinds[t], ram_ppe, RE2_SELFTEST_RAM, job.data_ptr, job.dram_stack, job.dram_stack_size, &res);
+		if (r->error || jr.bad || res.bad || jr.macroblocks != res.macroblocks || jr.out_bytes != res.out_bytes ||
+		    jr.macroblocks == 0) {
+			salsa64_log("JPEG: tarea de video de prueba %u: el SPE dio error %d, %u unidades (%u bytes, malos %u); el "
+				    "PPE %u (%u bytes, malos %u)", t, r->error, jr.macroblocks, jr.out_bytes, jr.bad,
+				    res.macroblocks, res.out_bytes, res.bad);
+			ok = false;
+		}
+	}
+	*crc_spe = salsa64_crc32(ram_spe, sizeof ram_spe);
+	*crc_ppe = salsa64_crc32(ram_ppe, sizeof ram_ppe);
+	return ok && *crc_spe == *crc_ppe && *crc_ppe == RE2_SELFTEST_CRC;
+}
+
 int salsa64_jpeg_spu_init(struct salsa64_jpeg_spu *s, struct salsa64_bus *bus, bool *same)
 {
 	memset(s, 0, sizeof *s);
@@ -140,6 +199,12 @@ int salsa64_jpeg_spu_init(struct salsa64_jpeg_spu *s, struct salsa64_bus *bus, b
 	salsa64_log("JPEG: tareas de prueba en el SPE: %s (SPE %08X, PPE %08X, host %08X; %.1f ms)",
 		    *same ? "iguales al PPE y al host" : "DIFIEREN", crc_spe, crc_ppe, JPEG_SELFTEST_CRC,
 		    (sysGetSystemTime() - t0) / 1e3);
+	t0 = sysGetSystemTime();
+	bool video_same = check_video(s->worker, &crc_spe, &crc_ppe);
+	salsa64_log("JPEG: tareas de video de prueba en el SPE: %s (SPE %08X, PPE %08X, host %08X; %.1f ms)",
+		    video_same ? "iguales al PPE y al host" : "DIFIEREN", crc_spe, crc_ppe, RE2_SELFTEST_CRC,
+		    (sysGetSystemTime() - t0) / 1e3);
+	*same = *same && video_same;
 	return 0;
 }
 

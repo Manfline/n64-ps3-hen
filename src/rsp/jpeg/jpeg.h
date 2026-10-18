@@ -17,10 +17,17 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* Variante del microcódigo (la reconoce core/rsp.c por el CRC-32). */
+/* Variante del microcódigo (la reconoce core/rsp.c por el CRC-32; los de
+ * video de Resident Evil 2, por la suma de los bytes del código: re2.h).
+ * Las tareas de video comparten el camino de las JPEG (hilo del CPU o
+ * backend en otro procesador, mismo resultado en filas) y traen sus
+ * parámetros en ucode_data en lugar de data_ptr. */
 enum salsa64_jpeg_kind {
 	SALSA64_JPEG_NONE = 0,
 	SALSA64_JPEG_OOT,     /* Zelda OoT y Pokémon Stadium 1 y 2: salida RGBA5551, sin reescalar Y/UV */
+	SALSA64_JPEG_RE2_RESIZE,  /* Resident Evil 2: cuadro RGB de 320 de ancho → RGBA5551 bilineal */
+	SALSA64_JPEG_RE2_DECODE,  /* Resident Evil 2: planos YCbCr 4:2:0 → RGBA8888 */
+	SALSA64_JPEG_RE2_FILL,    /* Resident Evil 2: promedio de dos cuadros RGBA8888 */
 };
 
 /* Bytes de entrada de un macrobloque ((modo + 4) bloques de 64
@@ -71,7 +78,7 @@ void salsa64_jpeg_qtable(const uint8_t *src, int16_t q[64]);
 void salsa64_jpeg_mb(uint32_t mode, const int16_t q[3][64], const uint8_t *in, uint8_t *out);
 
 /* Corre una tarea sobre la RDRAM (en el orden de bytes de la N64).
- * data_ptr: la estructura de la tarea. */
+ * data_ptr: la estructura de la tarea (para las de video, ucode_data). */
 void salsa64_jpeg_run(enum salsa64_jpeg_kind kind, uint8_t *rdram, uint32_t rdram_size, uint32_t data_ptr,
 		      struct salsa64_jpeg_result *res);
 
