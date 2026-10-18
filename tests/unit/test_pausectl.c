@@ -331,6 +331,54 @@ static void menu_exit_row(void)
 	CHECK_EQ(choose_exit(), PAUSECTL_EXIT);
 }
 
+/* Los dos «Reiniciar» preguntan siempre (también con confirmar = no), el
+ * cuadro dice cuál es, × devuelve su acción y ○ vuelve al juego sin hacer nada. */
+static enum pausectl_action choose_restart(int row)
+{
+	open_menu();
+	for (int i = 0; i < row; i++)
+		tap(B(DOWN));
+	CHECK_EQ(pc.menu_sel, row);
+	return tap(B(CROSS));
+}
+
+static void menu_restart_rows(void)
+{
+	CHECK_EQ(PM_RESET + 1, PM_RESTART);
+	CHECK_EQ(PM_RESTART + 1, PM_EXIT);
+	for (int confirm = 0; confirm < 2; confirm++) {
+		pausectl_init(&pc, confirm);
+		CHECK_EQ(choose_restart(PM_RESET), PAUSECTL_NONE);
+		CHECK(pc.dialog && !pc.menu);
+		CHECK_EQ(pc.dialog_for, PAUSECTL_RESET);
+		CHECK_EQ(pausectl_reasons(&pc), PAUSECTL_CONFIRM);
+		CHECK_EQ(game[0], 0);
+		CHECK_EQ(poll1(B(CROSS), false, true), PAUSECTL_RESET);
+		CHECK(!pc.dialog);
+		poll1(0, false, true);
+		CHECK_EQ(pausectl_reasons(&pc), 0);
+
+		pausectl_init(&pc, confirm);
+		CHECK_EQ(choose_restart(PM_RESTART), PAUSECTL_NONE);
+		CHECK(pc.dialog);
+		CHECK_EQ(pc.dialog_for, PAUSECTL_RESTART);
+		CHECK_EQ(poll1(B(CROSS), false, true), PAUSECTL_RESTART);
+		poll1(0, false, true);
+
+		/* ○ en el cuadro: el juego sigue y no se pide nada. */
+		pausectl_init(&pc, confirm);
+		choose_restart(PM_RESET);
+		CHECK_EQ(tap(B(CIRCLE)), PAUSECTL_NONE);
+		CHECK(!pc.dialog);
+		CHECK_EQ(pausectl_reasons(&pc), 0);
+	}
+	/* Salir sigue pidiendo su cuadro y devolviendo PAUSECTL_EXIT. */
+	pausectl_init(&pc, true);
+	CHECK_EQ(choose_exit(), PAUSECTL_NONE);
+	CHECK_EQ(pc.dialog_for, PAUSECTL_EXIT);
+	CHECK_EQ(poll1(B(CROSS), false, true), PAUSECTL_EXIT);
+}
+
 /* × en el cuadro sale; lo apretado no llega a lo siguiente (el menú de
  * Salsa64) hasta soltarse. */
 static void confirm_yes_exits(void)
@@ -579,6 +627,7 @@ void t_suite_pausectl(void)
 	RUN(menu_cheats_row);
 	RUN(menu_image_page);
 	RUN(menu_exit_row);
+	RUN(menu_restart_rows);
 	RUN(confirm_yes_exits);
 	RUN(combo_variants);
 	RUN(menu_survives_system_menu);

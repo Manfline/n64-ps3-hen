@@ -21,6 +21,7 @@ void pausectl_init(struct pausectl *p, bool confirm)
 {
 	memset(p, 0, sizeof *p);
 	p->confirm = confirm;
+	p->dialog_for = PAUSECTL_EXIT;
 	p->toggle = -1;
 	p->menu_do = -1;
 	p->image_do = -1;
@@ -163,19 +164,27 @@ enum pausectl_action pausectl_pads(struct pausectl *p, const uint32_t raw[PAUSEC
 				case PM_FPS:
 					p->menu_do = PM_FPS;
 					break;
+				case PM_RESET:
+				case PM_RESTART:
+					p->menu = false;
+					p->dialog = true;  /* siempre pregunta */
+					p->dialog_for = p->menu_sel == PM_RESET ? PAUSECTL_RESET : PAUSECTL_RESTART;
+					break;
 				case PM_EXIT:
 					p->menu = false;
-					if (p->confirm)
+					if (p->confirm) {
 						p->dialog = true;
-					else
+						p->dialog_for = PAUSECTL_EXIT;
+					} else {
 						act = PAUSECTL_EXIT;
+					}
 					break;
 				}
 			}
 		} else if (p->dialog) {
 			if (rise & BIT(SALSA64_DS3_CROSS)) {
 				p->dialog = false;
-				act = PAUSECTL_EXIT;
+				act = p->dialog_for;
 			} else if ((rise & BIT(SALSA64_DS3_CIRCLE)) || combo) {
 				p->dialog = false;
 			}

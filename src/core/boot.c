@@ -299,8 +299,33 @@ bool salsa64_boot_hle(struct salsa64_n64 *n64, int tv, struct salsa64_boot_info 
 	return salsa64_boot_hle_as(n64, tv, cic, info);
 }
 
+static bool boot_run(struct salsa64_n64 *n64, int tv, enum salsa64_cic cic, struct salsa64_boot_info *info,
+		     bool warm);
+
 bool salsa64_boot_hle_as(struct salsa64_n64 *n64, int tv, enum salsa64_cic cic,
 			 struct salsa64_boot_info *info)
+{
+	return boot_run(n64, tv, cic, info, false);
+}
+
+/*
+ * NMI del botón Reset: el PIF reinicia el CPU y el RCP, el IPL3 vuelve a
+ * copiar el programa de la ROM y salta a él con la RDRAM como estaba (n64brew.dev:
+ * «PIF-NUS», «Initial Program Load»). osResetType (0x8000030C) y $s5 valen 1
+ * para que libultra sepa que fue un reset suave.
+ */
+bool salsa64_boot_nmi(struct salsa64_n64 *n64, int tv, struct salsa64_boot_info *info)
+{
+	const struct salsa64_bus *bus = &n64->bus;
+	enum salsa64_cic cic = SALSA64_CIC_UNKNOWN;
+
+	if (bus->rom && bus->rom_size >= SALSA64_ROM_IPL3_END)
+		cic = salsa64_rom_cic(bus->rom);
+	return boot_run(n64, tv, cic, info, true);
+}
+
+static bool boot_run(struct salsa64_n64 *n64, int tv, enum salsa64_cic cic, struct salsa64_boot_info *info,
+		     bool warm)
 {
 	struct salsa64_boot_info scratch;
 	struct salsa64_bus *bus = &n64->bus;
@@ -312,17 +337,27 @@ bool salsa64_boot_hle_as(struct salsa64_n64 *n64, int tv, enum salsa64_cic cic,
 	if (!rom || bus->rom_size < SALSA64_ROM_IPL3_END)
 		return fail(info, "ROM ausente o de menos de 4 KB");
 
-	salsa64_n64_reset(n64);
+	if (warm)
+		salsa64_n64_reset_warm(n64);
+	else
+		salsa64_n64_reset(n64);
 	info->cic = cic;
 	info->tv = tv == SALSA64_BOOT_TV_AUTO ? salsa64_rom_tv_type(rom) : (enum salsa64_tv_type)tv;
 	boot_common(n64, rom);
 	salsa64_vi_set_tv(bus, info->tv);
+	uint32_t fields = bus->vi.fields;
 	salsa64_vi_start(bus);
+	if (warm)
+		n64->bus.vi.fields = fields;  /* el reset suave no hace retroceder el contador de campos */
 
 	/* Un IPL3 de Nintendo reconocido siempre copia 1 MB plano; si no, se
 	 * busca un ELF como hace el de libdragon. */
 	uint32_t elf = info->cic == SALSA64_CIC_UNKNOWN ? elf_find(bus) : 0;
 	bool ok = elf ? boot_elf(n64, elf, info) : boot_flat(n64, info);
+	if (ok && warm) {
+		salsa64_wr32(bus->rdram + 0x30C, 1);  /* osResetType = NMI */
+		n64->cpu.gpr[REG_S5] = 1;             /* el tipo de reset que el IPL2 pasa al IPL3 */
+	}
 	if (ok) {
 		salsa64_bus_rdram_written(bus, 0, bus->rdram_size);
 		salsa64_cpu_set_pc(&n64->cpu, salsa64_sx32(info->entry));

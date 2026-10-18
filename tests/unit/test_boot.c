@@ -371,6 +371,66 @@ static void rdram_regs_after_boot(void)
 	done();
 }
 
+/* Botón Reset: PRE_NMI en IP4 (Cause bit 12), NMI medio segundo después. */
+static void reset_button_prenmi(void)
+{
+	rom_header(0x80000400, 'E');
+	CHECK(boot(SALSA64_BOOT_TV_AUTO, NULL));
+	CHECK(!t_n64.nmi_pending);
+	CHECK(!(CPU->cause & 0x1000));
+	salsa64_n64_prenmi(&t_n64);
+	CHECK(t_n64.nmi_pending);
+	CHECK(CPU->cause & 0x1000);
+	CHECK_EQ(t_n64.nmi_at - CPU->cycles, SALSA64_NMI_DELAY_CYCLES);
+	CHECK(!salsa64_n64_nmi_due(&t_n64));
+	/* Una segunda pulsación no mueve el plazo. */
+	uint64_t at = t_n64.nmi_at;
+	CPU->cycles += 1000;
+	salsa64_n64_prenmi(&t_n64);
+	CHECK_EQ(t_n64.nmi_at, at);
+	CPU->cycles = at - 1;
+	CHECK(!salsa64_n64_nmi_due(&t_n64));
+	CPU->cycles = at;
+	CHECK(salsa64_n64_nmi_due(&t_n64));
+	done();
+}
+
+/* El NMI conserva la RDRAM (salvo lo que el IPL3 vuelve a copiar), deja
+ * osResetType = 1 y $s5 = 1, apaga las interrupciones del RCP y vuelve al
+ * punto de entrada. */
+static void reset_button_nmi(void)
+{
+	struct salsa64_boot_info info;
+	rom_header(0x80000400, 'E');
+	salsa64_wr32(rom + 0x1000, 0x12345678);  /* primera palabra del programa */
+	CHECK(boot(SALSA64_BOOT_TV_AUTO, &info));
+	CHECK_EQ(salsa64_rd32(t_n64.bus.rdram + 0x30C), 0);  /* arranque en frío */
+	CHECK_EQ(CPU->gpr[21], 0);
+	/* El juego estropea su propio código, deja datos y una interrupción pendiente. */
+	salsa64_wr32(t_n64.bus.rdram + 0x400, 0xDEADBEEF);
+	salsa64_wr32(t_n64.bus.rdram + 0x300000, 0xCAFEF00D);
+	salsa64_mi_raise(&t_n64.bus, SALSA64_IRQ_SI);
+	t_n64.bus.mi.mask = 0x3F;
+	CPU->cycles += 5000000;
+	salsa64_n64_prenmi(&t_n64);
+	CHECK(salsa64_boot_nmi(&t_n64, (int)info.tv, &info));
+	CHECK(!t_n64.nmi_pending);
+	CHECK(!(CPU->cause & 0x1000));
+	CHECK_EQ(salsa64_rd32(t_n64.bus.rdram + 0x400), 0x12345678);     /* el IPL3 vuelve a copiar el programa */
+	CHECK_EQ(salsa64_rd32(t_n64.bus.rdram + 0x300000), 0xCAFEF00D);  /* el resto de la RDRAM se conserva */
+	CHECK_EQ(salsa64_rd32(t_n64.bus.rdram + 0x30C), 1);              /* osResetType */
+	CHECK_EQ(CPU->gpr[21], 1);                                       /* $s5 */
+	CHECK_EQ(t_n64.bus.mi.intr, 0);
+	CHECK_EQ(t_n64.bus.mi.mask, 0);
+	CHECK_EQ(CPU->pc, 0xFFFFFFFF80000400ull);
+	CHECK_EQ(info.entry, 0x80000400);
+	/* Y un arranque en frío posterior vuelve a dejarlo en 0 y limpia la RDRAM. */
+	CHECK(boot(SALSA64_BOOT_TV_AUTO, NULL));
+	CHECK_EQ(salsa64_rd32(t_n64.bus.rdram + 0x30C), 0);
+	CHECK_EQ(salsa64_rd32(t_n64.bus.rdram + 0x300000), 0);
+	done();
+}
+
 void t_suite_boot(void)
 {
 	RUN(rom_byte_orders);
@@ -385,4 +445,6 @@ void t_suite_boot(void)
 	RUN(pi_bus_subword_reads);
 	RUN(pif_ram_subword_writes);
 	RUN(rdram_regs_after_boot);
+	RUN(reset_button_prenmi);
+	RUN(reset_button_nmi);
 }

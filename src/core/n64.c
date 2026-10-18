@@ -20,6 +20,8 @@ void salsa64_n64_init(struct salsa64_n64 *n64, uint8_t *rdram, uint32_t rdram_si
 	salsa64_rsp_init(&n64->bus, &n64->sched);
 	salsa64_ai_init(&n64->bus, &n64->sched);
 	salsa64_vi_start(&n64->bus);
+	n64->nmi_pending = false;
+	n64->nmi_at = 0;
 }
 
 void salsa64_n64_reset(struct salsa64_n64 *n64)
@@ -27,6 +29,33 @@ void salsa64_n64_reset(struct salsa64_n64 *n64)
 	salsa64_bus_reset(&n64->bus);
 	salsa64_cpu_reset(&n64->cpu);
 	salsa64_vi_start(&n64->bus);
+}
+
+void salsa64_n64_reset_warm(struct salsa64_n64 *n64)
+{
+	salsa64_bus_reset_warm(&n64->bus);  /* RCP, PIF y RSP (espera su tarea en vuelo); la RDRAM queda */
+	salsa64_cpu_reset(&n64->cpu);
+	/* El contador de campos sigue (quien mira los campos, como las pruebas
+	 * del host o los avisos, no ve el tiempo retroceder). */
+	uint32_t fields = n64->bus.vi.fields;
+	salsa64_vi_start(&n64->bus);
+	n64->bus.vi.fields = fields;
+	n64->nmi_pending = false;
+	n64->nmi_at = 0;
+}
+
+void salsa64_n64_prenmi(struct salsa64_n64 *n64)
+{
+	if (n64->nmi_pending)
+		return;
+	n64->nmi_pending = true;
+	n64->nmi_at = n64->cpu.cycles + SALSA64_NMI_DELAY_CYCLES;
+	salsa64_cpu_set_ip(&n64->cpu, SALSA64_IP_PRENMI, true);
+}
+
+bool salsa64_n64_nmi_due(const struct salsa64_n64 *n64)
+{
+	return n64->nmi_pending && n64->cpu.cycles >= n64->nmi_at;
 }
 
 void salsa64_n64_run(struct salsa64_n64 *n64, uint64_t cycles)

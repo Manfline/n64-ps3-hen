@@ -12,9 +12,12 @@
  *     cuenta como pulsación.
  *   - START + SELECT dentro del juego (los dos apretados y uno recién):
  *     abre el menú de pausa (PM_*): Continuar, Guardar estado, Cargar estado,
- *     Ranura (←→), Trucos, Imagen, Mostrar FPS y Salir. ↑↓ elige, × acepta, ○,
+ *     Ranura (←→), Trucos, Imagen, Mostrar FPS, Reiniciar (botón Reset),
+ *     Reiniciar desde cero y Salir. ↑↓ elige, × acepta, ○,
  *     START o START + SELECT otra vez lo cierran. «Salir» pide confirmación
- *     en el cuadro de abajo si `confirm`, y si no sale.
+ *     en el cuadro de abajo si `confirm`, y si no sale; los dos «Reiniciar»
+ *     preguntan siempre («¿Seguro?», dialog_for dice cuál) y devuelven
+ *     PAUSECTL_RESET o PAUSECTL_RESTART con ×.
  *   - «Imagen» abre su página (IM_*): Filtro, Densidad (solo con
  *     `image_density`: el CRT de máscara), Aspecto, Recorte, Escala
  *     interna e Interpolación (←→ o × cambian el valor: image_do con
@@ -49,12 +52,14 @@
 #define PAUSECTL_MENU    0x8u  /* menú de pausa (START + SELECT) */
 
 /* Filas del menú de pausa y de su página «Imagen». */
-enum { PM_RESUME, PM_SAVE, PM_LOAD, PM_SLOT, PM_CHEATS, PM_IMAGE, PM_FPS, PM_EXIT, PM_ROWS };
+enum { PM_RESUME, PM_SAVE, PM_LOAD, PM_SLOT, PM_CHEATS, PM_IMAGE, PM_FPS, PM_RESET, PM_RESTART, PM_EXIT, PM_ROWS };
 enum { IM_FILTER, IM_DENSITY, IM_ASPECT, IM_CROP, IM_SCALE, IM_INTERP, IM_SAVE, IM_BACK, IM_ROWS };
 
 enum pausectl_action {
 	PAUSECTL_NONE,
 	PAUSECTL_EXIT,  /* salir del juego (× en el cuadro, o el atajo sin confirmación) */
+	PAUSECTL_RESET,    /* «Reiniciar (botón Reset)»: × en su cuadro (PRE_NMI y NMI) */
+	PAUSECTL_RESTART,  /* «Reiniciar desde cero»: × en su cuadro (arranque en frío) */
 };
 
 struct pausectl {
@@ -63,6 +68,7 @@ struct pausectl {
 	bool drawing;      /* entre SYSUTIL_DRAW_BEGIN y SYSUTIL_DRAW_END */
 	bool intercepted;  /* en la última vuelta, los mandos eran del sistema */
 	bool dialog;       /* el cuadro está a la vista */
+	enum pausectl_action dialog_for;  /* qué confirma el cuadro: PAUSECTL_EXIT, _RESET o _RESTART */
 	/* Menú de pausa (START + SELECT): menu_sel es la fila elegida; menu_do, lo
 	 * que se pidió (PM_SAVE, PM_LOAD, PM_SLOT con menu_arg ±1, PM_FPS, o
 	 * PM_CHEATS sin trucos; -1 nada: quien llama lo lee y lo baja). */

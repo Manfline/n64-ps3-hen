@@ -1,5 +1,46 @@
 # Estado
 
+## 2026-10-18 — Reiniciar desde el menú de pausa (botón Reset y desde cero)
+
+- **Qué hay.** Dos filas nuevas en el menú de pausa, entre «Mostrar FPS» y «Salir», las dos con el
+  cuadro «¿Seguro?» (siempre, aunque «Confirmar al salir» esté en «No»; × sí, ○ no).
+  - **Reiniciar (botón Reset).** La emulación (hilo 0) da la interrupción de PRE_NMI (línea IP4 del
+    Cause, `salsa64_n64_prenmi`) al final del campo siguiente a la petición y, 0,5 s emulados después
+    (`SALSA64_NMI_DELAY_CYCLES`), pide el NMI como una petición de estado (`STATE_RESET`): con la
+    emulación quieta en el límite del campo, presentación llama a `salsa64_boot_nmi`
+    (`src/core/boot.c`). Reinicia CPU, RCP, PIF y RSP (`salsa64_rsp_reset` espera la tarea en vuelo
+    de la HLE, el LLE o el audio, sin dejar el SPE a medias), conserva la RDRAM, el IPL3 HLE vuelve
+    a copiar el megabyte del programa desde la ROM y deja `osResetType` (0x8000030C) y `$s5` en 1; el PC
+    vuelve a la entrada. El contador de campos no retrocede. Después se traducen y sueltan las colas
+    del RDP, el audio y los destinos del RSX, como al cargar un estado. El SPE 0 conserva su imagen:
+    si el juego carga otro microcódigo, cada tarea elige la suya como siempre. La caché del
+    recompilador se vacía por la reescritura de la RDRAM entera (`SALSA64_REC_FLUSH_RDRAM`) y por el
+    reset del CPU.
+  - **Reiniciar desde cero.** `run_game` se volvió un bucle sobre `run_game_once`: el menú pide
+    `GAME_RESTART`, el juego se cierra entero (`game_close`: partidas al disco, SPEs, caché del
+    recompilador, RSX) y se abre la misma ROM con `game_reset` y los mismos ajustes, sin pasar por la
+    lista (se conservan las banderas de prueba y la ranura de estados).
+- **Pruebas del host.** `tests/unit/test_boot.c` (PRE_NMI en el Cause bit 12 y plazo de 0,5 s,
+  segunda pulsación sin efecto, NMI con RDRAM conservada salvo el programa, `osResetType` = 1, `$s5` = 1,
+  MI sin interrupciones, arranque en frío posterior a 0) y `test_pausectl.c` (filas, cuadro siempre,
+  ○ cancela). `make test-host`: 653 pruebas; las dos fallidas (`menu_scan_dir` y `files` de cover)
+  fallan igual en rc4 en esta Mac. `tools/escenas-host.sh --comparar` contra rc4: 9 idénticas, 0
+  distintas. `salsa64-run --reset-at C` (PRE_NMI al final del campo C, NMI 30 campos después) y
+  `--nmi-at C` (NMI directo): SM64 (NMI en el campo 400 y PRE_NMI en el 380), Zelda OoT y GoldenEye
+  (NMI y PRE_NMI en el 700; con GoldenEye hasta el campo 1400, porque su arranque tarda ~600 campos)
+  vuelven a los logos (estrella y logo de Mario, logo «Nintendo 64» y logo de Nintendo) con los dos
+  tipos. Solo con el intérprete (Mac arm64): el recompilador y los SPE no se probaron aquí.
+- **Por validar en la PS3.** Paquete «Salsa64 reinicio» (SLSA00158, v0.2.7-65-g4c26c69-dirty):
+  `build/salsa64-reinicio/salsa64-reinicio.pkg`, 3 283 280 bytes, sha256
+  `fd09bf6bd99bafd18efff4740fba788c8dd1e07c0715f852cb6f7a55663497fe`, armado con `tools/build.sh -C
+  src/frontend PROGRAM=salsa64-reinicio "TITLE=Salsa64 reinicio" APPID=SLSA00158 pkg` (directorio de
+  build borrado antes). Probar con JIT, con `lle` y con la interpolación: «Reiniciar (botón Reset)»
+  en SM64 (logo), Zelda (logo «Nintendo 64», sin que se rompan texturas ni el audio), GoldenEye; y
+  «Reiniciar desde cero» con una partida guardada antes (que siga ahí), mirando en el log las líneas
+  «reinicio: PRE_NMI…», «reinicio: NMI en el campo…» y «reinicio desde cero…» y que el SPE 0 y los
+  demás arranquen sin avisos. No se vio el dibujo del menú (ni en RPCS3 ni en la consola): 10 filas
+  caben en 720 de alto (622 con el marco).
+
 ## 2026-10-18 — rc3: DPC continuado en la PS3 y el «LLE vacío» del censo era pantalla fija
 
 - **PS3 (por validar en la consola).** `src/rdp/rdp.c` (`translate`) no llama a

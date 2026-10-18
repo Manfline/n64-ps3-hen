@@ -55,6 +55,8 @@ struct salsa64_sched;
 #define SALSA64_CAUSE_BD       0x80000000u
 #define SALSA64_CAUSE_CE_SHIFT 28
 #define SALSA64_CAUSE_IP_SHIFT 8
+/* Línea IP4 del Cause (bit 12): la interrupción de PRE_NMI del botón Reset. */
+#define SALSA64_IP_PRENMI 4
 #define SALSA64_CAUSE_EXC(c)   (((c) >> 2) & 0x1F)
 
 /* FCR31 */
