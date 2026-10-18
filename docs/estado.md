@@ -1,12 +1,12 @@
 # Estado
 
-## 2026-10-17 — S2DEX suelto: Resident Evil 2 y Yoshi's Story (host y PPE; el SPE 0 no tiene sitio)
+## 2026-10-17 — S2DEX suelto: Resident Evil 2 y Yoshi's Story
 
 Las tareas gráficas con el texto «RSP Gfx ucode S2DEX» (Resident Evil 2: «fifo
 2.06»; Yoshi's Story: «S2DEX  1.06», sin «fifo») no tenían HLE: el log las
 contaba como «microcódigo desconocido» y la tarea terminaba sin dibujar. Ahora
-`src/rsp/gfx/s2dex.c` las interpreta, **en el host y en el PPE**. El SPE 0 no las
-hace todavía: no cabe (más abajo, con números).
+`src/rsp/gfx/s2dex.c` las interpreta en el host, el PPE y el SPE 0 (partición
+por familias, [spe0-familias.md](spe0-familias.md)).
 
 - **Antes.** Resident Evil 2 (`docs/pads/re2-intro.pad`, 3000 campos): 1821
   tareas con microcódigo desconocido y 608 gráficas; con 9000 campos, 14 281 tareas
@@ -80,28 +80,23 @@ hace todavía: no cabe (más abajo, con números).
   Yoshi, las monedas y la manzana, más una cuña de 30 × 15 píxeles que solo dibuja
   la LLE. Es el camino de F3DEX 1.x, no el de S2DEX, y no se investigó si es de la
   recarga a mitad de tarea o ya estaba.
-- **SPE 0: no cabe.** Con todo esto (tareas sueltas, objetos, el 3D que sigue
-  al `G_LOAD_UCODE`): texto 120 056 (antes 110 776, **+9280**), datos 800, bss
-  138 640 bytes; la pila tiene 2528 bytes libres y la cadena más honda usa 10 080
-  (`gfx_dl_f3d` 832 → `s2dex_run` 1264 → `obj_rectangle` 304 → `gfx_texrect` 464 →
-  `rect` 176 → `begin_prim` 736 → `gfx_combine` 2400 → …): holgura **−7552**
-  (mínimo 1536). Hay que quitar ~9,1 KB de texto, no 100 bytes: recortar el
-  código nuevo (`obj_rectangle` y `read_obj` usan divisiones de 64 bits, ~2 KB
-  entre las dos) no alcanza. `s2dex.c` solo ocupa 11 080 bytes (`s2dex_run` 5,1 KB con
-  `bg_draw` en línea). Por eso `GFX_S2DEX_FULL` (`rsp/gfx/hle.h`) solo existe en el
-  host y en el PPE y el SPE 0 compila el tramo S2DEX2 de siempre
-  (`SALSA64_SPU_S2DEX_FULL` lo incluye): su programa queda como antes
-  (texto 111 224, +448 por el reconocimiento de 1.x y el tramo genérico; datos 800 y bss 138 640 sin cambio; pila: 11 360 libres, cadena de 9584 bytes por `gfx_dl_f3dexbg` → `gfx_dl_f3dex2` → `gfx_dl_s2dex2` (marco de 1216) → `gfx_texrect` → …, holgura **1776**, mínimo 1536; al empezar eran 1840). Opciones, con números, para quien parta el SPE 0 por familias:
-  1. **Programa aparte para F3D + F3DEX + F3DEX2 + S2DEX** sin los de Rare y sin
-     F3DFLX (`f3ddkr` 3240 + `f3dexbg` 4416 + `f3dpd` 1344 + `flx` 864 = 9864
-     bytes de texto menos): con el resto igual, la pila tendría 12 392 bytes libres
-     contra 10 080 de cadena, **holgura +2312** (mínimo 1536). El programa de los
-     juegos de Rare y F-Zero X sale como el de hoy, con el tramo S2DEX2 chico (los
-     de Zelda y Kirby, que son F3DEX2, van en el primero).
-  2. **Todo en el PPE** (`gfx_ppe` en la carpeta de datos): ya funciona con este
-     código; más lento en 3D, y los dos juegos son sobre todo 2D.
-  3. **El tramo S2DEX en el PPE y el resto en el SPE:** el estado del RDP y la
-     TMEM no se comparten entre las dos instancias; no es fácil.
+- **SPE 0.** Con la partición por familias el S2DEX suelto es la parte
+  `GFX_PART_S2DEX` (`rsp/gfx/spe0.h`) y va en dos imágenes: la 0 (F3D, F3DEX 1.x
+  y los de Rare; Yoshi's Story mezcla en una tarea S2DEX 1.x y F3DEX 1.23) y la
+  1 (F3DEX2, F3DZEX2, S2DEX2 y F3DFLX; Resident Evil 2 mezcla S2DEX 2.x y
+  F3DEX2 entre tareas). `gfx_spe0_image`: `SALSA64_GBI_S2DEX1` → 0 y
+  `SALSA64_GBI_S2DEX` → 1. Sin esa partición no cabía: con todo en un programa,
+  texto 120 056 (+9280 sobre el de entonces), holgura de pila −7552 (mínimo
+  1536). Ahora: imagen 0 texto 103 688, bss 145 808, pila 11 616 libres, cadena
+  de 9872 (`gfx_dl_f3d` → `gfx_dl_s2dex1` → `s2dex_run` → `obj_*` → `gfx_texrect`
+  → …), **holgura 1744** (la más justa; mínimo 1536); imagen 1 texto 98 464,
+  holgura 7200; imagen 2 (Conker) texto 91 608, holgura 14 784. La aritmética de
+  64 bits de los objetos (`obj_rect`, `obj_rectangle`) se cambió a coma
+  flotante: el SPE no lleva la división de 64 bits (libgcc, ~5 KB). Una tarea
+  S2DEX que carga un microcódigo de otra imagen (S2DEX 1.x → F3DEX2, o 2.x →
+  F3D) no sigue en él (`GFX_HAS`); ninguno de los dos juegos lo hace.
+  `gfx_selftest_build` no tiene tarea S2DEX (la prueba de arranque compara el SPE
+  con el PPE solo para las demás familias).
 - **Pruebas.** Unitarias (`tools/build.sh test-host`): gfx 50 (3 nuevas: tarea
   S2DEX 2.x con LOADTXTR y OBJ_RECTANGLE, tarea S2DEX 1.x con la matriz y el
   sprite en dos triángulos —con D negativa—, y la tarea S2DEX 2.x que carga
@@ -111,22 +106,7 @@ hace todavía: no cabe (más abajo, con números).
   GoldenEye, Mario Kart 64 y Perfect Dark con `tools/escenas-host.sh --comparar`
   contra el ejecutor anterior: **8 imágenes idénticas** (md5 de la casa
   `5f67040f…` y de Kirby `4efd365c…`, iguales antes y después).
-- **Paquete de prueba** «Salsa64 S2DEX» (SLSA00145, v0.2.7-34-g20f48f5):
-  `build/salsa64-s2dex.pkg`, sha256
-  `4e809a7a27d482620834e42e24fa8020d82fa9eab6075ad1e10d5e78e754bac6`, armado con
-  `tools/build.sh -C src/frontend PROGRAM=salsa64-s2dex "TITLE=Salsa64 S2DEX"
-  APPID=SLSA00145 GFX_PPE=1 pkg` (el directorio de build borrado antes).
-  `GFX_PPE=1` (nuevo, `src/frontend/Makefile`) lo arma con la HLE gráfica en el
-  PPE sin pedirla con el archivo `gfx_ppe`: el log dice «HLE gráfica en el PPE».
-  Para probar en la PS3: abrir Resident Evil 2 (los logos, la intro y el video:
-  deben verse como con el paquete anterior, ahora con las copias a la pantalla
-  que hace S2DEX) y Yoshi's Story (la intro, el título, la selección de
-  archivo y un nivel; antes no dibujaba nada); mirar en el log las líneas de
-  tareas gráficas (0 «con microcódigo desconocido», 0 comandos sin implementar)
-  y los campos por segundo, que en el PPE serán menos que en el SPE: si Yoshi's
-  Story va lento, es el 3D en el PPE, no S2DEX.
-- **Falta.** Probarlo en la PS3 con `gfx_ppe` (el SPE 0 aún no hace S2DEX
-  suelto), y llegar a los menús de Resident Evil 2 (el host no pasa de las
+@@PAQUETE@@- **Falta.** Probarlo en la PS3 y llegar a los menús de Resident Evil 2 (el host no pasa de las
   cinemáticas): ahí estarán los G_OBJ_RECTANGLE y los demás objetos.
 ## 2026-10-17 — El SPE 0 por familias de microcódigos: tres imágenes
 

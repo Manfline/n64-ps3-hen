@@ -6,12 +6,11 @@ datos de compatibilidad.
 
 Las entradas antiguas conservan sus métodos de prueba como historia.
 
-## 2026-10-17 — S2DEX suelto: Resident Evil 2 y Yoshi's Story (host y PPE)
+## 2026-10-17 — S2DEX suelto: Resident Evil 2 y Yoshi's Story
 
 Las tareas con el texto «RSP Gfx ucode S2DEX» (Resident Evil 2, 2.06; Yoshi's
 Story, 1.06) no tenían HLE y terminaban sin dibujar. Ahora `src/rsp/gfx/s2dex.c`
-las interpreta en el host y en el PPE (`gfx_ppe`); el SPE 0 no tiene sitio
-todavía (detalle y opciones en [estado.md](estado.md)).
+las interpreta en el host, el PPE y el SPE 0 (detalle en [estado.md](estado.md)).
 
 | Juego | Antes (host, sin `--lle`) | Después | Contra el microcódigo real (`--lle=all`) |
 |---|---|---|---|
@@ -144,7 +143,7 @@ medición en el host.
 | Hydro Thunder | v1 | 5740 de 5740 | Sin eco en la prueba. |
 | Rush 2049 | v1 | 5728 de 5728 | Sin eco en la prueba. |
 | NBA Showtime | v1 | 5740 de 5740 | Sin eco en la prueba. |
-| Resident Evil 2 | v1 | 2856 de 2856 | Con eco (reverberación) en todas las subtramas. Además tiene HLE del video de las cinemáticas (arriba); los menús y el juego usan S2DEX sueltas, que desde el 2026-10-17 tienen HLE en el host y en el PPE (sección de arriba; en el SPE 0 aún no). |
+| Resident Evil 2 | v1 | 2856 de 2856 | Con eco (reverberación) en todas las subtramas. Además tiene HLE del video de las cinemáticas (arriba); los menús y el juego usan S2DEX sueltas, que desde el 2026-10-17 tienen HLE (sección de arriba). |
 | Star Wars: Rogue Squadron | v1 (otra compilación) | 5713 de 5713 | Con eco, con la envolvente del envío en rampa. Solo el audio: sus gráficos no tienen HLE. |
 | Indiana Jones | v2 | 5675 de 5724 (las otras 49, +1 en 2 de cada 8 muestras del canal izquierdo) | Solo el audio: sus gráficos no tienen HLE. |
 
@@ -190,7 +189,7 @@ asigna velocidad.
 | Super Mario Odyssey 64 | Inestable | — | Se registró una caída durante una prueba anterior de interpolación; queda pendiente una causa. |
 | Star Fox 64 | Jugable, con fallo gráfico | — | Las opciones del menú se repiten. |
 | Wave Race 64 | Fallo gráfico | — | Las texturas aparecen «como rayos desde el centro». |
-| Yoshi's Story | Dibuja en el host (antes, nada) | — | Sus tareas S2DEX 1.x sueltas tienen HLE en el host y en el PPE desde el 2026-10-17 (sección de arriba); en el SPE 0 aún no (hace falta `gfx_ppe`). Sin probar en la PS3. |
+| Yoshi's Story | Dibuja en el host (antes, nada) | — | Sus tareas S2DEX 1.x sueltas tienen HLE desde el 2026-10-17 (sección de arriba). Sin probar en la PS3. |
 | FIFA 99 | La intro funciona; el partido no arranca | — | Fallo conocido. |
 | Banjo-Kazooie | Jugable, con fallo gráfico | — | Las piezas del rompecabezas salen negras. |
 | Diddy Kong Racing | Jugable en el host | — | HLE de F3DDKR desde el 2026-10-17 (sección de arriba); sin probar en la PS3. |
