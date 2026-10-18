@@ -33,17 +33,20 @@
 
 #define SETS        3
 #define VTX_BYTES   (2u << 20)
-/* gfx_draw son 480 bytes: 1600 dibujos por tarea. El arena de texturas
- * casi no se usa con la caché (docs/memory-budget.md): le cede 256 KB y
- * CMD_INTERP. */
-#define CMD_BYTES   (768u << 10)
+/* gfx_draw son 496 bytes: 2600 dibujos por tarea. El arena de texturas
+ * casi no se usa con la caché (docs/memory-budget.md): le cede 256 KB, los
+ * de CMD_INTERP y el aumento de los comandos de 768 a 1280 KB (el jefe final
+ * de Conker dibuja ~1600 estrellas de un píxel, una por dibujo porque cada
+ * una trae su color primario, antes de su escenario; con 768 KB la lista se
+ * cortaba en la última estrella y salía solo el fondo negro). */
+#define CMD_BYTES   (1280u << 10)
 /* Con la interpolación la HLE pone también sus registros GFX_OP_VGROUP, en
- * hasta un tercio del búfer (gfx.h): ese tercio va de más (384 KB), y los
- * dibujos tienen el mismo lugar que sin ella (con 768 KB para los dos, una
+ * hasta un tercio del búfer (gfx.h): ese tercio va de más (640 KB), y los
+ * dibujos tienen el mismo lugar que sin ella (con 1280 KB para los dos, una
  * tarea pesada se cortaba y el juego recibía antes la interrupción del DP). */
 #define CMD_INTERP  (CMD_BYTES / (GFX_VGROUP_SHARE - 1))
 #define CMD_SET     (CMD_BYTES + CMD_INTERP)
-#define TEX_BYTES   ((4u << 20) - (256u << 10) - CMD_INTERP)
+#define TEX_BYTES   ((4u << 20) - (256u << 10) - CMD_INTERP - (CMD_BYTES - (768u << 10)))
 #define SET_BYTES   (VTX_BYTES + CMD_SET + TEX_BYTES)
 #define SETS_BYTES  (((SETS * SET_BYTES) + 0xFFFFFu) & ~0xFFFFFu)
 #define CACHE_BYTES (8u << 20)  /* caché de texturas (docs/memory-budget.md) */

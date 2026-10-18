@@ -658,6 +658,8 @@ void gchk_task_end(void)
 		for (unsigned i = 0; i < NSF; i++)
 			k->fld[i] += (sd >> i) & 1;
 	}
+	if (cls == GCHK_MINOR && getenv("SALSA64_GCHK_DUMP_MINOR"))
+		dump_images(k, &p);
 	if (cls == GCHK_DIFF) {
 		if (!k->first.set)
 			keep_example(&k->first, &p, kind);

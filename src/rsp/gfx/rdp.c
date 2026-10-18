@@ -1157,6 +1157,16 @@ void gfx_rdp_command(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	case G_RDPSETOTHERMODE:
 		g->oh = w0 & 0x00FFFFFF;
 		g->ol = w1;
+		/* La segunda generación sí sigue al RDP con el 0xEF, pero dentro de la tarea: la copia
+		 * arranca en 0 con cada una (Castlevania: el Z_SOURCE_SEL que el RDP traía de la tarea
+		 * anterior se colaba en el primer G_SETOTHERMODE_L y todo el escenario salía con una
+		 * sola z). */
+#if !defined(GFX_SPE0_IMG) || (GFX_SPE0_IMG != 0 && GFX_SPE0_IMG != 4)
+		/* No va en las imágenes 0 (primera generación: sp_om_shadow siempre vale 1) ni 4
+		 * (Indiana Jones no usa G_SETOTHERMODE parciales: sin lugar de pila de sobra). */
+		if (!g->sp_om_shadow)
+			g->sp_ol = g->ol;
+#endif
 		break;
 	case G_LOADTLUT: {
 		uint32_t t0 = gfx_io_clock();

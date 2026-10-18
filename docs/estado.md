@@ -1,5 +1,72 @@
 # Estado
 
+## 2026-10-18 (noche) — rc9: regresiones de la rc8 (Banjo-Tooie, DK64, Castlevania, Conker)
+
+Datos de la PS3 con la rc8 (`build/rc8-ps3/`: `salsa64.log`, `salsa64-cajas.log` y cinco cajas negras). Rama `rc8-regresiones`.
+
+- **Castlevania (caja 1380): arreglado en el host.** El LLE (`--lle=all --lle-check-gfx`
+  desde un estado en el campo 1350 de la pantalla de datos) dejó el `ol` final en
+  `0c184a50` y la HLE en `…54`: Z_SOURCE_SEL (bit 2 del othermode L) en 1. Su microcódigo es
+  F3DEX2 2.06 (segunda generación) y el RDP traía ese bit de la tarea anterior; la lista
+  solo manda `G_SETOTHERMODE_L` parciales (bits 3 a 31), así que el RSP real, cuya copia del
+  othermode arranca en 0 con cada tarea, lo deja en 0, y la HLE (que partía del `ol` del RDP)
+  lo conservaba: todos los dibujos con z del primitivo, orden de la lista, lo lejano tapaba lo
+  cercano (los textos del menú detrás del libro; con el arreglo la imagen de la HLE coincide con
+  la del LLE). Es lo mismo que Earthworm Jim 3D, pero en la segunda generación: ahora la copia
+  (`sp_ol`, 0 al cargar el microcódigo en cada tarea) es la base del `G_SETOTHERMODE_L` en las
+  dos, y en la segunda un `G_RDPSETOTHERMODE` crudo la sigue dentro de la tarea
+  (`src/rsp/gfx/dl.c`, `src/rsp/gfx/rdp.c`; la línea nueva no va en las imágenes 0 y 4 del
+  SPE 0: la 4 se quedó en 1520 de holgura de pila, mínimo 1536). Censo (`tools/censo-gfx.sh`,
+  12 juegos, antes y después): solo Castlevania cambia (204 → 151 tareas distintas, las
+  grandes de 78 a 68; quedan 93 «dibuja de más», sin mirar); DK64, Zelda,
+  Kirby, Smash, Paper Mario, Conker, RE2, Perfect Dark, Mario Tennis, Mario Party y Doom 64
+  idénticos número por número; `escenas-host.sh --comparar`: 9 imágenes idénticas; Banjo-Tooie
+  en el host (31 imágenes del campo 10700 al 11000): idénticas. Prueba nueva
+  `gfx_f3dex2_othermode_copy` en `tests/unit/test_gfx.c`.
+- **Conker, jefe final (caja 6421): causa encontrada, arreglo por tamaño.** Las dos tareas de
+  la caja tienen 1585 dibujos y solo estrellas: una por dibujo (un cuadrito de 1 × 1 con su
+  propio color primario, así que el estado cambia en cada una y no se juntan), 496 bytes cada
+  uno = 786 240 bytes, justo los 768 KB del búfer de comandos. El log de la PS3 lo dice: «tarea
+  mala … banderas del resultado 0x5» (FULLSYNC + CMD_FULL, 46 tareas cortadas de 96): la lista
+  se corta en la última estrella y el jefe (que va después) no llega. No es z ni orden ni una
+  regresión de la rc7/rc8. Arreglo: `CMD_BYTES` de 768 a 1280 KB (+640 KB de la interpolación),
+  sacados del arena de texturas (3,375 → 2,625 MB por juego de búferes; el total por juego no
+  cambia, `docs/memory-budget.md`). Cabe 2600 dibujos por tarea. **Por validar en la PS3**
+  (la tarea del SPE tardaba 42 ms con las estrellas solas: con el jefe encima irá a pocos
+  cuadros por segundo; fundir las estrellas, que solo difieren en un color constante, en un
+  solo dibujo con el color en los vértices lo arreglaría de raíz).
+- **DK64, transición circular (cajas 1668, 1790, 1859): causa sin encontrar.** Las tareas son
+  150 dibujos de 33 × 16 (una malla de 10 × 15 baldosas que leen el cuadro anterior de la
+  RDRAM, fuente `de 44c3d0/320`, a 304 con `tex_s = 0x8000`, perspectiva activa) y, armando
+  las texturas del volcado en una imagen, la captura es coherente («GAME 1» entero): los
+  datos de la HLE están bien. En el host el mismo efecto (pad de la sesión de la PS3, estado
+  en el campo 1612, LLE de 1612 a 1700) da 40 de 44 tareas idénticas y 4 «menores»: la HLE
+  dibuja un 6 % menos de píxeles que el LLE en la primera tarea girada (48 095 contra 51 028),
+  que son las grietas entre baldosas (el RDP, con AA_EN, escribe los píxeles de cobertura
+  parcial; el dibujo lleva prueba de alfa y `d->aa` lo excluye, y además las aristas con AA
+  están apagadas por omisión en la PS3). Ninguna de las dos cosas explica un cuadriculado
+  entero; falta ver el cuadro de la PS3. El contador «texturas desde un destino» queda en 0
+  durante el efecto (las baldosas se decodifican de la RDRAM, no del RSX).
+- **Banjo-Tooie: sin causa en el código; hace falta una caja negra.** El resultado de la HLE
+  en el host es idéntico entre la rc6 y la rc8 (31 imágenes del campo 10700 al 11000), y en el
+  log de la rc8 los mecanismos de la rc7b2/b3 que se nombraron no se activan en Tooie: 0
+  destinos cebados desde la RDRAM, 0 rectángulos de copia del PPE, 0 z cargadas, 0 borrados
+  enteros puestos, 0 líneas de la guarda sin escribir. Lo único distinto es que la emulación
+  espera cada tarea 11–17 ms a una copia del RSX a la RDRAM (150 de 150 tareas por ventana,
+  16 ms por campo de emulación, «ritmo 0,3 ms»: sin holgura, el ritmo del juego tiembla): el
+  log (trace `fb tarea 963`) dice que es una color image de **8 bits** en 0x3ab540 con 304 de
+  ancho, propiedad del CPU, que se pide cada tarea y se espera siempre (`big8`). Esa imagen
+  nunca aparece en el host (el respaldo usado en el host no llega a esa escena). Para seguir:
+  una caja negra de Tooie con la cámara moviéndose (SELECT + L2) y, si se puede, la corrida
+  con `sin-guarda-cpu` en `/dev_hdd0/salsa64`.
+- **Herramienta.** `SALSA64_GCHK_DUMP_MINOR=1` hace que `--lle-check-gfx` también guarde las
+  imágenes (LLE, HLE y diferencia) de las tareas «menores», no solo de las distintas.
+- **Pruebas y paquete.** `tools/build.sh test-host`: 658 pruebas, 0 fallidas. Paquete «Salsa64
+  rc9» (SLSA00168): `build/salsa64-rc9/salsa64-rc9.pkg`,
+  3 299 792 bytes, sha256 `aac81b6b468226b62db605f0e4f07dd62d56d3b04d696f0e9b73d8bf0d9fbf5c`
+  (v0.2.7-95-gf86d985 más estos cambios; holguras de pila de las imágenes del SPE 0: 1632,
+  6560, 14016, 2832 y 1648 bytes, mínimo 1536).
+
 ## 2026-10-18 — rc7b3: Resident Evil 2 lento en la sala de la estatua y las letras del menú de opciones
 
 Resultado de la rc7b2 en la PS3 (`build/rc7b2-ps3/`): «YOU DIED» y la sala de

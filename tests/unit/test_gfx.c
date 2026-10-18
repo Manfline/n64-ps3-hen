@@ -1653,6 +1653,26 @@ static bool bg_tex_is(int n, uint32_t x, uint32_t y, uint32_t ix, uint32_t iy)
 	return t[0] == (r << 3 | r >> 2) && t[1] == (g << 3 | g >> 2) && t[2] == (b << 3 | b >> 2) && t[3] == 0xFF;
 }
 
+/* La copia del othermode L del microcódigo de la segunda generación arranca en 0
+ * con cada tarea (sus datos): el RDP trae de la tarea anterior un Z_SOURCE_SEL en
+ * 1 y el primer G_SETOTHERMODE_L (render mode, bits 3 a 31) no lo hereda
+ * (Castlevania: todo el escenario salía con una sola z y lo lejano tapaba lo
+ * cercano). Un G_RDPSETOTHERMODE dentro de la tarea sí la actualiza. */
+static void gfx_f3dex2_othermode_copy(void)
+{
+	start();
+	gs.ol = 0x0c184a54u;  /* lo que dejó la tarea anterior: Z_SOURCE_SEL */
+	dl(0xE2000000 | 0u << 8 | 28, 0x0c192048u);  /* G_SETOTHERMODE_L, 3, 29 */
+	run();
+	CHECK_EQ(gs.ol, 0x0c192048u);
+	start();
+	gs.ol = 0x0c184a54u;
+	dl(0xEF000000, 0x0f0a4004u);                  /* G_RDPSETOTHERMODE crudo: Z_SOURCE_SEL */
+	dl(0xE2000000 | 0u << 8 | 28, 0x00553038u);
+	run();
+	CHECK_EQ(gs.ol, 0x0055303cu);                 /* sigue al RDP dentro de la tarea */
+}
+
 /* Room_DrawBackground2D de Zelda OoT: S2DEX2 copia una imagen RGBA16 sin
  * escala al marco con G_BG_COPY; la lista vuelve a F3DEX2 después. */
 static void gfx_s2dex_bg_copy(void)
@@ -2867,4 +2887,5 @@ void t_suite_gfx(void)
 	RUN(gfx_tile_mirror_once);
 	RUN(gfx_tile_clamp_mask_period);
 	RUN(gfx_tri_no_persp_half);
+	RUN(gfx_f3dex2_othermode_copy);
 }

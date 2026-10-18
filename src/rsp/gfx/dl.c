@@ -56,8 +56,10 @@ void gfx_ucode_reload(struct gfx_state *g, uint32_t text, int gen, bool nonear, 
 	 * copia del othermode L, que arranca en 0 con cada tarea (sus datos); la segunda (F3DEX2,
 	 * F3DZEX) la actualiza con él y sigue al RDP (visto con el LLE de Earthworm Jim 3D y de
 	 * Zelda: con la copia de F3DEX2 sin seguir al RDP, 419 de 447 tareas del título salían
-	 * distintas). Solo se lleva la parte L: con la H como el RDP queda solo el bit de
-	 * dither de 1 tarea de 1286 distinta del LLE. */
+	 * distintas). En las dos generaciones la copia arranca en 0 con cada tarea (no hereda
+	 * del RDP lo que dejó la anterior: Castlevania, visto con su LLE). Solo se lleva la
+	 * parte L: con la H como el RDP queda solo el bit de dither de 1 tarea de 1286 distinta
+	 * del LLE. */
 	g->sp_om_shadow = gen == 1;
 	g->sp_ol = 0;
 	g->dirty = true;
@@ -338,7 +340,7 @@ void gfx_sp_othermode(struct gfx_state *g, bool high, int shift, int len, uint32
 	 * G_SETOTHERMODE (Earthworm Jim 3D: un 0xEF de relleno deja Z_SOURCE_SEL en 1
 	 * y el RSP real lo apaga al fijar el modo de render). */
 	uint32_t *mode = high ? &g->oh : &g->ol;
-	uint32_t base = high ? g->oh : g->sp_om_shadow ? g->sp_ol : g->ol;
+	uint32_t base = high ? g->oh : g->sp_ol;
 	uint32_t v = (base & ~mask) | (data & mask);
 	if (v != *mode)
 		g->dirty = true;
