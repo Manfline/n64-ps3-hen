@@ -42,9 +42,18 @@ SPUKIT  := 1
 # src/spu/jpeg, y en el mismo SPE las tres tareas de video de Resident Evil 2
 # (re2.c). CRT con cable (dos SPEs, con `filtros-spe`): la señal y la
 # decodificación de S-Video y compuesto (src/spu/crt).
-SPU_PROGS := gfx audio rsp jpeg crt lz
-gfx_SRCS  := $(R)/src/spu/gfx/main.c $(R)/src/spu/gfx/io_spu.c \
-             $(filter-out %/io_mem.c %/sync.c %/state.c,$(wildcard $(R)/src/rsp/gfx/*.c))
+# La HLE gráfica del SPE 0 va en tres imágenes desde las mismas fuentes, cada
+# una con sus familias de microcódigos (src/rsp/gfx/spe0.h,
+# docs/spe0-familias.md): gfx0 la primera generación (F3D, F3DEX 1.x y las
+# variantes de Rare sobre F3D), gfx1 la segunda de Nintendo (F3DEX2, F3DZEX2,
+# S2DEX2 y F3DFLX en la tarea) y gfx2 la de Conker (F3DEXBG y el resto de la
+# segunda). Cada una con sus objetos en obj/spu-gfx<n>.
+GFX_IMAGES := 0 1 2
+SPU_PROGS := $(addprefix gfx,$(GFX_IMAGES)) audio rsp jpeg crt lz
+GFX_SPU_SRCS := $(R)/src/spu/gfx/main.c $(R)/src/spu/gfx/io_spu.c \
+                $(filter-out %/io_mem.c %/sync.c %/state.c %/selftest.c,$(wildcard $(R)/src/rsp/gfx/*.c))
+$(foreach i,$(GFX_IMAGES),$(eval gfx$(i)_SRCS := $(GFX_SPU_SRCS)) $(eval gfx$(i)_OBJDIR := spu-gfx$(i)) \
+	$(eval gfx$(i)_CFLAGS := -DGFX_SPE0_IMG=$(i)))
 audio_SRCS := $(R)/src/spu/audio/main.c $(R)/src/spu/audio/io_spu.c \
               $(filter-out %/io_mem.c %/sync.c %/selftest.c,$(wildcard $(R)/src/rsp/audio/*.c))
 rsp_SRCS   := $(R)/src/spu/rsp/main.c $(R)/src/spu/rsp/io_spu.c \
@@ -53,14 +62,17 @@ jpeg_SRCS  := $(R)/src/spu/jpeg/main.c $(R)/src/rsp/jpeg/jpeg.c $(R)/src/rsp/jpe
 crt_SRCS   := $(R)/src/spu/crt/main.c
 # Compresor LZ de lib/spukit (estados guardados, docs/estados.md): bloques de 64 KB.
 lz_SRCS    := $(R)/lib/spukit/spu/lz.c
-# Pila del SPE 0 (src/spu/gfx/main.c): el enlace falla si entre la cadena de
-# llamadas más honda y el final del programa quedan menos de 1,5 KB. Las
-# variantes de Rare se llaman por puntero desde su familia; lo demás que
-# llama por puntero es el arranque y la salida de la biblioteca de C.
-gfx_STACK_MIN  := 1536
-gfx_STACK_ARGS := --edge gfx_dl_f3d:pd_command --edge gfx_dl_f3d:dkr_command --edge gfx_dl_f3dex2:cbfd_command \
-                  --ignore exit --ignore __call_exitprocs --ignore __do_global_ctors_aux \
+# Pila del SPE 0 (src/spu/gfx/main.c), en cada imagen: el enlace falla si
+# entre la cadena de llamadas más honda y el final del programa quedan menos
+# de 1,5 KB. Las variantes de Rare se llaman por puntero desde su familia (en
+# gfx1, gfx_dl_f3dex2 solo recibe NULL); lo demás que llama por puntero es el
+# arranque y la salida de la biblioteca de C.
+GFX_STACK_LIBC := --ignore exit --ignore __call_exitprocs --ignore __do_global_ctors_aux \
                   --ignore __do_global_dtors_aux --ignore register_tm_clones --ignore deregister_tm_clones
+$(foreach i,$(GFX_IMAGES),$(eval gfx$(i)_STACK_MIN := 1536))
+gfx0_STACK_ARGS := --edge gfx_dl_f3d:pd_command --edge gfx_dl_f3d:dkr_command $(GFX_STACK_LIBC)
+gfx1_STACK_ARGS := --ignore gfx_dl_f3dex2 $(GFX_STACK_LIBC)
+gfx2_STACK_ARGS := --edge gfx_dl_f3dex2:cbfd_command $(GFX_STACK_LIBC)
 CFLAGS  := -ffp-contract=off -fno-math-errno
 LIBS    := -lrsx -lgcm_sys -laudio -lio -lsysutil -lhttp -lhttputil -lssl -lnetctl -lnet -lsysmodule -lrt -llv2 -lm
 # Caché del recompilador al final del segmento de texto (docs/rec-ppe.md).
@@ -100,34 +112,37 @@ $(OBJ)/crt_tube_lines_a4.fpo $(OBJ)/crt_tube_lines_a8.fpo $(OBJ)/crt_tube_lines_
 $(OBJ)/crt_tube_lines_b8.fpo $(OBJ)/crt_trinitron_lines_a.fpo \
 $(OBJ)/crt_trinitron_lines_b.fpo: filters/crt_tube_lines.cgh
 
+# Un objeto de src/rsp/gfx en todas las imágenes del SPE 0.
+GFX_OBJ = $(foreach i,$(GFX_IMAGES),$(OBJ)/spu-gfx$(i)/src/rsp/gfx/$(1))
+
 # El combiner, con -Os en el SPE 0: 5,6 KB menos de código (de 16,8 a 11,2
 # KB) que quedan para la pila. Corre una vez por estado de dibujo, no por
 # píxel ni por vértice.
-$(OBJ)/spu/src/rsp/gfx/combine.c.o: SPU_CFLAGS += -Os
+$(call GFX_OBJ,combine.c.o): SPU_CFLAGS += -Os
 # Los fondos de S2DEX (salas prerrenderizadas de Zelda OoT), también: 0,9 KB
 # menos de código y 112 bytes menos de marco en la cadena más honda de la
 # pila; se dibujan en unas decenas de tiras por cuadro.
-$(OBJ)/spu/src/rsp/gfx/s2dex.c.o: SPU_CFLAGS += -Os
+$(call GFX_OBJ,s2dex.c.o): SPU_CFLAGS += -Os
 # El despacho de comandos de Perfect Dark (f3dpd.c; los vértices y las
 # texturas van en geom.c y tmem.c), también: lo que ahorra paga el TEXRECT
 # dentro del tramo S2DEX (el cielo de Kirby 64).
-$(OBJ)/spu/src/rsp/gfx/f3dpd.c.o: SPU_CFLAGS += -Os
+$(call GFX_OBJ,f3dpd.c.o): SPU_CFLAGS += -Os
 # Lo de Diddy Kong Racing (f3ddkr.c: matrices, vértices y triángulos por DMA),
 # también: solo corre con ese juego.
-$(OBJ)/spu/src/rsp/gfx/f3ddkr.c.o: SPU_CFLAGS += -Os
+$(call GFX_OBJ,f3ddkr.c.o): SPU_CFLAGS += -Os
 # Lo de la interpolación de cuadros (vgroup.c), también: no le quita local
 # store ni pila a la HLE.
-$(OBJ)/spu/src/rsp/gfx/vgroup.c.o: SPU_CFLAGS += -Os
+$(call GFX_OBJ,vgroup.c.o): SPU_CFLAGS += -Os
 # Lo de F3DFLX, el microcódigo de F-Zero X (flx.c), también: solo corre con
 # ese juego. Y el recorrido de la display list (dl.c) vuelve a -Os para
 # pagarlo (−370 bytes, docs/estado.md 2026-10-13): de lo suyo solo
 # gfx_dl_next corre por comando, y es corta.
-$(OBJ)/spu/src/rsp/gfx/flx.c.o $(OBJ)/spu/src/rsp/gfx/dl.c.o: SPU_CFLAGS += -Os
+$(call GFX_OBJ,flx.c.o) $(call GFX_OBJ,dl.c.o): SPU_CFLAGS += -Os
 # La caché de texturas (texcache.c), también: ~1,2 KB de código para la pila
 # al juntar F3DFLX con el S2DEX de las salas de Zelda (la holgura bajaba a
 # 1328); identificar texturas cuesta 0,01–0,02 ms más por tarea.
-$(OBJ)/spu/src/rsp/gfx/texcache.c.o: SPU_CFLAGS += -Os
+$(call GFX_OBJ,texcache.c.o): SPU_CFLAGS += -Os
 # make no ve un cambio de banderas: que se recompilen si cambia este archivo.
-$(OBJ)/spu/src/rsp/gfx/combine.c.o $(OBJ)/spu/src/rsp/gfx/s2dex.c.o $(OBJ)/spu/src/rsp/gfx/f3dpd.c.o \
-$(OBJ)/spu/src/rsp/gfx/f3ddkr.c.o $(OBJ)/spu/src/rsp/gfx/vgroup.c.o $(OBJ)/spu/src/rsp/gfx/flx.c.o $(OBJ)/spu/src/rsp/gfx/dl.c.o \
-$(OBJ)/spu/src/rsp/gfx/texcache.c.o: Makefile
+$(call GFX_OBJ,combine.c.o) $(call GFX_OBJ,s2dex.c.o) $(call GFX_OBJ,f3dpd.c.o) \
+$(call GFX_OBJ,f3ddkr.c.o) $(call GFX_OBJ,vgroup.c.o) $(call GFX_OBJ,flx.c.o) $(call GFX_OBJ,dl.c.o) \
+$(call GFX_OBJ,texcache.c.o): Makefile
