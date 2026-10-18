@@ -92,6 +92,11 @@ static void bg_write(void *arg)
 	bg.finished = 1;
 }
 
+uint32_t states_reserved(void)
+{
+	return bg.ready ? bg.ram_cap + SALSA64_STATE_SECTIONS : 0;
+}
+
 bool states_init(uint32_t rdram_size)
 {
 	if (bg.ready)

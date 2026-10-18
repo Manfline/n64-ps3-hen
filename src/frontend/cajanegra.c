@@ -130,6 +130,11 @@ bool cajanegra_init(const struct salsa64_bus *bus)
 	return true;
 }
 
+uint32_t cajanegra_reserved(void)
+{
+	return cj.mem ? (cj.mb << 20) + BB_SLACK : 0;
+}
+
 void cajanegra_shutdown(uint64_t wait_us)
 {
 	if (!cj.on && !cj.mem)

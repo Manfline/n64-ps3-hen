@@ -231,6 +231,11 @@ void salsa64_rdp_fbfx(int level);
  * o RSXKIT_ENOMEM. */
 enum salsa64_interp { SALSA64_INTERP_OFF, SALSA64_INTERP_FIELDS, SALSA64_INTERP_FIXED };
 int salsa64_rdp_interp(int mode, float t);
+/* Suelta las tablas de la interpolación (al cerrar el juego; interp_apply las
+ * vuelve a pedir al abrir el siguiente si sigue encendida) y dice cuánto
+ * tienen reservado (0 si no hay). */
+void salsa64_rdp_interp_release(void);
+size_t salsa64_rdp_interp_bytes(void);
 /* Interruptor: en los dibujos opacos con AA_EN, las aristas como líneas
  * antes de los triángulos (rsxkit_draw.edges): tapan las grietas de las
  * uniones en T que el RDP tapa con la cobertura. Apagado por omisión: en
