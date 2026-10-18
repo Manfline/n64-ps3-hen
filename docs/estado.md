@@ -31,6 +31,13 @@ regla para agregar un microcódigo).
 - **RPCS3:** con la pila libre llena de un patrón (para medirla), su
   recompilador de SPU ejecutaba mal la imagen de F3D en algunos builds (bien
   con su intérprete): la pila solo se llena con el archivo `spe0-pila`.
+- **Pruebas:** `tools/build.sh test-host` 613/613; `tools/test-roms.sh` rc 0;
+  `tools/build.sh` rc 0; `tools/test-rec.sh` rc 1 solo por `menu_scan_dir`
+  bajo qemu (nemu64 433, fastmem 440); RPCS3: `spe0-todas`, gfxtest y sus
+  variantes F3D y F3DEX, vitest, audiotest y el menú en verde.
+- **Paquete de prueba** «Salsa64 SPE0» (SLSA00146, v0.2.7-32-gb3f2dc2):
+  `tools/build.sh -C src/frontend PROGRAM=salsa64-spe0 "TITLE=Salsa64 SPE0"
+  APPID=SLSA00146 pkg` con el directorio de build borrado antes.
 - **Falta:** la PS3 real con el paquete «Salsa64 SPE0» (SLSA00146): qué imagen
   carga cada juego, el tiempo de la carga y de un cambio (`spe0-todas` hace
   los tres al arrancar) y el tiempo del SPE 0 por tarea con la caché en 1024.

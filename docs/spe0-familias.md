@@ -279,7 +279,7 @@ En todas, 0 cambios de imagen.
 
 **Pruebas:** `tools/build.sh test-host` 613/613 (las 3 nuevas de
 `test_gfx_selftest.c`); `tools/test-roms.sh` rc 0; `tools/build.sh` (todos
-los programas) rc 0; `tools/test-rec.sh` TESTREC.
+los programas) rc 0; `tools/test-rec.sh` rc 1 solo por `menu_scan_dir` bajo qemu (como en main): 613 pruebas en ppc64 en los cinco modos, nemu64-test en 433 fallas (pin+eager también), fastmem en 440, vitest, estados y perfilado en verde.
 
 **RPCS3** (no concluyente para tiempos): con el archivo `spe0-todas` las tres imágenes
 arrancan y sus tareas de prueba dan lo mismo que el PPE, y el cambio entre
