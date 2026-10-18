@@ -51,8 +51,8 @@ hacen el trabajo vectorial (RSP, audio, posprocesado) y el RSX dibuja.
   GLideN64 (GPLv2, sin «o posterior») para los microcódigos que solo existen
   ahí (Factor 5, Acclaim, ZSortBOSS, F3DAM…). Los archivos tomados conservan
   su aviso y `GPL-2.0-only`, los propios siguen en GPLv2 o posterior y el
-  binario combinado se distribuye como GPLv2 (README.md). El primero fue
-  `src/rsp/gfx/f5rogue.c` (2026-10-18). Nunca en `lib/rsxkit/` ni `lib/spukit/`.
+  binario combinado se distribuye como GPLv2 (README.md). Los primeros fueron
+  `src/rsp/gfx/f5rogue.c` y `src/rsp/gfx/f5indy.c` (2026-10-18). Nunca en `lib/rsxkit/` ni `lib/spukit/`.
 - `.gitignore` excluye `*.z64`, `*.n64`, `*.v64`, `*.rom` salvo
   `tests/roms/homebrew/`.
 
