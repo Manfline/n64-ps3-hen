@@ -63,7 +63,7 @@
 #define GFX_SPE0_TC_1 1024
 #define GFX_SPE0_TC_2 1024
 #define GFX_SPE0_TC_3 1024
-#define GFX_SPE0_TC_4 224
+#define GFX_SPE0_TC_4 220
 
 #define GFX_SPE0_CAT_(a, b) a##b
 #define GFX_SPE0_CAT(a, b) GFX_SPE0_CAT_(a, b)

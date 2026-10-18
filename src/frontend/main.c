@@ -1393,6 +1393,43 @@ static uint8_t *read_rom_file(const char *path, uint8_t *buf, uint32_t cap, uint
 	return dst;
 }
 
+/* CRC-32 de cada megabyte de la ROM tal como está en memoria (ya en orden z64), para el log: si
+ * un juego lee datos malos del cartucho en la PS3 (Killer Instinct e Indiana Jones se quedaban
+ * descomprimiendo o dibujando basura tras cargar un nivel y no en el host), comparar con los de
+ * la misma ROM en la Mac dice si el archivo de la consola o su lectura a memoria cambió algo.
+ * Con tabla de 256 entradas: ~0,15 s para 32 MB. */
+static void log_rom_crcs(const uint8_t *rom, uint32_t size)
+{
+	static uint32_t tab[256];
+	if (!tab[1]) {
+		for (uint32_t i = 0; i < 256; i++) {
+			uint32_t c = i;
+			for (int k = 0; k < 8; k++)
+				c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+			tab[i] = c;
+		}
+	}
+	uint32_t all = 0xFFFFFFFFu;
+	char line[600];
+	unsigned n = 0, first = 0;
+	line[0] = '\0';
+	for (uint32_t mb = 0; mb < size; mb += 1u << 20) {
+		uint32_t end = size - mb < (1u << 20) ? size : mb + (1u << 20), c = 0xFFFFFFFFu;
+		for (uint32_t i = mb; i < end; i++) {
+			c = tab[(c ^ rom[i]) & 0xFF] ^ (c >> 8);
+			all = tab[(all ^ rom[i]) & 0xFF] ^ (all >> 8);
+		}
+		n += (unsigned)snprintf(line + n, sizeof line - n, " %08X", ~c);
+		if (n > sizeof line - 24 || end == size) {
+			salsa64_log("ROM: CRC-32 por megabyte desde el %u:%s", first, line);
+			line[0] = '\0';
+			n = 0;
+			first = (mb >> 20) + 1;
+		}
+	}
+	salsa64_log("ROM: CRC-32 de los %u bytes en memoria: %08X", size, ~all);
+}
+
 static uint8_t *embedded(const uint8_t *bin, uint32_t bin_size, uint32_t *size)
 {
 	uint8_t *buf = memalign(128, bin_size);
@@ -4486,6 +4523,8 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	salsa64_log("ROM %s \"%s\", %u bytes, %s, entrada 0x%08X, TV %s", source, title, rom_size,
 		    boot_info.kind == SALSA64_BOOT_ELF ? "ELF (IPL3 libre)" : "carga plana", boot_info.entry,
 		    boot_info.tv == SALSA64_TV_PAL ? "PAL" : boot_info.tv == SALSA64_TV_MPAL ? "MPAL" : "NTSC");
+	if (!(selftest_on || gfxtest_on || audiotest_on))
+		log_rom_crcs(rom, rom_size);
 	savefile_open(&save_file, &save, &n64.bus, rom, SAVES_DIR, SAVE_CFG, SALSA64_SAVE_AUTO, salsa64_log);
 	{
 		/* Un Controller Pak en cada control, salvo que el juego pida «Ninguno» (en las pruebas, ninguno). */

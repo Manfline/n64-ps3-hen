@@ -92,6 +92,31 @@ unsigned cuelgue_state_text(const struct salsa64_n64 *n64, char *out, unsigned s
 	     (unsigned long long)cpu->cur_pc, (unsigned long long)cpu->gpr[31], (unsigned long long)cpu->gpr[29],
 	     cpu->status, cpu->cause, (uint32_t)((cpu->cycles >> 1) + cpu->count_offset), cpu->compare);
 	tcode(&b, n64, cpu->cur_pc);
+	/* Los últimos eventos del RCP (sin las interrupciones del VI y del AI): el juego tiene que
+	 * verlos todos en este orden para seguir; si falta o sobra alguno, ahí está el cuelgue. */
+	{
+		static const char *const kinds[] = { "?", "IRQ sube", "IRQ baja", "tarea arranca", "tarea termina",
+						     "lista del CPU", "DP levanta" };
+		static const char *const irqs[] = { "SP", "SI", "AI", "VI", "PI", "DP" };
+		const struct salsa64_rsp *r = &bus->rsp;
+		uint32_t n = r->evlog_n < SALSA64_EVLOG_N ? r->evlog_n : SALSA64_EVLOG_N;
+		tput(&b, "últimos %u eventos del RCP (ciclos antes de este momento):\n", n);
+		for (uint32_t i = 0; i < n; i++) {
+			const struct salsa64_evlog_entry *e = &r->evlog[(r->evlog_n - n + i) % SALSA64_EVLOG_N];
+			unsigned long long ago = (unsigned long long)(cpu->cycles - e->cycles);
+			const char *kn = e->kind <= SALSA64_EV_DP_FIRE ? kinds[e->kind] : "?";
+			if (e->kind == SALSA64_EV_IRQ_UP || e->kind == SALSA64_EV_IRQ_DOWN)
+				tput(&b, "  -%llu %s %s (MI_INTR %02x)\n", ago, kn, e->a < 6 ? irqs[e->a] : "?", e->b);
+			else if (e->kind == SALSA64_EV_TASK_START)
+				tput(&b, "  -%llu %s tipo %u lista %08x\n", ago, kn, e->a, e->b);
+			else if (e->kind == SALSA64_EV_TASK_DONE)
+				tput(&b, "  -%llu %s tipo %u banderas %u\n", ago, kn, e->a, e->b);
+			else if (e->kind == SALSA64_EV_CPU_LIST)
+				tput(&b, "  -%llu %s %06x-%06x\n", ago, kn, e->a, e->b);
+			else
+				tput(&b, "  -%llu %s (esperando %u)\n", ago, kn, e->a);
+		}
+	}
 	return b.n;
 }
 
@@ -171,7 +196,7 @@ bool cuelgue_watch(struct cuelgue *c, const struct salsa64_n64 *n64, uint64_t no
 		return false;
 	c->said = true;
 
-	char text[2048];
+	static char text[8192];  /* con el anillo de eventos del RCP; una vez por corrida, desde el hilo del latido */
 	cuelgue_state_text(n64, text, sizeof text);
 	log("latido: el juego no lee los controles ni manda tareas gráficas ni listas al RDP hace %.1f s y el VI sigue "
 	    "(campo %u): ¿esperando una interrupción o un mensaje que no llega?", (now_us - c->t_change) / 1e6, fields);

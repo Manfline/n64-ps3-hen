@@ -19,12 +19,16 @@ static void mi_update(struct salsa64_bus *bus)
 void salsa64_mi_raise(struct salsa64_bus *bus, enum salsa64_irq irq)
 {
 	bus->mi.intr |= 1u << irq;
+	if (irq != SALSA64_IRQ_VI && irq != SALSA64_IRQ_AI)  /* las de cada campo y cada DMA llenarían el anillo */
+		salsa64_evlog_add(bus, SALSA64_EV_IRQ_UP, irq, bus->mi.intr);
 	mi_update(bus);
 }
 
 void salsa64_mi_clear(struct salsa64_bus *bus, enum salsa64_irq irq)
 {
 	bus->mi.intr &= ~(1u << irq);
+	if (irq != SALSA64_IRQ_VI && irq != SALSA64_IRQ_AI)
+		salsa64_evlog_add(bus, SALSA64_EV_IRQ_DOWN, irq, bus->mi.intr);
 	mi_update(bus);
 }
 

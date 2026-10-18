@@ -71,6 +71,11 @@ struct gfx_info {
 	uint32_t untouched;
 	uint32_t raw_start, raw_end;
 	uint32_t filled;     /* 1: la pila se llenó con el patrón; 0: se cuentan ceros (aproximado) */
+	/* Diagnóstico: lo primero que el SPE leyó de la display list de la última tarea
+	 * (su dirección y las 8 primeras palabras), para compararlo con lo que el PPE ve
+	 * de la RDRAM al terminar (gfx_spu.c, log_bad_task). */
+	uint32_t dl_addr;
+	uint32_t dl_first[4];
 };
 
 /* Hash de `len` bytes desde `start` de un anillo de `size` bytes (≤ 4096,

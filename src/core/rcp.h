@@ -302,7 +302,20 @@ struct salsa64_rsp_stats {
 	uint32_t unknown_ucode, unknown_ucode_size, unknown_data_size;
 };
 
+/* Diagnóstico de cuelgues (frontend/cuelgue.c): los últimos eventos del RCP que el
+ * juego tiene que ver para no quedarse esperando (interrupciones levantadas y
+ * bajadas, arranques y fines de tarea, listas del CPU al RDP), con su ciclo. */
+enum { SALSA64_EV_IRQ_UP = 1, SALSA64_EV_IRQ_DOWN, SALSA64_EV_TASK_START, SALSA64_EV_TASK_DONE, SALSA64_EV_CPU_LIST,
+       SALSA64_EV_DP_FIRE };
+#define SALSA64_EVLOG_N 64
+struct salsa64_evlog_entry {
+	uint64_t cycles;
+	uint32_t kind, a, b;
+};
+
 struct salsa64_rsp {
+	struct salsa64_evlog_entry evlog[SALSA64_EVLOG_N];
+	uint32_t evlog_n;       /* eventos anotados desde el arranque (el anillo guarda los últimos) */
 	struct salsa64_sched *sched;
 	const struct salsa64_gfx_backend *gfx;
 	const struct salsa64_audio_backend *audio;
@@ -456,6 +469,7 @@ enum salsa64_si_reg {
 #define SALSA64_RDRAM_REGS_END 0x03F80000u  /* después: escrituras "broadcast" */
 
 /* Interrupciones del MI. Actualizan Cause.IP2 del CPU. */
+void salsa64_evlog_add(struct salsa64_bus *bus, uint32_t kind, uint32_t a, uint32_t b);
 void salsa64_mi_raise(struct salsa64_bus *bus, enum salsa64_irq irq);
 void salsa64_mi_clear(struct salsa64_bus *bus, enum salsa64_irq irq);
 

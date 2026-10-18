@@ -36,7 +36,9 @@ static uint8_t rd_vtx[GFX_MAX_VTX * 16 + 32] __attribute__((aligned(128)));
 static uint8_t rd_mtx[64 + 32] __attribute__((aligned(128)));
 static uint8_t rd_small[512 + 32] __attribute__((aligned(128)));
 static uint8_t rd_tex[GFX_IO_MAX + 32] __attribute__((aligned(128)));
+#if GFX_HAS(F5INDY)
 static uint8_t wr_buf[512 + 32] __attribute__((aligned(128)));
+#endif
 
 static uint8_t dl_buf[2][DL_BLOCK] __attribute__((aligned(128)));
 static uint8_t vtx_buf[2][VTX_BUF] __attribute__((aligned(128)));
@@ -53,6 +55,22 @@ static struct {
 	uint32_t tex_used;
 } io;
 
+#if GFX_HAS(F5INDY)
+/* Diagnóstico (solo la imagen de Indiana Jones: las otras no tienen holgura de local store para
+ * esto): la primera lectura de display list de la tarea. */
+static struct {
+	uint32_t addr, n;
+	uint32_t w[4];
+} dbg;
+
+void gfx_io_dbg_first(uint32_t *addr, uint32_t w[4])
+{
+	*addr = dbg.n ? dbg.addr : ~0u;
+	for (unsigned i = 0; i < 4; i++)
+		w[i] = dbg.w[i];
+}
+#endif
+
 uint32_t gfx_io_clock(void)
 {
 	return ~spu_read_decrementer();  /* el decrementador cuenta hacia abajo */
@@ -62,6 +80,9 @@ void gfx_io_begin(struct gfx_state *g)
 {
 	(void)g;
 	memset(&io, 0, sizeof io);
+#if GFX_HAS(F5INDY)
+	memset(&dbg, 0, sizeof dbg);
+#endif
 	io.dl_addr[0] = io.dl_addr[1] = ~0u;
 }
 
@@ -137,23 +158,38 @@ const uint8_t *gfx_io_read(struct gfx_state *g, enum gfx_io_slot slot, uint32_t 
 	return spukit_get_unaligned(buf, rdram_ea(g, addr), size, TAG_READ);
 }
 
-/* Escribe en la RDRAM por DMA: el tramo alineado a 16 que contiene los bytes (se
- * lee antes lo que no se pisa). Solo la HLE de Indiana Jones lo usa. */
+#if GFX_HAS(F5INDY)
+/* Escribe en la RDRAM por DMA exactamente los bytes pedidos, sin leer antes ni
+ * reescribir los vecinos: el CPU emulado corre en el PPE mientras el SPE dibuja y
+ * puede cambiar bytes del mismo bloque de 16 (una lectura-modificación-escritura
+ * por bloques le pisaba lo escrito entre la lectura y la escritura, y el juego
+ * perdía datos de libultra o de sus propias estructuras). El MFC admite DMA de 1,
+ * 2, 4 y 8 bytes naturalmente alineados (con los 4 bits bajos del local store
+ * iguales a los de la dirección) y de múltiplos de 16 alineados a 16: el tramo se
+ * parte en esas piezas. Solo la HLE de Indiana Jones lo usa. */
 void gfx_io_write(struct gfx_state *g, uint32_t addr, const uint8_t *src, uint32_t size)
 {
-	if (size == 0 || addr >= g->job->rdram_size || size > g->job->rdram_size - addr)
+	if (size == 0 || addr >= g->job->rdram_size || size > g->job->rdram_size - addr || size > 512)
 		return;
-	const uint32_t start = addr & ~15u, end = (addr + size + 15) & ~15u, len = end - start;
-	if (len > 512)
-		return;
-	if (start != addr || end != addr + size) {
-		spukit_dma_get(wr_buf, rdram_ea(g, start), len, TAG_WR);
-		spukit_dma_wait(1u << TAG_WR);
+	const uint32_t base = addr & ~15u;
+	memcpy(wr_buf + (addr - base), src, size);
+	uint32_t a = addr, n = size;
+	while (n) {
+		uint32_t chunk;
+		if ((a & 15) == 0 && n >= 16) {
+			chunk = n & ~15u;
+		} else {
+			chunk = 8;
+			while (chunk > n || (a & (chunk - 1)))
+				chunk >>= 1;
+		}
+		mfc_put((volatile void *)(wr_buf + (a - base)), rdram_ea(g, a), chunk, TAG_WR, 0, 0);
+		a += chunk;
+		n -= chunk;
 	}
-	memcpy(wr_buf + (addr - start), src, size);
-	spukit_dma_put(wr_buf, rdram_ea(g, start), len, TAG_WR);
 	spukit_dma_wait(1u << TAG_WR);
 }
+#endif
 
 /* Pide el bloque de display list que contiene `block` al búfer b. */
 static void dl_fetch(struct gfx_state *g, int b, uint32_t block)
@@ -193,6 +229,14 @@ bool gfx_io_dl(struct gfx_state *g, uint32_t addr, uint32_t *w0, uint32_t *w1)
 	const uint8_t *p = dl_buf[b] + (addr - block);
 	*w0 = salsa64_rd32(p);
 	*w1 = salsa64_rd32(p + 4);
+#if GFX_HAS(F5INDY)
+	if (!dbg.n) {
+		dbg.n = 1;
+		dbg.addr = addr;
+		for (unsigned i = 0; i < 4; i++)  /* addr es múltiplo de 8: 16 bytes caben en el bloque salvo en su cola */
+			dbg.w[i] = salsa64_rd32(p + 4 * i);
+	}
+#endif
 	return true;
 }
 

@@ -1953,7 +1953,23 @@ void gfx_dl_f5indy(struct gfx_state *g)
 	f5.insub = false;
 	list_entry(g);
 	uint32_t w0, w1;
-	while (gfx_dl_next(g, &w0, &w1))
+	/* Una lista que entra en memoria en ceros (aún sin escribir, o ya borrada) no acaba
+	 * nunca: cada palabra en cero es un G_SPNOOP y la tarea recorre la RDRAM entera
+	 * (1 M de comandos, ~75 ms en el SPE) antes de cortarse. 8192 seguidas (64 KB de
+	 * ceros) no son una lista: se corta ya, como un bucle, para que el juego reciba
+	 * su interrupción del DP y el PPE anote la lista (log_bad_task). */
+	unsigned nops = 0;
+	while (gfx_dl_next(g, &w0, &w1)) {
+		if (w0 == 0 && w1 == 0) {
+			if (++nops >= 8192) {
+				g->res->flags |= GFX_RES_LOOP;
+				g->res->dl_errors++;
+				break;
+			}
+			continue;
+		}
+		nops = 0;
 		if (!f5i_cmd(g, w0, w1))
 			break;
+	}
 }
