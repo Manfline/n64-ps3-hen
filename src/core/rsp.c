@@ -99,6 +99,16 @@ static void jpeg_collect(struct salsa64_rsp *rsp)
 	jpeg_account(rsp, &r, rsp->clock_us ? rsp->clock_us() - t0 : 0);
 }
 
+void salsa64_evlog_add(struct salsa64_bus *bus, uint32_t kind, uint32_t a, uint32_t b)
+{
+	struct salsa64_rsp *rsp = &bus->rsp;
+	struct salsa64_evlog_entry *e = &rsp->evlog[rsp->evlog_n++ % SALSA64_EVLOG_N];
+	e->cycles = bus->cpu ? bus->cpu->cycles : 0;
+	e->kind = kind;
+	e->a = a;
+	e->b = b;
+}
+
 static void dp_sync_at(struct salsa64_bus *bus, uint64_t now);
 
 static void task_event(void *ctx, uint64_t when)
@@ -143,6 +153,7 @@ finished:
 		if (!(flags & (SALSA64_GFX_FULLSYNC | SALSA64_GFX_CUT)))
 			rsp->stats.gfx_nosync++;
 	}
+	salsa64_evlog_add(bus, SALSA64_EV_TASK_DONE, rsp->busy, flags);
 	rsp->busy = 0;
 	rsp_break(bus, SALSA64_SP_STATUS_TASKDONE);
 	/* La interrupción del DP llega si la lista pidió G_RDPFULLSYNC y también
@@ -170,6 +181,7 @@ static void dp_event(void *ctx, uint64_t when)
 #ifdef SALSA64_DEBUG_DP
 	salsa64_debug_dp(3, 0, 0);
 #endif
+	salsa64_evlog_add(bus, SALSA64_EV_DP_FIRE, rsp->dp_nnext, 0);
 	salsa64_mi_raise(ctx, SALSA64_IRQ_DP);
 	/* La siguiente de las que esperaban, a su hora. */
 	if (rsp->dp_nnext && rsp->sched) {
@@ -576,6 +588,7 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 								       : SALSA64_GBI_UNKNOWN;
 	enum salsa64_abi abi = task.type == SALSA64_TASK_AUDIO && valid ? salsa64_rsp_detect_abi(bus, &task)
 								       : SALSA64_ABI_UNKNOWN;
+	salsa64_evlog_add(bus, SALSA64_EV_TASK_START, task.type, task.data_ptr);
 	/* JPEG: el microcódigo se reconoce por su CRC (no trae texto). */
 	enum salsa64_jpeg_kind jpeg = SALSA64_JPEG_NONE;
 	if (task.type == SALSA64_TASK_JPEG && valid && !rsp->jpeg_lle && in_rdram(bus, task.ucode, task.ucode_size)) {

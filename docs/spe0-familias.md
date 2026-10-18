@@ -130,7 +130,7 @@ la ruta de Naboo: G_GEOMETRY_GEN 0x0C → pasos finales → recorrido de la mall
 → triángulo → lista secundaria → RDP); tres arreglos la dejaron en 1 808:
 la estructura de los pasos de Naboo es estática (en el bss, no en la pila), el
 recorrido de la malla corre fuera de la función que genera los vértices (no
-suma su marco al de ella), y la caché de texturas baja a 224 entradas
+suma su marco al de ella), y la caché de texturas baja a 220 entradas (224 hasta la rc4)
 (`GFX_SPE0_TC_4`). Medido en el host con la imagen 4 (`-DGFX_SPE0_IMG=4`),
 desde un estado de la primera misión, 1500 y 2800 tareas con la caché en 224 y
 en 1024: 0,2 y 0,1 texturas decodificadas por tarea y 0,1 desalojadas contra

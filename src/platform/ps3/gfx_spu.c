@@ -19,6 +19,7 @@
 #include <sys/systime.h>
 
 #include "core/bus.h"
+#include "core/endian.h"
 #include "platform/ps3/log.h"
 #include "platform/ps3/paths.h"
 #include "rsp/gfx/hle.h"
@@ -265,6 +266,38 @@ static void log_untouched(struct salsa64_gfx_spu *s, const char *when)
 			    s->tasks - s->image_tasks0);
 }
 
+/* Diagnóstico: una tarea cortada, con errores de lista o con cientos de miles de
+ * comandos (Indiana Jones se quedaba en negro tras una tarea de 75 ms en el SPE:
+ * una lista que el PPE y el SPE no ven igual, o una lista de ceros). Anota qué ve
+ * el PPE de la lista al terminar y qué leyó el SPE al empezar, para distinguir
+ * una carrera con el CPU emulado de una lista mala del juego. Solo las primeras
+ * 16, y con la tarea ya recogida (el SPE está libre). */
+static void log_bad_task(struct salsa64_gfx_spu *s, const struct gfx_job *job, const struct gfx_result *res,
+			 const char *what)
+{
+	if (!(res->flags & GFX_RES_CUT) && !res->dl_errors && res->commands < 200000u)
+		return;
+	if (s->bad_logged++ >= 16)
+		return;
+	uint32_t ppe[8] = { 0 }, dl = job->dl & 0x00FFFFFFu;
+	if (dl + 32 <= job->rdram_size)
+		for (unsigned i = 0; i < 8; i++)
+			ppe[i] = salsa64_rd32(s->bus->rdram + dl + 4 * i);
+	struct gfx_info in;
+	memset(&in, 0, sizeof in);
+	bool ok = s->worker && spu_info(s->worker, &in);
+	salsa64_log("gfx: %s mala (la %u): lista %06x (ucode %06x, gbi %u, banderas 0x%x), %u comandos, %u triángulos, "
+		    "%u dibujos, %u errores de lista, %u sin implementar (último 0x%02x), banderas del resultado 0x%x, "
+		    "%.2f ms en el SPE; el PPE ve la lista %08x %08x %08x %08x %08x %08x %08x %08x; %s",
+		    what, s->bad_logged, dl, job->ucode, job->gbi, job->flags, res->commands, res->triangles, res->draws,
+		    res->dl_errors, res->unknown_cmds, res->last_unknown, res->flags, res->t_total / 1000.0 / 79.8,
+		    ppe[0], ppe[1], ppe[2], ppe[3], ppe[4], ppe[5], ppe[6], ppe[7], ok ? "" : "sin la vista del SPE");
+	if (ok)
+		salsa64_log("gfx:   el SPE leyó primero en %06x%s: %08x %08x %08x %08x", in.dl_addr & 0x00FFFFFFu,
+			    in.dl_addr == ~0u ? " (ninguna lectura)" : "", in.dl_first[0], in.dl_first[1], in.dl_first[2],
+			    in.dl_first[3]);
+}
+
 /* Carga la imagen `img` (con la tarea en vuelo ya recogida). Si había otra,
  * su estado del RDP pasa a la nueva. 0 o el error de spukit (y sin
  * trabajador). */
@@ -422,6 +455,7 @@ static uint32_t spu_finish(void *ctx)
 	if (r->error)
 		job_error(s, r, &s->res, "una tarea");
 	account(s, r->ticks);
+	log_bad_task(s, &s->job, &s->res, "tarea");
 	salsa64_gfx_rdram_fills(s->bus, &s->job, &s->res);
 	s->sink.done(s->sink.ctx, &s->job, &s->res);
 	return salsa64_gfx_task_flags(&s->res);
@@ -467,6 +501,7 @@ static uint32_t spu_dpc_run(void *ctx, uint32_t start, uint32_t end, const uint8
 		job_error(s, r, &res, "una lista del CPU");
 	s->dpc_jobs++;
 	account_res(s, &res, r->ticks);
+	log_bad_task(s, &job, &res, "lista del CPU");
 	salsa64_gfx_rdram_fills(s->bus, &job, &res);
 	s->sink.done(s->sink.ctx, &job, &res);
 	s->dpc_open = !(res.flags & (GFX_RES_FULLSYNC | GFX_RES_CUT));

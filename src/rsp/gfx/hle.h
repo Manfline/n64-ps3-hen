@@ -309,6 +309,8 @@ enum gfx_io_slot { GFX_IO_VTX, GFX_IO_MTX, GFX_IO_SMALL, GFX_IO_TEX, GFX_IO_SLOT
 
 /* Reloj creciente para medir etapas (0 si la plataforma no lo da). */
 uint32_t gfx_io_clock(void);
+/* Solo en el SPE (io_spu.c): lo primero que leyó de la display list de la última tarea (diagnóstico, gfx_info). */
+void gfx_io_dbg_first(uint32_t *addr, uint32_t w[4]);
 /* Prepara la E/S para un trabajo. */
 void gfx_io_begin(struct gfx_state *g);
 /* Termina las escrituras pendientes y deja en res los bytes escritos. */

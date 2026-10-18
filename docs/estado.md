@@ -126,6 +126,70 @@ capas del fondo. Con los volcados de la consola (`build/rc4-ps3/`):
   `tools/build.sh -C src/frontend PROGRAM=salsa64-rc5b "TITLE=Salsa64 rc5b"
   APPID=SLSA00156 pkg` (el directorio de build borrado antes).
 
+## 2026-10-18 — rc5a: Indiana Jones y Killer Instinct Gold se quedan en negro en la PS3 con la rc4 (sin reproducir; instrumentado)
+
+En la PS3 real con la rc4, Indiana Jones (HLE de Factor 5, imagen 4 del SPE 0) enseña la pantalla de
+mejoras del Expansion Pak y se queda en negro, y Killer Instinct Gold deja elegir personaje y se
+queda en negro. Ninguno se reproduce en el host (interprete), ni con el recompilador bajo qemu
+ppc64 (KI: 2522 tareas gráficas hasta el campo ~1650 con las pulsaciones de
+`docs/pads/killerinstinct-pelea.pad`; Indy: 876 tareas en 1640 campos), ni con `SALSA64_GFX_LATE` /
+`SALSA64_GFX_TEAR`. Esta rama no declara arreglada la causa de ninguno; trae el análisis de lo que
+sí dicen los logs y los volcados de la consola, un arreglo con causa lógica para el SPE y la
+instrumentación para que la próxima corrida lo confirme.
+
+- **Killer Instinct: no es una regresión de `dp_run` (rc3).** Los volcados del cuelgue
+  (`cuelgue-<campo>.rdram`) de la rc4 y de dos corridas viejas (v0.2.8-rc1/rc2, del 2026-10-16)
+  son idénticos en lo que importa: el hilo principal del juego (OSThread id 3, prioridad 10) está
+  *parado con la bandera de falla* (estado 1, flags 2) tras una excepción de TLB al cargar de la
+  dirección 0x00010001 (CP0 Cause 8, `bad_vaddr 0x10001`), con `pc 0x800010F0` y `ra 0x800012F0`:
+  es el bucle de decodificación de Huffman de una descompresión (inflate) del propio juego, cuyo
+  búfer de entrada (0x802D4002, ya con más de 500 KB consumidos) aparece lleno de 0xFE. Los demás
+  hilos esperan mensajes con normalidad, el hilo ocioso corre en `b .` y las interrupciones del SP y
+  del DP que cuenta el latido (programadas = levantadas = 2 × listas) llegaron todas: el juego no
+  espera una interrupción, se murió. `tools/libultra-threads.py --all` lo muestra (sin `--all` el
+  hilo parado no sale). Falta saber qué hace diferente la consola en ese punto de la carga
+  (después de elegir personaje, para la pelea): datos malos del cartucho, memoria pisada por un
+  escritor que no es el juego, o una carrera del propio juego que solo sale con los tiempos de la
+  consola.
+- **Instrumentación nueva (PS3).**
+  - El log escribe, al abrir cada juego, el CRC-32 de cada megabyte de la ROM tal como está en
+    memoria y el de la ROM completa («ROM: CRC-32 por megabyte desde el 0: …»). Comparar con los de
+    la misma ROM en la Mac (Killer Instinct: total 31C76BE7; Indiana Jones: 4978EB57; por megabyte
+    en `python3 -c` con `zlib.crc32` sobre trozos de 1 MB) dice si el archivo de la consola o su lectura
+    a memoria cambió algo (sospecha: el juego descomprime y dibuja basura tras cargar datos).
+  - El aviso de cuelgue (`latido:`) imprime ahora los últimos 64 eventos del RCP (interrupciones del
+    SP, SI, PI y DP que suben y bajan con MI_INTR, arranques y fines de tarea con la dirección de su
+    lista, listas del CPU al RDP, interrupciones del DP levantadas) con su ciclo: el anillo está en
+    `salsa64_rsp.evlog` (`salsa64_evlog_add`, mi.c, rsp.c, sp.c).
+  - «gfx: tarea mala» / «lista del CPU mala»: una tarea cortada, con errores de lista o con más de
+    200 000 comandos escribe su lista, ucode y contadores, lo que el PPE ve de la lista al terminar y
+    lo que el SPE leyó primero de ella (`gfx_info.dl_addr`, `dl_first`). Distingue una carrera
+    con el CPU emulado o una lectura distinta del SPE de una lista mala del juego.
+- **Indiana Jones.** En los dos últimos trabajos gráficos antes de quedarse en negro (campos
+  400–499) el SPE tardó ~75 ms por tarea (el resto, 4 ms), dibujó 9 cosas, decodificó 9,5 texturas y la
+  HLE vio una color image imposible (`0xEEEEFF`, ancho 3005) y una tarea cortada: la forma de una
+  lista que se acaba en memoria en ceros o en basura (cada palabra en cero es un G_SPNOOP y se
+  recorre la RDRAM hasta el tope de 1 M de comandos). Dos cambios en la HLE:
+  - `gfx_dl_f5indy` corta la tarea (como bucle: DP forzada, `dl_errors`) tras 8192 palabras dobles
+    en cero seguidas, en vez de recorrer la RDRAM entera; prueba `f5i_zeros`.
+  - `gfx_io_write` del SPE (la escritura de las partículas 0x27 a la RDRAM) leía y reescribía bloques
+    de 16 bytes: si el CPU emulado (que corre en el PPE mientras el SPE dibuja) cambiaba bytes del
+    bloque entre la lectura y la escritura, se los pisaba con lo viejo. Ahora escribe exactamente los
+    bytes pedidos con DMA de 1, 2, 4 y 8 bytes alineados y de múltiplos de 16 (sin lectura previa).
+  En el host, `SALSA64_GFX_LATE=8 SALSA64_GFX_TEAR=1` muestra que en la misión de Perú el juego sí
+  cambia entradas de la tarea mientras corre (24 de 1067 tareas, invisible: 0 píxeles), así que la
+  lectura tardía del SPE no es inocua para este juego.
+- **Local store.** La imagen 4 del SPE 0 pasa de 224 a 220 entradas de la caché de texturas para pagar la
+  escritura por piezas, la guarda de ceros y la captura de la lista (holgura 1 648 contra el mínimo de
+  1 536; la 0, 1 616 como antes: la captura y `gfx_io_write` solo se compilan en la imagen 4). Paquete de
+  prueba «Salsa64 rc5a» (SLSA00155), armado con `tools/build.sh -C src/frontend PROGRAM=salsa64-rc5a
+  "TITLE=Salsa64 rc5a" APPID=SLSA00155 pkg` (el directorio de build borrado antes).
+- **Para probar en la PS3.** Indiana Jones (misma ruta de siempre: de los logos a la misión de Perú, A
+  en el Expansion Pak) y Killer Instinct Gold (elegir personaje y pelear dos veces); bajar el log
+  apenas termine. Si vuelven a quedarse en negro: las líneas «tarea mala» (Indy), el
+  `cuelgue-<campo>.rdram` y los eventos del RCP (KI), y los CRC por megabyte de la ROM contra los de
+  la Mac.
+
 ## 2026-10-18 — rc3: DPC continuado en la PS3 y el «LLE vacío» del censo era pantalla fija
 
 - **PS3 (por validar en la consola).** `src/rdp/rdp.c` (`translate`) no llama a

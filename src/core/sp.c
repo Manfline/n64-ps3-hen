@@ -172,6 +172,7 @@ static void dp_deliver(struct salsa64_bus *bus, uint32_t start, uint32_t end, co
 {
 	const struct salsa64_dpc_backend *dpc = bus->rsp.dpc;
 	bus->rsp.stats.dpc_runs++;
+	salsa64_evlog_add(bus, SALSA64_EV_CPU_LIST, start, end);
 	if (dpc && dpc->run(dpc->ctx, start, end, dmem) & SALSA64_GFX_FULLSYNC)
 		salsa64_rsp_dp_done(bus);
 }

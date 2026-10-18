@@ -35,6 +35,7 @@ struct salsa64_gfx_spu {
 	uint32_t dpc_conts;  /* de ellas, tramos de una lista aún sin SYNC_FULL (GFX_JOB_DPC_CONT) */
 	bool dpc_open;       /* el tramo anterior no cerró su lista */
 	uint32_t errors;     /* trabajos que el SPE devolvió con error (terminan como cortados) */
+	uint32_t bad_logged; /* tareas malas (cortadas, con errores de lista o larguísimas) ya anotadas en el log */
 	uint64_t dpc_us;     /* lo que esperó el PPE a cada una */
 	spukit_worker *worker;
 	const struct salsa64_bus *bus;

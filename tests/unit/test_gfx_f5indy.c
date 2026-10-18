@@ -440,6 +440,20 @@ static void f5i_particles(void)
 	CHECK_EQ(salsa64_rd16(t_n64.bus.rdram + verts + 8 * 5 + 4), 0u);
 }
 
+/* Una lista que entra en ceros (memoria sin escribir) se corta en vez de recorrer la RDRAM entera. */
+static void f5i_zeros(void)
+{
+	start();
+	memset(t_n64.bus.rdram + DL_PA + 8, 0, 100000);
+	dl_pc += 80000;  /* 10 000 palabras dobles en cero seguidas, y luego un fin que no se alcanza */
+	run();
+	CHECK(res.flags & GFX_RES_LOOP);
+	CHECK(res.flags & GFX_RES_CUT);
+	CHECK(res.dl_errors > 0);
+	CHECK(res.commands < 9000);
+	CHECK(!(res.flags & GFX_RES_FULLSYNC));
+}
+
 void t_suite_gfx_f5indy(void)
 {
 	RUN(f5i_lists);
@@ -454,4 +468,5 @@ void t_suite_gfx_f5indy(void)
 	RUN(f5i_texrect);
 	RUN(f5i_gen_vertices);
 	RUN(f5i_particles);
+	RUN(f5i_zeros);
 }

@@ -104,7 +104,7 @@ static void cuelgue_texto(void)
 	bus->rsp.stats.dp_fired = 6;
 	bus->rsp.stats.gfx_nosync = 2;
 	salsa64_sched_set(&t_n64.sched, SALSA64_EV_DP_SYNC, CPU->cycles + 5000);
-	char text[2048];
+	char text[8192];
 	unsigned n = cuelgue_state_text(&t_n64, text, sizeof text);
 	CHECK(n > 100 && n < sizeof text);
 	CHECK(strstr(text, "MI: INTR 15 máscara 3f"));
@@ -112,6 +112,7 @@ static void cuelgue_texto(void)
 	CHECK(strstr(text, "sin SYNC_FULL ni corte 2"));
 	CHECK(strstr(text, "DP +5000"));
 	CHECK(strstr(text, "tarea -"));
+	CHECK(strstr(text, "eventos del RCP"));
 	/* Un búfer chico se corta sin pasarse. */
 	char small[40];
 	n = cuelgue_state_text(&t_n64, small, sizeof small);
@@ -161,7 +162,7 @@ static void cuelgue_volcado(void)
 	f = fopen(path, "r");
 	CHECK(f != NULL);
 	if (f) {
-		char text[4096];
+		char text[16384];
 		size_t n = fread(text, 1, sizeof text - 1, f);
 		text[n] = '\0';
 		CHECK(strstr(text, "MI: INTR") && strstr(text, "gpr:") && strstr(text, "r28"));
