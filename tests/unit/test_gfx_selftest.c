@@ -91,6 +91,7 @@ static void gfx_selftest_lists(void)
 	check_gbi(SALSA64_GBI_F3DJFG, true);
 	check_gbi(SALSA64_GBI_F3DEXBG, true);
 	check_gbi(SALSA64_GBI_F5ROGUE, true);
+	check_gbi(SALSA64_GBI_F5INDY, true);
 }
 
 /* La comparación con tolerancia: los flotantes de los vértices y de los
@@ -153,9 +154,11 @@ static void gfx_spe0_images(void)
 	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_F3DZEX2), GFX_SPE0_F3DEX2);
 	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_F3DEXBG), GFX_SPE0_CONKER);
 	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_F5ROGUE), GFX_SPE0_F5ROGUE);
+	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_F5INDY), GFX_SPE0_F5INDY);
 	CHECK_EQ((uint64_t)(int64_t)gfx_spe0_image(SALSA64_GBI_UNKNOWN), (uint64_t)(int64_t)-1);
 	CHECK((GFX_SPE0_PARTS_1 & (GFX_PART_S2DEX2 | GFX_PART_FLX)) == (GFX_PART_S2DEX2 | GFX_PART_FLX));
 	CHECK((GFX_SPE0_PARTS_2 & GFX_PART_F3DEX2) && (GFX_SPE0_PARTS_0 & GFX_PART_F3D));
+	CHECK((GFX_SPE0_PARTS_4 & GFX_PART_F5INDY) && !(GFX_SPE0_PARTS_4 & GFX_PART_F3D));
 	CHECK((GFX_SPE0_PARTS_3 & GFX_PART_F5ROGUE) && (GFX_SPE0_PARTS_3 & GFX_PART_F3D) && !(GFX_SPE0_PARTS_3 & GFX_PART_F3DEX2));
 	/* El host compila todo. */
 	CHECK_EQ(GFX_PARTS, GFX_PART_ALL);

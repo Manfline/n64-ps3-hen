@@ -42,14 +42,15 @@ SPUKIT  := 1
 # src/spu/jpeg, y en el mismo SPE las tres tareas de video de Resident Evil 2
 # (re2.c). CRT con cable (dos SPEs, con `filtros-spe`): la señal y la
 # decodificación de S-Video y compuesto (src/spu/crt).
-# La HLE gráfica del SPE 0 va en cuatro imágenes desde las mismas fuentes, cada
+# La HLE gráfica del SPE 0 va en cinco imágenes desde las mismas fuentes, cada
 # una con sus familias de microcódigos (src/rsp/gfx/spe0.h,
 # docs/spe0-familias.md): gfx0 la primera generación (F3D, F3DEX 1.x y las
 # variantes de Rare sobre F3D), gfx1 la segunda de Nintendo (F3DEX2, F3DZEX2,
 # S2DEX2 y F3DFLX en la tarea), gfx2 la de Conker (F3DEXBG y el resto de la
-# segunda) y gfx3 la de Rogue Squadron (Factor 5, con lo común de F3D). Cada una
+# segunda), gfx3 la de Rogue Squadron (Factor 5, con lo común de F3D) y gfx4 la
+# de Indiana Jones y Battle for Naboo (Factor 5 con su DMEM de 4 KB). Cada una
 # con sus objetos en obj/spu-gfx<n>.
-GFX_IMAGES := 0 1 2 3
+GFX_IMAGES := 0 1 2 3 4
 SPU_PROGS := $(addprefix gfx,$(GFX_IMAGES)) audio rsp jpeg crt lz
 GFX_SPU_SRCS := $(R)/src/spu/gfx/main.c $(R)/src/spu/gfx/io_spu.c \
                 $(filter-out %/io_mem.c %/sync.c %/state.c %/selftest.c,$(wildcard $(R)/src/rsp/gfx/*.c))
@@ -75,6 +76,7 @@ gfx0_STACK_ARGS := --edge gfx_dl_f3d:pd_command --edge gfx_dl_f3d:dkr_command $(
 gfx1_STACK_ARGS := --ignore gfx_dl_f3dex2 $(GFX_STACK_LIBC)
 gfx2_STACK_ARGS := --edge gfx_dl_f3dex2:cbfd_command $(GFX_STACK_LIBC)
 gfx3_STACK_ARGS := --edge gfx_dl_f3d:f5_command $(GFX_STACK_LIBC)
+gfx4_STACK_ARGS := $(GFX_STACK_LIBC)
 CFLAGS  := -ffp-contract=off -fno-math-errno
 LIBS    := -lrsx -lgcm_sys -laudio -lio -lsysutil -lhttp -lhttputil -lssl -lnetctl -lnet -lsysmodule -lrt -llv2 -lm
 # Caché del recompilador al final del segmento de texto (docs/rec-ppe.md).
@@ -135,6 +137,8 @@ $(call GFX_OBJ,f3ddkr.c.o): SPU_CFLAGS += -Os
 # Lo de Rogue Squadron (f5rogue.c: vértices, triángulos, mallas generadas y
 # rectángulos), también: solo corre con ese juego.
 $(call GFX_OBJ,f5rogue.c.o): SPU_CFLAGS += -Os
+# Y la de Indiana Jones y Naboo (f5indy.c), igual.
+$(call GFX_OBJ,f5indy.c.o): SPU_CFLAGS += -Os
 # Lo de la interpolación de cuadros (vgroup.c), también: no le quita local
 # store ni pila a la HLE.
 $(call GFX_OBJ,vgroup.c.o): SPU_CFLAGS += -Os
@@ -149,5 +153,5 @@ $(call GFX_OBJ,flx.c.o) $(call GFX_OBJ,dl.c.o): SPU_CFLAGS += -Os
 $(call GFX_OBJ,texcache.c.o): SPU_CFLAGS += -Os
 # make no ve un cambio de banderas: que se recompilen si cambia este archivo.
 $(call GFX_OBJ,combine.c.o) $(call GFX_OBJ,s2dex.c.o) $(call GFX_OBJ,f3dpd.c.o) \
-$(call GFX_OBJ,f3ddkr.c.o) $(call GFX_OBJ,f5rogue.c.o) $(call GFX_OBJ,vgroup.c.o) $(call GFX_OBJ,flx.c.o) \
+$(call GFX_OBJ,f3ddkr.c.o) $(call GFX_OBJ,f5rogue.c.o) $(call GFX_OBJ,f5indy.c.o) $(call GFX_OBJ,vgroup.c.o) $(call GFX_OBJ,flx.c.o) \
 $(call GFX_OBJ,dl.c.o) $(call GFX_OBJ,texcache.c.o): Makefile

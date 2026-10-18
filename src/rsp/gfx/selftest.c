@@ -29,10 +29,14 @@
 #define F5COL_PA   0x1240u  /* tabla de colores de los vértices (8 palabras) */
 #define F5HGT_PA   0x1280u  /* alturas de la malla generada (bytes) */
 #define F5CLR_PA   0x1300u  /* colores de la malla generada (palabras) */
+#define INLIGHT_PA 0x1400u  /* Indiana Jones: luces (0x30 bytes, a 0xB00 de la DMEM) */
+#define INTAB_PA   0x1440u  /* y la tabla de desplazamientos (16 bytes, a 0x380) */
+#define INCOL_PA   0x1460u  /* colores que entran a la iluminación (32 bytes, a 0x480) */
+#define INPART_PA  0x1500u  /* 32 vértices de partículas (256 bytes) */
 #define CIMG_PA    0x10000u /* color image y z image: solo las direcciones */
 #define ZIMG_PA    0x18000u
 
-enum fam { FAM_F3D, FAM_F3DEX, FAM_F3DWR, FAM_F3DEX2, FAM_F5 };
+enum fam { FAM_F3D, FAM_F3DEX, FAM_F3DWR, FAM_F3DEX2, FAM_F5, FAM_INDY };
 
 struct b {
 	uint8_t *ram;
@@ -71,7 +75,11 @@ static void put_matrix(uint8_t *p, const int32_t m[16])
 
 static void othermode_h(struct b *b, int shift, int len, uint32_t data)
 {
-	if (gen2(b))
+	if (b->fam == FAM_INDY)
+		/* El microcódigo de Indiana Jones cuenta los bits desde el de arriba: la máscara son
+		 * len bits y va corrida 31 - (shift + len - 1). */
+		dl(b, 0xBA000000u | (uint32_t)(31 - (shift + len - 1)) << 8 | (uint32_t)(len - 1), data);
+	else if (gen2(b))
 		dl(b, 0xE3000000u | (uint32_t)(32 - shift - len) << 8 | (uint32_t)(len - 1), data);
 	else
 		dl(b, 0xBA000000u | (uint32_t)shift << 8 | (uint32_t)len, data);
@@ -109,6 +117,11 @@ static void vtx(struct b *b, uint32_t addr, unsigned v0, unsigned n)
 		(void)v0, (void)addr;
 		dl(b, 0x04000000u | n << 10, F5VTX_PA);
 		break;
+	case FAM_INDY:
+		/* Una DMA a la DMEM 0x170 y de ahí a los lugares 0 a n - 1. */
+		(void)v0, (void)addr;
+		dl(b, 0x01117000u | (8 * n - 1), n << 24 | F5VTX_PA);
+		break;
 	case FAM_F3DEX2:
 		dl(b, 0x01000000u | n << 12 | (v0 + n) << 1, addr);
 		break;
@@ -138,6 +151,17 @@ static void tri(struct b *b, unsigned v0, unsigned v1, unsigned v2)
 			dl(b, (r >> 8) << 16 | (r & 0x3FF), 0);
 		}
 		break;
+	case FAM_INDY:
+		/* G_TRI1: las direcciones de los lugares (0x600 + 40 por vértice), la palabra de los colores
+		 * (desplazamientos de 4 bytes en la tabla de 0xD40) y, con textura, las coordenadas. */
+		dl(b, 0xBF000000u | (b->tex_on ? 0x200u : 0u), (0x600 + 40 * v0) << 16 | (0x600 + 40 * v1));
+		dl(b, (v0 * 4) << 16 | (v1 * 4) << 8 | v2 * 4, (0x600 + 40 * v2) << 16);
+		if (b->tex_on) {
+			uint32_t r = rnd(b);
+			dl(b, (r & 0x1FFF) << 16 | ((r >> 4) & 0x1FFF), (r >> 3) << 16 | (r & 0x0FFF));
+			dl(b, (r >> 8) << 16 | (r & 0x3FF), 0);
+		}
+		break;
 	case FAM_F3DEX2:
 		dl(b, 0x05000000u | (v0 * 2) << 16 | (v1 * 2) << 8 | v2 * 2, 0);
 		break;
@@ -157,7 +181,7 @@ static void tri(struct b *b, unsigned v0, unsigned v1, unsigned v2)
  * 0 y un texel por píxel (en copia, 4 por paso: dsdx 4.0). */
 static void texrect(struct b *b, unsigned tile, unsigned x0, unsigned y0, unsigned x1, unsigned y1, bool copy)
 {
-	if (b->fam == FAM_F5) {
+	if (b->fam == FAM_F5 || b->fam == FAM_INDY) {
 		/* 16 bytes: las palabras de s y t y de dsdx y dtdy siguen a las dos primeras, sin opcode. */
 		dl(b, 0xE4000000u | (x1 << 2) << 12 | y1 << 2, tile << 24 | (x0 << 2) << 12 | y0 << 2);
 		dl(b, 0, (copy ? 4u << 10 : 1u << 10) << 16 | 1u << 10);
@@ -193,6 +217,9 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 	case SALSA64_GBI_F5ROGUE:
 		b.fam = FAM_F5;
 		break;
+	case SALSA64_GBI_F5INDY:
+		b.fam = FAM_INDY;
+		break;
 	default:
 		break;
 	}
@@ -225,7 +252,26 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 		p[14] = (uint8_t)(c >> 16);
 		p[15] = 0xFF;
 	}
-	if (b.fam == FAM_F5) {
+	if (b.fam == FAM_INDY) {
+		/* Luces: tipo 1 (con posición) en 0xB10, sus posiciones en 0xB00 y 0xB08; la tabla de
+		 * desplazamientos de 0x380 a vértices de 0x170; colores de entrada; 32 partículas. */
+		for (int i = 0; i < 0x30; i += 4)
+			salsa64_wr32(ram + INLIGHT_PA + i, rnd(&b) << 8 | 0x01);
+		salsa64_wr32(ram + INLIGHT_PA + 0x10, 0x60C0F001u);
+		salsa64_wr32(ram + INLIGHT_PA + 0x14, 0x00080000u | (rnd(&b) & 0x7FFF));
+		for (int i = 0; i < 16; i++)
+			ram[INTAB_PA + i] = (uint8_t)(8 * (i & 3));
+		for (int i = 0; i < 32; i += 4)
+			salsa64_wr32(ram + INCOL_PA + i, rnd(&b) << 8 | 0xFF);
+		for (int i = 0; i < 32; i++) {
+			uint8_t *p = ram + INPART_PA + 8 * i;
+			salsa64_wr16(p, (uint16_t)(rnd(&b) & 0x7F) - 64);
+			salsa64_wr16(p + 2, (uint16_t)(rnd(&b) & 0x7F) - 64);
+			salsa64_wr16(p + 4, (uint16_t)(rnd(&b) & 0x3F));
+			salsa64_wr16(p + 6, (uint16_t)((i & 3) << 8 | (i & 1)));
+		}
+	}
+	if (b.fam == FAM_F5 || b.fam == FAM_INDY) {
 		for (int i = 0; i < 8; i++) {
 			for (int k = 0; k < 3; k++)
 				salsa64_wr16(ram + F5VTX_PA + 8 * i + 2 * k, (uint16_t)pos[i][k]);
@@ -256,7 +302,7 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 	bg[23] = 2;                         /* 16 bits */
 
 	/* Estado: color image, z image, tijeras, viewport y matrices. */
-	if (b.fam == FAM_F5) {
+	if (b.fam == FAM_F5 || b.fam == FAM_INDY) {
 		/* Cada lista empieza con la palabra del salto de software. */
 		dl(&b, 0, 0);
 	}
@@ -273,13 +319,27 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 		dl(&b, 0, 0x00000000u);
 		dl(&b, 0x00200020u, 0);
 		dl(&b, 0x02000000u, F5COL_PA);
+	} else if (b.fam == FAM_INDY) {
+		/* Todo es una DMA a la DMEM: el viewport (0x130), la matriz combinada (0x5C0, de donde sale
+		 * la que se usa) y la de los vértices de la DMEM (0xE40). */
+		dl(&b, 0x0101300Fu, VP_PA);
+		dl(&b, 0x0105C03Fu, PROJ_PA);
+		dl(&b, 0x010E403Fu, PROJ_PA);
+		dl(&b, 0x0103800Fu, INTAB_PA);
+		dl(&b, 0x01300000u | 0x5B8u << 8 | 3u, 1u << 24 | INLIGHT_PA);  /* una luz (y 4 bytes a 0x5B8) */
+		dl(&b, 0x010B002Fu, INLIGHT_PA);
+		dl(&b, 0x0104801Fu, INCOL_PA);
 	} else {
 		dl(&b, gen2(&b) ? 0xDC080008u : 0x03800010u, VP_PA);
 	}
-	dl(&b, gen2(&b) ? 0xDA380007u : 0x01030040u, PROJ_PA);
-	dl(&b, gen2(&b) ? 0xDA380003u : 0x01020040u, MV_PA);
+	if (b.fam != FAM_INDY) {
+		dl(&b, gen2(&b) ? 0xDA380007u : 0x01030040u, PROJ_PA);
+		dl(&b, gen2(&b) ? 0xDA380003u : 0x01020040u, MV_PA);
+	}
 	if (gen2(&b))
 		dl(&b, 0xD9000000u, 0x00200004u | 0x1u);  /* G_SHADE | G_SHADING_SMOOTH | G_ZBUFFER */
+	else if (b.fam == FAM_INDY)
+		dl(&b, 0xB7000000u, 0x00000005u);         /* G_ZBUFFER y G_SHADE */
 	else
 		dl(&b, 0xB7000000u, 0x00000205u);         /* lo mismo con los bits de F3D */
 
@@ -293,6 +353,10 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 	dl(&b, 0xF7000000u, 0x00010001u * (rnd(&b) & 0xFFFE));
 	dl(&b, 0xF6000000u | (200u << 2) << 12 | 60u << 2, (8u << 2) << 12 | 8u << 2);
 	dl(&b, 0xE7000000u, 0);
+
+	/* La tabla de colores de los triángulos de Indiana Jones (0xD40): una DMA. */
+	if (b.fam == FAM_INDY)
+		dl(&b, 0x010D401Fu, F5COL_PA);
 
 	/* Dos triángulos con el sombreado, sin textura. */
 	cycle(&b, 0);
@@ -383,6 +447,23 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 		dl(&b, 0xBD000500u, 0xFF8040FFu);
 		dl(&b, 0, 0x00200020u);
 		dl(&b, 0x04000400u, 0);
+	}
+
+	/* Indiana Jones: la iluminación de las dos clases con una luz puntual, los vértices con la matriz
+	 * de 0xE40 y los rectángulos de las partículas. */
+	if (b.fam == FAM_INDY) {
+		cycle(&b, 0);
+		combine(&b, CC_T0, CC_ZERO, CC_SHADE, CC_ZERO, CC_T0, CC_A_ZERO, CC_SHADE, CC_A_ZERO);
+		texture(&b, 0, 1);
+		dl(&b, 0x01248000u | 0x1Fu, 7u << 24 | INCOL_PA);   /* iluminación 2 */
+		dl(&b, 0x01648000u | 0x1Fu, 7u << 24 | INCOL_PA);   /* iluminación 1 */
+		dl(&b, 0x05000000u | 0x00FFu, 0x00000018u);          /* los vértices 0 a 7 con la matriz de 0xE40 */
+		tri(&b, 0, 1, 2);
+		dl(&b, 0x05100000u | 0x8000u, 0x80000024u);           /* partículas: un bloque de 32 vértices */
+		dl(&b, INPART_PA, 0xFFFFFFFFu);
+		dl(&b, 0x00100010u, 0x00040004u);
+		dl(&b, 0x01000100u, 0x00020002u);
+		dl(&b, 0x0000000Fu, 0);
 	}
 
 	dl(&b, 0xE9000000u, 0);  /* G_RDPFULLSYNC */

@@ -466,6 +466,9 @@ static void rsp_detect_gbi_dkr(void)
 	static const struct { uint32_t crc; enum salsa64_gbi gbi; } cases[] = {
 		{ 0x8D91244Fu, SALSA64_GBI_F3DDKR }, { 0x6E6FC893u, SALSA64_GBI_F3DDKR },
 		{ 0xBDE9D1FBu, SALSA64_GBI_F3DJFG }, { 0xDA51CCDBu, SALSA64_GBI_F5ROGUE },
+		{ 0x6859BF8Eu, SALSA64_GBI_F5INDY }, { 0x23FEF05Fu, SALSA64_GBI_F5INDY },
+		/* Animal Crossing: F3DZEX2 y S2DEX2 sin texto de versión. */
+		{ 0xD39A0D4Fu, SALSA64_GBI_F3DZEX2 }, { 0x02C399DDu, SALSA64_GBI_S2DEX },
 	};
 	state = 0xFFFFFFFFu;  /* CRC de size − 4 ceros, sin la inversión final */
 	for (uint32_t i = 0; i < size - 4; i++)
@@ -480,6 +483,67 @@ static void rsp_detect_gbi_dkr(void)
 		CHECK_EQ(salsa64_crc32_words_swapped(p, size), cases[c].crc);
 		CHECK_EQ(salsa64_rsp_detect_gbi(&t_n64.bus, &task), cases[c].gbi);
 	}
+	memset(p, 0, size);
+}
+
+/* Animal Crossing (Dōbutsu no Mori): dos microcódigos sin texto, que se reconocen por el CRC-32 de su
+ * código (en palabras del host, de la lista de otros emuladores): el F3DZEX2 trae la bandera de «sin
+ * recorte contra el plano cercano» (el .NoN que un texto diría) y el S2DEX2 no. Código fabricado para
+ * que dé ese CRC. Y lo que el log de la PS3 imprime de un microcódigo desconocido
+ * (salsa64_rsp_ucode_ident): los CRC de los bytes y de las palabras del host, y el de los datos. */
+static void rsp_detect_animal_crossing(void)
+{
+	struct salsa64_bus *bus = &t_n64.bus;
+	const uint32_t code = 0x100000, size = 0x1000;  /* donde put_task dice que está el código */
+	uint8_t *p = bus->rdram + code;
+	static const struct { uint32_t crc; enum salsa64_gbi gbi; bool nonear; } cases[] = {
+		{ 0xD39A0D4Fu, SALSA64_GBI_F3DZEX2, true }, { 0x02C399DDu, SALSA64_GBI_S2DEX, false },
+	};
+	uint32_t state = 0xFFFFFFFFu;
+	for (uint32_t i = 0; i < size - 4; i++)
+		for (int k = 0; k < 8; k++)
+			state = (state >> 1) ^ (0xEDB88320u & (0u - (state & 1)));
+	salsa64_rsp_set_gfx(bus, &fake_backend);
+	for (unsigned c = 0; c < sizeof cases / sizeof cases[0]; c++) {
+		uint8_t tail[4];
+		memset(p, 0, size);
+		crc32_force(state, cases[c].crc, tail);
+		for (int i = 0; i < 4; i++)
+			p[size - 4 + (3 - i)] = tail[i];
+		memset(bus->rdram + 0x5000, 0, 0x800);  /* los datos: sin texto de versión */
+		put_task(SALSA64_TASK_GFX, 0x5000, 0x6000);
+		struct salsa64_task task;
+		salsa64_rsp_read_task(bus, &task);
+		CHECK_EQ(salsa64_rsp_detect_gbi(bus, &task), cases[c].gbi);
+		uint32_t cb, cw, cd;
+		CHECK(salsa64_rsp_ucode_ident(bus, task.ucode, task.ucode_size, task.ucode_data, task.ucode_data_size, &cb, &cw,
+					      &cd));
+		CHECK_EQ(cw, cases[c].crc);
+		CHECK_EQ(cb, salsa64_crc32(p, size));
+	}
+	/* El F3DZEX2 trae la bandera del plano cercano en la tarea que arranca. */
+	memset(p, 0, size);
+	{
+		uint8_t tail[4];
+		crc32_force(state, cases[0].crc, tail);
+		for (int i = 0; i < 4; i++)
+			p[size - 4 + (3 - i)] = tail[i];
+		memset(&fake, 0, sizeof fake);
+		memset(bus->rdram + 0x5000, 0, 0x800);
+		put_task(SALSA64_TASK_GFX, 0x5000, 0x6000);
+		wr(SP_REG(SALSA64_SP_STATUS), 0x1 | 0x4);
+		CHECK_EQ(fake.starts, 1);
+		CHECK_EQ(fake.gbi, SALSA64_GBI_F3DZEX2);
+		struct gfx_job job;
+		salsa64_gfx_job(&job, bus, &fake.task, fake.gbi);
+		CHECK((job.flags & GFX_JOB_NONEAR) != 0);
+		salsa64_sched_dispatch(&t_n64.sched, CPU->cycles + bus->rsp.gfx_cycles + bus->rsp.dp_cycles);
+		wr(SP_REG(SALSA64_SP_STATUS), 0x8);
+		bus->mi.intr = 0;
+	}
+	uint32_t cb, cw, cd;
+	CHECK(!salsa64_rsp_ucode_ident(bus, 0x7FFFFFF0u, 0x1000, 0, 0, &cb, &cw, &cd));
+	salsa64_rsp_set_gfx(bus, NULL);
 	memset(p, 0, size);
 }
 
@@ -621,6 +685,7 @@ void t_suite_rsp(void)
 	RUN(rsp_detect_gbi_crc);
 	RUN(rsp_detect_gbi_wr);
 	RUN(rsp_detect_gbi_dkr);
+	RUN(rsp_detect_animal_crossing);
 	RUN(rsp_dpc_from_cpu);
 	RUN(rsp_dp_interrupts_queue);
 }

@@ -24,6 +24,10 @@
  *   imagen 3 (Factor 5: Rogue Squadron y lo común de F3D): texto 101,9 KB
  *     (14 KB son de f5rogue.c con -Os), hasta _end 248 720 bytes, holgura
  *     3 472 (2026-10-18)
+ *   imagen 4 (Factor 5: Indiana Jones y Battle for Naboo; sin F3D): texto
+ *     118,5 KB (40 KB de f5indy.c con -Os, 18 KB de ellos de Naboo), bss
+ *     125,7 KB con la caché de texturas en 224 entradas y la DMEM de 4 KB de
+ *     f5indy.c, hasta _end 251 040 bytes, holgura 1 808 (2026-10-18)
  * Lo de todas:
  *   código común (recorrido, geometría, RDP, combiner con -Os 11 KB, TMEM,
  *     caché de texturas, interpolación, listas del CPU, runtime) ~ 83 KB

@@ -31,6 +31,8 @@
 #include "spu_gfx2_stack.h"
 #include "spu_gfx3_bin.h"
 #include "spu_gfx3_stack.h"
+#include "spu_gfx4_bin.h"
+#include "spu_gfx4_stack.h"
 
 /* Las imágenes embebidas (src/frontend/Makefile) y sus números del build
  * (tools/spu-stack.py): hasta dónde llega el programa en el local store y
@@ -45,8 +47,9 @@ static const struct {
 	{ spu_gfx1_bin, &spu_gfx1_bin_size, SPU_GFX1_END, SPU_GFX1_STACK, SPU_GFX1_SLACK },
 	{ spu_gfx2_bin, &spu_gfx2_bin_size, SPU_GFX2_END, SPU_GFX2_STACK, SPU_GFX2_SLACK },
 	{ spu_gfx3_bin, &spu_gfx3_bin_size, SPU_GFX3_END, SPU_GFX3_STACK, SPU_GFX3_SLACK },
+	{ spu_gfx4_bin, &spu_gfx4_bin_size, SPU_GFX4_END, SPU_GFX4_STACK, SPU_GFX4_SLACK },
 };
-_Static_assert(GFX_SPE0_IMAGES == 4, "una entrada de `images` por imagen del SPE 0");
+_Static_assert(GFX_SPE0_IMAGES == 5, "una entrada de `images` por imagen del SPE 0");
 
 /* El hash con SIMD del SPE (identidad de las texturas en la caché) debe dar
  * lo mismo que el de C: tramos que cortan bloques de 16 bytes y que dan la
@@ -147,7 +150,7 @@ static int check_lists(spukit_worker *w, int img)
 	static const uint32_t gbis[] = { SALSA64_GBI_F3D,    SALSA64_GBI_F3DEX,  SALSA64_GBI_F3DWR,
 					 SALSA64_GBI_F3DPD,  SALSA64_GBI_F3DDKR, SALSA64_GBI_F3DJFG,
 					 SALSA64_GBI_F3DEX2, SALSA64_GBI_F3DZEX2, SALSA64_GBI_F3DEXBG,
-					 SALSA64_GBI_F5ROGUE };
+					 SALSA64_GBI_F5ROGUE, SALSA64_GBI_F5INDY };
 	int bad = 0;
 	uint32_t task = 0;
 	memset(chk.cache, 0, sizeof chk.cache);

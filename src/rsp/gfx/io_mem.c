@@ -52,6 +52,14 @@ const uint8_t *gfx_io_read(struct gfx_state *g, enum gfx_io_slot slot, uint32_t 
 	return PTR(j->rdram_ea) + addr;
 }
 
+void gfx_io_write(struct gfx_state *g, uint32_t addr, const uint8_t *src, uint32_t size)
+{
+	const struct gfx_job *j = g->job;
+	if (addr >= j->rdram_size || size > j->rdram_size - addr)
+		return;
+	memcpy(PTR(j->rdram_ea) + addr, src, size);
+}
+
 bool gfx_io_dl(struct gfx_state *g, uint32_t addr, uint32_t *w0, uint32_t *w1)
 {
 	const uint8_t *p;

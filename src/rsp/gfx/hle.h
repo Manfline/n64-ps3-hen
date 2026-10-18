@@ -304,6 +304,9 @@ void gfx_io_end(struct gfx_state *g);
 /* Puntero a `size` bytes de la RDRAM desde `addr`, válido hasta la siguiente
  * lectura con el mismo `slot`; NULL si se sale de la RDRAM. */
 const uint8_t *gfx_io_read(struct gfx_state *g, enum gfx_io_slot slot, uint32_t addr, uint32_t size);
+/* Escribe `size` bytes en la RDRAM (lo que el microcódigo deja ahí: las partículas de Indiana Jones).
+ * Las escrituras salen antes de terminar el trabajo (gfx_io_end). */
+void gfx_io_write(struct gfx_state *g, uint32_t addr, const uint8_t *src, uint32_t size);
 /* Siguiente comando de la display list (8 bytes). false si se sale. */
 bool gfx_io_dl(struct gfx_state *g, uint32_t addr, uint32_t *w0, uint32_t *w1);
 /* Lugar para n vértices de salida (≤ 6), o NULL si no caben. */
@@ -337,6 +340,8 @@ void gfx_dl_f3dexbg(struct gfx_state *g);
 void gfx_dl_f3ddkr(struct gfx_state *g);
 /* Rogue Squadron (Factor 5, de F3D con lista de comandos de longitud variable y mallas de relieve generadas). */
 void gfx_dl_f5rogue(struct gfx_state *g);
+/* Indiana Jones y Battle for Naboo (Factor 5): una DMEM de 4 KB con DMA, luces, partículas y mallas. */
+void gfx_dl_f5indy(struct gfx_state *g);
 /* dpc.c: comandos crudos del RDP [job->dl, job->dl_end) (GFX_JOB_DPC). */
 void gfx_dl_dpc(struct gfx_state *g);
 

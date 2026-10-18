@@ -26,6 +26,7 @@
 #define TAG_VTX  3
 #define TAG_CMD  5
 #define TAG_TEX  7
+#define TAG_WR   9
 
 #define DL_BLOCK  1024u
 #define VTX_BUF   8192u
@@ -35,6 +36,7 @@ static uint8_t rd_vtx[GFX_MAX_VTX * 16 + 32] __attribute__((aligned(128)));
 static uint8_t rd_mtx[64 + 32] __attribute__((aligned(128)));
 static uint8_t rd_small[512 + 32] __attribute__((aligned(128)));
 static uint8_t rd_tex[GFX_IO_MAX + 32] __attribute__((aligned(128)));
+static uint8_t wr_buf[512 + 32] __attribute__((aligned(128)));
 
 static uint8_t dl_buf[2][DL_BLOCK] __attribute__((aligned(128)));
 static uint8_t vtx_buf[2][VTX_BUF] __attribute__((aligned(128)));
@@ -133,6 +135,24 @@ const uint8_t *gfx_io_read(struct gfx_state *g, enum gfx_io_slot slot, uint32_t 
 	if (size + 32 > cap)
 		return NULL;
 	return spukit_get_unaligned(buf, rdram_ea(g, addr), size, TAG_READ);
+}
+
+/* Escribe en la RDRAM por DMA: el tramo alineado a 16 que contiene los bytes (se
+ * lee antes lo que no se pisa). Solo la HLE de Indiana Jones lo usa. */
+void gfx_io_write(struct gfx_state *g, uint32_t addr, const uint8_t *src, uint32_t size)
+{
+	if (size == 0 || addr >= g->job->rdram_size || size > g->job->rdram_size - addr)
+		return;
+	const uint32_t start = addr & ~15u, end = (addr + size + 15) & ~15u, len = end - start;
+	if (len > 512)
+		return;
+	if (start != addr || end != addr + size) {
+		spukit_dma_get(wr_buf, rdram_ea(g, start), len, TAG_WR);
+		spukit_dma_wait(1u << TAG_WR);
+	}
+	memcpy(wr_buf + (addr - start), src, size);
+	spukit_dma_put(wr_buf, rdram_ea(g, start), len, TAG_WR);
+	spukit_dma_wait(1u << TAG_WR);
 }
 
 /* Pide el bloque de display list que contiene `block` al búfer b. */
