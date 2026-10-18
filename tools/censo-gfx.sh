@@ -38,7 +38,9 @@ mkdir -p "$OUT"
 make -s -C "$ROOT/src/host" OUT="$ROOT/build/host-mac" CC=cc SAN= -j8 2>&1 | grep -v "reducing alignment" || true
 [ -x "$BIN" ] || { echo "no se pudo compilar salsa64-run" >&2; exit 1; }
 
-# nombre  rom  campos  guion (auto | nada | archivo de docs/pads sin .pad)
+# nombre  rom  campos  guion (auto | nada | archivo de docs/pads sin .pad)  [async]
+# async: a ritmo normal de rebanadas (con --lle-speed 200) en vez de la tarea en el acto:
+# juegos que se atoran si el RSP termina al instante.
 ESCENAS="
 sm64          sm64.z64          4250  sm64-castillo
 oot           oot.z64           3600  auto
@@ -78,10 +80,10 @@ marioparty    marioparty.z64    3000  auto
 marioparty3   marioparty3.z64   3000  auto
 doom64        doom64.z64        3000  auto
 nflblitz      nflblitz.z64      3000  auto
-nbashowtime   nbashowtime.z64   3000  auto
+nbashowtime   nbashowtime.z64   3000  auto  async
 swracer       swracer.z64       3000  auto
 killerinstinct killerinstinct.z64 4000 killerinstinct-pelea
-hydrothunder  hydrothunder.z64  3000  auto
+hydrothunder  hydrothunder.z64  3000  auto  async
 cruisnusa     cruisnusa.z64     3000  auto
 rush2049      rush2049.z64      3000  auto
 roadrash64    roadrash64.z64    3000  auto
@@ -100,7 +102,7 @@ auto_pad() {
 }
 
 escena() {
-	nombre=$1 rom=$2 campos=$3 guion=$4
+	nombre=$1 rom=$2 campos=$3 guion=$4 modo=${5:-}
 	[ "$campos" -gt "$MAXF" ] && campos=$MAXF
 	if [ ! -f "$ROMS/$rom" ]; then
 		echo "$nombre: sin $rom, se omite"
@@ -111,21 +113,27 @@ escena() {
 	nada) pad="" ;;
 	*) pad=$(cat "$ROOT/docs/pads/$guion.pad") ;;
 	esac
-	SALSA64_GCHK_SECONDS=$SECS SALSA64_GCHK_LOG="$OUT/$nombre.tsv" \
-		"$BIN" -q --lle=all --lle-check-gfx --fields "$campos" ${pad:+--pad "$pad"} \
+	asinc=""
+	envasync="SALSA64_GCHK_X=1"
+	if [ "$modo" = async ]; then
+		asinc="--lle-speed 200"
+		envasync="SALSA64_GCHK_ASYNC=1"
+	fi
+	env SALSA64_GCHK_SECONDS="$SECS" SALSA64_GCHK_LOG="$OUT/$nombre.tsv" "$envasync" \
+		"$BIN" -q --lle=all $asinc --lle-check-gfx --fields "$campos" ${pad:+--pad "$pad"} \
 		--save-dir "$OUT/$nombre.saves" "$ROMS/$rom" >"$OUT/$nombre.log" 2>&1 || true
 	echo "$nombre: $(grep 'lle-check-gfx: [0-9]* tareas' "$OUT/$nombre.log" | head -1 | sed 's/^salsa64-run: lle-check-gfx: //')"
 }
 
 lista="$*"
-while read -r nombre rom campos guion; do
+while read -r nombre rom campos guion modo; do
 	[ -n "$nombre" ] || continue
 	if [ -n "$lista" ]; then
 		case " $lista " in *" $nombre "*) ;; *) continue ;; esac
 	fi
 	# Hasta $JOBS escenas a la vez.
 	while [ "$(jobs -r | wc -l)" -ge "$JOBS" ]; do sleep 1; done
-	escena "$nombre" "$rom" "$campos" "$guion" &
+	escena "$nombre" "$rom" "$campos" "$guion" "$modo" &
 done <<FIN
 $ESCENAS
 FIN

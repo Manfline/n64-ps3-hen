@@ -2539,7 +2539,9 @@ static void shadow_lle_start(void *ctx)
 static void gchk_lle_start(void *ctx)
 {
 	lle_host.backend.start(ctx);
-	if (!gchk_pending())
+	/* SALSA64_GCHK_ASYNC=1: por rebanadas como siempre (algunos juegos esperan al RSP con otro ritmo
+	 * y se atoran si la tarea termina en el acto: NBA Showtime, Hydro Thunder). */
+	if (!gchk_pending() || getenv("SALSA64_GCHK_ASYNC"))
 		return;
 	for (unsigned total = 0; total < (16u << 20) && !lle_host.rsp.halt;) {
 		uint32_t n = salsa64_lle_host_run(&lle_host, 1u << 16);

@@ -355,6 +355,7 @@ struct key {
 	uint32_t tasks, cls[GCHK_NCLASS], kinds[GCHK_NKIND], cut, big, lle_poor;
 	uint32_t tri_l, tri_h, rect_l, rect_h, draw_h;    /* de las tareas con HLE */
 	uint32_t unk_tasks_h;                              /* tareas donde la HLE no implementó algo */
+	uint32_t rdp_ops[64];                              /* comandos del RDP que llegaron del LLE, por opcode */
 	uint32_t unk_h[256], unk_l[256];                   /* opcodes sin implementar en la HLE y en el RDP del LLE */
 	uint32_t state_tasks, fld[64];                     /* tareas con el estado final del RDP distinto, y por campo */
 	uint64_t px_drawn, px_diff, px_bad, hist[5];
@@ -378,6 +379,7 @@ static struct {
 	struct gfx_result lle;      /* suma de los tramos del RDP del LLE */
 	uint32_t lle_jobs;
 	uint32_t unk_h_task;
+	uint32_t ops0[64];   /* gfx_dpc_hist al arrancar la tarea */
 	void *pre, *post;
 	uint32_t total_class[GCHK_NCLASS];
 	/* Opciones del entorno. */
@@ -502,6 +504,7 @@ void gchk_task_start(const struct salsa64_task *t, enum salsa64_gbi gbi, const c
 	memset(&G.lle, 0, sizeof G.lle);
 	G.lle_jobs = 0;
 	G.unk_h_task = 0;
+	memcpy(G.ops0, gfx_dpc_hist, sizeof G.ops0);
 	if (!G.hle)
 		return;
 	/* El estado del RDP de quien consume al LLE, a un gfx_state aparte. */
@@ -595,6 +598,8 @@ void gchk_task_end(void)
 	G.pending = false;
 	struct key *k = G.key;
 	k->tasks++;
+	for (unsigned i = 0; i < 64; i++)
+		k->rdp_ops[i] += gfx_dpc_hist[i] - G.ops0[i];
 	if (!G.hle) {
 		k->cls[GCHK_NOHLE]++;
 		G.total_class[GCHK_NOHLE]++;
@@ -721,6 +726,12 @@ void gchk_report(FILE *f)
 			fprintf(f, "gchk:   píxeles distintos por diferencia de canal: ≤8 %llu, ≤16 %llu, ≤32 %llu, ≤64 %llu, más %llu\n",
 				(unsigned long long)k->hist[0], (unsigned long long)k->hist[1], (unsigned long long)k->hist[2],
 				(unsigned long long)k->hist[3], (unsigned long long)k->hist[4]);
+		{
+			uint32_t h[256] = { 0 };
+			for (unsigned o = 0; o < 64; o++)
+				h[0xC0 + o] = k->rdp_ops[o];
+			print_ops(f, "comandos del RDP que entregó el LLE (opcode)", h);
+		}
 		print_ops(f, "comandos sin implementar en la HLE", k->unk_h);
 		print_ops(f, "comandos sin implementar en el RDP del LLE", k->unk_l);
 		char buf[256];
