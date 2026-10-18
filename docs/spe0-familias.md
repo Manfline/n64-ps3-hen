@@ -70,7 +70,8 @@ los 68 respaldos del autor (unos 50 juegos distintos; cada uno 4·10⁹ ciclos,
 - **Entre tareas**: Resident Evil 2 manda F3DEX2 y S2DEX sueltos (1217 y 3649
   tareas en 43 s) y Yoshi's Story solo S2DEX: el S2DEX suelto va en la imagen
   de F3DEX2. Rogue Squadron e Indiana Jones (Factor 5) mandan solo su
-  microcódigo (hoy «desconocido»): pueden ir en una imagen propia.
+  microcódigo: Rogue Squadron ya va en una imagen propia (la 3, abajo);
+  Indiana Jones y Naboo (otro microcódigo de Factor 5) siguen sin HLE.
 
 ## Partición
 
@@ -79,6 +80,7 @@ los 68 respaldos del autor (unos 50 juegos distintos; cada uno 4·10⁹ ciclos,
 | 0 «F3D» | `spu_gfx0` | F3D, F3DEX 1.x, F3DWR, F3DPD, F3DDKR, F3DJFG | SM64, GoldenEye, Perfect Dark, MK64, Wave Race, Star Fox 64, Banjo-Kazooie, Diddy Kong Racing, Jet Force Gemini, Mickey's Speedway, Killer Instinct Gold, Doom 64, 1080, FIFA 99… |
 | 1 «F3DEX2» | `spu_gfx1` | F3DEX2, F3DZEX2, S2DEX2 y F3DFLX en la tarea | Zelda OoT y MM, Kirby 64, F-Zero X, Smash, Banjo-Tooie, DK64, Paper Mario, Pokémon Snap y Stadium, Mario Party, RE2 (sus tareas F3DEX2)… |
 | 2 «Conker» | `spu_gfx2` | F3DEXBG (sobre F3DEX2) | Conker's Bad Fur Day |
+| 3 «Factor 5» | `spu_gfx3` | F5Rogue (sobre lo común de F3D: `f3d.c` da G_TEXTURE, el modo geométrico, G_SETOTHERMODE y los comandos del RDP) | Star Wars: Rogue Squadron (desde el 2026-10-18) |
 
 Conker va aparte porque su variante (4,5 KB) le quitaba a la imagen de
 F3DEX2 justo el lugar que necesita el S2DEX suelto; no comparte tareas con
@@ -102,16 +104,58 @@ imagen después de sus tareas de prueba, la pila que el SPE nunca tocó es algo
 mayor que la holgura del build (14 736, 14 256 y 15 536 bytes, contando
 palabras en cero): el grafo de llamadas del build es una cota.
 
+### La imagen 3, de Factor 5 (2026-10-18)
+
+`f5rogue.c` (traducción a C del microcódigo de Rogue Squadron de GLideN64) va
+en una imagen propia: F3D (`f3d.c`: 4,1 KB, para lo que comparte) y
+`GFX_PART_F5ROGUE` (`f5rogue.c` con `-Os`: ~14 KB de código y datos; el
+despacho de las mallas y la tabla de opciones son datos, y el rectángulo
+generado usa flotante: sin la aritmética de 64 bits de libgcc, 5,3 KB). Rogue
+Squadron solo manda su microcódigo, así que no hay cambios de imagen.
+
+| Imagen | Texto | Datos + bss | Hasta `_end` | Caché | Cadena más honda | Holgura |
+|---|---:|---:|---:|---:|---:|---:|
+| 3 Factor 5 | 102 064 | 800 + 145 808 | 248 848 | 1024 | 9 936 | 3 344 |
+
+(Las otras tres, con el mismo build: holgura 1 744 en la imagen 0, 7 056 en la
+1 y 14 512 en la 2; la 0 y la 1 ya llevaban S2DEX suelto.) La cadena más honda
+es G_TRIGEN → rejilla → `tg_draw` → triángulo → combiner (560 + 528 + 176 bytes
+de marcos propios; la lista de 40 triángulos y las alturas y colores van en la
+pila). Con la caché de texturas en 896 entradas (medido en una compilación anterior, +3 200) la holgura sube a unos 6 500.
+Autoprueba: `selftest.c` arma una lista de Rogue (viewport y escala de
+coordenadas dentro de la lista, la tabla de colores, `G_VTX`, `G_TRI1` con
+textura, las tres mallas de `G_TRIGEN`, un `G_TEXRECT` de 16 bytes y el
+rectángulo generado) y la imagen la pasa igual que el PPE.
+
+**RPCS3 y las direcciones de 32 bits.** Al añadir esta imagen, en RPCS3
+(recompilador LLVM de SPU) las tareas de prueba de **otras** imágenes empezaron
+a salir distintas a las del PPE, de una imagen u otra según el diseño del código
+(las imágenes 0, 1 y 2 estaban idénticas byte a byte a las de antes), y con el
+juego la imagen de Factor 5 llegó a no dibujar nada: el SPE leía ceros en vez de la
+display list. Con el intérprete de SPU de RPCS3 (`SPU Decoder: Interpreter
+(static)`) las tareas de prueba cuentan lo mismo que el PPE; el recompilador
+avisaba «MFC_EAH is not a zero constant» en cada DMA. La suma de 64 bits de
+`rdram_ea` y de las salidas dejaba un EAH que el compilador no podía probar cero:
+con direcciones de 32 bits (`ea32` en `src/spu/gfx/io_spu.c`; la memoria
+principal y la del RSX están bajo 4 GB) no se ha vuelto a ver en tres compilaciones
+distintas (con la caché de texturas de la imagen 3 en 1024 y en 960 y con la
+final): `spe0-todas` en frío y en caliente («tareas de prueba iguales al PPE» en
+las cuatro imágenes) y Rogue Squadron con la imagen 3 (970 tareas por 1800
+campos, 60 campos/s en RPCS3, sin errores). Quien vea líneas «el SPE difiere del
+PPE» con `16384` comandos en una imagen que cargó bien (el SPE leyó ceros en vez
+de la lista) debe sospechar de esto antes que de la HLE. Pendiente: confirmarlo en la
+PS3 real (esperable: el código del SPE de las imágenes 0, 1 y 2 es el de siempre).
+
 **Hueco para lo que falta** (lo que queda sobre el mínimo de 1536 bytes):
 
 - **S2DEX suelto** (RE2, Yoshi's Story) en la imagen 1: 11 488 bytes con
   la caché en 1024; con 896 entradas, 3 584 más, y con 768, 7 168 más
   (`GFX_SPE0_TC_1` en `spe0.h`). Lo que comparte con S2DEX2 (`s2dex.c`: los
   fondos, `G_OBJ_LOADTXTR`) ya está en la imagen.
-- **Factor 5** (Rogue Squadron, Indiana Jones, Naboo) en una imagen nueva
-  con solo lo común: la imagen 0 sin sus 8 712 bytes de la primera
-  generación deja ~21 KB sobre el mínimo con la caché en 1024 (~28 KB con
-  768).
+- **Factor 5**: Rogue Squadron ya está en la imagen 3 (1 808 bytes sobre el
+  mínimo con la caché en 1024; unos 5 000 con 896). Indiana Jones y Naboo usan otro
+  microcódigo (`F5Indi_Naboo.cpp` de GLideN64, sin HLE todavía) y irían a la
+  misma imagen o a una propia, según lo que pese.
 - **Acclaim, ZSortBOSS, Turbo3D, F3DAM**: en la imagen 0 si son de la
   primera generación (12,5 KB libres), o en imágenes propias.
 

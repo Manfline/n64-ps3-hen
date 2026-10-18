@@ -1,5 +1,124 @@
 # Estado
 
+## 2026-10-18 — Rogue Squadron: HLE del microcódigo gráfico de Factor 5 (host verificada, imagen del SPE 0 en RPCS3; falta la PS3)
+
+Rogue Squadron solo corría con el RSP a bajo nivel (10 a 13 campos/s en la misión
+de la PS3). Ahora `src/rsp/gfx/f5rogue.c` interpreta su microcódigo («F5Rogue»:
+sin texto de identificación; se reconoce por el CRC-32 de sus 4 KB leídos en palabras
+del host, `0xDA51CCDB`, el valor de GLideN64) en el host, el PPE y una cuarta
+imagen del SPE 0 («Factor 5», [spe0-familias.md](spe0-familias.md)). Indiana Jones y
+Battle for Naboo usan otro microcódigo de Factor 5 y siguen con la LLE.
+
+- **Licencia.** Es una traducción a C de `src/uCodes/F5Rogue.cpp` de GLideN64
+  (GPLv2 sola; commit `a04081ad`), la primera de ese proyecto que entra en el árbol: el
+  archivo lleva `GPL-2.0-only` y su aviso de origen, y el binario que lo enlaza se
+  distribuye como GPLv2 (README, CONTRIBUTING, docs/THIRD_PARTY.md, docs/proyecto.md).
+- **Qué es el microcódigo.** Fast3D con la lista de longitud variable: cada comando
+  trae sus datos detrás (viewport y escala de coordenadas de textura en `G_MOVEMEM`,
+  los colores y coordenadas de un triángulo, los 40 bytes de `G_TRIGEN`); cada
+  lista empieza con una palabra cuyos 24 bits bajos son el destino del `0xB5`.
+  Vértices de 8 bytes que van siempre desde el lugar 0 del búfer, triángulos con un
+  índice de color por vértice en una tabla, mallas de relieve generadas por el
+  microcódigo (rejillas de 5 × 5 y de 3 × 3 con alturas de 8 bits y un cuadrilátero; el
+  terreno y el cielo de Tatooine) y rectángulos de textura generados desde un vértice
+  (carteles). El resto (G_TEXTURE, modo geométrico, G_SETOTHERMODE) es el de Fast3D
+  y lo hace `f3d.c`; el cuadro completo está en la cabecera de `f5rogue.c`.
+- **Cómo se verificó.** `salsa64-run --lle=all` (el microcódigo real) como verdad:
+  los estados se guardan con la HLE (la LLE no guarda), y con `SALSA64_GFX_CYCLES=1000`
+  y `--lle-speed 200` las tareas duran lo mismo en las dos y el juego no diverge;
+  `--stop-gfx N:archivo` vuelca la imagen tras la tarea N, y un registro de cada
+  triángulo de la HLE y de cada cuadrilátero del RDP de la LLE (temporal, no está en el
+  árbol) permite comparar vértice por vértice. Se llega a las escenas con START y A
+  cada 120 campos desde el 400 (la intro se salta; «SELECT LEVEL» hacia el campo 4000,
+  «MISSION GOALS» hacia el 12 000 y el vuelo hacia el 14 000).
+- **Lo que se midió** (y por eso el código no es el de GLideN64):
+  - La **y de pantalla va al revés** de Fast3D (GLideN64 da vuelta el signo del
+    viewport y niega la y; aquí el viewport conserva su signo, así que se invierte la y
+    de cada vértice y su recorte en y).
+  - Los **`G_TEXRECT` (0xE4) de la lista son de 16 bytes**: s, t, dsdx y dtdy van en la
+    palabra siguiente, sin opcode, no como los dos comandos de Fast3D. Con el despacho de
+    F3D los ~200 rectángulos por tarea de los menús y el HUD se perdían.
+  - La **escala de s y t** de los vértices (mitad alta del producto con la escala de
+    G_MOVEMEM 0x82 más la baja del producto con la segunda) coincide con la del RDP, en 1/32
+    de texel con la perspectiva activa; con ella el RDP trae además una W (constante de
+    2,0 en los carteles de estrellas de la intro): la HLE usa la del vértice.
+  - La **opción 0x02 de la rejilla de 3 × 3** mezcla en GLideN64 hacia la altura 9 (la
+    rejilla no la usa): aquí hacia la 7, como su ponderación y su color.
+  - El **alfa de los vértices es el factor de niebla** (con G_FOG) y sale igual que
+    en el RSP real (±1: 229 y 229, 135 y 136). El RSP a bajo nivel del host no pone el
+    modo geométrico G_FOG en su estado y por eso no aplica niebla: las diferencias de 2 a
+    5 % del texto que se aleja son la niebla de la HLE.
+  - El **plano cercano** se quedó como el de F3D (z = −w): mover el recorte a la
+    profundidad 0 de pantalla (el RSP real deja los vértices recortados en 0,001) da
+    el mismo resultado con el viewport que trae la lista.
+  - El **rectángulo generado**: 208 de 268 comandos idénticos y 60 con el tamaño a un
+    cuarto de píxel (el RSP real usa una w algo distinta; la HLE trunca la del vértice). No se
+    ha afinado.
+  - El RSP real **trunca x e y de los vértices a cuartos de píxel**; la HLE no (las
+    posiciones difieren hasta 0,25 píxeles).
+- **Contra el RSP real** (mismo método; 6 tareas desde cada estado; porcentaje de
+  píxeles a más de 16 por canal; 320 × 240):
+
+  | Escena | Campo | Píxeles distintos |
+  |---|---:|---:|
+  | cinemática de la trinchera y los cazas | 2000 | 1,84 % |
+  | «SELECT LEVEL» (hangar con la nave y el texto) | 4000 | 0,81 % |
+  | principio del «crawl» | 5000 | 0,45 % |
+  | el «crawl» | 6000 a 9000 | 2,3 a 5,3 % (la niebla, arriba) |
+  | planeta en órbita | 10 000 | 0,06 % |
+  | «MISSION GOALS» | 12 000 y 13 000 | 12,3 y 12,5 % (el cielo, abajo) |
+  | vuelo y misión en Tatooine (cielo y terreno generados) | 11 000, 14 000 a 17 000 | 11,7 a 49 % |
+
+  El cielo es un degradado casi liso: los promedios de color coinciden a ±3 de 255
+  (el tramado y el filtro de las texturas difieren), por eso el porcentaje a más de 16
+  asusta más que la imagen. Por vértice, en 2 o 4 tareas de varios estados: los de
+  `G_TRIGEN` 5 × 5 coinciden con los del RSP real en las 448 de 448 (100 %); en 3 × 3
+  y en el cuadrilátero, 79 % de los triángulos (los demás los recorta o los quita el RSP
+  real fuera de la pantalla); colores en 94 a 100 % de los vértices y coordenadas de
+  textura en 83 a 100 %.
+- **Sin comandos sin implementar** en 9000 y 17 000 campos desde el arranque, ni
+  errores ni tareas cortadas. Por tarea en el vuelo (campo 15 000, 1000 tareas): 9978
+  comandos, 1500 triángulos, 17 rectángulos y 336 dibujos.
+- **Velocidad en el host.** Del campo 15 000, `salsa64-run` con la HLE: 2000 campos en
+  5,8 s; con `--lle=all`, 1000 campos en 12,2 s: ~4× por campo (con el rasterizador
+  del host en los dos). En la PS3 falta medirla.
+- **Imagen del SPE 0.** `GFX_SPE0_F5ROGUE` = 3 con F3D y `f5rogue.c` (-Os): texto 102 064,
+  hasta `_end` 248 848, cadena más honda 9936 y holgura 3344 (mínimo 1536); las otras
+  tres, con el mismo build, 1744, 7056 y 14 512. Sin aritmética de 64 bits (el rectángulo
+  generado va en flotante) y las opciones de las mallas son datos. Autoprueba contra el PPE con
+  una lista propia de Rogue (`selftest.c`).
+- **RPCS3.** La imagen arranca y pasa su autoprueba («tareas de prueba iguales al PPE»), y
+  con el juego (el menú abre la ROM de Rogue) corre 970 tareas por 1800 campos a 60
+  campos/s sin errores, con la HLE dibujando (54 a 323 dibujos por tarea). Al añadir la
+  imagen, las autopruebas de otras imágenes empezaron a salir distintas en RPCS3 (el SPE
+  leía ceros en vez de la display list, según el diseño del código; con el intérprete
+  de SPU de RPCS3 no pasa): las direcciones efectivas de las DMA de la HLE gráfica son ahora de 32
+  bits (`ea32`, `io_spu.c`; la memoria principal está bajo 4 GB) y no se ha vuelto a
+  ver en tres compilaciones; detalle en [spe0-familias.md](spe0-familias.md).
+- **Pruebas.** 12 nuevas (`tests/unit/test_gfx_f5.c`: listas con cabecera y saltos,
+  segmentos y niebla, `G_VTX` (y invertida), triángulos con colores y coordenadas de
+  textura (con y sin perspectiva), sombreado plano por el vértice del índice, `G_TRI2`,
+  las tres mallas de `G_TRIGEN` con su opción de interpolar, `G_TEXRECT` de 16 bytes y el
+  rectángulo generado) y la detección por CRC en `test_rsp.c`; en Docker
+  (`tools/build.sh test-host`, con ASan y UBSan) 628 pruebas, 0 fallidas;
+  `tools/escenas-host.sh --comparar` contra el árbol anterior: 8 de 8 idénticas;
+  `tools/test-roms.sh` rc 0.
+- **Paquete de prueba** «Salsa64 Rogue HLE» (SLSA00150, v0.2.7-44-gcbdd240):
+  `build/salsa64-rogue/salsa64-rogue.pkg`, 3 160 592 bytes, sha256
+  `35359ada5d1dcbcb632866a29713f5bafab7fc794e46a0107240c87fe1e75d1f`, armado con
+  `tools/build.sh -C src/frontend PROGRAM=salsa64-rogue "TITLE=Salsa64 Rogue HLE"
+  APPID=SLSA00150 pkg` (el directorio de build borrado antes). Para probar en la PS3: abrir
+  Rogue Squadron (el menú, «SELECT LEVEL», una misión de Tatooine en vuelo) y mirar en el
+  log que el SPE 0 cambie de F3D a «Factor 5» con las «tareas de prueba iguales al PPE»,
+  que las tareas gráficas den 0 «con microcódigo desconocido» y 0 comandos sin
+  implementar, los campos por segundo en la misión (con la LLE: 10 a 13) y, si se ve
+  mal, el cielo y el terreno, el HUD y los carteles (rectángulos generados). Si el SPE
+  llega a leer ceros (líneas «16384 comandos» en el log), avisar.
+- **Falta.** Probarlo en la PS3; la niebla de la HLE para el RSP a bajo nivel; afinar el
+  tamaño del rectángulo generado y cuantizar x e y a cuartos de píxel si la diferencia
+  se notara; Indiana Jones y Battle for Naboo (`F5Indi_Naboo.cpp`) y MusyX v2, como
+  siguientes.
+
 ## 2026-10-17 — S2DEX suelto: Resident Evil 2 y Yoshi's Story
 
 Las tareas gráficas con el texto «RSP Gfx ucode S2DEX» (Resident Evil 2: «fifo
