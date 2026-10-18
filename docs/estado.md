@@ -1,5 +1,18 @@
 # Estado
 
+## 2026-10-18 — Resident Evil 2: el logo de N64 salía a un cuarto
+
+La escala de `G_TEXTURE` que rc7b3 aplicó al ST de `G_MODIFYVTX` rompía el logo
+de la intro: el cuadrilátero (87 × 88) lleva s de 0 a 126 y t de 0 a 108 con
+escala 1/2 sobre una textura de 64 × 54 (color y alfa apilados), y el RDP ya
+reduce a la mitad las ST de los triángulos sin perspectiva de F3DEX. Con
+`--lle-check-gfx` (microcódigo F3DEX.Rej real, host, campos 231–241) el LLE
+dibuja el logo entero y la HLE solo su cuarto superior izquierdo ampliado; sin la
+escala en `G_MODIFYVTX` esas tareas ya no salen como distintas. El microcódigo
+real copia el ST tal cual. Queda por verificar que las letras del menú de
+opciones (arreglo original de rc7b3) no dependían de esa escala: si vuelven a
+salir revueltas, buscar por el ancho del tile y no en `gfx_modify_vertex`.
+
 ## 2026-10-18 (noche) — rc9: regresiones de la rc8 (Banjo-Tooie, DK64, Castlevania, Conker)
 
 Datos de la PS3 con la rc8 (`build/rc8-ps3/`: `salsa64.log`, `salsa64-cajas.log` y cinco cajas negras). Rama `rc8-regresiones`.
