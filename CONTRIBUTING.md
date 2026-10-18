@@ -34,7 +34,12 @@ A pull request that breaks any of these will be closed, however good the code.
    other): check its license first, keep its copyright notices, and record the
    origin (repository, commit, files, license) in `docs/THIRD_PARTY.md`. The
    emulator is GPL-2.0-or-later, so the source license must be compatible
-   with that.
+   with that. One exception, for the graphics microcode HLE only: code from
+   GLideN64 (GPL-2.0-only) may be taken for microcodes that exist nowhere
+   else under a free license (Factor 5, Acclaim, ZSortBOSS...). Such a file
+   keeps its notice and `GPL-2.0-only`, and the binary that links it is
+   GPLv2 (see the README); prefer a GPL-2.0-or-later source when one exists,
+   and never put it in `lib/rsxkit/` or `lib/spukit/`.
 5. **`lib/rsxkit/` and `lib/spukit/` are MIT**, so other emulators and
    homebrew can reuse them. No GPL code goes there, and nothing from sources
    with unclear licensing (for example the Super Mario 64 PC port, which is

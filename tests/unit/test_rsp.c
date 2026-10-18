@@ -465,7 +465,7 @@ static void rsp_detect_gbi_dkr(void)
 	 * bytes del código, al revés. */
 	static const struct { uint32_t crc; enum salsa64_gbi gbi; } cases[] = {
 		{ 0x8D91244Fu, SALSA64_GBI_F3DDKR }, { 0x6E6FC893u, SALSA64_GBI_F3DDKR },
-		{ 0xBDE9D1FBu, SALSA64_GBI_F3DJFG },
+		{ 0xBDE9D1FBu, SALSA64_GBI_F3DJFG }, { 0xDA51CCDBu, SALSA64_GBI_F5ROGUE },
 	};
 	state = 0xFFFFFFFFu;  /* CRC de size − 4 ceros, sin la inversión final */
 	for (uint32_t i = 0; i < size - 4; i++)

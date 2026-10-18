@@ -397,6 +397,7 @@ static const struct {
 	{ 0x8D91244Fu, SALSA64_GBI_F3DDKR },  /* Diddy Kong Racing (USA, rev. 1: el mismo de arriba) */
 	{ 0x6E6FC893u, SALSA64_GBI_F3DDKR },  /* Diddy Kong Racing (otra versión: sin respaldo para probarlo) */
 	{ 0xBDE9D1FBu, SALSA64_GBI_F3DJFG },  /* Jet Force Gemini y Mickey's Speedway USA: sin respaldo */
+	{ 0xDA51CCDBu, SALSA64_GBI_F5ROGUE }, /* Star Wars: Rogue Squadron (USA: el de su microcódigo, CRC-32 0x415EF7D5 de los bytes tal cual) */
 };
 
 static enum salsa64_gbi gbi_by_crc(const struct salsa64_bus *bus, const struct salsa64_task *task)
@@ -584,7 +585,7 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 		bool hle_gfx = task.type == SALSA64_TASK_GFX && valid && rsp->gfx &&
 			       (gbi == SALSA64_GBI_F3DEX2 || gbi == SALSA64_GBI_F3DZEX2 || gbi == SALSA64_GBI_F3D ||
 				gbi == SALSA64_GBI_F3DEX || gbi == SALSA64_GBI_F3DWR || gbi == SALSA64_GBI_F3DDKR ||
-				gbi == SALSA64_GBI_F3DJFG || s2dex_ok);
+				gbi == SALSA64_GBI_F3DJFG || gbi == SALSA64_GBI_F5ROGUE || s2dex_ok);
 		bool hle_audio = task.type == SALSA64_TASK_AUDIO && valid && rsp->audio && abi != SALSA64_ABI_UNKNOWN;
 		if (rsp->lle_mode == SALSA64_LLE_ALL || !(hle_gfx || hle_audio || jpeg != SALSA64_JPEG_NONE)) {
 			rsp->stats.lle++;

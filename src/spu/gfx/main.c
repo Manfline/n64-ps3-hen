@@ -21,6 +21,9 @@
  *     239 632 bytes, holgura 13 024
  *   imagen 2 (Conker): texto 91,5 KB, hasta _end 238 352 bytes, holgura
  *     14 784
+ *   imagen 3 (Factor 5: Rogue Squadron y lo común de F3D): texto 101,9 KB
+ *     (14 KB son de f5rogue.c con -Os), hasta _end 248 720 bytes, holgura
+ *     3 472 (2026-10-18)
  * Lo de todas:
  *   código común (recorrido, geometría, RDP, combiner con -Os 11 KB, TMEM,
  *     caché de texturas, interpolación, listas del CPU, runtime) ~ 83 KB

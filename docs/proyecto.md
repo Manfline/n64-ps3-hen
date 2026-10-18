@@ -47,6 +47,12 @@ hacen el trabajo vectorial (RSP, audio, posprocesado) y el RSX dibuja.
   los avisos de copyright, registrar el origen en `docs/THIRD_PARTY.md` y
   mantener la compatibilidad de licencia. Verificar la licencia de cada
   fuente antes de copiar código.
+- Excepción para la HLE (decidida el 2026-10-16): se puede tomar código de
+  GLideN64 (GPLv2, sin «o posterior») para los microcódigos que solo existen
+  ahí (Factor 5, Acclaim, ZSortBOSS, F3DAM…). Los archivos tomados conservan
+  su aviso y `GPL-2.0-only`, los propios siguen en GPLv2 o posterior y el
+  binario combinado se distribuye como GPLv2 (README.md). El primero fue
+  `src/rsp/gfx/f5rogue.c` (2026-10-18). Nunca en `lib/rsxkit/` ni `lib/spukit/`.
 - `.gitignore` excluye `*.z64`, `*.n64`, `*.v64`, `*.rom` salvo
   `tests/roms/homebrew/`.
 
