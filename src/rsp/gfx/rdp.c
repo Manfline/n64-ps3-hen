@@ -553,10 +553,14 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 	 * coordenada del vértice; medido con el microcódigo real de Majora's
 	 * Mask: el sol del telescopio (un atlas de 64 × 32 con dos soles, s de
 	 * 0 a 63) muestra solo el sol izquierdo. Los TEXRECT llevan s y t
-	 * directos al RDP y no cambian. */
+	 * directos al RDP y no cambian. También F3DEX 1.x lo hace: Mace dibuja
+	 * sus textos (glifos de 16 × 16 en un atlas de 160 de ancho, con s hasta
+	 * 127 en los vértices) sin perspectiva, y con el LLE las coordenadas que
+	 * llegan al RDP son la mitad (la tarea 361 del selector de personajes
+	 * pasó de 230 tareas distintas a 0 en la primera ronda de 375). */
 	if (kind == PRIM_TRI && d->ntex && !((g->oh >> G_MDSFT_TEXTPERSP) & 1) &&
 	    (g->job->gbi == SALSA64_GBI_F3DEX2 || g->job->gbi == SALSA64_GBI_F3DZEX2 ||
-	     g->job->gbi == SALSA64_GBI_F3DEXBG))
+	     g->job->gbi == SALSA64_GBI_F3DEXBG || g->job->gbi == SALSA64_GBI_F3DEX))
 		for (unsigned i = 0; i < d->ntex; i++) {
 			d->tex[i].xf[0] *= 0.5f;
 			d->tex[i].xf[1] *= 0.5f;

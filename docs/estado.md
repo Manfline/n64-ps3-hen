@@ -191,6 +191,94 @@ sin probarse en el RSX real.
   directorio de build borrado antes). Pruebas del host: 656, 0 fallidas; `tools/test-roms.sh` bien; las
   escenas del host no cambian por construcción (salsa64-run solo gana funciones nuevas de targets.c que no llama).
 
+## 2026-10-18 — gráficos: Earthworm Jim 3D (orden de dibujo) y Mace (textos) arreglados en la HLE; Mario Tennis y la z de Zelda diagnosticados
+
+Rama `graficos-jim-tennis` (sobre rc6), con las cajas negras de la rc6 en la
+PS3 y el LLE (`--lle=all`, `--lle-check-gfx`) como oráculo en el host.
+
+- **Earthworm Jim 3D, «cosas lejanas encima de cercanas».** La caja negra
+  (21 tareas) ya traía la causa: todo el escenario (dibujos 1–43) sale con
+  `depth 11` = prueba + escritura + **z del primitivo** y con la misma z (0),
+  así que en el RSX gana el último dibujado (el orden de dibujo), y el logo y
+  los textos (z del primitivo, ZMODE_XLU = prueba estricta) quedan tapados.
+  Con `--lle-check-gfx` la misma tarea (la 418, campo 430) tenía el logo y el
+  texto en el LLE y no en la HLE (34 774 píxeles distintos). Con el volcado de
+  la HLE y `gfxdump.py edit --set N:depth=…` se vio que sin la prueba de z
+  todo aparece; con la prueba pero sin LESS también. El mecanismo: Jim manda
+  un G_RDPSETOTHERMODE (0xEF) de relleno con `Z_SOURCE_SEL` en 1 (0x0f0a4004)
+  y después fija el modo de render con G_SETOTHERMODE_L (3, 29). En F3DEX 1.x
+  el microcódigo mezcla en **su propia copia del othermode** (que el 0xEF no
+  toca) y entrega la palabra entera al RDP: el bit 2 se apaga. La HLE llevaba
+  una sola copia (la del RDP) y conservaba ese bit; todo el escenario salía
+  con z del primitivo. (Se vio comparando `JIMDBG`: `ol=0055303c` en la HLE
+  contra `00553038` del LLE en cada tarea.) **Arreglo** (`dl.c`
+  `gfx_sp_othermode`, `rdp.c`): en la primera generación (F3D, F3DEX 1.x) la
+  parte L del othermode que mezcla G_SETOTHERMODE_L parte de una copia propia
+  (`sp_ol`, 0 al cargar el microcódigo, `sp_om_shadow`) que G_RDPSETOTHERMODE
+  no cambia; en F3DEX2/F3DZEX el 0xEF sí la actualiza y se sigue como antes
+  (probado: con la copia sin seguirlo, Zelda pasa de 197 a 419 tareas
+  distintas). Medido con el censo (HLE contra LLE, intro y título): Jim,
+  tareas grandes distintas de 147 a 0 (331 → 186 distintas, las que quedan
+  son de 1–8 niveles de canal); el resto de los juegos medidos
+  (Zelda, Mace, Banjo, MK64, GoldenEye, Perfect Dark, SM64, Kirby, DK64)
+  igual que con rc6. En el host la tarea 418 sale con el logo, el texto y
+  la sombra de Jim. Falta confirmar en la PS3 (la caja negra de la rc6 ya no
+  se puede reproducir: se capturó con la HLE vieja).
+- **Mace, textos.** Reproducido en el host: el selector de personajes (tarea
+  361, campo 770) no dibujaba «EXECUTIONER», «MORDOS KULL» ni el «8»; el LLE
+  sí. Los glifos son triángulos de 16 × 16 de un atlas IA8 de 160 de ancho
+  **sin corrección de perspectiva** (`G_TP_NONE`); el LLE entrega al RDP s y t
+  a la mitad de lo que dice el vértice (el RSP normaliza 1/W a ~0x4000 y el
+  RDP no divide). `build_state` ya lo hacía para la segunda generación
+  (el sol del telescopio de Majora); Mace con F3DEX 1.21 resultó igual. Con
+  F3DEX 1.x en esa condición: Mace de 230 tareas distintas (y 164 «dibuja
+  de más») a 0 en las 375 primeras; ningún otro juego cambia (ninguno dibuja
+  triángulos texturados sin perspectiva con F3DEX 1.x en las escenas medidas).
+- **Mario Tennis.** En el host la HLE y el LLE coinciden (23 distintas de
+  2 480 tareas hasta el partido, 0 grandes; los frames de las tres cajas
+  salen bien en el rasterizador del host). Lo que falla es del RSX.
+  - (a) *Puntos en el logo de N64*: la tarea 20 de la caja 59 dibuja el
+    logo en 8 tiras de 128 × 16; la última es un `TEXRECT` de una fila
+    (y 168, lry = uly) con la tira de las filas 112–127: su primera fila
+    tiene 7 texels sueltos (RDRAM después del final de la imagen). Salen
+    igual en el host (HLE y LLE) y en RPCS3 (`--replay` de la tarea); la
+    fila mínima de un TEXRECT de 1–2 ciclos con lry = uly es lo que hace el
+    RDP (`rdp.c`, `lry - uly < 1`). Es contenido de la ROM; sin consola
+    (o ares) no se puede decir si la N64 los muestra: no se tocó.
+  - (b) *Texturas sin alfa* y (c) *estela de la pelota*: la HLE no tiene
+    nada que arreglar; en la consola el 80 % de las texturas de una tarea
+    de partido vienen del RSX (14 000–18 000 por 5 s: render a textura, con
+    destinos de 64 × 64 RGBA16 y CI8 en 0xd4a80). `rsxkit_target_texture`
+    las lee como X8R8G8B8 (`target.c`): no hay canal alfa, así que lo que el
+    juego dibuja con alfa 0 en una imagen RGBA16 (el bit de alfa en 0) y
+    después usa como textura con alfa sale opaco. La caja negra no lo
+    puede mostrar (copia esas texturas de la RDRAM, ya decodificadas).
+    Diseño propuesto (sin hacer: no hay cómo validarlo sin la consola ni
+    RPCS3 que compila los programas de forma asíncrona, ver abajo): destinos
+    de imágenes de 16 bits en A8R8G8B8, borrados con alfa 0, y alfa del
+    destino = 1 en cada píxel dibujado (mezcla del canal alfa con
+    `CONSTANT_ALPHA`/`ZERO`, color de mezcla con alfa 1), leídos como ARGB;
+    el borrado a 0x0000 de la N64 da alfa 0. Probar en la PS3 con un
+    paquete con un interruptor.
+  - RPCS3 no sirve para mirar esto: la primera repetición de un volcado en
+    una sesión sale con los programas de fragmento sin compilar (la red de
+    Mario Tennis salió como una barra negra y con el mismo volcado, dos
+    corridas después, bien).
+- **Zelda, resplandor de las antorchas a través de las paredes (Pozo de
+  Kakariko).** No implementado esta ronda; diseño y medición estimada en
+  `docs/framebuffer.md` («La z que lee el CPU: copia desde el RSX»).
+- **Pruebas.** `tools/build.sh test-host`: 656 pruebas, 0 fallidas (una nueva:
+  `f3d_rdp_othermode_shadow`). `tools/escenas-host.sh` con rc6 y con la rama:
+  las 9 escenas idénticas (incluida SM64 y la casa de Link). `tools/test-roms.sh`
+  sin fallas. Pila del SPE 0: holgura 1632 (rc6: 1616).
+- **Paquete de prueba** «Salsa64 gráficos» (SLSA00164, v0.2.7-81-g40f0d33):
+  `build/salsa64-graficos/salsa64-graficos.pkg` (en el worktree de esta rama),
+  3 290 000 bytes, sha256
+  `14b8e900c95d66bac19f5f6cd4f0fdf797a13ff2c9d6fc7433f8934fe6a682d4`.
+  Probar: Earthworm Jim 3D (intro y primer nivel: el escenario con su
+  profundidad, el logo, los textos), Mace (selector de personajes, el libro
+  de las reglas), y que Zelda, SM64, Banjo y MK64 sigan igual.
+
 ## 2026-10-18 — rc5b2: la nave en la misión de Rogue, la z de Resident Evil 2 y los puntos de Yoshi
 
 Resultado de la rc5b en la PS3 real: el hangar de Rogue ya sale bien, pero en

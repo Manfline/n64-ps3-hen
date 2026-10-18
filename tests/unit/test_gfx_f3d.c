@@ -349,6 +349,19 @@ static void f3d_texgen(void)
 	CHECK(fabsf(gs.vtx[1].s - 15.5f) < 0.05f);
 }
 
+/* Un G_RDPSETOTHERMODE crudo (0xEF) cambia el RDP pero no la copia del
+ * microcódigo: el siguiente G_SETOTHERMODE_L parte de la copia (Earthworm Jim
+ * 3D: sin esto Z_SOURCE_SEL quedaba en 1 y todo el escenario salía con una z). */
+static void f3d_rdp_othermode_shadow(void)
+{
+	start(false);
+	dl(0xEF000000u | 0x080CFFu, 0x0f0a4004u);          /* RDP crudo: Z_SOURCE_SEL en 1 */
+	sp_othermode(false, 3, 29, 0x00553038u);           /* render mode */
+	run();
+	CHECK_EQ(gs.ol, 0x00553038u);
+	CHECK_EQ(gs.ol & 4u, 0u);
+}
+
 /* G_SETOTHERMODE_* con desplazamiento y largo directos, y los bits de
  * geometry mode que se mueven respecto de F3DEX2. */
 static void f3d_modes(void)
@@ -763,6 +776,7 @@ void t_suite_gfx_f3d(void)
 	RUN(f3d_lighting);
 	RUN(f3d_texgen);
 	RUN(f3d_modes);
+	RUN(f3d_rdp_othermode_shadow);
 	RUN(f3d_texrect);
 	RUN(f3d_dl_flow);
 	RUN(f3d_points_and_matrix);

@@ -511,6 +511,49 @@ recompilado del tramo y no avisa a los efectos de framebuffer
 Lo que se dibuja no llega: la z image de la RDRAM queda como recién
 borrada, y para el juego nada tapa al jugador (en el hardware, un muro sí).
 
+## La z que lee el CPU: copia desde el RSX (diseño, 2026-10-18)
+
+Caso que lo pide: Zelda OoT, el resplandor de las antorchas del Pozo de
+Kakariko se ve a través de las paredes (y, con la misma causa, DK64 y la
+cámara). Zelda lee con el CPU la z image de la RDRAM en el punto del
+resplandor para decidir si está tapado; en la PS3 a la RDRAM solo llega el
+borrado de la z (`salsa64_gfx_rdram_fills`), no lo dibujado (sección de
+arriba). No se implementó en esta ronda; lo que sigue es el plan y su costo.
+
+1. **Cuándo.** Solo con la z image que el CPU lee: no hay protección de
+   páginas en la PS3 (fastmem bloqueado por lv2, docs/fastmem.md), así que no
+   se puede detectar la lectura; el interruptor es por juego (lista por
+   código del cartucho: Zelda OoT/MM y DK64) y un archivo de bandera para
+   probar con otros. Apagado no cuesta nada.
+2. **Qué.** Al terminar la última tarea de un cuadro que dibujó con prueba
+   o escritura de z en una z image (`GFX_DEPTH_*`), copiar la z image del
+   RSX (Z24S8 a la resolución interna del destino) a la RDRAM de esa z
+   image (320 × 240 × 2 B = 150 KB).
+3. **Cómo, en el RSX.** Una transferencia (`rsxSetTransferData` /
+   `rsxSetTransferScaleSurface`) trata la zeta como un A8R8G8B8 de 32 bits y
+   la reduce con muestreo puntual (no se puede filtrar una z) del
+   tamaño interno (hasta 1600 × 1200 a 5×) a 320 × 240 en una superficie en
+   memoria principal mapeada; el mismo mecanismo de `rsxkit_target_read`
+   (copia a la RDRAM del color, 0,3–7 ms medidos en la PS3 según las escenas:
+   docs/estado.md, Mario Tennis). Estimación: 0,3–0,5 ms de RSX y la espera
+   de su barrera (la misma que ya espera la copia del color).
+4. **Cómo, en el CPU/SPE.** Convertir 76 800 palabras Z24 a la z de la N64:
+   `z18 = z24 >> 6` (la zeta del RSX ya es 0..1 como la z de la N64 tras la
+   viewport), comprimida a 14 bits en el formato del RDP (3 bits de
+   exponente, 11 de mantisa; el exponente es el número de unos iniciales de
+   los 18 bits) y dos bits de `dz`; el consumidor lee la palabra de 16 bits
+   `[z comprimida (14)][dz (2)]`. El `dz` puede salir de la pendiente entre
+   vecinos o fijo (el juego compara con margen). Vectorizado en un SPE:
+   decenas de µs; en el PPE, ~0,3 ms. Va en `src/rdp/` (la conversión es de
+   la N64; el copiado de la zeta en `lib/rsxkit/`, genérico).
+5. **Orden.** Después de `salsa64_gfx_rdram_fills` de la misma tarea (el
+   borrado ya está en la RDRAM) y antes de que el CPU emulado siga: la tarea
+   se da por terminada solo cuando la copia se escribió (barrera), como las
+   copias del color; hay que respetar la guarda contra el CPU de la rama
+   `rc6-memoria` (el CPU no toca esa RDRAM mientras se escribe).
+6. **Medir.** ms de RSX y de espera por cuadro en `docs/perf-log.md` con
+   el interruptor encendido y apagado, en el Pozo de Kakariko y en DK64.
+
 ## Pendiente
 
 - Profundidad de lo dibujado en la z image de la RDRAM (ver «La z image
