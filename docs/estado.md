@@ -54,6 +54,11 @@ capas del fondo. Con los volcados de la consola (`build/rc4-ps3/`):
   con la rc4 en RPCS3: son de la repetición). La z de cuadros viejos no se
   ve en una repetición (es una sola tarea con la z recién creada): falta la
   PS3.
+- **Paquete de prueba** «Salsa64 rc5b» (SLSA00156, v0.2.7-68-g8e5bbc0):
+  `build/salsa64-rc5b/salsa64-rc5b.pkg`, 3 282 384 bytes, sha256
+  `3dccf9d1a4c68609b3f40729b4a6bdef48bda96823cbad1eecd5ed360b9f0f19`, armado con
+  `tools/build.sh -C src/frontend PROGRAM=salsa64-rc5b "TITLE=Salsa64 rc5b"
+  APPID=SLSA00156 pkg` (el directorio de build borrado antes).
 
 ## 2026-10-18 — rc3: DPC continuado en la PS3 y el «LLE vacío» del censo era pantalla fija
 
