@@ -1,5 +1,180 @@
 # Estado
 
+## 2026-10-17 — Resident Evil 2: HLE del video de las cinemáticas (RESIZE, DECODE y FILL)
+
+Hasta hoy el juego corría en la PS3 a ~32 campos/s con audio de MusyX y el log
+contaba tareas gráficas con microcódigo sin HLE: eran las tres tareas de video
+de sus cinemáticas, que terminaban sin hacer nada. Ahora las hace la HLE
+(`src/rsp/jpeg/re2.c`, en el SPE del JPEG) y cada tarea sale **idéntica byte a
+byte** al microcódigo real corriendo en el intérprete del RSP del host. Falta
+probarlo en la PS3 (paquete «Salsa64 RE2», SLSA00144, abajo).
+
+- **Qué son.** Tres microcódigos pequeños, sin texto de identificación, en
+  tareas de tipo gráfico (`type` 1, `flags` 4, `data_ptr` en 0). Los
+  parámetros van en `ucode_data`: un segmento de datos de 128 bytes que el
+  juego rellena cada vez (parámetros en 0x00–0x27 y las constantes de los
+  vectores del microcódigo en 0x40–0x6F). RESIZE reescala un cuadro RGB de 320
+  de ancho (3 bytes por píxel) a RGBA5551 en bilineal: 436 × 382 en 6 franjas
+  de 63–64 filas, 320 × 240 en franjas de 40 y 596 × 436 en franjas de
+  72–73. DECODE convierte planos Y, Cb y Cr (4:2:0, 240 × 120) a RGBA8888 en un
+  búfer de 264 píxeles de ancho (2112 bytes por par de filas) y FILL promedia
+  dos de esos cuadros (el cruce entre dos escenas). El VI enseña esos búferes
+  directamente, en modo de 32 bits.
+- **Detección** como mupen64plus-rsp-hle (`try_normal_task_detection`, commit
+  `8a7a472a`): suma de los 256 primeros bytes del código (`0x450f`, `0x3b44` y
+  `0x3d84`), solo si la tarea no es de un microcódigo gráfico ni de audio
+  conocido. Entra en `core/rsp.c` junto a JPEG (mismo backend; estadísticas
+  aparte, `stats.video*`). En el modo LLE `auto` lo que tiene HLE se queda en
+  la HLE; una tarea con parámetros o constantes que no se midieron
+  (`salsa64_re2_supported`: constantes del segmento de datos distintas, anchos o
+  disposiciones fuera de lo medido) cuenta en `video_unsup` y va al
+  microcódigo real o termina sin hacer nada, como antes.
+- **La aritmética de mupen64plus no sirve.** Se portó primero tal cual y se
+  comparó: 46 % de los bytes distintos en RESIZE, 1,6 % en DECODE y 1,5 % en
+  FILL. Lo que hace el microcódigo (medido con el LLE y sus volcados; nada
+  del microcódigo se copió al repositorio, `docs/THIRD_PARTY.md`):
+  - *FILL*: `(s + d) >> 1` en los **cuatro** bytes (mupen deja el cuarto en 0).
+  - *DECODE*: cada canal es `⌊Y · 128 · K4 / 2^16⌋ ± ⌊(C · 128 − 0x4000) · K / 2^16⌋`
+    con piso en cada producto, recortado a 0..0x7F80 y `>> 7`; las constantes K
+    (Q16: 0xB375, 0x5B69, 0x2C0D, 0xE2D1, 0x950B) las trae el juego en su
+    segmento de datos. Es entero (mupen usa dobles con constantes de 9
+    decimales). El cuarto byte (alfa) el microcódigo no lo escribe: queda lo que
+    hay en su DMEM de salida, que son ceros salvo en las **28 primeras
+    posiciones de la primera fila de cada par**: el DMA de la croma Cr (trae 240
+    bytes desde 0x280 y pasa de 0x300, donde empieza esa fila) deja ahí sus bytes
+    131, 135, …; la segunda fila queda en cero. Se reproduce exacto (la HLE solo
+    toma anchos múltiplos de 16 hasta 240, que es el del juego).
+  - *RESIZE*: pesos de 15 bits (`⌊x_frac / 2⌋` y `⌊(y_frac / 2) mod 2^15⌋`, con la
+    parte fraccionaria de `y0 + n · y_ratio`: la fila de origen es su parte
+    entera, no solo la de `src_offset` como en mupen), los cuatro productos
+    `⌊wx · wy / 2^16⌋` por 4, y cada canal suma los cuatro `⌊byte · peso / 2^16⌋`
+    (piso por producto) más un redondeo antes de recortar a 255 y quedarse con
+    5 bits. El redondeo es **4** si el umbral del difuminado del segmento de
+    datos es 0 (las franjas de 436 y de 320 de ancho) y, con umbral > 0 (las de
+    596), un difuminado entre vecinos: cada carril de un grupo de 8 píxeles
+    acumula su suma con el redondeo anterior; la acumulada del carril de al lado
+    se compara con la suma del píxel en los tres canales y, si queda a menos del
+    umbral en los tres, el redondeo es esa acumulada `& 7`; si no, 4. El estado
+    sigue entre grupos y entre filas y arranca con ceros y con dos palabras de la
+    tarea (`dram_stack` y `dram_stack_size`: en la DMEM del RSP están justo
+    donde el microcódigo guarda el último carril). El microcódigo trae dos
+    filas de origen a la DMEM (1920 bytes) y escribe la fila de salida desde
+    0x780: para el **último píxel de una fila de 436** el vecino de abajo a la
+    derecha cae en esa fila de salida (en su píxel 0) y se lee tal como está; la
+    HLE lleva una DMEM de 4 KB igual para reproducirlo.
+- **Cómo se midió.** `salsa64-run --lle-check-jpeg` ahora detecta también estas
+  tareas: las manda al microcódigo real, corre la HLE sobre una copia de la RDRAM
+  y, al terminar el microcódigo, compara byte a byte lo que escribió cada unidad
+  (fila, par de filas o pasada). `SALSA64_JCHECK_VERBOSE=1` lista cada tarea (y el
+  segmento de datos de las que la HLE no acepta), `SALSA64_JCHECK_ALL=1` todas las
+  diferencias y `SALSA64_RE2_DUMP=archivo[:N]` vuelca las primeras N de cada tipo
+  (parámetros, entrada, salida del microcódigo y de la HLE, y su código; es del
+  juego: queda fuera del repositorio). `SALSA64_RE2_FUZZ=semilla` cambia antes de
+  cada tarea sus parámetros a valores al azar dentro de lo que la HLE acepta (anchos
+  múltiplos de 4 o de 16, pasos y desplazamientos en x y en y, umbral del difuminado,
+  constantes del color, cero de la croma, largos y saltos de las filas de FILL y las
+  palabras `dram_stack` y `dram_stack_size`), para comparar mucho más que las
+  geometrías del juego. Con 41 491 tuplas Y-Cb-Cr medidas se
+  ajustó el color de DECODE; las constantes y el flujo de cada microcódigo se
+  leyeron de su código desensamblado, solo para entender su aritmética.
+- **Resultado** (sin pulsaciones, 24 000 campos = 400 s de consola, 125 s de
+  corrida; la intro entera, con los logos y el video de entrada):
+
+  | Tarea | Tareas | Unidades | Bytes comparados | Bytes distintos |
+  |---|---:|---:|---:|---:|
+  | RESIZE | 210 | 11 958 filas | 11 374 128 | **0** |
+  | DECODE | 1566 | 93 960 pares de filas | 189 423 360 | **0** |
+  | FILL | 1560 | 93 600 pasadas | 188 697 600 | **0** |
+
+  Con `docs/pads/re2-intro.pad` (START y A, hasta el campo 9000): RESIZE 24, DECODE
+  11 y FILL 10 tareas, también 0. Con los parámetros al azar (`SALSA64_RE2_FUZZ`,
+  semilla 1 con 1500 campos y semillas 2 a 4 con 5000): 144 tareas de RESIZE, 934 de
+  DECODE y 929 de FILL, 0 bytes distintos. **Regresión del JPEG** (mismo oráculo): Ocarina
+  of Time con `docs/pads/zelda-casa-nueva.pad` (150 tareas, 600 macrobloques,
+  153 600 píxeles), Pokémon Stadium con `docs/pads/stadium-vs.pad` (900 tareas,
+  230 400 píxeles) y Pokémon Stadium 2 con el mismo guion (1500 tareas, 384 000
+  píxeles): **0 píxeles distintos** en los tres.
+- **Dónde corre y por qué.** En el SPE del JPEG (`src/spu/jpeg`, otro tipo de trabajo
+  del mismo trabajador de spukit; `src/platform/ps3/jpeg_spu.c`, con el PPE de
+  respaldo para lo que el SPE devuelve). Costo medido en el host (Apple Silicon,
+  clang -O2, sin sanitizadores; es lo que cuesta cuando no hay backend y la
+  tarea corre en el hilo del CPU):
+
+  | Tarea | Costo por tarea | Por unidad de trabajo |
+  |---|---:|---:|
+  | RESIZE (63 filas × 436 píxeles, 27 468 píxeles) | 0,34–0,38 ms | ~13 ns por píxel |
+  | DECODE (60 pares, 28 800 píxeles) | 0,088–0,100 ms | ~3 ns por píxel |
+  | FILL (120 filas de 960 bytes) | 0,012–0,014 ms | 0,1 ns por byte |
+
+  Un cuadro de video (a unos 15 cuadros por segundo: un DECODE y un FILL cada ~4
+  campos) cuesta ~0,11 ms en el host y los logos, 6 franjas de RESIZE por cuadro,
+  ~2,1 ms. El PPE es un núcleo en orden y en código escalar de enteros suele ser
+  bastante más lento que este host (estimado, no medido): un cuadro de video serían
+  del orden de 1 ms del hilo de emulación cada 4 campos y una franja de RESIZE de
+  varios ms, y ese hilo ya es el cuello de botella de los juegos pesados. El SPE del
+  JPEG está libre (solo trabaja al cargar una sala de Zelda o una imagen de
+  Stadium) y la tarea es por lotes: un trabajo por tarea completa, doble búfer de
+  DMA, sin diálogo fino. Por conteo de instrucciones del código SPU compilado (los
+  bucles de `salsa64_re2_resize_row` y `salsa64_re2_decode_pair`) salen ~1,3–2 ms
+  por franja de RESIZE y ~0,4–0,6 ms por tarea de DECODE (**estimados, no medidos
+  en la PS3**); el RSP real gasta 873 000 instrucciones del microcódigo por
+  franja de 436 (14 ms a 62,5 MHz; 1 356 300 en las de 596), así que el SPE va
+  unas 7 veces más rápido sin tocar el hilo de emulación. La PS3 dirá lo medido:
+  el log trae «video: N tareas (…) en el SPE: x, y y z ms (la más larga …)» cada 150
+  tareas, y sin SPE (el archivo `jpeg-ppe` o si no arranca) corre en el PPE y da su
+  costo.
+  - *Host, antes y después* (`salsa64-run`, 6000 campos = 100 s de consola, sin
+    sanitizadores): sin `--lle`, 24,86 s antes (241 campos/s; el video no se hacía)
+    y 24,24 s después (248 campos/s con 845 tareas de video, 56,6 ms en total en
+    el hilo del CPU); con `--lle` (S2DEX por el microcódigo real), 29,08 s antes
+    (206 campos/s; el video corría en el microcódigo: 402 M de instrucciones del
+    RSP) y 26,86 s después (223 campos/s; el RSP a bajo nivel baja a 180 M).
+- **Local store del SPE del JPEG** (`spu-size`): texto 29 792, datos 800 y bss
+  32 144 bytes (antes 10 880, 800 y 5 008): ~27 KB de búferes del video (la
+  DMEM de RESIZE de 4 KB, filas de entrada y de salida con doble búfer, los
+  planos de DECODE y las filas de FILL), 62,7 KB en total y ~195 KB libres para la
+  pila (la cadena más honda del video, `handler` → `run_resize` →
+  `salsa64_re2_resize_row`, usa menos de 1 KB). Sin divisiones de 64 bits en el SPE.
+- **DMA.** Las direcciones de la RDRAM vienen alineadas a 8 pero no a 16 (las
+  filas de 872 bytes de RESIZE alternan): la entrada se trae con el tramo
+  alineado a 16 que la contiene y la salida se arma con el mismo resto módulo 16
+  que su dirección y se pone con DMA de 8 bytes en los extremos y de 16 · n en el
+  centro (`dma_put8`). FILL usa 16 bytes por instrucción (`spu_and`, `spu_xor`,
+  `spu_rlmask`) si origen y destino están alineados, como en el juego.
+- **Pruebas.** Unitarias: 609 (602 y la suite `re2`: reconocimiento, CRC de las
+  tareas de prueba del arranque, FILL exacto con filas sin alinear y alineadas,
+  DECODE contra tuplas medidas con el microcódigo real y el alfa, RESIZE con
+  blanco, negro y gris, parámetros absurdos con ASan y UBSan, y la integración
+  en el RSP con y sin backend). 0 fallidas en Docker (gcc arm64, ASan y UBSan) y la suite `re2` también en ppc64
+  big-endian con qemu, en los cinco modos de `tools/test-rec.sh` (plain, far, pin, eager
+  y fpures; el modo pin pasó de los 600 s con la máquina cargada y se repitió con
+  `QEMU_TIMEOUT=3000`), con el mismo CRC de las tareas de prueba que el host.
+  `tools/test-roms.sh`: nemu64-test en 433 fallas (136 con `--lle`), vitest,
+  savetest, gfxtest en sus tres variantes, estados y audiotest en verde.
+  `tools/test-rec.sh`: nemu64-test con el recompilador en 433 (con pin y eager
+  también) y con fastmem en 440, vitest, estados y perfilado en verde; sale con
+  rc=1 por `menu_scan_dir` bajo qemu (enlaces duros en la carpeta compartida) y, en
+  el modo pin, esa suite aborta con «free(): invalid pointer» también corrida sola
+  (`SALSA64_TEST=menu`), sin nada de video. `tools/build.sh` compila todo sin
+  avisos. El arranque del frontend compara el
+  SPE con el PPE sobre una RDRAM de mentira (`rsp/jpeg/selftest.c`: cuatro
+  tareas con salidas alineadas a 8 y no a 16, y el difuminado); en RPCS3:
+  «JPEG: tareas de video de prueba en el SPE: iguales al PPE y al host (SPE
+  AE4B7E46, PPE AE4B7E46, host AE4B7E46)».
+- **Paquete de prueba** «Salsa64 RE2» (SLSA00144, v0.2.7-24-g02dea98): `build/salsa64-re2.pkg`,
+  sha256 `9d2273e5d0ffe0727545a9031a43ca3b0ac16620a8b0409568cfeabeb3d748f6`.
+  Para probar en la PS3: abrir Resident Evil 2 y ver la intro: los logos y el
+  video de entrada deben verse (con el cruce entre escenas) en vez de negro; mirar
+  en el log «JPEG: tareas de video de prueba en el SPE: iguales…» al arrancar y las
+  líneas «video: …» cada 150 tareas (ms por tipo en el SPE, la más larga, tareas
+  devueltas al PPE, espera del PPE, campo más lento y «sin HLE» en 0); si dice
+  DIFIEREN, el juego usa el PPE.
+- **Falta.** Probar el video en la PS3 real. El juego en sí (menús, fondos y
+  escenas) usa tareas S2DEX sueltas (`RSP Gfx ucode S2DEX fifo 2.06`, tipo 1) que
+  no tienen HLE: en el host, sin `--lle`, 14 062 tareas gráficas sin HLE en 8000
+  campos frente a 1090 de video (el log de la PS3 las seguirá contando). Las
+  cinemáticas se ven; el resto del juego no hasta que S2DEX suelto tenga HLE.
+
 ## 2026-10-17 — Candidata 0.2.8-rc1: integración de Killer Instinct Gold, el censo de audio y Diddy Kong Racing
 
 Sobre la versión 0.2.7 con MusyX y Diddy Kong Racing se unieron las ramas de
