@@ -230,6 +230,7 @@ struct depth {
 	 * y la última tarea revisada. */
 	uint32_t rd_sum, rd_changed, rd_changes, rd_checked;
 	uint32_t fed_task;   /* última tarea en que se cargó desde la RDRAM */
+	uint32_t fed_src;    /* última tarea que dibujó como color su dirección, ya cargada */
 	uint32_t auto_task;  /* última tarea con el borrado automático (zauto) */
 	rsxkit_depth *d;
 };
@@ -284,6 +285,10 @@ static struct {
 	uint32_t first_cimg, cimg_task;
 	bool frame_start;
 	uint32_t zup_fence;
+	/* Direcciones de z images en uso (las escribe la traducción, las lee
+	 * readbacks_wanted en el hilo de emulación): una color image en una de
+	 * ellas es la z escrita como color y su copia a la RDRAM se espera. */
+	volatile uint32_t zimg_seen[4];
 	int bound_t;                 /* ranura ligada, o -1 */
 	struct depth *bound_d;
 	unsigned last_set;           /* juego de búferes de la última tarea dibujada */
@@ -565,6 +570,8 @@ static void release_targets(void)
 	memset(rdp.surf_scale, 0, sizeof rdp.surf_scale);
 	rdp.vram = 0;
 	memset(rdp.depths, 0, sizeof rdp.depths);
+	for (int k = 0; k < 4; k++)
+		rdp.zimg_seen[k] = 0;
 	memset(rdp.zc_addr, 0, sizeof rdp.zc_addr);
 	memset(rdp.zc_task, 0, sizeof rdp.zc_task);
 	memset(rdp.zc_full, 0, sizeof rdp.zc_full);
@@ -1209,7 +1216,12 @@ static struct depth *get_depth(uint32_t addr, int slot)
 	d->h = h;
 	d->clear_pending = 0;
 	d->rd_sum = d->rd_changed = d->rd_changes = d->rd_checked = 0;
-	d->fed_task = d->auto_task = 0;
+	d->fed_task = d->auto_task = d->fed_src = 0;
+	for (int k = 0; k < 4; k++)
+		if (!rdp.zimg_seen[k] || rdp.zimg_seen[k] == addr || k == 3) {
+			rdp.zimg_seen[k] = addr;
+			break;
+		}
 	return d;
 }
 
@@ -1248,11 +1260,24 @@ static bool zfeed(struct depth *d, int slot)
 		d->rd_changed = task;
 		d->rd_changes++;
 	}
-	for (int k = 0; k < 4; k++)
-		if (rdp.zc_addr[k] == d->addr && task - rdp.zc_task[k] < ZFEED_TASKS)
+	/* La z escrita como color en una tarea anterior (Resident Evil 2: la
+	 * profundidad del fondo copiada con BG_COPY de 512 de ancho a la z
+	 * image, que los personajes leen a 328): su copia a la RDRAM ya se
+	 * esperó (readbacks_wanted), así que basta cargarla. */
+	uint32_t src = 0;
+	for (int i = 0; i < RDP_TARGETS_MAX; i++) {
+		const struct rdp_target *c = &rdp.tg.t[i];
+		if (c->used && c->addr == d->addr && c->last_task < task && c->last_task > d->fed_src &&
+		    c->last_task > src)
+			src = c->last_task;
+	}
+	if (!src) {
+		for (int k = 0; k < 4; k++)
+			if (rdp.zc_addr[k] == d->addr && task - rdp.zc_task[k] < ZFEED_TASKS)
+				return false;
+		if (d->rd_changes < 2 || task - d->rd_changed >= ZFEED_TASKS)
 			return false;
-	if (d->rd_changes < 2 || task - d->rd_changed >= ZFEED_TASKS)
-		return false;
+	}
 	uint32_t sc = rdp.surf_scale[slot] ? rdp.surf_scale[slot] : 1;
 	uint32_t lw = t->lw < width ? t->lw : width;
 	if (lw * sc > d->w || rows * sc > d->h)
@@ -1280,6 +1305,8 @@ static bool zfeed(struct depth *d, int slot)
 		d->clear_pending = 0;
 		rdp.stats.z_uploads++;
 		d->fed_task = task;
+		if (src)
+			d->fed_src = src;
 		LOGN(5, "gfx: z image %06x/%u cargada desde la RDRAM (%u filas a %u×): el RDP no la borra y el CPU la cambia",
 		     d->addr, width, rows, sc);
 		return true;
@@ -1715,7 +1742,10 @@ static void readbacks_wanted(struct set *s, const struct gfx_result *res)
 				 * siguiente decodificara la capa: quedaba la estela de la
 				 * capa vieja (Yoshi's Story, las capas que se redibujan en
 				 * tareas seguidas). */
-				bool sync = !again || big8(siz == 1u ? 1u : 2u, c->b) ||
+				bool zimg = false;
+				for (int z = 0; z < 4; z++)
+					zimg |= rdp.zimg_seen[z] == c->a;
+				bool sync = !again || big8(siz == 1u ? 1u : 2u, c->b) || zimg ||
 					    (small && rep < 2 && !rdp_reads_image(s, res, c->a, c->b));
 				s->rb_rep[k] = rep;
 				s->rb_sync[k] = sync;

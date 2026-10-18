@@ -1,5 +1,33 @@
 # Estado
 
+## 2026-10-18 — rc7b: los personajes de Resident Evil 2 (la z del fondo escrita como color)
+
+Con la caja negra de la PS3 (`build/rc6-ps3/re2b/cajanegra-1928`, la ciudad
+destruida con Leon y dos zombis invisibles) se ve el orden de cada cuadro:
+
+- tarea 6137: 35 `BG_COPY` de 512 × 4 en modo copia a la color image
+  **0x189A00 de 512 de ancho** (filas 0–138): es la profundidad del fondo
+  prerrenderizado (desde 0x6D4000 en la RDRAM), copiada como si fuera color;
+- tarea 6138: el fondo en color a 0x76A000/512;
+- tarea 6139: los personajes (30 dibujos, 1561 triángulos, prueba y
+  escritura de z) en 0x76A000 de **328 de ancho**, con z image 0x189A00.
+
+El RDP direcciona la z con el ancho de la color image, así que los 141 312
+bytes que el fondo copió a 512 de ancho son, para los personajes, la z de
+328 × 215. Reconstruida desde las texturas del volcado y descomprimida, la z
+del fondo va de 0,78 (lo cercano) a 1,0 y los personajes están en 0,945–0,95:
+con esa z los 4683 vértices de los personajes que caen en pantalla pasan la
+prueba. El RSX nunca la veía: la copia iba a una superficie de color y la
+profundidad 0x189A00 solo tenía la z de los personajes de cuadros viejos.
+
+**Arreglo** (`src/rdp/rdp.c`): la copia a la RDRAM de una color image en la
+dirección de una z image en uso se espera siempre (`zimg_seen`, en
+`readbacks_wanted`), y `zfeed` carga la z desde la RDRAM, con el ancho de la
+color image del dibujo, cuando esa dirección se dibujó como color en una
+tarea anterior y aún no se cargó (antes solo cuando el contenido de la RDRAM
+cambiaba: con el fondo quieto, una sola vez). La copia de RGB565 a la RDRAM
+conserva 15 de los 16 bits de cada z (el último es del dz).
+
 ## 2026-10-18 — rc5b2: la nave en la misión de Rogue, la z de Resident Evil 2 y los puntos de Yoshi
 
 Resultado de la rc5b en la PS3 real: el hangar de Rogue ya sale bien, pero en
