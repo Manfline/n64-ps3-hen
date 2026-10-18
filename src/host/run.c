@@ -2531,6 +2531,24 @@ static void shadow_lle_start(void *ctx)
 	shadow_start(&shadow.boot_task, dm_pre);
 }
 
+/* --lle-check-gfx: el microcódigo real corre la tarea entera en el acto, antes de que el CPU
+ * avance: la HLE lee la RDRAM al arrancar la tarea y el LLE, por rebanadas, la leería
+ * 1536 ciclos más tarde y con el CPU ya escribiendo (Pokémon Snap, Mario Kart 64…): lo que se
+ * compara es el RSP, no la carrera con el CPU. Una tarea que espera al CPU (semáforo, yield)
+ * se queda donde esté al llegar al tope y sigue por rebanadas. */
+static void gchk_lle_start(void *ctx)
+{
+	lle_host.backend.start(ctx);
+	if (!gchk_pending())
+		return;
+	for (unsigned total = 0; total < (16u << 20) && !lle_host.rsp.halt;) {
+		uint32_t n = salsa64_lle_host_run(&lle_host, 1u << 16);
+		total += n;
+		if (!n)
+			break;
+	}
+}
+
 /* Reloj del host para lo que el RSP mide en el hilo del CPU (HLE JPEG). */
 static uint64_t host_clock_us(void)
 {
@@ -3774,6 +3792,8 @@ int main(int argc, char **argv)
 			jcheck_lle.sync = jcheck_sync;
 		if (shadow.on)
 			jcheck_lle.start = shadow_lle_start;
+		if (gchk_on && !gchk_self)
+			jcheck_lle.start = gchk_lle_start;
 		salsa64_rsp_set_lle(&n64.bus, &jcheck_lle, lle_mode);
 	}
 	/* SALSA64_SIN_DPC=1: sin quien consuma las listas del RDP que escribe el

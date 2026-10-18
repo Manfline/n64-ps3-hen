@@ -11,10 +11,10 @@
 # (como tools/censo.sh). Sin juegos en la línea de comandos, corre todos.
 #
 # Cada escena es un guion de pulsaciones: uno de docs/pads/ si hay, o START y A
-# alternados cada 60 campos desde el 200 (pasa títulos y menús). Va con
-# --lle-speed 200: el RSP real corre casi al instante respecto al CPU y la
-# HLE (que lee la RDRAM al arrancar la tarea) ve lo mismo que el microcódigo
-# (docs/gfx-censo.md, «Carrera con el CPU»).
+# alternados cada 60 campos desde el 200 (pasa títulos y menús). Con
+# --lle-check-gfx el microcódigo corre cada tarea en el acto, antes de que el
+# CPU avance, así la HLE (que lee la RDRAM al arrancar la tarea) y el RSP ven
+# lo mismo (docs/gfx-censo.md, «Carrera con el CPU»).
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/build/censo-gfx"
@@ -112,7 +112,7 @@ escena() {
 	*) pad=$(cat "$ROOT/docs/pads/$guion.pad") ;;
 	esac
 	SALSA64_GCHK_SECONDS=$SECS SALSA64_GCHK_LOG="$OUT/$nombre.tsv" \
-		"$BIN" -q --lle=all --lle-speed 200 --lle-check-gfx --fields "$campos" ${pad:+--pad "$pad"} \
+		"$BIN" -q --lle=all --lle-check-gfx --fields "$campos" ${pad:+--pad "$pad"} \
 		--save-dir "$OUT/$nombre.saves" "$ROMS/$rom" >"$OUT/$nombre.log" 2>&1 || true
 	echo "$nombre: $(grep 'lle-check-gfx: [0-9]* tareas' "$OUT/$nombre.log" | head -1 | sed 's/^salsa64-run: lle-check-gfx: //')"
 }
