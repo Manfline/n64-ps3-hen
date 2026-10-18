@@ -63,9 +63,22 @@ void gfx_io_begin(struct gfx_state *g)
 	io.dl_addr[0] = io.dl_addr[1] = ~0u;
 }
 
+/* Dirección efectiva de 32 bits: la memoria principal de la PS3 (y la del RSX)
+ * está bajo 4 GB, así que la parte alta (EAH) es un cero constante. Con la
+ * suma de 64 bits el compilador deja un EAH que no es constante (RPCS3 avisa
+ * «MFC_EAH is not a zero constant») y, según el diseño del código, el
+ * recompilador de SPU de RPCS3 hacía que la imagen leyera ceros en vez de la
+ * display list: sus tareas de prueba salían distintas a las del PPE y el juego
+ * no dibujaba. Con esto no vuelve a pasar en los binarios probados
+ * (docs/spe0-familias.md). */
+static inline uint64_t ea32(uint64_t ea)
+{
+	return (uint32_t)ea;
+}
+
 static uint64_t rdram_ea(const struct gfx_state *g, uint32_t addr)
 {
-	return g->job->rdram_ea + addr;
+	return ea32(g->job->rdram_ea + addr);
 }
 
 static void flush_vtx(struct gfx_state *g)
@@ -73,7 +86,7 @@ static void flush_vtx(struct gfx_state *g)
 	if (!io.vtx_fill)
 		return;
 	int b = io.vtx_cur;
-	spukit_dma_put(vtx_buf[b], g->job->vtx_ea + io.vtx_flushed, (io.vtx_fill + 15) & ~15u, TAG_VTX + b);
+	spukit_dma_put(vtx_buf[b], ea32(g->job->vtx_ea + io.vtx_flushed), (io.vtx_fill + 15) & ~15u, TAG_VTX + b);
 	io.vtx_flushed += io.vtx_fill;
 	io.vtx_fill = 0;
 	io.vtx_cur ^= 1;
@@ -85,7 +98,7 @@ static void flush_cmd(struct gfx_state *g)
 	if (!io.cmd_fill)
 		return;
 	int b = io.cmd_cur;
-	spukit_dma_put(cmd_buf[b], g->job->cmd_ea + io.cmd_flushed, io.cmd_fill, TAG_CMD + b);
+	spukit_dma_put(cmd_buf[b], ea32(g->job->cmd_ea + io.cmd_flushed), io.cmd_fill, TAG_CMD + b);
 	io.cmd_flushed += io.cmd_fill;
 	io.cmd_fill = 0;
 	io.cmd_cur ^= 1;
@@ -208,7 +221,7 @@ int32_t gfx_io_tex_commit(struct gfx_state *g, uint32_t size)
 		g->res->flags |= GFX_RES_TEX_FULL;
 		return -1;
 	}
-	spukit_dma_put(tex_buf[io.tex_cur], g->job->tex_ea + off, (size + 15) & ~15u, TAG_TEX + io.tex_cur);
+	spukit_dma_put(tex_buf[io.tex_cur], ea32(g->job->tex_ea + off), (size + 15) & ~15u, TAG_TEX + io.tex_cur);
 	io.tex_cur ^= 1;
 	io.tex_used = off + size;
 	return (int32_t)off;
@@ -216,6 +229,6 @@ int32_t gfx_io_tex_commit(struct gfx_state *g, uint32_t size)
 
 void gfx_io_tex_cache(struct gfx_state *g, uint32_t off, uint32_t size)
 {
-	spukit_dma_put(tex_buf[io.tex_cur], g->job->cache_ea + off, (size + 15) & ~15u, TAG_TEX + io.tex_cur);
+	spukit_dma_put(tex_buf[io.tex_cur], ea32(g->job->cache_ea + off), (size + 15) & ~15u, TAG_TEX + io.tex_cur);
 	io.tex_cur ^= 1;
 }
