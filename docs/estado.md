@@ -1,5 +1,52 @@
 # Estado
 
+## 2026-10-18 — Zelda OoT: la Lente de la Verdad no quitaba las paredes falsas (alfa de la máscara anulado)
+
+Reporte del Pozo de Kakariko (v0.2.6/0.2.7 en la PS3): el círculo de la Lente y
+los objetos ocultos salían, pero las paredes falsas no desaparecían dentro del
+círculo. Con el estado guardado y el volcado de la consola (`gfxdump`) del
+autor.
+
+- **Mecanismo.** La Lente es una máscara de z: un TEXRECT de pantalla completa
+  (I4 de 128 × 64 con espejo; 0 dentro del círculo, 74 fuera) con z del
+  primitivo = 0, sin prueba de z, con escritura de z, blender «BL·0 + MEM·1»
+  (no escribe color) y prueba de alfa por umbral contra el color de mezcla
+  (8). El combiner da alfa = (PRIM_A − TEXEL0_A) · PRIM_LOD_FRAC, así que solo
+  los píxeles de dentro del círculo pasan y escriben z = 0. Las paredes falsas
+  se dibujan después con prueba de z (≤) y fallan dentro del círculo; el
+  círculo morado (alfa del mismo TEXRECT, con mezcla) y los objetos ocultos
+  no dependen de esa z.
+- **Causa.** `blend_constant` (`src/rsp/gfx/rdp.c`) ponía a cero todos los
+  términos k (color y alfa) de un dibujo cuyo blender usa el color de mezcla o
+  de niebla con FORCE_BL, para sustituirlos por esa constante; en la máscara
+  (blend KEEP) borraba también el alfa, que sí cuenta para la prueba de alfa:
+  con alfa 0 el umbral descartaba todo y la máscara nunca escribía z. Lo vio
+  el volcado: el dibujo 80 sin ningún término k. Es de la HLE (host y PS3);
+  `--lle=all` ya dibujaba bien.
+- **Arreglo.** (1) `blend_constant` no toca los dibujos de blend KEEP.
+  Con el estado del autor, el host con HLE y con `--lle=all` dibujan ahora lo
+  mismo: aparece el pasillo oculto dentro del círculo. (2) rsxkit
+  (`set_depth`): el RSX, como OpenGL, no escribe z con la prueba apagada; una
+  escritura sin prueba (esta máscara) pide la prueba con GCM_ALWAYS. Sin esto
+  la máscara no escribiría z en el RSX aunque el alfa estuviera bien (se
+  verifica en la PS3; RPCS3 no distingue). (3) El rasterizador del host
+  tampoco escribía z en los dibujos KEEP (salía antes del blender); ahora sí.
+  (4) La traza (`SALSA64_GFX_TRACE`) imprime `prim_lod` y `prim_min`.
+- **Pruebas.** `tools/build.sh test-host`: 650 pruebas, 0 fallidas. Las 8
+  escenas del host idénticas a antes. Falta la unidad de prueba del combiner
+  de la máscara.
+- **Resplandor de las antorchas a través de las paredes** (mismo Pozo): no
+  depende de esto. Es la z que Zelda lee con el CPU (memoria «La z image que
+  lee el CPU»); el arreglo natural es copiar la z dibujada del RSX a la RDRAM
+  cuando el juego la lee (la lectura de una z de 320 × 240 × 2 B = 150 KB por
+  cuadro: del orden de 0,3–0,5 ms de RSX más la espera de su barrera; solo en
+  las escenas donde se detecte la lectura). La Lente no lee la z con el CPU.
+- **Paquete de prueba** «Salsa64 lente» (SLSA00159, v0.2.7-65-g4c26c69-dirty):
+  `build/salsa64-lente/salsa64-lente.pkg`, 3 281 936 bytes, sha256
+  `766cfe85250cc6594403f3ccf06d7ff2d49822ae481f3dab2557d9ab6ca3cabd`.
+  Probar: Pozo de Kakariko con la partida del autor, usar la Lente frente a
+  la pared falsa: debe desaparecer dentro del círculo y mostrar el pasillo.
+
 ## 2026-10-18 — rc3: DPC continuado en la PS3 y el «LLE vacío» del censo era pantalla fija
 
 - **PS3 (por validar en la consola).** `src/rdp/rdp.c` (`translate`) no llama a

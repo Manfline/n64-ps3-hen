@@ -289,6 +289,12 @@ static void blend_constant(const struct gfx_state *g, struct gfx_draw *d)
 	unsigned m = (ol >> (20 + sh)) & 3, b = (ol >> (16 + sh)) & 3;
 	if (p != BL_FOG && p != BL_BL)
 		return;
+	/* Sin escritura de color (solo z, como la máscara de la Lente de la
+	 * Verdad de Zelda: blender BL·0 + MEM·1) el color del blender no se
+	 * ve, pero el alfa del combiner sí cuenta para la prueba de alfa: no
+	 * se toca (borrarlo anulaba toda la máscara). */
+	if (d->blend == GFX_BLEND_KEEP)
+		return;
 	bool force = (ol & FORCE_BL) != 0;
 	bool toward = force && m == BL_IN && a == BA_FOG && b == BB_1MA;
 	if (force && m != BL_MEM && !toward)
