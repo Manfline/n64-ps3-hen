@@ -1,5 +1,106 @@
 # Estado
 
+## 2026-10-17 — Jet Force Gemini y Mickey's Speedway: G_DMA_TEX_OFFSET (0x02) y desplazamientos de textura
+
+La candidata 0.2.8-rc1 dejaba a los dos juegos con comandos sin implementar
+(746 y 2548 en 2500 campos, el último con código 0x02) y, en el host, el
+semáforo de la salida de Mickey's Speedway no cambiaba de luz (en la PS3 el
+autor lo vio igual, con la carrera arrancando). Era el mismo comando.
+
+- **Qué es.** El microcódigo de Rare de los dos juegos (F3DJFG, el de Diddy Kong
+  Racing con otro conteo de vértices) trae un comando más, 0x02, que ni
+  Glide64mk2 (lo deja reservado) ni Rice (sin entrada) implementan y que
+  GLideN64 aproxima (solo formato RGBA, un índice por carga a la TMEM). Su
+  semántica sale de **seguir el microcódigo real en el host** (`--lle=all` con
+  un seguimiento de instrucciones temporal, que no queda en el árbol): el
+  comando trae por DMA la tabla que apunta w1 (el largo va en w0: 0x50 en
+  todas las listas vistas), copia **64 bytes = 32 entradas u16** a su DMEM,
+  enciende un interruptor y pone en cero un índice; cada G_SETTIMG que
+  sigue, **de cualquier formato**, suma a su dirección (antes de resolver el segmento) la entrada del índice y
+  lo avanza; **G_DMA_OFFSETS (0xBF) apaga el interruptor** (cada objeto del
+  juego empieza con un 0xBF y casi siempre un 0x02). El juego cambia las
+  tablas de un cuadro a otro para animar texturas: las luces del semáforo de
+  la salida son cuadros de 0x0B00 bytes (0x0B00, 0x1600, 0x2100 y 0x2C00 en
+  la entrada 0 de la tabla de ese objeto, en el orden en que las luces se
+  encienden). En Jet Force Gemini hay tablas con entradas distintas de
+  cero en varias escenas de la intro (cambian detalles de textura: de 0,01 a
+  0,8 % de los píxeles en 17 de 105 imágenes).
+- **Qué se hizo.** `src/rsp/gfx/f3ddkr.c`: G_DMA_TEX_OFFSET copia la tabla al
+  estado de DKR (en la unión con el de Conker: el tamaño de `gfx_rare` y con él
+  el de los estados guardados no cambia); G_SETTIMG pasa por el gancho de la
+  variante (suma la entrada y sigue con `gfx_rdp_command`); G_DMA_OFFSETS apaga
+  el interruptor. Pruebas unitarias nuevas (`dkr_tex_offsets`): el índice por
+  G_SETTIMG de cualquier formato, la suma antes del segmento, G_DMA_OFFSETS,
+  otro 0x02 que reinicia, la entrada 33 que no existe y la lista sin 0x02.
+  Lo demás que se revisó del microcódigo de JFG: el conteo de vértices (sin
+  sumar 1) coincide con el del microcódigo (alfas de abajo) y la matriz con
+  multiplicación da las mismas imágenes que él; no hizo falta tocarlos.
+- **Comandos sin implementar, antes → ahora** (`salsa64-run`, respaldos
+  propios): Jet Force Gemini 746 → 0 en 2500 campos (el título) y
+  27 981 → 0 en una partida nueva hasta la selección de personaje
+  (`docs/pads/jfg-3d.pad`, 14 000 campos, 16 787 tareas, 0 errores);
+  Mickey's Speedway 2548 → 0 en 2500 campos y 3242 → 0 desde el cuarto hasta
+  el principio de la carrera (`docs/pads/mickey-semaforo.pad`, campos 5600 a
+  12 000, 3170 tareas, 0 errores).
+- **Contra el microcódigo real** (`--lle=all --lle-speed 8`, desde estados
+  guardados del juego, mismos campos):
+  - los **G_SETTIMG que el microcódigo manda al RDP** son iguales a los de la
+    HLE, uno por uno: 26 029 de Mickey's Speedway (8 estados, 22 con
+    desplazamiento distinto de cero) y 13 550 de Jet Force Gemini (8 estados,
+    42 con desplazamiento);
+  - los **alfas de los vértices** de cada G_VTX (leídos del búfer de vértices
+    del RSP) coinciden: sin niebla 100 %; con niebla ±1 (la HLE redondea;
+    p. ej. Jet Force Gemini, campo 7600: 6759 vértices, 2030 iguales sin
+    niebla, 4046 con niebla iguales y 683 con diferencia de 1);
+    de paso comprueba el conteo de vértices de F3DJFG;
+  - la **imagen del VI** al mismo campo: Jet Force Gemini 0,96 %, 0,09 % y
+    3,07 % de píxeles distintos (> 16/255 tras tolerar 1 px) en tres escenas
+    (el puente de mando, una escena oscura con dos personajes y la
+    selección de Juno), y 45,6 % en la selva: ahí la
+    LLE del host no aplica la **niebla** del blender (`build_state` solo la
+    pone en los triángulos de la HLE) y con la niebla apagada en la HLE las
+    dos imágenes quedan a 1,0 %. Mickey's Speedway: 3,7 % en la tarea del
+    semáforo en verde (era 4,8 % sin el comando; en las filas del
+    semáforo, 6,5 % → 3,5 %) y 7,6–8,9 % en carrera (el HUD y los textos,
+    que la LLE del host no dibuja);
+  - **semáforo de la salida de Mickey's Speedway** (mismo guion desde el
+    arranque, imágenes cada 40 campos): sin el comando las tres luces
+    siguen apagadas hasta el verde de la carrera; con él pasan por rojo, rojo
+    rojo, rojo rojo rojo y verde, como en la imagen del microcódigo real.
+    Contra ares no se comparó: el semáforo exige pulsaciones del juego y el
+    título y la demo, lo único que ares alcanza sin entrada, no usan tablas
+    con entradas distintas de cero.
+- **Pulsaciones nuevas:** `docs/pads/mickey-semaforo.pad` (de «Press start» a
+  la parrilla y las luces) y `docs/pads/jfg-3d.pad` (partida nueva y la intro
+  en 3D); en `docs/pads/README.md`.
+- **SPE 0 (`spu_gfx`)**: texto 111 152, datos 800, bss 138 640 bytes
+  (250 592 de 262 144; eran 250 216); pila: la cadena más honda sigue en 9520
+  bytes y la holgura queda en **1840** (mínimo 1536; era 2224). Sin tocar
+  la caché de texturas ni nada más.
+- **Pruebas:** `tools/build.sh test-host` 603 pruebas, 0 fallidas (la nueva,
+  `dkr_tex_offsets`); `tools/test-roms.sh` rc 0 (nemu64-test en 433 fallas, 136
+  con `--lle`, vitest, savetest, gfxtest en sus tres variantes, estados y
+  audiotest en verde); `tools/test-rec.sh` rc 1 solo por `menu_scan_dir` bajo
+  qemu (como en main: no puede hacer enlaces duros en la carpeta compartida),
+  con las 603 pruebas unitarias en ppc64 en los cinco modos (plain, far, pin,
+  eager y fpures), nemu64-test con el recompilador en 433 fallas (pin+eager
+  también) y con fastmem en 440, vitest, estados y perfilado en verde.
+- **Paquete de prueba** «Salsa64 DKR» (SLSA00141), armado sobre el commit de
+  estas notas con `tools/build.sh -C src/frontend PROGRAM=salsa64-dkr
+  "TITLE=Salsa64 DKR" APPID=SLSA00141 pkg` (el directorio de build borrado
+  antes; en el menú, la pausa y la primera línea del log sale su versión).
+- **Sin cambios en los demás juegos**: Perfect Dark y Conker (3000 campos),
+  GoldenEye (Dam, `docs/pads/goldeneye-dam.pad`, 6000) y Diddy Kong Racing
+  (`docs/pads/dkr-pista.pad`, 10 000 campos y las imágenes de 6500, 8500 y
+  9500) dan el mismo `--gfx-frame` (md5) con la rama y sin ella, y Diddy Kong
+  Racing sigue en 0 comandos sin implementar.
+- **Falta**: probar en la PS3 real el paquete «Salsa64 DKR» (SLSA00141):
+  Mickey's Speedway hasta la salida de una carrera (las luces) y Jet Force
+  Gemini hasta la intro en 3D y el primer nivel; tiempo del SPE 0 por tarea
+  (el estado de DKR es el mismo; el comando nuevo es una DMA de 64 bytes y
+  una suma por G_SETTIMG). Pendiente aparte, que no es del microcódigo: la
+  niebla en la LLE del host.
+
 ## 2026-10-17 — Candidata 0.2.8-rc1: integración de Killer Instinct Gold, el censo de audio y Diddy Kong Racing
 
 Sobre la versión 0.2.7 con MusyX y Diddy Kong Racing se unieron las ramas de
