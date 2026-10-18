@@ -135,6 +135,11 @@ DMEM (4 KB cada una) caben de sobra en el local store.
   (con `--lle=all`: cada tarea de audio corre también en la HLE sobre una
   copia de la RDRAM y se comparan los tramos escritos; `SALSA64_LLE_DUMP_TASK=N`
   vuelca la lista de comandos de la tarea N).
+- `--lle-check-gfx` (también con `--lle=all`, que pone): el equivalente
+  gráfico. Cada tarea gráfica corre entera en el acto en el microcódigo real y en
+  la HLE desde el mismo estado del RDP, las dos salidas pasan por el mismo
+  rasterizador del host y se comparan los píxeles (docs/gfx-censo.md);
+  `tools/censo-gfx.sh` lo corre sobre una escena de cada juego.
 - `tools/test-roms.sh` corre nemu64-test dos veces: con la HLE (línea base
   `tests/roms/nemu64-test.fallas`) y con `--lle` (`nemu64-test-lle.fallas`).
 

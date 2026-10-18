@@ -34,9 +34,16 @@ def corto(clave):
     """Familia y versión del microcódigo, sin los blancos del texto."""
     clave = re.sub(r"\s+", " ", clave)
     clave = clave.replace("RSP Gfx ucode ", "").replace("Yoshitaka Yasumoto", "").replace("Nintendo.", "")
-    return re.sub(r" +", " ", clave).strip(" .")
+    clave = re.sub(r" +", " ", clave).strip(" .")
+    m = re.match(r"(.*): sin texto, crc de ucode_data ([0-9a-f]+)$", clave)
+    if m:
+        crc_sin_hle[m.group(2)] = crc_sin_hle.get(m.group(2), set())
+        return "desconocido (sin HLE)" if m.group(1) == "desconocido" else m.group(1) + " (sin texto)"
+    return clave
 
 
+crc_sin_hle = {}
+sin_hle_crc = collections.defaultdict(collections.Counter)  # crc de ucode_data -> {juego -> tareas}
 juegos = collections.OrderedDict()   # juego -> {clave -> Counter}
 ejemplos = {}                        # (juego, clave) -> tarea válida con más píxeles distintos
 ops_h = collections.defaultdict(collections.Counter)
@@ -52,6 +59,9 @@ for tsv in sorted(glob.glob(os.path.join(ruta, "*.tsv"))):
             if len(c) < 8:
                 continue
             clave = corto(c[2])
+            mcrc = re.search(r"desconocido: sin texto, crc de ucode_data ([0-9a-f]+)", c[2])
+            if mcrc:
+                sin_hle_crc[mcrc.group(1)][nombre] += 1
             t = por.setdefault(clave, collections.Counter())
             t["tareas"] += 1
             clase = c[3]
@@ -136,6 +146,13 @@ for clave, lista in sorted(poruc.items()):
     for _, v in lista:
         t.update(v)
     print("| %s | %s | %s | %d |" % (clave.replace("|", "/"), ", ".join(sorted({n for n, _ in lista})), fila(t), t["sinhle"]))
+
+print("\n## Microcódigos gráficos sin HLE (CRC de ucode_data)\n")
+print("| CRC | Juego | Tareas |")
+print("|---|---|---:|")
+for crc, por in sorted(sin_hle_crc.items(), key=lambda kv: -sum(kv[1].values())):
+    for nombre, n in por.items():
+        print("| %s | %s | %d |" % (crc, nombre, n))
 
 print("\n## Tipo de las tareas distintas (válidas)\n")
 print("| Microcódigo | La HLE no dibuja | La HLE dibuja de más | Otro color |")

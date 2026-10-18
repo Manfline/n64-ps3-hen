@@ -1,5 +1,26 @@
 # Estado
 
+## 2026-10-18 — Censo gráfico: el microcódigo real contra la HLE (`--lle-check-gfx`)
+
+Herramienta de medición, no un arreglo: `salsa64-run --lle=all --lle-check-gfx`
+corre cada tarea gráfica en el microcódigo del juego y en la HLE desde el mismo
+estado del RDP, dibuja las dos salidas en el mismo rasterizador y compara los
+píxeles (idéntica, menor, distinta), el estado final del RDP y los comandos que
+la HLE no implementa. Método, tolerancias, tablas y lista priorizada en
+**docs/gfx-censo.md**; `tools/censo-gfx.sh` y `tools/censo-gfx-tabla.py` lo
+repiten. 47 juegos, 105 373 tareas: 28 032 (27 %) con el LLE casi vacío (el
+camino LLE → RDP falla en F3DEX 1.x, F3D de Killer Instinct y Mortal Kombat
+Trilogy y otros: hace falta arreglarlo antes de fiarse del censo ahí); de las
+74 005 válidas, 48,2 % idénticas, 23,1 % menores y 28,7 % distintas. Con F3DEX2 y
+Zelda (Smash, Kirby, Paper Mario, Resident Evil 2, Stadium 2, Mario Party,
+Majora) la HLE es idéntica o casi en el 96–100 % de las tareas; Pokémon Snap
+(124 tareas de escenas 3D), F-Zero X, Conker, DKR, Jet Force Gemini y Perfect Dark
+son lo que queda por mirar. La HLE no deja ningún opcode sin implementar en las
+escenas corridas (`unknown_cmds` = 0). Con `SALSA64_GCHK_SELF=1` la HLE contra sí
+misma da 100 % idéntica (prueba del método). El host se compila con
+`-DGFX_CENSUS` (ganchos de la HLE: `GFX_UNKNOWN`, histograma del RDP; no entran
+en la PS3).
+
 ## 2026-10-17 — S2DEX suelto: Resident Evil 2 y Yoshi's Story
 
 Las tareas gráficas con el texto «RSP Gfx ucode S2DEX» (Resident Evil 2: «fifo
