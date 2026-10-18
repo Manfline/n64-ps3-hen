@@ -63,6 +63,7 @@ struct salsa64_rdp_stats {
 	 * origen en un destino leídas de su superficie o de la RDRAM, y
 	 * destinos cebados desde la RDRAM. */
 	uint32_t readbacks, readback_waits, readback_late;
+	uint32_t big8_sync, big8_nosync;  /* copias big8 pedidas con y sin espera */
 	uint64_t us_readback, us_readback_wait;
 	uint32_t mirrors, mirrors_skipped;  /* copias espejo (sin esperar) y las que no cupieron */
 	uint32_t frames_mirrored;           /* campos cuyo framebuffer se copió a la RDRAM */

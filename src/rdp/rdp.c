@@ -373,6 +373,9 @@ static struct {
 	/* Color images pedidas en las últimas RB_HISTORY tareas (hilo de
 	 * emulación): una que se repite ya no se espera. */
 	uint32_t rb_prev[RB_HISTORY][RB_PER_TASK], rb_prev_rep[RB_HISTORY][RB_PER_TASK];
+	/* Capas big8 vistas: direcciones, ancho y si algún dibujo las leyó como textura. */
+	struct { uint32_t addr, lw; bool read, used; } big8_seen[8];
+	uint32_t big8_next;
 	uint32_t rb_prev_n[RB_HISTORY];
 	uint32_t rb_prev_i;
 	/* Traza detallada (color images, ranuras y copias de cada tarea) de las
@@ -2179,6 +2182,40 @@ static bool rdp_reads_image(const struct set *s, const struct gfx_result *res, u
 	return false;
 }
 
+/* Aprende qué capas big8 se leen como textura/fondo (Yoshi's Story): solo
+ * esas se esperan; las que nadie lee (Banjo-Tooie) van sin esperar. */
+static void big8_learn(const struct set *s, const struct gfx_result *res)
+{
+	uint32_t off = 0;
+	while (off + sizeof(struct gfx_cmd) <= res->cmd_bytes) {
+		const struct gfx_cmd *c = (const struct gfx_cmd *)(s->cmd + off);
+		if (c->op == GFX_OP_END || c->size < sizeof *c)
+			break;
+		if (c->op == GFX_OP_DRAW && c->size >= sizeof(struct gfx_draw)) {
+			const struct gfx_draw *g = (const struct gfx_draw *)c;
+			for (int i = 0; i < g->ntex && i < 2; i++)
+				for (int k = 0; k < 8; k++)
+					if (rdp.big8_seen[k].used && g->tex[i].src_addr >= rdp.big8_seen[k].addr &&
+					    g->tex[i].src_addr < rdp.big8_seen[k].addr + rdp.big8_seen[k].lw * 240)
+						rdp.big8_seen[k].read = true;
+		}
+		off += c->size;
+	}
+}
+
+static bool big8_needs_wait(uint32_t addr, uint32_t lw)
+{
+	for (int k = 0; k < 8; k++)
+		if (rdp.big8_seen[k].used && rdp.big8_seen[k].addr == addr && rdp.big8_seen[k].lw == lw)
+			return rdp.big8_seen[k].read;
+	uint32_t k = rdp.big8_next++ & 7;
+	rdp.big8_seen[k].addr = addr;
+	rdp.big8_seen[k].lw = lw;
+	rdp.big8_seen[k].read = false;
+	rdp.big8_seen[k].used = true;
+	return true;  /* la primera vez se espera */
+}
+
 /* ¿Hay otra color image en la misma dirección, con otro ancho y de un
  * tamaño parecido (la mitad o más del área de la otra, en las dos
  * direcciones)? Resident Evil 2 copia el fondo a 512 de ancho y lo muestra
@@ -2209,6 +2246,7 @@ static void readbacks_wanted(struct set *s, const struct gfx_result *res)
 		memset(rdp.rb_prev_n, 0, sizeof rdp.rb_prev_n);
 		return;
 	}
+	big8_learn(s, res);
 	uint32_t off = 0;
 	while (off + sizeof(struct gfx_cmd) <= res->cmd_bytes) {
 		const struct gfx_cmd *c = (const struct gfx_cmd *)(s->cmd + off);
@@ -2255,7 +2293,15 @@ static void readbacks_wanted(struct set *s, const struct gfx_result *res)
 				/* La misma memoria con otro ancho (get_target la ceba desde
 				 * la RDRAM): la copia tiene que estar antes. */
 				zimg |= alias_of(c->a, c->b);
-				bool sync = !again || big8(siz == 1u ? 1u : 2u, c->b) || zimg ||
+				bool b8 = big8(siz == 1u ? 1u : 2u, c->b);
+				bool b8w = b8 && big8_needs_wait(c->a, c->b);
+				if (b8) {
+					if (b8w)
+						rdp.stats.big8_sync++;
+					else
+						rdp.stats.big8_nosync++;
+				}
+				bool sync = !again || b8w || zimg ||
 					    (small && rep < 2 && !rdp_reads_image(s, res, c->a, c->b));
 				s->rb_rep[k] = rep;
 				s->rb_sync[k] = sync;

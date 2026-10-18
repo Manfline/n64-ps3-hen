@@ -2988,6 +2988,8 @@ static void perf_window(uint64_t dt, uint32_t fields, uint64_t us_emu, uint64_t 
 	W(copias_esperadas, rs->readback_waits - r0->readback_waits);
 	W(copias_espera_us, rs->us_readback_wait - r0->us_readback_wait);
 	W(copias_tarde, rs->readback_late - r0->readback_late);
+	W(big8_esperadas, rs->big8_sync - r0->big8_sync);
+	W(big8_sin_espera, rs->big8_nosync - r0->big8_nosync);
 	W(copias_perdidas, rs->readbacks_lost - r0->readbacks_lost);
 	W(tareas_cortadas, n64.bus.rsp.stats.cut - sw.gfx_cut0);
 	W(comandos_saltados, gfx_spu.skipped - sw.gfx_skipped0);
@@ -3256,6 +3258,9 @@ static void stats(uint64_t now)
 				    rbw ? (rs.us_readback_wait - sw.rdp0.us_readback_wait) / 1e3 / rbw : 0.0,
 				    rs.readback_late - sw.rdp0.readback_late, mir, mirs, fmir, dmas, trsx, trd, tself, tppe,
 				    tppel, primes, pwaits, lost, tfail, tabs, bfail);
+		if (rs.big8_sync != sw.rdp0.big8_sync || rs.big8_nosync != sw.rdp0.big8_nosync)
+			salsa64_log("gfx: copias big8: %u esperadas, %u sin esperar", rs.big8_sync - sw.rdp0.big8_sync,
+				    rs.big8_nosync - sw.rdp0.big8_nosync);
 		uint32_t gcop = rs.guard_copies - sw.rdp0.guard_copies, glin = rs.guard_lines - sw.rdp0.guard_lines;
 		uint64_t gtb = rs.tb_guard_mark - sw.rdp0.tb_guard_mark;
 		if (gcop || gtb)
