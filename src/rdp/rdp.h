@@ -76,6 +76,10 @@ struct salsa64_rdp_stats {
 	uint64_t tb_guard_mark;  /* ticks del timebase */
 	uint32_t tall_fills;                /* rellenos de una color image más alta que 480 repartidos a sus destinos */
 	uint32_t tex_rsx, tex_rdram, tex_self, primes, prime_waits;
+	/* Alfa en los destinos (salsa64_rdp_target_alpha): destinos creados con
+	 * canal alfa, texturas leídas de uno de ellos, y rellenos / copias de
+	 * texturas que escribieron su alfa tal cual (rsxkit_draw.dst_alpha). */
+	uint32_t targets_alpha, tex_alpha, alpha_fills;
 	/* Texturas que la HLE no decodificó por venir de un destino
 	 * (GFX_TEX_TARGET) y que no se pudieron leer de él: decodificadas en el
 	 * PPE desde la RDRAM, y las que no cupieron en el arena (dibujo saltado). */
@@ -236,6 +240,14 @@ int salsa64_rdp_interp(int mode, float t);
  * uniones en T que el RDP tapa con la cobertura. Apagado por omisión: en
  * la PS3 a escala alta engordaba los modelos (docs/rsx-notes.md). */
 void salsa64_rdp_aa_edges(bool on);
+/* Interruptor: los destinos de 16 bits que no son un framebuffer del VI
+ * (render a textura) se crean con canal alfa (A8R8G8B8) y llevan el alfa de
+ * la N64: 0 al borrarse con 0x0000, 1 en cada píxel dibujado (el alfa del
+ * relleno o del texel en los rellenos y copias). Lo dibujado con alfa 0 y
+ * leído después como textura sale transparente, no opaco (Mario Tennis, los
+ * logos de Rogue Squadron). Encendido por omisión; `on` false vuelve a los
+ * destinos X8R8G8B8 de antes. Aplica a los destinos que se creen después. */
+void salsa64_rdp_target_alpha(bool on);
 /* Guarda de las copias tardías contra lo que escribió el CPU (rdp_guard,
  * targets.h): encendida por omisión; `on` false la apaga (para comparar).
  * Vigilante: si watch_hi > watch_lo, el log dice cada escritura que no es

@@ -3244,6 +3244,8 @@ static void stats(uint64_t now)
 		uint32_t lost = rs.readbacks_lost - sw.rdp0.readbacks_lost, tfail = rs.targets_failed - sw.rdp0.targets_failed;
 		uint32_t tabs = rs.targets_absurd - sw.rdp0.targets_absurd, bfail = rs.binds_failed - sw.rdp0.binds_failed;
 		uint32_t tppe = rs.tex_ppe - sw.rdp0.tex_ppe, tppel = rs.tex_ppe_lost - sw.rdp0.tex_ppe_lost;
+		uint32_t talpha = rs.targets_alpha - sw.rdp0.targets_alpha, xalpha = rs.tex_alpha - sw.rdp0.tex_alpha;
+		uint32_t falpha = rs.alpha_fills - sw.rdp0.alpha_fills;
 		if (rb || rbw || mir || mirs || fmir || dmas || trsx || trd || tself || primes || lost || tfail || tabs ||
 		    bfail || tppe || tppel)
 			salsa64_log("gfx: framebuffer: %u copias a la RDRAM (%.2f ms c/u en presentación), la emulación "
@@ -3256,6 +3258,10 @@ static void stats(uint64_t now)
 				    rbw ? (rs.us_readback_wait - sw.rdp0.us_readback_wait) / 1e3 / rbw : 0.0,
 				    rs.readback_late - sw.rdp0.readback_late, mir, mirs, fmir, dmas, trsx, trd, tself, tppe,
 				    tppel, primes, pwaits, lost, tfail, tabs, bfail);
+		if (talpha || xalpha || falpha)
+			salsa64_log("gfx: alfa en los destinos: %u destinos con alfa creados, %u texturas leídas de uno "
+				    "de ellos, %u rellenos o copias con su alfa",
+				    talpha, xalpha, falpha);
 		if (rs.big8_sync != sw.rdp0.big8_sync || rs.big8_nosync != sw.rdp0.big8_nosync)
 			salsa64_log("gfx: copias big8: %u esperadas, %u sin esperar", rs.big8_sync - sw.rdp0.big8_sync,
 				    rs.big8_nosync - sw.rdp0.big8_nosync);
@@ -4771,6 +4777,12 @@ static enum game_end run_game_once(uint8_t *rom, uint32_t rom_size, const char *
 					    guard_on ? "encendida" : "apagada (sin-guarda-cpu)", whi ? "en " : "apagado ",
 					    wlo, whi);
 		}
+		/* Alfa en los destinos de render a textura (salsa64_rdp_target_alpha):
+		 * `sin-alfa-destinos` vuelve a los destinos X8R8G8B8 de antes. */
+		bool tgt_alpha = !file_exists(SALSA64_DATA_DIR "/sin-alfa-destinos");
+		salsa64_rdp_target_alpha(tgt_alpha);
+		salsa64_log("alfa en los destinos de render a textura: %s",
+			    tgt_alpha ? "encendido" : "apagado (sin-alfa-destinos)");
 		salsa64_rdp_aa_edges(aa_edges);
 		if (aa_edges)
 			salsa64_log("aristas de los dibujos con AA: encendidas (aristas-aa, experimental)");
