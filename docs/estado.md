@@ -1,5 +1,33 @@
 # Estado
 
+## 2026-10-18 — rc7b2: Yoshi tras regresar y tras el reinicio; la vibración de Rogue
+
+Con las cajas negras de la rc6 (`build/rc6-ps3/yoshi2/`, `build/rc6-ps3/rogue2/`):
+
+- **Yoshi, pantalla negra tras «Reiniciar (botón Reset)».** No es la
+  presentación: desde el campo ~18 980 el juego deja de mandar tareas
+  gráficas (la caja 21307 no tiene ninguna en 2300 campos) y él mismo apaga
+  la imagen (`VI_H_VIDEO = 0` en todos los campos negros; antes 0x006C02EC),
+  con el CPU en sus bucles de espera y el audio andando: el juego se queda
+  esperando algo al volver a cargar la misión después del NMI. Hay que
+  buscarlo en el núcleo (lo que el NMI deja en el SP/DP/PI/SI, el estado del
+  RSP o de las interrupciones), no en `src/rdp`.
+- **Yoshi, personajes que desaparecen al regresar.** En la caja 14688 la
+  salida de la HLE sí trae a Yoshi y los objetos (el rasterizador del host los
+  dibuja), y Yoshi no usa profundidad (0 dibujos con z): no tienen que ver
+  `zauto` ni `zfeed`. En esos campos la caché de texturas desaloja de 20 a 29
+  texturas por tarea (en el resto, casi 0). Falta una captura de la PS3 en el
+  momento (SELECT + R2: volcado y su `.ppm`) para ver qué dibujos no llegan,
+  y probar el mismo recorrido con la rc4 para saber si es una regresión.
+- **Rogue, la imagen que vibra.** El menú es entrelazado: `VI_WIDTH` 1024
+  (dos líneas de 512), y `VI_ORIGIN` alterna 0x790400 y 0x790800 (una línea
+  del cuadro) junto con `VI_V_VIDEO` 0x003301ED y 0x003501EF (dos medias
+  líneas). En la tele los dos campos se intercalan; si se presenta cada campo
+  como una imagen completa desde su origen, sin el corrimiento de
+  `V_VIDEO`, la imagen sube y baja una línea en cada campo. Es probablemente
+  lo mismo que la intro de Racer. No se tocó en esta ronda.
+- **Rogue, logos sin alfa:** no se llegó a ver.
+
 ## 2026-10-18 — rc7b: los personajes de Resident Evil 2 (la z del fondo escrita como color)
 
 Con la caja negra de la PS3 (`build/rc6-ps3/re2b/cajanegra-1928`, la ciudad
