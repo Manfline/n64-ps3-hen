@@ -1157,10 +1157,6 @@ void gfx_rdp_command(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	case G_RDPSETOTHERMODE:
 		g->oh = w0 & 0x00FFFFFF;
 		g->ol = w1;
-		if (!g->sp_om_shadow) {
-			g->sp_oh = g->oh;
-			g->sp_ol = g->ol;
-		}
 		break;
 	case G_LOADTLUT: {
 		uint32_t t0 = gfx_io_clock();

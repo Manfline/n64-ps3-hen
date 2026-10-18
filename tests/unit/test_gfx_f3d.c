@@ -374,8 +374,7 @@ static void f3d_modes(void)
 	sp_set_geometry(F3D_ZBUFFER | F3D_SMOOTH | F3D_CULL_FRONT | F3D_CULL_BACK);
 	sp_clear_geometry(F3D_CULL_FRONT);
 	run();
-	/* La copia del othermode del microcódigo arranca en 0x080CFF / 0 (sus datos). */
-	CHECK_EQ(gs.oh, 0x080CFFu | 1u << 20 | 2u << 12);
+	CHECK_EQ(gs.oh, 1u << 20 | 2u << 12);
 	CHECK_EQ(gs.ol, (0xC8112078u & ~7u) | 1u);
 	CHECK_EQ(gs.geom, G_ZBUFFER | G_SHADING_SMOOTH | G_CULL_BACK);
 }

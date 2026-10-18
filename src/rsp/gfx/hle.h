@@ -221,6 +221,7 @@ struct gfx_state {
 	float mvp[16];
 	bool mvp_dirty;
 	bool lights_dirty;
+	bool sp_om_shadow;         /* 1 en la primera generación: G_RDPSETOTHERMODE no toca sp_ol */
 	uint32_t segments[16];
 	uint32_t geom;
 	struct gfx_light lights[GFX_MAX_LIGHTS + 1];
@@ -238,8 +239,7 @@ struct gfx_state {
 	uint8_t tex_tile, tex_level, tex_on;
 	uint32_t rdphalf1, rdphalf2;
 	uint32_t obj_rendermode;   /* G_OBJ_RENDERMODE de S2DEX (s2dex.c) */
-	uint8_t sp_om_shadow;      /* 1 en la primera generación: G_RDPSETOTHERMODE no toca la copia */
-	uint32_t sp_oh, sp_ol;     /* la copia del othermode que lleva el microcódigo (G_SETOTHERMODE_*); G_RDPSETOTHERMODE no la toca */
+	uint32_t sp_ol;            /* othermode L que lleva el microcódigo (G_SETOTHERMODE_L); G_RDPSETOTHERMODE no lo toca (sp_om_shadow) */
 	uint8_t chain_ex;          /* tarea S2DEX que siguió con F3DEX 1.x (G_LOAD_UCODE): f3d.c lo trata como F3DEX */
 	uint32_t raw[44];          /* comando del RDP armado con G_RDPHALF_* */
 	uint8_t raw_n, raw_len;    /* dobles palabras recibidas y esperadas */
