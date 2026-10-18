@@ -208,13 +208,18 @@ struct vm_frame {
 };
 static struct vm_frame *vm;
 
+#define ZCLEAR_PENDING 8
 struct depth {
 	bool used;
 	uint32_t addr, w, h;
 	uint32_t bytes;              /* lo que cuenta en rdp.vram */
-	bool clear_pending;
-	float clear_rect[4];
-	float clear_value;
+	/* Borrados pendientes hasta ligarla (en orden). Rogue Squadron borra
+	 * la z con dos rellenos seguidos (mitad izquierda y derecha, debajo del
+	 * horizonte) antes de dibujar: con uno solo pendiente se perdía el
+	 * primero y esa mitad quedaba con la z de cuadros viejos. */
+	uint32_t clear_pending;
+	float clear_rect[ZCLEAR_PENDING][4];
+	float clear_value[ZCLEAR_PENDING];
 	rsxkit_depth *d;
 };
 
@@ -886,13 +891,16 @@ static void to_rdram(const uint8_t *src, uint32_t pitch, uint32_t addr, uint32_t
 	 * 0x00010001 y el juego se colgaba en su manejador de excepciones). */
 	if (addr == 0)
 		return;
+	/* El paso de las big8 (XRGB8888) antes de soltar las líneas: con el de
+	 * RGB565 (1280 contra 1344 bytes en las capas de 336 de Yoshi's Story)
+	 * las últimas filas de la caja se leían de líneas viejas de la caché. */
+	if (big8(bpp, lw))
+		pitch = rb_pitch(bpp, lw);
 	/* El RSX escribió el búfer a espaldas de la caché del PPE: soltar las
 	 * líneas que pudieran quedar de la lectura anterior. */
 	for (uint32_t off = b->y0 * pitch & ~127u; off < b->y1 * pitch; off += 128)
 		__asm__ volatile("dcbf 0,%0" ::"r"(src + off) : "memory");
 	__asm__ volatile("sync" ::: "memory");
-	if (big8(bpp, lw))
-		pitch = rb_pitch(bpp, lw);
 	for (uint32_t y = b->y0; y < b->y1; y++) {
 		const uint16_t *row = (const uint16_t *)(src + y * pitch);
 		if (big8(bpp, lw)) {
@@ -1167,7 +1175,7 @@ static struct depth *get_depth(uint32_t addr, int slot)
 	d->addr = addr;
 	d->w = w;
 	d->h = h;
-	d->clear_pending = false;
+	d->clear_pending = 0;
 	return d;
 }
 
@@ -1192,8 +1200,9 @@ static bool bind(int slot, struct depth *d)
 	rdp.bound_t = slot;
 	rdp.bound_d = d;
 	if (d && d->clear_pending) {
-		rsxkit_clear(RSXKIT_CLEAR_DEPTH, 0, d->clear_value, d->clear_rect);
-		d->clear_pending = false;
+		for (uint32_t i = 0; i < d->clear_pending; i++)
+			rsxkit_clear(RSXKIT_CLEAR_DEPTH, 0, d->clear_value[i], d->clear_rect[i]);
+		d->clear_pending = 0;
 	}
 	return true;
 }
@@ -1208,14 +1217,28 @@ static void zclear(const struct gfx_zclear *z)
 	float rect[4] = { z->rect[0], z->rect[1], z->rect[2], z->rect[3] };
 	/* Z de 18 bits de la N64 en el valor de relleno (14 bits + dz). */
 	float value = (float)(z->h.b >> 2) / 16383.0f;
+	rdp.stats.zclears++;
 	if (d && d == rdp.bound_d) {
 		rsxkit_clear(RSXKIT_CLEAR_DEPTH, 0, value, rect);
 		return;
 	}
 	if (d) {
-		d->clear_pending = true;
-		memcpy(d->clear_rect, rect, sizeof rect);
-		d->clear_value = value;
+		uint32_t i = d->clear_pending;
+		rdp.stats.zclears_pending++;
+		if (i == ZCLEAR_PENDING) {
+			rdp.stats.zclears_merged++;
+			/* Sin lugar: el último crece hasta cubrir también este. */
+			i--;
+			float *r = d->clear_rect[i];
+			rect[0] = rect[0] < r[0] ? rect[0] : r[0];
+			rect[1] = rect[1] < r[1] ? rect[1] : r[1];
+			rect[2] = rect[2] > r[2] ? rect[2] : r[2];
+			rect[3] = rect[3] > r[3] ? rect[3] : r[3];
+		} else {
+			d->clear_pending++;
+		}
+		memcpy(d->clear_rect[i], rect, sizeof rect);
+		d->clear_value[i] = value;
 	}
 	/* Si aún no existe, nacerá en 1 (borrada). */
 }
@@ -1503,7 +1526,14 @@ static void readbacks_wanted(struct set *s, const struct gfx_result *res)
 				 * tarea anterior (esperarla costaba ~22 ms por tarea). Las
 				 * grandes repetidas nunca se esperan (la intro de Conker). */
 				bool small = c->b * (siz == 1u ? 1 : 2) * 240 <= MIRROR_BYTES;  /* 64 de ancho sí; 320, no */
-				bool sync = !again || (small && rep < 2 && !rdp_reads_image(s, res, c->a, c->b));
+				/* Las capas de 8 bits (big8) se esperan siempre: el juego las
+				 * lee como CI8 con paleta desde la RDRAM (no desde el RSX), y
+				 * la copia sin esperar llegaba después de que la tarea
+				 * siguiente decodificara la capa: quedaba la estela de la
+				 * capa vieja (Yoshi's Story, las capas que se redibujan en
+				 * tareas seguidas). */
+				bool sync = !again || big8(siz == 1u ? 1u : 2u, c->b) ||
+					    (small && rep < 2 && !rdp_reads_image(s, res, c->a, c->b));
 				s->rb_rep[k] = rep;
 				s->rb_sync[k] = sync;
 				s->rb_nsync += sync;
@@ -1746,6 +1776,13 @@ static void translate(uint32_t n)
 			bool is_tall = c->b && c->b <= 640 && rdp_targets_tall(c->b, lh) &&
 				       fills_only(s, off + c->size, res->cmd_bytes);
 			rdp.at = "destinos";
+			for (int k = 0; k < MAX_DEPTHS; k++)
+				if (rdp.depths[k].used && rdp.depths[k].addr == c->a) {
+					rdp.stats.z_as_color++;
+					LOGN(10, "gfx: color image %06x/%u en la dirección de una z image (la z como color: el RSX no la ve)",
+					     c->a, c->b);
+					break;
+				}
 			if (!is_tall && c->b && c->b <= 640 && lh <= 480) {
 				/* La ranura va a ser de otra imagen (la recicla este destino o
 				 * crece): lo que el RDP dibujó en ella hasta ahora, si es una
@@ -1856,6 +1893,8 @@ static void translate(uint32_t n)
 				memset(rdp.surf_dirty, 0, sizeof rdp.surf_dirty);
 			}
 			struct depth *d = rdp.bound_t == cur ? rdp.bound_d : NULL;
+			if ((g->depth & (GFX_DEPTH_TEST | GFX_DEPTH_WRITE)) == GFX_DEPTH_WRITE)
+				rdp.stats.z_write_only++;
 			if (g->depth) {
 				rdp.at = "profundidad";
 				d = get_depth(g->zimg, cur);

@@ -3194,6 +3194,13 @@ static void stats(uint64_t now)
 				    rbw ? (rs.us_readback_wait - sw.rdp0.us_readback_wait) / 1e3 / rbw : 0.0,
 				    rs.readback_late - sw.rdp0.readback_late, mir, mirs, fmir, dmas, trsx, trd, tself, tppe,
 				    tppel, primes, pwaits, lost, tfail, tabs, bfail);
+		uint32_t zwo = rs.z_write_only - sw.rdp0.z_write_only, zcl = rs.zclears - sw.rdp0.zclears;
+		uint32_t zpend = rs.zclears_pending - sw.rdp0.zclears_pending, zmrg = rs.zclears_merged - sw.rdp0.zclears_merged;
+		uint32_t zcol = rs.z_as_color - sw.rdp0.z_as_color;
+		if (zwo || zcl || zcol)
+			salsa64_log("gfx: profundidad: %u dibujos escriben la z sin probarla (%.1f por tarea), %u borrados de la z "
+				    "(%u pendientes hasta ligarla, %u juntados por no caber), %u color images en una z image",
+				    zwo, tasks ? (double)zwo / tasks : 0.0, zcl, zpend, zmrg, zcol);
 	}
 	if (lle_mode != SALSA64_LLE_OFF) {
 		uint32_t t = rsp_spu.tasks - sw.lle_tasks0;

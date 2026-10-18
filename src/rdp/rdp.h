@@ -100,6 +100,12 @@ struct salsa64_rdp_stats {
 	uint32_t interp_fields, interp_plain, interp_repeated;
 	uint32_t interp_rep_set, interp_rep_cache, interp_rep_surf;  /* repetidos: su juego ya en uso, la caché, sin superficie */
 	uint64_t us_interp_draw;
+	/* Profundidad: dibujos que escriben la z sin probarla (en el RSX van con
+	 * ALWAYS), borrados de la z (aplicados al momento, dejados pendientes
+	 * hasta ligarla, y los que no cupieron en la lista y se juntaron) y
+	 * color images en la dirección de una z image (el juego escribe la z
+	 * como color: el RSX no la ve en su profundidad). */
+	uint32_t z_write_only, zclears, zclears_pending, zclears_merged, z_as_color;
 };
 
 /* Después de rsxkit_init. scale = 0 (automática): la mayor escala entera
