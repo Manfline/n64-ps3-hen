@@ -374,8 +374,11 @@ static void shade(const struct gfx_draw *d, const struct gfx_vertex *v, const st
 #endif
 	uint32_t old = tg_rgb[idx];
 	float dst[3] = { (old >> 16 & 0xFF) / 255.0f, (old >> 8 & 0xFF) / 255.0f, (old & 0xFF) / 255.0f };
-	if (d->blend == GFX_BLEND_KEEP)
+	if (d->blend == GFX_BLEND_KEEP) {
+		if ((d->depth & GFX_DEPTH_WRITE) && zb)
+			zb->z[idx] = z;
 		return;
+	}
 	for (int l = 0; l < 3; l++) {
 		if (d->blend == GFX_BLEND_ALPHA)
 			out[l] = out[l] * out[3] + dst[l] * (1.0f - out[3]);

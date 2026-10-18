@@ -1005,10 +1005,10 @@ void salsa64_gfx_trace_state(const struct gfx_state *g, const struct gfx_draw *d
 	if (!salsa64_gfx_trace_now)
 		return;
 	fprintf(stderr, "  ST kind %d tile %d cyc %u ntex %u texon %u cc %06x:%08x oh %06x ol %08x prim %08x env %08x "
-		"fog %08x mul %.0f off %.0f geom %08x texs %04x,%04x timg %06x/%u vp %.1f,%.1f±%.1f,%.1f dl %06x\n", kind, tile,
+		"fog %08x mul %.0f off %.0f geom %08x texs %04x,%04x timg %06x/%u vp %.1f,%.1f±%.1f,%.1f dl %06x plod %u pmin %u\n", kind, tile,
 		d->cycle, d->ntex, g->tex_on, g->cc_hi, g->cc_lo, g->oh, g->ol, g->prim, g->env, g->fog, g->fog_mul,
 		g->fog_off, g->geom, g->tex_s, g->tex_t, g->timg_addr, g->timg_width, g->vtrans[0], g->vtrans[1],
-		g->vscale[0], g->vscale[1], g->dl_pc);
+		g->vscale[0], g->vscale[1], g->dl_pc, g->prim_lod, g->prim_min);
 	for (int i = 0; i < 2; i++) {
 		const struct gfx_tile *t = &g->tiles[(tile + i) & 7];
 		fprintf(stderr, "     tile%d fmt %u siz %u pal %u line %u tmem %u cms %u cmt %u mask %u,%u shift %u,%u "
