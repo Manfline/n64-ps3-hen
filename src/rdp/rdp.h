@@ -67,6 +67,12 @@ struct salsa64_rdp_stats {
 	uint32_t mirrors, mirrors_skipped;  /* copias espejo (sin esperar) y las que no cupieron */
 	uint32_t frames_mirrored;           /* campos cuyo framebuffer se copió a la RDRAM */
 	uint32_t dma_skipped;               /* copias descartadas porque un DMA escribió ahí después */
+	/* Guarda contra el CPU (rdp_guard, targets.h): líneas de 128 bytes que
+	 * una copia tardía no escribió porque algo que no es el RDP las cambió
+	 * desde que terminó su tarea, copias con alguna así, y el tiempo de
+	 * tomar las huellas al terminar cada tarea (hilo de emulación). */
+	uint32_t guard_lines, guard_copies;
+	uint64_t tb_guard_mark;  /* ticks del timebase */
 	uint32_t tall_fills;                /* rellenos de una color image más alta que 480 repartidos a sus destinos */
 	uint32_t tex_rsx, tex_rdram, tex_self, primes, prime_waits;
 	/* Texturas que la HLE no decodificó por venir de un destino
@@ -222,6 +228,12 @@ int salsa64_rdp_interp(int mode, float t);
  * uniones en T que el RDP tapa con la cobertura. Apagado por omisión: en
  * la PS3 a escala alta engordaba los modelos (docs/rsx-notes.md). */
 void salsa64_rdp_aa_edges(bool on);
+/* Guarda de las copias tardías contra lo que escribió el CPU (rdp_guard,
+ * targets.h): encendida por omisión; `on` false la apaga (para comparar).
+ * Vigilante: si watch_hi > watch_lo, el log dice cada escritura que no es
+ * del CPU (copias del RSX, VISCVG, DMA) en la RDRAM [watch_lo, watch_hi), y
+ * si dejó la palabra 0x00010001. Fuera del bucle. */
+void salsa64_rdp_guard(bool on, uint32_t watch_lo, uint32_t watch_hi);
 /* Hilo de emulación: un DMA escribió la RDRAM [pa, pa + len); con
  * `gfx_in_flight`, mientras corría una tarea gráfica. Las copias de esa
  * tarea y de las anteriores no pisan ese tramo (targets.h, rdp_dma_ring). */

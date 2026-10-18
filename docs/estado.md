@@ -1,5 +1,44 @@
 # Estado
 
+## 2026-10-18 — rc7a: las copias tardías del RSX pisaban lo que el CPU escribió (Indiana Jones y Killer Instinct Gold)
+
+- **Lo que dicen los datos de la PS3 (rc6).** La ROM en memoria está bien (CRC igual al de la Mac en
+  los dos juegos). Indiana Jones: «tarea mala» con la lista en 0x71D358 llena de 0x00010001; esa
+  dirección cae dentro del destino de 640 × 480 de la pantalla del Expansion Pak
+  (`gfx: destino 6b3000/640`, 0x6B3000–0x749000, a 85 filas del principio). Killer Instinct Gold:
+  el log trae `cpu: fallo AdEL … pc 0x00010001, ra 0x80039DFC` en el campo 914; en 0x80039DF4 hay
+  un `jalr` a un puntero a función leído de un objeto del audio de libultra (`lw t9, 8(s2)`): el
+  puntero valía 0x00010001. Todos los volcados de cuelgue de Killer Instinct (rc4, rc6 y los cuatro
+  de rsp-jit-ps3) tienen `bad_vaddr 0x00010001`; lo que se ve lleno de 0xFF o 0xFE (desde 0x0E40A0
+  hasta el final, o 0x1B4ED0–0x3A3000) aparece después de la caída (el CPU sigue en un bucle de copia en 0x80031408), no es la causa.
+- **Causa.** 0x0001 es un píxel negro en RGBA5551, lo que deja `to_rdram` al copiar un cuadro negro
+  del RSX a la RDRAM. Esas copias (espejo del framebuffer, copias sin esperar, espejos chicos y
+  VISCVG) las hace el hilo de presentación uno o más campos después de la tarea; solo se
+  descartaban si un DMA había tocado la memoria después (`dma_newer`), no si la había tocado el
+  CPU. Cuando el juego reusa la memoria de un framebuffer (listas de Indiana Jones en la memoria de la
+  pantalla del Expansion Pak; objetos del audio de Killer Instinct al cargar la pelea), el último
+  cuadro llegaba encima. En el host la copia es síncrona: por eso ninguno fallaba ahí. Es la misma
+  firma que Resident Evil 2 (el hilo en curso en 0x00010001), que se había tapado solo para la
+  dirección 0.
+- **Arreglo: guarda contra el CPU** (`rdp_guard`, targets.h; docs/framebuffer.md). Al terminar cada
+  tarea el hilo de emulación toma una huella por línea de 128 bytes de las filas que sus dibujos
+  pueden tocar (tijeras) en cada color image de 8 o 16 bits; la copia tardía solo escribe las líneas
+  cuyo contenido sigue siendo esa huella o la que dejó la última copia. Las demás se quedan como las
+  dejó el CPU. Además `to_rdram` ya no escribe fuera de la RDRAM (no lo comprobaba). Prueba
+  `targets_cpu_guard`. 512 KB de tablas (docs/memory-budget.md).
+- **Instrumentación.** Log de cada 5 s: «gfx: guarda contra el CPU: N copias tardías con M líneas sin
+  escribir …; huellas X ms por tarea»; las 12 primeras copias recortadas dicen origen, rango,
+  tarea y lo que había en la primera línea. `sin-guarda-cpu` en la carpeta de datos la apaga (A/B).
+  `vigilante.cfg` con «lo hi» en hexadecimal (p. ej. `6b3000 749000` para Indiana Jones) escribe cada
+  copia, VISCVG o DMA en ese rango y si dejó 0x00010001.
+- **Sin relación probada.** Yoshi's Story se congela al morir (sin cuelgue ni volcado en el log; usa
+  muchas copias a la RDRAM y podría ser lo mismo: mirar si sale la línea de la guarda) y los dos
+  logos sin alpha de un menú de Rogue Squadron (no son copias a la RDRAM; pendiente aparte).
+- **Para probar en la PS3.** Indiana Jones (pantalla del Expansion Pak → misión), Killer Instinct
+  Gold (elegir personaje y pelear dos veces), Yoshi's Story (morir), y Mario Kart 64 (túnel) y la
+  pausa de Zelda como regresión de las copias. Si alguno vuelve a fallar: la línea de la guarda y,
+  con `vigilante.cfg`, quién escribió el 0x00010001.
+
 ## 2026-10-18 — rc5b2: la nave en la misión de Rogue, la z de Resident Evil 2 y los puntos de Yoshi
 
 Resultado de la rc5b en la PS3 real: el hangar de Rogue ya sale bien, pero en

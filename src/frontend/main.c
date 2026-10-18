@@ -3256,6 +3256,13 @@ static void stats(uint64_t now)
 				    rbw ? (rs.us_readback_wait - sw.rdp0.us_readback_wait) / 1e3 / rbw : 0.0,
 				    rs.readback_late - sw.rdp0.readback_late, mir, mirs, fmir, dmas, trsx, trd, tself, tppe,
 				    tppel, primes, pwaits, lost, tfail, tabs, bfail);
+		uint32_t gcop = rs.guard_copies - sw.rdp0.guard_copies, glin = rs.guard_lines - sw.rdp0.guard_lines;
+		uint64_t gtb = rs.tb_guard_mark - sw.rdp0.tb_guard_mark;
+		if (gcop || gtb)
+			salsa64_log("gfx: guarda contra el CPU: %u copias tardías con %u líneas de 128 bytes sin escribir "
+				    "(algo que no es el RDP las cambió después de su tarea); huellas %.3f ms por tarea en el "
+				    "hilo de emulación",
+				    gcop, glin, tasks ? gtb * 1e3 / spukit_tick_hz() / tasks : 0.0);
 		uint32_t zwo = rs.z_write_only - sw.rdp0.z_write_only, zcl = rs.zclears - sw.rdp0.zclears;
 		uint32_t zpend = rs.zclears_pending - sw.rdp0.zclears_pending, zmrg = rs.zclears_merged - sw.rdp0.zclears_merged;
 		uint32_t zcol = rs.z_as_color - sw.rdp0.z_as_color, zup = rs.z_uploads - sw.rdp0.z_uploads;
@@ -4732,6 +4739,26 @@ static enum game_end run_game_once(uint8_t *rom, uint32_t rom_size, const char *
 		 * con AA_EN (salsa64_rdp_aa_edges), experimental y apagada por
 		 * omisión: en la PS3 engordaba los modelos (docs/rsx-notes.md). */
 		bool aa_edges = file_exists(SALSA64_DATA_DIR "/aristas-aa");
+		/* Guarda de las copias del RSX a la RDRAM contra lo que el CPU
+		 * escribió después de la tarea (salsa64_rdp_guard): `sin-guarda-cpu`
+		 * la apaga (para comparar); `vigilante.cfg` con dos direcciones
+		 * físicas en hexadecimal («6b3000 749000») enciende el vigilante: el
+		 * log dice cada escritura que no es del CPU en ese rango. */
+		{
+			bool guard_on = !file_exists(SALSA64_DATA_DIR "/sin-guarda-cpu");
+			unsigned wlo = 0, whi = 0;
+			FILE *wf = fopen(SALSA64_DATA_DIR "/vigilante.cfg", "r");
+			if (wf) {
+				if (fscanf(wf, "%x %x", &wlo, &whi) != 2 || whi <= wlo)
+					wlo = whi = 0;
+				fclose(wf);
+			}
+			salsa64_rdp_guard(guard_on, wlo, whi);
+			if (!guard_on || whi)
+				salsa64_log("guarda de las copias contra el CPU: %s; vigilante %s0x%06x–0x%06x",
+					    guard_on ? "encendida" : "apagada (sin-guarda-cpu)", whi ? "en " : "apagado ",
+					    wlo, whi);
+		}
 		salsa64_rdp_aa_edges(aa_edges);
 		if (aa_edges)
 			salsa64_log("aristas de los dibujos con AA: encendidas (aristas-aa, experimental)");

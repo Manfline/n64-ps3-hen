@@ -949,6 +949,65 @@ static void targets_dma_ring(void)
 	CHECK(rdp_dma_since(&r, 0x200000 + (RDP_DMA_RING + 4) * 4096, 0x200000 + (RDP_DMA_RING + 4) * 4096 + 16, 1));
 }
 
+/* La guarda de las copias tardías (rdp_guard): Indiana Jones arma sus
+ * listas de pantalla donde estuvo el framebuffer de 640 × 480 de la pantalla
+ * del Expansion Pak (0x6b3000); la copia de ese cuadro, que llega después,
+ * no debe pisar lo que el CPU escribió. */
+static uint8_t guard_ram[1u << 20] __attribute__((aligned(128)));
+static struct rdp_guard guard_t;
+
+static void targets_cpu_guard(void)
+{
+	const uint32_t FB = 0x6b300, LINE = 1280, ROWS = 240;
+	memset(guard_ram, 0, sizeof guard_ram);
+	rdp_guard_clear(&guard_t);
+	/* Sin huella, todo se puede escribir (como antes de la guarda). */
+	CHECK(rdp_guard_ok(&guard_t, guard_ram, FB >> RDP_GUARD_SHIFT));
+	CHECK(rdp_guard_hash(guard_ram) != 0);
+	/* Termina la tarea que dibujó el cuadro: huellas de sus filas. */
+	rdp_guard_mark(&guard_t, guard_ram, sizeof guard_ram, FB, FB + LINE * ROWS);
+	uint32_t l0 = FB >> RDP_GUARD_SHIFT, l1 = (FB + LINE * ROWS - 1) >> RDP_GUARD_SHIFT;
+	for (uint32_t l = l0; l <= l1; l++)
+		CHECK(rdp_guard_ok(&guard_t, guard_ram, l));
+	/* El CPU escribe una lista (una sola palabra basta) en la fila 85. */
+	uint32_t dl = FB + 85 * LINE + 0x58;
+	guard_ram[dl] = 0xDE;
+	CHECK(!rdp_guard_ok(&guard_t, guard_ram, dl >> RDP_GUARD_SHIFT));
+	CHECK(rdp_guard_ok(&guard_t, guard_ram, (dl >> RDP_GUARD_SHIFT) + 1));
+	CHECK(rdp_guard_ok(&guard_t, guard_ram, (dl >> RDP_GUARD_SHIFT) - 1));
+	/* Cualquier byte de la línea, y cambios que conservan la suma. */
+	guard_ram[dl] = 0;
+	CHECK(rdp_guard_ok(&guard_t, guard_ram, dl >> RDP_GUARD_SHIFT));
+	uint32_t la = dl & ~(RDP_GUARD_LINE - 1);
+	guard_ram[la + 7] = 1;   /* +1 en la palabra 0 */
+	guard_ram[la + 15] = 0xFF;  /* y −1 en la 1: la misma suma */
+	guard_ram[la + 14] = 0xFF;
+	guard_ram[la + 13] = 0xFF;
+	guard_ram[la + 12] = 0xFF;
+	guard_ram[la + 11] = 0xFF;
+	guard_ram[la + 10] = 0xFF;
+	guard_ram[la + 9] = 0xFF;
+	guard_ram[la + 8] = 0xFF;
+	CHECK(!rdp_guard_ok(&guard_t, guard_ram, la >> RDP_GUARD_SHIFT));
+	memset(guard_ram + la, 0, 16);
+	/* La copia escribe la línea: su resultado también vale (la tarea
+	 * siguiente pudo tomar las huellas antes de que llegara la copia). */
+	uint32_t l = (FB + 10 * LINE) >> RDP_GUARD_SHIFT;
+	memset(guard_ram + (l << RDP_GUARD_SHIFT), 0x01, RDP_GUARD_LINE);  /* el cuadro, de la copia */
+	CHECK(!rdp_guard_ok(&guard_t, guard_ram, l));
+	rdp_guard_wrote(&guard_t, guard_ram, l);
+	CHECK(rdp_guard_ok(&guard_t, guard_ram, l));
+	rdp_guard_mark(&guard_t, guard_ram, sizeof guard_ram, FB, FB + LINE);  /* otra tarea, sin la copia */
+	CHECK(rdp_guard_ok(&guard_t, guard_ram, l));
+	guard_ram[(l << RDP_GUARD_SHIFT) + 3] = 0x42;  /* y después el CPU */
+	CHECK(!rdp_guard_ok(&guard_t, guard_ram, l));
+	/* Fuera de la RDRAM no marca nada. */
+	rdp_guard_clear(&guard_t);
+	rdp_guard_mark(&guard_t, guard_ram, sizeof guard_ram, sizeof guard_ram - 64, sizeof guard_ram + 4096);
+	CHECK(guard_t.base[(sizeof guard_ram - 1) >> RDP_GUARD_SHIFT] != 0);
+	CHECK_EQ(guard_t.base[sizeof guard_ram >> RDP_GUARD_SHIFT], 0);
+}
+
 static void targets_frame_mirror(void)
 {
 	const uint32_t A = 0x38f800, B = 0x3b5000, C = 0x3da800, LINE = 640;
@@ -1050,6 +1109,7 @@ void t_suite_targets(void)
 {
 	RUN(targets_recycled_slot);
 	RUN(targets_dma_ring);
+	RUN(targets_cpu_guard);
 	RUN(targets_inside);
 	RUN(targets_tall_pending);
 	RUN(targets_present_interlaced);

@@ -381,6 +381,53 @@ void rdp_dma_note(struct rdp_dma_ring *r, uint32_t pa, uint32_t len, uint32_t ta
 /* ¿Algún DMA desde la tarea `task` (inclusive) tocó [lo, hi)? */
 bool rdp_dma_since(const struct rdp_dma_ring *r, uint32_t lo, uint32_t hi, uint32_t task);
 
+/* Guarda de las copias tardías contra lo que escribió el CPU.
+ *
+ * En la N64 el RDP escribe la color image mientras corre la tarea; lo que el
+ * CPU escribe después en esa memoria queda encima. En la PS3 la copia del
+ * RSX a la RDRAM (espejos del framebuffer, copias sin esperar, VISCVG) la
+ * hace el hilo de presentación uno o más campos después: si entretanto el
+ * juego reusó esa memoria (Indiana Jones arma sus listas de pantalla donde
+ * estuvo el framebuffer de 640 × 480 de la pantalla del Expansion Pak;
+ * Killer Instinct Gold, objetos del audio donde estuvo un cuadro), la copia
+ * le pisaba sus datos con el cuadro, que en negro es 0x0001 en RGBA5551: la
+ * lista salía llena de 0x00010001 y el CPU saltaba a 0x00010001.
+ *
+ * Una huella por línea de 128 bytes: `base` la pone el hilo de emulación al
+ * terminar cada tarea, en las filas que sus dibujos pueden tocar (la RDRAM
+ * aún sin la copia); `wrote`, el hilo de presentación tras escribir una copia
+ * en la línea. Una línea se puede copiar si no hay huella (0) o si su
+ * contenido es el de una de las dos: si no, algo que no es el RDP (el CPU,
+ * casi siempre) la cambió desde que terminó la tarea, y esa línea se salta.
+ * Las dos tablas tienen un solo escritor cada una; una carrera entre los dos
+ * hilos solo puede saltar una línea de más en una copia. */
+#define RDP_GUARD_SHIFT 7
+#define RDP_GUARD_LINE  (1u << RDP_GUARD_SHIFT)
+#define RDP_GUARD_LINES ((8u << 20) >> RDP_GUARD_SHIFT)
+struct rdp_guard {
+	uint32_t base[RDP_GUARD_LINES];
+	uint32_t wrote[RDP_GUARD_LINES];
+};
+/* Huella de 128 bytes alineados (nunca 0). */
+uint32_t rdp_guard_hash(const uint8_t *line);
+void rdp_guard_clear(struct rdp_guard *g);
+/* Hilo de emulación: huella de las líneas de [lo, hi) (recortado a `size`). */
+void rdp_guard_mark(struct rdp_guard *g, const uint8_t *rdram, uint32_t size, uint32_t lo, uint32_t hi);
+/* ¿Se puede escribir la línea `line` (dirección >> RDP_GUARD_SHIFT)? */
+static inline bool rdp_guard_ok(const struct rdp_guard *g, const uint8_t *rdram, uint32_t line)
+{
+	uint32_t b = g->base[line], w = g->wrote[line];
+	if (!b && !w)
+		return true;
+	uint32_t h = rdp_guard_hash(rdram + (line << RDP_GUARD_SHIFT));
+	return h == b || h == w;
+}
+/* Hilo de presentación: la copia escribió en la línea `line`. */
+static inline void rdp_guard_wrote(struct rdp_guard *g, const uint8_t *rdram, uint32_t line)
+{
+	g->wrote[line] = rdp_guard_hash(rdram + (line << RDP_GUARD_SHIFT));
+}
+
 /* Un relleno sobre una color image alta que se reparte entre los destinos
  * existentes (rdp_targets_inside) no llega a los que se creen después:
  * Star Fox 64 limpia sus tres framebuffers con un solo FILLRECT de 320 × 720

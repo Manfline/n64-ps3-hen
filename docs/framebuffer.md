@@ -216,8 +216,30 @@ DMA del PI, del SP, del SI, la HLE de audio) se anota en un anillo
 (`rdp_dma_ring`, targets.h) con la tarea gráfica en vuelo, y **ninguna copia
 de la tarea T (espejo del framebuffer, copia esperada, espejo chico) escribe
 un tramo que un DMA tocó desde que T empezó**: el dato del DMA es más nuevo.
-Un DMA anterior a la tarea sí se pisa, como en la N64. Las escrituras del
-propio CPU no se siguen (solo con el build `SALSA64_WATCH_MEM`).
+Un DMA anterior a la tarea sí se pisa, como en la N64.
+
+**Las escrituras del CPU (2026-10-18, rc7a).** Lo mismo pasa con el CPU, y
+en la PS3 con más tiempo de por medio: Indiana Jones arma sus display lists
+en 0x71D358, dentro del framebuffer de 640 × 480 de la pantalla del
+Expansion Pak (0x6B3000–0x749000), y Killer Instinct Gold mete objetos de
+su audio donde hubo un cuadro. El espejo de ese último cuadro (negro: 0x0001
+en RGBA5551) llegaba campos después y dejaba la lista llena de 0x00010001
+(«tarea mala» en el log) o un puntero a función en 0x00010001 (el CPU
+saltaba ahí: AdEL con `pc 0x00010001`, que es lo que tienen todos los
+volcados de cuelgue de Killer Instinct). En el host la copia es síncrona y
+no pasa. **Guarda** (`rdp_guard`, targets.h): al terminar cada tarea el
+hilo de emulación toma una huella de cada línea de 128 bytes de las filas
+que sus dibujos pueden tocar (tijeras) en cada color image de 8 o 16 bits;
+una copia tardía (espejo del framebuffer, copias, espejos chicos, VISCVG)
+solo escribe las líneas cuyo contenido sigue siendo esa huella o la que dejó
+la última copia; las demás las cambió algo que no es el RDP y se quedan como
+están. Cuesta leer las filas una vez por tarea (~150 KB en 320 × 240) y
+512 KB de tablas. El log de cada 5 s dice «guarda contra el CPU: N copias
+tardías con M líneas sin escribir» y las primeras 12 copias recortadas, con
+lo que había en la primera línea. `sin-guarda-cpu` en la carpeta de datos la
+apaga (para comparar) y `vigilante.cfg` («6b3000 749000», hexadecimal)
+escribe en el log cada copia, VISCVG o DMA que cae en ese rango y si dejó
+0x00010001.
 
 **Rellenos de imagen alta antes de que existan los destinos.** Star Fox 64
 limpia sus tres framebuffers con un solo FILLRECT de 320 × 720 en la primera

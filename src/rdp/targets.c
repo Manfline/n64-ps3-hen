@@ -635,6 +635,43 @@ bool rdp_dma_since(const struct rdp_dma_ring *r, uint32_t lo, uint32_t hi, uint3
 	return false;
 }
 
+uint32_t rdp_guard_hash(const uint8_t *line)
+{
+	/* Suma y o exclusivo rotado de las 16 palabras dobles: cualquier
+	 * cambio de una sola palabra cambia la suma; sin multiplicaciones (en
+	 * el PPE, mulld es lento y en cadena). Se lee como big-endian para que
+	 * el host y la PS3 den lo mismo (pruebas). */
+	uint64_t s = 0x9E3779B97F4A7C15ull, x = 0;
+	for (unsigned i = 0; i < RDP_GUARD_LINE / 8; i++) {
+		uint64_t w;
+		memcpy(&w, line + 8 * i, 8);
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+		w = __builtin_bswap64(w);
+#endif
+		s += w;
+		x ^= w << (i * 4 + 1) | w >> (63 - i * 4);
+	}
+	s += x << 17 | x >> 47;
+	return (uint32_t)(s ^ s >> 32) | 1u;
+}
+
+void rdp_guard_clear(struct rdp_guard *g)
+{
+	memset(g, 0, sizeof *g);
+}
+
+void rdp_guard_mark(struct rdp_guard *g, const uint8_t *rdram, uint32_t size, uint32_t lo, uint32_t hi)
+{
+	if (hi > size)
+		hi = size;
+	if (hi > RDP_GUARD_LINES << RDP_GUARD_SHIFT)
+		hi = RDP_GUARD_LINES << RDP_GUARD_SHIFT;
+	if (lo >= hi)
+		return;
+	for (uint32_t l = lo >> RDP_GUARD_SHIFT; l <= (hi - 1) >> RDP_GUARD_SHIFT; l++)
+		g->base[l] = rdp_guard_hash(rdram + (l << RDP_GUARD_SHIFT));
+}
+
 int rdp_targets_inside(const struct rdp_targets *s, uint32_t addr, uint32_t width, uint32_t bpp, uint32_t rows,
 		       int slots[RDP_TARGETS_MAX], uint32_t first_row[RDP_TARGETS_MAX])
 {
