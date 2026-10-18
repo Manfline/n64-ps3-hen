@@ -6,6 +6,31 @@ datos de compatibilidad.
 
 Las entradas antiguas conservan sus métodos de prueba como historia.
 
+## 2026-10-18 — Candidata de la v0.2.8 en la PS3 real
+
+Resumen de lo que cambia de estado desde la v0.2.7 (el detalle de cada juego
+está en las secciones siguientes y en `docs/estado.md`).
+
+| Juego | Estado en la v0.2.8 | Notas |
+|---|---|---|
+| Hydro Thunder, Rush 2049, NBA Showtime | con sonido (MusyX) | NBA Showtime corre acelerado |
+| Diddy Kong Racing, Jet Force Gemini, Mickey's Speedway USA | dibujan con la HLE de F3DDKR / F3DJFG | Diddy Kong Racing jugable |
+| Killer Instinct Gold | jugable | las listas del CPU las dibuja el SPE de gráficos |
+| Resident Evil 2 | jugable | video, menús, personajes con la z del fondo, «YOU DIED»; el logo de N64 va a un cuarto y la sala de la estatua a 65–80 % |
+| Star Wars: Rogue Squadron | jugable con HLE, 60 campos/s | logos de un menú sin transparencia; vibración de imagen en los menús |
+| Indiana Jones and the Infernal Machine | jugable con HLE | |
+| Star Wars Episode I: Battle for Naboo | HLE traducida, **sin probar** | sin respaldo |
+| Yoshi's Story | dibuja (S2DEX + capas de 8 bits) | se puede trabar al golpear un bloque; objetos que desaparecen y puntos en texturas |
+| Earthworm Jim 3D, Mace: The Dark Age | dibujan | |
+| Castlevania, F-Zero X | orden de dibujo corregido | |
+| FIFA 99 | inicia el partido | |
+| Conker's Bad Fur Day | el jefe final ya se ve | faltan texturas y va lento |
+| Zelda: Ocarina of Time | Lente de la Verdad | resplandor de antorchas a través de paredes |
+| Animal Forest | reconocido por el CRC | sin probar |
+| Mario Tennis, Mortal Kombat 4, Pokémon Snap, Star Fox 64, Majora's Mask, Donkey Kong 64, Road Rash 64 | sin cambio | ver los problemas conocidos en `CHANGELOG.md` |
+
+Las ROMs de más de 64 MB no están soportadas.
+
 ## 2026-10-18 — Indiana Jones and the Infernal Machine con HLE gráfica (en el host y en RPCS3; falta la PS3)
 
 Su microcódigo gráfico (Factor 5, CRC-32 de GLideN64 `6859BF8E`, 0x37AFC470 de

@@ -4,7 +4,7 @@ All notable changes to Salsa64. Speeds are measured on a real PS3 (HEN,
 NTSC backups); `docs/perf-log.md` has the detailed numbers and
 `docs/estado.md` the work log (both in Spanish).
 
-## [0.2.8] — unreleased
+## [0.2.8] — 2026-10-18
 
 ### Added
 - **Restart from the pause menu:** two new rows, both with an "Are you sure?"
@@ -21,10 +21,10 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 - **MusyX audio** (issue #11): the games that use Factor 5's MusyX engine
   (v1 and v2) used to run mute because their audio task is not a command list.
   They now have sound: Hydro Thunder, Rush 2049, NBA Showtime, Resident
-  Evil 2 and Star Wars: Rogue Squadron (the last two still have no graphics).
-  Gauntlet Legends and Tarzan use the same engine but have not been tried.
-  Checked on a computer against the real microcode, the mix matches byte for
-  byte (Indiana Jones differs by 1 in one channel in 49 of its tasks).
+  Evil 2, Star Wars: Rogue Squadron and Indiana Jones and the Infernal
+  Machine. Gauntlet Legends and Tarzan use the same engine but have not been
+  tried. Checked on a computer against the real microcode, the mix matches
+  byte for byte (Indiana Jones differs by 1 in one channel in 49 of its tasks).
 - **Diddy Kong Racing is playable:** HLE for Rare's own graphics microcode
   (F3DDKR): logos, intro, title, menus, track selection and the races
   (Ancient Lake, the Timber's Island adventure) draw correctly in the test
@@ -40,6 +40,32 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
   lists. They are now drawn by the graphics SPE, in the same state and with
   the same texture cache as the rest of the frame, and the interrupts of the
   RDP are queued so that two close ones are not lost.
+- **Star Wars: Rogue Squadron draws (HLE, 60 fields/s):** HLE for Factor 5's
+  graphics microcode, translated from GLideN64 (GPLv2; the combined binary is
+  distributed as GPLv2). Ships, terrain, menus and the missions draw; the
+  ship in the mission and the double z clear are handled.
+- **Indiana Jones and the Infernal Machine is playable (HLE):** same family of
+  microcode, with the first mission running from the logos to the levels.
+  The HLE also covers **Star Wars Episode I: Battle for Naboo**, which shares
+  the microcode but **has not been tried** (no backup to test).
+- **Resident Evil 2 is playable:** the intro videos (HLE of the RSP's video
+  tasks, byte for byte the real microcode), menus, characters drawn with the
+  background's z, and the "YOU DIED" screen. Uses S2DEX 2.x as separate tasks.
+- **Yoshi's Story draws:** HLE of S2DEX 1.x as separate tasks and the 8-bit
+  background layers (sky) copied to RDRAM with their index bits.
+- **Earthworm Jim 3D and Mace: The Dark Age** draw correctly (the leftover
+  Z_SOURCE_SEL from the RDP no longer put the whole scene at one depth).
+- **Castlevania** (drawing order) and **F-Zero X** (drawing order) fixes;
+  **FIFA 99** now starts the match; **Conker's Bad Fur Day:** the final boss
+  now shows up.
+- **Zelda: Ocarina of Time, Lens of Truth** draws (the z mask keeps its alpha
+  for the alpha test and the RSX writes z without testing it).
+- **Animal Forest** (Animal Crossing translation, issue #18): its microcodes
+  are now recognised by their code CRC. Not tried (no backup).
+- **Guard against the CPU:** late copies from the RSX to RDRAM no longer
+  overwrite what the CPU wrote after the task (fixes Indiana Jones and Killer
+  Instinct Gold, among others); copies never write the colour image to
+  address 0.
 - **Audio identical to the real microcode in 99.87 % of the tasks** (51 136
   tasks in 21 games, compared byte for byte; it was 13.1 %): pitch changes,
   mixing, envelopes, the filters and the MP3 decoder follow the rounding of
@@ -64,14 +90,25 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
   stack headroom.
 
 ### Known issues
-- Killer Instinct Gold: in the first version of the fix, the second fight
-  froze with the music still playing (the controllers stopped being read and
-  no more graphics tasks arrived). This build includes the detector above,
-  and it has not been shown on a console whether it is solved.
-- NBA Showtime runs sped up.
+- Memory is not fully released between games: if a big game (Resident Evil 2,
+  Conker) does not load after playing many in a row, quit Salsa64 to the XMB
+  and open it again.
+- Yoshi's Story can hang when hitting a block, and shows vanishing objects and
+  dots on textures. Conker's final boss shows but lacks textures and is slow.
+- Mario Tennis and some Rogue Squadron menu logos have no transparency. Image
+  shake in Racer's video and Rogue Squadron's menus.
+- Mortal Kombat 4 has no health bars. Pokémon Snap: texture order, slow intro.
+  Star Fox 64: the menu duplicates options. Majora's Mask: lighting.
+- NBA Showtime runs sped up. Road Rash 64 does not reach full speed.
+- Donkey Kong 64: the circular transition is checkered. Zelda torch glows
+  show through walls.
+- Resident Evil 2: the N64 logo runs at a quarter of the speed and the statue
+  room at 65-80 %.
+- ROMs larger than 64 MB are not supported.
+- Killer Instinct Gold: the second fight froze in an earlier version; the
+  frozen-game detector is included and it is not confirmed fixed.
 - Perfect Dark slows down in scenes of more than about 2300 triangles.
-- Rogue Squadron, Resident Evil 2 and Indiana Jones still draw nothing (no
-  HLE for their graphics microcode); only their audio works.
+- Frame interpolation (experimental) still leaves a trail on 2D sprites (#17).
 
 ## [0.2.7] — 2026-10-16
 
