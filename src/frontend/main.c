@@ -3266,7 +3266,10 @@ static void stats(uint64_t now)
 		uint32_t zwo = rs.z_write_only - sw.rdp0.z_write_only, zcl = rs.zclears - sw.rdp0.zclears;
 		uint32_t zpend = rs.zclears_pending - sw.rdp0.zclears_pending, zmrg = rs.zclears_merged - sw.rdp0.zclears_merged;
 		uint32_t zcol = rs.z_as_color - sw.rdp0.z_as_color, zup = rs.z_uploads - sw.rdp0.z_uploads;
-		uint32_t zaut = rs.z_auto - sw.rdp0.z_auto;
+		uint32_t zaut = rs.z_auto - sw.rdp0.z_auto, palias = rs.primes_alias - sw.rdp0.primes_alias;
+		if (palias)
+			salsa64_log("gfx: %u destinos cebados desde la RDRAM porque su memoria se dibujó después con otro ancho",
+				    palias);
 		if (zwo || zcl || zcol || zup || zaut)
 			salsa64_log("gfx: profundidad: %u dibujos escriben la z sin probarla (%.1f por tarea), %u borrados de la z "
 				    "(%u pendientes hasta ligarla, %u juntados por no caber), %u color images en una z image, "

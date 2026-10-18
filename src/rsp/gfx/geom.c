@@ -200,6 +200,16 @@ void gfx_modify_vertex(struct gfx_state *g, uint32_t v, uint32_t where, uint32_t
 	case G_MWO_POINT_XYSCREEN: {
 		/* Posición de pantalla nueva (10.2): se vuelve a llevar a recorte. */
 		float sx = (float)(int16_t)(val >> 16) / 4.0f, sy = (float)(int16_t)(val & 0xFFFF) / 4.0f;
+		/* Un vértice cargado con w = 0 (Resident Evil 2 arma así el texto de
+		 * la pantalla de muerte: vértices en cero y la posición de pantalla
+		 * puesta aquí). El RSP real le da al RDP esta posición tal cual; en
+		 * recorte iba con w = 0 y el RSX lo descartaba: pantalla negra. Se
+		 * lleva a w = 1, delante de la cámara. */
+		if (p->w == 0.0f && g->vscale[0] != 0.0f && g->vscale[1] != 0.0f) {
+			p->w = 1.0f;
+			p->z = 0.0f;
+			p->clip = 0;
+		}
 		if (p->w != 0.0f && g->vscale[0] != 0.0f && g->vscale[1] != 0.0f) {
 			p->x = (sx - g->vtrans[0]) / g->vscale[0] * p->w;
 			p->y = (g->vtrans[1] - sy) / g->vscale[1] * p->w;

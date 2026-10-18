@@ -289,6 +289,11 @@ static struct {
 	 * readbacks_wanted en el hilo de emulación): una color image en una de
 	 * ellas es la z escrita como color y su copia a la RDRAM se espera. */
 	volatile uint32_t zimg_seen[4];
+	/* Escrituras del PPE en la RDRAM en lugar del RDP (ppe_copy): las
+	 * últimas, con la tarea, para cebar los destinos y cargar las z que
+	 * caen encima. */
+	struct { uint32_t lo, hi, task; } ppe_wr[4];
+	unsigned ppe_wr_next;
 	int bound_t;                 /* ranura ligada, o -1 */
 	struct depth *bound_d;
 	unsigned last_set;           /* juego de búferes de la última tarea dibujada */
@@ -587,6 +592,8 @@ static void release_targets(void)
 	memset(rdp.depths, 0, sizeof rdp.depths);
 	for (int k = 0; k < 4; k++)
 		rdp.zimg_seen[k] = 0;
+	memset(rdp.ppe_wr, 0, sizeof rdp.ppe_wr);
+	rdp.ppe_wr_next = 0;
 	memset(rdp.zc_addr, 0, sizeof rdp.zc_addr);
 	memset(rdp.zc_task, 0, sizeof rdp.zc_task);
 	memset(rdp.zc_full, 0, sizeof rdp.zc_full);
@@ -1292,6 +1299,104 @@ static bool make_room(uint32_t bytes, int keep)
 	return true;
 }
 
+/* Filas que cuentan de un destino: las dibujadas si se sabe, si no su alto. */
+static inline uint32_t alias_rows(const struct rdp_target *t)
+{
+	return t->box.y1 ? t->box.y1 : t->lh;
+}
+
+/* La última tarea en que el PPE escribió en la RDRAM [lo, hi) en lugar del
+ * RDP (ppe_copy), o 0. */
+static uint32_t ppe_written(uint32_t lo, uint32_t hi)
+{
+	uint32_t t = 0;
+	for (int k = 0; k < 4; k++)
+		if (rdp.ppe_wr[k].task && rdp.ppe_wr[k].lo < hi && lo < rdp.ppe_wr[k].hi &&
+		    (int32_t)(rdp.ppe_wr[k].task - t) > 0)
+			t = rdp.ppe_wr[k].task;
+	return t;
+}
+
+/* Un rectángulo en modo copia hacia una color image de 16 bits más alta
+ * que 480 filas, que no tiene superficie (get_target la ignora): el PPE lo
+ * copia en la RDRAM como el RDP. Resident Evil 2 copia así, con BG_COPY de
+ * 512 de ancho y 509 filas, el fondo y su profundidad, que después se leen
+ * con otro ancho (596): sin esto, el fondo no se restauraba bajo Leon (su
+ * estela) y la z del fondo no llegaba. Respeta la guarda contra el CPU. */
+static void ppe_copy(const struct gfx_draw *g, const struct set *s, uint32_t addr, uint32_t width)
+{
+	const struct gfx_tex *gt = &g->tex[0];
+	if (gt->where == GFX_TEX_TARGET || !gt->width || !gt->height)
+		return;
+	const uint8_t *tex = (gt->where == GFX_TEX_CACHE ? rdp.cache : s->tex) + gt->offset;
+	const struct gfx_vertex *v = (const struct gfx_vertex *)(s->vtx) + g->h.a;
+	float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f, s0 = 0, t0 = 0, s1 = 0, t1 = 0;
+	for (uint32_t k = 0; k < g->h.b; k++) {
+		if (!(v[k].w > 0.0f))
+			return;
+		float x = v[k].x / v[k].w, y = v[k].y / v[k].w;
+		if (x < x0) x0 = x, s0 = v[k].s;
+		if (x > x1) x1 = x, s1 = v[k].s;
+		if (y < y0) y0 = y, t0 = v[k].t;
+		if (y > y1) y1 = y, t1 = v[k].t;
+	}
+	float sc[4] = { g->scissor[0] / 4.0f, g->scissor[1] / 4.0f, g->scissor[2] / 4.0f, g->scissor[3] / 4.0f };
+	int xa = (int)(x0 > sc[0] ? x0 : sc[0]), xb = (int)(x1 < sc[2] ? x1 : sc[2]);
+	int ya = (int)(y0 > sc[1] ? y0 : sc[1]), yb = (int)(y1 < sc[3] ? y1 : sc[3]);
+	if (xa < 0) xa = 0;
+	if (ya < 0) ya = 0;
+	if (xb > (int)width) xb = (int)width;
+	if (xb <= xa || yb <= ya || addr + (uint32_t)yb * width * 2 > rdp.rdram_size)
+		return;
+	float dsdx = x1 > x0 ? (s1 - s0) / (x1 - x0) : 0.0f, dtdy = y1 > y0 ? (t1 - t0) / (y1 - y0) : 0.0f;
+	struct late_note nt;
+	memset(&nt, 0, sizeof nt);
+	for (int y = ya; y < yb; y++) {
+		float t = t0 + ((float)y + 0.5f - y0) * dtdy;
+		int ty = (int)((t * gt->xf[1] + gt->xf[3]) * gt->height);
+		if (ty < 0 || ty >= gt->height)
+			continue;
+		uint32_t d0 = addr + ((uint32_t)y * width + (uint32_t)xa) * 2, d1 = addr + ((uint32_t)y * width + (uint32_t)xb) * 2;
+		bool ok[ROW_LINES];
+		bool all = guard_row(d0, d1, ok, &nt.skipped);
+		if (!all)
+			late_skip_note(&nt, d0, ok, ((d1 - 1) >> RDP_GUARD_SHIFT) - (d0 >> RDP_GUARD_SHIFT) + 1);
+		const uint8_t *row = tex + (uint32_t)ty * gt->pitch;
+		for (int x = xa; x < xb; x++) {
+			float sx = s0 + ((float)x + 0.5f - x0) * dsdx;
+			int tx = (int)((sx * gt->xf[0] + gt->xf[2]) * gt->width);
+			if (tx < 0 || tx >= gt->width)
+				continue;
+			const uint8_t *p = row + 4 * tx;
+			if (g->atest && p[3] < 128)
+				continue;  /* modo copia con prueba de alfa: el bit de alfa en 0 no se escribe */
+			uint32_t a = addr + ((uint32_t)y * width + (uint32_t)x) * 2;
+			if (!all && !ok[(a >> RDP_GUARD_SHIFT) - (d0 >> RDP_GUARD_SHIFT)])
+				continue;
+			uint16_t px = (uint16_t)((p[0] >> 3) << 11 | (p[1] >> 3) << 6 | (p[2] >> 3) << 1 | (p[3] >= 128));
+			rdp.rdram[a] = (uint8_t)(px >> 8);
+			rdp.rdram[a + 1] = (uint8_t)px;
+		}
+		guard_wrote(d0, d1, all ? NULL : ok);
+		nt.lines++;
+	}
+	uint32_t lo = addr + (uint32_t)ya * width * 2, hi = addr + (uint32_t)yb * width * 2;
+	unsigned k = 0;
+	while (k < 4 && !(rdp.ppe_wr[k].task == rdp.tg.task && rdp.ppe_wr[k].hi >= lo && rdp.ppe_wr[k].lo <= hi))
+		k++;
+	if (k == 4) {
+		k = rdp.ppe_wr_next;
+		rdp.ppe_wr_next = (k + 1) % 4;
+		rdp.ppe_wr[k].lo = lo;
+		rdp.ppe_wr[k].hi = hi;
+	} else {
+		rdp.ppe_wr[k].lo = lo < rdp.ppe_wr[k].lo ? lo : rdp.ppe_wr[k].lo;
+		rdp.ppe_wr[k].hi = hi > rdp.ppe_wr[k].hi ? hi : rdp.ppe_wr[k].hi;
+	}
+	rdp.ppe_wr[k].task = rdp.tg.task;
+	rdp.stats.ppe_copies++;
+}
+
 /* Ranura (con superficie) de una color image; -1 si el RSX no tiene
  * memoria para una nueva (esa imagen se queda en la copia de la RDRAM). La
  * superficie va a la escala del destino (rdp_target_scale), que queda en
@@ -1323,9 +1428,33 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
 	if (!fresh) {
 		/* Sin dibujar desde hace tareas: lo que vale está en la RDRAM. */
 		bool stale = rdp.tg.task - rdp.tg.t[i].last_task > RDP_TARGETS_FRESH;
-		snprintf(rdp.last_get.how, sizeof rdp.last_get.how, stale ? "cebada" : "viva");
-		if (stale)
+		/* La misma memoria dibujada después con otro ancho (Resident Evil 2:
+		 * el fondo se copia a 0x63E000 de 512 de ancho y los personajes van
+		 * encima a 596): la superficie de este ancho quedó vieja. La copia
+		 * de la otra a la RDRAM se espera (readbacks_wanted), así que se
+		 * ceba desde ahí; si no, el fondo no se restauraba bajo el
+		 * personaje y quedaba su estela. */
+		bool alias = false;
+		for (int j = 0; j < RDP_TARGETS_MAX && !stale; j++) {
+			const struct rdp_target *o = &rdp.tg.t[j];
+			/* Y que cubra casi lo mismo: Link de Zelda (64 de ancho en los
+			 * primeros bytes del framebuffer) no vuelve viejo el cuadro. */
+			uint32_t ai = rdp.tg.t[i].width * alias_rows(&rdp.tg.t[i]), ao = o->width * alias_rows(o);
+			if (j != i && o->used && o->addr == addr && o->width != width && 2u * ao >= ai && 2u * ai >= ao &&
+			    (int32_t)(o->last_task - rdp.tg.t[i].last_task) > 0 && o->last_task != rdp.tg.task)
+				alias = true;
+		}
+		{
+			const struct rdp_target *t = &rdp.tg.t[i];
+			uint32_t wt = ppe_written(t->addr, t->addr + t->width * t->bpp * t->lh);
+			if (wt && (int32_t)(wt - t->last_task) > 0)
+				alias = true;
+		}
+		snprintf(rdp.last_get.how, sizeof rdp.last_get.how, stale ? "cebada" : alias ? "cebada (otro ancho)" : "viva");
+		if (stale || alias) {
 			prime(i);
+			rdp.stats.primes_alias += alias;
+		}
 		return i;
 	}
 	if (before[i].used && (before[i].addr != addr || before[i].width != width))
@@ -1466,6 +1595,11 @@ static bool zfeed(struct depth *d, int slot)
 		if (c->used && c->addr == d->addr && c->last_task < task && c->last_task > d->fed_src &&
 		    c->last_task > src)
 			src = c->last_task;
+	}
+	{
+		uint32_t wt = ppe_written(d->addr, d->addr + width * rows * 2);
+		if (wt && (int32_t)(wt - d->fed_src) > 0 && (int32_t)(wt - src) > 0)
+			src = wt;
 	}
 	if (!src) {
 		for (int k = 0; k < 4; k++)
@@ -1911,6 +2045,28 @@ static bool rdp_reads_image(const struct set *s, const struct gfx_result *res, u
 	return false;
 }
 
+/* ¿Hay otra color image en la misma dirección, con otro ancho y de un
+ * tamaño parecido (la mitad o más del área de la otra, en las dos
+ * direcciones)? Resident Evil 2 copia el fondo a 512 de ancho y lo muestra
+ * a 596 o a 320 (el menú de opciones); Link de Zelda (64 de ancho en los
+ * primeros bytes del framebuffer) no cuenta. */
+static bool alias_of(uint32_t addr, uint32_t width)
+{
+	uint32_t area = 0;
+	for (int j = 0; j < RDP_TARGETS_MAX; j++)
+		if (rdp.tg.t[j].used && rdp.tg.t[j].addr == addr && rdp.tg.t[j].width == width)
+			area = rdp.tg.t[j].width * alias_rows(&rdp.tg.t[j]);
+	if (!area)
+		area = width * width * 3u / 4u;
+	for (int j = 0; j < RDP_TARGETS_MAX; j++) {
+		const struct rdp_target *o = &rdp.tg.t[j];
+		uint32_t a = o->width * alias_rows(o);
+		if (o->used && o->addr == addr && o->width != width && 2u * a >= area && 2u * area >= a)
+			return true;
+	}
+	return false;
+}
+
 static void readbacks_wanted(struct set *s, const struct gfx_result *res)
 {
 	s->rb_n = s->rb_nsync = 0;
@@ -1962,6 +2118,9 @@ static void readbacks_wanted(struct set *s, const struct gfx_result *res)
 				bool zimg = false;
 				for (int z = 0; z < 4; z++)
 					zimg |= rdp.zimg_seen[z] == c->a;
+				/* La misma memoria con otro ancho (get_target la ceba desde
+				 * la RDRAM): la copia tiene que estar antes. */
+				zimg |= alias_of(c->a, c->b);
 				bool sync = !again || big8(siz == 1u ? 1u : 2u, c->b) || zimg ||
 					    (small && rep < 2 && !rdp_reads_image(s, res, c->a, c->b));
 				s->rb_rep[k] = rep;
@@ -2197,6 +2356,7 @@ static void translate(uint32_t n)
 	uint32_t off = 0;
 	rsxkit_draw rd;
 	struct { uint32_t addr, width, bpp, rows; } tall = { 0, 0, 0, 0 };  /* color image más alta que 480 */
+	struct { bool on; uint32_t addr, width; } ppe_img = { false, 0, 0 };  /* la de ppe_copy */
 	while (off + sizeof(struct gfx_cmd) <= res->cmd_bytes) {
 		const struct gfx_cmd *c = (const struct gfx_cmd *)(s->cmd + off);
 		if (c->op == GFX_OP_END || c->size < sizeof *c)
@@ -2236,6 +2396,12 @@ static void translate(uint32_t n)
 			}
 			cur = is_tall ? -1 : get_target(c->a, c->b, (c->c >> 8) & 0xFF, siz, lh);
 			rdp.at = "dibujos";
+			/* Más alta que 480 (sin superficie): los rectángulos de copia van
+			 * a la RDRAM con el PPE (ppe_copy). */
+			ppe_img.on = cur < 0 && !is_tall && siz == 2u && c->b && c->b <= 640 && lh > 480 && rdp.rdram &&
+				     rdp.fbfx >= 2;
+			ppe_img.addr = c->a;
+			ppe_img.width = c->b;
 			if (cur >= 0 && rdp.last_get.fresh) {
 				/* Ranura de otra imagen: lo dibujado y su caja eran del destino
 				 * anterior (ver raster.c). */
@@ -2299,6 +2465,10 @@ static void translate(uint32_t n)
 				/* Y para los destinos que se creen después. */
 				rdp_targets_tall_note(&rdp.tg, tall.addr, tall.width, tall.bpp, tall.rows, x0, y0, x1, y1, color, slots,
 						      nin);
+				break;
+			}
+			if (cur < 0 && ppe_img.on && g->cycle == G_CYC_COPY && g->ntex == 1 && g->h.b >= 3) {
+				ppe_copy(g, s, ppe_img.addr, ppe_img.width);
 				break;
 			}
 			if (cur < 0 || !g->h.b)

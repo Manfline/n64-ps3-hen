@@ -1,5 +1,36 @@
 # Estado
 
+## 2026-10-18 — rc7b2: Resident Evil 2, estela de Leon, menú de opciones y pantalla de muerte
+
+Con las cajas negras de la rc7b (`build/rc7b-ps3/`):
+
+- **La estela de Leon (caja 7448).** En esa sala el fondo se copia con 128
+  `BG_COPY` a 0x63E000 **de 512 de ancho y 509 filas**, y Leon se dibuja en
+  la misma dirección a **596 de ancho**: los 512 × 509 × 2 bytes son, a 596,
+  el fondo de 596 × 437 (reconstruido desde el volcado sale la sala entera).
+  Lo mismo pasa con la z en 0x189A00. `get_target` ignoraba la imagen de 509
+  filas («color image imposible», más de 480), así que ni el fondo ni la z
+  llegaban a ningún lado y bajo Leon quedaba el cuadro anterior. **Arreglo**
+  (`ppe_copy` en `src/rdp/rdp.c`): los rectángulos de copia hacia una color
+  image de 16 bits de más de 480 filas los escribe el PPE en la RDRAM, como
+  el RDP (respetando la guarda contra el CPU y la prueba de alfa del modo
+  copia), y los destinos que caen encima se ceban desde la RDRAM; `zfeed`
+  carga la z desde ahí.
+- **Menú de opciones en negro (caja 21456).** Mismo patrón con alturas
+  normales: el fondo se copia a 0x63E000/512 y el menú se muestra en
+  0x63E000/320. La superficie de 320 nunca recibía el fondo (y la copia de
+  la de 512 iba sin esperar: por eso aparecía al grabar la caja negra, que
+  le daba tiempo). **Arreglo**: si la misma memoria se dibujó después con
+  otro ancho y un tamaño parecido (la mitad o más del área en las dos
+  direcciones; Link de Zelda a 64 de ancho no cuenta), esa copia a la RDRAM
+  se espera y el destino del otro ancho se ceba desde la RDRAM.
+- **Pantalla negra al morir (caja 4632).** Las 246 tareas del texto traen
+  vértices con x, y, z, w = 0: el juego los carga en cero y les pone la
+  posición de pantalla con `G_MODIFYVTX` (XYSCREEN). Con w = 0 la HLE dejaba
+  la posición de recorte en cero y el RSX los descartaba. **Arreglo**
+  (`gfx_modify_vertex`, `src/rsp/gfx/geom.c`): un vértice con w = 0 pasa a
+  w = 1 y su posición de pantalla se lleva a recorte.
+
 ## 2026-10-18 — rc7b2: Yoshi tras regresar y tras el reinicio; la vibración de Rogue
 
 Con las cajas negras de la rc6 (`build/rc6-ps3/yoshi2/`, `build/rc6-ps3/rogue2/`):
