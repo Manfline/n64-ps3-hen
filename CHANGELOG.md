@@ -42,6 +42,16 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
   `/dev_hdd0/salsa64/` gets a RAM dump (`cuelgue-<field>.rdram`, up to three
   per game) to attach to the bug report.
 
+### Changed
+- **The graphics SPE program comes in three images**, one per family of
+  graphics microcodes (first generation: Fast3D, F3DEX 1.x and Rare's
+  variants; F3DEX2 with S2DEX2 and F-Zero X's variant; Conker's). The one each
+  game needs is loaded with its first graphics task and checked against the
+  PPE before use. Each image has the texture cache back at 1024 textures and
+  room in the SPE's local store for the microcodes still missing (S2DEX,
+  Factor 5). The log says which image each game loaded, its size and its
+  stack headroom.
+
 ### Known issues
 - Killer Instinct Gold: in the first version of the fix, the second fight
   froze with the music still playing (the controllers stopped being read and

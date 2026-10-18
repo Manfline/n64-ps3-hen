@@ -128,6 +128,47 @@ hace todavía: no cabe (más abajo, con números).
 - **Falta.** Probarlo en la PS3 con `gfx_ppe` (el SPE 0 aún no hace S2DEX
   suelto), y llegar a los menús de Resident Evil 2 (el host no pasa de las
   cinemáticas): ahí estarán los G_OBJ_RECTANGLE y los demás objetos.
+## 2026-10-17 — El SPE 0 por familias de microcódigos: tres imágenes
+
+El programa del SPE 0 estaba a 250 592 de 262 144 bytes, con 1840 de holgura
+de pila (mínimo 1536) y la caché de texturas bajada a 768 entradas. Ahora se
+enlaza tres veces desde las mismas fuentes (`-DGFX_SPE0_IMG=<n>`,
+`src/rsp/gfx/spe0.h`) y el PPE carga la imagen de la familia de cada tarea.
+Todo en `docs/spe0-familias.md` (inventario, mezcla por juego, costos y la
+regla para agregar un microcódigo).
+
+- **Partición** (con los datos: ningún respaldo mezcla generaciones entre
+  tareas; S2DEX2 y F3DFLX solo dentro de F3DEX2; RE2 mezcla F3DEX2 y S2DEX
+  suelto): 0 «F3D» (F3D, F3DEX 1.x, F3DWR, PD, DKR/JFG/Mickey), 1 «F3DEX2»
+  (F3DEX2, F3DZEX2, S2DEX2 y F3DFLX en la tarea) y 2 «Conker». Hasta `_end`
+  238 992 / 239 632 / 238 352 bytes, holgura 14 080 / 13 024 / 14 784, las
+  tres con la **caché de texturas en 1024**.
+- **Hueco:** S2DEX suelto en la imagen 1: 11,5 KB sobre el mínimo (+3,5 KB
+  por cada 128 entradas de caché que se quiten); Factor 5 en una imagen
+  propia: ~21 KB. `s2dex.c` pasa sus cuentas de los fondos a 32 bits (eran
+  5,3 KB de libgcc).
+- **Cambio de imagen** por tarea (`need_image`, `gfx_spu.c`): el tramo del RDP
+  y las color images pasan por la memoria principal, la caché de texturas
+  queda vacía con una barrera hasta que el consumidor termina la última tarea
+  de la imagen anterior (`gfx_tc_fence`), y cada imagen se comprueba contra el
+  PPE al cargarse (hash y tareas de prueba de `src/rsp/gfx/selftest.c`). En
+  RPCS3, 3,4 ms; en la práctica, un cambio por juego al empezar.
+- **Host:** `salsa64-run` cuenta las tareas por microcódigo y los cambios de
+  imagen que habría; compilado con una sola imagen, da las mismas imágenes que
+  main en sus juegos (212 imágenes de 14 escenas iguales a main).
+- **RPCS3:** con la pila libre llena de un patrón (para medirla), su
+  recompilador de SPU ejecutaba mal la imagen de F3D en algunos builds (bien
+  con su intérprete): la pila solo se llena con el archivo `spe0-pila`.
+- **Pruebas:** `tools/build.sh test-host` 613/613; `tools/test-roms.sh` rc 0;
+  `tools/build.sh` rc 0; `tools/test-rec.sh` rc 1 solo por `menu_scan_dir`
+  bajo qemu (nemu64 433, fastmem 440); RPCS3: `spe0-todas`, gfxtest y sus
+  variantes F3D y F3DEX, vitest, audiotest y el menú en verde.
+- **Paquete de prueba** «Salsa64 SPE0» (SLSA00146, v0.2.7-32-gb3f2dc2):
+  `tools/build.sh -C src/frontend PROGRAM=salsa64-spe0 "TITLE=Salsa64 SPE0"
+  APPID=SLSA00146 pkg` con el directorio de build borrado antes.
+- **Falta:** la PS3 real con el paquete «Salsa64 SPE0» (SLSA00146): qué imagen
+  carga cada juego, el tiempo de la carga y de un cambio (`spe0-todas` hace
+  los tres al arrancar) y el tiempo del SPE 0 por tarea con la caché en 1024.
 
 ## 2026-10-17 — Jet Force Gemini y Mickey's Speedway: G_DMA_TEX_OFFSET (0x02) y desplazamientos de textura
 

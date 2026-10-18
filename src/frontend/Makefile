@@ -68,13 +68,6 @@ LDFLAGS := -T $(abspath $(R))/mk/rec-cache.ld -T lv2.ld
 
 include $(R)/mk/ps3.mk
 
-# GFX_PPE=1: la HLE gráfica en el PPE sin pedirlo con el archivo gfx_ppe (paquete de
-# prueba de S2DEX suelto, que el SPE 0 aún no hace).
-GFX_PPE ?= 0
-ifeq ($(GFX_PPE),1)
-$(OBJ)/src/frontend/main.c.o: PPU_CFLAGS += -DSALSA64_GFX_PPE_DEFAULT
-endif
-
 # Versión, título y APPID para version.c (menú, pausa y primera línea del
 # log). tools/build.sh calcula SALSA64_VERSION y SALSA64_COMMIT fuera del
 # contenedor: ahí dentro el .git de un worktree apunta a una ruta del host.

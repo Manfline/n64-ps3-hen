@@ -76,7 +76,7 @@ enum {
 	S2_RDPHALF_2 = 0xF1,
 };
 
-#ifdef GFX_S2DEX_FULL
+#if GFX_HAS(S2DEX)
 /* El opcode de S2DEX 1.x (Yoshi's Story: BG_1CYC 0x01, BG_COPY 0x02,
  * OBJ_RECTANGLE 0x03, OBJ_SPRITE 0x04, OBJ_MOVEMEM 0x05, SELECT_DL 0xB0,
  * OBJ_RENDERMODE 0xB1, OBJ_RECTANGLE_R 0xB2, LOADTXTR 0xC1 y LDTX_* 0xC2 a
@@ -275,24 +275,27 @@ static void bg_draw(struct gfx_state *g, uint32_t seg, bool scaled)
 
 	/* Marco recortado a la izquierda y arriba de la pantalla: se corre la
 	 * imagen lo que se recorta. Todo en texels ×1024 (u5.10) para la
-	 * escala. */
-	uint64_t sx0 = (uint64_t)b.image_x << 10, ty0 = (uint64_t)b.image_y << 10;
+	 * escala, en 32 bits: imageX < 2048, frameX ≥ −8192 y frameW < 16 384
+	 * píxeles, la escala < 65 536 y la imagen ≤ 1024 texels, así que nada
+	 * pasa de 2^31. En 64 bits, el SPE 0 traía 5,3 KB de libgcc (__muldi3,
+	 * __moddi3, __udivdi3, __umoddi3) solo para esto. */
+	uint32_t sx0 = b.image_x << 10, ty0 = b.image_y << 10;
 	uint32_t fx = 0, fy = 0;
 	if (b.frame_x < 0) {
 		fx = (uint32_t)-b.frame_x;
-		sx0 += (uint64_t)fx * b.scale_w;
+		sx0 += fx * b.scale_w;
 	}
 	if (b.frame_y < 0) {
 		fy = (uint32_t)-b.frame_y;
-		ty0 += (uint64_t)fy * b.scale_h;
+		ty0 += fy * b.scale_h;
 	}
 	if (fx >= b.frame_w || fy >= b.frame_h)
 		return;
 	uint32_t x_left = (uint32_t)(b.frame_x + (int32_t)fx), y = (uint32_t)(b.frame_y + (int32_t)fy);
 	uint32_t y_end = (uint32_t)(b.frame_y + (int32_t)b.frame_h);
 	uint32_t x_end = (uint32_t)(b.frame_x + (int32_t)b.frame_w);
-	uint64_t wrap_w = (uint64_t)b.image_w << 10, wrap_h = (uint64_t)b.image_h << 10;
-	uint64_t t = ty0 % wrap_h;
+	uint32_t wrap_w = b.image_w << 10, wrap_h = b.image_h << 10;
+	uint32_t t = ty0 % wrap_h;
 
 	while (y < y_end) {
 		/* Filas de imagen de esta tira: desde la de t, hasta per_load (una
@@ -302,7 +305,7 @@ static void bg_draw(struct gfx_state *g, uint32_t seg, bool scaled)
 		if (n > b.image_h - ty)
 			n = b.image_h - ty;
 		/* Píxeles de pantalla que caen en esas filas. */
-		uint64_t t_end = (uint64_t)(ty + n) << 10;
+		uint32_t t_end = (ty + n) << 10;
 		uint32_t rows = (uint32_t)((t_end - t + b.scale_h - 1) / b.scale_h);
 		if (rows == 0)
 			rows = 1;
@@ -312,7 +315,7 @@ static void bg_draw(struct gfx_state *g, uint32_t seg, bool scaled)
 		load_rows(g, &b, ty, load_n);
 
 		/* En x, tramos hasta la vuelta de la imagen. */
-		uint64_t s = sx0 % wrap_w;
+		uint32_t s = sx0 % wrap_w;
 		uint32_t x = x_left;
 		while (x < x_end) {
 			uint32_t cols = (uint32_t)((wrap_w - s + b.scale_w - 1) / b.scale_w);
@@ -321,10 +324,10 @@ static void bg_draw(struct gfx_state *g, uint32_t seg, bool scaled)
 			strip_rect(g, x << 2, y << 2, (x + cols) << 2, (y + rows) << 2, (uint32_t)(s >> 5),
 				   (uint32_t)(t >> 5), b.scale_w, b.scale_h, copy);
 			x += cols;
-			s = (s + (uint64_t)cols * b.scale_w) % wrap_w;
+			s = (s + cols * b.scale_w) % wrap_w;
 		}
 		y += rows;
-		t = (t + (uint64_t)rows * b.scale_h) % wrap_h;
+		t = (t + rows * b.scale_h) % wrap_h;
 	}
 }
 
@@ -373,7 +376,7 @@ static void obj_load_txtr(struct gfx_state *g, uint32_t seg)
 	}
 }
 
-#ifdef GFX_S2DEX_FULL
+#if GFX_HAS(S2DEX)
 /* --- Objetos (G_OBJ_*) --- */
 
 /* La matriz de objetos (uObjMtx / uObjSubMtx) vive en g->raw[4..11], libre
@@ -460,44 +463,45 @@ static void obj_tile(struct gfx_state *g, const struct obj *o)
  * cuartos de píxel (pueden venir al revés, con la imagen volteada, y salirse
  * de la pantalla por arriba o la izquierda); dsdx/dtdy en u5.10 (texels por
  * píxel, positivos). Los flags de volteo del sprite (bit 0 = s, bit 4 = t)
- * también invierten el recorrido. */
-static void obj_rect(struct gfx_state *g, const struct obj *o, int64_t x0, int64_t y0, int64_t x1, int64_t y1,
-		     int64_t dsdx, int64_t dtdy)
+ * también invierten el recorrido. En coma flotante y enteros de 32 bits: el
+ * SPE no lleva la división de 64 bits (libgcc, 5 KB). */
+static void obj_rect(struct gfx_state *g, const struct obj *o, float x0, float y0, float x1, float y1, float dsdx,
+		     float dtdy)
 {
 	bool fx = o->flags & 1, fy = o->flags & 0x10;
 	if (x1 < x0) {
-		int64_t t = x0;
+		float t = x0;
 		x0 = x1;
 		x1 = t;
 		fx = !fx;
 	}
 	if (y1 < y0) {
-		int64_t t = y0;
+		float t = y0;
 		y0 = y1;
 		y1 = t;
 		fy = !fy;
 	}
 	/* s y t del borde izquierdo y del superior, con el signo del recorrido. */
-	int64_t s = fx ? (int64_t)((o->w >> 5) - 1) << 5 : 0, t = fy ? (int64_t)((o->h >> 5) - 1) << 5 : 0;
+	float s = fx ? (float)(((o->w >> 5) - 1) << 5) : 0.0f, t = fy ? (float)(((o->h >> 5) - 1) << 5) : 0.0f;
 	if (fx)
 		dsdx = -dsdx;
 	if (fy)
 		dtdy = -dtdy;
 	/* TEXRECT no tiene coordenadas negativas: se recorta y se avanza s y t
 	 * (cuarto de píxel = dsdx / 4 texels, en u10.5 ×32: dsdx / 128). */
-	if (x0 < 0) {
-		s += -x0 * dsdx / 128;
-		x0 = 0;
+	if (x0 < 0.0f) {
+		s += -x0 * dsdx / 128.0f;
+		x0 = 0.0f;
 	}
-	if (y0 < 0) {
-		t += -y0 * dtdy / 128;
-		y0 = 0;
+	if (y0 < 0.0f) {
+		t += -y0 * dtdy / 128.0f;
+		y0 = 0.0f;
 	}
-	if (x1 <= x0 || y1 <= y0 || x0 >= 1024 * 4 || y0 >= 1024 * 4)
+	if (x1 <= x0 || y1 <= y0 || x0 >= 4096.0f || y0 >= 4096.0f)
 		return;
 	bool copy = ((g->oh >> G_MDSFT_CYCLETYPE) & 3) == G_CYC_COPY;
-	strip_rect(g, (uint32_t)x0, (uint32_t)y0, (uint32_t)x1, (uint32_t)y1, (uint32_t)s, (uint32_t)t,
-		   (uint32_t)dsdx, (uint32_t)dtdy, copy);
+	strip_rect(g, (uint32_t)x0, (uint32_t)y0, (uint32_t)x1, (uint32_t)y1, (uint32_t)(int32_t)s, (uint32_t)(int32_t)t,
+		   (uint32_t)(int32_t)dsdx, (uint32_t)(int32_t)dtdy, copy);
 }
 
 /* G_OBJ_RECTANGLE (base = false) y G_OBJ_RECTANGLE_R (con la escala base y
@@ -506,16 +510,17 @@ static void obj_rect(struct gfx_state *g, const struct obj *o, int64_t x0, int64
 static void obj_rectangle(struct gfx_state *g, const struct obj *o, bool base)
 {
 	const uint32_t *m = MTX(g);
-	int64_t bsx = base ? m[M_BSX] : 1024, bsy = base ? m[M_BSY] : 1024;
-	if (!bsx || !bsy)
+	float bsx = base ? (float)m[M_BSX] : 1024.0f, bsy = base ? (float)m[M_BSY] : 1024.0f;
+	if (bsx == 0.0f || bsy == 0.0f)
 		return;
-	int64_t qw = (int64_t)o->w * 128 * 1024 / ((int64_t)o->scale_w * bsx), qh = (int64_t)o->h * 128 * 1024 / ((int64_t)o->scale_h * bsy);
-	int64_t qx = base ? (int32_t)m[M_X] + (int64_t)o->x * 1024 / bsx : o->x;
-	int64_t qy = base ? (int32_t)m[M_Y] + (int64_t)o->y * 1024 / bsy : o->y;
-	int64_t dsdx = o->scale_w, dtdy = o->scale_h;
+	float qw = (float)o->w * 128.0f * 1024.0f / ((float)o->scale_w * bsx);
+	float qh = (float)o->h * 128.0f * 1024.0f / ((float)o->scale_h * bsy);
+	float qx = base ? (float)(int32_t)m[M_X] + (float)o->x * 1024.0f / bsx : (float)o->x;
+	float qy = base ? (float)(int32_t)m[M_Y] + (float)o->y * 1024.0f / bsy : (float)o->y;
+	float dsdx = (float)o->scale_w, dtdy = (float)o->scale_h;
 	if (base) {
-		dsdx = dsdx * bsx / 1024;
-		dtdy = dtdy * bsy / 1024;
+		dsdx = dsdx * bsx / 1024.0f;
+		dtdy = dtdy * bsy / 1024.0f;
 	}
 	obj_tile(g, o);
 	obj_rect(g, o, qx, qy, qx + qw, qy + qh, dsdx, dtdy);
@@ -575,7 +580,7 @@ static void obj_cmd(struct gfx_state *g, uint32_t op, uint32_t w1)
 	else
 		obj_rectangle(g, &o, op == S2_OBJ_RECTANGLE_R);
 }
-#endif /* GFX_S2DEX_FULL */
+#endif /* GFX_HAS(S2DEX) */
 
 /* Un tramo S2DEX: gen1 con los opcodes de S2DEX 1.x. `foreign`: está dentro
  * de una tarea de otra familia (G_LOAD_UCODE) y termina en el G_LOAD_UCODE
@@ -589,18 +594,18 @@ static bool s2dex_run(struct gfx_state *g, bool gen1, bool foreign)
 	if (foreign)
 		res->flags |= GFX_RES_LOAD_UCODE;
 	g->raw[0] = 0;
-#ifdef GFX_S2DEX_FULL
+#if GFX_HAS(S2DEX)
 	mtx_reset(g);
 #endif
 	while (gfx_dl_next(g, &w0, &w1)) {
-#ifdef GFX_S2DEX_FULL
+#if GFX_HAS(S2DEX)
 		uint32_t op = gen1 ? s2_canon(w0 >> 24) : w0 >> 24;
 #else
 		uint32_t op = w0 >> 24;
 #endif
 		switch (op) {
 		case S2_LOAD_UCODE: {
-#ifdef GFX_S2DEX_FULL
+#if GFX_HAS(S2DEX)
 			uint32_t text = gfx_addr(g, w1);
 			if (g->ucode && text == g->ucode) {
 				if (foreign)
@@ -613,7 +618,7 @@ static bool s2dex_run(struct gfx_state *g, bool gen1, bool foreign)
 					g->ucode = text;
 				break;
 			}
-			if (!foreign && (kind == 1 || kind == 2)) {
+			if (!foreign && ((kind == 1 && GFX_HAS(F3D)) || (kind == 2 && GFX_HAS(F3DEX2)))) {
 				/* RE2 (F3DEX2) y Yoshi's Story (F3DEX 1.x) cargan el de 3D a mitad
 				 * de la tarea y siguen con la lista: la sigue su intérprete. */
 				gfx_ucode_reload(g, text, kind, nonear, gfx_addr(g, g->rdphalf1), (w0 & 0xFFFF) + 1);
@@ -679,7 +684,7 @@ static bool s2dex_run(struct gfx_state *g, bool gen1, bool foreign)
 		case S2_OBJ_LOADTXTR:
 			obj_load_txtr(g, w1);
 			break;
-#ifdef GFX_S2DEX_FULL
+#if GFX_HAS(S2DEX)
 		case S2_OBJ_RECTANGLE:
 		case S2_OBJ_SPRITE:
 		case S2_OBJ_RECTANGLE_R:
@@ -725,7 +730,7 @@ bool gfx_dl_s2dex2(struct gfx_state *g)
 	return s2dex_run(g, false, true);
 }
 
-#ifdef GFX_S2DEX_FULL
+#if GFX_HAS(S2DEX)
 bool gfx_dl_s2dex1(struct gfx_state *g)
 {
 	return s2dex_run(g, true, true);

@@ -186,6 +186,15 @@ static void tc_reset(struct gfx_texcache *c, uint64_t ea, uint32_t cap)
 	c->cap = cap;
 	c->head_off = 0;
 	c->tail = c->count = 0;
+	c->fence_on = 0;
+}
+
+void gfx_tc_fence(struct gfx_state *g, uint64_t ea, uint32_t cap, uint32_t task)
+{
+	struct gfx_texcache *c = &g->tc;
+	tc_reset(c, ea, cap & ~127u);
+	c->fence = task;
+	c->fence_on = 1;
 }
 
 void gfx_tc_begin(struct gfx_state *g)
@@ -201,6 +210,8 @@ void gfx_tc_begin(struct gfx_state *g)
 	c->task = j->task;
 	/* Lo de esta tarea nunca se desaloja, diga lo que diga el consumidor. */
 	c->done_task = (int32_t)(j->done_task - (j->task - 1)) > 0 ? j->task - 1 : j->done_task;
+	if (c->fence_on && (int32_t)(c->done_task - c->fence) >= 0)
+		c->fence_on = 0;
 }
 
 static uint32_t home(const uint32_t key[2])
@@ -304,7 +315,7 @@ struct gfx_tc_entry *gfx_tc_insert(struct gfx_state *g, const uint32_t key[2], u
 {
 	struct gfx_texcache *c = &g->tc;
 	size = (size + 127) & ~127u;
-	if (!size || size > c->cap)
+	if (!size || size > c->cap || c->fence_on)
 		return NULL;
 	/* Invariante: la cola, de tail en adelante, sigue el orden de la región
 	 * empezando en head_off (lo de la vuelta anterior y luego lo de esta), y

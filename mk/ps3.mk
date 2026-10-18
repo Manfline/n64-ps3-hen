@@ -166,13 +166,26 @@ $(OBJ)/spu/%.c.o: $(ROOT)/%.c
 	@mkdir -p $(@D)
 	$(VERB)spu-gcc $(SPU_CFLAGS) -MMD -MP -c $< -o $@
 
+# Un programa con <nombre>_OBJDIR compila sus fuentes aparte, en obj/<dir>,
+# con <nombre>_CFLAGS además de SPU_CFLAGS: varias imágenes desde las mismas
+# fuentes (las del SPE 0, docs/spe0-familias.md). Con <nombre>_STACK_MIN, los
+# números de la pila quedan también en obj/spu_<nombre>_stack.h para el PPE
+# (SPU_<NOMBRE>_END, _FREE, _STACK y _SLACK).
 define SPU_PROG_RULES
-$(1)_OBJS := $$(patsubst $$(ROOT)/%,$$(OBJ)/spu/%.o,$$(abspath $$($(1)_SRCS)))
+$(1)_OBJDIR ?= spu
+$(1)_OBJS := $$(patsubst $$(ROOT)/%,$$(OBJ)/$$($(1)_OBJDIR)/%.o,$$(abspath $$($(1)_SRCS)))
+ifneq ($$($(1)_OBJDIR),spu)
+$$(OBJ)/$$($(1)_OBJDIR)/%.c.o: $$(ROOT)/%.c
+	@echo "  SPU CC  $$*.c ($(1))"
+	@mkdir -p $$(@D)
+	$$(VERB)spu-gcc $$(SPU_CFLAGS) $$($(1)_CFLAGS) -MMD -MP -c $$< -o $$@
+endif
 $$(OBJ)/spu_$(1).bin: $$($(1)_OBJS)
 	@echo "  SPU LD  spu_$(1)"
 	$$(VERB)spu-gcc $$(SPU_LDFLAGS) $$^ $$(SPU_LIBS) -o $$@
 	$$(VERB)spu-size $$@ | tail -n 1 | awk '{ printf "          local store: text %d, data %d, bss %d bytes\n", $$$$1, $$$$2, $$$$3 }'
 	$$(if $$($(1)_STACK_MIN),$$(VERB)python3 $$(ROOT)/tools/spu-stack.py --bin $$@ --min $$($(1)_STACK_MIN) \
+		--header $$(OBJ)/spu_$(1)_stack.h --name SPU_$$(shell echo $(1) | tr a-z A-Z) \
 		$$($(1)_STACK_ARGS) $$($(1)_OBJS) || { rm -f $$@; exit 1; })
 endef
 $(foreach p,$(SPU_PROGS),$(eval $(call SPU_PROG_RULES,$(p))))

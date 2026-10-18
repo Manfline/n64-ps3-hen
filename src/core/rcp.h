@@ -143,8 +143,8 @@ struct salsa64_gfx_backend {
 	bool (*save_state)(void *ctx, uint8_t *buf);
 	bool (*load_state)(void *ctx, const uint8_t *buf);
 	/* Hace las tareas S2DEX sueltas (SALSA64_GBI_S2DEX y S2DEX1). Si no, van al
-	 * RSP a bajo nivel (modo auto) o terminan sin dibujar. El SPE 0 no las hace
-	 * (rsp/gfx/hle.h, GFX_S2DEX_FULL): el host y el PPE sí. */
+	 * RSP a bajo nivel (modo auto) o terminan sin dibujar. El SPE 0 las hace en las imágenes 0 y 1
+	 * (rsp/gfx/spe0.h, GFX_PART_S2DEX): el host y el PPE, todas. */
 	bool s2dex;
 };
 
