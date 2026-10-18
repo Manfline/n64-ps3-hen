@@ -52,6 +52,14 @@ void gfx_ucode_reload(struct gfx_state *g, uint32_t text, int gen, bool nonear, 
 	g->ucode_var = GFX_HAS(FLX) && data ? (uint8_t)gfx_ucode_variant(g, data, size) : 0;
 	g->flx_table = 0;
 	g->near_clip = !nonear;
+	/* La primera generación (F3D, F3DEX 1.x) entrega G_RDPSETOTHERMODE al RDP sin tocar su
+	 * copia del othermode, que arranca con los datos del microcódigo (0x080CFF / 0); la
+	 * segunda (F3DEX2, F3DZEX) la actualiza con él y sigue al RDP (visto con el LLE de
+	 * Earthworm Jim 3D y de Zelda: con la copia de F3DEX2 sin seguir al RDP, 419 de 447
+	 * tareas del título salían distintas). */
+	g->sp_om_shadow = gen == 1;
+	g->sp_oh = g->sp_om_shadow ? 0x080CFFu : g->oh;
+	g->sp_ol = g->sp_om_shadow ? 0u : g->ol;
 	g->dirty = true;
 }
 
@@ -324,9 +332,16 @@ void gfx_sp_othermode(struct gfx_state *g, bool high, int shift, int len, uint32
 	if (len > 32 - shift)
 		len = 32 - shift;
 	uint32_t mask = (len >= 32 ? 0xFFFFFFFFu : ((1u << len) - 1)) << shift;
+	/* El microcódigo mezcla en su propia copia del othermode y entrega al RDP la
+	 * palabra entera; un G_RDPSETOTHERMODE (0xEF) crudo cambia el RDP pero no esa
+	 * copia, así que sus bits fuera de la máscara se pierden en el siguiente
+	 * G_SETOTHERMODE (Earthworm Jim 3D: un 0xEF de relleno deja Z_SOURCE_SEL en 1
+	 * y el RSP real lo apaga al fijar el modo de render). */
+	uint32_t *shadow = high ? &g->sp_oh : &g->sp_ol;
 	uint32_t *mode = high ? &g->oh : &g->ol;
-	uint32_t v = (*mode & ~mask) | (data & mask);
+	uint32_t v = (*shadow & ~mask) | (data & mask);
 	if (v != *mode)
 		g->dirty = true;
+	*shadow = v;
 	*mode = v;
 }

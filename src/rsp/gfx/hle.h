@@ -238,6 +238,8 @@ struct gfx_state {
 	uint8_t tex_tile, tex_level, tex_on;
 	uint32_t rdphalf1, rdphalf2;
 	uint32_t obj_rendermode;   /* G_OBJ_RENDERMODE de S2DEX (s2dex.c) */
+	uint8_t sp_om_shadow;      /* 1 en la primera generación: G_RDPSETOTHERMODE no toca la copia */
+	uint32_t sp_oh, sp_ol;     /* la copia del othermode que lleva el microcódigo (G_SETOTHERMODE_*); G_RDPSETOTHERMODE no la toca */
 	uint8_t chain_ex;          /* tarea S2DEX que siguió con F3DEX 1.x (G_LOAD_UCODE): f3d.c lo trata como F3DEX */
 	uint32_t raw[44];          /* comando del RDP armado con G_RDPHALF_* */
 	uint8_t raw_n, raw_len;    /* dobles palabras recibidas y esperadas */
