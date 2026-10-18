@@ -151,6 +151,10 @@ docs/          design notes, measurements, third-party sources (Spanish)
 
 Goals, architecture and roadmap: [docs/proyecto.md](docs/proyecto.md).
 
+## AI disclosure
+
+Salsa64 is an AI-assisted project. The emulator itself is tested on real PS3 hardware.
+
 ## Credits
 
 - **VIDEOGAMES SCZ** contributed the pause menu, cheats, box art, the 16:9
