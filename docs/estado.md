@@ -1,5 +1,64 @@
 # Estado
 
+## 2026-10-18 — rc5b2: la nave en la misión de Rogue, la z de Resident Evil 2 y los puntos de Yoshi
+
+Resultado de la rc5b en la PS3 real: el hangar de Rogue ya sale bien, pero en
+la misión la nave sigue a pedazos y el cielo muestra una cuadrícula; en Yoshi
+quedan puntos sueltos y a veces la estela; en Resident Evil 2 los personajes
+no se ven y el menú de opciones queda negro. Volcados y log en
+`build/rc5b-ps3/`.
+
+- **Rogue, la misión (reproducido en el host).** El juego borra la z solo
+  debajo del horizonte (y nada si se ve solo el cielo); arriba queda la z de
+  la nave de los cuadros anteriores. Con `salsa64-run` hasta el vuelo en
+  Tatooine (START y A cada 120 campos hasta el 17 000) y el stick tirando
+  hacia arriba y girando, el rasterizador del host la pierde a pedazos igual
+  que el RSX; con la z borrada en cada tarea sale entera, y también con la
+  prueba de la N64 (el margen de dos veces la pendiente de z). Ni el CPU ni
+  un DMA escriben esa z (vigilada con `SALSA64_WATCH_MEM`): en la N64 la nave
+  pasa contra su propia z vieja gracias al margen del dz. **Arreglo**
+  (`zauto` en `src/rdp/rdp.c`, igual en `src/host/raster.c`): en una tarea
+  que empieza un cuadro (su primera color image no es la de la tarea
+  anterior) y que antes de su primer dibujo con profundidad no borró la z
+  image entera, se borra entera. Las tareas que siguen un cuadro conservan
+  la z. En el host la nave sale entera en esa escena; las 9 escenas del host
+  salen idénticas (el borrado se dispara también en «casa», Kirby, Banjo y
+  Zelda, sin cambiar la imagen).
+- **Rogue, cuadrícula del cielo.** Sale igual en el rasterizador del host
+  (volcado 4622): las costuras entre los tramos del cielo vienen de la salida
+  de la HLE, no del RSX. Queda por comparar con el RSP real o con ares.
+- **Resident Evil 2.** La línea del log da 0 borrados de la z en el juego y
+  «color images en una z image» > 0: la z image (0x189A00) es también la
+  imagen del fondo de 512 de ancho, y la z de los personajes la deja el CPU
+  (o un DMA) en la RDRAM, que el RSX no ve. **Arreglo a probar** (`zfeed`):
+  si el RDP no borró la z image en las últimas 120 tareas y su contenido en
+  la RDRAM cambió al menos dos veces, la última hace menos de 120 tareas, se
+  carga desde la RDRAM antes del primer dibujo con profundidad de cada tarea
+  (z de 16 bits de la N64 descomprimida, `rdp_z16_to_z24` con su prueba en
+  `test_targets.c`, a Z24S8 en el PPE y `rsxkit_depth_load` agrandada a la
+  escala). Sin un volcado de las tareas 3D de RE2 (los de la consola son
+  todos de la tarea S2DEX del fondo) no se pudo ver qué hacen; la línea del
+  log cuenta ahora «z cargadas desde la RDRAM» y «borrados enteros puestos».
+  El menú de opciones en negro no se investigó (su volcado es una tarea con
+  un solo borrado de 189A00 a 320 de ancho).
+- **Yoshi, puntos.** En el volcado 12008 los puntos naranjas y azules en el
+  árbol turquesa salen también en el host: vienen de la capa CI8 en la
+  RDRAM, o sea, de cómo la dibujó el RSX. En una capa de 8 bits el color es
+  un índice de paleta y el filtro bilineal del RSX mezcla una fracción de
+  los vecinos aunque la muestra caiga en el centro del texel; un índice
+  mezclado es otro color. **Arreglo**: los dibujos en una capa big8 van sin
+  filtro (con el medio texel de la HLE, el más cercano da el mismo texel).
+  La cuadrícula regular de puntos blancos (30 objetos de 24 × 21 al final de
+  la tarea) sale igual en el host y en la rc4: es salida de la HLE.
+- **Yoshi, estela.** La textura de la capa trae columnas en cero (alfa 0):
+  partes de la capa que no estaban en la RDRAM. Las copias ya se esperan
+  todas; falta un volcado de la caja negra con las tareas que dibujan las
+  capas para ver qué parte no llega.
+- **Pruebas.** `tools/build.sh test-host`: 651 pruebas, 0 fallidas;
+  `tools/escenas-host.sh --comparar` contra la rc5b: 9 idénticas. Falta la
+  PS3 (la carga de la z de RE2, `rsxkit_depth_load`, no se probó en ningún
+  lado con el RSX).
+
 ## 2026-10-18 — rc5b: modelos a pedazos en Rogue Squadron (y quizá Resident Evil 2) y la estela de Yoshi
 
 Reporte de la rc4 en la PS3 real: en Rogue Squadron y Resident Evil 2 partes
