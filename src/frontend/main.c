@@ -4388,7 +4388,13 @@ static enum game_end run_game(uint8_t *rom, uint32_t rom_size, const char *sourc
 	salsa64_bus_set_isviewer(&n64.bus, isv_buf, isv_out, NULL);
 
 	/* HLE gráfica: en un SPE, o en el PPE si se pide. */
+#ifdef SALSA64_GFX_PPE_DEFAULT
+	/* Paquete de prueba (make GFX_PPE=1): las tareas S2DEX sueltas (Resident Evil 2,
+	 * Yoshi's Story) solo las hace el PPE; el SPE 0 no tiene sitio (rsp/gfx/hle.h). */
+	gfx_on_spu = 0;
+#else
 	gfx_on_spu = !file_exists(GFX_PPE_PATH);
+#endif
 	if (gfx_on_spu) {
 		spukit_init(6);
 		if ((rc = salsa64_gfx_spu_init(&gfx_spu, &n64.bus, &front_sink)) != 0) {
