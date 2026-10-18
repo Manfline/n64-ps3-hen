@@ -208,6 +208,7 @@ bool salsa64_vi_frame(const struct salsa64_bus *bus, struct salsa64_vi_frame *f)
 	if (f->width > pitch)
 		f->width = pitch;
 	f->origin = r[SALSA64_VI_ORIGIN] & 0xFFFFFF;
+	f->vpos = (r[SALSA64_VI_CONTROL] & SALSA64_VI_CONTROL_SERRATE) ? v_start + (bus->vi.field & 1) : 0;
 
 	/* Solo líneas completas dentro de la RDRAM. */
 	if (f->origin >= bus->rdram_size || f->width == 0)

@@ -4003,8 +4003,8 @@ int main(int argc, char **argv)
 			field_done(gfx_path, frame_every);
 			struct salsa64_vi_frame f;
 			if (trace_vi && salsa64_vi_frame(&n64.bus, &f))
-				fprintf(stderr, "campo %u: origen %06x %ux%u stride %u bpp %u (V_VIDEO %08x Y_SCALE %08x)\n",
-					n64.bus.vi.fields, f.origin, f.width, f.height, f.stride, f.bpp,
+				fprintf(stderr, "campo %u: origen %06x %ux%u stride %u bpp %u vpos %u (V_VIDEO %08x Y_SCALE %08x)\n",
+					n64.bus.vi.fields, f.origin, f.width, f.height, f.stride, f.bpp, f.vpos,
 					n64.bus.vi.regs[SALSA64_VI_V_VIDEO], n64.bus.vi.regs[SALSA64_VI_Y_SCALE]);
 			else if (trace_vi)
 				fprintf(stderr, "campo %u: sin imagen (CONTROL %08x ORIGIN %06x WIDTH %u H_VIDEO %08x V_VIDEO %08x)\n",

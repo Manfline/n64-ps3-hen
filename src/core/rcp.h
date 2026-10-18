@@ -409,6 +409,11 @@ struct salsa64_vi_frame {
 	uint32_t height;  /* líneas visibles */
 	uint32_t stride;  /* bytes por línea (VI_WIDTH × bytes por píxel) */
 	uint32_t bpp;     /* bytes por píxel: 2 o 4 */
+	/* Posición vertical del campo (entrelazado): la primera media línea de
+	 * V_VIDEO más el bit de campo del VI (medio renglón de la trama). Dos campos seguidos del mismo cuadro caen en
+	 * renglones contiguos de la pantalla. 0 si no es entrelazado (SERRATE
+	 * apagado) o no se conoce. */
+	uint32_t vpos;
 };
 
 enum salsa64_ai_reg {
