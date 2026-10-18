@@ -1,5 +1,28 @@
 # Estado
 
+## 2026-10-17 — Yoshi's Story: el cielo y las capas del fondo
+
+El fondo del nivel (cielo, colinas, árboles lejanos) salía negro y luego como
+estela de revuelto de colores, igual con la HLE que con el JIT del RSP.
+
+- **Causa.** El juego dibuja cada capa con el RDP en una color image de 8 bits
+  de 336 × 256 (0x250F80, 0x266580 y 0x27BB80) y después la usa como imagen CI8
+  con paleta en `G_BG_1CYC`. Esas imágenes nunca llegaban a la RDRAM: la copia del
+  destino a la RDRAM de las de 8 bits solo se hacía en el host para las de ancho
+  de VI, y en la PS3 sale por RGB565, donde el índice conserva 5 de 8 bits (la
+  paleta salía revuelta). Con `--lle=all` en el host la RDRAM sí recibe las capas
+  y el cielo sale bien; con la HLE, 0 bytes distintos de cero en esas tres imágenes.
+- **Arreglo.** Las imágenes de 8 bits de más de 128 de ancho (`big8` en
+  `src/rdp/rdp.c`): superficie a 1× (reducir a 2× mezclaría índices vecinos),
+  copia a la RDRAM en XRGB8888 con los 8 bits del rojo, y sin los espejos chicos.
+  En el host (`src/host/raster.c`), esas imágenes también se piden a la RDRAM.
+  Con eso el cielo, las colinas y los árboles salen **idénticos** a los de la
+  LLE en el nivel del campo 2100 (HLE y LLE sin diferencias visibles).
+- **Pruebas.** `tools/build.sh test-host` 616 pruebas, 0 fallidas;
+  `tools/escenas-host.sh --comparar`: 8 imágenes idénticas.
+- **Falta:** la PS3 real con el paquete «Salsa64 Yoshi cielo» (SLSA00147). La
+  rama de la PS3 no se pudo medir aquí (RPCS3 no llega al nivel).
+
 ## 2026-10-17 — S2DEX suelto: Resident Evil 2 y Yoshi's Story
 
 Las tareas gráficas con el texto «RSP Gfx ucode S2DEX» (Resident Evil 2: «fifo

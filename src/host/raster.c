@@ -997,7 +997,9 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 		uint32_t rows = box->y1 < t->lh ? box->y1 : t->lh;
 		/* Como la PS3: la copia pedida también en la tarea anterior va sin
 		 * esperar y la imagen sigue siendo del RDP (targets.h). */
-		bool wanted = raster_fbfx >= 2 && rdp_readback_wanted(&vi_ring, t->addr, t->width, t->bpp == 2 ? 2 : 0);
+		bool wanted = raster_fbfx >= 2 && (rdp_readback_wanted(&vi_ring, t->addr, t->width, t->bpp == 2 ? 2 : 0) ||
+				       (t->bpp == 1 && t->width > 128 && t->width != vi_ring.cur_width && t->width <= 640 && vi_ring.n &&
+					!rdp_vi_ring_covers(&vi_ring, t->addr, t->width)));
 		bool again = rb_wanted_task[i] && rb_wanted_task[i] + 1 == tg.task;
 		if (wanted)
 			rb_wanted_task[i] = tg.task;
@@ -1012,7 +1014,8 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 					"conjeturado %u)\n", raster_field, task_no, t->addr, t->width, box->x0, box->x1, box->y0, rows,
 					t->lh);
 		} else if (raster_fbfx >= 2 && rows && !t->presented && (t->bpp == 2 || t->bpp == 1) &&
-			   t->width != tg.vi_width && t->width * t->bpp * rows <= MIRROR_BYTES) {
+			   t->width != tg.vi_width && t->width * t->bpp * rows <= MIRROR_BYTES &&
+			   !(t->bpp == 1 && t->width > 128)) {
 			/* Espejo de una imagen auxiliar chica (en la PS3, sin esperar). */
 			if (dma_newer(t->addr, t->width * t->bpp * rows, task_no))
 				continue;

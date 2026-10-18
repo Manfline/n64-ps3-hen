@@ -836,6 +836,24 @@ static void fence_wait(uint32_t fence)
 	rdp.tb.fence += tb_now() - t0;
 }
 
+/* Imágenes de 8 bits grandes (más de 128 de ancho): no son la cobertura ni
+ * las sombras chicas sino capas que el juego dibuja con el RDP y después lee
+ * como CI8 con paleta (los fondos en capas de Yoshi's Story: cielo, colinas y
+ * árboles, 336 × 256 en tres imágenes). El índice tiene que llegar entero a
+ * la RDRAM: van a 1× (el filtro al reducir mezclaría índices vecinos), se
+ * copian con los 8 bits del rojo (RGB565 solo da 5: la paleta salía revuelta)
+ * y no pasan por los espejos chicos. */
+static inline bool big8(uint32_t bpp, uint32_t lw)
+{
+	return bpp == 1 && lw > 128;
+}
+
+/* Bytes por fila del búfer de la copia de una imagen (RGB565, o XRGB8888 las big8). */
+static inline uint32_t rb_pitch(uint32_t bpp, uint32_t lw)
+{
+	return big8(bpp, lw) ? (lw * 4 + 63) & ~63u : RB_PITCH;
+}
+
 /* Escribe en la RDRAM, como RGBA5551, la caja `b` (rdp_box: lo que el RDP
  * pudo escribir, nunca filas enteras) de una copia RGB565 de `lw` píxeles
  * por fila con paso `pitch` que empieza en la fila 0 del destino. */
@@ -858,9 +876,17 @@ static void to_rdram(const uint8_t *src, uint32_t pitch, uint32_t addr, uint32_t
 	for (uint32_t off = b->y0 * pitch & ~127u; off < b->y1 * pitch; off += 128)
 		__asm__ volatile("dcbf 0,%0" ::"r"(src + off) : "memory");
 	__asm__ volatile("sync" ::: "memory");
+	if (big8(bpp, lw))
+		pitch = rb_pitch(bpp, lw);
 	for (uint32_t y = b->y0; y < b->y1; y++) {
 		const uint16_t *row = (const uint16_t *)(src + y * pitch);
-		if (bpp == 1) {
+		if (big8(bpp, lw)) {
+			/* XRGB8888 (bytes X, R, G, B): el índice entero es el rojo. */
+			const uint8_t *px = src + y * pitch;
+			uint8_t *dst = rdp.rdram + addr + y * width;
+			for (uint32_t x = b->x0; x < x1; x++)
+				dst[x] = px[4 * x + 1];
+		} else if (bpp == 1) {
 			/* Color image de 8 bits (la cobertura que Zelda copia para el
 			 * filtro de Link): la intensidad es el rojo del RGB565. */
 			uint8_t *dst = rdp.rdram + addr + y * width;
@@ -1044,7 +1070,7 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
 	if (rdp.surf[i])
 		drop_surface(i);
 	const struct rdp_target *t = &rdp.tg.t[i];
-	uint32_t sc = rdp_target_scale(rdp.scale, t->lw, t->lh);
+	uint32_t sc = big8(t->bpp, t->lw) ? 1 : rdp_target_scale(rdp.scale, t->lw, t->lh);
 	uint32_t bytes = rdp_surface_bytes(t->lw * sc, t->lh * sc);
 	if (make_room(bytes, i))
 		rdp.surf[i] = rsxkit_target_create(t->lw * sc, t->lh * sc);
@@ -1599,7 +1625,7 @@ static int mirror_small(int i, const struct rdp_box *box, uint32_t n, uint32_t l
 	const struct rdp_target *t = &rdp.tg.t[i];
 	uint32_t rows = box->y1 < t->lh ? box->y1 : t->lh;
 	uint32_t pitch = (t->lw * 2 + 63) & ~63u;
-	if (!rdp.rdram || rdp.fbfx < 2 || !rows || t->presented || (t->bpp != 2 && t->bpp != 1) ||
+	if (!rdp.rdram || rdp.fbfx < 2 || !rows || t->presented || (t->bpp != 2 && t->bpp != 1) || big8(t->bpp, t->lw) ||
 	    t->width == rdp.tg.vi_width || pitch * rows > limit || t->addr + t->width * t->bpp * rows > rdp.rdram_size)
 		return -1;
 	int k = 0;
@@ -1875,7 +1901,7 @@ static void translate(uint32_t n)
 			}
 			/* Repetida y chica: espejo chico sin esperar (abajo). */
 			uint32_t pitch_small = (t->lw * 2 + 63) & ~63u;
-			if (!s->rb_sync[k] && t->width != rdp.tg.vi_width && pitch_small * rows <= MIRROR_BYTES) {
+			if (!s->rb_sync[k] && t->width != rdp.tg.vi_width && pitch_small * rows <= MIRROR_BYTES && !big8(t->bpp, t->lw)) {
 				handled = true;
 				break;
 			}
@@ -1912,8 +1938,10 @@ static void translate(uint32_t n)
 				continue;
 			/* El RSX reduce a 1× desde la escala de este destino. */
 			rsxkit_rect src = surface_rect(i, 0, 0, t->lw, rows);
-			if (rsxkit_target_read(rdp.surf[i], &src, rdp.rb_off + buf * RB_SLOT, RB_PITCH, t->lw, rows,
-					       RSXKIT_RGB565) != RSXKIT_OK) {
+			bool x8 = big8(t->bpp, t->lw);
+			if (rb_pitch(t->bpp, t->lw) * rows > RB_SLOT ||
+			    rsxkit_target_read(rdp.surf[i], &src, rdp.rb_off + buf * RB_SLOT, rb_pitch(t->bpp, t->lw), t->lw, rows,
+					       x8 ? RSXKIT_XRGB8888 : RSXKIT_RGB565) != RSXKIT_OK) {
 				LOGN(10, "gfx: copia a la RDRAM de %06x/%u: rsxkit_target_read falló", t->addr, t->width);
 				continue;
 			}
