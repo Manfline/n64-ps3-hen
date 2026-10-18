@@ -28,6 +28,12 @@ tarea anterior y aún no se cargó (antes solo cuando el contenido de la RDRAM
 cambiaba: con el fondo quieto, una sola vez). La copia de RGB565 a la RDRAM
 conserva 15 de los 16 bits de cada z (el último es del dz).
 
+Paquete de prueba «Salsa64 rc7b» (SLSA00162, v0.2.7-80-gfa20b9f):
+`build/salsa64-rc7b/salsa64-rc7b.pkg`, 3 289 488 bytes, sha256
+`6b1016af37f32e99f3aa661c176069ff96a48c27a9366d1994193e3e1169efba` (directorios
+de build borrados antes). Falta la PS3: la carga con `rsxkit_depth_load` sigue
+sin probarse en el RSX real.
+
 ## 2026-10-18 — rc5b2: la nave en la misión de Rogue, la z de Resident Evil 2 y los puntos de Yoshi
 
 Resultado de la rc5b en la PS3 real: el hangar de Rogue ya sale bien, pero en
