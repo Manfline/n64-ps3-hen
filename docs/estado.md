@@ -1,5 +1,60 @@
 # Estado
 
+## 2026-10-18 — rc5b: modelos a pedazos en Rogue Squadron (y quizá Resident Evil 2) y la estela de Yoshi
+
+Reporte de la rc4 en la PS3 real: en Rogue Squadron y Resident Evil 2 partes
+de los modelos 3D desaparecen; en Yoshi's Story sigue la estela en algunas
+capas del fondo. Con los volcados de la consola (`build/rc4-ps3/`):
+
+- **Lo que dice el volcado.** `salsa64-run --raster-dump` (compilado con
+  `-DRASTER_W=640 -DRASTER_H=480` para ver el cuadro entero de 512 × 448)
+  dibuja la nave entera en los volcados 1981 (elegir nave) y 3861 (Tatooine):
+  la HLE está bien; en la captura del RSX faltan el fuselaje y los motores
+  (quedan los cañones) y, en 1981, la pared del hangar. Lo que falta son los
+  dibujos con prueba y escritura de z (`depth 3`).
+- **Causa 1 (la principal).** Rogue no borra la z en todo el cuadro: dibuja
+  el fondo (hangar, piso, terreno, cielo) con escritura de z sin prueba
+  (`depth 2`: 28 dibujos en 1981, 293 en 3861) y eso la deja lista. En el
+  RSX la prueba apagada apaga también la escritura, así que esos dibujos no
+  escribían nada y los modelos se probaban contra la z de cuadros viejos (en
+  1981 no hay ningún borrado): la nave, que gira, solo pasaba donde quedaba
+  delante de todas sus posiciones anteriores. Arreglo en `lib/rsxkit`: con
+  escritura y sin prueba, prueba encendida con `GCM_ALWAYS`. Confirmado en
+  RPCS3 con un volcado editado (docs/rsx-notes.md).
+- **Causa 2.** En 3861 la z sí se borra, con dos rellenos seguidos (mitad
+  derecha y mitad izquierda, de la fila 172 hacia abajo) antes de ligarla, y
+  el borrado pendiente era uno solo: el segundo pisaba al primero y la mitad
+  derecha quedaba sin borrar. Ahora la profundidad guarda hasta 8 borrados
+  pendientes (`zclear` y `bind` en `src/rdp/rdp.c`); si no caben, el último
+  crece hasta cubrir el nuevo.
+- **Resident Evil 2.** Los volcados de la consola son de la tarea S2DEX del
+  fondo (sin dibujos 3D) y el host no llega al juego, así que no se pudo ver
+  qué hace su z. Si sus modelos usan las mismas formas, el arreglo los cubre.
+  Para saberlo, el log de la PS3 tiene una línea nueva cada 5 s, «gfx:
+  profundidad: N dibujos escriben la z sin probarla, M borrados de la z (P
+  pendientes, J juntados), K color images en una z image»; K > 0 quiere
+  decir que el juego escribe la z como color (con el RDP), cosa que el RSX
+  no ve en su profundidad (sería otro arreglo: subir esa imagen a la
+  profundidad del RSX).
+- **Yoshi's Story.** La textura del volcado 2689 que cubre la estela (capa
+  0x250F80, filas 25–30) trae ceros en las columnas 0–95 y 290–335: la capa
+  no estaba entera en la RDRAM cuando la HLE la leyó. Dos causas en las
+  copias de las imágenes de 8 bits grandes (`big8`): (1) cuando la capa se
+  redibuja en tareas seguidas la copia iba «sin esperar» (como las imágenes
+  grandes repetidas) y la tarea siguiente leía la capa vieja de la RDRAM; las
+  big8 se esperan siempre, porque el juego las lee como CI8 desde la RDRAM y
+  nunca desde el RSX; (2) `to_rdram` soltaba las líneas de la caché del PPE
+  con el paso de RGB565 (1280 bytes) y no con el de XRGB8888 (1344): las
+  últimas filas de la caja podían salir de líneas viejas.
+- **Pruebas.** `tools/build.sh test-host`: 650 pruebas, 0 fallidas. Las
+  escenas del host no cambian por construcción (ningún archivo que compile
+  `salsa64-run` cambió: `rdp.c`, `draw3d.c` y `main.c` son solo de la PS3).
+  RPCS3: repetición del volcado editado (arriba) y de 3861 sin editar (igual
+  que antes; los cuadros negros de la mira y de las sombras salen también
+  con la rc4 en RPCS3: son de la repetición). La z de cuadros viejos no se
+  ve en una repetición (es una sola tarea con la z recién creada): falta la
+  PS3.
+
 ## 2026-10-18 — rc3: DPC continuado en la PS3 y el «LLE vacío» del censo era pantalla fija
 
 - **PS3 (por validar en la consola).** `src/rdp/rdp.c` (`translate`) no llama a
