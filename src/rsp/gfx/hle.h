@@ -137,6 +137,13 @@ struct gfx_rare {
 			uint32_t tex_on, tex_i;      /* G_DMA_TEX_OFFSET: encendido y entrada que sigue */
 			uint8_t tex_off[64];         /* 32 desplazamientos u16 (en el orden de la N64) que se suman a G_SETTIMG */
 		} dkr;
+		struct {                 /* Rogue Squadron (f5rogue.c) */
+			uint32_t color_base;         /* tabla de colores de los vértices (física) */
+			uint32_t tex_scale[2];       /* escala de s y t de los vértices (G_MOVEMEM 0x82) */
+			uint32_t viewport;           /* dirección del viewport en la lista (G_MOVEMEM 0x80) */
+			uint32_t persp;              /* dirección de la última matriz de proyección */
+			uint32_t dl[12];             /* por nivel de la pila de listas: a dónde salta el 0xB5 */
+		} f5;
 	};
 };
 
@@ -328,6 +335,8 @@ void gfx_dl_f3dpd(struct gfx_state *g);
 void gfx_dl_f3dexbg(struct gfx_state *g);
 /* Diddy Kong Racing (de F3D, con vértices y triángulos por DMA). */
 void gfx_dl_f3ddkr(struct gfx_state *g);
+/* Rogue Squadron (Factor 5, de F3D con lista de comandos de longitud variable y mallas de relieve generadas). */
+void gfx_dl_f5rogue(struct gfx_state *g);
 /* dpc.c: comandos crudos del RDP [job->dl, job->dl_end) (GFX_JOB_DPC). */
 void gfx_dl_dpc(struct gfx_state *g);
 

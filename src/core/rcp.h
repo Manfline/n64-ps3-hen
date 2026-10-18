@@ -104,6 +104,7 @@ enum salsa64_gbi {
 	SALSA64_GBI_F3DDKR,   /* Diddy Kong Racing: Fast3D de Rare con matrices, vértices y triángulos por DMA */
 	SALSA64_GBI_F3DJFG,   /* Jet Force Gemini y Mickey's Speedway USA: el de DKR con otro conteo de vértices */
 	SALSA64_GBI_S2DEX1,   /* S2DEX 1.x suelto (Yoshi's Story): los mismos objetos con los opcodes de la primera generación */
+	SALSA64_GBI_F5ROGUE,  /* Star Wars: Rogue Squadron (Factor 5): vértices y triángulos con datos en la lista y tiras generadas (terreno) */
 };
 
 /* Campos de OSTask (16 palabras en DMEM 0xFC0). */

@@ -135,6 +135,11 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 			if (GFX_HAS(F3DEXBG))
 				gfx_dl_f3dexbg(g);
 			break;
+#if GFX_HAS(F5ROGUE)
+		case SALSA64_GBI_F5ROGUE:
+			gfx_dl_f5rogue(g);
+			break;
+#endif
 		default:
 			if (GFX_HAS(F3DEX2))
 				gfx_dl_f3dex2(g, NULL);

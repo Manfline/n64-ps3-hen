@@ -6,6 +6,30 @@ datos de compatibilidad.
 
 Las entradas antiguas conservan sus métodos de prueba como historia.
 
+## 2026-10-18 — Star Wars: Rogue Squadron con HLE gráfica (en el host; falta la PS3)
+
+El microcódigo gráfico de Factor 5 (CRC-32 de GLideN64 `DA51CCDB`; no trae texto
+de identificación) solo corría con el RSP a bajo nivel (10 a 13 campos/s en la
+misión de la PS3 con el recompilador del RSP). Ahora `src/rsp/gfx/f5rogue.c`
+(traducido de GLideN64; el binario pasa a ser GPLv2, README) lo interpreta en el
+host, el PPE y el SPE 0 (imagen 3 «Factor 5», docs/spe0-familias.md). Indiana
+Jones y Battle for Naboo usan otro microcódigo de Factor 5 (`F5Indi_Naboo`) y
+siguen con el RSP a bajo nivel.
+
+| Escena (host, respaldo propio) | Contra el RSP real (`--lle=all`, mismos estados) |
+|---|---|
+| logo, planeta en órbita, rastreo de estrellas | 0,06 a 0,5 % de píxeles distintos (> 16 por canal) |
+| «SELECT LEVEL» (la sala del hangar con la imagen de la nave y el texto) | 0,8 % |
+| texto que se aleja (el «crawl») | 2 a 5 %: la niebla de los vértices lejanos, que el RSP a bajo nivel del host no aplica |
+| escena de la trinchera y los cazas | 1,8 % |
+| «MISSION GOALS» y el vuelo en Tatooine (cielo y terreno generados) | los vértices coinciden con los del RSP real (posiciones en 75 a 100 % de los triángulos que caen dentro de la pantalla; colores en 94 a 100 % y coordenadas de textura en 83 a 100 % de los vértices); el cielo difiere en el patrón del tramado: promedios de color iguales a ±3 de 255 |
+
+Sin comandos sin implementar en 9000 y 17 000 campos desde el arranque; el
+título, los menús, la selección de misión, la cinemática y el vuelo se ven bien.
+Falta la PS3: velocidad y la imagen del SPE 0 (con RPCS3, en la sección de
+[estado.md](estado.md), arranca y pasa sus tareas de prueba, y 970 tareas del
+juego salen sin error).
+
 ## 2026-10-17 — S2DEX suelto: Resident Evil 2 y Yoshi's Story
 
 Las tareas con el texto «RSP Gfx ucode S2DEX» (Resident Evil 2, 2.06; Yoshi's
@@ -144,7 +168,7 @@ medición en el host.
 | Rush 2049 | v1 | 5728 de 5728 | Sin eco en la prueba. |
 | NBA Showtime | v1 | 5740 de 5740 | Sin eco en la prueba. |
 | Resident Evil 2 | v1 | 2856 de 2856 | Con eco (reverberación) en todas las subtramas. Además tiene HLE del video de las cinemáticas (arriba); los menús y el juego usan S2DEX sueltas, que desde el 2026-10-17 tienen HLE (sección de arriba). |
-| Star Wars: Rogue Squadron | v1 (otra compilación) | 5713 de 5713 | Con eco, con la envolvente del envío en rampa. Solo el audio: sus gráficos no tienen HLE. |
+| Star Wars: Rogue Squadron | v1 (otra compilación) | 5713 de 5713 | Con eco, con la envolvente del envío en rampa. Los gráficos, con HLE desde el 2026-10-18. |
 | Indiana Jones | v2 | 5675 de 5724 (las otras 49, +1 en 2 de cada 8 muestras del canal izquierdo) | Solo el audio: sus gráficos no tienen HLE. |
 
 Sin respaldo para probar: Gauntlet Legends, Tarzan, The World Is Not Enough,
@@ -196,7 +220,7 @@ asigna velocidad.
 | Jet Force Gemini | Solo los títulos, con comandos sin implementar | Dibuja con todos sus comandos en el host | G_DMA_TEX_OFFSET (2026-10-17, sección de arriba); sin probar en la PS3. |
 | Mickey's Speedway USA | Solo los títulos; el semáforo de la salida no cambia | Dibuja con todos sus comandos en el host; el semáforo cambia de luz | G_DMA_TEX_OFFSET (2026-10-17, sección de arriba); sin probar en la PS3. |
 | Indiana Jones | No jugable | — | Sin HLE de su microcódigo gráfico. |
-| Star Wars: Rogue Squadron | No jugable | — | Sin HLE de su microcódigo gráfico. |
+| Star Wars: Rogue Squadron | Jugable en el host (HLE gráfica del 2026-10-18; antes, solo con el RSP a bajo nivel) | — | `f5rogue.c` (sección de arriba); sin probar en la PS3. |
 | Resident Evil 2 | Cinemáticas y sus copias a la pantalla en el host; los menús, sin ver | — | HLE del video (RESIZE, DECODE y FILL) idéntica al microcódigo real y, desde el 2026-10-17, las tareas S2DEX sueltas (G_BG_COPY de los cuadros de video: idéntico al microcódigo real; el host no llega a los menús). Sin probar en la PS3. |
 
 Las pruebas de rendimiento detalladas de Banjo-Tooie corresponden a la sesión

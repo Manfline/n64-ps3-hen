@@ -25,16 +25,21 @@
 #define S2_TEXT_PA 0x3800u  /* "código" del S2DEX2: solo la dirección */
 #define BG_PA      0x3C00u  /* uObjBg */
 #define BG_IMG_PA  0x4000u  /* RGBA16 64 × 32 (4 KB) */
+#define F5VTX_PA   0x1200u  /* Rogue Squadron: 8 vértices de 8 bytes */
+#define F5COL_PA   0x1240u  /* tabla de colores de los vértices (8 palabras) */
+#define F5HGT_PA   0x1280u  /* alturas de la malla generada (bytes) */
+#define F5CLR_PA   0x1300u  /* colores de la malla generada (palabras) */
 #define CIMG_PA    0x10000u /* color image y z image: solo las direcciones */
 #define ZIMG_PA    0x18000u
 
-enum fam { FAM_F3D, FAM_F3DEX, FAM_F3DWR, FAM_F3DEX2 };
+enum fam { FAM_F3D, FAM_F3DEX, FAM_F3DWR, FAM_F3DEX2, FAM_F5 };
 
 struct b {
 	uint8_t *ram;
 	uint32_t pc;
 	enum fam fam;
 	uint32_t rnd;
+	bool tex_on;  /* la última G_TEXTURE: Rogue Squadron manda las coordenadas con el triángulo si es así */
 };
 
 static uint32_t rnd(struct b *b)
@@ -89,6 +94,7 @@ enum { CC_T0 = 1, CC_T1 = 2, CC_PRIM = 3, CC_SHADE = 4, CC_ZERO = 7, CC_C_T0A = 
 
 static void texture(struct b *b, unsigned tile, unsigned on)
 {
+	b->tex_on = on != 0;
 	if (gen2(b))
 		dl(b, 0xD7000000u | tile << 8 | on << 1, 0x80008000u);
 	else
@@ -98,6 +104,11 @@ static void texture(struct b *b, unsigned tile, unsigned on)
 static void vtx(struct b *b, uint32_t addr, unsigned v0, unsigned n)
 {
 	switch (b->fam) {
+	case FAM_F5:
+		/* Siempre desde el lugar 0, de 8 bytes cada uno. */
+		(void)v0, (void)addr;
+		dl(b, 0x04000000u | n << 10, F5VTX_PA);
+		break;
 	case FAM_F3DEX2:
 		dl(b, 0x01000000u | n << 12 | (v0 + n) << 1, addr);
 		break;
@@ -116,6 +127,17 @@ static void vtx(struct b *b, uint32_t addr, unsigned v0, unsigned n)
 static void tri(struct b *b, unsigned v0, unsigned v1, unsigned v2)
 {
 	switch (b->fam) {
+	case FAM_F5:
+		/* G_TRI1: índices ×5, la palabra de los colores (un índice de la tabla
+		 * por vértice) y, con textura, las coordenadas de cada vértice. */
+		dl(b, 0xBF000000u | (b->tex_on ? 2u : 0u), (v0 * 5) << 16 | (v1 * 5) << 8 | v2 * 5);
+		dl(b, (v0 * 4) << 16 | (v1 * 4) << 8 | v2 * 4, 0);
+		if (b->tex_on) {
+			uint32_t r = rnd(b);
+			dl(b, (r & 0x1FFF) << 16 | ((r >> 4) & 0x1FFF), (r >> 3) << 16 | (r & 0x0FFF));
+			dl(b, (r >> 8) << 16 | (r & 0x3FF), 0);
+		}
+		break;
 	case FAM_F3DEX2:
 		dl(b, 0x05000000u | (v0 * 2) << 16 | (v1 * 2) << 8 | v2 * 2, 0);
 		break;
@@ -135,6 +157,12 @@ static void tri(struct b *b, unsigned v0, unsigned v1, unsigned v2)
  * 0 y un texel por píxel (en copia, 4 por paso: dsdx 4.0). */
 static void texrect(struct b *b, unsigned tile, unsigned x0, unsigned y0, unsigned x1, unsigned y1, bool copy)
 {
+	if (b->fam == FAM_F5) {
+		/* 16 bytes: las palabras de s y t y de dsdx y dtdy siguen a las dos primeras, sin opcode. */
+		dl(b, 0xE4000000u | (x1 << 2) << 12 | y1 << 2, tile << 24 | (x0 << 2) << 12 | y0 << 2);
+		dl(b, 0, (copy ? 4u << 10 : 1u << 10) << 16 | 1u << 10);
+		return;
+	}
 	dl(b, 0xE4000000u | (x1 << 2) << 12 | y1 << 2, tile << 24 | (x0 << 2) << 12 | y0 << 2);
 	dl(b, gen2(b) ? 0xE1000000u : 0xB4000000u, 0);
 	dl(b, gen2(b) ? 0xF1000000u : 0xB3000000u, (copy ? 4u << 10 : 1u << 10) << 16 | 1u << 10);
@@ -148,7 +176,7 @@ static void put_texels(struct b *b, uint32_t addr, uint32_t bytes)
 
 uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 {
-	struct b b = { ram, DL_PA, FAM_F3D, seed * 2654435761u + 1 };
+	struct b b = { ram, DL_PA, FAM_F3D, seed * 2654435761u + 1, false };
 	memset(ram, 0, GFX_SELFTEST_RAM);
 	switch (gbi) {
 	case SALSA64_GBI_F3DEX:
@@ -161,6 +189,9 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 	case SALSA64_GBI_F3DZEX2:
 	case SALSA64_GBI_F3DEXBG:
 		b.fam = FAM_F3DEX2;
+		break;
+	case SALSA64_GBI_F5ROGUE:
+		b.fam = FAM_F5;
 		break;
 	default:
 		break;
@@ -194,6 +225,17 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 		p[14] = (uint8_t)(c >> 16);
 		p[15] = 0xFF;
 	}
+	if (b.fam == FAM_F5) {
+		for (int i = 0; i < 8; i++) {
+			for (int k = 0; k < 3; k++)
+				salsa64_wr16(ram + F5VTX_PA + 8 * i + 2 * k, (uint16_t)pos[i][k]);
+			salsa64_wr32(ram + F5COL_PA + 4 * i, rnd(&b) << 8 | 0xFF);
+		}
+		for (int i = 0; i < 48; i++)
+			ram[F5HGT_PA + i] = (uint8_t)((rnd(&b) & 7) - 4);
+		for (int i = 0; i < 48; i++)
+			salsa64_wr32(ram + F5CLR_PA + 4 * i, rnd(&b) << 8 | 0xFF);
+	}
 	put_texels(&b, TEX_PA, 16 * 32 * 2);
 	put_texels(&b, CI_PA, 16 * 16 / 2);
 	put_texels(&b, TLUT_PA, 16 * 2);
@@ -214,10 +256,26 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 	bg[23] = 2;                         /* 16 bits */
 
 	/* Estado: color image, z image, tijeras, viewport y matrices. */
+	if (b.fam == FAM_F5) {
+		/* Cada lista empieza con la palabra del salto de software. */
+		dl(&b, 0, 0);
+	}
 	dl(&b, 0xFF100000u | 319, CIMG_PA);
 	dl(&b, 0xFE000000u, ZIMG_PA);
 	dl(&b, 0xED000000u, (320u << 2) << 12 | 240u << 2);
-	dl(&b, gen2(&b) ? 0xDC080008u : 0x03800010u, VP_PA);
+	if (b.fam == FAM_F5) {
+		/* El viewport (16 bytes) y la escala de las coordenadas de textura (palabras
+		 * en +12 y +16) van en la lista, tras la primera palabra. */
+		dl(&b, 0x03800000u, 0);
+		for (int i = 0; i < 8; i += 4)
+			dl(&b, (uint32_t)(uint16_t)vp[i] << 16 | (uint16_t)vp[i + 1], (uint32_t)(uint16_t)vp[i + 2] << 16 | (uint16_t)vp[i + 3]);
+		dl(&b, 0x03820000u, 0);
+		dl(&b, 0, 0x00000000u);
+		dl(&b, 0x00200020u, 0);
+		dl(&b, 0x02000000u, F5COL_PA);
+	} else {
+		dl(&b, gen2(&b) ? 0xDC080008u : 0x03800010u, VP_PA);
+	}
 	dl(&b, gen2(&b) ? 0xDA380007u : 0x01030040u, PROJ_PA);
 	dl(&b, gen2(&b) ? 0xDA380003u : 0x01020040u, MV_PA);
 	if (gen2(&b))
@@ -300,6 +358,31 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 		combine(&b, CC_ZERO, CC_ZERO, CC_C_ZERO, CC_SHADE, CC_A_ZERO, CC_A_ZERO, CC_A_ZERO, CC_SHADE);
 		texture(&b, 0, 0);
 		dl(&b, 0x06000000u | 0 << 16 | 2 << 8 | 4, 2u << 16 | 4u << 8 | 6);  /* G_TRI2 */
+	}
+
+	/* Rogue Squadron: las tres mallas generadas (5 × 5, 3 × 3 y el cuadrilátero) y un
+	 * rectángulo de textura desde el vértice 1. */
+	if (b.fam == FAM_F5) {
+		cycle(&b, 0);
+		combine(&b, CC_T0, CC_ZERO, CC_SHADE, CC_ZERO, CC_T0, CC_A_ZERO, CC_SHADE, CC_A_ZERO);
+		texture(&b, 0, 1);
+		for (unsigned mode = 0; mode < 3; mode++) {
+			if (mode < 2) {
+				dl(&b, 0x05000000u | (mode ? 1u : 0u), 0);
+				dl(&b, F5HGT_PA, F5CLR_PA);
+				dl(&b, 0x00700070u, 0);
+				dl(&b, 0, 0x00000020u);
+			} else {
+				dl(&b, 0x05000200u, 0x00100020u);
+				dl(&b, 0x00300040u, rnd(&b) << 8 | 0xFF);
+				dl(&b, rnd(&b) << 8 | 0xFF, rnd(&b) << 8 | 0xFF);
+				dl(&b, rnd(&b) << 8 | 0xFF, 0x00000020u);
+			}
+			dl(&b, 0xFFD00000u, 48);
+		}
+		dl(&b, 0xBD000500u, 0xFF8040FFu);
+		dl(&b, 0, 0x00200020u);
+		dl(&b, 0x04000400u, 0);
 	}
 
 	dl(&b, 0xE9000000u, 0);  /* G_RDPFULLSYNC */
