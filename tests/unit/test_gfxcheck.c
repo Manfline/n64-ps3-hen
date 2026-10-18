@@ -182,6 +182,14 @@ static void gchk_state(void)
 	uint64_t d = gchk_state_diff(&sa, &sb);
 	CHECK_EQ(d, named("oh") | named("cc_lo") | named("tile.line"));
 	CHECK(named("oh") != 0 && named("cc_lo") != 0 && named("tile.line") != 0);
+	/* Los bits 0 a 7 de othermode H (máscara de mezcla y dither: la HLE no los lleva) se cuentan aparte. */
+	gfx_init(&sa);
+	gfx_init(&sb);
+	sa.oh ^= 0x30;
+	CHECK_EQ(gchk_state_diff(&sa, &sb), named("oh.dither"));
+	sa.oh ^= 0x30;
+	sa.oh ^= 0x100000;  /* el tipo de ciclo sí */
+	CHECK_EQ(gchk_state_diff(&sa, &sb), named("oh"));
 	/* Lo que no es del RDP (matrices, vértices) no cuenta. */
 	gfx_init(&sb);
 	gfx_init(&sa);

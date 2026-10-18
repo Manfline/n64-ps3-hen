@@ -30,6 +30,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "core/rom.h"
 #include "host/raster.h"
@@ -289,10 +290,11 @@ struct sfield {
 	uint8_t tile;  /* 1: campo de gfx_tile (se mira en las 8 tiles) */
 };
 
+#define GCHK_OH_DITHER 0xFFu
 #define SF(n) { #n, (uint16_t)offsetof(struct gfx_state, n), (uint16_t)sizeof(((struct gfx_state *)0)->n), 0 }
 #define SFT(n) { "tile." #n, (uint16_t)offsetof(struct gfx_tile, n), (uint16_t)sizeof(((struct gfx_tile *)0)->n), 1 }
 static const struct sfield sfields[] = {
-	SF(oh), SF(ol), SF(cc_hi), SF(cc_lo), SF(prim), SF(env), SF(fog), SF(blend), SF(fill), SF(prim_lod),
+	SF(oh), { "oh.dither", 0, 0, 2 }, SF(ol), SF(cc_hi), SF(cc_lo), SF(prim), SF(env), SF(fog), SF(blend), SF(fill), SF(prim_lod),
 	SF(prim_min), SF(prim_z), SF(prim_dz), SF(k4), SF(k5), SF(scissor), SF(cimg_addr), SF(cimg_width),
 	SF(cimg_fmt), SF(cimg_siz), SF(zimg_addr), SF(timg_addr), SF(timg_width), SF(timg_fmt), SF(timg_siz),
 	SFT(fmt), SFT(siz), SFT(pal), SFT(cms), SFT(cmt), SFT(masks), SFT(maskt), SFT(shifts), SFT(shiftt),
@@ -316,7 +318,13 @@ uint64_t gchk_state_diff(const struct gfx_state *a, const struct gfx_state *b)
 	uint64_t m = 0;
 	for (unsigned i = 0; i < NSF; i++) {
 		const struct sfield *f = &sfields[i];
-		if (f->tile) {
+		if (f->tile == 2) {  /* los bits 0 a 7 de othermode H: máscara de mezcla y dither (la HLE no los lleva) */
+			if ((a->oh ^ b->oh) & GCHK_OH_DITHER)
+				m |= 1ull << i;
+		} else if (i == 0) {  /* oh sin ellos */
+			if ((a->oh ^ b->oh) & ~GCHK_OH_DITHER)
+				m |= 1ull << i;
+		} else if (f->tile) {
 			for (unsigned t = 0; t < 8; t++) {
 				size_t o = offsetof(struct gfx_state, tiles) + t * sizeof(struct gfx_tile) + f->off;
 				if (memcmp((const uint8_t *)a + o, (const uint8_t *)b + o, f->size))
@@ -344,7 +352,7 @@ struct example {
 struct key {
 	char name[96];
 	enum salsa64_gbi gbi;
-	uint32_t tasks, cls[GCHK_NCLASS], kinds[GCHK_NKIND], cut, big;
+	uint32_t tasks, cls[GCHK_NCLASS], kinds[GCHK_NKIND], cut, big, lle_poor;
 	uint32_t tri_l, tri_h, rect_l, rect_h, draw_h;    /* de las tareas con HLE */
 	uint32_t unk_tasks_h;                              /* tareas donde la HLE no implementó algo */
 	uint32_t unk_h[256], unk_l[256];                   /* opcodes sin implementar en la HLE y en el RDP del LLE */
@@ -379,7 +387,15 @@ static struct {
 	struct key keys[MAX_KEYS];
 	unsigned nkeys;
 	uint32_t dump_from;
+	double deadline;   /* SALSA64_GCHK_SECONDS: tope de tiempo real; al pasarlo, informe y salida */
 } G;
+
+static double now_s(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
 
 static struct gfx_state hle_state;
 static uint8_t state_buf[GFX_STATE_BYTES];
@@ -417,6 +433,8 @@ void gchk_init(const struct salsa64_bus *bus, struct gfx_state *lle_state, const
 	}
 	gfx_init(&hle_state);
 	gfx_unknown_hook = on_unknown;
+	if (getenv("SALSA64_GCHK_SECONDS"))
+		G.deadline = now_s() + atof(getenv("SALSA64_GCHK_SECONDS"));
 	if (getenv("SALSA64_GCHK_LOG"))
 		G.log = fopen(getenv("SALSA64_GCHK_LOG"), "w");
 	if (getenv("SALSA64_GCHK_DUMP")) {
@@ -470,6 +488,11 @@ void gchk_task_start(const struct salsa64_task *t, enum salsa64_gbi gbi, const c
 		return;
 	if (G.pending)
 		gchk_task_end();
+	if (G.deadline && now_s() > G.deadline) {
+		fprintf(stderr, "salsa64-run: lle-check-gfx: tope de tiempo (SALSA64_GCHK_SECONDS), campo %u\n", G.field ? *G.field : 0);
+		gchk_report(stderr);
+		exit(0);
+	}
 	G.pending = true;
 	G.tasks++;
 	G.task_no++;
@@ -588,6 +611,9 @@ void gchk_task_end(void)
 	k->cls[cls]++;
 	k->kinds[kind]++;
 	k->big += cls == GCHK_DIFF && gchk_is_big(&p);
+	/* El microcódigo real casi no dibuja donde la HLE dibuja de verdad (≥ 2 % del área): el camino LLE
+	 * → RDP falla en esa tarea y la comparación no dice nada de la HLE. */
+	k->lle_poor += (uint64_t)p.drawn_h * 50 > p.area && (uint64_t)p.drawn_l * 10 < p.drawn_h;
 	G.total_class[cls]++;
 	k->cut += (G.res.flags & GFX_RES_CUT) != 0 || G.res.dl_errors != 0;
 	k->tri_l += G.lle.triangles;
@@ -614,6 +640,10 @@ void gchk_task_end(void)
 			keep_example(&k->worst, &p, kind);
 		dump_images(k, &p);
 	}
+	if (getenv("SALSA64_GCHK_STATE") && sd)
+		fprintf(stderr, "gchk: estado tarea %u (campo %u): LLE oh %08x ol %08x cc %08x/%08x; HLE oh %08x ol %08x cc %08x/%08x\n",
+			G.task_no, G.field ? *G.field : 0, G.lle_state->oh, G.lle_state->ol, G.lle_state->cc_hi, G.lle_state->cc_lo,
+			hle_state.oh, hle_state.ol, hle_state.cc_hi, hle_state.cc_lo);
 	if (getenv("SALSA64_GCHK_VERBOSE") && cls == GCHK_DIFF) {
 		fprintf(stderr, "gchk: tarea %u (campo %u) %s:", G.task_no, G.field ? *G.field : 0, k->name);
 		for (unsigned t = 0; t < p.ntgt; t++)
@@ -680,10 +710,10 @@ void gchk_report(FILE *f)
 		uint32_t n = k->cls[GCHK_SAME] + k->cls[GCHK_MINOR] + k->cls[GCHK_DIFF];
 		fprintf(f, "gchk: [%s] tareas %u, con HLE %u: idénticas %u, menores %u, distintas %u (grandes %u), sin HLE %u, cortadas %u; "
 			"triángulos LLE %u / HLE %u, rectángulos %u / %u, dibujos HLE %u; píxeles distintos %llu (de verdad %llu) de %llu "
-			"dibujados; tareas con comandos sin implementar en la HLE %u; estado final del RDP distinto en %u\n",
+			"dibujados; tareas con comandos sin implementar en la HLE %u; estado final del RDP distinto en %u; LLE casi vacía en %u\n",
 			k->name, k->tasks, n, k->cls[GCHK_SAME], k->cls[GCHK_MINOR], k->cls[GCHK_DIFF], k->big, k->cls[GCHK_NOHLE],
 			k->cut, k->tri_l, k->tri_h, k->rect_l, k->rect_h, k->draw_h, (unsigned long long)k->px_diff,
-			(unsigned long long)k->px_bad, (unsigned long long)k->px_drawn, k->unk_tasks_h, k->state_tasks);
+			(unsigned long long)k->px_bad, (unsigned long long)k->px_drawn, k->unk_tasks_h, k->state_tasks, k->lle_poor);
 		if (k->kinds[GCHK_KIND_MISSING] || k->kinds[GCHK_KIND_EXTRA] || k->kinds[GCHK_KIND_COLOR])
 			fprintf(f, "gchk:   tipo de las distintas: la HLE no dibuja %u, dibuja de más %u, otro color %u\n",
 				k->kinds[GCHK_KIND_MISSING], k->kinds[GCHK_KIND_EXTRA], k->kinds[GCHK_KIND_COLOR]);
