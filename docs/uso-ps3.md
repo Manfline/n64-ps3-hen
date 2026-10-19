@@ -582,6 +582,45 @@ sale al XMB en lugar de volver al menú (con el cuadro «¿Salir al XMB?» si
 «Confirmar al salir» está en sí).
 Para recuperar el menú, borrar `embedded`.
 
+## Lanzar una ROM desde otro programa (webMAN MOD y frontends)
+
+Salsa64 puede arrancar una ROM sin pasar por la lista, para que un frontend
+o webMAN MOD la abra desde el XMB. Hay dos formas; si llegan las dos, manda
+la primera:
+
+1. **Argumento del programa:** la ruta de la ROM como primer argumento
+   (`argv[1]`), por ejemplo con `sysProcessExitSpawn2` apuntando al
+   `EBOOT.BIN` de Salsa64.
+2. **Archivo `rom.txt`:** si no hay argumento, Salsa64 busca
+   `/dev_hdd0/game/SLSA00064/rom.txt` (el ID de título del paquete normal;
+   una variante con otro ID busca en su propia carpeta). Lee la primera línea
+   (hasta 250 caracteres; se quitan el salto de línea, el BOM y los espacios
+   del final), **borra el archivo** y abre esa ROM. Como se borra al leerlo,
+   la siguiente vez que se abra Salsa64 desde el XMB sale el menú normal.
+
+Reglas:
+
+- La ruta tiene que ser absoluta (`/dev_hdd0/...`, `/dev_usb000/...`, etc.) y
+  terminar en `.z64`, `.n64` o `.v64`, igual que las ROMs de la lista. No hace
+  falta que esté en una de las carpetas de ROMs de Salsa64.
+- Si la ROM no existe, no se puede leer o la ruta no sirve, no se pierde nada:
+  sale el menú normal con el aviso «No se pudo abrir <ruta>» y el motivo queda
+  en `salsa64.log`.
+- La línea de `salsa64.log` es `arranque directo: <ruta> (desde argv|rom.txt)`.
+- La ROM se abre igual que desde el menú: ajustes por juego (`juegos/`),
+  partidas, Controller Pak, estados, trucos, mapeo de controles y la última
+  ROM abierta funcionan igual.
+- **Al salir del juego** (menú de pausa, «Volver al menú») Salsa64 vuelve al
+  menú, como siempre; ahí se puede abrir otra ROM o «Salir al XMB». «Salir del
+  juego» del botón PS cierra Salsa64 directo. Si se quiere salir al XMB al
+  terminar el juego, hay que usar `embedded` (sección anterior), que es otro
+  modo.
+- Con `embedded` presente (pruebas y arranque fijo), `argv` y `rom.txt` se
+  ignoran y `rom.txt` no se borra.
+
+Ejemplo para un script de webMAN: escribir la ruta en
+`/dev_hdd0/game/SLSA00064/rom.txt` y lanzar `/dev_hdd0/game/SLSA00064/USRDIR/EBOOT.BIN`.
+
 ## Caja negra (depuración)
 
 Para ver en la Mac lo que solo pasa en la PS3 (la interpolación de cuadros,
