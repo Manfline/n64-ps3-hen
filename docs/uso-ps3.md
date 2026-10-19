@@ -68,9 +68,15 @@ detectado y, si la hay, la carátula del juego (abajo, «Carátulas»). La
 | × | Abrir la ROM elegida (o la opción) |
 | □ | Trucos de la ROM elegida (abajo, «Trucos») |
 | SELECT | Ajustes de la ROM elegida (abajo, «Ajustes por juego») |
-| L3 | Actualizar la lista de ROMs de la carpeta actual |
+| L3 | Actualizar la lista de ROMs de la carpeta actual (relee la carpeta y las cabeceras nuevas o cambiadas) |
 | △ | Ir a Opciones |
 | ○ | Volver de Opciones, de los trucos o de los ajustes; en una subcarpeta, subir un nivel; en la raíz, salir al XMB (pregunta antes: × sale, ○ sigue donde estaba) |
+
+Las cabeceras de las ROMs se guardan en `/dev_hdd0/salsa64/romlist.cache`
+(nombre, tamaño, fecha y cabecera de cada archivo): el arranque solo lee las
+ROMs nuevas o cambiadas, y al volver de un juego no se relee una carpeta cuya
+fecha no cambió. Si algo no se ve actualizado, L3 relee la carpeta; borrar
+`romlist.cache` (por FTP) la rehace entera.
 
 Al final de la lista están «Opciones» y «Salir al XMB».
 

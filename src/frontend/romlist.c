@@ -126,6 +126,234 @@ void romlist_parse_header(const uint8_t raw[0x40], const char *save_cfg, size_t 
 	e->save = (uint8_t)salsa64_save_detect(h, manual, &src);
 }
 
+
+/* ---- Caché persistente de cabeceras -------------------------------------------------
+ *
+ * Leer la cabecera de cada ROM cuesta ~27 ms en el disco de la PS3 (un stat y
+ * un open+read de un archivo grande: dos búsquedas del cabezal por ROM). Se
+ * guarda, por archivo, su tamaño, fecha y los 64 bytes crudos de la cabecera;
+ * el título, los CRC y el tipo de guardado se siguen calculando al armar la
+ * lista (así un cambio de guardado.cfg se respeta sin invalidar nada). Por
+ * cada carpeta se guarda además su fecha: con REUSE, si no cambió, la lista
+ * sale de la caché sin ni siquiera leer la carpeta.
+ * Archivo: cabecera fija + registros + reserva de nombres, con suma de
+ * verificación; si algo no cuadra se ignora y se rehace. */
+#define CACHE_MAGIC   0x53524C43u /* "SRLC" */
+#define CACHE_VERSION 1u
+#define CACHE_MAX     8192u
+#define CACHE_POOL    (1u << 20)
+
+enum { CK_FILE, CK_DIR, CK_META };
+
+struct crec {
+	uint32_t off, size, mtime, gen;
+	uint8_t kind, dead, pad[2];
+	uint8_t hdr[SALSA64_ROM_HEADER_SIZE];
+};
+
+struct cfile {
+	uint32_t magic, version, rec_size, count, pool_bytes, sum;
+};
+
+static struct {
+	char file[ROMLIST_PATH_MAX];
+	bool on, loaded, dirty;
+	struct crec *rec;
+	uint32_t count, pool_used, gen;
+	char *pool;
+	int32_t *tab; /* tabla hash abierta de índices en rec (−1 = vacío) */
+	uint32_t tab_size;
+	uint32_t hits, reads, fast_dirs;
+} cc;
+
+static uint32_t fnv(const void *p, size_t n, uint32_t h)
+{
+	const uint8_t *b = p;
+	while (n--)
+		h = (h ^ *b++) * 16777619u;
+	return h;
+}
+
+static void cache_free(void)
+{
+	free(cc.rec);
+	free(cc.pool);
+	free(cc.tab);
+	cc.rec = NULL;
+	cc.pool = NULL;
+	cc.tab = NULL;
+	cc.count = cc.pool_used = 0;
+	cc.loaded = false;
+}
+
+static bool cache_alloc(void)
+{
+	cc.rec = calloc(CACHE_MAX, sizeof *cc.rec);
+	cc.pool = malloc(CACHE_POOL);
+	cc.tab_size = CACHE_MAX * 2;
+	cc.tab = malloc(cc.tab_size * sizeof *cc.tab);
+	if (!cc.rec || !cc.pool || !cc.tab) {
+		cache_free();
+		return false;
+	}
+	memset(cc.tab, 0xFF, cc.tab_size * sizeof *cc.tab);
+	return true;
+}
+
+static const char *ckey(const struct crec *r)
+{
+	return cc.pool + r->off;
+}
+
+static int cache_find(const char *key, uint8_t kind)
+{
+	uint32_t i = fnv(key, strlen(key), 2166136261u) % cc.tab_size;
+	for (int32_t k; (k = cc.tab[i]) >= 0; i = (i + 1) % cc.tab_size)
+		if (cc.rec[k].kind == kind && !strcmp(ckey(&cc.rec[k]), key))
+			return k;
+	return -1;
+}
+
+static void tab_insert(int idx)
+{
+	const char *key = ckey(&cc.rec[idx]);
+	uint32_t i = fnv(key, strlen(key), 2166136261u) % cc.tab_size;
+	while (cc.tab[i] >= 0)
+		i = (i + 1) % cc.tab_size;
+	cc.tab[i] = idx;
+}
+
+/* Registro nuevo; NULL si no hay lugar (la lista funciona igual, sin caché). */
+static struct crec *cache_add(const char *key, uint8_t kind)
+{
+	size_t n = strlen(key) + 1;
+	if (cc.count >= CACHE_MAX || cc.pool_used + n > CACHE_POOL)
+		return NULL;
+	struct crec *r = &cc.rec[cc.count];
+	memset(r, 0, sizeof *r);
+	r->off = cc.pool_used;
+	r->kind = kind;
+	memcpy(cc.pool + cc.pool_used, key, n);
+	cc.pool_used += (uint32_t)n;
+	tab_insert((int)cc.count++);
+	cc.dirty = true;
+	return r;
+}
+
+static void cache_load(void)
+{
+	if (cc.loaded || !cc.on)
+		return;
+	if (!cache_alloc())
+		return;
+	cc.loaded = true;
+	FILE *f = fopen(cc.file, "rb");
+	if (!f)
+		return;
+	struct cfile h;
+	bool ok = fread(&h, sizeof h, 1, f) == 1 && h.magic == CACHE_MAGIC && h.version == CACHE_VERSION &&
+		  h.rec_size == sizeof(struct crec) && h.count <= CACHE_MAX && h.pool_bytes <= CACHE_POOL;
+	if (ok)
+		ok = fread(cc.rec, sizeof *cc.rec, h.count, f) == h.count &&
+		     fread(cc.pool, 1, h.pool_bytes, f) == h.pool_bytes;
+	fclose(f);
+	if (ok) {
+		uint32_t sum = fnv(cc.rec, h.count * sizeof *cc.rec, 2166136261u);
+		ok = fnv(cc.pool, h.pool_bytes, sum) == h.sum;
+	}
+	/* Cada nombre debe caer dentro de la reserva y terminar en cero. */
+	for (uint32_t i = 0; ok && i < h.count; i++)
+		ok = cc.rec[i].off < h.pool_bytes && memchr(cc.pool + cc.rec[i].off, 0, h.pool_bytes - cc.rec[i].off);
+	if (!ok) {
+		memset(cc.rec, 0, CACHE_MAX * sizeof *cc.rec);
+		cc.count = cc.pool_used = 0;
+		cc.dirty = true; /* se rehace y se reescribe */
+		return;
+	}
+	cc.count = h.count;
+	cc.pool_used = h.pool_bytes;
+	for (uint32_t i = 0; i < cc.count; i++)
+		tab_insert((int)i);
+}
+
+/* Escribe la caché sin los registros muertos (y reconstruye el índice). */
+static void cache_flush(void)
+{
+	if (!cc.on || !cc.loaded || !cc.dirty || !cc.rec)
+		return;
+	struct crec *nr = malloc(cc.count * sizeof *nr + 1);
+	char *np = malloc(cc.pool_used + 1);
+	if (!nr || !np) {
+		free(nr);
+		free(np);
+		return;
+	}
+	uint32_t n = 0, used = 0;
+	for (uint32_t i = 0; i < cc.count; i++) {
+		if (cc.rec[i].dead)
+			continue;
+		const char *k = ckey(&cc.rec[i]);
+		size_t len = strlen(k) + 1;
+		nr[n] = cc.rec[i];
+		nr[n].off = used;
+		nr[n].gen = 0;
+		memcpy(np + used, k, len);
+		used += (uint32_t)len;
+		n++;
+	}
+	struct cfile h = { CACHE_MAGIC, CACHE_VERSION, sizeof(struct crec), n, used, 0 };
+	h.sum = fnv(np, used, fnv(nr, n * sizeof *nr, 2166136261u));
+	FILE *f = fopen(cc.file, "wb");
+	bool ok = f && fwrite(&h, sizeof h, 1, f) == 1 && fwrite(nr, sizeof *nr, n, f) == n && fwrite(np, 1, used, f) == used;
+	if (f && fclose(f) != 0)
+		ok = false;
+	if (ok) {
+		memcpy(cc.rec, nr, n * sizeof *nr);
+		memcpy(cc.pool, np, used);
+		cc.count = n;
+		cc.pool_used = used;
+		memset(cc.tab, 0xFF, cc.tab_size * sizeof *cc.tab);
+		for (uint32_t i = 0; i < cc.count; i++)
+			tab_insert((int)i);
+		cc.dirty = false;
+	}
+	free(nr);
+	free(np);
+}
+
+void romlist_cache_release(void)
+{
+	cache_flush();
+	cache_free();
+}
+
+void romlist_cache_file(const char *path)
+{
+	if (path && cc.on && !strcmp(path, cc.file))
+		return;
+	cache_free();
+	cc.on = path && path[0] && strlen(path) < sizeof cc.file;
+	cc.dirty = false;
+	if (cc.on)
+		strcpy(cc.file, path);
+}
+
+void romlist_scan_stats(uint32_t *hits, uint32_t *reads, uint32_t *fast_dirs)
+{
+	if (hits)
+		*hits = cc.hits;
+	if (reads)
+		*reads = cc.reads;
+	if (fast_dirs)
+		*fast_dirs = cc.fast_dirs;
+}
+
+/* ¿`key` es hijo directo de `dir`? */
+static bool direct_child(const char *key, const char *dir, size_t dn)
+{
+	return !strncmp(key, dir, dn) && key[dn] == '/' && !strchr(key + dn + 1, '/');
+}
+
 static bool add_name(struct romlist *l, const char *name, struct rom_entry *e)
 {
 	size_t n = strlen(name);
@@ -143,28 +371,13 @@ static const char *base_name(const char *path)
 	return slash ? slash + 1 : path;
 }
 
-static bool add_file_size(struct romlist *l, const char *path, unsigned source, uint32_t size,
-		  const char *save_cfg, size_t save_cfg_len)
+/* Fila de ROM a partir de los 64 bytes crudos de su cabecera. */
+static bool add_rom_raw(struct romlist *l, const char *name, unsigned source, uint32_t size,
+			const uint8_t raw[SALSA64_ROM_HEADER_SIZE], const char *save_cfg, size_t save_cfg_len)
 {
-	if (l->count >= ROMLIST_MAX) {
-		l->skipped++;
-		return false;
-	}
-	FILE *f = fopen(path, "rb");
-	if (!f) {
-		l->skipped++;
-		return false;
-	}
-	uint8_t raw[SALSA64_ROM_HEADER_SIZE];
-	bool ok = fread(raw, 1, sizeof raw, f) == sizeof raw && size >= ROMLIST_MIN_SIZE;
-	fclose(f);
-	if (!ok) {
-		l->skipped++;
-		return false;
-	}
 	struct rom_entry *e = &l->e[l->count];
 	memset(e, 0, sizeof *e);
-	if (!add_name(l, base_name(path), e)) {
+	if (!add_name(l, name, e)) {
 		l->skipped++;
 		return false;
 	}
@@ -177,6 +390,60 @@ static bool add_file_size(struct romlist *l, const char *path, unsigned source, 
 	return true;
 }
 
+static bool read_header(const char *path, uint32_t size, uint8_t raw[SALSA64_ROM_HEADER_SIZE])
+{
+	FILE *f = fopen(path, "rb");
+	if (!f)
+		return false;
+	bool ok = fread(raw, 1, SALSA64_ROM_HEADER_SIZE, f) == SALSA64_ROM_HEADER_SIZE && size >= ROMLIST_MIN_SIZE;
+	fclose(f);
+	return ok;
+}
+
+static bool add_file_size(struct romlist *l, const char *path, unsigned source, uint32_t size, uint32_t mtime,
+		  const char *save_cfg, size_t save_cfg_len)
+{
+	if (l->count >= ROMLIST_MAX) {
+		l->skipped++;
+		return false;
+	}
+	uint8_t raw[SALSA64_ROM_HEADER_SIZE];
+	struct crec *r = NULL;
+	bool hit = false;
+	if (cc.on && cc.rec && mtime) {
+		int k = cache_find(path, CK_FILE);
+		if (k >= 0) {
+			r = &cc.rec[k];
+			hit = !r->dead && r->size == size && r->mtime == mtime;
+			if (hit)
+				memcpy(raw, r->hdr, sizeof raw);
+		}
+	}
+	if (hit) {
+		cc.hits++;
+	} else {
+		cc.reads++;
+		if (!read_header(path, size, raw)) {
+			l->skipped++;
+			return false;
+		}
+		if (cc.on && cc.rec && mtime) {
+			if (!r)
+				r = cache_add(path, CK_FILE);
+			if (r) {
+				r->size = size;
+				r->mtime = mtime;
+				memcpy(r->hdr, raw, sizeof raw);
+				r->dead = 0;
+				cc.dirty = true;
+			}
+		}
+	}
+	if (r)
+		r->gen = cc.gen;
+	return add_rom_raw(l, base_name(path), source, size, raw, save_cfg, save_cfg_len);
+}
+
 bool romlist_add_file(struct romlist *l, const char *path, unsigned source, const char *save_cfg, size_t save_cfg_len)
 {
 	struct stat st;
@@ -185,7 +452,7 @@ bool romlist_add_file(struct romlist *l, const char *path, unsigned source, cons
 		l->skipped++;
 		return false;
 	}
-	return add_file_size(l, path, source, (uint32_t)st.st_size, save_cfg, save_cfg_len);
+	return add_file_size(l, path, source, (uint32_t)st.st_size, 0, save_cfg, save_cfg_len);
 }
 
 static bool add_directory(struct romlist *l, const char *name, unsigned source)
@@ -234,9 +501,51 @@ static bool games_dir_without_roms(const char *path)
 	return !roms;
 }
 
-static bool scan_one(struct romlist *l, const char *dir, unsigned source, bool at_root, const char *save_cfg,
-		     size_t save_cfg_len)
+/* La carpeta sale entera de la caché si su fecha no cambió desde la última
+ * lectura completa. */
+static bool scan_from_cache(struct romlist *l, const char *dir, unsigned source, uint32_t dir_mtime,
+			    const char *save_cfg, size_t save_cfg_len)
 {
+	char mk[ROMLIST_PATH_MAX + 2];
+	if (!dir_mtime || snprintf(mk, sizeof mk, "#%s", dir) >= (int)sizeof mk)
+		return false;
+	int m = cache_find(mk, CK_META);
+	if (m < 0 || cc.rec[m].dead || cc.rec[m].mtime != dir_mtime)
+		return false;
+	size_t dn = strlen(dir);
+	l->skipped += cc.rec[m].size;
+	for (uint32_t i = 0; i < cc.count; i++) {
+		struct crec *r = &cc.rec[i];
+		if (r->dead || r->kind == CK_META || !direct_child(ckey(r), dir, dn))
+			continue;
+		const char *name = ckey(r) + dn + 1;
+		r->gen = cc.gen;
+		if (r->kind == CK_DIR) {
+			if (!add_directory(l, name, source))
+				l->skipped++;
+		} else if (l->count >= ROMLIST_MAX) {
+			l->skipped++;
+		} else {
+			cc.hits++;
+			add_rom_raw(l, name, source, r->size, r->hdr, save_cfg, save_cfg_len);
+		}
+	}
+	cc.fast_dirs++;
+	return true;
+}
+
+static bool scan_one(struct romlist *l, const char *dir, unsigned source, bool at_root, unsigned flags,
+		     const char *save_cfg, size_t save_cfg_len)
+{
+	struct stat dst;
+	uint32_t dir_mtime = 0;
+	bool use_cache = cc.on && cc.rec;
+	if (use_cache && stat(dir, &dst) == 0 && S_ISDIR(dst.st_mode))
+		dir_mtime = (uint32_t)dst.st_mtime;
+	cc.gen++;
+	if (use_cache && (flags & ROMLIST_SCAN_REUSE) && scan_from_cache(l, dir, source, dir_mtime, save_cfg, save_cfg_len))
+		return true;
+	uint32_t skipped0 = l->skipped;
 	DIR *d = opendir(dir);
 	if (!d)
 		return false;
@@ -259,8 +568,14 @@ static bool scan_one(struct romlist *l, const char *dir, unsigned source, bool a
 		if (S_ISDIR(st.st_mode)) {
 			if (at_root && !strcmp(name, "juegos") && games_dir_without_roms(path))
 				continue;
-			if (!add_directory(l, name, source))
+			if (!add_directory(l, name, source)) {
 				l->skipped++;
+			} else if (use_cache) {
+				int k = cache_find(path, CK_DIR);
+				struct crec *r = k >= 0 ? &cc.rec[k] : cache_add(path, CK_DIR);
+				if (r)
+					r->gen = cc.gen, r->dead = 0;
+			}
 			continue;
 		}
 		if (!S_ISREG(st.st_mode) || !romlist_has_rom_ext(name))
@@ -269,15 +584,39 @@ static bool scan_one(struct romlist *l, const char *dir, unsigned source, bool a
 			l->skipped++;
 			continue;
 		}
-		add_file_size(l, path, source, (uint32_t)st.st_size, save_cfg, save_cfg_len);
+		add_file_size(l, path, source, (uint32_t)st.st_size, (uint32_t)st.st_mtime, save_cfg, save_cfg_len);
 	}
 	closedir(d);
+	if (use_cache && dir_mtime) {
+		/* Lo que ya no está en la carpeta sale de la caché; y se anota su fecha. */
+		size_t dn = strlen(dir);
+		for (uint32_t i = 0; i < cc.count; i++) {
+			struct crec *r = &cc.rec[i];
+			if (!r->dead && r->kind != CK_META && r->gen != cc.gen && direct_child(ckey(r), dir, dn)) {
+				r->dead = 1;
+				cc.dirty = true;
+			}
+		}
+		char mk[ROMLIST_PATH_MAX + 2];
+		if (snprintf(mk, sizeof mk, "#%s", dir) < (int)sizeof mk) {
+			int k = cache_find(mk, CK_META);
+			struct crec *r = k >= 0 ? &cc.rec[k] : cache_add(mk, CK_META);
+			if (r && (r->mtime != dir_mtime || r->size != l->skipped - skipped0 || r->dead)) {
+				r->mtime = dir_mtime;
+				r->size = l->skipped - skipped0;
+				r->dead = 0;
+				cc.dirty = true;
+			}
+		}
+	}
 	return true;
 }
 
-int romlist_scan_sources(struct romlist *l, const char *const *roots, unsigned root_count, const char *relative,
-		 const char *save_cfg, size_t save_cfg_len)
+int romlist_scan_sources_ex(struct romlist *l, const char *const *roots, unsigned root_count, const char *relative,
+		 const char *save_cfg, size_t save_cfg_len, unsigned flags)
 {
+	cc.hits = cc.reads = cc.fast_dirs = 0;
+	cache_load();
 	if (!l || !roots || root_count > ROMLIST_SOURCES_MAX || strlen(relative) >= sizeof l->directory)
 		return -1;
 	l->count = l->rom_count = l->dir_count = l->skipped = l->strings_used = 0;
@@ -297,10 +636,17 @@ int romlist_scan_sources(struct romlist *l, const char *const *roots, unsigned r
 				    : snprintf(dir, sizeof dir, "%s", roots[i]);
 		if (n < 0 || (size_t)n >= sizeof dir)
 			continue;
-		if (scan_one(l, dir, i, relative[0] == 0, save_cfg, save_cfg_len))
+		if (scan_one(l, dir, i, relative[0] == 0, flags, save_cfg, save_cfg_len))
 			opened++;
 	}
+	cache_flush();
 	return opened ? (int)l->rom_count : -1;
+}
+
+int romlist_scan_sources(struct romlist *l, const char *const *roots, unsigned root_count, const char *relative,
+		 const char *save_cfg, size_t save_cfg_len)
+{
+	return romlist_scan_sources_ex(l, roots, root_count, relative, save_cfg, save_cfg_len, 0);
 }
 
 int romlist_scan_dir(struct romlist *l, const char *dir, const char *root, const char *save_cfg, size_t save_cfg_len)
