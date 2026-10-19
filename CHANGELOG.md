@@ -4,6 +4,16 @@ All notable changes to Salsa64. Speeds are measured on a real PS3 (HEN,
 NTSC backups); `docs/perf-log.md` has the detailed numbers and
 `docs/estado.md` the work log (both in Spanish).
 
+## [Unreleased]
+
+### Added
+- **Launch a ROM from outside** (issue #25): Salsa64 opens the ROM passed as
+  `argv[1]` or, failing that, the first line of
+  `/dev_hdd0/game/SLSA00064/rom.txt` (deleted once read), without showing the
+  menu, so webMAN MOD and other frontends can start N64 games from the XMB. A
+  missing ROM falls back to the normal menu with a notice. See
+  `docs/uso-ps3.md`.
+
 ## [0.2.8] — 2026-10-18
 
 ### Added

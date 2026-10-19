@@ -5456,14 +5456,11 @@ static void menu_test_load(void)
 	salsa64_log("menú, prueba automática: %u ROMs que abrir (%s)", mn.ntest, MENU_TEST_PATH);
 }
 
-/* Abre la ROM elegida y vuelve cuando el juego termina. */
-static enum game_end menu_open(const struct rom_entry *e)
+/* Abre la ROM `path` (de la lista del menú o del arranque directo) y vuelve
+ * cuando el juego termina. */
+static enum game_end menu_open_path(const char *path, const struct rom_entry *e)
 {
-	char path[ROMLIST_PATH_MAX], err[160], filename[ROMLIST_NAME_MAX + 1], title[ROMLIST_NAME_MAX + 1];
-	if (!romlist_build_path(roms, e, rom_dirs, ROMLIST_SOURCES_MAX, path, sizeof path)) {
-		menu_set_status(&menu, "La ruta de la ROM es demasiado larga");
-		return GAME_TO_MENU;
-	}
+	char err[160], filename[ROMLIST_NAME_MAX + 1], title[ROMLIST_NAME_MAX + 1];
 	snprintf(filename, sizeof filename, "%s", romlist_name(e));
 	snprintf(title, sizeof title, "%s", romlist_display_title(e));
 	snprintf(opened_title, sizeof opened_title, "%s", title);
@@ -5520,6 +5517,101 @@ static enum game_end menu_open(const struct rom_entry *e)
 	return end;
 }
 
+/* Abre la ROM elegida y vuelve cuando el juego termina. */
+static enum game_end menu_open(const struct rom_entry *e)
+{
+	char path[ROMLIST_PATH_MAX];
+	if (!romlist_build_path(roms, e, rom_dirs, ROMLIST_SOURCES_MAX, path, sizeof path)) {
+		menu_set_status(&menu, "La ruta de la ROM es demasiado larga");
+		return GAME_TO_MENU;
+	}
+	return menu_open_path(path, e);
+}
+
+/* Arranque directo (issue #25, docs/uso-ps3.md): la ROM que pide argv[1] o,
+ * si no, la primera línea de /dev_hdd0/game/<APPID>/rom.txt (que se borra al
+ * leerla). main() la deja en direct_rom; menu_loop la abre sin esperar a
+ * ninguna tecla, y si no se puede, el menú sale normal con un aviso. */
+#define DIRECT_ROM_MAX 250
+static char direct_rom[DIRECT_ROM_MAX + 1];
+static const char *direct_from = "";
+
+static void direct_request(int argc, char **argv)
+{
+	direct_rom[0] = '\0';
+	if (argc > 1 && argv && argv[1] && argv[1][0]) {
+		snprintf(direct_rom, sizeof direct_rom, "%s", argv[1]);
+		direct_from = "argv";
+	} else {
+		char txt[96];
+		snprintf(txt, sizeof txt, "/dev_hdd0/game/%s/rom.txt", salsa64_appid);
+		FILE *f = fopen(txt, "rb");
+		if (!f)
+			return;
+		char raw[DIRECT_ROM_MAX + 8];
+		size_t n = fread(raw, 1, sizeof raw - 1, f);
+		fclose(f);
+		if (unlink(txt) != 0)
+			salsa64_log("arranque directo: no se pudo borrar %s", txt);
+		raw[n] = '\0';
+		const char *p = raw;
+		if (!memcmp(p, "\xEF\xBB\xBF", 3))  /* BOM de UTF-8 */
+			p += 3;
+		size_t len = strcspn(p, "\r\n");
+		if (len > DIRECT_ROM_MAX)
+			len = DIRECT_ROM_MAX;
+		while (len && (p[len - 1] == ' ' || p[len - 1] == '\t'))
+			len--;
+		memcpy(direct_rom, p, len);
+		direct_rom[len] = '\0';
+		direct_from = "rom.txt";
+		if (!len) {
+			salsa64_log("arranque directo: %s vacío, se ignora", txt);
+			return;
+		}
+	}
+	salsa64_log("arranque directo: %s (desde %s)", direct_rom, direct_from);
+}
+
+/* Devuelve true si la app debe terminar (GAME_QUIT). Si la ROM no sirve, deja
+ * el aviso en el estado del menú. */
+static bool direct_launch(void)
+{
+	if (!direct_rom[0])
+		return false;
+	const char *why = NULL;
+	struct romlist *one = NULL;
+	if (direct_rom[0] != '/')
+		why = "la ruta debe ser absoluta";
+	else if (!romlist_has_rom_ext(direct_rom))
+		why = "extensión no admitida (.z64, .n64, .v64)";
+	else if (!(one = romlist_create()))
+		why = "sin memoria";
+	else if (!romlist_add_file(one, direct_rom, 0, mn.save_cfg, mn.save_cfg_len) || !one->count)
+		why = "no existe o no es una ROM válida";
+	if (why) {
+		salsa64_log("arranque directo: no se pudo abrir %s (%s)", direct_rom, why);
+		menu_set_status(&menu, "No se pudo abrir %s", direct_rom);
+		if (one)
+			romlist_free(one);
+		return false;
+	}
+	/* Que al volver el menú caiga en la carpeta de la ROM, si es de las conocidas. */
+	char root[ROMLIST_PATH_MAX];
+	if (rom_root_for_path(direct_rom, root, sizeof root)) {
+		const char *rel = direct_rom + strlen(root);
+		if (*rel == '/')
+			rel++;
+		snprintf(rom_dir, sizeof rom_dir, "%s", rel);
+		rom_parent_directory(rom_dir, rom_dir, sizeof rom_dir);
+	}
+	char path[DIRECT_ROM_MAX + 1];
+	snprintf(path, sizeof path, "%s", direct_rom);
+	enum game_end end = menu_open_path(path, &one->e[0]);
+	romlist_free(one);
+	return end == GAME_QUIT || app_quit;
+}
+
 /* El menú: lista, elige, abre y vuelve, hasta «Salir al XMB» o «Salir del
  * juego» del sistema. Devuelve 0, o 1 si la prueba automática falló. */
 static int menu_loop(void)
@@ -5569,7 +5661,8 @@ static int menu_loop(void)
 	bool want_shot = pres.autotest || file_exists(SHOTS_PATH);
 	uint32_t frames = 0;
 	int failed = 0;
-	while (!app_quit) {
+	bool direct_done = !pres.autotest && direct_launch();
+	while (!app_quit && !direct_done) {
 		beat.pres++;
 		beat.pres_at = "menú: sysutil";
 		sysutil_check();
@@ -5882,7 +5975,7 @@ static void watch_thread(void *arg)
 	sysThreadExit(0);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
 	char banner[192];
 	version_banner(banner, sizeof banner);
@@ -6012,6 +6105,7 @@ int main(void)
 	} else {
 		in_menu = 1;
 		res_tag = "prueba del juego";
+		direct_request(argc, argv);
 		salsa64_log("sin %s: menú", EMBED_PATH);
 		status = menu_loop();
 	}
