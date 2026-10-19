@@ -215,6 +215,8 @@ struct vm_frame {
 	struct vmatch_table t;
 };
 static struct vm_frame *vm;
+static void *vm_mem;  /* el bloque de las dos tablas (memalign) */
+static size_t vm_bytes;
 
 #define ZCLEAR_PENDING 8
 /* Lo que ppe_copy escribió (para no repetirlo igual). */
@@ -534,6 +536,8 @@ int salsa64_rdp_interp(int mode, float t)
 			free(mem);
 			return RSXKIT_ENOMEM;
 		}
+		vm_mem = mem;
+		vm_bytes = 2 * bytes;
 		for (int i = 0; i < 2; i++)
 			vmatch_table_init(&vm[i].t, mem + i * bytes, VM_GROUPS, VM_CLIP);
 	}
@@ -542,6 +546,26 @@ int salsa64_rdp_interp(int mode, float t)
 	if (rdp.interp.mode != SALSA64_INTERP_FIELDS)
 		rdp.interp.protect = 0;
 	return RSXKIT_OK;
+}
+
+/* Suelta las tablas del emparejamiento (al cerrar el juego): si quedan,
+ * encendidas a mitad de un juego, fijan el tope del heap por encima de la
+ * memoria que el juego suelta al cerrar y el heap no la devuelve. */
+void salsa64_rdp_interp_release(void)
+{
+	rdp.interp.mode = SALSA64_INTERP_OFF;
+	rdp.interp.protect = 0;
+	rdp.interp.have_prev = false;
+	free(vm_mem);
+	free(vm);
+	vm_mem = NULL;
+	vm = NULL;
+	vm_bytes = 0;
+}
+
+size_t salsa64_rdp_interp_bytes(void)
+{
+	return vm_bytes;
 }
 
 void salsa64_rdp_aa_edges(bool on)

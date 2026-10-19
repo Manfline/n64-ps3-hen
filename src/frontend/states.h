@@ -61,6 +61,8 @@ struct states_done {
  * Una vez por juego, fuera del bucle de emulación. false si no hubo memoria:
  * guardar sigue funcionando, todo seguido y sin comprimir. */
 bool states_init(uint32_t rdram_size);
+/* Bytes de la foto reservada (0 si no se reservó). */
+uint32_t states_reserved(void);
 /* Espera la escritura en curso (hasta wait_us) y suelta el hilo y el SPE. */
 void states_shutdown(uint64_t wait_us);
 /* ¿Hay una escritura en segundo plano en marcha? */

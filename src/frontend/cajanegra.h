@@ -49,6 +49,8 @@ bool cajanegra_init(const struct salsa64_bus *bus);
  * el anillo y el gancho. */
 void cajanegra_shutdown(uint64_t wait_us);
 bool cajanegra_enabled(void);
+/* Bytes que tiene reservados (anillo y tablas de trabajo; 0 sin reserva). */
+uint32_t cajanegra_reserved(void);
 
 /* Presentación empieza a procesar este campo: las tareas que se traduzcan
  * ahora llevan su número. */

@@ -4414,8 +4414,59 @@ static void rsx_hang_test(void)
 		rsxkit_fence();
 }
 
+/* Desglose de lo que cada subsistema tiene reservado al cerrar un juego y
+ * diferencia frente al cierre anterior. Las líneas «memoria …» dicen cuánto
+ * queda; esta dice dónde está y qué creció entre dos aperturas (heap de
+ * newlib en uso/libre/bloques/tope y memoria de usuario del sistema). Lo que
+ * queda reservado «para siempre» (RDRAM, fotos, estados, el muestreo y el
+ * perfil) debe salir igual en todas; lo que cambia de un cierre al
+ * siguiente es una fuga o fragmentación. */
+struct mem_close_in {
+	uint32_t blackbox, interp;  /* reservado justo antes de soltarse en el cierre */
+};
+
+static void mem_close_report(const struct mem_close_in *in)
+{
+	static struct {
+		bool have;
+		int arena, used, free_, blocks;
+		long top;
+		u32 user;
+		unsigned games;
+	} prev;
+	static struct {
+		u32 total;
+		u32 available;
+	} um __attribute__((aligned(16)));
+	struct mallinfo mi = mallinfo();
+	lv2syscall1(352, (u64)(uintptr_t)&um);
+	bool um_ok = (s32)p1 == 0;
+	long top = (long)(uintptr_t)sbrk(0);
+	unsigned kb_rdram = rdram ? SALSA64_RDRAM_MAX >> 10 : 0;
+	unsigned kb_snap = 0;
+	for (int i = 0; i < SNAP_SLOTS; i++)
+		kb_snap += snap_buf[i] ? SNAP_BYTES >> 10 : 0;
+	salsa64_log("memoria, reservado por subsistema (KB): RDRAM %u, instantáneas %u, estados %u, caja negra %u (soltada "
+		    "al cerrar), tablas de la interpolación %u (soltadas al cerrar), muestreo %u, perfil %u, ROM en páginas %u",
+		    kb_rdram, kb_snap, states_reserved() >> 10, in->blackbox >> 10, in->interp >> 10,
+		    rec_sample ? (unsigned)(sizeof *rec_sample >> 10) : 0, rec_profile ? (unsigned)(sizeof *rec_profile >> 10) : 0,
+		    rom_pages ? 1u : 0u);
+	if (prev.have)
+		salsa64_log("memoria, cambio frente al cierre anterior (juego %u tras el primero): heap en uso %+d KB, libres %+d KB "
+			    "en %+d bloques, arena %+d KB, tope %+ld KB, usuario libre %+d KB%s",
+			    ++prev.games, (mi.uordblks - prev.used) >> 10, (mi.fordblks - prev.free_) >> 10,
+			    mi.ordblks - prev.blocks, (mi.arena - prev.arena) >> 10, (top - prev.top) >> 10,
+			    um_ok ? ((int)um.available - (int)prev.user) >> 10 : 0,
+			    mi.uordblks - prev.used > 1024 ? " (el heap en uso creció más de 1 KB: fuga)" : "");
+	prev.have = true;
+	prev.arena = mi.arena, prev.used = mi.uordblks, prev.free_ = mi.fordblks, prev.blocks = mi.ordblks;
+	prev.top = top;
+	prev.user = um_ok ? um.available : 0;
+}
+
 static void game_close(void)
 {
+	struct mem_close_in mem_in = { cajanegra_reserved(), (uint32_t)salsa64_rdp_interp_bytes() };
 	cajanegra_shutdown(10000000);
 	states_shutdown(10000000);  /* un estado a medio escribir se termina antes de soltar nada */
 	salsa64_filters_release();
@@ -4466,6 +4517,7 @@ static void game_close(void)
 	/* Lo que quedó en las colas (sin presentar) y la memoria del RSX. */
 	drain(sysGetSystemTime(), 0);
 	uint32_t untranslated = salsa64_rdp_reset();
+	salsa64_rdp_interp_release();  /* sus tablas (2,4 MB) no se quedan fijando el tope del heap */
 	int snaps = 0;
 	for (int i = 0; i < SNAP_SLOTS; i++)
 		snaps += snap_state[i] != SNAP_FREE;
@@ -4478,6 +4530,7 @@ static void game_close(void)
 		    clean ? "estado limpio" : "ATENCIÓN, quedó algo en vuelo", emu_done ? "terminado" : "VIVO", queued,
 		    snaps, untranslated, spes ? "VIVOS" : "detenidos", hooks ? "CON BACKENDS" : "sin backends");
 	heap_report("al cerrar el juego");
+	mem_close_report(&mem_in);
 	if (perf.on) {
 		char end[384];
 		snprintf(end, sizeof end,
