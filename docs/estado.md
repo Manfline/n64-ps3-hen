@@ -271,6 +271,35 @@ sin probarse en el RSX real.
   directorio de build borrado antes). Pruebas del host: 656, 0 fallidas; `tools/test-roms.sh` bien; las
   escenas del host no cambian por construcción (salsa64-run solo gana funciones nuevas de targets.c que no llama).
 
+## 2026-10-18 — alfa en los destinos de render a textura (Mario Tennis, logos de Rogue Squadron)
+
+Rama `alfa-destinos` (sobre main ea6118e). Sin validar en la PS3: el host no ejecuta el camino del RSX.
+
+- **Cambio.** `rsxkit_target_create_ex(w, h, RSXKIT_TARGET_ALPHA)` crea destinos A8R8G8B8 (nacen con
+  alfa 0). `src/rdp` los usa para las color images de 16 bits que no son del ancho del VI (los
+  framebuffers quedan X8R8G8B8: no se leen con alfa y un destino con alfa mezcla en cada dibujo).
+  Alfa de la N64: `rsxkit_clear` con el alfa en el byte alto (0 al borrar con 0x0000); cada píxel de un
+  dibujo normal queda con alfa 1 (mezcla de alfa ONE/ZERO); un relleno (`G_CYC_FILL`) deja el bit de alfa
+  del color de relleno (`gfx_draw.aref`, nuevo uso en los rellenos); una copia sin mezcla (`G_CYC_COPY`)
+  deja el alfa del texel; el cebado (`target_fill_rows`) trae el bit de alfa de la RDRAM; la copia a
+  scratch conserva el alfa (programa de blit nuevo `rsxkit_blit_argb.fcg`). Las texturas leídas de un
+  destino con alfa ya salían como `RSXKIT_XRGB8888`, cuyo alfa lee el 3D (el remap del 3D usa el canal A).
+- **Interruptor.** Archivo `/dev_hdd0/salsa64/sin-alfa-destinos` (vacío): vuelve a los destinos de antes.
+  Por omisión, encendido. El log dice la decisión al abrir el juego y, por intervalo,
+  `gfx: alfa en los destinos: N destinos con alfa creados, N texturas leídas de uno de ellos, N rellenos o
+  copias con su alfa` (`targets_alpha`, `tex_alpha`, `alpha_fills`).
+- **Qué se razonó con las cajas** (sin RSX): en Mario Tennis, las texturas de partido vienen de destinos de
+  64 × 64 RGBA16 (ancho 64 ≠ 320 del VI: llevan alfa) y el borrado es 0x0000; las de ancho de VI no cambian
+  (Zelda pausa, túnel de MK64 y Yoshi siguen con el camino de antes si sus imágenes son del ancho del VI).
+- **Paquete de prueba** «Salsa64 alfa» (SLSA00175): `build/salsa64-alfa/salsa64-alfa.pkg`, 3 300 688 bytes, sha256
+  `3718f62a61f2ba395ec8c8cdd0df7321a5998af93c1002894e92b52bf7926dfe`. Probar Mario Tennis (partido y estela de la
+  pelota) y los logos del menú de Rogue Squadron; después Zelda (pausa), MK64 (túnel), RE2 y Yoshi; si algo
+  cambia, repetir con `sin-alfa-destinos`. `tools/build.sh test-host`: 658 pruebas, 0 fallidas.
+- **Límites conocidos.** Una textura con `GFX_TEX_PREMUL` leída de un destino con alfa no se premultiplica
+  (con alfa 0 el RGB suele ser 0, el efecto es mínimo). Las copias del RSX a la RDRAM siguen en RGB565 y
+  vuelven con el bit de alfa en 1 (`rsxkit_pixels_565_to_5551`). Si algún juego de los que ya andan cambia,
+  comparar con `sin-alfa-destinos`.
+
 ## 2026-10-18 — gráficos: Earthworm Jim 3D (orden de dibujo) y Mace (textos) arreglados en la HLE; Mario Tennis y la z de Zelda diagnosticados
 
 Rama `graficos-jim-tennis` (sobre rc6), con las cajas negras de la rc6 en la

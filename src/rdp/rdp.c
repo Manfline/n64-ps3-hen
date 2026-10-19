@@ -326,6 +326,7 @@ static struct {
 	/* Efectos de framebuffer (docs/framebuffer.md). */
 	int fbfx;                    /* 0 apagado, 1 render a textura, 2 también copias */
 	bool aa_edges;               /* salsa64_rdp_aa_edges */
+	bool target_alpha;           /* salsa64_rdp_target_alpha */
 	uint8_t *rdram;              /* la RDRAM emulada (NULL: sin copias ni cebado) */
 	uint32_t rdram_size;
 	void (*wake)(void);          /* despierta al hilo de presentación */
@@ -518,6 +519,11 @@ void salsa64_rdp_set_memory(uint8_t *rdram, uint32_t rdram_size, void (*wake)(vo
 void salsa64_rdp_vi(uint32_t origin, uint32_t width)
 {
 	rdp_vi_ring_push(&rdp.vi_ring, origin, width);
+}
+
+void salsa64_rdp_target_alpha(bool on)
+{
+	rdp.target_alpha = on;
 }
 
 void salsa64_rdp_fbfx(int level)
@@ -1513,6 +1519,14 @@ static void ppe_copy(const struct gfx_draw *g, const struct set *s, uint32_t add
  * memoria para una nueva (esa imagen se queda en la copia de la RDRAM). La
  * superficie va a la escala del destino (rdp_target_scale), que queda en
  * surf_scale. */
+/* ¿Este destino lleva canal alfa? Los de 16 bits que no son un framebuffer:
+ * del ancho del VI no (el cuadro principal no se lee como textura con alfa, y
+ * un destino con alfa mezcla en cada dibujo). */
+static bool alpha_wanted(const struct rdp_target *t)
+{
+	return rdp.target_alpha && t->bpp == 2 && t->width != rdp.tg.vi_width;
+}
+
 static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz, uint32_t min_lh)
 {
 	bool fresh;
@@ -1600,7 +1614,9 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
 	uint32_t sc = big8(t->bpp, t->lw) ? 1 : rdp_target_scale(rdp.scale, t->lw, t->lh);
 	uint32_t bytes = rdp_surface_bytes(t->lw * sc, t->lh * sc);
 	if (make_room(bytes, i))
-		rdp.surf[i] = rsxkit_target_create(t->lw * sc, t->lh * sc);
+		rdp.surf[i] = rsxkit_target_create_ex(t->lw * sc, t->lh * sc, alpha_wanted(t) ? RSXKIT_TARGET_ALPHA : 0);
+	if (rdp.surf[i] && rsxkit_target_has_alpha(rdp.surf[i]))
+		rdp.stats.targets_alpha++;
 	if (!rdp.surf[i]) {
 		rdp.stats.targets_failed++;
 		LOGN(20, "gfx: destino %06x/%u: el RSX no dio una superficie de %u × %u (%u×; %u KB vivos)", addr, width,
@@ -1973,12 +1989,13 @@ static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_textur
 		if (rdp.scratch_slot != slot || rdp_box_overlaps(&rdp.scratch_dirty, x0, y0, x0 + gt->width, y0 + gt->height)) {
 			uint32_t w, h;
 			rsxkit_target_size(rdp.surf[slot], &w, &h);
-			if (rdp.scratch && (rdp.scratch_w != w || rdp.scratch_h != h))
+			if (rdp.scratch && (rdp.scratch_w != w || rdp.scratch_h != h ||
+					    rsxkit_target_has_alpha(rdp.scratch) != rsxkit_target_has_alpha(rdp.surf[slot])))
 				drop_scratch();
 			if (!rdp.scratch) {
 				uint32_t bytes = rdp_surface_bytes(w, h);
 				if (make_room(bytes, slot))
-					rdp.scratch = rsxkit_target_create(w, h);
+					rdp.scratch = rsxkit_target_create_ex(w, h, rsxkit_target_has_alpha(rdp.surf[slot]) ? RSXKIT_TARGET_ALPHA : 0);
 				if (rdp.scratch) {
 					rdp.scratch_w = w;
 					rdp.scratch_h = h;
@@ -2003,6 +2020,8 @@ static bool texture_from_target(const struct gfx_tex *gt, int cur, rsxkit_textur
 	rsxkit_target_texture(from, map.row0, map.rows, &nt);
 	if (!nt.height)
 		return false;
+	if (rsxkit_target_has_alpha(from))
+		rdp.stats.tex_alpha++;
 	t->offset = nt.offset;
 	t->pitch = nt.pitch;
 	t->width = nt.width;
@@ -2172,6 +2191,20 @@ static bool to_rsxkit(const struct gfx_draw *g, struct set *s, int cur, rsxkit_d
 			return false;
 	}
 	memcpy(d->k, g->k, sizeof d->k);
+	/* Destino con alfa: el alfa de la N64 en lo que se escribe. Un dibujo
+	 * normal deja 1 en cada píxel (rsxkit_draw.dst_alpha por omisión); un
+	 * relleno, su bit de alfa (gfx_draw.aref); una copia sin mezcla, el
+	 * alfa del texel (el RDP copia los 16 bits tal cual). */
+	if (cur >= 0 && rdp.surf[cur] && rsxkit_target_has_alpha(rdp.surf[cur])) {
+		if (g->cycle == G_CYC_FILL) {
+			d->dst_alpha = RSXKIT_DSTA_FRAG;
+			d->k[RSXKIT_K_ONE][0][3] = (float)g->aref / 255.0f;
+			rdp.stats.alpha_fills++;
+		} else if (g->cycle == G_CYC_COPY && d->blend == RSXKIT_BLEND_OFF) {
+			d->dst_alpha = RSXKIT_DSTA_FRAG;
+			rdp.stats.alpha_fills++;
+		}
+	}
 	return true;
 }
 
@@ -2418,7 +2451,8 @@ static bool tall_fill_target(int i, float xa, float ya, float xb, float yb, uint
 	if (yb <= ya || xb <= xa || !rdp.surf[i] || !bind(i, NULL))
 		return false;
 	float rect[4] = { xa, ya, xb, yb };
-	rsxkit_clear(RSXKIT_CLEAR_COLOR, color, 0.0f, rect);
+	/* Con alfa en el destino: un relleno de un color que no es 0 deja alfa 1. */
+	rsxkit_clear(RSXKIT_CLEAR_COLOR, color | (color && rsxkit_target_has_alpha(rdp.surf[i]) ? 0xFF000000u : 0), 0.0f, rect);
 	rdp_targets_drawn(&rdp.tg, i);
 	drawn[i] = true;
 	rdp.surf_gen[i] = ++rdp.gen_seq;

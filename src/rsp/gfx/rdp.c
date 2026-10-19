@@ -476,6 +476,10 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 		for (int lane = 0; lane < 4; lane++)
 			d->k[GFX_K_ONE][0][lane] = c[lane] / 255.0f;
 		d->k[GFX_K_ONE][0][3] = 1.0f;
+		/* El alfa del relleno (el bit de alfa de un píxel de 16 bits) va aparte:
+		 * el color sale con alfa 1, y quien dibuja en un destino con alfa lo
+		 * necesita (rsxkit_draw.dst_alpha). Sin prueba de alfa en un relleno. */
+		d->aref = c[3];
 		d->cycle = G_CYC_FILL;
 		return;
 	}

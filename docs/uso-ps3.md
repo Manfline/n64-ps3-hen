@@ -707,6 +707,7 @@ se crean por FTP.
 | `perfilado.cfg` | Líneas `clave = valor` | Solo la app «Salsa64 perfil»: qué registra cada sesión de juego en `perfilado/` y con qué tope (docs/perfilado.md). Sin archivo, todo encendido y 200 MB |
 | `muestreo` | Basta con que exista | Muestreo por tiempo del recompilador: un hilo de baja prioridad mira cada 200 µs qué bloque corre el hilo de emulación (o si está en C: camino lento, intérprete, eventos…); cada 5 s el reparto al log y, al salir del juego, los 30 bloques con más tiempo con sus palabras de PPC (docs/rec-ppe.md, «Muestreo por tiempo»). Costo: dos palabras por entrada a bloque |
 | `aristas-aa` | Basta con que exista | Experimental: la pasada de aristas de los dibujos con antialiasing, líneas que tapan las grietas de las uniones en T (las líneas azules del piso del túnel de Dam en GoldenEye). Apagada por omisión: a escala alta hace que los polígonos de los modelos se superpongan en las uniones (docs/rsx-notes.md) |
+| `sin-alfa-destinos` | Basta con que exista | Apaga el canal de alfa de los destinos de render a textura de 16 bits (transparencia de lo que el juego dibuja en una imagen y usa después como textura: Mario Tennis, logos de Rogue Squadron). Encendido por omisión; para comparar |
 
 La carpeta también puede tener `covers/` (carátulas), `cheats/` (trucos y
 sus `.on`), `juegos/` (ajustes por juego), `states/` (estados guardados), `perfiles/` (el

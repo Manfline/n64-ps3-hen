@@ -362,7 +362,7 @@ struct gfx_draw {
 	uint8_t depth;           /* GFX_DEPTH_* */
 	uint8_t blend;           /* gfx_blend */
 	uint8_t atest;           /* GFX_ATEST_* */
-	uint8_t aref;            /* referencia de la prueba de alfa (0–255) */
+	uint8_t aref;            /* referencia de la prueba de alfa (0–255); en un relleno (G_CYC_FILL), su alfa */
 	uint8_t fog;             /* 1: mezclar el color con fog_color según C.a */
 	uint8_t ntex;            /* texturas usadas: 0, 1 o 2 */
 	uint32_t fog_color;      /* 0xRRGGBBAA */
