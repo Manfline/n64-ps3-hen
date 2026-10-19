@@ -522,8 +522,31 @@ void rdp_targets_present(struct rdp_targets *s, const struct salsa64_vi_frame *f
 	 * ocupa en pantalla lo mismo que el campo y no salta entre campos. */
 	uint32_t line = t->width * t->bpp, k = line && f->stride > line && f->stride % line == 0 ? f->stride / line : 1;
 	uint32_t rows = f->height * k;
-	if (k > 1)
+	if (f->vpos) {
+		/* Entrelazado con la posición vertical del campo (V_VIDEO y el
+		 * campo): el renglón 0 del destino cae en la pantalla, medido en
+		 * renglones de la trama (una fila del destino son 2 / k), en
+		 * V0 = vpos - 2 y0 / k. Dos campos de un mismo cuadro caen a lo más
+		 * un renglón aparte aunque cada uno empiece en una fila distinta
+		 * (Racer: origen una fila arriba y V_VIDEO dos medias líneas antes;
+		 * Rogue Squadron: origen una fila abajo y dos medias líneas después):
+		 * se presenta la misma ventana en los dos, la del campo anterior
+		 * del mismo destino, en vez de cada una desde su origen (la imagen
+		 * subía y bajaba una fila por campo). El primero de la pareja
+		 * alinea a k filas según la fila de la trama en que cae. */
+		int32_t v0 = (int32_t)(f->vpos * k) - 2 * (int32_t)best_y0;
+		uint32_t y0p = best_y0 - f->vpos % k % (best_y0 + 1);
+		if (s->il_valid && s->il_slot == best && v0 - s->il_v0 >= -(int32_t)k && v0 - s->il_v0 <= (int32_t)k &&
+		    s->il_y0 <= best_y0 && best_y0 - s->il_y0 <= k)
+			y0p = s->il_y0;
+		s->il_valid = true;
+		s->il_slot = best;
+		s->il_v0 = v0;
+		s->il_y0 = y0p;
+		out->y0 = y0p;
+	} else if (k > 1) {
 		out->y0 = best_y0 - best_y0 % k;
+	}
 	out->h = rows < t->lh - out->y0 ? rows : t->lh - out->y0;
 }
 

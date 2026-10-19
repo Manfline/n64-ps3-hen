@@ -820,6 +820,56 @@ static void targets_present_interlaced(void)
 	CHECK_EQ(p.h, 237);
 }
 
+/* Entrelazado con la posición vertical del campo (docs/estado.md, «VI
+ * entrelazado»): Racer (destino de 320 × 480, VI de 320 × 237 con stride de
+ * 2 filas; el campo 1 empieza una fila arriba y dos medias líneas antes) y
+ * Rogue Squadron (destino de 640 × 335, stride de 1 fila; el campo 1
+ * empieza una fila abajo y dos medias líneas después). Cada campo cae en
+ * un renglón contiguo de la trama; se presenta la misma ventana en los dos,
+ * no cada una desde su origen (la imagen subía y bajaba una fila). */
+static void targets_present_interlaced_vpos(void)
+{
+	bool fresh;
+	struct rdp_present p;
+	/* Racer */
+	const uint32_t RACER = 0x63b800;
+	rdp_targets_init(&s);
+	int r = rdp_targets_get(&s, RACER, 320, SIZ_16b, 480, &fresh);
+	rdp_targets_drawn(&s, r);
+	struct salsa64_vi_frame f = frame(0, 320, 237);
+	f.stride = 1280;
+	for (uint32_t n = 0; n < 6; n++) {
+		bool odd = n & 1;  /* campo con V_VIDEO 0x2301FD, origen una fila arriba */
+		f.origin = odd ? RACER + 640 : RACER + 1280;
+		f.vpos = odd ? 0x23 + 1 : 0x25;
+		rdp_targets_present(&s, &f, 20 + n, &p);
+		CHECK_EQ(p.slot, r);
+		CHECK_EQ(p.y0, 1);
+		CHECK_EQ(p.h, 474);
+	}
+	/* Rogue */
+	const uint32_t ROGUE = 0x790000;
+	rdp_targets_init(&s);
+	int g = rdp_targets_get(&s, ROGUE, 640, SIZ_16b, 335, &fresh);
+	rdp_targets_drawn(&s, g);
+	f = frame(0, 640, 316);
+	f.stride = 1280;
+	for (uint32_t n = 0; n < 6; n++) {
+		bool second = n & 1;  /* origen una fila abajo, V_VIDEO 0x3501EF */
+		f.origin = ROGUE + 1280 * (1 + second);
+		f.vpos = second ? 0x35 : 0x33 + 1;
+		rdp_targets_present(&s, &f, 40 + n, &p);
+		CHECK_EQ(p.slot, g);
+		CHECK_EQ(p.y0, 1);
+		CHECK_EQ(p.h, 316);
+	}
+	/* Sin entrelazado (vpos 0), nada cambia: cada origen es su fila. */
+	f.vpos = 0;
+	f.origin = ROGUE + 2 * 1280;
+	rdp_targets_present(&s, &f, 50, &p);
+	CHECK_EQ(p.y0, 2);
+}
+
 /* Color image de 320 × 720 (Star Fox 64): los tres framebuffers seguidos
  * caben enteros dentro, con sus filas de inicio; otro ancho, no. */
 static void targets_inside(void)
@@ -1113,6 +1163,7 @@ void t_suite_targets(void)
 	RUN(targets_inside);
 	RUN(targets_tall_pending);
 	RUN(targets_present_interlaced);
+	RUN(targets_present_interlaced_vpos);
 	RUN(targets_locate);
 	RUN(targets_decode_rgba16);
 	RUN(targets_texture_policy);

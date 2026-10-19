@@ -137,6 +137,12 @@ struct rdp_targets {
 	int shown;              /* ranura presentada en el último campo, o -1 */
 	uint32_t shown_origin;  /* origen del VI en ese campo */
 	uint32_t shown_field;
+	/* Entrelazado de alta resolución: la posición del renglón 0 del destino
+	 * en la pantalla (vpos - y0) y la fila desde la que se presentó. */
+	bool il_valid;
+	int il_slot;
+	int32_t il_v0;
+	uint32_t il_y0;
 	uint32_t vi_width;      /* ancho del VI en el último campo con imagen */
 	uint32_t created;       /* superficies creadas (estadística) */
 	uint32_t readbacks;     /* copias a la RDRAM (estadística) */

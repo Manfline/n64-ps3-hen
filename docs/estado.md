@@ -188,8 +188,19 @@ Con las cajas negras de la rc6 (`build/rc6-ps3/yoshi2/`, `build/rc6-ps3/rogue2/`
   del cuadro) junto con `VI_V_VIDEO` 0x003301ED y 0x003501EF (dos medias
   líneas). En la tele los dos campos se intercalan; si se presenta cada campo
   como una imagen completa desde su origen, sin el corrimiento de
-  `V_VIDEO`, la imagen sube y baja una línea en cada campo. Es probablemente
-  lo mismo que la intro de Racer. No se tocó en esta ronda.
+  `V_VIDEO`, la imagen sube y baja una línea en cada campo. Es lo mismo que
+  la intro de Racer. **Arreglado (rama `vi-entrelazado`, por validar en la
+  PS3):** el VI da ahora la posición vertical del campo (`vpos` = primera
+  media línea de `V_VIDEO` + el bit de campo, solo con SERRATE) y
+  `rdp_targets_present` presenta la misma ventana del destino en los dos
+  campos de un cuadro (renglón 0 del destino en `vpos - 2 y0 / k` de la
+  trama, igual en ambos con tolerancia de uno): Racer (destino 320 × 480,
+  stride de 2 filas, V_VIDEO 0x2501FF / 0x2301FD, origen una fila arriba en
+  el segundo) y Rogue (640 × 335, stride de 1 fila, 0x3301ED / 0x3501EF,
+  origen una fila abajo) quedan en `y0 = 1` en todos los campos (antes
+  alternaban 1 y 2 o 0 y 2); prueba `targets_present_interlaced_vpos`. Sin
+  SERRATE o sin `vpos` (los logos de DK64 de la prueba antigua) no cambia
+  nada, y las 8 escenas de `tools/escenas-host.sh` salen idénticas.
 - **Rogue, logos sin alfa:** no se llegó a ver.
 
 ## 2026-10-18 — rc7b: los personajes de Resident Evil 2 (la z del fondo escrita como color)
