@@ -5071,6 +5071,8 @@ static void test_flags_from_name(const char *name)
 }
 
 /* Arma la lista (con la fila de `keep` elegida, si sigue ahí). */
+static unsigned scan_flags;  /* ROMLIST_SCAN_REUSE solo al volver de un juego */
+
 static void menu_scan(const char *keep)
 {
 	uint64_t scan_start = sysGetSystemTime();
@@ -5085,14 +5087,20 @@ static void menu_scan(const char *keep)
 	mn.save_cfg_len = f ? fread(mn.save_cfg, 1, sizeof mn.save_cfg - 1, f) : 0;
 	if (f)
 		fclose(f);
-	int n = romlist_scan_sources(roms, rom_dirs, ROMLIST_SOURCES_MAX, rom_dir, mn.save_cfg, mn.save_cfg_len);
+	romlist_cache_file(SALSA64_DATA_DIR "/romlist.cache");
+	int n = romlist_scan_sources_ex(roms, rom_dirs, ROMLIST_SOURCES_MAX, rom_dir, mn.save_cfg, mn.save_cfg_len, scan_flags);
 	if (n < 0 && rom_dir[0]) {
 		rom_dir[0] = '\0';
-		n = romlist_scan_sources(roms, rom_dirs, ROMLIST_SOURCES_MAX, "", mn.save_cfg, mn.save_cfg_len);
+		n = romlist_scan_sources_ex(roms, rom_dirs, ROMLIST_SOURCES_MAX, "", mn.save_cfg, mn.save_cfg_len, scan_flags);
 	}
+	scan_flags = 0;
+	uint32_t c_hits, c_reads, c_fast;
+	romlist_scan_stats(&c_hits, &c_reads, &c_fast);
 	romlist_sort(roms, mn.settings.rom_order == MENU_ROM_ORDER_FILENAME ? ROMLIST_ORDER_FILENAME : ROMLIST_ORDER_TITLE);
 	salsa64_log("menú: lectura del directorio en %llu us; lista dinámica %u bytes (%u filas)",
 		    (unsigned long long)(sysGetSystemTime() - scan_start), (unsigned)romlist_memory_bytes(), roms->count);
+	salsa64_log("menú: caché de cabeceras: %u de la caché, %u leídas del disco, %u carpetas sin releer", c_hits, c_reads,
+		    c_fast);
 	salsa64_log("menú: %u ROMs en %u carpetas, %u no legibles o fuera de capacidad", roms->rom_count,
 	    roms->dir_count, roms->skipped);
 	if (roms->skipped)
@@ -5477,6 +5485,7 @@ static enum game_end menu_open(const struct rom_entry *e)
 	menu.loading = NULL;
 	romlist_free(roms);
 	roms = NULL;
+	romlist_cache_release();
 	menu.list = NULL;
 	uint32_t size = 0;
 	/* Búfer a la medida de la ROM, solo mientras dura el juego. */
@@ -5513,6 +5522,7 @@ static enum game_end menu_open(const struct rom_entry *e)
 	salsa64_log("menú: de vuelta de %s%s", path,
 		    end == GAME_FAILED ? " (no arrancó)" : !pres.autotest ? "" : ok ? " (prueba bien)" : " (prueba MAL)");
 	if (end != GAME_QUIT) {
+		scan_flags = ROMLIST_SCAN_REUSE;  /* sin releer las carpetas que no cambiaron (L3 las relee) */
 		menu_scan(path);  /* de nuevo: pudo entrar o salir una memoria USB */
 		if (err[0])
 			menu_set_status(&menu, "%s", err);

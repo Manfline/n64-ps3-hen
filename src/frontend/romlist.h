@@ -49,6 +49,14 @@ const char *romlist_display_title(const struct rom_entry *e);
 bool romlist_has_rom_ext(const char *name);
 void romlist_parse_header(const uint8_t raw[0x40], const char *save_cfg, size_t save_cfg_len, struct rom_entry *e);
 bool romlist_add_file(struct romlist *l, const char *path, unsigned source, const char *save_cfg, size_t save_cfg_len);
+/* Caché persistente de cabeceras (ver romlist.c). `path` NULL la apaga. */
+void romlist_cache_file(const char *path);
+void romlist_cache_release(void); /* suelta la memoria de la caché (se relee del archivo al volver) */
+#define ROMLIST_SCAN_REUSE 1u /* una carpeta sin cambios de fecha sale de la caché sin leerla */
+int romlist_scan_sources_ex(struct romlist *l, const char *const *roots, unsigned root_count, const char *relative,
+		 const char *save_cfg, size_t save_cfg_len, unsigned flags);
+/* De la última lectura: filas de la caché, cabeceras leídas del disco y carpetas resueltas sin leerlas. */
+void romlist_scan_stats(uint32_t *hits, uint32_t *reads, uint32_t *fast_dirs);
 int romlist_scan_dir(struct romlist *l, const char *dir, const char *root, const char *save_cfg, size_t save_cfg_len);
 int romlist_scan_sources(struct romlist *l, const char *const *roots, unsigned root_count, const char *relative,
 		 const char *save_cfg, size_t save_cfg_len);

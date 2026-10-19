@@ -199,6 +199,98 @@ static bool write_file(const char *path, const uint8_t *data, size_t n)
 	return fclose(f) == 0 && ok;
 }
 
+/* Caché de cabeceras: cientos de ROMs sintéticas (solo cabeceras generadas). */
+static void menu_scan_cache(void)
+{
+	if (!t_tmp_dir)
+		return;
+	char dir[256], path[300], cache[300], usb[256];
+	snprintf(dir, sizeof dir, "%s/cache-roms", t_tmp_dir);
+	snprintf(cache, sizeof cache, "%s/romlist.cache", t_tmp_dir);
+	snprintf(usb, sizeof usb, "%s/cache-sin-usb", t_tmp_dir);
+	mkdir(dir, 0777);
+	remove(cache);
+	static uint8_t rom[0x1000];
+	for (unsigned i = 0; i < 300; i++) {
+		char title[24];
+		snprintf(title, sizeof title, "JUEGO %03u", i);
+		memset(rom, 0, sizeof rom);
+		make_header(rom, title, "NABE", 0);
+		snprintf(path, sizeof path, "%s/j%03u.z64", dir, i);
+		CHECK(write_file(path, rom, sizeof rom));
+	}
+	char sub[300];
+	snprintf(sub, sizeof sub, "%s/sub", dir);
+	mkdir(sub, 0777);
+	snprintf(path, sizeof path, "%s/s.z64", sub);
+	memset(rom, 0, sizeof rom);
+	make_header(rom, "SUB", "NSUB", 0);
+	CHECK(write_file(path, rom, sizeof rom));
+
+	const char *roots[] = { dir };
+	uint32_t hits, reads, fast;
+	struct romlist *l = romlist_create();
+	romlist_cache_file(cache);
+	/* Primera vez: todo del disco. */
+	CHECK_EQ(romlist_scan_sources_ex(l, roots, 1, "", NULL, 0, 0), 300);
+	romlist_scan_stats(&hits, &reads, &fast);
+	CHECK_EQ(hits, 0);
+	CHECK_EQ(reads, 300);
+	/* Segunda: todo de la caché (como tras reiniciar: se suelta la memoria). */
+	romlist_cache_release();
+	CHECK_EQ(romlist_scan_sources_ex(l, roots, 1, "", NULL, 0, 0), 300);
+	romlist_scan_stats(&hits, &reads, &fast);
+	CHECK_EQ(hits, 300);
+	CHECK_EQ(reads, 0);
+	CHECK_EQ(l->dir_count, 1);
+	romlist_sort(l, ROMLIST_ORDER_TITLE);
+	CHECK(!strcmp(l->e[1].title, "JUEGO 000"));
+	/* Con REUSE y sin cambios: ni se lee la carpeta. */
+	CHECK_EQ(romlist_scan_sources_ex(l, roots, 1, "", NULL, 0, ROMLIST_SCAN_REUSE), 300);
+	romlist_scan_stats(&hits, &reads, &fast);
+	CHECK_EQ(fast, 1);
+	CHECK_EQ(reads, 0);
+	CHECK_EQ(l->count, 301);
+	/* Un archivo nuevo, uno cambiado y uno borrado: solo los dos primeros se leen. */
+	memset(rom, 0, sizeof rom);
+	make_header(rom, "NUEVO", "NNEW", 0);
+	snprintf(path, sizeof path, "%s/nuevo.z64", dir);
+	CHECK(write_file(path, rom, sizeof rom));
+	static uint8_t big[0x1010];
+	make_header(big, "CAMBIADO", "NCHG", 0);
+	snprintf(path, sizeof path, "%s/j005.z64", dir);
+	CHECK(write_file(path, big, sizeof big));
+	snprintf(path, sizeof path, "%s/j006.z64", dir);
+	CHECK_EQ(remove(path), 0);
+	CHECK_EQ(romlist_scan_sources_ex(l, roots, 1, "", NULL, 0, 0), 300);
+	romlist_scan_stats(&hits, &reads, &fast);
+	CHECK_EQ(reads, 2);
+	CHECK_EQ(hits, 298);
+	romlist_cache_release();
+	/* Caché corrupta: se ignora y se rehace. */
+	FILE *f = fopen(cache, "r+b");
+	CHECK(f != NULL);
+	if (f) {
+		fseek(f, 40, SEEK_SET);
+		fputc(0x5A, f);
+		fputc(0xA5, f);
+		fclose(f);
+	}
+	CHECK_EQ(romlist_scan_sources_ex(l, roots, 1, "", NULL, 0, 0), 300);
+	romlist_scan_stats(&hits, &reads, &fast);
+	CHECK_EQ(reads, 300);
+	romlist_cache_release();
+	CHECK_EQ(romlist_scan_sources_ex(l, roots, 1, "", NULL, 0, 0), 300);
+	romlist_scan_stats(&hits, &reads, &fast);
+	CHECK_EQ(hits, 300);
+	/* Subcarpeta. */
+	CHECK_EQ(romlist_scan_sources_ex(l, roots, 1, "sub", NULL, 0, 0), 1);
+	CHECK(!strcmp(l->e[1].title, "SUB"));
+	romlist_cache_file(NULL);
+	(void)usb;
+	romlist_free(l);
+}
+
 static void menu_scan_dir(void)
 {
 	if (!t_tmp_dir)
@@ -2022,6 +2114,7 @@ void t_suite_menu(void)
 	RUN(menu_sort_by_title);
 	RUN(menu_sort_by_filename);
 	RUN(menu_scan_dir);
+	RUN(menu_scan_cache);
 	RUN(menu_last_rom);
 	RUN(menu_needs_release_first);
 	RUN(menu_refresh_buttons);

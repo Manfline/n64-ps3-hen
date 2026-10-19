@@ -4,6 +4,17 @@ All notable changes to Salsa64. Speeds are measured on a real PS3 (HEN,
 NTSC backups); `docs/perf-log.md` has the detailed numbers and
 `docs/estado.md` the work log (both in Spanish).
 
+## [Unreleased]
+
+### Changed
+- **Faster ROM list:** with a few hundred ROMs the menu spent about 8 s reading
+  their headers at start-up and again every time it came back from a game. The
+  headers are now cached in `romlist.cache` (name, size, date and the 64-byte
+  header of each file), so start-up only reads the files that are new or
+  changed, and coming back from a game does not read the folder again unless
+  its date changed. L3 still rebuilds the list from the disk (and rewrites the
+  cache). A damaged or older cache is ignored and rebuilt.
+
 ## [0.2.8] — 2026-10-18
 
 ### Added
