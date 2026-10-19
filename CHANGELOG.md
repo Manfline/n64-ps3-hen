@@ -6,6 +6,8 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 
 ## [Unreleased]
 
+## [0.2.9] — 2026-10-19
+
 ### Added
 - **Launch a ROM from outside** (issue #25): Salsa64 opens the ROM passed as
   `argv[1]` or, failing that, the first line of
@@ -22,6 +24,34 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
   changed, and coming back from a game does not read the folder again unless
   its date changed. L3 still rebuilds the list from the disk (and rewrites the
   cache). A damaged or older cache is ignored and rebuilt.
+
+### Fixed
+- **Memory between games:** the frame-interpolation tables of each game are
+  released when it closes. Before, after about 40 games in a row the biggest
+  ROMs (Resident Evil 2, Conker) failed to start until Salsa64 was restarted.
+  The log now reports the memory of each subsystem when a game closes.
+- **Interlaced video:** the image no longer moves up and down one line every
+  field in Star Wars: Rogue Squadron.
+- **Render-to-texture alpha:** 16-bit render targets that are not the VI image
+  are created with an alpha channel, so what a game draws with alpha 0 and then
+  uses as a texture stays transparent. The file
+  `/dev_hdd0/salsa64/sin-alfa-destinos` turns it off.
+
+### Known issues
+- Mario Tennis and some Rogue Squadron menu logos still have no transparency
+  (they do not go through render-to-texture). The Racer video jumps by about
+  half a screen.
+- Yoshi's Story can hang when hitting a block, and shows vanishing objects and
+  dots on textures. Conker's final boss shows but lacks textures and is slow.
+- Mortal Kombat 4 has no health bars. Pokémon Snap: texture order, slow intro.
+  Star Fox 64: the menu duplicates options. Majora's Mask: lighting.
+- NBA Showtime runs sped up. Road Rash 64 does not reach full speed.
+- Zelda: Ocarina of Time: torch glows show through walls.
+- Resident Evil 2: the letters of the OPTIONS menu are garbled, and the statue
+  room runs at 65-80 %.
+- ROMs larger than 64 MB are not supported.
+- Perfect Dark slows down in scenes of more than about 2300 triangles.
+- Frame interpolation (experimental) still leaves a trail on 2D sprites (#17).
 
 ## [0.2.8] — 2026-10-18
 
