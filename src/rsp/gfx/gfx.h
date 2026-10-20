@@ -112,7 +112,30 @@ struct gfx_job {
 	 * o, con GFX_JOB_XBUS, de la DMEM en dmem_ea (4 KB). */
 	uint32_t dl_end;
 	uint64_t dmem_ea;
+	/* Diagnóstico opcional externo; cero no reserva ni transfiere detalle. */
+	uint64_t detail_ea;
+	uint32_t detail_cap, detail_version;
 };
+
+#define GFX_DETAIL_VERSION 1u
+/* Todos los campos son palabras sin punteros; tamaño múltiplo de 16.
+ * Tiempos anidados: DMA está incluido en las etapas; no sumarlo otra vez. */
+struct gfx_detail {
+	uint32_t version, task, bytes, commands;
+	uint32_t reads[4], requested[4], transferred[4], read_ticks[4];
+	uint32_t send_ticks[4];  /* envío; read_ticks mide la espera, ambos anidados */
+	uint32_t dl_fetches, dl_bytes, dl_hits, dl_misses;
+	uint32_t dma_puts[3], dma_bytes[3], wait_ticks[3];
+	uint32_t vertex_calls, vertices, lit_vertices, fog_vertices, texgen_vertices;
+	uint32_t triangles_in, triangles_ok, triangles_common, triangles_near, triangles_clipped;
+	uint32_t vtx_bytes, cmd_bytes, tex_bytes, state_builds;
+	/* Partición exclusiva: vtx/state/load del resultado + triangle/matrix/
+	 * dl/end/rest. triangle excluye state; los demás no se solapan. */
+	uint32_t t_total, t_vtx, t_state, t_load, t_triangle, t_matrix, t_dl, t_end, t_rest;
+	uint32_t reserved[4];
+};
+_Static_assert(sizeof(struct gfx_job) == 112, "descriptor gráfico de 112 bytes");
+_Static_assert(sizeof(struct gfx_detail) % 16 == 0, "detalle apto para DMA");
 
 #define GFX_JOB_RESET 0x1u  /* olvidar el estado del RDP (reset de la consola) */
 #define GFX_JOB_NOCACHE 0x2u  /* no usar ni llenar la caché (para medir) */

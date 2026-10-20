@@ -96,6 +96,13 @@ La escala elegida (`salsa64_rdp_init`, 0 = automática, 1–5) es un **objetivo 
 
 ## Local store de los SPEs (256 KB c/u)
 
+Diagnóstico opcional `gfx-spe-detalle`: bloque DMA de 256 bytes y acumulador
+de palabras de 64 bits, solo reservados en XDR al activar el archivo (menos
+de 1 KB, incluido alineamiento). La imagen 1 usa un marco separado alineado
+a 128 en su pila solo para tareas instrumentadas, sin bloque estático ni
+reducción de la caché. Las holguras verificadas se registran en
+`docs/estado.md`; el enlace sigue exigiendo al menos 1536 bytes.
+
 | Programa | Código | Datos + búferes | Total | Fuente |
 |---|---|---|---|---|
 | `spu-compute/spu/mix.c` | 2,6 KB | 0,8 KB + 64 KB | ~69 KB | `spu-size` en el build |

@@ -76,6 +76,46 @@ uint32_t gfx_io_clock(void)
 	return ~spu_read_decrementer();  /* el decrementador cuenta hacia abajo */
 }
 
+#if GFX_SPE0_IMG == 1
+void gfx_io_detail_begin(struct gfx_state *g)
+{
+#if GFX_SPE0_IMG == 1
+	if (g->detail) {
+		memset(g->detail, 0, sizeof *g->detail);
+		g->detail->version = GFX_DETAIL_VERSION;
+		g->detail->task = g->job->task;
+		g->detail->bytes = sizeof *g->detail;
+	}
+#else
+	(void)g;
+#endif
+}
+
+void gfx_io_detail_end(struct gfx_state *g)
+{
+#if GFX_SPE0_IMG == 1
+	if (g->detail) {
+		/* Etiqueta propia; el resultado de spukit se publica después. */
+		spukit_dma_put(g->detail, (uint32_t)g->job->detail_ea, sizeof *g->detail, TAG_WR);
+		spukit_dma_wait(1u << TAG_WR);
+	}
+#else
+	(void)g;
+#endif
+}
+#endif
+
+#define DETAIL_WAIT(g, mask, index) do { \
+	uint32_t tw = 0; \
+	GFX_DETAIL(g, tw = gfx_io_clock()); \
+	spukit_dma_wait(mask); \
+	GFX_DETAIL(g, (g)->detail->wait_ticks[index] += gfx_io_clock() - tw); \
+} while (0)
+#define DETAIL_PUT(g, index, size) GFX_DETAIL(g, { \
+	(g)->detail->dma_puts[index] += ((size) + 16383u) / 16384u; \
+	(g)->detail->dma_bytes[index] += (size); \
+})
+
 void gfx_io_begin(struct gfx_state *g)
 {
 	(void)g;
@@ -110,10 +150,11 @@ static void flush_vtx(struct gfx_state *g)
 		return;
 	int b = io.vtx_cur;
 	spukit_dma_put(vtx_buf[b], ea32(g->job->vtx_ea + io.vtx_flushed), (io.vtx_fill + 15) & ~15u, TAG_VTX + b);
+	DETAIL_PUT(g, 0, (io.vtx_fill + 15) & ~15u);
 	io.vtx_flushed += io.vtx_fill;
 	io.vtx_fill = 0;
 	io.vtx_cur ^= 1;
-	spukit_dma_wait(1u << (TAG_VTX + io.vtx_cur));  /* el otro búfer, libre */
+	DETAIL_WAIT(g, 1u << (TAG_VTX + io.vtx_cur), 0);  /* el otro búfer, libre */
 }
 
 static void flush_cmd(struct gfx_state *g)
@@ -122,10 +163,11 @@ static void flush_cmd(struct gfx_state *g)
 		return;
 	int b = io.cmd_cur;
 	spukit_dma_put(cmd_buf[b], ea32(g->job->cmd_ea + io.cmd_flushed), io.cmd_fill, TAG_CMD + b);
+	DETAIL_PUT(g, 1, io.cmd_fill);
 	io.cmd_flushed += io.cmd_fill;
 	io.cmd_fill = 0;
 	io.cmd_cur ^= 1;
-	spukit_dma_wait(1u << (TAG_CMD + io.cmd_cur));
+	DETAIL_WAIT(g, 1u << (TAG_CMD + io.cmd_cur), 1);
 }
 
 void gfx_io_end(struct gfx_state *g)
@@ -155,6 +197,20 @@ const uint8_t *gfx_io_read(struct gfx_state *g, enum gfx_io_slot slot, uint32_t 
 	}
 	if (size + 32 > cap)
 		return NULL;
+	GFX_DETAIL(g, {
+		uint64_t ea = rdram_ea(g, addr), start = ea & ~15ull;
+		uint32_t len = (uint32_t)(((ea + size + 15) & ~15ull) - start);
+		g->detail->reads[slot]++;
+		g->detail->requested[slot] += size;
+		g->detail->transferred[slot] += len;
+		uint32_t t = gfx_io_clock();
+		spukit_dma_get(buf, start, len, TAG_READ);
+		g->detail->send_ticks[slot] += gfx_io_clock() - t;
+		t = gfx_io_clock();
+		spukit_dma_wait(1u << TAG_READ);
+		g->detail->read_ticks[slot] += gfx_io_clock() - t;
+		return buf + (ea - start);
+	});
 	return spukit_get_unaligned(buf, rdram_ea(g, addr), size, TAG_READ);
 }
 
@@ -198,10 +254,11 @@ static void dl_fetch(struct gfx_state *g, int b, uint32_t block)
 	if (block + len > g->job->rdram_size)
 		len = g->job->rdram_size - block;
 	spukit_dma_get(dl_buf[b], rdram_ea(g, block), (len + 15) & ~15u, TAG_DL + b);
+	GFX_DETAIL(g, { g->detail->dl_fetches++; g->detail->dl_bytes += (len + 15) & ~15u; });
 	io.dl_addr[b] = block;
 }
 
-bool gfx_io_dl(struct gfx_state *g, uint32_t addr, uint32_t *w0, uint32_t *w1)
+static inline __attribute__((always_inline)) bool dl_read(struct gfx_state *g, uint32_t addr, uint32_t *w0, uint32_t *w1)
 {
 	addr &= ~7u;
 	if (addr + 8 > g->job->rdram_size)
@@ -209,6 +266,7 @@ bool gfx_io_dl(struct gfx_state *g, uint32_t addr, uint32_t *w0, uint32_t *w1)
 	uint32_t block = addr & ~(DL_BLOCK - 1);
 	int b = io.dl_cur;
 	if (io.dl_addr[b] != block) {
+		GFX_DETAIL(g, g->detail->dl_misses++);
 		int o = b ^ 1;
 		if (io.dl_addr[o] == block) {
 			/* El bloque siguiente que se pidió antes: ya llegó o está llegando. */
@@ -225,6 +283,8 @@ bool gfx_io_dl(struct gfx_state *g, uint32_t addr, uint32_t *w0, uint32_t *w1)
 			spukit_dma_wait(1u << (TAG_DL + o2));
 			dl_fetch(g, o2, next);
 		}
+	} else {
+		GFX_DETAIL(g, g->detail->dl_hits++);
 	}
 	const uint8_t *p = dl_buf[b] + (addr - block);
 	*w0 = salsa64_rd32(p);
@@ -238,6 +298,15 @@ bool gfx_io_dl(struct gfx_state *g, uint32_t addr, uint32_t *w0, uint32_t *w1)
 	}
 #endif
 	return true;
+}
+
+bool gfx_io_dl(struct gfx_state *g, uint32_t addr, uint32_t *w0, uint32_t *w1)
+{
+	uint32_t t = 0;
+	GFX_DETAIL(g, t = gfx_io_clock());
+	bool ok = dl_read(g, addr, w0, w1);
+	GFX_DETAIL(g, g->detail->t_dl += gfx_io_clock() - t);
+	return ok;
 }
 
 struct gfx_vertex *gfx_io_vtx(struct gfx_state *g, uint32_t n)
@@ -274,7 +343,7 @@ uint8_t *gfx_io_tex_begin(struct gfx_state *g, uint32_t size)
 	if (size > GFX_TEX_MAX)
 		return NULL;
 	/* El búfer se reutiliza cuando su DMA anterior terminó. */
-	spukit_dma_wait(1u << (TAG_TEX + io.tex_cur));
+	DETAIL_WAIT(g, 1u << (TAG_TEX + io.tex_cur), 2);
 	return tex_buf[io.tex_cur];
 }
 
@@ -286,6 +355,7 @@ int32_t gfx_io_tex_commit(struct gfx_state *g, uint32_t size)
 		return -1;
 	}
 	spukit_dma_put(tex_buf[io.tex_cur], ea32(g->job->tex_ea + off), (size + 15) & ~15u, TAG_TEX + io.tex_cur);
+	DETAIL_PUT(g, 2, (size + 15) & ~15u);
 	io.tex_cur ^= 1;
 	io.tex_used = off + size;
 	return (int32_t)off;
@@ -294,5 +364,6 @@ int32_t gfx_io_tex_commit(struct gfx_state *g, uint32_t size)
 void gfx_io_tex_cache(struct gfx_state *g, uint32_t off, uint32_t size)
 {
 	spukit_dma_put(tex_buf[io.tex_cur], ea32(g->job->cache_ea + off), (size + 15) & ~15u, TAG_TEX + io.tex_cur);
+	DETAIL_PUT(g, 2, (size + 15) & ~15u);
 	io.tex_cur ^= 1;
 }

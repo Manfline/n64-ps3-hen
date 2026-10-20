@@ -1,5 +1,6 @@
 # Estado
 
+
 ## 2026-10-20 — Road Rash 64: colisión de descartes de espera, no escrituras de código
 
 Rama `roadrash`, sobre v0.2.9. Diagnóstico, reproducción y archivo A/B en
@@ -55,6 +56,57 @@ Rama `roadrash`, sobre v0.2.9. Diagnóstico, reproducción y archivo A/B en
   emisor, descartes y desalojos; comprobar gráficos y audio al entrar y
   salir de carrera. El costo del código nativo y de gráficos sigue ahí:
   no se promete velocidad completa sin medir en la consola.
+
+## 2026-10-20 — Detalle opcional de la HLE gráfica del SPE
+
+Rama `gfx-spe-detalle`, base `10b19cc`. Instrumentación para separar los
+3,80 ms/tarea residuales (43,23 %) de Road Rash, sin optimización del
+camino gráfico. El archivo `/dev_hdd0/salsa64/gfx-spe-detalle`, leído al
+abrir el juego, activa solo la imagen 1; renombrarlo a `.off` y reabrir
+revierte el diagnóstico. Uso, campos y límites en `docs/gfx-spe-detalle.md`.
+
+- `gfx_job` aprovecha sus 16 bytes libres para dirección/capacidad/versión
+  de un bloque DMA de 256 bytes. Descriptor y `gfx_result` quedan en 112
+  bytes, con comprobaciones al compilar; la cola MIT no cambia. El SPE
+  espera el DMA del detalle antes de devolver el resultado. El PPE valida
+  tarea/versión/tamaño y resume cada 100 tareas instrumentadas y al cerrar.
+- Cuenta DMA de lectura por ranura y de salida por tipo, bytes pedidos y
+  alineados, envío/espera, vértices, luces/niebla/ST, triángulos de entrada,
+  aceptados y recortados/rechazados, estado, listas y salida. Tiempos
+  exclusivos de triángulos sin estado, matrices, listas y cierre; resto
+  explícito para cerrar contra `t_total`. Las esperas DMA son desglose
+  anidado, no sumandos adicionales.
+- Sin archivo no se reserva bloque/acumulador XDR ni marco de detalle en
+  el SPE; no hay DMA diagnóstico, lecturas extra del reloj ni incrementos
+  nuevos. El binario conserva comprobaciones de activación. Las imágenes
+  distintas de la 1 eliminan las llamadas y contadores por preprocesador;
+  no se reduce la caché de texturas.
+- Autoprueba en la consola: 17 pares sin/con detalle de una lista propia,
+  alternando orden, RDP reiniciado y caché desactivada, salida exacta y
+  mediana/mínimo/máximo del manejador. La autoprueba habitual contrasta
+  además el SPE instrumentado con el PPE. Por ejecutar en PS3.
+- Docker `test-host`: **661 pruebas, 870624 verificaciones, 0 fallidas**,
+  ASan y UBSan; prueba nueva de paridad y de capacidad/versión rechazadas.
+  La orden sin opciones tropieza con un aviso previo de GCC en
+  `test_menu.c:225` (`format-truncation`); pasó con
+  `EXTRA_CFLAGS=-Wno-format-truncation`, sin cambiar el menú.
+- Build Docker completo del frontend y paquete: imagen 1, texto 103536,
+  datos 800, bss 145808, `_end` 250256 y cadena de pila 10112 bytes;
+  holguras imágenes 0–4: **1632 / 1760 / 14144 / 2960 / 1648**, todas sobre
+  el mínimo de 1536. La imagen 1 deja solo 224 bytes sobre ese mínimo:
+  cualquier ampliación requiere volver a comprobar el presupuesto.
+- Paquete: `build/salsa64-gfx-spe-detalle/salsa64-gfx-spe-detalle.pkg`,
+  3314896 bytes, SHA-256
+  `a8d3ec1c95af61a5cdcc6ec4a1439fd122c17aef9fdde079574bb54a4f0acbf9`.
+  No se ejecutaron ROMs ni `--lle-check-gfx`; quedan la comparación con una
+  captura autorizada y la validación de sincronización/coste en PS3.
+
+Techo de ganancia de esta entrega: cero; aporta medidas. En la consola,
+exigir primero autopruebas sin diferencias, después repetir el mismo
+recorrido y configuración con y sin archivo, conservando aperturas y
+ventanas separadas. El detalle puede perturbar tiempos y solape del DMA;
+si el coste es alto, muestrear tareas completas antes de decidir un cambio.
+
 
 ## 2026-10-18 — Resident Evil 2: el logo de N64 salía a un cuarto
 
