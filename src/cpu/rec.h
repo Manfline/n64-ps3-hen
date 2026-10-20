@@ -32,6 +32,7 @@
 #include "core/bus.h"
 #include "core/types.h"
 #include "cpu/rec_prof.h"
+#include "cpu/rec_diag.h"
 #include "cpu/rec_sample.h"
 #include "cpu/rec_profile.h"
 #include "cpu/rec_tlb.h"
@@ -269,7 +270,13 @@ struct salsa64_rec_jtc {
 	uint32_t code;       /* palabra de entrada del bloque en la caché */
 };
 
+/* Quitar la consulta de espera recompilando e invalidando rangos, para A/B. */
+#define SALSA64_REC_OPT_IDLE_RECOMPILE 0x40000u
+
 struct salsa64_rec {
+	struct salsa64_rec_diag diag;
+	uint32_t idle_patch[SALSA64_REC_MAX_BLOCKS + 1];
+	uint32_t compiled_idle_patch;
 	uint32_t opts;
 	/* Bytes de la zona caliente (las dos mitades juntas); 0 = sin zona. Se
 	 * pone antes de salsa64_rec_init, que lo conserva y lo recorta a lo que

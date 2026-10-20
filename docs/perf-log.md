@@ -1,5 +1,57 @@
 # Registro de rendimiento
 
+## 2026-10-20 — Road Rash 64: evitar retraducciones por descartes de espera (host/qemu)
+
+NTSC, respaldo propio; 8 MB de RDRAM, Controller Pak nuevo en memoria,
+`docs/pads/roadrash-carrera.pad`, hasta el campo 2100 (3 290 786 100 ciclos,
+35,10 s de consola). Docker + qemu-ppc64 `power9`, registros fijos, caché
+24 MB, HLE gráfica y audio del host, **sin rasterizador**. Un mismo binario,
+primero `SALSA64_REC_IDLE_RECOMPILE=1`, después por omisión. Los logs locales
+son `build/roadrash/antes-final.log` y `despues-final.log`.
+
+| Cuenta o tiempo | Recompilar al descartar | Parche de una palabra |
+|---|---:|---:|
+| Bloques compilados | 61 422 | 8819 |
+| Repeticiones de dirección/largo/huella | 52 597 | 0 |
+| Tiempo del emisor (ms, timebase de qemu calibrado) | 3589,710 | 357,720 |
+| Del anterior, repeticiones (ms) | 3173,611 | 0 |
+| Invalidaciones por descarte de espera | 42 375 | 0 |
+| De las anteriores, huella MIPS idéntica | 42 375 | 0 |
+| Consultas quitadas por parche | 0 | 520 |
+| Invalidaciones por CPU / PI / otros escritores | 0 / 0 / 0 | 0 / 0 / 0 |
+| Bloques retirados por desalojo | 14 554 | 0 |
+| Desalojos de tramo | 29 | 2 (aún vacíos) |
+| Recortes por CU1 | 7 | 0 |
+| Contador histórico total de invalidados | 56 936 | 0 |
+| DMA del PI | 3622 | 3622 |
+| Detalles perdidos por tablas llenas | 0 | 0 |
+
+Compilaciones **−85,6 %**, tiempo dentro del emisor **−90,0 %** en esta
+medición de qemu. El tiempo total fue 66,11 / 35,53 s, pero hubo otras
+verificaciones concurrentes: no se usa como una ganancia controlada de
+rendimiento y, en particular, **no son tiempos ni FPS de la PS3**.
+
+Los saltos `8003ae0c` y `8003b824` comparten la ranura 49 del detector.
+Los bloques `8003ad84`, `8003adf0`, `8003b788`, `8003b7d8` se tradujeron
+10 420 veces cada uno con los mismos bytes MIPS en el modo anterior. Los
+cuatro acumularon 2837,338 ms de timebase del host al emitirlos. Los 7
+invalidados que faltan al sumar descartes y desalojos son recortes por CU1.
+No hubo escritura del juego que explicara las invalidaciones masivas.
+
+El estado entero final (antes / después / lockstep) tiene SHA-256
+`517c4364211057f7a26008c74db80f1dbb8ef5e855ac96371973464f0c43f451`.
+Road Rash pasa lockstep en 2100 campos; SM64, GoldenEye, MK64 y OoT en 600
+campos cada uno (inicio, sin recorrido de juego de esos controles). Más
+alcance y limitaciones de las pruebas en `docs/estado.md`.
+
+El log anterior de la consola registró 46 259 invalidados y 17 desalojos
+sin distinguir las causas. Un perfil anterior de otra partida tenía solo
+154 retraducciones en 13 988 campos; no era el mismo recorrido. La
+reproducción actual identifica el mecanismo de la cifra masiva, pero el
+paquete nuevo **todavía requiere A/B en PS3** con el archivo
+`/dev_hdd0/salsa64/jit-invalidacion-vieja`. No se extrapolan los milisegundos
+del host al Cell.
+
 Cada optimización lleva medición antes/después **en PS3 real** (RPCS3 no
 reproduce los tiempos del Cell). Formato: fecha, commit, prueba, entorno,
 antes, después, notas.

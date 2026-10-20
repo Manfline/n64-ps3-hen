@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — pruebas de la detección de bucles de espera (cpu/idle.c).
  *
@@ -7,6 +8,7 @@
  * nada visible.
  */
 #include "test.h"
+#include "cpu/rec.h"
 
 #include <string.h>
 
@@ -410,8 +412,74 @@ static void idle_poll_after_irq(void)
 	CHECK(!rejected(CODE(6)));
 }
 
+/* Descartar una consulta conserva la traducción y su delay slot. Una
+ * escritura real posterior tiene que invalidarla y ejecutar el código nuevo. */
+static void idle_patch_keeps_code(void)
+{
+	for (unsigned likely = 0; likely < 2; likely++) {
+		restart(true);
+		uint32_t branch = BNE(T0, 0, -2) | (likely ? 0x40000000u : 0);
+		uint32_t code[] = { ADDIU(T0, 0, 100), ADDIU(T0, T0, -1), branch, ADDIU(T1, T1, 1), J(CODE(4)), NOP };
+		t_load(code, sizeof code / sizeof code[0]);
+		R[T1] = 0;
+		struct salsa64_rec *rec = CPU->rec;
+		uint64_t killed = rec ? rec->stats.invalidated : 0, patched = rec ? rec->diag.idle_patched : 0;
+		salsa64_n64_run(&t_n64, 500);
+		CHECK_EQ(R[T0], 0);
+		CHECK_EQ(R[T1], likely ? 99 : 100);
+		if (rec && !(rec->opts & SALSA64_REC_OPT_IDLE_RECOMPILE)) {
+			CHECK(rec->diag.idle_patched > patched);
+			CHECK_EQ(rec->stats.invalidated, killed);
+		}
+		t_wr32(CODE(1), ADDIU(T0, T0, -2));
+		R[T0] = 14;
+		R[T1] = 0;
+		salsa64_cpu_set_pc(CPU, T_CODE + 4);
+		salsa64_n64_run(&t_n64, 100);
+		CHECK_EQ(R[T0], 0);
+		CHECK_EQ(R[T1], likely ? 6 : 7);
+	}
+}
+
+static void setup_rejected_jump(void)
+{
+	T_LOAD(ADDIU(T0, T0, 1), J(CODE(0)), ADDIU(T1, T1, 1));
+}
+
+static void idle_patch_jump_exact(void)
+{
+	CHECK_EQ(same_both_ways(setup_rejected_jump, 1001), 0);
+}
+
+/* Dos saltos distintos comparten una ranura del detector. El descarte
+ * de uno no debe obligar a retraducir el otro en cada vuelta. */
+static void idle_patch_colliding_rejections(void)
+{
+	restart(true);
+	const uint32_t a = 0x3AE0Cu, b = 0x3B824u;
+	CHECK_EQ(SALSA64_IDLE_SLOT(0x80000000u | a), SALSA64_IDLE_SLOT(0x80000000u | b));
+	uint32_t sub[] = { ADDIU(T0, 0, 3), ADDIU(T0, T0, -1), BNE(T0, 0, -2), NOP, JR(RA), NOP };
+	for (unsigned k = 0; k < sizeof sub / sizeof sub[0]; k++) {
+		t_wr32(a - 8 + 4 * k, sub[k]);
+		t_wr32(b - 8 + 4 * k, sub[k]);
+	}
+	T_LOAD(JAL(0x3AE04u), NOP, JAL(0x3B81Cu), NOP, J(T_CODE_PA), ADDIU(T2, T2, 1));
+	R[T2] = 0;
+	struct salsa64_rec *rec = CPU->rec;
+	uint64_t compiled = rec ? rec->stats.compiled : 0;
+	salsa64_n64_run(&t_n64, 3000);
+	CHECK_EQ(R[T2], 100);
+	CHECK_EQ(R[T0], 0);
+	CHECK_EQ(CPU->pc, T_CODE);
+	if (rec && !(rec->opts & SALSA64_REC_OPT_IDLE_RECOMPILE))
+		CHECK(rec->stats.compiled - compiled < 32);
+}
+
 void t_suite_idle(void)
 {
+	RUN(idle_patch_colliding_rejections);
+	RUN(idle_patch_keeps_code);
+	RUN(idle_patch_jump_exact);
 	RUN(idle_self_loop);
 	RUN(idle_vi_wait_exact);
 	RUN(idle_counter_not_skipped);

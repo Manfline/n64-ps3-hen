@@ -118,3 +118,16 @@ La escala elegida (`salsa64_rdp_init`, 0 = automática, 1–5) es un **objetivo 
 Medido en la PS3 abriendo ~40 juegos seguidos sin salir de Salsa64 (log con «memoria tras soltar la ROM» y «memoria al cerrar el juego»): con la ROM ya soltada, la memoria de usuario libre quedaba en 76 264 KB en cada cierre hasta que Rush 2049 encendió la interpolación por geometría desde la pausa. Sus tablas (2,4 MB, `memalign` en el heap) se reservaron con la memoria del juego ya en el heap, quedaron por encima y fijaron el tope: el heap pasó de 77 828 a 84 456 KB y ya no los devolvió. La memoria libre bajó a 70 120 KB para el resto de la sesión y Resident Evil II (ROM de 64 MB) se quedó con 4 584 KB, sin lo que pide el hilo de emulación. Ahora las tablas se sueltan en `game_close` (`salsa64_rdp_interp_release`) y se vuelven a pedir al abrir el siguiente si la interpolación sigue encendida.
 
 Quedan sin explicar ~2 KB de heap en uso por juego (75 365 → 75 454 KB en 37 aperturas, más bloques libres sueltos: 10 → 74): se parecen a los datos por hilo que newlib reserva al crear los hilos de emulación y de audio. Cada cierre escribe ahora dos líneas, «memoria, reservado por subsistema» y «memoria, cambio frente al cierre anterior», para ver qué crece de una apertura a otra.
+
+
+### Road Rash: medición y parche de consultas de espera (2026-10-20)
+
+`sizeof(struct salsa64_rec)` con estas tablas: **15 383 104 bytes** (14,670
+MiB en el host de 64 bits). El añadido es fijo, **1 638 568 bytes** de datos
+más alineación (~1,563 MiB): `struct salsa64_rec_diag` 1 376 416 bytes
+(huella por id, 16 384 identidades de compilación y 8192 sitios con sus
+cuentas) y 262 144 bytes para el sitio PPC de cada id, más la palabra del
+sitio en compilación y su relleno. No se reserva memoria por bloque ni por
+invalidación. La tabla de detalles tiene sondeo limitado a 64 entradas y
+cuenta los desbordamientos; los totales por causa no se pierden. Véase
+`docs/roadrash-invalidaciones.md`.

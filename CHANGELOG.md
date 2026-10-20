@@ -6,6 +6,10 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 
 ## [Unreleased]
 
+- **Road Rash 64:** keep translated blocks when rejecting idle-loop probes;
+  colliding probe entries repeatedly recompiled unchanged code. Add per-cause
+  counters and `jit-invalidacion-vieja` for comparison (PS3 performance pending).
+
 ## [0.2.9] — 2026-10-19
 
 ### Added
