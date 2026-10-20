@@ -30,6 +30,16 @@
 #include "spu_gfx0_stack.h"
 #include "spu_gfx1_bin.h"
 #include "spu_gfx1_stack.h"
+#include "spu_gfx1fase1_bin.h"
+#include "spu_gfx1fase1_stack.h"
+#include "spu_gfx1fase2_bin.h"
+#include "spu_gfx1fase2_stack.h"
+#include "spu_gfx1fase3_bin.h"
+#include "spu_gfx1fase3_stack.h"
+#include "spu_gfx1fase4_bin.h"
+#include "spu_gfx1fase4_stack.h"
+#include "spu_gfx1fase5_bin.h"
+#include "spu_gfx1fase5_stack.h"
 #include "spu_gfx2_bin.h"
 #include "spu_gfx2_stack.h"
 #include "spu_gfx3_bin.h"
@@ -40,19 +50,35 @@
 /* Las imágenes embebidas (src/frontend/Makefile) y sus números del build
  * (tools/spu-stack.py): hasta dónde llega el programa en el local store y
  * la holgura de la pila. */
-static const struct {
+struct gfx_spu_image {
 	const u8 *bin;
 	const u32 *size;
 	uint32_t end, stack;
 	int32_t slack;
-} images[GFX_SPE0_IMAGES] = {
+};
+static const struct gfx_spu_image images[GFX_SPE0_IMAGES] = {
 	{ spu_gfx0_bin, &spu_gfx0_bin_size, SPU_GFX0_END, SPU_GFX0_STACK, SPU_GFX0_SLACK },
 	{ spu_gfx1_bin, &spu_gfx1_bin_size, SPU_GFX1_END, SPU_GFX1_STACK, SPU_GFX1_SLACK },
 	{ spu_gfx2_bin, &spu_gfx2_bin_size, SPU_GFX2_END, SPU_GFX2_STACK, SPU_GFX2_SLACK },
 	{ spu_gfx3_bin, &spu_gfx3_bin_size, SPU_GFX3_END, SPU_GFX3_STACK, SPU_GFX3_SLACK },
 	{ spu_gfx4_bin, &spu_gfx4_bin_size, SPU_GFX4_END, SPU_GFX4_STACK, SPU_GFX4_SLACK },
 };
+static const struct gfx_spu_image phase_images[] = {
+	{ NULL, NULL, 0, 0, 0 },
+	{ spu_gfx1fase1_bin, &spu_gfx1fase1_bin_size, SPU_GFX1FASE1_END, SPU_GFX1FASE1_STACK, SPU_GFX1FASE1_SLACK },
+	{ spu_gfx1fase2_bin, &spu_gfx1fase2_bin_size, SPU_GFX1FASE2_END, SPU_GFX1FASE2_STACK, SPU_GFX1FASE2_SLACK },
+	{ spu_gfx1fase3_bin, &spu_gfx1fase3_bin_size, SPU_GFX1FASE3_END, SPU_GFX1FASE3_STACK, SPU_GFX1FASE3_SLACK },
+	{ spu_gfx1fase4_bin, &spu_gfx1fase4_bin_size, SPU_GFX1FASE4_END, SPU_GFX1FASE4_STACK, SPU_GFX1FASE4_SLACK },
+	{ spu_gfx1fase5_bin, &spu_gfx1fase5_bin_size, SPU_GFX1FASE5_END, SPU_GFX1FASE5_STACK, SPU_GFX1FASE5_SLACK },
+};
 _Static_assert(GFX_SPE0_IMAGES == 5, "una entrada de `images` por imagen del SPE 0");
+
+static const struct gfx_spu_image *image_data(const struct salsa64_gfx_spu *s, int img)
+{
+	if (img == GFX_SPE0_F3DEX2 && s->detail_phase)
+		return &phase_images[s->detail_phase];
+	return &images[img];
+}
 
 /* El hash con SIMD del SPE (identidad de las texturas en la caché) debe dar
  * lo mismo que el de C: tramos que cortan bloques de 16 bytes y que dan la
@@ -96,6 +122,7 @@ static int check_hash(spukit_worker *w)
  * los bytes «sin tocar» del log son exactos; sin él, los que siguen en cero. */
 #define SPE0_STACK_PATH SALSA64_DATA_DIR "/spe0-pila"
 #define SPE0_DETAIL_PATH SALSA64_DATA_DIR "/gfx-spe-detalle"
+#define SPE0_PHASE_PATH SALSA64_DATA_DIR "/gfx-fase-"
 #define SPE0_SCALAR_PATH SALSA64_DATA_DIR "/gfx-escalar"
 struct detail_window {
 	struct gfx_detail task __attribute__((aligned(128)));
@@ -105,7 +132,15 @@ struct detail_window {
 };
 
 #define DS(w, field) ((w)->sum[offsetof(struct gfx_detail, field) / 4])
-static void detail_log(struct detail_window *w)
+static const char *detail_phase_name(uint32_t phase)
+{
+	static const char *const names[] = {
+		"matriz", "desempacado", "proyeccion/division", "recorte", "niebla", "conversion/escritura",
+	};
+	return phase < sizeof names / sizeof names[0] ? names[phase] : "desconocida";
+}
+
+static void detail_log(struct detail_window *w, uint32_t phase)
 {
 	if (!w || !w->count) return;
 	double k = 1000.0 / (spukit_tick_hz() * w->count), n = w->count;
@@ -133,11 +168,18 @@ static void detail_log(struct detail_window *w)
 	double nv = DS(w, vertices), nb = DS(w, vector_vertices);
 	double rdram = w->sum[offsetof(struct gfx_detail, send_ticks) / 4] +
 		       w->sum[offsetof(struct gfx_detail, read_ticks) / 4];
-	double matrix = DS(w, vtx_transform), rest = DS(w, t_vtx) - rdram - matrix;
-	salsa64_log("gfx detalle: vtx fases ms/tarea, ticks/vtx RDRAM %.3f/%.1f matriz %.3f/%.1f "
-		    "resto %.3f/%.1f (desemp/proy/recorte/niebla/entero/escritura; incluye vgroup)",
-		    rdram * k, nv ? rdram / nv : 0.0, matrix * k, nb ? matrix / nb : 0.0,
-		    rest * k, nv ? rest / nv : 0.0);
+	double measured = DS(w, vtx_transform), rest = DS(w, t_vtx) - rdram - measured;
+	if (phase) {
+		salsa64_log("gfx detalle: vtx fases ms/tarea, ticks/vtx RDRAM %.3f/%.1f fase %u %s %.3f/%.1f "
+			    "resto sin esa fase %.3f/%.1f (lote vectorial)",
+			    rdram * k, nv ? rdram / nv : 0.0, phase, detail_phase_name(phase),
+			    measured * k, nb ? measured / nb : 0.0, rest * k, nv ? rest / nv : 0.0);
+	} else {
+		salsa64_log("gfx detalle: vtx fases ms/tarea, ticks/vtx RDRAM %.3f/%.1f matriz %.3f/%.1f "
+			    "resto %.3f/%.1f (desemp/proy/recorte/niebla/entero/escritura)",
+			    rdram * k, nv ? rdram / nv : 0.0, measured * k, nb ? measured / nb : 0.0,
+			    rest * k, nv ? rest / nv : 0.0);
+	}
 	for (unsigned i = 0; i < 4; i++)
 		salsa64_log("gfx detalle: lectura %u (vtx/mtx/pequena/TMEM): peticiones %.1f bytes pedidos %.0f DMA %.0f "
 			    "envio %.3f espera %.3f ms/tarea (anidados)", i,
@@ -171,7 +213,7 @@ static void detail_account(struct salsa64_gfx_spu *s, uint64_t ticks)
 	for (unsigned i = 0; i < sizeof words / sizeof words[0]; i++) w->sum[i] += words[i];
 	if (!w->count) w->first = s->job.task;
 	w->last = s->job.task; w->count++; w->handler += ticks;
-	if (w->count == 100) detail_log(w);
+	if (w->count == 100) detail_log(w, s->detail_phase);
 }
 static struct {
 	/* Una sola RDRAM: la HLE no la escribe (los rellenos los copia el PPE
@@ -442,7 +484,7 @@ static void log_untouched(struct salsa64_gfx_spu *s, const char *when)
 	if (s->worker && spu_info(s->worker, &in))
 		salsa64_log("SPE 0: imagen %s %s: %u bytes de pila sin tocar nunca (%s; holgura del build %d; %u tareas "
 			    "en esta imagen)", gfx_spe0_name(s->image), when, in.untouched,
-			    in.filled ? "con el patrón" : "en cero, aproximado", (int)images[s->image].slack,
+			    in.filled ? "con el patrón" : "en cero, aproximado", (int)image_data(s, s->image)->slack,
 			    s->tasks - s->image_tasks0);
 }
 
@@ -486,6 +528,7 @@ static int load_image(struct salsa64_gfx_spu *s, int img, uint32_t gbi)
 	if (img < 0 || img >= GFX_SPE0_IMAGES)
 		return SPUKIT_EARG;
 	uint64_t t0 = sysGetSystemTime();
+	const struct gfx_spu_image *image = image_data(s, img);
 	int from = s->worker ? s->image : -1;
 	bool carry = false;
 	if (s->worker) {
@@ -501,7 +544,7 @@ static int load_image(struct salsa64_gfx_spu *s, int img, uint32_t gbi)
 	}
 	uint64_t t1 = sysGetSystemTime();
 	struct stat st;
-	s->worker = spukit_worker_start(images[img].bin, "salsa64_gfx", stat(SPE0_STACK_PATH, &st) == 0);
+	s->worker = spukit_worker_start(image->bin, "salsa64_gfx", stat(SPE0_STACK_PATH, &st) == 0);
 	if (!s->worker) {
 		salsa64_log("SPE 0: no arrancó la imagen %s (%d)", gfx_spe0_name(img), spukit_last_error());
 		s->image = -1;
@@ -603,6 +646,7 @@ static void spu_start(void *ctx, const struct salsa64_task *task, enum salsa64_g
 		s->job.detail_ea = (uint64_t)(uintptr_t)&w->task;
 		s->job.detail_cap = sizeof w->task;
 		s->job.detail_version = GFX_DETAIL_VERSION;
+		s->job.flags |= GFX_JOB_DETAIL_PHASE(s->detail_phase);
 	}
 	s->seq = spukit_post(s->worker, GFX_JOB_TASK, &s->job, sizeof s->job);
 	s->pending = true;
@@ -760,10 +804,20 @@ int salsa64_gfx_spu_init(struct salsa64_gfx_spu *s, const struct salsa64_bus *bu
 	 * para probarlas en RPCS3 con las ROMs de prueba, que usan solo una
 	 * familia. Después se sigue como siempre, con la primera. */
 	struct stat st;
-	if (stat(SPE0_DETAIL_PATH, &st) == 0) {
+	for (uint32_t phase = 1; phase <= 5; phase++) {
+		char path[sizeof SPE0_PHASE_PATH + 2];
+		snprintf(path, sizeof path, "%s%u", SPE0_PHASE_PATH, phase);
+		if (stat(path, &st) == 0) {
+			s->detail_phase = phase;
+			break;
+		}
+	}
+	if (stat(SPE0_DETAIL_PATH, &st) == 0 || s->detail_phase) {
 		s->detail = memalign(128, sizeof(struct detail_window));
 		if (s->detail) memset(s->detail, 0, sizeof(struct detail_window));
-		salsa64_log("gfx detalle: %s (solo imagen 1)", s->detail ? "activado" : "sin memoria, desactivado");
+		salsa64_log("gfx detalle: %s (solo imagen 1, fase %u: %s)",
+			s->detail ? "activado" : "sin memoria, desactivado", s->detail_phase,
+			detail_phase_name(s->detail_phase));
 	}
 	s->scalar = stat(SPE0_SCALAR_PATH, &st) == 0;
 	salsa64_log("gfx: geometria del SPE: %s", s->scalar ? "escalar (gfx-escalar)" : "vectorial");
@@ -796,7 +850,7 @@ void salsa64_gfx_spu_shutdown(struct salsa64_gfx_spu *s)
 		spukit_worker_stop(s->worker);
 	}
 	s->worker = NULL;
-	detail_log(s->detail);
+	detail_log(s->detail, s->detail_phase);
 	free(s->detail);
 	s->detail = NULL;
 }

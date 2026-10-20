@@ -415,18 +415,30 @@ static void gfx_vertices4_fog(struct gfx_state *g, const uint8_t *src, uint32_t 
 {
 	union { gfx_v4f q; float f[4]; } x, y, z, xo, yo, zo, wo;
 	const float *m = g->mvp;
+	/* `vtx_transform` se reutiliza para una única subfase seleccionada por
+ 	 * trabajo; sin una imagen de fase conserva la medida de la matriz. */
+	uint32_t t = 0;
+#if defined(GFX_SPE0_PHASE) && GFX_SPE0_PHASE == 1
+	GFX_DETAIL(g, t = ~spu_read_decrementer());
+#endif
 	for (unsigned i = 0; i < 4; i++, src += 16) {
 		x.f[i] = (float)(int16_t)salsa64_rd16(src + 0);
 		y.f[i] = (float)(int16_t)salsa64_rd16(src + 2);
 		z.f[i] = (float)(int16_t)salsa64_rd16(src + 4);
 	}
-	uint32_t t = 0;
+#if defined(GFX_SPE0_PHASE) && GFX_SPE0_PHASE == 1
+	GFX_DETAIL(g, g->detail->vtx_transform += ~spu_read_decrementer() - t;);
+#endif
+#if !defined(GFX_SPE0_PHASE)
 	GFX_DETAIL(g, t = gfx_io_clock());
+#endif
 	xo.q = v4_dot(x.q, y.q, z.q, m, 0);
 	yo.q = v4_dot(x.q, y.q, z.q, m, 1);
 	zo.q = v4_dot(x.q, y.q, z.q, m, 2);
 	wo.q = v4_dot(x.q, y.q, z.q, m, 3);
+	#if !defined(GFX_SPE0_PHASE)
 	GFX_DETAIL(g, g->detail->vtx_transform += gfx_io_clock() - t;);
+	#endif
 	src -= 64;
 	for (unsigned i = 0; i < 4; i++, src += 16) {
 		struct gfx_vtx *v = &g->vtx[v0 + i];
@@ -436,23 +448,47 @@ static void gfx_vertices4_fog(struct gfx_state *g, const uint8_t *src, uint32_t 
 		v->w = wo.f[i];
 		/* No se ramifica por plano: las comparaciones dan exactamente los
 		 * mismos seis bits que el OR condicional escalar. */
+	#if defined(GFX_SPE0_PHASE) && GFX_SPE0_PHASE == 3
+		GFX_DETAIL(g, t = ~spu_read_decrementer());
+	#endif
 		v->clip = (uint32_t)(v->x < -v->w) * GFX_CLIP_XN |
 			  (uint32_t)(v->x >  v->w) * GFX_CLIP_XP |
 			  (uint32_t)(v->y < -v->w) * GFX_CLIP_YN |
 			  (uint32_t)(v->y >  v->w) * GFX_CLIP_YP |
 			  (uint32_t)(v->z >  v->w) * GFX_CLIP_ZF |
 			  (uint32_t)(v->w < 0.0f) * GFX_CLIP_W;
+	#if defined(GFX_SPE0_PHASE) && GFX_SPE0_PHASE == 3
+		GFX_DETAIL(g, g->detail->vtx_transform += ~spu_read_decrementer() - t;);
+	#endif
 		/* La división queda escalar deliberadamente: el refinamiento que
 		 * emite spu-gcc para / reproduce el redondeo de la ruta de referencia. */
+	#if defined(GFX_SPE0_PHASE) && GFX_SPE0_PHASE == 2
+		GFX_DETAIL(g, t = ~spu_read_decrementer());
+	#endif
 		float iw = v->w != 0.0f ? 1.0f / v->w : 0.0f;
 		v->sx = g->vtrans[0] + v->x * iw * g->vscale[0];
 		v->sy = g->vtrans[1] - v->y * iw * g->vscale[1];
 		v->sz = g->vtrans[2] + v->z * iw * g->vscale[2];
+	#if defined(GFX_SPE0_PHASE) && GFX_SPE0_PHASE == 2
+		GFX_DETAIL(g, g->detail->vtx_transform += ~spu_read_decrementer() - t;);
+	#endif
+	#if defined(GFX_SPE0_PHASE) && GFX_SPE0_PHASE == 5
+		GFX_DETAIL(g, t = ~spu_read_decrementer());
+	#endif
 		v->s = (float)(int16_t)salsa64_rd16(src + 8) * ((float)g->tex_s / (65536.0f * 32.0f));
 		v->t = (float)(int16_t)salsa64_rd16(src + 10) * ((float)g->tex_t / (65536.0f * 32.0f));
 		v->c[0] = src[12]; v->c[1] = src[13]; v->c[2] = src[14];
+	#if defined(GFX_SPE0_PHASE) && GFX_SPE0_PHASE == 5
+		GFX_DETAIL(g, g->detail->vtx_transform += ~spu_read_decrementer() - t;);
+	#endif
+	#if defined(GFX_SPE0_PHASE) && GFX_SPE0_PHASE == 4
+		GFX_DETAIL(g, t = ~spu_read_decrementer());
+	#endif
 		float zw = v->w > 0.0f && v->z >= -v->w ? v->z * iw : -1.0f;
 		v->c[3] = (uint8_t)clampf(zw * g->fog_mul + g->fog_off + 0.5f, 0.0f, 255.0f);
+	#if defined(GFX_SPE0_PHASE) && GFX_SPE0_PHASE == 4
+		GFX_DETAIL(g, g->detail->vtx_transform += ~spu_read_decrementer() - t;);
+	#endif
 	}
 }
 #endif

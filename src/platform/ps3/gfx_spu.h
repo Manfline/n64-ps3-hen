@@ -43,6 +43,7 @@ struct salsa64_gfx_spu {
 	struct gfx_job job;
 	struct gfx_result res;
 	void *detail;        /* bloque opcional, solo con gfx-spe-detalle */
+	uint32_t detail_phase; /* gfx-fase-<n>, cero: matriz como antes */
 	uint32_t seq;
 	bool pending;
 	bool nocache;        /* el hash del SPE no coincide: sin caché de texturas */

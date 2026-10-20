@@ -51,11 +51,14 @@ SPUKIT  := 1
 # de Indiana Jones y Battle for Naboo (Factor 5 con su DMEM de 4 KB). Cada una
 # con sus objetos en obj/spu-gfx<n>.
 GFX_IMAGES := 0 1 2 3 4
-SPU_PROGS := $(addprefix gfx,$(GFX_IMAGES)) audio rsp jpeg crt lz
+GFX_PHASES := 1 2 3 4 5
+SPU_PROGS := $(addprefix gfx,$(GFX_IMAGES)) $(addprefix gfx1fase,$(GFX_PHASES)) audio rsp jpeg crt lz
 GFX_SPU_SRCS := $(R)/src/spu/gfx/main.c $(R)/src/spu/gfx/io_spu.c \
                 $(filter-out %/io_mem.c %/sync.c %/state.c %/selftest.c,$(wildcard $(R)/src/rsp/gfx/*.c))
 $(foreach i,$(GFX_IMAGES),$(eval gfx$(i)_SRCS := $(GFX_SPU_SRCS)) $(eval gfx$(i)_OBJDIR := spu-gfx$(i)) \
 	$(eval gfx$(i)_CFLAGS := -DGFX_SPE0_IMG=$(i)))
+$(foreach p,$(GFX_PHASES),$(eval gfx1fase$(p)_SRCS := $(GFX_SPU_SRCS)) $(eval gfx1fase$(p)_OBJDIR := spu-gfx1fase$(p)) \
+	$(eval gfx1fase$(p)_CFLAGS := -DGFX_SPE0_IMG=1 -DGFX_SPE0_PHASE=$(p)))
 audio_SRCS := $(R)/src/spu/audio/main.c $(R)/src/spu/audio/io_spu.c \
               $(filter-out %/io_mem.c %/sync.c %/selftest.c,$(wildcard $(R)/src/rsp/audio/*.c))
 rsp_SRCS   := $(R)/src/spu/rsp/main.c $(R)/src/spu/rsp/io_spu.c \
@@ -72,8 +75,10 @@ lz_SRCS    := $(R)/lib/spukit/spu/lz.c
 GFX_STACK_LIBC := --ignore exit --ignore __call_exitprocs --ignore __do_global_ctors_aux \
                   --ignore __do_global_dtors_aux --ignore register_tm_clones --ignore deregister_tm_clones
 $(foreach i,$(GFX_IMAGES),$(eval gfx$(i)_STACK_MIN := 1536))
+$(foreach p,$(GFX_PHASES),$(eval gfx1fase$(p)_STACK_MIN := 1536))
 gfx0_STACK_ARGS := --edge gfx_dl_f3d:pd_command --edge gfx_dl_f3d:dkr_command $(GFX_STACK_LIBC)
 gfx1_STACK_ARGS := --ignore gfx_dl_f3dex2 $(GFX_STACK_LIBC)
+$(foreach p,$(GFX_PHASES),$(eval gfx1fase$(p)_STACK_ARGS := $(gfx1_STACK_ARGS)))
 gfx2_STACK_ARGS := --edge gfx_dl_f3dex2:cbfd_command $(GFX_STACK_LIBC)
 gfx3_STACK_ARGS := --edge gfx_dl_f3d:f5_command $(GFX_STACK_LIBC)
 gfx4_STACK_ARGS := $(GFX_STACK_LIBC)

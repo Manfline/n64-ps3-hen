@@ -175,6 +175,11 @@ _Static_assert(sizeof(struct gfx_detail) % 16 == 0, "detalle apto para DMA");
  * de diagnóstico A/B: el PPE lo pone al abrir el juego si existe
  * gfx-escalar en el directorio de datos. */
 #define GFX_JOB_SCALAR 0x100u
+/* Una sola subfase del postproceso del lote SIMD, para no acumular marcos de
+ * reloj en la imagen 1. Solo tiene efecto con GFX_JOB_DETAIL_PHASE_MASK. */
+#define GFX_JOB_DETAIL_PHASE_SHIFT 9u
+#define GFX_JOB_DETAIL_PHASE_MASK  (7u << GFX_JOB_DETAIL_PHASE_SHIFT)
+#define GFX_JOB_DETAIL_PHASE(n)    ((uint32_t)(n) << GFX_JOB_DETAIL_PHASE_SHIFT)
 
 /* ---- Caché de texturas -------------------------------------------------------
  * Las texturas decodificadas viven en una región de memoria que pone el
