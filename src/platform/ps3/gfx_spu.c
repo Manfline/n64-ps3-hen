@@ -96,6 +96,7 @@ static int check_hash(spukit_worker *w)
  * los bytes «sin tocar» del log son exactos; sin él, los que siguen en cero. */
 #define SPE0_STACK_PATH SALSA64_DATA_DIR "/spe0-pila"
 #define SPE0_DETAIL_PATH SALSA64_DATA_DIR "/gfx-spe-detalle"
+#define SPE0_SCALAR_PATH SALSA64_DATA_DIR "/gfx-escalar"
 struct detail_window {
 	struct gfx_detail task __attribute__((aligned(128)));
 	uint64_t sum[sizeof(struct gfx_detail) / 4];
@@ -318,6 +319,52 @@ static int check_detail(spukit_worker *w, struct detail_window *detail)
 	return bad;
 }
 
+/* La lista propia de F3DEX2 trae cuatro vértices con niebla en cada G_VTX.
+ * Se corre una vez por carriles y otra con GFX_JOB_SCALAR sobre el mismo SPE;
+ * las salidas que consume el PPE deben coincidir palabra por palabra. Los
+ * ticks no se comparan porque precisamente son el objeto del A/B. */
+static int check_vector(spukit_worker *w)
+{
+	struct gfx_result out[2];
+	uint32_t ticks[2][17];
+	uint32_t dl = gfx_selftest_build(chk.ram, SALSA64_GBI_F3DEX2, 11);
+	int bad = 0;
+	for (unsigned sample = 0; sample < 17; sample++) for (unsigned pass = 0; pass < 2; pass++) {
+		unsigned mode = pass ^ (sample & 1);
+		struct gfx_job j;
+		check_job(&j, mode, SALSA64_GBI_F3DEX2, 11, dl);
+		j.flags = GFX_JOB_RESET | GFX_JOB_NOCACHE | (mode ? GFX_JOB_SCALAR : 0);
+		memset(chk.vtx[mode], 0, sizeof chk.vtx[mode]);
+		memset(chk.cmd[mode], 0, sizeof chk.cmd[mode]);
+		memset(chk.tex[mode], 0, sizeof chk.tex[mode]);
+		memset(chk.cache[mode], 0, sizeof chk.cache[mode]);
+		const spukit_result *r = spukit_wait(w, spukit_post(w, GFX_JOB_TASK, &j, sizeof j));
+		memcpy(&out[mode], r->data, sizeof out[mode]);
+		ticks[mode][sample] = r->ticks;
+		bad += r->error != 0;
+		if (pass) {
+			struct gfx_result a = out[0], b = out[1];
+			a.t_total = a.t_vtx = a.t_state = a.t_tex = a.t_load = a.t_hash = 0;
+			b.t_total = b.t_vtx = b.t_state = b.t_tex = b.t_load = b.t_hash = 0;
+			bad += memcmp(&a, &b, sizeof a) != 0 || out[0].vtx_bytes != out[1].vtx_bytes ||
+				memcmp(chk.vtx[0], chk.vtx[1], out[0].vtx_bytes) != 0 ||
+				memcmp(chk.cmd[0], chk.cmd[1], out[0].cmd_bytes) != 0 ||
+				memcmp(chk.tex[0], chk.tex[1], out[0].tex_bytes) != 0 ||
+				memcmp(chk.cache[0], chk.cache[1], sizeof chk.cache[0]) != 0;
+		}
+	}
+	for (unsigned mode = 0; mode < 2; mode++)
+		for (unsigned i = 1; i < 17; i++) {
+			uint32_t value = ticks[mode][i], j = i;
+			while (j && ticks[mode][j - 1] > value) { ticks[mode][j] = ticks[mode][j - 1]; j--; }
+			ticks[mode][j] = value;
+		}
+	double k = 1e3 / spukit_tick_hz();
+	salsa64_log("gfx: autoprueba vectorial/escalar (F3DEX2 con niebla): salida %s, mediana %.3f/%.3f ms (17 pares)",
+		bad ? "DISTINTA" : "igual bit a bit", ticks[0][8] * k, ticks[1][8] * k);
+	return bad;
+}
+
 /* Estadísticas de un trabajo que terminó (tarea o lista del CPU). */
 static void account_res(struct salsa64_gfx_spu *s, const struct gfx_result *res, uint64_t ticks)
 {
@@ -451,6 +498,7 @@ static int load_image(struct salsa64_gfx_spu *s, int img, uint32_t gbi)
 	 * prueba de los microcódigos de la imagen. */
 	int bad_hash = check_hash(s->worker);
 	int bad_lists = check_lists(s->worker, img, s->detail);
+	if (img == 1) bad_lists += check_vector(s->worker);
 	if (img == 1 && s->detail) bad_lists += check_detail(s->worker, s->detail);
 	s->nocache = bad_hash != 0;
 	if (bad_lists)
@@ -531,6 +579,8 @@ static void spu_start(void *ctx, const struct salsa64_task *task, enum salsa64_g
 	s->last_task = s->job.task;
 	if (s->nocache)
 		s->job.flags |= GFX_JOB_NOCACHE;
+	if (s->scalar)
+		s->job.flags |= GFX_JOB_SCALAR;
 	if (s->detail && s->image == 1) {
 		struct detail_window *w = s->detail;
 		w->task.version = 0;  /* detectar resultado ausente o viejo */
@@ -699,6 +749,8 @@ int salsa64_gfx_spu_init(struct salsa64_gfx_spu *s, const struct salsa64_bus *bu
 		if (s->detail) memset(s->detail, 0, sizeof(struct detail_window));
 		salsa64_log("gfx detalle: %s (solo imagen 1)", s->detail ? "activado" : "sin memoria, desactivado");
 	}
+	s->scalar = stat(SPE0_SCALAR_PATH, &st) == 0;
+	salsa64_log("gfx: geometria del SPE: %s", s->scalar ? "escalar (gfx-escalar)" : "vectorial");
 	if (stat(SPE0_ALL_PATH, &st) == 0) {
 		salsa64_log("SPE 0: %s: cargo y compruebo las %d imágenes", SPE0_ALL_PATH, GFX_SPE0_IMAGES);
 		for (int i = GFX_SPE0_IMAGES - 1; i > 0; i--) {

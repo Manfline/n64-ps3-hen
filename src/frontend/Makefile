@@ -147,6 +147,13 @@ $(call GFX_OBJ,vgroup.c.o): SPU_CFLAGS += -Os
 # pagarlo (−370 bytes, docs/estado.md 2026-10-13): de lo suyo solo
 # gfx_dl_next corre por comando, y es corta.
 $(call GFX_OBJ,flx.c.o) $(call GFX_OBJ,dl.c.o): SPU_CFLAGS += -Os
+# F3DEX2 solo descodifica y despacha comandos; el trabajo por vértice y
+# triángulo queda en geom.c y rdp.c. En la imagen 1, hacerlo compacto deja
+# lugar en el local store para el lote SIMD de geometría.
+$(call GFX_OBJ,f3dex2.c.o): SPU_CFLAGS += -Os
+# La carga/decodificación de TMEM no es la ruta que se vectoriza y, en la
+# imagen 1, el tamaño compacto libera local store para la geometría caliente.
+$(OBJ)/spu-gfx1/src/rsp/gfx/tmem.c.o: SPU_CFLAGS += -Os
 # La caché de texturas (texcache.c), también: ~1,2 KB de código para la pila
 # al juntar F3DFLX con el S2DEX de las salas de Zelda (la holgura bajaba a
 # 1328); identificar texturas cuesta 0,01–0,02 ms más por tarea.
@@ -154,4 +161,5 @@ $(call GFX_OBJ,texcache.c.o): SPU_CFLAGS += -Os
 # make no ve un cambio de banderas: que se recompilen si cambia este archivo.
 $(call GFX_OBJ,combine.c.o) $(call GFX_OBJ,s2dex.c.o) $(call GFX_OBJ,f3dpd.c.o) \
 $(call GFX_OBJ,f3ddkr.c.o) $(call GFX_OBJ,f5rogue.c.o) $(call GFX_OBJ,f5indy.c.o) $(call GFX_OBJ,vgroup.c.o) $(call GFX_OBJ,flx.c.o) \
-$(call GFX_OBJ,dl.c.o) $(call GFX_OBJ,texcache.c.o): Makefile
+$(call GFX_OBJ,dl.c.o) $(call GFX_OBJ,f3dex2.c.o) $(call GFX_OBJ,texcache.c.o): Makefile
+$(OBJ)/spu-gfx1/src/rsp/gfx/tmem.c.o: Makefile

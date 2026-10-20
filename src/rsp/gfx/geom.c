@@ -16,6 +16,10 @@
 #include <stdint.h>
 #include <string.h>
 
+#if defined(__SPU__) && GFX_SPE0_IMG == 1
+#include <spu_intrinsics.h>
+#endif
+
 #include "core/endian.h"
 #include "rsp/gfx/hle.h"
 
@@ -386,6 +390,70 @@ void gfx_texgen_vertex(struct gfx_state *g, const float nrm[3], struct gfx_vtx *
 	v->t = t * ((float)g->tex_t / (65536.0f * 32.0f));
 }
 
+#if defined(__SPU__) && GFX_SPE0_IMG == 1
+/* Cuatro vértices sin luces ni generación de coordenadas. La entrada de los
+ * G_VTX es de 16 bytes, así que se juntan cuatro posiciones en los carriles
+ * del SPU y se conserva para cada carril la misma secuencia fm/fma/fa que
+ * usa el compilador en el camino escalar. La proyección, la conversión y la
+ * niebla siguen el orden escalar: de ese modo la salida es intercambiable
+ * con gfx-escalar incluso en los bordes de redondeo.
+ *
+ * Road Rash usa esta forma (color por vértice y niebla), que evita cuatro
+ * recorridos independientes de la matriz y los saltos de recorte. Las
+ * combinaciones con luz o TEXGEN conservan el camino general de abajo. */
+typedef vector float gfx_v4f;
+
+static inline gfx_v4f v4_dot(const gfx_v4f x, const gfx_v4f y, const gfx_v4f z, const float *m, unsigned c)
+{
+	gfx_v4f r = spu_mul(y, spu_splats(m[4 + c]));
+	r = spu_madd(x, spu_splats(m[c]), r);
+	r = spu_madd(z, spu_splats(m[8 + c]), r);
+	return spu_add(r, spu_splats(m[12 + c]));
+}
+
+static void gfx_vertices4_fog(struct gfx_state *g, const uint8_t *src, uint32_t v0)
+{
+	union { gfx_v4f q; float f[4]; } x, y, z, xo, yo, zo, wo;
+	const float *m = g->mvp;
+	for (unsigned i = 0; i < 4; i++, src += 16) {
+		x.f[i] = (float)(int16_t)salsa64_rd16(src + 0);
+		y.f[i] = (float)(int16_t)salsa64_rd16(src + 2);
+		z.f[i] = (float)(int16_t)salsa64_rd16(src + 4);
+	}
+	xo.q = v4_dot(x.q, y.q, z.q, m, 0);
+	yo.q = v4_dot(x.q, y.q, z.q, m, 1);
+	zo.q = v4_dot(x.q, y.q, z.q, m, 2);
+	wo.q = v4_dot(x.q, y.q, z.q, m, 3);
+	src -= 64;
+	for (unsigned i = 0; i < 4; i++, src += 16) {
+		struct gfx_vtx *v = &g->vtx[v0 + i];
+		v->x = xo.f[i];
+		v->y = yo.f[i];
+		v->z = zo.f[i];
+		v->w = wo.f[i];
+		/* No se ramifica por plano: las comparaciones dan exactamente los
+		 * mismos seis bits que el OR condicional escalar. */
+		v->clip = (uint32_t)(v->x < -v->w) * GFX_CLIP_XN |
+			  (uint32_t)(v->x >  v->w) * GFX_CLIP_XP |
+			  (uint32_t)(v->y < -v->w) * GFX_CLIP_YN |
+			  (uint32_t)(v->y >  v->w) * GFX_CLIP_YP |
+			  (uint32_t)(v->z >  v->w) * GFX_CLIP_ZF |
+			  (uint32_t)(v->w < 0.0f) * GFX_CLIP_W;
+		/* La división queda escalar deliberadamente: el refinamiento que
+		 * emite spu-gcc para / reproduce el redondeo de la ruta de referencia. */
+		float iw = v->w != 0.0f ? 1.0f / v->w : 0.0f;
+		v->sx = g->vtrans[0] + v->x * iw * g->vscale[0];
+		v->sy = g->vtrans[1] - v->y * iw * g->vscale[1];
+		v->sz = g->vtrans[2] + v->z * iw * g->vscale[2];
+		v->s = (float)(int16_t)salsa64_rd16(src + 8) * ((float)g->tex_s / (65536.0f * 32.0f));
+		v->t = (float)(int16_t)salsa64_rd16(src + 10) * ((float)g->tex_t / (65536.0f * 32.0f));
+		v->c[0] = src[12]; v->c[1] = src[13]; v->c[2] = src[14];
+		float zw = v->w > 0.0f && v->z >= -v->w ? v->z * iw : -1.0f;
+		v->c[3] = (uint8_t)clampf(zw * g->fog_mul + g->fog_off + 0.5f, 0.0f, 255.0f);
+	}
+}
+#endif
+
 void gfx_vertices(struct gfx_state *g, const uint8_t *src, uint32_t v0, uint32_t n)
 {
 	if (v0 >= GFX_MAX_VTX)
@@ -403,6 +471,19 @@ void gfx_vertices(struct gfx_state *g, const uint8_t *src, uint32_t v0, uint32_t
 	const float *m = g->mvp;
 	/* s, t del vértice (s10.5) × escala de G_TEXTURE (0.16) → texels. */
 	float ks = (float)g->tex_s / (65536.0f * 32.0f), kt = (float)g->tex_t / (65536.0f * 32.0f);
+
+#if defined(__SPU__) && GFX_SPE0_IMG == 1
+	/* El lote solo cubre la forma uniforme y medida. El resto sigue abajo,
+	 * también cuando gfx-escalar pide la ruta anterior para comparar. */
+	if (!(g->job->flags & GFX_JOB_SCALAR) && !lighting && (g->geom & G_FOG)) {
+		while (n >= 4) {
+			gfx_vertices4_fog(g, src, v0);
+			src += 64;
+			v0 += 4;
+			n -= 4;
+		}
+	}
+#endif
 
 	for (uint32_t i = 0; i < n; i++, src += 16) {
 		struct gfx_vtx *v = &g->vtx[v0 + i];

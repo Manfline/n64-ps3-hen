@@ -166,6 +166,10 @@ _Static_assert(sizeof(struct gfx_detail) % 16 == 0, "detalle apto para DMA");
  * destino bastaban para que volviera a cebarse desde la RDRAM y borrara lo
  * dibujado). */
 #define GFX_JOB_DPC_CONT 0x80u
+/* Fuerza el recorrido escalar de geometría en el SPE 0. Es un interruptor
+ * de diagnóstico A/B: el PPE lo pone al abrir el juego si existe
+ * gfx-escalar en el directorio de datos. */
+#define GFX_JOB_SCALAR 0x100u
 
 /* ---- Caché de texturas -------------------------------------------------------
  * Las texturas decodificadas viven en una región de memoria que pone el

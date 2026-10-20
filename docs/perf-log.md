@@ -1,5 +1,35 @@
 # Registro de rendimiento
 
+## 2026-10-20 — Lote de vértices F3DEX2 del SPE (host y presupuesto de local store)
+
+La inspección del objeto SPU de `gfx_vertices` confirmó un recorrido por
+vértice: cuatro productos/sumas para cada coordenada de recorte, seis pruebas
+de plano y una división para la proyección, además de ramas para luz, TEXGEN
+y niebla. La ruta medida de Road Rash usa color directo y niebla; no usa las
+rutas de luces o TEXGEN. El compilador emitía operaciones escalares y saltos
+de recorte, no un lote automático.
+
+La imagen 1 reúne cuatro entradas de `G_VTX` en los carriles del SPU para las
+cuatro coordenadas de recorte. Conserva la secuencia de operaciones de cada
+carril y deja proyección, conversión y niebla en el orden escalar para no
+cambiar el redondeo. `gfx-escalar` selecciona el recorrido previo al abrir el
+juego. La autoprueba F3DEX2 incorpora niebla y alterna 17 pares vectorial /
+escalar: compara vértices, comandos, texturas, caché y contadores, y deja en
+el log las medianas del decrementador. Falta ejecutar esa prueba en PS3 real;
+por tanto **no hay un tiempo ni una ganancia medida en PS3**.
+
+El intento de agrupar cuatro triángulos F3DEX2 no pasó el enlace: la imagen 1
+quedó 272 bytes bajo el mínimo de pila. Se retiró; los triángulos siguen por
+la ruta escalar. Para hacer ese trabajo habría que separar primero código o
+estado de la cadena S2DEX, no reducir el margen de seguridad.
+
+El host no ejecuta la imagen SPU y no sirve para estimar ms del Cell. Como
+validación funcional (no de rendimiento), `--lle-check-gfx`, limitado a 700
+campos, completó SM64 (270 tareas), OoT (540), MK64 (225) y Road Rash (696);
+en Road Rash fueron 696/696 idénticas. La comparación cuantitativa de la
+ganancia queda pendiente de la misma carrera de PS3 con `gfx-spe-detalle`,
+primero normal y luego con `gfx-escalar`.
+
 ## 2026-10-20 — Road Rash 64: evitar retraducciones por descartes de espera (host/qemu)
 
 NTSC, respaldo propio; 8 MB de RDRAM, Controller Pak nuevo en memoria,

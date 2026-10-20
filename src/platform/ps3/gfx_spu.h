@@ -46,6 +46,7 @@ struct salsa64_gfx_spu {
 	uint32_t seq;
 	bool pending;
 	bool nocache;        /* el hash del SPE no coincide: sin caché de texturas */
+	bool scalar;         /* gfx-escalar: ruta de geometría anterior para A/B */
 	bool no_worker;      /* la tarea en curso no tuvo SPE: termina cortada */
 	/* Imagen del SPE 0 cargada (rsp/gfx/spe0.h; -1: ninguna) y sus cambios. */
 	int image;

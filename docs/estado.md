@@ -1,6 +1,43 @@
 # Estado
 
 
+## 2026-10-20 — Lote SIMD de vértices F3DEX2 con niebla
+
+- **Hipótesis confirmada.** El objeto SPU de `gfx_vertices` recorría un
+  vértice por iteración: transformación escalar, seis comparaciones de
+  recorte, división para proyectar y ramas de luz/TEXGEN/niebla. Road Rash
+  entra en el caso de color directo con niebla; las esperas DMA medidas antes
+  siguen por debajo de 0,1 ms y no son la causa del coste.
+- **Cambio.** Solo en la imagen 1, cuatro posiciones se transforman en los
+  carriles del SPU cuando no hay luces ni TEXGEN y la niebla está activa. La
+  proyección, ST, conversión y niebla mantienen el orden escalar. Las rutas
+  restantes no cambian. El archivo `gfx-escalar` al abrir el juego selecciona
+  el recorrido previo y el log dice cuál quedó activo. La autoprueba F3DEX2
+  añade niebla y hace 17 pares vectorial/escalar, comprobando las salidas bit
+  a bit y registrando la mediana del decrementador.
+- **Triángulos.** Se intentó agrupar cuatro para el descarte por planos, pero
+  la cadena F3DEX2/S2DEX quedó 272 bytes bajo el mínimo de pila; se retiró.
+  No se atribuye una mejora de triángulos a esta entrega.
+- **Local store.** Build Docker: holguras de las imágenes 0–4: **1632 /
+  2304 / 14272 / 2960 / 1648 bytes**, mínimo 1536. Para liberar espacio, en
+  la imagen 1 TMEM y las rutas frías de rectángulos/RDP se compilan a tamaño;
+  el trayecto de triángulos y vértices mantiene `-O2`.
+- **Pruebas hechas.** `tools/build.sh test-host`: **664 pruebas, 870679
+  verificaciones, 0 fallidas**. El censo LLE del host, limitado a 700 campos,
+  ejecutó SM64 (270 tareas), OoT (540), MK64 (225) y Road Rash (696); Road
+  Rash dio 696/696 idénticas. El host no ejecuta el binario SPU, por lo que no
+  valida aún la paridad interna vectorial/escalar ni mide la PS3.
+- **Paquete local.** `build/salsa64-spe-vect/salsa64-spe-vect.pkg`, APPID
+  `SLSA00064`, SHA-256
+  `08503bfa822bc2d80d493cb9028a65737f2891f1648fe3105beec8016e040d43`.
+  No enviado ni publicado.
+- **Pendiente en PS3.** Con `gfx-spe-detalle`, comprobar primero la línea de
+  autoprueba sin diferencias y su mediana; repetir la misma carrera de Road
+  Rash con y sin `gfx-escalar`. Conservar ambos logs y comparar ms/tarea,
+  vértices, triángulos, campos/s, sondeos y audio. Repetir
+  `--lle-check-gfx` completo y un censo contra la referencia antes de asumir
+  una ganancia.
+
 ## 2026-10-20 — Road Rash 64: colisión de descartes de espera, no escrituras de código
 
 Rama `roadrash`, sobre v0.2.9. Diagnóstico, reproducción y archivo A/B en
