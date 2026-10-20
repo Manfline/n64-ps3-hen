@@ -95,9 +95,9 @@ revierte el diagnóstico. Uso, campos y límites en `docs/gfx-spe-detalle.md`.
   holguras imágenes 0–4: **1632 / 1760 / 14144 / 2960 / 1648**, todas sobre
   el mínimo de 1536. La imagen 1 deja solo 224 bytes sobre ese mínimo:
   cualquier ampliación requiere volver a comprobar el presupuesto.
-- Paquete: `build/salsa64-gfx-spe-detalle/salsa64-gfx-spe-detalle.pkg`,
-  3314896 bytes, SHA-256
-  `a8d3ec1c95af61a5cdcc6ec4a1439fd122c17aef9fdde079574bb54a4f0acbf9`.
+ - Paquete: `build/salsa64-gfx-spe-detalle/salsa64-gfx-spe-detalle.pkg`,
+   3319312 bytes, SHA-256
+   `7bb387d1307552872b0e1a6f819e93ccbfd5e244a78238cd4bd71b9c37184655`.
   No se ejecutaron ROMs ni `--lle-check-gfx`; quedan la comparación con una
   captura autorizada y la validación de sincronización/coste en PS3.
 
