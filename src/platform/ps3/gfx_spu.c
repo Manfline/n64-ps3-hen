@@ -127,6 +127,17 @@ static void detail_log(struct detail_window *w)
 		    DS(w, vector_vertices) / n, DS(w, vector_batches) / n, DS(w, scalar_forced) / n,
 		    DS(w, scalar_lighting) / n, DS(w, scalar_texgen) / n, DS(w, scalar_no_fog) / n,
 		    DS(w, scalar_tail) / n);
+	/* RDRAM se divide entre todos los vértices; las otras fases, solo entre
+	 * los que sí recorrieron el lote de cuatro. Así una cola escalar no baja
+	 * artificialmente los ticks/vértice del lote. */
+	double nv = DS(w, vertices), nb = DS(w, vector_vertices);
+	double rdram = w->sum[offsetof(struct gfx_detail, send_ticks) / 4] +
+		       w->sum[offsetof(struct gfx_detail, read_ticks) / 4];
+	double matrix = DS(w, vtx_transform), rest = DS(w, t_vtx) - rdram - matrix;
+	salsa64_log("gfx detalle: vtx fases ms/tarea, ticks/vtx RDRAM %.3f/%.1f matriz %.3f/%.1f "
+		    "resto %.3f/%.1f (desemp/proy/recorte/niebla/entero/escritura; incluye vgroup)",
+		    rdram * k, nv ? rdram / nv : 0.0, matrix * k, nb ? matrix / nb : 0.0,
+		    rest * k, nv ? rest / nv : 0.0);
 	for (unsigned i = 0; i < 4; i++)
 		salsa64_log("gfx detalle: lectura %u (vtx/mtx/pequena/TMEM): peticiones %.1f bytes pedidos %.0f DMA %.0f "
 			    "envio %.3f espera %.3f ms/tarea (anidados)", i,

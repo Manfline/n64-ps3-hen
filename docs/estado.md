@@ -1,5 +1,47 @@
 # Estado
 
+## 2026-10-20 — Medición de fases del lote SIMD F3DEX2
+
+- **Código máquina (imagen 1).** `spu-objdump` del `geom.c.o` y de
+  `spu_gfx1.bin` confirma cuatro carriles en la multiplicación: cuatro
+  cadenas `fm` + 2×`fma` + `fa` (16 operaciones vectoriales para la matriz
+  de cuatro vértices). No hay llamada a `memcpy`, a divisiones de libgcc ni a
+  conversiones de coma flotante por software en ese camino; las conversiones
+  son `csflt`/`cfltu`. Sí hay muchas cargas y permutaciones (`lqx`/`lqd`,
+  `rotqby`, `shufb`) al desempaquetar los `s16` big-endian y escribir los
+  campos. La división de perspectiva sigue por vértice con
+  `frest`/`fi`/`fm`/`fma`; el recorte usa comparaciones y selecciones, y el
+  tramo posterior conserva ramas para los casos de `w` y la cola. Las únicas
+  llamadas que aparecen en `gfx_vertices` corresponden a rutas no tomadas
+  por Road Rash (luces, TEXGEN, FLX y matriz sucia); con detalle, además, las
+  lecturas del reloj.
+- **Coste estático aproximado.** Por lote, la matriz tiene 16 FP vectoriales:
+  ~16 ciclos de emisión y ~24–32 al considerar las dependencias de las cuatro
+  cadenas (≈6–8 ciclos/vértice con el pipeline ocupado). El desempaquetado y
+  las escrituras usan decenas de cargas/permutaciones (≈15–30 ciclos/vértice
+  ideal); la proyección escalar (recíproco/refinamiento y tres coordenadas),
+  seis pruebas de recorte, ST/color y niebla quedan en ≈70–130 ciclos/vértice
+  antes de esperas y derrames. La ruta escalar repite las 16 FP de matriz
+  por vértice (≈24–32 ciclos/vértice por sus dependencias), pero comparte el
+  mismo postproceso de ≈70–130. Son cotas de agenda, no una medición de la
+  consola. La hipótesis principal para los ~0,25 µs/vértice es precisamente
+  ese tramo posterior aún escalar —sobre todo perspectiva, empaquetado y
+  escritura—, no la multiplicación de matriz que ya va a cuatro carriles.
+- **Medición nueva.** `gfx-spe-detalle` versión 3 conserva el bloque de 272
+  bytes y añade la línea `gfx detalle: vtx fases`: RDRAM (envío+espera DMA),
+  matriz del lote y `resto`. Por la pila, `resto` agrupa desempaquetado,
+  proyección, recorte, niebla, conversión/escritura y `vgroup`; mirar primero
+  sus ticks/vértice frente a `matriz`. Intentar separarlos todos llevó la
+  holgura de la imagen 1 a 336 bytes; se retiró antes de enlazar.
+- **Local store.** Build Docker: holguras de las imágenes 0–4: **1632 /
+  1648 / 14272 / 2960 / 1648 bytes** (mínimo 1536). La imagen 1 queda 112
+  bytes sobre el límite.
+- **Pruebas y paquete.** `tools/build.sh test-host`: **664 pruebas, 870679
+  verificaciones, 0 fallidas**. Paquete local
+  `build/salsa64-spe-vect/salsa64-spe-vect.pkg`, SHA-256
+  `5f5cb6ca0185ca875fe140615758c48b9d4e12920c534b399fe879cd256a852d`.
+  No enviado ni publicado.
+
 
 ## 2026-10-20 — Lote SIMD de vértices F3DEX2 con niebla
 

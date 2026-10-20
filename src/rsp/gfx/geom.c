@@ -420,10 +420,13 @@ static void gfx_vertices4_fog(struct gfx_state *g, const uint8_t *src, uint32_t 
 		y.f[i] = (float)(int16_t)salsa64_rd16(src + 2);
 		z.f[i] = (float)(int16_t)salsa64_rd16(src + 4);
 	}
+	uint32_t t = 0;
+	GFX_DETAIL(g, t = gfx_io_clock());
 	xo.q = v4_dot(x.q, y.q, z.q, m, 0);
 	yo.q = v4_dot(x.q, y.q, z.q, m, 1);
 	zo.q = v4_dot(x.q, y.q, z.q, m, 2);
 	wo.q = v4_dot(x.q, y.q, z.q, m, 3);
+	GFX_DETAIL(g, g->detail->vtx_transform += gfx_io_clock() - t;);
 	src -= 64;
 	for (unsigned i = 0; i < 4; i++, src += 16) {
 		struct gfx_vtx *v = &g->vtx[v0 + i];
