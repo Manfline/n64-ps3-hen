@@ -11,6 +11,8 @@
 
 #include "core/bus.h"
 #include "core/save.h"
+#include "cpu/rec.h"
+#include "cpu/vr4300.h"
 
 #ifdef SALSA64_DEBUG_PI
 void salsa64_debug_pi(uint32_t cart, uint32_t dram, uint32_t len);
@@ -48,8 +50,12 @@ static void pi_dma_to_rdram(struct salsa64_bus *bus, uint32_t len)
 		}
 		done += chunk;
 	}
-	if (dram < bus->rdram_size)
+	if (dram < bus->rdram_size) {
+		struct salsa64_rec *rec = bus->cpu ? bus->cpu->rec : NULL;
+		if (rec) rec->diag.source = 2;
 		salsa64_bus_rdram_written(bus, dram, len);
+		if (rec) rec->diag.source = 0;
+	}
 
 	bus->pi[SALSA64_PI_DRAM_ADDR] = (dram + len + 7) & 0x00FFFFF8;
 	bus->pi[SALSA64_PI_CART_ADDR] = (cart + len + 1) & 0xFFFFFFFE;

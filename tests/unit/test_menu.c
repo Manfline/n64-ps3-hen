@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — pruebas del menú para elegir ROM: la lista (src/frontend/romlist.c:
  * cabeceras en los tres órdenes de bytes, títulos, orden, directorio y la
@@ -204,7 +205,7 @@ static void menu_scan_cache(void)
 {
 	if (!t_tmp_dir)
 		return;
-	char dir[256], path[300], cache[300], usb[256];
+	char dir[256], path[320], cache[300], usb[256];
 	snprintf(dir, sizeof dir, "%s/cache-roms", t_tmp_dir);
 	snprintf(cache, sizeof cache, "%s/romlist.cache", t_tmp_dir);
 	snprintf(usb, sizeof usb, "%s/cache-sin-usb", t_tmp_dir);

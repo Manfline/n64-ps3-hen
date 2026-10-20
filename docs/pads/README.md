@@ -133,3 +133,8 @@ Las escenas del host (7 juegos, Kirby 64 y la casa de Link de
   Sin `--lle`, las tareas S2DEX sueltas del juego (menús y fondos) no tienen
   HLE y el VI enseña basura donde las espera; con `--lle` las hace el
   microcódigo real.
+- `roadrash-carrera.pad`: Road Rash 64 (USA), Controller Pak nuevo; los
+  botones del recorrido de la consola que produjo las invalidaciones
+  masivas, hasta el campo 1962. Medir hasta el 2100; pasa los menús y entra
+  a una carrera con Z sostenido. Las posiciones de la palanca son
+  aproximadas. Véase `docs/roadrash-invalidaciones.md`.

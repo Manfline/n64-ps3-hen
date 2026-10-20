@@ -392,6 +392,7 @@ bool salsa64_rec_emit_fpu_rtns(struct salsa64_rec *rec, uint32_t base, uint32_t 
 	struct ctx *c = &ctx;
 	int start[SALSA64_FPR_N];
 	memset(c, 0, sizeof *c);
+	c->idle_patch = -1;
 	c->rec = rec;
 	c->tramp = -1;
 	rec->nbuf[0] = rec->nbuf[1] = 0;
@@ -407,7 +408,7 @@ bool salsa64_rec_emit_fpu_rtns(struct salsa64_rec *rec, uint32_t base, uint32_t 
 		bind(c, slow);
 		fr_return(c, false);
 	}
-	uint32_t words = finalize(rec, base, limit);
+	uint32_t words = finalize(c, base, limit);
 	if (!words)
 		return false;
 	for (unsigned k = 0; k < SALSA64_FPR_N; k++)

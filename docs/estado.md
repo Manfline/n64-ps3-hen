@@ -1,5 +1,61 @@
 # Estado
 
+## 2026-10-20 — Road Rash 64: colisión de descartes de espera, no escrituras de código
+
+Rama `roadrash`, sobre v0.2.9. Diagnóstico, reproducción y archivo A/B en
+[docs/roadrash-invalidaciones.md](roadrash-invalidaciones.md).
+
+- **Causa medida.** Los saltos `8003ae0c` y `8003b824` caen en la ranura 49
+  del detector de espera. Descartar uno sustituía al otro; `rec_idle_exit`
+  invalidaba los bloques solapados para quitar la consulta, y al volver a
+  traducirlos la reintroducía. Los cuatro bloques `8003ad84`, `8003adf0`,
+  `8003b788` y `8003b7d8`: **10 420 traducciones por bloque**, mismo MIPS.
+  El contador histórico incluía también los desalojos; el aviso de
+  invalidación masiva clasificaba esos descartes internos como «DMA u otros».
+- **Host/qemu, recorrido de la consola hasta el campo 2100** (NTSC, 8 MB,
+  Pak nuevo, registros fijos, caché de 24 MB; sin rasterizar): **42 375
+  invalidaciones por descartes**, todas con huella MIPS idéntica, **0 por
+  CPU, 0 por PI, 0 por otros escritores**. Hubo 3622 DMA del PI. No hace
+  falta tratar overlays ni cambiar la granularidad de escrituras: ambas
+  rutas ya filtraban por solapamiento exacto de instrucciones.
+- **Cambio.** Se conserva el camino nativo normal desde la primera emisión
+  y se quita solo el salto PPC a la consulta cuando el bucle se descarta
+  (`NOP` + sincronización de cachés). Se mantienen el bloque y sus enlaces.
+  Las escrituras reales invalidan como antes; las huellas solo miden.
+  `jit-invalidacion-vieja` en `/dev_hdd0/salsa64/` selecciona recompilar al
+  volver a abrir el juego. El log nombra el modo, separa las causas, cuenta
+  las repeticiones y mide el emisor; detalles por PC al cerrar. +1,563 MiB
+  fijos (tablas y sitios de parche; `docs/memory-budget.md`).
+- **Mismo binario qemu, ambos modos consecutivos:** 61 422 → **8819**
+  compilaciones (−85,6 %), 52 597 → **0** repeticiones del mismo contenido,
+  3589,710 → **357,720 ms** en el emisor; descartes que invalidan
+  42 375 → **0**, retirados por desalojo 14 554 → **0**. Tablas sin
+  saturación. El estado entero del campo 2100 es idéntico byte a byte entre
+  ambos modos y el lockstep. Son tiempos del host/qemu, **no de la PS3**;
+  las corridas compartieron host con otras verificaciones, por lo que no
+  se usa su tiempo total como estimación de FPS.
+- **Paridad y pruebas.** Road Rash, 2100 campos / 3 290 786 100 ciclos,
+  44 164 470 salidas comparadas: `--lockstep sin diferencias`. Super Mario
+  64, GoldenEye, Mario Kart 64 y Zelda OoT: 600 campos cada uno, todos sin
+  diferencias. `tools/build.sh test-host`: **663 pruebas, 0 fallidas**.
+  Las 16 pruebas de espera pasan en qemu con intérprete y recompilador
+  estricto; incluyen colisión, likely, J y escritura real posterior.
+  La suite completa adicional de PPC pasó las 662 pruebas de intérprete,
+  pero en la segunda pasada mostró `f5i_particles` (partículas de Indiana
+  Jones; CPU ya terminado) y no completó el límite de 600 s. La prueba
+  aislada pasa con y sin recompilador (sin ejecutar bloques). Queda por
+  aislar el estado previo de esa suite; no se presenta como una suite PPC
+  completa verde ni se cambia aquí la HLE de Factor 5.
+- **Paquete local.** `build/salsa64-roadrash/salsa64-roadrash.pkg`, APPID
+  `SLSA00064`; build Docker y las cinco holguras de pila del SPE válidos
+  (1632, 6688, 14144, 2960 y 1648 bytes, mínimo 1536). SHA-256 al pie de
+  esta entrada tras el empaquetado final. No enviado ni publicado.
+- **PS3 pendiente.** Repetir la carrera con y sin el archivo: registrar
+  porcentaje de NTSC, ms de emulación, peor campo, compilaciones/ms del
+  emisor, descartes y desalojos; comprobar gráficos y audio al entrar y
+  salir de carrera. El costo del código nativo y de gráficos sigue ahí:
+  no se promete velocidad completa sin medir en la consola.
+
 ## 2026-10-18 — Resident Evil 2: el logo de N64 salía a un cuarto
 
 La escala de `G_TEXTURE` que rc7b3 aplicó al ST de `G_MODIFYVTX` rompía el logo
