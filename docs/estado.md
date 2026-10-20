@@ -19,7 +19,9 @@
   la cadena F3DEX2/S2DEX quedó 272 bytes bajo el mínimo de pila; se retiró.
   No se atribuye una mejora de triángulos a esta entrega.
 - **Local store.** Build Docker: holguras de las imágenes 0–4: **1632 /
-  2304 / 14272 / 2960 / 1648 bytes**, mínimo 1536. Para liberar espacio, en
+  1776 / 14272 / 2960 / 1648 bytes**, mínimo 1536. El detalle de cobertura
+  añadió 16 bytes al protocolo y el marco de detalle de la imagen 1 subió 16
+  bytes; sigue 240 bytes sobre el mínimo. Para liberar espacio, en
   la imagen 1 TMEM y las rutas frías de rectángulos/RDP se compilan a tamaño;
   el trayecto de triángulos y vértices mantiene `-O2`.
 - **Pruebas hechas.** `tools/build.sh test-host`: **664 pruebas, 870679
@@ -27,14 +29,25 @@
   ejecutó SM64 (270 tareas), OoT (540), MK64 (225) y Road Rash (696); Road
   Rash dio 696/696 idénticas. El host no ejecuta el binario SPU, por lo que no
   valida aún la paridad interna vectorial/escalar ni mide la PS3.
+- **Cobertura pendiente de la PS3.** El detalle versión 2 (272 bytes) imprime
+  por tarea los vértices y lotes vectoriales y los escalares por forzado,
+  iluminación (y su subconjunto TEXGEN), falta de niebla y cola de 1–3. En la
+  carrera ya registrada (ventana 9501–9600) había 9348,9 vértices/tarea en
+  434,6 cargas, todos con niebla y ninguno iluminado; el host de 2000 campos
+  reproduce la carrera con F3DEX2. Las colas pueden sumar como máximo 1303,8
+  vértices/tarea (13,9 %); por tanto ni luz/TEXGEN ni el múltiplo de cuatro
+  explican por sí solos una cobertura casi nula. La siguiente PS3 debe
+  distinguir forzado escalar de una discrepancia de la ruta medida. El host
+  no ejecuta la imagen SPE ni puede ver el bit `GFX_JOB_SCALAR` efectivo.
 - **Paquete local.** `build/salsa64-spe-vect/salsa64-spe-vect.pkg`, APPID
   `SLSA00064`, SHA-256
-  `08503bfa822bc2d80d493cb9028a65737f2891f1648fe3105beec8016e040d43`.
+  `ac402d68409da4efbf5c33ac602d3fe7d53979e38a2cece708c80107eedc2c78`.
   No enviado ni publicado.
 - **Pendiente en PS3.** Con `gfx-spe-detalle`, comprobar primero la línea de
   autoprueba sin diferencias y su mediana; repetir la misma carrera de Road
-  Rash con y sin `gfx-escalar`. Conservar ambos logs y comparar ms/tarea,
-  vértices, triángulos, campos/s, sondeos y audio. Repetir
+  Rash con y sin `gfx-escalar`, y guardar la nueva línea `lote vtx`. Conservar
+  ambos logs y comparar ms/tarea, vértices, triángulos, campos/s, sondeos y
+  audio. Repetir
   `--lle-check-gfx` completo y un censo contra la referencia antes de asumir
   una ganancia.
 

@@ -117,7 +117,7 @@ struct gfx_job {
 	uint32_t detail_cap, detail_version;
 };
 
-#define GFX_DETAIL_VERSION 1u
+#define GFX_DETAIL_VERSION 2u
 /* Todos los campos son palabras sin punteros; tamaño múltiplo de 16.
  * Tiempos anidados: DMA está incluido en las etapas; no sumarlo otra vez. */
 struct gfx_detail {
@@ -132,7 +132,11 @@ struct gfx_detail {
 	/* Partición exclusiva: vtx/state/load del resultado + triangle/matrix/
 	 * dl/end/rest. triangle excluye state; los demás no se solapan. */
 	uint32_t t_total, t_vtx, t_state, t_load, t_triangle, t_matrix, t_dl, t_end, t_rest;
-	uint32_t reserved[4];
+	/* Solo imagen 1 del SPE: cobertura del lote de cuatro vértices. Los
+	 * motivos escalares son excluyentes salvo scalar_texgen, que es el
+	 * subconjunto de scalar_lighting con G_TEXTURE_GEN. */
+	uint32_t vector_vertices, scalar_forced, scalar_lighting, scalar_texgen;
+	uint32_t scalar_no_fog, scalar_tail, vector_batches, reserved;
 };
 _Static_assert(sizeof(struct gfx_job) == 112, "descriptor gráfico de 112 bytes");
 _Static_assert(sizeof(struct gfx_detail) % 16 == 0, "detalle apto para DMA");

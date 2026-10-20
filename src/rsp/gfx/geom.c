@@ -475,7 +475,23 @@ void gfx_vertices(struct gfx_state *g, const uint8_t *src, uint32_t v0, uint32_t
 #if defined(__SPU__) && GFX_SPE0_IMG == 1
 	/* El lote solo cubre la forma uniforme y medida. El resto sigue abajo,
 	 * también cuando gfx-escalar pide la ruta anterior para comparar. */
-	if (!(g->job->flags & GFX_JOB_SCALAR) && !lighting && (g->geom & G_FOG)) {
+	if (g->job->flags & GFX_JOB_SCALAR) {
+		GFX_DETAIL(g, g->detail->scalar_forced += n);
+	} else if (lighting) {
+		GFX_DETAIL(g, {
+			g->detail->scalar_lighting += n;
+			if (g->geom & G_TEXTURE_GEN)
+				g->detail->scalar_texgen += n;
+		});
+	} else if (!(g->geom & G_FOG)) {
+		GFX_DETAIL(g, g->detail->scalar_no_fog += n);
+	} else {
+		uint32_t batches = n / 4;
+		GFX_DETAIL(g, {
+			g->detail->vector_vertices += batches * 4;
+			g->detail->vector_batches += batches;
+			g->detail->scalar_tail += n - batches * 4;
+		});
 		while (n >= 4) {
 			gfx_vertices4_fog(g, src, v0);
 			src += 64;

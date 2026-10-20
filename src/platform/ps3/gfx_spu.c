@@ -122,6 +122,11 @@ static void detail_log(struct detail_window *w)
 		    DS(w, triangles_common) / n, DS(w, triangles_near) / n, DS(w, triangles_clipped) / n,
 		    DS(w, commands) / n, DS(w, state_builds) / n, DS(w, vtx_bytes) / n, DS(w, cmd_bytes) / n,
 		    DS(w, tex_bytes) / n);
+	salsa64_log("gfx detalle: lote vtx vector %.1f en %.1f lotes; escalar forzado %.1f luz %.1f (ST %.1f) "
+		    "sin niebla %.1f cola %.1f",
+		    DS(w, vector_vertices) / n, DS(w, vector_batches) / n, DS(w, scalar_forced) / n,
+		    DS(w, scalar_lighting) / n, DS(w, scalar_texgen) / n, DS(w, scalar_no_fog) / n,
+		    DS(w, scalar_tail) / n);
 	for (unsigned i = 0; i < 4; i++)
 		salsa64_log("gfx detalle: lectura %u (vtx/mtx/pequena/TMEM): peticiones %.1f bytes pedidos %.0f DMA %.0f "
 			    "envio %.3f espera %.3f ms/tarea (anidados)", i,
