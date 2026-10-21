@@ -1,5 +1,30 @@
 # Estado
 
+## 2026-10-21 — Combinación RE2/SPE: host correcto, paquete bloqueado por pila
+
+- La unión inicial pasa 667 pruebas y 887192 verificaciones, cero fallos,
+  con ASan y UBSan (`build/logs/re2-integracion-host.log`). El primer build
+  limpio se detiene en la imagen 1: texto 103584, datos 800, bss 145808,
+  11744 bytes libres y cadena de pila de 10224, holgura **1520 bytes**
+  frente al mínimo de 1536. Log `build/logs/re2-integracion-paquete.log`.
+- En la imagen 1 no existe F3D: el tramo que acepta la carga de 3D solo
+  admite `kind == 2`. Se evita repetir esa comparación y se conserva la
+  distinción de primera generación cuando ambas familias están presentes
+  en el host/PPE. La segunda medida reduce el texto a 103560 bytes, pero
+  conserva el alineamiento final, la cadena y la holgura de 1520. Log
+  `build/logs/re2-integracion-spu1-compacto.log`.
+- Se detienen los builds tras repetir el mismo límite. No se reducen cachés,
+  no se relaja el margen de 1536 ni se genera un paquete incompleto. Las
+  pruebas host de la simplificación final vuelven a pasar: 667 pruebas,
+  887192 verificaciones, cero fallos; recompilación de `s2dex.c` confirmada
+  en `build/logs/re2-integracion-host-final.log`.
+- La cadena cruda conserva `main` 832, `run_detail` 464, `gfx_run` 176,
+  `gfx_dl_f3dex2` 688 y `s2dex_run` 1200 bytes; no se atribuye el déficit a
+  una función concreta sin más análisis. El siguiente trabajo debe estudiar
+  código o marcos reales antes de reintentar, no repetir el mismo build.
+  No hay RPCS3 ni validación PS3 del conjunto. Los paquetes separados
+  previamente probados permanecen intactos, sin cambios en main o consola.
+
 ## 2026-10-21 — Combinación de OPTIONS de RE2 con la base SPE actual
 
 - Se combina la corrección optativa de escala afín probada en la PS3

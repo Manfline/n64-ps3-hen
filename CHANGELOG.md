@@ -6,6 +6,9 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 
 ## [Unreleased]
 
+- Prepara la combinación de la corrección afín de RE2 con el lote SPE:
+  pruebas host correctas; paquete conjunto bloqueado por el margen de pila.
+
 - Documenta el corte por presupuesto de comandos de OoT, observado también
   en la imagen normal anterior; no se considera un fallo resuelto.
 
