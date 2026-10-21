@@ -16,6 +16,26 @@
 - Trabajo aislado: sin integración, publicación ni cambios en la consola.
   Falta confirmar visualmente los modelos en combate. Alcance, límites y
   procedimiento en `docs/turbo3d.md`.
+- Código `5c51bb2`: host 676 pruebas, 887277 verificaciones y cero fallos
+  con ASan/UBSan. Ejecutor del host compilado; homebrew F3DEX2 hasta campo
+  180 correcto. Conserva el aviso inicial conocido de tarea cortada del
+  homebrew; no se contabiliza como una prueba real de Turbo3D ni como cero
+  cortes de toda la ejecución.
+- Build limpio de catorce imágenes: holguras normales 1600/1712/14368/
+  3056/1616/15536 bytes; variantes de imagen 1 entre 1584 y 1840, todas
+  sobre el mínimo 1536. Imagen 5: final de programa 237328, cadena de pila
+  9264, caché 512 entradas. No se reducen cachés existentes.
+- RPCS3 con homebrew gráfico y las seis imágenes: hashes y tareas SPE/PPE
+  iguales, incluido Turbo3D y su acompañante. Normal: OK campo 137;
+  afín + recorte: OK campo 125; ambas 42/42 puntos y cierre limpio.
+  El aviso inicial `0x60`, 307 comandos/45 triángulos, es el ya observado
+  en el paquete anterior. No se han medido FPS de Dark Rift.
+- Paquete `build/salsa64-turbo3d/salsa64-turbo3d.pkg`, título
+  `Salsa64 Turbo3D`, `SLSA00184`, versión `v0.2.9-42-g5c51bb2`, 4062928
+  bytes; SHA-256
+  `dadf56067d02d4e672da0ae1731c267fa5d79012ecf27aed8dd39414cfe7e217`.
+  Logs locales `build/turbo3d-host-final.log`, `build/turbo3d-paquete-final.log`,
+  `build/turbo3d-rpcs3.log` y `build/turbo3d-rpcs3-recorte.log`.
 
 ## 2026-10-21 — Integración autorizada de RE2 y SPE en la rama principal
 

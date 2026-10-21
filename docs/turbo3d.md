@@ -3,6 +3,11 @@
 Estado: implementación experimental, apagada por omisión. No se declara
 Dark Rift compatible ni se promete una velocidad antes de probarlo en PS3.
 
+Candidato `5c51bb2`, `Salsa64 Turbo3D` (`SLSA00184`): host 676 pruebas
+sin fallos; catorce imágenes dentro del presupuesto; RPCS3 normal y con
+afín + recorte, 42/42 puntos y listas SPE/PPE iguales en las seis imágenes.
+Identidad y SHA del paquete en `estado.md`.
+
 ## Evidencia y alcance
 
 En la consola, Dark Rift arranca pero el autor no ve los modelos. Su log
