@@ -12,8 +12,8 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 - Añade una comparación optativa de la escala de textura afín cuando una
   tarea S2DEX carga F3DEX2 (`gfx-afin-cadena`), con controles de perspectiva,
   sprites, rectángulos y `G_MODIFYVTX`. Referencia conservada por omisión;
-  candidato empaquetado dentro del presupuesto del SPE, pendiente confirmar
-  OPTIONS de Resident Evil 2 en la PS3.
+  candidato empaquetado dentro del presupuesto del SPE y OPTIONS legible
+  confirmado por el autor en la PS3; falta regresión general e integración.
 
 - Amplía la traza VI de Racer: una ventana de campos, decisiones sin imagen o
   descartadas, registros instantáneos y la selección ya hecha por el RSX.

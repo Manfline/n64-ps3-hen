@@ -1,5 +1,26 @@
 # Estado
 
+## 2026-10-21 — RE2: OPTIONS legible en la PS3 con el candidato activo
+
+- El autor confirma que OPTIONS ya se ve correctamente. El log identifica
+  `4ef227f`, aplicación `Salsa64 RE2 OPTIONS` (`SLSA00182`), y anuncia
+  `gfx-afin-cadena` experimental activo. Confirma además la carga de la
+  ranura 0: campo 2198 → 1218, el mismo estado guardado en la referencia.
+- Las autopruebas de las imágenes usadas dan hash y tareas iguales al PPE.
+  Los resúmenes recogidos registran cero tareas cortadas y cero comandos
+  de otro microcódigo saltados. El log termina mientras sigue la ejecución:
+  no acredita todavía el cierre limpio ni una regresión completa del juego.
+- Log activo conservado en `build/ps3/re2-afin/activado-20261021.log`,
+  SHA-256 `93ddcc76e87da8204c505f3bbf577ce7dc0cf99266fed7586ac7dde3f95a25e4`.
+  Referencia en `build/ps3/re2-afin/referencia-20261021.log`, SHA-256
+  `f87c60eef1165e187ba2606bac8bf9062befac7c1fc5f5fc3652117d8cc17ecc`.
+  Estado respaldado en `build/ps3/re2-afin/referencia-options.st0`, SHA-256
+  `6a709fb7271f682b74d4f0a2234cf4cbbfba694cd47afae0939d15cc57a4e112`.
+- Validación visual comunicada por el autor, sin inspección de una captura
+  descargada ni comparación nueva contra el microcódigo real. No demuestra
+  mejora de velocidad ni resuelve el coste de la sala de la estatua.
+  El candidato sigue optativo, en rama aislada y sin integrar a main.
+
 ## 2026-10-21 — RE2: el candidato afín recupera el margen del SPE
 
 - Se revisó el estado transitorio de encadenamiento: solo S2DEX puede
