@@ -6,6 +6,9 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 
 ## [Unreleased]
 
+- Separa la autoprueba de hash del bucle gráfico SPE para liberar pila
+  activa sin reducir cachés ni el margen de seguridad.
+
 - Prepara la combinación de la corrección afín de RE2 con el lote SPE:
   pruebas host correctas; paquete conjunto bloqueado por el margen de pila.
 

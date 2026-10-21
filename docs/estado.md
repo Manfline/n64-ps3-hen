@@ -1,5 +1,24 @@
 # Estado
 
+## 2026-10-21 — Combinación RE2/SPE: separar la autoprueba recupera pila
+
+- El objeto anterior muestra la autoprueba de hash integrada en `main`,
+  cuyo marco de 832 bytes permanece vivo durante el dibujo. Se extrae
+  únicamente ese trabajo de arranque a `hash_job`, noinline y cold como los
+  trabajos de estado e información. Conserva las mismas comprobaciones,
+  DMA, hash y limpieza de TMEM. No cambia geometría, cola ni descriptores.
+- Primera medida de la imagen 1: `main` pasa de 832 a 752 bytes y el
+  trabajo de hash tiene marco propio de 144. La cadena más honda baja de
+  10224 a 10144; texto 103624, datos 800, bss 145808, libres 11744:
+  **1600 bytes de holgura**, con el mínimo de 1536 intacto. La separación
+  añade 64 bytes de texto respecto de la última medida, pero no cambia
+  `_end`; el margen ganado procede de los 80 bytes menos de pila activa.
+  Log `build/logs/re2-integracion-pila-hash.log`; objeto y marcos anteriores
+  conservados en `build/diagnostico-pila/`.
+- Pendiente paquete limpio de todas las imágenes, host y comprobaciones
+  RPCS3, incluidas las autopruebas de hash y ambas rutas de recorte.
+  No se supone mejora de velocidad ni validación PS3 del binario combinado.
+
 ## 2026-10-21 — Combinación RE2/SPE: host correcto, paquete bloqueado por pila
 
 - La unión inicial pasa 667 pruebas y 887192 verificaciones, cero fallos,
