@@ -1,5 +1,25 @@
 # Estado
 
+## 2026-10-21 — Primera regresión PS3 del conjunto: RE2
+
+- Log confirma `7c723d3`, `Salsa64 RE2 y SPE` (`SLSA00183`), escala afín
+  experimental activa y geometría vectorial con `spu_gfx1fase8`. Se carga
+  la ranura 0 al campo 1218; RE2 completa 829 campos emulados y 3010
+  tareas gráficas antes de volver al menú con estado limpio, cero campos
+  descartados por la cola y cero sin ranura. Los resúmenes registran cero
+  tareas cortadas y cero comandos de otra familia saltados.
+- Hash y tareas iguales al PPE; vectorial/escalar bit a bit, 64 lotes de
+  máscaras y A/B de detalle sin diferencias. El bloque de detalle se
+  publica en hardware sin avisos de bloque inválido. Holgura estática de
+  fase 8, 1584 bytes; 2976 sin tocar al cerrar, estimación por ceros.
+- Es una comprobación corta, no una regresión exhaustiva ni una medida de
+  ganancia. El autor avisa que terminó; falta su confirmación visual
+  explícita del paquete conjunto. El log termina en el menú, sin acreditar
+  todavía salida al XMB. Próxima prueba: carrera de Road Rash en el mismo
+  paquete, sin cambiar interruptores. Sin integración a main ni publicación.
+- Evidencia: `build/ps3/re2-spe/re2-20261021.log`, SHA-256
+  `b825d70328aea45e1c6bb89b7f9efbbe3a471bdd457908c0a0b8aff4b264f151`.
+
 ## 2026-10-21 — Paquete conjunto RE2/SPE completo y validado en RPCS3
 
 - Build limpio en Docker de `7c723d3`, sin reutilizar el directorio
