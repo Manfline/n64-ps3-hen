@@ -1,5 +1,27 @@
 # Estado
 
+## 2026-10-21 — Integración autorizada de RE2 y SPE en la rama principal
+
+- El autor da por realizadas las pruebas de RE2 y SPE y autoriza integrar
+  el conjunto. Se conserva el código del paquete probado `7c723d3`,
+  `Salsa64 RE2 y SPE` (`SLSA00183`); las revisiones posteriores solo
+  actualizan documentación. Se contrastan los árboles de fuentes,
+  bibliotecas y pruebas antes de la unión, sin cambios de ejecución.
+- Evidencia conservada: host 667 pruebas/887192 verificaciones/cero fallos,
+  trece imágenes SPE sobre el mínimo de 1536 y cuatro rutas RPCS3 correctas.
+  El log PS3 del conjunto confirma RE2 con carga de estado y cierre limpio;
+  Snap tiene además confirmación visual explícita del autor. Naboo queda
+  documentado como lentitud preexistente, no como regresión.
+- `gfx-afin-cadena` y `gfx-recorte-vector` permanecen optativos y apagados
+  por omisión; `gfx-escalar` conserva la referencia. No se incorporan el
+  experimento de destinos directos del recompilador ni nuevas HLE de
+  Acclaim o Turbo3D. Los pendientes de niebla de F-Zero, corte de comandos
+  de OoT y coste de la sala de la estatua siguen abiertos.
+- Integración local, sin push, etiqueta ni release. No se reconstruye o
+  renombra como RC el paquete experimental ya probado: conserva su código,
+  identificador y SHA. Un candidato público versionado requiere preparación
+  y aprobación por separado.
+
 ## 2026-10-21 — Battle for Naboo: lentitud preexistente, diagnóstico de consola
 
 - El autor aclara que la lentitud no es una regresión. El tramo de Naboo
