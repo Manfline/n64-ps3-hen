@@ -7,6 +7,7 @@
 #define SALSA64_PS3_THREAD_CLEANUP_H
 #include <stddef.h>
 #include <reent.h>
+#include <stdlib.h>
 
 static inline void salsa64_thread_reclaim(void)
 {
@@ -17,6 +18,15 @@ static inline void salsa64_thread_reclaim(void)
 	 * descriptores 0..2 del proceso (TTY y entrada compartidas). */
 	if (r == _GLOBAL_REENT)
 		return;
+	/* Esta newlib no recoge la cadena de potencias de cinco de dtoa.
+	 * Es exclusiva del contexto: no pertenece a su freelist ni al
+	 * resultado de la última conversión. Vaciarla evita que una libc
+	 * futura que sí la recoja pueda liberarla dos veces. */
+	while (r->_p5s) {
+		struct _Bigint *p = r->_p5s;
+		r->_p5s = p->_next;
+		free(p);
+	}
 	for (unsigned i = 0; i < 3; i++)
 		if (r->__sf[i]._file >= 0 && r->__sf[i]._file <= 2)
 			r->__sf[i]._close = NULL;

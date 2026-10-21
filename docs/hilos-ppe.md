@@ -22,6 +22,13 @@ reservas de conversión sin cerrar esos descriptores del proceso. No se
 modifican `FILE` externos ni el contexto global. Es específico de la newlib
 del toolchain PS3, que usa `__sf[3]` por hilo, no de libc del host.
 
+Además, la versión instalada no libera la cadena `_p5s` que conserva
+potencias de cinco para conversiones decimales. El helper vacía primero
+esa cadena exclusiva del hilo y la deja en NULL; después llama a la
+recogida general. No comparte bloques con la freelist ni con el resultado
+de la conversión. La prueba de precisión fuerza esa ruta: la primera
+limpieza conservaba 208 bytes por hilo, la completa conserva cero.
+
 `tests/phase0/memoria-hilos` separa hilos con enteros, decimales y logger,
 con y sin limpieza: ocho ciclos por lote, medidas exactas en bytes, y
 comprueba que el padre siga escribiendo después de cada `join`. Es una

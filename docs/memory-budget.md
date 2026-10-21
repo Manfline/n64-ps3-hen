@@ -137,6 +137,14 @@ hilo de emulación, con `memoria-hilos`, apagado por omisión; el detalle y
 los controles están en `hilos-ppe.md`. El log de diferencias entre cierres
 añade bytes exactos para distinguir un bloque pequeño del redondeo a KB.
 
+La primera recogida dejaba todavía 48–160 bytes en reaperturas del
+frontend. Un rastreo temporal de asignaciones identifica bloques de
+`_Balloc`/`__i2b` de contextos de hilo ya terminados, correspondientes a
+`_p5s`, no recogida por esta newlib. Una prueba de precisión confirma el
+defecto (208 bytes por hilo) y la corrección (cero). El candidato vacía
+también esa cadena antes de la recogida general. El rastreo no forma
+parte del paquete normal ni se activa durante la emulación habitual.
+
 
 ### Road Rash: medición y parche de consultas de espera (2026-10-20)
 

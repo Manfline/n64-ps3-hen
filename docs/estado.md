@@ -1,5 +1,28 @@
 # Estado
 
+## 2026-10-21 — Memoria: caché decimal residual identificada
+
+- El primer candidato reproduce el frontend completo en RPCS3: seis
+  reaperturas idénticas del homebrew gráfico, referencia +1840/+1904/
+  +1840/+1904/+1840 bytes entre cierres; limpieza inicial +48/+160/
+  +48/+48/+48. Ambas secuencias pasan seis pruebas de pantalla 42/42.
+  Se conserva como resultado parcial, no como ausencia total de fuga.
+- Un rastreo temporal identifica nuevos bloques de 36 bytes de `_Balloc`
+  y `__i2b` en contextos de hilo ya terminados: cadena `_p5s`, que la
+  newlib instalada no recoge con `_reclaim_reent`. También aparece una
+  reserva del hilo principal, que sigue vivo: no toda variación de heap
+  implica una asignación perdida al cerrar un juego.
+- Se añade un control de conversiones a 40 decimales: la limpieza inicial
+  falla de forma reproducible, 1664 bytes tras ocho hilos (208 por hilo).
+  Vaciar la cadena `_p5s` antes de la recogida general deja cero en los
+  ocho ciclos; los controles anteriores siguen dejando cero y el logger
+  continúa funcionando. No se cambia el toolchain ni se importa código.
+- Instrumentación temporal retirada del frontend y del enlace; solo
+  queda como artefacto local. Logs `build/memoria-rastro-rpcs3.log`,
+  `build/memoria-hilos-precision-rojo.log` y
+  `build/memoria-hilos-precision-verde.log`. Pendiente repetición del
+  frontend completo con la corrección final y validación PS3 real.
+
 ## 2026-10-21 — Memoria entre juegos: reproducción mínima y candidato
 
 - Se retoma la hipótesis de newlib ya documentada en `memory-budget.md`

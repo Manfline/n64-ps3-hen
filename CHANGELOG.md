@@ -7,7 +7,8 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 ## [Unreleased]
 
 - Añade limpieza optativa de reservas de newlib al cerrar el hilo de
-  emulación y una prueba aislada que preserva los descriptores compartidos.
+  emulación, incluida su caché decimal de potencias, y una prueba aislada
+  que preserva los descriptores compartidos.
 
 - Añade una HLE experimental de Turbo3D para Dark Rift, en una imagen SPE
   independiente y apagada por omisión; personajes, texturas y animaciones

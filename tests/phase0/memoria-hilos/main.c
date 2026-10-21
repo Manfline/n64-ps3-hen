@@ -14,14 +14,15 @@
 
 SYS_PROCESS_PARAM(1001, 0x100000);
 
-struct probe { bool decimal, clean, log; int ok; };
+struct probe { int decimal; bool clean, log; int ok; };
 static volatile double input = 1.0 / 7.0;
 
 static void worker(void *arg)
 {
 	struct probe *p = arg;
 	char text[128];
-	int n = p->decimal ? snprintf(text, sizeof text, "%.6f %.9e %.12g", input, input * 1234.0, input) :
+	int n = p->decimal == 2 ? snprintf(text, sizeof text, "%.40e %.40e", input * 1e40, input * 1e-40) :
+		p->decimal ? snprintf(text, sizeof text, "%.6f %.9e %.12g", input, input * 1234.0, input) :
 			    snprintf(text, sizeof text, "%d %x %s", 1234, 5678, "prueba");
 	p->ok = n > 0 && (unsigned)n < sizeof text;
 	if (p->log)
@@ -31,7 +32,7 @@ static void worker(void *arg)
 	sysThreadExit(0);
 }
 
-static int batch(const char *name, bool decimal, bool clean, bool log, int *growth)
+static int batch(const char *name, int decimal, bool clean, bool log, int *growth)
 {
 	/* El mismo hilo principal registra todos los valores. Un registro de
 	 * calentamiento evita incluir su primera reserva de stdio en el lote. */
@@ -68,20 +69,23 @@ static int batch(const char *name, bool decimal, bool clean, bool log, int *grow
 int main(void)
 {
 	salsa64_log_init("salsa64-memoria-hilos");
-	int integer = 0, ref = 0, clean = 0, logged = 0, logged_clean = 0;
+	int integer = 0, ref = 0, clean = 0, logged = 0, logged_clean = 0, precise = 0, precise_clean = 0;
 	int failed = batch("enteros", false, false, false, &integer);
 	if (!failed) failed = batch("decimal-referencia", true, false, false, &ref);
 	if (!failed) failed = batch("decimal-limpio", true, true, false, &clean);
 	if (!failed) failed = batch("registro-referencia", true, false, true, &logged);
 	if (!failed) failed = batch("registro-limpio", true, true, true, &logged_clean);
+	if (!failed) failed = batch("precision-referencia", 2, false, false, &precise);
+	if (!failed) failed = batch("precision-limpia", 2, true, false, &precise_clean);
 	/* No exigir que la referencia fugue: una libc que ya recoja sus
 	 * reservas también es válida. Sí exigir que la limpieza no acumule. */
-	if (clean != 0 || logged_clean != 0) {
-		salsa64_log("FALLO: los lotes limpios conservan %d/%d bytes", clean, logged_clean);
+	if (clean != 0 || logged_clean != 0 || precise_clean != 0) {
+		salsa64_log("FALLO: los lotes limpios conservan %d/%d/%d bytes", clean, logged_clean, precise_clean);
 		failed = 1;
 	}
 	salsa64_log("memoria: lotes enteros %d referencia %d limpio %d bytes", integer, ref, clean);
 	salsa64_log("memoria: registro referencia %d limpio %d bytes", logged, logged_clean);
+	salsa64_log("memoria: precision referencia %d limpio %d bytes", precise, precise_clean);
 	salsa64_log("RESULTADO memoria-hilos: %s", failed ? "FALLO" : "OK");
 	salsa64_log_shutdown();
 	return failed;
