@@ -81,7 +81,9 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 	/* El microcódigo se carga con cada tarea: su estado empieza de cero. */
 	g->dl_sp = 0;
 	g->obj_rendermode = 0;
+#if GFX_HAS(F3DEX2) && GFX_HAS(S2DEX)
 	g->chain_affine = 0;
+#endif
 #if GFX_HAS(S2DEX)
 	g->chain_ex = 0;
 #endif
