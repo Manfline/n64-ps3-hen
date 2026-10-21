@@ -1,5 +1,27 @@
 # Estado
 
+## 2026-10-21 — Regresión F3D con Mario 64 y crecimiento entre cierres
+
+- Mismo candidato `5c51bb2`/`SLSA00184`, Turbo3D activo. Se separa Mario
+  del log compuesto: apertura en línea 7278, cierre limpio en 8120 y
+  salida normal al XMB en 8145–8146. Imagen F3D con autopruebas iguales
+  al PPE y 2180 tareas gráficas, sin avisos de tareas malas o sin HLE ni
+  cortes reportados en los resúmenes. Esta ejecución no certifica por sí
+  sola la apariencia visual ni todos los juegos F3D.
+- 4467 campos realmente emulados, cero descartes de cola y campos sin
+  ranura. El cierre imprime campo 13934 por carga de estado: ranura 0,
+  campo 1889 → 11356, completada en 150,2 ms. No contar el salto del
+  estado como campos ejecutados ni derivar FPS de él.
+- En cuatro cierres de juegos distintos, heap en uso reportado:
+  75365 → 75367 → 75369 → 75371 KB. El aviso de crecimiento superior
+  a 1024 bytes se reproduce tras Mario sin tareas Turbo3D. El patrón es
+  acumulativo en estos cierres, pero no identifica una asignación perdida
+  ni demuestra una regresión del candidato: falta aislar el origen y una
+  referencia equivalente anterior. Arena y tope permanecen constantes.
+- Log `build/ps3/re2-spe/turbo3d-regresion-mario64-20261021.log`, SHA-256
+  `e4176e4fb33ef2822e27237251481a621cbef95e3d6f458a12e13638468b98b9`.
+  Sin cambios de código, banderas, main o publicación.
+
 ## 2026-10-21 — Segunda corrida de Dark Rift: cierre limpio y aviso de memoria
 
 - Mismo paquete `5c51bb2`/`SLSA00184`. El archivo descargado contiene la

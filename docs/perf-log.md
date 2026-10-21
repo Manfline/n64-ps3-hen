@@ -1,5 +1,18 @@
 # Registro de rendimiento
 
+## 2026-10-21 — Control F3D con Mario 64 en el candidato Turbo3D
+
+`5c51bb2`/`SLSA00184`, misma aplicación: Mario usa imagen F3D, 2180 tareas
+gráficas y 4467 campos realmente emulados, sin cortes reportados ni
+descartes de cola. 43 ventanas gráficas, rango 51,2–62,9 campos/s;
+las últimas dan 59,8–59,9. No son FPS únicos ni un A/B de rendimiento.
+La carga de estado de ranura 0 salta del campo 1889 al 11356: excluir ese
+salto del trabajo ejecutado. Regreso al menú y salida normal al XMB.
+Aviso acumulativo de memoria entre cierres registrado en `estado.md`.
+
+Log compuesto `build/ps3/re2-spe/turbo3d-regresion-mario64-20261021.log`,
+SHA-256 `e4176e4fb33ef2822e27237251481a621cbef95e3d6f458a12e13638468b98b9`.
+
 ## 2026-10-21 — Segunda corrida Turbo3D, mismo paquete en PS3
 
 Revisión `5c51bb2`, Dark Rift, solo líneas 2727–7187 del log compuesto:
