@@ -27,6 +27,13 @@ Paquete de prueba «Salsa64 Racer video» (SLSA00177):
 `build/salsa64-racer-video/salsa64-racer-video.pkg`, SHA-256
 `caf4eeaec9c7f9caf623571153e53e2d80504de2a2863bffedc746411c2b99d7`.
 
+Tras integrar los cambios actuales de Road Rash y del detalle del SPE, la
+regresión del host pasó con 664 pruebas y 870 680 verificaciones. Paquete
+local de regresión «Salsa64 regresión» (SLSA00178):
+`build/salsa64-regresion/salsa64-regresion.pkg`, SHA-256
+`4717063608f6380bab8babb84be32eaf0ae1113cc446139bd50e2c3a049220eb`.
+No se subió a la consola.
+
 ## 2026-10-20 — Racer: traza VI completa para capturar el video
 
 La bandera apagada por omisión `trace-vi` ahora acepta `N` o `N INICIO` y

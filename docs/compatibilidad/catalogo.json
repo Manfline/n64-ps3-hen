@@ -1,0 +1,30 @@
+{
+  "updated": "2026-10-20",
+  "states": ["Verificado en PS3", "Jugable", "Con problemas", "En investigación", "Sin probar"],
+  "evidence": ["PS3 real", "Host y LLE", "Sin prueba"],
+  "games": [
+    {"name":"Star Wars Episode I: Racer","state":"Verificado en PS3","evidence":"PS3 real","scope":"Video de introducción","tags":["VI","video"],"note":"El salto vertical del video entrelazado quedó corregido."},
+    {"name":"Road Rash 64","state":"Con problemas","evidence":"PS3 real","scope":"Carrera","tags":["JIT","rendimiento"],"note":"Sin retraducciones por la sonda de espera; sigue sin alcanzar velocidad completa."},
+    {"name":"Diddy Kong Racing","state":"Jugable","evidence":"PS3 real","scope":"Carrera y aventura","tags":["F3DDKR","HLE"],"note":"La HLE de Rare dibuja las rutas probadas."},
+    {"name":"Killer Instinct Gold","state":"Jugable","evidence":"PS3 real","scope":"Juego","tags":["HLE","gráficos"],"note":"Las listas del CPU se procesan en la HLE gráfica."},
+    {"name":"Resident Evil 2","state":"Con problemas","evidence":"PS3 real","scope":"Campaña y video","tags":["S2DEX","video"],"note":"Jugable; las letras de OPTIONS siguen revueltas y una sala baja de velocidad."},
+    {"name":"Star Wars: Rogue Squadron","state":"Jugable","evidence":"PS3 real","scope":"Menús y misión","tags":["Factor 5","VI"],"note":"La HLE funciona a 60 campos/s; algunos logos de menú no tienen transparencia."},
+    {"name":"Indiana Jones and the Infernal Machine","state":"En investigación","evidence":"Host y LLE","scope":"Primera misión","tags":["Factor 5","HLE"],"note":"La HLE coincide en las escenas revisadas; falta la prueba en PS3."},
+    {"name":"Star Wars Episode I: Battle for Naboo","state":"Sin probar","evidence":"Sin prueba","scope":"—","tags":["Factor 5","HLE"],"note":"Comparte familia de microcódigo con Indiana Jones; no hay prueba documentada."},
+    {"name":"Yoshi's Story","state":"Con problemas","evidence":"PS3 real","scope":"Juego","tags":["S2DEX","capas 8-bit"],"note":"Dibuja, pero puede colgarse al golpear un bloque y muestra objetos o puntos ausentes."},
+    {"name":"Conker's Bad Fur Day","state":"Con problemas","evidence":"PS3 real","scope":"Jefe final","tags":["framebuffer","rendimiento"],"note":"El jefe final ya se ve, pero faltan texturas y el rendimiento es bajo."},
+    {"name":"Mario Tennis","state":"Con problemas","evidence":"PS3 real","scope":"Menús","tags":["alfa","gráficos"],"note":"Los logos de menú todavía pierden transparencia."},
+    {"name":"Mortal Kombat 4","state":"Con problemas","evidence":"PS3 real","scope":"Combate","tags":["HUD"],"note":"Faltan las barras de salud."},
+    {"name":"Pokémon Snap","state":"Con problemas","evidence":"PS3 real","scope":"Juego","tags":["orden de dibujo"],"note":"Persisten errores de orden de dibujo."},
+    {"name":"Star Fox 64","state":"Con problemas","evidence":"PS3 real","scope":"Menú","tags":["menú"],"note":"El menú duplica opciones."},
+    {"name":"The Legend of Zelda: Ocarina of Time","state":"Con problemas","evidence":"PS3 real","scope":"Juego","tags":["iluminación"],"note":"El resplandor de las antorchas atraviesa paredes."},
+    {"name":"The Legend of Zelda: Majora's Mask","state":"Con problemas","evidence":"PS3 real","scope":"Juego","tags":["iluminación"],"note":"Quedan fallos de iluminación."},
+    {"name":"NBA Showtime","state":"Con problemas","evidence":"PS3 real","scope":"Juego","tags":["MusyX","velocidad"],"note":"El audio funciona; la emulación corre acelerada."},
+    {"name":"Hydro Thunder","state":"Jugable","evidence":"PS3 real","scope":"Juego","tags":["MusyX","audio"],"note":"El audio MusyX está disponible en la prueba documentada."},
+    {"name":"Rush 2049","state":"Jugable","evidence":"PS3 real","scope":"Juego","tags":["MusyX","audio"],"note":"El audio MusyX está disponible en la prueba documentada."},
+    {"name":"F-Zero X","state":"Jugable","evidence":"PS3 real","scope":"Juego","tags":["orden de dibujo"],"note":"La corrección de orden de dibujo está verificada."},
+    {"name":"Castlevania","state":"Jugable","evidence":"PS3 real","scope":"Juego","tags":["orden de dibujo"],"note":"La corrección de orden de dibujo está verificada."},
+    {"name":"FIFA 99","state":"En investigación","evidence":"PS3 real","scope":"Partido","tags":["juego"],"note":"Llega a iniciar un partido; falta una prueba de mayor alcance."},
+    {"name":"Animal Forest","state":"En investigación","evidence":"PS3 real","scope":"Menús","tags":["S2DEX","localización"],"note":"Se ve, pero los menús de fecha y nombre requieren trabajo."}
+  ]
+}

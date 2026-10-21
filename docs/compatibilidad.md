@@ -4,6 +4,10 @@ Censo de los juegos objetivo (tabla de docs/proyecto.md) y algunos extra. Los
 juegos se prueban con respaldos propios, fuera del repositorio; aquí solo hay
 datos de compatibilidad.
 
+Para consultar el censo por título, estado, evidencia y etiqueta técnica, abre
+el [radar de compatibilidad](compatibilidad/index.html). Sus datos están en
+`docs/compatibilidad/catalogo.json`; esta página conserva el detalle histórico.
+
 Las entradas antiguas conservan sus métodos de prueba como historia.
 
 ## 2026-10-18 — Candidata de la v0.2.8 en la PS3 real
