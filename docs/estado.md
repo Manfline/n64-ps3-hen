@@ -1,5 +1,30 @@
 # Estado
 
+## 2026-10-21 — Combinación RE2/SPE: normales aptas, recorte aún no cabe
+
+- La extracción del hash (`3818992`) pasa el build limpio de las cinco
+  imágenes normales: holguras 1600, 1600, 14368, 3056 y 1616 bytes. Las
+  fases 1 a 7 también cumplen el mínimo de 1536. Host con ASan y UBSan:
+  **667 pruebas, 887192 verificaciones, cero fallos**,
+  `build/logs/re2-spe-host.log`.
+- El paquete se detiene en la fase 8: texto 103688, datos 800, bss 145808,
+  11616 bytes libres, cadena 10144, holgura **1472**. Frente a la imagen 1
+  normal tiene 64 bytes más de texto y `_end` avanza 128 por alineamiento;
+  el marco de `main` sigue en 752. No se reduce el mínimo ni la caché.
+  Log `build/logs/re2-spe-paquete.log`.
+- Se mide aparte la extracción de la autoprueba `GFX_JOB_CLIP4` a una
+  función noinline/cold: texto 103784, mismo `_end`, marco de `main` 752 y
+  holgura 1472. No recupera pila y añade 96 bytes de texto; **se retira**.
+  Log `build/logs/re2-spe-pila-clip4.log`, objeto y marcos anteriores en
+  `build/diagnostico-pila/fase8-antes.*`. Tras dos fallos iguales de fase 8
+  se detienen las compilaciones; no se hace un tercer intento.
+- No hay paquete completo ni regresión RPCS3 del conjunto. Se conserva la
+  extracción del hash que sí reduce la pila, sin quitar el recorte opcional
+  ni generar un paquete que lo omita. El siguiente análisis debe centrarse
+  en los marcos aún vivos del bucle o en el código de fase 8 con evidencia
+  del binario; no presupone que separar otra función vaya a bastar.
+  Main y los paquetes de consola anteriormente validados siguen intactos.
+
 ## 2026-10-21 — Combinación RE2/SPE: separar la autoprueba recupera pila
 
 - El objeto anterior muestra la autoprueba de hash integrada en `main`,

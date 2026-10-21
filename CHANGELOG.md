@@ -10,7 +10,8 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
   activa sin reducir cachés ni el margen de seguridad.
 
 - Prepara la combinación de la corrección afín de RE2 con el lote SPE:
-  pruebas host correctas; paquete conjunto bloqueado por el margen de pila.
+  pruebas host e imágenes normales correctas; paquete conjunto bloqueado
+  por el margen de pila de la variante de recorte experimental.
 
 - Documenta el corte por presupuesto de comandos de OoT, observado también
   en la imagen normal anterior; no se considera un fallo resuelto.
