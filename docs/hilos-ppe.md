@@ -3,6 +3,31 @@
 El frontend de la PS3 (`src/frontend/main.c`) reparte el trabajo entre los
 dos hilos de hardware del PPE. Decidido el 2026-10-10.
 
+### Reservas de libc al terminar el hilo de emulación
+
+El candidato `memoria-hilos` recoge las reservas del contexto TLS de newlib
+como última llamada a libc del hilo de emulación, después de publicar el
+fin y despertar al principal; el principal sigue esperando `sysThreadJoin`
+antes de cerrar el juego. No modifica las colas, DMA, geometría o JIT.
+Está apagado por omisión; `/dev_hdd0/salsa64/memoria-hilos` lo activa al
+abrir cada juego. Renombrarlo a `.off` conserva la referencia en la siguiente
+apertura. No limpiar ese contexto desde otro hilo ni volver a usarlo después.
+
+`sysThreadExit` no recoge las reservas auxiliares de newlib. No basta con
+llamar `_reclaim_reent` sin más: la biblioteca instalada ejecuta `fclose`
+sobre los flujos locales del hilo. `thread_cleanup.h` desactiva únicamente
+su callback de cierre para los descriptores estándar 0..2 en los tres
+`FILE` embebidos del contexto local; la biblioteca libera sus buffers y
+reservas de conversión sin cerrar esos descriptores del proceso. No se
+modifican `FILE` externos ni el contexto global. Es específico de la newlib
+del toolchain PS3, que usa `__sf[3]` por hilo, no de libc del host.
+
+`tests/phase0/memoria-hilos` separa hilos con enteros, decimales y logger,
+con y sin limpieza: ocho ciclos por lote, medidas exactas en bytes, y
+comprueba que el padre siga escribiendo después de cada `join`. Es una
+prueba sin ROMs ni gráficos; el cierre completo del frontend se valida
+aparte con reaperturas de homebrew y después en hardware real.
+
 | Hilo | Prioridad | Qué hace |
 |---|---|---|
 | **Emulación** (`emu_thread`, creado con `sysThreadCreate`, pila de 256 KB) | 1000 | CPU de la N64 (`salsa64_n64_run_field`), planificador de eventos, PI/SI/AI/VI, arranque de tareas del RSP hacia el SPE 0 y espera de su fin, controles aplicados al PIF, copia de la imagen del VI, copia del guardado cuando toca volcarlo, medición A/B de vitest, texto del ISViewer |

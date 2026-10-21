@@ -1,5 +1,28 @@
 # Estado
 
+## 2026-10-21 — Memoria entre juegos: reproducción mínima y candidato
+
+- Se retoma la hipótesis de newlib ya documentada en `memory-budget.md`
+  el 2026-10-18. La prueba propia `memoria-hilos`, sin ROMs ni SPEs,
+  ejecuta ocho hilos por lote: enteros 0 bytes acumulados, decimales
+  4992 y decimales con logger 13312. Con recogida del contexto TLS,
+  ambos lotes dejan 0 bytes en RPCS3. No es todavía una medición PS3 real
+  ni demuestra que explique todas las reservas del frontend.
+- Se inspecciona la biblioteca efectivamente enlazada: `sysThreadExit`
+  no llama a la recogida de newlib; `_reclaim_reent` libera las reservas,
+  pero su limpieza stdio ejecuta `fclose`. El candidato preserva los
+  descriptores estándar compartidos 0..2 al limpiar solo sus `FILE`
+  locales embebidos; la prueba confirma que el padre sigue escribiendo.
+- Limpieza optativa al final de `emu_thread`, `memoria-hilos`, apagada
+  por omisión; se conserva el `join` antes de cerrar el juego. Sin
+  cambios en cálculos, SPE, DMA, JIT ni bibliotecas MIT. El nuevo candidato
+  parte de Turbo3D ya probado; main y el paquete instalado no se modifican.
+- Se añaden bytes exactos a la comparación del heap entre cierres y se
+  describe el umbral como crecimiento, no como prueba automática de fuga.
+  Pendiente cerrar la comparación OFF/ON del frontend completo con
+  reaperturas homebrew y después hardware real. Logs locales de la prueba:
+  `build/memoria-hilos-rpcs3.log` y `build/memoria-hilos-registro-rpcs3.log`.
+
 ## 2026-10-21 — Regresión F3D con Mario 64 y crecimiento entre cierres
 
 - Mismo candidato `5c51bb2`/`SLSA00184`, Turbo3D activo. Se separa Mario

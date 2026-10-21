@@ -190,6 +190,7 @@
 #include "platform/ps3/rsp_spu.h"
 #include "platform/ps3/log.h"
 #include "platform/ps3/rec_cache.h"
+#include "platform/ps3/thread_cleanup.h"
 #include "frontend/filters/filters.h"
 #include "rdp/rdp.h"
 #include "rsp/gfx/hle.h"
@@ -373,6 +374,7 @@ static struct mempakfile mempak_file;
 static uint8_t *rdram;
 static volatile int running;    /* la sesión de juego sigue */
 static volatile int emu_done;   /* el hilo de emulación salió de su bucle */
+static bool reclaim_emu;        /* optativo: recoger reservas TLS de newlib antes de salir */
 static volatile int app_quit;   /* «Salir del juego» del sistema: salir de la aplicación */
 /* Pausa (pausectl.h): el menú del sistema y el cuadro de START + SELECT.
  * pause_ctl es solo del hilo de presentación (el callback de sysutil corre
@@ -2188,6 +2190,10 @@ static void emu_thread(void *arg)
 	lwsync();
 	emu_done = 1;
 	wake();
+	/* Última operación de libc del hilo. El principal espera el join antes
+	 * de recoger el juego; no se toca su contexto ni sus FILE compartidos. */
+	if (reclaim_emu)
+		salsa64_thread_reclaim();
 	sysThreadExit(0);
 }
 
@@ -4507,12 +4513,12 @@ static void mem_close_report(const struct mem_close_in *in)
 		    rec_sample ? (unsigned)(sizeof *rec_sample >> 10) : 0, rec_profile ? (unsigned)(sizeof *rec_profile >> 10) : 0,
 		    rom_pages ? 1u : 0u);
 	if (prev.have)
-		salsa64_log("memoria, cambio frente al cierre anterior (juego %u tras el primero): heap en uso %+d KB, libres %+d KB "
+		salsa64_log("memoria, cambio frente al cierre anterior (juego %u tras el primero): heap en uso %+d KB (%+d bytes), libres %+d KB "
 			    "en %+d bloques, arena %+d KB, tope %+ld KB, usuario libre %+d KB%s",
-			    ++prev.games, (mi.uordblks - prev.used) >> 10, (mi.fordblks - prev.free_) >> 10,
+			    ++prev.games, (mi.uordblks - prev.used) >> 10, mi.uordblks - prev.used, (mi.fordblks - prev.free_) >> 10,
 			    mi.ordblks - prev.blocks, (mi.arena - prev.arena) >> 10, (top - prev.top) >> 10,
 			    um_ok ? ((int)um.available - (int)prev.user) >> 10 : 0,
-			    mi.uordblks - prev.used > 1024 ? " (el heap en uso creció más de 1 KB: fuga)" : "");
+			    mi.uordblks - prev.used > 1024 ? " (crecimiento de heap superior a 1 KB)" : "");
 	prev.have = true;
 	prev.arena = mi.arena, prev.used = mi.uordblks, prev.free_ = mi.fordblks, prev.blocks = mi.ordblks;
 	prev.top = top;
@@ -4995,6 +5001,9 @@ static enum game_end run_game_once(uint8_t *rom, uint32_t rom_size, const char *
 	}
 
 	/* El hilo de emulación. */
+	reclaim_emu = file_exists(SALSA64_DATA_DIR "/memoria-hilos");
+	salsa64_log("memoria: limpieza del hilo de emulación %s (memoria-hilos)",
+		    reclaim_emu ? "experimental activa" : "referencia");
 	sys_ppu_thread_t emu_tid;
 	if (sysThreadCreate(&emu_tid, emu_thread, NULL, EMU_PRIO, EMU_STACK, THREAD_JOINABLE,
 			    (char *)"salsa64_emu") != 0) {
