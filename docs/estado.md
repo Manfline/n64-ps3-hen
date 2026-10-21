@@ -1,5 +1,22 @@
 # Estado
 
+## 2026-10-21 — RE2: regresión básica en consola y cierre limpio
+
+- Tras revisar menús, partida e inventario con el candidato activo, el autor
+  informa que todo se ve bien. El log de la misma revisión `4ef227f`
+  confirma 4620 campos emulados, 17098 tareas gráficas, cero campos
+  descartados por la cola y cero campos sin ranura en RE2. Sus resúmenes
+  registran cero tareas cortadas y cero comandos de otro microcódigo saltados.
+- RE2 vuelve al menú con estado limpio, sin campos ni tareas pendientes.
+  La sesión completa termina después mediante «Salir al XMB» y salida normal.
+  Es regresión básica de las escenas revisadas, no validación exhaustiva ni
+  comparación contra el microcódigo real. La sala de la estatua conserva su
+  incidencia de rendimiento independiente.
+- Evidencia: `build/ps3/re2-afin/regresion-20261021.log`, SHA-256
+  `1ccfccdad4df9e590d486fb135db7d4613619f4af0c947f639e60d49e82e162e`.
+  El candidato queda optativo, activo en la consola e independiente de main;
+  falta preparar y validar la combinación con el lote vectorial integrado.
+
 ## 2026-10-21 — RE2: OPTIONS legible en la PS3 con el candidato activo
 
 - El autor confirma que OPTIONS ya se ve correctamente. El log identifica
