@@ -145,10 +145,12 @@ static __attribute__((noinline, cold)) void fill_stack(void)
 
 #if GFX_SPE0_IMG == 1
 /* Solo se ocupa este marco al pedir detalle: ninguna reserva en el camino
- * normal. Se publica el bloque antes de devolver el resultado de la cola. */
+ * normal. El DMA exige múltiplos y alineación de 16 bytes; pedir 128 aquí
+ * reserva hasta 112 bytes extra para realinear la pila. El destino conserva
+ * su alineación de 128. Se espera el DMA antes de abandonar este marco. */
 static __attribute__((noinline)) void run_detail(struct gfx_result *res)
 {
-	struct gfx_detail detail __attribute__((aligned(128)));
+	struct gfx_detail detail __attribute__((aligned(16)));
 	state.detail = &detail;
 	gfx_run(&state, &job, res);
 	state.detail = NULL;

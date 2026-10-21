@@ -6,6 +6,9 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 
 ## [Unreleased]
 
+- Ajusta la alineación local del diagnóstico DMA a 16 bytes para recuperar
+  pila en la variante de recorte, conservando el destino alineado a 128.
+
 - Separa la autoprueba de hash del bucle gráfico SPE para liberar pila
   activa sin reducir cachés ni el margen de seguridad.
 

@@ -1,5 +1,17 @@
 # Registro de rendimiento
 
+## 2026-10-21 — Pila del diagnóstico gráfico: alineación local de DMA
+
+Medición estática, no tiempos de PS3. La combinación RE2/SPE con el hash
+separado aún deja 1472 bytes de holgura en fase 8. El bloque local del
+detalle pide alineación de 128 aunque el DMA admite 16; el destino externo
+conserva sus 128 y se espera la transferencia antes de salir.
+
+Al alinear el bloque local a 16, `run_detail` baja de 464 a 352 bytes y la
+cadena total de 10144 a 10032. Texto 103688 → 103680, `_end` sin cambios,
+holgura 1472 → 1584. No se cambian cachés ni el mínimo de 1536, ni se
+atribuye beneficio de FPS. Log `build/logs/re2-spe-pila-detalle16.log`.
+
 ## 2026-10-20 — A/B de recorte SIMD: menor coste de geometría (PS3 real)
 
 Mismo paquete `salsa64-recorte-vector`: referencia `spu_gfx1fase7` frente a

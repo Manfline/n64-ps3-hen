@@ -1,5 +1,23 @@
 # Estado
 
+## 2026-10-21 — Recorte RE2/SPE: margen recuperado con DMA alineado a 16
+
+- El código generado de `run_detail` reserva 464 bytes para el bloque de
+  diagnóstico: además del contenido y los registros, realinea su dirección
+  local a 128. El contrato de `spukit_dma_put` admite direcciones alineadas
+  a 16 y tamaños múltiplos de 16. El destino externo continúa alineado a
+  128 y `gfx_io_detail_end` espera el DMA antes de abandonar el marco.
+- Se ajusta solo la alineación de la variable local de 128 a 16. No se
+  cambia tamaño, versión, contadores, cachés, geometría ni presupuesto de
+  pila. El nuevo marco mide 352 bytes: **112 menos**. En fase 8, texto
+  103680, datos 800, bss 145808, libres 11616 y cadena 10032: holgura
+  **1584**, superior al mínimo de 1536. Log
+  `build/logs/re2-spe-pila-detalle16.log`.
+- La medida aislada resuelve el límite estático de la variante pendiente;
+  todavía faltan paquete limpio completo, host y RPCS3 con detalle activo
+  para comprobar la publicación del bloque y las autopruebas de recorte.
+  Sin cambios en main o consola ni afirmaciones de velocidad.
+
 ## 2026-10-21 — Combinación RE2/SPE: normales aptas, recorte aún no cabe
 
 - La extracción del hash (`3818992`) pasa el build limpio de las cinco
