@@ -1,5 +1,20 @@
 # Registro de rendimiento
 
+## 2026-10-21 — Pokémon Snap en el paquete conjunto (PS3 real)
+
+Revisión `7c723d3`, afín y recorte experimental activos: 11513 campos
+emulados, 8073 tareas, cierre limpio y cero descartes de la cola. Los 40
+resúmenes periódicos del tramo de Snap tienen mediana 59,8 campos/s; no es
+una cifra de FPS de imágenes únicas. Hay ventanas activas de 55–56,6.
+
+No es benchmark comparable: empieza a 1× con Nítida, cambia a CRT Trinitron
+y luego a escala 5×. Las ventanas de 0 y 21,8 campos/s incluyen la pausa de
+8,4 s y su reanudación; no representan rendimiento sostenido. El autor no
+observó defectos gráficos en lo probado, sin especificar recorrido completo.
+No se atribuye mejora de velocidad ni corrección universal del orden de dibujo.
+Log `build/ps3/re2-spe/pokemon-snap-20261021.log`, SHA-256
+`a6c891d39b1b73e0e442caabe2f5a8546eb0efaa264f83e2de425ad21fb5369f`.
+
 ## 2026-10-21 — Pila del diagnóstico gráfico: alineación local de DMA
 
 Medición estática, no tiempos de PS3. La combinación RE2/SPE con el hash

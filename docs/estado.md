@@ -1,5 +1,30 @@
 # Estado
 
+## 2026-10-21 — Pokémon Snap: regresión adicional del conjunto en PS3
+
+- El autor reporta ausencia de defectos gráficos aparentes en lo jugado.
+  Log de `7c723d3`, `Salsa64 RE2 y SPE` (`SLSA00183`), tramo de Snap
+  separado de las otras aperturas de la misma sesión: 11513 campos emulados
+  y 8073 tareas gráficas. Cierre del juego limpio, cero descartes por cola,
+  cero campos sin ranura; resúmenes con cero tareas cortadas y cero comandos
+  de otro microcódigo saltados. El log termina después en el menú, no XMB.
+- Afín experimental y recorte activos, imagen `spu_gfx1fase8`. Hash/tareas
+  iguales al PPE; vectorial/escalar bit a bit, máscaras de 64 lotes y A/B
+  de detalle sin diferencias. La ruta vectorial se usa durante el juego,
+  y se reciben bloques de detalle sin avisos de datos inválidos. Holgura
+  1584 bytes y 2976 sin tocar al cerrar (estimación por ceros).
+- El tramo tiene 40 resúmenes periódicos: mediana 59,8 campos/s, no FPS de
+  imágenes únicas. Incluye pausas y cambios de presentación: empieza a 1×,
+  pasa por CRT Trinitron y termina a 5×. Hay ventanas activas de 55–56,6
+  campos/s; las de 0 y 21,8 coinciden con la pausa y su reanudación. No es
+  una medida A/B ni prueba de velocidad constante. Detalle en perf-log.
+- La observación visual respalda las escenas probadas, pero no identifica
+  el recorrido o la evaluación de fotos ni demuestra resuelto el reporte
+  histórico de orden de dibujo en todas las situaciones. No se cambia el
+  estado global de compatibilidad ni se atribuye la imagen al arreglo afín.
+- Evidencia `build/ps3/re2-spe/pokemon-snap-20261021.log`, SHA-256
+  `a6c891d39b1b73e0e442caabe2f5a8546eb0efaa264f83e2de425ad21fb5369f`.
+
 ## 2026-10-21 — Primera regresión PS3 del conjunto: RE2
 
 - Log confirma `7c723d3`, `Salsa64 RE2 y SPE` (`SLSA00183`), escala afín
