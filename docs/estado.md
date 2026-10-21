@@ -1,5 +1,21 @@
 # Estado
 
+## 2026-10-21 — Combinación de OPTIONS de RE2 con la base SPE actual
+
+- Se combina la corrección optativa de escala afín probada en la PS3
+  (`4ef227f`) con la base `8ac2708`, que contiene el lote vectorial y el
+  recorte experimental. Se conservan ambos interruptores independientes:
+  `gfx-afin-cadena` y `gfx-recorte-vector`, apagados por omisión;
+  `gfx-escalar` mantiene el retorno a la geometría escalar.
+- La unión conserva los bits de trabajo existentes y añade el bit afín
+  `0x1000`; no modifica el descriptor de 112 bytes ni el estado persistente.
+  Los conflictos se limitaban a entradas de documentación y a dos
+  definiciones contiguas de interruptores: se conservan ambas.
+- Las pruebas anteriores son evidencia de cada candidato por separado, no
+  validación del binario conjunto. Pendientes host, presupuesto de todas
+  las imágenes SPE y regresión RPCS3, seguidos de OPTIONS en la PS3.
+  No se modifica main ni se envía o publica este paquete durante la unión.
+
 ## 2026-10-21 — Regresión PS3 del paquete de integración SPE
 
 Paquete `SLSA00181`, código `74e41b9`, sin el experimento de destinos del
@@ -96,6 +112,159 @@ código solo modifican documentación.
   `build/logs/spe-integracion-rpcs3-{normal,vector}.log`.
   No mide rendimiento ni sustituye regresión comercial en PS3. Falta esta
   última; sin envío, integración en la rama principal ni publicación.
+
+## 2026-10-21 — RE2: regresión básica en consola y cierre limpio
+
+- Tras revisar menús, partida e inventario con el candidato activo, el autor
+  informa que todo se ve bien. El log de la misma revisión `4ef227f`
+  confirma 4620 campos emulados, 17098 tareas gráficas, cero campos
+  descartados por la cola y cero campos sin ranura en RE2. Sus resúmenes
+  registran cero tareas cortadas y cero comandos de otro microcódigo saltados.
+- RE2 vuelve al menú con estado limpio, sin campos ni tareas pendientes.
+  La sesión completa termina después mediante «Salir al XMB» y salida normal.
+  Es regresión básica de las escenas revisadas, no validación exhaustiva ni
+  comparación contra el microcódigo real. La sala de la estatua conserva su
+  incidencia de rendimiento independiente.
+- Evidencia: `build/ps3/re2-afin/regresion-20261021.log`, SHA-256
+  `1ccfccdad4df9e590d486fb135db7d4613619f4af0c947f639e60d49e82e162e`.
+  El candidato queda optativo, activo en la consola e independiente de main;
+  falta preparar y validar la combinación con el lote vectorial integrado.
+
+## 2026-10-21 — RE2: OPTIONS legible en la PS3 con el candidato activo
+
+- El autor confirma que OPTIONS ya se ve correctamente. El log identifica
+  `4ef227f`, aplicación `Salsa64 RE2 OPTIONS` (`SLSA00182`), y anuncia
+  `gfx-afin-cadena` experimental activo. Confirma además la carga de la
+  ranura 0: campo 2198 → 1218, el mismo estado guardado en la referencia.
+- Las autopruebas de las imágenes usadas dan hash y tareas iguales al PPE.
+  Los resúmenes recogidos registran cero tareas cortadas y cero comandos
+  de otro microcódigo saltados. El log termina mientras sigue la ejecución:
+  no acredita todavía el cierre limpio ni una regresión completa del juego.
+- Log activo conservado en `build/ps3/re2-afin/activado-20261021.log`,
+  SHA-256 `93ddcc76e87da8204c505f3bbf577ce7dc0cf99266fed7586ac7dde3f95a25e4`.
+  Referencia en `build/ps3/re2-afin/referencia-20261021.log`, SHA-256
+  `f87c60eef1165e187ba2606bac8bf9062befac7c1fc5f5fc3652117d8cc17ecc`.
+  Estado respaldado en `build/ps3/re2-afin/referencia-options.st0`, SHA-256
+  `6a709fb7271f682b74d4f0a2234cf4cbbfba694cd47afae0939d15cc57a4e112`.
+- Validación visual comunicada por el autor, sin inspección de una captura
+  descargada ni comparación nueva contra el microcódigo real. No demuestra
+  mejora de velocidad ni resuelve el coste de la sala de la estatua.
+  El candidato sigue optativo, en rama aislada y sin integrar a main.
+
+## 2026-10-21 — RE2: el candidato afín recupera el margen del SPE
+
+- Se revisó el estado transitorio de encadenamiento: solo S2DEX puede
+  activarlo al cargar F3DEX2 con `gfx-afin-cadena`, y se reinicia en cada
+  tarea. El chequeo repetido del interruptor en el RDP era redundante.
+  Retirarlo solo ahorró 24 bytes de texto y no cambió el alineamiento final:
+  la primera medida de esta revisión conservó 1504 bytes de holgura.
+- Se reutiliza `chain_ex`, ya transitorio y fuera del tramo RDP persistente:
+  0 referencia, 1 F3DEX 1.x, 2 F3DEX2 afín optativo. Desaparecen el campo y
+  reinicio adicionales del candidato anterior. Los intérpretes y el retorno
+  distinguen explícitamente la primera generación. No se cambian cachés,
+  descriptores DMA, formatos guardados ni aritmética de coordenadas.
+- La imagen F3DEX2 reconstruida mide 103632 bytes de texto, 800 de datos y
+  145808 de bss; quedan 11744 bytes para una cadena de pila de 10112:
+  **1632 bytes de holgura**, por encima del mínimo de 1536. La revisión
+  anterior tenía 103720 bytes de texto y 1504 de holgura. Log
+  `build/logs/re2-afin-estado-spu1.log`. No se bajó ningún presupuesto.
+- Host con ASan y UBSan: **666 pruebas, 870778 verificaciones, cero fallos**,
+  log `build/logs/re2-afin-estado-host.log`. Incluye F3DEX 1.x con el
+  interruptor apagado y encendido, y repetición de la misma lista F3DEX2
+  ON→OFF sin reinicializar el estado; conserva controles de perspectiva,
+  sprites, TEXRECT, MODIFYVTX y tarea siguiente.
+- Paquete completo compilado en Docker, código `4ef227f`:
+  `build/salsa64-re2-afin/salsa64-re2-afin.pkg`, título
+  `Salsa64 RE2 OPTIONS`, identificador `SLSA00182`, versión
+  `v0.2.9-12-g4ef227f`. Identidad contrastada con el ELF y PARAM.SFO.
+  SHA-256 `f338bcfd86caa0a5c5143fd487ab29cb8593e731d7a5809fa7cca18f02f29f29`.
+  Las cinco imágenes conservan holguras de 1632, 1632, 14144, 2960 y
+  1648 bytes, respectivamente. Log `build/logs/re2-afin-paquete.log`.
+  Esta rama parte de la base anterior a la integración del lote vectorial;
+  el paquete es aislado, no reemplaza el paquete de regresión SPE.
+- RPCS3 con `gfxtest` embebido: `RESULTADO frontend: OK`, campo 138 con
+  el interruptor encendido y campo 121 apagado; ambos cierres limpios.
+  Con `spe0-todas`, las cinco imágenes pasan sus tareas de prueba y hash
+  contra el PPE en ambas corridas. Logs
+  `build/logs/re2-afin-rpcs3-{on,off}.log`. Es una prueba de arranque y
+  regresión homebrew: no reproduce la transición de OPTIONS sobre la
+  entrada real del RSP ni demuestra beneficio de rendimiento.
+- La evidencia visual de OPTIONS continúa siendo la copia modificada de
+  la salida histórica, no una ejecución del candidato sobre la entrada real
+  del RSP. No se considera corregido en PS3 ni se incorpora todavía a la
+  rama principal. Antes de promoverlo, comparar OPTIONS con el interruptor
+  apagado y encendido, conservando estado reciente, log y captura.
+
+## 2026-10-20 — Resident Evil 2: candidato optativo para OPTIONS
+
+- **Contexto crudo.** La caja histórica 1289 de OPTIONS contiene 44 tareas
+  de 11 campos. La tarea 4251 tiene 105 dibujos y 212 triángulos; su salida
+  capturada también produce letras revueltas en el rasterizador del host.
+  Un dibujo tiene 62 píxeles de ancho, ST de 0 a 124 y una textura CI8
+  decodificada de 72 × 18 con transformación S de 1/72, sin el factor 1/2.
+- **Reproducción sintética.** La escala afín se decide con la familia de
+  inicio de `gfx_job`, no con la que S2DEX carga después. Una lista propia
+  que carga F3DEX2 desde S2DEX falla en los dos factores de textura; la
+  lista equivalente iniciada directamente como F3DEX2 sí usa 1/2. La
+  prueba anterior de la transición solo cubría TEXRECT.
+- **Candidato.** `GFX_JOB_AFFINE_CHAIN` conserva la identidad original del
+  trabajo y aplica la regla ya existente a los triángulos F3DEX2 cargados
+  desde S2DEX. No cambia las coordenadas de `G_MODIFYVTX`, la primera
+  generación ni el descriptor DMA. TEXRECT y los sprites S2DEX —triángulos
+  crudos— quedan fuera del predicado. Un byte transitorio al final del
+  estado se reinicia en cada tarea; no se agrega al formato de guardado.
+- **Interruptor apagado por omisión.** En PS3, crear
+  `/dev_hdd0/salsa64/gfx-afin-cadena` antes de abrir el juego; sin él conserva
+  la ruta anterior. Para volver a la referencia, renombrarlo a `.off` y
+  reabrir. El log anuncia referencia o experimental activa. En el host,
+  `SALSA64_GFX_AFFINE_CHAIN=1` activa el mismo bit del trabajo.
+- **Límite de la evidencia.** Una copia local de la tarea 4251, modificada
+  únicamente para reducir a la mitad las transformaciones S/T de sus 105
+  dibujos, produce OPTIONS legible. Eso respalda la hipótesis, pero no es
+  una ejecución del candidato sobre la entrada del RSP ni una comparación
+  contra el microcódigo real. La captura original permanece intacta. No se
+  considera arreglado en PS3 hasta probarlo con el mismo estado y revisión.
+- **Regresión host.** La prueba controla bandera apagada/encendida,
+  perspectiva, `G_MODIFYVTX` ST sin escala adicional, TEXRECT, sprite S2DEX
+  dentro del tramo 3D, retorno al triángulo y reinicio en la tarea siguiente.
+  Antes del cambio fallaban los dos factores S/T del caso encadenado. La
+  revisión final pasa **665 pruebas, 870750 verificaciones, cero fallos**
+  con ASan y UBSan; log `build/logs/re2-encadenado-acotado.log`.
+- **Paquete no disponible: presupuesto de local store.** El primer build
+  limpio se detuvo en la imagen 0: texto 104056, datos 800, bss 145808,
+  cadena 9856 y holgura 1504 bytes, por debajo del mínimo de 1536. Se
+  excluyeron por compilación el byte y sus operaciones de las imágenes
+  que no reúnen F3DEX2 y S2DEX. En la segunda compilación la imagen 0
+  recuperó sus 1632 bytes, pero la imagen 1 quedó en texto 103720, datos
+  800, bss 145808, cadena 10112 y holgura 1504. Se detuvieron los builds:
+  no se redujeron cachés ni el mínimo de pila. Los logs son
+  `build/logs/re2-revision-pkg.log` y
+  `build/logs/re2-revision-pkg-final.log`; los ELF, mapas y usos de pila
+  quedan en `build/salsa64-re2-revision-incompleto/` y
+  `build/salsa64-re2-revision/`. No se generó ni se envió un PKG.
+- **Siguiente análisis, sin aplicar.** El predicado del RDP vuelve a
+  comprobar la bandera que ya condiciona `chain_affine`; estudiar su
+  eliminación tras revisar los invariantes puede reducir código. También
+  se puede estudiar reutilizar el estado transitorio de encadenamiento
+  existente para evitar otro reinicio/campo, con pruebas de generación y
+  de retornos. Ninguna hipótesis garantiza recuperar el margen necesario.
+- **Imágenes de diagnóstico locales.** Original:
+  `build/re2-options/tarea4251.png`, SHA-256
+  `3e5b7b9fce659962fcc433ec1bbce6303e9a99ca2473056d0fe462936b50010b`;
+  copia con la hipótesis:
+  `build/re2-options/tarea4251-hipotesis-afin.png`, SHA-256
+  `a4e33a1bf54e7394c3b9a2a1bdd333e9d1625ec970902cc2578da7144c635e2f`.
+  No son imágenes de una corrida nueva en consola.
+- **Sala de la estatua.** Sin optimización nueva: su coste y OPTIONS son
+  problemas diferentes. Falta un estado reciente de la sala con el log de
+  la misma revisión; no se presupone que otra HLE de video lo resuelva.
+- **Captura mínima para la siguiente comprobación.** Guardar en una ranura
+  libre dentro de OPTIONS, conservar el estado y el log y una captura de
+  pantalla, y recoger la caja negra del cuadro entero, no solo la tarea
+  final de limpieza de profundidad. Con esa entrada se puede ejecutar la
+  siguiente tarea con la HLE y con el microcódigo real. La caja 1289 solo
+  conserva comandos/vértices/texturas ya producidos por la HLE, no la TMEM
+  ni la lista de entrada del RSP.
 
 ## 2026-10-20 — Racer: video entrelazado, altura insuficiente del destino
 

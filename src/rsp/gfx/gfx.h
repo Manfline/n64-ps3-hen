@@ -177,6 +177,12 @@ _Static_assert(sizeof(struct gfx_detail) % 16 == 0, "detalle apto para DMA");
  * de diagnóstico A/B: el PPE lo pone al abrir el juego si existe
  * gfx-escalar en el directorio de datos. */
 #define GFX_JOB_SCALAR 0x100u
+/* Comparación optativa: escala afín de los triángulos F3DEX2
+ * cargados dentro de una tarea S2DEX. No escala G_MODIFYVTX. */
+#define GFX_JOB_AFFINE_CHAIN 0x1000u
+/* Valor interno de chain_ex; no forma parte del descriptor ni del estado RDP. */
+#define GFX_CHAIN_AFFINE 2u
+
 /* ---- Caché de texturas -------------------------------------------------------
  * Las texturas decodificadas viven en una región de memoria que pone el
  * consumidor (job->cache_ea, cache_cap; vista por el RSX) y que la HLE

@@ -9,6 +9,16 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 - Documenta el corte por presupuesto de comandos de OoT, observado también
   en la imagen normal anterior; no se considera un fallo resuelto.
 
+- Reduce el estado del candidato afín de RE2 para recuperar el margen del
+  SPE, conservando la activación opcional y la caché de texturas.
+
+- Añade una comparación optativa de la escala de textura afín cuando una
+  tarea S2DEX carga F3DEX2 (`gfx-afin-cadena`), con controles de perspectiva,
+  sprites, rectángulos y `G_MODIFYVTX`. Referencia conservada por omisión;
+  candidato empaquetado dentro del presupuesto del SPE y OPTIONS legible
+  confirmado por el autor en la PS3. Regresión básica visual y cierre limpio
+  comprobados; pendiente integración con la base actual.
+
 - Amplía la traza VI de Racer: una ventana de campos, decisiones sin imagen o
   descartadas, registros instantáneos y la selección ya hecha por el RSX.
 - Reserva las filas que lee la ventana VI al crear un framebuffer: el video
