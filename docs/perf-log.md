@@ -12,6 +12,11 @@ cadena total de 10144 a 10032. Texto 103688 → 103680, `_end` sin cambios,
 holgura 1472 → 1584. No se cambian cachés ni el mínimo de 1536, ni se
 atribuye beneficio de FPS. Log `build/logs/re2-spe-pila-detalle16.log`.
 
+La reconstrucción limpia del paquete conjunto confirma 1584 bytes de
+holgura en fase 8 y 1712 en imagen 1 normal; todas las demás imágenes y
+fases también cumplen el mínimo. Las rutas instrumentadas pasan el A/B de
+detalle y publican sus bloques en RPCS3. No hay medición nueva de PS3.
+
 ## 2026-10-20 — A/B de recorte SIMD: menor coste de geometría (PS3 real)
 
 Mismo paquete `salsa64-recorte-vector`: referencia `spu_gfx1fase7` frente a

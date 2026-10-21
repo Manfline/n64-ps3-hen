@@ -1,5 +1,43 @@
 # Estado
 
+## 2026-10-21 — Paquete conjunto RE2/SPE completo y validado en RPCS3
+
+- Build limpio en Docker de `7c723d3`, sin reutilizar el directorio
+  incompleto anterior. Todas las imágenes pasan el mínimo de 1536 bytes:
+  normales 0…4, 1600/1712/14368/3056/1616; fases 1…8,
+  1840/1712/1712/1712/1712/1840/1840/1584. No se reducen cachés,
+  se omiten variantes ni se altera el presupuesto. Log
+  `build/logs/re2-spe-detalle16-paquete.log`.
+- Host con ASan y UBSan: **667 pruebas, 887192 verificaciones, cero fallos**;
+  log `build/logs/re2-spe-detalle16-host.log`.
+- Paquete `build/salsa64-re2-spe/salsa64-re2-spe.pkg`, título
+  `Salsa64 RE2 y SPE`, identificador `SLSA00183`, versión
+  `v0.2.9-34-g7c723d3`. Identidad comprobada en ELF y PARAM.SFO.
+  SHA-256 `a9de08a9cd0e5f2a9d8210dcae300a233ceb810bed8ba03b83868260fd12d513`.
+- RPCS3, `gfxtest` embebido, cuatro corridas secuenciales: referencia sin
+  banderas (OK, campo 137), afín con detalle normal (122), afín con recorte
+  fase 8 (125) y afín con geometría escalar forzada (122). Todas verifican
+  los 42 puntos de pantalla y cierran limpias. Con `spe0-todas`, las cinco
+  imágenes dan hash y tareas iguales al PPE en cada corrida.
+- El detalle DMA se publica y contabiliza correctamente en las dos rutas
+  instrumentadas, sin bloques inválidos. Autoprueba A/B de detalle con 17
+  pares y cero diferencias; vectorial/escalar igual bit a bit; fase 8,
+  64 lotes/256 máscaras con cero diferencias. Las cuatro capturas PPM son
+  idénticas, SHA-256
+  `ebe13720078b6f94a725155aff7f6ba66a44739d78ff49f30727729e45ecf97a`.
+  Se inspeccionó además la captura de referencia. Logs
+  `build/logs/re2-spe-rpcs3-{normal,afin-detalle,afin-recorte,afin-escalar}.log`.
+- Persiste la advertencia inicial del homebrew, tarea 1 con resultado
+  `0x60` (tramo ajeno terminado sin retorno), 307 comandos, 45 triángulos
+  y 28 dibujos. El mismo caso aparece en los logs de los paquetes SPE y
+  RE2 anteriores; no se presenta como corregido ni como una regresión nueva.
+- El paquete combinado aún requiere comprobar OPTIONS con el mismo estado
+  y una carrera de Road Rash en la PS3. Las pruebas RPCS3 no reproducen la
+  entrada real del RSP de OPTIONS ni certifican tiempos o sincronización
+  del hardware. La alineación DMA local de 16 cumple el contrato de la
+  transferencia; queda pendiente su validación en consola. No se sube el
+  paquete, integra a main ni publica durante esta preparación.
+
 ## 2026-10-21 — Recorte RE2/SPE: margen recuperado con DMA alineado a 16
 
 - El código generado de `run_detail` reserva 464 bytes para el bloque de
