@@ -1,7 +1,8 @@
 # Turbo3D: candidato para Dark Rift
 
-Estado: implementación experimental, apagada por omisión. No se declara
-Dark Rift compatible ni se promete una velocidad antes de probarlo en PS3.
+Estado: implementación experimental, apagada por omisión. El autor confirma
+en PS3 ambos personajes, texturas y animaciones correctos en la pelea
+probada. No se declara validado el juego completo.
 
 Candidato `5c51bb2`, `Salsa64 Turbo3D` (`SLSA00184`): host 676 pruebas
 sin fallos; catorce imágenes dentro del presupuesto; RPCS3 normal y con
@@ -10,8 +11,9 @@ Identidad y SHA del paquete en `estado.md`.
 
 Primera corrida PS3 conservada (2026-10-21): la imagen carga y supera sus
 autopruebas, produce geometría y cierra limpia tras 7016 campos. Los
-resúmenes no muestran tareas cortadas. El autor todavía no ha confirmado
-explícitamente la apariencia de los personajes; no se marca como resuelto.
+resúmenes no muestran tareas cortadas. Posteriormente el autor confirma
+explícitamente que los dos personajes, texturas y animaciones se ven bien:
+la ausencia de modelos queda corregida en la escena probada.
 Detalle y límites de la medición en `estado.md` y `perf-log.md`.
 
 ## Evidencia y alcance

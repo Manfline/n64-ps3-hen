@@ -1,5 +1,17 @@
 # Estado
 
+## 2026-10-21 — Dark Rift: modelos, texturas y animación confirmados en PS3
+
+- El autor confirma explícitamente que se ven bien los dos personajes,
+  sus texturas y sus animaciones en la corrida del candidato `5c51bb2`.
+  Se da por corregida la ausencia de modelos en esa pelea, con el log
+  de la primera corrida conservado abajo. No se extiende la confirmación
+  a todos los personajes, escenarios o al juego completo.
+- Siguiente comprobación propuesta con el mismo paquete y opciones:
+  otra pareja y escenario, después un juego F3D habitual para regresión.
+  Sin autorización de integración a main ni publicación; Turbo3D sigue
+  siendo optativo. La comparación con el RSP real permanece pendiente.
+
 ## 2026-10-21 — Primera corrida del candidato Turbo3D en PS3
 
 - Log de `5c51bb2`, `Salsa64 Turbo3D`/`SLSA00184`, opción activa,
@@ -18,6 +30,7 @@
 - Pendiente confirmación explícita del autor sobre ambos modelos,
   texturas y animación: «ya quedó» se interpreta como corrida terminada,
   no como certificación visual. Sin integración a main ni publicación.
+  La confirmación visual posterior se registra arriba.
 - Log `build/ps3/re2-spe/dark-rift-turbo3d-20261021.log`, SHA-256
   `603187cf2aaea08c6f8b04e52304a5ac96425a8aedbe31489e22b2f5704a907d`.
 
