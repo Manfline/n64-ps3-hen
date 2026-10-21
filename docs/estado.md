@@ -18,9 +18,17 @@
   contra el microcódigo real sigue pendiente.
 - Pruebas host de la base combinada: 665 pruebas, 887094 verificaciones,
   cero fallos con ASan y UBSan; log local
-  `build/logs/spe-integracion-host.log`. Falta compilación limpia del
-  frontend y regresión del binario combinado. Sin
-  integración en la rama principal ni publicación en este punto.
+  `build/logs/spe-integracion-host.log`. Compilación limpia del frontend
+  completada en Docker; log `build/logs/spe-integracion-pkg.log`. Todas las
+  imágenes gráficas conservan al menos 1536 bytes de holgura estática; la
+  imagen 1 normal y la fase 8 tienen 1648 bytes.
+- Paquete de regresión `build/salsa64-spe-integracion/salsa64-spe-integracion.pkg`,
+  título `Salsa64 SPE integracion`, identificador `SLSA00181`, versión
+  `v0.2.9-16-g74e41b9`. SHA-256
+  `b09cde7efabacdac0f6d19d1510d8db58151c2579a2af99347b02cd64560bedf`.
+  Identidad contrastada con el ELF y PARAM.SFO. Falta la regresión del
+  binario combinado en RPCS3 y PS3. Sin envío, integración en la rama
+  principal ni publicación en este punto.
 
 ## 2026-10-20 — Racer: video entrelazado, altura insuficiente del destino
 
