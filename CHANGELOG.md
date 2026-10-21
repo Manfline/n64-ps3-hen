@@ -6,6 +6,9 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 
 ## [Unreleased]
 
+- Reduce el estado del candidato afín de RE2 para recuperar el margen del
+  SPE, conservando la activación opcional y la caché de texturas.
+
 - Añade una comparación optativa de la escala de textura afín cuando una
   tarea S2DEX carga F3DEX2 (`gfx-afin-cadena`), con controles de perspectiva,
   sprites, rectángulos y `G_MODIFYVTX`. Referencia conservada por omisión;

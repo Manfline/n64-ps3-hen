@@ -1,5 +1,33 @@
 # Estado
 
+## 2026-10-21 — RE2: el candidato afín recupera el margen del SPE
+
+- Se revisó el estado transitorio de encadenamiento: solo S2DEX puede
+  activarlo al cargar F3DEX2 con `gfx-afin-cadena`, y se reinicia en cada
+  tarea. El chequeo repetido del interruptor en el RDP era redundante.
+  Retirarlo solo ahorró 24 bytes de texto y no cambió el alineamiento final:
+  la primera medida de esta revisión conservó 1504 bytes de holgura.
+- Se reutiliza `chain_ex`, ya transitorio y fuera del tramo RDP persistente:
+  0 referencia, 1 F3DEX 1.x, 2 F3DEX2 afín optativo. Desaparecen el campo y
+  reinicio adicionales del candidato anterior. Los intérpretes y el retorno
+  distinguen explícitamente la primera generación. No se cambian cachés,
+  descriptores DMA, formatos guardados ni aritmética de coordenadas.
+- La imagen F3DEX2 reconstruida mide 103632 bytes de texto, 800 de datos y
+  145808 de bss; quedan 11744 bytes para una cadena de pila de 10112:
+  **1632 bytes de holgura**, por encima del mínimo de 1536. La revisión
+  anterior tenía 103720 bytes de texto y 1504 de holgura. Log
+  `build/logs/re2-afin-estado-spu1.log`. No se bajó ningún presupuesto.
+- Host con ASan y UBSan: **666 pruebas, 870778 verificaciones, cero fallos**,
+  log `build/logs/re2-afin-estado-host.log`. Incluye F3DEX 1.x con el
+  interruptor apagado y encendido, y repetición de la misma lista F3DEX2
+  ON→OFF sin reinicializar el estado; conserva controles de perspectiva,
+  sprites, TEXRECT, MODIFYVTX y tarea siguiente.
+- La imagen que antes no cabía queda validada por el build; falta terminar
+  el paquete completo y sus comprobaciones RPCS3. La evidencia de OPTIONS
+  continúa siendo la copia modificada de la salida histórica, no una
+  ejecución del candidato sobre la entrada real del RSP. No se considera
+  corregido en PS3 ni se incorpora todavía a la rama principal.
+
 ## 2026-10-20 — Resident Evil 2: candidato optativo para OPTIONS
 
 - **Contexto crudo.** La caja histórica 1289 de OPTIONS contiene 44 tareas

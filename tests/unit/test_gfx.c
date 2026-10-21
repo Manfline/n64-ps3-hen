@@ -1949,6 +1949,30 @@ static void gfx_s2dex_task_chains_f3dex2(void)
 	CHECK_EQ(res.flags & (GFX_RES_FULLSYNC | GFX_RES_FOREIGN_END), GFX_RES_FULLSYNC);
 }
 
+/* El interruptor de segunda generación no cambia el destino F3DEX 1.x.
+ * Su END propio debe terminar sin caer en el intérprete F3DEX2. */
+static void gfx_s2dex_chain_first_generation(void)
+{
+	for (unsigned enabled = 0; enabled < 2; enabled++) {
+		start();
+		job_gbi = SALSA64_GBI_S2DEX;
+		job_flags = enabled ? GFX_JOB_AFFINE_CHAIN : 0;
+		uint32_t data = data_alloc(64);
+		memset(t_n64.bus.rdram + data, 0, 64);
+		static const char text[] = "RSP Gfx ucode F3DEX fifo 1.23 Salsa64";
+		memcpy(t_n64.bus.rdram + data, text, sizeof text);
+		dl(0xE1000000, data);
+		dl(0xDD00003F, 0x00031000);
+		dl(0xE9000000, 0);
+		dl(0xB8000000, 0);
+		run();
+		CHECK_EQ(gs.chain_ex, 1);
+		CHECK_EQ(res.dl_errors, 0);
+		CHECK_EQ(res.unknown_cmds, 0);
+		CHECK_EQ(res.flags & (GFX_RES_FULLSYNC | GFX_RES_CUT), GFX_RES_FULLSYNC);
+	}
+}
+
 /* ---- Caché de texturas ---- */
 
 /* RGBA16 4×2 desde TEX_PA con LOADBLOCK y un TEXRECT en copia. */
@@ -2548,6 +2572,7 @@ static void tri_no_persp_half(bool chained, bool enabled)
 		CHECK(d->tex[0].xf[0] > k / 16.0f - 1e-6f && d->tex[0].xf[0] < k / 16.0f + 1e-6f);
 		CHECK(d->tex[0].xf[1] > k / 4.0f - 1e-6f && d->tex[0].xf[1] < k / 4.0f + 1e-6f);
 		if (chained) {
+			CHECK_EQ(gs.chain_ex, enabled ? GFX_CHAIN_AFFINE : 0);
 			CHECK_EQ(res.draws, 4);
 			CHECK_EQ(res.dl_errors, 0);
 			CHECK_EQ(res.unknown_cmds, 0);
@@ -2560,12 +2585,29 @@ static void tri_no_persp_half(bool chained, bool enabled)
 				CHECK(fabsf(a->tex[0].xf[0] * a->tex[0].width - scale) < 1e-6f);
 				CHECK(fabsf(a->tex[0].xf[1] * a->tex[0].height - scale) < 1e-6f);
 			}
+			if (enabled) {
+				/* Repetir la misma entrada ON→OFF sin gfx_init: el estado
+				 * transitorio no debe mantener la corrección anterior. */
+				job.flags &= ~GFX_JOB_AFFINE_CHAIN;
+				gfx_run(&gs, &job, &res);
+				CHECK_EQ(gs.chain_ex, 0);
+				CHECK_EQ(res.draws, 4);
+				for (int i = 0; i < 4; i += 3) {
+					const struct gfx_draw *a = draw_n(i);
+					CHECK(a && a->ntex == 1);
+					if (!a || a->ntex != 1)
+						return;
+					CHECK(fabsf(a->tex[0].xf[0] * a->tex[0].width - 1.0f) < 1e-6f);
+					CHECK(fabsf(a->tex[0].xf[1] * a->tex[0].height - 1.0f) < 1e-6f);
+				}
+			}
 			/* La tarea siguiente no hereda la procedencia S2DEX. */
 			dl_pc = DL_PA;
+			job_flags &= ~GFX_JOB_AFFINE_CHAIN;
 			job_gbi = SALSA64_GBI_F3DEX2;
 			dl(0xE9000000, 0);
 			run();
-			CHECK_EQ(gs.chain_affine, 0);
+			CHECK_EQ(gs.chain_ex, 0);
 		}
 	}
 }
@@ -2909,6 +2951,7 @@ void t_suite_gfx(void)
 	RUN(gfx_s2dex_task_rectangle);
 	RUN(gfx_s2dex1_task_sprite);
 	RUN(gfx_s2dex_task_chains_f3dex2);
+	RUN(gfx_s2dex_chain_first_generation);
 	RUN(gfx_setconvert_k5);
 	RUN(gfx_texrect_two_tiles);
 	RUN(gfx_untextured_texel);

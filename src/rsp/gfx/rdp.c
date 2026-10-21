@@ -566,7 +566,9 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 	    (g->job->gbi == SALSA64_GBI_F3DEX2 || g->job->gbi == SALSA64_GBI_F3DZEX2 ||
 	     g->job->gbi == SALSA64_GBI_F3DEXBG || g->job->gbi == SALSA64_GBI_F3DEX
 #if GFX_HAS(F3DEX2) && GFX_HAS(S2DEX)
-	     || ((g->job->flags & GFX_JOB_AFFINE_CHAIN) && g->chain_affine)
+	     /* Solo la carga S2DEX→F3DEX2 con el interruptor activo puede poner
+	      * este indicador; gfx_run lo borra al empezar cada tarea. */
+	     || g->chain_ex == GFX_CHAIN_AFFINE
 #endif
 	    ))
 		for (unsigned i = 0; i < d->ntex; i++) {

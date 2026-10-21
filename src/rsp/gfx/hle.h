@@ -255,7 +255,9 @@ struct gfx_state {
 	uint32_t rdphalf1, rdphalf2;
 	uint32_t obj_rendermode;   /* G_OBJ_RENDERMODE de S2DEX (s2dex.c) */
 	uint32_t sp_ol;            /* othermode L que lleva el microcódigo (G_SETOTHERMODE_L); G_RDPSETOTHERMODE no lo toca (sp_om_shadow) */
-	uint8_t chain_ex;          /* tarea S2DEX que siguió con F3DEX 1.x (G_LOAD_UCODE): f3d.c lo trata como F3DEX */
+	/* Procedencia transitoria de S2DEX: 0 referencia, 1 F3DEX 1.x,
+	 * GFX_CHAIN_AFFINE F3DEX2 con escala afín experimental. */
+	uint8_t chain_ex;
 	uint32_t raw[44];          /* comando del RDP armado con G_RDPHALF_* */
 	uint8_t raw_n, raw_len;    /* dobles palabras recibidas y esperadas */
 	uint32_t dl_stack[GFX_DL_STACK];
@@ -316,9 +318,6 @@ struct gfx_state {
 	 * el código del SPE 0 crece (y la pila con él). */
 	uint32_t flx_table;        /* F3DFLX: la tabla del alfa (G_DMA_IO, segmentada), o 0 */
 	uint8_t ucode_var;         /* GFX_UCODE_FLX: el microcódigo en curso */
-#if GFX_HAS(F3DEX2) && GFX_HAS(S2DEX)
-	uint8_t chain_affine;      /* tarea S2DEX que cargó F3DEX2; solo sus PRIM_TRI usan escala afín */
-#endif
 	struct gfx_detail *detail;  /* fuera del tramo persistente del RDP */
 };
 
