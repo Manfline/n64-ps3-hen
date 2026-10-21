@@ -1,5 +1,21 @@
 # Registro de rendimiento
 
+## 2026-10-21 — Segunda corrida Turbo3D, mismo paquete en PS3
+
+Revisión `5c51bb2`, Dark Rift, solo líneas 2727–7187 del log compuesto:
+13935 campos emulados y 30474 tareas gráficas mixtas en imagen 5, cerca
+de cuatro minutos. En 138 ventanas gráficas, cinco bajan de 58 campos/s;
+rango total 50,6–62,1. Las últimas cinco dan 59,8/59,8/51,8/59,8/59,8;
+la de 51,8 tiene un peor campo de 275,9 ms. Causa de los picos no aislada.
+Hasta 877 triángulos por tarea de promedio de ventana; no son FPS únicos
+ni cifras exclusivas de la familia Turbo3D. No hay comparación A/B de la
+misma carga ni se concluye una mejora de velocidad frente a la primera
+pelea. Cierre limpio; aviso de crecimiento de heap entre juegos registrado
+como pendiente en `estado.md`.
+
+Log `build/ps3/re2-spe/dark-rift-turbo3d-segunda-20261021.log`, SHA-256
+`81d89a796316d5e9f69e2aaa6e06e76fdd32b659c9b521cad8ba2d1029084227`.
+
 ## 2026-10-21 — Turbo3D: primera corrida en PS3, sin A/B equivalente
 
 Código `5c51bb2`, Dark Rift NTSC, escala 5×/Nítida y sin filtro.

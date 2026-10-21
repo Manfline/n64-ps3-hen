@@ -1,5 +1,28 @@
 # Estado
 
+## 2026-10-21 — Segunda corrida de Dark Rift: cierre limpio y aviso de memoria
+
+- Mismo paquete `5c51bb2`/`SLSA00184`. El archivo descargado contiene la
+  primera corrida, una apertura de Shadows of the Empire y la segunda
+  de Dark Rift. Se analiza esta última por separado: líneas 2727–7187,
+  apertura 773,992 s y cierre de emulación 1011,199 s.
+- 13935 campos emulados y 30474 tareas gráficas en imagen 5 (familias
+  mezcladas, no un conteo exclusivo de Turbo3D); cero descartes de cola
+  y campos sin ranura, sin avisos de tareas malas o sin HLE y resúmenes
+  con cero cortes y comandos de otras familias saltados. Autopruebas
+  iguales al PPE y regreso limpio al menú; sin evidencia de salida XMB.
+- La pila estimada sin tocar sigue en 16512 bytes. Se conserva la
+  confirmación visual explícita de la primera pelea; no se inventa una
+  confirmación nueva de personajes o escenarios en esta segunda.
+- El comprobador entre cierres avisa de aumento de heap en uso superior
+  a 1024 bytes (la línea redondeada imprime +1 KB) tanto tras Shadows
+  como tras el segundo Dark Rift. No demuestra una fuga de Turbo3D:
+  no aísla subsistemas ni compara cierres equivalentes repetidos. Queda
+  pendiente comprobar si se acumula antes de cerrar la estabilidad.
+- Log `build/ps3/re2-spe/dark-rift-turbo3d-segunda-20261021.log`, SHA-256
+  `81d89a796316d5e9f69e2aaa6e06e76fdd32b659c9b521cad8ba2d1029084227`.
+  Sin cambios de código, opciones de consola, integración o publicación.
+
 ## 2026-10-21 — Dark Rift: modelos, texturas y animación confirmados en PS3
 
 - El autor confirma explícitamente que se ven bien los dos personajes,
