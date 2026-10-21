@@ -9,8 +9,9 @@ una cifra de FPS de imágenes únicas. Hay ventanas activas de 55–56,6.
 
 No es benchmark comparable: empieza a 1× con Nítida, cambia a CRT Trinitron
 y luego a escala 5×. Las ventanas de 0 y 21,8 campos/s incluyen la pausa de
-8,4 s y su reanudación; no representan rendimiento sostenido. El autor no
-observó defectos gráficos en lo probado, sin especificar recorrido completo.
+8,4 s y su reanudación; no representan rendimiento sostenido. El autor
+confirma que ya no observó el desorden de dibujo en lo probado, sin
+especificar recorrido completo.
 No se atribuye mejora de velocidad ni corrección universal del orden de dibujo.
 Log `build/ps3/re2-spe/pokemon-snap-20261021.log`, SHA-256
 `a6c891d39b1b73e0e442caabe2f5a8546eb0efaa264f83e2de425ad21fb5369f`.

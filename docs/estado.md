@@ -2,7 +2,9 @@
 
 ## 2026-10-21 — Pokémon Snap: regresión adicional del conjunto en PS3
 
-- El autor reporta ausencia de defectos gráficos aparentes en lo jugado.
+- El autor confirma explícitamente que ya no observó el desorden de dibujo
+  reportado anteriormente, además de no ver otros defectos gráficos aparentes
+  en lo jugado. Es evidencia visual positiva de esa incidencia en esta prueba.
   Log de `7c723d3`, `Salsa64 RE2 y SPE` (`SLSA00183`), tramo de Snap
   separado de las otras aperturas de la misma sesión: 11513 campos emulados
   y 8073 tareas gráficas. Cierre del juego limpio, cero descartes por cola,
@@ -18,10 +20,11 @@
   pasa por CRT Trinitron y termina a 5×. Hay ventanas activas de 55–56,6
   campos/s; las de 0 y 21,8 coinciden con la pausa y su reanudación. No es
   una medida A/B ni prueba de velocidad constante. Detalle en perf-log.
-- La observación visual respalda las escenas probadas, pero no identifica
-  el recorrido o la evaluación de fotos ni demuestra resuelto el reporte
-  histórico de orden de dibujo en todas las situaciones. No se cambia el
-  estado global de compatibilidad ni se atribuye la imagen al arreglo afín.
+- La mejora visual del orden de dibujo queda confirmada por el autor para
+  las escenas probadas. No se identificó aún el recorrido o la evaluación
+  de fotos ni se determinó qué cambio produjo la mejora. Se conserva esa
+  cobertura concreta, sin atribuirla al arreglo afín ni certificar todas
+  las situaciones del juego.
 - Evidencia `build/ps3/re2-spe/pokemon-snap-20261021.log`, SHA-256
   `a6c891d39b1b73e0e442caabe2f5a8546eb0efaa264f83e2de425ad21fb5369f`.
 
