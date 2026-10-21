@@ -410,9 +410,25 @@ static void lle_mode_auto_and_all(void)
 	salsa64_rsp_reset(&t_n64.bus);
 	wr(SP_REG(SALSA64_SP_STATUS), 0x2);  /* HALT: el reset no lo repone */
 
+	/* Las dos familias de Rare también tienen HLE: auto no debe mandarlas al
+	 * microcódigo real solo porque se reconocen de forma distinta. */
+	task_gfx(0x3000, "Salsa64 GBI F3DPD");
+	wr(SP_REG(SALSA64_SP_STATUS), 0x5);
+	CHECK_EQ(hle.starts, 2);
+	CHECK(!lle.running);
+	salsa64_rsp_reset(&t_n64.bus);
+	wr(SP_REG(SALSA64_SP_STATUS), 0x2);
+
+	task_gfx(0x3000, "Salsa64 GBI F3DEXBG");
+	wr(SP_REG(SALSA64_SP_STATUS), 0x5);
+	CHECK_EQ(hle.starts, 3);
+	CHECK(!lle.running);
+	salsa64_rsp_reset(&t_n64.bus);
+	wr(SP_REG(SALSA64_SP_STATUS), 0x2);
+
 	task_gfx(0x3000, "microcodigo propio");
 	wr(SP_REG(SALSA64_SP_STATUS), 0x5);
-	CHECK_EQ(hle.starts, 1);
+	CHECK_EQ(hle.starts, 3);
 	CHECK(lle.running);
 	salsa64_lle_host_run(&lle, 100);
 	CHECK_EQ(rd(DMEM + 0x100), 0x99);
@@ -425,7 +441,7 @@ static void lle_mode_auto_and_all(void)
 	task_gfx(0x3000, "Salsa64 GBI F3DEX2");
 	wr(SP_PC_REG, 0);
 	wr(SP_REG(SALSA64_SP_STATUS), 0x5);
-	CHECK_EQ(hle.starts, 1);
+	CHECK_EQ(hle.starts, 3);
 	CHECK(lle.running);
 	salsa64_lle_host_run(&lle, 100);
 	CHECK_EQ(rd(DMEM + 0x100), 0x99);

@@ -25,6 +25,9 @@
 #define S2_TEXT_PA 0x3800u  /* "código" del S2DEX2: solo la dirección */
 #define BG_PA      0x3C00u  /* uObjBg */
 #define BG_IMG_PA  0x4000u  /* RGBA16 64 × 32 (4 KB) */
+#define FLX_DATA_PA 0x5000u /* "datos" del F3DFLX: solo su texto */
+#define FLX_TEXT_PA 0x5400u /* "código" del F3DFLX: solo la dirección */
+#define FLX_TAB_PA  0x5800u /* tabla de alfa de F3DFLX (256 bytes) */
 #define F5VTX_PA   0x1200u  /* Rogue Squadron: 8 vértices de 8 bytes */
 #define F5COL_PA   0x1240u  /* tabla de colores de los vértices (8 palabras) */
 #define F5HGT_PA   0x1280u  /* alturas de la malla generada (bytes) */
@@ -287,7 +290,11 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 	put_texels(&b, TLUT_PA, 16 * 2);
 	put_texels(&b, BG_IMG_PA, 64 * 32 * 2);
 	static const char s2[] = "RSP Gfx ucode S2DEX  fifo 2.05  Salsa64 selftest";
+	static const char flx[] = "RSP Gfx ucode F3DFLX.Rej fifo 2.03F Salsa64 selftest";
 	memcpy(ram + S2_DATA_PA, s2, sizeof s2);
+	memcpy(ram + FLX_DATA_PA, flx, sizeof flx);
+	for (unsigned i = 0; i < 256; i++)
+		ram[FLX_TAB_PA + i] = (uint8_t)i;
 	uint8_t *bg = ram + BG_PA;
 	salsa64_wr16(bg + 0, 0);            /* imageX (u10.5) */
 	salsa64_wr16(bg + 2, 64 << 2);      /* imageW (u10.2) */
@@ -300,6 +307,18 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 	salsa64_wr32(bg + 16, BG_IMG_PA);   /* imagePtr */
 	bg[22] = 0;                         /* RGBA */
 	bg[23] = 2;                         /* 16 bits */
+
+	/* S2DEX es una tarea completa, no solo el tramo que F3DEX2 carga con
+	 * G_LOAD_UCODE. Las dos codificaciones hacen una copia de fondo y cierran
+	 * la lista por sus propios opcodes. */
+	if (gbi == SALSA64_GBI_S2DEX || gbi == SALSA64_GBI_S2DEX1) {
+		dl(&b, 0xFF100000u | 319, CIMG_PA);
+		dl(&b, 0xED000000u, (320u << 2) << 12 | 240u << 2);
+		dl(&b, gbi == SALSA64_GBI_S2DEX1 ? 0x02000000u : 0x0A000000u, BG_PA);
+		dl(&b, 0xE9000000u, 0);  /* G_RDPFULLSYNC */
+		dl(&b, gbi == SALSA64_GBI_S2DEX1 ? 0xB8000000u : 0xDF000000u, 0);
+		return DL_PA;
+	}
 
 	/* Estado: color image, z image, tijeras, viewport y matrices. */
 	if (b.fam == FAM_F5 || b.fam == FAM_INDY) {
@@ -336,8 +355,12 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 		dl(&b, gen2(&b) ? 0xDA380007u : 0x01030040u, PROJ_PA);
 		dl(&b, gen2(&b) ? 0xDA380003u : 0x01020040u, MV_PA);
 	}
-	if (gen2(&b))
-		dl(&b, 0xD9000000u, 0x00200004u | 0x1u);  /* G_SHADE | G_SHADING_SMOOTH | G_ZBUFFER */
+	if (gen2(&b)) {
+		/* También cubre el lote SIMD de vértices: color directo, niebla y
+		 * cuatro vértices por G_VTX, sin luces ni TEXGEN. */
+		dl(&b, 0xD9000000u, 0x00210004u | 0x1u);  /* G_SHADE | G_SHADING_SMOOTH | G_FOG | G_ZBUFFER */
+		dl(&b, 0xDB080000u, 0x01000000u);          /* G_MW_FOG: factor 256, sesgo 0 */
+	}
 	else if (b.fam == FAM_INDY)
 		dl(&b, 0xB7000000u, 0x00000005u);         /* G_ZBUFFER y G_SHADE */
 	else
@@ -363,6 +386,12 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 	combine(&b, CC_ZERO, CC_ZERO, CC_C_ZERO, CC_SHADE, CC_A_ZERO, CC_A_ZERO, CC_A_ZERO, CC_SHADE);
 	texture(&b, 0, 0);
 	vtx(&b, VTX_PA, 0, 8);
+	if (gbi == SALSA64_GBI_F3DZEX2) {
+		/* G_BRANCH_W: v0 siempre queda por debajo del máximo s32 y salta a
+		 * la primera instrucción que seguiría de todos modos. */
+		dl(&b, 0xE1000000u, b.pc + 16);
+		dl(&b, 0x04000000u, 0x7FFFFFFFu);
+	}
 	tri(&b, 0, 1, 2);
 	tri(&b, 3, 4, 5);
 
@@ -422,6 +451,13 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 		combine(&b, CC_ZERO, CC_ZERO, CC_C_ZERO, CC_SHADE, CC_A_ZERO, CC_A_ZERO, CC_A_ZERO, CC_SHADE);
 		texture(&b, 0, 0);
 		dl(&b, 0x06000000u | 0 << 16 | 2 << 8 | 4, 2u << 16 | 4u << 8 | 6);  /* G_TRI2 */
+		if (gbi == SALSA64_GBI_F3DEX2) {
+			/* F-Zero X cambia de F3DEX2 a F3DFLX dentro de la lista y sube
+			 * la tabla que usa para el alfa de sus vértices. */
+			dl(&b, 0xE1000000u, FLX_DATA_PA);
+			dl(&b, 0xDD000000u | (sizeof flx - 1), FLX_TEXT_PA);
+			dl(&b, 0xD6000000u | (0x8B0u / 8) << 13 | 255u, FLX_TAB_PA);
+		}
 	}
 
 	/* Rogue Squadron: las tres mallas generadas (5 × 5, 3 × 3 y el cuadrilátero) y un

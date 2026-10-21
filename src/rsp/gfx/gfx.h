@@ -63,6 +63,8 @@ struct gfx_state_job {
  * bytes de pila que nunca se tocaron desde que arrancó (con el patrón que
  * pone al arrancar si se le pide; si no, los que siguen en cero). */
 #define GFX_JOB_INFO 5
+#define GFX_JOB_CLIP4 6  /* autoprueba de recorte SIMD: solo variante experimental */
+struct gfx_clip4_job { float x[4], y[4], z[4], w[4]; };
 struct gfx_info {
 	uint32_t image;
 	uint32_t tc_entries;
@@ -117,7 +119,7 @@ struct gfx_job {
 	uint32_t detail_cap, detail_version;
 };
 
-#define GFX_DETAIL_VERSION 1u
+#define GFX_DETAIL_VERSION 3u
 /* Todos los campos son palabras sin punteros; tamaño múltiplo de 16.
  * Tiempos anidados: DMA está incluido en las etapas; no sumarlo otra vez. */
 struct gfx_detail {
@@ -132,7 +134,12 @@ struct gfx_detail {
 	/* Partición exclusiva: vtx/state/load del resultado + triangle/matrix/
 	 * dl/end/rest. triangle excluye state; los demás no se solapan. */
 	uint32_t t_total, t_vtx, t_state, t_load, t_triangle, t_matrix, t_dl, t_end, t_rest;
-	uint32_t reserved[4];
+	/* Solo imagen 1: ticks de la matriz del lote de cuatro. El resto de las
+	 * fases se deriva de t_vtx y de los contadores de E/S para no crecer el
+	 * marco de detalle en la pila del SPE. Los motivos escalares son
+	 * excluyentes salvo scalar_texgen, que es subconjunto de luz. */
+	uint32_t vector_vertices, scalar_forced, scalar_lighting, scalar_texgen;
+	uint32_t scalar_no_fog, scalar_tail, vector_batches, vtx_transform;
 };
 _Static_assert(sizeof(struct gfx_job) == 112, "descriptor gráfico de 112 bytes");
 _Static_assert(sizeof(struct gfx_detail) % 16 == 0, "detalle apto para DMA");
@@ -166,7 +173,10 @@ _Static_assert(sizeof(struct gfx_detail) % 16 == 0, "detalle apto para DMA");
  * destino bastaban para que volviera a cebarse desde la RDRAM y borrara lo
  * dibujado). */
 #define GFX_JOB_DPC_CONT 0x80u
-
+/* Fuerza el recorrido escalar de geometría en el SPE 0. Es un interruptor
+ * de diagnóstico A/B: el PPE lo pone al abrir el juego si existe
+ * gfx-escalar en el directorio de datos. */
+#define GFX_JOB_SCALAR 0x100u
 /* ---- Caché de texturas -------------------------------------------------------
  * Las texturas decodificadas viven en una región de memoria que pone el
  * consumidor (job->cache_ea, cache_cap; vista por el RSX) y que la HLE

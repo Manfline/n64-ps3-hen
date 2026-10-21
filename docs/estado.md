@@ -1,5 +1,102 @@
 # Estado
 
+## 2026-10-21 — Regresión PS3 del paquete de integración SPE
+
+Paquete `SLSA00181`, código `74e41b9`, sin el experimento de destinos del
+recompilador ni el candidato de OPTIONS. Las revisiones posteriores a ese
+código solo modifican documentación.
+
+- Road Rash completa ambas rutas: normal, 6250 campos y 6239 tareas de
+  imagen 1; fase 8, 6224 campos y 6213 tareas. Cero tareas cortadas y cierre
+  limpio en ambas.
+- OoT, fase 8: 7568 tareas, 22091 campos emulados, una tarea cortada por
+  presupuesto de comandos y cinco campos descartados por la cola. El autor
+  no observó fallos visuales. El antecedente de la ruta normal y los límites
+  del diagnóstico se detallan a continuación; no se considera resuelto.
+- Majora, fase 8: 9033 tareas, 27024 campos emulados, cero tareas cortadas y
+  siete campos descartados por la cola. F-Zero X, fase 8: 18556 tareas,
+  18826 campos emulados, cero tareas cortadas y cero campos descartados.
+- En las cuatro regresiones las autopruebas registran listas/hash iguales
+  al PPE, vectorial/escalar bit a bit y, con fase 8, máscaras y detalle A/B
+  sin diferencias. Todos los cierres terminan sin tareas pendientes.
+  No sustituye validación visual exhaustiva ni demuestra ganancia de FPS.
+- El lote de vértices conserva `gfx-escalar` como retorno a la ruta anterior.
+  El recorte de fase 8 permanece optativo mediante `gfx-recorte-vector`,
+  todavía instrumentado. La niebla de F-Zero sigue pendiente por separado.
+  Logs locales conservados en `build/ps3/spe-integracion/`.
+
+## 2026-10-21 — OoT: corte por presupuesto de comandos, con antecedente en ruta normal
+
+- **Evidencia actual.** En la regresión de `74e41b9`, imagen
+  `spu_gfx1fase8`, una tarea de OoT alcanza exactamente 1048576 comandos.
+  El resultado es `0x10` (`GFX_RES_LOOP`), con 638339 comandos desconocidos,
+  dos triángulos, 52 dibujos y cero errores de dirección de lista. Consume
+  188 ms en el SPE. No es un corte por capacidad de vértices, comandos de
+  salida o texturas. El autor no observó un fallo visual.
+- **Antecedente sin recorte experimental.** La captura anterior
+  `gfx-zelda-f3dzex2.log` identifica `spu_gfx1` normal y fase 0 de detalle.
+  Ya registra dos tareas con el mismo microcódigo, límite de 1048576
+  comandos y 638341 comandos desconocidos. Su resultado `0x11` también
+  incluye el presupuesto agotado, aunque no es una ejecución idéntica.
+  Por tanto, el patrón no es exclusivo de la variante 8 ni nuevo del
+  paquete combinado. Esa referencia ya contiene el lote de vértices:
+  no demuestra que el problema existiera antes de toda la rama SIMD.
+- **Diagnóstico de lectura.** La vista de los primeros comandos del SPE
+  solo se rellena al compilar una imagen con `GFX_HAS(F5INDY)`. La imagen 1
+  devuelve deliberadamente el centinela de ausencia; la línea «ninguna
+  lectura» no demuestra un fallo de DMA ni que el SPE no ejecutara la lista.
+- **Límite.** Solo se conservan contadores y el prefijo que ve el PPE al
+  terminar, no toda la entrada del RSP en el instante del corte. No es
+  posible repetir exactamente esa tarea en host con este log. No se ha
+  identificado la causa del recorrido anómalo ni se atribuye a una carrera
+  con el CPU, a un bucle del juego o a la geometría. El lector de listas y
+  su presupuesto no cambian en esta integración; esa inspección no sustituye
+  una comparación sobre la misma entrada.
+- **Evidencias conservadas.**
+  `build/ps3/spe-integracion/oot-vector-20261021.log`, SHA-256
+  `fedecaac6c0d679b7c4bd39c6a4ab443179db10d8630258e3e20dc9bcd8cc508`;
+  `build/ps3/spe-integracion/oot-normal-anterior-20261020.log`, SHA-256
+  `f86af1c8b8a266547c73545a835baa35e34fee7dac261480901227edb25fa5a0`.
+  El paquete actual completa OoT con cierre limpio; conserva la salvedad de
+  una tarea cortada y cinco campos descartados por la cola. No se declara
+  corregido el incidente ni se modifica código durante este diagnóstico.
+
+## 2026-10-20 — Preparación de integración del lote SIMD sobre la base actual
+
+- Se reúnen el lote de cuatro vértices, las fases de medición y el recorte
+  experimental con la base que ya contiene la corrección VI de Racer y el
+  catálogo de compatibilidad. No se incorpora el experimento de destinos
+  directos del recompilador ni el diagnóstico Acclaim.
+- `gfx-escalar` conserva el retorno a la geometría anterior. El recorte
+  SIMD permanece optativo mediante `gfx-recorte-vector`: aún usa la imagen
+  de fase 8 y su detalle, no una variante normal sin instrumentación.
+- La revisión conserva el ABI de trabajos y resultados de 112 bytes. El
+  PPE y todas las imágenes SPE deben reconstruirse juntos. Los resultados
+  de consola anteriores se mantienen como evidencia histórica, no como
+  validación automática del nuevo binario combinado.
+- El reporte visual de niebla de F-Zero X sigue diferido; no se considera
+  causado ni resuelto por esta integración. La comparación de una escena
+  contra el microcódigo real sigue pendiente.
+- Pruebas host de la base combinada: 665 pruebas, 887094 verificaciones,
+  cero fallos con ASan y UBSan; log local
+  `build/logs/spe-integracion-host.log`. Compilación limpia del frontend
+  completada en Docker; log `build/logs/spe-integracion-pkg.log`. Todas las
+  imágenes gráficas conservan al menos 1536 bytes de holgura estática; la
+  imagen 1 normal y la fase 8 tienen 1648 bytes.
+- Paquete de regresión `build/salsa64-spe-integracion/salsa64-spe-integracion.pkg`,
+  título `Salsa64 SPE integracion`, identificador `SLSA00181`, versión
+  `v0.2.9-16-g74e41b9`. SHA-256
+  `b09cde7efabacdac0f6d19d1510d8db58151c2579a2af99347b02cd64560bedf`.
+  Identidad contrastada con el ELF y PARAM.SFO.
+- RPCS3, ROM gráfica homebrew embebida: `RESULTADO frontend: OK`, campo 125
+  en ruta normal sin detalle y campo 137 con `gfx-recorte-vector`. La imagen
+  `spu_gfx1fase8` confirma 64 lotes/256 vértices sin diferencias en las
+  máscaras, salida vectorial/escalar bit a bit, listas/hash iguales al PPE
+  y detalle A/B sin diferencias. Logs
+  `build/logs/spe-integracion-rpcs3-{normal,vector}.log`.
+  No mide rendimiento ni sustituye regresión comercial en PS3. Falta esta
+  última; sin envío, integración en la rama principal ni publicación.
+
 ## 2026-10-20 — Racer: video entrelazado, altura insuficiente del destino
 
 Las tres cajas nuevas capturadas durante el salto del video (campos 558, 656
@@ -71,6 +168,344 @@ incluye registros ni ventana del destino. La caja guarda `V_CURRENT` crudo
 en cero y no guarda vpos, así que tampoco permite deducir la paridad real.
 Evidencia y propuesta inicial en [racer-vi.md](racer-vi.md). No hubo
 validación de consola en esa revisión anterior.
+
+## 2026-10-20 — F-Zero X: regresión de recorte y reporte de niebla ausente
+
+- **Diferido por decisión del autor.** El reporte de niebla se retoma más
+  adelante; no pedir otra captura ni bloquear los frentes de JIT y Acclaim
+  por este diagnóstico. Conservar log e hipótesis, sin darlo por resuelto.
+
+- **Captura.** Paquete de recorte SIMD, imagen `spu_gfx1fase8` confirmada,
+  7574 tareas completadas. Autoprueba directa de máscaras 64 lotes/256
+  vértices sin diferencias, vectorial/escalar bit a bit, hash/listas iguales
+  al PPE y detalle A/B sin diferencias. Resúmenes con cero tareas cortadas
+  y comandos ajenos saltados; 3040 bytes de pila sin tocar al cerrar
+  (estimación por ceros). Última ventana parcial: 213,3 vértices vectoriales
+  de 595,5 totales/tarea; sí ejercitó la ruta modificada.
+- **Reporte visual abierto.** El autor no ve la niebla que espera durante
+  la carrera. El log cuenta `G_FOG` activo (226,1 vértices/tarea en la
+  última ventana), pero no conserva los factores finales, el blender y la
+  salida de cada dibujo. Ese contador no demuestra que el efecto aparezca
+  en pantalla. No se da por validada visualmente la niebla.
+- **Inspección.** La HLE calcula el factor en el alfa; el blender reconoce
+  la mezcla del primer ciclo y el consumidor transmite niebla/color al
+  programa de vértices del RSX. F3DFLX usa además el color de niebla para
+  brillos sin `G_FOG`, documentados el 14 de octubre; no confundirlos con
+  niebla por distancia. Cinco volcados históricos `fzero-rc2` tienen dibujos
+  con niebla activa y factores no nulos: no describen la escena actual ni
+  descartan el reporte. La incidencia histórica de interpolación afín y
+  recorte del fondo es una hipótesis de relación, no una causa confirmada.
+- **Siguiente evidencia.** Un volcado `SELECT + R2` y su captura en la escena
+  donde falta niebla permitirán comprobar factor alfa, estado de dibujo y
+  salida RSX/rasterizador. Hace falta la misma escena de referencia para
+  atribuirlo a una regresión; las autopruebas no la sustituyen. Sin cambios
+  de renderizado ni paquete nuevo durante esta inspección.
+- **Log local.** `build/ps3/recorte-regresion-fzero-20261020.log`, SHA-256
+  `c2a89e448560c765fd539a67e1d673d92c43af36aeb0cb376746a4e2c00b254b`.
+
+## 2026-10-20 — Recorte SIMD experimental del lote F3DEX2
+
+- **Evidencia y cambio.** La fase 7 localizó en el lote el 81,9 % del coste
+  de vértices de su ventana de carrera. En su código máquina las expresiones
+  escalares de recorte generaban ramas por plano. La variante 8 calcula las
+  seis banderas para cuatro vértices con comparaciones y máscaras SIMD
+  explícitas, conservando la aritmética de matriz, perspectiva y niebla.
+- **A/B.** `gfx-recorte-vector` selecciona la imagen experimental y mide el
+  lote completo. Sin ese archivo, `gfx-fase-7` carga la referencia anterior
+  con el mismo intervalo. `gfx-escalar` debe estar apagado. No hay ganancia
+  medida todavía; los tiempos individuales de las microfases no predicen
+  cuánto se ahorrará, porque sus relojes también cuestan.
+- **Cobertura.** El host compara 16384 vértices contra las condiciones de
+  la ruta escalar: planos exactos, signos de cero, w negativo y máscaras
+  distintas en cada carril. La imagen experimental añade un trabajo de
+  autoprueba que calcula directamente 64 lotes/256 vértices en el SPE y
+  devuelve sus banderas al PPE. Se conservan listas sintéticas SPE/PPE,
+  vectorial/escalar y detalle A/B. Cualquier diferencia impide validar el
+  experimento; la comparación de una escena contra el microcódigo real
+  sigue siendo una comprobación aparte.
+- **Suite host final.** `tools/build.sh test-host`: **665 pruebas, 887093
+  verificaciones, 0 fallidas** con ASan y UBSan.
+- **Prioridad posterior.** Al cerrar el A/B de Road Rash, evaluar una
+  optimización general del JIT con varios juegos, lockstep y medida en PS3.
+- **Binario y RPCS3.** La variante 8 emite seis comparaciones vectoriales
+  sin las ramas por plano en 0x9b10–0x9b64. Hasta `_end` 250256 bytes,
+  cadena de pila 10224, holgura **1648** (mínimo 1536). El homebrew gráfico
+  terminó `RESULTADO frontend: OK (campo 137)`; la autoprueba directa del
+  SPE devolvió cero diferencias en 64 lotes/256 vértices, las listas y hash
+  coincidieron con el PPE y las salidas vectorial/escalar fueron iguales bit
+  a bit. Detalle A/B: cero diferencias. Estas pruebas no miden la PS3.
+- **Paquete experimental.**
+  `build/salsa64-recorte-vector/salsa64-recorte-vector.pkg`, título
+  `Salsa64 - recorte SIMD`, SHA-256
+  `c5d3fbdc8df7ad62e583fae49b32b79cd628159b60b85b906f798fa0037b5ab7`.
+  A/B de carrera completado en PS3 con el mismo paquete: referencia
+  `gfx-fase-7` y después `gfx-recorte-vector`, sin `gfx-escalar`.
+- **Resultado PS3.** Autopruebas SPE de máscaras 64 lotes/256 vértices con
+  cero diferencias, vectorial/escalar bit a bit, listas/hash iguales al PPE
+  y detalle A/B con cero diferencias; cierre tras 5975 tareas y 3040 bytes
+  de pila sin tocar (estimación por ceros). En ventanas completas de 100
+  tareas con más de 2000 vértices vectoriales/tarea (50/51 ventanas), lote
+  ponderado **18,22 → 16,02 ticks/vértice vectorial (−12,1 %)** y etapa
+  completa **267,56 → 241,30 ns/vértice total (−9,8 %)**. Cobertura
+  vectorial 96,02/96,05 %. Ver criterio, ventanas comparables y límites en
+  `docs/perf-log.md`; no es una ganancia global de FPS. Logs locales
+  `build/ps3/recorte-referencia-20261020.log` y
+  `build/ps3/recorte-vector-20261020.log`. Variante aún experimental; falta
+  regresión adicional antes de integrarla como ruta normal.
+- **Regresión OoT.** La imagen experimental completó 2517 tareas; hash y
+  listas SPE/PPE iguales, máscaras y A/B sin diferencias y vectorial/escalar
+  bit a bit. Los resúmenes registraron cero tareas cortadas y cero comandos
+  de otro microcódigo saltados; 3040 bytes de pila sin tocar al cerrar
+  (estimación por ceros). La cobertura del lote nuevo es pequeña en esta
+  escena: última ventana parcial 12,0 vértices vectoriales/tarea de 3868,1
+  totales (aproximadamente 0,31 %); predominan iluminación y vértices sin
+  niebla. Confirma ejecución y coexistencia de rutas, no una validación
+  gráfica exhaustiva ni una ganancia en OoT. Log
+  `build/ps3/recorte-regresion-oot-20261020.log`, SHA-256
+  `32a06a8f996035fd238b7499f34edd7bc19763f0568dec90b571aa794b7f010e`.
+- **Regresión Majora.** Imagen experimental confirmada, 4805 tareas,
+  autopruebas de máscaras y detalle A/B sin diferencias, vectorial/escalar
+  bit a bit y listas/hash iguales al PPE. Los resúmenes registraron cero
+  tareas cortadas y comandos de otro microcódigo saltados. Al cerrar quedaron
+  1968 bytes de pila sin tocar (estimación por ceros, no sustituye la holgura
+  estática de 1648). Cobertura reducida y dependiente de la escena: por
+  ejemplo, ventana 4501–4600 con 31,2 vértices vectoriales de 5273,0 totales
+  por tarea; al final no hubo lotes aptos. No valida por sí sola el blur ni
+  los defectos gráficos conocidos. Log
+  `build/ps3/recorte-regresion-majora-20261020.log`, SHA-256
+  `7d8429ea604301287e30baeaea3ccae85b35fbb25721093ca6306b5558f4f26b`.
+
+## 2026-10-20 — Medición del lote SIMD completo F3DEX2
+
+- **Pregunta.** La fase 6 dejó 0,969 ms/tarea fuera del postproceso en la
+  ventana 6001–6100 de Road Rash. Ese resto mezcla desempaquetado, matriz,
+  colas escalares y envoltura de carga; no identifica un coste optimizable.
+- **Instrumento.** `gfx-fase-7` selecciona `spu_gfx1fase7`: un único intervalo
+  desde el desempaquetado del primer vértice hasta el final del postproceso
+  del cuarto. Reutiliza el acumulador y el protocolo de detalle versión 3.
+  RDRAM y resto se muestran en la misma ventana; los ticks del lote se
+  dividen entre los vértices vectoriales y el resto entre todos.
+- **Decisión tras PS3.** En la ventana 7401–7500, el lote consume 1,941 ms
+  de los 2,371 ms/tarea de vértices (81,9 %), RDRAM 0,089 y resto 0,341
+  (14,4 %). Hubo 8863,8 vértices/tarea, 8561,0 vectoriales y 302,8 de cola.
+  Son 18,1 ticks por vértice vectorial dentro del lote y 3,1 por vértice
+  total fuera. La última ventana completa 7801–7900 da 18,3 y 3,5,
+  respectivamente. El siguiente trabajo gráfico debe concentrarse en el
+  código del lote; no hay evidencia de que la envoltura sea el coste
+  dominante. No restar esta apertura de la fase 6 para estimar una operación
+  concreta ni atribuir una ganancia: aún falta un cambio y su A/B.
+- **Validación host.** `tools/build.sh test-host`: **664 pruebas, 870709
+  verificaciones, 0 fallidas**. El host no ejecuta la imagen SPE; la nueva
+  variante se comprobó también en PS3: vectorial/escalar iguales bit a bit,
+  A/B con cero diferencias en 17 pares (sin/con 0,205/0,210 ms), hash y
+  tareas iguales al PPE. `spu_gfx1fase7` confirmado, 7907 tareas y 3168 bytes
+  de pila sin tocar al cerrar (estimación por ceros).
+- **Build Docker.** Imagen 7 hasta 250128 bytes, cadena de pila 10224 y
+  holgura **1776** (mínimo 1536). El desensamblado tiene un par de lecturas
+  del decrementador en el lote, en 0x9820 y 0x9dac; el mapa del frontend
+  confirma la imagen embebida. Paquete
+  `build/salsa64-spe-fase7/salsa64-spe-fase7.pkg`, título visible
+  `Salsa64 - fase 7`, mismo APPID. SHA-256
+  `6649226156f90a1f140f47c75c25732f070de4c1ec736e96d83494aac371012c`.
+  Log local `build/ps3/vect-fase7-20261020.log`; no se atribuye ganancia.
+
+## 2026-10-20 — Intervalo conjunto del postproceso SIMD F3DEX2
+
+- **Motivo.** Las cinco aperturas de Road Rash 64 midieron por separado
+  desempaquetado, proyección, recorte, niebla y conversión/escritura entre
+  3,8 y 5,6 ticks/vértice, pero dejaron 16,4–20,9 ticks fuera de cada una.
+  Sus ventanas no son sumables: cada una tuvo su propio reloj y carga. La
+  siguiente medida reúne las fases 2–5, incluidas las copias directas de
+  x/y/z/w que no cabían en la fase 5; el desempaquetado queda fuera.
+- **Instrumento.** `gfx-fase-6` carga otra imagen 1 y rodea con un único par
+  de lecturas del decrementador todo el postproceso de un lote vectorial de
+  cuatro: registros de posición, banderas de recorte, perspectiva,
+  ST/color y niebla. No cambia las salidas ni el bloque DMA de detalle; el
+  resto de la línea sigue separando RDRAM y el tiempo que queda fuera de ese
+  intervalo.
+- **Local store y pruebas.** La imagen termina en 250128 bytes, su cadena de
+  pila es de 10224 y deja **1776 bytes** de holgura, frente al mínimo de
+  1536. `tools/build.sh test-host`: **664 pruebas, 870709 verificaciones, 0
+  fallidas**.
+- **Paquete probado en PS3.**
+  `build/salsa64-spe-vect/salsa64-spe-vect.pkg`, SHA-256
+  `68945be02335b91ea5b0d88199dff4caeaeb326483492369fb5ea391a456e36e`.
+  La consola confirmó `spu_gfx1fase6`, hash y tareas iguales al PPE,
+  vectorial/escalar bit a bit iguales y A/B con cero diferencias en 17
+  pares (medianas sin/con detalle 0,205/0,210 ms). Cerró tras 6142 tareas de
+  imagen 1, con 3168 bytes de pila sin tocar (estimación por ceros).
+- **Medida.** En tareas 6001–6100, vértices 2,516 ms/tarea: RDRAM 0,094,
+  postproceso 1,452 y resto 0,969 (redondeados). Hubo 9316,5 vértices/tarea,
+  8932,4 vectoriales y 384,1 de cola; postproceso 13,0 ticks por vértice
+  vectorial y resto 8,3 por vértice total. El intervalo excluye desempaquetado
+  y matriz; el resto incluye esos trabajos, las colas y la envoltura de
+  carga. No puede atribuirse todavía a una operación concreta. La ventana
+  parcial final confirma 13,0 y 8,3 ticks, respectivamente. Log local
+  `build/ps3/vect-fase6-20261020.log`. Siguiente paso: separar el coste del
+  lote completo del de carga y colas; estas cifras no prueban una mejora.
+
+## 2026-10-20 — Cobertura de autoprueba para las variantes gráficas
+
+- **Selector LLE.** En modo `auto`, F3DPD (Perfect Dark) y F3DEXBG (Conker)
+  se reconocían y tenían HLE, pero no figuraban como disponibles al decidir
+  si arrancar el RSP a bajo nivel. Se añaden al selector y la prueba del modo
+  automático confirma que ambas van al backend gráfico; `all` sigue enviando
+  todo al RSP a bajo nivel.
+- **Autoprueba SPE/PPE.** Las tareas S2DEX sueltas ahora tienen listas propias
+  para las codificaciones 1.x y 2.x: color image, tijera, G_BG_COPY,
+  G_RDPFULLSYNC y su G_ENDDL. Se comparan al cargar las imágenes 0 y 1, igual
+  que las demás familias. La lista F3DZEX2 ejecuta G_BRANCH_W y la de F3DEX2
+  recarga F3DFLX y sube su tabla de alfa por G_DMA_IO. Las pruebas unitarias
+  comprueban los contadores y las asignaciones de imagen.
+- **Pruebas.** `tools/build.sh test-host`: **664 pruebas, 870709
+  verificaciones, 0 fallidas**. En PS3, el interruptor temporal `spe0-todas`
+  cargó las cinco imágenes y todas devolvieron el mismo hash y las mismas
+  tareas sintéticas que el PPE; el resumen fue «ninguna» distinta. La imagen
+  F3D tuvo 1632 bytes de holgura de pila y la F3DEX2, 1648. El interruptor se
+  desactivó después de la corrida. Paquete local
+  `build/salsa64-gfx-autoprueba/salsa64-gfx-autoprueba.pkg`, SHA-256
+  `426937ed58123e0b8427bac2aecba000ab46229f2719edf66bbec85e6c0f5d6b`.
+- **Integración S2DEX1.** Yoshi's Story ejecutó 2506 tareas en la imagen
+  F3D/S2DEX1, con 0 tareas cortadas, 0 comandos de otro microcódigo saltados
+  y 55 799 fondos S2DEX. Al cerrar, la imagen conservaba 2000 bytes de pila
+  sin tocar; no hubo errores gráficos.
+- **Integración F3DFLX.** F-Zero X completó 3857 tareas en la imagen F3DEX2,
+  con 0 tareas cortadas y 0 comandos de otro microcódigo saltados; al cerrar
+  quedaban 3040 bytes de pila sin tocar. El registro no cuenta cada
+  `G_LOAD_UCODE`, por lo que confirma estabilidad de la carrera conocida por
+  usar F3DFLX, mientras que la recarga y G_DMA_IO quedan comparados de forma
+  directa en la autoprueba SPE/PPE.
+- **Integración S2DEX2 y VI.** Resident Evil 2 completó 10 008 tareas en la
+  imagen F3DEX2, con 0 tareas cortadas y 0 comandos de otro microcódigo
+  saltados; al cerrar quedaban 2608 bytes de pila sin tocar. En la última
+  ventana de la corrida, el VI no perdió copias ni destinos de framebuffer;
+  las copias a RDRAM siguieron siendo el coste dominante. Esto no prueba ni
+  corrige los defectos visuales conocidos del juego, que requieren reproducir
+  cada escena afectada.
+- **Integración F3DZEX2.** Zelda OoT seleccionó la imagen F3DEX2 para GBI 2
+  y completó 3404 tareas, con 0 tareas cortadas y 0 comandos de otro
+  microcódigo saltados; al cerrar quedaban 3040 bytes de pila sin tocar. La
+  escena recorrida no usó fondos S2DEX2; la prueba sintética conserva la
+  comprobación directa de `G_BRANCH_W`.
+- **Selector LLE automático en PS3.** Con `lle=auto`, Perfect Dark ejecutó
+  3740 tareas gráficas por la HLE de la imagen F3D y el resumen del LLE fue
+  0 tareas, 0 instrucciones y 0 fallidas. Así se confirma en la consola que
+  F3DPD no cae al intérprete real. No hubo tareas cortadas ni comandos de otro
+  microcódigo saltados.
+- **Selector LLE automático en PS3, Conker.** Con el mismo interruptor,
+  Conker seleccionó la imagen propia para GBI 7 y ejecutó 2477 tareas por
+  HLE; el resumen del LLE volvió a ser 0 tareas, 0 instrucciones y 0
+  fallidas. No hubo tareas cortadas ni comandos de otro microcódigo saltados;
+  al cerrar quedaban 14 448 bytes de pila sin tocar. El interruptor `lle` se
+  desactivó al terminar ambas corridas, para volver a permitir estados.
+
+## 2026-10-20 — Medición de una subfase del lote SIMD F3DEX2
+
+- **Código máquina (imagen 1).** `spu-objdump` del `geom.c.o` y de
+  `spu_gfx1.bin` confirma cuatro carriles en la multiplicación: cuatro
+  cadenas `fm` + 2×`fma` + `fa` (16 operaciones vectoriales para la matriz
+  de cuatro vértices). No hay llamada a `memcpy`, a divisiones de libgcc ni a
+  conversiones de coma flotante por software en ese camino; las conversiones
+  son `csflt`/`cfltu`. Sí hay muchas cargas y permutaciones (`lqx`/`lqd`,
+  `rotqby`, `shufb`) al desempaquetar los `s16` big-endian y escribir los
+  campos. La división de perspectiva sigue por vértice con
+  `frest`/`fi`/`fm`/`fma`; el recorte usa comparaciones y selecciones, y el
+  tramo posterior conserva ramas para los casos de `w` y la cola. Las únicas
+  llamadas que aparecen en `gfx_vertices` corresponden a rutas no tomadas
+  por Road Rash (luces, TEXGEN, FLX y matriz sucia); con detalle, además, las
+  lecturas del reloj.
+- **Coste estático aproximado.** Por lote, la matriz tiene 16 FP vectoriales:
+  ~16 ciclos de emisión y ~24–32 al considerar las dependencias de las cuatro
+  cadenas (≈6–8 ciclos/vértice con el pipeline ocupado). El desempaquetado y
+  las escrituras usan decenas de cargas/permutaciones (≈15–30 ciclos/vértice
+  ideal); la proyección escalar (recíproco/refinamiento y tres coordenadas),
+  seis pruebas de recorte, ST/color y niebla quedan en ≈70–130 ciclos/vértice
+  antes de esperas y derrames. La ruta escalar repite las 16 FP de matriz
+  por vértice (≈24–32 ciclos/vértice por sus dependencias), pero comparte el
+  mismo postproceso de ≈70–130. Son cotas de agenda, no una medición de la
+  consola. La hipótesis principal para los ~0,25 µs/vértice es precisamente
+  ese tramo posterior aún escalar —sobre todo perspectiva, empaquetado y
+  escritura—, no la multiplicación de matriz que ya va a cuatro carriles.
+- **Medición nueva.** `gfx-spe-detalle` versión 3 conserva el bloque de 272
+  bytes y añade la línea `gfx detalle: vtx fases`: RDRAM (envío+espera DMA),
+  matriz del lote y `resto`. Para descomponer este último sin acumular marcos
+  de reloj, al abrir el juego se puede crear exactamente un archivo vacío
+  `gfx-fase-1` a `gfx-fase-5` en el directorio de datos. Cada archivo carga
+  una imagen 1 distinta y mide, respectivamente, desempaquetado;
+  proyección/división; recorte; niebla; o conversión ST/color y escritura.
+  El archivo activa también el detalle. Sin `gfx-fase-*`,
+  `gfx-spe-detalle` conserva la medición de matriz; con varios archivos el
+  log avisa y elige el número menor. La fase 5 no incluye las copias directas
+  de x/y/z/w: añadir otro par de relojes agotaba la pila.
+- **PS3 real, cinco aperturas.** Las cinco imágenes cargaron y sus
+  autopruebas vectorial/escalar y A/B dieron cero diferencias. En la ventana
+  final de cada apertura, RDRAM quedó en 0,8 ticks/vértice y las subfases
+  dieron: desempaquetado **4,6**, proyección/división **4,9**, recorte
+  **5,0**, niebla **3,8** y conversión/escritura **5,6** ticks/vértice. Los
+  restos respectivos fueron 16,4, 20,1, 20,4, 20,9 y 19,2; las aperturas no
+  tienen la misma carga, así que no se suman ni se usan como una comparación
+  de campos/s. Ninguna subfase aislada explica los ~20 ticks: juntas son el
+  siguiente objetivo de inspección, sin atribuir aún una ganancia.
+- **Local store.** Build Docker: holguras de las imágenes 0–4: **1632 /
+  1648 / 14272 / 2960 / 1648 bytes** (mínimo 1536). Las fases 1–5 dejan
+  **1776 / 1648 / 1648 / 1648 / 1648 bytes**, con las mismas opciones de
+  tamaño que la imagen 1 normal.
+- **Pruebas y paquete.** `tools/build.sh test-host`: **664 pruebas, 870679
+  verificaciones, 0 fallidas**. Paquete local
+  `build/salsa64-spe-vect/salsa64-spe-vect.pkg`, SHA-256
+  `dbe1c5c2b6bff8a0de45f2761041ceab29e304ce9d4959595d4b7e49fdbcb8ac`.
+  Instalado para prueba en la PS3 real; no publicado.
+
+
+## 2026-10-20 — Lote SIMD de vértices F3DEX2 con niebla
+
+- **Hipótesis confirmada.** El objeto SPU de `gfx_vertices` recorría un
+  vértice por iteración: transformación escalar, seis comparaciones de
+  recorte, división para proyectar y ramas de luz/TEXGEN/niebla. Road Rash
+  entra en el caso de color directo con niebla; las esperas DMA medidas antes
+  siguen por debajo de 0,1 ms y no son la causa del coste.
+- **Cambio.** Solo en la imagen 1, cuatro posiciones se transforman en los
+  carriles del SPU cuando no hay luces ni TEXGEN y la niebla está activa. La
+  proyección, ST, conversión y niebla mantienen el orden escalar. Las rutas
+  restantes no cambian. El archivo `gfx-escalar` al abrir el juego selecciona
+  el recorrido previo y el log dice cuál quedó activo. La autoprueba F3DEX2
+  añade niebla y hace 17 pares vectorial/escalar, comprobando las salidas bit
+  a bit y registrando la mediana del decrementador.
+- **Triángulos.** Se intentó agrupar cuatro para el descarte por planos, pero
+  la cadena F3DEX2/S2DEX quedó 272 bytes bajo el mínimo de pila; se retiró.
+  No se atribuye una mejora de triángulos a esta entrega.
+- **Local store.** Build Docker: holguras de las imágenes 0–4: **1632 /
+  1776 / 14272 / 2960 / 1648 bytes**, mínimo 1536. El detalle de cobertura
+  añadió 16 bytes al protocolo y el marco de detalle de la imagen 1 subió 16
+  bytes; sigue 240 bytes sobre el mínimo. Para liberar espacio, en
+  la imagen 1 TMEM y las rutas frías de rectángulos/RDP se compilan a tamaño;
+  el trayecto de triángulos y vértices mantiene `-O2`.
+- **Pruebas hechas.** `tools/build.sh test-host`: **664 pruebas, 870679
+  verificaciones, 0 fallidas**. El censo LLE del host, limitado a 700 campos,
+  ejecutó SM64 (270 tareas), OoT (540), MK64 (225) y Road Rash (696); Road
+  Rash dio 696/696 idénticas. El host no ejecuta el binario SPU, por lo que no
+  valida aún la paridad interna vectorial/escalar ni mide la PS3.
+- **Cobertura pendiente de la PS3.** El detalle versión 2 (272 bytes) imprime
+  por tarea los vértices y lotes vectoriales y los escalares por forzado,
+  iluminación (y su subconjunto TEXGEN), falta de niebla y cola de 1–3. En la
+  carrera ya registrada (ventana 9501–9600) había 9348,9 vértices/tarea en
+  434,6 cargas, todos con niebla y ninguno iluminado; el host de 2000 campos
+  reproduce la carrera con F3DEX2. Las colas pueden sumar como máximo 1303,8
+  vértices/tarea (13,9 %); por tanto ni luz/TEXGEN ni el múltiplo de cuatro
+  explican por sí solos una cobertura casi nula. La siguiente PS3 debe
+  distinguir forzado escalar de una discrepancia de la ruta medida. El host
+  no ejecuta la imagen SPE ni puede ver el bit `GFX_JOB_SCALAR` efectivo.
+- **Paquete local.** `build/salsa64-spe-vect/salsa64-spe-vect.pkg`, APPID
+  `SLSA00064`, SHA-256
+  `ac402d68409da4efbf5c33ac602d3fe7d53979e38a2cece708c80107eedc2c78`.
+  No enviado ni publicado.
+- **Pendiente en PS3.** Con `gfx-spe-detalle`, comprobar primero la línea de
+  autoprueba sin diferencias y su mediana; repetir la misma carrera de Road
+  Rash con y sin `gfx-escalar`, y guardar la nueva línea `lote vtx`. Conservar
+  ambos logs y comparar ms/tarea, vértices, triángulos, campos/s, sondeos y
+  audio. Repetir
+  `--lle-check-gfx` completo y un censo contra la referencia antes de asumir
+  una ganancia.
 
 ## 2026-10-20 — Road Rash 64: colisión de descartes de espera, no escrituras de código
 

@@ -57,6 +57,9 @@
 #include <sys/spu_thread.h>
 
 #include "rsp/gfx/hle.h"
+#if GFX_SPE0_IMG == 1 && GFX_SPE0_PHASE == 8
+#include "rsp/gfx/clip4.h"
+#endif
 
 #ifndef GFX_SPE0_IMG
 #error "src/spu/gfx se compila una vez por imagen, con -DGFX_SPE0_IMG=<n> (rsp/gfx/spe0.h)"
@@ -155,6 +158,18 @@ static __attribute__((noinline)) void run_detail(struct gfx_result *res)
 static int handler(void *ctx, const spukit_job *j, spukit_result *res)
 {
 	(void)ctx;
+#if GFX_SPE0_IMG == 1 && GFX_SPE0_PHASE == 8
+	if (j->kind == GFX_JOB_CLIP4) {
+		gfx_clip4f x, y, z, w;
+		struct gfx_clip4_job input;
+		memcpy(&input, j->data, sizeof input);
+		memcpy(&x, input.x, sizeof x); memcpy(&y, input.y, sizeof y);
+		memcpy(&z, input.z, sizeof z); memcpy(&w, input.w, sizeof w);
+		gfx_clip4u clips = gfx_clip4_mask(x, y, z, w);
+		memcpy(res->data, &clips, sizeof clips);
+		return 0;
+	}
+#endif
 	if (j->kind == GFX_JOB_HASH) {
 		/* Antes de cualquier tarea: la TMEM sirve de búfer y queda en cero. */
 		struct gfx_hash_job hj;

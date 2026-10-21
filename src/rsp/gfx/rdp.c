@@ -17,6 +17,15 @@
 #include "core/rcp.h"
 #include "rsp/gfx/hle.h"
 
+/* Estas rutas son rectángulos y triángulos crudos del RDP, no la emisión de
+ * G_TRI de la imagen 1. Compactarlas deja el local store para los lotes de
+ * geometría; las demás imágenes conservan -O2. */
+#if defined(__SPU__) && GFX_SPE0_IMG == 1
+#define GFX_IMG1_COLD __attribute__((optimize("Os")))
+#else
+#define GFX_IMG1_COLD
+#endif
+
 #ifdef SALSA64_GFX_TRACE
 /* Depuración en el host (src/host/run.c): el estado resumido de cada dibujo. */
 void salsa64_gfx_trace_state(const struct gfx_state *g, const struct gfx_draw *d, int kind, int tile);
@@ -740,7 +749,7 @@ detail_done:
 /* Rectángulo de pantalla en dos triángulos. x, y en píxeles; s, t en texels
  * en cada esquina (0: arriba a la izquierda, 1: arriba a la derecha,
  * 2: abajo a la izquierda, 3: abajo a la derecha). */
-static void rect(struct gfx_state *g, enum prim_kind kind, int tile, float x0, float y0, float x1, float y1,
+static GFX_IMG1_COLD void rect(struct gfx_state *g, enum prim_kind kind, int tile, float x0, float y0, float x1, float y1,
 		 const float s[4], const float t[4], unsigned clamp, const uint16_t lim[2])
 {
 	if (x1 <= x0 || y1 <= y0)
@@ -796,7 +805,7 @@ static uint16_t sampled(float hi, bool bilinear, uint32_t n)
  * Aparte y sin inline: en el SPE sus temporales no ocupan la pila mientras
  * gfx_texrect llama a rect, que está en la cadena más honda (fondo S2DEX →
  * TEXRECT → estado → combiner; src/spu/gfx/main.c). */
-static __attribute__((noinline)) unsigned texrect_clamp(const struct gfx_state *g, int tile, unsigned cycle, float s0,
+static GFX_IMG1_COLD __attribute__((noinline)) unsigned texrect_clamp(const struct gfx_state *g, int tile, unsigned cycle, float s0,
 							 float t0, float dsdx, float dtdy, float ns, float nt,
 							 bool *rows)
 {
@@ -820,7 +829,7 @@ static __attribute__((noinline)) unsigned texrect_clamp(const struct gfx_state *
 	return clamp;
 }
 
-void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uint32_t w3, bool flip)
+GFX_IMG1_COLD void gfx_texrect(struct gfx_state *g, uint32_t w0, uint32_t w1, uint32_t w2, uint32_t w3, bool flip)
 {
 	unsigned cycle = (g->oh >> G_MDSFT_CYCLETYPE) & 3;
 	float lrx = ((w0 >> 12) & 0xFFF) / 4.0f, lry = (w0 & 0xFFF) / 4.0f;
@@ -979,7 +988,7 @@ void gfx_rdp_tex_quad(struct gfx_state *g, int tile, const float *x, const float
 }
 #endif
 
-void gfx_rdp_triangle(struct gfx_state *g, const uint32_t *w)
+GFX_IMG1_COLD void gfx_rdp_triangle(struct gfx_state *g, const uint32_t *w)
 {
 	uint32_t op = w[0] >> 24;
 	bool shade = op & 4, tex = op & 2, zb = op & 1;
@@ -1134,7 +1143,7 @@ static void set_image(uint32_t w0, uint8_t *fmt, uint8_t *siz, uint16_t *width)
 	*width = (uint16_t)((w0 & 0xFFF) + 1);
 }
 
-void gfx_rdp_command(struct gfx_state *g, uint32_t w0, uint32_t w1)
+GFX_IMG1_COLD void gfx_rdp_command(struct gfx_state *g, uint32_t w0, uint32_t w1)
 {
 	uint32_t op = w0 >> 24;
 	switch (op) {
