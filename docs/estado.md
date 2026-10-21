@@ -22,11 +22,27 @@
   interruptor apagado y encendido, y repetición de la misma lista F3DEX2
   ON→OFF sin reinicializar el estado; conserva controles de perspectiva,
   sprites, TEXRECT, MODIFYVTX y tarea siguiente.
-- La imagen que antes no cabía queda validada por el build; falta terminar
-  el paquete completo y sus comprobaciones RPCS3. La evidencia de OPTIONS
-  continúa siendo la copia modificada de la salida histórica, no una
-  ejecución del candidato sobre la entrada real del RSP. No se considera
-  corregido en PS3 ni se incorpora todavía a la rama principal.
+- Paquete completo compilado en Docker, código `4ef227f`:
+  `build/salsa64-re2-afin/salsa64-re2-afin.pkg`, título
+  `Salsa64 RE2 OPTIONS`, identificador `SLSA00182`, versión
+  `v0.2.9-12-g4ef227f`. Identidad contrastada con el ELF y PARAM.SFO.
+  SHA-256 `f338bcfd86caa0a5c5143fd487ab29cb8593e731d7a5809fa7cca18f02f29f29`.
+  Las cinco imágenes conservan holguras de 1632, 1632, 14144, 2960 y
+  1648 bytes, respectivamente. Log `build/logs/re2-afin-paquete.log`.
+  Esta rama parte de la base anterior a la integración del lote vectorial;
+  el paquete es aislado, no reemplaza el paquete de regresión SPE.
+- RPCS3 con `gfxtest` embebido: `RESULTADO frontend: OK`, campo 138 con
+  el interruptor encendido y campo 121 apagado; ambos cierres limpios.
+  Con `spe0-todas`, las cinco imágenes pasan sus tareas de prueba y hash
+  contra el PPE en ambas corridas. Logs
+  `build/logs/re2-afin-rpcs3-{on,off}.log`. Es una prueba de arranque y
+  regresión homebrew: no reproduce la transición de OPTIONS sobre la
+  entrada real del RSP ni demuestra beneficio de rendimiento.
+- La evidencia visual de OPTIONS continúa siendo la copia modificada de
+  la salida histórica, no una ejecución del candidato sobre la entrada real
+  del RSP. No se considera corregido en PS3 ni se incorpora todavía a la
+  rama principal. Antes de promoverlo, comparar OPTIONS con el interruptor
+  apagado y encendido, conservando estado reciente, log y captura.
 
 ## 2026-10-20 — Resident Evil 2: candidato optativo para OPTIONS
 
