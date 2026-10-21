@@ -204,7 +204,11 @@ void gfx_dl_f3d(struct gfx_state *g, gfx_cmd_hook hook)
 {
 	struct gfx_result *res = g->res;
 #if GFX_HAS(S2DEX)
+#if GFX_HAS(F3DEX2)
+	const bool ex = g->job->gbi == SALSA64_GBI_F3DEX || g->chain_ex == 1;
+#else
 	const bool ex = g->job->gbi == SALSA64_GBI_F3DEX || g->chain_ex;
+#endif
 #else
 	const bool ex = g->job->gbi == SALSA64_GBI_F3DEX;
 #endif

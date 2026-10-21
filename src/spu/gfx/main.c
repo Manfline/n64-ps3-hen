@@ -145,15 +145,36 @@ static __attribute__((noinline, cold)) void fill_stack(void)
 
 #if GFX_SPE0_IMG == 1
 /* Solo se ocupa este marco al pedir detalle: ninguna reserva en el camino
- * normal. Se publica el bloque antes de devolver el resultado de la cola. */
+ * normal. El DMA exige múltiplos y alineación de 16 bytes; pedir 128 aquí
+ * reserva hasta 112 bytes extra para realinear la pila. El destino conserva
+ * su alineación de 128. Se espera el DMA antes de abandonar este marco. */
 static __attribute__((noinline)) void run_detail(struct gfx_result *res)
 {
-	struct gfx_detail detail __attribute__((aligned(128)));
+	struct gfx_detail detail __attribute__((aligned(16)));
 	state.detail = &detail;
 	gfx_run(&state, &job, res);
 	state.detail = NULL;
 }
 #endif
+
+/* La autoprueba se ejecuta antes de dibujar. Su estado y sus temporales
+ * no deben ampliar el marco que permanece vivo durante toda tarea gráfica. */
+static __attribute__((noinline, cold)) int hash_job(const spukit_job *j, spukit_result *res)
+{
+	/* Antes de cualquier tarea: la TMEM sirve de búfer y queda en cero. */
+	struct gfx_hash_job hj;
+	memcpy(&hj, j->data, sizeof hj);
+	if (hj.size > sizeof state.tmem || (hj.size & (hj.size - 1)) || hj.size < 16)
+		return -1;
+	spukit_dma_get(state.tmem, hj.ea, hj.size, 0);
+	spukit_dma_wait(1u << 0);
+	struct gfx_hash h;
+	gfx_hash_init(&h);
+	gfx_hash_ring(&h, state.tmem, hj.size, hj.start, hj.len);
+	gfx_hash_final(&h, (uint32_t *)res->data);
+	memset(state.tmem, 0, sizeof state.tmem);
+	return 0;
+}
 
 static int handler(void *ctx, const spukit_job *j, spukit_result *res)
 {
@@ -170,21 +191,8 @@ static int handler(void *ctx, const spukit_job *j, spukit_result *res)
 		return 0;
 	}
 #endif
-	if (j->kind == GFX_JOB_HASH) {
-		/* Antes de cualquier tarea: la TMEM sirve de búfer y queda en cero. */
-		struct gfx_hash_job hj;
-		memcpy(&hj, j->data, sizeof hj);
-		if (hj.size > sizeof state.tmem || (hj.size & (hj.size - 1)) || hj.size < 16)
-			return -1;
-		spukit_dma_get(state.tmem, hj.ea, hj.size, 0);
-		spukit_dma_wait(1u << 0);
-		struct gfx_hash h;
-		gfx_hash_init(&h);
-		gfx_hash_ring(&h, state.tmem, hj.size, hj.start, hj.len);
-		gfx_hash_final(&h, (uint32_t *)res->data);
-		memset(state.tmem, 0, sizeof state.tmem);
-		return 0;
-	}
+	if (j->kind == GFX_JOB_HASH)
+		return hash_job(j, res);
 	if (j->kind == GFX_JOB_STATE_SAVE || j->kind == GFX_JOB_STATE_LOAD)
 		return state_job(j->kind == GFX_JOB_STATE_SAVE, (const struct gfx_state_job *)(const void *)j->data, res);
 	if (j->kind == GFX_JOB_INFO)

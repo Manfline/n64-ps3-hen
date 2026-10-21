@@ -6,8 +6,29 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 
 ## [Unreleased]
 
+- Ajusta la alineación local del diagnóstico DMA a 16 bytes para recuperar
+  pila en la variante de recorte, conservando el destino alineado a 128.
+
+- Separa la autoprueba de hash del bucle gráfico SPE para liberar pila
+  activa sin reducir cachés ni el margen de seguridad.
+
+- Prepara la combinación de la corrección afín de RE2 con el lote SPE:
+  paquete completo dentro del presupuesto, pruebas host y cuatro rutas en
+  RPCS3 correctas y pruebas del conjunto en PS3 registradas. Integración
+  local autorizada; sin publicación.
+
 - Documenta el corte por presupuesto de comandos de OoT, observado también
   en la imagen normal anterior; no se considera un fallo resuelto.
+
+- Reduce el estado del candidato afín de RE2 para recuperar el margen del
+  SPE, conservando la activación opcional y la caché de texturas.
+
+- Añade una comparación optativa de la escala de textura afín cuando una
+  tarea S2DEX carga F3DEX2 (`gfx-afin-cadena`), con controles de perspectiva,
+  sprites, rectángulos y `G_MODIFYVTX`. Referencia conservada por omisión;
+  candidato empaquetado dentro del presupuesto del SPE y OPTIONS legible
+  confirmado por el autor en la PS3. Regresión básica visual y cierre limpio
+  comprobados e integrados con la base actual; activación todavía optativa.
 
 - Amplía la traza VI de Racer: una ventana de campos, decisiones sin imagen o
   descartadas, registros instantáneos y la selección ya hecha por el RSX.

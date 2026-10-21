@@ -573,7 +573,13 @@ static void build_state(struct gfx_state *g, struct gfx_draw *d, enum prim_kind 
 	 * pasó de 230 tareas distintas a 0 en la primera ronda de 375). */
 	if (kind == PRIM_TRI && d->ntex && !((g->oh >> G_MDSFT_TEXTPERSP) & 1) &&
 	    (g->job->gbi == SALSA64_GBI_F3DEX2 || g->job->gbi == SALSA64_GBI_F3DZEX2 ||
-	     g->job->gbi == SALSA64_GBI_F3DEXBG || g->job->gbi == SALSA64_GBI_F3DEX))
+	     g->job->gbi == SALSA64_GBI_F3DEXBG || g->job->gbi == SALSA64_GBI_F3DEX
+#if GFX_HAS(F3DEX2) && GFX_HAS(S2DEX)
+	     /* Solo la carga S2DEX→F3DEX2 con el interruptor activo puede poner
+	      * este indicador; gfx_run lo borra al empezar cada tarea. */
+	     || g->chain_ex == GFX_CHAIN_AFFINE
+#endif
+	    ))
 		for (unsigned i = 0; i < d->ntex; i++) {
 			d->tex[i].xf[0] *= 0.5f;
 			d->tex[i].xf[1] *= 0.5f;

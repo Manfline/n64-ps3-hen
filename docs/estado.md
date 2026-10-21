@@ -1,5 +1,252 @@
 # Estado
 
+## 2026-10-21 — Integración autorizada de RE2 y SPE en la rama principal
+
+- El autor da por realizadas las pruebas de RE2 y SPE y autoriza integrar
+  el conjunto. Se conserva el código del paquete probado `7c723d3`,
+  `Salsa64 RE2 y SPE` (`SLSA00183`); las revisiones posteriores solo
+  actualizan documentación. Se contrastan los árboles de fuentes,
+  bibliotecas y pruebas antes de la unión, sin cambios de ejecución.
+- Evidencia conservada: host 667 pruebas/887192 verificaciones/cero fallos,
+  trece imágenes SPE sobre el mínimo de 1536 y cuatro rutas RPCS3 correctas.
+  El log PS3 del conjunto confirma RE2 con carga de estado y cierre limpio;
+  Snap tiene además confirmación visual explícita del autor. Naboo queda
+  documentado como lentitud preexistente, no como regresión.
+- `gfx-afin-cadena` y `gfx-recorte-vector` permanecen optativos y apagados
+  por omisión; `gfx-escalar` conserva la referencia. No se incorporan el
+  experimento de destinos directos del recompilador ni nuevas HLE de
+  Acclaim o Turbo3D. Los pendientes de niebla de F-Zero, corte de comandos
+  de OoT y coste de la sala de la estatua siguen abiertos.
+- Integración local, sin push, etiqueta ni release. No se reconstruye o
+  renombra como RC el paquete experimental ya probado: conserva su código,
+  identificador y SHA. Un candidato público versionado requiere preparación
+  y aprobación por separado.
+
+## 2026-10-21 — Battle for Naboo: lentitud preexistente, diagnóstico de consola
+
+- El autor aclara que la lentitud no es una regresión. El tramo de Naboo
+  en el log de `7c723d3` usa la HLE de Factor 5 Indy (`spu_gfx4`, gbi 13),
+  no la imagen F3DEX2 de la optimización de Road Rash. Que las banderas
+  afín/recorte estén presentes no implica que esa ruta se use en Naboo.
+- Los primeros 600 campos rondan 60 campos/s. Tras la transición, los
+  resúmenes periódicos marcan 31,4–33,2 campos/s (52–55 % NTSC) y 29,4–31,3
+  ms de emulación por campo, con prácticamente cero espera de ritmo y cero
+  tiempo saltado por bucles de espera. La ventana final de 100 campos que
+  incluye una pausa da 24,5; no se toma como velocidad sostenida.
+- El coste gráfico crece: campos 700–799, 128 triángulos y SPE 3,93 ms por
+  tarea; 1300–1399, 1385 triángulos y SPE 14,63 ms. Como el ritmo ya ronda
+  32 campos/s en el tramo de poca geometría, no se explica solo por la HLE
+  gráfica: el hilo de emulación es un frente relevante que falta perfilar.
+  No se restan tiempos de hilos o tareas solapadas para inventar una cuota
+  exacta del CPU. En los últimos resúmenes el RSX registra solo 9–15 % de
+  ocupación como cota superior; no apunta a saturación de rasterizado.
+- En carga alta, la traducción al RSX cuesta unos 6–7,7 ms por tarea y el
+  estado gráfico 3,5–5,1 ms en el SPE. Los vértices de Factor 5 no están
+  cubiertos por el contador genérico que imprime 0,00 ms; eso no demuestra
+  coste nulo. No hay detalle de subfases de la imagen 4 en este log.
+- El recompilador acumula 500,869 ms de compilación y cero recompilaciones
+  repetidas: no aparece la tormenta de recompilación de Road Rash. El
+  contador «traducciones» es `vt_probes`, consultas de direcciones virtuales,
+  no número de compilaciones. No se identifica todavía una función CPU
+  culpable ni se implementa una optimización durante esta revisión.
+- Final: 1625 campos emulados, 1469 tareas gráficas, cero descartes de la
+  cola y cero campos sin ranura; resúmenes sin tareas cortadas ni comandos
+  ajenos saltados. Hash y tareas de prueba iguales al PPE, cierre limpio y
+  salida normal al XMB. Holgura de imagen 4 de 1616 bytes; 1936 sin tocar
+  al cerrar (estimación por ceros). Se registra como pendiente de rendimiento
+  aparte, no como regresión nueva ni certificación visual exhaustiva.
+- Evidencia `build/ps3/re2-spe/naboo-20261021.log`, SHA-256
+  `d784957ff0e2908abe97523926843e0602b493835825cc37a153720ce25927fd`.
+
+## 2026-10-21 — Pokémon Snap: regresión adicional del conjunto en PS3
+
+- El autor confirma explícitamente que ya no observó el desorden de dibujo
+  reportado anteriormente, además de no ver otros defectos gráficos aparentes
+  en lo jugado. Es evidencia visual positiva de esa incidencia en esta prueba.
+  Log de `7c723d3`, `Salsa64 RE2 y SPE` (`SLSA00183`), tramo de Snap
+  separado de las otras aperturas de la misma sesión: 11513 campos emulados
+  y 8073 tareas gráficas. Cierre del juego limpio, cero descartes por cola,
+  cero campos sin ranura; resúmenes con cero tareas cortadas y cero comandos
+  de otro microcódigo saltados. El log termina después en el menú, no XMB.
+- Afín experimental y recorte activos, imagen `spu_gfx1fase8`. Hash/tareas
+  iguales al PPE; vectorial/escalar bit a bit, máscaras de 64 lotes y A/B
+  de detalle sin diferencias. La ruta vectorial se usa durante el juego,
+  y se reciben bloques de detalle sin avisos de datos inválidos. Holgura
+  1584 bytes y 2976 sin tocar al cerrar (estimación por ceros).
+- El tramo tiene 40 resúmenes periódicos: mediana 59,8 campos/s, no FPS de
+  imágenes únicas. Incluye pausas y cambios de presentación: empieza a 1×,
+  pasa por CRT Trinitron y termina a 5×. Hay ventanas activas de 55–56,6
+  campos/s; las de 0 y 21,8 coinciden con la pausa y su reanudación. No es
+  una medida A/B ni prueba de velocidad constante. Detalle en perf-log.
+- La mejora visual del orden de dibujo queda confirmada por el autor para
+  las escenas probadas. No se identificó aún el recorrido o la evaluación
+  de fotos ni se determinó qué cambio produjo la mejora. Se conserva esa
+  cobertura concreta, sin atribuirla al arreglo afín ni certificar todas
+  las situaciones del juego.
+- Evidencia `build/ps3/re2-spe/pokemon-snap-20261021.log`, SHA-256
+  `a6c891d39b1b73e0e442caabe2f5a8546eb0efaa264f83e2de425ad21fb5369f`.
+
+## 2026-10-21 — Primera regresión PS3 del conjunto: RE2
+
+- Log confirma `7c723d3`, `Salsa64 RE2 y SPE` (`SLSA00183`), escala afín
+  experimental activa y geometría vectorial con `spu_gfx1fase8`. Se carga
+  la ranura 0 al campo 1218; RE2 completa 829 campos emulados y 3010
+  tareas gráficas antes de volver al menú con estado limpio, cero campos
+  descartados por la cola y cero sin ranura. Los resúmenes registran cero
+  tareas cortadas y cero comandos de otra familia saltados.
+- Hash y tareas iguales al PPE; vectorial/escalar bit a bit, 64 lotes de
+  máscaras y A/B de detalle sin diferencias. El bloque de detalle se
+  publica en hardware sin avisos de bloque inválido. Holgura estática de
+  fase 8, 1584 bytes; 2976 sin tocar al cerrar, estimación por ceros.
+- Es una comprobación corta, no una regresión exhaustiva ni una medida de
+  ganancia. El autor avisa que terminó; falta su confirmación visual
+  explícita del paquete conjunto. El log termina en el menú, sin acreditar
+  todavía salida al XMB. Próxima prueba: carrera de Road Rash en el mismo
+  paquete, sin cambiar interruptores. Sin integración a main ni publicación.
+- Evidencia: `build/ps3/re2-spe/re2-20261021.log`, SHA-256
+  `b825d70328aea45e1c6bb89b7f9efbbe3a471bdd457908c0a0b8aff4b264f151`.
+
+## 2026-10-21 — Paquete conjunto RE2/SPE completo y validado en RPCS3
+
+- Build limpio en Docker de `7c723d3`, sin reutilizar el directorio
+  incompleto anterior. Todas las imágenes pasan el mínimo de 1536 bytes:
+  normales 0…4, 1600/1712/14368/3056/1616; fases 1…8,
+  1840/1712/1712/1712/1712/1840/1840/1584. No se reducen cachés,
+  se omiten variantes ni se altera el presupuesto. Log
+  `build/logs/re2-spe-detalle16-paquete.log`.
+- Host con ASan y UBSan: **667 pruebas, 887192 verificaciones, cero fallos**;
+  log `build/logs/re2-spe-detalle16-host.log`.
+- Paquete `build/salsa64-re2-spe/salsa64-re2-spe.pkg`, título
+  `Salsa64 RE2 y SPE`, identificador `SLSA00183`, versión
+  `v0.2.9-34-g7c723d3`. Identidad comprobada en ELF y PARAM.SFO.
+  SHA-256 `a9de08a9cd0e5f2a9d8210dcae300a233ceb810bed8ba03b83868260fd12d513`.
+- RPCS3, `gfxtest` embebido, cuatro corridas secuenciales: referencia sin
+  banderas (OK, campo 137), afín con detalle normal (122), afín con recorte
+  fase 8 (125) y afín con geometría escalar forzada (122). Todas verifican
+  los 42 puntos de pantalla y cierran limpias. Con `spe0-todas`, las cinco
+  imágenes dan hash y tareas iguales al PPE en cada corrida.
+- El detalle DMA se publica y contabiliza correctamente en las dos rutas
+  instrumentadas, sin bloques inválidos. Autoprueba A/B de detalle con 17
+  pares y cero diferencias; vectorial/escalar igual bit a bit; fase 8,
+  64 lotes/256 máscaras con cero diferencias. Las cuatro capturas PPM son
+  idénticas, SHA-256
+  `ebe13720078b6f94a725155aff7f6ba66a44739d78ff49f30727729e45ecf97a`.
+  Se inspeccionó además la captura de referencia. Logs
+  `build/logs/re2-spe-rpcs3-{normal,afin-detalle,afin-recorte,afin-escalar}.log`.
+- Persiste la advertencia inicial del homebrew, tarea 1 con resultado
+  `0x60` (tramo ajeno terminado sin retorno), 307 comandos, 45 triángulos
+  y 28 dibujos. El mismo caso aparece en los logs de los paquetes SPE y
+  RE2 anteriores; no se presenta como corregido ni como una regresión nueva.
+- El paquete combinado aún requiere comprobar OPTIONS con el mismo estado
+  y una carrera de Road Rash en la PS3. Las pruebas RPCS3 no reproducen la
+  entrada real del RSP de OPTIONS ni certifican tiempos o sincronización
+  del hardware. La alineación DMA local de 16 cumple el contrato de la
+  transferencia; queda pendiente su validación en consola. No se sube el
+  paquete, integra a main ni publica durante esta preparación.
+
+## 2026-10-21 — Recorte RE2/SPE: margen recuperado con DMA alineado a 16
+
+- El código generado de `run_detail` reserva 464 bytes para el bloque de
+  diagnóstico: además del contenido y los registros, realinea su dirección
+  local a 128. El contrato de `spukit_dma_put` admite direcciones alineadas
+  a 16 y tamaños múltiplos de 16. El destino externo continúa alineado a
+  128 y `gfx_io_detail_end` espera el DMA antes de abandonar el marco.
+- Se ajusta solo la alineación de la variable local de 128 a 16. No se
+  cambia tamaño, versión, contadores, cachés, geometría ni presupuesto de
+  pila. El nuevo marco mide 352 bytes: **112 menos**. En fase 8, texto
+  103680, datos 800, bss 145808, libres 11616 y cadena 10032: holgura
+  **1584**, superior al mínimo de 1536. Log
+  `build/logs/re2-spe-pila-detalle16.log`.
+- La medida aislada resuelve el límite estático de la variante pendiente;
+  todavía faltan paquete limpio completo, host y RPCS3 con detalle activo
+  para comprobar la publicación del bloque y las autopruebas de recorte.
+  Sin cambios en main o consola ni afirmaciones de velocidad.
+
+## 2026-10-21 — Combinación RE2/SPE: normales aptas, recorte aún no cabe
+
+- La extracción del hash (`3818992`) pasa el build limpio de las cinco
+  imágenes normales: holguras 1600, 1600, 14368, 3056 y 1616 bytes. Las
+  fases 1 a 7 también cumplen el mínimo de 1536. Host con ASan y UBSan:
+  **667 pruebas, 887192 verificaciones, cero fallos**,
+  `build/logs/re2-spe-host.log`.
+- El paquete se detiene en la fase 8: texto 103688, datos 800, bss 145808,
+  11616 bytes libres, cadena 10144, holgura **1472**. Frente a la imagen 1
+  normal tiene 64 bytes más de texto y `_end` avanza 128 por alineamiento;
+  el marco de `main` sigue en 752. No se reduce el mínimo ni la caché.
+  Log `build/logs/re2-spe-paquete.log`.
+- Se mide aparte la extracción de la autoprueba `GFX_JOB_CLIP4` a una
+  función noinline/cold: texto 103784, mismo `_end`, marco de `main` 752 y
+  holgura 1472. No recupera pila y añade 96 bytes de texto; **se retira**.
+  Log `build/logs/re2-spe-pila-clip4.log`, objeto y marcos anteriores en
+  `build/diagnostico-pila/fase8-antes.*`. Tras dos fallos iguales de fase 8
+  se detienen las compilaciones; no se hace un tercer intento.
+- No hay paquete completo ni regresión RPCS3 del conjunto. Se conserva la
+  extracción del hash que sí reduce la pila, sin quitar el recorte opcional
+  ni generar un paquete que lo omita. El siguiente análisis debe centrarse
+  en los marcos aún vivos del bucle o en el código de fase 8 con evidencia
+  del binario; no presupone que separar otra función vaya a bastar.
+  Main y los paquetes de consola anteriormente validados siguen intactos.
+
+## 2026-10-21 — Combinación RE2/SPE: separar la autoprueba recupera pila
+
+- El objeto anterior muestra la autoprueba de hash integrada en `main`,
+  cuyo marco de 832 bytes permanece vivo durante el dibujo. Se extrae
+  únicamente ese trabajo de arranque a `hash_job`, noinline y cold como los
+  trabajos de estado e información. Conserva las mismas comprobaciones,
+  DMA, hash y limpieza de TMEM. No cambia geometría, cola ni descriptores.
+- Primera medida de la imagen 1: `main` pasa de 832 a 752 bytes y el
+  trabajo de hash tiene marco propio de 144. La cadena más honda baja de
+  10224 a 10144; texto 103624, datos 800, bss 145808, libres 11744:
+  **1600 bytes de holgura**, con el mínimo de 1536 intacto. La separación
+  añade 64 bytes de texto respecto de la última medida, pero no cambia
+  `_end`; el margen ganado procede de los 80 bytes menos de pila activa.
+  Log `build/logs/re2-integracion-pila-hash.log`; objeto y marcos anteriores
+  conservados en `build/diagnostico-pila/`.
+- Pendiente paquete limpio de todas las imágenes, host y comprobaciones
+  RPCS3, incluidas las autopruebas de hash y ambas rutas de recorte.
+  No se supone mejora de velocidad ni validación PS3 del binario combinado.
+
+## 2026-10-21 — Combinación RE2/SPE: host correcto, paquete bloqueado por pila
+
+- La unión inicial pasa 667 pruebas y 887192 verificaciones, cero fallos,
+  con ASan y UBSan (`build/logs/re2-integracion-host.log`). El primer build
+  limpio se detiene en la imagen 1: texto 103584, datos 800, bss 145808,
+  11744 bytes libres y cadena de pila de 10224, holgura **1520 bytes**
+  frente al mínimo de 1536. Log `build/logs/re2-integracion-paquete.log`.
+- En la imagen 1 no existe F3D: el tramo que acepta la carga de 3D solo
+  admite `kind == 2`. Se evita repetir esa comparación y se conserva la
+  distinción de primera generación cuando ambas familias están presentes
+  en el host/PPE. La segunda medida reduce el texto a 103560 bytes, pero
+  conserva el alineamiento final, la cadena y la holgura de 1520. Log
+  `build/logs/re2-integracion-spu1-compacto.log`.
+- Se detienen los builds tras repetir el mismo límite. No se reducen cachés,
+  no se relaja el margen de 1536 ni se genera un paquete incompleto. Las
+  pruebas host de la simplificación final vuelven a pasar: 667 pruebas,
+  887192 verificaciones, cero fallos; recompilación de `s2dex.c` confirmada
+  en `build/logs/re2-integracion-host-final.log`.
+- La cadena cruda conserva `main` 832, `run_detail` 464, `gfx_run` 176,
+  `gfx_dl_f3dex2` 688 y `s2dex_run` 1200 bytes; no se atribuye el déficit a
+  una función concreta sin más análisis. El siguiente trabajo debe estudiar
+  código o marcos reales antes de reintentar, no repetir el mismo build.
+  No hay RPCS3 ni validación PS3 del conjunto. Los paquetes separados
+  previamente probados permanecen intactos, sin cambios en main o consola.
+
+## 2026-10-21 — Combinación de OPTIONS de RE2 con la base SPE actual
+
+- Se combina la corrección optativa de escala afín probada en la PS3
+  (`4ef227f`) con la base `8ac2708`, que contiene el lote vectorial y el
+  recorte experimental. Se conservan ambos interruptores independientes:
+  `gfx-afin-cadena` y `gfx-recorte-vector`, apagados por omisión;
+  `gfx-escalar` mantiene el retorno a la geometría escalar.
+- La unión conserva los bits de trabajo existentes y añade el bit afín
+  `0x1000`; no modifica el descriptor de 112 bytes ni el estado persistente.
+  Los conflictos se limitaban a entradas de documentación y a dos
+  definiciones contiguas de interruptores: se conservan ambas.
+- Las pruebas anteriores son evidencia de cada candidato por separado, no
+  validación del binario conjunto. Pendientes host, presupuesto de todas
+  las imágenes SPE y regresión RPCS3, seguidos de OPTIONS en la PS3.
+  No se modifica main ni se envía o publica este paquete durante la unión.
+
 ## 2026-10-21 — Regresión PS3 del paquete de integración SPE
 
 Paquete `SLSA00181`, código `74e41b9`, sin el experimento de destinos del
@@ -96,6 +343,159 @@ código solo modifican documentación.
   `build/logs/spe-integracion-rpcs3-{normal,vector}.log`.
   No mide rendimiento ni sustituye regresión comercial en PS3. Falta esta
   última; sin envío, integración en la rama principal ni publicación.
+
+## 2026-10-21 — RE2: regresión básica en consola y cierre limpio
+
+- Tras revisar menús, partida e inventario con el candidato activo, el autor
+  informa que todo se ve bien. El log de la misma revisión `4ef227f`
+  confirma 4620 campos emulados, 17098 tareas gráficas, cero campos
+  descartados por la cola y cero campos sin ranura en RE2. Sus resúmenes
+  registran cero tareas cortadas y cero comandos de otro microcódigo saltados.
+- RE2 vuelve al menú con estado limpio, sin campos ni tareas pendientes.
+  La sesión completa termina después mediante «Salir al XMB» y salida normal.
+  Es regresión básica de las escenas revisadas, no validación exhaustiva ni
+  comparación contra el microcódigo real. La sala de la estatua conserva su
+  incidencia de rendimiento independiente.
+- Evidencia: `build/ps3/re2-afin/regresion-20261021.log`, SHA-256
+  `1ccfccdad4df9e590d486fb135db7d4613619f4af0c947f639e60d49e82e162e`.
+  El candidato queda optativo, activo en la consola e independiente de main;
+  falta preparar y validar la combinación con el lote vectorial integrado.
+
+## 2026-10-21 — RE2: OPTIONS legible en la PS3 con el candidato activo
+
+- El autor confirma que OPTIONS ya se ve correctamente. El log identifica
+  `4ef227f`, aplicación `Salsa64 RE2 OPTIONS` (`SLSA00182`), y anuncia
+  `gfx-afin-cadena` experimental activo. Confirma además la carga de la
+  ranura 0: campo 2198 → 1218, el mismo estado guardado en la referencia.
+- Las autopruebas de las imágenes usadas dan hash y tareas iguales al PPE.
+  Los resúmenes recogidos registran cero tareas cortadas y cero comandos
+  de otro microcódigo saltados. El log termina mientras sigue la ejecución:
+  no acredita todavía el cierre limpio ni una regresión completa del juego.
+- Log activo conservado en `build/ps3/re2-afin/activado-20261021.log`,
+  SHA-256 `93ddcc76e87da8204c505f3bbf577ce7dc0cf99266fed7586ac7dde3f95a25e4`.
+  Referencia en `build/ps3/re2-afin/referencia-20261021.log`, SHA-256
+  `f87c60eef1165e187ba2606bac8bf9062befac7c1fc5f5fc3652117d8cc17ecc`.
+  Estado respaldado en `build/ps3/re2-afin/referencia-options.st0`, SHA-256
+  `6a709fb7271f682b74d4f0a2234cf4cbbfba694cd47afae0939d15cc57a4e112`.
+- Validación visual comunicada por el autor, sin inspección de una captura
+  descargada ni comparación nueva contra el microcódigo real. No demuestra
+  mejora de velocidad ni resuelve el coste de la sala de la estatua.
+  El candidato sigue optativo, en rama aislada y sin integrar a main.
+
+## 2026-10-21 — RE2: el candidato afín recupera el margen del SPE
+
+- Se revisó el estado transitorio de encadenamiento: solo S2DEX puede
+  activarlo al cargar F3DEX2 con `gfx-afin-cadena`, y se reinicia en cada
+  tarea. El chequeo repetido del interruptor en el RDP era redundante.
+  Retirarlo solo ahorró 24 bytes de texto y no cambió el alineamiento final:
+  la primera medida de esta revisión conservó 1504 bytes de holgura.
+- Se reutiliza `chain_ex`, ya transitorio y fuera del tramo RDP persistente:
+  0 referencia, 1 F3DEX 1.x, 2 F3DEX2 afín optativo. Desaparecen el campo y
+  reinicio adicionales del candidato anterior. Los intérpretes y el retorno
+  distinguen explícitamente la primera generación. No se cambian cachés,
+  descriptores DMA, formatos guardados ni aritmética de coordenadas.
+- La imagen F3DEX2 reconstruida mide 103632 bytes de texto, 800 de datos y
+  145808 de bss; quedan 11744 bytes para una cadena de pila de 10112:
+  **1632 bytes de holgura**, por encima del mínimo de 1536. La revisión
+  anterior tenía 103720 bytes de texto y 1504 de holgura. Log
+  `build/logs/re2-afin-estado-spu1.log`. No se bajó ningún presupuesto.
+- Host con ASan y UBSan: **666 pruebas, 870778 verificaciones, cero fallos**,
+  log `build/logs/re2-afin-estado-host.log`. Incluye F3DEX 1.x con el
+  interruptor apagado y encendido, y repetición de la misma lista F3DEX2
+  ON→OFF sin reinicializar el estado; conserva controles de perspectiva,
+  sprites, TEXRECT, MODIFYVTX y tarea siguiente.
+- Paquete completo compilado en Docker, código `4ef227f`:
+  `build/salsa64-re2-afin/salsa64-re2-afin.pkg`, título
+  `Salsa64 RE2 OPTIONS`, identificador `SLSA00182`, versión
+  `v0.2.9-12-g4ef227f`. Identidad contrastada con el ELF y PARAM.SFO.
+  SHA-256 `f338bcfd86caa0a5c5143fd487ab29cb8593e731d7a5809fa7cca18f02f29f29`.
+  Las cinco imágenes conservan holguras de 1632, 1632, 14144, 2960 y
+  1648 bytes, respectivamente. Log `build/logs/re2-afin-paquete.log`.
+  Esta rama parte de la base anterior a la integración del lote vectorial;
+  el paquete es aislado, no reemplaza el paquete de regresión SPE.
+- RPCS3 con `gfxtest` embebido: `RESULTADO frontend: OK`, campo 138 con
+  el interruptor encendido y campo 121 apagado; ambos cierres limpios.
+  Con `spe0-todas`, las cinco imágenes pasan sus tareas de prueba y hash
+  contra el PPE en ambas corridas. Logs
+  `build/logs/re2-afin-rpcs3-{on,off}.log`. Es una prueba de arranque y
+  regresión homebrew: no reproduce la transición de OPTIONS sobre la
+  entrada real del RSP ni demuestra beneficio de rendimiento.
+- La evidencia visual de OPTIONS continúa siendo la copia modificada de
+  la salida histórica, no una ejecución del candidato sobre la entrada real
+  del RSP. No se considera corregido en PS3 ni se incorpora todavía a la
+  rama principal. Antes de promoverlo, comparar OPTIONS con el interruptor
+  apagado y encendido, conservando estado reciente, log y captura.
+
+## 2026-10-20 — Resident Evil 2: candidato optativo para OPTIONS
+
+- **Contexto crudo.** La caja histórica 1289 de OPTIONS contiene 44 tareas
+  de 11 campos. La tarea 4251 tiene 105 dibujos y 212 triángulos; su salida
+  capturada también produce letras revueltas en el rasterizador del host.
+  Un dibujo tiene 62 píxeles de ancho, ST de 0 a 124 y una textura CI8
+  decodificada de 72 × 18 con transformación S de 1/72, sin el factor 1/2.
+- **Reproducción sintética.** La escala afín se decide con la familia de
+  inicio de `gfx_job`, no con la que S2DEX carga después. Una lista propia
+  que carga F3DEX2 desde S2DEX falla en los dos factores de textura; la
+  lista equivalente iniciada directamente como F3DEX2 sí usa 1/2. La
+  prueba anterior de la transición solo cubría TEXRECT.
+- **Candidato.** `GFX_JOB_AFFINE_CHAIN` conserva la identidad original del
+  trabajo y aplica la regla ya existente a los triángulos F3DEX2 cargados
+  desde S2DEX. No cambia las coordenadas de `G_MODIFYVTX`, la primera
+  generación ni el descriptor DMA. TEXRECT y los sprites S2DEX —triángulos
+  crudos— quedan fuera del predicado. Un byte transitorio al final del
+  estado se reinicia en cada tarea; no se agrega al formato de guardado.
+- **Interruptor apagado por omisión.** En PS3, crear
+  `/dev_hdd0/salsa64/gfx-afin-cadena` antes de abrir el juego; sin él conserva
+  la ruta anterior. Para volver a la referencia, renombrarlo a `.off` y
+  reabrir. El log anuncia referencia o experimental activa. En el host,
+  `SALSA64_GFX_AFFINE_CHAIN=1` activa el mismo bit del trabajo.
+- **Límite de la evidencia.** Una copia local de la tarea 4251, modificada
+  únicamente para reducir a la mitad las transformaciones S/T de sus 105
+  dibujos, produce OPTIONS legible. Eso respalda la hipótesis, pero no es
+  una ejecución del candidato sobre la entrada del RSP ni una comparación
+  contra el microcódigo real. La captura original permanece intacta. No se
+  considera arreglado en PS3 hasta probarlo con el mismo estado y revisión.
+- **Regresión host.** La prueba controla bandera apagada/encendida,
+  perspectiva, `G_MODIFYVTX` ST sin escala adicional, TEXRECT, sprite S2DEX
+  dentro del tramo 3D, retorno al triángulo y reinicio en la tarea siguiente.
+  Antes del cambio fallaban los dos factores S/T del caso encadenado. La
+  revisión final pasa **665 pruebas, 870750 verificaciones, cero fallos**
+  con ASan y UBSan; log `build/logs/re2-encadenado-acotado.log`.
+- **Paquete no disponible: presupuesto de local store.** El primer build
+  limpio se detuvo en la imagen 0: texto 104056, datos 800, bss 145808,
+  cadena 9856 y holgura 1504 bytes, por debajo del mínimo de 1536. Se
+  excluyeron por compilación el byte y sus operaciones de las imágenes
+  que no reúnen F3DEX2 y S2DEX. En la segunda compilación la imagen 0
+  recuperó sus 1632 bytes, pero la imagen 1 quedó en texto 103720, datos
+  800, bss 145808, cadena 10112 y holgura 1504. Se detuvieron los builds:
+  no se redujeron cachés ni el mínimo de pila. Los logs son
+  `build/logs/re2-revision-pkg.log` y
+  `build/logs/re2-revision-pkg-final.log`; los ELF, mapas y usos de pila
+  quedan en `build/salsa64-re2-revision-incompleto/` y
+  `build/salsa64-re2-revision/`. No se generó ni se envió un PKG.
+- **Siguiente análisis, sin aplicar.** El predicado del RDP vuelve a
+  comprobar la bandera que ya condiciona `chain_affine`; estudiar su
+  eliminación tras revisar los invariantes puede reducir código. También
+  se puede estudiar reutilizar el estado transitorio de encadenamiento
+  existente para evitar otro reinicio/campo, con pruebas de generación y
+  de retornos. Ninguna hipótesis garantiza recuperar el margen necesario.
+- **Imágenes de diagnóstico locales.** Original:
+  `build/re2-options/tarea4251.png`, SHA-256
+  `3e5b7b9fce659962fcc433ec1bbce6303e9a99ca2473056d0fe462936b50010b`;
+  copia con la hipótesis:
+  `build/re2-options/tarea4251-hipotesis-afin.png`, SHA-256
+  `a4e33a1bf54e7394c3b9a2a1bdd333e9d1625ec970902cc2578da7144c635e2f`.
+  No son imágenes de una corrida nueva en consola.
+- **Sala de la estatua.** Sin optimización nueva: su coste y OPTIONS son
+  problemas diferentes. Falta un estado reciente de la sala con el log de
+  la misma revisión; no se presupone que otra HLE de video lo resuelva.
+- **Captura mínima para la siguiente comprobación.** Guardar en una ranura
+  libre dentro de OPTIONS, conservar el estado y el log y una captura de
+  pantalla, y recoger la caja negra del cuadro entero, no solo la tarea
+  final de limpieza de profundidad. Con esa entrada se puede ejecutar la
+  siguiente tarea con la HLE y con el microcódigo real. La caja 1289 solo
+  conserva comandos/vértices/texturas ya producidos por la HLE, no la TMEM
+  ni la lista de entrada del RSP.
 
 ## 2026-10-20 — Racer: video entrelazado, altura insuficiente del destino
 

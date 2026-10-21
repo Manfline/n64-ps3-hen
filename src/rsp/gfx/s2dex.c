@@ -623,7 +623,17 @@ static bool s2dex_run(struct gfx_state *g, bool gen1, bool foreign)
 				/* RE2 (F3DEX2) y Yoshi's Story (F3DEX 1.x) cargan el de 3D a mitad
 				 * de la tarea y siguen con la lista: la sigue su intérprete. */
 				gfx_ucode_reload(g, text, kind, nonear, gfx_addr(g, g->rdphalf1), (w0 & 0xFFFF) + 1);
-				g->chain_ex = kind == 1;
+#if GFX_HAS(F3DEX2) && GFX_HAS(S2DEX)
+				/* En la imagen sin F3D esta rama solo admite kind == 2. */
+				uint8_t chain = (g->job->flags & GFX_JOB_AFFINE_CHAIN) ? GFX_CHAIN_AFFINE : 0;
+#if GFX_HAS(F3D)
+				if (kind == 1)
+					chain = 1;
+#endif
+#else
+				uint8_t chain = kind == 1;
+#endif
+				g->chain_ex = chain;
 				return true;
 			}
 			return gfx_dl_skip_foreign(g, gen1 ? 0xAF : S2_LOAD_UCODE, gen1 ? 0x06 : S2_DL, gen1 ? 0xB8 : S2_ENDDL);
@@ -742,6 +752,10 @@ int gfx_dl_s2dex(struct gfx_state *g, bool gen1)
 {
 	if (!s2dex_run(g, gen1, false))
 		return GFX_S2_END;
+#if GFX_HAS(F3DEX2)
+	return g->chain_ex == 1 ? GFX_S2_F3DEX : GFX_S2_F3DEX2;
+#else
 	return g->chain_ex ? GFX_S2_F3DEX : GFX_S2_F3DEX2;
+#endif
 }
 #endif
