@@ -469,6 +469,7 @@ static void rsp_detect_gbi_dkr(void)
 		{ 0x6859BF8Eu, SALSA64_GBI_F5INDY }, { 0x23FEF05Fu, SALSA64_GBI_F5INDY },
 		/* Animal Crossing: F3DZEX2 y S2DEX2 sin texto de versión. */
 		{ 0xD39A0D4Fu, SALSA64_GBI_F3DZEX2 }, { 0x02C399DDu, SALSA64_GBI_S2DEX },
+		{ 0x2BDCFC8Au, SALSA64_GBI_TURBO3D }, { 0x77195A68u, SALSA64_GBI_TURBO3D_F3D },
 	};
 	state = 0xFFFFFFFFu;  /* CRC de size − 4 ceros, sin la inversión final */
 	for (uint32_t i = 0; i < size - 4; i++)
@@ -481,7 +482,13 @@ static void rsp_detect_gbi_dkr(void)
 		for (int i = 0; i < 4; i++)
 			p[size - 4 + (3 - i)] = tail[i];
 		CHECK_EQ(salsa64_crc32_words_swapped(p, size), cases[c].crc);
+		struct salsa64_gfx_backend turbo = { .turbo3d = true };
+		if (cases[c].gbi >= SALSA64_GBI_TURBO3D) {
+			CHECK_EQ(salsa64_rsp_detect_gbi(&t_n64.bus, &task), SALSA64_GBI_UNKNOWN);
+			salsa64_rsp_set_gfx(&t_n64.bus, &turbo);
+		}
 		CHECK_EQ(salsa64_rsp_detect_gbi(&t_n64.bus, &task), cases[c].gbi);
+		salsa64_rsp_set_gfx(&t_n64.bus, NULL);
 	}
 	memset(p, 0, size);
 }

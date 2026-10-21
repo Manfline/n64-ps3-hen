@@ -86,7 +86,9 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 #endif
 	gfx_ucode_reload(g, job->ucode, job->gbi == SALSA64_GBI_F3D || job->gbi == SALSA64_GBI_F3DEX ||
 					 job->gbi == SALSA64_GBI_F3DPD || job->gbi == SALSA64_GBI_F3DWR ||
-					 job->gbi == SALSA64_GBI_F3DDKR || job->gbi == SALSA64_GBI_F3DJFG ? 1 : 2,
+					 job->gbi == SALSA64_GBI_F3DDKR || job->gbi == SALSA64_GBI_F3DJFG ||
+					 (GFX_HAS(TURBO3D) && (job->gbi == SALSA64_GBI_TURBO3D ||
+					  job->gbi == SALSA64_GBI_TURBO3D_F3D)) ? 1 : 2,
 			 job->flags & GFX_JOB_NONEAR, 0, 0);
 	g->have_draw = false;
 	g->target_sent = false;
@@ -110,6 +112,12 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 		/* En el SPE 0, cada imagen compila solo sus familias (spe0.h): el
 		 * PPE no le manda las de otra, y si llegara una, no dibuja nada. */
 		switch (job->gbi) {
+#if GFX_HAS(TURBO3D)
+		case SALSA64_GBI_TURBO3D:
+			gfx_dl_turbo3d(g);
+			break;
+		case SALSA64_GBI_TURBO3D_F3D:
+#endif
 		case SALSA64_GBI_F3D:
 		case SALSA64_GBI_F3DEX:
 		case SALSA64_GBI_F3DWR:

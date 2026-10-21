@@ -6,6 +6,9 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 
 ## [Unreleased]
 
+- Añade una HLE experimental de Turbo3D para Dark Rift, en una imagen SPE
+  independiente y apagada por omisión; pendiente de confirmación visual en PS3.
+
 - Ajusta la alineación local del diagnóstico DMA a 16 bytes para recuperar
   pila en la variante de recorte, conservando el destino alineado a 128.
 

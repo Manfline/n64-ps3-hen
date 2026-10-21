@@ -255,6 +255,32 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 		p[14] = (uint8_t)(c >> 16);
 		p[15] = 0xFF;
 	}
+	if (gbi == SALSA64_GBI_TURBO3D) {
+		/* Dos objetos: carga en 253..255 y reutilización sin matriz ni
+		 * vértices nuevos. Datos propios para comparar SPE y PPE. */
+		const uint32_t glob = 0x6000, obj = 0x6100, obj2 = 0x6200, tri = 0x6300, rdp = 0x6400;
+		salsa64_wr32(ram + glob + 8, 0x00080000);
+		memcpy(ram + glob + 80, ram + VP_PA, 16);
+		salsa64_wr32(ram + glob + 96, rdp);
+		salsa64_wr32(ram + rdp, 0xFF10013F); /* RGBA16, 320 píxeles */
+		salsa64_wr32(ram + rdp + 4, CIMG_PA);
+		salsa64_wr32(ram + rdp + 8, 0xED000000);
+		salsa64_wr32(ram + rdp + 12, (320u * 4 << 12) | (240u * 4));
+		salsa64_wr32(ram + rdp + 16, 0xFCFFFFFF);
+		salsa64_wr32(ram + rdp + 20, 0xFFFE793C); /* SHADE */
+		salsa64_wr32(ram + obj, 4);
+		ram[obj + 8] = 3; ram[obj + 9] = 253; ram[obj + 10] = 1;
+		memcpy(ram + obj + 24, ram + PROJ_PA, 64);
+		salsa64_wr32(ram + obj2, 4);
+		ram[obj2 + 10] = 1; ram[obj2 + 11] = 1;
+		salsa64_wr32(ram + obj2 + 12, rdp + 32);
+		salsa64_wr32(ram + rdp + 32, 0xE9000000);
+		ram[tri] = 253; ram[tri + 1] = 254; ram[tri + 2] = 255;
+		dl(&b, glob, obj); dl(&b, VTX_PA, tri);
+		dl(&b, 0, obj2); dl(&b, 0, tri);
+		dl(&b, 0, 0); dl(&b, 0, 0);
+		return DL_PA;
+	}
 	if (b.fam == FAM_INDY) {
 		/* Luces: tipo 1 (con posición) en 0xB10, sus posiciones en 0xB00 y 0xB08; la tabla de
 		 * desplazamientos de 0x380 a vértices de 0x170; colores de entrada; 32 partículas. */

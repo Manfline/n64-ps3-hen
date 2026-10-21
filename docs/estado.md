@@ -1,5 +1,22 @@
 # Estado
 
+## 2026-10-21 — Candidato Turbo3D para los modelos de Dark Rift
+
+- Se implementa el formato de objetos, estado global, matrices combinadas,
+  vértices y listas RDP de Turbo3D. El CRC medido en consola corresponde
+  a tareas que antes terminaban sin dibujar. Fuente GPLv2 o posterior y
+  avisos conservados en `docs/THIRD_PARTY.md`.
+- Sexta imagen SPE para Turbo3D y su Fast3D acompañante, con caché de
+  vértices propia; las cinco imágenes previas mantienen sus familias y
+  cachés. Interruptor `gfx-turbo3d`, apagado por omisión; sin él se conserva
+  la detección anterior. No se modifica la ruta LLE all.
+- Se añaden pruebas sintéticas de geometría, reutilización, segmentos y
+  entradas malformadas, además de la comparación SPE/PPE al cargar imagen.
+  No equivalen a una comparación contra el microcódigo real.
+- Trabajo aislado: sin integración, publicación ni cambios en la consola.
+  Falta confirmar visualmente los modelos en combate. Alcance, límites y
+  procedimiento en `docs/turbo3d.md`.
+
 ## 2026-10-21 — Integración autorizada de RE2 y SPE en la rama principal
 
 - El autor da por realizadas las pruebas de RE2 y SPE y autoriza integrar

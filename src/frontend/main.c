@@ -4640,6 +4640,8 @@ static enum game_end run_game_once(uint8_t *rom, uint32_t rom_size, const char *
 	salsa64_log("gfx: escala afin de tramos 3D encadenados %s (gfx-afin-cadena)",
 		    gfx_affine_chain ? "experimental activa" : "referencia");
 	gfx_on_spu = !file_exists(GFX_PPE_PATH);
+	bool turbo3d = file_exists(SALSA64_DATA_DIR "/gfx-turbo3d");
+	salsa64_log("gfx: Turbo3D %s (gfx-turbo3d)", turbo3d ? "experimental activo" : "apagado");
 	if (gfx_on_spu) {
 		spukit_init(6);
 		if ((rc = salsa64_gfx_spu_init(&gfx_spu, &n64.bus, &front_sink)) != 0) {
@@ -4648,9 +4650,11 @@ static enum game_end run_game_once(uint8_t *rom, uint32_t rom_size, const char *
 		}
 	}
 	if (gfx_on_spu) {
+		gfx_spu.backend.turbo3d = turbo3d;
 		salsa64_rsp_set_gfx(&n64.bus, &gfx_spu.backend);
 	} else {
 		salsa64_gfx_sync_init(&gfx_ppe, &gfx_ppe_state, &n64.bus, &front_sink);
+		gfx_ppe.backend.turbo3d = turbo3d;
 		salsa64_rsp_set_gfx(&n64.bus, &gfx_ppe.backend);
 	}
 	/* Killer Instinct Gold (y otros) dibuja con listas del RDP que el CPU

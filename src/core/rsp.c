@@ -407,6 +407,8 @@ static const struct {
 	enum salsa64_gbi gbi;
 	bool nonear;  /* no recorta contra el plano cercano (el ".NoN" que el texto de otros no trae aquí) */
 } ucode_crcs_w[] = {
+	{ 0x2BDCFC8Au, SALSA64_GBI_TURBO3D, false }, /* Dark Rift: medido también en la PS3 */
+	{ 0x77195A68u, SALSA64_GBI_TURBO3D_F3D, false }, /* Fast3D del mismo juego */
 	{ 0x8D91244Fu, SALSA64_GBI_F3DDKR, false },  /* Diddy Kong Racing (USA, rev. 1: el mismo de arriba) */
 	{ 0x6E6FC893u, SALSA64_GBI_F3DDKR, false },  /* Diddy Kong Racing (otra versión: sin respaldo para probarlo) */
 	{ 0xBDE9D1FBu, SALSA64_GBI_F3DJFG, false },  /* Jet Force Gemini y Mickey's Speedway USA: sin respaldo */
@@ -434,6 +436,10 @@ static enum salsa64_gbi gbi_by_crc(const struct salsa64_bus *bus, const struct s
 	crc = salsa64_crc32_words_swapped(bus->rdram + addr, size);
 	for (unsigned i = 0; i < sizeof ucode_crcs_w / sizeof ucode_crcs_w[0]; i++)
 		if (ucode_crcs_w[i].crc == crc) {
+			if ((ucode_crcs_w[i].gbi == SALSA64_GBI_TURBO3D ||
+			     ucode_crcs_w[i].gbi == SALSA64_GBI_TURBO3D_F3D) &&
+			    (!bus->rsp.gfx || !bus->rsp.gfx->turbo3d))
+				continue;
 			*nonear = ucode_crcs_w[i].nonear;
 			return ucode_crcs_w[i].gbi;
 		}
@@ -472,6 +478,8 @@ static enum salsa64_gbi detect_gbi(const struct salsa64_bus *bus, const struct s
 	const uint8_t *p = bus->rdram + addr, *end = p + size;
 
 	/* ROMs de prueba de Salsa64 (sin microcódigo de Nintendo). */
+	if (find(p, end, "Salsa64 GBI Turbo3D") && bus->rsp.gfx && bus->rsp.gfx->turbo3d)
+		return SALSA64_GBI_TURBO3D;
 	if (find(p, end, "Salsa64 GBI F3DEXBG"))
 		return SALSA64_GBI_F3DEXBG;
 	if (find(p, end, "Salsa64 GBI F3DPD"))
@@ -630,7 +638,8 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 			       (gbi == SALSA64_GBI_F3DEX2 || gbi == SALSA64_GBI_F3DZEX2 || gbi == SALSA64_GBI_F3D ||
 				gbi == SALSA64_GBI_F3DEX || gbi == SALSA64_GBI_F3DWR || gbi == SALSA64_GBI_F3DPD ||
 				gbi == SALSA64_GBI_F3DDKR || gbi == SALSA64_GBI_F3DJFG || gbi == SALSA64_GBI_F3DEXBG ||
-				gbi == SALSA64_GBI_F5ROGUE || gbi == SALSA64_GBI_F5INDY || s2dex_ok);
+				gbi == SALSA64_GBI_F5ROGUE || gbi == SALSA64_GBI_F5INDY ||
+				gbi == SALSA64_GBI_TURBO3D || gbi == SALSA64_GBI_TURBO3D_F3D || s2dex_ok);
 		bool hle_audio = task.type == SALSA64_TASK_AUDIO && valid && rsp->audio && abi != SALSA64_ABI_UNKNOWN;
 		if (rsp->lle_mode == SALSA64_LLE_ALL || !(hle_gfx || hle_audio || jpeg != SALSA64_JPEG_NONE)) {
 			rsp->stats.lle++;
