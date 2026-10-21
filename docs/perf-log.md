@@ -1,5 +1,26 @@
 # Registro de rendimiento
 
+## 2026-10-21 — Battle for Naboo: coste medido sin comparación A/B (PS3)
+
+Revisión `7c723d3`, imagen Factor 5 Indy, escala 1× sin filtro. El autor
+reporta lentitud preexistente, no regresión. Primeros 600 campos cerca de
+60 campos/s; tras la transición, 31,4–33,2 campos/s (52–55 % NTSC),
+29,4–31,3 ms de emulación por campo. No son FPS de imágenes únicas.
+
+En 700–799 hay 128 triángulos/tarea, SPE 3,93 ms y traducción RSX 3,59 ms;
+en 1300–1399, 1385 triángulos, SPE 14,63 ms y traducción RSX 7,46 ms.
+El ritmo ya es de unos 32 campos/s con poca geometría: queda por perfilar
+el hilo de emulación, además de la HLE de Factor 5. No sumar ni restar
+estos intervalos paralelos como si fueran una partición del cuadro.
+El RSX marca una cota de ocupación 9–15 % en los últimos resúmenes.
+
+Compilación acumulada 500,869 ms, repetidas cero. Cierre limpio tras 1625
+campos y 1469 tareas, cero descartes de cola y tareas cortadas. La ventana
+final de 24,5 campos/s contiene una pausa y no mide velocidad sostenida.
+No hay captura anterior equivalente para atribuir cambios de rendimiento.
+Log `build/ps3/re2-spe/naboo-20261021.log`, SHA-256
+`d784957ff0e2908abe97523926843e0602b493835825cc37a153720ce25927fd`.
+
 ## 2026-10-21 — Pokémon Snap en el paquete conjunto (PS3 real)
 
 Revisión `7c723d3`, afín y recorte experimental activos: 11513 campos

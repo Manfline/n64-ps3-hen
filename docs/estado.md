@@ -1,5 +1,41 @@
 # Estado
 
+## 2026-10-21 — Battle for Naboo: lentitud preexistente, diagnóstico de consola
+
+- El autor aclara que la lentitud no es una regresión. El tramo de Naboo
+  en el log de `7c723d3` usa la HLE de Factor 5 Indy (`spu_gfx4`, gbi 13),
+  no la imagen F3DEX2 de la optimización de Road Rash. Que las banderas
+  afín/recorte estén presentes no implica que esa ruta se use en Naboo.
+- Los primeros 600 campos rondan 60 campos/s. Tras la transición, los
+  resúmenes periódicos marcan 31,4–33,2 campos/s (52–55 % NTSC) y 29,4–31,3
+  ms de emulación por campo, con prácticamente cero espera de ritmo y cero
+  tiempo saltado por bucles de espera. La ventana final de 100 campos que
+  incluye una pausa da 24,5; no se toma como velocidad sostenida.
+- El coste gráfico crece: campos 700–799, 128 triángulos y SPE 3,93 ms por
+  tarea; 1300–1399, 1385 triángulos y SPE 14,63 ms. Como el ritmo ya ronda
+  32 campos/s en el tramo de poca geometría, no se explica solo por la HLE
+  gráfica: el hilo de emulación es un frente relevante que falta perfilar.
+  No se restan tiempos de hilos o tareas solapadas para inventar una cuota
+  exacta del CPU. En los últimos resúmenes el RSX registra solo 9–15 % de
+  ocupación como cota superior; no apunta a saturación de rasterizado.
+- En carga alta, la traducción al RSX cuesta unos 6–7,7 ms por tarea y el
+  estado gráfico 3,5–5,1 ms en el SPE. Los vértices de Factor 5 no están
+  cubiertos por el contador genérico que imprime 0,00 ms; eso no demuestra
+  coste nulo. No hay detalle de subfases de la imagen 4 en este log.
+- El recompilador acumula 500,869 ms de compilación y cero recompilaciones
+  repetidas: no aparece la tormenta de recompilación de Road Rash. El
+  contador «traducciones» es `vt_probes`, consultas de direcciones virtuales,
+  no número de compilaciones. No se identifica todavía una función CPU
+  culpable ni se implementa una optimización durante esta revisión.
+- Final: 1625 campos emulados, 1469 tareas gráficas, cero descartes de la
+  cola y cero campos sin ranura; resúmenes sin tareas cortadas ni comandos
+  ajenos saltados. Hash y tareas de prueba iguales al PPE, cierre limpio y
+  salida normal al XMB. Holgura de imagen 4 de 1616 bytes; 1936 sin tocar
+  al cerrar (estimación por ceros). Se registra como pendiente de rendimiento
+  aparte, no como regresión nueva ni certificación visual exhaustiva.
+- Evidencia `build/ps3/re2-spe/naboo-20261021.log`, SHA-256
+  `d784957ff0e2908abe97523926843e0602b493835825cc37a153720ce25927fd`.
+
 ## 2026-10-21 — Pokémon Snap: regresión adicional del conjunto en PS3
 
 - El autor confirma explícitamente que ya no observó el desorden de dibujo
