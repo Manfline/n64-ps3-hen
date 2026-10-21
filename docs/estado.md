@@ -16,8 +16,10 @@
 - El reporte visual de niebla de F-Zero X sigue diferido; no se considera
   causado ni resuelto por esta integración. La comparación de una escena
   contra el microcódigo real sigue pendiente.
-- Validación de la base combinada en curso: pruebas host y compilación
-  limpia del frontend antes de preparar un paquete de regresión. Sin
+- Pruebas host de la base combinada: 665 pruebas, 887094 verificaciones,
+  cero fallos con ASan y UBSan; log local
+  `build/logs/spe-integracion-host.log`. Falta compilación limpia del
+  frontend y regresión del binario combinado. Sin
   integración en la rama principal ni publicación en este punto.
 
 ## 2026-10-20 — Racer: video entrelazado, altura insuficiente del destino
