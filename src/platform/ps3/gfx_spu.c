@@ -14,6 +14,8 @@
 #include "platform/ps3/gfx_spu.h"
 
 #include <stdio.h>
+#include <malloc.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/systime.h>
@@ -93,6 +95,67 @@ static int check_hash(spukit_worker *w)
 /* Con este archivo el SPE llena su pila libre con un patrón al arrancar y
  * los bytes «sin tocar» del log son exactos; sin él, los que siguen en cero. */
 #define SPE0_STACK_PATH SALSA64_DATA_DIR "/spe0-pila"
+#define SPE0_DETAIL_PATH SALSA64_DATA_DIR "/gfx-spe-detalle"
+struct detail_window {
+	struct gfx_detail task __attribute__((aligned(128)));
+	uint64_t sum[sizeof(struct gfx_detail) / 4];
+	uint64_t handler;
+	uint32_t count, first, last;
+};
+
+#define DS(w, field) ((w)->sum[offsetof(struct gfx_detail, field) / 4])
+static void detail_log(struct detail_window *w)
+{
+	if (!w || !w->count) return;
+	double k = 1000.0 / (spukit_tick_hz() * w->count), n = w->count;
+	salsa64_log("gfx detalle: tareas %u-%u (%u), ms/tarea manejador %.3f total %.3f vtx %.3f estado %.3f "
+		    "TMEM %.3f tri sin estado %.3f matrices %.3f listas %.3f cierre %.3f resto %.3f",
+		    w->first, w->last, w->count, w->handler * k, DS(w, t_total) * k, DS(w, t_vtx) * k,
+		    DS(w, t_state) * k, DS(w, t_load) * k, DS(w, t_triangle) * k, DS(w, t_matrix) * k,
+		    DS(w, t_dl) * k, DS(w, t_end) * k, DS(w, t_rest) * k);
+	salsa64_log("gfx detalle: por tarea vertices %.1f (%0.1f cargas, luz %.1f niebla %.1f ST %.1f), "
+		    "tri entrada %.1f aceptados %.1f plano comun %.1f cercano %.1f recortados %.1f; "
+		    "comandos %.1f estados %.1f salida v/c/t %.0f/%.0f/%.0f bytes",
+		    DS(w, vertices) / n, DS(w, vertex_calls) / n, DS(w, lit_vertices) / n, DS(w, fog_vertices) / n,
+		    DS(w, texgen_vertices) / n, DS(w, triangles_in) / n, DS(w, triangles_ok) / n,
+		    DS(w, triangles_common) / n, DS(w, triangles_near) / n, DS(w, triangles_clipped) / n,
+		    DS(w, commands) / n, DS(w, state_builds) / n, DS(w, vtx_bytes) / n, DS(w, cmd_bytes) / n,
+		    DS(w, tex_bytes) / n);
+	for (unsigned i = 0; i < 4; i++)
+		salsa64_log("gfx detalle: lectura %u (vtx/mtx/pequena/TMEM): peticiones %.1f bytes pedidos %.0f DMA %.0f "
+			    "envio %.3f espera %.3f ms/tarea (anidados)", i,
+			    w->sum[offsetof(struct gfx_detail, reads) / 4 + i] / n,
+			    w->sum[offsetof(struct gfx_detail, requested) / 4 + i] / n,
+			    w->sum[offsetof(struct gfx_detail, transferred) / 4 + i] / n,
+			    w->sum[offsetof(struct gfx_detail, send_ticks) / 4 + i] * k,
+			    w->sum[offsetof(struct gfx_detail, read_ticks) / 4 + i] * k);
+	for (unsigned i = 0; i < 3; i++)
+		salsa64_log("gfx detalle: salida %u (vtx/cmd/tex): DMA %.1f bytes %.0f espera %.3f ms/tarea (anidada)",
+			    i, w->sum[offsetof(struct gfx_detail, dma_puts) / 4 + i] / n,
+			    w->sum[offsetof(struct gfx_detail, dma_bytes) / 4 + i] / n,
+			    w->sum[offsetof(struct gfx_detail, wait_ticks) / 4 + i] * k);
+	salsa64_log("gfx detalle: listas bloques %.1f bytes %.0f aciertos %.1f cambios %.1f por tarea",
+		    DS(w, dl_fetches) / n, DS(w, dl_bytes) / n, DS(w, dl_hits) / n, DS(w, dl_misses) / n);
+	memset(w->sum, 0, sizeof w->sum);
+	w->count = 0; w->handler = 0;
+}
+
+static void detail_account(struct salsa64_gfx_spu *s, uint64_t ticks)
+{
+	if (!s->detail || !s->job.detail_ea) return;
+	struct detail_window *w = s->detail;
+	if (w->task.version != GFX_DETAIL_VERSION || w->task.task != s->job.task ||
+	    w->task.bytes != sizeof w->task) {
+		salsa64_log("gfx detalle: bloque invalido en tarea %u", s->job.task);
+		return;
+	}
+	uint32_t words[sizeof(struct gfx_detail) / 4];
+	memcpy(words, &w->task, sizeof words);
+	for (unsigned i = 0; i < sizeof words / sizeof words[0]; i++) w->sum[i] += words[i];
+	if (!w->count) w->first = s->job.task;
+	w->last = s->job.task; w->count++; w->handler += ticks;
+	if (w->count == 100) detail_log(w);
+}
 static struct {
 	/* Una sola RDRAM: la HLE no la escribe (los rellenos los copia el PPE
 	 * después, salsa64_gfx_rdram_fills) y el SPE termina antes de que corra
@@ -146,7 +209,7 @@ static void log_words(const char *what, const uint8_t *spe, const uint8_t *ppe, 
 	salsa64_log("SPE 0:   %s (byte: SPE/PPE)%s", what, line);
 }
 
-static int check_lists(spukit_worker *w, int img)
+static int check_lists(spukit_worker *w, int img, struct detail_window *detail)
 {
 	static const uint32_t gbis[] = { SALSA64_GBI_F3D,    SALSA64_GBI_F3DEX,  SALSA64_GBI_F3DWR,
 					 SALSA64_GBI_F3DPD,  SALSA64_GBI_F3DDKR, SALSA64_GBI_F3DJFG,
@@ -165,6 +228,11 @@ static int check_lists(spukit_worker *w, int img)
 		uint32_t dl = gfx_selftest_build(chk.ram, gbis[i], task);
 		check_job(&job[0], 0, gbis[i], task, dl);
 		check_job(&job[1], 1, gbis[i], task, dl);
+		if (img == 1 && detail) {
+			job[0].detail_ea = (uint64_t)(uintptr_t)&detail->task;
+			job[0].detail_cap = sizeof detail->task;
+			job[0].detail_version = GFX_DETAIL_VERSION;
+		}
 		memset(chk.vtx, 0, sizeof chk.vtx);
 		memset(chk.cmd, 0, sizeof chk.cmd);
 		memset(chk.tex, 0, sizeof chk.tex);
@@ -199,6 +267,54 @@ static int check_lists(spukit_worker *w, int img)
 			bad++;
 		}
 	}
+	return bad;
+}
+
+/* Misma lista propia, sin caché y con RDP reiniciado en cada muestra.
+ * Alternar el orden evita atribuir todo el calentamiento a un lado. */
+static int check_detail(spukit_worker *w, struct detail_window *detail)
+{
+	uint32_t ticks[2][17];
+	uint32_t dl = gfx_selftest_build(chk.ram, SALSA64_GBI_F3DEX2, 7);
+	int bad = 0;
+	for (unsigned sample = 0; sample < 17; sample++) {
+		struct gfx_result out[2];
+		for (unsigned pass = 0; pass < 2; pass++) {
+			unsigned mode = pass ^ (sample & 1);
+			struct gfx_job j;
+			check_job(&j, mode, SALSA64_GBI_F3DEX2, 7, dl);
+			j.flags = GFX_JOB_RESET | GFX_JOB_NOCACHE;
+			if (mode) {
+				j.detail_ea = (uint64_t)(uintptr_t)&detail->task;
+				j.detail_cap = sizeof detail->task;
+				j.detail_version = GFX_DETAIL_VERSION;
+			}
+			const spukit_result *r = spukit_wait(w, spukit_post(w, GFX_JOB_TASK, &j, sizeof j));
+			ticks[mode][sample] = r->ticks;
+			memcpy(&out[mode], r->data, sizeof out[mode]);
+			if (r->error) bad++;
+		}
+		uint32_t first;
+		if (out[0].vtx_bytes != out[1].vtx_bytes || out[0].cmd_bytes != out[1].cmd_bytes ||
+		    out[0].tex_bytes != out[1].tex_bytes || out[0].flags != out[1].flags ||
+		    out[0].triangles != out[1].triangles || out[0].commands != out[1].commands ||
+		    gfx_selftest_compare_vtx((const uint8_t *)chk.vtx[0], (const uint8_t *)chk.vtx[1],
+					    out[0].vtx_bytes, 0, &first) ||
+		    gfx_selftest_compare_cmd(chk.cmd[0], chk.cmd[1], out[0].cmd_bytes, 0, &first) ||
+		    memcmp(chk.tex[0], chk.tex[1], out[0].tex_bytes)) bad++;
+	}
+	for (unsigned mode = 0; mode < 2; mode++) {
+		for (unsigned i = 1; i < 17; i++) {
+			uint32_t value = ticks[mode][i], j = i;
+			while (j && ticks[mode][j - 1] > value) { ticks[mode][j] = ticks[mode][j - 1]; j--; }
+			ticks[mode][j] = value;
+		}
+	}
+	double k = 1e3 / spukit_tick_hz();
+	salsa64_log("gfx detalle: autoprueba A/B 17 pares, sin/con mediana %.3f/%.3f ms, "
+		    "min %.3f/%.3f max %.3f/%.3f, diferencias %d (lista propia, no mide una carrera)",
+		    ticks[0][8] * k, ticks[1][8] * k, ticks[0][0] * k, ticks[1][0] * k,
+		    ticks[0][16] * k, ticks[1][16] * k, bad);
 	return bad;
 }
 
@@ -239,6 +355,7 @@ static void account(struct salsa64_gfx_spu *s, uint64_t ticks)
 {
 	s->tasks++;
 	account_res(s, &s->res, ticks);
+	detail_account(s, ticks);
 }
 
 /* ---- Imágenes del SPE 0 ------------------------------------------------------ */
@@ -333,7 +450,8 @@ static int load_image(struct salsa64_gfx_spu *s, int img, uint32_t gbi)
 	/* Comprobaciones contra el PPE: el hash de las texturas y las tareas de
 	 * prueba de los microcódigos de la imagen. */
 	int bad_hash = check_hash(s->worker);
-	int bad_lists = check_lists(s->worker, img);
+	int bad_lists = check_lists(s->worker, img, s->detail);
+	if (img == 1 && s->detail) bad_lists += check_detail(s->worker, s->detail);
 	s->nocache = bad_hash != 0;
 	if (bad_lists)
 		s->selftest_bad |= 1u << img;
@@ -413,6 +531,13 @@ static void spu_start(void *ctx, const struct salsa64_task *task, enum salsa64_g
 	s->last_task = s->job.task;
 	if (s->nocache)
 		s->job.flags |= GFX_JOB_NOCACHE;
+	if (s->detail && s->image == 1) {
+		struct detail_window *w = s->detail;
+		w->task.version = 0;  /* detectar resultado ausente o viejo */
+		s->job.detail_ea = (uint64_t)(uintptr_t)&w->task;
+		s->job.detail_cap = sizeof w->task;
+		s->job.detail_version = GFX_DETAIL_VERSION;
+	}
 	s->seq = spukit_post(s->worker, GFX_JOB_TASK, &s->job, sizeof s->job);
 	s->pending = true;
 }
@@ -569,6 +694,11 @@ int salsa64_gfx_spu_init(struct salsa64_gfx_spu *s, const struct salsa64_bus *bu
 	 * para probarlas en RPCS3 con las ROMs de prueba, que usan solo una
 	 * familia. Después se sigue como siempre, con la primera. */
 	struct stat st;
+	if (stat(SPE0_DETAIL_PATH, &st) == 0) {
+		s->detail = memalign(128, sizeof(struct detail_window));
+		if (s->detail) memset(s->detail, 0, sizeof(struct detail_window));
+		salsa64_log("gfx detalle: %s (solo imagen 1)", s->detail ? "activado" : "sin memoria, desactivado");
+	}
 	if (stat(SPE0_ALL_PATH, &st) == 0) {
 		salsa64_log("SPE 0: %s: cargo y compruebo las %d imágenes", SPE0_ALL_PATH, GFX_SPE0_IMAGES);
 		for (int i = GFX_SPE0_IMAGES - 1; i > 0; i--) {
@@ -598,4 +728,7 @@ void salsa64_gfx_spu_shutdown(struct salsa64_gfx_spu *s)
 		spukit_worker_stop(s->worker);
 	}
 	s->worker = NULL;
+	detail_log(s->detail);
+	free(s->detail);
+	s->detail = NULL;
 }

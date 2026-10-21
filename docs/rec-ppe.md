@@ -1409,3 +1409,11 @@ compiler error: Segmentation fault"; repetir compila bien
 | 2026-10-12 | Formato 2 del perfil con sitios de salida (4809ec2, el árbol final del núcleo) | qemu-ppc64 | GoldenEye hasta la presa 7,5 G ciclos en `--lockstep` con el perfil cargado (692 calientes, 1483 sitios de salida contando en los caminos que salen) **sin diferencias** (1 h 26 min) |
 | 2026-10-13 | Código compacto (2be85a4; con main a9df32a) | qemu-ppc64 | unitarias 437/437 (446/446 con main) en los cinco modos; nemu64-test 433 fallas (línea base) con y sin fijos; vitest y estados OK; `--lockstep` **sin diferencias** en nemu64-test, vitest, Perfect Dark 3 G ciclos (38,8 M salidas comparadas) y GoldenEye hasta la presa 7,5 G ciclos (204 M salidas, 14 825 bloques, 2 h 15 min); con main fusionado (a9df32a), otra vez nemu64-test, vitest, Perfect Dark y GoldenEye hasta la presa (204 M salidas) sin diferencias; con el muestreo por tiempo encendido (a5ea24e), unitarias 449/449, nemu64-test 433 fallas y su `--lockstep` sin diferencias. Dos errores que atraparon las pruebas antes de pasar: `addi r0, 0, -4` en la rutina compartida (r0 como base vale 0: cur_pc salía −4 y las excepciones iban a cualquier parte) y la cadena de escritura entrando por el extremo equivocado (escribía solo el primer registro: `dsub_and_daddi` y el lockstep de nemu64-test lo vieron) |
 Rendimiento: solo en la PS3 real (docs/perf-log.md, «Recompilador»).
+
+## Descartes de espera sin retraducción
+
+Desde el trabajo de Road Rash, quitar una consulta al detector de espera
+parchea su salto PPC, sin invalidar la traducción. Las colisiones de la
+tabla del detector podían hacer retraducir los mismos bloques miles de
+veces. Causa, contadores, reproducción y archivo de comparación:
+[Road Rash: invalidaciones](roadrash-invalidaciones.md).

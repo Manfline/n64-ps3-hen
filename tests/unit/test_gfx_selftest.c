@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Salsa64 — las tareas de prueba de la HLE gráfica (src/rsp/gfx/selftest.c)
  * que el PPE compara con cada imagen del SPE 0 al cargarla: que de verdad
@@ -21,6 +22,8 @@ static struct gfx_vertex vtx_a[512] __attribute__((aligned(16))), vtx_b[512] __a
 static uint8_t cmd_a[16384] __attribute__((aligned(16))), cmd_b[16384] __attribute__((aligned(16)));
 static uint8_t tex_a[65536] __attribute__((aligned(128))), tex_b[65536] __attribute__((aligned(128)));
 static uint8_t cache_a[65536] __attribute__((aligned(128))), cache_b[65536] __attribute__((aligned(128)));
+static struct gfx_detail detail __attribute__((aligned(128)));
+static unsigned detail_mode;
 
 static void run(uint32_t gbi, struct gfx_vertex *vtx, uint8_t *cmd, uint8_t *tex, uint8_t *cache,
 		struct gfx_result *res)
@@ -41,6 +44,11 @@ static void run(uint32_t gbi, struct gfx_vertex *vtx, uint8_t *cmd, uint8_t *tex
 	job.task = 1;
 	job.gbi = gbi;
 	job.ucode = GFX_SELFTEST_UCODE;
+	if (detail_mode) {
+		job.detail_ea = (uint64_t)(uintptr_t)&detail;
+		job.detail_cap = detail_mode == 2 ? sizeof detail - 1 : sizeof detail;
+		job.detail_version = detail_mode == 3 ? GFX_DETAIL_VERSION + 1 : GFX_DETAIL_VERSION;
+	}
 	memset(vtx, 0, sizeof vtx_a);
 	memset(cmd, 0, sizeof cmd_a);
 	memset(tex, 0, sizeof tex_a);
@@ -75,6 +83,41 @@ static void check_gbi(uint32_t gbi, bool rare)
 	CHECK_EQ(gfx_selftest_compare_cmd(cmd_a, cmd_b, ra.cmd_bytes, 0, &first), 0);
 	CHECK_EQ(gfx_selftest_compare_vtx((const uint8_t *)vtx_a, (const uint8_t *)vtx_b, ra.vtx_bytes, 0, &first), 0);
 	CHECK(!memcmp(tex_a, tex_b, sizeof tex_a) && !memcmp(cache_a, cache_b, sizeof cache_a));
+}
+
+static void gfx_detail_parity(void)
+{
+	struct gfx_result a, b;
+	run(SALSA64_GBI_F3DEX2, vtx_a, cmd_a, tex_a, cache_a, &a);
+	detail_mode = 1;
+	run(SALSA64_GBI_F3DEX2, vtx_b, cmd_b, tex_b, cache_b, &b);
+	CHECK(!memcmp(&a, &b, sizeof a));
+	CHECK(!memcmp(vtx_a, vtx_b, a.vtx_bytes));
+	CHECK(!memcmp(cmd_a, cmd_b, a.cmd_bytes));
+	CHECK(!memcmp(tex_a, tex_b, sizeof tex_a));
+	CHECK(!memcmp(cache_a, cache_b, sizeof cache_a));
+	CHECK_EQ(detail.version, GFX_DETAIL_VERSION);
+	CHECK_EQ(detail.bytes, sizeof detail);
+	CHECK_EQ(detail.task, 1);
+	CHECK_EQ(detail.commands, a.commands);
+	CHECK_EQ(detail.triangles_ok, a.triangles);
+	CHECK(detail.triangles_in >= detail.triangles_ok);
+	CHECK(detail.vertices > 0 && detail.vertex_calls > 0);
+	CHECK(detail.reads[GFX_IO_VTX] > 0);
+	CHECK_EQ(detail.requested[GFX_IO_VTX], detail.vertices * 16);
+	CHECK_EQ(detail.vtx_bytes, a.vtx_bytes);
+	CHECK_EQ(detail.cmd_bytes, a.cmd_bytes);
+	CHECK_EQ(detail.t_rest, 0); /* reloj del host = 0 */
+	for (detail_mode = 2; detail_mode <= 3; detail_mode++) {
+		memset(&detail, 0xA5, sizeof detail);
+		run(SALSA64_GBI_F3DEX2, vtx_b, cmd_b, tex_b, cache_b, &b);
+		CHECK_EQ(detail.version, 0xA5A5A5A5u);
+		CHECK(!memcmp(&a, &b, sizeof a));
+	}
+	detail_mode = 0;
+	memset(&detail, 0xA5, sizeof detail);
+	run(SALSA64_GBI_F3DEX2, vtx_b, cmd_b, tex_b, cache_b, &b);
+	CHECK_EQ(detail.version, 0xA5A5A5A5u);
 }
 
 static void gfx_selftest_lists(void)
@@ -167,6 +210,7 @@ static void gfx_spe0_images(void)
 void t_suite_gfx_selftest(void)
 {
 	RUN(gfx_selftest_lists);
+	RUN(gfx_detail_parity);
 	RUN(gfx_selftest_compare_floats);
 	RUN(gfx_spe0_images);
 }

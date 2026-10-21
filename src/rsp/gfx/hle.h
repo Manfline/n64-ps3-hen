@@ -18,6 +18,13 @@
 #include "rsp/gfx/gfx.h"
 #include "rsp/gfx/spe0.h"
 
+/* Las otras imágenes no contienen ni ejecutan el detalle. */
+#if !defined(GFX_SPE0_IMG) || GFX_SPE0_IMG == 1
+#define GFX_DETAIL(g, ...) do { if ((g)->detail) { __VA_ARGS__; } } while (0)
+#else
+#define GFX_DETAIL(g, ...) do { if (0) { __VA_ARGS__; } } while (0)
+#endif
+
 /* Censo gráfico del host (src/host/gfxcheck.c, -DGFX_CENSUS): cada comando
  * que la HLE no implementa avisa al gancho con su opcode. En la PS3 y en el
  * SPE la macro no genera nada. */
@@ -31,6 +38,14 @@ extern uint32_t gfx_dpc_hist[64];  /* dpc.c: comandos del RDP por opcode (6 bits
 #endif
 
 #define GFX_MAX_VTX     64   /* F3D: 16; F3DEX y F3DEX2: 32 */
+struct gfx_state;
+#if !defined(GFX_SPE0_IMG) || GFX_SPE0_IMG == 1
+void gfx_io_detail_begin(struct gfx_state *g);
+void gfx_io_detail_end(struct gfx_state *g);
+#else
+#define gfx_io_detail_begin(g) ((void)0)
+#define gfx_io_detail_end(g) ((void)0)
+#endif
 #define GFX_MTX_STACK   32   /* F3D: 10, F3DEX2: 18 en la RDRAM */
 #define GFX_DL_STACK    32   /* F3D: 10, F3DEX2: 18 */
 #define GFX_MAX_LIGHTS  11   /* + la ambiental; F3DEX2: 7, Conker: 11 */
@@ -301,6 +316,7 @@ struct gfx_state {
 	 * el código del SPE 0 crece (y la pila con él). */
 	uint32_t flx_table;        /* F3DFLX: la tabla del alfa (G_DMA_IO, segmentada), o 0 */
 	uint8_t ucode_var;         /* GFX_UCODE_FLX: el microcódigo en curso */
+	struct gfx_detail *detail;  /* fuera del tramo persistente del RDP */
 };
 
 /* ---- E/S: la implementa cada plataforma (io_mem.c, src/spu/gfx/io_spu.c) ----

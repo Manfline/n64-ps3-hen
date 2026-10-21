@@ -3880,6 +3880,7 @@ int main(int argc, char **argv)
 	if (use_rec) {
 		void *code = salsa64_host_rec_buffer();
 		rec.opts = salsa64_host_rec_opts();
+		fprintf(stderr, "salsa64-run: descartes de espera: %s\n", rec.opts & SALSA64_REC_OPT_IDLE_RECOMPILE ? "recompilar" : "parche PPC");
 		if (getenv("SALSA64_REC_DUMP"))
 			rec.on_compile = dump_block;
 		if (getenv("SALSA64_REC_PROF")) {
@@ -3989,6 +3990,7 @@ int main(int argc, char **argv)
 	/* Bucle principal: bloques de `slice` ciclos y verificación entre ellos. */
 	enum stop_reason reason = STOP_NONE;
 	uint64_t start_cycles = n64.cpu.cycles, start_idle = n64.cpu.idle_cycles, t0 = now_us();
+	uint64_t tb_start = salsa64_rec_trace_now();
 	while (reason == STOP_NONE) {
 		uint64_t done = n64.cpu.cycles - start_cycles;
 		if (done >= max_cycles) {
@@ -4072,6 +4074,7 @@ int main(int argc, char **argv)
 		us ? (cycles - idle_cycles) / (double)us : 0.0,
 		cycles ? 100.0 * idle_cycles / cycles : 0.0, (unsigned long long)n64.cpu.pc);
 	if (use_rec) {
+		salsa64_rec_diag_report(&rec, us ? (salsa64_rec_trace_now() - tb_start) * 1000000 / us : 0, true, save_log);
 		const struct salsa64_rec_stats *st = &rec.stats;
 		fprintf(stderr, "salsa64-run: recompilador: %llu bloques (%llu fuera de KSEG0, %llu desprendidos y %llu "
 			"enganchados en otra física, %u KB de caché), %llu solo intérprete, %llu entradas, %llu enlaces, "

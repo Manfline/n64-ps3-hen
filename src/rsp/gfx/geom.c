@@ -89,9 +89,12 @@ void gfx_mtx_mul(float out[16], const float a[16], const float b[16])
 
 void gfx_matrix(struct gfx_state *g, uint32_t addr, uint32_t flags)
 {
+	uint32_t td = 0;
+	GFX_DETAIL(g, td = gfx_io_clock());
 	const uint8_t *src = gfx_io_read(g, GFX_IO_MTX, addr, 64);
 	if (!src) {
 		g->res->dl_errors++;
+		GFX_DETAIL(g, g->detail->t_matrix += gfx_io_clock() - td);
 		return;
 	}
 	float m[16];
@@ -114,6 +117,7 @@ void gfx_matrix(struct gfx_state *g, uint32_t addr, uint32_t flags)
 		g->lights_dirty = true;
 	}
 	g->mvp_dirty = true;
+	GFX_DETAIL(g, g->detail->t_matrix += gfx_io_clock() - td);
 }
 
 void gfx_pop_matrix(struct gfx_state *g, uint32_t n)
@@ -347,6 +351,13 @@ void gfx_load_vertices(struct gfx_state *g, uint32_t addr, uint32_t v0, uint32_t
 	}
 	gfx_vertices(g, src, v0, n);
 	gfx_vgroup(g, addr, 16, v0, n, src);
+	GFX_DETAIL(g, {
+		g->detail->vertex_calls++;
+		g->detail->vertices += n;
+		if (g->geom & G_LIGHTING) g->detail->lit_vertices += n;
+		if (g->geom & G_FOG) g->detail->fog_vertices += n;
+		if (g->geom & G_TEXTURE_GEN) g->detail->texgen_vertices += n;
+	});
 }
 
 void gfx_light_vectors(struct gfx_state *g)

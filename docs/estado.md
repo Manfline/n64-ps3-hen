@@ -65,6 +65,113 @@ en cero y no guarda vpos, así que tampoco permite deducir la paridad real.
 Evidencia y propuesta inicial en [racer-vi.md](racer-vi.md). No hubo
 validación de consola en esa revisión anterior.
 
+## 2026-10-20 — Road Rash 64: colisión de descartes de espera, no escrituras de código
+
+Rama `roadrash`, sobre v0.2.9. Diagnóstico, reproducción y archivo A/B en
+[docs/roadrash-invalidaciones.md](roadrash-invalidaciones.md).
+
+- **Causa medida.** Los saltos `8003ae0c` y `8003b824` caen en la ranura 49
+  del detector de espera. Descartar uno sustituía al otro; `rec_idle_exit`
+  invalidaba los bloques solapados para quitar la consulta, y al volver a
+  traducirlos la reintroducía. Los cuatro bloques `8003ad84`, `8003adf0`,
+  `8003b788` y `8003b7d8`: **10 420 traducciones por bloque**, mismo MIPS.
+  El contador histórico incluía también los desalojos; el aviso de
+  invalidación masiva clasificaba esos descartes internos como «DMA u otros».
+- **Host/qemu, recorrido de la consola hasta el campo 2100** (NTSC, 8 MB,
+  Pak nuevo, registros fijos, caché de 24 MB; sin rasterizar): **42 375
+  invalidaciones por descartes**, todas con huella MIPS idéntica, **0 por
+  CPU, 0 por PI, 0 por otros escritores**. Hubo 3622 DMA del PI. No hace
+  falta tratar overlays ni cambiar la granularidad de escrituras: ambas
+  rutas ya filtraban por solapamiento exacto de instrucciones.
+- **Cambio.** Se conserva el camino nativo normal desde la primera emisión
+  y se quita solo el salto PPC a la consulta cuando el bucle se descarta
+  (`NOP` + sincronización de cachés). Se mantienen el bloque y sus enlaces.
+  Las escrituras reales invalidan como antes; las huellas solo miden.
+  `jit-invalidacion-vieja` en `/dev_hdd0/salsa64/` selecciona recompilar al
+  volver a abrir el juego. El log nombra el modo, separa las causas, cuenta
+  las repeticiones y mide el emisor; detalles por PC al cerrar. +1,563 MiB
+  fijos (tablas y sitios de parche; `docs/memory-budget.md`).
+- **Mismo binario qemu, ambos modos consecutivos:** 61 422 → **8819**
+  compilaciones (−85,6 %), 52 597 → **0** repeticiones del mismo contenido,
+  3589,710 → **357,720 ms** en el emisor; descartes que invalidan
+  42 375 → **0**, retirados por desalojo 14 554 → **0**. Tablas sin
+  saturación. El estado entero del campo 2100 es idéntico byte a byte entre
+  ambos modos y el lockstep. Son tiempos del host/qemu, **no de la PS3**;
+  las corridas compartieron host con otras verificaciones, por lo que no
+  se usa su tiempo total como estimación de FPS.
+- **Paridad y pruebas.** Road Rash, 2100 campos / 3 290 786 100 ciclos,
+  44 164 470 salidas comparadas: `--lockstep sin diferencias`. Super Mario
+  64, GoldenEye, Mario Kart 64 y Zelda OoT: 600 campos cada uno, todos sin
+  diferencias. `tools/build.sh test-host`: **663 pruebas, 0 fallidas**.
+  Las 16 pruebas de espera pasan en qemu con intérprete y recompilador
+  estricto; incluyen colisión, likely, J y escritura real posterior.
+  La suite completa adicional de PPC pasó las 662 pruebas de intérprete,
+  pero en la segunda pasada mostró `f5i_particles` (partículas de Indiana
+  Jones; CPU ya terminado) y no completó el límite de 600 s. La prueba
+  aislada pasa con y sin recompilador (sin ejecutar bloques). Queda por
+  aislar el estado previo de esa suite; no se presenta como una suite PPC
+  completa verde ni se cambia aquí la HLE de Factor 5.
+- **Paquete local.** `build/salsa64-roadrash/salsa64-roadrash.pkg`, APPID
+  `SLSA00064`; build Docker y las cinco holguras de pila del SPE válidos
+  (1632, 6688, 14144, 2960 y 1648 bytes, mínimo 1536). SHA-256 al pie de
+  esta entrada tras el empaquetado final. No enviado ni publicado.
+- **PS3 pendiente.** Repetir la carrera con y sin el archivo: registrar
+  porcentaje de NTSC, ms de emulación, peor campo, compilaciones/ms del
+  emisor, descartes y desalojos; comprobar gráficos y audio al entrar y
+  salir de carrera. El costo del código nativo y de gráficos sigue ahí:
+  no se promete velocidad completa sin medir en la consola.
+
+## 2026-10-20 — Detalle opcional de la HLE gráfica del SPE
+
+Rama `gfx-spe-detalle`, base `10b19cc`. Instrumentación para separar los
+3,80 ms/tarea residuales (43,23 %) de Road Rash, sin optimización del
+camino gráfico. El archivo `/dev_hdd0/salsa64/gfx-spe-detalle`, leído al
+abrir el juego, activa solo la imagen 1; renombrarlo a `.off` y reabrir
+revierte el diagnóstico. Uso, campos y límites en `docs/gfx-spe-detalle.md`.
+
+- `gfx_job` aprovecha sus 16 bytes libres para dirección/capacidad/versión
+  de un bloque DMA de 256 bytes. Descriptor y `gfx_result` quedan en 112
+  bytes, con comprobaciones al compilar; la cola MIT no cambia. El SPE
+  espera el DMA del detalle antes de devolver el resultado. El PPE valida
+  tarea/versión/tamaño y resume cada 100 tareas instrumentadas y al cerrar.
+- Cuenta DMA de lectura por ranura y de salida por tipo, bytes pedidos y
+  alineados, envío/espera, vértices, luces/niebla/ST, triángulos de entrada,
+  aceptados y recortados/rechazados, estado, listas y salida. Tiempos
+  exclusivos de triángulos sin estado, matrices, listas y cierre; resto
+  explícito para cerrar contra `t_total`. Las esperas DMA son desglose
+  anidado, no sumandos adicionales.
+- Sin archivo no se reserva bloque/acumulador XDR ni marco de detalle en
+  el SPE; no hay DMA diagnóstico, lecturas extra del reloj ni incrementos
+  nuevos. El binario conserva comprobaciones de activación. Las imágenes
+  distintas de la 1 eliminan las llamadas y contadores por preprocesador;
+  no se reduce la caché de texturas.
+- Autoprueba en la consola: 17 pares sin/con detalle de una lista propia,
+  alternando orden, RDP reiniciado y caché desactivada, salida exacta y
+  mediana/mínimo/máximo del manejador. La autoprueba habitual contrasta
+  además el SPE instrumentado con el PPE. Por ejecutar en PS3.
+- Docker `test-host`: **661 pruebas, 870624 verificaciones, 0 fallidas**,
+  ASan y UBSan; prueba nueva de paridad y de capacidad/versión rechazadas.
+  La orden sin opciones tropieza con un aviso previo de GCC en
+  `test_menu.c:225` (`format-truncation`); pasó con
+  `EXTRA_CFLAGS=-Wno-format-truncation`, sin cambiar el menú.
+- Build Docker completo del frontend y paquete: imagen 1, texto 103536,
+  datos 800, bss 145808, `_end` 250256 y cadena de pila 10112 bytes;
+  holguras imágenes 0–4: **1632 / 1760 / 14144 / 2960 / 1648**, todas sobre
+  el mínimo de 1536. La imagen 1 deja solo 224 bytes sobre ese mínimo:
+  cualquier ampliación requiere volver a comprobar el presupuesto.
+ - Paquete: `build/salsa64-gfx-spe-detalle/salsa64-gfx-spe-detalle.pkg`,
+   3319312 bytes, SHA-256
+   `7bb387d1307552872b0e1a6f819e93ccbfd5e244a78238cd4bd71b9c37184655`.
+  No se ejecutaron ROMs ni `--lle-check-gfx`; quedan la comparación con una
+  captura autorizada y la validación de sincronización/coste en PS3.
+
+Techo de ganancia de esta entrega: cero; aporta medidas. En la consola,
+exigir primero autopruebas sin diferencias, después repetir el mismo
+recorrido y configuración con y sin archivo, conservando aperturas y
+ventanas separadas. El detalle puede perturbar tiempos y solape del DMA;
+si el coste es alto, muestrear tareas completas antes de decidir un cambio.
+
+
 ## 2026-10-18 — Resident Evil 2: el logo de N64 salía a un cuarto
 
 La escala de `G_TEXTURE` que rc7b3 aplicó al ST de `G_MODIFYVTX` rompía el logo

@@ -79,7 +79,8 @@ static inline void *salsa64_host_fastmem_window(size_t rdram_bytes)
 
 static inline uint32_t salsa64_host_rec_opts(void)
 {
-	return (salsa64_host_env_on("SALSA64_REC_FASTMEM") ? SALSA64_REC_OPT_FASTMEM : 0) |
+	return (salsa64_host_env_on("SALSA64_REC_IDLE_RECOMPILE") ? SALSA64_REC_OPT_IDLE_RECOMPILE : 0) |
+	       (salsa64_host_env_on("SALSA64_REC_FASTMEM") ? SALSA64_REC_OPT_FASTMEM : 0) |
 	       (salsa64_host_env_on("SALSA64_REC_NO_GROUP") ? SALSA64_REC_OPT_NO_GROUP : 0) |
 	       (salsa64_host_env_on("SALSA64_REC_FPU_INLINE") ? SALSA64_REC_OPT_FPU_INLINE : 0) |
 	       (salsa64_host_env_on("SALSA64_REC_NO_JTC") ? 0 : SALSA64_REC_OPT_JTC) |

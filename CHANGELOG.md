@@ -12,6 +12,16 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
   entrelazado de Racer ya no queda limitado por la tijera de su tarea RDP y
   deja de saltar verticalmente.
 
+- **Road Rash 64:** conserva los bloques traducidos al descartar sondas de
+  espera; las entradas que colisionaban retraducían código idéntico. Añade
+  contadores por causa y `jit-invalidacion-vieja` para comparar.
+
+- **Diagnóstico opcional de la HLE gráfica del SPE** (`gfx-spe-detalle`):
+  bloque DMA externo con contadores de etapas, geometría y transferencias, y
+  autoprueba sintética A/B; apagado por omisión, sin cambiar la cola ni el ABI
+  del resultado gráfico.
+
+
 ## [0.2.9] — 2026-10-19
 
 ### Added

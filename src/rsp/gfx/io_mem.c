@@ -20,6 +20,22 @@ struct io_mem {
 
 static struct io_mem io_default;
 
+void gfx_io_detail_begin(struct gfx_state *g)
+{
+	const struct gfx_job *j = g->job;
+	g->detail = NULL;
+	if (j->detail_version != GFX_DETAIL_VERSION || j->detail_cap < sizeof(struct gfx_detail) ||
+	    !j->detail_ea || (j->detail_ea & 127))
+		return;
+	g->detail = (struct gfx_detail *)(uintptr_t)j->detail_ea;
+	memset(g->detail, 0, sizeof *g->detail);
+	g->detail->version = GFX_DETAIL_VERSION;
+	g->detail->bytes = sizeof *g->detail;
+	g->detail->task = j->task;
+}
+
+void gfx_io_detail_end(struct gfx_state *g) { (void)g; }
+
 uint32_t gfx_io_clock(void)
 {
 	return 0;
@@ -45,10 +61,13 @@ void gfx_io_end(struct gfx_state *g)
 
 const uint8_t *gfx_io_read(struct gfx_state *g, enum gfx_io_slot slot, uint32_t addr, uint32_t size)
 {
-	(void)slot;
 	const struct gfx_job *j = g->job;
 	if (addr >= j->rdram_size || size > j->rdram_size - addr)
 		return NULL;
+	GFX_DETAIL(g, {
+		g->detail->reads[slot]++;
+		g->detail->requested[slot] += size;
+	});
 	return PTR(j->rdram_ea) + addr;
 }
 

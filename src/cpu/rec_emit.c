@@ -256,6 +256,7 @@ struct ijump {
 };
 
 struct ctx {
+	int idle_patch;  /* etiqueta de la consulta que se puede quitar */
 	struct salsa64_rec *rec;
 	uint64_t pc;
 	uint32_t pa;
@@ -2362,7 +2363,7 @@ static void emit_fpu(struct ctx *c, unsigned k)
 /* Conversiones y raíz de la FPU, CFC1/CTC1, LWL/LWR y compañía, MFC0. */
 #include "cpu/rec_emit_ext.h"
 /* La FPU compacta: las operaciones como rutinas compartidas del preámbulo. */
-static uint32_t finalize(struct salsa64_rec *rec, uint32_t base, uint32_t limit);
+static uint32_t finalize(struct ctx *c, uint32_t base, uint32_t limit);
 #include "cpu/rec_emit_fpurtn.h"
 /* La FPU con registros residentes (reemplaza a emit_fpu, emit_cop1 y a lo de
  * COP1 de rec_emit_ext.h solo con SALSA64_REC_OPT_FPU_RES, experimental). */
@@ -2702,9 +2703,10 @@ static void emit_branch(struct ctx *c, unsigned b)
 
 	/* Bucle de espera posible (idle.c): el camino tomado vuelve a C antes del
 	 * delay slot, en el mismo estado en que el intérprete consulta idle_hint;
-	 * rec.c llama a salsa64_vr4300_idle y, si la tabla lo descarta, invalida
-	 * el bloque para compilarlo sin la consulta. */
+	 * rec.c llama a salsa64_vr4300_idle y, si la tabla lo descarta, quita
+	 * el salto a la consulta. El camino nativo queda listo desde el inicio. */
 	bool idle = idle_candidate(c, d, bpc);
+	bool patch_idle = !(c->rec->opts & SALSA64_REC_OPT_IDLE_RECOMPILE);
 	int idle_exit = -1;
 	if (idle) {
 		idle_exit = new_label(c);
@@ -2714,14 +2716,22 @@ static void emit_branch(struct ctx *c, unsigned b)
 		fpu_flush(c);
 		writeback(c, c->written);
 		E(c, ppc_addi(R_CYCLES, R_CYCLES, (int32_t)b + 1));
-		li32u(c, 0, i);  /* el despachador no relee la instrucción (puede estar mapeada) */
+		if (patch_idle)
+			li64(c, 0, ((uint64_t)c->rec->cur_id << 32) | i);
+		else
+			li32u(c, 0, i);  /* el despachador no relee la instrucción */
 		E(c, ppc_std(0, OFF(rec_site), R_CPU));
 		li64(c, 3, bpc);
 		restore_borrowed(c);
 		emit_b(c, abs_label(c, c->rec->exit_idle), false);
 		c->sec = sec;
-		if (d->kind == K_BRANCH)
+		if (d->kind == K_BRANCH) {
+			if (patch_idle) {
+				c->idle_patch = new_label(c);
+				bind(c, c->idle_patch);
+			}
 			emit_bc(c, br->bo, br->bi, idle_exit);
+		}
 	}
 
 	if (likely) {
@@ -2737,9 +2747,14 @@ static void emit_branch(struct ctx *c, unsigned b)
 		emit_exit_to(c, br->fall);
 		c->sec = sec;
 	}
-	if (idle && d->kind != K_BRANCH) {  /* J o branch-likely tomado: siempre a C */
+	if (idle && d->kind != K_BRANCH) {
+		if (patch_idle) {
+			c->idle_patch = new_label(c);
+			bind(c, c->idle_patch);
+		}
 		emit_b(c, idle_exit, false);
-		return;
+		if (!patch_idle)
+			return;
 	}
 
 	c->in_ds = true;
@@ -2763,7 +2778,7 @@ static void emit_branch(struct ctx *c, unsigned b)
 		}
 		return;
 	case K_BRANCH: {
-		if (idle) {  /* el tomado ya salió antes del delay slot */
+		if (idle && !patch_idle) {  /* el tomado ya salió antes del delay slot */
 			emit_site(c, b, SALSA64_RPF_SITE_FALL, br->fall);
 			emit_exit_to(c, br->fall);
 			return;
@@ -2877,8 +2892,9 @@ static void restore_borrowed(struct ctx *c)
 
 /* Ubica las secciones en la caché a partir de la palabra `base`, resuelve los
  * saltos y copia. Devuelve las palabras usadas, o 0 si algo no cupo. */
-static uint32_t finalize(struct salsa64_rec *rec, uint32_t base, uint32_t limit)
+static uint32_t finalize(struct ctx *c, uint32_t base, uint32_t limit)
 {
+	struct salsa64_rec *rec = c->rec;
 	uint32_t nhot = rec->nbuf[SEC_HOT], ncold = rec->nbuf[SEC_COLD];
 	rec->fm_nnew = 0;
 	if (rec->overflow || base + nhot + ncold > limit)
@@ -2917,6 +2933,10 @@ static uint32_t finalize(struct salsa64_rec *rec, uint32_t base, uint32_t limit)
 		rec->fm_new_cold[k] = start[lc->sec] + lc->pos;
 	}
 	rec->fm_nnew = rec->fm_npend;
+	if (c->idle_patch >= 0) {
+		const struct salsa64_rec_label *p = &rec->labels[c->idle_patch];
+		rec->compiled_idle_patch = start[p->sec] + p->pos;
+	}
 	memcpy(rec->code + start[0], rec->buf[SEC_HOT], nhot * 4);
 	memcpy(rec->code + start[1], rec->buf[SEC_COLD], ncold * 4);
 	salsa64_rec_sync(rec->code + base, (nhot + ncold) * 4);
@@ -2939,6 +2959,8 @@ static void reset_emission(struct ctx *c)
 	memcpy(d, c->d, sizeof d);
 	memcpy(ds_of, c->ds_of, sizeof ds_of);
 	memset(c, 0, sizeof *c);
+	c->idle_patch = -1;
+	rec->compiled_idle_patch = 0;
 	c->rec = rec;
 	c->pc = pc;
 	c->pa = pa;
@@ -3173,7 +3195,7 @@ static uint32_t emit_block(struct ctx *c, uint32_t base, uint32_t limit)
 	}
 	cls_set(c, SALSA64_RT_C_EXIT);
 
-	return finalize(rec, base, limit);
+	return finalize(c, base, limit);
 }
 
 /* Perfilado (rec_trace.h): cómo termina el bloque recién emitido, su huella
@@ -3231,6 +3253,8 @@ uint32_t salsa64_rec_compile(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, 
 	uint32_t end = salsa64_rec_code_end(rec, pa, seg);  /* fuera de KSEG0, sin cruzar páginas */
 
 	memset(c, 0, sizeof *c);
+	c->idle_patch = -1;
+	rec->compiled_idle_patch = 0;
 	c->rec = rec;
 	c->pc = pc;
 	c->pa = pa;

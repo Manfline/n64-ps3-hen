@@ -37,7 +37,7 @@ _Static_assert(sizeof(struct gfx_vertex) == 32, "gfx_vertex: 32 bytes");
 _Static_assert(sizeof(struct gfx_draw) % 16 == 0, "gfx_draw: múltiplo de 16");
 _Static_assert(sizeof(struct gfx_zclear) % 16 == 0, "gfx_zclear: múltiplo de 16");
 _Static_assert(sizeof(struct gfx_job) <= 112, "gfx_job cabe en un trabajo de spukit");
-_Static_assert(sizeof(struct gfx_result) <= 112, "gfx_result cabe en un resultado de spukit");
+_Static_assert(sizeof(struct gfx_result) == 112, "gfx_result conserva los 112 bytes del resultado de spukit");
 
 /* Clases de primitiva: cambian partes del estado (los rectángulos no se
  * descartan por orientación ni usan la profundidad de los vértices). */
@@ -615,6 +615,7 @@ static struct gfx_vertex *begin_prim(struct gfx_state *g, enum prim_kind kind, i
 		uint32_t t0 = gfx_io_clock();
 		build_state(g, &d, kind, tile);
 		g->res->t_state += gfx_io_clock() - t0;
+		GFX_DETAIL(g, g->detail->state_builds++);
 		d.prim_kind = kind;
 		d.prim_tile = (uint32_t)tile;
 		g->dirty = false;
@@ -662,12 +663,16 @@ static void lerp_vertex(struct gfx_vertex *o, const struct gfx_vertex *a, const 
 
 void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
 {
+	uint32_t td = 0, ts = 0;
+	GFX_DETAIL(g, { td = gfx_io_clock(); ts = g->res->t_state; g->detail->triangles_in++; });
 	if (a >= GFX_MAX_VTX || b >= GFX_MAX_VTX || c >= GFX_MAX_VTX)
-		return;
+		goto detail_done;
 	const struct gfx_vtx *v[3] = { &g->vtx[a], &g->vtx[b], &g->vtx[c] };
 	/* Fuera del mismo plano los tres: no se ve. */
-	if (v[0]->clip & v[1]->clip & v[2]->clip & GFX_CLIP_MASK)
-		return;
+	if (v[0]->clip & v[1]->clip & v[2]->clip & GFX_CLIP_MASK) {
+		GFX_DETAIL(g, g->detail->triangles_common++);
+		goto detail_done;
+	}
 	struct gfx_vertex p[4];
 	for (int i = 0; i < 3; i++)
 		gfx_vtx_out(g, v[i], &p[i]);
@@ -691,9 +696,12 @@ void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
 			d[i] = v[i]->z + v[i]->w;
 			behind += d[i] < 0.0f;
 		}
-		if (behind == 3)
-			return;
+		if (behind == 3) {
+			GFX_DETAIL(g, g->detail->triangles_near++);
+			goto detail_done;
+		}
 		if (behind) {
+			GFX_DETAIL(g, g->detail->triangles_clipped++);
 			struct gfx_vertex in[3] = { p[0], p[1], p[2] };
 			n = 0;
 			for (int i = 0; i < 3; i++) {
@@ -714,8 +722,9 @@ void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
 	}
 	struct gfx_vertex *o = begin_prim(g, PRIM_TRI, g->tex_tile, 3 * (n - 2));
 	if (!o)
-		return;
+		goto detail_done;
 	g->res->triangles++;
+	GFX_DETAIL(g, g->detail->triangles_ok++);
 	o[0] = p[0];
 	o[1] = p[1];
 	o[2] = p[2];
@@ -724,6 +733,8 @@ void gfx_triangle(struct gfx_state *g, uint32_t a, uint32_t b, uint32_t c)
 		o[4] = p[2];
 		o[5] = p[3];
 	}
+detail_done:
+	GFX_DETAIL(g, g->detail->t_triangle += gfx_io_clock() - td - (g->res->t_state - ts));
 }
 
 /* Rectángulo de pantalla en dos triángulos. x, y en píxeles; s, t en texels

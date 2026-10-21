@@ -140,6 +140,18 @@ static __attribute__((noinline, cold)) void fill_stack(void)
 	(void)here;
 }
 
+#if GFX_SPE0_IMG == 1
+/* Solo se ocupa este marco al pedir detalle: ninguna reserva en el camino
+ * normal. Se publica el bloque antes de devolver el resultado de la cola. */
+static __attribute__((noinline)) void run_detail(struct gfx_result *res)
+{
+	struct gfx_detail detail __attribute__((aligned(128)));
+	state.detail = &detail;
+	gfx_run(&state, &job, res);
+	state.detail = NULL;
+}
+#endif
+
 static int handler(void *ctx, const spukit_job *j, spukit_result *res)
 {
 	(void)ctx;
@@ -169,7 +181,13 @@ static int handler(void *ctx, const spukit_job *j, spukit_result *res)
 	 * manda): error, sin tocar nada. */
 	if (!(job.flags & GFX_JOB_DPC) && gfx_spe0_image(job.gbi) != GFX_SPE0_IMG)
 		return -2;
-	gfx_run(&state, &job, (struct gfx_result *)res->data);
+#if GFX_SPE0_IMG == 1
+	if (job.detail_version == GFX_DETAIL_VERSION && job.detail_cap >= sizeof(struct gfx_detail) &&
+	    job.detail_ea && !(job.detail_ea & 127) && !(job.detail_ea >> 32))
+		run_detail((struct gfx_result *)res->data);
+	else
+#endif
+		gfx_run(&state, &job, (struct gfx_result *)res->data);
 	return 0;
 }
 

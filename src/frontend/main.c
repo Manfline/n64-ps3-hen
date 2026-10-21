@@ -2052,16 +2052,17 @@ static struct {
 static void inval_check(void)
 {
 	struct salsa64_rec_stats *st = &rec.stats;
-	if (st->invalidated < inval_seen.all || st->inval_cpu < inval_seen.cpu)
+	uint64_t written = rec.diag.hits[0] + rec.diag.hits[1] + rec.diag.hits[2];
+	if (written < inval_seen.all || st->inval_cpu < inval_seen.cpu)
 		inval_seen.all = inval_seen.cpu = 0;  /* el recompilador volvió a empezar (otro juego) */
-	uint64_t all = st->invalidated - inval_seen.all, cpu = st->inval_cpu - inval_seen.cpu;
+	uint64_t all = written - inval_seen.all, cpu = st->inval_cpu - inval_seen.cpu;
 	if (all >= INVAL_MASS)
 		salsa64_log("recompilador: %llu bloques invalidados en el campo %u: %llu por escrituras del CPU "
 			    "(%06x–%06x), %llu por DMA u otros (%06x–%06x)", (unsigned long long)all, n64.bus.vi.fields,
 			    (unsigned long long)cpu, cpu ? st->inval_cpu_lo : 0, cpu ? st->inval_cpu_hi : 0,
 			    (unsigned long long)(all - cpu), all > cpu ? st->inval_other_lo : 0,
 			    all > cpu ? st->inval_other_hi : 0);
-	inval_seen.all = st->invalidated;
+	inval_seen.all = written;
 	inval_seen.cpu = st->inval_cpu;
 	salsa64_rec_inval_reset(&rec);
 }
@@ -2121,8 +2122,11 @@ static void emu_thread(void *arg)
 			 (n64.cpu.cycles - c0) - (n64.cpu.idle_cycles - i0), gfx_spu.sleep_us + jpeg_spu.sleep_us - s0,
 			 h1.load && h1.load_phase == ph0 ? (int)ph0 : -1);
 		cheats_apply(&game_cheats, &n64.bus);  /* los activos del juego (vacío si no hay) */
-		if (use_rec)
+		if (use_rec) {
 			inval_check();
+			if (n64.bus.vi.fields % 300 == 0)
+				salsa64_rec_diag_report(&rec, spukit_tick_hz(), false, salsa64_log);
+		}
 		uint64_t t1 = sysGetSystemTime();
 		n64.cpu.rec_mark = SALSA64_SMP_OTHER;
 		beat.emu_at = "fin del campo";
@@ -2175,6 +2179,8 @@ static void emu_thread(void *arg)
 		if (req)
 			emu_park();
 	}
+	if (use_rec)
+		salsa64_rec_diag_report(&rec, spukit_tick_hz(), true, salsa64_log);
 	beat.emu_at = "terminado";
 	lwsync();
 	emu_done = 1;
@@ -4724,6 +4730,10 @@ static enum game_end run_game_once(uint8_t *rom, uint32_t rom_size, const char *
 	}
 
 	rec.opts = SALSA64_REC_OPT_PIN;  /* +7 % en nemu64-test (docs/perf-log.md) */
+	if (file_exists(SALSA64_DATA_DIR "/jit-invalidacion-vieja"))
+		rec.opts |= SALSA64_REC_OPT_IDLE_RECOMPILE;
+	salsa64_log("recompilador: descartes de espera por %s (jit-invalidacion-vieja para recompilar)",
+		    rec.opts & SALSA64_REC_OPT_IDLE_RECOMPILE ? "recompilacion de rangos" : "parche de una palabra PPC");
 	rec.fm_window = NULL;
 	if (salsa64_ps3_fastmem_ptr() && rdram == salsa64_ps3_fastmem_ptr()) {
 		rec.opts |= SALSA64_REC_OPT_FASTMEM;

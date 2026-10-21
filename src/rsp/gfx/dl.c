@@ -75,6 +75,7 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 	uint32_t t_start = gfx_io_clock();
 	g->job = job;
 	g->res = res;
+	gfx_io_detail_begin(g);
 	if (job->flags & GFX_JOB_RESET)
 		gfx_rdp_reset(g);
 	/* El microcódigo se carga con cada tarea: su estado empieza de cero. */
@@ -166,9 +167,20 @@ void gfx_run(struct gfx_state *g, const struct gfx_job *job, struct gfx_result *
 		}
 	}
 
+	uint32_t t_end = 0;
+	GFX_DETAIL(g, t_end = gfx_io_clock());
 	gfx_flush_draw(g);
 	gfx_io_end(g);
+	GFX_DETAIL(g, g->detail->t_end = gfx_io_clock() - t_end);
 	res->t_total = gfx_io_clock() - t_start;
+	GFX_DETAIL(g, {
+		struct gfx_detail *d = g->detail;
+		d->commands = res->commands;
+		d->vtx_bytes = res->vtx_bytes; d->cmd_bytes = res->cmd_bytes; d->tex_bytes = res->tex_bytes;
+		d->t_total = res->t_total; d->t_vtx = res->t_vtx; d->t_state = res->t_state; d->t_load = res->t_load;
+		d->t_rest = d->t_total - d->t_vtx - d->t_state - d->t_load - d->t_triangle - d->t_matrix - d->t_dl - d->t_end;
+	});
+	gfx_io_detail_end(g);
 #ifdef SALSA64_DEBUG_DL
 	if (debug_on)
 		fprintf(stderr, "fin: %u comandos, %u triángulos, %u sin implementar (último %02x), banderas %x\n",
