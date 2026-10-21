@@ -1,5 +1,127 @@
 # Registro de rendimiento
 
+## 2026-10-20 — A/B de recorte SIMD: menor coste de geometría (PS3 real)
+
+Mismo paquete `salsa64-recorte-vector`: referencia `spu_gfx1fase7` frente a
+`spu_gfx1fase8` con `gfx-recorte-vector`. Ambas aperturas dieron hash/listas
+iguales al PPE, vectorial/escalar bit a bit iguales y detalle A/B con cero
+diferencias. La experimental verificó además 64 lotes/256 máscaras de
+recorte sin diferencias, completó 5975 tareas y dejó 3040 bytes de pila sin
+tocar al cerrar (estimación por ceros), holgura de build 1648.
+
+Se tomaron todas las ventanas completas de 100 tareas con más de 2000
+vértices vectoriales por tarea: 50 ventanas de referencia y 51 del
+experimento. Los tiempos se ponderan por vértices, usando los ms/tarea y
+promedios impresos (redondeados); el decrementador usa 79,8 MHz.
+
+| Medida | Referencia | Recorte SIMD |
+| --- | ---: | ---: |
+| Lote, ticks por vértice vectorial ponderados | 18,22 | 16,02 |
+| Mediana por ventana y rango | 18,2 (18,0–18,4) | 16,0 (15,8–16,2) |
+| Etapa de vértices, ns por vértice total ponderados | 267,56 | 241,30 |
+| Cobertura de la ruta vectorial | 96,02 % | 96,05 % |
+
+El lote consume aproximadamente **12,1 % menos** tiempo por vértice
+vectorial; la etapa completa de vértices, **9,8 % menos** por vértice total.
+Como comprobación local, las ventanas 5401–5500 tienen 4387,7/4344,0
+vértices, 202,1/200,7 cargas y 188,4/189,4 de cola por tarea: el lote pasa
+de 0,951 a 0,834 ms/tarea y vértices de 1,164 a 1,047; RDRAM y resto
+mantienen 0,043 y 0,170 ms/tarea en ambos. La selección de ventanas global
+no exige una escena idéntica; no atribuir un porcentaje de FPS ni de tiempo
+total de cuadro a este cambio. El diagnóstico sigue activo en ambos modos.
+
+Log experimental `build/ps3/recorte-vector-20261020.log`, SHA-256
+`f5cfc805ffc7da903d81c3103bdc10b1f7f074c1ee411e24665f86fcbbf1b055`;
+referencia y huella en la entrada siguiente. El resultado justifica conservar
+la variante como candidata de integración; falta regresión en otras escenas
+y familias antes de convertirla en comportamiento normal.
+
+## 2026-10-20 — Referencia del A/B de recorte SIMD (PS3 real)
+
+Paquete `salsa64-recorte-vector`, interruptor experimental apagado y fase 7
+confirmada (`spu_gfx1fase7`). Hash y tareas iguales al PPE,
+vectorial/escalar bit a bit iguales; A/B sintético 17 pares sin diferencias
+(mediana sin/con detalle 0,205/0,209 ms). Cierre tras 6287 tareas, con 3168
+bytes de pila sin tocar (estimación por ceros).
+
+Última ventana completa 6101–6200: 7243,1 vértices/tarea, 6963,0 vectoriales
+y 280,1 de cola; lote 1,592 ms/tarea y 18,2 ticks/vértice vectorial,
+RDRAM 0,070, resto 0,275 de 1,938 ms/tarea de vértices (redondeados).
+La parcial final (87 tareas) registra 18,3 ticks de lote y 3,1 de resto.
+Es la referencia del mismo paquete: no comparar campos/s entre escenas
+distintas ni anunciar una ganancia hasta recoger el modo experimental.
+Log `build/ps3/recorte-referencia-20261020.log`, SHA-256
+`363e91fb19096318f97c1a2169902669cb197dd976bfa7dbf3a2be2039139098`.
+
+## 2026-10-20 — Lote completo F3DEX2 en Road Rash 64 (PS3 real)
+
+Paquete `salsa64-spe-fase7`, imagen `spu_gfx1fase7` confirmada, 7907 tareas.
+Hash y tareas iguales al PPE, vectorial/escalar bit a bit iguales; A/B 17
+pares sin diferencias (mediana sin/con detalle 0,205/0,210 ms). Holgura de
+build 1776 bytes y 3168 sin tocar al cerrar (estimación por ceros).
+
+Ventana 7401–7500: 8863,8 vértices/tarea, 8561,0 vectoriales y 302,8 de cola.
+Los 2,371 ms/tarea de vértices se reparten en lote completo 1,941 ms
+(81,9 %), RDRAM 0,089 y resto 0,341 (14,4 %). El lote mide 18,1 ticks por
+vértice vectorial y resto 3,1 por vértice total. La última ventana completa,
+7801–7900, registra lote 0,992, RDRAM 0,048 y resto 0,198 de 1,238 ms/tarea;
+18,3 y 3,5 ticks/vértice, respectivamente.
+
+El intervalo incluye desempaquetado, matriz y postproceso. El trabajo interno
+del lote domina este reparto; la carga externa y las colas quedan como coste
+secundario. No identifica por sí solo una instrucción ni mide una mejora.
+Las aperturas de fases 6 y 7 tuvieron escenas distintas: no restar sus tiempos
+para calcular el coste de matriz/desempaquetado. Log local
+`build/ps3/vect-fase7-20261020.log`, SHA-256
+`d0c0e46827c4a7cf3f170885ad11b6a0c6e2a96f983b2f7580faca359f65a2c7`.
+
+## 2026-10-20 — Postproceso conjunto F3DEX2 en Road Rash 64 (PS3 real)
+
+`gfx-fase-6`, imagen `spu_gfx1fase6`, geometría vectorial. Hash y tareas
+sintéticas iguales al PPE; vectorial/escalar iguales bit a bit; autoprueba
+A/B 17 pares, cero diferencias, medianas sin/con 0,205/0,210 ms. El cierre
+registró 6142 tareas y 3168 bytes de pila sin tocar (estimación por ceros),
+con holgura de build de 1776 bytes.
+
+Ventana completa de tareas 6001–6100: 9316,5 vértices/tarea, de los cuales
+8932,4 vectoriales y 384,1 de cola. El tiempo de vértices fue 2,516 ms/tarea:
+RDRAM 0,094, postproceso completo 1,452 y resto 0,969 (redondeados). Son
+13,0 ticks por vértice vectorial de postproceso y 8,3 por vértice total del
+resto. La ventana parcial final de 42 tareas mantiene ambos valores.
+
+Este intervalo cubre las copias x/y/z/w y las fases 2–5 juntas, con un par
+de relojes por lote. Excluye desempaquetado y matriz; esos trabajos, las
+colas escalares y la envoltura de carga permanecen en resto. Los relojes y
+la planificación del compilador perturban la medida; no sumar las fases
+1–5 de otras aperturas para deducir una duración sin instrumentación ni
+comparar campos/s como ganancia. Log local
+`build/ps3/vect-fase6-20261020.log`, SHA-256
+`fc21a738a5a2a6ef250a819ab34de223d759ae97f2a5a40824cf4b57aa118d78`.
+
+## 2026-10-20 — Subfases de vértices F3DEX2 en Road Rash 64 (PS3 real)
+
+Cinco aperturas de la misma carrera, con interpolación apagada, escala interna
+5× y la ruta vectorial normal, cargaron una imagen de diagnóstico distinta de
+la imagen 1. Las autopruebas vectorial/escalar y A/B de las cinco aberturas
+reportaron cero diferencias. La fase 5 no incluye las copias directas de
+x/y/z/w, para conservar la holgura mínima de pila.
+
+| Subfase medida | Ticks/vértice | Resto sin esa fase | RDRAM |
+|---|---:|---:|---:|
+| Desempacado | **4,6** | 16,4 | 0,8 |
+| Proyección/división | **4,9** | 20,1 | 0,8 |
+| Recorte | **5,0** | 20,4 | 0,8 |
+| Niebla | **3,8** | 20,9 | 0,8 |
+| Conversión/escritura | **5,6** | 19,2 | 0,8 |
+
+Cada fila procede de la ventana final de su propia apertura (unas seis mil
+tareas de la imagen 1); las cargas no son idénticas. Por ello los restos no
+se suman ni sirven para comparar campos/s. Tampoco aparece una subfase única
+que explique los ~20 ticks por vértice: las cinco cuestan 3,8–5,6 ticks en
+sus imágenes instrumentadas. El siguiente cambio debe partir del código
+máquina de esas rutas y conservar un interruptor A/B; no se infiere una
+ganancia de rendimiento de estas corridas.
+
 ## 2026-10-20 — Lote de vértices F3DEX2 del SPE (host y presupuesto de local store)
 
 La inspección del objeto SPU de `gfx_vertices` confirmó un recorrido por

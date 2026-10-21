@@ -51,7 +51,7 @@ SPUKIT  := 1
 # de Indiana Jones y Battle for Naboo (Factor 5 con su DMEM de 4 KB). Cada una
 # con sus objetos en obj/spu-gfx<n>.
 GFX_IMAGES := 0 1 2 3 4
-GFX_PHASES := 1 2 3 4 5
+GFX_PHASES := 1 2 3 4 5 6 7 8
 SPU_PROGS := $(addprefix gfx,$(GFX_IMAGES)) $(addprefix gfx1fase,$(GFX_PHASES)) audio rsp jpeg crt lz
 GFX_SPU_SRCS := $(R)/src/spu/gfx/main.c $(R)/src/spu/gfx/io_spu.c \
                 $(filter-out %/io_mem.c %/sync.c %/state.c %/selftest.c,$(wildcard $(R)/src/rsp/gfx/*.c))
@@ -123,48 +123,53 @@ $(OBJ)/crt_trinitron_lines_b.fpo: filters/crt_tube_lines.cgh
 
 # Un objeto de src/rsp/gfx en todas las imágenes del SPE 0.
 GFX_OBJ = $(foreach i,$(GFX_IMAGES),$(OBJ)/spu-gfx$(i)/src/rsp/gfx/$(1))
+# Las variantes de medición son la imagen 1 con un único intervalo activo.
+# Deben conservar las mismas opciones de tamaño que la imagen normal:
+# de otro modo se mediría otro programa y se pondría en riesgo su pila.
+GFX_PHASE_OBJ = $(foreach p,$(GFX_PHASES),$(OBJ)/spu-gfx1fase$(p)/src/rsp/gfx/$(1))
+GFX_ALL_OBJ = $(call GFX_OBJ,$(1)) $(call GFX_PHASE_OBJ,$(1))
 
 # El combiner, con -Os en el SPE 0: 5,6 KB menos de código (de 16,8 a 11,2
 # KB) que quedan para la pila. Corre una vez por estado de dibujo, no por
 # píxel ni por vértice.
-$(call GFX_OBJ,combine.c.o): SPU_CFLAGS += -Os
+$(call GFX_ALL_OBJ,combine.c.o): SPU_CFLAGS += -Os
 # Los fondos de S2DEX (salas prerrenderizadas de Zelda OoT), también: 0,9 KB
 # menos de código y 112 bytes menos de marco en la cadena más honda de la
 # pila; se dibujan en unas decenas de tiras por cuadro.
-$(call GFX_OBJ,s2dex.c.o): SPU_CFLAGS += -Os
+$(call GFX_ALL_OBJ,s2dex.c.o): SPU_CFLAGS += -Os
 # El despacho de comandos de Perfect Dark (f3dpd.c; los vértices y las
 # texturas van en geom.c y tmem.c), también: lo que ahorra paga el TEXRECT
 # dentro del tramo S2DEX (el cielo de Kirby 64).
-$(call GFX_OBJ,f3dpd.c.o): SPU_CFLAGS += -Os
+$(call GFX_ALL_OBJ,f3dpd.c.o): SPU_CFLAGS += -Os
 # Lo de Diddy Kong Racing (f3ddkr.c: matrices, vértices y triángulos por DMA),
 # también: solo corre con ese juego.
-$(call GFX_OBJ,f3ddkr.c.o): SPU_CFLAGS += -Os
+$(call GFX_ALL_OBJ,f3ddkr.c.o): SPU_CFLAGS += -Os
 # Lo de Rogue Squadron (f5rogue.c: vértices, triángulos, mallas generadas y
 # rectángulos), también: solo corre con ese juego.
-$(call GFX_OBJ,f5rogue.c.o): SPU_CFLAGS += -Os
+$(call GFX_ALL_OBJ,f5rogue.c.o): SPU_CFLAGS += -Os
 # Y la de Indiana Jones y Naboo (f5indy.c), igual.
-$(call GFX_OBJ,f5indy.c.o): SPU_CFLAGS += -Os
+$(call GFX_ALL_OBJ,f5indy.c.o): SPU_CFLAGS += -Os
 # Lo de la interpolación de cuadros (vgroup.c), también: no le quita local
 # store ni pila a la HLE.
-$(call GFX_OBJ,vgroup.c.o): SPU_CFLAGS += -Os
+$(call GFX_ALL_OBJ,vgroup.c.o): SPU_CFLAGS += -Os
 # Lo de F3DFLX, el microcódigo de F-Zero X (flx.c), también: solo corre con
 # ese juego. Y el recorrido de la display list (dl.c) vuelve a -Os para
 # pagarlo (−370 bytes, docs/estado.md 2026-10-13): de lo suyo solo
 # gfx_dl_next corre por comando, y es corta.
-$(call GFX_OBJ,flx.c.o) $(call GFX_OBJ,dl.c.o): SPU_CFLAGS += -Os
+$(call GFX_ALL_OBJ,flx.c.o) $(call GFX_ALL_OBJ,dl.c.o): SPU_CFLAGS += -Os
 # F3DEX2 solo descodifica y despacha comandos; el trabajo por vértice y
 # triángulo queda en geom.c y rdp.c. En la imagen 1, hacerlo compacto deja
 # lugar en el local store para el lote SIMD de geometría.
-$(call GFX_OBJ,f3dex2.c.o): SPU_CFLAGS += -Os
+$(call GFX_ALL_OBJ,f3dex2.c.o): SPU_CFLAGS += -Os
 # La carga/decodificación de TMEM no es la ruta que se vectoriza y, en la
 # imagen 1, el tamaño compacto libera local store para la geometría caliente.
-$(OBJ)/spu-gfx1/src/rsp/gfx/tmem.c.o: SPU_CFLAGS += -Os
+$(OBJ)/spu-gfx1/src/rsp/gfx/tmem.c.o $(call GFX_PHASE_OBJ,tmem.c.o): SPU_CFLAGS += -Os
 # La caché de texturas (texcache.c), también: ~1,2 KB de código para la pila
 # al juntar F3DFLX con el S2DEX de las salas de Zelda (la holgura bajaba a
 # 1328); identificar texturas cuesta 0,01–0,02 ms más por tarea.
-$(call GFX_OBJ,texcache.c.o): SPU_CFLAGS += -Os
+$(call GFX_ALL_OBJ,texcache.c.o): SPU_CFLAGS += -Os
 # make no ve un cambio de banderas: que se recompilen si cambia este archivo.
-$(call GFX_OBJ,combine.c.o) $(call GFX_OBJ,s2dex.c.o) $(call GFX_OBJ,f3dpd.c.o) \
-$(call GFX_OBJ,f3ddkr.c.o) $(call GFX_OBJ,f5rogue.c.o) $(call GFX_OBJ,f5indy.c.o) $(call GFX_OBJ,vgroup.c.o) $(call GFX_OBJ,flx.c.o) \
-$(call GFX_OBJ,dl.c.o) $(call GFX_OBJ,f3dex2.c.o) $(call GFX_OBJ,texcache.c.o): Makefile
-$(OBJ)/spu-gfx1/src/rsp/gfx/tmem.c.o: Makefile
+$(call GFX_ALL_OBJ,combine.c.o) $(call GFX_ALL_OBJ,s2dex.c.o) $(call GFX_ALL_OBJ,f3dpd.c.o) \
+$(call GFX_ALL_OBJ,f3ddkr.c.o) $(call GFX_ALL_OBJ,f5rogue.c.o) $(call GFX_ALL_OBJ,f5indy.c.o) $(call GFX_ALL_OBJ,vgroup.c.o) $(call GFX_ALL_OBJ,flx.c.o) \
+$(call GFX_ALL_OBJ,dl.c.o) $(call GFX_ALL_OBJ,f3dex2.c.o) $(call GFX_ALL_OBJ,texcache.c.o): Makefile
+$(OBJ)/spu-gfx1/src/rsp/gfx/tmem.c.o $(call GFX_PHASE_OBJ,tmem.c.o): Makefile

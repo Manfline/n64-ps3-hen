@@ -28,6 +28,73 @@ del SPE. Además la autoprueba habitual compara el SPE instrumentado contra
 el PPE sin detalle con su tolerancia previa. Estas listas no representan
 la carga de una carrera y sus tiempos solo son válidos en PS3 real.
 
+## Medición por subfase de vértices
+
+Para sustituir la columna `matriz` por otro intervalo de vértices, crear
+antes de abrir el juego exactamente uno de estos archivos vacíos en
+`/dev_hdd0/salsa64/`:
+
+| Archivo | Intervalo medido |
+| --- | --- |
+| `gfx-fase-1` | Desempacado de x/y/z desde RDRAM. |
+| `gfx-fase-2` | Recíproco de w, división y proyección de pantalla. |
+| `gfx-fase-3` | Comparaciones y banderas de recorte. |
+| `gfx-fase-4` | Niebla y límite del alfa. |
+| `gfx-fase-5` | Conversión de ST/color y escritura del vértice intermedio. |
+| `gfx-fase-6` | Postproceso completo del lote: copias x/y/z/w, recorte, proyección, ST/color y niebla. |
+| `gfx-fase-7` | Lote completo de cuatro: desempaquetado, matriz y postproceso; excluye DMA, colas escalares y envoltura de carga. |
+| `gfx-fase-8` | Mismo intervalo de lote completo, con las seis banderas de recorte calculadas por SIMD. |
+
+El archivo de fase activa el detalle aunque no exista `gfx-spe-detalle`. Solo
+cambia la imagen 1; las demás imágenes no llevan los relojes. Sin un archivo
+de fase, `gfx-spe-detalle` mide la matriz como antes. Si hay más de uno, el
+log lo indica y usa el número menor; renombrar los demás con el sufijo `.off`
+antes de abrir de nuevo. La fase 5 no incluye las copias directas de x/y/z/w:
+un segundo intervalo reducía la holgura de pila bajo el mínimo. La fase 6 las
+incluye con las demás etapas mediante un único intervalo alrededor de todo el
+postproceso.
+
+La fase 7 empieza antes del desempaquetado y termina tras la niebla del cuarto
+vértice, con un único par de relojes por lote. El resto contiene la envoltura,
+las colas escalares y los trabajos externos al lote, una vez descontada la
+RDRAM. No restar directamente los tiempos de fase 6 y 7 de aperturas distintas:
+el compilador y la escena pueden cambiar. Comprobar el nombre de imagen
+`spu_gfx1fase7`, la cobertura del lote y las autopruebas antes de interpretar
+la nueva partición.
+
+## Comparación experimental del recorte SIMD
+
+`gfx-recorte-vector` activa la variante 8 y el detalle del lote completo.
+Tiene prioridad sobre `gfx-fase-*`; el log lo anuncia. Para A/B conservar
+`gfx-fase-7` y alternar únicamente `gfx-recorte-vector` con su nombre `.off`,
+cerrando y abriendo el juego entre corridas. `gfx-escalar` debe estar apagado:
+ese interruptor fuerza la geometría general y evita ambas variantes del lote.
+
+El cambio aplica seis comparaciones y máscaras a los cuatro vértices; no
+cambia matriz, perspectiva ni niebla. Al cargar la variante se comprueban
+directamente 64 lotes/256 vértices contra las banderas del PPE, con igualdad
+en planos, ceros con signo y w negativo; además se conservan las autopruebas
+de listas, vectorial/escalar y detalle A/B. Un fallo de cualquiera invalida
+la medición. Esta autoprueba sintética no sustituye comparar una escena con
+el microcódigo real ni valida todos los efectos gráficos del juego.
+
+Comparar varias ventanas con vértices/cargas/triángulos y cobertura del lote
+parecidos, usando ticks por vértice vectorial y ms/tarea. Si cambian los
+campos/s sin bajar el coste comparable de vértices, no atribuir una mejora
+al recorte. La variante sigue experimental y optativa. El A/B en PS3 real
+midió 18,22 → 16,02 ticks por vértice vectorial del lote (−12,1 %), sin
+demostrar una ganancia global de FPS. Las regresiones de OoT, Majora y
+F-Zero X no registraron diferencias en las autopruebas; el reporte visual
+de niebla de F-Zero X sigue abierto, sin atribución al cambio. Ver
+`docs/perf-log.md` y `docs/estado.md` para las ventanas y sus límites.
+
+Cada variante conserva las opciones de tamaño de la imagen 1. Las holguras
+de las fases 1–7 son 1776, 1648, 1648, 1648, 1648, 1776 y 1776 bytes,
+respectivamente; el mínimo exigido es 1536. Comparar una apertura por fase con la misma ruta,
+resolución y ajustes; no activar `gfx-escalar` en esa serie. Verificar primero
+las diferencias cero de las autopruebas, guardar cada log por separado y no
+atribuir una diferencia a una fase hasta repetir la ventana de tareas.
+
 ## Protocolo y memoria
 
 `gfx_job` usa los 16 bytes antes libres: dirección de 64 bits, capacidad y

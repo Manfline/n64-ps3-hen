@@ -18,10 +18,14 @@
 
 #if defined(__SPU__) && GFX_SPE0_IMG == 1
 #include <spu_intrinsics.h>
+#include <spukit/spu.h>
 #endif
 
 #include "core/endian.h"
 #include "rsp/gfx/hle.h"
+#if defined(__SPU__) && GFX_SPE0_IMG == 1 && GFX_SPE0_PHASE == 8
+#include "rsp/gfx/clip4.h"
+#endif
 
 static float inv_sqrt(float x)
 {
@@ -416,9 +420,9 @@ static void gfx_vertices4_fog(struct gfx_state *g, const uint8_t *src, uint32_t 
 	union { gfx_v4f q; float f[4]; } x, y, z, xo, yo, zo, wo;
 	const float *m = g->mvp;
 	/* `vtx_transform` se reutiliza para una única subfase seleccionada por
- 	 * trabajo; sin una imagen de fase conserva la medida de la matriz. */
+	 * imagen; sin una imagen de fase conserva la medida de la matriz. */
 	uint32_t t = 0;
-#if defined(GFX_SPE0_PHASE) && GFX_SPE0_PHASE == 1
+#if defined(GFX_SPE0_PHASE) && (GFX_SPE0_PHASE == 1 || GFX_SPE0_PHASE >= 7)
 	GFX_DETAIL(g, t = ~spu_read_decrementer());
 #endif
 	for (unsigned i = 0; i < 4; i++, src += 16) {
@@ -440,23 +444,37 @@ static void gfx_vertices4_fog(struct gfx_state *g, const uint8_t *src, uint32_t 
 	GFX_DETAIL(g, g->detail->vtx_transform += gfx_io_clock() - t;);
 	#endif
 	src -= 64;
+#if defined(GFX_SPE0_PHASE) && GFX_SPE0_PHASE == 6
+	/* Un solo intervalo para el postproceso completo del lote: incluye las
+	 * copias x/y/z/w que no cabían en la fase 5 y las fases 2 a 5.
+	 * El desempaquetado y la matriz quedan fuera del intervalo. */
+	GFX_DETAIL(g, t = ~spu_read_decrementer());
+#endif
+	#if GFX_SPE0_PHASE == 8
+	union { gfx_clip4u q; uint32_t u[4]; } clips;
+	clips.q = gfx_clip4_mask(xo.q, yo.q, zo.q, wo.q);
+	#endif
 	for (unsigned i = 0; i < 4; i++, src += 16) {
 		struct gfx_vtx *v = &g->vtx[v0 + i];
 		v->x = xo.f[i];
 		v->y = yo.f[i];
 		v->z = zo.f[i];
 		v->w = wo.f[i];
-		/* No se ramifica por plano: las comparaciones dan exactamente los
-		 * mismos seis bits que el OR condicional escalar. */
+		/* La variante 8 calcula los cuatro juegos de banderas con SIMD.
+		 * La referencia conserva las comparaciones escalares anteriores. */
 	#if defined(GFX_SPE0_PHASE) && GFX_SPE0_PHASE == 3
 		GFX_DETAIL(g, t = ~spu_read_decrementer());
 	#endif
+	#if GFX_SPE0_PHASE == 8
+		v->clip = clips.u[i];
+	#else
 		v->clip = (uint32_t)(v->x < -v->w) * GFX_CLIP_XN |
 			  (uint32_t)(v->x >  v->w) * GFX_CLIP_XP |
 			  (uint32_t)(v->y < -v->w) * GFX_CLIP_YN |
 			  (uint32_t)(v->y >  v->w) * GFX_CLIP_YP |
 			  (uint32_t)(v->z >  v->w) * GFX_CLIP_ZF |
 			  (uint32_t)(v->w < 0.0f) * GFX_CLIP_W;
+	#endif
 	#if defined(GFX_SPE0_PHASE) && GFX_SPE0_PHASE == 3
 		GFX_DETAIL(g, g->detail->vtx_transform += ~spu_read_decrementer() - t;);
 	#endif
@@ -490,6 +508,9 @@ static void gfx_vertices4_fog(struct gfx_state *g, const uint8_t *src, uint32_t 
 		GFX_DETAIL(g, g->detail->vtx_transform += ~spu_read_decrementer() - t;);
 	#endif
 	}
+#if defined(GFX_SPE0_PHASE) && (GFX_SPE0_PHASE >= 6)
+	GFX_DETAIL(g, g->detail->vtx_transform += ~spu_read_decrementer() - t;);
+#endif
 }
 #endif
 

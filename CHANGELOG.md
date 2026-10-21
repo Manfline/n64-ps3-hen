@@ -12,6 +12,16 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
   entrelazado de Racer ya no queda limitado por la tijera de su tarea RDP y
   deja de saltar verticalmente.
 
+- **Recorte SIMD experimental:** `gfx-recorte-vector` compara por planos
+  cuatro vértices F3DEX2 a la vez; conserva la fase 7 como referencia A/B y
+  añade autoprueba directa de las máscaras en el SPE. En el A/B de Road Rash
+  en PS3, el lote consume aproximadamente 12 % menos por vértice vectorial;
+  no representa una ganancia global de FPS.
+
+- **HLE gráfica:** en modo RSP a bajo nivel automático, Perfect Dark y
+  Conker conservan ahora sus microcódigos HLE. La autoprueba SPE↔PPE cubre
+  S2DEX suelto 1.x y 2.x, G_BRANCH_W de F3DZEX2 y el cambio a F3DFLX.
+
 - **HLE gráfica del SPE:** la imagen F3DEX2 procesa de cuatro en cuatro los
   vértices sin luces ni TEXGEN que llevan niebla. `gfx-escalar` conserva la
   ruta anterior para A/B y la autoprueba compara ambas salidas bit a bit.
@@ -24,6 +34,11 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
   bloque DMA externo con contadores de etapas, geometría y transferencias, y
   autoprueba sintética A/B; apagado por omisión, sin cambiar la cola ni el ABI
   del resultado gráfico.
+
+- **Subfases de vértices de la HLE gráfica del SPE:** `gfx-fase-1` a
+  `gfx-fase-7` seleccionan al abrir una medición de desempaquetado,
+  proyección, recorte, niebla, conversión/escritura, postproceso completo
+  o lote completo en la imagen F3DEX2.
 
 
 ## [0.2.9] — 2026-10-19

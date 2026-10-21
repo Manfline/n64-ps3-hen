@@ -13,6 +13,7 @@
 #include "rsp/gfx/backend.h"
 #include "rdp/targets.h"
 #include "rsp/gfx/hle.h"
+#include "rsp/gfx/clip4.h"
 
 #define DL_PA   0x10000u
 #define DATA_PA 0x20000u
@@ -2835,8 +2836,41 @@ static void gfx_clip_ratio_f3dex2(void)
 	CHECK(d1->scissor[0] == 120 * 4 && d1->scissor[1] == 90 * 4 && d1->scissor[2] == 200 * 4 &&
 	      d1->scissor[3] == 150 * 4);}
 
+/* Misma operación vectorial que la variante SPE; el oráculo usa el OR
+ * condicional de la ruta escalar. Incluye igualdad con planos, w negativo,
+ * cero con ambos signos y carriles que producen banderas distintas. */
+static void gfx_clip_four_planes(void)
+{
+	static const float values[8] = { -65536.0f, -2.0f, -1.0f, -0.0f, 0.0f, 1.0f, 2.0f, 65536.0f };
+	for (unsigned iw = 0; iw < 8; iw++)
+	for (unsigned ix = 0; ix < 8; ix++)
+	for (unsigned iy = 0; iy < 8; iy++)
+	for (unsigned iz = 0; iz < 8; iz++) {
+		union { gfx_clip4f q; float f[4]; } x, y, z, w;
+		union { gfx_clip4u q; uint32_t u[4]; } clips;
+		for (unsigned lane = 0; lane < 4; lane++) {
+			x.f[lane] = values[(ix + lane) & 7];
+			y.f[lane] = values[(iy + lane * 3) & 7];
+			z.f[lane] = values[(iz + lane * 5) & 7];
+			w.f[lane] = values[(iw + lane * 7) & 7];
+		}
+		clips.q = gfx_clip4_mask(x.q, y.q, z.q, w.q);
+		for (unsigned lane = 0; lane < 4; lane++) {
+			uint32_t ref = 0;
+			if (x.f[lane] < -w.f[lane]) ref |= GFX_CLIP_XN;
+			if (x.f[lane] > w.f[lane]) ref |= GFX_CLIP_XP;
+			if (y.f[lane] < -w.f[lane]) ref |= GFX_CLIP_YN;
+			if (y.f[lane] > w.f[lane]) ref |= GFX_CLIP_YP;
+			if (z.f[lane] > w.f[lane]) ref |= GFX_CLIP_ZF;
+			if (w.f[lane] < 0.0f) ref |= GFX_CLIP_W;
+			CHECK_EQ(clips.u[lane], ref);
+		}
+	}
+}
+
 void t_suite_gfx(void)
 {
+	RUN(gfx_clip_four_planes);
 	RUN(gfx_combiner_forms);
 	RUN(gfx_s2dex_task_rectangle);
 	RUN(gfx_s2dex1_task_sprite);

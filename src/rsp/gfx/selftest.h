@@ -5,10 +5,12 @@
  * (viewport, matrices, vértices, triángulos, cargas a la TMEM con LOADBLOCK
  * y LOADTLUT, texturas RGBA16 y CI4, combiners de uno y dos ciclos, dos
  * texturas, rectángulos, relleno) con la codificación de la familia del
- * microcódigo pedido y, en la segunda generación, un tramo S2DEX2 con un
- * G_BG_COPY. Nada viene de un juego ni de un microcódigo: vértices, texturas
- * y textos son inventados (el texto "RSP Gfx ucode S2DEX…" es lo que
- * reconoce gfx_ucode_kind).
+ * microcódigo pedido; en la segunda generación, un tramo S2DEX2 con un
+ * G_BG_COPY, y en las tareas S2DEX sueltas 1.x y 2.x, su propia copia de
+ * fondo y terminación de lista. F3DZEX2 pasa por G_BRANCH_W y F3DEX2 cambia
+ * también a F3DFLX y sube su tabla de alfa. Nada viene de un juego ni de un
+ * microcódigo: vértices, texturas y textos son inventados (el texto
+ * "RSP Gfx ucode S2DEX…" es lo que reconoce gfx_ucode_kind).
  *
  * Al cargar una imagen del SPE 0 (src/platform/ps3/gfx_spu.c) cada
  * microcódigo de la imagen se ejecuta en el SPE y en el PPE sobre copias

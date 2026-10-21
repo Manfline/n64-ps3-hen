@@ -40,6 +40,12 @@
 #include "spu_gfx1fase4_stack.h"
 #include "spu_gfx1fase5_bin.h"
 #include "spu_gfx1fase5_stack.h"
+#include "spu_gfx1fase6_bin.h"
+#include "spu_gfx1fase6_stack.h"
+#include "spu_gfx1fase7_bin.h"
+#include "spu_gfx1fase7_stack.h"
+#include "spu_gfx1fase8_bin.h"
+#include "spu_gfx1fase8_stack.h"
 #include "spu_gfx2_bin.h"
 #include "spu_gfx2_stack.h"
 #include "spu_gfx3_bin.h"
@@ -51,31 +57,37 @@
  * (tools/spu-stack.py): hasta dónde llega el programa en el local store y
  * la holgura de la pila. */
 struct gfx_spu_image {
+	const char *program;
 	const u8 *bin;
 	const u32 *size;
 	uint32_t end, stack;
 	int32_t slack;
 };
 static const struct gfx_spu_image images[GFX_SPE0_IMAGES] = {
-	{ spu_gfx0_bin, &spu_gfx0_bin_size, SPU_GFX0_END, SPU_GFX0_STACK, SPU_GFX0_SLACK },
-	{ spu_gfx1_bin, &spu_gfx1_bin_size, SPU_GFX1_END, SPU_GFX1_STACK, SPU_GFX1_SLACK },
-	{ spu_gfx2_bin, &spu_gfx2_bin_size, SPU_GFX2_END, SPU_GFX2_STACK, SPU_GFX2_SLACK },
-	{ spu_gfx3_bin, &spu_gfx3_bin_size, SPU_GFX3_END, SPU_GFX3_STACK, SPU_GFX3_SLACK },
-	{ spu_gfx4_bin, &spu_gfx4_bin_size, SPU_GFX4_END, SPU_GFX4_STACK, SPU_GFX4_SLACK },
+	{ "spu_gfx0", spu_gfx0_bin, &spu_gfx0_bin_size, SPU_GFX0_END, SPU_GFX0_STACK, SPU_GFX0_SLACK },
+	{ "spu_gfx1", spu_gfx1_bin, &spu_gfx1_bin_size, SPU_GFX1_END, SPU_GFX1_STACK, SPU_GFX1_SLACK },
+	{ "spu_gfx2", spu_gfx2_bin, &spu_gfx2_bin_size, SPU_GFX2_END, SPU_GFX2_STACK, SPU_GFX2_SLACK },
+	{ "spu_gfx3", spu_gfx3_bin, &spu_gfx3_bin_size, SPU_GFX3_END, SPU_GFX3_STACK, SPU_GFX3_SLACK },
+	{ "spu_gfx4", spu_gfx4_bin, &spu_gfx4_bin_size, SPU_GFX4_END, SPU_GFX4_STACK, SPU_GFX4_SLACK },
 };
 static const struct gfx_spu_image phase_images[] = {
-	{ NULL, NULL, 0, 0, 0 },
-	{ spu_gfx1fase1_bin, &spu_gfx1fase1_bin_size, SPU_GFX1FASE1_END, SPU_GFX1FASE1_STACK, SPU_GFX1FASE1_SLACK },
-	{ spu_gfx1fase2_bin, &spu_gfx1fase2_bin_size, SPU_GFX1FASE2_END, SPU_GFX1FASE2_STACK, SPU_GFX1FASE2_SLACK },
-	{ spu_gfx1fase3_bin, &spu_gfx1fase3_bin_size, SPU_GFX1FASE3_END, SPU_GFX1FASE3_STACK, SPU_GFX1FASE3_SLACK },
-	{ spu_gfx1fase4_bin, &spu_gfx1fase4_bin_size, SPU_GFX1FASE4_END, SPU_GFX1FASE4_STACK, SPU_GFX1FASE4_SLACK },
-	{ spu_gfx1fase5_bin, &spu_gfx1fase5_bin_size, SPU_GFX1FASE5_END, SPU_GFX1FASE5_STACK, SPU_GFX1FASE5_SLACK },
+	{ NULL, NULL, NULL, 0, 0, 0 },
+	{ "spu_gfx1fase1", spu_gfx1fase1_bin, &spu_gfx1fase1_bin_size, SPU_GFX1FASE1_END, SPU_GFX1FASE1_STACK, SPU_GFX1FASE1_SLACK },
+	{ "spu_gfx1fase2", spu_gfx1fase2_bin, &spu_gfx1fase2_bin_size, SPU_GFX1FASE2_END, SPU_GFX1FASE2_STACK, SPU_GFX1FASE2_SLACK },
+	{ "spu_gfx1fase3", spu_gfx1fase3_bin, &spu_gfx1fase3_bin_size, SPU_GFX1FASE3_END, SPU_GFX1FASE3_STACK, SPU_GFX1FASE3_SLACK },
+	{ "spu_gfx1fase4", spu_gfx1fase4_bin, &spu_gfx1fase4_bin_size, SPU_GFX1FASE4_END, SPU_GFX1FASE4_STACK, SPU_GFX1FASE4_SLACK },
+	{ "spu_gfx1fase5", spu_gfx1fase5_bin, &spu_gfx1fase5_bin_size, SPU_GFX1FASE5_END, SPU_GFX1FASE5_STACK, SPU_GFX1FASE5_SLACK },
+	{ "spu_gfx1fase6", spu_gfx1fase6_bin, &spu_gfx1fase6_bin_size, SPU_GFX1FASE6_END, SPU_GFX1FASE6_STACK, SPU_GFX1FASE6_SLACK },
+	{ "spu_gfx1fase7", spu_gfx1fase7_bin, &spu_gfx1fase7_bin_size, SPU_GFX1FASE7_END, SPU_GFX1FASE7_STACK, SPU_GFX1FASE7_SLACK },
+	{ "spu_gfx1fase8", spu_gfx1fase8_bin, &spu_gfx1fase8_bin_size, SPU_GFX1FASE8_END, SPU_GFX1FASE8_STACK, SPU_GFX1FASE8_SLACK },
 };
 _Static_assert(GFX_SPE0_IMAGES == 5, "una entrada de `images` por imagen del SPE 0");
+_Static_assert(sizeof phase_images / sizeof phase_images[0] == 9, "una imagen por fase de vértices");
 
 static const struct gfx_spu_image *image_data(const struct salsa64_gfx_spu *s, int img)
 {
-	if (img == GFX_SPE0_F3DEX2 && s->detail_phase)
+	if (img == GFX_SPE0_F3DEX2 && s->detail_phase &&
+	    s->detail_phase < sizeof phase_images / sizeof phase_images[0])
 		return &phase_images[s->detail_phase];
 	return &images[img];
 }
@@ -123,6 +135,7 @@ static int check_hash(spukit_worker *w)
 #define SPE0_STACK_PATH SALSA64_DATA_DIR "/spe0-pila"
 #define SPE0_DETAIL_PATH SALSA64_DATA_DIR "/gfx-spe-detalle"
 #define SPE0_PHASE_PATH SALSA64_DATA_DIR "/gfx-fase-"
+#define SPE0_CLIP4_PATH SALSA64_DATA_DIR "/gfx-recorte-vector"
 #define SPE0_SCALAR_PATH SALSA64_DATA_DIR "/gfx-escalar"
 struct detail_window {
 	struct gfx_detail task __attribute__((aligned(128)));
@@ -136,6 +149,9 @@ static const char *detail_phase_name(uint32_t phase)
 {
 	static const char *const names[] = {
 		"matriz", "desempacado", "proyeccion/division", "recorte", "niebla", "conversion/escritura",
+		"postproceso completo",
+		"lote completo",
+		"lote completo/recorte SIMD",
 	};
 	return phase < sizeof names / sizeof names[0] ? names[phase] : "desconocida";
 }
@@ -272,7 +288,8 @@ static int check_lists(spukit_worker *w, int img, struct detail_window *detail)
 {
 	static const uint32_t gbis[] = { SALSA64_GBI_F3D,    SALSA64_GBI_F3DEX,  SALSA64_GBI_F3DWR,
 					 SALSA64_GBI_F3DPD,  SALSA64_GBI_F3DDKR, SALSA64_GBI_F3DJFG,
-					 SALSA64_GBI_F3DEX2, SALSA64_GBI_F3DZEX2, SALSA64_GBI_F3DEXBG,
+					 SALSA64_GBI_S2DEX1, SALSA64_GBI_F3DEX2, SALSA64_GBI_F3DZEX2,
+					 SALSA64_GBI_S2DEX,  SALSA64_GBI_F3DEXBG,
 					 SALSA64_GBI_F5ROGUE, SALSA64_GBI_F5INDY };
 	int bad = 0;
 	uint32_t task = 0;
@@ -381,6 +398,35 @@ static int check_detail(spukit_worker *w, struct detail_window *detail)
  * Se corre una vez por carriles y otra con GFX_JOB_SCALAR sobre el mismo SPE;
  * las salidas que consume el PPE deben coincidir palabra por palabra. Los
  * ticks no se comparan porque precisamente son el objeto del A/B. */
+static int check_clip4(spukit_worker *w)
+{
+	static const float values[8] = { -65536.0f, -2.0f, -1.0f, -0.0f, 0.0f, 1.0f, 2.0f, 65536.0f };
+	unsigned bad = 0;
+	for (unsigned iw = 0; iw < 8; iw++)
+	for (unsigned ix = 0; ix < 8; ix++) {
+		struct gfx_clip4_job j;
+		uint32_t ref[4], got[4];
+		for (unsigned i = 0; i < 4; i++) {
+			j.x[i] = values[(ix + i) & 7];
+			j.y[i] = values[(ix + i + 1) & 7];
+			j.z[i] = values[(ix + i + 3) & 7];
+			j.w[i] = values[(iw + i) & 7];
+			ref[i] = 0;
+			if (j.x[i] < -j.w[i]) ref[i] |= GFX_CLIP_XN;
+			if (j.x[i] > j.w[i]) ref[i] |= GFX_CLIP_XP;
+			if (j.y[i] < -j.w[i]) ref[i] |= GFX_CLIP_YN;
+			if (j.y[i] > j.w[i]) ref[i] |= GFX_CLIP_YP;
+			if (j.z[i] > j.w[i]) ref[i] |= GFX_CLIP_ZF;
+			if (j.w[i] < 0.0f) ref[i] |= GFX_CLIP_W;
+		}
+		const spukit_result *r = spukit_wait(w, spukit_post(w, GFX_JOB_CLIP4, &j, sizeof j));
+		memcpy(got, r->data, sizeof got);
+		bad += r->error != 0 || memcmp(got, ref, sizeof ref) != 0;
+	}
+	salsa64_log("gfx: autoprueba recorte SIMD: 64 lotes/256 vertices, %u diferencias", bad);
+	return bad != 0;
+}
+
 static int check_vector(spukit_worker *w)
 {
 	struct gfx_result out[2];
@@ -558,6 +604,7 @@ static int load_image(struct salsa64_gfx_spu *s, int img, uint32_t gbi)
 	int bad_hash = check_hash(s->worker);
 	int bad_lists = check_lists(s->worker, img, s->detail);
 	if (img == 1) bad_lists += check_vector(s->worker);
+	if (img == 1 && s->detail_phase == 8) bad_lists += check_clip4(s->worker);
 	if (img == 1 && s->detail) bad_lists += check_detail(s->worker, s->detail);
 	s->nocache = bad_hash != 0;
 	if (bad_lists)
@@ -587,11 +634,11 @@ static int load_image(struct salsa64_gfx_spu *s, int img, uint32_t gbi)
 		s->switches++;
 		s->switch_us += t4 - t0;
 	}
-	salsa64_log("SPE 0: imagen %s (spu_gfx%d, %u bytes del ELF) %s gbi %u: local store %u de 262144 bytes "
+	salsa64_log("SPE 0: imagen %s (%s, %u bytes del ELF) %s gbi %u: local store %u de 262144 bytes "
 		    "hasta _end, caché de texturas %u entradas, pila: la cadena más honda %u y holgura %d (build), "
 		    "%u sin tocar al cargar; hash %s, tareas de prueba %s",
-		    gfx_spe0_name(img), img, (unsigned)*images[img].size, from >= 0 ? "en lugar de la anterior para" : "para",
-		    (unsigned)gbi, in.end, in.tc_entries, images[img].stack, (int)images[img].slack, in.untouched,
+		    gfx_spe0_name(img), image->program, (unsigned)*image->size, from >= 0 ? "en lugar de la anterior para" : "para",
+		    (unsigned)gbi, in.end, in.tc_entries, image->stack, (int)image->slack, in.untouched,
 		    bad_hash ? "DISTINTO del PPE (sin caché de texturas)" : "igual al del PPE",
 		    bad_lists ? "DISTINTAS del PPE" : "iguales al PPE");
 	if (in.image != (uint32_t)img || in.raw_start != GFX_RAW_START || in.raw_end != GFX_RAW_END)
@@ -646,7 +693,6 @@ static void spu_start(void *ctx, const struct salsa64_task *task, enum salsa64_g
 		s->job.detail_ea = (uint64_t)(uintptr_t)&w->task;
 		s->job.detail_cap = sizeof w->task;
 		s->job.detail_version = GFX_DETAIL_VERSION;
-		s->job.flags |= GFX_JOB_DETAIL_PHASE(s->detail_phase);
 	}
 	s->seq = spukit_post(s->worker, GFX_JOB_TASK, &s->job, sizeof s->job);
 	s->pending = true;
@@ -804,13 +850,21 @@ int salsa64_gfx_spu_init(struct salsa64_gfx_spu *s, const struct salsa64_bus *bu
 	 * para probarlas en RPCS3 con las ROMs de prueba, que usan solo una
 	 * familia. Después se sigue como siempre, con la primera. */
 	struct stat st;
-	for (uint32_t phase = 1; phase <= 5; phase++) {
+	unsigned phase_files = 0;
+	for (uint32_t phase = 1; phase < sizeof phase_images / sizeof phase_images[0]; phase++) {
 		char path[sizeof SPE0_PHASE_PATH + 2];
 		snprintf(path, sizeof path, "%s%u", SPE0_PHASE_PATH, phase);
 		if (stat(path, &st) == 0) {
-			s->detail_phase = phase;
-			break;
+			if (!s->detail_phase)
+				s->detail_phase = phase;
+			phase_files++;
 		}
+	}
+	if (phase_files > 1)
+		salsa64_log("gfx detalle: hay %u archivos gfx-fase; se usa la fase %u", phase_files, s->detail_phase);
+	if (stat(SPE0_CLIP4_PATH, &st) == 0) {
+		s->detail_phase = 8;
+		salsa64_log("gfx: recorte SIMD experimental (gfx-recorte-vector), mide lote completo; sustituye gfx-fase");
 	}
 	if (stat(SPE0_DETAIL_PATH, &st) == 0 || s->detail_phase) {
 		s->detail = memalign(128, sizeof(struct detail_window));

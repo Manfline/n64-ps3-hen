@@ -64,11 +64,16 @@ static void check_gbi(uint32_t gbi, bool rare)
 	run(gbi, vtx_a, cmd_a, tex_a, cache_a, &ra);
 	run(gbi, vtx_b, cmd_b, tex_b, cache_b, &rb);
 	bool gen2 = gbi == SALSA64_GBI_F3DEX2 || gbi == SALSA64_GBI_F3DZEX2;
-	CHECK(ra.draws >= 3);
+	bool s2dex = gbi == SALSA64_GBI_S2DEX || gbi == SALSA64_GBI_S2DEX1;
+	CHECK(ra.draws >= (s2dex ? 1u : 3u));
 	CHECK_EQ(ra.flags & GFX_RES_CUT, 0);
 	CHECK(ra.flags & GFX_RES_FULLSYNC);
 	CHECK_EQ(ra.dl_errors, 0);
-	if (!rare) {
+	if (s2dex) {
+		CHECK_EQ(ra.bg, 1);
+		CHECK_EQ(ra.rects, 1);
+		CHECK_EQ(ra.unknown_cmds, 0);
+	} else if (!rare) {
 		/* 2 + 2 + 1 triángulos (y el G_TRI2 tras el fondo), 2 rellenos y 2
 		 * TEXRECT (y las tiras del fondo), 2 texturas (y la del fondo). */
 		CHECK_EQ(ra.triangles, gen2 ? 7u : 5u);
@@ -125,8 +130,10 @@ static void gfx_selftest_lists(void)
 	check_gbi(SALSA64_GBI_F3D, false);
 	check_gbi(SALSA64_GBI_F3DEX, false);
 	check_gbi(SALSA64_GBI_F3DWR, false);
+	check_gbi(SALSA64_GBI_S2DEX1, false);
 	check_gbi(SALSA64_GBI_F3DEX2, false);
 	check_gbi(SALSA64_GBI_F3DZEX2, false);
+	check_gbi(SALSA64_GBI_S2DEX, false);
 	/* Las de Rare interpretan distinto vértices y triángulos: basta que
 	 * dibujen algo y terminen (lo que se compara es SPE contra PPE). */
 	check_gbi(SALSA64_GBI_F3DPD, true);
@@ -193,8 +200,10 @@ static void gfx_spe0_images(void)
 	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_F3DPD), GFX_SPE0_F3D);
 	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_F3DDKR), GFX_SPE0_F3D);
 	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_F3DJFG), GFX_SPE0_F3D);
+	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_S2DEX1), GFX_SPE0_F3D);
 	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_F3DEX2), GFX_SPE0_F3DEX2);
 	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_F3DZEX2), GFX_SPE0_F3DEX2);
+	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_S2DEX), GFX_SPE0_F3DEX2);
 	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_F3DEXBG), GFX_SPE0_CONKER);
 	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_F5ROGUE), GFX_SPE0_F5ROGUE);
 	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_F5INDY), GFX_SPE0_F5INDY);

@@ -63,6 +63,8 @@ struct gfx_state_job {
  * bytes de pila que nunca se tocaron desde que arrancó (con el patrón que
  * pone al arrancar si se le pide; si no, los que siguen en cero). */
 #define GFX_JOB_INFO 5
+#define GFX_JOB_CLIP4 6  /* autoprueba de recorte SIMD: solo variante experimental */
+struct gfx_clip4_job { float x[4], y[4], z[4], w[4]; };
 struct gfx_info {
 	uint32_t image;
 	uint32_t tc_entries;
@@ -175,12 +177,6 @@ _Static_assert(sizeof(struct gfx_detail) % 16 == 0, "detalle apto para DMA");
  * de diagnóstico A/B: el PPE lo pone al abrir el juego si existe
  * gfx-escalar en el directorio de datos. */
 #define GFX_JOB_SCALAR 0x100u
-/* Una sola subfase del postproceso del lote SIMD, para no acumular marcos de
- * reloj en la imagen 1. Solo tiene efecto con GFX_JOB_DETAIL_PHASE_MASK. */
-#define GFX_JOB_DETAIL_PHASE_SHIFT 9u
-#define GFX_JOB_DETAIL_PHASE_MASK  (7u << GFX_JOB_DETAIL_PHASE_SHIFT)
-#define GFX_JOB_DETAIL_PHASE(n)    ((uint32_t)(n) << GFX_JOB_DETAIL_PHASE_SHIFT)
-
 /* ---- Caché de texturas -------------------------------------------------------
  * Las texturas decodificadas viven en una región de memoria que pone el
  * consumidor (job->cache_ea, cache_cap; vista por el RSX) y que la HLE
