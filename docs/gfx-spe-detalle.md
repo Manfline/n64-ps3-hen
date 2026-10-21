@@ -191,8 +191,11 @@ tiempos exclusivos, DMA, sondeos y audio. Si el detalle perturba demasiado
 la carga, el siguiente cambio debe muestrear tareas enteras. No usar estos
 datos instrumentados como prueba de una ganancia de rendimiento.
 
-No se ha ejecutado una carrera ni `--lle-check-gfx`: la tarea se valida con
-listas propias, sin ROM ni microcódigo propietario. La comparación contra
-el microcódigo real requiere una captura autorizada y queda pendiente, al
-igual que sincronización y coste en la consola. El techo de ganancia de
-esta entrega es cero: solo aporta medidas para elegir un cambio posterior.
+La entrega inicial del diagnóstico se validó con listas propias, sin ROM
+ni microcódigo propietario; su techo de ganancia era cero. Las mediciones
+posteriores de carrera y regresiones están en `docs/estado.md` y
+`docs/perf-log.md`. No se ha cerrado una comparación de esta variante con
+`--lle-check-gfx` sobre la escena real: requiere una entrada reproducible y
+un oráculo que complete las tareas. El paquete combinado de integración
+pasa la ROM gráfica homebrew en RPCS3 con ruta normal y variante 8; eso no
+sustituye la regresión del nuevo binario en la consola.

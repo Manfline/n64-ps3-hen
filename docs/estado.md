@@ -26,9 +26,15 @@
   título `Salsa64 SPE integracion`, identificador `SLSA00181`, versión
   `v0.2.9-16-g74e41b9`. SHA-256
   `b09cde7efabacdac0f6d19d1510d8db58151c2579a2af99347b02cd64560bedf`.
-  Identidad contrastada con el ELF y PARAM.SFO. Falta la regresión del
-  binario combinado en RPCS3 y PS3. Sin envío, integración en la rama
-  principal ni publicación en este punto.
+  Identidad contrastada con el ELF y PARAM.SFO.
+- RPCS3, ROM gráfica homebrew embebida: `RESULTADO frontend: OK (campo 137)`
+  tanto en ruta normal sin detalle como con `gfx-recorte-vector`. La imagen
+  `spu_gfx1fase8` confirma 64 lotes/256 vértices sin diferencias en las
+  máscaras, salida vectorial/escalar bit a bit, listas/hash iguales al PPE
+  y detalle A/B sin diferencias. Logs
+  `build/logs/spe-integracion-rpcs3-{normal,vector}.log`.
+  No mide rendimiento ni sustituye regresión comercial en PS3. Falta esta
+  última; sin envío, integración en la rama principal ni publicación.
 
 ## 2026-10-20 — Racer: video entrelazado, altura insuficiente del destino
 
