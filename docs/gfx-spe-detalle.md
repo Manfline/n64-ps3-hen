@@ -35,7 +35,7 @@ versión de detalle. Ocupa exactamente 112 bytes. `gfx_result` conserva sus
 112 bytes y la cola de `lib/spukit` no cambia. Los tamaños se comprueban al
 compilar. Es necesario reconstruir juntas las imágenes SPE y el PPE.
 
-El bloque versión 1 tiene 256 bytes, alineado a 128; contiene solo palabras
+El bloque versión 3 tiene 272 bytes, alineado a 128; contiene solo palabras
 de 32 bits y el número de tarea. El PPE reserva un bloque y un acumulador
 de 64 bits al abrir el juego solo si está presente el archivo, y los libera
 al cerrar. Hay una sola tarea en vuelo por trabajador: se recoge antes de
@@ -75,6 +75,14 @@ registro de grupos; incluye iluminación, niebla y generación de ST. Se
 cuentan vértices con cada función activada y cargas completadas. El host
 usa memoria directa: no simula bytes ni latencia DMA y su reloj vale cero.
 
+La línea `lote vtx` de la imagen 1 separa los vértices transformados por el
+lote y sus grupos de cuatro de los que siguieron escalares: modo
+`gfx-escalar`, iluminación (con el subconjunto que además tiene TEXGEN), falta
+de niebla y la cola de uno a tres de una carga por lo demás apta. Iluminación
+y TEXGEN no son dos rechazos acumulables: TEXGEN solo cambia el vértice dentro
+del camino iluminado. El contador no atribuye rechazos a recorte, alineación,
+destino ni tipo de DMA porque esos no son condiciones de este lote.
+
 Los triángulos de entrada son llamadas a `gfx_triangle`; aceptados significa
 que obtuvieron salida, plano común y cercano son rechazos, y recortados
 cuenta cruces del plano cercano antes de intentar reservar salida. Un
@@ -89,6 +97,17 @@ Las listas cuentan bloques pedidos (incluida precarga), bytes, aciertos en
 el bloque actual y cambios de bloque; un cambio puede aprovechar un bloque
 precargado. No se contabilizan bytes de precarga desperdiciados ni un
 histograma por número de luces en esta versión.
+
+La línea `gfx detalle: vtx fases` resume una tarea (la ventana habitual
+agrupa 100) en ms/tarea y ticks/vértice. `RDRAM` suma el envío y la espera de
+la DMA síncrona de la carga de vértices y se divide por todos los vértices;
+`matriz` se divide solo por los que entraron en el lote de cuatro. `resto`
+sale de `t_vtx` al descontar ambos y agrupa desempaquetado,
+proyección/división, banderas de recorte, niebla, conversión a color entero,
+escritura del vértice intermedio y `vgroup`. No se desglosa más sin bajar la
+holgura de pila de la imagen 1 del mínimo de 1536 bytes. No mide
+`gfx_vtx_out`: esa conversión al registro final ocurre al consumir cada
+triángulo y queda en `tri sin estado`.
 
 ## Validación y siguiente medición
 

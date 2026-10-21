@@ -51,11 +51,14 @@ SPUKIT  := 1
 # de Indiana Jones y Battle for Naboo (Factor 5 con su DMEM de 4 KB). Cada una
 # con sus objetos en obj/spu-gfx<n>.
 GFX_IMAGES := 0 1 2 3 4
-SPU_PROGS := $(addprefix gfx,$(GFX_IMAGES)) audio rsp jpeg crt lz
+GFX_PHASES := 1 2 3 4 5
+SPU_PROGS := $(addprefix gfx,$(GFX_IMAGES)) $(addprefix gfx1fase,$(GFX_PHASES)) audio rsp jpeg crt lz
 GFX_SPU_SRCS := $(R)/src/spu/gfx/main.c $(R)/src/spu/gfx/io_spu.c \
                 $(filter-out %/io_mem.c %/sync.c %/state.c %/selftest.c,$(wildcard $(R)/src/rsp/gfx/*.c))
 $(foreach i,$(GFX_IMAGES),$(eval gfx$(i)_SRCS := $(GFX_SPU_SRCS)) $(eval gfx$(i)_OBJDIR := spu-gfx$(i)) \
 	$(eval gfx$(i)_CFLAGS := -DGFX_SPE0_IMG=$(i)))
+$(foreach p,$(GFX_PHASES),$(eval gfx1fase$(p)_SRCS := $(GFX_SPU_SRCS)) $(eval gfx1fase$(p)_OBJDIR := spu-gfx1fase$(p)) \
+	$(eval gfx1fase$(p)_CFLAGS := -DGFX_SPE0_IMG=1 -DGFX_SPE0_PHASE=$(p)))
 audio_SRCS := $(R)/src/spu/audio/main.c $(R)/src/spu/audio/io_spu.c \
               $(filter-out %/io_mem.c %/sync.c %/selftest.c,$(wildcard $(R)/src/rsp/audio/*.c))
 rsp_SRCS   := $(R)/src/spu/rsp/main.c $(R)/src/spu/rsp/io_spu.c \
@@ -72,8 +75,10 @@ lz_SRCS    := $(R)/lib/spukit/spu/lz.c
 GFX_STACK_LIBC := --ignore exit --ignore __call_exitprocs --ignore __do_global_ctors_aux \
                   --ignore __do_global_dtors_aux --ignore register_tm_clones --ignore deregister_tm_clones
 $(foreach i,$(GFX_IMAGES),$(eval gfx$(i)_STACK_MIN := 1536))
+$(foreach p,$(GFX_PHASES),$(eval gfx1fase$(p)_STACK_MIN := 1536))
 gfx0_STACK_ARGS := --edge gfx_dl_f3d:pd_command --edge gfx_dl_f3d:dkr_command $(GFX_STACK_LIBC)
 gfx1_STACK_ARGS := --ignore gfx_dl_f3dex2 $(GFX_STACK_LIBC)
+$(foreach p,$(GFX_PHASES),$(eval gfx1fase$(p)_STACK_ARGS := $(gfx1_STACK_ARGS)))
 gfx2_STACK_ARGS := --edge gfx_dl_f3dex2:cbfd_command $(GFX_STACK_LIBC)
 gfx3_STACK_ARGS := --edge gfx_dl_f3d:f5_command $(GFX_STACK_LIBC)
 gfx4_STACK_ARGS := $(GFX_STACK_LIBC)
@@ -147,6 +152,13 @@ $(call GFX_OBJ,vgroup.c.o): SPU_CFLAGS += -Os
 # pagarlo (−370 bytes, docs/estado.md 2026-10-13): de lo suyo solo
 # gfx_dl_next corre por comando, y es corta.
 $(call GFX_OBJ,flx.c.o) $(call GFX_OBJ,dl.c.o): SPU_CFLAGS += -Os
+# F3DEX2 solo descodifica y despacha comandos; el trabajo por vértice y
+# triángulo queda en geom.c y rdp.c. En la imagen 1, hacerlo compacto deja
+# lugar en el local store para el lote SIMD de geometría.
+$(call GFX_OBJ,f3dex2.c.o): SPU_CFLAGS += -Os
+# La carga/decodificación de TMEM no es la ruta que se vectoriza y, en la
+# imagen 1, el tamaño compacto libera local store para la geometría caliente.
+$(OBJ)/spu-gfx1/src/rsp/gfx/tmem.c.o: SPU_CFLAGS += -Os
 # La caché de texturas (texcache.c), también: ~1,2 KB de código para la pila
 # al juntar F3DFLX con el S2DEX de las salas de Zelda (la holgura bajaba a
 # 1328); identificar texturas cuesta 0,01–0,02 ms más por tarea.
@@ -154,4 +166,5 @@ $(call GFX_OBJ,texcache.c.o): SPU_CFLAGS += -Os
 # make no ve un cambio de banderas: que se recompilen si cambia este archivo.
 $(call GFX_OBJ,combine.c.o) $(call GFX_OBJ,s2dex.c.o) $(call GFX_OBJ,f3dpd.c.o) \
 $(call GFX_OBJ,f3ddkr.c.o) $(call GFX_OBJ,f5rogue.c.o) $(call GFX_OBJ,f5indy.c.o) $(call GFX_OBJ,vgroup.c.o) $(call GFX_OBJ,flx.c.o) \
-$(call GFX_OBJ,dl.c.o) $(call GFX_OBJ,texcache.c.o): Makefile
+$(call GFX_OBJ,dl.c.o) $(call GFX_OBJ,f3dex2.c.o) $(call GFX_OBJ,texcache.c.o): Makefile
+$(OBJ)/spu-gfx1/src/rsp/gfx/tmem.c.o: Makefile

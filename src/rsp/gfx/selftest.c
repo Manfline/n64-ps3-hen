@@ -336,8 +336,12 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 		dl(&b, gen2(&b) ? 0xDA380007u : 0x01030040u, PROJ_PA);
 		dl(&b, gen2(&b) ? 0xDA380003u : 0x01020040u, MV_PA);
 	}
-	if (gen2(&b))
-		dl(&b, 0xD9000000u, 0x00200004u | 0x1u);  /* G_SHADE | G_SHADING_SMOOTH | G_ZBUFFER */
+	if (gen2(&b)) {
+		/* También cubre el lote SIMD de vértices: color directo, niebla y
+		 * cuatro vértices por G_VTX, sin luces ni TEXGEN. */
+		dl(&b, 0xD9000000u, 0x00210004u | 0x1u);  /* G_SHADE | G_SHADING_SMOOTH | G_FOG | G_ZBUFFER */
+		dl(&b, 0xDB080000u, 0x01000000u);          /* G_MW_FOG: factor 256, sesgo 0 */
+	}
 	else if (b.fam == FAM_INDY)
 		dl(&b, 0xB7000000u, 0x00000005u);         /* G_ZBUFFER y G_SHADE */
 	else

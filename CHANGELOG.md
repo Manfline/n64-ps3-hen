@@ -12,6 +12,10 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
   entrelazado de Racer ya no queda limitado por la tijera de su tarea RDP y
   deja de saltar verticalmente.
 
+- **HLE gráfica del SPE:** la imagen F3DEX2 procesa de cuatro en cuatro los
+  vértices sin luces ni TEXGEN que llevan niebla. `gfx-escalar` conserva la
+  ruta anterior para A/B y la autoprueba compara ambas salidas bit a bit.
+
 - **Road Rash 64:** conserva los bloques traducidos al descartar sondas de
   espera; las entradas que colisionaban retraducían código idéntico. Añade
   contadores por causa y `jit-invalidacion-vieja` para comparar.

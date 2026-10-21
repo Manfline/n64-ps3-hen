@@ -100,12 +100,6 @@ static void do_movemem(struct gfx_state *g, uint32_t w0, uint32_t w1)
 	}
 }
 
-static void tri(struct gfx_state *g, uint32_t w)
-{
-	gfx_triangle(g, ((w >> 16) & 0xFF) / 2, ((w >> 8) & 0xFF) / 2, (w & 0xFF) / 2);
-}
-
-
 void gfx_dl_f3dex2(struct gfx_state *g, gfx_cmd_hook hook)
 {
 	struct gfx_result *res = g->res;
@@ -146,11 +140,11 @@ void gfx_dl_f3dex2(struct gfx_state *g, gfx_cmd_hook hook)
 			}
 			break;
 		case G_TRI1:
-			tri(g, w0);
+			gfx_triangle(g, ((w0 >> 16) & 0xFF) / 2, ((w0 >> 8) & 0xFF) / 2, (w0 & 0xFF) / 2);
 			break;
 		case G_TRI2:
-			tri(g, w0);
-			tri(g, w1);
+			gfx_triangle(g, ((w0 >> 16) & 0xFF) / 2, ((w0 >> 8) & 0xFF) / 2, (w0 & 0xFF) / 2);
+			gfx_triangle(g, ((w1 >> 16) & 0xFF) / 2, ((w1 >> 8) & 0xFF) / 2, (w1 & 0xFF) / 2);
 			break;
 		case G_QUAD: {
 			uint32_t a = ((w0 >> 16) & 0xFF) / 2, b = ((w0 >> 8) & 0xFF) / 2, c = (w0 & 0xFF) / 2;

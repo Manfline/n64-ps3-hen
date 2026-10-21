@@ -72,6 +72,99 @@ en cero y no guarda vpos, así que tampoco permite deducir la paridad real.
 Evidencia y propuesta inicial en [racer-vi.md](racer-vi.md). No hubo
 validación de consola en esa revisión anterior.
 
+## 2026-10-20 — Medición de fases del lote SIMD F3DEX2
+
+- **Código máquina (imagen 1).** `spu-objdump` del `geom.c.o` y de
+  `spu_gfx1.bin` confirma cuatro carriles en la multiplicación: cuatro
+  cadenas `fm` + 2×`fma` + `fa` (16 operaciones vectoriales para la matriz
+  de cuatro vértices). No hay llamada a `memcpy`, a divisiones de libgcc ni a
+  conversiones de coma flotante por software en ese camino; las conversiones
+  son `csflt`/`cfltu`. Sí hay muchas cargas y permutaciones (`lqx`/`lqd`,
+  `rotqby`, `shufb`) al desempaquetar los `s16` big-endian y escribir los
+  campos. La división de perspectiva sigue por vértice con
+  `frest`/`fi`/`fm`/`fma`; el recorte usa comparaciones y selecciones, y el
+  tramo posterior conserva ramas para los casos de `w` y la cola. Las únicas
+  llamadas que aparecen en `gfx_vertices` corresponden a rutas no tomadas
+  por Road Rash (luces, TEXGEN, FLX y matriz sucia); con detalle, además, las
+  lecturas del reloj.
+- **Coste estático aproximado.** Por lote, la matriz tiene 16 FP vectoriales:
+  ~16 ciclos de emisión y ~24–32 al considerar las dependencias de las cuatro
+  cadenas (≈6–8 ciclos/vértice con el pipeline ocupado). El desempaquetado y
+  las escrituras usan decenas de cargas/permutaciones (≈15–30 ciclos/vértice
+  ideal); la proyección escalar (recíproco/refinamiento y tres coordenadas),
+  seis pruebas de recorte, ST/color y niebla quedan en ≈70–130 ciclos/vértice
+  antes de esperas y derrames. La ruta escalar repite las 16 FP de matriz
+  por vértice (≈24–32 ciclos/vértice por sus dependencias), pero comparte el
+  mismo postproceso de ≈70–130. Son cotas de agenda, no una medición de la
+  consola. La hipótesis principal para los ~0,25 µs/vértice es precisamente
+  ese tramo posterior aún escalar —sobre todo perspectiva, empaquetado y
+  escritura—, no la multiplicación de matriz que ya va a cuatro carriles.
+- **Medición nueva.** `gfx-spe-detalle` versión 3 conserva el bloque de 272
+  bytes y añade la línea `gfx detalle: vtx fases`: RDRAM (envío+espera DMA),
+  matriz del lote y `resto`. Por la pila, `resto` agrupa desempaquetado,
+  proyección, recorte, niebla, conversión/escritura y `vgroup`; mirar primero
+  sus ticks/vértice frente a `matriz`. Intentar separarlos todos llevó la
+  holgura de la imagen 1 a 336 bytes; se retiró antes de enlazar.
+- **Local store.** Build Docker: holguras de las imágenes 0–4: **1632 /
+  1648 / 14272 / 2960 / 1648 bytes** (mínimo 1536). La imagen 1 queda 112
+  bytes sobre el límite.
+- **Pruebas y paquete.** `tools/build.sh test-host`: **664 pruebas, 870679
+  verificaciones, 0 fallidas**. Paquete local
+  `build/salsa64-spe-vect/salsa64-spe-vect.pkg`, SHA-256
+  `5f5cb6ca0185ca875fe140615758c48b9d4e12920c534b399fe879cd256a852d`.
+  No enviado ni publicado.
+
+
+## 2026-10-20 — Lote SIMD de vértices F3DEX2 con niebla
+
+- **Hipótesis confirmada.** El objeto SPU de `gfx_vertices` recorría un
+  vértice por iteración: transformación escalar, seis comparaciones de
+  recorte, división para proyectar y ramas de luz/TEXGEN/niebla. Road Rash
+  entra en el caso de color directo con niebla; las esperas DMA medidas antes
+  siguen por debajo de 0,1 ms y no son la causa del coste.
+- **Cambio.** Solo en la imagen 1, cuatro posiciones se transforman en los
+  carriles del SPU cuando no hay luces ni TEXGEN y la niebla está activa. La
+  proyección, ST, conversión y niebla mantienen el orden escalar. Las rutas
+  restantes no cambian. El archivo `gfx-escalar` al abrir el juego selecciona
+  el recorrido previo y el log dice cuál quedó activo. La autoprueba F3DEX2
+  añade niebla y hace 17 pares vectorial/escalar, comprobando las salidas bit
+  a bit y registrando la mediana del decrementador.
+- **Triángulos.** Se intentó agrupar cuatro para el descarte por planos, pero
+  la cadena F3DEX2/S2DEX quedó 272 bytes bajo el mínimo de pila; se retiró.
+  No se atribuye una mejora de triángulos a esta entrega.
+- **Local store.** Build Docker: holguras de las imágenes 0–4: **1632 /
+  1776 / 14272 / 2960 / 1648 bytes**, mínimo 1536. El detalle de cobertura
+  añadió 16 bytes al protocolo y el marco de detalle de la imagen 1 subió 16
+  bytes; sigue 240 bytes sobre el mínimo. Para liberar espacio, en
+  la imagen 1 TMEM y las rutas frías de rectángulos/RDP se compilan a tamaño;
+  el trayecto de triángulos y vértices mantiene `-O2`.
+- **Pruebas hechas.** `tools/build.sh test-host`: **664 pruebas, 870679
+  verificaciones, 0 fallidas**. El censo LLE del host, limitado a 700 campos,
+  ejecutó SM64 (270 tareas), OoT (540), MK64 (225) y Road Rash (696); Road
+  Rash dio 696/696 idénticas. El host no ejecuta el binario SPU, por lo que no
+  valida aún la paridad interna vectorial/escalar ni mide la PS3.
+- **Cobertura pendiente de la PS3.** El detalle versión 2 (272 bytes) imprime
+  por tarea los vértices y lotes vectoriales y los escalares por forzado,
+  iluminación (y su subconjunto TEXGEN), falta de niebla y cola de 1–3. En la
+  carrera ya registrada (ventana 9501–9600) había 9348,9 vértices/tarea en
+  434,6 cargas, todos con niebla y ninguno iluminado; el host de 2000 campos
+  reproduce la carrera con F3DEX2. Las colas pueden sumar como máximo 1303,8
+  vértices/tarea (13,9 %); por tanto ni luz/TEXGEN ni el múltiplo de cuatro
+  explican por sí solos una cobertura casi nula. La siguiente PS3 debe
+  distinguir forzado escalar de una discrepancia de la ruta medida. El host
+  no ejecuta la imagen SPE ni puede ver el bit `GFX_JOB_SCALAR` efectivo.
+- **Paquete local.** `build/salsa64-spe-vect/salsa64-spe-vect.pkg`, APPID
+  `SLSA00064`, SHA-256
+  `ac402d68409da4efbf5c33ac602d3fe7d53979e38a2cece708c80107eedc2c78`.
+  No enviado ni publicado.
+- **Pendiente en PS3.** Con `gfx-spe-detalle`, comprobar primero la línea de
+  autoprueba sin diferencias y su mediana; repetir la misma carrera de Road
+  Rash con y sin `gfx-escalar`, y guardar la nueva línea `lote vtx`. Conservar
+  ambos logs y comparar ms/tarea, vértices, triángulos, campos/s, sondeos y
+  audio. Repetir
+  `--lle-check-gfx` completo y un censo contra la referencia antes de asumir
+  una ganancia.
+
 ## 2026-10-20 — Road Rash 64: colisión de descartes de espera, no escrituras de código
 
 Rama `roadrash`, sobre v0.2.9. Diagnóstico, reproducción y archivo A/B en

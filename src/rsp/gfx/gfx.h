@@ -117,7 +117,7 @@ struct gfx_job {
 	uint32_t detail_cap, detail_version;
 };
 
-#define GFX_DETAIL_VERSION 1u
+#define GFX_DETAIL_VERSION 3u
 /* Todos los campos son palabras sin punteros; tamaño múltiplo de 16.
  * Tiempos anidados: DMA está incluido en las etapas; no sumarlo otra vez. */
 struct gfx_detail {
@@ -132,7 +132,12 @@ struct gfx_detail {
 	/* Partición exclusiva: vtx/state/load del resultado + triangle/matrix/
 	 * dl/end/rest. triangle excluye state; los demás no se solapan. */
 	uint32_t t_total, t_vtx, t_state, t_load, t_triangle, t_matrix, t_dl, t_end, t_rest;
-	uint32_t reserved[4];
+	/* Solo imagen 1: ticks de la matriz del lote de cuatro. El resto de las
+	 * fases se deriva de t_vtx y de los contadores de E/S para no crecer el
+	 * marco de detalle en la pila del SPE. Los motivos escalares son
+	 * excluyentes salvo scalar_texgen, que es subconjunto de luz. */
+	uint32_t vector_vertices, scalar_forced, scalar_lighting, scalar_texgen;
+	uint32_t scalar_no_fog, scalar_tail, vector_batches, vtx_transform;
 };
 _Static_assert(sizeof(struct gfx_job) == 112, "descriptor gráfico de 112 bytes");
 _Static_assert(sizeof(struct gfx_detail) % 16 == 0, "detalle apto para DMA");
@@ -166,6 +171,15 @@ _Static_assert(sizeof(struct gfx_detail) % 16 == 0, "detalle apto para DMA");
  * destino bastaban para que volviera a cebarse desde la RDRAM y borrara lo
  * dibujado). */
 #define GFX_JOB_DPC_CONT 0x80u
+/* Fuerza el recorrido escalar de geometría en el SPE 0. Es un interruptor
+ * de diagnóstico A/B: el PPE lo pone al abrir el juego si existe
+ * gfx-escalar en el directorio de datos. */
+#define GFX_JOB_SCALAR 0x100u
+/* Una sola subfase del postproceso del lote SIMD, para no acumular marcos de
+ * reloj en la imagen 1. Solo tiene efecto con GFX_JOB_DETAIL_PHASE_MASK. */
+#define GFX_JOB_DETAIL_PHASE_SHIFT 9u
+#define GFX_JOB_DETAIL_PHASE_MASK  (7u << GFX_JOB_DETAIL_PHASE_SHIFT)
+#define GFX_JOB_DETAIL_PHASE(n)    ((uint32_t)(n) << GFX_JOB_DETAIL_PHASE_SHIFT)
 
 /* ---- Caché de texturas -------------------------------------------------------
  * Las texturas decodificadas viven en una región de memoria que pone el
