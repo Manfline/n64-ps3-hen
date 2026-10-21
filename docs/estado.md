@@ -1,5 +1,41 @@
 # Estado
 
+## 2026-10-21 — OoT: corte por presupuesto de comandos, con antecedente en ruta normal
+
+- **Evidencia actual.** En la regresión de `74e41b9`, imagen
+  `spu_gfx1fase8`, una tarea de OoT alcanza exactamente 1048576 comandos.
+  El resultado es `0x10` (`GFX_RES_LOOP`), con 638339 comandos desconocidos,
+  dos triángulos, 52 dibujos y cero errores de dirección de lista. Consume
+  188 ms en el SPE. No es un corte por capacidad de vértices, comandos de
+  salida o texturas. El autor no observó un fallo visual.
+- **Antecedente sin recorte experimental.** La captura anterior
+  `gfx-zelda-f3dzex2.log` identifica `spu_gfx1` normal y fase 0 de detalle.
+  Ya registra dos tareas con el mismo microcódigo, límite de 1048576
+  comandos y 638341 comandos desconocidos. Su resultado `0x11` también
+  incluye el presupuesto agotado, aunque no es una ejecución idéntica.
+  Por tanto, el patrón no es exclusivo de la variante 8 ni nuevo del
+  paquete combinado. Esa referencia ya contiene el lote de vértices:
+  no demuestra que el problema existiera antes de toda la rama SIMD.
+- **Diagnóstico de lectura.** La vista de los primeros comandos del SPE
+  solo se rellena al compilar una imagen con `GFX_HAS(F5INDY)`. La imagen 1
+  devuelve deliberadamente el centinela de ausencia; la línea «ninguna
+  lectura» no demuestra un fallo de DMA ni que el SPE no ejecutara la lista.
+- **Límite.** Solo se conservan contadores y el prefijo que ve el PPE al
+  terminar, no toda la entrada del RSP en el instante del corte. No es
+  posible repetir exactamente esa tarea en host con este log. No se ha
+  identificado la causa del recorrido anómalo ni se atribuye a una carrera
+  con el CPU, a un bucle del juego o a la geometría. El lector de listas y
+  su presupuesto no cambian en esta integración; esa inspección no sustituye
+  una comparación sobre la misma entrada.
+- **Evidencias conservadas.**
+  `build/ps3/spe-integracion/oot-vector-20261021.log`, SHA-256
+  `fedecaac6c0d679b7c4bd39c6a4ab443179db10d8630258e3e20dc9bcd8cc508`;
+  `build/ps3/spe-integracion/oot-normal-anterior-20261020.log`, SHA-256
+  `f86af1c8b8a266547c73545a835baa35e34fee7dac261480901227edb25fa5a0`.
+  El paquete actual completa OoT con cierre limpio; conserva la salvedad de
+  una tarea cortada y cinco campos descartados por la cola. No se declara
+  corregido el incidente ni se modifica código durante este diagnóstico.
+
 ## 2026-10-20 — Preparación de integración del lote SIMD sobre la base actual
 
 - Se reúnen el lote de cuatro vértices, las fases de medición y el recorte
