@@ -1,5 +1,70 @@
 # Estado
 
+## 2026-10-20 — Racer: video entrelazado, altura insuficiente del destino
+
+Las tres cajas nuevas capturadas durante el salto del video (campos 558, 656
+y 757) y la traza de los primeros 1800 campos descartan cambios de registros,
+alternancia RSX/RDRAM o interpolación como explicación: el VI mantiene
+`CONTROL=00013052`, 320 × 237, paso 1280 y las dos ventanas verticales
+contiguas. El selector sí corta la ventana: necesita 474 filas lógicas y
+elige los tres framebuffers con alturas 384, 464 y 384; presenta solo 383,
+463 y 383 respectivamente. Sus escalas internas también alternan 3×, 2× y
+3×. La tijera de las tareas acaba en 384, pero el video ya está en la RDRAM
+cuando nace el destino; usar la tijera como alto máximo pierde la parte que
+el VI todavía lee.
+
+El anillo de VI ahora conserva la geometría de cada origen. Al crear una
+color image compatible, la HLE exige el alto que cubre la ventana VI reciente
+(origen oculto + filas visibles × paso), antes de crear y cebar su superficie.
+Para Racer es 476 filas para el origen a dos filas de la base, suficiente
+para la ventana presentada de 474. La prueba unitaria reproduce exactamente
+esa geometría. Es un cambio de reserva de destino, no de los registros ni de
+la selección entre campos. La suite host pasó (660 pruebas, 870 603
+verificaciones). En la PS3 real, durante el mismo video, el salto dejó de
+ocurrir; no se tomaron mediciones de rendimiento.
+
+Paquete de prueba «Salsa64 Racer video» (SLSA00177):
+`build/salsa64-racer-video/salsa64-racer-video.pkg`, SHA-256
+`caf4eeaec9c7f9caf623571153e53e2d80504de2a2863bffedc746411c2b99d7`.
+
+## 2026-10-20 — Racer: traza VI completa para capturar el video
+
+La bandera apagada por omisión `trace-vi` ahora acepta `N` o `N INICIO` y
+registra esa ventana de campos, no solo imágenes válidas. Cada campo deja una
+sola decisión: RSX, RDRAM, sin imagen, copia descartada, saltado o cola llena.
+La entrada lleva la instantánea de los catorce registros del VI (incluido
+`V_CURRENT` calculado al cerrar el campo), `vpos`, paridad, origen, tamaño,
+paso, tareas y atraso. Si el RSX lo presenta, añade sin repetir el selector:
+destino, ranura, edad, ventana lógica, región de superficie, recorte,
+rectángulo de salida y si es verdadero, intermedio o repetido.
+
+La selección se consulta después de `salsa64_rdp_present`; no vuelve a recorrer
+los destinos ni modifica el historial. Sin bandera no se formatea ninguna
+línea ni se consulta el selector. El frontend de PS3 compiló desde un directorio
+de build limpio. La suite host no llegó a enlazar por una advertencia previa de
+`test_menu.c` tratada como error; el test existente de la ventana entrelazada
+de Racer sigue siendo la cobertura específica. Paquete de diagnóstico
+«Salsa64 Racer VI» (SLSA00176):
+`build/salsa64-racer-vi/salsa64-racer-vi.pkg`, SHA-256
+`af3b9147cfb1f871cf85c2a6fdad35ad6e730154b364f9e726e7340932478cd9`.
+La corrida de la PS3 ya está hecha; evidencia y procedimiento en
+[racer-vi.md](racer-vi.md).
+
+## 2026-10-20 — Racer: las cajas disponibles eran de la demo, faltaba el video
+
+Diagnóstico sobre `59cb166`, sin cambios de emulación ni de presentación.
+Las únicas cajas de Racer en `build/ps3-limpieza-20261019/` son la 628
+(campos 621–628) y la 762 (761–762). Repetidas en el host, las tareas 951 y
+1074 muestran la demo de carrera, no el video con el salto. Los diez campos
+son RSX y tienen el VI entrelazado conocido (320 × 237, paso 1280,
+`V_VIDEO` 0x2501ff / 0x2301fd); no prueban la causa del salto de media
+pantalla del video. `trace-vi.off` contiene 600 pero está inerte: solo se
+abre `trace-vi`. La traza actual omite campos sin imagen y saltados y no
+incluye registros ni ventana del destino. La caja guarda `V_CURRENT` crudo
+en cero y no guarda vpos, así que tampoco permite deducir la paridad real.
+Evidencia y propuesta inicial en [racer-vi.md](racer-vi.md). No hubo
+validación de consola en esa revisión anterior.
+
 ## 2026-10-18 — Resident Evil 2: el logo de N64 salía a un cuarto
 
 La escala de `G_TEXTURE` que rc7b3 aplicó al ST de `G_MODIFYVTX` rompía el logo

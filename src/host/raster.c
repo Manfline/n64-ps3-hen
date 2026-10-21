@@ -1076,7 +1076,7 @@ void raster_task(const struct gfx_job *job, const struct gfx_result *res)
 
 void raster_vi(const struct salsa64_vi_frame *f)
 {
-	rdp_vi_ring_push(&vi_ring, f->origin, f->width);
+	rdp_vi_ring_frame(&vi_ring, f);
 	/* Como la PS3: qué destino se presenta (marca `presented`, el ancho del
 	 * VI y la ranura protegida del reciclado). Sin esto el host copiaba a
 	 * la RDRAM todos los destinos de cada tarea, framebuffers incluidos, y

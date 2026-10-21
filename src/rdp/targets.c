@@ -388,14 +388,30 @@ void rdp_box_add(struct rdp_box *b, float x0, float y0, float x1, float y1, bool
 
 void rdp_vi_ring_push(struct rdp_vi_ring *r, uint32_t origin, uint32_t width)
 {
-	if (!width)
+	struct salsa64_vi_frame f;
+	memset(&f, 0, sizeof f);
+	f.origin = origin;
+	f.width = width;
+	f.height = width * 3 / 4;
+	f.stride = width * 2;
+	f.bpp = 2;
+	rdp_vi_ring_frame(r, &f);
+}
+
+void rdp_vi_ring_frame(struct rdp_vi_ring *r, const struct salsa64_vi_frame *f)
+{
+	if (!f->width)
 		return;
-	r->cur_width = width;
+	r->cur_width = f->width;
 	for (uint32_t k = 0; k < RDP_VI_RING && k < r->n; k++)
-		if (r->origin[(r->n - 1 - k) % RDP_VI_RING] == origin)
+		if (r->origin[(r->n - 1 - k) % RDP_VI_RING] == f->origin)
 			return;
-	r->origin[r->n % RDP_VI_RING] = origin;
-	r->width[r->n % RDP_VI_RING] = width;
+	uint32_t i = r->n % RDP_VI_RING;
+	r->origin[i] = f->origin;
+	r->width[i] = f->width;
+	r->height[i] = f->height;
+	r->stride[i] = f->stride;
+	r->bpp[i] = f->bpp;
 	r->n++;
 }
 
@@ -411,6 +427,28 @@ bool rdp_vi_ring_covers(const struct rdp_vi_ring *r, uint32_t addr, uint32_t wid
 			return true;
 	}
 	return false;
+}
+
+uint32_t rdp_vi_ring_min_height(const struct rdp_vi_ring *r, uint32_t addr, uint32_t width, uint32_t bpp)
+{
+	uint32_t line = width * bpp, need = 0;
+	if (!line)
+		return 0;
+	for (uint32_t k = 0; k < RDP_VI_RING && k < r->n; k++) {
+		uint32_t i = (r->n - 1 - k) % RDP_VI_RING;
+		if (r->width[i] != width || r->bpp[i] != bpp || r->stride[i] < line || r->stride[i] % line ||
+		    r->origin[i] < addr)
+			continue;
+		uint32_t off = r->origin[i] - addr;
+		/* Solo los pocos renglones ocultos antes del origen, como la regla
+		 * que reconoce un framebuffer en rdp_vi_ring_covers. */
+		if (off % line || off > 8 * line)
+			continue;
+		uint32_t rows = r->height[i] * (r->stride[i] / line);
+		if (rows && off / line + rows > need)
+			need = off / line + rows;
+	}
+	return need;
 }
 
 bool rdp_readback_wanted(const struct rdp_vi_ring *r, uint32_t addr, uint32_t width, uint32_t siz)

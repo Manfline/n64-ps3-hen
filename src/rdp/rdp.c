@@ -516,9 +516,9 @@ void salsa64_rdp_set_memory(uint8_t *rdram, uint32_t rdram_size, void (*wake)(vo
 	rdp.wake = wake;
 }
 
-void salsa64_rdp_vi(uint32_t origin, uint32_t width)
+void salsa64_rdp_vi(const struct salsa64_vi_frame *f)
 {
-	rdp_vi_ring_push(&rdp.vi_ring, origin, width);
+	rdp_vi_ring_frame(&rdp.vi_ring, f);
 }
 
 void salsa64_rdp_target_alpha(bool on)
@@ -579,11 +579,19 @@ void salsa64_rdp_aa_edges(bool on)
 	rdp.aa_edges = on;
 }
 
-void salsa64_rdp_last_present(int *slot, uint32_t *age, uint32_t *addr)
+bool salsa64_rdp_last_present(struct salsa64_rdp_present_info *out)
 {
-	*slot = rdp.last_p.slot;
-	*age = rdp.last_p.age;
-	*addr = rdp.last_p.slot >= 0 ? rdp.tg.t[rdp.last_p.slot].addr : 0;
+	if (rdp.last_p.slot < 0 || rdp.last_p.slot >= RDP_TARGETS_MAX)
+		return false;
+	const struct rdp_target *t = &rdp.tg.t[rdp.last_p.slot];
+	if (!t->used || !rdp.again.surf)
+		return false;
+	*out = (struct salsa64_rdp_present_info){
+		rdp.last_p.slot, t->addr, t->lw, t->lh, rdp.again.scale,
+		rdp.last_p.y0, rdp.last_p.w, rdp.last_p.h, rdp.last_p.age,
+		rdp.again.src.x, rdp.again.src.y, rdp.again.src.w, rdp.again.src.h
+	};
+	return true;
 }
 
 static uint32_t find_black(uint32_t lo, uint32_t hi);
@@ -1536,6 +1544,16 @@ static int get_target(uint32_t addr, uint32_t width, uint32_t fmt, uint32_t siz,
 	 * interpretado: Zelda al abrir la pausa manda anchos de 1495 y 3770) no
 	 * toca la tabla: reciclaría una ranura buena para nada. */
 	if (!width || width > 640 || min_lh > 480) {
+		rdp.stats.targets_absurd++;
+		snprintf(rdp.last_get.how, sizeof rdp.last_get.how, "imposible, ignorada");
+		LOGN(10, "gfx: color image imposible %06x/%u (alto %u): se ignora", addr, width, min_lh);
+		return -1;
+	}
+	uint32_t bpp = siz == G_IM_SIZ_32b ? 4 : siz == G_IM_SIZ_8b ? 1 : 2;
+	uint32_t vi_lh = rdp_vi_ring_min_height(&rdp.vi_ring, addr, width, bpp);
+	if (vi_lh > min_lh)
+		min_lh = vi_lh;
+	if (min_lh > 480) {
 		rdp.stats.targets_absurd++;
 		snprintf(rdp.last_get.how, sizeof rdp.last_get.how, "imposible, ignorada");
 		LOGN(10, "gfx: color image imposible %06x/%u (alto %u): se ignora", addr, width, min_lh);

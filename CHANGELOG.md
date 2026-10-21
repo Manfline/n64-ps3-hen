@@ -6,6 +6,12 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 
 ## [Unreleased]
 
+- Amplía la traza VI de Racer: una ventana de campos, decisiones sin imagen o
+  descartadas, registros instantáneos y la selección ya hecha por el RSX.
+- Reserva las filas que lee la ventana VI al crear un framebuffer: el video
+  entrelazado de Racer ya no queda limitado por la tijera de su tarea RDP y
+  deja de saltar verticalmente.
+
 ## [0.2.9] — 2026-10-19
 
 ### Added

@@ -213,9 +213,10 @@ void salsa64_rdp_drop_targets(void);
  * (Yoshi's Story: las lee como CI8 desde la RDRAM); por omisión no se esperan. */
 void salsa64_rdp_set_big8_wait(bool wait);
 void salsa64_rdp_set_memory(uint8_t *rdram, uint32_t rdram_size, void (*wake)(void));
-/* Hilo de emulación, al terminar cada campo con imagen: origen y ancho del
- * VI, para distinguir framebuffers de imágenes auxiliares desde ese hilo. */
-void salsa64_rdp_vi(uint32_t origin, uint32_t width);
+/* Hilo de emulación, al terminar cada campo con imagen: geometría del VI,
+ * para distinguir framebuffers de imágenes auxiliares y reservar una color
+ * image que cubra toda su ventana. */
+void salsa64_rdp_vi(const struct salsa64_vi_frame *f);
 /* Interruptor: 0 apaga los efectos de framebuffer (las texturas que
  * vienen de un destino se leen de la RDRAM como antes y nada se copia), 1
  * solo render a textura, 2 también las copias a la RDRAM (por omisión). */
@@ -263,9 +264,15 @@ void salsa64_rdp_guard(bool on, uint32_t watch_lo, uint32_t watch_hi);
  * `gfx_in_flight`, mientras corría una tarea gráfica. Las copias de esa
  * tarea y de las anteriores no pisan ese tramo (targets.h, rdp_dma_ring). */
 void salsa64_rdp_rdram_written(uint32_t pa, uint32_t len, bool gfx_in_flight);
-/* Lo que eligió la última salsa64_rdp_present: ranura (-1: nada del RSX),
- * campos desde que se dibujó y dirección del destino (traza por campo). */
-void salsa64_rdp_last_present(int *slot, uint32_t *age, uint32_t *addr);
+/* Lo que eligió la última salsa64_rdp_present. Es una consulta del resultado
+ * ya elegido: no vuelve a recorrer los destinos ni cambia su historial. */
+struct salsa64_rdp_present_info {
+	int slot;                 /* ranura del destino */
+	uint32_t addr, width, height, scale;
+	uint32_t y0, w, h, age;  /* ventana lógica y antigüedad */
+	uint32_t src_x, src_y, src_w, src_h;  /* región final de la superficie */
+};
+bool salsa64_rdp_last_present(struct salsa64_rdp_present_info *out);
 
 /* Avisos y la traza de las copias (los escribe el frontend en su log). */
 void salsa64_rdp_set_log(void (*fn)(const char *fmt, ...));

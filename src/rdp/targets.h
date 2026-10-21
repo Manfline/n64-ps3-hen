@@ -161,6 +161,11 @@ struct rdp_targets {
 #define RDP_VI_RING 8
 struct rdp_vi_ring {
 	uint32_t origin[RDP_VI_RING], width[RDP_VI_RING];
+	/* Geometría de cada origen. Además de identificar framebuffers, evita
+	 * que una color image nazca más baja que la ventana VI que la mostrará:
+	 * el video entrelazado de Racer avanza dos filas del destino por cada
+	 * fila visible. */
+	uint32_t height[RDP_VI_RING], stride[RDP_VI_RING], bpp[RDP_VI_RING];
 	uint32_t n;
 	uint32_t cur_width;
 };
@@ -461,6 +466,7 @@ int rdp_targets_tall_pending(struct rdp_targets *s, int slot, const struct rdp_d
 			     struct rdp_tall_rect out[RDP_TALL_FILLS]);
 
 void rdp_vi_ring_push(struct rdp_vi_ring *r, uint32_t origin, uint32_t width);
+void rdp_vi_ring_frame(struct rdp_vi_ring *r, const struct salsa64_vi_frame *f);
 /* ¿Hay que copiar a la RDRAM la color image (addr, width, siz) cuando el
  * RDP termine de dibujarla? Sí para una imagen de 16 bits del ancho del VI
  * que no es ninguno de los framebuffers recientes: un cuadro guardado
@@ -470,6 +476,9 @@ bool rdp_readback_wanted(const struct rdp_vi_ring *r, uint32_t addr, uint32_t wi
 /* ¿La color image (addr, width) está dentro de alguno de los framebuffers
  * recientes del VI? Las que no lo están son imágenes auxiliares. */
 bool rdp_vi_ring_covers(const struct rdp_vi_ring *r, uint32_t addr, uint32_t width);
+/* Alto mínimo de la color image (addr, width, bpp) que cubre una ventana
+ * VI reciente. 0 si no hay una compatible. */
+uint32_t rdp_vi_ring_min_height(const struct rdp_vi_ring *r, uint32_t addr, uint32_t width, uint32_t bpp);
 
 /* Qué presentar en el campo `field` para la imagen `f` del VI: entre los
  * destinos recientes que cubren el origen, el del ancho del VI; entre

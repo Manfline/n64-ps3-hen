@@ -532,7 +532,7 @@ static int snap_cas(int slot, uint32_t from, uint32_t to)
 #define FIELD_KEEP  (FIELD_CHECK | FIELD_SHOT | FIELD_STATE)
 #define GFX_WIN_FIELDS 100
 static uint32_t cap_every, exit_field;  /* capturas = "N M" */
-static uint32_t trace_vi_left;          /* SALSA64_DATA_DIR/trace-vi: campos que se registran al presentar */
+static uint32_t trace_vi_count, trace_vi_first;  /* SALSA64_DATA_DIR/trace-vi: ventana de campos */
 struct field_msg {
 	uint32_t field;             /* n64.bus.vi.fields al terminar */
 	uint32_t tasks;             /* tareas gráficas terminadas hasta ahí */
@@ -541,6 +541,7 @@ struct field_msg {
 	uint32_t flags;
 	volatile uint32_t skip;     /* emulación lo pone si encoló uno más nuevo */
 	uint32_t vi[SALSA64_VI_NREGS];  /* registros del VI al terminar el campo (caja negra) */
+	uint32_t vi_current, parity;  /* lecturas calculadas al terminar el campo */
 };
 static struct field_msg field_q[FIELD_QUEUE];
 static volatile uint32_t field_head, field_tail;  /* head la mueve emulación; tail, presentación */
@@ -1625,6 +1626,38 @@ static uint32_t visible_tasks(void)
 	return salsa64_rdp_tasks_done() - (n64.bus.rsp.dp_held ? 1u : 0u);
 }
 
+static bool trace_vi_want(uint32_t field)
+{
+	return trace_vi_count && field >= trace_vi_first && field - trace_vi_first < trace_vi_count;
+}
+
+/* Escribe una sola decisión por campo de la ventana. Todos los datos del VI
+ * vienen de `m`, que el hilo de emulación terminó antes de encolarlo. */
+static void trace_vi_log(const struct field_msg *m, const char *decision, uint32_t behind,
+			 const struct salsa64_rdp_present_info *p, const struct salsa64_rdp_field_info *fi,
+			 const struct salsa64_overscan *crop, const rsxkit_rect *out)
+{
+	if (!trace_vi_want(m->field))
+		return;
+	const uint32_t *v = m->vi;
+	if (p) {
+		const char *kind = fi->kind == SALSA64_FIELD_INTERP ? "intermedio" :
+			fi->kind == SALSA64_FIELD_REPEAT ? "repetido" : "verdadero";
+		salsa64_log("vi campo %u: %s; tareas %u; origen %06x; imagen %ux%u paso %u bpp %u; vpos %u paridad %u; atraso %u; regs %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x; destino %06x ranura %d logico %ux%u escala %u edad %u; ventana %u,%u %ux%u; superficie %u,%u %ux%u; recorte %u,%u,%u,%u; salida %d,%d %ux%u; %s t=%.3f k=%u tareas %u/%u",
+			    m->field, decision, m->tasks, m->f.origin, m->f.width, m->f.height, m->f.stride, m->f.bpp,
+			    m->f.vpos, m->parity, behind, v[0], v[1], v[2], v[3], m->vi_current, v[5], v[6], v[7],
+			    v[8], v[9], v[10], v[11], v[12], v[13], p->addr, p->slot, p->width, p->height, p->scale,
+			    p->age, p->y0, 0u, p->w, p->h, p->src_x, p->src_y, p->src_w, p->src_h, crop->left,
+			    crop->right, crop->top, crop->bottom, out->x, out->y, out->w, out->h, kind, fi->t, fi->k,
+			    fi->task, fi->prev_task);
+	} else {
+		salsa64_log("vi campo %u: %s; tareas %u; origen %06x; imagen %ux%u paso %u bpp %u; vpos %u paridad %u; atraso %u; regs %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x",
+			    m->field, decision, m->tasks, m->f.origin, m->f.width, m->f.height, m->f.stride, m->f.bpp,
+			    m->f.vpos, m->parity, behind, v[0], v[1], v[2], v[3], m->vi_current, v[5], v[6], v[7],
+			    v[8], v[9], v[10], v[11], v[12], v[13]);
+	}
+}
+
 static void post_field(uint32_t flags)
 {
 	uint32_t last_idx = post_last;
@@ -1636,9 +1669,11 @@ static void post_field(uint32_t flags)
 	m.snap = -1;
 	m.flags = flags;
 	memcpy(m.vi, n64.bus.vi.regs, sizeof m.vi);
+	m.vi_current = salsa64_vi_read(&n64.bus, SALSA64_VI_V_CURRENT * 4);
+	m.parity = n64.bus.vi.field & 1;
 
 	if (salsa64_vi_frame(&n64.bus, &m.f) && m.f.width <= FB_MAX_W && m.f.height <= FB_MAX_H) {
-		salsa64_rdp_vi(m.f.origin, m.f.width);  /* qué color images son framebuffers */
+		salsa64_rdp_vi(&m.f);  /* qué color images son framebuffers y qué alto necesitan */
 		if (selftest_on && selftest_frame(&n64.bus, &m.f))
 			m.flags |= FIELD_CHECK;
 		if (cap_every && m.field % cap_every == 0)
@@ -1677,6 +1712,7 @@ static void post_field(uint32_t flags)
 		if (m.snap >= 0)
 			snap_state[m.snap] = SNAP_FREE;
 		emu_stats.dropped++;
+		trace_vi_log(&m, "cola llena", 0, NULL, NULL, NULL, NULL);
 		return;
 	}
 	if (last_idx != ~0u && (int32_t)(last_idx - field_tail) >= 0) {
@@ -2612,6 +2648,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		if (m->snap >= 0)
 			snap_cas(m->snap, SNAP_QUEUED, SNAP_FREE);
 		pres.skipped++;
+		trace_vi_log(m, "saltado", 0, NULL, NULL, NULL, NULL);
 		cj_note_field(m, BB_FLD_SKIPPED);
 		return;
 	}
@@ -2622,6 +2659,7 @@ static void present_field(const struct field_msg *m, uint64_t now)
 		if (!have) {
 			/* Emulación la soltó al encolar un campo más nuevo. */
 			pres.skipped++;
+			trace_vi_log(m, "copia descartada", 0, NULL, NULL, NULL, NULL);
 			cj_note_field(m, BB_FLD_SKIPPED);
 			return;
 		}
@@ -2679,16 +2717,18 @@ static void present_field(const struct field_msg *m, uint64_t now)
 	} else {
 		pres.blank++;
 	}
-	if (trace_vi_left && m->f.width) {
-		int tslot;
-		uint32_t age, taddr;
-		salsa64_rdp_last_present(&tslot, &age, &taddr);
-		trace_vi_left--;
-		salsa64_log("vi campo %u: origen %06x %ux%u → %s (destino %06x ranura %d, dibujado hace %u campos; emulación %u "
-			    "campos por delante)",
-			    m->field, m->f.origin, m->f.width, m->f.height,
-			    pres.still == STILL_RSX ? "RSX" : pres.still == STILL_FB ? "RDRAM" : "nada", taddr, tslot, age,
-			    behind);
+	if (pres.still == STILL_RSX) {
+		struct salsa64_rdp_present_info p;
+		struct salsa64_rdp_field_info fi;
+		if (salsa64_rdp_last_present(&p)) {
+			salsa64_rdp_field_info(&fi);
+			trace_vi_log(m, "RSX", behind, &p, &fi, &crop, &r);
+		} else {
+			trace_vi_log(m, "RSX sin selección", behind, NULL, NULL, NULL, NULL);
+		}
+	} else {
+		trace_vi_log(m, pres.still == STILL_FB ? "RDRAM" : m->f.width ? "nada" : "sin imagen", behind,
+			     NULL, NULL, NULL, NULL);
 	}
 	if (have)
 		snap_state[slot] = SNAP_FREE;  /* ya está en la memoria del RSX */
@@ -4841,14 +4881,17 @@ static enum game_end run_game_once(uint8_t *rom, uint32_t rom_size, const char *
 			salsa64_log("aristas de los dibujos con AA: encendidas (aristas-aa, experimental)");
 	}
 	{
-		/* SALSA64_DATA_DIR/trace-vi: registrar qué se presenta en cada uno
-		 * de los primeros N campos (por omisión 300). */
+		/* SALSA64_DATA_DIR/trace-vi: "N" o "N INICIO" registra una
+		 * ventana de campos, incluso si se salta o no hay imagen. */
 		FILE *tf = fopen(SALSA64_DATA_DIR "/trace-vi", "r");
-		trace_vi_left = 0;
+		trace_vi_count = 0;
+		trace_vi_first = 1;
 		if (tf) {
-			if (fscanf(tf, "%u", &trace_vi_left) != 1)
-				trace_vi_left = 300;
+			if (fscanf(tf, "%u %u", &trace_vi_count, &trace_vi_first) < 1)
+				trace_vi_count = 300;
 			fclose(tf);
+			if (trace_vi_count)
+				salsa64_log("traza VI: %u campos desde el %u", trace_vi_count, trace_vi_first);
 		}
 	}
 	{

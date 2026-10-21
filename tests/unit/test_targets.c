@@ -833,11 +833,17 @@ static void targets_present_interlaced_vpos(void)
 	struct rdp_present p;
 	/* Racer */
 	const uint32_t RACER = 0x63b800;
-	rdp_targets_init(&s);
-	int r = rdp_targets_get(&s, RACER, 320, SIZ_16b, 480, &fresh);
-	rdp_targets_drawn(&s, r);
-	struct salsa64_vi_frame f = frame(0, 320, 237);
+	struct salsa64_vi_frame f = frame(RACER + 1280, 320, 237);
 	f.stride = 1280;
+	struct rdp_vi_ring vi;
+	memset(&vi, 0, sizeof vi);
+	rdp_vi_ring_frame(&vi, &f);
+	/* El origen está dos filas dentro; 237 filas del VI con paso doble
+	 * ocupan 474 del destino. La tijera de la tarea puede terminar antes. */
+	CHECK_EQ(rdp_vi_ring_min_height(&vi, RACER, 320, 2), 476u);
+	rdp_targets_init(&s);
+	int r = rdp_targets_get(&s, RACER, 320, SIZ_16b, rdp_vi_ring_min_height(&vi, RACER, 320, 2), &fresh);
+	rdp_targets_drawn(&s, r);
 	for (uint32_t n = 0; n < 6; n++) {
 		bool odd = n & 1;  /* campo con V_VIDEO 0x2301FD, origen una fila arriba */
 		f.origin = odd ? RACER + 640 : RACER + 1280;
