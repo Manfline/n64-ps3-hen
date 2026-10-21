@@ -1,5 +1,41 @@
 # Registro de rendimiento
 
+## 2026-10-21 — Memoria por reapertura: limpieza completa de newlib
+
+RPCS3, revisión `2dcd367`, mismo ELF y ocho aperturas consecutivas del
+homebrew gráfico por variante. Afín, recorte y Turbo3D activos en ambos;
+solo cambia `memoria-hilos`. No hay ROMs comerciales en esta prueba.
+
+| Diferencia de heap entre cierres (bytes) | Referencia | Limpieza completa |
+|---|---:|---:|
+| 1 | +1968 | +112 |
+| 2 | +1840 | 0 |
+| 3 | +1904 | 0 |
+| 4 | +1904 | 0 |
+| 5 | +1904 | 0 |
+| 6 | +1840 | 0 |
+| 7 | +1904 | 0 |
+| Total | +13264 | +112 |
+
+La reserva inicial de 112 bytes no vuelve a crecer en los seis cierres
+siguientes. Arena y tope constantes; no confundir la caída de «libres KB»
+redondeados con bytes perdidos. Ambos conjuntos: ocho aperturas/cierres
+correctos, todas las pantallas 42/42 y salida normal. Se conserva el aviso
+inicial `0x60` conocido del homebrew, en ambas variantes. No son medidas
+de velocidad ni una certificación de memoria en hardware real.
+
+La prueba aislada de siete lotes de ocho hilos deja 0 bytes con limpieza
+en decimales, logger y alta precisión. La variante previa dejaba 208 bytes
+por hilo en alta precisión: `_reclaim_reent` no recogía su cadena `_p5s`.
+El candidato la vacía antes y preserva los descriptores estándar 0..2.
+No modifica el camino de emulación por campo ni la HLE gráfica.
+
+Logs `build/memoria-final-{referencia,limpio}-rpcs3.log`; SHA-256 completos
+en `estado.md`. Falta repetir varias aperturas en la misma aplicación PS3;
+no salir al XMB entre ellas porque eso reinicia el proceso y oculta el
+crecimiento acumulativo. La prueba de consola requiere autorización de
+envío y no se da por realizada con RPCS3.
+
 ## 2026-10-21 — Control F3D con Mario 64 en el candidato Turbo3D
 
 `5c51bb2`/`SLSA00184`, misma aplicación: Mario usa imagen F3D, 2180 tareas

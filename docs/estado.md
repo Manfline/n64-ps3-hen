@@ -1,5 +1,46 @@
 # Estado
 
+## 2026-10-21 — Memoria: candidato completo validado en reaperturas homebrew
+
+- Código `2dcd367`, rama `memoria-cierres`, incluye Turbo3D previamente
+  probado. Se limpia únicamente el contexto newlib del hilo de emulación
+  al terminar, incluida su cadena de potencias decimales; se preservan
+  los descriptores estándar compartidos. `memoria-hilos` sigue optativo y
+  apagado por omisión. No se cambia el toolchain ni las bibliotecas MIT.
+- Mismo binario, ocho aperturas del mismo homebrew gráfico por variante,
+  con afín y recorte activos: referencia +1968/+1840/+1904/+1904/+1904/
+  +1840/+1904 bytes entre cierres (13264 acumulados); limpieza completa
+  +112/0/0/0/0/0/0 (112 acumulados). No se declara cero desde la primera
+  apertura: la reserva inicial no vuelve a crecer en los seis cierres
+  siguientes. Arena, tope y memoria de usuario estables en las diferencias.
+- Dieciséis corridas con 42/42 puntos de pantalla y ambos conjuntos
+  terminan con ocho juegos abiertos/cerrados, cero fallas y salida normal.
+  La advertencia inicial conocida del homebrew de lista cortada `0x60`
+  sigue presente en ambas variantes; no se atribuye a la limpieza.
+- Prueba mínima, 56 hilos: ocho por cada uno de siete lotes. Sin recoger,
+  decimales 4992, logger 13312 y precisión 10624 bytes; con limpieza
+  completa, los tres lotes dejan cero. El control de precisión falló antes
+  de recoger `_p5s` (1664 bytes residuales) y pasa después sin relajar
+  ninguna aserción. El padre conserva su salida tras cada `join`.
+- Host final 676 pruebas/887277 verificaciones/cero fallos, ASan/UBSan.
+  Catorce imágenes SPE conservan sus márgenes, todas >=1536 bytes.
+  Se verifica el enlace final sin `memtrace` ni envoltorios de asignaciones;
+  el rastreo queda únicamente como artefacto local.
+- Paquete `build/salsa64-turbo3d-memoria/salsa64-turbo3d-memoria.pkg`,
+  `Salsa64 Turbo3D memoria`/`SLSA00186`, `v0.2.9-49-g2dcd367`, 4063824
+  bytes, SHA-256
+  `ea14891ebd30a34ec88e05ce6fe168c52fb1e91d430d3e8b9283fcd1cb53c9ac`.
+- Evidencia `build/memoria-final-referencia-rpcs3.log` (SHA-256
+  `b96dd14233fbcce26f764136bbf9c9583b01b355d44e2620b00ca301258e2740`),
+  `build/memoria-final-limpio-rpcs3.log` (SHA-256
+  `96509c88bbd21642d85aee4907c29a1c8f3e8fed16d68e9a1eb684e46a79fa0a`),
+  y `build/memoria-hilos-precision-verde.log` (SHA-256
+  `6a094f6e2117074b38c07819098eb12d43ccca07df69a0c200e1d087ff5343e3`).
+- Pendiente autorización de envío y confirmación en PS3 real, sin salir
+  de la aplicación entre aperturas; XMB solo al final para recoger el log.
+  No se certifican todos los subsistemas o libc futuras. Sin main,
+  publicación ni cambios en las opciones de la consola.
+
 ## 2026-10-21 — Memoria: caché decimal residual identificada
 
 - El primer candidato reproduce el frontend completo en RPCS3: seis

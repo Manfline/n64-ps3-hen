@@ -145,6 +145,13 @@ defecto (208 bytes por hilo) y la corrección (cero). El candidato vacía
 también esa cadena antes de la recogida general. El rastreo no forma
 parte del paquete normal ni se activa durante la emulación habitual.
 
+**Resultado del candidato completo `2dcd367` (RPCS3):** ocho reaperturas
+idénticas, mismo binario; referencia acumula 13264 bytes entre siete
+cierres, limpieza acumula 112 en el primer intervalo y cero en los seis
+siguientes. Ambas secuencias pasan la prueba gráfica. Falta medir en PS3
+real; se conserva la reserva inicial observada y no se redondea a cero.
+Datos y procedimiento de confirmación en `perf-log.md` y `estado.md`.
+
 
 ### Road Rash: medición y parche de consultas de espera (2026-10-20)
 
