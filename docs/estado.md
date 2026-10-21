@@ -1,5 +1,30 @@
 # Estado
 
+## 2026-10-21 — Regresión PS3 del paquete de integración SPE
+
+Paquete `SLSA00181`, código `74e41b9`, sin el experimento de destinos del
+recompilador ni el candidato de OPTIONS. Las revisiones posteriores a ese
+código solo modifican documentación.
+
+- Road Rash completa ambas rutas: normal, 6250 campos y 6239 tareas de
+  imagen 1; fase 8, 6224 campos y 6213 tareas. Cero tareas cortadas y cierre
+  limpio en ambas.
+- OoT, fase 8: 7568 tareas, 22091 campos emulados, una tarea cortada por
+  presupuesto de comandos y cinco campos descartados por la cola. El autor
+  no observó fallos visuales. El antecedente de la ruta normal y los límites
+  del diagnóstico se detallan a continuación; no se considera resuelto.
+- Majora, fase 8: 9033 tareas, 27024 campos emulados, cero tareas cortadas y
+  siete campos descartados por la cola. F-Zero X, fase 8: 18556 tareas,
+  18826 campos emulados, cero tareas cortadas y cero campos descartados.
+- En las cuatro regresiones las autopruebas registran listas/hash iguales
+  al PPE, vectorial/escalar bit a bit y, con fase 8, máscaras y detalle A/B
+  sin diferencias. Todos los cierres terminan sin tareas pendientes.
+  No sustituye validación visual exhaustiva ni demuestra ganancia de FPS.
+- El lote de vértices conserva `gfx-escalar` como retorno a la ruta anterior.
+  El recorte de fase 8 permanece optativo mediante `gfx-recorte-vector`,
+  todavía instrumentado. La niebla de F-Zero sigue pendiente por separado.
+  Logs locales conservados en `build/ps3/spe-integracion/`.
+
 ## 2026-10-21 — OoT: corte por presupuesto de comandos, con antecedente en ruta normal
 
 - **Evidencia actual.** En la regresión de `74e41b9`, imagen
