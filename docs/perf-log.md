@@ -1,5 +1,26 @@
 # Registro de rendimiento
 
+## 2026-10-21 — Turbo3D: primera corrida en PS3, sin A/B equivalente
+
+Código `5c51bb2`, Dark Rift NTSC, escala 5×/Nítida y sin filtro.
+Opción Turbo3D activa; imagen 5 con 13935 tareas combinadas de Turbo3D y
+su F3D acompañante. 7016 campos emulados y cierre limpio. El log no
+identifica por sí solo qué escena corresponde a cada ventana.
+
+De 68 ventanas gráficas registradas, solo una baja de 58 campos/s:
+1800–1899, 50,3 campos/s y peor campo 332,9 ms de emulación. No se ha
+determinado la causa del pico; no atribuirlo sin más a compilación o HLE.
+Las cinco últimas ventanas (6500–6999) dan 59,6–60,1 campos/s,
+878–943 triángulos por tarea, SPE 2,82–3,81 ms y traducción RSX
+1,86–2,65 ms. Son promedios por tarea de ventanas mixtas, no tiempos
+exclusivos de Turbo3D ni FPS de imágenes únicas.
+
+No comparar el rendimiento contra la versión que omitía los modelos como
+si dibujara la misma carga. Falta confirmación visual y no es una prueba
+de equivalencia frente al RSP real. No se cambian otras opciones.
+Log `build/ps3/re2-spe/dark-rift-turbo3d-20261021.log`, SHA-256
+`603187cf2aaea08c6f8b04e52304a5ac96425a8aedbe31489e22b2f5704a907d`.
+
 ## 2026-10-21 — Battle for Naboo: coste medido sin comparación A/B (PS3)
 
 Revisión `7c723d3`, imagen Factor 5 Indy, escala 1× sin filtro. El autor

@@ -1,5 +1,26 @@
 # Estado
 
+## 2026-10-21 — Primera corrida del candidato Turbo3D en PS3
+
+- Log de `5c51bb2`, `Salsa64 Turbo3D`/`SLSA00184`, opción activa,
+  Dark Rift NTSC a escala 5×/Nítida, sin filtro. La imagen 5 supera hash
+  y listas contra el PPE. Un cambio inicial F3D → Turbo3D (gbi 15),
+  después 13935 tareas en esa imagen; el contador mezcla Turbo3D y el
+  F3D acompañante, no permite repartirlas por familia.
+- Los resúmenes producen geometría, hasta 943 triángulos por tarea en
+  promedio de una ventana. No aparecen avisos de tareas malas o sin HLE;
+  los resúmenes periódicos registran cero tareas cortadas y cero comandos
+  de otro microcódigo saltados. No equivale a un oráculo gráfico del RSP.
+- 7016 campos emulados, cero descartes de cola o campos sin ranura,
+  cierre limpio y regreso al menú. El log acaba en el menú, no demuestra
+  una posterior salida al XMB. Pila estimada sin tocar 16512 bytes;
+  holgura estática 15536. Rendimiento detallado en `perf-log.md`.
+- Pendiente confirmación explícita del autor sobre ambos modelos,
+  texturas y animación: «ya quedó» se interpreta como corrida terminada,
+  no como certificación visual. Sin integración a main ni publicación.
+- Log `build/ps3/re2-spe/dark-rift-turbo3d-20261021.log`, SHA-256
+  `603187cf2aaea08c6f8b04e52304a5ac96425a8aedbe31489e22b2f5704a907d`.
+
 ## 2026-10-21 — Candidato Turbo3D para los modelos de Dark Rift
 
 - Se implementa el formato de objetos, estado global, matrices combinadas,

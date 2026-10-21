@@ -8,6 +8,12 @@ sin fallos; catorce imágenes dentro del presupuesto; RPCS3 normal y con
 afín + recorte, 42/42 puntos y listas SPE/PPE iguales en las seis imágenes.
 Identidad y SHA del paquete en `estado.md`.
 
+Primera corrida PS3 conservada (2026-10-21): la imagen carga y supera sus
+autopruebas, produce geometría y cierra limpia tras 7016 campos. Los
+resúmenes no muestran tareas cortadas. El autor todavía no ha confirmado
+explícitamente la apariencia de los personajes; no se marca como resuelto.
+Detalle y límites de la medición en `estado.md` y `perf-log.md`.
+
 ## Evidencia y alcance
 
 En la consola, Dark Rift arranca pero el autor no ve los modelos. Su log
