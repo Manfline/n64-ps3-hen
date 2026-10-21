@@ -32,8 +32,34 @@
 - **Regresión host.** La prueba controla bandera apagada/encendida,
   perspectiva, `G_MODIFYVTX` ST sin escala adicional, TEXRECT, sprite S2DEX
   dentro del tramo 3D, retorno al triángulo y reinicio en la tarea siguiente.
-  Se debe reconstruir el PPE y todas las imágenes SPE juntos y comprobar
-  la holgura antes de preparar la prueba de consola.
+  Antes del cambio fallaban los dos factores S/T del caso encadenado. La
+  revisión final pasa **665 pruebas, 870750 verificaciones, cero fallos**
+  con ASan y UBSan; log `build/logs/re2-encadenado-acotado.log`.
+- **Paquete no disponible: presupuesto de local store.** El primer build
+  limpio se detuvo en la imagen 0: texto 104056, datos 800, bss 145808,
+  cadena 9856 y holgura 1504 bytes, por debajo del mínimo de 1536. Se
+  excluyeron por compilación el byte y sus operaciones de las imágenes
+  que no reúnen F3DEX2 y S2DEX. En la segunda compilación la imagen 0
+  recuperó sus 1632 bytes, pero la imagen 1 quedó en texto 103720, datos
+  800, bss 145808, cadena 10112 y holgura 1504. Se detuvieron los builds:
+  no se redujeron cachés ni el mínimo de pila. Los logs son
+  `build/logs/re2-revision-pkg.log` y
+  `build/logs/re2-revision-pkg-final.log`; los ELF, mapas y usos de pila
+  quedan en `build/salsa64-re2-revision-incompleto/` y
+  `build/salsa64-re2-revision/`. No se generó ni se envió un PKG.
+- **Siguiente análisis, sin aplicar.** El predicado del RDP vuelve a
+  comprobar la bandera que ya condiciona `chain_affine`; estudiar su
+  eliminación tras revisar los invariantes puede reducir código. También
+  se puede estudiar reutilizar el estado transitorio de encadenamiento
+  existente para evitar otro reinicio/campo, con pruebas de generación y
+  de retornos. Ninguna hipótesis garantiza recuperar el margen necesario.
+- **Imágenes de diagnóstico locales.** Original:
+  `build/re2-options/tarea4251.png`, SHA-256
+  `3e5b7b9fce659962fcc433ec1bbce6303e9a99ca2473056d0fe462936b50010b`;
+  copia con la hipótesis:
+  `build/re2-options/tarea4251-hipotesis-afin.png`, SHA-256
+  `a4e33a1bf54e7394c3b9a2a1bdd333e9d1625ec970902cc2578da7144c635e2f`.
+  No son imágenes de una corrida nueva en consola.
 - **Sala de la estatua.** Sin optimización nueva: su coste y OPTIONS son
   problemas diferentes. Falta un estado reciente de la sala con el log de
   la misma revisión; no se presupone que otra HLE de video lo resuelva.
