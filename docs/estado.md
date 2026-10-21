@@ -27,8 +27,8 @@
   `v0.2.9-16-g74e41b9`. SHA-256
   `b09cde7efabacdac0f6d19d1510d8db58151c2579a2af99347b02cd64560bedf`.
   Identidad contrastada con el ELF y PARAM.SFO.
-- RPCS3, ROM gráfica homebrew embebida: `RESULTADO frontend: OK (campo 137)`
-  tanto en ruta normal sin detalle como con `gfx-recorte-vector`. La imagen
+- RPCS3, ROM gráfica homebrew embebida: `RESULTADO frontend: OK`, campo 125
+  en ruta normal sin detalle y campo 137 con `gfx-recorte-vector`. La imagen
   `spu_gfx1fase8` confirma 64 lotes/256 vértices sin diferencias en las
   máscaras, salida vectorial/escalar bit a bit, listas/hash iguales al PPE
   y detalle A/B sin diferencias. Logs
