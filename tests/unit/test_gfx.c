@@ -2476,10 +2476,21 @@ static void gfx_tile_clamp_mask_period(void)
  * tal cual y F3DEX2 normaliza 1/W a la mitad; el sol del telescopio de
  * Majora's Mask): la escala de s y t de la textura se reduce a la mitad.
  * Con G_TP_PERSP no cambia. Los TEXRECT no cambian. */
-static void gfx_tri_no_persp_half(void)
+static void tri_no_persp_half(bool chained, bool enabled)
 {
 	for (int persp = 0; persp < 2; persp++) {
 		start();
+		if (chained) {
+			if (enabled)
+				job_flags |= GFX_JOB_AFFINE_CHAIN;
+			job_gbi = SALSA64_GBI_S2DEX;
+			uint32_t data = data_alloc(64);
+			memset(t_n64.bus.rdram + data, 0, 64);
+			static const char text[] = "RSP Gfx ucode F3DEX fifo 2.06 Salsa64";
+			memcpy(t_n64.bus.rdram + data, text, sizeof text);
+			dl(0xE1000000, data);
+			dl(0xDD00003F, 0x00031000);
+		}
 		viewport_320x240();
 		load_mtx(ident, true);
 		load_mtx(ident, false);
@@ -2503,17 +2514,74 @@ static void gfx_tri_no_persp_half(void)
 		};
 		uint32_t va = put_vertices(v, 3);
 		dl(0x01000000 | 3 << 12 | (0 + 3) << 1, va);
+		/* MODIFYVTX ST no lleva otra escala de G_TEXTURE: el cambio afín
+		 * debe vivir en el estado de muestreo, no en estas coordenadas. */
+		dl(0x02140002, (16u * 32u) << 16);
 		dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);
+		if (chained) {
+			/* TEXRECT no usa la escala de los triángulos afines. */
+			dl(0xE4000000 | 40 << 14 | 40 << 2, 4 << 14 | 4 << 2);
+			dl(0xE1000000, 0);
+			dl(0xF1000000, 0x04000400);
+			/* El tramo 3D carga S2DEX para un sprite y después vuelve.
+			 * Sus triángulos crudos ya llevan ST de texel y no se escalan. */
+			uint32_t data = data_alloc(64);
+			memset(t_n64.bus.rdram + data, 0, 64);
+			static const char text[] = "RSP Gfx ucode S2DEX fifo 2.05 Salsa64";
+			memcpy(t_n64.bus.rdram + data, text, sizeof text);
+			dl(0xE1000000, data);
+			dl(0xDD00003F, 0x00032000);
+			dl(0x02000000, put_sprite(10, 5, 1024, 1024, 16, 4, 0));
+			dl(0xDD000000, 0x00031000);
+			dl(0xF5880000 | 2 << 9, 2u << 18 | 2u << 8);
+			dl(0xF2000000, (15 << 2) << 12 | (3 << 2));
+			dl(0x05000000 | 0 << 16 | 1 << 9 | 2 << 1, 0);
+		}
 		dl(0xE9000000, 0);
 		run();
 		const struct gfx_draw *d = draw_n(0);
 		CHECK(d && d->ntex == 1);
 		if (!d || d->ntex != 1)
 			return;
-		float k = persp ? 1.0f : 0.5f;
+		float k = persp || (chained && !enabled) ? 1.0f : 0.5f;
+		CHECK_EQ(out_vtx[1].s, 16.0f);
 		CHECK(d->tex[0].xf[0] > k / 16.0f - 1e-6f && d->tex[0].xf[0] < k / 16.0f + 1e-6f);
 		CHECK(d->tex[0].xf[1] > k / 4.0f - 1e-6f && d->tex[0].xf[1] < k / 4.0f + 1e-6f);
+		if (chained) {
+			CHECK_EQ(res.draws, 4);
+			CHECK_EQ(res.dl_errors, 0);
+			CHECK_EQ(res.unknown_cmds, 0);
+			for (int i = 1; i < 4; i++) {
+				const struct gfx_draw *a = draw_n(i);
+				CHECK(a && a->ntex == 1);
+				if (!a || a->ntex != 1)
+					return;
+				float scale = i == 3 ? k : 1.0f;
+				CHECK(fabsf(a->tex[0].xf[0] * a->tex[0].width - scale) < 1e-6f);
+				CHECK(fabsf(a->tex[0].xf[1] * a->tex[0].height - scale) < 1e-6f);
+			}
+			/* La tarea siguiente no hereda la procedencia S2DEX. */
+			dl_pc = DL_PA;
+			job_gbi = SALSA64_GBI_F3DEX2;
+			dl(0xE9000000, 0);
+			run();
+			CHECK_EQ(gs.chain_affine, 0);
+		}
 	}
+}
+
+static void gfx_tri_no_persp_half(void)
+{
+	tri_no_persp_half(false, false);
+}
+
+/* El mismo intérprete F3DEX2 debe producir la misma escala cuando empieza
+ * en una tarea S2DEX que lo carga después con G_LOAD_UCODE. Los TEXRECT y
+ * los triángulos con perspectiva no cambian de escala. */
+static void gfx_s2dex_chained_affine_texture(void)
+{
+	tri_no_persp_half(true, false);
+	tri_no_persp_half(true, true);
 }
 
 static void gfx_tmem_decode_formats(void)
@@ -2887,5 +2955,6 @@ void t_suite_gfx(void)
 	RUN(gfx_tile_mirror_once);
 	RUN(gfx_tile_clamp_mask_period);
 	RUN(gfx_tri_no_persp_half);
+	RUN(gfx_s2dex_chained_affine_texture);
 	RUN(gfx_f3dex2_othermode_copy);
 }

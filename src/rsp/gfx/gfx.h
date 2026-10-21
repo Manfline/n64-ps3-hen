@@ -166,6 +166,9 @@ _Static_assert(sizeof(struct gfx_detail) % 16 == 0, "detalle apto para DMA");
  * destino bastaban para que volviera a cebarse desde la RDRAM y borrara lo
  * dibujado). */
 #define GFX_JOB_DPC_CONT 0x80u
+/* Comparación optativa: escala afín de los triángulos F3DEX2
+ * cargados dentro de una tarea S2DEX. No escala G_MODIFYVTX. */
+#define GFX_JOB_AFFINE_CHAIN 0x1000u
 
 /* ---- Caché de texturas -------------------------------------------------------
  * Las texturas decodificadas viven en una región de memoria que pone el

@@ -1283,6 +1283,8 @@ static void gfx_acquire(void *ctx, struct gfx_job *job)
 	 * destino reciente y decodifica él lo que al final no pueda leer. */
 	if (gfx.raster && raster_fbfx >= 1 && !getenv("SALSA64_NO_FBTEX"))
 		job->flags |= GFX_JOB_FBTEX;
+	if (getenv("SALSA64_GFX_AFFINE_CHAIN"))
+		job->flags |= GFX_JOB_AFFINE_CHAIN;
 #ifdef SALSA64_GFX_TRACE
 	salsa64_gfx_trace_now = trace_gfx_verbose && trace_gfx_left && n64.bus.vi.fields > (trace_from ? trace_from : 500);
 	trace_draw = trace_states = 0;

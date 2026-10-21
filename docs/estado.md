@@ -1,5 +1,50 @@
 # Estado
 
+## 2026-10-20 — Resident Evil 2: candidato optativo para OPTIONS
+
+- **Contexto crudo.** La caja histórica 1289 de OPTIONS contiene 44 tareas
+  de 11 campos. La tarea 4251 tiene 105 dibujos y 212 triángulos; su salida
+  capturada también produce letras revueltas en el rasterizador del host.
+  Un dibujo tiene 62 píxeles de ancho, ST de 0 a 124 y una textura CI8
+  decodificada de 72 × 18 con transformación S de 1/72, sin el factor 1/2.
+- **Reproducción sintética.** La escala afín se decide con la familia de
+  inicio de `gfx_job`, no con la que S2DEX carga después. Una lista propia
+  que carga F3DEX2 desde S2DEX falla en los dos factores de textura; la
+  lista equivalente iniciada directamente como F3DEX2 sí usa 1/2. La
+  prueba anterior de la transición solo cubría TEXRECT.
+- **Candidato.** `GFX_JOB_AFFINE_CHAIN` conserva la identidad original del
+  trabajo y aplica la regla ya existente a los triángulos F3DEX2 cargados
+  desde S2DEX. No cambia las coordenadas de `G_MODIFYVTX`, la primera
+  generación ni el descriptor DMA. TEXRECT y los sprites S2DEX —triángulos
+  crudos— quedan fuera del predicado. Un byte transitorio al final del
+  estado se reinicia en cada tarea; no se agrega al formato de guardado.
+- **Interruptor apagado por omisión.** En PS3, crear
+  `/dev_hdd0/salsa64/gfx-afin-cadena` antes de abrir el juego; sin él conserva
+  la ruta anterior. Para volver a la referencia, renombrarlo a `.off` y
+  reabrir. El log anuncia referencia o experimental activa. En el host,
+  `SALSA64_GFX_AFFINE_CHAIN=1` activa el mismo bit del trabajo.
+- **Límite de la evidencia.** Una copia local de la tarea 4251, modificada
+  únicamente para reducir a la mitad las transformaciones S/T de sus 105
+  dibujos, produce OPTIONS legible. Eso respalda la hipótesis, pero no es
+  una ejecución del candidato sobre la entrada del RSP ni una comparación
+  contra el microcódigo real. La captura original permanece intacta. No se
+  considera arreglado en PS3 hasta probarlo con el mismo estado y revisión.
+- **Regresión host.** La prueba controla bandera apagada/encendida,
+  perspectiva, `G_MODIFYVTX` ST sin escala adicional, TEXRECT, sprite S2DEX
+  dentro del tramo 3D, retorno al triángulo y reinicio en la tarea siguiente.
+  Se debe reconstruir el PPE y todas las imágenes SPE juntos y comprobar
+  la holgura antes de preparar la prueba de consola.
+- **Sala de la estatua.** Sin optimización nueva: su coste y OPTIONS son
+  problemas diferentes. Falta un estado reciente de la sala con el log de
+  la misma revisión; no se presupone que otra HLE de video lo resuelva.
+- **Captura mínima para la siguiente comprobación.** Guardar en una ranura
+  libre dentro de OPTIONS, conservar el estado y el log y una captura de
+  pantalla, y recoger la caja negra del cuadro entero, no solo la tarea
+  final de limpieza de profundidad. Con esa entrada se puede ejecutar la
+  siguiente tarea con la HLE y con el microcódigo real. La caja 1289 solo
+  conserva comandos/vértices/texturas ya producidos por la HLE, no la TMEM
+  ni la lista de entrada del RSP.
+
 ## 2026-10-20 — Racer: video entrelazado, altura insuficiente del destino
 
 Las tres cajas nuevas capturadas durante el salto del video (campos 558, 656

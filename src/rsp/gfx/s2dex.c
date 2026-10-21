@@ -624,6 +624,7 @@ static bool s2dex_run(struct gfx_state *g, bool gen1, bool foreign)
 				 * de la tarea y siguen con la lista: la sigue su intérprete. */
 				gfx_ucode_reload(g, text, kind, nonear, gfx_addr(g, g->rdphalf1), (w0 & 0xFFFF) + 1);
 				g->chain_ex = kind == 1;
+				g->chain_affine = kind == 2 && (g->job->flags & GFX_JOB_AFFINE_CHAIN) != 0;
 				return true;
 			}
 			return gfx_dl_skip_foreign(g, gen1 ? 0xAF : S2_LOAD_UCODE, gen1 ? 0x06 : S2_DL, gen1 ? 0xB8 : S2_ENDDL);

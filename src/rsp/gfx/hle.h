@@ -316,6 +316,7 @@ struct gfx_state {
 	 * el código del SPE 0 crece (y la pila con él). */
 	uint32_t flx_table;        /* F3DFLX: la tabla del alfa (G_DMA_IO, segmentada), o 0 */
 	uint8_t ucode_var;         /* GFX_UCODE_FLX: el microcódigo en curso */
+	uint8_t chain_affine;      /* tarea S2DEX que cargó F3DEX2; solo sus PRIM_TRI usan escala afín */
 	struct gfx_detail *detail;  /* fuera del tramo persistente del RDP */
 };
 
