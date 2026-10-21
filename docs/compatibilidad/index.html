@@ -5,43 +5,77 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Compatibilidad documentada de Salsa64 en PS3.">
-  <title>Radar de compatibilidad · Salsa64</title>
+  <title>Compatibilidad · Salsa64</title>
   <style>
-    :root { --ink:#ecf3ef; --muted:#9ab0aa; --paper:#101816; --panel:#17231f; --line:#2f423a; --lime:#b6ef77; --aqua:#60d6c2; --amber:#f1c66a; --rose:#f08784; --slate:#7f9690; }
-    * { box-sizing:border-box; } body { margin:0; color:var(--ink); background:radial-gradient(circle at 85% -10%,#1c4d43 0,transparent 34rem),var(--paper); font:16px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
-    main { max-width:1180px; margin:auto; padding:3rem 1.25rem 4rem; } header { display:grid; grid-template-columns:1fr auto; gap:1rem; align-items:end; border-bottom:1px solid var(--line); padding-bottom:1.5rem; }
-    h1 { font:700 clamp(2rem,6vw,4.8rem)/.9 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:-.08em; margin:0; } .lead { color:var(--muted); max-width:58rem; margin:1rem 0 0; } .stamp { color:var(--lime); font-size:.8rem; text-align:right; }
-    .summary { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:.65rem; margin:1.5rem 0; } .meter { min-height:5.8rem; padding:1rem; border:1px solid var(--line); background:color-mix(in srgb,var(--panel) 90%,transparent); } .meter b { display:block; font-size:1.85rem; line-height:1; margin-bottom:.5rem; } .meter span { color:var(--muted); font-size:.75rem; }
-    .controls { display:grid; grid-template-columns:2fr 1fr 1fr; gap:.75rem; margin:1.5rem 0 .75rem; } input,select { width:100%; min-height:3rem; border:1px solid var(--line); border-radius:0; background:#0c1311; color:var(--ink); padding:.65rem .8rem; font:inherit; } input:focus,select:focus { outline:2px solid var(--aqua); outline-offset:2px; }
-    #count { color:var(--muted); margin:.5rem 0 1rem; font-size:.85rem; } .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(270px,1fr)); gap:.8rem; } article { display:flex; min-height:13.5rem; flex-direction:column; border:1px solid var(--line); background:linear-gradient(145deg,#1a2924,#121d19); padding:1rem; } article:hover { border-color:var(--aqua); } h2 { font-size:1.08rem; line-height:1.15; margin:0 0 .8rem; } .meta { color:var(--muted); font-size:.75rem; margin-bottom:.9rem; } .note { margin:0; color:#d8e2de; font:14px/1.45 system-ui,sans-serif; } .chips { display:flex; flex-wrap:wrap; gap:.35rem; margin-top:auto; padding-top:1rem; } .chip { border:1px solid currentColor; padding:.16rem .38rem; font-size:.68rem; color:var(--muted); } .state { color:var(--c); } .state::before { content:"● "; } .Verificado-en-PS3 { --c:var(--lime); } .Jugable { --c:var(--aqua); } .Con-problemas { --c:var(--amber); } .En-investigación { --c:var(--rose); } .Sin-probar { --c:var(--slate); } #empty { color:var(--muted); border:1px dashed var(--line); padding:2rem; }
-    .En-investigacion { --c:var(--rose); }
-    footer { color:var(--muted); border-top:1px solid var(--line); margin-top:2rem; padding-top:1rem; font:12px/1.5 system-ui,sans-serif; } footer a { color:var(--aqua); }
-    @media (max-width:700px) { main { padding-top:1.5rem; } header { grid-template-columns:1fr; } .stamp { text-align:left; } .summary { grid-template-columns:repeat(2,1fr); } .controls { grid-template-columns:1fr; } }
+    :root { --ink:#202124; --muted:#62666c; --paper:#f7f7f5; --surface:#fff; --line:#d9d9d5; --link:#1b5e8d; --ok:#267443; --play:#386d9c; --issue:#a26312; --research:#7b579b; --none:#777; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--paper); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { max-width:1100px; margin:auto; padding:2.5rem 1.25rem 4rem; }
+    header { border-bottom:1px solid var(--line); padding-bottom:1.25rem; }
+    h1 { margin:0; font-size:clamp(1.75rem,4vw,2.35rem); font-weight:650; letter-spacing:-.03em; }
+    .lead { max-width:50rem; margin:.55rem 0 0; color:var(--muted); }
+    .updated { display:block; margin-top:.9rem; color:var(--muted); font-size:.82rem; }
+    .legend { display:flex; flex-wrap:wrap; gap:.45rem 1.15rem; margin:1.25rem 0; color:var(--muted); font-size:.86rem; }
+    .state { color:var(--state); font-weight:600; white-space:nowrap; }
+    .state::before { content:"●"; margin-right:.38rem; font-size:.75em; }
+    .Verificado-en-PS3 { --state:var(--ok); } .Jugable { --state:var(--play); } .Con-problemas { --state:var(--issue); } .En-investigacion { --state:var(--research); } .Sin-probar { --state:var(--none); }
+    .controls { display:grid; grid-template-columns:minmax(14rem,2fr) minmax(11rem,1fr) minmax(10rem,1fr); gap:.7rem; margin:1.5rem 0 .65rem; }
+    input, select { width:100%; min-height:2.55rem; border:1px solid #bfc1c0; border-radius:4px; background:var(--surface); color:var(--ink); padding:.5rem .65rem; font:inherit; }
+    input:focus, select:focus { outline:2px solid #70a8cf; outline-offset:1px; }
+    #count { margin:.35rem 0 1rem; color:var(--muted); font-size:.85rem; }
+    .table-wrap { overflow-x:auto; border:1px solid var(--line); border-radius:5px; background:var(--surface); }
+    table { width:100%; min-width:760px; border-collapse:collapse; text-align:left; }
+    th { padding:.72rem .85rem; border-bottom:1px solid var(--line); background:#f0f0ed; color:#4e5155; font-size:.76rem; font-weight:650; letter-spacing:.04em; text-transform:uppercase; }
+    td { padding:.85rem; border-bottom:1px solid #e6e6e2; vertical-align:top; }
+    tbody tr:last-child td { border-bottom:0; } tbody tr:hover { background:#f9fbfc; }
+    .title { font-weight:650; } .evidence { color:var(--muted); font-size:.88rem; } .note { max-width:32rem; }
+    .tags { display:flex; flex-wrap:wrap; gap:.3rem; } .tag { border:1px solid #d1d4d3; border-radius:3px; color:#5f6368; padding:.08rem .32rem; font-size:.76rem; white-space:nowrap; }
+    #empty { margin:1rem 0 0; color:var(--muted); } footer { margin-top:1.5rem; color:var(--muted); font-size:.82rem; } footer a { color:var(--link); }
+    @media (max-width:700px) { main { padding-top:1.5rem; } .controls { grid-template-columns:1fr; } .legend { display:grid; grid-template-columns:1fr 1fr; gap:.35rem; } }
   </style>
 </head>
 <body>
   <main>
     <header>
-      <div><h1>RADAR<br>DE JUEGOS</h1><p class="lead">Compatibilidad documentada de Salsa64. El estado describe la evidencia disponible, no una promesa general para cada versión o escena.</p></div>
-      <div class="stamp" id="updated">CATÁLOGO LOCAL</div>
+      <h1>Compatibilidad</h1>
+      <p class="lead">Registro de juegos probados con Salsa64. El estado resume la evidencia disponible; puede variar entre escenas, revisiones y configuraciones.</p>
+      <span class="updated" id="updated">Actualizado localmente</span>
     </header>
-    <section class="summary" id="summary" aria-label="Resumen por estado"></section>
-    <section class="controls" aria-label="Filtros"><input id="search" type="search" placeholder="Buscar título, etiqueta o nota" autocomplete="off"><select id="state"><option value="">Todos los estados</option></select><select id="evidence"><option value="">Toda la evidencia</option></select></section>
-    <p id="count" aria-live="polite"></p><section class="cards" id="cards"></section><p id="empty" hidden>No hay juegos que coincidan con esos filtros.</p>
+    <section class="legend" id="summary" aria-label="Resumen por estado"></section>
+    <section class="controls" aria-label="Filtros">
+      <input id="search" type="search" placeholder="Buscar por título, nota o etiqueta" autocomplete="off" aria-label="Buscar juegos">
+      <select id="state" aria-label="Filtrar por estado"><option value="">Todos los estados</option></select>
+      <select id="evidence" aria-label="Filtrar por evidencia"><option value="">Toda la evidencia</option></select>
+    </section>
+    <p id="count" aria-live="polite"></p>
+    <div class="table-wrap"><table><thead><tr><th>Juego</th><th>Estado</th><th>Prueba</th><th>Notas</th><th>Áreas</th></tr></thead><tbody id="rows"></tbody></table></div>
+    <p id="empty" hidden>No hay juegos que coincidan con esos filtros.</p>
     <footer>Fuente: <a href="../compatibilidad.md">registro de compatibilidad</a>, <a href="../estado.md">estado técnico</a> y <a href="../../CHANGELOG.md">cambios no publicados</a>. Los respaldos de juego no se distribuyen con Salsa64.</footer>
   </main>
   <script>
-    const $ = s => document.querySelector(s), slug = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\w]+/g,'-').replace(/^-|-$/g,'');
+    const $ = selector => document.querySelector(selector);
+    const slug = text => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w]+/g, '-').replace(/^-|-$/g, '');
     let data;
-    function addOptions(select, values) { values.forEach(v => select.add(new Option(v, v))); }
+    function addOptions(select, values) { values.forEach(value => select.add(new Option(value, value))); }
+    function cell(row, className, value) { const element = document.createElement('td'); element.className = className; element.textContent = value; row.append(element); return element; }
     function render() {
-      const term = $('#search').value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase(), state = $('#state').value, evidence = $('#evidence').value;
-      const games = data.games.filter(g => !state || g.state === state).filter(g => !evidence || g.evidence === evidence).filter(g => !term || [g.name,g.note,g.scope,...g.tags].join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().includes(term));
-      $('#cards').replaceChildren(...games.map(g => { const a=document.createElement('article'); a.innerHTML=`<h2>${g.name}</h2><div class="meta"><span class="state ${slug(g.state)}">${g.state}</span><br>${g.evidence} · ${g.scope}</div><p class="note">${g.note}</p><div class="chips">${g.tags.map(t=>`<span class="chip">${t}</span>`).join('')}</div>`; return a; }));
-      $('#count').textContent = `${games.length} de ${data.games.length} entradas visibles`;
-      $('#empty').hidden = games.length !== 0;
+      const term = $('#search').value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+      const state = $('#state').value, evidence = $('#evidence').value;
+      const games = data.games.filter(game => (!state || game.state === state) && (!evidence || game.evidence === evidence)).filter(game => !term || [game.name, game.note, game.scope, ...game.tags].join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().includes(term));
+      const fragment = document.createDocumentFragment();
+      games.forEach(game => {
+        const row = document.createElement('tr'); cell(row, 'title', game.name);
+        const stateCell = cell(row, '', ''); const stateLabel = document.createElement('span'); stateLabel.className = `state ${slug(game.state)}`; stateLabel.textContent = game.state; stateCell.append(stateLabel);
+        cell(row, 'evidence', `${game.evidence} · ${game.scope}`); cell(row, 'note', game.note);
+        const tagsCell = cell(row, 'tags', ''); game.tags.forEach(tag => { const label = document.createElement('span'); label.className = 'tag'; label.textContent = tag; tagsCell.append(label); }); fragment.append(row);
+      });
+      $('#rows').replaceChildren(fragment); $('#count').textContent = `${games.length} de ${data.games.length} juegos visibles`; $('#empty').hidden = games.length !== 0;
     }
-    fetch('catalogo.json').then(r => r.json()).then(d => { data=d; $('#updated').textContent=`ACTUALIZADO ${d.updated}`; addOptions($('#state'),d.states); addOptions($('#evidence'),d.evidence); $('#summary').replaceChildren(...d.states.map(s => { const n=d.games.filter(g=>g.state===s).length, box=document.createElement('div'); box.className='meter '+slug(s); box.innerHTML=`<b>${n}</b><span class="state ${slug(s)}">${s}</span>`; return box; })); ['search','state','evidence'].forEach(id=>$('#'+id).addEventListener(id==='search'?'input':'change',render)); render(); }).catch(() => { $('#empty').hidden=false; $('#empty').textContent='No se pudo cargar el catálogo.'; });
+    fetch('catalogo.json').then(response => response.json()).then(catalog => {
+      data = catalog; $('#updated').textContent = `Actualizado: ${catalog.updated}`; addOptions($('#state'), catalog.states); addOptions($('#evidence'), catalog.evidence);
+      const summary = $('#summary'); catalog.states.forEach(state => { const label = document.createElement('span'); label.className = `state ${slug(state)}`; label.textContent = `${catalog.games.filter(game => game.state === state).length} ${state}`; summary.append(label); });
+      ['search', 'state', 'evidence'].forEach(id => $('#'+id).addEventListener(id === 'search' ? 'input' : 'change', render)); render();
+    }).catch(() => { $('#empty').hidden = false; $('#empty').textContent = 'No se pudo cargar el catálogo.'; });
   </script>
 </body>
 </html>
