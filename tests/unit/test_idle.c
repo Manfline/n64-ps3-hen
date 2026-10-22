@@ -427,8 +427,9 @@ static void idle_patch_keeps_code(void)
 		salsa64_n64_run(&t_n64, 500);
 		CHECK_EQ(R[T0], 0);
 		CHECK_EQ(R[T1], likely ? 99 : 100);
-		if (rec && rec->diag && !(rec->opts & SALSA64_REC_OPT_IDLE_RECOMPILE)) {
-			CHECK(rec->diag.idle_patched > patched);
+		if (rec && !(rec->opts & SALSA64_REC_OPT_IDLE_RECOMPILE)) {
+			if (rec->diag)
+				CHECK(rec->diag->idle_patched > patched);
 			CHECK_EQ(rec->stats.invalidated, killed);
 		}
 		t_wr32(CODE(1), ADDIU(T0, T0, -2));
