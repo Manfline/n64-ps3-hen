@@ -26,7 +26,7 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
   self-test compares both bit for bit.
 - **Recompiler and busy-wait loops:** dropping a busy-wait probe no longer
   throws away the translated block. Road Rash recompiled the same code tens of
-  thousands of times (85 % fewer compilations in the host measurement).
+  thousands of times; on a real PS3 it now invalidates no blocks at all.
   `jit-invalidacion-vieja` restores the old behaviour for comparison.
 - **Auto low-level RSP mode** keeps the HLE microcodes of Perfect Dark and
   Conker.
@@ -37,9 +37,9 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 - **Boot of CIC 6106 games (Yoshi's Story, F-Zero X…):** the HLE boot now runs
   the first stage of the cartridge's own IPL3 once, so low RDRAM holds what
   the real console leaves there (checked byte for byte against ares). Yoshi's
-  Story installed empty callbacks without it, never freed its objects, made
-  enemies and items vanish and hung when hitting a text block or after dying.
-  Confirmed on a real PS3: blocks respond, nothing vanishes, no hang.
+  Story never freed its objects: enemies and items vanished, and the game hung
+  when hitting a text block or after dying. All of that is fixed on a real
+  PS3.
 - **S2DEX 1.x (Yoshi's Story):** the width of `G_SETOTHERMODE_H/L` was off by
   one (the 2.x encoding was used). `gfx-s2dex-modos-viejos` restores the old
   behaviour.

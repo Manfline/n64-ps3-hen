@@ -19,6 +19,7 @@ Las entradas antiguas conservan sus métodos de prueba como historia.
 | Pokémon Snap | sin desorden de dibujo en las escenas probadas (PS3) | causa no aislada; sin recorrer el juego completo |
 | Star Wars Episode I: Racer | video del logo corregido (PS3) | carrera ~47 campos/s |
 | Yoshi's Story | arranque del CIC 6106 corregido; ancho de G_SETOTHERMODE de S2DEX 1.x corregido | confirmado en la PS3: el bloque responde, no desaparecen enemigos ni objetos y no se cuelga al morir; quedan puntos y colores erróneos |
+| Turok: Dinosaur Hunter, Turok 2 | arrancan y corren a 60 campos/s (PS3; en la v0.2.9 no arrancaban) | Turok 2 usa Acclaim (`E44DF568`) por la ruta de F3DEX2: falta su iluminación propia |
 | Battle for Naboo | arranca con HLE (Factor 5 Indy) | 31–33 campos/s en escenas con carga |
 
 ## 2026-10-18 — Candidata de la v0.2.8 en la PS3 real
