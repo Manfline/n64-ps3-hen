@@ -171,9 +171,9 @@ code from other projects keep their original copyright notices (see
 [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md)).
 
 **The combined binary is distributed under GPLv2.** `src/rsp/gfx/f5rogue.c`
-(the graphics microcode HLE for Star Wars: Rogue Squadron) and
+(the graphics microcode HLE for Star Wars: Rogue Squadron),
 `src/rsp/gfx/f5indy.c` (the one for Indiana Jones and the Infernal Machine and
-Battle for Naboo) are translated from
+Battle for Naboo) and `src/rsp/gfx/f3dex2acclaim.c` are translated from
 [GLideN64](https://github.com/gonetz/GLideN64), which is GPL version 2
 only (no "or later"), and keep that license
 (`SPDX-License-Identifier: GPL-2.0-only`). Everything else in the tree stays

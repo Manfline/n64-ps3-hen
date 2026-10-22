@@ -82,11 +82,16 @@ los 68 respaldos del autor (unos 50 juegos distintos; cada uno 4·10⁹ ciclos,
 | 2 «Conker» | `spu_gfx2` | F3DEXBG (sobre F3DEX2) | Conker's Bad Fur Day |
 | 3 «Factor 5» | `spu_gfx3` | F5Rogue (sobre lo común de F3D: `f3d.c` da G_TEXTURE, el modo geométrico, G_SETOTHERMODE y los comandos del RDP) | Star Wars: Rogue Squadron (desde el 2026-10-18) |
 | 4 «Factor 5 Indy» | `spu_gfx4` | F5Indy (`f5indy.c`, con su propia DMEM de 4 KB y su propio recorrido de la lista: no lleva F3D) | Indiana Jones and the Infernal Machine (desde el 2026-10-18); Battle for Naboo (sin respaldo para probarlo) |
-| 5 «Turbo3D» | `spu_gfx5` | Turbo3D y el F3D que la acompaña (`turbo3d.c`, de Glide64mk2) | juegos con Turbo3D (desde el 2026-10-21; `sin-turbo3d` lo apaga) |
+| 5 «Turbo3D/Acclaim» | `spu_gfx5` | Turbo3D con su F3D, y F3DEX2ACCLAIM sobre F3DEX2 | familias optativas (`sin-turbo3d` y `gfx-acclaim`) |
 
 Conker va aparte porque su variante (4,5 KB) le quitaba a la imagen de
 F3DEX2 justo el lugar que necesita el S2DEX suelto; no comparte tareas con
 nadie y su imagen no trae S2DEX2 ni F3DFLX (que nunca corren con él).
+
+Acclaim no cabe en la imagen 1: daba −400 bytes de holgura con el mínimo en
+1536. Va en la imagen 5, cuya caché se conserva en 512 entradas. Lleva F3DEX2
+y su tramo S2DEX2 para conservar el comportamiento de la familia; no lleva
+F3DFLX. L3DEX no tiene HLE y no provoca cambios de imagen del SPE 0.
 
 **Números de cada imagen** (`spu-size` y `tools/spu-stack.py` en el build,
 2026-10-17; el texto de `s2dex.c` ya en 32 bits, ver abajo):

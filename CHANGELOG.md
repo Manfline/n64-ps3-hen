@@ -7,6 +7,7 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 ## [Unreleased]
 
 ### Added
+- **Acclaim microcode HLE (optional, `gfx-acclaim`):** supports its compact point lights and geometry lighting bit; disabled by default.
 - **Turbo3D microcode (HLE):** Dark Rift now draws its fighters, textures and
   animations. It runs in a new SPE 0 image (5) together with the F3D tasks
   the game also sends. On by default; `/dev_hdd0/salsa64/sin-turbo3d` turns it
