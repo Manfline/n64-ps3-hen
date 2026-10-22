@@ -106,6 +106,8 @@ enum salsa64_gbi {
 	SALSA64_GBI_S2DEX1,   /* S2DEX 1.x suelto (Yoshi's Story): los mismos objetos con los opcodes de la primera generación */
 	SALSA64_GBI_F5ROGUE,  /* Star Wars: Rogue Squadron (Factor 5): vértices y triángulos con datos en la lista y tiras generadas (terreno) */
 	SALSA64_GBI_F5INDY,   /* Indiana Jones and the Infernal Machine y Battle for Naboo (Factor 5): una DMEM de 4 KB con DMA, luces y partículas */
+	SALSA64_GBI_TURBO3D, /* listas de objetos de Dark Rift */
+	SALSA64_GBI_TURBO3D_F3D, /* su Fast3D acompañante, en la misma imagen */
 };
 
 /* Campos de OSTask (16 palabras en DMEM 0xFC0). */
@@ -148,6 +150,7 @@ struct salsa64_gfx_backend {
 	 * RSP a bajo nivel (modo auto) o terminan sin dibujar. El SPE 0 las hace en las imágenes 0 y 1
 	 * (rsp/gfx/spe0.h, GFX_PART_S2DEX): el host y el PPE, todas. */
 	bool s2dex;
+	bool turbo3d; /* familia experimental: apagada salvo petición explícita */
 };
 
 /* ABI de las listas de audio (alist): cada microcódigo de audio numera y

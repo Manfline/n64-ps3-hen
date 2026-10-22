@@ -43,12 +43,26 @@ referencia de diseño, sin copiar código** (decisión en docs/rec-ppe.md):
 |---|---|---|---|
 | Not64 | github.com/extremscorner/not64, `d35a7a1c454eca973995939dbca3f06725cf4a6e` (2026-04-10) | GPLv2 o posterior (cabeceras de `r4300/ppc/*`; `LICENCE.TXT` = GPL v2) | Lectura de `r4300/ppc/` y `Recomp-Cache*` |
 | Wii64 | github.com/emukidid/Wii64, `2e1c6fb056e1965a57f6be4accdbf5460e7de291` (2026-10-09) | GPLv2 o posterior | Lectura de `r4300/ppc/` |
-La HLE gráfica de la Fase 2 (`src/rsp/gfx/`, `src/spu/gfx/`, `src/rdp/`) y
-`lib/spukit/` también son código propio. Para el comportamiento de F3DEX2 y
+La HLE gráfica de la Fase 2 (`src/rsp/gfx/`, `src/spu/gfx/`, `src/rdp/`) es
+principalmente código propio; las adaptaciones se detallan abajo.
+`lib/spukit/` también es código propio. Para el comportamiento de F3DEX2 y
 del RDP se consultaron la documentación de n64brew.dev y el código de
 emuladores GPL (abajo), sin copiar código: se reescribió a partir de la
 descripción. Nada de eso entra en `lib/rsxkit/` ni en `lib/spukit/` (MIT),
 que solo usan PSL1GHT.
+
+### Turbo3D
+
+`src/rsp/gfx/turbo3d.c` adapta el formato y recorrido de listas de objetos
+de `src/Glide64/turbo3D.h`, en
+[mupen64plus-video-glide64mk2](https://github.com/mupen64plus/mupen64plus-video-glide64mk2/blob/b07cb0bc8f29d6ee43efdf0a4d5a1b878ba98393/src/Glide64/turbo3D.h),
+revisión `b07cb0bc8f29d6ee43efdf0a4d5a1b878ba98393` (consulta 2026-10-21).
+GPLv2 o posterior: Copyright (c) 2002 Dave2001 y (c) 2003–2009
+Sergey 'Gonetz' Lipski. Se conservan sus avisos en el archivo adaptado.
+La transformación, el recorte y el RDP usan las funciones de Salsa64;
+no se importa código Glide ni se modifica ninguna biblioteca MIT.
+Los CRC `2BDCFC8A` y `77195A68` identifican Turbo3D y su Fast3D acompañante
+en la tabla de GLideN64 (`src/GBI.cpp`): solo valores, no código.
 
 Datos tomados de terceros (no código):
 

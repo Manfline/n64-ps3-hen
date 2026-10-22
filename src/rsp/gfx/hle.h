@@ -367,6 +367,7 @@ void gfx_io_tex_cache(struct gfx_state *g, uint32_t off, uint32_t size);
 typedef bool (*gfx_cmd_hook)(struct gfx_state *g, uint32_t w0, uint32_t w1);
 void gfx_dl_f3dex2(struct gfx_state *g, gfx_cmd_hook hook);
 void gfx_dl_f3d(struct gfx_state *g, gfx_cmd_hook hook);
+void gfx_dl_turbo3d(struct gfx_state *g);
 /* Variantes de Rare: Perfect Dark y Diddy Kong Racing (de F3D) y Conker (de F3DEX2). */
 void gfx_dl_f3dpd(struct gfx_state *g);
 void gfx_dl_f3dexbg(struct gfx_state *g);

@@ -38,6 +38,8 @@
 #include "spu_gfx3_stack.h"
 #include "spu_gfx4_bin.h"
 #include "spu_gfx4_stack.h"
+#include "spu_gfx5_bin.h"
+#include "spu_gfx5_stack.h"
 
 /* Las imágenes embebidas (src/frontend/Makefile) y sus números del build
  * (tools/spu-stack.py): hasta dónde llega el programa en el local store y
@@ -55,11 +57,12 @@ static const struct gfx_spu_image images[GFX_SPE0_IMAGES] = {
 	{ "spu_gfx2", spu_gfx2_bin, &spu_gfx2_bin_size, SPU_GFX2_END, SPU_GFX2_STACK, SPU_GFX2_SLACK },
 	{ "spu_gfx3", spu_gfx3_bin, &spu_gfx3_bin_size, SPU_GFX3_END, SPU_GFX3_STACK, SPU_GFX3_SLACK },
 	{ "spu_gfx4", spu_gfx4_bin, &spu_gfx4_bin_size, SPU_GFX4_END, SPU_GFX4_STACK, SPU_GFX4_SLACK },
+	{ "spu_gfx5", spu_gfx5_bin, &spu_gfx5_bin_size, SPU_GFX5_END, SPU_GFX5_STACK, SPU_GFX5_SLACK },
 };
 static const struct gfx_spu_image phase_images[] = {
 	{ "spu_gfx1fase8", spu_gfx1fase8_bin, &spu_gfx1fase8_bin_size, SPU_GFX1FASE8_END, SPU_GFX1FASE8_STACK, SPU_GFX1FASE8_SLACK },
 };
-_Static_assert(GFX_SPE0_IMAGES == 5, "una entrada de `images` por imagen del SPE 0");
+_Static_assert(GFX_SPE0_IMAGES == 6, "una entrada de `images` por imagen del SPE 0");
 
 static const struct gfx_spu_image *image_data(const struct salsa64_gfx_spu *s, int img)
 {
@@ -265,7 +268,8 @@ static int check_lists(spukit_worker *w, int img, struct detail_window *detail)
 					 SALSA64_GBI_F3DPD,  SALSA64_GBI_F3DDKR, SALSA64_GBI_F3DJFG,
 					 SALSA64_GBI_S2DEX1, SALSA64_GBI_F3DEX2, SALSA64_GBI_F3DZEX2,
 					 SALSA64_GBI_S2DEX,  SALSA64_GBI_F3DEXBG,
-					 SALSA64_GBI_F5ROGUE, SALSA64_GBI_F5INDY };
+					 SALSA64_GBI_F5ROGUE, SALSA64_GBI_F5INDY,
+					 SALSA64_GBI_TURBO3D, SALSA64_GBI_TURBO3D_F3D };
 	int bad = 0;
 	uint32_t task = 0;
 	memset(chk.cache, 0, sizeof chk.cache);

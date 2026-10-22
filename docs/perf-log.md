@@ -1,5 +1,91 @@
 # Registro de rendimiento
 
+## 2026-10-21 — Memoria por reapertura: limpieza completa de newlib
+
+RPCS3, revisión `2dcd367`, mismo ELF y ocho aperturas consecutivas del
+homebrew gráfico por variante. Afín, recorte y Turbo3D activos en ambos;
+solo cambia `memoria-hilos`. No hay ROMs comerciales en esta prueba.
+
+| Diferencia de heap entre cierres (bytes) | Referencia | Limpieza completa |
+|---|---:|---:|
+| 1 | +1968 | +112 |
+| 2 | +1840 | 0 |
+| 3 | +1904 | 0 |
+| 4 | +1904 | 0 |
+| 5 | +1904 | 0 |
+| 6 | +1840 | 0 |
+| 7 | +1904 | 0 |
+| Total | +13264 | +112 |
+
+La reserva inicial de 112 bytes no vuelve a crecer en los seis cierres
+siguientes. Arena y tope constantes; no confundir la caída de «libres KB»
+redondeados con bytes perdidos. Ambos conjuntos: ocho aperturas/cierres
+correctos, todas las pantallas 42/42 y salida normal. Se conserva el aviso
+inicial `0x60` conocido del homebrew, en ambas variantes. No son medidas
+de velocidad ni una certificación de memoria en hardware real.
+
+La prueba aislada de siete lotes de ocho hilos deja 0 bytes con limpieza
+en decimales, logger y alta precisión. La variante previa dejaba 208 bytes
+por hilo en alta precisión: `_reclaim_reent` no recogía su cadena `_p5s`.
+El candidato la vacía antes y preserva los descriptores estándar 0..2.
+No modifica el camino de emulación por campo ni la HLE gráfica.
+
+Logs `build/memoria-final-{referencia,limpio}-rpcs3.log`; SHA-256 completos
+en `estado.md`. Falta repetir varias aperturas en la misma aplicación PS3;
+no salir al XMB entre ellas porque eso reinicia el proceso y oculta el
+crecimiento acumulativo. La prueba de consola requiere autorización de
+envío y no se da por realizada con RPCS3.
+
+## 2026-10-21 — Control F3D con Mario 64 en el candidato Turbo3D
+
+`5c51bb2`/`SLSA00184`, misma aplicación: Mario usa imagen F3D, 2180 tareas
+gráficas y 4467 campos realmente emulados, sin cortes reportados ni
+descartes de cola. 43 ventanas gráficas, rango 51,2–62,9 campos/s;
+las últimas dan 59,8–59,9. No son FPS únicos ni un A/B de rendimiento.
+La carga de estado de ranura 0 salta del campo 1889 al 11356: excluir ese
+salto del trabajo ejecutado. Regreso al menú y salida normal al XMB.
+Aviso acumulativo de memoria entre cierres registrado en `estado.md`.
+
+Log compuesto `build/ps3/re2-spe/turbo3d-regresion-mario64-20261021.log`,
+SHA-256 `e4176e4fb33ef2822e27237251481a621cbef95e3d6f458a12e13638468b98b9`.
+
+## 2026-10-21 — Segunda corrida Turbo3D, mismo paquete en PS3
+
+Revisión `5c51bb2`, Dark Rift, solo líneas 2727–7187 del log compuesto:
+13935 campos emulados y 30474 tareas gráficas mixtas en imagen 5, cerca
+de cuatro minutos. En 138 ventanas gráficas, cinco bajan de 58 campos/s;
+rango total 50,6–62,1. Las últimas cinco dan 59,8/59,8/51,8/59,8/59,8;
+la de 51,8 tiene un peor campo de 275,9 ms. Causa de los picos no aislada.
+Hasta 877 triángulos por tarea de promedio de ventana; no son FPS únicos
+ni cifras exclusivas de la familia Turbo3D. No hay comparación A/B de la
+misma carga ni se concluye una mejora de velocidad frente a la primera
+pelea. Cierre limpio; aviso de crecimiento de heap entre juegos registrado
+como pendiente en `estado.md`.
+
+Log `build/ps3/re2-spe/dark-rift-turbo3d-segunda-20261021.log`, SHA-256
+`81d89a796316d5e9f69e2aaa6e06e76fdd32b659c9b521cad8ba2d1029084227`.
+
+## 2026-10-21 — Turbo3D: primera corrida en PS3, sin A/B equivalente
+
+Código `5c51bb2`, Dark Rift NTSC, escala 5×/Nítida y sin filtro.
+Opción Turbo3D activa; imagen 5 con 13935 tareas combinadas de Turbo3D y
+su F3D acompañante. 7016 campos emulados y cierre limpio. El log no
+identifica por sí solo qué escena corresponde a cada ventana.
+
+De 68 ventanas gráficas registradas, solo una baja de 58 campos/s:
+1800–1899, 50,3 campos/s y peor campo 332,9 ms de emulación. No se ha
+determinado la causa del pico; no atribuirlo sin más a compilación o HLE.
+Las cinco últimas ventanas (6500–6999) dan 59,6–60,1 campos/s,
+878–943 triángulos por tarea, SPE 2,82–3,81 ms y traducción RSX
+1,86–2,65 ms. Son promedios por tarea de ventanas mixtas, no tiempos
+exclusivos de Turbo3D ni FPS de imágenes únicas.
+
+No comparar el rendimiento contra la versión que omitía los modelos como
+si dibujara la misma carga. Falta confirmación visual y no es una prueba
+de equivalencia frente al RSP real. No se cambian otras opciones.
+Log `build/ps3/re2-spe/dark-rift-turbo3d-20261021.log`, SHA-256
+`603187cf2aaea08c6f8b04e52304a5ac96425a8aedbe31489e22b2f5704a907d`.
+
 ## 2026-10-21 — Battle for Naboo: coste medido sin comparación A/B (PS3)
 
 Revisión `7c723d3`, imagen Factor 5 Indy, escala 1× sin filtro. El autor
