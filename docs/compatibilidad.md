@@ -10,6 +10,17 @@ el [radar de compatibilidad](compatibilidad/index.html). Sus datos están en
 
 Las entradas antiguas conservan sus métodos de prueba como historia.
 
+## 2026-10-22 — Candidata de la v0.2.10 (microcódigos)
+
+| Juego | Estado | Notas |
+|---|---|---|
+| Dark Rift | dibuja peleadores, texturas y animaciones (PS3) | Turbo3D en la imagen 5 del SPE 0; solo con `gfx-turbo3d`. Probada una pelea; Mario 64 sin regresión |
+| Resident Evil 2 | letras de OPTIONS legibles (PS3) | solo con `gfx-afin-cadena`; menús, inventario y partida sin regresión |
+| Pokémon Snap | sin desorden de dibujo en las escenas probadas (PS3) | causa no aislada; sin recorrer el juego completo |
+| Star Wars Episode I: Racer | video del logo recortado por la tijera, corregido | falta confirmarlo en la PS3 |
+| Yoshi's Story | ancho de G_SETOTHERMODE de S2DEX 1.x corregido | sigue trabándose en el bloque de texto: la reserva de objetos se llena |
+| Battle for Naboo | arranca con HLE (Factor 5 Indy) | 31–33 campos/s en escenas con carga |
+
 ## 2026-10-18 — Candidata de la v0.2.8 en la PS3 real
 
 Resumen de lo que cambia de estado desde la v0.2.7 (el detalle de cada juego

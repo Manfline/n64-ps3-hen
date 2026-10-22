@@ -6,66 +6,51 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 
 ## [Unreleased]
 
-- Limpia el candidato: diagnóstico JIT opcional, menos imágenes SPE y modos S2DEX 1.x corregidos.
+### Added
+- **Turbo3D microcode (HLE, optional):** Dark Rift now draws its fighters,
+  textures and animations (confirmed on a real PS3). It runs in a new SPE 0
+  image (5) together with the F3D tasks the game also sends. Off by default:
+  create `/dev_hdd0/salsa64/gfx-turbo3d` to enable it; without it Salsa64
+  behaves as in 0.2.9. Based on Glide64mk2 (GPLv2+), see `docs/THIRD_PARTY.md`.
+- **Affine texture scale for F3DEX2 loaded from S2DEX (optional,
+  `gfx-afin-cadena`):** fixes the garbled letters of the Resident Evil 2
+  OPTIONS menu (confirmed on a real PS3, with menus, inventory and a saved game
+  checked for regressions).
+- **Vector clipping in the SPE (optional, `gfx-recorte-vector`):** F3DEX2
+  vertices are tested against the clip planes four at a time. About 12 % less
+  time per vertex in the batch on Road Rash; not a global FPS gain.
 
-- Ajusta la alineación local del diagnóstico DMA a 16 bytes para recuperar
-  pila en la variante de recorte, conservando el destino alineado a 128.
+### Changed
+- **Faster F3DEX2 in the SPE:** vertices without lights or TEXGEN that carry
+  fog are processed four at a time. `gfx-escalar` keeps the old path; a
+  self-test compares both bit for bit.
+- **Recompiler and busy-wait loops:** dropping a busy-wait probe no longer
+  throws away the translated block. Road Rash recompiled the same code tens of
+  thousands of times (85 % fewer compilations in the host measurement).
+  `jit-invalidacion-vieja` restores the old behaviour for comparison.
+- **Auto low-level RSP mode** keeps the HLE microcodes of Perfect Dark and
+  Conker.
+- Recompiler fingerprint diagnostics are now optional (`jit-diag`) and cost
+  nothing when off.
 
-- Separa la autoprueba de hash del bucle gráfico SPE para liberar pila
-  activa sin reducir cachés ni el margen de seguridad.
+### Fixed
+- **S2DEX 1.x (Yoshi's Story):** the width of `G_SETOTHERMODE_H/L` was off by
+  one (the 2.x encoding was used). `gfx-s2dex-modos-viejos` restores the old
+  behaviour. It does not fix the Yoshi's Story hang.
+- **Pokémon Snap:** the draw-order problem is gone in the scenes tested on a
+  real PS3 (cause not isolated).
+- **Racer:** the interlaced intro video is no longer clipped by the RDP
+  scissor of its task and should stop jumping (to be confirmed on a real PS3).
+- **Memory between games (optional, `memoria-hilos`):** releases the newlib
+  buffers of the emulation thread when a game closes.
 
-- Prepara la combinación de la corrección afín de RE2 con el lote SPE:
-  paquete completo dentro del presupuesto, pruebas host y cuatro rutas en
-  RPCS3 correctas y pruebas del conjunto en PS3 registradas. Integración
-  local autorizada; sin publicación.
-
-- Documenta el corte por presupuesto de comandos de OoT, observado también
-  en la imagen normal anterior; no se considera un fallo resuelto.
-
-- Reduce el estado del candidato afín de RE2 para recuperar el margen del
-  SPE, conservando la activación opcional y la caché de texturas.
-
-- Añade una comparación optativa de la escala de textura afín cuando una
-  tarea S2DEX carga F3DEX2 (`gfx-afin-cadena`), con controles de perspectiva,
-  sprites, rectángulos y `G_MODIFYVTX`. Referencia conservada por omisión;
-  candidato empaquetado dentro del presupuesto del SPE y OPTIONS legible
-  confirmado por el autor en la PS3. Regresión básica visual y cierre limpio
-  comprobados e integrados con la base actual; activación todavía optativa.
-
-- Amplía la traza VI de Racer: una ventana de campos, decisiones sin imagen o
-  descartadas, registros instantáneos y la selección ya hecha por el RSX.
-- Reserva las filas que lee la ventana VI al crear un framebuffer: el video
-  entrelazado de Racer ya no queda limitado por la tijera de su tarea RDP y
-  deja de saltar verticalmente.
-
-- **Recorte SIMD experimental:** `gfx-recorte-vector` compara por planos
-  cuatro vértices F3DEX2 a la vez; conserva la fase 7 como referencia A/B y
-  añade autoprueba directa de las máscaras en el SPE. En el A/B de Road Rash
-  en PS3, el lote consume aproximadamente 12 % menos por vértice vectorial;
-  no representa una ganancia global de FPS.
-
-- **HLE gráfica:** en modo RSP a bajo nivel automático, Perfect Dark y
-  Conker conservan ahora sus microcódigos HLE. La autoprueba SPE↔PPE cubre
-  S2DEX suelto 1.x y 2.x, G_BRANCH_W de F3DZEX2 y el cambio a F3DFLX.
-
-- **HLE gráfica del SPE:** la imagen F3DEX2 procesa de cuatro en cuatro los
-  vértices sin luces ni TEXGEN que llevan niebla. `gfx-escalar` conserva la
-  ruta anterior para A/B y la autoprueba compara ambas salidas bit a bit.
-
-- **Road Rash 64:** conserva los bloques traducidos al descartar sondas de
-  espera; las entradas que colisionaban retraducían código idéntico. Añade
-  contadores por causa y `jit-invalidacion-vieja` para comparar.
-
-- **Diagnóstico opcional de la HLE gráfica del SPE** (`gfx-spe-detalle`):
-  bloque DMA externo con contadores de etapas, geometría y transferencias, y
-  autoprueba sintética A/B; apagado por omisión, sin cambiar la cola ni el ABI
-  del resultado gráfico.
-
-- **Subfases de vértices de la HLE gráfica del SPE:** `gfx-fase-1` a
-  `gfx-fase-7` seleccionan al abrir una medición de desempaquetado,
-  proyección, recorte, niebla, conversión/escritura, postproceso completo
-  o lote completo en la imagen F3DEX2.
-
+### Known issues
+- Yoshi's Story still hangs when hitting a text block: the game's object pool
+  fills up (under investigation).
+- Star Wars Episode I: Battle for Naboo runs at about 31-33 fields/s in heavy
+  scenes.
+- Zelda: Ocarina of Time can cut display lists by command budget (also in
+  0.2.9).
 
 ## [0.2.9] — 2026-10-19
 
