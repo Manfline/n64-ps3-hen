@@ -17,11 +17,6 @@ grupo de familias, y el PPE carga la de la familia de cada tarea.
 
 ## Inventario (antes de partir)
 
-El candidato Turbo3D añade una sexta imagen (`spu_gfx5`), aislada de las
-cinco existentes: listas Turbo3D y el Fast3D acompañante de Dark Rift.
-Solo se selecciona con `gfx-turbo3d`; véase `turbo3d.md`. Su caché de 512
-entradas y su búfer de 256 vértices no alteran los de otras familias.
-
 Del `.map` del programa único de main e22e10c (enlazado aparte con
 `-Wl,-Map`, las mismas banderas y `--gc-sections`) y `tools/spu-stack.py`:
 texto 111 152, datos 800, bss 138 640 bytes (250 592 de 262 144); la cadena

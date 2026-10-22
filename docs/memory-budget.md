@@ -126,32 +126,6 @@ Medido en la PS3 abriendo ~40 juegos seguidos sin salir de Salsa64 (log con «me
 
 Quedan sin explicar ~2 KB de heap en uso por juego (75 365 → 75 454 KB en 37 aperturas, más bloques libres sueltos: 10 → 74): se parecen a los datos por hilo que newlib reserva al crear los hilos de emulación y de audio. Cada cierre escribe ahora dos líneas, «memoria, reservado por subsistema» y «memoria, cambio frente al cierre anterior», para ver qué crece de una apertura a otra.
 
-**Diagnóstico 2026-10-21:** una prueba mínima PS3 ejecutada en RPCS3
-confirma reservas que sobreviven a la salida del hilo: ocho hilos con
-enteros dejan 0 bytes; con conversión decimal, 4992 (624 por hilo); con
-conversión y el logger, 13312 (1664 por hilo). Recoger el contexto de
-newlib preservando los descriptores estándar deja 0 bytes en ambos lotes.
-Son cifras de esta prueba, no una medición nueva de hardware real ni la
-atribución completa de los ~2 KB históricos. El candidato recoge solo el
-hilo de emulación, con `memoria-hilos`, apagado por omisión; el detalle y
-los controles están en `hilos-ppe.md`. El log de diferencias entre cierres
-añade bytes exactos para distinguir un bloque pequeño del redondeo a KB.
-
-La primera recogida dejaba todavía 48–160 bytes en reaperturas del
-frontend. Un rastreo temporal de asignaciones identifica bloques de
-`_Balloc`/`__i2b` de contextos de hilo ya terminados, correspondientes a
-`_p5s`, no recogida por esta newlib. Una prueba de precisión confirma el
-defecto (208 bytes por hilo) y la corrección (cero). El candidato vacía
-también esa cadena antes de la recogida general. El rastreo no forma
-parte del paquete normal ni se activa durante la emulación habitual.
-
-**Resultado del candidato completo `2dcd367` (RPCS3):** ocho reaperturas
-idénticas, mismo binario; referencia acumula 13264 bytes entre siete
-cierres, limpieza acumula 112 en el primer intervalo y cero en los seis
-siguientes. Ambas secuencias pasan la prueba gráfica. Falta medir en PS3
-real; se conserva la reserva inicial observada y no se redondea a cero.
-Datos y procedimiento de confirmación en `perf-log.md` y `estado.md`.
-
 
 ### Road Rash: medición y parche de consultas de espera (2026-10-20)
 
