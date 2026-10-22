@@ -34,9 +34,14 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
   nothing when off.
 
 ### Fixed
+- **Boot of CIC 6106 games (Yoshi's Story, F-Zero X…):** the HLE boot now runs
+  the first stage of the cartridge's own IPL3 once, so low RDRAM holds what
+  the real console leaves there (checked byte for byte against ares). Yoshi's
+  Story installed empty callbacks without it, never freed its objects and hung
+  when hitting a text block (still to be confirmed on a real PS3).
 - **S2DEX 1.x (Yoshi's Story):** the width of `G_SETOTHERMODE_H/L` was off by
   one (the 2.x encoding was used). `gfx-s2dex-modos-viejos` restores the old
-  behaviour. It does not fix the Yoshi's Story hang.
+  behaviour.
 - **Pokémon Snap:** the draw-order problem is gone in the scenes tested on a
   real PS3 (cause not isolated).
 - **Racer:** the interlaced intro video is no longer clipped by the RDP
@@ -45,8 +50,6 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
   buffers of the emulation thread when a game closes.
 
 ### Known issues
-- Yoshi's Story still hangs when hitting a text block: the game's object pool
-  fills up (under investigation).
 - Star Wars Episode I: Battle for Naboo runs at about 31-33 fields/s in heavy
   scenes.
 - Zelda: Ocarina of Time can cut display lists by command budget (also in

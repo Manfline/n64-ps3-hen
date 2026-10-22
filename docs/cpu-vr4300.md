@@ -54,9 +54,10 @@ no se copió código de Not64, Mupen64Plus ni ares.
 
 `salsa64_boot_hle` (`src/core/boot.c`) sustituye la PIF ROM (IPL1 e IPL2) y
 el IPL3 del cartucho: carga el programa y deja la máquina como la deja el
-IPL3 al saltar a él. No se incluye ni se ejecuta código de Nintendo; la
-variante de IPL3 de la ROM del usuario se reconoce por el CRC-32 de sus bytes
-0x40–0xFFF.
+IPL3 al saltar a él. No incluye código de Nintendo; la variante de IPL3 de la
+ROM del usuario se reconoce por el CRC-32 de sus bytes 0x40–0xFFF. La única
+ejecución parcial es la primera etapa 6106/7106, tomada directamente de esa
+ROM para reconstruir su segunda etapa cifrada en RDRAM baja.
 
 Antes de arrancar, `salsa64_rom_normalize` lleva el volcado a .z64
 (big-endian): .v64 (bytes intercambiados de dos en dos, firma `37 80 40 12`)
@@ -131,10 +132,21 @@ fuentes en docs/THIRD_PARTY.md):
 | Tamaño de la RDRAM | En 0x3F0, además de osMemSize en 0x318 | homebrew que arranca con IPL3 6105 (n64bootloader) |
 | `osCicId` (0x310) | 6105 (también con el 6103: 6103) | Conker (sin él no arranca su hilo principal), Perfect Dark, DK64; con 6103, Banjo-Kazooie y Diddy Kong Racing |
 
+Solo CIC 6106/7106:
+
+- Su segunda etapa en RDRAM `0x000–0x2BB` no existe tal cual en la ROM. El
+  arranque ejecuta unas 6 000 instrucciones de la primera etapa que aporta la
+  ROM, hasta el salto a esa zona, y conserva solo las escrituras a RDRAM; el
+  CPU, el RCP, el planificador y el tiempo vuelven al estado HLE anterior.
+- Yoshi comprueba una palabra de esa zona durante la inicialización. Si falta,
+  instala callbacks vacíos en sus objetos y nunca alcanza la rutina que los
+  devuelve al estado libre; con el residuo correcto vuelve a reutilizarlos.
+- DMEM e IMEM terminan en `0xFF`, salvo `0x17D8` en IMEM `0x000`, y
+  `osCicId` también vale `0x17D8`, como en la referencia.
+
 Las variables de libultra (0x300–0x318, con `osCicId`) se escriben después
 y pisan la copia; de 0x31C a 0x337 queda lo copiado. `osCicId` se escribe
-solo con el 6103 y el 6105, las dos variantes de las que hay juegos que lo
-comprueban; con las demás queda en 0. Con el 6105 no se reproduce lo que queda en
+solo con el 6103, el 6105 y el 6106. Con el 6105 no se reproduce lo que queda en
 IMEM 0x000–0x11F (el microcódigo, descifrado del residuo del IPL2 que deja la
 PIF ROM): es código de Nintendo. Tampoco el resto de los registros que deja
 cada IPL3 (los cálculos del checksum): no hay documentación pública ni juego

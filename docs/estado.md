@@ -1,5 +1,15 @@
 # Estado
 
+## 2026-10-22 — Arranque del CIC 6106: residuo del IPL3 en la RDRAM baja
+
+Causa del cuelgue de Yoshi's Story en el bloque de texto: el arranque HLE no
+reproducía lo que el IPL3 del 6106 deja cifrado en RDRAM 0x000–0x2BB, y el
+juego instalaba callbacks vacíos y nunca liberaba objetos (reserva de 100
+llena; ares, 37). `boot_x106_copy` (`src/core/boot.c`) ejecuta una vez la
+primera etapa del IPL3 del propio cartucho (~6000 instrucciones) y restaura el
+resto de la máquina. En el host: RDRAM igual a ares byte a byte, 73 altas y 47
+bajas (máximo 27 ocupados), lockstep de 600 campos sin diferencias. Falta la PS3.
+
 ## 2026-10-22 — Limpieza de candidata
 
 - El diagnóstico del recompilador queda apagado por omisión y reserva sus
