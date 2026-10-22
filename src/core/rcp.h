@@ -108,6 +108,7 @@ enum salsa64_gbi {
 	SALSA64_GBI_F5INDY,   /* Indiana Jones and the Infernal Machine y Battle for Naboo (Factor 5): una DMEM de 4 KB con DMA, luces y partículas */
 	SALSA64_GBI_TURBO3D, /* listas de objetos de Dark Rift */
 	SALSA64_GBI_TURBO3D_F3D, /* su Fast3D acompañante, en la misma imagen */
+	SALSA64_GBI_F3DEX2ACCLAIM, /* variante de F3DEX2 con luces compactas y bit de iluminación propio */
 };
 
 /* Campos de OSTask (16 palabras en DMEM 0xFC0). */
@@ -151,6 +152,7 @@ struct salsa64_gfx_backend {
 	 * (rsp/gfx/spe0.h, GFX_PART_S2DEX): el host y el PPE, todas. */
 	bool s2dex;
 	bool turbo3d; /* familia experimental: apagada salvo petición explícita */
+	bool acclaim; /* variante optativa: solo se reconoce por CRC cuando está activa */
 };
 
 /* ABI de las listas de audio (alist): cada microcódigo de audio numera y

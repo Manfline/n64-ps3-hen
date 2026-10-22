@@ -362,7 +362,9 @@ void gfx_load_vertices(struct gfx_state *g, uint32_t addr, uint32_t v0, uint32_t
 	GFX_DETAIL(g, {
 		g->detail->vertex_calls++;
 		g->detail->vertices += n;
-		if (g->geom & G_LIGHTING) g->detail->lit_vertices += n;
+		if ((g->geom & G_LIGHTING) ||
+		    (GFX_HAS(ACCLAIM) && g->job->gbi == SALSA64_GBI_F3DEX2ACCLAIM &&
+		     (g->geom & G_ACCLAIM_LIGHTING))) g->detail->lit_vertices += n;
 		if (g->geom & G_FOG) g->detail->fog_vertices += n;
 		if (g->geom & G_TEXTURE_GEN) g->detail->texgen_vertices += n;
 	});
@@ -525,6 +527,8 @@ void gfx_vertices(struct gfx_state *g, const uint8_t *src, uint32_t v0, uint32_t
 		g->mvp_dirty = false;
 	}
 	bool lighting = (g->geom & G_LIGHTING) != 0;
+	bool acclaim_lighting = GFX_HAS(ACCLAIM) && g->job->gbi == SALSA64_GBI_F3DEX2ACCLAIM &&
+				(g->geom & G_ACCLAIM_LIGHTING) != 0;
 	if (lighting && g->lights_dirty)
 		update_lights(g);
 	const uint8_t *flx_tab = GFX_HAS(FLX) && lighting ? gfx_flx_table(g) : NULL;
@@ -537,7 +541,7 @@ void gfx_vertices(struct gfx_state *g, const uint8_t *src, uint32_t v0, uint32_t
 	 * también cuando gfx-escalar pide la ruta anterior para comparar. */
 	if (g->job->flags & GFX_JOB_SCALAR) {
 		GFX_DETAIL(g, g->detail->scalar_forced += n);
-	} else if (lighting) {
+	} else if (lighting || acclaim_lighting) {
 		GFX_DETAIL(g, {
 			g->detail->scalar_lighting += n;
 			if (g->geom & G_TEXTURE_GEN)
@@ -605,6 +609,8 @@ void gfx_vertices(struct gfx_state *g, const uint8_t *src, uint32_t v0, uint32_t
 					rgb[2] += k * g->lights[l].col[2];
 				}
 			}
+			if (acclaim_lighting)
+				gfx_acclaim_light(g, v, rgb);
 			for (int k = 0; k < 3; k++)
 				v->c[k] = (uint8_t)clampf(rgb[k] + 0.5f, 0.0f, 255.0f);
 			v->c[3] = c[3];
@@ -615,6 +621,12 @@ void gfx_vertices(struct gfx_state *g, const uint8_t *src, uint32_t v0, uint32_t
 				v->c[3] = gfx_flx_alpha(g, flx_tab, c);
 			else if (g->geom & G_TEXTURE_GEN)
 				gfx_texgen_vertex(g, nrm, v);
+		} else if (acclaim_lighting) {
+			float rgb[3] = { (float)c[0], (float)c[1], (float)c[2] };
+			gfx_acclaim_light(g, v, rgb);
+			for (int k = 0; k < 3; k++)
+				v->c[k] = (uint8_t)clampf(rgb[k] + 0.5f, 0.0f, 255.0f);
+			v->c[3] = c[3];
 		} else {
 			v->c[0] = c[0];
 			v->c[1] = c[1];

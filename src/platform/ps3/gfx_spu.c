@@ -269,7 +269,7 @@ static int check_lists(spukit_worker *w, int img, struct detail_window *detail)
 					 SALSA64_GBI_S2DEX1, SALSA64_GBI_F3DEX2, SALSA64_GBI_F3DZEX2,
 					 SALSA64_GBI_S2DEX,  SALSA64_GBI_F3DEXBG,
 					 SALSA64_GBI_F5ROGUE, SALSA64_GBI_F5INDY,
-					 SALSA64_GBI_TURBO3D, SALSA64_GBI_TURBO3D_F3D };
+					 SALSA64_GBI_TURBO3D, SALSA64_GBI_TURBO3D_F3D, SALSA64_GBI_F3DEX2ACCLAIM };
 	int bad = 0;
 	uint32_t task = 0;
 	memset(chk.cache, 0, sizeof chk.cache);

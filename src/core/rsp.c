@@ -456,6 +456,18 @@ static bool gfx_ucode_nonear(const uint8_t *q, const uint8_t *end)
 	return false;
 }
 
+/* La variante Acclaim comparte el texto de F3DEX2: solo se distingue por
+ * los 4 KB de código y solo cuando el interruptor optativo está activo. */
+static bool acclaim_ucode(const struct salsa64_bus *bus, const struct salsa64_task *task)
+{
+	if (!bus->rsp.gfx || !bus->rsp.gfx->acclaim)
+		return false;
+	uint32_t addr = task->ucode & 0x1FFFFFFFu;
+	uint32_t size = task->ucode_size ? task->ucode_size : 0x1000u;
+	return size == 0x1000u && in_rdram(bus, addr, size) &&
+	       salsa64_crc32_words_swapped(bus->rdram + addr, size) == 0xE44DF568u;
+}
+
 static enum salsa64_gbi detect_gbi(const struct salsa64_bus *bus, const struct salsa64_task *task, bool *nonear);
 
 enum salsa64_gbi salsa64_rsp_detect_gbi(const struct salsa64_bus *bus, const struct salsa64_task *task)
@@ -476,6 +488,9 @@ static enum salsa64_gbi detect_gbi(const struct salsa64_bus *bus, const struct s
 	if (size > bus->rdram_size - addr)
 		size = bus->rdram_size - addr;
 	const uint8_t *p = bus->rdram + addr, *end = p + size;
+	/* Antes del texto genérico F3DEX2, que esta variante también trae. */
+	if (acclaim_ucode(bus, task))
+		return SALSA64_GBI_F3DEX2ACCLAIM;
 
 	/* ROMs de prueba de Salsa64 (sin microcódigo de Nintendo). */
 	if (find(p, end, "Salsa64 GBI Turbo3D") && bus->rsp.gfx && bus->rsp.gfx->turbo3d)
@@ -635,7 +650,8 @@ void salsa64_rsp_start(struct salsa64_bus *bus)
 	 * tarea con HLE "disponible" es la que sus backends saben hacer. */
 	if (rsp->lle && rsp->lle_mode != SALSA64_LLE_OFF && rsp->sched) {
 		bool hle_gfx = task.type == SALSA64_TASK_GFX && valid && rsp->gfx &&
-			       (gbi == SALSA64_GBI_F3DEX2 || gbi == SALSA64_GBI_F3DZEX2 || gbi == SALSA64_GBI_F3D ||
+			       (gbi == SALSA64_GBI_F3DEX2 || gbi == SALSA64_GBI_F3DZEX2 ||
+				gbi == SALSA64_GBI_F3DEX2ACCLAIM || gbi == SALSA64_GBI_F3D ||
 				gbi == SALSA64_GBI_F3DEX || gbi == SALSA64_GBI_F3DWR || gbi == SALSA64_GBI_F3DPD ||
 				gbi == SALSA64_GBI_F3DDKR || gbi == SALSA64_GBI_F3DJFG || gbi == SALSA64_GBI_F3DEXBG ||
 				gbi == SALSA64_GBI_F5ROGUE || gbi == SALSA64_GBI_F5INDY ||
