@@ -62,7 +62,7 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
   fields/s). Star Wars Episode I: Battle for Naboo runs at about 31-33
   fields/s in heavy scenes.
 - Pokémon Snap slows down hard at 5× internal resolution (down to about 40
-  fields/s: the RSX cannot keep up); at 1× and 3× it runs at full speed.
+  fields/s: the RSX cannot keep up); up to 4× it runs at full speed.
 - F-Zero X has no fog.
 - Mario Tennis and some Rogue Squadron menu logos have no transparency.
 - Conker's final boss lacks textures and is slow. Mortal Kombat 4 has no

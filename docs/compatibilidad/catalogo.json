@@ -15,7 +15,7 @@
     {"name":"Conker's Bad Fur Day","state":"Con problemas","evidence":"PS3 real","scope":"Jefe final","tags":["framebuffer","rendimiento"],"note":"El jefe final ya se ve, pero faltan texturas y el rendimiento es bajo."},
     {"name":"Mario Tennis","state":"Con problemas","evidence":"PS3 real","scope":"Menús","tags":["alfa","gráficos"],"note":"Los logos de menú todavía pierden transparencia."},
     {"name":"Mortal Kombat 4","state":"Con problemas","evidence":"PS3 real","scope":"Combate","tags":["HUD"],"note":"Faltan las barras de salud."},
-    {"name":"Pokémon Snap","state":"Jugable","evidence":"PS3 real","scope":"Recorrido","tags":["RSX","escala"],"note":"Sin desorden de dibujo; a 1× y 3× va a velocidad completa. A 5× tiene bajadas fuertes (40–52 campos/s): el RSX no alcanza."},
+    {"name":"Pokémon Snap","state":"Jugable","evidence":"PS3 real","scope":"Recorrido","tags":["RSX","escala"],"note":"Sin desorden de dibujo; hasta 4× va a velocidad completa. A 5× tiene bajadas fuertes (40–52 campos/s): el RSX no alcanza."},
     {"name":"Star Fox 64","state":"Con problemas","evidence":"PS3 real","scope":"Menú","tags":["menú"],"note":"El menú duplica opciones."},
     {"name":"The Legend of Zelda: Ocarina of Time","state":"Con problemas","evidence":"PS3 real","scope":"Juego","tags":["iluminación"],"note":"El resplandor de las antorchas atraviesa paredes."},
     {"name":"The Legend of Zelda: Majora's Mask","state":"Con problemas","evidence":"PS3 real","scope":"Juego","tags":["iluminación"],"note":"Quedan fallos de iluminación."},
