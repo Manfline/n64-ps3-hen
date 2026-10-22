@@ -153,6 +153,10 @@ struct gfx_rare {
 			float light_pos[GFX_MAX_LIGHTS + 1][3];
 			float light_ca[GFX_MAX_LIGHTS + 1];  /* intensidad de la luz puntual */
 		};
+		struct {                 /* F3DEX2ACCLAIM: ranuras compactas 2..9 */
+			float pos[8][3];
+			float ca[8], la[8], qa[8];
+		} acclaim;
 		struct {                 /* Diddy Kong Racing (f3ddkr.c) */
 			uint32_t dma_mtx, dma_vtx;   /* G_DMA_OFFSETS: bases de las direcciones de G_MTX y G_VTX */
 			uint32_t vtx_last;           /* donde sigue un G_VTX que añade */
@@ -366,7 +370,9 @@ void gfx_io_tex_cache(struct gfx_state *g, uint32_t off, uint32_t size);
  * (ya resuelto) y false para que siga la familia. */
 typedef bool (*gfx_cmd_hook)(struct gfx_state *g, uint32_t w0, uint32_t w1);
 void gfx_dl_f3dex2(struct gfx_state *g, gfx_cmd_hook hook);
+void gfx_dl_f3dex2acclaim(struct gfx_state *g);
 void gfx_dl_f3d(struct gfx_state *g, gfx_cmd_hook hook);
+void gfx_dl_turbo3d(struct gfx_state *g);
 /* Variantes de Rare: Perfect Dark y Diddy Kong Racing (de F3D) y Conker (de F3DEX2). */
 void gfx_dl_f3dpd(struct gfx_state *g);
 void gfx_dl_f3dexbg(struct gfx_state *g);
@@ -469,6 +475,8 @@ void gfx_light_vectors(struct gfx_state *g);
 /* G_TEXTURE_GEN: s, t del vértice según su normal (unitaria, espacio del
  * modelo) y el lookat, con la escala de G_TEXTURE. */
 void gfx_texgen_vertex(struct gfx_state *g, const float nrm[3], struct gfx_vtx *v);
+/* Suma las luces compactas Acclaim al RGB en flotante, antes de cuantizar. */
+void gfx_acclaim_light(const struct gfx_state *g, const struct gfx_vtx *v, float rgb[3]);
 void gfx_set_viewport(struct gfx_state *g, const uint8_t *vp);
 /* G_MOVEWORD G_MW_CLIP: `offset` dentro de la tabla (RNX 0x04, RNY 0x0C; los
  * positivos RPX y RPY son los mismos con signo contrario). */
@@ -594,6 +602,7 @@ static inline uint32_t gfx_addr(const struct gfx_state *g, uint32_t seg)
  * cualquier microcódigo (f3d.c traduce los suyos). */
 #define G_ZBUFFER            0x00000001u
 #define G_SHADE              0x00000004u
+#define G_ACCLAIM_LIGHTING   0x00000080u
 #define G_CULL_FRONT         0x00000200u
 #define G_CULL_BACK          0x00000400u
 #define G_FOG                0x00010000u

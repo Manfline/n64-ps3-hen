@@ -469,6 +469,7 @@ static void rsp_detect_gbi_dkr(void)
 		{ 0x6859BF8Eu, SALSA64_GBI_F5INDY }, { 0x23FEF05Fu, SALSA64_GBI_F5INDY },
 		/* Animal Crossing: F3DZEX2 y S2DEX2 sin texto de versión. */
 		{ 0xD39A0D4Fu, SALSA64_GBI_F3DZEX2 }, { 0x02C399DDu, SALSA64_GBI_S2DEX },
+		{ 0x2BDCFC8Au, SALSA64_GBI_TURBO3D }, { 0x77195A68u, SALSA64_GBI_TURBO3D_F3D },
 	};
 	state = 0xFFFFFFFFu;  /* CRC de size − 4 ceros, sin la inversión final */
 	for (uint32_t i = 0; i < size - 4; i++)
@@ -481,8 +482,51 @@ static void rsp_detect_gbi_dkr(void)
 		for (int i = 0; i < 4; i++)
 			p[size - 4 + (3 - i)] = tail[i];
 		CHECK_EQ(salsa64_crc32_words_swapped(p, size), cases[c].crc);
+		struct salsa64_gfx_backend turbo = { .turbo3d = true };
+		if (cases[c].gbi >= SALSA64_GBI_TURBO3D) {
+			CHECK_EQ(salsa64_rsp_detect_gbi(&t_n64.bus, &task), SALSA64_GBI_UNKNOWN);
+			salsa64_rsp_set_gfx(&t_n64.bus, &turbo);
+		}
 		CHECK_EQ(salsa64_rsp_detect_gbi(&t_n64.bus, &task), cases[c].gbi);
+		salsa64_rsp_set_gfx(&t_n64.bus, NULL);
 	}
+	memset(p, 0, size);
+}
+
+/* F3DEX2ACCLAIM trae el mismo texto de versión que F3DEX2. Solo el
+ * interruptor optativo permite anteponer el CRC de palabras del código al
+ * texto; apagado, el despacho queda exactamente en F3DEX2. Código sintético. */
+static void rsp_detect_gbi_acclaim(void)
+{
+	struct salsa64_bus *bus = &t_n64.bus;
+	const uint32_t code = 0x8000, size = 0x1000;
+	uint8_t *p = bus->rdram + code, tail[4];
+	uint32_t state = 0xFFFFFFFFu;
+	memset(p, 0, size);
+	for (uint32_t i = 0; i < size - 4; i++)
+		for (int k = 0; k < 8; k++)
+			state = (state >> 1) ^ (0xEDB88320u & (0u - (state & 1)));
+	crc32_force(state, 0xE44DF568u, tail);
+	for (int i = 0; i < 4; i++)
+		p[size - 4 + (3 - i)] = tail[i];
+	CHECK_EQ(salsa64_crc32_words_swapped(p, size), 0xE44DF568u);
+
+	struct salsa64_task task;
+	memset(&task, 0, sizeof task);
+	memset(bus->rdram + 0x5000, 0, 0x800);
+	put_text(0x5040, "RSP Gfx ucode F3DEX       fifo 2.08 ");
+	task.ucode = 0x80000000u | code;
+	task.ucode_size = 0;  /* el RSP carga los 4 KB completos */
+	task.ucode_data = 0x80005000;
+	task.ucode_data_size = 0x800;
+	struct salsa64_gfx_backend off = { 0 }, on = { .acclaim = true };
+	salsa64_rsp_set_gfx(bus, &off);
+	CHECK_EQ(salsa64_rsp_detect_gbi(bus, &task), SALSA64_GBI_F3DEX2);
+	salsa64_rsp_set_gfx(bus, &on);
+	CHECK_EQ(salsa64_rsp_detect_gbi(bus, &task), SALSA64_GBI_F3DEX2ACCLAIM);
+	p[17] ^= 1;
+	CHECK_EQ(salsa64_rsp_detect_gbi(bus, &task), SALSA64_GBI_F3DEX2);
+	salsa64_rsp_set_gfx(bus, NULL);
 	memset(p, 0, size);
 }
 
@@ -749,6 +793,7 @@ void t_suite_rsp(void)
 	RUN(rsp_detect_gbi_crc);
 	RUN(rsp_detect_gbi_wr);
 	RUN(rsp_detect_gbi_dkr);
+	RUN(rsp_detect_gbi_acclaim);
 	RUN(rsp_detect_animal_crossing);
 	RUN(rsp_dpc_from_cpu);
 	RUN(rsp_dpc_split_command);

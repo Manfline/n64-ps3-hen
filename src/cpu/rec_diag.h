@@ -32,4 +32,6 @@ uint64_t salsa64_rec_diag_hash(const struct salsa64_rec *rec, uint32_t pa, uint3
 void salsa64_rec_diag_compiled(struct salsa64_rec *rec, unsigned id, uint64_t ticks);
 void salsa64_rec_diag_hit(struct salsa64_rec *rec, unsigned id, uint32_t pa, uint32_t len);
 void salsa64_rec_diag_report(const struct salsa64_rec *rec, uint64_t hz, bool details, void (*log)(const char *, ...));
+bool salsa64_rec_diag_alloc(struct salsa64_rec *rec);
+void salsa64_rec_diag_free(struct salsa64_rec *rec);
 #endif

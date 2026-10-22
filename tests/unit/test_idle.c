@@ -423,12 +423,13 @@ static void idle_patch_keeps_code(void)
 		t_load(code, sizeof code / sizeof code[0]);
 		R[T1] = 0;
 		struct salsa64_rec *rec = CPU->rec;
-		uint64_t killed = rec ? rec->stats.invalidated : 0, patched = rec ? rec->diag.idle_patched : 0;
+		uint64_t killed = rec ? rec->stats.invalidated : 0, patched = rec && rec->diag ? rec->diag->idle_patched : 0;
 		salsa64_n64_run(&t_n64, 500);
 		CHECK_EQ(R[T0], 0);
 		CHECK_EQ(R[T1], likely ? 99 : 100);
 		if (rec && !(rec->opts & SALSA64_REC_OPT_IDLE_RECOMPILE)) {
-			CHECK(rec->diag.idle_patched > patched);
+			if (rec->diag)
+				CHECK(rec->diag->idle_patched > patched);
 			CHECK_EQ(rec->stats.invalidated, killed);
 		}
 		t_wr32(CODE(1), ADDIU(T0, T0, -2));

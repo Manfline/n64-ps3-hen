@@ -1,5 +1,37 @@
 # Estado
 
+## 2026-10-22 — HLE de F3DEX2ACCLAIM
+
+- Encendida por omisión (`sin-acclaim` la apaga; host `SALSA64_GFX_ACCLAIM=0`).
+  A/B en la PS3: los disparos iluminan las paredes solo con la HLE propia;
+  misma velocidad (Turok 2 59,9; Turok 3 56,3 frente a 56,6 campos/s).
+- Antepone el CRC de palabras `E44DF568`
+  al texto F3DEX2; apagado conserva el despacho y la salida anteriores.
+- La HLE traduce `MOVEMEM` de 24/16 bytes, luces compactas con atenuación y
+  el bit geométrico 0x80; las pruebas usan solo listas y datos sintéticos.
+- En el SPE 0 va en la imagen 5 con F3DEX2; conserva su caché de 512 entradas
+  y deja 4880 bytes de holgura. Las demás imágenes quedan entre 1568 y 14368.
+- Host: 682/887361 sin fallos; build completo y `test-phase2.sh` correctos.
+
+## 2026-10-22 — Arranque del CIC 6106: residuo del IPL3 en la RDRAM baja
+
+Causa del cuelgue de Yoshi's Story en el bloque de texto: el arranque HLE no
+reproducía lo que el IPL3 del 6106 deja cifrado en RDRAM 0x000–0x2BB, y el
+juego instalaba callbacks vacíos y nunca liberaba objetos (reserva de 100
+llena; ares, 37). `boot_x106_copy` (`src/core/boot.c`) ejecuta una vez la
+primera etapa del IPL3 del propio cartucho (~6000 instrucciones) y restaura el
+resto de la máquina. En el host: RDRAM igual a ares byte a byte, 73 altas y 47
+bajas (máximo 27 ocupados), lockstep de 600 campos sin diferencias. Falta la PS3.
+
+## 2026-10-22 — Limpieza de candidata
+
+- El diagnóstico del recompilador queda apagado por omisión y reserva sus
+  tablas solo con `jit-diag` o `SALSA64_REC_DIAG=1`; las cuentas ligeras de
+  invalidación siguen activas. Se retiraron las imágenes de medición 1–7;
+  `gfx-recorte-vector` conserva su imagen propia. La autoprueba vectorial
+  corre una sola vez por arranque. Se integraron los cierres de memoria y
+  la corrección de S2DEX; falta completar build y regresiones en este entorno.
+
 ## 2026-10-21 — Integración autorizada de RE2 y SPE en la rama principal
 
 - El autor da por realizadas las pruebas de RE2 y SPE y autoriza integrar

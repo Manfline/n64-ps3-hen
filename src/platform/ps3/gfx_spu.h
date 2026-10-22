@@ -56,6 +56,7 @@ struct salsa64_gfx_spu {
 	uint32_t switches;       /* cambios de imagen con el juego andando */
 	uint64_t switch_us;      /* lo que costaron, en el PPE */
 	uint32_t selftest_bad;   /* imágenes cuyas tareas de prueba difirieron del PPE (bit por imagen) */
+	bool vector_checked, detail_checked; /* autopruebas de imagen 1, una vez por arranque */
 	/* Estadísticas desde el arranque. */
 	uint32_t tasks;
 	uint64_t spu_ticks;  /* tiempo de la HLE en el SPE (ticks del timebase) */

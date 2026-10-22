@@ -63,9 +63,14 @@ static void check_gbi(uint32_t gbi, bool rare)
 	uint32_t first;
 	run(gbi, vtx_a, cmd_a, tex_a, cache_a, &ra);
 	run(gbi, vtx_b, cmd_b, tex_b, cache_b, &rb);
-	bool gen2 = gbi == SALSA64_GBI_F3DEX2 || gbi == SALSA64_GBI_F3DZEX2;
+	bool gen2 = gbi == SALSA64_GBI_F3DEX2 || gbi == SALSA64_GBI_F3DZEX2 ||
+		    gbi == SALSA64_GBI_F3DEX2ACCLAIM;
 	bool s2dex = gbi == SALSA64_GBI_S2DEX || gbi == SALSA64_GBI_S2DEX1;
-	CHECK(ra.draws >= (s2dex ? 1u : 3u));
+	if (gbi == SALSA64_GBI_F3DEX2ACCLAIM)
+		CHECK_EQ(gs.ucode, GFX_SELFTEST_UCODE);
+	CHECK(ra.draws >= (s2dex || gbi == SALSA64_GBI_TURBO3D ? 1u : 3u));
+	if (gbi == SALSA64_GBI_TURBO3D)
+		CHECK_EQ(ra.triangles, 2);
 	CHECK_EQ(ra.flags & GFX_RES_CUT, 0);
 	CHECK(ra.flags & GFX_RES_FULLSYNC);
 	CHECK_EQ(ra.dl_errors, 0);
@@ -79,6 +84,7 @@ static void check_gbi(uint32_t gbi, bool rare)
 		CHECK_EQ(ra.triangles, gen2 ? 7u : 5u);
 		CHECK_EQ(ra.rects, gen2 ? 5u : 4u);
 		CHECK_EQ(ra.unknown_cmds, 0);
+		CHECK_EQ(ra.last_unknown, 0);
 		CHECK_EQ(ra.textures, gen2 ? 3u : 2u);
 		CHECK_EQ(ra.bg, gen2 ? 1u : 0u);
 	}
@@ -133,6 +139,7 @@ static void gfx_selftest_lists(void)
 	check_gbi(SALSA64_GBI_S2DEX1, false);
 	check_gbi(SALSA64_GBI_F3DEX2, false);
 	check_gbi(SALSA64_GBI_F3DZEX2, false);
+	check_gbi(SALSA64_GBI_F3DEX2ACCLAIM, false);
 	check_gbi(SALSA64_GBI_S2DEX, false);
 	/* Las de Rare interpretan distinto vértices y triángulos: basta que
 	 * dibujen algo y terminen (lo que se compara es SPE contra PPE). */
@@ -142,6 +149,8 @@ static void gfx_selftest_lists(void)
 	check_gbi(SALSA64_GBI_F3DEXBG, true);
 	check_gbi(SALSA64_GBI_F5ROGUE, true);
 	check_gbi(SALSA64_GBI_F5INDY, true);
+	check_gbi(SALSA64_GBI_TURBO3D, true);
+	check_gbi(SALSA64_GBI_TURBO3D_F3D, false);
 }
 
 /* La comparación con tolerancia: los flotantes de los vértices y de los
@@ -203,12 +212,16 @@ static void gfx_spe0_images(void)
 	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_S2DEX1), GFX_SPE0_F3D);
 	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_F3DEX2), GFX_SPE0_F3DEX2);
 	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_F3DZEX2), GFX_SPE0_F3DEX2);
+	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_F3DEX2ACCLAIM), GFX_SPE0_TURBO3D);
 	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_S2DEX), GFX_SPE0_F3DEX2);
 	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_F3DEXBG), GFX_SPE0_CONKER);
 	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_F5ROGUE), GFX_SPE0_F5ROGUE);
 	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_F5INDY), GFX_SPE0_F5INDY);
+	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_TURBO3D), GFX_SPE0_TURBO3D);
+	CHECK_EQ(gfx_spe0_image(SALSA64_GBI_TURBO3D_F3D), GFX_SPE0_TURBO3D);
 	CHECK_EQ((uint64_t)(int64_t)gfx_spe0_image(SALSA64_GBI_UNKNOWN), (uint64_t)(int64_t)-1);
 	CHECK((GFX_SPE0_PARTS_1 & (GFX_PART_S2DEX2 | GFX_PART_FLX)) == (GFX_PART_S2DEX2 | GFX_PART_FLX));
+	CHECK(GFX_SPE0_PARTS_5 & GFX_PART_ACCLAIM);
 	CHECK((GFX_SPE0_PARTS_2 & GFX_PART_F3DEX2) && (GFX_SPE0_PARTS_0 & GFX_PART_F3D));
 	CHECK((GFX_SPE0_PARTS_4 & GFX_PART_F5INDY) && !(GFX_SPE0_PARTS_4 & GFX_PART_F3D));
 	CHECK((GFX_SPE0_PARTS_3 & GFX_PART_F5ROGUE) && (GFX_SPE0_PARTS_3 & GFX_PART_F3D) && !(GFX_SPE0_PARTS_3 & GFX_PART_F3DEX2));

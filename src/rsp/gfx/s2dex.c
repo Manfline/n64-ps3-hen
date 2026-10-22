@@ -679,7 +679,7 @@ static bool s2dex_run(struct gfx_state *g, bool gen1, bool foreign)
 			break;
 		case S2_SETOTHERMODE_L:
 		case S2_SETOTHERMODE_H: {
-			int len = (int)(w0 & 0xFF) + 1;
+			int len = (int)(w0 & 0xFF) + (!gen1 || (g->job->flags & GFX_JOB_S2DEX_OLD_MODES) != 0);
 			int shift = gen1 ? (int)((w0 >> 8) & 0xFF) : 32 - (int)((w0 >> 8) & 0xFF) - len;
 			gfx_sp_othermode(g, op == S2_SETOTHERMODE_H, shift, len, w1);
 			break;

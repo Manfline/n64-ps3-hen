@@ -10,6 +10,18 @@ el [radar de compatibilidad](compatibilidad/index.html). Sus datos están en
 
 Las entradas antiguas conservan sus métodos de prueba como historia.
 
+## 2026-10-22 — Candidata de la v0.2.10 (microcódigos)
+
+| Juego | Estado | Notas |
+|---|---|---|
+| Dark Rift | dibuja peleadores, texturas y animaciones (PS3) | Turbo3D en la imagen 5 del SPE 0; encendido por omisión (`sin-turbo3d` lo apaga). Probada una pelea; Mario 64 sin regresión |
+| Resident Evil 2 | letras de OPTIONS legibles (PS3); líneas verticales finas entre tiles | encendida por omisión (`sin-afin-cadena` la apaga); menús, inventario y partida sin regresión |
+| Pokémon Snap | sin desorden de dibujo en las escenas probadas (PS3) | hasta 4× va a velocidad completa; a 5× baja a 40–52 campos/s en tramos (el RSX no alcanza) |
+| Star Wars Episode I: Racer | video del logo corregido (PS3) | carrera ~47 campos/s |
+| Yoshi's Story | arranque del CIC 6106 corregido; ancho de G_SETOTHERMODE de S2DEX 1.x corregido | confirmado en la PS3: el bloque responde, no desaparecen enemigos ni objetos y no se cuelga al morir; quedan puntos y colores erróneos |
+| Turok: Dinosaur Hunter, Turok 2, Turok 3 | arrancan; 56–60 campos/s (PS3; en la v0.2.9 no arrancaban) | Turok 2 y 3 usan Acclaim (`E44DF568`): HLE propia con sus luces de punto (los disparos iluminan las paredes), encendida por omisión |
+| Battle for Naboo | arranca con HLE (Factor 5 Indy) | 31–33 campos/s en escenas con carga |
+
 ## 2026-10-18 — Candidata de la v0.2.8 en la PS3 real
 
 Resumen de lo que cambia de estado desde la v0.2.7 (el detalle de cada juego

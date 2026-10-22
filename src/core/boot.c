@@ -13,6 +13,8 @@
  *   - CIC 6105: solo direcciones y tamaños, de varias fuentes cotejadas
  *     (docs/THIRD_PARTY.md); los bytes los pone el cartucho del usuario.
  *   - CIC 6103: lo mismo para su copia a la RDRAM (docs/THIRD_PARTY.md).
+ *   - CIC 6106: la primera etapa la aporta y la ejecuta la ROM del usuario;
+ *     solo se conserva su segunda etapa en RDRAM (docs/THIRD_PARTY.md).
  */
 #include "core/boot.h"
 
@@ -220,10 +222,48 @@ static void boot_x103(struct salsa64_bus *bus)
 	salsa64_wr32(bus->sp_mem + 0x1000, X103_IMEM_CIC);
 }
 
-/* CIC 6106 (F-Zero X): como el 6103 en DMEM e IMEM (0xFF salvo el número en
- * IMEM 0x000), con su número 6104 (0x17D8), medido corriendo el IPL3 del
- * cartucho. Su copia de la imagen a la RDRAM baja no se reproduce (no está
- * en la ROM tal cual) y ningún juego conocido la comprueba. */
+/*
+ * El IPL3 del 6106 cifra la parte que deja en la RDRAM baja: no se puede
+ * copiar tal cual desde la ROM, como con el 6103 y el 6105. Se ejecuta solo
+ * su primera etapa, desde los bytes que aporta el cartucho, hasta que salta
+ * a la segunda etapa recién escrita en KSEG0. Son unas 6 000 instrucciones
+ * una vez por arranque; se restaura toda la máquina salvo la RDRAM para que
+ * el resto del arranque siga siendo HLE y no cambie su tiempo observable.
+ */
+#define X106_STAGE2_FIRST 0x80000000u
+#define X106_STAGE2_END   0x800002BCu
+#define X106_BOOT_STEPS   65536u
+
+static bool boot_x106_copy(struct salsa64_n64 *n64, enum salsa64_tv_type tv)
+{
+	struct salsa64_bus *bus = &n64->bus;
+	struct salsa64_cpu *cpu = &n64->cpu;
+	struct salsa64_n64 saved = *n64;
+
+	memcpy(bus->sp_mem + 0x40, bus->rom + 0x40, 0xFC0);
+	cpu->gpr[19] = 0;
+	cpu->gpr[20] = tv;
+	cpu->gpr[21] = 0;
+	cpu->gpr[22] = salsa64_cic_seed(SALSA64_CIC_6106);
+	cpu->gpr[23] = 1;
+	cpu->gpr[11] = salsa64_sx32(0xA4000040u);
+	cpu->gpr[29] = salsa64_sx32(0xA4001FF0u);
+	cpu->gpr[31] = salsa64_sx32(0xA4001550u);
+	salsa64_cpu_set_pc(cpu, salsa64_sx32(0xA4000040u));
+
+	uint32_t steps = 0, pc;
+	do {
+		salsa64_cpu_step(cpu);
+		pc = (uint32_t)cpu->pc;
+	} while ((pc < X106_STAGE2_FIRST || pc >= X106_STAGE2_END) && ++steps < X106_BOOT_STEPS);
+
+	*n64 = saved;
+	return pc >= X106_STAGE2_FIRST && pc < X106_STAGE2_END;
+}
+
+/* CIC 6106: como el 6103 en DMEM e IMEM (0xFF salvo el número en IMEM
+ * 0x000), con su identificador 0x17D8, medido corriendo el IPL3 del
+ * cartucho. La copia cifrada de RDRAM baja la produce boot_x106_copy. */
 #define X106_CIC_ID      0x17D8u
 
 static bool boot_flat(struct salsa64_n64 *n64, struct salsa64_boot_info *info)
@@ -245,6 +285,8 @@ static bool boot_flat(struct salsa64_n64 *n64, struct salsa64_boot_info *info)
 	if (!rdram_range(bus, entry, len, &pa))
 		return fail(info, "la dirección de arranque del encabezado no cae en la RDRAM");
 	memcpy(bus->rdram + pa, bus->rom + SALSA64_ROM_IPL3_END, len);
+	if (info->cic == SALSA64_CIC_6106 && !boot_x106_copy(n64, info->tv))
+		return fail(info, "el IPL3 6106 no produjo su segunda etapa");
 	if (info->cic == SALSA64_CIC_6103)
 		boot_x103(bus);
 	else if (info->cic == SALSA64_CIC_6105)
@@ -264,7 +306,7 @@ static bool boot_flat(struct salsa64_n64 *n64, struct salsa64_boot_info *info)
 	salsa64_wr32(bus->rdram + 0x304, 0);
 	salsa64_wr32(bus->rdram + 0x308, 0xB0000000u);
 	salsa64_wr32(bus->rdram + 0x30C, 0);
-	/* osCicId: los IPL3 del 6103 y del 6105 dejan su número, y los juegos de
+	/* osCicId: los IPL3 del 6103, 6105 y 6106 dejan su número; los juegos de
 	 * Rare lo comprueban (6103: Banjo-Kazooie, Diddy Kong Racing; 6105:
 	 * Conker no arranca su hilo principal sin él, Perfect Dark, DK64). De
 	 * las demás variantes no hay dato: queda como estaba. */

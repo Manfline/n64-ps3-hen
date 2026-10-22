@@ -13,6 +13,7 @@
 #include "cpu/rec.h"
 
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "core/sched.h"
@@ -1193,12 +1194,14 @@ static void invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t len);
 void salsa64_rec_invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t len)
 {
 	uint64_t before = rec->stats.invalidated;
-	rec->diag.calls[rec->diag.source]++;
+	unsigned source = rec->diag ? rec->diag->source : 0;
+	if (rec->diag)
+		rec->diag->calls[source]++;
 	invalidate(rec, pa, len);
 	if (rec->stats.invalidated != before) {
-		if (rec->diag.source != 3)
+		if (source != 3)
 			inval_note(&rec->stats.inval_other_lo, &rec->stats.inval_other_hi, pa, len);
-		if (rec->trace && rec->diag.source != 3)
+		if (rec->trace && source != 3)
 			salsa64_rec_trace_invalidate(rec->trace, SALSA64_RT_COMPILE_DMA, pa, len,
 					    (uint32_t)(rec->stats.invalidated - before));
 	}
@@ -1230,7 +1233,8 @@ static void invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t len)
 			unsigned id;
 			while ((id = rec->map[w >> 2]) != 0 && rec->blocks[id].pa + rec->blocks[id].bytes > pa)
 			{
-				salsa64_rec_diag_hit(rec, id, pa, len);
+				if (rec->diag)
+					salsa64_rec_diag_hit(rec, id, pa, len);
 				kill_block(rec, id);
 			}
 		}
@@ -1240,9 +1244,11 @@ static void invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t len)
 
 void salsa64_rec_code_written(struct salsa64_rec *rec, uint32_t pa, uint32_t len)
 {
-	rec->diag.source = 1;
+	if (rec->diag) {
+		rec->diag->source = 1;
+		rec->diag->calls[1]++;
+	}
 	uint64_t before = rec->stats.invalidated;
-	rec->diag.calls[rec->diag.source]++;
 	invalidate(rec, pa, len);
 	if (rec->stats.invalidated != before) {
 		rec->stats.inval_cpu += rec->stats.invalidated - before;
@@ -1251,7 +1257,8 @@ void salsa64_rec_code_written(struct salsa64_rec *rec, uint32_t pa, uint32_t len
 			salsa64_rec_trace_invalidate(rec->trace, SALSA64_RT_COMPILE_CPU_WRITE, pa, len,
 					    (uint32_t)(rec->stats.invalidated - before));
 	}
-	rec->diag.source = 0;
+	if (rec->diag)
+		rec->diag->source = 0;
 }
 
 static bool rec_ids_ok(const struct salsa64_rec *rec)
@@ -1283,7 +1290,8 @@ static void evict_segment(struct salsa64_rec *rec, unsigned s)
 			killed++;
 		}
 	}
-	rec->diag.evicted += killed;
+	if (rec->diag)
+		rec->diag->evicted += killed;
 	if (rec->trace)
 		salsa64_rec_trace_evicted(rec, s < SALSA64_REC_HOT_SEGMENTS ? 1 : 0, s, killed);
 	rec->seg_gen[s]++;
@@ -1372,10 +1380,12 @@ static unsigned new_block(struct salsa64_rec *rec, uint64_t pc, uint32_t pa, uns
 		rec->map[pa >> 2] = (uint16_t)id;
 	salsa64_rec_x_add(rec, id, pc, pa, seg, code != 0);
 	rec->idle_patch[id] = code ? rec->compiled_idle_patch : 0;
-	if (code)
-		salsa64_rec_diag_compiled(rec, id, ticks);
-	else
-		rec->diag.hash[id] = 0;
+	if (rec->diag) {
+		if (code)
+			salsa64_rec_diag_compiled(rec, id, ticks);
+		else
+			rec->diag->hash[id] = 0;
+	}
 	rec->map_dirty = true;
 	if (pa < rec->rdram_size)  /* no en la ROM */
 		flags_add(rec, b->pa, b->pa + b->bytes, +1);
@@ -1574,16 +1584,19 @@ static void rec_idle_exit(struct salsa64_rec *rec, uint64_t bpc)
 	if (!(rec->opts & SALSA64_REC_OPT_IDLE_RECOMPILE) && site && rec->blocks[id].code) {
 		rec->code[site] = PPC_NOP;
 		salsa64_rec_sync(&rec->code[site], 4);
-		rec->diag.idle_patched++;
+		if (rec->diag)
+			rec->diag->idle_patched++;
 		return;
 	}
 	/* Modo anterior, o bloque temporal del modo estricto. */
-	rec->diag.source = 3;
+	if (rec->diag)
+		rec->diag->source = 3;
 	if ((bpc >> 29) == 0x7FFFFFFFCull)
 		salsa64_rec_invalidate(rec, (uint32_t)bpc & 0x1FFFFFFF, 4);
 	else
 		salsa64_rec_x_kill_at(rec, bpc);
-	rec->diag.source = 0;
+	if (rec->diag)
+		rec->diag->source = 0;
 }
 
 void salsa64_rec_run(struct salsa64_rec *rec)
@@ -1778,6 +1791,7 @@ bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *co
 
 	/* Los ganchos de depuración y el perfil los pone quien llama antes de iniciar. */
 	uint32_t opts = rec->opts, hot_bytes = rec->hot_bytes;
+	struct salsa64_rec_diag *diag = rec->diag;
 	void *fm_window = rec->fm_window;
 	void (*after_exit)(struct salsa64_rec *, uint64_t, void *) = rec->after_exit;
 	void (*on_compile)(struct salsa64_rec *, uint64_t, uint32_t, uint32_t, bool) = rec->on_compile;
@@ -1785,6 +1799,10 @@ bool salsa64_rec_init(struct salsa64_rec *rec, struct salsa64_cpu *cpu, void *co
 	struct salsa64_rec_prof *prof = rec->prof;
 	struct salsa64_rec_trace *trace = rec->trace;
 	memset(rec, 0, sizeof *rec);
+	if (diag)
+		free(diag);
+	if ((opts & SALSA64_REC_OPT_DIAG) && !salsa64_rec_diag_alloc(rec))
+		opts &= ~SALSA64_REC_OPT_DIAG;
 	salsa64_rec_inval_reset(rec);
 	rec->trace = trace;
 	rec->opts = opts;

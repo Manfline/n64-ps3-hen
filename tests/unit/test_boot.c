@@ -174,8 +174,22 @@ static void rom_ipl3_pattern(void)
 		rom[i] = (uint8_t)(i * 7 + 3);
 }
 
+/* Primera etapa 6106 sintética: deja una palabra en RDRAM baja y salta a
+ * ella. Sirve para probar la ejecución acotada sin incluir un IPL3 real. */
+static void rom_ipl3_x106(void)
+{
+	memset(rom + SALSA64_ROM_HEADER_SIZE, 0,
+	       SALSA64_ROM_IPL3_END - SALSA64_ROM_HEADER_SIZE);
+	salsa64_wr32(rom + 0x40, LUI(T0, 0x8000));
+	salsa64_wr32(rom + 0x44, LUI(T1, 0x1357));
+	salsa64_wr32(rom + 0x48, ORI(T1, T1, 0x9BDF));
+	salsa64_wr32(rom + 0x4C, SW(T1, 0x164, T0));
+	salsa64_wr32(rom + 0x50, JR(T0));
+	salsa64_wr32(rom + 0x54, NOP);
+}
+
 /* Dirección de arranque y semilla por variante; nada en la RDRAM baja salvo
- * las variables de libultra (y lo propio del 6103 y del 6105, abajo). */
+ * las variables de libultra y lo propio del 6103, 6105 y 6106. */
 static void boot_by_cic(void)
 {
 	static const struct {
@@ -195,6 +209,8 @@ static void boot_by_cic(void)
 		struct salsa64_boot_info info;
 		rom_header(v[i].header, 'E');
 		rom_ipl3_pattern();
+		if (v[i].cic == SALSA64_CIC_6106)
+			rom_ipl3_x106();
 		salsa64_wr32(rom + 0x1000, ADDIU(T0, ZERO, 0x66));
 		salsa64_bus_set_rom(&t_n64.bus, rom, sizeof rom);
 
@@ -224,6 +240,28 @@ static void boot_by_cic(void)
 			CHECK_EQ(salsa64_rd32(t_n64.bus.sp_mem + 0x1000), fill);
 		}
 	}
+	done();
+}
+
+static void boot_cic6106_leftovers(void)
+{
+	struct salsa64_boot_info info;
+	rom_header(0x80200400, 'E');
+	rom_ipl3_x106();
+	salsa64_bus_set_rom(&t_n64.bus, rom, sizeof rom);
+	CHECK(salsa64_boot_hle_as(&t_n64, SALSA64_BOOT_TV_AUTO, SALSA64_CIC_6106, &info));
+
+	CHECK_EQ(t_rd32(0x164), 0x13579BDF);
+	CHECK_EQ(R[T0], 0);  /* los temporales de la primera etapa no se filtran */
+	CHECK_EQ(R[T1], 0);
+	CHECK_EQ(CPU->pc, 0xFFFFFFFF80000400ull);
+	CHECK_EQ(t_n64.bus.vi.fields, 0);  /* la ejecución interna no consume campos */
+	CHECK_EQ(salsa64_cpu_count(CPU), 23437500);
+
+	const uint8_t *dmem = t_n64.bus.sp_mem, *imem = dmem + 0x1000;
+	CHECK_EQ(salsa64_rd32(dmem), 0xFFFFFFFF);
+	CHECK_EQ(salsa64_rd32(imem), 0x17D8);
+	CHECK_EQ(salsa64_rd32(imem + 4), 0xFFFFFFFF);
 	done();
 }
 
@@ -441,6 +479,7 @@ void t_suite_boot(void)
 	RUN(boot_by_cic);
 	RUN(boot_cic6103_leftovers);
 	RUN(boot_cic6105_leftovers);
+	RUN(boot_cic6106_leftovers);
 	RUN(isviewer_prints);
 	RUN(pi_bus_subword_reads);
 	RUN(pif_ram_subword_writes);

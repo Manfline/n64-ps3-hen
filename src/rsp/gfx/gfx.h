@@ -180,6 +180,7 @@ _Static_assert(sizeof(struct gfx_detail) % 16 == 0, "detalle apto para DMA");
 /* Comparación optativa: escala afín de los triángulos F3DEX2
  * cargados dentro de una tarea S2DEX. No escala G_MODIFYVTX. */
 #define GFX_JOB_AFFINE_CHAIN 0x1000u
+#define GFX_JOB_S2DEX_OLD_MODES 0x2000u
 /* Valor interno de chain_ex; no forma parte del descriptor ni del estado RDP. */
 #define GFX_CHAIN_AFFINE 2u
 

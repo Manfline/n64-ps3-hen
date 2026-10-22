@@ -190,6 +190,7 @@
 #include "platform/ps3/rsp_spu.h"
 #include "platform/ps3/log.h"
 #include "platform/ps3/rec_cache.h"
+#include "platform/ps3/thread_cleanup.h"
 #include "frontend/filters/filters.h"
 #include "rdp/rdp.h"
 #include "rsp/gfx/hle.h"
@@ -373,6 +374,7 @@ static struct mempakfile mempak_file;
 static uint8_t *rdram;
 static volatile int running;    /* la sesión de juego sigue */
 static volatile int emu_done;   /* el hilo de emulación salió de su bucle */
+static bool reclaim_emu;        /* optativo: recoger reservas TLS de newlib antes de salir */
 static volatile int app_quit;   /* «Salir del juego» del sistema: salir de la aplicación */
 /* Pausa (pausectl.h): el menú del sistema y el cuadro de START + SELECT.
  * pause_ctl es solo del hilo de presentación (el callback de sysutil corre
@@ -848,6 +850,7 @@ static char version_text[64], build_text[160];
 /* Sink gráfico del frontend: el del RDP más el timbre a presentación. */
 static const struct salsa64_gfx_sink *rdp_sink;
 static bool gfx_affine_chain;
+static bool gfx_s2dex_old_modes;
 
 static void front_acquire(void *ctx, struct gfx_job *job)
 {
@@ -855,6 +858,8 @@ static void front_acquire(void *ctx, struct gfx_job *job)
 	rdp_sink->acquire(rdp_sink->ctx, job);
 	if (gfx_affine_chain)
 		job->flags |= GFX_JOB_AFFINE_CHAIN;
+	if (gfx_s2dex_old_modes)
+		job->flags |= GFX_JOB_S2DEX_OLD_MODES;
 }
 
 /* DMA a la RDRAM (hilo de emulación): las copias del RDP no lo pisan. */
@@ -2055,16 +2060,17 @@ static struct {
 static void inval_check(void)
 {
 	struct salsa64_rec_stats *st = &rec.stats;
-	uint64_t written = rec.diag.hits[0] + rec.diag.hits[1] + rec.diag.hits[2];
+	uint64_t written = st->invalidated;
 	if (written < inval_seen.all || st->inval_cpu < inval_seen.cpu)
 		inval_seen.all = inval_seen.cpu = 0;  /* el recompilador volvió a empezar (otro juego) */
 	uint64_t all = written - inval_seen.all, cpu = st->inval_cpu - inval_seen.cpu;
+	uint64_t other = all > cpu ? all - cpu : 0;
 	if (all >= INVAL_MASS)
 		salsa64_log("recompilador: %llu bloques invalidados en el campo %u: %llu por escrituras del CPU "
 			    "(%06x–%06x), %llu por DMA u otros (%06x–%06x)", (unsigned long long)all, n64.bus.vi.fields,
 			    (unsigned long long)cpu, cpu ? st->inval_cpu_lo : 0, cpu ? st->inval_cpu_hi : 0,
-			    (unsigned long long)(all - cpu), all > cpu ? st->inval_other_lo : 0,
-			    all > cpu ? st->inval_other_hi : 0);
+			    (unsigned long long)other, other ? st->inval_other_lo : 0,
+			    other ? st->inval_other_hi : 0);
 	inval_seen.all = written;
 	inval_seen.cpu = st->inval_cpu;
 	salsa64_rec_inval_reset(&rec);
@@ -2127,7 +2133,7 @@ static void emu_thread(void *arg)
 		cheats_apply(&game_cheats, &n64.bus);  /* los activos del juego (vacío si no hay) */
 		if (use_rec) {
 			inval_check();
-			if (n64.bus.vi.fields % 300 == 0)
+			if (rec.diag && n64.bus.vi.fields % 300 == 0)
 				salsa64_rec_diag_report(&rec, spukit_tick_hz(), false, salsa64_log);
 		}
 		uint64_t t1 = sysGetSystemTime();
@@ -2182,12 +2188,16 @@ static void emu_thread(void *arg)
 		if (req)
 			emu_park();
 	}
-	if (use_rec)
+	if (use_rec && rec.diag)
 		salsa64_rec_diag_report(&rec, spukit_tick_hz(), true, salsa64_log);
 	beat.emu_at = "terminado";
 	lwsync();
 	emu_done = 1;
 	wake();
+	/* Última operación de libc del hilo. El principal espera el join antes
+	 * de recoger el juego; no se toca su contexto ni sus FILE compartidos. */
+	if (reclaim_emu)
+		salsa64_thread_reclaim();
 	sysThreadExit(0);
 }
 
@@ -4507,12 +4517,12 @@ static void mem_close_report(const struct mem_close_in *in)
 		    rec_sample ? (unsigned)(sizeof *rec_sample >> 10) : 0, rec_profile ? (unsigned)(sizeof *rec_profile >> 10) : 0,
 		    rom_pages ? 1u : 0u);
 	if (prev.have)
-		salsa64_log("memoria, cambio frente al cierre anterior (juego %u tras el primero): heap en uso %+d KB, libres %+d KB "
+		salsa64_log("memoria, cambio frente al cierre anterior (juego %u tras el primero): heap en uso %+d KB (%+d bytes), libres %+d KB "
 			    "en %+d bloques, arena %+d KB, tope %+ld KB, usuario libre %+d KB%s",
-			    ++prev.games, (mi.uordblks - prev.used) >> 10, (mi.fordblks - prev.free_) >> 10,
+			    ++prev.games, (mi.uordblks - prev.used) >> 10, mi.uordblks - prev.used, (mi.fordblks - prev.free_) >> 10,
 			    mi.ordblks - prev.blocks, (mi.arena - prev.arena) >> 10, (top - prev.top) >> 10,
 			    um_ok ? ((int)um.available - (int)prev.user) >> 10 : 0,
-			    mi.uordblks - prev.used > 1024 ? " (el heap en uso creció más de 1 KB: fuga)" : "");
+			    mi.uordblks - prev.used > 1024 ? " (crecimiento de heap superior a 1 KB)" : "");
 	prev.have = true;
 	prev.arena = mi.arena, prev.used = mi.uordblks, prev.free_ = mi.fordblks, prev.blocks = mi.ordblks;
 	prev.top = top;
@@ -4636,10 +4646,15 @@ static enum game_end run_game_once(uint8_t *rom, uint32_t rom_size, const char *
 	salsa64_bus_set_isviewer(&n64.bus, isv_buf, isv_out, NULL);
 
 	/* HLE gráfica: en un SPE, o en el PPE si se pide. */
-	gfx_affine_chain = file_exists(SALSA64_DATA_DIR "/gfx-afin-cadena");
-	salsa64_log("gfx: escala afin de tramos 3D encadenados %s (gfx-afin-cadena)",
-		    gfx_affine_chain ? "experimental activa" : "referencia");
+	gfx_affine_chain = !file_exists(SALSA64_DATA_DIR "/sin-afin-cadena");
+	gfx_s2dex_old_modes = file_exists(SALSA64_DATA_DIR "/gfx-s2dex-modos-viejos");
+	salsa64_log("gfx: escala afin de tramos 3D encadenados %s (sin-afin-cadena)",
+		    gfx_affine_chain ? "activa" : "referencia");
 	gfx_on_spu = !file_exists(GFX_PPE_PATH);
+	bool turbo3d = !file_exists(SALSA64_DATA_DIR "/sin-turbo3d");
+	salsa64_log("gfx: Turbo3D %s (sin-turbo3d)", turbo3d ? "activo" : "apagado");
+	bool acclaim = !file_exists(SALSA64_DATA_DIR "/sin-acclaim");
+	salsa64_log("gfx: HLE Acclaim %s (sin-acclaim)", acclaim ? "activa" : "apagada");
 	if (gfx_on_spu) {
 		spukit_init(6);
 		if ((rc = salsa64_gfx_spu_init(&gfx_spu, &n64.bus, &front_sink)) != 0) {
@@ -4648,9 +4663,13 @@ static enum game_end run_game_once(uint8_t *rom, uint32_t rom_size, const char *
 		}
 	}
 	if (gfx_on_spu) {
+		gfx_spu.backend.turbo3d = turbo3d;
+		gfx_spu.backend.acclaim = acclaim;
 		salsa64_rsp_set_gfx(&n64.bus, &gfx_spu.backend);
 	} else {
 		salsa64_gfx_sync_init(&gfx_ppe, &gfx_ppe_state, &n64.bus, &front_sink);
+		gfx_ppe.backend.turbo3d = turbo3d;
+		gfx_ppe.backend.acclaim = acclaim;
 		salsa64_rsp_set_gfx(&n64.bus, &gfx_ppe.backend);
 	}
 	/* Killer Instinct Gold (y otros) dibuja con listas del RDP que el CPU
@@ -4736,6 +4755,10 @@ static enum game_end run_game_once(uint8_t *rom, uint32_t rom_size, const char *
 	}
 
 	rec.opts = SALSA64_REC_OPT_PIN;  /* +7 % en nemu64-test (docs/perf-log.md) */
+	if (file_exists(SALSA64_DATA_DIR "/jit-diag")) {
+		rec.opts |= SALSA64_REC_OPT_DIAG;
+		salsa64_log("recompilador: diagnóstico de huellas activo (jit-diag)");
+	}
 	if (file_exists(SALSA64_DATA_DIR "/jit-invalidacion-vieja"))
 		rec.opts |= SALSA64_REC_OPT_IDLE_RECOMPILE;
 	salsa64_log("recompilador: descartes de espera por %s (jit-invalidacion-vieja para recompilar)",
@@ -4991,6 +5014,9 @@ static enum game_end run_game_once(uint8_t *rom, uint32_t rom_size, const char *
 	}
 
 	/* El hilo de emulación. */
+	reclaim_emu = file_exists(SALSA64_DATA_DIR "/memoria-hilos");
+	salsa64_log("memoria: limpieza del hilo de emulación %s (memoria-hilos)",
+		    reclaim_emu ? "experimental activa" : "referencia");
 	sys_ppu_thread_t emu_tid;
 	if (sysThreadCreate(&emu_tid, emu_thread, NULL, EMU_PRIO, EMU_STACK, THREAD_JOINABLE,
 			    (char *)"salsa64_emu") != 0) {

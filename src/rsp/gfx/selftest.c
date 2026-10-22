@@ -36,10 +36,11 @@
 #define INTAB_PA   0x1440u  /* y la tabla de desplazamientos (16 bytes, a 0x380) */
 #define INCOL_PA   0x1460u  /* colores que entran a la iluminación (32 bytes, a 0x480) */
 #define INPART_PA  0x1500u  /* 32 vértices de partículas (256 bytes) */
+#define AC_LIGHT_PA 0x1600u /* luz compacta de Acclaim (16 bytes) */
 #define CIMG_PA    0x10000u /* color image y z image: solo las direcciones */
 #define ZIMG_PA    0x18000u
 
-enum fam { FAM_F3D, FAM_F3DEX, FAM_F3DWR, FAM_F3DEX2, FAM_F5, FAM_INDY };
+enum fam { FAM_F3D, FAM_F3DEX, FAM_F3DWR, FAM_F3DEX2, FAM_ACCLAIM, FAM_F5, FAM_INDY };
 
 struct b {
 	uint8_t *ram;
@@ -64,7 +65,7 @@ static void dl(struct b *b, uint32_t w0, uint32_t w1)
 
 static bool gen2(const struct b *b)
 {
-	return b->fam == FAM_F3DEX2;
+	return b->fam == FAM_F3DEX2 || b->fam == FAM_ACCLAIM;
 }
 
 /* Mtx de libultra: 16 partes enteras y 16 fracciones (s15.16). */
@@ -126,6 +127,7 @@ static void vtx(struct b *b, uint32_t addr, unsigned v0, unsigned n)
 		dl(b, 0x01117000u | (8 * n - 1), n << 24 | F5VTX_PA);
 		break;
 	case FAM_F3DEX2:
+	case FAM_ACCLAIM:
 		dl(b, 0x01000000u | n << 12 | (v0 + n) << 1, addr);
 		break;
 	case FAM_F3DEX:
@@ -166,6 +168,7 @@ static void tri(struct b *b, unsigned v0, unsigned v1, unsigned v2)
 		}
 		break;
 	case FAM_F3DEX2:
+	case FAM_ACCLAIM:
 		dl(b, 0x05000000u | (v0 * 2) << 16 | (v1 * 2) << 8 | v2 * 2, 0);
 		break;
 	case FAM_F3DEX:
@@ -217,6 +220,9 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 	case SALSA64_GBI_F3DEXBG:
 		b.fam = FAM_F3DEX2;
 		break;
+	case SALSA64_GBI_F3DEX2ACCLAIM:
+		b.fam = FAM_ACCLAIM;
+		break;
 	case SALSA64_GBI_F5ROGUE:
 		b.fam = FAM_F5;
 		break;
@@ -254,6 +260,39 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 		p[13] = (uint8_t)(c >> 8);
 		p[14] = (uint8_t)(c >> 16);
 		p[15] = 0xFF;
+	}
+	/* Luz compacta inventada: posición (0, 0, 0), RGB, radio 2 y
+	 * pendiente 1/2. La autoprueba Acclaim recorre su MOVEMEM y su bit 0x80. */
+	ram[AC_LIGHT_PA + 6] = 32;
+	ram[AC_LIGHT_PA + 7] = 48;
+	ram[AC_LIGHT_PA + 8] = 64;
+	salsa64_wr16(ram + AC_LIGHT_PA + 10, 2);
+	salsa64_wr16(ram + AC_LIGHT_PA + 12, 0x8000);
+	if (gbi == SALSA64_GBI_TURBO3D) {
+		/* Dos objetos: carga en 253..255 y reutilización sin matriz ni
+		 * vértices nuevos. Datos propios para comparar SPE y PPE. */
+		const uint32_t glob = 0x6000, obj = 0x6100, obj2 = 0x6200, tri = 0x6300, rdp = 0x6400;
+		salsa64_wr32(ram + glob + 8, 0x00080000);
+		memcpy(ram + glob + 80, ram + VP_PA, 16);
+		salsa64_wr32(ram + glob + 96, rdp);
+		salsa64_wr32(ram + rdp, 0xFF10013F); /* RGBA16, 320 píxeles */
+		salsa64_wr32(ram + rdp + 4, CIMG_PA);
+		salsa64_wr32(ram + rdp + 8, 0xED000000);
+		salsa64_wr32(ram + rdp + 12, (320u * 4 << 12) | (240u * 4));
+		salsa64_wr32(ram + rdp + 16, 0xFCFFFFFF);
+		salsa64_wr32(ram + rdp + 20, 0xFFFE793C); /* SHADE */
+		salsa64_wr32(ram + obj, 4);
+		ram[obj + 8] = 3; ram[obj + 9] = 253; ram[obj + 10] = 1;
+		memcpy(ram + obj + 24, ram + PROJ_PA, 64);
+		salsa64_wr32(ram + obj2, 4);
+		ram[obj2 + 10] = 1; ram[obj2 + 11] = 1;
+		salsa64_wr32(ram + obj2 + 12, rdp + 32);
+		salsa64_wr32(ram + rdp + 32, 0xE9000000);
+		ram[tri] = 253; ram[tri + 1] = 254; ram[tri + 2] = 255;
+		dl(&b, glob, obj); dl(&b, VTX_PA, tri);
+		dl(&b, 0, obj2); dl(&b, 0, tri);
+		dl(&b, 0, 0); dl(&b, 0, 0);
+		return DL_PA;
 	}
 	if (b.fam == FAM_INDY) {
 		/* Luces: tipo 1 (con posición) en 0xB10, sus posiciones en 0xB00 y 0xB08; la tabla de
@@ -358,7 +397,9 @@ uint32_t gfx_selftest_build(uint8_t *ram, uint32_t gbi, uint32_t seed)
 	if (gen2(&b)) {
 		/* También cubre el lote SIMD de vértices: color directo, niebla y
 		 * cuatro vértices por G_VTX, sin luces ni TEXGEN. */
-		dl(&b, 0xD9000000u, 0x00210004u | 0x1u);  /* G_SHADE | G_SHADING_SMOOTH | G_FOG | G_ZBUFFER */
+		dl(&b, 0xD9000000u, 0x00210004u | 0x1u | (b.fam == FAM_ACCLAIM ? 0x80u : 0));
+		if (b.fam == FAM_ACCLAIM)
+			dl(&b, 0xDC080000u | 96u << 5 | 10u, AC_LIGHT_PA);
 		dl(&b, 0xDB080000u, 0x01000000u);          /* G_MW_FOG: factor 256, sesgo 0 */
 	}
 	else if (b.fam == FAM_INDY)

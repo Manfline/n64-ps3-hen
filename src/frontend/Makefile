@@ -42,16 +42,17 @@ SPUKIT  := 1
 # src/spu/jpeg, y en el mismo SPE las tres tareas de video de Resident Evil 2
 # (re2.c). CRT con cable (dos SPEs, con `filtros-spe`): la señal y la
 # decodificación de S-Video y compuesto (src/spu/crt).
-# La HLE gráfica del SPE 0 va en cinco imágenes desde las mismas fuentes, cada
+# La HLE gráfica del SPE 0 va en seis imágenes desde las mismas fuentes, cada
 # una con sus familias de microcódigos (src/rsp/gfx/spe0.h,
 # docs/spe0-familias.md): gfx0 la primera generación (F3D, F3DEX 1.x y las
 # variantes de Rare sobre F3D), gfx1 la segunda de Nintendo (F3DEX2, F3DZEX2,
 # S2DEX2 y F3DFLX en la tarea), gfx2 la de Conker (F3DEXBG y el resto de la
 # segunda), gfx3 la de Rogue Squadron (Factor 5, con lo común de F3D) y gfx4 la
-# de Indiana Jones y Battle for Naboo (Factor 5 con su DMEM de 4 KB). Cada una
+# de Indiana Jones y Battle for Naboo (Factor 5 con su DMEM de 4 KB); gfx5,
+# Turbo3D con su Fast3D acompañante y Acclaim sobre F3DEX2. Cada una
 # con sus objetos en obj/spu-gfx<n>.
-GFX_IMAGES := 0 1 2 3 4
-GFX_PHASES := 1 2 3 4 5 6 7 8
+GFX_IMAGES := 0 1 2 3 4 5
+GFX_PHASES := 8
 SPU_PROGS := $(addprefix gfx,$(GFX_IMAGES)) $(addprefix gfx1fase,$(GFX_PHASES)) audio rsp jpeg crt lz
 GFX_SPU_SRCS := $(R)/src/spu/gfx/main.c $(R)/src/spu/gfx/io_spu.c \
                 $(filter-out %/io_mem.c %/sync.c %/state.c %/selftest.c,$(wildcard $(R)/src/rsp/gfx/*.c))
@@ -69,9 +70,9 @@ crt_SRCS   := $(R)/src/spu/crt/main.c
 lz_SRCS    := $(R)/lib/spukit/spu/lz.c
 # Pila del SPE 0 (src/spu/gfx/main.c), en cada imagen: el enlace falla si
 # entre la cadena de llamadas más honda y el final del programa quedan menos
-# de 1,5 KB. Las variantes de Rare se llaman por puntero desde su familia (en
-# gfx1, gfx_dl_f3dex2 solo recibe NULL); lo demás que llama por puntero es el
-# arranque y la salida de la biblioteca de C.
+# de 1,5 KB. Las variantes llaman por puntero desde su familia; en gfx5 el
+# recorrido F3DEX2 usa el gancho de Acclaim. Lo demás que llama por puntero es
+# el arranque y la salida de la biblioteca de C.
 GFX_STACK_LIBC := --ignore exit --ignore __call_exitprocs --ignore __do_global_ctors_aux \
                   --ignore __do_global_dtors_aux --ignore register_tm_clones --ignore deregister_tm_clones
 $(foreach i,$(GFX_IMAGES),$(eval gfx$(i)_STACK_MIN := 1536))
@@ -82,6 +83,7 @@ $(foreach p,$(GFX_PHASES),$(eval gfx1fase$(p)_STACK_ARGS := $(gfx1_STACK_ARGS)))
 gfx2_STACK_ARGS := --edge gfx_dl_f3dex2:cbfd_command $(GFX_STACK_LIBC)
 gfx3_STACK_ARGS := --edge gfx_dl_f3d:f5_command $(GFX_STACK_LIBC)
 gfx4_STACK_ARGS := $(GFX_STACK_LIBC)
+gfx5_STACK_ARGS := --ignore gfx_dl_f3d --edge gfx_dl_f3dex2:acclaim_command $(GFX_STACK_LIBC)
 CFLAGS  := -ffp-contract=off -fno-math-errno
 LIBS    := -lrsx -lgcm_sys -laudio -lio -lsysutil -lhttp -lhttputil -lssl -lnetctl -lnet -lsysmodule -lrt -llv2 -lm
 # Caché del recompilador al final del segmento de texto (docs/rec-ppe.md).
@@ -160,7 +162,7 @@ $(call GFX_ALL_OBJ,flx.c.o) $(call GFX_ALL_OBJ,dl.c.o): SPU_CFLAGS += -Os
 # F3DEX2 solo descodifica y despacha comandos; el trabajo por vértice y
 # triángulo queda en geom.c y rdp.c. En la imagen 1, hacerlo compacto deja
 # lugar en el local store para el lote SIMD de geometría.
-$(call GFX_ALL_OBJ,f3dex2.c.o): SPU_CFLAGS += -Os
+$(call GFX_ALL_OBJ,f3dex2.c.o) $(call GFX_ALL_OBJ,f3dex2acclaim.c.o): SPU_CFLAGS += -Os
 # La carga/decodificación de TMEM no es la ruta que se vectoriza y, en la
 # imagen 1, el tamaño compacto libera local store para la geometría caliente.
 $(OBJ)/spu-gfx1/src/rsp/gfx/tmem.c.o $(call GFX_PHASE_OBJ,tmem.c.o): SPU_CFLAGS += -Os
@@ -171,5 +173,5 @@ $(call GFX_ALL_OBJ,texcache.c.o): SPU_CFLAGS += -Os
 # make no ve un cambio de banderas: que se recompilen si cambia este archivo.
 $(call GFX_ALL_OBJ,combine.c.o) $(call GFX_ALL_OBJ,s2dex.c.o) $(call GFX_ALL_OBJ,f3dpd.c.o) \
 $(call GFX_ALL_OBJ,f3ddkr.c.o) $(call GFX_ALL_OBJ,f5rogue.c.o) $(call GFX_ALL_OBJ,f5indy.c.o) $(call GFX_ALL_OBJ,vgroup.c.o) $(call GFX_ALL_OBJ,flx.c.o) \
-$(call GFX_ALL_OBJ,dl.c.o) $(call GFX_ALL_OBJ,f3dex2.c.o) $(call GFX_ALL_OBJ,texcache.c.o): Makefile
+$(call GFX_ALL_OBJ,dl.c.o) $(call GFX_ALL_OBJ,f3dex2.c.o) $(call GFX_ALL_OBJ,f3dex2acclaim.c.o) $(call GFX_ALL_OBJ,texcache.c.o): Makefile
 $(OBJ)/spu-gfx1/src/rsp/gfx/tmem.c.o $(call GFX_PHASE_OBJ,tmem.c.o): Makefile
