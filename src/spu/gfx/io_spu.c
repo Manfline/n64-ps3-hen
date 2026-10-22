@@ -79,29 +79,21 @@ uint32_t gfx_io_clock(void)
 #if GFX_SPE0_IMG == 1
 void gfx_io_detail_begin(struct gfx_state *g)
 {
-#if GFX_SPE0_IMG == 1
 	if (g->detail) {
 		memset(g->detail, 0, sizeof *g->detail);
 		g->detail->version = GFX_DETAIL_VERSION;
 		g->detail->task = g->job->task;
 		g->detail->bytes = sizeof *g->detail;
 	}
-#else
-	(void)g;
-#endif
 }
 
 void gfx_io_detail_end(struct gfx_state *g)
 {
-#if GFX_SPE0_IMG == 1
 	if (g->detail) {
 		/* Etiqueta propia; el resultado de spukit se publica después. */
 		spukit_dma_put(g->detail, (uint32_t)g->job->detail_ea, sizeof *g->detail, TAG_WR);
 		spukit_dma_wait(1u << TAG_WR);
 	}
-#else
-	(void)g;
-#endif
 }
 #endif
 

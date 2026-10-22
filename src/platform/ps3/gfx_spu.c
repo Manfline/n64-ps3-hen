@@ -30,20 +30,6 @@
 #include "spu_gfx0_stack.h"
 #include "spu_gfx1_bin.h"
 #include "spu_gfx1_stack.h"
-#include "spu_gfx1fase1_bin.h"
-#include "spu_gfx1fase1_stack.h"
-#include "spu_gfx1fase2_bin.h"
-#include "spu_gfx1fase2_stack.h"
-#include "spu_gfx1fase3_bin.h"
-#include "spu_gfx1fase3_stack.h"
-#include "spu_gfx1fase4_bin.h"
-#include "spu_gfx1fase4_stack.h"
-#include "spu_gfx1fase5_bin.h"
-#include "spu_gfx1fase5_stack.h"
-#include "spu_gfx1fase6_bin.h"
-#include "spu_gfx1fase6_stack.h"
-#include "spu_gfx1fase7_bin.h"
-#include "spu_gfx1fase7_stack.h"
 #include "spu_gfx1fase8_bin.h"
 #include "spu_gfx1fase8_stack.h"
 #include "spu_gfx2_bin.h"
@@ -71,24 +57,14 @@ static const struct gfx_spu_image images[GFX_SPE0_IMAGES] = {
 	{ "spu_gfx4", spu_gfx4_bin, &spu_gfx4_bin_size, SPU_GFX4_END, SPU_GFX4_STACK, SPU_GFX4_SLACK },
 };
 static const struct gfx_spu_image phase_images[] = {
-	{ NULL, NULL, NULL, 0, 0, 0 },
-	{ "spu_gfx1fase1", spu_gfx1fase1_bin, &spu_gfx1fase1_bin_size, SPU_GFX1FASE1_END, SPU_GFX1FASE1_STACK, SPU_GFX1FASE1_SLACK },
-	{ "spu_gfx1fase2", spu_gfx1fase2_bin, &spu_gfx1fase2_bin_size, SPU_GFX1FASE2_END, SPU_GFX1FASE2_STACK, SPU_GFX1FASE2_SLACK },
-	{ "spu_gfx1fase3", spu_gfx1fase3_bin, &spu_gfx1fase3_bin_size, SPU_GFX1FASE3_END, SPU_GFX1FASE3_STACK, SPU_GFX1FASE3_SLACK },
-	{ "spu_gfx1fase4", spu_gfx1fase4_bin, &spu_gfx1fase4_bin_size, SPU_GFX1FASE4_END, SPU_GFX1FASE4_STACK, SPU_GFX1FASE4_SLACK },
-	{ "spu_gfx1fase5", spu_gfx1fase5_bin, &spu_gfx1fase5_bin_size, SPU_GFX1FASE5_END, SPU_GFX1FASE5_STACK, SPU_GFX1FASE5_SLACK },
-	{ "spu_gfx1fase6", spu_gfx1fase6_bin, &spu_gfx1fase6_bin_size, SPU_GFX1FASE6_END, SPU_GFX1FASE6_STACK, SPU_GFX1FASE6_SLACK },
-	{ "spu_gfx1fase7", spu_gfx1fase7_bin, &spu_gfx1fase7_bin_size, SPU_GFX1FASE7_END, SPU_GFX1FASE7_STACK, SPU_GFX1FASE7_SLACK },
 	{ "spu_gfx1fase8", spu_gfx1fase8_bin, &spu_gfx1fase8_bin_size, SPU_GFX1FASE8_END, SPU_GFX1FASE8_STACK, SPU_GFX1FASE8_SLACK },
 };
 _Static_assert(GFX_SPE0_IMAGES == 5, "una entrada de `images` por imagen del SPE 0");
-_Static_assert(sizeof phase_images / sizeof phase_images[0] == 9, "una imagen por fase de vértices");
 
 static const struct gfx_spu_image *image_data(const struct salsa64_gfx_spu *s, int img)
 {
-	if (img == GFX_SPE0_F3DEX2 && s->detail_phase &&
-	    s->detail_phase < sizeof phase_images / sizeof phase_images[0])
-		return &phase_images[s->detail_phase];
+	if (img == GFX_SPE0_F3DEX2 && s->detail_phase == 8)
+		return &phase_images[0];
 	return &images[img];
 }
 
@@ -134,7 +110,6 @@ static int check_hash(spukit_worker *w)
  * los bytes «sin tocar» del log son exactos; sin él, los que siguen en cero. */
 #define SPE0_STACK_PATH SALSA64_DATA_DIR "/spe0-pila"
 #define SPE0_DETAIL_PATH SALSA64_DATA_DIR "/gfx-spe-detalle"
-#define SPE0_PHASE_PATH SALSA64_DATA_DIR "/gfx-fase-"
 #define SPE0_CLIP4_PATH SALSA64_DATA_DIR "/gfx-recorte-vector"
 #define SPE0_SCALAR_PATH SALSA64_DATA_DIR "/gfx-escalar"
 struct detail_window {
@@ -153,7 +128,7 @@ static const char *detail_phase_name(uint32_t phase)
 		"lote completo",
 		"lote completo/recorte SIMD",
 	};
-	return phase < sizeof names / sizeof names[0] ? names[phase] : "desconocida";
+	return phase == 8 ? names[8] : "normal";
 }
 
 static void detail_log(struct detail_window *w, uint32_t phase)
@@ -603,9 +578,15 @@ static int load_image(struct salsa64_gfx_spu *s, int img, uint32_t gbi)
 	 * prueba de los microcódigos de la imagen. */
 	int bad_hash = check_hash(s->worker);
 	int bad_lists = check_lists(s->worker, img, s->detail);
-	if (img == 1) bad_lists += check_vector(s->worker);
+	if (img == 1 && !s->vector_checked) {
+		bad_lists += check_vector(s->worker);
+		s->vector_checked = true;
+	}
 	if (img == 1 && s->detail_phase == 8) bad_lists += check_clip4(s->worker);
-	if (img == 1 && s->detail) bad_lists += check_detail(s->worker, s->detail);
+	if (img == 1 && s->detail && !s->detail_checked) {
+		bad_lists += check_detail(s->worker, s->detail);
+		s->detail_checked = true;
+	}
 	s->nocache = bad_hash != 0;
 	if (bad_lists)
 		s->selftest_bad |= 1u << img;
@@ -850,18 +831,6 @@ int salsa64_gfx_spu_init(struct salsa64_gfx_spu *s, const struct salsa64_bus *bu
 	 * para probarlas en RPCS3 con las ROMs de prueba, que usan solo una
 	 * familia. Después se sigue como siempre, con la primera. */
 	struct stat st;
-	unsigned phase_files = 0;
-	for (uint32_t phase = 1; phase < sizeof phase_images / sizeof phase_images[0]; phase++) {
-		char path[sizeof SPE0_PHASE_PATH + 2];
-		snprintf(path, sizeof path, "%s%u", SPE0_PHASE_PATH, phase);
-		if (stat(path, &st) == 0) {
-			if (!s->detail_phase)
-				s->detail_phase = phase;
-			phase_files++;
-		}
-	}
-	if (phase_files > 1)
-		salsa64_log("gfx detalle: hay %u archivos gfx-fase; se usa la fase %u", phase_files, s->detail_phase);
 	if (stat(SPE0_CLIP4_PATH, &st) == 0) {
 		s->detail_phase = 8;
 		salsa64_log("gfx: recorte SIMD experimental (gfx-recorte-vector), mide lote completo; sustituye gfx-fase");

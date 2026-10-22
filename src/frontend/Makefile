@@ -51,7 +51,7 @@ SPUKIT  := 1
 # de Indiana Jones y Battle for Naboo (Factor 5 con su DMEM de 4 KB). Cada una
 # con sus objetos en obj/spu-gfx<n>.
 GFX_IMAGES := 0 1 2 3 4
-GFX_PHASES := 1 2 3 4 5 6 7 8
+GFX_PHASES := 8
 SPU_PROGS := $(addprefix gfx,$(GFX_IMAGES)) $(addprefix gfx1fase,$(GFX_PHASES)) audio rsp jpeg crt lz
 GFX_SPU_SRCS := $(R)/src/spu/gfx/main.c $(R)/src/spu/gfx/io_spu.c \
                 $(filter-out %/io_mem.c %/sync.c %/state.c %/selftest.c,$(wildcard $(R)/src/rsp/gfx/*.c))
