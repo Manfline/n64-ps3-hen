@@ -848,6 +848,7 @@ static char version_text[64], build_text[160];
 /* Sink gráfico del frontend: el del RDP más el timbre a presentación. */
 static const struct salsa64_gfx_sink *rdp_sink;
 static bool gfx_affine_chain;
+static bool gfx_s2dex_old_modes;
 
 static void front_acquire(void *ctx, struct gfx_job *job)
 {
@@ -855,6 +856,8 @@ static void front_acquire(void *ctx, struct gfx_job *job)
 	rdp_sink->acquire(rdp_sink->ctx, job);
 	if (gfx_affine_chain)
 		job->flags |= GFX_JOB_AFFINE_CHAIN;
+	if (gfx_s2dex_old_modes)
+		job->flags |= GFX_JOB_S2DEX_OLD_MODES;
 }
 
 /* DMA a la RDRAM (hilo de emulación): las copias del RDP no lo pisan. */
@@ -4638,6 +4641,7 @@ static enum game_end run_game_once(uint8_t *rom, uint32_t rom_size, const char *
 
 	/* HLE gráfica: en un SPE, o en el PPE si se pide. */
 	gfx_affine_chain = file_exists(SALSA64_DATA_DIR "/gfx-afin-cadena");
+	gfx_s2dex_old_modes = file_exists(SALSA64_DATA_DIR "/gfx-s2dex-modos-viejos");
 	salsa64_log("gfx: escala afin de tramos 3D encadenados %s (gfx-afin-cadena)",
 		    gfx_affine_chain ? "experimental activa" : "referencia");
 	gfx_on_spu = !file_exists(GFX_PPE_PATH);

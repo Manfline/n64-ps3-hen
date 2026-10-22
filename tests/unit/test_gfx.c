@@ -1848,6 +1848,19 @@ static void s2dex_task(unsigned gbi)
 
 /* S2DEX 2.x suelto: G_OBJ_LOADTXTR y G_OBJ_RECTANGLE (un TEXRECT en la
  * posición del sprite, a su tamaño y con la imagen de la TMEM). */
+static void s2dex1_mode_case(bool old)
+{
+	start();
+	job_flags = old ? GFX_JOB_S2DEX_OLD_MODES : 0;
+	dl(0xBA000020, 0xFFFFFFFF); dl(0xB9000020, 0xFFFFFFFF);
+	dl(0xBA000403, 0); dl(0xB9000403, 0);
+	dl(0xBA000800, 0); dl(0xB9000800, 0); dl(0xB8000000, 0);
+	s2dex_task(SALSA64_GBI_S2DEX1);
+	CHECK_EQ(gs.oh, old ? 0xFFFFFE0F : 0xFFFFFF8F);
+	CHECK_EQ(gs.ol, old ? 0xFFFFFE0F : 0xFFFFFF8F);
+}
+static void gfx_s2dex1_othermode_width(void) { s2dex1_mode_case(false); }
+static void gfx_s2dex1_othermode_old(void) { s2dex1_mode_case(true); }
 static void gfx_s2dex_task_rectangle(void)
 {
 	start();
@@ -2983,6 +2996,8 @@ void t_suite_gfx(void)
 	RUN(gfx_clip_four_planes);
 	RUN(gfx_combiner_forms);
 	RUN(gfx_s2dex_task_rectangle);
+	RUN(gfx_s2dex1_othermode_width);
+	RUN(gfx_s2dex1_othermode_old);
 	RUN(gfx_s2dex1_task_sprite);
 	RUN(gfx_s2dex_task_chains_f3dex2);
 	RUN(gfx_s2dex_chain_first_generation);

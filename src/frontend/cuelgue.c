@@ -65,6 +65,13 @@ unsigned cuelgue_state_text(const struct salsa64_n64 *n64, char *out, unsigned s
 	tput(&b, "campo %u, ciclo %llu, VI: CONTROL %08x ORIGIN %06x WIDTH %u V_INTR %u V_CURRENT %u\n", bus->vi.fields,
 	     (unsigned long long)cpu->cycles, bus->vi.regs[SALSA64_VI_CONTROL], bus->vi.regs[SALSA64_VI_ORIGIN],
 	     bus->vi.regs[SALSA64_VI_WIDTH], bus->vi.regs[SALSA64_VI_V_INTR], bus->vi.regs[SALSA64_VI_V_CURRENT]);
+	tput(&b, "VI: H_VIDEO %08x V_VIDEO %08x; PI: STATUS %08x DRAM %08x CART %08x; SI: STATUS %08x DRAM %08x\n",
+	     bus->vi.regs[SALSA64_VI_H_VIDEO], bus->vi.regs[SALSA64_VI_V_VIDEO], bus->pi[SALSA64_PI_STATUS],
+	     bus->pi[SALSA64_PI_DRAM_ADDR], bus->pi[SALSA64_PI_CART_ADDR], bus->si[SALSA64_SI_STATUS],
+	     bus->si[SALSA64_SI_DRAM_ADDR]);
+	tput(&b, "NMI: pendiente %u ciclo %llu; cpu: siguiente %016llx EPC %016llx ErrorEPC %016llx\n",
+	     n64->nmi_pending, (unsigned long long)n64->nmi_at, (unsigned long long)cpu->pc,
+	     (unsigned long long)cpu->epc, (unsigned long long)cpu->error_epc);
 	tput(&b, "MI: INTR %02x máscara %02x modo %08x; SP_STATUS %04x SP_PC %03x semáforo %u; "
 		 "DP: STATUS %03x START %06x END %06x CURRENT %06x\n",
 	     bus->mi.intr, bus->mi.mask, bus->mi.mode, bus->sp.regs[SALSA64_SP_STATUS], bus->sp.pc,
