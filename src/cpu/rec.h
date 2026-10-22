@@ -272,9 +272,11 @@ struct salsa64_rec_jtc {
 
 /* Quitar la consulta de espera recompilando e invalidando rangos, para A/B. */
 #define SALSA64_REC_OPT_IDLE_RECOMPILE 0x40000u
+/* Huellas y tablas de diagnóstico, reservadas solo al iniciar si se piden. */
+#define SALSA64_REC_OPT_DIAG 0x80000u
 
 struct salsa64_rec {
-	struct salsa64_rec_diag diag;
+	struct salsa64_rec_diag *diag;
 	uint32_t idle_patch[SALSA64_REC_MAX_BLOCKS + 1];
 	uint32_t compiled_idle_patch;
 	uint32_t opts;

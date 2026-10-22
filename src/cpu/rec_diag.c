@@ -2,8 +2,21 @@
 #include "cpu/rec.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "cpu/vr4300.h"
+
+bool salsa64_rec_diag_alloc(struct salsa64_rec *rec)
+{
+	rec->diag = calloc(1, sizeof *rec->diag);
+	return rec->diag != NULL;
+}
+
+void salsa64_rec_diag_free(struct salsa64_rec *rec)
+{
+	free(rec->diag);
+	rec->diag = NULL;
+}
 
 uint64_t salsa64_rec_diag_hash(const struct salsa64_rec *rec, uint32_t pa, uint32_t bytes)
 {
@@ -18,7 +31,7 @@ uint64_t salsa64_rec_diag_hash(const struct salsa64_rec *rec, uint32_t pa, uint3
 
 void salsa64_rec_diag_compiled(struct salsa64_rec *rec, unsigned id, uint64_t ticks)
 {
-	struct salsa64_rec_diag *d = &rec->diag;
+	struct salsa64_rec_diag *d = rec->diag;
 	const struct salsa64_rec_block *b = &rec->blocks[id];
 	uint32_t pc = rec->x.xb[id].vpc;
 	uint64_t hash = salsa64_rec_diag_hash(rec, b->pa, b->bytes);
@@ -45,7 +58,7 @@ void salsa64_rec_diag_compiled(struct salsa64_rec *rec, unsigned id, uint64_t ti
 
 void salsa64_rec_diag_hit(struct salsa64_rec *rec, unsigned id, uint32_t pa, uint32_t len)
 {
-	struct salsa64_rec_diag *d = &rec->diag;
+	struct salsa64_rec_diag *d = rec->diag;
 	const struct salsa64_rec_block *b = &rec->blocks[id];
 	unsigned source = d->source;
 	bool same = d->hash[id] == salsa64_rec_diag_hash(rec, b->pa, b->bytes);
@@ -81,7 +94,9 @@ static bool selected(const unsigned *ids, unsigned n, unsigned id)
 
 void salsa64_rec_diag_report(const struct salsa64_rec *rec, uint64_t hz, bool details, void (*log)(const char *, ...))
 {
-	const struct salsa64_rec_diag *d = &rec->diag;
+	const struct salsa64_rec_diag *d = rec->diag;
+	if (!d)
+		return;
 	char s[512];
 	snprintf(s, sizeof s, "invalidaciones: llamadas CPU/PI/otros %llu/%llu/%llu; bloques %llu/%llu/%llu; "
 		 "iguales (huella) %llu/%llu/%llu; compilando %llu ticks, repetidas %llu (%llu ticks); "

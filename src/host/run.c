@@ -3882,6 +3882,8 @@ int main(int argc, char **argv)
 	if (use_rec) {
 		void *code = salsa64_host_rec_buffer();
 		rec.opts = salsa64_host_rec_opts();
+		if (salsa64_host_env_on("SALSA64_REC_DIAG"))
+			rec.opts |= SALSA64_REC_OPT_DIAG;
 		fprintf(stderr, "salsa64-run: descartes de espera: %s\n", rec.opts & SALSA64_REC_OPT_IDLE_RECOMPILE ? "recompilar" : "parche PPC");
 		if (getenv("SALSA64_REC_DUMP"))
 			rec.on_compile = dump_block;

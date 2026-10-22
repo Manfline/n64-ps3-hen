@@ -461,7 +461,8 @@ void salsa64_rec_x_invalidate(struct salsa64_rec *rec, uint32_t pa, uint32_t end
 			next = x->xb[id].pnext;
 			const struct salsa64_rec_block *b = &rec->blocks[id];
 			if (b->pa < end && b->pa + b->bytes > pa) {
-				salsa64_rec_diag_hit(rec, id, pa, end - pa);
+				if (rec->diag)
+					salsa64_rec_diag_hit(rec, id, pa, end - pa);
 				if (!salsa64_rec_x_detach(rec, id))
 					salsa64_rec_kill_block(rec, id);
 			}
@@ -478,7 +479,8 @@ void salsa64_rec_x_kill_at(struct salsa64_rec *rec, uint64_t vpc)
 		for (unsigned id = x->xhash[xhash_slot(start)], next; id; id = next) {
 			next = x->xb[id].hnext;
 			if (x->xb[id].vpc == start && start + rec->blocks[id].bytes > v) {
-				salsa64_rec_diag_hit(rec, id, rec->blocks[id].pa + v - start, 4);
+				if (rec->diag)
+					salsa64_rec_diag_hit(rec, id, rec->blocks[id].pa + v - start, 4);
 				salsa64_rec_kill_block(rec, id);
 			}
 		}
