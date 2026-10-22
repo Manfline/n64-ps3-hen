@@ -4646,13 +4646,13 @@ static enum game_end run_game_once(uint8_t *rom, uint32_t rom_size, const char *
 	salsa64_bus_set_isviewer(&n64.bus, isv_buf, isv_out, NULL);
 
 	/* HLE gráfica: en un SPE, o en el PPE si se pide. */
-	gfx_affine_chain = file_exists(SALSA64_DATA_DIR "/gfx-afin-cadena");
+	gfx_affine_chain = !file_exists(SALSA64_DATA_DIR "/sin-afin-cadena");
 	gfx_s2dex_old_modes = file_exists(SALSA64_DATA_DIR "/gfx-s2dex-modos-viejos");
-	salsa64_log("gfx: escala afin de tramos 3D encadenados %s (gfx-afin-cadena)",
-		    gfx_affine_chain ? "experimental activa" : "referencia");
+	salsa64_log("gfx: escala afin de tramos 3D encadenados %s (sin-afin-cadena)",
+		    gfx_affine_chain ? "activa" : "referencia");
 	gfx_on_spu = !file_exists(GFX_PPE_PATH);
-	bool turbo3d = file_exists(SALSA64_DATA_DIR "/gfx-turbo3d");
-	salsa64_log("gfx: Turbo3D %s (gfx-turbo3d)", turbo3d ? "experimental activo" : "apagado");
+	bool turbo3d = !file_exists(SALSA64_DATA_DIR "/sin-turbo3d");
+	salsa64_log("gfx: Turbo3D %s (sin-turbo3d)", turbo3d ? "activo" : "apagado");
 	if (gfx_on_spu) {
 		spukit_init(6);
 		if ((rc = salsa64_gfx_spu_init(&gfx_spu, &n64.bus, &front_sink)) != 0) {

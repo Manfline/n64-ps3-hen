@@ -14,8 +14,8 @@ Las entradas antiguas conservan sus métodos de prueba como historia.
 
 | Juego | Estado | Notas |
 |---|---|---|
-| Dark Rift | dibuja peleadores, texturas y animaciones (PS3) | Turbo3D en la imagen 5 del SPE 0; solo con `gfx-turbo3d`. Probada una pelea; Mario 64 sin regresión |
-| Resident Evil 2 | letras de OPTIONS legibles (PS3) | solo con `gfx-afin-cadena`; menús, inventario y partida sin regresión |
+| Dark Rift | dibuja peleadores, texturas y animaciones (PS3) | Turbo3D en la imagen 5 del SPE 0; encendido por omisión (`sin-turbo3d` lo apaga). Probada una pelea; Mario 64 sin regresión |
+| Resident Evil 2 | letras de OPTIONS legibles (PS3) | encendida por omisión (`sin-afin-cadena` la apaga); menús, inventario y partida sin regresión |
 | Pokémon Snap | sin desorden de dibujo en las escenas probadas (PS3) | causa no aislada; sin recorrer el juego completo |
 | Star Wars Episode I: Racer | video del logo recortado por la tijera, corregido | falta confirmarlo en la PS3 |
 | Yoshi's Story | ancho de G_SETOTHERMODE de S2DEX 1.x corregido | sigue trabándose en el bloque de texto: la reserva de objetos se llena |

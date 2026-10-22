@@ -3788,7 +3788,8 @@ int main(int argc, char **argv)
 		rdram = fm_window;
 	}
 	salsa64_n64_init(&n64, rdram, ram);
-	gfx_affine_chain = getenv("SALSA64_GFX_AFFINE_CHAIN") != NULL;
+	const char *affine = getenv("SALSA64_GFX_AFFINE_CHAIN");
+	gfx_affine_chain = !affine || strcmp(affine, "0");
 	if (getenv("SALSA64_GFX_CYCLES"))
 		n64.bus.rsp.gfx_cycles = (uint32_t)strtoul(getenv("SALSA64_GFX_CYCLES"), NULL, 0);
 	if (getenv("SALSA64_DP_CYCLES"))
@@ -3812,7 +3813,7 @@ int main(int argc, char **argv)
 	iopt.from_field = trace_from;
 	interp_init(&iopt);
 	const char *turbo3d = getenv("SALSA64_GFX_TURBO3D");
-	gfx_sync.backend.turbo3d = turbo3d && !strcmp(turbo3d, "1");
+	gfx_sync.backend.turbo3d = !turbo3d || strcmp(turbo3d, "0");
 	salsa64_rsp_set_gfx(&n64.bus, &gfx_sync.backend);
 	if (getenv("SALSA64_GFX_LATE")) {
 		gfx_late.polls = (unsigned)strtoul(getenv("SALSA64_GFX_LATE"), NULL, 0);

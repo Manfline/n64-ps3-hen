@@ -7,15 +7,15 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 ## [Unreleased]
 
 ### Added
-- **Turbo3D microcode (HLE, optional):** Dark Rift now draws its fighters,
-  textures and animations (confirmed on a real PS3). It runs in a new SPE 0
-  image (5) together with the F3D tasks the game also sends. Off by default:
-  create `/dev_hdd0/salsa64/gfx-turbo3d` to enable it; without it Salsa64
-  behaves as in 0.2.9. Based on Glide64mk2 (GPLv2+), see `docs/THIRD_PARTY.md`.
-- **Affine texture scale for F3DEX2 loaded from S2DEX (optional,
-  `gfx-afin-cadena`):** fixes the garbled letters of the Resident Evil 2
-  OPTIONS menu (confirmed on a real PS3, with menus, inventory and a saved game
-  checked for regressions).
+- **Turbo3D microcode (HLE):** Dark Rift now draws its fighters, textures and
+  animations (confirmed on a real PS3). It runs in a new SPE 0 image (5)
+  together with the F3D tasks the game also sends. On by default;
+  `/dev_hdd0/salsa64/sin-turbo3d` turns it off. Based on Glide64mk2 (GPLv2+),
+  see `docs/THIRD_PARTY.md`.
+- **Affine texture scale for F3DEX2 loaded from S2DEX:** fixes the garbled
+  letters of the Resident Evil 2 OPTIONS menu (confirmed on a real PS3, with
+  menus, inventory and a saved game checked for regressions). On by default;
+  `sin-afin-cadena` turns it off.
 - **Vector clipping in the SPE (optional, `gfx-recorte-vector`):** F3DEX2
   vertices are tested against the clip planes four at a time. About 12 % less
   time per vertex in the batch on Road Rash; not a global FPS gain.
