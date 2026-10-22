@@ -16,7 +16,7 @@ Las entradas antiguas conservan sus métodos de prueba como historia.
 |---|---|---|
 | Dark Rift | dibuja peleadores, texturas y animaciones (PS3) | Turbo3D en la imagen 5 del SPE 0; encendido por omisión (`sin-turbo3d` lo apaga). Probada una pelea; Mario 64 sin regresión |
 | Resident Evil 2 | letras de OPTIONS legibles (PS3); líneas verticales finas entre tiles | encendida por omisión (`sin-afin-cadena` la apaga); menús, inventario y partida sin regresión |
-| Pokémon Snap | sin desorden de dibujo en las escenas probadas (PS3) | causa no aislada; sin recorrer el juego completo |
+| Pokémon Snap | sin desorden de dibujo en las escenas probadas (PS3) | a 1× va a velocidad completa; a 5× baja a 40–52 campos/s en tramos (el RSX no alcanza) |
 | Star Wars Episode I: Racer | video del logo corregido (PS3) | carrera ~47 campos/s |
 | Yoshi's Story | arranque del CIC 6106 corregido; ancho de G_SETOTHERMODE de S2DEX 1.x corregido | confirmado en la PS3: el bloque responde, no desaparecen enemigos ni objetos y no se cuelga al morir; quedan puntos y colores erróneos |
 | Turok: Dinosaur Hunter, Turok 2, Turok 3 | arrancan; 56–60 campos/s (PS3; en la v0.2.9 no arrancaban) | Turok 2 y 3 usan Acclaim (`E44DF568`): HLE propia con sus luces de punto (los disparos iluminan las paredes), encendida por omisión |

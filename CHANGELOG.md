@@ -61,6 +61,8 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 - Racer and Road Rash 64 do not reach full speed in races (about 47 and 51
   fields/s). Star Wars Episode I: Battle for Naboo runs at about 31-33
   fields/s in heavy scenes.
+- Pokémon Snap slows down hard at 5× internal resolution (down to about 40
+  fields/s: the RSX cannot keep up); at 1× it runs at full speed.
 - F-Zero X has no fog.
 - Mario Tennis and some Rogue Squadron menu logos have no transparency.
 - Conker's final boss lacks textures and is slow. Mortal Kombat 4 has no
