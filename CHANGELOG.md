@@ -4,7 +4,7 @@ All notable changes to Salsa64. Speeds are measured on a real PS3 (HEN,
 NTSC backups); `docs/perf-log.md` has the detailed numbers and
 `docs/estado.md` the work log (both in Spanish).
 
-## [Unreleased]
+## [0.2.10] — 2026-10-22
 
 ### Added
 - **Acclaim microcode HLE (F3DEX2ACCLAIM):** Turok 2 and Turok 3 now show
