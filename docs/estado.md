@@ -1,15 +1,17 @@
 # Estado
 
-## 2026-10-22 — HLE optativa de F3DEX2ACCLAIM
+## 2026-10-22 — HLE de F3DEX2ACCLAIM
 
-- `gfx-acclaim` (apagado por omisión) antepone el CRC de palabras `E44DF568`
+- Encendida por omisión (`sin-acclaim` la apaga; host `SALSA64_GFX_ACCLAIM=0`).
+  A/B en la PS3: los disparos iluminan las paredes solo con la HLE propia;
+  misma velocidad (Turok 2 59,9; Turok 3 56,3 frente a 56,6 campos/s).
+- Antepone el CRC de palabras `E44DF568`
   al texto F3DEX2; apagado conserva el despacho y la salida anteriores.
 - La HLE traduce `MOVEMEM` de 24/16 bytes, luces compactas con atenuación y
   el bit geométrico 0x80; las pruebas usan solo listas y datos sintéticos.
 - En el SPE 0 va en la imagen 5 con F3DEX2; conserva su caché de 512 entradas
   y deja 4880 bytes de holgura. Las demás imágenes quedan entre 1568 y 14368.
 - Host: 682/887361 sin fallos; build completo y `test-phase2.sh` correctos.
-  Falta el A/B visual en PS3 de una escena iluminada, con y sin el archivo.
 
 ## 2026-10-22 — Arranque del CIC 6106: residuo del IPL3 en la RDRAM baja
 

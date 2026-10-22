@@ -3816,8 +3816,9 @@ int main(int argc, char **argv)
 	interp_init(&iopt);
 	const char *turbo3d = getenv("SALSA64_GFX_TURBO3D");
 	gfx_sync.backend.turbo3d = !turbo3d || strcmp(turbo3d, "0");
-	gfx_sync.backend.acclaim = salsa64_host_env_on("SALSA64_GFX_ACCLAIM");
-	fprintf(stderr, "salsa64-run: HLE Acclaim %s (SALSA64_GFX_ACCLAIM=1)\n",
+	const char *acclaim = getenv("SALSA64_GFX_ACCLAIM");
+	gfx_sync.backend.acclaim = !acclaim || strcmp(acclaim, "0");
+	fprintf(stderr, "salsa64-run: HLE Acclaim %s (SALSA64_GFX_ACCLAIM=0 la apaga)\n",
 		gfx_sync.backend.acclaim ? "activa" : "apagada");
 	salsa64_rsp_set_gfx(&n64.bus, &gfx_sync.backend);
 	if (getenv("SALSA64_GFX_LATE")) {

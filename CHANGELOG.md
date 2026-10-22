@@ -7,7 +7,11 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 ## [Unreleased]
 
 ### Added
-- **Acclaim microcode HLE (optional, `gfx-acclaim`):** supports its compact point lights and geometry lighting bit; disabled by default.
+- **Acclaim microcode HLE (F3DEX2ACCLAIM):** Turok 2 and Turok 3 now show
+  their dynamic point lights, such as shots lighting up the walls (confirmed
+  on a real PS3, same speed). Runs in SPE 0 image 5 together with Turbo3D.
+  On by default; `sin-acclaim` turns it off. Translated from GLideN64
+  (GPLv2), see `docs/THIRD_PARTY.md`.
 - **Turbo3D microcode (HLE):** Dark Rift now draws its fighters, textures and
   animations. It runs in a new SPE 0 image (5) together with the F3D tasks
   the game also sends. On by default; `/dev_hdd0/salsa64/sin-turbo3d` turns it
@@ -40,8 +44,7 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
   vanished, and the game hung when hitting a text block or after dying. All
   of that is fixed on a real PS3.
 - **Turok: Dinosaur Hunter and Turok 2: Seeds of Evil** now start (they did
-  not in 0.2.9) and run at full speed on a real PS3. Turok 2's Acclaim
-  lighting is still handled as plain F3DEX2, so some lights may look off.
+  not in 0.2.9) and run at full speed on a real PS3.
 - **S2DEX 1.x:** the width of `G_SETOTHERMODE_H/L` was off by one (the 2.x
   encoding was used). `gfx-s2dex-modos-viejos` restores the old behaviour.
 - **Pokémon Snap:** no more draw-order problems in the scenes tested on a real
