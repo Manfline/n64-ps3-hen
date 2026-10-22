@@ -8,13 +8,11 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 
 ### Added
 - **Turbo3D microcode (HLE):** Dark Rift now draws its fighters, textures and
-  animations (confirmed on a real PS3). It runs in a new SPE 0 image (5)
-  together with the F3D tasks the game also sends. On by default;
-  `/dev_hdd0/salsa64/sin-turbo3d` turns it off. Based on Glide64mk2 (GPLv2+),
-  see `docs/THIRD_PARTY.md`.
+  animations. It runs in a new SPE 0 image (5) together with the F3D tasks
+  the game also sends. On by default; `/dev_hdd0/salsa64/sin-turbo3d` turns it
+  off. Based on Glide64mk2 (GPLv2+), see `docs/THIRD_PARTY.md`.
 - **Affine texture scale for F3DEX2 loaded from S2DEX:** fixes the garbled
-  letters of the Resident Evil 2 OPTIONS menu (confirmed on a real PS3, with
-  menus, inventory and a saved game checked for regressions). On by default;
+  letters of the Resident Evil 2 OPTIONS menu. On by default;
   `sin-afin-cadena` turns it off.
 - **Vector clipping in the SPE (optional, `gfx-recorte-vector`):** F3DEX2
   vertices are tested against the clip planes four at a time. About 12 % less
@@ -25,41 +23,50 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
   fog are processed four at a time. `gfx-escalar` keeps the old path; a
   self-test compares both bit for bit.
 - **Recompiler and busy-wait loops:** dropping a busy-wait probe no longer
-  throws away the translated block. Road Rash recompiled the same code tens of
-  thousands of times; on a real PS3 it now invalidates no blocks at all.
-  `jit-invalidacion-vieja` restores the old behaviour for comparison.
+  throws away the translated block. Road Rash 64 used to recompile the same
+  code tens of thousands of times; on a real PS3 it now invalidates no blocks
+  at all. `jit-invalidacion-vieja` restores the old behaviour for comparison.
 - **Auto low-level RSP mode** keeps the HLE microcodes of Perfect Dark and
   Conker.
 - Recompiler fingerprint diagnostics are now optional (`jit-diag`) and cost
   nothing when off.
 
 ### Fixed
-- **Boot of CIC 6106 games (Yoshi's Story, F-Zero X…):** the HLE boot now runs
-  the first stage of the cartridge's own IPL3 once, so low RDRAM holds what
-  the real console leaves there (checked byte for byte against ares). Yoshi's
-  Story never freed its objects: enemies and items vanished, and the game hung
-  when hitting a text block or after dying. All of that is fixed on a real
+- **Yoshi's Story (and other CIC 6106 games, such as F-Zero X):** the HLE boot
+  now runs the first stage of the cartridge's own IPL3 once, so low RDRAM
+  holds what the real console leaves there (checked byte for byte against
+  ares). Without it Yoshi's Story never freed its objects: enemies and items
+  vanished, and the game hung when hitting a text block or after dying. All
+  of that is fixed on a real PS3.
+- **Turok: Dinosaur Hunter and Turok 2: Seeds of Evil** now start (they did
+  not in 0.2.9) and run at full speed on a real PS3. Turok 2's Acclaim
+  lighting is still handled as plain F3DEX2, so some lights may look off.
+- **S2DEX 1.x:** the width of `G_SETOTHERMODE_H/L` was off by one (the 2.x
+  encoding was used). `gfx-s2dex-modos-viejos` restores the old behaviour.
+- **Pokémon Snap:** no more draw-order problems in the scenes tested on a real
   PS3.
-- **S2DEX 1.x (Yoshi's Story):** the width of `G_SETOTHERMODE_H/L` was off by
-  one (the 2.x encoding was used). `gfx-s2dex-modos-viejos` restores the old
-  behaviour.
-- **Pokémon Snap:** the draw-order problem is gone in the scenes tested on a
-  real PS3 (cause not isolated).
-- **Racer:** the interlaced intro video is no longer clipped by the RDP
-  scissor of its task and no longer jumps (confirmed on a real PS3).
+- **Star Wars Episode I: Racer:** the LucasArts intro video no longer jumps
+  (it was clipped by the RDP scissor of its task).
 - **Memory between games (optional, `memoria-hilos`):** releases the newlib
   buffers of the emulation thread when a game closes.
 
 ### Known issues
 - Yoshi's Story still shows some wrong dots and colours in its graphics.
 - Resident Evil 2: thin vertical seams between the tiles of the OPTIONS menu
-  (text fully readable).
-- F-Zero X has no fog. Racer and Road Rash 64 still miss full speed in races
-  (about 47 and 51 fields/s).
-- Star Wars Episode I: Battle for Naboo runs at about 31-33 fields/s in heavy
-  scenes.
-- Zelda: Ocarina of Time can cut display lists by command budget (also in
-  0.2.9).
+  (text fully readable); the statue room runs at 65-80 %.
+- Racer and Road Rash 64 do not reach full speed in races (about 47 and 51
+  fields/s). Star Wars Episode I: Battle for Naboo runs at about 31-33
+  fields/s in heavy scenes.
+- F-Zero X has no fog.
+- Mario Tennis and some Rogue Squadron menu logos have no transparency.
+- Conker's final boss lacks textures and is slow. Mortal Kombat 4 has no
+  health bars. Star Fox 64: the menu duplicates options. Majora's Mask:
+  lighting. NBA Showtime runs sped up.
+- Zelda: Ocarina of Time: torch glows show through walls, and some display
+  lists are cut by the command budget.
+- ROMs larger than 64 MB are not supported.
+- Perfect Dark slows down in scenes of more than about 2300 triangles.
+- Frame interpolation (experimental) still leaves a trail on 2D sprites (#17).
 
 ## [0.2.9] — 2026-10-19
 
