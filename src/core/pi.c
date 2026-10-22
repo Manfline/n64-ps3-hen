@@ -52,9 +52,9 @@ static void pi_dma_to_rdram(struct salsa64_bus *bus, uint32_t len)
 	}
 	if (dram < bus->rdram_size) {
 		struct salsa64_rec *rec = bus->cpu ? bus->cpu->rec : NULL;
-		if (rec) rec->diag.source = 2;
+		if (rec && rec->diag) rec->diag->source = 2;
 		salsa64_bus_rdram_written(bus, dram, len);
-		if (rec) rec->diag.source = 0;
+		if (rec && rec->diag) rec->diag->source = 0;
 	}
 
 	bus->pi[SALSA64_PI_DRAM_ADDR] = (dram + len + 7) & 0x00FFFFF8;
