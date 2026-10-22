@@ -6,6 +6,8 @@ NTSC backups); `docs/perf-log.md` has the detailed numbers and
 
 ## [Unreleased]
 
+- Limpia el candidato: diagnóstico JIT opcional, menos imágenes SPE y modos S2DEX 1.x corregidos.
+
 - Ajusta la alineación local del diagnóstico DMA a 16 bytes para recuperar
   pila en la variante de recorte, conservando el destino alineado a 128.
 

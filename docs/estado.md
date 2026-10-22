@@ -1,5 +1,14 @@
 # Estado
 
+## 2026-10-22 — Limpieza de candidata
+
+- El diagnóstico del recompilador queda apagado por omisión y reserva sus
+  tablas solo con `jit-diag` o `SALSA64_REC_DIAG=1`; las cuentas ligeras de
+  invalidación siguen activas. Se retiraron las imágenes de medición 1–7;
+  `gfx-recorte-vector` conserva su imagen propia. La autoprueba vectorial
+  corre una sola vez por arranque. Se integraron los cierres de memoria y
+  la corrección de S2DEX; falta completar build y regresiones en este entorno.
+
 ## 2026-10-21 — Integración autorizada de RE2 y SPE en la rama principal
 
 - El autor da por realizadas las pruebas de RE2 y SPE y autoriza integrar
