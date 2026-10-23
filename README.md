@@ -151,6 +151,11 @@ docs/          design notes, measurements, third-party sources (Spanish)
 
 Goals, architecture and roadmap: [docs/proyecto.md](docs/proyecto.md).
 
+## Support
+
+If you enjoy Salsa64, you can buy me a coffee at
+[buymeacoffee.com/ricowp81](https://buymeacoffee.com/ricowp81). Thanks!
+
 ## AI disclosure
 
 Salsa64 is an AI-assisted project. The emulator itself is tested on real PS3 hardware.
