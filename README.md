@@ -1,4 +1,57 @@
-# Salsa64
+# N64 para PS3 HEN
+
+Fork do [Salsa64](https://github.com/ricowp81/Salsa64), com foco inicial em
+**Mario Kart 64 no PS3 com HEN**. O código completo do emulador e seu
+histórico foram preservados, assim como a licença GPLv2 e os créditos.
+
+**Início do fork:** 25/10/2026, a partir do commit
+`8d06589157485a5b25c4749c687fa4b347e184e3` do Salsa64.
+
+## O que foi preparado neste fork
+
+- [Guia em português para HEN e Mario Kart 64](docs/hen-mario-kart-64.md).
+- [Perfil de configuração](profiles/mario-kart-64/) com menu em português,
+  saída 720p, escala 2x, formato 4:3 e itens em L2 ou R2.
+- `tools/build-hen.sh`: gera **N64 PS3 HEN - Salsa64**, ID `NPSH00064`.
+- GitHub Actions para testar o núcleo e gerar o `.pkg` sob demanda.
+- Ajuste na cópia dos metadados de texturas para compilar com GCC 13 e
+  `-Werror`, sem desativar os avisos do compilador.
+
+**Testes locais:** 682 testes / 887.361 verificações do núcleo passaram
+com GCC 13, AddressSanitizer e UBSan em Linux x86_64.
+
+**Estado:** preparação inicial. A compilação para PS3 e a validação desta
+versão em um console real devem ser confirmadas antes de anunciar
+compatibilidade ou desempenho. Os recursos do emulador descritos abaixo
+são do projeto original; não são novas implementações deste fork.
+
+## Compilar e acompanhar
+
+```sh
+git clone https://github.com/Manfline/n64-ps3-hen.git
+cd n64-ps3-hen
+make -j2 test-host         # testes portáteis com GCC/Make, ASan e UBSan
+tools/docker-image.sh     # compilador PS3 e PSL1GHT; requer Docker
+sh tools/build-hen.sh -j2    # build/n64-ps3-hen/n64-ps3-hen.pkg
+```
+
+No GitHub, use **Actions > Gerar pacote PS3 HEN > Run workflow** para
+compilar sem preparar o ambiente local. Os testes do núcleo rodam em
+pushes e pull requests; o build PS3 é manual porque constrói o toolchain.
+
+O pacote usa um ID próprio no XMB, mas compartilha `/dev_hdd0/salsa64`
+com o Salsa64 original. Leia o guia antes de copiar configurações ou
+alternar compilações. O perfil é opcional e não inclui ROMs.
+
+## Origem e licença
+
+O emulador foi criado por **ricowp81** e pelos colaboradores citados
+abaixo. O binário combinado permanece sob **GPLv2**, conforme os avisos
+originais e [LICENSE](LICENSE). Este fork não é afiliado à Nintendo ou Sony.
+
+---
+
+# Salsa64 — documentacao original
 
 A Nintendo 64 emulator for the PlayStation 3 (homebrew, runs on HEN or CFW),
 designed around the Cell processor: the PPE runs the VR4300 CPU with a
