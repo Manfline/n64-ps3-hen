@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: Gerar pacote PS3 HEN
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Compilar ps3toolchain e PSL1GHT
+        run: tools/docker-image.sh
+      - name: Validar o nucleo antes de gerar o pacote
+        run: tools/build.sh -j2 test-host
+      - name: Gerar o PKG deste fork
+        run: sh tools/build-hen.sh -j2
+      - name: Calcular a integridade dos pacotes
+        working-directory: build/n64-ps3-hen
+        run: sha256sum ./*.pkg > SHA256SUMS
+      - name: Disponibilizar pacotes e configuracao
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: n64-ps3-hen-${{ github.sha }}
+          path: |
+            build/n64-ps3-hen/*.pkg
+            build/n64-ps3-hen/SHA256SUMS
+            profiles/mario-kart-64/
+            docs/hen-mario-kart-64.md
+            LICENSE
+          if-no-files-found: error
+          retention-days: 30
+      - name: Preservar o log do toolchain
+        if: failure()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: log-toolchain-${{ github.sha }}
+          path: build/logs/
+          if-no-files-found: ignore
