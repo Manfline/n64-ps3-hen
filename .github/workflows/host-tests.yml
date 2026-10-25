@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: Testes do emulador
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Testar o nucleo com AddressSanitizer e UBSan
+        run: make -j2 test-host
+      - name: Compilar o executor de ROMs homebrew
+        run: make -j2 host
+      - name: Verificar o script de compilacao HEN
+        run: |
+          sh -n tools/build-hen.sh
+          sh tools/build-hen.sh --help
