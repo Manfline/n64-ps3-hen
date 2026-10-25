@@ -95,7 +95,7 @@ static void note_load(struct gfx_state *g, uint32_t tmem, uint32_t bytes, uint32
 }
 
 /* El origen de una textura: los campos src_* de gfx_tex, que van seguidos
- * (8 bytes), para armarlo aparte y copiarlo de una vez. */
+ * (8 bytes), para armarlo aparte de la textura. */
 struct tex_src {
 	uint32_t src_addr;
 	uint16_t src_pitch;
@@ -627,7 +627,12 @@ static bool resolve(struct gfx_state *g, const struct gfx_tile *t, unsigned tt, 
 	} else if (!resolve_content(g, t, tt, premul, w, h, x0, y0, once, tex)) {
 		return false;
 	}
-	memcpy(&tex->src_addr, &src, sizeof src);
+	/* Copiar cada campo evita escribir 8 bytes a través del subobjeto
+	 * src_addr (4 bytes), que GCC 13 rechaza con -Wstringop-overflow. */
+	tex->src_addr = src.src_addr;
+	tex->src_pitch = src.src_pitch;
+	tex->src_siz = src.src_siz;
+	tex->src_fmt = src.src_fmt;
 #ifdef SALSA64_GFX_TRACE
 	salsa64_gfx_trace_tex(g, t, tex, g->res->textures != before);
 #endif
