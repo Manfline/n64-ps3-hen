@@ -1,5 +1,19 @@
 # Estado
 
+## 2026-10-25 — Fork Manfline/n64-ps3-hen
+
+- Preparacion inicial para HEN y Mario Kart 64; documentacion en portugues
+  en `docs/hen-mario-kart-64.md` y configuracion opcional en `profiles/`.
+- Compilacion con titulo propio, `PROGRAM=n64-ps3-hen`, `APPID=NPSH00064`;
+  los datos siguen en `/dev_hdd0/salsa64`, compartidos con Salsa64.
+- La copia de los cuatro campos de procedencia de textura se hace por
+  campo: GCC 13 rechazaba el `memcpy` de 8 bytes desde `&tex->src_addr`
+  (subobjeto de 4 bytes) con `-Werror=stringop-overflow`.
+- GitHub Actions para pruebas del host y empaquetado manual con PSL1GHT.
+- Host Linux x86_64 con GCC 13, ASan y UBSan: 682 pruebas, 887361
+  verificaciones, cero fallos.
+- Compilacion PS3, rendimiento y validacion de este fork en HEN pendientes.
+
 ## 2026-10-22 — HLE de F3DEX2ACCLAIM
 
 - Encendida por omisión (`sin-acclaim` la apaga; host `SALSA64_GFX_ACCLAIM=0`).
