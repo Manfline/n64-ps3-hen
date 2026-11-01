@@ -170,6 +170,13 @@ $(OBJ)/spu-gfx1/src/rsp/gfx/tmem.c.o $(call GFX_PHASE_OBJ,tmem.c.o): SPU_CFLAGS 
 # al juntar F3DFLX con el S2DEX de las salas de Zelda (la holgura bajaba a
 # 1328); identificar texturas cuesta 0,01–0,02 ms más por tarea.
 $(call GFX_ALL_OBJ,texcache.c.o): SPU_CFLAGS += -Os
+# Evita que main guarde decenas de registros para invariantes del bucle
+# de spukit_run. Recupera pila por tarea sin cambiar la ruta por vértice.
+# Backport de Salsa64 4639ce254ac00a866f0fd1d46206460dd06be34a.
+GFX_MAIN_OBJ := $(foreach i,$(GFX_IMAGES),$(OBJ)/spu-gfx$(i)/src/spu/gfx/main.c.o) \
+                $(foreach p,$(GFX_PHASES),$(OBJ)/spu-gfx1fase$(p)/src/spu/gfx/main.c.o)
+$(GFX_MAIN_OBJ): SPU_CFLAGS += -fno-move-loop-invariants -fno-tree-loop-im
+$(GFX_MAIN_OBJ): Makefile
 # make no ve un cambio de banderas: que se recompilen si cambia este archivo.
 $(call GFX_ALL_OBJ,combine.c.o) $(call GFX_ALL_OBJ,s2dex.c.o) $(call GFX_ALL_OBJ,f3dpd.c.o) \
 $(call GFX_ALL_OBJ,f3ddkr.c.o) $(call GFX_ALL_OBJ,f5rogue.c.o) $(call GFX_ALL_OBJ,f5indy.c.o) $(call GFX_ALL_OBJ,vgroup.c.o) $(call GFX_ALL_OBJ,flx.c.o) \
