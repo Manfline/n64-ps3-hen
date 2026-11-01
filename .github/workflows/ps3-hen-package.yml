@@ -16,12 +16,24 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Compilar ps3toolchain e PSL1GHT
-        run: tools/docker-image.sh
+      - name: Preparar o compilador de imagens
+        uses: docker/setup-buildx-action@v4.4.1
+      - name: Compilar ps3toolchain e PSL1GHT com cache
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          load: true
+          push: false
+          tags: salsa64-toolchain:dev
+          cache-from: type=gha,scope=ps3-toolchain
+          cache-to: type=gha,mode=max,scope=ps3-toolchain
       - name: Validar o nucleo antes de gerar o pacote
         run: tools/build.sh -j2 test-host
       - name: Gerar o PKG deste fork
-        run: sh tools/build-hen.sh -j2
+        run: |
+          mkdir -p build/logs
+          sh tools/build-hen.sh -j2 2>&1 | tee build/logs/ps3-hen-package.log
       - name: Calcular a integridade dos pacotes
         working-directory: build/n64-ps3-hen
         run: sha256sum ./*.pkg > SHA256SUMS
