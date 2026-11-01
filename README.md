@@ -7,23 +7,28 @@ histórico foram preservados, assim como a licença GPLv2 e os créditos.
 **Início do fork:** 25/10/2026, a partir do commit
 `8d06589157485a5b25c4749c687fa4b347e184e3` do Salsa64.
 
-## O que foi preparado neste fork
+## Mario Kart 64 em Full HD
 
 - [Guia em português para HEN e Mario Kart 64](docs/hen-mario-kart-64.md).
 - [Perfil de configuração](profiles/mario-kart-64/) com menu em português,
-  saída 720p, escala 2x, formato 4:3 e itens em L2 ou R2.
+  saída **1920×1080**, escala interna **5×**, formato 4:3 e itens em L2 ou R2.
+  Uma imagem de 320×240 é renderizada em 1600×1200 e reduzida para a
+  área 4:3 da tela, sem esticar a imagem. Novas configurações já começam
+  em 1080p / 5×; configurações existentes são preservadas.
 - `tools/build-hen.sh`: gera **N64 PS3 HEN - Salsa64**, ID `NPSH00064`.
 - GitHub Actions para testar o núcleo e gerar o `.pkg` sob demanda.
-- Ajuste na cópia dos metadados de texturas para compilar com GCC 13 e
-  `-Werror`, sem desativar os avisos do compilador.
+- Otimizações de memória do SPU trazidas do Salsa64: combiner com menos
+  temporários, pilha menor na entrada das tarefas e cópia compacta dos
+  metadados de texturas compatível com GCC 13 e `-Werror`.
 
 **Testes locais:** 682 testes / 887.361 verificações do núcleo passaram
 com GCC 13, AddressSanitizer e UBSan em Linux x86_64.
 
-**Estado:** preparação inicial. A compilação para PS3 e a validação desta
-versão em um console real devem ser confirmadas antes de anunciar
-compatibilidade ou desempenho. Os recursos do emulador descritos abaixo
-são do projeto original; não são novas implementações deste fork.
+**Estado:** perfil Full HD implementado. A velocidade desta compilação em
+um PS3 real com HEN ainda precisa ser medida. 1080p é a saída de vídeo;
+a resolução interna depende do framebuffer do jogo. A integração com
+RetroArch está em standby. Os recursos descritos abaixo são herdados do
+projeto original.
 
 ## Compilar e acompanhar
 
