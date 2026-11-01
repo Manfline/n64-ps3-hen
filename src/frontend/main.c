@@ -6017,7 +6017,7 @@ static int menu_loop(void)
 
 /* video.cfg: «salida = 1080» prefiere 1080p (también la línea sola «1080» del
  * formato viejo); «escala = auto|1..5» es el tamaño del render de la N64
- * (auto: 4× a 1080p, 3× a 720p). Sin archivo, 720p y escala automática.
+ * (auto: 4× a 1080p, 3× a 720p). Sin archivo, 1080p y escala 5× en este fork.
  * Si la tele no acepta 1080, sigue con el siguiente modo de la lista. */
 static const int32_t modes_1080[] = {
 	VIDEO_RESOLUTION_1080, VIDEO_RESOLUTION_720, VIDEO_RESOLUTION_480, VIDEO_RESOLUTION_576,
