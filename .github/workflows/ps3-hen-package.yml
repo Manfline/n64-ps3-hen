@@ -31,6 +31,7 @@ jobs:
       - name: Validar o nucleo antes de gerar o pacote
         run: tools/build.sh -j2 test-host
       - name: Gerar o PKG deste fork
+        shell: bash
         run: |
           mkdir -p build/logs
           sh tools/build-hen.sh -j2 2>&1 | tee build/logs/ps3-hen-package.log
