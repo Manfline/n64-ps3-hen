@@ -1,5 +1,23 @@
 # Estado
 
+## 2026-11-01 — Mario Kart 64 Full HD no fork Manfline
+
+- RetroArch em standby; foco no executavel independente para PS3 HEN.
+- Novas configuracoes: saida 1920x1080, escala interna 5x e aspecto 4:3.
+  Em 320x240, o RSX desenha 1600x1200 e reduz para a apresentacao 1080p.
+  O perfil por jogo tambem passa a 5x; configuracoes salvas sao preservadas.
+- Combiner copiado do Salsa64 2c1ba3c (inclui construtores por ponteiro),
+  entrada das tarefas com as flags de 4639ce2 e copia de textura compacta
+  a partir do objeto completo como em c71211c. A protecao de pilha de
+  1536 bytes permanece ativa em todas as imagens do SPE 0.
+- A compilacao anterior falhou em gfx1fase8 (1440 < 1536 bytes livres).
+- Host GCC 13 com ASan/UBSan: 682 testes, 887361 verificacoes, zero falhas.
+- Um milhao de combiners aleatorios: comandos identicos antes/depois,
+  com ASan/UBSan (LeakSanitizer desativado nesse teste sem alocacoes).
+- Workflow PS3 com cache do toolchain e preservacao do log de compilacao.
+- Rendimentos, graficos, audio e controles deste fork ainda aguardam
+  validacao no PS3 real com HEN; nao ha promessa de FPS em 1080p.
+
 ## 2026-10-25 — Fork Manfline/n64-ps3-hen
 
 - Preparacion inicial para HEN y Mario Kart 64; documentacion en portugues
@@ -4107,24 +4125,6 @@ en docs/filtros.md.
   Lo dibujado en la consola coincide con la referencia como en RPCS3
   (cables: a 1/255 o menos en el 99,0–99,7 % contra el modelo del RSX), y
   la comprobación de las tablas fp16 en la consola da error 0,0010.
-## 2026-11-01 — Mario Kart 64 Full HD no fork Manfline
-
-- RetroArch em standby; foco no executavel independente para PS3 HEN.
-- Novas configuracoes: saida 1920x1080, escala interna 5x e aspecto 4:3.
-  Em 320x240, o RSX desenha 1600x1200 e reduz para a apresentacao 1080p.
-  O perfil por jogo tambem passa a 5x; configuracoes salvas sao preservadas.
-- Combiner copiado do Salsa64 2c1ba3c (inclui construtores por ponteiro),
-  entrada das tarefas com as flags de 4639ce2 e copia de textura compacta
-  a partir do objeto completo como em c71211c. A protecao de pilha de
-  1536 bytes permanece ativa em todas as imagens do SPE 0.
-- A compilacao anterior falhou em gfx1fase8 (1440 < 1536 bytes livres).
-- Host GCC 13 com ASan/UBSan: 682 testes, 887361 verificacoes, zero falhas.
-- Um milhao de combiners aleatorios: comandos identicos antes/depois,
-  com ASan/UBSan (LeakSanitizer desativado nesse teste sem alocacoes).
-- Workflow PS3 com cache do toolchain e preservacao do log de compilacao.
-- Rendimentos, graficos, audio e controles deste fork ainda aguardam
-  validacao no PS3 real com HEN; nao ha promessa de FPS em 1080p.
-
 - **Segunda ronda** (paquete SLSA00109 en `build/ps3-4`): quinto CRT, «CRT
   Trinitron (exp.)» (el KV-29 de RetroMac: el tubo de franjas sin cable,
   con el desenfoque del haz a lo ancho; referencia en `tools/crt-ref.c`);
