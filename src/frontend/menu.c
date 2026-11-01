@@ -50,8 +50,9 @@ void menu_settings_default(struct menu_settings *s)
 {
 	s->waves = true;
 	s->overscan = MENU_OVERSCAN_NORMAL;
-	s->resolution = MENU_RES_720P;
-	s->scale = 0;
+	/* Perfil Full HD deste fork. Configurações salvas têm precedência. */
+	s->resolution = MENU_RES_1080P;
+	s->scale = 5;
 	s->fps = false;
 	s->confirm = true;
 	s->aspect = MENU_ASPECT_4_3;
