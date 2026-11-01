@@ -957,6 +957,9 @@ static void menu_options_page(void)
 {
 	struct menu m;
 	nav_setup(&m, 2, 0);
+	/* Probar todo el ciclo de opciones desde 720p y escala automática. */
+	m.set.resolution = MENU_RES_720P;
+	m.set.scale = 0;
 	menu_input(&m, 0, 0);
 	/* X en «Opciones» abre la página; X cambia el fondo. */
 	m.sel = 2;
@@ -1226,7 +1229,7 @@ static void menu_settings_file(void)
 	menu_settings_default(&s);
 	CHECK(s.waves);
 	CHECK_EQ(s.overscan, MENU_OVERSCAN_NORMAL);
-	CHECK_EQ(s.resolution, MENU_RES_720P);
+	CHECK_EQ(s.resolution, MENU_RES_1080P);
 	static const char off[] = "# comentario\n  FONDO = No\notra = cosa\n";
 	menu_settings_parse(&s, off, sizeof off - 1);
 	CHECK(!s.waves);
@@ -1681,12 +1684,12 @@ static void menu_video_file(void)
 {
 	struct menu_settings s;
 	menu_settings_default(&s);
-	CHECK_EQ(s.resolution, MENU_RES_720P);
-	CHECK_EQ(s.scale, 0);
+	CHECK_EQ(s.resolution, MENU_RES_1080P);
+	CHECK_EQ(s.scale, 5);
 	const char old[] = "1080\n";
 	menu_video_parse(&s, old, sizeof old - 1);
 	CHECK_EQ(s.resolution, MENU_RES_1080P);
-	CHECK_EQ(s.scale, 0);
+	CHECK_EQ(s.scale, 5);
 	const char old720[] = "720\n";
 	menu_video_parse(&s, old720, sizeof old720 - 1);
 	CHECK_EQ(s.resolution, MENU_RES_720P);
