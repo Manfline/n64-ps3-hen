@@ -4,6 +4,13 @@ Fork do [Salsa64](https://github.com/ricowp81/Salsa64), com foco inicial em
 **Mario Kart 64 no PS3 com HEN**. O código completo do emulador e seu
 histórico foram preservados, assim como a licença GPLv2 e os créditos.
 
+**Download:** [versão experimental Full HD — instalador e perfil](https://github.com/Manfline/n64-ps3-hen/releases/tag/hen-fullhd-v0.1.0).
+O ZIP reúne o `.pkg`, configurações, instruções, licença e relatório de
+validação. A compilação PS3 do commit `41da49f` foi concluída com sucesso;
+as sete imagens gráficas do SPU passaram pela proteção de pilha, com
+margem mínima de 5.824 bytes para um limite exigido de 1.536.
+A validação desta compilação no console real com HEN ainda está pendente.
+
 **Início do fork:** 25/10/2026, a partir do commit
 `8d06589157485a5b25c4749c687fa4b347e184e3` do Salsa64.
 
